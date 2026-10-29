@@ -61,9 +61,6 @@ export interface CompactContextDetails {
 	mode: string;
 	compactModel: string;
 	compactionCount: number;
-	/** 压缩已触发（结果经注入消息送达，不在工具结果里）。 */
-	launched: boolean;
-	fellBack: boolean;
 	/** 收起态一行摘要（buildCompactContextSummary 产出；GUI 收起态与 TUI 折叠态共用）。 */
 	summary?: string;
 }
@@ -241,9 +238,7 @@ export function registerCompactContextTool(
 				details: {
 					mode,
 					compactModel: mode === "cross-model" ? config.compactModel.ref : gating.modelId,
-					fellBack: false,
 					compactionCount: compactionCount + 1,
-					launched: true,
 					summary: buildCompactContextSummary(),
 				} satisfies CompactContextDetails,
 			};

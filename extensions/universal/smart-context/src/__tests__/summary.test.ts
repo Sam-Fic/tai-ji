@@ -71,8 +71,6 @@ describe("compact_context execute details.summary", () => {
 		const res = await tools[0]!.execute("t1", {}, undefined, undefined, makeCtx());
 		expect(res.details).toMatchObject({
 			mode: "same-model",
-			launched: true,
-			fellBack: false,
 			summary: "Context compacted",
 		});
 	});
@@ -105,7 +103,7 @@ function renderedText(result: unknown, expanded: boolean): string {
 describe("renderCompactContextResult", () => {
 	const result = {
 		content: [{ type: "text", text: "压缩已启动（same-model 模式）..." }],
-		details: { mode: "same-model", launched: true, summary: "Context compacted" },
+		details: { mode: "same-model", summary: "Context compacted" },
 	};
 
 	it("折叠态 → details.summary 一行", () => {
