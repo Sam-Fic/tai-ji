@@ -48,6 +48,14 @@ import type { ScheduledTask } from './types.js'
 // STALE_CTX_MARKER 文案兜底（F2 catch 分诊）。
 let sessionGeneration = 0
 
+/**
+ * 任务恢复失败累计计数（gap4 修复：重放流级错误不再折叠成空 Map）。session_start
+ * 装配点对恢复失败显式降级（warn + 空任务集继续装配）时递增，计数随 warn 一起输出
+ * ——重复失败（跨 session 替换持续失败）在日志里可见。与 sessionGeneration 同理声明
+ * 在模块级：跨 factory 重跑累计，闭包级每次重跑即归零。
+ */
+let schedulerRecoveryFailures = 0
+
 /** 包内既有 logger（ack 编排的日志侧与其它模块同源）。 */
 const logger = getLogger('scheduler')
 
@@ -132,7 +140,19 @@ export default function schedulerExtension(pi: ExtensionAPI): void {
       isIdle: () => ctx.isIdle(),
     }
     const runtime = new SchedulerRuntime(backend, () => sessionGeneration !== myGeneration, modelOps)
-    runtime.loadTasks(backend.loadTasks())
+    // gap4 修复（失败语义折叠）：重放流级错误（session JSONL 损坏 / getEntries 抛错）
+    // 在装配点显式降级——warn（含累计失败计数）+ 按空任务集继续装配。scheduler 是
+    // 辅助功能：不 catch 的话抛错点之后的装配体（startScheduler / ack 轮 / service /
+    // schedule tool）整段被跳过，恢复失败升级成整套扩展不可用。空任务集是显式降级
+    // 而非「成功恢复出无任务」，排障经本 warn 定位。
+    try {
+      runtime.loadTasks(backend.loadTasks())
+    } catch (err) {
+      schedulerRecoveryFailures += 1
+      logger.warn('scheduler task recovery failed; starting with empty task set (scheduled reminders inactive until session restart)', {
+        detail: { err: toErrorMessage(err), recoveryFailures: schedulerRecoveryFailures },
+      })
+    }
     // W2：tick 后回调刷新 widget（替代独立 widgetTimer + setInterval，节奏对齐 TICK_INTERVAL_MS）
     runtime.onAfterTick(() => refreshWidget(ctx))
     runtime.startScheduler()

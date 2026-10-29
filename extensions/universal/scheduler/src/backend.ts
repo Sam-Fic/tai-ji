@@ -199,8 +199,10 @@ export class PiSchedulerBackend implements SchedulerBackend {
   /**
    * 读路径：折叠当前 session 的 TASK_ENTRY_TYPE custom entries 恢复任务（非接口成员，
    * 由装配点 session_start / session_tree 重折叠调用）。replayFoldEntries 内部含 fork
-   * owner 过滤与异常兜底。U6c：折叠输入接活跃路径裁剪——从 leafId 沿 parentId 回溯，
-   * 被撤子树的任务 op 不再恢复 pending（否则被撤任务到点照常触发真实 turn，A14）。
+   * owner 过滤；流级错误上抛（session_start 装配点 catch 显式降级、session_tree 由
+   * pi runner 对 handler 抛错 emitError 容错，runtime 保持上一代任务集）。U6c：折叠
+   * 输入接活跃路径裁剪——从 leafId 沿 parentId 回溯，被撤子树的任务 op 不再恢复
+   * pending（否则被撤任务到点照常触发真实 turn，A14）。
    */
   loadTasks(): ScheduledTask[] {
     return [

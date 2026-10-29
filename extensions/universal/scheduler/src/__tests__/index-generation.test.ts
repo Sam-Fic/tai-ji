@@ -299,3 +299,47 @@ describe('F1: session_start 停旧 runtime（crash-fix U4）', () => {
     expect(stopSchedulerCalls).toEqual([runtimeInstances[0]])
   })
 })
+
+// ── gap4 修复：任务恢复失败在装配点显式降级（不折叠成空 Map 成功恢复）──
+// replayFoldEntries 流级错误（session JSONL 损坏 / getEntries 抛错）上抛到 session_start
+// 装配点：warn（含累计失败计数）+ 空任务集继续装配。装配体（startScheduler / service /
+// schedule tool）不因恢复失败被跳过——不 catch 时抛错点之后的装配整段丢失，恢复失败
+// 升级成整套扩展不可用。
+describe('gap4: session_start 任务恢复失败显式降级', () => {
+  beforeEach(() => {
+    isCtxStaleCaptures.length = 0
+    runtimeInstances.length = 0
+    stopSchedulerCalls.length = 0
+    setSchedulerWidgetMock.mockClear()
+    loggerMock.warn.mockClear()
+  })
+
+  afterEach(() => {
+    for (const rt of runtimeInstances) {
+      rt.stopScheduler()
+    }
+  })
+
+  it('getEntries 抛错 → warn 留痕（含错误信息）+ 空任务集启动，装配不中断', () => {
+    const { pi, events } = createMockPi()
+    schedulerExtension(pi)
+    const sessionStart = events.get('session_start')
+    expect(sessionStart).toBeDefined()
+
+    const ctx = createFakeCtx('/test/recovery-fail.json')
+    ;(ctx.sessionManager as { getEntries: () => unknown[] }).getEntries = () => {
+      throw new Error('JSONL corrupted')
+    }
+
+    sessionStart!({ type: 'session_start', reason: 'startup' }, ctx)
+
+    // 装配未中断：runtime 已构造（后续 startScheduler / service / tool 装配照常）
+    expect(isCtxStaleCaptures.length).toBe(1)
+    expect(runtimeInstances).toHaveLength(1)
+    // 显式降级留痕：恢复失败 warn（非静默空任务集）；错误信息入日志
+    const warnCalls = loggerMock.warn.mock.calls.map((c) => String(c[0]))
+    expect(warnCalls.some((m) => m.includes('scheduler task recovery failed'))).toBe(true)
+    const recoveryCall = loggerMock.warn.mock.calls.find((c) => String(c[0]).includes('scheduler task recovery failed'))
+    expect(JSON.stringify(recoveryCall?.[1])).toContain('JSONL corrupted')
+  })
+})

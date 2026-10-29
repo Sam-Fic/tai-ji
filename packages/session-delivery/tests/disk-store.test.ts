@@ -14,7 +14,7 @@
  * fs 全程内存替身（DiskStoreFs 注入点）——本文件不触真实磁盘。
  */
 import { describe, it, expect } from 'vitest'
-import { createDiskDeliveryStore, type DiskStoreFs } from '../src/disk-store.js'
+import { createDiskDeliveryStore, DiskStoreReadError, type DiskStoreFs } from '../src/disk-store.js'
 import type { DeliveryStoreRecord } from '../src/types.js'
 
 /** 内存 fs 替身：单文件内容按路径存 Map；mkdirSync 记号 no-op。 */
@@ -163,5 +163,46 @@ describe('DiskDeliveryStore — 失败语义', () => {
     store.persist(recordOf('a'))
     expect(fs.files.has(FILE)).toBe(true)
     expect(fs.files.has(`dir:${DIR}`)).toBe(true)
+  })
+})
+
+describe('DiskDeliveryStore — 读失败分型（失败语义折叠修复：读失败 ≠ 空文件）', () => {
+  /** 预置一个 record 行 + 一个 ack 行，再让 readFileSync 定向抛错（文件存在但不可读）。 */
+  function brokenReadFs(): DiskStoreFs & { files: Map<string, string>; repair: () => void } {
+    const base = memFs()
+    base.files.set(
+      FILE,
+      [
+        `{"t":"record","r":${JSON.stringify(recordOf('a'))}}`,
+        '{"t":"ack","id":"b","at":5}',
+      ].join('\n'),
+    )
+    const actualRead = base.readFileSync
+    let broken = true
+    base.readFileSync = (p: string) => {
+      if (broken && p === FILE) throw new Error('EACCES: permission denied')
+      return actualRead(p)
+    }
+    return { ...base, files: base.files, repair: () => { broken = false } }
+  }
+
+  it('读失败 → DiskStoreReadError 上抛，不折叠成空结果（loadUndelivered / hasTerminal / persist）', () => {
+    const fs = brokenReadFs()
+    const store = createDiskDeliveryStore({ fs, dir: DIR, file: FILE })
+    expect(() => store.loadUndelivered()).toThrow(DiskStoreReadError)
+    expect(() => store.hasTerminal('b')).toThrow(DiskStoreReadError)
+    expect(() => store.persist(recordOf('c'))).toThrow(DiskStoreReadError)
+    // persist 在读失败时不追加：耐久承诺未作（不能在判重数据不可用的视图上受理）
+    expect(fs.files.get(FILE)).not.toContain('"id":"c"')
+  })
+
+  it('读失败不被缓存为「已加载空态」：故障恢复后同实例重读拿到全量数据', () => {
+    const fs = brokenReadFs()
+    const store = createDiskDeliveryStore({ fs, dir: DIR, file: FILE })
+    expect(() => store.loadUndelivered()).toThrow(DiskStoreReadError)
+    fs.repair()
+    // 同一实例：loaded 未被失败置位，重读文件 → 内存派生数据完整（record a 在册、b 判重）
+    expect(store.loadUndelivered().map((r) => r.id)).toEqual(['a'])
+    expect(store.hasTerminal('b')).toBe(true)
   })
 })

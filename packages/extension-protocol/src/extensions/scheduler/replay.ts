@@ -4,8 +4,8 @@
 //
 // 依赖范围收敛（P7）：本文件零包外依赖——原实现的扩展侧错误消息检查（toErrorMessage）
 // 与扩展共享 logger 以注入参数替代（ReplayFoldOptions.warn），
-// 错误降级语义（返回空 Map / 跳过损坏条目）在包内自足成立；扩展侧经薄 wrapper 注入
-// logger.warn 保持日志行为不变。
+// 错误语义（流级错误上抛 / 损坏条目跳过 + warn 注入）在包内自足成立；扩展侧经薄
+// wrapper 注入 logger.warn 保持单条跳过日志行为不变。
 
 import { appendExecutionRecord, snapshotToTask, TASK_ENTRY_TYPE } from './types.js'
 import type { ScheduledTask, SchedulerEntryOp } from './types.js'
@@ -57,23 +57,21 @@ export interface SchedulerEntryLike {
  *
  * append-only 时序保证 nextRunAt 不回退（D1）：advance entry 按写入顺序折叠，自然取到最后推进值。
  *
- * getEntries 解析/迭代异常 → options.warn + 返回空 Map（gap4）：降级为无任务而非崩溃调用方。
+ * 流级错误（entry 迭代器抛错 / getEntries 读取失败，如 session JSONL 损坏）显式上抛
+ * （gap4 修复，失败语义折叠）：恢复失败不得折叠成与「真空表」同形的空 Map 成功结果。
+ * 降级形态归调用方——扩展 session_start 装配点 catch 显式降级（warn + 空任务集继续
+ * 装配，pi runner 对 handler 抛错只 emitError 但会跳过抛错点之后的装配体）；单条损坏
+ * entry 仍逐条跳过 + options.warn（MF-2，一条损坏不得清空全部任务）。
  */
 export function replayFoldEntries(
   entries: Iterable<SchedulerEntryLike>,
   currentSessionFile: string | undefined,
   options?: ReplayFoldOptions,
 ): Map<string, ScheduledTask> {
-  try {
-    const tasks = new Map<string, ScheduledTask>()
-    foldEntries(entries, tasks, options)
-    filterNonOwnerTasks(tasks, currentSessionFile)
-    return tasks
-  } catch (err) {
-    // gap4：session JSONL 损坏 / 迭代器抛错时降级为无任务，不让调用方崩溃。
-    options?.warn?.('replayFoldEntries failed', { error: toErrorMessage(err) })
-    return new Map()
-  }
+  const tasks = new Map<string, ScheduledTask>()
+  foldEntries(entries, tasks, options)
+  filterNonOwnerTasks(tasks, currentSessionFile)
+  return tasks
 }
 
 /** 步骤① 全量折叠：跳过非本扩展 entry 与检查不过的损坏 entry；单条折叠抛错只跳过该条（MF-2）。 */

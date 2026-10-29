@@ -145,7 +145,7 @@ describe('replayFoldEntries（包内折叠器）', () => {
     expect(result.size).toBe(0)
   })
 
-  it('迭代器抛错时 warn 注入被调 + 返回空 Map，不崩溃调用方（gap4）', () => {
+  it('迭代器抛错 → 上抛流级错误，不折叠成空 Map（gap4 修复：恢复失败不得伪装成无任务）', () => {
     const warn = vi.fn()
     // 构造迭代时抛错的 iterable（模拟 session JSONL 损坏）
     const throwingIterable: Iterable<SchedulerEntryLike> = {
@@ -160,13 +160,34 @@ describe('replayFoldEntries（包内折叠器）', () => {
       },
     }
 
-    const result = replayFoldEntries(throwingIterable, '/s.json', { warn })
-    expect(result.size).toBe(0)
-    expect(warn).toHaveBeenCalledTimes(1)
-    expect(warn).toHaveBeenCalledWith(
-      'replayFoldEntries failed',
-      expect.objectContaining({ error: expect.stringContaining('JSONL corrupted') }),
-    )
+    expect(() => replayFoldEntries(throwingIterable, '/s.json', { warn })).toThrow('JSONL corrupted')
+    // 流级错误不产生折叠期降级日志（warn 注入只服务单条损坏跳过，降级决策归调用方）
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('合法 entry 前缀 + 后续迭代抛错 → 整体上抛（已折叠前缀不得被当成真空表返回）', () => {
+    const session = '/s.json'
+    const valid: SchedulerEntryLike[] = [
+      entry({ op: 'upsert', taskId: 'A', ownerSessionFile: session, task: snapshot({ id: 'A' }) }),
+    ]
+    const prefixThenThrow: Iterable<SchedulerEntryLike> = {
+      [Symbol.iterator]() {
+        const inner = valid[Symbol.iterator]()
+        let exhausted = false
+        return {
+          next() {
+            if (!exhausted) {
+              const r = inner.next()
+              if (!r.done) return r
+              exhausted = true
+            }
+            throw new Error('JSONL corrupted mid-stream')
+          },
+        }
+      },
+    }
+
+    expect(() => replayFoldEntries(prefixThenThrow, session)).toThrow('JSONL corrupted mid-stream')
   })
 
   it('检查逐变体拒绝缺必填/非法字段的 entry：静默跳过，合法 entry 仍折叠（MF-2）', () => {
@@ -226,7 +247,7 @@ describe('replayFoldEntries（包内折叠器）', () => {
     expect(result.size).toBe(1)
     expect(result.get('GOOD')).toBeDefined()
     expect(result.has('BAD')).toBe(false)
-    // 逐条跳过 warn（非外层整体 catch 的 replayFoldEntries failed warn）
+    // 逐条跳过 warn（单条损坏只跳过该条；流级错误已改为上抛，不走 warn）
     expect(warn).toHaveBeenCalledTimes(1)
     expect(warn).toHaveBeenCalledWith(
       'skipping corrupted scheduler entry',

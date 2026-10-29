@@ -48,6 +48,8 @@ export {
   // v3 波 4（统一消息投递 §3.8 文本行）：磁盘 outbox——DeliveryStore 的 runtime 半区
   // 实现（fs 窄接口注入，本包零 node:fs import；目录/文件路径由 runtime 侧动态推导）
   createDiskDeliveryStore,
+  // 读失败显式分型（读失败 ≠ 空文件）：消费方 instanceof 判别 / 诊断定位
+  DiskStoreReadError,
   type DiskDeliveryStore,
   type DiskDeliveryStoreDeps,
   type DiskStoreFs,

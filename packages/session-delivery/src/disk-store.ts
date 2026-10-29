@@ -20,6 +20,8 @@
  * 设计 §3.5.1「两个实现在两半区适配层」）；目录与文件路径由装配方（runtime 侧）动态
  * 推导后以字符串传入。崩溃写入的中途半行由读取容错覆盖（JSON.parse 失败 warn 跳过）
  * ——最坏丢一行 = 最坏多投一次，与「必达优先于去重」语义一致，不需要原子替换协议。
+ * 读失败（文件存在但不可读）显式分型上抛 DiskStoreReadError，不折叠成空结果（见
+ * ensureLoaded 注释）；文件不存在 = 合法空态。
  */
 import type { DeliveryStore, DeliveryStoreRecord } from './types.js'
 
@@ -81,6 +83,22 @@ function serializeLine(line: OutboxLine): string {
   return `${JSON.stringify(line)}\n`
 }
 
+/**
+ * outbox 读失败错误（显式分型：读失败 ≠ 空文件）。文件存在但不可读（权限 / 瞬时 fs
+ * 故障）时由 ensureLoaded 抛出——判别形态与 DeliveryReclaimError 同理（进程内同包
+ * 调用边界，instanceof 最简判别）。
+ */
+export class DiskStoreReadError extends Error {
+  /** outbox 文件路径（诊断定位）。 */
+  readonly file: string
+
+  constructor(file: string, cause?: unknown) {
+    super(`disk delivery store read failed: ${file}`, { cause })
+    this.name = 'DiskStoreReadError'
+    this.file = file
+  }
+}
+
 export function createDiskDeliveryStore(deps: DiskDeliveryStoreDeps): DiskDeliveryStore {
   const { fs, dir, file } = deps
   const log = deps.log ?? ((message: string, err?: unknown): void => { console.warn(message, err ?? '') })
@@ -118,17 +136,23 @@ export function createDiskDeliveryStore(deps: DiskDeliveryStoreDeps): DiskDelive
 
   function ensureLoaded(): void {
     if (loaded) return
-    loaded = true
-    if (!fs.existsSync(file)) return
+    if (!fs.existsSync(file)) {
+      loaded = true // 文件不存在 = 合法空态（从未写入），可缓存
+      return
+    }
     let raw: string
     try {
       raw = fs.readFileSync(file, 'utf8')
     } catch (err) {
-      // 读取失败按空文件处理：判重失效（terminalIds 空 → 宁可多投）+ 本轮重放源
-      // 不可用（内存派生数据全空，loadUndelivered 返回空不重放）；warn 留痕，重启重读自愈。
-      log(`[disk-delivery-store] read failed (treated as empty), file=${file}`, err)
-      return
+      // 读失败显式分型上抛（失败语义折叠修复）：不缓存「已加载空态」——loaded 保持
+      // false，下次调用重读（瞬时故障自愈）；持久故障的下游形态：persist 一并失败 →
+      // 内核 persistBeforeAccept 拒收（不作耐久承诺）；loadUndelivered 上抛 → runtime
+      // reconcile catch 下轮重试 / resync 经 RPC 中央 catch 回显式错误；hasTerminal
+      // 上抛 → safeHasTerminal 保守放行 + warn（重投可见可查）。
+      log(`[disk-delivery-store] read failed (propagating; not treated as empty), file=${file}`, err)
+      throw new DiskStoreReadError(file, err)
     }
+    loaded = true
     let lineNumber = 0
     for (const lineText of raw.split('\n')) {
       lineNumber += 1

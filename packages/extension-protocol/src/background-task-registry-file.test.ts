@@ -151,20 +151,22 @@ describe('readRegistry（超集形态 + corrupt 隔离 + onLog 注入）', () =>
     expect(readFileSync(join(dir, siblings[0]), 'utf8')).toBe('{broken again')
   })
 
-  it('读失败（权限）→ 空表 + corrupted:false + onLog warn（降级非损坏）', () => {
+  it('读失败（权限）→ 抛错 + onLog warn（禁止折叠成空表——空表重建会丢失全部登记）', () => {
     const dir = freshDir()
     const path = join(dir, 'registry.json')
-    writeRegistryFile(path, 'unreadable')
+    writeRegistryFile(path, serializeRegistryFile([entry('bt-1')]))
     chmodSync(path, 0o000)
     try {
       const { events, logger } = collectLogs()
-      const result = readRegistry(path, logger)
-      expect(result).toEqual({ entries: [], corrupted: false })
+      expect(() => readRegistry(path, logger)).toThrow()
       expect(events).toHaveLength(1)
+      expect(events[0].level).toBe('warn')
       expect(events[0].event).toContain('registry read failed')
     } finally {
       chmodSync(path, 0o644)
     }
+    // 权限恢复后原内容可正常读出——读失败路径未动文件（无空表重建、无 .corrupt 隔离）
+    expect(readRegistry(path).entries).toEqual([entry('bt-1')])
   })
 })
 

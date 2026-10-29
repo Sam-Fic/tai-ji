@@ -149,8 +149,8 @@ describe('replayFoldEntries', () => {
     expect(inA.get('X')!.nextRunAt).toBe(500)
   })
 
-  // ── TC-W-GETENTRIES-FALLBACK：getEntries 异常兜底（gap4）──
-  it('TC-W-GETENTRIES-FALLBACK: 迭代器抛错时 logger.warn + 返回空 Map，不崩溃', () => {
+  // ── TC-W-GETENTRIES-FALLBACK：getEntries 流级错误传播（gap4 修复）──
+  it('TC-W-GETENTRIES-FALLBACK: 迭代器抛错经 wrapper 上抛（不折叠空 Map），降级归装配点', () => {
     loggerMock.warn.mockClear()
     // 构造迭代时抛错的 iterable（模拟 session JSONL 损坏）
     const throwingIterable: Iterable<SchedulerEntryLike> = {
@@ -165,12 +165,9 @@ describe('replayFoldEntries', () => {
       },
     }
 
-    const result = replayFoldEntries(throwingIterable, '/s.json')
-    expect(result.size).toBe(0)
-    expect(loggerMock.warn).toHaveBeenCalled()
-    const msg = loggerMock.warn.mock.calls[0]![0] as string
-    expect(msg).toContain('replayFoldEntries failed')
-    expect(loggerMock.warn.mock.calls[0]![1]).toEqual(expect.objectContaining({ error: expect.stringContaining('JSONL corrupted') }))
+    expect(() => replayFoldEntries(throwingIterable, '/s.json')).toThrow('JSONL corrupted')
+    // 流级错误不产生折叠期降级日志——显式降级（warn + 空任务集）在 session_start 装配点
+    expect(loggerMock.warn).not.toHaveBeenCalled()
   })
 
   // ── gap2 补强：advance 后 lastStatus/lastRunAt/runCount/history 全恢复 ──
@@ -303,7 +300,7 @@ describe('replayFoldEntries', () => {
     expect(result.size).toBe(1)
     expect(result.get('GOOD')).toBeDefined()
     expect(result.has('BAD')).toBe(false)
-    // 逐条跳过 warn（非外层整体 catch 的 replayFoldEntries failed warn）
+    // 逐条跳过 warn（单条损坏只跳过该条；流级错误已改为上抛，不走 warn）
     expect(loggerMock.warn).toHaveBeenCalled()
     const msg = loggerMock.warn.mock.calls[0]![0] as string
     expect(msg).toContain('skipping corrupted scheduler entry')
