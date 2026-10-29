@@ -165,6 +165,8 @@ export function evaluateRetryRules(message: string, rules: readonly RetryableErr
  * - 锚文本 `rate limit 429 too many requests` 实测命中 pi-ai RETRYABLE 词表的
  *   `rate.?limit` / `429` / `too many requests` 三条，且不含 NON_RETRYABLE 词表任何成员
  *   （node_modules @earendil-works/pi-ai dist/utils/retry.js 1.0.0 实装核对）；
+ *   该前提由 __tests__/pi-ai-vocabulary-parity.test.ts 机器锁（行为级对拍
+ *   isRetryableAssistantError，pi-ai 升级换词表致锚文本失效时红灯）；
  * - 追加式非替换式：原 errorMessage 完整保留在前段（pi 会话记录持久化改写形态，无信息丢失）。
  */
 export const RETRY_REWRITE_MARKER = " [taiji-retry: rate limit 429 too many requests]";

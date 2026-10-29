@@ -3,7 +3,8 @@
  * 校验与匹配定在 shared：runtime 写入侧校验、settings 展示与 extension 分流匹配共用同一套语义，
  * 杜绝两端漂移（llm-retry 域同款纪律）。
  * extension 侧因 bundle 隔离会复制同语义实现（normalizeHostname / matchesHostPattern），
- * 本模块是匹配语义 SSOT——复制体漂移时以本文件为准。
+ * 本模块是匹配语义 SSOT——复制体漂移时以本文件为准，两侧一致由 extension 侧
+ * __tests__/network-proxy-shared-parity.test.ts 跨包对拍锁定（同输入矩阵双侧同判）。
  * 设计依据：.tmp/tech-design/llm-network-proxy.md §3.1（配置 schema 与匹配语义）。
  */
 
@@ -167,12 +168,12 @@ function collectProxyServerErrors(proxy: unknown): string[] {
  * 对象性守卫（llm-retry 同款）：null/数组解构会抛 TypeError 或静默得 undefined，
  * 写路径校验须以错误信封逃逸而非异常。
  */
-export function validateNetworkProxyConfig(config: NetworkProxyConfig): NetworkProxyValidationResult {
+export function validateNetworkProxyConfig(config: unknown): NetworkProxyValidationResult {
   if (config === null || typeof config !== 'object' || Array.isArray(config)) {
     return { ok: false, errors: [`网络代理配置必须是对象: ${String(config)}`] }
   }
   const errors: string[] = []
-  const { enabled, proxy, noProxy, rules, ipv4Only } = config
+  const { enabled, proxy, noProxy, rules, ipv4Only } = config as Record<string, unknown>
   if (typeof enabled !== 'boolean') {
     errors.push(`网络代理开关必须是开或关: ${JSON.stringify(enabled) ?? String(enabled)}，请重新切换一次开关后保存`)
   }

@@ -50,6 +50,7 @@
     "undici": "^7.28.0"
   },
   "devDependencies": {
+    "@taiji/shared": "workspace:*",
     "@vitest/coverage-v8": "^4.1.9",
     "vitest": "^4.1.8"
   },
