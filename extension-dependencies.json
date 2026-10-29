@@ -157,7 +157,7 @@
         {
           "package": "@zhushanwen/pi-exec-skills",
           "type": "package",
-          "reason": "代码层静态 import resolveSkills/SkillResolution（src/enter.ts top-level re-export，export { resolveSkills } from \"@zhushanwen/pi-exec-skills\"，ADR-0074 执行门禁单源）与 detectExecSkills/ExecSkill（src/tool.ts top-level import），缺失时模块加载即抛 Cannot find module，是强依赖"
+          "reason": "代码层静态 import resolveSkills/SkillResolution（src/enter.ts top-level re-export，export { resolveSkills } from \"@zhushanwen/pi-exec-skills\"，ADR-0096 执行门禁单源）与 detectExecSkills/ExecSkill（src/tool.ts top-level import），缺失时模块加载即抛 Cannot find module，是强依赖"
         },
         {
           "package": "@zhushanwen/pi-session-path",

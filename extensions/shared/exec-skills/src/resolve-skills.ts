@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 /**
- * 技能执行门禁共享能力（ADR-0074 落地包）：steer/注入前的「pi 实际认得」确认，
+ * 技能执行门禁共享能力（ADR-0096 落地包）：steer/注入前的「pi 实际认得」确认，
  * 走 pi 注册表（pi.getCommands）。与同包 exec-skills 模块构成两段消费语义闭环——
  * 扫描（发现，自研直读磁盘，技能热装即时可见）≠ 本模块（执行门禁，pi 注册表
  * 是执行权威）；pi 不认得的技能只提示不注入。

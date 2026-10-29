@@ -42,8 +42,10 @@ export function bestEffort(err: unknown, context: string, level: BestEffortLevel
 // core 不能 import `@zhushanwen/pi-ext-guards`（扩展侧包，core 消费方向非法）——
 // stale 分诊在此建包内极小分类，标记值与 ext-guards 的 STALE_CTX_MARKER 同源同值
 //（pi 语义断言 PS-30：会话替换后旧 runner 每个方法首行 assertActive 抛错，文案含
-// "stale after session replacement"；探针随 pi 版本门禁重验，两侧值漂移会被
-// ext-guards 的 pi-semantics-stale-ctx-wording 测试拦截）。
+// "stale after session replacement"；探针随 pi 版本门禁重验。对拍分工：ext-guards 的
+// pi-semantics-stale-ctx-wording 测试锁 pi 实装 ↔ ext-guards 常量双侧一致性；core
+// 副本由 best-effort-pi-call.test.ts 硬编码同值断言锁定——pi 改文案时两把锁齐红，
+// 须同步全部副本）。
 
 /** pi stale ctx 错误文案标记（PS-30，与 `@zhushanwen/pi-ext-guards` 的
  *  STALE_CTX_MARKER 同值；core 内极小副本，理由见上方块注释）。 */
