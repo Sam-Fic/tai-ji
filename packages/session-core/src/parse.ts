@@ -71,14 +71,12 @@ function toEntry(raw: unknown): Entry | undefined {
 /**
  * 解析 session JSONL 文本为 entries。
  *
- * 末尾换行产生的空行忽略（不计 skipped、不计 partial）；中间空行容错跳过
- * （正常 JSONL 无空行，防御文件损坏）。最后一行 parse 失败时 lastLinePartial=true
- * （活跃 session 写到一半的半行），区别于中间坏行。
+ * 末尾换行产生的空行忽略（不计 skipped）；中间空行容错跳过
+ * （正常 JSONL 无空行，防御文件损坏）。
  */
 export function parseSessionContent(content: string): ParseResult {
   const entries: Entry[] = []
   let skippedLines = 0
-  let lastLinePartial = false
 
   const lines = content.split('\n')
   // 移除末尾因 trailing newline 产生的空行（非真实行）
@@ -88,7 +86,6 @@ export function parseSessionContent(content: string): ParseResult {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
-    const isLast = i === lines.length - 1
 
     // 中间空行容错：不计 skipped
     if (line.trim() === '') continue
@@ -98,14 +95,12 @@ export function parseSessionContent(content: string): ParseResult {
       raw = JSON.parse(line)
     } catch {
       skippedLines++
-      if (isLast) lastLinePartial = true
       continue
     }
 
     const entry = toEntry(raw)
     if (entry === undefined) {
       skippedLines++
-      if (isLast) lastLinePartial = true
       continue
     }
     entries.push(entry)
@@ -115,7 +110,6 @@ export function parseSessionContent(content: string): ParseResult {
     entries,
     skippedLines,
     totalBytes: Buffer.byteLength(content, 'utf8'),
-    lastLinePartial,
   }
 }
 

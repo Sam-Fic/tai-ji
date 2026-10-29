@@ -100,8 +100,8 @@ function extractZcodeSessionRefAnchor(engineHandle: unknown): ZcodeAnchor | unde
  * 多候选文件：按候选列表顺序逐文件扫，文件内有命中锚（含末条裁决后）即止——
  * 候选顺序 = 调用方声明的优先级（liveSessionDir 优先），不跨文件合并。
  *
- * 行级容错：逐行解析由基座 parseSessionContent 承担（坏行跳过继续、末行半行记
- * lastLinePartial 不中断）——best-effort，不因一行坏 JSON 失败整文件。
+ * 行级容错：逐行解析由基座 parseSessionContent 承担（坏行跳过继续、不中断）——
+ * best-effort，不因一行坏 JSON 失败整文件。
  *
  * 候选文件读失败（不存在/不可读）= 该候选无命中，跳过继续下一候选；本函数契约
  * 是「锚或 not-found」，IO 错误同样收敛到 not-found 信号（调用方映射错误码），

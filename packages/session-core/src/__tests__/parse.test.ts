@@ -34,7 +34,6 @@ describe('parseSessionContent', () => {
 
     expect(result.entries).toHaveLength(5)
     expect(result.skippedLines).toBe(0)
-    expect(result.lastLinePartial).toBe(false)
     expect(result.totalBytes).toBe(Buffer.byteLength(content, 'utf8'))
 
     expect(result.entries[0]).toMatchObject({ type: 'session', id: 'sess-1', cwd: '/tmp/proj' })
@@ -78,23 +77,21 @@ describe('parseSessionContent', () => {
     expect(result.skippedLines).toBe(0)
   })
 
-  it('末行半行记 lastLinePartial，区别于中间坏行', () => {
+  it('末行半行与中间坏行同计 skippedLines（坏行统计不区分行位置）', () => {
     const partial = `${JSON.stringify({ type: 'message', id: 'a', parentId: null })}\n{"type":"mess`
     const result = parseSessionContent(partial)
 
     expect(result.entries).toHaveLength(1)
     expect(result.skippedLines).toBe(1)
-    expect(result.lastLinePartial).toBe(true)
 
     const midBroken = `{"type":"mess\n${JSON.stringify({ type: 'message', id: 'a', parentId: null })}\n`
     const result2 = parseSessionContent(midBroken)
 
     expect(result2.entries).toHaveLength(1)
     expect(result2.skippedLines).toBe(1)
-    expect(result2.lastLinePartial).toBe(false)
   })
 
-  it('trailing newline 与中间空行不计 skipped 不计 partial', () => {
+  it('trailing newline 与中间空行不计 skipped', () => {
     const content = [
       JSON.stringify({ type: 'message', id: 'a', parentId: null }),
       '',
@@ -107,11 +104,10 @@ describe('parseSessionContent', () => {
 
     expect(result.entries).toHaveLength(2)
     expect(result.skippedLines).toBe(0)
-    expect(result.lastLinePartial).toBe(false)
   })
 
   it('空文本产出空 ParseResult', () => {
-    expect(parseSessionContent('')).toEqual({ entries: [], skippedLines: 0, totalBytes: 0, lastLinePartial: false })
+    expect(parseSessionContent('')).toEqual({ entries: [], skippedLines: 0, totalBytes: 0 })
   })
 })
 

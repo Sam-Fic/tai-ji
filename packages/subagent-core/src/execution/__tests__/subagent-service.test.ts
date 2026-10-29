@@ -1148,18 +1148,11 @@ function setup(initOverrides: Partial<{ isIdle: () => boolean }> = {}): {
   return { agentDir, service, store, pi };
 }
 
-describe("T4① notify gate 二元组（[U5 / §3.2.7] 放弃轮标记阻断 + 跨世代丢弃 / 其余放行）", () => {
-  it("blocks abandoned-round hits and cross-epoch inbound; allows settled/running without marks", () => {
+describe("T4① notify gate（[U5 / §3.2.7] 放弃轮标记阻断 / 其余放行）", () => {
+  it("blocks abandoned-round hits; allows settled/running without marks", () => {
     // 放弃轮标记命中（承接原 cancelled 阻断防双发）：同世代回注轮 ≤ 标记轮 → 丢弃。
     expect(
       notifyGateAllowsDelivery({ lastAbandonedRound: { epoch: 0, round: 2 }, round: 2 }),
-    ).toBe(false);
-    // 两步判定第一步：回注声明世代 ≠ record 当前世代 → 丢弃。
-    expect(
-      notifyGateAllowsDelivery(
-        { epoch: 1, lastAbandonedRound: { epoch: 0, round: 2 } },
-        { epoch: 0, round: 2 },
-      ),
     ).toBe(false);
     // 标记槽世代 ≠ 当前世代（reopen 残留）→ 标记自然失效，新世代正常轮放行。
     expect(

@@ -249,10 +249,10 @@ export {
   setSubagentService,
   type SubagentServiceInit,
 } from "./execution/service/service-bootstrap.ts";
-// notifyGateAllowsDelivery：[U5/K11] 轮次完成回注的投递门——二元组判据（回注
-// epoch 世代比对 + 放弃轮标记命中阻断；收尾轮构造性豁免——close 收尾写入 journal 记录挂在
-// 通知送达之后且不置标记），判据源已从旧「closedReason 形态枚举」切换为
-// 「放弃标记」单维——
+// notifyGateAllowsDelivery：[U5/K11] 轮次完成回注的投递门——放弃轮标记命中阻断
+// （收尾轮构造性豁免——close 收尾写入 journal 记录挂在通知送达之后且不置标记；
+// 跨世代重复帧由 notifyId 投递日志判重承接），判据源已从旧「closedReason 形态枚举」
+// 切换为「放弃标记」单维——
 // 投递内核与壳侧 notify 链的共同语义锚点（execution 生产域消费，A2a/U5）。
 export { notifyGateAllowsDelivery } from "./execution/subagent-service.ts";
 

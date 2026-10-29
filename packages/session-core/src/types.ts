@@ -69,8 +69,6 @@ export interface ParseResult {
   /** JSON 解析失败（含缺必填结构字段）的行数 */
   skippedLines: number
   totalBytes: number
-  /** 最后一行疑似半行（活跃 session 写入中），区别于中间坏行 */
-  lastLinePartial: boolean
 }
 
 /**
