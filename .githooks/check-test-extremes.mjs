@@ -86,6 +86,11 @@ const EXEMPT = {
   'scripts/__tests__/check-test-blind-wait.test.mjs': '盲等检查器黑盒自测（每处 spawn <300ms，裁决保留）',
   'scripts/__tests__/check-prompt-outposts.test.mjs': '出站调用点检查黑盒自测（fixture 由被测脚本常量生成，spawn 亚秒级）',
   'scripts/__tests__/check-domain-type-path.test.mjs': '检查器黑盒自测（spawn 检查脚本本体，亚秒级）',
+  // —— 重写 u-foundation 新增检查器黑盒自测（同款 spawn 本体形态，2026-10-31） ——
+  'scripts/__tests__/check-testid-parity.test.mjs': 'testid 对账检查器黑盒自测（spawn 检查脚本本体，亚秒级）',
+  'scripts/__tests__/check-test-typecheck-coverage.test.mjs': 'typecheck 覆盖对账检查器黑盒自测（spawn 检查脚本本体，亚秒级）',
+  'scripts/__tests__/check-shared-module-admission.test.mjs': 'shared 模块准入检查器黑盒自测（spawn 检查脚本本体，亚秒级）',
+  'scripts/__tests__/run-affected-e2e-ci.test.mjs': 'on-diff e2e CI 消费器黑盒自测（spawn 被测脚本本体，亚秒级）',
   'scripts/__tests__/check-domain-slices.test.mjs': '域切分守卫黑盒自测（spawn 检查脚本本体，亚秒级，沿检查器自测先例）',
   'scripts/__tests__/check-test-results.test.mjs': 'junit 聚合检查黑盒自测（spawn 检查脚本本体，亚秒级）',
   'scripts/__tests__/check-test-junit-parity.test.mjs': 'junit 守恒工具黑盒自测（spawn 工具本体，亚秒级）',

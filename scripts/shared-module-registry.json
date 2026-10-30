@@ -1,0 +1,261 @@
+{
+  "_comment": "@taiji/shared 模块准入登记（D14：立模块准入规则 + 机器检查）。准入规则与机器检查 = scripts/check-shared-module-admission.mjs（头注释成文）。新模块进 packages/shared/src/ 必须同步在本表登记 purpose（一句话跨包理由），检查脚本对账磁盘与登记双向一致——不登记即红。purpose 取模块头注释首句；头注释缺失的模块应补头注释（新模块义务）。",
+  "modules": [
+    {
+      "file": "archive.ts",
+      "purpose": "session 归档域共享契约（session-archive 设计 §7 D3 簿记 schema + D5 RPC 消息，"
+    },
+    {
+      "file": "codemode.ts",
+      "purpose": "codemode 域 WS 协议契约（runtime ↔ renderer 共享，接口先行）。"
+    },
+    {
+      "file": "constants.ts",
+      "purpose": "Shared constants used by both runtime (Node.js) and renderer (Electron)."
+    },
+    {
+      "file": "crash-journal-schema.ts",
+      "purpose": "崩溃条目清单事件 Schema SSOT（docs/architecture/crash-forensics-and-watchdog.md §3.3 D1）。"
+    },
+    {
+      "file": "discovery-migrate.ts",
+      "purpose": "判定单条路径的 scope 归属（方案 §2.3）："
+    },
+    {
+      "file": "display-name.ts",
+      "purpose": "agent/workflow 引用显示名（basename 短名）——GUI 侧单点实现（D-收敛：tray 行、"
+    },
+    {
+      "file": "extension.ts",
+      "purpose": "对话框族帧（pi1-disposition-chat-flow D6）：kind=dialog 的 WS 消息族，载荷判别字段 dialogKind"
+    },
+    {
+      "file": "file-tree.ts",
+      "purpose": "shared/file-tree.ts — FileNode DTO（⑤code-arch §3，#1，D-012）"
+    },
+    {
+      "file": "gen-stats.ts",
+      "purpose": "gen-stats.ts — Composer 生成指标（token 速度 + 缓存命中率 + TTFT 首字延迟）类型 SSOT"
+    },
+    {
+      "file": "git.ts",
+      "purpose": "git.status 的返回结构（FR-12/G-R2-01）。cwd 非 git 仓库时 isRepo=false，其余字段为默认值。"
+    },
+    {
+      "file": "handoff.ts",
+      "purpose": "Handoff 域共享常量（chat-flow-consistency U9 / 特殊流程 S2）。"
+    },
+    {
+      "file": "import-session.ts",
+      "purpose": "导入会话 RPC 契约（runtime ↔ renderer 共享，接口先行；pi / zcode 多源）。"
+    },
+    {
+      "file": "index.ts",
+      "purpose": "聚合出口（re-export 全部模块符号；renderer/core 等消费方的主入口）"
+    },
+    {
+      "file": "ipc-channels.ts",
+      "purpose": "Electron IPC 通道名 SSOT（preload ↔ main ↔ renderer 三侧，u-foundation）。"
+    },
+    {
+      "file": "ipc-payloads.ts",
+      "purpose": "Electron IPC payload 类型 SSOT（与 ipc-channels.ts 通道名配对，请求与返回两侧）。"
+    },
+    {
+      "file": "llm-retry.ts",
+      "purpose": "LLM 重试配置域（类型 + D8 数值合法域）。"
+    },
+    {
+      "file": "local-file-url.ts",
+      "purpose": "local-file:// 协议 URL 构造（renderer img src 唯一构造点，浏览器安全纯函数）。"
+    },
+    {
+      "file": "mandatory-extensions.json",
+      "purpose": "数据清单（机器可读 SSOT）"
+    },
+    {
+      "file": "mcp.ts",
+      "purpose": "mcp 域 WS 协议契约（runtime ↔ renderer 共享，接口先行）。"
+    },
+    {
+      "file": "message-metadata.ts",
+      "purpose": "SegmentsMetadataFile —— user message 结构化 segments 的 sidecar 存储。"
+    },
+    {
+      "file": "message.ts",
+      "purpose": "完成通知类 customType SSOT（conversation-renderer-model-unification §3.3.2："
+    },
+    {
+      "file": "migration.ts",
+      "purpose": "迁移功能（从其他 agent 迁移配置）共享类型。"
+    },
+    {
+      "file": "network-proxy.ts",
+      "purpose": "LLM 网络代理配置域（类型 + 校验 + 匹配语义纯函数）。"
+    },
+    {
+      "file": "panel.ts",
+      "purpose": "Panel 类型（v2：移除 split 后单 panel 语义）。"
+    },
+    {
+      "file": "paths.ts",
+      "purpose": "跨进程数据目录路径解析（main + runtime 共用，ADR-0009 隔离）。"
+    },
+    {
+      "file": "pi-default-prompt.ts",
+      "purpose": "pi 默认核心系统提示词（固定段，不含动态段）。"
+    },
+    {
+      "file": "pi-entry.ts",
+      "purpose": "pi session entry 的 wire 类型（data-source-governance W21 自 core/domain/chat/apply-entry.ts 下沉）。"
+    },
+    {
+      "file": "pi-preset.ts",
+      "purpose": "Pi 启动参数预设数据模型。"
+    },
+    {
+      "file": "plugin-capability-map.ts",
+      "purpose": "插件业务能力词 → 内置模块放行集映射 SSOT（provider-plugin-access D3）"
+    },
+    {
+      "file": "plugin-namespace.ts",
+      "purpose": "插件命名空间推导与绑定校验 SSOT（provider-plugin-access D4）"
+    },
+    {
+      "file": "plugin-permission-map.ts",
+      "purpose": "插件权限词汇 ↔ RPC 方法名映射 SSOT"
+    },
+    {
+      "file": "plugin-view-scope.ts",
+      "purpose": "plugin-view-scope —— 插件视图归属作用域（provider-plugin-access U2，分区键泛化）。"
+    },
+    {
+      "file": "plugin.ts",
+      "purpose": "插件视图声明（wire 侧形状，与 plugin-sdk / core 两版 PluginContributesView 对齐）。"
+    },
+    {
+      "file": "project.ts",
+      "purpose": "Project 数据模型（v6 D14：Project 一级导航，2026-08-04 语义修正）。"
+    },
+    {
+      "file": "protocol.ts",
+      "purpose": "测试连接按协议分组的单行结果（SSOT，2026-09-10 review S-9 手写重复收编）："
+    },
+    {
+      "file": "provider.ts",
+      "purpose": "Provider 机器标识品牌类型（design provider-arch-hardening §3.3 D2 / Phase 2）。"
+    },
+    {
+      "file": "quota-presets.ts",
+      "purpose": "Coding Plan 额度查询 — Provider 预设配置。"
+    },
+    {
+      "file": "quota-refresh-targets.ts",
+      "purpose": "cookie 类 provider 的额度查询登录态刷新目标（隐藏窗口刷新器导航信息 SSOT）。"
+    },
+    {
+      "file": "quota-types.ts",
+      "purpose": "Coding Plan 额度查询 — 共享类型定义。"
+    },
+    {
+      "file": "recommended-extensions.json",
+      "purpose": "数据清单（机器可读 SSOT）"
+    },
+    {
+      "file": "remote-access.ts",
+      "purpose": "远程访问配置契约 SSOT：remote-access.json 的文件名与内容形态，"
+    },
+    {
+      "file": "retry-rules.ts",
+      "purpose": "LLM 重试规则域（类型 + 校验 + 判定管线纯函数 SSOT，subagent-observability §3.3.12）。"
+    },
+    {
+      "file": "revoke-restore.ts",
+      "purpose": "草稿还原纯函数族（message revoke 设计 §3.3 D7 两层切条规则 + msg-pipeline-debloat"
+    },
+    {
+      "file": "runtime-instance.ts",
+      "purpose": "runtime 自登记文件契约（runtime 写、Electron supervisor 读的唯一共享形状）。"
+    },
+    {
+      "file": "segments.ts",
+      "purpose": "Segment —— user message content 的结构化模型（ADR-0043）。"
+    },
+    {
+      "file": "session-occupancy.ts",
+      "purpose": "session occupancy 域形状与「回合进行中」判定集合（chat-flow-consistency D1 契约根，"
+    },
+    {
+      "file": "session-store-paths.ts",
+      "purpose": "session 存储树纯路径公式模块（零 env 读写、零进程假设）。"
+    },
+    {
+      "file": "session.ts",
+      "purpose": "session 状态。"
+    },
+    {
+      "file": "settings.ts",
+      "purpose": "设置域共享类型（settings 页面与 runtime 的 DTO）"
+    },
+    {
+      "file": "skill-marker.ts",
+      "purpose": "Composer 多 skill 注入的标记语法与预算估算 SSOT（foundation 模块）。"
+    },
+    {
+      "file": "sound-defaults.ts",
+      "purpose": "系统提示音默认映射 SSOT（single source of truth）。"
+    },
+    {
+      "file": "spawn-env-contract.ts",
+      "purpose": "出站 env 契约 SSOT（runtime 及 main 孵化子进程时「给什么 / 不给什么」）。"
+    },
+    {
+      "file": "speech-text.ts",
+      "purpose": "朗读文本清洗（TTS speak 前置，设计 .tmp/tech-design/ai-voice-tts.md D7）。"
+    },
+    {
+      "file": "subagent.ts",
+      "purpose": "Subagent 数据模型 —— 从主 session JSONL 的 subagent toolCall/toolResult 提取。"
+    },
+    {
+      "file": "tailwind-preset.ts",
+      "purpose": "taiji 共享 Tailwind preset（v3 冷蓝暗色，ADR-0019）。"
+    },
+    {
+      "file": "terminal-id.ts",
+      "purpose": "终端实例编号（terminalId）格式谓词 —— `term:<会话id>:<序号>` 的跨层协议级约定 SSOT。"
+    },
+    {
+      "file": "timeouts.ts",
+      "purpose": "RPC 超时校准链常量 SSOT（timeout-slow-flow-wallclock 设计 D2/D3）。"
+    },
+    {
+      "file": "tts-types.ts",
+      "purpose": "语音合成朗读（TTS）契约类型 —— shared 协议层 SSOT。"
+    },
+    {
+      "file": "update.ts",
+      "purpose": "自动升级相关共享类型（前端 + main + preload 三方共享）。"
+    },
+    {
+      "file": "usage-stats.ts",
+      "purpose": "用量统计共享类型（W1 数据层）"
+    },
+    {
+      "file": "vid-rpc-gate.ts",
+      "purpose": "vid RPC 门 —— renderer/mobile 发往 runtime 的 RPC 在 command 入口统一拦截虚拟会话 id。"
+    },
+    {
+      "file": "virtual-session-id.ts",
+      "purpose": "虚拟 session ID 工厂 —— subagent / agent call 对话流在 chatStore.messages Map 中的 key 约定。"
+    },
+    {
+      "file": "workflow.ts",
+      "purpose": "Workflow 数据模型 —— runtime 派生视图链的 shared 消费契约。"
+    },
+    {
+      "file": "workspace.ts",
+      "purpose": "RecentWorkspaceRecord — 最近工作区记录 DTO"
+    }
+  ]
+}

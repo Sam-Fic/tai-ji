@@ -2835,7 +2835,7 @@
       ],
       "trigger": "on-diff",
       "serial": false,
-      "run": "pnpm -C packages/session-delivery test && pnpm -C packages/runtime exec vitest run src/services/session/__tests__/delivery-outbox-crash-recovery.test.ts",
+      "run": "pnpm -C packages/session-delivery test && pnpm -C packages/runtime exec vitest run src/services/session/__tests__/delivery-resync-crash-retry.test.ts src/services/session/__tests__/session-projection-bundle.test.ts",
       "owner": "packages/runtime",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
       "note": "统一投递波 4 双层口径的 mock 层（零 token，可进 CI）：覆盖 A9 全部断言点。真实进程层 = E2E-DELIVERY-02（设计 §6 波 4 增补：双层都跑，真实进程层为「应用崩溃重启后未送达消息自动重新入队」的验收判据）"
@@ -5676,6 +5676,62 @@
       "owner": "scripts/",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
       "note": "R1 态：main 侧 gate-verdict-ssot 收敛（ADR-0170~0175）的工程件，随 feat-quota-cookie-refresh 合并 main 带入；日常 CI 由 ci.yml scripts-guards 步骤聚合判红。"
+    },
+    {
+      "id": "E2E-FOUND-01",
+      "summary": "重写前置地基三红灯机器检查（D13/D14）：testid 对账器 + renderer 测试 typecheck 覆盖对账 + shared 模块准入检查 + on-diff e2e CI 消费者（subagent-workflow-capability-architecture u-foundation 交付资产）",
+      "scope": [
+        "scripts/check-testid-parity.mjs",
+        "scripts/check-test-typecheck-coverage.mjs",
+        "scripts/check-shared-module-admission.mjs",
+        "scripts/run-affected-e2e-ci.mjs",
+        "scripts/shared-module-registry.json",
+        "scripts/__tests__/check-testid-parity.test.mjs",
+        "scripts/__tests__/check-test-typecheck-coverage.test.mjs",
+        "scripts/__tests__/check-shared-module-admission.test.mjs",
+        "scripts/__tests__/run-affected-e2e-ci.test.mjs"
+      ],
+      "layer": "L1",
+      "assets": [
+        {
+          "kind": "script",
+          "ref": "scripts/check-testid-parity.mjs"
+        },
+        {
+          "kind": "script",
+          "ref": "scripts/check-test-typecheck-coverage.mjs"
+        },
+        {
+          "kind": "script",
+          "ref": "scripts/check-shared-module-admission.mjs"
+        },
+        {
+          "kind": "script",
+          "ref": "scripts/run-affected-e2e-ci.mjs"
+        },
+        {
+          "kind": "spec",
+          "ref": "scripts/__tests__/check-testid-parity.test.mjs"
+        },
+        {
+          "kind": "spec",
+          "ref": "scripts/__tests__/check-test-typecheck-coverage.test.mjs"
+        },
+        {
+          "kind": "spec",
+          "ref": "scripts/__tests__/check-shared-module-admission.test.mjs"
+        },
+        {
+          "kind": "spec",
+          "ref": "scripts/__tests__/run-affected-e2e-ci.test.mjs"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": false,
+      "run": "node scripts/check-testid-parity.mjs && node scripts/check-shared-module-admission.mjs && node scripts/check-test-typecheck-coverage.mjs && pnpm exec vitest run scripts/__tests__/check-testid-parity.test.mjs scripts/__tests__/check-test-typecheck-coverage.test.mjs scripts/__tests__/check-shared-module-admission.test.mjs scripts/__tests__/run-affected-e2e-ci.test.mjs",
+      "owner": "scripts",
+      "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
+      "note": "R2 态（按改动范围触发）：u-foundation 三红灯与准入检查的防回归面——检查本体被改坏（对账语义退化/豁免登记失守）时本条红。日常 CI 承载 = ci.yml invariants（testid-parity / shared-admission 步骤）与 typecheck（coverage 对账步骤）+ scripts-guards 测试步骤（四测试文件已列举）；select-affected-e2e.mjs 的 --json 出口改动由既有 E2E-PIPE-04 / E2E-ZCODE-01 族资产测试覆盖其纯函数（toJsonPayload 用例在 select-affected-e2e.test.mjs，该文件已在 E2E-PIPE-04 登记）。typecheck 覆盖检查跑两遍 vue-tsc 属重检查，触发即含 renderer 测试面改动，语义一致。"
     }
   ]
 }

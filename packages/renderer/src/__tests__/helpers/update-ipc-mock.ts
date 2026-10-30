@@ -14,6 +14,7 @@
  * （服务直接加载 useAppUpdate 源码的 composables 四文件）。
  */
 import { vi } from 'vitest'
+import type { Mock } from 'vitest'
 import type {
   LatestReleaseInfo,
   LaunchResult,
@@ -30,8 +31,30 @@ export interface UpdateProgressPayload {
   percent: number
 }
 
-/** 内存 ipc adapter：AppUpdateIpc 的 vi.fn 实现 + 测试专用推送触发器 */
-export interface MemoryAppUpdateIpc extends AppUpdateIpc {
+/** 内存 ipc adapter：AppUpdateIpc 的 vi.fn 实现 + 测试专用推送触发器。
+ *  8 个可摆置方法显式声明为 Mock<T>（运行时即 vi.fn，消费方 resetCardUpdateHarness
+ *  调 mockReset/mockResolvedValue 需要类型面可见）；onUpdateProgress/onUpdateError
+ *  与 fire* 扩展沿用继承/自有声明。 */
+export interface MemoryAppUpdateIpc
+  extends Omit<
+    AppUpdateIpc,
+    | 'checkForUpdate'
+    | 'updateDownload'
+    | 'updateInstall'
+    | 'getPreloaded'
+    | 'getPendingUpdate'
+    | 'getLaunchResult'
+    | 'getUpdateSettings'
+    | 'openExternal'
+  > {
+  checkForUpdate: Mock<(opts?: { force?: boolean }) => Promise<UpdateCheckResult>>
+  updateDownload: Mock<(version: string) => Promise<{ downloaded: boolean }>>
+  updateInstall: Mock<() => Promise<UpdateInstallResult>>
+  getPreloaded: Mock<() => Promise<{ release: LatestReleaseInfo; filePath: string } | null>>
+  getPendingUpdate: Mock<() => Promise<LatestReleaseInfo | null>>
+  getLaunchResult: Mock<() => Promise<LaunchResult | null>>
+  getUpdateSettings: Mock<() => Promise<UpdateSettings>>
+  openExternal: Mock<(url: string) => Promise<void>>
   /** 模拟 main 进度的进度推送（转发给已注册的 onUpdateProgress 回调） */
   fireProgress(p: UpdateProgressPayload): void
   /** 模拟 main 进度的错误推送（转发给已注册的 onUpdateError 回调） */

@@ -6,6 +6,9 @@
  *   - scope 含于 diff 的 on-diff rule + 全部 always rule = 受影响面
  *   - --release 输出 on-release / on-pi-bump 面（发布与 pi 升级必跑清单）
  *   - --check 门禁：diff 文件落在 watched root 下却不被任何 rule 覆盖 → exit 1（防漏登记）
+ *   - --json 机器可读输出（CI 执行消费者 scripts/run-affected-e2e-ci.mjs 消费）：
+ *     JSON 数组 [{id, layer, trigger, serial, run, summary}]，与人读 markdown 互斥
+ *     （--json 时只输出 JSON 到 stdout，日志类信息全走 stderr）
  *
  * glob 匹配与 scripts/select-constraints.mjs 同款零依赖语义（<prefix>/** → startsWith，
  * 精确路径 → 全等），不引 minimatch——两调度器保持一套匹配语义。
@@ -103,6 +106,18 @@ export function releaseRules(map, { layer } = {}) {
   return map.rules.filter((rule) => RELEASE_TRIGGERS.includes(rule.trigger) && (!layer || rule.layer === layer));
 }
 
+/** --json 输出载荷（CI 执行消费者契约：字段子集 + 顺序稳定）。 */
+export function toJsonPayload(rules) {
+  return rules.map(({ id, layer, trigger, serial, run, summary }) => ({
+    id,
+    layer,
+    trigger,
+    serial,
+    run,
+    summary,
+  }));
+}
+
 // ---------- main ----------
 
 function loadMap() {
@@ -181,6 +196,7 @@ function main() {
   const base = argValue("--base") ?? "origin/main";
   const release = args.includes("--release");
   const check = args.includes("--check");
+  const json = args.includes("--json");
   const layer = argValue("--layer");
   if (layer && !LAYERS.includes(layer)) {
     console.error(`[select-affected-e2e] --layer 非法 "${layer}"（合法值 ${LAYERS.join(" | ")}）`);
@@ -205,14 +221,22 @@ function main() {
 
   const files = release ? [] : changedFiles(base);
 
+  // --json：机器可读输出（CI 执行消费者形态）——JSON 独占 stdout，进度信息走 stderr
+  // 不混流；on-diff 与 --release 两形态各自取 rules 后统一序列化。
+  const rules = release ? releaseRules(map, { layer }) : selectRules(map, files, { layer });
+  if (json) {
+    const payload = toJsonPayload(rules);
+    console.error(`[select-affected-e2e] --json：${payload.length} 条（base=${base}${release ? " release" : ""}${layer ? ` layer=${layer}` : ""}）`);
+    process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+    return;
+  }
+
   if (release) {
-    const rules = releaseRules(map, { layer });
     console.log(`# e2e release / pi-bump 面（--release${layer ? ` --layer ${layer}` : ""}）\n`);
     console.log(renderRules(rules, map));
     return;
   }
 
-  const rules = selectRules(map, files, { layer });
   console.log(`# 受影响 e2e 清单（select-affected-e2e）\n`);
   console.log(`- 变更范围：\`git diff ${base}...HEAD\`，共 ${files.length} 个文件${layer ? `（--layer ${layer} 过滤）` : ""}`);
   console.log("");

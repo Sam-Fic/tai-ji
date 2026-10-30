@@ -107,6 +107,15 @@ jobs:
         continue-on-error: true
         run: pnpm --filter @taiji/frontend run typecheck:test
 
+      # 红灯③覆盖对账（D13 三红灯之一）：include 全量形态断言 + exclude 债务登记与
+      # 全量跑有错文件集双向对账（新文件类型错即红 / 已修复债务强制收编 / 新债务须
+      # 显式登记）——防 tsconfig 回退白名单或债务登记腐烂。跑两遍 vue-tsc（正式 +
+      # 全量），约 +3min。
+      - name: Typecheck coverage reconciliation (renderer tests)
+        id: typecheck-coverage
+        continue-on-error: true
+        run: node scripts/check-test-typecheck-coverage.mjs
+
       # mobile-renderer 独立 typecheck（与 pre-commit 前端类型门禁段同口径）：renderer
       # tsconfig include 不含 mobile 包，缺本步则 mobile 全包在 CI 零编译期信号。
       - name: TypeCheck - mobile-renderer
@@ -176,6 +185,7 @@ jobs:
           failed=0
           if [ "${{ steps.typecheck-renderer.outcome }}" != "success" ]; then echo "::error title=TypeCheck-renderer::failed"; failed=1; fi
           if [ "${{ steps.typecheck-renderer-tests.outcome }}" != "success" ]; then echo "::error title=TypeCheck-renderer-tests::failed"; failed=1; fi
+          if [ "${{ steps.typecheck-coverage.outcome }}" != "success" ]; then echo "::error title=TypeCheck-coverage::failed"; failed=1; fi
           if [ "${{ steps.typecheck-mobile-renderer.outcome }}" != "success" ]; then echo "::error title=TypeCheck-mobile-renderer::failed"; failed=1; fi
           if [ "${{ steps.typecheck-runtime.outcome }}" != "success" ]; then echo "::error title=TypeCheck-runtime::failed"; failed=1; fi
           if [ "${{ steps.typecheck-shared.outcome }}" != "success" ]; then echo "::error title=TypeCheck-shared::failed"; failed=1; fi
@@ -499,7 +509,7 @@ jobs:
       - name: Test - scripts guards
         id: scripts-guards
         continue-on-error: true
-        run: pnpm exec vitest run scripts/__tests__/check-unsafe-stream-writes.test.mjs scripts/__tests__/check-core-dist-gate.test.mjs scripts/__tests__/gitcode-release-sync.test.mjs scripts/__tests__/check-publish-surface.test.mjs scripts/__tests__/check-layout-literals.test.mjs scripts/__tests__/check-provider-credential-reads.test.mjs scripts/__tests__/vue-rules-split-justified.test.mjs scripts/__tests__/check-subagent-service-boundary.test.mjs scripts/__tests__/check-subagent-core-value-cycles.test.mjs scripts/__tests__/check-global-slot-keys.test.mjs scripts/__tests__/check-record-write-surface.test.mjs scripts/__tests__/validate-constraints.test.mjs scripts/__tests__/check-thinking-levels.test.mjs scripts/__tests__/check-ci-vitest-targets.test.mjs scripts/__tests__/check-doc-symbol-drift.test.mjs scripts/__tests__/check-guide-contract-projection.test.mjs scripts/__tests__/check-infra-services-import.test.mjs scripts/__tests__/verify-scheduler-e2e.test.mjs scripts/__tests__/render-sampling-decisions.test.mjs scripts/__tests__/check-domain-type-path.test.mjs scripts/__tests__/check-capability-allowlist-sync.test.mjs scripts/__tests__/check-artifact-dir-formula-sync.test.mjs scripts/__tests__/check-posix-resolve-mirror-sync.test.mjs scripts/__tests__/pi-env-admission-gate.test.mjs scripts/__tests__/merge-gate.test.mjs scripts/__tests__/merge-state.test.mjs scripts/__tests__/merge-sync.test.mjs scripts/__tests__/merge-wait-for-ci.test.mjs scripts/__tests__/merge-release.test.mjs scripts/__tests__/merge-verify-ci-release.test.mjs scripts/__tests__/changeset-versionable.test.mjs scripts/__tests__/changeset-check.test.mjs scripts/__tests__/check-test-blind-wait.test.mjs scripts/__tests__/check-prompt-outposts.test.mjs scripts/__tests__/check-pi-subtree-shared-imports.test.mjs scripts/__tests__/probe-registry.test.mjs scripts/__tests__/check-repo-literal.test.mjs scripts/__tests__/quality-gates.test.mjs scripts/__tests__/check-test-extremes.test.mjs scripts/__tests__/cross-branch-overlap.test.mjs scripts/__tests__/zcode-session-db-cleanup.test.mjs scripts/__tests__/check-test-suite-wiring.test.mjs scripts/__tests__/select-affected-domain.test.mjs scripts/__tests__/check-domain-slices.test.mjs scripts/__tests__/check-slow-tests.test.mjs scripts/__tests__/check-test-results.test.mjs scripts/__tests__/check-test-junit-parity.test.mjs
+        run: pnpm exec vitest run scripts/__tests__/check-unsafe-stream-writes.test.mjs scripts/__tests__/check-core-dist-gate.test.mjs scripts/__tests__/gitcode-release-sync.test.mjs scripts/__tests__/check-publish-surface.test.mjs scripts/__tests__/check-layout-literals.test.mjs scripts/__tests__/check-provider-credential-reads.test.mjs scripts/__tests__/vue-rules-split-justified.test.mjs scripts/__tests__/check-subagent-service-boundary.test.mjs scripts/__tests__/check-subagent-core-value-cycles.test.mjs scripts/__tests__/check-global-slot-keys.test.mjs scripts/__tests__/check-record-write-surface.test.mjs scripts/__tests__/validate-constraints.test.mjs scripts/__tests__/check-thinking-levels.test.mjs scripts/__tests__/check-ci-vitest-targets.test.mjs scripts/__tests__/check-doc-symbol-drift.test.mjs scripts/__tests__/check-guide-contract-projection.test.mjs scripts/__tests__/check-infra-services-import.test.mjs scripts/__tests__/verify-scheduler-e2e.test.mjs scripts/__tests__/render-sampling-decisions.test.mjs scripts/__tests__/check-domain-type-path.test.mjs scripts/__tests__/check-capability-allowlist-sync.test.mjs scripts/__tests__/check-artifact-dir-formula-sync.test.mjs scripts/__tests__/check-posix-resolve-mirror-sync.test.mjs scripts/__tests__/pi-env-admission-gate.test.mjs scripts/__tests__/merge-gate.test.mjs scripts/__tests__/merge-state.test.mjs scripts/__tests__/merge-sync.test.mjs scripts/__tests__/merge-wait-for-ci.test.mjs scripts/__tests__/merge-release.test.mjs scripts/__tests__/merge-verify-ci-release.test.mjs scripts/__tests__/changeset-versionable.test.mjs scripts/__tests__/changeset-check.test.mjs scripts/__tests__/check-test-blind-wait.test.mjs scripts/__tests__/check-prompt-outposts.test.mjs scripts/__tests__/check-pi-subtree-shared-imports.test.mjs scripts/__tests__/probe-registry.test.mjs scripts/__tests__/check-repo-literal.test.mjs scripts/__tests__/quality-gates.test.mjs scripts/__tests__/check-test-extremes.test.mjs scripts/__tests__/cross-branch-overlap.test.mjs scripts/__tests__/zcode-session-db-cleanup.test.mjs scripts/__tests__/check-test-suite-wiring.test.mjs scripts/__tests__/select-affected-domain.test.mjs scripts/__tests__/check-domain-slices.test.mjs scripts/__tests__/check-slow-tests.test.mjs scripts/__tests__/check-test-results.test.mjs scripts/__tests__/check-test-junit-parity.test.mjs scripts/__tests__/check-testid-parity.test.mjs scripts/__tests__/check-test-typecheck-coverage.test.mjs scripts/__tests__/check-shared-module-admission.test.mjs scripts/__tests__/run-affected-e2e-ci.test.mjs
 
       # 解掩蔽（同 lint job 聚合语义）：五个测试/门步骤并列暴露，任一非 success
       #（含 skipped）由聚合步骤判红。
@@ -750,6 +760,21 @@ jobs:
           console.log("apply-entry closure OK (shared + intra-directory only)");
           '
 
+      # 红灯① testid 对账器（D13 三红灯之一）：e2e spec 引用的 data-testid × renderer
+      # 实现对账——spec 引用悬空（DOM 无实现）即红；已知悬空（已删 DOM 的历史 spec）
+      # 在脚本 KNOWN_DANGLING 显式登记豁免，随推树退役重建后强制收编。纯 fs 扫描零依赖。
+      - name: Testid parity guard (D13 red-light #1)
+        id: testid-parity
+        continue-on-error: true
+        run: node scripts/check-testid-parity.mjs
+
+      # 红灯配套（D14）：@taiji/shared 模块准入机器检查——依赖方向（零 workspace
+      # import）+ IO/进程内置禁令 + 模块登记双向对账（准入规则成文见脚本头注释）。
+      - name: Shared module admission guard (D14)
+        id: shared-admission
+        continue-on-error: true
+        run: node scripts/check-shared-module-admission.mjs
+
       # G1 pi 语义登记检查（pi-boundary-reliability §3.3 D7，与 pre-commit 同源直调）：
       # registry schema / 探针存在性 / pi 三包 + runtime pin 四包版本门禁。
       # 注：docs/** 在 paths-ignore 内——pi-semantics.json 单独变更不触发 CI，
@@ -990,6 +1015,8 @@ jobs:
           if [ "${{ steps.record-write.outcome }}" != "success" ]; then echo "::error title=record-write::failed"; failed=1; fi
           if [ "${{ steps.unsafe-stream.outcome }}" != "success" ]; then echo "::error title=unsafe-stream::failed"; failed=1; fi
           if [ "${{ steps.prompt-outposts.outcome }}" != "success" ]; then echo "::error title=prompt-outposts::failed"; failed=1; fi
+          if [ "${{ steps.testid-parity.outcome }}" != "success" ]; then echo "::error title=testid-parity::failed"; failed=1; fi
+          if [ "${{ steps.shared-admission.outcome }}" != "success" ]; then echo "::error title=shared-admission::failed"; failed=1; fi
           if [ "${{ steps.alias-tsconfig.outcome }}" != "success" ]; then echo "::error title=alias-tsconfig::failed"; failed=1; fi
           if [ "${{ steps.vitest-guard.outcome }}" != "success" ]; then echo "::error title=vitest-guard::failed"; failed=1; fi
           if [ "${{ steps['registry-pools'].outcome }}" != "success" ]; then echo "::error title=registry-pools::failed"; failed=1; fi
@@ -1001,6 +1028,38 @@ jobs:
           if [ "${{ steps.rfl-parity.outcome }}" != "success" ]; then echo "::error title=rfl-parity::failed"; failed=1; fi
           exit $failed
 
+  # 红灯② on-diff e2e 清单 CI 执行消费者（D13 三红灯之一）：消费
+  # `node scripts/select-affected-e2e.mjs --json` 产出的 on-diff 机器清单，把受影响的
+  # L1（mock 零 token）层 rule 空载串行真实执行（执行体 = scripts/run-affected-e2e-ci.mjs，
+  # 单条失败不中断、末尾聚合判红——同 lint/typecheck 解掩蔽模式）。消费面口径：
+  # on-diff × L1；always 两条由既有 e2e-visual / e2e-behavior 固定 job 承载不重复跑；
+  # L2/L2.5/L3 真实进程/真机层禁入 CI（AGENTS.md e2e 执行准则，TAIJI_SKIP_REAL_PI=1
+  # 与其余 test job 同口径）。fetch-depth: 0 取全历史供 git diff <base>...HEAD 判定。
+  # 无命中（清单空）时秒级通过。
+  e2e-on-diff:
+    name: E2E on-diff (L1 consumer)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: pnpm install --frozen-lockfile
+
+      - name: Run affected L1 e2e (serial, aggregate)
+        run: node scripts/run-affected-e2e-ci.mjs --base origin/main
+
   # PR 构建检查：electron-builder 打包流程，不在 PR 上传产物。
   # dir-only=true：只产出 unpacked 目录，跳过安装器压缩（省 ~185s）。安装器配置回归交给 release.yml。
   # needs gate：lint/typecheck + 5 个 test job + 两个 E2E job（visual 像素对比层 + behavior P0 smoke 层）
@@ -1008,7 +1067,7 @@ jobs:
   # （sdk-sync 已随 plugin-types SSOT 收敛删除——SDK 升权威源、runtime 薄壳 re-export，无同步可查。）
   build:
     name: Build
-    needs: [lint, typecheck, test-runtime, test-renderer, test-main, test-state-machine, test-extensions, e2e-visual, e2e-behavior]
+    needs: [lint, typecheck, test-runtime, test-renderer, test-main, test-state-machine, test-extensions, e2e-visual, e2e-behavior, e2e-on-diff]
     uses: ./.github/workflows/build.yml
     with:
       upload-artifacts: false

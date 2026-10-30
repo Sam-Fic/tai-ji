@@ -14,7 +14,7 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { ref, type Component } from 'vue'
 import { vi } from 'vitest'
-import type { ProviderInfo, ModelInfo } from '@taiji/shared'
+import type { ProviderInfo, ModelInfo, ProviderId } from '@taiji/shared'
 import {
   getSettingsStore,
   provideSettingsTransport,
@@ -100,19 +100,19 @@ export function systemFixture(): SystemSettings {
 
 /** 有凭证 provider fixture（模型挂在 providers[].models —— extension 模型配置候选的正确数据源）。 */
 export function authedProvider(): ProviderInfo {
-  return { id: 'p1', name: 'Prov One', apiKeySet: true, status: 'connected', models: [{ id: 'm1', name: 'Model One' }] }
+  return { id: 'p1' as ProviderId, name: 'Prov One', apiKeySet: true, status: 'connected', models: [{ id: 'm1', name: 'Model One' }] }
 }
 
 /** 无凭证 provider fixture（apiKeySet=false，其模型不应出现在下拉）。 */
 export function unauthedProvider(): ProviderInfo {
-  return { id: 'p2', name: 'Prov Two', apiKeySet: false, status: 'not_configured', models: [{ id: 'm2', name: 'Model Two' }] }
+  return { id: 'p2' as ProviderId, name: 'Prov Two', apiKeySet: false, status: 'not_configured', models: [{ id: 'm2', name: 'Model Two' }] }
 }
 
 /** 聚合模型 fixture（scoped 过滤后形态，仅含白名单内 m1）。注入用于检查：
  *  useAuthedModelGroups 改为 providers 派生后，下拉候选必须不受 store.models 内容影响。 */
 export function modelFixtures(): ModelInfo[] {
   return [
-    { id: 'm1', name: 'Model One', providerId: 'p1', providerName: 'Prov One' },
+    { id: 'm1', name: 'Model One', providerId: 'p1' as ProviderId, providerName: 'Prov One' },
   ]
 }
 

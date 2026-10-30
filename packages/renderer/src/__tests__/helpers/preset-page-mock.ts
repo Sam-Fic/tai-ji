@@ -16,7 +16,7 @@
  *   （组件等）之前——vi.mock 工厂惰性执行时 presetMock 需已初始化（TDZ）；
  * - 消费文件不得再 vi.mock 同两目标（后注册者生效，静默覆盖）。
  */
-import { afterEach, beforeEach, vi } from 'vitest'
+import { beforeEach, vi } from 'vitest'
 import type { VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { useToast } from '@/composables/useToast'

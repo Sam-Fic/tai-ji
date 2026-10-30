@@ -68,6 +68,10 @@ const SCRIPTS_GUARD_FILES = [
   'scripts/__tests__/check-slow-tests.test.mjs',
   'scripts/__tests__/check-test-results.test.mjs',
   'scripts/__tests__/check-test-junit-parity.test.mjs',
+  'scripts/__tests__/check-testid-parity.test.mjs',
+  'scripts/__tests__/check-test-typecheck-coverage.test.mjs',
+  'scripts/__tests__/check-shared-module-admission.test.mjs',
+  'scripts/__tests__/run-affected-e2e-ci.test.mjs',
 ]
 
 /**
