@@ -240,11 +240,20 @@ type RecordPublishSource = RecordRefreshTrigger | 'event-projection'
  * found（待裁决项 4）会话存在性标志：false = 主会话文件不在册（pi 首条消息前延迟落盘
  * 窗口 / 扫描竞态）——「读不到会话」与「会话存在但列表为空」显式分形：renderer 拿到
  * found=false 保留既有分区不覆盖（空列表歧义的根治）；found=true 的空列表是真实空。
+ *
+ * [U1-lite D10] batchInProgress「批进行中」additive 标志：查询到达时投影批加载 /
+ * entry 拉取轮仍在途 = 返回的是部分数据，消费方（无旧数据的会话）据此显示骨架屏、
+ * 不把部分数据当全量照显（SC9 消费语义）；批末一次快照发布后重拉即得完整数据。
+ * 误报（批实际已结束）与漏报（恰好批外）都只影响骨架屏时长，不影响数据正确性。
+ * 过渡期机制：随重写 M5 旧派生视图退场而删除（加载态概念以登记表 schema 字段
+ * 形态进重写 M0 契约，D10）。
  */
 export interface OversizeAwareResult<T> {
   records: T[]
   oversize: boolean
   found: boolean
+  /** [U1-lite D10] 批进行中标志（additive；详见接口注释）。 */
+  batchInProgress: boolean
 }
 
 /** workflow 增量信号形状（session.workflowUpdate payload.update；status / reason / 步骤数 / stepStatuses（status@attempts）/ phasesFingerprint 任一变化一条）。 */
@@ -981,18 +990,17 @@ export class SessionRecords {
     const frames: string[] = []
 
     if (subagentsDifferFromPublished(cache.subagents, cache.publishedSubagents)) {
-      // 覆盖查询定位锚一次解析透传（SessionMetaRef）：原逐 record 查询各扫一遍全目录
-      // → 整帧一次；解析结果仅本帧内使用，不回写缓存。
-      const target = this.deps.sessionStore.scanSessions({ force: true }).find((s) => s.id === sessionId)
-      const resolved: SessionMetaRef | undefined = target !== undefined
-        ? { cwd: target.cwd, filePath: target.filePath }
-        : undefined
+      // [U3 / D12] 发布链死扫描与无效定位锚构造已删（本帧原有一轮 sessionStore 全目录
+      // 重扫 + SessionMetaRef 锚构造）——产物在 model-override-query 侧已无消费方
+      // （getRecordOverride 第三参形参下划线忽略、getRunOverride 形参已删，注释明言
+      // 反推链已消失）。删除后每次发布省一轮全目录扫描；覆盖查询的定位锚语义保留在
+      // 查询路径（getSubagents/getWorkflows 的 target 透传，非本帧）。
       bus.publish(sessionId, {
         type: 'session.subagents',
         // 详情载荷增强（覆盖状态 + 最近生效值）在帧构造点施放——派生缓存（cache.subagents）
         // 保持纯派生视图产物，增强不回写缓存、不参与水位 diff（覆盖写入的 runtime 感知走
         // record 事件流 → 派生视图变化 → 水位 diff → 本帧构造时读最新值的时序）。
-        payload: { sessionId, subagents: this.enhanceSubagentDetails(sessionId, Array.from(cache.subagents.values()), resolved) },
+        payload: { sessionId, subagents: this.enhanceSubagentDetails(sessionId, Array.from(cache.subagents.values())) },
       })
       cache.publishedSubagents = new Map(cache.subagents) // publish 完成即推进（镜像当前派生 id 集）
       frames.push('session.subagents')
@@ -1159,7 +1167,7 @@ export class SessionRecords {
     const target = this.deps.sessionStore.scanSessions({ force: true }).find((s) => s.id === sessionId)
     // [待裁决项 4] 会话不在册（延迟落盘窗口 / 扫描竞态）→ found=false 显式分形，
     // 不再与「会话存在但真空列表」共用同一空返回（renderer 据此保留分区）。
-    if (!target) return { records: [], oversize: false, found: false }
+    if (!target) return { records: [], oversize: false, found: false, batchInProgress: false }
     // [W1 / D6] 读请求只读内存派生视图；oversize（>32MB = v1 巨文件时代会话）走旧格式
     // 惰性兼容读路径（32MB 预检语义退役至此专属——extractor 预检在该路径降级空列表
     // + oversize 标志 + warn，[RT-4#8] 语义原样保留）。
@@ -1168,6 +1176,7 @@ export class SessionRecords {
       if (oversize) this.warnOversizeOnce(sessionId, 'subagents')
       // 详情载荷增强与派生视图分支同构（分叉态重载消费不因巨文件降级缺字段）。
       // resolved 透传：target 已在手，覆盖查询不再二次全目录扫描。
+      // oversize 兼容读路径是同步整文件提取，无批概念，batchInProgress 恒 false。
       return {
         records: this.enhanceSubagentDetails(
           sessionId,
@@ -1176,11 +1185,15 @@ export class SessionRecords {
         ),
         oversize,
         found: true,
+        batchInProgress: false,
       }
     }
     const cache = this.ensureRecordEntriesCache(sessionId)
     // target 透传 = mtime 对账素材（查询是真理通道，见 ensureProjection 注释）
     const projection = this.ensureProjection(sessionId, cache, target)
+    // [U1-lite D10] 批进行中 = 投影批加载窗口或 entry 拉取轮在途（后者是异步窗口，
+    // 查询可在 await 间隙到达拿到部分数据——SC9 骨架屏判据的数据源）。
+    const batchInProgress = cache.inflight !== null || projection.isBatchLoading()
     return {
       records: this.enhanceSubagentDetails(
         sessionId,
@@ -1189,6 +1202,7 @@ export class SessionRecords {
       ),
       oversize: false,
       found: true,
+      batchInProgress,
     }
   }
 
@@ -1390,14 +1404,14 @@ export class SessionRecords {
     // wave:perf-w26（plan M-3）：路径解析消费方 force 旁路 TTL（与 getSubagents 同理）。
     const target = this.deps.sessionStore.scanSessions({ force: true }).find((s) => s.id === sessionId)
     // [待裁决项 4] found 透传：语义同 getSubagents。
-    if (!target) return { records: [], oversize: false, found: false }
+    if (!target) return { records: [], oversize: false, found: false, batchInProgress: false }
     if (isSessionFileOversize(target.filePath)) {
       const { records, oversize } = extractWorkflowsFromSessionFile(target.filePath)
       if (oversize) this.warnOversizeOnce(sessionId, 'workflows')
       // oversize 降级路径不带详情增强（v1 巨文件时代会话，无成员派生源锚；降级语义
       // 与 getSubagents 分支的「兼容读路径照常增强」不同——此处无同 session 成员派生视图
-      // 可圈定，保持条目原样）。
-      return { records, oversize, found: true }
+      // 可圈定，保持条目原样）；同步整文件提取无批概念。
+      return { records, oversize, found: true, batchInProgress: false }
     }
     const cache = this.ensureRecordEntriesCache(sessionId)
     // target 透传 = mtime 对账素材（同 getSubagents，查询是真理通道）
@@ -1416,7 +1430,9 @@ export class SessionRecords {
       resolved,
       translateEngineModelRefToDisplay,
     )
-    return { records: workflows, oversize: false, found: true }
+    // [U1-lite D10] 批进行中标志（语义同 getSubagents）。
+    const batchInProgress = cache.inflight !== null || projection.isBatchLoading()
+    return { records: workflows, oversize: false, found: true, batchInProgress }
   }
 
   /**

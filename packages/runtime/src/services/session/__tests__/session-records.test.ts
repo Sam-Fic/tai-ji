@@ -788,7 +788,8 @@ describe('磁盘读侧（scanSessions → extractor 真实执行）', () => {
   it('getSubagents：session 不在扫描结果返回 []', async () => {
     const { records } = makeRecords()
     // [RT-4#8] 结构化返回（records + oversize）：无扫描命中 = 空列表且非 oversize
-    expect(await records.getSubagents('s-none')).toEqual({ records: [], oversize: false, found: false })
+    // [U1-lite D10] additive batchInProgress 字段进严格 toEqual 期望
+    expect(await records.getSubagents('s-none')).toEqual({ records: [], oversize: false, found: false, batchInProgress: false })
   })
 
   it('getWorkflows：定位 session 文件后提取 workflow 列表', async () => {
@@ -820,8 +821,8 @@ describe('磁盘读侧（scanSessions → extractor 真实执行）', () => {
       const first = await records.getSubagents('s-big')
       const second = await records.getWorkflows('s-big')
       await records.getSubagents('s-big')
-      expect(first).toEqual({ records: [], oversize: true, found: true })
-      expect(second).toEqual({ records: [], oversize: true, found: true })
+      expect(first).toEqual({ records: [], oversize: true, found: true, batchInProgress: false })
+      expect(second).toEqual({ records: [], oversize: true, found: true, batchInProgress: false })
       // 每会话 + 每类别一次（去重 key = sid:kind）：3 次调用 2 条 warn（subagents 一次 + workflows 一次）
       const dedupeWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes('list unavailable'))
       expect(dedupeWarns).toHaveLength(2)

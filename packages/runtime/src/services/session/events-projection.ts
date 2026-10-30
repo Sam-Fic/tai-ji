@@ -49,75 +49,24 @@ import { join } from 'node:path'
 import type { SubagentJournalReport } from '@zhushanwen/extension-protocol'
 import type { SubagentRecord, WorkflowRunRecord } from '@taiji/shared'
 import {
-  ALL_RUN_OUTCOMES, foldRunEventCheckpoint, INITIAL_RUN_EVENT_FOLD, RUN_EVENTS_SUFFIX,
-  RUN_EVENT_TYPES, SUBAGENT_RECORD_CUSTOM_TYPE, WORKFLOW_RECORD_CUSTOM_TYPE,
+  foldRunEventCheckpoint, INITIAL_RUN_EVENT_FOLD, RUN_EVENTS_SUFFIX,
+  SUBAGENT_RECORD_CUSTOM_TYPE, WORKFLOW_RECORD_CUSTOM_TYPE,
   classifySubagentRecordEntryData, classifyWorkflowRecordEntryData, foldRecordEvents,
   INITIAL_RECORD_EVENT_FOLD_STATE, parseRecordEventFileLine, readEventTail, RECORD_EVENTS_SUFFIX,
   type RecordCreatedEvent, type RecordEvent, type RecordEventFoldState, type RunEventFoldCheckpoint,
   type SubagentRecordRegisteredEntryData, type SubagentRecordSettledEntryData,
   type WorkflowRecordRegisteredEntryData, type WorkflowRecordSettledEntryData, type WorkflowRunEvent,
 } from '@zhushanwen/subagent-core'
+// [events-projection 拆分] run 行解析器移驻 sibling（max-lines 上限顶满，last-round
+// 同款先例）；经本文件 re-export 维持原导出路径（model-override-query /
+// workflow-run-events-reader / 测试的 import 零改动）
+import { parseWorkflowRunEventFileLine } from './events-projection-run-line.js'
+export { parseWorkflowRunEventFileLine } from './events-projection-run-line.js'
 
 import { mergeWorkflowStepRecords } from './workflow-step-merge.js'
 // [subagent-observability u3 F4] lastRound wire 产出单点（独立模块——本文件行数上限顶满）。
 import { resolveSubagentLastRound } from './events-projection-last-round.js'
 import { projectV2Workflow } from "./workflow-record-projection.js"
-
-// ── run journal 行解析（域无关 tail 原语的 run 域注入）─────────
-
-/**
- * run 事件 type 词表集合（词表 SSOT = core run-events RUN_EVENT_TYPES，经 barrel
- * 消费——判定面与 core isWorkflowRunEventLine 同词表单源）。编译期穷尽守卫双向：
- * Set 构造泛型校验「词表 ⊆ WorkflowRunEvent['type'] 判别联合」，下方编译锁校验
- * 反向「union 成员 ⊆ 词表」——core 词表增删成员时漂移在编译期显形，运行时零漂移面。
- * 词表外历史行（ask-executing / member-pool 等删值成员）经词表外判定返回
- * undefined，由 tailer 跳过计日志。
- */
-const RUN_EVENT_TYPE_SET: ReadonlySet<string> = new Set<WorkflowRunEvent['type']>(RUN_EVENT_TYPES)
-
-// 编译锁（纯类型，零运行时）：union 成员缺席词表 → Exclude 非 never → 三元求值
-// never，赋值处编译红（先例：subagent-engine-sdk wire-field-locks 的
-// _assertNoDoubleWrite 同款形态）
-const _assertRunEventTypeWordlist: Exclude<
-  WorkflowRunEvent['type'],
-  (typeof RUN_EVENT_TYPES)[number]
-> extends never ? true : never = true
-
-/**
- * run journal 文件行解析器（event-tail parseLine 注入面，run 域）。
- *
- * 守卫对齐 core run-events isWorkflowRunEventLine 的最宽共同判定面：JSON 对象 +
- * type 落词表 + ts 有限数值 + seq（携带时）正安全整数 + outcome（agent-settled /
- * run-settled 携带时）落词表。seq 缺失放行——W1 前存量 事件行无该字段（D7
- * 惰性兼容读，旧行为不变）。坏行返回 undefined 交 tailer 计数（宽容跳过，不卡游标）。
- */
-export function parseWorkflowRunEventFileLine(line: string): WorkflowRunEvent | undefined {
-  const trimmed = line.trim()
-  if (trimmed.length === 0) return undefined
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(trimmed)
-  } catch {
-    return undefined
-  }
-  if (typeof parsed !== 'object' || parsed === null) return undefined
-  const rec = parsed as { type?: unknown; ts?: unknown; seq?: unknown; outcome?: unknown }
-  if (typeof rec.type !== 'string' || !RUN_EVENT_TYPE_SET.has(rec.type)) return undefined
-  if (typeof rec.ts !== 'number' || !Number.isFinite(rec.ts)) return undefined
-  if (
-    rec.seq !== undefined &&
-    (typeof rec.seq !== 'number' || !Number.isSafeInteger(rec.seq) || rec.seq < 1)
-  ) {
-    return undefined
-  }
-  if (
-    rec.outcome !== undefined &&
-    !(ALL_RUN_OUTCOMES as readonly string[]).includes(rec.outcome as string)
-  ) {
-    return undefined
-  }
-  return parsed as WorkflowRunEvent
-}
 
 // ── run journal fold（[W2 D7] 单源删除）───────────────────────
 //
@@ -562,6 +511,39 @@ export class SessionEventProjection {
     this.runJournalDir = opts.runJournalDir
     this.onProjectionChange = opts.onProjectionChange
   }
+
+  // ── U1-lite 批加载（设计 §7.3 / D10：冷读与增量补读期间抑制发布、批末一次）────
+  //
+  // 与既有 applyingEntryBatch 同款标志形态（D10 原文；嵌套补读——recompute →
+  // checkFinalEntryCatchup → readFromOffset → applyEvents → fireChange——天然被
+  // 同一标志覆盖）：批内 fireChange 只记账不发，批末有记账才补发一次——冷读 N 个
+  // 事件文件从 N 次发布合为 1 次（A4「推送帧数 = 1」的机器面）。过渡期机制：随
+  // 重写 M5 旧派生视图退场而删除（§3.4 M1 / §6.10）。
+  private batchLoading = false
+  private pendingChangeInBatch = false
+
+  /**
+   * 「批进行中」标志读取口（D10 additive 协议字段的数据源；getSubagents 等读 RPC /
+   * 推送帧构造点消费）。同步单线程下读点在批外恒 false；语义完整性保留（未来冷读
+   * 分片化后批窗口跨越 await，读点即可见 true）。
+   */
+  isBatchLoading(): boolean {
+    return this.batchLoading
+  }
+
+  /** 开批：置位抑制标志（幂等，嵌套开批不重置记账）。 */
+  private beginBatch(): void {
+    this.batchLoading = true
+  }
+
+  /** 闭批：批内有被抑制的变更 → 补发一次发布（批末一次全量快照语义）。 */
+  private endBatch(): void {
+    this.batchLoading = false
+    if (this.pendingChangeInBatch) {
+      this.pendingChangeInBatch = false
+      this.fireChange()
+    }
+  }
   /**
    * entry 批应用（v2 条目分类 → 源持有态；fullRebuild = 游标全量重拉，entry 源
    * 整体重置为新基线，事件源不动——事件流 是事实源，不随 entry 游标自愈重置）。
@@ -599,10 +581,18 @@ export class SessionEventProjection {
    * 事件源冷启动 / 手动收敛入口（幂等）：全目录扫读（首次 = 从 0 全量冷读，此后
    * 从各文件字节偏移续读）。推送通道断连（pi 进程死亡 → 重开 session）后的收敛
    * 路径——journal 是磁盘上的事实源，冷读即恢复读。
+   *
+   * [U1-lite] 冷读全程批加载（beginBatch/endBatch）：批内逐文件 fold 的发布被抑制，
+   * 批末一次补发——冷读期推送量 O(N) → O(1)。
    */
   attach(): void {
-    this.coldReadDomain('record')
-    this.coldReadDomain('run')
+    this.beginBatch()
+    try {
+      this.coldReadDomain('record')
+      this.coldReadDomain('run')
+    } finally {
+      this.endBatch()
+    }
   }
 
   /** 事件源是否已完整接线（两域目录均非 undefined）——降级投影升级腿的判定面。
@@ -654,8 +644,16 @@ export class SessionEventProjection {
     const watermark = domain === 'record' ? (this.sources.recordFolds.get(id)?.lastSeq ?? 0) : (this.sources.runFolds.get(id)?.lastSeq ?? 0)
     const minSeq = seqs.length > 0 ? Math.min(...seqs) : undefined
     if (minSeq !== undefined && minSeq > watermark + 1) {
-      // 缺口：从字节偏移补读到文件尾（覆盖报告事件——它们已在盘上），fold 去重
-      this.readFromOffset(domain, id)
+      // 缺口：从字节偏移补读到文件尾（覆盖报告事件——它们已在盘上），fold 去重。
+      // [U1-lite] 增量补读同批加载语义（D10「冷读/增量补读期间抑制发布、批末一次」）：
+      // 补读链内 recompute → checkFinalEntryCatchup → readFromOffset 的嵌套发布
+      // 被同一标志覆盖，批末一次补发。
+      this.beginBatch()
+      try {
+        this.readFromOffset(domain, id)
+      } finally {
+        this.endBatch()
+      }
     } else {
       this.applyEvents(domain, id, events)
     }
@@ -805,6 +803,11 @@ export class SessionEventProjection {
 
   private fireChange(): void {
     if (this.applyingEntryBatch || this.disposed) return
+    // [U1-lite] 批加载窗口内的发布记账不发（批末一次补发，见 beginBatch/endBatch）。
+    if (this.batchLoading) {
+      this.pendingChangeInBatch = true
+      return
+    }
     this.onProjectionChange()
   }
 }

@@ -12,12 +12,46 @@ import { checkPluginCompatibility } from './plugin-version-checker.js'
  *   2. <projectRoot>/.taiji/plugins/  （项目级插件）
  *   3. built-in 目录（resolveBuiltinPluginsDir：--builtin-plugins-dir 显式注入优先，
  *      缺失时回退多形态候选探测，见其注释）
+ *
+ * ── 禁用标记跳过（startup-readiness §7.5 / D2 / U7 机制半边）──────────────────
+ *
+ * `<pluginsDir>/disabled.json`（InstalledStore 同目录维护，条目 = pluginId + reason +
+ * disabledAt）命中的插件在 scan 时整体跳过（不出现在 descriptor 列表 = 不装载、不
+ * 激活）。判定按 pluginId（目录名），对全部三个扫描目录生效。清单读取失败按空表
+ * 容错（禁用机制故障不阻断正常装载）；条目残留（插件已不在盘）自然无效果——扫描
+ * 对象是插件目录，无目录即无装载候选（D2）。
+ *
+ * ── [V8] 插件装载错误分类边界（startup-readiness D2 / §7.5，枚举记录在案）──────
+ *
+ * 装载链（pluginService.initialize → bootstrapPluginService 9 步 → scan → 激活）的
+ * 错误来源按「确定性 vs 环境性」分类（D2 采用段：确定性 → 阻断（u-m2 呈现 failed
+ * 屏）；环境性 → 不阻断、按现状重试语义）：
+ *
+ * 确定性错误（代码/声明缺陷，重试必然复现 → 阻断语义）：
+ *   R1 manifest 非法——package.json JSON 解析失败（parseManifest catch 分支）；
+ *   R2 manifest 缺失/版本不符——无 taijiPlugin 段或 manifestVersion !== 1；
+ *   R3 入口越权——manifest.main 解析到插件目录外（resolveEntry 逃逸拒绝）；
+ *   R4 engines 不兼容——taiji engine range 不含当前版本（DEPS_MISSING descriptor）；
+ *   R5 依赖缺失——激活期 import 失败 / worker 加载抛错（plugin-bootstrap load 链）；
+ *   R6 激活抛错——onStartupFinished / 激活事件 handler 抛错（activator 链）。
+ *
+ * 环境性错误（外部条件瞬态，重试可恢复 → 不阻断、按现状重试语义）：
+ *   E1 网络拉取失败——安装/更新通道（pluginInstaller npm 拉取）失败；不属装载链
+ *   （装载读的是已落盘目录），永不该由装载阻断兜底。
+ *
+ * 边界注记：scan 侧的目录不可读（readdir/stat 失败）是本地 IO 形态，现状按跳过 +
+ * warn 容错（本文件既有语义），不进确定性分类——「目录级缺席」与「插件级坏」是
+ * 两个失败面，前者不指名插件、无法进 failed 屏。分类判定的消费（business 能力判据
+ * + failed 屏 + [禁用并重试]）归 u-m2 呈现半边（M2-5）；本单元交付机制半边（禁用
+ * 标记 + 扫描跳过 + 卸载清理）。
  */
 export class PluginRegistry {
   private cache = new Map<string, PluginDescriptor>()
   private projectRoot: string
   private pluginsConfigDir: string
   private builtinPluginsDir: string | undefined
+  /** [U7] 禁用清单读取的 warn 去重（读失败每轮 scan 一次即可，不刷屏）。 */
+  private warnedDisabledRead = false
 
   /** @param projectRoot 项目根（项目级插件扫描用）
    *  @param pluginsConfigDir 全局配置根（~/.taiji/，全局插件扫描用），由组合根注入。
@@ -37,6 +71,13 @@ export class PluginRegistry {
       { path: join(this.projectRoot, '.taiji', 'plugins'), source: 'external' },
       { path: await this.resolveBuiltinPluginsDir(), source: 'built-in' },
     ]
+    // [U7/D2] 禁用标记清单（<pluginsConfigDir>/plugins/disabled.json，InstalledStore
+    // 同目录同 schema 族）：命中 pluginId 的目录整体跳过。读取失败按空表容错
+    // （fail-open——禁用机制自身故障不阻断正常装载，warn 留痕）。
+    const disabled = await this.loadDisabledIds()
+    if (disabled.size > 0) {
+      console.info(`[plugin-registry] skipping ${disabled.size} disabled plugin(s): ${[...disabled].join(', ')}`)
+    }
     const results: PluginDescriptor[] = []
     for (const { path: dir, source } of dirs) {
       let entries: string[]
@@ -50,6 +91,7 @@ export class PluginRegistry {
         // 辅助目录跳过：安装暂存区（.staging）等 dot 条目不是插件（scoped 包目录名
         // 解耦后安装目录为 scope__pkg 一级形态，扫描口径与安装目录名对齐——U4）
         if (entry.startsWith('.')) continue
+        if (disabled.has(entry)) continue // [U7] 禁用标记跳过（装载阻断链路的重试半边）
         const fullPath = join(dir, entry)
         try {
           const st = await stat(fullPath)
@@ -64,6 +106,41 @@ export class PluginRegistry {
     }
     this.cacheDescriptors(results)
     return results
+  }
+
+  /**
+   * [U7/D2] 读禁用标记清单的 pluginId 集（scan 跳过判定面）。
+   *
+   * 直接读文件而不 import InstalledStore 类：InstalledStore 是登记写入域的类（含
+   * atomicWrite 依赖链），扫描侧只需要读半边；文件路径与 schema 由 installed-store
+   * 单源定义（DISABLED_FILE 常量与条目形状注释互指），读侧解析容错与
+   * InstalledStore.loadDisabled 同语义（损坏 → 空表 + warn）。
+   */
+  private async loadDisabledIds(): Promise<Set<string>> {
+    const disabledPath = join(this.pluginsConfigDir, 'plugins', 'disabled.json')
+    let raw: string
+    try {
+      raw = await readFile(disabledPath, 'utf-8')
+    } catch {
+      return new Set() // 文件缺失 = 无禁用插件（常态）
+    }
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        if (!this.warnedDisabledRead) {
+          this.warnedDisabledRead = true
+          console.warn(`[plugin-registry] disabled.json has unexpected shape, treating as empty`)
+        }
+        return new Set()
+      }
+      return new Set(Object.keys(parsed as Record<string, unknown>))
+    } catch (err) {
+      if (!this.warnedDisabledRead) {
+        this.warnedDisabledRead = true
+        console.warn(`[plugin-registry] failed to parse disabled.json, treating as empty:`, err)
+      }
+      return new Set()
+    }
   }
 
   /**

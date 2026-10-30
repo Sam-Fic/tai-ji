@@ -5178,6 +5178,26 @@
       "note": "R2 态 + 用例级门控（2026-10-27 测试范围收缩：两簇门控——>5MB 保尾截断（真 5MB jsonl 写入 + 截断）与并发追加写（4 个真子进程 writer 验证 O_APPEND 单行原子性）；聚合求和 / 水位 / 坏行跳过等纯逻辑用例留无门控默认组）。触发条件 = scope 内代理统计读侧 diff 命中。断言本质 = 截断保尾行边界对齐 + 并发写全量可解析无交错坏行。serial=真 的理由 = 真进程 / 真磁盘吞吐在满载下无稳定上界。"
     },
     {
+      "id": "E2E-INTEG-70",
+      "summary": "session-manager full e2e real LLM 层：真实凭证全链（archive/delete/人身约束，REAL_PI_READY 门控、开发机手动，不进 CI 集成组——凭证相关保持手动）",
+      "scope": [
+        "packages/runtime/src/services/session/event-interpreter.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "packages/runtime/src/__tests__/equivalence/session-manager-full-e2e.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "pnpm --filter @taiji/runtime exec vitest run src/__tests__/equivalence/session-manager-full-e2e.test.ts",
+      "owner": "packages/runtime",
+      "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
+      "note": "REAL_PI_READY 门控资产（真实凭证层，check-slow-tests 门控豁免登记 2026-10-31）：本地有凭证时该 describe 真跑、用例耗时 2.8-4.4s 超 2s 阈值，属门控资产不占默认组预算；faux 层（同文件前半 7 条）mock 化单测在默认组，无慢用例；trigger=on-diff 仅为清单触发提示形态，实际执行保持开发机手动（凭证相关），不进 CI 自动执行"
+    },
+    {
       "id": "E2E-PIPE-23",
       "summary": "测试执行域触发档机制（round6 Wave2）：domain-map.json 单一权威源（14 域 / 99 个挂载渲染重型文件）+ run-domain-tests 按域跑 + check-domain-map 健康度检查（结构/存在性/唯一归属/挂载特征/消费方接线）+ 两包 vitest exclude 派生",
       "scope": [

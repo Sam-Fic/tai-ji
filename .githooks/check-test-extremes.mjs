@@ -86,6 +86,8 @@ const EXEMPT = {
   'scripts/__tests__/check-test-blind-wait.test.mjs': '盲等检查器黑盒自测（每处 spawn <300ms，裁决保留）',
   'scripts/__tests__/check-prompt-outposts.test.mjs': '出站调用点检查黑盒自测（fixture 由被测脚本常量生成，spawn 亚秒级）',
   'scripts/__tests__/check-domain-type-path.test.mjs': '检查器黑盒自测（spawn 检查脚本本体，亚秒级）',
+  // —— X4 量级特征断言（非敏感性性能水位）：V1 批加载冷读计时看守 ——
+  'packages/runtime/src/services/session/__tests__/events-projection-batch.test.ts': '量级特征断言（X4 误报类）：拦批加载抑制失效的秒级回潮（设计锚点 11-12s 形态 vs 实测 3ms），阈值取毫秒级上界×两个数量级余量——机制坏了才红、负载波动不红；系启动设计 V1 验收的 CI 看守用例，挂门控会失去看守意义',
   'scripts/__tests__/check-domain-slices.test.mjs': '域切分守卫黑盒自测（spawn 检查脚本本体，亚秒级，沿检查器自测先例）',
   'scripts/__tests__/check-test-results.test.mjs': 'junit 聚合检查黑盒自测（spawn 检查脚本本体，亚秒级）',
   'scripts/__tests__/check-test-junit-parity.test.mjs': 'junit 守恒工具黑盒自测（spawn 工具本体，亚秒级）',

@@ -6,6 +6,7 @@ import { _resetSessionMetaCacheForTest, cleanupMigrateResidues, cleanupTmpMigrat
 import type { ISessionService } from '../src/interfaces.js';
 import { FileError } from '../src/services/file-error.js';
 import { FileService, MAX_SEARCH_RESULTS, type FileServiceOptions } from '../src/services/file-service.js';
+import { resolveSessionContext } from '../src/services/file-service.js';
 import { GitError, GitService, type GitServiceOptions } from '../src/services/git-service.js';
 import { GitStateService } from '../src/services/git/git-state-service.js';
 import type { FsEntry, IFileExecutor } from '../src/services/ports/file-executor.js';
@@ -2198,4 +2199,266 @@ describe('cleanupMigrateResidues（suggestion 6）', () => {
     }
   })
 })
+
+
+// ======================================================================
+// ← startup-readiness U4/D5（RL3）：纯读会话上下文两级解析 + btw 两形态
+// ======================================================================
+//
+// RL3 看守面（设计 §4.2）：纯读不依赖内存活跃表——kill -9 恢复期（活跃表空）纯读
+// RPC 经第二级（pi 会话文件扫描链，未迁移形态）照常解析 cwd；btw 两形态——在册
+// （registerSession 注册，cwd = 主会话 cwd）第一级照常解析行为不变；不在册（重启
+// 窗口，线文件落 ext-sessions/<mainSid>/btw/、不在 sessions/ 扫描面）两级 miss +
+// 布局命中 → 「不支持」错误，与「Session 不存在」错误码可区分（不混同）。
+//
+// fixture 形态：TAIJI_AGENT_DATA_DIR 指向 mkdtemp 隔离树；未迁移形态会话 =
+// <data>/agent/sessions/<sid>.jsonl（首行 pi session header，cwd 指向真实存在的
+// fixture 目录——searchFiles 的 cwd 准入 stat 需要）；btw 线 = <data>/ext-sessions/
+// <mainSid>/btw/<lineSid>.jsonl（布局反转后的线目录公式）。
+
+describe('startup-readiness U4: 纯读两级解析（resolveSessionContext）', () => {
+  function setupU4Fixture(): { dataDir: string; workDir: string; writeMainSession: (sid: string, cwd: string) => void; writeBtwLine: (mainSid: string, lineSid: string) => void; cleanup: () => void } {
+    const dataDir = mkdtempSync(join(tmpdir(), 'u4-pure-read-'))
+    const workDir = mkdtempSync(join(tmpdir(), 'u4-pure-read-work-'))
+    const origDataDir = process.env.TAIJI_AGENT_DATA_DIR
+    process.env.TAIJI_AGENT_DATA_DIR = dataDir
+    return {
+      dataDir,
+      workDir,
+      writeMainSession(sid: string, cwd: string): void {
+        const sessionsDir = join(dataDir, 'agent', 'sessions')
+        mkdirSync(sessionsDir, { recursive: true })
+        writeFileSync(join(sessionsDir, `${sid}.jsonl`), `{"type":"session","id":"${sid}","cwd":"${cwd}","timestamp":"2026-01-01"}\n`)
+      },
+      writeBtwLine(mainSid: string, lineSid: string): void {
+        const btwDir = join(dataDir, 'ext-sessions', mainSid, 'btw')
+        mkdirSync(btwDir, { recursive: true })
+        writeFileSync(join(btwDir, `${lineSid}.jsonl`), `{"type":"session","id":"${lineSid}","cwd":"${workDir}","timestamp":"2026-01-01"}\n`)
+      },
+      cleanup(): void {
+        _resetSessionMetaCacheForTest()
+        invalidateScanDirCache()
+        if (origDataDir === undefined) {
+          delete process.env.TAIJI_AGENT_DATA_DIR
+        } else {
+          process.env.TAIJI_AGENT_DATA_DIR = origDataDir
+        }
+        rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+        rmSync(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+      },
+    }
+  }
+
+  const MAIN_SID = '019a1b2c-0000-7000-8000-000000000001'
+  const LINE_SID = '019a1b2c-0000-7000-8000-000000000002'
+
+  it('第一级命中（内存活跃表）：解析结果 kind=active，行为不变', () => {
+    const f = setupU4Fixture()
+    try {
+      f.writeMainSession(MAIN_SID, f.workDir)
+      const resolution = resolveSessionContext(MAIN_SID, () => f.workDir)
+      expect(resolution).toEqual({ kind: 'active', cwd: f.workDir })
+    } finally {
+      f.cleanup()
+    }
+  })
+
+  it('第一级 miss + 磁盘命中（kill -9 恢复期未迁移形态）：kind=disk，cwd 来自会话文件 header', () => {
+    const f = setupU4Fixture()
+    try {
+      f.writeMainSession(MAIN_SID, f.workDir)
+      const resolution = resolveSessionContext(MAIN_SID, () => undefined)
+      expect(resolution.kind).toBe('disk')
+      if (resolution.kind === 'disk') {
+        expect(resolution.cwd).toBe(f.workDir)
+        expect(resolution.filePath).toContain(MAIN_SID)
+      }
+    } finally {
+      f.cleanup()
+    }
+  })
+
+  it('btw 在册形态：经 registerSession 在内存 → 第一级照常解析（kind=active，行为不变）', () => {
+    const f = setupU4Fixture()
+    try {
+      f.writeBtwLine(MAIN_SID, LINE_SID)
+      // 在册 btw 线：registerSession 以线 id 注册、cwd = 主会话 cwd（btw-service 契约）
+      const resolution = resolveSessionContext(LINE_SID, () => f.workDir)
+      expect(resolution).toEqual({ kind: 'active', cwd: f.workDir })
+    } finally {
+      f.cleanup()
+    }
+  })
+
+  it('btw 不在册形态（重启窗口）：两级 miss + 布局命中 → kind=btw-line（「不支持」分形源）', () => {
+    const f = setupU4Fixture()
+    try {
+      f.writeBtwLine(MAIN_SID, LINE_SID)
+      const resolution = resolveSessionContext(LINE_SID, () => undefined)
+      expect(resolution).toEqual({ kind: 'btw-line' })
+    } finally {
+      f.cleanup()
+    }
+  })
+
+  it('两级全 miss（含磁盘也无）：kind=not-found（现状「会话不存在」语义）', () => {
+    const f = setupU4Fixture()
+    try {
+      const resolution = resolveSessionContext('no-such-session-id', () => undefined)
+      expect(resolution).toEqual({ kind: 'not-found' })
+    } finally {
+      f.cleanup()
+    }
+  })
+})
+
+describe('startup-readiness U4: FileService 纯读换源（RL3）', () => {
+  it('恢复期（活跃表空）：searchFiles 经第二级磁盘解析照常返回，无「Session 不存在或无 cwd」', async () => {
+    const f = setupU4Fixture2()
+    try {
+      const svc = new FileService({
+        sessionService: { getSummary: () => undefined } as unknown as FileServiceOptions['sessionService'],
+        executor: fakeFsExecutor(f.workDir),
+      })
+      const files = await svc.searchFiles(MAIN_SID2)
+      expect(Array.isArray(files)).toBe(true)
+    } finally {
+      f.cleanup()
+    }
+  })
+
+  it('btw 不在册（重启窗口）：FileError code=btw_line_inactive，与 session_not_found 可区分', async () => {
+    const f = setupU4Fixture2()
+    try {
+      f.writeBtwLine(MAIN_SID2, LINE_SID2)
+      const svc = new FileService({
+        sessionService: { getSummary: () => undefined } as unknown as FileServiceOptions['sessionService'],
+        executor: fakeFsExecutor(f.workDir),
+      })
+      const err = await svc.searchFiles(LINE_SID2).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(FileError)
+      const fe = err as FileError
+      expect(fe.code).toBe('btw_line_inactive')
+      expect(fe.code).not.toBe('session_not_found')
+      expect(fe.message).toContain(LINE_SID2)
+    } finally {
+      f.cleanup()
+    }
+  })
+
+  it('两级全 miss：FileError code=session_not_found（现状语义保持）', async () => {
+    const f = setupU4Fixture2()
+    try {
+      const svc = new FileService({
+        sessionService: { getSummary: () => undefined } as unknown as FileServiceOptions['sessionService'],
+        executor: fakeFsExecutor(f.workDir),
+      })
+      const err = await svc.searchFiles('totally-unknown-sid').catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(FileError)
+      expect((err as FileError).code).toBe('session_not_found')
+    } finally {
+      f.cleanup()
+    }
+  })
+})
+
+describe('startup-readiness U4: GitService 纯读换源（RL3）', () => {
+  it('恢复期（活跃表空）：getStatus 经第二级磁盘解析不抛 session_not_found', async () => {
+    const f = setupU4Fixture2()
+    try {
+      const exec = { exec: vi.fn().mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 }) }
+      const svc = new GitService({
+        sessionService: { getSummary: () => undefined } as unknown as GitServiceOptions['sessionService'],
+        executor: exec as unknown as IGitExecutor,
+        stateService: new GitStateService({ executor: exec as unknown as IGitExecutor, repoObserver: stubObserver }),
+      })
+      const result = await svc.getStatus(MAIN_SID2)
+      expect(result).toBeDefined()
+    } finally {
+      f.cleanup()
+    }
+  })
+
+  it('btw 不在册（重启窗口）：GitError code=btw_line_inactive 且与 session_not_found 可区分', async () => {
+    const f = setupU4Fixture2()
+    try {
+      f.writeBtwLine(MAIN_SID2, LINE_SID2)
+      const exec = { exec: vi.fn().mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 }) }
+      const svc = new GitService({
+        sessionService: { getSummary: () => undefined } as unknown as GitServiceOptions['sessionService'],
+        executor: exec as unknown as IGitExecutor,
+        stateService: new GitStateService({ executor: exec as unknown as IGitExecutor, repoObserver: stubObserver }),
+      })
+      const err = await svc.getStatus(LINE_SID2).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(GitError)
+      const ge = err as GitError
+      expect(ge.code).toBe('btw_line_inactive')
+      expect(ge.code).not.toBe('session_not_found')
+      // 执行器未被触达（解析失败先于任何 git 调用）
+      expect(exec.exec).not.toHaveBeenCalled()
+    } finally {
+      f.cleanup()
+    }
+  })
+
+  it('两级全 miss：GitError code=session_not_found（现状语义保持）', async () => {
+    const f = setupU4Fixture2()
+    try {
+      const exec = { exec: vi.fn().mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 }) }
+      const svc = new GitService({
+        sessionService: { getSummary: () => undefined } as unknown as GitServiceOptions['sessionService'],
+        executor: exec as unknown as IGitExecutor,
+        stateService: new GitStateService({ executor: exec as unknown as IGitExecutor, repoObserver: stubObserver }),
+      })
+      const err = await svc.getStatus('nope-sid').catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(GitError)
+      expect((err as GitError).code).toBe('session_not_found')
+    } finally {
+      f.cleanup()
+    }
+  })
+})
+
+function setupU4Fixture2(): { dataDir: string; workDir: string; writeBtwLine: (mainSid: string, lineSid: string) => void; cleanup: () => void } {
+  const dataDir = mkdtempSync(join(tmpdir(), 'u4-git-file-'))
+  const workDir = mkdtempSync(join(tmpdir(), 'u4-git-file-work-'))
+  const origDataDir = process.env.TAIJI_AGENT_DATA_DIR
+  process.env.TAIJI_AGENT_DATA_DIR = dataDir
+  const sessionsDir = join(dataDir, 'agent', 'sessions')
+  mkdirSync(sessionsDir, { recursive: true })
+  writeFileSync(join(sessionsDir, `${MAIN_SID2}.jsonl`), `{"type":"session","id":"${MAIN_SID2}","cwd":"${workDir}","timestamp":"2026-01-01"}\n`)
+  return {
+    dataDir,
+    workDir,
+    writeBtwLine(mainSid: string, lineSid: string): void {
+      const btwDir = join(dataDir, 'ext-sessions', mainSid, 'btw')
+      mkdirSync(btwDir, { recursive: true })
+      writeFileSync(join(btwDir, `${lineSid}.jsonl`), `{"type":"session","id":"${lineSid}","cwd":"${workDir}","timestamp":"2026-01-01"}\n`)
+    },
+    cleanup(): void {
+      _resetSessionMetaCacheForTest()
+      invalidateScanDirCache()
+      if (origDataDir === undefined) {
+        delete process.env.TAIJI_AGENT_DATA_DIR
+      } else {
+        process.env.TAIJI_AGENT_DATA_DIR = origDataDir
+      }
+      rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+      rmSync(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    },
+  }
+}
+
+const MAIN_SID2 = '019a1b2c-0000-7000-8000-0000000000a1'
+const LINE_SID2 = '019a1b2c-0000-7000-8000-0000000000a2'
+
+/** 最小 IFileExecutor fake：listDir 返回空（searchFiles 只需不炸）。 */
+function fakeFsExecutor(workDir: string): IFileExecutor {
+  return {
+    listDir: async () => [] as FsEntry[],
+    readFile: async () => '',
+    stat: async () => ({ type: 'dir', size: 0 }),
+  } as unknown as IFileExecutor
+}
+
 });
