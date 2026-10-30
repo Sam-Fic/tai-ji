@@ -13,7 +13,7 @@
  *   session-lifecycle.ts → 会话生命周期装配 seam（测试可注入 fake 依赖）
  *   workflow-events.ts   → workflow 域事件族装配 seam（7 个 pi.on handler + deps 装配）
  *
- * 本文件 = 组合根：只留注册（tools / commands / renderer / 进程级信号 hook）与
+ * 本文件 = 组合根：只留注册（tools / commands / renderer）与
  * 装配接线（core 端口 / 注入器 / 两个 seam 调用）。
  *
  * 架构导航见 docs/extensions/subagents/architecture.md。
@@ -23,8 +23,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { getLogger, setPiHandle } from "@zhushanwen/pi-extension-logger";
-import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
+import { setPiHandle } from "@zhushanwen/pi-extension-logger";
 
 // ═══ core 宿主端口接线（subagent-core 包抽离 u0-wire；实现见 src/host/pi-host.ts） ═══
 import { configureCore } from "@zhushanwen/subagent-core";
@@ -40,7 +39,6 @@ import { syncEnginesFile } from "@zhushanwen/subagent-core";
 // [P3 引擎接线] 组合根登记 'zcode' 引擎（D8 薄壳：vendored 定位 cli descriptor；
 // engineDataDir 默认走 common/data-dir SSOT）
 import { registerZcodeEngine } from "@zhushanwen/subagent-core";
-import { markAllSpawnedChildrenDead } from "@zhushanwen/subagent-core";
 // bg-notify 送达通道 customType（notify 词表单源，与 shared/runtime/core 消费侧同源）
 import { SUBAGENT_BG_NOTIFY_CUSTOM_TYPE } from "@zhushanwen/extension-protocol";
 // [engine-awareness U3/D7-④] per-turn 引擎检测编排 + before_agent_start 链尾接线
@@ -63,45 +61,6 @@ import { registerWorkflowScriptTool } from "./interface/tool/tool-workflow-scrip
 import { setupWorkflowDomain } from "./workflow-events.ts";
 
 // ── Factory ──────────────────────────────────────────────────
-
-// 模块级 logger（setPiHandle 注入后自动走 appendEntry）
-const logger = getLogger("subagents");
-
-// ═══ [V2 决策 7 防线 i] process 级 shutdown hook ═══
-//
-// session_shutdown 是 pi 的 async hook，进程被 SIGTERM/SIGINT 强杀或崩溃时来不及
-// 触发；sync 子进程（controller 为 undefined，abortRunningControllers 跳过它们）会
-// 泄漏为孤儿。process.on 兜底调 markAllSpawnedChildrenDead——core 侧该入口为
-// 镜像置死 no-op（仅清空 core spawnedChildren 镜像记账，不发任何进程信号；命名即
-// 语义，防「kill 前缀」误读为发信号），真实回收链 = 子进程 stdin-EOF 自灭（宿主
-// 退出 / EngineClient 销毁）+ dispose 链；本调用保留兜底占位（镜像一致性），不构成
-// 真实收割。guard 防多信号叠加（如 SIGINT 后又 beforeExit）重复触发。
-let processShutdownHookFired = false;
-
-function reapSpawnedChildrenOnShutdown(): void {
-  if (processShutdownHookFired) return;
-  processShutdownHookFired = true;
-  try {
-    markAllSpawnedChildrenDead();
-  } catch (err) {
-    // best-effort：收割失败不阻断退出流程——debug 留痕（孤儿子进程排查线索），
-    // 不静默吞错，对齐「错误必须可操作」。
-    logger.debug(
-      "[subagents] process shutdown reap best-effort failed (markAllSpawnedChildrenDead)",
-      { reason: toErrorMessage(err) },
-    );
-  }
-}
-
-/**
- * 测试钩子：重置 module 级 shutdown guard。
- *
- * 对齐 lifecycle-manager._resetLifecycleState 模式——processShutdownHookFired 是
- * module 级单例状态，跨 test 持久，单测需显式重置以验证 idempotent 行为。
- */
-export function _resetProcessShutdownGuardForTest(): void {
-  processShutdownHookFired = false;
-}
 
 export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
   // 注入 pi handle 给全局 extension-logger，让深层代码（best-effort / error-recovery）
@@ -187,47 +146,6 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
       if (state) state.lastEngine = engine;
     },
   });
-
-  // ════════════════════════════════════════════════════════════
-  //  [V2 决策 7 防线 i] process 级 shutdown hook（显式收割三道防线之一）
-  //
-  //  上方 session_shutdown（pi async hook，workflow-events.ts）在进程被 SIGTERM/
-  //  SIGINT 强杀或崩溃时不触发，此处 process.on 兜底确保 sync 子进程被收割
-  //  （防线 i：shutdown 时显式 SIGTERM 全部 activation）。
-  //
-  //  - SIGTERM：pi 各 mode（rpc/interactive/print）自带 SIGTERM handler 负责退出编排，
-  //    本 extension 的 handler 只做收割 + 设 exitCode（不 re-raise、不抢 pi 的退出语义；
-  //    taiji 桌面 supervisor 用 SIGTERM 杀 pi 走这条路）。
-  //  - SIGINT：pi 本体不注册常规 SIGINT handler（interactive/print/rpc 均 SIGTERM only），
-  //    依赖 Node 默认终止。本 extension 注册 listener 即取消默认终止——若只设 exitCode，
-  //    本地 pi CLI 的 Ctrl-C 杀不死进程（TUI/stdin/agent loop 仍在事件循环）。故收割
-  //    完成后 re-raise 恢复默认终止，见下方 sigintHandler。
-  //  - beforeExit 是退出前最后事件，不 exit（自然退出）。
-  //  - idempotent guard（reapSpawnedChildrenOnShutdown 内）防多信号叠加重复 kill。
-  //
-  //  防线 iii（activate 互斥）：未接线——acquireActivateLock 机制已随简化清扫删除
-  //  （历史接线点随协议化重构消失，仅余自持单测）。当前的双写者防护由
-  //  subagent-service 的 resumesInFlight 集合检查承担。
-  //  防线 ii（启动孤儿扫描）：未接线，骨架已随 L2 死代码清扫删除（当前 piped stdio
-  //  下 stdin-EOF 自灭链覆盖崩溃路径）。
-  // ════════════════════════════════════════════════════════════
-  process.on("SIGTERM", () => {
-    reapSpawnedChildrenOnShutdown();
-    // S-3: 改用 process.exitCode 而非 process.exit(0)，让子进程 cleanup 完成后再自然退出。
-    // process.exit(0) 会立即终止，可能在 reapSpawnedChildrenOnShutdown 完成前截断。
-    // 退出编排归 pi 自身的 SIGTERM handler（rpc-mode 会主动退出）。
-    process.exitCode = 0;
-  });
-  // [review 修复] SIGINT re-raise：收割同步完成后，先移除自身 listener 再向自身重发
-  // SIGINT，恢复 Node 默认终止。不 removeListener 直接 kill(process.pid) 会再次进入
-  // 本 handler 递归；移除后无其他 SIGINT listener（pi 不注册）→ 默认行为终止进程。
-  const sigintHandler = (): void => {
-    reapSpawnedChildrenOnShutdown();
-    process.removeListener("SIGINT", sigintHandler);
-    process.kill(process.pid, "SIGINT");
-  };
-  process.on("SIGINT", sigintHandler);
-  process.on("beforeExit", reapSpawnedChildrenOnShutdown);
 
   // ════════════════════════════════════════════════════════════
   //  Tools（7 个）+ Commands（3 个）—— 注册点盘点

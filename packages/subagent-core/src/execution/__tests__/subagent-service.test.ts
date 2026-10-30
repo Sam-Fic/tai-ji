@@ -408,8 +408,9 @@ describe("SubagentService", () => {
 
       // sync record 的 controller 是 undefined，running 状态下 dispose 不应抛
       // （abortRunningControllers 检查 r.controller 才 abort，sync 跳过）
-      // [C1] sync 子进程的 kill 由 markAllSpawnedChildrenDead 兜底（spawnedChildren Set 注册），
-      //      集成验证见 run-spawn-integration.test.ts 的 C1 用例（mock spawn + spy kill）。
+      // [C1] sync record 的状态清理走 disposeAllRecords（parent-shutdown）的
+      //      killRecordChildWithEscalation 记账（镜像置死，不发进程信号）；真实终止
+      //      在引擎进程内（stdin-EOF 自灭链），宿主侧无 kill 动作。
       const syncRecord = registerRunningSync(service, "sync-1");
       expect(syncRecord.controller).toBeUndefined();
 
