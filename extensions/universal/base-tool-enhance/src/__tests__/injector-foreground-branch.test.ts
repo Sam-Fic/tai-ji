@@ -28,6 +28,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 	getAgentDir: () => agentDirRef.dir,
 }));
 
+import { getProcessStartTimeSec, pidStartMatchesRegistered } from "@zhushanwen/extension-protocol/background-task";
 import { clearConfigCache } from "@zhushanwen/pi-llm-shared";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -375,10 +376,10 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)("matrix A routing (§3.2)", () => {
 // ──────────────────── 收尾 pid 判定两分支（断言 #4）────────────────────
 
 describe.skipIf(!INTEGRATION_TESTS_ENABLED)("parsePidFile (wrapper pidfile protocol read side)", () => {
-	it("parses the taiji-fg-wrap JSON contract {pid, pidStartTimeSec}", () => {
-		const f = join(DATA_DIR, "probe-pid.json");
+	it("parses the taiji-fg-wrap JSON contract; consumes pid only (pidStartTimeSec is a wall-clock approximation, never registered)", () => {
+		const f = join(DATA_DIR, "probe-json.pid");
 		writeFileSync(f, '{"pid":12345,"pidStartTimeSec":1700000000}\n', "utf8");
-		expect(parsePidFile(f)).toEqual({ pid: 12345, pidStartTime: 1700000000 });
+		expect(parsePidFile(f)).toEqual({ pid: 12345 });
 	});
 
 	it("tolerates missing pidStartTimeSec and rejects invalid fields", () => {
@@ -393,7 +394,7 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)("parsePidFile (wrapper pidfile proto
 	it("legacy whitespace form and corrupt content fall back safely", () => {
 		const f4 = join(DATA_DIR, "probe-pid-legacy.pid");
 		writeFileSync(f4, "99 1700000000\n", "utf8");
-		expect(parsePidFile(f4)).toEqual({ pid: 99, pidStartTime: 1700000000 });
+		expect(parsePidFile(f4)).toEqual({ pid: 99 });
 		const f5 = join(DATA_DIR, "probe-pid-garbage.pid");
 		writeFileSync(f5, "{corrupt json", "utf8");
 		expect(parsePidFile(f5)).toEqual({});
@@ -419,7 +420,8 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)("settle by pidfile (断言 #4)", () 
 		expect(existsSync(task!.outputFile)).toBe(true);
 		expect(existsSync(join(TASKS_DIR, `${task!.taskId}.sh`))).toBe(true);
 		expect(existsSync(join(TASKS_DIR, `${task!.taskId}.pid`))).toBe(true);
-		// registry running 条目含 pidStartTime（pidfile 携带值）
+		// registry running 条目含 pidStartTime（登记时同源直读 ps——与守望/超时身份校验
+		// 同一经 getProcessStartTimeSec，严格相等比对成立；fixture 的 sleep 30 真活进程）
 		const entry = readRegistry(getRegistryPath(DATA_DIR, SESSION_ID)).get(task!.taskId);
 		expect(entry?.state).toBe("running");
 		expect(typeof entry?.pidStartTime).toBe("number");
@@ -496,7 +498,6 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)("registerConvertedTask (断言 #11)"
 		const task = registerConvertedTask({
 			taskId: "bt-1700000000-rct001",
 			pid: 4242424, // 不可达 pid（登记不判活——判活在改写层收尾已完成）
-			pidStartTime: 1_700_000_000,
 			command: "sleep 30 && echo done",
 			dataDir: DATA_DIR,
 			sessionId: SESSION_ID,
@@ -506,15 +507,18 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)("registerConvertedTask (断言 #11)"
 		expect(getTask(task.taskId)?.state).toBe("running");
 		expect(countActiveTasks()).toBe(1);
 		expect(task.child).toBeUndefined(); // 无 child 句柄（exit 感知归守望）
-		// ② registry 落盘 running 条目（含 pidStartTime 供 pid 复用防御）
+		// pidStartTime 同源直读 ps：不可达 pid 读不到 → 条目省略该字段（消费方降级
+		// startedAt 秒级校验兜底，不报错不阻断）
+		expect(task.pidStartTime).toBeUndefined();
+		// ② registry 落盘 running 条目
 		const entry = readRegistry(getRegistryPath(DATA_DIR, SESSION_ID)).get(task.taskId);
 		expect(entry).toMatchObject({
 			taskId: task.taskId,
 			pid: 4242424,
 			state: "running",
-			pidStartTime: 1_700_000_000,
 			ownerPiPid: process.pid,
 		});
+		expect(entry).not.toHaveProperty("pidStartTime");
 		// ③ pending:register emit（session_start 差集对账前提）
 		expect(pi.events.emit).toHaveBeenCalledWith("pending:register", {
 			id: task.taskId,
@@ -547,7 +551,6 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)("registerConvertedTask (断言 #11)"
 		const task = registerConvertedTask({
 			taskId: "bt-1700000000-poolov",
 			pid: 4242424,
-			pidStartTime: 1,
 			command: "echo overflow",
 			dataDir: DATA_DIR,
 			sessionId: SESSION_ID,
@@ -562,7 +565,6 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)("registerConvertedTask (断言 #11)"
 		const task = registerConvertedTask({
 			taskId: "bt-1700000000-rctto1",
 			pid: 4242424,
-			pidStartTime: 1,
 			command: "echo to",
 			dataDir: DATA_DIR,
 			sessionId: SESSION_ID,
@@ -573,7 +575,11 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)("registerConvertedTask (断言 #11)"
 		expect(task.timeoutTimer).toBeDefined();
 	});
 
-	it("pidStartTime fallback: read from the live process when pidfile omits it", () => {
+	it("pidStartTime source: read from the live process via getProcessStartTimeSec — identity check passes (same clock source)", () => {
+		// 回归防护（U1 同源修复）：登记值必须与守望/bash_kill/超时身份校验同一时钟源
+		// （ps lstart）。曾采信 pidfile 的 wrapper 墙钟近似值（跨秒边界比真实值大 1），
+		// pidStartMatchesRegistered 严格相等无容差 → 守望首轮误判 pid 复用，对在跑
+		// 任务假终态 + 假完成通知（exit code unknown）+ 任务脱离可杀可查
 		const child = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
 		child.unref();
 		const pid = child.pid!;
@@ -587,6 +593,10 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)("registerConvertedTask (断言 #11)"
 			});
 			expect(typeof task.pidStartTime).toBe("number");
 			expect(task.pidStartTime).toBeGreaterThan(0);
+			// 与消费方同源同值：pidStartMatchesRegistered（守望/超时身份校验同一谓词）判 true
+			const actualStartSec = getProcessStartTimeSec(pid);
+			expect(actualStartSec).toBeDefined();
+			expect(pidStartMatchesRegistered(actualStartSec!, task.pidStartTime, task.startedAt)).toBe(true);
 		} finally {
 			try {
 				process.kill(-pid, "SIGKILL");

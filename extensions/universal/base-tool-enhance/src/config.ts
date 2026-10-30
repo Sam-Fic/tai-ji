@@ -42,7 +42,8 @@ export interface BaseToolEnhanceConfig {
 	backgroundTimeoutSeconds: number | null;
 	/**
 	 * 空闲转后台阈值（秒）：前台命令输出静默满此值时转后台（不杀命令，只解除阻塞——
-	 * 是「转后台阈值」不是超时）；null = 关闭（回落官方原生无限等待）。
+	 * 是「转后台阈值」不是超时）；null = 关闭（回落官方原生无限等待）。归一化取整为
+	 * ≥1 整数（消费者 = 包装脚本 --idle 参数，只接受非负整数秒）。
 	 */
 	idleBackgroundSec: number | null;
 	maxConcurrentBackground: number;
@@ -103,6 +104,19 @@ function normalizeSecondsKey(raw: unknown, key: string, fallback: number | null)
 		return clamped;
 	}
 	return raw;
+}
+
+/**
+ * idleBackgroundSec 归一化：normalizeSecondsKey 基础上向下取整（消费者 = 包装脚本
+ * --idle 参数，bash 文本协议只接受非负整数秒——放行小数会使配置层值空间与执行层
+ * 可接受值空间出现差集，差集配置下全部 A5 前台命令 exit 64 立即失败、机制整体
+ * 断裂）。正小数 floor 后 <1 的（如 0.5）抬到 1：--idle 0 语义是「首轮监控即转
+ * 后台」，不是亚秒阈值的合理近似。timeout 双键不取整——消费者是 pi 官方 timeout
+ * 参数（数字秒，小数合法）。
+ */
+function normalizeIdleBackgroundSec(raw: unknown): number | null {
+	const normalized = normalizeSecondsKey(raw, "idleBackgroundSec", DEFAULT_IDLE_BACKGROUND_SEC);
+	return normalized === null ? null : Math.max(1, Math.floor(normalized));
 }
 
 /**
@@ -169,11 +183,7 @@ export function normalizeBaseToolEnhanceConfig(raw: unknown): BaseToolEnhanceCon
 		disableBuiltinForcePatterns: normalizeDisableBuiltinForcePatterns(raw.disableBuiltinForcePatterns),
 		foregroundTimeoutSeconds: normalizeSecondsKey(raw.foregroundTimeoutSeconds, "foregroundTimeoutSeconds", null),
 		backgroundTimeoutSeconds: normalizeSecondsKey(raw.backgroundTimeoutSeconds, "backgroundTimeoutSeconds", null),
-		idleBackgroundSec: normalizeSecondsKey(
-			raw.idleBackgroundSec,
-			"idleBackgroundSec",
-			DEFAULT_IDLE_BACKGROUND_SEC,
-		),
+		idleBackgroundSec: normalizeIdleBackgroundSec(raw.idleBackgroundSec),
 		maxConcurrentBackground: normalizeMaxConcurrentBackground(raw.maxConcurrentBackground),
 	};
 }

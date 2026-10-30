@@ -212,13 +212,17 @@ function prepareForegroundWrap(
 
 /**
  * pidfile 读取（wrapper 写、改写层读的协议载体，bin/taiji-fg-wrap 实装对齐）：单行 JSON
- * `{"pid":<n>,"pidStartTimeSec":<epoch秒>}`。解析防御：文件缺失 / JSON 损坏 / 字段非法 →
- * pid undefined；空格分隔 `<pid> <pidStartTime>` 旧文本形态保留回退（协议漂移防御）。
+ * `{"pid":<n>,"pidStartTimeSec":<epoch秒>}`，读侧只消费 pid。pidStartTimeSec 不作为
+ * 登记值（它是 wrapper spawn 后的墙钟近似，跨秒边界可比真实启动秒大 1；身份校验消费方
+ * 与 getProcessStartTimeSec 严格相等比对无容差，采信近似值会恒失配 → 守望首轮误判
+ * pid 复用、假终态+假完成通知——见 registerConvertedTask 同源直读）。解析防御：文件
+ * 缺失 / JSON 损坏 / 字段非法 → pid undefined；空格分隔 `<pid> <pidStartTime>` 旧文本
+ * 形态保留回退（协议漂移防御，同样只取首字段 pid）。
  * pidfile 缺失 = wrapper 在 spawn 与写 pidfile 的毫秒窗口内被杀（设计 §5 部件 1 已接受
  * 形态：B5 兜底对该次失效，命令进程可能残留，与 pi 原生执行中宿主崩溃的残留同级）→
  * 不登记（无 pid 可管），cmd.sh 尽力清理。
  */
-export function parsePidFile(pidfilePath: string): { pid?: number; pidStartTime?: number } {
+export function parsePidFile(pidfilePath: string): { pid?: number } {
 	let raw: string;
 	try {
 		raw = readFileSync(pidfilePath, "utf8").trim();
@@ -234,10 +238,7 @@ export function parsePidFile(pidfilePath: string): { pid?: number; pidStartTime?
 			const parsed: unknown = JSON.parse(raw);
 			if (isRecord(parsed)) {
 				const pid = toPid(parsed.pid);
-				if (pid !== undefined) {
-					const pidStartTime = toPid(parsed.pidStartTimeSec);
-					return { pid, ...(pidStartTime !== undefined ? { pidStartTime } : {}) };
-				}
+				if (pid !== undefined) return { pid };
 			}
 		} catch (err) {
 			// JSON 损坏 → 回退空格分隔形态（协议防御路径，debug 留痕便于排障）
@@ -246,11 +247,8 @@ export function parsePidFile(pidfilePath: string): { pid?: number; pidStartTime?
 			});
 		}
 	}
-	const fields = raw.split(/\s+/);
-	const pid = toPid(fields[0]);
-	if (pid === undefined) return {};
-	const pidStartTime = toPid(fields[1]);
-	return { pid, ...(pidStartTime !== undefined ? { pidStartTime } : {}) };
+	const pid = toPid(raw.split(/\s+/)[0]);
+	return pid !== undefined ? { pid } : {};
 }
 
 /**
@@ -272,8 +270,6 @@ export function parsePidFile(pidfilePath: string): { pid?: number; pidStartTime?
 export function registerConvertedTask(opts: {
 	taskId: string;
 	pid: number;
-	/** pidfile 携带的启动时间（epoch 秒，可省略） */
-	pidStartTime?: number;
 	command: string;
 	dataDir: string;
 	sessionId: string;
@@ -281,9 +277,14 @@ export function registerConvertedTask(opts: {
 }): BackgroundTask {
 	const registryPath = getRegistryPath(opts.dataDir, opts.sessionId);
 	const outputFile = join(dirname(registryPath), `${opts.taskId}.log`);
-	// pidStartTime（pid 复用防御，M3 补写字段同款）：pidfile 携带值优先；缺失时直接读
-	// 进程 start time；读不到省略（消费方降级 startedAt 秒级校验兜底，不报错不阻断）
-	const pidStartTime = opts.pidStartTime ?? getProcessStartTimeSec(opts.pid);
+	// pidStartTime（pid 复用防御，spawn-background M3 补写同款）：登记时同源直读
+	// getProcessStartTimeSec——与全部身份校验消费方（守望 / bash_kill / 后台超时 /
+	// reaper）同经 ps lstart，严格相等比对（pidStartMatchesRegistered 无容差）才能
+	// 成立。pidfile 的 pidStartTimeSec 是 wrapper 墙钟近似（跨秒边界可比真实值大
+	// 1），采信它会让守望首轮误判 pid 复用 → 对在跑任务假终态+假完成通知。登记时
+	// 进程刚经 isPidAlive 验活（改写层收尾判定），直读几乎必成；读不到省略（消费方
+	// 降级 startedAt 秒级校验兜底——floor 单调性零误跳，优于回退墙钟近似值）
+	const pidStartTime = getProcessStartTimeSec(opts.pid);
 	const task: BackgroundTask = {
 		taskId: opts.taskId,
 		pid: opts.pid,
@@ -321,7 +322,7 @@ function settleConvertedCommand(
 	sessionId: string,
 	backgroundTimeoutSec: number | undefined,
 ): BackgroundTask | undefined {
-	const { pid, pidStartTime } = parsePidFile(plan.pidfilePath);
+	const { pid } = parsePidFile(plan.pidfilePath);
 	if (pid === undefined || !isPidAlive(pid)) {
 		for (const path of [plan.cmdShPath, plan.pidfilePath, plan.logFile]) {
 			try {
@@ -337,7 +338,6 @@ function settleConvertedCommand(
 	return registerConvertedTask({
 		taskId: plan.taskId,
 		pid,
-		pidStartTime,
 		command: plan.command,
 		dataDir,
 		sessionId,

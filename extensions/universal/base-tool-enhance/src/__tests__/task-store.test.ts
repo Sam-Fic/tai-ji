@@ -138,7 +138,8 @@ describe("task store state machine", () => {
 	});
 });
 
-describe("terminal LRU eviction (cap 50)", () => {	it("evicts oldest terminal entries beyond cap, keeps recent ones", () => {
+describe("terminal LRU eviction (cap 50)", () => {
+	it("evicts oldest terminal entries beyond cap, keeps recent ones", () => {
 		const OVERFLOW = 5;
 		const total = MAX_TERMINAL_TASKS + OVERFLOW;
 		const created: BackgroundTask[] = [];
@@ -184,7 +185,6 @@ describe("converted registration co-resides with spawn registration", () => {
 		const converted = registerConvertedTask({
 			taskId: "bt-1700000000-conv01",
 			pid: 4242424,
-			pidStartTime: 1_700_000_000,
 			command: "echo converted",
 			dataDir: CONVERT_DATA_DIR,
 			sessionId: "session-conv",
@@ -202,7 +202,6 @@ describe("converted registration co-resides with spawn registration", () => {
 		const converted = registerConvertedTask({
 			taskId: "bt-1700000000-conv02",
 			pid: 4242425,
-			pidStartTime: 1_700_000_000,
 			command: "echo conv",
 			dataDir: CONVERT_DATA_DIR,
 			sessionId: "session-conv",

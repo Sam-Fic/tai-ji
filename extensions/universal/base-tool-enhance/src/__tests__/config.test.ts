@@ -121,12 +121,15 @@ describe("normalizeBaseToolEnhanceConfig（键级矩阵）", () => {
 		}
 	});
 
-	it("idleBackgroundSec：正数透传（含小数）；换算毫秒超 int32 上限 → clamp + warn", () => {
+	it("idleBackgroundSec：整数透传；小数 floor 取整（<1 抬到 1）；clamp 上限同为整数", () => {
 		expect(normalizeBaseToolEnhanceConfig({ idleBackgroundSec: 30 }).idleBackgroundSec).toBe(30);
-		expect(normalizeBaseToolEnhanceConfig({ idleBackgroundSec: 1.5 }).idleBackgroundSec).toBe(1.5);
+		// wrapper --idle 只接受非负整数秒（bash 文本协议）——小数放行会让差集配置下
+		// 全部 A5 前台命令 exit 64，归一化层收敛为整数
+		expect(normalizeBaseToolEnhanceConfig({ idleBackgroundSec: 1.5 }).idleBackgroundSec).toBe(1);
+		expect(normalizeBaseToolEnhanceConfig({ idleBackgroundSec: 0.5 }).idleBackgroundSec).toBe(1);
 		const config = normalizeBaseToolEnhanceConfig({ idleBackgroundSec: 1_000_000_000 });
-		// int32 ms 上限 2147483647 → 2147483.647s（与 timeout 键同款 clamp）
-		expect(config.idleBackgroundSec).toBeCloseTo(2147483.647, 3);
+		// int32 ms 上限 2147483647 → 2147483.647s（与 timeout 键同款 clamp）→ floor 2147483
+		expect(config.idleBackgroundSec).toBe(2147483);
 		expect(warnMock).toHaveBeenCalledTimes(1);
 		expect(warnMock.mock.calls[0]?.[0]).toContain("clamped");
 	});
