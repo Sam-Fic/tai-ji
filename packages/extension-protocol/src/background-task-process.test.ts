@@ -525,5 +525,33 @@ describe('killProcessTree 回退路径（组长已死 → 单 pid kill + pgrep �
       // 无 resolved-group-kill-missed（未尝试组杀）；子孙与目标命中（kill spy mock 返回 true）
       expect(steps).toEqual(['process-group-kill-missed'])
     })
+
+    it('解析组杀落空（解析出合法 pgid ≠ 自身组，组 kill ESRCH）→ resolved-group-kill-missed 诊断不中断，继续走 pgrep 回退杀子孙与目标', () => {
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid: number) => {
+        if (pid < 0) throw errnoLike('ESRCH', 'process group gone')
+        return true
+      })
+      const { steps, logger } = collectFallback()
+      // ps 按被探测 pid 区分（args = ['-o','pgid=','-p','<pid>']，args[3] 即 pid）：目标 4321
+      // 解析出合法 pgid 4343，自身组探测返回 4242 → pgid ≠ ownPgid 越过防自杀判定进入解析
+      // 组杀；kill spy 对一切负 pid 抛 ESRCH → 解析组杀落空（组长已死、组残留但组 kill 不可
+      // 达的形态）。守护点：该分支必须发出 resolved-group-kill-missed 诊断且不中断（如 catch
+      // 后误 return 不走回退，kill 序列止步于 -4343，断言当场变红），继续 pgrep 回退
+      childMock.spawnSync.mockImplementation((cmd: string, args: string[]) => {
+        if (cmd === 'ps') {
+          return args[3] === '4321'
+            ? { status: 0, error: undefined, stdout: '4343\n' }
+            : { status: 0, error: undefined, stdout: '4242\n' }
+        }
+        const target = args[1]
+        if (target === '4321') return { status: 0, error: undefined, stdout: '5100\n' }
+        return { status: 1, error: undefined, stdout: '' }
+      })
+      killProcessTree(4321, logger)
+      // kill 序列 = 快路径组杀(-4321) 落空 → 解析组杀(-4343) 落空 → 回退：枚举杀子孙(5100) → 杀目标(4321)
+      expect(killSpy.mock.calls.map((c) => c[0])).toEqual([-4321, -4343, 5100, 4321])
+      // 两条组杀落空诊断各一条；回退 kill 全命中（spy 返回 true），无额外回退诊断
+      expect(steps).toEqual(['process-group-kill-missed', 'resolved-group-kill-missed'])
+    })
   })
 })
