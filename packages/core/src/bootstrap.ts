@@ -72,32 +72,47 @@ export function setPluginListSource(subscribe: (handler: (plugins: PluginDescrip
   pluginListSubscribe = subscribe
 }
 
-// 壳向 ExtensionHost 注册挂载点（sidebar.tab / panel.header / composer.toolbar）
+/**
+ * 壳注册的挂载点全量清单（registerMountPoints 的单一权威；注册序即数组序）。
+ *
+ * 命名 SSOT = SDK/descriptor-types（'sidebar.tab' | 'panel.header' | 'composer.toolbar'），
+ * renderer ViewHost view-id 按同名路由（MF-8：曾用 'panel.header.action' 导致 listMountPoints
+ * 与渲染端名字失配）。三段构成：
+ * - Tier 1 挂载点（§12.1，对齐 audit §12.1 步骤 1）：sidebar tab / panel header / composer toolbar
+ * - Provider 页挂载位（provider-plugin-access D2/U2）：授权流程与条目扩展内容由插件用
+ *   GuiComponent 树填充（宿主只画容器），视图归属为全局域 scope（无会话归属，分区键
+ *   global:<mountId>:<pluginId>）
+ * - 容器位挂载点三族（容器扩展点统一 §7.2 挂载点注册）：drawer.tab（右抽屉标签页）/
+ *   overlay.content（浮层内容类型——§6.8 内容注册表形态，非标签页）/ settings.section
+ *   （设置页分区）
+ *
+ * 本清单同时是 contribution-placement-reconciliation.test.ts 的对账基准：PLACEMENT_BY_TYPE
+ * 的每个 placement 必须落在本清单或挂载点校验豁免清单（MOUNT_POINT_CHECK_EXEMPT_TYPES）
+ * 内。新增/删除挂载点只改这里，注册函数与对账测试随动。
+ */
+export const REGISTERED_MOUNT_POINTS = [
+  'sidebar.tab',
+  'panel.header',
+  'composer.toolbar',
+  'provider.authorize',
+  'provider.detail-extra',
+  'drawer.tab',
+  'overlay.content',
+  'settings.section',
+] as const
+
+// 壳向 ExtensionHost 注册挂载点（清单 = REGISTERED_MOUNT_POINTS，含 Tier 1 三点 +
+// Provider 页两点 + 容器位三族；各族的注册理由见常量注释）
 export async function registerMountPoints(): Promise<void> {
   console.log('[bootstrap] step 4/5 registerMountPoints')
   if (!mountRegistryImpl) {
     console.warn('[bootstrap] registerMountPoints: registry not injected, skip (setExtensionRegistries)')
     return
   }
-  // Tier 1 挂载点（§12.1，对齐 audit §12.1 步骤 1）：sidebar tab / panel header / composer toolbar。
-  // 命名 SSOT = SDK/descriptor-types（'sidebar.tab' | 'panel.header' | 'composer.toolbar'），
-  // renderer ViewHost view-id 按同名路由（MF-8：曾用 'panel.header.action' 导致 listMountPoints 与
-  // 渲染端名字失配）。
-  mountRegistryImpl.register('sidebar.tab')
-  mountRegistryImpl.register('panel.header')
-  mountRegistryImpl.register('composer.toolbar')
-  // Provider 页挂载位（provider-plugin-access D2/U2）：授权流程与条目扩展内容由插件用
-  // GuiComponent 树填充（宿主只画容器），视图归属为全局域 scope（无会话归属，分区键
-  // global:<mountId>:<pluginId>）。消费方 = U6 Provider 页接入（u-provider-page）。
-  mountRegistryImpl.register('provider.authorize')
-  mountRegistryImpl.register('provider.detail-extra')
-  // 容器位挂载点三族（容器扩展点统一 §7.2 挂载点注册）：drawer.tab（右抽屉标签页）/
-  // overlay.content（浮层内容类型——§6.8 内容注册表形态，非标签页）/ settings.section
-  //（设置页分区）。该机制连续第三次真实扩位且零渲染端改动；三族的渲染端派生消费由
-  // ContentSlotRegistry 派生视图承接（U6/U7/U8 接线）。
-  mountRegistryImpl.register('drawer.tab')
-  mountRegistryImpl.register('overlay.content')
-  mountRegistryImpl.register('settings.section')
+  // 注册序 = REGISTERED_MOUNT_POINTS 数组序（最小改动：原逐条 register 收敛为清单循环）
+  for (const name of REGISTERED_MOUNT_POINTS) {
+    mountRegistryImpl.register(name)
+  }
 }
 
 // 声明通路订阅句柄（容器扩展点统一 §6.2）：scanContributions 重复调用时先退订旧订阅

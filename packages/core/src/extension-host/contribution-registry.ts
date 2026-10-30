@@ -9,7 +9,9 @@
  * - loadExternal 幂等：重复注入同一 pluginId 不翻倍；覆盖粒度 = (type, contributionId)
  *   逐项（声明源合并 §6.2——静态表项不被未被清单覆盖的声明清除，失败模式 D 防线）
  * - routeAll 后每条 contribution 的 available 反映挂载点注册态（AC9 置灰依据）；
- *   未注册挂载点 → emit unregistered-mount-point 事件（ERR1，不静默丢弃）
+ *   未注册挂载点 → emit unregistered-mount-point 事件（ERR1，不静默丢弃）；
+ *   command/slashCommand 型豁免挂载点校验（MOUNT_POINT_CHECK_EXEMPT_TYPES——这两类
+ *   不消费渲染容器，壳从未注册其 placement 名字）
  * - clearForPlugin(pluginId)：清除该插件全部贡献（崩溃/禁用/卸载清理族，幂等）
  * - 向后兼容：旧 panels 字段（legacy manifest）映射为 view（deprecated alias）
  * - loadExternal 的 descriptor 无清单声明（contributes 缺失或 {}）→ 不清不注册（ERR5 降级，
@@ -26,12 +28,48 @@ import type {
   ViewContributionSummary,
 } from './types'
 
-const PLACEMENT_BY_TYPE: Record<Exclude<ContributionType, 'view' | 'menu'>, string> = {
+/**
+ * 贡献类型 → 默认 placement 映射（view/menu 除外：两者 placement 来自声明本体）。
+ *
+ * 对账纪律：每个映射值必须落在「壳注册的挂载点清单」（REGISTERED_MOUNT_POINTS，
+ * bootstrap.ts 单一权威）或「挂载点校验豁免类型」（MOUNT_POINT_CHECK_EXEMPT_TYPES）
+ * 之一——新增贡献类型或改 placement 时由
+ * __tests__/contribution-placement-reconciliation.test.ts 机器拦截。
+ */
+export const PLACEMENT_BY_TYPE: Record<Exclude<ContributionType, 'view' | 'menu'>, string> = {
   command: 'commands',
   slashCommand: 'slash',
-  configuration: 'settings',
+  // configuration 渲染在设置页分区（壳注册的挂载点名；曾误写 'settings'，壳从未注册该名字）
+  configuration: 'settings.section',
   // headerAction 复用已注册挂载点名 panel.header（不新增名字，AP-1）
   headerAction: 'panel.header',
+}
+
+/**
+ * 挂载点校验豁免类型清单（用户裁决 2026-10-30：prod console 每次启动打 6 条
+ * 「贡献 X 引用未注册挂载点 'slash'/'commands'，已置灰」的根因修复）。
+ *
+ * command / slashCommand 型贡献不消费渲染容器，PLACEMENT_BY_TYPE 给的名字只是历史
+ * 路由键：
+ * - 命令展示走 CommandRegistry（ensureCommandDeclarationsSync 同步声明）
+ * - slash 命令执行走 pi 注入（声明与执行分离，见 builtin-contributions.ts）
+ * 壳从未注册 'commands'/'slash' 两个名字（初始导入提交起即不存在，全仓 git 历史核实
+ * 只出现在单测里，非改名丢失）。继续对其做挂载点校验只会把合法贡献误判为
+ * available=false 并刷 unregistered-mount-point 告警。豁免 = 有意不做校验的登记决策，
+ * 新增类型不自动获得豁免；清单成员与理由由
+ * __tests__/contribution-placement-reconciliation.test.ts 对账守护（删条目即测试红）。
+ */
+export const MOUNT_POINT_CHECK_EXEMPT_TYPES = {
+  // 命令展示走 CommandRegistry.resolveSlashCommands 同源注册，执行经
+  // plugin.executeCommand RPC → Worker handler，与渲染容器无关
+  command: '命令展示走 CommandRegistry、执行经 plugin.executeCommand RPC，不消费渲染容器',
+  // slash 命令展示走 CommandRegistry（声明即显示，ADR-0050），执行由 pi extension 承担
+  slashCommand: 'slash 命令展示走 CommandRegistry、执行由 pi extension 承担，不消费渲染容器',
+} as const satisfies Partial<Record<ContributionType, string>>
+
+/** 该贡献类型是否豁免挂载点校验（routeAll 与 renderer toContributionInfos 同源消费）。 */
+export function isMountPointCheckExempt(type: ContributionType): boolean {
+  return type in MOUNT_POINT_CHECK_EXEMPT_TYPES
 }
 
 // ── 解析：PluginContributes v2 → ContributionRecord[]（按 type 分段 helper）──
@@ -208,9 +246,16 @@ export class ContributionRegistry {
    * available=false + emit unregistered-mount-point，种类值 'unregistered-mount-point'
    * 与 failure-degradation 的 FAILURE_JUDGEMENT_TABLE 行 1 同名——renderer 订阅侧按
    * 同形去重键 `pluginId::contributionId::unregistered-mount-point` warn 一次）。
+   *
+   * 豁免：MOUNT_POINT_CHECK_EXEMPT_TYPES 内的类型（command/slashCommand）不消费渲染
+   * 容器，直接置 available=true 且不 emit——否则 prod console 每次启动刷 6 条误告警。
    */
   routeAll(mounts: MountPointRegistry): void {
     for (const c of this.contributions.values()) {
+      if (isMountPointCheckExempt(c.type)) {
+        c.available = true
+        continue
+      }
       if (mounts.has(c.placement)) {
         c.available = true
       } else {
