@@ -3,18 +3,21 @@
  *
  * 契约两端（此前各持一份逐字同构实现，对齐手段是注释，已归一到本模块）：
  *  - extension 侧：@zhushanwen/pi-base-tool-enhance（bash_kill 前校验 / 后台 timeout
- *    到点校验 / 对账判死），原实现在其 kill-tree.ts
+ *    到点校验 / 对账判死），原实现在其 kill-tree.ts（归一前原仓库文件，本仓不可考）
  *  - runtime 侧：taiji background-task-reaper（孤儿收殓三分支判定），原实现在
- *    background-task-reaper.ts 原语区
+ *    background-task-reaper.ts 原语区（原语已归一迁出至本模块，该文件余部仍在 runtime）
  *
  * 分支语义（与 pi 实装对齐，勿单侧擅改）：Windows `taskkill /F /T`；POSIX 按进程组终止
- * `kill -- -<pgid>`（后台任务 detached spawn 自成进程组，pgid = pid）；按进程组终止不到时
- * 回退单 pid + `pgrep -P` 递归杀残留子进程。
+ * `kill -- -<pgid>`（后台任务 detached spawn 自成进程组，pgid = pid）；快路径落空时解析
+ * 目标真实 pgid（`ps -o pgid=`）按组杀——转后台任务组成员非组长形态（ADR-0182，组长
+ * 死后组仍有效）；解析出的组等于调用者自身进程组时跳过组杀（防自杀）落回退；均不可达
+ * 才回退单 pid + `pgrep -P` 递归杀残留子进程（先孙后子最后目标，防 reparent 逃逸枚举）。
  *
  * 日志通道：本模块零日志依赖（protocol 零运行时依赖纪律）——回退路径的诊断经可选
  * 回调 `onFallback(step, err)` 上报，extension 侧注入 logger.debug 适配、runtime 侧
  * 注入 console.debug 适配。step 为稳定短标识符：
  *  - 'process-group-kill-missed'      POSIX 进程组 kill 失败（组长已死），走回退
+ *  - 'resolved-group-kill-missed'     解析真实 pgid 的组 kill 失败，走回退（ADR-0182）
  *  - 'single-pid-kill-missed'         单 pid kill 失败（目标已死，幂等语义）
  *  - 'taskkill-failed'                Windows taskkill 失败
  *  - 'descendant-enumeration-failed'  pgrep 不可用/失败，放弃子孙枚举
@@ -118,7 +121,9 @@ function killProcessTreeWindows(pid: number, onFallback?: ProcessFallbackLogger)
 function killDescendantsRecursive(pid: number, onFallback?: ProcessFallbackLogger): void {
   let stdout: string
   try {
-    const result = spawnSync('pgrep', ['-P', String(pid)], { encoding: 'utf8' })
+    // timeout 与 ps 同款（PS_TIMEOUT_MS）：本函数在 process.on("exit") 收殓路径同步执行，
+    // 卡死的 pgrep 不得无限阻塞收殓；超时落 result.error → 按空表处理，残留交下个收殓周期
+    const result = spawnSync('pgrep', ['-P', String(pid)], { encoding: 'utf8', timeout: PS_TIMEOUT_MS })
     if (result.error || result.status !== 0 || !result.stdout) return
     stdout = result.stdout
   } catch (err) {

@@ -25,6 +25,15 @@
 // 本文件是真子进程集成（每用例 spawn 官方 bash 工具链），但全部命令立即完成、无真实
 // 时钟等待窗口（挂住形态 = 失败场景，靠显式上界变红），单用例实测 <2s——不挂
 // TAIJI_TEST_INTEGRATION 门控，默认组真跑（skip 形态会让六族守护静默失效）。
+//
+// 守护边界前提（分流正确性不在本文件守护面）：wrapped 形态真走包装的前提 = A5 判定
+// 不回落（非子代理进程 / 非 win32 / idleBackgroundSec 非 null）。runWrapped 的两条
+// 零感知断言（无登记条目、background-tasks/ 零残留）在「真包装后 B2 清理」与「A5
+// 判定回落官方原生（分流回归：A6 子代理 env 污染 / N3 配置解析漂移 / A7 平台判定）」
+// 两种形态下终态相同——比对退化为官方 vs 官方恒绿。因此单跑本文件的绿灯不排除分流
+// 回归；矩阵 A 分流正确性由 injector 域测试承载（injector-foreground-branch.test.ts，
+// 挂 TAIJI_TEST_INTEGRATION 门控）、wrapper 真跑形态由 wrapper 域门控测试承载
+// （wrapper-foreground-idle.test.ts）——三层并存时该盲区闭合，单跑时依赖本声明知情。
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -112,7 +121,12 @@ type ParityResult = {
 	isError: boolean | undefined;
 	/** structuredContent.truncated（output 字段 1MB 上限口径，独立于 display 截断） */
 	structuredTruncated: boolean | undefined;
-	/** details.truncation（display 截断元数据，fullOutputPath 归一化剔除后逐字段比对） */
+	/**
+	 * details.truncation（display 截断元数据）。官方 TruncationResult 接口无任何路径
+	 * 字段（pi truncate.d.ts：content/truncated/truncatedBy/…/maxBytes），extract 处
+	 * 全量逐字段比对即可；对 fullOutputPath 的 delete 是防御性预留——pi 若把路径字段
+	 * 移入 truncation 则自动剔除，现状为无害 no-op（见 extract 内注释）。
+	 */
 	truncation: Record<string, unknown> | undefined;
 	hasDisplayFullOutput: boolean;
 }
@@ -124,6 +138,9 @@ function extract(result: unknown): ParityResult {
 		structuredContent?: {
 			output?: string;
 			truncated?: boolean;
+			// 官方仅在 structured truncated 时携带该随机临时路径（pi bash.js 组装
+			// structuredContent 的条件展开）；路径值随机不可比，存在性已由
+			// structuredTruncated 等价断言间接覆盖——故声明形态但不提取不比对
 			full_output_path?: string;
 			exit_code?: number;
 		};
@@ -134,6 +151,11 @@ function extract(result: unknown): ParityResult {
 	let truncation: Record<string, unknown> | undefined;
 	if (truncationRaw !== undefined) {
 		truncation = { ...truncationRaw };
+		// 官方布局中 fullOutputPath 在 details 顶层（pi bash.js formatOutput：
+		// details = { truncation, fullOutputPath }），TruncationResult 无该字段，本行
+		// 现状为 no-op；保留为防御性预留——pi 若将路径字段移入 truncation，此处自动
+		// 剔除，随机路径仍不进入逐字段比对。顶层路径的存在性另经 hasDisplayFullOutput
+		// 只比真假、不比路径值（随机 tmpdir 不可逐字相等）
 		delete truncation.fullOutputPath;
 	}
 	return {
@@ -183,7 +205,7 @@ function assertParity(label: string, command: string, official: ParityResult, wr
 	expect(wrapped.structuredTruncated, `${label} structuredContent.truncated 两形态等价（command: ${JSON.stringify(command)}）`).toBe(
 		official.structuredTruncated,
 	);
-	expect(wrapped.truncation, `${label} 截断元数据等价（fullOutputPath 剔除后；command: ${JSON.stringify(command)}）`).toEqual(
+	expect(wrapped.truncation, `${label} 截断元数据等价（官方 TruncationResult 无路径字段，全量逐字段；command: ${JSON.stringify(command)}）`).toEqual(
 		official.truncation,
 	);
 	expect(wrapped.hasDisplayFullOutput, `${label} display 截断的 Full output 存在性两形态一致（command: ${JSON.stringify(command)}）`).toBe(

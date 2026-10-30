@@ -187,6 +187,10 @@ describe("reconcile scenario ①: graceful-exit leftover (registry exited, entry
 	it("maps exited reason/exitCode through the same mapping as the exit edge", async () => {
 		const cases: Array<[RegistryEntry, string]> = [
 			[makeRegistryEntry({ state: "exited", reason: "natural", exitCode: 3 }), "failed"],
+			// natural + 无退出码 = 结果未知形态（转后台任务 reparent 无父权，退出码结构性
+			// 不可得——foreground-idle-to-background §5 部件 5）：session_start 对账落
+			// reason/status 双 unknown，与 exit 边沿同引 toPendingReason 单点
+			[makeRegistryEntry({ state: "exited", reason: "natural", exitCode: null }), "unknown"],
 			[makeRegistryEntry({ state: "exited", reason: "timeout", exitCode: null }), "time_limited"],
 			[makeRegistryEntry({ state: "exited", reason: "killed", exitCode: null }), "cancelled"],
 			[makeRegistryEntry({ state: "exited", reason: "process-exit", exitCode: null }), "cancelled"],
@@ -209,14 +213,17 @@ describe("entry status maps via protocol mapReasonToStatus (D10 single-source, i
 	// bte 写侧 status 与 pending-notifications unregister listener 同引 protocol 单点
 	// （ext-simplify-17 D10）——原 status: reason 的 identity 假设在非 identity reason
 	// （budget_limited→failed 等）上会静默漂移，映射表演化时两写侧不再可能分叉。
-	// settle 产域四值当前恰为 identity 映射，但断言范围按「status === mapReasonToStatus
+	// settle 产域各值当前恰为 identity 映射，但断言范围按「status === mapReasonToStatus
 	// (reason)」表述：映射表日后改任何一行的口径，本组用例随实现同源自洽。
 	it("appended status equals the authoritative mapping for every reason the settle path can produce", () => {
-		// settledPendingReason 全产域：exited 三分支（natural/timeout/killed|process-exit
-		// 经 toPendingReason）+ orphaned/判死兜底 cancelled + reason 缺失防御分支
-		const settleReasons = ["completed", "failed", "time_limited", "cancelled"] as const;
+		// settledPendingReason 全产域：exited 三分支（natural 按 exitCode 分流 completed/
+		// failed/unknown——null = 结果未知形态；timeout；killed|process-exit 经
+		// toPendingReason）+ orphaned/判死兜底 cancelled + reason 缺失防御分支。
+		// unknown 经 mapReasonToStatus 的 fail-visible 缺省档返回 'unknown'（词表未显式
+		// 登记该键、走 default，结果仍 identity）
+		const settleReasons = ["completed", "failed", "time_limited", "cancelled", "unknown"] as const;
 		for (const reason of settleReasons) {
-			expect(mapReasonToStatus(reason)).toBe(reason); // 当前口径下四值均为 identity 映射
+			expect(mapReasonToStatus(reason)).toBe(reason); // 当前口径下各值均为 identity 映射
 		}
 	});
 
