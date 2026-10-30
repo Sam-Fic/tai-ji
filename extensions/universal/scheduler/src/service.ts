@@ -48,10 +48,10 @@ export class SchedulerService {
     public readonly runtime: SchedulerRuntime,
     private readonly now: () => number,
     /**
-     * 创建成功后的汇聚点回调（可选；u-ack-turn 接线）：addTask 成功且 nextRuns 算好后
-     * 调用一次。fire-and-forget —— create 不 await（触发是后台编排，不得阻塞用户可见的
-     * 创建反馈时延）；调用方（index.ts）自行 catch 回调内的异步失败。
-     * 既有调用点（interaction.ts / commands.ts / tool.ts）不传，行为不变。
+     * 创建成功后的汇聚点回调（可选；index.ts 接线 = widget 即时刷新）：addTask 成功且
+     * nextRuns 算好后调用一次。fire-and-forget —— create 不 await（反馈不得阻塞用户可见
+     * 的创建时延）。三个创建入口（tool / command / interaction）自然经此被覆盖，无需
+     * 各自动手。
      */
     private readonly onTaskCreated?: (task: ScheduledTask) => void,
   ) {}
@@ -121,7 +121,7 @@ export class SchedulerService {
       runPreview,
     ].join('\n')
 
-    // 创建汇聚点（u-ack-turn）：ack 确认轮触发。调用点在成功返回前、nextRuns 算好之后——
+    // 创建汇聚点：UI 反馈触发（widget 即时刷新）。调用点在成功返回前、nextRuns 算好之后——
     // 三个创建入口（tool / command / interaction）自然经此被覆盖，无需各自动手。
     this.onTaskCreated?.(task)
 

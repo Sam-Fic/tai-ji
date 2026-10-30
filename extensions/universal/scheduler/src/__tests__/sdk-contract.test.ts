@@ -20,15 +20,14 @@
 import type { ExtensionAPI, ExtensionContext, Theme } from '@earendil-works/pi-coding-agent'
 import { describe, expect, it, vi } from 'vitest'
 
-// MF-3：session_start handler 会真实执行 importLegacyStore(ctx.cwd, ...) —— fakeCtx cwd='/test'
-// 会触碰真实用户 FS（~/.pi/agent/scheduler/root/test/scheduler.json 的 renameSync/existsSync/
-// unlinkSync；该目录是活跃数据目录，一旦路径存在会 rename+unlink 真实用户数据且结果不确定）。
-// mock 掉 importer 模块：session_start 装配路径仍被调用（vi.fn 记录调用），FS 副作用为零；
-// 装配时序由 scripts/verify-scheduler-e2e.cjs 的 S12/S17 真实环境覆盖（S10 followup）。
-// mock 返回 vi.fn() 作为延迟删除 cleanup（MF-1：turn_end / session_shutdown 装配链路可测）。
-vi.mock('../importer.js', () => ({ importLegacyStore: vi.fn(() => vi.fn()) }))
+// 任务库 FS 哑化：session_start 会推导 store 路径（默认指向真实用户 agentDir）并读盘，
+// mock 协议 store 模块使装配零 FS 副作用（missing = 空任务集，等价新 session）。
+vi.mock('@zhushanwen/extension-protocol/scheduler-store', () => ({
+  schedulerStoreFilePath: () => '/sched-test-store/sess.json',
+  readSchedulerStore: () => ({ kind: 'missing' }),
+  writeSchedulerStore: vi.fn(),
+}))
 
-import { importLegacyStore } from '../importer.js'
 import schedulerExtension from '../index.js'
 
 /**
@@ -77,10 +76,10 @@ function createFakeCtx(): ExtensionContext {
     isIdle: () => true,
     hasPendingMessages: () => false,
     ui: { setWidget: vi.fn() },
-    // append-only 模型：session_start 时 PiSchedulerBackend(ctx, pi) 读 ctx.sessionManager.getEntries()
-    // 折叠恢复任务。fakeCtx 返回空 entries + 固定 sessionFile（无历史任务，等价新 session）。
+    // 快照模式：session_start 时 PiSchedulerBackend 读任务库分片文件恢复任务。
+    // fakeCtx 提供固定 sessionId（store mock 返回 missing = 空任务集，等价新 session）。
     sessionManager: {
-      getEntries: () => [],
+      getSessionId: () => 'sess-sdk-contract',
       getSessionFile: () => '/test/session.json',
     },
   } as unknown as ExtensionContext
@@ -222,29 +221,19 @@ describe('pi-scheduler SDK contract', () => {
     expect(names).not.toContain('scheduler')
   })
 
-  // MF-1（R2）装配链路：session_start → importLegacyStore 返回延迟删除 cleanup；
-  // turn_end 触发 cleanup（主触发点，flush 已发生）；session_shutdown 兜底再调 + 复位。
-  it('MF-1 装配：turn_end / session_shutdown 调用延迟删除 cleanup，importer 仅 session_start 调 1 次', async () => {
+  // 事件面收缩（任务库分离）：factory 只注册 session_start / agent_settled /
+  // session_shutdown 三个事件——turn_end（IMPORT-FLUSH-GUARD cleanup + ack 安全网）
+  // 与 message_start（ack 触发器判别）已随机制退役。
+  it('事件注册面：session_start / agent_settled / session_shutdown 三事件，无 turn_end / message_start / session_tree', () => {
     const { pi, events } = createMockPi()
     schedulerExtension(pi)
-    const fakeCtx = createFakeCtx()
-
-    // 其他用例也触发 session_start，先清调用记录（mockClear 保留实现）
-    vi.mocked(importLegacyStore).mockClear()
-
-    // session_start → importLegacyStore 调用 1 次，返回 cleanup（新 session 未 flush 延迟删除路径）
-    await events.get('session_start')!({ type: 'session_start', reason: 'startup' }, fakeCtx)
-    expect(importLegacyStore).toHaveBeenCalledTimes(1)
-    const cleanup = vi.mocked(importLegacyStore).mock.results[0]!.value
-    expect(typeof cleanup).toBe('function')
-
-    // turn_end（首个 turn 完成，flush 已发生）→ cleanup 被调用——跨 session 双导入窗口封住点
-    await events.get('turn_end')!()
-    expect(cleanup).toHaveBeenCalledTimes(1)
-
-    // session_shutdown → 兜底再调一次（覆盖从未产生 turn 的 session），随后复位
-    await events.get('session_shutdown')!()
-    expect(cleanup).toHaveBeenCalledTimes(2)
+    const names = [...events.keys()]
+    expect(names).toContain('session_start')
+    expect(names).toContain('agent_settled')
+    expect(names).toContain('session_shutdown')
+    expect(names).not.toContain('turn_end')
+    expect(names).not.toContain('message_start')
+    expect(names).not.toContain('session_tree')
   })
 })
 

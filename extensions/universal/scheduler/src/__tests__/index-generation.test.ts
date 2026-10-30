@@ -33,10 +33,20 @@ vi.mock('@zhushanwen/pi-extension-logger', () => ({
   setPiHandle: vi.fn(),
 }))
 
-// MF-3：session_start 会真实执行 importLegacyStore(ctx.cwd, ...)，触碰用户真实 FS
-// （~/.pi/agent/scheduler/... 的 renameSync/existsSync 探测）。mock 掉 importer
-// 模块，装配路径仍被调用、FS 副作用为零。
-vi.mock('../importer.js', () => ({ importLegacyStore: vi.fn(() => vi.fn()) }))
+// 任务库 FS 哑化：session_start 会推导 store 路径（默认指向真实用户 agentDir）并读盘，
+// mock 协议 store 模块使装配零 FS 副作用（read 结果可经 stub 注入，write 哑化——
+// 与旧 mock importer / pi.appendEntry 形态同构）。
+const { schedulerStoreStub } = vi.hoisted(() => ({
+  schedulerStoreStub: {
+    read: { kind: 'missing' } as { kind: string; tasks?: unknown[] },
+    readImpl: null as null | (() => unknown),
+  },
+}))
+vi.mock('@zhushanwen/extension-protocol/scheduler-store', () => ({
+  schedulerStoreFilePath: () => '/sched-test-store/sess.json',
+  readSchedulerStore: () => (schedulerStoreStub.readImpl ? schedulerStoreStub.readImpl() : schedulerStoreStub.read),
+  writeSchedulerStore: vi.fn(),
+}))
 
 // u-p2b 接线断言：index.ts 的 refreshWidget 必须走结构化/双模入口 `setSchedulerWidget`
 // （取代旧 `renderSchedulerWidget` TUI 单形态）——mock 捕获调用（任务数组直传）。
@@ -78,7 +88,7 @@ vi.mock('../runtime.js', async (importOriginal) => {
 
 import schedulerExtension from '../index.js'
 import { TICK_INTERVAL_MS } from '../runtime.js'
-import { TASK_ENTRY_TYPE } from '../types.js'
+import type { ScheduledTask } from '../types.js'
 
 /**
  * 最小 fake pi：覆盖 factory 消费的 API 面
@@ -107,7 +117,7 @@ function createFakeCtx(sessionFile: string): ExtensionContext {
     hasPendingMessages: () => false,
     ui: { setWidget: vi.fn() },
     sessionManager: {
-      getEntries: () => [],
+      getSessionId: () => 'sess-index-generation',
       getSessionFile: () => sessionFile,
     },
   } as unknown as ExtensionContext
@@ -217,45 +227,28 @@ describe('F1: session_start 停旧 runtime（crash-fix U4）', () => {
   const BASE = Date.parse('2026-01-01T00:00:00Z')
 
   /**
-   * 构造远期到期的启用任务 upsert entry（owner = sessionFile，避免 fork owner 过滤）；
+   * 构造远期到期的启用任务（任务库快照恢复输入）；
    * nextRunAt 取 BASE + 1h，测试时间窗（分钟级）内无 dispatch 噪音，任务集保持静态。
    */
-  function taskEntry(sessionFile: string) {
+  function makeTask(): ScheduledTask {
     return {
-      type: 'custom',
-      customType: TASK_ENTRY_TYPE,
-      data: {
-        op: 'upsert',
-        taskId: 'aaaa1111',
-        ownerSessionFile: sessionFile,
-        task: {
-          id: 'aaaa1111',
-          name: 'keepalive probe',
-          prompt: 'probe prompt',
-          kind: 'recurring',
-          schedule: { mode: 'interval', intervalMs: 3_600_000 },
-          enabled: true,
-          createdAt: BASE,
-          nextRunAt: BASE + 3_600_000,
-          runCount: 0,
-          history: [],
-        },
-      },
+      id: 'aaaa1111',
+      name: 'keepalive probe',
+      prompt: 'probe prompt',
+      kind: 'recurring',
+      schedule: { mode: 'interval', intervalMs: 3_600_000 },
+      enabled: true,
+      createdAt: BASE,
+      nextRunAt: BASE + 3_600_000,
+      runCount: 0,
+      history: [],
     }
   }
 
-  /** 同 createFakeCtx，但注入非空任务集（首帧渲染需要非空任务集可断言）。 */
-  function createFakeCtxWithTasks(sessionFile: string): ExtensionContext {
-    return {
-      cwd: '/test-index-session-start',
-      isIdle: () => true,
-      hasPendingMessages: () => false,
-      ui: { setWidget: vi.fn() },
-      sessionManager: {
-        getEntries: () => [taskEntry(sessionFile)],
-        getSessionFile: () => sessionFile,
-      },
-    } as unknown as ExtensionContext
+  /** 同 createFakeCtx，但任务库读取注入非空任务集（首帧渲染需要非空任务集可断言）。 */
+  function createFakeCtxWithTasks(_sessionFile: string): ExtensionContext {
+    schedulerStoreStub.read = { kind: 'ok', tasks: [makeTask()] }
+    return createFakeCtx('/test-index-session-start.json')
   }
 
   beforeEach(() => {
@@ -300,9 +293,9 @@ describe('F1: session_start 停旧 runtime（crash-fix U4）', () => {
   })
 })
 
-// ── gap4 修复：任务恢复失败在装配点显式降级（不折叠成空 Map 成功恢复）──
-// replayFoldEntries 流级错误（session JSONL 损坏 / getEntries 抛错）上抛到 session_start
-// 装配点：warn（含累计失败计数）+ 空任务集继续装配。装配体（startScheduler / service /
+// ── gap4 修复：任务恢复失败在装配点显式降级（不折叠成静默空任务集）──
+// 任务库读取的流级错误（EACCES 等非 ENOENT 读失败）上抛到 session_start 装配点：
+// warn（含累计失败计数）+ 空任务集继续装配。装配体（startScheduler / service /
 // schedule tool）不因恢复失败被跳过——不 catch 时抛错点之后的装配整段丢失，恢复失败
 // 升级成整套扩展不可用。
 describe('gap4: session_start 任务恢复失败显式降级', () => {
@@ -320,18 +313,17 @@ describe('gap4: session_start 任务恢复失败显式降级', () => {
     }
   })
 
-  it('getEntries 抛错 → warn 留痕（含错误信息）+ 空任务集启动，装配不中断', () => {
+  it('任务库读取抛错 → warn 留痕（含错误信息）+ 空任务集启动，装配不中断', () => {
     const { pi, events } = createMockPi()
     schedulerExtension(pi)
     const sessionStart = events.get('session_start')
     expect(sessionStart).toBeDefined()
 
-    const ctx = createFakeCtx('/test/recovery-fail.json')
-    ;(ctx.sessionManager as { getEntries: () => unknown[] }).getEntries = () => {
-      throw new Error('JSONL corrupted')
+    schedulerStoreStub.readImpl = () => {
+      throw new Error('EACCES store unreadable')
     }
 
-    sessionStart!({ type: 'session_start', reason: 'startup' }, ctx)
+    sessionStart!({ type: 'session_start', reason: 'startup' }, createFakeCtx('/test/recovery-fail.json'))
 
     // 装配未中断：runtime 已构造（后续 startScheduler / service / tool 装配照常）
     expect(isCtxStaleCaptures.length).toBe(1)
@@ -340,6 +332,6 @@ describe('gap4: session_start 任务恢复失败显式降级', () => {
     const warnCalls = loggerMock.warn.mock.calls.map((c) => String(c[0]))
     expect(warnCalls.some((m) => m.includes('scheduler task recovery failed'))).toBe(true)
     const recoveryCall = loggerMock.warn.mock.calls.find((c) => String(c[0]).includes('scheduler task recovery failed'))
-    expect(JSON.stringify(recoveryCall?.[1])).toContain('JSONL corrupted')
+    expect(JSON.stringify(recoveryCall?.[1])).toContain('EACCES store unreadable')
   })
 })

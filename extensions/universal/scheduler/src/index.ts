@@ -1,14 +1,13 @@
+import { getAgentDir } from '@earendil-works/pi-coding-agent'
 import type { ExtensionAPI, ExtensionContext, Theme } from '@earendil-works/pi-coding-agent'
 import type { GuiContext } from '@zhushanwen/extension-protocol'
+import { schedulerStoreFilePath } from '@zhushanwen/extension-protocol/scheduler-store'
 import { toErrorMessage } from '@zhushanwen/pi-ext-guards'
 import { getLogger } from '@zhushanwen/pi-extension-logger'
 
-import { createAckTurnController, type AckTurnController } from './ack-turn.js'
 import { PiSchedulerBackend } from './backend.js'
 import { registerScheduleCommand } from './commands.js'
-import { formatSchedule } from './format.js'
-import { readUiLocale, t } from './i18n.js'
-import { importLegacyStore } from './importer.js'
+import { readUiLocale } from './i18n.js'
 import { abortPendingScheduleForms } from './interaction.js'
 import { renderScheduleToolResult } from './render-result.js'
 import { SchedulerRuntime, type SchedulerModelOps } from './runtime.js'
@@ -43,20 +42,17 @@ import type { ScheduledTask } from './types.js'
 // 绑定，永不再递增 → 其 isCtxStale 恒 false。该盲区由两道既有防线覆盖：pi 在替换前 await
 // fire session_shutdown（F1 stopScheduler 主防线，teardownCurrent）+ runtime 侧
 // STALE_CTX_MARKER 文案兜底（F2 catch 分诊）。
-// 绑定，永不再递增 → 其 isCtxStale 恒 false。该盲区由两道既有防线覆盖：pi 在替换前 await
-// fire session_shutdown（F1 stopScheduler 主防线，teardownCurrent）+ runtime 侧
-// STALE_CTX_MARKER 文案兜底（F2 catch 分诊）。
 let sessionGeneration = 0
 
 /**
- * 任务恢复失败累计计数（gap4 修复：重放流级错误不再折叠成空 Map）。session_start
+ * 任务恢复失败累计计数（gap4：读侧流级错误不折叠成静默空集）。session_start
  * 装配点对恢复失败显式降级（warn + 空任务集继续装配）时递增，计数随 warn 一起输出
  * ——重复失败（跨 session 替换持续失败）在日志里可见。与 sessionGeneration 同理声明
  * 在模块级：跨 factory 重跑累计，闭包级每次重跑即归零。
  */
 let schedulerRecoveryFailures = 0
 
-/** 包内既有 logger（ack 编排的日志侧与其它模块同源）。 */
+/** 包内既有 logger（与其它模块同源）。 */
 const logger = getLogger('scheduler')
 
 /**
@@ -69,22 +65,9 @@ const logger = getLogger('scheduler')
  */
 export default function schedulerExtension(pi: ExtensionAPI): void {
   let service: SchedulerService | null = null
-  // U6c：当代 backend（session_start 装配点更新）。factory 顶层 session_tree handler
-  // 经它委托当代重折叠（注册点理由见下方 session_tree 注册点注释）。
-  let activeBackend: PiSchedulerBackend | null = null
-  // IMPORT-FLUSH-GUARD（MF-1）：importLegacyStore 对未 flush 的新 session 返回延迟删除 .imported
-  // 的 cleanup——turn_end / session_shutdown 时执行：确认 flush（sessionFile 已出现）则删，
-  // 未 flush 保留供崩溃恢复重导入（否则未 flush 即退出 → 全部旧任务丢失且源文件已销毁）。
-  // 触发点用 turn_end（而非仅 session_shutdown）：turn_end 时该轮 message_end 已全部持久化
-  // （flush 必已发生），把跨 session 双导入窗口从「session 整个生命周期」缩回
-  // 「session_start → 首个 turn_end」秒级。cleanup 幂等（importer.ts importFromFile），重复调用安全。
-  let importCleanup: (() => void) | undefined
-  // ack 确认轮控制器（u-ack-turn）：per-session 实例（backend 每代新建），但状态住
-  // ack-turn 的模块级单例——新代构造后即接管并清理上一代残留。
-  let ackController: AckTurnController | null = null
-  // D1 指纹跳推 + D2 保活底线帧的推送状态（scheduler widget 推送修正设计 D1-b/D2）。
+  // D1 指纹跳推的推送状态（scheduler widget 推送修正设计 D1-b）。
   // **必须声明在 factory 闭包内（extension 实例态），禁模块级**：模块级跨 session 残留会让
-  // 新会话继承旧会话的指纹/时间戳——session_start 的首帧（含清屏帧）被跳推，widget 面板
+  // 新会话继承旧会话的指纹——session_start 的首帧（含清屏帧）被跳推，widget 面板
   // 空窗；模块级 vs 闭包级的语义差异在本包有实证（见上方 sessionGeneration 注释）。
   // 生命周期：session_start 装配新会话实例时重置（refreshWidgetState 调用点）。
   let lastWidgetFingerprint: string | null = null
@@ -100,24 +83,24 @@ export default function schedulerExtension(pi: ExtensionAPI): void {
     // sessionGeneration 与之比较（factory 重跑的新闭包与本闭包共享同一模块绑定）。
     sessionGeneration += 1
     const myGeneration = sessionGeneration
-    // F1（治本）：session 替换/重入时先停上一代 runtime 的 tick interval——dispatch 的 await sendMessage
-    // 窗口与 session 替换交错时旧 session_shutdown 可能永远等不到（timer 泄漏源头）。stopScheduler 幂等，
-    // shutdown 已停过再停一次无副作用。
+    // F1（治本）：session 替换/重入时先停上一代 runtime 的 tick interval——dispatch 的 await
+    // 窗口与 session 替换交错时旧 session_shutdown 可能永远等不到（timer 泄漏源头）。
+    // stopScheduler 幂等，shutdown 已停过再停一次无副作用。
     service?.runtime.stopScheduler()
-    // 装配点：backend（ctx.sessionManager 读 entries / pi.appendEntry 写 op）→ runtime（内存态 + 调度）→ service（业务入口）
-    const backend = new PiSchedulerBackend(ctx, pi)
-    // U6c：同步给 factory 顶层 session_tree handler（下方注册）——同代 session_start
-    // 复发时本赋值覆盖为最新 backend，委托恒指当代 ctx 的实例。
-    activeBackend = backend
-    // 旧 store 原子导入（CL3 方案A）：必须在 backend.loadTasks() 之前执行——
-    // append 的 upsert entry 进入 pi 内存 fileEntries，紧接的 loadTasks replay 统一重放读到导入任务。
-    // ctx.cwd 类型为 string（SDK ExtensionContext 必填），无需 ?? process.cwd() 兜底（CL2）。
-    importCleanup = importLegacyStore(ctx.cwd, pi, ctx.sessionManager.getSessionFile())
+    // 任务库分片路径（任务库与会话事实分离）：getAgentDir() 官方数据目录 + cwd workspace
+    // 隔离 + sessionId 分片。sessionId 非法形态（--no-session 等空值）归一 'no-session'
+    // ——该模式任务仍持久化（方案 B 红利：写盘不再依赖 pi 会话首写门控）。
+    const sessionId = ctx.sessionManager.getSessionId()
+    const storePath = schedulerStoreFilePath(
+      getAgentDir(),
+      ctx.cwd,
+      /^[A-Za-z0-9_-]+$/.test(sessionId) ? sessionId : 'no-session',
+    )
+    // 装配点：backend（快照文件读写 + 投递端口）→ runtime（内存态 + 调度）→ service（业务入口）
+    const backend = new PiSchedulerBackend(ctx, pi, storePath)
 
     // G1：注入代际比对（本 runtime 建立时的代数 vs 实时代数），供 tick 前置检查与
     // F2 catch 分诊判定 stale——不依赖 pi 错误文案。
-    // 投递模型（scheduler-steer-direct-dispatch）：到期任务 steer 直投（backend.sendMessage），
-    // 受理即记账，不经投递内核。
     // U4 模型控制接口（设计 D3）：runtime 只见 'provider/id' ref（与 task.model 同域），pi 的
     // Model 对象解析封在本闭包。setModelByRef 契约 = 不 throw、失败返回 false（ref 非法 /
     // modelRegistry.find 无命中 / pi setModel false / 意外异常统一折叠）。
@@ -140,11 +123,12 @@ export default function schedulerExtension(pi: ExtensionAPI): void {
       isIdle: () => ctx.isIdle(),
     }
     const runtime = new SchedulerRuntime(backend, () => sessionGeneration !== myGeneration, modelOps)
-    // gap4 修复（失败语义折叠）：重放流级错误（session JSONL 损坏 / getEntries 抛错）
-    // 在装配点显式降级——warn（含累计失败计数）+ 按空任务集继续装配。scheduler 是
-    // 辅助功能：不 catch 的话抛错点之后的装配体（startScheduler / ack 轮 / service /
-    // schedule tool）整段被跳过，恢复失败升级成整套扩展不可用。空任务集是显式降级
-    // 而非「成功恢复出无任务」，排障经本 warn 定位。
+    // 任务库直读恢复（一次 JSON.parse 重建任务集；missing/corrupt 在 backend 内折叠为
+    // 空任务集，流级错误在此显式降级）。scheduler 是辅助功能：不 catch 的话抛错点之后的
+    // 装配体（startScheduler / service / schedule tool）整段被跳过，恢复失败升级成整套
+    // 扩展不可用。空任务集是显式降级而非「成功恢复出无任务」，排障经本 warn 定位。
+    // RPC 模式下 session_start 每代触发两次（见 pi runner 的 rebindSession 双路）——重复
+    // 读同一文件无副作用，天然无害。
     try {
       runtime.loadTasks(backend.loadTasks())
     } catch (err) {
@@ -153,91 +137,25 @@ export default function schedulerExtension(pi: ExtensionAPI): void {
         detail: { err: toErrorMessage(err), recoveryFailures: schedulerRecoveryFailures },
       })
     }
-    // W2：tick 后回调刷新 widget（替代独立 widgetTimer + setInterval，节奏对齐 TICK_INTERVAL_MS）
+    // W2：tick 后回调刷新 widget（节奏对齐 TICK_INTERVAL_MS）
     runtime.onAfterTick(() => refreshWidget(ctx))
     runtime.startScheduler()
 
-    // ack 确认轮装配（u-ack-turn）：构造后立刻调 handleSessionBoundary——它是 session_start
-    // 与 session_shutdown 共用的边界清理：做一次写盘判定并注销上一代残留的覆写窗口
-    // （模块级单例跨代共享的结构性意义）。
-    ackController = createAckTurnController({
-      backend,
-      log: logger,
-      render: (key, params) => t(key, params),
-      notify: (message, level) => ctx.ui.notify(message, level),
-      // 已注册 provider 查询（ack no-base 判据②）：闭包捕获本 session 的 modelRegistry——
-      // getRegisteredProviderIds 返回 native 重载层 ∪ 扩展注册层两层并集，任一层命中即
-      // no-base（覆写会顶掉注册且 unregister 两层同删不恢复，第三方经任一层注册的
-      // provider 不能被 ack 静默删除）。
-      isProviderRegistered: (providerId) =>
-        ctx.modelRegistry.getRegisteredProviderIds().includes(providerId),
-    })
-    ackController.handleSessionBoundary()
-
     service = new SchedulerService(runtime, () => backend.now(), (task) => {
-      // 创建汇聚点 → ack 触发器（fire-and-forget：回调不 await，失败仅日志侧）。
-      // 唯一生产开关 TAIJI_SCHED_ACK_DISABLE 在此单点读取（fail-safe 方向：缺省不禁用）。
-      const controller = ackController
-      if (!controller) return
-      void controller
-        .maybeStartAck({
-          task: {
-            id: task.id,
-            name: task.name,
-            scheduleText: formatSchedule(task.schedule, task.kind, readUiLocale()),
-          },
-          model: backend.getCurrentModel(),
-          isIdle: backend.isIdle(),
-          isToggleDisabled: process.env.TAIJI_SCHED_ACK_DISABLE === '1',
-        })
-        .catch(err => logger.warn('ack turn failed', { error: toErrorMessage(err) }))
+      // 创建确认 = UI 反馈（任务库分离裁决：不再制造模型轮——写盘不依赖会话门控，
+      // 无需合成 assistant 应答）。命令路径的创建 notify 由 interaction 层就近发出
+      // （openScheduleFormAsync 内），tool 路径的回执是 tool result 本身；本汇聚点只补
+      // widget 即时刷新（不等 30s tick）——任务徽标/列表立即可见。
+      void task
+      refreshWidget(ctx)
     })
 
     // 注册 widget（SDK setWidget 第一重载：直接传 string[]）。初始渲染一次，
     // 后续随每次 tickScheduler 末尾的 onAfterTick 回调刷新（推送频率由指纹跳推判定，
     // 见 refreshWidget）。
-    // 新会话实例起点重置推送状态：首帧（含空任务清屏帧）必推，不继承前代指纹/时间戳。
+    // 新会话实例起点重置推送状态：首帧（含空任务清屏帧）必推，不继承前代指纹。
     lastWidgetFingerprint = null
     refreshWidget(ctx)
-  })
-
-  // U6c：树回退（撤回 __taiji_nav__ → navigateTree / 用户树跳转）后重折叠任务集。
-  // 注册在 factory 顶层而非 PiSchedulerBackend 构造函数：pi 的 on 是追加语义（loader.js
-  // on 实现 list.push，无去重——0.84.4 连 off 都没有，1.0.0 起返回 unsubscribe 但本处
-  // 不消费，handler 生命周期随 factory 代际收敛），且 RPC 模式下每次 session 替换
-  // session_start 在同一代内触发两次（agent-session-runtime finishSessionReplacement
-  // 内部 rebindSession 一路 + RPC handler 再 rebindSession 一路，均经 bindExtensions
-  // emit session_start）——构造函数注册会同代线性累积 handler（残留旧代 backend 在旧
-  // ctx 上重复执行幂等 loadTasks，handler 数随替换无界缓增）。factory 每代恰好运行一次
-  // （loader.js initializeExtension 每代新建 handlers Map 并重跑 factory），顶层注册
-  // 结构性保证每代恰一 handler；委托 activeBackend（session_start 装配点更新）保证折叠
-  // 输入恒为当代实例，事件早于首个 session_start 时 no-op。
-  // 纯重建体（goal/plan/todo 的 session_tree handler 同款）：只按活跃路径重折叠任务集
-  // 并回调 runtime 换 Map——不做任何 sendMessage / appendEntry / tickTimer 启停（tick
-  // 常驻循环照常消费新任务集，被撤子树任务不在集内即到点不触发，A14）。
-  pi.on('session_tree', (_event: unknown, _ctx: ExtensionContext) => {
-    activeBackend?.refoldSessionTree()
-  })
-
-  // turn_end 单注册共用（U4 恢复挂点与 MF-1 cleanup 同事件）：真实 pi 的 on 是 handler 列表
-  // 追加，但测试仿真 mock 为覆盖式单 handler，且同事件单注册与「listener 防重复注册」纪律一致。
-  // （U4 模型恢复不在本事件：D1 归属简化后恢复唯一事件通道 = agent_settled，见 runtime.handleRunSettled）
-  pi.on('turn_end', () => {
-    // IMPORT-FLUSH-GUARD（MF-1）：延迟删除的主触发点——turn_end 前该轮所有 message_end 已持久化
-    // （agent-session.js _handleAgentEvent 在 message_end 处理中调 appendMessage 触发 flush），
-    // sessionFile 已出现 → cleanup 删 .imported；仍未 flush（无 assistant 消息的轮次）→ 静默保留，
-    // 下次 turn_end / session_shutdown 重试。cleanup 幂等（importer.ts importFromFile）。
-    importCleanup?.()
-    // ack 安全网注销（幂等）：正常路径已在 streamSimple 调用点自撤，这里覆盖「覆写未被调用」
-    // 的轮次（E2）。
-    ackController?.handleTurnEnd()
-  })
-
-  // message_start 仅剩 ack 触发器判别（u-ack-turn）：只有我们注入的 custom 消息（前缀
-  // pi-scheduler-ack:）才同步武装覆写；外来/assistant 消息一律忽略。（U4 dispatch 归属匹配
-  // 已随 D1 归属简化删除）
-  pi.on('message_start', (event) => {
-    ackController?.handleMessageStart(event?.message)
   })
 
   // U4 dispatch 模型切换恢复的唯一事件挂点：agent_settled = run 完全沉降（无 retry/
@@ -251,23 +169,10 @@ export default function schedulerExtension(pi: ExtensionAPI): void {
     //（reason ∈ quit/reload/new/resume/fork）→ abort 挂起的表单交互（不创建、不 toast）。
     // taiji 内「切到另一会话」不触发本事件，表单保留且仍有效（有意行为）。
     abortPendingScheduleForms()
-    // append-only 模型无 persistSync（runtime 已按 op appendEntry 落盘到 owner session JSONL）；
-    // widgetTimer 已移除（由 runtime.onAfterTick 替代）。仅停止 scheduler tick。
+    // 快照模式下任务集已随每次变更原子落盘（无收尾 flush 需求）；仅停止 scheduler tick。
     if (service) {
       service.runtime.stopScheduler()
     }
-    // IMPORT-FLUSH-GUARD（MF-1）：兜底清理——正常路径已由首个 turn_end 完成；此处覆盖
-    // 从未产生 turn 的 session（打开未发消息即关闭）。cleanup 确认 flush（sessionFile 已出现）
-    // 则删 .imported，未 flush 保留供崩溃恢复重导入
-    try {
-      importCleanup?.()
-    } finally {
-      // MF-2：cleanup 抛非 ENOENT 错误（如 EACCES）也必须复位，避免残留闭包
-      importCleanup = undefined
-    }
-    // ack 边界清理（u-ack-turn）：先做写盘判定再自撤覆写并全量清状态（含取消上一代 30s
-    // 定时器）—— session_start 与 session_shutdown 共用，跨代单例的结构性意义。
-    ackController?.handleSessionBoundary()
   })
 
   // 注册 schedule tool（触发反转：直建，不再弹确认表单——人侧表单入口在 /schedule 命令）。
@@ -346,8 +251,7 @@ export default function schedulerExtension(pi: ExtensionAPI): void {
    * `ctx as GuiContext`：pi 的 `ExtensionContext` 与协议包最小结构（mode/hasUI/ui.setWidget）
    * 静态不完全兼容，先例见 todo/src/index.ts makeRefreshDisplay。
    *
-   * 推送频率判定（scheduler widget 推送修正设计 D1-b；原 D2 保活底线帧随 idle reaper
-   * 退役一并删除——其存在理由唯一指向 reaper 回收防御）：
+   * 推送频率判定（scheduler widget 推送修正设计 D1-b）：
    * - D1 指纹跳推：任务集稳定指纹（computeTasksFingerprint，字段集含 kind/locale）与上次
    *   实际推送相同 → 跳过推送。时间流逝不是状态变化，任务集不变期间零推送
    *   （rpc/tui 两模式同效——判定在 setWidgetDual 之前）。

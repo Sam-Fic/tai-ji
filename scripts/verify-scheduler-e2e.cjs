@@ -230,8 +230,9 @@ function locatePiBinary() {
 }
 
 /**
- * importer.ts getLegacyStorePath 的 CommonJS 端口（R-cleanup 用，推导需清理的路径）。
- * 推导逻辑必须与 extensions/universal/scheduler/src/importer.ts 完全一致。
+ * 旧 store（v1 scheduler.json）路径的 CommonJS 端口（R-cleanup 用，推导需清理的路径）。
+ * 旧 store 迁移桥已随任务库方案 B 退役（extensions/universal/scheduler 不再读写 v1 store）；
+ * 本函数仅供清理历史遗留文件，推导逻辑与退役前的 getLegacyStorePath 保持一致。
  */
 function getLegacyStorePath(cwd) {
   const home = os.homedir()

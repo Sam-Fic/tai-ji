@@ -5,7 +5,6 @@
   "scope": {},
   "tests": [
     "extensions/taiji/system-prompt-trace/src/__tests__/baseline.a12.test.ts",
-    "extensions/taiji/system-prompt-trace/src/__tests__/diff.test.ts",
     "extensions/taiji/system-prompt-trace/src/__tests__/index-wiring.test.ts",
     "extensions/taiji/system-prompt-trace/src/__tests__/trace.a11.test.ts",
     "extensions/taiji/system-prompt/src/__tests__/system-prompt.test.ts",

@@ -14,6 +14,10 @@
     "./background-task": {
       "types": "./src/background-task-entry.ts",
       "import": "./src/background-task-entry.ts"
+    },
+    "./scheduler-store": {
+      "types": "./src/extensions/scheduler/store.ts",
+      "import": "./src/extensions/scheduler/store.ts"
     }
   },
   "publishConfig": {
@@ -28,6 +32,10 @@
       "./background-task": {
         "types": "./dist/background-task-entry.d.ts",
         "import": "./dist/background-task-entry.js"
+      },
+      "./scheduler-store": {
+        "types": "./dist/scheduler-store-entry.d.ts",
+        "import": "./dist/scheduler-store-entry.js"
       }
     }
   },
