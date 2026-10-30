@@ -14,7 +14,7 @@
  *   - authority 非空且文件存在（剥离 #锚点后按相对 docs/ 解析，../ 前缀相对仓库根）
  *   - enforcement：machine 项 hook 须存在于 .githooks/ / scripts/ / 仓库根（含 "§" 的内联段特例跳过）；
  *     review 项 agent 须存在于 .agents/skills/<skill>/agents/<agent>.md（skills 一级子目录任一命中即
- *     通过——skill 实体 workspace 根共享不入库，ADR-0074/0076，agent 归属 skill 不固定）
+ *     通过——skill 实体 workspace 根共享不入库，ADR-0086，agent 归属 skill 不固定）
  *
  * 退出码：0 成功 / 2 校验失败（含 JSON 解析失败）
  *
@@ -79,7 +79,7 @@ export function validateAuthority(c, at, errors) {
 
 /**
  * review agent 存在性：枚举 skills 一级子目录的 agents/<agent>.md，任一命中即通过。
- * skill 实体在 workspace 根共享、不入库（ADR-0074/0076），agent 不固定属于哪个 skill，
+ * skill 实体在 workspace 根共享、不入库（ADR-0086），agent 不固定属于哪个 skill，
  * 故按目录形态扫描而非写死 skill 名。skillsDir 参数化供测试注入临时树。
  */
 export function validateAgentExists(agent, skillsDir = DEFAULT_SKILLS_DIR) {

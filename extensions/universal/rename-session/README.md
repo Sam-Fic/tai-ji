@@ -11,7 +11,7 @@ Pi rename-session 扩展 — 三种触发模式下自动/自主为会话生成 s
 - **触发时机（first-stop 路径）**：只在 round 的最终 turn（`stopReason === "stop"`）评估——工具中间轮 / error / aborted / length 轮不评估，error 轮延迟到下一个成功轮命名
 - **两段输入（自动路径）**：`[user(首条 prompt), assistant(最终回复)]` 两段信号（各截断 4000 码点），不含 toolCall/toolResult 过程数据，token 成本不随工具数增长；first-prompt 模式无 assistant 段（降级两条）
 - **独立选模**：标题生成用独立的 `ModelSelector` 配置（仅支持 `ref` 精确指定 provider/model）；**未配置（空 ref）时跟随会话主模型**（`ctx.model`），开箱即用
-- **可靠性行为**：固定 30s 超时；写入前重查手动名（防覆盖 LLM 调用窗口内的竞态，agent-tool 工具路径除外——显式改名允许覆盖）；任何失败静默跳过保留原 label，绝不阻断 agent 循环
+- **可靠性行为**：LLM 调用不设包内超时（ADR-0122——挂死由 provider SDK/HTTP 层默认超时直报，无 30s 类包内兜底）；写入前重查手动名（防覆盖 LLM 调用窗口内的竞态，agent-tool 工具路径除外——显式改名允许覆盖）；任何失败静默跳过保留原 label，绝不阻断 agent 循环
 - 标题直接 `setSessionName` 写入，不进 session history（不污染对话记录）
 - **子 session 自动排除**：subagent 子进程 session 不触发 rename（避免给临时产物起名）
 
@@ -84,7 +84,7 @@ pi install npm:@zhushanwen/pi-rename-session
 3. **O(1) 快速路径（first-stop）**：只有 `stopReason === "stop"` 的 turn 才继续——**rename 一定在 round 末触发**（最终 turn 的 message 即最终 assistant 回复，final text 零遍历可得），不会在首个 iteration 中途命名。first-prompt 入口的对应检查：首条 user 判定 = handler 执行时 `getEntries()` 中 user message 计数 === 0（pi 的 extension handler 先于该条 message 的 entries append 执行，本条即 session 首条 user；steering/follow-up 消息到达时首条已入 entries，天然不重复触发）。
 4. **首 round 判定（first-stop）**：session entries 中成功（stop）assistant 回复数 === 1 才触发（后续 round 不重复 rename；error 轮的 assistant 回复不计数，延迟到下一个成功轮）。
 5. **两段输入构造**：`[user(首条 prompt), assistant(最终回复文本), user(instruction)]`——任务意图 + 轮次结论恰好与标题语义对齐，不含 toolCall/toolResult 过程数据；两段文本各截断 4000 Unicode 码点（中文场景约 4k token/段，成本可控且不随工具数增长）。assistant 段为空（first-prompt 模式 / 纯工具结束的 round）时降级为两条——标题主信号本就是 prompt。
-6. **LLM 生成 slug 标题**：独立精简 system prompt（<200 字符的 slug 词组约束，非整个 agent prompt）+ instruction（正反例 few-shot，作为追加 user message 发送）+ `tools: []` + `maxTokens: 64`，按 `config.model` 独立选模（空 ref 跟随会话主模型）发起一次 LLM 调用；固定 30s 超时（超时归一为失败，走静默跳过）。
+6. **LLM 生成 slug 标题**：独立精简 system prompt（<200 字符的 slug 词组约束，非整个 agent prompt）+ instruction（正反例 few-shot，作为追加 user message 发送）+ `tools: []` + `maxTokens: 64`，按 `config.model` 独立选模（空 ref 跟随会话主模型）发起一次 LLM 调用；不设包内超时（ADR-0122——挂死由 provider SDK 默认超时直报，OpenAI/Anthropic SDK 默认 10 分钟；失败归一走静默跳过）。
 7. **写入**：cleanTitle 清洗（去首尾引号 / markdown 强调标记 / 句尾标点、空白归一、按码点截断）后 `setSessionName` 写入。**写入前重查** `pi.getSessionName()`——LLM 调用窗口（2-30s）内用户手动命名的竞态由此兜住，已有名则 skip 不覆盖。**不**写入 session history，对话记录不受影响。
 8. **`rename_session` 工具（agent-tool）**：execute 内检查链依次为——先拒绝 subagent session（子会话是临时产物，subagent 排除检查覆盖 message_end / turn_end / 工具三入口，C-ext-21）；再 live 读 config 检查——mode 已切走时拒绝（错误文案含恢复指引：切回 agent-tool / 手动改名）；title 经 cleanTitle 清洗，空值拒绝；非空直接 `setSessionName` **不走防覆盖检查**（agent 显式调用 = 代表用户的意图，允许覆盖任何既有名，含自动名/语义名）。
 
@@ -99,7 +99,7 @@ rename 是 best-effort 副作用，任何失败静默跳过、绝不阻断 agent
 | 非 round-1（成功回复数 ≠ 1） | skip（count=N），一次性语义 |
 | 非 first-prompt 模式收到 user message_end | skip（mode=<mode>），事件路径 live 分派 |
 | 非 session 首条 user message（first-prompt） | skip（userCount=N），一次性语义 |
-| LLM 调用失败 / 超过 30s | 记录失败日志，保留原 label（不做重试；用户可手动命名） |
+| LLM 调用失败（含 provider SDK 默认超时，10 分钟级） | 记录失败日志，保留原 label（不做重试；用户可手动命名） |
 | 标题清洗后为空 | skip（title empty） |
 | 写入前发现已有手动名（自动路径） | skip（name exists），不覆盖 |
 | `rename_session` 工具被调用但 mode 已切走 | execute 检查拒绝（isError 文案含恢复指引） |
@@ -129,11 +129,11 @@ rename 是 best-effort 副作用，任何失败静默跳过、绝不阻断 agent
 | 11 | `skip: empty prompt` | message_end handler（`firstPrompt skip: empty prompt`） | user message 载荷无文本（理论不发生） |
 | 12 | `tool renamed to "<title>"` | rename_session 工具 execute | agent-tool 路径写入成功（`setSessionName` 之后打出，无防覆盖前缀） |
 
-另有三条**非 debug 常开**日志（无条件经 `logger.warn` 落 appendEntry entry，任意环境可 `grep "rename-session:log" <session.jsonl>` 排障）：`rename LLM call failed`（`logger.warn(msg, { error })` 形态，error 详情在结构化 data 字段；超时时 llm-shared callLLM 内部的 extractText 将空错误文本归一为 `unknown error`——extension 侧 `result.error ?? "unknown error"` 只兜 null/undefined，空串兜底发生在 llm-shared 层）、`model not available, skipping`（选模失败）、`title empty after clean, skipping rename`（调用成功但标题清洗后为空，结构化 data 含 `model` / `stopReason` / `raw`(≤100 码点标题候选预览)——`stopReason=length` 表示输出预算被 thinking 吃尽，是上调 `maxTokens` 常量的数据信号）。handler 侧日志 message 带 `t=<ISO时间>` 与 `turnIndex`；llm 侧带 `t=<ISO时间>`、无 turnIndex。文件日志通道（`<agentDir>/logs/`）需 `TAIJI_AGENT_DEBUG=1`，独立 pi 用户排障优先 grep session 文件（无需复跑）。
+另有三条**非 debug 常开**日志（无条件经 `logger.warn` 落 appendEntry entry，任意环境可 `grep "rename-session:log" <session.jsonl>` 排障）：`rename LLM call failed`（`logger.warn(msg, { error })` 形态，error 详情在结构化 data 字段；挂死类失败（SDK/HTTP 层默认超时）错误文本为空时，llm-shared callLLM 内部的 extractText 将其归一为 `unknown error`——extension 侧 `result.error ?? "unknown error"` 只兜 null/undefined，空串兜底发生在 llm-shared 层）、`model not available, skipping`（选模失败）、`title empty after clean, skipping rename`（调用成功但标题清洗后为空，结构化 data 含 `model` / `stopReason` / `raw`(≤100 码点标题候选预览)——`stopReason=length` 表示输出预算被 thinking 吃尽，是上调 `maxTokens` 常量的数据信号）。handler 侧日志 message 带 `t=<ISO时间>` 与 `turnIndex`；llm 侧带 `t=<ISO时间>`、无 turnIndex。文件日志通道（`<agentDir>/logs/`）需 `TAIJI_AGENT_DEBUG=1`，独立 pi 用户排障优先 grep session 文件（无需复跑）。
 
 ## E2E 验收
 
-E2E 是本地人工触发的验收资产（真实 pi 进程 + 真实模型，不进常规 CI），覆盖七个场景：A1 触发时机证据链（流序/内容匹配/负向/行序/结构五重——结构断言 = 仅一条 LLM request + [user,assistant,user] 三元组）、A2 slug 风格 ×3、A3 防覆盖（静态/竞态/一次性）、A4 error 轮两阶段（`--session` 续跑）、A5 超时兜底（hang provider）、A6 first-prompt 模式（触发时点 = 首条 assistant `message_start` 前 rename LLM 请求已发出 + 标题仅基于 prompt + 后续 round 不再改名；完成序不做 gate）、A7 agent-tool 模式（工具改名即时写入覆盖既有名 + first-stop 对照进程零 `rename_session` toolCall entry）。
+E2E 是本地人工触发的验收资产（真实 pi 进程 + 真实模型，不进常规 CI），覆盖七个场景：A1 触发时机证据链（流序/内容匹配/负向/行序/结构五重——结构断言 = 仅一条 LLM request + [user,assistant,user] 三元组）、A2 slug 风格 ×3、A3 防覆盖（静态/竞态/一次性）、A4 error 轮两阶段（`--session` 续跑）、A5 挂死直报（hang provider——无包内超时（ADR-0122），挂死调用由 provider SDK 默认超时（10 分钟级）报失败，pi 存活）、A6 first-prompt 模式（触发时点 = 首条 assistant `message_start` 前 rename LLM 请求已发出 + 标题仅基于 prompt + 后续 round 不再改名；完成序不做 gate）、A7 agent-tool 模式（工具改名即时写入覆盖既有名 + first-stop 对照进程零 `rename_session` toolCall entry）。
 
 ```bash
 cd extensions/universal/rename-session
@@ -173,7 +173,7 @@ rename-session/
     ├── index.ts          # 工厂入口（message_end/turn_end handler 按模式分派 + rename_session 工具注册 + /auto-rename 命令）
     ├── landing.ts        # landTitle：两入口共用写入管道（起 LLM → 防覆盖重查 → setSessionName → renamed to 日志 + usage 记录）
     ├── commands.ts       # /auto-rename on|off|status 命令（enable/disable 别名）
-    ├── llm.ts            # callRenameLLM / 两段输入构造 / debug 内省 / 超时
+    ├── llm.ts            # callRenameLLM / 两段输入构造 / debug 内省 / 档位判定
     ├── pure.ts           # 纯函数（配置 / 首轮计数 / cleanTitle）
     └── __tests__/        # 单测（pure / commands / llm mock / index 集成）
 ```

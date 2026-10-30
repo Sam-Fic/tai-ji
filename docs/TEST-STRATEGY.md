@@ -54,7 +54,7 @@ cd packages/ui && npx vitest run
 pnpm --filter @taiji/frontend run typecheck
 cd packages/runtime && npx tsc --noEmit
 
-# pi-scheduler 真实环境端到端实测（spawn 真实 pi + LLM，设计契约见脚本头部）
+# pi-scheduler 真实环境端到端实测（spawn 真实 pi + faux LLM 演员，快照任务库轨，设计契约见脚本头部）
 node scripts/verify-scheduler-e2e.cjs
 ```
 

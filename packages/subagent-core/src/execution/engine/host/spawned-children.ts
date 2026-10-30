@@ -118,7 +118,7 @@ export function killRecordChildWithEscalation(recordId: string, _source: string)
 }
 
 /**
- * 全量收割记账（dispose / parent-shutdown）：镜像整体置死。
+ * 全量收割记账（SubagentService.dispose / zsw runner-core.js）：镜像整体置死。
  *
  * 命名如实标注语义（只动镜像记账，不发任何进程信号）——真实回收链 = 子进程
  * stdin-EOF 自灭（宿主退出 / EngineClient 销毁）+ disposeEngines()（registry）。

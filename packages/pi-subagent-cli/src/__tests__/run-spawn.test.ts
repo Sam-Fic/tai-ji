@@ -299,6 +299,8 @@ rl.on("line", (line) => {
     readonly spawnOptions: { command: string; args: string[]; env: Record<string, string | undefined>; cwd: string | undefined };
     /** 已收到的 stdin 行（诊断用）。 */
     readonly stdinLines: string[] = [];
+    /** [kill-chain 失败语义] kill 抛错注入（EPERM 等）——杀不死的子进程用例。 */
+    killFailure?: Error;
     private readonly script: FakePiScript;
     private stdinBuffer = "";
     private finished = false;
@@ -413,6 +415,8 @@ rl.on("line", (line) => {
     }
 
     kill(signal?: NodeJS.Signals | number): boolean {
+      // [kill-chain 失败语义] 注入 kill 抛错（EPERM 形态）——杀不死的子进程用例。
+      if (this.killFailure !== undefined) throw this.killFailure;
       if (this.finished) return true;
       this.killed = true;
       const sig: NodeJS.Signals | null = typeof signal === "string" ? signal : null;
@@ -1327,6 +1331,86 @@ describe("subagent-observability 判定链事实化（§3.3.1 验收）", () => 
       budget: { used: 1, limit: 1 },
     });
     expect(result.error).toContain("137");
+  });
+
+  // ── [kill-chain-architecture §3.3] 杀链失败语义：杀不死的子进程 ──
+  // 修复前形态：killChild fire-and-forget 吞掉 EPERM → 进程不死 → close 永不到来 →
+  // await exitPromise 永悬挂 → run 永无终态。修复后：killFailed 事实位 + exitPromise
+  // 手动 settle（退出码 125，非 128+signo 收割折算口径）→ 立即失败终态。
+
+  it("杀链失败（kill EPERM）→ run 立即失败终态：engine_kill_failed 文案带 pid/reason 诊断，退出码不走 128+signo 折算", async () => {
+    const h = makeStubHarness({
+      getStateData: { ...SUCCESS_IDENTITY },
+      onPrompt: (child) => {
+        child.writeStdoutLine({ type: "message_end", message: { usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 }, stopReason: "stop" } });
+        child.writeStdoutLine({ type: "turn_end" }); // maxTurns=1 + grace 0 → 此边沿同步 abort → killChild
+      },
+    });
+    const runP = runSpawnOnce(baseParams(h, { maxTurns: 1, graceTurns: 0 }), callbacksOf(h));
+    const child = await nextFakeChild();
+    child.killFailure = Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+    const result = await runP; // 不等 close（子进程不死）——修复前此处永悬挂
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/^engine_kill_failed:/);
+    expect(result.error).toContain(`pid=${String(child.pid)}`);
+    expect(result.error).toContain("reason=permission-denied");
+    expect(result.error).toContain("Recovery:");
+    // 退出码口径：手动 settle 的失败码（非 128+signo 收割折算，非裸退出码文案）
+    expect(result.error).not.toContain("137");
+    // 分类事实保留（limiter 耗尽仍是失败分类的权威事实；文案按优先序被杀链违约覆盖）
+    expect(result.failure).toMatchObject({ class: "harness", kind: "turn_budget_exhausted" });
+  });
+
+  it("杀链失败 + 错误停因事实并存 → 文案优先序：killFailed（杀链违约）优先于 terminalErrorFact", async () => {
+    // agent_settled 错误停因收割触发 killChild（onAgentSettled 的 terminalErrorFact
+    // 分支不置 exitResolved——与干净轮收割不同），kill 抛 EPERM → killFailed 事实位
+    // 与 terminalErrorFact 并存：文案以杀链违约为首事实（进程仍活，run 终态在此合成）
+    const h = makeStubHarness({
+      getStateData: { ...SUCCESS_IDENTITY },
+      onPrompt: (child) => {
+        child.writeStdoutLine({
+          type: "message_end",
+          message: { usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 }, stopReason: "error", errorMessage: "500: provider down" },
+        });
+        child.writeStdoutLine({ type: "turn_end" });
+        child.writeStdoutLine({ type: "agent_end", willRetry: false, reason: "error" });
+        child.writeStdoutLine({ type: "agent_settled" });
+      },
+    });
+    const runP = runSpawnOnce(baseParams(h), callbacksOf(h));
+    const child = await nextFakeChild();
+    child.killFailure = Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+    const result = await runP;
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/^engine_kill_failed:/);
+    expect(result.error).toContain("reason=permission-denied");
+  });
+
+  it("kill-failed settle 后迟到 close 被幂等门吸收：终态不被改写，收尾清理照常", async () => {
+    const h = makeStubHarness({
+      getStateData: { ...SUCCESS_IDENTITY },
+      onPrompt: (child) => {
+        child.writeStdoutLine({ type: "message_end", message: { usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 }, stopReason: "stop" } });
+        child.writeStdoutLine({ type: "turn_end" });
+      },
+    });
+    const runP = runSpawnOnce(baseParams(h, { maxTurns: 1, graceTurns: 0 }), callbacksOf(h));
+    const child = await nextFakeChild();
+    child.killFailure = Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+    const result = await runP;
+    expect(result.error).toMatch(/^engine_kill_failed:/);
+
+    // 权限环境变化后进程真死（迟到 close）：终态不被改写（exitPromise 已 settle 125）、
+    // close finalizer 清理照常（注销 / exited 镜像上报）——撤销注入让 exit() 正常发事件
+    child.killFailure = undefined;
+    child.exit(null, "SIGKILL");
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    const exited = h.stateChanges.find((s) => s.state === "exited");
+    expect(exited).toBeDefined(); // 迟到 close 的清理链（镜像上报）照常执行
+    expect(result.success).toBe(false); // 终态不被迟到 close 翻案
   });
 
   // ── [宿主取消竞窗] agent_end 已置 clean、settled 未到窗口触发取消 ──

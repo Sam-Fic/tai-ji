@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { defineStateMachine } from '@zhushanwen/state-machine'
 import { getPiAgentDir } from './pi-paths.js'
 import { redactArgv } from './argv-redact.js'
 import { recordSpawnMarkers } from './spawn-markers.js'
@@ -29,6 +30,7 @@ import {
   buildSwitchSessionParams,
   buildExtensionUiResponsePayload,
   killPiProcess,
+  KillSignalError,
   createPendingRegistry,
   createEarlyFrameBuffer,
   type PiMessage,
@@ -156,6 +158,59 @@ function toStringArray(v: unknown): string[] {
   return v.filter((x): x is string => typeof x === 'string')
 }
 
+// ── pi 进程生命周期状态机（kill-chain-architecture §3.2）────────────────────
+//
+// 显式四态收敛原 `_exited`/`_killing` 裸布尔积（4 组合 2 非法）。kill-failed 是
+// 显式终态不是回退：「杀令已下」不可撤回，客户端整体不可用（进程生死不可控），
+// 吸收态语义正确。表外转移 fail-fast（对齐 RUN_MACHINE errorPolicy:'throw'）。
+//
+// 迟到事件的入口幂等吸收：Node 生命周期内「error 先到、exit 随后」「stream error 置
+// 终态后 exit 到场」是合法事件序列——终态下到达的 process-exit / process-error 不进
+// 转移（表外会误伤），由处置入口吸收后照跑幂等清理动作（rejectAll 空表 no-op /
+// notifyExitOnce 幂等）。真正表外可 fail-fast 的只剩编程错误形态（终态下 kill-requested
+// 不会到转移入口——kill() 入口按当前态幂等短路）。
+
+/** pi 进程生命周期状态词表。 */
+type PiProcLifecycle = 'spawned' | 'killing' | 'exited' | 'kill-failed'
+/** pi 进程生命周期事件词表。 */
+type PiProcLifecycleEvent = 'kill-requested' | 'process-exit' | 'process-error' | 'kill-failed'
+
+/**
+ * 转移表（动作归调用点，状态机只裁决合法性）：
+ *   spawned × kill-requested → killing      发杀链；结果驱动后续转移
+ *   spawned × process-exit   → exited       非计划内死亡（crash log + rejectAll + notify）
+ *   spawned × process-error  → exited       同上（terminateFromError 处置链）
+ *   killing  × process-exit  → exited       杀链收尾（onExit 钩子 rejectAll）
+ *   killing  × process-error → exited       杀令已下的进程以 error 形态终结（通知抑制）
+ *   killing  × kill-failed   → kill-failed  杀链 reject（立即 rejectAll + 泄漏告警）
+ *   exited / kill-failed     = 吸收态（无表行）
+ */
+const PI_PROC_MACHINE = defineStateMachine<PiProcLifecycle, PiProcLifecycleEvent>({
+  name: 'pi-proc-lifecycle',
+  states: {
+    spawned: {},
+    killing: {},
+    exited: { terminal: true },
+    'kill-failed': { terminal: true },
+  },
+  initial: 'spawned',
+  events: {
+    'kill-requested': {},
+    'process-exit': {},
+    'process-error': {},
+    'kill-failed': {},
+  },
+  transitions: [
+    { from: 'spawned', on: 'kill-requested', to: 'killing' },
+    { from: 'spawned', on: 'process-exit', to: 'exited' },
+    { from: 'spawned', on: 'process-error', to: 'exited' },
+    { from: 'killing', on: 'process-exit', to: 'exited' },
+    { from: 'killing', on: 'process-error', to: 'exited' },
+    { from: 'killing', on: 'kill-failed', to: 'kill-failed' },
+  ],
+  errorPolicy: 'throw',
+})
+
 // ── start 提取 helper（复杂度债务偿还，行为保持提取：按处理阶段下沉，主函数只留编排）──
 
 /**
@@ -208,8 +263,19 @@ export class RpcClient implements IPiEngine {
     },
   })
   private msgCounter = 0
-  private _exited = false
-  private _killing = false
+  /**
+   * pi 进程生命周期当前态（PI_PROC_MACHINE 的实例态）。写入只经 processExitFrom() /
+   * processErrorFrom() / kill() 三个转移入口（表外转移 fail-fast）。
+   */
+  private procState: PiProcLifecycle = 'spawned'
+  /**
+   * 「主动杀令已发起」的 latched 事实位（kill-requested 转移时置 true，永不复位）。
+   * 用途单一：exit/error 处置链的通知抑制判据（主动 kill 流程不发死亡通知——通知归
+   * kill 链收尾，exitCallbacks 上层据通知做用户可见的崩溃上报）。状态机 killing 态
+   * 经 process-exit/error 转入 exited 后该事实仍在（kill 成功收割的 exit 事件同样抑制
+   * 通知），四态词表达不了「exited 由 killing 演化而来」，故独立持有。
+   */
+  private plannedKill = false
   /**
    * exitCallbacks 多播是否已发（RT-2#6）：proc 'error' 与 'exit' 合并为单一 terminate
    * 出口后，运行中 error 先通知、exit 随后到场的形态需要幂等检查防双发（spawn 失败
@@ -379,14 +445,14 @@ export class RpcClient implements IPiEngine {
     })
 
     proc.on('exit', (code) => {
-      this._exited = true
+      this.transitionProc('process-exit')
       console.log(`[rpc] process exited with code ${code}`)
       this.piSessionLog?.end()
       this.piSessionLog = null
       // Only reject pending requests on unexpected exits.
-      // For normal kill flow (_killing=true), rejectAll is called in kill()
+      // For normal kill flow (plannedKill), rejectAll is called in kill()
       // via a separate safety net so callers don't hang forever.
-      if (!this._killing) {
+      if (!this.plannedKill) {
         this.writeCrashLogIfNeeded(code)
         this.rejectAll(new Error(`pi process exited with code ${code}${this.formatStderrSuffix()}`))
         this.notifyExitOnce(code, this.getStderrTail())
@@ -417,14 +483,14 @@ export class RpcClient implements IPiEngine {
     // 事故）。stdin 是 runtime → pi 的唯一写侧（sendCommand / sendRaw）；pi 半关闭
     // （写端已死）或崩溃后再写 stdin，流错误（EPIPE / ERR_STREAM_DESTROYED）异步 emit
     // 到 stdin——写调用本身不抛，try/catch 接不住；若无 listener 会被 uncaught-policy
-    // log-continue 吞掉：_exited 不置位、pending 不 reject、自愈强杀不触发 → 后续每条
+    // log-continue 吞掉：终态不进、pending 不 reject、自愈强杀不触发 → 后续每条
     // RPC 各挂满超时且误归因「pi 无响应」（RT-2#1）。故三个流都必须在源头接线，不得
     // 依赖 uncaught-policy 兜底。
     //
     // 管道断裂但进程可能仍存活（孤儿泄漏）：handleStreamError 内 SIGKILL 加速其死亡，
     // 让 proc.on('exit') 作为死亡通知的唯一出口（避免「stream error 通知 + exit 通知」
-    // 双触发）。刻意调 ChildProcess 原生 kill 而非 this.kill()：后者置 _killing=true，
-    // exit 处理器会跳过 exitCallbacks —— 死亡通知整条丢失。
+    // 双触发）。刻意调 ChildProcess 原生 kill 而非 this.kill()：后者会走 kill-requested
+    // 转移置 plannedKill，exit 处理器会跳过 exitCallbacks —— 死亡通知整条丢失。
     proc.stdout?.on('error', (err: NodeJS.ErrnoException) => this.handleStreamError('stdout', err))
 
     proc.stdin?.on('error', (err: NodeJS.ErrnoException) => this.handleStreamError('stdin', err))
@@ -452,12 +518,16 @@ export class RpcClient implements IPiEngine {
 
   /**
    * 三个 stream（stdout/stdin/stderr）'error' 的统一处置（W2，单实现收敛自三块近似复制）：
-   * console.error 留痕 → 置 _exited → rejectAll pending → SIGKILL 加速进程死亡。
+   * console.error 留痕 → process-error 转移进终态 → rejectAll pending → SIGKILL 加速进程死亡。
    * 注册点语义与降级理由见 wireProcessHandlers 内 stream error 接线段注释。
    */
   private handleStreamError(stream: 'stdout' | 'stdin' | 'stderr', err: NodeJS.ErrnoException): void {
     console.error(`[rpc] ${stream} stream error:`, err)
-    this._exited = true
+    // stream 断裂 = 进程通道不可用：process-error 转移进 exited 终态（出站请求自此
+    // 拒绝）。与 terminateFromError 的动作分工：此处不发死亡通知、不写 crash log——
+    // 两者均由随后到达的 proc 'exit' 事件承载（死亡通知唯一出口语义），此处只清 pending
+    // 并加速进程死亡。
+    this.transitionProc('process-error')
     this.rejectAll(new Error(`pi ${stream} stream error: ${err.message}`))
     this.killProcAfterStreamError(stream)
   }
@@ -478,19 +548,19 @@ export class RpcClient implements IPiEngine {
   /**
    * 进程级 'error' 的终止处置（RT-2#6）——与 exit 合并为单一 terminate 出口。
    *
-   * 此前 error handler 只 rejectAll：spawn 失败（ENOENT 等）不 emit 'exit'，piSessionLog
-   * 的 fd 悬挂、exitCallbacks 永不触发（ProcessManager 会话表收不到死亡通知）。现补齐
-   * exit 处置链的全部收尾（对齐批次 3 stdin stream error 的完整处置链口径：_exited 置位
-   * + rejectAll 必达）；运行中 error 后 exit 若仍到场，各步幂等（piSessionLog 已置 null /
+   * spawn 失败（ENOENT 等）不 emit 'exit'：只 rejectAll 会让 piSessionLog 的 fd 悬挂、
+   * exitCallbacks 永不触发（ProcessManager 会话表收不到死亡通知），故此处补齐 exit
+   * 处置链的全部收尾（process-error 转移进终态 + rejectAll 必达）；运行中 error 后
+   * exit 若仍到场，各步幂等（终态迟到事件入口吸收，piSessionLog 已置 null /
    * rejectAll 空表 no-op），exitCallbacks 通知由 notifyExitOnce 幂等检查防双发。
-   * _killing 语义与 exit handler 对齐：主动 kill 流程不发死亡通知（kill() 的 onExit
-   * rejectAll 统一收尾）。
+   * plannedKill 语义与 exit handler 对齐：主动 kill 流程不发死亡通知（kill() 的
+   * onExit rejectAll 统一收尾）。
    */
   private terminateFromError(err: Error): void {
-    this._exited = true
+    this.transitionProc('process-error')
     this.piSessionLog?.end()
     this.piSessionLog = null
-    if (!this._killing) {
+    if (!this.plannedKill) {
       this.writeCrashLogIfNeeded(null)
       // 错误消息保留 err.message 原文（Node spawn ENOENT 的 message 自带 'spawn ... ENOENT'，
       // ProcessManager.createSession 的安装指引匹配（includes('spawn')/includes('ENOENT')）不依赖本前缀）
@@ -591,6 +661,30 @@ export class RpcClient implements IPiEngine {
     this.pendingRegistry.rejectAll(error)
   }
 
+  /**
+   * 进程生命周期转移唯一写点：表外转移 fail-fast（机器 errorPolicy:'throw'）。
+   *
+   * 终态下的 process-exit / process-error 迟到事件（先行 process error / stream
+   * error 之后的合法 Node 事件序列）幂等吸收不进转移，处置动作由调用点照跑（自身
+   * 幂等：rejectAll 空表 no-op / notifyExitOnce 幂等）。kill-requested / kill-failed
+   * 事件的终态抑制由各自入口短路（kill() 幂等短路 / catch 的 killing 判定），不在此处。
+   */
+  private transitionProc(event: PiProcLifecycleEvent): void {
+    if ((event === 'process-exit' || event === 'process-error') && this.isProcTerminal()) return
+    const next = PI_PROC_MACHINE.transition(this.procState, event).state
+    if (next === null) {
+      // 表内无 to:null（实体消亡）行，本分支类型层不可达；机器表未来引入消亡行时
+      // 在此 fail-fast 暴露，不静默保持现态
+      throw new Error(`[rpc] pi-proc-lifecycle ${event} from '${this.procState}' produced a null (entity-terminated) state, which this machine does not declare`)
+    }
+    this.procState = next
+  }
+
+  /** 进程生命周期终态判定（exited / kill-failed——客户端不可用，出站请求拒绝）。 */
+  private isProcTerminal(): boolean {
+    return this.procState === 'exited' || this.procState === 'kill-failed'
+  }
+
   private nextId(): string {
     return `rpc_${++this.msgCounter}_${Date.now()}`
   }
@@ -612,7 +706,7 @@ export class RpcClient implements IPiEngine {
    * 不允许静默丢弃；错误日志已在函数内留痕（经 logger.patchConsole tee 落 runtime 日志）。
    */
   sendRaw(data: string): boolean {
-    if (!this.proc || this._exited) {
+    if (!this.proc || this.isProcTerminal()) {
       console.error('[rpc] sendRaw failed: pi process is not running')
       return false
     }
@@ -630,7 +724,7 @@ export class RpcClient implements IPiEngine {
 
   sendCommand(type: string, params: Record<string, unknown> = {}): Promise<PiMessage> {
     return new Promise((resolve, reject) => {
-      if (!this.proc || this._exited) {
+      if (!this.proc || this.isProcTerminal()) {
         return reject(new Error('pi process is not running'))
       }
 
@@ -686,7 +780,7 @@ export class RpcClient implements IPiEngine {
    * 多播（可多订阅者，后注册者不再覆盖先注册者），返回 unsubscribe（与 onEvent 对称）。
    * 每个进程恰好通知一次：出口 = proc 'exit' 与 proc 'error'（RT-2#6 合并为单一 terminate
    * 出口，notifyExitOnce 幂等防双发；stream error 只 kill 不通知，死亡通知仍由 exit 承载）；
-   * _killing=true 的主动 kill 流程不通知，语义不变。
+   * plannedKill（主动 kill 流程）不通知，语义不变。
    */
   onExit(callback: (code: number | null, stderr: string) => void): () => void {
     this.exitCallbacks.add(callback)
@@ -719,7 +813,7 @@ export class RpcClient implements IPiEngine {
    * §3.2-D4 / U3-4）。
    *
    * 触发条件：code≠0 且非主动 kill（调用点在 exit handler 与 terminateFromError 的
-   * !this._killing 分支内；process error 路径传 code=null）。
+   * !plannedKill 分支内；process error 路径传 code=null）。
    * code=null（信号死亡 / spawn 失败的 process error，如管道断裂后的 SIGKILL）同属异常退出，落盘。
    * 正常退出（code=0）与主动 kill 流程不写。
    * 文件：合法 sid → `<root>/<sid>/logs/pi-crash-<date>.log`（session 存储树 logs/ 域，
@@ -806,7 +900,7 @@ export class RpcClient implements IPiEngine {
   }
 
   get exited(): boolean {
-    return this._exited
+    return this.isProcTerminal()
   }
 
   /**
@@ -1082,16 +1176,50 @@ export class RpcClient implements IPiEngine {
   // ── Lifecycle ─────────────────────────────────────────────────────
 
   async kill(): Promise<void> {
-    if (!this.proc || this._exited) return
+    // 幂等短路（K2 同精神）：进程不在 / 已终结（exited、kill-failed）→ no-op；
+    // killing（杀令已下）→ no-op（SIGKILL 已投递或失败已上报，重复请求无事可做）。
+    // 吸收态下 kill-requested 不进转移表（表外转移是编程错误形态），入口直接 return。
+    if (!this.proc || this.procState !== 'spawned') return
 
-    this._killing = true
+    this.transitionProc('kill-requested')
+    this.plannedKill = true
 
-    // 杀链（pi-rpc kill-chain 部件）：SIGKILL 直杀 + 立即 resolve（不等收尸，exit
-    // handler 由进程生命周期接手；grace 优雅退出等待窗已随 ADR-0122 退役）。
-    // exit 安全网：_killing=true 使 exit handler 跳过 rejectAll，此处 onExit 回调统一
-    // 清 pending——调用方不必悬挂等待。
-    return killPiProcess(this.proc!, {
-      onExit: () => this.rejectAll(new Error('pi process killed')),
-    })
+    const proc = this.proc
+    try {
+      // 杀链（pi-rpc kill-chain 部件）：SIGKILL 直杀 + 三值判别（signal-delivered /
+      // already-dead 两态都是合法完成，成功路径 resolve 时点不变）。exit 安全网：
+      // plannedKill 使 exit handler 跳过 rejectAll，onExit 回调统一清 pending——
+      // 调用方不必悬挂等待。
+      await killPiProcess(proc, {
+        onExit: () => this.rejectAll(new Error('pi process killed')),
+      })
+    } catch (err) {
+      // kill-failed 终态（killing → kill-failed）：杀链违约（进程仍活），pending 收尾
+      // 改由状态转移驱动——杀不死的进程永不发 exit，等事件 = 永挂（墙钟超时已随
+      // ADR-0122 退役，无兜底）。防御分支：kill() 入口到杀链 settle 之间无 await 间隔，
+      // exit/error 事件不可能抢先进入终态，判定恒真（未来插入 await 时兜底，此时
+      // pending 已由终结处置链 rejectAll）。
+      if (!this.isProcTerminal()) {
+        this.transitionProc('kill-failed')
+        const detail = describeKillFailure(err)
+        this.rejectAll(new Error(detail))
+        console.error(
+          `[rpc] ${detail} — pi process is still alive and may leak (session cleanup already done by caller). `
+          + `Recovery: inspect the process owner (ps -o pid,uid,ppid,command -p ${proc.pid ?? '?'}) and terminate it manually.`,
+        )
+      }
+      // KillSignalError 沿 reject 上抛给 destroySession——既有 catch +
+      // [PROCESS-LEAK-RISK] warn 从死路径变活路径（调用方拿到该有的失败上报）。
+      throw err
+    }
   }
+}
+
+/** kill-failed 转移的 pending reject / 泄漏告警文案（KillSignalError 诊断置顶）。 */
+function describeKillFailure(err: unknown): string {
+  if (err instanceof KillSignalError) {
+    return `pi process kill failed: process still alive `
+      + `(pid: ${err.pid ?? 'unknown'}, reason: ${err.reason}${err.errno !== undefined ? `, errno: ${err.errno}` : ''})`
+  }
+  return `pi process kill failed: ${err instanceof Error ? err.message : String(err)}`
 }

@@ -1,5 +1,5 @@
 /**
- * @zhushanwen/pi-exec-skills 公共出口（ADR-0074 落地包）。
+ * @zhushanwen/pi-exec-skills 公共出口（ADR-0096 落地包）。
  *
  * 两段消费语义闭环：exec-skills = 发现（目录扫描，技能热装即时可见）；
  * resolve-skills = 执行门禁（pi 注册表确认 pi 实际认得）。禁止各扩展自扫

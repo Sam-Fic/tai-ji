@@ -66,6 +66,5 @@ describe('serializeSession', () => {
 
     expect(parsed.entries).toEqual(entries)
     expect(parsed.skippedLines).toBe(0)
-    expect(parsed.lastLinePartial).toBe(false)
   })
 })

@@ -4,7 +4,8 @@
  * 类型与校验语义 SSOT = packages/shared/src/network-proxy.ts（u-foundation 契约）——
  * extension bundle 自包含不 import shared 运行时代码（extensions 对 shared 的既有惯例：
  * 结构类型本地声明 + 行为镜像锁定测试），本文件是复制体；漂移时以 shared 为准，
- * __tests__/config.test.ts 锁两侧行为一致。
+ * __tests__/config.test.ts 锁本侧行为，__tests__/network-proxy-shared-parity.test.ts
+ * 跨包对拍（同输入矩阵 import @taiji/shared 双侧同判）锁两侧一致。
  *
  * 配置文件 = <agentDir>/config/network-proxy-ext-config.json（llm-shared getConfigPath
  * 推导；runtime 写侧与 settings 页经 RPC 打通，设计 .tmp/tech-design/llm-network-proxy.md

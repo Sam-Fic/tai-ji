@@ -234,13 +234,13 @@
   },
   {
     "id": "PS-14",
-    "claim": "session 延迟首写：首条 assistant 消息前 jsonl 不落盘（_persist 的 hasAssistant 门控），新 session crash 窗口内内存记账丢失；翻转时机 = assistant entry append 的同步点（_appendEntry push 后同步 _persist，hasAssistant 命中即走 wx 全量补写分支，无异步 flush 窗口）——getEntries 读到 assistant ⇒ 磁盘文件必已含全部内存 entry，scheduler ack 落盘判据①的反向推论以此承重",
+    "claim": "session 延迟首写：首条 user 或 assistant 消息前 jsonl 不落盘（_persist 的 _hasConversation 门控——fileEntries 中存在 role 为 user 或 assistant 的 message entry 即开门，setup 条目与 custom 条目不开门），开门前条目只留内存、crash 窗口内丢失；翻转时机 = 首条 user/assistant entry append 的同步点（_appendEntry push 后同步 _persist，_hasConversation 命中即走 wx 全量补写分支，无异步 flush 窗口）——getEntries 读到 user 或 assistant 消息 ⇒ 磁盘文件必已建且含全部内存 entry，scheduler ack 落盘判据①的反向推论以此承重；user 消息在轮次开始（message_end → appendMessage）即落盘、先于首次模型请求（上游有意设计 #10000：首轮未完成也保 prompt 在盘）",
     "piAnchor": [
       {
         "pkg": "pi-coding-agent",
         "distPath": "dist/core/session-manager.js",
-        "symbol": "_persist(entry) 的 hasAssistant 门控",
-        "note": ":726-756 —— hasAssistant 检查 :729；!hasAssistant 分支 :730-740（flushed 已真则 appendFileSync :732，否则置 false 内存持有）；!flushed 全量补写分支 :741-752 同步执行（openSync \"wx\" :742 → for writeFileSync :744-746 → flushed=true :751）；_appendEntry :757-762（push :758 → _persist :761）——0.84.4 无 _flushSoon/异步 flush，全链同步 I/O"
+        "symbol": "_persist(entry) 的 _hasConversation 门控",
+        "note": ":785-820 —— _hasConversation :791-793（fileEntries.some(type===\"message\" && role∈{user,assistant})；:785-790 上游注释声明有意从 user message 起算 #10000）；_persist :794-814（persist=false/无 sessionFile 首行 return :795-796；!flushed 且门控未开 return、条目只留内存 :797-799；开门即 openSync \"wx\" :800 同步全量补写、flushed=true :809，无异步窗口；已 flush 则 appendFileSync 增量 :812）；_appendEntry :815-820（push → _persist）；appendCustomEntry :901-912（custom 条目同链过门控）；user 消息落盘点 = dist/core/agent-session.js message_end → appendMessage :738-753。【门控语义与锚行号按 pi@1.0.0 dist 源码核实（2026-10-30）；0.84.4 实装仅判 assistant（hasAssistant，:726-756），1.0.0 起为 user‖assistant 双判】"
       }
     ],
     "guard": {

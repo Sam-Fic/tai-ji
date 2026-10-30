@@ -187,7 +187,7 @@ describe('/schedule 命令 表单路径（rpc）', () => {
     await handler("5m 'x'", ctx)
     await flush()
 
-    expect(backend.appendedOps).toHaveLength(0)
+    expect(backend.persistedSnapshots).toHaveLength(0)
     expect(notify).not.toHaveBeenCalled()
   })
 
@@ -203,9 +203,9 @@ describe('/schedule 命令 表单路径（rpc）', () => {
     expect(notify).toHaveBeenCalledWith(expect.stringContaining('Created'), 'info')
     expect(notify.mock.calls[0]![0]).toContain('edited')
     expect(notify.mock.calls[0]![0]).not.toContain('Task "edited"')
-    const upsert = backend.appendedOps.find(op => op.op === 'upsert')
-    expect(upsert && upsert.op === 'upsert' ? upsert.task.kind : undefined).toBe('once')
-    expect(upsert && upsert.op === 'upsert' ? upsert.task.model : undefined).toBe('prov-b/m2')
+    const created = backend.persistedTasks?.[0]
+    expect(created?.kind).toBe('once')
+    expect(created?.model).toBe('prov-b/m2')
   })
 
   it('提交创建失败：notify error（severity 分级——成功 info / 失败 error）', async () => {
@@ -234,7 +234,7 @@ describe('/schedule 命令 表单路径（rpc）', () => {
     await flush()
 
     expect(notify).toHaveBeenCalledWith(expect.stringContaining('Form channel unavailable'), 'error')
-    expect(backend.appendedOps).toHaveLength(0)
+    expect(backend.persistedSnapshots).toHaveLength(0)
 
     // 「本会话后续直接给提示」：select 不再被调用
     const next = createCtx({ select: vi.fn() })
@@ -252,7 +252,7 @@ describe('/schedule 命令 表单路径（rpc）', () => {
     await flush()
 
     expect(notify).toHaveBeenCalledWith(expect.stringContaining('Form protocol mismatch'), 'error')
-    expect(backend.appendedOps).toHaveLength(0)
+    expect(backend.persistedSnapshots).toHaveLength(0)
   })
 
   it('echo（回包=发送 payload，旧宿主组合）→ channel-error 折叠：notify error', async () => {
@@ -263,7 +263,7 @@ describe('/schedule 命令 表单路径（rpc）', () => {
     await flush()
 
     expect(notify).toHaveBeenCalledWith(expect.stringContaining('Form channel unavailable'), 'error')
-    expect(backend.appendedOps).toHaveLength(0)
+    expect(backend.persistedSnapshots).toHaveLength(0)
   })
 
   it('envelope 值非 ScheduleFormResult 形状 → notify error（协议版本错配）', async () => {
@@ -276,7 +276,7 @@ describe('/schedule 命令 表单路径（rpc）', () => {
     await flush()
 
     expect(notify).toHaveBeenCalledWith(expect.stringContaining('Form protocol mismatch'), 'error')
-    expect(backend.appendedOps).toHaveLength(0)
+    expect(backend.persistedSnapshots).toHaveLength(0)
   })
 
   it('envelope 键缺失（空 FormAnswers）→ notify error（协议版本错配）', async () => {
@@ -287,7 +287,7 @@ describe('/schedule 命令 表单路径（rpc）', () => {
     await flush()
 
     expect(notify).toHaveBeenCalledWith(expect.stringContaining('Form protocol mismatch'), 'error')
-    expect(backend.appendedOps).toHaveLength(0)
+    expect(backend.persistedSnapshots).toHaveLength(0)
   })
 
   // ── 异步打开：handler 不 await 表单（规避 prompt RPC 60s 窗口） ──
@@ -353,7 +353,7 @@ describe('/schedule 命令 模式矩阵', () => {
     expect(custom).toHaveBeenCalledTimes(1)
     expect(select).not.toHaveBeenCalled()
     expect(notify).toHaveBeenCalledWith(expect.stringContaining('tui edited'), 'info')
-    expect(backend.appendedOps.some(op => op.op === 'upsert')).toBe(true)
+    expect(backend.persistedSnapshots).not.toHaveLength(0)
   })
 
   it('tui：custom resolve null（取消）→ 不创建、无 toast', async () => {
@@ -362,7 +362,7 @@ describe('/schedule 命令 模式矩阵', () => {
 
     await handler("5m 'x'", ctx)
 
-    expect(backend.appendedOps).toHaveLength(0)
+    expect(backend.persistedSnapshots).toHaveLength(0)
     expect(notify).not.toHaveBeenCalled()
   })
 
@@ -373,7 +373,7 @@ describe('/schedule 命令 模式矩阵', () => {
 
     expect(select).not.toHaveBeenCalled()
     expect(custom).not.toHaveBeenCalled()
-    expect(backend.appendedOps.some(op => op.op === 'upsert')).toBe(true)
+    expect(backend.persistedSnapshots).not.toHaveLength(0)
     expect(notify).not.toHaveBeenCalled() // json 模式 notify 是 no-op，成功路径无信号（已登记 P3）
   })
 
@@ -382,7 +382,7 @@ describe('/schedule 命令 模式矩阵', () => {
     await handler("5m 'check build'", ctx)
     expect(select).not.toHaveBeenCalled()
     expect(custom).not.toHaveBeenCalled()
-    expect(backend.appendedOps.some(op => op.op === 'upsert')).toBe(true)
+    expect(backend.persistedSnapshots).not.toHaveLength(0)
   })
 
   // ── json / print 无参 → throw ──
@@ -392,7 +392,7 @@ describe('/schedule 命令 模式矩阵', () => {
       const { ctx } = createCtx({ mode })
       await expect(handler('', ctx)).rejects.toThrow('No interactive form')
     }
-    expect(backend.appendedOps).toHaveLength(0)
+    expect(backend.persistedSnapshots).toHaveLength(0)
   })
 
   // ── json / print 带参失败 → throw（不被 catch 吞） ──
@@ -410,6 +410,6 @@ describe('/schedule 命令 模式矩阵', () => {
       await expect(handler("nonsense-bad-spec 'x'", ctx)).rejects.toThrow('Invalid schedule')
       expect(notify).not.toHaveBeenCalled()
     }
-    expect(backend.appendedOps).toHaveLength(0)
+    expect(backend.persistedSnapshots).toHaveLength(0)
   })
 })

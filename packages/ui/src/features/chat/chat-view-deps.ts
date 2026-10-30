@@ -157,13 +157,6 @@ export interface ChatViewDeps {
     sessionId?: string,
     opts?: { finalizeOpenFence?: boolean },
   ) => Promise<IncrementalMarkdownResult & { cache: IncrementalMarkdownCache }>
-  /**
-   * streaming-fence 占位转完整渲染的静默阈值 ms（renderer 壳 STREAMING_FENCE_SILENCE_MS，
-   * SSOT 在 renderer）。finalize 判定 = message complete ∨ token 静默 ≥ 阈值（组件内派生，
-   * 审计候选 18：谓词注入收单阈值字段——原 shouldFinalizeStreamingFence 谓词生产实现即
-   * 该公式，两注入合一）。
-   */
-  streamingFenceSilenceMs: number
   /** 渲染 mermaid 为 SVG（renderer 壳 renderMermaid，依赖 mermaid 库） */
   renderMermaid: (source: string, theme: 'dark' | 'light') => Promise<{ svg: string }>
   /**

@@ -170,10 +170,12 @@ export default [
   // prompt 送达回执（prompt-ack）接线 / fd3 raw mirror 装配的单点聚合文件（职责内聚，
   // 再拆属独立重构任务）。prompt-ack 接线与 mirror 装配入列后折算 520 行 > 500 软上限，
   // 按「微超即提额，保留软上限告警」先例（pi-provider-store）提额，长期应拆分。
+  // [kill-chain-architecture] killChild 失败接 reject（杀链失败手动 settle 接线）净增
+  // 数行，543 > 540 微超即提额至 560（同型先例：control-server 2026-10-23）。
   {
     files: ['packages/pi-subagent-cli/src/spawn-runner.ts'],
     rules: {
-      'max-lines': ['warn', { max: 540, skipBlankLines: true, skipComments: true }],
+      'max-lines': ['warn', { max: 560, skipBlankLines: true, skipComments: true }],
     },
   },
   // [HISTORICAL·2026-09 idle-pi-reclamation] 空闲 pi 进程回收功能接入（reaper 装配 +

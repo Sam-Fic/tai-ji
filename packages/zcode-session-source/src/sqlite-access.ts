@@ -243,12 +243,7 @@ function wrapDb(db: SqliteDb): ZcodeReadonlyDb {
     },
     readSchemaVersion() {
       try {
-        const row = db.prepare('SELECT app_version FROM schema_migration ORDER BY time_applied DESC LIMIT 1').get()
-        if (typeof row === 'object' && row !== null) {
-          const v = (row as Record<string, unknown>).app_version
-          if (typeof v === 'string' && v.length > 0) return v
-        }
-        return undefined
+        return queryLatestSchemaVersion(db)
       } catch {
         // best-effort 诊断（主查询已失败，schema_migration 可能同样不可读）：吞错不带版本
         return undefined
@@ -266,6 +261,20 @@ function wrapDb(db: SqliteDb): ZcodeReadonlyDb {
 }
 
 /**
+ * 读 schema_migration 最新版本（单点）：SQL 与行提取只此一份，readSchemaVersion
+ * 诊断面与 assertKnownSchema 门禁面共用；表不可读的处置由调用侧分流（门禁
+ * fail-fast 抛 ZcodeSchemaDriftError，诊断面吞错返回 undefined）。
+ */
+function queryLatestSchemaVersion(db: SqliteDb): string | undefined {
+  const row = db.prepare('SELECT app_version FROM schema_migration ORDER BY time_applied DESC LIMIT 1').get()
+  if (typeof row === 'object' && row !== null) {
+    const v = (row as Record<string, unknown>).app_version
+    if (typeof v === 'string' && v.length > 0) return v
+  }
+  return undefined
+}
+
+/**
  * schema 版本已知集门禁：读 schema_migration 最新版本，超出 KNOWN_ZCODE_SCHEMA_
  * VERSIONS（或表不可读）→ ZcodeSchemaDriftError（observedVersion 区分「有版本但不
  * 认识」与「表不可读」两种归因）。检查通过静默返回。
@@ -273,11 +282,7 @@ function wrapDb(db: SqliteDb): ZcodeReadonlyDb {
 export function assertKnownSchema(db: SqliteDb): void {
   let observedVersion: string | undefined
   try {
-    const row = db.prepare('SELECT app_version FROM schema_migration ORDER BY time_applied DESC LIMIT 1').get()
-    if (typeof row === 'object' && row !== null) {
-      const v = (row as Record<string, unknown>).app_version
-      if (typeof v === 'string' && v.length > 0) observedVersion = v
-    }
+    observedVersion = queryLatestSchemaVersion(db)
   } catch {
     throw new ZcodeSchemaDriftError(
       undefined,

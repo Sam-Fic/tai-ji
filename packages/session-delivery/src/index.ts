@@ -42,12 +42,17 @@ export {
 export {
   // 用户回收错误类（D4-1）：cancel/drain 对挂起 waiter 的 reject，消费方 instanceof 判别
   DeliveryReclaimError,
+  // 终局持久化失败分型错误（磁盘权威裁决）：ack 写盘失败 → 内存不登记终态，消费方
+  // instanceof 判别后显式上报（外部送达事实不回滚，恢复后可能重投）
+  DeliveryAckPersistError,
 } from './errors.js'
 
 export {
   // v3 波 4（统一消息投递 §3.8 文本行）：磁盘 outbox——DeliveryStore 的 runtime 半区
   // 实现（fs 窄接口注入，本包零 node:fs import；目录/文件路径由 runtime 侧动态推导）
   createDiskDeliveryStore,
+  // 读失败显式分型（读失败 ≠ 空文件）：消费方 instanceof 判别 / 诊断定位
+  DiskStoreReadError,
   type DiskDeliveryStore,
   type DiskDeliveryStoreDeps,
   type DiskStoreFs,

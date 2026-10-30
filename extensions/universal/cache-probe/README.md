@@ -39,6 +39,7 @@ python3 extensions/universal/cache-probe/analyze.py ~/.pi/agent/sessions ~/.taij
 
 ## 已知限制（实测查明）
 
+- Google 系模型的 system prompt 不可观测：pi-ai 对 Google 请求的 `systemInstruction` 恒传 string（`google-generative-ai.js` / `google-vertex.js` 实装），`extractSystem` 不消费 string 形态 → Google 流量的 `spFull` 恒为哨兵值 `no-system`，system prompt 漂移会被归因矩阵计入「前缀未变」档。仅当采集范围纳入 Google 系模型时构成实际失明（当前采集 fleet 无 Google 模型，零影响）。
 - pi CLI 启动路径（`--session` / `--continue` / `--resume`）的 session_start reason 恒为 `startup`（pi 侧只做 SessionManager.open/continueRecent，不走运行时 switch 路径；`resume` / `new` / `fork` 仅运行时 switch/fork 出现，`reload` 仅 /reload 出现）——跨进程识别靠 baseline 标记 + 时间戳 gap，漂移检测靠 hash 对比，均不受影响。
 - 同进程内修改 AGENTS.md 不进 system prompt（pi 启动快照），contextFiles 漂移只出现在跨进程边界——pi 的行为，不是探针缺陷。
 - 真实环境实测发现：extension 链（如 subagent-workflow）存在每 turn 级的 system prompt 动态注入，由 spFull 单独捕获——这正是它存在的价值。

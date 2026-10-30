@@ -171,7 +171,10 @@ export class BackgroundTaskService {
 
   /**
    * 读指定 session 的 registry 全量条目。目录/文件不存在（含垃圾 sid）→ 静默空表；
-   * 损坏 → 空表 + corrupted:true（.corrupt 隔离，D1/S7 语义），不 throw。
+   * 损坏 → 空表 + corrupted:true（.corrupt 隔离，D1/S7 语义）；读失败（权限等）→
+   * 上抛（失败语义折叠修复：不折叠成空表）——RPC 读侧由 server 中央 catch 回
+   * error envelope（显式失败），广播侧 publishBackgroundTasksUpdate catch 降级跳过
+   * 本轮广播。kill 流程的锁内重读同样上抛 → 既有 catch 归 registry-write-failed。
    */
   listTasks(sessionId: string): BackgroundTaskListResult {
     return readRegistryEntriesWithStatus(this.registryPathFor(sessionId))

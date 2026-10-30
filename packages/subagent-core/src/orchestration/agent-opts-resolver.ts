@@ -46,7 +46,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * （pi 用户单独装本包）不保证存在，顶层值 import 会让整个 extension 加载崩溃；
  * 且 builtin esbuild bundle 会把 import 的包内联成双实例（先例：session-runner.ts
  * 的 PI_WORKFLOW_SCHEMA env 契约注释）。故本地复制，任一端改动判定逻辑必须同步
- * 另一端（两端 docstring 互相锚定）。
+ * 另一端（两端 docstring 互相锚定）；两侧一致由 structured-output 侧
+ * __tests__/object-root-schema-parity.test.ts 跨包对拍锁定（行为级：本函数文案
+ * 选行 ↔ 对端 isObjectRootSchema 判定），副本漂移即红。
  *
  * draft-07 语义：无 type 时类型关键字按值形态适用——properties/required 等
  * object 特有关键字的存在意味着作者在描述 object 输出，算 object 根；组合根

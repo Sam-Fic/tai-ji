@@ -17,7 +17,6 @@ import type { SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 
 const logger = getLogger("pi-system-prompt-trace");
-import { summarizePromptDiff } from "./diff.js";
 import { mapReasonForFirstWrite, SYSTEM_PROMPT_CUSTOM_TYPE } from "./types.js";
 import type {
 	PresetFallbackFact,
@@ -62,7 +61,6 @@ export interface SystemPromptTrace {
 interface CurrentPrompt {
 	version: number;
 	hash: string;
-	fullText: string;
 }
 
 function computePromptHash(text: string): string {
@@ -78,14 +76,7 @@ export function createSystemPromptTrace(env: TraceEnv, stash: SwitchStash): Syst
 	// 未回落 / 未注入 → undefined，entry 的 presetFallback 字段不出现（既有形状向后兼容）。
 	const presetFallback = env.getPresetFallback();
 
-	const write = (
-		ctx: TraceContext,
-		text: string,
-		hash: string,
-		reason: TraceReason,
-		version: number,
-		parentFullText: string | undefined,
-	): void => {
+	const write = (ctx: TraceContext, text: string, hash: string, reason: TraceReason, version: number): void => {
 		const data: SystemPromptTraceEntryData = {
 			version,
 			hash,
@@ -93,9 +84,6 @@ export function createSystemPromptTrace(env: TraceEnv, stash: SwitchStash): Syst
 			fullText: text,
 			charCount: text.length,
 		};
-		if (parentFullText !== undefined) {
-			data.parentVersionDiffSummary = summarizePromptDiff(parentFullText, text);
-		}
 		// 回落事实随本进程写出的每条 entry 携带：本次 pi 运行确实以回落档启动，
 		// resume 快照与后续 change 同属该运行，披露一致（事件语义 = 本次运行口径）。
 		if (presetFallback !== undefined) {
@@ -145,14 +133,14 @@ export function createSystemPromptTrace(env: TraceEnv, stash: SwitchStash): Syst
 				if (current !== null) {
 					// 后续 turn：hash 对比去重（设计 D2），变化才写 change
 					if (hash === current.hash) return;
-					write(ctx, text, hash, "change", current.version + 1, current.fullText);
-					current = { version: current.version + 1, hash, fullText: text };
+					write(ctx, text, hash, "change", current.version + 1);
+					current = { version: current.version + 1, hash };
 					return;
 				}
 				// 本 session_start 周期的首个 turn_start
 				if (baseline !== null && baseline.hash === hash) {
 					// 跨重启基线命中且未变化：不写，但确立 current 供后续 turn 继续对比
-					current = { version: baseline.version, hash, fullText: text };
+					current = { version: baseline.version, hash };
 					return;
 				}
 				// 必写：有基线 → resume（该 session 已有历史版本，这是重开点的快照，version 续接）；
@@ -160,9 +148,8 @@ export function createSystemPromptTrace(env: TraceEnv, stash: SwitchStash): Syst
 				const version = baseline === null ? 1 : baseline.version + 1;
 				const reason: TraceReason =
 					baseline === null ? mapReasonForFirstWrite(sessionStartReason ?? "startup") : "resume";
-				const parentFullText = baseline === null ? undefined : baseline.fullText;
-				write(ctx, text, hash, reason, version, parentFullText);
-				current = { version, hash, fullText: text };
+				write(ctx, text, hash, reason, version);
+				current = { version, hash };
 			} catch (e) {
 				// 留痕是诊断性旁路：任何失败都不允许影响 agent 主流程（logger.error → appendEntry 持久化）
 				logger.error("turn_start handler failed", { detail: String(e) });

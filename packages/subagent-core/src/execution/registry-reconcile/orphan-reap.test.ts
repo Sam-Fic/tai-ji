@@ -4,18 +4,17 @@
 //   （维护轮只登记/删除，不写任何事件帧）；删引用后触发维护轮，宽限不调零组
 //   不删（首判时刻锚定——老 mtime 存量组首轮也不删，「不采用锚 mtime」裁决的
 //   回归钉）、调零组删三件 + 残锁 + 清登记；存活引用 run 不受影响。
-// - 场景 19「对账清理存量形态与接管保护」：v1 条目引用的存量 run（旧双源文件
+// - 场景 19「对账清理存量形态与接管保护」：引用命中的存量 run（旧双源文件
 //   形态、无 record 流）不删；A 建 run → 删 A → B resume 接管补注册 → 维护轮
 //   三件不删。
 //
 // 被测函数 = reapOrphanRuns（persistence/run-state-evidence.ts，[D9] 移除后无主
-// run 的唯一磁盘清理通道）。引用集三代（v2 注册条目 / v1 全量快照条目 /
-// pre-W17 link 指针）的解析本体在壳侧注入点（subagent-workflow/session-lifecycle
-// 的 collectAliveWorkflowRunReferences，u1a 领地）——core 层契约 = 注入并集命中
-// 即保护，本文件按该契约以注入集合模拟三代引用与接管；三代解析本体的测试覆盖
-// 已由壳侧真实解析路径承接（v1/v2 两代见 scenario-08 / scenario-19；link 指针
-// 分支见 scenario-19「pre-W17 link 指针条目引用」用例——同文件另含 sessions 根
-// 真 IO 故障整轮跳过用例）。
+// run 的唯一磁盘清理通道）。引用集解析本体在壳侧注入点（subagent-workflow/
+// session-lifecycle 的 collectAliveWorkflowRunReferences，u1a 领地）——v2 注册
+// 条目单代（用户 2026-10-30 裁决无 v1/link 存量数据），core 层契约 = 注入并集
+// 命中即保护，本文件按该契约以注入集合模拟引用与接管；解析本体的测试覆盖
+// 已由壳侧真实解析路径承接（v2 见 scenario-08 / scenario-19，旧格式条目不产生
+// 引用见 scenario-19——同文件另含 sessions 根真 IO 故障整轮跳过用例）。
 //
 // 测试纪律：全部 mkdtempSync 自建自删（禁触真实数据目录）；时钟经 options.now
 // 注入（确定性）；reap 不读 record 内容（候选按文件名 / 引用按注入 / 时间按
@@ -194,7 +193,7 @@ describe("场景 8：终局化移除 + 对账清理（D9 + 裁决点 7）", () =
 });
 
 describe("场景 19：对账清理存量形态与接管保护（裁决点 7）", () => {
-  it("v1 条目引用的存量 run（旧双源文件形态、无 record 流）不删——三代引用并集命中即保护", async () => {
+  it("引用命中的存量 run（旧双源文件形态、无 record 流）不删——注入引用并集命中即保护（core 契约与解析形态无关）", async () => {
     seedLegacyRunFootprint("wf-legacy");
     const { deps } = makeDeps(new Set(["wf-legacy"]));
 

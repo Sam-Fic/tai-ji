@@ -2766,7 +2766,7 @@
         "../extensions/universal/subagent-workflow/src/__tests__/workflow-events.test.ts",
         "../extensions/universal/subagent-workflow/src/__tests__/adoption.test.ts",
         "../packages/subagent-core/src/execution/engine/__tests__/registry.test.ts",
-        "../packages/subagent-core/src/execution/engine/__tests__/reverse-router-slot-read.test.ts"
+        "../packages/subagent-core/src/execution/engine/client/__tests__/engine-client.test.ts"
       ],
       "dimensions": [
         "extension-api",
@@ -3282,12 +3282,12 @@
     },
     {
       "id": "C-ext-30",
-      "summary": "命令/技能获取统一走 @zhushanwen/pi-exec-skills 共享包（extensions/shared/exec-skills/，ADR-0074）：detectExecSkills 自研扫描直读磁盘 = 发现（技能热装即时可见），resolveSkills = 执行门禁（pi.getCommands 过滤 source==='skill' 确认 pi 实际认得）；禁止各扩展自扫 skill 目录或直用 pi 注册表快照（getCommands 启动加载集，reload 才刷新）形成第二实现。机器执行点 = check-extension-dependencies.mjs 依赖登记双向校验——反向：包 package.json dependencies/peerDependencies 声明的 @zhushanwen/* / @taiji/* 包必须登记进 extension-dependencies.json 该条目 dependsOn，漏登记即红（含 extensions/shared/ 库的条目存在性）；正向：dependsOn 引用的 workspace 内包必须可解析，悬空引用即红；pi bump 的目录/overrides 语义漂移由 pi-semantics PS-53 探针族重验兜住",
+      "summary": "命令/技能获取统一走 @zhushanwen/pi-exec-skills 共享包（extensions/shared/exec-skills/，ADR-0096）：detectExecSkills 自研扫描直读磁盘 = 发现（技能热装即时可见），resolveSkills = 执行门禁（pi.getCommands 过滤 source==='skill' 确认 pi 实际认得）；禁止各扩展自扫 skill 目录或直用 pi 注册表快照（getCommands 启动加载集，reload 才刷新）形成第二实现。机器执行点 = check-extension-dependencies.mjs 依赖登记双向校验——反向：包 package.json dependencies/peerDependencies 声明的 @zhushanwen/* / @taiji/* 包必须登记进 extension-dependencies.json 该条目 dependsOn，漏登记即红（含 extensions/shared/ 库的条目存在性）；正向：dependsOn 引用的 workspace 内包必须可解析，悬空引用即红；pi bump 的目录/overrides 语义漂移由 pi-semantics PS-67 探针族重验兜住",
       "scope": [
         "extensions/**"
       ],
       "authority": [
-        "adr/decisions.md#ADR-0074",
+        "adr/decisions.md#ADR-0096",
         "extensions/extension-conventions.md"
       ],
       "dimensions": [
@@ -3353,7 +3353,7 @@
     },
     {
       "id": "C-ext-32",
-      "summary": "模型可见性投喂单点 = provider-live-sync 包（extensions/universal/provider-live-sync/，投喂模块 src/catalog-bridge.ts）：taiji 侧目录缓存 → pi 进程注册表常驻条目的写入单点。新增模型数据来源（未来第三条缓存链、新目录源）时改该投喂模块的输入，禁止在其他扩展新开 registerProvider/registerNativeProvider/registerVirtualModel 常驻注入——注入修的是注册表这一事实源，消费方（--model 解析 / rpc set_model / rename / smart-context / permission / scheduler / subagent 校验 / provider 对账）零改动自动受益，新开注入点等于绕过单点、制造第二写入方。scheduler 的 ack 合成轮（src/ack-turn.ts 临时注册合成 provider、one-shot 注销）是执行通道覆写、非可见性投喂，语义不同不在禁列。机器执行点 = check_register_allowlist.py 调用点白名单（包粒度：provider-live-sync + scheduler 两包，测试目录排除）。豁免（provider-plugin-access D7）：羊毛 pi 扩展 pi-wool-<family>（独立仓 tai-ji-plugin）自行 registerProvider 注册自有 provider（providerId = wool-<family>），数据源 = models.json 条目（上游目录由 taiji 插件经 providers.write 的 models 字段写回），不参与 catalog-bridge 投喂链 → 属本条豁免；豁免边界 = 不得注册 wool-<family> 之外的 provider、不得向 taiji 目录缓存写入。主仓 extensions/ 无羊毛包（已迁独立仓），本脚本包粒度白名单维持 provider-live-sync + scheduler 两包不变",
+      "summary": "模型可见性投喂单点 = provider-live-sync 包（extensions/universal/provider-live-sync/，投喂模块 src/catalog-bridge.ts）：taiji 侧目录缓存 → pi 进程注册表常驻条目的写入单点。新增模型数据来源（未来第三条缓存链、新目录源）时改该投喂模块的输入，禁止在其他扩展新开 registerProvider/registerNativeProvider/registerVirtualModel 常驻注入——注入修的是注册表这一事实源，消费方（--model 解析 / rpc set_model / rename / smart-context / permission / scheduler / subagent 校验 / provider 对账）零改动自动受益，新开注入点等于绕过单点、制造第二写入方。机器执行点 = check_register_allowlist.py 调用点白名单（包粒度、测试目录排除）；scheduler 的 ack 合成轮已随任务库分离退役，包内无注册表注入调用点。豁免（provider-plugin-access D7）：羊毛 pi 扩展 pi-wool-<family>（独立仓 tai-ji-plugin）自行 registerProvider 注册自有 provider（providerId = wool-<family>），数据源 = models.json 条目（上游目录由 taiji 插件经 providers.write 的 models 字段写回），不参与 catalog-bridge 投喂链 → 属本条豁免；豁免边界 = 不得注册 wool-<family> 之外的 provider、不得向 taiji 目录缓存写入。主仓 extensions/ 无羊毛包（已迁独立仓）",
       "scope": [
         "extensions/**"
       ],

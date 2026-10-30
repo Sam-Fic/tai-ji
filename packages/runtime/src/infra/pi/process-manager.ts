@@ -374,13 +374,15 @@ export class ProcessManager implements IProcessManager {
     getCrashJournal().append({ layer: 'pi', event: 'shutdown', reason: 'planned', sessionId })
     // Remove from maps first to prevent exitCallback from triggering,
     // but keep a reference so we can kill after removal.
-    // kill() is guaranteed to resolve (SIGCONT → SIGTERM → 2s → SIGKILL).
+    // kill() 成功路径（signal-delivered / already-dead）resolve；失败（进程仍活，
+    // 如 EPERM）reject KillSignalError——客户端已进 kill-failed 终态（pending 已
+    // rejectAll），此处 catch 后继续收尾并留 LEAK-RISK 上报，孤儿进程交宿主/用户处置。
     // 幂等：Map 无条目时（并发 deleteSession / 强杀分支已先行）静默跳过，不重复 kill。
     this.processes.delete(sessionId)
     this.clientToId.delete(proc.client)
     try {
       await proc.client.kill()
-    // eslint-disable-next-line taste/no-silent-catch -- kill() has internal SIGTERM→SIGKILL fallback; orphan risk logged
+    // eslint-disable-next-line taste/no-silent-catch -- kill failure (process still alive) is an environment error: session cleanup must proceed, orphan risk logged below
     } catch (e) {
       console.warn(`[process-manager] [PROCESS-LEAK-RISK] kill failed for session ${sessionId}:`, toErrorMessage(e))
     }

@@ -4,11 +4,10 @@ import { getLogger } from '@zhushanwen/pi-extension-logger'
 import type { SchedulerBackend } from './backend.js'
 import { autoName, generateTaskId } from './format.js'
 import { computeNextRunAt, MS_PER_DAY, MS_PER_MINUTE, parseDuration } from './parsing.js'
-import { appendExecutionRecord, toTaskSnapshot } from './types.js'
+import { appendExecutionRecord } from './types.js'
 import type {
   AddOptions,
   ScheduledTask,
-  SchedulerEntryOp,
   ScheduleSpec,
 } from './types.js'
 
@@ -17,19 +16,14 @@ const logger = getLogger('scheduler')
 const MAX_TASKS = 50
 const RATE_LIMIT_PER_MINUTE = 6
 // tick 间隔（30s）。导出供测试 import 复用（fake timers 推进量与生产节奏同源——禁
-// 测试本地重造 30_000 魔数，改值即测试锚同步漂移）；ack 写盘自检为事件驱动
-//（maybeStartAck 由任务创建回调触发，见 index.ts 创建汇聚点；message_start /
-// turn_end 挂点只承载覆写武装与安全网注销），不引用本常量。
+// 测试本地重造 30_000 魔数，改值即测试锚同步漂移）。
 export const TICK_INTERVAL_MS = 30_000
 const DEFAULT_EXPIRY_DAYS = 7
 const DEFAULT_EXPIRY_MS = DEFAULT_EXPIRY_DAYS * MS_PER_DAY // 7 days
-// U4 dispatch 模型切换（设计 D3 修订版 + D1 归属简化 + ADR-0122 事实查询翻转）：
-// - dispatch 注入消息的 customType 标记前缀（sendMessage 的消息标记，供运维从 session 流
-//   识别 scheduler dispatch 注入；与 ack 触发器前缀 pi-scheduler-ack: 避让）
-// - 恢复判定锚点 = isIdle() 同步事实查询（判定层级最高）：agent_settled 确定性事件是
-//   提前触发的加速器（事件到达即查询并兑现）；每 tick 开头对未决记录做一次同步事实
-//   查询兜正确性（事件丢失时由查询收敛——拉保证正确、事件只优化延迟）。原 2-tick
-//   计数对账（时间窗猜测事件丢失）已按 ADR-0122 删除。
+// dispatch 注入消息的 customType 标记前缀（sendMessage 的消息标记，供运维从 session 流
+// 识别 scheduler dispatch 注入）。U4 恢复判定锚点 = isIdle() 同步事实查询（判定层级
+// 最高）：agent_settled 确定性事件是提前触发的加速器；每 tick 开头对未决记录做一次
+// 同步事实查询兜正确性（ADR-0122 事实查询翻转）。
 const DISPATCH_CUSTOM_TYPE_PREFIX = 'pi-scheduler:'
 
 /**
@@ -52,8 +46,8 @@ export interface SchedulerModelOps {
 }
 
 /**
- * 未决模型切换记录（纯内存态）。模型语义异常不进持久化词表
- * （replay 检查对 advance.status 硬校验 'success'，旁路字段会炸重放推进）。
+ * 未决模型切换记录（纯内存态）。模型语义异常不进任务快照（模型恢复是会话侧瞬时
+ * 编排态，非任务事实——重启后无需恢复，未恢复的 dispatch 已按 failed/成功记账）。
  *
  * 生命周期（ADR-0122 事实查询翻转后）：dispatch 受理 → 记录创建（in-flight 等价语义：
  * 等 run 落定）；恢复兑现锚点 = isIdle() 同步事实查询（agent_settled 事件提前触发 +
@@ -67,7 +61,7 @@ interface PendingModelSwitch {
   targetModelRef: string
 }
 
-// HISTORY_LIMIT 单点在 types.ts（ext-simplify-08 L5）——与 replay.ts 的 advance 折叠共用
+// HISTORY_LIMIT 单点在 protocol types.ts——runtime 记账与快照写入口共用同一上限。
 // STALE_CTX_MARKER（文案兜底分诊词）已迁移到 ext-guards 共享检查（guardStaleCtx 内部
 // 引用，本文件不再直接持有）。语义：G1 模块级代际检测（isCtxStale）为主判；文案子串
 // 覆盖代际盲区——显式 reload / cwd 变化触发 clearExtensionCache 后 jiti 重新 import 产生
@@ -101,8 +95,8 @@ export class SchedulerRuntime {
   private modelOpChain: Promise<void> = Promise.resolve()
 
   /**
-   * 依赖反转构造：backend 承担 appendEntry/pi.sendMessage/时间源，runtime 只持有内存态。
-   * 不触碰任何 FS / session JSONL（测试可用 MockSchedulerBackend 零副作用注入）。
+   * 依赖反转构造：backend 承担快照落盘/投递端口/时间源，runtime 只持有内存态。
+   * 不触碰任何 FS / pi API（测试可用 MockSchedulerBackend 零副作用注入）。
    *
    * isCtxStale（G1 代际检测，S9/R3-M1）：返回 true 表示本 runtime 建立时的 session 已被
    * 替换。index.ts 装配点注入（模块级代数比对，R3-M1），使 stale 分诊不依赖 pi 错误文案；
@@ -115,13 +109,6 @@ export class SchedulerRuntime {
     this.backend = backend
     this.isCtxStale = isCtxStale
     this.modelOps = modelOps
-    // U6c：session_tree（树回退）重折叠接线——生产 backend 在 pi.on('session_tree')
-    // 时按活跃路径重折叠任务集并回调；落点 = 本 tasks Map（loadTasks 换集）。
-    // 纯重建：不 dispatch、不 append op、不动 tickTimer 启停（常驻循环照常消费
-    // 新任务集，被撤子树任务不在集内即到点不触发）也不动 pendingModelSwitch
-    // （撤回编排前置 = 会话空闲，无在途模型切换记录）。测试替身不实现
-    // onSessionTree 时 ?. 订阅为 no-op，既有单测路径不变。
-    backend.onSessionTree?.((tasks) => this.loadTasks(tasks))
   }
 
   // ── 任务 CRUD ──
@@ -168,14 +155,8 @@ export class SchedulerRuntime {
     }
 
     this.tasks.set(id, task)
-    // append-only：写 upsert op 到 owner session JSONL（ER-APPEND-FAIL catch，内存态已更新）
-    this.appendEntrySafe({
-      op: 'upsert',
-      taskId: id,
-      // getSessionFile() 在 --no-session 模式返回 undefined → '' 兜底（该模式 appendEntry 无 owner 不落盘）
-      ownerSessionFile: this.backend.getSessionFile() ?? '',
-      task: toTaskSnapshot(task),
-    })
+    // 快照落盘（内存态已更新，失败 warn 不 rethrow——见 persistTasksSafe）
+    this.persistTasksSafe()
     return task
   }
 
@@ -191,9 +172,6 @@ export class SchedulerRuntime {
     const task = this.tasks.get(id)
     if (!task) return false
     task.enabled = enabled
-    // enable 重算到未来后的新 nextRunAt；携带到 toggle op 持久化，
-    // 防 resume 重放从 upsert 快照回退到旧过期 nextRunAt（P1 跨 session 持久化）
-    let recalcedNext: number | undefined
     // enable 时若 nextRunAt 已过期，重算，避免 enable 瞬间立即触发
     if (enabled && task.nextRunAt < this.backend.now()) {
       const next = computeNextRunAt(task.schedule, this.backend.now())
@@ -201,7 +179,6 @@ export class SchedulerRuntime {
         this.disableForInvalidCron(task)
       } else {
         task.nextRunAt = next
-        recalcedNext = next
         // MF-1：重算到未来后清除残留 pending。pending 是「到期待 dispatch」标记，
         // 由 busy tick 的 step2 置位（W4 跨 tick 重试保留）。nextRunAt 已推到未来则该标记过期，
         // 否则下个 tick step3 `pending && enabled` 会在重算的未来时间点之前提前 dispatch，
@@ -209,23 +186,16 @@ export class SchedulerRuntime {
         task.pending = false
       }
     }
-    // 全部 mutation 完成后 append toggle：确保 append 的 enabled 是最终值
-    // （LOW4：cron-invalid 回退 enabled=false 的路径，append enabled=false 而非入参 true）
-    // P1：nextRunAt 仅 enable 重算到未来时携带——持久化重算值，防 resume 重放回退到 upsert 快照的旧过期值。
-    // 普通 toggle / cron 失效回退（recalcedNext=undefined）不带，重放时保持 upsert 快照值。
-    this.appendEntrySafe({
-      op: 'toggle',
-      taskId: id,
-      enabled: task.enabled,
-      ...(recalcedNext !== undefined && { nextRunAt: recalcedNext }),
-    })
+    // 全部 mutation 完成后快照落盘：enabled / 重算的 nextRunAt（含 cron 失效回退的
+    // enabled=false）以最终值持久化（快照模式下无 op 时序拼接问题）
+    this.persistTasksSafe()
     return true
   }
 
   deleteTask(id: string): boolean {
     const deleted = this.tasks.delete(id)
     if (deleted) {
-      this.appendEntrySafe({ op: 'delete', taskId: id })
+      this.persistTasksSafe()
     }
     return deleted
   }
@@ -233,8 +203,7 @@ export class SchedulerRuntime {
   async runTaskNow(id: string): Promise<boolean> {
     const task = this.tasks.get(id)
     if (!task) return false
-    // gap3：持久化由 dispatchTask 成功后 append advance(recurring)/delete(once) 隐式覆盖，
-    // 不在此重复 append（advance 已在 dispatchTask chokepoint）
+    // 持久化由 dispatchTask 成功后的 onDispatchSuccess 快照统一覆盖，不在此重复写
     return await this.dispatchTask(task)
   }
 
@@ -307,15 +276,15 @@ export class SchedulerRuntime {
 
     const now = this.backend.now()
 
-    // 1. 过期清理（must-fix 2 / CL9：append delete 抵消残留 upsert，防 resume 复活已过期任务）
-    // append-only 下 upsert entry 永久残留 JSONL（D10 不裁剪），若无 delete entry 抵消，
-    // resume 时 replayFoldEntries 会从 upsert 重放出已过期任务 → 每 resume 复活直到首个 tick。
+    // 1. 过期清理：过期任务移出任务集，循环后一次快照落盘（防重启后过期任务复活）
+    let expiredAny = false
     for (const [id, task] of this.tasks) {
       if (task.expiresAt && now >= task.expiresAt) {
         this.tasks.delete(id)
-        this.appendEntrySafe({ op: 'delete', taskId: id })
+        expiredAny = true
       }
     }
+    if (expiredAny) this.persistTasksSafe()
 
     // 2. 标记到期（pending 是运行时标记，与 enabled 正交）
     for (const task of this.tasks.values()) {
@@ -394,9 +363,9 @@ export class SchedulerRuntime {
    * 失败降级（分级，不阻塞核心
    * 调度）：modelOps 缺省 / 会话无当前模型 / setModel false → 日志 + 放弃切换，照常 dispatch。
    *
-   * 持久化（append-only）：recurring 成功推进 nextRunAt → append advance（status='success' CL8）；
-   * once 成功 → append delete。失败 dispatch 不 append（CL7 重试语义，transient 失败 nextRunAt 未推进）。
-   * 模型切换语义不进任何持久化词表（U4 (c)：appendExecutionRecord/advance/delete 行为不变）。
+   * 持久化（快照）：成功受理后 onDispatchSuccess 统一落盘（记账 + once 删除 /
+   * recurring 推进）；失败 dispatch 走 failed 记账落盘（nextRunAt 未推进，下 tick
+   * 重试）。模型切换记录是纯内存态，不进快照（模型语义异常非任务事实）。
    */
   private async dispatchTaskInner(task: ScheduledTask): Promise<boolean> {
     // 检查速率限制（U4 (b)：rate-limit 拒绝路径保持在任何 setModel 之前，无模型残留）
@@ -503,6 +472,9 @@ export class SchedulerRuntime {
       task.lastStatus = 'failed'
       task.pending = false
       appendExecutionRecord(task, this.backend.now(), 'failed')
+      // failed 记账落盘：面板直读快照，lastError/history 可见性依赖此处（nextRunAt
+      // 未推进，下 tick 重试——重试轮每次失败一次写，低频可接受）
+      this.persistTasksSafe()
       return false
     }
     return this.onDispatchSuccess(task)
@@ -510,6 +482,8 @@ export class SchedulerRuntime {
 
   /**
    * dispatch 成功后的状态更新与持久化（dispatchTaskInner 受理成功后调用）。
+   * 持久化 = 全量快照落盘一次（记账字段 + once 删除 / recurring 推进 / cron 失效停用
+   * 三分支的最终态统一覆盖；旧 advance/delete op 拼接已随 event sourcing 退役）。
    */
   private async onDispatchSuccess(task: ScheduledTask): Promise<boolean> {
     const now = this.backend.now()
@@ -522,22 +496,15 @@ export class SchedulerRuntime {
 
     if (task.kind === 'once') {
       this.tasks.delete(task.id)
-      this.appendEntrySafe({ op: 'delete', taskId: task.id })
     } else {
       const next = computeNextRunAt(task.schedule, now)
       if (next === undefined) {
         this.disableForInvalidCron(task)
       } else {
         task.nextRunAt = next
-        this.appendEntrySafe({
-          op: 'advance',
-          taskId: task.id,
-          nextRunAt: next,
-          at: now,
-          status: 'success',
-        })
       }
     }
+    this.persistTasksSafe()
 
     this.dispatchTimestamps.push(now)
     return true
@@ -677,7 +644,8 @@ export class SchedulerRuntime {
    * ERR-2 fallback（ext-simplify-17 B3 抽取）：cron 表达式失效 → 停用任务并记录失败原因
    * （toggle enable 重算与 dispatch 成功推进两处共用）。禁止 `?? now()` 类 fallback
    * （会使 nextRunAt=now，下个 tick 立即重算 → 死循环）；nextRunAt 保留原值——
-   * enabled=false 后 tick 不再触发。
+   * enabled=false 后 tick 不再触发。持久化由两个调用点随后的 persistTasksSafe 统一覆盖
+   * （快照模式下停用态必然落盘——旧 event sourcing 下此分支曾缺 op、resume 后复活）。
    */
   private disableForInvalidCron(task: ScheduledTask): void {
     task.enabled = false
@@ -688,27 +656,26 @@ export class SchedulerRuntime {
   // ── 装配与回调 ──
 
   /**
-   * 任务集换装入口（装配点 session_start 注入初始数组 + U6c session_tree 重折叠共用；
-   * 读盘/重放由 backend 完成，runtime 只持有内存态）。
+   * 任务集换装入口（装配点 session_start 注入初始数组；读盘由 backend 完成，
+   * runtime 只持有内存态）。
    */
   loadTasks(tasks: ScheduledTask[]): void {
     this.tasks = new Map(tasks.map(t => [t.id, t]))
   }
 
-  // ── append-only 持久化辅助 ──
+  // ── 快照持久化辅助 ──
 
   /**
-   * 委托 backend.appendEntry。失败 → logger.warn + 不 rethrow（ER-APPEND-FAIL）。
-   * 内存态已先行更新（at-least-once 已知恶化窗口：append 失败则该 op 丢失，resume 重放回退）。
-   * 不再设 task.lastError='persist failed'（append 失败是 transient，不应污染业务态）。
+   * 全量任务集快照落盘。失败 → logger.warn + 不 rethrow（原 ER-APPEND-FAIL 语义延续）：
+   * 内存态已先行更新、不中断调度，下一次任务集变化的写点重试（残余窗口 = 「自上次
+   * 成功写之后的变化」在进程崩溃时丢失，见设计 §4.3 失败语义）。
+   * 不设 task.lastError='persist failed'（落盘失败是 transient，不应污染业务态）。
    */
-  private appendEntrySafe(op: SchedulerEntryOp): void {
+  private persistTasksSafe(): void {
     try {
-      this.backend.appendEntry(op)
+      this.backend.persistTasks([...this.tasks.values()])
     } catch (err) {
-      // best-effort 降级（ER-APPEND-FAIL）：append-only 模型下 append 失败仅丢失该 op 的持久化，
-      // 内存态已先行更新、不 rethrow，业务流程继续。at-least-once 已知恶化窗口（resume 重放回退）。
-      logger.warn('appendEntry failed', { error: toErrorMessage(err) })
+      logger.warn('scheduler store persist failed', { error: toErrorMessage(err) })
     }
   }
 }

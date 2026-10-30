@@ -1610,14 +1610,21 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
    * stream 类入 ring，晚订阅 renderer 由 snapshot 重放兜底）。bus 未注入时 no-op（nullable
    * 注入语义与域内其余 publish 点一致）。entry 形状为 extension-protocol 契约，shared 侧
    * 逐字段镜像（u-proto D9，结构兼容直赋）。
+   * registry 读失败（listTasks 上抛）→ warn + 跳过本轮广播（拉取是真相通道，广播只做
+   * 提示）：本方法跑在 mtime 轮询的 setInterval 回调内，上抛会炸 runtime 进程；下一次
+   * mtime 变化自动重试广播，renderer 主动拉取路径由 RPC 中央 catch 回显式 error envelope。
    */
   private publishBackgroundTasksUpdate(sessionId: string): void {
-    const { entries, corrupted } = this.backgroundTasks.listTasks(sessionId)
-    const msg: ServerMessage = {
-      type: 'backgroundTask:updated',
-      payload: { sessionId, tasks: entries, corrupted },
+    try {
+      const { entries, corrupted } = this.backgroundTasks.listTasks(sessionId)
+      const msg: ServerMessage = {
+        type: 'backgroundTask:updated',
+        payload: { sessionId, tasks: entries, corrupted },
+      }
+      this.messageBus?.publish(sessionId, msg)
+    } catch (e) {
+      console.warn('[session-service] backgroundTask update broadcast skipped (registry read failed), sid=', sessionId, e instanceof Error ? e.message : e)
     }
-    this.messageBus?.publish(sessionId, msg)
   }
 
   /**

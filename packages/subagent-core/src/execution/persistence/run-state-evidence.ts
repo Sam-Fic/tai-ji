@@ -634,8 +634,9 @@ export function findRunSettlementEvidence(stateDir: string, runId: string): RunS
 // createPiHostRunEnumeration（run 维度枚举 ≠ session 维度引用集采集，且维护轮
 // 不应依赖 pi 布局的 agentDir 活源）。
 //
-// 引用集三代形态（都解析——只认 v2 会把存量 run 首轮误判无主并不可逆删除）：
-// v2 注册条目（当前主形态）/ v1 全量快照条目 / pre-W17 link 指针。
+// 引用集形态 = v2 注册条目单代（用户 2026-10-30 裁决无 v1/link 存量数据——壳侧
+// 注入点只解析 v2，v1 全量快照 / pre-W17 link 指针条目按不存在处理，与壳
+// jsonl-run-store loadAll 的 v2-only 发现域两侧语义一致）。
 
 /** 对账清理的宿主注入依赖（引用集采集面 + 日志）。 */
 export interface OrphanRunReapDeps { // oe-exempt:20260929:framework:workflow/record 协议契约类型——ports 类型契约先行、单实现常态（dev-0.10.5 已验收代码 merge 带入）
@@ -801,11 +802,11 @@ export interface OrphanRunReapResult { // oe-exempt:20260929:framework:workflow/
  * 1. 枚举 stateDir 的 runId 候选（record 流后缀 + 旧 journal 后缀的文件族并集——
  *    含历史遗留形态；manifest 单独在场不成候选：无 record 流与旧 journal 的孤儿
  *    manifest 是终局派生视图残留，prune 资格链已覆盖）；
- * 2. 引用集三代解析（collectAliveRunReferences 注入——壳侧全池 session 文件扫描，
- *    v2 注册条目 ∪ v1 快照条目 ∪ pre-W17 link 指针的并集，解析归壳侧注入点）；
+ * 2. 引用集解析（collectAliveRunReferences 注入——壳侧全池 session 文件扫描，
+ *    v2 注册条目单代，解析形态归壳侧注入点）；
  * 3. 引用命中 → 跳过（保护——任一存活 session 引用即保留）；引用未命中 → 登记
  *    首判无主时刻（幂等：已登记保持首判时刻，宽限锚不随重扫漂移——「不采用锚
- *    mtime」的裁决：仅被 v1/link 引用的存量 run 创建于数周前，首轮判无主即删
+ *    mtime」的裁决：引用 session 删除前已创建数周的存量 run，首轮判无主即删
  *    的话宽限保护为零）；
  * 4. 删除条件（与门）：登记距今 ≥ 宽限窗 ∧ 三件最大 mtime 距扫描 ≥ 宽限窗 ∧
  *    当轮仍无引用 → 删三件 + 残锁 + 清登记条目。
@@ -904,7 +905,7 @@ export async function reapOrphanRuns(
   const runIds = collectOrphanCandidateRunIds(names);
   result.scanned = runIds.size;
 
-  // 引用集采集（壳侧注入点——三代解析归注入实现）
+  // 引用集采集（壳侧注入点——解析形态归注入实现，v2-only）
   let referenced: ReadonlySet<string>;
   try {
     referenced = await deps.collectAliveRunReferences();

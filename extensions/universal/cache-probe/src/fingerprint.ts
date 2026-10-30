@@ -57,24 +57,22 @@ export function hashOf(value: unknown): string {
 }
 
 /**
- * 从 provider payload 提取 system 内容（最终视角）。三种口径：
+ * 从 provider payload 提取 system 内容（最终视角）。两种口径：
  *  - OpenAI 兼容：messages 内 role 为 system 或 developer
  *    （pi 源码 ai/src/api/openai-completions.ts 的 useDeveloperRole 分支）
  *  - Anthropic：顶层 system（数组）
- *  - Google：顶层字段 systemInstruction 为对象形态——仅手工伪造的输入可达：
- *    pi-ai 1.0.0 实装（dist/api/google-generative-ai.js / google-vertex.js 的
- *    systemInstruction: sanitizeSurrogates(...)）恒传
- *    string，isRecord 分支对 string
- *    恒不命中，故实装流量下 Google 侧返回 null（spFull 观测恒 no-system）。
- *    归因是「提取只认对象形态」而非「Google 请求没有 system」，勿把下方
- *    isRecord(systemInstruction) 分支误读为 Google 口径主通路。
+ *
+ * Google 口径为已知失明（README 已知限制）：pi-ai 1.0.0 实装对 systemInstruction
+ * 恒传 string（dist/api/google-generative-ai.js / google-vertex.js 的
+ * `systemInstruction: sanitizeSurrogates(...)`），本提取不消费 string 形态 →
+ * Google 流量 spFull 恒为哨兵值 "no-system"。旧的对象形态分支（isRecord 恒不命中，
+ * 仅手工伪造输入可达）已删；若采集范围纳入 Google 系模型，应新增 string 分支
+ * 恢复可观测（cache-probe 审计候选 1 车道 C）。
  */
 export function extractSystem(payload: unknown): unknown | null {
 	if (!isRecord(payload)) return null;
 	const system = payload["system"];
 	if (Array.isArray(system)) return system;
-	const systemInstruction = payload["systemInstruction"];
-	if (isRecord(systemInstruction)) return systemInstruction;
 	const messages = payload["messages"];
 	if (Array.isArray(messages)) {
 		const sys = messages.filter(

@@ -4,8 +4,6 @@ import { MockSchedulerBackend } from './mock-backend.js'
 import { SchedulerRuntime } from '../runtime.js'
 import { SchedulerService } from '../service.js'
 import { handleSchedule } from '../tool.js'
-import type { ScheduledTask, TaskSnapshot } from '../types.js'
-import { snapshotToTask, toTaskSnapshot } from '../types.js'
 
 /**
  * schedule tool 直建流覆盖（触发反转 D1，设计 §6.1）：
@@ -37,14 +35,14 @@ describe('schedule tool 直建流', () => {
   it('预校验：prompt 空 → throw 且未创建', async () => {
     await expect(handleSchedule(service, { prompt: '', schedule: '5m' }, undefined))
       .rejects.toThrow('prompt must not be empty')
-    expect(backend.appendedOps).toHaveLength(0)
+    expect(backend.persistedSnapshots).toHaveLength(0)
   })
 
   it('预校验：schedule 非法（ISO 时间戳不可解析）→ throw 且未创建', async () => {
     await expect(
       handleSchedule(service, { prompt: 'x', schedule: '2026-09-19T09:00:00' }, undefined),
     ).rejects.toThrow('unrecognized schedule')
-    expect(backend.appendedOps).toHaveLength(0)
+    expect(backend.persistedSnapshots).toHaveLength(0)
   })
 
   // ── 直建：会话模式不再参与（无 ctx 参数 ⇒ rpc/tui/json/print 同一路径） ──
@@ -59,8 +57,8 @@ describe('schedule tool 直建流', () => {
     const text = result.content[0]!.text
     expect(text).toContain('Task "check build"')
     expect(text).not.toContain('Created without user confirmation')
-    const upsert = backend.appendedOps.find(op => op.op === 'upsert')
-    expect(upsert && upsert.op === 'upsert' ? upsert.task.model : undefined).toBe('prov-a/m1')
+    const created = backend.persistedTasks?.[0]
+    expect(created?.model).toBe('prov-a/m1')
   })
 
   // ── abort：取消语义（正常返回，不 throw），不创建 ──
@@ -74,7 +72,7 @@ describe('schedule tool 直建流', () => {
     expect(result.details).toEqual({ cancelled: true })
     expect(result.content[0]!.text).toContain('The task was NOT created')
     expect(result.content[0]!.text).toContain('Do not assume a configuration and do not retry')
-    expect(backend.appendedOps).toHaveLength(0)
+    expect(backend.persistedSnapshots).toHaveLength(0)
   })
 
   // ── 参数透传：kind / name / expires / model 全部落到 entry 快照 ──
@@ -86,15 +84,15 @@ describe('schedule tool 直建流', () => {
       undefined,
     )
 
-    const onceUpsert = backend.appendedOps.find(op => op.op === 'upsert')
-    expect(onceUpsert && onceUpsert.op === 'upsert' ? onceUpsert.task.kind : undefined).toBe('once')
-    expect(onceUpsert && onceUpsert.op === 'upsert' ? onceUpsert.task.name : undefined).toBe('my task')
+    const onceCreated = backend.persistedTasks?.[0]
+    expect(onceCreated?.kind).toBe('once')
+    expect(onceCreated?.name).toBe('my task')
     // once 触发即删：expires 语义不适用（runtime 忽略）——这是既有语义，非本单元改动
-    expect(onceUpsert && onceUpsert.op === 'upsert' ? onceUpsert.task.expiresAt : 'none').toBeUndefined()
+    expect(onceCreated?.expiresAt).toBeUndefined()
 
     await handleSchedule(service, { prompt: 'q', schedule: '1d', expires: '30d' }, undefined)
-    const recurringUpsert = backend.appendedOps.filter(op => op.op === 'upsert')[1]
-    expect(recurringUpsert && recurringUpsert.op === 'upsert' ? recurringUpsert.task.expiresAt !== undefined : false).toBe(true)
+    const recurringCreated = backend.persistedTasks?.find(t => t.prompt === 'q')
+    expect(recurringCreated?.expiresAt).not.toBeUndefined()
   })
 })
 
@@ -112,24 +110,13 @@ describe('model 字段族落盘', () => {
     expect(withoutModel.model).toBeUndefined()
   })
 
-  it('toTaskSnapshot → snapshotToTask 往返 model 保真（漏加列举 = 重放丢失的反向验证）', () => {
-    const task: ScheduledTask = {
-      id: 'abcd1234',
-      name: 'm task',
-      prompt: 'p',
-      kind: 'recurring',
-      schedule: { mode: 'interval', intervalMs: 60000 },
-      model: 'prov-a/m1',
-      enabled: true,
-      createdAt: 1000,
-      nextRunAt: 2000,
-      runCount: 0,
-      history: [],
-    }
+  it('快照落盘 model 保真：persistTasks 收到的任务集含 model 字段（漏字段 = 恢复丢失的反向验证）', async () => {
+    const backend = new MockSchedulerBackend()
+    const runtime = new SchedulerRuntime(backend)
 
-    const snapshot: TaskSnapshot = toTaskSnapshot(task)
-    expect(snapshot.model).toBe('prov-a/m1')
-    const restored = snapshotToTask(snapshot)
-    expect(restored.model).toBe('prov-a/m1')
+    const withModel = await runtime.addTask('p1', { mode: 'interval', intervalMs: 60000 }, { model: 'prov-a/m1' })
+
+    const persisted = backend.persistedTasks?.find(t => t.id === withModel.id)
+    expect(persisted?.model).toBe('prov-a/m1')
   })
 })

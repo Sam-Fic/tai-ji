@@ -49,6 +49,36 @@ function signalNumberOf(signal: NodeJS.Signals): number {
  */
 const SPAWN_ERROR_EXIT_CODE = 127;
 
+/**
+ * 杀链失败（进程仍活，run 被 killChild 手动 settle）的收尾退出码。非零失败口径，
+ * 但不走 128+signo 折算——那是「被信号杀死」的成功收割口径（normalizeExitCode）；
+ * 杀失败是「进程未死、杀链违约」，取 POSIX 惯例的 kill 失败值（GNU timeout 同
+ * 语义：125 = timeout/kill 自身失败，与 126 不可执行 / 127 未找到区分）。
+ */
+export const KILL_FAILED_EXIT_CODE = 125;
+
+/**
+ * [kill-chain-architecture §3.3] killChild 杀链失败（进程仍活）的 exitPromise 手动
+ * settle——第三个触发源，与 settled resolve / close finalizer 并列：杀不死的进程永不
+ * 发 close，等事件 = run 永悬挂。exitResolved 幂等门吸收迟到赛跑（run 已收尾则
+ * no-op；反向——本 settle 先行、进程随后真死的迟到 close 由 promise 二次 resolve
+ * no-op 吸收，close finalizer 清理照常执行）。
+ */
+export function settleExitAsKillFailed(
+  deps: Pick<StdoutPumpDeps, "child" | "recordId" | "runEnd">,
+  err: unknown,
+): void {
+  if (deps.runEnd.exitResolved === true) return;
+  deps.runEnd.killFailed = err;
+  deps.runEnd.endedCleanly = false;
+  deps.runEnd.exitResolved = true;
+  logger.error(
+    `[session-runner] kill failed for ${deps.recordId} (pid ${String(deps.child.pid)} still alive; run finalized as failure without waiting for close)`,
+    { detail: toErrorMessage(err) },
+  );
+  deps.runEnd.resolveChatRun?.(KILL_FAILED_EXIT_CODE);
+}
+
 /** run 收尾状态（轮收敛（agent_end/agent_settled）与 close 收尾共享的可变句柄）。 */
 export interface RunEndState {
   /**
@@ -122,6 +152,14 @@ export interface RunEndState {
    * handled 结算与取消赛跑的短路判据。
    */
   exitResolved?: boolean;
+  /**
+   * [kill-chain-architecture §3.3] 杀链失败事实（killChild 的 reject 落位）：SIGKILL
+   * 未投递成功且进程仍活（KillSignalError：EPERM / 不可判定），exitPromise 由 killChild
+   * 手动 settle（第三个触发源，与 settled resolve / close finalizer 并列）——杀不死的
+   * 进程永不发 close，等事件 = run 永悬挂。undefined = 杀链无失败（成功收割或未触发）。
+   * 类型 unknown：reject 载荷除 KillSignalError 外还可能是冒出的编程错误（EINVAL 族）。
+   */
+  killFailed?: unknown;
 }
 
 /** session 身份回填状态机（三路写同源；get_state 监听表随行持有）。 */

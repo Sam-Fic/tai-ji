@@ -339,8 +339,10 @@ export async function callRenameLLM(
 		logger.warn("model not available, skipping");
 		return null;
 	}
+	// config.thinkingLevel 类型为 string 且 normalizeRenameConfig 恒回填默认值（"off"），
+	// 生产路径不存在 undefined 形态，无需 !== undefined 谓词。
 	const reasoningLevel = getSupportedThinkingLevels(model).find((l) => l === config.thinkingLevel);
-	if (config.thinkingLevel !== undefined && reasoningLevel === undefined) {
+	if (reasoningLevel === undefined) {
 		logger.warn(
 			`configured thinkingLevel "${config.thinkingLevel}" is not supported by ${model.provider}/${model.id}; calling without a thinking level`,
 		);

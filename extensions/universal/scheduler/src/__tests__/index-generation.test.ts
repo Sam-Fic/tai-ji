@@ -33,10 +33,24 @@ vi.mock('@zhushanwen/pi-extension-logger', () => ({
   setPiHandle: vi.fn(),
 }))
 
-// MF-3：session_start 会真实执行 importLegacyStore(ctx.cwd, ...)，触碰用户真实 FS
-// （~/.pi/agent/scheduler/... 的 renameSync/existsSync 探测）。mock 掉 importer
-// 模块，装配路径仍被调用、FS 副作用为零。
-vi.mock('../importer.js', () => ({ importLegacyStore: vi.fn(() => vi.fn()) }))
+// 任务库 FS 哑化：session_start 会推导 store 路径（默认指向真实用户 agentDir）并读盘，
+// mock 协议 store 模块使装配零 FS 副作用（read 结果可经 stub 注入，write 哑化——
+// 与旧 mock importer / pi.appendEntry 形态同构）。
+const { schedulerStoreStub, schedulerStorePathMock } = vi.hoisted(() => ({
+  schedulerStoreStub: {
+    read: { kind: 'missing' } as { kind: string; tasks?: unknown[] },
+    readImpl: null as null | (() => unknown),
+  },
+  // 分片键行为锁：捕获 session_start 装配点传入 schedulerStoreFilePath 的 sessionId 段。
+  schedulerStorePathMock: vi.fn(
+    (_agentDir: string, _cwd: string, _sessionId: string) => '/sched-test-store/sess.json',
+  ),
+}))
+vi.mock('@zhushanwen/extension-protocol/scheduler-store', () => ({
+  schedulerStoreFilePath: schedulerStorePathMock,
+  readSchedulerStore: () => (schedulerStoreStub.readImpl ? schedulerStoreStub.readImpl() : schedulerStoreStub.read),
+  writeSchedulerStore: vi.fn(),
+}))
 
 // u-p2b 接线断言：index.ts 的 refreshWidget 必须走结构化/双模入口 `setSchedulerWidget`
 // （取代旧 `renderSchedulerWidget` TUI 单形态）——mock 捕获调用（任务数组直传）。
@@ -78,7 +92,7 @@ vi.mock('../runtime.js', async (importOriginal) => {
 
 import schedulerExtension from '../index.js'
 import { TICK_INTERVAL_MS } from '../runtime.js'
-import { TASK_ENTRY_TYPE } from '../types.js'
+import type { ScheduledTask } from '../types.js'
 
 /**
  * 最小 fake pi：覆盖 factory 消费的 API 面
@@ -100,17 +114,34 @@ function createMockPi(): {
 }
 
 /** 最小 fake ctx：覆盖 session_start 装配链读到的全部字段（backend 构造 / runtime 构造 / refreshWidget）。 */
-function createFakeCtx(sessionFile: string): ExtensionContext {
+function createFakeCtx(sessionFile: string | undefined, sessionId = 'sess-index-generation'): ExtensionContext {
   return {
     cwd: '/test-index-generation',
     isIdle: () => true,
     hasPendingMessages: () => false,
     ui: { setWidget: vi.fn() },
     sessionManager: {
-      getEntries: () => [],
+      getSessionId: () => sessionId,
       getSessionFile: () => sessionFile,
     },
   } as unknown as ExtensionContext
+}
+
+/** 快照恢复输入的合法任务（字段集与 ScheduledTask 对齐，nextRunAt 远期避免 tick 噪音）。 */
+function makeRestorableTask(): ScheduledTask {
+  const now = Date.now()
+  return {
+    id: 'restored-task',
+    name: 'restored probe',
+    prompt: 'probe prompt',
+    kind: 'once',
+    schedule: { mode: 'interval', intervalMs: 3_600_000 },
+    enabled: true,
+    createdAt: now,
+    nextRunAt: now + 3_600_000,
+    runCount: 0,
+    history: [],
+  }
 }
 
 describe('G1: index.ts 代际接线（S9）', () => {
@@ -217,45 +248,28 @@ describe('F1: session_start 停旧 runtime（crash-fix U4）', () => {
   const BASE = Date.parse('2026-01-01T00:00:00Z')
 
   /**
-   * 构造远期到期的启用任务 upsert entry（owner = sessionFile，避免 fork owner 过滤）；
+   * 构造远期到期的启用任务（任务库快照恢复输入）；
    * nextRunAt 取 BASE + 1h，测试时间窗（分钟级）内无 dispatch 噪音，任务集保持静态。
    */
-  function taskEntry(sessionFile: string) {
+  function makeTask(): ScheduledTask {
     return {
-      type: 'custom',
-      customType: TASK_ENTRY_TYPE,
-      data: {
-        op: 'upsert',
-        taskId: 'aaaa1111',
-        ownerSessionFile: sessionFile,
-        task: {
-          id: 'aaaa1111',
-          name: 'keepalive probe',
-          prompt: 'probe prompt',
-          kind: 'recurring',
-          schedule: { mode: 'interval', intervalMs: 3_600_000 },
-          enabled: true,
-          createdAt: BASE,
-          nextRunAt: BASE + 3_600_000,
-          runCount: 0,
-          history: [],
-        },
-      },
+      id: 'aaaa1111',
+      name: 'keepalive probe',
+      prompt: 'probe prompt',
+      kind: 'recurring',
+      schedule: { mode: 'interval', intervalMs: 3_600_000 },
+      enabled: true,
+      createdAt: BASE,
+      nextRunAt: BASE + 3_600_000,
+      runCount: 0,
+      history: [],
     }
   }
 
-  /** 同 createFakeCtx，但注入非空任务集（首帧渲染需要非空任务集可断言）。 */
-  function createFakeCtxWithTasks(sessionFile: string): ExtensionContext {
-    return {
-      cwd: '/test-index-session-start',
-      isIdle: () => true,
-      hasPendingMessages: () => false,
-      ui: { setWidget: vi.fn() },
-      sessionManager: {
-        getEntries: () => [taskEntry(sessionFile)],
-        getSessionFile: () => sessionFile,
-      },
-    } as unknown as ExtensionContext
+  /** 同 createFakeCtx，但任务库读取注入非空任务集（首帧渲染需要非空任务集可断言）。 */
+  function createFakeCtxWithTasks(_sessionFile: string): ExtensionContext {
+    schedulerStoreStub.read = { kind: 'ok', tasks: [makeTask()] }
+    return createFakeCtx('/test-index-session-start.json')
   }
 
   beforeEach(() => {
@@ -297,5 +311,107 @@ describe('F1: session_start 停旧 runtime（crash-fix U4）', () => {
     // 行为断言（验收标准）：stopScheduler 恰被调一次且命中 runtime1；
     // F1 缺失时旧 timer 不被停（数组为空或不含 runtime1）
     expect(stopSchedulerCalls).toEqual([runtimeInstances[0]])
+  })
+})
+
+// ── gap4 修复：任务恢复失败在装配点显式降级（不折叠成静默空任务集）──
+// 任务库读取的流级错误（EACCES 等非 ENOENT 读失败）上抛到 session_start 装配点：
+// warn（含累计失败计数）+ 空任务集继续装配。装配体（startScheduler / service /
+// schedule tool）不因恢复失败被跳过——不 catch 时抛错点之后的装配整段丢失，恢复失败
+// 升级成整套扩展不可用。
+describe('gap4: session_start 任务恢复失败显式降级', () => {
+  beforeEach(() => {
+    isCtxStaleCaptures.length = 0
+    runtimeInstances.length = 0
+    stopSchedulerCalls.length = 0
+    setSchedulerWidgetMock.mockClear()
+    loggerMock.warn.mockClear()
+  })
+
+  afterEach(() => {
+    for (const rt of runtimeInstances) {
+      rt.stopScheduler()
+    }
+  })
+
+  it('任务库读取抛错 → warn 留痕（含错误信息）+ 空任务集启动，装配不中断', () => {
+    const { pi, events } = createMockPi()
+    schedulerExtension(pi)
+    const sessionStart = events.get('session_start')
+    expect(sessionStart).toBeDefined()
+
+    schedulerStoreStub.readImpl = () => {
+      throw new Error('EACCES store unreadable')
+    }
+
+    sessionStart!({ type: 'session_start', reason: 'startup' }, createFakeCtx('/test/recovery-fail.json'))
+
+    // 装配未中断：runtime 已构造（后续 startScheduler / service / tool 装配照常）
+    expect(isCtxStaleCaptures.length).toBe(1)
+    expect(runtimeInstances).toHaveLength(1)
+    // 显式降级留痕：恢复失败 warn（非静默空任务集）；错误信息入日志
+    const warnCalls = loggerMock.warn.mock.calls.map((c) => String(c[0]))
+    expect(warnCalls.some((m) => m.includes('scheduler task recovery failed'))).toBe(true)
+    const recoveryCall = loggerMock.warn.mock.calls.find((c) => String(c[0]).includes('scheduler task recovery failed'))
+    expect(JSON.stringify(recoveryCall?.[1])).toContain('EACCES store unreadable')
+  })
+})
+
+// ── 任务库分片键：--no-session 归一 + 跨重启同分片恢复（scheduler-redesign 方案 B）──
+// pi 1.0.0 在 --no-session 下仍生成进程内 UUID sessionId（每次启动都不同），但会话不落盘、
+// sessionFile 不设置。分片键判据落在 getSessionFile() 上：归一 'no-session' 后两个进程
+// 命中同一分片文件，恢复上一进程的任务集。若按 sessionId 形态判定（UUID 是路径安全值），
+// 每次启动都会开新分片 → 任务不恢复（S28 实测发现的恒不命中分支）。
+describe('任务库分片键（--no-session 归一）', () => {
+  beforeEach(() => {
+    isCtxStaleCaptures.length = 0
+    runtimeInstances.length = 0
+    schedulerStorePathMock.mockClear()
+    schedulerStoreStub.read = { kind: 'missing' }
+    schedulerStoreStub.readImpl = null
+    setSchedulerWidgetMock.mockClear()
+  })
+
+  afterEach(() => {
+    for (const rt of runtimeInstances) {
+      rt.stopScheduler()
+    }
+  })
+
+  it('--no-session 两次启动（UUID 不同）推导同一 no-session 分片并恢复任务集', () => {
+    // 第一进程：sessionId 是 UUID（路径安全），sessionFile 缺失（--no-session）
+    const first = createMockPi()
+    schedulerExtension(first.pi)
+    first.events.get('session_start')!(
+      { type: 'session_start', reason: 'startup' },
+      createFakeCtx(undefined, 'uuid-proc-a'),
+    )
+    expect(schedulerStorePathMock).toHaveBeenCalledTimes(1)
+    expect(schedulerStorePathMock.mock.calls[0]![2]).toBe('no-session')
+
+    // 第一进程写下的任务快照（同一分片文件）；第二进程重启：UUID 不同、sessionFile 仍缺失
+    schedulerStoreStub.read = { kind: 'ok', tasks: [makeRestorableTask()] }
+    const second = createMockPi()
+    schedulerExtension(second.pi)
+    second.events.get('session_start')!(
+      { type: 'session_start', reason: 'startup' },
+      createFakeCtx(undefined, 'uuid-proc-b'),
+    )
+
+    expect(schedulerStorePathMock).toHaveBeenCalledTimes(2)
+    expect(schedulerStorePathMock.mock.calls[1]![2]).toBe('no-session')
+    // 行为锁：第二次装配恢复出上一进程的任务集（跨重启恢复，而非新 UUID 新分片空集）
+    expect(setSchedulerWidgetMock.mock.calls.at(-1)![1]).toEqual([
+      expect.objectContaining({ id: 'restored-task' }),
+    ])
+  })
+
+  it('持久会话按 sessionId 分片：resume 同 id 同分片，fork 新 id 新分片', () => {
+    const { pi, events } = createMockPi()
+    schedulerExtension(pi)
+    const sessionStart = events.get('session_start')!
+    sessionStart({ type: 'session_start', reason: 'resume' }, createFakeCtx('/test/owner.jsonl', 'sess-owner'))
+    sessionStart({ type: 'session_start', reason: 'fork' }, createFakeCtx('/test/fork.jsonl', 'sess-fork'))
+    expect(schedulerStorePathMock.mock.calls.map(call => call[2])).toEqual(['sess-owner', 'sess-fork'])
   })
 })

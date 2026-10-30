@@ -21,8 +21,17 @@ import { join } from 'node:path'
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// MF-3（与 sdk-contract.test.ts 同款）：mock importer，session_start 装配零 FS 副作用。
-vi.mock('../importer.js', () => ({ importLegacyStore: vi.fn(() => vi.fn()) }))
+// 任务库 FS 哑化（快照分离后 session_start 会推导 store 路径并真实读写盘——默认
+// getAgentDir() 指向真实用户目录，必须 mock；与旧 mock importer / pi.appendEntry 形态同构）。
+// read 结果经 stub 注入（任务集由用例设置）。
+const { schedulerStoreStub } = vi.hoisted(() => ({
+  schedulerStoreStub: { read: { kind: 'missing' } as { kind: string; tasks?: unknown[] } },
+}))
+vi.mock('@zhushanwen/extension-protocol/scheduler-store', () => ({
+  schedulerStoreFilePath: () => '/sched-test-store/sess.json',
+  readSchedulerStore: () => schedulerStoreStub.read,
+  writeSchedulerStore: vi.fn(),
+}))
 
 // mock 共享 logger（与 index-generation.test.ts 同款）：fail-open 用例断言 warn 留痕。
 const { loggerMock } = vi.hoisted(() => ({
@@ -36,35 +45,31 @@ vi.mock('@zhushanwen/pi-extension-logger', () => ({
 
 import schedulerExtension from '../index.js'
 import { TICK_INTERVAL_MS } from '../runtime.js'
-import { TASK_ENTRY_TYPE } from '../types.js'
+import type { ScheduledTask } from '../types.js'
 /** 原保活窗口时长（10min；原 D2 已退役）——静态用例静置越过后断言仍零推送。 */
 const RETIRED_KEEPALIVE_WINDOW_MS = 10 * 60 * 1000
 const BASE = Date.parse('2026-01-01T00:00:00Z')
 
-/** 构造一个远期到期的启用任务 upsert entry（owner = sessionFile，避免 fork owner 过滤）。 */
-function taskEntry(sessionFile: string, overrides: Record<string, unknown> = {}) {
+/** 构造一个远期到期的启用任务（任务库快照恢复用）。 */
+function makeTask(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
   return {
-    type: 'custom',
-    customType: TASK_ENTRY_TYPE,
-    data: {
-      op: 'upsert',
-      taskId: 'aaaa1111',
-      ownerSessionFile: sessionFile,
-      task: {
-        id: 'aaaa1111',
-        name: 'keepalive probe',
-        prompt: 'probe prompt',
-        kind: 'recurring',
-        schedule: { mode: 'interval', intervalMs: 3_600_000 },
-        enabled: true,
-        createdAt: BASE,
-        nextRunAt: BASE + 3_600_000, // 远期到期：测试时间窗内无 dispatch 噪音
-        runCount: 0,
-        history: [],
-        ...overrides,
-      },
-    },
+    id: 'aaaa1111',
+    name: 'keepalive probe',
+    prompt: 'probe prompt',
+    kind: 'recurring',
+    schedule: { mode: 'interval', intervalMs: 3_600_000 },
+    enabled: true,
+    createdAt: BASE,
+    nextRunAt: BASE + 3_600_000, // 远期到期：测试时间窗内无 dispatch 噪音
+    runCount: 0,
+    history: [],
+    ...overrides,
   }
+}
+
+/** 注入任务库读取结果（session_start 直读任务库恢复任务集）。 */
+function setStoreTasks(tasks: ScheduledTask[]): void {
+  schedulerStoreStub.read = { kind: 'ok', tasks }
 }
 
 function createMockPi(): { pi: ExtensionAPI; events: Map<string, (...args: unknown[]) => void> } {
@@ -79,8 +84,8 @@ function createMockPi(): { pi: ExtensionAPI; events: Map<string, (...args: unkno
   return { pi, events }
 }
 
-/** fake ctx：entries 注入任务（owner = sessionFile）；setWidget 独立导出作观测范围。 */
-function createFakeCtx(sessionFile: string, entries: unknown[] = []): {
+/** fake ctx：sessionManager 提供 sessionId（store 分片键）与 sessionFile；setWidget 作观测范围。 */
+function createFakeCtx(sessionFile: string): {
   ctx: ExtensionContext
   setWidget: ReturnType<typeof vi.fn>
 } {
@@ -91,7 +96,7 @@ function createFakeCtx(sessionFile: string, entries: unknown[] = []): {
     hasPendingMessages: () => false,
     ui: { setWidget },
     sessionManager: {
-      getEntries: () => entries,
+      getSessionId: () => 'sess-widget-push',
       getSessionFile: () => sessionFile,
     },
   } as unknown as ExtensionContext
@@ -113,7 +118,8 @@ describe('widget 推送判定（D1 指纹跳推）', () => {
     const { pi, events } = createMockPi()
     schedulerExtension(pi)
     const sessionStart = events.get('session_start')!
-    const { ctx, setWidget } = createFakeCtx('/test/wp-static.json', [taskEntry('/test/wp-static.json')])
+    setStoreTasks([makeTask()])
+    const { ctx, setWidget } = createFakeCtx('/test/wp-static.json')
     sessionStart({ type: 'session_start', reason: 'startup' }, ctx)
     expect(setWidget).toHaveBeenCalledTimes(1) // 首帧必推（实例态重置）
 
@@ -126,6 +132,7 @@ describe('widget 推送判定（D1 指纹跳推）', () => {
     const { pi, events } = createMockPi()
     schedulerExtension(pi)
     const sessionStart = events.get('session_start')!
+    schedulerStoreStub.read = { kind: 'missing' }
     const { ctx, setWidget } = createFakeCtx('/test/wp-empty.json')
     sessionStart({ type: 'session_start', reason: 'startup' }, ctx)
     expect(setWidget).toHaveBeenCalledTimes(1) // 首帧 = 清屏帧（setWidget(key, undefined)）
@@ -141,7 +148,8 @@ describe('widget 推送判定（D1 指纹跳推）', () => {
     schedulerExtension(pi)
     const sessionStart = events.get('session_start')!
     const file = '/test/wp-failopen.json'
-    const { ctx, setWidget } = createFakeCtx(file, [taskEntry(file)])
+    setStoreTasks([makeTask()])
+    const { ctx, setWidget } = createFakeCtx(file)
     sessionStart({ type: 'session_start', reason: 'startup' }, ctx)
     expect(setWidget).toHaveBeenCalledTimes(1)
 
@@ -167,7 +175,8 @@ describe('widget 推送判定（D1 指纹跳推）', () => {
       schedulerExtension(pi)
       const sessionStart = events.get('session_start')!
       const file = '/test/wp-locale.json'
-      const { ctx, setWidget } = createFakeCtx(file, [taskEntry(file)])
+      setStoreTasks([makeTask()])
+      const { ctx, setWidget } = createFakeCtx(file)
       sessionStart({ type: 'session_start', reason: 'startup' }, ctx)
       expect(setWidget).toHaveBeenCalledTimes(1)
       expect(String(setWidget.mock.calls[0]![1]?.[0])).toContain('[scheduler]')

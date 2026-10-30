@@ -14,13 +14,13 @@
 - zcode 会话库（sqlite）与多 coding-agent 导入源的源格式读取域——见 [session-import-sources.md](session-import-sources.md)
 - subagent 引擎自身 spawn 的 session 文件——独立文件、独立进程写（C-sw-01），主 session 树回退不触碰；runtime 侧对它们的读取点在本清单登记归类，判定理由注明文件独立性
 - pi stdout tee 日志（`infra/logger.ts`）——写流非读者（R3 锚点命中的排除项）
-- extension 侧旁路数据文件（非 session .jsonl）：plan 的 `.plan/` markdown 与模板（`plan/src/compact.ts` / `command.ts` / `templates.ts` / `exec-skills.ts`）、scheduler importer、system-prompt / system-prompt-trace baseline、llm-shared config、smart-context 的 compact sidecar 重注入（`compact-handler.ts` `readFileForReinject`）——均为配置/自产物文件读取；其中 smart-context compact sidecar 与撤回语义的交互（重启重注入是否需按活跃路径判定）属 message-revoke 设计域裁决事项，不在本普查清单判定
+- extension 侧旁路数据文件（非 session .jsonl）：plan 的 `.plan/` markdown 与模板（`plan/src/compact.ts` / `command.ts` / `templates.ts` / `exec-skills.ts`）、system-prompt / system-prompt-trace baseline、llm-shared config、smart-context 的 compact sidecar 重注入（`compact-handler.ts` `readFileForReinject`）——均为配置/自产物文件读取；其中 smart-context compact sidecar 与撤回语义的交互（重启重注入是否需按活跃路径判定）属 message-revoke 设计域裁决事项，不在本普查清单判定
 
 **归类准则（G2 二分）**：
 
 | 归类 | 定义 | 判据 |
 |------|------|------|
-| **未来状态随树** | 读取物是可由活跃路径确定性重建的当前状态；撤回后按活跃路径重算，被撤子树内容不进派生态 | 语义是「现在是什么」（todo 列表 / plan 状态 / goal / pending 定时任务 / 模型绑定），不是「发生过什么」 |
+| **未来状态随树** | 读取物是可由活跃路径确定性重建的当前状态；撤回后按活跃路径重算，被撤子树内容不进派生态 | 语义是「现在是什么」（todo 列表 / plan 状态 / goal / 模型绑定），不是「发生过什么」 |
 | **已发生事实照实** | 读取物是发生过的事实记录；重建即伪造事实（run 真实执行过、token 真实消耗、通知真实发过、名字与结局真实发生过） | 撤回不回滚世界与审计面（G2 口径：不从文件/日志中抹除） |
 
 补充登记形态（非二分成员）：
@@ -69,19 +69,17 @@ grep -rln 'readSessionHeaderId\|SESSION_HEADER_TYPE' scripts/ --include='*.mjs'
 | goal | `session.ts` `reconstructGoalState`（全文件倒序重建；`before_agent_start` 注入读内存态不重算） | 随树 | goal 状态 = 当前状态；同款裁剪 + 新增 `session_tree` handler 即时重建（否则被撤 goal 逐轮注入模型上下文） | U6c |
 | goal | `ports.ts` SessionPort 接口声明 + `adapters/ports.ts` 一行委托（`getEntries: () => ctx.sessionManager.getEntries()`） | 消费方委托（随树） | 锚点命中但自身不读文件（类型声明 / 一行委托）；读取语义落在 `session.ts` `reconstructGoalState`，随树判定由 U6c 覆盖 | U6c |
 | goal | `adapters/event-handlers/agent-end.ts` + `command-adapter.ts` `countActiveFromEntries` 活跃性检查 / `goal-history` 展示 | 照实 | 活跃 run 是已发生事实（与撤回互斥由编排 workflow-running 检查承载）；history 命令展示历史记录 | — |
-| scheduler | `backend.ts` `loadTasks` 折叠（全文件折叠恢复 pending 定时任务） | 随树 | pending 定时任务 = 未来将发生的事；被撤子树任务不得复活触发（重折叠 + `session_tree` handler） | U6c |
-| scheduler | `ack-turn.ts` `hasAssistantEntry` 落盘判据（fail-closed 只读） | 照实 | 判据 = 文件是否已有 assistant flush（文件事实），非状态派生视图 | — |
 | subagent-workflow | `jsonl-run-store.ts` `loadAll()`（workflow-record entry 重建 run 记录） | 照实 | run 真实执行过，与 runtime 侧 workflow-extractor 同业务含义同口径 | — |
 | pending-notifications | `index.ts` 每 turn 全量扫描（pending register/unregister 对账） | 照实 | 后台任务活跃性是已发生事实；run 在跑则照实（撤回遇活跃 run 由编排前置检查阻止，两口径互斥不冲突） | — |
 | session-manager | `watch-coordinator.ts` `recoverStaleRegisters`（session_start 重启收尾路径：`scanPendingEntries` 差集对账后逐条重开活跃 type 'session' 的 watch，D7③） | 照实 | pending 注册活跃性是已发生事实——与 §3 pending-notifications 行同口径（同一 protocol 差集单点对账，撤回遇活跃 run 由编排前置检查阻止） | — |
 | delivery-port（extensions/shared） | `src/pi-host.ts` 装配接线 `readSessionEntries: () => ctx.sessionManager.getEntries()`（投递端口的 pi 扩展侧装配点） | 消费方委托（照实） | 锚点命中但读取语义落在投递端口——session_start 差集扫描（outbox − (delivered ∪ ack)）经此读点，照实对账才幂等 | — |
-| session-path（extensions/shared） | `src/index.ts` `filterActivePath`（活跃路径裁剪单一实现：todo/plan/goal/scheduler 四包状态重建输入的共用读点——四包原同构副本收编于此，回退取值口径随之统一） | 随树（随消费方） | 防御语义与 pi `buildSessionPath` 同构（leafId 缺失/失效回退文件尾，详见 §4.1 异源登记）；读取语义落在四消费包（§3 各行随树判定不变）；runtime/plugin 两侧不经本包（有意异源） | U6b / U6c（四包各自承接） |
+| session-path（extensions/shared） | `src/index.ts` `filterActivePath`（活跃路径裁剪单一实现：todo/plan/goal 三包状态重建输入的共用读点——三包原同构副本收敛于此，回退取值口径随之统一） | 随树（随消费方） | 防御语义与 pi `buildSessionPath` 同构（leafId 缺失/失效回退文件尾，详见 §4.1 异源登记）；读取语义落在三消费包（§3 各行随树判定不变）；runtime/plugin 两侧不经本包（有意异源） | U6b / U6c（三包各自承接） |
 | base-tool-enhance | `index.ts` / `background/pending-reconcile.ts` `reconcilePendingEntries` | 照实 | bash 后台 pending 对账 = 已发生事实 | — |
 | rename-session | `index.ts` / `llm.ts` / `landing.ts`（`countUserMessages` / `extractUserPromptText` 起名输入） | 照实 | 会话起名是历史事实分析（用户确实说过）；输出为展示性标签，被撤消息进入起名视野属可接受残影（见 §7 边界 ①） | — |
 | smart-context | `index.ts` / `tool.ts` `countCompactions`（压缩计数 + 分档提醒） | 照实 | 压缩已发生、provider 已消耗（与 usage 统计同口径）；分档提醒按真实历史校准 | — |
 | session-reader | `@zhushanwen/session-core` 读取原语（`readTailIdentity` / `createReadStream`，fs 直读 `.jsonl`） | 豁免登记 | 审计工具范围，G2「不从文件/日志中抹除」口径——撤回后旧分支经 session_read 仍可查（A1 验收锚「session 文件仍含 M」的消费方） | — |
 
-> **§3 收编注记**：todo / plan / goal / scheduler 四行的活跃路径裁剪读点 = `extensions/shared/session-path`（E1 锚点命中该库 `src/index.ts`）。收编后 `plan/src/state.ts` 不再直接命中 E1（读取语义不变，经共享库流转）；`todo/src/handlers.ts` 的命中为既有 H1 注释提及（`getEntries()` filter-copy 语义说明，非读取点）。
+> **§3 收敛注记**：todo / plan / goal 三行的活跃路径裁剪读点 = `extensions/shared/session-path`（E1 锚点命中该库 `src/index.ts`）。收敛后 `plan/src/state.ts` 不再直接命中 E1（读取语义不变，经共享库流转）；`todo/src/handlers.ts` 的命中为既有 H1 注释提及（`getEntries()` filter-copy 语义说明，非读取点）。
 
 ## 4. Runtime 侧读者清单（R1 + R2 + R3）
 
@@ -93,9 +91,9 @@ grep -rln 'readSessionHeaderId\|SESSION_HEADER_TYPE' scripts/ --include='*.mjs'
 | `infra/pi/session-entry-mapper.ts` | `mapSessionEntries`（RPC / 文件两条历史链共用映射单点） | 随树 | 喂入裁剪后 entries；无分支 session leafId 缺省 = 文件尾 = 现行为 | U6a |
 | `services/session-history.ts` | `getHistoryFromFilePath` + 离线尾读（`tailReadOffline`） | 随树 | 同一历史派生视图的文件源路径；离线尾读等价裁剪 | U6a |
 | `services/session/history-rebuild-cache.ts` | 全量重建缓存 | 随树 | 缓存基线语义 = 活跃路径派生视图（非全文件）；撤回编排显式清缓存强制全量重建 | U6a |
-| `services/plugin-service/api/session-api.ts` | `readEntries` handler（plugin 族读侧的 runtime 派生视图生成点：pi get_entries → `filterEntriesToActivePath` 活跃路径过滤 → 五字段派生视图，parentId 不出 runtime） | 随树 | 插件镜像的折叠输入 = 本派生视图回包——过滤在派生视图生成前使被撤子树 op 构造性不达任何插件（scheduler-manager 面板残留缺陷的 runtime 数据范围落点，U7）；防御语义与 extensions 裁剪同构但有意异源：leafId 缺失/悬空 → **不过滤**（增量批不丢数据优先，extensions 侧按文件尾回退是全量语义），环状 parentId `!activeIds.has` 防环 | U7（撤回信号广播同批） |
+| `services/plugin-service/api/session-api.ts` | `readEntries` handler（plugin 族读侧的 runtime 派生视图生成点：pi get_entries → `filterEntriesToActivePath` 活跃路径过滤 → 五字段派生视图，parentId 不出 runtime） | 随树 | 插件镜像的折叠输入 = 本派生视图回包——过滤在派生视图生成前使被撤子树 op 构造性不达任何插件（U7）；防御语义与 extensions 裁剪同构但有意异源：leafId 缺失/悬空 → **不过滤**（增量批不丢数据优先，extensions 侧按文件尾回退是全量语义），环状 parentId `!activeIds.has` 防环 | U7（撤回信号广播同批） |
 
-> **§4.1 防御语义异源登记（R2 审查采纳，防后续审查误报）**：extensions 侧的活跃路径防御已收编为单一共享实现 `extensions/shared/session-path`（todo/plan/goal/scheduler 四包原同构副本收编——收编前四包回退取值口径已分叉：plan/todo 取数组尾条目 vs goal/scheduler 取最后一条带 string id 条目，统一为后者；真实 pi SessionEntry 恒有 id，生产行为不变），与 pi `buildSessionPath` 同构——leafId 缺失/失效**回退文件尾**（全量语义，宁全勿漏）；runtime 重建链（entry-tree-builder 族）同构同源、不经共享库（extension 不能 import runtime 包，跨包异源为有意设计）。与两者有意异源的是 §4.1 末行 plugin 派生视图生成点（leafId 悬空**不过滤**——增量批部分数据，不丢数据优先）与 runtime 侧「降级 warn + 原样返回」的 SSOT 形态（对话流宁多显 vs 注入范围宁裁勿漏——G2 二分准则在各面的落地形态差异，均为有意设计非漂移）。
+> **§4.1 防御语义异源登记（R2 审查采纳，防后续审查误报）**：extensions 侧的活跃路径防御已收敛为单一共享实现 `extensions/shared/session-path`（todo/plan/goal 三包原同构副本收敛——收敛前回退取值口径已分叉：plan/todo 取数组尾条目 vs goal 取最后一条带 string id 条目，统一为后者；真实 pi SessionEntry 恒有 id，生产行为不变），与 pi `buildSessionPath` 同构——leafId 缺失/失效**回退文件尾**（全量语义，宁全勿漏）；runtime 重建链（entry-tree-builder 族）同构同源、不经共享库（extension 不能 import runtime 包，跨包异源为有意设计）。与两者有意异源的是 §4.1 末行 plugin 派生视图生成点（leafId 悬空**不过滤**——增量批部分数据，不丢数据优先）与 runtime 侧「降级 warn + 原样返回」的 SSOT 形态（对话流宁多显 vs 注入范围宁裁勿漏——G2 二分准则在各面的落地形态差异，均为有意设计非漂移）。
 
 ### 4.2 派生提取器族（随树）
 
@@ -146,9 +144,8 @@ grep -rln 'readSessionHeaderId\|SESSION_HEADER_TYPE' scripts/ --include='*.mjs'
 |----|--------|------|
 | permission | `index.ts` `pi.on("session_tree")` → statusline/footer 重绘 | 重绘时读新分支 config，不读 session 文件 |
 | subagent-workflow | `session_tree` → `terminateRunningRuns` | 撤回编排以 workflow-running 前置检查阻止该副作用触发（撤回遇活跃 run 不放行） |
-| scheduler（extensions/universal） | `backend.ts` `pi.on("session_tree")` → 重折叠任务集 | 纯重建体（loadTasks 换 Map），零 dispatch 零 append；被撤任务到点不触发（A14） |
 
-**runtime 侧插件读者（readEntries 通道，非 session_tree）**：`resources/plugins/scheduler-manager`——per-session 任务镜像（累计 task op 折叠 + sinceEntryId 增量），随树语义经两通道兑现：①runtime readEntries 派生视图生成点活跃路径过滤（§4.1 末行，被撤 op 构造性不达插件）；②撤回信号 `'taiji:revoked'`（revoke-orchestrator 失效点广播 → pluginService.notifyEntryInvalidation）驱动插件丢弃累计镜像全量重建（U7）。插件不能 import runtime/extensions 包，filterActivePath 语义在插件消费方由 runtime 派生视图层代偿——同构实现的有意分层，非漏接。
+**runtime 侧插件读者（readEntries 通道，非 session_tree）**：当前无插件经该通道消费 session 条目——`scheduler-manager` 面板已改为直接读取任务库快照文件（`readSchedulerStore`），任务数据独立于会话流，撤回不产生任务侧重建动作。
 
 `session_tree` / `session_before_tree` 不经 RPC 事件流（extension 进程内专属）；runtime 侧完成确认走 reply + get_entries 校验（该读者归类登记见 §6 N13）。
 

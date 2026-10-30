@@ -114,6 +114,7 @@
     "packages/runtime/src/__tests__/logger.test.ts",
     "packages/runtime/src/__tests__/rpc-client-bundle.test.ts",
     "packages/runtime/src/__tests__/rpc-client-exit-multicast.test.ts",
+    "packages/runtime/src/__tests__/rpc-client-kill-failed.test.ts",
     "packages/runtime/src/__tests__/rpc-client-rt2-hardening.test.ts",
     "packages/runtime/src/__tests__/rpc-client-spawn-env.test.ts",
     "packages/runtime/src/infra/__tests__/**",
@@ -148,7 +149,6 @@
     "packages/shared/src/__tests__/timeouts.test.ts",
     "packages/state-machine/src/**",
     "packages/ui/src/__tests__/form-protocol.test.ts",
-    "packages/ui/src/primitives/__tests__/Tooltip.test.ts",
     "packages/ui/src/primitives/__tests__/button-variants.test.ts",
     "packages/ui/src/primitives/__tests__/empty-state.test.ts",
     "packages/ui/src/primitives/__tests__/inline-notice.test.ts",
@@ -157,6 +157,7 @@
     "packages/ui/src/primitives/__tests__/skeleton.test.ts",
     "packages/ui/src/primitives/__tests__/status-dot.test.ts",
     "packages/ui/src/primitives/__tests__/status-pill.test.ts",
+    "packages/ui/src/primitives/__tests__/Tooltip.test.ts",
     "packages/ui/src/primitives/popover/__tests__/PopoverContent.test.ts"
   ],
   "sharedBy": {

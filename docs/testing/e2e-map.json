@@ -645,7 +645,7 @@
     },
     {
       "id": "E2E-SCHED-01",
-      "summary": "pi-scheduler 端到端真实环境实测（真 pi 进程 + 真 scheduler extension + faux LLM 演员，S1-S23 契约：模型路径直建 + /scheduler 命令表单 + 命令路径确认轮持久化，notify 帧 + session JSONL 双轨断言）",
+      "summary": "pi-scheduler 端到端真实环境实测（真 pi 进程 + 真 scheduler extension + faux LLM 演员，S1-S30 快照任务库轨：任务/调度记账落独立 JSON 快照，按 sessionId 分片、原子替换写；断言快照路径/schema/任务集/恢复/隔离 + 会话流只承载会话事实，ack 合成轮与 event sourcing entry 折叠已退役）",
       "scope": [
         "extensions/universal/scheduler/**",
         "scripts/verify-scheduler-e2e.cjs"
@@ -662,7 +662,7 @@
       "run": "node scripts/verify-scheduler-e2e.cjs",
       "owner": "extensions/universal/scheduler",
       "authority": "docs/TEST-STRATEGY.md#2-测试分层",
-      "note": "spawn 真实 pi 进程族，按 e2e 执行准则空载串行。[u-e2e-adjust] 命令路径持久化证据链改锚「确认轮」：建任务后 scheduler 注入零 token 本地合成轮（覆写会话当前 provider 的 streamSimple，产出 stopReason=aborted 的 assistant 行 + ack.confirm 文案），这就是正常路径——打开 pi 会话落盘开关，flush 探针退役；S18/S19/S20/S21 改为断言会话 JSONL 的 aborted assistant 行 + 确认文案（locale 固定 en-US）+ op=upsert 落盘（S19 为负向：无 assistant 行、无 upsert）；新增 S22（合成行字段：provider/model=会话模型、usage 全 0 + 宿主不变量：model_change/thinking_level_change 不因创建新增 + auto-rename 不被合成轮触发）与 S23（同会话连续两次创建 ⇒ 确认轮恰 1 次）。"
+      "note": "spawn 真实 pi 进程族，按 e2e 执行准则空载串行。任务库唯一持久化通道 = <PI_CODING_AGENT_DIR>/scheduler/<root>/<cwd segments>/<sessionId>.json（v2 快照，全量原子替换写，无 tmp 残留）。S1-S30 断言范围：写入（路径/schemaVersion/任务字段/无 tmp 残留/无 v1 legacy 文件）+ 恢复（resume 同分片直接读取 / 损坏改名 .corrupt-<ts> 后空集启动 / 既有快照 + cron 失效停用 / --no-session 分片键归一 'no-session' 跨重启恢复）+ 隔离（不同 sessionId 分片互不可见、fork 新分片）+ 会话流只承载会话事实（负向断言无 pi-scheduler:task 条目，dispatch 注入 pi-scheduler:dispatched 出现）。S18/S19/S20/S21 保留命令表单 / notify 语义，落盘断言改快照（S19 负向：取消后无快照写入）；ack 合成轮与 event sourcing entry 折叠已随任务库分离退役，S22/S23 相应删除。"
     },
     {
       "id": "E2E-BATCH-01",
@@ -1030,6 +1030,26 @@
       "owner": "scripts/",
       "authority": "docs/architecture/zcode-session-db-isolation.md",
       "note": "R2 态：一次性迁移清理工具（设计 D7/W5a），行为由 fixture 测试零 token 锁定（mkdtempSync 假库 + BEFORE DELETE 触发器注入索引侧失败）；真实库执行属停机窗口人工操作（--plan 确认 + --confirm-count 受控旁路），不进自动化"
+    },
+    {
+      "id": "E2E-ZCODE-02",
+      "summary": "zcode session 库访问层 schema 版本诊断面单测：queryLatestSchemaVersion 两个调用侧分流（门禁面 assertKnownSchema fail-fast / 诊断面 readSchemaVersion 吞错返 undefined；路由假驱动，纯逻辑不触真实 sqlite）",
+      "scope": [
+        "packages/zcode-session-source/src/sqlite-access.ts"
+      ],
+      "layer": "L1",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "packages/zcode-session-source/src/__tests__/read-schema-version.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": false,
+      "run": "pnpm --filter @zhushanwen/zcode-session-source exec vitest run src/__tests__/read-schema-version.test.ts",
+      "owner": "packages/zcode-session-source",
+      "authority": "docs/TEST-STRATEGY.md",
+      "note": "单测层（无集成门控、非 slow-sqlite 组）：假驱动下开库门禁先过合法版本行、诊断面再读不可用形态（非对象 / 空串）断言返 undefined 不回填假值；与 E2E-INTEG-42（同文件 sqlite-access.ts 的错误契约集成层）分层不重叠——本规则锁纯逻辑分流，真库 I/O 语义归集成层"
     },
     {
       "id": "E2E-REMOTE-01",
@@ -3126,7 +3146,7 @@
     },
     {
       "id": "E2E-REGALLOW-01",
-      "summary": "模型可见性投喂单点调用点白名单检查脚本组（约束 C-ext-32）：extensions/ 下 registerProvider|registerNativeProvider|registerVirtualModel 调用点只许出现在 provider-live-sync（目录投喂写入单点）与 scheduler（ack 合成轮临时覆写 + backend 转发）两包——防新开常驻注入点绕过单点制造第二写入方",
+      "summary": "模型可见性投喂单点调用点白名单检查脚本组（约束 C-ext-32）：extensions/ 下 registerProvider|registerNativeProvider|registerVirtualModel 调用点只许出现在 provider-live-sync（目录投喂写入单点；scheduler 的 ack 合成轮已随任务库分离退役，包内无注册表注入调用点）——防新开常驻注入点绕过单点制造第二写入方",
       "scope": [
         ".githooks/check_register_allowlist.py"
       ],
@@ -3142,7 +3162,7 @@
       "run": "python3 .githooks/check_register_allowlist.py",
       "owner": "extensions/universal/provider-live-sync",
       "authority": "docs/constraints.json",
-      "note": "R2 态：真实运行形态 = pre-commit 2i 段按路径触发（extensions/**/*.{ts,mts,cts,js,mjs} / 本脚本 / install-hooks.sh 任一 staged，复用 SKIP_EXTENSION_LINT 开关）；判定唯一源 = 脚本内两包白名单常量，新增合法注入点须同 commit 改白名单并同步 C-ext-32 登记；零第三方依赖、全量扫描 ~0.1s"
+      "note": "R2 态：真实运行形态 = pre-commit 2i 段按路径触发（extensions/**/*.{ts,mts,cts,js,mjs} / 本脚本 / install-hooks.sh 任一 staged，复用 SKIP_EXTENSION_LINT 开关）；判定唯一源 = 脚本内包粒度白名单常量（测试目录排除），新增合法注入点须同 commit 改白名单并同步 C-ext-32 登记；零第三方依赖、全量扫描 ~0.1s"
     },
     {
       "id": "E2E-EDGEFADE-01",

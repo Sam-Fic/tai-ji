@@ -51,46 +51,34 @@ export const NOTIFY_CUSTOM_TYPE = SUBAGENT_BG_NOTIFY_CUSTOM_TYPE;
  * 全部从 ExecutionRecord 同名字段直传——调用点 `notifyGateAllowsDelivery(record)`）。
  */
 export interface NotifyGateRecordState {
-  /** record 当前世代（两步判定的比较基准——非标记槽 epoch，§3.2.7 显式两步）。 */
+  /** record 当前世代（标记判定的比较基准——非标记槽 epoch；跨世代重复帧由
+   *  notifyId（id:epoch:round）投递日志判重承接）。 */
   readonly epoch?: Epoch;
   /** 放弃轮标记（gate 判据，单槽）：abort（cancel / 编排性关闭打断）时置在途轮。 */
   readonly lastAbandonedRound?: AbandonedRoundMark | null;
-  /** 当前轮次（gate 第二步的回注轮缺省源——settle 推进后的值，正常轮通知凭此
+  /** 当前轮次（gate 回注轮缺省源——settle 推进后的值，正常轮通知凭此
    *  越过旧标记；被中断轮不推进，迟到回注轮 ≤ 标记轮被丢弃）。 */
-  readonly round?: number;
-}
-
-/**
- * notify 门的回注声明身份（迟到帧自带；缺省 = 读 record 自身——同世代、当前轮）。
- * 现有消费点的回注均从 record 派生视图（无独立世代/轮载体），缺省路径恒命中「同世代」，
- * 拦截由第二步标记判定承担；跨世代重复帧的最终防线 = notifyId（id:epoch:round）
- * 投递日志判重（reopen 前最后轮必已同步入账，晚到回注必为重复帧——设计 §3.2.7 论证）。
- */
-export interface NotifyGateInbound {
-  /** 回注声明世代（缺省 = record 当前 epoch，第一步恒同世代）。 */
-  readonly epoch?: Epoch;
-  /** 回注声明轮（缺省 = record.round ?? 0）。 */
   readonly round?: number;
 }
 
 /**
  * [U5 / §3.2.7 通知 gate] 轮次完成回注的投递门。
  *
- * 两个阻断维度承接旧 closedReason 集合门的事故防御（v4 A-6 僵尸回执 / cancelled
+ * 阻断维度承接旧 closedReason 集合门的事故防御（v4 A-6 僵尸回执 / cancelled
  * 防双发），判据源 = 「放弃标记」单维（收尾/静默场景由放弃轮标记 + 轮身份检查 +
  * notifyId 账本三层承接——原 intent=archived 静默 gate 随 intent 概念删除退役）：
  *
- *   ① 回注 epoch ≠ record 当前 epoch → 丢弃（跨世代回注）；
- *   ② 放弃轮标记命中 → 阻断（承接原 cancelled 阻断防双发）。**显式两步**（比较基准
- *      = record 当前 epoch，非标记槽 epoch——reopen 后标记残留旧 epoch，按标记槽比较
- *      会把新世代全部正常轮通知吞掉）：
- *        第一步：回注 epoch ≠ record 当前 epoch → 丢弃；
- *        第二步：同 epoch 时标记非空、标记槽世代 = 当前世代且回注轮 ≤ 标记轮 → 丢弃。
+ *   放弃轮标记命中 → 阻断（承接原 cancelled 阻断防双发）。比较基准 = record 当前
+ *   epoch，非标记槽 epoch——reopen 后标记残留旧 epoch，按标记槽比较会把新世代
+ *   全部正常轮通知吞掉：标记非空、标记槽世代 = 当前世代且回注轮 ≤ 标记轮 → 丢弃。
+ *   标记槽世代 ≠ 当前世代（reopen 残留）→ 标记自然失效；跨世代重复帧的最终防线 =
+ *   notifyId（id:epoch:round）投递日志判重（reopen 前最后轮必已同步入账，晚到
+ *   回注必为重复帧——设计 §3.2.7 论证）。
  *
  * 收尾轮豁免（构造性）：close 挂起等待的最后一轮（closeAfterRound 消费）通知正常
  * 送达——close 不置放弃轮标记（标记只由 cancel/编排性关闭的 abort 置位），且收尾
  * 写入 journal 记录的编排挂在轮次通知送达之后（§3.2.5 顺序约束 [写死]），settle 时点 record 仍
- * running 非放弃轮，①②均不命中。收尾后的残余迟到回注由轮身份检查（Continuation
+ * running 非放弃轮，不命中。收尾后的残余迟到回注由轮身份检查（Continuation
  * abortAndClearQueue 废弃轮身份）+ 投递日志 notifyId 判重承接。
  *
  * 正常轮通知不该被旧标记吞的论证（为何比较 record.round 而非标记槽）：正常轮 N settle
@@ -103,17 +91,13 @@ export interface NotifyGateInbound {
  */
 export function notifyGateAllowsDelivery(
   state: NotifyGateRecordState,
-  inbound: NotifyGateInbound = {},
 ): boolean {
   const currentEpoch = state.epoch ?? 0;
-  // ① 第一步：跨世代回注丢弃（比较基准 = record 当前 epoch）。
-  const inboundEpoch = inbound.epoch ?? currentEpoch;
-  if (inboundEpoch !== currentEpoch) return false;
-  // ② 第二步：标记槽在当前世代且回注轮 ≤ 标记轮 → 丢弃（防双发）。标记槽世代 ≠
+  // 标记槽在当前世代且回注轮 ≤ 标记轮 → 丢弃（防双发）。标记槽世代 ≠
   // 当前世代（reopen 残留）→ 标记自然失效，跨世代重复帧由 notifyId 去重承接。
   const mark = state.lastAbandonedRound;
   if (mark != null && mark.epoch === currentEpoch) {
-    const inboundRound = inbound.round ?? state.round ?? 0;
+    const inboundRound = state.round ?? 0;
     if (inboundRound <= mark.round) return false;
   }
   return true;

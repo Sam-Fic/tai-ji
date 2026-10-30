@@ -69,7 +69,7 @@ export interface DeliveryDeliverOptions { // oe-exempt:20261017:framework:统一
  */
 export type DeliveryDeliverResult =
   | { kind: "accepted"; id: string }
-  | { kind: "swallowed"; reason: "already-seen" | "duplicate-content" }
+  | { kind: "swallowed"; reason: "already-seen" }
   | { kind: "rejected"; reason: string };
 
 // ─── collect 面（批量收取；result-collect 设计 §3.1②③）──────

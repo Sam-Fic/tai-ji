@@ -32,3 +32,37 @@ export class DeliveryReclaimError extends Error {
     this.entryId = entryId
   }
 }
+
+/**
+ * 「终局事实已发生，但持久终局（store.ack）写入失败」的分型错误（2026-10-30 用户裁决
+ * 「磁盘为准」：内存终态必须以磁盘确认为准）。
+ *
+ * 产生点（delivery.ts ackStore）：confirmDelivered / cancel / drain 终局化时先写持久
+ * 终局，store.ack 抛错即包装为本类——内核不登记内存终态（条目留守活跃集非终态，判重
+ * 与恢复以磁盘为唯一权威），由各终局入口捕获留痕并显式上报。
+ *
+ * 语义边界：外部送达事实不可回滚（消息已实际发出）——写盘失败期间该条不视为已终态，
+ * 恢复（重启重放 / 下一回执边沿重驱动）后可能重投，at-least-once 语义被显式接受
+ * （宁可可能重投，不做内存单方终态）。
+ *
+ * 结构化字段：
+ * - entryId：终局写入失败的条目 id。
+ * - state：本应落定的终态（'delivered' | 'cancelled'）——文案按它分叉：delivered 强调
+ *   送达事实已成立；cancelled 强调本地撤销意图已发生但持久撤销凭据未落。
+ */
+export class DeliveryAckPersistError extends Error {
+  readonly entryId: string
+  readonly state: 'delivered' | 'cancelled'
+
+  constructor(entryId: string, state: 'delivered' | 'cancelled', cause?: unknown) {
+    super(
+      state === 'delivered'
+        ? `delivery delivered but terminal record not persisted; recovery may redeliver (id=${entryId})`
+        : `entry cancelled locally but terminal record not persisted; recovery may redeliver (id=${entryId})`,
+      { cause },
+    )
+    this.name = 'DeliveryAckPersistError'
+    this.entryId = entryId
+    this.state = state
+  }
+}

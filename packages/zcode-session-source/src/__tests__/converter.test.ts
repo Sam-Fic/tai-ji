@@ -971,7 +971,6 @@ describe('canonical 合法性与 applyEntry 重放锚', () => {
     // canonical Entry 结构（type/id/parentId 必填 + message.role 合法域）
     const roundTrip = parseSessionContent(serializeSession(session.entries))
     expect(roundTrip.skippedLines).toBe(0)
-    expect(roundTrip.lastLinePartial).toBe(false)
     expect(roundTrip.entries).toHaveLength(session.entries.length)
     expect(roundTrip.entries.map((e) => [e.type, e.id, e.parentId, e.message?.role])).toEqual(
       lines.map((e) => [e.type, e.id, e.parentId, e.message?.role]),

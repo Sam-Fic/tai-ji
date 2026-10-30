@@ -16,7 +16,7 @@ import type {
   PlanDocMeta,
   PlanReviewRequest,
 } from "@zhushanwen/extension-protocol";
-// 执行方式检测单源自 ADR-0074 共享包（plan-mode-audit-remediation 批次 4②b 迁入）
+// 执行方式检测单源自 ADR-0096 共享包（plan-mode-audit-remediation 批次 4②b 迁入）
 import { detectExecSkills } from "@zhushanwen/pi-exec-skills";
 import type { ExecSkill } from "@zhushanwen/pi-exec-skills";
 import { getLogger } from "@zhushanwen/pi-extension-logger";

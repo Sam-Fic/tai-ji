@@ -2,52 +2,43 @@ import { describe, expect, it } from 'vitest'
 import {
   formatRelativeTime,
   formatSchedule,
-  replayFoldEntries,
-  TASK_ENTRY_TYPE,
+  HISTORY_LIMIT,
+  appendExecutionRecord,
+  SCHEDULER_MODAL_VIEW_ID,
   type ScheduledTask,
-  type SchedulerEntryOp,
 } from '../../index'
 
-// ── scheduler 折叠器下沉 smoke（P7 验收③：两个消费方都能从包入口取符号）──
-// 包入口（barrel）必须可取到全部下沉符号；折叠行为在此只做最小冒烟
-// （逐行为覆盖在扩展侧 replay.test.ts / format.test.ts，P7 判据 = 扩展全量测试不改断言仍绿；
-//  包内 replay.test.ts / format.test.ts 承接 coverage-gate 增量口径的直接覆盖）。
+// ── scheduler 段收缩后 barrel smoke：任务契约 + 记账 helper + 格式化器可从包入口取到
+//（event sourcing 契约——TASK_ENTRY_TYPE / SchedulerEntryOp / replayFoldEntries——已随
+//  任务库分离整体退役，store 契约经 ./scheduler-store 子出口，见 store.test.ts）──
 
-describe('包入口导出 scheduler 下沉符号（barrel smoke）', () => {
-  it('entry 契约常量与折叠器/格式化器可从包入口导入', () => {
-    expect(TASK_ENTRY_TYPE).toBe('pi-scheduler:task')
-    expect(typeof replayFoldEntries).toBe('function')
+describe('包入口导出 scheduler 段符号（barrel smoke）', () => {
+  it('任务契约常量与记账 helper / 格式化器可从包入口导入', () => {
+    expect(HISTORY_LIMIT).toBe(20)
+    expect(typeof appendExecutionRecord).toBe('function')
     expect(typeof formatSchedule).toBe('function')
     expect(typeof formatRelativeTime).toBe('function')
+    expect(SCHEDULER_MODAL_VIEW_ID).toBe('modal-scheduler-manager-scheduler-manager.panel')
   })
 
-  it('replayFoldEntries 纯函数可独立折叠（零 pi 依赖自足成立）', () => {
-    const op: SchedulerEntryOp = {
-      op: 'upsert',
-      taskId: 'a1b2c3d4',
-      ownerSessionFile: '/s/a.jsonl',
-      task: {
-        id: 'a1b2c3d4',
-        name: 'check-build',
-        prompt: 'check build',
-        kind: 'recurring',
-        schedule: { mode: 'interval', intervalMs: 1_800_000 },
-        enabled: true,
-        createdAt: 0,
-        nextRunAt: 1_800_000,
-        runCount: 0,
-        history: [],
-      },
+  it('appendExecutionRecord 追加并按 HISTORY_LIMIT 裁剪', () => {
+    const task: ScheduledTask = {
+      id: 'a1b2c3d4',
+      name: 'check-build',
+      prompt: 'check build',
+      kind: 'recurring',
+      schedule: { mode: 'interval', intervalMs: 1_800_000 },
+      enabled: true,
+      createdAt: 0,
+      nextRunAt: 1_800_000,
+      runCount: 0,
+      history: [],
     }
-    const entries = [
-      { type: 'message', data: {} },
-      { type: 'custom', customType: TASK_ENTRY_TYPE, data: op },
-    ]
-    const tasks = replayFoldEntries(entries, '/s/a.jsonl')
-    expect(tasks.size).toBe(1)
-    const task: ScheduledTask | undefined = tasks.get('a1b2c3d4')
-    expect(task?.name).toBe('check-build')
-    expect(task?.ownerSessionFile).toBe('/s/a.jsonl')
+    for (let i = 0; i < HISTORY_LIMIT + 5; i++) {
+      appendExecutionRecord(task, i, 'success')
+    }
+    expect(task.history).toHaveLength(HISTORY_LIMIT)
+    expect(task.history[0]).toEqual({ at: 5, status: 'success' })
   })
 
   it('formatSchedule / formatRelativeTime 输出形状（interval every / once in / 相对时间）', () => {

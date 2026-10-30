@@ -106,7 +106,7 @@ describe("compact_context 工具（R2 降级态：fire-and-forget + 结果注入
 		const result = await tools[0].execute("t1", {}, undefined, undefined, makeCtx());
 		expect(result.content[0].text).toContain("压缩已启动");
 		expect(result.content[0].text).toContain("same-model");
-		expect(result.details).toMatchObject({ mode: "same-model", launched: true, fellBack: false, compactionCount: 1 });
+		expect(result.details).toMatchObject({ mode: "same-model", compactionCount: 1 });
 	});
 
 	it("renderResult 接线（C-ext-05）：注册定义携带函数成员 + 折叠态输出 details.summary 一行", async () => {

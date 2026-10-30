@@ -35,11 +35,15 @@
       "extensions/universal/provider-live-sync/src/**"
     ],
     "shared": [
-      "packages/shared/src/provider.ts"
+      "packages/shared/src/network-proxy.ts",
+      "packages/shared/src/provider.ts",
+      "packages/shared/src/retry-rules.ts"
     ]
   },
   "tests": [
+    "extensions/universal/network-proxy/src/__tests__/network-proxy-shared-parity.test.ts",
     "extensions/universal/provider-live-sync/src/**",
+    "extensions/universal/retry-rules/src/__tests__/pi-ai-vocabulary-parity.test.ts",
     "packages/runtime/src/services/__tests__/merged-catalog-three-state.test.ts",
     "packages/runtime/src/services/__tests__/model-quota-bundle.test.ts",
     "packages/runtime/src/services/__tests__/provider-catalog-refresh.test.ts",

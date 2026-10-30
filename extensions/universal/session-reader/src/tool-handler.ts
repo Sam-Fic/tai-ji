@@ -46,7 +46,11 @@ import {
 } from './discovery/archive-match.js'
 import { resolveSessionRoots } from './discovery/roots.js'
 import { readSessionHeaderIdSync } from './discovery/session-header.js'
-import { findZcodeEntryAnchor, type ZcodeAnchor } from './discovery/entry-anchor.js'
+import {
+  findZcodeEntryAnchor,
+  readParsedEntriesBestEffort,
+  type ZcodeAnchor,
+} from './discovery/entry-anchor.js'
 import {
   listZcodeManifests,
   readZcodeManifest,
@@ -59,11 +63,7 @@ import {
   type RecordManifest,
 } from './discovery/subagents.js'
 import { readRunSnapshot, resolveWorkflows } from './discovery/workflows.js'
-import {
-  parseSessionContent,
-  parseSessionFile,
-  type ParseResult,
-} from '@zhushanwen/session-core'
+import { parseSessionFile, type ParseResult } from '@zhushanwen/session-core'
 import { parseRunRecordStream, parseRunSnapshot, renderWorkflowOverview, type WorkflowOverview } from './core/workflow.js'
 import { buildTreeView } from './core/tree.js'
 import { segmentTurns } from './core/turns.js'
@@ -358,13 +358,11 @@ async function classifyIncompleteEntryAnchor(
   saId: string,
 ): Promise<ZcodeAnchorMissingReason | undefined> {
   for (const file of candidateFiles) {
-    let content: string
-    try {
-      content = await readFile(file, 'utf8')
-    } catch {
-      continue
-    }
-    const reason = firstIncompleteAnchorReason(parseSessionContent(content).entries, saId)
+    // 读取/解析失败（含非法 message role 的 fail-fast 抛错）按候选跳过：归因分类是
+    // best-effort 附加信息，最终 not-found 错误仍由调用方显式抛出
+    const entries = await readParsedEntriesBestEffort(file)
+    if (entries === undefined) continue
+    const reason = firstIncompleteAnchorReason(entries, saId)
     if (reason !== undefined) return reason
   }
   return undefined
@@ -566,7 +564,7 @@ async function loadZcodeParsed(anchor: ZcodeAnchor, agentDir: string): Promise<P
     }
     // ParseResult 形状对齐：zcode 库读无「文件字节/坏行」概念（strict Entry 树已由
     // converter 保证），totalBytes/skippedLines 恒 0
-    return { entries: normalized.entries, totalBytes: 0, skippedLines: 0, lastLinePartial: false }
+    return { entries: normalized.entries, totalBytes: 0, skippedLines: 0 }
   } catch (e) {
     if (e instanceof Error && e.message.startsWith('[zcode_')) throw e // 本函数产出的错误范围原样传播
     throw err(zcodeReadErrorMessage(e, agentDir))

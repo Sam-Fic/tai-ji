@@ -83,8 +83,8 @@ export function spawnEngineChild(opts: SpawnEngineChildOptions): ChildProcess {
       "abort",
       () => {
         // [SIGCONT 前置] 唤醒潜在 SIGSTOP 冻结形态——冻结进程对 SIGTERM 只排队不
-        // 处理，不先 SIGCONT 则 grace 窗内永远等不到退出（与 pi-rpc killPiProcess
-        // 同源的防御）；对未冻结进程是 no-op，对已退进程由 safeKill 幂等吞掉。
+        // 处理，不先 SIGCONT 则 grace 窗内永远等不到退出；对未冻结进程是 no-op，
+        // 对已退进程由 safeKill 幂等吞掉。
         safeKill(child, "SIGCONT");
         void killChain(child, {
           graceMs: ENGINE_ABORT_KILL_GRACE_MS,

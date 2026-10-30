@@ -183,8 +183,10 @@ function createKernelAssembly(deps: KernelAssemblyDeps): { kernel: ReturnType<ty
       // 有意 no-op：port 半区落盘在 deliver 提交层前置完成（文件头「耐久职责的分工」）。
     },
     ack(id: string): void {
-      // 内核终局（delivered / cancelled）→ 持久终局列。抛错由内核 ackStore 捕获
-      // warn（终局事实已发生不回滚）——本层不重复吞咽。
+      // 内核终局（delivered / cancelled）→ 持久终局列。磁盘权威：appendEntry 抛错 =
+      // 持久终局未写入 → state.ackedIds 不登记（内存派生数据只在落盘成功后登记），
+      // 错误上抛由内核包装分型错误 DeliveryAckPersistError——内核不登记内存终态、条目
+      // 留守非终态（恢复后可能重投，at-least-once 显式接受），本层不吞咽。
       host.appendEntry(ACK_CUSTOM_TYPE, { v: 2, id });
       state.ackedIds.add(id);
     },
