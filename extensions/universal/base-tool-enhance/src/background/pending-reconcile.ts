@@ -191,8 +191,13 @@ function isTerminalByRegistry(entry: RegistryEntry): boolean {
  *    两路径写出的 entry 语义一致）；reason 缺失按 cancelled 处理（防御分支，正常路径
  *    finalize 必写 reason）
  *  - orphaned / running+判死：cancelled（任务非自身成败地终止/消失）
+ *  返回联合随 toPendingReason 扩展（natural + 无退出码 → "unknown"，结果未知形态，
+ *  foreground-idle-to-background §5 部件 5——经 mapReasonToStatus fail-visible 缺省落
+ *  'unknown' status，protocol 零改动）。
  */
-function settledPendingReason(entry: RegistryEntry): "completed" | "failed" | "time_limited" | "cancelled" {
+function settledPendingReason(
+	entry: RegistryEntry,
+): "completed" | "failed" | "unknown" | "time_limited" | "cancelled" {
 	if (entry.state === "exited" && entry.reason !== undefined) {
 		return toPendingReason(entry.reason, entry.exitCode ?? null);
 	}

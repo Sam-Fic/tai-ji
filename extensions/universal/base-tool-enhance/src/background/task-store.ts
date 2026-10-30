@@ -5,9 +5,11 @@
  * RPC session.*）会重新 load extension 实例，实例级状态随 dispose 消失；模块级 Map
  * 跨替换存活，任务表无需恢复（pending-notifications 的 unsubscribers 列表同范式）。
  *
- * 条目唯一来源 = 本进程 execute 的 spawn（registerSpawnedTask 全仓唯一调用点 =
- * spawn-background.ts）。他进程 / 历史 session 的 running 条目**永不进表**——
- * 零恢复零接管，孤儿处置权统一归收殓侧（u-bte-remove 后 = taiji runtime）
+ * 条目唯一来源 = 本进程 execute 的两条登记路径（registerSpawnedTask 调用点 =
+ * spawn-background.ts 的 spawnBackgroundTask 与 bash-tool.ts 的
+ * registerConvertedTask——前者 spawn 显式后台/白名单任务，后者登记包装命令转后台，
+ * foreground-idle-to-background §4.3）。他进程 / 历史 session 的 running 条目**永不
+ * 进表**——零恢复零接管，孤儿处置权统一归收殓侧（u-bte-remove 后 = taiji runtime）
  * 按属主裁决；终态条目可从 registry 读，仅供 bash_output 查历史。
  *
  * 终态条目 LRU 上限 MAX_TERMINAL_ENTRIES（与 registry 对称），淘汰后 bash_output
@@ -18,7 +20,10 @@
  * 跨进程预写的 killing 不会被 stale 内存态冲回，D6-en intent 读回（exit-collector.ts）
  * 的正确性依赖此约束。全部 5 个 writeRegistryEntry 调用点逐一成立：
  *   ① spawn-background.ts spawnBackgroundTask：registerSpawnedTask（新条目首登记）
- *     先于 registry 写 running；
+ *     先于 registry 写 running；bash-tool.ts registerConvertedTask（转后台登记，
+ *     foreground-idle-to-background）同序——内存先行再写 registry running；
+ *     退出口径差异：转后台无 child 句柄、不挂 exit 边沿（终态由 exit-watch 守望收尾），
+ *     写序约束本身不变；
  *   ② bash-kill-tool.ts：markKillingIntent(taskId,"killed") 先于 registry 写 killing；
  *   ③ spawn-background.ts armBackgroundTimeout：markKillingIntent(taskId,"timeout")
  *     先于 registry 写 killing（pid 已死路径提前 return，不触达写点）；
@@ -44,7 +49,8 @@ export const MAX_TERMINAL_TASKS = 50;
 const taskTable = new Map<string, BackgroundTask>();
 
 /**
- * 登记新任务（条目唯一入口，仅 spawn-background 调用）。
+ * 登记新任务（条目唯一入口；调用点 = spawn-background.ts 的 spawnBackgroundTask 与
+ * bash-tool.ts 的 registerConvertedTask，见文件头「条目唯一来源」）。
  * 同 taskId 已存在 = 编码错误（task_id 含 ts+rand 保证全局唯一），防御性覆盖并保留
  * 日志语义由调用方保证不发生。
  */

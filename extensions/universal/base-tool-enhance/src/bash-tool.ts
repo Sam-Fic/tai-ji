@@ -13,18 +13,53 @@
  *  4. 白名单强制后台（M4，D3/D13）：命令命中 force-test/force-longrun/用户正则 →
  *     无视 background 参数强制后台，忽略 LLM 显式 timeout；双模式 timeout 配置注入
  *     （前台未填 → foregroundTimeoutSeconds，后台未填 → backgroundTimeoutSeconds）
+ *  5. 空闲转后台包装层（foreground-idle-to-background M1，矩阵 A5）：无超时（显式与
+ *     配置注入均无）且未命中白名单、非子代理、非 win32、idleBackgroundSec 非 null 的
+ *     前台命令，命令原文写入 cmd.sh 后经包装脚本 taiji-fg-wrap 执行（空闲监控 + 转后
+ *     台标记 + 输出落日志抄送，u-wrapper 交付物）；execute 收尾按 pidfile 判定命令存
+ *     活性——还活着（B3 静默转后台 / B5 包装异常）→ registerConvertedTask 登记 + 守
+ *     望收尾；已死（B2 正常完成）→ 不登记零感知 + 三文件清理。执行本体仍是官方
+ *     delegate.execute（包装命令串交官方原样跑），透传等价契约不变（A5 公理）。
  */
 
-import type { AgentToolUpdateCallback, BashToolDetails, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import type {
+	AgentToolResult,
+	AgentToolUpdateCallback,
+	BashToolDetails,
+	ExtensionToolContext,
+} from "@earendil-works/pi-coding-agent";
 import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";
+import { getProcessStartTimeSec, isPidAlive } from "@zhushanwen/extension-protocol/background-task";
 import { Type } from "typebox";
+import { isRecord, toErrorMessage } from "@zhushanwen/pi-ext-guards";
+import { getLogger } from "@zhushanwen/pi-extension-logger";
 
 import { truncateCommand } from "./background/command-display.ts";
-import { resolveTaijiDataDir } from "./background/registry.ts";
-import { resolveBackgroundTimeoutSec, spawnBackgroundTask } from "./background/spawn-background.ts";
+import { attachExitWatch } from "./background/exit-watch.ts";
+import { emitPendingRegister } from "./background/notify.ts";
+import {
+	getRegistryPath,
+	resolveTaijiDataDir,
+	taskToRegistryEntry,
+	writeRegistryEntry,
+} from "./background/registry.ts";
+import {
+	armBackgroundTimeout,
+	generateTaskId,
+	resolveBackgroundTimeoutSec,
+	spawnBackgroundTask,
+} from "./background/spawn-background.ts";
 import { isSubagentProcess } from "./background/subagent-guard.ts";
+import { registerSpawnedTask } from "./background/task-store.ts";
+import type { BackgroundTask } from "./background/types.ts";
 import { loadBaseToolEnhanceConfig, type BaseToolEnhanceConfig } from "./config.ts";
 import { compileForcePatterns, describeForceMatch, matchForceBackground } from "./force-patterns.ts";
+
+const logger = getLogger("base-tool-enhance");
 
 /**
  * override 后的 bash input schema。
@@ -68,6 +103,8 @@ const ENHANCED_BASH_DESCRIPTION = [
 	"bash_output {task_id} is for on-demand progress checks only (omit task_id to list known background tasks); never use it as a wait loop. Terminate a task with bash_kill {task_id}.",
 	"",
 	"Commands matching the force-background whitelist (test suites, dev servers, watch jobs and similar long-running commands) are automatically routed to background even when background was not requested; the result carries a task_id and completion auto-notifies — the same DO NOT bash sleep rule applies.",
+	"",
+	"Idle-to-background: when you give NO timeout (explicit or configured default) and the command is not whitelisted, the command runs under an idle monitor — if it produces no output for 600s (configurable), the tool call returns early with a [TAIJI-FG-BG] marker while the command keeps running (its output keeps going to a log file). That marker is NOT completion: there is no exit code yet. Read the captured output in the marker result first, then decide: keep waiting (the completion notification will arrive automatically — DO NOT bash sleep or busy-wait), check progress with bash_output, or terminate with bash_kill. A command that streams output continuously (monitors, tail -f style logs, while loops) never trips the idle threshold — pass an explicit timeout (it then runs natively and is killed at the deadline) or set background: true for such commands.",
 ].join("\n");
 
 /**
@@ -109,6 +146,230 @@ function startBackgroundAndReply(
 		],
 		details: undefined as undefined,
 	};
+}
+
+// ───────────── 空闲转后台包装层（foreground-idle-to-background，矩阵 A5）─────────────
+
+/** 包装脚本在扩展内的相对位置（u-wrapper 交付物 bin/taiji-fg-wrap；改写层只构造命令串，不依赖其已存在——真 wrapper 集成由 D3 真机验收承载）。 */
+export function resolveFgWrapScriptPath(): string {
+	return fileURLToPath(new URL("../bin/taiji-fg-wrap", import.meta.url));
+}
+
+/** 包装脚本转后台标记行前缀（设计 §5 部件 3 三方契约；B5 补标记判据 = wrapper 已打印则不重复补）。 */
+const FG_BG_MARKER_TAG = "[TAIJI-FG-BG]";
+
+/** POSIX shell 单引号引用（包装命令串中路径段防空格/特殊字符；win32 不走本层——矩阵 A7）。 */
+function shQuote(pathSegment: string): string {
+	return `'${pathSegment.replace(/'/g, `'\\''`)}'`;
+}
+
+/** 包装命令执行的三文件（与任务日志同目录 = registry.json 同目录）。 */
+interface ForegroundWrapPlan {
+	taskId: string;
+	/** 原始命令全文（登记条目的 command 字段） */
+	command: string;
+	cmdShPath: string;
+	logFile: string;
+	pidfilePath: string;
+	wrappedCommand: string;
+	idleSec: number;
+}
+
+/**
+ * A5 改写：命令原文写 cmd.sh（零转义、零长度限制——bash 直接解释文件，无注入面）
+ * 并构造包装命令串交官方 execute。taskId 预生成（generateTaskId 同款形态）：--task-id
+ * 传包装脚本，--log/--pidfile 路径与（可能的）登记条目共用同一 id——登记发生在收尾，
+ * 包装脚本的标记行在退出时打印，id 必须事前已定（B2 正常完成时 id 弃用，无冲突）。
+ */
+function prepareForegroundWrap(
+	command: string,
+	dataDir: string,
+	sessionId: string,
+	idleSec: number,
+): ForegroundWrapPlan {
+	const taskId = generateTaskId();
+	const tasksDir = dirname(getRegistryPath(dataDir, sessionId));
+	const cmdShPath = join(tasksDir, `${taskId}.sh`);
+	const logFile = join(tasksDir, `${taskId}.log`);
+	const pidfilePath = join(tasksDir, `${taskId}.pid`);
+	mkdirSync(tasksDir, { recursive: true });
+	writeFileSync(cmdShPath, command.endsWith("\n") ? command : `${command}\n`, "utf8");
+	const wrappedCommand = [
+		shQuote(resolveFgWrapScriptPath()),
+		"--idle",
+		String(idleSec),
+		"--task-id",
+		taskId,
+		"--log",
+		shQuote(logFile),
+		"--pidfile",
+		shQuote(pidfilePath),
+		"--",
+		shQuote(cmdShPath),
+	].join(" ");
+	return { taskId, command, cmdShPath, logFile, pidfilePath, wrappedCommand, idleSec };
+}
+
+/**
+ * pidfile 读取（wrapper 写、改写层读的协议载体，bin/taiji-fg-wrap 实装对齐）：单行 JSON
+ * `{"pid":<n>,"pidStartTimeSec":<epoch秒>}`。解析防御：文件缺失 / JSON 损坏 / 字段非法 →
+ * pid undefined；空格分隔 `<pid> <pidStartTime>` 旧文本形态保留回退（协议漂移防御）。
+ * pidfile 缺失 = wrapper 在 spawn 与写 pidfile 的毫秒窗口内被杀（设计 §5 部件 1 已接受
+ * 形态：B5 兜底对该次失效，命令进程可能残留，与 pi 原生执行中宿主崩溃的残留同级）→
+ * 不登记（无 pid 可管），cmd.sh 尽力清理。
+ */
+export function parsePidFile(pidfilePath: string): { pid?: number; pidStartTime?: number } {
+	let raw: string;
+	try {
+		raw = readFileSync(pidfilePath, "utf8").trim();
+	} catch {
+		return {};
+	}
+	const toPid = (value: unknown): number | undefined => {
+		const n = typeof value === "number" ? value : Number.parseInt(String(value), 10);
+		return Number.isInteger(n) && n > 0 ? n : undefined;
+	};
+	if (raw.startsWith("{")) {
+		try {
+			const parsed: unknown = JSON.parse(raw);
+			if (isRecord(parsed)) {
+				const pid = toPid(parsed.pid);
+				if (pid !== undefined) {
+					const pidStartTime = toPid(parsed.pidStartTimeSec);
+					return { pid, ...(pidStartTime !== undefined ? { pidStartTime } : {}) };
+				}
+			}
+		} catch (err) {
+			// JSON 损坏 → 回退空格分隔形态（协议防御路径，debug 留痕便于排障）
+			logger.debug("pidfile JSON parse failed; falling back to whitespace form", {
+				detail: { pidfilePath, err: toErrorMessage(err) },
+			});
+		}
+	}
+	const fields = raw.split(/\s+/);
+	const pid = toPid(fields[0]);
+	if (pid === undefined) return {};
+	const pidStartTime = toPid(fields[1]);
+	return { pid, ...(pidStartTime !== undefined ? { pidStartTime } : {}) };
+}
+
+/**
+ * 转后台登记（只登记不 spawn）：包装命令 execute 返回、收尾判定命令进程还活着
+ * （B3 静默转后台 / B5 包装异常兜底）时的登记入口。三步对齐 spawnBackgroundTask 登记
+ * 链路（spawn-background.ts 范式）：
+ *   ① registerSpawnedTask（内存单例表，运行时权威）
+ *   ② writeRegistryEntry（registry 落盘 running 条目）
+ *   ③ emitPendingRegister（pending:register emit——session_start 差集对账前提）
+ * 不挂 attachExitCollector（转后台命令非本进程 child，无 exit 事件边沿）——退出感知
+ * 由 exit-watch.ts 的 pid 守望承载（attachExitWatch，部件 5）。
+ * 超时启用接线（矩阵 C2）：backgroundTimeoutSeconds 经 armBackgroundTimeout（自
+ * spawn-background.ts 导出）挂 task.timeoutTimer——漏接则转后台任务不受后台超时约束。
+ * 并发池关系（设计 §5 部件 2）：**不过并发门**（池满不拒——命令已存活，拒绝登记 =
+ * 标记行已打印而任务不存在 + 孤儿进程；spawn 侧 maxConcurrentBackground 上限语义 =
+ * spawn 准入控制，非表容量硬限）。登记进表即为 running 条目、计入 countActiveTasks、
+ * 占用池（挤占形态 = 池满时显式后台 spawn 被拒，错误文案含 bash_kill 指引可处置）。
+ */
+export function registerConvertedTask(opts: {
+	taskId: string;
+	pid: number;
+	/** pidfile 携带的启动时间（epoch 秒，可省略） */
+	pidStartTime?: number;
+	command: string;
+	dataDir: string;
+	sessionId: string;
+	timeoutSec?: number;
+}): BackgroundTask {
+	const registryPath = getRegistryPath(opts.dataDir, opts.sessionId);
+	const outputFile = join(dirname(registryPath), `${opts.taskId}.log`);
+	// pidStartTime（pid 复用防御，M3 补写字段同款）：pidfile 携带值优先；缺失时直接读
+	// 进程 start time；读不到省略（消费方降级 startedAt 秒级校验兜底，不报错不阻断）
+	const pidStartTime = opts.pidStartTime ?? getProcessStartTimeSec(opts.pid);
+	const task: BackgroundTask = {
+		taskId: opts.taskId,
+		pid: opts.pid,
+		command: opts.command,
+		outputFile,
+		registryPath,
+		startedAt: Date.now(),
+		state: "running",
+		ownerPiPid: process.pid,
+		sessionId: opts.sessionId,
+		...(pidStartTime !== undefined ? { pidStartTime } : {}),
+		// child 缺省：转后台命令非本进程 spawn，无 ChildProcess 句柄（exit 感知归守望）
+	};
+	if (opts.timeoutSec !== undefined) {
+		armBackgroundTimeout(task, opts.timeoutSec);
+	}
+	registerSpawnedTask(task);
+	writeRegistryEntry(registryPath, taskToRegistryEntry(task));
+	emitPendingRegister(task);
+	// 退出感知守望（部件 5）：2s 轮询 pid，ESRCH / pid 复用 → finalize 链收尾
+	attachExitWatch(task);
+	return task;
+}
+
+/**
+ * execute 收尾统一判定（§4.3 登记判据 = pid 存活性，B2/B3/B5 三形态收口）：
+ *  - pidfile 可读且 pid 活 → 登记为后台任务（返回条目，调用方按需补标记行）
+ *  - pid 死 / pidfile 不可读 → 不登记零感知 + 删除本次三文件（cmd.sh/pidfile/日志——
+ *    B2 无登记条目则文件无消费方，输出已经官方管道完整透传；防「调用频次 × 会话寿命」
+ *    的单调累积）。三文件删除对中途异常尽力而为（rmSync force，缺哪个删哪个）
+ */
+function settleConvertedCommand(
+	plan: ForegroundWrapPlan,
+	dataDir: string,
+	sessionId: string,
+	backgroundTimeoutSec: number | undefined,
+): BackgroundTask | undefined {
+	const { pid, pidStartTime } = parsePidFile(plan.pidfilePath);
+	if (pid === undefined || !isPidAlive(pid)) {
+		for (const path of [plan.cmdShPath, plan.pidfilePath, plan.logFile]) {
+			try {
+				rmSync(path, { force: true });
+			} catch (err) {
+				logger.debug("foreground-wrap cleanup failed (best-effort)", {
+					detail: { path, err: toErrorMessage(err) },
+				});
+			}
+		}
+		return undefined;
+	}
+	return registerConvertedTask({
+		taskId: plan.taskId,
+		pid,
+		pidStartTime,
+		command: plan.command,
+		dataDir,
+		sessionId,
+		timeoutSec: backgroundTimeoutSec,
+	});
+}
+
+/** B5 补标记（设计 §3.2 失败路径）：wrapper 异常死亡未及打印标记行时，由改写层在结果尾部补齐（命令仍在跑、日志路径、查询/终止用法）。 */
+function buildConvertedMarkerNote(task: BackgroundTask): string {
+	return [
+		`${FG_BG_MARKER_TAG} Command moved to background (the wrapper exited without printing its marker) — still running, NOT finished (no exit code yet).`,
+		`Full log: ${task.outputFile}`,
+		`Check: bash_output {task_id:"${task.taskId}"}; terminate: bash_kill {task_id:"${task.taskId}"}.`,
+		"It will notify on completion — DO NOT bash sleep while waiting.",
+	].join("\n");
+}
+
+/** 首个 text 块尾部追加（无 text 块则追加一块；content 类型面 = pi AgentToolResult 判别联合，窄化零断言）。 */
+function appendTextToResult<T extends AgentToolResult<unknown>>(result: T, note: string): T {
+	for (const block of result.content) {
+		if (block.type === "text") {
+			block.text = `${block.text}\n${note}`;
+			return result;
+		}
+	}
+	result.content.push({ type: "text", text: note });
+	return result;
+}
+
+/** 结果文本是否已含 wrapper 标记（收尾判定本身走 pidfile，此处仅判 B5 补标记的必要性——B3 已打印则透传不动，不解析标记内容）。 */
+function resultHasFgBgMarker(result: AgentToolResult<unknown>): boolean {
+	return result.content.some((block) => block.type === "text" && block.text.includes(FG_BG_MARKER_TAG));
 }
 
 /**
@@ -211,23 +472,80 @@ export function createBashOverrideToolDefinition() {
 				return startBackgroundAndReply(args.command, ctx, config, timeoutSec);
 			}
 			const delegate = getDelegate(ctx.cwd);
-			// 前台委托：只转发官方 schema 已识别的字段（command/timeout），background
+			// 前台路径：只转发官方 schema 已识别的字段（command/timeout），background
 			// 是本包增量，官方 execute 不认识（其解构也只取这两个键，显式构造让
 			// 「本层转发侧」在代码上自解释）。subagent 降级（D14）与 background 缺省
 			// 都落到这条路径。
 			//
 			// 前台 timeout 注入（M4/G3）：LLM 未填 && foregroundTimeoutSeconds 配置了
-			// 默认 → 注入；默认 null 不注入 = pi 原生不限时语义（D4）。注入与 subagent
-			// 降级正交——D14 只废 background/白名单语义，前台默认超时是全局挂死保护
+			// 默认 → 注入；默认 null 不注入。注入与 subagent 降级正交——D14 只废
+			// background/白名单语义，前台默认超时是全局挂死保护
 			const foregroundTimeout =
 				args.timeout !== undefined ? args.timeout : (config.foregroundTimeoutSeconds ?? undefined);
-			return delegate.execute(
-				toolCallId,
-				{ command: args.command, timeout: foregroundTimeout },
-				signal,
-				onUpdate,
-				ctx,
-			);
+
+			// 矩阵 A3/A4（§4.4 timeout 与转后台互斥分工，A 级）：超时存在（显式或配置
+			// 注入）= 模型/用户已选定「到点杀」处置策略，命令原样交官方——不包装、无
+			// 转后台。两机制互斥，无并存武装。
+			if (foregroundTimeout !== undefined) {
+				return delegate.execute(
+					toolCallId,
+					{ command: args.command, timeout: foregroundTimeout },
+					signal,
+					onUpdate,
+					ctx,
+				);
+			}
+
+			// 矩阵 A5 前置例外（全部回落官方原生，与现状逐字一致）：
+			//  - A6：子代理进程内一律官方原生执行（§4.5——不包装不登记，subagent-guard
+			//    文件头两条降级理由：结构化输出契约 + 孤儿无人收殓）
+			//  - A7：win32 回落（包装脚本暂不支持 Windows，差距 G7，M3 波次消除）
+			//  - N3：idleBackgroundSec=null（用户显式关闭机制，opt-out 语义）
+			const idleSec = config.idleBackgroundSec;
+			if (
+				subagent ||
+				process.platform === "win32" ||
+				idleSec === null
+			) {
+				return delegate.execute(
+					toolCallId,
+					{ command: args.command, timeout: undefined },
+					signal,
+					onUpdate,
+					ctx,
+				);
+			}
+
+			// 矩阵 A5：包装执行 + 空闲转后台。执行本体仍是官方 delegate（包装命令串交
+			// 官方原样跑，timeout 缺省 = 官方无超时语义；转后台后的超时 =
+			// backgroundTimeoutSeconds，由 registerConvertedTask 的 armBackgroundTimeout
+			// 接线承担）。收尾统一读 pidfile 判定命令进程存活性：还活着（B3 静默转后台 /
+			// B5 包装异常）→ 登记；已死（B2 正常完成）→ 不登记零感知 + 三文件清理。
+			const dataDir = resolveTaijiDataDir();
+			const sessionId = ctx.sessionManager.getSessionId();
+			const plan = prepareForegroundWrap(args.command, dataDir, sessionId, idleSec);
+			try {
+				const result = await delegate.execute(
+					toolCallId,
+					{ command: plan.wrappedCommand, timeout: undefined },
+					signal,
+					onUpdate,
+					ctx,
+				);
+				const converted = settleConvertedCommand(plan, dataDir, sessionId, config.backgroundTimeoutSeconds ?? undefined);
+				// B5 补标记：wrapper 未及打印标记行（异常死亡）时由本层补齐；B3 已打印
+				// → 透传不动（登记后结果文本透传原则：标记行已在输出内，模型直接可读）
+				if (converted !== undefined && !resultHasFgBgMarker(result)) {
+					return appendTextToResult(result, buildConvertedMarkerNote(converted));
+				}
+				return result;
+			} catch (err) {
+				// 官方 execute 抛错（含矩阵 B4 用户中止：abort 按进程组整组杀——wrapper
+				// 与真实命令同组一并死，收尾判定走 B2 清理路径）→ 收尾判定照走，官方
+				// 式错误原样上抛（不吞不改写）
+				settleConvertedCommand(plan, dataDir, sessionId, config.backgroundTimeoutSeconds ?? undefined);
+				throw err;
+			}
 		},
 	};
 }

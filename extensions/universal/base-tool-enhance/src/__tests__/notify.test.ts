@@ -35,6 +35,7 @@ import {
 	handleTaskExit,
 	refreshPiReference,
 	resetNotifyForTest,
+	toPendingReason,
 } from "../background/notify.ts";
 import { setOnTaskExit } from "../background/exit-collector.ts";
 import { spawnBackgroundTask } from "../background/spawn-background.ts";
@@ -570,5 +571,52 @@ describe("register emit direct unit (no spawn)", () => {
 	it("does nothing when reference unset; payload unchanged when attached late", () => {
 		resetNotifyForTest();
 		expect(() => emitPendingRegister(finalizedTask({ state: "running" }))).not.toThrow();
+	});
+});
+
+// ── natural + 无退出码 → 「结果未知」形态（断言 #12，foreground-idle-to-background
+//    §5 部件 5）：转后台任务退出码结构性不可得（reparent init 无父权），被信号终止的
+//    显式后台任务同样无退出码——无退出码即如实报未知，不再保守误报 failed ──
+
+describe("natural + null exit code: unknown-outcome form (断言 #12)", () => {
+	it("toPendingReason(natural, null/undefined) → 'unknown'; existing mappings unchanged", () => {
+		expect(toPendingReason("natural", null)).toBe("unknown");
+		expect(toPendingReason("natural", undefined)).toBe("unknown");
+		// 既有映射核对（修订只动 natural + 无退出码一格）
+		expect(toPendingReason("natural", 0)).toBe("completed");
+		expect(toPendingReason("natural", 3)).toBe("failed");
+		expect(toPendingReason("timeout", null)).toBe("time_limited");
+		expect(toPendingReason("killed", null)).toBe("cancelled");
+		expect(toPendingReason("process-exit", null)).toBe("cancelled");
+		// "unknown" 是 mapReasonToStatus 词表外键 → fail-visible 缺省落 'unknown'
+		//（extension-protocol/pending-entries.ts；protocol 零改动）
+	});
+
+	it("completion content reads 'finished (exit code unknown, …)' with tail lines — never 'failed'", () => {
+		const content = buildNotificationContent(
+			finalizedTask({ exitCode: null, tailSummary: "build ok", durationMs: 1_391_000 }),
+		);
+		expect(content).toContain("finished (exit code unknown, 23m11s)");
+		expect(content).not.toContain("failed");
+		expect(content).toContain("Last lines: build ok");
+	});
+
+	it("port path steers the unknown form; details keep endReason natural + exitCode null", () => {
+		const host = attachPort();
+		handleTaskExit(finalizedTask({ exitCode: null, durationMs: 5000 }));
+
+		expect(host.sendMessage).toHaveBeenCalledTimes(1);
+		const message = portSentMessage(host);
+		expect(message.content).toContain("finished (exit code unknown, 5s)");
+		expect(message.details).toMatchObject({ endReason: "natural", exitCode: null });
+	});
+
+	it("signal-terminated explicit background task (natural + null) uses the same unknown form", () => {
+		// 修订统一适用于 natural + null 全部来源（设计 §9）——exit 事件 code 为 null 的
+		// 既有显式后台形态不再报 failed
+		const content = buildNotificationContent(finalizedTask({ exitCode: null, reason: "natural" }));
+		expect(content).toContain("finished (exit code unknown");
+		expect(content).not.toContain("failed");
+		expect(buildNotifyDetails(finalizedTask({ exitCode: null })).exitCode).toBeNull();
 	});
 });

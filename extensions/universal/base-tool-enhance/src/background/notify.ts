@@ -77,10 +77,15 @@ export function resetNotifyForTest(): void {
 
 /**
  * 本包终态 reason → pending reason 字符串。
- * 映射值全部落在 pending-notifications mapReasonToStatus 的已知分支（四个值在该
- * switch 全部直通同名 status），保证 emit 后 listener 算出的 status 与本包预期一致：
+ * 映射值全部落在 pending-notifications mapReasonToStatus 的已知分支或其 fail-visible
+ * 缺省，保证 emit 后 listener 算出的 status 与本包预期一致：
  *  - natural + exitCode 0 → "completed"（正常完成）
- *  - natural + 非零/不可知 → "failed"（§3.1 失败路径：通知带 error 与末尾输出摘要）
+ *  - natural + 非零 → "failed"（§3.1 失败路径：通知带 error 与末尾输出摘要）
+ *  - natural + null/undefined（无退出码）→ "unknown"（结果未知——转后台任务退出码
+ *    结构性不可得：命令 reparent 到 init、无父权 wait 不可用；被信号终止的显式后台
+ *    任务同样无退出码。"unknown" 不在 mapReasonToStatus 词表内 → 经其 fail-visible
+ *    缺省落 'unknown' status（protocol 零改动，foreground-idle-to-background §5
+ *    部件 5），不再保守误报为失败引导）
  *  - timeout   → "time_limited"
  *  - killed    → "cancelled"
  *  - process-exit → "cancelled"（进程退出收殓终止，非任务自身成败）
@@ -88,7 +93,7 @@ export function resetNotifyForTest(): void {
 export function toPendingReason(
 	reason: BackgroundTaskEndReason,
 	exitCode: number | null | undefined,
-): "completed" | "failed" | "time_limited" | "cancelled" {
+): "completed" | "failed" | "unknown" | "time_limited" | "cancelled" {
 	switch (reason) {
 		case "timeout":
 			return "time_limited";
@@ -96,8 +101,11 @@ export function toPendingReason(
 		case "process-exit":
 			return "cancelled";
 		default:
-			// natural：exit 0 = 成功；非零（含 null 不可知，保守按失败处理引导查看输出）
-			return exitCode === 0 ? "completed" : "failed";
+			// natural：exit 0 = 成功；非零 = 失败；无退出码 = 结果未知（如实上报，
+			// 不谎报 failed——成功长任务曾恒被报为失败）
+			if (exitCode === 0) return "completed";
+			if (exitCode === null || exitCode === undefined) return "unknown";
+			return "failed";
 	}
 }
 
@@ -238,7 +246,11 @@ export type NotificationTaskLike = Pick<
  *   Full output: <path>; use bash_output {task_id:"bt-x"} for details.
  *
  * 失败任务 head 行标 failed（exit code 即 error 摘要，尾部输出佐证）；timeout 标
- * timed out；tailSummary 为空（无输出/文件丢失）时省略 Last lines 行。
+ * timed out；natural + 无退出码标「结果未知」形态 `finished (exit code unknown, …)`
+ * （foreground-idle-to-background §5 部件 5：转后台任务退出码结构性不可得，被信号
+ * 终止的显式后台任务同样无退出码——无退出码即如实报未知，措辞沿用
+ * buildTerminatedNotificationLine 的 exit code unknown 先例；渲染层对 exitCode null
+ * 已归中性档）；tailSummary 为空（无输出/文件丢失）时省略 Last lines 行。
  */
 export function buildNotificationContent(task: NotificationTaskLike): string {
 	const duration = formatDurationMs(task.durationMs ?? 0);
@@ -248,8 +260,10 @@ export function buildNotificationContent(task: NotificationTaskLike): string {
 		head = `[background-bash] ${task.taskId} timed out (${duration}): ${command}`;
 	} else if (task.exitCode === 0) {
 		head = `[background-bash] ${task.taskId} finished (exit 0, ${duration}): ${command}`;
+	} else if (task.exitCode === null || task.exitCode === undefined) {
+		head = `[background-bash] ${task.taskId} finished (exit code unknown, ${duration}): ${command}`;
 	} else {
-		head = `[background-bash] ${task.taskId} failed (exit ${task.exitCode ?? "unknown"}, ${duration}): ${command}`;
+		head = `[background-bash] ${task.taskId} failed (exit ${task.exitCode}, ${duration}): ${command}`;
 	}
 	const lines = [head];
 	if (task.tailSummary !== undefined && task.tailSummary.length > 0) {
@@ -281,7 +295,7 @@ export interface BackgroundBashDetails {
 	/** 存活时长（毫秒），与 content 中的耗时同源同口径。 */
 	durationMs: number;
 	endReason: "natural" | "timeout";
-	/** 无退出码时为 null（timeout / 被信号终止语义，D1 可空字段）。 */
+	/** 无退出码时为 null（timeout / 被信号终止 / 转后台任务自然完成——无父权不可得，D1 可空字段）。 */
 	exitCode: number | null;
 }
 

@@ -238,7 +238,12 @@ export function spawnBackgroundTask(opts: SpawnBackgroundOptions): SpawnBackgrou
  * killed）。接受语义微移：到期前极窄窗口内自然死亡的任务改标 natural（仅影响 AI
  * 通知文案）。
  */
-function armBackgroundTimeout(task: BackgroundTask, timeoutSec: number): void {
+/**
+ * 导出（foreground-idle-to-background §4.7/C2 超时启用接线）：转后台登记
+ * （bash-tool.ts registerConvertedTask）复用同一启用函数——转后台后超时 =
+ * backgroundTimeoutSeconds（该格无显式值可继承），漏接则转后台任务不受后台超时约束。
+ */
+export function armBackgroundTimeout(task: BackgroundTask, timeoutSec: number): void {
 	const timer = setTimeout(() => {
 		// pid 复用防御（§3.6，同 bash_kill 范式，宁不杀勿误杀）：
 		// 任务早已退出（exit 边沿未被收尾或竞态未及）且 pid 在到点前被系统复用

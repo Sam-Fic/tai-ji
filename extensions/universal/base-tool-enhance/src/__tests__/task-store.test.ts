@@ -1,13 +1,25 @@
 // src/__tests__/task-store.test.ts —— 单例任务表白盒：task_id 唯一性 / 状态机 / LRU
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
+// registerConvertedTask（bash-tool.ts 第二登记点）经顶层 import 链引用 pi 工厂——
+// 轻量 mock 隔离（本文件只测登记表语义，不触官方工厂行为）
+const { createBashToolDefinitionMock } = vi.hoisted(() => ({
+	createBashToolDefinitionMock: vi.fn(),
+}));
+vi.mock("@earendil-works/pi-coding-agent", () => ({
+	createBashToolDefinition: createBashToolDefinitionMock,
+}));
+
+import { registerConvertedTask } from "../bash-tool.ts";
+import { clearExitWatchesForTest } from "../background/exit-watch.ts";
 import { generateTaskId } from "../background/spawn-background.ts";
 import {
 	clearTaskStoreForTest,
+	countActiveTasks,
 	finalizeTask,
 	MAX_TERMINAL_TASKS,
 	markKillingIntent,
@@ -17,6 +29,8 @@ import {
 	getTask,
 } from "../background/task-store.ts";
 import type { BackgroundTask } from "../background/types.ts";
+
+const CONVERT_DATA_DIR = mkdtempSync(join(tmpdir(), "bte-taskstore-conv-"));
 
 function makeTask(overrides: Partial<BackgroundTask> = {}): BackgroundTask {
 	return {
@@ -34,7 +48,12 @@ function makeTask(overrides: Partial<BackgroundTask> = {}): BackgroundTask {
 }
 
 afterEach(() => {
+	clearExitWatchesForTest();
 	clearTaskStoreForTest();
+});
+
+afterAll(() => {
+	rmSync(CONVERT_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 });
 
 describe("generateTaskId", () => {
@@ -119,8 +138,7 @@ describe("task store state machine", () => {
 	});
 });
 
-describe("terminal LRU eviction (cap 50)", () => {
-	it("evicts oldest terminal entries beyond cap, keeps recent ones", () => {
+describe("terminal LRU eviction (cap 50)", () => {	it("evicts oldest terminal entries beyond cap, keeps recent ones", () => {
 		const OVERFLOW = 5;
 		const total = MAX_TERMINAL_TASKS + OVERFLOW;
 		const created: BackgroundTask[] = [];
@@ -152,5 +170,51 @@ describe("terminal LRU eviction (cap 50)", () => {
 		}
 		expect(getTask(active.taskId)).toBeDefined();
 		expect(getTask(active.taskId)?.state).toBe("running");
+	});
+});
+
+// ── 转后台登记（registerConvertedTask，foreground-idle-to-background §4.3）：第二
+//    登记调用点与 spawn 登记共存于同一模块级单例表——头部不变量注释同步的行为面 ──
+
+describe("converted registration co-resides with spawn registration", () => {
+	it("registerConvertedTask lands in the same singleton table and counts toward active tasks", () => {
+		const spawned = makeTask();
+		registerSpawnedTask(spawned);
+
+		const converted = registerConvertedTask({
+			taskId: "bt-1700000000-conv01",
+			pid: 4242424,
+			pidStartTime: 1_700_000_000,
+			command: "echo converted",
+			dataDir: CONVERT_DATA_DIR,
+			sessionId: "session-conv",
+		});
+
+		// 两类条目同表共存（registerSpawnedTask 调用点 = spawnBackgroundTask + registerConvertedTask）
+		expect(getTask(converted.taskId)?.state).toBe("running");
+		expect(getActiveTasks().map((t) => t.taskId).sort()).toEqual([converted.taskId, spawned.taskId].sort());
+		expect(countActiveTasks()).toBe(2);
+		// 转后台条目无 child 句柄（exit 感知归 exit-watch，不挂 exit-collector）
+		expect(getTask(converted.taskId)?.child).toBeUndefined();
+	});
+
+	it("converted entry flows through the same state machine (killing intent → finalize)", () => {
+		const converted = registerConvertedTask({
+			taskId: "bt-1700000000-conv02",
+			pid: 4242425,
+			pidStartTime: 1_700_000_000,
+			command: "echo conv",
+			dataDir: CONVERT_DATA_DIR,
+			sessionId: "session-conv",
+		});
+
+		markKillingIntent(converted.taskId, "killed");
+		expect(getTask(converted.taskId)?.state).toBe("killing");
+		expect(countActiveTasks()).toBe(1); // killing 仍属活跃（守望/收殓监护对象）
+
+		const finalized = finalizeTask(converted.taskId, { exitCode: null, reason: "killed", endedAt: Date.now() });
+		expect(finalized?.state).toBe("exited");
+		expect(finalized?.exitCode).toBeNull(); // 转后台退出码结构性不可得
+		expect(countActiveTasks()).toBe(0);
 	});
 });

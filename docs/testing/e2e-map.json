@@ -312,7 +312,8 @@
         "packages/runtime/src/transport/session-message-handler.ts",
         "packages/shared/src/protocol.ts",
         "packages/shared/src/virtual-session-id.ts",
-        "e2e/btw-turn-isolation.spec.ts"
+        "e2e/btw-turn-isolation.spec.ts",
+        "extensions/universal/base-tool-enhance/**"
       ],
       "layer": "L3",
       "assets": [
@@ -1362,7 +1363,8 @@
       "scope": [
         "packages/subagent-core/src/execution/engine/**",
         "packages/subagent-core/src/execution/service/workflow-dispatch.ts",
-        "packages/pi-subagent-cli/src/**"
+        "packages/pi-subagent-cli/src/**",
+        "extensions/universal/base-tool-enhance/**"
       ],
       "layer": "L3",
       "assets": [
@@ -1390,7 +1392,8 @@
         "packages/subagent-core/src/execution/service/workflow-dispatch.ts",
         "packages/pi-subagent-cli/src/**",
         "packages/subagent-core/src/execution/service/member-reuse-pool.ts",
-        "packages/subagent-core/workflows/fan-out.js"
+        "packages/subagent-core/workflows/fan-out.js",
+        "extensions/universal/base-tool-enhance/**"
       ],
       "layer": "L3",
       "assets": [
@@ -1425,7 +1428,8 @@
         "packages/subagent-core/src/execution/engine/**",
         "packages/subagent-core/src/execution/service/workflow-dispatch.ts",
         "packages/subagent-core/src/execution/service/chat-rounds.ts",
-        "packages/pi-subagent-cli/src/**"
+        "packages/pi-subagent-cli/src/**",
+        "extensions/universal/base-tool-enhance/**"
       ],
       "layer": "L3",
       "assets": [
@@ -1451,7 +1455,8 @@
       "scope": [
         "packages/subagent-core/src/execution/engine/**",
         "packages/subagent-core/src/execution/service/workflow-dispatch.ts",
-        "packages/zcode-subagent-cli/src/**"
+        "packages/zcode-subagent-cli/src/**",
+        "extensions/universal/base-tool-enhance/**"
       ],
       "layer": "L3",
       "assets": [
