@@ -63,7 +63,7 @@
  *   | — | — | S25 新增：delete 快照转移（任务移除、文件保留空集） |
  *   | — | — | S26 新增：run-now dispatch（立即注入 + 记账 + nextRunAt 推进） |
  *   | — | — | S27 新增：过期清理（expires 到期 → tick 移除，不注入） |
- *   | — | — | S28 新增：--no-session 写盘（无会话文件仍落盘；分片键为进程 UUID，重启不恢复——登记语义） |
+ *   | — | — | S28 新增：--no-session 写盘 + 跨重启恢复（sessionFile 缺失 → 分片键归一 'no-session'） |
  *   | — | — | S29 新增：损坏快照恢复（改名 .corrupt-<ts> 留证 + 空集启动 + 再写新快照） |
  *   | — | — | S30 新增：既有快照恢复 + cron 失效停用（dispatch 后 disableForInvalidCron 落盘） |
  *
@@ -1933,14 +1933,15 @@ async function runS27(piBin) {
 }
 
 /**
- * S28：--no-session 写盘（无会话文件仍落盘；sessionFile 字段省略）。
+ * S28：--no-session 写盘 + 跨重启恢复（分片键归一 'no-session'）。
  *
- * 实测语义（pi 1.0.0）：persist=false 时 sessionManager 仍生成**进程内 UUID** sessionId
- *（session-manager.newSession 无条件 createSessionId），故分片键是该 UUID 而非
- * 'no-session'——index.ts 的归一分支在本版本不触发。因此：
- *   - 任务确实落盘（旧机制「--no-session 任务不持久化」的缺陷消失，写盘不依赖会话门控）
- *   - 重启 = 新进程新 UUID = 新分片，不恢复上一进程的任务（诚实登记，不是本场景要证的「恢复」）
- * 断言两条：① 本进程快照在盘、无 sessionFile 字段；② 重启进程分片不同且看不到旧任务。
+ * 实测语义（pi 1.0.0）：persist=false 时 sessionManager 仍生成进程内 UUID sessionId
+ *（session-manager.newSession 无条件 createSessionId），但会话不落盘、sessionFile 不设置
+ *（getSessionFile() 返回 undefined）。分片键判据 = sessionFile 缺失 → 归一 'no-session'：
+ *   - 任务落盘不依赖 pi 会话首写门控（方案 B）
+ *   - 重启 = 新进程新 UUID，但分片键相同 → 命中同一快照文件，任务集恢复
+ * 断言：① 快照落在 no-session 分片、无 sessionFile 字段；② 重启后 list 看到上一进程的
+ * 任务，快照字节不变；③ 进程 UUID 不产生分片文件（分片文件总数 = 1）。
  */
 async function runS28(piBin) {
   const ws = makeWorkspace('S28')
@@ -1959,7 +1960,7 @@ async function runS28(piBin) {
     const info1 = await s1.sessionInfo()
     const turn1 = await s1.prompt('Call the schedule tool with the preset arguments. Then reply: done')
     if (!turn1.ok) return fail('S28', 'phase1 create turn did not end')
-    const path1 = storePathFor(ws, info1.sessionId)
+    const path1 = storePathFor(ws, NO_SESSION_SHARD)
     const created = await waitForSnapshot(path1, snap => snapshotTasks(snap).length === 1, 20000)
     await s1.kill()
     if (!created.ok) return fail('S28', 'no-session task not persisted at ' + path1)
@@ -1983,12 +1984,17 @@ async function runS28(piBin) {
 
     const ck = makeChecks()
     ck.add('phase1 sessionId is a shard-legal id (UUID)', /^[A-Za-z0-9_-]+$/.test(info1.rawSessionId), info1.rawSessionId)
-    ck.add('snapshot written without a session file', created.ok, path1)
+    ck.add('snapshot written at no-session shard', created.ok, path1)
+    ck.eq('phase1 store path uses no-session shard', path1, storePathFor(ws, NO_SESSION_SHARD))
     ck.add('sessionFile field omitted (--no-session)', raw1.raw && !('sessionFile' in raw1.raw))
-    ck.add('phase2 sessionId differs (no stable identity)', info2.sessionId !== info1.sessionId,
+    ck.add('phase2 sessionId differs (new process UUID)', info2.sessionId !== info1.sessionId,
       `${info1.sessionId} -> ${info2.sessionId}`)
-    ck.add('phase2 shard missing (no cross-restart recovery)', !existsSync(storePathFor(ws, info2.sessionId)))
-    ck.add("phase2 list says 'No scheduled tasks.'", blob.includes('No scheduled tasks.'))
+    ck.add('phase2 reuses no-session shard (cross-restart recovery)',
+      existsSync(storePathFor(ws, NO_SESSION_SHARD)))
+    ck.add('phase2 process UUID produced no shard file', !existsSync(storePathFor(ws, info2.sessionId)),
+      storePathFor(ws, info2.sessionId))
+    ck.add("phase2 list not 'No scheduled tasks.'", !blob.includes('No scheduled tasks.'))
+    ck.add('phase2 list shows recovered task id', !!task && blob.includes(task.id), task ? task.id : 'missing')
     ck.add('phase1 snapshot still on disk (durable write)', existsSync(path1))
     const raw2 = readSnapshotRaw(path1)
     ck.add('phase1 snapshot byte-identical after restart', raw2.text === raw1.text)
@@ -2288,7 +2294,7 @@ function confirmV(results) {
     },
     {
       name: 'V3',
-      claim: '恢复 = 一次直读：resume / corrupted 留证后空集启动 / --no-session 写盘（S5/S29/S28）',
+      claim: '恢复 = 一次直读：resume / corrupted 留证后空集启动 / --no-session 归一 no-session 分片跨重启恢复（S5/S29/S28）',
       status: anyPass(['S5', 'S29', 'S28']) ? 'CONFIRMED' : 'NEEDS-FOLLOWUP',
     },
     {

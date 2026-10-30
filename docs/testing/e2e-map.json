@@ -645,7 +645,7 @@
     },
     {
       "id": "E2E-SCHED-01",
-      "summary": "pi-scheduler 端到端真实环境实测（真 pi 进程 + 真 scheduler extension + faux LLM 演员，S1-S23 契约：模型路径直建 + /scheduler 命令表单 + 命令路径确认轮持久化，notify 帧 + session JSONL 双轨断言）",
+      "summary": "pi-scheduler 端到端真实环境实测（真 pi 进程 + 真 scheduler extension + faux LLM 演员，S1-S30 快照任务库轨：任务/调度记账落独立 JSON 快照，按 sessionId 分片、原子替换写；断言快照路径/schema/任务集/恢复/隔离 + 会话流只承载会话事实，ack 合成轮与 event sourcing entry 折叠已退役）",
       "scope": [
         "extensions/universal/scheduler/**",
         "scripts/verify-scheduler-e2e.cjs"
@@ -662,7 +662,7 @@
       "run": "node scripts/verify-scheduler-e2e.cjs",
       "owner": "extensions/universal/scheduler",
       "authority": "docs/TEST-STRATEGY.md#2-测试分层",
-      "note": "spawn 真实 pi 进程族，按 e2e 执行准则空载串行。[u-e2e-adjust] 命令路径持久化证据链改锚「确认轮」：建任务后 scheduler 注入零 token 本地合成轮（覆写会话当前 provider 的 streamSimple，产出 stopReason=aborted 的 assistant 行 + ack.confirm 文案），这就是正常路径——打开 pi 会话落盘开关，flush 探针退役；S18/S19/S20/S21 改为断言会话 JSONL 的 aborted assistant 行 + 确认文案（locale 固定 en-US）+ op=upsert 落盘（S19 为负向：无 assistant 行、无 upsert）；新增 S22（合成行字段：provider/model=会话模型、usage 全 0 + 宿主不变量：model_change/thinking_level_change 不因创建新增 + auto-rename 不被合成轮触发）与 S23（同会话连续两次创建 ⇒ 确认轮恰 1 次）。"
+      "note": "spawn 真实 pi 进程族，按 e2e 执行准则空载串行。任务库唯一持久化载体 = <PI_CODING_AGENT_DIR>/scheduler/<root>/<cwd segments>/<sessionId>.json（v2 快照，全量原子替换写，无 tmp 残留）。S1-S30 断言面：写入（路径/schemaVersion/任务字段/无 tmp 残留/无 v1 legacy 文件）+ 恢复（resume 同分片直读 / 损坏改名 .corrupt-<ts> 后空集启动 / 既有快照 + cron 失效停用 / --no-session 分片键归一 'no-session' 跨重启恢复）+ 隔离（不同 sessionId 分片互不可见、fork 新分片）+ 会话流只承载会话事实（负向断言无 pi-scheduler:task 条目，dispatch 注入 pi-scheduler:dispatched 出现）。S18/S19/S20/S21 保留命令表单 / notify 语义，落盘断言改快照（S19 负向：取消后无快照写入）；ack 合成轮与 event sourcing entry 折叠已随任务库分离退役，S22/S23 相应删除。"
     },
     {
       "id": "E2E-BATCH-01",

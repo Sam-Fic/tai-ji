@@ -14,8 +14,8 @@ scheduler 是全仓唯一「数据面已完全插件化、内容渲染已用通�
 
 已在插件侧（且是全仓最干净的样板）：
 
-1. 数据生产：`@zhushanwen/pi-scheduler`（`extensions/universal/scheduler/src/`，19 个生产文件 5393 行）把任务写成 pi custom entry（`TASK_ENTRY_TYPE = 'pi-scheduler:task'`，`packages/extension-protocol/src/extensions/scheduler/types.ts:65`；写侧 `extensions/universal/scheduler/src/backend.ts:188`）。
-2. 数据消费与折叠：builtin plugin `scheduler-manager`（`resources/plugins/scheduler-manager/index.ts`，706 行）经插件 API 拉取 entry、折叠成任务集、组装 `GuiComponent[]`（`buildModalTree`，`index.ts:199`），再 `api.views.update` 推给宿主。
+1. 数据生产：`@zhushanwen/pi-scheduler`（`extensions/universal/scheduler/src/`，19 个生产文件 5393 行）把任务集写成独立 JSON 快照（`<piAgentDir>/scheduler/<root>/<cwd segments>/<sessionId>.json`，v2 schema、按 owner sessionId 分片、原子替换写；读写单实现 = `packages/extension-protocol/src/extensions/scheduler/store.ts`，写侧 `extensions/universal/scheduler/src/backend.ts` 的 `persistTasks`）。
+2. 数据消费：builtin plugin `scheduler-manager`（`resources/plugins/scheduler-manager/index.ts`，706 行）直读同一快照文件（`sessions.get` 取 cwd → `schedulerStoreFilePath` 推导路径 → `readSchedulerStore` 一次 JSON.parse），组装 `GuiComponent[]`（`buildModalTree`，`index.ts:199`），再 `api.views.update` 推给宿主。
 3. 渲染：`packages/ui/src/extension-host/ViewHost.vue:48-53` 从 `ViewHostStore` 取分区树，交 `GuiComponentRenderer` 递归渲染；调度器业务语义在宿主侧为零。
 4. 写操作：树内 `action-bar` → `ACTION_EXECUTOR_KEY`（`packages/ui/src/rendering-protocol/action-executor-key.ts:22`，壳层 provide 于 `packages/renderer/src/composables/shell/useExtensionHostBridge.ts:559-567`）→ `CommandRegistry.execute` → `plugin.executeCommand` → 插件 handler。宿主只当执行器。
 
@@ -40,7 +40,7 @@ scheduler 是全仓唯一「数据面已完全插件化、内容渲染已用通�
 
 做完这 3 步，宿主对 scheduler 的专属认知 = 0 行（`SCHEDULER_MODAL_VIEW_ID` 常量被声明内 viewId 取代）。对照 todo/goal 已达成的 A 级形态（`extensions/universal/todo/src/model.ts` 的 `buildGui()`，前端零专属代码），差距恰好就是这三步。
 
-另需登记一个既有事实（非缺陷，属冗余入口）：scheduler 同时存在两条显示通道——headerAction 的 clock 按钮（`core/extension-host/builtin-contributions.ts:59`）与 pi extension 推的协议 widget（`extensions/universal/scheduler/src/widget.ts:151` 的 `setWidgetDual(ctx, 'scheduler', ...)`，key = `'scheduler'`）。后者经 `ViewHostStore` 出现在托盘 widget 区（`packages/renderer/src/components/panel/tray/ComposerTray.vue:425-432` 无任何 key 过滤），与左簇 clock 在有任务时同时可见。两者数据源不同（widget 由 pi extension 直推、headerAction 树由插件再次拉取折叠），语义重叠，插件化时可一并裁决是否保留双通道。
+另需登记一个既有事实（非缺陷，属冗余入口）：scheduler 同时存在两条显示通道——headerAction 的 clock 按钮（`core/extension-host/builtin-contributions.ts:59`）与 pi extension 推的协议 widget（`extensions/universal/scheduler/src/widget.ts:151` 的 `setWidgetDual(ctx, 'scheduler', ...)`，key = `'scheduler'`）。后者经 `ViewHostStore` 出现在托盘 widget 区（`packages/renderer/src/components/panel/tray/ComposerTray.vue:425-432` 无任何 key 过滤），与左簇 clock 在有任务时同时可见。两者数据源不同（widget 由 pi extension 直推、headerAction 树由插件直读快照），语义重叠，插件化时可一并裁决是否保留双通道。
 
 ---
 
@@ -51,13 +51,16 @@ scheduler 是全仓唯一「数据面已完全插件化、内容渲染已用通�
 ```
 @zhushanwen/pi-scheduler (extensions/universal/scheduler/)
   service.create / toggle / delete / run       service.ts
-    → backend.appendEntry(op)                  backend.ts:38/58/188
-      → pi.appendEntry(TASK_ENTRY_TYPE, op)    pi SDK（同步落盘 session JSONL）
+    → runtime 更新内存任务集 → persistTasks    runtime.ts
+      → backend.persistTasks(tasks)            backend.ts
+        → writeSchedulerStore(path, { tasks }) extension-protocol store.ts
+          （tmp → fsync → rename，原子替换写）
 ```
 
-- entry 类型常量：`packages/extension-protocol/src/extensions/scheduler/types.ts:65`（`'pi-scheduler:task'`），op 联合类型同文件 `:91`。
-- 这是唯一持久化面：调度器状态无独立文件，全部是 session JSONL 的 custom entry（event sourcing + 折叠恢复）。撤销（`taiji:revoked`）后靠 pi 活跃路径裁剪重建，`scheduler-manager/index.ts:87` 的 `REVOKED_SIGNAL_CUSTOM_TYPE`（注释 `:85-90` 说明三侧同串）。
-- 展示侧另有独立通道（不进对话流、不进 entry）：`widget.ts:150-152` `setSchedulerWidget` → `setWidgetDual(ctx, 'scheduler', ...)`（`packages/extension-protocol/src/core/helpers.ts:105-121`）→ GUI 分支 `guiSetWidget`（`:65-78`，单行 NUL marker + JSON）。
+- 快照形状：`{ schemaVersion: 2, sessionFile?, tasks }`（`packages/extension-protocol/src/extensions/scheduler/store.ts`）。`sessionFile` 是排障对账用冗余字段，`--no-session` 时缺省。
+- 这是唯一持久化面：任务定义与调度记账全部落独立 JSON 快照，读路径一次 JSON.parse 重建任务集（损坏则改名 `.corrupt-<ts>` 留证后空集启动）。会话 JSONL 只承载 dispatch 注入消息与用户对话，不承载任务数据。
+- 分片键：持久会话 = sessionId（resume 同 id 同文件恢复，fork 新 id 新分片）；`--no-session`（`getSessionFile()` 为空）= 固定值 `no-session`，任务跨重启恢复。路径 = `<piAgentDir>/scheduler/<root>/<cwd segments>/<sessionId>.json`（workspace 隔离段沿用 cwd）。
+- 展示侧另有独立通道（不进对话流、不进快照）：`widget.ts:150-152` `setSchedulerWidget` → `setWidgetDual(ctx, 'scheduler', ...)`（`packages/extension-protocol/src/core/helpers.ts:105-121`）→ GUI 分支 `guiSetWidget`（`:65-78`，单行 NUL marker + JSON）。
 
 ### 1.2 中转侧（runtime）
 
@@ -234,7 +237,7 @@ interface PluginContributesHeaderAction {
 
 (c) 到期通知：走 notify / custom 消息，无专属渲染。
 
-- 派发：`extensions/universal/scheduler/src/backend.ts:57` 的 `sendMessage`（返回 void，投递结果无感知，已单独登记 [scheduler-result-awareness-channel.md](../scheduler-result-awareness-channel.md)）。
+- 派发：`extensions/universal/scheduler/src/backend.ts` 的 `deliverDispatch`（经投递端口 `port.deliver`，timing 恒 `steer`，幂等键 `${taskId}:${dispatchEpoch}`；端口缺席时降级直发 `pi.sendMessage`。端口拒收 rejected → runtime 走 failed 记账，下个 tick 重试）。
 - 呈现：落 `SystemNotice.vue` 通用 display:true 分支（`packages/ui/src/features/chat/SystemNotice.vue:244` 注释点名 scheduler 派发提示同族同规格）。
 
 (d) 附带事实：widget 推送（1 处，`widget.ts:151`）推的是**协议 widget**，进托盘 widget 区，不进对话流。

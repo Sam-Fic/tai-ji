@@ -88,14 +88,17 @@ export default function schedulerExtension(pi: ExtensionAPI): void {
     // stopScheduler 幂等，shutdown 已停过再停一次无副作用。
     service?.runtime.stopScheduler()
     // 任务库分片路径（任务库与会话事实分离）：getAgentDir() 官方数据目录 + cwd workspace
-    // 隔离 + sessionId 分片。sessionId 非法形态（--no-session 等空值）归一 'no-session'
-    // ——该模式任务仍持久化（方案 B 红利：写盘不再依赖 pi 会话首写门控）。
+    // 隔离 + sessionId 分片。--no-session 的判据是 getSessionFile() 为空：pi 在该模式下
+    // 仍生成进程内 UUID sessionId（每次启动都不同），但会话不落盘、sessionFile 不设置。
+    // 分片键据此归一固定值 'no-session'——任务仍持久化（方案 B：写盘不依赖 pi 会话
+    // 首写门控），且跨重启命中同一分片恢复。持久会话按 sessionId 分片（resume 同 id
+    // 同文件恢复，fork 新 id → 新分片空任务集）；非路径安全的 sessionId 同样归一，
+    // 避免 schedulerStoreFilePath 的 fail-fast 在装配点抛出。
     const sessionId = ctx.sessionManager.getSessionId()
-    const storePath = schedulerStoreFilePath(
-      getAgentDir(),
-      ctx.cwd,
-      /^[A-Za-z0-9_-]+$/.test(sessionId) ? sessionId : 'no-session',
-    )
+    const shardKey = ctx.sessionManager.getSessionFile() === undefined || !/^[A-Za-z0-9_-]+$/.test(sessionId)
+      ? 'no-session'
+      : sessionId
+    const storePath = schedulerStoreFilePath(getAgentDir(), ctx.cwd, shardKey)
     // 装配点：backend（快照文件读写 + 投递端口）→ runtime（内存态 + 调度）→ service（业务入口）
     const backend = new PiSchedulerBackend(ctx, pi, storePath)
 
