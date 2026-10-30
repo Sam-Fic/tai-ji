@@ -18,7 +18,7 @@
  * 【不变量登记（D6-en，注释级）】extension 对某条目的**每次 registry 写都先经该
  * 条目的内存状态更新**——registry 侧 killing 状态因此恒为内存态的派生视图，runtime
  * 跨进程预写的 killing 不会被 stale 内存态冲回，D6-en intent 读回（exit-collector.ts）
- * 的正确性依赖此约束。全部 5 个 writeRegistryEntry 调用点逐一成立：
+ * 的正确性依赖此约束。全部 7 个 writeRegistryEntry 调用点逐一成立（① 含两处）：
  *   ① spawn-background.ts spawnBackgroundTask：registerSpawnedTask（新条目首登记）
  *     先于 registry 写 running；bash-tool.ts registerConvertedTask（转后台登记，
  *     foreground-idle-to-background）同序——内存先行再写 registry running；
@@ -29,7 +29,9 @@
  *     先于 registry 写 killing（pid 已死路径提前 return，不触达写点）；
  *   ④ exit-collector.ts finalizeExitedTask：finalizeTask（内存终态化）先于 registry 写 exited；
  *   ⑤ process-exit-guard.ts reapBackgroundTasksNow：finalizeTask 先于 registry 写
- *     exited(process-exit)（设计枚举 4 点时未列本点，实际同序成立，一并登记）。
+ *     exited(process-exit)（设计枚举 4 点时未列本点，实际同序成立，一并登记）；
+ *   ⑥ exit-watch.ts finalizeConvertedExit：finalizeTask 先于 registry 写 exited
+ *     （转后台任务退出守望收尾，foreground-idle-to-background §5 部件 5，同 ④ 序）。
  * 未来新增写路径（如 maintenance 类）必须保持该顺序，违反即 intent 可丢失。
  */
 

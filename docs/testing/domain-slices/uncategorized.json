@@ -1,6 +1,6 @@
 {
   "name": "uncategorized",
-  "summary": "池：孤儿与在途混合（跨域混合 bundle 按精确路径登记 + sharedBy 注记内含域；equivalence 混沌组；主题/i18n 横切；11 个未入词表扩展包整包清单与 background-task/retry-rules/network-proxy/migration 聚簇见 pendingDomains 注记——立新城时整簇迁出；棘轮只降不升，基线 = _meta.uncategorizedBaseline）",
+  "summary": "池：孤儿与在途混合（跨域混合 bundle 按精确路径登记 + sharedBy 注记内含域；equivalence 混沌组；主题/i18n 横切；11 个未入词表扩展包整包清单与 retry-rules/network-proxy/migration 聚簇见 pendingDomains 注记——立新城时整簇迁出；background-task 读侧/契约 9 件留池——ext 写侧已立城 base-tool-enhance 域，runtime reaper/service/bundle 5 件 + extension-protocol 契约 3 件 + core transport api 1 件；棘轮只降不升，基线 = _meta.uncategorizedBaseline）",
   "layers": [],
   "scope": {},
   "tests": [

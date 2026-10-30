@@ -1,6 +1,6 @@
 {
   "name": "base-tool-enhance",
-  "summary": "bash 工具增强整包（前台空闲转后台 / 后台任务域写侧 / 通知投递；runtime 收殓读侧 reaper/service 归 host 域，extension-protocol 契约归 foundation，renderer 详情面板按 W2-B 冻结在 tray 域）",
+  "summary": "bash 工具增强整包（前台空闲转后台 / 后台任务域写侧 / 通知投递；runtime 收殓读侧 reaper/service 与 extension-protocol 契约、core transport api 测试仍留 uncategorized 池，renderer 详情面板按 W2-B 冻结在 tray 域）",
   "layers": [
     "extension"
   ],
