@@ -2,7 +2,11 @@
   "name": "uncategorized",
   "summary": "池：孤儿与在途混合（跨域混合 bundle 按精确路径登记 + sharedBy 注记内含域；equivalence 混沌组；主题/i18n 横切；11 个未入词表扩展包整包清单与 background-task/retry-rules/network-proxy/migration 聚簇见 pendingDomains 注记——立新城时整簇迁出；棘轮只降不升，基线 = _meta.uncategorizedBaseline）",
   "layers": [],
-  "scope": {},
+  "scope": {
+    "runtime": [
+      "packages/runtime/src/services/background-task/update-broadcast.ts"
+    ]
+  },
   "tests": [
     "extensions/taiji/system-prompt-trace/src/__tests__/baseline.a12.test.ts",
     "extensions/taiji/system-prompt-trace/src/__tests__/index-wiring.test.ts",

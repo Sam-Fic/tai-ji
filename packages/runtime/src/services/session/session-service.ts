@@ -70,6 +70,9 @@ import { buildCrashDetailDigest, registerCrashLedgerAttachHooks } from './crash-
 // registry 读 + mtime 轮询 + kill 矩阵实现在 services/background-task/（u-runtime-svc），
 // 本 Facade 只做组装接线（组装点注释见构造器 backgroundTasks 赋值处）。
 import { BackgroundTaskService } from '../background-task/background-task-service.js'
+// backgroundTask:updated 广播组装（自本 Facade 行为保持迁出，max-lines 门禁——先例
+// crash-forensics-hooks.ts；组装点一行接线在 assembleSubmodules backgroundTasks 赋值处）。
+import { publishBackgroundTasksUpdate } from '../background-task/update-broadcast.js'
 // [B5 触发点收窄 2026-09-15] plugin sessionData 清理分发已从本模块迁出——真删除路径
 // （lifecycle.delete）侧 import 并调用（见 session-lifecycle.ts delete 内 B5 注释）；本模块
 // 的 removeSessionEntry 汇聚点同时收三条 session 存活路径（pi 崩溃 exit / forceQuit /
@@ -617,7 +620,9 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
     // no-op；组合根在 setServices 前注入 bus，晚于首个 2s 轮询拍）。piAgentDir 用默认
     // getPiAgentDir() 动态推导（生产正确；测试经 vi.mock pi-paths 指向 tmp）。
     this.backgroundTasks = new BackgroundTaskService({
-      onTasksChanged: (sessionId) => this.publishBackgroundTasksUpdate(sessionId),
+      // 广播组装迁 background-task/update-broadcast.ts（行为保持抽取，max-lines 门禁）；
+      // 闭包内 backgroundTasks/messageBus 均调用时刻动态读（getter 语义不变）。
+      onTasksChanged: (sessionId) => publishBackgroundTasksUpdate(this.backgroundTasks, this.messageBus, sessionId),
     })
     this.backgroundTasks.start()
 
@@ -1602,30 +1607,6 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
   }
 
   // ── 私有协作者 ────────────────────────────────────────────────
-
-  /**
-   * backgroundTask:updated 广播组装（background-task-sidebar D3，u-runtime-rpc①）：
-   * onTasksChanged（mtime 轮询 / 自写自检触发）时重读该 session registry 全量 → messageBus
-   * session 级 publish（Server→Client 冒号 camelCase，对齐 backgroundTask:updated 命名规则；
-   * stream 类入 ring，晚订阅 renderer 由 snapshot 重放兜底）。bus 未注入时 no-op（nullable
-   * 注入语义与域内其余 publish 点一致）。entry 形状为 extension-protocol 契约，shared 侧
-   * 逐字段镜像（u-proto D9，结构兼容直赋）。
-   * registry 读失败（listTasks 上抛）→ warn + 跳过本轮广播（拉取是真相通道，广播只做
-   * 提示）：本方法跑在 mtime 轮询的 setInterval 回调内，上抛会炸 runtime 进程；下一次
-   * mtime 变化自动重试广播，renderer 主动拉取路径由 RPC 中央 catch 回显式 error envelope。
-   */
-  private publishBackgroundTasksUpdate(sessionId: string): void {
-    try {
-      const { entries, corrupted } = this.backgroundTasks.listTasks(sessionId)
-      const msg: ServerMessage = {
-        type: 'backgroundTask:updated',
-        payload: { sessionId, tasks: entries, corrupted },
-      }
-      this.messageBus?.publish(sessionId, msg)
-    } catch (e) {
-      console.warn('[session-service] backgroundTask update broadcast skipped (registry read failed), sid=', sessionId, e instanceof Error ? e.message : e)
-    }
-  }
 
   /**
    * 归属 project sidecar 延迟写入兜底（D14 语义修正，2026-08-04）。
