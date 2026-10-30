@@ -48,6 +48,7 @@ export interface DisabledPluginEntry { // oe-exempt:20261031:framework:禁用标
 export type DisabledPluginsFile = Record<string, DisabledPluginEntry>
 
 const INSTALLED_FILE = 'installed.json'
+/** 路径公式与 plugin-registry.loadDisabledIds（join(pluginsConfigDir, 'plugins', ...)）两处实装——本常量模块私有未导出，改名双侧同步；plugin-disabled-registry.test.ts 同时测读写两半兜底。 */
 const DISABLED_FILE = 'disabled.json'
 /** 登记文件序列化缩进（人读 diff 友好；纯展示选择非逻辑参数） */
 const JSON_INDENT = 2

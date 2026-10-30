@@ -5,11 +5,14 @@
  * XY 码解析、numstat 聚合、冲突判定全部隐藏。handler 只需 catch → error envelope。
  *
  * 分层：GitService 调 IGitExecutor（port）做写操作 IO，调 git-status-parser（纯函数 kernel，
- * 本仓 infra/git/）做 commit 冲突预检解析，经 ISessionService 取 cwd，getStatus 经
+ * 本仓 infra/git/）做 commit 冲突预检解析，cwd 经 resolveSessionContext 两级解析（U4/D5，
+ * file-service 单点：内存活跃表 → 磁盘元数据带缓存，第一级读 ISessionService），getStatus 经
  * IGitStateService（状态统一读取：去重/缓存/失效，perf W16-W17）。不直接 import infra 实现。
  *
  * 安全：
- * - cwd 取自 sessionService.getSession(sid).cwd（session.create 时确立的受信工作目录）
+ * - cwd 经 resolveSessionCwd 两级解析（U4/D5，论证见 resolveSessionCwd 注释）：第一级 =
+ *   内存活跃表在册会话（session.create 时确立的受信工作目录）；第二级 = 磁盘会话文件
+ *   header 登记的 cwd（session.create 时确立的同一事实源的落盘形态，非推断值）
  * - stage/unstage 的 filePaths：逐个 path.resolve 后必须落在 cwd 之下（isUnderOrEqual），
  *   防止 `../../etc/passwd` 之类的路径穿越 → 越界抛 GitPathError（→ 'path_not_allowed'）
  *

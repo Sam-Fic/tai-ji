@@ -112,9 +112,13 @@ export class PluginRegistry {
    * [U7/D2] 读禁用标记清单的 pluginId 集（scan 跳过判定面）。
    *
    * 直接读文件而不 import InstalledStore 类：InstalledStore 是登记写入域的类（含
-   * atomicWrite 依赖链），扫描侧只需要读半边；文件路径与 schema 由 installed-store
-   * 单源定义（DISABLED_FILE 常量与条目形状注释互指），读侧解析容错与
-   * InstalledStore.loadDisabled 同语义（损坏 → 空表 + warn）。
+   * atomicWrite 依赖链），扫描侧只需要读半边；条目 schema 由 installed-store 侧
+   * DisabledPluginEntry 形状单源定义（本读侧只消费 pluginId 键）。文件路径公式
+   * （join(pluginsConfigDir, 'plugins', 'disabled.json')）与 installed-store 的
+   * DISABLED_FILE 常量（模块私有未导出）是两份独立实装——改名需双侧同步，
+   * plugin-disabled-registry.test.ts 同时测写半边（InstalledStore）与读半边
+   * （本类 scan）兜底；读侧解析容错与 InstalledStore.loadDisabled 同语义
+   * （损坏 → 空表 + warn）。
    */
   private async loadDisabledIds(): Promise<Set<string>> {
     const disabledPath = join(this.pluginsConfigDir, 'plugins', 'disabled.json')

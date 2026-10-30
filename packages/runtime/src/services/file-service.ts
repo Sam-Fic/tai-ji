@@ -3,15 +3,22 @@
  *
  * 职责（单一变化原因「文件树编排」）：cwd 解析 / 越界统一守门 / 懒加载分层 / ignore 标记 / readFile 截断。
  *
- * 数据流（§4 功能1）：listTree → sessionService.getSummary(sid).cwd → isUnderOrEqual 守门 →
+ * 数据流（§4 功能1）：listTree → requireCwd → resolveSessionContext 两级解析（内存活跃表 →
+ *   磁盘元数据带缓存，btw 两形态处置，U4/D5，见下方注释块）→ isUnderOrEqual 守门 →
  *   executor.listDir ×N（1+M 次，F-1：顶层 1 次 + 每个顶层 dir 再 1 次拿一级子）→
  *   ignore-parser 标记（命中的节点标 ignored=true，前端按开关过滤）→ FileNode[]（path 相对 cwd，不含前导斜杠）。
  *
  * 分层：FileService 经 IFileExecutor（port）做 IO，经 ignore-parser 纯函数 kernel（本仓 infra/fs/，
- *   compileIgnoreRules/matchPath）做 ignore 计算，经 ISessionService 取 cwd。不直接 import node:fs（AC-2 grep 验证）。
+ *   compileIgnoreRules/matchPath）做 ignore 计算，cwd 经 resolveSessionContext 两级解析
+ *   （U4/D5：内存活跃表 → 磁盘元数据带缓存，第一级读 ISessionService 内存活跃表）。
+ *   不直接 import node:fs（AC-2 grep 验证）。
  *
  * 安全（NFR-AC-S2 越界统一守门）：
- * - cwd 取自 sessionService.getSummary(sid).cwd（session.create 时确立的受信工作目录）
+ * - cwd 经 resolveSessionContext 两级解析（U4/D5，见下方注释块与 requireCwd）：
+ *   第一级 = 内存活跃表在册会话（ISessionService，session.create 时确立的受信工作目录）；
+ *   第二级 = 磁盘会话文件 header 登记的 cwd——session.create 时确立的同一事实源的落盘
+ *   形态，非推断值（受信论证同 git-service resolveSessionCwd）；btw 不在册线两级 miss →
+ *   btw-line 形态（消费方转「不支持」错误），不以布局推断的 cwd 作守门基准
  * - expandDir/readFile 的 path：path.resolve(cwd, path) 后必须落在 cwd 之下（isUnderOrEqual），
  *   防 `../../etc/passwd` 路径穿越 → 越界抛 FileError('out_of_cwd')。
  *   （listTree 入口对 cwd 自身守门，恒 true，保持入口统一守门模式。）
