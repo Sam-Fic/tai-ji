@@ -2,16 +2,16 @@
   "name": "probe-container-plugin",
   "version": "0.0.1",
   "private": true,
+  "type": "module",
   "taijiPlugin": {
     "manifestVersion": 1,
     "main": "index.js",
     "activationEvents": [
       "onStartupFinished"
     ],
-    "trustLevel": "trusted",
-    "source": "built-in",
     "permissions": [
-      "sessions.readState"
+      "sessions.readState",
+      "views.update"
     ],
     "contributes": {
       "views": [

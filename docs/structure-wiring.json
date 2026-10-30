@@ -7,17 +7,11 @@
       "testScript": "test:resources-plugins",
       "publish": false,
       "coverage": true
-    },
-    "resources/plugins/probe-container-plugin": {
-      "reason": "D3 验收探针插件（容器扩展点统一验收素材，不入 pnpm workspace；无测试防线、不发布，index.js 经 esbuild 本地构建）",
-      "typecheckAnchor": "TypeCheck - builtin plugins (resources)",
-      "testScript": null,
-      "publish": false,
-      "coverage": false
     }
   },
   "exempt": {
     "packages/runtime/src/plugins/demo": "src 内嵌 demo 插件（plugin system 示例载荷，非独立结构）",
-    "packages/runtime/test/fixtures/plugins/hello-world": "测试夹具（vitest fs-guard 白名单域内，非独立结构）"
+    "packages/runtime/test/fixtures/plugins/hello-world": "测试夹具（vitest fs-guard 白名单域内，非独立结构）",
+    "packages/runtime/test/fixtures/plugins/probe-container-plugin": "测试夹具（容器扩展点统一验收探针，verify-taiji 剧本种子进 dataDir 用，非独立结构）"
   }
 }
