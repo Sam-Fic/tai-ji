@@ -1000,7 +1000,15 @@ export class SessionRecords {
         // 详情载荷增强（覆盖状态 + 最近生效值）在帧构造点施放——派生缓存（cache.subagents）
         // 保持纯派生视图产物，增强不回写缓存、不参与水位 diff（覆盖写入的 runtime 感知走
         // record 事件流 → 派生视图变化 → 水位 diff → 本帧构造时读最新值的时序）。
-        payload: { sessionId, subagents: this.enhanceSubagentDetails(sessionId, Array.from(cache.subagents.values())) },
+        // [U1-lite D10] 推送帧携带 additive「批进行中」标志（判据与 getSubagents 同源：
+        // 在途 entry 拉取轮或投影批加载窗口）。批末补发点投影批标志已闭（endBatch 先清
+        // 标志再补发），本帧值实际由在途轮显形；消费方（SC7/SC8 展示副本）对无旧数据
+        // 会话据 true 显示骨架屏，不把部分数据当全量照显。
+        payload: {
+          sessionId,
+          subagents: this.enhanceSubagentDetails(sessionId, Array.from(cache.subagents.values())),
+          batchInProgress: cache.inflight !== null || (cache.projection?.isBatchLoading() ?? false),
+        },
       })
       cache.publishedSubagents = new Map(cache.subagents) // publish 完成即推进（镜像当前派生 id 集）
       frames.push('session.subagents')
