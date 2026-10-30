@@ -16,12 +16,13 @@
  */
 
 /**
- * pi message entry 的 role 域（窄联合：解析时值检查收窄，非法 role 计坏行）。
+ * pi message entry 的 role 域（窄联合：解析时值检查收窄，词表外 role 整文件解析
+ * 抛 UnknownMessageRoleError——fail-fast，不静默丢 message）。
  *
  * 四值闭集与 pi 1.0 AgentMessage 的 role 全集对齐（pi-ai dist/types.d.ts SystemMessage/
- * UserMessage/AssistantMessage/ToolResultMessage）。1.0 起 system 消息落盘
- * （工具集变更高频追加），三值时代 role=system 的行在检查处丢弃 message 字段
- * （内容静默丢失）；四值放行后 expand/详情可读。
+ * UserMessage/AssistantMessage/ToolResultMessage）。词表外 role 意味着写入方 pi 版本
+ * 较新：显式失败优于静默丢内容（用户裁决 2026-10-30），pi 新增 role 时扩展本词表
+ *（编译期穷尽断言强制清单同步）并补行为测试。
  */
 export type SessionMessageRole = 'user' | 'assistant' | 'toolResult' | 'system'
 

@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { parseSessionContent, parseSessionFile } from '../parse.js'
+import { parseSessionContent, parseSessionFile, UnknownMessageRoleError } from '../parse.js'
+import { SESSION_MESSAGE_ROLES } from '../types.js'
 
 function makeTmpDir(): string {
   return mkdtempSync(join(tmpdir(), 'session-core-parse-'))
@@ -58,11 +59,61 @@ describe('parseSessionContent', () => {
     expect(result.skippedLines).toBe(3)
   })
 
-  it('非法 message role 计坏行（role 收窄失败 → 缺 message 但 id 合法时 entry 保留）', () => {
+  it('非法 message role → 整文件解析抛 UnknownMessageRoleError（fail-fast，不静默丢内容）', () => {
+    const content = [
+      JSON.stringify({ type: 'message', id: 'a', parentId: null, message: { role: 'user', content: 'ok' } }),
+      JSON.stringify({ type: 'message', id: 'b', parentId: 'a', message: { role: 'bot', content: 'x' } }),
+    ].join('\n')
+
+    let caught: unknown
+    try {
+      parseSessionContent(content)
+    } catch (e) {
+      caught = e
+    }
+
+    expect(caught).toBeInstanceOf(UnknownMessageRoleError)
+    const err = caught as UnknownMessageRoleError
+    expect(err.line).toBe(2)
+    expect(err.role).toBe('bot')
+    // 错误消息三要素：行号定位、非法值、恢复动作提示（升级 taiji / 修复该行）
+    expect(err.message).toContain('第 2 行')
+    expect(err.message).toContain('"bot"')
+    expect(err.message).toContain(SESSION_MESSAGE_ROLES.join('/'))
+    expect(err.message).toContain('升级 taiji')
+  })
+
+  it('message 存在但缺失 role 同样抛 UnknownMessageRoleError（role 原值 undefined）', () => {
+    const content = JSON.stringify({ type: 'message', id: 'a', parentId: null, message: { content: 'x' } })
+
+    let caught: unknown
+    try {
+      parseSessionContent(content)
+    } catch (e) {
+      caught = e
+    }
+
+    expect(caught).toBeInstanceOf(UnknownMessageRoleError)
+    const err = caught as UnknownMessageRoleError
+    expect(err.line).toBe(1)
+    expect(err.role).toBeUndefined()
+  })
+
+  it('合法 role 词表四值（user/assistant/toolResult/system）照常解析出 message', () => {
+    const content = SESSION_MESSAGE_ROLES.map((role, i) =>
+      JSON.stringify({ type: 'message', id: `m${i}`, parentId: null, message: { role, content: 'x' } }),
+    ).join('\n')
+
+    const result = parseSessionContent(content)
+
+    expect(result.entries.map((e) => e.message?.role)).toEqual([...SESSION_MESSAGE_ROLES])
+    expect(result.skippedLines).toBe(0)
+  })
+
+  it('message 字段缺省（无 message 键）的行照常产出 entry', () => {
     const result = parseSessionContent(
-      JSON.stringify({ type: 'message', id: 'a', message: { role: 'bot', content: 'x' } }),
+      JSON.stringify({ type: 'message', id: 'a', parentId: null }),
     )
-    // role 非法 → message 字段丢弃，entry 本身（type/id 合法）保留
     expect(result.entries).toHaveLength(1)
     expect(result.entries[0]?.message).toBeUndefined()
     expect(result.skippedLines).toBe(0)
@@ -125,6 +176,16 @@ describe('parseSessionFile', () => {
       expect(result.skippedLines).toBe(0)
 
       await expect(parseSessionFile(join(dir, 'missing.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' })
+
+      // 非法 role 文件同样 fail-fast（parseSessionContent 的文件版透传解析错误）
+      const badRoleFile = join(dir, 'bad-role.jsonl')
+      writeFileSync(
+        badRoleFile,
+        `${JSON.stringify({ type: 'message', id: 'a', parentId: null, message: { role: 'bot', content: 'x' } })}\n`,
+        'utf8',
+      )
+      await expect(parseSessionFile(badRoleFile)).rejects.toBeInstanceOf(UnknownMessageRoleError)
+      await expect(parseSessionFile(badRoleFile)).rejects.toMatchObject({ line: 1, role: 'bot' })
     } finally {
       rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
     }

@@ -16,7 +16,7 @@ export type {
   SessionMessageRole,
 } from './types.js'
 
-export { parseSessionContent, parseSessionFile } from './parse.js'
+export { parseSessionContent, parseSessionFile, UnknownMessageRoleError } from './parse.js'
 export { serializeSession } from './serialize.js'
 export { readFirstJsonlLine, readFirstJsonlLineSync } from './first-line.js'
 export { sessionIdFromFileName } from './session-id.js'

@@ -100,31 +100,28 @@ function extractZcodeSessionRefAnchor(engineHandle: unknown): ZcodeAnchor | unde
  * 多候选文件：按候选列表顺序逐文件扫，文件内有命中锚（含末条裁决后）即止——
  * 候选顺序 = 调用方声明的优先级（liveSessionDir 优先），不跨文件合并。
  *
- * 行级容错：逐行解析由基座 parseSessionContent 承担（坏行跳过继续、不中断）——
- * best-effort，不因一行坏 JSON 失败整文件。
+ * 行级容错：坏行（非法 JSON/缺 type/id）由基座 parseSessionContent 跳过继续；message
+ * 存在但 role 不在词表时基座整文件解析抛 UnknownMessageRoleError（fail-fast，不静默
+ * 丢内容）——readParsedEntriesBestEffort 把两类读失败（IO / 解析 fail-fast）统一收敛为
+ * undefined，候选跳过。
  *
- * 候选文件读失败（不存在/不可读）= 该候选无命中，跳过继续下一候选；本函数契约
- * 是「锚或 not-found」，IO 错误同样收敛到 not-found 信号（调用方映射错误码），
+ * 候选文件读失败（不存在/不可读/解析 fail-fast）= 该候选无命中，跳过继续下一候选；
+ * 本函数契约是「锚或 not-found」，IO 错误同样收敛到 not-found 信号（调用方映射错误码），
  * 不向上抛。
  *
  * 读取用 node:fs/promises 的 async readFile——本函数跑在 pi 扩展进程内，同步
  * readFileSync 全文读入会阻塞事件循环（同函数族 classifyIncompleteEntryAnchor
  * 同形态；对照 readSessionHeaderIdSync 只在首行 4KB 有界读时才允许同步）。
  *
- * @returns 命中的锚；所有候选均未命中（或全部候选不可读）→ undefined（not-found 信号）
+ * @returns 命中的锚；所有候选均未命中（或全部候选不可读/解析失败）→ undefined（not-found 信号）
  */
 export async function findZcodeEntryAnchor(
   candidateFiles: readonly string[],
   saId: string,
 ): Promise<ZcodeAnchor | undefined> {
   for (const file of candidateFiles) {
-    let content: string
-    try {
-      content = await readFile(file, 'utf8')
-    } catch {
-      continue
-    }
-    const { entries } = parseSessionContent(content)
+    const entries = await readParsedEntriesBestEffort(file)
+    if (entries === undefined) continue
     let anchor: ZcodeAnchor | undefined
     for (const entry of entries) {
       const hit = zcodeAnchorOfEntry(entry, saId)
@@ -133,4 +130,24 @@ export async function findZcodeEntryAnchor(
     if (anchor !== undefined) return anchor
   }
   return undefined
+}
+
+/**
+ * 读 session 文件并解析为 entries 的 best-effort 形态：读取失败（不存在/不可读）或
+ * 解析 fail-fast（message 存在但 role 不在词表等）都返回 undefined——候选扫描语境的
+ * 容错读（失败候选不贡献结果）；需要显式报错的主读链不走本函数（tool-handler
+ * safeParse 把解析错误转为带 👉 的工具错误）。
+ */
+export async function readParsedEntriesBestEffort(file: string): Promise<Entry[] | undefined> {
+  let content: string
+  try {
+    content = await readFile(file, 'utf8')
+  } catch {
+    return undefined
+  }
+  try {
+    return parseSessionContent(content).entries
+  } catch {
+    return undefined
+  }
 }

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseSessionContent, parseSessionFile, type Entry } from '@zhushanwen/session-core'
+import { parseSessionContent, parseSessionFile, UnknownMessageRoleError, type Entry } from '@zhushanwen/session-core'
 
 /** 构造单行 JSONL entry 字符串 */
 function line(obj: Record<string, unknown>): string {
@@ -136,18 +136,24 @@ describe('parseSessionContent', () => {
     expect(result.entries[0].parentId).toBeNull()
   })
 
-  it('message 缺/非法 role → 丢弃 message 字段但保留 entry', () => {
+  it('message 非法/缺失 role → 整文件解析抛 UnknownMessageRoleError（fail-fast 不静默丢内容）', () => {
     // role 样本用词表外的值（'bot'）——'system' 已随 pi 1.0 四值词表放行（session-core D9①）
     const content = [
       line({ type: 'message', id: 'm1', parentId: null, message: { role: 'bot', content: 'x' } }),
-      line({ type: 'message', id: 'm2', parentId: null, message: { content: 'x' } }),
     ].join('\n')
 
-    const result = parseSessionContent(content)
+    expect(() => parseSessionContent(content)).toThrow(UnknownMessageRoleError)
+    expect(() => parseSessionContent(content)).toThrow(/第 1 行.*"bot"/)
 
-    expect(result.entries).toHaveLength(2)
+    // message 存在但缺失 role 同样 fail-fast（role 不在词表）
+    const missingRole = line({ type: 'message', id: 'm2', parentId: null, message: { content: 'x' } })
+    expect(() => parseSessionContent(missingRole)).toThrow(UnknownMessageRoleError)
+
+    // message 键整体缺省照常产出 entry（无 message 结构可校验）
+    const noMessage = line({ type: 'message', id: 'm3', parentId: null })
+    const result = parseSessionContent(noMessage)
+    expect(result.entries).toHaveLength(1)
     expect(result.entries[0].message).toBeUndefined()
-    expect(result.entries[1].message).toBeUndefined()
   })
 })
 
