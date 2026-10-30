@@ -29,7 +29,6 @@ import { renderMarkdownSegments } from '@taiji/ui/features/chat/markdown'
 import {
   createIncrementalRenderCache,
   renderIncremental,
-  STREAMING_FENCE_SILENCE_MS,
 } from '@taiji/ui/features/chat/markdown-incremental'
 import type { Message } from '@taiji/shared'
 import { chatStore, createTurnExpansion, useChatInstance } from '../shell/app-runtime'
@@ -93,7 +92,6 @@ const deps: ChatViewDeps = {
     const result = await renderIncremental(source, c, { ...EMPTY_ENV, copyLabel: t('composable.copyLabel') }, opts)
     return { ...result, cache: c }
   },
-  streamingFenceSilenceMs: STREAMING_FENCE_SILENCE_MS,
   // ④ 占位降级（M-13 mermaid 行：图表在桌面查看；文案经 i18n，不养文案副本）
   renderMermaid: (source, _theme) => {
     void source

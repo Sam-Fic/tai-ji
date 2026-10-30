@@ -75,7 +75,7 @@
 /**
  * Markdown 渲染器（w6 迁 ui，deps 注入重构）。
  * - D-5 增量消费（W23）：流式渲染状态机在 useMarkdownStreaming（rAF 节流 + latest-wins 串行 +
- *   前缀段引用恒等缓存 + tail 段每帧重建 + streaming-fence 占位/finalize/粘滞 + 卸载清理）；
+ *   前缀段引用恒等缓存 + tail 段每帧重建 + streaming-fence 占位/finalize + 卸载清理）；
  *   渲染模式 = deps.renderMarkdownIncremental（必填注入，无全量回退路径）
  * - 文件路径经 deps.onFileClick/openDrawer 桥接；歧义浮层选中是本组件本地编排
  *   （onAmbiguousSelect → onFileClick + openDrawer + 清浮层状态）
@@ -101,7 +101,8 @@ const props = defineProps<{
   /** 渲染变体：默认 undefined（正文级排版）；'thinking' 用于 thinking 块/次要过程信息。 */
   variant?: 'thinking'
   /** 所属 assistant 是否正在流式（Block text 分支透传）。true 期间未结束 fence 走 streaming-fence
-   *  占位（静默 ≥阈值或翻 false 时 finalize 转完整渲染）；false/undefined（complete/静态内容）直接完整渲染。 */
+   *  占位（finalize 只由翻 false（消息 complete）触发，流中停顿不提前；fence 结束标记到达时
+   *  占位分支自然不进入）；false/undefined（complete/静态内容）直接完整渲染。 */
   streaming?: boolean
   /** 相对资源解析基准目录（绝对路径；设计 markdown-html-sanitize-render D4，双通道取值
    *  props 覆盖优先）：props 供 DetailPane 等静态宿主传打开文件所在目录（④路点击语义）；
