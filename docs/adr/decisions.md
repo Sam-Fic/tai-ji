@@ -1245,3 +1245,11 @@ WorkflowTab 步骤列表的数据源绑定从「workflow-record 全量快照（6
 **依据**：触发信号选在效果层而非原因层是根因（效果信号必然晚一帧、与布局系统耦合、随内容频率线性放大）；数据通路已存在且消息级直达（真机 242 delta 批大小恒 1）；覆盖盲区源无数据信号（「补 N 个 watch 无解」），debounce 时间尾沿是唯一可行的归属判别；聚合三条件带无堆栈限定使同文本带堆栈真错误不吞（不吞错纪律）。
 
 **登记**：实装（commit f146f14aa / dc069ba51 / 69fa5df95，分支 fix-ro-follow-loop）——`packages/renderer/src/composables/panel/useMessageStreamFollowTriggers.ts`（主体重构 + dev 窗尾重置计数）、`packages/renderer/src/components/panel/MessageStream.vue`（deps 注入位 + 空挂点/实参清理）、`packages/renderer/src/composables/panel/useVirtuaFollow.ts` 与 `useStreamingPin.ts`（接口退役）、`packages/renderer/src/boot/error-reporter.ts`（D5 聚合 + emitPayload 单点化）、`packages/renderer/src/composables/panel/usePinBottomGuard.ts`（文案）。验收剧本入库：`.agents/skills/verify-taiji/scenarios/follow-{stream-quiet,stick-shrink,detach-interactions,blindzone-converge}.mjs`（覆盖矩阵同步补行）。验收终态与降级处置：`~/.agents/skill-data/dev-flow/fix-ro-follow-loop-1dc70637/`（stream-follow-reshape.ledger.md）。
+
+### ADR-0182 killProcessTree 按真实 pgid 杀组：支持组成员非组长形态（转后台任务 kill 假成功根因修复）（2026-10-31 交付裁决，fix-chat-flow-stuck）
+
+**决策**：killProcessTree 快路径 `kill(-pid)` 原隐含「登记 pid 即进程组组长」（detached spawn 形态成立，显式后台任务 pgid=pid）。前台转后台任务（registerConvertedTask，bash 空闲转后台交付）登记 pid 复用前台进程链——组成员非组长，`kill(-pid)` 恒 ESRCH；原回退路径先杀父后 `pgrep -P` 枚举，父死后子进程 reparent 逃逸枚举 → kill 回执假成功（killed=true + registry 转终态）+ 命令链进程残留。修复：快路径落空后解析目标真实 pgid（`ps -o pgid=`）按组杀——reparent 不换组、组长死后组仍有效，覆盖全部命令链成员；解析组等于调用者自身进程组时跳过（防自杀）落回退；回退顺序修正为先枚举杀孙辈/子辈、最后杀目标本身。显式后台任务行为不变（快路径直接命中，原语义保真）。
+
+**依据**：D3 验收 verify-a1 独立探针实测复现全链（kill(-pid) ESRCH → 单杀父成功 → pgrep -P 空 → sleep 残留 PPID=1，与现场 pid/pgid 形态逐字同构）；「按目标真实进程组终止」是 killProcessTree 全部消费方（bash_kill / reaper 补杀 / background-task-service kill）语义「杀整棵进程树」的准确实现，比「假设组长=登记 pid」少一个隐含前提。
+
+**登记**：实装（commit ded112065）——`packages/extension-protocol/src/background-task-process.ts`（pgid 解析层 + 回退顺序修正）+ 同文件测试（新增转后台形态真实进程回归用例；632 用例绿）。设计文档：`~/.agents/skill-data/tech-design/fix-chat-flow-stuck-84f23fa0/foreground-idle-to-background.md`（D3 验收熔断项闭环）。
