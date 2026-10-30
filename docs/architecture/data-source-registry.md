@@ -128,7 +128,7 @@ taiji runtime 指向 pi session JSONL 的写点全集共 6 处（r3 审查补漏
 
 写点 1-5 已全部消灭或迁移（W1×2 + W11×3），6 登记后保留；pi JSONL 本体的 taiji 侧写点已归零、R1 allowlist 已清空为空集（写点集合与源码真实状态一致，防后续 review 误判「另有未登记写方」——r1/r2/r3 连续三轮审查均在此处扫出遗漏）。
 
-## 4. 例外与合法形态登记（二十项）
+## 4. 例外与合法形态登记（二十二项）
 
 > 编号 ⑭ 漏号未用（登记时手工跳号，非删除）——编号即身份不回填，外部对 §4 ⑰ 等的引用保持稳定。
 
@@ -157,6 +157,7 @@ taiji runtime 指向 pi session JSONL 的写点全集共 6 处（r3 审查补漏
 
 | ⑳ session 归档域写点（session-archive D1，ADR-0153） | `packages/runtime/src/services/archive/archive-service.ts` 五写点：①压缩体 `.jsonl.zst.tmp`→rename（archive/ 树内）②簿记 `.archive.json` 原子重写（archive/ 树内聚合根；写原语 = archive-paths `writeLedgerAtomic` 单点，C-data-11）③unarchive 解压中间态 `sessions/<原路径>.jsonl.tmp`→rename（tmp+rename 原子范式）④purge 引用枚举源解压 tmp（`prepareReferenceEnumerationSource` 写归档单元内 `<originalFile>.tmp`、cascade 消费后用后即清 unlink——离场内容 tmp + 用后即清，与 ③ 同族合法形态；登记与机器命中清单一一对应，dmg-r1-10 补列）⑤自愈/重试路径同族目标：独立簿记写点在 `archive-self-heal.ts`（staging 簿记补写走 writeLedgerAtomic / restoring 簿记归位 renameSync / 孤儿明文主文件搬回 sessions/ renameSync / 行 1b 压缩收尾窗口归位的解压回明文 tmp+rename——该文件条件 A 不命中、不进 allowlist，机器口径 21 命中不含它）。测试构造器 `archive-fixture.ts` 写点全部落在 mkdtemp tmp 树（vitest 防线白名单内） | **合法性依据 = 写目标非 pi 当前持有的 JSONL 本体**：归档前置编排先 detach+终止 pi 再搬移（D5 步骤 2，sessions/ 原路径文件已被 rename 走）；unarchive 解压写 `.tmp` 时该路径主文件不存在（冲突检测前置 + 互斥不变量 1），rename 后文件交还 scanner/spawn 全新 pi——「pi 唯一写方」指在场主文件，归档域只写离场文件与 tmp 中间态；④同族（写对象 = 归档单元内离场内容的解压副本，pi 不在场）；archive/ 树不在 SessionScanner 扫描范围（不变量 4 物理隔离），无并发读方 | 长期形态（归档域设计内写点，ADR-0153；退役随归档功能下线） |
 | ㉑ 存量磁盘孤儿清扫脚本写点（u-w5s-orphan-sweep，session-identity-visibility-state W5 批 2） | `scripts/sweep-orphan-session-dirs.mjs` 三写点：①点检记录 JSON 落用户指定路径（`--record` CLI 参数；内容 = 三条件逐条标注 + 冻结删除清单 + 失败集合——验收项 14「判定独立性」要求的存量全集取数源，防 no-op 脚本自报空集重新全绿）②`--selftest` fixture 构造器写点（目标全在 mkdtemp tmp 树，含构造的假 `agent/sessions/**/*.jsonl` header 行，禁触真实数据目录）③selftest 点检记录回读校验写点（同 tmp 树） | **合法性依据 = 写目标均非 pi session JSONL 本体**：①写对象 = 清扫动作的点检记录 JSON（路径由 CLI 显式给定，不经 sessions 目录推导）；②③ 写对象 = selftest 自建 tmp 树内 fixture 与记录（`mkdtempSync(join(tmpdir(), …))`，与 ⑳ archive-fixture 同族）；删除动作本身经 `ISessionStore.trashDirectory` 端口移入回收站（失败保留原地 + 结构化错误上抛），不直删 jsonl | 长期形态（W5 设计内交付物；随清扫脚本退役） |
+| ㉒ RO 归因探针统计缓存（dev-only，resize-observer-loop-noise 问题登记） | `packages/renderer/src/boot/resize-observer-probe.ts` 的 `siteStats` 模块级 Map：key = RO 注册点定位串（构造 stack 派生），value = 60s 窗内回调次数 + 新建实例数 | **合法性依据 = 非 GUI 数据源**：不进 store、不渲染、不持久化、无跨进程通道；消费方 = console.debug 窗尾 top 10 输出（诊断即弃）；prod 构建经 `import.meta.env.DEV` 提前 return + 死代码消除，缓存整体不存在 | 随探针退役：RO loop 触发源归因完成、`docs/todo/resize-observer-loop-noise.md` 登记关闭时删除（退役条件见该问题登记） |
 
 ## 5. 维护规约
 
