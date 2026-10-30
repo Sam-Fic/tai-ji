@@ -662,7 +662,7 @@
       "run": "node scripts/verify-scheduler-e2e.cjs",
       "owner": "extensions/universal/scheduler",
       "authority": "docs/TEST-STRATEGY.md#2-测试分层",
-      "note": "spawn 真实 pi 进程族，按 e2e 执行准则空载串行。任务库唯一持久化载体 = <PI_CODING_AGENT_DIR>/scheduler/<root>/<cwd segments>/<sessionId>.json（v2 快照，全量原子替换写，无 tmp 残留）。S1-S30 断言面：写入（路径/schemaVersion/任务字段/无 tmp 残留/无 v1 legacy 文件）+ 恢复（resume 同分片直读 / 损坏改名 .corrupt-<ts> 后空集启动 / 既有快照 + cron 失效停用 / --no-session 分片键归一 'no-session' 跨重启恢复）+ 隔离（不同 sessionId 分片互不可见、fork 新分片）+ 会话流只承载会话事实（负向断言无 pi-scheduler:task 条目，dispatch 注入 pi-scheduler:dispatched 出现）。S18/S19/S20/S21 保留命令表单 / notify 语义，落盘断言改快照（S19 负向：取消后无快照写入）；ack 合成轮与 event sourcing entry 折叠已随任务库分离退役，S22/S23 相应删除。"
+      "note": "spawn 真实 pi 进程族，按 e2e 执行准则空载串行。任务库唯一持久化通道 = <PI_CODING_AGENT_DIR>/scheduler/<root>/<cwd segments>/<sessionId>.json（v2 快照，全量原子替换写，无 tmp 残留）。S1-S30 断言范围：写入（路径/schemaVersion/任务字段/无 tmp 残留/无 v1 legacy 文件）+ 恢复（resume 同分片直接读取 / 损坏改名 .corrupt-<ts> 后空集启动 / 既有快照 + cron 失效停用 / --no-session 分片键归一 'no-session' 跨重启恢复）+ 隔离（不同 sessionId 分片互不可见、fork 新分片）+ 会话流只承载会话事实（负向断言无 pi-scheduler:task 条目，dispatch 注入 pi-scheduler:dispatched 出现）。S18/S19/S20/S21 保留命令表单 / notify 语义，落盘断言改快照（S19 负向：取消后无快照写入）；ack 合成轮与 event sourcing entry 折叠已随任务库分离退役，S22/S23 相应删除。"
     },
     {
       "id": "E2E-BATCH-01",
@@ -3126,7 +3126,7 @@
     },
     {
       "id": "E2E-REGALLOW-01",
-      "summary": "模型可见性投喂单点调用点白名单检查脚本组（约束 C-ext-32）：extensions/ 下 registerProvider|registerNativeProvider|registerVirtualModel 调用点只许出现在 provider-live-sync（目录投喂写入单点）与 scheduler（ack 合成轮临时覆写 + backend 转发）两包——防新开常驻注入点绕过单点制造第二写入方",
+      "summary": "模型可见性投喂单点调用点白名单检查脚本组（约束 C-ext-32）：extensions/ 下 registerProvider|registerNativeProvider|registerVirtualModel 调用点只许出现在 provider-live-sync（目录投喂写入单点；scheduler 的 ack 合成轮已随任务库分离退役，包内无注册表注入调用点）——防新开常驻注入点绕过单点制造第二写入方",
       "scope": [
         ".githooks/check_register_allowlist.py"
       ],
@@ -3142,7 +3142,7 @@
       "run": "python3 .githooks/check_register_allowlist.py",
       "owner": "extensions/universal/provider-live-sync",
       "authority": "docs/constraints.json",
-      "note": "R2 态：真实运行形态 = pre-commit 2i 段按路径触发（extensions/**/*.{ts,mts,cts,js,mjs} / 本脚本 / install-hooks.sh 任一 staged，复用 SKIP_EXTENSION_LINT 开关）；判定唯一源 = 脚本内两包白名单常量，新增合法注入点须同 commit 改白名单并同步 C-ext-32 登记；零第三方依赖、全量扫描 ~0.1s"
+      "note": "R2 态：真实运行形态 = pre-commit 2i 段按路径触发（extensions/**/*.{ts,mts,cts,js,mjs} / 本脚本 / install-hooks.sh 任一 staged，复用 SKIP_EXTENSION_LINT 开关）；判定唯一源 = 脚本内包粒度白名单常量（测试目录排除），新增合法注入点须同 commit 改白名单并同步 C-ext-32 登记；零第三方依赖、全量扫描 ~0.1s"
     },
     {
       "id": "E2E-EDGEFADE-01",

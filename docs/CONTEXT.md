@@ -749,7 +749,7 @@ pi 内置模型目录内的 provider（pi-ai 编译期目录快照；`getBuiltin
 **代码映射**: `extensions/shared/llm-shared/src/catalog-overlay.ts`（`getCatalogOverlayState`）；runtime 侧同名实现 `packages/runtime/src/services/provider-catalog-refresh.ts`（`getCatalogOverlayState`）。
 
 ### 模型可见性投喂
-目录投喂通道承载的写入单点约束命名：把 taiji 侧可见的目录数据常驻写入 pi 注册表，写入单点 = provider-live-sync 包（投喂模块 `catalog-bridge.ts`）——新增模型数据来源只改该模块输入，禁止在其他扩展新开 `registerProvider` / `registerNativeProvider` / `registerVirtualModel` 常驻注入；消费方（--model 解析 / rpc set_model / rename / smart-context 等）零改动自动受益。约束登记 [C-ext-32](constraints.json)；守则章节 extension-conventions「模型可见性投喂单点 [MANDATORY]」；机器执行点 = 调用点白名单检查 `check_register_allowlist.py`。与 [目录投喂](#目录投喂catalog-overlay) 的边界：彼词条描述机制与数据流（缓存文件载体、注入语义），本词条是该通道写入单点约束的登记名（constraints / 守则 / 机器检查引用的形态）；scheduler 的 ack 合成轮是执行通道覆写、非可见性投喂，不在禁列。
+目录投喂通道承载的写入单点约束命名：把 taiji 侧可见的目录数据常驻写入 pi 注册表，写入单点 = provider-live-sync 包（投喂模块 `catalog-bridge.ts`）——新增模型数据来源只改该模块输入，禁止在其他扩展新开 `registerProvider` / `registerNativeProvider` / `registerVirtualModel` 常驻注入；消费方（--model 解析 / rpc set_model / rename / smart-context 等）零改动自动受益。约束登记 [C-ext-32](constraints.json)；守则章节 extension-conventions「模型可见性投喂单点 [MANDATORY]」；机器执行点 = 调用点白名单检查 `check_register_allowlist.py`。与 [目录投喂](#目录投喂catalog-overlay) 的边界：彼词条描述机制与数据流（缓存文件形态、注入语义），本词条是该通道写入单点约束的登记名（constraints / 守则 / 机器检查引用的形态）；scheduler 的 ack 合成轮已随任务库分离退役，扩展侧现无第二个注册表注入通道。
 
 ## v3 UI 结构术语（2026-06 重构）
 
