@@ -72,10 +72,12 @@
  * v3 增量（统一消息投递内核，设计 unified-delivery §3.5）：
  * - DeliveryStore 端口（config.store）：send/sendChecked 受理前先 persist（耐久承诺
  *   先于投递尝试；persist 抛错 = 承诺未落 → 拒收 rejected('persist-failed')，条目
- *   回滚不入队不投递）；终局 delivered / cancelled 后 ack（finalizeEntry / drain）；
- *   forget 失败条目 discard（无终局语义的记录无痕移除，防重启复活）。ack / 判重
- *   查询的 store 异常降级 warn 留痕、状态机照常（终局事实已发生 / 探测异常降级
- *   保守放行）；persist 异常 fail-fast 拒收（承诺语义）。
+ *   回滚不入队不投递）；终局 delivered / cancelled 时 ack（finalizeEntry / drain）；
+ *   forget 失败条目 discard（无终局语义的记录无痕移除，防重启复活）。ack 先于内存
+ *   终态登记（磁盘权威，2026-10-30 用户裁决「内存终态必须以磁盘确认为准」）：写盘
+ *   失败 → 内存不登记终态（条目留守活跃集非终态）+ 分型错误 DeliveryAckPersistError
+ *   显式上报——外部送达事实不回滚，恢复后可能重投（at-least-once 显式接受）；判重
+ *   查询（hasTerminal）异常保守放行 + warn；persist 异常 fail-fast 拒收（承诺语义）。
  * - 送达凭据三档（receiptAnchor）：'details-id' 与 'marker' / 'acceptance' 并列
  *   （ADR-0074 词条扩展）。details-id 条目受理后维持 in-flight 等回执（同 marker）；
  *   判定逻辑以可注入凭据检查函数（config.proofCheck）承载，调用点 =
@@ -103,7 +105,7 @@
  * 消息数（受理转 in-flight 后不计；「在途未确认」数经 entriesFull() 全量视图消费）。
  */
 
-import { DeliveryReclaimError } from './errors.js'
+import { DeliveryAckPersistError, DeliveryReclaimError } from './errors.js'
 import { LruSet } from './lru.js'
 import type {
   DeliveryConfig,
@@ -287,7 +289,10 @@ export interface DeliveryHandleV2 extends DeliveryHandle {
    * msg.payload 同步替换引用（onSettled per-message 契约的消费方拿到替换后内容）。
    */
   edit(id: string, payload: DeliveryPayload): boolean
-  /** 全量取回文本（forceQuit，D9③）：条目清空 + 全部记 cancelled tombstone。 */
+  /**
+   * 全量取回文本（forceQuit，D9③）：条目清空 + 全部记 cancelled tombstone（ack 写盘
+   * 失败的条目除外——文本照常返回，条目转 failed 留守，见 drain 实现的磁盘权威序注释）。
+   */
   drain(): DrainResult
 }
 
@@ -533,13 +538,18 @@ export function createDelivery(
     })
   }
 
-  /** 终局写持久终局（finalizeEntry / drain 调用）。异常降级 warn——终局事实已发生，状态机不回滚。 */
-  function ackStore(id: string): void {
+  /**
+   * 终局写持久终局（finalizeEntry / drain 调用，磁盘权威序的第一步）：store.ack 抛错
+   * 包装为分型错误 DeliveryAckPersistError 上抛——调用方不得继续登记内存终态。外部
+   * 送达事实不回滚：错误文案携带「已送达/已撤销但终态未持久化，恢复后可能重投」的
+   * 恢复提示；留痕（warn）由各终局入口的捕获点承载。
+   */
+  function ackStore(id: string, state: 'delivered' | 'cancelled'): void {
     if (!store) return
     try {
       store.ack(id)
     } catch (err) {
-      warn(`store.ack failed (terminal record not persisted; id=${id})`, err)
+      throw new DeliveryAckPersistError(id, state, err)
     }
   }
 
@@ -613,8 +623,19 @@ export function createDelivery(
     return false
   }
 
-  /** 终态落定：出活跃集 + 登记判重索引 + 写终局记录 + 持久终局（v3 判重统一）。调用方负责 onSettled/通知语义。 */
+  /**
+   * 终态落定：写持久终局 + 出活跃集 + 登记判重索引 + 写终局记录（v3 判重统一）。调用方
+   * 负责 onSettled/通知语义。
+   *
+   * 权威序（磁盘为准，2026-10-30 用户裁决「内存终态必须以磁盘确认为准」）：ackStore
+   * 先行——持久终局写盘成功后才执行下方全部内存登记；写盘失败在任一内存变更前抛
+   * DeliveryAckPersistError 中止（条目留守活跃集原态、未终态），由各终局入口
+   * （confirmDelivered / cancel / drain）捕获留痕并显式上报。判重与恢复以磁盘为唯一
+   * 权威：写盘失败期间该条不视为已终态，恢复后可能重投（at-least-once 显式接受）。
+   */
   function finalizeEntry(e: KernelEntry, state: Extract<DeliveryEntryState, 'delivered' | 'cancelled'>): void {
+    ackStore(e.id, state)
+    // —— 以下内存登记仅在持久终局落盘成功后执行（磁盘确认前的内存单方终态 = 状态分叉）——
     // 终态同步摘出出站批次（dmg-r1-1）：终态条目不得随在途批次引用留存，否则迟到
     // 路径（旧批次引用等）会把已撤销/已送达文本随批次再次处理。原地 splice 保持
     // inFlight 在途 promise 闭包对批数组的引用一致（filter 重赋值会让旧引用复活成员）。
@@ -627,12 +648,11 @@ export function createDelivery(
     const ts = now()
     e.updatedAt = ts
     e.settledAt = ts
-    // v3 判重统一（设计 §3.5.5）：终局即时登记内存索引 + 终局记录 + 持久终局
+    // v3 判重统一（设计 §3.5.5）：终局即时登记内存索引 + 终局记录
     // （已撤销消息的防复活凭据 = 撤销时写持久终局；store 未装配时索引 ≡ 记录表，
     // 行为与 v2 tombstones Map 逐字节等价）。
     terminalIndex.add(e.id)
     terminalRecords.set(e.id, { id: e.id, state, lane: e.lane, settledAt: ts })
-    ackStore(e.id)
     if (state === 'delivered') {
       // F1-11：delivered 终局同步了结 checked waiter 的受理口径（resolveWaitersOf
       // 注释）——防止「confirmDelivered 先于 port.send promise settle」时序倒挂下
@@ -642,6 +662,41 @@ export function createDelivery(
       if (deliveredLog.length > DEFAULT_DELIVERED_WINDOW) deliveredLog.shift()
     }
     notifyChange()
+  }
+
+  /**
+   * 终局写盘失败后的条目留守（cancel / drain 的 DeliveryAckPersistError 路径）：转
+   * failed 歧义性非终态留守——磁盘上仍是未投递记录（恢复重放可能重投，at-least-once
+   * 显式接受），本地则保持「结果未定、不自动重投」：failed 不参与 pump/doSend，防
+   * settled 边沿把用户已撤销/已取回的文本在本进程内再投出（重投决策归消费方，与
+   * failInFlight / onFailure='failed' 同态同出路）。同步摘出出站批次（dmg-r1-1 同口径）。
+   */
+  function parkAsFailed(e: KernelEntry): void {
+    const batchIdx = inflightBatch.indexOf(e)
+    if (batchIdx !== -1) inflightBatch.splice(batchIdx, 1)
+    const ts = now()
+    e.state = 'failed'
+    e.updatedAt = ts
+    e.settledAt = ts
+    notifyChange()
+  }
+
+  /**
+   * cancel 的终局化（两段式收回确认与 queued/failed 本地终结共用）：持久终局写盘失败
+   * → 内存不登记终态，条目转 failed 留守（parkAsFailed——本地撤销意图保持「结果未定、
+   * 不自动重投」，磁盘上仍是未投递记录），分型错误上抛（cancel 是用户驱动入口，显式
+   * 失败面 = 调用方收到撤销未生效并可重试；cancel 接受 failed 态，写盘恢复后重试即
+   * 补落终局）。waiter reject 先于本调用发生（撤销意图的通知面，见 cancel 各分支）。
+   */
+  function cancelFinalize(e: KernelEntry): void {
+    try {
+      finalizeEntry(e, 'cancelled')
+    } catch (err) {
+      if (!(err instanceof DeliveryAckPersistError)) throw err
+      warn(`store.ack failed; cancel not terminalized, entry parked failed (id=${e.id})`, err)
+      parkAsFailed(e)
+      throw err
+    }
   }
 
   /** 活跃条目移除（无 tombstone）：受拒 checked 条目（入口即拦，未进通道无判重语义）。 */
@@ -1146,7 +1201,18 @@ export function createDelivery(
     // 回执；迟到的送达回执 / resync 的 transcript 预检命中即确定性送达事实，终结
     // failed 猜测，行随事实消失）
     if (e.state !== 'queued' && e.state !== 'in-flight' && e.state !== 'failed') return false
-    finalizeEntry(e, 'delivered')
+    try {
+      finalizeEntry(e, 'delivered')
+    } catch (err) {
+      if (!(err instanceof DeliveryAckPersistError)) throw err
+      // 磁盘权威：持久终局未写入 → 不登记内存终态（条目留守原态），送达回调不触发
+      // （终态未落定）。送达事实已发生不可回滚——恢复后可能重投（warn 携带分型错误
+      // 文案）。重试路径：条目仍在活跃集，下一回执边沿 / 对账 / resync 重驱动本入口
+      // 即重试 ack（写盘恢复后同一调用补落终局）。返回 false = 终局未发生（与未知 id
+      // / 已终态同形，回执边沿幂等重入）。
+      warn(`store.ack failed; terminal not registered, entry stays non-terminal (id=${id})`, err)
+      return false
+    }
     // D9⑤：'delivered' 仅由送达回执（本调用）驱动回调；per-message 契约保持
     if (!disposed) callOnSettled(e.msg, 'delivered')
     return true
@@ -1258,12 +1324,12 @@ export function createDelivery(
         return { kind: 'reclaim-requested', entry: snapshot(e) }
       }
       rejectWaitersOf(e, new DeliveryReclaimError('cancelled', id))
-      finalizeEntry(e, 'cancelled')
+      cancelFinalize(e)
       return { kind: 'cancelled', entry: snapshot(e) }
     }
     // queued（含出站批次中）/failed：本地终结（× 移除 failed 同路径）
     rejectWaitersOf(e, new DeliveryReclaimError('cancelled', id))
-    finalizeEntry(e, 'cancelled')
+    cancelFinalize(e)
     return { kind: 'cancelled', entry: snapshot(e) }
   }
 
@@ -1319,19 +1385,35 @@ export function createDelivery(
   function drain(): DrainResult {
     if (disposed) return []
     const drained = active.slice()
-    active.length = 0
-    activeIndex.clear()
+    const ts = now()
+    const result: Array<{ id: string; payload: DeliveryPayload }> = []
+    for (const e of drained) {
+      // 逐条磁盘先行（磁盘权威序，见 finalizeEntry）：ack 写盘成功才登记内存终局
+      // cancelled——drain 后该 id 不应再被 resync 重报复活（判重索引 + 终局记录 +
+      // 持久终局，防复活凭据在持久终局记录里）。写盘失败 → 文本照常返回（本地取回
+      // 事实成立），条目转 failed 留守（parkAsFailed：持久撤销未记录，恢复重放可能
+      // 重投）+ 分型错误 warn 留痕；drain 不上抛（forceQuit 收尾路径必须完成，显式
+      // 失败面 = 逐条 warn 携带 DeliveryAckPersistError，重试入口 = cancel 接受
+      // failed 态）。
+      try {
+        ackStore(e.id, 'cancelled')
+        const idx = active.indexOf(e)
+        if (idx !== -1) active.splice(idx, 1)
+        activeIndex.delete(e.id)
+        e.state = 'cancelled'
+        e.updatedAt = ts
+        e.settledAt = ts
+        terminalIndex.add(e.id)
+        terminalRecords.set(e.id, { id: e.id, state: 'cancelled', lane: e.lane, settledAt: ts })
+      } catch (err) {
+        if (!(err instanceof DeliveryAckPersistError)) throw err
+        warn(`store.ack failed in drain; entry not terminalized, parked failed (id=${e.id})`, err)
+        parkAsFailed(e)
+      }
+      result.push({ id: e.id, payload: e.payload })
+    }
     inflightBatch = []
     inFlight = false
-    const ts = now()
-    const result = drained.map((e) => {
-      // 全部记 cancelled 终局：drain 后该 id 不应再被 resync 重报复活（v3：判重
-      // 索引 + 终局记录 + 持久终局——防复活凭据在持久终局记录里）
-      terminalIndex.add(e.id)
-      terminalRecords.set(e.id, { id: e.id, state: 'cancelled', lane: e.lane, settledAt: ts })
-      ackStore(e.id)
-      return { id: e.id, payload: e.payload }
-    })
     // 挂起中的 checked 不留永久 pending
     for (const w of checkedPending) {
       w.reject(new DeliveryReclaimError('drained'))

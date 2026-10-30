@@ -42,6 +42,9 @@ export {
 export {
   // 用户回收错误类（D4-1）：cancel/drain 对挂起 waiter 的 reject，消费方 instanceof 判别
   DeliveryReclaimError,
+  // 终局持久化失败分型错误（磁盘权威裁决）：ack 写盘失败 → 内存不登记终态，消费方
+  // instanceof 判别后显式上报（外部送达事实不回滚，恢复后可能重投）
+  DeliveryAckPersistError,
 } from './errors.js'
 
 export {

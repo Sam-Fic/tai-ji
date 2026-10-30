@@ -226,8 +226,12 @@ export interface DeliveryStoreRecord {
  * - persist：send 受理前调用（耐久承诺先于投递尝试，与账本 record 先于 deliver 同
  *   律）。persist 抛错 = 承诺未落 → 内核拒收该条目（send 返回 persist-failed /
  *   sendChecked 同步 throw），不进入投递流程。
- * - ack：终局 delivered / cancelled 后调用（写持久终局——已撤销消息的防复活凭据
- *   同样在持久终局记录里）。ack 抛错不回滚状态机（终局事实已发生），warn 留痕。
+ * - ack：终局 delivered / cancelled 时调用（写持久终局——已撤销消息的防复活凭据
+ *   同样在持久终局记录里）。磁盘权威（2026-10-30 用户裁决「内存终态必须以磁盘确认为
+ *   准」）：ack 先于内存终态登记，抛错 = 持久终局未写入 → 内核不登记内存终态（条目
+ *   留守活跃集非终态）并显式上报分型错误 DeliveryAckPersistError；外部送达事实不
+ *   回滚，恢复后可能重投（at-least-once 显式接受）。实现方须遵守同序：自身内存派生
+ *   数据只在落盘成功后登记。
  * - discard：forget 失败条目的记录无痕移除（无终局无判重语义——区别于 ack，不进
  *   终局记录，防重启后 loadUndelivered 把已弃条目当未投递复活）。
  * - loadUndelivered：供重启 / 重放时重入队（装配方启动时取回未终局记录重新提交）。
@@ -244,7 +248,7 @@ export interface DeliveryStoreRecord {
 export interface DeliveryStore {
   /** 受理前写入记录（耐久承诺先于投递尝试）。抛错 = 承诺未写入，内核拒收。 */
   persist(record: DeliveryStoreRecord): void
-  /** 终局（delivered / cancelled）后写持久终局（从待投差集移除、进终局记录）。 */
+  /** 终局（delivered / cancelled）写持久终局（从待投差集移除、进终局记录）。抛错 = 持久终局未写入 → 内核不登记内存终态（磁盘权威，见上方契约）。 */
   ack(id: string): void
   /** forget 失败条目的记录无痕移除（无终局形态，区别于 ack）。 */
   discard(id: string): void

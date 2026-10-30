@@ -158,6 +158,19 @@ describe('DiskDeliveryStore — 失败语义', () => {
     expect(() => store.persist(recordOf('a'))).toThrow('ENOSPC')
   })
 
+  it('ack 追加失败上抛且终局集不登记（磁盘先行：内存派生数据只在落盘成功后登记）', () => {
+    const fs = memFs()
+    const store = createDiskDeliveryStore({ fs, dir: DIR, file: FILE })
+    store.persist(recordOf('a'))
+    fs.appendFileSync = () => {
+      throw new Error('ENOSPC')
+    }
+    expect(() => store.ack('a')).toThrow('ENOSPC')
+    expect(store.hasTerminal('a')).toBe(false) // 派生终局集未登记（≠ 磁盘已终态）
+    expect(store.loadUndelivered().map((r) => r.id)).toEqual(['a']) // 记录仍按未终态看待
+    expect(store.loadTerminalIds()).toEqual([])
+  })
+
   it('首次写入前惰性建目录；目录已建后不重复 mkdir', () => {
     const { fs, store } = newStore()
     store.persist(recordOf('a'))
