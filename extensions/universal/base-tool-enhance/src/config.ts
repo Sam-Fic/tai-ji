@@ -25,6 +25,12 @@ const MS_PER_SECOND = 1000;
 /** setTimeout 延迟上限（int32 ms）：timeout 配置换算毫秒后的 clamp 上限。 */
 const INT32_MAX_MS = 2_147_483_647;
 
+/**
+ * idleBackgroundSec 默认值（秒）：正常工具调用分钟级、编译静默常见 1-5 分钟，10 分钟
+ * 输出静默在交互会话已是强异常信号（设计 §4.2 量级依据）。
+ */
+export const DEFAULT_IDLE_BACKGROUND_SEC = 600;
+
 export interface BaseToolEnhanceConfig {
 	/** 用户正则（源字符串），追加到内置两组白名单之后（compile 在 force-patterns.ts）。 */
 	forceBackgroundPatterns: string[];
@@ -34,15 +40,21 @@ export interface BaseToolEnhanceConfig {
 	foregroundTimeoutSeconds: number | null;
 	/** null = 不注入；数字 = 后台未填 timeout 时的默认秒数。 */
 	backgroundTimeoutSeconds: number | null;
+	/**
+	 * 空闲转后台阈值（秒）：前台命令输出静默满此值时转后台（不杀命令，只解除阻塞——
+	 * 是「转后台阈值」不是超时）；null = 关闭（回落官方原生无限等待）。
+	 */
+	idleBackgroundSec: number | null;
 	maxConcurrentBackground: number;
 }
 
-/** 默认配置（零配置状态：内置白名单两组全生效、双模式不注入 timeout、并发 8）。 */
+/** 默认配置（零配置状态：内置白名单两组全生效、双模式不注入 timeout、空闲转后台 600s、并发 8）。 */
 export const DEFAULT_BASE_TOOL_ENHANCE_CONFIG: BaseToolEnhanceConfig = {
 	forceBackgroundPatterns: [],
 	disableBuiltinForcePatterns: false,
 	foregroundTimeoutSeconds: null,
 	backgroundTimeoutSeconds: null,
+	idleBackgroundSec: DEFAULT_IDLE_BACKGROUND_SEC,
 	// 单一来源：与 spawnBackgroundTask 的 opts.maxConcurrent 缺省同值（M2 常量）
 	maxConcurrentBackground: DEFAULT_MAX_CONCURRENT_BACKGROUND,
 };
@@ -65,14 +77,22 @@ function warnInvalid(key: string, value: unknown, fallback: string): void {
 }
 
 /**
- * timeout 键归一化：null/缺省 → null（不注入，D4）；正有限数 → 原值；
- * 类型错/负数/0/非有限 → null + warn；换算毫秒超 int32 上限 → clamp + warn。
+ * 秒类配置键归一化（timeout 双键与 idleBackgroundSec 共用）：undefined（未配置）→
+ * fallback；null（显式 null）→ null；正有限数 → 原值；类型错/负数/0/非有限 → fallback
+ * + warn；换算毫秒超 int32 上限 → clamp + warn。
+ *
+ * null 与 undefined 分流的理由：timeout 键默认即 null（不注入，D4），两落点合一无分叉；
+ * idleBackgroundSec 默认 600，必须三分——undefined = 未配置（默认开启）、显式 null =
+ * 用户关闭（透传，下游据此回落官方原生）、坏值 = 回退默认而非关闭（显式 null 是唯一
+ * 关闭通道，坏值不得意外关闭机制）。
  */
-function normalizeTimeoutSeconds(raw: unknown, key: string): number | null {
-	if (raw === null || raw === undefined) return null;
+function normalizeSecondsKey(raw: unknown, key: string, fallback: number | null): number | null {
+	if (raw === undefined) return fallback;
+	if (raw === null) return null;
 	if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
-		warnInvalid(key, raw, "null (no timeout injection)");
-		return null;
+		const fallbackDesc = fallback === null ? "null (no timeout injection)" : `${fallback} (default)`;
+		warnInvalid(key, raw, fallbackDesc);
+		return fallback;
 	}
 	if (raw * MS_PER_SECOND > INT32_MAX_MS) {
 		const clamped = INT32_MAX_MS / MS_PER_SECOND;
@@ -147,8 +167,13 @@ export function normalizeBaseToolEnhanceConfig(raw: unknown): BaseToolEnhanceCon
 	return {
 		forceBackgroundPatterns: normalizeForceBackgroundPatterns(raw.forceBackgroundPatterns),
 		disableBuiltinForcePatterns: normalizeDisableBuiltinForcePatterns(raw.disableBuiltinForcePatterns),
-		foregroundTimeoutSeconds: normalizeTimeoutSeconds(raw.foregroundTimeoutSeconds, "foregroundTimeoutSeconds"),
-		backgroundTimeoutSeconds: normalizeTimeoutSeconds(raw.backgroundTimeoutSeconds, "backgroundTimeoutSeconds"),
+		foregroundTimeoutSeconds: normalizeSecondsKey(raw.foregroundTimeoutSeconds, "foregroundTimeoutSeconds", null),
+		backgroundTimeoutSeconds: normalizeSecondsKey(raw.backgroundTimeoutSeconds, "backgroundTimeoutSeconds", null),
+		idleBackgroundSec: normalizeSecondsKey(
+			raw.idleBackgroundSec,
+			"idleBackgroundSec",
+			DEFAULT_IDLE_BACKGROUND_SEC,
+		),
 		maxConcurrentBackground: normalizeMaxConcurrentBackground(raw.maxConcurrentBackground),
 	};
 }
