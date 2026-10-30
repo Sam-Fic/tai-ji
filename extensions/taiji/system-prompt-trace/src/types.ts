@@ -72,8 +72,6 @@ export interface SystemPromptTraceEntryData {
 	fullText: string;
 	/** fullText.length（UTF-16 码元数）。 */
 	charCount: number;
-	/** 与上一版的行级 diff 摘要；首条留痕（无 parent）时缺省。 */
-	parentVersionDiffSummary?: string;
 	/**
 	 * 模式回落事实（F1b，E4 trace 披露部分）：本次 pi 进程以「模式已删除 → 回落
 	 * builtin:full」启动时出现；未回落（正常启动）时**字段不出现**——既有 entry
@@ -86,8 +84,6 @@ export interface SystemPromptTraceEntryData {
 export interface PromptBaseline {
 	hash: string;
 	version: number;
-	/** 留痕 entry 直读恒有值（可生成 diff 摘要）。 */
-	fullText?: string;
 }
 
 /**
