@@ -105,8 +105,10 @@ export const opendesignFetcher: ProviderQuotaFetcher = {
     )
     const fiveHour = byDuration.get(FIVE_HOUR_SECONDS)
     const week = byDuration.get(WEEK_SECONDS)
+    // 骨架捕获的 Set-Cookie 透传到 outcome（所有出口——回写归 quota-service 裁决）
+    const setCookies = result.setCookies
     // 两窗口全缺 = 无订阅数据（eligible:false 等同形态——有响应结构但无可用窗口）
-    if (!fiveHour && !week) return { ok: false, reason: 'no-subscription' }
+    if (!fiveHour && !week) return { ok: false, reason: 'no-subscription', ...(setCookies && { setCookies }) }
 
     return {
       ok: true,
@@ -118,6 +120,7 @@ export const opendesignFetcher: ProviderQuotaFetcher = {
           INFINITE_WIN,
         ],
       },
+      ...(setCookies && { setCookies }),
     }
   },
 }

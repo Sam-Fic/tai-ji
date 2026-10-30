@@ -87,34 +87,47 @@ export function isOptionalNumericField(v: unknown): boolean {
   return v === undefined || numericField(v) !== undefined
 }
 
+/** 读取响应全部 Set-Cookie 行（undici/Node 18.14+ 的 getSetCookie 逐条返回）。
+ *  无 Set-Cookie 时返回 undefined（不带空数组——outcome 不得物化 setCookies 空键）。
+ *  fetchQuotaJson 骨架与 declarative-fetch 引擎共用（单一来源，禁止复制）。 */
+export function readSetCookies(resp: Response): string[] | undefined {
+  const lines = resp.headers.getSetCookie().filter((line) => line !== '')
+  return lines.length > 0 ? lines : undefined
+}
+
 /**
  * JSON fetcher 共用骨架：凭证检查 → HTTP 状态归类 → JSON 解析 + shape guard →
  * 网络异常归类（logger.debug 落盘，禁止静默 catch）。doFetch 返回的 Response 由
  * 骨架消费 json()；guard 失败 / 解析失败归 parse。AbortSignal.timeout 由各
  * fetcher 在 doFetch 闭包内自带。
+ *
+ * 拿到响应即捕获 Set-Cookie 挂到 setCookies（成功/非 2xx/parse 分支均可能携带——
+ * 服务端滑动续期常伴随 3xx/401 出现；有才挂，无则不物化空键）。网络异常分支无
+ * Response 可读，不挂。回写 cookie 文件归 quota-service 按凭证形态裁决，骨架只透传。
  */
 export async function fetchQuotaJson<T>(
   logTag: string,
   doFetch: () => Promise<Response>,
   guard: (v: unknown) => v is T,
-): Promise<{ ok: true; data: T } | { ok: false; reason: QuotaFetchFailureReason }> {
+): Promise<{ ok: true; data: T; setCookies?: string[] } | { ok: false; reason: QuotaFetchFailureReason; setCookies?: string[] }> {
   try {
     const resp = await doFetch()
+    const setCookies = readSetCookies(resp)
     if (!resp.ok) {
       // [u10/G4] 非 2xx 提前 return 不读 body——未消费的 body 会钉住连接（无法回连接池
       // 复用 + 缓冲驻留），显式 cancel 释放（body 可为 null，如 204/304，optional chain 兜底）。
       void resp.body?.cancel()
-      return { ok: false, reason: statusToReason(resp.status) }
+      return { ok: false, reason: statusToReason(resp.status), ...(setCookies && { setCookies }) }
     }
 
     let data: T
     try {
       data = (await resp.json()) as T
     } catch {
-      return { ok: false, reason: 'parse' }
+      return { ok: false, reason: 'parse', ...(setCookies && { setCookies }) }
     }
-    if (!guard(data)) return { ok: false, reason: 'parse' }
-    return { ok: true, data }
+    if (!guard(data)) return { ok: false, reason: 'parse', ...(setCookies && { setCookies }) }
+    return { ok: true, data, ...(setCookies && { setCookies }) }
   } catch (err) {
     // fetch 网络异常 / 超时 → network（架构约定 #4 落盘，禁止静默 catch）。
     // RT-7#6：debug → warn——打包态日志级别 info 会过滤 debug，网络失败成因生产不可见。

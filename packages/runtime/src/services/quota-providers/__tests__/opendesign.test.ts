@@ -198,3 +198,45 @@ describe('opendesignFetcher · 失败归类', () => {
     ).toEqual({ ok: false, reason: 'network' })
   })
 })
+
+// ── Set-Cookie 透传：fetchQuotaJson 骨架捕获，fetcher 全出口流向 outcome
+// （ok / no-subscription / 非 2xx），回写 cookie 文件归 quota-service 裁决。──
+
+describe('opendesignFetcher · Set-Cookie 透传', () => {
+  /** 构造带 Set-Cookie 行的 JSON Response（append 逐条添加，getSetCookie 逐条返回）。 */
+  function responseWithCookies(body: string, setCookieLines: string[], status = 200): Response {
+    const headers = new Headers({ 'content-type': 'application/json' })
+    for (const line of setCookieLines) headers.append('set-cookie', line)
+    return new Response(body, { status, headers })
+  }
+
+  it('成功响应带 Set-Cookie → outcome.setCookies 透传原始行；无 Set-Cookie → 不物化空键', async () => {
+    const headers = new Headers({ 'content-type': 'application/json' })
+    headers.append('set-cookie', 'sid=new; Path=/; HttpOnly')
+    setupFetch(() => new Response(usagePayload(), { status: 200, headers }))
+    const out = await opendesignFetcher.fetchQuota('k=v', 'cookie', { quotaParams: { workspaceUrl: WORKSPACE_URL } })
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(out.setCookies).toEqual(['sid=new; Path=/; HttpOnly'])
+    // 对照：无 Set-Cookie 的成功响应不带 setCookies 键（非空数组物化）
+    setupFetch(() => jsonResponse(usagePayload()))
+    const out2 = await opendesignFetcher.fetchQuota('k=v', 'cookie', { quotaParams: { workspaceUrl: WORKSPACE_URL } })
+    expect(out2.ok).toBe(true)
+    if (!out2.ok) return
+    expect('setCookies' in out2).toBe(false)
+  })
+
+  it('401 带 Set-Cookie → unauthorized + setCookies 透传（会话轮换伴随 401 出现）', async () => {
+    setupFetch(() => responseWithCookies('{"error":"unauthenticated"}', ['sid=rotated'], 401))
+    expect(
+      await opendesignFetcher.fetchQuota('k=v', 'cookie', { quotaParams: { workspaceUrl: WORKSPACE_URL } }),
+    ).toEqual({ ok: false, reason: 'unauthorized', setCookies: ['sid=rotated'] })
+  })
+
+  it('两窗口全缺（no-subscription）带 Set-Cookie → 同样透传（骨架 ok 分支后的本地出口不丢）', async () => {
+    setupFetch(() => responseWithCookies(JSON.stringify({ eligible: false, windows: [] }), ['sid=x']))
+    expect(
+      await opendesignFetcher.fetchQuota('k=v', 'cookie', { quotaParams: { workspaceUrl: WORKSPACE_URL } }),
+    ).toEqual({ ok: false, reason: 'no-subscription', setCookies: ['sid=x'] })
+  })
+})
