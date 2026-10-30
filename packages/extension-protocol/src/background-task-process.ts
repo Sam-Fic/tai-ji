@@ -47,10 +47,13 @@ export function isPidAlive(pid: number): boolean {
 
 /**
  * 杀整棵进程树（同步；收殓路径在 process.on("exit") 里跑，必须同步）。
- * POSIX 按进程组终止（pgid = pid）一次性覆盖全部子孙；按进程组终止不到（组长已死）回退
- * 单 pid + pgrep -P 递归清理残留子进程（先杀孙辈再杀子辈，防孙辈在父死后被
- * reparent 逃逸枚举）。Windows taskkill /F /T。幂等：目标已死时静默成功
- * （回退路径的诊断经 onFallback 上报，无回调则静默）。
+ * POSIX：优先按进程组终止——detached spawn 形态（显式后台任务）pgid = pid，kill(-pid)
+ * 一次覆盖全部子孙；pid 非组长（前台转后台任务复用前台进程链，pgid ≠ pid）时解析真实
+ * pgid 按组杀（reparent 不换组，组长死后组仍在）；均不可达时回退单 pid + pgrep -P
+ * 递归清理（先枚举杀孙辈再杀子辈、最后杀目标本身——防目标死后子进程被 reparent 逃逸
+ * 枚举）。解析出的 pgid 等于调用者自身进程组时跳过组杀（防自杀），走回退。
+ * Windows taskkill /F /T。幂等：目标已死时静默成功（回退路径的诊断经 onFallback
+ * 上报，无回调则静默）。
  */
 export function killProcessTree(pid: number, onFallback?: ProcessFallbackLogger): void {
   if (!Number.isInteger(pid) || pid <= 0) return
@@ -62,16 +65,40 @@ export function killProcessTree(pid: number, onFallback?: ProcessFallbackLogger)
     process.kill(-pid, 'SIGKILL')
     return
   } catch (err) {
-    // best-effort 降级：组长已死（进程组不复存在）时走单 pid + 子孙递归兜底
     onFallback?.('process-group-kill-missed', err)
   }
+  const ownPgid = readPgid(process.pid)
+  const pgid = readPgid(pid)
+  if (pgid !== null && pgid > 1 && pgid !== ownPgid) {
+    try {
+      process.kill(-pgid, 'SIGKILL')
+      return
+    } catch (err) {
+      onFallback?.('resolved-group-kill-missed', err)
+    }
+  }
+  killDescendantsRecursive(pid, onFallback)
   try {
     process.kill(pid, 'SIGKILL')
   } catch (err) {
     // best-effort：目标已死（kill 幂等语义），仅留诊断
     onFallback?.('single-pid-kill-missed', err)
   }
-  killDescendantsRecursive(pid, onFallback)
+}
+
+/** 读 pid 的真实 pgid（ps -o pgid=）；失败/不可解析 → null（调用方按不可达处理走回退）。 */
+function readPgid(pid: number): number | null {
+  try {
+    const result = spawnSync('ps', ['-o', 'pgid=', '-p', String(pid)], {
+      encoding: 'utf8',
+      timeout: PS_TIMEOUT_MS,
+    })
+    if (result.error || result.status !== 0 || !result.stdout) return null
+    const pgid = Number.parseInt(result.stdout.trim(), 10)
+    return Number.isInteger(pgid) && pgid > 0 ? pgid : null
+  } catch {
+    return null
+  }
 }
 
 function killProcessTreeWindows(pid: number, onFallback?: ProcessFallbackLogger): void {
