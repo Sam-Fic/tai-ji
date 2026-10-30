@@ -61,6 +61,22 @@ export interface MessageDecoration {
 /** 插件状态枚举（IF2/DM3）。 */
 export type PluginStatus = 'discovered' | 'loaded' | 'active' | 'inactive' | 'crashed'
 
+/**
+ * 命令注册广播载荷（plugin:commandRegistered → plugin-command-registered）。
+ * runtime 侧源形状 = CommandRegistration（commands-api）；handlerId / workerId /
+ * registeredAt 是 runtime 内部簿记字段（通道归属校验、注册时点），不进 renderer 事件。
+ */
+export interface CommandRegisteredPayload {
+  pluginId: string
+  commandId: string
+  title?: string
+  category?: string
+  keybinding?: string
+  when?: string
+  /** 命令执行超时声明（原样透传 CommandDescriptor.timeoutMs 语义） */
+  timeoutMs?: number
+}
+
 /** 通知载荷（IF2/DM3 未定形，W2 bridge 按 runtime 实际形状收窄）。 */
 export interface NotificationPayload {
   pluginId: string
@@ -83,6 +99,7 @@ export type InternalEvent =
   | { kind: 'plugin-config-changed'; pluginId: string; config: unknown }
   | { kind: 'plugin-message-decoration'; sessionId?: string; decoration: MessageDecoration }
   | { kind: 'plugin-status-change'; pluginId: string; status: PluginStatus }
+  | { kind: 'plugin-command-registered'; command: CommandRegisteredPayload } // 命令注册下行广播（暂无 renderer 消费方，登记转发保证未来可订阅）
   | { kind: 'ui-request'; sessionId?: string; request: DialogRequest } // uiRequest + extension.ui_request 归一
   // widget + widgetGui 归一。归属二选一（provider-plugin-access U2 分区键泛化）：
   // 会话域带 sessionId（extension:widget / 会话域 plugin:viewUpdate）；全局域带 mountId

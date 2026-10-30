@@ -1805,6 +1805,11 @@ export type ServerMessageType =
   // ViewHost 分区缺失补拉时拉取插件 UI 快照，ADR-0097「拉为主、推补充」——transient
   // 推送帧的丢失收敛通道）。
   | 'plugin:uiSnapshot'
+  // plugin:commandRegistered：插件命令注册下行广播（runtime registerCommandRpcHandlers
+  // 每条登记后 broadcastRegistered 生产，全局通道无 sessionId）。载荷 = CommandRegistration
+  // 全形（含 handlerId/workerId/registeredAt 簿记字段）；renderer 侧 MessageBusBridge
+  // 归一为 plugin-command-registered 事件时剥除簿记字段（登记转发，暂无消费方）。
+  | 'plugin:commandRegistered'
   | 'extension:widget' | 'extension:widgetGui' | 'extension:notify'
   | 'extension:setEditorText'
   | 'extension:requestsInvalidated'
@@ -2752,6 +2757,24 @@ export interface ServerMessageMapBase {
   // （旧版广播）时前端回退按 pluginId 匹配。approved=true 批准 / false 拒绝（含挂起期
   // 清理唤醒）——撤窗语义两值一致，approved 供消费端审计/展示，不参与匹配。
   'plugin:permissionRequestResolved': { pluginId: string; requestId: string; approved: boolean } & Record<string, unknown>
+  // plugin:commandRegistered：插件命令注册下行广播（plugin-rpc-setup.ts
+  // registerCommandRpcHandlers 的 broadcastRegistered 生产）。载荷 = CommandRegistration
+  // 全形（commands-api.ts 同形状）：pluginId/commandId/handlerId/workerId/registeredAt
+  // 必带，title/category/keybinding/when/timeoutMs 随注册声明可选；renderer 侧 bridge
+  // 窄化剥除 handlerId/workerId/registeredAt 簿记字段（见 message-bus-bridge
+  // parseCommandRegistered）。
+  'plugin:commandRegistered': {
+    pluginId: string
+    commandId: string
+    handlerId: string
+    workerId: string
+    title?: string
+    category?: string
+    keybinding?: string
+    when?: string
+    timeoutMs?: number
+    registeredAt: number
+  }
   'model.list': { models: ModelInfo[] }
   // config.sessions：reply + broadcast 双用帧。archiveCount（session-archive 设计 D5 协议
   // 变更点）= 归档目录条目数（侧栏归档入口角标数据源），reply 与广播帧均携带；可选字段
@@ -3728,6 +3751,43 @@ export interface ServerMessageMapBase {
   // 模块级单订阅按归属过滤）；收到后重新拉取。
   'canvas.updated': { canvasId: string; sessionId: string; evType: CanvasEventType; eventId: string; summary: string }
 }
+
+/**
+ * plugin 系下行帧类型全集（`plugin:` 冒号前缀成员的运行时可迭代投影）。
+ *
+ * 收敛动机：runtime 广播字面量散落各生产点（broadcastFn / broadcastOrBroker 的
+ * `(type: string, ...)` 形态，编译期不拦），renderer 侧 MessageBusBridge 的
+ * PLUGIN_HANDLERS 漏登记 = 帧落「未知类型」error 路径（plugin:commandRegistered
+ * 曾漏，2026-10 裁决补登记 + 机器对账）。对账防线 =
+ * packages/core/src/extension-host/__tests__/plugin-downlink-contract.test.ts：
+ * 断言本清单每个类型被 PLUGIN_HANDLERS 登记（或在测试内登记的专用消费方豁免清单内）。
+ *
+ * 新增 plugin: 下行帧的三步义务：
+ *   ① ServerMessageType 加 union 成员 + ② ServerMessageMapBase 加 payload 契约
+ *   （均本文件，satisfies 锚定 ① 漏 = 编译报错）；③ 本清单加同名字符串
+ *   （③ 漏由对账测试的编译期差集断言 + 运行时对账拦截）。
+ * 已知残余缺口：只在生产点写新字面量、①②③ 全漏的形态无机器拦截（生产点签名
+ * 是 string；全量收敛生产点为具名常量改动面大，2026-10 裁决不做）。
+ */
+export const PLUGIN_DOWNLINK_TYPES = [
+  'plugin:crashed',
+  'plugin:notification',
+  'plugin:statusChange',
+  'plugin:permissionRequest',
+  'plugin:messageDecoration',
+  'plugin:config',
+  'plugin:uiRequest',
+  'plugin:uiRequestExpired',
+  'plugin:permissionRequestExpired',
+  'plugin:permissionRequestResolved',
+  'plugin:viewUpdate',
+  'plugin:event',
+  'plugin:headerActionUpdate',
+  'plugin:uiSnapshot',
+  'plugin:commandRegistered',
+] as const satisfies readonly ServerMessageType[]
+
+export type PluginDownlinkType = (typeof PLUGIN_DOWNLINK_TYPES)[number]
 
 /**
  * Runtime → Client payload 类型映射（与 ClientMessageMap 对称）。
