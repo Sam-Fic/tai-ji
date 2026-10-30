@@ -703,9 +703,6 @@ importers:
       '@zhushanwen/pi-llm-shared':
         specifier: workspace:*
         version: link:../../shared/llm-shared
-      '@zhushanwen/pi-session-path':
-        specifier: workspace:*
-        version: link:../../shared/session-path
       croner:
         specifier: ^9.0.0
         version: 9.1.0
