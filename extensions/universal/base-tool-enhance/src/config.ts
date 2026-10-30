@@ -1,5 +1,5 @@
 /**
- * 配置体系（M4，设计文档 §3.5「配置文件」段 + §3.6「config 解析失败」行）。
+ * 配置体系（M4，配置原则由本文件头注释直接承载，见下）。
  *
  * 委托 llm-shared loadConfig（mtime+size 读时刷新热重载，同 smart-context/permission
  * 范式）——【热重载契约】每次需要配置直接调 loadBaseToolEnhanceConfig，禁止上层
@@ -190,7 +190,7 @@ export function normalizeBaseToolEnhanceConfig(raw: unknown): BaseToolEnhanceCon
 
 /**
  * 加载配置（每次调用直接走 loadConfig 读时刷新——热重载契约，禁止上层缓存）。
- * 文件不存在 / 坏 JSON → 全默认值 + warn（§3.6：工具按默认值继续工作）。
+ * 文件不存在 / 坏 JSON → 全默认值 + warn（工具按默认值继续工作）。
  */
 export function loadBaseToolEnhanceConfig(): BaseToolEnhanceConfig {
 	return loadConfig(CONFIG_PKG, DEFAULT_BASE_TOOL_ENHANCE_CONFIG, normalizeBaseToolEnhanceConfig, (msg) => {
