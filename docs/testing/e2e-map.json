@@ -1032,6 +1032,26 @@
       "note": "R2 态：一次性迁移清理工具（设计 D7/W5a），行为由 fixture 测试零 token 锁定（mkdtempSync 假库 + BEFORE DELETE 触发器注入索引侧失败）；真实库执行属停机窗口人工操作（--plan 确认 + --confirm-count 受控旁路），不进自动化"
     },
     {
+      "id": "E2E-ZCODE-02",
+      "summary": "zcode session 库访问层 schema 版本诊断面单测：queryLatestSchemaVersion 两个调用侧分流（门禁面 assertKnownSchema fail-fast / 诊断面 readSchemaVersion 吞错返 undefined；路由假驱动，纯逻辑不触真实 sqlite）",
+      "scope": [
+        "packages/zcode-session-source/src/sqlite-access.ts"
+      ],
+      "layer": "L1",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "packages/zcode-session-source/src/__tests__/read-schema-version.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": false,
+      "run": "pnpm --filter @zhushanwen/zcode-session-source exec vitest run src/__tests__/read-schema-version.test.ts",
+      "owner": "packages/zcode-session-source",
+      "authority": "docs/TEST-STRATEGY.md",
+      "note": "单测层（无集成门控、非 slow-sqlite 组）：假驱动下开库门禁先过合法版本行、诊断面再读不可用形态（非对象 / 空串）断言返 undefined 不回填假值；与 E2E-INTEG-42（同文件 sqlite-access.ts 的错误契约集成层）分层不重叠——本规则锁纯逻辑分流，真库 I/O 语义归集成层"
+    },
+    {
       "id": "E2E-REMOTE-01",
       "summary": "远程访问真机/仿真验收 S2-S8：手机连接全链 / 鉴权负面 / 关闭即消失 / token 生命周期 / 断连恢复 / 新建任务 / ask-user 双端（真机 + 同 WiFi，CDP 移动仿真先行）",
       "scope": [

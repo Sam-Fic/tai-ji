@@ -428,7 +428,7 @@ function seedFauxAgent(ws, label, fauxSteps) {
 
 /**
  * stdout 行分发：JSON.parse 失败的行（banner / 半行）跳过；全部成功帧进 captured
- * （证据来源）、response 帧按 id 唤醒 pending、sessionFile 进缓存、turn_end 唤醒回合等待者。
+ * （证据来源），其余按帧类型分流给 response / extension_ui_request / turn_end 处理器。
  */
 function consumeRpcLine(line, state, captured, pending) {
   if (!line.trim()) return
@@ -440,52 +440,59 @@ function consumeRpcLine(line, state, captured, pending) {
   }
   captured.push(msg)
 
-  if (msg.type === 'response' && msg.data && typeof msg.data.sessionFile === 'string') {
+  if (msg.type === 'response') return handleResponseFrame(msg, state, pending)
+  if (msg.type === 'extension_ui_request') return handleUiRequestFrame(msg, state)
+  if (msg.type === 'turn_end') handleTurnEndFrame(msg, state)
+}
+
+/** response 帧：sessionFile 进缓存、按 id 唤醒 pending 等待者。 */
+function handleResponseFrame(msg, state, pending) {
+  if (msg.data && typeof msg.data.sessionFile === 'string') {
     state.sessionFileCache = msg.data.sessionFile
   }
-  if (msg.type === 'response' && msg.id) {
-    const waiter = pending.get(msg.id)
-    if (waiter) {
-      pending.delete(msg.id)
-      waiter.resolve(msg)
-    }
-  }
-  if (msg.type === 'extension_ui_request') {
-    if (msg.method === 'notify') {
-      state.notifies.push({
-        id: typeof msg.id === 'string' ? msg.id : String(msg.id),
-        message: typeof msg.message === 'string' ? msg.message : '',
-        notifyType: typeof msg.notifyType === 'string' ? msg.notifyType : undefined,
-      })
-    }
-    const view = {
+  if (!msg.id) return
+  const waiter = pending.get(msg.id)
+  if (!waiter) return
+  pending.delete(msg.id)
+  waiter.resolve(msg)
+}
+
+/** extension_ui_request 帧：notify 记录 + 表单应答（有 uiActor 走演员，否则记录后取消）。 */
+function handleUiRequestFrame(msg, state) {
+  if (msg.method === 'notify') {
+    state.notifies.push({
       id: typeof msg.id === 'string' ? msg.id : String(msg.id),
-      method: typeof msg.method === 'string' ? msg.method : '',
-      title: typeof msg.title === 'string' ? msg.title : undefined,
-      options: Array.isArray(msg.options) ? msg.options.map(String) : undefined,
-    }
-    let reply
-    if (state.uiActor) {
-      reply = state.uiActor(view)
-    } else {
-      // 缺省 uiActor：schedule 表单属非预期（模型路径直建，不应弹表单）→ 记录 + 取消
-      if (msg.method !== 'select' || msg.title !== UI_FORM_MARKER) return
-      state.unexpectedScheduleForms.push(view)
-      reply = { cancelled: true }
-    }
-    if (reply && state.respond) {
-      state.respond({ type: 'extension_ui_response', id: msg.id, ...reply })
-    }
-    return
+      message: typeof msg.message === 'string' ? msg.message : '',
+      notifyType: typeof msg.notifyType === 'string' ? msg.notifyType : undefined,
+    })
   }
-  if (msg.type === 'turn_end') {
-    const stopReason = (msg.message && msg.message.stopReason) || msg.stopReason || ''
-    if (stopReason !== 'toolUse' && state.turnEndResolver) {
-      const resolver = state.turnEndResolver
-      state.turnEndResolver = null
-      resolver.resolve({ ok: true, stopReason })
-    }
+  const view = {
+    id: typeof msg.id === 'string' ? msg.id : String(msg.id),
+    method: typeof msg.method === 'string' ? msg.method : '',
+    title: typeof msg.title === 'string' ? msg.title : undefined,
+    options: Array.isArray(msg.options) ? msg.options.map(String) : undefined,
   }
+  let reply
+  if (state.uiActor) {
+    reply = state.uiActor(view)
+  } else {
+    // 缺省 uiActor：schedule 表单属非预期（模型路径直建，不应弹表单）→ 记录 + 取消
+    if (msg.method !== 'select' || msg.title !== UI_FORM_MARKER) return
+    state.unexpectedScheduleForms.push(view)
+    reply = { cancelled: true }
+  }
+  if (reply && state.respond) {
+    state.respond({ type: 'extension_ui_response', id: msg.id, ...reply })
+  }
+}
+
+/** turn_end 帧：非 toolUse 的回合结束唤醒回合等待者。 */
+function handleTurnEndFrame(msg, state) {
+  const stopReason = (msg.message && msg.message.stopReason) || msg.stopReason || ''
+  if (stopReason === 'toolUse' || !state.turnEndResolver) return
+  const resolver = state.turnEndResolver
+  state.turnEndResolver = null
+  resolver.resolve({ ok: true, stopReason })
 }
 
 /** 表单问题 → 回包 key（D2 回包契约：key = header ?? question，与 FormOverlay qKey 同规则）。 */
@@ -863,6 +870,21 @@ function fail(name, reason) {
   return { name, status: 'FAIL', evidence: reason }
 }
 
+/** 异常 → 场景证据串（各场景 catch 的统一出口；err 可能不是 Error）。 */
+function exceptionEvidence(err) {
+  return `exception: ${err && err.stack ? err.stack : String(err)}`
+}
+
+/** 会话收尾（场景 finally 用：会话可能尚未创建成功）。 */
+async function killQuiet(session) {
+  if (session) await session.kill()
+}
+
+/** 断言集 → 场景状态（PASS / FAIL 二值出口）。 */
+function verdictOf(ck) {
+  return ck.allOk() ? 'PASS' : 'FAIL'
+}
+
 /** S1：once 创建 → 快照（回显 + 字段 + 原子写 + 面板一致 + 会话流无任务条目）。 */
 async function runS1(piBin) {
   const ws = makeWorkspace('S1')
@@ -931,14 +953,14 @@ async function runS1(piBin) {
 
     return {
       name: 'S1',
-      status: ck.allOk() ? 'PASS' : 'FAIL',
+      status: verdictOf(ck),
       evidence: ck.evidence(),
       debug: { snapshot: snapshot.text },
     }
   } catch (err) {
-    return fail('S1', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S1', exceptionEvidence(err))
   } finally {
-    if (s) await s.kill()
+    await killQuiet(s)
     ws.cleanup()
   }
 }
@@ -984,11 +1006,11 @@ async function runS2(piBin) {
     checkStoreHygiene(ws, ck, 1)
     checkPanelParity(ws, ck, info.sessionId, task ? [task.id] : [])
 
-    return { name: 'S2', status: ck.allOk() ? 'PASS' : 'FAIL', evidence: ck.evidence() }
+    return { name: 'S2', status: verdictOf(ck), evidence: ck.evidence() }
   } catch (err) {
-    return fail('S2', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S2', exceptionEvidence(err))
   } finally {
-    if (s) await s.kill()
+    await killQuiet(s)
     ws.cleanup()
   }
 }
@@ -1044,14 +1066,14 @@ async function runS3(piBin) {
 
     return {
       name: 'S3',
-      status: ck.allOk() ? 'PASS' : 'FAIL',
+      status: verdictOf(ck),
       evidence: ck.evidence() + `; A task id=${taskA ? taskA.id : '?'}`,
     }
   } catch (err) {
-    return fail('S3', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S3', exceptionEvidence(err))
   } finally {
-    if (a) await a.kill()
-    if (b) await b.kill()
+    await killQuiet(a)
+    await killQuiet(b)
     ws.cleanup()
   }
 }
@@ -1106,12 +1128,12 @@ async function runS4(piBin) {
     ck.add("B list says 'No scheduled tasks.'", blobB.includes('No scheduled tasks.'))
     ck.eq('A shard remains readable (empty tasks)', snapshotTasks(readSnapshotRaw(pathA)).length, 0)
 
-    return { name: 'S4', status: ck.allOk() ? 'PASS' : 'FAIL', evidence: ck.evidence() }
+    return { name: 'S4', status: verdictOf(ck), evidence: ck.evidence() }
   } catch (err) {
-    return fail('S4', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S4', exceptionEvidence(err))
   } finally {
-    if (a) await a.kill()
-    if (b) await b.kill()
+    await killQuiet(a)
+    await killQuiet(b)
     ws.cleanup()
   }
 }
@@ -1165,12 +1187,12 @@ async function runS5(piBin) {
     ck.eq('snapshot mtime unchanged', mtimeAfter, mtimeBefore)
     checkStoreHygiene(ws, ck, 1)
 
-    return { name: 'S5', status: ck.allOk() ? 'PASS' : 'FAIL', evidence: ck.evidence() }
+    return { name: 'S5', status: verdictOf(ck), evidence: ck.evidence() }
   } catch (err) {
-    return fail('S5', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S5', exceptionEvidence(err))
   } finally {
-    if (a) await a.kill()
-    if (a2) await a2.kill()
+    await killQuiet(a)
+    await killQuiet(a2)
     ws.cleanup()
   }
 }
@@ -1222,14 +1244,36 @@ async function runS9(piBin) {
     ck.eq('legacy scheduler.json count', legacyStoreFiles(ws.agentDir).length, 0)
     ck.eq('tmp residue count', tmpResidues(ws.agentDir).length, 0)
 
-    return { name: 'S9', status: ck.allOk() ? 'PASS' : 'FAIL', evidence: ck.evidence() }
+    return { name: 'S9', status: verdictOf(ck), evidence: ck.evidence() }
   } catch (err) {
-    return fail('S9', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S9', exceptionEvidence(err))
   } finally {
-    if (a) await a.kill()
-    if (b) await b.kill()
+    await killQuiet(a)
+    await killQuiet(b)
     ws.cleanup()
   }
+}
+
+/** fork 触发：取第一条可分叉用户消息 → fork RPC（失败时带原因返回）。 */
+async function forkFromFirstMessage(s) {
+  const forkMessages = await s.sendRpc({ type: 'get_fork_messages' })
+  const messages = forkMessages && forkMessages.success && forkMessages.data ? forkMessages.data.messages : []
+  const entryId = messages.length > 0 ? messages[0].entryId : null
+  if (!entryId) return { ok: false, reason: 'no forkable user message (get_fork_messages empty)' }
+  const resp = await s.sendRpc({ type: 'fork', entryId })
+  if (!resp || !resp.success) return { ok: false, reason: 'fork RPC failed: ' + JSON.stringify(resp) }
+  return { ok: true }
+}
+
+/** fork 后 rebind 轮询：sessionId 变化即返回新 info；超时返 null。 */
+async function waitForForkedSession(s, originSessionId, timeoutMs = 20000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const info = await s.sessionInfo()
+    if (info.sessionId !== originSessionId) return info
+    await sleep(300)
+  }
+  return null
 }
 
 /**
@@ -1259,22 +1303,11 @@ async function runS11(piBin) {
     const created = await waitForSnapshot(pathA, snap => snapshotTasks(snap).length === 1, 20000)
     if (!created.ok) return fail('S11', 'origin session did not create task')
 
-    const forkMessages = await s.sendRpc({ type: 'get_fork_messages' })
-    const messages = forkMessages && forkMessages.success && forkMessages.data ? forkMessages.data.messages : []
-    const entryId = messages.length > 0 ? messages[0].entryId : null
-    if (!entryId) return fail('S11', 'no forkable user message (get_fork_messages empty)')
-    const forkResp = await s.sendRpc({ type: 'fork', entryId })
-    if (!forkResp || !forkResp.success) return fail('S11', 'fork RPC failed: ' + JSON.stringify(forkResp))
+    const fork = await forkFromFirstMessage(s)
+    if (!fork.ok) return fail('S11', fork.reason)
 
-    // fork 后 rebind session，轮询到新 sessionId
-    let infoFork = null
-    const deadline = Date.now() + 20000
-    while (Date.now() < deadline) {
-      infoFork = await s.sessionInfo()
-      if (infoFork.sessionId !== infoA.sessionId) break
-      await sleep(300)
-    }
-    if (!infoFork || infoFork.sessionId === infoA.sessionId) return fail('S11', 'fork did not rebind to a new sessionId')
+    const infoFork = await waitForForkedSession(s, infoA.sessionId)
+    if (!infoFork) return fail('S11', 'fork did not rebind to a new sessionId')
     const pathFork = storePathFor(ws, infoFork.sessionId)
     const entriesFork = await s.getEntries()
 
@@ -1288,11 +1321,11 @@ async function runS11(piBin) {
     checkStoreHygiene(ws, ck, 1)
     ck.eq('fork session has no retired task entries', entriesFork.filter(e => e && e.customType === RETIRED_SESSION_TASK_ENTRY).length, 0)
 
-    return { name: 'S11', status: ck.allOk() ? 'PASS' : 'FAIL', evidence: ck.evidence() }
+    return { name: 'S11', status: verdictOf(ck), evidence: ck.evidence() }
   } catch (err) {
-    return fail('S11', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S11', exceptionEvidence(err))
   } finally {
-    if (s) await s.kill()
+    await killQuiet(s)
     ws.cleanup()
   }
 }
@@ -1347,12 +1380,12 @@ async function runS13(piBin) {
     ck.add("resume list not 'No scheduled tasks.'", !blob.includes('No scheduled tasks.'))
     ck.add('resume list shows task id', task ? blob.includes(task.id) : false)
 
-    return { name: 'S13', status: ck.allOk() ? 'PASS' : 'FAIL', evidence: ck.evidence() }
+    return { name: 'S13', status: verdictOf(ck), evidence: ck.evidence() }
   } catch (err) {
-    return fail('S13', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S13', exceptionEvidence(err))
   } finally {
-    if (a) await a.kill()
-    if (a2) await a2.kill()
+    await killQuiet(a)
+    await killQuiet(a2)
     ws.cleanup()
   }
 }
@@ -1396,13 +1429,13 @@ async function runS15(piBin) {
 
     return {
       name: 'S15',
-      status: ck.allOk() ? 'PASS' : 'FAIL',
+      status: verdictOf(ck),
       evidence: ck.evidence() + `; tasks=${JSON.stringify(taskIds)}`,
     }
   } catch (err) {
-    return fail('S15', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S15', exceptionEvidence(err))
   } finally {
-    if (s) await s.kill()
+    await killQuiet(s)
     ws.cleanup()
   }
 }
@@ -1481,11 +1514,11 @@ async function runS17(piBin) {
     ck.add('every dispatch content is task prompt', dispatchPoll.entries.every(e => dispatchContentText(e) === marker),
       dispatchPoll.entries.map(e => JSON.stringify(dispatchContentText(e).slice(0, 40))).join(','))
 
-    return { name: 'S17', status: ck.allOk() ? 'PASS' : 'FAIL', evidence: ck.evidence() }
+    return { name: 'S17', status: verdictOf(ck), evidence: ck.evidence() }
   } catch (err) {
-    return fail('S17', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S17', exceptionEvidence(err))
   } finally {
-    if (s) await s.kill()
+    await killQuiet(s)
     ws.cleanup()
   }
 }
@@ -1548,11 +1581,11 @@ async function runS18(piBin) {
     checkNoRetiredTaskEntries(ck, entries, jsonl.entries, 's18')
     checkPanelParity(ws, ck, info.sessionId, task ? [task.id] : [])
 
-    return { name: 'S18', status: ck.allOk() ? 'PASS' : 'FAIL', evidence: ck.evidence() }
+    return { name: 'S18', status: verdictOf(ck), evidence: ck.evidence() }
   } catch (err) {
-    return fail('S18', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S18', exceptionEvidence(err))
   } finally {
-    if (s) await s.kill()
+    await killQuiet(s)
     ws.cleanup()
   }
 }
@@ -1588,11 +1621,11 @@ async function runS19(piBin) {
     ck.eq('shard file count', shardFiles(ws.agentDir).length, 0)
     checkNoRetiredTaskEntries(ck, entries, jsonl.entries, 's19')
 
-    return { name: 'S19', status: ck.allOk() ? 'PASS' : 'FAIL', evidence: ck.evidence() }
+    return { name: 'S19', status: verdictOf(ck), evidence: ck.evidence() }
   } catch (err) {
-    return fail('S19', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S19', exceptionEvidence(err))
   } finally {
-    if (s) await s.kill()
+    await killQuiet(s)
     ws.cleanup()
   }
 }
@@ -1650,11 +1683,11 @@ async function runS20(piBin) {
     ck.eq('no assistant lines (command path + ack retired)', aborted.length, 0)
     checkPanelParity(ws, ck, info.sessionId, task ? [task.id] : [])
 
-    return { name: 'S20', status: ck.allOk() ? 'PASS' : 'FAIL', evidence: ck.evidence() }
+    return { name: 'S20', status: verdictOf(ck), evidence: ck.evidence() }
   } catch (err) {
-    return fail('S20', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S20', exceptionEvidence(err))
   } finally {
-    if (s) await s.kill()
+    await killQuiet(s)
     ws.cleanup()
   }
 }
@@ -1701,11 +1734,11 @@ async function runS21(piBin) {
       ck.eq('task kind', task.kind, 'recurring')
       ck.eq('task interval 30m', task.schedule && task.schedule.intervalMs, 1800000)
     }
-    return { name: 'S21', status: ck.allOk() ? 'PASS' : 'FAIL', evidence: ck.evidence() }
+    return { name: 'S21', status: verdictOf(ck), evidence: ck.evidence() }
   } catch (err) {
-    return fail('S21', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S21', exceptionEvidence(err))
   } finally {
-    if (s) await s.kill()
+    await killQuiet(s)
     ws.cleanup()
   }
 }
@@ -1781,11 +1814,11 @@ async function runS24(piBin) {
     ck.eq('runCount untouched by toggles', finalTask && finalTask.runCount, 0)
     ck.eq('tmp residue count', tmpResidues(ws.agentDir).length, 0)
 
-    return { name: 'S24', status: ck.allOk() ? 'PASS' : 'FAIL', evidence: ck.evidence() + `; task=${taskId}` }
+    return { name: 'S24', status: verdictOf(ck), evidence: ck.evidence() + `; task=${taskId}` }
   } catch (err) {
-    return fail('S24', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S24', exceptionEvidence(err))
   } finally {
-    if (s) await s.kill()
+    await killQuiet(s)
     ws.cleanup()
   }
 }
@@ -1825,11 +1858,11 @@ async function runS25(piBin) {
     ck.eq('panel sees empty list', parity.tasks.length, 0)
     ck.eq('tmp residue count', tmpResidues(ws.agentDir).length, 0)
 
-    return { name: 'S25', status: ck.allOk() ? 'PASS' : 'FAIL', evidence: ck.evidence() + `; deleted=${taskId}` }
+    return { name: 'S25', status: verdictOf(ck), evidence: ck.evidence() + `; deleted=${taskId}` }
   } catch (err) {
-    return fail('S25', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S25', exceptionEvidence(err))
   } finally {
-    if (s) await s.kill()
+    await killQuiet(s)
     ws.cleanup()
   }
 }
@@ -1880,11 +1913,11 @@ async function runS26(piBin) {
     ck.add('dispatch content is task prompt', dispatchContentText(dispatchPoll.entries[0]) === marker)
     ck.eq('tmp residue count', tmpResidues(ws.agentDir).length, 0)
 
-    return { name: 'S26', status: ck.allOk() ? 'PASS' : 'FAIL', evidence: ck.evidence() }
+    return { name: 'S26', status: verdictOf(ck), evidence: ck.evidence() }
   } catch (err) {
-    return fail('S26', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S26', exceptionEvidence(err))
   } finally {
-    if (s) await s.kill()
+    await killQuiet(s)
     ws.cleanup()
   }
 }
@@ -1923,11 +1956,11 @@ async function runS27(piBin) {
     ck.eq('expiry removed task WITHOUT dispatch (inline)', inlineDispatches.length, 0)
     ck.eq('expiry removed task WITHOUT dispatch (jsonl)', diskDispatches.length, 0)
 
-    return { name: 'S27', status: ck.allOk() ? 'PASS' : 'FAIL', evidence: ck.evidence() }
+    return { name: 'S27', status: verdictOf(ck), evidence: ck.evidence() }
   } catch (err) {
-    return fail('S27', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S27', exceptionEvidence(err))
   } finally {
-    if (s) await s.kill()
+    await killQuiet(s)
     ws.cleanup()
   }
 }
@@ -2002,12 +2035,12 @@ async function runS28(piBin) {
     ck.eq('tmp residue count', tmpResidues(ws.agentDir).length, 0)
     ck.add('task id recorded', !!task, task ? task.id : 'missing')
 
-    return { name: 'S28', status: ck.allOk() ? 'PASS' : 'FAIL', evidence: ck.evidence() }
+    return { name: 'S28', status: verdictOf(ck), evidence: ck.evidence() }
   } catch (err) {
-    return fail('S28', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S28', exceptionEvidence(err))
   } finally {
-    if (s1) await s1.kill()
-    if (s2) await s2.kill()
+    await killQuiet(s1)
+    await killQuiet(s2)
     ws.cleanup()
   }
 }
@@ -2080,12 +2113,12 @@ async function runS29(piBin) {
     }
     ck.eq('schemaVersion after rewrite', rewritten.snapshot.raw && rewritten.snapshot.raw.schemaVersion, SCHEDULER_STORE_SCHEMA_VERSION)
 
-    return { name: 'S29', status: ck.allOk() ? 'PASS' : 'FAIL', evidence: ck.evidence() }
+    return { name: 'S29', status: verdictOf(ck), evidence: ck.evidence() }
   } catch (err) {
-    return fail('S29', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S29', exceptionEvidence(err))
   } finally {
-    if (s1) await s1.kill()
-    if (s2) await s2.kill()
+    await killQuiet(s1)
+    await killQuiet(s2)
     ws.cleanup()
   }
 }
@@ -2170,12 +2203,12 @@ async function runS30(piBin) {
     ck.add('no repeated dispatch after disable', finalDispatches.length === 1, String(finalDispatches.length))
     ck.add('no repeated dispatch after disable (runCount)', !!settled && settled.runCount === 1, settled ? String(settled.runCount) : 'missing')
 
-    return { name: 'S30', status: ck.allOk() ? 'PASS' : 'FAIL', evidence: ck.evidence() }
+    return { name: 'S30', status: verdictOf(ck), evidence: ck.evidence() }
   } catch (err) {
-    return fail('S30', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S30', exceptionEvidence(err))
   } finally {
-    if (s1) await s1.kill()
-    if (s2) await s2.kill()
+    await killQuiet(s1)
+    await killQuiet(s2)
     ws.cleanup()
   }
 }
@@ -2264,12 +2297,12 @@ async function runS12(piBin) {
       afterTask ? String(afterTask.nextRunAt - afterTask.createdAt) : '?')
     ck.add("list not 'No scheduled tasks.'", !blob.includes('No scheduled tasks.'))
 
-    return { name: 'S12', status: ck.allOk() ? 'PASS' : 'FAIL', evidence: ck.evidence() }
+    return { name: 'S12', status: verdictOf(ck), evidence: ck.evidence() }
   } catch (err) {
-    return fail('S12', `exception: ${err && err.stack ? err.stack : String(err)}`)
+    return fail('S12', exceptionEvidence(err))
   } finally {
-    if (a) await a.kill()
-    if (a2) await a2.kill()
+    await killQuiet(a)
+    await killQuiet(a2)
     ws.cleanup()
   }
 }
@@ -2372,7 +2405,7 @@ async function executeScenario(name, piBin) {
   try {
     return await fn(piBin)
   } catch (err) {
-    return { name, status: 'FAIL', evidence: `exception: ${err && err.stack ? err.stack : String(err)}` }
+    return { name, status: 'FAIL', evidence: exceptionEvidence(err) }
   }
 }
 
@@ -2523,6 +2556,22 @@ async function main() {
   console.log(`${TAG} ============================================================`)
   console.log(`${TAG} pi-scheduler e2e (task-store snapshot track)`)
   console.log(`${TAG} model: ${MODEL}`)
+  const toRun = resolveScenarioList(arg, piBin)
+  if (typeof toRun === 'number') return toRun
+
+  const results = await runScenarios(toRun, piBin)
+  const gates = confirmV(results)
+  console.log(`${TAG} ------------------------------------------------------------`)
+  console.log(`${TAG} V-gates (design claims):`)
+  for (const gate of gates) printResult({ ...gate, evidence: gate.claim })
+  return printSummary(results, gates)
+}
+
+/**
+ * 前置解析：pi 二进制 / 扩展装配 / 场景名三项检查，任一失败返回退出码 2；
+ * 通过时打印装配信息并返回待跑场景清单。
+ */
+function resolveScenarioList(arg, piBin) {
   if (!piBin) {
     console.log(`${TAG} pi binary not found (set PI_BIN); expected ${PI_BIN_DEFAULT}`)
     return 2
@@ -2541,28 +2590,30 @@ async function main() {
   console.log(`${TAG} extension: ${EXTENSION_PATH}`)
   console.log(`${TAG} store module: ${STORE_MODULE_PATH}`)
   console.log(`${TAG} scenario(s): ${toRun.join(', ')}`)
+  return toRun
+}
 
+/** 逐场景执行：结果带耗时；FAIL 场景附快照 debug 段。 */
+async function runScenarios(toRun, piBin) {
   const results = []
   for (const name of toRun) {
     console.log(`${TAG} ------------------------------------------------------------`)
     console.log(`${TAG} running ${name} ...`)
     const startedAt = Date.now()
     const result = await executeScenario(name, piBin)
-    if (result) {
-      result.elapsedMs = Date.now() - startedAt
-      results.push(result)
-      printResult(result)
-      if (result.status === 'FAIL' && result.debug && result.debug.snapshot) {
-        console.log(`${TAG} [debug] ${name} snapshot:\n${result.debug.snapshot}`)
-      }
+    if (!result) continue
+    result.elapsedMs = Date.now() - startedAt
+    results.push(result)
+    printResult(result)
+    if (result.status === 'FAIL' && result.debug && result.debug.snapshot) {
+      console.log(`${TAG} [debug] ${name} snapshot:\n${result.debug.snapshot}`)
     }
   }
+  return results
+}
 
-  console.log(`${TAG} ------------------------------------------------------------`)
-  console.log(`${TAG} V-gates (design claims):`)
-  const gates = confirmV(results)
-  for (const gate of gates) printResult({ ...gate, evidence: gate.claim })
-
+/** 汇总与退出码判定：任一 FAIL = 1；全 FOLLOWUP / 无 FAIL = 0（followup 是显式登记，不是静默跳过）。 */
+function printSummary(results, gates) {
   const ran = results.filter(r => typeof r.elapsedMs === 'number')
   const failed = results.filter(r => r.status === 'FAIL')
   const followed = results.filter(r => r.status === 'FOLLOWUP')
@@ -2574,8 +2625,6 @@ async function main() {
   console.log(`${TAG} total: ${ran.length - failed.length - followed.length} PASS, ${failed.length} FAIL, ${followed.length} FOLLOWUP`)
   if (followed.length > 0) console.log(`${TAG}   followup: ${followed.map(r => r.name).join(', ')}`)
   console.log(`${TAG} V-gates: ${gates.filter(g => g.status === 'CONFIRMED').length} confirmed, ${gates.filter(g => g.status !== 'CONFIRMED').length} needs-followup`)
-
-  // 判定：任一 FAIL = 1；全 FOLLOWUP/无 FAIL = 0（followup 是显式登记，不是静默跳过）
   const code = failed.length === 0 && results.length > 0 ? 0 : 1
   console.log(`${TAG} exit code: ${code}`)
   return code

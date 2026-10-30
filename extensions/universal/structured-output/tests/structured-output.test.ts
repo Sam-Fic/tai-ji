@@ -20,8 +20,9 @@ import Ajv from "ajv";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // 被测主入口（src/index.ts 导出 executeStructuredOutput 供直接调用；
-// workflow 变体工厂供注册期防御/合成测试调用）
+// workflow / daily 变体工厂供注册期防御、合成与 execute 包装测试调用）
 import {
+  createDailyToolDefinition,
   createWorkflowToolDefinition,
   executeStructuredOutput,
   SO_SCHEMA_SIZE_WARN_BYTES,
@@ -499,6 +500,33 @@ describe("Tool execute (real call via executeStructuredOutput)", () => {
   it("accepts boolean root schema (draft-07: true = accept all)", async () => {
     const result = await executeStructuredOutput({ schema: true, data: { ok: 1 } });
     expect(result.details).toEqual({ ok: 1 });
+  });
+});
+
+// ── 日常变体注册体（createDailyToolDefinition.execute）──────────────────
+//
+// 覆盖注册对象的 execute 封装层：日常变体恒走自报校验（env 桥接分支已删），
+// workflow 模式由 index.ts 分岔注册 workflow 变体，不经过本包装。
+
+describe("createDailyToolDefinition — execute wrapper", () => {
+  it("delegates to the self-reported schema/data validation path", async () => {
+    const tool = createDailyToolDefinition();
+    const result = await tool.execute("call-daily-1", {
+      schema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
+      data: { ok: true },
+    });
+    expect(result.content[0]!.text).toContain("recorded successfully");
+    expect(result.details).toEqual({ ok: true });
+  });
+
+  it("propagates validation errors from the shared execute path", async () => {
+    const tool = createDailyToolDefinition();
+    await expect(
+      tool.execute("call-daily-2", {
+        schema: { type: "object", properties: { n: { type: "number" } }, required: ["n"] },
+        data: { n: "not-a-number" },
+      }),
+    ).rejects.toThrow(/Schema validation failed/);
   });
 });
 
