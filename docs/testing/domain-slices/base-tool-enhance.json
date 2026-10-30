@@ -1,0 +1,24 @@
+{
+  "name": "base-tool-enhance",
+  "summary": "bash 工具增强整包（前台空闲转后台 / 后台任务域写侧 / 通知投递；runtime 收殓读侧 reaper/service 归 host 域，extension-protocol 契约归 foundation，renderer 详情面板按 W2-B 冻结在 tray 域）",
+  "layers": [
+    "extension"
+  ],
+  "scope": {
+    "extension": [
+      "extensions/universal/base-tool-enhance/**"
+    ]
+  },
+  "tests": [
+    "extensions/universal/base-tool-enhance/**"
+  ],
+  "sharedBy": {},
+  "contracts": [],
+  "e2eRules": [
+    "E2E-BTW-01",
+    "E2E-BATCH-10",
+    "E2E-BATCH-11",
+    "E2E-BATCH-12",
+    "E2E-BATCH-13"
+  ]
+}
