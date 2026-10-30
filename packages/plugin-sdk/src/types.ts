@@ -638,8 +638,8 @@ export interface SessionInfo {
 // ── Storage 类型 ─────────────────────────────────────────────────
 
 /**
- * @stable — [AP-4/u2d] 条目镜像派生视图：含 type/customType（共享折叠器 replayFoldEntries
- * 的首道检查依赖这两个字段）；data 原样透传（域语义插件解）；pi 树结构噪声不出 runtime。
+ * @stable — [AP-4/u2d] 条目镜像派生视图：含 type/customType（消费方按 customType
+ * 判别条目域）；data 原样透传（域语义插件解）；pi 树结构噪声不出 runtime。
  */
 export interface PluginSessionEntry {
   id: string

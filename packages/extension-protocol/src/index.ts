@@ -72,25 +72,21 @@ export {
   isAskUserQuestion,
 } from './extensions/ask-user/helpers'
 
-// ── ./extensions/scheduler：scheduler 任务条目契约 + 折叠器 + 时间格式化（扩展与插件同源单实现；entry 实现在 extensions/universal/scheduler，写侧经 /schedule 扩展命令，本分组只承载纯契约与纯函数）──
+// ── ./extensions/scheduler：scheduler 任务契约 + 时间格式化（扩展与插件同源单实现；任务库
+// 快照文件契约 store.ts 含 node:fs，走 `./scheduler-store` 独立子出口，不进本桶出口——
+// 浏览器消费方结构性不触达 node 内建，先例 = background-task-entry）──
 export type {
   ScheduleSpec,
   TaskKind,
   TaskStatus,
   ScheduledTask,
   ExecutionRecord,
-  TaskSnapshot,
-  SchedulerEntryOp,
 } from './extensions/scheduler/types'
 export {
-  TASK_ENTRY_TYPE,
   HISTORY_LIMIT,
   appendExecutionRecord,
-  snapshotToTask,
   SCHEDULER_MODAL_VIEW_ID,
 } from './extensions/scheduler/types'
-export type { SchedulerEntryLike, ReplayFoldOptions } from './extensions/scheduler/replay'
-export { replayFoldEntries } from './extensions/scheduler/replay'
 export {
   MS_PER_DAY,
   MS_PER_HOUR,

@@ -288,7 +288,7 @@ describe('rpc-client', () => {
       clearExitHandlers()
     })
 
-    it('stdin emit error → pending reject + _exited 置位 + SIGKILL 自愈强杀', async () => {
+    it('stdin emit error → pending reject + 终态置位 + SIGKILL 自愈强杀', async () => {
       // 先注册一条 pending（挂起的 RPC，stream error 后必须被 reject 而非挂满超时）
       const commandPromise = client.sendCommand('get_state')
       await Promise.resolve()
@@ -297,8 +297,9 @@ describe('rpc-client', () => {
 
       // ① pending reject（消息含流名，可归因 stdin 而非「pi 无响应」）
       await expect(commandPromise).rejects.toThrow(/stdin stream error/)
-      // ② _exited 置位（后续 sendRaw / isAlive 立即可见死亡态）
-      expect((client as unknown as { _exited: boolean })._exited).toBe(true)
+      // ② 进程生命周期终态（后续 sendRaw / isAlive 立即可见死亡态；四态状态机的
+      // exited / kill-failed 均为终态，经公开 exited getter 断言）
+      expect(client.exited).toBe(true)
       // ③ 自愈强杀触发（SIGKILL 加速进程死亡，exit 为死亡通知唯一出口）
       expect(killSignals()).toContain('SIGKILL')
     })

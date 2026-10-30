@@ -63,7 +63,7 @@ export const SESSION_READ_NOT_WIRED = 'SESSION_READ_NOT_WIRED'
  */
 type EntriesSinceResult = { data?: { entries?: unknown[]; leafId?: string | null } }
 
-/** readEntries 派生视图条目：含 type/customType——共享折叠器 replayFoldEntries 的首道检查依赖这两个字段，剥掉即强迫折叠器分叉。data 原样透传（域语义插件解）。 */
+/** readEntries 派生视图条目：含 type/customType（消费方按 customType 判别条目域）。data 原样透传（域语义插件解）。 */
 export interface PluginSessionEntry {
   id: string
   timestamp: string
@@ -338,15 +338,15 @@ function toPluginSessionEntry(raw: unknown, customType: string): PluginSessionEn
 /**
  * 活跃路径过滤（readEntries 派生视图前的 raw entries 裁剪）：从 leafId 沿 parentId 回溯得
  * 活跃路径 id 集合，只保留链上条目——消息撤回（navigateTree 树回退）后，被撤子树的
- * custom op entry 不得再进入插件镜像的折叠输入（scheduler-manager 面板残留缺陷的
- * runtime 数据范围落点；全量与增量两模式同过本过滤）。与 extensions 侧 todo/plan/goal/
- * scheduler 的 filterActivePath、runtime infra/pi/entry-tree-builder 是设计登记的并行
- * 同构实现（extension 不能 import runtime 包的约束所致；census 收敛决策归阶段 6）。
+ * custom op entry 不得再进入插件镜像的折叠输入（全量与增量两模式同过本过滤）。与
+ * extensions 侧 todo/plan/goal 的 filterActivePath、runtime infra/pi/entry-tree-builder
+ * 是设计登记的并行同构实现（extension 不能 import runtime 包的约束所致；census 收敛
+ * 决策归阶段 6）。
  *
- * 防御语义（与 scheduler 扩展同构）：leafId 缺失/null/不在条目集 → 不过滤（回退现行为
- * ——增量批的父链可越批悬空，按「不丢数据」优先）；parentId 环 → `!activeIds.has`
- * 检查终止（不死循环）；无 string id 的条目按线性语义保留（派生视图层 toPluginSessionEntry
- * 会再次收窄，此处不提前丢弃）。
+ * 防御语义：leafId 缺失/null/不在条目集 → 不过滤（回退现行为——增量批的父链可越批
+ * 悬空，按「不丢数据」优先）；parentId 环 → `!activeIds.has` 检查终止（不死循环）；
+ * 无 string id 的条目按线性语义保留（派生视图层 toPluginSessionEntry 会再次收窄，
+ * 此处不提前丢弃）。
  */
 export function filterEntriesToActivePath(rawEntries: unknown[], leafId: string | null | undefined): unknown[] {
   if (rawEntries.length === 0) return rawEntries
@@ -445,7 +445,8 @@ export function registerSessionRpcHandlers(
   // 权限模型一致）；域字符串由调用方声明、runtime 不硬编码任何域（通用数据范围）。
   rpcServer.registerMethod(SESSION_READ_METHODS.readEntries, async (params) => {
     const sessionId = asSafeKey(params.sessionId, 'sessionId')
-    // customType 形如 'pi-scheduler:task'（含冒号），走 asString 不走 SAFE_KEY 白名单
+    // customType 允许任意域字符串（可含 ':' 等 asSafeKey 白名单外字符，且不进文件
+    // 路径——路径安全由 sessionId 的 asSafeKey 承担），走 asString
     const customType = asString(params.customType, 'customType')
     const sinceEntryId = asOptionalString(params.sinceEntryId, 'sinceEntryId')
     const read = deps.sessionRead

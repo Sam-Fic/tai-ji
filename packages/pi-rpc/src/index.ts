@@ -57,8 +57,8 @@ export {
 } from './commands.ts'
 export type { PromptImageAttachment, UiResponseShape } from './commands.ts'
 
-export { killPiProcess } from './kill-chain.ts'
-export type { KillableChild } from './kill-chain.ts'
+export { killPiProcess, KillSignalError } from './kill-chain.ts'
+export type { KillableChild, KillOutcome } from './kill-chain.ts'
 
 export { buildPiOutboundEnv } from './env.ts'
 export type { BuildChildEnvFn, PiOutboundEnvOptions } from './env.ts'
