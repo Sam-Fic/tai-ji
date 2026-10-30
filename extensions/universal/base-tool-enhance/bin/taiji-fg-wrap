@@ -13,7 +13,12 @@
 #     本脚本退出无管道关闭副作用，真实命令继续落盘——SIGPIPE 规避，B3 结构性保证）。
 #   - 写 pidfile：真实命令 pid + 启动时间（epoch 秒，spawn 时刻近似）。读者 = execute
 #     改写层收尾判定（B2 已死不登记 / B3·B5 活则登记为后台任务）。
-#   - 监控循环（间隔 sleep 0.2，与抄送延迟上限共用 200ms 口径）：每轮先查命令死活
+#   - 监控循环（间隔 = sleep 0.15 + 单轮固定开销，实测单轮 182-193ms ≤ 200ms——设计
+#     §5 部件 1「循环间隔 ≤200ms 与抄送延迟上限（矩阵 B1）同源、两口径必须一致」；
+#     校准实测（2026-10-31 darwin arm64，§9 检查点）：单轮固定开销 = now_ms（perl
+#     fork ~6ms）+ log_size（wc fork ~8ms），有新增输出时 +tail ~5ms；sleep 0.2 实测
+#     单轮 236-238ms 系统性超 200ms 口径，故取 0.15；同轮外层已取的日志 size 经参数
+#     传入 flush_log 复用，省去第二次 wc fork）：每轮先查命令死活
 #     （B6 单进程内顺序判定，天然串行无竞态）→ 死则抄完剩余输出、exit 透传真实退出码
 #     （B2）；活且空闲累积超阈值（当前时刻 − 最后输出字节时刻 ≥ 阈值，真实时钟度量，
 #     非按轮次计数）→ 打印转后台标记行、exit 0（B3，不杀命令）；活且未超 → 抄送日志
@@ -129,9 +134,15 @@ log_size() {
 # 抄送日志新增字节到自身 stdout（B1），推进 offset。
 # 按字节 offset 接续 = 累积缓冲形态：UTF-8 多字节字符跨批次时字节流无损（管道字节
 # 拼接完整），仅中间批次的渲染可能临时切半，由后续批次补全——不丢不重。
+# $1 可选 = 外层本轮已取的日志 size：复用可省同轮第二次 wc fork（单轮固定开销
+# 校准项，见文件头实测登记）；缺省时内部自取（B2 收尾路径仅调一次，开销不敏感）。
 flush_log() {
 	local size
-	size=$(log_size "$LOG_PATH" "$log_offset")
+	if [ $# -ge 1 ]; then
+		size="$1"
+	else
+		size=$(log_size "$LOG_PATH" "$log_offset")
+	fi
 	if [ "$size" -gt "$log_offset" ]; then
 		tail -c +$((log_offset + 1)) "$LOG_PATH"
 		log_offset="$size"
@@ -155,7 +166,7 @@ log_offset=0
 last_byte_ms=$(now_ms)
 
 while true; do
-	sleep 0.2
+	sleep 0.15
 
 	# B6：每轮先查死活（判死 = kill -0 ESRCH = bash 已收割后台作业，wait 立即返回状态）
 	if ! kill -0 "$child_pid" 2>/dev/null; then
@@ -168,7 +179,7 @@ while true; do
 	now=$(now_ms)
 	size=$(log_size "$LOG_PATH" "$log_offset")
 	if [ "$size" -gt "$log_offset" ]; then
-		flush_log
+		flush_log "$size"
 		last_byte_ms="$now"
 	fi
 
