@@ -47,12 +47,9 @@ import { reapOrphanRuns, runRetentionMaintenanceRound } from "@zhushanwen/subage
 import { getSubagentRecordsDir } from "@zhushanwen/subagent-core";
 import { listWorkflowRunsDirs, resolvePiWorkflowRunsDir } from "@zhushanwen/subagent-core";
 import { ENV_ROOT_SESSION_ID } from "@zhushanwen/subagent-core";
-// workflow 族 customType 词表单源（workflow-record 现役 + workflow-state-link legacy
-// 指针）：引用集三代解析的判别字面量经 barrel 消费，勿手抄。
-import {
-  WORKFLOW_RECORD_CUSTOM_TYPE,
-  WORKFLOW_STATE_LINK_CUSTOM_TYPE,
-} from "@zhushanwen/subagent-core";
+// workflow 族 customType 词表单源（workflow-record 现役）：引用集解析的判别
+// 字面量经 barrel 消费，勿手抄。
+import { WORKFLOW_RECORD_CUSTOM_TYPE } from "@zhushanwen/subagent-core";
 import {
   getSubagentService,
   setSubagentService,
@@ -175,12 +172,11 @@ function resolveWorkflowRunsDir(ctx: ExtensionContext): string {
 // ── [裁决点 7] 存活 session 引用集采集（壳侧注入点，core 不 import pi SDK）──────
 //
 // 全池 session 文件流式扫描（sessions 根 + 全 slug 子目录的 *.jsonl），逐文件
-// 提 workflow run 的注册引用并集——三代形态都解析（v2 注册条目 / v1 全量快照
-// 条目 / pre-W17 link 指针）：
-// - v2：workflow-record custom entry，data.kind === "registered" → data.runId；
-// - v1：data.v === 1 且 data.snapshot.runId 为 string → snapshot.runId；
-// - link：workflow-state-link custom entry → data.runId。
-// 只认 v2 会把存量 run 首轮误判无主并不可逆删除（设计裁决点 7「引用集三代形态」）。
+// 提 workflow run 的注册引用并集——v2-only：只认 v2 注册条目（workflow-record
+// custom entry，data.kind === "registered" → data.runId）。v1 全量快照条目 /
+// pre-W17 link 指针条目不再解析（用户 2026-10-30 裁决：无 v1/link 存量数据，
+// 旧格式条目按不存在处理——两侧读侧语义一致，均与 jsonl-run-store loadAll
+// 的 v2-only 发现域对齐）。
 //
 // 行预过滤（customType 子串）+ 逐行 JSON.parse 的宽容扫描：单文件解析失败跳过
 // （坏文件不阻断整轮——引用集缺侧 = 宁保留方向：少采集到的 run 引用会使其
@@ -219,25 +215,15 @@ function extractRunReferencesFromLine(line: string, out: Set<string>): void {
     return;
   }
   if (!isWorkflowCustomEntry(parsed)) return;
-  const d: Record<string, unknown> = parsed.data;
-  if (parsed.customType === WORKFLOW_RECORD_CUSTOM_TYPE) {
-    extractWorkflowRecordRunReference(d, out);
-  } else if (parsed.customType === WORKFLOW_STATE_LINK_CUSTOM_TYPE) {
-    if (typeof d.runId === "string" && d.runId !== "") out.add(d.runId);
-  }
-}
-
-/** [extractRunReferencesFromLine 拆分] workflow-record 条目两代引用提取
- * （v2 registered 的 runId / v1 快照内 runId）。 */
-function extractWorkflowRecordRunReference(
-  d: Record<string, unknown>,
-  out: Set<string>,
-): void {
-  if (d.kind === "registered" && typeof d.runId === "string" && d.runId !== "") {
-    out.add(d.runId);
-  } else if (d.v === 1 && typeof d.snapshot === "object" && d.snapshot !== null) {
-    const snapRunId: unknown = (d.snapshot as Record<string, unknown>).runId;
-    if (typeof snapRunId === "string" && snapRunId !== "") out.add(snapRunId);
+  // v2-only：只认 v2 注册条目的 runId（v1 快照 / link 指针旧格式按不存在处理，
+  // 见本节头注释的用户裁决登记）。
+  if (
+    parsed.customType === WORKFLOW_RECORD_CUSTOM_TYPE &&
+    parsed.data.kind === "registered" &&
+    typeof parsed.data.runId === "string" &&
+    parsed.data.runId !== ""
+  ) {
+    out.add(parsed.data.runId);
   }
 }
 
@@ -614,7 +600,7 @@ async function runProcessLevelMaintenance(
       );
       // [裁决点 7]（workflow-run-resume-revision）孤儿 run 对账清理：引用集采集 =
       // 壳侧注入点（core 不 import pi SDK——全池 session 文件流式扫描，v2 注册
-      // 条目 ∪ v1 快照条目 ∪ pre-W17 link 指针三代解析的并集）。同维护轮触发点、
+      // 条目解析，v2-only）。同维护轮触发点、
       // 同 oncePerProcess 检查（幂等整轮）；宽限窗缺省 7 天（env 可调）。
       // 触发范围 = session 存储树内全部 runs 目录（core listWorkflowRunsDirs 枚举，
       // 与 core pi-host-run-store 同一单源——「引用 session 全删的目录」的残留 run

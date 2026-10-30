@@ -1,5 +1,5 @@
 // scenario-orphan-reap.test.ts —— C04 簇合并产物（round5-F）：孤儿 run 对账
-// 清理场景层（真装配维护轮 + 壳侧三代引用解析）。两个来源的 14 个 vi.mock 为
+// 清理场景层（真装配维护轮 + 壳侧 v2 引用解析）。两个来源的 14 个 vi.mock 为
 // 同目标同工厂孪生形态，合并为文件级一份；各来源原有文件级 hook 与私有 helper
 // 下沉进各自唯一的顶层 describe（用例全名不变、零新增层级）。
 //
@@ -8,12 +8,12 @@
 //     终局化移除 + 对账清理——构造孤儿 run 确认不再被自动终局化；删引用 session
 //     后触发维护轮（宽限调零/不调零对照，含老 mtime 存量组））
 //   - scenario-19-orphan-reap-legacy.test.ts（场景 19，裁决点 7：对账清理存量
-//     形态与接管保护——v1 条目引用的存量 run；A 建 run → 删 A → B resume 接管
-//     在跑 → 维护轮）
+//     形态与接管保护——旧格式条目不产生引用（v2-only）；A 建 run → 删 A →
+//     B resume 接管在跑 → 维护轮）
 //
 // 分层：core reapOrphanRuns 单测层在 subagent-core orphan-reap.test（u1b，注入
 // 集合模拟引用）。本文件是场景层——经 setupSessionLifecycle 真装配触发维护轮
-// （session_start 挂点），引用集走壳侧三代解析真实实现（collectAliveWorkflowRun
+// （session_start 挂点），引用集走壳侧 v2 解析真实实现（collectAliveWorkflowRun
 // References 全池 session 文件扫描——u1b deviations 登记的壳侧缺口在此补）。
 // mock 栈抄自 session-lifecycle.test.ts（同款安全网）。
 
@@ -130,7 +130,7 @@ const OLD = Date.now() - 30 * 86_400_000; // 老 mtime 存量组锚（「不采�
 // 来源：scenario-08-orphan-reap.test.ts —— 场景 8
 // ══════════════════════════════════════════════════════════════
 
-describe("场景 8：终局化移除 + 对账清理（真装配维护轮 + 壳侧三代引用解析）", () => {
+describe("场景 8：终局化移除 + 对账清理（真装配维护轮 + 壳侧 v2 引用解析）", () => {
   let tmpDir: string;
   let agentDir: string;
   let stateDir: string;
@@ -353,7 +353,7 @@ describe("场景 19：对账清理存量形态与接管保护", () => {
     }
   }
 
-  /** session 文件写入条目行（v1 快照条目 / v2 注册条目两形态）。 */
+  /** session 文件写入条目行（v2 注册 / v1 快照 / link 指针各形态夹具）。 */
   function seedSessionEntry(slug: string, sessionId: string, entryLine: Record<string, unknown>): string {
     const dir = path.join(sessionsRoot, slug);
     fs.mkdirSync(dir, { recursive: true });
@@ -393,11 +393,13 @@ describe("场景 19：对账清理存量形态与接管保护", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });
 
-  it("v1 快照条目引用的存量 run（旧双源文件形态、无 record 流）：三代引用识别，不删", async () => {
+  it("v1 快照条目不再产生引用（v2-only）：仅旧格式条目「引用」的 run 判无主，宽限调零后删除", async () => {
     process.env[ORPHAN_RUN_GRACE_WINDOW_MS_ENV] = "0";
     seedLegacyFootprint("wf-s19-v1");
     ageRun("wf-s19-v1", OLD);
-    // v1 快照条目行（data.v === 1 + snapshot.runId——只认 v2 会误判无主并不可逆删除）
+    // v1 快照条目行（data.v === 1 + snapshot.runId）——v2-only 解析下不产生引用
+    //（用户 2026-10-30 裁决无 v1/link 存量数据，该形态生产不可达；本用例锁
+    // 解析面回归：旧格式识别分支不得回流）
     seedSessionEntry("legacy", "sess-v1", {
       type: "custom",
       customType: "workflow-record",
@@ -405,7 +407,7 @@ describe("场景 19：对账清理存量形态与接管保护", () => {
     });
 
     await runMaintenanceRound("sess-v1-round");
-    expect(legacyExists("wf-s19-v1")).toBe(true);
+    expect(legacyExists("wf-s19-v1")).toBe(false);
   });
 
   it("A 建 run → 删 A → B resume 接管（v2 条目已补）→ 维护轮：三件不删（接管已补注册）", async () => {
@@ -437,14 +439,16 @@ describe("场景 19：对账清理存量形态与接管保护", () => {
     expect(fs.existsSync(path.join(stateDir, "wf-s19-takeover.json"))).toBe(true);
   });
 
-  it("pre-W17 link 指针条目引用的 run：三代引用识别的第三档，宽限调零维护轮后五件不删", async () => {
+  it("pre-W17 link 指针条目不再产生引用（v2-only）：仅旧格式条目「引用」的 run 判无主，宽限调零后五件删除", async () => {
     process.env[ORPHAN_RUN_GRACE_WINDOW_MS_ENV] = "0";
     seedRecordFootprint("wf-s19-link");
     fs.writeFileSync(path.join(stateDir, "wf-s19-link.jsonl"), '{"v":"wf-run-v1","fixture":true}\n', "utf8");
     fs.writeFileSync(path.join(stateDir, "wf-s19-link.events.jsonl"), '{"type":"run-created"}\n', "utf8");
     fs.writeFileSync(path.join(stateDir, "wf-s19-link.resume.lock"), "{}", "utf8");
     ageRun("wf-s19-link", OLD);
-    // pre-W17 指针形态：workflow-state-link custom entry → data.runId
+    // pre-W17 指针形态：workflow-state-link custom entry → data.runId——v2-only
+    // 解析下不产生引用（用户 2026-10-30 裁决无 v1/link 存量数据，该形态生产
+    // 不可达；锁解析面回归）
     seedSessionEntry("legacy", "sess-link", {
       type: "custom",
       customType: "workflow-state-link",
@@ -452,9 +456,9 @@ describe("场景 19：对账清理存量形态与接管保护", () => {
     });
 
     await runMaintenanceRound("sess-link-round");
-    // 五件全在（record 流 + manifest + 旧双源 + 残锁——link 引用命中保护）
+    // 五件全删（record 流 + manifest + 旧双源 + 残锁——link 引用不再保护）
     for (const suffix of [".record.jsonl", ".json", ".jsonl", ".events.jsonl", ".resume.lock"]) {
-      expect(fs.existsSync(path.join(stateDir, `wf-s19-link${suffix}`))).toBe(true);
+      expect(fs.existsSync(path.join(stateDir, `wf-s19-link${suffix}`))).toBe(false);
     }
   });
 

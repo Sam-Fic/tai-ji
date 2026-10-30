@@ -1,9 +1,9 @@
 // src/__tests__/jsonl-run-store-loadall.test.ts
 //
 // loadAll 发现域裁决锚（v2-only）：主 session 的发现通道收敛为「v2 注册条目定界 →
-// record 流权威重建」单通道。历史形态 entry（v1 全量快照 / 旧 workflow-state-link
-// 指针）不参与发现——旧 session JSONL 里的历史 entry 仍在盘上，loadAll 必须静默
-// 忽略（不抛、不重建、零 warn），未知 entry 容忍面不受影响。
+// record 流权威重建」单通道。旧格式 entry（v1 全量快照 / 旧 workflow-state-link
+// 指针）按不存在处理（用户 2026-10-30 裁决无 v1/link 存量数据）——在盘也不识别，
+// loadAll 必须静默忽略（不抛、不重建、零 warn），未知 entry 容忍面不受影响。
 // v2 重建/收编读侧的完整用例在 jsonl-run-store-session-file.test.ts（W17/W1 describe）与
 // __tests__/record-mode/（[D1] record 单源语义族）。
 
