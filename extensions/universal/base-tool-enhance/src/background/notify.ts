@@ -1,6 +1,6 @@
 /**
- * 完成通知入账与 pending-notifications 接入（M3 + unified-delivery 波 3 入账切换，
- * 设计 .tmp/tech-design/unified-delivery.md D3 裁决 1 / §5 波 3 / 老能力映射 #4）。
+ * 完成通知入账与 pending-notifications 接入（M3 + unified-delivery 投递统一化设计的
+ * 波 3 入账切换，D3 裁决 1 / 老能力映射 #4；语义由本文件头注释直接承载，见下）。
  *
  * 通道形态：
  *  - register/unregister 经 pi.events.emit（EventBus，pending 侧 pi.events.on 消费）
@@ -32,7 +32,7 @@
  * （收殓时 pi API 不可用，无 outbox 条目，重放无从覆盖）改由对账路径承接
  * （pending-reconcile.ts——收殓终态通知的唯一生产者）。
  *
- * kill 路径不入账（§3.5「bash_kill 终态收尾的单点归属」，老能力映射 #10 result 类
+ * kill 路径不入账（bash_kill 终态收尾的单点归属原则，老能力映射 #10 result 类
  * silent 声明）：reason:"killed" 只 emit unregister——kill 调用方就在当前 turn 等结果，
  * 双发是噪音。
  *
@@ -110,7 +110,7 @@ export function toPendingReason(
 }
 
 /**
- * ⑤ 登记成功后 emit pending:register（§3.5 数据流 ⑤）。
+ * ⑤ 登记成功后 emit pending:register（后台任务生命周期数据流步骤 ⑤）。
  * 形态对齐 pending-notifications parseRegisterEvent 期望：{id, type, name}——
  * type:"bash" 经 D16 直通（process 档），**不携带 expiresAt**（该字段由 pending 侧
  * listener 按分档决定，process 档落盘省略）。引用未注入或 emit throw（旧 bus）时
@@ -130,7 +130,7 @@ export function emitPendingRegister(task: BackgroundTask): void {
 }
 
 /**
- * ⑧ emit pending:unregister（§3.5 数据流 ⑧）。
+ * ⑧ emit pending:unregister（后台任务生命周期数据流步骤 ⑧）。
  * data 形态对齐 pending-notifications parseUnregisterEvent 期望：{id, reason}——
  * status 不在 emit data 里（listener 用 mapReasonToStatus(reason) 自行计算）；
  * appendEntry 侧（对账/收殓）的落盘形态 {id, reason, status} 见 pending-reconcile.ts。

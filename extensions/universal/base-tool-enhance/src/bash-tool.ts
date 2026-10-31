@@ -83,7 +83,7 @@ const enhancedBashSchema = Type.Object({
 /**
  * 重写的 bash description（给 LLM 的，英文，风格对齐官方文案 bash.js:233）。
  *
- * 覆盖设计文档 §3.5 要求的三个要点：
+ * description 文案必须覆盖的要点（覆盖要求由本注释直接承载）：
  *  1. background:true 语义（立即返回 task_id，bash_output 查询 / bash_kill 终止）
  *  2. 白名单命中命令自动转后台（即使未要求 background）
  *  3. timeout 单位秒、显式填写会被尊重（唯一例外：白名单强转后台时忽略，D13）
@@ -91,7 +91,7 @@ const enhancedBashSchema = Type.Object({
  *     turn（notify.ts），LLM 文案必须传达「不要 sleep 空等」——实测大量 agent
  *     启动后台任务后跑 bash sleep 轮询空等，机制在而契约不在所致
  *
- * bash_output / bash_kill 工具由 M2 单元注册，description 先行提及（D2/§3.5 要求）。
+ * bash_output / bash_kill 工具由 M2 单元注册，description 先行提及（D2 要求）。
  */
 const ENHANCED_BASH_DESCRIPTION = [
 	"Execute a bash command in the current working directory. Returns stdout and stderr.",
@@ -466,7 +466,7 @@ export function createBashOverrideToolDefinition() {
 			// subagent 进程内忽略 background 走前台，保持内置同步语义）。abort/interrupt
 			// 不传播到后台任务（D15）：本分支不接触 signal，立即返回
 			if (args.background === true && !subagent) {
-				// timeout 优先级（§3.5）：LLM 显式值 > 配置默认 > 不限；无效显式值沿用
+				// timeout 优先级：LLM 显式值 > 配置默认 > 不限；无效显式值沿用
 				// pi 内置文案抛错（注入只发生在「LLM 未填 && 配置了默认」，D4）
 				const timeoutSec = resolveBackgroundTimeoutSec(args.timeout, config.backgroundTimeoutSeconds ?? undefined);
 				return startBackgroundAndReply(args.command, ctx, config, timeoutSec);
