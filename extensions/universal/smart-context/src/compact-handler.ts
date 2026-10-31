@@ -20,6 +20,11 @@
  * - 事件取消（D3 第一层，SI4）：session_start(new/resume/fork) / session_shutdown /
  *   session_compact 到达即取消任务放弃结果；session_tree 仅观测告警（回退不取消）；
  *   session_start(startup/reload) 不取消（reload 使扩展工厂重跑、内存态自清）。
+ * - 落盘兜底校验 + appendCompaction 直调 + 档位重置补偿（U3：D3 第二层 / D2 / D6）：
+ *   validateBackgroundPersist 三项校验（sessionId 一致 / 无被抢先 compaction / 收缩校验）
+ *   任一失败放弃落盘；persistBackgroundCompaction 直调 sessionManager.appendCompaction
+ *   （local 形状声明 + 存在性探测，fromHook=true 与同步接管一致）；落盘成功经回调清
+ *   firedThresholds（D6，与 session_compact 监听共用）。
  * - 独立熔断（SI5）：后台失败独立计数，连续 ≥3（沿用 TAKEOVER_FAILURE_LIMIT）停止自动触发；
  *   与同步路径 failStreak 隔离、膨胀段记录（inflatedSegments）共享读取；被抢先取消不计入。
  *
@@ -97,6 +102,19 @@ export interface BackgroundTaskSnapshot {
 	lastEntryId: string;
 	/** 触发时刻上下文用量（观测日志用，语义以 preparation.tokensBefore 为准）。 */
 	tokens: number;
+	/**
+	 * 触发时刻 branch 上全部 compaction entry id（D3 第二层校验②的已知集合）：
+	 * 校验②落地为「当前 branch 上出现未知 id 的 compaction = 被抢先」——锚点条目可定位时
+	 * 与「快照末端之后区间扫描」等价（锚点之前的公共前缀条目 id 全部已知）；锚点被
+	 * navigateTree 回退丢弃时（V4：回退不取消、结果应正常落盘）区间无定义，集合判定
+	 * 是它的时序无关自然延伸（runlog U3 决策 A1）。
+	 */
+	compactionIds: string[];
+	/**
+	 * 触发时刻预计算的被压段 token（收缩校验③分母）：被压范围来自触发快照，分母在触发
+	 * 时刻定死，续段无需 preparation 穿透（runlog U3 决策 A2，AfterGenerationHook 契约不动）。
+	 */
+	shadowedTokens: number;
 }
 
 /**
@@ -160,6 +178,146 @@ export type AfterGenerationHook = (
 	snapshot: BackgroundTaskSnapshot,
 	ctx: ExtensionContext,
 ) => Promise<ContinuationOutcome>;
+
+// ──────────────────────── 落盘兜底校验 + appendCompaction 直调（U3：D3 第二层 / D2 / D6） ────────────────────────
+
+/** 落盘兜底校验失败原因（可辨识：驱动 ContinuationOutcome 与日志）。 */
+export type PersistCheckFailure =
+	/** 校验①：sessionId 与触发时刻不一致（会话已替换的兜底对账）。 */
+	| "session-mismatch"
+	/** 校验②：快照已知集合之外出现 compaction entry（被抢先压缩）。 */
+	| "preempted"
+	/** 校验③：摘要膨胀（isSummaryInflated，压缩无净收益）。 */
+	| "summary-inflated";
+
+/** 校验结果（纯数据：ok=false 时携带失败原因，放弃必留日志由调用方落地）。 */
+export type PersistCheckVerdict = { ok: true } | { ok: false; reason: PersistCheckFailure };
+
+/**
+ * 落盘兜底校验器（D3 第二层，覆盖事件取消与落盘之间的竞态窗口）：纯函数、可穷举单测（RL2）。
+ * 三项任一失败放弃落盘、等下轮触发：
+ * ①sessionId 与触发时刻一致（防御性——taiji 每 session 独立进程下无自然触发场景，护栏 pi 裸跑形态）；
+ * ②当前 branch 上无快照已知集合之外的 compaction entry（被抢先的时序无关判定，runlog U3 决策 A1——
+ *   锚点可定位时等价于「快照末端之后区间扫描」，锚点被回退丢弃时集合判定仍可裁决）；
+ * ③收缩校验 isSummaryInflated（SI6：摘要 token ≥ 被压段 token 即放弃，分母取触发快照预计算值）。
+ */
+export function validateBackgroundPersist(
+	snapshot: BackgroundTaskSnapshot,
+	entriesNow: ReadonlyArray<SessionEntry>,
+	sessionIdNow: string,
+	result: CompactionResult,
+): PersistCheckVerdict {
+	// ①会话已替换（session_start/shutdown 事件层取消未达的竞态窗口兜底）
+	if (sessionIdNow !== snapshot.sessionId) {
+		return { ok: false, reason: "session-mismatch" };
+	}
+	// ②被抢先压缩：未知 id 的 compaction 必为触发后新增（触发时刻 branch 上的已知集合之外）
+	for (const entry of entriesNow) {
+		if (entry.type === "compaction" && !snapshot.compactionIds.includes(entry.id)) {
+			return { ok: false, reason: "preempted" };
+		}
+	}
+	// ③收缩校验：摘要不小于被压段 → 落盘使上下文不降反升，放弃（膨胀段记录由调用方经回调共享）
+	const summaryTokens = estimateTextTokens(result.summary);
+	if (isSummaryInflated(summaryTokens, snapshot.shadowedTokens)) {
+		return { ok: false, reason: "summary-inflated" };
+	}
+	return { ok: true };
+}
+
+/**
+ * SessionManager.appendCompaction 的局部形状声明（AS1：ExtensionContext.sessionManager 类型上是
+ * ReadonlySessionManager——Pick 收窄不含 appendCompaction，运行时是完整 SessionManager 实例）。
+ * 参数序与类型按 pi dist 实读核对：session-manager.d.ts:271
+ * `appendCompaction<T>(summary, firstKeptEntryId, tokensBefore, details?, fromHook?, usage?): string`，
+ * usage 与 CompactionResult["usage"] 同为 pi-ai Usage（任务书 U3 checkpoint 兑现）。
+ */
+interface AppendCompactionLike {
+	appendCompaction?: (
+		summary: string,
+		firstKeptEntryId: string | null,
+		tokensBefore: number,
+		details?: unknown,
+		fromHook?: boolean,
+		usage?: CompactionResult["usage"],
+	) => string | undefined;
+}
+
+/** sessionManager 的运行时收窄检查（RL3：只收窄到对象，方法存在性单独探测）。 */
+function asAppendCompactionHost(sm: unknown): AppendCompactionLike | undefined {
+	return typeof sm === "object" && sm !== null ? (sm as AppendCompactionLike) : undefined;
+}
+
+/** persistBackgroundCompaction 的补偿回调（D6）：由接线层（index.ts）注入 session 级状态操作。 */
+export interface BackgroundPersistCallbacks {
+	/** 落盘成功补偿：清空已提醒档位（与 session_compact 事件监听共用同一段逻辑，D6）。 */
+	onPersisted?: () => void;
+	/** 收缩校验失败的膨胀段记录（D3：与同步路径 inflatedSegments 共享读取，同段不再触发防反复烧钱）。 */
+	onInflated?: (firstKeptEntryId: string) => void;
+}
+
+/**
+ * 落盘续段（U3 主体：存在性探测 → 三项兜底校验 → appendCompaction 直调 → 补偿回调）。
+ *
+ * 探测（RL3）：`typeof === "function"` 存在性探测，缺失放弃落盘、记日志、不抛错（观察级依赖
+ * UD1/UD8 的运行时对账；maybeStart 另有前置探测省生成费用，两处语义不同见其注释）。
+ * 落盘（D2/AX2）：直调 sessionManager.appendCompaction，参数口径与 pi 原生压缩流程一致
+ * （agent-session.js:2199），fromHook=true 与同步接管路径一致；挂载点（leaf）由 pi 依落盘
+ * 时刻 branch 决定、不干预（AS6：压缩期间新条目天然衔接进保留段）；usage/details 随 entry
+ * 写入（D6 用量归因消费侧照读）。不伪造 pi 事件（UD6：appendCompaction 纯追加无事件）。
+ * 落盘异常不在此吞——debugLog 标注阶段后原样上抛，由 runBackgroundTask 异常递增点③收口。
+ */
+export async function persistBackgroundCompaction(
+	ctx: ExtensionContext,
+	result: CompactionResult,
+	snapshot: BackgroundTaskSnapshot,
+	callbacks?: BackgroundPersistCallbacks,
+): Promise<ContinuationOutcome> {
+	const host = asAppendCompactionHost(ctx.sessionManager);
+	// RL3 存在性探测：方法缺失 = pi 观察级依赖失效，放弃落盘不抛错（绝不静默）
+	if (!host || typeof host.appendCompaction !== "function") {
+		warnLog("background compaction persist skipped: sessionManager.appendCompaction unavailable");
+		return "dropped";
+	}
+
+	// D3 第二层：三项兜底校验（entriesNow 与 appendCompaction 之间无 await——单线程事件循环
+	// 同步帧内连续执行，校验与落盘之间构造性无竞态）
+	const sessionIdNow = ctx.sessionManager.getSessionId();
+	const entriesNow = ctx.sessionManager.getEntries();
+	const verdict = validateBackgroundPersist(snapshot, entriesNow, sessionIdNow, result);
+	if (!verdict.ok) {
+		if (verdict.reason === "summary-inflated") {
+			callbacks?.onInflated?.(result.firstKeptEntryId);
+			warnLog("background compaction persist rejected: summary inflated", {
+				summaryTokens: estimateTextTokens(result.summary),
+				shadowedTokens: snapshot.shadowedTokens,
+			});
+			return "inflated";
+		}
+		debugLog(`background compaction persist rejected: ${verdict.reason} (sessionId=${snapshot.sessionId})`);
+		return "dropped";
+	}
+
+	try {
+		const entryId = host.appendCompaction(
+			result.summary,
+			result.firstKeptEntryId,
+			result.tokensBefore,
+			result.details,
+			true, // fromHook：与同步接管路径落盘口径一致（pi 同参位传 fromExtension=true）
+			result.usage,
+		);
+		callbacks?.onPersisted?.();
+		debugLog(
+			`background compaction persisted: entry=${entryId ?? "?"} firstKept=${result.firstKeptEntryId} ` +
+				`sessionId=${snapshot.sessionId}`,
+		);
+		return "validated";
+	} catch (error) {
+		debugLog(`background compaction persist error: ${toErrorMessage(error)}`);
+		throw error;
+	}
+}
 
 /**
  * 从单条消息提取文件操作（pi extractFileOpsFromMessage 的等价组装——该函数不在包根导出，
@@ -295,17 +453,19 @@ export function buildBackgroundPreparation(
 }
 
 /**
- * 后台压缩任务管理器（U2）：触发判定 + 互斥 + 独立熔断 + 事件取消。
+ * 后台压缩任务管理器（U2/U3）：触发判定 + 互斥 + 独立熔断 + 事件取消 + 膨胀段共享读取。
  *
  * state 为 session 级闭包（index.ts 在 session_start 重建后经 getState 读当前代容器——
- * 旧代任务的回调写旧闭包对象，对新状态天然无害）。afterGeneration 是 U3 续段接线点，
- * U2 阶段缺省不传。
+ * 旧代任务的回调写旧闭包对象，对新状态天然无害）。afterGeneration 是 U3 续段接线点；
+ * getInflatedSegments 提供膨胀段共享读取（D3：与同步路径 inflatedSegments 同一集合，
+ * 同段不再触发防反复烧钱），缺省视为空集。
  */
 export function createBackgroundCompactionManager(
 	pi: ExtensionAPI,
 	getState: () => BackgroundCompactionState,
 	loadConfigFn: () => SmartContextConfig,
 	afterGeneration?: AfterGenerationHook,
+	getInflatedSegments?: () => ReadonlySet<string>,
 ) {
 	/**
 	 * 事件取消（D3 第一层）：有进行中任务则 abort 放弃结果并回空闲。
@@ -332,6 +492,17 @@ export function createBackgroundCompactionManager(
 		// 门控前置（D4）：enabled 与 excludedModels，与同步接管同款判定
 		if (!isGatingActive(config, modelId)) return false;
 
+		// 前置存在性探测（U3）：appendCompaction 缺失 = pi 观察级依赖失效（UD1/UD8）的恒定
+		// 状态，拦截在生成前省一次全量生成费用；落盘侧另有存在性探测兜底（RL3，语义不同——
+		// 此处「不启动任务」、彼处「放弃结果」，运行中 pi 包不变故两者判定恒一致）
+		{
+			const sm: unknown = ctx.sessionManager;
+			if (!sm || typeof (sm as AppendCompactionLike).appendCompaction !== "function") {
+				debugLog("background compaction skipped: sessionManager.appendCompaction unavailable");
+				return false;
+			}
+		}
+
 		// 独立熔断（SI5）：连续失败 ≥3 停止自动触发（只影响本入口，工具/手动路径不受影响）
 		if (state.failureStreak >= TAKEOVER_FAILURE_LIMIT) {
 			debugLog("background compaction circuit breaker open, skipping auto trigger");
@@ -347,11 +518,19 @@ export function createBackgroundCompactionManager(
 		const preparation = buildBackgroundPreparation(ctx);
 		if (!preparation) return false;
 
+		// 膨胀段共享读取（D3/SI6）：该段收缩校验曾失败 → 同段不再触发防反复烧钱
+		if (getInflatedSegments?.().has(preparation.firstKeptEntryId)) {
+			debugLog(`background compaction skipped: segment previously inflated (firstKept=${preparation.firstKeptEntryId})`);
+			return false;
+		}
+
 		const entriesTail = ctx.sessionManager.getEntries();
 		const snapshot: BackgroundTaskSnapshot = {
 			sessionId: ctx.sessionManager.getSessionId(),
 			lastEntryId: entriesTail[entriesTail.length - 1]?.id ?? "",
 			tokens: usage.tokens,
+			compactionIds: entriesTail.filter((e) => e.type === "compaction").map((e) => e.id),
+			shadowedTokens: estimateShadowedTokens(preparation.messagesToSummarize),
 		};
 
 		// 任务自持 AbortController；异步序列 fire-and-forget（正常路径无人 await）。

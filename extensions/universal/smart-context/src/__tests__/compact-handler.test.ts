@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 // mock pi SDK：接管路径的单测不触网（same-mode 输入链 + cross-mode 原生组装都替换）。
 // importOriginal 保留真实模块（含 pure.js 依赖的 estimateTokens），其余覆盖项在后
@@ -14,7 +14,7 @@ vi.mock("../llm.js", () => ({
 }));
 
 import { compact as nativeCompact, buildContextEntries, buildSessionProjection, sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { CompactionResult, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { callSameModelCompaction } from "../llm.js";
 import {
 	buildBackgroundPreparation,
@@ -23,8 +23,11 @@ import {
 	createBeforeCompactHandler,
 	createTakeoverState,
 	isAutoCompactTriggered,
+	persistBackgroundCompaction,
+	validateBackgroundPersist,
 	type AfterGenerationHook,
 	type BackgroundCompactionState,
+	type BackgroundTaskSnapshot,
 } from "../compact-handler.js";
 import smartContextExtension from "../index.js";
 import { normalizeSmartContextConfig, type SmartContextConfig } from "../pure.js";
@@ -296,7 +299,7 @@ function expectMatchesProjection(entries: SessionEntry[], prep: NonNullable<Retu
 		.toEqual(projection.messages);
 }
 
-/** U2 组装/管理器共用的 ctx：entries + usage + sessionId。 */
+/** U2 组装/管理器共用的 ctx：entries + usage + sessionId（appendCompaction mock 供 U3 落盘链路）。 */
 function makeBgCtx(entries: SessionEntry[], usage: { tokens: number | null; contextWindow: number } | null): ExtensionContext {
 	return {
 		model: { provider: "zai", id: "glm" },
@@ -306,17 +309,24 @@ function makeBgCtx(entries: SessionEntry[], usage: { tokens: number | null; cont
 			getSessionId: () => "s1",
 			getSessionFile: () => "/tmp/s1.jsonl",
 			getEntries: () => entries,
+			appendCompaction: vi.fn(() => "entry-persisted"),
 		},
 		modelRegistry: {},
 	} as unknown as ExtensionContext;
+}
+
+/** 取 ctx.sessionManager 上的 appendCompaction mock（运行时形状，类型声明层不可见——AS1）。 */
+function getAppendMock(ctx: ExtensionContext): Mock {
+	return (ctx.sessionManager as unknown as { appendCompaction: Mock }).appendCompaction;
 }
 
 function makeBgManager(
 	bgState: BackgroundCompactionState,
 	config: SmartContextConfig,
 	afterGeneration?: AfterGenerationHook,
+	getInflatedSegments?: () => ReadonlySet<string>,
 ) {
-	const manager = createBackgroundCompactionManager(makePi(), () => bgState, () => config, afterGeneration);
+	const manager = createBackgroundCompactionManager(makePi(), () => bgState, () => config, afterGeneration, getInflatedSegments);
 	return manager;
 }
 
@@ -583,5 +593,220 @@ describe("后台事件取消与独立熔断（U2 验收②：RL1）", () => {
 		await bgState.active?.done;
 		expect(bgState.failureStreak).toBe(1);
 		expect(bgState.active).toBeNull();
+	});
+});
+
+// ──────────────────────── U3：落盘兜底校验 + appendCompaction 直调 + 档位重置补偿 ────────────────────────
+
+/** 校验器/落盘直调共用的 CompactionResult 底座（短摘要 = 不膨胀；details 为 same-model 标记）。 */
+function makeCompactionResult(overrides?: Partial<CompactionResult>): CompactionResult {
+	return {
+		summary: "bg summary",
+		firstKeptEntryId: "e3",
+		tokensBefore: TRIGGER_USAGE.tokens,
+		usage: { input: 1, output: 2 },
+		details: { engine: "smart-context", mode: "same-model", model: "zai/glm" },
+		...overrides,
+	};
+}
+
+/** 校验器直测共用的快照底座（shadowedTokens=4000：摘要 ≥4000 tokens 即膨胀）。 */
+function makeSnapshot(overrides?: Partial<BackgroundTaskSnapshot>): BackgroundTaskSnapshot {
+	return {
+		sessionId: "s1",
+		lastEntryId: "e5",
+		tokens: TRIGGER_USAGE.tokens,
+		compactionIds: [],
+		shadowedTokens: 4_000,
+		...overrides,
+	};
+}
+
+describe("落盘兜底校验器（U3 验收①：RL2 逐项反例 + 通过用例）", () => {
+	it("通过用例：sessionId 一致 + 无未知 compaction + 摘要不膨胀 → ok", () => {
+		expect(validateBackgroundPersist(makeSnapshot(), sampleEntriesNoCompaction(), "s1", makeCompactionResult()))
+			.toEqual({ ok: true });
+	});
+
+	it("反例① sessionId 变更（会话已替换）→ session-mismatch", () => {
+		expect(validateBackgroundPersist(makeSnapshot(), sampleEntriesNoCompaction(), "s2", makeCompactionResult()))
+			.toEqual({ ok: false, reason: "session-mismatch" });
+	});
+
+	it("反例② 快照末端之后出现新 compaction entry（未知 id = 被抢先）→ preempted", () => {
+		const entries = [...sampleEntriesNoCompaction(), makeCompactionEntry("c-rival", "e5", "e5")];
+		expect(validateBackgroundPersist(makeSnapshot(), entries, "s1", makeCompactionResult()))
+			.toEqual({ ok: false, reason: "preempted" });
+	});
+
+	it("通过② 既有 compaction（快照已知 id 集合内）不误判被抢先", () => {
+		const entries = sampleEntriesWithCompaction(); // 含 c0（触发时刻已在 branch 上）
+		const snapshot = makeSnapshot({ lastEntryId: "k4", compactionIds: ["c0"] });
+		expect(validateBackgroundPersist(snapshot, entries, "s1", makeCompactionResult()))
+			.toEqual({ ok: true });
+	});
+
+	it("通过②b 回退丢弃锚点（session_tree 落盘侧断言）：锚点不在当前 branch、无新 compaction → 落盘放行（V4：回退不取消）", () => {
+		// 回退后 branch = [e1, n1]：锚点 e5 已被丢弃（不在 entries 中），且无抢先 compaction
+		const entriesAfterRollback = [makeUserEntry("e1", null, BIG), makeUserEntry("n1", "e1", "continue")];
+		expect(validateBackgroundPersist(makeSnapshot(), entriesAfterRollback, "s1", makeCompactionResult()))
+			.toEqual({ ok: true });
+	});
+
+	it("反例②b 回退后新分支被抢先压缩（未知 id）→ preempted（防错位 entry 落盘，AX3）", () => {
+		const entriesAfterRollback = [
+			makeUserEntry("e1", null, BIG),
+			makeCompactionEntry("c-other", "e1", "e1"),
+		];
+		expect(validateBackgroundPersist(makeSnapshot(), entriesAfterRollback, "s1", makeCompactionResult()))
+			.toEqual({ ok: false, reason: "preempted" });
+	});
+
+	it("反例③ 摘要膨胀（摘要 token ≥ 被压段，SI6）→ summary-inflated", () => {
+		const inflated = makeCompactionResult({ summary: "z".repeat(20_000) }); // 20000 chars → 5000 tokens ≥ 4000
+		expect(validateBackgroundPersist(makeSnapshot(), sampleEntriesNoCompaction(), "s1", inflated))
+			.toEqual({ ok: false, reason: "summary-inflated" });
+	});
+
+	it("通过③ 摘要略小于被压段 → ok（收缩校验放行）", () => {
+		const compactEnough = makeCompactionResult({ summary: "y".repeat(8_000) }); // 2000 tokens < 4000
+		expect(validateBackgroundPersist(makeSnapshot(), sampleEntriesNoCompaction(), "s1", compactEnough))
+			.toEqual({ ok: true });
+	});
+});
+
+describe("appendCompaction 直调链路（U3 验收②③：RL3 存在性探测 + D6 档位重置）", () => {
+	it("落盘成功：参数口径与 pi 原生一致（fromHook=true、usage/details 透传）、onPersisted 回调、validated 清零", async () => {
+		mockedCall.mockResolvedValue({ ok: true, text: "bg summary", usage: { input: 3, output: 4 } });
+		const bgState = createBackgroundCompactionState();
+		const onPersisted = vi.fn();
+		const hook: AfterGenerationHook = (result, snapshot, ctx) =>
+			persistBackgroundCompaction(ctx, result, snapshot, { onPersisted });
+		const manager = makeBgManager(bgState, normalizeSmartContextConfig({}), hook);
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
+
+		expect(manager.maybeStart(ctx)).toBe(true);
+		expect(getAppendMock(ctx)).not.toHaveBeenCalled(); // 生成完成前不落盘
+		await bgState.active?.done;
+
+		expect(getAppendMock(ctx)).toHaveBeenCalledTimes(1);
+		const [summary, firstKept, tokensBefore, details, fromHook, usage] = getAppendMock(ctx).mock.calls[0];
+		expect(firstKept).toBe("e3"); // 样例 A 切点（快照范围落 entry）
+		expect(summary).toContain("bg summary");
+		expect(tokensBefore).toBe(TRIGGER_USAGE.tokens); // preparation.tokensBefore = getContextUsage() 口径
+		expect(details).toEqual({ engine: "smart-context", mode: "same-model", model: "zai/glm" });
+		expect(fromHook).toBe(true); // 与同步接管路径落盘口径一致
+		expect(usage).toEqual({ input: 3, output: 4 }); // usage 随 entry 写入（D6 用量归因消费侧照读）
+		expect(onPersisted).toHaveBeenCalledTimes(1); // D6 档位重置补偿回调
+		expect(bgState.failureStreak).toBe(0); // validated 清零
+		expect(bgState.active).toBeNull();
+	});
+
+	it("RL3 前置探测：appendCompaction 缺失 → 不启动任务（生成费用零浪费）", () => {
+		const bgState = createBackgroundCompactionState();
+		const manager = makeBgManager(bgState, normalizeSmartContextConfig({}));
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
+		delete (ctx.sessionManager as { appendCompaction?: unknown }).appendCompaction;
+		expect(manager.maybeStart(ctx)).toBe(false);
+		expect(mockedCall).not.toHaveBeenCalled();
+		expect(bgState.active).toBeNull();
+	});
+
+	it("RL3 落盘侧探测：appendCompaction 缺失 → 放弃落盘、不抛错（dropped），补偿回调不触发", async () => {
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
+		delete (ctx.sessionManager as { appendCompaction?: unknown }).appendCompaction;
+		const onPersisted = vi.fn();
+		const outcome = await persistBackgroundCompaction(ctx, makeCompactionResult(), makeSnapshot(), { onPersisted });
+		expect(outcome).toBe("dropped");
+		expect(onPersisted).not.toHaveBeenCalled();
+	});
+
+	it("被抢先（校验②链路）：落盘前出现新 compaction → 放弃，appendCompaction 不调、档位不重置、计数不动", async () => {
+		const entries = sampleEntriesNoCompaction();
+		const bgState = createBackgroundCompactionState();
+		const onPersisted = vi.fn();
+		const hook: AfterGenerationHook = (result, snapshot, ctx) =>
+			persistBackgroundCompaction(ctx, result, snapshot, { onPersisted });
+		const manager = makeBgManager(bgState, normalizeSmartContextConfig({}), hook);
+		const ctx = makeBgCtx(entries, TRIGGER_USAGE);
+		mockedCall.mockResolvedValue({ ok: true, text: "bg summary", usage: { input: 1, output: 2 } });
+
+		expect(manager.maybeStart(ctx)).toBe(true);
+		// 生成窗口内被抢先：同步接管路径压了一条新 compaction entry（未知 id）
+		entries.push(makeCompactionEntry("c-rival", "e5", "e5"));
+		await bgState.active?.done;
+
+		expect(getAppendMock(ctx)).not.toHaveBeenCalled();
+		expect(onPersisted).not.toHaveBeenCalled();
+		expect(bgState.failureStreak).toBe(0); // dropped：会话态失效类放弃，计数不动
+		expect(bgState.active).toBeNull();
+	});
+
+	it("摘要膨胀（校验③链路）：放弃落盘 + 膨胀段记录回调 + 同段不再触发（共享读取）", async () => {
+		const entries = sampleEntriesNoCompaction();
+		const bgState = createBackgroundCompactionState();
+		const onInflated = vi.fn();
+		const hook: AfterGenerationHook = (result, snapshot, ctx) =>
+			persistBackgroundCompaction(ctx, result, snapshot, { onInflated });
+		const manager = makeBgManager(
+			bgState,
+			normalizeSmartContextConfig({}),
+			hook,
+			// 膨胀段共享读取（模拟 index.ts 接线：读 state.takeover.inflatedSegments 同一集合）
+			() => new Set(onInflated.mock.calls.map((call) => call[0] as string)),
+		);
+		const ctx = makeBgCtx(entries, TRIGGER_USAGE);
+		// 摘要 80000 chars → 20000 tokens ≥ 被压段（两条 BIG ≈ 15000+ tokens）
+		mockedCall.mockResolvedValue({ ok: true, text: "z".repeat(80_000), usage: { input: 1, output: 2 } });
+
+		expect(manager.maybeStart(ctx)).toBe(true);
+		await bgState.active?.done;
+
+		expect(getAppendMock(ctx)).not.toHaveBeenCalled();
+		expect(onInflated).toHaveBeenCalledWith("e3"); // 样例 A 切点段被记录（与同步路径共享集合语义）
+		expect(bgState.failureStreak).toBe(1); // inflated：递增点②
+		expect(mockedCall).toHaveBeenCalledTimes(1);
+
+		// 同段防重：膨胀段未消 → 不再触发防反复烧钱
+		expect(manager.maybeStart(makeBgCtx(entries, TRIGGER_USAGE))).toBe(false);
+		expect(mockedCall).toHaveBeenCalledTimes(1);
+	});
+
+	it("档位重置补偿（U3 验收③，D6）：落盘成功后 firedThresholds 清空，同档重新提醒（index.ts 全接线）", async () => {
+		const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
+		const sendMessage = vi.fn();
+		const hookPi = {
+			on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => void) => {
+				handlers.set(name, handler);
+			},
+			getAllTools: () => [],
+			registerTool: vi.fn(),
+			sendMessage,
+			appendEntry: vi.fn(),
+		} as unknown as ExtensionAPI;
+		smartContextExtension(hookPi);
+
+		// 行情：450K/500K 窗口 → 450_000 = 0.9×500_000 压线触发后台任务，且 ≥ 400K 第一档提醒
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), { tokens: 450_000, contextWindow: 500_000 });
+		handlers.get("session_start")!({ type: "session_start", reason: "startup" }, ctx);
+
+		// 第一次 settle：越档提醒（fired 记 400K 档）+ 后台任务启动（挂起）
+		const gen = holdGeneration();
+		handlers.get("agent_settled")!({ type: "agent_settled" }, ctx);
+		expect(mockedCall).toHaveBeenCalledTimes(1);
+		expect(sendMessage).toHaveBeenCalledTimes(1); // 第一档提醒投递
+		gen.release(true);
+		// 落盘链路全微任务：drain 到 appendCompaction 被调，再 drain 续段尾部（onPersisted 回流）
+		for (let i = 0; i < 50 && getAppendMock(ctx).mock.calls.length === 0; i++) await Promise.resolve();
+		expect(getAppendMock(ctx)).toHaveBeenCalledTimes(1); // 落盘成功（补偿的前置事实）
+		for (let i = 0; i < 50; i++) await Promise.resolve();
+
+		// 第二次 settle：420K 越第一档但低于触发线（450K，不启动新任务）→ fired 已清 → 同档重新提醒
+		handlers.get("agent_settled")!(
+			{ type: "agent_settled" },
+			makeBgCtx(sampleEntriesNoCompaction(), { tokens: 420_000, contextWindow: 500_000 }),
+		);
+		expect(sendMessage).toHaveBeenCalledTimes(2); // firedThresholds 清空的直接行为证据
+		expect(mockedCall).toHaveBeenCalledTimes(1); // 未越触发线，不重复启动任务
 	});
 });

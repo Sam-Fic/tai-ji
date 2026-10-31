@@ -6,8 +6,9 @@
  *   + 会话替换类启动取消进行中后台压缩任务（D3 第一层，new/resume/fork）
  * - subagent 进程（R6）：不注册工具、不提醒（宁缺勿污）
  * - session_before_compact：双模式接管（compact-handler）
- * - session_compact：重置提醒 fired（D3）+ 后台任务被抢先取消（D3 第一层——后台路径自身
- *   落盘不发该事件，收到即代表其他压缩抢先落盘）
+ * - session_compact：重置提醒 fired（D3，与后台落盘成功回调共用 resetFiredThresholds）
+ *   + 后台任务被抢先取消（D3 第一层——后台路径自身落盘不发该事件，收到即代表其他压缩
+ *   抢先落盘）
  * - session_shutdown：后台任务取消（D3 第一层）
  * - session_tree：仅观测告警（D3 rejected：会话内回退不破坏压缩正确性，不取消）
  * - agent_settled：后台压缩自动触发（D4：触发线/互斥/门控/独立熔断判定内聚 manager）
@@ -29,6 +30,8 @@ import {
 	createBeforeCompactHandler,
 	createTakeoverState,
 	debugLog,
+	persistBackgroundCompaction,
+	type AfterGenerationHook,
 	type BackgroundCompactionState,
 	type TakeoverState,
 } from "./compact-handler.js";
@@ -139,9 +142,31 @@ export default function smartContextExtension(pi: ExtensionAPI): void {
 		}
 	};
 
-	// ── 后台压缩任务管理（U2：触发判定/互斥/独立熔断/事件取消，D2/D3/D4）──
-	// getState 读当前代容器（state.background），manager 自身跨代存活无需重建
-	const background = createBackgroundCompactionManager(pi, () => state.background, loadSmartContextConfig);
+	// ── 后台压缩任务管理（U2：触发判定/互斥/独立熔断/事件取消；U3：续段落盘 + 膨胀段共享读取）──
+	// getState 读当前代容器（state.background），manager 自身跨代存活无需重建。
+	// 落盘续段（U3/D3 第二层/D2/D6）：三项兜底校验 + appendCompaction 直调，落盘成功回调
+	// 清 firedThresholds（D6 档位重置补偿，与 session_compact 监听共用 resetFiredThresholds），
+	// 收缩校验失败回调写共享膨胀段集合（与同步路径同段不重试同源）。
+	const resetFiredThresholds = (): void => {
+		state.firedThresholds.clear();
+	};
+	const backgroundAfterGeneration: AfterGenerationHook = (result, snapshot, ctx) =>
+		persistBackgroundCompaction(ctx, result, snapshot, {
+			onPersisted: () => {
+				resetFiredThresholds();
+				debugLog(`fired thresholds reset after background compaction (sessionId=${snapshot.sessionId})`);
+			},
+			onInflated: (firstKeptEntryId) => {
+				state.takeover.inflatedSegments.add(firstKeptEntryId);
+			},
+		});
+	const background = createBackgroundCompactionManager(
+		pi,
+		() => state.background,
+		loadSmartContextConfig,
+		backgroundAfterGeneration,
+		() => state.takeover.inflatedSegments,
+	);
 
 	pi.on("session_start", (event, ctx) => {
 		// D3 第一层（SI4）：new/resume/fork = 会话替换，进行中后台任务立即取消放弃结果
@@ -181,10 +206,11 @@ export default function smartContextExtension(pi: ExtensionAPI): void {
 
 	// ── 压缩完成：重置提醒档位（D3）+ 后台任务被抢先取消（D3 第一层）──
 	// 后台路径自身落盘不发 session_compact（UD6：appendCompaction 纯追加无事件），
-	// 收到该事件必是其他压缩（同步接管/手动/原生兜底）抢先落盘
+	// 收到该事件必是其他压缩（同步接管/手动/原生兜底）抢先落盘；档位清空与后台落盘成功
+	// 回调共用 resetFiredThresholds（D6 补偿共用化）
 	pi.on("session_compact", (_event, _ctx) => {
 		background.cancelActive("session_compact");
-		state.firedThresholds.clear();
+		resetFiredThresholds();
 	});
 
 	// ── 工具注册（常驻，不可用态由 execute 运行时校验拒绝，D5）──
