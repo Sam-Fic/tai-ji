@@ -79,7 +79,8 @@ const EXEMPT = {
   'packages/pi-subagent-cli/src/__tests__/spawn-event-adapter.test.ts': 'X2 误报：30000 是 UI 请求 payload 的业务 timeout 字段（fixture 数据），非测试超时预算',
   // —— ④ performance.now 非断言性消费：确定性时钟 mock（X4 假阳性：performance.now 被 vi.spyOn 全控，非真实计时断言） ——
   'packages/ui/src/primitives/__tests__/sheet.test.ts': 'Sheet 拖拽手势测试的时钟全控 mock——happy-dom 的 PointerEvent 构造函数自身消费 performance.now() 做 timeStamp，须 spyOn mock 后事件构造与 handler 共享同一时钟源，速度 = dy/durationMs 断言才确定性成立；是确定性化手段，非性能水位断言',
-  'packages/subagent-core/src/__tests__/transport-local.test.ts': '谓词层留一次确定性 ps -p 探活（不可达 pid、ENOENT 立返、零时间窗；E2E-INTEG-28 登记）',
+  // transport-local.test.ts 已删（382c73f6f 用例合并入 engine-client.test.ts，该文件挂
+  // 集成门控后 scanFile 直接跳过）——原豁免键随之移除，无承接豁免义务。
   // —— ④ performance.now 非断言性消费：轮询时钟（fake Date 用例下 Date.now 冻结的替代），非性能断言 ——
   // —— 检查器黑盒自测（spawn 检查脚本本体，亚秒级） ——
   'scripts/__tests__/check-test-extremes.test.mjs': '本检查器黑盒自测（spawn 检查器本体，单处 <300ms）',
@@ -88,7 +89,9 @@ const EXEMPT = {
   'scripts/__tests__/check-domain-type-path.test.mjs': '检查器黑盒自测（spawn 检查脚本本体，亚秒级）',
   // —— X4 量级特征断言（非敏感性性能水位）：V1 批加载冷读计时看守 ——
   'packages/runtime/src/services/session/__tests__/events-projection-batch.test.ts': '量级特征断言（X4 误报类）：拦批加载抑制失效的秒级回潮（设计锚点 11-12s 形态 vs 实测 3ms），阈值取毫秒级上界×两个数量级余量——机制坏了才红、负载波动不红；系启动设计 V1 验收的 CI 看守用例，挂门控会失去看守意义',
-  // —— 重写 u-foundation 新增检查器黑盒自测（同款 spawn 本体形态，2026-10-31） ——
+  // —— 重写 u-foundation 新增检查器黑盒自测（同款 spawn 本体形态，2026-10-31；
+  //    资产在 feat-rewrite-foundation 分支（acb45c18b），并入 dev-0.12.2 前本分支
+  //    四键悬空属预期——重写侧若放弃该四文件需同步删豁免） ——
   'scripts/__tests__/check-testid-parity.test.mjs': 'testid 对账检查器黑盒自测（spawn 检查脚本本体，亚秒级）',
   'scripts/__tests__/check-test-typecheck-coverage.test.mjs': 'typecheck 覆盖对账检查器黑盒自测（spawn 检查脚本本体，亚秒级）',
   'scripts/__tests__/check-shared-module-admission.test.mjs': 'shared 模块准入检查器黑盒自测（spawn 检查脚本本体，亚秒级）',

@@ -1,10 +1,10 @@
 /**
- * 常驻事件循环滞后遥测单测（startup-readiness 设计 §7.1 / D4；RL4 看守面）。
+ * 常驻事件循环滞后遥测单测（startup-readiness 设计 §7.1 / RL4 看守面；U5 遥测半边）。
  *
  * 看守行为：
  * - monitorEventLoopDelay 直方图快照可读：负载期（同步阻塞 > 50ms）滞后被观测到
  *   （A3「负载期滞后无一次 > 50ms」的断言读取口存在且量纲正确——真机 A3 剧本归
- *   D3 验收面，此处看守遥测源自身的观测能力）；
+ *   dev-flow 工作流 D3 端到端验收阶段，此处看守遥测源自身的观测能力）；
  * - 直方图分布进结构化日志：落盘口（注入的 log fn）按窗口收到含 percentile 的
  *   meta（fake timers 推进落盘间隔）；
  * - 不参与杀进程决策：模块导出面无进程控制原语（结构断言——start/stop/snapshot
@@ -52,7 +52,7 @@ describe('event-loop-telemetry（RL4 常驻滞后遥测）', () => {
     const snap = getEventLoopDelaySnapshot()
     expect(snap.running).toBe(true)
     // 断言 > 50ms 即 A3 判据阈值（该用例看守「遥测源能观测到 > 50ms 的滞后」，
-    // A3 真机剧本的「无一次 > 50ms」断言归 D3 验收面）。
+    // A3 真机剧本的「无一次 > 50ms」断言归 dev-flow 工作流 D3 端到端验收阶段）。
     expect(snap.maxMs).toBeGreaterThan(50)
   })
 

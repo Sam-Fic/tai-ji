@@ -1,5 +1,5 @@
 /**
- * 常驻事件循环滞后遥测（startup-readiness 设计 §7.1 / D4 / RL4）。
+ * 常驻事件循环滞后遥测（startup-readiness 设计 §7.1 / RL4；U5 遥测半边）。
  *
  * Node `monitorEventLoopDelay` 直方图常驻采样（resolution 20ms = Node 默认档，
  * 密集采样口径、非 5s 探针），滞后分布进结构化日志（logger.info 一行 meta JSON：

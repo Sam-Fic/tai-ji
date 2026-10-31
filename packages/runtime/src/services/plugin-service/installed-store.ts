@@ -68,7 +68,8 @@ export class InstalledStore {
     return this.filePath
   }
 
-  /** disabled.json 绝对路径（registry 扫描跳过与测试断言用）。 */
+  /** disabled.json 绝对路径（测试断言用；registry 扫描不经此 getter——路径公式两处
+   *  独立实装，见 plugin-registry loadDisabledIds 头注与 :51 单源注释）。 */
   get disabledPath(): string {
     return this.disabledFilePath
   }

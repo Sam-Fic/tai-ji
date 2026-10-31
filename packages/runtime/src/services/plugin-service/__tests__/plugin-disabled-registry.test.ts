@@ -1,7 +1,7 @@
 /**
  * U7 机制半边单测（startup-readiness 设计 §7.5 / D2；RL9 机制半边看守面）。
  *
- * 三态各有用例（F7 验收条款）：
+ * 三态各有用例（验收场景 A8 的机制半边；设计 §4.2 RL9 看守）：
  * 1. 标记写入：recordDisabled → disabled.json 条目落盘（pluginId + reason + disabledAt）；
  * 2. 扫描跳过：PluginRegistry.scan 对 disabled.json 命中的插件目录整体跳过（不产
  *    descriptor = 不装载）；清单缺失/损坏按空表容错（禁用机制故障不阻断正常装载）；
@@ -70,6 +70,18 @@ describe('InstalledStore disabled 标记（U7 三态之 1：标记写入）', ()
     expect(await store.loadDisabled()).toEqual({})
   })
 
+  it('条目级容错（读侧同语义闭合）：形状不合条目被丢弃，clearDisabled no-op 不写盘', async () => {
+    // 形状不合条目（如手工编辑成字符串值）：写侧视图不认 → clearDisabled 不触发
+    // 写回，disabled.json 原样保留——不产生「scan 认 / enable 不认」的单侧认知。
+    writeFileSync(store.disabledPath, JSON.stringify({ 'plug-bad': 'bad', 'plug-ok': { reason: 'r', disabledAt: '2026-10-31T00:00:00Z' } }))
+    const before = readFileSync(store.disabledPath, 'utf-8')
+    expect(await store.loadDisabled()).toEqual({ 'plug-ok': { reason: 'r', disabledAt: '2026-10-31T00:00:00Z' } })
+    await store.clearDisabled('plug-bad')
+    expect(readFileSync(store.disabledPath, 'utf-8')).toBe(before)
+    await store.clearDisabled('plug-ok')
+    expect(await store.loadDisabled()).toEqual({})
+  })
+
   it('卸载清理（U7 三态之 3）：recordUninstalled 同步清 installed 与 disabled 两份条目', async () => {
     await store.recordInstalled('plug-a')
     await store.recordDisabled('plug-a', 'activation failed')
@@ -122,6 +134,21 @@ describe('PluginRegistry 扫描跳过（U7 三态之 2）', () => {
     writeFileSync(join(pluginsDir, 'disabled.json'), '{broken')
     const descriptors = await registry.scan()
     expect(descriptors.map((d) => d.pluginId)).toContain('plug-a')
+  })
+
+  it('条目形状不合 → scan 不认该禁用键（读侧与 InstalledStore.loadDisabled 全同语义）', async () => {
+    makePluginDir(pluginsDir, 'plug-bad')
+    makePluginDir(pluginsDir, 'plug-ok')
+    writeFileSync(
+      join(pluginsDir, 'disabled.json'),
+      JSON.stringify({
+        'plug-bad': 'bad shape',
+        'plug-ok': { reason: 'manifest invalid', disabledAt: '2026-10-31T00:00:00Z' },
+      }),
+    )
+    const ids = (await registry.scan()).map((d) => d.pluginId)
+    expect(ids).toContain('plug-bad') // 形状不合不入禁用集 → 不跳过
+    expect(ids).not.toContain('plug-ok') // 合法条目照常跳过
   })
 
   it('禁用 → 重新启用（清条目）→ reload 后插件恢复装载', async () => {

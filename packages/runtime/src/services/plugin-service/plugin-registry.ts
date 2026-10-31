@@ -113,12 +113,14 @@ export class PluginRegistry {
    *
    * 直接读文件而不 import InstalledStore 类：InstalledStore 是登记写入域的类（含
    * atomicWrite 依赖链），扫描侧只需要读半边；条目 schema 由 installed-store 侧
-   * DisabledPluginEntry 形状单源定义（本读侧只消费 pluginId 键）。文件路径公式
+   * DisabledPluginEntry 形状单源定义（本读侧消费 pluginId 键 + 条目形状校验）。文件路径公式
    * （join(pluginsConfigDir, 'plugins', 'disabled.json')）与 installed-store 的
    * DISABLED_FILE 常量（模块私有未导出）是两份独立实装——改名需双侧同步，
    * plugin-disabled-registry.test.ts 同时测写半边（InstalledStore）与读半边
-   * （本类 scan）兜底；读侧解析容错与 InstalledStore.loadDisabled 同语义
-   * （损坏 → 空表 + warn）。
+   * （本类 scan）兜底；读侧解析容错与 InstalledStore.loadDisabled 全同语义
+   * （文件级：损坏/非对象 → 空表 + warn；条目级：形状不合丢弃该条不连坐——
+   * 读侧禁用集与写侧读写视图一致，clearDisabled 的「重新启用」通道对
+   * 形状不合条目同样闭合，不产生 scan 认 / enable 不认的缝隙）。
    */
   private async loadDisabledIds(): Promise<Set<string>> {
     const disabledPath = join(this.pluginsConfigDir, 'plugins', 'disabled.json')
@@ -137,7 +139,20 @@ export class PluginRegistry {
         }
         return new Set()
       }
-      return new Set(Object.keys(parsed as Record<string, unknown>))
+      // 条目形状校验与 InstalledStore.loadDisabled 同款（逐条，不连坐）：非对象 /
+      // 缺 reason / 缺 disabledAt 的条目按损坏丢弃该键——禁用集只含两视图共识条目。
+      const ids = new Set<string>()
+      for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+        if (
+          typeof value === 'object' &&
+          value !== null &&
+          typeof (value as { reason?: unknown }).reason === 'string' &&
+          typeof (value as { disabledAt?: unknown }).disabledAt === 'string'
+        ) {
+          ids.add(key)
+        }
+      }
+      return ids
     } catch (err) {
       if (!this.warnedDisabledRead) {
         this.warnedDisabledRead = true

@@ -118,9 +118,12 @@ export class GitService implements IGitService {
    * reply 形状零变化——renderer 无感。
    */
   async getStatus(sessionId: string): Promise<GitStatusResult> {
-    // [U4] getCwd 现为两级解析并直接抛可分型 GitError（session_not_found /
-    // btw_line_inactive）；解析成功但 cwd 为空串的防御分支保留（header cwd 非空由
-    // 扫描器 fail-fast 保证，此处兜底归 session_not_found 语义）。
+    // [U4] resolveSessionCwd 两级解析直接抛可分型 GitError（session_not_found /
+    // btw_line_inactive），getStatus 不持空 cwd 兜底分支——空串输入在上游被结构性
+    // 排除：第一级 resolveSessionContext 对空串按未命中（file-service.ts），第二级
+    // scanSessionMeta 对 header id/cwd 缺失或空串 badHeader fail-fast 跳过该文件
+    // （session-file-utils.ts）——磁盘命中的 cwd 恒非空，「解析成功但 cwd 为空串」
+    // 不可达，无需兜底。
     const cwd = this.resolveSessionCwd(sessionId)
     return this.opts.stateService.getStatus(sessionId, cwd)
   }
@@ -139,7 +142,7 @@ export class GitService implements IGitService {
   /**
    * 取单文件 diff（#5，UC-6 点文件预览的后端）。
    *
-   * 数据流：getCwd → 新写越界校验（K-6，仿 resolveFilePaths 但 diff 路径无先例）→
+   * 数据流：resolveSessionCwd → 新写越界校验（K-6，仿 resolveFilePaths 但 diff 路径无先例）→
    *   executor.exec(cwd, 'diff', ['--', path])（NFR-AC-S3 经 port 数组形式）。
    *
    * 边界（AC-5.1~5.5）：

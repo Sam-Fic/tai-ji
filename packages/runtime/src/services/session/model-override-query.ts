@@ -5,7 +5,8 @@
  * 权威源（shared SubagentModelOverrideStatus 注释锚定）：
  * - chat 域：record 事件文件（`<recordsDir>/<recordId><RECORD_EVENTS_SUFFIX>`）的
  *   `record-model-override` 帧（core RecordEventFoldState.modelOverride 槽位的盘上源）；
- * - run 域：run journal（`<sessionDir>/workflow-state/<runId><RUN_EVENTS_SUFFIX>`）的
+ * - run 域：run journal（`<root>/<sid>/workflow/runs/<runId><RUN_EVENTS_SUFFIX>`，
+ *   resolvePiWorkflowRunsDir 派生，与下方定位链同源）的
  *   `model-override` 帧（core latestModelOverride 的盘上源）。
  *
  * 读取语义 = 尾向扫描首条命中即权威值：两域 fold 对覆盖帧都是「后写整替、无清除帧」
@@ -76,8 +77,9 @@ export interface SessionMetaRef {
 }
 
 /** modelOverrideQuery 窄口（session-records deps / workflow-record-projection 入参同形；
- *  覆盖状态查询的唯一入口——切换网关不承载查询，M1-3 收敛）。resolved 为 additive
- *  可选参：传入 = 复用调用方已解析的 session 定位锚，缺省 = 查询内自扫（现行为）。 */
+ *  覆盖状态查询的唯一入口——切换网关不承载查询，M1-3 收敛）。resolved 仅为透传链
+ *  契约稳定保留（additive 可选参）：两域目录均由 sessionId 直接派生（布局反转终态），
+ *  实装不消费该锚——getRecordOverride 形参忽略（_resolved）、getRunOverride 无第三参。 */
 export interface ModelOverrideQuery {
   getRecordOverride(sessionId: string, recordId: string, resolved?: SessionMetaRef): SubagentModelOverrideStatus | undefined
   getRunOverride(sessionId: string, runId: string, resolved?: SessionMetaRef): SubagentModelOverrideStatus | undefined
