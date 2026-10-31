@@ -654,7 +654,7 @@ WorkflowTab 步骤列表的数据源绑定从「workflow-record 全量快照（6
 
 **元原则**：原则面前无存量豁免——与本体系冲突的既往裁决一并推翻（已删：zcode 无进展检测双 timer、notify 看门狗重投、update 停滞检测、event-tail watch 族、structured-output 强制退出等，清单原 defense-mechanism-cleanup 登记已随清查完结删除，git 历史可追溯）。
 
-**保留白名单（原则不适用域）**：产品功能定时（调度/提醒/产品轮询能力）、调用方显式配置传入的超时参数（C2 显式业务超时）、恢复场景的文件读取、锁语义原语（file-lock）、事件驱动的对账与拉取通道（ADR-0097 实现本体：delivery-port 回执对账（details-id 命中 + session_start 差集重放）、reconcile 事件触发路径、worktree 观察期族）、构建脚本类、PingProbe 无进展检测（ADR-0047 口径）、外部网络端点墙钟（npm/oauth，网络客户端标准防线）。过渡形态轮询登记：trace-sync 现取轮询（FETCH_CURRENT_PROMPT_POLL_MS=250ms / 8s 上限，pi 侧写侧无完成事件信号、轮询是当前唯一可达通道；退役条件 = pi 提供 entry 写入事件边沿或命令 RPC 直返结果）。
+**保留白名单（原则不适用域）**：产品功能定时（调度/提醒/产品轮询能力）、调用方显式配置传入的超时参数（C2 显式业务超时）、恢复场景的文件读取、锁语义原语（file-lock）、事件驱动的对账与拉取通道（ADR-0097 实现本体：delivery-port 回执对账（details-id 命中 + session_start 差集重放）、reconcile 事件触发路径、worktree 观察期族）、构建脚本类、PingProbe 无进展检测（ADR-0047 口径）、外部网络端点墙钟（npm/oauth，网络客户端标准防线）、前台空闲转后台的空闲阈值触发（foreground-idle-to-background：空闲 = 输出流的缺失，否定性信号无事件可发，时间度量是唯一载体；空闲信号只切换等待方式、不做死活判定、不自动恢复，恢复决策归拥有语义知识的模型——2026-10-30 用户裁定不在「墙钟兜底不建」条款射程内，射程论证 = 设计前提清单 #11，tech-design 过程产出不入库、以本行为准）。过渡形态轮询登记：trace-sync 现取轮询（FETCH_CURRENT_PROMPT_POLL_MS=250ms / 8s 上限，pi 侧写侧无完成事件信号、轮询是当前唯一可达通道；退役条件 = pi 提供 entry 写入事件边沿或命令 RPC 直返结果）；转后台任务退出守望轮询（exit-watch 2s 间隔，转后台命令 reparent 到 init 无 exit 事件、跨进程退出通知原语无跨平台形态，轮询是当前唯一可达通道；退役条件 = 出现跨进程退出事件的可达通道时改事件驱动）。
 
 **依据**：本体系收敛自 pi 1.0 适配设计包交付后的系列裁决（2026-10-05）：命令终局事件化（handled/started/断连三事件）、投递 backoff 退役、全项目防御机制清查（约 270 处登记）、event-tail 退役与推送通道方向、受理层同步上屏、scheduler 切换对账翻转为事实查询。故障模型依据 = 本地进程通信无网络类瞬态失败情形，对端死亡有 OS 级信号。
 
@@ -1250,6 +1250,6 @@ WorkflowTab 步骤列表的数据源绑定从「workflow-record 全量快照（6
 
 **决策**：killProcessTree 快路径 `kill(-pid)` 原隐含「登记 pid 即进程组组长」（detached spawn 形态成立，显式后台任务 pgid=pid）。前台转后台任务（registerConvertedTask，bash 空闲转后台交付）登记 pid 复用前台进程链——组成员非组长，`kill(-pid)` 恒 ESRCH；原回退路径先杀父后 `pgrep -P` 枚举，父死后子进程 reparent 逃逸枚举 → kill 回执假成功（killed=true + registry 转终态）+ 命令链进程残留。修复：快路径落空后解析目标真实 pgid（`ps -o pgid=`）按组杀——reparent 不换组、组长死后组仍有效，覆盖全部命令链成员；解析组等于调用者自身进程组时跳过（防自杀）落回退；回退顺序修正为先枚举杀孙辈/子辈、最后杀目标本身。显式后台任务行为不变（快路径直接命中，原语义保真）。
 
-**依据**：D3 验收 verify-a1 独立探针实测复现全链（kill(-pid) ESRCH → 单杀父成功 → pgrep -P 空 → sleep 残留 PPID=1，与现场 pid/pgid 形态逐字同构）；「按目标真实进程组终止」是 killProcessTree 全部消费方（bash_kill / reaper 补杀 / background-task-service kill）语义「杀整棵进程树」的准确实现，比「假设组长=登记 pid」少一个隐含前提。
+**依据**：D3 验收 verify-a1 独立探针实测复现全链（kill(-pid) ESRCH → 单杀父成功 → pgrep -P 空 → sleep 残留 PPID=1，与现场 pid/pgid 形态逐字同构）；「按目标真实进程组终止」是 killProcessTree 全部消费方（bash_kill / 后台超时到点杀（spawn-background）/ reaper 补杀 / background-task-service kill / process-exit-guard / subagent-control）语义「杀整棵进程树」的准确实现，比「假设组长=登记 pid」少一个隐含前提。
 
 **登记**：实装（commit ded112065）——`packages/extension-protocol/src/background-task-process.ts`（pgid 解析层 + 回退顺序修正）+ 同文件测试（新增转后台形态真实进程回归用例；632 用例绿）。设计文档：`~/.agents/skill-data/tech-design/fix-chat-flow-stuck-84f23fa0/foreground-idle-to-background.md`（D3 验收熔断项闭环）。
