@@ -12,7 +12,7 @@
  * 进表**——零恢复零接管，孤儿处置权统一归收殓侧（u-bte-remove 后 = taiji runtime）
  * 按属主裁决；终态条目可从 registry 读，仅供 bash_output 查历史。
  *
- * 终态条目 LRU 上限 MAX_TERMINAL_ENTRIES（与 registry 对称），淘汰后 bash_output
+ * 终态条目 LRU 上限 MAX_TERMINAL_TASKS（与 registry 对称），淘汰后 bash_output
  * 回落 registry 查询。
  *
  * 【不变量登记（D6-en，注释级）】extension 对某条目的**每次 registry 写都先经该

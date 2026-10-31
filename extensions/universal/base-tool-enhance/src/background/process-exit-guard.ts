@@ -94,7 +94,7 @@ export function reapBackgroundTasksNow(): void {
 		});
 		if (finalized !== undefined) {
 			writeRegistryEntry(finalized.registryPath, taskToRegistryEntry(finalized));
-			// 尽力补 emit pending:unregister（§3.5「pi API 若仍可用」）：SIGTERM
+			// 尽力补 emit pending:unregister（尽力语义：pi API 若仍可用则投递）：SIGTERM
 			// 信号路径 pi 引用尚活（emit 经模块级 notify 引用，bus 未 dispose 时送达
 			// pending listener 落盘）；process.on("exit") 同步路径 bus 可能已 dispose，
 			// emit throw 被 notify 内部捕获降级——残留由 session_start 对账兜底。

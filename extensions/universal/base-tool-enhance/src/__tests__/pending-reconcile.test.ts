@@ -1,5 +1,6 @@
-// src/__tests__/pending-reconcile.test.ts —— M3 session_start 对账单元（§3.5 接入细则 4）
-// + 收殓终态通知补投（unified-delivery D3 裁决 1 / §5 波 3）：
+// src/__tests__/pending-reconcile.test.ts —— M3 session_start 对账单元
+// + 收殓终态通知补投（unified-delivery D3 裁决 1 / 波 3；投递统一化设计的现行登记处 =
+// ADR-0074 与 docs/CONTEXT.md「统一投递（unified delivery，v3）」段）：
 //  - bt- 差集（protocol collectActivePendingIds 单点消费）/ 三类僵尸场景 appendEntry
 //    权威路径（唯一写路径，无 emit）/ 活任务与缺条目保守跳过
 //  - 收殓补投：候选 = 收殓终态（orphaned / exited+process-exit）∧ 送达痕迹未命中，
@@ -149,7 +150,7 @@ describe("bt- diff via protocol collectActivePendingIds (single-source diff core
 		expect([...ids]).toEqual(["bt-a"]);
 	});
 
-	it("register→unregister→register same id stays settled (global cancellation, §5.4①)", () => {
+	it("register→unregister→register same id stays settled (global cancellation)", () => {
 		const ids = collectActivePendingIds(
 			[
 				registerEntry("bt-a"),
@@ -235,7 +236,7 @@ describe("entry status maps via protocol mapReasonToStatus (D10 single-source, i
 		expect(mapReasonToStatus("interrupted-by-restart")).toBe("aborted");
 		expect(mapReasonToStatus("interrupted-by-parent")).toBe("aborted");
 		expect(mapReasonToStatus("reopened")).toBe("completed");
-		// 词表外 reason 缺省 unknown（fail-visible——§3.3.11④ fail-open=completed 废除）
+		// 词表外 reason 缺省 unknown（fail-visible——fail-open=completed 已废除，登记处见文件头）
 		expect(mapReasonToStatus("some-future-reason")).toBe("unknown");
 	});
 });
@@ -369,7 +370,7 @@ describe("appendEntry failure tolerance", () => {
 });
 
 // ============================================================================
-// 收殓终态通知补投（unified-delivery D3 裁决 1 / §5 波 3：对账路径 = 收殓终态
+// 收殓终态通知补投（unified-delivery D3 裁决 1 / 波 3，登记处见文件头：对账路径 = 收殓终态
 // 通知的唯一生产者，载体 = port.deliver）
 // ============================================================================
 
@@ -396,8 +397,8 @@ describe("reap-notify: candidates (reaped terminal × trace absent) via port.del
 		// 收殓终态无业务 details（old decision 3 保持：无时长、不谎报成败）
 		expect(envelope.payload).not.toHaveProperty("details");
 		expect(envelope.payload.content).not.toMatch(/\d+[smh]/);
-		// collectKey 债权申报 = [taskId]（result-collect 设计 §3.4：对账补投条目带键，
-		// 与主链 notify.ts 同款，collect 可收取收殓终态）
+		// collectKey 债权申报 = [taskId]（result-collect 域，现行登记处 = ADR-0146：
+		// 对账补投条目带键，与主链 notify.ts 同款，collect 可收取收殓终态）
 		const opts = deliver.mock.calls[0][1] as { collectKey?: string[] } | undefined;
 		expect(opts?.collectKey).toEqual([entry.taskId]);
 		expect(result.redelivered).toEqual([entry.taskId]);
