@@ -124,16 +124,17 @@ function parsePositiveInteger(
 
 function revertOverrides(
   budgets: ExecutionBudgets,
-  overridden: ReadonlySet<keyof ExecutionBudgets>,
+  overridden: Set<keyof ExecutionBudgets>,
   fields: readonly (keyof ExecutionBudgets)[],
   env: ExecutionBudgetEnv,
   ignored: ExecutionBudgetOverrideIssue[],
   reason: string,
-): void {
+): boolean {
   let reverted = false
   for (const field of fields) {
     if (!overridden.has(field)) continue
     budgets[field] = EXECUTION_BUDGET_DEFAULTS[field]
+    overridden.delete(field)
     ignored.push({
       envName: EXECUTION_BUDGET_ENV_NAMES[field],
       rawValue: env[EXECUTION_BUDGET_ENV_NAMES[field]] ?? '',
@@ -148,6 +149,7 @@ function revertOverrides(
       reason,
     })
   }
+  return reverted
 }
 
 /**
@@ -159,6 +161,10 @@ function revertOverrides(
  * - globalSoftLimitBytes < globalHardLimitBytes；
  * - sessionHardLimitBytes ≤ globalHardLimitBytes；
  * - sessionSoftLimitBytes ≤ globalSoftLimitBytes。
+ *
+ * 校验为不动点式收敛：任一检查触发实际回退后从头重跑全部检查，直至一轮无回退——
+ * 顺序单遍校验在「先触发的检查回退字段破坏了先前已通过的检查」时不会复检（例：会话
+ * 软/硬限同时覆盖、会话硬限因超全局硬限先回退，回退后的软限 ≥ 硬限不再被检出）。
  */
 export function resolveExecutionBudgets(
   env: ExecutionBudgetEnv = readExecutionBudgetEnv(),
@@ -174,55 +180,47 @@ export function resolveExecutionBudgets(
     overridden.add(field)
   }
 
-  if (budgets.logSegmentMinBytes > budgets.logSegmentTargetBytes) {
-    revertOverrides(
-      budgets,
-      overridden,
+  // 终止性：每次实际回退都把一个覆盖字段置回默认值并移出 overridden（默认值组满足
+  // 全部不变量），循环至多执行 overridden 大小 + 1 轮。检查触发但无可回退字段时只
+  // 记录不驱动下一轮——继续循环不会改变任何值，只会无限重复记录。
+  for (;;) {
+    let revertedThisPass = false
+    const enforce = (
+      broken: boolean,
+      fields: readonly (keyof ExecutionBudgets)[],
+      reason: string,
+    ): void => {
+      if (!broken) return
+      if (revertOverrides(budgets, overridden, fields, env, ignored, reason)) {
+        revertedThisPass = true
+      }
+    }
+    enforce(
+      budgets.logSegmentMinBytes > budgets.logSegmentTargetBytes,
       ['logSegmentMinBytes', 'logSegmentTargetBytes'],
-      env,
-      ignored,
       '段最小尺寸不得大于段目标尺寸；恢复动作：调整两个环境变量使 min ≤ target',
     )
-  }
-  if (budgets.sessionSoftLimitBytes >= budgets.sessionHardLimitBytes) {
-    revertOverrides(
-      budgets,
-      overridden,
+    enforce(
+      budgets.sessionSoftLimitBytes >= budgets.sessionHardLimitBytes,
       ['sessionSoftLimitBytes', 'sessionHardLimitBytes'],
-      env,
-      ignored,
       '会话软限必须小于会话硬限；恢复动作：调整两个环境变量使 soft < hard',
     )
-  }
-  if (budgets.globalSoftLimitBytes >= budgets.globalHardLimitBytes) {
-    revertOverrides(
-      budgets,
-      overridden,
+    enforce(
+      budgets.globalSoftLimitBytes >= budgets.globalHardLimitBytes,
       ['globalSoftLimitBytes', 'globalHardLimitBytes'],
-      env,
-      ignored,
       '全局软限必须小于全局硬限；恢复动作：调整两个环境变量使 soft < hard',
     )
-  }
-  if (budgets.sessionHardLimitBytes > budgets.globalHardLimitBytes) {
-    revertOverrides(
-      budgets,
-      overridden,
+    enforce(
+      budgets.sessionHardLimitBytes > budgets.globalHardLimitBytes,
       ['sessionHardLimitBytes', 'globalHardLimitBytes'],
-      env,
-      ignored,
       '会话硬限不得大于全局硬限；恢复动作：调整两个环境变量使会话级 ≤ 全局级',
     )
-  }
-  if (budgets.sessionSoftLimitBytes > budgets.globalSoftLimitBytes) {
-    revertOverrides(
-      budgets,
-      overridden,
+    enforce(
+      budgets.sessionSoftLimitBytes > budgets.globalSoftLimitBytes,
       ['sessionSoftLimitBytes', 'globalSoftLimitBytes'],
-      env,
-      ignored,
       '会话软限不得大于全局软限；恢复动作：调整两个环境变量使会话级 ≤ 全局级',
     )
+    if (!revertedThisPass) break
   }
 
   return { budgets, ignored }

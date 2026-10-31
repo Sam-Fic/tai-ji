@@ -123,4 +123,30 @@ describe('关系不变量（覆盖破坏时回退默认值）', () => {
     expect(result.budgets.globalSoftLimitBytes).toBe(EXECUTION_BUDGET_DEFAULTS.globalSoftLimitBytes)
     expect(result.budgets.globalHardLimitBytes).toBe(EXECUTION_BUDGET_DEFAULTS.globalHardLimitBytes)
   })
+
+  it('组合覆盖链式回退后仍满足全部不变量且逐项记录 ignored（校验收敛至不动点）', () => {
+    // 会话软限 600MB + 会话硬限 8GB 同时覆盖：第一遍软<硬通过、会话硬限>全局硬限
+    // （8GB > 4GB 默认）触发会话硬限回退默认 512MB；回退后软限 600MB ≥ 硬限 512MB
+    // 必须被复检捕获、软限也回退默认——不得以「软限 ≥ 硬限」的矛盾组合静默生效。
+    const result = resolveExecutionBudgets({
+      [EXECUTION_BUDGET_ENV_NAMES.sessionSoftLimitBytes]: String(629145600),
+      [EXECUTION_BUDGET_ENV_NAMES.sessionHardLimitBytes]: String(8589934592),
+    })
+    expect(result.budgets.logSegmentMinBytes).toBeLessThanOrEqual(result.budgets.logSegmentTargetBytes)
+    expect(result.budgets.sessionSoftLimitBytes).toBeLessThan(result.budgets.sessionHardLimitBytes)
+    expect(result.budgets.globalSoftLimitBytes).toBeLessThan(result.budgets.globalHardLimitBytes)
+    expect(result.budgets.sessionHardLimitBytes).toBeLessThanOrEqual(result.budgets.globalHardLimitBytes)
+    expect(result.budgets.sessionSoftLimitBytes).toBeLessThanOrEqual(result.budgets.globalSoftLimitBytes)
+    expect(result.budgets.sessionSoftLimitBytes).toBe(EXECUTION_BUDGET_DEFAULTS.sessionSoftLimitBytes)
+    expect(result.budgets.sessionHardLimitBytes).toBe(EXECUTION_BUDGET_DEFAULTS.sessionHardLimitBytes)
+    // fail-visible：两个被覆盖字段各有一条带原始值与恢复动作的拒绝记录，不静默回退。
+    expect(result.ignored).toHaveLength(2)
+    const ignoredByEnvName = new Map(result.ignored.map((issue) => [issue.envName, issue]))
+    const softIssue = ignoredByEnvName.get(EXECUTION_BUDGET_ENV_NAMES.sessionSoftLimitBytes)
+    const hardIssue = ignoredByEnvName.get(EXECUTION_BUDGET_ENV_NAMES.sessionHardLimitBytes)
+    expect(softIssue?.rawValue).toBe('629145600')
+    expect(softIssue?.reason).toContain('恢复动作')
+    expect(hardIssue?.rawValue).toBe('8589934592')
+    expect(hardIssue?.reason).toContain('恢复动作')
+  })
 })
