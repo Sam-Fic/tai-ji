@@ -1,5 +1,5 @@
 /**
- * 后台任务 spawn（D7/D10/D12/D15，设计文档 §3.5 后台任务生命周期数据流 ③④）。
+ * 后台任务 spawn（D7/D10/D12/D15；spawn 与登记语义由本文件头注释直接承载，见下）。
  *
  * spawn 细节：detached（自成进程组，进程树 kill 的语义基础）+ stdio 直接落
  * <dataDir>/ext-sessions/<sessionId>/background-tasks/<task_id>.log（append fd，不占内存、
@@ -67,7 +67,7 @@ function randomRandSegment(): string {
 }
 
 /**
- * 后台 timeout 解析（秒），优先级 = LLM 显式值 > 配置默认值 > 不限（§3.5）：
+ * 后台 timeout 解析（秒），优先级 = LLM 显式值 > 配置默认值 > 不限：
  *  - 显式值有效 → 显式值；显式值无效（非有限/≤0）→ 沿用 pi 内置文案抛错
  *  - 显式值缺省 && 配置默认提供 → 配置默认（M4 注入接缝：调用侧传
  *    backgroundTimeoutSeconds；已 normalize，必为正有限数）
@@ -214,11 +214,11 @@ export function spawnBackgroundTask(opts: SpawnBackgroundOptions): SpawnBackgrou
 		armBackgroundTimeout(task, opts.timeoutSec);
 	}
 
-	// 登记顺序（§3.5 数据流 ③④⑤）：单例表（运行时权威）→ registry（持久化）→
-	// pending:register emit。registry 写失败不阻断（条目停留 running 由 runtime
-	// 收殓器兜底——孤儿判定按 ownerPiPid，§3.5；u-bte-remove 下沉后不再依赖本包
-	// 扫描）；emit 失败同样无害（peer 未加载/引用未注入时无 listener，通知
-	// 链路缺失不影响任务本体）
+	// 登记顺序（后台任务生命周期数据流步骤 ③④⑤）：单例表（运行时权威）→
+	// registry（持久化）→ pending:register emit。registry 写失败不阻断（条目停留
+	// running 由 runtime 收殓器兜底——孤儿判定按 ownerPiPid；u-bte-remove 下沉后
+	// 不再依赖本包扫描）；emit 失败同样无害（peer 未加载/引用未注入时无 listener，
+	// 通知链路缺失不影响任务本体）
 	registerSpawnedTask(task);
 	writeRegistryEntry(registryPath, taskToRegistryEntry(task));
 	emitPendingRegister(task);
@@ -245,7 +245,7 @@ export function spawnBackgroundTask(opts: SpawnBackgroundOptions): SpawnBackgrou
  */
 export function armBackgroundTimeout(task: BackgroundTask, timeoutSec: number): void {
 	const timer = setTimeout(() => {
-		// pid 复用防御（§3.6，同 bash_kill 范式，宁不杀勿误杀）：
+		// pid 复用防御（同 bash_kill 范式，宁不杀勿误杀）：
 		// 任务早已退出（exit 边沿未被收尾或竞态未及）且 pid 在到点前被系统复用
 		// 时，直接 killProcessTree 会杀掉复用 pid 上的无辜进程（整进程组 SIGKILL）。
 		if (!isRecordedPidStillOriginal(task)) {

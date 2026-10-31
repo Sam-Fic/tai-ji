@@ -1,6 +1,8 @@
 /**
  * 完成通知入账与 pending-notifications 接入（M3 + unified-delivery 投递统一化设计的
- * 波 3 入账切换，D3 裁决 1 / 老能力映射 #4；语义由本文件头注释直接承载，见下）。
+ * 波 3 入账切换，D3 裁决 1 / 老能力映射 #4；投递统一化设计的现行登记处 = ADR-0074
+ * 与 docs/CONTEXT.md「统一投递（unified delivery，v3）」段，语义由本文件头注释
+ * 直接承载，见下）。
  *
  * 通道形态：
  *  - register/unregister 经 pi.events.emit（EventBus，pending 侧 pi.events.on 消费）
@@ -12,7 +14,7 @@
  *    C-ext-19 的 at-most-once 直发禁令由此在通道无关层面满足（结果语义 = at-least-once
  *    + 幂等）。
  *  - port 缺席（装配异常 / 版本混装窗口）= 直发兜底：pi.sendMessage steer + warn
- *    留痕（设计 §3.7 缺席语义；降级代价 = 无判重无耐久的 at-most-once，只覆盖装配
+ *    留痕（port 缺席语义；降级代价 = 无判重无耐久的 at-most-once，只覆盖装配
  *    异常窗口、不作为常态路径——warn 即修复信号）。
  *
  * D17 pi 引用刷新：直发兜底与 pending emit 通路持模块级「当前 pi 引用」——同进程
@@ -55,7 +57,7 @@ const logger = getLogger("base-tool-enhance");
 
 /**
  * 通知消息 customType：桌面 custom_message 通用渲染通道（subagent-bg-notify 先例，
- * §3.1 用户视角「对话流中以 custom entry 形式出现」）。
+ * 用户视角 = 完成通知在对话流中以 custom entry 形式出现）。
  */
 export const BACKGROUND_BASH_CUSTOM_TYPE = "background-bash";
 
@@ -80,7 +82,7 @@ export function resetNotifyForTest(): void {
  * 映射值全部落在 pending-notifications mapReasonToStatus 的已知分支或其 fail-visible
  * 缺省，保证 emit 后 listener 算出的 status 与本包预期一致：
  *  - natural + exitCode 0 → "completed"（正常完成）
- *  - natural + 非零 → "failed"（§3.1 失败路径：通知带 error 与末尾输出摘要）
+ *  - natural + 非零 → "failed"（失败路径：通知带 error 与末尾输出摘要）
  *  - natural + null/undefined（无退出码）→ "unknown"（结果未知——转后台任务退出码
  *    结构性不可得：命令 reparent 到 init、无父权 wait 不可用；被信号终止的显式后台
  *    任务同样无退出码。"unknown" 不在 mapReasonToStatus 词表内 → 经其 fail-visible
@@ -186,9 +188,9 @@ function deliverTaskFinishedNotification(task: BackgroundTask): void {
 					details: buildNotifyDetails(task),
 				},
 			},
-			// collectKey 债权申报（result-collect 设计 §3.4）：单债权条目 = 其
-			// pending:register 的 id（bash 域幂等键与债权键同 id，设计 §3.3），对账
-			// 补投路径（pending-reconcile deliverReapNotifications）同款申报。
+			// collectKey 债权申报（result-collect 域，现行登记处 = ADR-0146）：
+			// 单债权条目 = 其 pending:register 的 id（bash 域幂等键与债权键同 id），
+			// 对账补投路径（pending-reconcile deliverReapNotifications）同款申报。
 			{ collectKey: [task.taskId] },
 		);
 		if (receipt.kind === "rejected") {
@@ -239,7 +241,7 @@ export type NotificationTaskLike = Pick<
 >;
 
 /**
- * 通知文案（§3.1 终态样例）：
+ * 通知文案（终态样例）：
  *
  *   [background-bash] bt-x finished (exit 0, 3m12s): pnpm test
  *   Last lines: ... Tests: 42 passed ...
@@ -274,7 +276,7 @@ export function buildNotificationContent(task: NotificationTaskLike): string {
 }
 
 /**
- * sendMessage details 载荷（设计 §3.3 D1 schema）。
+ * sendMessage details 载荷（D1 schema）。
  *
  * 为什么另立 details 而非让上层解析 content：content 是本模块内部模板字符串、写给
  * LLM 接力的日志行，格式漂移即静默打破解析；details 经既有透传管道（event-adapter
