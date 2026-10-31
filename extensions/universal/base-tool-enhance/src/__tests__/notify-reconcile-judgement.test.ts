@@ -1,5 +1,5 @@
 // src/__tests__/notify-reconcile-judgement.test.ts —— 收殓终态补投的送达痕迹提取
-// （unified-delivery D3 裁决 1）：collectDeliveredTaskIds 五形态（正常消息/fork 副本/
+// （unified-delivery D3 裁决 1，现行登记处 = ADR-0074 与 docs/CONTEXT.md『统一投递』段）：collectDeliveredTaskIds 五形态（正常消息/fork 副本/
 // 缺 details 旧消息/非 bash 通知/killed 无痕迹任务）+ content 双落盘形态容错。
 // 旧补投标记（background-bash:reconciled）随波 3 补投机制退役：防双投由 port 幂等
 // 接管，marker 判据/读写形态及其测试一并删除（反向锁见 pending-reconcile.test.ts

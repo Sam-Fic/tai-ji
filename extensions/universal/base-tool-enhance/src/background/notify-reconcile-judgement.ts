@@ -1,6 +1,6 @@
 /**
  * 收殓终态补投的送达痕迹提取（unified-delivery D3 裁决 1：对账路径 = 收殓终态通知
- * 的唯一生产者，pending-reconcile.ts 消费）——纯函数，无 I/O、无 pi 依赖。
+ * 的唯一生产者，pending-reconcile.ts 消费；裁决的现行登记处 = ADR-0074 与 docs/CONTEXT.md『统一投递』段）——纯函数，无 I/O、无 pi 依赖。
  *
  * collectDeliveredTaskIds：从会话 entries 提取「已送达完成通知的 taskId 集合」。
  * 送达痕迹 = 会话文件里的完成通知消息本身（custom_message，customType =

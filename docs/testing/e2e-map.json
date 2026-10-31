@@ -5163,6 +5163,66 @@
       "note": "R2 态 + 用例级门控（2026-10-27 测试范围收缩：两簇门控——>5MB 保尾截断（真 5MB jsonl 写入 + 截断）与并发追加写（4 个真子进程 writer 验证 O_APPEND 单行原子性）；聚合求和 / 水位 / 坏行跳过等纯逻辑用例留无门控默认组）。触发条件 = scope 内代理统计读侧 diff 命中。断言本质 = 截断保尾行边界对齐 + 并发写全量可解析无交错坏行。serial=真 的理由 = 真进程 / 真磁盘吞吐在满载下无稳定上界。"
     },
     {
+      "id": "E2E-INTEG-70",
+      "summary": "base-tool-enhance 空闲转后台包装脚本真进程层：idle 触发转后台存活 / 触发时序 / 退出码透传 / 逐字抄送（含 UTF-8 多字节跨批次） / N1 持续输出不转后台（TAIJI_TEST_INTEGRATION 门控）",
+      "scope": [
+        "extensions/universal/base-tool-enhance/bin/taiji-fg-wrap"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "extensions/universal/base-tool-enhance/src/__tests__/wrapper-foreground-idle.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "TAIJI_TEST_INTEGRATION=1 pnpm --filter @zhushanwen/pi-base-tool-enhance exec vitest run src/__tests__/wrapper-foreground-idle.test.ts",
+      "owner": "extensions/universal/base-tool-enhance",
+      "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
+      "note": "R2 态 + 用例级门控（文件留 main 默认组；门控 = TAIJI_TEST_INTEGRATION，SSOT = test-guard/integration-gate.ts，skip 理由注入 describe 名）。被测对象 = bin/taiji-fg-wrap 包装脚本本体（foreground-idle-to-background 设计 §5 部件 1），自包含真进程集成：真 spawn 包装脚本 + 真实时钟空闲触发，不依赖扩展运行时。触发条件 = scope 内包装脚本 diff 命中（bash-tool.ts 侧收尾判定改动另由 E2E-INTEG-71 承接）。断言本质 = idle 满阈值转后台（命令进程存活 + 输出抄送逐字不丢）+ 触发时序窗 + 退出码透传 + N1 持续输出刷新空闲计时不转后台；serial=真 的理由 = 真子进程 + 真实时钟空闲窗（idle 2s 窗 ±0.5s 判定），OS 调度延迟无稳定上界（fake timers 控制不了子进程时钟，全部用短 idle 实测）。CI test-extensions job 已带 env=1。"
+    },
+    {
+      "id": "E2E-INTEG-71",
+      "summary": "base-tool-enhance execute 改写层真 shell 集成：矩阵 A 七格分流 / 包装命令构造 / 收尾 pid 判定两分支 / registerConvertedTask 三步登记（TAIJI_TEST_INTEGRATION 门控）",
+      "scope": [
+        "extensions/universal/base-tool-enhance/src/bash-tool.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "extensions/universal/base-tool-enhance/src/__tests__/injector-foreground-branch.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "TAIJI_TEST_INTEGRATION=1 pnpm --filter @zhushanwen/pi-base-tool-enhance exec vitest run src/__tests__/injector-foreground-branch.test.ts",
+      "owner": "extensions/universal/base-tool-enhance",
+      "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
+      "note": "R2 态 + 用例级门控（文件留 main 默认组；门控 = TAIJI_TEST_INTEGRATION，SSOT = test-guard/integration-gate.ts，skip 理由注入 describe 名）。被测对象 = bash-tool.ts 的 createBashOverrideToolDefinition（foreground-idle-to-background M1）；真 wrapper 由本文件用本地 fixture bash 脚本模拟 pidfile 契约——officialExecute mock 真跑 fixture，包装命令串经真实 shell 解析（引号/空格路径一并覆盖），真 wrapper 集成由 E2E-INTEG-70 承接。触发条件 = scope 内 execute 改写层 diff 命中。断言本质 = 矩阵 A 分流（A5 包装构造全参 / A3/A4 不包装 / A7 win32 回落 / A6 子代理 / N3 关闭）+ 收尾 pid 判定（活=登记 / 死=不登记且三文件删除）+ registerConvertedTask 三步落点与池满计数；serial=真 的理由 = fixture 真子进程 spawn + 真实 shell 解析，进程退出时序无稳定上界。CI test-extensions job 已带 env=1。"
+    },
+    {
+      "id": "E2E-INTEG-72",
+      "summary": "base-tool-enhance 转后台任务退出守望：谓词三分支真值表（ESRCH 收尾 / 存活继续 / pid 复用不杀）+ ps 失败保守跳过 + finalize 链落点（TAIJI_TEST_INTEGRATION 门控）",
+      "scope": [
+        "extensions/universal/base-tool-enhance/src/background/exit-watch.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "extensions/universal/base-tool-enhance/src/__tests__/exit-watch.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "TAIJI_TEST_INTEGRATION=1 pnpm --filter @zhushanwen/pi-base-tool-enhance exec vitest run src/__tests__/exit-watch.test.ts",
+      "owner": "extensions/universal/base-tool-enhance",
+      "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
+      "note": "R2 态 + 用例级门控（文件留 main 默认组；门控 = TAIJI_TEST_INTEGRATION，SSOT = test-guard/integration-gate.ts，skip 理由注入 describe 名）。被测对象 = exit-watch.ts 退出守望（foreground-idle-to-background 设计 §5 部件 5）：转后台命令 reparent 到 init 后无 exit 事件，轮询 isPidAlive + start-time 身份校验收尾（exitCode 恒 null 落中性通知链，同 E2E-INTEG-50 的 notify 收尾口径）。触发条件 = scope 内守望源 diff 命中。断言本质 = 谓词三分支真值表（ESRCH→finalize / 存活且 start time 匹配→继续守望 / start time 漂移=pid 复用→按退出收尾且不杀无关进程）+ ps 原语失败（读不到 start time）绝不触发 finalize + 间隔驱动 attach 接线；serial=真 的理由 = 真子进程生死时序 + 守望间隔轮询窗口，无确定性完成信号。CI test-extensions job 已带 env=1。"
+    },
+    {
       "id": "E2E-PIPE-23",
       "summary": "测试执行域触发档机制（round6 Wave2）：domain-map.json 单一权威源（14 域 / 99 个挂载渲染重型文件）+ run-domain-tests 按域跑 + check-domain-map 健康度检查（结构/存在性/唯一归属/挂载特征/消费方接线）+ 两包 vitest exclude 派生",
       "scope": [

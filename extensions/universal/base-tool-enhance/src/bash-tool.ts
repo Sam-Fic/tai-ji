@@ -233,22 +233,19 @@ export function parsePidFile(pidfilePath: string): { pid?: number } {
 		const n = typeof value === "number" ? value : Number.parseInt(String(value), 10);
 		return Number.isInteger(n) && n > 0 ? n : undefined;
 	};
-	if (raw.startsWith("{")) {
-		try {
-			const parsed: unknown = JSON.parse(raw);
-			if (isRecord(parsed)) {
-				const pid = toPid(parsed.pid);
-				if (pid !== undefined) return { pid };
-			}
-		} catch (err) {
-			// JSON 损坏 → 回退空格分隔形态（协议防御路径，debug 留痕便于排障）
-			logger.debug("pidfile JSON parse failed; falling back to whitespace form", {
-				detail: { pidfilePath, err: toErrorMessage(err) },
-			});
+	// JSON 单一契约（wrapper 写侧自首个交付起只写 {"pid",...} 形态，无旧文本格式）；
+	// 缺失 / 损坏 / 字段非法 → {}（不崩溃、不误判活）
+	if (!raw.startsWith("{")) return {};
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		if (isRecord(parsed)) {
+			const pid = toPid(parsed.pid);
+			if (pid !== undefined) return { pid };
 		}
+	} catch {
+		// JSON 损坏 → {}（协议防御路径）
 	}
-	const pid = toPid(raw.split(/\s+/)[0]);
-	return pid !== undefined ? { pid } : {};
+	return {};
 }
 
 /**

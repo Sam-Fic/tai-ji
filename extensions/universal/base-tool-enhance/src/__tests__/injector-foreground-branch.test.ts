@@ -391,10 +391,10 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)("parsePidFile (wrapper pidfile proto
 		expect(parsePidFile(f3)).toEqual({});
 	});
 
-	it("legacy whitespace form and corrupt content fall back safely", () => {
-		const f4 = join(DATA_DIR, "probe-pid-legacy.pid");
+	it("non-JSON / corrupt / missing content all fall back to empty (JSON 单一契约)", () => {
+		const f4 = join(DATA_DIR, "probe-pid-nonjson.pid");
 		writeFileSync(f4, "99 1700000000\n", "utf8");
-		expect(parsePidFile(f4)).toEqual({ pid: 99 });
+		expect(parsePidFile(f4)).toEqual({});
 		const f5 = join(DATA_DIR, "probe-pid-garbage.pid");
 		writeFileSync(f5, "{corrupt json", "utf8");
 		expect(parsePidFile(f5)).toEqual({});

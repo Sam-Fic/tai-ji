@@ -8,7 +8,7 @@
  * session 替换接管）+ 挂 exit 边沿通知回调（unregister emit + 完成通知经 port.deliver
  * 入账，缺席兜底 sendMessage steer）+ session_start 对账 + 收殓终态通知补投
  * （对账路径 = 唯一生产者，session_start 差集逐任务 port.deliver，幂等由 port
- * seenIds + 内核三级判重承管——unified-delivery 波 3）。
+ * seenIds + 内核三级判重承管——unified-delivery 波 3；投递统一化设计的现行登记处 = ADR-0074 与 docs/CONTEXT.md『统一投递』段）。
  * 维护链双触发点：session_start 事件 + `__taiji_bg_reconcile__` 内部命令（taiji runtime
  * 在 getCommands 时按节流补触发，覆盖「切走切回同进程重挂接、session_start 不重发」场景）。
  * 收殓下沉（u-bte-remove）：M5 孤儿收殓已移交 taiji runtime（background-task-
