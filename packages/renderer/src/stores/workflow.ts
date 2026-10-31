@@ -518,15 +518,20 @@ export const useWorkflowStore = defineStore('workflow', () => {
    */
   function triggerWorkflowReload(sessionId: string, status: string): void {
     const sid = sessionId
-    // 增量信号 → 立即拉取完整列表；running 信号后列表为空 = workflow-state-link 可能未
-    // 落盘（pi 延迟写入时序），显式 warn 出声（诊断信号，非补偿——不延迟重新拉取）
+    // 增量信号 → 立即拉取完整列表；running 信号后列表为空先归因再出声（两级分流，
+    // 空列表 ≠ 未落盘）：① 拉取失败（loadError 分区置位）→ console.error 已留痕，不打
+    // 「未落盘」warn（RPC 拉不到 ≠ 数据未落盘）；② oversize 降级读（主 session 文件
+    // >32MB，records 恒空、分区不覆盖）→ 已知设计内行为（[RT-4#8]，runtime 预检已有
+    // warn 留痕 + oversizeOf facet 驱动面板降级提示），此处静默跳过；③ 两者皆无且列表
+    // 真空 → 才可能是「未落盘」，显式 warn（诊断信号，非补偿——不延迟重新拉取）
     void loadWorkflows(sid).then(() => {
-      if (status === 'running' && getRecordsBySession(sid).length === 0) {
-        console.warn(
-          '[workflow-store] running 信号后 workflow 列表为空：workflow-state-link 可能未落盘（pi 延迟写入），终态显示缺失',
-          sid,
-        )
-      }
+      if (status !== 'running' || getRecordsBySession(sid).length > 0) return
+      if (loadErrorOf(sid) !== null) return
+      if (oversizeOf(sid)) return
+      console.warn(
+        '[workflow-store] running 信号后 workflow 列表为空：workflow 注册/终态条目可能未落盘（pi 延迟写入），终态显示缺失',
+        sid,
+      )
     })
     // [可视化 U5/D4] overlay 活跃 run 的事件流重新拉取（§3.1-4：overlay 订阅 run 级信号
     // 触发 getWorkflows + 事件流重新拉取——store 内聚合接线，信号处理链零改动）。force
