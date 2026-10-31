@@ -26,12 +26,17 @@
  * 「pause 被同批 message 的 reset 抹掉」的链路。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { EventInterpreter } from '../src/services/session/event-interpreter.js'
 // SR6（SSOT）：ping 阈值常量从源码 import，测试跟随源码调参，不本地重复定义（避免漂移）
 import {
   PING_INTERVAL_MS,
   PING_WARN_FAIL_COUNT,
 } from '../src/services/session/event-interpreter.js'
+// 观测超时窗常量（pi-stall-detection D1）：event-interpreter.ts 的 re-export 行不在本单元
+// 范围，从策略持有方（SSOT）直取
+import { PING_OBSERVE_TIMEOUT_MS } from '../src/services/session/event-interpreter-ping.js'
 import { translate } from '../src/infra/pi/event-adapter.js'
 import { ASK_USER_MARKER } from '@zhushanwen/extension-protocol'
 import type { ServerMessage } from '@taiji/shared'
@@ -312,5 +317,104 @@ describe('EventInterpreter · watchdog ping 探测机制（ADR-0047）', () => {
     await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS * 4)
 
     expect(onSilentAbort).not.toHaveBeenCalled() // 中途成功清零，未连续 3 次失败
+  })
+
+  // ── RL2：观测超时注入（pi-stall-detection D1：悬挂也计失败）────────────────
+  // 现状盲区（PR1）：pi 活着但事件循环挂死时探测请求永不返回，tick 悬挂在 await 上，
+  // 失败计数永不累计、WARN 与判死全部不可达。观测超时把悬挂转成显式失败（三态之三）。
+  it('RL2: pingPi 悬挂（永不 resolve）→ 观测超时计失败：failCount 累计、WARN 2 次到达、onSilentAbort 3 次触发', async () => {
+    pingPi.mockImplementation(() => new Promise(() => {})) // 永不 settle（PR1 悬挂形态）
+
+    interpreter.interpret([turnStart()])
+
+    // 第 1 次 tick（60s）+ 观测超时窗（5s）→ failCount=1：无 WARN 无 abort
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS + PING_OBSERVE_TIMEOUT_MS)
+    expect(pingPi).toHaveBeenCalledTimes(1)
+    expect(findStreamWarn()).toBeUndefined()
+    expect(onSilentAbort).not.toHaveBeenCalled()
+
+    // 第 2 次 tick + 观测超时 → failCount=2 → WARN（停滞文案，非「进程真死」）
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS + PING_OBSERVE_TIMEOUT_MS)
+    const warn = findStreamWarn()
+    expect(warn).toMatchObject({
+      type: 'message.stream_warn',
+      payload: {
+        sessionId,
+        content: expect.stringContaining('未响应健康探测'),
+      },
+    })
+    expect(
+      (warn as ServerMessage<'message.stream_warn'>).payload.content,
+    ).not.toContain('进程真死')
+    expect(onSilentAbort).not.toHaveBeenCalled()
+
+    // 第 3 次 tick + 观测超时 → failCount=3 → 判定 pi 停滞 → onSilentAbort
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS + PING_OBSERVE_TIMEOUT_MS)
+    expect(onSilentAbort).toHaveBeenCalledTimes(1)
+    expect(onSilentAbort).toHaveBeenCalledWith(expect.objectContaining({ sessionId }))
+  })
+
+  // ── RL2 对照：观测超时窗内响应到达 → 正常计数语义（不误判）────────────────
+  it('RL2 对照: pingPi 慢响应但窗内 settle（< 观测超时窗）→ 不计失败、不触发任何判定', async () => {
+    // 慢尾形态（AS10 校准对象）：响应耗时小于观测超时窗但大于 0——合法慢，不是停滞
+    pingPi.mockImplementation(
+      () => new Promise((resolve) => setTimeout(() => resolve({}), PING_OBSERVE_TIMEOUT_MS - 1)),
+    )
+
+    interpreter.interpret([turnStart()])
+    // 第 1 次 tick + 窗内慢响应；间隔 60s > 观测窗 5s，上一轮已 settle 后下一轮 tick 才发
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS)
+    // 快进观测超时窗：上一 tick 的慢响应已在窗内 settle（无失败）
+    await vi.advanceTimersByTimeAsync(PING_OBSERVE_TIMEOUT_MS)
+
+    expect(findStreamWarn()).toBeUndefined()
+    expect(onSilentAbort).not.toHaveBeenCalled()
+  })
+
+  // ── RL9：观测超时窗常量护栏（量级分离）───────────────────────────────────
+  it('RL9: 观测超时窗 ≥5s 且 ≤探测间隔 60s（防窗值调进正常 RTT 值域或超过探测间隔）', () => {
+    expect(PING_OBSERVE_TIMEOUT_MS).toBeGreaterThanOrEqual(5_000)
+    expect(PING_OBSERVE_TIMEOUT_MS).toBeLessThanOrEqual(PING_INTERVAL_MS)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RL1 契约：业务 RPC 调用链无墙钟超时（pi-stall-detection AX3/RL1）
+//
+// 读 rpc-client.ts 源码做文本断言——「业务方法签名与 sendCommand 调用点无超时注入」
+// 是源形态契约（架构红线：观测超时只挂探测请求，业务墙钟不回潮，ADR-0122）。
+// 同步逻辑（文件进、断言出），符合单测层判据第 ① 档。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('RL1 契约：业务 RPC 调用链无 timeout（pi-stall-detection AX3）', () => {
+  const rpcClientSource = readFileSync(
+    fileURLToPath(new URL('../src/infra/pi/rpc-client.ts', import.meta.url)),
+    'utf8',
+  )
+
+  it('sendCommand 公共签名两参（type, params），无 timeout 参数（类型层与探测变体分离）', () => {
+    expect(rpcClientSource).toMatch(
+      /sendCommand\(type: string, params: Record<string, unknown> = \{\}\): Promise<PiMessage>/,
+    )
+  })
+
+  it('业务方法的 sendCommand 调用点全部无超时注入', () => {
+    // this.sendCommand( 精确匹配：不误伤 this.sendCommandInternal(（探测内部通道，
+    // 其调用点合法携带 timeoutMs）
+    const callLines = rpcClientSource
+      .split('\n')
+      .filter((line) => line.includes('this.sendCommand('))
+    expect(callLines.length).toBeGreaterThan(0) // 调用点在场（防断言目标为空）
+    for (const line of callLines) {
+      expect(line).not.toMatch(/timeout/i)
+    }
+  })
+
+  it('probeState 是唯一携带 timeoutMs 的公开方法签名（观测通道单点）', () => {
+    // 类方法签名行（2 空格缩进、非 private / 注释行）中含 timeoutMs 的：只有探测变体
+    const publicSignatureLines = rpcClientSource
+      .split('\n')
+      .filter((line) => /^  (?!private\b|\/\/|\*)\w.*timeoutMs/.test(line))
+    expect(publicSignatureLines).toHaveLength(1)
+    expect(publicSignatureLines[0]).toContain('probeState')
   })
 })

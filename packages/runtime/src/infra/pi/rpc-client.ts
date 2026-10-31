@@ -19,6 +19,9 @@ import { captureMachinePiSnapshotSection, collectUnifiedLogCorrelation } from '.
 // 与任务级 bash 1h / compact 30min，推翻 timeout-slow-flow-wallclock D2/D3 量级校准）
 // 与 timedOutIds 迟到响应丢弃（S6）已整体删除——pi 对 RPC 永不响应时调用方 promise
 // 悬挂，失败信号归 pi exit/error 事件链（rejectAll + notifyExitOnce）。
+// 观测通道例外（pi-stall-detection D1，ADR-0122 白名单口径扩展）：探测请求
+// probeState 有界等待——探测请求的响应性本身是被测信号（悬挂计失败），不是业务
+// 失败兜底；业务 RPC（prompt/steer/bash/compact 等）永不携带墙钟超时（RL1 契约）。
 import {
   attachLfOnlyLineReader,
   buildPiMainAgentArgs,
@@ -629,6 +632,37 @@ export class RpcClient implements IPiEngine {
   }
 
   sendCommand(type: string, params: Record<string, unknown> = {}): Promise<PiMessage> {
+    return this.sendCommandInternal(type, params)
+  }
+
+  /**
+   * get_state 探测变体（观测通道专用，pi-stall-detection D1 / ADR-0122 白名单口径扩展）：
+   * 带观测超时窗的 get_state——探测请求的响应性本身是被测信号（pi 事件循环活性，第 1 层），
+   * 窗满 = 信号判定失败，不是业务失败兜底。
+   *
+   * 与业务通道的分界（RL1 契约）：本方法是全类唯一携带超时的出站通道；业务 RPC
+   * （prompt/steer/bash/compact 等）永不携带墙钟超时（sendCommand 签名两参，见上）。
+   *
+   * 窗满语义：pendingRegistry.cancel 摘表（防悬挂表项累积）+ reject——迟到的 get_state
+   * 响应经 resolveResponse 查无表项返回 false，无副作用无 throw（AS8/RL8）。
+   *
+   * 与 getState 的差异：不带 attachedSessionFile 取证副作用（D6-④）——探测即用即弃
+   * （PingProbe 只消费 resolve/reject 三态语义，不消费 state 内容）。
+   *
+   * timeoutMs 由调用方（组合根 pingPi 接线）传 PING_OBSERVE_TIMEOUT_MS（窗值常量 SSOT
+   * 在探测策略持有方 event-interpreter-ping.ts），本层不定义窗值。
+   */
+  async probeState(timeoutMs: number): Promise<Record<string, unknown> | undefined> {
+    return (await this.sendCommandInternal('get_state', {}, timeoutMs)).data
+  }
+
+  /**
+   * 出站 RPC 内部通道（sendCommand 与 probeState 的共用实现）。
+   *
+   * timeoutMs 缺省 = 业务通道语义（无墙钟——ADR-0122 退役，悬挂失败信号归 pi
+   * exit/error 事件链 rejectAll）；传值 = 观测通道语义（仅 probeState 消费，见上）。
+   */
+  private sendCommandInternal(type: string, params: Record<string, unknown>, timeoutMs?: number): Promise<PiMessage> {
     return new Promise((resolve, reject) => {
       if (!this.proc || this._exited) {
         return reject(new Error('pi process is not running'))
@@ -637,20 +671,25 @@ export class RpcClient implements IPiEngine {
       const id = this.nextId()
       const msg = JSON.stringify({ id, type, ...params }) + '\n'
 
-      // D6-④：崩溃取证「死前最后动作」。sendCommand 是全部 RPC 的唯一入口，
+      // D6-④：崩溃取证「死前最后动作」。sendCommandInternal 是全部 RPC 的唯一入口，
       // 记录点在 pending 注册前——即使进程在写 stdin 后立刻死亡，字段已就位。
       this.lastCommandType = type
 
-      // 出站 touch：sendCommand 是全部出站 RPC 的唯一咽喉。touch 在状态检查后：
+      // 出站 touch：sendCommandInternal 是全部出站 RPC 的唯一咽喉。touch 在状态检查后：
       // 进程已死时无活动可言。
       this._lastActivityAt = Date.now()
 
+      // 观测超时 timer（观测通道专用；业务通道 undefined 无 timer，语义不变）
+      let boundedWaitTimer: ReturnType<typeof setTimeout> | undefined
+
       // pending 注册（pi-rpc registry 部件）。无墙钟超时（ADR-0122 退役，见文件头）：
-      // pi 对该命令永不响应时 promise 悬挂，失败信号归 pi exit/error 事件链 rejectAll。
+      // pi 对该命令永不响应时 promise 悬挂，失败信号归 pi exit/error 事件链 rejectAll
+      // （观测通道的窗满失败除外，见 timeoutMs 分支）。
       this.pendingRegistry.register(
         id,
         {
           resolve: (res) => {
+            if (boundedWaitTimer !== undefined) clearTimeout(boundedWaitTimer)
             // Check if the response indicates failure (PiMessage.success / .error 已声明类型)
             if (res.success === false) {
               reject(new Error(res.error ?? `RPC command "${type}" failed`))
@@ -667,14 +706,27 @@ export class RpcClient implements IPiEngine {
               resolve(res)
             }
           },
-          reject,
+          reject: (err) => {
+            if (boundedWaitTimer !== undefined) clearTimeout(boundedWaitTimer)
+            reject(err)
+          },
         },
       )
+
+      if (timeoutMs !== undefined) {
+        // 观测超时（D1）：窗满 = 事件循环活性信号判定失败——cancel 摘表（迟到响应查无
+        // 表项返回 false，无副作用）+ reject（探测失败计失败）。
+        boundedWaitTimer = setTimeout(() => {
+          this.pendingRegistry.cancel(id)
+          reject(new Error(`get_state probe observation timeout (${timeoutMs}ms)`))
+        }, timeoutMs)
+      }
 
       try {
         console.log('[rpc] send: type=' + type)
         this.proc.stdin!.write(msg)
       } catch (e) {
+        if (boundedWaitTimer !== undefined) clearTimeout(boundedWaitTimer)
         this.pendingRegistry.cancel(id)
         reject(new Error(`Failed to write to pi stdin: ${e}`))
       }

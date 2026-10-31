@@ -104,6 +104,9 @@ import { PiRetrySettings } from './infra/pi/pi-retry-settings.js'
 import { EventAdapter } from './infra/pi/event-adapter.js'
 import { FileChangeDiffAdapter } from './infra/pi/file-change-diff-adapter.js'
 import { EventInterpreter, applySessionOccupancyTransition } from './services/session/event-interpreter.js'
+// ping 探测观测超时窗常量从策略持有方直取（event-interpreter.ts 只 re-export ADR-0047
+// 既有三常量，该文件不在本单元范围；D1 窗值单一调整点 = event-interpreter-ping.ts）
+import { PING_OBSERVE_TIMEOUT_MS } from './services/session/event-interpreter-ping.js'
 import { isGeneratingTurn } from './services/session/types.js'
 import { join, resolve, isAbsolute } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -1003,9 +1006,10 @@ async function main(): Promise<void> {
         data: { ...context, sessionId },
         timestamp: Date.now(),
       }),
-      // [ADR-0047] ping 探测连续 3 次失败（180s）判定 pi 进程真死，触发 abort。
-      // 复用 sessionService.abort → message-dispatcher.abort 完整路径（client.abort 成功/失败
-      // 均有兜底广播 + occupancy turn 复位（isGeneratingTurn 派生自然翻 false））。.catch 防极端异常逃逸成 unhandledRejection
+      // [ADR-0047] ping 探测连续 3 次失败（180s）判定 pi 停滞（未响应健康探测：进程死
+      // 或事件循环挂死），触发 abort。复用 sessionService.abort → message-dispatcher.abort
+      // 完整路径（client.abort 成功/失败均有兜底广播 + occupancy turn 复位（isGeneratingTurn
+      // 派生自然翻 false））。.catch 防极端异常逃逸成 unhandledRejection
       //（abort 内部已 try/catch 广播终态）——逃逸异常必须留痕：pi 死而 abort 链也坏时，
       // 零诊断线索无法排障（b24-M4）。
       onSilentAbort: ({ sessionId: sid }) => {
@@ -1041,10 +1045,13 @@ async function main(): Promise<void> {
       // 延迟解析 client：interpreter 在 session 创建时构造，那时 client 可能尚未 spawn。
       // pm（ProcessManager）在本闭包外已创建，getClient 返回 undefined 时计为一次失败
       // （AC-9），但不抛错——client 偶发未就绪不应让 interpret 批次崩溃。
+      // [pi-stall-detection D1] 探测走 probeState 观测变体（请求级有界等待 + 窗满 cancel
+      // pending）——悬挂的探测请求经观测超时窗转成显式失败（事件循环挂死形态可判定）；
+      // 窗值常量 SSOT 在 event-interpreter-ping.ts（探测策略持有方）。
       pingPi: async () => {
         const client = pm.getClient(sessionId)
         if (!client) return undefined
-        return client.getState()
+        return client.probeState(PING_OBSERVE_TIMEOUT_MS)
       },
       // W18（data-source-governance P3.1）：自描述 record entry（subagent-record /
       // workflow-record）到达 → 派生缓存失效。sessionService 同
