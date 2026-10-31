@@ -196,10 +196,10 @@ pi -p "/schedule 5m 'check build'"
 | once 任务 | 触发后自动删除 | 不参与后续调度 |
 | cron 失效 | 任务停用 + `lastStatus=failed` + `lastError='cron expression invalid'` | 不会用 `now()` 兜底导致每 tick 重触发死循环 |
 | 忙时 dispatch | steer 直投（scheduler-steer-direct-dispatch） | busy 时消息插入当前 turn、idle 时开新 turn（`{deliverAs:'steer', triggerTurn:true}`），受理即记账不排队；同任务 in-flight 检查防双投 |
-| history | 保留最近 **20** 条执行记录 | 超出丢弃最旧；快照落盘时同样裁剪（写入口统一剥离运行时标记 pending 后全量序列化） |
+| history | 保留最近 **20** 条执行记录 | 超出丢弃最旧（上限由 `appendExecutionRecord` 在 runtime 记账侧单点裁剪）；快照写入口**不裁剪**——只剥离运行时标记 `pending` 后逐项拷贝 `history` 全量序列化 |
 | 持久化 | 任务集全量快照原子落盘（每次任务集变更即写，tmp+fsync+rename） | 任务随 owner session 分片持久化，resume 后直读恢复；落盘失败 warn + 内存态照常推进、下写点重试 |
 | 交付语义 | **受理即记账**（投递端口 at-most-once 注入） | dispatch 经投递端口受理后注入失败首败即弃（forget，2026-10-25 裁决：丢一轮 << 重投造成重复提醒）；端口拒收（rejected）走 failed 记账、下个 tick 单通道重试 |
-| 延迟写入窗口 | 无（写盘不依赖 pi 会话首写门控） | 任务库独立于会话 JSONL，每次变更即落盘——旧「pi 首条 assistant 消息前不 flush」的丢失窗口已随任务库分离消除 |
+| 延迟写入窗口 | 无（写盘不依赖 pi 会话首写门控） | 任务库独立于会话 JSONL，每次变更即落盘——旧「pi 首条 user 或 assistant 消息前不 flush」的丢失窗口已随任务库分离消除 |
 | 触发条件 | pi 进程需存活且 session 打开 | 电脑睡眠 / pi 进程未运行 = 不触发（非系统 cron，无后台守护） |
 
 错误语义（无错误码；双受众分派——`message` 英文回退供 tool result / `messageKey`+`params` 供命令层词典渲染，见「文案与语言」）：`schedule` tool 创建时参数预校验失败（prompt 空 / schedule 非法）→ 直接 throw `Invalid parameters: ...`（修正参数后重调）；`/schedule` 命令 `json`/`print` 模式带参解析失败 → throw 词典文案（en: `Invalid schedule: "..."`）；`run`/`toggle`/`delete` 引用不存在的 id / `run` 时任务 disabled / rate-limited / 同任务在途 / 任务数超上限 → 命令层 toast 按词典本地化（en 示例：`Task <id> not found` / `Task <id> not dispatched (disabled, rate-limited, or dispatch in flight)` / `Task limit reached (50) — delete one first`）。表单交互的取消/abort 不是错误（不创建、无 toast）；通道失败/回包非法在 rpc/tui 走 `notify(..., 'error')`、在 json/print 走 throw——见「创建方式」。
@@ -234,11 +234,11 @@ pi -p "/schedule 5m 'check build'"
 
 ### 会话 JSONL 的边界
 
-会话 JSONL 只承载 dispatch 注入消息（到点注入时对话必然已存在，消息自身即过 pi 首写门控）与用户对话；任务定义与调度记账**不写会话 JSONL**——无首写门控依赖，任务库写盘独立于会话流。旧 event sourcing 写链（`pi-scheduler:` custom entry 族 + replay 重放折叠）已随 plan B 整体删除。
+会话 JSONL 只承载 dispatch 注入消息（到点注入时会话必已含 user 或 assistant 消息——任务只能经用户命令或模型 tool 创建，二者都以 user 或 assistant 消息为前提，pi 首写门控早已通过）与用户对话；任务定义与调度记账**不写会话 JSONL**——无首写门控依赖，任务库写盘独立于会话流。旧 event sourcing 写链（`pi-scheduler:` custom entry 族 + replay 重放折叠）已随 plan B 整体删除。
 
 ### 单一写者 + 同源单实现
 
-分片键 = sessionId 保证单写者：同一 session 同一时刻只有一个 pi 进程，分片文件天然无并发写。store 模块（`@zhushanwen/extension-protocol/scheduler-store`）是扩展（pi 进程内，唯一写者）与 taiji scheduler-manager 面板（runtime worker，只读者）的同源单实现——路径推导与文件形状两侧构造性一致，双实现会漂移。
+分片键 = sessionId 保证单写者：同一 session 同一时刻只有一个 pi 进程，分片文件天然无并发写。**已知例外**：`--no-session` 等空/非法 sessionId 归一为固定分片 `no-session`——同 cwd 并存多个 `pi --no-session` 进程时共写同一文件，写侧整文件 RMW（tmp → fsync → rename）无跨进程锁，后写覆盖先写。store 模块（`@zhushanwen/extension-protocol/scheduler-store`）是扩展（pi 进程内，唯一写者）与 taiji scheduler-manager 面板（runtime worker，只读者）的同源单实现——路径推导与文件形状两侧构造性一致，双实现会漂移。
 
 ### 不进入 LLM context
 
@@ -246,7 +246,7 @@ pi -p "/schedule 5m 'check build'"
 
 ### 归属即结构性质
 
-任务物理存在于 owner session 的分片文件。**分片文件删除 = 任务消失**，无残留、无需 GC。fork 出的 session 用新 sessionId → 新分片（不加载、不执行继承的任务副本，原 session resume 照常），subagent 也不受主 session 任务干扰。
+任务物理存在于 owner session 的分片文件。**分片文件删除 = 任务消失**，无残留、无需 GC。但 **session 删除不回收分片**：分片在 `<agentDir>/scheduler/...`（pi agent 数据目录）不在 session 存储树内，无 owner、无清理路径（已知例外，见 data-source-registry #88）——fork 出的 session 用新 sessionId → 新分片（不加载、不执行继承的任务副本，原 session resume 照常），subagent 也不受主 session 任务干扰。
 
 ### 旧 store（v1）处置
 
@@ -254,12 +254,13 @@ pi -p "/schedule 5m 'check build'"
 
 ## 依赖的 pi 行为清单
 
-本扩展的存储与投递方案（独立快照分片 + 投递端口 dispatch）依赖以下 pi 源码行为。这些是**实测存在但非 SDK 契约承诺**的隐式行为，pi 升级后需逐条复核。各条锚点实测自 **pi v1.0.0**（pi-mono 仓库 `packages/coding-agent/src/` 与 `packages/agent/src/`，下文以短路径引用），pi 升级后按文件名重新定位行号复核：
+本扩展的存储与投递方案（独立快照分片 + 投递端口 dispatch）依赖以下 pi 源码行为。这些是**实测存在但非 SDK 契约承诺**的隐式行为，pi 升级后需逐条复核。各条锚点实测自 **pi v1.0.0**：路径相对 pi-mono 仓库 `packages/coding-agent/src/`（`core/` 前缀照写；`config.ts` 在包根，`agent.ts` 取自 `packages/agent/src/`），行号为该版本源码行；pi 升级后按文件名 + 符号名重新定位行号复核（行号会漂移，符号名是稳定锚点）：
 
 1. **`getAgentDir()` 返回进程级数据目录**：任务库分片根路径来源。实测：`PI_CODING_AGENT_DIR` 环境变量覆盖优先、缺省 `~/.pi/agent`（config.ts:563-569；常量名定义 config.ts:543）。runtime 注入 pi 进程的 `PI_CODING_AGENT_DIR` 与 taiji 面板侧 `getPiAgentDir()` 必须指向同一目录，否则两侧分片路径漂移（同源单实现的前提）
-2. **`sessionManager.getSessionId()` / `getSessionFile()` 稳定语义**：sessionId 是分片键（resume 同 id / fork 新 id 的恢复语义全系于此）；`getSessionFile()` 为空 = `--no-session` 模式的判据（归一 `no-session` 分片）。实测：两 getter 直读字段（session-manager.ts:1152-1158）；resume 加载时 sessionId 取自文件 header（session-manager.ts:1090），fork / 新 session 换新 id（session-manager.ts:1713、1745）。若 pi 改变 sessionId 的稳定性（如 resume 换 id），任务恢复会失效
-3. **`host.sendMessage` steer 档注入形态**：dispatch 经投递端口翻译为 steer 档 `sendMessage`（busy 时消息插入当前 turn、idle 时开新 turn，`{deliverAs:'steer', triggerTurn:true}`）。实测：扩展 sendMessage 绑定到 `sendCustomMessage`（agent-session.ts:3341-3349）；`isStreaming` 时 steer 档转入 `agent.steer`、非 streaming 且 `triggerTurn` 时开新 turn（agent-session.ts:2259-2272）；steer 消息在当前 assistant turn 的工具调用结束后、下一次 LLM 调用前注入（agent.ts:299-301 入队，注入时机注释 agent-session.ts:2156-2158）。若 pi 改变 steer 语义（注入失败形态、triggerTurn 行为），dispatch 交付语义需重新评估
-4. **`ctx.isIdle()` 同步事实查询**（U4 dispatch 模型切换恢复判定锚点）：agent_settled 事件的「run 完全沉降」复核依赖它。实测：接口声明 extensions/types.ts:348，ctx 绑定经 runner 转发（extensions/runner.ts:909-912），getter 实装 = `!_isAgentRunActive && !isCompacting`（agent-session.ts:1435-1437）。若语义变化，模型恢复判定需重新评估
+2. **`sessionManager.getSessionId()` / `getSessionFile()` 稳定语义**：sessionId 是分片键（resume 同 id / fork 新 id 的恢复语义全系于此）；`getSessionFile()` 为空 = `--no-session` 模式的判据（归一 `no-session` 分片）。实测：两 getter 直读字段（core/session-manager.ts:1152-1158）；resume 加载时 sessionId 取自文件 header（core/session-manager.ts:1090），fork / 新 session 换新 id（core/session-manager.ts:1713、1745）。若 pi 改变 sessionId 的稳定性（如 resume 换 id），任务恢复会失效
+3. **`host.sendMessage` steer 档注入形态**：dispatch 经投递端口翻译为 steer 档 `sendMessage`（busy 时消息插入当前 turn、idle 时开新 turn，`{deliverAs:'steer', triggerTurn:true}`）。实测：扩展 sendMessage 绑定到 `sendCustomMessage`（core/agent-session.ts:3341-3349）；`isStreaming` 时 steer 档转入 `agent.steer`、非 streaming 且 `triggerTurn` 时开新 turn（core/agent-session.ts:2259-2272）；steer 消息在当前 assistant turn 的工具调用结束后、下一次 LLM 调用前注入（agent.ts:299-301 入队，注入时机注释 core/agent-session.ts:2156-2158）。若 pi 改变 steer 语义（注入失败形态、triggerTurn 行为），dispatch 交付语义需重新评估
+4. **`ctx.isIdle()` 同步事实查询**（U4 dispatch 模型切换恢复判定锚点）：agent_settled 事件的「run 完全沉降」复核依赖它。实测：接口声明 core/extensions/types.ts:348，ctx 绑定经 runner 转发（core/extensions/runner.ts:909-912），getter 实装 = `!_isAgentRunActive && !isCompacting`（core/agent-session.ts:1435-1437）。若语义变化，模型恢复判定需重新评估
+5. **会话首写门控（user 或 assistant 消息）**：会话 JSONL 文件在会话首次含 user 或 assistant 消息时才创建（首 flush）；setup entry（model / thinkingLevel / system prompt）与扩展注入的 custom message 单独存在时不落盘。任务库写盘不依赖该门控（任务库独立于会话 JSONL），但「任务创建后会话文件已存在」的推断以它为前提。实测：`_hasConversation()` 判据 = `fileEntries` 中类型 `message` 且 role 为 `user` 或 `assistant`（core/session-manager.ts:1166-1170），`_persist` 首次 flush 在该判据成立时以 `openSync(..., 'wx')` 建文件（core/session-manager.ts:1172-1177），注释原文「Starting at the user message (not the first assistant reply)」（core/session-manager.ts:1161-1164；pi 包 dist 编译产物对应 core/session-manager.js:786-798）。若 pi 改变门控（如首条任意 entry 即落盘，或扩展 custom message 也算会话事实），依赖该前提的叙述与验收需重新评估
 
 任一条行为变更都需重新验证验收场景（尤其 resume、fork、dispatch 场景）。
 
@@ -274,7 +275,7 @@ npx vitest run src/__tests__/<file>.test.ts   # 单个文件
 
 - **依赖反转**：`SchedulerRuntime` 只依赖 `SchedulerBackend` 接口（`deliverDispatch` / `persistTasks` / `now`），不触碰 FS/pi。测试注入 `MockSchedulerBackend`（`src/__tests__/mock-backend.ts` 测试专用实现，记录 deliverDispatch/persistTasks 调用、支持注入固定时间与落盘失败）实现零副作用测试；`backend.loadTasks` 类方法由 store 模块的真实读写覆盖（临时目录注入路径即可全行为覆盖，设计 §6.2「TaskStore 是纯 FS 模块，注入路径即可测」）
 - **纯函数**：`parseDuration` / `formatDuration` / `parseSchedule` / `computeNextRunAt` / `computeNextRuns`（`src/parsing.ts`）无副作用，可直接断言
-- **快照读写**：store 模块三分支读（ok / missing / corrupt 改名留证）+ 原子替换写 + 写入口 pending 剥离与 history 裁剪（`@zhushanwen/extension-protocol` scheduler-store 子出口测试）
+- **快照读写**：store 模块三分支读（ok / missing / corrupt 改名留证）+ 原子替换写 + 写入口 pending 剥离与 history 逐项拷贝（不裁剪——20 条上限属 `appendExecutionRecord`，`@zhushanwen/extension-protocol` scheduler-store 子出口测试）
 - **投递链**：backend deliverDispatch 的端口受理/拒收/幂等键路径（`src/__tests__/backend-delivery.test.ts`）
 - **直建流**：`handleSchedule` 预校验 / abort / 参数透传（`src/__tests__/tool-create-flow.test.ts`）；命令路径表单（无参 / 带参预填 / 取消 / 提交 / channel-error / non-json / echo / 模式矩阵 / 异步不阻塞 / json·print throw，`src/__tests__/commands-form.test.ts`）；交互生命周期（草稿构造 + AbortController 注册表，`src/__tests__/interaction.test.ts`）
 
