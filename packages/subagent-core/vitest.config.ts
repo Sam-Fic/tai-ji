@@ -17,9 +17,8 @@ import { loadZeroMockPool } from "../../test-guard/zero-mock-pool.ts";
  *   每文件新进程，语义与分池前完全一致。
  * - **live**：ENGINE_CONFORMANCE_LIVE 手动门资产（conformance/engine-conformance.live，
  *   公网真调模型、本地默认 skip），隔离语义对齐 isolated（每文件新进程、同组串行）；
- *   独立成池使全量跑可用 --project '!live' 排除（显式路径单独跑不受
- *   影响——isolated 已 exclude 该文件防跨池重复收集；包 test 脚本当前未接该旗标，
- *   env 未设时收集即 skip 的计数仍进全量输出）；真机执行走 e2e-map
+ *   独立成池使全量门禁可用 --project '!live' 排除（零 skip 计数，显式路径单独跑不受
+ *   影响——isolated 已 exclude 该文件防跨池重复收集）；真机执行走 e2e-map
  *   E2E-INTEG-71 登记的显式路径命令（档位语义 = docs/TEST-STRATEGY.md
  *   「集成测试门控约定」节）。
  * - 池成员变更流程：check-zero-mock-pool.mjs --update 重写登记表 → 三包各两轮全量
@@ -64,8 +63,8 @@ export default taijiTestConfig({
       },
       {
         // live 池：ENGINE_CONFORMANCE_LIVE 手动门资产（隔离语义对齐 isolated：每文件
-        // 新进程、同组串行）；全量入口未接 --project '!live' 排除旗标（env 未设时收集
-        // 即 skip 的计数仍进全量输出），真机执行 = e2e-map E2E-INTEG-71 的显式路径命令
+        // 新进程、同组串行）；全量门禁以 --project '!live' 排除本池（env 未设时收集即
+        // skip 的计数不再进全量输出），真机执行 = e2e-map E2E-INTEG-71 的显式路径命令
         test: guardProjectSetup({
           name: "live",
           include: ["src/execution/engine/__tests__/conformance/engine-conformance.live.test.ts"],

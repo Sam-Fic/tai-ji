@@ -1,6 +1,7 @@
 // updater.e2e.test.ts —— 升级脚本 mac 真链 E2E 档（自 updater.test.ts 拆出，池分离：
-// 本文件独立成 live 池，全量跑可手动以 --project '!live' 排除（当前全量入口未接该
-// 旗标，env 未设时 skip 计数仍进全量输出，见 main/vitest.config.ts）。
+// 本文件独立成 live 池：全量门禁（gate-a 系）以 --project '!live' 排除；package.json 的
+// test:main 入口未接该旗标（它是带文件参数真跑 live 资产的唯一正确入口，接旗标会堵死），
+// 直接跑 test:main 时 env 未设的收集即 skip 计数仍进其输出。详见 main/vitest.config.ts。
 // 共同被测业务模块：`update/updater-script.ts`。mock 相容：全簇零 vi.mock。
 //
 // 内容 = updater.test.ts 中 TAIJI_E2E_UPDATER 门控的三段（mac 端到端 / 状态机中断注入 /

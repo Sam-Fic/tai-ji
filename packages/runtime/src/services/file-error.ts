@@ -9,6 +9,7 @@
  */
 export type FileErrorCode =
   | 'session_not_found'
+  | 'btw_line_inactive' // [startup-readiness U4/D5] btw 线不在册（重启窗口）纯读「不支持」——与 session_not_found 可区分的分形（RL3 单测看守）
   | 'permission_denied'
   | 'out_of_cwd' // NFR-AC-S2 越界统一守门
   | 'not_found'

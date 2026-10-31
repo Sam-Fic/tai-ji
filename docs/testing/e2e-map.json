@@ -5773,6 +5773,26 @@
       "owner": "scripts",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
       "note": "R2 态（按改动范围触发）：u-foundation 三红灯与准入检查的防回归面——检查本体被改坏（对账语义退化/豁免登记失守）时本条红。日常 CI 承载 = ci.yml invariants（testid-parity / shared-admission 步骤）与 typecheck（coverage 对账步骤）+ scripts-guards 测试步骤（四测试文件已列举）；select-affected-e2e.mjs 的 --json 出口改动由既有 E2E-PIPE-04 / E2E-ZCODE-01 族资产测试覆盖其纯函数（toJsonPayload 用例在 select-affected-e2e.test.mjs，该文件已在 E2E-PIPE-04 登记）。typecheck 覆盖检查跑两遍 vue-tsc 属重检查——重检查为检查器防回归所需（检查器本体改动时验证其仍工作），与 CI typecheck job 常驻步骤同体检重复可接受。"
+    },
+    {
+      "id": "E2E-INTEG-70",
+      "summary": "session-manager full e2e real LLM 层：真实凭证全链（archive/delete/人身约束，REAL_PI_READY 门控、开发机手动，不进 CI 集成组——凭证相关保持手动）",
+      "scope": [
+        "packages/runtime/src/services/session/event-interpreter.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "packages/runtime/src/__tests__/equivalence/session-manager-full-e2e.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "pnpm --filter @taiji/runtime exec vitest run src/__tests__/equivalence/session-manager-full-e2e.test.ts",
+      "owner": "packages/runtime",
+      "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
+      "note": "REAL_PI_READY 门控资产（真实凭证层，check-slow-tests 门控豁免登记 2026-10-31）：本地有凭证时该 describe 真跑、用例耗时 2.8-4.4s 超 2s 阈值，属门控资产不占默认组预算；faux 层（同文件前半 7 条）mock 化单测在默认组，无慢用例；trigger=on-diff 仅为清单触发提示形态，实际执行保持开发机手动（凭证相关），不进 CI 自动执行"
     }
   ]
 }

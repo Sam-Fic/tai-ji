@@ -71,6 +71,10 @@
  */
 import { execFile } from 'node:child_process'
 import type { CrashJournalEvent } from '@taiji/shared'
+// spawn argv 判据常量同引（startup 设计 §7.2「孤儿收割判据单源」）：判据①②的 flag 形态
+// 与值承载 flag 名与 pi-rpc spawn 构造共用同一组常量——构造侧改 flag 时本判据同步失效
+// 的窗口被对账测试锁住（services-root-bundle spawn argv 判据对账段）。
+import { PI_SPAWN_MODE_ARGS, PI_SPAWN_NO_EXTENSIONS, PI_SPAWN_SKILL_FLAG, PI_SPAWN_EXTENSION_FLAG } from '@zhushanwen/pi-rpc'
 import { getCrashJournal } from '../infra/crash-journal.js'
 import { redactArgvLine } from '../infra/pi/argv-redact.js'
 
@@ -190,8 +194,8 @@ function flagValue(tokens: string[], flag: string): string | null {
   return collectFlagValues(tokens, flag)[0] ?? null
 }
 
-/** 参与清单匹配的两个值承载 flag（pi-rpc appendSkillArgs / appendExtensionArgs 的注入段）。 */
-const MARKER_FLAGS = ['--extension', '--skill'] as const
+/** 参与清单匹配的两个值承载 flag（pi-rpc appendSkillArgs / appendExtensionArgs 的注入段，判据③单源同引）。 */
+const MARKER_FLAGS = [PI_SPAWN_EXTENSION_FLAG, PI_SPAWN_SKILL_FLAG] as const
 
 /**
  * 判定 ps 行是否「taiji spawn 的 pi RPC 进程」——判据 v2 四条合取的前三条（第四条
@@ -209,8 +213,8 @@ const MARKER_FLAGS = ['--extension', '--skill'] as const
  */
 export function matchesOwnPiArgv(row: PsRow, markerPaths: readonly string[]): boolean {
   const tokens = tokenizeArgv(row.command)
-  if (flagValue(tokens, '--mode') !== 'rpc') return false
-  if (!tokens.includes('--no-extensions')) return false
+  if (flagValue(tokens, PI_SPAWN_MODE_ARGS[0]) !== PI_SPAWN_MODE_ARGS[1]) return false
+  if (!tokens.includes(PI_SPAWN_NO_EXTENSIONS)) return false
   if (markerPaths.length === 0) return false
   const markers = new Set(markerPaths)
   return MARKER_FLAGS.some(flag => collectFlagValues(tokens, flag).some(v => markers.has(v)))

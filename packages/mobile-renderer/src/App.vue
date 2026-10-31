@@ -211,7 +211,7 @@ const navRoute = computed<ChatSourceDomain>({
 // 壳级键盘处理（§6.16）：visualViewport 高度 → --shell-viewport-h，输入条贴可视区下沿
 useVisualViewport()
 
-// ── connected 边沿三件套（v1 接线保留：connected-reconcile 契约）──────────────
+// ── connected 边沿触发动作组（v1 接线保留：connected-reconcile 契约）──────────────
 // 连接成功即拉取会话列表 + form/planReview 快照对账 + 当前活跃会话历史对账；同时记录
 // 连接建立时刻（§6.11 设置页「已连接时长」派生源，每次重连重算）。
 watch(() => shellConnectionState.value === 'connected', (connected) => {

@@ -199,6 +199,7 @@ describe('W18：record entry 派生缓存——增量拉取编排（mock RPC 层
     const subMsgs = received(ws, 'session.subagents')
     expect(subMsgs).toHaveLength(1)
     expect(subMsgs[0]!.payload).toEqual({
+      batchInProgress: true,
       sessionId: sid,
       subagents: [expect.objectContaining({ subagentId: 'sa-1', status: 'running' })],
     })
@@ -239,6 +240,7 @@ describe('W18：record entry 派生缓存——增量拉取编排（mock RPC 层
     expect(subMsgs).toHaveLength(2)
     // merge 后终态收敛（增量终态条目覆盖 running 基线，列表仍是全量派生）
     expect(subMsgs[1]!.payload).toEqual({
+      batchInProgress: true,
       sessionId: sid,
       // v2 终态条目直定 idle + stopReason（v1 的 closed→idle 归一 + closedReason 派生位已随 v1 层删除）
       subagents: [expect.objectContaining({ subagentId: 'sa-1', status: 'idle', stopReason: 'failed' })],
@@ -307,6 +309,7 @@ describe('W18：record entry 派生缓存——增量拉取编排（mock RPC 层
     // 全量重建 = 新基线整体替换（sa-1 消失、sa-2 在位）
     const subMsgs = received(ws, 'session.subagents')
     expect(subMsgs[subMsgs.length - 1]!.payload).toEqual({
+      batchInProgress: true,
       sessionId: sid,
       // v2 终态条目直定 idle + stopReason（v1 closed→idle 归一已随 v1 层删除）
       subagents: [expect.objectContaining({ subagentId: 'sa-2', status: 'idle', stopReason: 'completed' })],
@@ -343,6 +346,7 @@ describe('W18：record entry 派生缓存——增量拉取编排（mock RPC 层
     expect(fx.client.getEntries).toHaveBeenLastCalledWith('e-1')
     const subMsgs = received(ws, 'session.subagents')
     expect(subMsgs[subMsgs.length - 1]!.payload).toEqual({
+      batchInProgress: true,
       sessionId: sid,
       // v2 终态条目直定 idle
       subagents: [expect.objectContaining({ subagentId: 'sa-1', status: 'idle' })],

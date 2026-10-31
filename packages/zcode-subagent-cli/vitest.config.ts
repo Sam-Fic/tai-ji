@@ -19,9 +19,8 @@ import { loadZeroMockPool } from "../../test-guard/zero-mock-pool.ts";
  * （TAIJI_TEST_INTEGRATION）执行语义保持与分池前完全一致。
  * live 池 = ENGINE_CONFORMANCE_LIVE 手动门资产（zcode-engine.live，公网真调模型、
  * 本地默认 skip）：从 isolated 池划出独立成池，隔离语义与 isolated 一致（每文件新进程），
- * 使全量跑可用 --project '!live' 排除它（显式路径单独跑不受影响——
- * isolated 已 exclude 该文件防跨池重复收集；包 test 脚本当前未接该旗标，env 未设时
- * 收集即 skip 的计数仍进全量输出）；真机执行走 e2e-map E2E-INTEG-71 登记
+ * 使全量门禁可用 --project '!live' 排除它（零 skip 计数，显式路径单独跑不受影响——
+ * isolated 已 exclude 该文件防跨池重复收集）；真机执行走 e2e-map E2E-INTEG-71 登记
  * 的显式路径命令（档位语义 = docs/TEST-STRATEGY.md「集成测试门控约定」节）。
  * 池 CLI 语义注意：package.json test 脚本的 --pool=threads 是 CLI 级覆盖，对全部
  * project 同时生效（vitest projects 语义，见 runtime config 文件头）；isolate 差异
@@ -52,8 +51,8 @@ export default taijiTestConfig({
       },
       {
         // live 池：ENGINE_CONFORMANCE_LIVE 手动门资产（隔离语义对齐 isolated：每文件
-        // 新进程）；全量入口未接 --project '!live' 排除旗标（env 未设时收集即 skip 的
-        // 3 条计数仍进全量输出），真机执行 = e2e-map E2E-INTEG-71 的显式路径命令
+        // 新进程）；全量门禁以 --project '!live' 排除本池（env 未设时收集即 skip 的
+        // 3 条计数不再进全量输出），真机执行 = e2e-map E2E-INTEG-71 的显式路径命令
         test: guardProjectSetup({
           name: "live",
           include: ["src/__tests__/zcode-engine.live.test.ts"],

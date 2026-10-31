@@ -327,6 +327,7 @@ describe('SessionService.getAgentCallFilePath', () => {
       ],
       oversize: false,
       found: true,
+      batchInProgress: false,
     })
     const result = await service.getAgentCallFilePath('main-sess', 'sa-001')
     expect(result).toBe(sessionFile)
@@ -334,7 +335,7 @@ describe('SessionService.getAgentCallFilePath', () => {
 
   it('找不到 record → 空串', async () => {
     const service = createService()
-    vi.spyOn(recordsRef(service), 'getSubagents').mockResolvedValue({ records: [], oversize: false, found: true })
+    vi.spyOn(recordsRef(service), 'getSubagents').mockResolvedValue({ records: [], oversize: false, found: true, batchInProgress: false })
     expect(await service.getAgentCallFilePath('main-sess', 'sa-missing')).toBe('')
   })
 
@@ -346,6 +347,7 @@ describe('SessionService.getAgentCallFilePath', () => {
       ],
       oversize: false,
       found: true,
+      batchInProgress: false,
     })
     expect(await service.getAgentCallFilePath('main-sess', 'sa-001')).toBe('')
   })
@@ -358,6 +360,7 @@ describe('SessionService.getAgentCallFilePath', () => {
       ],
       oversize: false,
       found: true,
+      batchInProgress: false,
     })
     expect(await service.getAgentCallFilePath('main-sess', 'sa-001')).toBe('')
   })

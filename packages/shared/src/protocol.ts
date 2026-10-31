@@ -1036,13 +1036,15 @@ export interface ClientMessageMap {
   // engine-provider-unification D5：per-engine 默认模型写入（runtime 写 config.json engineDefaults
   // 键，写入前校验 modelRef ∈ 该引擎模型清单；engineId/modelRef 回显见 mutation reply）。
   'session.setSubagentEngineDefaultModel': { engineId: string; modelRef: string }
-  // workflow 列表/agent call 对话流读取（runtime 直读主 session JSONL + workflow-state JSONL，不依赖扩展）
+  // workflow 列表/agent call 对话流读取（不依赖扩展）：getWorkflows 走 runtime 每会话
+  // 内存派生视图（[W1 读路径换源]，主 session JSONL 全文重读已退役，oversize 兼容
+  // 路径除外——见下方 reply 段注释）；agent call 对话流按 trace[].sessionId 直读对应 JSONL
   'session.getWorkflows': { sessionId: string }
   'session.getAgentCallHistory': { sessionId: string; agentCallSessionId: string }
   'session.getAgentCallFilePath': { sessionId: string; agentCallSessionId: string }
   'session.workflowAction': { sessionId: string; action: 'abort'; runId: string }
   // workflow 可视化两条拉取 RPC（workflow-visualization 设计 §3.1-4/§3.1-5）：
-  // sessionId 定位 session 的 workflow-state 目录（record 流所在）+ 对齐 workflowAction
+  // sessionId 定位 session 的 run journal 目录（workflow/runs/，record 流所在）+ 对齐 workflowAction
   // 的双参数先例；runId 为 run 级标识（wf- 前缀）。
   'session.getWorkflowRunEvents': { sessionId: string; runId: string }
   'session.getWorkflowDag': { sessionId: string; runId: string }
@@ -2973,7 +2975,12 @@ export interface ServerMessageMapBase {
   //   消息前延迟落盘窗口 / 扫描竞态），「读不到会话」与「会话存在但列表为空」显式分形，
   //   消费方（store）拿 false 保留既有分区不覆盖、true 的空列表是真实空（直接覆盖）；缺省
   //   true（广播帧不带 = 权威数据帧 / mock / 旧 runtime）。
-  'session.subagents': { sessionId: string; subagents: SubagentRecord[]; oversize?: boolean; found?: boolean }
+  // batchInProgress（U1-lite D10）：additive「批进行中」标志——true = 本载荷可能是部分数据
+  //   （查询落在投影批加载 / entry 拉取轮在途的 await 间隙）。呈现半边（骨架屏消费——对
+  //   无旧数据的会话显示骨架屏、不把部分数据当全量照显）归后续波次（u-m2/SC9）接线，
+  //   本字段当前仅机制半边；缺省 false（mock / 旧 runtime 不带，消费方按 false 处理）。
+  //   广播帧（批末快照）与 RPC reply 均携带。
+  'session.subagents': { sessionId: string; subagents: SubagentRecord[]; oversize?: boolean; found?: boolean; batchInProgress?: boolean }
   // session.planState：plan 模式状态派生视图（runtime 读 session JSONL 最后一条 plan-state entry
   // 派生，冷热两路径共用同一份派生代码）。live 路径 = 派生视图链 stateSnapshot('plan') 广播；
   // 冷读路径 = session.getPlanState RPC reply 复用本 payload。docs 缺省 = 旧 schema entry（D4 降级）。
@@ -3021,13 +3028,14 @@ export interface ServerMessageMapBase {
   //（推送只是「drawer 已打开且无后续 chunk」场景的即时性补强，缺席丢失由接入拉取兜底）。
   'session.subagentStreamDegraded': { sessionId: string; recordId: string }
   // session.workflows：当前 session 派生的 workflow 列表。
-  // [W1 读路径换源] 数据源 = runtime 每会话内存派生视图（pi entry 游标 + run journal（workflow-state
+  // [W1 读路径换源] 数据源 = runtime 每会话内存派生视图（pi entry 游标 + run journal（workflow/runs/
   //   目录）tail 双增量源喂入）——主 session JSONL 全文重读退役；条目源自 workflow-record v2
   //   注册/终态两条小条目（W17 前旧指针 / W17~W1 v1 快照为兼容读层）。信号形态不动（W3 领地）。
   // oversize（RT-4#8）：与 session.subagents 同款降级标志——W1 起仅旧格式惰性兼容读路径可产生
   //   （32MB 预检保留在兼容层），恒空数组语义不变。
   // found（待裁决项 4）：与 session.subagents 同款会话存在性标志（RPC reply 专用，缺省 true）。
-  'session.workflows': { sessionId: string; workflows: WorkflowRunRecord[]; oversize?: boolean; found?: boolean }
+  // batchInProgress（U1-lite D10）：与 session.subagents 同款 additive 批进行中标志（缺省 false）。
+  'session.workflows': { sessionId: string; workflows: WorkflowRunRecord[]; oversize?: boolean; found?: boolean; batchInProgress?: boolean }
   // session.agentCallHistory：workflow 内 agent call 的对话流消息（runtime 按 trace[].sessionId 查找 JSONL）。
   // truncated：u4b（D5①）巨型 JSONL 超预检阈值后逆序窗口降级标志（optional，消费方按 false 处理）。
   'session.agentCallHistory': { sessionId: string; agentCallSessionId: string; messages: import('./message').Message[]; truncated?: boolean }
