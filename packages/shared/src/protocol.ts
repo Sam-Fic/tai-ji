@@ -74,6 +74,9 @@ import type { GenStatsFrame } from './gen-stats'
 // quota.configure payload 形状 SSOT 引用（coding-plan-quota-config-ux §7.1 契约收敛）
 import type { QuotaConfigurePayload } from './quota-types'
 import type { QuotaPreset } from './quota-presets'
+// readiness 域（startup-readiness-and-current-state 设计 §7.1，u-m0 M0 契约期）：
+// 形状 SSOT 在 ./readiness，本文件仅登记 type→payload 映射
+import type { ReadinessSnapshot, SessionsRecoveryProgressPayload } from './readiness'
 
 // plan 生命周期状态类型（plan 状态机显式化 D2）：经包出口（@zhushanwen/extension-protocol）
 // 直接引用 PlanLifecycleState（canonical = packages/extension-protocol/src/extensions/plan/state-machine，barrel 已 re-export），
@@ -411,6 +414,12 @@ export type ClientMessageType =
   // 全量状态经 canvas.get 拉取 + canvas.updated 广播失效收敛（拉为主，ADR-0097），
   // mutate reply 只回事件回执（eventId/evType/summary）或结构化错误，不进 MUTATION_DOMAINS。
   | 'canvas.list' | 'canvas.get' | 'canvas.mutate'
+  // runtime.readiness（startup-readiness-and-current-state 设计 §7.1/D1，u-m0 M0 契约期）：
+  // readiness 快照拉取 RPC（出口三件套之一——按需与重连拉取，持续态唯一真相）。无参数；
+  // reply 与 request 同名（rollingRestart.status 同款 payload 消费型同名模式）。payload/reply
+  // 形状 SSOT 在 ./readiness（ReadinessSnapshot），消息映射登记见 ServerMessageMap /
+  // ReplyPayloadMap 对应条目。实装随 M2（U6 其余实装）；M0 契约期先行定形。
+  | 'runtime.readiness'
 
 // ── Payload 类型定义 ────────────────────────────────────────────
 
@@ -1530,6 +1539,10 @@ export interface ClientMessageMap {
   'canvas.list': { sessionId: string }
   'canvas.get': { canvasId: string; sessionId: string }
   'canvas.mutate': { actor: CanvasActor; sessionId: string } & CanvasMutateRequest
+  // runtime.readiness：无参只读查询（rollingRestart.status 同款 Record<string, never>；
+  // startup-readiness-and-current-state 设计 §7.1，u-m0 M0 契约期）。reply 同名，
+  // 载荷形状 SSOT 在 ./readiness（ReadinessSnapshot）。
+  'runtime.readiness': Record<string, never>
 }
 
 // ClientMessage 由 ClientMessageMap 直接派生：每个 type 字面量映射到
@@ -1905,6 +1918,16 @@ export type ServerMessageType =
   // 启动 reattach 高水位延迟推送（Server→Client 冒号 camelCase；进入单发 + 缓解退出单发，
   // payload 见 ReattachDeferredPayload）。
   | 'reattach:deferred'
+  // readiness 域（startup-readiness-and-current-state 设计 §7.1/D1，u-m0 M0 契约期定形，
+  // 实装随 M2）：readiness = 拉取 RPC reply（与 ClientMessageType 的 'runtime.readiness'
+  // request 同名——rollingRestart.status 同款），同时是初始推送 readiness 段的帧型
+  //（sendInitialState 批内 additive 下发、首连一次到达，旧客户端不消费无影响）；
+  // readinessChanged = 能力翻转边沿广播（仅翻转发，不承载连续进度——D11），载荷为翻转后
+  // 全量快照（消费端整体覆盖，与「拉取为持续态唯一真相」的三段式对齐）；sessionsRecoveryProgress =
+  // sessions 恢复进度节流通知（500ms 级时间节流，仅 sessions 恢复期发送，D11）。三帧均
+  // 无 sessionId 走 broker 纯全局通道（mcp:testResult / rollingRestart:* 先例）。载荷形状
+  // SSOT 在 ./readiness；登记清单共四消息（含 Client 侧拉取 RPC），见 §3.4 M0。
+  | 'runtime.readiness' | 'runtime.readinessChanged' | 'runtime.sessionsRecoveryProgress'
   // btw.*（btw-question D6；W4b 线枚举帧退役后剩 2 帧）：2 个控制帧的 RPC reply（同名
   // request/reply——session.subscribe / session.import 同款模式），纯 RPC reply（走 reply
   // 通道不经 publish，不入 TOPIC_TABLE——session.subscribe 同族）。原 btw.list 兼作线列表
@@ -3686,6 +3709,18 @@ export interface ServerMessageMapBase {
   // 消费——高压延迟横幅路径；active 进入/缓解退出两态，字段语义见 payload 类型）。
   'reattach:deferred': ReattachDeferredPayload
 
+  // ── readiness 域（startup-readiness-and-current-state 设计 §7.1/D1，u-m0 M0 契约期）──
+  // readiness：拉取 RPC reply + 初始推送 readiness 段共用帧型（sendInitialState 批内
+  // additive 下发；三通道同源——广播加速显示、拉取为持续态唯一真相）。字段语义见
+  // ReadinessSnapshot（./readiness）。
+  'runtime.readiness': ReadinessSnapshot
+  // readinessChanged：能力翻转边沿广播（仅翻转发），载荷 = 翻转后全量快照（消费端
+  // 整体覆盖，无增量合并状态）。连续进度不走本帧——sessions 恢复进度走下方节流通知。
+  'runtime.readinessChanged': ReadinessSnapshot
+  // sessionsRecoveryProgress：sessions 恢复进度节流通知（500ms 级，D11；reason 迁移
+  // 无能力翻转边沿可借，状态行刷新走本通知；仅 sessions 恢复期发送）。
+  'runtime.sessionsRecoveryProgress': SessionsRecoveryProgressPayload
+
   // ── btw.*（btw-question D6 控制帧 reply；W4b 后线枚举帧与其状态广播已退役）──
   /** btw.create reply：新建线的 sessionId（pi 真实 id）+ 归属主会话 + fork 快照状态（创建期 pill 数据源）。 */
   'btw.create': { sessionId: string; mainSid: string; forkState: BtwForkState }
@@ -4169,6 +4204,9 @@ export interface ReplyPayloadMap {
   // rollingRestart.status（crash-forensics-and-watchdog §3.3 D5，u7b）：只读查询 reply
   //（payload 消费型；与 request 同名——session.subscribe / backgroundTask.list 同款模式）。
   'rollingRestart.status': ServerMessageMap['rollingRestart.status']
+  // runtime.readiness（startup-readiness-and-current-state 设计 §7.1，u-m0 M0 契约期）：
+  // 只读查询 reply（payload 消费型；与 request 同名——rollingRestart.status 同款模式）。
+  'runtime.readiness': ServerMessageMap['runtime.readiness']
 
   // terminal.* 都是 ack 型，统一 reply 'terminal.ack'（前端 command() 按 id 匹配 resolve；
   // spawn 回包携 terminalId、list 回包携 instances，见 ServerMessageMap['terminal.ack']）
