@@ -1,5 +1,6 @@
 // src/__tests__/delivery-port-assembly.test.ts —— 统一投递端口装配点行为锁
-//（unified-delivery 波 2 前半，设计 §3.7 装配点：base-tool-enhance 的 session_start）。
+//（unified-delivery 波 2 前半，装配点 = base-tool-enhance 的 session_start；投递统一化
+// 设计的现行登记处 = ADR-0074 与 docs/CONTEXT.md「统一投递（unified delivery，v3）」段）。
 // 锁三类装配行为：
 // ① session_start 触发端口装配且经进程级槽可达（getDeliveryPort）；
 // ② 装配后端口是活的投递通路（deliver → pi.appendEntry outbox + pi.sendMessage
@@ -72,7 +73,7 @@ function fireSessionStart(pi: ReturnType<typeof createMockPi>, ctx: ExtensionCon
 	);
 }
 
-describe("session_start 装配统一投递端口（unified-delivery §3.7）", () => {
+describe("session_start 装配统一投递端口（unified-delivery 波 2 装配点；登记处见文件头）", () => {
 	it("session_start 后端口经进程级槽可达", () => {
 		setupOfficialFactory();
 		const pi = createMockPi();

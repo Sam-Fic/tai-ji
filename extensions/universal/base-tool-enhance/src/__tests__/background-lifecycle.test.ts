@@ -353,7 +353,7 @@ describe("bash_output tool", () => {
 		await expect(outputTool({ task_id: "bt-none" })).rejects.toThrow(/No such task/);
 	});
 
-	it("P0-1: list merges only TERMINAL registry entries — running entries stay invisible (§3.5)", async () => {
+	it("P0-1: list merges only TERMINAL registry entries — running entries stay invisible", async () => {
 		// 独立 session 目录：单例表空 + registry 含 running 与 exited 两条他进程条目
 		// （模拟 resume 被强杀 session：runtime 收殓转终态前的窗口里 registry 残留 running）
 		const sid = "sess-p0-list";
@@ -369,7 +369,7 @@ describe("bash_output tool", () => {
 		expect(ids).not.toContain("bt-xrun"); // running 条目不并入——无幻影 running 行
 	});
 
-	it("P0-1: detail registry fallback is terminal-only — cross-process running entry not queryable (§3.5)", async () => {
+	it("P0-1: detail registry fallback is terminal-only — cross-process running entry not queryable", async () => {
 		const sid = "sess-p0-detail";
 		const path = getRegistryPath(DATA_DIR, sid);
 		writeRegistryEntry(path, makeRegistryEntry({ taskId: "bt-xrun2", state: "running" }));
@@ -383,7 +383,7 @@ describe("bash_output tool", () => {
 		expect(detail.exitCode).toBe(3);
 	});
 
-	it("deleted output file degrades to <lost> without crashing (§3.6)", async () => {
+	it("deleted output file degrades to <lost> without crashing", async () => {
 		const task = spawnOk("sleep 0.1 && echo gone");
 		emitFakeExit(task, 0);
 		unlinkSync(task.outputFile);
@@ -816,9 +816,9 @@ describe("D15: abort signal does not propagate to background tasks", () => {
 	});
 });
 
-// ──────────────────────── 单测层：spawn 失败路径（§3.6） ────────────────────────
+// ──────────────────────── 单测层：spawn 失败路径 ────────────────────────
 
-describe("spawn failure paths (§3.6)", () => {
+describe("spawn failure paths", () => {
 	it("nonexistent cwd reports the builtin-style error", () => {
 		const result = spawnBackgroundTask({
 			command: "echo hi",
