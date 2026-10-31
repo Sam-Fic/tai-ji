@@ -784,8 +784,8 @@ export class SessionMessageHandler {
     // [待裁决项 4] found 透传：false = 会话不在册（延迟落盘窗口 / 扫描竞态），renderer
     // 保留既有分区不覆盖（与「真实空列表」分形）。
     // [U1-lite D10] batchInProgress 透传：查询落在投影批加载 / entry 拉取轮在途的 await
-    // 间隙时本批数据不完整——移动壳 SubagentSheet（SC9）据 true 显示骨架屏，不把部分
-    // 数据当全量照显。
+    // 间隙时本批数据不完整。呈现半边（移动壳 SubagentSheet（SC9）据 true 显示骨架屏、
+    // 不把部分数据当全量照显）归 u-m2 波次接线，本 handler 只交机制半边。
     const { records: subagents, oversize, found, batchInProgress } = await this.ctx.sessionService.getSubagents(msg.payload.sessionId)
     return this.ctx.reply(ws, msg.id, 'session.subagents', { sessionId: msg.payload.sessionId, subagents, oversize, found, batchInProgress })
   }

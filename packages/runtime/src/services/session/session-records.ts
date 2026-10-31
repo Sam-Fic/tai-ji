@@ -242,8 +242,9 @@ type RecordPublishSource = RecordRefreshTrigger | 'event-projection'
  * found=false 保留既有分区不覆盖（空列表歧义的根治）；found=true 的空列表是真实空。
  *
  * [U1-lite D10] batchInProgress「批进行中」additive 标志：查询到达时投影批加载 /
- * entry 拉取轮仍在途 = 返回的是部分数据，消费方（无旧数据的会话）据此显示骨架屏、
- * 不把部分数据当全量照显（SC9 消费语义）；批末一次快照发布后重拉即得完整数据。
+ * entry 拉取轮仍在途 = 返回的是部分数据。呈现半边（骨架屏消费——无旧数据的会话据此
+ * 显示骨架屏、不把部分数据当全量照显，SC9 消费语义）归后续波次（u-m2/SC9）接线，
+ * 本字段当前仅机制半边；批末一次快照发布后重拉即得完整数据。
  * 误报（批实际已结束）与漏报（恰好批外）都只影响骨架屏时长，不影响数据正确性。
  * 过渡期机制：随重写 M5 旧派生视图退场而删除（加载态概念以登记表 schema 字段
  * 形态进重写 M0 契约，D10）。
@@ -1002,8 +1003,9 @@ export class SessionRecords {
         // record 事件流 → 派生视图变化 → 水位 diff → 本帧构造时读最新值的时序）。
         // [U1-lite D10] 推送帧携带 additive「批进行中」标志（判据与 getSubagents 同源：
         // 在途 entry 拉取轮或投影批加载窗口）。批末补发点投影批标志已闭（endBatch 先清
-        // 标志再补发），本帧值实际由在途轮显形；消费方（SC7/SC8 展示副本）对无旧数据
-        // 会话据 true 显示骨架屏，不把部分数据当全量照显。
+        // 标志再补发），本帧值实际由在途轮显形。呈现半边（消费方对无旧数据会话据 true
+        // 显示骨架屏、不把部分数据当全量照显）归后续波次（u-m2/SC9）接线，本模块只交
+        // 机制半边。
         payload: {
           sessionId,
           subagents: this.enhanceSubagentDetails(sessionId, Array.from(cache.subagents.values())),

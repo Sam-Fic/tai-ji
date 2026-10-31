@@ -2974,9 +2974,10 @@ export interface ServerMessageMapBase {
   //   消费方（store）拿 false 保留既有分区不覆盖、true 的空列表是真实空（直接覆盖）；缺省
   //   true（广播帧不带 = 权威数据帧 / mock / 旧 runtime）。
   // batchInProgress（U1-lite D10）：additive「批进行中」标志——true = 本载荷可能是部分数据
-  //   （查询落在投影批加载 / entry 拉取轮在途的 await 间隙），消费方对无旧数据的会话显示
-  //   骨架屏、不把部分数据当全量照显；缺省 false（mock / 旧 runtime 不带，消费方按 false
-  //   处理）。广播帧（批末快照）与 RPC reply 均携带。
+  //   （查询落在投影批加载 / entry 拉取轮在途的 await 间隙）。呈现半边（骨架屏消费——对
+  //   无旧数据的会话显示骨架屏、不把部分数据当全量照显）归后续波次（u-m2/SC9）接线，
+  //   本字段当前仅机制半边；缺省 false（mock / 旧 runtime 不带，消费方按 false 处理）。
+  //   广播帧（批末快照）与 RPC reply 均携带。
   'session.subagents': { sessionId: string; subagents: SubagentRecord[]; oversize?: boolean; found?: boolean; batchInProgress?: boolean }
   // session.planState：plan 模式状态派生视图（runtime 读 session JSONL 最后一条 plan-state entry
   // 派生，冷热两路径共用同一份派生代码）。live 路径 = 派生视图链 stateSnapshot('plan') 广播；
