@@ -3,12 +3,15 @@
  *
  * fixture 场景（内联源码片段，不依赖真实 renderer/e2e 的内容漂移）：
  *   - 实现提取三形态：静态属性 / 动态模板前缀 / 动态绑定字面量（三元）
- *   - spec 引用三形态：[data-testid="X"] / getByTestId('X')（单双引号）/ [data-testid^="P"]
+ *   - 实现提取剥注释：JSDoc / 行注释 / 模板注释里的 data-testid 不算实现（PresetChip.vue 形态）
+ *   - spec 引用形态：[data-testid="X"] / getByTestId('X')（单双引号）/ [data-testid^="P"] /
+ *     模板字面量 `P${...}`（取静态前缀）/ 正则字面量 /^P.../（取字面前缀）/ 无插值模板按 exact
+ *   - 变量形态 getByTestId(变量) 不可检测：不计入引用集
  *   - 精确引用被动态前缀覆盖（`turn-${...}` 族产出 turn-1）
  *   - 前缀引用被实现前缀 / exact 前缀命中覆盖
  *   - 悬空精确 / 悬空前缀判红；KNOWN_DANGLING 豁免分桶；stale 豁免（恢复实现且引用仍在）检出
  * 末组烟测 spawnSync --root 注入 tmpdir fixture 树（mkdtempSync 自建自删）直测
- * main 的退出码链路（绿 / 悬空红 / 实现目录缺失 2 / spec 目录缺失 2）。
+ * main 的退出码链路（绿 / 悬空红 / 实现目录缺失 2 / spec 目录缺失 2 / 目录存在但零 spec 2）。
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -59,9 +62,23 @@ describe('extractImpls：实现三形态提取', () => {
     expect(exact.has('default-project-flat-zone')).toBe(true)
     expect(exact.has('fallback-lit')).toBe(true)
   })
+
+  it('注释文本不算实现（JSDoc / 行注释 / 模板注释；PresetChip.vue:31 形态）', () => {
+    const src = [
+      '/**',
+      ' * 信任标记跨档不丢：纯图标档 = 右上角警示色角标（`data-testid="preset-chip-replace-badge"`）+ tooltip。',
+      ' */',
+      '// 行注释形态：data-testid="line-comment-id"',
+      '<!-- <span data-testid="template-comment-id" /> -->',
+      '<span data-testid="real-id" />',
+    ].join('\n')
+    const { exact, prefix } = extractImpls('PresetChip.vue', src)
+    expect([...exact.keys()]).toEqual(['real-id'])
+    expect(prefix.size).toBe(0)
+  })
 })
 
-describe('extractSpecRefs：spec 引用三形态', () => {
+describe('extractSpecRefs：spec 引用形态', () => {
   it('[data-testid="X"] 与 getByTestId 单双引号 → exact；[^=] → prefix', () => {
     const src = [
       `const a = page.locator('[data-testid="tray-panel"]')`,
@@ -72,6 +89,18 @@ describe('extractSpecRefs：spec 引用三形态', () => {
     const { exact, prefix } = extractSpecRefs('s.spec.ts', src)
     expect([...exact.keys()].sort()).toEqual(['composer-box', 'terminal-xterm', 'tray-panel'])
     expect([...prefix.keys()]).toEqual(['wf-viz-event-'])
+  })
+
+  it('模板字面量 → 静态前缀、正则字面量 → 字面前缀、无插值模板 → exact、变量形态不计引用', () => {
+    const src = [
+      'const a = overlay.getByTestId(`wfvz-dag-node-${nodeId}`)',
+      'const b = page.getByTestId(/^turn-\\d+$/)',
+      'const c = page.getByTestId(opts.settleScopeTestId)',
+      'const d = page.getByTestId(`composer-box`)',
+    ].join('\n')
+    const { exact, prefix } = extractSpecRefs('s.spec.ts', src)
+    expect([...exact.keys()]).toEqual(['composer-box'])
+    expect([...prefix.keys()].sort()).toEqual(['turn-', 'wfvz-dag-node-'])
   })
 })
 
@@ -145,10 +174,11 @@ describe('main 退出码（--root 注入 tmpdir fixture 树）', () => {
   let root
   beforeAll(() => {
     root = mkdtempSync(join(tmpdir(), 'testid-parity-main-'))
-    // IMPL_ROOTS 三个目录齐备（main 对任一实现目录缺失 fail-fast exit 2）
+    // IMPL_ROOTS 四个目录齐备（main 对任一实现目录缺失 fail-fast exit 2）
     mkdirSync(join(root, 'packages', 'renderer', 'src'), { recursive: true })
     mkdirSync(join(root, 'packages', 'core', 'src'), { recursive: true })
     mkdirSync(join(root, 'packages', 'ui', 'src'), { recursive: true })
+    mkdirSync(join(root, 'packages', 'dom-core', 'src'), { recursive: true })
     mkdirSync(join(root, 'e2e'), { recursive: true })
     writeFileSync(
       join(root, 'packages', 'renderer', 'src', 'Comp.vue'),
@@ -196,11 +226,28 @@ describe('main 退出码（--root 注入 tmpdir fixture 树）', () => {
       mkdirSync(join(noE2eRoot, 'packages', 'renderer', 'src'), { recursive: true })
       mkdirSync(join(noE2eRoot, 'packages', 'core', 'src'), { recursive: true })
       mkdirSync(join(noE2eRoot, 'packages', 'ui', 'src'), { recursive: true })
+      mkdirSync(join(noE2eRoot, 'packages', 'dom-core', 'src'), { recursive: true })
       const r = run(['--root', noE2eRoot])
       expect(r.status).toBe(2)
       expect(r.stdout + r.stderr).toContain('e2e spec 目录缺失')
     } finally {
       rmSync(noE2eRoot, { recursive: true, force: true , maxRetries: 5, retryDelay: 20 })
+    }
+  })
+
+  it('输入错误：e2e 目录存在但零 spec 文件 → exit 2（零引用对账恒 PASS 属 fail-open）', () => {
+    const emptySpecRoot = mkdtempSync(join(tmpdir(), 'testid-parity-empty-spec-'))
+    try {
+      mkdirSync(join(emptySpecRoot, 'packages', 'renderer', 'src'), { recursive: true })
+      mkdirSync(join(emptySpecRoot, 'packages', 'core', 'src'), { recursive: true })
+      mkdirSync(join(emptySpecRoot, 'packages', 'ui', 'src'), { recursive: true })
+      mkdirSync(join(emptySpecRoot, 'packages', 'dom-core', 'src'), { recursive: true })
+      mkdirSync(join(emptySpecRoot, 'e2e'), { recursive: true })
+      const r = run(['--root', emptySpecRoot])
+      expect(r.status).toBe(2)
+      expect(r.stdout + r.stderr).toContain('无 *.spec.ts')
+    } finally {
+      rmSync(emptySpecRoot, { recursive: true, force: true , maxRetries: 5, retryDelay: 20 })
     }
   })
 })

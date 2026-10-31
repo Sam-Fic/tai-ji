@@ -10,15 +10,21 @@
  *
  * 对账语义（单向：spec → 实现；实现未被 spec 引用不构成红灯——大量组件无 e2e
  * 覆盖是常态，不立反向义务）：
- *   - spec 精确引用（[data-testid="X"] / getByTestId('X')）：实现 exact 集含 X，
+ *   - spec 精确引用（[data-testid="X"] / getByTestId('X'|`X`)）：实现 exact 集含 X，
  *     或存在实现前缀 P 使 X.startsWith(P)（动态模板 `P${...}` 产出的族）
- *   - spec 前缀引用（[data-testid^="P"]）：存在实现前缀 P' 使 P'.startsWith(P)，
- *     或存在实现 exact E 使 E.startsWith(P)
+ *   - spec 前缀引用（[data-testid^="P"] / getByTestId(`P${...}`) / getByTestId(/^P...)）：
+ *     存在实现前缀 P' 使 P'.startsWith(P)，或存在实现 exact E 使 E.startsWith(P)
+ *   - 不可检测形态：getByTestId(变量)——引用目标运行时才确定，静态对账无法归属
+ *     （现网实例 e2e/search-modal.spec.ts 的 opts.settleScopeTestId）。该形态不计入
+ *     引用集、也不判红，其实现存在性由 spec 内的变量来源自行保证。
  *
- * 实现提取范围 = packages/renderer/src + packages/core/src + packages/ui/src
- * （桌面渲染链三源；mobile-renderer 独立壳，其组件不出现在桌面 e2e 的 DOM 中，
- * 纳入会掩盖桌面悬空）。测试文件（__tests__ / *.test.ts / *.spec.ts）排除——
- * 测试桩里的 testid 不是 DOM 实现。
+ * 实现提取范围 = packages/renderer/src + packages/core/src + packages/ui/src +
+ * packages/dom-core/src（桌面渲染链四源；mobile-renderer 独立壳，其组件不出现在
+ * 桌面 e2e 的 DOM 中，纳入会掩盖桌面悬空）。**新增渲染链包（renderer 直接消费且
+ * 产出 DOM）必须同步本段与 main 的 IMPL_ROOTS**——漏收的包其真实实现会被判悬空
+ * （dom-core 曾漏收）。实现提取前剥注释（行注释 / 块注释 / 模板注释）——注释文本
+ * 不是 DOM 实现。测试文件（__tests__ / *.test.ts / *.spec.ts）排除——测试桩里的
+ * testid 不是 DOM 实现。
  *
  * 已知悬空登记（KNOWN_DANGLING）：引用已删 DOM 的历史 spec 引用，按设计 D13
  * 「悬空 e2e 随推树退役重建断言，不做修复」显式登记豁免（不静默吞）——登记项
@@ -30,11 +36,12 @@
  *   node scripts/check-testid-parity.mjs              # 对账仓库当前状态
  *   node scripts/check-testid-parity.mjs --root <dir> # 测试注入（fixture 树根）
  *
- * 退出码：0 对账通过 / 1 有悬空引用或 stale 登记项 / 2 输入错误（目录缺失等）
+ * 退出码：0 对账通过 / 1 有悬空引用或 stale 登记项 / 2 输入错误（目录缺失、e2e 零 spec 等）
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const TESTID_CHARS = "[a-zA-Z0-9_@.-]";
 
@@ -55,6 +62,19 @@ const KNOWN_DANGLING = {
 // ---------- 纯函数（scripts/__tests__/check-testid-parity.test.mjs 消费） ----------
 
 /**
+ * 剥去三类注释（模板注释 / 块注释 / 行注释），注释文本不是 DOM 实现。
+ * 现网反例：PresetChip.vue 的 JSDoc 写了 `data-testid="preset-chip-replace-badge"`，
+ * 真实现在模板里；不剥注释时 JSDoc 一行就足以让该 testid 判为「有实现」，模板实现
+ * 被删也不报悬空（漏报）。行注释形态用负向 lookbehind 守卫，排除 `http://` 这类协议串。
+ */
+function stripComments(src) {
+  return src
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(?<![:\w])\/\/[^\n]*/g, "");
+}
+
+/**
  * 从源码文本提取 testid 实现。
  * 三形态：
  *   1. 静态属性 data-testid="X" → exact X（负向 lookbehind 排除 :data-testid 绑定）
@@ -69,21 +89,35 @@ export function extractImpls(path, src) {
     if (!map.has(key)) map.set(key, []);
     map.get(key).push(path);
   };
-  for (const m of src.matchAll(new RegExp(`(?<!:)data-testid="(${TESTID_CHARS}+)"`, "g"))) {
+  const code = stripComments(src);
+  for (const m of code.matchAll(new RegExp(`(?<!:)data-testid="(${TESTID_CHARS}+)"`, "g"))) {
     record(exact, m[1]);
   }
-  for (const m of src.matchAll(new RegExp(`:?data-testid="?` + "`" + `(${TESTID_CHARS}+)\\$\\{`, "g"))) {
+  for (const m of code.matchAll(new RegExp(`:?data-testid="?` + "`" + `(${TESTID_CHARS}+)\\$\\{`, "g"))) {
     record(prefix, m[1]);
   }
-  for (const m of src.matchAll(new RegExp(`:data-testid="([^"\`]*)"`, "g"))) {
+  for (const m of code.matchAll(new RegExp(`:data-testid="([^"\`]*)"`, "g"))) {
     for (const lit of m[1].matchAll(new RegExp(`'(${TESTID_CHARS}+)'`, "g"))) record(exact, lit[1]);
   }
   return { exact, prefix };
 }
 
+/** 正则字面量可提取的静态前缀：仅接受 `^` 锚定形态（未锚定 = 子串匹配，无前缀语义），
+ *  取到首个正则元字符前的字面段；无可提取字面前缀时返回空串（不记账）。 */
+function regexLiteralPrefix(body) {
+  if (!body.startsWith("^")) return "";
+  let out = "";
+  for (const ch of body.slice(1)) {
+    if ("\\.+*?()[]{}|^$".includes(ch)) break;
+    out += ch;
+  }
+  return out;
+}
+
 /**
  * 从 e2e spec 源码提取 testid 引用。
- * 形态：[data-testid="X"] 精确 / [data-testid^="P"] 前缀 / getByTestId('X') 精确。
+ * 形态：[data-testid="X"] 精确 / [data-testid^="P"] 前缀 / getByTestId('X'|`X`) 精确 /
+ * getByTestId(`P${...}`) 模板前缀 / getByTestId(/^P.../) 正则前缀。
  */
 export function extractSpecRefs(path, src) {
   const exact = new Map();
@@ -95,6 +129,15 @@ export function extractSpecRefs(path, src) {
   for (const m of src.matchAll(new RegExp(`\\[data-testid="(${TESTID_CHARS}+)"\\]`, "g"))) record(exact, m[1]);
   for (const m of src.matchAll(new RegExp(`getByTestId\\(['"](${TESTID_CHARS}+)['"]\\)`, "g"))) record(exact, m[1]);
   for (const m of src.matchAll(new RegExp(`\\[data-testid\\^="(${TESTID_CHARS}+)"\\]`, "g"))) record(prefix, m[1]);
+  // 无插值模板字面量 = 静态字面量（getByTestId(`X`) 语义等同 'X'）
+  for (const m of src.matchAll(new RegExp("getByTestId\\(\\s*`(" + TESTID_CHARS + "+)`\\s*\\)", "g"))) record(exact, m[1]);
+  // 含插值模板字面量 → `${` 前静态段进前缀桶（与实现侧动态模板前缀同思路）
+  for (const m of src.matchAll(new RegExp("getByTestId\\(\\s*`(" + TESTID_CHARS + "+)\\$\\{", "g"))) record(prefix, m[1]);
+  // 正则字面量 → 锚定后首个元字符前的字面前缀
+  for (const m of src.matchAll(/getByTestId\(\s*\/((?:\\.|\[[^\]]*\]|[^/\\\n])+)\/[gimsuy]*\s*\)/g)) {
+    const p = regexLiteralPrefix(m[1]);
+    if (p) record(prefix, p);
+  }
   return { exact, prefix };
 }
 
@@ -234,7 +277,7 @@ export function main(argv = process.argv.slice(2)) {
   const root = rootIdx !== -1 ? argv[rootIdx + 1] : ".";
   const repoRoot = (p) => join(root, p);
 
-  const IMPL_ROOTS = ["packages/renderer/src", "packages/core/src", "packages/ui/src"];
+  const IMPL_ROOTS = ["packages/renderer/src", "packages/core/src", "packages/ui/src", "packages/dom-core/src"];
   const SPEC_ROOTS = ["e2e"];
 
   const missing = IMPL_ROOTS.filter((r) => !existsSync(repoRoot(r)));
@@ -255,6 +298,14 @@ export function main(argv = process.argv.slice(2)) {
   const { extracts: impls, fileCount: implFileCount } = collectExtracts(IMPL_ROOTS, collectSourceFiles, extractImpls, repoRoot);
   const { extracts: specRefs, fileCount: specFileCount } = collectExtracts(SPEC_ROOTS, collectSpecFiles, extractSpecRefs, repoRoot);
 
+  // 目录存在但零 spec 文件与目录缺失同为 fail-open：对账零命中恒 PASS。按输入错误拦截
+  if (specFileCount === 0) {
+    console.error(`[check-testid-parity] e2e spec 目录下无 *.spec.ts 文件：${SPEC_ROOTS.join(", ")}`);
+    console.error("  恢复动作：确认 e2e 测试文件已随分支提交（或用 --root 指向含 e2e/*.spec.ts 的树根）——");
+    console.error("  零 spec 时对账恒 PASS 属 fail-open，不能当作通过。");
+    return 2;
+  }
+
   const result = parityCheck(specRefs, impls, KNOWN_DANGLING);
 
   console.log(
@@ -264,5 +315,5 @@ export function main(argv = process.argv.slice(2)) {
   return renderParityResult(result);
 }
 
-const isMain = process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href;
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(join(process.argv[1])).href;
 if (isMain) process.exit(main());
