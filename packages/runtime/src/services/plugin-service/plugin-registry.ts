@@ -2,6 +2,7 @@ import { readFile, readdir, stat } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import type { TaijiPackageJson, PluginDescriptor, PluginState, PluginContributes, PluginSource, TaijiManifest } from './plugin-types.js'
 import { checkPluginCompatibility } from './plugin-version-checker.js'
+import { DISABLED_FILE, parseDisabledFile } from './installed-store.js'
 
 /**
  * 插件注册中心：扫描本地插件目录，解析 package.json 中的 taijiPlugin manifest，
@@ -50,7 +51,7 @@ export class PluginRegistry {
   private projectRoot: string
   private pluginsConfigDir: string
   private builtinPluginsDir: string | undefined
-  /** [U7] 禁用清单读取的 warn 去重（读失败每轮 scan 一次即可，不刷屏）。 */
+  /** [U7] 禁用清单读取的 warn 去重（读失败实例生命周期 warn 一次，不刷屏；scan 多轮不重置）。 */
   private warnedDisabledRead = false
 
   /** @param projectRoot 项目根（项目级插件扫描用）
@@ -111,55 +112,34 @@ export class PluginRegistry {
   /**
    * [U7/D2] 读禁用标记清单的 pluginId 集（scan 跳过判定面）。
    *
-   * 直接读文件而不 import InstalledStore 类：InstalledStore 是登记写入域的类（含
-   * atomicWrite 依赖链），扫描侧只需要读半边；条目 schema 由 installed-store 侧
-   * DisabledPluginEntry 形状单源定义（本读侧消费 pluginId 键 + 条目形状校验）。文件路径公式
-   * （join(pluginsConfigDir, 'plugins', 'disabled.json')）与 installed-store 的
-   * DISABLED_FILE 常量（模块私有未导出）是两份独立实装——改名需双侧同步，
-   * plugin-disabled-registry.test.ts 同时测写半边（InstalledStore）与读半边
-   * （本类 scan）兜底；读侧解析容错与 InstalledStore.loadDisabled 全同语义
-   * （文件级：损坏/非对象 → 空表 + warn；条目级：形状不合丢弃该条不连坐——
-   * 读侧禁用集与写侧读写视图一致，clearDisabled 的「重新启用」通道对
-   * 形状不合条目同样闭合，不产生 scan 认 / enable 不认的缝隙）。
+   * 直接读文件而不持有 InstalledStore 实例：InstalledStore 是登记写入域的类（含
+   * atomicWrite 依赖链），扫描侧只需要读半边。路径公式与解析容错经 installed-store
+   * 导出的 DISABLED_FILE 常量 + parseDisabledFile 共享原语单源（branch-review
+   * dmg-r1-3 收敛；解析原语承担文件级损坏 → 空表与条目级形状不合丢弃，写读两侧
+   * 同一实现）。本读侧独有的 warn 去重策略见 warnedDisabledRead（实例生命周期
+   * 一次——scan 多轮重复失败不刷屏；写侧 loadDisabled 每次留痕）。文件缺失 =
+   * 无禁用插件（常态，静默空集）。plugin-disabled-registry.test.ts 对账测试保留
+   * 为写读两半的回归锁；读侧禁用集与写侧读写视图一致——clearDisabled 的「重新
+   * 启用」通道对形状不合条目同样闭合，不产生 scan 认 / enable 不认的缝隙。
    */
   private async loadDisabledIds(): Promise<Set<string>> {
-    const disabledPath = join(this.pluginsConfigDir, 'plugins', 'disabled.json')
+    const disabledPath = join(this.pluginsConfigDir, 'plugins', DISABLED_FILE)
     let raw: string
     try {
       raw = await readFile(disabledPath, 'utf-8')
     } catch {
       return new Set() // 文件缺失 = 无禁用插件（常态）
     }
-    try {
-      const parsed: unknown = JSON.parse(raw)
-      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        if (!this.warnedDisabledRead) {
-          this.warnedDisabledRead = true
-          console.warn(`[plugin-registry] disabled.json has unexpected shape, treating as empty`)
-        }
-        return new Set()
+    const { entries, failure, detail } = parseDisabledFile(raw)
+    if (failure && !this.warnedDisabledRead) {
+      this.warnedDisabledRead = true
+      if (failure === 'shape') {
+        console.warn(`[plugin-registry] disabled.json has unexpected shape, treating as empty`)
+      } else {
+        console.warn(`[plugin-registry] failed to parse disabled.json, treating as empty:`, detail)
       }
-      // 条目形状校验与 InstalledStore.loadDisabled 同款（逐条，不连坐）：非对象 /
-      // 缺 reason / 缺 disabledAt 的条目按损坏丢弃该键——禁用集只含两视图共识条目。
-      const ids = new Set<string>()
-      for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-        if (
-          typeof value === 'object' &&
-          value !== null &&
-          typeof (value as { reason?: unknown }).reason === 'string' &&
-          typeof (value as { disabledAt?: unknown }).disabledAt === 'string'
-        ) {
-          ids.add(key)
-        }
-      }
-      return ids
-    } catch (err) {
-      if (!this.warnedDisabledRead) {
-        this.warnedDisabledRead = true
-        console.warn(`[plugin-registry] failed to parse disabled.json, treating as empty:`, err)
-      }
-      return new Set()
     }
+    return new Set(Object.keys(entries))
   }
 
   /**

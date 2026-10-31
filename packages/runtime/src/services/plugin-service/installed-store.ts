@@ -47,9 +47,69 @@ export interface DisabledPluginEntry { // oe-exempt:20261031:framework:禁用标
 
 export type DisabledPluginsFile = Record<string, DisabledPluginEntry>
 
+// ── 写读共享原语（branch-review dmg-r1-3 单源收敛）─────────────────────────
+
+/** 禁用条目形状谓词：非对象 / 缺 reason / 缺 disabledAt → false（条目级容错判据单源）。 */
+function isDisabledEntryShape(value: unknown): value is DisabledPluginEntry {
+  if (typeof value !== 'object' || value === null) return false
+  const entry = value as { reason?: unknown; disabledAt?: unknown }
+  return typeof entry.reason === 'string' && typeof entry.disabledAt === 'string'
+}
+
+/** disabled.json 原文解析结果：entries 恒有值（失败时为空表）；failure 标记失败种类供调用方 fail-visible。 */
+export interface DisabledFileParseResult {
+  entries: DisabledPluginsFile
+  /** 解析失败种类；undefined = 解析成功。'shape' = 顶层非对象（含数组/null）；'parse' = JSON 损坏。 */
+  failure?: 'shape' | 'parse'
+  /** 'parse' 失败的原始错误（warn 附带用）。 */
+  detail?: unknown
+}
+
+/**
+ * disabled.json 原文解析（写读两侧共用单源）：文件级容错（JSON 损坏 / 顶层非对象 →
+ * 空表）+ 条目级容错（形状不合丢弃该条，不连坐其余条目）。文件读取失败（缺失/权限）
+ * 不进本函数——两侧同语义静默空表（合法态）。warn 策略（日志前缀 / 是否去重）归
+ * 调用方：写侧 loadDisabled 每次留痕，读侧 loadDisabledIds 实例生命周期去重。
+ */
+export function parseDisabledFile(raw: string): DisabledFileParseResult {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch (err) {
+    return { entries: {}, failure: 'parse', detail: err }
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { entries: {}, failure: 'shape' }
+  }
+  const entries: DisabledPluginsFile = {}
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (isDisabledEntryShape(value)) entries[key] = { reason: value.reason, disabledAt: value.disabledAt }
+  }
+  return { entries }
+}
+
+// ── 登记写链串行化（branch-review dmg-r1-4）────────────────────────────────
+
+/**
+ * 登记写链（模块级 promise 链）：全部「读改写」写点（recordDisabled / clearDisabled /
+ * recordUninstalled）经同一链排队——前一写点完成后才进下一写点的 load→改→write，
+ * 封住 recordUninstalled 双文件四步写 await 交错窗口内并发写点的覆盖丢失。模块级
+ * （非实例级）使跨实例指向同目录的写点同样串行。链只保序不吞错：任务失败照常上抛
+ * 调用方（既有 catch 呈报语义不变），且不阻断后续排队写点。
+ */
+let storeWriteChain: Promise<unknown> = Promise.resolve()
+
+function enqueueStoreWrite<T>(task: () => Promise<T>): Promise<T> {
+  const run = storeWriteChain.then(task, task)
+  storeWriteChain = run.catch(() => {})
+  return run
+}
+
 const INSTALLED_FILE = 'installed.json'
-/** 路径公式与 plugin-registry.loadDisabledIds（join(pluginsConfigDir, 'plugins', ...)）两处实装——本常量模块私有未导出，改名双侧同步；plugin-disabled-registry.test.ts 同时测读写两半兜底。 */
-const DISABLED_FILE = 'disabled.json'
+/** disabled.json 文件名（路径公式单源，branch-review dmg-r1-3 收敛）：InstalledStore 写侧
+ *  与 PluginRegistry 读侧（loadDisabledIds）均 import 本常量拼装同一文件路径；
+ *  plugin-disabled-registry.test.ts 对账测试保留为写读两半回归锁。 */
+export const DISABLED_FILE = 'disabled.json'
 /** 登记文件序列化缩进（人读 diff 友好；纯展示选择非逻辑参数） */
 const JSON_INDENT = 2
 
@@ -68,8 +128,7 @@ export class InstalledStore {
     return this.filePath
   }
 
-  /** disabled.json 绝对路径（测试断言用；registry 扫描不经此 getter——路径公式两处
-   *  独立实装，见 plugin-registry loadDisabledIds 头注与 :51 单源注释）。 */
+  /** disabled.json 绝对路径（测试断言用；registry 读侧直接 import DISABLED_FILE 拼装同一路径公式——单源见常量注释）。 */
   get disabledPath(): string {
     return this.disabledFilePath
   }
@@ -104,7 +163,8 @@ export class InstalledStore {
     }
   }
 
-  /** 读禁用标记清单；容错语义与 load 对称（缺失/损坏 → 空表，warn 留痕不抛）。 */
+  /** 读禁用标记清单；容错语义与 load 对称（缺失/损坏 → 空表，warn 留痕不抛）。
+   *  解析容错经 parseDisabledFile 单源（plugin-registry 读侧共用，dmg-r1-3）。 */
   async loadDisabled(): Promise<DisabledPluginsFile> {
     let raw: string
     try {
@@ -112,30 +172,13 @@ export class InstalledStore {
     } catch {
       return {}
     }
-    try {
-      const parsed: unknown = JSON.parse(raw)
-      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        console.warn(`[installed-store] ${DISABLED_FILE} has unexpected shape, treating as empty`)
-        return {}
-      }
-      const result: DisabledPluginsFile = {}
-      for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-        const reason =
-          typeof value === 'object' && value !== null && typeof (value as { reason?: unknown }).reason === 'string'
-            ? (value as { reason: string }).reason
-            : undefined
-        const disabledAt =
-          typeof value === 'object' && value !== null && typeof (value as { disabledAt?: unknown }).disabledAt === 'string'
-            ? (value as { disabledAt: string }).disabledAt
-            : undefined
-        // 条目形状不合按损坏丢弃该条（与 load 的逐条容错同款，不连坐其余条目）
-        if (reason !== undefined && disabledAt !== undefined) result[key] = { reason, disabledAt }
-      }
-      return result
-    } catch (err) {
-      console.warn(`[installed-store] failed to parse ${DISABLED_FILE}, treating as empty:`, err)
-      return {}
+    const { entries, failure, detail } = parseDisabledFile(raw)
+    if (failure === 'shape') {
+      console.warn(`[installed-store] ${DISABLED_FILE} has unexpected shape, treating as empty`)
+    } else if (failure === 'parse') {
+      console.warn(`[installed-store] failed to parse ${DISABLED_FILE}, treating as empty:`, detail)
     }
+    return entries
   }
 
   /** 登记安装时间（installedAt = 当前时刻 ISO 串）。幂等覆盖。 */
@@ -147,20 +190,24 @@ export class InstalledStore {
 
   /**
    * 写禁用标记（U7/D2：「[禁用并重试]」动作的落盘半边；disabledAt 缺省当前时刻）。
-   * 幂等覆盖（重复禁用刷新原因与时间）。
+   * 幂等覆盖（重复禁用刷新原因与时间）。经登记写链排队（dmg-r1-4）。
    */
-  async recordDisabled(pluginId: string, reason: string, disabledAt: string = new Date().toISOString()): Promise<void> {
-    const all = await this.loadDisabled()
-    all[pluginId] = { reason, disabledAt }
-    await this.write(this.disabledFilePath, all)
+  recordDisabled(pluginId: string, reason: string, disabledAt: string = new Date().toISOString()): Promise<void> {
+    return enqueueStoreWrite(async () => {
+      const all = await this.loadDisabled()
+      all[pluginId] = { reason, disabledAt }
+      await this.write(this.disabledFilePath, all)
+    })
   }
 
-  /** 清除禁用标记（插件管理页「重新启用」动作的落盘半边）。条目不存在时 no-op。 */
-  async clearDisabled(pluginId: string): Promise<void> {
-    const all = await this.loadDisabled()
-    if (!(pluginId in all)) return
-    delete all[pluginId]
-    await this.write(this.disabledFilePath, all)
+  /** 清除禁用标记（插件管理页「重新启用」动作的落盘半边）。条目不存在时 no-op。经登记写链排队（dmg-r1-4）。 */
+  clearDisabled(pluginId: string): Promise<void> {
+    return enqueueStoreWrite(async () => {
+      const all = await this.loadDisabled()
+      if (!(pluginId in all)) return
+      delete all[pluginId]
+      await this.write(this.disabledFilePath, all)
+    })
   }
 
   /**
@@ -169,19 +216,23 @@ export class InstalledStore {
    * [U7/D2] 同步清除该 pluginId 的禁用标记条目——与卸载清 installed.json 登记对称
    * 的单点实装（卸载链路 recordUninstalled 调用即同时清两份登记；「禁用 → 卸载 →
    * 重装同 id」路径上重装即正常装载）。清除失败不吞：与登记写失败同路上抛，由
-   * 卸载调用方 catch 呈报（既有 recordUninstalled 的 catch 形态不变）。
+   * 卸载调用方 catch 呈报（既有 recordUninstalled 的 catch 形态不变）。双文件
+   * 四步写整体经登记写链排队（dmg-r1-4）——四步的 await 交错窗口不再暴露给
+   * 并发写点，无覆盖丢失。
    */
-  async recordUninstalled(pluginId: string): Promise<void> {
-    const all = await this.load()
-    if (pluginId in all) {
-      delete all[pluginId]
-      await this.write(this.filePath, all)
-    }
-    const disabled = await this.loadDisabled()
-    if (pluginId in disabled) {
-      delete disabled[pluginId]
-      await this.write(this.disabledFilePath, disabled)
-    }
+  recordUninstalled(pluginId: string): Promise<void> {
+    return enqueueStoreWrite(async () => {
+      const all = await this.load()
+      if (pluginId in all) {
+        delete all[pluginId]
+        await this.write(this.filePath, all)
+      }
+      const disabled = await this.loadDisabled()
+      if (pluginId in disabled) {
+        delete disabled[pluginId]
+        await this.write(this.disabledFilePath, disabled)
+      }
+    })
   }
 
   private async write(filePath: string, all: InstalledPluginsFile | DisabledPluginsFile): Promise<void> {
