@@ -178,7 +178,7 @@ export class FileMessageHandler {
 
   /**
    * 统一 file 错误回复（D10/P0-B）。
-   * - FileError → 取其 code（session_not_found / permission_denied / out_of_cwd / timeout / not_found / read_failed）
+   * - FileError → 取其 code（session_not_found / btw_line_inactive / permission_denied / out_of_cwd / not_found / read_failed）
    * - 其它 → 'file_failed' + toErrorMessage
    * 注意：not_implemented 不走此方法（file.write 骨架在上游 catch 转结构化 result）。
    * sessionId 为空串时省略 details（保持既有行为）。
