@@ -66,21 +66,42 @@ export function listTopModules(sharedSrcDir) {
     .sort();
 }
 
+/**
+ * import 说明符提取形态（词法近似扫描，只认引号字面量，与 from 形态同等限制）：
+ *   - 静态：`import x from "spec"` / `export x from "spec"`
+ *   - side-effect：`import "spec"`——side-effect import 语法上只能出现在模块顶层
+ *     语句位置，锚定行首，避免误伤注释里的用法示例文本（如「import '@taiji/…'」）
+ *   - 动态：`import("spec")`（含 `import ("spec")` 空格变体；表达式位置不可锚行首）
+ * 三形态在合法源码上互不重叠，同一 spec 不会重复计数。
+ */
+const IMPORT_SPEC_PATTERNS = [
+  /from\s+['"]([^'"]+)['"]/g,
+  /^\s*import\s*['"]([^'"]+)['"]/gm,
+  /\bimport\s*\(\s*['"]([^'"]+)['"]/g,
+];
+
+function violationMessage(rel, spec) {
+  if (/^@taiji\//.test(spec)) {
+    return `${rel}: import workspace 包 ${spec}（shared 必须保持最底层，规则 2）`;
+  }
+  if (/^\.\.\/\.\.\//.test(spec)) {
+    return `${rel}: 跨包相对 import ${spec}（绕过依赖图，规则 2）`;
+  }
+  const builtin = spec.startsWith("node:") ? spec : "";
+  if (builtin && BANNED_BUILTINS.includes(builtin)) {
+    return `${rel}: 禁用内置 import ${builtin}（shared 纯模块形态，规则 3）`;
+  }
+  return null;
+}
+
 /** 检查 A+B：依赖方向与内置禁令（输入 = 相对路径 → 源码文本 的数组，排除测试文件）。 */
 export function scanSourceViolations(sources) {
   const violations = [];
   for (const [rel, src] of sources) {
-    for (const m of src.matchAll(/from\s+['"]([^'"]+)['"]/g)) {
-      const spec = m[1];
-      if (/^@taiji\//.test(spec)) {
-        violations.push(`${rel}: import workspace 包 ${spec}（shared 必须保持最底层，规则 2）`);
-      } else if (/^\.\.\/\.\.\//.test(spec)) {
-        violations.push(`${rel}: 跨包相对 import ${spec}（绕过依赖图，规则 2）`);
-      } else {
-        const builtin = spec.startsWith("node:") ? spec : "";
-        if (builtin && BANNED_BUILTINS.includes(builtin)) {
-          violations.push(`${rel}: 禁用内置 import ${builtin}（shared 纯模块形态，规则 3）`);
-        }
+    for (const pattern of IMPORT_SPEC_PATTERNS) {
+      for (const m of src.matchAll(pattern)) {
+        const v = violationMessage(rel, m[1]);
+        if (v) violations.push(v);
       }
     }
   }

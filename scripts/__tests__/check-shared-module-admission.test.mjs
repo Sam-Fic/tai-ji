@@ -44,6 +44,21 @@ describe('scanSourceViolations：依赖方向与 IO 禁令', () => {
     expect(BANNED_BUILTINS).toContain('node:child_process')
   })
 
+  it('side-effect 与动态 import 形态同判据检出，纯模块放行', () => {
+    const vs = scanSourceViolations([
+      ['d.ts', `import 'node:fs'`],
+      ['e.ts', `await import('node:child_process')`],
+      ['f.ts', `const m = import("node:http")`],
+      ['g.ts', `import('@taiji/shared/thing')`],
+      ['ok3.ts', `import 'node:path'`],
+    ])
+    expect(vs.some((v) => v.includes('d.ts') && v.includes('node:fs'))).toBe(true)
+    expect(vs.some((v) => v.includes('e.ts') && v.includes('node:child_process'))).toBe(true)
+    expect(vs.some((v) => v.includes('f.ts') && v.includes('node:http'))).toBe(true)
+    expect(vs.some((v) => v.includes('g.ts') && v.includes('@taiji/'))).toBe(true)
+    expect(vs.some((v) => v.includes('ok3.ts'))).toBe(false)
+  })
+
   it('干净源码零违规', () => {
     expect(scanSourceViolations([['clean.ts', `export const a = 1`]])).toEqual([])
   })
