@@ -16,7 +16,7 @@
 |---|---|---|---|
 | ext-guards | `src/index.ts` | 新增 `guardStaleCtx` / `STALE_CTX_MARKER` | —（检查本体） |
 | smart-context | `src/tool.ts` | `compact_context` 的 `onComplete`/`onError` 两处（E1 实锤崩溃点，tool.ts 原 :183/:187） | isCtxStale 注入 + onStale=debugLog |
-| smart-context | `src/index.ts` | `agent_settled` 阈值提醒、`model_select` 跨界通知、`model_select` downshift 三处 `pi.sendUserMessage`（原 :127/:144/:157） | isCtxStale（模块级代数计数器，同 scheduler G1 范式）+ onStale=debugLog |
+| smart-context | `src/index.ts` | `agent_settled` 阈值提醒、`model_select` 跨界通知、`model_select` downshift 三处 `pi.sendUserMessage`（原 :127/:144/:157） | isCtxStale（模块级代数计数器，同 scheduler 范式）+ onStale=debugLog |
 | plan | `src/execution-notice.ts`（原 compact.ts） | 已退役：原接入点 src/compact.ts :218-229 两处回调已随 D-B1-6 形态砍除（文件改名 execution-notice.ts，回调通道不存在，无接入范围；全包 `guardStaleCtx` 零调用） | — |
 | scheduler | `src/runtime.ts` | `startScheduler` 的 tick 回调整体迁移到 `guardStaleCtx`（三件套语义等价，对照见 §5） | isCtxStale + onStale=retireStaleTimer |
 | structured-output | `src/loop-gate.ts` | terminal teardown 的 `ctx.abort()`/`ctx.shutdown()` | onStale=stderr 直出（该包日志惯例） |
@@ -34,7 +34,7 @@
 |---|---|---|---|
 | **smart-context** | tool.ts compact 两回调（E1 实锤）；index.ts 三处事件回调内 `pi.sendUserMessage` | **接入** | E1 实锤崩溃点（9/3 pi-crash log 堆栈 `assertActive → sendUserMessage`）；三处事件回调为 D1「所有 fire-and-forget 异步回调接入」判定对象（价值见 §1 崩溃侧分层） |
 | **plan** | 原接入点 compact.ts :218-229 两处回调（已随 D-B1-6 形态砍除——文件改名 execution-notice.ts，回调通道不存在，无接入面，全包 `guardStaleCtx` 零调用）；现存 execution-notice.ts 完成投递（`pi.sendMessage`，经 tool.ts :1235 `handlePlanComplete` 同步调用）；command.ts /plan command handler | **退役**（原 compact 两处接入）；**排除**（完成投递、command handler） | 原接入与 E1 同构（无人接的 Promise 链），形态已删；现存投递在 plan 工具 execute 的同步链（用户批准 plan 的当次工具调用内执行），执行时 session 活跃，无跨 session 存活窗口；command handler 是用户主动触发的同步上下文，同理由 |
-| **scheduler** | runtime.ts tick（setInterval 回调内 `onAfterTick → ctx.ui` / dispatch → `pi.sendMessage`） | **迁移**（共享检查替换原地实现） | 既有已验证范式（G1+F2+retireStaleTimer），迁移语义等价对照见 §5 |
+| **scheduler** | runtime.ts tick（setInterval 回调内 `onAfterTick → ctx.ui` / dispatch → `pi.sendMessage`） | **迁移**（共享检查替换原地实现） | 既有已验证范式（代际前置检查 + catch 分诊 + retireStaleTimer 自停），迁移语义等价对照见 §5 |
 | **structured-output** | loop-gate.ts terminal 的 `ctx.abort()`/`ctx.shutdown()`（无防御）；workflow-hook.ts :249 `pi.sendUserMessage`（try/catch 有痕降级）；loop-gate forceExit setTimeout（只 `process.stderr.write` + `process.exit`） | **接入**（loop-gate terminal）；**排除**（workflow-hook、forceExit timer） | abort/shutdown 在 assertActive 范围且无任何 try/catch（async handler 内 throw = 无人接 rejection）；workflow-hook 的 turn_end 已有 try/catch + writeSteerFailedLog（无崩溃范围；检查「非 stale 上抛」语义在此处会把有痕降级恶化为崩溃，不接入是行为保持）；forceExit timer 不触碰 pi/ctx |
 | **pending-notifications** | events.on 回调内 `pi.appendEntry`（经 safeAppendEntry） | **排除** | 包内 `safeAppendEntry` 已 try/catch 静默兜底（注释明言 stale 场景）；events.on 订阅经 pi tracked subscription 在 session 替换时自动退订（W4 注释实锚 loader.js:338-341）——双防线已覆盖，无无人接抛错路径 |
 | **goal** | src/adapters/command-adapter.ts :381（/goal command handler 内 followUp）；src/adapters/event-handlers/agent-end.ts :179 `pi.appendEntry`（agent_end handler 内） | **排除**（普查实证后无需接入） | command handler = 同步上下文（同 plan command 排除理由）；agent_end handler 在 pi `emit()` 的 try/catch 内（§1 实证）——stale throw 被 pi 捕获转 emitError，非崩溃范围 |
@@ -75,8 +75,8 @@
 
 | 三件套 | 迁移前（原地实现） | 迁移后（guardStaleCtx） | 等价性 |
 |---|---|---|---|
-| G1 前置检查 | interval 回调首行 `if (this.isCtxStale?.()) { this.retireStaleTimer(); return }` | 检查前置检查 `isCtxStale` 命中 → `onStale`（=retireStaleTimer）且 tickScheduler 不执行 | 等价：retire 调用点从前置分支移入检查 onStale；tick 不执行；`tick stopped` warn 口径不变（runtime.test.ts「U1: stale 错误 → warn "tick stopped" + timer 自停」「代际翻转后泄漏 timer 在下个 tick 前置检查自停」测试锚定，迁移后复跑通过） |
-| F2 catch 分诊 | `void this.tickScheduler().catch(err => this.isCtxStale?.() \|\| msg.includes(STALE_CTX_MARKER) ? retireStaleTimer() : warn('tick error'))` | 检查对 async fn 的 rejection 用同一谓词分诊：stale → onStale；非 stale → 原样 reject → 外层 `.catch` warn `'tick error'`（`toErrorMessage` 与原 `err instanceof Error ? .message : String()` 同实现） | 等价：分诊谓词字面一致（代际主判 \|\| 文案兜底）；非 stale 的 warn 调用点从检查内移至检查外 .catch，文案与「不终止调度」语义不变（runtime.test.ts「U2: 非 stale 错误 → warn "tick error" 且调度继续」「isCtxStale 注入但返回 false + 非 stale 错误 → warn "tick error" 且调度继续」「isCtxStale 返回 false 但错误文案含 stale 片段 → 文案兜底仍自停」锚定） |
+| 代际前置检查 | interval 回调首行 `if (this.isCtxStale?.()) { this.retireStaleTimer(); return }` | 检查前置检查 `isCtxStale` 命中 → `onStale`（=retireStaleTimer）且 tickScheduler 不执行 | 等价：retire 调用点从前置分支移入检查 onStale；tick 不执行；`tick stopped` warn 口径不变（runtime.test.ts「U1: stale 错误 → warn "tick stopped" + timer 自停」「代际翻转后泄漏 timer 在下个 tick 前置检查自停」测试锚定，迁移后复跑通过） |
+| catch 分诊 | `void this.tickScheduler().catch(err => this.isCtxStale?.() \|\| msg.includes(STALE_CTX_MARKER) ? retireStaleTimer() : warn('tick error'))` | 检查对 async fn 的 rejection 用同一谓词分诊：stale → onStale；非 stale → 原样 reject → 外层 `.catch` warn `'tick error'`（`toErrorMessage` 与原 `err instanceof Error ? .message : String()` 同实现） | 等价：分诊谓词字面一致（代际主判 \|\| 文案兜底）；非 stale 的 warn 调用点从检查内移至检查外 .catch，文案与「不终止调度」语义不变（runtime.test.ts「U2: 非 stale 错误 → warn "tick error" 且调度继续」「isCtxStale 注入但返回 false + 非 stale 错误 → warn "tick error" 且调度继续」「isCtxStale 返回 false 但错误文案含 stale 片段 → 文案兜底仍自停」锚定） |
 | retireStaleTimer 自停 | 私有方法：warn `tick stopped: stale extension ctx (session replaced); timer self-retired` + 幂等 `stopScheduler()` | 未改动 | 完全一致 |
 | STALE_CTX_MARKER 常量 | 本模块字符串常量 | 改为 import ext-guards 的共享常量（同一字面量） | 值不变；文案稳定性责任上移到 PS-30 门禁 |
 
