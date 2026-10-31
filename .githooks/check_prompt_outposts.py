@@ -115,10 +115,12 @@ OUTPOST_CALLSITES = [
         "index.ts",
         "await client.prompt(reasonText, undefined, 'steer')",
         "exempt",
-        "[pi-stall-detection U4] 判死自动恢复的 steer 注入原因提示：reasonText 为机器生成的"
-        "诊断文案（判定依据/静默时长/在途阶段定位，模板拼接自 StallMatrix 裁决常量，非用户"
-        "内容）——SkillInjector 的技能/命令注入语义不适用于机器诊断注入；出站点唯一"
-        "（onSilentAbort 自动处置链内，D3）",
+        "[pi-stall-detection U2+U4] 判死自动恢复 steer 注入原因提示（出站点唯一，两链共用）："
+        "U2/D2② 第 1 层探测判死链（onSilentAbort→handleStallDetermination）恢复链无 "
+        "reasonHint，回落固定常量 STALL_REASON_HINT；U4/D3 第 2 层静默判死链"
+        "（stallMatrix.onJudge→handleSilenceJudgeDetermination）注入 composeStallJudgeHintText"
+        " 模板（判定依据/静默时长/在途阶段定位）——均机器生成诊断文案，非用户内容，"
+        "SkillInjector 的技能/命令注入语义不适用于机器诊断注入",
     ),
     (
         "services/session/session-service.ts",
