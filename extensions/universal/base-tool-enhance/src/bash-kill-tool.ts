@@ -1,5 +1,6 @@
 /**
- * bash_kill 工具（D9，§3.5「bash_kill 终态收尾的单点归属」+ 跨进程边界段）。
+ * bash_kill 工具（D9：独立小工具，与 bash_output 权限语义分离；终态收尾单点归属
+ * 与跨进程 kill 边界由本文件头注释直接承载，见下）。
  *
  * 职责边界：只负责杀进程树 + kill 前把单例表与 registry **两侧**标 killing intent
  * （查询结果立即可见——kill 返回后 bash_output 即显示 killing，无「已 kill 仍 running」
@@ -8,12 +9,12 @@
  * turn 内等结果，再发 steer 通知是双发噪音——按 notify.ts 的单点归属规则，kill
  * 路径不 sendMessage，reason:"killed" 只 emit unregister，终态由 handleTaskExit 收尾）。
  *
- * kill 目标归属（§3.5）：**限定本进程单例表条目**；registry 回落限定终态条目
+ * kill 目标归属：**限定本进程单例表条目**；registry 回落限定终态条目
  * （exited/orphaned → already exited）——registry 中他进程的 running/killing 条目
  * **不可 kill**（跨进程边界：处置权归发起进程；孤儿收殓已下沉 taiji runtime，
  * u-bte-remove 后由 background-task-reaper 按 ownerPiPid 属主判定处置）。
  * kill 前校验 pid 判活 + start time 匹配（防陈旧条目遇 pid 复用误杀无关进程，
- * 宁不杀勿误杀，§3.6 收殓侧同原则）。
+ * 宁不杀勿误杀，收殓侧同原则）。
  */
 
 import type { AgentToolResult, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
@@ -71,7 +72,7 @@ export function createBashKillToolDefinition() {
 			ctx: ExtensionContext,
 		): Promise<AgentToolResult<unknown>> {
 			const sessionId = ctx.sessionManager.getSessionId();
-			// 查找顺序（§3.5 kill 目标归属）：单例表（本进程，kill 权威目标）→ registry
+			// 查找顺序（kill 目标归属，见文件头）：单例表（本进程，kill 权威目标）→ registry
 			// 回落（限定终态——他进程 running/killing 条目不可 kill）
 			const fromStore = getAllTasks().find((t) => t.taskId === args.task_id);
 			if (fromStore === undefined) {
@@ -108,7 +109,7 @@ export function createBashKillToolDefinition() {
 				);
 			}
 
-			// pid 复用防御（§3.6 宁不杀勿误杀）：
+			// pid 复用防御（宁不杀勿误杀）：
 			//  - pid 已死 → already exited 风格返回，不发 kill（终态由 exit 边沿收尾）
 			//  - 有 pidStartTime 字段 → 校验实际进程 start time 匹配；不匹配/读不到 =
 			//    复用嫌疑，拒绝 kill 并说明
