@@ -1036,6 +1036,12 @@ jobs:
   # L2/L2.5/L3 真实进程/真机层禁入 CI（AGENTS.md e2e 执行准则，TAIJI_SKIP_REAL_PI=1
   # 与其余 test job 同口径）。fetch-depth: 0 取全历史供 git diff <base>...HEAD 判定。
   # 无命中（清单空）时秒级通过。
+  # CI 可执行性单源 = e2e-map 条目自身的 ci 字段：消费面内 ubuntu 无法承载的 rule
+  #（需桌面环境 / 依赖被 .gitignore 忽略的构建产物）在该条目登记
+  # ci: {runnable: false, skipReason}，执行体只读该字段、跳过时打印理由，不另维护
+  # 白名单——新增需跳过的 rule 改自己的登记行即可。执行体把失败分桶为「用例失败」
+  #（命令已执行并返回非零）与「无法执行」（没跑起来 / 未返回退出码），后者先修
+  # 执行环境而不是当作用例结论。
   # 注：docs/** 在 on.paths-ignore 内——e2e-map.json 单独变更不触发任何 CI job（含本
   # job 与 invariants 检查），清单变更的消费链与 run 字段可执行性只有 pre-commit
   # validate-e2e-map + --staged 结构校验兜底（已知边界，性能取舍；run 引用文件存在性
@@ -1055,6 +1061,12 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+
+      # 消费前校验登记表形态：ci 字段是执行/跳过的唯一判据，非法形态必须 fail-fast，
+      # 不能退化成「非法 → 落到缺省可跑 → 假红」或「非法 → 静默跳过」。零依赖脚本，
+      # 放在安装依赖之前以便快速失败。
+      - name: Validate e2e-map (ci field contract)
+        run: node scripts/validate-e2e-map.mjs
 
       - name: Install dependencies
         env:

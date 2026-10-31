@@ -10,6 +10,7 @@
       "assets": "数组。{kind: spec|script|probe|harness, ref: 仓库相对路径}。ref 必须磁盘真实存在（scripts/validate-e2e-map.mjs 强校验）",
       "trigger": "单值：on-diff（diff 命中 scope 时跑）| always（每次固定跑，不看 diff）| on-release（发布管线跑，当前无条目，保留枚举位）| on-pi-bump（pi 版本升级时重验）。一条 rule 一个主触发；同一 asset 需要多个触发范围时拆多条 rule（assets 允许重复引用），不引入 trigger 数组——范例：E2E-EQUIV-01（on-diff）与 E2E-EQUIV-02/03/04（on-pi-bump）为同族资产的触发范围拆分",
       "serial": "true = 必须空载串行（真实进程/真实 LLM 层：跨包跨套件并发会饱和 CPU 或使真实 LLM 轮次越过事件预算）；false = 可并发、可进 CI 常驻环节",
+      "ci": "可选。on-diff × L1 消费面（scripts/run-affected-e2e-ci.mjs）内该 rule 能否在 ubuntu CI 承载：缺省 = 可跑；{ runnable: false, skipReason } = 显式登记跳过与理由（如需桌面环境 / 依赖被 .gitignore 忽略的构建产物）。消费侧只读本字段，不另维护白名单；scripts/validate-e2e-map.mjs 强校验 runnable=false 必带非空 skipReason",
       "run": "可直接执行的运行命令（仓库根为 cwd）",
       "owner": "维护归属（包/目录路径）",
       "authority": "权威文档锚点（仓库相对路径，可含 #锚点）",
@@ -18,7 +19,8 @@
     "check": "--check 门禁语义：coverage(rule, file) = scope glob 匹配 ∪ asset ref 精等；watched roots = 全部 scope 的 <prefix>/ 目录 ∪ 资产族目录（同一目录聚合 ≥2 个 asset 才整体看护——资产族之家；孤资产落在 scripts/ 等共享目录时不产生目录级看护根，防通用目录被泛化）。diff 文件落在任一 watched root 下却不被任何 rule coverage → exit 1（防漏登记：新增 e2e 资产或 watched 触发范围内的新域必须显式登记）；watched roots 之外的文件不参与该门",
     "consumers": [
       "scripts/select-affected-e2e.mjs（--base 按 diff 选受影响 rules + 可运行命令 / --release 选 on-release + on-pi-bump 面 / --layer 过滤 / --check 防漏登记门禁）",
-      "scripts/validate-e2e-map.mjs（结构校验 + asset 磁盘存在强校验；pre-commit 在本文件或两脚本及其单测变更时触发）"
+      "scripts/validate-e2e-map.mjs（结构校验 + asset 磁盘存在强校验 + ci 字段形态校验；pre-commit 在本文件或两脚本及其单测变更时触发）",
+      "scripts/run-affected-e2e-ci.mjs（CI 执行消费者：消费 select-affected-e2e --json 的 on-diff × L1 面，按本表条目的 ci 字段执行 / 登记跳过）"
     ]
   },
   "rules": [
@@ -2555,6 +2557,10 @@
       ],
       "trigger": "on-diff",
       "serial": false,
+      "ci": {
+        "runnable": false,
+        "skipReason": "run 里的 check-core-dist-gate 只读 packages/subagent-core/dist（.gitignore 忽略，干净 checkout 无产物；dist bundle 缺失即 FAIL，脚本只读不自行 build）——运行时机在 subagent-core build 之后。本 rule 另两段在 CI 已有固定承载：check-rfl-parity = invariants job 的 rfl-parity 步骤，check-core-dist-gate 单测 = test-extensions job 的 scripts-guards 步骤"
+      },
       "run": "node scripts/check-rfl-parity.mjs && node scripts/check-core-dist-gate.mjs && npx vitest run scripts/__tests__/check-core-dist-gate.test.mjs",
       "owner": "packages/subagent-core",
       "authority": "docs/adr/decisions.md",
@@ -2660,6 +2666,10 @@
       ],
       "trigger": "on-diff",
       "serial": false,
+      "ci": {
+        "runnable": false,
+        "skipReason": "verify-staged-extensions 要求 staged 产物（默认 apps/electron/resources/extensions/@zhushanwen，apps/electron/resources/ 被 .gitignore 忽略，干净 checkout 不存在，缺目录即 exit 1）——真实运行形态 = apps/electron build:pre 与 build.yml 调用的 scripts/postbuild-validate.sh 打包前置门"
+      },
       "run": "node scripts/verify-staged-extensions.mjs",
       "owner": "scripts/",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
@@ -4526,6 +4536,10 @@
       "trigger": "on-diff",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
       "serial": false,
+      "ci": {
+        "runnable": false,
+        "skipReason": "playwright electron project 需桌面环境（mac runner / xvfb），ubuntu 消费 job 无法承载——归 e2e-behavior 同族 runner 或本地空载串行跑"
+      },
       "run": "npx playwright test e2e/spawn-isolation-guard.spec.ts --project=electron",
       "owner": "e2e"
     },

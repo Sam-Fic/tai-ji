@@ -7,8 +7,10 @@
  *   - --release 输出 on-release / on-pi-bump 面（发布与 pi 升级必跑清单）
  *   - --check 门禁：diff 文件落在 watched root 下却不被任何 rule 覆盖 → exit 1（防漏登记）
  *   - --json 机器可读输出（CI 执行消费者 scripts/run-affected-e2e-ci.mjs 消费）：
- *     JSON 数组 [{id, layer, trigger, serial, run, summary}]，与人读 markdown 互斥
- *     （--json 时只输出 JSON 到 stdout，日志类信息全走 stderr）
+ *     JSON 数组 [{id, layer, trigger, serial, run, summary, ci?}]，与人读 markdown
+ *     互斥（--json 时只输出 JSON 到 stdout，日志类信息全走 stderr）。ci 为可选
+ *     字段，只在 rule 登记了 CI 可执行性（{runnable, skipReason}）时透传——CI
+ *     消费侧据此决定执行还是登记跳过，不另维护白名单。
  *
  * glob 匹配与 scripts/select-constraints.mjs 同款零依赖语义（<prefix>/** → startsWith，
  * 精确路径 → 全等），不引 minimatch——两调度器保持一套匹配语义。
@@ -106,15 +108,16 @@ export function releaseRules(map, { layer } = {}) {
   return map.rules.filter((rule) => RELEASE_TRIGGERS.includes(rule.trigger) && (!layer || rule.layer === layer));
 }
 
-/** --json 输出载荷（CI 执行消费者契约：字段子集 + 顺序稳定）。 */
+/** --json 输出载荷（CI 执行消费者契约：字段子集 + 顺序稳定；ci 仅在 rule 登记时透传）。 */
 export function toJsonPayload(rules) {
-  return rules.map(({ id, layer, trigger, serial, run, summary }) => ({
+  return rules.map(({ id, layer, trigger, serial, run, summary, ci }) => ({
     id,
     layer,
     trigger,
     serial,
     run,
     summary,
+    ...(ci ? { ci } : {}),
   }));
 }
 

@@ -245,4 +245,12 @@ describe('toJsonPayload：--json 消费者契约', () => {
     expect(Object.keys(payload[0])).toEqual(['id', 'layer', 'trigger', 'serial', 'run', 'summary'])
     expect(payload[0].run).toBe('echo fake-01')
   })
+
+  it('ci（CI 可执行性登记）只在 rule 登记时透传，未登记项不产生该键', () => {
+    const [plain, withCi] = fixtureMap().rules
+    withCi.ci = { runnable: false, skipReason: '需桌面环境' }
+    const payload = toJsonPayload([plain, withCi])
+    expect('ci' in payload[0]).toBe(false)
+    expect(payload[1].ci).toEqual({ runnable: false, skipReason: '需桌面环境' })
+  })
 })
