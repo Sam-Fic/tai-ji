@@ -4,6 +4,37 @@
 // 持久化载体 = 独立快照文件（形态与读写见同目录 store.ts）。本分组零 pi 依赖、
 // 零 node 依赖——纯类型 + 纯函数（store.ts 含 node:fs，走独立子出口）。
 
+// ── 快照文件判形契约（零 node 依赖，供包外消费方单源复用；读写实装在同目录 store.ts）──
+
+/** 快照 schema 版本（v2 = 任务库分离形态；v1 是 npm 0.1.1 旧 store，文件名不同不互读）。 */
+export const SCHEDULER_STORE_SCHEMA_VERSION = 2
+
+/**
+ * 快照文件形状（v2 任务库分离 schema；方案 B 设计原文未归档，裁决内容与背景
+ * 以 commit 73073b169 message 为溯源锚——同 store.ts 头注口径）。
+ * tasks 为内存任务集的全量快照：写入口统一剥离运行时标记（pending）并拷贝 history，
+ * 读方拿到的即干净的持久化形态。
+ */
+export type SchedulerStoreFile = {
+  schemaVersion: typeof SCHEDULER_STORE_SCHEMA_VERSION
+  /** owner session 的 JSONL 路径（冗余记录，供排障与对账；--no-session 时可缺省） */
+  sessionFile?: string
+  tasks: ScheduledTask[]
+}
+
+/**
+ * 快照文件形状校验（M0 契约期由 @taiji/shared/execution 的 scheduler 小域契约单源
+ * re-export，U6 存量导入消费）：顶层 schemaVersion=2 + tasks 数组且逐项为对象
+ * （字段级信任唯一写者，不逐字段校验）。
+ */
+export function isSchedulerStoreFile(data: unknown): data is SchedulerStoreFile {
+  if (!data || typeof data !== 'object') return false
+  const record = data as Record<string, unknown>
+  if (record.schemaVersion !== SCHEDULER_STORE_SCHEMA_VERSION) return false
+  if (!Array.isArray(record.tasks)) return false
+  return record.tasks.every(t => t !== null && typeof t === 'object')
+}
+
 // ── 调度规格 ──
 
 export type ScheduleSpec =

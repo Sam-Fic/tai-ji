@@ -14,6 +14,10 @@
       "types": "./src/paths.ts",
       "import": "./src/paths.ts"
     },
+    "./execution": {
+      "types": "./src/execution/index.ts",
+      "import": "./src/execution/index.ts"
+    },
     "./session-store-paths": {
       "types": "./src/session-store-paths.ts",
       "import": "./src/session-store-paths.ts"

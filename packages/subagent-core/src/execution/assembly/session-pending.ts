@@ -67,8 +67,9 @@ export interface ActivePendingResult {
  * 契约上 register/unregister 必带 data.id）。
  *
  * 剪枝：文件 stat/read 失败（含删除）即删 cursor（下次成功读时全量重建，增量只是
- * 优化不是事实源）；进程 close 后由调用方调 prunePendingCursor 显式回收。
- * 测试隔离用 clearPendingCursors()。
+ * 优化不是事实源）；prunePendingCursor 显式回收入口已无生产调用方（[D5 消亡登记]
+ * ——生产消费方随 inproc session-runner 删除清零，存活面 = 机制本体，M5 归宿见设计
+ * 「迁移与重写专项对账」旧能力映射 pending 行）。测试隔离用 clearPendingCursors()。
  */
 interface PendingReadCursor {
   offset: number;
@@ -88,11 +89,12 @@ export function clearPendingCursors(): void {
 }
 
 /**
- * [LC-6/T6②] 剪枝单个 sessionFile 的增量游标（子进程 close / session 终态化时调）。
+ * [LC-6/T6②] 剪枝单个 sessionFile 的增量游标。
  *
- * 进程死后其 sessionFile 不再有 agent_end 判定，cursor 条目（offset + 活跃后代 Map）
- * 只会滞留不再更新——进程退出路径调用本函数回收。文件删除侧的自动剪枝在
- * accumulatePendingEntries（stat/read 失败即删）。不存在时 no-op。
+ * [D5 消亡登记] 生产调用方随 inproc session-runner 删除清零（全仓 grep 生产代码零命中），
+ * 本函数仅为单测锁守的机制本体保留，M5 归宿见设计「迁移与重写专项对账」旧能力映射
+ * pending 行——不存在「进程 close / session 终态化」的生产调用链。文件删除侧的自动
+ * 剪枝在 accumulatePendingEntries（stat/read 失败即删）。不存在时 no-op。
  */
 export function prunePendingCursor(sessionFile: string): void {
   cursors.delete(sessionFile);

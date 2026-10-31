@@ -54,7 +54,7 @@ describe('renderSchedulerWidgetTui（D1 静态范围契约）', () => {
     const result = renderSchedulerWidgetTui(tasks, 'en-US')
     expect(result[0]).not.toContain('[!]')
     expect(result[0]).not.toContain('overdue')
-    // 反例锚点（设计 D1-a）：过期任务仍是最近任务（不用 now 过滤），显示其静态调度描述
+    // 反例锚点：过期任务仍是最近任务（不用 now 过滤），显示其静态调度描述
     expect(result[0]).toContain('test task')
     expect(result[0]).toContain('every 1m')
   })
@@ -217,8 +217,8 @@ describe('setSchedulerWidget', () => {
   })
 })
 
-// ── D1-b 任务集指纹（computeTasksFingerprint 纯函数契约）──
-// 维护不变量：指纹字段集 ⊇ widget 显示决定因素全集（scheduler widget 推送修正设计 D1-b）。
+// ── 任务集指纹（computeTasksFingerprint 纯函数契约）──
+// 维护不变量：指纹字段集 ⊇ widget 显示决定因素全集。
 // 显示侧 = f(id, name, schedule, kind, enabled, nextRunAt, locale)——以下用例逐字段锁定：
 // 变更任一显示决定因素必变指纹，字段不变必同指纹。
 

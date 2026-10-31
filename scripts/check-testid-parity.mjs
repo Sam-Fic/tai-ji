@@ -229,9 +229,9 @@ export function collectSpecFiles(root) {
 
 // ---------- main ----------
 
-// main 原把实现面/spec 引用面两份收集循环与结果渲染全内联在一个函数体，圈复杂度
-// 16 超门禁阈值（15）。拆为 collectExtracts（参数化收集壳，两侧共用）与
-// renderParityResult（结果渲染 + 退出码），行为逐字保持。
+// main 职责拆两段：collectExtracts = 实现面与 spec 引用面共用的参数化收集壳
+// （遍历 roots 逐文件跑 extract 并合并）；renderParityResult = 对账结果渲染与退出码
+// （豁免登记打印、悬空/stale 两类 FAIL 输出、进程退出码裁决）。
 
 /** [main 拆分] 遍历 roots 收集 testid 提取结果（实现面与 spec 引用面共用一壳）。
  *  extract(f, src) 返回 { exact, prefix }；返回 { extracts, fileCount }。 */

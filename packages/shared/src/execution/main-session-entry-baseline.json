@@ -1,0 +1,383 @@
+{
+  "_comment": "主 session JSONL 条目类型基线清单——M0-2 契约层机器可读数据文件，S2 diff 白名单的唯一载体。prose 文档（ADR / 测试策略等）只引用本文件路径、不复制清单内容；迁移期在校准探针下真实 diff 增量后只改本文件（清单更新即判定口径同步更新）。S2 diff 工具（scripts/s2-session-entry-diff.mjs）运行时直读本文件，禁止工具侧内嵌副本。coverage-file-gate-exempt: 纯数据契约单源，无 JS 可执行语义；消费方为 scripts/s2-session-entry-diff.mjs 运行时直读，清单结构合法性由 packages/shared/src/execution/__tests__/s2-diff-tool.test.ts 经 loadBaseline 全量校验，lcov 行覆盖对 JSON 数据文件不构成有效口径。",
+  "schemaVersion": 1,
+  "contractVersion": 1,
+  "purpose": "定义主 session / 子会话 JSONL 增量中允许与禁止的条目类型。判定口径：SPEC 分类 verdict=allow 且 allowIn 含当前 scope 的条目放行；verdict=forbid 或 scope 不在 allowIn 的条目为违规；无任何规则命中 = unknown（按 unknownPolicy 判违规）。",
+  "scopeSemantics": {
+    "main": "主 session JSONL（<dataDir>/agent/sessions/*.jsonl）增量。",
+    "child": "subagent / workflow 子会话 JSONL 增量（子进程 session 文件）。"
+  },
+  "categories": {
+    "conversation": "对话类条目：pi 原生消息 / 自定义消息 / 摘要 / 标签 / 用量 / 上下文编辑 / 会话元数据。对话链与投递日志是本域范围外，保留。",
+    "deliveryLog": "投递日志类条目：delivery-port 发件箱、投递确认、旧版 ledger/ack。通知交付的持久日志，保留。",
+    "extensionState": "扩展自有非执行域条目（goal / plan / smart-context / structured-output / 系统提示词 / 消息 id 映射等）与诊断日志（*:log、subagent:* 失败上报）。不属于本重写退役的执行生命周期写链，保留。",
+    "executionState": "执行域生命周期状态：v2 record / identity、workflow/subagent 类 pending、pi-scheduler 历史执行条目。迁移后主 session 与子会话增量中都应为零（M3 单波原子切换后写链退役）。"
+  },
+  "sources": [
+    {
+      "id": "pi-write-side",
+      "description": "pi 宿主写侧。pi 为黑盒上游（Bun 编译二进制），无法静态穷举；本清单登记 taiji 已建模/已知的条目类型（packages/shared/src/pi-entry.ts + runtime 会话文件读取点 + 生产会话实测）。出现未登记类型时先更新本清单再判定——防对合法条目误报违规。"
+    },
+    {
+      "id": "extension-append-entry",
+      "description": "各扩展 pi.appendEntry 写点。逐条 note 注明仓库相对来源文件与行号（行号随源码变动，排查时按文件复核）；sendMessage 的自定义消息（custom_message / message role custom）统归 pi-write-side 的对话类规则，不单列。"
+    }
+  ],
+  "rules": [
+    {
+      "id": "pi-session-header",
+      "match": { "entryType": "session" },
+      "category": "conversation",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "pi-write-side",
+      "note": "会话文件首行头（{\"type\":\"session\",...}）；runtime 读取点以 entry.type === 'session' 识别并跳过（packages/runtime/src/infra/pi/session-file-utils.ts）。"
+    },
+    {
+      "id": "pi-message",
+      "match": { "entryType": "message" },
+      "category": "conversation",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "pi-write-side",
+      "note": "对话消息（user/assistant/toolResult/bashExecution/custom/compactionSummary/branchSummary 等 role 都在 message 字段里）；pi-entry.ts PiMessageEntry 建模。"
+    },
+    {
+      "id": "pi-custom-message",
+      "match": { "entryType": "custom_message" },
+      "category": "conversation",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "pi-write-side",
+      "note": "扩展 sendMessage 注入的自定义消息（进 LLM 上下文 + 对话流）：含 scheduler dispatch 的 pi-scheduler:<taskId> 注入消息、subagent-engine-changed、goal-context-exceeded、background-bash、smart-context、plan-context、structured-output:retry-reminder 等。按对话类放行；注意与 custom entry 的区分——同名 customType 作为 appendEntry 落盘时才按 custom 规则判定。"
+    },
+    {
+      "id": "pi-label",
+      "match": { "entryType": "label" },
+      "category": "conversation",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "pi-write-side",
+      "note": "用户书签 / 撤回信号 LabelEntry（例：taiji:revoked 标签由 navigateTree 追加，见 extensions/taiji/host-internals/src/host-commands.ts:67）。"
+    },
+    {
+      "id": "pi-compaction",
+      "match": { "entryType": "compaction" },
+      "category": "conversation",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "pi-write-side",
+      "note": "compact 摘要条目。"
+    },
+    {
+      "id": "pi-branch-summary",
+      "match": { "entryType": "branch_summary" },
+      "category": "conversation",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "pi-write-side",
+      "note": "branch 摘要条目。"
+    },
+    {
+      "id": "pi-usage",
+      "match": { "entryType": "usage" },
+      "category": "conversation",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "pi-write-side",
+      "note": "用量记录条目（pi 1.0.0 新增；不进对话流，用量统计计入）。"
+    },
+    {
+      "id": "pi-context-edit",
+      "match": { "entryType": "context_edit" },
+      "category": "conversation",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "pi-write-side",
+      "note": "对更早 context-producing entry 的追加式编辑（pi 1.0.0 新增；只改未来模型上下文）。"
+    },
+    {
+      "id": "pi-thinking-level-change",
+      "match": { "entryType": "thinking_level_change" },
+      "category": "conversation",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "pi-write-side",
+      "note": "pi 写入的思考档位变更条目（taiji 未建模，但属会话元数据；见 packages/shared/src/pi-entry.ts 头注）。"
+    },
+    {
+      "id": "pi-model-change",
+      "match": { "entryType": "model_change" },
+      "category": "conversation",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "pi-write-side",
+      "note": "pi 写入的模型变更条目（模型热切换事实；session-model-tail-read 读取点）。"
+    },
+    {
+      "id": "pi-session-info",
+      "match": { "entryType": "session_info" },
+      "category": "conversation",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "pi-write-side",
+      "note": "会话名元数据条目（rename 后追加；session-file-external-scan 读取点）。"
+    },
+    {
+      "id": "delivery-port-outbox",
+      "match": { "entryType": "custom", "customType": "delivery-port-outbox" },
+      "category": "deliveryLog",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "delivery-port 发件箱条目（extensions/shared/delivery-port/src/journal.ts:28 OUTBOX_CUSTOM_TYPE）；投递日志类。"
+    },
+    {
+      "id": "delivery-port-ack",
+      "match": { "entryType": "custom", "customType": "delivery-port-ack" },
+      "category": "deliveryLog",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "delivery-port 投递/收集终局确认（journal.ts:30 ACK_CUSTOM_TYPE；写点 delivery-port.ts:190/196/416）。"
+    },
+    {
+      "id": "delivery-port-outbox-v1",
+      "match": { "entryType": "custom", "customType": "subagent-bg-notify-ledger" },
+      "category": "deliveryLog",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "旧版投递日志发件箱（journal.ts:33 V1_OUTBOX_CUSTOM_TYPE）；存量会话兼容读，属投递日志类。"
+    },
+    {
+      "id": "delivery-port-ack-v1",
+      "match": { "entryType": "custom", "customType": "subagent-bg-notify-ack" },
+      "category": "deliveryLog",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "旧版投递日志确认（journal.ts:35 V1_ACK_CUSTOM_TYPE）；存量会话兼容读。"
+    },
+    {
+      "id": "managed-session-notify",
+      "match": { "entryType": "custom", "customType": "managed-session-notify" },
+      "category": "deliveryLog",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "session-manager 托管会话通知内容（extensions/universal/session-manager/src/notify-content.ts:17）；经 delivery port 交付，属投递日志类（若以 custom_message 形态落盘由 pi-custom-message 规则放行）。"
+    },
+    {
+      "id": "subagent-record",
+      "match": { "entryType": "custom", "customType": "subagent-record" },
+      "category": "executionState",
+      "verdict": "forbid",
+      "allowIn": [],
+      "source": "extension-append-entry",
+      "note": "旧 v2 subagent 生命周期条目（packages/subagent-core/src/execution/persistence/record-entry.ts:23；register/settled 写点 record-store.ts:479/521/1338 与 record-store-rounds.ts:578/611）。S2 判定：迁移后主 session 增量中不得出现。"
+    },
+    {
+      "id": "workflow-record",
+      "match": { "entryType": "custom", "customType": "workflow-record" },
+      "category": "executionState",
+      "verdict": "forbid",
+      "allowIn": [],
+      "source": "extension-append-entry",
+      "note": "旧 v2 workflow run 生命周期条目（packages/subagent-core/src/orchestration/workflow-record-entry.ts:36；写点 extensions/universal/subagent-workflow/src/jsonl-run-store.ts:941 与 recovery 补写 session-lifecycle.ts:727）。S2 判定：迁移后主 session 增量中不得出现。"
+    },
+    {
+      "id": "subagent-identity",
+      "match": { "entryType": "custom", "customType": "subagent-identity" },
+      "category": "executionState",
+      "verdict": "forbid",
+      "allowIn": [],
+      "source": "extension-append-entry",
+      "note": "旧执行身份条目（packages/subagent-core/src/execution/persistence/session-reconstructor.ts:138；写点 extensions/universal/subagent-workflow/src/session-lifecycle.ts:498）。S2 判定：迁移后主 session 增量中不得出现。"
+    },
+    {
+      "id": "pi-scheduler-execution-custom",
+      "match": { "entryType": "custom", "customTypePrefix": "pi-scheduler:" },
+      "category": "executionState",
+      "verdict": "forbid",
+      "allowIn": [],
+      "source": "extension-append-entry",
+      "note": "scheduler 历史执行状态条目前缀（extensions/universal/scheduler/src/runtime.ts:27 DISPATCH_CUSTOM_TYPE_PREFIX）。plan B（commit 73073b169）已删除 appendEntry 写链；本规则只拦 custom entry——dispatch 注入的 custom_message（同前缀）属对话类，由 pi-custom-message 放行。plan B 前历史存量条目属 U6 导入源，不在增量判定范围。"
+    },
+    {
+      "id": "pending-register-workflow-subagent",
+      "match": { "entryType": "custom", "customType": "pending:register", "dataType": ["workflow", "subagent"] },
+      "category": "executionState",
+      "verdict": "forbid",
+      "allowIn": [],
+      "source": "extension-append-entry",
+      "note": "workflow/subagent 类 pending 注册（packages/subagent-core/src/execution/notify/notify-host.ts:78 type=subagent；orchestration/lifecycle.ts:364 与 resume-run.ts:644 type=workflow）——写子会话文件。M3 后子会话增量不得出现（M3-5 判据）；主 session 出现同理违规。"
+    },
+    {
+      "id": "pending-register-bash-session",
+      "match": { "entryType": "custom", "customType": "pending:register", "dataType": ["bash", "session"] },
+      "category": "extensionState",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "bash/session 类 pending 注册（base-tool-enhance background/notify.ts:116 type=bash；session-manager watch-coordinator.ts:121 type=session）——写当前 session（主或子会话都可能：subagent 也可跑后台 bash）。域外保留（设计前提清单排除记录 ⑥），不属本重写退役对象。"
+    },
+    {
+      "id": "pending-unregister-execution",
+      "match": { "entryType": "custom", "customType": "pending:unregister", "dataType": ["workflow", "subagent"] },
+      "category": "executionState",
+      "verdict": "forbid",
+      "allowIn": [],
+      "source": "extension-append-entry",
+      "note": "workflow/subagent 类 pending 注销（载荷 {id, reason, status} 无 type；dataType 由 S2 工具用同文件 pending:register 的 id→type 映射推导）。M3 后子会话增量不得出现（M3-5 判据）。"
+    },
+    {
+      "id": "pending-unregister-domain-external",
+      "match": { "entryType": "custom", "customType": "pending:unregister", "dataType": ["bash", "session"] },
+      "category": "extensionState",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "bash/session 类 pending 注销（dataType 同理由同文件 register 映射推导）——域外保留，主/子会话均放行；推导失败的注销走 unknown（先更新清单再判定）。"
+    },
+    {
+      "id": "goal-state",
+      "match": { "entryType": "custom", "customType": "goal-state" },
+      "category": "extensionState",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "goal 状态快照（extensions/universal/goal/src/persistence.ts:14；写点 adapters/ports.ts:35）。非执行域。"
+    },
+    {
+      "id": "goal-history",
+      "match": { "entryType": "custom", "customType": "goal-history" },
+      "category": "extensionState",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "goal 历史（persistence.ts:15；写点 adapters/ports.ts:38）。"
+    },
+    {
+      "id": "goal-log",
+      "match": { "entryType": "custom", "customType": "goal:log" },
+      "category": "extensionState",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "goal 结构化日志：两文件 5 处写点（extensions/universal/goal/src/adapters/event-handlers/agent-end.ts:207/255/279/304 + before-agent-start.ts:47）；设计 S2 通过标准明确登记为合法 custom entry 范例。"
+    },
+    {
+      "id": "plan-state",
+      "match": { "entryType": "custom", "customType": "plan-state" },
+      "category": "extensionState",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "plan 状态帧派生源（packages/extension-protocol/src/extensions/plan/legacy-entries.ts:28；写点 extensions/universal/plan/src/state.ts:318）。plan 域终态归宿另行设计（不属本重写）。"
+    },
+    {
+      "id": "cache-probe",
+      "match": { "entryType": "custom", "customType": "cache-probe" },
+      "category": "extensionState",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "cache-probe 前缀指纹采集条目（extensions/universal/cache-probe/src/index.ts:39；写点 :69/:90/:97）。"
+    },
+    {
+      "id": "rename-session",
+      "match": { "entryType": "custom", "customType": "rename-session" },
+      "category": "extensionState",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "rename-session 扩展的命名记录（extensions/universal/rename-session/src/landing.ts:65）。"
+    },
+    {
+      "id": "smart-context-fired",
+      "match": { "entryType": "custom", "customType": "smart-context:fired" },
+      "category": "extensionState",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "smart-context 档位触发记录（extensions/universal/smart-context/src/pure.ts:273；写点 index.ts:177）。"
+    },
+    {
+      "id": "structured-output-hook",
+      "match": { "entryType": "custom", "customType": "structured-output:hook" },
+      "category": "extensionState",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "structured-output workflow hook 记录（extensions/universal/structured-output/src/workflow-hook.ts:44；写点 :144）。"
+    },
+    {
+      "id": "structured-output-gate",
+      "match": { "entryType": "custom", "customType": "structured-output:gate" },
+      "category": "extensionState",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "structured-output loop gate 记录（loop-gate.ts:457；写点 :476）。"
+    },
+    {
+      "id": "taiji-system-prompt",
+      "match": { "entryType": "custom", "customType": "taiji:system-prompt" },
+      "category": "extensionState",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "系统提示词追踪（extensions/taiji/system-prompt-trace/src/types.ts:12；写点 trace.ts:92）。"
+    },
+    {
+      "id": "taiji-current-system-prompt",
+      "match": { "entryType": "custom", "customType": "taiji:current-system-prompt" },
+      "category": "extensionState",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "当前系统提示词快照（extensions/taiji/host-internals/src/host-commands.ts:37）。"
+    },
+    {
+      "id": "taiji-client-msg-id",
+      "match": { "entryType": "custom", "customType": "taiji.client-msg-id" },
+      "category": "extensionState",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "clientUuid → userEntryId 映射（extensions/taiji/host-internals/src/msg-id-mapper.ts:52；写点 :104）。"
+    },
+    {
+      "id": "unified-hooks-tool-error",
+      "match": { "entryType": "custom", "customType": "unified-hooks:tool-error" },
+      "category": "extensionState",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "工具报错审计（extensions/universal/base-tool-enhance/src/tool-error-audit.ts:83）。"
+    },
+    {
+      "id": "subagent-diagnostics",
+      "match": { "entryType": "custom", "customTypePrefix": "subagent:" },
+      "category": "extensionState",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "subagent 域诊断上报前缀（subagent:manifest-write-failed / manifest-invalid-status / state-write-failed / worktree-rebuild-conflict，写点 packages/subagent-core/src/execution/persistence/*.ts）。精确值 subagent-record / subagent-identity 属执行生命周期，已由前序精确规则拦截（本规则只兜诊断日志）。"
+    },
+    {
+      "id": "extension-logger-suffix",
+      "match": { "entryType": "custom", "customTypeSuffix": ":log" },
+      "category": "extensionState",
+      "verdict": "allow",
+      "allowIn": ["main", "child"],
+      "source": "extension-append-entry",
+      "note": "extension-logger 的 <extName>:log 通道（extensions/shared/extension-logger/src/index.ts）：含 workflow:log（subagent-workflow/src/workflow-events.ts:357）、subagents:log、session-manager:log 等诊断日志；非生命周期状态。"
+    }
+  ],
+  "unknownPolicy": {
+    "verdict": "violation",
+    "reason": "白名单外条目类型：按设计 S2 通过标准先更新本基线清单（唯一载体）再判定——防对合法 custom entry 误报违规，也防新执行状态写链漏报。"
+  }
+}

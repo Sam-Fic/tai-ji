@@ -180,14 +180,14 @@ describe('SchedulerRuntime', () => {
     })
   })
 
-  // ── R3-S1：dispatchTask in-flight 检查 ──
+  // ── dispatchTask in-flight 检查 ──
   // tick 为 fire-and-forget：tick1 的 await sendMessage 挂起超过 TICK_INTERVAL_MS（如 pi
   // 卡死）时，tick2 的 step2 再标 pending → step3 对同一 task 并发第二个 dispatch → 同一
   // prompt 双注入。检查：同任务在途（Set<taskId>）
   // 时 skip 本轮并 warn；不同任务不受影响。
   // 末两条为调用方 API 层验收：不经 tick，直接并发/串行调 dispatchTask，
   // 验证检查在调用方入口同样拦截（warn + 第二次 false）与完成后放行。
-  describe('dispatchTask in-flight 检查（R3-S1）', () => {
+  describe('dispatchTask in-flight 检查', () => {
     beforeEach(() => {
       vi.useFakeTimers()
       vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
@@ -587,12 +587,12 @@ describe('SchedulerRuntime', () => {
     })
   })
 
-  // ── F2：tick 错误分诊（crash-fix）──
+  // ── tick 错误分诊 ──
   // startScheduler 的 interval 回调对 fire-and-forget 的 tickScheduler() 加 catch：
   // stale 类错误（session 替换后泄漏 timer 访问 stale ctx）→ warn "tick stopped" + stopScheduler
   // 自停；其他错误 → warn "tick error" 继续调度。修复前 tick 内异常无人接住 →
   // unhandledRejection → pi 主进程 exit 1。
-  describe('tick 错误分诊（F2）', () => {
+  describe('tick 错误分诊', () => {
 
     beforeEach(() => {
       vi.useFakeTimers()
@@ -657,15 +657,15 @@ describe('SchedulerRuntime', () => {
     })
   })
 
-  // ── G1：代际检测分诊（S9 review 修复 / R3-M1 模块级化）──
+  // ── 代际检测分诊 ──
   // isCtxStale（index.ts 注入的模块级代数比对）为主判，替代对 pi 错误文案的依赖：
-  // - G1-a：in-flight tick 内代际翻转 + 任意非文案错误 → catch 分诊走 stale 自停（不依赖文案）
-  // - G1-b：代际翻转后（无任何错误）泄漏 timer 在下个 tick 前置检查自停，不进入 tick
-  // - G1-c：显式注入 isCtxStale=false + 非 stale 错误 → 仍 "tick error" 继续调度（不误伤）
-  // - G1-d：isCtxStale=false 但错误文案含 stale 片段 → 文案兜底仍自停（覆盖 reload 盲区：
+  // - in-flight tick 内代际翻转 + 任意非文案错误 → catch 分诊走 stale 自停（不依赖文案）
+  // - 代际翻转后（无任何错误）泄漏 timer 在下个 tick 前置检查自停，不进入 tick
+  // - 显式注入 isCtxStale=false + 非 stale 错误 → 仍 "tick error" 继续调度（不误伤）
+  // - isCtxStale=false 但错误文案含 stale 片段 → 文案兜底仍自停（覆盖 reload 盲区：
   //   clearExtensionCache 后 jiti 重 import 全新模块环境，旧闭包的模块级代数冻结不再递增，
   //   只剩文案能识别 stale；模块级方案的装配级验证见 index-generation.test.ts factory 重跑用例）
-  describe('G1: 代际检测分诊（S9）', () => {
+  describe('代际检测分诊', () => {
     let staleFlag: boolean
     let genRuntime: SchedulerRuntime
 
@@ -681,7 +681,7 @@ describe('SchedulerRuntime', () => {
       vi.useRealTimers()
     })
 
-    it('G1-a: in-flight tick 期间代际翻转 + 非文案错误 → warn "tick stopped" + 自停（不依赖 pi 错误文案）', async () => {
+    it('in-flight tick 期间代际翻转 + 非文案错误 → warn "tick stopped" + 自停（不依赖 pi 错误文案）', async () => {
       loggerMock.warn.mockClear()
       const nowSpy = vi.spyOn(backend, 'now')
       // tick 内先翻世代（模拟 session 替换交错发生在 dispatch await 窗口），再抛与
@@ -692,7 +692,7 @@ describe('SchedulerRuntime', () => {
       })
 
       genRuntime.startScheduler()
-      await vi.advanceTimersByTimeAsync(TICK_INTERVAL_MS) // tick1：catch 分诊走 G1 代际 → 自停
+      await vi.advanceTimersByTimeAsync(TICK_INTERVAL_MS) // tick1：catch 分诊走代际主判 → 自停
 
       const warnText = loggerMock.warn.mock.calls.map(c => String(c[0])).join('\n')
       expect(warnText).toContain('tick stopped')
@@ -706,11 +706,11 @@ describe('SchedulerRuntime', () => {
       nowSpy.mockRestore()
     })
 
-    it('G1-b: 代际翻转后泄漏 timer 在下个 tick 前置检查自停——不进入 tick（backend.now 零调用）', async () => {
+    it('代际翻转后泄漏 timer 在下个 tick 前置检查自停——不进入 tick（backend.now 零调用）', async () => {
       loggerMock.warn.mockClear()
       const nowSpy = vi.spyOn(backend, 'now')
       genRuntime.startScheduler()
-      // session 替换：代际翻转（F1 未能触达的泄漏 timer 场景；无任何错误发生）
+      // session 替换：代际翻转（session_start 停旧 timer 主防线未能触达的泄漏 timer 场景；无任何错误发生）
       staleFlag = true
 
       await vi.advanceTimersByTimeAsync(TICK_INTERVAL_MS) // tick1：前置检查命中 → 自停
@@ -726,7 +726,7 @@ describe('SchedulerRuntime', () => {
       nowSpy.mockRestore()
     })
 
-    it('G1-c: isCtxStale 注入但返回 false + 非 stale 错误 → warn "tick error" 且调度继续', async () => {
+    it('isCtxStale 注入但返回 false + 非 stale 错误 → warn "tick error" 且调度继续', async () => {
       loggerMock.warn.mockClear()
       const nowSpy = vi.spyOn(backend, 'now')
       // staleFlag 恒 false（beforeEach 初始化）：代际未翻转，注入存在不改变分诊结果
@@ -749,7 +749,7 @@ describe('SchedulerRuntime', () => {
       nowSpy.mockRestore()
     })
 
-    it('G1-d: isCtxStale 返回 false 但错误文案含 stale 片段 → 文案兜底仍自停（覆盖 reload 盲区）', async () => {
+    it('isCtxStale 返回 false 但错误文案含 stale 片段 → 文案兜底仍自停（覆盖 reload 盲区）', async () => {
       loggerMock.warn.mockClear()
       const nowSpy = vi.spyOn(backend, 'now')
       // reload 场景模拟：factory 重跑后旧闭包代际计数不再递增（staleFlag 恒 false），

@@ -1,10 +1,11 @@
-// scheduler 任务库快照文件（scheduler-redesign 方案 B：任务库与会话事实分离）。
+// scheduler 任务库快照文件（scheduler-redesign 方案 B：任务库与会话事实分离；
+// 方案 B 设计原文未归档，裁决内容与背景以 commit 73073b169 message 为溯源锚）。
 //
 // 任务定义与调度记账不再写进 pi 会话 JSONL（custom entry event sourcing 已整体退役），
 // 改为独立 JSON 快照：按 owner sessionId 分片、存 pi agentDir、原子替换写
 // （tmp + rename）。会话 JSONL 只剩 dispatch 注入消息与用户对话。
 //
-// 分片键 = sessionId 的理由（设计 §4.3）：
+// 分片键 = sessionId 的理由：
 // - 单写者免费获得：同一 session 同一时刻只有一个 pi 进程，分片文件天然无并发写；
 // - resume 同 sessionId → 同文件直接恢复；fork 新 sessionId → 分片不存在 → 空任务集
 //   （等价旧 fork owner 过滤语义，实现从过滤逻辑降为「不同文件天然不共享」）；
@@ -18,22 +19,15 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import type { ScheduledTask } from './types.js'
+import type { ScheduledTask, SchedulerStoreFile } from './types.js'
+import { SCHEDULER_STORE_SCHEMA_VERSION, isSchedulerStoreFile } from './types.js'
 
-/** 快照 schema 版本（v2 = 任务库分离形态；v1 是 npm 0.1.1 旧 store，文件名不同不互读）。 */
-export const SCHEDULER_STORE_SCHEMA_VERSION = 2
-
-/**
- * 快照文件形状（设计 §4.3 schema）。
- * tasks 为内存任务集的全量快照：写入口统一剥离运行时标记（pending）并拷贝 history，
- * 读方拿到的即干净的持久化形态。
- */
-export type SchedulerStoreFile = {
-  schemaVersion: typeof SCHEDULER_STORE_SCHEMA_VERSION
-  /** owner session 的 JSONL 路径（冗余记录，供排障与对账；--no-session 时可缺省） */
-  sessionFile?: string
-  tasks: ScheduledTask[]
-}
+// 快照 schema 版本常量、文件形状类型与形状校验函数单源于 ./types.js（零 node 依赖
+// 纯模块——M0 契约期 @taiji/shared/execution 经 extension-protocol 主出口单源 re-export，
+// 浏览器消费方不得触达本文件 node:fs）；此处 re-export 保持既有 `./scheduler-store`
+// 子出口与包内 `./store.js` import 路径不变。
+export type { SchedulerStoreFile } from './types.js'
+export { SCHEDULER_STORE_SCHEMA_VERSION, isSchedulerStoreFile }
 
 /**
  * 读结果三分支：
@@ -46,7 +40,8 @@ export type SchedulerStoreRead =
   | { kind: 'missing' }
   | { kind: 'corrupt'; renamedTo: string }
 
-/** 读写选项：降级日志注入点（包内零 logger 依赖，与 ReplayFoldOptions.warn 先例同构）。 */
+/** 读写选项：降级日志 warn 注入点（包内零 logger 依赖；同构先例 = replay 折叠链的
+ *  ReplayFoldOptions.warn——该链已随方案 B 落地整体退役，见 commit 73073b169 删除的 replay.ts）。 */
 export type SchedulerStoreOptions = {
   warn?: (message: string, context?: unknown) => void
 }
@@ -85,10 +80,10 @@ function toStoreTask(task: ScheduledTask): ScheduledTask {
 }
 
 /**
- * 读快照：一次 JSON.parse（设计 §4.5——「读一个文件重建任务集」，重放折叠 / fork owner
+ * 读快照：一次 JSON.parse 读整个文件重建任务集（无重放折叠——重放折叠 / fork owner
  * 过滤 / 活跃路径裁剪三件套已随 event sourcing 退役）。
  *
- * 失败语义（设计 §4.3）：
+ * 失败语义：
  * - ENOENT → `missing`（空任务集正常路径）
  * - 解析/形状失败 → 改名 `.corrupt-<ts>` 留证 + 返回 `corrupt`（调用方按空任务集继续，
  *   调度不中断——与旧「恢复失败显式降级」语义一致）；改名自身失败（只读卷等）不抛，
@@ -177,15 +172,6 @@ function renameCorrupt(filePath: string): string {
   } catch {
     return filePath
   }
-}
-
-/** 快照形状校验：顶层 schemaVersion=2 + tasks 数组且逐项为对象（字段级信任唯一写者，不逐字段校验）。 */
-function isSchedulerStoreFile(data: unknown): data is SchedulerStoreFile {
-  if (!data || typeof data !== 'object') return false
-  const record = data as Record<string, unknown>
-  if (record.schemaVersion !== SCHEDULER_STORE_SCHEMA_VERSION) return false
-  if (!Array.isArray(record.tasks)) return false
-  return record.tasks.every(t => t !== null && typeof t === 'object')
 }
 
 /** ENOENT 判定（code 属性优先，message 兜底——跨平台 fs 错误形态）。 */

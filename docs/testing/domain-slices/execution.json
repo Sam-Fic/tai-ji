@@ -1,0 +1,9 @@
+{
+  "name": "execution",
+  "summary": "执行域契约层（packages/shared/src/execution：M0 事件/快照/结果/通知/命令协议、身份与预算单源、告警形状、主 session JSONL 条目类型基线清单；M1+ 执行状态权威的跨包契约底座）。",
+  "layers": ["shared"],
+  "scope": {
+    "shared": ["packages/shared/src/execution/**"]
+  },
+  "tests": ["packages/shared/src/execution/**"]
+}

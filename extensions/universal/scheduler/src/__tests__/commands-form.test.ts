@@ -9,7 +9,7 @@ import { SchedulerRuntime } from '../runtime.js'
 import { SchedulerService } from '../service.js'
 
 /**
- * 命令路径表单覆盖（设计 §6.2 D2）：
+ * 命令路径表单覆盖（scheduler-redesign 方案 B，2026-10-30 裁决）：
  * 无参 / 带参预填 / 取消 / 提交成功 / channel-error / non-json / echo（三条错误分支从
  * tool-create-flow.test.ts 迁入，覆盖不丢）/ 模式矩阵（rpc / tui / json / print）/
  * handler 立即 resolve（异步不阻塞）/ json·print 无参 throw / 带参失败 throw /

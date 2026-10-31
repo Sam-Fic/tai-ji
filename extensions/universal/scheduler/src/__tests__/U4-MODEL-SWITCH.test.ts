@@ -1,8 +1,7 @@
 /**
- * U4_MODEL_SWITCH：dispatch 模型切换（设计 D3 修订版 + D1 归属简化 + ADR-0122
- * 事实查询翻转）验收
+ * U4_MODEL_SWITCH：dispatch 模型切换（ADR-0122 事实查询翻转）验收
  *
- * 覆盖五块机制（D1 终态：agent_settled + isIdle 复核拆 turnIndex 归属状态机——原
+ * 覆盖五块机制（归属机制终态：agent_settled + isIdle 复核拆 turnIndex 归属状态机——原
  * turnIndex 归属：4 状态字段 + 6 事件挂点 + customType 前缀匹配）：
  * - 切换：dispatchTaskInner 在 deliverDispatch 前 setModel（busy 亦生效——本层不做 idle 检查）
  * - 恢复：判定锚点 = isIdle() 同步事实查询（判定层级最高）；agent_settled 确定性事件是
@@ -10,7 +9,7 @@
  *   （记录保留），tick 的 isIdle() 查询在 idle 重入时兑现；不挂 agent_end（end 后可能
  *   有自动续跑 turn，恢复只认 settled）
  * - 互斥：切换在途时其他需切模型任务 skip + pending 留待下 tick 重试
- * - 串行化（MF-2）：settled 恢复在途 / 切换 setModel 在途未建记录窗口内，后继需切模型
+ * - 串行化：settled 恢复在途 / 切换 setModel 在途未建记录窗口内，后继需切模型
  *   任务的 setModel 排队等前序模型 op 完成（任意两个 setModel 不并发、双记录不叠写）
  * - tick 事实查询兜正确性（原 2-tick 计数对账已按 ADR-0122 删除）：严格先于同 tick
  *   dispatch 循环；记录存在 + idle 即恢复（agent_settled 丢失时由查询收敛——拉保证
@@ -19,7 +18,7 @@
  *   模型语义异常只走日志（不进持久化词表）
  *
  * 事件注入：直接调用 runtime 的 handleRunSettled（index.ts 的 pi.on 只做转发）。
- * tick：fake timers 驱动真实 interval（对齐 runtime.test.ts F2 形态）。
+ * tick：fake timers 驱动真实 interval（对齐 runtime.test.ts tick 错误分诊形态）。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -369,9 +368,9 @@ describe('U4_MODEL_SWITCH: dispatch 模型切换', () => {
     })
   })
 
-  describe('模型 op 串行化（MF-2 回归）', () => {
+  describe('模型 op 串行化回归', () => {
     it('settled 恢复在途时新需切模型任务 dispatch → 新 setModel 排队等恢复完成（先恢复后切换）', async () => {
-      // MF-2 回归：handleRunSettled 的恢复是 fire-and-forget（先同步清记录再 await setModel(原)）。
+      // 串行化回归：handleRunSettled 的恢复是 fire-and-forget（先同步清记录再 await setModel(原)）。
       // 修复前恢复在途窗口内 pendingModelSwitch 已为 null → 新 dispatch 的互斥检查放行，
       // setModel(目标) 与在途 setModel(原) 并发、完成顺序不定（恢复后完成则该任务 turn
       // 静默跑错模型）。修复后恢复持模型 op 队列，后继 setModel 排队等其完成。

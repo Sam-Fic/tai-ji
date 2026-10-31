@@ -167,9 +167,8 @@ export function buildFullTsconfig(formalTsconfigPath, tmpDir) {
   return tmpPath;
 }
 
-// main 原把三项对账（include 形态 / exclude 死路径 / 双跑债务对账）全内联在一个函数体，
-// 圈复杂度 16 超门禁阈值（15）。拆为 staticChecks（1/2 项静态对账）与
-// runDebtReconciliation（第 3 项双跑对账），行为逐字保持。
+// main 职责拆两段：staticChecks = include 形态与 exclude 死路径静态对账；
+// runDebtReconciliation = 双跑债务对账（tsconfig exclude 集 ↔ 全量错误集双向一致）。
 
 /** [main 拆分] 静态对账（第 1/2 项）：include 全量形态断言 + exclude ⊆ 磁盘测试文件集。
  *  失败明细推入 failures；返回 { failures, missingForms, deadExcludes, diskTests } 供 main 汇总输出。 */

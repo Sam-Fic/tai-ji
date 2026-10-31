@@ -196,6 +196,8 @@ pi -p "/schedule 5m 'check build'"
 | once 任务 | 触发后自动删除 | 不参与后续调度 |
 | cron 失效 | 任务停用 + `lastStatus=failed` + `lastError='cron expression invalid'` | 不会用 `now()` 兜底导致每 tick 重触发死循环 |
 | 忙时 dispatch | steer 直投（scheduler-steer-direct-dispatch） | busy 时消息插入当前 turn、idle 时开新 turn（`{deliverAs:'steer', triggerTurn:true}`），受理即记账不排队；同任务 in-flight 检查防双投 |
+| 任务级模型切换 | dispatch 前 setModel(task.model)，完成后恢复原模型 | task.model 非空且 ≠ 会话当前模型时按「互斥校验 → setModel → dispatch」执行，busy 亦生效（steer turn 开新 turn 取模型快照）；恢复挂 agent_settled（run 完全沉降）+ tick 事实查询兜底；全部 setModel 经模型 op 串行队列防并发交错；模型切换秩序设计（design D3）原文未归档，裁决内容与背景以 commit 1def857fe（初版与 P-MODEL 探针修订）/ 005fb44bf（模型 op 串行化收敛）/ 8159e3fe7（agent_settled 恢复锚点）message 为溯源锚 |
+| widget 推送节流 | 指纹跳推（任务集不变即零推送） | widget 行内容静态化（不含随时间流逝变化的元素）是跳推前提；每次推送前对比任务集指纹，不变即跳过本次推送（判定在 index.ts 的 refreshWidget）；widget 推送修正设计原文未归档，裁决内容与背景以 commit 4bd690a54 message 为溯源锚 |
 | history | 保留最近 **20** 条执行记录 | 超出丢弃最旧（上限由 `appendExecutionRecord` 在 runtime 记账侧单点裁剪）；快照写入口**不裁剪**——只剥离运行时标记 `pending` 后逐项拷贝 `history` 全量序列化 |
 | 持久化 | 任务集全量快照原子落盘（每次任务集变更即写，tmp+fsync+rename） | 任务随 owner session 分片持久化，resume 后直读恢复；落盘失败 warn + 内存态照常推进、下写点重试 |
 | 交付语义 | **受理即记账**（投递端口 at-most-once 注入） | dispatch 经投递端口受理后注入失败首败即弃（forget，2026-10-25 裁决：丢一轮 << 重投造成重复提醒）；端口拒收（rejected）走 failed 记账、下个 tick 单通道重试 |
@@ -208,7 +210,7 @@ pi -p "/schedule 5m 'check build'"
 
 ### 当前机制（独立 JSON 快照分片）
 
-任务存储为独立 JSON 快照文件（scheduler-redesign 方案 B：任务库与会话事实分离，2026-10-30 裁决），路径由 `schedulerStoreFilePath(getAgentDir(), cwd, sessionId)` 推导：
+任务存储为独立 JSON 快照文件（scheduler-redesign 方案 B：任务库与会话事实分离，2026-10-30 裁决；方案 B 设计原文未归档，裁决内容与背景以 commit 73073b169 message 为溯源锚），路径由 `schedulerStoreFilePath(getAgentDir(), cwd, sessionId)` 推导：
 
 ```
 <agentDir>/scheduler/<root>/<segments>/<sessionId>.json
@@ -273,7 +275,7 @@ npx vitest run src/__tests__/<file>.test.ts   # 单个文件
 
 测试策略：
 
-- **依赖反转**：`SchedulerRuntime` 只依赖 `SchedulerBackend` 接口（`deliverDispatch` / `persistTasks` / `now`），不触碰 FS/pi。测试注入 `MockSchedulerBackend`（`src/__tests__/mock-backend.ts` 测试专用实现，记录 deliverDispatch/persistTasks 调用、支持注入固定时间与落盘失败）实现零副作用测试；`backend.loadTasks` 类方法由 store 模块的真实读写覆盖（临时目录注入路径即可全行为覆盖，设计 §6.2「TaskStore 是纯 FS 模块，注入路径即可测」）
+- **依赖反转**：`SchedulerRuntime` 只依赖 `SchedulerBackend` 接口（`deliverDispatch` / `persistTasks` / `now`），不触碰 FS/pi。测试注入 `MockSchedulerBackend`（`src/__tests__/mock-backend.ts` 测试专用实现，记录 deliverDispatch/persistTasks 调用、支持注入固定时间与落盘失败）实现零副作用测试；`backend.loadTasks` 类方法由 store 模块的真实读写覆盖——持久化只经 scheduler-store 纯 FS 读写（无进程内状态），测试注入临时目录路径即可全行为覆盖
 - **纯函数**：`parseDuration` / `formatDuration` / `parseSchedule` / `computeNextRunAt` / `computeNextRuns`（`src/parsing.ts`）无副作用，可直接断言
 - **快照读写**：store 模块三分支读（ok / missing / corrupt 改名留证）+ 原子替换写 + 写入口 pending 剥离与 history 逐项拷贝（不裁剪——20 条上限属 `appendExecutionRecord`，`@zhushanwen/extension-protocol` scheduler-store 子出口测试）
 - **投递链**：backend deliverDispatch 的端口受理/拒收/幂等键路径（`src/__tests__/backend-delivery.test.ts`）

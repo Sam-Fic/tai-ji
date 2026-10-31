@@ -6,7 +6,7 @@ import { SchedulerService } from '../service.js'
 import { handleSchedule } from '../tool.js'
 
 /**
- * schedule tool 直建流覆盖（触发反转 D1，设计 §6.1）：
+ * schedule tool 直建流覆盖（触发反转，scheduler-redesign 方案 B 2026-10-30 裁决）：
  * 预校验 throw（不创建）/ abort → cancelled result（不创建）/ 会话模式不参与（rpc 与 print
  * 行为一致，直建）/ kind/name/expires/model 透传入 entry 快照 / 不再有「未经确认」附注。
  *

@@ -1,6 +1,6 @@
 // src/__tests__/index-generation.test.ts
 //
-// G1（S9 review 修复 / R3-M1 模块级化）集成单测：index.ts 装配点为每代 SchedulerRuntime
+// 代际检测集成单测：index.ts 装配点为每代 SchedulerRuntime
 // 注入代际检测回调（模块级 sessionGeneration 比对），使 stale 分诊不依赖 pi 错误文案。
 //
 // 两类拓扑：
@@ -10,12 +10,12 @@
 //   factory 函数体，loader.ts extensionCache 只缓存 factory 函数对象不缓存执行结果）——
 //   装配级用例模拟两次独立 factory() 调用（各自新闭包、共享模块级代数），实证模块级变量
 //   跨 factory 重跑保留：第二代 session_start 递增模块级计数器后，第一代 runtime 的
-//   isCtxStale 翻转为 true 且其泄漏 timer 在下个 tick 前置检查自停。闭包级实现（R3-M1
-//   修复前）在此拓扑下恒 false——正是被 R3 实测证伪的生产失效路径。
+//   isCtxStale 翻转为 true 且其泄漏 timer 在下个 tick 前置检查自停。闭包级实现（修复前）
+//   在此拓扑下恒 false——正是实测证伪的生产失效路径。
 //
 // 本文件用 InstrumentedRuntime（继承真实 SchedulerRuntime，记录构造参 isCtxStale）
 // 捕获注入回调与装配事实。InstrumentedRuntime 全部行为继承父类，不影响装配链本身
-// （F1 停旧 timer 等行为由本文件 F1 describe 锚定，此处不重复）。
+// （session_start 停旧 timer 等行为由本文件对应 describe 锚定，此处不重复）。
 // steer 直投模型（scheduler-steer-direct-dispatch）：装配点不再创建 delivery handle，
 // runtime 构造收 backend + isCtxStale? + modelOps? 三参（U4：modelOps 缺省 = 无模型
 // 切换能力降级）。
@@ -69,7 +69,7 @@ const { isCtxStaleCaptures, runtimeInstances, stopSchedulerCalls } = vi.hoisted(
 
 // InstrumentedRuntime 继承真实实现（loadTasks/onAfterTick/startScheduler 均真实执行），
 // 仅捕获构造参（isCtxStale）并登记实例（afterEach 统一停 timer，避免真实 setInterval 残留）；
-// stopScheduler 调用按序记录（F1 验收断言范围：新装配前旧实例必须被停）。
+// stopScheduler 调用按序记录（验收断言范围：新装配前旧实例必须被停）。
 vi.mock('../runtime.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../runtime.js')>()
   const RealSchedulerRuntime = actual.SchedulerRuntime
@@ -144,7 +144,7 @@ function makeRestorableTask(): ScheduledTask {
   }
 }
 
-describe('G1: index.ts 代际接线（S9）', () => {
+describe('index.ts 代际接线', () => {
   beforeEach(() => {
     isCtxStaleCaptures.length = 0
     runtimeInstances.length = 0
@@ -186,7 +186,7 @@ describe('G1: index.ts 代际接线（S9）', () => {
     expect(isCtxStaleCaptures[2]!()).toBe(false)
   })
 
-  // ── R3-M1/R3-S5：factory 重跑装配级用例（生产主路径拓扑）──
+  // ── factory 重跑装配级用例（生产主路径拓扑）──
   // pi 每次 session 替换都重跑 factory 函数体（新闭包）。本用例模拟两次独立 factory()
   // 调用 + 各 fire 一次 session_start，实证「模块级 sessionGeneration 跨 factory 重跑保留」：
   // 闭包级实现（修复前）在第二代 session_start 后 firstStale() 仍恒 false——测试即失败。
@@ -206,8 +206,8 @@ describe('G1: index.ts 代际接线（S9）', () => {
       expect(firstStale()).toBe(false) // 第一代是当前代
 
       // 第二代：再次独立执行 factory（模拟 newSession/fork/switchSession 的 factory 重跑，
-      // 新闭包的 service 为 null——第一代闭包的 service 对它不可见，F1 停不到第一代 timer，
-      // 复现「F1 未能触达、只剩 G1 前置检查」的泄漏路径）+ session_start
+      // 新闭包的 service 为 null——第一代闭包的 service 对它不可见，停旧防线停不到第一代
+      // timer，复现「停旧未能触达、只剩代际前置检查」的泄漏路径）+ session_start
       const second = createMockPi()
       schedulerExtension(second.pi)
       const secondSessionStart = second.events.get('session_start')
@@ -215,12 +215,12 @@ describe('G1: index.ts 代际接线（S9）', () => {
       secondSessionStart!({ type: 'session_start', reason: 'new_session' }, createFakeCtx('/test/factory-rerun-2.json'))
 
       // 核心断言：模块级计数器被第二代闭包的 session_start 递增，第一代 runtime 的
-      // isCtxStale 生效（闭包级实现在此恒 false——R3-M1 修复的生产失效路径）
+      // isCtxStale 生效（闭包级实现在此恒 false——模块级化修复的生产失效路径）
       expect(firstStale()).toBe(true)
       expect(isCtxStaleCaptures[1]!()).toBe(false) // 第二代是当前代
 
       // tick 前置自停：第一代 runtime 的泄漏 timer 在下个 tick 被代际前置检查拦截
-      // （G1-b 的生产路径验证：warn "tick stopped" + timer 自停，后续 tick 不再发生）
+      // （生产路径验证：warn "tick stopped" + timer 自停，后续 tick 不再发生）
       await vi.advanceTimersByTimeAsync(TICK_INTERVAL_MS)
       const warnText = loggerMock.warn.mock.calls.map(c => String(c[0])).join('\n')
       expect(warnText).toContain('tick stopped')
@@ -235,16 +235,16 @@ describe('G1: index.ts 代际接线（S9）', () => {
   })
 })
 
-// ── F1: session_start 停旧 runtime（crash-fix U4）──
+// ── session_start 停旧 runtime ──
 // session_start 多发/重入时先停上一代 runtime 的 tick interval：dispatch 的 await sendMessage
 // 窗口与 session 替换交错时，旧 session_shutdown 可能永远等不到 → 旧 30s tick timer 泄漏 →
 // 下一 tick 的 refreshWidget 访问 stale ctx.ui 抛错 → unhandledRejection → pi 主进程 exit 1。
-// F1 在 session_start 开头幂等 stopScheduler，从源头消灭。
+// 防线在 session_start 开头幂等 stopScheduler，从源头消灭。
 //
-// 行为断言口径（验收 U4）：观测范围 = InstrumentedRuntime 的 stopScheduler 调用序列
-// （widget 推送是 D1 指纹跳推语义——任务集静态期间零推送，不能靠推送计数区分新旧 timer；
-// stopScheduler 白盒断言直接锁定「新装配前旧实例必须被停」的 F1 语义本身）。
-describe('F1: session_start 停旧 runtime（crash-fix U4）', () => {
+// 行为断言口径：观测范围 = InstrumentedRuntime 的 stopScheduler 调用序列
+// （widget 推送是指纹跳推语义——任务集静态期间零推送，不能靠推送计数区分新旧 timer；
+// stopScheduler 白盒断言直接锁定「新装配前旧实例必须被停」的停旧语义本身）。
+describe('session_start 停旧 runtime', () => {
   const BASE = Date.parse('2026-01-01T00:00:00Z')
 
   /**
@@ -299,17 +299,17 @@ describe('F1: session_start 停旧 runtime（crash-fix U4）', () => {
     expect(setSchedulerWidgetMock).toHaveBeenCalledTimes(1)
     expect(runtimeInstances).toHaveLength(1)
 
-    // 前置因果锚点：静置数个 tick——timer1 在 tick（无异常），任务集静态零推送（D1 跳推）
+    // 前置因果锚点：静置数个 tick——timer1 在 tick（无异常），任务集静态零推送（指纹跳推）
     await vi.advanceTimersByTimeAsync(2 * TICK_INTERVAL_MS)
     expect(setSchedulerWidgetMock).toHaveBeenCalledTimes(1)
 
-    // 第二次 session_start（session 替换）：F1 在装配新 runtime 前停掉 timer1
+    // 第二次 session_start（session 替换）：装配新 runtime 前先停掉 timer1
     sessionStart!({ type: 'session_start', reason: 'new_session' }, createFakeCtxWithTasks('/test/session-2.json'))
     expect(setSchedulerWidgetMock).toHaveBeenCalledTimes(2) // runtime2 初始渲染（实例态重置，首帧必推）
     expect(runtimeInstances).toHaveLength(2)
 
     // 行为断言（验收标准）：stopScheduler 恰被调一次且命中 runtime1；
-    // F1 缺失时旧 timer 不被停（数组为空或不含 runtime1）
+    // 停旧防线缺失时旧 timer 不被停（数组为空或不含 runtime1）
     expect(stopSchedulerCalls).toEqual([runtimeInstances[0]])
   })
 })

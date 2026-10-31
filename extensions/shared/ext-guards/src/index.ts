@@ -215,7 +215,7 @@ export function isTaijiGuiHost(ctx: GuiHostContextLike): boolean {
 // timer tick、延迟回调）在该窗口触碰 pi/ctx = pi 进程被无人接的同步 throw 炸死（9/3 E1
 // 实锤：smart-context compact onError → sendUserMessage → assertActive → exit 1）。
 // GUI 的每次切 session/新建/重载都在制造失效窗口——这是「pi 单独用不崩、套 GUI 就崩」
-// 的核心机制差异。本检查把 scheduler 已验证的防御范式（G1 代际前置检查 + F2 catch 文案
+// 的核心机制差异。本检查把 scheduler 已验证的防御范式（代际前置检查 + catch 文案
 // 分诊）泛化成共享原语，接入方不再各自内联。
 
 /**
@@ -235,7 +235,7 @@ export interface GuardStaleCtxOptions {
 	/** 观测标签（默认降级日志的前缀，建议 "包名:场景" 形态）。 */
 	label?: string;
 	/**
-	 * 前置代际检查（G1 形态，主判）：返回 true 表示本回调所属的 session 已被替换，
+	 * 前置代际检查（主判）：返回 true 表示本回调所属的 session 已被替换，
 	 * 检查完全不执行 fn、直接走 stale 降级。调用方注入，同 scheduler 的模块级代数
 	 * 计数器模式（session_start 递增模块级代数，旧代闭包捕获值 < 模块值即 stale）。
 	 * 缺省（不注入）恒视为非 stale——前置检查关闭，完全依赖错误文案兜底分诊
@@ -280,13 +280,13 @@ function defaultOnStale(label: string, error?: unknown): void {
  *
  * 语义三段（与 scheduler 范式逐条对应，scheduler/runtime.ts startScheduler 是迁移先例）：
  *
- * 1. **前置代际检查（G1 形态，主判）**：`opts.isCtxStale?.()` 为 true → 不执行 fn
+ * 1. **前置代际检查（主判）**：`opts.isCtxStale?.()` 为 true → 不执行 fn
  *    （完全不触碰捕获的 stale pi/ctx）、调 `opts.onStale?.()`（无参）、返回 undefined。
- * 2. **fn 同步执行 + 同步抛错分诊（F2 形态的同步部分）**：错误文案含
+ * 2. **fn 同步执行 + 同步抛错分诊（catch 分诊的同步侧）**：错误文案含
  *    `STALE_CTX_MARKER`（或抛错后 isCtxStale 翻转）→ 调 `opts.onStale?.(error)`、
  *    返回 undefined；**非 stale 类错误原样上抛**——检查不吞真实 bug（上抛的崩溃链路
  *    与 E1 相同，有 pi-crash log 取证 + 错误规格表走 T4 恢复链路）。
- * 3. **Promise 透传分诊（F2 形态的异步部分）**：fn 返回 Promise 时检查对 rejection
+ * 3. **Promise 透传分诊（catch 分诊的异步侧）**：fn 返回 Promise 时检查对 rejection
  *    挂同一分诊——stale → resolve 为 undefined，非 stale → 原样 reject 给调用方的
  *    `.catch`。返回的是新 Promise 实例（原实例的 rejection 已被检查接管，调用方不得
  *    再对原实例挂 then/catch，否则非 stale 错误会走原实例 rejection）。

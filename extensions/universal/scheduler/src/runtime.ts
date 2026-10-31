@@ -64,11 +64,11 @@ interface PendingModelSwitch {
 // HISTORY_LIMIT 单点在 protocol types.ts——runtime 记账（appendExecutionRecord）裁剪到该上限；
 // 快照写入口不裁剪，只逐项拷贝 history。
 // STALE_CTX_MARKER（文案兜底分诊词）已迁移到 ext-guards 共享检查（guardStaleCtx 内部
-// 引用，本文件不再直接持有）。语义：G1 模块级代际检测（isCtxStale）为主判；文案子串
+// 引用，本文件不再直接持有）。语义：模块级代际检测（isCtxStale）为主判；文案子串
 // 覆盖代际盲区——显式 reload / cwd 变化触发 clearExtensionCache 后 jiti 重新 import 产生
 // 全新模块环境，旧闭包引用的模块级代数冻结不再递增，isCtxStale 恒 false，只剩错误文案
 // 能识别 stale。pi 非契约 API（Error message 非稳定接口）：文案由 docs/pi-semantics.json
-// PS-30 探针随 pi 版本门禁自动重验；pi 升级仍需回归 runtime.test.ts 的 U1 / G1-d 文案
+// PS-30 探针随 pi 版本门禁自动重验；pi 升级仍需回归 runtime.test.ts 的 stale 文案
 // 锚定用例。文案变更时此兜底失效，后果为 timer 泄漏 + 每 30s warn（不 crash）。
 
 export class SchedulerRuntime {
@@ -78,17 +78,17 @@ export class SchedulerRuntime {
   private dispatchTimestamps: number[] = []
   private onAfterTickCallback: (() => void) | null = null
   private readonly isCtxStale: (() => boolean) | undefined
-  // R3-S1：同任务 dispatch 在途标记（Set<taskId>），见 dispatchTask 注释
+  // 同任务 dispatch 在途标记（Set<taskId>），见 dispatchTask 注释
   private readonly dispatchesInFlight = new Set<string>()
   // dispatch 幂等键的轮次标记状态（unified-delivery 迁移），见 nextDispatchEpoch 注释
   private dispatchStamp = 0
   private dispatchSeq = 0
-  // U4 dispatch 模型切换（设计 D3 修订版）：模型控制接口（缺省 undefined = 无切换能力，降级）
+  // U4 dispatch 模型切换：模型控制接口（缺省 undefined = 无切换能力，降级）
   private readonly modelOps: SchedulerModelOps | undefined
   // 未决模型切换记录（同时至多一条——互斥窗口 + 模型 op 串行队列共同保证「切换→dispatch→
   // 恢复」周期单在途、单 setModel 在途）
   private pendingModelSwitch: PendingModelSwitch | null = null
-  // 模型 op 串行队列尾（MF-2 收敛）：调度器发起的全部 setModel（dispatch 切换 / 期望模型
+  // 模型 op 串行队列尾：调度器发起的全部 setModel（dispatch 切换 / 期望模型
   // 恢复 / 错误路径恢复）单点经 serializeModelOp 入队——「setModel 起步 → 记录创建 /
   // 恢复收尾」全程持队，任何后继 setModel 发起点先排队前置等待，两个 setModel 并发
   // 结构性不可能（完成顺序不定 → turn 静默跑错模型的交错被消除）。链条引用恒吞错
@@ -99,8 +99,8 @@ export class SchedulerRuntime {
    * 依赖反转构造：backend 承担快照落盘/投递端口/时间源，runtime 只持有内存态。
    * 不触碰任何 FS / pi API（测试可用 MockSchedulerBackend 零副作用注入）。
    *
-   * isCtxStale（G1 代际检测，S9/R3-M1）：返回 true 表示本 runtime 建立时的 session 已被
-   * 替换。index.ts 装配点注入（模块级代数比对，R3-M1），使 stale 分诊不依赖 pi 错误文案；
+   * isCtxStale（模块级代际检测）：返回 true 表示本 runtime 建立时的 session 已被
+   * 替换。index.ts 装配点注入（模块级代数比对），使 stale 分诊不依赖 pi 错误文案；
    * 缺省（不注入）恒视为非 stale——纯 runtime 单测与旧装配路径行为不变。
    *
    * modelOps（U4）：模型控制接口，session_start 装配点注入；缺省 = 无模型切换能力
@@ -215,18 +215,17 @@ export class SchedulerRuntime {
     this.tickTimer = setInterval(() => {
       // 三件套语义等价迁移到共享检查 guardStaleCtx（crash-resilience D1 / u1-ext-guard；
       // 检查语义 = 本处原地实现的泛化，迁移对照逐条可证）：
-      // 1. G1 前置检查（S9）：检查的 isCtxStale 命中 → onStale（= retireStaleTimer）且
+      // 1. 代际前置检查：检查的 isCtxStale 命中 → onStale（= retireStaleTimer）且
       //    tickScheduler 不执行——与迁移前「前置分支 return」等价：本 runtime 所属 session
       //    已被替换 → timer 属泄漏资源自停退场，不触碰捕获的 stale ctx，不依赖 pi 错误文案。
-      //    主防线仍是 F1（session_start 停旧 timer），此处覆盖 F1 未能触达的泄漏路径。
-      // 2. F2 catch 分诊（防御兜底）：检查对 tickScheduler 的 rejection 挂同一分诊谓词
+      //    主防线仍是 session_start 停旧 timer，此处覆盖其未能触达的泄漏路径。
+      // 2. catch 分诊（防御兜底）：检查对 tickScheduler 的 rejection 挂同一分诊谓词
       //    `isCtxStale() || 文案含 STALE_CTX_MARKER`（字面不变）——stale → retireStaleTimer；
-      //    非 stale → 原样 reject，由下方 .catch 仅告警不终止调度（'tick error' 文案不变，
-      //    U2/G1-c 锚定）。fire-and-forget 的 tick 链路必须自带 catch——tick 内任何异常
+      //    非 stale → 原样 reject，由下方 .catch 仅告警不终止调度（'tick error' 文案不变）。
+      //    fire-and-forget 的 tick 链路必须自带 catch——tick 内任何异常
       //    （典型：泄漏 timer 的 onAfterTick → refreshWidget 访问 stale ctx.ui 抛错）无人接住
       //    即 unhandledRejection，直接崩掉 pi 主进程（E1 同机制）。
-      // 3. retireStaleTimer 自停：未改（'tick stopped' warn 口径与幂等 stopScheduler 原样，
-      //    U1/G1-b/G1-d 锚定）。
+      // 3. retireStaleTimer 自停：未改（'tick stopped' warn 口径与幂等 stopScheduler 原样）。
       // `?.catch`：前置检查命中时检查返回 undefined（fn 未执行、无 Promise、无 rejection
       // 可接——retire 已由 onStale 完成）；非 stale 时返回 Promise，非 stale rejection
       // 流到 .catch 仅告警。
@@ -247,8 +246,8 @@ export class SchedulerRuntime {
   }
 
   /**
-   * stale 自停退场（G1 前置检查与 F2 catch 分诊共用）：warn 观测口径与 crash-fix 一致
-   * （含 "tick stopped"，U1 断言锚定）+ stopScheduler（幂等）。timer 自停后调度由
+   * stale 自停退场（代际前置检查与 catch 分诊共用）：warn 观测口径不变
+   * （含 "tick stopped"）+ stopScheduler（幂等）。timer 自停后调度由
    * session_start 重建的新一代 runtime 接管。
    */
   private retireStaleTimer(): void {
@@ -316,7 +315,7 @@ export class SchedulerRuntime {
    * dispatch 单个任务。返回 true 表示消息已发出（投递端口受理 / 直发兜底受理），
    * false 表示 no-op（task disabled / 已有同任务在途 / rate-limited）。
    *
-   * R3-S1 in-flight 检查：tick 为 fire-and-forget，若 tick1 的 `await backend.deliverDispatch`
+   * in-flight 检查：tick 为 fire-and-forget，若 tick1 的 `await backend.deliverDispatch`
    * 挂起超过 TICK_INTERVAL_MS（如 pi 卡死），tick2 的 step2 会再标 pending、step3 对同一
    * task 并发第二个 dispatch → 同一 prompt 双注入。参照 subagent-workflow resumesInFlight
    * 模式：入口同步置位、finally 清除（覆盖 gate / rate-limit / sendMessage 抛错 / 成功推进
@@ -354,10 +353,10 @@ export class SchedulerRuntime {
    * 幂等键（不撞上一轮在端口投递日志里的终局条目——恒定 taskId 会被端口永久判重
    * 吞掉）。
    *
-   * U4 模型切换（设计 D3 修订版）：task.model 非空且 ≠ 会话当前模型时，dispatch 前
+   * U4 模型切换：task.model 非空且 ≠ 会话当前模型时，dispatch 前
    * 按序执行「互斥校验 → setModel(task.model) → 记未决切换记录 → dispatch」，切换段
-   * 整体入模型 op 串行队列（modelOpChain——与恢复 setModel 互斥，MF-2）。busy 亦照常 setModel
-   * （P-MODEL-② 证伪「busy 切换不生效」——steer 消息消费时在同一 run 内开新 turn，turn
+   * 整体入模型 op 串行队列（modelOpChain——与恢复 setModel 互斥）。busy 亦照常 setModel
+   * （已证伪「busy 切换不生效」——steer 消息消费时在同一 run 内开新 turn，turn
    * 开始从 ctx.model 取当前模型，setModel 对 steer turn 生效。pi 实装锚点（1.0.0 复核）：
    * dist/core/agent-session.js setModel 同步写 agent.state.model + 每个 turn
    * 准备时从 agent.state.model 取模型快照——setModel 先于下一 turn 准备即生效）。
@@ -378,7 +377,7 @@ export class SchedulerRuntime {
       const targetModelRef = task.model
       let skipped = false
       if (this.pendingModelSwitch) {
-        // 互斥窗口（设计 D3，理由 = 切换秩序）：未决记录未关闭时，其他需切模型任务命中即
+        // 互斥窗口（理由 = 切换秩序）：未决记录未关闭时，其他需切模型任务命中即
         // skip 本轮 + pending 留待下 tick 重试（复用现状 skip 语义，不建真队列；不需切模型
         // 的任务不受互斥影响——检查只在本分支）。「dispatch 写新记录前先结算旧记录」
         // 的落地：本分支结构性永不写新记录（杜绝新旧叠写），skip 前做一次 isIdle() 事实
@@ -390,7 +389,7 @@ export class SchedulerRuntime {
         await this.settlePendingIfIdle('mutex-settle')
         skipped = true
       } else {
-        // 模型 op 串行段（MF-2 收敛，互斥窗口全程覆盖「setModel 起步 → 记录创建」）：
+        // 模型 op 串行段（互斥窗口全程覆盖「setModel 起步 → 记录创建」）：
         // 前序模型 op（agent_settled 恢复 / 前序 dispatch 切换 / 错误路径恢复）可能仍在途——
         // 排队等待期间未决记录与当前模型均可能变化，禁止按排队前快照盲切（旧快照的
         // expectedModelRef 会把恢复锚点记错），串行段内重新校验后再切换。后来的需切模型
@@ -572,7 +571,7 @@ export class SchedulerRuntime {
   }
 
   /**
-   * 模型 op 入队（串行化原语，MF-2）：op 排到 modelOpChain 尾，前序 op 完成（含失败）
+   * 模型 op 入队（串行化原语）：op 排到 modelOpChain 尾，前序 op 完成（含失败）
    * 后才执行；返回本 op 的结果 Promise 供调用方 await。链尾引用恒吞错自愈（重置为
    * resolved），保证前序 op 失败不阻断后继、也不向链条泄漏 rejection（失败只回给本 op
    * 调用方）。op 内禁止再入队（会死锁）——现有 op（切换 / 恢复）只调
@@ -592,7 +591,7 @@ export class SchedulerRuntime {
    * 当前模型已等于期望（用户已手动切回）→ 清记录不动作；setModel(原) false →
    * restore-failed 终态（日志含恢复动作：会话停留在任务模型，需手动切回）+ 清记录。
    * 记录先关后恢复——防 await setModel 期间 agent_settled 与 tick 对账并发重入。
-   * 恢复 setModel 本体经模型 op 串行队列（serializeModelOp，MF-2）：agent_settled 挂点的
+   * 恢复 setModel 本体经模型 op 串行队列（serializeModelOp）：agent_settled 挂点的
    * fire-and-forget 调用由此变为安全——在途恢复持队，后续任何 setModel 发起点
    * （dispatch 切换 / 对账恢复）排队等待，两个 setModel 并发结构性不可能（完成顺序
    * 不定 → turn 静默跑错模型的交错被消除）。「当前 == 期望」复核移入串行段：排队
@@ -628,10 +627,10 @@ export class SchedulerRuntime {
    * _emitAgentSettled 先置 _isAgentRunActive = false 再 emit），dispatched turn 必已
    * 结束，无需 turnIndex 归属识别——事件到达即做 isIdle() 事实查询：
    * - idle → 兑现恢复（事件是提前触发的加速器，恢复延迟 = 事件即时）
-   * - 非 idle（settled 与用户新 run 交错）→ 不能切：会把新 run 的模型换掉
-   *   （P-MODEL-② 同族形态）。记录保留，由 tick 的 isIdle() 查询在 idle 重入时兑现。
+   * - 非 idle（settled 与用户新 run 交错）→ 不能切：会把新 run 的模型换掉。
+   *   记录保留，由 tick 的 isIdle() 查询在 idle 重入时兑现。
    * 不挂 agent_end 恢复：end 后仍可能有自动续跑 turn，此时切回会把续跑 turn 的模型换掉
-   * （P-MODEL-② 同族形态）——恢复只认 settled。
+   * ——恢复只认 settled。
    */
   handleRunSettled(): void {
     if (this.isCtxStale?.()) return
@@ -669,7 +668,7 @@ export class SchedulerRuntime {
   /**
    * 全量任务集快照落盘。失败 → logger.warn + 不 rethrow（原 ER-APPEND-FAIL 语义延续）：
    * 内存态已先行更新、不中断调度，下一次任务集变化的写点重试（残余窗口 = 「自上次
-   * 成功写之后的变化」在进程崩溃时丢失，见设计 §4.3 失败语义）。
+   * 成功写之后的变化」在进程崩溃时丢失）。
    * 不设 task.lastError='persist failed'（落盘失败是 transient，不应污染业务态）。
    */
   private persistTasksSafe(): void {

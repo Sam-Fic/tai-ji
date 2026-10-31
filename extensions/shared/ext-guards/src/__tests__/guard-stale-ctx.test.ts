@@ -20,7 +20,7 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-describe("guardStaleCtx 前置代际检查（G1 形态）", () => {
+describe("guardStaleCtx 前置代际检查", () => {
 	it("isCtxStale=true：fn 完全不执行，stale 静默降级返回 undefined", () => {
 		const fn = vi.fn(() => "should not run");
 
@@ -56,7 +56,7 @@ describe("guardStaleCtx 前置代际检查（G1 形态）", () => {
 	});
 });
 
-describe("guardStaleCtx 同步抛错分诊（F2 形态同步部分）", () => {
+describe("guardStaleCtx 同步抛错分诊（catch 分诊的同步侧）", () => {
 	it("非 stale 错误：原样上抛（同一错误实例，不吞不包装）", () => {
 		const boom = new Error("real bug: schema validation exploded");
 		const onStale = vi.fn();
@@ -108,7 +108,7 @@ describe("guardStaleCtx 同步抛错分诊（F2 形态同步部分）", () => {
 	});
 });
 
-describe("guardStaleCtx async fn（F2 形态异步侧，scheduler tick 迁移形态）", () => {
+describe("guardStaleCtx async fn（catch 分诊的异步侧，scheduler tick 迁移形态）", () => {
 	it("stale rejection：resolve 为 undefined（不 reject，fire-and-forget 安全）", async () => {
 		const onStale = vi.fn();
 
