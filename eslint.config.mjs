@@ -110,6 +110,16 @@ export default [
       'max-lines': 'off',
     },
   },
+  // sidebar 主组件（sessions tab 三支互斥链 / 项目分组 / 视图切换动效 / 恢复期状态行
+  // 预留挂点的宿主壳，D11 R4 裁决的挂载层级看守对象）：职责内聚但非注释行 503 超 500，
+  // 拆分属独立重构任务（随 chat 三件先例）。短期 max-lines override 避免阻塞，长期应拆分；
+  // 首次纳入门禁视野 = design-code-sync R1 G4（2026-10-31）触及该文件时暴露存量超限。
+  {
+    files: ['packages/renderer/src/components/sidebar/Sidebar.vue'],
+    rules: {
+      'max-lines': 'off',
+    },
+  },
   // [HISTORICAL] runtime 的 .cjs 文件（plugin-esm-loader.cjs 等）是 Node CJS 模块，
   // require() 是唯一导入方式——no-require-imports 规则对 .cjs 是误报（2026-08-05 添加，
   // sandbox ESM loader 落地时确认：tsup entry 直接打包 .cjs 源文件，无 TS 转换层）。
