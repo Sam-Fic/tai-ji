@@ -3,10 +3,15 @@
  *
  * - session_start：session 级闭包状态重建（规范 Session 隔离：熔断计数不跨 session）
  *   + fired 档位从 session entries 重建（D15：reload/进程重启同 session 不重复提醒）
+ *   + 会话替换类启动取消进行中后台压缩任务（D3 第一层，new/resume/fork）
  * - subagent 进程（R6）：不注册工具、不提醒（宁缺勿污）
  * - session_before_compact：双模式接管（compact-handler）
- * - session_compact：重置提醒 fired（D3）
- * - agent_settled：越档检查 + marker 持久化（D15）+ nextTurn 投递一次性提醒（D3/D4①）
+ * - session_compact：重置提醒 fired（D3）+ 后台任务被抢先取消（D3 第一层——后台路径自身
+ *   落盘不发该事件，收到即代表其他压缩抢先落盘）
+ * - session_shutdown：后台任务取消（D3 第一层）
+ * - session_tree：仅观测告警（D3 rejected：会话内回退不破坏压缩正确性，不取消）
+ * - agent_settled：后台压缩自动触发（D4：触发线/互斥/门控/独立熔断判定内聚 manager）
+ *   + 越档检查 + marker 持久化（D15）+ nextTurn 投递一次性提醒（D3/D4①）
  * - model_select：跨界通知 + downshift 提醒（D5/D4①）
  *
  * 通知投递路径（D4①，delivery-ownership-kernel）：四类通知全部经 notices.ts 的
@@ -19,9 +24,12 @@ import { guardStaleCtx, isSubagentProcess, toErrorMessage } from "@zhushanwen/pi
 import { setPiHandle } from "@zhushanwen/pi-extension-logger";
 
 import {
+	createBackgroundCompactionManager,
+	createBackgroundCompactionState,
 	createBeforeCompactHandler,
 	createTakeoverState,
 	debugLog,
+	type BackgroundCompactionState,
 	type TakeoverState,
 } from "./compact-handler.js";
 import { sendSmartContextNotice } from "./notices.js";
@@ -41,6 +49,8 @@ import {
 /** session 级闭包状态（规范：模块级仅工厂函数，状态在 session_start 重建）。 */
 interface SessionState {
 	takeover: TakeoverState;
+	/** 后台压缩任务状态（U2：进行中互斥 + 独立熔断计数）。 */
+	background: BackgroundCompactionState;
 	/** 已提醒档位（token 值为键；session_compact 清空，D3）。 */
 	firedThresholds: Set<number>;
 	/** fired 是否已从 session entries seed 过（D15：每次状态重建恰好 seed 一次）。 */
@@ -49,7 +59,12 @@ interface SessionState {
 
 /** session 级状态唯一构造点（初始态与 session_start 重建同源，新增字段不落两处）。 */
 function createSessionState(): SessionState {
-	return { takeover: createTakeoverState(), firedThresholds: new Set(), firedSeeded: false };
+	return {
+		takeover: createTakeoverState(),
+		background: createBackgroundCompactionState(),
+		firedThresholds: new Set(),
+		firedSeeded: false,
+	};
 }
 
 // G1 代际检测（crash-resilience D1，同 scheduler/src/index.ts 的模块级代数计数器范式）：
@@ -124,13 +139,36 @@ export default function smartContextExtension(pi: ExtensionAPI): void {
 		}
 	};
 
-	pi.on("session_start", (_event: unknown, ctx: ExtensionContext) => {
+	// ── 后台压缩任务管理（U2：触发判定/互斥/独立熔断/事件取消，D2/D3/D4）──
+	// getState 读当前代容器（state.background），manager 自身跨代存活无需重建
+	const background = createBackgroundCompactionManager(pi, () => state.background, loadSmartContextConfig);
+
+	pi.on("session_start", (event, ctx) => {
+		// D3 第一层（SI4）：new/resume/fork = 会话替换，进行中后台任务立即取消放弃结果
+		// （必须在重建 state 前 abort——否则旧任务失控跑完白花生成费用）；startup/reload
+		// 不取消（startup 时任务不存在；reload 使扩展工厂重跑、内存态自清）
+		if (event.reason === "new" || event.reason === "resume" || event.reason === "fork") {
+			background.cancelActive(`session_start(${event.reason})`);
+		}
 		// 先递增模块级代数再装配：自此同模块环境内所有前代闭包的 isCtxStale 返回 true
 		sessionGeneration += 1;
 		const myGeneration = sessionGeneration;
 		isCtxStale = () => sessionGeneration !== myGeneration;
 		state = createSessionState();
 		seedFiredThresholds(ctx);
+	});
+
+	// session_shutdown（D3 第一层）：扩展运行时因退出/reload/会话替换被拆除前到达——有任务即取消
+	pi.on("session_shutdown", (event) => {
+		background.cancelActive(`session_shutdown(${event.reason})`);
+	});
+
+	// session_tree（D3 rejected 论证）：会话内回退不产生语义错位（回退不取消，取消只浪费
+	// 已花生成费用）——仅观测告警
+	pi.on("session_tree", () => {
+		if (state.background.active) {
+			debugLog("session_tree during background compaction: keeping task (rollback does not invalidate snapshot)");
+		}
 	});
 
 	// ── 压缩生成接管（D1/D12）──
@@ -141,8 +179,11 @@ export default function smartContextExtension(pi: ExtensionAPI): void {
 	);
 	pi.on("session_before_compact", beforeCompact);
 
-	// ── 压缩完成：重置提醒档位（D3）──
+	// ── 压缩完成：重置提醒档位（D3）+ 后台任务被抢先取消（D3 第一层）──
+	// 后台路径自身落盘不发 session_compact（UD6：appendCompaction 纯追加无事件），
+	// 收到该事件必是其他压缩（同步接管/手动/原生兜底）抢先落盘
 	pi.on("session_compact", (_event, _ctx) => {
+		background.cancelActive("session_compact");
 		state.firedThresholds.clear();
 	});
 
@@ -155,6 +196,10 @@ export default function smartContextExtension(pi: ExtensionAPI): void {
 
 	// ── 阈值提醒（D3/D4）：agent_settled 越档检查 + marker 持久化 + nextTurn 一次性投递 ──
 	pi.on("agent_settled", (_event, ctx) => {
+		// 后台压缩自动触发（D4）：门控/互斥/独立熔断/触发线/准备数据组装判定全部内聚
+		// maybeStart，与下方提醒链路相互独立（触发即后台执行，不阻塞本回调）
+		background.maybeStart(ctx);
+
 		const config = loadSmartContextConfig();
 		const modelId = getCurrentModelId(ctx.model);
 		if (!isGatingActive(config, modelId)) return;
