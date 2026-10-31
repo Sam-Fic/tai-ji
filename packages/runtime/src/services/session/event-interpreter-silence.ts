@@ -18,6 +18,13 @@
  *（ask_user pending / compacting——锚点暂停计时非重置，RL5）；④ 非 backoff 宽限窗
  *（summarization_retry_scheduled 载荷 delayMs——RL11）。
  *
+ * [转后台防护（C1/C2 格，无锚点形态）] 前台命令静默 idleBackgroundSec 后转后台 = 工具
+ * 调用早退（[TAIJI-FG-BG] 标记 → tool_execution_end 帧刷新计时）；pending 后台任务无
+ * 帧流信号可锚（pending 态在扩展任务存储，完成通知经 steer 注入开新回合），不设豁免
+ * 锚点——防线 = ① T 公式恒盖过转后台窗 + 早退边沿帧刷新计时 + 转后台关闭
+ *（idleBackgroundSec=null）不装配判死分支（RL14）。转后台后同回合仍占用且静默超 T
+ * 照常判死（占用回合的持续静默即停滞目标形态；pi 整体挂死由第 1 层探测兜底）。
+ *
  * [ADR-0122 射程登记] 时间度量是判定载体的依据与前台空闲转后台先例同构（AS5）：
  * 静默 = 输出流的缺失，否定性信号无事件可发；阈值由自愈窗覆盖公式推出（非猜测量级）。
  * 退役条件：pi 若提供回合推进心跳/在途状态推送等确定性信号，本矩阵的时间判定可整体替换。

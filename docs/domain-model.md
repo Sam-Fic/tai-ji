@@ -47,14 +47,14 @@ session 的会话占用（occupancy）是四维结构：turn 维（状态机，�
 |----|--------|---------|---------|
 | 第 0 层 进程存活 | pi exit / error 事件链 | RpcClient exit 链（进程生死唯一权威） | 进程死 → 全部在途 RPC 显式失败（rejectAll）→ 错误入流 + 显式收尾广播 |
 | 第 1 层 事件循环活性 | get_state 探测请求有界等待（`PING_OBSERVE_TIMEOUT_MS` 5s 窗，60s 周期） | `PingProbe` 失败计数（每回合瞬态，探测生命期随 occupancy 转移边沿启停） | 窗内响应 = 事件循环活（失败计数清零）；超时计一次失败——2 次广播停滞 WARN，3 次判停滞（get_state 同步内存读必响应，连续观测超时即停滞确定性成立，无误杀范围） |
-| 第 2 层 回合推进 | 帧流事件静默计时 + 在途阶段定位 + 豁免锚点检查 | runtime 静默判定矩阵（event-interpreter-silence.ts；判定阈值 T = idleBackgroundSec + 300s 与提示阈值 T_hint = T − 60s 同源联动推导，经广播携带，renderer 不复制推导） | 静默超 T_hint → 活动条温和提示（判定权在 runtime，呈现只是辅助）；超 T 且无在途信号、无豁免锚点（ask_user 等待 / 压缩中 / 转后台标记）→ 判死 |
+| 第 2 层 回合推进 | 帧流事件静默计时 + 在途阶段定位 + 豁免锚点检查 | runtime 静默判定矩阵（event-interpreter-silence.ts；判定阈值 T = idleBackgroundSec + 300s 与提示阈值 T_hint = T − 60s 同源联动推导，经广播携带，renderer 不复制推导） | 静默超 T_hint → 活动条温和提示（判定权在 runtime，呈现只是辅助）；超 T 且无在途信号、无豁免锚点（ask_user 等待 / 压缩中）→ 判死；前台命令转后台不设锚点——防线 = T 公式恒盖过转后台窗 + 转后台早退边沿帧（tool_execution_end）刷新计时 + 转后台关闭配置不装配判死分支 |
 
 **非 occupancy 第五维**：停滞判定是信号驱动的瞬态判定与广播，不产生持久状态、不进 occupancy 状态机（上节四维结构与 `SESSION_TURN_MACHINE` 转移表不受影响）；与 occupancy 的唯一交点是生命期——探测与静默计时只在回合占用期运行、随 occupancy 转移边沿启停。
 
 **自动处置分型**（处置经强杀编排 forceQuitSession 唯一实现，按来源分型）：
 
 - 第 1 层判停滞且进程存活（事件循环挂死形态）→ 自动处置链：sample 调用栈取证 → 判死强杀（`probe_stall_auto_quit` 机器分型）→ 窄化自动恢复接回会话 → steer 注入原因提示；恢复失败降级死亡发声 + 用户手动重开。进程已死形态不进自动链，维持错误入流 + 用户显式重开。
-- 第 2 层判死 → 自动 abort + steer 注入原因提示（含静默时长与判定依据）；abort 悬挂超升级窗升级判死强杀（与第 1 层共用机器分型与自动恢复接线）。禁用超时配置（httpIdleTimeoutMs=0）或自愈窗实际配置值超出 T 覆盖公式的会话不启用第 2 层判死，降级仅提示（显式登记边界，非缺陷）。
+- 第 2 层判死 → 自动 abort + steer 注入原因提示（含静默时长与判定依据）；abort 悬挂超升级窗升级判死强杀（与第 1 层共用机器分型与自动恢复接线）。边界：转后台后同回合仍占用且静默超 T 照常判死——pending 后台任务无帧流信号可作锚点（完成通知经 steer 注入开新回合），占用回合的持续静默即停滞目标形态；pi 整体挂死由第 1 层探测兜底。禁用超时配置（httpIdleTimeoutMs=0）、自愈窗实际配置值超出 T 覆盖公式、或转后台关闭（idleBackgroundSec=null）的会话不启用第 2 层判死，降级仅提示（显式登记边界，非缺陷）。
 - 用户停止分型（`abort_timeout` / `user_force_quit`）语义不变：升级窗强杀后恢复归用户显式重开，不进自动恢复接线。
 
 ## 画布域

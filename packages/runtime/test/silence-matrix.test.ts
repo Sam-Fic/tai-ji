@@ -5,7 +5,8 @@
  * - RL4：T/T_hint 单源联动推导等式 + 逐窗不等式 + 配置维超界降级触发（两口径不并存——
  *   实施裁决 = 主案超界降级，resolveStallMatrixArms 纯函数消费配置快照）；
  * - RL5：豁免锚点（compacting / ask_user）暂停计时不产生漏报/误报；锚点消失后从既有静默
- *   时长继续（不重置）；判死后辅助提示清除；
+ *   时长继续（不重置）；判死后辅助提示清除；转后台防护（C2 格，无锚点形态）= T 盖过
+ *   转后台窗 + 早退边沿帧（tool_execution_end）刷新计时 + 边界后照常判死；
  * - RL11：在途信号刷新静默计时 + 过滤帧不计时 + summarization backoff 按载荷 delayMs
  *   宽限 + 反向判死必达；
  * - RL13：steer 投递失败降级 warn 不阻断恢复；
@@ -350,6 +351,32 @@ describe('RL5 豁免锚点：暂停计时非重置 + 判死后辅助提示清除
     expect(h.judged).toHaveLength(1)
   })
 
+  it('转后台防护（C2 格，无锚点形态）：早退边沿帧（tool_execution_end）刷新计时——转后台窗内不误杀，边界后照常判死', async () => {
+    const h = makeMatrix()
+    h.matrix.start()
+    // 前台命令静默至转后台窗满（默认 idleBackgroundSec=600s）：T=900s 构造性盖过，窗满未判死
+    await h.advance(DEFAULT_IDLE_BACKGROUND_SEC * 1_000)
+    expect(h.judged).toHaveLength(0)
+    // 转后台 = 工具调用早退（[TAIJI-FG-BG] 标记）→ tool_execution_end 帧到达：刷新计时重新起算
+    h.matrix.observe({
+      kind: 'tool-call-end',
+      toolCallId: 't1',
+      output: '[TAIJI-FG-BG] Command moved to background after 600s without output',
+      details: undefined,
+      images: undefined,
+      toolName: 'bash',
+      isError: false,
+      entry: {},
+    } as unknown as PiTranslatedEvent)
+    // 刷新后静默 899s（< T=900s）：不判死——转后台不设锚点，防线 = T 盖过转后台窗 + 边沿帧刷新
+    await h.advance(899_000)
+    expect(h.judged).toHaveLength(0)
+    // 登记边界：转后台后同回合仍占用且静默超 T 照常判死（pending 后台任务无帧流信号可锚）
+    await h.advance(1_000 + 2 * SILENCE_TICK_MS)
+    expect(h.judged).toHaveLength(1)
+    expect(h.judged[0].phase).toBe('tool')
+  })
+
   it('提示边沿：T_hint 到达 active=true 广播；帧流恢复 active=false 清除；判死（T）后提示清除（RL5 清除用例）', async () => {
     const h = makeMatrix()
     h.matrix.start()
@@ -542,6 +569,19 @@ describe('RL16 判死自动 abort：悬挂升级走判死强杀分型 + 恢复�
     expect(injectText).toContain('静默')
     expect(injectText).toContain('工具执行中')
     expect(userStoppedMarkStore.hasUserStoppedMark('s1')).toBe(false)
+    // reason 文案随分型分流（U3 修复断言）：stall_auto 升级套判死分型文案——entry 枚举
+    // 标签与实际 source 一致（非 'User abort…(abort_timeout)' 用户停止谎报），exit 含
+    // 「停滞 + 自动恢复」语义（与恢复链在途事实一致，D2 可读文案消费裁决）
+    expect(h.svc.persistSessionOutcome).toHaveBeenCalledWith(
+      's1', 'stopped', 'pi stalled (health probe unresponsive) — auto force-quit (probe_stall_auto_quit)',
+    )
+    const exited = h.published.find((m) => m.type === 'session.exited') as
+      | { type: 'session.exited'; payload: { sessionId: string; code: null; reason: string } }
+      | undefined
+    expect(exited).toBeDefined()
+    expect(exited!.payload.reason).toContain('停滞')
+    expect(exited!.payload.reason).toContain('自动恢复')
+    expect(exited!.payload.reason).not.toContain('User abort')
   })
 
   it('成功回执形态（LLM 请求类悬挂 abort 即达）：stopped 终态 + occupancy 复位 + complete{aborted} + steer 注入（静默文案）', async () => {
@@ -586,6 +626,17 @@ describe('RL16 判死自动 abort：悬挂升级走判死强杀分型 + 恢复�
       await p
       await h.flush()
       expect(h.order).toEqual(['destroy', 'consume', 'restore', 'inject'])
+      // reason 文案分流（U3 修复断言）：判死分型可读文案（停滞 + 自动恢复在途），非用户停止谎报
+      expect(h.svc.persistSessionOutcome).toHaveBeenCalledWith(
+        's1', 'stopped', 'pi stalled (health probe unresponsive) — auto force-quit (probe_stall_auto_quit)',
+      )
+      const exited = h.published.find((m) => m.type === 'session.exited') as
+        | { type: 'session.exited'; payload: { sessionId: string; code: null; reason: string } }
+        | undefined
+      expect(exited).toBeDefined()
+      expect(exited!.payload.reason).toContain('停滞')
+      expect(exited!.payload.reason).toContain('自动恢复')
+      expect(exited!.payload.reason).not.toContain('User abort')
     }
     // ④ session_manager abort 工具——agent 显式停止意图：升级强杀后不进恢复、不注入
     {
@@ -600,6 +651,18 @@ describe('RL16 判死自动 abort：悬挂升级走判死强杀分型 + 恢复�
       expect(h.order).not.toContain('consume')
       expect(h.order).not.toContain('restore')
       expect(h.order).not.toContain('inject')
+      // reason 文案分流（U3 修复断言）：机器发起文案（非 'User abort'），不含「自动恢复」
+      // 承诺（与 V11 e 恢复接线零调用一致——恢复归 agent/用户显式重开）
+      expect(h.svc.persistSessionOutcome).toHaveBeenCalledWith(
+        's1', 'stopped', 'Agent abort timed out — auto force-quit (probe_stall_auto_quit)',
+      )
+      const exited = h.published.find((m) => m.type === 'session.exited') as
+        | { type: 'session.exited'; payload: { sessionId: string; code: null; reason: string } }
+        | undefined
+      expect(exited).toBeDefined()
+      expect(exited!.payload.reason).toContain('agent 发起的停止请求')
+      expect(exited!.payload.reason).not.toContain('自动恢复')
+      expect(exited!.payload.reason).not.toContain('User abort')
     }
   })
 })
