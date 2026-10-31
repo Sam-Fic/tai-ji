@@ -21,7 +21,8 @@
  *   store 模块（路径推导与文件形状构造性一致）。快照读取不依赖 pi 进程存活——
  *   dead/恢复中会话的任务列表照常可读。
  * - 刷新触发：任务库写入不产生会话 entry（无失效信号可订阅），改三通道——
- *   ① 写命令成功后主动 scheduleRefresh（本插件写路径自己发起）；
+ *   ① 写路径快照自检：操作前快照无该 id 时立即 scheduleRefresh 重拉（handleWrite E5）；
+ *      写命令受理后不主动刷新，变更由 ② 收敛；
  *   ② 周期轮询（POLL_INTERVAL_MS，覆盖对话内 schedule tool 创建/删除与到点 dispatch
  *     的记账变化；非活跃会话无 pi 进程、快照不变，轮询读同一文件成本为一次小文件读）；
  *   ③ onDidActivateSession 补充拉取（切换会话即时刷新）。
@@ -270,6 +271,10 @@ interface SessionMirror {
   disposables: DisposableLike[]
 }
 
+// @data-owner #88 —— per-session 任务集镜像（数据唯一入口 = 任务库快照文件直读；权威源 =
+// 分片快照，刷新 = 首拉 / 周期轮询 / onDidActivateSession 补充拉取 / 写路径无该 id 时重拉，
+// 清理 = teardownMirror〔onDidDestroySession〕。resources/plugins 不在 @data-owner 全仓扫描根内，
+// 登记见 docs/architecture/data-source-registry.md #88）。
 const mirrors = new Map<string, SessionMirror>()
 /** 渲染端焦点会话（open 链无会话上下文，见头注；didActivate 维护 + list() 兜底） */
 let focusSessionId: string | null = null
@@ -500,7 +505,7 @@ async function handleWrite(
     if (receipt.accepted) {
       // 写成功：旧失败 notice 必须清掉再推——不清则下一次刷新会把陈旧
       // 「操作未生效」与已变更行一起重推（操作已生效却仍挂失败提示）。主动 push 让
-      // 清除立即可见（重复推送幂等）；数据不乐观更新，快照仍由三通道刷新收敛。
+      // 清除立即可见（重复推送幂等）；数据不乐观更新，快照由轮询与激活信号刷新收敛。
       await setNoticeAndPush(api, sessionId, null)
       return
     }

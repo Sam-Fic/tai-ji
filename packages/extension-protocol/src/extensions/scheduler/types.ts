@@ -40,8 +40,8 @@ export type ExecutionRecord = {
 }
 
 /**
- * history 裁剪上限（单点）：runtime 侧 dispatch 累积（appendExecutionRecord）与
- * 快照写入口的 history 拷贝共用同一上限——多处各持字面量会漂移，收敛到本文件单点导出。
+ * history 裁剪上限（单点）：由 `appendExecutionRecord` 在 runtime 记账侧执行裁剪；
+ * 快照写入口不裁剪（只逐项拷贝）——上限字面量只此一处，多处各持会漂移。
  */
 export const HISTORY_LIMIT = 20
 

@@ -16,7 +16,7 @@
 //   - 持有 running record（终态/回收 record 在 archive 时立即从内存移除）
 //   - onChange 订阅（TUI widget/list 据此重渲）
 //   - collectRecords：内存(running) ∪ 磁盘(sessions/*.jsonl 重建) ∪ 主 session entry 源
-//     （[U7/B-restart] zcode record 专用缺员补源）∪ manifest(sessions-index.json 补充) 四源合并
+//     （[U7/B-restart] zcode record 专用缺员补源）∪ manifest（manifest 目录 <id>.json 补充）四源合并
 //   - 提供 snapshot() 只读视图给 TUI（永不返回可变引用）
 //
 // ════════════════════════════════════════════════════════════════════

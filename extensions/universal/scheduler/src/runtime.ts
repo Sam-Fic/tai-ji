@@ -61,7 +61,8 @@ interface PendingModelSwitch {
   targetModelRef: string
 }
 
-// HISTORY_LIMIT 单点在 protocol types.ts——runtime 记账与快照写入口共用同一上限。
+// HISTORY_LIMIT 单点在 protocol types.ts——runtime 记账（appendExecutionRecord）裁剪到该上限；
+// 快照写入口不裁剪，只逐项拷贝 history。
 // STALE_CTX_MARKER（文案兜底分诊词）已迁移到 ext-guards 共享检查（guardStaleCtx 内部
 // 引用，本文件不再直接持有）。语义：G1 模块级代际检测（isCtxStale）为主判；文案子串
 // 覆盖代际盲区——显式 reload / cwd 变化触发 clearExtensionCache 后 jiti 重新 import 产生

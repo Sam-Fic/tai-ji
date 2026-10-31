@@ -12,7 +12,7 @@ pi-scheduler 是 **session 存活期间的 AI 提醒器**——在 pi 进程运�
 - 电脑睡眠 / 关机 = 不触发
 - 不依赖系统 crontab，不注册任何开机自启
 
-**任务归属创建它的 session**：任务物理存储在创建它的 session 的 JSONL 文件内，**只在 owner session 打开（继续对话 / resume）时才触发**。
+**任务归属创建它的 session**：任务物理存储为独立 JSON 快照分片（按 owner sessionId 分片，见「数据存储位置」），**只在 owner session 打开（继续对话 / resume）时才触发**。
 
 > **这是设计决策，不是 bug（D9）**：本扩展定位是 **session 级 AI 提醒器**——任务归属创建它的 session，只在 owner session 存活时触发。如果你每天开新 session，昨天建的"明早检查 CI"任务今天不会响，除非你 resume 昨天创建该任务的那个 session。这不是"任务丢了"：任务随 session 持久化，session 不打开就不调度。**用户若发现「昨天建的任务今天没响」，这是预期行为**，请 resume 创建该任务的 session。
 
@@ -38,26 +38,19 @@ npm install @zhushanwen/pi-scheduler
 
 ```
 session_start
-  ├─ PiSchedulerBackend（pi.sendMessage + 时间源 + appendEntry + getEntries）
+  ├─ 推导任务库分片路径：schedulerStoreFilePath(getAgentDir(), ctx.cwd, shardKey)
+  │    （shardKey = sessionId；--no-session 等空/非法值归一为 'no-session'）
+  ├─ PiSchedulerBackend（投递端口 dispatch + 快照文件读写 + 时间源）
   │    └─ SchedulerRuntime（内存态 + 30s tick 调度 + 限流）
   │         └─ SchedulerService（tool/command 唯一业务入口）
-  ├─ runtime.loadTasks(replay(getEntries()))  ← 重放 session JSONL 的 custom entry 折叠恢复任务
-  │                                             （仅 ownerSessionFile 匹配的加载，fork 副本被过滤）
+  ├─ runtime.loadTasks(backend.loadTasks())  ← 一次 JSON.parse 直读快照分片重建任务集
+  │                                             （分片不存在 = 空任务集，正常路径；
+  │                                               fork 新 sessionId → 新分片，天然不继承）
   ├─ runtime.startScheduler()                  ← 启动 30s tick
   └─ 注册 scheduler widget（每个 tick 后刷新）
 ```
 
-运行时每次状态变更会 append 一条 custom entry 到创建任务的 session 的 JSONL（统一 `customType: pi-scheduler:task`，`op` 字段区分）：
-
-| op | 触发时机 | 携带数据 |
-|----|---------|---------|
-| `upsert` | 创建 / 更新任务 | task 全快照（含 nextRunAt 初值、ownerSessionFile） |
-| `advance` | dispatch 成功后 | 推进后的 nextRunAt、本次执行 at / status |
-| `toggle` | 启用 / 停用 | enabled（enable 时若重算了 nextRunAt 则随 op 一并携带，防 resume 回退到过期值） |
-| `delete` | 删除；once 触发后自动 delete | taskId |
-
-- fork 出的 session 重放时按 `ownerSessionFile` 过滤，不加载、不执行继承的任务副本（原 session resume 照常）
-- `session_shutdown` 停止 tick + 兜底执行延迟删除 cleanup（正常路径已由首个 turn_end 完成）——任务已 append 到 JSONL，无需额外写盘
+运行时每次任务集变更（创建 / 更新 / 推进 / 启停 / 删除）都把内存任务集**全量快照原子落盘**到该 session 的分片文件（`persistTasks`：tmp + fsync + rename 原子替换，见「数据存储位置」）。会话 JSONL 只承载 dispatch 注入消息与用户对话，**不承载任务数据**（任务库与会话事实分离，2026-10-30 裁决）。
 
 ## /schedule 命令用法
 
@@ -203,60 +196,73 @@ pi -p "/schedule 5m 'check build'"
 | once 任务 | 触发后自动删除 | 不参与后续调度 |
 | cron 失效 | 任务停用 + `lastStatus=failed` + `lastError='cron expression invalid'` | 不会用 `now()` 兜底导致每 tick 重触发死循环 |
 | 忙时 dispatch | steer 直投（scheduler-steer-direct-dispatch） | busy 时消息插入当前 turn、idle 时开新 turn（`{deliverAs:'steer', triggerTurn:true}`），受理即记账不排队；同任务 in-flight 检查防双投 |
-| history | 保留最近 **20** 条执行记录 | 超出丢弃最旧；重放折叠时同样裁剪 |
-| 持久化 | custom entry append 到 session JSONL（dispatch 成功后立即 append advance 记录执行） | 任务随 owner session 持久化，resume 后重放恢复，无需额外写盘 |
-| 交付语义 | **at-least-once**（至少一次） | dispatch 成功后内存更新 nextRunAt 并 append advance；append 之前若进程崩溃可能重复注入一次（无精确一次保证，可接受） |
-| 延迟写入窗口 | 新 session 首 turn 内建任务后进程崩溃可能丢失 | pi 延迟写入：首条 assistant 消息前不 flush。窗口窄、概率极低、无恢复手段 |
+| history | 保留最近 **20** 条执行记录 | 超出丢弃最旧（上限由 `appendExecutionRecord` 在 runtime 记账侧单点裁剪）；快照写入口**不裁剪**——只剥离运行时标记 `pending` 后逐项拷贝 `history` 全量序列化 |
+| 持久化 | 任务集全量快照原子落盘（每次任务集变更即写，tmp+fsync+rename） | 任务随 owner session 分片持久化，resume 后直读恢复；落盘失败 warn + 内存态照常推进、下写点重试 |
+| 交付语义 | **受理即记账**（投递端口 at-most-once 注入） | dispatch 经投递端口受理后注入失败首败即弃（forget，2026-10-25 裁决：丢一轮 << 重投造成重复提醒）；端口拒收（rejected）走 failed 记账、下个 tick 单通道重试 |
+| 延迟写入窗口 | 无（写盘不依赖 pi 会话首写门控） | 任务库独立于会话 JSONL，每次变更即落盘——旧「pi 首条 user 或 assistant 消息前不 flush」的丢失窗口已随任务库分离消除 |
 | 触发条件 | pi 进程需存活且 session 打开 | 电脑睡眠 / pi 进程未运行 = 不触发（非系统 cron，无后台守护） |
 
 错误语义（无错误码；双受众分派——`message` 英文回退供 tool result / `messageKey`+`params` 供命令层词典渲染，见「文案与语言」）：`schedule` tool 创建时参数预校验失败（prompt 空 / schedule 非法）→ 直接 throw `Invalid parameters: ...`（修正参数后重调）；`/schedule` 命令 `json`/`print` 模式带参解析失败 → throw 词典文案（en: `Invalid schedule: "..."`）；`run`/`toggle`/`delete` 引用不存在的 id / `run` 时任务 disabled / rate-limited / 同任务在途 / 任务数超上限 → 命令层 toast 按词典本地化（en 示例：`Task <id> not found` / `Task <id> not dispatched (disabled, rate-limited, or dispatch in flight)` / `Task limit reached (50) — delete one first`）。表单交互的取消/abort 不是错误（不创建、无 toast）；通道失败/回包非法在 rpc/tui 走 `notify(..., 'error')`、在 json/print 走 throw——见「创建方式」。
 
 ## 数据存储位置
 
-### 当前机制
+### 当前机制（独立 JSON 快照分片）
 
-任务存储为 custom entry，写入创建它的 session 的 JSONL 文件（统一 `customType: pi-scheduler:task`，`op` 字段区分 upsert / advance / toggle / delete）。任务物理归属于创建它的 session——`appendEntry` 把 entry 写入当前 session 的 JSONL，`getEntries()` 重放折叠恢复内存态。
+任务存储为独立 JSON 快照文件（scheduler-redesign 方案 B：任务库与会话事实分离，2026-10-30 裁决），路径由 `schedulerStoreFilePath(getAgentDir(), cwd, sessionId)` 推导：
 
-### append-only
+```
+<agentDir>/scheduler/<root>/<segments>/<sessionId>.json
+```
 
-custom entry 物理追加到 JSONL，不修改、不删除——pi 依赖 JSONL 物理保留来维持 session tree 的 parentId 链。重放时 per-taskId 按 entry 顺序折叠得到当前态：
+- `agentDir` = pi 的 `getAgentDir()` 官方数据目录
+- `<root>/<segments>` = owner session 工作目录（cwd）的路径隔离层——同 agentDir 下不同 cwd 互不干扰
+- `<sessionId>.json` = 分片文件：持久会话按 sessionId 分片（resume 同 id 同文件恢复；fork 新 id → 新分片空任务集，天然不继承，等价旧 fork owner 过滤语义）；`--no-session` 等空/非法 sessionId 归一为固定分片 `no-session`（任务仍持久化，跨重启命中同一分片恢复）
 
-- `upsert` → 任务以快照覆盖（last-write-wins，含 ownerSessionFile / nextRunAt 初值）
-- `advance` → 推进 nextRunAt、记录本次执行（at / status）
-- `toggle` → 切换 enabled
-- `delete` → 该任务标记消失（once 触发后自动 delete，重放即不见）
+文件形状：`{ schemaVersion: 2, sessionFile?: string, tasks: ScheduledTask[] }`——`tasks` 为内存任务集全量快照（写入口统一剥离运行时标记 `pending`、逐项拷贝 `history`）；`sessionFile` 为冗余排障字段。
 
-末态 = per taskId 全序列折叠的结果：最后一次 delete 之后若无后续 upsert 则任务不存在；advance / toggle 为增量 op，叠加在其 upsert 快照之上。
+### 原子替换写
+
+每次任务集 mutation 全量落盘（`backend.persistTasks` → `writeSchedulerStore`）：序列化到 tmp 文件 → fsync → rename（POSIX rename 原子性）。崩溃时要么旧文件完整、要么新文件完整，无半写形态。目录不存在则递归创建（首写建目录）。写失败 throw，由 runtime 的 `persistTasksSafe` 捕获：warn + 内存态照常推进，下一次任务集变化的写点重试。
+
+### 读路径三分支
+
+`backend.loadTasks`（装配点 session_start 调用，非接口成员）→ `readSchedulerStore` 一次 JSON.parse：
+
+- 文件不存在（missing）→ 空任务集（新 session / fork / 从未建任务，**正常路径**）
+- 损坏（corrupt：解析或形状校验失败）→ 改名 `<path>.corrupt-<ts>` 留证 + warn，按空任务集继续（调度不中断）；改名自身失败不抛，仍返回 corrupt
+- 其他读错误（EACCES 等）→ 上抛，由装配点显式降级（warn + 空任务集继续装配，恢复失败计数累计可见）
+
+### 会话 JSONL 的边界
+
+会话 JSONL 只承载 dispatch 注入消息（到点注入时会话必已含 user 或 assistant 消息——任务只能经用户命令或模型 tool 创建，二者都以 user 或 assistant 消息为前提，pi 首写门控早已通过）与用户对话；任务定义与调度记账**不写会话 JSONL**——无首写门控依赖，任务库写盘独立于会话流。旧 event sourcing 写链（`pi-scheduler:` custom entry 族 + replay 重放折叠）已随 plan B 整体删除。
+
+### 单一写者 + 同源单实现
+
+分片键 = sessionId 保证单写者：同一 session 同一时刻只有一个 pi 进程，分片文件天然无并发写。**已知例外**：`--no-session` 等空/非法 sessionId 归一为固定分片 `no-session`——同 cwd 并存多个 `pi --no-session` 进程时共写同一文件，写侧整文件 RMW（tmp → fsync → rename）无跨进程锁，后写覆盖先写。store 模块（`@zhushanwen/extension-protocol/scheduler-store`）是扩展（pi 进程内，唯一写者）与 taiji scheduler-manager 面板（runtime worker，只读者）的同源单实现——路径推导与文件形状两侧构造性一致，双实现会漂移。
 
 ### 不进入 LLM context
 
-pi 的 context 构建对 custom entry 无 case（被过滤）——任务数据零污染对话上下文，不影响 token / 模型上下文。
+任务数据存独立文件，天然不进 pi 的 context 构建——零 token 污染，不依赖 pi 对 custom entry 的过滤行为。
 
 ### 归属即结构性质
 
-任务物理存在于创建 session 的 JSONL 内。**session 文件删除 = 任务消失**，无残留、无需 GC、无分片文件。fork 出的 session 不加载继承的任务副本（ownerSessionFile 过滤），subagent 也不受主 session 任务干扰。
+任务物理存在于 owner session 的分片文件。**分片文件删除 = 任务消失**，无残留、无需 GC。但 **session 删除不回收分片**：分片在 `<agentDir>/scheduler/...`（pi agent 数据目录）不在 session 存储树内，无 owner、无清理路径（已知例外，见 data-source-registry #88）——fork 出的 session 用新 sessionId → 新分片（不加载、不执行继承的任务副本，原 session resume 照常），subagent 也不受主 session 任务干扰。
 
-### 旧版迁移
+### 旧 store（v1）处置
 
-升级前任务存在 cwd 共享的旧 store（`~/.pi/agent/schedule/` 下按 cwd 路径展开的 `scheduler.json`；导入时同时探测 `getAgentDir()` 下的同形路径）。升级后首个检测到旧文件的 session 原子 `rename` 为 `scheduler.json.imported`，逐任务 appendEntry upsert 到自己的 JSONL，然后删除 `.imported`（⚠️ 删除时机依赖 flush：resumed session 已落盘可立即删；新 session（pi 延迟写入，entries 仅内存）延迟到首个 `turn_end`（该轮 message_end 已全部持久化，flush 必已发生）确认 flush 后删，`session_shutdown` 兜底；未 flush 保留 `.imported` 供崩溃恢复重导入，避免源文件销毁 + 数据未落盘的双重丢失）：
-
-- **归属**：旧任务无 owner 信息，**归属首个完成导入的 session**（无更好近似）
-- **过期任务立即触发**：导入后若 nextRunAt 已过期，**首个 tick 立即 dispatch**（once 立即注入、recurring 补跑）
-
-### entry 累积
-
-recurring 长期 session 的 scheduler entry 会持续累积（每次 dispatch append 一条 advance）。量级可控：约 250B/条，1h 任务运行一年约 8760 条 ≈ 2MB。且 custom entry 不进 LLM context，不影响 token / 模型上下文。**不做物理裁剪**（append-only 约束 + advance 是 nextRunAt 正确性的必要记录，不可省）。未来若成问题，方向是等 pi 提供 compaction hook，不是本 extension 自建裁剪。
+旧版 store（cwd 共享的 `scheduler.json`，v1 schema）与新分片同目录不同名、互不冲突；按用户裁决**不迁移、留盘为孤儿**——升级后旧文件原样保留，不读不写。
 
 ## 依赖的 pi 行为清单
 
-本扩展的存储方案（custom entry event sourcing）依赖以下 pi 源码行为。这些是**实测存在但非 SDK 契约承诺**的隐式行为，pi 升级后需逐条复核：
+本扩展的存储与投递方案（独立快照分片 + 投递端口 dispatch）依赖以下 pi 源码行为。这些是**实测存在但非 SDK 契约承诺**的隐式行为，pi 升级后需逐条复核。各条锚点实测自 **pi v1.0.0**：路径相对 pi-mono 仓库 `packages/coding-agent/src/`（`core/` 前缀照写；`config.ts` 在包根，`agent.ts` 取自 `packages/agent/src/`），行号为该版本源码行；pi 升级后按文件名 + 符号名重新定位行号复核（行号会漂移，符号名是稳定锚点）：
 
-1. **`pi.appendEntry` / `ctx.sessionManager.getEntries()` 存在且 custom entry 不进 LLM context**：custom entry 在 pi 的 context 构建（`sessionEntryToContextMessages`）中无 case，被 flatMap 过滤，任务数据零污染对话上下文。若 pi 未来把 custom entry 纳入 context，会污染 token / 模型输入
-2. **fork（`forkFrom`）全文件复制 custom entry**：forkFrom 是全文件复制（含被放弃分支的 entries，无 fork 点概念），不是 fork 点路径复制。本扩展靠 owner 过滤兜底两条复制路径。若 pi 改为按分支选择性复制，fork 隔离逻辑需重新评估
-3. **`getEntries()` 返回全量 entries（不按当前分支过滤）**：实测 `getEntries()` 返回全部 fileEntries（session-manager.js:982-984），navigate 只改 leafId 指针不改 entries。因此任务不随 navigate 消失。若 pi 改为按 leafId / 分支过滤 getEntries，切换分支会导致任务丢失
-4. **navigate / 切换分支不改任务 entries**：navigate 只移动 leafId 指针，不增删 custom entry，任务 entries 跨分支稳定存在。若 pi 未来在 navigate 时裁剪 entries，任务持久性会破坏
+1. **`getAgentDir()` 返回进程级数据目录**：任务库分片根路径来源。实测：`PI_CODING_AGENT_DIR` 环境变量覆盖优先、缺省 `~/.pi/agent`（config.ts:563-569；常量名定义 config.ts:543）。runtime 注入 pi 进程的 `PI_CODING_AGENT_DIR` 与 taiji 面板侧 `getPiAgentDir()` 必须指向同一目录，否则两侧分片路径漂移（同源单实现的前提）
+2. **`sessionManager.getSessionId()` / `getSessionFile()` 稳定语义**：sessionId 是分片键（resume 同 id / fork 新 id 的恢复语义全系于此）；`getSessionFile()` 为空 = `--no-session` 模式的判据（归一 `no-session` 分片）。实测：两 getter 直读字段（core/session-manager.ts:1152-1158）；resume 加载时 sessionId 取自文件 header（core/session-manager.ts:1090），fork / 新 session 换新 id（core/session-manager.ts:1713、1745）。若 pi 改变 sessionId 的稳定性（如 resume 换 id），任务恢复会失效
+3. **`host.sendMessage` steer 档注入形态**：dispatch 经投递端口翻译为 steer 档 `sendMessage`（busy 时消息插入当前 turn、idle 时开新 turn，`{deliverAs:'steer', triggerTurn:true}`）。实测：扩展 sendMessage 绑定到 `sendCustomMessage`（core/agent-session.ts:3341-3349）；`isStreaming` 时 steer 档转入 `agent.steer`、非 streaming 且 `triggerTurn` 时开新 turn（core/agent-session.ts:2259-2272）；steer 消息在当前 assistant turn 的工具调用结束后、下一次 LLM 调用前注入（agent.ts:299-301 入队，注入时机注释 core/agent-session.ts:2156-2158）。若 pi 改变 steer 语义（注入失败形态、triggerTurn 行为），dispatch 交付语义需重新评估
+4. **`ctx.isIdle()` 同步事实查询**（U4 dispatch 模型切换恢复判定锚点）：agent_settled 事件的「run 完全沉降」复核依赖它。实测：接口声明 core/extensions/types.ts:348，ctx 绑定经 runner 转发（core/extensions/runner.ts:909-912），getter 实装 = `!_isAgentRunActive && !isCompacting`（core/agent-session.ts:1435-1437）。若语义变化，模型恢复判定需重新评估
+5. **会话首写门控（user 或 assistant 消息）**：会话 JSONL 文件在会话首次含 user 或 assistant 消息时才创建（首 flush）；setup entry（model / thinkingLevel / system prompt）与扩展注入的 custom message 单独存在时不落盘。任务库写盘不依赖该门控（任务库独立于会话 JSONL），但「任务创建后会话文件已存在」的推断以它为前提。实测：`_hasConversation()` 判据 = `fileEntries` 中类型 `message` 且 role 为 `user` 或 `assistant`（core/session-manager.ts:1166-1170），`_persist` 首次 flush 在该判据成立时以 `openSync(..., 'wx')` 建文件（core/session-manager.ts:1172-1177），注释原文「Starting at the user message (not the first assistant reply)」（core/session-manager.ts:1161-1164；pi 包 dist 编译产物对应 core/session-manager.js:786-798）。若 pi 改变门控（如首条任意 entry 即落盘，或扩展 custom message 也算会话事实），依赖该前提的叙述与验收需重新评估
 
-任一条行为变更都需重新验证 design 的 D1 / D2 断言与验收场景（尤其 resume、fork 场景）。
+任一条行为变更都需重新验证验收场景（尤其 resume、fork、dispatch 场景）。
 
 ## 开发
 
@@ -267,10 +273,10 @@ npx vitest run src/__tests__/<file>.test.ts   # 单个文件
 
 测试策略：
 
-- **依赖反转**：`SchedulerRuntime` 只依赖 `SchedulerBackend` 接口（`sendMessage` / `appendEntry` / `now`），不触碰 FS/pi。测试注入 `MockSchedulerBackend`（`src/__tests__/mock-backend.ts` 测试专用实现）实现零副作用测试
+- **依赖反转**：`SchedulerRuntime` 只依赖 `SchedulerBackend` 接口（`deliverDispatch` / `persistTasks` / `now`），不触碰 FS/pi。测试注入 `MockSchedulerBackend`（`src/__tests__/mock-backend.ts` 测试专用实现，记录 deliverDispatch/persistTasks 调用、支持注入固定时间与落盘失败）实现零副作用测试；`backend.loadTasks` 类方法由 store 模块的真实读写覆盖（临时目录注入路径即可全行为覆盖，设计 §6.2「TaskStore 是纯 FS 模块，注入路径即可测」）
 - **纯函数**：`parseDuration` / `formatDuration` / `parseSchedule` / `computeNextRunAt` / `computeNextRuns`（`src/parsing.ts`）无副作用，可直接断言
-- **重放折叠**：custom entry 折叠协议（upsert / advance / toggle / delete，含 nextRunAt 重放恢复、fork owner 过滤）
+- **快照读写**：store 模块三分支读（ok / missing / corrupt 改名留证）+ 原子替换写 + 写入口 pending 剥离与 history 逐项拷贝（不裁剪——20 条上限属 `appendExecutionRecord`，`@zhushanwen/extension-protocol` scheduler-store 子出口测试）
+- **投递链**：backend deliverDispatch 的端口受理/拒收/幂等键路径（`src/__tests__/backend-delivery.test.ts`）
 - **直建流**：`handleSchedule` 预校验 / abort / 参数透传（`src/__tests__/tool-create-flow.test.ts`）；命令路径表单（无参 / 带参预填 / 取消 / 提交 / channel-error / non-json / echo / 模式矩阵 / 异步不阻塞 / json·print throw，`src/__tests__/commands-form.test.ts`）；交互生命周期（草稿构造 + AbortController 注册表，`src/__tests__/interaction.test.ts`）
-- **旧 store 导入**：rename `.imported` 原子收敛（单成功者、崩溃恢复）
 
-扩展内部结构：`backend.ts`（后端抽象）→ `replay.ts`（custom entry 重放折叠）→ `runtime.ts`（调度核心）→ `service.ts`（业务入口）→ `tool.ts`（tool 直建流）/ `commands.ts`（/schedule 命令适配层）→ `interaction.ts`（表单交互 / 协议错配 / AbortController 生命周期）→ `create-form-component.ts`（TUI 创建表单组件，由 `interaction.ts` 消费）→ `widget.ts`（双模状态栏 widget：GUI 结构化 meta + TUI 文本行）→ `i18n.ts`（L2 词典 / locale 读取 / 结果渲染）→ `importer.ts`（旧 store 导入）。
+扩展内部结构：`backend.ts`（后端抽象：投递端口 dispatch + 快照读写）→ `runtime.ts`（调度核心，任务集 mutation 后 `persistTasksSafe` 全量快照落盘）→ `service.ts`（业务入口）→ `tool.ts`（tool 直建流）/ `commands.ts`（/schedule 命令适配层）→ `interaction.ts`（表单交互 / 协议错配 / AbortController 生命周期）→ `create-form-component.ts`（TUI 创建表单组件，由 `interaction.ts` 消费）→ `widget.ts`（双模状态栏 widget：GUI 结构化 meta + TUI 文本行）→ `i18n.ts`（L2 词典 / locale 读取 / 结果渲染）。快照文件读写实装在 `@zhushanwen/extension-protocol` 的 scheduler-store 子出口（`packages/extension-protocol/src/extensions/scheduler/store.ts`，与 taiji scheduler-manager 面板同源单实现）。

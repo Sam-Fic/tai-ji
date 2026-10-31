@@ -227,9 +227,9 @@ it('首屏渲染：<页面> DOM 含关键交互元素', () => {
 |-----------|---------|----------------------------------|
 | Landing 态（无 session）| `Panel`（`sessionId:null`）| `composer-box` / `chip-directory` |
 | 激活 session 后 | `Panel`（激活态）| `composer-box` / `turn-*` |
-| 侧边栏 | `Sidebar` / `SessionItem` | `session-list` / `session-item` / `session-agent-badge`（agent-spawned AI 标记）/ `session-view-parent-item`（查看父 session 菜单项） |
-| 文件树 | `FileTree` | `file-tree` / `tree-node` |
-| 搜索浮层 | `SearchModal` | `search-modal` / `search-input` |
+| 侧边栏 | `Sidebar` / `SessionItem` | `session-agent-badge`（agent-spawned AI 标记）/ `session-view-parent-item`（查看父 session 菜单项） |
+| 文件树 | `FileTree` | 无生产 testid 实现（`file-tree` / `tree-node` 均零命中，随 renderer 重写重建） |
+| 搜索浮层 | `SearchModal` | `search-input`（`SearchModal.vue` 实有；容器级 `search-modal` 无实现，随 renderer 重写重建） |
 | Composer slash 浮层 | `Composer` | `composer-box` |
 | Settings · 用量 | `UsagePage` | `usage-ledger` / `usage-metric-toggle` / `usage-range-toggle` / `usage-empty-state` / `usage-error-state` |
 
@@ -289,6 +289,7 @@ it('首屏渲染：<页面> DOM 含关键交互元素', () => {
 | **pi 语义检查探针族** | 静态直读 pi dist 断言私有语义契约（pattern 引擎匹配规则 / reasoning 两级门控 / RPC 响应侧 / steer drain 窗 / settled 复位序 / entry→context 映射），pi 升级语义漂移即红；配套 `check-pi-semantics.mjs` 版本门禁（四包一致 + verifiedWith 比对）与 `diff-probe-thinking.mjs` 档位对账。破坏=pi bump 后语义假设批量过期无人知（登记≠防御：8-20 登记观察项 8-27 照样出事的实证） | `2026-08-27 事故对`（subagent 派发 429/gc + 思考等级自动变关）`[from: pi-boundary-reliability U7]` | `packages/runtime/src/infra/pi/__tests__/pi-semantics-*.test.ts`（6 文件，凭证无关 CI 可跑）+ `scripts/check-pi-semantics.mjs`（pre-commit + CI）+ `scripts/diff-probe-thinking.mjs` |
 | **run/record 介质归位写侧** | journal 唯一事实源 + 主 session 每实体注册/终态两条 v2 小条目：v1 全量快照写点（已删，回潮即红）、eventLog/displayItems 死字节载荷、事件文件（`.events`）白名单外直写、两族 entry 白名单外直写，任一出现即检查红；旧读者（runtime 两 extractor / 壳 loadAll / core rebuild / session-reader 锚链 / event-interpreter）对 v2 条目行为 = 版本门跳过或正确解析，零幻影零崩溃 | W1 介质归位（[ADR-0094](adr/decisions.md)；写侧检查断言随写点收敛更新） | `scripts/check-record-write-surface.mjs`（R1-R7，L1 pre-commit + CI invariants）+ `scripts/__tests__/check-record-write-surface.test.mjs`（检查规则回归）+ 版本门/条目契约测试族（`record-entry-collect.test.ts`、`record-store-rebuild-v-gate.test.ts`、`workflow-record-entry.test.ts`、session-reader 锚链测试、runtime `events-projection*.test.ts`） |
 | **subagent 轮收条事实化与债权结清** | 轮成败判定锚定引擎收尾边沿事实（停因 stop/error/aborted + FailureCause 五维），轮收条只存事实不存推断（负面断言：无 `completed` 存储值 / 无 `schema_deterministic` 替换死因 / 无 `finished a round` 文案）；债权结清 SettlementReason 封闭五值 fail-visible（词表外解析缺省 unknown，fail-open 谎报成功废除）；run 终局吸收成员交付（partially_succeeded + failedMembers[].cause + partialMembers）；失联清点合并进 run 级 startup-sweep（manifest 快照判定 + pid 探活，无时间窗）；轮应答五分支文案与攒批窗删除后边沿即投（批形态保留边界：recover 重放 / collectRelease 直通 / compaction 唤醒）；三词表枚举完整性静态防线（词表漂移即红） | subagent-observability（[ADR-0158](adr/decisions.md)～[ADR-0163](adr/decisions.md)，2026-10-24 交付） | 词表锚 `packages/subagent-engine-sdk/src/__tests__/failure-cause-vocabulary.test.ts` + `packages/subagent-core/src/execution/domain/__tests__/record-types.test.ts` + `packages/subagent-core/src/shared/__tests__/run-vocabulary.test.ts`；判定链与收条 `packages/pi-subagent-cli` 判定断言族 + `record-store-round-idle-settle.test.ts` + `reducer-parity.test.ts`（error → turn_end 后 lastError 仍可读）；清点 `startup-sweep.test.ts`（record 半边 3 用例）+ `sweep-binding.test.ts`（lost 结清）；通知 `notifier-round-facts.test.ts`（五分支 + finished a round 回归锚）+ delivery-port 行为锁（边沿即投 / 批形态保留）；renderer 判据 `subagent-bucket.test.ts`（红点四形态）+ `state-tone-lock.test.ts` + wire 契约探针（LAST_ROUND_WIRE_CONTRACT） |
+| **subagent/workflow 执行域行为基线** | 执行状态权威收归 runtime 后的行为锚：启动即可见（工具 accepted 后三入口同一 revision 可查，无「扩展 running、runtime 空列表」）、主 session JSONL 无新增执行生命周期条目（条目类型基线清单白名单 diff）、修订号门（拉取回执不覆盖新推送）、通知至少一次且结果工件独立可查 | subagent-workflow-capability-architecture（2026-10-31 登记计划基线；守护测试随交付波次 M1-M5 落地时建立，验收节点 A1-A16 见 impl-plan） | 计划锚：S2 白名单 diff 工具（M0 基线清单单源）+ verify-taiji `p0-subagent-workflow-dispatch.mjs`（工具入口派发、record/run 终态）与 `p0-session-persistence.mjs`（会话与执行状态恢复）——两剧本为仓库外技能资产（`~/.agents/skill-data/verify-taiji/`，L2 dev-flow 触发形态，不进 CI、不登记 e2e-map） |
 | **sync-collect 探针（已退役，R3 归档）** | sync 批机制已随 collect 退役整体删除（2026-09-16）——探针的被测写点（flushBatch 时序、appendBatchFinalizedEntry、finalizeOrphanRecord merge、E1 判定）已不存在，v2/v3 不再可跑，e2e-map 登记已摘除。`scripts/probes/subagent-sync-collect/` 目录（18 文件，含 RESULTS.md 与 v1/v2/v3）已删除（2026-09-16 随 collect 退役清理，git 可追溯）；此处记录退役原因（禁止只删不记）。 | `collect 退役`（u8 文档同步）`[from: subagents-batch-tool-fanout P2.4]` | 探针目录已删除（git 可追溯） |
 
 ### 等价性测试双轨（真实 LLM turn 基线：开发阶段按改动范围跑）[from: 2026-08-19 data-source-governance]
@@ -398,6 +399,8 @@ taste/no-silent-catch 处理：纯 console.warn 仍报（要求传播/重抛）�
 | **R1 升级为 CI 固定环节 固定环节** | mock/fixture 化后零 token 零凭证可复跑，每 PR 跑 | CI job（如 e2e-behavior / e2e-visual / test-runtime 单测层） | 用例打 `@p0-smoke` 标签（行为 mock 层）或进 vitest 套件；名单随本章节登记 |
 | **R2 保留为按改动范围触发的 e2e 子集** | 依赖真实进程 / 真实 LLM / 特定环境，CI 跑不了或不该跑 | dev-flow 验收计划（L2）/ 触发式回归（L3）/ L2.5 调研线 | **触发条件必填**（见下），登记进 `docs/testing/e2e-map.json`（机器登记 SSOT；结构校验 = `scripts/validate-e2e-map.mjs`，防漏门禁 = `scripts/select-affected-e2e.mjs --check`；本章节表格保留宿主叙述） |
 | **R3 归档为文档** | 退役（守护对象已消亡 / 断言范围被更强资产覆盖 / 环境前提永久不可复现） | docs/testing/ 手册对应章节，注明退役原因 | spec 文件删除 + 手册记录「退役原因 + git 可追溯」；禁止只删不记 |
+
+**仓库外 verify-taiji 剧本的归宿登记（2026-10-31）**：tech-design（subagent-workflow-capability-architecture §4 e2eImpact）登记的受影响测试资产中，verify-taiji `p0-subagent-workflow-dispatch.mjs` / `p0-session-persistence.mjs` 两剧本属仓库外技能资产（`~/.agents/skill-data/verify-taiji/`，u-verify-assets territory）——按 R2/L2 形态归宿（dev-flow 验收计划触发，真机 + 真实 LLM），不进 CI、不登记 e2e-map.json（机器登记 SSOT 只覆盖仓内资产）；真机验收轨（S1-S16）随执行域波次重验。
 
 **触发条件必填原则**：R2 资产必须写明「什么改动触发重跑」——可判定的条件（改动路径 glob / 事件如 pi bump / release，条件可判定、路径可 grep）。tech-design 设计文档的「e2e 影响面评估」据此圈定子集，dev-flow 验收计划表承接。写法参考：`docs/testing/e2e-map.json` 的 E2E-BATCH-01（现行 R2：scope = 路径 glob 集合 + trigger = on-diff）；trigger 的事件形态参考 E2E-BATCH-02（R3 人工验收，trigger = on-pi-bump 表达重验时机信号）。
 

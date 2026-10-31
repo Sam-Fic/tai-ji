@@ -10,6 +10,7 @@
       "assets": "数组。{kind: spec|script|probe|harness, ref: 仓库相对路径}。ref 必须磁盘真实存在（scripts/validate-e2e-map.mjs 强校验）",
       "trigger": "单值：on-diff（diff 命中 scope 时跑）| always（每次固定跑，不看 diff）| on-release（发布管线跑，当前无条目，保留枚举位）| on-pi-bump（pi 版本升级时重验）。一条 rule 一个主触发；同一 asset 需要多个触发范围时拆多条 rule（assets 允许重复引用），不引入 trigger 数组——范例：E2E-EQUIV-01（on-diff）与 E2E-EQUIV-02/03/04（on-pi-bump）为同族资产的触发范围拆分",
       "serial": "true = 必须空载串行（真实进程/真实 LLM 层：跨包跨套件并发会饱和 CPU 或使真实 LLM 轮次越过事件预算）；false = 可并发、可进 CI 常驻环节",
+      "ci": "可选。on-diff × L1 消费面（scripts/run-affected-e2e-ci.mjs）内该 rule 能否在 ubuntu CI 承载：缺省 = 可跑；{ runnable: false, skipReason } = 显式登记跳过与理由（如需桌面环境 / 依赖被 .gitignore 忽略的构建产物）。消费侧只读本字段，不另维护白名单；scripts/validate-e2e-map.mjs 强校验 runnable=false 必带非空 skipReason",
       "run": "可直接执行的运行命令（仓库根为 cwd）",
       "owner": "维护归属（包/目录路径）",
       "authority": "权威文档锚点（仓库相对路径，可含 #锚点）",
@@ -18,7 +19,8 @@
     "check": "--check 门禁语义：coverage(rule, file) = scope glob 匹配 ∪ asset ref 精等；watched roots = 全部 scope 的 <prefix>/ 目录 ∪ 资产族目录（同一目录聚合 ≥2 个 asset 才整体看护——资产族之家；孤资产落在 scripts/ 等共享目录时不产生目录级看护根，防通用目录被泛化）。diff 文件落在任一 watched root 下却不被任何 rule coverage → exit 1（防漏登记：新增 e2e 资产或 watched 触发范围内的新域必须显式登记）；watched roots 之外的文件不参与该门",
     "consumers": [
       "scripts/select-affected-e2e.mjs（--base 按 diff 选受影响 rules + 可运行命令 / --release 选 on-release + on-pi-bump 面 / --layer 过滤 / --check 防漏登记门禁）",
-      "scripts/validate-e2e-map.mjs（结构校验 + asset 磁盘存在强校验；pre-commit 在本文件或两脚本及其单测变更时触发）"
+      "scripts/validate-e2e-map.mjs（结构校验 + asset 磁盘存在强校验 + ci 字段形态校验；pre-commit 在本文件或两脚本及其单测变更时触发）",
+      "scripts/run-affected-e2e-ci.mjs（CI 执行消费者：消费 select-affected-e2e --json 的 on-diff × L1 面，按本表条目的 ci 字段执行 / 登记跳过）"
     ]
   },
   "rules": [
@@ -2555,6 +2557,10 @@
       ],
       "trigger": "on-diff",
       "serial": false,
+      "ci": {
+        "runnable": false,
+        "skipReason": "run 里的 check-core-dist-gate 只读 packages/subagent-core/dist（.gitignore 忽略，干净 checkout 无产物；dist bundle 缺失即 FAIL，脚本只读不自行 build）——运行时机在 subagent-core build 之后。本 rule 另两段在 CI 已有固定承载：check-rfl-parity = invariants job 的 rfl-parity 步骤，check-core-dist-gate 单测 = test-extensions job 的 scripts-guards 步骤"
+      },
       "run": "node scripts/check-rfl-parity.mjs && node scripts/check-core-dist-gate.mjs && npx vitest run scripts/__tests__/check-core-dist-gate.test.mjs",
       "owner": "packages/subagent-core",
       "authority": "docs/adr/decisions.md",
@@ -2660,6 +2666,10 @@
       ],
       "trigger": "on-diff",
       "serial": false,
+      "ci": {
+        "runnable": false,
+        "skipReason": "verify-staged-extensions 要求 staged 产物（默认 apps/electron/resources/extensions/@zhushanwen，apps/electron/resources/ 被 .gitignore 忽略，干净 checkout 不存在，缺目录即 exit 1）——真实运行形态 = apps/electron build:pre 与 build.yml 调用的 scripts/postbuild-validate.sh 打包前置门"
+      },
       "run": "node scripts/verify-staged-extensions.mjs",
       "owner": "scripts/",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
@@ -2835,7 +2845,7 @@
       ],
       "trigger": "on-diff",
       "serial": false,
-      "run": "pnpm -C packages/session-delivery test && pnpm -C packages/runtime exec vitest run src/services/session/__tests__/delivery-outbox-crash-recovery.test.ts",
+      "run": "pnpm -C packages/session-delivery test && pnpm -C packages/runtime exec vitest run src/services/session/__tests__/delivery-resync-crash-retry.test.ts src/services/session/__tests__/session-projection-bundle.test.ts",
       "owner": "packages/runtime",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
       "note": "统一投递波 4 双层口径的 mock 层（零 token，可进 CI）：覆盖 A9 全部断言点。真实进程层 = E2E-DELIVERY-02（设计 §6 波 4 增补：双层都跑，真实进程层为「应用崩溃重启后未送达消息自动重新入队」的验收判据）"
@@ -4397,7 +4407,7 @@
       "run": "TAIJI_TEST_INTEGRATION=1 pnpm --filter @taiji/electron run test:main test/updater.test.ts",
       "owner": "apps/electron",
       "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
-      "note": "R2 态 + 用例级门控（文件留 main 默认组，快用例继续占默认组；门控 = TAIJI_TEST_INTEGRATION，SSOT = test-guard/integration-gate.ts，skip 理由注入 describe 名）（现仅一段门控 describe：linux mv 段（4 例，无 hdiutil 依赖、CI ubuntu 可跑）；mac 真链三段（端到端/中断注入/磁盘满 P10）全部走 TAIJI_E2E_UPDATER E2E 档，登记 = E2E-UPDATER-01；单测层保留 bash -n 语法 3 条 + CLI 工具可用性 2 条 + mock 模板断言 12 条）。触发条件 = 升级脚本本体 diff 命中。断言本质 = 升级脚本对真实 bash 的组合行为（门控用例断言体零改动，文件级 60s 预算只辖门控组）；serial=真 的理由 = 真 bash 子进程与真实等待窗，重执行用例 1-5s。run 命令唯一正确入口 = test:main script（vitest 直跑因 config 上浮 no tests found，见 TEST-STRATEGY.md 已知坑）。CI test-main job 已带 env=1（mac 真链段在该 env 下 skip，属 E2E 档语义）。"
+      "note": "R2 态 + 用例级门控（文件留 main 默认组（legacy 池），快用例继续占默认组；门控 = TAIJI_TEST_INTEGRATION，SSOT = test-guard/integration-gate.ts，skip 理由注入 describe 名）（现仅一段门控 describe：linux mv 段（4 例，无 hdiutil 依赖、CI ubuntu 可跑）；mac 真链三段（端到端/中断注入/磁盘满 P10，14 例）已整段保形拆出至独立文件 test/updater.e2e.test.ts 并独立 live 池（可手动以 --project '!live' 排除；当前全量入口 test:main 未接该旗标，env 未设时收集即 skip 的 14 条计数仍进全量输出——test:main 同时是带文件参数真跑 live 资产的唯一正确入口，接旗标会堵死该入口），走 TAIJI_E2E_UPDATER E2E 档，登记 = E2E-UPDATER-01；本文件保留单测层 bash -n 语法 3 条 + CLI 工具可用性 2 条 + mock 模板断言 12 条）。触发条件 = 升级脚本本体 diff 命中。断言本质 = 升级脚本对真实 bash 的组合行为（门控用例断言体零改动，文件级 60s 预算只辖门控组）；serial=真 的理由 = 真 bash 子进程与真实等待窗，重执行用例 1-5s。run 命令唯一正确入口 = test:main script（vitest 直跑因 config 上浮 no tests found，见 TEST-STRATEGY.md 已知坑）。CI test-main job 已带 env=1（mac 真链段在独立 live 池文件内、CI 不设 E2E env 不跑，属 E2E 档语义）。"
     },
     {
       "id": "E2E-PIPE-20",
@@ -4526,6 +4536,10 @@
       "trigger": "on-diff",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
       "serial": false,
+      "ci": {
+        "runnable": false,
+        "skipReason": "playwright electron project 需桌面环境（mac runner / xvfb），ubuntu 消费 job 无法承载——归 e2e-behavior 同族 runner 或本地空载串行跑"
+      },
       "run": "npx playwright test e2e/spawn-isolation-guard.spec.ts --project=electron",
       "owner": "e2e"
     },
@@ -5178,6 +5192,32 @@
       "note": "R2 态 + 用例级门控（2026-10-27 测试范围收缩：两簇门控——>5MB 保尾截断（真 5MB jsonl 写入 + 截断）与并发追加写（4 个真子进程 writer 验证 O_APPEND 单行原子性）；聚合求和 / 水位 / 坏行跳过等纯逻辑用例留无门控默认组）。触发条件 = scope 内代理统计读侧 diff 命中。断言本质 = 截断保尾行边界对齐 + 并发写全量可解析无交错坏行。serial=真 的理由 = 真进程 / 真磁盘吞吐在满载下无稳定上界。"
     },
     {
+      "id": "E2E-INTEG-71",
+      "summary": "引擎 conformance live 真机门（ENGINE_CONFORMANCE_LIVE 手动门，公网真调模型）：zcode-subagent-cli 的 zcode-engine.live（app-server 常驻形态全链，3 例）+ subagent-core 的 engine-conformance.live（协议客户端 × 引擎包 CLI conformance 最小子集，4 例）——同一资产族两包互补（前者覆盖 schema 全链，后者只跑最小子集，见 core live 文件头注释）",
+      "scope": [
+        "packages/zcode-subagent-cli/src/zcode-engine.ts",
+        "packages/subagent-core/src/execution/engine/client/engine-client.ts",
+        "packages/subagent-core/src/execution/engine/client/remote-engine.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "packages/zcode-subagent-cli/src/__tests__/zcode-engine.live.test.ts"
+        },
+        {
+          "kind": "spec",
+          "ref": "packages/subagent-core/src/execution/engine/__tests__/conformance/engine-conformance.live.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "ENGINE_CONFORMANCE_LIVE=1 pnpm --filter @zhushanwen/zcode-subagent-cli exec vitest run src/__tests__/zcode-engine.live.test.ts && ENGINE_CONFORMANCE_LIVE=1 pnpm --filter @zhushanwen/subagent-core exec vitest run src/execution/engine/__tests__/conformance/engine-conformance.live.test.ts",
+      "owner": "packages/zcode-subagent-cli",
+      "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
+      "note": "手动门登记（非 TAIJI_TEST_INTEGRATION 族 env：门控 = ENGINE_CONFORMANCE_LIVE，方向与集成门控相反——本地按需跑、CI 不跑，需引擎已装 + 有效凭据 + 公网可达，缺省 ZCODE_E2E_MODEL / PI_LIVE_MODEL 指定真调模型；trigger=on-diff 仅声明「scope 内引擎适配层 diff 命中才需重跑」，实际执行为手动 / 验收节点，登记口径同 E2E-UPDATER-01 的 E2E 档先例）。两包 conformance live 是同一资产族，合一条 rule 双 asset（zcode-subagent-cli 覆盖 schema 全链 3 例；subagent-core 跑 conformance 最小子集 4 例）；两文件已各自独立 live 池（两包 vitest.config.ts）：可手动以 --project '!live' 排除该池（当前全量入口 test 脚本未接该旗标，env 未设时收集即 skip 的 7 条计数仍进全量输出），显式路径单独跑不受影响。断言本质 = 引擎适配层对真实引擎进程的真实调用链不变量（事件流不变量 + 关键终态，不做逐字段 diff）。serial=真 的理由 = 公网真调模型，重载荷 + 速率敏感。"
+    },
+    {
       "id": "E2E-PIPE-23",
       "summary": "测试执行域触发档机制（round6 Wave2）：domain-map.json 单一权威源（14 域 / 99 个挂载渲染重型文件）+ run-domain-tests 按域跑 + check-domain-map 健康度检查（结构/存在性/唯一归属/挂载特征/消费方接线）+ 两包 vitest exclude 派生",
       "scope": [
@@ -5597,7 +5637,7 @@
     },
     {
       "id": "E2E-UPDATER-01",
-      "summary": "升级脚本 mac 真链全部段 E2E 档：端到端 5 例 / 状态机中断注入 8 例 / 磁盘满（P10，1MB HFS+ 小容量卷上 ditto 拷入 2MB 不可压产物 ENOSPC）1 例——真 hdiutil + 真 ditto + 真 bash 全链（TAIJI_E2E_UPDATER 门控，带 env 跑整个文件）",
+      "summary": "升级脚本 mac 真链全部段 E2E 档（独立文件 test/updater.e2e.test.ts，live 池）：端到端 5 例 / 状态机中断注入 8 例 / 磁盘满（P10，1MB HFS+ 小容量卷上 ditto 拷入 2MB 不可压产物 ENOSPC）1 例——真 hdiutil + 真 ditto + 真 bash 全链（TAIJI_E2E_UPDATER 门控，带 env 跑整个文件）",
       "scope": [
         "apps/electron/main/update/updater-script.ts"
       ],
@@ -5605,15 +5645,15 @@
       "assets": [
         {
           "kind": "spec",
-          "ref": "apps/electron/main/test/updater.test.ts"
+          "ref": "apps/electron/main/test/updater.e2e.test.ts"
         }
       ],
       "trigger": "on-diff",
       "serial": true,
-      "run": "TAIJI_E2E_UPDATER=1 pnpm --filter @taiji/electron run test:main test/updater.test.ts",
+      "run": "TAIJI_E2E_UPDATER=1 pnpm --filter @taiji/electron run test:main test/updater.e2e.test.ts",
       "owner": "apps/electron",
       "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
-      "note": "R2 态 + E2E 档（与同文件的 E2E-INTEG-53 同资产不同档：53 走 TAIJI_TEST_INTEGRATION 随 CI test-main job 常驻，本条门控 = TAIJI_E2E_UPDATER、CI 不设该 env 故不跑，升级脚本本体 diff 命中或手动跑）。覆盖 = 文件内全部 mac 真链段（端到端 / 中断注入 / 磁盘满 P10，E2E env 下跑整个文件；同文件 linux mv 段与 mock 段不受本 env 影响——linux 段随 53 的集成门控）；run 命令唯一正确入口 = test:main script（同 53）。断言本质 = 升级脚本对真实 DMG / 磁盘卷 / bash 的组合行为（含 P10 的 S4 ditto 落 staging 撞 ENOSPC 失败路径，四断言一条不减）；serial=真 的理由 = 真 hdiutil/ditto/bash 子进程 + 挂载点生命周期，重执行用例 3-30s。档位语义登记 = docs/TEST-STRATEGY.md「集成测试门控约定」节 E2E 档段。"
+      "note": "R2 态 + E2E 档（与 E2E-INTEG-53 同被测模块不同文件不同档：53 走 TAIJI_TEST_INTEGRATION 随 CI test-main job 常驻，本条门控 = TAIJI_E2E_UPDATER、CI 不设该 env 故不跑，升级脚本本体 diff 命中或手动跑）。mac 真链三段（端到端 / 中断注入 / 磁盘满 P10，14 例）已自 updater.test.ts 整段保形拆出为独立文件并独立 live 池（apps/electron/main/vitest.config.ts）：可手动以 --project '!live' 排除该池（当前全量入口 test:main 未接该旗标，env 未设时收集即 skip 的 14 条计数仍进全量输出——test:main 同时是本条 run 命令的唯一正确入口，接旗标会堵死带文件参数的真跑），显式路径 / E2E 档全文件跑不受影响；同被测模块的 linux mv 段与 mock 段留 updater.test.ts（随 53 的集成门控）。run 命令唯一正确入口 = test:main script（同 53）。断言本质 = 升级脚本对真实 DMG / 磁盘卷 / bash 的组合行为（含 P10 的 S4 ditto 落 staging 撞 ENOSPC 失败路径，四断言一条不减）；serial=真 的理由 = 真 hdiutil/ditto/bash 子进程 + 挂载点生命周期，重执行用例 3-30s。档位语义登记 = docs/TEST-STRATEGY.md「集成测试门控约定」节 E2E 档段。"
     },
     {
       "id": "E2E-NPM-01",
@@ -5676,6 +5716,63 @@
       "owner": "scripts/",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
       "note": "R1 态：main 侧 gate-verdict-ssot 收敛（ADR-0170~0175）的工程件，随 feat-quota-cookie-refresh 合并 main 带入；日常 CI 由 ci.yml scripts-guards 步骤聚合判红。"
+    },
+    {
+      "id": "E2E-FOUND-01",
+      "summary": "重写前置地基三红灯机器检查（D13/D14）：testid 对账器 + renderer 测试 typecheck 覆盖对账 + shared 模块准入检查 + on-diff e2e CI 消费者（subagent-workflow-capability-architecture u-foundation 交付资产）",
+      "scope": [
+        "scripts/check-testid-parity.mjs",
+        "scripts/check-test-typecheck-coverage.mjs",
+        "scripts/check-shared-module-admission.mjs",
+        "scripts/run-affected-e2e-ci.mjs",
+        "scripts/shared-module-registry.json",
+        "scripts/shared-node-builtin-rules.json",
+        "scripts/__tests__/check-testid-parity.test.mjs",
+        "scripts/__tests__/check-test-typecheck-coverage.test.mjs",
+        "scripts/__tests__/check-shared-module-admission.test.mjs",
+        "scripts/__tests__/run-affected-e2e-ci.test.mjs"
+      ],
+      "layer": "L1",
+      "assets": [
+        {
+          "kind": "script",
+          "ref": "scripts/check-testid-parity.mjs"
+        },
+        {
+          "kind": "script",
+          "ref": "scripts/check-test-typecheck-coverage.mjs"
+        },
+        {
+          "kind": "script",
+          "ref": "scripts/check-shared-module-admission.mjs"
+        },
+        {
+          "kind": "script",
+          "ref": "scripts/run-affected-e2e-ci.mjs"
+        },
+        {
+          "kind": "spec",
+          "ref": "scripts/__tests__/check-testid-parity.test.mjs"
+        },
+        {
+          "kind": "spec",
+          "ref": "scripts/__tests__/check-test-typecheck-coverage.test.mjs"
+        },
+        {
+          "kind": "spec",
+          "ref": "scripts/__tests__/check-shared-module-admission.test.mjs"
+        },
+        {
+          "kind": "spec",
+          "ref": "scripts/__tests__/run-affected-e2e-ci.test.mjs"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": false,
+      "run": "node scripts/check-testid-parity.mjs && node scripts/check-shared-module-admission.mjs && node scripts/check-test-typecheck-coverage.mjs && pnpm exec vitest run scripts/__tests__/check-testid-parity.test.mjs scripts/__tests__/check-test-typecheck-coverage.test.mjs scripts/__tests__/check-shared-module-admission.test.mjs scripts/__tests__/run-affected-e2e-ci.test.mjs",
+      "owner": "scripts",
+      "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
+      "note": "R2 态（按改动范围触发）：u-foundation 三红灯与准入检查的防回归面——检查本体被改坏（对账语义退化/豁免登记失守）时本条红。日常 CI 承载 = ci.yml invariants（testid-parity / shared-admission 步骤）与 typecheck（coverage 对账步骤）+ scripts-guards 测试步骤（四测试文件已列举）；select-affected-e2e.mjs 的 --json 出口改动由既有 E2E-PIPE-04 / E2E-ZCODE-01 族资产测试覆盖其纯函数（toJsonPayload 用例在 select-affected-e2e.test.mjs，该文件已在 E2E-PIPE-04 登记）。typecheck 覆盖检查跑两遍 vue-tsc 属重检查——重检查为检查器防回归所需（检查器本体改动时验证其仍工作），与 CI typecheck job 常驻步骤同体检重复可接受。"
     }
   ]
 }

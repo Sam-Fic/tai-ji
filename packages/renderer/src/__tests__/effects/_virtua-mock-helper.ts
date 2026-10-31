@@ -9,6 +9,7 @@
  * happy-dom RO 手动派发 stub，供挂载级测试确定性驱动 ResizeObserver 回调。
  */
 import { vi } from 'vitest'
+import type { ScrollToIndexOpts } from 'virtua'
 import type { VirtualizerHandle } from 'virtua/vue'
 
 /** 默认 mock 几何（distance = scrollSize - scrollOffset - viewportSize = 0，即默认贴底） */
@@ -28,10 +29,10 @@ export function createMockVlist(
     scrollSize: number
     scrollOffset: number
     viewportSize: number
-    scrollToIndex: ReturnType<typeof vi.fn>
-    getItemOffset: ReturnType<typeof vi.fn>
-    getItemSize: ReturnType<typeof vi.fn>
-    findItemIndex: ReturnType<typeof vi.fn>
+    scrollToIndex: (index: number, opts?: ScrollToIndexOpts) => void
+    getItemOffset: (index: number) => number
+    getItemSize: (index: number) => number
+    findItemIndex: (offset: number) => number
   }>,
 ): VirtualizerHandle {
   const scrollSize = overrides?.scrollSize ?? DEFAULT_SCROLL_SIZE
@@ -42,12 +43,12 @@ export function createMockVlist(
     scrollOffset,
     viewportSize,
     cache: {} as unknown as VirtualizerHandle['cache'],
-    scrollToIndex: overrides?.scrollToIndex ?? vi.fn(),
-    getItemOffset: overrides?.getItemOffset ?? vi.fn(),
-    getItemSize: overrides?.getItemSize ?? vi.fn(),
+    scrollToIndex: overrides?.scrollToIndex ?? vi.fn((_index: number, _opts?: ScrollToIndexOpts): void => undefined),
+    getItemOffset: overrides?.getItemOffset ?? vi.fn((_index: number): number => 0),
+    getItemSize: overrides?.getItemSize ?? vi.fn((_index: number): number => 0),
     findItemIndex:
       overrides?.findItemIndex ??
-      vi.fn((offset: number) => {
+      vi.fn((offset: number): number => {
         // 默认：把 offset 当作末尾位置，返回一个稳定的 last index（mock 5 项数据 → last index）
         return offset >= scrollSize ? DEFAULT_LAST_INDEX : DEFAULT_MID_INDEX
       }),
