@@ -185,46 +185,26 @@ export function collectSpecFiles(root) {
 
 // ---------- main ----------
 
-export function main(argv = process.argv.slice(2)) {
-  const rootIdx = argv.indexOf("--root");
-  const root = rootIdx !== -1 ? argv[rootIdx + 1] : ".";
-  const repoRoot = (p) => join(root, p);
+// main 原把实现面/spec 引用面两份收集循环与结果渲染全内联在一个函数体，圈复杂度
+// 16 超门禁阈值（15）。拆为 collectExtracts（参数化收集壳，两侧共用）与
+// renderParityResult（结果渲染 + 退出码），行为逐字保持。
 
-  const IMPL_ROOTS = ["packages/renderer/src", "packages/core/src", "packages/ui/src"];
-  const SPEC_ROOTS = ["e2e"];
-
-  const missing = IMPL_ROOTS.filter((r) => !existsSync(repoRoot(r)));
-  if (missing.length > 0) {
-    console.error(`[check-testid-parity] 实现源目录缺失：${missing.join(", ")}`);
-    console.error(`  恢复动作：在仓库根运行本脚本（或用 --root 指向含 ${IMPL_ROOTS[0]} 的树根）`);
-    return 2;
-  }
-
-  const impls = { exact: new Map(), prefix: new Map() };
-  let implFileCount = 0;
-  for (const r of IMPL_ROOTS) {
-    for (const f of collectSourceFiles(repoRoot(r))) {
-      implFileCount++;
-      mergeExtracts(impls, extractImpls(f, readFileSync(f, "utf8")));
+/** [main 拆分] 遍历 roots 收集 testid 提取结果（实现面与 spec 引用面共用一壳）。
+ *  extract(f, src) 返回 { exact, prefix }；返回 { extracts, fileCount }。 */
+function collectExtracts(roots, listFiles, extract, repoRoot) {
+  const extracts = { exact: new Map(), prefix: new Map() };
+  let fileCount = 0;
+  for (const r of roots) {
+    for (const f of listFiles(repoRoot(r))) {
+      fileCount++;
+      mergeExtracts(extracts, extract(f, readFileSync(f, "utf8")));
     }
   }
-  const specRefs = { exact: new Map(), prefix: new Map() };
-  let specFileCount = 0;
-  for (const r of SPEC_ROOTS) {
-    for (const f of collectSpecFiles(repoRoot(r))) {
-      specFileCount++;
-      const refs = extractSpecRefs(f, readFileSync(f, "utf8"));
-      mergeExtracts(specRefs, { exact: refs.exact, prefix: refs.prefix });
-    }
-  }
+  return { extracts, fileCount };
+}
 
-  const { danglingExact, danglingPrefix, exempted, staleExemptions } = parityCheck(specRefs, impls, KNOWN_DANGLING);
-
-  console.log(
-    `[check-testid-parity] 实现：${implFileCount} 文件（exact ${impls.exact.size} / 前缀 ${impls.prefix.size}）；` +
-      `spec 引用：${specFileCount} 文件（exact ${specRefs.exact.size} / 前缀 ${specRefs.prefix.size}）`,
-  );
-
+/** [main 拆分] 对账结果渲染与退出码：豁免登记打印、悬空/stale 两类 FAIL 输出。 */
+function renderParityResult({ danglingExact, danglingPrefix, exempted, staleExemptions }) {
   let failed = 0;
   if (exempted.length > 0) {
     console.log(`\n已知悬空（登记豁免，${exempted.length} 项——不判红，退役条件见登记）：`);
@@ -246,6 +226,33 @@ export function main(argv = process.argv.slice(2)) {
   }
   if (failed === 0) console.log("[check-testid-parity] PASS：spec testid 引用全部有实现（豁免项除外）");
   return failed;
+}
+
+export function main(argv = process.argv.slice(2)) {
+  const rootIdx = argv.indexOf("--root");
+  const root = rootIdx !== -1 ? argv[rootIdx + 1] : ".";
+  const repoRoot = (p) => join(root, p);
+
+  const IMPL_ROOTS = ["packages/renderer/src", "packages/core/src", "packages/ui/src"];
+  const SPEC_ROOTS = ["e2e"];
+
+  const missing = IMPL_ROOTS.filter((r) => !existsSync(repoRoot(r)));
+  if (missing.length > 0) {
+    console.error(`[check-testid-parity] 实现源目录缺失：${missing.join(", ")}`);
+    console.error(`  恢复动作：在仓库根运行本脚本（或用 --root 指向含 ${IMPL_ROOTS[0]} 的树根）`);
+    return 2;
+  }
+
+  const { extracts: impls, fileCount: implFileCount } = collectExtracts(IMPL_ROOTS, collectSourceFiles, extractImpls, repoRoot);
+  const { extracts: specRefs, fileCount: specFileCount } = collectExtracts(SPEC_ROOTS, collectSpecFiles, extractSpecRefs, repoRoot);
+
+  const result = parityCheck(specRefs, impls, KNOWN_DANGLING);
+
+  console.log(
+    `[check-testid-parity] 实现：${implFileCount} 文件（exact ${impls.exact.size} / 前缀 ${impls.prefix.size}）；` +
+      `spec 引用：${specFileCount} 文件（exact ${specRefs.exact.size} / 前缀 ${specRefs.prefix.size}）`,
+  );
+  return renderParityResult(result);
 }
 
 const isMain = process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href;

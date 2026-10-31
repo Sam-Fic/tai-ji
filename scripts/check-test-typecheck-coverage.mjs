@@ -142,6 +142,53 @@ export function buildFullTsconfig(formalTsconfigPath, tmpDir) {
   return tmpPath;
 }
 
+// main 原把三项对账（include 形态 / exclude 死路径 / 双跑债务对账）全内联在一个函数体，
+// 圈复杂度 16 超门禁阈值（15）。拆为 staticChecks（1/2 项静态对账）与
+// runDebtReconciliation（第 3 项双跑对账），行为逐字保持。
+
+/** [main 拆分] 静态对账（第 1/2 项）：include 全量形态断言 + exclude ⊆ 磁盘测试文件集。
+ *  失败明细推入 failures；返回 { failures, missingForms, deadExcludes, diskTests } 供 main 汇总输出。 */
+function staticChecks(tsconfig, rendererDir) {
+  const failures = [];
+  const missingForms = missingIncludeForms(tsconfig.include);
+  if (missingForms.length > 0) {
+    failures.push(`include 缺全量形态（新测试文件将漏出 typecheck）：${missingForms.join(", ")}`);
+  }
+  const diskTests = collectTestFiles(join(rendererDir, "src"), rendererDir);
+  const diskSet = new Set(diskTests);
+  const deadExcludes = (tsconfig.exclude ?? []).filter((f) => !diskSet.has(f));
+  if (deadExcludes.length > 0) {
+    failures.push(`exclude 含非测试文件/死路径（须删除）：${deadExcludes.join(", ")}`);
+  }
+  return { failures, missingForms, deadExcludes, diskTests };
+}
+
+/** [main 拆分] 双跑对账（第 3 项）：正式跑（exclude 生效）必须绿 + 全量跑债务对账。
+ *  失败明细推入 failures；返回全量跑统计供 main 汇总行输出；临时目录必清（finally）。 */
+function runDebtReconciliation(rendererDir, tsconfigPath, tsconfig, failures) {
+  const formalRun = runVueTsc(rendererDir, tsconfigPath);
+  if (formalRun.status !== 0) {
+    failures.push("正式 typecheck:test（exclude 生效）跑红——新登记外文件存在类型错误：");
+    failures.push(...formalRun.stdout.split("\n").filter((l) => l.includes("error TS")).slice(0, 20));
+  }
+  const tmpDir = mkdtempSync(join(tmpdir(), "test-typecheck-full-"));
+  try {
+    const fullTsconfig = buildFullTsconfig(tsconfigPath, tmpDir);
+    const fullRun = runVueTsc(rendererDir, fullTsconfig);
+    const errorFiles = parseErrorFiles(fullRun.stdout);
+    const { unregistered, stale } = reconcileDebt(errorFiles, tsconfig.exclude ?? []);
+    if (unregistered.length > 0) {
+      failures.push(`未登记债务（全量跑有错但不在 exclude，须修复或显式登记）：${unregistered.join(", ")}`);
+    }
+    if (stale.length > 0) {
+      failures.push(`stale 债务登记（已无类型错误，须从 tsconfig exclude 删行收编）：${stale.join(", ")}`);
+    }
+    return { errorCount: errorFiles.length, excludeCount: (tsconfig.exclude ?? []).length };
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 export function main(argv = process.argv.slice(2)) {
   const rendererRel = argv.includes("--renderer-dir") ? argv[argv.indexOf("--renderer-dir") + 1] : "packages/renderer";
   const noRun = argv.includes("--no-run");
@@ -155,47 +202,14 @@ export function main(argv = process.argv.slice(2)) {
   }
   const tsconfig = JSON.parse(readFileSync(tsconfigPath, "utf8"));
 
-  const failures = [];
-
-  // 1. include 全量形态断言
-  const missingForms = missingIncludeForms(tsconfig.include);
-  if (missingForms.length > 0) {
-    failures.push(`include 缺全量形态（新测试文件将漏出 typecheck）：${missingForms.join(", ")}`);
-  }
-
-  // 2. exclude ⊆ 磁盘测试文件集
-  const diskTests = collectTestFiles(join(rendererDir, "src"), rendererDir);
-  const diskSet = new Set(diskTests);
-  const deadExcludes = (tsconfig.exclude ?? []).filter((f) => !diskSet.has(f));
-  if (deadExcludes.length > 0) {
-    failures.push(`exclude 含非测试文件/死路径（须删除）：${deadExcludes.join(", ")}`);
-  }
+  const { failures, missingForms, deadExcludes, diskTests } = staticChecks(tsconfig, rendererDir);
 
   // 3. 双跑对账（--no-run 跳过，仅供单测复用纯函数链）
   if (!noRun) {
-    const formalRun = runVueTsc(rendererDir, tsconfigPath);
-    if (formalRun.status !== 0) {
-      failures.push("正式 typecheck:test（exclude 生效）跑红——新登记外文件存在类型错误：");
-      failures.push(...formalRun.stdout.split("\n").filter((l) => l.includes("error TS")).slice(0, 20));
-    }
-    const tmpDir = mkdtempSync(join(tmpdir(), "test-typecheck-full-"));
-    try {
-      const fullTsconfig = buildFullTsconfig(tsconfigPath, tmpDir);
-      const fullRun = runVueTsc(rendererDir, fullTsconfig);
-      const errorFiles = parseErrorFiles(fullRun.stdout);
-      const { unregistered, stale } = reconcileDebt(errorFiles, tsconfig.exclude ?? []);
-      if (unregistered.length > 0) {
-        failures.push(`未登记债务（全量跑有错但不在 exclude，须修复或显式登记）：${unregistered.join(", ")}`);
-      }
-      if (stale.length > 0) {
-        failures.push(`stale 债务登记（已无类型错误，须从 tsconfig exclude 删行收编）：${stale.join(", ")}`);
-      }
-      console.log(
-        `[check-test-typecheck-coverage] 全量跑：${errorFiles.length} 文件有类型错误 / exclude 登记 ${(tsconfig.exclude ?? []).length} 项 / 磁盘测试文件 ${diskTests.length} 个`,
-      );
-    } finally {
-      rmSync(tmpDir, { recursive: true, force: true });
-    }
+    const { errorCount, excludeCount } = runDebtReconciliation(rendererDir, tsconfigPath, tsconfig, failures);
+    console.log(
+      `[check-test-typecheck-coverage] 全量跑：${errorCount} 文件有类型错误 / exclude 登记 ${excludeCount} 项 / 磁盘测试文件 ${diskTests.length} 个`,
+    );
   }
 
   console.log(
