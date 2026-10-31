@@ -469,7 +469,7 @@ export const activeSessionId = sessionStore.activeId
 /** session 列表扁平视图（响应式派生，列表页消费） */
 export const sessionList = sessionStore.list
 
-/** 载入 session 分组列表（App 挂载 / 列表页刷新入口；错误态落 store.listLoadError） */
+/** 载入 session 分组列表（App connected 边沿触发（App.vue watch）/ 列表页重试入口；错误态落 store.listLoadError） */
 export function loadSessions(): Promise<void> {
   return useSessionInstance.loadSessions()
 }
