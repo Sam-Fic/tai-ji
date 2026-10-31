@@ -75,8 +75,8 @@
 
 | 三件套 | 迁移前（原地实现） | 迁移后（guardStaleCtx） | 等价性 |
 |---|---|---|---|
-| G1 前置检查 | interval 回调首行 `if (this.isCtxStale?.()) { this.retireStaleTimer(); return }` | 检查前置检查 `isCtxStale` 命中 → `onStale`（=retireStaleTimer）且 tickScheduler 不执行 | 等价：retire 调用点从前置分支移入检查 onStale；tick 不执行；`tick stopped` warn 口径不变（U1/G1-b 测试锚定，迁移后复跑通过） |
-| F2 catch 分诊 | `void this.tickScheduler().catch(err => this.isCtxStale?.() \|\| msg.includes(STALE_CTX_MARKER) ? retireStaleTimer() : warn('tick error'))` | 检查对 async fn 的 rejection 用同一谓词分诊：stale → onStale；非 stale → 原样 reject → 外层 `.catch` warn `'tick error'`（`toErrorMessage` 与原 `err instanceof Error ? .message : String()` 同实现） | 等价：分诊谓词字面一致（代际主判 \|\| 文案兜底）；非 stale 的 warn 调用点从检查内移至检查外 .catch，文案与「不终止调度」语义不变（U2/G1-c/G1-d 锚定） |
+| G1 前置检查 | interval 回调首行 `if (this.isCtxStale?.()) { this.retireStaleTimer(); return }` | 检查前置检查 `isCtxStale` 命中 → `onStale`（=retireStaleTimer）且 tickScheduler 不执行 | 等价：retire 调用点从前置分支移入检查 onStale；tick 不执行；`tick stopped` warn 口径不变（runtime.test.ts「U1: stale 错误 → warn "tick stopped" + timer 自停」「代际翻转后泄漏 timer 在下个 tick 前置检查自停」测试锚定，迁移后复跑通过） |
+| F2 catch 分诊 | `void this.tickScheduler().catch(err => this.isCtxStale?.() \|\| msg.includes(STALE_CTX_MARKER) ? retireStaleTimer() : warn('tick error'))` | 检查对 async fn 的 rejection 用同一谓词分诊：stale → onStale；非 stale → 原样 reject → 外层 `.catch` warn `'tick error'`（`toErrorMessage` 与原 `err instanceof Error ? .message : String()` 同实现） | 等价：分诊谓词字面一致（代际主判 \|\| 文案兜底）；非 stale 的 warn 调用点从检查内移至检查外 .catch，文案与「不终止调度」语义不变（runtime.test.ts「U2: 非 stale 错误 → warn "tick error" 且调度继续」「isCtxStale 注入但返回 false + 非 stale 错误 → warn "tick error" 且调度继续」「isCtxStale 返回 false 但错误文案含 stale 片段 → 文案兜底仍自停」锚定） |
 | retireStaleTimer 自停 | 私有方法：warn `tick stopped: stale extension ctx (session replaced); timer self-retired` + 幂等 `stopScheduler()` | 未改动 | 完全一致 |
 | STALE_CTX_MARKER 常量 | 本模块字符串常量 | 改为 import ext-guards 的共享常量（同一字面量） | 值不变；文案稳定性责任上移到 PS-30 门禁 |
 
