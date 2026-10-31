@@ -1979,5 +1979,91 @@
       "note": "消费方（C-ext-05 direct 常驻全集，2026-10-23 ADR-0136 重划终态）：goal_control（extensions/universal/goal）、schedule / schedule_control（extensions/universal/scheduler）、compact_context（extensions/universal/smart-context）、create_managed_session（extensions/universal/session-manager，direct 档经 registerSessionTool 条件展开不写字段）、plan（extensions/universal/plan）、workflow-script / subagent_batch（extensions/universal/subagent-workflow）的注册断言与 JSDoc 注释。与 PS-79 分工：PS-79 登记 ToolExposure 五档分级与 setActiveTools 声明语义，本条登记「缺字段 = direct 缺省」本身。pi 升级时重验：grep dist/core/agent-session.js '_getToolExposure'（?? 兜底值是否仍为 direct）+ types.d.ts exposure 注释 Default 值是否漂移"
     },
     "verifiedWith": "1.0.0"
+  },
+  {
+    "id": "PS-92",
+    "claim": "get_state 是同步内存读的轻量命令、事件循环活时必响应：rpc-mode get_state 分支对 session 的 13 个属性纯同步直读构造响应（无 await、无 IO、分发链无扩展 hook 可拦截点——handleInputLine 直入 switch 分发），事件循环活时毫秒级返回。taiji 第 1 层停滞判定承重（pi-stall-detection D1/AX2）：PingProbe 探测（probeState 观测变体，请求级有界等待）3 次观测超时 = 该强不变量被破坏 = 确定性停滞、无误杀范围。pi 升级重验（UD1 退场条件）：若 get_state 变为异步/可被 hook 拦截/携带 IO，慢尾形态出现——观测超时窗（PING_OBSERVE_TIMEOUT_MS）须按实测重新校准，且「确定性判定、无误杀」前提须重审",
+    "piAnchor": [
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/modes/rpc/rpc-mode.js",
+        "symbol": "get_state case 分支",
+        "note": ":345-360 —— 13 属性对象字面量直读（model/thinkingLevel/isStreaming/isCompacting/steeringMode/followUpMode/sessionFile/sessionId/sessionName/autoCompactionEnabled/messageCount/pendingMessageCount）+ success() 同步返回，分支体内无 await【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      },
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/modes/rpc/rpc-mode.js",
+        "symbol": "handleInputLine",
+        "note": "分发入口直入 switch 命令分发；rpc-mode 全文无 hook 调用可拦截 get_state（pi-stall-detection U1 检查点亲读核实——慢尾形态无设计内来源）【行号锚基于 pi@1.0.0 实装实测】"
+      }
+    ],
+    "guard": {
+      "type": "observe",
+      "note": "taiji 消费方 = PingProbe 探测链（event-interpreter-ping.ts pingPi → rpc-client probeState；pi-stall-detection D1 观测超时）。pi 升级时重验：grep dist/modes/rpc/rpc-mode.js 'get_state' 分支是否仍为纯同步字段读取（无 await / 无 IO / 无 hook）+ 分发链是否新增可拦截点；慢尾形态出现则 PING_OBSERVE_TIMEOUT_MS 按实测重新校准并复审确定性判定前提"
+    },
+    "verifiedWith": "1.0.0"
+  },
+  {
+    "id": "PS-93",
+    "claim": "abort 是协作式请求、回执 = 回合收尾完成：AgentSession.abort() 置中止标记 + abortRetry/abortCompaction/abortBranchSummary + agent.abort()（AbortController 即时取消在途 await 点）后 await waitForIdle()（已 idle 立即返回，否则等当前回合收尾）——正常协作形态秒级回执；事件循环挂死形态永不回执（taiji 停止升级链 ABORT_UPGRADE_WINDOW_MS 窗满升级强杀所依赖的 pi 侧事实，pi-stall-detection D2/SI7：pi 侧 abort 后合法收尾全部即时有界——LLM 流/压缩/摘要即刻取消、MCP signal 转发即抛、bash 杀进程树）。与 PS-74 分工：PS-74 登记 abort 对 idle pi 的幂等 no-op 形态，本条登记 abort 的协作收尾语义本身",
+    "piAnchor": [
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/agent-session.js",
+        "symbol": "abort / waitForIdle",
+        "note": ":1873-1881 async abort = 置 _agentRunAbortRequested（run 活跃时）+ abortRetry + abortCompaction + abortBranchSummary + beforeSettle 标记 + agent.abort() + await this.waitForIdle()；:1883-1888 async waitForIdle = isIdle 即返回，否则 await _getIdleWaitPromise()【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      }
+    ],
+    "guard": {
+      "type": "observe",
+      "note": "taiji 消费方 = message-dispatcher abort 升级链（await client.abort() 施加有界等待，窗满自动升级 forceQuitSession——pi-stall-detection U2/D2①）。pi 升级时重验：grep dist/core/agent-session.js 'async abort'（收尾序列是否仍以 await waitForIdle 结尾）与 'async waitForIdle'（isIdle 快路径是否保留）；若 abort 改为即时回执（不等收尾），升级窗语义需重审"
+    },
+    "verifiedWith": "1.0.0"
+  },
+  {
+    "id": "PS-94",
+    "claim": "pi 内 MCP 工具调用默认 60s 超时自愈、条目级可覆盖：DEFAULT_TIMEOUT_SECONDS = 60，生效超时 = (entry.config.timeout ?? 60) * 1000（每条目可配置覆盖）；服务端 progress 通知重挂超时计时器（持续有进展的调用不被超时打断），窗满取消 pending 抛 McpTimeoutError、以错误工具结果收尾（tool_execution_end isError）。taiji 第 2 层静默判定的自愈窗①承重（pi-stall-detection AS12）：tool_execution_update 在途 = MCP 工具自愈中的合法静默；条目级覆盖生效值超出 T 覆盖公式配置分量的会话不启用判死（AS13 超界降级）",
+    "piAnchor": [
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/extensions/mcp/runtime.js",
+        "symbol": "DEFAULT_TIMEOUT_SECONDS / timeoutMs",
+        "note": ":17 const DEFAULT_TIMEOUT_SECONDS = 60；:155 return (this.entry.config.timeout ?? DEFAULT_TIMEOUT_SECONDS) * 1000（条目级覆盖表达式）【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      }
+    ],
+    "guard": {
+      "type": "observe",
+      "note": "taiji 消费方 = 第 2 层静默判定矩阵在途信号行（静默判定矩阵，pi-stall-detection D3/U4 W2）与 T 覆盖公式的 MCP 配置分量（自愈窗实际生效值超界降级，AS13）。pi 升级时重验：grep dist/extensions/mcp/runtime.js 'DEFAULT_TIMEOUT_SECONDS'（默认值是否仍 60）+ 'entry.config.timeout'（条目级覆盖表达式是否保留）"
+    },
+    "verifiedWith": "1.0.0"
+  },
+  {
+    "id": "PS-95",
+    "claim": "模型请求自愈窗 httpIdleTimeoutMs 默认 300s 且一身三用：① undici dispatcher 的 bodyTimeout 与 headersTimeout（同一 normalizedTimeoutMs）；② SDK 请求 timeoutMs 的全局兜底（effectiveTimeoutMs）；③ 数值 0 = 用户显式禁用——SDK 侧替换为 2147483647ms（事实性无超时）。配置链：settings httpIdleTimeoutMs（parseHttpIdleTimeoutMs 接受任意有限 ≥0 值，0 不被拒绝）→ getHttpIdleTimeoutMs 缺省回 300_000；请求级 timeoutMs = options.timeoutMs ?? providerRetrySettings.timeoutMs（taiji provider.timeoutMs，合法域 1-600000，未设跟随全局）?? effectiveTimeoutMs（provider 覆盖优先于全局）。taiji 第 2 层静默判定自愈窗②承重（pi-stall-detection AS13/AS15）：禁用（0）或生效值超出 T 覆盖公式配置分量的会话不启用第 2 层判死、降级温和提示",
+    "piAnchor": [
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/http-dispatcher.js",
+        "symbol": "DEFAULT_HTTP_IDLE_TIMEOUT_MS / configureHttpDispatcher / parseHttpIdleTimeoutMs",
+        "note": ":3 export const DEFAULT_HTTP_IDLE_TIMEOUT_MS = 300_000；:15 parseHttpIdleTimeoutMs（任意有限 ≥0 值取 floor）；:68-81 configureHttpDispatcher 将同一 normalizedTimeoutMs 同时设为 bodyTimeout 与 headersTimeout【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      },
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/settings-manager.js",
+        "symbol": "getHttpIdleTimeoutMs",
+        "note": ":667-669 return parseTimeoutSetting(this.settings.httpIdleTimeoutMs, 'httpIdleTimeoutMs') ?? DEFAULT_HTTP_IDLE_TIMEOUT_MS（缺省回 300s；0 为合法配置值不被拒绝）【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      },
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/sdk.js",
+        "symbol": "buildRequestOptions",
+        "note": ":182-188 httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs()；effectiveTimeoutMs = httpIdleTimeoutMs === 0 ? 2147483647 : httpIdleTimeoutMs（0 = 禁用 → 事实性无超时）；timeoutMs: options.timeoutMs ?? providerRetrySettings.timeoutMs ?? effectiveTimeoutMs（provider 覆盖优先于全局）【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      }
+    ],
+    "guard": {
+      "type": "observe",
+      "note": "taiji 消费方 = 第 2 层判死降级判定（RL14 禁用分支 + AS13 超界降级，pi-stall-detection D3/U4 W2）与 packages/runtime/src/services/llm-retry-config-helper.ts（provider.timeoutMs 合法域 1-600000、未设跟随全局）。pi 升级时重验：grep dist/core/http-dispatcher.js 'DEFAULT_HTTP_IDLE_TIMEOUT_MS'（是否仍 300_000）+ dist/core/sdk.js '2147483647'（0=禁用替换语义是否保留）+ settings-manager.js 'getHttpIdleTimeoutMs'（缺省链是否保留）"
+    },
+    "verifiedWith": "1.0.0"
   }
 ]

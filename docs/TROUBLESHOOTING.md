@@ -612,6 +612,25 @@ git -C <barePath> for-each-ref --format='%(refname)' refs/remotes/origin | xargs
 ```
 
 已受害的分支用 `git merge main` 补齐（快进或常规合并均可）。
+### 42. 会话停滞判定与恢复：怎么判定哪层、各层恢复动作（pi-stall-detection，2026-11 登记）
+
+会话健康分三层各自独立判定（每层信号源只探测本层，不跨层外推；分层语义权威登记见 [domain-model.md](domain-model.md)「会话健康分层」词条）。排障时先按症状定位层，再按层取恢复动作：
+
+| 层 | 信号源与判定 | 用户可见表现 |
+|---|---|---|
+| 第 0 层 进程存活 | pi exit / error 事件链（进程生死唯一权威） | 会话错误消息入流 + 显式收尾广播；恢复 = 用户显式重开会话（崩溃不自动恢复） |
+| 第 1 层 事件循环活性 | get_state 探测请求 5s 有界等待窗（60s 周期，`PING_OBSERVE_TIMEOUT_MS`）；连续失败计数 | 2 次失败广播停滞 WARN（「pi 停滞」）；3 次判停滞 → 进自动处置链 |
+| 第 2 层 回合推进 | 帧流静默计时：判定阈值 T = idleBackgroundSec + 300s（默认 900s）、提示阈值 T_hint = T − 60s；判死前查在途信号与豁免锚点（ask_user 等待 / 压缩中 / 转后台标记，锚点在场不判死） | T_hint 到达：活动条（ActivityStrip）stall 行温和提示「已静默 N 分钟，可点停止或继续等待」（非红色警告非弹窗）；超 T 判死 → 自动 abort + 注入原因提示 |
+
+**各层恢复动作**：
+
+- **第 1 层判停滞且进程存活**（事件循环挂死形态）→ 自动处置链，无需人工：sample 调用栈取证 → 强杀 → 自动恢复接回会话 → steer 注入原因提示（agent 带死因上下文继续）；恢复重试耗尽降级死亡发声 + 用户手动重开。进程已死形态不进自动链，维持第 0 层显式重开语义。
+- **第 2 层判死** → 自动 abort（pi 事件循环活可接收）+ steer 注入原因提示；abort 悬挂超升级窗自动升级强杀（机器判死分型 `probe_stall_auto_quit`，走同上自动恢复）。降级形态只有提示无判死：`httpIdleTimeoutMs=0`（禁用模型请求超时）、自愈窗实际配置值 ≥ T、转后台关闭（idleBackgroundSec=null）——三类配置下第 2 层自动判定出口缺失，属显式登记边界非缺陷。
+- **用户停止**（停止按钮 / 右键强制退出）语义不变：挂死对象上停止经升级窗自动强杀收尾，恢复归用户显式重开。
+
+**强杀取证产物（sample 调用栈存档）**：强杀执行前 macOS `sample <pid> 2` 采样 2 秒调用栈，落会话存储树 logs 域 `<数据目录>/ext-sessions/<sessionId>/logs/stall-sample-<时间戳>.txt`；非 macOS 跳过留痕，取证失败不阻断强杀。生命周期 = 随会话删除整树自动回收（ADR-0151 整树软删），无独立保留期——排查历史停滞时产物是否还在取决于会话是否还活着。
+
+**handoff 取消链残留无界悬挂（显式豁免出口）**：交接（handoff，把当前会话交接给新会话的编排）进行中点取消，取消经 `HandoffService.abortHandoff`（packages/runtime/src/services/handoff-service.ts:372）直连 pi client.abort，不经 message-dispatcher 的 abort 升级窗——pi 挂死时该取消无限悬挂（catch 只覆盖显式失败，不覆盖悬挂），且无自动强杀出口。此出口是停止升级链设计（pi-stall-detection D2① 裁决 ⑤）的显式豁免，射程仅此一条路径。判定特征：交接中取消后 handingOff 占用不复位、停止无回执、其余停止入口（升级链覆盖的）正常。手动恢复：侧栏右键强制退出该会话（走强杀编排，不经挂死的 abort 通道），或重启应用。治理登记 = [docs/todo/handoff-abort-hang.md](todo/handoff-abort-hang.md)；生产出现经该出口的悬挂事故（本小节命中）即治理条目登记的重审触发条件之一。
 ### 33. LLM 网络代理分流失效：配了代理规则的服务商仍直连失败（pi 升级后高发）
 
 **症状**：settings「网络代理」页已启用并配置规则，但命中规则的服务商请求仍不走代理（或代理软件侧无新 CONNECT 隧道）；典型触发时点 = pi 版本升级后（分流依赖两个 pi/Node 未承诺前提：上游 SDK 默认 fetch 运行时读 `globalThis.fetch`；外部 undici 包 `setGlobalDispatcher` 写入的槽与 Node 内置 fetch 读取的槽一致——任一被升级打破即静默失效）。
@@ -680,7 +699,7 @@ bare repo + worktree 结构下，`.bare/hooks/pre-commit` 是全部 worktree 共
 | 类 | 判据 | 规则 | 实例 |
 |---|---|---|---|
 | ① 自有状态对账 | 状态变化 100% 经由自身请求/事件路径 | **禁止周期轮询**。主链路 = 回执 + 事件失效；周期 pull 会掩盖主链路 bug | thinkingLevel 30s 轮询（已随设计定案删除，附录 C.4） |
-| ② 活性探测 | 对端死掉/卡死时无法自报 | 允许，但**优先升级式触发**（事件静默超时 / 请求失败再探），无条件周期须论证 | pingPi 60s、WS 15s ping+45s watchdog、Electron 30s /health |
+| ② 活性探测 | 对端死掉/卡死时无法自报 | 允许，但**优先升级式触发**（事件静默超时 / 请求失败再探），无条件周期须论证 | pingPi 60s、WS 15s ping+45s watchdog、Electron 30s /health、ping 观测超时（get_state 探测请求 5s 有界等待窗，pi-stall-detection D1）、静默判定矩阵（回合帧流静默计时 + 判死自动处置，pi-stall-detection D3——见上「会话停滞判定与恢复」条目） |
 | ③ 外部世界 | 数据源在外部、无 push 通道 | 允许轮询；频率 = 外部约束（API 限额 / 下游缓存 TTL），不做无依据加密 | 应用更新检查（GitHub + GitCode 双源，全源限流退避——rateLimited = 全部源均在退避窗口才报；周期 60min 不变） |
 | ④ 空转 | 有 push 通道仍轮询，或产出数据无消费者 | **删除或事件化** | plugin-host 30s memory monitor（lastActiveAt 只写不读，已删）、handoff 2s 轮询（onExit 多播化后已事件化） |
 

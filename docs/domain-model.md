@@ -1,6 +1,6 @@
 # taiji 领域模型登记
 
-> **本文件定位**：领域聚合、不变量与状态机的登记处（统一语言词条在 [CONTEXT.md](CONTEXT.md)）。当前登记域：**画布（problem-solve canvas，聚合与不变量，2026-10）**；**状态机基建与六域状态机（run / 画布节点 / plan / goal / permanent-session + 归档单元 + session occupancy turn，2026-10，见下「状态机基建」节）**；**session 存储归档域（归档单元聚合 + 不变量 + 转移表，2026-10，见下「session 存储归档域」节）**；**subagent 会话轮债权域（record 会话 / 轮 / 债权聚合不变量，2026-10，见下「subagent 会话轮债权域」节）**。
+> **本文件定位**：领域聚合、不变量与状态机的登记处（统一语言词条在 [CONTEXT.md](CONTEXT.md)）。当前登记域：**画布（problem-solve canvas，聚合与不变量，2026-10）**；**状态机基建与六域状态机（run / 画布节点 / plan / goal / permanent-session + 归档单元 + session occupancy turn，2026-10，见下「状态机基建」节）**；**会话健康分层（停滞判定三层信号源与判定权归属，2026-11，见下「会话健康分层」节）**；**session 存储归档域（归档单元聚合 + 不变量 + 转移表，2026-10，见下「session 存储归档域」节）**；**subagent 会话轮债权域（record 会话 / 轮 / 债权聚合不变量，2026-10，见下「subagent 会话轮债权域」节）**。
 >
 ## 状态机基建（@zhushanwen/state-machine）
 
@@ -37,6 +37,25 @@ session 的会话占用（occupancy）是四维结构：turn 维（状态机，�
   3. abort 链的 idle 转移只允许在型 1（入口快照 turn ∈ {dispatching, generating}，有回合被中止）内调用；压缩取消与收尾窗口不写终态、不广播、不动 turn
   4. 终态 sidecar 写入纪律 = 第一终态优先（persistSessionOutcome 统一层：已有 done/error/stopped 则跳过；willRetry=true 的 attempt 级中间失败跳过终态写入、settling 转移保留）
 - **穷举与审计**：`generateTableTests` 全组合穷举（4 态 × 6 事件）+ 词表派发点静态审计 + 退役词零残留断言（session-turn-machine.test.ts）。
+
+## 会话健康分层（pi-stall-detection，2026-11）
+> 机制纪律：健康信号分层独立——每层信号源只探测本层，不跨层外推（事件循环挂死与回合推进停滞共用单层信号必然产生盲区）；观测通道与业务通道分离——请求级有界等待只存在于健康探测请求，业务 RPC（prompt / steer / bash / compact）永不携带墙钟超时，失败信号归 pi exit/error 事件链（[ADR-0122](adr/decisions.md) 保留白名单「PingProbe 无进展检测」行承载的观测通道例外）。判定与处置的机制单点在 runtime session 域：探测 = `PingProbe`（event-interpreter-ping.ts），第 2 层判定 = 静默判定矩阵（event-interpreter-silence.ts），自动处置链编排 = message-dispatcher.ts；renderer 只做辅助呈现，不复制判定规则。排障入口见 [TROUBLESHOOTING.md](TROUBLESHOOTING.md)「会话停滞判定与恢复」条目。
+
+会话健康由三层各自独立的信号源判定，与上节 occupancy 正交——occupancy 回答「回合处于哪个进行阶段」，健康分层回答「占用中的会话是否停滞」：
+
+| 层 | 信号源 | 判定权威 | 判定语义 |
+|----|--------|---------|---------|
+| 第 0 层 进程存活 | pi exit / error 事件链 | RpcClient exit 链（进程生死唯一权威） | 进程死 → 全部在途 RPC 显式失败（rejectAll）→ 错误入流 + 显式收尾广播 |
+| 第 1 层 事件循环活性 | get_state 探测请求有界等待（`PING_OBSERVE_TIMEOUT_MS` 5s 窗，60s 周期） | `PingProbe` 失败计数（每回合瞬态，探测生命期随 occupancy 转移边沿启停） | 窗内响应 = 事件循环活（失败计数清零）；超时计一次失败——2 次广播停滞 WARN，3 次判停滞（get_state 同步内存读必响应，连续观测超时即停滞确定性成立，无误杀范围） |
+| 第 2 层 回合推进 | 帧流事件静默计时 + 在途阶段定位 + 豁免锚点检查 | runtime 静默判定矩阵（event-interpreter-silence.ts；判定阈值 T = idleBackgroundSec + 300s 与提示阈值 T_hint = T − 60s 同源联动推导，经广播携带，renderer 不复制推导） | 静默超 T_hint → 活动条温和提示（判定权在 runtime，呈现只是辅助）；超 T 且无在途信号、无豁免锚点（ask_user 等待 / 压缩中 / 转后台标记）→ 判死 |
+
+**非 occupancy 第五维**：停滞判定是信号驱动的瞬态判定与广播，不产生持久状态、不进 occupancy 状态机（上节四维结构与 `SESSION_TURN_MACHINE` 转移表不受影响）；与 occupancy 的唯一交点是生命期——探测与静默计时只在回合占用期运行、随 occupancy 转移边沿启停。
+
+**自动处置分型**（处置经强杀编排 forceQuitSession 唯一实现，按来源分型）：
+
+- 第 1 层判停滞且进程存活（事件循环挂死形态）→ 自动处置链：sample 调用栈取证 → 判死强杀（`probe_stall_auto_quit` 机器分型）→ 窄化自动恢复接回会话 → steer 注入原因提示；恢复失败降级死亡发声 + 用户手动重开。进程已死形态不进自动链，维持错误入流 + 用户显式重开。
+- 第 2 层判死 → 自动 abort + steer 注入原因提示（含静默时长与判定依据）；abort 悬挂超升级窗升级判死强杀（与第 1 层共用机器分型与自动恢复接线）。禁用超时配置（httpIdleTimeoutMs=0）或自愈窗实际配置值超出 T 覆盖公式的会话不启用第 2 层判死，降级仅提示（显式登记边界，非缺陷）。
+- 用户停止分型（`abort_timeout` / `user_force_quit`）语义不变：升级窗强杀后恢复归用户显式重开，不进自动恢复接线。
 
 ## 画布域
 > 机制纪律：不变量与状态机转移表的实现单点在 runtime CanvasService（`packages/runtime/src/services/canvas/`）——renderer / extension 侧不复制领域规则，全部写操作经唯一入口 `mutate`（契约 = `packages/extension-protocol/src/extensions/canvas/`，agent 工具实现 = `extensions/taiji/canvas/`，GUI 写通道 = WS RPC `canvas.mutate`）。
