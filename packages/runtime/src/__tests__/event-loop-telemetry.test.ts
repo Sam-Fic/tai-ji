@@ -28,23 +28,29 @@ describe('event-loop-telemetry（RL4 常驻滞后遥测）', () => {
     vi.useRealTimers()
   })
 
-  it('负载期滞后可观测：同步阻塞 120ms → 快照 maxMs > 50（A3 断言读取口量纲正确）', async () => {
+  it('负载期滞后可观测：负载驱动下同步阻塞 120ms → 快照 maxMs > 50（A3 断言读取口量纲正确）', async () => {
     const log = vi.fn()
     startEventLoopDelayTelemetry(log)
     const before = getEventLoopDelaySnapshot()
     expect(before.running).toBe(true)
 
+    // 负载驱动：monitorEventLoopDelay 的采样 timer 是 unref 的，事件循环需有
+    // 活跃 handle 持续运转才如实记录 tick 间隔——空转循环里阻塞期间错过的采样点
+    // 直接丢失，同步阻塞不留任何样本。10ms 周期任务模拟负载期的事件驱动。
+    const load = setInterval(() => {}, 10)
+    await new Promise((resolve) => setTimeout(resolve, 100)) // 负载稳定运转
+
     // 同步忙等 120ms：阻塞事件循环，monitorEventLoopDelay 在事件循环恢复后的
-    // resolution tick 记录该轮滞后——阻塞结束后让循环转 200ms（真实定时器）
-    // 使直方图完成计量，再读快照。
+    // tick 记录该轮滞后（20ms 桶宽量化 + 开销，实测 ~123ms）。阻塞结束后让循环
+    // 转 200ms（真实定时器）使直方图完成计量，再读快照。
     const t0 = Date.now()
     while (Date.now() - t0 < 120) {
       // busy loop
     }
     await new Promise((resolve) => setTimeout(resolve, 200))
+    clearInterval(load)
     const snap = getEventLoopDelaySnapshot()
     expect(snap.running).toBe(true)
-    // 忙等产生的事件循环滞后 ≥ 阻塞时长减去直方图分辨率（100ms 桶宽）余量；
     // 断言 > 50ms 即 A3 判据阈值（该用例看守「遥测源能观测到 > 50ms 的滞后」，
     // A3 真机剧本的「无一次 > 50ms」断言归 D3 验收面）。
     expect(snap.maxMs).toBeGreaterThan(50)
