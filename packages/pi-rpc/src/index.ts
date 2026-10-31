@@ -14,6 +14,10 @@ export type {
 } from './types.ts'
 
 export {
+  PI_SPAWN_MODE_ARGS,
+  PI_SPAWN_NO_EXTENSIONS,
+  PI_SPAWN_SKILL_FLAG,
+  PI_SPAWN_EXTENSION_FLAG,
   appendSkillArgs,
   appendExtensionArgs,
   appendToolArgs,

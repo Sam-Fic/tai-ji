@@ -62,6 +62,15 @@ export interface SessionHeader {
 
 // ── 解析工具 ─────────────────────────────────────────────────
 
+// header 格式版本防御（startup 设计 §7.2）：模块本体在 './session-header-version.ts'
+// （max-lines 预算拆分，先例 session-residue-cleanup.ts）；此处 re-export 维持
+// session-file-utils 既有导出路径，parseSessionHeader 是唯一计数触发点。
+import { countUnknownSessionHeaderVersion, MAX_KNOWN_SESSION_HEADER_VERSION } from './session-header-version.js'
+export {
+  getSessionHeaderUnknownVersionCounts,
+  _resetSessionHeaderVersionWarnForTest,
+} from './session-header-version.js'
+
 /**
  * 解析 session JSONL 首行的 session header。
  *
@@ -69,6 +78,9 @@ export interface SessionHeader {
  * header 固定在首行，长 session 文件（数 MB）全量读只为取第一行是纯浪费；扫描器对每个
  * 候选文件调一次本函数，节省随文件数线性放大。首行读取走基座字节原语（下方
  * readFirstJsonlLine 薄包装）。
+ *
+ * 版本防御（startup 设计 §7.2）：header 的 version 字段（实测现行 3）高于已知最高版本
+ * 时告警计数——未来 pi 升级把版本抬到 taiji 解析器未验证的形态时，降级不再无声。
  */
 export function parseSessionHeader(filePath: string): SessionHeader | null {
   const firstLine = readFirstJsonlLine(filePath)
@@ -76,6 +88,9 @@ export function parseSessionHeader(filePath: string): SessionHeader | null {
   try {
     const entry = JSON.parse(firstLine) as Record<string, unknown>
     if (!isSessionHeaderEntry(entry)) return null
+    if (typeof entry.version === 'number' && entry.version > MAX_KNOWN_SESSION_HEADER_VERSION) {
+      countUnknownSessionHeaderVersion(entry.version, filePath)
+    }
     // id/cwd/timestamp 与 parentSession/forkEntryId 同款 typeof 守卫条件赋值（缺就不设，
     // 运行时语义与原裸断言一致——缺失字段读出 undefined）。SessionHeader 必有字段声明是
     // 「正常 session 均有」的乐观约定（见 isSessionHeaderEntry 注释），宽收窄差在返回
