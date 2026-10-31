@@ -42,8 +42,8 @@ const RELATIVE_UNITS_ZH: readonly (readonly [string, number])[] = [
 /**
  * Format ScheduleSpec to readable string. kind 区分 once/recurring（once 显示 'once in X' 而非误导性的 'every X'）。
  *
- * `locale` 必填、无默认值（设计 r4 M1）：漏传即编译报错，替代「人工枚举调用点」清单
- * （r3→r4 已连漏 notify/widget 与 getArgumentCompletions 两处）。内部按 `spec.mode`
+ * `locale` 必填、无默认值：漏传即编译报错，替代「人工枚举调用点」清单
+ * （设计修订过程中曾连漏 notify/widget 与 getArgumentCompletions 两处）。内部按 `spec.mode`
  * 显式分支 interval/cron——不靠 `intervalMs`/`cron` 空值推断。
  *
  * 直接调用点三处：`service.ts`（tool/L4 → 'en-US'）、`widget.ts`（TUI/L2 →
@@ -80,7 +80,7 @@ function formatDurationI18n(ms: number, locale: UiLocale): string {
  * en 未来: "in 5m" / 过去: "5m ago" / 当前(±5s): "now"
  * zh 未来: "5 分钟后" / 过去: "5 分钟前" / 当前: "现在"
  *
- * `locale` 必填、无默认值（设计 r4 M1：漏传即编译报错）。`now` 可选参数：基准时间戳，
+ * `locale` 必填、无默认值（漏传即编译报错）。`now` 可选参数：基准时间戳，
  * 默认 Date.now()。测试可传固定值快进/锁定。
  */
 export function formatRelativeTime(timestamp: number, locale: UiLocale, now?: number): string {

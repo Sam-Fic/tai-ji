@@ -303,7 +303,7 @@ describe('SchedulerService', () => {
       expect(renderResult('task.list', params, 'en-US')).toContain('### Scheduled (2)')
     })
 
-    // ── D1 执行状态摘要（task.list 行尾失败可见性补偿；widget 推送修正设计 D1 代价四要素）──
+    // ── 执行状态摘要（task.list 行尾失败可见性补偿）──
 
     it('task.list 行尾摘要：近期失败 → 「上次: 失败×n」（用户可见失败信号）', async () => {
       const created = await service.create('flaky', '5m')
@@ -315,7 +315,7 @@ describe('SchedulerService', () => {
       if (result.params === undefined || !('tasks' in result.params)) throw new Error('expected list params')
       const line = renderResult('task.list', result.params, 'zh-CN').split('\n')[1]!
       expect(line).toContain('上次: 失败×2')
-      // 命令变体保留相对时间（设计 D1-a：命令层按需呈现侧不变）
+      // 命令变体保留相对时间（命令层按需呈现侧不变）
       expect(line).toMatch(/分钟后|分钟前|\d+m ago|in \d+m/)
       // params 携带 locale-neutral 原始值（摘要不预渲染）
       expect(result.params.tasks[0]!.lastExec).toEqual({ lastStatus: 'failed', recentFailures: 2 })

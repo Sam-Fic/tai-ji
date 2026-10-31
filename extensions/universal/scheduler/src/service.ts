@@ -70,7 +70,7 @@ export class SchedulerService {
     scheduleInput: string,
     options: AddOptions = {},
   ): Promise<ServiceResult<{ task: ScheduledTask; nextRuns: number[] }>> {
-    // parseSchedule 同步化（D2）后返回值即 ScheduleSpec（L7：不再包装 { spec }）；
+    // parseSchedule 同步化后返回值即 ScheduleSpec（不再包装 { spec }）；
     // undefined 唯一语义 = 表达式无效——croner 是 dependencies 恒在盘，不存在解析器缺失
     const parsed = parseSchedule(scheduleInput)
     if (!parsed) {

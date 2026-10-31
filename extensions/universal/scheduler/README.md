@@ -196,6 +196,7 @@ pi -p "/schedule 5m 'check build'"
 | once 任务 | 触发后自动删除 | 不参与后续调度 |
 | cron 失效 | 任务停用 + `lastStatus=failed` + `lastError='cron expression invalid'` | 不会用 `now()` 兜底导致每 tick 重触发死循环 |
 | 忙时 dispatch | steer 直投（scheduler-steer-direct-dispatch） | busy 时消息插入当前 turn、idle 时开新 turn（`{deliverAs:'steer', triggerTurn:true}`），受理即记账不排队；同任务 in-flight 检查防双投 |
+| widget 推送节流 | 指纹跳推（任务集不变即零推送） | widget 行内容静态化（不含随时间流逝变化的元素）是跳推前提；每次推送前对比任务集指纹，不变即跳过本次推送（判定在 index.ts 的 refreshWidget）；widget 推送修正设计原文未归档，裁决内容与背景以 commit 4bd690a54 message 为溯源锚 |
 | history | 保留最近 **20** 条执行记录 | 超出丢弃最旧（上限由 `appendExecutionRecord` 在 runtime 记账侧单点裁剪）；快照写入口**不裁剪**——只剥离运行时标记 `pending` 后逐项拷贝 `history` 全量序列化 |
 | 持久化 | 任务集全量快照原子落盘（每次任务集变更即写，tmp+fsync+rename） | 任务随 owner session 分片持久化，resume 后直读恢复；落盘失败 warn + 内存态照常推进、下写点重试 |
 | 交付语义 | **受理即记账**（投递端口 at-most-once 注入） | dispatch 经投递端口受理后注入失败首败即弃（forget，2026-10-25 裁决：丢一轮 << 重投造成重复提醒）；端口拒收（rejected）走 failed 记账、下个 tick 单通道重试 |

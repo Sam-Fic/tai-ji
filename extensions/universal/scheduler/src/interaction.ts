@@ -99,7 +99,7 @@ function modelRef(m: { provider: string; id: string }): string {
 
 /**
  * Draft.models 组装单点（P-SCOPED 探针结论）：ctx.scopedModels 优先
- * （pi /scoped-models 同集语义）；taiji builtin 装配下恒空（S12）→ 回退
+ * （pi /scoped-models 同集语义）；taiji builtin 装配下恒空 → 回退
  * modelRegistry.getAvailable()（已配 auth 的可用模型全集）。
  */
 export function collectModelIds(ctx: ExtensionContext): string[] {

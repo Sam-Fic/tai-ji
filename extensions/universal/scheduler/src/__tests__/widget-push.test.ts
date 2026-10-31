@@ -1,13 +1,13 @@
 // src/__tests__/widget-push.test.ts
 //
-// scheduler widget 推送（D1 指纹跳推）集成单测：
+// scheduler widget 推送（指纹跳推）集成单测：
 // 走 index.ts 真实装配链（session_start → runtime.onAfterTick → refreshWidget），
 // 观测范围 = ctx.ui.setWidget 调用序列（每个实际推送恰一次调用——跳推判定在
 // setSchedulerWidget 之前，setWidgetDual 的 TUI 分支与清屏分支都落 setWidget）。
 //
-// 行为契约（scheduler widget 推送修正设计 D1-b）：
-// - 任务集指纹不变 → 跳推（时间流逝不是状态变化，静态期零推送——G1；跨原保活窗口
-//   时长仍零推送，锁定原 D2 保活底线帧已随 idle reaper 退役不回归）
+// 行为契约：
+// - 任务集指纹不变 → 跳推（时间流逝不是状态变化，静态期零推送；跨原保活窗口
+//   时长仍零推送，锁定原保活底线帧已随 idle reaper 退役不回归）
 // - 空任务集同样静态期零推送（清屏帧只推一次）
 // - fail-open：指纹计算异常即推送（宁可多推不可漏显）+ warn 留痕
 // - locale 入指纹：切语言一次推送自愈（集成臂；kind 字段在 widget.test.ts 纯函数臂锁定）
@@ -46,7 +46,7 @@ vi.mock('@zhushanwen/pi-extension-logger', () => ({
 import schedulerExtension from '../index.js'
 import { TICK_INTERVAL_MS } from '../runtime.js'
 import type { ScheduledTask } from '../types.js'
-/** 原保活窗口时长（10min；原 D2 已退役）——静态用例静置越过后断言仍零推送。 */
+/** 原保活窗口时长（10min；保活底线帧已退役）——静态用例静置越过后断言仍零推送。 */
 const RETIRED_KEEPALIVE_WINDOW_MS = 10 * 60 * 1000
 const BASE = Date.parse('2026-01-01T00:00:00Z')
 
@@ -103,7 +103,7 @@ function createFakeCtx(sessionFile: string): {
   return { ctx, setWidget }
 }
 
-describe('widget 推送判定（D1 指纹跳推）', () => {
+describe('widget 推送判定（指纹跳推）', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     vi.setSystemTime(BASE)
@@ -114,7 +114,7 @@ describe('widget 推送判定（D1 指纹跳推）', () => {
     vi.useRealTimers()
   })
 
-  it('D1: 任务集静态期间零推送——静置越过原保活窗口仍零推送（D2 退役不回归）', async () => {
+  it('任务集静态期间零推送——静置越过原保活窗口仍零推送（保活底线帧退役不回归）', async () => {
     const { pi, events } = createMockPi()
     schedulerExtension(pi)
     const sessionStart = events.get('session_start')!
@@ -128,7 +128,7 @@ describe('widget 推送判定（D1 指纹跳推）', () => {
     expect(setWidget).toHaveBeenCalledTimes(1)
   })
 
-  it('D1: 空任务集静态期零推送（清屏帧只推一次）', async () => {
+  it('空任务集静态期零推送（清屏帧只推一次）', async () => {
     const { pi, events } = createMockPi()
     schedulerExtension(pi)
     const sessionStart = events.get('session_start')!
@@ -168,7 +168,7 @@ describe('widget 推送判定（D1 指纹跳推）', () => {
     expect(warnText).toContain('fingerprint')
   })
 
-  it('D1: locale 切换改变指纹 → 下一 tick 推送一次且文本随新语言', async () => {
+  it('locale 切换改变指纹 → 下一 tick 推送一次且文本随新语言', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'sched-wp-locale-'))
     try {
       const { pi, events } = createMockPi()

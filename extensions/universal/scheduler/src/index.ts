@@ -65,7 +65,7 @@ const logger = getLogger('scheduler')
  */
 export default function schedulerExtension(pi: ExtensionAPI): void {
   let service: SchedulerService | null = null
-  // D1 指纹跳推的推送状态（scheduler widget 推送修正设计 D1-b）。
+  // 指纹跳推的推送状态。
   // **必须声明在 factory 闭包内（extension 实例态），禁模块级**：模块级跨 session 残留会让
   // 新会话继承旧会话的指纹——session_start 的首帧（含清屏帧）被跳推，widget 面板
   // 空窗；模块级 vs 闭包级的语义差异在本包有实证（见上方 sessionGeneration 注释）。
@@ -254,8 +254,8 @@ export default function schedulerExtension(pi: ExtensionAPI): void {
    * `ctx as GuiContext`：pi 的 `ExtensionContext` 与协议包最小结构（mode/hasUI/ui.setWidget）
    * 静态不完全兼容，先例见 todo/src/index.ts makeRefreshDisplay。
    *
-   * 推送频率判定（scheduler widget 推送修正设计 D1-b）：
-   * - D1 指纹跳推：任务集稳定指纹（computeTasksFingerprint，字段集含 kind/locale）与上次
+   * 推送频率判定：
+   * - 指纹跳推：任务集稳定指纹（computeTasksFingerprint，字段集含 kind/locale）与上次
    *   实际推送相同 → 跳过推送。时间流逝不是状态变化，任务集不变期间零推送
    *   （rpc/tui 两模式同效——判定在 setWidgetDual 之前）。
    * - fail-open：指纹计算异常即推送（宁可多推不可漏显）。
