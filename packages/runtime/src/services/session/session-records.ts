@@ -1379,9 +1379,9 @@ export class SessionRecords {
   /**
    * 获取 session 派生的 workflow 列表。
    *
-   * [W1 / D6] 读请求只读内存派生视图（run 骨架经 事件 fold + v2 条目定界；v1 快照
-   * 实体走冻结兼容数据）；oversize（>32MB）走旧格式惰性兼容读路径（预检语义专属域，
-   * 与 getSubagents 同款）。
+   * [W1 / D6] 读请求只读内存派生视图（run 骨架经 事件 fold + v2 条目定界——v1 冻结
+   * 层已删，见 events-projection.ts 头注登记）；oversize（>32MB = v1 巨文件时代会话）
+   * 走旧格式惰性兼容读路径（预检语义专属域，与 getSubagents 同款）。
    */
   async getWorkflows(sessionId: string): Promise<OversizeAwareResult<WorkflowRunRecord>> {
     // wave:perf-w26（plan M-3）：路径解析消费方 force 旁路 TTL（与 getSubagents 同理）。

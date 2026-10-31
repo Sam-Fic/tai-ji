@@ -24,7 +24,8 @@
  *
  * 环境：真 composerInjectionStore 单例（断言范围），mock useChat（编排接线）+ '@/api/domains/delivery'
  * （drain RPC）+ '@/api'（forceQuit RPC）+ toast（捕获提示）
- * + 侧栏外围 store（对齐 sidebar-ondeletefolder.test.ts 范式降级）。
+ * + 侧栏外围 store（对齐 __tests__/helpers/sidebar-mount.ts 封装的 Sidebar 挂载范式降级，
+ * 载体 sidebar-mount-bundle.test.ts）。
  *
  * 运行：cd packages/renderer && npx vitest run src/__tests__/sidebar/force-quit-queue-recovery.test.ts
  */

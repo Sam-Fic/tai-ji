@@ -717,7 +717,12 @@ export class SessionEventProjection {
       else this.sources.runFolds.delete(id)
     }
     if (chunk.skippedLines > 0) {
-      console.warn(`[events-projection] ${domain} events skipped ${chunk.skippedLines} bad lines: ${filePath}`)
+      // skippedLines 单通道含合法头行（每文件每生命周期至多 1 次，event-tail.ts
+      // EventTailChunk 注释登记）——文案不写成纯 bad lines，防冷读大会话逐文件
+      // 误报「坏行」稀释真坏行告警敏感度。
+      console.warn(
+        `[events-projection] ${domain} events skipped ${chunk.skippedLines} line(s) (header and/or bad lines): ${filePath}`,
+      )
     }
     if (chunk.events.length > 0) this.applyEvents(domain, id, chunk.events)
   }
