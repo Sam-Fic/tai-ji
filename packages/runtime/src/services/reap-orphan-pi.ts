@@ -25,7 +25,8 @@
  *      AGENTS.md 实测命令模板均不带，机器可判的硬分界。已知例外（2026-10-31 终态同步
  *      补登）：btw fork bootstrap 一次性进程（btw-fork-exec.ts 硬编码 argv）不带该
  *      flag——判据②不命中即不在收割射程（fail-safe 方向：只漏收不误杀；该例外是否
- *      收编 spawn 常量单源属 btw 域裁决，见该文件）；
+ *      收编 spawn 常量单源属 btw 域裁决，登记见 btw-fork-exec.ts 文件头
+ *      「关键红线呼应」区块的跨域登记行）；
  *   ③ argv 中任一 `--extension`/`--skill` 值与 spawn 清单中某项精确相等。清单 =
  *      `<dataDir>/run/pi-spawn-markers.json`（写侧 spawn-markers.ts，每次 spawn 全量
  *      覆盖写，仅登记 taiji staged 专属路径；用户配置来源 ~/.pi/、项目 .pi/、~/.agents/
