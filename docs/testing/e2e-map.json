@@ -4397,7 +4397,7 @@
       "run": "TAIJI_TEST_INTEGRATION=1 pnpm --filter @taiji/electron run test:main test/updater.test.ts",
       "owner": "apps/electron",
       "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
-      "note": "R2 态 + 用例级门控（文件留 main 默认组，快用例继续占默认组；门控 = TAIJI_TEST_INTEGRATION，SSOT = test-guard/integration-gate.ts，skip 理由注入 describe 名）（现仅一段门控 describe：linux mv 段（4 例，无 hdiutil 依赖、CI ubuntu 可跑）；mac 真链三段（端到端/中断注入/磁盘满 P10）全部走 TAIJI_E2E_UPDATER E2E 档，登记 = E2E-UPDATER-01；单测层保留 bash -n 语法 3 条 + CLI 工具可用性 2 条 + mock 模板断言 12 条）。触发条件 = 升级脚本本体 diff 命中。断言本质 = 升级脚本对真实 bash 的组合行为（门控用例断言体零改动，文件级 60s 预算只辖门控组）；serial=真 的理由 = 真 bash 子进程与真实等待窗，重执行用例 1-5s。run 命令唯一正确入口 = test:main script（vitest 直跑因 config 上浮 no tests found，见 TEST-STRATEGY.md 已知坑）。CI test-main job 已带 env=1（mac 真链段在该 env 下 skip，属 E2E 档语义）。"
+      "note": "R2 态 + 用例级门控（文件留 main 默认组（legacy 池），快用例继续占默认组；门控 = TAIJI_TEST_INTEGRATION，SSOT = test-guard/integration-gate.ts，skip 理由注入 describe 名）（现仅一段门控 describe：linux mv 段（4 例，无 hdiutil 依赖、CI ubuntu 可跑）；mac 真链三段（端到端/中断注入/磁盘满 P10，14 例）已整段保形拆出至独立文件 test/updater.e2e.test.ts 并独立 live 池（全量门禁以 --project '!live' 排除），走 TAIJI_E2E_UPDATER E2E 档，登记 = E2E-UPDATER-01；本文件保留单测层 bash -n 语法 3 条 + CLI 工具可用性 2 条 + mock 模板断言 12 条）。触发条件 = 升级脚本本体 diff 命中。断言本质 = 升级脚本对真实 bash 的组合行为（门控用例断言体零改动，文件级 60s 预算只辖门控组）；serial=真 的理由 = 真 bash 子进程与真实等待窗，重执行用例 1-5s。run 命令唯一正确入口 = test:main script（vitest 直跑因 config 上浮 no tests found，见 TEST-STRATEGY.md 已知坑）。CI test-main job 已带 env=1（mac 真链段在独立 live 池文件内、CI 不设 E2E env 不跑，属 E2E 档语义）。"
     },
     {
       "id": "E2E-PIPE-20",
@@ -5178,6 +5178,32 @@
       "note": "R2 态 + 用例级门控（2026-10-27 测试范围收缩：两簇门控——>5MB 保尾截断（真 5MB jsonl 写入 + 截断）与并发追加写（4 个真子进程 writer 验证 O_APPEND 单行原子性）；聚合求和 / 水位 / 坏行跳过等纯逻辑用例留无门控默认组）。触发条件 = scope 内代理统计读侧 diff 命中。断言本质 = 截断保尾行边界对齐 + 并发写全量可解析无交错坏行。serial=真 的理由 = 真进程 / 真磁盘吞吐在满载下无稳定上界。"
     },
     {
+      "id": "E2E-INTEG-71",
+      "summary": "引擎 conformance live 真机门（ENGINE_CONFORMANCE_LIVE 手动门，公网真调模型）：zcode-subagent-cli 的 zcode-engine.live（app-server 常驻形态全链，3 例）+ subagent-core 的 engine-conformance.live（协议客户端 × 引擎包 CLI conformance 最小子集，4 例）——同一资产族两包互补（前者覆盖 schema 全链，后者只跑最小子集，见 core live 文件头注释）",
+      "scope": [
+        "packages/zcode-subagent-cli/src/zcode-engine.ts",
+        "packages/subagent-core/src/execution/engine/client/engine-client.ts",
+        "packages/subagent-core/src/execution/engine/client/remote-engine.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "packages/zcode-subagent-cli/src/__tests__/zcode-engine.live.test.ts"
+        },
+        {
+          "kind": "spec",
+          "ref": "packages/subagent-core/src/execution/engine/__tests__/conformance/engine-conformance.live.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "ENGINE_CONFORMANCE_LIVE=1 pnpm --filter @zhushanwen/zcode-subagent-cli exec vitest run src/__tests__/zcode-engine.live.test.ts && ENGINE_CONFORMANCE_LIVE=1 pnpm --filter @zhushanwen/subagent-core exec vitest run src/execution/engine/__tests__/conformance/engine-conformance.live.test.ts",
+      "owner": "packages/zcode-subagent-cli",
+      "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
+      "note": "手动门登记（非 TAIJI_TEST_INTEGRATION 族 env：门控 = ENGINE_CONFORMANCE_LIVE，方向与集成门控相反——本地按需跑、CI 不跑，需引擎已装 + 有效凭据 + 公网可达，缺省 ZCODE_E2E_MODEL / PI_LIVE_MODEL 指定真调模型；trigger=on-diff 仅声明「scope 内引擎适配层 diff 命中才需重跑」，实际执行为手动 / 验收节点，登记口径同 E2E-UPDATER-01 的 E2E 档先例）。两包 conformance live 是同一资产族，合一条 rule 双 asset（zcode-subagent-cli 覆盖 schema 全链 3 例；subagent-core 跑 conformance 最小子集 4 例）；两文件已各自独立 live 池（两包 vitest.config.ts）：全量门禁以 --project '!live' 排除该池（env 未设时收集即 skip 的 7 条计数不再进全量输出），显式路径单独跑不受影响。断言本质 = 引擎适配层对真实引擎进程的真实调用链不变量（事件流不变量 + 关键终态，不做逐字段 diff）。serial=真 的理由 = 公网真调模型，重载荷 + 速率敏感。"
+    },
+    {
       "id": "E2E-PIPE-23",
       "summary": "测试执行域触发档机制（round6 Wave2）：domain-map.json 单一权威源（14 域 / 99 个挂载渲染重型文件）+ run-domain-tests 按域跑 + check-domain-map 健康度检查（结构/存在性/唯一归属/挂载特征/消费方接线）+ 两包 vitest exclude 派生",
       "scope": [
@@ -5597,7 +5623,7 @@
     },
     {
       "id": "E2E-UPDATER-01",
-      "summary": "升级脚本 mac 真链全部段 E2E 档：端到端 5 例 / 状态机中断注入 8 例 / 磁盘满（P10，1MB HFS+ 小容量卷上 ditto 拷入 2MB 不可压产物 ENOSPC）1 例——真 hdiutil + 真 ditto + 真 bash 全链（TAIJI_E2E_UPDATER 门控，带 env 跑整个文件）",
+      "summary": "升级脚本 mac 真链全部段 E2E 档（独立文件 test/updater.e2e.test.ts，live 池）：端到端 5 例 / 状态机中断注入 8 例 / 磁盘满（P10，1MB HFS+ 小容量卷上 ditto 拷入 2MB 不可压产物 ENOSPC）1 例——真 hdiutil + 真 ditto + 真 bash 全链（TAIJI_E2E_UPDATER 门控，带 env 跑整个文件）",
       "scope": [
         "apps/electron/main/update/updater-script.ts"
       ],
@@ -5605,15 +5631,15 @@
       "assets": [
         {
           "kind": "spec",
-          "ref": "apps/electron/main/test/updater.test.ts"
+          "ref": "apps/electron/main/test/updater.e2e.test.ts"
         }
       ],
       "trigger": "on-diff",
       "serial": true,
-      "run": "TAIJI_E2E_UPDATER=1 pnpm --filter @taiji/electron run test:main test/updater.test.ts",
+      "run": "TAIJI_E2E_UPDATER=1 pnpm --filter @taiji/electron run test:main test/updater.e2e.test.ts",
       "owner": "apps/electron",
       "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
-      "note": "R2 态 + E2E 档（与同文件的 E2E-INTEG-53 同资产不同档：53 走 TAIJI_TEST_INTEGRATION 随 CI test-main job 常驻，本条门控 = TAIJI_E2E_UPDATER、CI 不设该 env 故不跑，升级脚本本体 diff 命中或手动跑）。覆盖 = 文件内全部 mac 真链段（端到端 / 中断注入 / 磁盘满 P10，E2E env 下跑整个文件；同文件 linux mv 段与 mock 段不受本 env 影响——linux 段随 53 的集成门控）；run 命令唯一正确入口 = test:main script（同 53）。断言本质 = 升级脚本对真实 DMG / 磁盘卷 / bash 的组合行为（含 P10 的 S4 ditto 落 staging 撞 ENOSPC 失败路径，四断言一条不减）；serial=真 的理由 = 真 hdiutil/ditto/bash 子进程 + 挂载点生命周期，重执行用例 3-30s。档位语义登记 = docs/TEST-STRATEGY.md「集成测试门控约定」节 E2E 档段。"
+      "note": "R2 态 + E2E 档（与 E2E-INTEG-53 同被测模块不同文件不同档：53 走 TAIJI_TEST_INTEGRATION 随 CI test-main job 常驻，本条门控 = TAIJI_E2E_UPDATER、CI 不设该 env 故不跑，升级脚本本体 diff 命中或手动跑）。mac 真链三段（端到端 / 中断注入 / 磁盘满 P10，14 例）已自 updater.test.ts 整段保形拆出为独立文件并独立 live 池（apps/electron/main/vitest.config.ts）：全量门禁以 --project '!live' 排除该池（env 未设时收集即 skip 的 14 条计数不再进全量输出），显式路径 / E2E 档全文件跑不受影响；同被测模块的 linux mv 段与 mock 段留 updater.test.ts（随 53 的集成门控）。run 命令唯一正确入口 = test:main script（同 53）。断言本质 = 升级脚本对真实 DMG / 磁盘卷 / bash 的组合行为（含 P10 的 S4 ditto 落 staging 撞 ENOSPC 失败路径，四断言一条不减）；serial=真 的理由 = 真 hdiutil/ditto/bash 子进程 + 挂载点生命周期，重执行用例 3-30s。档位语义登记 = docs/TEST-STRATEGY.md「集成测试门控约定」节 E2E 档段。"
     },
     {
       "id": "E2E-NPM-01",

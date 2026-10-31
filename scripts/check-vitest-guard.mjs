@@ -47,8 +47,9 @@ const ENV_PURITY_MARK = 'ENV_PURITY_PATH'
  */
 const PROJECT_GUARD_EXEMPT = {
   // legacy 池为存量 40+ 测试文件；挂 guard 会暴露存量用例自身设计缺陷（见该 config 注释），
-  // 接入是独立单元工作，故有意豁免。
-  'apps/electron/main/vitest.config.ts': ['legacy'],
+  // 接入是独立单元工作，故有意豁免。live 池 = updater e2e 手动门资产（拆分自 legacy，
+  // 全程 mkdtemp tmpdir + HFS+ 镜像操作，同款不挂理由随迁）。
+  'apps/electron/main/vitest.config.ts': ['legacy', 'live'],
 }
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_ROOT = path.resolve(SCRIPT_DIR, '..')
