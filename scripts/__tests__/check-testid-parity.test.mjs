@@ -6,9 +6,9 @@
  *   - spec 引用三形态：[data-testid="X"] / getByTestId('X')（单双引号）/ [data-testid^="P"]
  *   - 精确引用被动态前缀覆盖（`turn-${...}` 族产出 turn-1）
  *   - 前缀引用被实现前缀 / exact 前缀命中覆盖
- *   - 悬空精确 / 悬空前缀判红；KNOWN_DANGLING 豁免分桶；stale 豁免（恢复实现 / 引用消失）检出
+ *   - 悬空精确 / 悬空前缀判红；KNOWN_DANGLING 豁免分桶；stale 豁免（恢复实现且引用仍在）检出
  * 末组烟测 spawnSync --root 注入 tmpdir fixture 树（mkdtempSync 自建自删）直测
- * main 的退出码链路（绿 / 悬空红 / 实现目录缺失 2）。
+ * main 的退出码链路（绿 / 悬空红 / 实现目录缺失 2 / spec 目录缺失 2）。
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -187,6 +187,20 @@ describe('main 退出码（--root 注入 tmpdir fixture 树）', () => {
       expect(r.status).toBe(2)
     } finally {
       rmSync(emptyRoot, { recursive: true, force: true , maxRetries: 5, retryDelay: 20 })
+    }
+  })
+
+  it('输入错误：e2e spec 目录缺失 → exit 2（实现目录齐备时仍拦截，防空转恒 PASS）', () => {
+    const noE2eRoot = mkdtempSync(join(tmpdir(), 'testid-parity-no-e2e-'))
+    try {
+      mkdirSync(join(noE2eRoot, 'packages', 'renderer', 'src'), { recursive: true })
+      mkdirSync(join(noE2eRoot, 'packages', 'core', 'src'), { recursive: true })
+      mkdirSync(join(noE2eRoot, 'packages', 'ui', 'src'), { recursive: true })
+      const r = run(['--root', noE2eRoot])
+      expect(r.status).toBe(2)
+      expect(r.stdout + r.stderr).toContain('e2e spec 目录缺失')
+    } finally {
+      rmSync(noE2eRoot, { recursive: true, force: true , maxRetries: 5, retryDelay: 20 })
     }
   })
 })

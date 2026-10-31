@@ -22,8 +22,9 @@
  *
  * 已知悬空登记（KNOWN_DANGLING）：引用已删 DOM 的历史 spec 引用，按设计 D13
  * 「悬空 e2e 随推树退役重建断言，不做修复」显式登记豁免（不静默吞）——登记项
- * 输出豁免标注但 exit 0；登记项实际恢复实现或引用消失后报 stale 要求删行
- * （防豁免永久残留，同 oe-exempt 过期恢复拦截的先例语义）。
+ * 输出豁免标注但 exit 0；登记项恢复实现且 spec 引用仍在时报 stale 要求删行
+ * （防豁免永久残留，同 oe-exempt 过期恢复拦截的先例语义）；spec 引用整个消失
+ * （spec 被删）= 死登记，不强制清理——真实退役以重建断言为主形态。
  *
  * 用法：
  *   node scripts/check-testid-parity.mjs              # 对账仓库当前状态
@@ -240,6 +241,14 @@ export function main(argv = process.argv.slice(2)) {
   if (missing.length > 0) {
     console.error(`[check-testid-parity] 实现源目录缺失：${missing.join(", ")}`);
     console.error(`  恢复动作：在仓库根运行本脚本（或用 --root 指向含 ${IMPL_ROOTS[0]} 的树根）`);
+    return 2;
+  }
+
+  // e2e 目录缺失不拦截会 fail-open：collectSpecFiles 静默返回空集，对账零命中恒 PASS
+  const missingSpecRoots = SPEC_ROOTS.filter((r) => !existsSync(repoRoot(r)));
+  if (missingSpecRoots.length > 0) {
+    console.error(`[check-testid-parity] e2e spec 目录缺失：${missingSpecRoots.join(", ")}`);
+    console.error(`  恢复动作：在仓库根运行本脚本（或用 --root 指向含 ${SPEC_ROOTS[0]}/ 的树根）`);
     return 2;
   }
 
