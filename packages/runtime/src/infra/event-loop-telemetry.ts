@@ -41,7 +41,7 @@ const PERCENTILE_P99 = 99
 /** 落盘口（logger.info 形态注入，避免 telemetry ⇄ logger 循环 import）。 */
 export type TelemetryLogFn = (message: string, meta?: Record<string, unknown>) => void
 
-/** 当前窗口直方图快照（A3「负载期滞后无一次 > 50ms」的断言读取口；单位 ms）。 */
+/** 当前窗口直方图快照（单测断言与进程内排障的读取口；单位 ms——真机 A3 验收剧本在 Node 进程外读 60s 窗口日志行，不经此快照）。 */
 export type EventLoopDelaySnapshot = {
   /** 滞后样本数（窗口内事件循环轮次数级的采样计数）。 */
   count: number
@@ -96,7 +96,7 @@ export function stopEventLoopDelayTelemetry(): void {
   logFn = undefined
 }
 
-/** 读当前窗口直方图快照（不重置；A3 断言与排障的读取口）。 */
+/** 读当前窗口直方图快照（不重置；消费方 = 单测断言 event-loop-telemetry.test.ts 与进程内排障——真机 A3 验收剧本读 60s 窗口日志行，不经此函数）。 */
 export function getEventLoopDelaySnapshot(): EventLoopDelaySnapshot {
   if (histogram === undefined) {
     return { count: 0, p50ms: 0, p90ms: 0, p99ms: 0, maxMs: 0, meanMs: 0, running: false }
