@@ -2,8 +2,8 @@
  * SessionRecords 直测（S6 迁出批 1）：subagent/workflow 记录域——派生缓存族（订阅注册/
  * 防抖失效/增量拉取/游标自愈/销毁清理）+ 动作命令转发 + 引擎配置读写。
  *
- * 分层（G2：import 无 session-service，stub 面 = deps 5 方法）：
- * - mock 层 = deps（pm/sessionStore/hasSession/getMessageBus/getExtensionPaths），entry
+ * 分层（G2：import 无 session-service，stub 面 = deps 4 方法）：
+ * - mock 层 = deps（pm/sessionStore/hasSession/getMessageBus），entry
  *   形态对齐 pi appendCustomEntry 契约（沿用 session-record-entries.test.ts 的 fixture
  *   形态）；scanSubagentEntries/scanWorkflowEntries 等 extractor 生产代码真实执行。
  * - fake timers（项目规范）：SCALAR_STATE_DEBOUNCE_MS 防抖由 advanceTimersByTimeAsync 推进。

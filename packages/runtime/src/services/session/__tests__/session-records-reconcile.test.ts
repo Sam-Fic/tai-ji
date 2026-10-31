@@ -1,7 +1,8 @@
 /**
  * SessionRecords 送达水位对账直测（reload-closeout D2+D6，u1）。
  *
- * 覆盖（A3 全部转化为单测 + A5 反向 + 定时路径/实施期门③/profiling 门①）：
+ * 覆盖（A3 全部转化为单测 + A5 反向 + agent_settled 对账路径/profiling 门①；
+ * 定时对账路径及其覆盖声明（含实施期门③）已随 ADR-0112 退役删除，无定时路径用例）：
  * - 发布门换基线：发布判定 = 当前派生快照 vs 已发布快照（水位），补发帧构造来源 =
  *   水位 diff 差异集（非 merge 变化信号）；稳态快照==水位零帧。
  * - A3a/A3b 检查/发布门跳自愈：hasSession 瞬态 false / bus 未注入窗口 → publish 未发生
@@ -9,8 +10,8 @@
  *   反证）；补发后快照==水位==权威。
  * - A3c 断连丢弃行为锁定：publish 完成（零订阅者不可观测于 runtime 侧）→ 水位推进 →
  *   重连后 diff 空（该形态由 stateSnapshot 回放覆盖，水位结构性不触发）。
- * - 定时路径（15s 服务级单例 timer）：内容落缓存自启、cursor=null 跳过（门③）、扫描域
- *   清零随 onSessionDisposed 停、与在途拉取经 inflight 合并。
+ * - agent_settled 对账路径：水位滞留对账补发、与在途拉取经 inflight 合并
+ *   （原定时路径覆盖声明随 ADR-0112 退役删除）。
  * - A5 反向：无 reload 演进序列帧只在真实变化时发（帧序列为改动前子集），消费端最终
  *   视图等价；fullRebuild 内容不变零帧（cursor 自愈全量重新拉取旧形态发冗余帧——已知差异）。
  * - profiling 门①拆两层（单测层极端测试整治第二波）：单测半场 = 同值增量最重形态的

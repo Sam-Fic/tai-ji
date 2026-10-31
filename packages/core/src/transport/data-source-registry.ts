@@ -3,7 +3,8 @@
  * 设计 §7.4 数据源登记层，u-m0 M0 契约期 M0-3）。
  *
  * 本文件落「本设计侧形状」：DataSourceDescriptor 形状 SSOT + 数据源读载体的公共
- * 字段形态（加载态）。桌面 4 处拉取 watch + settings 域 + 移动端三件套统一迁入同一
+ * 字段形态（加载态）。桌面 4 处拉取 watch + settings 域 + 移动端触发动作组（App.vue
+ * connected 三拉取：loadSessions / reconcileFormRequests / refreshHistory）统一迁入同一
  * 登记表的实装随 u-m2（quota presets 首个数据源接入）与 u-m3（主体搬迁）波次交付；
  * M0 契约期先行定形——后续波次编译消费本形状，防各波次自造描述符漂移。
  *

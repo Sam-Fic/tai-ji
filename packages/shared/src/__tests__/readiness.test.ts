@@ -105,7 +105,7 @@ describe('RL1 契约面封闭（startup-readiness-and-current-state §4.2）', (
 
   it('进程生命周期 state 字段不进能力项（D1 不采用栏否决记录的回归看守）', () => {
     // v2 草案六值 state（spawning/listening/serving/draining/stopped/failed）已删除：
-    // 白名单无 state 位；编译期哨兵（tsc 层红）见文件尾 _RL1_FieldSetRejectsExtraField。
+    // 白名单无 state 位；编译期哨兵（tsc 层红）见文件尾 _RL1_RejectsStateField。
     const whitelisted = READINESS_CAPABILITY_ENTRY_FIELDS as readonly string[]
     for (const stateValue of ['state', 'spawning', 'listening', 'serving', 'draining', 'stopped', 'failed']) {
       expect(whitelisted).not.toContain(stateValue)

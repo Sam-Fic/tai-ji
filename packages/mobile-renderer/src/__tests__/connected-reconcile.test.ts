@@ -1,7 +1,8 @@
 // connected 边沿当前会话对账接线（remote-use U9 / A6）。
 //
-// 锁定壳层接线这一件事：App.vue 的 isConnected 翻 true 时，对当前活跃会话经
-// useSession 实例方法出口（app-runtime.refreshHistory）触发重连对账。设计明示该形态
+// 锁定壳层接线这一件事：App.vue 的 shellConnectionState === 'connected' 边沿
+// （connection-view 四态派生布尔）翻 true 时，对当前活跃
+// 会话经 useSession 实例方法出口（app-runtime.refreshHistory）触发重连对账。设计明示该形态
 // 真机层无独立可观测锚点（对账执行与否不产生可区分 UI 呈现，V9 证明力边界声明），
 // 防线必须落在本接线单测——漏接形态（watch 未调出口）下 V9 真机会因「更早轮次无人
 // 触碰」假通过。
@@ -55,7 +56,7 @@ describe('connected 边沿当前会话对账（U9/A6 接线）', () => {
     sessionStore.setActiveId(null)
   })
 
-  it('isConnected 翻 true：refreshHistory 经出口以当前活跃会话调用（接线主体——漏接即 V9 假通过）', async () => {
+  it('connected 边沿（shellConnectionState === \'connected\'）：refreshHistory 经出口以当前活跃会话调用（接线主体——漏接即 V9 假通过）', async () => {
     sessionStore.setActiveId('u9-rc-sid')
     wrapper = mountApp()
     expect(mockRefreshHistory).not.toHaveBeenCalled()
