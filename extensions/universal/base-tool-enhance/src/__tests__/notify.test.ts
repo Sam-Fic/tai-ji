@@ -1,7 +1,8 @@
-// src/__tests__/notify.test.ts —— M3 通知入账单元（unified-delivery 波 3）：
+// src/__tests__/notify.test.ts —— M3 通知入账单元（unified-delivery 波 3；投递统一化
+// 设计的现行登记处 = ADR-0074 与 docs/CONTEXT.md「统一投递（unified delivery，v3）」段）：
 // register emit 形态（数据流 ⑤）/ exit 边沿入账（⑧⑨，含 killed 零投递零入账）/
 // port.deliver 接线（id=taskId、details 业务字段保持 + deliveryId 追加）/
-// port 缺席降级直发（设计 §3.7 缺席语义）/ 通知文案 / D17 pi 引用刷新（兜底通路）/
+// port 缺席降级直发（缺席语义，登记处见文件头）/ 通知文案 / D17 pi 引用刷新（兜底通路）/
 // 收殓路径（process-exit 不经主路径，零投递零入账——对账承接）
 //
 // 主路径补投退役的丢失覆盖对位（D3 裁决 1，测试注释级）：
@@ -342,7 +343,7 @@ describe("exit-edge notification via delivery port (⑧⑨, unified-delivery wav
 	});
 });
 
-describe("port-absent fallback (assembly anomaly window, §3.7 absence semantics)", () => {
+describe("port-absent fallback (assembly anomaly window, absence semantics)", () => {
 	it("port absent: direct steer fallback with exact params (at-most-once registered degradation)", () => {
 		const pi = createMockPi();
 		attach(pi);
@@ -380,7 +381,7 @@ describe("port-absent fallback (assembly anomaly window, §3.7 absence semantics
 	});
 });
 
-describe("notification content (§3.1 sample)", () => {
+describe("notification content (user-view sample)", () => {
 	it("finished: contains task_id, exit code, duration, command, Full output path, bash_output hint", () => {
 		const content = buildNotificationContent(finalizedTask());
 		expect(content).toContain("bt-1700000000-test01");
@@ -423,7 +424,7 @@ describe("notification details (D1 schema + deliveryId append; business fields b
 			endReason: "natural",
 			exitCode: 0,
 		});
-		// deliveryId = port 注入的送达凭据（§3.3 词条：身份由注入端附加，业务字段保持原样）
+		// deliveryId = port 注入的送达凭据（词条语义：身份由注入端附加，业务字段保持原样）
 		expect(message.details.deliveryId).toBe("bt-1700000000-test01");
 		// content 是 triggerTurn:true 给 LLM 接力的载荷：入账不得改动一个字节
 		expect(message.content).toBe(

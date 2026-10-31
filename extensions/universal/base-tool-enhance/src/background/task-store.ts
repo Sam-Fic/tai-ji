@@ -45,7 +45,7 @@ import {
 	type KillingIntent,
 } from "./types.ts";
 
-/** 终态条目 LRU 上限（§3.5 两层存储分工：单例表与 registry 对称采用 LRU 50）。 */
+/** 终态条目 LRU 上限（两层存储分工：单例表与 registry 对称采用 LRU 50）。 */
 export const MAX_TERMINAL_TASKS = 50;
 
 const taskTable = new Map<string, BackgroundTask>();
@@ -108,8 +108,8 @@ export interface FinalizeOutcome {
 
 /**
  * 终态化（exited）：唯一终态写入口。exit 事件边沿（exit-collector）、进程退出收殓
- * 两条路径收敛到这里（bash_kill 不直接写终态——单一终态归属，§3.5「bash_kill 终态
- * 收尾的单点归属」）。消费 intent、清 timeout 定时器、算 durationMs、LRU 淘汰溢出终态。
+ * 两条路径收敛到这里（bash_kill 不直接写终态——单一终态归属，「bash_kill 终态收尾
+ * 的单点归属」原则）。消费 intent、清 timeout 定时器、算 durationMs、LRU 淘汰溢出终态。
  */
 export function finalizeTask(taskId: string, outcome: FinalizeOutcome): BackgroundTask | undefined {
 	const task = taskTable.get(taskId);
