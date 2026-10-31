@@ -7,7 +7,9 @@
  * ① **未知 id 判定源 = 执行域已知键集的补集**：一个请求键既不在执行域已知键集
  *    （active / ready / collected / nonCollectable）也不在旧 pending 链已知键集时，
  *    判为 unknown_id，逐条进 errors 随本次调用返回，**不进等待集**（不阻塞到 timeout）。
- *    旧 pending 链（bash/session 类）是 M5 前的过渡路径，随旧条目链退役。
+ *    旧 pending 链（bash/session 类）是 M5 前的过渡路径，随旧条目链退役。M3–M5 升级
+ *    窗口期内，升级前在途 run（尚未导入执行域）同判未知、同形态返回；M5 导入为
+ *    interrupted 后该 id 转为已知（可 resume）——unknown_id 文案承载此窗口期语义。
  *
  * ② **混合键集两路聚合口径与单一 timeout 共享**：workflow/subagent 键走执行域路，
  *    bash/session 键走旧 pending 路；两路按键分路判定，三桶
@@ -71,8 +73,11 @@ export interface CollectKeyError { // oe-exempt:20261031:framework:执行域跨�
  * 执行域已知键集（由 M3 工具视图从执行快照 + 通知缓存派生；四集合语义互斥）：
  * - active：非终局的 run / 有在途轮次的 member → 进等待集；
  * - ready：已终局且有结果工件、通知尚未 collected → 立即进 collected（并回写 notice.collect）；
+ *   通知 abandoned 的键不在此列——归 nonCollectable（对齐 notice.ts isNoticeOutOfCollectSet：
+ *   abandoned 在缓存中呈其终态、不进等待与收集集），不得进 ready/collected；
  * - collected：通知已 collected → 进 collected（幂等返回其快照）；
- * - nonCollectable：已知但当前不可收集（interrupted 暂停态、已关闭且无结果的成员）→ errors。
+ * - nonCollectable：已知但当前不可收集（interrupted 暂停态、已关闭且无结果的成员、通知
+ *   abandoned 的键）→ errors。
  *
  * 同一键误入多集合时的优先级（fail-visible，不静默）：nonCollectable > collected >
  * ready > active——越靠近「不可推进」的判定越优先，避免把悬置对象放进等待集（S8）。
@@ -105,10 +110,18 @@ export interface CollectRouting { // oe-exempt:20261031:framework:执行域跨�
   errors: CollectKeyError[]
 }
 
+/**
+ * 未知 id 文案（文案 M0 定稿义务，设计 §5.2 旧能力映射 pending 行「窗口期口径」）：
+ * 除「从未派发」外还须覆盖 M3–M5 升级窗口期形态——升级前在途 run（执行器已随旧
+ * 进程终止、尚未导入执行域）对执行域同样未知、同形态返回；M5 导入为 interrupted
+ * 后该 id 转为已知，可 resume（S8 窗口期判据引用此形态）。
+ */
 const UNKNOWN_ID_ERROR: Omit<CollectKeyError, 'key'> = {
   code: 'unknown_id',
-  message: '请求 id 不属于本会话执行域已知键，也不属于旧 pending 链已知键',
-  recovery: '确认该任务已在本会话派发；collect_results 的未知 id 按执行域已知键集补集判定，派发成功后再调用',
+  message:
+    '请求 id 不属于本会话执行域已知键，也不属于旧 pending 链已知键（M3–M5 升级窗口期内，升级前在途 run 尚未导入执行域时同属未知——逐条 errors 返回、不进等待集、不占 timeout）',
+  recovery:
+    '确认该任务已在本会话派发；collect_results 的未知 id 按执行域已知键集补集判定，派发成功后再调用。若为升级前在途 run，M5 存量导入后该 id 转为已知（interrupted 态，可 resume）',
 }
 
 const NOT_COLLECTABLE_ERROR: Omit<CollectKeyError, 'key'> = {

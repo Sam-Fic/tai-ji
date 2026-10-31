@@ -36,6 +36,17 @@ describe('拍板 ①：未知 id 判定源 = 执行域已知键集补集', () =>
     expect(routing.errors[0]?.recovery).toContain('派发')
   })
 
+  it('unknown_id 文案含升级窗口期语义（reason 标注未知/未导入，M0 定稿义务）', () => {
+    const routing = routeCollectKeys({
+      requested: ['pre-upgrade-run'],
+      execution: { active: [], ready: [], collected: [], nonCollectable: [] },
+      pendingKnown: [],
+    })
+    expect(routing.errors[0]?.message).toContain('尚未导入执行域')
+    expect(routing.errors[0]?.recovery).toContain('M5')
+    expect(routing.errors[0]?.recovery).toContain('resume')
+  })
+
   it('执行域已知但不可收集（interrupted 暂停态）→ errors.not_collectable', () => {
     const routing = routeCollectKeys({
       requested: ['paused-run'],
