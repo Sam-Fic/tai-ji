@@ -1,9 +1,9 @@
 /**
  * 常驻事件循环滞后遥测（startup-readiness 设计 §7.1 / RL4；U5 遥测半边）。
  *
- * Node `monitorEventLoopDelay` 直方图常驻采样（resolution 20ms = Node 默认档，
- * 密集采样口径、非 5s 探针），滞后分布进结构化日志（logger.info 一行 meta JSON：
- * p50/p90/p99/max/mean/count）。
+ * Node `monitorEventLoopDelay` 直方图常驻采样（resolution 20ms 显式选择——密集采样
+ * 口径、非 5s 探针，取舍论证见 HISTOGRAM_RESOLUTION_MS 注释），滞后分布进结构化日志
+ * （logger.info 一行 meta JSON：p50/p90/p99/max/mean/count）。
  *
  * 职责边界（设计 §7.1「常驻遥测」行原文）：验收与日常排障同一遥测源，同时是
  * 「分片被改坏」的常驻红灯；**不参与杀进程决策**（探针判据不变——supervisor
@@ -20,11 +20,13 @@
 import { monitorEventLoopDelay, type IntervalHistogram } from 'node:perf_hooks'
 
 /**
- * 直方图桶宽（= 采样密度；密集采样口径，非 5s 探针）。取 Node monitorEventLoopDelay
- * 默认 20ms：分辨率必须小于 A3/RL4 判据阈值 50ms——空闲稳态的事件循环自然 tick
- * 间隔会被直方图量化为 ≈ 分辨率值，若分辨率高于判据阈值（如 100ms），空闲稳态
- * 即呈现 ~100ms「滞后」，> 50ms 判据被量化假象淹没（结构性不可满足）；20ms 档下
- * 空闲稳态量化为 ~20ms，> 50ms 仍是真滞后的有效信号。
+ * 直方图桶宽（= 采样密度；密集采样口径，非 5s 探针）。20ms 显式选择（非 Node 默认档
+ * ——Node monitorEventLoopDelay 默认 resolution 为 10ms）：分辨率必须小于 A3/RL4
+ * 判据阈值 50ms——空闲稳态的事件循环自然 tick 间隔会被直方图量化为 ≈ 分辨率值，
+ * 若分辨率高于判据阈值（如 100ms），空闲稳态即呈现 ~100ms「滞后」，> 50ms 判据被
+ * 量化假象淹没（结构性不可满足）；10ms 默认档同样满足该上界，取 20ms 为采样量
+ * （桶数）与分辨率的折中——20ms 档下空闲稳态量化为 ~20ms，> 50ms 仍是真滞后的
+ * 有效信号。
  */
 const HISTOGRAM_RESOLUTION_MS = 20
 /** 落盘间隔：每 60s 一行汇总（采样连续，落盘低频——日志量与观测密度的折中）。 */
