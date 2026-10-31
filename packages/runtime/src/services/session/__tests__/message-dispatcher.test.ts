@@ -1632,7 +1632,7 @@ describe('RL3 abort 悬挂升级链（D2① 主案）', () => {
     expect(userStoppedMarkStore.hasUserStoppedMark('s1')).toBe(false)
   })
 
-  it('机器路径升级 source=判死分型非 abort_timeout（D2① 消费方 ③④ 分型裁决）', async () => {
+  it('机器路径升级 source=判死分型非 abort_timeout（D2① 消费方 ③④ 分型裁决）+ reason 文案随分型分流', async () => {
     for (const source of ['convergence', 'agent'] as const) {
       resetU2GateState()
       // hangDestroy 挂住编排：置位分型在收尾前观察（convergence 的恢复链消费发生在收尾后）
@@ -1645,6 +1645,26 @@ describe('RL3 abort 悬挂升级链（D2① 主案）', () => {
       h.releaseDestroy()
       await p
       await h.flush()
+      // reason 文案分流（U3 修复断言）：机器路径终态 entry 不呈现用户停止文案
+      // （'User abort' / '(abort_timeout)' = 终态谎报），枚举标签与实际 source 一致
+      const expectedOutcome =
+        source === 'agent'
+          ? 'Agent abort timed out — auto force-quit (probe_stall_auto_quit)'
+          : 'pi stalled (health probe unresponsive) — auto force-quit (probe_stall_auto_quit)'
+      expect(h.svc.persistSessionOutcome).toHaveBeenCalledWith('s1', 'stopped', expectedOutcome)
+      const exited = h.exitedMsg()
+      expect(exited).toBeDefined()
+      // convergence 升级后进窄化自动恢复：exit 文案含判死分型「停滞 + 自动恢复」语义
+      //（D2：不向用户裸呈枚举字面量、不含与恢复链在途矛盾的「重新打开即可恢复」表述）
+      // agent 显式停止意图：不进自动恢复——文案不含「自动恢复」承诺，恢复归显式重开
+      if (source === 'agent') {
+        expect(exited!.payload.reason).toContain('agent 发起的停止请求')
+        expect(exited!.payload.reason).not.toContain('自动恢复')
+      } else {
+        expect(exited!.payload.reason).toContain('停滞')
+        expect(exited!.payload.reason).toContain('自动恢复')
+      }
+      expect(exited!.payload.reason).not.toContain('User abort')
     }
   })
 

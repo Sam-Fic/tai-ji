@@ -104,7 +104,7 @@ export const AUTO_RECOVER_MAX_ATTEMPTS = 2
 /** sample 取证 execFile 的超时上限（sample 本体 2s 采样 + 启动/落盘余量）。 */
 const STALL_SAMPLE_EXEC_TIMEOUT_MS = 10_000
 
-/** 升级强杀（abort_timeout）终态 entry 诊断文案 / session.exited 用户可见文案。 */
+/** 用户停止升级强杀（abort_timeout）终态 entry 诊断文案 / session.exited 用户可见文案。 */
 const ABORT_TIMEOUT_OUTCOME_REASON = 'User abort timed out — auto force-quit (abort_timeout)'
 const ABORT_TIMEOUT_EXIT_REASON =
   '停止请求未被 pi 确认（等待窗内无回执），已自动强制终止该会话。重新打开该 session 即可恢复（历史完整）。'
@@ -113,6 +113,16 @@ const ABORT_TIMEOUT_EXIT_REASON =
 const STALL_OUTCOME_REASON = 'pi stalled (health probe unresponsive) — auto force-quit (probe_stall_auto_quit)'
 const STALL_EXIT_REASON =
   '会话停滞：pi 未响应健康探测，已自动终止进程并尝试自动恢复；若未自动恢复请重新打开该 session（历史完整）。'
+
+/**
+ * agent 发起（session_manager abort 工具）的 abort 悬挂升级强杀终态 entry 诊断文案 /
+ * session.exited 用户可见文案（判死分型）：agent 显式停止意图，升级后不进自动恢复、
+ * 不注入 steer（V11 e / RL16 恢复分流），恢复归 agent/用户显式重开——文案不含
+ * 「尝试自动恢复」承诺，与显式重开的在途事实一致。
+ */
+const AGENT_ABORT_TIMEOUT_OUTCOME_REASON = 'Agent abort timed out — auto force-quit (probe_stall_auto_quit)'
+const AGENT_ABORT_TIMEOUT_EXIT_REASON =
+  'agent 发起的停止请求未被 pi 确认（等待窗内无回执），已自动强制终止该会话。重新打开该 session 即可恢复（历史完整）。'
 
 /** 恢复成功后经 steer 注入的原因提示（AX6 显式呈报：agent 循环带着死因上下文继续）。 */
 const STALL_REASON_HINT =
@@ -517,8 +527,9 @@ export class MessageDispatcher {
    * 升级窗）——窗内回执走既有成功路径；窗满未回执 = 对挂死对象协作式请求已证不可达，自动
    * 升级 forceQuitSession 完成停止意图（AX4 有界完成；PI 卡死形态从无限悬挂变有界收敛）。
    * 升级 source 分型：'user' → abort_timeout（用户停止分型，K2 语义不变）；'convergence'/
-   * 'agent'（机器路径）→ probe_stall_auto_quit（机器判定无用户意图参与，不置用户分型——
-   * RL3 机器路径断言落点）。升级后恢复归用户显式重开（dead 标记 + restore 路径，历史完整）。
+   * 'agent'/'stall_auto'（机器路径）→ probe_stall_auto_quit（机器判定无用户意图参与，不置
+   * 用户分型——RL3 机器路径断言落点）；升级 reason 文案随分型同路分流（见升级分支内注释）。
+   * 用户路径升级后恢复归用户显式重开（dead 标记 + restore 路径，历史完整）。
    *
    * [U2 修复] source 分型（默认 'user' 既有调用方零改动）：'convergence' 由收敛环通路传入
    * （session-service gate.configure 接线），成功路径终态 reason 写 'Convergence abort (auto)'
@@ -566,10 +577,21 @@ export class MessageDispatcher {
         // 升级窗窗满：协作式请求不可达已证，自动升级强杀完成停止意图（编排唯一实现
         // forceQuitSession；幂等 join 防与右键/restore 兜底双杀）。
         const upgradeSource: ForceQuitSource = source === 'user' ? 'abort_timeout' : PROBE_STALL_AUTO_QUIT
+        // 升级文案随 upgradeSource 分流（D2 消费裁决：判死分型 reason 含「会话停滞已
+        // 自动终止与恢复」语义、机器路径套用户停止文案 = 终态谎报）：user →
+        // ABORT_TIMEOUT_*；convergence/stall_auto（升级后进窄化自动恢复）→ STALL_*；
+        // agent（显式停止意图、不进自动恢复——V11 e）→ AGENT_ABORT_TIMEOUT_*（不含
+        // 自动恢复承诺，「重新打开即可恢复」与显式重开事实一致）。
+        const [outcomeReason, exitReason] =
+          source === 'user'
+            ? [ABORT_TIMEOUT_OUTCOME_REASON, ABORT_TIMEOUT_EXIT_REASON]
+            : source === 'agent'
+              ? [AGENT_ABORT_TIMEOUT_OUTCOME_REASON, AGENT_ABORT_TIMEOUT_EXIT_REASON]
+              : [STALL_OUTCOME_REASON, STALL_EXIT_REASON]
         console.warn(
           `[message-dispatcher] abort hung past upgrade window (${ABORT_UPGRADE_WINDOW_MS}ms, source=${source}) — escalating to forceQuitSession (source=${upgradeSource}), sid=${sessionId}`,
         )
-        await this.forceQuitSession(sessionId, ABORT_TIMEOUT_OUTCOME_REASON, ABORT_TIMEOUT_EXIT_REASON, upgradeSource)
+        await this.forceQuitSession(sessionId, outcomeReason, exitReason, upgradeSource)
         // 恢复语义按入口分型（D2① 消费方裁决 ①③④ + U4 判死分流）：① 用户停止 → 显式
         // 重开（不进自动恢复）；③ convergence（noteAgentStart 掐的是恢复回放 turn）→ 升级
         // 强杀后进窄化自动恢复（再次恢复属同一恢复过程）；④ agent 显式停止 → 不进自动恢复
