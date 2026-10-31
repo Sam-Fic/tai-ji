@@ -16,6 +16,10 @@
  *         E \ exclude → 未登记的新债务（存量文件新增类型错 / exclude 漏登记）→ 红
  *         exclude \ E → stale（该文件已可收编）→ 红，要求从 exclude 删行收编
  *      ——债务只减不增：收编有强制信号，新增债务必须显式登记（登记时即知是债）
+ *   4. 全量跑基础设施故障隔离：全量跑非零退出且零可解析错误 = vue-tsc 崩溃 /
+ *      配置错（不是零类型错误）→ 债务对账跳过并按独立失败类别红掉——防止把
+ *      基础设施故障误判成全部 exclude 可收编（照 stale 指引删行会把真实债务
+ *      纳回正式跑变红）
  *
  * 临时 tsconfig 全绝对路径形态写 mkdtemp 目录（相对 include/paths 在 /tmp 下解析
  * 落空），跑完整目录删除，不留工作区。
@@ -23,7 +27,8 @@
  * 用法：node scripts/check-test-typecheck-coverage.mjs [--renderer-dir <dir>]
  *   --renderer-dir 默认 packages/renderer（相对仓库根）；测试注入用
  *
- * 退出码：0 对账通过 / 1 对账失败（新债务 / stale / 正式跑红 / include 形态回退）
+ * 退出码：0 对账通过 / 1 对账失败（新债务 / stale / 正式跑红 / include 形态回退 /
+ *         全量跑基础设施故障）
  *         2 输入错误（目录缺失、tsconfig 解析失败）
  *
  * 跳过真实 vue-tsc 双跑（单测/无依赖环境）：--no-run 开关只跑静态对账（1/2 项），
@@ -164,7 +169,8 @@ function staticChecks(tsconfig, rendererDir) {
 }
 
 /** [main 拆分] 双跑对账（第 3 项）：正式跑（exclude 生效）必须绿 + 全量跑债务对账。
- *  失败明细推入 failures；返回全量跑统计供 main 汇总行输出；临时目录必清（finally）。 */
+ *  失败明细推入 failures；返回全量跑统计供 main 汇总行输出（infraFailure = vue-tsc
+ *  基础设施故障、债务对账已跳过）；临时目录必清（finally）。 */
 function runDebtReconciliation(rendererDir, tsconfigPath, tsconfig, failures) {
   const formalRun = runVueTsc(rendererDir, tsconfigPath);
   if (formalRun.status !== 0) {
@@ -176,6 +182,14 @@ function runDebtReconciliation(rendererDir, tsconfigPath, tsconfig, failures) {
     const fullTsconfig = buildFullTsconfig(tsconfigPath, tmpDir);
     const fullRun = runVueTsc(rendererDir, fullTsconfig);
     const errorFiles = parseErrorFiles(fullRun.stdout);
+    // 全量跑非零退出且零可解析错误 = vue-tsc 基础设施故障（崩溃 / 配置错），
+    // 不能当零类型错误对账——否则全部 exclude 误判 stale，照指引删行会把真实
+    // 债务纳回正式跑变红。按独立失败类别红掉，债务对账跳过（头注释第 4 项）。
+    if (fullRun.status !== 0 && errorFiles.length === 0) {
+      failures.push("全量跑未产出可解析结果（疑似 vue-tsc 基础设施故障），债务对账跳过：");
+      failures.push(...fullRun.stdout.split("\n").filter((l) => l.trim()).slice(0, 10));
+      return { infraFailure: true, excludeCount: (tsconfig.exclude ?? []).length };
+    }
     const { unregistered, stale } = reconcileDebt(errorFiles, tsconfig.exclude ?? []);
     if (unregistered.length > 0) {
       failures.push(`未登记债务（全量跑有错但不在 exclude，须修复或显式登记）：${unregistered.join(", ")}`);
@@ -200,15 +214,31 @@ export function main(argv = process.argv.slice(2)) {
     console.error("  恢复动作：确认在仓库根运行，或用 --renderer-dir 指向 renderer 包目录");
     return 2;
   }
-  const tsconfig = JSON.parse(readFileSync(tsconfigPath, "utf8"));
+  const srcDir = join(rendererDir, "src");
+  if (!existsSync(srcDir)) {
+    console.error(`[check-test-typecheck-coverage] renderer src 目录缺失：${srcDir}`);
+    console.error("  恢复动作：确认在仓库根运行，或用 --renderer-dir 指向含 src/ 的 renderer 包目录");
+    return 2;
+  }
+  let tsconfig;
+  try {
+    tsconfig = JSON.parse(readFileSync(tsconfigPath, "utf8"));
+  } catch (err) {
+    console.error(`[check-test-typecheck-coverage] tsconfig 解析失败：${err instanceof Error ? err.message : String(err)}`);
+    console.error("  恢复动作：修复 tsconfig.typecheck-test.json 的 JSON 语法错误（误删/改坏时按 git 历史恢复）");
+    return 2;
+  }
 
   const { failures, missingForms, deadExcludes, diskTests } = staticChecks(tsconfig, rendererDir);
 
   // 3. 双跑对账（--no-run 跳过，仅供单测复用纯函数链）
   if (!noRun) {
-    const { errorCount, excludeCount } = runDebtReconciliation(rendererDir, tsconfigPath, tsconfig, failures);
+    const debt = runDebtReconciliation(rendererDir, tsconfigPath, tsconfig, failures);
+    const fullRunSummary = debt.infraFailure
+      ? "债务对账跳过（全量跑基础设施故障，先按上方 vue-tsc 原始输出归因）"
+      : `${debt.errorCount} 文件有类型错误`;
     console.log(
-      `[check-test-typecheck-coverage] 全量跑：${errorCount} 文件有类型错误 / exclude 登记 ${excludeCount} 项 / 磁盘测试文件 ${diskTests.length} 个`,
+      `[check-test-typecheck-coverage] 全量跑：${fullRunSummary} / exclude 登记 ${debt.excludeCount} 项 / 磁盘测试文件 ${diskTests.length} 个`,
     );
   }
 

@@ -25,7 +25,8 @@
  *   --json-in    测试注入：直接给 select-affected-e2e --json 的输出文件（跳过
  *                spawn git diff，fixture 形态不依赖仓库 diff 状态）
  *
- * 退出码：0 全部通过（或清单空）/ 1 有失败 rule / 2 输入错误（清单产出失败）
+ * 退出码：0 全部通过（或清单空）/ 1 有失败 rule / 2 输入错误（清单产出失败、
+ *         --json-in 文件缺失或非法 JSON）
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
@@ -64,7 +65,13 @@ export function planExecution(rules) {
 function loadRules(argv) {
   const jsonInIdx = argv.indexOf("--json-in");
   if (jsonInIdx !== -1) {
-    return { status: 0, rules: JSON.parse(readFileSync(argv[jsonInIdx + 1], "utf8")) };
+    try {
+      return { status: 0, rules: JSON.parse(readFileSync(argv[jsonInIdx + 1], "utf8")) };
+    } catch (err) {
+      console.error(`[run-affected-e2e-ci] --json-in 读取/解析失败：${err instanceof Error ? err.message : String(err)}`);
+      console.error("  恢复动作：确认 --json-in 指向 select-affected-e2e --json 的输出文件（存在且为合法 JSON）");
+      return { status: 2, rules: [] };
+    }
   }
   const args = [];
   const baseIdx = argv.indexOf("--base");
