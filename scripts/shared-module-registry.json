@@ -26,6 +26,10 @@
       "purpose": "agent/workflow 引用显示名（basename 短名）——GUI 侧单点实现（D-收敛：tray 行、workflow 块标题行共用，替代各自内联的 split/replace 私有拷贝，消除 tray 侧只切 `/` 不切 `\\` 的分叉）。"
     },
     {
+      "file": "execution/",
+      "purpose": "执行域共享契约（M0：事件外层/快照/结果/通知/命令协议 + 身份与预算单源 + 告警形状；含主 session JSONL 条目类型基线清单数据文件——S2 diff 白名单唯一载体，运行时直读）。"
+    },
+    {
       "file": "extension.ts",
       "purpose": "Extension 领域 DTO（runtime ↔ renderer 流转的扩展相关 payload：ExtensionInfo / UI 交互 / 安装流 / 状态推送 + 内置/必装判定纯函数）。"
     },

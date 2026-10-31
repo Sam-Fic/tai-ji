@@ -5773,6 +5773,32 @@
       "owner": "scripts",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
       "note": "R2 态（按改动范围触发）：u-foundation 三红灯与准入检查的防回归面——检查本体被改坏（对账语义退化/豁免登记失守）时本条红。日常 CI 承载 = ci.yml invariants（testid-parity / shared-admission 步骤）与 typecheck（coverage 对账步骤）+ scripts-guards 测试步骤（四测试文件已列举）；select-affected-e2e.mjs 的 --json 出口改动由既有 E2E-PIPE-04 / E2E-ZCODE-01 族资产测试覆盖其纯函数（toJsonPayload 用例在 select-affected-e2e.test.mjs，该文件已在 E2E-PIPE-04 登记）。typecheck 覆盖检查跑两遍 vue-tsc 属重检查——重检查为检查器防回归所需（检查器本体改动时验证其仍工作），与 CI typecheck job 常驻步骤同体检重复可接受。"
+    },
+    {
+      "id": "E2E-S2DIFF-01",
+      "summary": "S2 主 session JSONL 条目 diff 白名单工具（subagent-workflow-capability-architecture u-m0 交付资产）：白名单运行时直读 packages/shared 基线清单单源、工具侧零内嵌副本；A2 两时点与 M3-5 判据直接消费（u-m3 波次零工具构建）",
+      "scope": [
+        "scripts/s2-session-entry-diff.mjs",
+        "packages/shared/src/execution/main-session-entry-baseline.json",
+        "packages/shared/src/execution/__tests__/s2-diff-tool.test.ts"
+      ],
+      "layer": "L1",
+      "assets": [
+        {
+          "kind": "script",
+          "ref": "scripts/s2-session-entry-diff.mjs"
+        },
+        {
+          "kind": "spec",
+          "ref": "packages/shared/src/execution/__tests__/s2-diff-tool.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": false,
+      "run": "node scripts/s2-session-entry-diff.mjs --self-check && cd packages/shared && npx vitest run src/execution/__tests__/s2-diff-tool.test.ts",
+      "owner": "scripts",
+      "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
+      "note": "R2 态（按改动范围触发）：u-m0 交付的 S2 diff 白名单工具防回归面——工具本体或基线清单单源被改坏时本条红（--self-check 覆盖清单读取/增量算法/unknown 判定；测试覆盖黑盒 spawn 与判定语义，该测试文件的 X1 豁免登记见 .githooks/check-test-extremes.mjs——进程语义即被测对象）。真机消费方 = verify-taiji A2 剧本两时点（M3 波次首验），剧本侧届时引用本登记。"
     }
   ]
 }

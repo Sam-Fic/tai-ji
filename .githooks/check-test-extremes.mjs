@@ -91,6 +91,8 @@ const EXEMPT = {
   'scripts/__tests__/check-test-typecheck-coverage.test.mjs': 'typecheck 覆盖对账检查器黑盒自测（spawn 检查脚本本体，亚秒级）',
   'scripts/__tests__/check-shared-module-admission.test.mjs': 'shared 模块准入检查器黑盒自测（spawn 检查脚本本体，亚秒级）',
   'scripts/__tests__/run-affected-e2e-ci.test.mjs': 'on-diff e2e CI 消费器黑盒自测（spawn 被测脚本本体，亚秒级）',
+  // —— 重写 u-m0 新增 S2 diff 工具黑盒自测（同款 spawn 被测脚本形态，2026-10-31） ——
+  'packages/shared/src/execution/__tests__/s2-diff-tool.test.ts': 'S2 diff 工具黑盒自测（被测物即 CLI 脚本 scripts/s2-session-entry-diff.mjs；spawn 单 node 进程、确定性、亚秒级，进程语义即被测对象）',
   // —— e2e 手动门资产（TAIJI_E2E_UPDATER 门控，拆分自 updater.test.ts，E2E-UPDATER-01 登记） ——
   'apps/electron/main/test/updater.e2e.test.ts': 'e2e 手动门资产（X1+X2）：真子进程（dmg 挂载/真实 bash/updater 二进制）与 60s 预算（真实下载端到端含中断注入）是被测物语义本身，TAIJI_E2E_UPDATER 门控（非 INTEGRATION 族，同文件双档拆分自 updater.test.ts）；执行走 e2e-map E2E-UPDATER-01 的 on-diff/手动命令',
   'scripts/__tests__/check-domain-slices.test.mjs': '域切分守卫黑盒自测（spawn 检查脚本本体，亚秒级，沿检查器自测先例）',
