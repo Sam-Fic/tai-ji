@@ -28,11 +28,11 @@ import {
 import { computeTasksFingerprint, setSchedulerWidget } from './widget.js'
 import type { ScheduledTask } from './types.js'
 
-// G1（代际检测，S9/R3-M1）：session 代际计数器。必须声明在模块级而非 factory 体内：
+// 代际检测：session 代际计数器。必须声明在模块级而非 factory 体内：
 // pi 每次 session 替换（newSession/fork/switchSession）都重跑 extension factory 函数体
 // （loader.ts loadExtension 无条件 `await factory(api)`；extensionCache 只缓存 factory
 // 函数对象、不缓存执行结果）——闭包级声明每次重跑即重置，各代 runtime 的 isCtxStale 恒
-// false（R3 实测证伪的回归）。模块级声明下，extensionCache 命中期间（同 cwd 未 reload）
+// false（实测证伪的回归）。模块级声明下，extensionCache 命中期间（同 cwd 未 reload）
 // factory 是同一函数对象、共享同一模块环境绑定，计数器跨 factory 重跑保留递增：新闭包的
 // session_start 递增本计数器，各代 runtime 构造时捕获的代数从此小于模块值 → isCtxStale
 // 生效——stale 分诊不依赖 pi 错误文案（Error message 非契约 API，pi 升级改文案即静默失效）。
@@ -40,8 +40,8 @@ import type { ScheduledTask } from './types.js'
 // 残余盲区（reload）：显式 reload / cwd 变化触发 clearExtensionCache → jiti 重新 import
 // （moduleCache:false）产生全新模块环境，本计数器随新环境重置；旧闭包引用的是旧模块环境的
 // 绑定，永不再递增 → 其 isCtxStale 恒 false。该盲区由两道既有防线覆盖：pi 在替换前 await
-// fire session_shutdown（F1 stopScheduler 主防线，teardownCurrent）+ runtime 侧
-// STALE_CTX_MARKER 文案兜底（F2 catch 分诊）。
+// fire session_shutdown（stopScheduler 主防线，teardownCurrent）+ runtime 侧
+// STALE_CTX_MARKER 文案兜底（catch 分诊）。
 let sessionGeneration = 0
 
 /**
@@ -78,12 +78,12 @@ export default function schedulerExtension(pi: ExtensionAPI): void {
   }
 
   pi.on('session_start', (_event, ctx: ExtensionContext) => {
-    // G1：先递增模块级代数再装配——自此同模块环境内所有前代 runtime 的 isCtxStale 返回
+    // 先递增模块级代数再装配——自此同模块环境内所有前代 runtime 的 isCtxStale 返回
     // true（stale）。myGeneration 是本 handler 的代数，注入的比对闭包读实时模块级
     // sessionGeneration 与之比较（factory 重跑的新闭包与本闭包共享同一模块绑定）。
     sessionGeneration += 1
     const myGeneration = sessionGeneration
-    // F1（治本）：session 替换/重入时先停上一代 runtime 的 tick interval——dispatch 的 await
+    // 治本防线：session 替换/重入时先停上一代 runtime 的 tick interval——dispatch 的 await
     // 窗口与 session 替换交错时旧 session_shutdown 可能永远等不到（timer 泄漏源头）。
     // stopScheduler 幂等，shutdown 已停过再停一次无副作用。
     service?.runtime.stopScheduler()
@@ -102,8 +102,8 @@ export default function schedulerExtension(pi: ExtensionAPI): void {
     // 装配点：backend（快照文件读写 + 投递端口）→ runtime（内存态 + 调度）→ service（业务入口）
     const backend = new PiSchedulerBackend(ctx, pi, storePath)
 
-    // G1：注入代际比对（本 runtime 建立时的代数 vs 实时代数），供 tick 前置检查与
-    // F2 catch 分诊判定 stale——不依赖 pi 错误文案。
+    // 注入代际比对（本 runtime 建立时的代数 vs 实时代数），供 tick 前置检查与
+    // catch 分诊判定 stale——不依赖 pi 错误文案。
     // U4 模型控制接口（设计 D3）：runtime 只见 'provider/id' ref（与 task.model 同域），pi 的
     // Model 对象解析封在本闭包。setModelByRef 契约 = 不 throw、失败返回 false（ref 非法 /
     // modelRegistry.find 无命中 / pi setModel false / 意外异常统一折叠）。
@@ -184,7 +184,7 @@ export default function schedulerExtension(pi: ExtensionAPI): void {
   // 错误路径 throw（W4）：pi 对 execute throw 置 isError:true（agent-loop.js:581-588；
   // 1.0.0 起返回值 isError:true 也被尊重，本工具恒走 throw 路径两版语义等价）；
   // getService() 未初始化异常穿透到这里，包装
-  // 'Error: Scheduler not initialized' 格式（R3 格式保持）。
+  // 'Error: Scheduler not initialized' 格式。
   pi.registerTool({
     name: 'schedule',
     label: 'Schedule',

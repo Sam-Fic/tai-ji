@@ -64,11 +64,11 @@ interface PendingModelSwitch {
 // HISTORY_LIMIT 单点在 protocol types.ts——runtime 记账（appendExecutionRecord）裁剪到该上限；
 // 快照写入口不裁剪，只逐项拷贝 history。
 // STALE_CTX_MARKER（文案兜底分诊词）已迁移到 ext-guards 共享检查（guardStaleCtx 内部
-// 引用，本文件不再直接持有）。语义：G1 模块级代际检测（isCtxStale）为主判；文案子串
+// 引用，本文件不再直接持有）。语义：模块级代际检测（isCtxStale）为主判；文案子串
 // 覆盖代际盲区——显式 reload / cwd 变化触发 clearExtensionCache 后 jiti 重新 import 产生
 // 全新模块环境，旧闭包引用的模块级代数冻结不再递增，isCtxStale 恒 false，只剩错误文案
 // 能识别 stale。pi 非契约 API（Error message 非稳定接口）：文案由 docs/pi-semantics.json
-// PS-30 探针随 pi 版本门禁自动重验；pi 升级仍需回归 runtime.test.ts 的 U1 / G1-d 文案
+// PS-30 探针随 pi 版本门禁自动重验；pi 升级仍需回归 runtime.test.ts 的 stale 文案
 // 锚定用例。文案变更时此兜底失效，后果为 timer 泄漏 + 每 30s warn（不 crash）。
 
 export class SchedulerRuntime {
@@ -99,8 +99,8 @@ export class SchedulerRuntime {
    * 依赖反转构造：backend 承担快照落盘/投递端口/时间源，runtime 只持有内存态。
    * 不触碰任何 FS / pi API（测试可用 MockSchedulerBackend 零副作用注入）。
    *
-   * isCtxStale（G1 代际检测，S9/R3-M1）：返回 true 表示本 runtime 建立时的 session 已被
-   * 替换。index.ts 装配点注入（模块级代数比对，R3-M1），使 stale 分诊不依赖 pi 错误文案；
+   * isCtxStale（模块级代际检测）：返回 true 表示本 runtime 建立时的 session 已被
+   * 替换。index.ts 装配点注入（模块级代数比对），使 stale 分诊不依赖 pi 错误文案；
    * 缺省（不注入）恒视为非 stale——纯 runtime 单测与旧装配路径行为不变。
    *
    * modelOps（U4）：模型控制接口，session_start 装配点注入；缺省 = 无模型切换能力
@@ -215,18 +215,17 @@ export class SchedulerRuntime {
     this.tickTimer = setInterval(() => {
       // 三件套语义等价迁移到共享检查 guardStaleCtx（crash-resilience D1 / u1-ext-guard；
       // 检查语义 = 本处原地实现的泛化，迁移对照逐条可证）：
-      // 1. G1 前置检查（S9）：检查的 isCtxStale 命中 → onStale（= retireStaleTimer）且
+      // 1. 代际前置检查：检查的 isCtxStale 命中 → onStale（= retireStaleTimer）且
       //    tickScheduler 不执行——与迁移前「前置分支 return」等价：本 runtime 所属 session
       //    已被替换 → timer 属泄漏资源自停退场，不触碰捕获的 stale ctx，不依赖 pi 错误文案。
-      //    主防线仍是 F1（session_start 停旧 timer），此处覆盖 F1 未能触达的泄漏路径。
-      // 2. F2 catch 分诊（防御兜底）：检查对 tickScheduler 的 rejection 挂同一分诊谓词
+      //    主防线仍是 session_start 停旧 timer，此处覆盖其未能触达的泄漏路径。
+      // 2. catch 分诊（防御兜底）：检查对 tickScheduler 的 rejection 挂同一分诊谓词
       //    `isCtxStale() || 文案含 STALE_CTX_MARKER`（字面不变）——stale → retireStaleTimer；
-      //    非 stale → 原样 reject，由下方 .catch 仅告警不终止调度（'tick error' 文案不变，
-      //    U2/G1-c 锚定）。fire-and-forget 的 tick 链路必须自带 catch——tick 内任何异常
+      //    非 stale → 原样 reject，由下方 .catch 仅告警不终止调度（'tick error' 文案不变）。
+      //    fire-and-forget 的 tick 链路必须自带 catch——tick 内任何异常
       //    （典型：泄漏 timer 的 onAfterTick → refreshWidget 访问 stale ctx.ui 抛错）无人接住
       //    即 unhandledRejection，直接崩掉 pi 主进程（E1 同机制）。
-      // 3. retireStaleTimer 自停：未改（'tick stopped' warn 口径与幂等 stopScheduler 原样，
-      //    U1/G1-b/G1-d 锚定）。
+      // 3. retireStaleTimer 自停：未改（'tick stopped' warn 口径与幂等 stopScheduler 原样）。
       // `?.catch`：前置检查命中时检查返回 undefined（fn 未执行、无 Promise、无 rejection
       // 可接——retire 已由 onStale 完成）；非 stale 时返回 Promise，非 stale rejection
       // 流到 .catch 仅告警。
@@ -247,8 +246,8 @@ export class SchedulerRuntime {
   }
 
   /**
-   * stale 自停退场（G1 前置检查与 F2 catch 分诊共用）：warn 观测口径与 crash-fix 一致
-   * （含 "tick stopped"，U1 断言锚定）+ stopScheduler（幂等）。timer 自停后调度由
+   * stale 自停退场（代际前置检查与 catch 分诊共用）：warn 观测口径不变
+   * （含 "tick stopped"）+ stopScheduler（幂等）。timer 自停后调度由
    * session_start 重建的新一代 runtime 接管。
    */
   private retireStaleTimer(): void {
