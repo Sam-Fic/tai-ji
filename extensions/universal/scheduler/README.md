@@ -254,12 +254,12 @@ pi -p "/schedule 5m 'check build'"
 
 ## 依赖的 pi 行为清单
 
-本扩展的存储与投递方案（独立快照分片 + 投递端口 dispatch）依赖以下 pi 源码行为。这些是**实测存在但非 SDK 契约承诺**的隐式行为，pi 升级后需逐条复核：
+本扩展的存储与投递方案（独立快照分片 + 投递端口 dispatch）依赖以下 pi 源码行为。这些是**实测存在但非 SDK 契约承诺**的隐式行为，pi 升级后需逐条复核。各条锚点实测自 **pi v1.0.0**（pi-mono 仓库 `packages/coding-agent/src/` 与 `packages/agent/src/`，下文以短路径引用），pi 升级后按文件名重新定位行号复核：
 
-1. **`getAgentDir()` 返回进程级数据目录**：任务库分片根路径来源。runtime 注入 pi 进程的 `PI_CODING_AGENT_DIR` 与 taiji 面板侧 `getPiAgentDir()` 必须指向同一目录，否则两侧分片路径漂移（同源单实现的前提）
-2. **`sessionManager.getSessionId()` / `getSessionFile()` 稳定语义**：sessionId 是分片键（resume 同 id / fork 新 id 的恢复语义全系于此）；`getSessionFile()` 为空 = `--no-session` 模式的判据（归一 `no-session` 分片）。若 pi 改变 sessionId 的稳定性（如 resume 换 id），任务恢复会失效
-3. **`host.sendMessage` steer 档注入形态**：dispatch 经投递端口翻译为 steer 档 `sendMessage`（busy 时消息插入当前 turn、idle 时开新 turn，`{deliverAs:'steer', triggerTurn:true}`）。若 pi 改变 steer 语义（注入失败形态、triggerTurn 行为），dispatch 交付语义需重新评估
-4. **`ctx.isIdle()` 同步事实查询**（U4 dispatch 模型切换恢复判定锚点）：agent_settled 事件的「run 完全沉降」复核依赖它。若语义变化，模型恢复判定需重新评估
+1. **`getAgentDir()` 返回进程级数据目录**：任务库分片根路径来源。实测：`PI_CODING_AGENT_DIR` 环境变量覆盖优先、缺省 `~/.pi/agent`（config.ts:563-569；常量名定义 config.ts:543）。runtime 注入 pi 进程的 `PI_CODING_AGENT_DIR` 与 taiji 面板侧 `getPiAgentDir()` 必须指向同一目录，否则两侧分片路径漂移（同源单实现的前提）
+2. **`sessionManager.getSessionId()` / `getSessionFile()` 稳定语义**：sessionId 是分片键（resume 同 id / fork 新 id 的恢复语义全系于此）；`getSessionFile()` 为空 = `--no-session` 模式的判据（归一 `no-session` 分片）。实测：两 getter 直读字段（session-manager.ts:1152-1158）；resume 加载时 sessionId 取自文件 header（session-manager.ts:1090），fork / 新 session 换新 id（session-manager.ts:1713、1745）。若 pi 改变 sessionId 的稳定性（如 resume 换 id），任务恢复会失效
+3. **`host.sendMessage` steer 档注入形态**：dispatch 经投递端口翻译为 steer 档 `sendMessage`（busy 时消息插入当前 turn、idle 时开新 turn，`{deliverAs:'steer', triggerTurn:true}`）。实测：扩展 sendMessage 绑定到 `sendCustomMessage`（agent-session.ts:3341-3349）；`isStreaming` 时 steer 档转入 `agent.steer`、非 streaming 且 `triggerTurn` 时开新 turn（agent-session.ts:2259-2272）；steer 消息在当前 assistant turn 的工具调用结束后、下一次 LLM 调用前注入（agent.ts:299-301 入队，注入时机注释 agent-session.ts:2156-2158）。若 pi 改变 steer 语义（注入失败形态、triggerTurn 行为），dispatch 交付语义需重新评估
+4. **`ctx.isIdle()` 同步事实查询**（U4 dispatch 模型切换恢复判定锚点）：agent_settled 事件的「run 完全沉降」复核依赖它。实测：接口声明 extensions/types.ts:348，ctx 绑定经 runner 转发（extensions/runner.ts:909-912），getter 实装 = `!_isAgentRunActive && !isCompacting`（agent-session.ts:1435-1437）。若语义变化，模型恢复判定需重新评估
 
 任一条行为变更都需重新验证验收场景（尤其 resume、fork、dispatch 场景）。
 
