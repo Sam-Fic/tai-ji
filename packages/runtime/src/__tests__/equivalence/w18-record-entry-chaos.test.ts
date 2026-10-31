@@ -172,6 +172,7 @@ describe('W18 equivalence: 丢失 entry_appended 广播 → 兜底失效重新�
     const normalMsgs = ws.sent.map((s) => JSON.parse(s) as ServerMessage).filter((m) => m.type === 'session.subagents')
     expect(normalMsgs).toHaveLength(1)
     expect(normalMsgs[0]!.payload).toEqual({
+      batchInProgress: true,
       sessionId: sid,
       // v2 条目对派生视图：终态条目定终局（stopReason/error/result 直出；closedReason 无 v2 等价位）
       subagents: [expect.objectContaining({

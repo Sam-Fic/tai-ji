@@ -77,6 +77,7 @@
     "apps/electron/main/test/update-self-healer.test.ts",
     "apps/electron/main/test/update-settings.test.ts",
     "apps/electron/main/test/updater.test.ts",
+    "apps/electron/main/test/updater.e2e.test.ts",
     "apps/electron/main/test/url-scheme-validators.test.ts",
     "apps/electron/main/test/w2-main-integration.test.ts",
     "apps/electron/main/test/win-updater-cmd.test.ts",

@@ -88,6 +88,13 @@ const EXEMPT = {
   'scripts/__tests__/check-domain-type-path.test.mjs': '检查器黑盒自测（spawn 检查脚本本体，亚秒级）',
   // —— X4 量级特征断言（非敏感性性能水位）：V1 批加载冷读计时看守 ——
   'packages/runtime/src/services/session/__tests__/events-projection-batch.test.ts': '量级特征断言（X4 误报类）：拦批加载抑制失效的秒级回潮（设计锚点 11-12s 形态 vs 实测 3ms），阈值取毫秒级上界×两个数量级余量——机制坏了才红、负载波动不红；系启动设计 V1 验收的 CI 看守用例，挂门控会失去看守意义',
+  // —— 重写 u-foundation 新增检查器黑盒自测（同款 spawn 本体形态，2026-10-31） ——
+  'scripts/__tests__/check-testid-parity.test.mjs': 'testid 对账检查器黑盒自测（spawn 检查脚本本体，亚秒级）',
+  'scripts/__tests__/check-test-typecheck-coverage.test.mjs': 'typecheck 覆盖对账检查器黑盒自测（spawn 检查脚本本体，亚秒级）',
+  'scripts/__tests__/check-shared-module-admission.test.mjs': 'shared 模块准入检查器黑盒自测（spawn 检查脚本本体，亚秒级）',
+  'scripts/__tests__/run-affected-e2e-ci.test.mjs': 'on-diff e2e CI 消费器黑盒自测（spawn 被测脚本本体，亚秒级）',
+  // —— e2e 手动门资产（TAIJI_E2E_UPDATER 门控，拆分自 updater.test.ts，E2E-UPDATER-01 登记） ——
+  'apps/electron/main/test/updater.e2e.test.ts': 'e2e 手动门资产（X1+X2）：真子进程（dmg 挂载/真实 bash/updater 二进制）与 60s 预算（真实下载端到端含中断注入）是被测物语义本身，TAIJI_E2E_UPDATER 门控（非 INTEGRATION 族，同文件双档拆分自 updater.test.ts）；执行走 e2e-map E2E-UPDATER-01 的 on-diff/手动命令',
   'scripts/__tests__/check-domain-slices.test.mjs': '域切分守卫黑盒自测（spawn 检查脚本本体，亚秒级，沿检查器自测先例）',
   'scripts/__tests__/check-test-results.test.mjs': 'junit 聚合检查黑盒自测（spawn 检查脚本本体，亚秒级）',
   'scripts/__tests__/check-test-junit-parity.test.mjs': 'junit 守恒工具黑盒自测（spawn 工具本体，亚秒级）',
