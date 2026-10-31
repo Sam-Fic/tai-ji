@@ -144,25 +144,39 @@ function assembleSummary(
 }
 
 /**
+ * 压缩生成的显式输入（U1 解耦）：从 SessionBeforeCompactEvent 摘出生成逻辑实际消费的字段。
+ * 后台压缩路径（D2）没有事件对象，组装等价字段直接传入——生成逻辑与事件载体解耦，
+ * same-model / cross-model 两模式共用此形状（各取所需字段）。
+ * preparation 类型经索引派生：CompactionPreparation 不在 SDK 包根导出清单。
+ */
+interface GenerationInput {
+	preparation: SessionBeforeCompactEvent["preparation"];
+	branchEntries: SessionBeforeCompactEvent["branchEntries"];
+	customInstructions: SessionBeforeCompactEvent["customInstructions"];
+	signal: SessionBeforeCompactEvent["signal"];
+}
+
+/**
  * same-model 生成（D12）：完整上下文 + 会话原 system prompt + tools + 追加压缩指令。
  * 返回 null = 失败（调用方走 D7 回退）。
  */
 async function generateSameMode(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
-	event: SessionBeforeCompactEvent,
+	input: GenerationInput,
 ): Promise<CompactionResult | null> {
 	const model = ctx.model;
 	if (!model) {
 		debugLog("same-mode: no current model");
 		return null;
 	}
+	const { preparation, branchEntries, customInstructions, signal } = input;
 	// AgentMessage[]（含 bash/custom 等扩展消息）→ 标准 Message[]（与主会话请求同源转换，
 	// convertToLlm 是 pi host 默认实现——同样的输入产生同样的输出，前缀缓存对齐的前提）
-	const fullMessages = convertToLlm(buildSessionContext(event.branchEntries).messages);
+	const fullMessages = convertToLlm(buildSessionContext(branchEntries).messages);
 	const instructionMessage = {
 		role: "user" as const,
-		content: [{ type: "text" as const, text: buildSameModelInstruction(event.customInstructions) }],
+		content: [{ type: "text" as const, text: buildSameModelInstruction(customInstructions) }],
 		timestamp: Date.now(),
 	};
 	const tools = projectTools(pi.getAllTools());
@@ -171,7 +185,7 @@ async function generateSameMode(
 		systemPrompt: ctx.getSystemPrompt() ?? "",
 		messages: [...fullMessages, instructionMessage],
 		tools,
-		signal: event.signal,
+		signal,
 		sessionId: ctx.sessionManager.getSessionId(),
 	});
 	if (!result.ok) {
@@ -190,15 +204,15 @@ async function generateSameMode(
 	const sessionFile = getSessionFilePath(ctx);
 	const summary = assembleSummary(
 		result.text,
-		event.preparation.fileOps,
-		event.branchEntries,
-		event.preparation.firstKeptEntryId,
+		preparation.fileOps,
+		branchEntries,
+		preparation.firstKeptEntryId,
 		sessionFile,
 	);
 	return {
 		summary,
-		firstKeptEntryId: event.preparation.firstKeptEntryId,
-		tokensBefore: event.preparation.tokensBefore,
+		firstKeptEntryId: preparation.firstKeptEntryId,
+		tokensBefore: preparation.tokensBefore,
 		usage: result.usage as CompactionResult["usage"],
 		details: {
 			engine: "smart-context",
@@ -215,8 +229,8 @@ async function generateSameMode(
  */
 async function generateCrossMode(
 	ctx: ExtensionContext,
-	event: SessionBeforeCompactEvent,
 	config: SmartContextConfig,
+	input: GenerationInput,
 ): Promise<CompactionResult | null> {
 	const model = resolveModel(ctx, config.compactModel);
 	if (!model) {
@@ -236,12 +250,12 @@ async function generateCrossMode(
 		)
 		: undefined;
 	const result = await nativeCompact(
-		event.preparation,
+		input.preparation,
 		model,
 		auth.apiKey,
 		headers,
-		event.customInstructions,
-		event.signal,
+		input.customInstructions,
+		input.signal,
 		undefined,
 		undefined,
 		auth.env,
@@ -294,9 +308,16 @@ export function createBeforeCompactHandler(
 		const mode = pickMode(config, currentModelId);
 
 		try {
+			// 薄包装（U1 解耦）：事件对象摘出生成逻辑消费的字段，两模式共用同一输入形状
+			const input: GenerationInput = {
+				preparation: event.preparation,
+				branchEntries: event.branchEntries,
+				customInstructions: event.customInstructions,
+				signal: event.signal,
+			};
 			const result = mode === "same-model"
-				? await generateSameMode(pi, ctx, event)
-				: await generateCrossMode(ctx, event, config);
+				? await generateSameMode(pi, ctx, input)
+				: await generateCrossMode(ctx, config, input);
 
 			if (!result) {
 				state.failStreak += 1;
