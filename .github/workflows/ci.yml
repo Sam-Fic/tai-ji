@@ -1036,6 +1036,10 @@ jobs:
   # L2/L2.5/L3 真实进程/真机层禁入 CI（AGENTS.md e2e 执行准则，TAIJI_SKIP_REAL_PI=1
   # 与其余 test job 同口径）。fetch-depth: 0 取全历史供 git diff <base>...HEAD 判定。
   # 无命中（清单空）时秒级通过。
+  # 注：docs/** 在 on.paths-ignore 内——e2e-map.json 单独变更不触发任何 CI job（含本
+  # job 与 invariants 检查），清单变更的消费链与 run 字段可执行性只有 pre-commit
+  # validate-e2e-map + --staged 结构校验兜底（已知边界，性能取舍；run 引用文件存在性
+  # 校验属新机制立项，未经裁决不建）。
   e2e-on-diff:
     name: E2E on-diff (L1 consumer)
     runs-on: ubuntu-latest

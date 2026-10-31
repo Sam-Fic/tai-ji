@@ -1,5 +1,5 @@
 {
-  "_comment": "exclude = 存量测试类型债务登记（红灯③登记制）：include 已全量化（新测试文件自动受检、类型错即红），exclude 内文件为带类型错误的存量测试（133→128 收编中），逐个修复后由 node scripts/check-test-typecheck-coverage.mjs 的 stale 判定强制删行收编——债务只减不增，禁止为新文件登记（新文件类型错当场修）。",
+  "_comment": "exclude = 存量测试类型债务登记（红灯③登记制）：include 已全量化（新测试文件自动受检、类型错即红），exclude 内文件为带类型错误的存量测试（128 项收编中），逐个修复后由 node scripts/check-test-typecheck-coverage.mjs 的 stale 判定强制删行收编——债务只减不增，禁止为新文件登记（新文件类型错当场修）。",
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
