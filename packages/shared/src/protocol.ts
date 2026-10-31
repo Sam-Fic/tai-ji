@@ -1979,7 +1979,9 @@ export interface SkillCacheInvalidatedPayload {
 }
 
 // ── backgroundTask 域 payload 辅助类型（docs/architecture/background-task-sidebar-view.md §3.3 D3/D9，u-proto）──
-// shared 仅 type-only 直引 @zhushanwen/extension-protocol（PlanLifecycleState 直引先例）；
+// 本域 type-only 直引 @zhushanwen/extension-protocol（PlanLifecycleState 直引先例；shared 对
+// 该包的依赖已登记在 packages/shared/package.json 与 check-shared-module-admission.mjs 的
+// ALLOWED_WORKSPACE_DEPS——本文件只引类型，值级 import/re-export 在 message.ts）；
 // 本域仍走值形状镜像惯例（SubagentEngineConfigView / SessionTraceHeaderPayload
 // 同先例：契约 SSOT 在彼处，shared 侧放结构镜像，结构兼容即协议兼容）。任务条目逐字段镜像
 // extension-protocol background-task.ts 的 BackgroundTaskRegistryEntry（D9 数据契约零新造——

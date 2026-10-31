@@ -1,5 +1,5 @@
 {
-  "_comment": "@taiji/shared 模块准入登记（D14：立模块准入规则 + 机器检查）。准入规则与机器检查 = scripts/check-shared-module-admission.mjs（头注释成文）。新模块进 packages/shared/src/ 必须同步在本表登记 purpose（一句话跨包理由），检查脚本对账磁盘与登记双向一致——不登记即红。purpose 取模块头注释首句；头注释缺失的模块应补头注释（新模块义务）。",
+  "_comment": "@taiji/shared 模块准入登记（D14：立模块准入规则 + 机器检查）。准入规则与机器检查 = scripts/check-shared-module-admission.mjs（头注释成文）。新模块进 packages/shared/src/ 必须同步在本表登记 purpose（一句话跨包理由），检查脚本对账磁盘与登记双向一致——不登记即红。模块发现覆盖子目录：顶层文件按文件名登记；src 一级子目录按目录级条目登记（`<dir>/` 形态，一个目录一个准入声明，其下文件增删不再逐个登记）。purpose 取模块头注释首句，描述整个模块而非文件内某一块；头注释缺失的模块应补头注释（新模块义务）。",
   "modules": [
     {
       "file": "archive.ts",
@@ -27,7 +27,7 @@
     },
     {
       "file": "extension.ts",
-      "purpose": "对话框族帧（pi1-disposition-chat-flow D6）：kind=dialog 的 WS 消息族，载荷判别字段 dialogKind"
+      "purpose": "Extension 领域 DTO（runtime ↔ renderer 流转的扩展相关 payload：ExtensionInfo / UI 交互 / 安装流 / 状态推送 + 内置/必装判定纯函数）。"
     },
     {
       "file": "file-tree.ts",
@@ -39,7 +39,7 @@
     },
     {
       "file": "git.ts",
-      "purpose": "git.status 的返回结构（FR-12/G-R2-01）。cwd 非 git 仓库时 isRepo=false，其余字段为默认值。"
+      "purpose": "Git 领域 DTO（git.status 返回结构 GitStatusResult / GitFileStatus / 分支名非法字符表）——runtime 实现写、renderer 展示读的共享契约。"
     },
     {
       "file": "handoff.ts",
@@ -83,7 +83,7 @@
     },
     {
       "file": "message.ts",
-      "purpose": "完成通知类 customType SSOT（conversation-renderer-model-unification §3.3.2：黑名单已删，收敛为 display 单一判别）。"
+      "purpose": "Message 领域 DTO 与消息词表 SSOT（Message / FileChange / customType 词表 / 投递标记与通知解析纯函数）——runtime ↔ renderer 共享。"
     },
     {
       "file": "migration.ts",
@@ -131,7 +131,7 @@
     },
     {
       "file": "plugin.ts",
-      "purpose": "插件视图声明（wire 侧形状，与 plugin-sdk / core 两版 PluginContributesView 对齐）。"
+      "purpose": "Plugin 领域 DTO（PluginInfo + contributes wire 侧形状，与 plugin-sdk / core 两版 PluginContributesView 对齐）。"
     },
     {
       "file": "project.ts",
@@ -139,7 +139,7 @@
     },
     {
       "file": "protocol.ts",
-      "purpose": "测试连接按协议分组的单行结果（SSOT，2026-09-10 review S-9 手写重复收编）：protocol `config.discoveredModels.results` 元素 / core transport / core TestConnectionResult / runtime port ConnectionTestResult 四处同形状，全部引用本类型，漂移编译期红。"
+      "purpose": "Client→Runtime WS 协议消息类型 SSOT（消息枚举与 type→payload 映射的唯一权威源，runtime ↔ renderer 双侧共享）。"
     },
     {
       "file": "provider.ts",
@@ -191,7 +191,7 @@
     },
     {
       "file": "session.ts",
-      "purpose": "session 状态。"
+      "purpose": "session 状态与摘要 DTO（进程级状态词表 + SessionSummary / SessionGroup）——runtime 产出、renderer 侧栏消费的跨包契约。"
     },
     {
       "file": "settings.ts",
