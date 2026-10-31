@@ -1,32 +1,26 @@
 /**
- * compact_context 工具（D6 + §3.5 接口契约）。
+ * compact_context 工具（D6 + §3.5 接口契约；U4 纯触发化——D4 入口矩阵①）。
  *
- * execute 流程：门控校验（D5 拒绝态）→ 阈值保护（D6）→ ctx.compact() fire-and-forget
- * （R2 实测 2026-08-22：tool execute 内 await ctx.compact() 不可行——AgentSession.compact
- * 开头的 abort() 会中止当前 agent 循环，挂起的 Promise 永不兑现、session 无 toolResult。
- * 故走 §3.2 降级态：execute 立即返回"压缩已启动"，onComplete/onError 后经
- * sendSmartContextNotice 注入结果消息（nextTurn 投递路径，D4①——随下一次 prompt 注入，
- * 不自起 run；此刻无进行中回合，compact 内部 abort 为 no-op）。
- * 压缩生成由 session_before_compact 接管 handler 完成（工具只触发，不生成）。
+ * execute 流程：门控校验（D5 拒绝态，V7 现状文案）→ 阈值保护（D6 低 tokens 拒绝）→
+ * 后台任务触发（经 deps.background 注入的共享后台任务管理器能力）→ 立即返回成功回执
+ * （GL1：不等待摘要生成；压缩执行期对话零阻塞零掐断——不触碰 ctx.compact /
+ * AgentSession 压缩路径，旧路径掐断进行中回合的 abort 副作用随之消失）。
+ * 已有后台任务进行中时返回「后台压缩进行中」的幂等成功回执（不是错误；RL1 单态互斥）。
+ * 压缩生成→校验→落盘由后台任务自管（compact-handler.ts 后台任务管理器）；
+ * 完成/失败通知经 nextTurn 注入（U5 接线）。
  *
- * 掐断的 turn 由 runtime 兜底续跑（设计 D4②）：本工具触发的 manual compact 会 abort 进行中
- * 的 agent turn（pi F5：manual compact 明文不续跑），runtime 在 compaction_end 判定
- * 「manual + 非 runtime 发起 + compaction_start 前 turn 被掐断」后经投递内核追加续跑投递。
+ * deps.background 是生产接线契约（BackgroundCompactionControls）：注册点注入与
+ * agent_settled 自动触发共享同一 session 级互斥容器的查询/启动能力（RL1）；
+ * 未注入 = 接线缺失，execute 在门控与阈值检查后 fail-fast（不撒谎回执、不静默降级）。
  */
 
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import { guardStaleCtx, isRecord, toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { Type } from "typebox";
 
-import { debugLog } from "./compact-handler.js";
-import { sendSmartContextNotice } from "./notices.js";
 import { renderCompactContextResult } from "./render-result.js";
-import { buildDegradationHintLine } from "./reminder.js";
 import {
-	DEGRADATION_HINT_MIN_COMPACTIONS,
 	checkToolThresholdGuard,
 	countCompactions,
-	formatK,
 	getCurrentModelId,
 	isGatingActive,
 	loadSmartContextConfig,
@@ -47,15 +41,7 @@ const CompactContextParams = Type.Object(
 	{ additionalProperties: false },
 );
 
-/** CompactionResult 的宽松形状（onComplete 回调参数消费字段）。 */
-interface CompactionResultLike {
-	tokensBefore?: number;
-	estimatedTokensAfter?: number;
-	usage?: { input?: number; output?: number; cacheRead?: number };
-	details?: { engine?: string; mode?: string } & Record<string, unknown>;
-}
-
-/** 工具 details（renderResult 数据源，规范：不依赖 content 文本解析）。R2 降级态：启动即返回。 */
+/** 工具 details（renderResult 数据源，规范：不依赖 content 文本解析）。 */
 export interface CompactContextDetails {
 	/** 启动时的模式判定（cross-model 时为配置的压缩模型 ref）。 */
 	mode: string;
@@ -66,51 +52,48 @@ export interface CompactContextDetails {
 }
 
 /**
- * 收起态一行摘要。R2 降级态下工具返回时压缩尚未完成（结果异步注入），无保留比例
- * 数据可取——恒为 "Context compacted"；完成后的比例数据走注入消息，不进本摘要。
+ * 后台压缩任务依赖（U4 工具路径接线契约——生产接线单元照此注入实现）。
+ *
+ * 注入的实现必须与 agent_settled 自动触发共享同一 session 级互斥容器
+ * （RL1：同一时刻至多一个后台压缩任务在执行），即 compact-handler.ts
+ * createBackgroundCompactionManager 所用 BackgroundCompactionState 的能力面。
+ */
+export interface BackgroundCompactionControls {
+	/** 互斥查询：当前 session 是否有进行中的后台压缩任务（空闲⇄进行中单态判定）。 */
+	isActive: () => boolean;
+	/**
+	 * 启动后台压缩任务（工具路径 = 显式请求：不做触发线（D4 ratio×窗口）与独立熔断
+	 * （SI5）判定——两者仅约束 agent_settled 自动触发入口）。
+	 * 返回 true = 已启动；false = 已有任务进行中（isActive 与本调用之间竞态窗口的
+	 * 兜底判定，调用方按互斥幂等处理）。
+	 * 生成结果不经本调用返回（触发即返回）：完成/失败经通知通道送达（U5）。
+	 */
+	start: (ctx: ExtensionContext, customInstructions?: string) => boolean;
+}
+
+/**
+ * 收起态一行摘要。压缩在后台执行，工具返回时无保留比例数据可取——比例数据走完成
+ * 通知注入消息，不进本摘要。
  */
 export function buildCompactContextSummary(): string {
 	return "Context compacted";
 }
 
-/** 工具描述（§3.5：三条件自查引导；条件即纪律，无第三层复述——D1 单源化核对通过）。 */
+/** 工具描述（§3.5：三条件自查引导；条件即纪律，无第三层复述）。压缩在后台执行（U4 纯触发化）。 */
 const TOOL_DESCRIPTION =
 	"压缩当前会话上下文（释放早期对话占用的 token；压缩由配置的模型执行，不会切换你的主模型）。" +
+	"压缩在后台进行：调用后立即返回，生成期间你可以继续任何工作，完成后的结果消息会送达会话。" +
 	"仅在同时满足以下条件时调用：1) 当前任务的一个阶段已完成并验证（如一批文件改完、测试通过）；" +
 	"2) 后续工作不再依赖将被压缩的早期细节；3) 上下文已超过提醒阈值（你会收到 [smart-context 提示]）。";
-
-/** CompactionResult → 宽松形状的 guard 转换（onComplete 回调参数消费，避免 cast）。 */
-function toCompactionResultLike(result: unknown): CompactionResultLike {
-	const r: Record<string, unknown> = isRecord(result) ? result : {};
-	const usage = isRecord(r.usage) ? r.usage : null;
-	const details = isRecord(r.details) ? r.details : null;
-	const num = (v: unknown) => (typeof v === "number" ? v : undefined);
-	const str = (v: unknown) => (typeof v === "string" ? v : undefined);
-	return {
-		tokensBefore: num(r.tokensBefore),
-		estimatedTokensAfter: num(r.estimatedTokensAfter),
-		usage: usage
-			? {
-				input: num(usage.input),
-				output: num(usage.output),
-				cacheRead: num(usage.cacheRead),
-			}
-			: undefined,
-		details: details
-			? {
-				engine: str(details.engine),
-				mode: str(details.mode),
-			}
-			: undefined,
-	};
-}
 
 /**
  * 注册 compact_context 工具。
  *
- * gatingProbe/usageProbe 为依赖注入（单测 mock 点）：
+ * gatingProbe/usageProbe/getEntries/background 为依赖注入（单测 mock 点）：
  * - gatingProbe(ctx) → { active, modelId }（生产实现：现场读配置判定）
  * - usageProbe(ctx) → { tokens, contextWindow }（生产实现：ctx.getContextUsage()）
+ * - getEntries(ctx) → 条目列表（生产实现：ctx.sessionManager.getEntries()）
+ * - background：后台任务互斥查询与启动（BackgroundCompactionControls 契约）
  */
 export function registerCompactContextTool(
 	pi: ExtensionAPI,
@@ -119,10 +102,15 @@ export function registerCompactContextTool(
 		usageProbe?: (ctx: ExtensionContext) => { tokens: number | null; contextWindow: number };
 		getEntries?: (ctx: ExtensionContext) => ReadonlyArray<EntryLike>;
 		/**
-		 * G1 代际检测（crash-resilience D1）：compact 是 fire-and-forget——onComplete/onError
-		 * 回调在压缩 LLM 调用期间异步触发，用户此间切换/重载 session 后回调持有的 pi 已
-		 * stale（E1 实锤崩溃点）。index.ts 注入模块级代数比对闭包，前置检查 + 错误分诊
-		 * 双保险；缺省时检查退化为纯文案兜底分诊（PS-30 门禁守文案）。
+		 * 后台压缩任务依赖（BackgroundCompactionControls 契约）。未注入 = 生产接线
+		 * 缺失：execute 在门控与阈值检查后抛「后台压缩未接线」错误（fail-fast）。
+		 */
+		background?: BackgroundCompactionControls;
+		/**
+		 * 【过渡兼容字段，当前无消费方】G1 代际检测闭包：后台化后工具不再持有异步
+		 * 回调（旧 ctx.compact onComplete/onError 路径已删除），本字段暂无调用点——
+		 * 保留仅为兼容现有注册点的字面量传参（删除会触发 excess property check
+		 * 编译错）；生产接线单元注入 background 时一并移除。
 		 */
 		isCtxStale?: () => boolean;
 	},
@@ -153,7 +141,7 @@ export function registerCompactContextTool(
 		description: TOOL_DESCRIPTION,
 		parameters: CompactContextParams,
 		execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
-			// D5 门控现场校验（配置热改即时生效，不依赖注册时机）
+			// D5 门控现场校验（配置热改即时生效，不依赖注册时机；V7：拒绝回现状文案）
 			const gating = probeGating(ctx);
 			const config = loadSmartContextConfig();
 			if (!gating.active) {
@@ -163,76 +151,57 @@ export function registerCompactContextTool(
 				throw new Error(reason);
 			}
 
-			// D6 阈值保护（含 null 分支）
+			// D6 阈值保护（含 null 分支；A9：现状文案不动）
 			const usage = probeUsage(ctx);
 			const guardMessage = checkToolThresholdGuard(config.reminderThresholds, usage.tokens);
 			if (guardMessage !== null) {
 				throw new Error(guardMessage);
 			}
 
-			const compactionCount = countCompactions(getEntries(ctx));
+			// 后台任务依赖（接线契约）：未注入 = 生产接线缺失 → fail-fast。接线上线前
+			// 的窗口期工具显式不可用，不撒谎回执、不静默降级
+			const background = deps?.background;
+			if (!background) {
+				throw new Error(
+					"compact_context 后台压缩未接线：工具注册点缺少 background 依赖注入（BackgroundCompactionControls）。" +
+						"请在 smart-context 扩展注册处注入与自动触发共享互斥容器的查询/启动接口。",
+				);
+			}
 
-			// R2 降级态：fire-and-forget。工具立即返回"已启动"；压缩完成后（此时无进行中
-			// 回合，compact 内部的 abort 为 no-op）经 sendSmartContextNotice 注入结果
-			// （nextTurn：随下一次 prompt 作为 custom role 上下文注入，不自起 run——D4①）
+			const compactionCount = countCompactions(getEntries(ctx));
 			const mode = pickMode(config, gating.modelId);
-			ctx.compact({
-				customInstructions:
-					typeof params.custom_instructions === "string" && params.custom_instructions.trim() !== ""
-						? params.custom_instructions
-						: undefined,
-				// E1 实锤崩溃点（9/3 pi-crash log）：两个回调由 compact 的内部 Promise 链异步
-				// 调用，不在 pi runner emit() 的 try/catch 内——session 替换窗口（GUI 切
-				// session/新建/重载高频触发）下 sendMessage 命中 stale ctx 同步抛错即
-				// 杀死 pi 进程（pi 1.0.0 实装：dist/core/extensions/loader.js 的 assertActive
-				// wrapper 对 stale 即 throw "no longer active"，在 runtime 调用前同步 throw）。
-				// 检查 stale 静默降级（结果不投递，用户可重试 /compact），非
-				// stale 错误原样上抛（检查不吞真实 bug）。
-				onComplete: (r: unknown) => {
-					guardStaleCtx(() => {
-						const result = toCompactionResultLike(r);
-						const resultMode = result.details?.mode ?? "native-fallback";
-						const fellBack = resultMode === "native-fallback";
-						if (fellBack) debugLog("compact_context: takeover fell back to native generation");
-						const cacheRead = result.usage?.cacheRead;
-						const cost = result.usage
-							? `${formatK(result.usage.input ?? 0)} input${cacheRead ? `（其中缓存命中 ${formatK(cacheRead)}）` : ""} + ${formatK(result.usage.output ?? 0)} output`
-							: "未知";
-						const showHint = compactionCount + 1 >= DEGRADATION_HINT_MIN_COMPACTIONS;
-						const lines = [
-							`[smart-context] 压缩完成。模式：${resultMode}${fellBack ? "（压缩模型不可用，已回退当前模型——请检查配置：taiji 设置页或 smart-context-ext-config skill）" : ""}。`,
-							`压缩前 ${formatK(result.tokensBefore ?? 0)} tokens → 压缩后约 ${formatK(result.estimatedTokensAfter ?? 0)} tokens；摘要生成成本：${cost}。`,
-							showHint ? buildDegradationHintLine() : "",
-						].filter((l) => l !== "");
-						sendSmartContextNotice(pi, lines.join("\n"), "compact-complete");
-					}, {
-						isCtxStale: deps?.isCtxStale,
-						label: "smart-context:compact-onComplete",
-						onStale: (error) => debugLog(`compact result delivery skipped (stale ctx): ${toErrorMessage(error)}`),
-					});
-				},
-				onError: (err: Error) => {
-					// 压缩本身的失败信息先落日志（检查体外——stale 降级时该观测保留）
-					debugLog(`compact_context error: ${err.message}`);
-					guardStaleCtx(() => {
-						sendSmartContextNotice(
-							pi,
-							`[smart-context] 压缩失败：${err.message}。上下文未变化，可稍后重试（若反复失败，检查 smart-context 配置或使用 /compact）。`,
-							"compact-failed",
-						);
-					}, {
-						isCtxStale: deps?.isCtxStale,
-						label: "smart-context:compact-onError",
-						onStale: (error) => debugLog(`compact failure notice delivery skipped (stale ctx): ${toErrorMessage(error)}`),
-					});
-				},
-			});
+			const customInstructions =
+				typeof params.custom_instructions === "string" && params.custom_instructions.trim() !== ""
+					? params.custom_instructions
+					: undefined;
+
+			// U4 纯触发化：启动后台任务立即回执（GL1 不等待摘要生成）。互斥幂等（RL1）：
+			// 已进行中不再启动，返回成功回执而非错误——isActive 与 start 之间的竞态由
+			// start 返回 false 兜底，同样按幂等处理
+			const started = !background.isActive() && background.start(ctx, customInstructions);
+			if (!started) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: "后台压缩进行中，本次请求已并入该任务，无需重复触发。压缩在后台进行，你可以继续任何工作；完成后会收到一条结果消息。",
+						},
+					],
+					details: {
+						mode,
+						compactModel: mode === "cross-model" ? config.compactModel.ref : gating.modelId,
+						// 无新任务启动，压缩序号不变
+						compactionCount,
+						summary: buildCompactContextSummary(),
+					} satisfies CompactContextDetails,
+				};
+			}
 
 			return {
 				content: [
 					{
 						type: "text",
-						text: `压缩已启动（${mode === "same-model" ? "same-model 模式，KV 缓存优化" : `cross-model 模式，使用 ${config.compactModel.ref}`}）。压缩完成后你会收到一条结果消息；期间可以继续其他工作，但引用早期上下文的操作请等结果消息到达。`,
+						text: `压缩已启动（${mode === "same-model" ? "same-model 模式，KV 缓存优化" : `cross-model 模式，使用 ${config.compactModel.ref}`}）。压缩在后台进行，你可以继续任何工作；完成后会收到一条结果消息。`,
 					},
 				],
 				details: {
