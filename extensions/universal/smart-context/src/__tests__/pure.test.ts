@@ -46,6 +46,23 @@ describe("normalizeSmartContextConfig", () => {
 		const c = normalizeSmartContextConfig({ compactModel: { type: "regex", pattern: "x" } });
 		expect(c.compactModel).toEqual({ type: "ref", ref: "" });
 	});
+
+	it("autoCompactThresholdRatio 缺省/非法类型回默认 0.9（D4 用户裁决）", () => {
+		expect(DEFAULT_SMART_CONTEXT_CONFIG.autoCompactThresholdRatio).toBe(0.9);
+		expect(normalizeSmartContextConfig({}).autoCompactThresholdRatio).toBe(0.9);
+		expect(normalizeSmartContextConfig({ autoCompactThresholdRatio: "0.8" }).autoCompactThresholdRatio).toBe(0.9);
+		expect(normalizeSmartContextConfig({ autoCompactThresholdRatio: null }).autoCompactThresholdRatio).toBe(0.9);
+		expect(normalizeSmartContextConfig({ autoCompactThresholdRatio: Number.NaN }).autoCompactThresholdRatio).toBe(0.9);
+		expect(normalizeSmartContextConfig({ autoCompactThresholdRatio: Number.POSITIVE_INFINITY }).autoCompactThresholdRatio).toBe(0.9);
+	});
+
+	it("autoCompactThresholdRatio 有限数越界钳制到 [0,1]，区间内直通", () => {
+		expect(normalizeSmartContextConfig({ autoCompactThresholdRatio: 1.5 }).autoCompactThresholdRatio).toBe(1);
+		expect(normalizeSmartContextConfig({ autoCompactThresholdRatio: -0.2 }).autoCompactThresholdRatio).toBe(0);
+		expect(normalizeSmartContextConfig({ autoCompactThresholdRatio: 0.95 }).autoCompactThresholdRatio).toBe(0.95);
+		expect(normalizeSmartContextConfig({ autoCompactThresholdRatio: 0 }).autoCompactThresholdRatio).toBe(0);
+		expect(normalizeSmartContextConfig({ autoCompactThresholdRatio: 1 }).autoCompactThresholdRatio).toBe(1);
+	});
 });
 
 describe("门控与模式判定（D5/D12）", () => {

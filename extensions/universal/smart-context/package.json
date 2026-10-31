@@ -19,7 +19,8 @@
             500000,
             600000
           ],
-          "excludedModels": []
+          "excludedModels": [],
+          "autoCompactThresholdRatio": 0.9
         }
       }
     ]
