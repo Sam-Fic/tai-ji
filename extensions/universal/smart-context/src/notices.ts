@@ -21,6 +21,8 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+import { formatK } from "./pure.js";
+
 /** 通知的 customType（taiji 侧按此识别 system 消息来源；pi TUI display 恒 true）。 */
 export const SMART_CONTEXT_NOTICE_CUSTOM_TYPE = "smart-context";
 
@@ -56,4 +58,68 @@ export function sendSmartContextNotice(
 		},
 		{ triggerTurn: false, deliverAs: "nextTurn" },
 	);
+}
+
+/** 完成通知数据（U5：D6 完成通知的组装输入；token 数为压缩前后口径）。 */
+export interface CompactCompleteNoticeInput {
+	/** 本次压缩的模式（与生成入口判定同源）。 */
+	mode: "same-model" | "cross-model";
+	/** 压缩前上下文 token（触发快照口径）。 */
+	tokensBefore: number;
+	/** 压缩后上下文 token（estimatedTokensAfter 或「保留段 + 摘要」估算，接线层定口径）。 */
+	tokensAfter: number;
+}
+
+/**
+ * 后台压缩完成通知文案（D6：落盘成功后投递，含压缩前后 token 数与模式）。
+ * 「下一条消息起生效」语义登记 GL3/AS3：投影按请求现算，无需用户操作。
+ */
+export function buildCompactCompleteNotice(input: CompactCompleteNoticeInput): string {
+	return (
+		`[smart-context] 后台压缩完成（${input.mode} 模式）：上下文 ` +
+		`${formatK(input.tokensBefore)} → ${formatK(input.tokensAfter)} tokens。` +
+		`下一条消息起将使用压缩后的上下文。`
+	);
+}
+
+/** 失败通知数据（U5：D6 失败通知的组装输入；条件 = 校验放弃/探测失败/生成空结果/异常/熔断）。 */
+export interface CompactFailureNoticeInput {
+	/** 失败终局（dropped 涵盖落盘兜底校验放弃与 appendCompaction 探测失败两类）。 */
+	outcome: "inflated" | "dropped" | "empty" | "error";
+	/** outcome=error 时的错误消息。 */
+	error?: string;
+	/** 失败类终局的独立熔断计数（文案展示用）。 */
+	failureStreak?: number;
+	/** 递增后计数达到熔断阈值：自动触发已暂停（工具路径不受影响，SI5）。 */
+	circuitBreakerOpen?: boolean;
+}
+
+/** 失败原因行（按终局给短语与恢复动作；「上下文保持原样」是各终局共同的不变量）。 */
+function compactFailureReasonLine(input: CompactFailureNoticeInput): string {
+	switch (input.outcome) {
+		case "inflated":
+			return "后台压缩已放弃：生成的摘要未缩小上下文（无净收益），结果未落盘，上下文保持原样。";
+		case "dropped":
+			return "后台压缩已放弃：生成期间会话状态已变化（被其他压缩抢先或会话已切换），结果未落盘，上下文保持原样。";
+		case "empty":
+			return "后台压缩失败：摘要生成未返回结果，上下文保持原样。";
+		case "error":
+			return `后台压缩失败：${input.error ?? "未知错误"}，上下文保持原样。`;
+	}
+}
+
+/**
+ * 后台压缩失败通知文案（D6：失败不静默）。熔断达到阈值时附加一行说明（同一次失败
+ * 只投一条通知，熔断语义并入该条——不重复投递）。
+ */
+export function buildCompactFailureNotice(input: CompactFailureNoticeInput): string {
+	const lines = [`[smart-context] ${compactFailureReasonLine(input)}`];
+	if (input.circuitBreakerOpen) {
+		lines.push(
+			`已连续失败 ${input.failureStreak ?? "?"} 次，本会话自动触发压缩已暂停（compact_context 工具仍可手动调用）。`,
+		);
+	} else if (input.outcome === "empty" || input.outcome === "error") {
+		lines.push("可稍后重试（调用 compact_context），或忽略本轮继续工作。");
+	}
+	return lines.join("\n");
 }

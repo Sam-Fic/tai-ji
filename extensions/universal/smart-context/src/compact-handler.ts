@@ -27,6 +27,10 @@
  *   firedThresholds（D6，与 session_compact 监听共用）。
  * - 独立熔断（SI5）：后台失败独立计数，连续 ≥3（沿用 TAKEOVER_FAILURE_LIMIT）停止自动触发；
  *   与同步路径 failStreak 隔离、膨胀段记录（inflatedSegments）共享读取；被抢先取消不计入。
+ * - 工具路径启动（U5 接线残项）：startForTool = compact_context 显式请求（互斥 + 门控前置，
+ *   跳过触发线与独立熔断——SI5 两者仅约束自动触发；非互斥失败抛错不谎报幂等）。
+ * - 终局通知（U5/D6 呈现半边）：runBackgroundTask 各终局回调 onSettled 恰一次
+ *   （cancelled 不回调），接线层（index.ts）组装完成/失败文案经 nextTurn 投递。
  *
  * 输出 CompactionResult.details 携带 {engine:"smart-context", mode, model} 标记（D1 entry 标记）。
  * model = `${model.provider}/${model.id}`（执行压缩的实际模型）——用量页 compaction 归属数据源
@@ -178,6 +182,41 @@ export type AfterGenerationHook = (
 	snapshot: BackgroundTaskSnapshot,
 	ctx: ExtensionContext,
 ) => Promise<ContinuationOutcome>;
+
+/**
+ * 后台任务终局描述（U5 通知接线点：D6 补偿的呈现半边）。
+ * runBackgroundTask 在每个终局点回调 onSettled 恰一次（cancelled 事件取消除外——
+ * D3：取消非失败，且 session_compact 抢先场景用户刚完成一次手动压缩，再弹通知是噪音）。
+ * 接线层（index.ts）据此组装完成/失败文案经 nextTurn 投递；每次任务至多一条通知（不重复）。
+ */
+export interface BackgroundTaskSettlement {
+	/** 任务触发时刻的 sessionId（stale 分诊与排障）。 */
+	sessionId: string;
+	/** 任务终局（语义同 ContinuationOutcome + 生成层结局）。 */
+	outcome:
+		/** 校验通过且已落盘 → 完成通知。 */
+		| "validated"
+		/** 收缩校验失败放弃落盘 → 失败通知（递增点②）。 */
+		| "inflated"
+		/** 落盘兜底校验失败或 appendCompaction 探测失败，放弃落盘 → 失败通知（计数不动）。 */
+		| "dropped"
+		/** 生成空结果 → 失败通知（递增点①）。 */
+		| "empty"
+		/** 生成异常 → 失败通知（递增点③）。 */
+		| "error";
+	/** 本次任务的模式（完成通知展示「压缩前后 token 数与模式」，D6）。 */
+	mode: "same-model" | "cross-model";
+	/** validated/inflated 时携带：生成的压缩结果（tokensBefore/summary/estimatedTokensAfter 通知数据源）。 */
+	result?: CompactionResult;
+	/** validated/inflated 时携带：触发快照的被压段 token（压缩后 token 估算输入）。 */
+	shadowedTokens?: number;
+	/** error 时携带：错误消息。 */
+	error?: string;
+	/** 失败类终局（empty/inflated/error）：递增后的独立熔断计数。 */
+	failureStreak?: number;
+	/** 失败类终局：递增后计数达到熔断阈值（自动触发将暂停，工具路径不受影响，SI5）。 */
+	circuitBreakerOpen?: boolean;
+}
 
 // ──────────────────────── 落盘兜底校验 + appendCompaction 直调（U3：D3 第二层 / D2 / D6） ────────────────────────
 
@@ -453,12 +492,18 @@ export function buildBackgroundPreparation(
 }
 
 /**
- * 后台压缩任务管理器（U2/U3）：触发判定 + 互斥 + 独立熔断 + 事件取消 + 膨胀段共享读取。
+ * 后台压缩任务管理器（U2/U3/U5）：触发判定 + 互斥 + 独立熔断 + 事件取消 + 膨胀段共享读取
+ * + 工具路径启动 + 终局通知回调。
  *
  * state 为 session 级闭包（index.ts 在 session_start 重建后经 getState 读当前代容器——
  * 旧代任务的回调写旧闭包对象，对新状态天然无害）。afterGeneration 是 U3 续段接线点；
- * getInflatedSegments 提供膨胀段共享读取（D3：与同步路径 inflatedSegments 同一集合，
- * 同段不再触发防反复烧钱），缺省视为空集。
+ * onSettled 是 U5 通知接线点（每个终局恰一次，cancelled 除外）；getInflatedSegments 提供
+ * 膨胀段共享读取（D3：与同步路径 inflatedSegments 同一集合，同段不再触发防反复烧钱），
+ * 缺省视为空集。
+ *
+ * 两个启动入口共享同一「进行中」单态容器（RL1）：maybeStart = agent_settled 自动触发
+ * （互斥 + 门控 + 探测 + 熔断 + 触发线 + 膨胀段全判定）；startForTool = compact_context
+ * 工具显式请求（互斥 + 门控前置，跳过触发线与独立熔断——SI5：两者仅约束自动触发入口）。
  */
 export function createBackgroundCompactionManager(
 	pi: ExtensionAPI,
@@ -466,6 +511,7 @@ export function createBackgroundCompactionManager(
 	loadConfigFn: () => SmartContextConfig,
 	afterGeneration?: AfterGenerationHook,
 	getInflatedSegments?: () => ReadonlySet<string>,
+	onSettled?: (settlement: BackgroundTaskSettlement) => void,
 ) {
 	/**
 	 * 事件取消（D3 第一层）：有进行中任务则 abort 放弃结果并回空闲。
@@ -480,7 +526,68 @@ export function createBackgroundCompactionManager(
 		debugLog(`background compaction cancelled: ${reason} (sessionId=${task.snapshot.sessionId})`);
 	};
 
-	/** 触发判定 + 启动（D4）。返回是否启动（供日志；判定全部前置短路）。 */
+	/** 互斥查询（RL1）：单态判定，工具路径契约 BackgroundCompactionControls.isActive 的实装。 */
+	const isActive = (): boolean => getState().active !== null;
+
+	/**
+	 * appendCompaction 前置存在性探测（U3）：缺失 = pi 观察级依赖失效（UD1/UD8）的恒定
+	 * 状态，拦截在生成前省一次全量生成费用；落盘侧另有存在性探测兜底（RL3，语义不同——
+	 * 此处「不启动任务」、彼处「放弃结果」，运行中 pi 包不变故两者判定恒一致）。
+	 */
+	const appendCompactionAvailable = (ctx: ExtensionContext): boolean => {
+		const sm: unknown = ctx.sessionManager;
+		return Boolean(sm && typeof (sm as AppendCompactionLike).appendCompaction === "function");
+	};
+
+	/**
+	 * 共用启动段（快照 → AbortController → runBackgroundTask）：互斥兜底由本函数自检
+	 * （两入口已前置判定，此处兜 isActive 与 start 之间的同帧竞态）。state.active 赋值与
+	 * runBackgroundTask 调用同处一个同步帧：run 的续段都在微任务，不会在赋值前看到空
+	 * active（单线程事件循环顺序保证）；task 引用先落地再回填 done，run 的 finally 凭
+	 * 引用判「是否仍是自己」，构造性排除误清后继任务的竞态。
+	 */
+	const launchTask = (
+		ctx: ExtensionContext,
+		config: SmartContextConfig,
+		modelId: string,
+		preparation: SessionBeforeCompactEvent["preparation"],
+		usageTokens: number,
+		customInstructions: string | undefined,
+		source: "auto" | "tool",
+	): boolean => {
+		const state = getState();
+		if (state.active) return false;
+
+		const entriesTail = ctx.sessionManager.getEntries();
+		const snapshot: BackgroundTaskSnapshot = {
+			sessionId: ctx.sessionManager.getSessionId(),
+			lastEntryId: entriesTail[entriesTail.length - 1]?.id ?? "",
+			tokens: usageTokens,
+			compactionIds: entriesTail.filter((e) => e.type === "compaction").map((e) => e.id),
+			shadowedTokens: estimateShadowedTokens(preparation.messagesToSummarize),
+		};
+
+		// 任务自持 AbortController；异步序列 fire-and-forget（正常路径无人 await）
+		const abort = new AbortController();
+		const input: GenerationInput = {
+			preparation,
+			// 触发时刻快照（SI3）：branch 条目流随 preparation 组装自同一 entries 视图
+			branchEntries: [...entriesTail],
+			customInstructions,
+			signal: abort.signal,
+		};
+		const mode = pickMode(config, modelId);
+		const task: ActiveBackgroundTask = { abort, snapshot, done: Promise.resolve() };
+		state.active = task;
+		task.done = runBackgroundTask(pi, ctx, config, mode, input, abort, state, snapshot, afterGeneration, onSettled, task);
+		debugLog(
+			`background compaction started(${source}): mode=${mode} tokens=${usageTokens} ` +
+				`firstKept=${preparation.firstKeptEntryId}`,
+		);
+		return true;
+	};
+
+	/** 触发判定 + 启动（D4 自动入口）。返回是否启动（供日志；判定全部前置短路）。 */
 	const maybeStart = (ctx: ExtensionContext): boolean => {
 		const state = getState();
 
@@ -492,15 +599,9 @@ export function createBackgroundCompactionManager(
 		// 门控前置（D4）：enabled 与 excludedModels，与同步接管同款判定
 		if (!isGatingActive(config, modelId)) return false;
 
-		// 前置存在性探测（U3）：appendCompaction 缺失 = pi 观察级依赖失效（UD1/UD8）的恒定
-		// 状态，拦截在生成前省一次全量生成费用；落盘侧另有存在性探测兜底（RL3，语义不同——
-		// 此处「不启动任务」、彼处「放弃结果」，运行中 pi 包不变故两者判定恒一致）
-		{
-			const sm: unknown = ctx.sessionManager;
-			if (!sm || typeof (sm as AppendCompactionLike).appendCompaction !== "function") {
-				debugLog("background compaction skipped: sessionManager.appendCompaction unavailable");
-				return false;
-			}
+		if (!appendCompactionAvailable(ctx)) {
+			debugLog("background compaction skipped: sessionManager.appendCompaction unavailable");
+			return false;
 		}
 
 		// 独立熔断（SI5）：连续失败 ≥3 停止自动触发（只影响本入口，工具/手动路径不受影响）
@@ -524,41 +625,56 @@ export function createBackgroundCompactionManager(
 			return false;
 		}
 
-		const entriesTail = ctx.sessionManager.getEntries();
-		const snapshot: BackgroundTaskSnapshot = {
-			sessionId: ctx.sessionManager.getSessionId(),
-			lastEntryId: entriesTail[entriesTail.length - 1]?.id ?? "",
-			tokens: usage.tokens,
-			compactionIds: entriesTail.filter((e) => e.type === "compaction").map((e) => e.id),
-			shadowedTokens: estimateShadowedTokens(preparation.messagesToSummarize),
-		};
-
-		// 任务自持 AbortController；异步序列 fire-and-forget（正常路径无人 await）。
-		// state.active 赋值与 runBackgroundTask 调用同处一个同步帧：run 的续段都在微任务，
-		// 不会在赋值前看到空 active（单线程事件循环顺序保证）
-		const abort = new AbortController();
-		const input: GenerationInput = {
-			preparation,
-			// 触发时刻快照（SI3）：branch 条目流随 preparation 组装自同一 entries 视图
-			branchEntries: [...entriesTail],
-			customInstructions: undefined,
-			signal: abort.signal,
-		};
-		const mode = pickMode(config, modelId);
-		// state.active 赋值与 runBackgroundTask 调用同处一个同步帧：run 的续段都在微任务，
-		// 不会在赋值前看到空 active（单线程事件循环顺序保证）；task 引用先落地再回填 done，
-		// run 的 finally 凭引用判「是否仍是自己」，构造性排除误清后继任务的竞态
-		const task: ActiveBackgroundTask = { abort, snapshot, done: Promise.resolve() };
-		state.active = task;
-		task.done = runBackgroundTask(pi, ctx, config, mode, input, abort, state, snapshot, afterGeneration, task);
-		debugLog(
-			`background compaction started: mode=${mode} tokens=${usage.tokens} window=${usage.contextWindow} ` +
-				`ratio=${config.autoCompactThresholdRatio} firstKept=${preparation.firstKeptEntryId}`,
-		);
-		return true;
+		return launchTask(ctx, config, modelId, preparation, usage.tokens, undefined, "auto");
 	};
 
-	return { maybeStart, cancelActive };
+	/**
+	 * 工具路径启动（U5 接线残项）：compact_context 工具显式请求的后台任务启动，即
+	 * tool.ts BackgroundCompactionControls 契约的 start 实装。
+	 *
+	 * 与自动入口的判定差异（D4 入口矩阵①）：
+	 * - 保留：互斥（撞上返回 false——工具按幂等处理，U4 契约唯一 false 语义）与
+	 *   isGatingActive 门控前置（工具 execute 已现场校验过，此处防御双检——配置热改
+	 *   窗口兜底）；
+	 * - 跳过：触发线（D4 ratio×窗口——显式请求即用户/agent 决策，不受自动触发线约束）
+	 *   与独立熔断（SI5：熔断仅停自动触发）；
+	 * - 不做膨胀段拦截：膨胀段（D3/SI6）防的是「同段反复自动触发反复烧钱」，工具显式
+	 *   请求是知情决策（可带 custom_instructions 改善摘要），不拦——落盘侧收缩校验仍会
+	 *   放弃膨胀结果并经通知回报。
+	 *
+	 * 失败语义：非互斥原因不可启动（门控拒绝 / appendCompaction 探测失败 / 无可压内容）
+	 * 抛错而非返回 false——false 在工具侧按「后台压缩进行中」幂等回执处理，非互斥失败
+	 * 返回 false 会撒谎回执；抛错经工具 execute 上浮为失败回执（诚实、可操作）。
+	 */
+	const startForTool = (ctx: ExtensionContext, customInstructions?: string): boolean => {
+		if (isActive()) return false;
+
+		const config = loadConfigFn();
+		const modelId = getCurrentModelId(ctx.model);
+		if (!isGatingActive(config, modelId)) {
+			throw new Error(
+				`compact_context 后台压缩启动被门控拒绝：当前模型 ${modelId} 不在放行范围（enabled/excludedModels）。` +
+					`可在 taiji 设置页或 smart-context-ext-config skill 中调整后重试。`,
+			);
+		}
+		if (!appendCompactionAvailable(ctx)) {
+			throw new Error(
+				"compact_context 后台压缩启动失败：sessionManager.appendCompaction 不可用（pi 会话接口缺失，观察级依赖失效）。" +
+					"请升级或回退 pi 版本后重试。",
+			);
+		}
+
+		const preparation = buildBackgroundPreparation(ctx);
+		if (!preparation) {
+			throw new Error(
+				"compact_context 后台压缩未启动：当前上下文没有可压缩内容（刚压缩过，或全部上下文在保留预算内）。",
+			);
+		}
+
+		return launchTask(ctx, config, modelId, preparation, ctx.getContextUsage()?.tokens ?? 0, customInstructions, "tool");
+	};
+
+	return { maybeStart, cancelActive, isActive, startForTool };
 }
 
 /**
@@ -566,6 +682,8 @@ export function createBackgroundCompactionManager(
  * 结局四类：cancelled（放弃结果，计数不动）/ empty（生成空结果，递增①）/ error（异常，递增③）/
  * 生成成功 → afterGeneration 处置回报（validated 清零 / inflated 递增② / dropped 不动）。
  * 任一结局回空闲（try/finally）。旧代闭包场景：写入的是捕获的旧 state 对象，无害。
+ * 终局通知（U5/D6）：onSettled 在每个终局点回调恰一次（cancelled 不回调——取消非失败，
+ * 不在 D6 失败通知清单；afterGeneration 未接线的开发中间态也不回调，不撒谎成功）。
  */
 async function runBackgroundTask(
 	pi: ExtensionAPI,
@@ -577,14 +695,19 @@ async function runBackgroundTask(
 	state: BackgroundCompactionState,
 	snapshot: BackgroundTaskSnapshot,
 	afterGeneration?: AfterGenerationHook,
+	onSettled?: (settlement: BackgroundTaskSettlement) => void,
 	task?: ActiveBackgroundTask,
 ): Promise<void> {
+	/** 终局回调适配：sessionId/mode 由本闭包统一补齐，接线层只消费终局语义与数据载荷。 */
+	const settle = (settlement: Omit<BackgroundTaskSettlement, "sessionId" | "mode">): void => {
+		onSettled?.({ ...settlement, sessionId: snapshot.sessionId, mode });
+	};
 	try {
 		const result = mode === "same-model"
 			? await generateSameMode(pi, ctx, input)
 			: await generateCrossMode(ctx, config, input);
 
-		// 被抢先取消：放弃结果（取消非失败，SI5 递增点不含取消）
+		// 被抢先取消：放弃结果（取消非失败，SI5 递增点不含取消；不发终局通知）
 		if (abort.signal.aborted) {
 			debugLog(`background compaction discarded result after cancellation (sessionId=${snapshot.sessionId})`);
 			return;
@@ -593,6 +716,11 @@ async function runBackgroundTask(
 		if (!result) {
 			state.failureStreak += 1;
 			warnLog("background compaction produced no result", { failureStreak: state.failureStreak });
+			settle({
+				outcome: "empty",
+				failureStreak: state.failureStreak,
+				circuitBreakerOpen: state.failureStreak >= TAKEOVER_FAILURE_LIMIT,
+			});
 			return;
 		}
 
@@ -611,11 +739,20 @@ async function runBackgroundTask(
 		}
 		if (outcome === "validated") {
 			state.failureStreak = 0;
+			settle({ outcome, result, shadowedTokens: snapshot.shadowedTokens });
 		} else if (outcome === "inflated") {
 			state.failureStreak += 1;
 			warnLog("background compaction summary inflated, rejected by continuation", { failureStreak: state.failureStreak });
+			settle({
+				outcome,
+				result,
+				shadowedTokens: snapshot.shadowedTokens,
+				failureStreak: state.failureStreak,
+				circuitBreakerOpen: state.failureStreak >= TAKEOVER_FAILURE_LIMIT,
+			});
 		} else {
 			debugLog(`background compaction dropped by continuation (stale snapshot, sessionId=${snapshot.sessionId})`);
+			settle({ outcome: "dropped" });
 		}
 	} catch (error) {
 		// 取消引发的异常（abort 竞态）不算失败
@@ -626,6 +763,12 @@ async function runBackgroundTask(
 		// 递增点③：异常
 		state.failureStreak += 1;
 		warnLog("background compaction error", { error: toErrorMessage(error), failureStreak: state.failureStreak });
+		settle({
+			outcome: "error",
+			error: toErrorMessage(error),
+			failureStreak: state.failureStreak,
+			circuitBreakerOpen: state.failureStreak >= TAKEOVER_FAILURE_LIMIT,
+		});
 	} finally {
 		// 回空闲：凭引用判「active 仍是本任务」才清（跨代写旧闭包对象无害；同代不误清后继）
 		if (task && state.active === task) state.active = null;

@@ -12,6 +12,15 @@ vi.mock("../llm.js", () => ({
 	callSameModelCompaction: vi.fn(),
 	projectTools: (tools: unknown[]) => tools.map((t) => ({ name: (t as { name: string }).name })),
 }));
+// 配置加载覆写（U5 工具端到端用例经 index.ts 缺省 gatingProbe 消费本函数——真实实现读
+// agentDir 磁盘配置，测试必须确定且不触真实数据目录）：其余纯函数保持实装
+vi.mock("../pure.js", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../pure.js")>();
+	return {
+		...actual,
+		loadSmartContextConfig: vi.fn(() => actual.normalizeSmartContextConfig({})),
+	};
+});
 
 import { compact as nativeCompact, buildContextEntries, buildSessionProjection, sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
 import type { CompactionResult, SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -27,6 +36,7 @@ import {
 	validateBackgroundPersist,
 	type AfterGenerationHook,
 	type BackgroundCompactionState,
+	type BackgroundTaskSettlement,
 	type BackgroundTaskSnapshot,
 } from "../compact-handler.js";
 import smartContextExtension from "../index.js";
@@ -325,8 +335,9 @@ function makeBgManager(
 	config: SmartContextConfig,
 	afterGeneration?: AfterGenerationHook,
 	getInflatedSegments?: () => ReadonlySet<string>,
+	onSettled?: (settlement: BackgroundTaskSettlement) => void,
 ) {
-	const manager = createBackgroundCompactionManager(makePi(), () => bgState, () => config, afterGeneration, getInflatedSegments);
+	const manager = createBackgroundCompactionManager(makePi(), () => bgState, () => config, afterGeneration, getInflatedSegments, onSettled);
 	return manager;
 }
 
@@ -796,17 +807,322 @@ describe("appendCompaction 直调链路（U3 验收②③：RL3 存在性探测 
 		expect(mockedCall).toHaveBeenCalledTimes(1);
 		expect(sendMessage).toHaveBeenCalledTimes(1); // 第一档提醒投递
 		gen.release(true);
-		// 落盘链路全微任务：drain 到 appendCompaction 被调，再 drain 续段尾部（onPersisted 回流）
+		// 落盘链路全微任务：drain 到 appendCompaction 被调，再 drain 续段尾部（onPersisted 回流
+		// 与 U5 终局通知）
 		for (let i = 0; i < 50 && getAppendMock(ctx).mock.calls.length === 0; i++) await Promise.resolve();
 		expect(getAppendMock(ctx)).toHaveBeenCalledTimes(1); // 落盘成功（补偿的前置事实）
 		for (let i = 0; i < 50; i++) await Promise.resolve();
+
+		// U5/D6 完成通知：落盘成功 → compact-complete 经 nextTurn 投递（不自起回合），
+		// 含压缩前后 token 数与模式（D6）
+		expect(sendMessage).toHaveBeenCalledTimes(2);
+		const [completeMessage, completeOptions] = sendMessage.mock.calls[1]!;
+		expect(completeMessage).toMatchObject({
+			customType: "smart-context",
+			display: true,
+			details: { source: "compact-complete" },
+		});
+		expect(String(completeMessage.content)).toContain("后台压缩完成");
+		expect(String(completeMessage.content)).toContain("same-model");
+		expect(String(completeMessage.content)).toContain("450K"); // tokensBefore = 触发行情
+		expect(completeOptions).toEqual({ triggerTurn: false, deliverAs: "nextTurn" });
 
 		// 第二次 settle：420K 越第一档但低于触发线（450K，不启动新任务）→ fired 已清 → 同档重新提醒
 		handlers.get("agent_settled")!(
 			{ type: "agent_settled" },
 			makeBgCtx(sampleEntriesNoCompaction(), { tokens: 420_000, contextWindow: 500_000 }),
 		);
-		expect(sendMessage).toHaveBeenCalledTimes(2); // firedThresholds 清空的直接行为证据
+		expect(sendMessage).toHaveBeenCalledTimes(3); // +1 提醒（firedThresholds 清空的直接行为证据）
+		expect(sendMessage.mock.calls[2]![0]).toMatchObject({ details: { source: "threshold-reminder" } });
 		expect(mockedCall).toHaveBeenCalledTimes(1); // 未越触发线，不重复启动任务
+	});
+});
+
+// ──────────────────────── U5：工具路径启动（接线残项：startForTool 实装 BackgroundCompactionControls） ────────────────────────
+
+describe("工具路径启动（U5：互斥 + 门控前置，跳过触发线/熔断/膨胀段）", () => {
+	it("门控前置：disabled → 抛错（不触 LLM 不启动）；探测失败 → 抛错", () => {
+		const manager = makeBgManager(createBackgroundCompactionState(), normalizeSmartContextConfig({ enabled: false }));
+		expect(() => manager.startForTool(makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE))).toThrow(/门控拒绝/);
+
+		const noProbeState = createBackgroundCompactionState();
+		const noProbeManager = makeBgManager(noProbeState, normalizeSmartContextConfig({}));
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
+		delete (ctx.sessionManager as { appendCompaction?: unknown }).appendCompaction;
+		expect(() => noProbeManager.startForTool(ctx)).toThrow(/appendCompaction 不可用/);
+		expect(mockedCall).not.toHaveBeenCalled();
+		expect(noProbeManager.isActive()).toBe(false);
+	});
+
+	it("互斥（RL1）：任务进行中 startForTool 返回 false（U4 契约幂等语义）且不触 LLM；收尾回空闲", async () => {
+		const gen = holdGeneration();
+		const bgState = createBackgroundCompactionState();
+		const manager = makeBgManager(bgState, normalizeSmartContextConfig({}));
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
+
+		// 自动入口占位：进行中 → isActive true、工具路径 false
+		expect(manager.maybeStart(ctx)).toBe(true);
+		expect(manager.isActive()).toBe(true);
+		expect(manager.startForTool(makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE))).toBe(false);
+		expect(mockedCall).toHaveBeenCalledTimes(1);
+
+		gen.release(true);
+		await bgState.active?.done;
+		expect(manager.isActive()).toBe(false);
+	});
+
+	it("跳过触发线（工具显式请求不受 D4 约束）：未越线行情 maybeStart 拒绝、startForTool 照常启动", async () => {
+		const bgState = createBackgroundCompactionState();
+		const manager = makeBgManager(bgState, normalizeSmartContextConfig({}));
+		mockedCall.mockResolvedValue({ ok: true, text: "s", usage: { input: 1, output: 2 } });
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), BELOW_USAGE); // 100K/200K = 50% < 0.9 线
+
+		expect(manager.maybeStart(ctx)).toBe(false); // 自动入口：触发线挡住（对照）
+		expect(manager.startForTool(ctx)).toBe(true); // 工具入口：显式请求放行
+		expect(mockedCall).toHaveBeenCalledTimes(1);
+		await bgState.active?.done;
+	});
+
+	it("跳过独立熔断（SI5：熔断仅停自动触发）：连续失败 3 次后 maybeStart 拒绝、startForTool 照常启动", async () => {
+		const bgState = createBackgroundCompactionState();
+		const manager = makeBgManager(bgState, normalizeSmartContextConfig({}));
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
+
+		mockedCall.mockResolvedValue({ ok: false, text: "", error: "boom" });
+		for (let i = 0; i < 3; i++) {
+			expect(manager.maybeStart(ctx)).toBe(true);
+			await bgState.active?.done;
+		}
+		expect(bgState.failureStreak).toBe(3);
+		expect(manager.maybeStart(ctx)).toBe(false); // 自动入口：熔断挡住（对照）
+
+		mockedCall.mockResolvedValue({ ok: true, text: "s", usage: { input: 1, output: 2 } });
+		expect(manager.startForTool(ctx)).toBe(true); // 工具入口：不受熔断影响
+		await bgState.active?.done;
+		expect(bgState.failureStreak).toBe(0); // 成功清零
+	});
+
+	it("跳过膨胀段拦截（显式请求不拦，落盘侧校验仍生效）：同段已 inflated，maybeStart 拒绝、startForTool 照常启动", async () => {
+		const bgState = createBackgroundCompactionState();
+		const inflated = new Set(["e3"]); // 样例 A 切点段已记录膨胀
+		const manager = makeBgManager(bgState, normalizeSmartContextConfig({}), undefined, () => inflated);
+		mockedCall.mockResolvedValue({ ok: true, text: "s", usage: { input: 1, output: 2 } });
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
+
+		expect(manager.maybeStart(ctx)).toBe(false); // 自动入口：膨胀段挡住（对照）
+		expect(manager.startForTool(ctx)).toBe(true);
+		await bgState.active?.done;
+	});
+
+	it("custom_instructions 透传到生成输入（same-model 指令的 Additional focus 段）", async () => {
+		const bgState = createBackgroundCompactionState();
+		const manager = makeBgManager(bgState, normalizeSmartContextConfig({}));
+		mockedCall.mockResolvedValue({ ok: true, text: "s", usage: { input: 1, output: 2 } });
+		expect(manager.startForTool(makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE), "保留验证结果")).toBe(true);
+		const instruction = mockedCall.mock.calls[0]![1].messages.at(-1) as { content: Array<{ text: string }> };
+		expect(instruction.content[0]!.text).toContain("保留验证结果");
+		await bgState.active?.done;
+	});
+
+	it("无可压内容（刚压缩完/预算内）→ 抛错（诚实失败，不谎报互斥幂等）", () => {
+		const bgState = createBackgroundCompactionState();
+		const manager = makeBgManager(bgState, normalizeSmartContextConfig({}));
+		const compacted = [makeCompactionEntry("c9", null, "c9")];
+		expect(() => manager.startForTool(makeBgCtx(compacted, TRIGGER_USAGE))).toThrow(/没有可压缩内容/);
+		expect(mockedCall).not.toHaveBeenCalled();
+	});
+
+	it("工具触发端到端（index.ts 注入形态）：compact_context execute 真实走通到 U2 任务启动", async () => {
+		const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
+		const registerTool = vi.fn();
+		const hookPi = {
+			on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => void) => {
+				handlers.set(name, handler);
+			},
+			getAllTools: () => [],
+			registerTool,
+			sendMessage: vi.fn(),
+			appendEntry: vi.fn(),
+		} as unknown as ExtensionAPI;
+		smartContextExtension(hookPi);
+		expect(registerTool).toHaveBeenCalledTimes(1);
+		const tool = registerTool.mock.calls[0]![0] as {
+			execute: (
+				id: string,
+				params: Record<string, unknown>,
+				signal: undefined,
+				onUpdate: undefined,
+				ctx: ExtensionContext,
+			) => Promise<{ content: Array<{ type: string; text: string }>; details: Record<string, unknown> }>;
+		};
+
+		// 行情：420K ≥ 最低提醒档 400K（A9 护栏放行）、42% < 0.9 触发线——工具显式请求不受触发线约束
+		mockedCall.mockResolvedValue({ ok: true, text: "s", usage: { input: 1, output: 2 } });
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), { tokens: 420_000, contextWindow: 1_000_000 });
+		const result = await tool.execute("t1", {}, undefined, undefined, ctx);
+		expect(result.content[0]!.text).toContain("压缩已启动"); // GL1 立即回执
+		expect(mockedCall).toHaveBeenCalledTimes(1); // 真实走通：U2 任务已启动并进入生成
+		expect(mockedCall.mock.calls[0]![1].signal.aborted).toBe(false);
+		for (let i = 0; i < 50; i++) await Promise.resolve(); // 任务收尾 drain
+		expect(mockedCall).toHaveBeenCalledTimes(1);
+	});
+});
+
+// ──────────────────────── U5：终局通知回调（D6 呈现半边：每个终局恰一次，cancelled 除外） ────────────────────────
+
+describe("终局通知回调 onSettled（U5：D6 失败不静默、不重复）", () => {
+	it("validated：恰一次回调，载荷含 result/shadowedTokens/mode/sessionId", async () => {
+		mockedCall.mockResolvedValue({ ok: true, text: "bg summary", usage: { input: 1, output: 2 } });
+		const onSettled = vi.fn();
+		const hook: AfterGenerationHook = (result, snapshot, ctx) => persistBackgroundCompaction(ctx, result, snapshot);
+		const bgState = createBackgroundCompactionState();
+		const manager = makeBgManager(bgState, normalizeSmartContextConfig({}), hook, undefined, onSettled);
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
+
+		expect(manager.maybeStart(ctx)).toBe(true);
+		await bgState.active?.done;
+
+		expect(onSettled).toHaveBeenCalledTimes(1); // 每任务恰一条通知（不重复）
+		const settlement = onSettled.mock.calls[0]![0] as BackgroundTaskSettlement;
+		expect(settlement.outcome).toBe("validated");
+		expect(settlement.mode).toBe("same-model");
+		expect(settlement.sessionId).toBe("s1");
+		expect(settlement.result?.tokensBefore).toBe(TRIGGER_USAGE.tokens);
+		expect(settlement.shadowedTokens).toBeGreaterThan(0);
+		expect(settlement.failureStreak).toBeUndefined();
+	});
+
+	it("inflated：回调带递增计数；dropped（校验放弃/探测失败同分支）：回调无计数字段", async () => {
+		const onSettled = vi.fn();
+		const bgState = createBackgroundCompactionState();
+		const afterGen = vi.fn();
+		const manager = makeBgManager(bgState, normalizeSmartContextConfig({}), afterGen as unknown as AfterGenerationHook, undefined, onSettled);
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
+
+		// inflated（递增点②）：载荷带 failureStreak 与 result
+		mockedCall.mockResolvedValue({ ok: true, text: "bg summary", usage: { input: 1, output: 2 } });
+		afterGen.mockResolvedValue("inflated");
+		expect(manager.maybeStart(ctx)).toBe(true);
+		await bgState.active?.done;
+		expect(onSettled.mock.calls[0]![0]).toMatchObject({ outcome: "inflated", failureStreak: 1, circuitBreakerOpen: false });
+
+		// dropped（校验放弃与探测失败在 settlement 层同一 "dropped" 分支——通知文案同一入口）：
+		// 计数不动、无 failureStreak 字段
+		afterGen.mockResolvedValue("dropped");
+		expect(manager.maybeStart(ctx)).toBe(true);
+		await bgState.active?.done;
+		const dropped = onSettled.mock.calls[1]![0] as BackgroundTaskSettlement;
+		expect(dropped.outcome).toBe("dropped");
+		expect(dropped.failureStreak).toBeUndefined();
+		expect(dropped.circuitBreakerOpen).toBeUndefined();
+		expect(bgState.failureStreak).toBe(1); // dropped 不递增
+	});
+
+	it("empty（递增点①）与 error（递增点③）：各回调一次，载荷带错误/计数", async () => {
+		const onSettled = vi.fn();
+		const bgState = createBackgroundCompactionState();
+		const manager = makeBgManager(bgState, normalizeSmartContextConfig({}), undefined, undefined, onSettled);
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
+
+		mockedCall.mockResolvedValue({ ok: false, text: "", error: "boom" });
+		expect(manager.maybeStart(ctx)).toBe(true);
+		await bgState.active?.done;
+		expect(onSettled.mock.calls[0]![0]).toMatchObject({ outcome: "empty", failureStreak: 1, circuitBreakerOpen: false });
+
+		mockedCall.mockRejectedValue(new Error("boom"));
+		expect(manager.maybeStart(ctx)).toBe(true);
+		await bgState.active?.done;
+		const errorSettlement = onSettled.mock.calls[1]![0] as BackgroundTaskSettlement;
+		expect(errorSettlement.outcome).toBe("error");
+		expect(errorSettlement.error).toContain("boom");
+		expect(errorSettlement.failureStreak).toBe(2);
+		expect(onSettled).toHaveBeenCalledTimes(2);
+	});
+
+	it("熔断标记：第 3 次失败 circuitBreakerOpen=true（自动触发将暂停，SI5）", async () => {
+		const onSettled = vi.fn();
+		const bgState = createBackgroundCompactionState();
+		bgState.failureStreak = 2;
+		const manager = makeBgManager(bgState, normalizeSmartContextConfig({}), undefined, undefined, onSettled);
+		mockedCall.mockResolvedValue({ ok: false, text: "", error: "boom" });
+		expect(manager.maybeStart(makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE))).toBe(true);
+		await bgState.active?.done;
+		expect(onSettled.mock.calls[0]![0]).toMatchObject({ outcome: "empty", failureStreak: 3, circuitBreakerOpen: true });
+	});
+
+	it("cancelled（事件取消）：不回调通知（取消非失败，D3；session_compact 抢先场景不弹噪音）", async () => {
+		const onSettled = vi.fn();
+		const gen = holdGeneration();
+		const bgState = createBackgroundCompactionState();
+		const afterGen = vi.fn().mockResolvedValue("validated");
+		const manager = makeBgManager(bgState, normalizeSmartContextConfig({}), afterGen as unknown as AfterGenerationHook, undefined, onSettled);
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
+
+		expect(manager.maybeStart(ctx)).toBe(true);
+		const done = bgState.active?.done;
+		manager.cancelActive("session_compact");
+		gen.release(true);
+		await done;
+		expect(onSettled).not.toHaveBeenCalled();
+	});
+
+	it("index.ts 全接线：生成失败 → compact-failed 通知经 nextTurn 投递（不自起回合）", async () => {
+		const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
+		const sendMessage = vi.fn();
+		const hookPi = {
+			on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => void) => {
+				handlers.set(name, handler);
+			},
+			getAllTools: () => [],
+			registerTool: vi.fn(),
+			sendMessage,
+			appendEntry: vi.fn(),
+		} as unknown as ExtensionAPI;
+		smartContextExtension(hookPi);
+
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
+		handlers.get("session_start")!({ type: "session_start", reason: "startup" }, ctx);
+		mockedCall.mockResolvedValue({ ok: false, text: "", error: "boom" });
+		handlers.get("agent_settled")!({ type: "agent_settled" }, ctx);
+		// 任务收尾全微任务链（生成 → 续段 → settlement → 通知）
+		for (let i = 0; i < 50; i++) await Promise.resolve();
+
+		expect(sendMessage).toHaveBeenCalledTimes(1); // 失败通知（不静默），无提醒（行情未越档不叠加）
+		const [message, options] = sendMessage.mock.calls[0]!;
+		expect(message).toMatchObject({
+			customType: "smart-context",
+			display: true,
+			details: { source: "compact-failed" },
+		});
+		expect(String(message.content)).toContain("后台压缩失败");
+		expect(options).toEqual({ triggerTurn: false, deliverAs: "nextTurn" });
+	});
+
+	it("index.ts 全接线：连续失败 3 次 → 第 3 条通知含熔断语义（各失败恰一条不重复）", async () => {
+		const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
+		const sendMessage = vi.fn();
+		const hookPi = {
+			on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => void) => {
+				handlers.set(name, handler);
+			},
+			getAllTools: () => [],
+			registerTool: vi.fn(),
+			sendMessage,
+			appendEntry: vi.fn(),
+		} as unknown as ExtensionAPI;
+		smartContextExtension(hookPi);
+
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
+		handlers.get("session_start")!({ type: "session_start", reason: "startup" }, ctx);
+		mockedCall.mockResolvedValue({ ok: false, text: "", error: "boom" });
+		for (let i = 0; i < 3; i++) {
+			handlers.get("agent_settled")!({ type: "agent_settled" }, ctx);
+			for (let j = 0; j < 50; j++) await Promise.resolve();
+		}
+		expect(sendMessage).toHaveBeenCalledTimes(3); // 每次失败一条，不重复不静默
+		expect(String(sendMessage.mock.calls[0]![0].content)).not.toContain("自动触发压缩已暂停");
+		expect(String(sendMessage.mock.calls[1]![0].content)).not.toContain("自动触发压缩已暂停");
+		expect(String(sendMessage.mock.calls[2]![0].content)).toContain("自动触发压缩已暂停"); // 熔断并入第 3 条
+		expect(String(sendMessage.mock.calls[2]![0].content)).toContain("compact_context 工具仍可手动调用");
 	});
 });

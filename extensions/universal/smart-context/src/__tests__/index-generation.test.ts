@@ -1,17 +1,14 @@
 // src/__tests__/index-generation.test.ts
 //
-// G1 装配级测试（crash-resilience D1，参照 scheduler __tests__/index-generation.test.ts 形态）：
-// index.ts 装配点向 registerCompactContextTool 注入的 deps.isCtxStale 必须是 live 绑定
-// wrapper（() => isCtxStale()）——registerCompactContextTool 在 factory 体同步执行，简写
-// 属性 { isCtxStale } 会把该行时刻的初始 () => false 快照进 deps 对象，session_start
-// handler 内的重新赋值不回写已构造对象 → compact onComplete/onError（E1 实锤崩溃点）
-// 检查的前置代际检查恒不生效，stale 分诊 100% 退化为 PS-30 文案兜底。
+// U5 工具接线装配回归：index.ts 注册点向 registerCompactContextTool 注入 deps.background
+// （BackgroundCompactionControls 契约：isActive/start），工具路径与 agent_settled 自动
+// 触发共享同一 session 级互斥容器（RL1）——未注入时工具 execute 在门控与阈值检查后抛
+// 「后台压缩未接线」（fail-fast，tool.test.ts 覆盖），本文件守住注册点真的注入了。
 //
-// 可区分快照 vs live 的唯一拓扑是 factory 重跑（生产主路径：pi 每次 session 替换
-// newSession/fork/switchSession 都重跑 factory 函数体，loader.ts extensionCache 只缓存
-// factory 函数对象）：同闭包内 fire session_start 后本闭包恒是当前代（isCtxStale 读到
-// false，与快照实现值不可区分）；只有第一代 deps 在第二代 session_start 递增模块级
-// sessionGeneration 后必须翻 true——快照实现在此恒 false，正是生产失效路径。
+// 本文件前身是 G1 deps.isCtxStale live 绑定装配回归：compact_context 纯触发化（U4）后
+// 工具不再持有异步回调（旧 ctx.compact onComplete/onError 路径删除），isCtxStale 过渡
+// 字段随 U5 注入 background 一并退役——代际分诊仅剩事件回调内的 guardStaleCtx 消费
+// （闭包内读变量绑定，天然 live），无快照风险点，故该回归对象消亡、本文件改守注入契约。
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,11 +24,14 @@ vi.mock("@zhushanwen/pi-extension-logger", () => ({
 }));
 
 // 装配捕获：mock tool.js，逐次登记 index.ts 传入的 deps（同 scheduler 捕获 runtime 构造第三参）
+interface CapturedDeps {
+	background?: { isActive: () => boolean; start: (ctx: ExtensionContext, customInstructions?: string) => boolean };
+}
 const { registerCompactContextToolCalls } = vi.hoisted(() => ({
-	registerCompactContextToolCalls: [] as Array<{ deps?: { isCtxStale?: () => boolean } }>,
+	registerCompactContextToolCalls: [] as Array<{ deps?: CapturedDeps }>,
 }));
 vi.mock("../tool.js", () => ({
-	registerCompactContextTool: (_pi: unknown, deps?: { isCtxStale?: () => boolean }) => {
+	registerCompactContextTool: (_pi: unknown, deps?: CapturedDeps) => {
 		registerCompactContextToolCalls.push({ deps });
 	},
 }));
@@ -52,54 +52,49 @@ function createMockPi(): {
 	return { pi, events };
 }
 
-/** 触发 session_start（handler 只更新模块级代数与闭包状态，ctx 不被读取）。 */
+/** 触发 session_start（handler 重建 session 级闭包状态，ctx 仅 seed 用——空 entries 安全）。 */
 function fireSessionStart(events: Map<string, (...args: unknown[]) => void>): void {
 	const sessionStart = events.get("session_start");
 	expect(sessionStart).toBeDefined();
 	sessionStart!({ type: "session_start" }, {} as ExtensionContext);
 }
 
-describe("G1: compact 工具 deps.isCtxStale live 绑定（crash-resilience D1 装配回归）", () => {
+describe("U5: 工具注册 background 契约注入（接线残项落地）", () => {
 	beforeEach(() => {
 		registerCompactContextToolCalls.length = 0;
 	});
 
-	it("factory 同步构造 deps：注入的是函数，首个 session_start 前恒 false（安全默认），fire 后本闭包为当前代", () => {
+	it("deps.background 注入且 isActive/start 均为函数；isCtxStale 过渡字段不再传", () => {
 		const { pi, events } = createMockPi();
 		smartContextExtension(pi);
 		expect(registerCompactContextToolCalls).toHaveLength(1);
-		const isCtxStale = registerCompactContextToolCalls[0]!.deps?.isCtxStale;
-		expect(isCtxStale).toBeTypeOf("function");
+		const background = registerCompactContextToolCalls[0]!.deps?.background;
+		expect(background).toBeDefined();
+		expect(background!.isActive).toBeTypeOf("function");
+		expect(background!.start).toBeTypeOf("function");
+		// 过渡字段退役断言：注册点不得再传 isCtxStale（tool.ts deps 已无该字段）
+		expect("isCtxStale" in (registerCompactContextToolCalls[0]!.deps ?? {})).toBe(false);
 
-		// 首个 session_start 前：无 session，恒 false（安全默认）
-		expect(isCtxStale!()).toBe(false);
-
-		// fire 后本闭包被装配为当前代 → false；同闭包重复 fire（rpc-mode bindExtensions
-		// 重调）后仍为当前代。注意：单闭包拓扑内 live wrapper 与快照实现的返回值同为
-		// false、不可区分——快照 vs live 的回归断言在下方 factory 重跑用例。
+		// 互斥查询可用：装配后（未 fire session_start 亦有初始状态容器）无进行中任务
+		expect(background!.isActive()).toBe(false);
+		// fire 后 controls 仍可用（闭包经 getState 读当前代容器，非快照）
 		fireSessionStart(events);
-		expect(isCtxStale!()).toBe(false);
-		fireSessionStart(events);
-		expect(isCtxStale!()).toBe(false);
+		expect(background!.isActive()).toBe(false);
 	});
 
-	it("factory 重跑：第二次 factory + session_start 后，第一代 deps.isCtxStale 翻 true、第二代 false", () => {
-		// 第一代：独立 factory 执行 + session_start 装配
+	it("factory 重跑（session 替换拓扑）：两代各自拿到独立 controls，均读各自代容器", () => {
 		const first = createMockPi();
 		smartContextExtension(first.pi);
 		fireSessionStart(first.events);
-		const firstIsCtxStale = registerCompactContextToolCalls[0]!.deps!.isCtxStale!;
-		expect(firstIsCtxStale()).toBe(false); // 第一代是当前代
-
-		// 第二代：再次独立执行 factory（模拟 newSession/fork/switchSession 的 factory 重跑，
-		// 新闭包；模块级 sessionGeneration 跨 factory 重跑保留）+ session_start
 		const second = createMockPi();
 		smartContextExtension(second.pi);
 		fireSessionStart(second.events);
 
-		// 核心回归断言：第一代 deps 读到第一代闭包重新赋值后的 isCtxStale，感知换代翻
-		// true（快照实现 = 简写属性 { isCtxStale }，在此恒 false——本用例的回归失败点）
-		expect(firstIsCtxStale()).toBe(true);
-		expect(registerCompactContextToolCalls[1]!.deps!.isCtxStale!()).toBe(false); // 第二代是当前代
+		expect(registerCompactContextToolCalls).toHaveLength(2);
+		const firstBackground = registerCompactContextToolCalls[0]!.deps!.background!;
+		const secondBackground = registerCompactContextToolCalls[1]!.deps!.background!;
+		// 两代 controls 各自可调用且空闲（工厂重跑后旧代任务随旧闭包消亡，isActive 恒 false）
+		expect(firstBackground.isActive()).toBe(false);
+		expect(secondBackground.isActive()).toBe(false);
 	});
 });

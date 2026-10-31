@@ -62,8 +62,8 @@ function makeCtx(): ExtensionContext {
 // ── buildCompactContextSummary ───────────────────────
 
 describe("buildCompactContextSummary", () => {
-	it("恒为 Context compacted（后台执行：返回时压缩未完成，无比例数据）", () => {
-		expect(buildCompactContextSummary()).toBe("Context compacted");
+	it("恒为「后台压缩已启动」（后台执行：返回时任务刚启动，完成语义由完成通知承载）", () => {
+		expect(buildCompactContextSummary()).toBe("后台压缩已启动");
 	});
 });
 
@@ -76,7 +76,7 @@ describe("compact_context execute details.summary", () => {
 		const res = await tools[0]!.execute("t1", {}, undefined, undefined, makeCtx());
 		expect(res.details).toMatchObject({
 			mode: "same-model",
-			summary: "Context compacted",
+			summary: "后台压缩已启动",
 		});
 	});
 });

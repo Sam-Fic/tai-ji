@@ -178,9 +178,10 @@ describe("compact_context 工具（U4 纯触发化：后台任务触发 + 立即
 		const result = await tool.execute("t1", {}, undefined, undefined, makeCtx());
 		const renderTheme = { fg: (_token: string, text: string) => text } as unknown as Theme;
 		const lines = tool.renderResult!(result, { expanded: false }, renderTheme).render(400);
-		// Text.render 按宽度 pad，trim 后断言（折叠态 = details.summary 一行）
+		// Text.render 按宽度 pad，trim 后断言（折叠态 = details.summary 一行；U5 文案：
+		// 工具返回时任务刚启动，「已完成」语义由完成通知承载）
 		expect(lines.length).toBe(1);
-		expect(lines[0].trim()).toBe("Context compacted");
+		expect(lines[0].trim()).toBe("后台压缩已启动");
 	});
 
 	it("countCompactions 只数 compaction entries", () => {

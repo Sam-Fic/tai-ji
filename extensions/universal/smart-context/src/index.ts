@@ -13,6 +13,10 @@
  * - session_tree：仅观测告警（D3 rejected：会话内回退不破坏压缩正确性，不取消）
  * - agent_settled：后台压缩自动触发（D4：触发线/互斥/门控/独立熔断判定内聚 manager）
  *   + 越档检查 + marker 持久化（D15）+ nextTurn 投递一次性提醒（D3/D4①）
+ * - registerCompactContextTool：注入 background 契约（U5——工具路径与自动触发共享
+ *   互斥容器；工具纯触发化后无异步回调，isCtxStale 过渡字段退役）
+ * - 后台任务终局：完成/失败通知经 nextTurn 投递（U5/D6——validated 完成、失败不静默，
+ *   熔断达到阈值并入该条通知；cancelled 事件取消不发）
  * - model_select：跨界通知 + downshift 提醒（D5/D4①）
  *
  * 通知投递路径（D4①，delivery-ownership-kernel）：四类通知全部经 notices.ts 的
@@ -35,12 +39,13 @@ import {
 	type BackgroundCompactionState,
 	type TakeoverState,
 } from "./compact-handler.js";
-import { sendSmartContextNotice } from "./notices.js";
+import { sendSmartContextNotice, buildCompactCompleteNotice, buildCompactFailureNotice } from "./notices.js";
 import { buildDownshiftNotice, buildSwitchNotice, buildThresholdReminder } from "./reminder.js";
 import { registerCompactContextTool } from "./tool.js";
 import {
 	countCompactions,
 	deriveFiredThresholds,
+	estimateTextTokens,
 	findCrossedThresholds,
 	FIRED_ENTRY_CUSTOM_TYPE,
 	getCurrentModelId,
@@ -48,6 +53,7 @@ import {
 	loadSmartContextConfig,
 	type EntryLike,
 } from "./pure.js";
+import type { BackgroundTaskSettlement } from "./compact-handler.js";
 
 /** session 级闭包状态（规范：模块级仅工厂函数，状态在 session_start 重建）。 */
 interface SessionState {
@@ -160,12 +166,61 @@ export default function smartContextExtension(pi: ExtensionAPI): void {
 				state.takeover.inflatedSegments.add(firstKeptEntryId);
 			},
 		});
+
+	// ── 后台压缩终局通知（U5：D6 补偿的呈现半边）──
+	// 每个终局点恰一条通知（cancelled 事件取消不发——D3 取消非失败）：validated → 完成
+	// 通知（压缩前后 token 数与模式）；inflated/dropped/empty/error → 失败通知不静默，
+	// 熔断达到阈值时文案附加「自动触发已暂停」。压缩后 token 口径：estimatedTokensAfter
+	// （pi 原生可填）优先，缺省按「压缩前 − 被压段 + 摘要」估算（chars/4 口径与收缩校验
+	// 同源）。异步收尾时 session 可能已替换——guardStaleCtx 分诊，stale 静默降级。
+	const onBackgroundSettled = (settlement: BackgroundTaskSettlement): void => {
+		if (settlement.outcome === "validated") {
+			const result = settlement.result;
+			if (!result) {
+				debugLog(`compact complete settlement missing result (sessionId=${settlement.sessionId})`);
+				return;
+			}
+			const shadowed = settlement.shadowedTokens ?? 0;
+			const tokensAfter =
+				result.estimatedTokensAfter ?? Math.max(0, result.tokensBefore - shadowed + estimateTextTokens(result.summary));
+			const text = buildCompactCompleteNotice({
+				mode: settlement.mode,
+				tokensBefore: result.tokensBefore,
+				tokensAfter,
+			});
+			debugLog(`compact complete notice queued (sessionId=${settlement.sessionId} tokens=${result.tokensBefore}->${tokensAfter})`);
+			guardStaleCtx(() => {
+				sendSmartContextNotice(pi, text, "compact-complete");
+			}, {
+				isCtxStale,
+				label: "smart-context:compact-complete-notice",
+				onStale: (error) => debugLog(`compact complete notice skipped (stale ctx): ${toErrorMessage(error)}`),
+			});
+			return;
+		}
+		const text = buildCompactFailureNotice({
+			outcome: settlement.outcome,
+			error: settlement.error,
+			failureStreak: settlement.failureStreak,
+			circuitBreakerOpen: settlement.circuitBreakerOpen,
+		});
+		debugLog(`compact failure notice queued (sessionId=${settlement.sessionId} outcome=${settlement.outcome})`);
+		guardStaleCtx(() => {
+			sendSmartContextNotice(pi, text, "compact-failed");
+		}, {
+			isCtxStale,
+			label: "smart-context:compact-failed-notice",
+			onStale: (error) => debugLog(`compact failure notice skipped (stale ctx): ${toErrorMessage(error)}`),
+		});
+	};
+
 	const background = createBackgroundCompactionManager(
 		pi,
 		() => state.background,
 		loadSmartContextConfig,
 		backgroundAfterGeneration,
 		() => state.takeover.inflatedSegments,
+		onBackgroundSettled,
 	);
 
 	pi.on("session_start", (event, ctx) => {
@@ -214,11 +269,13 @@ export default function smartContextExtension(pi: ExtensionAPI): void {
 	});
 
 	// ── 工具注册（常驻，不可用态由 execute 运行时校验拒绝，D5）──
-	// isCtxStale 必须传 live 绑定 wrapper 而非简写属性：本行在 factory 体同步执行，简写
-	// { isCtxStale } 会把此刻的初始 () => false 快照进 deps 对象，上方 session_start
-	// handler 的重新赋值不回写已构造对象 → compact onComplete/onError（E1 实锤崩溃点）
-	// 检查的前置代际检查恒不生效。wrapper 每次调用读闭包当前绑定。
-	registerCompactContextTool(pi, { isCtxStale: () => isCtxStale() });
+	// background 注入（U5 接线残项落地）：isActive/startForTool 与 agent_settled 自动触发
+	// 共享同一 session 级互斥容器（RL1），工具路径跳过触发线与独立熔断（SI5）。
+	// 工具已无异步回调（U4 纯触发化），旧 isCtxStale 过渡字段随注入一并退役——代际
+	// 分诊仅剩事件回调内的 guardStaleCtx 消费（闭包内读变量绑定，天然 live）。
+	registerCompactContextTool(pi, {
+		background: { isActive: background.isActive, start: background.startForTool },
+	});
 
 	// ── 阈值提醒（D3/D4）：agent_settled 越档检查 + marker 持久化 + nextTurn 一次性投递 ──
 	pi.on("agent_settled", (_event, ctx) => {

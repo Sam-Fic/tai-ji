@@ -52,7 +52,7 @@ export interface CompactContextDetails {
 }
 
 /**
- * 后台压缩任务依赖（U4 工具路径接线契约——生产接线单元照此注入实现）。
+ * 后台压缩任务依赖（U4 工具路径接线契约；U5 起由 index.ts 注册点注入生产实装）。
  *
  * 注入的实现必须与 agent_settled 自动触发共享同一 session 级互斥容器
  * （RL1：同一时刻至多一个后台压缩任务在执行），即 compact-handler.ts
@@ -65,18 +65,20 @@ export interface BackgroundCompactionControls {
 	 * 启动后台压缩任务（工具路径 = 显式请求：不做触发线（D4 ratio×窗口）与独立熔断
 	 * （SI5）判定——两者仅约束 agent_settled 自动触发入口）。
 	 * 返回 true = 已启动；false = 已有任务进行中（isActive 与本调用之间竞态窗口的
-	 * 兜底判定，调用方按互斥幂等处理）。
+	 * 兜底判定，调用方按互斥幂等处理）——false 是唯一的互斥语义，非互斥原因不可启动
+	 * （门控拒绝 / 压缩接口探测失败 / 无可压内容）由实现抛错上浮（诚实失败，不谎报幂等）。
 	 * 生成结果不经本调用返回（触发即返回）：完成/失败经通知通道送达（U5）。
 	 */
 	start: (ctx: ExtensionContext, customInstructions?: string) => boolean;
 }
 
 /**
- * 收起态一行摘要。压缩在后台执行，工具返回时无保留比例数据可取——比例数据走完成
- * 通知注入消息，不进本摘要。
+ * 收起态一行摘要（GUI 收起态与 TUI 折叠态共用，经 details.summary 渲染）。
+ * 压缩在后台执行：工具返回时任务刚启动，收起态/历史态语义 = 「后台压缩已启动」；
+ * 「已完成」语义由完成通知承载（U5/D6），比例数据走完成通知不进本摘要。
  */
 export function buildCompactContextSummary(): string {
-	return "Context compacted";
+	return "后台压缩已启动";
 }
 
 /** 工具描述（§3.5：三条件自查引导；条件即纪律，无第三层复述）。压缩在后台执行（U4 纯触发化）。 */
@@ -93,7 +95,8 @@ const TOOL_DESCRIPTION =
  * - gatingProbe(ctx) → { active, modelId }（生产实现：现场读配置判定）
  * - usageProbe(ctx) → { tokens, contextWindow }（生产实现：ctx.getContextUsage()）
  * - getEntries(ctx) → 条目列表（生产实现：ctx.sessionManager.getEntries()）
- * - background：后台任务互斥查询与启动（BackgroundCompactionControls 契约）
+ * - background：后台任务互斥查询与启动（BackgroundCompactionControls 契约；
+ *   U5 起 index.ts 注册点注入生产实装，与自动触发共享互斥容器）
  */
 export function registerCompactContextTool(
 	pi: ExtensionAPI,
@@ -106,13 +109,6 @@ export function registerCompactContextTool(
 		 * 缺失：execute 在门控与阈值检查后抛「后台压缩未接线」错误（fail-fast）。
 		 */
 		background?: BackgroundCompactionControls;
-		/**
-		 * 【过渡兼容字段，当前无消费方】G1 代际检测闭包：后台化后工具不再持有异步
-		 * 回调（旧 ctx.compact onComplete/onError 路径已删除），本字段暂无调用点——
-		 * 保留仅为兼容现有注册点的字面量传参（删除会触发 excess property check
-		 * 编译错）；生产接线单元注入 background 时一并移除。
-		 */
-		isCtxStale?: () => boolean;
 	},
 ): void {
 	const probeGating =

@@ -55,6 +55,7 @@
     "extensions/universal/smart-context/src/__tests__/compact-handler.test.ts",
     "extensions/universal/smart-context/src/__tests__/index-generation.test.ts",
     "extensions/universal/smart-context/src/__tests__/index-reminder-delivery.test.ts",
+    "extensions/universal/smart-context/src/__tests__/notices.test.ts",
     "extensions/universal/smart-context/src/__tests__/pure.test.ts",
     "extensions/universal/smart-context/src/__tests__/reminder.test.ts",
     "extensions/universal/smart-context/src/__tests__/sdk-contract.test.ts",
