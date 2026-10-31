@@ -85,6 +85,11 @@ export function resolveSessionContext(
   if (activeCwd !== undefined && activeCwd !== '') {
     return { kind: 'active', cwd: activeCwd }
   }
+  // [同源登记 dmg-r1-5] 磁盘段 + btw 布局段与 SessionStateQuery 冷读定位链
+  // （session-state-query.ts getState 段 2 / 段 4）同源同参：同走 scanPiSessions({ force: true })
+  // 全扫（冷读链经 findScannedSessionFileById 包装，同一 infra 函数）+ findBtwLineFileByLayout
+  // 布局定位。两链平行实装、判别产物各异（本链出 cwd / btw-line 判别形态；冷读链出
+  // filePath + scannedDirCount 埋点）——重写 G11/M5 换源时两处同步替换，不许只换一链。
   const meta = scanPiSessions({ force: true }).find((s) => s.id === sessionId)
   if (meta !== undefined) {
     return { kind: 'disk', cwd: meta.cwd, filePath: meta.filePath }

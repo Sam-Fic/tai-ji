@@ -194,6 +194,12 @@ export class SessionStateQuery {
    * 为何布局兜底沉到第 4 步：它是对整棵存储树的 O(会话数) 枚举，放在最前会让**每个冷
    * 主会话**都先付这笔成本（而主会话占冷读的绝大多数）；btw 线构造性不在段 1/段 2 的
    * 扫描范围，两段 miss 后兜底寻址结果与旧顺序不变（重启后的线只有本支能寻址）。
+   *
+   * 同源登记（dmg-r1-5）：段 2 / 段 4 与 file-service.ts `resolveSessionContext` 的磁盘段
+   * （`scanPiSessions({ force: true })`，彼链直接 import）+ btw 布局段（`findBtwLineFileByLayout`）
+   * 同源同参（本链经 deps 注入缝取同一 infra 函数）。两链平行实装、判别产物各异（本链
+   * filePath + scannedDirCount 埋点，彼链 cwd / btw-line 判别形态）——重写 G11/M5 换源时
+   * 两处同步替换，不许只换一链。
    */
   async getState(sessionId: string): Promise<SessionStateReply> {
     // ── live 分支：只读实例快照（风险点 1/2）──

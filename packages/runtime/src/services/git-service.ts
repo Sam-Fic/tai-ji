@@ -81,7 +81,7 @@ export class GitService implements IGitService {
     if (resolution.kind === 'btw-line') {
       throw new GitError(
         'btw_line_inactive',
-        `btw 线未在册（runtime 重启窗口内），纯读不支持: ${sessionId}`,
+        `该 btw 线不在册（runtime 重启窗口内），文件/git 操作不支持: ${sessionId}`,
       )
     }
     throw new GitError('session_not_found', `Session 不存在或无 cwd: ${sessionId}`)
