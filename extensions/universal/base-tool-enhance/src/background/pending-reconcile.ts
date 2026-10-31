@@ -1,6 +1,8 @@
 /**
- * session_start pending 对账 + 收殓终态通知补投（M3 §3.5 接入细则第 4 条 +
- * unified-delivery D3 裁决 1 / §5 波 3，设计 .tmp/tech-design/unified-delivery.md）。
+ * session_start pending 对账 + 收殓终态通知补投（M3 session_start 维护链 +
+ * unified-delivery D3 裁决 1 / 波 3；投递统一化设计的现行登记处 = ADR-0074 与
+ * docs/CONTEXT.md「统一投递（unified delivery，v3）」段，语义由本文件头注释
+ * 直接承载，见下）。
  *
  * 职责一（既有）：对「session entries 差集显示 active、但任务已终态」的 bt- 任务补写
  * pending:unregister entry。覆盖三类 otherwise 悬空场景：
@@ -179,7 +181,7 @@ export async function reconcilePendingEntries(
 	return result;
 }
 
-/** 终态判据（§3.5 接入细则 4 原文）：registry 终态，或 active 状态但 pid 已判死。 */
+/** 终态判据：registry 终态，或 active 状态但 pid 已判死。 */
 function isTerminalByRegistry(entry: RegistryEntry): boolean {
 	if (isTerminalState(entry.state)) return true;
 	return isActiveState(entry.state) && !isPidAlive(entry.pid);
@@ -242,8 +244,8 @@ function deliverReapNotifications(
 					display: true,
 				},
 			},
-			// collectKey 债权申报（result-collect 设计 §3.4）：与主链 notify.ts 同款——
-			// 重启后补投的通知条目带键，collect 可收取收殓终态。
+			// collectKey 债权申报（result-collect 域，现行登记处 = ADR-0146）：与主链
+			// notify.ts 同款——重启后补投的通知条目带键，collect 可收取收殓终态。
 			{ collectKey: [entry.taskId] },
 		);
 		if (receipt.kind === "accepted") {
