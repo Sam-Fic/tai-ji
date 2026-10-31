@@ -5791,14 +5791,18 @@
         {
           "kind": "spec",
           "ref": "packages/shared/src/execution/__tests__/s2-diff-tool.test.ts"
+        },
+        {
+          "kind": "spec",
+          "ref": "packages/shared/src/execution/__tests__/baseline.test.ts"
         }
       ],
       "trigger": "on-diff",
       "serial": false,
-      "run": "node scripts/s2-session-entry-diff.mjs --self-check && cd packages/shared && npx vitest run src/execution/__tests__/s2-diff-tool.test.ts",
+      "run": "node scripts/s2-session-entry-diff.mjs --self-check && cd packages/shared && npx vitest run src/execution/__tests__/s2-diff-tool.test.ts src/execution/__tests__/baseline.test.ts",
       "owner": "scripts",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
-      "note": "R2 态（按改动范围触发）：u-m0 交付的 S2 diff 白名单工具防回归面——工具本体或基线清单单源被改坏时本条红（--self-check 覆盖清单读取/增量算法/unknown 判定；测试覆盖黑盒 spawn 与判定语义，该测试文件的 X1 豁免登记见 .githooks/check-test-extremes.mjs——进程语义即被测对象）。真机消费方 = verify-taiji A2 剧本两时点（M3 波次首验），剧本侧届时引用本登记。"
+      "note": "R2 态（按改动范围触发）：u-m0 交付的 S2 diff 白名单工具防回归面——工具本体或基线清单单源被改坏时本条红（--self-check 覆盖清单读取/增量算法/unknown 判定；s2-diff-tool.test.ts 覆盖黑盒 spawn 与判定语义，其 X1 豁免登记见 .githooks/check-test-extremes.mjs——进程语义即被测对象；baseline.test.ts 锁清单内容语义——设计点名写点登记与各规则 verdict/allowIn，防单条写点删除或 verdict 翻转静默漂移）。真机消费方 = verify-taiji A2 剧本两时点（M3 波次首验），剧本侧届时引用本登记。"
     }
   ]
 }
