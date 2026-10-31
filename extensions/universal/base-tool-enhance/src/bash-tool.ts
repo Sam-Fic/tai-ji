@@ -260,8 +260,9 @@ export function parsePidFile(pidfilePath: string): { pid?: number } {
 			const pid = toPid(parsed.pid);
 			if (pid !== undefined) return { pid };
 		}
-	} catch {
-		// JSON 损坏 → {}（协议防御路径）
+	} catch (err) {
+		// JSON 损坏 → {}（协议防御路径）；warn 留痕（taste/no-silent-catch）
+		logger.warn(`[bash-tool] fg-wrap marker 解析失败，按缺失处理: ${String(err)}`)
 	}
 	return {};
 }

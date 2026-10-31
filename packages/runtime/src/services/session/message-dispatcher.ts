@@ -99,6 +99,8 @@ export const ABORT_UPGRADE_WINDOW_MS = 10_000
  * export 供测试（SR6）。
  */
 export const AUTO_RECOVER_DELAY_MS = 1_000
+/** 秒 ↔ 毫秒换算（日志可读化换算用，no-magic-numbers）。 */
+const MS_PER_SECOND = 1_000
 export const AUTO_RECOVER_MAX_ATTEMPTS = 2
 
 /** sample 取证 execFile 的超时上限（sample 本体 2s 采样 + 启动/落盘余量）。 */
@@ -835,16 +837,19 @@ export class MessageDispatcher {
             // 静默判死文案，第 1 层探测判死回落 STALL_REASON_HINT（RL13 失败 warn 降级）。
             await port.injectReasonHint(sessionId, reasonHint ?? STALL_REASON_HINT)
           } catch (e) {
+            // best-effort 降级：恢复已完成、注入失败不回滚恢复（RL13 warn 降级路径）
             console.warn(`[message-dispatcher] reason hint injection failed (non-blocking, recovery already done), sid=${sessionId}:`, toErrorMessage(e))
           }
           return
         } catch (e) {
+          // best-effort 降级：单次恢复失败重试下一轮（上限 AUTO_RECOVER_MAX_ATTEMPTS，耗尽走死亡发声）
           console.error(`[message-dispatcher] auto-recovery attempt ${attempt}/${AUTO_RECOVER_MAX_ATTEMPTS} failed, sid=${sessionId}:`, toErrorMessage(e))
         }
       }
       console.error(`[message-dispatcher] auto-recovery exhausted (${AUTO_RECOVER_MAX_ATTEMPTS} attempts) — degrading to death announcement + manual reopen, sid=${sessionId}`)
       port.reportDeath(sessionId)
     } catch (e) {
+      // best-effort 降级：恢复链整体异常不向调用方传播（判死强杀已终局，会话已回 idle 态）
       console.error(`[message-dispatcher] auto-recovery chain escaped (sessionId=${sessionId}):`, e)
     }
   }
@@ -863,7 +868,7 @@ export class MessageDispatcher {
    */
   async handleSilenceJudgeDetermination(sessionId: string, payload: StallJudgePayload): Promise<void> {
     console.warn(
-      `[message-dispatcher] silence judge determination: auto-aborting stalled turn (silent=${Math.round(payload.silentMs / 1_000)}s, phase=${payload.phase}), sid=${sessionId}`,
+      `[message-dispatcher] silence judge determination: auto-aborting stalled turn (silent=${Math.round(payload.silentMs / MS_PER_SECOND)}s, phase=${payload.phase}), sid=${sessionId}`,
     )
     await this.abort(sessionId, 'stall_auto', { reasonHint: composeStallJudgeHintText(payload) })
   }

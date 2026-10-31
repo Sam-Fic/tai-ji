@@ -764,23 +764,23 @@ export class EventInterpreter {
       pingPi: opts.pingPi,
       onSilentAbort: opts.onSilentAbort
         ? (payload) => {
-            // [pi-stall-detection U4] 第 1 层判定接管：探测判死（进程死/事件循环挂死）后
-            // 第 2 层静默矩阵退出（该会话的终止编排已由自动处置链接管，静默计时/提示失去
-            // 消费对象）。矩阵 stop 幂等，先于处置链执行（处置链内部 destroy → detach →
-            // dispose 亦兜底停止）。
-            this.silence?.stop()
-            opts.onSilentAbort?.(payload)
-          }
+          // [pi-stall-detection U4] 第 1 层判定接管：探测判死（进程死/事件循环挂死）后
+          // 第 2 层静默矩阵退出（该会话的终止编排已由自动处置链接管，静默计时/提示失去
+          // 消费对象）。矩阵 stop 幂等，先于处置链执行（处置链内部 destroy → detach →
+          // dispose 亦兜底停止）。
+          this.silence?.stop()
+          opts.onSilentAbort?.(payload)
+        }
         : undefined,
     })
     // [pi-stall-detection U4] 静默判定矩阵（同域协作对象；未装配 = null——存量测试零改动）。
     this.silence = opts.stallMatrix
       ? new SilenceMatrix({
-          sessionId,
-          send: opts.send,
-          configSnapshot: opts.stallMatrix.configSnapshot,
-          onJudge: opts.stallMatrix.onJudge,
-        })
+        sessionId,
+        send: opts.send,
+        configSnapshot: opts.stallMatrix.configSnapshot,
+        onJudge: opts.stallMatrix.onJudge,
+      })
       : null
     // [pi-stall-detection D4] 登记探测循环查找通道：受理出站边沿启动
     //（startPingProbeFromDeliveryEdge）与收回 idle 边沿停止（转移原语单点）经本表到达。

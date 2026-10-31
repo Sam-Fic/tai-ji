@@ -81,8 +81,13 @@ export interface SilenceThresholds { // oe-exempt:20261101:framework:静默判�
  * summarization backoff 窗不进本覆盖公式（retry.ts 退避上界是用户可配置项非设计内常量），
  * 由 summarization_retry_scheduled 载荷 delayMs 豁免承担（RL11）。
  */
+/** 秒 ↔ 毫秒换算（no-magic-numbers）。 */
+const MS_PER_SECOND = 1_000
+/** 分钟 ↔ 毫秒换算（no-magic-numbers）。 */
+const MS_PER_MINUTE = 60_000
+
 export function deriveSilenceThresholds(idleBackgroundSec: number): SilenceThresholds {
-  const judgeMs = (idleBackgroundSec + MODEL_WINDOW_FALLBACK_MS / 1_000) * 1_000
+  const judgeMs = (idleBackgroundSec + MODEL_WINDOW_FALLBACK_MS / MS_PER_SECOND) * MS_PER_SECOND
   return { judgeMs, hintMs: judgeMs - SILENCE_HINT_LEAD_MS }
 }
 
@@ -236,8 +241,8 @@ function readMcpMaxTimeoutMs(cwd: string | undefined): number | null {
   let max: number | null = null
   for (const entry of effective.values()) {
     if (entry['enabled'] === false) continue
-    const timeoutSec = readFiniteNumber(entry['timeout'], Number.EPSILON) ?? DEFAULT_MCP_TIMEOUT_MS / 1_000
-    const ms = timeoutSec * 1_000
+    const timeoutSec = readFiniteNumber(entry['timeout'], Number.EPSILON) ?? DEFAULT_MCP_TIMEOUT_MS / MS_PER_SECOND
+    const ms = timeoutSec * MS_PER_SECOND
     if (max === null || ms > max) max = ms
   }
   return max
@@ -408,7 +413,7 @@ export function describeStallPhase(phase: StallPhase): string {
  * 循环带着死因上下文继续）。[runtime] 前缀对齐 U2 STALL_REASON_HINT 形态。
  */
 export function composeStallJudgeHintText(payload: StallJudgePayload): string {
-  const minutes = Math.round(payload.silentMs / 60_000)
+  const minutes = Math.round(payload.silentMs / MS_PER_MINUTE)
   return (
     `[runtime] 上一回合已静默约 ${minutes} 分钟（最后活动阶段：${describeStallPhase(payload.phase)}），` +
     '超过判定阈值且无在途信号、无豁免锚点，已被自动终止；会话保持可用。' +
