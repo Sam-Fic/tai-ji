@@ -70,6 +70,8 @@ const RUN_ID_PATTERN = /^[\w-]{1,128}$/
  * session 定位锚透传形态（调用方已持有 session meta 时随查询传入）。布局反转后
  * 两域目录都由分区键（sessionId）直接派生（[session-store-layout-inversion D2/D3]），
  * 本锚不再是查询的定位必需项——保留形参 = 调用方透传链不变（窄口契约稳定）。
+ * 退役时点与删除次序随下方 ModelOverrideQuery 窄口注释登记（随透传链同步波次
+ * 编译器驱动删除）。
  */
 export interface SessionMetaRef {
   cwd?: string
@@ -79,7 +81,12 @@ export interface SessionMetaRef {
 /** modelOverrideQuery 窄口（session-records deps / workflow-record-projection 入参同形；
  *  覆盖状态查询的唯一入口——切换网关不承载查询，M1-3 收敛）。resolved 仅为透传链
  *  契约稳定保留（additive 可选参）：两域目录均由 sessionId 直接派生（布局反转终态），
- *  实装不消费该锚——getRecordOverride 形参忽略（_resolved）、getRunOverride 无第三参。 */
+ *  实装不消费该锚——getRecordOverride 形参忽略（_resolved）、getRunOverride 无第三参。
+ *  退役时点（过渡设计须有时点）：随透传链消费点（session-records 增强链 /
+ *  workflow-record-projection 入参的 resolved 形参与锚构造）同步退役的波次删除——
+ *  届时先删透传链侧形参与锚构造，TS 编译器按实装签名不匹配揪出本接口两方法第三参
+ *  及 SessionMetaRef 残留 import，同波次编译器驱动一并清删；不单侧先行删参
+ *  （透传链仍在传参 = 立即编译失败，必须消费点同步改动）。 */
 export interface ModelOverrideQuery {
   getRecordOverride(sessionId: string, recordId: string, resolved?: SessionMetaRef): SubagentModelOverrideStatus | undefined
   getRunOverride(sessionId: string, runId: string, resolved?: SessionMetaRef): SubagentModelOverrideStatus | undefined
