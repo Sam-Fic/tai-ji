@@ -20,9 +20,12 @@ import { taijiTestConfig, GLOBAL_SETUP_PATH, guardProjectSetup } from '../../../
 //   存量池接入 guard 是独立单元的工作，不在本配置内打折处理；globalSetup 层（env 固定 +
 //   真实数据目录 fail-fast）对 legacy 池仍生效。
 // - live：TAIJI_E2E_UPDATER 手动门资产（test/updater.e2e.test.ts，mac 真链三段：真
-//   hdiutil/ditto/bash 全链、env 未设时整段 skip）。独立成池使全量门禁可用
-//   --project '!live' 排除（env 未设时收集即 skip 的 14 条计数不再进全量输出；显式
-//   路径 / E2E 档全文件跑不受影响——legacy 池已 exclude 该文件防跨池重复收集）。
+//   hdiutil/ditto/bash 全链、env 未设时整段 skip）。独立成池使全量跑可用
+//   --project '!live' 手动排除（legacy 池已 exclude 该文件防跨池重复收集，显式
+//   路径 / E2E 档全文件跑不受影响）。注意全量入口 test:main 脚本当前未接该旗标：
+//   test:main 也是带文件参数真跑 live 资产的唯一正确入口（vitest 直跑因 config
+//   上浮 no tests found，见 TEST-STRATEGY.md），接旗标会把该入口堵死，故 env 未设时
+//   收集即 skip 的 14 条计数仍进全量输出（零 skip 需入口结构另行分流后才可兑现）。
 //   隔离语义对齐 legacy 池（默认每文件新 worker，无 fs-guard——E2E 段全程只在
 //   mkdtemp tmpdir 与 HFS+ 小容量镜像上操作，无真实数据目录触点）；root 级
 //   globalSetup 对本池生效（env 钉 tmp + 真实数据目录 fail-fast 属环境防线，
@@ -86,8 +89,8 @@ export default taijiTestConfig({
       },
       {
         test: {
-          // live 池：TAIJI_E2E_UPDATER 手动门资产（E2E 档，CI 不跑；全量门禁以
-          // --project '!live' 排除本池，见文件头 live 池契约注释）
+          // live 池：TAIJI_E2E_UPDATER 手动门资产（E2E 档，CI 不跑；全量入口未接
+          // --project '!live' 排除旗标，见文件头 live 池契约注释）
           name: 'live',
           include: ['test/updater.e2e.test.ts'],
         },

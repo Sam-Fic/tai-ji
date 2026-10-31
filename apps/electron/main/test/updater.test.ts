@@ -8,7 +8,8 @@
 //
 // 池分离（live 池拆分）：TAIJI_E2E_UPDATER 门控的 mac 真链三段（端到端 / 中断注入 /
 // 磁盘满 P10，14 用例）已整段保形迁移到 test/updater.e2e.test.ts（独立 live 池，全量
-// 门禁以 --project '!live' 排除；e2e-map 登记 = E2E-UPDATER-01）。本文件保留
+// 跑可手动以 --project '!live' 排除、当前全量入口未接该旗标；e2e-map 登记 =
+// E2E-UPDATER-01）。本文件保留
 // INTEGRATION 档快用例 21 个（bash 语法检查 3 + linux mv 4 + CLI 工具 2 + mock 模板
 // 断言 12；e2e-map 登记 = E2E-INTEG-53）。
 
