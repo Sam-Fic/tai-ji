@@ -11,7 +11,13 @@
  * 从 session-file-utils.ts 拆出（max-lines 预算，先例 session-residue-cleanup.ts）：
  * 版本防御是独立概念，无 JSONL 解析依赖。
  *
- * 实测版本形态：pi 1.0.0 现行写 3，历史文件 1 在档可读（~/.pi 会话目录抽样）。
+ * pi 侧行为锚（ADR-0063 I4；机器登记 docs/pi-semantics.json PS-92，pi 升级经 C-proc-08
+ * 版本门禁强制重验；pi@1.0.0 dist/core/session-manager.js 实装实测）：写侧恒写 3——
+ * CURRENT_SESSION_VERSION = 3（:11），newSession 首建 / createBranchedSession branch 换文件 /
+ * forkFrom fork 换 cwd 三处 header 构造统一引用该常量；读侧历史文件兼容——加载期
+ * migrateToCurrentVersion 把 v1/v2 级联迁移到 3（迁移发生即 _rewriteFile），纯读
+ * loadEntriesFromFile 无版本校验直读。~/.pi 会话目录抽样与源码锚一致（现行文件 3、
+ * 历史文件 1）。
  */
 
 /** 已认识的 pi 会话 header 最高格式版本。高于此值 = 未来 pi 升级产物，字段语义未经验证。 */

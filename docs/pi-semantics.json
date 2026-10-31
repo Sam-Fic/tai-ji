@@ -1979,5 +1979,28 @@
       "note": "消费方（C-ext-05 direct 常驻全集，2026-10-23 ADR-0136 重划终态）：goal_control（extensions/universal/goal）、schedule / schedule_control（extensions/universal/scheduler）、compact_context（extensions/universal/smart-context）、create_managed_session（extensions/universal/session-manager，direct 档经 registerSessionTool 条件展开不写字段）、plan（extensions/universal/plan）、workflow-script / subagent_batch（extensions/universal/subagent-workflow）的注册断言与 JSDoc 注释。与 PS-79 分工：PS-79 登记 ToolExposure 五档分级与 setActiveTools 声明语义，本条登记「缺字段 = direct 缺省」本身。pi 升级时重验：grep dist/core/agent-session.js '_getToolExposure'（?? 兜底值是否仍为 direct）+ types.d.ts exposure 注释 Default 值是否漂移"
     },
     "verifiedWith": "1.0.0"
+  },
+  {
+    "id": "PS-92",
+    "claim": "pi 会话 header 首行 version 字段现行恒写 3：CURRENT_SESSION_VERSION = 3（session-manager.js 模块常量），全部三处 header 构造点统一引用该常量——newSession 首建首写（header 为文件首行）/ createBranchedSession branch 换新文件 / forkFrom fork 换 cwd 新文件（writeFileSync wx 首行直写）；读侧历史版本兼容：加载期 migrateToCurrentVersion 按 header.version（缺省视为 1）级联迁移 v1→v2→v3 后 _rewriteFile 重写，纯读 loadEntriesFromFile 无版本校验直读。taiji 侧 MAX_KNOWN_SESSION_HEADER_VERSION = 3（packages/runtime/src/infra/pi/session-header-version.ts，startup 设计 §7.2 版本防御）以本条为 pi 侧行为锚：高于 3 = 未来 pi 升级产物、字段语义未经验证",
+    "piAnchor": [
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/session-manager.js",
+        "symbol": "CURRENT_SESSION_VERSION / 三处 header 构造",
+        "note": ":11 export const CURRENT_SESSION_VERSION = 3；:697-705 newSession 首建 header（:705 fileEntries = [header]，文件首行）；:1242-1249 createBranchedSession header；:1398-1406 forkFrom newHeader + writeFileSync 首行直写——三处统一 version: CURRENT_SESSION_VERSION【行号锚基于 pi@1.0.0 实装实测】"
+      },
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/session-manager.js",
+        "symbol": "migrateToCurrentVersion / _loadEntries / loadEntriesFromFile",
+        "note": ":75-85 —— :77 header?.version ?? 1、:80-83 version<2 → migrateV1ToV2（:31-54）、version<3 → migrateV2ToV3（:56-70，in place 抬到 3）；:722-723 _loadEntries 迁移发生即 _rewriteFile；:325 loadEntriesFromFile 纯读无版本校验【行号锚基于 pi@1.0.0 实装实测】"
+      }
+    ],
+    "guard": {
+      "type": "observe",
+      "note": "消费方：packages/runtime/src/infra/pi/session-header-version.ts 的 MAX_KNOWN_SESSION_HEADER_VERSION = 3（高于已知最高版本的未知 header 告警计数，模块头注锚本条；解析入口 session-file-utils parseSessionHeader 宽松解析、版本未知不拒读）。pi 升级时重验：grep dist/core/session-manager.js 'CURRENT_SESSION_VERSION'（常量值是否仍为 3、header 构造点是否仍统一引用）+ migrateToCurrentVersion 是否仍兼容 v1/v2 在档历史文件"
+    },
+    "verifiedWith": "1.0.0"
   }
 ]
