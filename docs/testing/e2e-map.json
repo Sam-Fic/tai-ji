@@ -2841,6 +2841,10 @@
         {
           "kind": "spec",
           "ref": "packages/runtime/src/services/session/__tests__/session-projection-bundle.test.ts"
+        },
+        {
+          "kind": "spec",
+          "ref": "packages/runtime/src/services/session/__tests__/delivery-resync-crash-retry.test.ts"
         }
       ],
       "trigger": "on-diff",
@@ -5772,7 +5776,7 @@
       "run": "node scripts/check-testid-parity.mjs && node scripts/check-shared-module-admission.mjs && node scripts/check-test-typecheck-coverage.mjs && pnpm exec vitest run scripts/__tests__/check-testid-parity.test.mjs scripts/__tests__/check-test-typecheck-coverage.test.mjs scripts/__tests__/check-shared-module-admission.test.mjs scripts/__tests__/run-affected-e2e-ci.test.mjs",
       "owner": "scripts",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
-      "note": "R2 态（按改动范围触发）：u-foundation 三红灯与准入检查的防回归面——检查本体被改坏（对账语义退化/豁免登记失守）时本条红。日常 CI 承载 = ci.yml invariants（testid-parity / shared-admission 步骤）与 typecheck（coverage 对账步骤）+ scripts-guards 测试步骤（四测试文件已列举）；select-affected-e2e.mjs 的 --json 出口改动由既有 E2E-PIPE-04 / E2E-ZCODE-01 族资产测试覆盖其纯函数（toJsonPayload 用例在 select-affected-e2e.test.mjs，该文件已在 E2E-PIPE-04 登记）。typecheck 覆盖检查跑两遍 vue-tsc 属重检查——重检查为检查器防回归所需（检查器本体改动时验证其仍工作），与 CI typecheck job 常驻步骤同体检重复可接受。"
+      "note": "R2 态（按改动范围触发）：u-foundation 三红灯与准入检查的防回归面——检查本体被改坏（对账语义退化/豁免登记失守）时本条红。消费口径 = on-diff × L1（CI 执行消费者 = ci.yml e2e-on-diff job / scripts/run-affected-e2e-ci.mjs），CI 可执行性按本表 ci 字段登记。日常 CI 承载 = ci.yml invariants（testid-parity / shared-admission 步骤）与 typecheck（coverage 对账步骤）+ scripts-guards 测试步骤（四测试文件已列举）；select-affected-e2e.mjs 的 --json 出口改动由既有 E2E-PIPE-04 / E2E-ZCODE-01 族资产测试覆盖其纯函数（toJsonPayload 用例在 select-affected-e2e.test.mjs，该文件已在 E2E-PIPE-04 登记）。typecheck 覆盖检查跑两遍 vue-tsc 属重检查——重检查为检查器防回归所需（检查器本体改动时验证其仍工作），与 CI typecheck job 常驻步骤同体检重复可接受。"
     },
     {
       "id": "E2E-S2DIFF-01",

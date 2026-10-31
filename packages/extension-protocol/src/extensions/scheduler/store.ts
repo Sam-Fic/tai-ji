@@ -1,10 +1,11 @@
-// scheduler 任务库快照文件（scheduler-redesign 方案 B：任务库与会话事实分离）。
+// scheduler 任务库快照文件（scheduler-redesign 方案 B：任务库与会话事实分离；
+// 方案 B 设计原文未归档，裁决内容与背景以 commit 73073b169 message 为溯源锚）。
 //
 // 任务定义与调度记账不再写进 pi 会话 JSONL（custom entry event sourcing 已整体退役），
 // 改为独立 JSON 快照：按 owner sessionId 分片、存 pi agentDir、原子替换写
 // （tmp + rename）。会话 JSONL 只剩 dispatch 注入消息与用户对话。
 //
-// 分片键 = sessionId 的理由（设计 §4.3）：
+// 分片键 = sessionId 的理由：
 // - 单写者免费获得：同一 session 同一时刻只有一个 pi 进程，分片文件天然无并发写；
 // - resume 同 sessionId → 同文件直接恢复；fork 新 sessionId → 分片不存在 → 空任务集
 //   （等价旧 fork owner 过滤语义，实现从过滤逻辑降为「不同文件天然不共享」）；
@@ -39,7 +40,8 @@ export type SchedulerStoreRead =
   | { kind: 'missing' }
   | { kind: 'corrupt'; renamedTo: string }
 
-/** 读写选项：降级日志注入点（包内零 logger 依赖，与 ReplayFoldOptions.warn 先例同构）。 */
+/** 读写选项：降级日志 warn 注入点（包内零 logger 依赖；同构先例 = replay 折叠链的
+ *  ReplayFoldOptions.warn——该链已随方案 B 落地整体退役，见 commit 73073b169 删除的 replay.ts）。 */
 export type SchedulerStoreOptions = {
   warn?: (message: string, context?: unknown) => void
 }
@@ -78,10 +80,10 @@ function toStoreTask(task: ScheduledTask): ScheduledTask {
 }
 
 /**
- * 读快照：一次 JSON.parse（设计 §4.5——「读一个文件重建任务集」，重放折叠 / fork owner
+ * 读快照：一次 JSON.parse 读整个文件重建任务集（无重放折叠——重放折叠 / fork owner
  * 过滤 / 活跃路径裁剪三件套已随 event sourcing 退役）。
  *
- * 失败语义（设计 §4.3）：
+ * 失败语义：
  * - ENOENT → `missing`（空任务集正常路径）
  * - 解析/形状失败 → 改名 `.corrupt-<ts>` 留证 + 返回 `corrupt`（调用方按空任务集继续，
  *   调度不中断——与旧「恢复失败显式降级」语义一致）；改名自身失败（只读卷等）不抛，

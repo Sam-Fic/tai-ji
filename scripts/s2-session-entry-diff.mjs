@@ -331,14 +331,21 @@ function synthesizeEntryForRule(rule) {
   return { type: "custom", customType, ...(dataType === undefined ? {} : { data: { type: dataType } }) };
 }
 
-function selfCheck() {
+function selfCheck(baselinePath = DEFAULT_BASELINE_PATH) {
   const failures = [];
   const check = (name, condition, detail) => {
     if (!condition) failures.push(`${name}${detail ? `：${detail}` : ""}`);
     console.log(`  [${condition ? "PASS" : "FAIL"}] ${name}${condition || !detail ? "" : ` — ${detail}`}`);
   };
 
-  const baseline = loadBaseline();
+  let baseline;
+  try {
+    baseline = loadBaseline(baselinePath);
+  } catch (err) {
+    console.error(`[s2-session-entry-diff] self-check 无法加载白名单清单（${baselinePath}）：${err instanceof Error ? err.message : String(err)}`);
+    console.error("  恢复动作：核对清单文件存在与 JSON 结构（单源路径见 --help），或用 --baseline 指定可用清单后重跑。");
+    return 2;
+  }
   check("白名单清单结构合法且可运行时加载", true);
 
   const allowRule = baseline.rules.find(
@@ -431,7 +438,7 @@ function selfCheck() {
 
   if (failures.length > 0) {
     console.error(`[s2-session-entry-diff] self-check FAIL（${failures.length} 项）`);
-    return 1;
+    return 2;
   }
   console.log("[s2-session-entry-diff] self-check PASS");
   return 0;
@@ -489,7 +496,7 @@ export function main(argv) {
     printHelp();
     return 0;
   }
-  if (parsed.flags.has("--self-check")) return selfCheck();
+  if (parsed.flags.has("--self-check")) return selfCheck(parsed.values["--baseline"]);
 
   const beforePath = parsed.values["--before"];
   const afterPath = parsed.values["--after"];

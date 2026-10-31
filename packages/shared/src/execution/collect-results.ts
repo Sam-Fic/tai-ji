@@ -72,7 +72,9 @@ export interface CollectKeyError { // oe-exempt:20261031:framework:执行域跨�
 /**
  * 执行域已知键集（由 M3 工具视图从执行快照 + 通知缓存派生；四集合语义互斥）：
  * - active：非终局的 run / 有在途轮次的 member → 进等待集；
- * - ready：已终局且有结果工件、通知尚未 collected → 立即进 collected（并回写 notice.collect）；
+ * - ready：已终局且有结果工件、通知已 delivered 且未 collected（状态机 collected 仅可由
+ *   delivered 进入，见 notice.ts NOTICE_STATUS_TRANSITIONS）→ 立即进 collected（并回写
+ *   notice.collect）；
  *   通知 abandoned 的键不在此列——归 nonCollectable（对齐 notice.ts isNoticeOutOfCollectSet：
  *   abandoned 在缓存中呈其终态、不进等待与收集集），不得进 ready/collected；
  * - collected：通知已 collected → 进 collected（幂等返回其快照）；
@@ -98,7 +100,8 @@ export interface CollectRoutingInput { // oe-exempt:20261031:framework:执行域
   pendingKnown: readonly string[]
 }
 
-/** 分路结果（三桶 + 两路等待子集；waitKeys 是两路并集）。 */
+/** 分路结果（collected/errors 两桶 + 两路等待子集；waitKeys 是两路并集；stillOpen 无字段——
+ *  于等待解除时由等待集按当时状态派生，属 M3 工具视图）。 */
 export interface CollectRouting { // oe-exempt:20261031:framework:执行域跨包协议契约（shared 单源 ports 层，实现随 u-m1/u-m2/u-m3 波次落地）
   collected: string[]
   /** 执行域路等待键（S15 ④ 判据：与 pendingWait 并集共享单一 timeout）。 */

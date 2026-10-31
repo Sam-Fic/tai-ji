@@ -99,8 +99,7 @@ export interface SchedulerBackendCtx {
  *
  * storeFilePath 由装配点（index.ts session_start）经 schedulerStoreFilePath(
  * getAgentDir(), ctx.cwd, sessionId) 推导后注入——backend 不持有路径推导知识，
- * 测试注入临时目录路径即可全行为覆盖（设计 §6.2「TaskStore 是纯 FS 模块，注入
- * 路径即可测」）。
+ * 测试注入临时目录路径即可全行为覆盖（TaskStore 是纯 FS 模块，注入路径即可测）。
  */
 export class PiSchedulerBackend implements SchedulerBackend {
   private ctx: SchedulerBackendCtx

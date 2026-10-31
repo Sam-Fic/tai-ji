@@ -28,7 +28,9 @@ export interface ManifestRecord {
    * cancelled 保持独立（用户取消语义）。crashed 不进 manifest——
    * crashed 曾是重启重建时的派生态，随永久会话模型 §3.2.4 重建单规则退役
    *（磁盘重建恒 idle，无派生终态）。
-   * 历史 "error"/"completed"/"failed" 值由读侧 mapManifestStatus 向后兼容映射。
+   * 历史 "completed"/"failed" 由读侧 mapManifestStatus 映射 idle；历史 "error" 不兼容——
+   * isValidManifest 守卫即拒收（VALID_MANIFEST_STATUSES 不含 error），即使到达读侧
+   * mapManifestStatus 亦返回 null 跳过（按数据损坏处理，见 record-store-rebuild.ts）。
    */
   status: "running" | "closed" | "cancelled";
   /**

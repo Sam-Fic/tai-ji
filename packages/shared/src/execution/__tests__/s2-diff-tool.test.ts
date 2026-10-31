@@ -201,6 +201,60 @@ describe('scope 判定', () => {
   })
 })
 
+describe('pending:unregister dataType 推导（注销条目无 type，由同文件 register id→type 映射补齐）', () => {
+  it('workflow 类注销：同文件 register 推导出 workflow → 判违规（M3-5 注销侧判据）', () => {
+    const before = path.join(workDir, 'unreg-wf-before.jsonl')
+    const after = path.join(workDir, 'unreg-wf-after.jsonl')
+    writeJsonl(before, [workflowPendingEntry])
+    writeJsonl(after, [
+      workflowPendingEntry,
+      {
+        id: 'wf-unreg-1',
+        type: 'custom',
+        customType: 'pending:unregister',
+        data: { id: 'wf-pending-1', reason: 'settled', status: 'collected' },
+      },
+    ])
+    const result = runTool(['--before', before, '--after', after])
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain('rule=pending-unregister-execution')
+    expect(result.stdout).toContain('reason=forbidden')
+  })
+
+  it('bash 类注销：同文件 register 推导出 bash → 域外放行', () => {
+    const before = path.join(workDir, 'unreg-bash-before.jsonl')
+    const after = path.join(workDir, 'unreg-bash-after.jsonl')
+    writeJsonl(before, [bashPendingEntry])
+    writeJsonl(after, [
+      bashPendingEntry,
+      {
+        id: 'bash-unreg-1',
+        type: 'custom',
+        customType: 'pending:unregister',
+        data: { id: 'bash-1', reason: 'settled', status: 'collected' },
+      },
+    ])
+    const result = runTool(['--before', before, '--after', after])
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('rule=pending-unregister-domain-external')
+  })
+
+  it('注销条目同文件无 register 源：推导失败走 unknown → 判违规', () => {
+    const after = path.join(workDir, 'unreg-ghost-after.jsonl')
+    writeJsonl(after, [
+      {
+        id: 'ghost-unreg-1',
+        type: 'custom',
+        customType: 'pending:unregister',
+        data: { id: 'ghost-1', reason: 'settled', status: 'collected' },
+      },
+    ])
+    const result = runTool(['--before', emptyBefore, '--after', after])
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain('unknown')
+  })
+})
+
 describe('机器可读输出与输入错误', () => {
   it('--json 输出结构化报告（ok / counts / violations）', () => {
     const result = runTool(['--before', emptyBefore, '--after', afterForbidden, '--json'])
