@@ -6,8 +6,10 @@
  * 不再是父子关系，无人回收——挂住的 pi 持有 API key、长 turn 继续烧 token（失败模式 F）。
  * pi 自身的 stdin-EOF 自杀链有两个挂起点（dispose handler 串行 await 无超时 /
  * flushRawStdout 遇 EPIPE throw 跳过 exit），均在 pi 源码侧、taiji 不可修，因此需要不依赖
- * 父进程存活的自救兜底：新 runtime 启动后延迟数秒（调用方控制，见
- * startup-background-init.ts 的 5s 定时器）扫描并回收残留 pi。
+ * 父进程存活的自救兜底：新 runtime 启动后由 startup-background-init.ts 的
+ * scheduleOrphanReapChain 立即调度收殓（原 5s 延迟窗已随 ADR-0122 退役——判据
+ * argv/ppid=1 事实化后不误杀本 runtime 的子进程，时间窗属纯保险；退役登记见
+ * 本文件尾部退役段与 startup-background-init.ts 函数体注释）。
  *
  * 孤儿判据沿革（argv，跨平台统一）：
  * - env 判据（PI_CODING_AGENT_DIR，D4a 原案）被本机探针在案否决：macOS 的 `ps eww` 与
@@ -20,7 +22,10 @@
  *   ① `--mode rpc`（防误杀用户手跑的交互式 pi）；
  *   ② argv 含 `--no-extensions`——主判别位：taiji spawn 恒带（pi-rpc
  *      buildPiMainAgentArgs 首行，U1 收敛后 rpc-client 经公共包构造），用户裸 pi 与
- *      AGENTS.md 实测命令模板均不带，机器可判的硬分界；
+ *      AGENTS.md 实测命令模板均不带，机器可判的硬分界。已知例外（2026-10-31 终态同步
+ *      补登）：btw fork bootstrap 一次性进程（btw-fork-exec.ts 硬编码 argv）不带该
+ *      flag——判据②不命中即不在收割射程（fail-safe 方向：只漏收不误杀；该例外是否
+ *      收编 spawn 常量单源属 btw 域裁决，见该文件）；
  *   ③ argv 中任一 `--extension`/`--skill` 值与 spawn 清单中某项精确相等。清单 =
  *      `<dataDir>/run/pi-spawn-markers.json`（写侧 spawn-markers.ts，每次 spawn 全量
  *      覆盖写，仅登记 taiji staged 专属路径；用户配置来源 ~/.pi/、项目 .pi/、~/.agents/
@@ -86,7 +91,7 @@ import { redactArgvLine } from '../infra/pi/argv-redact.js'
  * argv 对应字段）。writer 以 spread 序列化，扩展字段原样落盘 JSONL。
  */
 
-// ADR-0112 退役登记（2026-10-05）：本模块原三时间机制已删——①PS_TIMEOUT_MS 10s
+// ADR-0122 退役登记（2026-10-05）：本模块原三时间机制已删——①PS_TIMEOUT_MS 10s
 // （ps 枚举墙钟）；②ORPHAN_KILL_GRACE_MS 2s（SIGTERM 优雅退出宽限，删后 SIGTERM 成死
 // 信号，杀链收敛为 SIGKILL 直杀，推翻 crash-forensics 附录 E kill 族 grace 背书）；
 // ③ORPHAN_REAP_DELAY_MS 5s（启动延迟窗——判据 argv/ppid=1 事实化，不误杀新 runtime
@@ -204,7 +209,9 @@ const MARKER_FLAGS = [PI_SPAWN_EXTENSION_FLAG, PI_SPAWN_SKILL_FLAG] as const
  * ① `--mode rpc`：必要条件——用户在终端手工跑的交互式 pi 不带它，没有这条会误杀
  *   用户自己的调试进程；
  * ② argv 含独立 token `--no-extensions`（主判别位）：taiji spawn 恒带（pi-rpc
- *   buildPiMainAgentArgs 首行），用户裸 pi / AGENTS.md 实测命令模板不带。boolean
+ *   buildPiMainAgentArgs 首行），用户裸 pi / AGENTS.md 实测命令模板不带（btw fork
+ *   bootstrap 一次性进程除外——argv 不带该 flag，判据②不命中即不在收割射程，
+ *   fail-safe 方向，见文件头判据②例外补登）。boolean
  *   flag 只判 token 存在性（精确整
  *   token，`--no-extensions-x` 之类前缀延伸不算）；
  * ③ 任一 `--extension`/`--skill` 值与 markerPaths 中某项【精确相等】（=== 整串，禁
@@ -459,7 +466,7 @@ export async function reapOrphanPiProcesses(options: ReapOrphanOptions): Promise
 /**
  * 单个孤儿的处置序列。返回 false = 处置失败（调用方记入 failed，仅日志不抛）。
  *
- * SIGKILL 直杀（ADR-0112：SIGTERM grace 优雅退出窗退役）。SIGKILL 发射前 pid 复用复验
+ * SIGKILL 直杀（ADR-0122：SIGTERM grace 优雅退出窗退役）。SIGKILL 发射前 pid 复用复验
  * （防线尽力而为）：处置起点锚定一次 ps lstart，SIGKILL 发射前复读比对——lstart 变化 =
  * 原孤儿已死、pid 已被无关进程复用（pid 复用必经原进程退出），跳过 SIGKILL 防「处置窗口
  * 内误杀复用者」。任一时点 ps 失败（null）→ 按现状继续，不因防线缺席放弃处置。原孤儿已随

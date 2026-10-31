@@ -7,7 +7,7 @@
  *   扩容第三族——record 三族 customType 早退门 + scanPlanStateEntries 派生 + session.planState
  *   publish diff；[reload-closeout D2] 发布门基线从 merge 变化信号换成已发布快照水位，
  *   检查/发布门处丢帧 = 水位滞留 → agent_settled 边沿单路径对账补发（定时路径已随
- *   ADR-0112 退役，见文件尾退役登记），稳态零帧）；
+ *   ADR-0122 退役，见文件尾退役登记），稳态零帧）；
  * - 磁盘读侧/动作/引擎配置：getSubagents/getWorkflows（[W1 / D6] 读请求只读事件
  *   派生视图——entry 游标 + 事件 tail 双源单点合并，见 events-projection.ts；v1 巨文件
  *   会话 oversize 分流走旧格式惰性兼容读路径）、getPlanState（冷启动磁盘扫描不变）、
@@ -227,7 +227,7 @@ type EntriesSinceResult = { data?: { entries?: unknown[]; leafId?: string | null
 /**
  * [pull-push W0] refreshRecordEntries 的触发路径标注（发布观测事件的「原因」字段）：
  * invalidate = entry_appended 失效防抖路径；reconcile-settled = agent_settled 对账路径
- * （定时对账路径及其词表成员已随 ADR-0112 退役删除）。
+ * （定时对账路径及其词表成员已随 ADR-0122 退役删除）。
  */
 type RecordRefreshTrigger = 'invalidate' | 'reconcile-settled'
 /** 发布归因词表（可观测行 trigger 字段）：entry 批路径透传 refresh trigger，事件派生视图路径恒 'event-projection'。 */
@@ -857,7 +857,7 @@ export class SessionRecords {
     return cache.inflight
   }
 
-  // [ADR-0112 退役登记] 定时对账路径（reload-closeout D2 的 15s 服务级 setInterval 扫描）
+  // [ADR-0122 退役登记] 定时对账路径（reload-closeout D2 的 15s 服务级 setInterval 扫描）
   // 已删——记录条目对账保留事件边沿单路径（agent_settled 触发 reconcileRecordEntries），
   // settled 路径丢失时条目滞留至下一事件边沿。
 
@@ -1661,7 +1661,7 @@ export class SessionRecords {
    * W18：销毁 record entry 派生缓存（主动删 + 进程退出汇聚点）。停防抖定时器
    * （在途 inflight 的拉取完成后 applyRecordEntries 的 hasSession 检查拦住发布，
    * 不复活已清 bus 条目）。[reload-closeout D2] 送达水位随 cache 同批清理（对账定时器
-   * 已随 ADR-0112 退役，无起停需清理）。
+   * 已随 ADR-0122 退役，无起停需清理）。
    */
   onSessionDisposed(sessionId: string): void {
     const cache = this.recordEntriesCaches.get(sessionId)
