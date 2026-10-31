@@ -21,7 +21,7 @@
  *      `FS_GUARD_PATH` 与 `ENV_PURITY_PATH`——只挂 fs-guard 的单防线形态视为漏挂，
  *      与工厂助手的双挂载语义对齐）——projects 内 setupFiles 不继承 root 级，新
  *      project 漏挂即静默失去防线；有意不挂的 project 须登记在 PROJECT_GUARD_EXEMPT
- *      （当前唯一例外：apps/electron/main 的 legacy 池，存量用例未适配 guard，见其配置注释）。
+ *      （例外以登记表为准，当前 legacy 与 live 两池）。
  *
  * 只做静态特征校验，不执行测试。
  * 用法：node scripts/check-vitest-guard.mjs [目标根目录]（缺省 = 仓库根；位置参数仅供 fixture 自测）

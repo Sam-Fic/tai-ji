@@ -277,7 +277,9 @@ function main() {
   if (opts.json) return emitJson(rules, opts);
 
   printHumanReport(rules, map, { ...opts, files });
-  if (opts.check) runCheckGate(map, opts.base);
+  // --check 门禁仅在默认 on-diff 形态执行：--release 形态只出发布面清单不跑防漏登记
+  // 门禁（与拆分前 main 的 --release 渲染后提前 return 形态一致）
+  if (!opts.release && opts.check) runCheckGate(map, opts.base);
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(join(process.argv[1])).href;
