@@ -25,7 +25,8 @@
   "files": [
     "src/",
     "index.ts",
-    "skills/"
+    "skills/",
+    "bin/"
   ],
   "dependencies": {
     "@zhushanwen/extension-protocol": "workspace:*",

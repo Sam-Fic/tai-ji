@@ -16,13 +16,17 @@
  *  5. 空闲转后台包装层（foreground-idle-to-background M1，矩阵 A5）：无超时（显式与
  *     配置注入均无）且未命中白名单、非子代理、非 win32、idleBackgroundSec 非 null 的
  *     前台命令，命令原文写入 cmd.sh 后经包装脚本 taiji-fg-wrap 执行（空闲监控 + 转后
- *     台标记 + 输出落日志抄送，u-wrapper 交付物）；execute 收尾按 pidfile 判定命令存
- *     活性——还活着（B3 静默转后台 / B5 包装异常）→ registerConvertedTask 登记 + 守
- *     望收尾；已死（B2 正常完成）→ 不登记零感知 + 三文件清理。执行本体仍是官方
- *     delegate.execute（包装命令串交官方原样跑），透传等价契约不变（A5 公理）。
+ *     台标记 + 输出落日志抄送，u-wrapper 交付物）；execute 收尾按 pidfile × 标记行
+ *     判定——还活着（B3 静默转后台 / B5 包装异常）→ registerConvertedTask 登记 + 守
+ *     望收尾；已死且无标记行（B2 正常完成）→ 不登记零感知 + 三文件清理；已死但有
+ *     标记行 → 照常登记（标记行在 = 通知承诺在 = 必登记，守望首轮 ESRCH 收尾兑现通
+ *     知）；官方 execute 抛错且 abort 已置（B4 用户中止）→ 跳过判活直接清理三文件
+ *     （组杀后僵尸窗口内 isPidAlive 对将死进程返回 true，判活登记 = 幽灵通知）。
+ *     执行本体仍是官方 delegate.execute（包装命令串交官方原样跑），透传等价契约不变
+ *     （A5 公理）。
  */
 
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -150,8 +154,22 @@ function startBackgroundAndReply(
 
 // ───────────── 空闲转后台包装层（foreground-idle-to-background，矩阵 A5）─────────────
 
-/** 包装脚本在扩展内的相对位置（u-wrapper 交付物 bin/taiji-fg-wrap；改写层只构造命令串，不依赖其已存在——真 wrapper 集成由 D3 真机验收承载）。 */
+/**
+ * 包装脚本双形态探测（逐字对齐 plan/templates.ts getBuiltinTemplateDir 先例）：
+ *  - 源码形态（npm 安装 / dev jiti 直接加载 src/bash-tool.ts）：__dirname = <pkg>/src，
+ *    脚本在 `../bin/taiji-fg-wrap`（包根 bin/，随 files 白名单发布）。
+ *  - bundle 形态（staged 打包内置，esbuild 把本文件 inline 进包根 index.js）：
+ *    __dirname = …/extensions/@zhushanwen/pi-base-tool-enhance，脚本由
+ *    bundle-extensions.mjs 专项拷贝到同级 `bin/`。若仍按 `../bin` 推导会错位一级
+ *    解析到 …/@zhushanwen/bin/taiji-fg-wrap（不存在）→ 打包版每条包装命令串指向
+ *    不存在的脚本，全部常规前台命令 exit 127。
+ * 探测先 bundle 形态后源码形态：两形态目录互斥（staged 无 src/；源码布局 src/ 下
+ * 无 bin/），existsSync 判别即可定位；均缺失时回退源码形态路径（改写层只构造命令串
+ * 不依赖脚本已存在——真 wrapper 缺失在执行期 exit 127 显性暴露，fail-fast 可见）。
+ */
 export function resolveFgWrapScriptPath(): string {
+	const bundleForm = fileURLToPath(new URL("./bin/taiji-fg-wrap", import.meta.url));
+	if (existsSync(bundleForm)) return bundleForm;
 	return fileURLToPath(new URL("../bin/taiji-fg-wrap", import.meta.url));
 }
 
@@ -306,30 +324,44 @@ export function registerConvertedTask(opts: {
 	return task;
 }
 
+/** 三文件清理（cmd.sh/pidfile/日志，B2 无登记条目则文件无消费方，输出已经官方管道完整透传；防「调用频次 × 会话寿命」的单调累积）。对中途异常尽力而为（rmSync force，缺哪个删哪个）。 */
+function cleanupWrapFiles(plan: ForegroundWrapPlan): void {
+	for (const path of [plan.cmdShPath, plan.pidfilePath, plan.logFile]) {
+		try {
+			rmSync(path, { force: true });
+		} catch (err) {
+			logger.debug("foreground-wrap cleanup failed (best-effort)", {
+				detail: { path, err: toErrorMessage(err) },
+			});
+		}
+	}
+}
+
 /**
- * execute 收尾统一判定（§4.3 登记判据 = pid 存活性，B2/B3/B5 三形态收口）：
+ * execute 收尾统一判定（§4.3 登记判据 = pid 存活性 × 标记行，B2/B3/B4/B5 形态收口）：
  *  - pidfile 可读且 pid 活 → 登记为后台任务（返回条目，调用方按需补标记行）
- *  - pid 死 / pidfile 不可读 → 不登记零感知 + 删除本次三文件（cmd.sh/pidfile/日志——
- *    B2 无登记条目则文件无消费方，输出已经官方管道完整透传；防「调用频次 × 会话寿命」
- *    的单调累积）。三文件删除对中途异常尽力而为（rmSync force，缺哪个删哪个）
+ *  - 判死且无标记行 → 不登记零感知 + 删除本次三文件（B2 正常完成：输出已经官方
+ *    管道完整透传，无登记条目则文件无消费方）
+ *  - 判死但有标记行（B4 修复）→ 照常登记：标记行在 = 承诺在（"It will notify on
+ *    completion"）= 必登记——无登记无守望则通知永不到来，且三文件清理会让标记行引用
+ *    的日志路径落空。登记后 attachExitWatch 首轮（≤2s）ESRCH 收尾、通知兑现，退出码
+ *    如实报 unknown（转后台任务退出码结构性不可得，notify.ts 已登记形态）。
+ *  - pidfile 不可读（pid undefined）→ 不登记 + 尽力清理（spawn 毫秒窗口被杀的设计已
+ *    接受代价；「标记行在 + pidfile 缺失」真实序列不可达——标记打印在监控循环内，
+ *    前提是 pidfile 早已写毕，防御侧仍走清理：无 pid 可管，登记无载体）。
+ * hasMarker 与调用方「登记后不重复补标记」逻辑形成同一判据双向闭合：标记行在 = 承诺在
+ * = 必登记；登记成功且无标记行 = 必补标记（B5）。
  */
 function settleConvertedCommand(
 	plan: ForegroundWrapPlan,
 	dataDir: string,
 	sessionId: string,
 	backgroundTimeoutSec: number | undefined,
+	hasMarker: boolean,
 ): BackgroundTask | undefined {
 	const { pid } = parsePidFile(plan.pidfilePath);
-	if (pid === undefined || !isPidAlive(pid)) {
-		for (const path of [plan.cmdShPath, plan.pidfilePath, plan.logFile]) {
-			try {
-				rmSync(path, { force: true });
-			} catch (err) {
-				logger.debug("foreground-wrap cleanup failed (best-effort)", {
-					detail: { path, err: toErrorMessage(err) },
-				});
-			}
-		}
+	if (pid === undefined || (!isPidAlive(pid) && !hasMarker)) {
+		cleanupWrapFiles(plan);
 		return undefined;
 	}
 	return registerConvertedTask({
@@ -529,18 +561,43 @@ export function createBashOverrideToolDefinition() {
 					onUpdate,
 					ctx,
 				);
-				const converted = settleConvertedCommand(plan, dataDir, sessionId, config.backgroundTimeoutSeconds ?? undefined);
+				// 收尾判据（settleConvertedCommand 注释）：标记行在 = 承诺在 = 必登记——
+				// pid 判死也不清理（B4：命令恰在收尾窗口死亡时通知承诺不落空）
+				const converted = settleConvertedCommand(
+					plan,
+					dataDir,
+					sessionId,
+					config.backgroundTimeoutSeconds ?? undefined,
+					resultHasFgBgMarker(result),
+				);
 				// B5 补标记：wrapper 未及打印标记行（异常死亡）时由本层补齐；B3 已打印
-				// → 透传不动（登记后结果文本透传原则：标记行已在输出内，模型直接可读）
+				// → 透传不动（登记后结果文本透传原则：标记行已在输出内，模型直接可读）。
+				// 与 settle 的 hasMarker 判据双向闭合：标记行在 = 必登记；登记且无标记 = 必补
 				if (converted !== undefined && !resultHasFgBgMarker(result)) {
 					return appendTextToResult(result, buildConvertedMarkerNote(converted));
 				}
 				return result;
 			} catch (err) {
-				// 官方 execute 抛错（含矩阵 B4 用户中止：abort 按进程组整组杀——wrapper
-				// 与真实命令同组一并死，收尾判定走 B2 清理路径）→ 收尾判定照走，官方
-				// 式错误原样上抛（不吞不改写）
-				settleConvertedCommand(plan, dataDir, sessionId, config.backgroundTimeoutSeconds ?? undefined);
+				// 矩阵 B4 用户中止（abort 按进程组整组杀——wrapper 与真实命令同组一并死）
+				// 前置跳过判活收尾：pi 组杀后抛错不等真实命令被系统收尸，收尾判活
+				// isPidAlive（kill -0 只查 pid 存在性）对僵尸进程返回 true → 误登记转
+				// 后台任务 → 守望 2s 后 ESRCH 收尾发幽灵「finished」通知唤醒新回合（B4
+				// 设计矩阵「用户中止无登记」）。abort 信号已置即属用户中止形态：直接
+				// 清理三文件后原样上抛（无登记 = 无守望 = 无通知）。
+				if (signal?.aborted === true) {
+					cleanupWrapFiles(plan);
+					throw err;
+				}
+				// 非 abort 的官方 execute 抛错（spawn 失败等形态——命令进程死活未定，
+				// 判活收尾仍需执行）→ 收尾判定照走（抛错路径无 result 可判标记，恒
+				// hasMarker=false 走 pid 判定），官方式错误原样上抛（不吞不改写）
+				settleConvertedCommand(
+					plan,
+					dataDir,
+					sessionId,
+					config.backgroundTimeoutSeconds ?? undefined,
+					false,
+				);
 				throw err;
 			}
 		},

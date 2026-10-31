@@ -134,6 +134,11 @@ log_size() {
 # 抄送日志新增字节到自身 stdout（B1），推进 offset。
 # 按字节 offset 接续 = 累积缓冲形态：UTF-8 多字节字符跨批次时字节流无损（管道字节
 # 拼接完整），仅中间批次的渲染可能临时切半，由后续批次补全——不丢不重。
+# 输出量以快照 size 为准（head -c 截断）：快照与 tail 执行之间存在毫秒级窗口，窗口内
+# 命令新写的字节会被 tail 一并读到 EOF——若照单输出而 offset 只推进到快照值，下一轮
+# 将重复抄送该段（同段字节两次进入抄送流）。head 按 $((size - log_offset)) 截断后，
+# 快照后新字节留给下一轮，不重不丢。head 读满即退，tail 后续写入收 SIGPIPE 是预期
+# （本脚本无 pipefail / errexit，不影响退出码透传）。
 # $1 可选 = 外层本轮已取的日志 size：复用可省同轮第二次 wc fork（单轮固定开销
 # 校准项，见文件头实测登记）；缺省时内部自取（B2 收尾路径仅调一次，开销不敏感）。
 flush_log() {
@@ -144,7 +149,7 @@ flush_log() {
 		size=$(log_size "$LOG_PATH" "$log_offset")
 	fi
 	if [ "$size" -gt "$log_offset" ]; then
-		tail -c +$((log_offset + 1)) "$LOG_PATH"
+		tail -c +$((log_offset + 1)) "$LOG_PATH" | head -c $((size - log_offset))
 		log_offset="$size"
 	fi
 }

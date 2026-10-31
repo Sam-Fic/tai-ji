@@ -376,5 +376,35 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
 			expect(run.code).toBe(0);
 			expect(run.stdout.split("\n").filter((l) => l.startsWith("中文行-"))).toEqual(lines);
 		});
+
+		it("写入与抄送并发时输出不重不丢（快照与 tail 之间日志增长：输出量以快照为准，B3 竞态回归防护）", { timeout: USEC_TIMEOUT }, async () => {
+			// 竞态形态：flush_log 先取日志 size 快照（wc fork ~8ms）再 tail 读文件
+			// （fork ~5ms），两 fork 之间的毫秒窗口内命令仍在写——tail 会读到快照后
+			// 新写字节并输出到 EOF。修复前 offset 只推进到快照值 → 下一轮从快照+1
+			// 重新抄送，同段字节两次进入抄送流（已用最小实验证实）。
+			// 触发形态：写端满速持续写（bash for 循环逐行 echo，无 sleep，300000 行
+			// 实测 ~0.7s——跨约 4 个 0.15s 抄送轮次且全程写入中，每轮快照-tail 窗口
+			// 内写端必然在写，竞态命中近乎必然；写端停-写节奏（批间 sleep）下快照时
+			// 日志稳定，永远命中不了——故本用例与「长输出多批次抄送」用例形态互补。
+			// 行数下限约束：bash 满速写 ~140ms/60000 行——写端若在第一轮轮询
+			// （0.15s）前写完，全程只有一轮全量抄送、零竞态窗口，测试恒绿抓不到
+			// bug（首版 60000 行实测即此假绿形态）。
+			const totalLines = 300_000;
+			const script = `for i in $(seq 1 ${totalLines}); do echo "race-line-$i"; done`;
+			const run = await runWrapper(writeCmdWithIdle("cmd.sh", script, 30, "race"));
+
+			expect(run.code).toBe(0);
+			// 不重不丢判据 = 抄送流与日志逐字节一致：重复段会让 relay 比 log 长且含
+			// 重复行序；丢失则 relay 短于 log。两者任一形态都破坏 equals。
+			const relay = Buffer.concat(run.stdoutBuf);
+			const log = readFileSync(join(workDir, "race.log"));
+			expect(relay.length, "抄送流字节数与日志一致（重复段会多、丢字节会少）").toBe(log.length);
+			expect(relay.equals(log), "抄送流与日志逐字节一致（无重复段）").toBe(true);
+			// 行序唯一性双保险：relay 解码后每行恰出现一次（race-line-N 升序无重复）
+			const relayLines = relay.toString("utf8").split("\n");
+			expect(relayLines).toHaveLength(totalLines + 1); // 尾部换行产生的空串
+			expect(relayLines[0]).toBe("race-line-1");
+			expect(relayLines[totalLines - 1]).toBe(`race-line-${totalLines}`);
+		});
 	},
 );

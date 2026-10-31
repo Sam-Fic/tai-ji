@@ -185,9 +185,9 @@ function useConfig(config: Record<string, unknown>): void {
 	clearConfigCache();
 }
 
-async function executeBash(command: string, extra: Record<string, unknown> = {}) {
+async function executeBash(command: string, extra: Record<string, unknown> = {}, signal?: AbortSignal) {
 	const tool = createBashOverrideToolDefinition();
-	return tool.execute("call-x", { command, ...extra }, undefined, undefined, createCtx() as never);
+	return tool.execute("call-x", { command, ...extra }, signal, undefined, createCtx() as never);
 }
 
 /** 包装命令串解析（shQuote 单引号形态，正则安全——tmp 路径无单引号）。 */
@@ -485,6 +485,139 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)("settle by pidfile (断言 #4)", () 
 		expect(getAllTasks()).toHaveLength(0);
 		// cmd.sh 尽力清理；目录内无本次调用残留（pidfile/log 本就不存在）
 		expect(existsSync(join(TASKS_DIR))).toBe(true);
+	});
+
+	it("B4 修复: 标记行存在 + pid 已死 → 照常登记 + 日志保留 + 守望通知兑现（exit code unknown），结果不重复补标记", { timeout: 20_000 }, async () => {
+		const pi = createMockPi();
+		refreshPiReference(pi as unknown as ExtensionAPI);
+		// wrapper 已打印标记行（结果含 [TAIJI-FG-BG]）+ 命令恰在收尾窗口死亡
+		// （fixture dead：pidfile 指向已收殓的 pid）——修复前判死即清理三文件：
+		// 标记行的 "It will notify on completion" 承诺落空（无登记无守望无通知）、
+		// 标记行引用的日志路径也被删
+		officialRunsFixture(
+			"dead",
+			'ran: ...\n[TAIJI-FG-BG] Command moved to background after 600s without output — still running (wrapper printed marker).',
+		);
+
+		const result = await executeBash("echo done");
+
+		// 标记行在 = 承诺在 = 必登记（判死也不清理）
+		const task = getAllTasks()[0];
+		expect(task).toBeDefined();
+		expect(task?.state).toBe("running");
+		expect(task?.command).toBe("echo done");
+		// 三文件保留：日志是标记行引用路径 + bash_output 数据源 + 通知 tail 数据源
+		expect(existsSync(task!.outputFile)).toBe(true);
+		expect(existsSync(join(TASKS_DIR, `${task!.taskId}.sh`))).toBe(true);
+		expect(existsSync(join(TASKS_DIR, `${task!.taskId}.pid`))).toBe(true);
+		// 结果透传不重复补标记（wrapper 已打印 → 恰 1 处，与 B5 补标记逻辑双向闭合）
+		expect(resultText(result).match(/\[TAIJI-FG-BG\]/g)).toHaveLength(1);
+
+		// 守望首轮（2s 轮询）ESRCH 收尾 → 完成通知到达，退出码如实报 unknown
+		// （转后台任务退出码结构性不可得，notify.ts 已登记形态）
+		await vi.waitFor(
+			() => {
+				expect(pi.sendMessage).toHaveBeenCalled();
+			},
+			{ timeout: 8_000 },
+		);
+		const notified = pi.sendMessage.mock.calls[0]![0] as { customType: string; content: string };
+		expect(notified.customType).toBe("background-bash");
+		expect(notified.content).toContain(`[background-bash] ${task!.taskId} finished (exit code unknown`);
+		expect(notified.content).toContain("echo done");
+		// 收尾链同轮完成：pending:unregister emit + 终态落定（exited）
+		expect(pi.events.emit).toHaveBeenCalledWith(
+			"pending:unregister",
+			expect.objectContaining({ id: task!.taskId, reason: "unknown" }),
+		);
+		expect(getTask(task!.taskId)?.state).toBe("exited");
+		// 日志在通知后仍保留（bash_output 可查，不随收尾删除）
+		expect(existsSync(task!.outputFile)).toBe(true);
+	});
+});
+
+// ──────────── execute 抛错路径的收尾（B2 abort 前置判定）────────────
+
+describe.skipIf(!INTEGRATION_TESTS_ENABLED)("execute error path catch settle (abort × 非 abort)", () => {
+	/**
+	 * mock：真跑 fixture（alive——写活 pidfile：sleep 30 存活进程）后抛错。复刻 pi
+	 * abort 组杀后的僵尸窗口：命令进程被杀但未被系统收尸，isPidAlive 仍返回 true——
+	 * 若收尾错误地走判活路径会读到活 pid 误登记（B2 缺陷形态）。onPidfile 回调捕获
+	 * fixture pid 供测试收尾清理（三文件删除后 pidfile 不再可读）。
+	 */
+	function officialRunsFixtureThenThrow(onPidfile: (pid: number) => void): void {
+		officialExecuteMock.mockImplementation(async (_id: string, args: { command: string }) => {
+			expect(args.command).toContain(resolveFgWrapScriptPath());
+			const fixtureCommand = args.command.replace(
+				`'${resolveFgWrapScriptPath()}'`,
+				`'${FIXTURE_PATH}'`,
+			);
+			await new Promise<void>((resolve, reject) => {
+				const child = spawn("bash", ["-c", fixtureCommand], {
+					env: { ...process.env, FIXTURE_MODE: "alive" },
+					stdio: "ignore",
+				});
+				child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`fixture exited ${code}`))));
+				child.on("error", reject);
+			});
+			const p = parseWrapped(args.command);
+			const pid = parsePidFile(p.pidfile).pid;
+			if (pid !== undefined) onPidfile(pid);
+			throw new Error("Bash command aborted");
+		});
+	}
+
+	it("B2 修复: abort 抛错（signal.aborted=true）→ 跳过判活收尾，不登记 + 三文件删除 + 无通知（设计矩阵 B4「用户中止无登记」）", async () => {
+		const pi = createMockPi();
+		refreshPiReference(pi as unknown as ExtensionAPI);
+		let fixturePid: number | undefined;
+		officialRunsFixtureThenThrow((pid) => {
+			fixturePid = pid;
+		});
+
+		// 官方式错误原样上抛（不吞不改写）
+		await expect(executeBash("sleep 30", {}, AbortSignal.abort())).rejects.toThrow("Bash command aborted");
+
+		const wrapped = officialExecuteMock.mock.calls[0]![1] as { command: string };
+		const p = parseWrapped(wrapped.command);
+		// 不登记（僵尸窗口内 pid 判活为 true，判活收尾会误登记——abort 前置判定跳过）
+		expect(getAllTasks()).toHaveLength(0);
+		expect(readRegistry(getRegistryPath(DATA_DIR, SESSION_ID)).get(p.taskId)).toBeUndefined();
+		// 三文件删除（直接清理，复用 settle 判死分支逻辑）
+		expect(existsSync(p.cmdSh)).toBe(false);
+		expect(existsSync(p.pidfile)).toBe(false);
+		expect(existsSync(p.log)).toBe(false);
+		// 无通知链路任何一环（无登记 → 无 pending:register / 无守望 → 无 unregister / sendMessage）
+		expect(pi.events.emit).not.toHaveBeenCalled();
+		expect(pi.sendMessage).not.toHaveBeenCalled();
+		// fixture 残留清理（sleep 30 未被收尾路径处理）
+		if (fixturePid !== undefined) {
+			try {
+				process.kill(-fixturePid, "SIGKILL");
+			} catch {
+				try {
+					process.kill(fixturePid, "SIGKILL");
+				} catch {
+					// already dead
+				}
+			}
+		}
+	});
+
+	it("B2 对照: 非 abort 抛错（无 signal）→ settle 照走判活收尾，活 pid 仍登记（spawn 失败等形态现行语义不变）", async () => {
+		const pi = createMockPi();
+		refreshPiReference(pi as unknown as ExtensionAPI);
+		officialRunsFixtureThenThrow(() => {});
+
+		await expect(executeBash("sleep 30")).rejects.toThrow("Bash command aborted");
+
+		// fixture alive：pid 判活为 true → 照常登记（错误上抛但任务接管，B5 兜底语义）
+		expect(getAllTasks()).toHaveLength(1);
+		expect(getAllTasks()[0]?.state).toBe("running");
+		expect(pi.events.emit).toHaveBeenCalledWith(
+			"pending:register",
+			expect.objectContaining({ id: getAllTasks()[0]!.taskId }),
+		);
 	});
 });
 
