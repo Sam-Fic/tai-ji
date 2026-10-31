@@ -74,18 +74,23 @@ export {
 
 // ── ./extensions/scheduler：scheduler 任务契约 + 时间格式化（扩展与插件同源单实现；任务库
 // 快照文件契约 store.ts 含 node:fs，走 `./scheduler-store` 独立子出口，不进本桶出口——
-// 浏览器消费方结构性不触达 node 内建，先例 = background-task-entry）──
+// 浏览器消费方结构性不触达 node 内建，先例 = background-task-entry。判形契约三符号
+// （schema 版本常量 / 文件形状类型 / 形状校验函数）已移入零 node 依赖的 types.js，
+// 经本桶出口供 @taiji/shared/execution 的 M0 scheduler 小域契约单源消费）──
 export type {
   ScheduleSpec,
   TaskKind,
   TaskStatus,
   ScheduledTask,
   ExecutionRecord,
+  SchedulerStoreFile,
 } from './extensions/scheduler/types'
 export {
   HISTORY_LIMIT,
   appendExecutionRecord,
   SCHEDULER_MODAL_VIEW_ID,
+  SCHEDULER_STORE_SCHEMA_VERSION,
+  isSchedulerStoreFile,
 } from './extensions/scheduler/types'
 export {
   MS_PER_DAY,

@@ -18,22 +18,15 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import type { ScheduledTask } from './types.js'
+import type { ScheduledTask, SchedulerStoreFile } from './types.js'
+import { SCHEDULER_STORE_SCHEMA_VERSION, isSchedulerStoreFile } from './types.js'
 
-/** 快照 schema 版本（v2 = 任务库分离形态；v1 是 npm 0.1.1 旧 store，文件名不同不互读）。 */
-export const SCHEDULER_STORE_SCHEMA_VERSION = 2
-
-/**
- * 快照文件形状（设计 §4.3 schema）。
- * tasks 为内存任务集的全量快照：写入口统一剥离运行时标记（pending）并拷贝 history，
- * 读方拿到的即干净的持久化形态。
- */
-export type SchedulerStoreFile = {
-  schemaVersion: typeof SCHEDULER_STORE_SCHEMA_VERSION
-  /** owner session 的 JSONL 路径（冗余记录，供排障与对账；--no-session 时可缺省） */
-  sessionFile?: string
-  tasks: ScheduledTask[]
-}
+// 快照 schema 版本常量、文件形状类型与形状校验函数单源于 ./types.js（零 node 依赖
+// 纯模块——M0 契约期 @taiji/shared/execution 经 extension-protocol 主出口单源 re-export，
+// 浏览器消费方不得触达本文件 node:fs）；此处 re-export 保持既有 `./scheduler-store`
+// 子出口与包内 `./store.js` import 路径不变。
+export type { SchedulerStoreFile } from './types.js'
+export { SCHEDULER_STORE_SCHEMA_VERSION, isSchedulerStoreFile }
 
 /**
  * 读结果三分支：
@@ -177,15 +170,6 @@ function renameCorrupt(filePath: string): string {
   } catch {
     return filePath
   }
-}
-
-/** 快照形状校验：顶层 schemaVersion=2 + tasks 数组且逐项为对象（字段级信任唯一写者，不逐字段校验）。 */
-function isSchedulerStoreFile(data: unknown): data is SchedulerStoreFile {
-  if (!data || typeof data !== 'object') return false
-  const record = data as Record<string, unknown>
-  if (record.schemaVersion !== SCHEDULER_STORE_SCHEMA_VERSION) return false
-  if (!Array.isArray(record.tasks)) return false
-  return record.tasks.every(t => t !== null && typeof t === 'object')
 }
 
 /** ENOENT 判定（code 属性优先，message 兜底——跨平台 fs 错误形态）。 */
