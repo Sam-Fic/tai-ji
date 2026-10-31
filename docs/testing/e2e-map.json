@@ -5726,6 +5726,7 @@
         "scripts/check-shared-module-admission.mjs",
         "scripts/run-affected-e2e-ci.mjs",
         "scripts/shared-module-registry.json",
+        "scripts/shared-node-builtin-rules.json",
         "scripts/__tests__/check-testid-parity.test.mjs",
         "scripts/__tests__/check-test-typecheck-coverage.test.mjs",
         "scripts/__tests__/check-shared-module-admission.test.mjs",
