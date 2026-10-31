@@ -8,10 +8,13 @@
  *   - parseErrorFiles 只收 src/ 前缀 renderer 文件（他包传递错误不计账）
  *   - reconcileDebt：未登记新债务 / stale 可收编分桶
  *   - buildFullTsconfig：extends 绝对化 + exclude 清空 + include/paths 绝对化
+ *   - classifyRun / runDebtReconciliation：正式跑与全量跑同一错误分级（spawn 失败 =
+ *     基础设施故障，不归因 exclude 债务；runner 注入，不真跑 vue-tsc）
  *   - main --no-run：临时 tsconfig 树（mkdtempSync 自建自删）形态断言红/绿
+ *   - isMain：脚本路径含 # 时仍执行 main（pathToFileURL 判定，不退化为空转 exit 0）
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -23,6 +26,8 @@ import {
   parseErrorFiles,
   reconcileDebt,
   buildFullTsconfig,
+  classifyRun,
+  runDebtReconciliation,
 } from '../check-test-typecheck-coverage.mjs'
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
@@ -131,6 +136,71 @@ describe('buildFullTsconfig', () => {
   })
 })
 
+describe('classifyRun（正式跑 / 全量跑同一错误分级判据）', () => {
+  it('零退出 → ok；非零且零可解析错误 → infra（原始输出留证）；非零且有错误 → type-error', () => {
+    expect(classifyRun({ status: 0, stdout: '' })).toEqual({ kind: 'ok', errorFiles: [], detailLines: [] })
+
+    const infra = classifyRun({ status: 1, stdout: 'Error: spawn pnpm ENOENT\n\n    at ChildProcess\n' })
+    expect(infra.kind).toBe('infra')
+    expect(infra.errorFiles).toEqual([])
+    expect(infra.detailLines).toEqual(['Error: spawn pnpm ENOENT', '    at ChildProcess'])
+
+    const typed = classifyRun({
+      status: 2,
+      stdout: 'src/__tests__/a.test.ts(1,1): error TS2322: Type string\n噪声行\n',
+    })
+    expect(typed.kind).toBe('type-error')
+    expect(typed.errorFiles).toEqual(['src/__tests__/a.test.ts'])
+    expect(typed.detailLines).toEqual(['src/__tests__/a.test.ts(1,1): error TS2322: Type string'])
+  })
+})
+
+describe('runDebtReconciliation（runner 注入，不真跑 vue-tsc）', () => {
+  const withTsconfig = (fn) => {
+    const dir = mkdtempSync(join(tmpdir(), 'debt-reconcile-'))
+    try {
+      writeFileSync(join(dir, 'tsconfig.typecheck-test.json'), JSON.stringify({ include: [], exclude: [] }))
+      return fn(dir, join(dir, 'tsconfig.typecheck-test.json'))
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
+  }
+
+  it('正式跑 spawn 失败（零可解析错误）→ 报基础设施故障并带原始输出，不归因 exclude 债务', () => {
+    withTsconfig((dir, tsconfigPath) => {
+      const failures = []
+      const r = runDebtReconciliation(dir, tsconfigPath, { exclude: [] }, failures, () => ({
+        status: 1,
+        stdout: 'Error: spawn pnpm ENOENT\n',
+      }))
+      const text = failures.join('\n')
+      expect(r.formalInfra).toBe(true)
+      expect(text).toContain('typecheck 基础设施故障')
+      expect(text).toContain('spawn pnpm ENOENT')
+      expect(text).not.toContain('新登记外文件存在类型错误')
+      expect(text).not.toContain('exclude 显式登记')
+    })
+  })
+
+  it('正式跑有类型错误 → 报「新登记外文件存在类型错误」，明细取 error TS 行', () => {
+    withTsconfig((dir, tsconfigPath) => {
+      const failures = []
+      let calls = 0
+      const formalOut = 'src/__tests__/a.test.ts(1,1): error TS2322: Type string is not assignable\n'
+      const r = runDebtReconciliation(dir, tsconfigPath, { exclude: [] }, failures, () => {
+        calls += 1
+        return calls === 1 ? { status: 1, stdout: formalOut } : { status: 0, stdout: '' }
+      })
+      const text = failures.join('\n')
+      expect(r.formalInfra).toBe(false)
+      expect(r.debtFindings).toBe(1)
+      expect(text).toContain('新登记外文件存在类型错误')
+      expect(text).toContain('error TS2322')
+      expect(text).not.toContain('基础设施故障')
+    })
+  })
+})
+
 describe('main --no-run（静态对账链，不真跑 vue-tsc）', () => {
   let root
   beforeAll(() => {
@@ -180,5 +250,41 @@ describe('main --no-run（静态对账链，不真跑 vue-tsc）', () => {
     mkdirSync(empty)
     const r = run(empty)
     expect(r.status).toBe(2)
+  })
+})
+
+describe('isMain 判定（路径含 # 不得退化为静默 exit 0）', () => {
+  it('脚本副本位于含 # 的目录 → 仍执行 main 并输出 PASS', () => {
+    // import.meta.url 取的是 realpath（/var → /private/var），副本路径也用 realpath
+    // 基址，确保 # 是 href 比对的唯一变量
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'ismain-hash-')))
+    try {
+      const hashDir = join(base, 'dir#hash')
+      mkdirSync(hashDir)
+      const copy = join(hashDir, 'check-test-typecheck-coverage.mjs')
+      writeFileSync(copy, readFileSync(SCRIPT_PATH, 'utf8'))
+
+      const rendererDir = join(base, 'renderer')
+      mkdirSync(join(rendererDir, 'src', '__tests__'), { recursive: true })
+      writeFileSync(
+        join(rendererDir, 'tsconfig.typecheck-test.json'),
+        JSON.stringify({
+          include: [
+            'src/**/__tests__/**/*',
+            'src/**/*.test.ts',
+            'src/**/*.test.tsx',
+            'src/**/*.spec.ts',
+          ],
+          exclude: [],
+        }),
+      )
+      const r = spawnSync(process.execPath, [copy, '--no-run', '--renderer-dir', rendererDir], {
+        encoding: 'utf8',
+      })
+      expect(r.stdout).toContain('PASS')
+      expect(r.status).toBe(0)
+    } finally {
+      rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
   })
 })
