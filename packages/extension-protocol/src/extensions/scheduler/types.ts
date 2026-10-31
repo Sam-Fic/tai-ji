@@ -10,7 +10,8 @@
 export const SCHEDULER_STORE_SCHEMA_VERSION = 2
 
 /**
- * 快照文件形状（设计 §4.3 schema）。
+ * 快照文件形状（v2 任务库分离 schema；方案 B 设计原文未归档，裁决内容与背景
+ * 以 commit 73073b169 message 为溯源锚——同 store.ts 头注口径）。
  * tasks 为内存任务集的全量快照：写入口统一剥离运行时标记（pending）并拷贝 history，
  * 读方拿到的即干净的持久化形态。
  */

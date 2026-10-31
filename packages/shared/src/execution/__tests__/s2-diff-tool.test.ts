@@ -6,6 +6,7 @@
  * - 运行时直读基线清单（--baseline 覆盖即改变判定，证明工具侧无内嵌副本）；
  * - 白名单外条目 / scope 限制 / 畸形输入判违规；
  * - 两时点增量语义（before 指纹扣除后只判新增行）；
+ * - pending:unregister dataType 推导（注销条目无 type，由同文件 register id→type 映射补齐，推导失败走 unknown）；
  * - 输入错误退出码 2、--help 退出码 0。
  */
 
