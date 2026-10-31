@@ -336,6 +336,7 @@ export {
   foldRecordEvents,
   INITIAL_RECORD_EVENT_FOLD_STATE,
   parseRecordEventFileLine,
+  isRecordEventHeaderLine,
   recordEventsPath,
   RECORD_EVENTS_SUFFIX,
   type RecordCreatedEvent,

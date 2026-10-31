@@ -52,7 +52,7 @@ import {
   ALL_RUN_OUTCOMES, foldRunEventCheckpoint, INITIAL_RUN_EVENT_FOLD, RUN_EVENTS_SUFFIX,
   RUN_EVENT_TYPES, SUBAGENT_RECORD_CUSTOM_TYPE, WORKFLOW_RECORD_CUSTOM_TYPE,
   classifySubagentRecordEntryData, classifyWorkflowRecordEntryData, foldRecordEvents,
-  INITIAL_RECORD_EVENT_FOLD_STATE, parseRecordEventFileLine, readEventTail, RECORD_EVENTS_SUFFIX,
+  INITIAL_RECORD_EVENT_FOLD_STATE, parseRecordEventFileLine, isRecordEventHeaderLine, readEventTail, RECORD_EVENTS_SUFFIX,
   type RecordCreatedEvent, type RecordEvent, type RecordEventFoldState, type RunEventFoldCheckpoint,
   type SubagentRecordRegisteredEntryData, type SubagentRecordSettledEntryData,
   type WorkflowRecordRegisteredEntryData, type WorkflowRecordSettledEntryData, type WorkflowRunEvent,
@@ -710,7 +710,7 @@ export class SessionEventProjection {
     const offsets = domain === 'record' ? this.recordOffsets : this.runOffsets
     const chunk =
       domain === 'record'
-        ? readEventTail(filePath, offsets.get(id) ?? 0, parseRecordEventFileLine)
+        ? readEventTail(filePath, offsets.get(id) ?? 0, parseRecordEventFileLine, isRecordEventHeaderLine)
         : readEventTail(filePath, offsets.get(id) ?? 0, parseWorkflowRunEventFileLine)
     offsets.set(id, chunk.nextOffset)
     // 截断/重建：fold 全量重放（域 fold seq 守卫下不重建也幂等——重建走保守路径）
