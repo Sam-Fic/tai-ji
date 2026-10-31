@@ -15,6 +15,9 @@
  * - identity.ts  stepKey 生成规则 + Run/Member/Attempt 身份与 resume 契约
  * - budgets.ts   两级预算与日志分段常量单源（环境变量可覆盖）
  * - alerts.ts    失联宽限结构化告警（观测告警，不判死）
+ * - scheduler.ts scheduler 小域任务契约（G10：小域任务视图 + v2 快照判形与字段映射 +
+ *                JSONL 历史条目源 schema 与映射（U6 存量导入双源）+ SI8 task.fired
+ *                到期事实语义）
  * - main-session-entry-baseline.json  S2 diff 白名单唯一载体（工具运行时直读）
  */
 
@@ -29,3 +32,4 @@ export * from './collect-results'
 export * from './identity'
 export * from './budgets'
 export * from './alerts'
+export * from './scheduler'

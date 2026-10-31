@@ -5803,6 +5803,27 @@
       "owner": "scripts",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
       "note": "R2 态（按改动范围触发）：u-m0 交付的 S2 diff 白名单工具防回归面——工具本体或基线清单单源被改坏时本条红（--self-check 覆盖清单读取/增量算法/unknown 判定；s2-diff-tool.test.ts 覆盖黑盒 spawn 与判定语义，其 X1 豁免登记见 .githooks/check-test-extremes.mjs——进程语义即被测对象；baseline.test.ts 锁清单内容语义——设计点名写点登记与各规则 verdict/allowIn，防单条写点删除或 verdict 翻转静默漂移）。真机消费方 = verify-taiji A2 剧本两时点（M3 波次首验），剧本侧届时引用本登记。"
+    },
+    {
+      "id": "E2E-SCHED2SRC-01",
+      "summary": "scheduler 小域任务契约与 U6 双源导入映射（subagent-workflow-capability-architecture u-m0 交付资产）：任务 schema 单源（直引 extension-protocol 主出口）+ v2 快照判形 re-export + JSONL 历史条目源 schema 按 git 历史冻结形态复立 + 字段映射双向键集锁定（S13 存量定时任务导入验收的对账依据）",
+      "scope": [
+        "packages/shared/src/execution/scheduler.ts",
+        "packages/shared/src/execution/__tests__/scheduler.test.ts"
+      ],
+      "layer": "L1",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "packages/shared/src/execution/__tests__/scheduler.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": false,
+      "run": "cd packages/shared && npx vitest run src/execution/__tests__/scheduler.test.ts",
+      "owner": "packages/shared",
+      "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
+      "note": "R2 态（按改动范围触发）：u-m0 交付的 scheduler 小域契约防回归面——契约本体、映射裁决或词表被改坏时本条红（词表锁定 = §6.10 第 5 项「直接继承现行词表」裁决的可执行载体）。消费方：u-m1 小域数据结构随权威落地、u-m5 存量导入器（双源：v2 快照分片 + plan B 前会话 JSONL pi-scheduler: 历史条目）、S13 双源验收。"
     }
   ]
 }
