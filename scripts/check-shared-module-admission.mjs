@@ -87,14 +87,13 @@ export function scanSourceViolations(sources) {
   return violations;
 }
 
-/** 检查 C：登记完备双向对账。 */
+/** 检查 C：登记完备双向对账（purpose 非空校验在 main 内直接读 registry 条目实现）。 */
 export function reconcileRegistry(diskFiles, registeredFiles) {
   const disk = new Set(diskFiles);
   const reg = new Set(registeredFiles);
   return {
     unregistered: diskFiles.filter((f) => !reg.has(f)),
     dead: registeredFiles.filter((f) => !disk.has(f)),
-    missingPurpose: registeredFiles.filter((f) => disk.has(f)),
   };
 }
 
