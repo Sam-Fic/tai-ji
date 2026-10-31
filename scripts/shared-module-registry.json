@@ -3,7 +3,7 @@
   "modules": [
     {
       "file": "archive.ts",
-      "purpose": "session 归档域共享契约（session-archive 设计 §7 D3 簿记 schema + D5 RPC 消息，"
+      "purpose": "session 归档域共享契约（session-archive 设计 §7 D3 簿记 schema + D5 RPC 消息，实施计划 u-foundation：类型 + 词表 + 解析校验的单一权威源）。"
     },
     {
       "file": "codemode.ts",
@@ -19,11 +19,11 @@
     },
     {
       "file": "discovery-migrate.ts",
-      "purpose": "判定单条路径的 scope 归属（方案 §2.3）："
+      "purpose": "判定单条路径的 scope 归属（方案 §2.3）：绝对路径（以 `/` 或 `~` 开头，如 `/abs/...`、`~/.pi/agent/skills`）→ 'global'，相对路径（其余，如 `.agents/skills`、`.taiji/skills`）→ 'project'。"
     },
     {
       "file": "display-name.ts",
-      "purpose": "agent/workflow 引用显示名（basename 短名）——GUI 侧单点实现（D-收敛：tray 行、"
+      "purpose": "agent/workflow 引用显示名（basename 短名）——GUI 侧单点实现（D-收敛：tray 行、workflow 块标题行共用，替代各自内联的 split/replace 私有拷贝，消除 tray 侧只切 `/` 不切 `\\` 的分叉）。"
     },
     {
       "file": "extension.ts",
@@ -83,7 +83,7 @@
     },
     {
       "file": "message.ts",
-      "purpose": "完成通知类 customType SSOT（conversation-renderer-model-unification §3.3.2："
+      "purpose": "完成通知类 customType SSOT（conversation-renderer-model-unification §3.3.2：黑名单已删，收敛为 display 单一判别）。"
     },
     {
       "file": "migration.ts",
@@ -139,7 +139,7 @@
     },
     {
       "file": "protocol.ts",
-      "purpose": "测试连接按协议分组的单行结果（SSOT，2026-09-10 review S-9 手写重复收编）："
+      "purpose": "测试连接按协议分组的单行结果（SSOT，2026-09-10 review S-9 手写重复收编）：protocol `config.discoveredModels.results` 元素 / core transport / core TestConnectionResult / runtime port ConnectionTestResult 四处同形状，全部引用本类型，漂移编译期红。"
     },
     {
       "file": "provider.ts",
@@ -163,7 +163,7 @@
     },
     {
       "file": "remote-access.ts",
-      "purpose": "远程访问配置契约 SSOT：remote-access.json 的文件名与内容形态，"
+      "purpose": "远程访问配置契约 SSOT：remote-access.json 的文件名与内容形态，main（写入侧：生成/轮换 token、开关状态落盘）与 runtime（读取侧：每次 WS auth 握手热读 remote token 入鉴权集合）两端共用，禁止复制定义。"
     },
     {
       "file": "retry-rules.ts",
@@ -171,7 +171,7 @@
     },
     {
       "file": "revoke-restore.ts",
-      "purpose": "草稿还原纯函数族（message revoke 设计 §3.3 D7 两层切条规则 + msg-pipeline-debloat"
+      "purpose": "草稿还原纯函数族（message revoke 设计 §3.3 D7 两层切条规则 + msg-pipeline-debloat D5-2 剥除统一——本文件是 stripDeliveryMarkers 的唯一实现 SSOT）。"
     },
     {
       "file": "runtime-instance.ts",
@@ -183,7 +183,7 @@
     },
     {
       "file": "session-occupancy.ts",
-      "purpose": "session occupancy 域形状与「回合进行中」判定集合（chat-flow-consistency D1 契约根，"
+      "purpose": "session occupancy 域形状与「回合进行中」判定集合（chat-flow-consistency D1 契约根，u-foundation 单元交付，纯类型与常量导出——零行为变更）。"
     },
     {
       "file": "session-store-paths.ts",
