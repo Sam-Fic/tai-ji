@@ -237,6 +237,18 @@ describe('A1 shouldReattachEntry 真补集过滤公式（D3）', () => {
   it('时钟偏斜（lastActivityAt 在未来）→ idle 为负 ≤ 窗口 → 恢复（偏恢复方向，errs-safe）', () => {
     expect(shouldReattachEntry(entry({ lastActivityAt: T0 + 5 * MIN }), filterInput)).toBe(true)
   })
+
+  it('[fix-chat-flow-stuck A-6] 场景：占用中 runtime 崩溃（occupancy 边沿刷新后的磁盘快照）→ 自动恢复命中', () => {
+    // 快照生产链 = crash-forensics-hooks refreshCheckpointOnOccupancyEdge（occupancy 转移边沿
+    // 翻转时刷 occupied 落盘，端到端链路证据见 occupancy-checkpoint-edge.test.ts）：
+    // attach 时 idle（注册时刻占用恒 idle）→ 进入占用边沿翻 occupied → 占用中 runtime 崩溃，
+    // 磁盘快照停留本形态——安静长 turn（idle 窗口超 2h 也不靠它）必须恢复。
+    expect(shouldReattachEntry(entry({
+      occupancy: 'occupied',
+      lastActivityAt: T0 - 5 * HOUR,
+      lastViewedAt: null,
+    }), filterInput)).toBe(true)
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────────────────

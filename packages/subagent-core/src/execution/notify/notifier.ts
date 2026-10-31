@@ -506,8 +506,12 @@ export function createNotifier(host: NotifierHost): BgNotifier {
         { ...(collectKey !== undefined ? { collectKey } : {}) },
       );
       if (result.kind === "rejected") {
+        // [fix-chat-flow-stuck C-2] 如实描述：rejected = 端口拒收（persist-failed 受理前落盘
+        // 失败 / disposed 端口已销毁），通知未落盘即从未进入投递流程；notifyId 单调不复用、
+        // 无重试队列，本次通知已丢失（结构性不可达「下次 notify 重投」——不存在下次）。
         notifyLogger.warn(
-          "delivery port rejected notification (idempotency key not registered; will retry on next notify)",
+          "delivery port rejected notification (reason: persist-failed/disposed) — not persisted," +
+            " no redelivery channel, this notification is lost",
           { detail: { notifyId, reason: result.reason } },
         );
         return false;

@@ -4,6 +4,9 @@ export default {
   //（编辑重发/撤回）被门拒绝——专属文案指引回主会话视图，不落通用失败文案。
   vidViewReadonly: '当前视图为会话快照，该操作仅支持在主会话视图执行',
   nextTurnSendFailed: '下轮消息发送失败：{msg}',
+  // [fix-chat-flow-stuck C-4] 停止请求 65s 兜底超时：pi 大概率挂死（abort RPC 无回执），
+  // 唯一收敛出口 = 侧栏右键「强制退出」——toast 指引恢复动作，不得静默
+  abortTimedOut: '停止请求超时：会话可能已无响应，请在侧边栏右键该会话选择「强制退出」',
   compactFailed: '压缩失败：{msg}',
   bashFailed: 'Bash 执行失败：{msg}',
   // [U5 消息撤回 D8] 撤回编排 toast 文案（D8 错误规格表呈现列为 SSOT，与 core useChat 的

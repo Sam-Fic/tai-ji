@@ -1312,6 +1312,15 @@ export function createUseChat(deps: UseChatDeps) {
       // pendingSend 已清（乐观），实体收尾靠 runtime 广播 message.complete{aborted} 兜底。
       // [chat-flow R4] 停止失败 toast 已删：pi 层失败的呈现由 runtime message.error 气泡承担
       // （dispatcher.abort 吞错广播）；WS 断由断连全局提示覆盖，RPC reject 落 warn 不打扰。
+      // [fix-chat-flow-stuck C-4] 超时形态例外升级 toast：renderer pending 层 65s backstop
+      // 超时（error.code='timeout'）= abort 请求无回执且 pi 大概率挂死（abort RPC 对挂死 pi
+      // 悬挂、无服务端超时兜底，ADR-0122 退役登记），message.error 气泡与断连提示都不会来
+      // ——静默 warn 会把用户留在「点了停止但毫无反馈」的僵局，toast 指引唯一收敛出口
+      // （侧栏右键「强制退出」）。
+      if ((e as { code?: unknown } | null)?.code === 'timeout') {
+        deps.toast.error(deps.t('composable.abortTimedOut'))
+        return
+      }
       console.warn(`[useChat] abort RPC failed (sid=${sid})`, e)
     }
   }

@@ -314,6 +314,52 @@ function finalizeAttemptAssistant(messages: MessageEffectContext['messages'], si
 }
 
 /**
+ * [fix-chat-flow-stuck C-3] per-session「本回合已见非 abort 回合终态」标记：
+ *
+ * 竞态场景：用户点停止与回合自然完成赛跑——complete{stop}（自然终态）先到、迟到的
+ * complete{aborted} 后到。此时 changed=false（无 streaming 实体可收尾）、提示行追加条件
+ * 原样命中 → 追加「已停止：回复尚未开始」——与事实相反（回复已完整生成）。本标记让
+ * complete{aborted} 的提示行分支跳过「已见自然终态」的回合。
+ *
+ * 生命周期（依据帧序事实，不建时间推测）：
+ * - 置位：message.complete 以 reason ∈ {normal, error} 处理时（willRetry 中间失败早退不置
+ *   ——attempt 级终态非回合终态）；
+ * - 复位：message_start / message_end（新回合最早帧信号——user 送达回执先于 assistant
+ *   message_start，两者都预示「已有比标记更新的事实」，此时到达的 aborted 属新回合，
+ *   dispatching 窗口停止的正当提示不得被残留标记吞掉）；
+ * - 清理：store.disposeSession 同点清理（与 executingBash 同编排清理范式）。
+ * 重连/重订阅回放经同一 handler 链按序重放，标记状态随帧序重建（无陈旧复用）。
+ */
+// taste:allow-no-data-owner W24-EX-C（非 GUI 数据技术结构）：回合终态竞态标记（纯 effect
+// 内部判定簿记，非任何数据源的缓存派生视图——事实来源是 complete/message_start 帧本身）
+const naturalTurnEndSeenSessions = new Set<string>()
+
+/** complete{stop|error} 处理时置位（见上方生命周期注释）。 */
+function markNaturalTurnEnd(sid: string): void {
+  naturalTurnEndSeenSessions.add(sid)
+}
+
+/** message_start / message_end 新回合帧到达时复位。 */
+function resetNaturalTurnEnd(sid: string): void {
+  naturalTurnEndSeenSessions.delete(sid)
+}
+
+/** 本回合已见非 abort 回合终态（complete{aborted} 提示行分支的竞态守卫读口）。 */
+function hasNaturalTurnEnd(sid: string): boolean {
+  return naturalTurnEndSeenSessions.has(sid)
+}
+
+/** session 级清除（store.disposeSession cleanup 编排同点调用，与 clearExecutingBash 同范式）。 */
+export function clearNaturalTurnEndSeen(sessionId: string): void {
+  naturalTurnEndSeenSessions.delete(sessionId)
+}
+
+/** 测试复位（vitest 隔离；生产路径不调，notice-text resetChatNoticeTextForTest 同款先例）。 */
+export function resetNaturalTurnEndSeenForTest(): void {
+  naturalTurnEndSeenSessions.clear()
+}
+
+/**
  * [chat-flow-consistency 缺陷 3/7] liveOnly 提示行追加（stream_warn 先例形态）：
  * id `s-<uuid>`、liveOnly: true、分组归 turn 内 notice 不切断回合（W3 消费）；pi 无对应
  * entry、重开即消失——live ≠ reload 差异与 stream_warn 同型（W2 已裁决豁免等价性断言）。
@@ -406,6 +452,8 @@ const messageEffects: Partial<Record<ServerMessageType, MessageEffectHandler>> =
   // ── 主流式生命周期（chunk 创建/收尾 + isGenerating 派生）──
   'message.message_start': (ctx, sid, payload) => {
     const { messages, clearPendingSend, retryStates } = ctx
+    // [fix-chat-flow-stuck C-3] 新回合帧：复位「已见自然终态」标记（见标记块注释）
+    resetNaturalTurnEnd(sid)
     // [合并收尾] premature-timeout 打标作废路径与 armStreamingTimer 随上游「streaming idle
     // timeout 移除」一并退役（main 侧已整体摘除，git 可追溯）。
     // [HISTORICAL] QueueBubble 快照条件清/僵尸清理（G-023）已随 queue_update 计数路径退役：
@@ -465,6 +513,10 @@ const messageEffects: Partial<Record<ServerMessageType, MessageEffectHandler>> =
       finalizeAttemptAssistant(messages, sid)
       return
     }
+    // [fix-chat-flow-stuck C-3] 非 abort 回合终态置位「已见自然终态」标记（normal/error 均
+    // 是回合终态——error 后迟到的 aborted 同样不该追加「回复尚未开始」提示；attempt 级
+    // willRetry 早退在上面，不置位）。
+    if (reason !== 'aborted') markNaturalTurnEnd(sid)
     // [HISTORICAL] pi turn 失败（stopReason='error'）时 runtime event-adapter 从 agent_end 提取
     // errorMessage 放进本 payload。曾经过往 handler 只读 stopReason/content/usage 把它丢弃——
     // 秒败 turn（如模型 400 拒绝首请求）content 为空，气泡仅剩一个空 error 态，用户完全不可见。
@@ -509,7 +561,9 @@ const messageEffects: Partial<Record<ServerMessageType, MessageEffectHandler>> =
     // （changed=false，用户消息可能已入 pi transcript 但无任何 streaming 实体）→ 追加 liveOnly
     // 停止提示行（「已停止：回复尚未开始」），消除「乐观气泡孤挂、无回复无说明」的静默形态。
     // 幂等防双通道重复（缺陷 9：runtime 必达广播 + pi 自发翻译帧，末位已是本提示则跳过）。
-    if (reason === 'aborted' && !changed) {
+    // [fix-chat-flow-stuck C-3] 竞态守卫：本回合已见非 abort 终态（complete{stop/error} 先到，
+    // 回复已完整生成/已错误收尾）→ 迟到的 aborted 帧不追加提示行（提示与事实相反）。
+    if (reason === 'aborted' && !changed && !hasNaturalTurnEnd(sid)) {
       appendTurnNoticeLine(messages, sid, 'stoppedBeforeStart')
     }
     // [chat-flow-consistency 缺陷 7] 终态截断提示：max_tokens（输出半截）/content_filter
@@ -720,6 +774,9 @@ const messageEffects: Partial<Record<ServerMessageType, MessageEffectHandler>> =
 
   // ── [W21] message_end —— 重构 entry 喂 reducer（实时 feed 权威载体，reducer 薄封装）──
   'message.message_end': (ctx, sid, payload) => {
+    // [fix-chat-flow-stuck C-3] 新回合帧：复位「已见自然终态」标记（user 送达回执先于
+    // assistant message_start 到达，是下一回合最早的帧信号——见标记块注释）
+    resetNaturalTurnEnd(sid)
     const entry = payload['entry']
     // entry 形态检查：message entry（type:'message'）才喂。
     // [坏 entry 静默丢弃 → 见文件头「行为等价性」设计裁决；构造点 = event-adapter handleMessageEnd]

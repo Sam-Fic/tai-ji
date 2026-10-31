@@ -21,6 +21,7 @@ import { textToSegments } from '@taiji/shared'
 import type { Message, Segment, ServerMessage } from '@taiji/shared'
 import { replayEntries } from '../apply-entry'
 import { provideDevMode, __resetDevModeForTesting } from '../../../platform/dev-mode'
+import { resetNaturalTurnEndSeenForTest } from '../effects/registry'
 import { msg } from './helpers/fixtures'
 
 /** 构造独立 store 实例（effectScope 包裹 onScopeDispose 注册 + 测试隔离）。返回 store + dispose。 */
@@ -1022,6 +1023,104 @@ describe('createChatStore factory', () => {
       sut.store.setMessages(sid, [userMsg('u1'), { id: 'a1', role: 'assistant', content: '已完成', status: 'complete', timestamp: 1 }])
       sut.store.finalizeAllStreaming('disconnect')
       expect(sut.store.getMessages(sid)[1].status).toBe('complete')
+    })
+
+    it('[fix-chat-flow-stuck A-3] settling 残留（仅 occupancy turn 维占用、无消息实体）随断连收尾清占用', () => {
+      const sid = 's1'
+      // settling 形态：turn-end 后断连——实体已定稿（无 streaming 消息）、无 retry/pendingSend，
+      // 仅 occupancy turn='settling' 残留（候选集 turn 维 + 守卫 turn 维此前均缺席 → 永久滞留）
+      sut.store.setOccupancy(sid, { turn: 'settling', compacting: false, bash: false, handingOff: false })
+      expect(sut.store.sessionPhase(sid).turn).toBe('settling')
+
+      sut.store.finalizeAllStreaming('disconnect')
+
+      // occupancy 分区被 clearIndependentTransient 清除 → sessionPhase 派生回落全 idle
+      // （发送位/停止按钮形态不再卡「进行中」；重连后 stateSnapshot 回放恢复真实值）
+      expect(sut.store.sessionPhase(sid).turn).toBe('idle')
+      expect(sut.store.sessionPhase(sid).compacting).toBe(false)
+      expect(sut.store.sessionPhase(sid).bash).toBe(false)
+    })
+
+    it('[fix-chat-flow-stuck A-3] dispatching / generating 形态同获断连收尾（turn 维全相位覆盖）', () => {
+      const s1 = 's1'
+      const s2 = 's2'
+      sut.store.setOccupancy(s1, { turn: 'dispatching', compacting: false, bash: false, handingOff: false })
+      sut.store.setOccupancy(s2, { turn: 'generating', compacting: false, bash: false, handingOff: false })
+
+      sut.store.finalizeAllStreaming('disconnect')
+
+      expect(sut.store.sessionPhase(s1).turn).toBe('idle')
+      expect(sut.store.sessionPhase(s2).turn).toBe('idle')
+    })
+  })
+
+  describe('[fix-chat-flow-stuck C-3] complete{aborted} 提示行的自然终态竞态守卫', () => {
+    // 标记宿主是 effects/registry 模块级 Set（跨 store 实例存活），逐用例复位防先导用例
+    // 置位泄漏进后续用例（sut = makeStore() 重建实例不清模块态）
+    beforeEach(() => {
+      resetNaturalTurnEndSeenForTest()
+    })
+
+    /** 分区中 stoppedBeforeStart 提示行的条数（未注入 translator 时文案回退键名原文）。 */
+    function stoppedNoticeCount(sid: string): number {
+      return sut.store.getMessages(sid).filter(
+        (m) => m.role === 'system' && m.liveOnly === true && typeof m.content === 'string' && m.content.includes('stoppedBeforeStart'),
+      ).length
+    }
+
+    it('自然完成后迟到的 complete{aborted} 帧不追加提示行（回复已完整生成，提示与事实相反）', () => {
+      const sid = 's1'
+      // complete{stop} 先到：无 streaming 实体（changed=false）——自然终态置位标记
+      sut.store.applyMessageEvent(sid, msg(sid, 'message.complete', { stopReason: 'end_turn' }))
+      // 迟到的 complete{aborted}：中止与自然完成竞态，跳过「已停止：回复尚未开始」提示行
+      sut.store.applyMessageEvent(sid, msg(sid, 'message.complete', { stopReason: 'aborted' }))
+
+      expect(stoppedNoticeCount(sid)).toBe(0)
+    })
+
+    it('无先导自然终态的 dispatching 窗口停止照常追加提示行（正当场景回归保护）', () => {
+      const sid = 's1'
+      sut.store.applyMessageEvent(sid, msg(sid, 'message.complete', { stopReason: 'aborted' }))
+
+      expect(stoppedNoticeCount(sid)).toBe(1)
+    })
+
+    it('error 终态同样置位：error 完成后迟到的 aborted 帧不追加提示行', () => {
+      const sid = 's1'
+      sut.store.applyMessageEvent(sid, msg(sid, 'message.complete', { stopReason: 'error', errorMessage: 'boom' }))
+      sut.store.applyMessageEvent(sid, msg(sid, 'message.complete', { stopReason: 'aborted' }))
+
+      expect(stoppedNoticeCount(sid)).toBe(0)
+    })
+
+    it('willRetry 中间失败不置位（attempt 级终态非回合终态）：其后的 aborted 仍追加提示行', () => {
+      const sid = 's1'
+      sut.store.applyMessageEvent(sid, msg(sid, 'message.complete', { stopReason: 'error', willRetry: true }))
+      sut.store.applyMessageEvent(sid, msg(sid, 'message.complete', { stopReason: 'aborted' }))
+
+      expect(stoppedNoticeCount(sid)).toBe(1)
+    })
+
+    it('新回合帧复位标记：complete{stop} 后 message_end(user)（新回合最早帧）到达，随后的 aborted 恢复追加提示行', () => {
+      const sid = 's1'
+      sut.store.applyMessageEvent(sid, msg(sid, 'message.complete', { stopReason: 'end_turn' }))
+      // 新回合 user 送达回执（无 inflight 记账、无内核标记 → ③ 外来直发入流）——复位标记
+      sut.store.applyMessageEvent(sid, msg(sid, 'message.message_end', {
+        entry: { type: 'message', id: 'e-user-1', parentId: null, timestamp: '2026-01-01T00:00:00Z', message: { role: 'user', content: 'next question', timestamp: 1 } },
+      }))
+      // 新回合的 aborted（dispatching 窗口停止形态）：正当提示不得被残留标记吞掉
+      sut.store.applyMessageEvent(sid, msg(sid, 'message.complete', { stopReason: 'aborted' }))
+
+      expect(stoppedNoticeCount(sid)).toBe(1)
+    })
+
+    it('disposeSession 清理标记：清除后再来 aborted（changed=false）恢复追加提示行', () => {
+      const sid = 's1'
+      sut.store.applyMessageEvent(sid, msg(sid, 'message.complete', { stopReason: 'end_turn' }))
+      sut.store.disposeSession(sid)
+      sut.store.applyMessageEvent(sid, msg(sid, 'message.complete', { stopReason: 'aborted' }))
+
+      expect(stoppedNoticeCount(sid)).toBe(1)
     })
   })
 

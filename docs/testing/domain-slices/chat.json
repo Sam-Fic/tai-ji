@@ -122,6 +122,7 @@
     "packages/runtime/src/services/session/__tests__/delivery-resync-crash-retry.test.ts",
     "packages/runtime/src/services/session/__tests__/history-bundle.test.ts",
     "packages/runtime/src/services/session/__tests__/message-dispatcher.test.ts",
+    "packages/runtime/src/services/session/__tests__/occupancy-checkpoint-edge.test.ts",
     "packages/runtime/src/services/session/__tests__/rolling-restart.test.ts",
     "packages/runtime/src/services/session/__tests__/session-content-cascade.test.ts",
     "packages/runtime/src/services/session/__tests__/session-delivery-commands.test.ts",

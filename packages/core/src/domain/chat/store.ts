@@ -7,7 +7,7 @@
 import { computed, ref, shallowRef, type ComputedRef, type ShallowRef } from 'vue'
 import { commitMessages, truncateMessagesFrom, prependHistory as prependHistoryMut, createAssistantErrorMessage } from './mutations'
 import { truncateToolOutputBatch, truncateToolOutputBatchCached } from './truncate-tool-output'
-import { dispatchMessageEvent } from './effects/registry'
+import { dispatchMessageEvent, clearNaturalTurnEndSeen } from './effects/registry'
 import {
   applyEntry,
   createChatViewStateBuffer,
@@ -37,7 +37,7 @@ import type {
   SubagentDirectiveData,
   ToolCall,
 } from '@taiji/shared'
-import { segmentsToText, SUBAGENT_DIRECTIVE_CUSTOM_TYPE, PI_RESPAWN_NOTICE_CUSTOM_TYPE } from '@taiji/shared'
+import { segmentsToText, SUBAGENT_DIRECTIVE_CUSTOM_TYPE, PI_RESPAWN_NOTICE_CUSTOM_TYPE, isActiveTurnPhase } from '@taiji/shared'
 import type { PiRespawnNoticeVariant } from '@taiji/shared'
 import type { RetryState, FinalizeReason } from './store-types'
 import { isDevMode } from '../../platform/dev-mode'
@@ -1069,13 +1069,24 @@ export function createChatStore(options: ChatStoreOptions = {}) {
 
   /**
    * 多 session 统一收尾（断连 / runtime 重启兜底）：遍历瞬态 session，逐个调 resetTransientStates。
-   * 遍历范围是 messages.keys() ∪ occupancy 分区中 compacting / handingOff 的 sid ∪ retryStates ∪ pendingSend 并集
-   *（不能只遍历 messages——compacting/handingOff/retry/pendingSend 可独立于消息存在）。详见 ./README.md。
+   * 遍历范围是 messages.keys() ∪ occupancy 分区中 turn 非 idle / compacting / handingOff 的 sid ∪ retryStates ∪ pendingSend 并集
+   *（不能只遍历 messages——occupancy turn/compacting/handingOff/retry/pendingSend 可独立于消息存在）。详见 ./README.md。
    */
   function finalizeAllStreaming(reason: FinalizeReason): void {
     const candidateSids = streamingStateMachine.collectFinalizeCandidates()
     for (const sid of candidateSids) {
-      if (isGenerating(sid) || isCompacting(sid) || isHandingOff(sid) || retryStates.value.has(sid) || pendingSend.value.has(sid)) {
+      // [fix-chat-flow-stuck A-3] 守卫补 occupancy turn 维（isActiveTurnPhase 单一判定源）：
+      // settling 残留（turn-end 后断连、实体已定稿）此前五条件全不命中，occupancy 分区不清
+      // → 发送位/停止按钮形态永久卡「进行中」。occupancy 是重建型状态（重连 stateSnapshot
+      // 回放即恢复，与 compacting/handingOff 同语义，见 clearIndependentTransient 注释），清分区无损。
+      if (
+        isGenerating(sid)
+        || isActiveTurnPhase(sessionPhase(sid).turn)
+        || isCompacting(sid)
+        || isHandingOff(sid)
+        || retryStates.value.has(sid)
+        || pendingSend.value.has(sid)
+      ) {
         resetTransientStates(sid, reason)
       }
     }
@@ -1342,6 +1353,9 @@ export function createChatStore(options: ChatStoreOptions = {}) {
     // [D3 closure] executingBash ephemeral 分区同点清理（bash-effects 模块级 Map 挂接本
     // 编排——session 删除无残留；形态定案理由见 bash-effects.ts 文件头注释）
     clearExecutingBash(sessionId)
+    // [fix-chat-flow-stuck C-3] 回合终态竞态标记同点清理（effects/registry 模块级 Set，
+    // 与 executingBash 同编排清理范式）
+    clearNaturalTurnEndSeen(sessionId)
     // D-3 生命周期：streaming flag 惰性派生缓存随 messages 分区同点清理（漏删即慢泄漏，
     // 07 文档 §3.3.2 cleanup 契约）。
     sessionStreamingFlags.delete(sessionId)

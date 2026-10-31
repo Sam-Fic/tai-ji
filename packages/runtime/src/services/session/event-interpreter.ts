@@ -55,6 +55,8 @@ import { AgentSettledDelayer } from './event-interpreter-settled-delay.js'
 //（event-interpreter-ping-dispose.test.ts 等直接 import 本文件；SR6 SSOT）。
 export { PING_INTERVAL_MS, PING_FAIL_THRESHOLD, PING_WARN_FAIL_COUNT } from './event-interpreter-ping.js'
 import { toErrorMessage } from '../../utils/errors.js'
+// [fix-chat-flow-stuck A-6] occupancy 转移边沿 → runtime-checkpoint 占用快照搭车刷新（best-effort 旁路）
+import { refreshCheckpointOnOccupancyEdge } from './crash-forensics-hooks.js'
 import type { SessionManagerAction, CanvasMarkerAction } from '@zhushanwen/extension-protocol'
 // notify 通道 customType 词表单源（extension-protocol，与壳写点同源）
 import { SUBAGENT_BG_NOTIFY_CUSTOM_TYPE, WORKFLOW_RESULT_CUSTOM_TYPE } from '@zhushanwen/extension-protocol'
@@ -198,6 +200,10 @@ export function updateSessionOccupancy(
   ) return
   session.occupancy = next
   publish?.publish(session.id, { type: 'session.occupancy', payload: occupancyFramePayload(session.id, next) })
+  // [fix-chat-flow-stuck A-6] 占用快照随转移边沿刷进 runtime-checkpoint（best-effort 旁路，
+  // hooks 内异常隔离 + 归并值翻转才落盘——否则「占用中 runtime 崩溃」的磁盘快照恒 idle，
+  // reattach 的 occupied 豁免判据永不命中）。广播主链先行，旁路收尾。
+  refreshCheckpointOnOccupancyEdge(session.id, prev, next)
 }
 
 /**
@@ -284,9 +290,11 @@ export function applySessionOccupancyTransition(
    * 差集重放 / scheduler 旁路源起的 turn 被 noteAgentStart 拦截再 abort（被掐通知已
    * 注入上下文，回执关闭由投递日志 details-id 凭据承接，不重复投递）。
  *
- * 「被掐 turn 的 settled 永不到达」（pi 收尾挂死）归显式上报链：PingProbe（ADR-0047，
- * 60s ping × 3 连续失败）→ onSilentAbort → forceQuitSession。
- */
+   * 「被掐 turn 的 settled 永不到达」（pi 收尾挂死）归显式上报链：PingProbe（ADR-0047，
+   * 60s ping × 3 连续失败）→ onSilentAbort → sessionService.abort（组合根 index.ts 接线；
+   * 并非 forceQuitSession 强杀）。abort RPC 对挂死 pi 悬挂、无超时兜底（ADR-0122 退役登记，
+   * 见 message-dispatcher.abort 注释）——处置归用户「强制退出」。
+   */
 export class UserStoppedGate {
   /** 宿主存取 + abort 能力（SessionService 构造时注入；未注入时全部 no-op——测试友好）。 */
   private deps: {
@@ -331,7 +339,9 @@ export class UserStoppedGate {
   noteAgentStart(sessionId: string): void {
     if (!this.hasUserStoppedMark(sessionId)) return
     console.warn(`[event-interpreter] userStopped: intercepting unattributed agent_start, re-aborting (sessionId=${sessionId})`)
-    // fire-and-forget：abort 内部已含失败链（超时 → forceQuitSession 强杀收敛）。
+    // fire-and-forget：abort RPC 对挂死 pi 悬挂、无超时兜底（ADR-0122 退役登记，处置归用户
+    // 「强制退出」，见 message-dispatcher.abort 注释）；.catch 只防异常逃逸成 unhandledRejection，
+    // 非重试/强杀通道。
     this.deps?.abortSession(sessionId).catch((e: unknown) => {
       console.warn(`[event-interpreter] userStopped: re-abort failed, mark kept (sessionId=${sessionId}):`, e)
     })

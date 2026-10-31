@@ -23,8 +23,8 @@
  *   字面要求）。
  *
  * **errs 方向（D3 显式声明，排查口径）**：
- * - lastActivityAt 只在 reaper 5min tick 搭车刷盘 ⟹ checkpoint 值 ≤ 真实值 ⟹ 算出
- *   idle ≥ 真实 idle ⟹ 过滤**偏「漏恢复」**（退化 = 现状 lazy，用户代价 = 一次手动触碰）；
+ * - lastActivityAt 只在生命周期事件 + occupancy 边沿翻转搭车刷盘 ⟹ checkpoint 值 ≤ 真实值
+ *   ⟹ 算出 idle ≥ 真实 idle ⟹ 过滤**偏「漏恢复」**（退化 = 现状 lazy，用户代价 = 一次手动触碰）；
  * - **快照布尔反向形态**：任务于 T 结束、T+≤5min 内崩溃时 backgroundTasks/relayChildren
  *   快照仍为 true → **多恢复**一个真实已 idle 的 session——新 runtime 的 reaper 后续拍
  *   按 checkpoint 时间戳正常回收它（自收敛，无用户可见损害）。排查口径：持续多恢复且

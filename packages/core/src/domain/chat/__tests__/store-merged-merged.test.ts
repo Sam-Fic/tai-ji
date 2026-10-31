@@ -1055,6 +1055,17 @@ describe("useChat", () => {
       f.dispose()
     })
 
+    it('[fix-chat-flow-stuck C-4] abort 超时（pending 层 65s backstop，code=timeout）：升级 toast 指引强制退出', async () => {
+      const f = makeFixture()
+      // pending.ts sweepExpired 的 reject 形态：Error + code='timeout'（65s 兜底超时到达）
+      f.chatApi.abort.mockRejectedValueOnce(Object.assign(new Error('request timeout after 65000ms'), { code: 'timeout' }))
+      await expect(f.useChat.abort('s9')).resolves.toBeUndefined()
+      // 超时 = abort 无回执（pi 大概率挂死，气泡/断连提示都不会来）——toast 是唯一反馈通道，
+      // 指引侧栏右键「强制退出」收敛出口
+      expect(f.toast.error).toHaveBeenCalledWith('composable.abortTimedOut')
+      f.dispose()
+    })
+
     it('hydrate（reconcile 生产通路验收路径）：注入历史 + truncated 窗口标志', () => {
       const f = makeFixture()
       // use-session 点击切入把 getHistory reply 经 historyWindowFromReply 归一后写 store

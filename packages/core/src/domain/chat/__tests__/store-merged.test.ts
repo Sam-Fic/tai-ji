@@ -22,6 +22,7 @@ import { ensureStreamSubscription, invalidateStreamSubscription, resetChatModule
 import { setSubscriptionPorts, getSubscriptionState, resetSubscriptionStates } from '../../../coordination/subscription-state'
 import { createSessionStore, deriveSessionStatus, sessionsInRuntimeGroupOrder } from '../../session/store'
 import { createLifecycleEffects, type LifecycleEffects, type LifecycleEffectsDeps, type LifecycleNoticeTexts } from '../lifecycle-effects'
+import { getExecutingBash } from '../bash-effects'
 import { _resetLruForTest } from '../lru'
 import { createStreamingStateMachine, type SubagentStreamStateSnapshot } from '../streaming-state-machine'
 
@@ -483,6 +484,20 @@ describe("lifecycle-effects", () => {
 
       expect(getSubscriptionState(sid)).toBeUndefined()
       expect(unsub).toHaveBeenCalledTimes(1)
+    })
+
+    it('[fix-chat-flow-stuck C-1] 执行中 !command 的瞬时执行态随 exited 清理（pi 已死、bashResult 永不再达）', () => {
+      const sid = 's1'
+      // 执行态置位（bashStartEffect 写 per-session ephemeral 分区）
+      f.chat.applyMessageEvent(sid, {
+        type: 'message.bashStart',
+        payload: { sessionId: sid, command: 'long-run', timestamp: 1 },
+      } as ServerMessage)
+      expect(getExecutingBash(sid)?.command).toBe('long-run')
+
+      f.effects.markSessionDead(sid, 'Session process exited (code: 1)')
+
+      expect(getExecutingBash(sid)).toBeUndefined()
     })
   })
 

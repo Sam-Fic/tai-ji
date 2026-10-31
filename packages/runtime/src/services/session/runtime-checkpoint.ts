@@ -22,8 +22,8 @@
  * 4. **失败现场**：`<runDir>/runtime-checkpoint-failed-<ts>.json` 保留最近 3 份（新失败
  *    覆盖最旧）。
  * 5. **风暴防护**：写只在 session 生命周期事件发生（不在每次 touch 刷盘——D3 时效性
- *    裁决；原「reaper tick 搭车刷新」的驱动方已随 ADR-0122 空闲回收退役，refreshSessions
- *    保留为无生产调用方的搭车刷新接口，见其方法注释）；rename 同域失败幂等（ENOENT =
+ *    裁决；refreshSessions 的生产驱动方 = occupancy 转移边沿搭车刷新，归并快照翻转才
+ *    落盘，见其方法注释）；rename 同域失败幂等（ENOENT =
  *    并发删除已隔离；EACCES = 原地残留静默，不重试不升级）；事件只记首次（进程内 once，
  *    防同一失败被反复记录）。
  *
@@ -39,7 +39,8 @@
  *
  * **时效性与 errs 方向（设计 D3 显式声明，实现口径必须一致；按 ADR-0122 reaper 退役后
  * 现状更正，与 crash-forensics-and-watchdog.md D3 时效性裁决同口径）**：lastActivityAt
- * 不在每次 touch 刷盘（写风暴），只在 session 生命周期事件随写更新（无周期刷新）——
+ * 不在每次 touch 刷盘（写风暴），只在 session 生命周期事件随写更新 + occupancy 转移边沿
+ * 刷 occupied↔idle 翻转（fix-chat-flow-stuck A-6，无周期刷新）——
  * checkpoint 值 ≤ 真实值，故消费侧算出的 idle = now − 值 **≥ 真实 idle**，过滤**偏
  * 「漏恢复」**（刚交互过但跨过阈值边界的 session 被判更闲置而漏恢复），退化为现状 lazy
  * （用户代价 = 一次手动触碰），不是偏「多恢复」。快照布尔同此（诚实声明）：backgroundTasks
@@ -160,9 +161,9 @@ export interface RuntimeCheckpointUpsert {
  * 搭车刷新输入（D3：只刷时效字段与豁免快照，**不新增/不复活条目**——
  * 只更新内存清单中已存在的项，避免把未附着的候选写进 checkpoint）。
  *
- * 保留接口（ADR-0122 reaper 退役后现状）：原驱动方 reaper 5min tick 已随空闲回收整体
- * 退役，本接口当前无生产调用方（仅单测），按设计登记保留为恢复周期刷新再接线时的
- * 现成入口（crash-forensics-and-watchdog.md D3「时效性裁决」）。
+ * 生产驱动方 = crash-forensics-hooks 的 occupancy 转移边沿刷新
+ * （refreshCheckpointOnOccupancyEdge，fix-chat-flow-stuck A-6）：占用快照归并值翻转时
+ * 刷 occupancy + activityAt，保证「占用中 runtime 崩溃」的磁盘快照反映真实占用。
  */
 export interface RuntimeCheckpointRefresh {
   /** pi session id。 */
@@ -317,13 +318,13 @@ export class RuntimeCheckpointStore {
   /**
    * 搭车刷新（D3 时效性裁决）：只更新**已存在**条目，一次落盘。
    *
-   * **保留接口、当前无生产调用方**：原驱动方 reaper 5min tick 已随 ADR-0122 空闲回收
-   * 整体退役，checkpoint 条目此后只在注册汇聚点整条写入；本接口按设计登记保留，若后续
-   * 恢复周期刷新再接线即为现成入口（crash-forensics-and-watchdog.md D3「时效性裁决」）。
+   * 生产驱动方 = crash-forensics-hooks 的 occupancy 转移边沿刷新
+   * （refreshCheckpointOnOccupancyEdge，fix-chat-flow-stuck A-6）——归并快照翻转
+   * （idle↔occupied）才调，turn 内相位推进不落盘（调用方做边沿过滤；本方法字段级
+   * touched 判定只挡空刷新，相同值重复刷新仍会落盘，节流责任在调用方）。
    *
-   * 不新增条目（候选枚举与 checkpoint 同源 = getActiveSessionIds，未附着者不该进清单）；
-   * 本拍未判定的字段保留现值（undefined = 不覆盖，区别于「判定为 false/idle」）。
-   * 无任何变更时不落盘（避免空 tick 反复改写文件）。
+   * 不新增条目（未附着者不该进清单）；本拍未判定的字段保留现值（undefined = 不覆盖，
+   * 区别于「判定为 false/idle」）。无任何变更时不落盘（避免空刷新反复改写文件）。
    */
   refreshSessions(refreshes: readonly RuntimeCheckpointRefresh[]): void {
     let changed = false
