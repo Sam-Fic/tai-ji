@@ -93,45 +93,58 @@ function readJsonFile(filePath, label) {
 
 /**
  * 结构校验（fail-closed：清单不可信时不产出绿）。
- * 返回错误清单；空数组 = 合法。
+ * 返回错误清单；空数组 = 合法。按校验面拆三个子函数：根级字段 / 单条规则 / match 键，
+ * 错误清单按「根级 → rules 依声明序逐条」原序合并，与单函数版逐条 push 等价。
  */
 export function validateBaseline(baseline) {
-  const errors = [];
   if (!isPlainObject(baseline)) return ["清单根必须是对象"];
+  const errors = validateBaselineRoot(baseline);
+  const categories = isPlainObject(baseline.categories) ? Object.keys(baseline.categories) : [];
+  const seenIds = new Set();
+  for (const [index, rule] of (Array.isArray(baseline.rules) ? baseline.rules : []).entries()) {
+    errors.push(...validateBaselineRule(rule, `rules[${index}]`, categories, seenIds));
+  }
+  return errors;
+}
+
+/** 根级字段校验：schemaVersion / categories / rules / unknownPolicy。 */
+function validateBaselineRoot(baseline) {
+  const errors = [];
   if (typeof baseline.schemaVersion !== "number") errors.push("schemaVersion 必须是数字");
   if (!isPlainObject(baseline.categories)) errors.push("categories 必须是对象");
   if (!Array.isArray(baseline.rules) || baseline.rules.length === 0) errors.push("rules 必须是非空数组");
   if (!isPlainObject(baseline.unknownPolicy) || baseline.unknownPolicy.verdict !== "violation") {
     errors.push("unknownPolicy.verdict 必须是 violation（白名单外条目按违规处理）");
   }
+  return errors;
+}
 
-  const categories = isPlainObject(baseline.categories) ? Object.keys(baseline.categories) : [];
-  const seenIds = new Set();
-  for (const [index, rule] of (Array.isArray(baseline.rules) ? baseline.rules : []).entries()) {
-    const where = `rules[${index}]`;
-    if (!isPlainObject(rule)) {
-      errors.push(`${where} 必须是对象`);
-      continue;
-    }
-    if (typeof rule.id !== "string" || !rule.id) errors.push(`${where}.id 必须是非空字符串`);
-    else if (seenIds.has(rule.id)) errors.push(`${where}.id 重复：${rule.id}`);
-    else seenIds.add(rule.id);
-    if (!categories.includes(rule.category)) errors.push(`${where}.category 未在 categories 登记：${rule.category}`);
-    if (rule.verdict !== "allow" && rule.verdict !== "forbid") errors.push(`${where}.verdict 必须是 allow/forbid`);
-    if (!Array.isArray(rule.allowIn) || rule.allowIn.some((scope) => !VALID_SCOPES.has(scope))) {
-      errors.push(`${where}.allowIn 必须是 main/child 数组`);
-    }
-    if (typeof rule.source !== "string" || !rule.source) errors.push(`${where}.source 必须是非空字符串`);
-    if (typeof rule.note !== "string" || !rule.note) errors.push(`${where}.note 必须是非空字符串`);
-    if (!isPlainObject(rule.match)) {
-      errors.push(`${where}.match 必须是对象`);
-      continue;
-    }
-    const matchKeys = Object.keys(rule.match).filter((key) => MATCH_KEYS.has(key));
-    if (matchKeys.length === 0) errors.push(`${where}.match 至少要有一个受支持条件（${[...MATCH_KEYS].join("/")}）`);
-    for (const key of Object.keys(rule.match)) {
-      if (!MATCH_KEYS.has(key)) errors.push(`${where}.match.${key} 不是受支持条件`);
-    }
+/** 单条规则校验：id / category / verdict / allowIn / source / note / match。 */
+function validateBaselineRule(rule, where, categories, seenIds) {
+  if (!isPlainObject(rule)) return [`${where} 必须是对象`];
+  const errors = [];
+  if (typeof rule.id !== "string" || !rule.id) errors.push(`${where}.id 必须是非空字符串`);
+  else if (seenIds.has(rule.id)) errors.push(`${where}.id 重复：${rule.id}`);
+  else seenIds.add(rule.id);
+  if (!categories.includes(rule.category)) errors.push(`${where}.category 未在 categories 登记：${rule.category}`);
+  if (rule.verdict !== "allow" && rule.verdict !== "forbid") errors.push(`${where}.verdict 必须是 allow/forbid`);
+  if (!Array.isArray(rule.allowIn) || rule.allowIn.some((scope) => !VALID_SCOPES.has(scope))) {
+    errors.push(`${where}.allowIn 必须是 main/child 数组`);
+  }
+  if (typeof rule.source !== "string" || !rule.source) errors.push(`${where}.source 必须是非空字符串`);
+  if (typeof rule.note !== "string" || !rule.note) errors.push(`${where}.note 必须是非空字符串`);
+  if (isPlainObject(rule.match)) errors.push(...validateBaselineMatchKeys(rule.match, where));
+  else errors.push(`${where}.match 必须是对象`);
+  return errors;
+}
+
+/** match 键校验：至少一个受支持条件；出现的键全部受支持。 */
+function validateBaselineMatchKeys(match, where) {
+  const errors = [];
+  const supportedCount = Object.keys(match).filter((key) => MATCH_KEYS.has(key)).length;
+  if (supportedCount === 0) errors.push(`${where}.match 至少要有一个受支持条件（${[...MATCH_KEYS].join("/")}）`);
+  for (const key of Object.keys(match)) {
+    if (!MATCH_KEYS.has(key)) errors.push(`${where}.match.${key} 不是受支持条件`);
   }
   return errors;
 }
@@ -202,25 +215,31 @@ export function diffSessionLines(beforeLines, afterLines) {
   return increments;
 }
 
-export function entryMatchesRule(entry, rule, dataTypeById = undefined) {
-  const match = rule.match ?? {};
-  const entryType = isPlainObject(entry) && typeof entry.type === "string" ? entry.type : undefined;
-  const expectedEntryTypes = asArray(match.entryType);
-  if (expectedEntryTypes !== undefined && !expectedEntryTypes.includes(entryType)) return false;
-
-  const customType = isPlainObject(entry) && typeof entry.customType === "string" ? entry.customType : undefined;
+/** customType 族条件（exact / prefix / suffix）：未声明的条件跳过，声明的全部满足才通过。 */
+function matchesCustomType(match, customType) {
   if (match.customType !== undefined && customType !== match.customType) return false;
   if (match.customTypePrefix !== undefined && !(customType?.startsWith(match.customTypePrefix) ?? false)) return false;
   if (match.customTypeSuffix !== undefined && !(customType?.endsWith(match.customTypeSuffix) ?? false)) return false;
+  return true;
+}
 
-  if (match.dataType !== undefined) {
-    const data = isPlainObject(entry) ? entry.data : undefined;
-    let dataType = isPlainObject(data) && typeof data.type === "string" ? data.type : undefined;
-    if (dataType === undefined && isPlainObject(data) && typeof data.id === "string" && dataTypeById !== undefined) {
-      dataType = dataTypeById.get(data.id);
-    }
-    if (!(asArray(match.dataType) ?? []).includes(dataType)) return false;
+/** dataType 条件：data.type 直读；部分注销类条目（只带 id 无 type）经 dataTypeById 推导补齐。 */
+function matchesDataType(match, entry, dataTypeById) {
+  const data = isPlainObject(entry) ? entry.data : undefined;
+  let dataType = isPlainObject(data) && typeof data.type === "string" ? data.type : undefined;
+  if (dataType === undefined && isPlainObject(data) && typeof data.id === "string" && dataTypeById !== undefined) {
+    dataType = dataTypeById.get(data.id);
   }
+  return (asArray(match.dataType) ?? []).includes(dataType);
+}
+
+export function entryMatchesRule(entry, rule, dataTypeById = undefined) {
+  const match = rule.match ?? {};
+  const digest = entryDigest(entry);
+  const expectedEntryTypes = asArray(match.entryType);
+  if (expectedEntryTypes !== undefined && !expectedEntryTypes.includes(digest.type)) return false;
+  if (!matchesCustomType(match, digest.customType)) return false;
+  if (match.dataType !== undefined && !matchesDataType(match, entry, dataTypeById)) return false;
   return true;
 }
 

@@ -1,5 +1,5 @@
 {
-  "_comment": "主 session JSONL 条目类型基线清单——M0-2 契约层机器可读数据文件，S2 diff 白名单的唯一载体。prose 文档（ADR / 测试策略等）只引用本文件路径、不复制清单内容；迁移期在校准探针下真实 diff 增量后只改本文件（清单更新即判定口径同步更新）。S2 diff 工具（scripts/s2-session-entry-diff.mjs）运行时直读本文件，禁止工具侧内嵌副本。",
+  "_comment": "主 session JSONL 条目类型基线清单——M0-2 契约层机器可读数据文件，S2 diff 白名单的唯一载体。prose 文档（ADR / 测试策略等）只引用本文件路径、不复制清单内容；迁移期在校准探针下真实 diff 增量后只改本文件（清单更新即判定口径同步更新）。S2 diff 工具（scripts/s2-session-entry-diff.mjs）运行时直读本文件，禁止工具侧内嵌副本。coverage-file-gate-exempt: 纯数据契约单源，无 JS 可执行语义；消费方为 scripts/s2-session-entry-diff.mjs 运行时直读，清单结构合法性由 packages/shared/src/execution/__tests__/s2-diff-tool.test.ts 经 loadBaseline 全量校验，lcov 行覆盖对 JSON 数据文件不构成有效口径。",
   "schemaVersion": 1,
   "contractVersion": 1,
   "purpose": "定义主 session / 子会话 JSONL 增量中允许与禁止的条目类型。判定口径：SPEC 分类 verdict=allow 且 allowIn 含当前 scope 的条目放行；verdict=forbid 或 scope 不在 allowIn 的条目为违规；无任何规则命中 = unknown（按 unknownPolicy 判违规）。",
