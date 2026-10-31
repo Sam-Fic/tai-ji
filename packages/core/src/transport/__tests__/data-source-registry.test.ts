@@ -36,6 +36,21 @@ type _Assert_ScopeDomain = AssertExtends<DataSourceDescriptor['scope'], 'global'
 // 加载态字段形态在位（batchInProgress? 可缺省布尔）
 type _Assert_LoadingStateField = AssertExtends<DataSourcePayloadFields['batchInProgress'], boolean | undefined>
 
+// ── 编译期强制执行点（AssertExtends/AssertAssignable 须经泛型约束消费才被 tsc 机器强制）──
+// TS 对未被消费的类型别名不做诊断（断言失败解析为 ERROR 元组仍零报错，tsc --noEmit 全绿）——
+// 上面各断言别名必须经泛型约束消费，设计 §7.4 的值域锁定才真正承载机器看守。任一值域
+// 漂移（failure 加第二值 / requires 混入设计外维度 / scope 增值 / 载体字段漂移）→ 对应行
+// TS2344（ERROR 元组带出双方类型，可读）。运行期仅返回常量 true，零成本。
+// （模式同 shared 契约面先例 plan-protocol.test.ts / gen-stats.test.ts。）
+const _enforceTrue = <T extends true>(_v?: T): true => true
+const _dataSourceRegistryAssertsEnforced = [
+  _enforceTrue<_Assert_RemoteCapabilities>(),
+  _enforceTrue<_Assert_LocalDimensionsAccepted>(),
+  _enforceTrue<_Assert_FailureDomain>(),
+  _enforceTrue<_Assert_ScopeDomain>(),
+  _enforceTrue<_Assert_LoadingStateField>(),
+]
+
 // ── 运行期断言 ────────────────────────────────────────────────
 describe('DataSourceDescriptor §7.4 形状（u-m0 M0-3）', () => {
   it('拉取型描述符可构造：requires 引用 RemoteCapability + 本地维度', async () => {
