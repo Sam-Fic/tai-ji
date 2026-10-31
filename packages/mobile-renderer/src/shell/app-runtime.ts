@@ -469,7 +469,7 @@ export const activeSessionId = sessionStore.activeId
 /** session 列表扁平视图（响应式派生，列表页消费） */
 export const sessionList = sessionStore.list
 
-/** 载入 session 分组列表（App 挂载 / 列表页刷新入口；错误态落 store.listLoadError） */
+/** 载入 session 分组列表（App connected 边沿触发（App.vue watch）/ 列表页重试入口；错误态落 store.listLoadError） */
 export function loadSessions(): Promise<void> {
   return useSessionInstance.loadSessions()
 }
@@ -623,7 +623,7 @@ export function networkKindFromHost(hostname: string): 'tailscale' | 'lan' {
 // 设置页「已连接时长」的客户端派生源；null = 尚无 connected 边沿）
 export const connectedSince = ref<number | null>(null)
 
-/** connected 边沿记录（App.vue watch isConnected 消费；每次重连重算——显示本次连接会话时长） */
+/** connected 边沿记录（App.vue watch shellConnectionState === 'connected' 消费；每次重连重算——显示本次连接会话时长） */
 export function markConnectedNow(): void {
   connectedSince.value = Date.now()
 }

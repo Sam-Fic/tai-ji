@@ -97,7 +97,7 @@ const _dagFamilyBidirectionalLock: _DagFamilyBidirectionalLock = [
   true, true, true, true, true, true, true,
 ]
 
-/** record 文件读原语：全量读 + 逐行复用投影解析器（坏行宽容跳过计 warn——对齐活体 tailer 的 onSkippedLines 语义）。 */
+/** record 文件读原语：全量读 + 逐行复用投影解析器（头行/坏行宽容跳过计 warn——对齐 tailer skippedLines 单通道语义：头行是合法存在，同样计入计数）。 */
 function readWorkflowRecordFile(recordPath: string): WorkflowRunEvent[] {
   const content = readFileSync(recordPath, 'utf8')
   const events: WorkflowRunEvent[] = []
@@ -111,7 +111,7 @@ function readWorkflowRecordFile(recordPath: string): WorkflowRunEvent[] {
     events.push(event)
   }
   if (skipped > 0) {
-    console.warn(`[workflow-run-events-reader] record stream skipped ${skipped} bad lines: ${recordPath}`)
+    console.warn(`[workflow-run-events-reader] record stream skipped ${skipped} line(s) (header and/or bad lines): ${recordPath}`)
   }
   return events
 }

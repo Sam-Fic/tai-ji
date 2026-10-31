@@ -1,5 +1,5 @@
 /**
- * pi 会话 header 格式版本防御（startup 设计 §7.2「pi 格式版本防御」，终态同步修复 G3）。
+ * pi 会话 header 格式版本防御（startup 设计 §7.2「pi 格式版本防御」，终态同步修复 design-code-sync R1 G3〔§7.2 pi 格式版本防御条款〕）。
  *
  * 为什么存在：过渡期仍读 pi 会话文件的路径（扫描器 / U4 纯读两级解析等，消费方经
  * session-file-utils parseSessionHeader 单点）在 pi 升级把 header version 抬到 taiji

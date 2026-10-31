@@ -4,7 +4,9 @@
  * 三态各有用例（验收场景 A8 的机制半边；设计 §4.2 RL9 看守）：
  * 1. 标记写入：recordDisabled → disabled.json 条目落盘（pluginId + reason + disabledAt）；
  * 2. 扫描跳过：PluginRegistry.scan 对 disabled.json 命中的插件目录整体跳过（不产
- *    descriptor = 不装载）；清单缺失/损坏按空表容错（禁用机制故障不阻断正常装载）；
+ *    descriptor = 不装载）；清单缺失/损坏按空表容错（禁用机制故障不阻断正常装载）。
+ *    看守面覆盖三个扫描目录（全局 configDir/plugins / 项目级 .taiji/plugins /
+ *    built-in 显式注入目录——禁用过滤在统一 entry 循环，三目录同一路径）；
  * 3. 卸载清理：recordUninstalled 同步清 installed.json 与 disabled.json 两份条目
  *    （对称语义——「禁用 → 卸载 → 重装同 id」路径上重装即正常装载，无残留标记）。
  *
@@ -121,6 +123,36 @@ describe('PluginRegistry 扫描跳过（U7 三态之 2）', () => {
     const ids = descriptors.map((d) => d.pluginId)
     expect(ids).not.toContain('plug-disabled')
     expect(ids).toContain('plug-normal')
+  })
+
+  it('项目级目录（<projectRoot>/.taiji/plugins）命中禁用键同样被跳过（三扫描目录同一路径）', async () => {
+    // 禁用过滤位于统一 entry 循环（plugin-registry.ts scan 内 disabled.has(entry)
+    // continue），对三个扫描目录同一路径生效——本用例看守项目级目录这一半，
+    // 防重构把过滤挪进特定 source 分支后静默失真。
+    const projectPluginsDir = join(dir, 'project', '.taiji', 'plugins')
+    makePluginDir(projectPluginsDir, 'plug-proj-disabled')
+    makePluginDir(projectPluginsDir, 'plug-proj-normal')
+    // 禁用标记清单固定读全局 <pluginsConfigDir>/plugins/disabled.json（判定键 =
+    // 目录名即 pluginId，跨目录生效）
+    mkdirSync(pluginsDir, { recursive: true })
+    writeFileSync(
+      join(pluginsDir, 'disabled.json'),
+      JSON.stringify({ 'plug-proj-disabled': { reason: 'r', disabledAt: '2026-10-31T00:00:00Z' } }),
+    )
+    const ids = (await registry.scan()).map((d) => d.pluginId)
+    expect(ids).not.toContain('plug-proj-disabled')
+    expect(ids).toContain('plug-proj-normal')
+  })
+
+  it('built-in 目录（显式注入路径）命中禁用键同样被跳过（三扫描目录同一路径）', async () => {
+    makePluginDir(join(dir, 'builtin'), 'plug-builtin-disabled')
+    mkdirSync(pluginsDir, { recursive: true })
+    writeFileSync(
+      join(pluginsDir, 'disabled.json'),
+      JSON.stringify({ 'plug-builtin-disabled': { reason: 'r', disabledAt: '2026-10-31T00:00:00Z' } }),
+    )
+    const ids = (await registry.scan()).map((d) => d.pluginId)
+    expect(ids).not.toContain('plug-builtin-disabled')
   })
 
   it('disabled.json 缺失（常态）→ 全部装载不受影响', async () => {

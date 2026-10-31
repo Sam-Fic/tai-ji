@@ -349,6 +349,10 @@ describe('spawn argv 判据对账（startup 设计 §7.2「孤儿收割判据单
   // 对账方向：判据 flag 与 spawn 构造经 pi-rpc 判据常量同源同引（PI_SPAWN_MODE_ARGS /
   // PI_SPAWN_NO_EXTENSIONS / PI_SPAWN_EXTENSION_FLAG / PI_SPAWN_SKILL_FLAG）。构造侧改
   // flag 形态（改名/删除）而不同步判据 → 本段对账测试红——替代「两侧各自硬编码时的静默漏收」。
+  // 看守拓扑补登（2026-10-31 终态同步）：subagent 包装层（pi-subagent-cli buildSpawnArgs）
+  // push 的 --no-extensions 变更不在本段红灯射程——本段在下方用例中以本地 args.push 模拟
+  // 包装层而非实调它；该半边的红灯由 pi-subagent-cli spawn-args.test 的 toEqual 锚定承担
+  // （断言产物含 "--no-extensions"），CI 同批可拦。本段锚定的是 pi-rpc 模板产物 + 判据合取。
 
   it('buildPiMainAgentArgs 产物满足四条合取①②③（主 agent spawn 形态对账）', () => {
     const argv = buildPiMainAgentArgs({ extensionPaths: [MARKERS[0]] }, undefined)

@@ -2,7 +2,7 @@
  * RuntimeServer — 编排层：路由表装配（D1）+ service 编排 + 连接/消息协调。
  *
  * C2 拆分后只保留传输编排职责：
- * - 组合 ConnectionManager（连接生命周期 + 心跳 + 连接池）与 ServerMessageBroker（发送/广播/initial state）。
+ * - 组合 ConnectionManager（连接生命周期 + 连接池）与 ServerMessageBroker（发送/广播/initial state）。
  * - D1 中央分发表：handler 的 handles 清单 + Map spread → O(N→M) 路由映射（亮点，勿动）。
  * - setServices：四阶段编排（assignServices → createBroker → assembleHandlers → buildRoutes），
  *   装配全部 message handler 并注入各 handler 的 context（messaging + 领域依赖）。

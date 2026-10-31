@@ -6,7 +6,8 @@
  *   失效信号 → 防抖 → cursor 三路径拉取 → merge → 送达水位发布；plan 模式重设计 D1③④
  *   扩容第三族——record 三族 customType 早退门 + scanPlanStateEntries 派生 + session.planState
  *   publish diff；[reload-closeout D2] 发布门基线从 merge 变化信号换成已发布快照水位，
- *   检查/发布门处丢帧 = 水位滞留 → agent_settled / 15s 定时两路径对账补发，稳态零帧）；
+ *   检查/发布门处丢帧 = 水位滞留 → agent_settled 边沿单路径对账补发（定时路径已随
+ *   ADR-0122 退役，见文件尾退役登记），稳态零帧）；
  * - 磁盘读侧/动作/引擎配置：getSubagents/getWorkflows（[W1 / D6] 读请求只读事件
  *   派生视图——entry 游标 + 事件 tail 双源单点合并，见 events-projection.ts；v1 巨文件
  *   会话 oversize 分流走旧格式惰性兼容读路径）、getPlanState（冷启动磁盘扫描不变）、
@@ -127,7 +128,7 @@ const SUBAGENT_ACTION_RESULT_MAX_BYTES = 262_144
  * [reload-closeout D2] 送达水位：published* 三字段 = 已发布快照（发布门基线）。发布判定 =
  * 当前派生快照 vs 已发布快照（逐 record 比对，equals 语义与 merge 域 helpers 同源），
  * publish 调用完成即推进——检查失败 / bus 未注入 → publish 未发生 → 水位滞留 → 下轮
- * 触发（agent_settled / 15s 定时）diff 非空必补发；稳态快照==水位零帧。生命周期随本
+ * 触发（agent_settled 边沿）diff 非空必补发；稳态快照==水位零帧。生命周期随本
  * cache：销毁（onSessionDisposed）同批清理、重注册新建空水位首发布；fullRebuild 只重置
  * 派生 Map，**水位存续**（re-merge 后对水位比对，内容不变零帧——cursor 自愈全量重新拉取
  * 发冗余帧的旧形态就此消除）。内存与派生缓存同构 ×2（SubagentRecord KB 级 × 打开 pane
@@ -225,10 +226,10 @@ type EntriesSinceResult = { data?: { entries?: unknown[]; leafId?: string | null
 
 /**
  * [pull-push W0] refreshRecordEntries 的触发路径标注（发布观测事件的「原因」字段）：
- * invalidate = entry_appended 失效防抖路径；reconcile-settled = agent_settled 对账路径；
- * reconcile-timer = 15s 定时对账路径。
+ * invalidate = entry_appended 失效防抖路径；reconcile-settled = agent_settled 对账路径
+ * （定时对账路径及其词表成员已随 ADR-0122 退役删除）。
  */
-type RecordRefreshTrigger = 'invalidate' | 'reconcile-settled' | 'reconcile-timer'
+type RecordRefreshTrigger = 'invalidate' | 'reconcile-settled'
 /** 发布归因词表（可观测行 trigger 字段）：entry 批路径透传 refresh trigger，事件派生视图路径恒 'event-projection'。 */
 type RecordPublishSource = RecordRefreshTrigger | 'event-projection'
 
@@ -414,26 +415,12 @@ function recordRecentEffectiveModel(record: SubagentRecord): SessionModelChangeE
 }
 
 /**
-   * [reload-closeout D2] 送达水位对账定时路径间隔（低频兜底；主路径 = agent_settled 路径秒级）。
- * 15s + 单轮耗时，对 G1「完成后 ≤30s 收敛」阈值留 2x 余量。稳态成本 = 每 15s 每「有
- * record 的 session」一次 get_entries(since) 空增量 RPC（pi 侧内存读非磁盘扫描——pi 实装
- * 锚点：pi 1.0.0 dist/core/session-manager.js getEntries 返回 `this.fileEntries.filter(...)`
- * 内存过滤零磁盘 IO；调用链 dist/modes/rpc/rpc-mode.js case "get_entries"）。
- */
-
-/**
  * [reload-closeout D2 实施期门①] 单轮对账（fetch→merge→publish）耗时红绿线：
  * ≤100ms/session/轮（u0 faux 基线 15ms，~6.7x 余量）。超限 warn = 重审触发线信号
- * （扫描域 session 数 > 10 或稳态单轮超线 → 重新校准定时间隔/扫描域，设计 D2）。
+ * （稳态单轮超线 → 重审该阈值定值，设计 D2；agent_settled 边沿单路径下该红线约束
+ * 单轮耗时本身）。
  */
 export const RECORD_RECONCILE_ROUND_BUDGET_MS = 100
-
-/**
- * [reload-closeout D2 重审触发线第二维度] 对账扫描域规模观测阈值：域内 session 数超过
- * 此值时 warn（跨阈值边沿触发一次，稳态持续超线不重复刷）。超线 = 定时间隔/扫描域需
- * 重新校准的信号——设计 D2 重审触发线两维度之一（另一维度 = 上方单轮耗时红线）。
- */
-export const RECORD_RECONCILE_DOMAIN_SIZE_WARN_THRESHOLD = 10
 
 /**
  * 定向消息文本的换行编码（composer 四符号 §3.3.3 / 探针 P3 转义协议）。
@@ -479,19 +466,6 @@ export class SessionRecords {
    * 生命周期——与 per-session 派生缓存同寿命，进程级单实例）。
    */
   private readonly runEventsReader = new WorkflowRunEventsReader()
-
-  /**
-   * [reload-closeout D2] 定时对账路径：服务级单例 timer（15s，unref 不钉住进程退出）。
-   * 扫描域 = 持有非空派生缓存的已注册 session；域清零随 onSessionDisposed 检查停。
-   * 与防抖失效路径 / agent_settled 路径的重入经 per-session inflight 合并（既有机制）。
-   */
-
-  /**
-   * [reload-closeout D2 重审触发线第二维度] 扫描域规模边沿状态（上次 sweep 是否已超
-   * 阈值）——纯 bool 随服务实例生命周期，无需 dispose；边沿翻转才 warn，防止 15s 轮询
-   * 稳态持续超线时刷屏。
-   */
-  private reconcileDomainOverThreshold = false
 
   constructor(
     private readonly deps: SessionRecordsDeps,
@@ -615,8 +589,8 @@ export class SessionRecords {
   }
 
   /**
-   * [reload-closeout D2] 对账轮失败 warn（agent_settled 路径与定时 sweep 路径共用，两路径恢复
-   * 指引保持一致）。恢复指引（设计 §3.1 场景 B / §3.4 错误规格「日志含恢复指引」）：
+   * [reload-closeout D2] 对账轮失败 warn（失效防抖路径与 agent_settled 对账路径共用，
+   * 两路径恢复指引保持一致）。恢复指引（设计 §3.1 场景 B / §3.4 错误规格「日志含恢复指引」）：
    * 数据目录可读性是该路径失败的常见根因；W18 失效链全量重新拉取是既有兜底路径，指给排障者。
    */
   private warnReconcileRoundFailed(sessionId: string, e: unknown): void {
@@ -819,8 +793,8 @@ export class SessionRecords {
    * 失败语义：Entry not found → 丢 cursor 就地重试一次全量自愈（两轮上限，防坏 pi 反复全量）；
    * 其他 RPC 错误 → warn 后保留 cursor（下次失效重试仍走增量），不发布（快照未变）。
    *
-   * [pull-push W0] trigger 参数标注本轮触发路径（invalidate / reconcile-settled /
-   * reconcile-timer），随发布观测事件落日志（S5 排障口径「哪条路径补的帧」）；成功完成
+   * [pull-push W0] trigger 参数标注本轮触发路径（invalidate / reconcile-settled），随发布观测
+   * 事件落日志（S5 排障口径「哪条路径补的帧」）；成功完成
    * 一轮后清 awaitingFirstPull（首次拉取未决解除，对账域判定回归内容域）。
    */
   private async refreshRecordEntries(sessionId: string, trigger: RecordRefreshTrigger): Promise<void> {
@@ -872,19 +846,18 @@ export class SessionRecords {
         }
       } finally {
         // [reload-closeout D2 实施期门①] 单轮红绿线观测：fetch→merge→publish 全程计时
-        // （u0 基线 15ms），超线 warn = 重审触发线信号（定时间隔/扫描域重校准依据）。
+        // （u0 基线 15ms），超线 warn = 重审触发线信号（单轮耗时阈值重审依据）。
         const elapsedMs = Date.now() - startedAt
         if (elapsedMs > RECORD_RECONCILE_ROUND_BUDGET_MS) {
           console.warn(`[session-service] record refresh round took ${elapsedMs}ms for ${sessionId} (budget ${RECORD_RECONCILE_ROUND_BUDGET_MS}ms) — profiling red line exceeded, recalibration trigger`)
         }
-        // [reload-closeout D2] 派生内容落缓存后同步定时路径起停（域非空起、域空停）
       }
     }
     cache.inflight = run().finally(() => { cache.inflight = null })
     return cache.inflight
   }
 
-  // [ADR-0112 退役登记] 定时对账路径（reload-closeout D2 的 15s 服务级 setInterval 扫描）
+  // [ADR-0122 退役登记] 定时对账路径（reload-closeout D2 的 15s 服务级 setInterval 扫描）
   // 已删——记录条目对账保留事件边沿单路径（agent_settled 触发 reconcileRecordEntries），
   // settled 路径丢失时条目滞留至下一事件边沿。
 
@@ -1406,9 +1379,9 @@ export class SessionRecords {
   /**
    * 获取 session 派生的 workflow 列表。
    *
-   * [W1 / D6] 读请求只读内存派生视图（run 骨架经 事件 fold + v2 条目定界；v1 快照
-   * 实体走冻结兼容数据）；oversize（>32MB）走旧格式惰性兼容读路径（预检语义专属域，
-   * 与 getSubagents 同款）。
+   * [W1 / D6] 读请求只读内存派生视图（run 骨架经 事件 fold + v2 条目定界——v1 冻结
+   * 层已删，见 events-projection.ts 头注登记）；oversize（>32MB = v1 巨文件时代会话）
+   * 走旧格式惰性兼容读路径（预检语义专属域，与 getSubagents 同款）。
    */
   async getWorkflows(sessionId: string): Promise<OversizeAwareResult<WorkflowRunRecord>> {
     // wave:perf-w26（plan M-3）：路径解析消费方 force 旁路 TTL（与 getSubagents 同理）。
@@ -1687,8 +1660,8 @@ export class SessionRecords {
   /**
    * W18：销毁 record entry 派生缓存（主动删 + 进程退出汇聚点）。停防抖定时器
    * （在途 inflight 的拉取完成后 applyRecordEntries 的 hasSession 检查拦住发布，
-   * 不复活已清 bus 条目）。[reload-closeout D2] 送达水位随 cache 同批清理；扫描域
-   * 清零随本处检查停对账定时器。
+   * 不复活已清 bus 条目）。[reload-closeout D2] 送达水位随 cache 同批清理（对账定时器
+   * 已随 ADR-0122 退役，无起停需清理）。
    */
   onSessionDisposed(sessionId: string): void {
     const cache = this.recordEntriesCaches.get(sessionId)
@@ -1833,7 +1806,7 @@ function planStateDiffersFromPublished(current: PlanStateView | null, published:
  * plan session 的 planState 恒 null——修复前不在域内）保持对账域内，agent_settled 路径
  * 持续重试直至首轮拉取成功。代价校准：cursor=null 的重试走全量 RPC，但 getEntries 是
  * pi 内存过滤零磁盘 IO（session-manager.js:982-984 锚点），频率 = agent_settled 每
- * turn 一次；定时路径仍受实施期门③约束（cursor=null 跳过），无高频放大。
+ * turn 一次，无高频放大。
  */
 function isInReconcileDomain(cache: RecordEntriesCache): boolean {
   return cache.awaitingFirstPull || cache.subagents.size > 0 || cache.workflows.size > 0 || cache.planState !== null

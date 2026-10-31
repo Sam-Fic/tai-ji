@@ -638,3 +638,16 @@ export { ACTIVE_TURN_PHASES, isActiveTurnPhase, IDLE_SESSION_PHASE } from './ses
 // runtime 发送侧（handoff-prompt）与 core 派生侧（交接回合识别，apply-entry-convert）
 // 同源引用，识别判定与发送值不漂移。措辞冻结约束见 ./handoff 头注。
 export { HANDOFF_PROMPT_TEMPLATE } from './handoff'
+// readiness 域（startup-readiness-and-current-state 设计 §7.1 能力契约层，u-m0 M0 契约期）：
+// 跨进程能力枚举 + readiness 快照 + sessions 恢复进度通知载荷 + 契约面封闭白名单。
+// 形状 SSOT = ./readiness；core 登记表 DataSourceDescriptor.requires 跨包引用
+// RemoteCapability（设计 §7.4）。protocol.ts 的 runtime.readiness /
+// runtime.readinessChanged / runtime.sessionsRecoveryProgress 三帧内联引用其类型。
+export type {
+  RemoteCapability,
+  ReadinessProgress,
+  ReadinessCapabilityEntry,
+  ReadinessSnapshot,
+  SessionsRecoveryProgressPayload,
+} from './readiness'
+export { READINESS_CAPABILITY_ENTRY_FIELDS, READINESS_SNAPSHOT_FIELDS } from './readiness'

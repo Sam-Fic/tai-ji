@@ -408,9 +408,10 @@ export function parseRecordEventLine(value: unknown): RecordEvent | null {
 }
 
 /**
- * 文件行解析器（event-tail / scan 共用）：空行静默跳过、头行静默跳过（合法
- * 存在，非坏行——计数语义见 readEventTail 的 skippedLines 注释）、坏行（JSON
- * 解析失败 / 词表外 / 信封坏值）返回 undefined 交调用方计数。
+ * 文件行解析器（event-tail / scan 共用）：空行/头行/坏行（JSON 解析失败 / 词表外 /
+ * 信封坏值）统一返回 undefined 交调用方计数。头行是合法存在、非坏行，同样计入
+ * skippedLines 单通道（计数语义见 readEventTail 的 skippedLines 注释）——消费方
+ * warn 文案须按「含头行」口径表述（header and/or bad lines），不得写成纯 bad lines。
  */
 export function parseRecordEventFileLine(line: string): RecordEvent | undefined {
   const trimmed = line.trim();

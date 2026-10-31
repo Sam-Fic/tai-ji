@@ -641,10 +641,11 @@ export class PluginService implements IPluginService {
         }
       }
 
-      // U4：安装登记同步清理（installed.json 条目随卸载移除）。降级策略：登记缺失
+      // U4/D2：安装登记同步清理（installed.json 条目随卸载移除，含 disabled.json
+      // 禁用条目同步清除——D2/登记表 #89 双文件对称清理）。降级策略：登记缺失
       // 无碍安装判定（目录 + package.json 才是事实源），失败 warn 留痕不阻断卸载
       await this.installedStore.recordUninstalled(pluginId).catch((err: unknown) => {
-        console.warn(`[plugin-service] failed to remove installed.json entry for ${pluginId}:`, toErrorMessage(err))
+        console.warn(`[plugin-service] failed to remove registration entries (installed.json/disabled.json) for ${pluginId}:`, toErrorMessage(err))
       })
 
       // 从注册表中移除
