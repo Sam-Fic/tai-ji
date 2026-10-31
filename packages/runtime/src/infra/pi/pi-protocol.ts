@@ -475,6 +475,20 @@ export interface PiSummarizationRetryScheduledEvent extends PiBaseMessage {
 }
 
 /**
+ * bash 执行流 chunk 事件（pi-stall-detection U4 补录——pi 0.84.1 新增，此前仅以
+ * NULL_EVENTS 字面量登记、未入契约联合）。pi dist/core/agent-session.js:2210 executeBash
+ * onChunk 逐 chunk 发射：{type:"bash_execution_update", id?, delta}，id 复用发起 bash RPC
+ * 的请求 id（docs/rpc.md:26）；LLM bash 工具路径（id 缺省）同样发射。
+ */
+export interface PiBashExecutionUpdateEvent extends PiBaseMessage {
+  type: 'bash_execution_update'
+  /** 发起 bash RPC 的请求 id（RPC 通道携带；LLM bash 工具路径缺省）。 */
+  id?: string
+  /** 本 chunk 输出增量。 */
+  delta: string
+}
+
+/**
  * 压缩/分支摘要重试单次尝试开始事件（D12 三事件之二）。pi 1.0.0 实发两变体
  * （agent-session.d.ts）：`{ source: 'branchSummary' }` 与
  * `{ source: 'compaction', reason }`——reason 仅 compaction 源携带，故可选。
@@ -769,6 +783,9 @@ export type PiEvent =
   | PiSummarizationRetryScheduledEvent
   | PiSummarizationRetryAttemptStartEvent
   | PiSummarizationRetryFinishedEvent
+  // bash 执行流 chunk（pi-stall-detection U4 补录：静默判定矩阵在途信号源——此前仅
+  // NULL_EVENTS 字面量登记，未入契约联合；U4 起翻译为 bash-execution-update kind）
+  | PiBashExecutionUpdateEvent
 
 // ── 事件名字面量常量表（pi1-disposition-chat-flow U3⑦，D5⑥ 字面量单点化）──────────
 
@@ -810,6 +827,7 @@ export const PI_EVENT_NAMES = [
   'summarization_retry_scheduled',
   'summarization_retry_attempt_start',
   'summarization_retry_finished',
+  'bash_execution_update',
 ] as const satisfies readonly PiEvent['type'][]
 
 /** 词表成员类型（常量表值域）。 */
@@ -853,6 +871,22 @@ export type PiEventNameDriftGuard = [
  */
 export const PI_EVENT = {
   agentStart: 'agent_start',
+  turnStart: 'turn_start',
+  toolExecutionUpdate: 'tool_execution_update',
+  messageStart: 'message_start',
+  messageUpdate: 'message_update',
+  queueUpdate: 'queue_update',
+  compactionStart: 'compaction_start',
+  autoRetryStart: 'auto_retry_start',
+  autoRetryEnd: 'auto_retry_end',
+  bashExecutionUpdate: 'bash_execution_update',
+  sessionInfoChanged: 'session_info_changed',
+  thinkingLevelChanged: 'thinking_level_changed',
+  summarizationRetryScheduled: 'summarization_retry_scheduled',
+  summarizationRetryAttemptStart: 'summarization_retry_attempt_start',
+  summarizationRetryFinished: 'summarization_retry_finished',
+  extensionUiRequest: 'extension_ui_request',
+  extensionError: 'extension_error',
   agentEnd: 'agent_end',
   turnEnd: 'turn_end',
   toolExecutionStart: 'tool_execution_start',

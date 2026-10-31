@@ -93,7 +93,9 @@ import { SessionEntryRemovalOrchestrator, runDestroyStepIsolated } from './sessi
 // 空闲回收占座原语与等待观测超时（idle-pi-reclamation D6-2，u2）。type-only import：
 // Seat 实例由 u3 组合根创建后 setter 注入，本模块不持有创建权（不引入运行时依赖环）。
 import { RespawnOrchestrator } from './pi-respawn.js'
-import { MessageDispatcher, type SystemCommandOutcome } from './message-dispatcher.js'
+import { MessageDispatcher, type SystemCommandOutcome, type StallAutoDisposePort } from './message-dispatcher.js'
+// [pi-stall-detection U4] 判死载荷类型（静默判定矩阵单源，D3）。
+import type { StallJudgePayload } from './event-interpreter-silence.js'
 // [A1 接线] skill 注入映射源（skill-reload-nondestructive D7）：records/dispatcher 的
 // SkillInjector 共享同一晚绑定占位，组合根在 SkillRegistry 构造后 bind 真源（构造顺序环
 // 见 LateBoundSkillSource 注释）。
@@ -138,6 +140,16 @@ export const userStoppedMarkStore: UserStoppedMarkStore = {
   },
   hasUserStoppedMark(sessionId: string): boolean {
     return userStoppedMarks.has(sessionId)
+  },
+  getUserStoppedSource(sessionId: string): ForceQuitSource | undefined {
+    return userStoppedMarks.get(sessionId)?.source
+  },
+  consumeUserStoppedMarkOfSource(sessionId: string, allowed: readonly ForceQuitSource[]): boolean {
+    const mark = userStoppedMarks.get(sessionId)
+    if (!mark || !allowed.includes(mark.source)) return false
+    userStoppedMarks.delete(sessionId)
+    console.warn(`[session-service] userStopped mark consumed by source (sessionId=${sessionId}, source=${mark.source})`)
+    return true
   },
   clearUserStoppedMark(sessionId: string): void {
     userStoppedMarks.delete(sessionId)
@@ -1021,9 +1033,33 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
   // [HISTORICAL] sendSubagentMessage（marker 半成品通道）已删除（composer 四符号设计 D2）：
   // base64 隐藏注释前缀在 extension 侧零消费方，且经主 agent 转发违背
   // 「直达 subagent」目标——定向消息改走 subagentAction(message/start)。
-  async abort(sessionId: string): Promise<void> { return this.dispatcher.abort(sessionId) }
+  // [pi-stall-detection U4] source：session_manager abort 工具通路的机器分型传参（'agent'）——
+  // agent 发起的 abort 不是用户操作，升级窗窗满强杀置判死强杀分型而非 abort_timeout 用户
+  // 分型（D2① 消费方 ④ / RL16 分型不变量；transport 层唯一非缺省调用点）。
+  async abort(sessionId: string, source?: 'agent'): Promise<void> { return this.dispatcher.abort(sessionId, source) }
   /** 强制退出卡死 session（sidebar 右键入口，杀 pi 进程 + stopped 收敛）。 */
   async forceQuit(sessionId: string): Promise<void> { return this.dispatcher.forceQuit(sessionId) }
+  /**
+   * 停滞判定自动处置链入口（pi-stall-detection U2，D2②）：onSilentAbort（探测 3 次观测
+   * 超时判定）的组合根接线点——按第 0 层进程存活信号分型分流（进程死维持既有协作式 abort
+   * 显式收尾路由；存活 → sample 取证 → 判死强杀 → 窄化自动恢复触发链）。编排本体在
+   * MessageDispatcher.handleStallDetermination，本方法仅转发（组合根不经 dispatcher 直达）。
+   */
+  async handleStallDetermination(sessionId: string): Promise<void> { return this.dispatcher.handleStallDetermination(sessionId) }
+  /**
+   * 第 2 层静默判死入口（pi-stall-detection U4，D3）：静默判定矩阵判死的组合根接线点——
+   * 自动 abort 复用 U2 有界等待 + 悬挂升级判死强杀分型（RL16）+ steer 注入原因提示。
+   * 编排本体在 MessageDispatcher.handleSilenceJudgeDetermination，本方法仅转发。
+   */
+  async handleSilenceJudgeDetermination(sessionId: string, payload: StallJudgePayload): Promise<void> {
+    return this.dispatcher.handleSilenceJudgeDetermination(sessionId, payload)
+  }
+  /**
+   * 后置注入停滞自动处置链端口（pi-stall-detection U2；组合根装配序：恢复执行/注入/发声
+   * 依赖 respawn 编排器与死亡发声闭包，均晚于 dispatcher 构造——对齐 setMessageBus /
+   * setDeliveryRegistry 后置注入先例）。null = 拆除（测试隔离用）。
+   */
+  setStallAutoDisposePort(port: StallAutoDisposePort | null): void { this.dispatcher.setStallAutoDisposePort(port) }
   /** bash 投递回执（started/settled/rejected + 可选失败原因），1:1 透传 dispatcher（翻译层在 transport）。 */
   async sendBash(sessionId: string, command: string, excludeFromContext?: boolean): Promise<{ status: 'started' | 'settled' | 'rejected'; error?: string }> {
     return this.dispatcher.sendBash(sessionId, command, excludeFromContext)

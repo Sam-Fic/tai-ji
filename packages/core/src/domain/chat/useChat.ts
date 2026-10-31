@@ -732,6 +732,19 @@ function handleSessionOccupancy(
   }
 }
 
+/** [pi-stall-detection U4 / D3] 静默辅助提示消费（session.stall_hint state topic：live 广播 +
+ * stateSnapshot 回放同路径到达）。判定权在 runtime——T/T_hint 推导单源 runtime（review-main#1
+ * 双阈值裁决），本 handler 只把 last-value 帧写进 chat store 派生视图分区（ActivityStrip
+ * stall 行文案源），不复制推导、不做任何判定动作。active=false = 清除边沿（帧流恢复 /
+ * 判死触发 / 回合收尾），setStallHint 内部删记录回落「无提示在显」。 */
+function handleSessionStallHint(
+  sid: string,
+  chat: ChatStoreInstance,
+  msg: ServerMessage<'session.stall_hint'>,
+): void {
+  chat.setStallHint(sid, msg.payload)
+}
+
 /** pi 改写 session 名（session_info_changed → session.renamed，见 event-adapter.ts）。
  * guard：payload.name 为空时跳过 —— 防 pi 推空名/旧名覆盖用户手动 rename 的值。
  * 用闭包 sid（对称 compacting/compacted handler）：session.* 走 session 级通道
@@ -839,6 +852,12 @@ function handleSessionFrame(
     }
     case 'session.occupancy': {
       handleSessionOccupancy(sid, chat, msg, deps)
+      break
+    }
+    // [pi-stall-detection U4 / D3] 静默辅助提示 last-value 帧（呈现派生视图写入，
+    // 判定权在 runtime——renderer 只呈现）
+    case 'session.stall_hint': {
+      handleSessionStallHint(sid, chat, msg)
       break
     }
     // [投递所有权内核 u3b / D7] 内核条目状态快照：队列区/气泡 morph 的单一数据源

@@ -106,6 +106,7 @@ vi.mock('@/stores/chat', () => ({
       degradedQueries.push({ virtualId, recordId })
       return degradedRef.value
     },
+    getStallHint: () => undefined,
   }),
 }))
 

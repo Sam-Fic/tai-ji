@@ -193,7 +193,11 @@ export interface ISessionService {
 
   // [HISTORICAL] sendSubagentMessage 已删除（composer 四符号设计 D2，marker 半成品通道废弃）：
   // 定向消息改走 subagentAction(message/start) 直达 subagent。
-  abort(sessionId: string): Promise<void>
+  // [pi-stall-detection U4] source：session_manager abort 工具通路的机器分型传参（唯一非
+  // 缺省调用点 = session-manager-handler abort 分支——agent 发起的 abort 不是用户操作，
+  // 悬挂升级置判死强杀分型而非 abort_timeout 用户分型，RL16 分型不变量；缺省 undefined =
+  // 用户语义不变）。
+  abort(sessionId: string, source?: 'agent'): Promise<void>
   /** 强制退出卡死 session（sidebar 右键入口，杀 pi 进程 + stopped 收敛）。 */
   forceQuit(sessionId: string): Promise<void>
   /**

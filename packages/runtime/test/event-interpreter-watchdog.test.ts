@@ -33,6 +33,8 @@ import { EventInterpreter } from '../src/services/session/event-interpreter.js'
 import {
   PING_INTERVAL_MS,
   PING_WARN_FAIL_COUNT,
+  applySessionOccupancyTransition,
+  startPingProbeFromDeliveryEdge,
 } from '../src/services/session/event-interpreter.js'
 // 观测超时窗常量（pi-stall-detection D1）：event-interpreter.ts 的 re-export 行不在本单元
 // 范围，从策略持有方（SSOT）直取
@@ -41,6 +43,7 @@ import { translate } from '../src/infra/pi/event-adapter.js'
 import { ASK_USER_MARKER } from '@zhushanwen/extension-protocol'
 import type { ServerMessage } from '@taiji/shared'
 import type { PiTranslatedEvent } from '../src/services/session/types.js'
+import type { SessionOccupancyStateStore } from '../src/services/session/types.js'
 import type { PiExtensionUiRequestEvent } from '../src/infra/pi/pi-protocol.js'
 
 /**
@@ -416,5 +419,231 @@ describe('RL1 契约：业务 RPC 调用链无 timeout（pi-stall-detection AX3�
       .filter((line) => /^  (?!private\b|\/\/|\*)\w.*timeoutMs/.test(line))
     expect(publicSignatureLines).toHaveLength(1)
     expect(publicSignatureLines[0]).toContain('probeState')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RL7：dispatching 窗口探测前置（pi-stall-detection D4/RL7）
+//
+// 探测生命期从「turn-start 起」前置到「受理出站起」：prompt 受理（dispatching 置位）
+// 即启动探测（PR4——窗口内 pi 挂死时 prompt RPC 悬挂、turn-start 永不到达，探测不能等
+// turn-start）；occupancy 收回 idle 的全部边沿（turn 维 idle / reject-other / full-reset
+// 三事件，转移表全组合合法表）停止探测——接线在转移原语单点（applySessionOccupancyTransition），
+// 对写方 7 处调用点构造性覆盖，防计时器在 idle 会话以探测周期常驻。
+//
+// 测试形态：interpreter 直构 + 模块级受理边沿入口（startPingProbeFromDeliveryEdge）+
+// 转移原语驱动——与生产接线同构（registry.markDispatchingIfIdle 置位处就是这两步）；
+// registry 侧接线存在性由文末源形态断言补（RL1 同款，watchdog 测试不组装投递内核）。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('RL7 · dispatching 窗口探测前置（pi-stall-detection D4）', () => {
+  const sessionId = 'sid-rl7'
+
+  let sent: ServerMessage[]
+  let send: (msg: ServerMessage) => void
+  let pingPi: ReturnType<typeof vi.fn>
+  let onSilentAbort: ReturnType<typeof vi.fn>
+  let interpreter: EventInterpreter
+  /** idle 起点 view（SessionOccupancyStateStore 最小形态，publish=null 不广播）。 */
+  let view: SessionOccupancyStateStore
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    sent = []
+    send = (msg) => { sent.push(msg) }
+    pingPi = vi.fn().mockResolvedValue({})
+    onSilentAbort = vi.fn()
+    // interpreter 构造即向模块级探测注册表登记 sessionId（D4 门面通路）
+    interpreter = new EventInterpreter(sessionId, {
+      send,
+      pingPi,
+      onSilentAbort,
+    } as unknown as ConstructorParameters<typeof EventInterpreter>[1])
+    view = { id: sessionId, occupancy: { turn: 'idle', compacting: false, bash: false, handingOff: false } }
+  })
+
+  afterEach(() => {
+    // 注销注册表条目（跨用例隔离——模块级 Map 不随 fake timers 复位）
+    interpreter.dispose()
+    vi.useRealTimers()
+  })
+
+  /** 受理出站边沿（与 registry.markDispatchingIfIdle 置位处两步一致：dispatching 转移 + 启动入口）。 */
+  function acceptOutboundEdge(): void {
+    applySessionOccupancyTransition(view, null, 'dispatching')
+    startPingProbeFromDeliveryEdge(sessionId)
+  }
+
+  /** 收回 idle 边沿（转移原语单点：idle / reject-other / full-reset 三事件统一停止探测）。 */
+  function returnToIdle(transition: 'idle' | 'reject-other' | 'full-reset'): void {
+    applySessionOccupancyTransition(view, null, transition)
+  }
+
+  function warnCount(): number {
+    return sent.filter((m) => m.type === 'message.stream_warn').length
+  }
+
+  // ── RL7-1：dispatching 置位后（无 turn-start）探测 tick 已发出 ──────────────
+  it('RL7-1: 受理出站边沿启动探测（无 turn-start）→ 推进探测间隔后 tick 已发出；未受理的 idle 会话零探测', async () => {
+    // 基线对照：interpreter 在场但未走受理边沿（idle 会话）→ 不探测
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS * 2)
+    expect(pingPi).not.toHaveBeenCalled()
+
+    // 受理出站边沿（dispatching 置位 + 启动入口，无 turn-start）→ 探测运行
+    acceptOutboundEdge()
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS)
+    expect(pingPi).toHaveBeenCalledTimes(1)
+    expect(onSilentAbort).not.toHaveBeenCalled()
+  })
+
+  // ── RL7-2：busy 拒收路径（reject-other 收回 idle）→ 探测停止、idle 会话零探测 ─
+  it('RL7-2: prompt 受理后 busy 拒收（reject-other 收回 occupancy idle，registry :895/:1022 写方）→ 拒收回 idle 边沿后探测停止、零探测 tick', async () => {
+    pingPi.mockRejectedValue(new Error('busy'))
+
+    acceptOutboundEdge()
+    // 受理期推进 120s：2 次失败 → WARN 已发、failCount=2（未达 3，探测仍在跑）
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS * PING_WARN_FAIL_COUNT)
+    expect(pingPi).toHaveBeenCalledTimes(2)
+    expect(warnCount()).toBe(1)
+
+    // busy 拒收 → reject-other 收回 idle → 探测停止
+    returnToIdle('reject-other')
+    const tickCountAtReject = pingPi.mock.calls.length
+
+    // idle 会话再推进 180s：零新增 tick、零新增 WARN、零判定
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS * 3)
+    expect(pingPi.mock.calls.length).toBe(tickCountAtReject)
+    expect(warnCount()).toBe(1)
+    expect(onSilentAbort).not.toHaveBeenCalled()
+  })
+
+  // ── RL7-3：handled 终局路径（settleDispatching('idle')）→ 探测停止 ──────────
+  it('RL7-3: prompt 受理后 disposition=handled（扩展命令接管、settleDispatching(\'idle\')，registry :1026 写方）→ 回落 idle 边沿后探测停止、零探测 tick', async () => {
+    acceptOutboundEdge()
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS)
+    expect(pingPi).toHaveBeenCalledTimes(1)
+
+    // handled 终局 → settleDispatching('idle') 收回 idle → 探测停止（防计时器常驻）
+    returnToIdle('idle')
+    const tickCountAtHandled = pingPi.mock.calls.length
+
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS * 3)
+    expect(pingPi.mock.calls.length).toBe(tickCountAtHandled)
+    expect(onSilentAbort).not.toHaveBeenCalled()
+  })
+
+  // ── RL7-4a：受理期累计达阈值在 turn-start 前已独立触发判定 ──────────────────
+  it('RL7-4a: 受理期失败累计达 3 次 → turn-start 未到达即独立触发判定（探测判定不分相位）', async () => {
+    pingPi.mockRejectedValue(new Error('timeout'))
+
+    acceptOutboundEdge()
+    // 推进 180s：受理期连续 3 次失败 → 判定触发（无 turn-start 参与）
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS * 3)
+
+    expect(onSilentAbort).toHaveBeenCalledTimes(1)
+    expect(onSilentAbort).toHaveBeenCalledWith(expect.objectContaining({ sessionId }))
+    // 判定后探测自停（tick 内 stop）
+    const tickCountAtAbort = pingPi.mock.calls.length
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS)
+    expect(pingPi.mock.calls.length).toBe(tickCountAtAbort)
+  })
+
+  // ── RL7-4b：turn-start 到达时 start() 重置计数（受理期清零、回合期独立累计）──
+  it('RL7-4b: turn-start 到达时 start() 重置计数——受理期累计清零、回合期从零独立累计（不跨期继承）', async () => {
+    pingPi.mockRejectedValue(new Error('timeout'))
+
+    acceptOutboundEdge()
+    // 受理期 2 次失败（WARN 1 条、failCount=2 残留）
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS * PING_WARN_FAIL_COUNT)
+    expect(warnCount()).toBe(1)
+
+    // turn-start 到达：既有 start() 语义重置（受理期累计清零、warned 重置）
+    interpreter.interpret([turnStart()])
+    const tickCountAtTurnStart = pingPi.mock.calls.length
+
+    // 回合期再 2 次失败：WARN 再发 1 条（warned 已重置）、不 abort——若受理期 2 次被继承
+    // （2+2=4 ≥ 3）此处已误判死，本断言即重置语义的反证
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS * PING_WARN_FAIL_COUNT)
+    expect(pingPi.mock.calls.length).toBe(tickCountAtTurnStart + PING_WARN_FAIL_COUNT)
+    expect(warnCount()).toBe(2)
+    expect(onSilentAbort).not.toHaveBeenCalled()
+
+    // 回合期第 3 次失败 → 判定（从零累计的口径）
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS)
+    expect(onSilentAbort).toHaveBeenCalledTimes(1)
+  })
+
+  // ── RL7-5：停止接线形态抽样——full-reset 与 abort await 失败收尾两写方事件 ───
+  it('RL7-5a: full-reset 边沿（pi exit 销毁，dispatcher :550 / session-service :729 写方事件）→ 探测停止', async () => {
+    acceptOutboundEdge()
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS)
+    expect(pingPi).toHaveBeenCalledTimes(1)
+
+    returnToIdle('full-reset')
+    const tickCountAtReset = pingPi.mock.calls.length
+
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS * 3)
+    expect(pingPi.mock.calls.length).toBe(tickCountAtReset)
+    expect(onSilentAbort).not.toHaveBeenCalled()
+  })
+
+  it('RL7-5b: idle 边沿（abort await 失败收尾，dispatcher :416 写方事件）→ 探测停止', async () => {
+    acceptOutboundEdge()
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS)
+    expect(pingPi).toHaveBeenCalledTimes(1)
+
+    returnToIdle('idle')
+    const tickCountAtAbortLeg = pingPi.mock.calls.length
+
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS * 3)
+    expect(pingPi.mock.calls.length).toBe(tickCountAtAbortLeg)
+    expect(onSilentAbort).not.toHaveBeenCalled()
+  })
+
+  // ── RL7-6：reject-other 停止后残留计数不触发判定；下次受理边沿 start() 重置 ──
+  it('RL7-6: reject-other 停止后残留计数无 tick 无消费者、零判定；下一次受理出边沿 start() 幂等重置清零（无跨投递继承）', async () => {
+    pingPi.mockRejectedValue(new Error('timeout'))
+
+    acceptOutboundEdge()
+    // 受理期 2 次失败 → 残留 failCount=2、warned=true
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS * PING_WARN_FAIL_COUNT)
+    expect(warnCount()).toBe(1)
+
+    // 拒收停止：残留计数保留但无 tick 无消费者 → 推进任意时长零判定
+    returnToIdle('reject-other')
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS * 3)
+    expect(onSilentAbort).not.toHaveBeenCalled()
+
+    // 下一次受理出站边沿：start() 幂等重置（先 stop 再清零 failCount/warned）
+    acceptOutboundEdge()
+    // 重置后 2 次失败：WARN 再发（warned 已重置）、不 abort（failCount 已重置——若残留
+    // 2 次被继承，2+2=4 ≥ 3 此处已误判死）
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS * PING_WARN_FAIL_COUNT)
+    expect(warnCount()).toBe(2)
+    expect(onSilentAbort).not.toHaveBeenCalled()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RL7 接线契约：registry 受理边沿调用探测启动入口（源形态断言，RL1 同款判据①）。
+//
+// RL7 行为用例直调模块级入口（与 markDispatchingIfIdle 置位处两步同构），但
+// 「registry 真的调了入口」由本断言钉住——防入口存在而接线脱落的静默回归。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('RL7 接线契约：registry 受理边沿接线（pi-stall-detection D4）', () => {
+  const registrySource = readFileSync(
+    fileURLToPath(new URL('../src/services/session/session-delivery-registry.ts', import.meta.url)),
+    'utf8',
+  )
+
+  it('markDispatchingIfIdle 置位处调用 startPingProbeFromDeliveryEdge（受理出站边沿启动探测）', () => {
+    const sourceLines = registrySource.split('\n')
+    // 置位函数体内的调用点（参数形态 = sessionId）恰一处：idle 门内、dispatching 转移之后
+    const callLines = sourceLines.filter((line) => line.includes('startPingProbeFromDeliveryEdge(sessionId)'))
+    expect(callLines).toHaveLength(1)
+    // 调用点在 markDispatchingIfIdle 函数体内（函数头之后、前文含 idle 门判定）
+    const callIndex = sourceLines.findIndex((line) => line.includes('startPingProbeFromDeliveryEdge(sessionId)'))
+    const functionHead = sourceLines.findIndex((line) => line.includes('function markDispatchingIfIdle'))
+    expect(callIndex).toBeGreaterThan(functionHead)
+    expect(sourceLines.slice(0, callIndex).join('\n')).toContain("(view.occupancy?.turn ?? 'idle') === 'idle'")
   })
 })

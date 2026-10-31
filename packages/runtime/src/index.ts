@@ -9,7 +9,8 @@ import { readRemoteAccessToken } from './infra/remote-access.js'
 // 探测 → handler 构造）收敛在组合根（见 main() Transport layer 装配段），实现与穿越
 // 防护（E4）在 infra/mobile-static.ts。
 import { createMobileStaticHandler, resolveMobileStaticRoot } from './infra/mobile-static.js'
-import { SessionService } from './services/session/session-service.js'
+import { SessionService, userStoppedMarkStore } from './services/session/session-service.js'
+import { PROBE_STALL_AUTO_QUIT } from './services/session/types.js'
 import { REVOKED_SIGNAL_CUSTOM_TYPE } from './services/session/revoke-orchestrator.js'
 // BtwService 组合根接线（btw-question M2-b，B2 授权）：依赖六项按其 docstring 归位本文件。
 import { BtwService } from './services/session/btw-service.js'
@@ -107,6 +108,8 @@ import { EventInterpreter, applySessionOccupancyTransition } from './services/se
 // ping 探测观测超时窗常量从策略持有方直取（event-interpreter.ts 只 re-export ADR-0047
 // 既有三常量，该文件不在本单元范围；D1 窗值单一调整点 = event-interpreter-ping.ts）
 import { PING_OBSERVE_TIMEOUT_MS } from './services/session/event-interpreter-ping.js'
+// [pi-stall-detection U4] 静默判定矩阵：配置读侧（AS11 联动通道）+ 判死载荷类型（D3）。
+import { readStallMatrixConfigSnapshot, type StallJudgePayload } from './services/session/event-interpreter-silence.js'
 import { isGeneratingTurn } from './services/session/types.js'
 import { join, resolve, isAbsolute } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -1007,13 +1010,15 @@ async function main(): Promise<void> {
         timestamp: Date.now(),
       }),
       // [ADR-0047] ping 探测连续 3 次失败（180s）判定 pi 停滞（未响应健康探测：进程死
-      // 或事件循环挂死），触发 abort。复用 sessionService.abort → message-dispatcher.abort
-      // 完整路径（client.abort 成功/失败均有兜底广播 + occupancy turn 复位（isGeneratingTurn
-      // 派生自然翻 false））。.catch 防极端异常逃逸成 unhandledRejection
-      //（abort 内部已 try/catch 广播终态）——逃逸异常必须留痕：pi 死而 abort 链也坏时，
-      // 零诊断线索无法排障（b24-M4）。
+      // 或事件循环挂死），触发自动处置链。[pi-stall-detection U2 / D2②] 接线从协作式
+      // sessionService.abort 改为按第 0 层进程存活信号分型的自动处置链入口
+      // handleStallDetermination（编排体在 dispatcher）：进程死 → 维持既有协作式 abort
+      // 显式收尾路由（AS9 链路逐点不变）；进程存活（事件循环挂死）→ sample 取证 → 判死
+      // 强杀 → 窄化自动恢复触发链 → 注入原因提示。.catch 防极端异常逃逸成
+      // unhandledRejection（abort/收尾内部已 try/catch 广播终态）——逃逸异常必须留痕：
+      // pi 死而处置链也坏时，零诊断线索无法排障（b24-M4）。
       onSilentAbort: ({ sessionId: sid }) => {
-        sessionService.abort(sid).catch((e) => {
+        sessionService.handleStallDetermination(sid).catch((e) => {
           console.warn(`[runtime] silent-abort chain escaped (session ${sid}):`, e)
         })
       },
@@ -1076,6 +1081,21 @@ async function main(): Promise<void> {
       // sd-u5 起多播化：bash flush 是第一条路径（原单播语义不变），其后分发 agentSettledListeners
       // （delivery 内核 settled 边沿唤醒 + notify-once settle 兑现）；逐订阅者隔离 try/catch 收敛在
       // fanOutSettled（agent-settled-fanout.ts，可单测——本文件 import 即执行 main() 不可直测）。
+      // [pi-stall-detection U4 / D3] 静默判定矩阵装配：配置快照在 adapter 构造时读定
+      //（AS11 联动通道——base-tool-enhance 扩展配置 + pi settings + mcp.json 直读，与 pi
+      // 进程解析同锚 getPiAgentDir；分支装配 RL14 在矩阵构造时按快照求值——禁用/超界
+      // 配置只装配提示分支）；判死触发经 handleSilenceJudgeDetermination 接自动 abort
+      //（复用 U2 有界等待 + 悬挂升级判死强杀分型 + steer 注入）。.catch 防判死链异常
+      // 逃逸成 unhandledRejection（abort/收尾内部已 try/catch 广播终态，与 onSilentAbort
+      // 同款逃逸留痕理由）。
+      stallMatrix: {
+        configSnapshot: readStallMatrixConfigSnapshot(cwd),
+        onJudge: (payload: StallJudgePayload) => {
+          sessionService.handleSilenceJudgeDetermination(payload.sessionId, payload).catch((e) => {
+            console.warn(`[runtime] silence judge chain escaped (session ${payload.sessionId}):`, e)
+          })
+        },
+      },
       onAgentSettled: (sid) => {
         sessionService.flushPendingBashResults(sid)
         // [session-dead 2026-09-10] run 级联结束（pi _runAgentPrompt 的 finally 确定性 emit）→
@@ -1191,6 +1211,33 @@ async function main(): Promise<void> {
   // 编排 getter）——原 getActiveDeliveryRegistry 进程内活动槽已删除，装配经本调用显式流转
   // （server 启动前完成注入，RPC 到达时注册表必已就绪）。
   sessionService.setDeliveryRegistry(sessionDelivery)
+
+  // [pi-stall-detection U2 / D2②] 停滞自动处置链端口后置注入（组合根装配序：恢复执行 /
+  // 死亡发声依赖 respawn 编排器与 speakSessionDeath 闭包，均晚于 dispatcher 构造——对齐
+  // setDeliveryRegistry 后置注入先例）：
+  // - restoreSession = facade（join 单源收敛于 respawn.ensureRestored——AS17 恢复执行本体
+  //   复用既有簿记组件，新建的只是触发链）；
+  // - injectReasonHint = 恢复成功后经 steer 通道注入死因提示（UD7：投递语义随 U4 前置
+  //   检查点核实，投递失败由触发链降级 warn 留痕，不阻断恢复完成态）；
+  // - reportDeath = 恢复重试耗尽降级死亡发声（对齐 crashExit 'terminal' 既有路径经
+  //   speakSessionDeath 收敛——债权收尾 + 用户手动重开）；
+  // - consumeAutoRecoveryMark = 判死分型标记的同权分型消费（宿主 store 直连——dispatcher
+  //   不反向 import session-service，模块单向性经本闭包保持）。
+  sessionService.setStallAutoDisposePort({
+    restoreSession: (sessionId) => sessionService.restoreSession(sessionId),
+    injectReasonHint: async (sessionId, reasonText) => {
+      const client = pm.getClient(sessionId)
+      if (!client) {
+        throw new Error(`no live client for reason hint injection (sessionId=${sessionId})`)
+      }
+      await client.prompt(reasonText, undefined, 'steer')
+    },
+    reportDeath: (sessionId) => {
+      speakSessionDeath(sessionId, 'exit', {})
+    },
+    consumeAutoRecoveryMark: (sessionId) =>
+      userStoppedMarkStore.consumeUserStoppedMarkOfSource(sessionId, [PROBE_STALL_AUTO_QUIT]),
+  })
   // u4（delivery-ownership-kernel D4②）：续跑判定装配——工具压缩（manual）掐断的活跃 turn
   // 在 compaction_end 判定后经内核 FIFO 追加续跑投递（与用户消息同通道，无第二 prompt 发起方）。
   // 投递出口 = sessionDelivery.submit（D1 单一判定源：lane 判定归内核，本模块不直连 pi）。

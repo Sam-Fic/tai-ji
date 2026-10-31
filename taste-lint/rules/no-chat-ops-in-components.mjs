@@ -38,6 +38,7 @@
  *  拦截——只对集合不对顺序；清单内分组注释仅作阅读导航，顺序不约束） */
 const OPS_FIELDS = new Set([
   // 写操作
+  'setStallHint', 'clearStallHint',
   'setChangeSetStatus', 'markChangeSetsSuperseded', 'markHistoryFailed',
   'clearHistoryError', 'markHistoryCacheFailed', 'clearHistoryCacheFailed',
   'hydrate', 'setMessages', 'reconcileHistory',

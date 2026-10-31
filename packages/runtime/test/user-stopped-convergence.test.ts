@@ -27,7 +27,7 @@ import {
 } from '../src/services/session/session-delivery-registry.js'
 import { RpcTimeoutError } from '../src/utils/errors.js'
 import type { ServerMessage } from '@taiji/shared'
-import type { UserStoppedMarkStore } from '../src/services/session/types.js'
+import type { ForceQuitSource, UserStoppedMarkStore } from '../src/services/session/types.js'
 import type { IDispatcherSessionOps } from '../src/services/session/session-internal.js'
 import type { IManagedSessionView } from '../src/services/session/types.js'
 import type { IMessageBus } from '../src/services/message-bus/message-bus.js'
@@ -37,13 +37,20 @@ import { flushDelivery } from './helpers/flush-delivery.js'
 
 /** 记账式 mock 标记宿主（模拟 session-service.ts 模块级 Map 的语义）。 */
 function makeMarkStore(): UserStoppedMarkStore & {
-  marks: Map<string, { source: string }>
+  marks: Map<string, { source: ForceQuitSource }>
 } {
-  const marks = new Map<string, { source: string }>()
+  const marks = new Map<string, { source: ForceQuitSource }>()
   return {
     marks,
-    markUserStopped: vi.fn((sessionId: string, source: string) => { marks.set(sessionId, { source }) }),
+    markUserStopped: vi.fn((sessionId: string, source: ForceQuitSource) => { marks.set(sessionId, { source }) }),
     hasUserStoppedMark: vi.fn((sessionId: string) => marks.has(sessionId)),
+    getUserStoppedSource: vi.fn((sessionId: string) => marks.get(sessionId)?.source),
+    consumeUserStoppedMarkOfSource: vi.fn((sessionId: string, allowed: readonly string[]) => {
+      const mark = marks.get(sessionId)
+      if (!mark || !allowed.includes(mark.source)) return false
+      marks.delete(sessionId)
+      return true
+    }),
     clearUserStoppedMark: vi.fn((sessionId: string) => { marks.delete(sessionId) }),
     clearAllUserStoppedMarks: vi.fn(() => marks.clear()),
   }

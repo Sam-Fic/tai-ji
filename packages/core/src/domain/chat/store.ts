@@ -57,6 +57,12 @@ import { getViewedVids } from '@taiji/core/domain/drawer'
 export type SessionOccupancyState = Omit<ServerMessageMap['session.occupancy'], 'sessionId'>
 
 /**
+ * [pi-stall-detection U4 / D3] 静默辅助提示派生视图载荷（session.stall_hint state topic 帧
+ * 的 payload——T/T_hint 推导单源 runtime，本分区只承载呈现事实，renderer 不复制推导）。
+ */
+export type StallHintState = ServerMessageMap['session.stall_hint']
+
+/**
  * [E-4] toolCall overlay 形态挂载到分区最后一条 assistant（subagent entry 帧消费，§6.1）。
  *
  * 模块级纯函数（输入输出均不可变构造）：与主对话流 message.tool_call_start effect 同语义，
@@ -408,6 +414,14 @@ export function createChatStore(options: ChatStoreOptions = {}) {
    *  session.compacted 清除 / 断连收尾随 occupancy 分区一并清（reason 只在 isCompacting 时被读，
    *  孤立残留无害）。 */
   const compactingReasons = ref<Map<string, string>>(new Map())
+  /**
+   * [pi-stall-detection U4 / D3] 静默辅助提示分区（session.stall_hint state topic 驱动，
+   * per-session last-value）。runtime 判定权（T_hint 边沿 + 帧流恢复/判死清除边沿），本
+   * Map 是呈现派生视图（ActivityStrip stall 行文案源）；无记录 = 无提示在显。
+   * 断连收尾（resetTransientStates）与 disposeSession 删分区——重连后 stateSnapshot 回放
+   * 恢复真实值（与 occupancies 分区同语义）。
+   */
+  const stallHints = ref<Map<string, StallHintState>>(new Map())
   /**
    * [crash-resilience T4 回流修复] pi 意外退出后的「引擎恢复中」过渡态分区（session id Set）。
    *
@@ -1106,6 +1120,9 @@ export function createChatStore(options: ChatStoreOptions = {}) {
     // occupancy 分区由 clearOccupancy 删，reason 由本点清——重连快照恢复 occupancy 后浮层
     // 文案从 session.compacting 事件重新取得，不残留旧 reason）
     setCompactingReason(sessionId, undefined)
+    // [pi-stall-detection U4] 静默辅助提示随断连收尾清理（occupancy 同款重建型状态——
+    // 重连 stateSnapshot 回放恢复真实值，不残留旧提示）
+    clearStallHint(sessionId)
   }
 
   // ── pendingSend 生命周期（useChat/effects 经 ctx/port 调）──
@@ -1215,6 +1232,29 @@ export function createChatStore(options: ChatStoreOptions = {}) {
    *  MessageStream 据此切文案：手动→compressing / 自动→autoCompressing。 */
   function getCompactingReason(sessionId: string): string | undefined {
     return compactingReasons.value.get(sessionId)
+  }
+
+  /** [pi-stall-detection U4 / D3] 写入静默辅助提示分区（session.stall_hint 帧驱动；
+   *  useChat handler 消费 live 广播与 stateSnapshot 回放同一入口）。整体替换该 sid 分区
+   *  （last-value 帧，非 patch；active=false = 清除边沿——删记录回落「无提示在显」）。 */
+  function setStallHint(sessionId: string, hint: StallHintState): void {
+    const next = new Map(stallHints.value)
+    if (hint.active) next.set(sessionId, hint)
+    else next.delete(sessionId)
+    stallHints.value = next
+  }
+
+  /** [pi-stall-detection U4 / D3] 读取静默辅助提示（无在显提示 = undefined）。 */
+  function getStallHint(sessionId: string): StallHintState | undefined {
+    return stallHints.value.get(sessionId)
+  }
+
+  /** [pi-stall-detection U4 / D3] 删除静默辅助提示分区（断连收尾 / disposeSession）。 */
+  function clearStallHint(sessionId: string): void {
+    if (!stallHints.value.has(sessionId)) return
+    const next = new Map(stallHints.value)
+    next.delete(sessionId)
+    stallHints.value = next
   }
 
   // isHandingOff 读 occupancy 派生（见 isCompacting 旁定义；setHandingOff 已随
@@ -1328,7 +1368,7 @@ export function createChatStore(options: ChatStoreOptions = {}) {
     // 避免 TS 将不同 Map 元素推断为具体联合类型导致 new Map(ref.value) 不兼容。
     // inflightCounts（[steer-bubble D4]）：disposeSession 同步清 inflight——确认基线随分区
     // 销毁作废（与 LRU 驱逐的刻意豁免不同，见 lruEvictDeps 处声明注释）。
-    const mapRefs: { value: Map<string, unknown> }[] = [messages, retryStates, inflightCounts, compactingReasons, occupancies, historyWindows, submitSeqs, baselinePrependTicks]
+    const mapRefs: { value: Map<string, unknown> }[] = [messages, retryStates, inflightCounts, compactingReasons, occupancies, historyWindows, submitSeqs, baselinePrependTicks, stallHints]
     const setRefs: { value: Set<string> }[] = [hydrated, pendingSend, failedHistory, respawnPending, historyCacheFailed]
     for (const ref of mapRefs) {
       if (ref.value.has(sessionId)) {
@@ -1432,6 +1472,9 @@ export function createChatStore(options: ChatStoreOptions = {}) {
     sessionPhase,
     setCompactingReason,
     getCompactingReason,
+    setStallHint,
+    getStallHint,
+    clearStallHint,
     isHandingOff,
     appendSystemNotice,
     appendRespawnNotice,
@@ -1494,6 +1537,7 @@ export type ChatStoreReaders = Pick<
   | 'getMessages' | 'getRetryState' | 'getChangeSetStatus'
   | 'isHydrated' | 'isGenerating' | 'isActive'
   | 'isCompacting' | 'getCompactingReason' | 'isHandingOff'
+  | 'getStallHint'
   | 'sessionPhase' | 'isPendingSend'
   | 'isRespawnPending'
   | 'isHistoryCacheFailed'
@@ -1525,6 +1569,7 @@ export type ChatStoreOps = Pick<
   | 'finalizeAllStreaming' | 'resetTransientStates' | 'addPendingSend'
   | 'clearPendingSend' | 'markSessionError'
   | 'setOccupancy' | 'clearOccupancy' | 'setCompactingReason'
+  | 'setStallHint' | 'clearStallHint'
   | 'appendSystemNotice' | 'appendRespawnNotice' | 'appendSubagentDirective' | 'truncateFrom'
   | 'markRespawnPending' | 'clearRespawnPending'
   | 'applyFileChanges' | 'disposeSession' | 'markStreamingBashError'

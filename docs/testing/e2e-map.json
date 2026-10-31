@@ -5721,6 +5721,25 @@
       "owner": "scripts/",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
       "note": "R1 态：main 侧 gate-verdict-ssot 收敛（ADR-0170~0175）的工程件，随 feat-quota-cookie-refresh 合并 main 带入；日常 CI 由 ci.yml scripts-guards 步骤聚合判红。"
+    },
+    {
+      "id": "E2E-INTEG-73",
+      "summary": "静默判定矩阵单测组：T/T_hint 阈值推导、豁免锚点、在途信号刷新、判死触发与分型（pi-stall-detection U4；纯单测无真实 pi）",
+      "scope": [
+        "packages/runtime/src/services/session/event-interpreter-silence.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "packages/runtime/test/silence-matrix.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "owner": "packages/runtime",
+      "serial": true,
+      "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
+      "run": "pnpm --filter @taiji/runtime exec vitest run test/silence-matrix.test.ts"
     }
   ]
 }

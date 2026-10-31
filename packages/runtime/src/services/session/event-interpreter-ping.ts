@@ -61,7 +61,7 @@ export interface PingProbeDeps {
    * 有界等待兜住判定语义（与请求级 cancel 分层：cancel 归 probeState，判定归本模块）。
    */
   pingPi?: () => Promise<Record<string, unknown> | undefined> | undefined
-  /** pi 停滞 abort 回调（连续 3 次失败触发；组合根调 sessionService.abort 复用兜底广播路径）。 */
+  /** pi 停滞 abort 回调（连续 3 次失败触发；组合根按进程存活分型接自动处置链，pi-stall-detection U2/D2②）。 */
   onSilentAbort?: (payload: { sessionId: string }) => void
 }
 

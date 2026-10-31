@@ -285,6 +285,9 @@ export default {
     // [notice-family-phrase-detail 2026-09-18 option A] executing-bash row elapsed meta — keeps an
     // in-row observation of the run after the command moved to the hover detail
     executingBashElapsed: '{elapsed} elapsed',
+    // [pi-stall-detection U4 / D3] 静默辅助提示（ActivityStrip stall 行；温和文案非红色警告，
+    // 判定权在 runtime，本层只呈现；帧流恢复即清除）
+    stallHint: 'Silent for {minutes} min — you can stop, or keep waiting',
     // no hardcoded threshold — user-adjustable, a literal would drift)
     // ── Speech reading (ai-voice-tts; key consumers = useTtsPlayer + TurnSummary button states) ──
     // Toast wording mirrors design §5.4 failure table; four title keys = speak button state machine (design §5.1).

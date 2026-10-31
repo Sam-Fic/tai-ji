@@ -1760,6 +1760,9 @@ export type ServerMessageType =
   // session 归档域 reply（与 request 同名，payload 消费型——session.getSubagentStreamState 同模式）
   | 'session.archive' | 'session.unarchive' | 'session.purgeArchive' | 'config.archives'
   | 'session.exited'
+  // session.stall_hint（pi-stall-detection U4 / D3）：静默辅助提示 last-value 状态帧
+  //（state topic，payload 见 ServerMessageMapBase 对应条目；T/T_hint 推导单源 runtime）。
+  | 'session.stall_hint'
   // D7（u8-pi-respawn）：pi 崩溃自动恢复结果推送（payload 见
   // ServerMessageMapBase 两行注释）。
   | 'session.restored' | 'session.restoreFailed'
@@ -2797,6 +2800,13 @@ export interface ServerMessageMapBase {
   // reason: 人类可读的错误原因（含 stderr 尾部截断），供诊断面板展开显示。
   // code: pi 进程退出码（null 表示进程被信号杀死无退出码）。
   'session.exited': { sessionId: string; code: number | null; reason: string }
+  // session.stall_hint（pi-stall-detection U4 / D3 双阈值裁决）：静默辅助提示的 last-value
+  // 状态帧（state topic，重连/切回经 stateSnapshot 回放恢复）。判定权在 runtime——T/T_hint
+  // 推导单源 runtime（review-main#1），本帧只携带呈现所需事实，renderer 不复制推导：
+  // active=true = 静默已过 T_hint（判死阈值前 60s 行动窗）；active=false = 帧流恢复 /
+  // 判死触发 / 回合收尾的清除边沿。silentMs = 提示发出时刻的累计静默时长（毫秒）；phase =
+  // 静默前最后在途阶段（'tool' | 'model-first-byte' | 'stream'），仅呈现用。
+  'session.stall_hint': { sessionId: string; active: boolean; silentMs: number; phase: 'tool' | 'model-first-byte' | 'stream' }
   // session.restored / session.restoreFailed（D7，u8-pi-respawn）：
   // pi 非主动退出后的自动恢复结果推送（恢复编排点 = ProcessManager onSessionExit 链 →
   // pi-respawn.ts 编排；5s 延迟 + 连续 2 次失败熔断）。两者只在「非主动退出触发的自动

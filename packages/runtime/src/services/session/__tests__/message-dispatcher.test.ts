@@ -30,10 +30,20 @@ import {
   createSessionDeliveryRegistry,
   type SessionDeliveryDeps,
 } from '../session-delivery-registry.js'
-import { applySessionOccupancyTransition } from '../event-interpreter.js'
+import { applySessionOccupancyTransition, userStoppedGate } from '../event-interpreter.js'
+import { PingProbe, PING_INTERVAL_MS } from '../event-interpreter-ping.js'
+import { userStoppedMarkStore } from '../session-service.js'
 import type { IDispatcherSessionOps } from '../session-internal.js'
 import { isGeneratingTurn } from '../types.js'
+import { PROBE_STALL_AUTO_QUIT } from '../types.js'
 import type { IManagedSessionView } from '../types.js'
+import {
+  ABORT_UPGRADE_WINDOW_MS,
+  AUTO_RECOVER_DELAY_MS,
+  AUTO_RECOVER_MAX_ATTEMPTS,
+  type StallAutoDisposePort,
+  type StallSampleRunner,
+} from '../message-dispatcher.js'
 import type { IPiEngine, IProcessManager } from '../../ports/pi-engine.js'
 import type { IMessageBus } from '../../message-bus/message-bus.js'
 import type { ServerMessage } from '@taiji/shared'
@@ -1469,5 +1479,431 @@ describe('A9 workflow-running 拦截回执（探针：mock workflow 派生视图
 
     expect(reply.revoked).toBe(true)
     expect(h.promptCalls).toEqual([`/${TAIJI_NAV_COMMAND} e2`])
+  })
+})
+
+// ════════════════ pi-stall-detection U2：停止升级链 + 第 1 层自动处置链（RL3/RL9/RL10/RL12/RL15）════════════════
+//
+// 断言-红灯映射（设计 §4.2）：RL3 升级窗 / RL9 常量护栏 / RL10 自动处置链调用序与分型 /
+// RL12 sample 三失败分支不阻断 / RL15 标记分型消费。机制：abort 有界等待（升级窗满 →
+// forceQuitSession）+ handleStallDetermination 存活分型（sample → 判死强杀 → 窄化自动恢复
+// 触发链 → 注入）+ 双入口 join 幂等。
+
+interface StallHarnessOptions { // oe-exempt:20261101:test:测试注入桩装配参数形状（makeStallHarness 单消费方）
+  /** client.abort 行为覆盖（缺省立即成功回执；RL3 悬挂用例注入永不 resolve）。 */
+  abortImpl?: () => Promise<unknown>
+  /** client.exited（第 0 层存活信号 mock，SC6）。 */
+  exited?: boolean
+  pid?: number | null
+  /** sample 取证桩（RL12 分支注入；缺省 resolve 成功）。 */
+  sampleRunner?: StallSampleRunner
+  /** 平台探测覆盖（RL12 非 macOS 分支；缺省 darwin）。 */
+  platform?: () => NodeJS.Platform
+  /** 恢复执行行为覆盖（缺省成功；RL10 降级用例注入 reject）。 */
+  restoreImpl?: () => Promise<unknown>
+  /** destroySession 挂起门（RL3 双入口并发幂等用例：true 时返回手动 gate）。 */
+  hangDestroy?: boolean
+}
+
+function makeStallHarness(opts: StallHarnessOptions = {}) {
+  const order: string[] = []
+  const client = {
+    prompt: vi.fn(async () => ({})),
+    touchActivity: vi.fn(),
+    abort: vi.fn(opts.abortImpl ?? (async () => ({}))),
+    exited: opts.exited ?? false,
+    pid: opts.pid === undefined ? 4242 : opts.pid,
+    getCommands: vi.fn(async () => []),
+    onEvent: vi.fn(() => () => {}),
+  } as unknown as IPiEngine
+  const session = makeMockSession({
+    occupancy: { turn: 'generating', compacting: false, bash: false, handingOff: false },
+  })
+  const svc = {
+    ensureActive: vi.fn(async () => client),
+    getSessionByClient: vi.fn(() => session),
+    persistSessionOutcome: vi.fn(),
+    clearSessionOutcome: vi.fn(),
+    getSession: vi.fn(() => session),
+    removeSessionEntry: vi.fn(),
+    detachSession: vi.fn(),
+  } as unknown as IDispatcherSessionOps
+  // 可释放的 destroy 挂起门（双入口并发幂等用例：构造真实并发窗——destroy mock 立即
+  // resolve 时编排同步跑完、in-flight 已清，join 无法命中）。
+  let releaseDestroy: (() => void) | null = null
+  const destroyGate: Promise<void> | null = opts.hangDestroy
+    ? new Promise<void>((resolve) => { releaseDestroy = resolve })
+    : null
+  const pm = {
+    getClient: vi.fn(() => client),
+    destroySession: vi.fn(async () => {
+      order.push('destroy')
+      if (destroyGate) await destroyGate
+    }),
+  } as unknown as IProcessManager
+  const workspaceService = { record: vi.fn() } as unknown as WorkspaceService
+  const published: ServerMessage[] = []
+  const messageBus = {
+    publish: vi.fn((_sid: string, msg: ServerMessage) => published.push(msg)),
+  } as unknown as IMessageBus
+  const dispatcher = new MessageDispatcher(svc, pm, workspaceService, messageBus)
+  const port: StallAutoDisposePort = {
+    restoreSession: vi.fn(async () => {
+      order.push('restore')
+      if (opts.restoreImpl) return opts.restoreImpl()
+      return {}
+    }),
+    injectReasonHint: vi.fn(async () => {
+      order.push('inject')
+    }),
+    reportDeath: vi.fn(() => {
+      order.push('reportDeath')
+    }),
+    consumeAutoRecoveryMark: vi.fn((sid: string) => {
+      order.push('consume')
+      return userStoppedMarkStore.consumeUserStoppedMarkOfSource(sid, [PROBE_STALL_AUTO_QUIT])
+    }),
+    runStallSample: vi.fn(async () => {
+      order.push('sample')
+      if (opts.sampleRunner) return opts.sampleRunner(4242, '/tmp/stall-sample.txt')
+      return undefined
+    }),
+    ...(opts.platform ? { platform: opts.platform } : {}),
+  }
+  dispatcher.setStallAutoDisposePort(port)
+  const gateAbort = vi.fn(async () => {})
+  userStoppedGate.configure({ marks: userStoppedMarkStore, abortSession: gateAbort })
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 40; i += 1) await Promise.resolve()
+  }
+  return {
+    dispatcher, port, client, session, svc, pm, published, order, gateAbort, flush,
+    /** 释放 destroy 挂起门（hangDestroy 用例的编排完成信号）。 */
+    releaseDestroy: () => releaseDestroy?.(),
+    exitedMsg: () => published.find((m) => m.type === 'session.exited') as
+      | { type: 'session.exited'; payload: { sessionId: string; code: null; reason: string } }
+      | undefined,
+  }
+}
+
+/** U2 用例族的 gate/store 隔离（模块级单例——用例间清空防泄漏）。 */
+function resetU2GateState(): void {
+  userStoppedGate.resetForTest()
+  userStoppedMarkStore.clearAllUserStoppedMarks()
+}
+
+describe('RL9 常量护栏：升级窗量级（SI7 处置②）', () => {
+  it('升级窗 ≥ 10s（远大于正常协作式 abort 秒级回执，防调参进正常值域）', () => {
+    expect(ABORT_UPGRADE_WINDOW_MS).toBeGreaterThanOrEqual(10_000)
+  })
+})
+
+describe('RL3 abort 悬挂升级链（D2① 主案）', () => {
+  afterEach(resetU2GateState)
+
+  it('窗满自动升级 forceQuitSession：source=abort_timeout + stopped 终态 + session.exited + 幂等单次编排', async () => {
+    const h = makeStallHarness({ abortImpl: () => new Promise(() => {}) })
+    const p = h.dispatcher.abort('s1')
+    await vi.advanceTimersByTimeAsync(ABORT_UPGRADE_WINDOW_MS)
+    await p
+    await h.flush()
+    // 升级强杀收尾三步（终态 entry + session.exited + removeEntry）
+    expect(h.svc.persistSessionOutcome).toHaveBeenCalledWith('s1', 'stopped', 'User abort timed out — auto force-quit (abort_timeout)')
+    const exited = h.exitedMsg()
+    expect(exited).toBeDefined()
+    expect(exited!.payload.reason).toContain('强制终止')
+    expect(h.svc.removeSessionEntry).toHaveBeenCalledTimes(1)
+    expect(h.pm.destroySession).toHaveBeenCalledTimes(1)
+    // 用户停止分型标记（K2 语义不变）
+    expect(userStoppedMarkStore.getUserStoppedSource('s1')).toBe('abort_timeout')
+    // 升级路径不广播 aborted 完成帧（收尾由 session.exited 承担）
+    expect(h.published.some((m) => m.type === 'message.complete')).toBe(false)
+  })
+
+  it('反向：窗内正常回执不升级（既有成功路径保持）', async () => {
+    const h = makeStallHarness()
+    await h.dispatcher.abort('s1')
+    // 回执已完成，超窗推进后无残留升级（clearTimeout——无 timer 泄漏）
+    await vi.advanceTimersByTimeAsync(ABORT_UPGRADE_WINDOW_MS + 1_000)
+    await h.flush()
+    expect(h.svc.persistSessionOutcome).toHaveBeenCalledWith('s1', 'stopped', 'User aborted')
+    expect(h.exitedMsg()).toBeUndefined()
+    expect(h.pm.destroySession).not.toHaveBeenCalled()
+    expect(userStoppedMarkStore.hasUserStoppedMark('s1')).toBe(false)
+  })
+
+  it('机器路径升级 source=判死分型非 abort_timeout（D2① 消费方 ③④ 分型裁决）', async () => {
+    for (const source of ['convergence', 'agent'] as const) {
+      resetU2GateState()
+      // hangDestroy 挂住编排：置位分型在收尾前观察（convergence 的恢复链消费发生在收尾后）
+      const h = makeStallHarness({ abortImpl: () => new Promise(() => {}), hangDestroy: true })
+      const p = h.dispatcher.abort('s1', source)
+      await vi.advanceTimersByTimeAsync(ABORT_UPGRADE_WINDOW_MS)
+      await h.flush()
+      expect(userStoppedMarkStore.getUserStoppedSource('s1')).toBe(PROBE_STALL_AUTO_QUIT)
+      expect(userStoppedMarkStore.getUserStoppedSource('s1')).not.toBe('abort_timeout')
+      h.releaseDestroy()
+      await p
+      await h.flush()
+    }
+  })
+
+  it('恢复语义分流（D2① ③④）：convergence 升级后进窄化自动恢复；agent 升级后恢复零调用', async () => {
+    // ③ noteAgentStart 掐的是恢复回放 turn——升级强杀后再次恢复属同一恢复过程
+    {
+      resetU2GateState()
+      const h = makeStallHarness({ abortImpl: () => new Promise(() => {}) })
+      const p = h.dispatcher.abort('s1', 'convergence')
+      await vi.advanceTimersByTimeAsync(ABORT_UPGRADE_WINDOW_MS)
+      await vi.advanceTimersByTimeAsync(AUTO_RECOVER_DELAY_MS)
+      await p
+      await h.flush()
+      expect(h.order).toContain('consume')
+      expect(h.order).toContain('restore')
+      expect(h.order).toContain('inject')
+    }
+    // ④ agent 显式停止意图：升级强杀后不进自动恢复（防强杀-恢复循环），恢复归显式重开
+    {
+      resetU2GateState()
+      const h = makeStallHarness({ abortImpl: () => new Promise(() => {}) })
+      const p = h.dispatcher.abort('s1', 'agent')
+      await vi.advanceTimersByTimeAsync(ABORT_UPGRADE_WINDOW_MS)
+      await vi.advanceTimersByTimeAsync(AUTO_RECOVER_DELAY_MS)
+      await p
+      await h.flush()
+      expect(h.order).not.toContain('consume')
+      expect(h.order).not.toContain('restore')
+      expect(h.order).not.toContain('inject')
+      expect(h.port.reportDeath).not.toHaveBeenCalled()
+    }
+  })
+
+  it('双入口并发幂等：升级强杀执行中并发右键强杀 → join 单次编排（destroy/session.exited 恰一次）', async () => {
+    // hangDestroy 构造真实并发窗：destroy mock 立即 resolve 时编排同步跑完、in-flight
+    // 已清，join 无法命中（真实 destroy 是数十 ms 的 SIGKILL 编排，并发窗存在）。
+    const h = makeStallHarness({ abortImpl: () => new Promise(() => {}), hangDestroy: true })
+    const upgrade = h.dispatcher.abort('s1')
+    await vi.advanceTimersByTimeAsync(ABORT_UPGRADE_WINDOW_MS)
+    await h.flush()
+    // 升级强杀已进入编排并挂在 destroy 上（标记已置——先到者 abort_timeout）
+    expect(userStoppedMarkStore.getUserStoppedSource('s1')).toBe('abort_timeout')
+    // 用户此时点右键强制退出（并发第二入口）→ join 同一编排
+    const manual = h.dispatcher.forceQuit('s1')
+    await h.flush()
+    expect(h.pm.destroySession).toHaveBeenCalledTimes(1)
+    expect(h.exitedMsg()).toBeUndefined() // 编排在途，session.exited 未发（收尾在 finally）
+    // 释放 destroy 门：编排完成，终态三步恰执行一次
+    h.releaseDestroy?.()
+    await Promise.all([upgrade, manual])
+    await h.flush()
+    expect(h.pm.destroySession).toHaveBeenCalledTimes(1)
+    expect(h.published.filter((m) => m.type === 'session.exited')).toHaveLength(1)
+    expect(h.svc.removeSessionEntry).toHaveBeenCalledTimes(1)
+    // 先到者置位语义：标记保持 abort_timeout（join 方不覆盖）
+    expect(userStoppedMarkStore.getUserStoppedSource('s1')).toBe('abort_timeout')
+  })
+})
+
+describe('RL10 第 1 层判定自动处置链（D2②）', () => {
+  afterEach(resetU2GateState)
+
+  it('存活判死全链调用序：取证 → 强杀 → 分型消费 → 恢复 → 注入（SI8 三前提时序）', async () => {
+    const h = makeStallHarness({ exited: false })
+    await h.dispatcher.handleStallDetermination('s1')
+    await vi.advanceTimersByTimeAsync(AUTO_RECOVER_DELAY_MS)
+    await h.flush()
+    // 调用序（RL10）：取证 → 强杀（destroy）→ 分型消费（restore 前——SI8 ②）→ 恢复 → 注入
+    expect(h.order).toEqual(['sample', 'destroy', 'consume', 'restore', 'inject'])
+    // 强杀分型 = 判死分型，标记被接线消费后清除（RL15 前半）
+    expect(userStoppedMarkStore.hasUserStoppedMark('s1')).toBe(false)
+    // session.exited 判死文案可读（非裸枚举字面量）
+    const exited = h.exitedMsg()
+    expect(exited).toBeDefined()
+    expect(exited!.payload.reason).toContain('停滞')
+    expect(exited!.payload.reason).not.toContain('probe_stall_auto_quit')
+    // 恢复成功：死亡发声零调用
+    expect(h.port.reportDeath).not.toHaveBeenCalled()
+    // 恢复后的回放 agent_start 不被 noteAgentStart 再 abort（标记已清——门禁放行）
+    h.gateAbort.mockClear()
+    userStoppedGate.noteAgentStart('s1')
+    await h.flush()
+    expect(h.gateAbort).not.toHaveBeenCalled()
+  })
+
+  it('进程死对照：exit 已到达 → 既有显式收尾路由，取证/强杀/恢复/注入零调用（AS9 链路不变）', async () => {
+    const h = makeStallHarness({
+      exited: true,
+      abortImpl: async () => {
+        throw new Error('pi process is not running')
+      },
+    })
+    await h.dispatcher.handleStallDetermination('s1')
+    await h.flush()
+    expect(h.port.runStallSample).not.toHaveBeenCalled()
+    expect(h.port.restoreSession).not.toHaveBeenCalled()
+    expect(h.port.injectReasonHint).not.toHaveBeenCalled()
+    expect(h.port.reportDeath).not.toHaveBeenCalled()
+    expect(h.pm.destroySession).not.toHaveBeenCalled()
+    expect(h.exitedMsg()).toBeUndefined()
+    // 既有显式收尾（abort catch 分支）：stopped 终态 + message.error 广播
+    expect(h.svc.persistSessionOutcome).toHaveBeenCalledWith('s1', 'stopped', expect.stringContaining('Abort failed'))
+    expect(h.published.some((m) => m.type === 'message.error')).toBe(true)
+  })
+
+  it('恢复失败重试耗尽 → 降级死亡发声（不静默循环）', async () => {
+    const h = makeStallHarness({
+      exited: false,
+      restoreImpl: async () => {
+        throw new Error('restore failed')
+      },
+    })
+    await h.dispatcher.handleStallDetermination('s1')
+    await vi.advanceTimersByTimeAsync(AUTO_RECOVER_DELAY_MS * AUTO_RECOVER_MAX_ATTEMPTS)
+    await h.flush()
+    // 初次 + 重试各一次 restore，全部失败后 reportDeath 恰一次
+    expect(h.port.restoreSession).toHaveBeenCalledTimes(AUTO_RECOVER_MAX_ATTEMPTS)
+    expect(h.order.filter((s) => s === 'restore')).toHaveLength(AUTO_RECOVER_MAX_ATTEMPTS)
+    expect(h.order).toContain('reportDeath')
+    expect(h.port.injectReasonHint).not.toHaveBeenCalled()
+  })
+})
+
+describe('RL10 反向：探测未达阈值自动链零触发（PingProbe → onSilentAbort 阈值语义）', () => {
+  it('失败 2 次仅 WARN；第 3 次才触发 onSilentAbort（下游链路由组合根接线唯一到达）', async () => {
+    const onSilentAbort = vi.fn()
+    const send = vi.fn()
+    const pingPi = vi.fn(async () => {
+      throw new Error('ping get_state observation timeout (5000ms)')
+    })
+    const probe = new PingProbe({ sessionId: 's1', send, pingPi, onSilentAbort })
+    probe.start()
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS)
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS)
+    // 未达阈值（2 次）：onSilentAbort 零调用 → sample/forceQuitSession/恢复/注入零调用
+    //（handleStallDetermination 的唯一触发点 = 组合根 onSilentAbort 接线，构造性传导）
+    expect(onSilentAbort).not.toHaveBeenCalled()
+    expect(send).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS)
+    expect(onSilentAbort).toHaveBeenCalledTimes(1)
+    probe.stop()
+  })
+})
+
+describe('RL12 sample 取证尽力而为（D6 / AX4）', () => {
+  afterEach(resetU2GateState)
+
+  it('非零退出：取证失败 warn 留痕一行，强杀与恢复链照常', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const h = makeStallHarness({
+        exited: false,
+        sampleRunner: async () => {
+          throw new Error('sample exited with code 1')
+        },
+      })
+      await h.dispatcher.handleStallDetermination('s1')
+      await vi.advanceTimersByTimeAsync(AUTO_RECOVER_DELAY_MS)
+      await h.flush()
+      expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('stall forensics failed'))).toBe(true)
+      expect(h.exitedMsg()).toBeDefined()
+      expect(h.order).toContain('restore')
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('超时形态（execFile timeout reject）：不阻断强杀', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const h = makeStallHarness({
+        exited: false,
+        sampleRunner: async () => {
+          throw new Error('sample command timed out after 10000ms')
+        },
+      })
+      await h.dispatcher.handleStallDetermination('s1')
+      await vi.advanceTimersByTimeAsync(AUTO_RECOVER_DELAY_MS)
+      await h.flush()
+      expect(h.exitedMsg()).toBeDefined()
+      expect(h.order).toContain('restore')
+      expect(h.port.reportDeath).not.toHaveBeenCalled()
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('平台不支持（非 macOS）：runner 零调用 + 跳过留痕 + 强杀照常', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const h = makeStallHarness({ exited: false, platform: () => 'linux' })
+      await h.dispatcher.handleStallDetermination('s1')
+      await vi.advanceTimersByTimeAsync(AUTO_RECOVER_DELAY_MS)
+      await h.flush()
+      expect(h.port.runStallSample).not.toHaveBeenCalled()
+      expect(logSpy.mock.calls.some((c) => String(c[0]).includes('non-macOS'))).toBe(true)
+      expect(h.exitedMsg()).toBeDefined()
+    } finally {
+      logSpy.mockRestore()
+    }
+  })
+
+  it('成功对照：产物路径写日志（logs 域 stall-sample- 前缀）', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const h = makeStallHarness({ exited: false })
+      await h.dispatcher.handleStallDetermination('s1')
+      await h.flush()
+      const savedLine = logSpy.mock.calls.map((c) => String(c[0])).find((s) => s.includes('stall forensics saved'))
+      expect(savedLine).toBeDefined()
+      expect(savedLine).toContain('stall-sample-')
+    } finally {
+      logSpy.mockRestore()
+    }
+  })
+})
+
+describe('RL15 userStopped 标记按 source 分型消费（D2 恢复段）', () => {
+  afterEach(resetU2GateState)
+
+  it('用户分型不被接线消费：双入口用户先到（user_force_quit 在场）→ 恢复跳过 + 标记保留', async () => {
+    // hangDestroy 构造并发窗（join 命中前提）；platform=linux 让 stall 侧取证走非 darwin
+    // 早退（零真实 IO——mkdir 完成时机不受 fake timers 控制，flush 无法等待）。
+    const h = makeStallHarness({ exited: false, hangDestroy: true, platform: () => 'linux' })
+    // 用户右键强杀先到：forceQuit 的同步段即置 user_force_quit 标记并进入编排（挂 destroy）
+    const manual = h.dispatcher.forceQuit('s1')
+    await h.flush()
+    expect(userStoppedMarkStore.getUserStoppedSource('s1')).toBe('user_force_quit')
+    // 探测判死随后到达：join 同一编排；收尾后分型消费读到用户分型 → 不消费、不自动恢复
+    const stall = h.dispatcher.handleStallDetermination('s1')
+    await h.flush()
+    expect(h.pm.destroySession).toHaveBeenCalledTimes(1)
+    h.releaseDestroy()
+    await Promise.all([manual, stall])
+    await vi.advanceTimersByTimeAsync(AUTO_RECOVER_DELAY_MS)
+    await h.flush()
+    // 编排单次（join）+ 强杀照常
+    expect(h.pm.destroySession).toHaveBeenCalledTimes(1)
+    expect(h.published.filter((m) => m.type === 'session.exited')).toHaveLength(1)
+    // 分型消费未命中（用户分型语义不变、标记保留），恢复链零触发
+    expect(userStoppedMarkStore.getUserStoppedSource('s1')).toBe('user_force_quit')
+    expect(h.port.restoreSession).not.toHaveBeenCalled()
+    expect(h.port.injectReasonHint).not.toHaveBeenCalled()
+    expect(h.port.reportDeath).not.toHaveBeenCalled()
+  })
+
+  it('既有语义回归：consumeForExplicitDelivery / disposeForDelete 清标记行为不变（全分型）', () => {
+    userStoppedGate.configure({ marks: userStoppedMarkStore, abortSession: vi.fn(async () => {}) })
+    userStoppedMarkStore.markUserStopped('s1', 'abort_timeout')
+    userStoppedGate.consumeForExplicitDelivery('s1')
+    expect(userStoppedMarkStore.hasUserStoppedMark('s1')).toBe(false)
+    userStoppedMarkStore.markUserStopped('s1', 'user_force_quit')
+    userStoppedGate.disposeForDelete('s1')
+    expect(userStoppedMarkStore.hasUserStoppedMark('s1')).toBe(false)
+    // 分型读口与原子消费的边界：不匹配分型保留
+    userStoppedMarkStore.markUserStopped('s1', 'user_force_quit')
+    expect(userStoppedMarkStore.consumeUserStoppedMarkOfSource('s1', [PROBE_STALL_AUTO_QUIT])).toBe(false)
+    expect(userStoppedMarkStore.getUserStoppedSource('s1')).toBe('user_force_quit')
+    expect(userStoppedMarkStore.consumeUserStoppedMarkOfSource('s1', ['user_force_quit'])).toBe(true)
+    expect(userStoppedMarkStore.hasUserStoppedMark('s1')).toBe(false)
   })
 })
