@@ -104,7 +104,7 @@ export default function schedulerExtension(pi: ExtensionAPI): void {
 
     // 注入代际比对（本 runtime 建立时的代数 vs 实时代数），供 tick 前置检查与
     // catch 分诊判定 stale——不依赖 pi 错误文案。
-    // U4 模型控制接口（设计 D3）：runtime 只见 'provider/id' ref（与 task.model 同域），pi 的
+    // U4 模型控制接口：runtime 只见 'provider/id' ref（与 task.model 同域），pi 的
     // Model 对象解析封在本闭包。setModelByRef 契约 = 不 throw、失败返回 false（ref 非法 /
     // modelRegistry.find 无命中 / pi setModel false / 意外异常统一折叠）。
     const modelOps: SchedulerModelOps = {

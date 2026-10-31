@@ -78,17 +78,17 @@ export class SchedulerRuntime {
   private dispatchTimestamps: number[] = []
   private onAfterTickCallback: (() => void) | null = null
   private readonly isCtxStale: (() => boolean) | undefined
-  // R3-S1：同任务 dispatch 在途标记（Set<taskId>），见 dispatchTask 注释
+  // 同任务 dispatch 在途标记（Set<taskId>），见 dispatchTask 注释
   private readonly dispatchesInFlight = new Set<string>()
   // dispatch 幂等键的轮次标记状态（unified-delivery 迁移），见 nextDispatchEpoch 注释
   private dispatchStamp = 0
   private dispatchSeq = 0
-  // U4 dispatch 模型切换（设计 D3 修订版）：模型控制接口（缺省 undefined = 无切换能力，降级）
+  // U4 dispatch 模型切换：模型控制接口（缺省 undefined = 无切换能力，降级）
   private readonly modelOps: SchedulerModelOps | undefined
   // 未决模型切换记录（同时至多一条——互斥窗口 + 模型 op 串行队列共同保证「切换→dispatch→
   // 恢复」周期单在途、单 setModel 在途）
   private pendingModelSwitch: PendingModelSwitch | null = null
-  // 模型 op 串行队列尾（MF-2 收敛）：调度器发起的全部 setModel（dispatch 切换 / 期望模型
+  // 模型 op 串行队列尾：调度器发起的全部 setModel（dispatch 切换 / 期望模型
   // 恢复 / 错误路径恢复）单点经 serializeModelOp 入队——「setModel 起步 → 记录创建 /
   // 恢复收尾」全程持队，任何后继 setModel 发起点先排队前置等待，两个 setModel 并发
   // 结构性不可能（完成顺序不定 → turn 静默跑错模型的交错被消除）。链条引用恒吞错
@@ -315,7 +315,7 @@ export class SchedulerRuntime {
    * dispatch 单个任务。返回 true 表示消息已发出（投递端口受理 / 直发兜底受理），
    * false 表示 no-op（task disabled / 已有同任务在途 / rate-limited）。
    *
-   * R3-S1 in-flight 检查：tick 为 fire-and-forget，若 tick1 的 `await backend.deliverDispatch`
+   * in-flight 检查：tick 为 fire-and-forget，若 tick1 的 `await backend.deliverDispatch`
    * 挂起超过 TICK_INTERVAL_MS（如 pi 卡死），tick2 的 step2 会再标 pending、step3 对同一
    * task 并发第二个 dispatch → 同一 prompt 双注入。参照 subagent-workflow resumesInFlight
    * 模式：入口同步置位、finally 清除（覆盖 gate / rate-limit / sendMessage 抛错 / 成功推进
@@ -353,10 +353,10 @@ export class SchedulerRuntime {
    * 幂等键（不撞上一轮在端口投递日志里的终局条目——恒定 taskId 会被端口永久判重
    * 吞掉）。
    *
-   * U4 模型切换（设计 D3 修订版）：task.model 非空且 ≠ 会话当前模型时，dispatch 前
+   * U4 模型切换：task.model 非空且 ≠ 会话当前模型时，dispatch 前
    * 按序执行「互斥校验 → setModel(task.model) → 记未决切换记录 → dispatch」，切换段
-   * 整体入模型 op 串行队列（modelOpChain——与恢复 setModel 互斥，MF-2）。busy 亦照常 setModel
-   * （P-MODEL-② 证伪「busy 切换不生效」——steer 消息消费时在同一 run 内开新 turn，turn
+   * 整体入模型 op 串行队列（modelOpChain——与恢复 setModel 互斥）。busy 亦照常 setModel
+   * （已证伪「busy 切换不生效」——steer 消息消费时在同一 run 内开新 turn，turn
    * 开始从 ctx.model 取当前模型，setModel 对 steer turn 生效。pi 实装锚点（1.0.0 复核）：
    * dist/core/agent-session.js setModel 同步写 agent.state.model + 每个 turn
    * 准备时从 agent.state.model 取模型快照——setModel 先于下一 turn 准备即生效）。
@@ -377,7 +377,7 @@ export class SchedulerRuntime {
       const targetModelRef = task.model
       let skipped = false
       if (this.pendingModelSwitch) {
-        // 互斥窗口（设计 D3，理由 = 切换秩序）：未决记录未关闭时，其他需切模型任务命中即
+        // 互斥窗口（理由 = 切换秩序）：未决记录未关闭时，其他需切模型任务命中即
         // skip 本轮 + pending 留待下 tick 重试（复用现状 skip 语义，不建真队列；不需切模型
         // 的任务不受互斥影响——检查只在本分支）。「dispatch 写新记录前先结算旧记录」
         // 的落地：本分支结构性永不写新记录（杜绝新旧叠写），skip 前做一次 isIdle() 事实
@@ -389,7 +389,7 @@ export class SchedulerRuntime {
         await this.settlePendingIfIdle('mutex-settle')
         skipped = true
       } else {
-        // 模型 op 串行段（MF-2 收敛，互斥窗口全程覆盖「setModel 起步 → 记录创建」）：
+        // 模型 op 串行段（互斥窗口全程覆盖「setModel 起步 → 记录创建」）：
         // 前序模型 op（agent_settled 恢复 / 前序 dispatch 切换 / 错误路径恢复）可能仍在途——
         // 排队等待期间未决记录与当前模型均可能变化，禁止按排队前快照盲切（旧快照的
         // expectedModelRef 会把恢复锚点记错），串行段内重新校验后再切换。后来的需切模型
@@ -571,7 +571,7 @@ export class SchedulerRuntime {
   }
 
   /**
-   * 模型 op 入队（串行化原语，MF-2）：op 排到 modelOpChain 尾，前序 op 完成（含失败）
+   * 模型 op 入队（串行化原语）：op 排到 modelOpChain 尾，前序 op 完成（含失败）
    * 后才执行；返回本 op 的结果 Promise 供调用方 await。链尾引用恒吞错自愈（重置为
    * resolved），保证前序 op 失败不阻断后继、也不向链条泄漏 rejection（失败只回给本 op
    * 调用方）。op 内禁止再入队（会死锁）——现有 op（切换 / 恢复）只调
@@ -591,7 +591,7 @@ export class SchedulerRuntime {
    * 当前模型已等于期望（用户已手动切回）→ 清记录不动作；setModel(原) false →
    * restore-failed 终态（日志含恢复动作：会话停留在任务模型，需手动切回）+ 清记录。
    * 记录先关后恢复——防 await setModel 期间 agent_settled 与 tick 对账并发重入。
-   * 恢复 setModel 本体经模型 op 串行队列（serializeModelOp，MF-2）：agent_settled 挂点的
+   * 恢复 setModel 本体经模型 op 串行队列（serializeModelOp）：agent_settled 挂点的
    * fire-and-forget 调用由此变为安全——在途恢复持队，后续任何 setModel 发起点
    * （dispatch 切换 / 对账恢复）排队等待，两个 setModel 并发结构性不可能（完成顺序
    * 不定 → turn 静默跑错模型的交错被消除）。「当前 == 期望」复核移入串行段：排队
@@ -627,10 +627,10 @@ export class SchedulerRuntime {
    * _emitAgentSettled 先置 _isAgentRunActive = false 再 emit），dispatched turn 必已
    * 结束，无需 turnIndex 归属识别——事件到达即做 isIdle() 事实查询：
    * - idle → 兑现恢复（事件是提前触发的加速器，恢复延迟 = 事件即时）
-   * - 非 idle（settled 与用户新 run 交错）→ 不能切：会把新 run 的模型换掉
-   *   （P-MODEL-② 同族形态）。记录保留，由 tick 的 isIdle() 查询在 idle 重入时兑现。
+   * - 非 idle（settled 与用户新 run 交错）→ 不能切：会把新 run 的模型换掉。
+   *   记录保留，由 tick 的 isIdle() 查询在 idle 重入时兑现。
    * 不挂 agent_end 恢复：end 后仍可能有自动续跑 turn，此时切回会把续跑 turn 的模型换掉
-   * （P-MODEL-② 同族形态）——恢复只认 settled。
+   * ——恢复只认 settled。
    */
   handleRunSettled(): void {
     if (this.isCtxStale?.()) return
