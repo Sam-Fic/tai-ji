@@ -208,7 +208,7 @@ pi -p "/schedule 5m 'check build'"
 
 ### 当前机制（独立 JSON 快照分片）
 
-任务存储为独立 JSON 快照文件（scheduler-redesign 方案 B：任务库与会话事实分离，2026-10-30 裁决），路径由 `schedulerStoreFilePath(getAgentDir(), cwd, sessionId)` 推导：
+任务存储为独立 JSON 快照文件（scheduler-redesign 方案 B：任务库与会话事实分离，2026-10-30 裁决；方案 B 设计原文未归档，裁决内容与背景以 commit 73073b169 message 为溯源锚），路径由 `schedulerStoreFilePath(getAgentDir(), cwd, sessionId)` 推导：
 
 ```
 <agentDir>/scheduler/<root>/<segments>/<sessionId>.json
@@ -273,7 +273,7 @@ npx vitest run src/__tests__/<file>.test.ts   # 单个文件
 
 测试策略：
 
-- **依赖反转**：`SchedulerRuntime` 只依赖 `SchedulerBackend` 接口（`deliverDispatch` / `persistTasks` / `now`），不触碰 FS/pi。测试注入 `MockSchedulerBackend`（`src/__tests__/mock-backend.ts` 测试专用实现，记录 deliverDispatch/persistTasks 调用、支持注入固定时间与落盘失败）实现零副作用测试；`backend.loadTasks` 类方法由 store 模块的真实读写覆盖（临时目录注入路径即可全行为覆盖，设计 §6.2「TaskStore 是纯 FS 模块，注入路径即可测」）
+- **依赖反转**：`SchedulerRuntime` 只依赖 `SchedulerBackend` 接口（`deliverDispatch` / `persistTasks` / `now`），不触碰 FS/pi。测试注入 `MockSchedulerBackend`（`src/__tests__/mock-backend.ts` 测试专用实现，记录 deliverDispatch/persistTasks 调用、支持注入固定时间与落盘失败）实现零副作用测试；`backend.loadTasks` 类方法由 store 模块的真实读写覆盖——持久化只经 scheduler-store 纯 FS 读写（无进程内状态），测试注入临时目录路径即可全行为覆盖
 - **纯函数**：`parseDuration` / `formatDuration` / `parseSchedule` / `computeNextRunAt` / `computeNextRuns`（`src/parsing.ts`）无副作用，可直接断言
 - **快照读写**：store 模块三分支读（ok / missing / corrupt 改名留证）+ 原子替换写 + 写入口 pending 剥离与 history 逐项拷贝（不裁剪——20 条上限属 `appendExecutionRecord`，`@zhushanwen/extension-protocol` scheduler-store 子出口测试）
 - **投递链**：backend deliverDispatch 的端口受理/拒收/幂等键路径（`src/__tests__/backend-delivery.test.ts`）

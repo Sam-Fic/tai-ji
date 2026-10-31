@@ -168,7 +168,7 @@ export default function schedulerExtension(pi: ExtensionAPI): void {
   pi.on('agent_settled', () => service?.runtime.handleRunSettled())
 
   pi.on('session_shutdown', async () => {
-    // 命令路径挂起表单的收尾（设计 §6.2 生命周期案 ①②③）：session_shutdown
+    // 命令路径挂起表单的收尾：session_shutdown
     //（reason ∈ quit/reload/new/resume/fork）→ abort 挂起的表单交互（不创建、不 toast）。
     // taiji 内「切到另一会话」不触发本事件，表单保留且仍有效（有意行为）。
     abortPendingScheduleForms()
@@ -258,7 +258,7 @@ export default function schedulerExtension(pi: ExtensionAPI): void {
    * - D1 指纹跳推：任务集稳定指纹（computeTasksFingerprint，字段集含 kind/locale）与上次
    *   实际推送相同 → 跳过推送。时间流逝不是状态变化，任务集不变期间零推送
    *   （rpc/tui 两模式同效——判定在 setWidgetDual 之前）。
-   * - fail-open：指纹计算异常即推送（宁可多推不可漏显，设计 §3.1 失败路径）。
+   * - fail-open：指纹计算异常即推送（宁可多推不可漏显）。
    */
   function refreshWidget(ctx: ExtensionContext): void {
     if (!service) return

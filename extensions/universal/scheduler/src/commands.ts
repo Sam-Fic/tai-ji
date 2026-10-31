@@ -46,7 +46,7 @@ function tokenizeQuoted(input: string): string[] {
 // ── 文案（L2 词典通道）──
 // 命令层自有串（usage / not-initialized / 无交互通道 / description）已入 i18n.ts 词典，
 // 经 `renderResult(messageKey, params, locale)` 单入口渲染（u-p2b 接线）。`/schedule` 的
-// registerCommand.description 是注册期静态串（切语言不热更 = 已接受滞后，设计 §6.9）。
+// registerCommand.description 是注册期静态串（切语言不热更 = 已接受滞后）。
 
 /** 子命令 handler：统一返回 ServiceResult（notify severity 按 success 分流）。 */
 type SubcommandHandler = (service: SchedulerService, parts: string[]) => ServiceResult | Promise<ServiceResult>
@@ -182,7 +182,7 @@ export async function executeScheduleCommand(
  * service 通过 getter 获取：registerScheduleCommand 在 factory 顶层调用，此时 session_start
  * 尚未触发、service 还是 null。getArgumentCompletions / handler 真正执行时才读 service 当前值。
  *
- * handler 整体 try/catch 按 mode 分流（设计 §6.2 错误通道矩阵）：rpc / tui 的用户可见通道
+ * handler 整体 try/catch 按 mode 分流（错误通道按 mode 分派）：rpc / tui 的用户可见通道
  * 只有 `ctx.ui.notify`（pi 把 handler 异常转 `extension_error`，renderer 白名单不含它 → 静默
  * 丢弃）；json / print 必须原样 rethrow（notify 是 no-op，stderr 是唯一可见通道）。
  */

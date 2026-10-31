@@ -669,7 +669,7 @@ export class SchedulerRuntime {
   /**
    * 全量任务集快照落盘。失败 → logger.warn + 不 rethrow（原 ER-APPEND-FAIL 语义延续）：
    * 内存态已先行更新、不中断调度，下一次任务集变化的写点重试（残余窗口 = 「自上次
-   * 成功写之后的变化」在进程崩溃时丢失，见设计 §4.3 失败语义）。
+   * 成功写之后的变化」在进程崩溃时丢失）。
    * 不设 task.lastError='persist failed'（落盘失败是 transient，不应污染业务态）。
    */
   private persistTasksSafe(): void {

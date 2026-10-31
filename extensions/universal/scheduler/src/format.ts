@@ -46,7 +46,7 @@ const RELATIVE_UNITS_ZH: readonly (readonly [string, number])[] = [
  * （r3→r4 已连漏 notify/widget 与 getArgumentCompletions 两处）。内部按 `spec.mode`
  * 显式分支 interval/cron——不靠 `intervalMs`/`cron` 空值推断。
  *
- * 直接调用点三处（设计 §7.1）：`service.ts`（tool/L4 → 'en-US'）、`widget.ts`（TUI/L2 →
+ * 直接调用点三处：`service.ts`（tool/L4 → 'en-US'）、`widget.ts`（TUI/L2 →
  * 当前 locale）、`commands.ts` 的 `getArgumentCompletions`（补全菜单/L2 → 当前 locale）。
  * u-p2b 已删除 u-p2a 遗留的两参 `@deprecated` 桥，locale 至此全线必填（无第二形态）。
  */

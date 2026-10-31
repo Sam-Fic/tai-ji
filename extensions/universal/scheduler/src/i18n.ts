@@ -8,14 +8,14 @@ export type { UiLocale } from './format.js'
 export { readUiLocale }
 
 /**
- * L2 extension 侧词典 + locale 读取接线（设计 §6.6 D6 / §7.1）。
+ * L2 extension 侧词典 + locale 读取接线。
  *
  * 语言归属原则（D6）：跨边界只走数据——renderer 是语言权威，进程只读派生态。
  * 读取器（readUiLocale + mtime+size 双键读缓存 + 降级）下沉在
  * `@zhushanwen/pi-llm-shared` 单一实现（@data-owner #39 注解随实现持有）；
  * 需求方（本包与 plan 的 i18n 层）经 import 消费，不再各自就地实现。
  *
- * 三个渲染入口按受众分工（设计 §6.9「双受众」）：
+ * 三个渲染入口按受众分工（双受众：L4 tool result 用英文 `message` / L2 呈现层走词典）：
  * - `t(key, params)`：单条词典模板
  * - `renderResult(messageKey, params, locale)`：toast / 命令反馈（12+ 条命令反馈）
  * - `renderTaskLine(taskParams, locale)`：**命令变体**任务行（状态●/○ + id + name + 摘要 +
@@ -31,7 +31,7 @@ export { readUiLocale }
 
 export const DEFAULT_UI_LOCALE: UiLocale = 'en-US'
 
-// ── messageKey ↔ params 判别联合（设计 §7.1：按 messageKey 分型的 locale-neutral 原始值）──
+// ── messageKey ↔ params 判别联合（按 messageKey 分型的 locale-neutral 原始值）──
 //
 // 命名避开 `errorCode` 族（刚被 ext-simplify-08 删除）：语义 = 本地化键（呈现层查词典），
 // **非**错误分类——成功/失败均可用同一字段。消费者 = commands/interaction 的 notify 路径
@@ -163,7 +163,7 @@ export const SERVICE_MESSAGE_KEYS: readonly ServiceMessageKey[] = [
   'form.protocolMismatch',
 ]
 
-// ── 词典（zh-CN / en-US，文案表见设计 §7.5）──
+// ── 词典（zh-CN / en-US）──
 
 type Dictionary = Record<string, string>
 
@@ -426,7 +426,7 @@ export type LocalizableResult = { message: string } & (
 /**
  * 结果 → L2 文本（commands / interaction 呈现层的单入口）：有 `messageKey` 走
  * `renderResult` 词典渲染（含命令层自有串）；未分类失败（无 key，如 `service.ts` 的
- * `id is required` / `toErrorMessage` catch-all）回落英文 `message`（设计 §6.9 已声明）。
+ * `id is required` / `toErrorMessage` catch-all）回落英文 `message`（双受众既定语义）。
  * 两受众不串：L4 tool result 直接用 `message`，不经本函数。
  */
 export function renderResultText(result: LocalizableResult, locale: UiLocale): string {

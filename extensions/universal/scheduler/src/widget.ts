@@ -56,11 +56,11 @@ export function renderSchedulerWidgetTui(tasks: ScheduledTask[], locale: UiLocal
 }
 
 /**
- * GUI 臂结构化载荷（设计 §6.8 D8）：body = 逐任务 list-tree（行文本走 `renderTaskLineStatic`
+ * GUI 臂结构化载荷（scheduler-redesign 方案 B，2026-10-30 裁决）：body = 逐任务 list-tree（行文本走 `renderTaskLineStatic`
  * 静态变体单点），head 元数据由宿主壳层渲染——**标题由扩展自产**（`meta.title = t('tray.title')`），
  * 宿主零改动（三处渲染范围：前两面 trim / `TrayAggregatePanel` nullish，非空标题均正确）。
  *
- * icon 点名 lucide key 'clock'（与设计 §6.8 一致）；badge = 启用任务数；status 两态 =
+ * icon 点名 lucide key 'clock'；badge = 启用任务数；status 两态 =
  * 有启用任务 running / 空 idle（D1-a：「有逾期 → failed」翻牌已移除——逾期是 now 派生
  * 显示，且 lastStatus 不在指纹字段集内）。刷新节拍 = 状态变化驱动 + 保活底线帧
  * （scheduler widget 推送修正设计 D1/D2）。
