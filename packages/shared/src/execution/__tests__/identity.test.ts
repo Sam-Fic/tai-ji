@@ -87,6 +87,11 @@ describe('调用点静态路径归一', () => {
     expect(normalizeCallSiteRef('./workflows//review.js:12:5')).toBe('workflows/review.js:12:5')
     expect(() => normalizeCallSiteRef('/abs/review.js:12:5')).toThrow('绝对路径')
   })
+
+  it('空串 / 仅 ./ 前缀 fail-fast（严格归一层；未匹配容错由 resolveStepKey 入口承担）', () => {
+    expect(() => normalizeCallSiteRef('')).toThrow('调用点为空')
+    expect(() => normalizeCallSiteRef('./')).toThrow('调用点为空')
+  })
 })
 
 describe('未匹配组（静态解析不可得名实例不强行匹配）', () => {
@@ -99,6 +104,17 @@ describe('未匹配组（静态解析不可得名实例不强行匹配）', () =
       label: 'callId-3',
     })
     expect(STEP_KEY_UNMATCHED_GROUP).toBe('unmatched')
+  })
+
+  it('callSite 空串 / 仅 ./ 前缀（归一后为空）→ unmatched 组（字符串形态的静态解析不可得）', () => {
+    for (const callSite of ['', './']) {
+      expect(resolveStepKey({ scriptHash: 'abc123', callSite, occurrence: 2, label: 'callId-5' })).toEqual({
+        kind: 'unmatched',
+        group: STEP_KEY_UNMATCHED_GROUP,
+        occurrence: 2,
+        label: 'callId-5',
+      })
+    }
   })
 
   it('callSite 可得 → 静态解析出稳定键', () => {

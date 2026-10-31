@@ -165,8 +165,9 @@ export function computeStepKey(input: StepKeyInput): StepKey {
 /**
  * 解析 stepKey：静态调用点可得 → 稳定键；不可得 → 未匹配组（不强行匹配）。
  *
- * 调用点为空（undefined 或空串归一后为空）是「静态解析不可得名」的唯一信号；
- * 结构化调用点非法（绝对路径/负行列）会抛错——那是解析器缺陷，不是合法的未匹配形态。
+ * 调用点为空（undefined、空串、或仅 `./` 前缀等归一后为空的字符串形态）是「静态解析
+ * 不可得名」的唯一信号，归未匹配组；结构化调用点非法（绝对路径/负行列）会抛错——
+ * 那是解析器缺陷，不是合法的未匹配形态。
  */
 export function resolveStepKey(input: {
   scriptHash: string
@@ -174,7 +175,11 @@ export function resolveStepKey(input: {
   occurrence: number
   label?: string
 }): StepKeyResolution {
-  if (input.callSite === undefined) {
+  // 未匹配容错在入口完成：空串若直接进 normalizeCallSiteRef 会被严格归一层按解析器缺陷抛错
+  if (
+    input.callSite === undefined ||
+    (typeof input.callSite === 'string' && normalizeCallSitePath(input.callSite) === '')
+  ) {
     return {
       kind: 'unmatched',
       group: STEP_KEY_UNMATCHED_GROUP,
@@ -183,14 +188,6 @@ export function resolveStepKey(input: {
     }
   }
   const callSite = normalizeCallSiteRef(input.callSite)
-  if (!callSite) {
-    return {
-      kind: 'unmatched',
-      group: STEP_KEY_UNMATCHED_GROUP,
-      occurrence: input.occurrence,
-      ...(input.label !== undefined ? { label: input.label } : {}),
-    }
-  }
   return {
     kind: 'static',
     stepKey: computeStepKey({ scriptHash: input.scriptHash, callSite, occurrence: input.occurrence }),

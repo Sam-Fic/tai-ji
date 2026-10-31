@@ -27,6 +27,7 @@ import type {
   StepKey,
 } from './ids'
 import type {
+  AttemptStatus,
   DispatchOrigin,
   MemberMode,
   MemberStatus,
@@ -42,7 +43,8 @@ export interface ExecutionMemberTurnSnapshot { // oe-exempt:20261031:framework:�
   readonly attemptId: AttemptId
   /** 成员轮次序号（1 起）。 */
   turn: number
-  status: 'running' | 'settled' | 'interrupted'
+  /** 所属 attempt 的状态（status.ts AttemptStatus 同源词表，扩值自动跟随）。 */
+  status: AttemptStatus
   startedAt: number
   settledAt?: number
   /** 引擎收尾事实词（停止原因）。 */
