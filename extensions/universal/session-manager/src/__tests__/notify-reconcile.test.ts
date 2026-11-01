@@ -16,10 +16,22 @@
 //   fulfills=0——D8⑤/R-1 锁）；幂等收敛（补投受理后 journal 承载抵消）；死亡槽
 //   内存态缺席不阻断补投（判据不读死亡槽——SC10 登记）。
 
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { PENDING_REGISTER_ENTRY_TYPE, PENDING_UNREGISTER_ENTRY_TYPE } from "@zhushanwen/extension-protocol";
 import { ACK_CUSTOM_TYPE, OUTBOX_CUSTOM_TYPE } from "@zhushanwen/pi-delivery-port";
+
+const { loggerMock } = vi.hoisted(() => ({
+	loggerMock: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+vi.mock("@zhushanwen/pi-extension-logger", () => ({
+	getLogger: () => loggerMock,
+}));
 
 import { MANAGED_SESSION_NOTIFY_CUSTOM_TYPE } from "../notify-content.ts";
 import {
@@ -29,6 +41,7 @@ import {
 	collectUnregisterReasons,
 	buildManagedReconcileBriefing,
 	isReconcileNotifyCandidate,
+	readSessionFileEntries,
 	runNotifyReconcileMaintenance,
 	type ReconcileNotifyFacts,
 } from "../notify-reconcile.ts";
@@ -380,5 +393,175 @@ describe("死亡槽 (sessionId, deathSeq) 内存态缺席不阻断补投", () =>
 			makeDeps([registerEntry("sm-d", "session", "research"), unregisterEntry("sm-d", "exited")], submit),
 		);
 		expect(result.redelivered).toEqual(["sm-d"]);
+	});
+});
+
+// ── A1 产品缺陷修复回归（域侧同构）：判据事实源磁盘化 ──
+// 缺陷链（与 bash 域范本同构，范本 = base-tool-enhance pending-reconcile.test.ts
+// 「disk-fact journal source」describe）：pi SessionManager._appendEntry 先
+// fileEntries.push 后 _persist、persist 失败（真机注入形态 = session JSONL
+// chmod 0444，EACCES 挡写不挡读）无回滚 → 幽灵内存 entry（内存账在册、JSONL 无
+// 行）；判据曾消费 getEntries() 内存账 → delivered/journaled 误真 → 补投静默失效。
+// 修复后事实源 = session JSONL 落盘条目（deps.sessionFile，index.ts 经
+// getSessionFile() 传入）。单测模拟形态 = 内存 entries 与磁盘文件不一致（幽灵态
+// 的定义特征），与真机 chmod 注入同族（同是「内存有、盘上无」的产物）。
+describe("判据事实源磁盘化（幽灵内存 entry 回归，A1 域侧同构修复）", () => {
+	const DATA_DIR = mkdtempSync(join(tmpdir(), "sm-reconcile-"));
+	const SESSION_FILE = join(DATA_DIR, "session.jsonl");
+
+	/** 写 session JSONL（pi _persist 落盘形态：每条 entry 一行 JSON.stringify）。 */
+	function writeSessionFile(lines: unknown[]): void {
+		mkdirSync(DATA_DIR, { recursive: true });
+		writeFileSync(SESSION_FILE, lines.map((l) => JSON.stringify(l)).join("\n") + (lines.length > 0 ? "\n" : ""));
+	}
+
+	it("幽灵 in-memory outbox entry（内存有、盘上无）→ 补投发生（A1 回归本体）", () => {
+		// 磁盘事实：JSONL 只含 register + unregister（EACCES 实况——outbox persist
+		// 被挡，盘上无该键任何受理行）；内存账多一条幽灵 outbox entry
+		writeSessionFile([registerEntry("sm-1"), unregisterEntry("sm-1", "completed")]);
+		const ghostEntries = [
+			registerEntry("sm-1"),
+			unregisterEntry("sm-1", "completed"),
+			outboxEntry("sm-1"), // 幽灵：rejected 首败受理即留一条，内存账在册、盘上无
+		];
+		const submit = vi.fn(() => true);
+		const result = runNotifyReconcileMaintenance({
+			reason: "test",
+			entries: ghostEntries,
+			sessionFile: SESSION_FILE,
+			submitNotify: submit,
+		});
+		// 幽灵 journaled 不再误真：补投放行（内存账口径曾沿幽灵态静默吞补投）
+		expect(result.redelivered).toEqual(["sm-1"]);
+		expect(submit).toHaveBeenCalledTimes(1);
+	});
+
+	it("幽灵 delivered trace（内存通知条目、盘上无）→ 补投发生（delivered 事实读盘）", () => {
+		writeSessionFile([registerEntry("sm-1"), unregisterEntry("sm-1", "completed")]);
+		const ghostEntries = [
+			registerEntry("sm-1"),
+			unregisterEntry("sm-1", "completed"),
+			notifyEntry("sm-1", "research", "completed"), // 幽灵送达痕迹
+		];
+		const submit = vi.fn(() => true);
+		const result = runNotifyReconcileMaintenance({
+			reason: "test",
+			entries: ghostEntries,
+			sessionFile: SESSION_FILE,
+			submitNotify: submit,
+		});
+		expect(result.redelivered).toEqual(["sm-1"]);
+	});
+
+	it("outbox entry 在盘上 → 零补投（journaled 读盘正命中，磁盘事实正向抵消）", () => {
+		// entries 形态 = 重启后内存账从盘重建的一致形态（内存账 ⊇ 盘上条目是运行时
+		// 构造性前提——人工构造「内存空、盘上有」会撞内存预检短路早退，非真实形态）
+		const diskAndMemory = [registerEntry("sm-1"), unregisterEntry("sm-1", "completed"), outboxEntry("sm-1")];
+		writeSessionFile(diskAndMemory);
+		const submit = vi.fn(() => true);
+		const result = runNotifyReconcileMaintenance({
+			reason: "test",
+			entries: diskAndMemory,
+			sessionFile: SESSION_FILE,
+			submitNotify: submit,
+		});
+		expect(result.redelivered).toEqual([]);
+		expect(result.skippedJournaled).toEqual(["sm-1"]);
+		expect(submit).not.toHaveBeenCalled();
+	});
+
+	it("幽灵 unregister reason（register 落盘、注销条目盘上无）→ 零补投（磁盘口径：盘上无注销 = 债权在途，保守 miss）", () => {
+		// 口径锁（文件头「判据事实源磁盘化」段残余登记）：register 落盘 + unregister
+		// 幽灵 → 盘上无注销 = 「新闻未到达」——不虚构补投（漏补投方向，与
+		// 「漏补投优于重复投」既有取向一致）
+		writeSessionFile([registerEntry("sm-1")]);
+		const ghostEntries = [registerEntry("sm-1"), unregisterEntry("sm-1", "completed")];
+		const submit = vi.fn(() => true);
+		const result = runNotifyReconcileMaintenance({
+			reason: "test",
+			entries: ghostEntries,
+			sessionFile: SESSION_FILE,
+			submitNotify: submit,
+		});
+		expect(result.candidates).toBe(0);
+		expect(submit).not.toHaveBeenCalled();
+	});
+
+	it("sessionFile 缺席（no-persist 形态）→ 退化内存账 + warn（现状行为；该形态无幽灵态，内存账即完整事实）", () => {
+		const inMemoryEntries = [registerEntry("sm-1"), unregisterEntry("sm-1", "completed"), outboxEntry("sm-1")];
+		const submit = vi.fn(() => true);
+		const result = runNotifyReconcileMaintenance({
+			reason: "test",
+			entries: inMemoryEntries, // 不传 sessionFile
+			submitNotify: submit,
+		});
+		// no-persist 形态 _persist no-op 恒成功：内存 outbox = 真受理 → 不补投
+		expect(result.redelivered).toEqual([]);
+		expect(result.skippedJournaled).toEqual(["sm-1"]);
+		expect(loggerMock.warn).toHaveBeenCalledWith(
+			expect.stringContaining("fell back to in-memory entries"),
+			expect.anything(),
+		);
+	});
+
+	it("session file 不可读（chmod 0000，读侧 EACCES）→ 盘事实按空 + warn（保守 miss，候选源与抵消事实同按空）", () => {
+		writeSessionFile([registerEntry("sm-1"), unregisterEntry("sm-1", "completed")]);
+		chmodSync(SESSION_FILE, 0o000);
+		const submit = vi.fn(() => true);
+		try {
+			const result = runNotifyReconcileMaintenance({
+				reason: "test",
+				entries: [registerEntry("sm-1"), unregisterEntry("sm-1", "completed")],
+				sessionFile: SESSION_FILE,
+				submitNotify: submit,
+			});
+			// 读失败宽容口径（warn 即修复信号）：候选源与抵消事实同按空 → 零补投；
+			// 下一对账边沿环境修复后幂等重查
+			expect(result.redelivered).toEqual([]);
+			expect(loggerMock.warn).toHaveBeenCalledWith(
+				expect.stringContaining("disk entries treated as empty"),
+				expect.anything(),
+			);
+		} finally {
+			chmodSync(SESSION_FILE, 0o644);
+		}
+	});
+});
+
+// ── readSessionFileEntries 容错（JSONL 读侧；口径登记见函数头注）──
+
+describe("readSessionFileEntries（磁盘读侧容错）", () => {
+	const DATA_DIR = mkdtempSync(join(tmpdir(), "sm-readfile-"));
+
+	it("文件缺失（ENOENT，首条对话消息前常态）→ 空数组", () => {
+		expect(readSessionFileEntries(join(DATA_DIR, "no-such-file.jsonl"))).toEqual([]);
+	});
+
+	it("脏行跳过、合法行解析（JSONL 逐行容错）", () => {
+		mkdirSync(DATA_DIR, { recursive: true });
+		const file = join(DATA_DIR, "dirty.jsonl");
+		writeFileSync(
+			file,
+			['{"type":"custom","customType":"x"}', "not-json", "", '{"type":"message"}'].join("\n"),
+		);
+		const entries = readSessionFileEntries(file);
+		expect(entries).toHaveLength(2);
+		expect(entries[0]).toEqual({ type: "custom", customType: "x" });
+	});
+
+	it("不可读文件（chmod 0000）→ 空 + warn（宽容口径：磁盘事实不可得 = 无条目）", () => {
+		mkdirSync(DATA_DIR, { recursive: true });
+		const file = join(DATA_DIR, "locked.jsonl");
+		writeFileSync(file, "{}\n");
+		chmodSync(file, 0o000);
+		try {
+			expect(readSessionFileEntries(file)).toEqual([]);
+			expect(loggerMock.warn).toHaveBeenCalledWith(
+				expect.stringContaining("disk entries treated as empty"),
+				expect.anything(),
+			);
+		} finally {
+			chmodSync(file, 0o644);
+		}
 	});
 });

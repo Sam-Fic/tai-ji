@@ -557,6 +557,13 @@ export function setupWorkflowDomain(
           reason: "session_start",
           pi,
           entries: ctx.sessionManager.getEntries(),
+          // 补投判据事实源磁盘化（A1 产品缺陷修复，域侧同构落点）：getSessionFile()
+          // 传 session JSONL 路径，manifest/痕迹/日志判据读落盘条目而非内存账——pi
+          // _appendEntry persist 失败无回滚的幽灵内存 entry 曾使 journaled 误真、
+          // 补投静默失效（机制见 workflow-notify-reconcile.ts 文件头「判据事实源
+          // 磁盘化」段）；no-persist 形态 getSessionFile() 返回 undefined，对账侧
+          // 退化内存账（现状行为）。
+          sessionFile: ctx.sessionManager.getSessionFile(),
           notifiedRunIds,
           settledRecordOf: (runId) => result.store.settledRecordOf(runId),
           loadRuns: () => result.store.loadAll(),
@@ -586,6 +593,9 @@ export function setupWorkflowDomain(
       reason: "agent_settled",
       pi,
       entries: ctx.sessionManager.getEntries(),
+      // 补投判据事实源磁盘化（A1 产品缺陷修复，域侧同构落点——session_start 入口
+      // 同款注释）：判据读 session JSONL 落盘条目，no-persist 形态退化内存账 + warn。
+      sessionFile: ctx.sessionManager.getSessionFile(),
       notifiedRunIds,
       settledRecordOf: (runId) => state.store.settledRecordOf(runId),
       loadRuns: () => state.store.loadAll(),

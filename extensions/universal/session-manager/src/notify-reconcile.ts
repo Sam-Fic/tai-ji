@@ -10,9 +10,23 @@
 //   候选 = 应投递而未送达（isTerminal）∧ 域排除位未命中 ∧ 送达痕迹未命中 ∧
 //          投递日志无该幂等键承载
 //
-// 判据事实源 = pending 表派生视图（设计 SC10）+ 当前 session entries 的三个
-// 辅助事实源（送达痕迹 / 投递日志 / 死亡新闻对——三者与 pending 表同盘：port
-// 受理日志与通知条目都 appendEntry 到当前 session，单次 entries 遍历全产）。
+// 判据事实源磁盘化（completion-signal-delivery A1 修复的域侧同构落位，范本 =
+// base-tool-enhance pending-reconcile.ts「判据事实源磁盘化」段）：判据全部事实
+// 源——pending 表派生视图（设计 SC10）+ 送达痕迹 / 投递日志 / 死亡新闻对三个辅助
+// 源——读 session JSONL 落盘条目（readSessionFileEntries），不读 pi 内存账。pi
+// SessionManager._appendEntry 先 fileEntries.push 后 _persist、persist 失败
+// （EACCES 等）无回滚，留下「幽灵内存 entry」（内存账在册、JSONL 无行）；内存账
+// 口径曾把幽灵的送达痕迹/投递日志条目当真 → 「拒收未受理」的键被误判已受理 →
+// 补投结构性静默失效。磁盘事实使 delivered/journaled 语义 = 「JSONL 实际含该键
+// 条目」，与受理落盘契约一物一名；sessionFile 缺席（no-persist 形态——_persist
+// no-op 恒成功、无幽灵态）退化内存 entries（该形态内存账即完整事实）+ warn 留痕。
+// 成本口径：内存账 ⊇ 盘上条目（幽灵态只会多不会少），内存预检「无 register 条目
+// 早退」= 盘上亦无——高频边沿（agent_settled）常态（无 managed session 债权）零
+// 文件读，候选在册才读盘（bash 域范本同款「候选在册才读盘」形态）。
+// 幽灵候选源（register/unregister 条目自身落盘失败）的残余 = 磁盘口径下候选不可
+// 见的保守 miss（漏补投方向，与「漏补投优于重复投」既有取向一致）：该形态 =
+// 债权登记持久化断裂，重启后任何恢复通道都无从发现，对账以磁盘事实为准是其正确
+// 语义；盘上无注销条目 = 「债权在途」不虚构补投。
 //
 // 四项读取规则（D8③ 本域判据的落地细则，逐项落实）：
 //   ① 取数形态 = pending:register/unregister 全量 entries 现算（经 protocol
@@ -96,7 +110,9 @@ import {
 	readAckId,
 	readOutboxDataV2,
 } from "@zhushanwen/pi-delivery-port";
+import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
+import { readFileSync } from "node:fs";
 
 import { MANAGED_SESSION_NOTIFY_CUSTOM_TYPE } from "./notify-content.ts";
 
@@ -271,6 +287,47 @@ export function collectJournaledDeliveryIds(entries: readonly unknown[]): Set<st
 	return ids;
 }
 
+// ─── 判据事实源读侧（session JSONL 落盘条目）───
+
+/**
+ * 读 session JSONL 文件的落盘条目（判据事实源的磁盘读侧；动机与退化语义见文件头
+ * 「判据事实源磁盘化」段，与 base-tool-enhance pending-reconcile.ts 同名函数同构
+ * 落位——跨扩展无依赖通道，域侧副本）。pi _persist 落盘形态 = 每条 entry 一行
+ * JSON.stringify，逐行 parse 产出与 getEntries() 同构的条目数组。
+ *
+ * 容错口径（与 collectJournaledDeliveryIds「data 畸形按无条目」宽容口径同源）：
+ *  - ENOENT → []：session 首条对话消息前文件不存在（pi _persist 首次 flush 前置
+ *    条件），常态非异常；
+ *  - 其他读错误（EACCES 等）→ warn + []：磁盘事实不可得按「无条目」，候选源与
+ *    抵消事实同按空（保守 miss + warn 修复信号——按内存账退化则会沿幽灵态静默
+ *    吞补投，即 A1 缺陷形态本身）；
+ *  - 脏行（JSON.parse 失败 / 非对象）单行跳过（JSONL 容错纪律，protocol
+ *    pending-entries 扫描同款）。
+ */
+export function readSessionFileEntries(sessionFile: string): unknown[] {
+	let text: string;
+	try {
+		text = readFileSync(sessionFile, "utf8");
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") return [];
+		logger.warn("reconcile journal facts read failed; disk entries treated as empty (candidates retried at next reconcile edge)", {
+			detail: { sessionFile, err: toErrorMessage(err) },
+		});
+		return [];
+	}
+	const entries: unknown[] = [];
+	for (const line of text.split("\n")) {
+		if (line.trim() === "") continue;
+		try {
+			const parsed: unknown = JSON.parse(line);
+			if (parsed !== null && typeof parsed === "object") entries.push(parsed);
+		} catch {
+			// 脏行跳过：单行损坏不拖垮整盘事实
+		}
+	}
+	return entries;
+}
+
 // ─── 骨架简报 payload（D8⑤ + R-1：独立构造，不调主路径 buildManagedNotifyContent）───
 
 /**
@@ -326,12 +383,21 @@ export interface NotifyReconcileResult { // oe-exempt:20261101:framework:跨包�
  * 现算 + deliver 同步受理，毫秒级）。幂等：重复执行时已补投键有投递日志承载/
 * 送达痕迹抵消，判据不再命中。失败吞掉记 warn（对账/补投失败无害：候选判据
  * 仍命中，下一对账边沿幂等重查）——调用方不需自行 try-catch。
+ *
+ * sessionFile = 当前 session JSONL 路径（pi sessionManager.getSessionFile()）——
+ * 判据全部事实源读它的落盘条目（磁盘事实，机制见文件头「判据事实源磁盘化」段）；
+ * undefined（no-persist 形态）退化内存 entries（现状行为）+ warn。
  */
 export function runNotifyReconcileMaintenance(deps: {
 	/** 入口来源（session_start / agent_settled）——入口来源日志可辨。 */
 	reason: string;
-	/** 当前 session entries（pending 表 + 送达痕迹 + 投递日志 + 死亡对四源同盘）。 */
+	/** 当前 session entries（内存账——预检短路源 + no-persist 退化事实源）。 */
 	entries: readonly unknown[];
+	/**
+	 * 当前 session JSONL 路径（装配 = ctx.sessionManager.getSessionFile() 直通）——
+	 * 判据事实源磁盘读侧；undefined = no-persist 形态退化内存账 + warn。
+	 */
+	sessionFile?: string;
 	/** 补投出口（装配注入 = recordManagedNotify 直通——补投与主路径共用投递管道）。 */
 	submitNotify: (notifyId: string, content: string, details: ManagedReconcileNotifyDetails) => boolean;
 }): NotifyReconcileResult {
@@ -343,13 +409,30 @@ export function runNotifyReconcileMaintenance(deps: {
 		skippedJournaled: [],
 	};
 	try {
-		// 四项规则①：全量 entries 现算（scanPendingEntries 单点——registerEntries
-		// 含已注销条目，非 active 差集视图）
-		const scan = scanPendingEntries(deps.entries);
-		const unregisterReasons = collectUnregisterReasons(deps.entries);
-		const deliveredIds = collectDeliveredManagedNotifyIds(deps.entries);
-		const deathPairs = collectDeliveredDeathPairs(deps.entries);
-		const journaledIds = collectJournaledDeliveryIds(deps.entries);
+		// 内存预检短路（bash 域「候选在册才读盘」同款成本下界）：内存账 ⊇ 盘上条目
+		// （幽灵态只会多不会少），无 register 条目早退 = 盘上亦无，零文件读。
+		const memScan = scanPendingEntries(deps.entries);
+		if (memScan.registerEntries.length === 0) return result;
+
+		// 候选在册：事实源磁盘化（文件头「判据事实源磁盘化」段）——五源判据事实
+		// 全部从 session JSONL 落盘条目产出；sessionFile 缺席（no-persist 形态，
+		// 磁盘事实结构性不存在）退化内存 entries——该形态 _persist no-op 恒成功、
+		// 无幽灵态，内存账即完整事实。
+		const factEntries = deps.sessionFile !== undefined
+			? readSessionFileEntries(deps.sessionFile)
+			: deps.entries;
+		if (deps.sessionFile === undefined) {
+			logger.warn("managed notify reconcile journal facts fell back to in-memory entries: session file unavailable (no-persist session?); ghost in-memory entries would misjudge delivered/journaled facts", {
+				detail: { reason: deps.reason },
+			});
+		}
+		// 四项规则①：全量落盘条目现算（scanPendingEntries 单点——registerEntries
+		// 含已注销条目，非 active 差集视图）；四源辅助事实同盘单次遍历全产
+		const scan = scanPendingEntries(factEntries);
+		const unregisterReasons = collectUnregisterReasons(factEntries);
+		const deliveredIds = collectDeliveredManagedNotifyIds(factEntries);
+		const deathPairs = collectDeliveredDeathPairs(factEntries);
+		const journaledIds = collectJournaledDeliveryIds(factEntries);
 
 		result.scanned = scan.registerEntries.length;
 		// 预检短路（u1/u3 同款成本下界）：无 register 条目不触后续三源提取——

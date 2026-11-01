@@ -20,6 +20,23 @@
 //   域过滤构造性成立（D8④ 的本域对应面）：候选源只认 workflow-record 条目，
 //   该 customType 的写方仅 workflow 域（core lifecycle/finalizeRun），无跨域混装。
 //
+// 判据事实源磁盘化（completion-signal-delivery A1 修复的域侧同构落位，范本 =
+// base-tool-enhance pending-reconcile.ts「判据事实源磁盘化」段）：manifest 面与
+// 送达痕迹/投递日志两抵消事实读 session JSONL 落盘条目（readSessionFileEntries），
+// 不读 pi 内存账——pi SessionManager._appendEntry 先 fileEntries.push 后 _persist、
+// persist 失败（EACCES 等）无回滚，留下「幽灵内存 entry」（内存账在册、JSONL 无
+// 行）；内存账口径曾把幽灵的痕迹/日志条目当真 → 「拒收未受理」的 run 被误判已受
+// 理 → 补投结构性静默失效。磁盘事实使 delivered/journaled 语义 = 「JSONL 实际含
+// 该键条目」，与受理落盘契约一物一名；sessionFile 缺席（no-persist 形态——
+// _persist no-op 恒成功、无幽灵态）退化内存 entries（该形态内存账即完整事实）+
+// warn 留痕。成本口径：内存账 ⊇ 盘上条目（幽灵态只会多不会少），内存预检「无
+// 注册条目早退」= 盘上亦无——高频边沿（agent_settled）常态（无 workflow run）
+// 零文件读，候选在册才读盘（bash 域范本同款「候选在册才读盘」形态）。journal 面
+// （settledRecordOf/loadRuns）本就是独立磁盘文件，不受幽灵态影响，原样保留。
+// 幽灵注册条目（workflow-record 自身落盘失败）的残余 = 磁盘口径下候选不可见的
+// 保守 miss（漏补投方向）：该形态 = 注册锚点持久化断裂，重启后 manifest 面无从
+// 发现该 run，对账以磁盘事实为准是其正确语义。
+//
 // 幂等键 = wf-done:<runId>（WORKFLOW_DONE_NOTIFY_ID_PREFIX，主路径 notifyDone
 // 同构造——RL8 同锁：补投与主路径共用同一构造与投递管道）。
 //
@@ -50,6 +67,7 @@
 // 幂等：补投受理成功后投递日志条目（id）与送达痕迹抵消判据，下一边沿不再命中；
 // 跨边沿重复对账天然收敛。
 
+import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -62,6 +80,7 @@ import {
 	readAckId,
 	readOutboxDataV2,
 } from "@zhushanwen/pi-delivery-port";
+import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 import {
 	WORKFLOW_RECORD_CUSTOM_TYPE,
@@ -223,6 +242,47 @@ export function collectJournaledDeliveryIds(entries: readonly unknown[]): Set<st
 	return ids;
 }
 
+// ─── 判据事实源读侧（session JSONL 落盘条目）───
+
+/**
+ * 读 session JSONL 文件的落盘条目（判据事实源的磁盘读侧；动机与退化语义见文件头
+ * 「判据事实源磁盘化」段，与 base-tool-enhance pending-reconcile.ts 同名函数同构
+ * 落位——跨扩展无依赖通道，域侧副本）。pi _persist 落盘形态 = 每条 entry 一行
+ * JSON.stringify，逐行 parse 产出与 getEntries() 同构的条目数组。
+ *
+ * 容错口径（与 collectJournaledDeliveryIds「data 畸形按无条目」宽容口径同源）：
+ *  - ENOENT → []：session 首条对话消息前文件不存在（pi _persist 首次 flush 前置
+ *    条件），常态非异常；
+ *  - 其他读错误（EACCES 等）→ warn + []：磁盘事实不可得按「无条目」，manifest 面
+ *    与抵消事实同按空（保守 miss + warn 修复信号——按内存账退化则会沿幽灵态静默
+ *    吞补投，即 A1 缺陷形态本身）；
+ *  - 脏行（JSON.parse 失败 / 非对象）单行跳过（JSONL 容错纪律，record 流扫描
+ *    同款）。
+ */
+export function readSessionFileEntries(sessionFile: string): unknown[] {
+	let text: string;
+	try {
+		text = readFileSync(sessionFile, "utf8");
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") return [];
+		logger.warn("reconcile journal facts read failed; disk entries treated as empty (candidates retried at next reconcile edge)", {
+			detail: { sessionFile, err: toErrorMessage(err) },
+		});
+		return [];
+	}
+	const entries: unknown[] = [];
+	for (const line of text.split("\n")) {
+		if (line.trim() === "") continue;
+		try {
+			const parsed: unknown = JSON.parse(line);
+			if (parsed !== null && typeof parsed === "object") entries.push(parsed);
+		} catch {
+			// 脏行跳过：单行损坏不拖垮整盘事实
+		}
+	}
+	return entries;
+}
+
 /** 补投幂等键（主路径 notifyDone 同构造——RL8 同锁）。 */
 export function buildDoneNotifyId(runId: string): string {
 	return `${WORKFLOW_DONE_NOTIFY_ID_PREFIX}${runId}`;
@@ -252,17 +312,27 @@ export interface NotifyReconcileResult { // oe-exempt:20261101:framework:跨包�
  * 时已补投键有投递日志承载/送达痕迹抵消，判据不再命中。失败吞掉记 warn（对账/
  * 补投失败无害：候选判据仍命中，下一对账边沿幂等重查）——调用方不需自行 try-catch。
  *
- * 成本下界（u1/u3 同款预检短路纪律）：entries 单次遍历产出 manifest/痕迹/日志三
- * 集合先行，候选为空（常态——rejected 罕见）零 record 读；候选非空才 loadRuns
- * （全量聚合重建，会话内 run 十级量级小文件）。
+ * sessionFile = 当前 session JSONL 路径（pi sessionManager.getSessionFile()）——
+ * manifest 面与痕迹/日志两抵消事实读它的落盘条目（磁盘事实，机制见文件头「判据
+ * 事实源磁盘化」段）；undefined（no-persist 形态）退化内存 entries（现状行为）+
+ * warn。journal 面（settledRecordOf/loadRuns）独立磁盘文件，不受影响。
+ *
+ * 成本下界（u1/u3 同款预检短路纪律）：内存预检「无注册条目早退」（内存账 ⊇ 盘上
+ * 条目——幽灵态只会多不会少，早退 = 盘上亦无，高频边沿常态零文件读）；候选非空
+ * 才读盘 + loadRuns（全量聚合重建，会话内 run 十级量级小文件）。
  */
 export async function runNotifyReconcileMaintenance(deps: {
 	/** 入口来源（session_start / agent_settled）——入口来源日志可辨。 */
 	reason: string;
 	/** 当前 pi（补投出口 notifyDone 的投递参数——与主路径同一投递管道）。 */
 	pi: ExtensionAPI;
-	/** 当前 session entries（manifest 面 + 送达痕迹 + 投递日志三源同盘）。 */
+	/** 当前 session entries（内存账——预检短路源 + no-persist 退化事实源）。 */
 	entries: readonly unknown[];
+	/**
+	 * 当前 session JSONL 路径（装配 = ctx.sessionManager.getSessionFile() 直通）——
+	 * 判据事实源磁盘读侧；undefined = no-persist 形态退化内存账 + warn。
+	 */
+	sessionFile?: string;
 	/** notifyDone 去重窗口（domainState.notifiedRunIds 透传——补投受理后正常入窗）。 */
 	notifiedRunIds: Set<string>;
 	/** 终局记录查询（装配 = JsonlRunStore.settledRecordOf 直通）。 */
@@ -280,10 +350,26 @@ export async function runNotifyReconcileMaintenance(deps: {
 	};
 	try {
 		logger.debug("workflow notify reconcile dispatch", { detail: { reason: deps.reason } });
-		const registered = collectRegisteredWorkflowRuns(deps.entries);
+		// 内存预检短路（bash 域「候选在册才读盘」同款成本下界）：内存账 ⊇ 盘上条目
+		// （幽灵态只会多不会少），无注册条目早退 = 盘上亦无，零文件读。
+		if (collectRegisteredWorkflowRuns(deps.entries).length === 0) return result;
+
+		// 候选在册：事实源磁盘化（文件头「判据事实源磁盘化」段）——manifest 面与
+		// 痕迹/日志两抵消事实全部从 session JSONL 落盘条目产出；sessionFile 缺席
+		// （no-persist 形态，磁盘事实结构性不存在）退化内存 entries——该形态
+		// _persist no-op 恒成功、无幽灵态，内存账即完整事实。
+		const factEntries = deps.sessionFile !== undefined
+			? readSessionFileEntries(deps.sessionFile)
+			: deps.entries;
+		if (deps.sessionFile === undefined) {
+			logger.warn("workflow notify reconcile journal facts fell back to in-memory entries: session file unavailable (no-persist session?); ghost in-memory entries would misjudge delivered/journaled facts", {
+				detail: { reason: deps.reason },
+			});
+		}
+		const registered = collectRegisteredWorkflowRuns(factEntries);
 		result.scanned = registered.length;
-		const deliveredIds = collectDeliveredWorkflowNotifyIds(deps.entries);
-		const journaledIds = collectJournaledDeliveryIds(deps.entries);
+		const deliveredIds = collectDeliveredWorkflowNotifyIds(factEntries);
+		const journaledIds = collectJournaledDeliveryIds(factEntries);
 
 		// 预检（磁盘承载两事实先行，终局事实后核——record 读只在候选上发生）。
 		// 抵消键分类记录进 skippedDelivered/skippedJournaled（观测面——u1/u3 终判

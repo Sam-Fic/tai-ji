@@ -191,6 +191,12 @@ async function executeTool(
  * entries 读取（ctx.sessionManager.getEntries）一层。补投出口 = recordManagedNotify
  * 直通（与主路径同一投递管道与重提链——补投 payload 走骨架简报，幂等键与主路径
  * 同构造 notifyId，collectKey 申报 = 自身键）。
+ *
+ * sessionFile = ctx.sessionManager.getSessionFile()（补投判据事实源磁盘化，A1
+ * 缺陷修复的域侧同构落点）：判据事实读 session JSONL 落盘条目而非内存账——pi
+ * _appendEntry persist 失败无回滚的幽灵内存 entry 曾使 delivered/journaled 误真、
+ * 补投静默失效（机制见 notify-reconcile.ts 文件头「判据事实源磁盘化」段）；
+ * no-persist 形态 getSessionFile() 返回 undefined，对账侧退化内存账（现状行为）。
  */
 function runNotifyReconcileSafely(
 	pi: ExtensionAPI,
@@ -203,6 +209,7 @@ function runNotifyReconcileSafely(
 		runNotifyReconcileMaintenance({
 			reason,
 			entries,
+			sessionFile: ctx.sessionManager.getSessionFile(),
 			submitNotify: (notifyId, content, details) =>
 				recordManagedNotify(notifyId, content, details, [notifyId]),
 		});
