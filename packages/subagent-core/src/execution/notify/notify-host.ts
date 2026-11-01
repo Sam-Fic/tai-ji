@@ -3,16 +3,35 @@
 // emitPendingUnregister + notifier 实例持有）整体搬移至此（行为逐字节等价：搬移 +
 // 依赖注入，不重写逻辑）。变化原因：改通知文案 / dedup 身份 / 放行检查 / pending 注册
 // 注销协议，只改本文件；Service 只保留编排与依赖注入（getPi / isIdle）。
+//
+// 对账补投挂点（completion-signal-delivery D5/D7② 三入口，编排互调
+// notify-reconcile.ts 的唯一对账函数）：
+//   ① session_start——revive()（SubagentService.initSession 链内无条件调用，含
+//      /new /resume /fork）；
+//   ② agent_settled——revive() 内经 pi.on("agent_settled") 订阅（回合收尾兜底边沿；
+//      受 pi 注入时点约束——构造期 pi 为 null，订阅只能在 initSession 注入 pi 之后
+//      落位；per-pi 实例恰一次，session 替换随旧 pi 消亡、新实例重新注册——RL13
+//      同款构造性防累积论证）；
+//   ③ 切回补强（__taiji_bg_reconcile__）——pi 命令名全局唯一（base-tool-enhance 注册），
+//      core 包内无触发源，生产接线 = 扩展侧/壳侧调包导出的同一对账函数（reason="resume"）。
+// 对账事实源经 NotifyHostDeps.getReconcileSource 注入（可选——缺席 = 对账不挂，
+// 既有构造方零改动行为不变；生产构造点恒注入，见 subagent-service.ts）。
 
 import { displayAgentName } from "../../shared/agent-ref.ts";
 import { isLegacyClosedSettled, snapshot } from "../persistence/execution-record.ts";
 import { hasArmedIdleTimer, isResumable } from "../lifecycle/lifecycle-predicates.ts";
 // [§1.4 (b)] pi 通知通道 best-effort 执行（stale 分诊 + 留痕不冒泡）。
 import { bestEffortPiCall } from "../assembly/best-effort.ts";
-import type { BgNotifier, NotifierHost } from "./notifier.ts";
-import { createNotifier } from "./notifier.ts";
-import type { BgNotifyRecord } from "./notifier.ts";
+import {
+  runNotifyReconcileMaintenance,
+  type NotifyReconcileSource,
+} from "./notify-reconcile.ts";
+import { getLogger } from "../../core/logger.ts";
+import { NOTIFY_CUSTOM_TYPE, createNotifier } from "./notifier.ts";
+import type { BgNotifier, BgNotifyRecord, NotifierHost } from "./notifier.ts";
 import type { ExecutionRecord } from "../domain/record-model.ts";
+
+const logger = getLogger("subagents");
 
 /** Pi ExtensionAPI 的最小接口（duck-typed）——原定义于 subagent-service.ts，随通知簇
  *  （piAdapter / emitPending* 的依赖）搬移至此并导出（Service 的 session 注入参数仍引用）。
@@ -40,6 +59,12 @@ export interface NotifyHostDeps {
   getPi: () => PiLike | null;
   /** 主 agent isIdle 查询（ctx.isIdle，initSession 注入；未注入时 undefined）。 */
   getIsIdle: () => (() => boolean) | undefined;
+  /**
+   * 对账补投事实源（completion-signal-delivery D5/D7② 可选注入——缺席 = 对账不挂，
+   * 既有构造方零改动）。生产构造点供给：records 全量（终态态）+ 主 session entries
+   * 读取（notify-reconcile.readSessionEntriesFromFile 同源闭包）。
+   */
+  getReconcileSource?: () => NotifyReconcileSource | undefined;
 }
 
 /** 通知簇 host 面（Service 经此消费；notifier 实例封装在内部不外露）。 */
@@ -119,6 +144,45 @@ export function createNotifyHost(deps: NotifyHostDeps): NotifyHost {
   };
 
   const notifier: BgNotifier = createNotifier(piAdapter());
+
+  // ── 对账补投编排闭包（completion-signal-delivery D5/D7② 三入口唯一编排）──
+  //
+  // source 缺席（deps.getReconcileSource 未注入 / 装配异常窗）= 对账不挂（返回空
+  // 结果形态）——与端口缺席降级同款缺席语义，留 debug 痕（缺席是装配级状态而非逐
+  // 条通知事件，不逐边沿 warn 刷屏）。
+  let reconcileSourceAbsentWarned = false;
+  const runReconcile = (reason: string): void => {
+    const source = deps.getReconcileSource?.();
+    if (!source) {
+      if (!reconcileSourceAbsentWarned) {
+        reconcileSourceAbsentWarned = true;
+        logger.debug(
+          "notify reconcile skipped: reconcile source not wired (check NotifyHostDeps.getReconcileSource at construction)",
+        );
+      }
+      return;
+    }
+    // 编排内部自捕获失败记 warn（对账失败无害，下一边沿幂等重查）——async fire 型
+    // 调用防 unhandled rejection（bash 域编排同款论证）。
+    void runNotifyReconcileMaintenance({
+      reason,
+      source,
+      notifyCustomType: NOTIFY_CUSTOM_TYPE,
+      submitNotify: (record) => notifier.notify(record),
+    }).catch(() => {});
+  };
+
+  // agent_settled 订阅（②入口）：订阅时点受 pi 注入约束——构造期 pi 为 null，在
+  // revive()（initSession 注入 pi 之后）落位。per-pi 实例恰一次（boundPi 防重——
+  // 同一 pi 实例上重复 initSession 不重复注册）；session 替换随旧 pi 消亡（pi 侧
+  // eventBus 重建，RL13 同款构造性防累积），新实例经下次 revive 重新注册。
+  let boundPiForSettled: PiLike | null = null;
+  const ensureSettledSubscription = (): void => {
+    const pi = deps.getPi();
+    if (pi === null || pi === boundPiForSettled) return;
+    boundPiForSettled = pi;
+    pi.on?.("agent_settled", () => runReconcile("agent_settled"));
+  };
 
   /** record → BgNotifyRecord（notifier.notify 入参映射，内部不外露）。
    *  v4 B-1：检查放行 closed（终态，含 cancelled）、hasArmedIdleTimer（对话模式轮次完成，notify 主 agent G1）
@@ -266,6 +330,11 @@ export function createNotifyHost(deps: NotifyHostDeps): NotifyHost {
 
     revive(): void {
       notifier.revive();
+      // [对账补投入口①②] session_start 边沿（initSession 链内无条件到达——含
+      // /new /resume /fork）对账一次；pi 注入就绪后落位 agent_settled 订阅（回合
+      // 收尾兜底边沿，②入口）。顺序无敏感：订阅只挂 handler 不触发对账。
+      ensureSettledSubscription();
+      runReconcile("session_start");
     },
 
     flushPendingNotifications(): void {

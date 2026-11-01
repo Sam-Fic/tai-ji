@@ -37,6 +37,10 @@ import { ManifestStore } from "./persistence/manifest-store.ts";
 import type { ModelConfigService } from "./assembly/model-config-service.ts";
 import type { AgentConfig, ModelInfo, ResolvedModel } from "./assembly/model-resolver.ts";
 import { type NotifyHost, type PiLike, createNotifyHost } from "./notify/notify-host.ts";
+import {
+  NOTIFY_RECONCILE_SCAN_LIMIT,
+  readSessionEntriesFromFile,
+} from "./notify/notify-reconcile.ts";
 // [H1 U2] notify 门迁 notifier.ts（Continuation 双闸共用），此处 re-export 保持既有
 // import 路径（测试消费方 `from "../subagent-service.ts"` 不变）。
 export { notifyGateAllowsDelivery } from "./notify/notifier.ts";
@@ -198,6 +202,17 @@ export class SubagentService {
   private readonly notifyHost: NotifyHost = createNotifyHost({
     getPi: () => this.pi,
     getIsIdle: () => this.isIdleFn,
+    // [u3 通知对账补投事实源装配] NotifyHostDeps.getReconcileSource 生产供给：
+    // 全量 record（含终态、includeWorkflow=true——origin 排除位在 notify-reconcile
+    // 判据内落位、真值表逐行可测）+ 主 session entries 读取（送达痕迹/投递日志两
+    // 事实源）。惰性闭包（session 级状态运行时可变——mainSessionFile initSession
+    // 注入；字段初始化器闭包先例 = 上方 getPi）。接线说明与缺席语义见 notify-host.ts
+    // 头注与 notify-reconcile.ts 文件头。
+    getReconcileSource: () => ({
+      listReconcileRecords: () =>
+        this.queries.collectRecords(NOTIFY_RECONCILE_SCAN_LIMIT, "all", true),
+      readSessionEntries: () => readSessionEntriesFromFile(this.mainSessionFile),
+    }),
   });
 
   private readonly manifestStore: ManifestStore;
