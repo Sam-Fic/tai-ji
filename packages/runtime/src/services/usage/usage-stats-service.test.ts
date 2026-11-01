@@ -728,7 +728,7 @@ describe('UsageStatsService', () => {
     expect(result.rows[0].costUSD).toBe(0)
   })
 
-  // ── ③ compaction model 归属（details.model 权威优先，usage-page-fixes §3.3 ④）──
+  // ── ③ compaction model 归属（details.model 权威优先，非 string/空串回退 'compaction'）──
 
   it('③ compaction entry details.model 权威归属（U3 落盘形态 provider/id）', async () => {
     const content = [
