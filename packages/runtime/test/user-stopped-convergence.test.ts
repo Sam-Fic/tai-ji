@@ -1,14 +1,18 @@
 /**
  * userStopped 标记单测（原 D4 收敛环时间窗已随 ADR-0122 清查删除；本文件锁定
  * 事件顺序契约终态：标记存活期 = 旁路 turn 拦截存续期，标记清除只由显式意图
- * 事件驱动——显式投递 / 会话删除 / shutdown，无任何自动收敛）。
+ * 事件驱动——显式投递 / 会话删除 / shutdown，无任何自动收敛。例外：判死分型
+ * probe_stall_auto_quit 的标记由自动恢复接线同权消费（consumeUserStoppedMarkOfSource，
+ * pi-stall-detection D2 显式裁决例外，types.ts 契约登记；断言落点 =
+ * message-dispatcher.test.ts RL15 分型消费用例）。
  *
  * 覆盖映射：
  * - UserStoppedGate 契约：标记存活 → agent_start 一律拦截再 abort；显式投递清标记
  *   放行；agent_settled 不清标记（同边沿补投击穿反例的契约锁）；
  * - interpreter 挂点接线：hook agent_start → noteAgentStart；
  * - dispatcher 置位分型：K1 forceQuit → source='user_force_quit'、K2 abort 超时强杀
- *   → source='abort_timeout'；
+ *   → source='abort_timeout'（K1/K2 置位断言均落 message-dispatcher.test.ts——K2 :1618、
+ *   K1 :1895，本文件无用例）；
  * - sendPrompt / deliverText 显式投递清标记放行。
  *
  * mock 策略：全部依赖 mock，不 spawn pi。
@@ -25,7 +29,6 @@ import { MessageDispatcher } from '../src/services/session/message-dispatcher.js
 import {
   createSessionDeliveryRegistry,
 } from '../src/services/session/session-delivery-registry.js'
-import { RpcTimeoutError } from '../src/utils/errors.js'
 import type { ServerMessage } from '@taiji/shared'
 import type { ForceQuitSource, UserStoppedMarkStore } from '../src/services/session/types.js'
 import type { IDispatcherSessionOps } from '../src/services/session/session-internal.js'
@@ -190,7 +193,6 @@ describe('MessageDispatcher 置位分型与显式投递清标记', () => {
 
   function makeDispatcher(opts: {
     session?: IManagedSessionView
-    abortBehavior?: 'ok' | 'rpc-timeout'
     /** U3 用例：pm.getClient 无条目（forceQuit 早退分支）。 */
     clientMissing?: boolean
     /**
@@ -201,9 +203,7 @@ describe('MessageDispatcher 置位分型与显式投递清标记', () => {
     turnOccupied?: boolean
   } = {}) {
     const session = opts.session ?? makeMockSession()
-    const abortFn = opts.abortBehavior === 'rpc-timeout'
-      ? vi.fn(async () => { throw new RpcTimeoutError('abort', 60000) })
-      : vi.fn(async () => {})
+    const abortFn = vi.fn(async () => {})
     /** prompt 时刻的标记快照（时序构造性断言：清标记必须先于 prompt）。 */
     let markAtPrompt: boolean | undefined
     const client = {

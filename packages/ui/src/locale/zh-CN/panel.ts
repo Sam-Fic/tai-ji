@@ -276,11 +276,12 @@ export default {
     executingBash: '正在执行',
     // [notice-family-phrase-detail 2026-09-18 方案 A] bash 执行行 elapsed meta——命令移入悬停
     // 详情后，行内保留计时观察维持执行期可见性
-    executingBashElapsed: '已 {elapsed}',    // [pi-stall-detection U4 / D3] 静默辅助提示（ActivityStrip stall 行；温和文案非红色警告，
-    // 判定权在 runtime，本层只呈现；帧流恢复即清除）
+    executingBashElapsed: '已 {elapsed}',
+    // [pi-stall-detection U4 / D3] 静默辅助提示（ActivityStrip stall 行；温和文案非红色警告，
+    // 判定权在 runtime，本层只呈现；帧流恢复即清除。静默时长由帧 payload（silentMs）携带，
+    // 文案不写死阈值数字——阈值用户可调，写死会漂移）
     stallHint: '已静默 {minutes} 分钟，可点停止或继续等待',
 
-    // 不写死阈值数字——阈值用户可调，写死会漂移）
     // ── 语音朗读（ai-voice-tts，key 消费方 = useTtsPlayer + TurnSummary 按钮态）──
     // toast 文案与设计 §5.4 失败表逐字对齐；title 四键 = 朗读按钮状态机（设计 §5.1）。
     speakTitle: '朗读',

@@ -293,6 +293,7 @@ plan 模式重设计（GUI 呈现 + skill 挂载 + 文档审阅闭环）的全�
 
 ### ADR-0047 watchdog 用进程健康探测
 pi 卡死检测用「进程健康探测」（每 60s ping get_state）替代「事件静默时长」——静默 ≠ 卡死（ask_user 等待/慢工具都会静默），连续 2 次失败广播 WARN、3 次（180s）才 onSilentAbort。实装 `event-interpreter-ping.ts`（PingProbe）。与「runtime watchdog 滚动重启」（默认不武装，TAIJI_RUNTIME_WATCHDOG_ARMED）是两套机制。登记 C-comm-09。
+**修订（pi-stall-detection，2026-11-01 随实施落地）**：「失败」判定内涵随 D1 扩展为三态——reject（进程死/写失败）、resolve(undefined)（client 未就绪）、探测请求观测超时（悬挂计失败；观测通道例外登记见 ADR-0122 保留白名单行），阈值口径（2 次 WARN / 3 次判定）不变；判定后处置随 D2 改按第 0 层进程存活信号分型的自动处置链（进程死维持协作式 abort 显式收尾路由，存活进自动处置链），条款详见 ADR-0122「停滞判定与处置条款修订」段。
 
 ### ADR-0069 内存活性治理审计裁决（2026-09-14，维持不治为默认）
 全仓内存活性审计后的用户裁决：登记不治点位「维持不治」是默认，翻案需新实测压力数据（原审计文档 docs/design/memory-leak-remediation.md 已删除、git 可追溯，各点位量级锚与重审条件见其 §2.5；裁决注释已写入各源码处）。不治 8 项：sessionMetaCache / externalMetaCache / notRepoCache / usage-stats shards（语料有界）、pi-respawn 熔断计数（熔断语义优先）、clearedSessions tombstone（有意无界防迟到写）、executingBash 断连残留（两害相权残留更轻）、session-file-utils 32MB 全量读（协议合法载荷有硬上界）。已治理侧：G2 活性无界组（openPiStreams close 摘除、ws-client sweepExpiredInFlightSubscribes 挂重连路径）与 G4 杂项组（prematureTimeoutIds/deferFlushFailureCounts 纳入 disposeSession、skill-registry projectWatchers LRU(8)、ImportSessionDialog close 清扫描结果、quota fetch body cancel）。系统性防护（纯加状态不接线清理打回）已并入 ADR-0049 checklist。

@@ -337,9 +337,10 @@ export function startPingProbeFromDeliveryEdge(sessionId: string): void {
    * 注入上下文，回执关闭由投递日志 details-id 凭据承接，不重复投递）。
  *
    * 「被掐 turn 的 settled 永不到达」（pi 收尾挂死）归显式上报链：PingProbe（ADR-0047，
-   * 60s ping × 3 连续失败）→ onSilentAbort → sessionService.abort（组合根 index.ts 接线；
-   * 并非 forceQuitSession 强杀）。abort RPC 对挂死 pi 悬挂、无超时兜底（ADR-0122 退役登记，
-   * 见 message-dispatcher.abort 注释）——处置归用户「强制退出」。
+   * 60s ping × 3 连续失败）→ onSilentAbort → 组合根接线 sessionService.handleStallDetermination
+   *（pi-stall-detection U2/D2② 按第 0 层进程存活信号分型的自动处置链：进程死维持协作式
+   * abort 显式收尾路由，进程存活 → sample 取证 → 判死强杀 → 窄化自动恢复 → 注入原因提示
+   *——见 index.ts onSilentAbort 接线与同文件 onSilentAbort JSDoc）。
    */
 export class UserStoppedGate {
   /** 宿主存取 + abort 能力（SessionService 构造时注入；未注入时全部 no-op——测试友好）。 */

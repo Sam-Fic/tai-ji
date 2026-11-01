@@ -8,9 +8,12 @@
  * 为什么是模块级、为什么独立于 ManagedSession：forceQuit 尾步 removeSessionEntry 会删
  * sessions Map 条目、销毁 session 对象，而标记必须存活到后续 restore（用户点开 dead session
  * 时 restoreSession 读它决定是否 restore-abort）——挂在 session 对象 / 实例字段上都会随条目
- * 删除消亡。清理路径全列（D4）：restore 收敛消费（gate 静默窗满清，主路径）/ delete /
- * destroyAll / 进程退出（内存态整体消亡，天然清理）；removeSessionEntry 刻意不清（forceQuit
- * 尾步经过它，只停收敛环定时器，见 gate.disposeForEntryRemoval）。
+ * 删除消亡。清理路径全列：显式投递（gate.consumeForExplicitDelivery）/ delete（lifecycle.delete
+ * 显式调 gate.disposeForDelete）/ shutdown（gate.disposeAll）/ 判死分型自动恢复消费
+ *（consumeUserStoppedMarkOfSource，pi-stall-detection U2 显式例外，types.ts 契约登记）/
+ * 进程退出（内存态整体消亡，天然清理）；removeSessionEntry 刻意不清（forceQuit 尾步经过
+ * 它，标记须存活到后续 restore——见 session-entry-removal.ts 汇聚点注释；原 D4 收敛环
+ * 清理已随 ADR-0122 时间窗删除移除）。
  *
  * 子模块（dispatcher/lifecycle/interpreter 挂点）不直接 import 本模块（模块依赖单向性：
  * session-service Facade 值导入全部子模块，反向 import 成环），统一经 event-interpreter.ts 的

@@ -4,8 +4,10 @@
  * 覆盖验收条款（设计 §4.2 对应行）：
  * - RL4：T/T_hint 单源联动推导等式 + 逐窗不等式 + 配置维超界降级触发（两口径不并存——
  *   实施裁决 = 主案超界降级，resolveStallMatrixArms 纯函数消费配置快照）；
- * - RL5：豁免锚点（compacting / ask_user）暂停计时不产生漏报/误报；锚点消失后从既有静默
- *   时长继续（不重置）；判死后辅助提示清除；转后台防护（C2 格，无锚点形态）= T 盖过
+ * - RL5：豁免锚点（compacting / ask_user）在场暂停计时不产生漏报/误报；锚点经帧流恢复
+ *   解除后计时刷新重新起算（compaction_end / agent 继续产出 = 回合推进证据，AS16 ① 类）
+ *   ——「暂停非重置」语义仅在 backoff 宽限窗成立（窗满后从既有静默时长继续，见 RL11 用例）；
+ *   判死后辅助提示清除；转后台防护（C2 格，无锚点形态）= T 盖过
  *   转后台窗 + 早退边沿帧（tool_execution_end）刷新计时 + 边界后照常判死；
  * - RL11：在途信号刷新静默计时 + 过滤帧不计时 + summarization backoff 按载荷 delayMs
  *   宽限 + 反向判死必达；
@@ -256,8 +258,9 @@ describe('RL11 在途信号：帧流刷新静默计时 + 在途阶段定位', ()
     h.matrix.observe({ kind: 'summarization-retry-scheduled', delayMs: 300_000 } as PiTranslatedEvent)
     await h.advance(150_000) // 950s：T 已过但 backoff 窗内（800+300=1100s 截止）
     expect(h.judged).toHaveLength(0)
-    // 窗满后从既有静默继续（不重置——与 RL5 锚点同语义）：1200s = 冻结 800s + 窗满后
-    // 累计 100s = 900s 达 T → 判死（backoff 宽限是暂停非清零，fail-safe 不放大豁免）
+    // 窗满后从既有静默继续（不重置——backoff 宽限窗是唯一无帧流边沿的「暂停非重置」
+    // 形态；compacting/ask_user 锚点经帧流边沿解除后是刷新重新起算，两者语义不同）：
+    // 1200s = 冻结 800s + 窗满后累计 100s = 900s 达 T → 判死（backoff 宽限是暂停非清零，fail-safe 不放大豁免）
     await h.advance(250_000)
     expect(h.judged).toHaveLength(1)
     // 判死后矩阵自停：继续推进零重判
@@ -300,11 +303,11 @@ describe('RL11 在途信号：帧流刷新静默计时 + 在途阶段定位', ()
 
 // ── RL5：豁免锚点（runtime 侧：暂停计时 / 继续 / 清除）────────────────
 
-describe('RL5 豁免锚点：暂停计时非重置 + 判死后辅助提示清除', () => {
+describe('RL5 豁免锚点：在场暂停计时（帧流恢复解除后刷新重新起算）+ 判死后辅助提示清除', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
 
-  it('compacting 锚点：在场超阈值无提示不判死；锚点消失后从既有静默时长继续（不重置）', async () => {
+  it('compacting 锚点：在场超阈值无提示不判死；锚点在场暂停、compaction_end 刷新重新起算', async () => {
     const h = makeMatrix()
     h.matrix.start()
     // 静默 100s → compaction_start（锚点置位，计时暂停）
