@@ -50,7 +50,7 @@
 import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
-import type { SubagentJournalReport } from '@zhushanwen/extension-protocol'
+import { PLAN_STATE_CUSTOM_TYPE, type SubagentJournalReport } from '@zhushanwen/extension-protocol'
 import type { SubagentRecord, WorkflowRunRecord } from '@taiji/shared'
 import { isEnoent } from '../../utils/errors.js'
 import {
@@ -936,9 +936,12 @@ export class SessionEventProjection {
    *   真实存储树分布实测，成本大头在主文件 entry 源的分片侧）。构建期 buildingSilently
    *   门抑制 fireChange。
    * - 返回 promise：resolve = 构建完成（entryOffset = 游标；主文件超界 null = oversize
-   *   回落语义，与 buildProjection 一致），实例未接线发布——调用方核对缓存身份后原子
-   *   切换；reject = 构建期读失败（游标未动、旧实例未动——调用方 warn 一条，恢复由
-   *   下一次查询触发的核对重新调度，零重试定时器，ADR-0122）。
+   *   回落语义，与 buildProjection 一致；planEntries = 扫描产出内的 plan-state 条目收集
+   *   ——[U5 plan 冷路径归一 D6] 截断重写后 plan 派生的喂数：重写文件 = pi 内存条目全集，
+   *   派生消费方在 session-records 原子切换点，实例本体不持 plan（plan 家族不进派生视图）），
+   *   实例未接线发布——调用方核对缓存身份后原子切换；reject = 构建期读失败（游标未动、
+   *   旧实例未动——调用方 warn 一条，恢复由下一次查询触发的核对重新调度，零重试定时器，
+   *   ADR-0122）。
    */
   static buildInSegments(opts: {
     sessionId: string
@@ -949,17 +952,18 @@ export class SessionEventProjection {
     segmentBudgetBytes: number
     /** 正式发布回调（构建期静默；原子切换后生效） */
     onProjectionChange: () => void
-  }): { promise: Promise<{ projection: SessionEventProjection; entryOffset: number | null }> } {
+  }): { promise: Promise<{ projection: SessionEventProjection; entryOffset: number | null; planEntries: unknown[] }> } {
     const projection = new SessionEventProjection({
       sessionId: opts.sessionId,
       recordsDir: opts.recordsDir,
       runJournalDir: opts.runJournalDir,
       onProjectionChange: opts.onProjectionChange,
     })
-    const promise = (async (): Promise<{ projection: SessionEventProjection; entryOffset: number | null }> => {
+    const promise = (async (): Promise<{ projection: SessionEventProjection; entryOffset: number | null; planEntries: unknown[] }> => {
       projection.buildingSilently = true
       try {
         let entryOffset: number | null
+        const planEntries: unknown[] = []
         if (opts.sessionFilePath !== undefined) {
           let offset: number | null = 0
           for await (const scan of scanRecordFamilyInSegments(opts.sessionFilePath, 0, opts.segmentBudgetBytes)) {
@@ -970,6 +974,7 @@ export class SessionEventProjection {
               break
             }
             projection.applyEntryBatch(scan.entries)
+            collectPlanStateEntries(scan.entries, planEntries)
             offset = scan.nextOffset
             if (scan.truncated || !scan.hasMore) break
           }
@@ -978,11 +983,25 @@ export class SessionEventProjection {
           entryOffset = null
         }
         projection.attach()
-        return { projection, entryOffset }
+        return { projection, entryOffset, planEntries }
       } finally {
         projection.buildingSilently = false
       }
     })()
     return { promise }
+  }
+}
+
+/**
+ * [U5 plan 冷路径归一 D6] 扫描产出内 plan-state 条目的宽松收集（customType 粗滤，解析
+ * 后的严格判定与派生归 scanPlanStateEntries 单源）：plan 家族不进派生视图（applyEntryBatch
+ * 对未知 customType 零处理），收集仅为把续读链扫描产出上浮给 session-records 的 plan 派生
+ * 挂点（首建/截断整建两处全量语义喂数）。
+ */
+function collectPlanStateEntries(entries: readonly unknown[], into: unknown[]): void {
+  for (const entry of entries) {
+    if (typeof entry === 'object' && entry !== null && (entry as { customType?: unknown }).customType === PLAN_STATE_CUSTOM_TYPE) {
+      into.push(entry)
+    }
   }
 }

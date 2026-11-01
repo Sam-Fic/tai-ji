@@ -12,6 +12,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { appendFileSync, mkdtempSync, writeFileSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, truncateSync } from 'node:fs'
+import * as nodeFs from 'node:fs'
 import { logger } from '../../../infra/logger.js'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -30,6 +31,7 @@ import { extractSubagentsFromSessionFile } from '../subagent-extractor.js'
 import { extractWorkflowsFromSessionFile } from '../workflow-extractor.js'
 // [subagent-composer 结果回执通道] 回执目录单源（rootSessionId 分区键，读侧与生产同式）
 import { getSubagentMessageResultsDir } from '@zhushanwen/subagent-core'
+import type { PlanStateView } from '@taiji/shared'
 
 const extractSubagentsMock = vi.mocked(extractSubagentsFromSessionFile)
 const extractWorkflowsMock = vi.mocked(extractWorkflowsFromSessionFile)
@@ -1497,7 +1499,13 @@ describe('plan-state 派生视图（D1③④）', () => {
     expect(last.docs).toEqual([expect.objectContaining({ fileName: 'design.md' })])
   })
 
-  it('冷路径 getPlanState：定位 session 文件后经 extractor 提取（与热路径同一份派生代码）', async () => {
+  // ── [U5 plan 冷路径归一 D6] 冷路径读侧换源：getPlanState 与 getSubagents/getWorkflows
+  // 同一统一续读链（直查定位 → oversize 分流 → ensureProjection size/游标核对与续读），
+  // plan 派生读 cache.planState（与 live planState 同一数据源、同一派生落点 mergePlanState），
+  // 独立全文解析（extractPlanStateFromSessionFile）退役。验收对照：V7（冷启动 ≡ live）/
+  // 无全文件 readFileSync / oversize 降级形态保持；RL7 = 冷热对拍断言（A7 行承接）。──
+
+  it('[U5 D6] 冷路径 getPlanState：走统一续读链派生（与 getSubagents/getWorkflows 同一读路径）', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'session-records-plan-'))
     const filePath = join(dir, 'session.jsonl')
     writeFileSync(filePath, [
@@ -1518,7 +1526,117 @@ describe('plan-state 派生视图（D1③④）', () => {
     }
   })
 
-  it('冷路径 getPlanState：session 不在扫描结果返回未激活缺省 View（RPC reply 无 null 域）', async () => {
+  it('[RL7 / U5 D6] 冷热对拍：冷启动 getPlanState 与激活会话后 cache.planState 派生结果一致', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'session-records-rl7-'))
+    const filePath = join(dir, 'session.jsonl')
+    // 磁盘腿与 live 腿同值 entry 集（plan entry + record 族混入——多族产出共存的续读链）
+    const diskPlanEntry = planStateEntry(fullPlanData('awaiting'), 'e1')
+    writeFileSync(filePath, [
+      JSON.stringify({ type: 'message', id: 'm1' }),
+      JSON.stringify(diskPlanEntry),
+      ...subagentRecordEntry('sa-1', 'running', 'e2').map((e) => JSON.stringify(e)),
+    ].join('\n') + '\n')
+    try {
+      const { records, client } = makeRecords({
+        sessionStore: { scanSessions: vi.fn(() => [{ id: 's1', filePath, cwd: '/tmp/proj' }]) } as unknown as ISessionStore,
+      })
+      // 冷启动腿：无 live 数据——续读链首建扫描 + plan 派生（mergePlanState 全量语义）
+      const cold = await records.getPlanState('s1')
+      // live 腿：激活会话 → get_entries 全量轮返回同值 entry 集 → 同一派生函数落 cache.planState
+      const fire = registerSession(records)
+      client.getEntries.mockResolvedValue({
+        data: { entries: [structuredClone(diskPlanEntry)], leafId: 'e1' },
+      })
+      fire('s1')
+      records.invalidateRecordEntries('s1', 'plan-state')
+      await flushDebounce()
+      const cache = planStateCacheOf(records, 's1')
+      expect(cache?.planState).not.toBeNull()
+      expect(cold).toEqual(cache?.planState)
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
+  })
+
+  it('[U5 D6] 冷启动后续读增量推进：追加 plan entry 后再次查询返回新值（同一游标链，非二次冷读）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'session-records-plan-incr-'))
+    const filePath = join(dir, 'session.jsonl')
+    writeFileSync(filePath, [
+      JSON.stringify({ type: 'message', id: 'm1' }),
+      JSON.stringify(planStateEntry(fullPlanData('awaiting'), 'e1')),
+    ].join('\n') + '\n')
+    try {
+      const { records } = makeRecords({
+        sessionStore: { scanSessions: vi.fn(() => [{ id: 's1', filePath }]) } as unknown as ISessionStore,
+      })
+      const first = await records.getPlanState('s1')
+      expect(first.state).toBe('reviewing')
+      // 跨实例追加（dc801b73d 陈旧缺陷回归形态的 plan 版）：磁盘新事实经下次查询续读可见
+      const resetEntry = planStateEntry({
+        isActive: false,
+        planFilePath: '/tmp/taiji-plan/auth/plan.md',
+        requirement: '',
+        templateName: '',
+      }, 'e2')
+      appendFileSync(filePath, JSON.stringify(resetEntry) + '\n')
+      const second = await records.getPlanState('s1')
+      expect(second.isActive).toBe(false)
+      // reset entry（isActive:false）无 state 字段 → readLifecycleState 按 isActive 映射 'idle'
+      expect(second.state).toBe('idle')
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
+  })
+
+  it('[U5 D6 / V7] 冷启动查询无全文件 readFileSync（全文解析退役，读侧 = 流式扫描 + 字节原语）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'session-records-plan-nofull-'))
+    const filePath = join(dir, 'session.jsonl')
+    writeFileSync(filePath, [
+      JSON.stringify({ type: 'message', id: 'm1' }),
+      JSON.stringify(planStateEntry(fullPlanData('awaiting'), 'e1')),
+    ].join('\n') + '\n')
+    try {
+      const { records } = makeRecords({
+        sessionStore: { scanSessions: vi.fn(() => [{ id: 's1', filePath }]) } as unknown as ISessionStore,
+      })
+      const readSpy = vi.spyOn(nodeFs, 'readFileSync')
+      try {
+        // 两次查询：首建（冷扫描）+ 稳态核对（零重算）——全程无 readFileSync 触达
+        await records.getPlanState('s1')
+        await records.getPlanState('s1')
+        expect(readSpy).not.toHaveBeenCalled()
+      } finally {
+        readSpy.mockRestore()
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
+  })
+
+  it('[U5 D6 / V7③] oversize（文件 >32MB 预检阈值）：plan 降级未激活缺省 View + 每会话一次 warn', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'session-records-plan-oversize-'))
+    const filePath = join(dir, 'huge-session.jsonl')
+    // 稀疏文件：写一字节后 truncate 到超阈值——stat.size 超限触发降级，磁盘实际占用极小
+    writeFileSync(filePath, '\n')
+    truncateSync(filePath, 33 * 1024 * 1024)
+    const { records } = makeRecords({
+      sessionStore: { scanSessions: vi.fn(() => [{ id: 's-big', filePath }]) } as unknown as ISessionStore,
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const expected = { isActive: false, planFilePath: null, requirement: null, templateName: null }
+      expect(await records.getPlanState('s-big')).toEqual(expected)
+      // 面板 retry 场景：分形稳定 + warn 每会话只落一次（plan 分形文案）
+      expect(await records.getPlanState('s-big')).toEqual(expected)
+      const planWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes('plan state unavailable'))
+      expect(planWarns).toHaveLength(1)
+    } finally {
+      warnSpy.mockRestore()
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
+  })
+
+  it('[U5 D6] 冷路径 getPlanState：session 不在扫描结果返回未激活缺省 View（RPC reply 无 null 域）', async () => {
     const { records } = makeRecords()
     const view = await records.getPlanState('s-none')
     expect(view).toEqual({
@@ -1899,6 +2017,13 @@ function projectionOf(records: SessionRecords, sessionId: string): SessionEventP
   return caches.get(sessionId)?.projection ?? null
 }
 
+/** [RL7] 冷热对拍的 live 腿观察面（摸私有 cache——cache.planState 是 live 链的派生落点，
+ * 与 getPlanState 读路径归一后的返回值同源）。 */
+function planStateCacheOf(records: SessionRecords, sessionId: string): { planState: PlanStateView | null } | undefined {
+  const caches = (records as unknown as { recordEntriesCaches: Map<string, { planState: PlanStateView | null }> }).recordEntriesCaches
+  return caches.get(sessionId)
+}
+
 describe('查询真理通道：未激活会话投影 size/游标续读核对（F1-51/F1-17）', () => {
   function makeUnactivatedWorld(): {
     world: ReturnType<typeof makeV2World>
@@ -2029,6 +2154,38 @@ describe('查询真理通道：未激活会话投影 size/游标续读核对（F
       expect(projectionOf(records, 's1')).not.toBe(projectionBefore)
       const third = await records.getSubagents('s1')
       expect(third.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'running' })
+    } finally {
+      rmSync(world.worldDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
+  })
+
+  it('[U5 D6] 截断重写后的 plan 派生：buildInSegments planEntries 上浮喂数，旧基线作废、整建后收敛到重写文件新值', async () => {
+    const { world, records, rewriteSessionFile } = makeUnactivatedWorld()
+    try {
+      // 首建：主文件含活跃 plan entry（awaiting）+ record 族（多族产出共存）——游标登记到文件尾
+      rewriteSessionFile([
+        { type: 'session', id: 's1', cwd: '/tmp/resume-proj' },
+        planStateEntry(fullPlanData('awaiting'), 'e-p1'),
+        subagentRegisteredV2('sa-1'),
+        subagentSettledV2('sa-1'),
+      ])
+      const first = await records.getPlanState('s1')
+      expect(first.isActive).toBe(true)
+      expect(first.state).toBe('reviewing')
+
+      // 重写为更短内容且 plan entry 翻转（compaction 重写保留内存条目的形态变体）：
+      // size < 游标 → 截断判定 → 异步整建（planEntries 收集 = 整建扫描产出的 plan-state 条目）
+      rewriteSessionFile([
+        { type: 'session', id: 's1', cwd: '/tmp/resume-proj' },
+        planStateEntry(fullPlanData('revising'), 'e-p2'),
+        subagentRegisteredV2('sa-1'),
+      ])
+      const second = await records.getPlanState('s1')
+      expect(second.state).toBe('reviewing') // 快照应答：在途窗口旧基线可读
+      const caches = (records as unknown as { recordEntriesCaches: Map<string, { projectionAsyncRead: Promise<void> | null }> }).recordEntriesCaches
+      await caches.get('s1')!.projectionAsyncRead // await 在途整建（确定性完成信号）→ 原子切换
+      const converged = await records.getPlanState('s1')
+      expect(converged.state).toBe('revising')
     } finally {
       rmSync(world.worldDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
     }

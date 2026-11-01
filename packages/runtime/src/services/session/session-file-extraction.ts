@@ -4,8 +4,9 @@
  *   oversize 分流（v1 巨文件时代会话，>32MB）——32MB 预检与 oversize 语义退役至
  *   此专属。行为冻结：预检/降级/错误分级语义保持改造前逐字不变；
  * - 新路径冷启动流式扫描 scanRecordFamilyEntriesFromSessionFile：按块读 + 行预过滤
- *   + 仅 record 族 entry 进结果（不整串物化、不解析全部对话行），journal 派生视图的
- *   entry 源冷启动专用（events-projection.ts 消费）。
+ *   + 仅 record 族与 plan-state 条目进结果（[U5 plan 冷路径归一 D6] 起 plan-state 条目
+ *   同批进产出——getPlanState 冷启动派生的喂数通道；不整串物化、不解析全部对话行），
+ *   journal 派生视图的 entry 源冷启动专用（events-projection.ts 消费）。
  *
  * subagent-extractor 与 workflow-extractor 的文件读取骨架此前逐字复制（statSync 预检 →
  * oversize 降级 warn → readFileSync → parseJsonl → entry 扫描），两份漂移即行为分叉；
@@ -28,6 +29,7 @@ import {
   WORKFLOW_RECORD_CUSTOM_TYPE,
   WORKFLOW_STATE_LINK_CUSTOM_TYPE,
 } from '@zhushanwen/subagent-core'
+import { PLAN_STATE_CUSTOM_TYPE } from '@zhushanwen/extension-protocol'
 
 /** extract*FromSessionFile 的结果形状：records + oversize 正交降级标志（不往 records
  * 里塞哨兵记录；正交字段先例 = HistoryFileReadResult {messages, truncated} /
@@ -101,6 +103,9 @@ const RECORD_FAMILY_LINE_HINTS: readonly string[] = [
   SUBAGENT_RECORD_CUSTOM_TYPE, // v1 快照 + v2 注册/终态条目
   WORKFLOW_RECORD_CUSTOM_TYPE, // 同上（两族）
   WORKFLOW_STATE_LINK_CUSTOM_TYPE, // legacy workflow 指针
+  PLAN_STATE_CUSTOM_TYPE, // [U5 plan 冷路径归一 D6] plan-state 条目——续读链是 getPlanState
+  // 冷启动 plan 派生的唯一喂数通道（读路径归一，全文解析已退役）；漏掉它 = plan 冷启动
+  // 派生永远为空（「线索取宽：漏命中有害」的本族成员）
   'subagent-bg-notify', // legacy bg-notify custom_message
   '"subagent"', // legacy toolCall（"name":"subagent"）/ toolResult（"toolName":"subagent"）
   '"type":"session"', // legacy 主 cwd 提取（findLegacyMainCwd）

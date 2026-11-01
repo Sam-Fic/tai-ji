@@ -9,7 +9,9 @@
  *   检查/发布门处丢帧 = 水位滞留 → agent_settled / 15s 定时两路径对账补发，稳态零帧）；
  * - 磁盘读侧/动作/引擎配置：getSubagents/getWorkflows（[W1 / D6] 读请求只读事件
  *   派生视图——entry 游标 + 事件 tail 双源单点合并，见 events-projection.ts；v1 巨文件
- *   会话 oversize 分流走旧格式惰性兼容读路径）、getPlanState（冷启动磁盘扫描不变）、
+ *   会话 oversize 分流走旧格式惰性兼容读路径）、getPlanState（[U5 / D6] 与前两者同一
+ *   续读链读 cache.planState——plan 派生挂点 = buildProjection 首建 / 续读核对 /
+ *   异步续读 / 截断整建四处，独立全文解析已退役）、
  *   getSubagentHistory/getAgentCall*（record.sessionFile 直读）、
  *   workflowAction/subagentAction（经扩展 slash command 的生命周期/定向消息操作）、
  *   U7 引擎配置方法族（engines.json/config.json 读写；D5 扩 per-engine 默认模型）。
@@ -44,7 +46,7 @@ import {
   resolvePiWorkflowRunsDir,
   readGlobalConfig,
 } from '@zhushanwen/subagent-core'
-import { extractPlanStateFromSessionFile, scanPlanStateEntries, INACTIVE_PLAN_STATE_VIEW } from './plan-state-extractor.js'
+import { scanPlanStateEntries, INACTIVE_PLAN_STATE_VIEW } from './plan-state-extractor.js'
 // 悬停详情卡消息计数（通道 2）：流式计数会话 JSONL 的用户+助手消息条数
 import { countSessionMessagesInFile } from './session-message-count.js'
 // PLAN_STATE_CUSTOM_TYPE canonical = extension-protocol legacy-entries（D-B4-1 从 shared
@@ -803,6 +805,11 @@ export class SessionRecords {
       projection.applyEntryBatch(scan !== null ? scan.entries : [])
       // 游标登记：null = 未读（v1 巨文件回落——扫描上界外，续读核对不适用该形态）
       cache.projectionEntryOffset = scan !== null ? scan.nextOffset : null
+      // [U5 plan 冷路径归一 D6] 首建全量轮的 plan 派生（喂数 = 同一次扫描产出，与 record
+      // 族共用同一游标推进；派生函数单源 = scanPlanStateEntries）。冷启动裁剪边界：扫描
+      // 产出是行预过滤子集（对话行缺席），活跃路径裁剪的全量 parent 链构造不出来——走
+      // scanPlanStateEntries 缺省分支（全集逆序取首，边界登记见 plan-state-extractor 头注释）
+      mergePlanState(cache, scanPlanStateEntries(scan !== null ? scan.entries : []), true)
     } else {
       cache.projectionEntryOffset = null
     }
@@ -876,6 +883,9 @@ export class SessionRecords {
     }
     cache.projection.applyEntryBatch(scan.entries)
     cache.projectionEntryOffset = scan.nextOffset
+    // [U5 plan 冷路径归一 D6] 增量段 plan 派生（喂数 = 同一次续读扫描产出；增量语义 =
+    // mergePlanState false——本段无 plan entry 保持基线，有则覆盖，与 live 增量轮同款）
+    mergePlanState(cache, scanPlanStateEntries(scan.entries), false)
     cache.projection.reconcileEventSources()
   }
 
@@ -950,6 +960,10 @@ export class SessionRecords {
       cache.projectionEntryOffset = built.entryOffset
       previous?.dispose()
       this.syncCacheFromProjection(cache, built.projection)
+      // [U5 plan 冷路径归一 D6] 截断重写后的 plan 派生（喂数 = buildInSegments 收集上浮的
+      // plan-state 条目——重写文件 = pi 内存条目全集，旧基线整体作废，全量语义：重写后
+      // 全集无 plan entry → 归 null 收敛（mergePlanState isFullRebuild 分支））
+      mergePlanState(cache, scanPlanStateEntries(built.planEntries), true)
       if (!this.deps.hasSession(sessionId)) return // 已销毁：fold 已切换但不 publish（与 entry 路径同一检查）
       this.publishRecordChanges(cache, sessionId, 'async-reconcile')
       logger.info('[session-records] async projection rebuild completed (atomic switch)', {
@@ -1006,6 +1020,9 @@ export class SessionRecords {
       if (projection === null) return
       projection.applyEntryBatch(entries)
       cache.projectionEntryOffset = nextOffset
+      // [U5 plan 冷路径归一 D6] 异步续读批的 plan 派生（增量语义，同预算内续读分支——
+      // 快照应答窗口内落盘的 plan entry 在本点收敛进 cache.planState，无第二读法）
+      mergePlanState(cache, scanPlanStateEntries(entries), false)
       projection.reconcileEventSources()
       this.syncCacheFromProjection(cache, projection)
       if (!this.deps.hasSession(sessionId)) return // 已销毁：fold 已应用但不 publish（与 entry 路径同一检查）
@@ -1442,10 +1459,19 @@ export class SessionRecords {
     return enhanced ?? records
   }
 
-  private warnOversizeOnce(sessionId: string, kind: 'subagents' | 'workflows'): void {
+  private warnOversizeOnce(sessionId: string, kind: 'subagents' | 'workflows' | 'plan'): void {
     const key = `${sessionId}:${kind}`
     if (this.oversizeWarned.has(key)) return
     this.oversizeWarned.add(key)
+    // [U5 plan 冷路径归一 D6] plan 分形文案：plan 是单 View 非列表（降级形态 = inactive
+    // view，与列表族的「空列表 + oversize 标志」不同构，warn 可观测性由本行承担）
+    if (kind === 'plan') {
+      console.warn(
+        `[session-service] plan state unavailable: session file exceeds read precheck threshold (sid=${sessionId}) —` +
+        ` getPlanState returns inactive view; panel shows default (inactive) plan state`,
+      )
+      return
+    }
     console.warn(
       `[session-service] ${kind} list unavailable: session file exceeds read precheck threshold (sid=${sessionId}) —` +
       ` list RPC returns empty with oversize flag; panel shows degraded hint`,
@@ -1766,20 +1792,36 @@ export class SessionRecords {
   }
 
   /**
-   * 获取 session 的 plan 模式状态派生视图（plan 模式重设计 D1⑥ 冷路径，供 session.getPlanState
-   * RPC handler 调用；u1-rpc 接线）。
+   * 获取 session 的 plan 模式状态派生视图（供 session.getPlanState RPC handler 调用；
+   * u1-rpc 接线）。
    *
-   * 纯磁盘读取，不依赖 pi 进程活跃——冷启动首次拉取 / 切换首次拉取与 live 派生视图（refreshRecordEntries
-   * → scanPlanStateEntries）共用同一份派生代码（D1「派生代码唯一」不变量）。文件不存在、
-   * 无 plan-state entry 等「从未进过 plan」形态归一为「未激活」缺省 View（INACTIVE_PLAN_STATE_VIEW，
-   * 对齐 extension DEFAULT_PLAN_STATE——RPC reply 契约 planState 无 null 域，GUI 端
-   * isActive:false 即不渲染 PlanModeBar）。
+   * [U5 plan 冷路径归一 D6] 读路径归一：与 getSubagents/getWorkflows 完全同一条统一续读链
+   * （直查定位 → oversize 分流 → ensureRecordEntriesCache → ensureProjection size/游标
+   * 核对与续读），plan 状态读 cache.planState——与 live planState 同一数据源、同一派生落点
+   * （mergePlanState 单源，喂数挂点见 buildProjection / reconcileProjectionOnQuery /
+   * runAsyncResumeTask / runAsyncRebuildTask）。冷启动查询成本 = 首建冷扫描（流式，观测
+   * 分布内 ≤ 14ms，D8）+ 此后续读核对，独立全文解析已退役（V7：无全文件 readFileSync）。
+   *
+   * 文件不存在、无 plan-state entry 等「从未进过 plan」形态归一为「未激活」缺省 View
+   * （INACTIVE_PLAN_STATE_VIEW，对齐 extension DEFAULT_PLAN_STATE——RPC reply 契约
+   * planState 无 null 域，GUI 端 isActive:false 即不渲染 PlanModeBar）；oversize（>32MB
+   * v1 巨文件时代会话）同归缺省 View（验收条款③降级形态，warnOversizeOnce 每会话一次）。
    */
   async getPlanState(sessionId: string): Promise<PlanStateView> {
     // [U2 D5] 查询定位走直查单点（与 getSubagents/getWorkflows 同理）。
     const target = this.resolveQuerySessionRef(sessionId)
     if (!target) return INACTIVE_PLAN_STATE_VIEW
-    return extractPlanStateFromSessionFile(target.filePath)
+    // oversize 分流（与 getSubagents/getWorkflows 同位）：v1 巨文件走旧格式惰性兼容读路径
+    // 族，续读核对对其跳过（reconcileProjectionOnQuery 上界门）——plan 无列表语义，降级
+    // 为「未激活」缺省 View 即降级形态本体（对齐退役前 extractor 的 oversize 语义）。
+    if (isSessionFileOversize(target.filePath)) {
+      this.warnOversizeOnce(sessionId, 'plan')
+      return INACTIVE_PLAN_STATE_VIEW
+    }
+    const cache = this.ensureRecordEntriesCache(sessionId)
+    // target 透传 = 查询核对素材（[U1 续读化] size/游标核对；plan 派生随同一次核对续读推进）
+    this.ensureProjection(sessionId, cache, target)
+    return cache.planState ?? INACTIVE_PLAN_STATE_VIEW
   }
 
   /**
