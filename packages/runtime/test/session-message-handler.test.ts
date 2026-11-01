@@ -97,6 +97,31 @@ describe('SessionMessageHandler — error envelope 回归', () => {
     })
   })
 
+  describe('session.getSubagents / session.getWorkflows — batchInProgress 透传（U1-lite D10）', () => {
+    it('getSubagents reply payload 携带 batchInProgress（机制半边透传，呈现半边归 u-m2）', async () => {
+      const { cap, handler } = makeHandler({
+        getSubagents: vi.fn().mockResolvedValue({ records: [], oversize: false, found: true, batchInProgress: false }),
+      })
+      await handler.handleSessionMessage(msg('session.getSubagents', { sessionId: 's1' }), WS)
+      expect(cap.replies[0]).toMatchObject({
+        id: 'm1',
+        type: 'session.subagents',
+        payload: { sessionId: 's1', subagents: [], oversize: false, found: true, batchInProgress: false },
+      })
+    })
+    it('getWorkflows reply payload 携带 batchInProgress（语义同 getSubagents）', async () => {
+      const { cap, handler } = makeHandler({
+        getWorkflows: vi.fn().mockResolvedValue({ records: [], oversize: false, found: true, batchInProgress: true }),
+      })
+      await handler.handleSessionMessage(msg('session.getWorkflows', { sessionId: 's1' }), WS)
+      expect(cap.replies[0]).toMatchObject({
+        id: 'm1',
+        type: 'session.workflows',
+        payload: { sessionId: 's1', workflows: [], oversize: false, found: true, batchInProgress: true },
+      })
+    })
+  })
+
   describe('session.switch auto-restore', () => {
     it('ENOENT → sendError(file_not_found)', async () => {
       const { cap, handler } = makeHandler({
