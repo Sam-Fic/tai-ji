@@ -6,13 +6,13 @@
  * 跨进程消费经 shared 出口（index.ts）——core 登记表 DataSourceDescriptor 的 requires
  * 引用本文件 RemoteCapability（设计 §7.4）。
  *
- * 契约面（2026-10-31 收窄裁决，D1 不采用栏有否决记录）：ReadinessSnapshot = capabilities
+ * 契约封闭性（2026-10-31 收窄裁决，D1 不采用栏有否决记录）：ReadinessSnapshot = capabilities
  * 数组唯一 + 能力项字段集封闭——v2 草案的六值进程生命周期 state 字段
  * （spawning/listening/serving/draining/stopped/failed）及显式转移表删除：零消费方
  * 且 failed/stopped 两值协议上不可达（进程已死/已停时 WS 连接不存在，readiness RPC
  * 与广播均发不出）。runtime 进程内部阶段（spawn/serve/drain）为实现细节不入跨进程
  * 协议；进程死活由既有信号承载（探针 /health 判据不变、WS 断连、supervisor 进程信号
- * 与退出码）。字段集封闭由 READINESS_CAPABILITY_ENTRY_FIELDS 白名单常量 + 契约面单测
+ * 与退出码）。字段集封闭由 READINESS_CAPABILITY_ENTRY_FIELDS 白名单常量 + 契约封闭性单测
  * （__tests__/readiness.test.ts，RL1）双重看守，防字段回潮。
  */
 
@@ -39,7 +39,7 @@ export interface ReadinessProgress { // oe-exempt:20261031:framework:启动就�
  *
  * 字段集封闭（RL1）：name / ready / reason? / since / progress? 恰好五项——
  * 字段集外新增（进程生命周期 state 字段等）即红。机器看守 = 下方
- * READINESS_CAPABILITY_ENTRY_FIELDS 白名单常量（运行期可断言的单一投影）+ 契约面
+ * READINESS_CAPABILITY_ENTRY_FIELDS 白名单常量（运行期可断言的单一投影）+ 契约封闭性
  * 单测的编译期双向对账断言（keyof 集合 ⊆ 白名单 ∩ 白名单 ⊆ keyof）。
  */
 export interface ReadinessCapabilityEntry { // oe-exempt:20261031:framework:启动就绪跨包协议契约（shared 单源 ports 层，能力项字段集封闭由 RL1 白名单看守，实现随后续波次落地）
@@ -61,7 +61,7 @@ export interface ReadinessCapabilityEntry { // oe-exempt:20261031:framework:启�
  * reply / runtime.readinessChanged 广播三通道共用的载荷形状（推送与拉取同源——
  * 广播为加速显示，拉取为持续态唯一真相，D1 三段式消费）。
  *
- * 契约面 = capabilities 数组唯一：快照顶层除 capabilities 外无其他字段（RL1）。
+ * 契约封闭性判据 = capabilities 数组唯一：快照顶层除 capabilities 外无其他字段（RL1）。
  */
 export interface ReadinessSnapshot { // oe-exempt:20261031:framework:启动就绪跨包协议契约（shared 单源 ports 层，推送/拉取/广播三通道共用载荷形状，实现随后续波次落地）
   capabilities: ReadinessCapabilityEntry[]
@@ -82,7 +82,7 @@ export interface SessionsRecoveryProgressPayload { // oe-exempt:20261031:framewo
 }
 
 /**
- * 能力项字段集白名单（RL1 契约面封闭性的运行期可断言载体）：与
+ * 能力项字段集白名单（RL1 契约封闭性的运行期可断言载体）：与
  * ReadinessCapabilityEntry 的 keyof 集合双向锁定——类型加字段不改本常量 → 编译期
  * 对账断言红（readiness.test.ts，tsc 层）；改本常量不加字段 → satisfies 约束红 +
  * 单测运行期精确断言红。协议字段扩展 = 同时改类型与本常量（diff 显式可见，

@@ -9,7 +9,7 @@
  *  - 加载态字段形态 batchInProgress?（D10 概念入 M0 契约）在位；修订号字段不落
  *    （归重写侧同窗口对齐，只引用不实现——data-source-registry.ts 头注）。
  *
- * 模式同 shared 契约面单测先例：编译期 AssertExtends + 运行期字面量构造断言。
+ * 模式同 shared 契约封闭性单测先例：编译期 AssertExtends + 运行期字面量构造断言。
  * 实装随 u-m2（quota presets 首个数据源接入）/ u-m3（主体搬迁）交付；本测试锁形状。
  *
  * 运行：cd packages/core && npx vitest run src/transport
@@ -41,7 +41,7 @@ type _Assert_LoadingStateField = AssertExtends<DataSourcePayloadFields['batchInP
 // 上面各断言别名必须经泛型约束消费，设计 §7.4 的值域锁定才真正承载机器看守。任一值域
 // 漂移（failure 加第二值 / requires 混入设计外维度 / scope 增值 / 载体字段漂移）→ 对应行
 // TS2344（ERROR 元组带出双方类型，可读）。运行期仅返回常量 true，零成本。
-// （模式同 shared 契约面先例 plan-protocol.test.ts / gen-stats.test.ts。）
+// （模式同 shared 契约封闭性先例 plan-protocol.test.ts / gen-stats.test.ts。）
 const _enforceTrue = <T extends true>(_v?: T): true => true
 const _dataSourceRegistryAssertsEnforced = [
   _enforceTrue<_Assert_RemoteCapabilities>(),

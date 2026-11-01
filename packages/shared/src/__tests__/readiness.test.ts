@@ -1,10 +1,10 @@
 /**
- * readiness.test.ts — readiness 契约面单测（startup-readiness-and-current-state 设计
+ * readiness.test.ts — readiness 契约封闭性单测（startup-readiness-and-current-state 设计
  * §4.2 RL1，u-m0 M0 契约期 M0-2）。
  *
  * 看守对象：packages/shared/src/readiness.ts 形状 SSOT + protocol.ts 四消息登记。
  * 验证三组：
- *  - RL1 契约面封闭：ReadinessSnapshot 顶层仅 capabilities 数组；能力项字段集 =
+ *  - RL1 契约封闭：ReadinessSnapshot 顶层仅 capabilities 数组；能力项字段集 =
  *    name/ready/reason?/since/progress? 恰好五项——字段集外新增（进程生命周期 state
  *    字段等，v2 草案否决记录见设计 D1 不采用栏）即红。
  *  - §7.1 形状逐字段对账：RemoteCapability 四值 / ReadinessProgress / 能力项字段
@@ -89,7 +89,7 @@ type _Assert_ReadinessChangedNotReply = AssertNotHasKey<ReplyPayloadMap, 'runtim
 type _Assert_ProgressNotReply = AssertNotHasKey<ReplyPayloadMap, 'runtime.sessionsRecoveryProgress'>
 
 // ── 运行期断言 ────────────────────────────────────────────────
-describe('RL1 契约面封闭（startup-readiness-and-current-state §4.2）', () => {
+describe('RL1 契约封闭（startup-readiness-and-current-state §4.2）', () => {
   it('能力项字段集 = name/ready/reason/since/progress 恰好五项（字段集外新增即红）', () => {
     // 白名单常量是字段集的运行期唯一投影：给 ReadinessCapabilityEntry 加字段必须
     // 同批改这里才不红——「进程生命周期 state 字段回潮」（D1 否决记录）在 diff 层
