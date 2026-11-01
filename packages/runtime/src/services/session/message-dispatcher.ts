@@ -894,8 +894,9 @@ export class MessageDispatcher {
    *
    * [D4] source 为置位分型（K1 user_force_quit / K2 abort_timeout 用户分型；K9
    * probe_stall_auto_quit 机器判死分型）：编排开头置 userStopped 标记（宿主 =
-   * session-service.ts 模块级 Map，独立于 ManagedSession 生命周期——尾步 removeSessionEntry
-   * 删条目后标记仍可被 restore 读到）。标记驱动 restore-abort 收敛环：被杀的旧执行（notify
+   * user-stopped-mark-store.ts 模块级 Map，独立于 ManagedSession 生命周期——尾步
+   * removeSessionEntry 删条目后标记仍可被 restore 读到；session-service re-export 保持
+   * 拆分前 import 兼容）。标记驱动 restore-abort 收敛环：被杀的旧执行（notify
    * replay / 补发路径）不得自动复活；K9 判死分型标记由自动恢复接线按 source 分型消费（RL15）。
    *
    * [code-harden RT-4#1] 失败语义：编排体 try/finally——detach / destroy / persist 失败
