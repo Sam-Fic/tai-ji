@@ -29,6 +29,7 @@ import type { IPiEngine } from '../services/ports/pi-engine.js'
 import type { IMessageBus } from '../services/message-bus/message-bus.js'
 import type { ServerMessage } from '@taiji/shared'
 import type { SkillInjectionResult, SkillInjector, SkillNotice } from '../services/session/skill-injector.js'
+import type { DeliveryStore, DeliveryStoreRecord } from '@zhushanwen/session-delivery'
 
 const PI_COMPACTING_MSG =
   'Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.'
@@ -59,6 +60,10 @@ interface HarnessOptions {
   transcript?: Array<{ type: string; message?: { role: string; content: unknown } }>
   /** clear_queue 返回值（槽位滞留文本） */
   cleared?: { steering: string[]; followUp: string[] }
+  /** 装配 ack 写盘故障的 outbox store（dmg-r1-4 回归：持久终局写盘失败路径）；缺省 = 无 store */
+  ackBroken?: boolean
+  /** client 不挂 clearQueue（pi 未附着形态：queuePrimitive = null → settleCancelWithoutReclaim 路径） */
+  noClearQueue?: boolean
 }
 
 function makeHarness(opts: HarnessOptions = {}) {
@@ -69,6 +74,24 @@ function makeHarness(opts: HarnessOptions = {}) {
   const promptCalls: Array<[string, unknown, unknown]> = []
   const notices = vi.fn()
   let cleared = opts.cleared ?? { steering: [], followUp: [] }
+  // ack 故障 outbox store（dmg-r1-4）：内存记录 + ack 抛错开关（持久终局写盘失败模拟）
+  const outbox = new Map<string, DeliveryStoreRecord>()
+  let ackBroken = opts.ackBroken ?? false
+  const failingStore: DeliveryStore = {
+    persist: (record) => {
+      outbox.set(record.id, { ...record })
+    },
+    ack: (id) => {
+      if (ackBroken) throw new Error('disk full')
+      outbox.delete(id)
+    },
+    discard: (id) => {
+      outbox.delete(id)
+    },
+    loadUndelivered: () => [...outbox.values()],
+    loadTerminalIds: () => [],
+    hasTerminal: () => false,
+  }
 
   const client = {
     prompt: vi.fn(async (text: string, images?: unknown, behavior?: unknown) => {
@@ -90,6 +113,10 @@ function makeHarness(opts: HarnessOptions = {}) {
       }
     }),
   }
+  if (opts.noClearQueue === true) {
+    // pi 未附着形态：摘除 clearQueue（queuePrimitive 判 function 缺席 → null）
+    delete (client as { clearQueue?: unknown }).clearQueue
+  }
   const injector = {
     inject: vi.fn(async (_client: unknown, text: string): Promise<SkillInjectionResult> => ({
       text: text,
@@ -106,6 +133,7 @@ function makeHarness(opts: HarnessOptions = {}) {
     recordWorkspace: vi.fn(),
     getMessageBus: () =>
       ({ publish: (_sid: string, msg: ServerMessage) => published.push(msg) }) as unknown as IMessageBus,
+    ...(opts.ackBroken === true ? { createDeliveryStore: () => failingStore } : {}),
   }
   const registry = createSessionDeliveryRegistry(deps, injector)
   /** 推进一帧 pi 事件（回执注入点） */
@@ -125,6 +153,7 @@ function makeHarness(opts: HarnessOptions = {}) {
     registry, deps, view, client, injector, published, promptCalls, notices,
     emitPiEvent, userMessageEnd, emitSettled, flush,
     setCleared: (next: { steering: string[]; followUp: string[] }) => { cleared = next },
+    setAckBroken: (next: boolean) => { ackBroken = next },
   }
 }
 
@@ -913,6 +942,106 @@ describe('in-flight 撤销二段式归宿（dmg-r1-2）：意图集持有至兑�
     await vi.advanceTimersByTimeAsync(30_000)
     await h.flush()
     expect(h.registry.entries('s1')?.tombstones).toMatchObject([{ id, state: 'delivered' }])
+  })
+})
+
+// ── 缺陷修复回归（dmg-r1-4）：cancel 的持久终局写盘失败适配 ────────────────
+// 缺陷：cancel 的终局化（内核 cancelFinalize）在 store.ack 写盘失败时抛
+// DeliveryAckPersistError（条目已 parkAsFailed 转 failed 留守），registry 四个
+// cancel 调用点（cancel 主路径 / revokeInFlight / settleRevokedEntry /
+// settleCancelWithoutReclaim）裸调无捕获——错误穿出 registry 边界，RPC 入口
+// （session-message-handler delivery.cancel）与撤销编排只靠 server.ts 中央 catch
+// 兜住，用户侧只收到通用错误。修复 = 四处统一转显式应答
+// { cancelled: false, reason: '终态未持久化，请稍后重试' }：条目 failed 留守、
+// 不自动重投，cancel 接受 failed 态，写盘恢复后重试即补落终局。
+
+describe('终局写盘失败适配（dmg-r1-4）：DeliveryAckPersistError 收敛为显式应答', () => {
+  it('queued 态撤销遇 ack 写盘失败：显式应答（不抛错）+ 条目 failed 留守；磁盘恢复后重试补落终局', async () => {
+    const h = makeHarness({ ackBroken: true })
+    applySessionOccupancyTransition(h.view, null, 'compacting-start')
+    const id = 'u-e1000001-0000-4000-8000-000000000001'
+    h.registry.submit('s1', { content: '要撤的', clientUuid: id })
+    await h.flush()
+
+    const outcome = await h.registry.cancel('s1', id)
+    // 分型错误不穿出 registry 边界：显式应答 + 重试指引（修复前：promise reject 穿到 RPC 入口）
+    expect(outcome).toEqual({ cancelled: false, reason: '终态未持久化，请稍后重试' })
+    // 条目由内核 parkAsFailed 留守活跃集（非终态、不参与重投），无 tombstone
+    expect(h.registry.entries('s1')?.active).toMatchObject([{ id, state: 'failed' }])
+    expect(h.registry.entries('s1')?.tombstones).toHaveLength(0)
+
+    h.setAckBroken(false) // 磁盘故障恢复
+    const retry = await h.registry.cancel('s1', id) // cancel 接受 failed 态：重试即补落终局
+    expect(retry.cancelled).toBe(true)
+    expect(retry.content).toContain('要撤的')
+    expect(h.registry.entries('s1')?.tombstones).toMatchObject([{ id, state: 'cancelled' }])
+  })
+
+  it('投递中撤销（收回流程内）遇 ack 写盘失败：显式应答（不抛错）+ 条目 failed 留守', async () => {
+    const h = makeHarness({
+      ackBroken: true,
+      view: { occupancy: { turn: 'generating', compacting: false, bash: false, handingOff: false } },
+    })
+    const id = 'u-e1000002-0000-4000-8000-000000000002'
+    h.registry.submit('s1', { content: '投递中撤的', clientUuid: id })
+    await h.flush()
+    const text = h.promptCalls[0]![0] as string
+    h.setCleared({ steering: [text], followUp: [] })
+
+    const outcome = await h.registry.cancel('s1', id)
+    expect(outcome).toEqual({ cancelled: false, reason: '终态未持久化，请稍后重试' })
+    expect(h.registry.entries('s1')?.active).toMatchObject([{ id, state: 'failed' }])
+    expect(h.registry.entries('s1')?.tombstones).toHaveLength(0)
+  })
+
+  it('收回兑现（settleRevokedEntry）遇 ack 写盘失败：不抛错、不写移交表、意图留守；对账重试补落终局', async () => {
+    const h = makeHarness({
+      ackBroken: true,
+      view: { occupancy: { turn: 'generating', compacting: false, bash: false, handingOff: false } },
+    })
+    const id = 'u-e1000003-0000-4000-8000-000000000003'
+    h.registry.submit('s1', { content: '蒸发兑现', clientUuid: id })
+    await h.flush()
+    const text = h.promptCalls[0]![0] as string
+
+    // 首次 cancel：clear_queue 空收 → 意图留守（pendingRevoke），条目在途
+    expect((await h.registry.cancel('s1', id)).cancelled).toBe(false)
+
+    // pi 断连：文本随进程离场 → settleRevokedEntry 兑现，ack 写盘失败（无 try/catch 的调用点）
+    expect(() => h.registry.onPiDisconnected('s1')).not.toThrow()
+    expect(h.registry.entries('s1')?.active).toMatchObject([{ id, state: 'failed' }])
+    expect(h.registry.entries('s1')?.tombstones).toHaveLength(0)
+    expect(h.published.filter((m) => m.type === 'message.error')).toHaveLength(0)
+
+    // 磁盘恢复 + 对账触发点（clear_queue 再收文本）→ 意图重试补落终局（移交表兑现路径）
+    h.setAckBroken(false)
+    h.setCleared({ steering: [text], followUp: [] })
+    await h.registry.reconcile('s1', 'agent-settled')
+    await h.flush()
+    expect(h.registry.entries('s1')?.active).toHaveLength(0)
+    expect(h.registry.entries('s1')?.tombstones).toMatchObject([{ id, state: 'cancelled' }])
+  })
+
+  it('无 pi 队列原语（pi 未附着）撤销遇 ack 写盘失败：显式应答（不抛错）；恢复后重试补落终局', async () => {
+    const h = makeHarness({
+      ackBroken: true,
+      noClearQueue: true,
+      view: { occupancy: { turn: 'generating', compacting: false, bash: false, handingOff: false } },
+    })
+    const id = 'u-e1000004-0000-4000-8000-000000000004'
+    h.registry.submit('s1', { content: '未附着撤的', clientUuid: id })
+    await h.flush()
+
+    const outcome = await h.registry.cancel('s1', id)
+    expect(outcome).toEqual({ cancelled: false, reason: '终态未持久化，请稍后重试' })
+    expect(h.registry.entries('s1')?.active).toMatchObject([{ id, state: 'failed' }])
+    expect(h.registry.entries('s1')?.tombstones).toHaveLength(0)
+
+    h.setAckBroken(false) // 磁盘故障恢复：意图集仍在 → 再入收回流程重试 ack
+    const retry = await h.registry.cancel('s1', id)
+    expect(retry.cancelled).toBe(true)
+    expect(retry.content).toContain('未附着撤的')
+    expect(h.registry.entries('s1')?.tombstones).toMatchObject([{ id, state: 'cancelled' }])
   })
 })
 
