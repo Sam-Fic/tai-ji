@@ -18,13 +18,12 @@
  *
  * import 通路说明：subagent-core 公共 barrel 不导出 formatSchemaInstruction，深路径
  * 又被其 exports（D5 定稿）收窄，包名深 import 不可达——按同目录
- * cross-package-contract.test.ts 既有先例走 workspace 相对路径动态 import 源码叶子；
- * devDependencies 已声明 @zhushanwen/subagent-core / @zhushanwen/pi-subagent-cli
- * （workspace:*，仅测试面耦合）。**不可 skip**：对端叶子不可达时本文件直接 fail
- * （错误含恢复动作）——单包环境先安装 workspace devDependency，workspace 内不可达
- * = 对端叶子布局漂移，需同步更新本文件候选路径。与 cross-package-contract.test.ts
- * ① 组（同名常量断言但带降级 skip）的关系：本文件是硬锁，共享叶子收敛（候选 1
- * 车道 B）落地后两者一并收敛为「锁导入存在」。
+ * cross-package-contract.test.ts 既有先例走 workspace 相对路径动态 import 源码叶子，
+ * 不经过包名解析（故 package.json 无需声明对端 devDependency），该通路仅在完整
+ * workspace 内成立。**不可 skip**：对端叶子不可达时本文件直接 fail（错误含恢复
+ * 动作）——workspace 内不可达 = 对端叶子布局漂移，需把新路径追加进本文件候选路径。
+ * 与 cross-package-contract.test.ts ① 组（同名常量断言但带降级 skip）的关系：本文件
+ * 是硬锁，共享叶子收敛（候选 1 车道 B）落地后两者一并收敛为「锁导入存在」。
  */
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -61,9 +60,9 @@ async function importOrThrow<T>(spec: string, what: string): Promise<T> {
 	} catch (cause) {
 		throw new Error(
 			`[object-root-schema-parity] ${what} 不可达（${spec}）。`
-			+ "跨包对拍只在 taiji workspace 内成立：单包环境请安装 workspace devDependency"
-			+ "（@zhushanwen/subagent-core / @zhushanwen/pi-subagent-cli: workspace:*）后重试；"
-			+ "workspace 内不可达 = 对端叶子布局漂移，请把新路径追加进本文件候选路径。"
+			+ "跨包对拍经 workspace 相对路径动态 import 源码叶子，不经过包名解析，仅在完整"
+			+ " workspace 内成立：请在完整 workspace 内重试；workspace 内不可达 = 对端叶子"
+			+ "布局漂移，请把新路径追加进本文件候选路径。"
 			+ `底层原因：${cause instanceof Error ? cause.message : String(cause)}`,
 		);
 	}
