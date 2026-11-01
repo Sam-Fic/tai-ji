@@ -29,6 +29,7 @@
  * 裸包名解析不到；type-only import 运行时被剥离，.js 后缀仅 typecheck 期解析）。
  */
 import { rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -40,7 +41,6 @@ import {
   schedulerStoreFilePath,
   writeSchedulerStore,
 } from '../../../../packages/extension-protocol/src/extensions/scheduler/store.ts'
-import { getPiAgentDir } from '../../../../packages/shared/src/paths.ts'
 
 /** sendMessage 回执 reason 词表（与 SDK sendMessage 签名的闭集同源 = SendPromptReason 三值；
  *  busy/compacting/bash 退役值已删，运行态不再产出，mock 不得注入） */
@@ -55,6 +55,10 @@ type PluginModule = typeof import('../index.ts')
 
 const READ_DEBOUNCE_MS = 200
 const SESSION_CWD = '/w/proj'
+/** 插件宿主 env 契约键（与 index.ts resolveAgentDir 同键；生产值由 runtime 注入） */
+const PI_AGENT_DIR_ENV_KEY = 'PI_CODING_AGENT_DIR'
+/** 测试固定的 agentDir（tmp 下，与 global-setup 钉的 TAIJI_AGENT_DATA_DIR 同域隔离） */
+const TEST_AGENT_DIR = join(tmpdir(), 'scheduler-manager-test-agent')
 
 // ── fixture 构造 ─────────────────────────────────────────────────
 
@@ -93,7 +97,7 @@ function makeTask(
 
 /** 写任务库快照 fixture（与插件读取同源：store 模块路径推导 + 原子写）。 */
 function writeStore(sessionId: string, cwd: string, tasks: ScheduledTask[]): void {
-  writeSchedulerStore(schedulerStoreFilePath(getPiAgentDir(), cwd, sessionId), { tasks })
+  writeSchedulerStore(schedulerStoreFilePath(TEST_AGENT_DIR, cwd, sessionId), { tasks })
 }
 
 /** ansi-text 节点判别（GuiComponent 是泛型接口非 union，narrow 用显式 guard） */
@@ -271,14 +275,19 @@ beforeEach(() => {
   vi.useFakeTimers()
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.spyOn(console, 'log').mockImplementation(() => {})
+  // 插件经 env 契约键取 agentDir（生产值由 runtime 的 pluginHostPiAgentDirEnv 注入）；
+  // 测试固定到 tmp 下的独立目录，先清残留再设键（宿主机 shell 若泄漏同键会被覆盖）
+  rmSync(TEST_AGENT_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+  vi.stubEnv(PI_AGENT_DIR_ENV_KEY, TEST_AGENT_DIR)
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
   vi.useRealTimers()
-  // 快照 fixture 清理：TAIJI_AGENT_DATA_DIR 固定 tmp 在同次运行内跨用例共享，
+  // 快照 fixture 清理：TEST_AGENT_DIR 固定 tmp 在同次运行内跨用例共享，
   // 不清则前序用例写入的分片会污染后续「快照不存在」类用例
-  rmSync(join(getPiAgentDir(), 'scheduler'), { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+  rmSync(join(TEST_AGENT_DIR, 'scheduler'), { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
 })
 
 // ── 激活链 + 首次快照读取（其余用例的前置语义，独立断言）──────────────────────
