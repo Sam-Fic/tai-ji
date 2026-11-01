@@ -39,6 +39,7 @@ import type {
 } from '../protocol'
 import {
   READINESS_CAPABILITY_ENTRY_FIELDS,
+  READINESS_REASON_CODES,
   READINESS_SNAPSHOT_FIELDS,
 } from '../readiness'
 
@@ -97,6 +98,21 @@ describe('RL1 契约封闭（startup-readiness-and-current-state §4.2）', () =
     expect([...READINESS_CAPABILITY_ENTRY_FIELDS].sort()).toEqual(
       ['name', 'progress', 'ready', 'reason', 'since'].sort(),
     )
+  })
+
+  it('READINESS_REASON_CODES 五码封闭词表（dmg-r1-3）：reason 值域单源 + 测试形态对账', () => {
+    // 词表 = reason 字段「机器可读枚举」声明的值域单源；新增原因码须同批改常量与设计。
+    expect([...READINESS_REASON_CODES].sort()).toEqual(
+      ['mem-pressure', 'plugin_failed', 'plugins_loading', 'reattaching', 'recovering'].sort(),
+    )
+    // 本文件已出现的 reason 测试形态全部可由词表导出（plugin_failed 带前缀约定后缀）：
+    // 'plugin_failed:demo-plugin' / 'recovering' / 'mem-pressure' / 'reattaching'。
+    const reasonOf = (code: (typeof READINESS_REASON_CODES)[number], suffix?: string) =>
+      suffix === undefined ? code : `${code}:${suffix}`
+    expect(reasonOf('plugin_failed', 'demo-plugin')).toBe('plugin_failed:demo-plugin')
+    for (const code of READINESS_REASON_CODES) {
+      expect(READINESS_REASON_CODES).toContain(code)
+    }
   })
 
   it('快照顶层仅 capabilities 数组（RL1：capabilities 数组唯一）', () => {

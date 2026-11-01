@@ -47,7 +47,8 @@ export interface ReadinessCapabilityEntry { // oe-exempt:20261031:framework:启�
   name: RemoteCapability
   /** 当前是否就绪。 */
   ready: boolean
-  /** 未就绪原因：机器可读枚举 + 人可读文案（插件失败含插件 id，D2）。就绪时缺省。 */
+  /** 未就绪原因：机器可读枚举（值域 = READINESS_REASON_CODES 五码封闭词表；plugin_failed
+   * 登记 `plugin_failed:<pluginId>` 前缀约定，D2）+ 人可读文案。就绪时缺省。 */
   reason?: string
   /** 进入当前 ready 态的时刻（epoch 毫秒）——边沿时序断言（A1 边沿间隔 > 0）的数据源。 */
   since: number
@@ -75,7 +76,8 @@ export interface ReadinessSnapshot { // oe-exempt:20261031:framework:启动就�
  * （D11 时间平抑登记）。
  */
 export interface SessionsRecoveryProgressPayload { // oe-exempt:20261031:framework:启动就绪跨包协议契约（shared 单源 ports 层，会话恢复节流通知载荷，实现随后续波次落地）
-  /** 机器可读枚举——覆盖 reason 迁移（如 mem-pressure → 恢复中）的文案刷新。 */
+  /** 机器可读枚举（值域 = READINESS_REASON_CODES，插件失败同前缀约定）——覆盖 reason 迁移
+   *（如 mem-pressure → 恢复中）的文案刷新。 */
   reason: string
   /** n/m 进度；跳过/退化懒恢复等无计数形态缺省。 */
   progress?: ReadinessProgress
@@ -98,3 +100,18 @@ export const READINESS_CAPABILITY_ENTRY_FIELDS = [
 
 /** ReadinessSnapshot 快照顶层字段白名单（RL1：capabilities 数组唯一的运行期投影）。 */
 export const READINESS_SNAPSHOT_FIELDS = ['capabilities'] as const satisfies readonly (keyof ReadinessSnapshot)[]
+
+/**
+ * readiness reason 封闭词表（dmg-r1-3 收敛——reason 字段声明「机器可读枚举」的值域单源）：
+ * 五码覆盖设计已登记的未就绪原因；插件失败登记 `plugin_failed:<pluginId>` 前缀约定
+ * （词表成员为前缀码，实际值带插件 id 后缀）。新增原因码 = 同批改本常量与设计文档，
+ * diff 显式可见的契约 review 点；reason 字段协议类型保持开放 string（协议 additive，
+ * 不因词表收窄破坏线上载荷形状）。
+ */
+export const READINESS_REASON_CODES = [
+  'plugins_loading',
+  'recovering',
+  'mem-pressure',
+  'reattaching',
+  'plugin_failed',
+] as const

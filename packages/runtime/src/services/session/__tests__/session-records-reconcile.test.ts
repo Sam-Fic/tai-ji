@@ -701,7 +701,7 @@ describe('U6d invalidateDerivedState 撤回失效契约', () => {
     await flushDebounce()
     client.getEntries.mockClear()
 
-    // 在途增量轮：deferred promise 挂起（15s 定时路径与撤回并发的真实竞态形态）
+    // 在途增量轮：deferred promise 挂起（失效防抖 + agent_settled 边沿与撤回并发的真实竞态形态）
     let releaseInc!: (v: GetEntriesResult) => void
     client.getEntries.mockImplementation(async (since?: string) => {
       if (since !== undefined) {

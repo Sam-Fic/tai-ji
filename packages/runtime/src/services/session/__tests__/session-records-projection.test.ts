@@ -61,15 +61,15 @@ describe('plan-state-first-entry-frame', () => {
  * - pi stdout tee：/plan command handler 的 appendEntry 同步 _emit entry_appended
  *   （agent-session.js bindCore appendEntry：appendCustomEntry 后立即广播，无 turn 边界延迟）；
  * - W18 防抖 300ms 后的 getEntries 首次拉取返回全量 entries 含 plan-state（cursor 随 leafId 推进，
- *   后续 15s 对账 sweep 全走增量——tee rpc_14→rpc_17 链）。
+ *   后续对账路径全走增量——tee rpc_14→rpc_17 链（rpc 序号为真机证据链历史锚点，采集于 15s sweep 时期）。
  *
  * 两个用例分别锁定「实时路径」（订阅在发布前建立，帧经 broadcastText 直达）与
  * 「恢复路径」（发布早于订阅，帧经 subscribe 应答 stateSnapshot 回放——切走再切回/
  * 断连重连的恢复语义）。
  *
  * 第四用例锁定「丢弃且不补发机制」（2026-09-24 真机会话 01a0d509 形态 B 判定固化）：
- * publish 时无订阅者 → 水位照样推进（u0 校准：publish 调用完成即推进）→ 15s 定时路径与
- * agent_settled 路径 diff 恒空不补发 → 帧仅经 subscribe stateSnapshot 恢复。该形态下
+ * publish 时无订阅者 → 水位照样推进（u0 校准：publish 调用完成即推进）→ 失效防抖与
+ * agent_settled 边沿路径 diff 恒空不补发 → 帧仅经 subscribe stateSnapshot 恢复。该形态下
  * 黑洞持续 = 设计内（对账路径只覆盖「merge 已对、publish 跳丢」，丢弃靠快照兜底），
  * 恢复触发点全在消费侧（重连/切回的重订阅）——本用例把这一判定固定为，防止后续把
  * 水位语义改掉时无测试显形。
@@ -121,7 +121,7 @@ function makePipeline(entriesForFirstPull: unknown[], leafId = 'leaf-1') {
       }
     },
     // 按生产 cursor 三路径分流：无参（cursor=null 全量）返回 fixture；带 since（增量）
-    // 返回空批——对账路径的稳态形态（真机 15s sweep 空增量 rpc 同形）。
+    // 返回空批——对账路径的稳态形态（真机空增量 rpc 同形；15s sweep 为历史锚点表述，该定时机制已随 ADR-0122 退役）。
     getEntries: vi.fn(async (since?: string) =>
       since === undefined ? getEntriesResponse(entriesForFirstPull, leafId) : { data: { entries: [], leafId } },
     ),

@@ -1059,8 +1059,8 @@ async function main(): Promise<void> {
       },
       // [reload-closeout D2] 送达水位对账路径（agent_settled，fire-and-forget）：重跑 record
       // 派生管线，发布门 = 已发布快照水位——检查/发布门处丢的帧下轮触发必补发（回调
-      // 内部自带扫描域门与 inflight 合并，不阻塞 interpret 批次；15s 定时路径为低频兜底，
-      // 在 SessionRecords 服务级单例 timer 内自持）。
+      // 内部自带扫描域门与 inflight 合并，不阻塞 interpret 批次；agent_settled 边沿单路径，
+      // 15s 定时兜底已随 ADR-0122 退役，见 session-records.ts 退役登记）。
       onRecordReconcile: (sid) => {
         sessionService.reconcileRecordEntries(sid)
       },
