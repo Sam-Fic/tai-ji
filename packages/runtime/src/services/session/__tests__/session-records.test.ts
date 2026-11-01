@@ -837,6 +837,17 @@ describe('磁盘读侧（scanSessions → extractor 真实执行）', () => {
   // ── [U2 路径解析单点直查 D5]：查询定位走登记表 + 单文件直查，稳态零扫描；miss 回退
   // 不静默 found=false；同路径换 id 防御。fixture 首行为真 session header（header 惰性读
   // 校验的对象）──
+  //
+  // [U2 验收条款③·header 惰性读成本实测记录] 2026-11-01，darwin arm64，Node v24：
+  // 实测对象 = 未激活会话单文件直查的 header 校验读（resolveQuerySessionRef 一/二级的
+  // parseSessionHeader 首行读）。fixture = 200 个 100KB 兄弟会话目录 + 目标文件三档
+  // 尺寸（64KB / 8MB / 32MB，32MB = oversize 阈值），warmup 200 次、计时 1000 次取中位：
+  //   64KB median 0.012ms（p95 0.017ms）；8MB 0.012ms（p95 0.015ms）；32MB 0.011ms（p95 0.015ms）
+  // 结论：单次直查 ~10-17µs，与文件尺寸（首行读不触尾部）及目录会话数（只开目标一个
+  // 文件）解耦；对照退役形态 readFileSync 全量读 32MB = median 9.413ms（约 800 倍）。
+  // 复测方式：按本节 fixture 形态写临时 vitest 用例（parseSessionHeader 计时 +
+  // readFileSync 对照），`cd packages/runtime && npx vitest run <该临时文件>`，跑完即删。
+  // 对照 M1 resolveSessionContext 先例：M1 实体不在本基线（btw 域在途），按同形态自测记录。
   const U2_SESSION_HEADER: Record<string, unknown> = {
     type: 'session', id: 's1', cwd: '/tmp/proj', timestamp: '2026-11-01T00:00:00Z',
   }
