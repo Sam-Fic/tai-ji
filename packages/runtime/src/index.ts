@@ -1046,6 +1046,18 @@ async function main(): Promise<void> {
         if (!client) return undefined
         return client.getState()
       },
+      // C1（feat-compaction-closure 分界行实时化）：smart-context 落盘信号 → get_entries 拉取
+      // compaction entry 合成对话流分界行帧。延迟解析 client（pingPi 同款）：interpreter 在
+      // session 创建时构造，client 可能尚未 spawn——返回 undefined 由 interpreter 降级
+      // （不发帧、warn 留痕），不抛错。
+      getPiEntries: async () => {
+        const client = pm.getClient(sessionId)
+        if (!client) return undefined
+        const msg = await client.getEntries()
+        // GetEntriesResponse 形状（pi-session-data）：data 已由 sendCommand 归一（data ?? payload）
+        const data = msg.data as { entries?: unknown[] } | undefined
+        return data?.entries
+      },
       // W18（data-source-governance P3.1）：自描述 record entry（subagent-record /
       // workflow-record）到达 → 派生缓存失效。sessionService 同
       // thinkingLevelState 的延迟解析模式（createAdapter 闭包先于 sessionService 构造，

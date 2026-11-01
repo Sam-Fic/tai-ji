@@ -303,8 +303,13 @@ function asAppendCompactionHost(sm: unknown): AppendCompactionLike | undefined {
 
 /** persistBackgroundCompaction 的补偿回调（D6）：由接线层（index.ts）注入 session 级状态操作。 */
 export interface BackgroundPersistCallbacks {
-	/** 落盘成功补偿：清空已提醒档位（与 session_compact 事件监听共用同一段逻辑，D6）。 */
-	onPersisted?: () => void;
+	/**
+	 * 落盘成功补偿：清空已提醒档位（与 session_compact 事件监听共用同一段逻辑，D6）。
+	 * C1 起附带 entryId（appendCompaction 返回的 compaction entry id，pi 形状声明保守允许
+	 * undefined）——接线层用它组装落盘信号（分界行实时化），调用点仍在落盘事实点的同一
+	 * 同步帧内（guardStaleCtx 内、appendCompaction 成功后），非 stale 由外层保证。
+	 */
+	onPersisted?: (entryId: string | undefined) => void;
 	/** 收缩校验失败的膨胀段记录（D3：与同步路径 inflatedSegments 共享读取，同段不再触发防反复烧钱）。 */
 	onInflated?: (firstKeptEntryId: string) => void;
 }
@@ -369,7 +374,7 @@ export async function persistBackgroundCompaction(
 					true, // fromHook：与同步接管路径落盘口径一致（pi 同参位传 fromExtension=true）
 					result.usage,
 				);
-				callbacks?.onPersisted?.();
+				callbacks?.onPersisted?.(entryId);
 				debugLog(
 					`background compaction persisted: entry=${entryId ?? "?"} firstKept=${result.firstKeptEntryId} ` +
 						`sessionId=${snapshot.sessionId}`,

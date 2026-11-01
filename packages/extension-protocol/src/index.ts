@@ -242,6 +242,16 @@ export {
   SUBAGENT_DIRECTIVE_CUSTOM_TYPE,
 } from './extensions/subagent-notify/custom-types'
 
+// ── ./extensions/smart-context：smart-context 通知通道词表（custom_message customType 单源：
+// 写侧 = @zhushanwen/pi-smart-context 通知与后台压缩落盘信号，读侧 = runtime event-interpreter
+// 落盘信号分诊；历史上扩展本地常量，runtime 分诊引入后收敛单源）──
+export {
+  SMART_CONTEXT_NOTICE_CUSTOM_TYPE,
+  COMPACTION_ENTRY_APPENDED_SOURCE,
+  parseCompactionPersistSignal,
+} from './extensions/smart-context/notify-types'
+export type { CompactionPersistSignal } from './extensions/smart-context/notify-types'
+
 // [pi1-disposition-chat-flow D7①] plugin-bridge 协议段（marker/types/guards + 桶导出）
 // 随 plugin-bridge 整体退役删除；select 通道原语（core/select-rpc.ts）为公共层保留。
 

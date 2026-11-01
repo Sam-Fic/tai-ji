@@ -4,10 +4,16 @@
 // 投递形态断言（customType/display/{triggerTurn:false, deliverAs:"nextTurn"}）在装配层
 // 覆盖：index-reminder-delivery.test.ts（提醒/模型通知）+ compact-handler.test.ts（压缩
 // 完成/失败通知全接线），本文件只锁文案内容与条件分支。
+//
+// C1 落盘信号（sendCompactionPersistSignal）的形态在本文件直测：它是 runtime 分诊消费的
+// 机器信号（非用户可见通知），字段与投递选项是跨层契约，漂移即分界行链路断。
 
-import { describe, expect, it } from "vitest";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { describe, expect, it, vi } from "vitest";
 
-import { buildCompactCompleteNotice, buildCompactFailureNotice } from "../notices.js";
+import { COMPACTION_ENTRY_APPENDED_SOURCE, SMART_CONTEXT_NOTICE_CUSTOM_TYPE } from "@zhushanwen/extension-protocol";
+
+import { buildCompactCompleteNotice, buildCompactFailureNotice, sendCompactionPersistSignal } from "../notices.js";
 
 describe("buildCompactCompleteNotice（U5/D6 完成通知：压缩前后 token 数与模式）", () => {
 	it("含模式、前后 token（formatK 口径）与下一条消息生效语义", () => {
@@ -64,5 +70,56 @@ describe("buildCompactFailureNotice（U5/D6 失败通知：四终局原因行，
 		expect(buildCompactFailureNotice({ outcome: "empty", failureStreak: 1 })).toContain("重试");
 		expect(buildCompactFailureNotice({ outcome: "inflated" })).not.toContain("重试");
 		expect(buildCompactFailureNotice({ outcome: "dropped" })).not.toContain("重试");
+	});
+});
+
+describe("落盘信号词表值锚定（extension-protocol SSOT，contract.notify-custom-types 先例同款）", () => {
+	it("SMART_CONTEXT_NOTICE_CUSTOM_TYPE === 'smart-context'（历史 session JSONL 已有该 customType entry，改值 = 跨侧破坏性变更）", () => {
+		expect(SMART_CONTEXT_NOTICE_CUSTOM_TYPE).toBe("smart-context");
+	});
+
+	it("COMPACTION_ENTRY_APPENDED_SOURCE === 'compaction-entry-appended'（runtime 分诊 details.source 字节契约）", () => {
+		expect(COMPACTION_ENTRY_APPENDED_SOURCE).toBe("compaction-entry-appended");
+	});
+});
+
+describe("sendCompactionPersistSignal（C1 落盘信号：runtime 分诊消费的机器信号）", () => {
+	function makePi(impl?: () => void): { pi: ExtensionAPI; sendMessage: ReturnType<typeof vi.fn> } {
+		const sendMessage = vi.fn(impl);
+		return { pi: { sendMessage } as unknown as ExtensionAPI, sendMessage };
+	}
+
+	it("形态契约：customType 单源常量 + display:false + content 空串 + details{source, compactionId} + {triggerTurn:false} 无 deliverAs", () => {
+		const { pi, sendMessage } = makePi();
+		sendCompactionPersistSignal(pi, "entry-1");
+
+		expect(sendMessage).toHaveBeenCalledTimes(1);
+		const [message, options] = sendMessage.mock.calls[0]!;
+		expect(message).toEqual({
+			customType: SMART_CONTEXT_NOTICE_CUSTOM_TYPE,
+			content: "",
+			display: false,
+			details: { source: COMPACTION_ENTRY_APPENDED_SOURCE, compactionId: "entry-1" },
+		});
+		// toEqual 全量锁投递选项：无 deliverAs（空闲时 pi 立即 append 并 emit，秒级直达）
+		expect(options).toEqual({ triggerTurn: false });
+	});
+
+	it("compactionId undefined 透传（形状声明保守允许；runtime 侧降级尾部兜底）", () => {
+		const { pi, sendMessage } = makePi();
+		sendCompactionPersistSignal(pi, undefined);
+
+		expect(sendMessage.mock.calls[0]![0].details).toEqual({
+			source: COMPACTION_ENTRY_APPENDED_SOURCE,
+			compactionId: undefined,
+		});
+	});
+
+	it("sendMessage 同步抛错 → 内吞不上抛（上抛会把已落盘的压缩改记失败，dmg-r1-2 同语义）", () => {
+		const { pi, sendMessage } = makePi(() => {
+			throw new Error("boom");
+		});
+		expect(() => sendCompactionPersistSignal(pi, "entry-1")).not.toThrow();
+		expect(sendMessage).toHaveBeenCalledTimes(1);
 	});
 });

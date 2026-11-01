@@ -762,6 +762,8 @@ describe("appendCompaction 直调链路（U3 验收②③：RL3 存在性探测 
 		expect(fromHook).toBe(true); // 与同步接管路径落盘口径一致
 		expect(usage).toEqual({ input: 3, output: 4 }); // usage 随 entry 写入（D6 用量归因消费侧照读）
 		expect(onPersisted).toHaveBeenCalledTimes(1); // D6 档位重置补偿回调
+		// C1：onPersisted 携带落盘 entry id（接线层组装落盘信号的 compactionId 数据源）
+		expect(onPersisted).toHaveBeenCalledWith("entry-persisted");
 		expect(bgState.failureStreak).toBe(0); // validated 清零
 		expect(bgState.active).toBeNull();
 	});
@@ -867,9 +869,17 @@ describe("appendCompaction 直调链路（U3 验收②③：RL3 存在性探测 
 		for (let i = 0; i < 50; i++) await Promise.resolve();
 
 		// U5/D6 完成通知：落盘成功 → compact-complete 经 nextTurn 投递（不自起回合），
-		// 含压缩前后 token 数与模式（D6）
-		expect(sendMessage).toHaveBeenCalledTimes(2);
-		const [completeMessage, completeOptions] = sendMessage.mock.calls[1]!;
+		// 含压缩前后 token 数与模式（D6）。C1 落盘信号在 onPersisted 事实点先行投递
+		//（display:false 机器信号，分界行数据源），完成通知随后，两条互不替代
+		expect(sendMessage).toHaveBeenCalledTimes(3);
+		const [signalMessage, signalOptions] = sendMessage.mock.calls[1]!;
+		expect(signalMessage).toMatchObject({
+			customType: "smart-context",
+			display: false,
+			details: { source: "compaction-entry-appended", compactionId: "entry-persisted" },
+		});
+		expect(signalOptions).toEqual({ triggerTurn: false }); // 空闲投递：无 deliverAs，pi 立即 append
+		const [completeMessage, completeOptions] = sendMessage.mock.calls[2]!;
 		expect(completeMessage).toMatchObject({
 			customType: "smart-context",
 			display: true,
@@ -885,8 +895,8 @@ describe("appendCompaction 直调链路（U3 验收②③：RL3 存在性探测 
 			{ type: "agent_settled" },
 			makeBgCtx(sampleEntriesNoCompaction(), { tokens: 420_000, contextWindow: 500_000 }),
 		);
-		expect(sendMessage).toHaveBeenCalledTimes(3); // +1 提醒（firedThresholds 清空的直接行为证据）
-		expect(sendMessage.mock.calls[2]![0]).toMatchObject({ details: { source: "threshold-reminder" } });
+		expect(sendMessage).toHaveBeenCalledTimes(4); // +1 提醒（firedThresholds 清空的直接行为证据）
+		expect(sendMessage.mock.calls[3]![0]).toMatchObject({ details: { source: "threshold-reminder" } });
 		expect(mockedCall).toHaveBeenCalledTimes(1); // 未越触发线，不重复启动任务
 	});
 });

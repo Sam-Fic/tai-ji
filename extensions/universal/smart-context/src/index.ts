@@ -21,6 +21,10 @@
  * - 后台任务终局：完成/失败通知经 nextTurn 投递（U5/D6——validated 完成、失败不静默，
  *   熔断达到阈值并入该条通知；cancelled 事件取消不发）；通知投递失败由 compact-handler
  *   的 settle 内吞留痕，不改写压缩成败事实
+ * - 后台压缩落盘信号（C1 分界行实时化）：persistBackgroundCompaction 成功的事实点
+ *   （onPersisted 回调）经 sendCompactionPersistSignal 发 custom message（display:false、
+ *   {triggerTurn:false} 无 deliverAs，空闲时立即 append）——taiji runtime 分诊命中后取
+ *   compaction entry 合成对话流分界行帧，分界行不再只能重开可见
  * - model_select：跨界通知 + downshift 提醒（D5/D4①）
  *
  * 通知投递路径（D4①，delivery-ownership-kernel）：四类通知全部经 notices.ts 的
@@ -43,7 +47,7 @@ import {
 	type BackgroundCompactionState,
 	type TakeoverState,
 } from "./compact-handler.js";
-import { sendSmartContextNotice, buildCompactCompleteNotice, buildCompactFailureNotice } from "./notices.js";
+import { sendSmartContextNotice, buildCompactCompleteNotice, buildCompactFailureNotice, sendCompactionPersistSignal } from "./notices.js";
 import { buildDownshiftNotice, buildSwitchNotice, buildThresholdReminder } from "./reminder.js";
 import { registerCompactContextTool } from "./tool.js";
 import {
@@ -168,9 +172,14 @@ export default function smartContextExtension(pi: ExtensionAPI): void {
 			result,
 			snapshot,
 			{
-				onPersisted: () => {
+				onPersisted: (entryId) => {
 					resetFiredThresholds();
 					debugLog(`fired thresholds reset after background compaction (sessionId=${snapshot.sessionId})`);
+					// C1 分界行实时化：落盘信号挂在「落盘成功」事实点（本回调在 appendCompaction
+					// 成功后的同一同步帧内、guardStaleCtx 之中，非 stale 由外层保证），不在终局
+					// 回调点（settle 已跨 await 且不带 entryId）。发送失败由 sendCompactionPersistSignal
+					// 内吞留痕（上抛会把已落盘的压缩改记失败，见该函数注释）。
+					sendCompactionPersistSignal(pi, entryId);
 				},
 				onInflated: (firstKeptEntryId) => {
 					state.takeover.inflatedSegments.add(firstKeptEntryId);
