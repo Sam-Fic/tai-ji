@@ -368,35 +368,52 @@ export async function persistBackgroundCompaction(
 /**
  * 从单条消息提取文件操作（pi extractFileOpsFromMessage 的等价组装——该函数不在包根导出，
  * 语义按 pi compaction/utils.js 实读复刻：toolResult 侧收 nestedCalls、assistant 侧收
- * toolCall blocks，按工具名 read/write/edit 归档 path 参数）。
+ * toolCall blocks，按工具名 read/write/edit 归档 path 参数）。按 role 分派到两侧提取，
+ * 分派外的形态不计（collectToolResultFileOps / collectAssistantToolCallOps / addFileOp）。
  */
 function extractFileOpsFromAgentMessage(message: Parameters<typeof estimateTokens>[0], fileOps: FileOperations): void {
-	const addFileOp = (toolName: unknown, args: unknown): void => {
-		const path = isRecord(args) && typeof args.path === "string" ? args.path : undefined;
-		if (!path) return;
-		if (toolName === "read") fileOps.read.add(path);
-		else if (toolName === "write") fileOps.written.add(path);
-		else if (toolName === "edit") fileOps.edited.add(path);
-	};
 	if (message.role === "toolResult") {
-		// codemode 脚本发起的调用记录在脚本结果上（pi 同款语义）
-		const rec = isRecord(message) ? message : undefined;
-		const nested = isRecord(rec?.nestedCalls) ? rec.nestedCalls : undefined;
-		const calls = Array.isArray(nested?.calls) ? nested.calls : [];
-		for (const call of calls) {
-			const c = isRecord(call) ? call : undefined;
-			addFileOp(c?.name, c?.arguments);
-		}
+		collectToolResultFileOps(message, fileOps);
 		return;
 	}
 	if (message.role !== "assistant") return;
+	collectAssistantToolCallOps(message, fileOps);
+}
+
+/** toolResult 侧提取：codemode 脚本发起的调用记录在脚本结果上（pi 同款语义，nestedCalls）。 */
+function collectToolResultFileOps(message: Parameters<typeof estimateTokens>[0], fileOps: FileOperations): void {
+	const rec = isRecord(message) ? message : undefined;
+	const nested = isRecord(rec?.nestedCalls) ? rec.nestedCalls : undefined;
+	const calls = Array.isArray(nested?.calls) ? nested.calls : [];
+	for (const call of calls) {
+		const c = isRecord(call) ? call : undefined;
+		addFileOp(fileOps, c?.name, c?.arguments);
+	}
+}
+
+/** assistant 侧提取：content 内 toolCall blocks（按工具名归档 path 参数）。
+ *  入参 = AgentMessage 联合的 assistant 变体（role 分派处窄化后传入，content 才含
+ *  toolCall block 联合成员）。 */
+function collectAssistantToolCallOps(
+	message: Extract<Parameters<typeof estimateTokens>[0], { role: "assistant" }>,
+	fileOps: FileOperations,
+): void {
 	const content = isRecord(message) ? message.content : undefined;
 	if (!Array.isArray(content)) return;
 	for (const block of content) {
 		const b = isRecord(block) ? block : undefined;
 		if (b?.type !== "toolCall") continue;
-		addFileOp(b.name, b.arguments);
+		addFileOp(fileOps, b.name, b.arguments);
 	}
+}
+
+/** 工具名 → fileOps 分桶：read/written/edited 归档 path 参数（无 path 参数或其余工具名不计）。 */
+function addFileOp(fileOps: FileOperations, toolName: unknown, args: unknown): void {
+	const path = isRecord(args) && typeof args.path === "string" ? args.path : undefined;
+	if (!path) return;
+	if (toolName === "read") fileOps.read.add(path);
+	else if (toolName === "write") fileOps.written.add(path);
+	else if (toolName === "edit") fileOps.edited.add(path);
 }
 
 /**
@@ -434,63 +451,33 @@ function collectFileOps(
  * system role 消息剔除与 pi 原生一致（compaction.js:50-53 同款过滤，见组装处注释），
  * 不属于差异项。
  * 返回 undefined = 无可压（条目不足 / 刚压缩完 / 全量在保留预算内 / 被压段仅 system 消息）。
+ * 组装流程拆为 loadPreparationContext（条目装载 + 无可压前置判定）/
+ * sliceCompressionEntries + toNonSystemMessages（被压段组装）/
+ * collectCompressedFileOps（fileOps 汇总），本函数只做编排（圈复杂度门禁阈值 15）。
  */
 export function buildBackgroundPreparation(
 	ctx: ExtensionContext,
 ): SessionBeforeCompactEvent["preparation"] | undefined {
-	let entries: readonly SessionEntry[];
-	try {
-		entries = ctx.sessionManager.getEntries();
-	} catch (error) {
-		debugLog(`background preparation: entries read failed: ${toErrorMessage(error)}`);
-		return undefined;
-	}
-	const contextEntries = buildContextEntries([...entries]);
-	if (contextEntries.length === 0) return undefined;
-	// 末条是 compaction = 刚压缩完（appendCompaction 挂 leaf），无可压（prepareCompaction 同款前置）
-	if (contextEntries[contextEntries.length - 1].type === "compaction") return undefined;
-
-	// 最新 compaction 是活动列表首条（buildContextEntries 切分语义）；更早 compaction 的
-	// 摘要已被它收编，previousSummary 只取最新一份（prepareCompaction 同款边界）
-	let previousSummary: string | undefined;
-	let boundaryStart = 0;
-	const head = contextEntries[0];
-	if (head?.type === "compaction") {
-		previousSummary = head.summary;
-		boundaryStart = 1;
-	}
+	const loaded = loadPreparationContext(ctx);
+	if (!loaded) return undefined;
+	const { contextEntries, previousSummary, boundaryStart } = loaded;
 
 	const cutPoint = findCutPoint(contextEntries, boundaryStart, contextEntries.length, DEFAULT_COMPACTION_SETTINGS.keepRecentTokens);
 	const firstKeptEntry = contextEntries[cutPoint.firstKeptEntryIndex];
 	if (!firstKeptEntry?.id) return undefined;
 
 	const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
-	// 区间内的老 compaction entry 过滤（其投影贡献为空消息，AS6——仅最新 compaction 贡献摘要，
-	// 原始视角组装须显式对齐，否则上一份摘要消息会混入被压段重复提交）
-	const shadowedEntries = contextEntries.slice(boundaryStart, historyEnd).filter((e) => e.type !== "compaction");
-	const turnPrefixEntries = cutPoint.isSplitTurn
-		? contextEntries.slice(cutPoint.turnStartIndex, cutPoint.firstKeptEntryIndex).filter((e) => e.type !== "compaction")
-		: [];
+	const { shadowedEntries, turnPrefixEntries } = sliceCompressionEntries(contextEntries, boundaryStart, cutPoint, historyEnd);
 	// system role 消息剔除（pi getMessagesFromProjectedEntryForCompaction 同款，compaction.js
 	// :50-53——system message 是 prompt 状态非对话内容，compaction entry 的 systemMessage 承载
 	// 其回放；不剔除会使摘要 LLM 输入混入 system 消息、与 pi 原生组装（已过滤）不同分布）
-	const messagesToSummarize = shadowedEntries
-		.flatMap(sessionEntryToContextMessages)
-		.filter((message) => message.role !== "system");
-	const turnPrefixMessages = turnPrefixEntries
-		.flatMap(sessionEntryToContextMessages)
-		.filter((message) => message.role !== "system");
+	const messagesToSummarize = toNonSystemMessages(shadowedEntries);
+	const turnPrefixMessages = toNonSystemMessages(turnPrefixEntries);
 	if (messagesToSummarize.length === 0 && turnPrefixMessages.length === 0) return undefined;
 
+	const head = contextEntries[0];
 	const prevCompaction = head?.type === "compaction" ? head : undefined;
-	const fileOps = collectFileOps(messagesToSummarize, prevCompaction);
-	if (cutPoint.isSplitTurn) {
-		// split-turn 时 turnPrefix 也在压缩范围（prepareCompaction 同款提取）
-		const prefixOps = collectFileOps(turnPrefixMessages, undefined);
-		for (const key of ["read", "written", "edited"] as const) {
-			for (const f of prefixOps[key]) fileOps[key].add(f);
-		}
-	}
+	const fileOps = collectCompressedFileOps(messagesToSummarize, turnPrefixMessages, prevCompaction, cutPoint.isSplitTurn);
 
 	const tokensBefore = ctx.getContextUsage()?.tokens ?? 0;
 	return {
@@ -505,6 +492,75 @@ export function buildBackgroundPreparation(
 		// pi 压缩设置的漂移为已接受代价（四要素登记见设计 AS10）
 		settings: { ...DEFAULT_COMPACTION_SETTINGS },
 	};
+}
+
+/** [buildBackgroundPreparation 拆分] 条目装载 + 无可压前置判定：getEntries 读失败 /
+ *  零活动条目 / 末条是 compaction（刚压缩完，appendCompaction 挂 leaf，prepareCompaction
+ *  同款前置）→ undefined。同时定 previousSummary 与 boundaryStart——最新 compaction 是
+ *  活动列表首条（buildContextEntries 切分语义）；更早 compaction 的摘要已被它收编，
+ *  previousSummary 只取最新一份（prepareCompaction 同款边界）。 */
+function loadPreparationContext(ctx: ExtensionContext) {
+	let entries: readonly SessionEntry[];
+	try {
+		entries = ctx.sessionManager.getEntries();
+	} catch (error) {
+		debugLog(`background preparation: entries read failed: ${toErrorMessage(error)}`);
+		return undefined;
+	}
+	const contextEntries = buildContextEntries([...entries]);
+	if (contextEntries.length === 0) return undefined;
+	if (contextEntries[contextEntries.length - 1].type === "compaction") return undefined;
+	let previousSummary: string | undefined;
+	let boundaryStart = 0;
+	const head = contextEntries[0];
+	if (head?.type === "compaction") {
+		previousSummary = head.summary;
+		boundaryStart = 1;
+	}
+	return { contextEntries, previousSummary, boundaryStart };
+}
+
+/** [buildBackgroundPreparation 拆分] 被压段切片：shadowedEntries = [boundaryStart, historyEnd)
+ *  内老 compaction 过滤（其投影贡献为空消息，AS6——仅最新 compaction 贡献摘要，原始视角
+ *  组装须显式对齐，否则上一份摘要消息会混入被压段重复提交）；turnPrefixEntries =
+ *  split-turn 时 [turnStartIndex, firstKeptEntryIndex) 段（同款 compaction 过滤，
+ *  非 split-turn 为空）。 */
+function sliceCompressionEntries(
+	contextEntries: SessionEntry[],
+	boundaryStart: number,
+	cutPoint: ReturnType<typeof findCutPoint>,
+	historyEnd: number,
+) {
+	const shadowedEntries = contextEntries.slice(boundaryStart, historyEnd).filter((e) => e.type !== "compaction");
+	const turnPrefixEntries = cutPoint.isSplitTurn
+		? contextEntries.slice(cutPoint.turnStartIndex, cutPoint.firstKeptEntryIndex).filter((e) => e.type !== "compaction")
+		: [];
+	return { shadowedEntries, turnPrefixEntries };
+}
+
+/** [buildBackgroundPreparation 拆分] system role 消息剔除（pi getMessagesFromProjectedEntryForCompaction
+ *  同款，compaction.js:50-53——system message 是 prompt 状态非对话内容，compaction entry 的
+ *  systemMessage 承载其回放；不剔除会使摘要 LLM 输入混入 system 消息、与 pi 原生组装（已过滤）不同分布）。 */
+function toNonSystemMessages(entries: SessionEntry[]) {
+	return entries.flatMap(sessionEntryToContextMessages).filter((message) => message.role !== "system");
+}
+
+/** [buildBackgroundPreparation 拆分] 被压范围 fileOps：被压消息逐条提取（collectFileOps，
+ *  pi extractFileOperations 等价）+ split-turn 时 turnPrefix 也在压缩范围
+ *  （prepareCompaction 同款提取，前缀 fileOps 并回主集合）。 */
+function collectCompressedFileOps(
+	messagesToSummarize: ReadonlyArray<Parameters<typeof estimateTokens>[0]>,
+	turnPrefixMessages: ReadonlyArray<Parameters<typeof estimateTokens>[0]>,
+	prevCompaction: CompactionEntry | undefined,
+	isSplitTurn: boolean,
+): FileOperations {
+	const fileOps = collectFileOps(messagesToSummarize, prevCompaction);
+	if (!isSplitTurn) return fileOps;
+	const prefixOps = collectFileOps(turnPrefixMessages, undefined);
+	for (const key of ["read", "written", "edited"] as const) {
+		for (const f of prefixOps[key]) fileOps[key].add(f);
+	}
+	return fileOps;
 }
 
 /**
