@@ -121,6 +121,9 @@ describe("__taiji_bg_reconcile__ command: runtime-resume trigger face", () => {
 			await def.handler("", {
 				sessionManager: {
 					getSessionId: () => sessionId,
+					// getSessionFile = undefined（no-persist mock 形态）：A1 修复后维护链
+					// 新读该成员传对账第 6 参（补投判据磁盘事实源；undefined 退化内存账）
+					getSessionFile: () => undefined,
 					getEntries: () => [
 						{
 							customType: "pending:register",
@@ -170,7 +173,7 @@ describe("session_start chain: reconcile (M3, reap sunk into runtime by u-bte-re
 
 			const handler = pi.on.mock.calls.find((call) => call[0] === "session_start")?.[1] as (
 				event: unknown,
-				ctx: { sessionManager: { getSessionId: () => string; getEntries: () => unknown[] } },
+				ctx: { sessionManager: { getSessionId: () => string; getEntries: () => unknown[]; getSessionFile: () => string | undefined } },
 			) => void;
 			expect(handler).toBeDefined();
 			// pi runner emit session_start 必带事件（SessionStartEvent.reason 必填，
@@ -178,6 +181,8 @@ describe("session_start chain: reconcile (M3, reap sunk into runtime by u-bte-re
 			handler({ type: "session_start", reason: "resume" }, {
 				sessionManager: {
 					getSessionId: () => sessionId,
+					// getSessionFile = undefined（no-persist mock 形态，同 __taiji_bg_reconcile__ 用例注）
+					getSessionFile: () => undefined,
 					getEntries: () => [
 						{
 							customType: "pending:register",

@@ -16,7 +16,7 @@
 //    幂等预检 + 内核三级判重 + outbox/ack 终态列）——本文件锁定「marker 在场不再
 //    阻断重投」（痕迹缺失即重投，旧 marker「标记在而消息丢」残余失败域随之修复）
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -37,6 +37,7 @@ vi.mock("@zhushanwen/pi-extension-logger", () => ({
 
 import {
 	isReapNotifyCandidate,
+	readSessionFileEntries,
 	reconcilePendingEntries,
 	type ReconcileDeliver,
 	type ReconcilePi,
@@ -718,5 +719,154 @@ describe("RL12: single exported judgement — same facts, same verdict from any 
 			exitCode: null,
 		});
 		expect(isReapNotifyCandidate(killedEntry, empty, empty)).toBe(false);
+	});
+});
+
+// ── A1 产品缺陷修复回归：补投判据事实源磁盘化 ──
+// 缺陷链（A1 验收 4 次确定性复现）：pi SessionManager._appendEntry 先 fileEntries.push
+// 后 _persist、persist 失败（真机注入形态 = session JSONL chmod 0444，EACCES 挡写不挡
+// 读）无回滚 → 幽灵内存 outbox entry（内存账在册、JSONL 无行）；判据曾消费
+// getEntries() 内存账 → journaled 误真 → 补投静默失效。修复后事实源 = session JSONL
+// 落盘条目（reconcilePendingEntries 第 6 参 sessionFile，index.ts 经
+// getSessionFile() 传入）。单测模拟形态 = 内存 entries 与磁盘文件不一致（幽灵态的
+// 定义特征），与真机 chmod 注入同族（同是「内存有、盘上无」的产物）。
+describe("reap-notify: disk-fact journal source (ghost in-memory entry regression, A1 fix)", () => {
+	const TASK_ID = "bt-1700000000-ghst01";
+	const SESSION_FILE = join(DATA_DIR, "session.jsonl");
+
+	function exitedNaturalEntry(): RegistryEntry {
+		return makeRegistryEntry({
+			taskId: TASK_ID,
+			state: "exited",
+			reason: "natural",
+			// 转后台任务退出码结构性不可得（A1 场景 exit code unknown 形态）
+			exitCode: null,
+			durationMs: 16_034,
+			tailSummary: "done",
+		});
+	}
+
+	function writeSessionFile(lines: unknown[]): void {
+		mkdirSync(DATA_DIR, { recursive: true });
+		writeFileSync(SESSION_FILE, lines.map((l) => JSON.stringify(l)).join("\n") + (lines.length > 0 ? "\n" : ""));
+	}
+
+	it("ghost in-memory outbox entry (in memory, absent on disk) → re-notify (A1 regression)", async () => {
+		writeRegistryEntry(getRegistryPath(DATA_DIR, SESSION_ID), exitedNaturalEntry());
+		// 磁盘事实：JSONL 只含一条无关行（EACCES 实况——outbox persist 被挡，盘上无该 taskId 任何行）
+		writeSessionFile([{ type: "message", id: "m1", message: { role: "user", content: "hi" } }]);
+		// 内存账：幽灵 outbox entry（rejected 首败即留一条，含单次重提则两条，取其一已足命中）
+		const ghostEntries = [journaledOutboxEntry(TASK_ID)];
+		const deliver = createMockDeliver();
+
+		const result = await reconcilePendingEntries(createMockPi(), DATA_DIR, SESSION_ID, ghostEntries, deliver, SESSION_FILE);
+
+		expect(deliver).toHaveBeenCalledTimes(1);
+		expect(result.redelivered).toEqual([TASK_ID]);
+	});
+
+	it("ghost delivered trace (notify message in memory, absent on disk) → re-notify (delivered fact reads disk)", async () => {
+		writeRegistryEntry(getRegistryPath(DATA_DIR, SESSION_ID), exitedNaturalEntry());
+		writeSessionFile([]);
+		const ghostEntries = [deliveredEntry(TASK_ID)];
+		const deliver = createMockDeliver();
+
+		const result = await reconcilePendingEntries(createMockPi(), DATA_DIR, SESSION_ID, ghostEntries, deliver, SESSION_FILE);
+
+		expect(deliver).toHaveBeenCalledTimes(1);
+		expect(result.redelivered).toEqual([TASK_ID]);
+	});
+
+	it("outbox entry present on disk → NOT re-notified (disk fact positive: journaled reads JSONL)", async () => {
+		writeRegistryEntry(getRegistryPath(DATA_DIR, SESSION_ID), exitedNaturalEntry());
+		writeSessionFile([journaledOutboxEntry(TASK_ID)]);
+		const deliver = createMockDeliver();
+
+		const result = await reconcilePendingEntries(createMockPi(), DATA_DIR, SESSION_ID, [], deliver, SESSION_FILE);
+
+		expect(deliver).not.toHaveBeenCalled();
+		expect(result.redelivered).toEqual([]);
+	});
+
+	it("session file missing (ENOENT, pre-first-flush) → re-notify (normal path, empty disk facts)", async () => {
+		writeRegistryEntry(getRegistryPath(DATA_DIR, SESSION_ID), exitedNaturalEntry());
+		const deliver = createMockDeliver();
+
+		const result = await reconcilePendingEntries(createMockPi(), DATA_DIR, SESSION_ID, [], deliver, SESSION_FILE);
+
+		expect(deliver).toHaveBeenCalledTimes(1);
+		expect(result.redelivered).toEqual([TASK_ID]);
+	});
+
+	it("session file unreadable (chmod 0000, read-side EACCES) → treated as empty, re-notify + warn (expose-problem direction)", async () => {
+		writeRegistryEntry(getRegistryPath(DATA_DIR, SESSION_ID), exitedNaturalEntry());
+		writeSessionFile([journaledOutboxEntry(TASK_ID)]);
+		chmodSync(SESSION_FILE, 0o000);
+		const deliver = createMockDeliver();
+		try {
+			const result = await reconcilePendingEntries(createMockPi(), DATA_DIR, SESSION_ID, [], deliver, SESSION_FILE);
+			// 读失败按宽容口径空集（与 journaled「畸形按无条目」同向）：判据放行补投，
+			// 重投由 port 幂等预检收敛；按内存账退化则沿幽灵态静默吞补投 = 缺陷形态本身
+			expect(deliver).toHaveBeenCalledTimes(1);
+			expect(result.redelivered).toEqual([TASK_ID]);
+			expect(loggerMock.warn).toHaveBeenCalledWith(
+				expect.stringContaining("journal facts read failed"),
+				expect.anything(),
+			);
+		} finally {
+			chmodSync(SESSION_FILE, 0o644);
+		}
+	});
+
+	it("sessionFile absent (no-persist form) → falls back to in-memory entries + warn (registered degradation)", async () => {
+		writeRegistryEntry(getRegistryPath(DATA_DIR, SESSION_ID), exitedNaturalEntry());
+		// no-persist 形态 _persist no-op 恒成功、无幽灵态，内存账即完整事实：内存
+		// outbox entry = 真受理 → 不补投（现状行为，磁盘事实结构性不存在时的唯一事实源）
+		const inMemoryEntries = [journaledOutboxEntry(TASK_ID)];
+		const deliver = createMockDeliver();
+
+		const result = await reconcilePendingEntries(createMockPi(), DATA_DIR, SESSION_ID, inMemoryEntries, deliver);
+
+		expect(deliver).not.toHaveBeenCalled();
+		expect(result.redelivered).toEqual([]);
+		expect(loggerMock.warn).toHaveBeenCalledWith(
+			expect.stringContaining("fell back to in-memory entries"),
+			expect.anything(),
+		);
+	});
+});
+
+// ── readSessionFileEntries 容错（JSONL 读侧；口径登记见函数头注）──
+describe("readSessionFileEntries (disk read-side tolerance)", () => {
+	it("missing file → empty array (pre-first-flush is normal, not an error)", () => {
+		expect(readSessionFileEntries(join(DATA_DIR, "no-such-file.jsonl"))).toEqual([]);
+	});
+
+	it("malformed lines skipped, valid lines parsed (JSONL per-line tolerance)", () => {
+		mkdirSync(DATA_DIR, { recursive: true });
+		const file = join(DATA_DIR, "dirty.jsonl");
+		writeFileSync(
+			file,
+			['{"type":"custom","customType":"x"}', "not-json", "", '{"type":"message"}'].join("\n"),
+		);
+		const entries = readSessionFileEntries(file);
+		expect(entries).toHaveLength(2);
+		expect(entries[0]).toEqual({ type: "custom", customType: "x" });
+	});
+
+	it("unreadable file (chmod 0000) → empty + warn (lenient: disk facts unavailable = no entries)", () => {
+		mkdirSync(DATA_DIR, { recursive: true });
+		const file = join(DATA_DIR, "locked.jsonl");
+		writeFileSync(file, "{}\n");
+		chmodSync(file, 0o000);
+		try {
+			expect(readSessionFileEntries(file)).toEqual([]);
+			expect(loggerMock.warn).toHaveBeenCalledWith(
+				expect.stringContaining("disk entries treated as empty"),
+				expect.anything(),
+			);
+		} finally {
+			chmodSync(file, 0o644);
+		}
 	});
 });

@@ -70,8 +70,11 @@ function makeEvent(reason: SessionStartEvent["reason"]): SessionStartEvent {
 }
 
 function makeCtx() {
+	// getSessionFile = undefined（mock 的 no-persist 形态）：A1 修复后维护链新读
+	// sessionManager.getSessionFile() 传对账第 6 参——undefined 时补投判据退化内存
+	// entries（装配语义，见 pending-reconcile.ts）；本文件断言差集编排面，不触磁盘事实
 	return {
-		sessionManager: { getSessionId: () => "sid-once", getEntries: () => [] },
+		sessionManager: { getSessionId: () => "sid-once", getEntries: () => [], getSessionFile: () => undefined },
 	};
 }
 
@@ -127,8 +130,9 @@ describe("session_start maintenance chain after reap sink (u-bte-remove)", () =>
 		await handler(makeEvent("new"), ctx);
 
 		expect(reconcileMock).toHaveBeenCalledTimes(3);
-		expect(reconcileMock).toHaveBeenNthCalledWith(1, expect.anything(), dataDirRef.dir, "sid-once", []);
-		expect(reconcileMock).toHaveBeenLastCalledWith(expect.anything(), dataDirRef.dir, "sid-once", []);
+		// 6 参全形（A1 修复后签名）：deliver/sessionFile 尾参 = 缺省 undefined 形态锁定
+		expect(reconcileMock).toHaveBeenNthCalledWith(1, expect.anything(), dataDirRef.dir, "sid-once", [], undefined, undefined);
+		expect(reconcileMock).toHaveBeenLastCalledWith(expect.anything(), dataDirRef.dir, "sid-once", [], undefined, undefined);
 		// 无全局扫描回流：误触发已删锁导出的任何访问会被 mock 缺键直接抛错（检查见工厂注释），无告警
 		expect(loggerMock.warn).not.toHaveBeenCalled();
 	});
@@ -236,7 +240,7 @@ describe("agent_settled edge: third reconcile entry (completion-signal-delivery 
 
 		await settleHandler({ type: "agent_settled" }, ctx);
 		expect(reconcileMock).toHaveBeenCalledTimes(1);
-		expect(reconcileMock).toHaveBeenNthCalledWith(1, expect.anything(), dataDirRef.dir, "sid-once", []);
+		expect(reconcileMock).toHaveBeenNthCalledWith(1, expect.anything(), dataDirRef.dir, "sid-once", [], undefined, undefined);
 
 		// 三入口对同一 ctx 状态各派发一次对账、参数形态完全一致（判据单一）
 		await sessionStartHandler(makeEvent("resume"), ctx);

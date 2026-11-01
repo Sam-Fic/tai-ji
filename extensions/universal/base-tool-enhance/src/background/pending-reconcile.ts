@@ -35,6 +35,16 @@
  * killed 终态排除于候选（成因排除位——kill 发令方当次交互已同步获知，补投是重复
  * 刺激；kill 路径通知不入账的单点归属规则见 notify.ts 文件头）。
  *
+ * 判据事实源磁盘化（A1 产品缺陷修复，completion-signal-delivery D3 验收挖出）：
+ * 送达痕迹与投递日志两事实读 session JSONL 落盘条目（readSessionFileEntries），
+ * 不读 pi 内存账——pi SessionManager._appendEntry 先 fileEntries.push 后 _persist、
+ * persist 失败（EACCES 等）无回滚，留下「幽灵内存 entry」（内存账在册、JSONL 无行）。
+ * 投递契约 rejected = 拒收未受理、幂等键未登记（delivery-port types「条目可重试」），
+ * 幽灵内存态曾把该 taskId 误判「受理已发生」→ 三重判据 journaled 位误真 → 补投
+ * 结构性静默失效。磁盘事实使 journaled/delivered 语义 = 「JSONL 实际含该键条目」，
+ * 与受理落盘契约一物一名；sessionFile 缺席（no-persist 形态，磁盘事实结构性不存在）
+ * 退化内存 entries（该形态无 persist 失败，内存账即完整事实）+ warn 留痕。
+ *
  * 三边沿入口（session_start / __taiji_bg_reconcile__ 切回 / agent_settled 回合收尾）
  * 经 index.ts 编排互调本文件的 reconcilePendingEntries——判据单一（RL12）：三入口对
  * 同一事实状态产出同一判定，跨边沿双投由 port 幂等吞并防住。agent_settled 高频边沿
@@ -69,6 +79,7 @@ import { isPidAlive } from "@zhushanwen/extension-protocol/background-task";
 import { getDeliveryPort } from "@zhushanwen/pi-delivery-port";
 import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
+import { readFileSync } from "node:fs";
 
 import { collectDeliveredTaskIds, collectJournaledDeliveryIds, isReconcileNotifyCandidate, type ReconcileNotifyFacts } from "./notify-reconcile-judgement.ts";
 import {
@@ -133,7 +144,10 @@ export interface ReconcileResult {
  * 每个僵尸任务 appendEntry 一次（唯一权威写路径）。
  *
  * deliver 缺省取进程级槽当前实例（session_start 已装配 port——index.ts 装配点先于
- * 本链执行）；显式传参供测试注入。
+ * 本链执行）；显式传参供测试注入。sessionFile = 当前 session JSONL 路径（pi
+ * sessionManager.getSessionFile()）——补投判据事实源（送达痕迹 / 投递日志）读它
+ * 的落盘条目（磁盘事实）；undefined（no-persist 形态）退化内存 entries（现状行为）
+ * + warn，见 deliverReapNotifications。
  */
 export async function reconcilePendingEntries(
 	pi: ReconcilePi,
@@ -141,11 +155,12 @@ export async function reconcilePendingEntries(
 	sessionId: string,
 	entries: unknown[],
 	deliver: ReconcileDeliver | undefined = getDeliveryPort()?.deliver,
+	sessionFile: string | undefined = undefined,
 ): Promise<ReconcileResult> {
 	const result: ReconcileResult = { reconciled: 0, skipped: [], redelivered: [] };
 
 	// ① 收殓终态通知补投（先通知后清观测点；幂等由 port 承管，同步无 await）
-	deliverReapNotifications(deliver, dataDir, sessionId, entries, result);
+	deliverReapNotifications(deliver, dataDir, sessionId, entries, sessionFile, result);
 
 	// ② 既有 pending 差集循环（无条件执行；unregister 收尾的唯一写点）
 	const unsettled = collectActivePendingIds(entries, { idPrefix: BACKGROUND_TASK_ID_PREFIX });
@@ -223,6 +238,44 @@ function settledPendingReason(
 }
 
 /**
+ * 读 session JSONL 文件的落盘条目（补投判据事实源的磁盘读侧；动机与退化语义见
+ * 文件头「判据事实源磁盘化」段）。pi _persist 落盘形态 = 每条 entry 一行 JSON，
+ * 逐行 parse 产出与 getEntries() 同构的条目数组。
+ *
+ * 容错口径（与 collectJournaledDeliveryIds「data 畸形按无条目」宽容口径同源）：
+ *  - ENOENT → []：session 首条对话消息前文件不存在（pi _persist 首次 flush 前置
+ *    条件），常态非异常；
+ *  - 其他读错误（EACCES 等）→ warn + []：磁盘事实不可得按「无条目」，判据放行
+ *    补投、重投由 port 幂等预检收敛（方向 = 暴露问题类，warn 即修复信号——按
+ *    内存账退化则会沿幽灵态静默吞掉补投，即 A1 缺陷形态本身）；
+ *  - 脏行（JSON.parse 失败 / 非对象）单行跳过（JSONL 容错纪律，protocol
+ *    pending-entries 扫描同款）。
+ */
+export function readSessionFileEntries(sessionFile: string): unknown[] {
+	let text: string;
+	try {
+		text = readFileSync(sessionFile, "utf8");
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") return [];
+		logger.warn("reap-notify journal facts read failed; disk entries treated as empty (candidates retry at next reconcile edge)", {
+			detail: { sessionFile, err: toErrorMessage(err) },
+		});
+		return [];
+	}
+	const entries: unknown[] = [];
+	for (const line of text.split("\n")) {
+		if (line.trim() === "") continue;
+		try {
+			const parsed: unknown = JSON.parse(line);
+			if (parsed !== null && typeof parsed === "object") entries.push(parsed);
+		} catch {
+			// 脏行跳过：单行损坏不拖垮整盘事实（与 readRegistry 解析纪律同向）
+		}
+	}
+	return entries;
+}
+
+/**
  * 终态通知对账补投（D2：registry 全集独立遍历，不挂 pending 差集循环——差集
  * 候选 = pending:register 还挂着的任务，而「exit 边沿 unregister 已写、通知从未
  * 投出」下差集为空，挂靠即永久漏补）。逐候选经 port.deliver（幂等键 = taskId）：
@@ -231,7 +284,7 @@ function settledPendingReason(
  * （session_start / 切回 / agent_settled）幂等重投。
  *
  * 成本预检短路（D2/D7：agent_settled 高频边沿的常态成本下界）：registry 侧事实
- * （终态 ∧ 非 killed）先行短路，无候选不触 entries 全扫描；候选在册才扫 entries，
+ * （终态 ∧ 非 killed）先行短路，无候选不触 session 文件读取；候选在册才读盘，
  * 且一次遍历产出送达痕迹 + 投递日志两集合（不双倍扫描）。
  */
 function deliverReapNotifications(
@@ -239,6 +292,7 @@ function deliverReapNotifications(
 	dataDir: string,
 	sessionId: string,
 	entries: unknown[],
+	sessionFile: string | undefined,
 	result: ReconcileResult,
 ): void {
 	if (deliver === undefined) {
@@ -251,7 +305,7 @@ function deliverReapNotifications(
 	if (registry.size === 0) return;
 
 	// ① 预检短路：registry 侧事实（终态 ∧ 非 killed；痕迹/日志两事实预检置空 =
-	// 只查 registry 侧）——无候选即早退，entries 全扫描不发生（判据单一：预检与
+	// 只查 registry 侧）——无候选即早退，session 文件读不发生（判据单一：预检与
 	// 终判共用同一骨架映射 registryFacts，不另立第二套真值）
 	const candidates: RegistryEntry[] = [];
 	for (const entry of registry.values()) {
@@ -259,9 +313,20 @@ function deliverReapNotifications(
 	}
 	if (candidates.length === 0) return;
 
-	// ② 候选在册：一次遍历 entries 产出两事实集合，终判三重判据
-	const delivered = collectDeliveredTaskIds(entries);
-	const journaled = collectJournaledDeliveryIds(entries);
+	// ② 候选在册：事实源磁盘化（文件头「判据事实源磁盘化」段）——痕迹/日志两集合
+	// 从 session JSONL 落盘条目产出（一次读文件，两集合单次遍历）；sessionFile 缺席
+	// （no-persist 形态，磁盘事实结构性不存在）退化内存 entries——该形态 _persist
+	// no-op 恒成功、无幽灵态，内存账即完整事实。
+	const factEntries = sessionFile !== undefined
+		? readSessionFileEntries(sessionFile)
+		: entries;
+	if (sessionFile === undefined) {
+		logger.warn("reap-notify journal facts fell back to in-memory entries: session file unavailable (no-persist session?); ghost in-memory entries would misjudge journaled/delivered facts", {
+			detail: { sessionId },
+		});
+	}
+	const delivered = collectDeliveredTaskIds(factEntries);
+	const journaled = collectJournaledDeliveryIds(factEntries);
 	for (const entry of candidates) {
 		if (!isReapNotifyCandidate(entry, delivered, journaled)) continue;
 		const receipt = deliver(

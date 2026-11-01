@@ -158,7 +158,19 @@ async function runReconcileMaintenance(
 	});
 	try {
 		const sessionId = ctx.sessionManager.getSessionId();
-		await reconcilePendingEntries(pi, resolveTaijiDataDir(), sessionId, ctx.sessionManager.getEntries());
+		// 补投判据事实源磁盘化（A1 产品缺陷修复）：getSessionFile() 传 session JSONL
+		// 路径，痕迹/日志判据读落盘条目而非内存账——pi _appendEntry persist 失败
+		// 无回滚的幽灵内存 entry 曾使 journaled 误真、补投静默失效（机制见
+		// pending-reconcile.ts 文件头「判据事实源磁盘化」段）；no-persist 形态
+		// getSessionFile() 返回 undefined，对账侧退化内存账（现状行为）。
+		await reconcilePendingEntries(
+			pi,
+			resolveTaijiDataDir(),
+			sessionId,
+			ctx.sessionManager.getEntries(),
+			undefined,
+			ctx.sessionManager.getSessionFile(),
+		);
 	} catch (err) {
 		// 对账失败无害：僵尸 register 停留差集，下一 session_start 幂等重查
 		logger.warn("session_start pending reconcile failed; zombies retried next session start", {
