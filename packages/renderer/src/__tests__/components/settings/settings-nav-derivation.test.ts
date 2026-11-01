@@ -4,7 +4,7 @@
  * 三视角（TEST-STRATEGY §3）：
  * - 构建者：注册表派生分组结构 / contentMaxWidth 声明字段 / 分区键映射（纯逻辑断言）；
  * - 使用者：SettingsModal mount 后 nav 分区 testid 可点、点击切换分区（DOM 交互断言）；
- * - 观察者：首屏 17 内置 nav 项 + 三组头渲染；无组插件声明归「其他」组（组头可见）。
+ * - 观察者：首屏 18 内置 nav 项 + 三组头渲染；无组插件声明归「其他」组（组头可见）。
  *
  * 插件声明注入 = getContentSlotRegistry().loadExternal（U4 通路落地后同一入口；
  * 本单元直接驱动注册表，声明形状 = ContentSlotDeclaration）。
@@ -76,7 +76,7 @@ beforeEach(() => {
 // teleport 到 body 的挂载件用例间必须卸载（焦点断言/跨用例 DOM 污染）
 enableAutoUnmount(afterEach)
 
-describe('设置页内置 17 项注册表派生（§6.1 设置页行）', () => {
+describe('设置页内置 18 项注册表派生（§6.1 设置页行）', () => {
   it('三个内置分组 + 组内分区键顺序与既有 navGroups 一致（零行为变化基线）', () => {
     const groups = useSettingsNavGroups().value
     expect(groups.map((g) => g.group)).toEqual(['resources', 'input-appearance', 'env-system'])
@@ -84,7 +84,7 @@ describe('设置页内置 17 项注册表派生（§6.1 设置页行）', () => 
     expect(keys).toEqual([
       'provider', 'skill', 'agent', 'extension', 'mcp', 'preset',
       'appearance', 'system-prompt', 'rename-session', 'tts', 'terminal',
-      'worktree', 'update', 'remote-access', 'network-proxy', 'system', 'usage',
+      'worktree', 'update', 'remote-access', 'network-proxy', 'system', 'smart-context-compaction', 'usage',
     ])
   })
 
@@ -178,13 +178,13 @@ function mountModal(props: { open: boolean; initialSection?: string } = { open: 
 }
 
 describe('SettingsModal nav 渲染（观察者 + 使用者视角）', () => {
-  it('首屏：17 内置分区 testid 全渲染 + 三组头文案可见（§6.1 内置项零行为变化）', () => {
+  it('首屏：18 内置分区 testid 全渲染 + 三组头文案可见（§6.1 内置项零行为变化）', () => {
     mountModal()
     const body = document.body
     const keys = [
       'provider', 'skill', 'agent', 'extension', 'mcp', 'preset',
       'appearance', 'system-prompt', 'rename-session', 'tts', 'terminal',
-      'worktree', 'update', 'remote-access', 'network-proxy', 'system', 'usage',
+      'worktree', 'update', 'remote-access', 'network-proxy', 'system', 'smart-context-compaction', 'usage',
     ]
     for (const key of keys) {
       expect(body.querySelector(`[data-testid="settings-nav-${key}"]`)).not.toBeNull()

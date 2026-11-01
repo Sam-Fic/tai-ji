@@ -334,6 +334,8 @@ export interface SettingsTransport {
   setSmartContextThresholds(thresholds: number[]): Promise<ServerMessageMap['config.smartContextThresholds']>
   /** 排除模型列表（每条完整 provider/modelId，runtime 侧过滤去重） */
   setSmartContextExcludedModels(models: string[]): Promise<ServerMessageMap['config.smartContextExcludedModels']>
+  /** 后台压缩触发线（0-1 窗口占比，runtime 侧钳制；reply 回钳制后生效值） */
+  setSmartContextAutoCompactThresholdRatio(ratio: number): Promise<ServerMessageMap['config.smartContextAutoCompactThresholdRatio']>
   /** codemode 开关（ok:false = settings.json 损坏拒入，error + corruption 同源错误态；两态信封不 reject） */
   setCodemodeEnabled(enabled: boolean): Promise<CodemodeSetEnabledResult>
 

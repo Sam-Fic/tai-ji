@@ -78,6 +78,7 @@ import {
   setSmartContextCompactModel as setSmartContextCompactModelImpl,
   setSmartContextThresholds as setSmartContextThresholdsImpl,
   setSmartContextExcludedModels as setSmartContextExcludedModelsImpl,
+  setSmartContextAutoCompactThresholdRatio as setSmartContextAutoCompactThresholdRatioImpl,
   type SmartContextConfigSnapshot,
 } from './smart-context-config.js'
 import {
@@ -483,6 +484,11 @@ export class ConfigService implements IConfigService {
   /** 设置排除模型列表（过滤无 "/" 条目去重后写入 excludedModels 字段）。 */
   setSmartContextExcludedModels(models: string[]): void {
     setSmartContextExcludedModelsImpl(models)
+  }
+
+  /** 设置后台压缩触发线（读改写 autoCompactThresholdRatio 字段；非有限数归默认 0.9、有限数钳制 [0,1]）。 */
+  setSmartContextAutoCompactThresholdRatio(ratio: number): void {
+    setSmartContextAutoCompactThresholdRatioImpl(ratio)
   }
 
   // ── LLM 网络代理配置（llm-network-proxy 设计，单行委托 network-proxy-config）──

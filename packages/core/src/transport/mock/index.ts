@@ -2162,6 +2162,7 @@ const mockSmartContextPrefs = {
   compactModel: '',
   reminderThresholds: [] as number[],
   excludedModels: [] as string[],
+  autoCompactThresholdRatio: 0.9,
 }
 // codemode 开关内存态（默认开 = 产品裁决「常驻默认打开」，与启动迁移写 +codemode 后的读侧一致）
 const mockCodemodePrefs = { enabled: true }
@@ -2260,6 +2261,7 @@ export const settings = {
       compactModel: mockSmartContextPrefs.compactModel,
       reminderThresholds: [...mockSmartContextPrefs.reminderThresholds],
       excludedModels: [...mockSmartContextPrefs.excludedModels],
+      autoCompactThresholdRatio: mockSmartContextPrefs.autoCompactThresholdRatio,
     }
   },
   async setSmartContextEnabled(enabled: boolean): Promise<ServerMessageMap['config.smartContextEnabled']> {
@@ -2277,6 +2279,10 @@ export const settings = {
   async setSmartContextExcludedModels(models: string[]): Promise<ServerMessageMap['config.smartContextExcludedModels']> {
     mockSmartContextPrefs.excludedModels = [...models]
     return { models: [...models] }
+  },
+  async setSmartContextAutoCompactThresholdRatio(ratio: number): Promise<ServerMessageMap['config.smartContextAutoCompactThresholdRatio']> {
+    mockSmartContextPrefs.autoCompactThresholdRatio = ratio
+    return { ratio }
   },
   // ── [C3] system 设置项字段（codemode）：内存态 fixture（不持久化；损坏错误态为 runtime
   //    读侧 raw 预检行为，mock 模式文件系统态不模拟，恒 corruption=null）──

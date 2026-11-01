@@ -1071,12 +1071,13 @@ describe("mock-settings-system-fields", () => {
   })
 
   describe('mock settings system 字段（智能上下文）：set 回显 + 写后读回 + 拷贝隔离', () => {
-    it('enabled / compactModel / thresholds / excludedModels', async () => {
+    it('enabled / compactModel / thresholds / excludedModels / autoCompactThresholdRatio', async () => {
       expect(await settings.setSmartContextEnabled(true)).toEqual({ enabled: true })
       expect(await settings.setSmartContextCompactModel('glm-flash')).toEqual({ model: 'glm-flash' })
 
       expect(await settings.setSmartContextThresholds([80, 92])).toEqual({ thresholds: [80, 92] })
       expect(await settings.setSmartContextExcludedModels(['a/b', 'c/d'])).toEqual({ models: ['a/b', 'c/d'] })
+      expect(await settings.setSmartContextAutoCompactThresholdRatio(0.85)).toEqual({ ratio: 0.85 })
 
       const cfg = await settings.getSmartContextConfig()
       expect(cfg).toEqual({
@@ -1084,6 +1085,7 @@ describe("mock-settings-system-fields", () => {
         compactModel: 'glm-flash',
         reminderThresholds: [80, 92],
         excludedModels: ['a/b', 'c/d'],
+        autoCompactThresholdRatio: 0.85,
       })
     })
 

@@ -477,6 +477,15 @@ const MUTATION_RPC_REGISTRY: readonly MutationRegistryEntry[] = [
     effectiveFields: ['models'],
   },
   {
+    // C3 独立压缩设置页：触发线 setter——原样落盘（非有限数归默认 / 越界钳制在 helper 层，
+    // 与 renameMaxLength 同款归一位置），reply 读回钳制后生效值
+    type: 'config.setSmartContextAutoCompactThresholdRatio',
+    branch: 'verbatim',
+    contract: 'echo-value',
+    replyKey: 'config.smartContextAutoCompactThresholdRatio',
+    effectiveFields: ['ratio'],
+  },
+  {
     // provider CRUD 的 set 通道：set 原值落盘 + reply 回显 providerId + broadcastProviderList
     // 全量广播（provider-message-handler handleSetProvider）。quotaAutoEnabled（optional，仅新建
     // 分支携带）供 renderer toast（provider-edit-form save 消费 → ProviderPage

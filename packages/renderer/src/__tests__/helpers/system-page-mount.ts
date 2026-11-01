@@ -40,7 +40,8 @@ export function createSettingsApiMocks() {
     setSmartContextCompactModel: vi.fn(),
     setSmartContextThresholds: vi.fn(),
     setSmartContextExcludedModels: vi.fn(),
-    // 消费方：SystemSmartContextSection（SystemPage mount 时消费，缺导出即 "No export defined"）；rename 相关桩另供 RenameSessionPage 测试经 settings-transport-stub 覆盖
+    setSmartContextAutoCompactThresholdRatio: vi.fn(),
+    // 消费方：SmartContextCompactionPage（独立菜单页 mount 时消费，缺导出即 "No export defined"）；rename 相关桩另供 RenameSessionPage 测试经 settings-transport-stub 覆盖
   }
 }
 
@@ -119,14 +120,24 @@ export function modelFixtures(): ModelInfo[] {
 /** smart-context 默认提醒阈值档（绝对 token 数，与 extension DEFAULT_REMINDER_THRESHOLDS 一致）。 */
 const SMART_CONTEXT_DEFAULT_THRESHOLDS = [400_000, 500_000, 600_000] as const
 
+/** smart-context 默认触发线（与 extension DEFAULT_AUTO_COMPACT_THRESHOLD_RATIO / runtime 基底一致）。 */
+const SMART_CONTEXT_DEFAULT_AUTO_COMPACT_RATIO = 0.9
+
 /** smart-context 默认配置 fixture（与 extension 默认值一致）。 */
 export function smartContextFixture(excludedModels: string[] = []): {
   enabled: boolean
   compactModel: string
   reminderThresholds: number[]
   excludedModels: string[]
+  autoCompactThresholdRatio: number
 } {
-  return { enabled: true, compactModel: '', reminderThresholds: [...SMART_CONTEXT_DEFAULT_THRESHOLDS], excludedModels }
+  return {
+    enabled: true,
+    compactModel: '',
+    reminderThresholds: [...SMART_CONTEXT_DEFAULT_THRESHOLDS],
+    excludedModels,
+    autoCompactThresholdRatio: SMART_CONTEXT_DEFAULT_AUTO_COMPACT_RATIO,
+  }
 }
 
 /** 注入非空 providers/models 到 settings store 单例（模块级 store 的 ref，直接写 .value）。 */
@@ -179,4 +190,5 @@ export function resetSettingsApiMocks(m: SettingsApiMocks): void {
   m.setSmartContextCompactModel.mockResolvedValue({ model: '' })
   m.setSmartContextThresholds.mockResolvedValue({ thresholds: [...SMART_CONTEXT_DEFAULT_THRESHOLDS] })
   m.setSmartContextExcludedModels.mockResolvedValue({ models: [] })
+  m.setSmartContextAutoCompactThresholdRatio.mockResolvedValue({ ratio: SMART_CONTEXT_DEFAULT_AUTO_COMPACT_RATIO })
 }

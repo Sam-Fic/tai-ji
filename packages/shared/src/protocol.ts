@@ -341,6 +341,7 @@ export type ClientMessageType =
   | 'config.setSmartContextCompactModel'
   | 'config.setSmartContextThresholds'
   | 'config.setSmartContextExcludedModels'
+  | 'config.setSmartContextAutoCompactThresholdRatio'
   // codemode 开关命令对（codemode 设计 D1/A1）：get 读激活态（损坏错误态经 corruption 字段返回），
   // set 写增量条目（损坏拒入走 ok:false 信封）；payload/reply 形状见 codemode 域登记段。
   | 'config.getCodemodeEnabled' | 'config.setCodemodeEnabled'
@@ -1420,6 +1421,8 @@ export interface ClientMessageMap {
   'config.setSmartContextThresholds': { thresholds: number[] }
   /** config.setSmartContextExcludedModels：设置排除模型列表（每条完整 provider/modelId，runtime 侧过滤去重）。 */
   'config.setSmartContextExcludedModels': { models: string[] }
+  /** config.setSmartContextAutoCompactThresholdRatio：设置后台压缩触发线（0-1 窗口占比，runtime 侧钳制）。 */
+  'config.setSmartContextAutoCompactThresholdRatio': { ratio: number }
   /** config.getCodemodeEnabled：读取 codemode 开关（无参数）。 */
   'config.getCodemodeEnabled': Record<string, never>
   /** config.setCodemodeEnabled：设置 codemode 开关目标态（写入语义归 runtime 侧字段域）。 */
@@ -1874,6 +1877,7 @@ export type ServerMessageType =
   | 'config.smartContextCompactModel'
   | 'config.smartContextThresholds'
   | 'config.smartContextExcludedModels'
+  | 'config.smartContextAutoCompactThresholdRatio'
   // codemode 开关命令对 reply（codemode 设计 D1/A1）：get 回激活态 + 损坏错误态；set 回两态信封
   //（成功终态 / 损坏拒入含 error + corruption）。
   | 'config.codemodeEnabled' | 'config.codemodeSetEnabled'
@@ -3341,12 +3345,13 @@ export interface ServerMessageMapBase {
   'config.renamePrompt': RenamePromptReply
   /** config.renameMaxLength：config.getRenameMaxLength / config.setRenameMaxLength 的 reply（归一后生效值，默认 50）。 */
   'config.renameMaxLength': { maxLength: number }
-  /** config.smartContextConfig：config.getSmartContextConfig 的 reply（compactModel 为 "provider/modelId" 复合串，空串 = 未设置；thresholds 为 token 绝对数）。 */
+  /** config.smartContextConfig：config.getSmartContextConfig 的 reply（compactModel 为 "provider/modelId" 复合串，空串 = 未设置；thresholds 为 token 绝对数；ratio 为 0-1 窗口占比）。 */
   'config.smartContextConfig': {
     enabled: boolean
     compactModel: string
     reminderThresholds: number[]
     excludedModels: string[]
+    autoCompactThresholdRatio: number
   }
   /** config.smartContextEnabled：config.setSmartContextEnabled 的 reply。 */
   'config.smartContextEnabled': { enabled: boolean }
@@ -3356,6 +3361,8 @@ export interface ServerMessageMapBase {
   'config.smartContextThresholds': { thresholds: number[] }
   /** config.smartContextExcludedModels：config.setSmartContextExcludedModels 的 reply（过滤去重后）。 */
   'config.smartContextExcludedModels': { models: string[] }
+  /** config.smartContextAutoCompactThresholdRatio：config.setSmartContextAutoCompactThresholdRatio 的 reply（钳制后生效值，非有限数归默认 0.9）。 */
+  'config.smartContextAutoCompactThresholdRatio': { ratio: number }
   /** config.codemodeEnabled：config.getCodemodeEnabled 的 reply（corruption 非空 = settings.json 损坏错误态，此时 enabled 恒 false）。 */
   'config.codemodeEnabled': CodemodeEnabledResult
   /** config.codemodeSetEnabled：config.setCodemodeEnabled 的 reply（两态信封：写后落盘终态 / 损坏拒入）。 */
@@ -4063,6 +4070,7 @@ export interface ReplyPayloadMap {
   'config.setSmartContextCompactModel': ServerMessageMap['config.smartContextCompactModel']
   'config.setSmartContextThresholds': ServerMessageMap['config.smartContextThresholds']
   'config.setSmartContextExcludedModels': ServerMessageMap['config.smartContextExcludedModels']
+  'config.setSmartContextAutoCompactThresholdRatio': ServerMessageMap['config.smartContextAutoCompactThresholdRatio']
   // codemode 开关命令对（codemode 设计 D1/A1）
   'config.getCodemodeEnabled': ServerMessageMap['config.codemodeEnabled']
   'config.setCodemodeEnabled': ServerMessageMap['config.codemodeSetEnabled']

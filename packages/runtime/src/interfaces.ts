@@ -702,6 +702,8 @@ export interface IConfigService {
   setSmartContextThresholds(thresholds: number[]): void
   /** 设置排除模型列表（过滤无 "/" 条目去重后写入 excludedModels 字段）。 */
   setSmartContextExcludedModels(models: string[]): void
+  /** 设置后台压缩触发线（读改写 extension 配置文件的 autoCompactThresholdRatio 字段，钳制 [0,1]）。 */
+  setSmartContextAutoCompactThresholdRatio(ratio: number): void
   // ── LLM 网络代理配置（llm-network-proxy 设计 §5 U3）──
   /** 读取网络代理配置快照（ext-config 文件，缺失/坏 JSON/字段非法回默认值）。 */
   getNetworkProxyConfig(): NetworkProxyConfig
