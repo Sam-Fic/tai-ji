@@ -4146,9 +4146,11 @@ export interface ReplyPayloadMap {
   // mutation-reply-contract.test.ts 的 MUTATION_RPC_REGISTRY（分支一 effective-value，
   // 生效值断言锚 effective 分支）——subagent 域新增 mutation 须同批登记，漏登记即红）。
   'subagent.setModel': ServerMessageMap['subagent.modelSet']
-  // session.compactBackground：触发受理 ack——fire-and-forget 触发型 mutation，无生效值/
-  // 回显字段；payload 不读（session.handoff 同款 ack 型登记，同名帧 payload 见 ServerMessageMap）。
-  // 启动失败走 error envelope 'compact_start_failed'（MUTATION_RPC_REGISTRY ack-exempt 档登记）。
+  // session.compactBackground：触发受理 ack——动作型 RPC（触发后台压缩，无配置状态改值、
+  // 无生效值/回显字段），在 MUTATION_RPC_REGISTRY 登记范围之外（ADR-0065 谓词只框定配置
+  // 状态 mutation；动作型非候选，无需豁免登记）。payload 不读（reply 只确认指令已受理送达，
+  // 同名帧 payload 见 ServerMessageMap）；失败走 error envelope 'compact_start_failed'
+  //（投递前命令在册校验失败 / pi 拉活失败 / 传输级失败——renderer toast compactStartFailed 消费）。
   'session.compactBackground': void
   'session.delete': void          // reply session.deleted
   'session.deleteByCwd': BatchDeleteResult // reply session.deletedByCwd（前端读 deleted/failed 列表）

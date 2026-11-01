@@ -917,6 +917,16 @@ describe("工具路径启动（U5：互斥 + 门控前置，跳过触发线/熔�
 		expect(noProbeManager.isActive()).toBe(false);
 	});
 
+	it("manual 来源跳过门控：enabled=false 时手动启动成功（用户意志，与旧 pi 原生手动压缩对齐）", async () => {
+		const bgState = createBackgroundCompactionState();
+		// enabled=false：tool 来源抛「门控拒绝」（上一用例锁定），manual 来源照常启动
+		const manager = makeBgManager(bgState, normalizeSmartContextConfig({ enabled: false }));
+		mockedCall.mockResolvedValue({ ok: true, text: "s", usage: { input: 1, output: 2 } });
+		expect(manager.startForTool(makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE), undefined, "manual")).toBe(true);
+		expect(mockedCall).toHaveBeenCalledTimes(1);
+		await bgState.active?.done;
+	});
+
 	it("互斥（RL1）：任务进行中 startForTool 返回 false（U4 契约幂等语义）且不触 LLM；收尾回空闲", async () => {
 		const gen = holdGeneration();
 		const bgState = createBackgroundCompactionState();

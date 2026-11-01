@@ -1356,7 +1356,7 @@
   },
   {
     "id": "PS-61",
-    "claim": "manual 压缩掐断语义与事件序：AgentSession.compact() 第一步 await this.abort() 掐当前 run（abort() 只置 activeRun.abortController 为 aborted——不清 steering/followUp 队列、无补投副作用），JSDoc 明文 \"Manual compaction never retries or continues the interrupted agent turn\"；被掐 run 以 agent_end（末条 assistant message stopReason='aborted'，实机探针 P-reason(c) 断言）收尾且该事件先于 compaction_start 到达（compact 头 await this.abort() 先于 compaction_start emit 的 await 序形态 + P-reason(c) 真机实测）。承重（delivery-ownership-kernel D4② 续跑判定条件①③）：runtime 以「reason==='manual' + compaction_start 前 turn 被掐断」判定补投续跑——pi 若在 abort 后自动续跑/补投队列，续跑投递即变重复起 run",
+    "claim": "manual 压缩掐断语义与事件序：AgentSession.compact() 第一步 await this.abort() 掐当前 run（abort() 只置 activeRun.abortController 为 aborted——不清 steering/followUp 队列、无补投副作用），JSDoc 明文 \"Manual compaction never retries or continues the interrupted agent turn\"；被掐 run 以 agent_end（末条 assistant message stopReason='aborted'，实机探针 P-reason(c) 断言）收尾且该事件先于 compaction_start 到达（compact 头 await this.abort() 先于 compaction_start emit 的 await 序形态 + P-reason(c) 真机实测）。taiji 现无 manual compact 触发方（GUI 手动压缩走 smart-context 后台管理器不掐 turn；runtime 侧 compact 调用已删）——本条作为 pi 原生行为边界登记保留：compact() 掐断当前 run 且不补投，任何未来消费方（恢复同步 manual 压缩链）须以此边界为前提，pi 若在 abort 后自动续跑/补投队列即行为漂移",
     "piAnchor": [
       {
         "pkg": "pi-agent-core",
@@ -1379,7 +1379,7 @@
   },
   {
     "id": "PS-62",
-    "claim": "compaction_start/end 的 reason 词表恒三值：manual 路径（AgentSession.compact）start 恒字面量 'manual'（全 dist 唯一 emit 点），end 成功/aborted 两处均 'manual'；auto 路径 _runAutoCompaction(reason, willRetry) 变量透传，reason 仅 'threshold'（阈值命中，2 调用点）与 'overflow'（溢出/截断恢复，2 调用点）两值。auto 路径收尾有 hasQueuedMessages→continue 补投（设计 F6：不丢消息、不掐 turn，无需续跑），与 manual 路径无补投（PS-61）互为对照——runtime 续跑判定以 reason==='manual' 识别「掐 turn 的压缩」；pi 引入第四 reason 值或改 manual 判定名时判定侧须复审（漏判 = 不续跑；误判 = 多一条被投递内核吸收的投递）。pi 1.0.0 附带变化：threshold 字面量调用点 2→3（新增 _checkCompaction post-run 复查段超限即压缩路径），词表仍恒三值、auto 路径仍变量透传",
+    "claim": "compaction_start/end 的 reason 词表恒三值：manual 路径（AgentSession.compact）start 恒字面量 'manual'（全 dist 唯一 emit 点），end 成功/aborted 两处均 'manual'；auto 路径 _runAutoCompaction(reason, willRetry) 变量透传，reason 仅 'threshold'（阈值命中，2 调用点）与 'overflow'（溢出/截断恢复，2 调用点）两值。auto 路径收尾有 hasQueuedMessages→continue 补投（设计 F6：不丢消息、不掐 turn，无需续跑），与 manual 路径无补投（PS-61）互为对照——taiji 消费方 = event-adapter 原样透传 reason → interpreter 广播 session.compacting{reason}，前端 compacting 浮层文案区分手动（'manual'）/自动（'threshold'|'overflow'）；pi 引入第四 reason 值或改 manual 判定名时，runtime 类型 PiCompactionReason（pi-protocol.ts）与前端文案分派须复审。pi 1.0.0 附带变化：threshold 字面量调用点 2→3（新增 _checkCompaction post-run 复查段超限即压缩路径），词表仍恒三值、auto 路径仍变量透传",
     "piAnchor": [
       {
         "pkg": "pi-coding-agent",

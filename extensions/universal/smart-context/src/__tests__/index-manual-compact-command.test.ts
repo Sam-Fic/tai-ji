@@ -8,10 +8,13 @@
 //      runtime reply → renderer toast 承载，不双投）；
 //   ② customInstructions percent 编码可逆：args = encodeURIComponent 原文（含空格/引号），
 //      解码后透传给压缩生成（input.customInstructions）；
-//   ③ busy 幂等：后台任务进行中再触发 → 通知通道投递「进行中已并入」回执（口径与
+//   ③ busy 幂等：后台任务进行中再触发 → 即时通知通道投递「进行中已并入」回执（口径与
 //      compact_context 工具 busy 回执一致），不重复启动；
-//   ④ 启动失败（门控拒绝 / args 解码失败）：通知通道投递失败文案（含原因），不上抛
-//      （重抛只进 pi emitError 日志，通知才是用户可达呈现）。
+//   ④ 启动失败（门控拒绝 / args 解码失败）：即时通知通道投递失败文案（含原因），不上抛
+//      （重抛只进 pi emitError 日志，通知才是用户可达呈现）。③④ 走即时投递形态
+//      （sendSmartContextImmediateNotice，无 deliverAs）：回执承载用户刚敲的 /compact 的
+//      即时失败事实，nextTurn pending 队列会推迟到下一条用户消息后才可见——失败提示与
+//      触发动作脱钩（renderer 受理 toast 已先行，延迟到达 = 假成功观感）。
 //
 // runtime 侧契约（RPC handler 受理即 reply / session-service fire-and-forget 投递）由
 // runtime 包单测覆盖；两侧以命令名字面量对齐（跨包字符串契约，改名必须同批）。
@@ -170,6 +173,13 @@ function noticeCalls(sendMessage: ReturnType<typeof vi.fn>): string[] {
 		.map((c) => (c[0] as { content: string }).content);
 }
 
+/** 通知投递选项判据：锁 smart-context 通知的投递形态（即时回执 vs nextTurn 通道）。 */
+function noticeOptions(sendMessage: ReturnType<typeof vi.fn>): unknown[] {
+	return sendMessage.mock.calls
+		.filter((c) => (c[0] as { customType?: string }).customType === SMART_CONTEXT_NOTICE_CUSTOM_TYPE)
+		.map((c) => c[1]);
+}
+
 describe("__taiji_compact__ 命令（C2 手动触发入口）", () => {
 	beforeEach(() => {
 		callSameModelCompactionMock.mockReset();
@@ -224,27 +234,29 @@ describe("__taiji_compact__ 命令（C2 手动触发入口）", () => {
 		expect(notices).toHaveLength(1);
 		expect(notices[0]).toContain("后台压缩进行中");
 		expect(notices[0]).toContain("已并入该任务");
+		// busy 回执走即时投递（无 deliverAs，空闲即达不进 nextTurn pending 队列）
+		expect(noticeOptions(sendMessage)[0]).toEqual({ triggerTurn: false });
 		expect(callSameModelCompactionMock).toHaveBeenCalledTimes(1); // 未重复启动
 		release({ summary: "s", firstKeptEntryId: "e3", tokensBefore: 30_000 });
 	});
 
-	it("门控拒绝（enabled=false）→ 通知通道失败文案，不上抛", async () => {
+	it("门控关闭（enabled=false）不拦 manual：手动显式命令 = 用户意志，照常启动（门控只拦 auto/tool）", async () => {
 		const { handler, sendMessage } = await setup({ enabled: false });
-		await expect(handler("", makeCtx(makeCompressibleEntries()))).resolves.toBeUndefined();
-		const notices = noticeCalls(sendMessage);
-		expect(notices).toHaveLength(1);
-		expect(notices[0]).toContain("后台压缩未启动");
-		expect(notices[0]).toContain("不在放行范围");
-		expect(callSameModelCompactionMock).not.toHaveBeenCalled();
+		await handler("", makeCtx(makeCompressibleEntries()));
+		// manual 来源跳过 isGatingActive（与旧 pi 原生手动压缩对齐：旧链不受 smart-context
+		// 开关影响）——enabled=false 时照样启动，无失败通知
+		expect(callSameModelCompactionMock).toHaveBeenCalledTimes(1);
+		expect(noticeCalls(sendMessage)).toHaveLength(0);
 	});
 
-	it("args 解码失败（非法 percent 编码）→ 通知通道失败文案（协议异常可操作呈现）", async () => {
+	it("args 解码失败（非法 percent 编码）→ 即时通知通道失败文案（协议异常可操作呈现）", async () => {
 		const { handler, sendMessage } = await setup();
 		await handler("%zz-not-percent", makeCtx(makeCompressibleEntries()));
 		const notices = noticeCalls(sendMessage);
 		expect(notices).toHaveLength(1);
 		expect(notices[0]).toContain("后台压缩未启动");
 		expect(notices[0]).toContain("解码失败");
+		expect(noticeOptions(sendMessage)[0]).toEqual({ triggerTurn: false });
 		expect(callSameModelCompactionMock).not.toHaveBeenCalled();
 	});
 });

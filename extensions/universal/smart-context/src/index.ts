@@ -29,7 +29,9 @@
  *
  * 通知投递路径（D4①，delivery-ownership-kernel）：四类通知全部经 notices.ts 的
  * sendSmartContextNotice 走 nextTurn（随下一次 prompt 注入、不自起 run）——通知 run 不再
- * 抢占用户消息投递跑道；被压缩掐断的 turn 由 runtime 续跑投递兜底（D4②）。
+ * 抢占用户消息投递跑道。手动触发失败回执（start-failed/busy）走即时投递（见 notices.ts
+ * sendSmartContextImmediateNotice）。后台压缩全程不掐 turn（C2 后手动压缩不经 pi 同步
+ * compact 链，进行中回合不受影响），无「被压缩掐断的 turn」需续跑兜底。
  */
 
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -48,6 +50,7 @@ import {
 	type TakeoverState,
 } from "./compact-handler.js";
 import {
+	sendSmartContextImmediateNotice,
 	sendSmartContextNotice,
 	buildCompactBusyNotice,
 	buildCompactCompleteNotice,
@@ -323,10 +326,14 @@ export default function smartContextExtension(pi: ExtensionAPI): void {
 	// 后拼在命令名后（percent 编码无空格/换行，args = 首空格后原样余串可逆还原；空串 =
 	// 未携带，pi 切分语义 PS-63 实锚 agent-session.js:1604-1608）。
 	// 回执路径三分：启动成功不发通知（GUI 提示由 runtime reply → renderer toast 承载，
-	// 不双投）；false = 后台任务进行中，幂等回执经通知通道投递（口径与 compact_context
-	// 工具 busy 回执一致）；抛错 = 非互斥失败（门控拒绝/探测失败/无可压内容），失败文案
-	// 经通知通道投递后不再重抛——重抛只进 pi emitError 日志、用户不可见，通知才是用户
-	// 可达的失败呈现（发送失败由 sendSmartContextNotice 内吞留痕，与其他通知同语义）。
+	// 不双投）；false = 后台任务进行中，幂等回执经即时通知通道投递（口径与 compact_context
+	// 工具 busy 回执一致）；抛错 = 非互斥失败（门控拒绝/探测失败/无可压内容），失败文案经
+	// 即时通知通道投递后不再重抛——重抛只进 pi emitError 日志、用户不可见，通知才是用户
+	// 可达的失败呈现（发送失败由投递函数内吞留痕，与其他通知同语义）。两条回执走即时
+	// 形态（sendSmartContextImmediateNotice）：承载的是用户刚敲的 /compact 的即时失败
+	// 事实，nextTurn 的 pending 队列会把它推迟到用户下一条消息后才可见——失败提示与
+	// 触发动作脱钩，且 renderer 受理 toast（「后台压缩已启动」）已先行，延迟到达 = 假成功
+	// 观感；即时形态空闲即达，与受理 toast 形成「受理≠成功、失败独立可见」的完整回执链。
 	pi.registerCommand("__taiji_compact__", {
 		description:
 			"Internal: start a background compaction on demand (taiji runtime manual /compact trigger; args = encodeURIComponent(customInstructions), empty = none)",
@@ -337,7 +344,7 @@ export default function smartContextExtension(pi: ExtensionAPI): void {
 					customInstructions = decodeURIComponent(args.trim());
 				} catch (error) {
 					debugLog(`__taiji_compact__ args decode failed: ${toErrorMessage(error)}`);
-					sendSmartContextNotice(
+					sendSmartContextImmediateNotice(
 						pi,
 						buildCompactStartFailureNotice(`压缩指引参数解码失败（预期百分号编码）：${toErrorMessage(error)}`),
 						"compact-start-failed",
@@ -350,12 +357,12 @@ export default function smartContextExtension(pi: ExtensionAPI): void {
 				started = background.startForTool(_ctx, customInstructions, "manual");
 			} catch (error) {
 				debugLog(`__taiji_compact__ start failed: ${toErrorMessage(error)}`);
-				sendSmartContextNotice(pi, buildCompactStartFailureNotice(toErrorMessage(error)), "compact-start-failed");
+				sendSmartContextImmediateNotice(pi, buildCompactStartFailureNotice(toErrorMessage(error)), "compact-start-failed");
 				return;
 			}
 			if (!started) {
 				debugLog("__taiji_compact__ busy: background compaction already running (idempotent receipt)");
-				sendSmartContextNotice(pi, buildCompactBusyNotice(), "compact-busy");
+				sendSmartContextImmediateNotice(pi, buildCompactBusyNotice(), "compact-busy");
 			}
 		},
 	});

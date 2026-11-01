@@ -170,6 +170,13 @@ const BG_RECONCILE_COMMAND = '/__taiji_bg_reconcile__'
 const BG_COMPACT_COMMAND = '/__taiji_compact__'
 
 /**
+ * 同一命令的注册名形态（无斜杠）：pi getCommands 返回的扩展命令 name = 注册名
+ * （invocationName，无 `/` 前缀），sendSystemCommand 的 requireCommand 在册探测按此
+ * 形态匹配（与 BG_COMPACT_COMMAND 同一契约的两个形态，改名必须同批）。
+ */
+const BG_COMPACT_COMMAND_NAME = '__taiji_compact__'
+
+/**
  * subagent 流状态数据源端口（B2 subagent-stream-chunk §4.1，session.getSubagentStreamState
  * RPC 的数据源路由半）：(sessionId, recordId) → SubagentTee 内存三元组只读派生视图，undefined =
  * 该 record 无在管 tee（未注册 / child exit 已清理 / session 不匹配）。实现由组合根注入
@@ -1051,21 +1058,27 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
    */
   flushPendingBashResults(sessionId: string): void { this.dispatcher.flushPendingBashResults(sessionId) }
   /**
-   * 手动触发后台压缩（C2 /compact 后台化，接口契约见 interfaces.ts）：取活跃 client 后
-   * 经内部命令 fire-and-forget 送达 smart-context 扩展后台管理器（先例 maybeTriggerBgReconcile
-   * 的 `/__taiji_bg_reconcile__` 同形态）。
+   * 手动触发后台压缩（C2 /compact 后台化，接口契约见 interfaces.ts）：经 sendSystemCommand
+   * 旁路通道送达 smart-context 扩展后台管理器（requireCommand = 命令在册校验）。
    *
-   * 执行形态：不 await prompt（压缩全程分钟级，本方法只承载受理语义，reply 立即返回）；
-   * .catch 防 unhandled rejection——投递失败只 console.warn（扩展侧启动失败经通知通道
-   * 自行呈现；投递层失败 = pi 进程级异常，由 session 状态面兜底，无请求级回执可挂）。
+   * 投递前校验（C2 复审）：`__taiji_compact__` 命令未注册（smart-context 扩展未加载）时
+   * pi 会把 `/__taiji_compact__ ...` 原文当用户消息直投 LLM——requireCommand 探测
+   * （client.getCommands 实时查询）fail-closed 拦截该形态，命令串永不进模型（E14 结构性
+   * 防线）。旁路通道自带 ensureActive 交接（pi 被空闲回收时先拉活）+ touchActivity。
+   *
+   * 执行形态：await 命令执行（内部命令同步跑、不进模型、无 turn，命令 handler 只做启动
+   * 判定不等待压缩全程——毫秒级）后 reply，受理语义保持。非 'sent' 终态（extension-missing /
+   * pi-reclaimed / error）抛错 → RPC reject → renderer useChat.compactBackground catch 后
+   * toast compactStartFailed 兜底（受理≠成功，扩展侧启动失败的独立通知在 smart-context
+   * 侧即时投递，两回执链互补）。
    */
   async compactBackground(sessionId: string, customInstructions?: string): Promise<void> {
-    const client = this.pm.getClient(sessionId)
-    if (!client) throw new Error(`Session ${sessionId} not found`)
     const args = customInstructions !== undefined ? ` ${encodeURIComponent(customInstructions)}` : ''
-    void client.prompt(`${BG_COMPACT_COMMAND}${args}`).catch((err) => {
-      console.warn(`[session-service] background compact trigger failed (sessionId=${sessionId}):`, err)
-    })
+    const outcome = await this.sendSystemCommand(sessionId, `${BG_COMPACT_COMMAND}${args}`, BG_COMPACT_COMMAND_NAME)
+    if (outcome.kind === 'sent') return
+    // 三终态各自的恢复动作：extension-missing 查扩展启用状态；pi-reclaimed 重试或重启会话；error 看传输错误详情
+    const detail = outcome.kind === 'extension-missing' ? '压缩扩展（smart-context）未加载或命令未注册，命令未发送。请检查扩展是否启用后重试。' : outcome.kind === 'pi-reclaimed' ? '会话引擎无法激活（pi 进程拉起失败），命令未发送。请稍后重试或重启会话。' : `命令投递失败：${outcome.message ?? '未知错误'}`
+    throw new Error(`后台压缩未启动：${detail}`)
   }
   setSendMessageHook(hook: SendMessageHook): void { this.dispatcher.setSendMessageHook(hook) }
   listPersistedSessions(): SessionGroup[] { return this.scanner.listPersistedSessions() }

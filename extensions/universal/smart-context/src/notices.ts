@@ -1,5 +1,6 @@
 /**
- * 通知注入唯一出口（D4①：四类通知 nextTurn 化；C1：后台压缩落盘信号即时 append 化）。
+ * 通知注入唯一出口（D4①：四类通知 nextTurn 化；C1：后台压缩落盘信号即时 append 化；
+ * C2 复审：手动触发失败回执即时可见化）。
  *
  * 四类通知（压缩结果 onComplete / onError、阈值提醒、model_select 跨界与降档两条）从
  * `sendUserMessage(deliverAs:'steer'|'followUp')` 改为 `sendMessage(deliverAs:'nextTurn',
@@ -11,6 +12,13 @@
  * 落盘信号（C1 分界行实时化）是第五条投递，走另一形态：`sendMessage({triggerTurn:false})`
  * 无 deliverAs——空闲时 pi 立即 append 并 emit message_start/end（runtime 即时收到
  * customStart 帧合成对话流分界行），streaming 窗口内挂回合尾（秒级延迟，接受）。
+ *
+ * 手动触发失败回执（compact-start-failed / compact-busy，C2 `__taiji_compact__` 命令路径）
+ * 走同一即时形态但可见（sendSmartContextImmediateNotice）：nextTurn 的 pending 队列在用户
+ * 下一条消息前不可见，而这两条回执承载的是用户刚敲的 /compact 的即时失败事实——延迟到
+ * 下一条消息才出现 = 失败提示与触发动作脱钩（用户已看到「后台压缩已启动」的受理 toast，
+ * 假成功观感）。即时形态空闲即达（pi sendCustomMessage 空闲分支直接 append+emit），
+ * streaming 中挂回合尾（与 C1 信号同窗接受）。
  *
  * 语义定性（设计 D4「C-ext-19 合规定性」四类两分）：
  * - 阈值提醒 / model_select 两条 = **提醒语义**（与 scheduler 2026-09-15 逐条处理完毕先例同类：
@@ -69,6 +77,33 @@ export function sendSmartContextNotice(
 			details: { source },
 		},
 		{ triggerTurn: false, deliverAs: "nextTurn" },
+	);
+}
+
+/**
+ * 注入一条即时可见的 smart-context 通知（失败回执路径，不自起 run）。
+ *
+ * 与 sendSmartContextNotice 的差别只在投递选项：无 deliverAs + `{triggerTurn:false}`——
+ * pi sendCustomMessage 该形态空闲时直接 `_appendCustomMessage`（立即 append + emit，
+ * 不进 `_pendingNextTurnMessages`），streaming 窗口内挂回合尾（`_pendingCustomMessages`
+ * 回合尾 flush）。消费方是「用户刚敲的命令立刻失败」类回执（compact-start-failed /
+ * compact-busy）：即时事实用即时通道，nextTurn 的「常驻至下一条用户消息」对它是延迟
+ * 而非必达（消息内容与触发动作脱钩）。字段载荷（customType/display/details.source）
+ * 与 nextTurn 形态完全一致——runtime 分诊不区分投递路径。
+ */
+export function sendSmartContextImmediateNotice(
+	pi: Pick<ExtensionAPI, "sendMessage">,
+	text: string,
+	source: SmartContextNoticeSource,
+): void {
+	pi.sendMessage(
+		{
+			customType: SMART_CONTEXT_NOTICE_CUSTOM_TYPE,
+			content: text,
+			display: true,
+			details: { source },
+		},
+		{ triggerTurn: false },
 	);
 }
 
@@ -157,8 +192,12 @@ export function buildCompactFailureNotice(input: CompactFailureNoticeInput): str
 /**
  * 后台压缩落盘信号（C1 分界行实时化）：落盘成功这个事实点的即时通知。消费方是 taiji
  * runtime（分诊 customType + details.source 命中后取 compaction entry 合成对话流分界行帧），
- * 不是用户——content 空串 + display:false（对话流不渲染；details 是信号唯一载荷，不进
- * LLM 上下文）。投递形态 `{triggerTurn:false}` 无 deliverAs：空闲时 pi 立即 append 并 emit
+ * 不是用户——content 空串 + display:false（对话流不渲染，details 是信号唯一载荷）。
+ * LLM 上下文路径（实况链）：该 custom_message entry 进 pi 的上下文投影，convertToLlm 将
+ * role:"custom" 无条件转 user 消息（不读 display）——content 空串即映射为空文本 text block，
+ * provider transform 层过滤空 text block（不耗 token、不报错），对模型净效果为零。这是
+ * 空串 content 的结构性无害，不是「不进上下文」的协议保证——content 若非空即对模型可见。
+ * 投递形态 `{triggerTurn:false}` 无 deliverAs：空闲时 pi 立即 append 并 emit
  * message_start/end（agent-session sendCustomMessage 末段分支），runtime 即时收到 customStart
  * 帧；streaming 窗口内挂回合尾（秒级延迟，接受并登记）。
  *

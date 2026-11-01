@@ -780,9 +780,13 @@ describe('SessionService · dispatcher', () => {
   })
 
   describe('compactBackground', () => {
-    it('fire-and-forget：prompt 发内部命令后立即返回（不等待压缩全程）+ 零 compaction 广播', async () => {
-      const client = setup.mountClient('sid-c')
-      await setup.service.compactBackground('sid-c')
+    /** seedSession 的在册命令清单（requireCommand 探测命中形态：pi getCommands 返回注册名，无斜杠）。 */
+    const compactRegistered = [{ name: '__taiji_compact__', description: '', source: 'extension' }]
+
+    it('命令在册 → prompt 发内部命令（受理即回，不等待压缩全程）+ 零 compaction 广播', async () => {
+      // seedSession 注册完整 session 态（ensureActive 快路径需要 sessions Map 条目）+ 命令在册
+      const { id, client } = await setup.seedSession({ commands: compactRegistered })
+      await setup.service.compactBackground(id)
       expect(client.prompt).toHaveBeenCalledTimes(1)
       expect(client.prompt).toHaveBeenCalledWith('/__taiji_compact__')
       // 零 compaction 广播（后台压缩不发 pi compaction 事件；生命周期态由 interpreter 从
@@ -798,9 +802,9 @@ describe('SessionService · dispatcher', () => {
     })
 
     it('customInstructions percent 编码进命令 args（含空格/引号可逆还原）', async () => {
-      const client = setup.mountClient('sid-c')
+      const { id, client } = await setup.seedSession({ commands: compactRegistered })
       const instructions = '保留 关键决策 与 "引号" 内容'
-      await setup.service.compactBackground('sid-c', instructions)
+      await setup.service.compactBackground(id, instructions)
       const sent = vi.mocked(client.prompt).mock.calls[0]?.[0] ?? ''
       // 命令名后恰一个空格 + 编码段（无原始空格——pi args = 首空格后原样余串）
       expect(sent.startsWith('/__taiji_compact__ ')).toBe(true)
@@ -809,16 +813,24 @@ describe('SessionService · dispatcher', () => {
       expect(decodeURIComponent(encoded)).toBe(instructions)
     })
 
-    it('prompt reject → 不上抛（fire-and-forget .catch 吞掉留痕）', async () => {
-      const client = setup.mountClient('sid-c')
-      vi.mocked(client.prompt).mockRejectedValueOnce(new Error('pi gone'))
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      await expect(setup.service.compactBackground('sid-c')).resolves.toBeUndefined()
-      warnSpy.mockRestore()
+    it('命令不在册（扩展未加载）→ 拒发抛错且 prompt 零调用（命令串不进模型，E14 结构性防线）', async () => {
+      // seedSession 不传 commands = getCommands 返回 []（smart-context 扩展未加载形态）
+      const { id, client } = await setup.seedSession()
+      await expect(setup.service.compactBackground(id)).rejects.toThrow(/后台压缩未启动.*smart-context/)
+      // 拒发 = 命令串未被 prompt 直投（pi 未注册命令时会把原文当用户消息发给模型）
+      expect(client.prompt).not.toHaveBeenCalled()
     })
 
-    it('throws when session has no client', async () => {
-      await expect(setup.service.compactBackground('missing')).rejects.toThrow('Session missing not found')
+    it('prompt reject（传输级失败）→ 上抛（renderer toast compactStartFailed 承载）', async () => {
+      const { id, client } = await setup.seedSession({ commands: compactRegistered })
+      vi.mocked(client.prompt).mockRejectedValueOnce(new Error('pi gone'))
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      await expect(setup.service.compactBackground(id)).rejects.toThrow('后台压缩未启动')
+      errSpy.mockRestore()
+    })
+
+    it('session 无注册（ensureActive 拉活失败）→ 抛错（pi-reclaimed 回执文案）', async () => {
+      await expect(setup.service.compactBackground('missing')).rejects.toThrow('后台压缩未启动')
     })
   })
 })

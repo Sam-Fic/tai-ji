@@ -1529,8 +1529,10 @@ export class SessionMessageHandler {
   /**
    * 手动压缩触发（C2 /compact 后台化）：受理即 reply（压缩本体在 pi 进程后台执行，
    * 完成事实经 smart-context 落盘信号链（对话流分界行）与完成通知到达，不经请求级
-   * 回执承载）。扩展侧判定结果（启动成功 / 进行中幂等 / 门控拒绝）经 smart-context
-   * 通知通道呈现，本 handler 只负责把指令送达 pi。
+   * 回执承载）。本 handler 负责把指令送达 pi（compactBackground 内 sendSystemCommand
+   * requireCommand 在册校验 fail-closed——smart-context 扩展未加载时命令串不进模型，
+   * 拒发经 compact_start_failed error envelope 回执）。扩展侧判定结果（启动成功 /
+   * 进行中幂等 / 启动失败）经 smart-context 通知通道呈现（失败回执即时投递）。
    */
   async handleSessionCompactBackground(msg: Extract<ClientMessage, { type: 'session.compactBackground' }>, ws: WsType): Promise<void> {
     const compactId = msg.payload.sessionId

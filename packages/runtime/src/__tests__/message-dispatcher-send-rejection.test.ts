@@ -462,8 +462,9 @@ describe('MessageDispatcher —— W1 abortBash/sendBash 竞态检查', () => {
 // [2026-09 测试舰队审查 r2-21] 'W3 compact busy 预检' describe 已删（重复替身归并）。
 // [C2 /compact 后台化] 来源 message-dispatcher-compact.test.ts 的整段（makeCompactMocks 工厂
 // + dispatcher.compact 五用例）随同步 compact 链退役：dispatcher 不再持有 compact 编排
-//（GUI 手动压缩 = session.compactBackground fire-and-forget，session-service 直投内部命令），
-// 「零 compaction 广播」约束由 interpreter 事件驱动架构结构性保证（M4），无独立断言面。
+//（GUI 手动压缩 = session.compactBackground 经 sendSystemCommand 旁路投递内部命令，
+// requireCommand 在册探测 fail-closed），「零 compaction 广播」约束由 interpreter 事件驱动
+// 架构结构性保证（M4），无独立断言面。
 
 // ════════════════ 来源: message-dispatcher-require-command.test.ts ════════════════
 

@@ -13,7 +13,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import { COMPACTION_ENTRY_APPENDED_SOURCE, SMART_CONTEXT_NOTICE_CUSTOM_TYPE } from "@zhushanwen/extension-protocol";
 
-import { buildCompactCompleteNotice, buildCompactFailureNotice, sendCompactionPersistSignal } from "../notices.js";
+import {
+	buildCompactCompleteNotice,
+	buildCompactFailureNotice,
+	sendCompactionPersistSignal,
+	sendSmartContextImmediateNotice,
+	sendSmartContextNotice,
+} from "../notices.js";
 
 describe("buildCompactCompleteNotice（U5/D6 完成通知：压缩前后 token 数与模式）", () => {
 	it("含模式、前后 token（formatK 口径）与下一条消息生效语义", () => {
@@ -80,6 +86,44 @@ describe("落盘信号词表值锚定（extension-protocol SSOT，contract.notif
 
 	it("COMPACTION_ENTRY_APPENDED_SOURCE === 'compaction-entry-appended'（runtime 分诊 details.source 字节契约）", () => {
 		expect(COMPACTION_ENTRY_APPENDED_SOURCE).toBe("compaction-entry-appended");
+	});
+});
+
+describe("sendSmartContextImmediateNotice（C2 手动触发失败回执：即时可见投递）", () => {
+	function makePi(): { pi: ExtensionAPI; sendMessage: ReturnType<typeof vi.fn> } {
+		const sendMessage = vi.fn();
+		return { pi: { sendMessage } as unknown as ExtensionAPI, sendMessage };
+	}
+
+	it("投递选项无 deliverAs（{triggerTurn:false}）——空闲即达，不进 nextTurn pending 队列", () => {
+		const { pi, sendMessage } = makePi();
+		sendSmartContextImmediateNotice(pi, "后台压缩未启动：原因", "compact-start-failed");
+		const [message, options] = sendMessage.mock.calls[0]!;
+		// toEqual 全量锁投递选项：无 deliverAs = pi sendCustomMessage 分支序不走
+		// _pendingNextTurnMessages（nextTurn 通道），空闲分支直接 _appendCustomMessage
+		// （立即 append + emit，用户当下可见——失败回执与触发动作不脱钩）
+		expect(options).toEqual({ triggerTurn: false });
+		// 消息载荷与 nextTurn 形态一致：customType 单源常量 + display:true 可见 + source 定位
+		expect(message).toEqual({
+			customType: SMART_CONTEXT_NOTICE_CUSTOM_TYPE,
+			content: "后台压缩未启动：原因",
+			display: true,
+			details: { source: "compact-start-failed" },
+		});
+	});
+
+	it("busy 回执同一即时形态（source=compact-busy）", () => {
+		const { pi, sendMessage } = makePi();
+		sendSmartContextImmediateNotice(pi, "后台压缩进行中", "compact-busy");
+		const [, options] = sendMessage.mock.calls[0]!;
+		expect(options).toEqual({ triggerTurn: false });
+	});
+
+	it("对照：sendSmartContextNotice（其余通知）保持 nextTurn 不动", () => {
+		const { pi, sendMessage } = makePi();
+		sendSmartContextNotice(pi, "后台压缩完成", "compact-complete");
+		const [, options] = sendMessage.mock.calls[0]!;
+		expect(options).toEqual({ triggerTurn: false, deliverAs: "nextTurn" });
 	});
 });
 

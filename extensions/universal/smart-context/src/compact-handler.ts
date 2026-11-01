@@ -758,11 +758,13 @@ export function createBackgroundCompactionManager(
 	 * 命令（GUI 手动 /compact，C2 /compact 后台化）共用入口。
 	 *
 	 * 与自动入口的判定差异（§3.1 入口矩阵①）：
-	 * - 保留：互斥（撞上返回 false——工具按幂等处理，U4 契约唯一 false 语义）与
-	 *   isGatingActive 门控前置（工具 execute 已现场校验过，此处防御双检——配置热改
+	 * - 保留：互斥（撞上返回 false——工具按幂等处理，U4 契约唯一 false 语义）；tool 来源
+	 *   保留 isGatingActive 门控前置（工具 execute 已现场校验过，此处防御双检——配置热改
 	 *   窗口兜底）；
-	 * - 跳过：触发线（D4 ratio×窗口——显式请求即用户/agent 决策，不受自动触发线约束）
-	 *   与独立熔断（SI5：熔断仅停自动触发）；
+	 * - 跳过：manual 来源门控（手动显式命令 = 用户意志，与旧 pi 原生手动压缩行为对齐——
+	 *   旧链不受 smart-context 开关影响；enabled/excludedModels 只拦 agent 自主决策的
+	 *   auto/tool 路径）；触发线（D4 ratio×窗口——显式请求即用户/agent 决策，不受自动
+	 *   触发线约束）与独立熔断（SI5：熔断仅停自动触发）；
 	 * - 不做膨胀段拦截：膨胀段（D3/SI6）防的是「同段反复自动触发反复烧钱」，工具显式
 	 *   请求是知情决策（可带 custom_instructions 改善摘要），不拦——落盘侧收缩校验仍会
 	 *   放弃膨胀结果并经通知回报。
@@ -773,7 +775,7 @@ export function createBackgroundCompactionManager(
 	 * 由命令 handler catch 后经通知通道投递失败文案。
 	 *
 	 * source 标记（观测口径）：tool = compact_context 工具；manual = GUI 手动 /compact
-	 * 经 runtime `__taiji_compact__` 命令触发。仅进 debugLog 观测，不影响判定与通知。
+	 * 经 runtime `__taiji_compact__` 命令触发。除 manual 跳门控外不影响判定与通知。
 	 */
 	const startForTool = (
 		ctx: ExtensionContext,
@@ -784,7 +786,7 @@ export function createBackgroundCompactionManager(
 
 		const config = loadConfigFn();
 		const modelId = getCurrentModelId(ctx.model);
-		if (!isGatingActive(config, modelId)) {
+		if (source !== "manual" && !isGatingActive(config, modelId)) {
 			throw new Error(
 				`compact_context 后台压缩启动被门控拒绝：当前模型 ${modelId} 不在放行范围（enabled/excludedModels）。` +
 					`可在 taiji 设置页或 smart-context-ext-config skill 中调整后重试。`,
