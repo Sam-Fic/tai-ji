@@ -1073,6 +1073,25 @@ export class SessionLifecycle implements ISessionRegistry {
   }
 
   /**
+   * scheduler 任务库分片 best-effort 清点（删除链辅助，btw 线直删与级联两处共用候选）：
+   * 线 jsonl 已落盘 → 分片键取线自身 sessionId；失败仅留痕不阻断删除主链（线本体已删，
+   * 残留分片仅占盘，重试删除即补清——与级联段 ⑤ 的 failed 收敛同口径）；冷线不在册
+   * （session meta 取不到真值）→ cwd 缺失，分片路径不可推导，按 skipped 留痕不猜路径。
+   * 独立成方法 = best-effort 降级细节不掺入 delete 主链控制流（复杂度门禁同步受益）。
+   */
+  private purgeSchedulerShardForDeletedSession(sessionId: string, session: IManagedSessionRecord | undefined): void {
+    if (session === undefined || session.cwd === undefined) {
+      console.warn(`[session-lifecycle] scheduler task-store shard purge skipped for btw line ${sessionId}: cwd unavailable (cold line not in registry)`)
+      return
+    }
+    try {
+      purgeSchedulerShard(getPiAgentDir(), session.cwd, sessionId)
+    } catch (e: unknown) {
+      console.warn(`[session-lifecycle] scheduler task-store shard purge failed for btw line ${sessionId} (residual shard only occupies disk; retry the delete to clear it): ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  /**
    * 删除会话（D5 删除链四段，2026-10-17 收敛）：
    *   ① 收殓——cascade 内 await reapBackgroundTasks（杀在途后台进程 + 写 orphaned
    *      终态），先于一切删除动作；
@@ -1144,22 +1163,9 @@ export class SessionLifecycle implements ISessionRegistry {
       // 取线自身 sessionId（不走 no-session 归一），故 btw 线有自有分片、且键与 delete()
       // 入参 sessionId 同值。本分支先于级联 cwd 解析与 cascadeDeletedSessionContent
       // return，段 ⑤ 整体够不到——不在此处补清点则分片孤儿留盘（#88「可按会话回收
-      // 部分已消解」对该路径不成立）。
-      // best-effort：失败 warn 不阻断删除主链（closeLine 已完成，重试删除即补清），
-      // 形态与级联段 ⑤ 的 failed 收敛同口径。
-      if (session !== undefined && session.cwd !== undefined) {
-        try {
-          purgeSchedulerShard(getPiAgentDir(), session.cwd, sessionId)
-        } catch (e: unknown) {
-          // best-effort 降级：清点失败仅留痕，不阻断删除主链（closeLine 已完成，线本体已删；
-          // 残留分片仅占盘，重试删除即补清——与级联段 ⑤ 的 failed 收敛同口径）。
-          console.warn(`[session-lifecycle] scheduler task-store shard purge failed for btw line ${sessionId} (residual shard only occupies disk; retry the delete to clear it): ${e instanceof Error ? e.message : String(e)}`)
-        }
-      } else {
-        // 冷线不在册（session meta 取不到真值）→ cwd 缺失：分片路径不可推导，按 skipped
-        // 留痕不猜路径（与 scheduler-shard-purge.ts 的 skipped 分支同纪律）。
-        console.warn(`[session-lifecycle] scheduler task-store shard purge skipped for btw line ${sessionId}: cwd unavailable (cold line not in registry)`)
-      }
+      // 部分已消解」对该路径不成立）。best-effort 细节（失败留痕 / 冷线 skipped）在
+      // purgeSchedulerShardForDeletedSession 单点。
+      this.purgeSchedulerShardForDeletedSession(sessionId, session)
       return
     }
     // [M4-a] 级联 cwd 解析（两分支各取真值；分支抛出则级联随之跳过——btw 线目录由

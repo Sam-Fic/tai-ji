@@ -41,7 +41,6 @@
       "packages/runtime/src/services/session/replicated-state.ts",
       "packages/runtime/src/services/session/replicated-states.config.ts",
       "packages/runtime/src/services/session/restore-seeding.ts",
-      "packages/runtime/src/services/session/resume-decision.ts",
       "packages/runtime/src/services/session/revoke-orchestrator.ts",
       "packages/runtime/src/services/session/rolling-restart.ts",
       "packages/runtime/src/services/session/runtime-checkpoint.ts",
