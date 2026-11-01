@@ -7,6 +7,10 @@
  * extension 的 llm-shared getConfigPath('smart-context') 路径契约对齐）。RMW / 锁协议
  * 走共享基建 ext-config-rmw.ts（与 setRenameModel 逐字同一实现——该文件同样被 runtime
  * 与 extension 双方 RMW）。
+ *
+ * 与 extension 配置的两层关系（dmg-r2-3 登记，勿再混为一谈）：
+ * - 落盘默认基底 = extension DEFAULT_SMART_CONTEXT_CONFIG 的**全字段**镜像（机器对拍锁定）；
+ * - GUI 快照 = 其中 4 个 GUI 可编辑字段的扁平视图（ratio 无控件、无消费方，见接口注）。
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -16,6 +20,15 @@ import { extractRefString, rmwExtConfigField } from './ext-config-rmw.js'
 /**
  * GUI 侧的 smart-context 配置快照（extension 侧 SmartContextConfig 的扁平视图：
  * compactModel 折叠为 "provider/modelId" 复合串，空串 = 未设置/跟随当前会话模型）。
+ *
+ * 射程登记（dmg-r2-3）：本快照只含 4 个 GUI 可编辑字段——设置页「智能上下文压缩」节
+ * 的四个控件（开关 / 压缩模型 / 三档提醒阈值 / 排除模型）。autoCompactThresholdRatio
+ * 刻意不进快照：该字段无 GUI 控件、无 runtime 消费方，只由 extension 侧读取生效
+ * （ADR-0182 D4 的后台自动压缩触发线，extensions/universal/smart-context/src/
+ * compact-handler.ts）。它在落盘默认基底里全量镜像（见 smartContextDefaultBase 注），
+ * 随 RMW 写出的文件完整携带，extension 读取侧 normalize 不依赖 runtime 补默认。
+ * 将来若加 GUI 控件，字段入快照时须同步 packages/shared 的 config.smartContextConfig
+ * reply 契约（否则 reply 会携带协议未声明字段）。
  */
 export interface SmartContextConfigSnapshot {
   enabled: boolean
@@ -40,9 +53,21 @@ function defaultThresholds(): number[] {
 const SMART_CONTEXT_MAX_THRESHOLD_TIERS = 3
 
 /**
- * 落盘默认基底工厂（文件缺失/损坏时用，与 extension 的 DEFAULT_SMART_CONTEXT_CONFIG 一致：
- * extensions/universal/smart-context/src/pure.ts）。工厂形态保证每次全新对象/数组，
- * 各 RMW 写点不共享嵌套引用。
+ * 后台压缩触发线默认值（窗口 90%，与 extension 的 DEFAULT_AUTO_COMPACT_THRESHOLD_RATIO
+ * 一致：extensions/universal/smart-context/src/pure.ts:32；ADR-0182 D4）。
+ * 只进落盘默认基底、不进 GUI 快照——射程理由见 SmartContextConfigSnapshot 接口注。
+ */
+const SMART_CONTEXT_DEFAULT_AUTO_COMPACT_THRESHOLD_RATIO = 0.9
+
+/**
+ * 落盘默认基底工厂（文件缺失/损坏时用，与 extension 的 DEFAULT_SMART_CONTEXT_CONFIG
+ * **全字段**一致：extensions/universal/smart-context/src/pure.ts:50）——含
+ * autoCompactThresholdRatio（GUI 快照不含它，射程见 SmartContextConfigSnapshot 接口注）。
+ * 工厂形态保证每次全新对象/数组，各 RMW 写点不共享嵌套引用。
+ *
+ * 全字段一致性由 src/services/__tests__/smart-context-config-default-parity.test.ts
+ * 机器对拍锁定（import extension 侧 pure.ts 源码叶子逐字段深相等）：extension 将来加
+ * 字段而本基底没跟上时该测试红灯，防再次单侧漂移。
  */
 function smartContextDefaultBase(): Record<string, unknown> {
   return {
@@ -50,6 +75,7 @@ function smartContextDefaultBase(): Record<string, unknown> {
     compactModel: { type: 'ref', ref: '' },
     reminderThresholds: defaultThresholds(),
     excludedModels: [],
+    autoCompactThresholdRatio: SMART_CONTEXT_DEFAULT_AUTO_COMPACT_THRESHOLD_RATIO,
   }
 }
 
@@ -77,7 +103,10 @@ function normalizeExcludedModels(raw: unknown): string[] {
   return [...new Set(raw.filter((m): m is string => typeof m === 'string' && m.includes('/')))]
 }
 
-/** 默认快照（与 smartContextDefaultBase 对应的扁平视图）。 */
+/**
+ * 默认快照（GUI 可编辑四字段的默认值；落盘基底是全字段镜像，见
+ * smartContextDefaultBase——两者的字段集差异是刻意的 GUI 快照射程，非漏抄）。
+ */
 function smartContextDefaults(): SmartContextConfigSnapshot {
   return {
     enabled: true,

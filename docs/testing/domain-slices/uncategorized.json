@@ -121,6 +121,7 @@
     "packages/runtime/src/__tests__/wiring-bundle.test.ts",
     "packages/runtime/src/services/__tests__/config-service.test.ts",
     "packages/runtime/src/services/__tests__/provider-config-bundle.test.ts",
+    "packages/runtime/src/services/__tests__/smart-context-config-default-parity.test.ts",
     "packages/runtime/src/services/background-task/background-task-bundle.test.ts",
     "packages/runtime/src/services/background-task/background-task-service.test.ts",
     "packages/runtime/src/services/migration/__tests__/migration-bundle.test.ts",
