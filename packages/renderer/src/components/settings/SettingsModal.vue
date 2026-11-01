@@ -142,6 +142,7 @@
               <NetworkPage v-else-if="view === 'network-proxy'" />
               <SystemPromptPage v-else-if="view === 'system-prompt'" />
               <RenameSessionPage v-else-if="view === 'rename-session'" />
+              <SmartContextCompactionPage v-else-if="view === 'smart-context-compaction'" />
               <TerminalPage v-else-if="view === 'terminal'" :is-active="activeView === 'terminal'" />
               <McpSection v-else-if="view === 'mcp'" />
               <PiPresetsPage v-else-if="view === 'preset'" />
@@ -189,6 +190,7 @@ import PluginContributionsPage from './extension/PluginContributionsPage.vue'
 import SystemPage from './system/SystemPage.vue'
 import SystemPromptPage from './system/SystemPromptPage.vue'
 import RenameSessionPage from './rename-session/RenameSessionPage.vue'
+import SmartContextCompactionPage from './smart-context/SmartContextCompactionPage.vue'
 import TerminalPage from './terminal/TerminalPage.vue'
 import McpSection from './mcp/McpSection.vue'
 import WorktreePage from './worktree/WorktreePage.vue'
@@ -204,7 +206,7 @@ import NetworkPage from './network/NetworkPage.vue'
 const isMac = detectPlatform() === 'mac'
 
 /**
- * nav 分组数据源（容器扩展点统一 §6.1/U8）：容器位注册表派生（内置 17 项为注册表初始项，
+ * nav 分组数据源（容器扩展点统一 §6.1/U8）：容器位注册表派生（内置 18 项为注册表初始项，
  * lib/content-slots.ts 登记；插件声明的 settings.section 项按 group 字段归组、无组归
  * 「其他」），此处只做展示塑形（分组头文案 / 分区键 / label / icon 组件解析）。
  * [HISTORICAL] 曾为 navGroups as const 静态三分组 17 项（demo NAV_GROUPS 形态），分区

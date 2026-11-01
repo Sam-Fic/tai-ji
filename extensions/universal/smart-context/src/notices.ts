@@ -1,5 +1,6 @@
 /**
- * 通知注入唯一出口（D4①：四类通知 nextTurn 化）。
+ * 通知注入唯一出口（D4①：四类通知 nextTurn 化；C1：后台压缩落盘信号即时 append 化；
+ * C2 复审：手动触发失败回执即时可见化）。
  *
  * 四类通知（压缩结果 onComplete / onError、阈值提醒、model_select 跨界与降档两条）从
  * `sendUserMessage(deliverAs:'steer'|'followUp')` 改为 `sendMessage(deliverAs:'nextTurn',
@@ -7,6 +8,17 @@
  * docs/pi-semantics.json#PS-06，verifiedWith 以该登记为准：`_pendingNextTurnMessages` 常驻至被消费、不自起 run），结构上消除「通知自起 run 抢占用户
  * 消息投递跑道」——故事 C 根因：压缩完成后通知 run 与用户消息同时 prompt()，后到者被 pi 以
  * `Agent is already processing` 拒绝。
+ *
+ * 落盘信号（C1 分界行实时化）是第五条投递，走另一形态：`sendMessage({triggerTurn:false})`
+ * 无 deliverAs——空闲时 pi 立即 append 并 emit message_start/end（runtime 即时收到
+ * customStart 帧合成对话流分界行），streaming 窗口内挂回合尾（秒级延迟，接受）。
+ *
+ * 手动触发失败回执（compact-start-failed / compact-busy，C2 `__taiji_compact__` 命令路径）
+ * 走同一即时形态但可见（sendSmartContextImmediateNotice）：nextTurn 的 pending 队列在用户
+ * 下一条消息前不可见，而这两条回执承载的是用户刚敲的 /compact 的即时失败事实——延迟到
+ * 下一条消息才出现 = 失败提示与触发动作脱钩（用户已看到「后台压缩已启动」的受理 toast，
+ * 假成功观感）。即时形态空闲即达（pi sendCustomMessage 空闲分支直接 append+emit），
+ * streaming 中挂回合尾（与 C1 信号同窗接受）。
  *
  * 语义定性（设计 D4「C-ext-19 合规定性」四类两分）：
  * - 阈值提醒 / model_select 两条 = **提醒语义**（与 scheduler 2026-09-15 逐条处理完毕先例同类：
@@ -20,16 +32,24 @@
  * 注入——pi 内建 overflow/threshold 自动压缩兜底在场，无人在场时上下文可能持续增长。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+	COMPACTION_ENTRY_APPENDED_SOURCE,
+	SMART_CONTEXT_NOTICE_CUSTOM_TYPE,
+} from "@zhushanwen/extension-protocol";
 
+import { debugLog } from "./compact-handler.js";
 import { formatK } from "./pure.js";
 
-/** 通知的 customType（taiji 侧按此识别 system 消息来源；pi TUI display 恒 true）。 */
-export const SMART_CONTEXT_NOTICE_CUSTOM_TYPE = "smart-context";
+// customType 单源在 extension-protocol（runtime 分诊同源消费），此处 re-export 保持既有
+// import 路径（本扩展历史消费方）不变
+export { SMART_CONTEXT_NOTICE_CUSTOM_TYPE };
 
 /** 通知来源（进 details.source，排障定位用）。 */
 export type SmartContextNoticeSource =
 	| "compact-complete"
 	| "compact-failed"
+	| "compact-busy"
+	| "compact-start-failed"
 	| "threshold-reminder"
 	| "model-switch"
 	| "model-downshift";
@@ -57,6 +77,33 @@ export function sendSmartContextNotice(
 			details: { source },
 		},
 		{ triggerTurn: false, deliverAs: "nextTurn" },
+	);
+}
+
+/**
+ * 注入一条即时可见的 smart-context 通知（失败回执路径，不自起 run）。
+ *
+ * 与 sendSmartContextNotice 的差别只在投递选项：无 deliverAs + `{triggerTurn:false}`——
+ * pi sendCustomMessage 该形态空闲时直接 `_appendCustomMessage`（立即 append + emit，
+ * 不进 `_pendingNextTurnMessages`），streaming 窗口内挂回合尾（`_pendingCustomMessages`
+ * 回合尾 flush）。消费方是「用户刚敲的命令立刻失败」类回执（compact-start-failed /
+ * compact-busy）：即时事实用即时通道，nextTurn 的「常驻至下一条用户消息」对它是延迟
+ * 而非必达（消息内容与触发动作脱钩）。字段载荷（customType/display/details.source）
+ * 与 nextTurn 形态完全一致——runtime 分诊不区分投递路径。
+ */
+export function sendSmartContextImmediateNotice(
+	pi: Pick<ExtensionAPI, "sendMessage">,
+	text: string,
+	source: SmartContextNoticeSource,
+): void {
+	pi.sendMessage(
+		{
+			customType: SMART_CONTEXT_NOTICE_CUSTOM_TYPE,
+			content: text,
+			display: true,
+			details: { source },
+		},
+		{ triggerTurn: false },
 	);
 }
 
@@ -109,6 +156,24 @@ function compactFailureReasonLine(input: CompactFailureNoticeInput): string {
 }
 
 /**
+ * 后台压缩进行中幂等回执文案（C2 手动触发入口：`__taiji_compact__` 命令在后台任务
+ * 进行中再触发时的用户回执）。口径与 compact_context 工具的 busy 回执逐字一致（同一
+ * 互斥事实，两入口共用一份事实描述）。
+ */
+export function buildCompactBusyNotice(): string {
+	return "后台压缩进行中，本次请求已并入该任务，无需重复触发。压缩在后台进行，你可以继续任何工作；完成后会收到一条结果消息。";
+}
+
+/**
+ * 后台压缩启动失败文案（C2 手动触发入口：`__taiji_compact__` 命令路径的非互斥失败
+ * ——门控拒绝 / appendCompaction 探测失败 / 无可压内容 / 参数解码失败）。reason 透传
+ * startForTool 的抛错文案（自身已含原因与恢复动作，此处只加前缀定位来源）。
+ */
+export function buildCompactStartFailureNotice(reason: string): string {
+	return `[smart-context] 后台压缩未启动：${reason}`;
+}
+
+/**
  * 后台压缩失败通知文案（D6：失败不静默）。熔断达到阈值时附加一行说明（同一次失败
  * 只投一条通知，熔断语义并入该条——不重复投递）。
  */
@@ -122,4 +187,40 @@ export function buildCompactFailureNotice(input: CompactFailureNoticeInput): str
 		lines.push("可稍后重试（调用 compact_context），或忽略本轮继续工作。");
 	}
 	return lines.join("\n");
+}
+
+/**
+ * 后台压缩落盘信号（C1 分界行实时化）：落盘成功这个事实点的即时通知。消费方是 taiji
+ * runtime（分诊 customType + details.source 命中后取 compaction entry 合成对话流分界行帧），
+ * 不是用户——content 空串 + display:false（对话流不渲染，details 是信号唯一载荷）。
+ * LLM 上下文路径（实况链）：该 custom_message entry 进 pi 的上下文投影，convertToLlm 将
+ * role:"custom" 无条件转 user 消息（不读 display）——content 空串即映射为空文本 text block，
+ * provider transform 层过滤空 text block（不耗 token、不报错），对模型净效果为零。这是
+ * 空串 content 的结构性无害，不是「不进上下文」的协议保证——content 若非空即对模型可见。
+ * 投递形态 `{triggerTurn:false}` 无 deliverAs：空闲时 pi 立即 append 并 emit
+ * message_start/end（agent-session sendCustomMessage 末段分支），runtime 即时收到 customStart
+ * 帧；streaming 窗口内挂回合尾（秒级延迟，接受并登记）。
+ *
+ * 失败语义（与通知投递失败同款，dmg-r1-2）：同步抛错只 debugLog 留痕、不上抛——调用点
+ * （BackgroundPersistCallbacks.onPersisted）在 persistBackgroundCompaction 的 appendCompaction
+ * try 块内，上抛会把已落盘的压缩改记失败并无谓递增熔断计数（成败事实被信号失败篡改）。
+ * 信号丢失的最坏结果 = 分界行退回「重开会话才可见」的原状，压缩本身不受影响。
+ */
+export function sendCompactionPersistSignal(
+	pi: Pick<ExtensionAPI, "sendMessage">,
+	compactionId: string | undefined,
+): void {
+	try {
+		pi.sendMessage(
+			{
+				customType: SMART_CONTEXT_NOTICE_CUSTOM_TYPE,
+				content: "",
+				display: false,
+				details: { source: COMPACTION_ENTRY_APPENDED_SOURCE, compactionId },
+			},
+			{ triggerTurn: false },
+		);
+	} catch (error) {
+		debugLog(`compaction persist signal delivery failed: ${error instanceof Error ? error.message : String(error)}`);
+	}
 }

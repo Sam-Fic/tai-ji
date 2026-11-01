@@ -12,10 +12,8 @@ export type {
   CommandSourceInfo,
   DefaultModelSource,
   WorktreeErrorCode, WorktreeUnknownErrorCode, WorktreeEnvelopeCode,
-  // session.compact 失败分类码（msg-pipeline-debloat D4-2）：runtime handler 落码 +
+  // hook 否决类分类码（message.send / message.bash / delivery.submit blocked）：runtime 落码 +
   // core useChat toast 抑制判别跨包共用
-  CompactErrorCode,
-  // hook 否决类分类码（message.send / message.bash / delivery.submit blocked）：同上跨包共用
   MessageBlockedCode,
   TerminalConfig, TerminalInstanceSummary, TerminalRoutingErrorCode, TerminalErrorCode, TerminalUnknownErrorCode, TerminalEnvelopeCode,
   SkillCacheScope, SkillCacheInvalidatedPayload,
@@ -242,7 +240,7 @@ export type {
   McpServerStatusBadge,
 } from './mcp'
 // RPC 超时校准链常量 SSOT（timeout-slow-flow-wallclock D2/D3，renderer/runtime 双端编译期对齐）
-export { BASH_RPC_TIMEOUT_MS, COMPACT_RPC_TIMEOUT_MS, RENDERER_RPC_MARGIN_MS } from './timeouts'
+export { BASH_RPC_TIMEOUT_MS, RENDERER_RPC_MARGIN_MS } from './timeouts'
 export * from './extension'
 export * from './git'
 export * from './plugin'

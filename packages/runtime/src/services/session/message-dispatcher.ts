@@ -1,8 +1,11 @@
 /**
  * MessageDispatcher — 从 session-service 巨石拆出的消息派发职责。
  *
- * 负责:sendMessage / abort / compact + sendMessageHook 注册 + bash 通道（BashDispatcher
- * 协作类持有）。
+ * 负责:sendMessage / abort + sendMessageHook 注册 + bash 通道（BashDispatcher
+ * 协作类持有）。[C2 /compact 后台化] 同步 compact 编排（compact / rejectCompactIfBusy /
+ * busyCompactReason，含 compacting-start 置位与 compacting-end 兜底复位）已退役——GUI
+ * 手动压缩改走 session.compactBackground fire-and-forget（session-service 直投内部命令），
+ * 压缩生命周期前端态仍由 interpreter 从 pi compaction_start/compaction_end 事件唯一编排。
  *
  * [投递所有权内核 u2] 用户消息路径（sendMessage）**内核化**：投递所有权移交
  * SessionDeliveryRegistry（D1 单一所有者）——本类保留「BeforeSend hook 拦截 + 入口 touch +
@@ -34,12 +37,7 @@
 import type { IDispatcherSessionOps } from './session-internal.js'
 import { runDestroyStepIsolated } from './session-entry-removal.js'
 import type { IPiEngine, IProcessManager } from '../ports/pi-engine.js'
-import type {
-  SendMessageHook,
-  ForceQuitSource,
-  SessionOccupancy,
-  IManagedSessionView,
-} from './types.js'
+import type { SendMessageHook, ForceQuitSource } from './types.js'
 import { isGeneratingTurn } from './types.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 import type { IMessageBus } from '../message-bus/message-bus.js'
@@ -603,96 +601,4 @@ export class MessageDispatcher {
     return client
   }
 
-  /**
-   * busy 预检的拒绝原因（null = 不忙）。判定序 = compacting 优先（A 置位后 B 进来预检
-   * 能看到）、bash 次之、生成中最后——文案与 rejectIfBusy 的 warn 日志共用。
-   */
-  private busyCompactReason(
-    occ: SessionOccupancy | undefined,
-  ): 'compaction already running' | 'bash running' | 'agent generating' | null {
-    if (occ?.compacting === true) return 'compaction already running'
-    if (occ?.bash === true) return 'bash running'
-    if (isGeneratingTurn(occ?.turn)) return 'agent generating'
-    return null
-  }
-
-  /**
-   * [W3 + M4] busy 预检：与 sendBash 预检的 occupancy.compacting 拒绝对称 + 防并发 compact 重入。
-   * 补 compacting 维：A 置位（interpreter 从 compaction_start 事件）后，B 进来预检若无 compacting
-   * 看不到 A → 两个 client.compact RPC 并发 → 双 compaction 事件流。补上后事件层 P-dedup by construction 成立。
-   *
-   * 事件驱动（M4）：compaction 生命周期广播全删——由 interpreter 从 compaction_start/compaction_end
-   * 唯一编排（session.compacting / message.compactionSummary / session.compacted / 对话流错误提示）。
-   * dispatcher 退化为「预检 + RPC 触发 + 失败复位」三件事。
-   */
-  private rejectCompactIfBusy(sessionId: string, active: IManagedSessionView | undefined): void {
-    const reason = this.busyCompactReason(active?.occupancy)
-    if (reason === null) return
-    const errMsg = `Cannot compact while ${reason}`
-    console.warn(`[message-dispatcher] compact preemptive reject (busy), sid=${sessionId}, reason=${reason}`)
-    // 对话流内联呈现（msg-pipeline-debloat D4-2）：busy 拒绝的可见部分从 renderer toast
-    // 改为对话流 system 提示条目——走 message.stream_warn（非终结性提示通道：仅追加
-    // system 消息、不调 finalizeSession，正在流式的 turn 不受影响；runtime 自产提示、
-    // pi 无 entry 的正确入流形态）。不能用 message.error——其终态 effect 会把生成中的
-    // assistant 误收尾为 error。renderer catch 见 compact_busy 分类码抑制 toast，双呈现
-    // 不叠加。零生命周期广播不变：不广播 session.compacted{error}（预检在 RPC 前，pi
-    // 未发 compaction_start，interpreter 状态机不参与）。
-    this.messageBus?.publish(sessionId, { type: 'message.stream_warn', payload: { sessionId, content: errMsg } })
-    // throw 扁平错误携带分类码（WorktreeService 同款 Object.assign 模式）→ handler
-    // error envelope 原样透传 → renderer catch 按分类码路由（抑制 toast）。
-    throw Object.assign(new Error(errMsg), { code: 'compact_busy' })
-  }
-
-  async compact(sessionId: string, customInstructions?: string): Promise<void> {
-    const startTime = Date.now()
-    const client = this.pm.getClient(sessionId)
-    if (!client) {
-      console.error('[message-dispatcher] compact: session not found, sessionId=' + sessionId)
-      throw new Error(`Session ${sessionId} not found`)
-    }
-
-    console.log('[message-dispatcher] compact: start, sessionId=' + sessionId + ', customInstructions=' + (customInstructions ? `"${customInstructions}"` : '(none)'))
-
-    const active = this.svc.getSessionByClient(client)
-    // [chat-flow-consistency D1] 派生三布尔已删，忙闲读口 = occupancy 派生（isGeneratingTurn /
-    // compacting / bash 维），语义与原读点逐字等价。
-    this.rejectCompactIfBusy(sessionId, active)
-
-    // [RT-4#10] 预检与置位原子化：预检通过后立即写 'compacting-start'（原语义 = 只在 pi
-    // compaction_start 事件回流后由 interpreter 置位，事件往返窗内第二个 compact 的预检
-    // 仍读 false → 两连发双双通过 → 双 compaction 事件流）。事件回流时 interpreter 的
-    // 'compacting-start' 经原语全等去重幂等（不双写）。RPC 为同步等待压缩完成（pi 1.0.0
-    // agent-session.js compact() await 全程），finally 的 'compacting-end' 复位与
-    // compaction_end 事件三路对称复位语义保持。
-    if (active) {
-      applySessionOccupancyTransition(active, this.messageBus, 'compacting-start')
-    }
-
-    // 事件驱动（M4）：不广播 session.compacting——由 interpreter 从 compaction_start 事件驱动
-    // （置位例外见上方 [RT-4#10]：预检互斥窗口要求 dispatcher 侧先行）。dispatcher 做 RPC 触发 + 失败复位。
-    try {
-      await client.compact(customInstructions)
-      console.log('[message-dispatcher] compact: complete, sessionId=' + sessionId + ', elapsed=' + (Date.now() - startTime) + 'ms')
-    } catch (e) {
-      const errMsg = toErrorMessage(e)
-      console.error('[message-dispatcher] compact: failed, sid=' + sessionId + ', err=' + errMsg + ', elapsed=' + (Date.now() - startTime) + 'ms')
-      // 零广播：不广播 session.compacted{error}。pi 手动 compact 失败必发 compaction_end{errorMessage}
-      // （agent-session.js:1464-1483 无静默路径），interpreter 统一编排失败提示（session.compacted{error} +
-      // message.error 对话流提示）。此处只传播 RPC error，复位交由下方 finally（兜底防 transport 级失败
-      // ——RPC 未达 pi / pi 来不及发 compaction_end——时 session 卡死）。
-      throw e
-    } finally {
-      // 兜底复位：interpreter 的 compaction_end 是复位主力（三路对称），此处防 transport 级失败时
-      // interpreter 未触发 compaction_end 导致 session 卡死。[RT-4#10] 置位移到预检后，本复位
-      // 从「对 false 幂等无害」变为真实复位路径（成功路径与 compaction_end 事件幂等去重）。
-      if (active) {
-        // occupancy #6 兜底（D2 迁移，'compacting-end' 行）：transport 级失败时 compaction_end
-        //（#6）不到达，compacting 维度在此镜像复位（派生 isCompacting=false；对未置位场景幂等无害）。
-        applySessionOccupancyTransition(active, this.messageBus, 'compacting-end')
-        // [MF-1-9] compacting 复位边沿：唤醒投递内核持有期等待者（兜底复位也是边沿源——
-        // pi compaction_end 事件不可达时，这里是 compacting hold 释放的唯一信号）。
-        this.delivery?.notifyHoldRelease(sessionId)
-      }
-    }
-  }
 }

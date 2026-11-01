@@ -58,6 +58,7 @@ describe('makeSettingsTransportStub', () => {
       compactModel: '',
       reminderThresholds: [],
       excludedModels: [],
+      autoCompactThresholdRatio: 0.9,
     })
     // oauth 缺省不可达态（started:false 显式声明桩无真实登录通道）
     expect(await stub.oauthLogin('p1')).toEqual({ started: false, error: 'stub transport' })

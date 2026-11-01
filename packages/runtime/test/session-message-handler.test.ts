@@ -22,7 +22,7 @@ function makeHandler(sessionOverrides: Record<string, ReturnType<typeof vi.fn>> 
   const sessionService = {
     sendMessage: vi.fn().mockResolvedValue({ blocked: false }),
     ensureActive: vi.fn().mockResolvedValue(undefined),
-    compact: vi.fn().mockResolvedValue(undefined),
+    compactBackground: vi.fn().mockResolvedValue(undefined),
     abort: vi.fn().mockResolvedValue(undefined),
     getHistory: vi.fn().mockResolvedValue([]),
     getSummary: vi.fn().mockReturnValue(undefined),
@@ -74,23 +74,51 @@ describe('SessionMessageHandler — error envelope 回归', () => {
   // [MF-1-8 退役] message.steer / message.follow_up 路由已删除（u5a 退役条件兑现）：
   // 发送统一收敛 delivery.submit，error envelope 用例随路由一并退役。
 
-  describe('session.compact', () => {
-    it('ensureActive 失败 → sendError(compact_failed)', async () => {
+  describe('session.compactBackground', () => {
+    it('ensureActive 失败 → sendError(compact_start_failed)', async () => {
       const { cap, handler } = makeHandler({ ensureActive: vi.fn().mockRejectedValue(new Error('restore fail')) })
-      await handler.handleSessionCompact(msg('session.compact', { sessionId: 's1' }) as never, WS)
-      expect(cap.errors[0]).toMatchObject({ code: 'compact_failed', id: 'm1' })
+      await handler.handleSessionCompactBackground(msg('session.compactBackground', { sessionId: 's1' }) as never, WS)
+      expect(cap.errors[0]).toMatchObject({ code: 'compact_start_failed', id: 'm1' })
       expect(cap.replies).toHaveLength(0)
     })
-    it('compact 失败 → sendError(compact_failed)', async () => {
-      const { cap, handler } = makeHandler({ compact: vi.fn().mockRejectedValue(new Error('pi error')) })
-      await handler.handleSessionCompact(msg('session.compact', { sessionId: 's1' }) as never, WS)
-      expect(cap.errors[0]).toMatchObject({ code: 'compact_failed' })
+    it('compactBackground 失败（session 无活跃进程）→ sendError(compact_start_failed)', async () => {
+      const { cap, handler } = makeHandler({ compactBackground: vi.fn().mockRejectedValue(new Error('Session s1 not found')) })
+      await handler.handleSessionCompactBackground(msg('session.compactBackground', { sessionId: 's1' }) as never, WS)
+      expect(cap.errors[0]).toMatchObject({ code: 'compact_start_failed' })
     })
-    it('成功 → reply session.compacted (带 ack id)', async () => {
+    it('成功 → reply session.compactBackground 受理 ack（触发即回执，不等压缩全程）', async () => {
       const { cap, handler } = makeHandler()
-      await handler.handleSessionCompact(msg('session.compact', { sessionId: 's1' }) as never, WS)
-      expect(cap.replies[0]).toMatchObject({ id: 'm1', type: 'session.compacted', payload: { status: 'compacted' } })
+      await handler.handleSessionCompactBackground(
+        msg('session.compactBackground', { sessionId: 's1', customInstructions: '保留关键决策' }) as never,
+        WS,
+      )
+      expect(cap.replies[0]).toMatchObject({ id: 'm1', type: 'session.compactBackground', payload: { sessionId: 's1' } })
       expect(cap.errors).toHaveLength(0)
+    })
+  })
+
+  describe('session.getSubagents / session.getWorkflows — batchInProgress 透传（U1-lite D10）', () => {
+    it('getSubagents reply payload 携带 batchInProgress（机制半边透传，呈现半边归 u-m2）', async () => {
+      const { cap, handler } = makeHandler({
+        getSubagents: vi.fn().mockResolvedValue({ records: [], oversize: false, found: true, batchInProgress: false }),
+      })
+      await handler.handleSessionMessage(msg('session.getSubagents', { sessionId: 's1' }), WS)
+      expect(cap.replies[0]).toMatchObject({
+        id: 'm1',
+        type: 'session.subagents',
+        payload: { sessionId: 's1', subagents: [], oversize: false, found: true, batchInProgress: false },
+      })
+    })
+    it('getWorkflows reply payload 携带 batchInProgress（语义同 getSubagents）', async () => {
+      const { cap, handler } = makeHandler({
+        getWorkflows: vi.fn().mockResolvedValue({ records: [], oversize: false, found: true, batchInProgress: true }),
+      })
+      await handler.handleSessionMessage(msg('session.getWorkflows', { sessionId: 's1' }), WS)
+      expect(cap.replies[0]).toMatchObject({
+        id: 'm1',
+        type: 'session.workflows',
+        payload: { sessionId: 's1', workflows: [], oversize: false, found: true, batchInProgress: true },
+      })
     })
   })
 
@@ -1206,7 +1234,7 @@ function makeErrCodeHandler(createImpl: ReturnType<typeof vi.fn>, forkImpl?: Ret
     delete: deleteImpl ?? vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue({ blocked: false }),
     ensureActive: vi.fn().mockResolvedValue(undefined),
-    compact: vi.fn().mockResolvedValue(undefined),
+    compactBackground: vi.fn().mockResolvedValue(undefined),
     abort: vi.fn().mockResolvedValue(undefined),
     getHistory: vi.fn().mockResolvedValue([]),
     getSummary: vi.fn().mockReturnValue(undefined),

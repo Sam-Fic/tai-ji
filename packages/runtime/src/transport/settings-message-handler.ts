@@ -228,6 +228,7 @@ export class SettingsMessageHandler {
     'config.setSmartContextCompactModel': (msg, ws) => this.smartContextConfigHandler.handle(msg, ws),
     'config.setSmartContextThresholds': (msg, ws) => this.smartContextConfigHandler.handle(msg, ws),
     'config.setSmartContextExcludedModels': (msg, ws) => this.smartContextConfigHandler.handle(msg, ws),
+    'config.setSmartContextAutoCompactThresholdRatio': (msg, ws) => this.smartContextConfigHandler.handle(msg, ws),
     // ── 网络代理域（network-proxy-config-message-handler.ts，llm-network-proxy）──
     'config.getNetworkProxy': (msg, ws) => this.networkProxyConfigHandler.handle(msg, ws),
     'config.setNetworkProxy': (msg, ws) => this.networkProxyConfigHandler.handle(msg, ws),

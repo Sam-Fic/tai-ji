@@ -303,8 +303,13 @@ function asAppendCompactionHost(sm: unknown): AppendCompactionLike | undefined {
 
 /** persistBackgroundCompaction 的补偿回调（D6）：由接线层（index.ts）注入 session 级状态操作。 */
 export interface BackgroundPersistCallbacks {
-	/** 落盘成功补偿：清空已提醒档位（与 session_compact 事件监听共用同一段逻辑，D6）。 */
-	onPersisted?: () => void;
+	/**
+	 * 落盘成功补偿：清空已提醒档位（与 session_compact 事件监听共用同一段逻辑，D6）。
+	 * C1 起附带 entryId（appendCompaction 返回的 compaction entry id，pi 形状声明保守允许
+	 * undefined）——接线层用它组装落盘信号（分界行实时化），调用点仍在落盘事实点的同一
+	 * 同步帧内（guardStaleCtx 内、appendCompaction 成功后），非 stale 由外层保证。
+	 */
+	onPersisted?: (entryId: string | undefined) => void;
 	/** 收缩校验失败的膨胀段记录（D3：与同步路径 inflatedSegments 共享读取，同段不再触发防反复烧钱）。 */
 	onInflated?: (firstKeptEntryId: string) => void;
 }
@@ -369,7 +374,7 @@ export async function persistBackgroundCompaction(
 					true, // fromHook：与同步接管路径落盘口径一致（pi 同参位传 fromExtension=true）
 					result.usage,
 				);
-				callbacks?.onPersisted?.();
+				callbacks?.onPersisted?.(entryId);
 				debugLog(
 					`background compaction persisted: entry=${entryId ?? "?"} firstKept=${result.firstKeptEntryId} ` +
 						`sessionId=${snapshot.sessionId}`,
@@ -654,7 +659,7 @@ export function createBackgroundCompactionManager(
 		preparation: SessionBeforeCompactEvent["preparation"],
 		usageTokens: number,
 		customInstructions: string | undefined,
-		source: "auto" | "tool",
+		source: "auto" | "tool" | "manual",
 	): boolean => {
 		const state = getState();
 		if (state.active) return false;
@@ -748,29 +753,40 @@ export function createBackgroundCompactionManager(
 	};
 
 	/**
-	 * 工具路径启动（U5 接线残项）：compact_context 工具显式请求的后台任务启动，即
-	 * tool.ts BackgroundCompactionControls 契约的 start 实装。
+	 * 工具/手动路径启动（U5 接线残项 + C2 手动触发入口）：显式请求的后台任务启动，即
+	 * tool.ts BackgroundCompactionControls 契约的 start 实装与 `__taiji_compact__`
+	 * 命令（GUI 手动 /compact，C2 /compact 后台化）共用入口。
 	 *
 	 * 与自动入口的判定差异（§3.1 入口矩阵①）：
-	 * - 保留：互斥（撞上返回 false——工具按幂等处理，U4 契约唯一 false 语义）与
-	 *   isGatingActive 门控前置（工具 execute 已现场校验过，此处防御双检——配置热改
+	 * - 保留：互斥（撞上返回 false——工具按幂等处理，U4 契约唯一 false 语义）；tool 来源
+	 *   保留 isGatingActive 门控前置（工具 execute 已现场校验过，此处防御双检——配置热改
 	 *   窗口兜底）；
-	 * - 跳过：触发线（D4 ratio×窗口——显式请求即用户/agent 决策，不受自动触发线约束）
-	 *   与独立熔断（SI5：熔断仅停自动触发）；
+	 * - 跳过：manual 来源门控（手动显式命令 = 用户意志，与旧 pi 原生手动压缩行为对齐——
+	 *   旧链不受 smart-context 开关影响；enabled/excludedModels 只拦 agent 自主决策的
+	 *   auto/tool 路径）；触发线（D4 ratio×窗口——显式请求即用户/agent 决策，不受自动
+	 *   触发线约束）与独立熔断（SI5：熔断仅停自动触发）；
 	 * - 不做膨胀段拦截：膨胀段（D3/SI6）防的是「同段反复自动触发反复烧钱」，工具显式
 	 *   请求是知情决策（可带 custom_instructions 改善摘要），不拦——落盘侧收缩校验仍会
 	 *   放弃膨胀结果并经通知回报。
 	 *
 	 * 失败语义：非互斥原因不可启动（门控拒绝 / appendCompaction 探测失败 / 无可压内容）
 	 * 抛错而非返回 false——false 在工具侧按「后台压缩进行中」幂等回执处理，非互斥失败
-	 * 返回 false 会撒谎回执；抛错经工具 execute 上浮为失败回执（诚实、可操作）。
+	 * 返回 false 会撒谎回执；抛错经工具 execute 上浮为失败回执（诚实、可操作），命令路径
+	 * 由命令 handler catch 后经通知通道投递失败文案。
+	 *
+	 * source 标记（观测口径）：tool = compact_context 工具；manual = GUI 手动 /compact
+	 * 经 runtime `__taiji_compact__` 命令触发。除 manual 跳门控外不影响判定与通知。
 	 */
-	const startForTool = (ctx: ExtensionContext, customInstructions?: string): boolean => {
+	const startForTool = (
+		ctx: ExtensionContext,
+		customInstructions?: string,
+		source: "tool" | "manual" = "tool",
+	): boolean => {
 		if (isActive()) return false;
 
 		const config = loadConfigFn();
 		const modelId = getCurrentModelId(ctx.model);
-		if (!isGatingActive(config, modelId)) {
+		if (source !== "manual" && !isGatingActive(config, modelId)) {
 			throw new Error(
 				`compact_context 后台压缩启动被门控拒绝：当前模型 ${modelId} 不在放行范围（enabled/excludedModels）。` +
 					`可在 taiji 设置页或 smart-context-ext-config skill 中调整后重试。`,
@@ -790,7 +806,7 @@ export function createBackgroundCompactionManager(
 			);
 		}
 
-		return launchTask(ctx, config, modelId, preparation, ctx.getContextUsage()?.tokens ?? 0, customInstructions, "tool");
+		return launchTask(ctx, config, modelId, preparation, ctx.getContextUsage()?.tokens ?? 0, customInstructions, source);
 	};
 
 	return { maybeStart, cancelActive, isActive, startForTool };

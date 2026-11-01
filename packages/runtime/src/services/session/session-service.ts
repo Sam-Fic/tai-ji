@@ -160,6 +160,23 @@ export const userStoppedMarkStore: UserStoppedMarkStore = {
 const BG_RECONCILE_COMMAND = '/__taiji_bg_reconcile__'
 
 /**
+ * GUI 手动压缩触发（C2 /compact 后台化）的内部命令。命令名与扩展侧注册
+ * （extensions/universal/smart-context src/index.ts 的 pi.registerCommand）是跨包
+ * 字符串契约，字面量锤定不 import（BG_RECONCILE_COMMAND 同款）——`/__` 双下划线前缀
+ * = 内部命令（前端 internal-command-filter 过滤不显示），两处注释互为指针，改名必须
+ * 同批。customInstructions 经 encodeURIComponent 编码后拼在命令名后（percent 编码无
+ * 空格/换行，pi args 切分 = 首空格后原样余串，扩展侧 decodeURIComponent 可逆还原）。
+ */
+const BG_COMPACT_COMMAND = '/__taiji_compact__'
+
+/**
+ * 同一命令的注册名形态（无斜杠）：pi getCommands 返回的扩展命令 name = 注册名
+ * （invocationName，无 `/` 前缀），sendSystemCommand 的 requireCommand 在册探测按此
+ * 形态匹配（与 BG_COMPACT_COMMAND 同一契约的两个形态，改名必须同批）。
+ */
+const BG_COMPACT_COMMAND_NAME = '__taiji_compact__'
+
+/**
  * subagent 流状态数据源端口（B2 subagent-stream-chunk §4.1，session.getSubagentStreamState
  * RPC 的数据源路由半）：(sessionId, recordId) → SubagentTee 内存三元组只读派生视图，undefined =
  * 该 record 无在管 tee（未注册 / child exit 已清理 / session 不匹配）。实现由组合根注入
@@ -1040,7 +1057,29 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
    * 经 EventInterpreter.onAgentSettled 回调注入（组合根 index.ts）。
    */
   flushPendingBashResults(sessionId: string): void { this.dispatcher.flushPendingBashResults(sessionId) }
-  async compact(sessionId: string, customInstructions?: string): Promise<void> { return this.dispatcher.compact(sessionId, customInstructions) }
+  /**
+   * 手动触发后台压缩（C2 /compact 后台化，接口契约见 interfaces.ts）：经 sendSystemCommand
+   * 旁路通道送达 smart-context 扩展后台管理器（requireCommand = 命令在册校验）。
+   *
+   * 投递前校验（C2 复审）：`__taiji_compact__` 命令未注册（smart-context 扩展未加载）时
+   * pi 会把 `/__taiji_compact__ ...` 原文当用户消息直投 LLM——requireCommand 探测
+   * （client.getCommands 实时查询）fail-closed 拦截该形态，命令串永不进模型（E14 结构性
+   * 防线）。旁路通道自带 ensureActive 交接（pi 被空闲回收时先拉活）+ touchActivity。
+   *
+   * 执行形态：await 命令执行（内部命令同步跑、不进模型、无 turn，命令 handler 只做启动
+   * 判定不等待压缩全程——毫秒级）后 reply，受理语义保持。非 'sent' 终态（extension-missing /
+   * pi-reclaimed / error）抛错 → RPC reject → renderer useChat.compactBackground catch 后
+   * toast compactStartFailed 兜底（受理≠成功，扩展侧启动失败的独立通知在 smart-context
+   * 侧即时投递，两回执链互补）。
+   */
+  async compactBackground(sessionId: string, customInstructions?: string): Promise<void> {
+    const args = customInstructions !== undefined ? ` ${encodeURIComponent(customInstructions)}` : ''
+    const outcome = await this.sendSystemCommand(sessionId, `${BG_COMPACT_COMMAND}${args}`, BG_COMPACT_COMMAND_NAME)
+    if (outcome.kind === 'sent') return
+    // 三终态各自的恢复动作：extension-missing 查扩展启用状态；pi-reclaimed 重试或重启会话；error 看传输错误详情
+    const detail = outcome.kind === 'extension-missing' ? '压缩扩展（smart-context）未加载或命令未注册，命令未发送。请检查扩展是否启用后重试。' : outcome.kind === 'pi-reclaimed' ? '会话引擎无法激活（pi 进程拉起失败），命令未发送。请稍后重试或重启会话。' : `命令投递失败：${outcome.message ?? '未知错误'}`
+    throw new Error(`后台压缩未启动：${detail}`)
+  }
   setSendMessageHook(hook: SendMessageHook): void { this.dispatcher.setSendMessageHook(hook) }
   listPersistedSessions(): SessionGroup[] { return this.scanner.listPersistedSessions() }
   /**

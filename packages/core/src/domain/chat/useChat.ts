@@ -18,7 +18,7 @@
  *
  * abort：调 api.chat.abort（方法存在，中断流转 DEFERRED G-025）。
  */
-import type { Segment, ServerMessage, ServerMessageUnion, CompactErrorCode, MessageBlockedCode, Message } from '@taiji/shared'
+import type { Segment, ServerMessage, ServerMessageUnion, MessageBlockedCode, Message } from '@taiji/shared'
 import { segmentsToPrompt, restoreRevokedDraft, markerLiteral, MESSAGE_BLOCKED_CODE, VID_RPC_REJECTED_CODE } from '@taiji/shared'
 import {
   subscribeSession,
@@ -105,13 +105,12 @@ const streamSubscriptions = new Map<string, () => void>()
  * RPC 失败的 toast 抑制判别（msg-pipeline-debloat D4-2）：按 error envelope 分类码路由，
  * 不依赖事件到达顺序推断。
  *
- * envelope 携带 runtime 分类码（CompactErrorCode / MessageBlockedCode，词表 SSOT 在
- * shared protocol.ts）= 错误的
- * 用户可见呈现已由 runtime 侧编排——compact_busy → 对话流 system 提示（dispatcher
- * stream_warn）；compact_failed → interpreter 对话流（compaction 级失败）或 session
- * 状态侧（ensureActive 失败）；message_blocked → 错误气泡（dispatcher 广播——BeforeSend
- * hook 否决，message.send / message.bash / delivery.submit 三 handler 统一落此码）。
- * 此时再弹全局错误 toast 属双提示，抑制。
+ * envelope 携带 runtime 分类码（MessageBlockedCode，词表 SSOT 在 shared protocol.ts）
+ * = 错误的用户可见呈现已由 runtime 侧编排——message_blocked → 错误气泡（dispatcher
+ * 广播——BeforeSend hook 否决，message.send / message.bash / delivery.submit 三 handler
+ * 统一落此码）。此时再弹全局错误 toast 属双提示，抑制。
+ * [C2 /compact 后台化] 旧压缩分类码（compact_busy / compact_failed）随同步 compact 链
+ * 退役——后台压缩受理失败全部 renderer toast 兜底（compactBackground 分支不再走本判别）。
  *
  * 其余形态保守回退为 toast 兜底（错误可见性优先，AGENTS.md 规则 3）：
  * - 未知分类码（runtime 未来新增码而 renderer 未升级）——宁可多弹不可吞；
@@ -136,12 +135,9 @@ function isVidRpcRejected(e: unknown): boolean {
   return (e as { code?: unknown } | null)?.code === VID_RPC_REJECTED_CODE
 }
 
-/** compact RPC 的已分类码集合（词表 SSOT = shared CompactErrorCode）。 */
-const COMPACT_CLASSIFIED_CODES: readonly CompactErrorCode[] = ['compact_busy', 'compact_failed']
-
 /** hook 否决类 RPC 的已分类码（message.send / message.bash / delivery.submit 三 handler
  * 对 blocked 失败落的同一码，dispatcher 已广播 message.error 错误气泡）。值经 shared
- * 词表单点引用（MESSAGE_BLOCKED_CODE，与 CompactErrorCode 同 SSOT）——本文件不再
+ * 词表单点引用（MESSAGE_BLOCKED_CODE，shared SSOT）——本文件不再
  * 手抄字面量，码名漂移在编译期即失配。 */
 const BLOCKED_CLASSIFIED_CODE: MessageBlockedCode = MESSAGE_BLOCKED_CODE
 
@@ -968,7 +964,7 @@ export function ensureStreamSubscription(
  * 全经 UseChatDeps 注入。renderer useChat() 薄包装注入 deps，20 消费方零 churn。
  *
  * @param deps 依赖注入（chatApi/writeSegments/getChatStore/getSessionStore/toast/t）
- * @returns send/followUp/abort/compact/editAndResend/loadMoreHistory/
+ * @returns send/followUp/abort/compactBackground/editAndResend/loadMoreHistory/
  *          hasMoreHistory/disposeSession/sendBash/abortBash
  */
 export function createUseChat(deps: UseChatDeps) {
@@ -1408,39 +1404,32 @@ export function createUseChat(deps: UseChatDeps) {
   }
 
   /**
-   * 压缩上下文（#6 + M4）：确保会话级订阅（消费 session.compacting/compacted）→ 调 api.compact。
+   * 手动触发后台压缩（C2 /compact 后台化）：确保会话级订阅（消费 session.compacting/
+   * compacted 生命周期广播）→ 调 api.compactBackground（触发即回执，不等待压缩全程）。
    *
-   * 错误反馈（msg-pipeline-debloat D4-2 分类码路由）：按 error envelope 分类码判别 toast
-   * 抑制，不依赖 compaction_end 与 RPC reply 的到达顺序。
-   *   - compact_busy（dispatcher busy 预检拒绝）：对话流 system 提示已由 runtime stream_warn
-   *     编排 → 抑制 toast。
-   *   - compact_failed（pi 层失败 / ensureActive 恢复失败）：interpreter 对话流（compaction
-   *     级，含 aborted 取消语义）或 session 状态侧已呈现 → 抑制 toast。
-   *   - 其余（未知分类码 / pending 机械码 timeout·overflow·unknown / 无码断连）：runtime
-   *     侧呈现未发生，保守 toast 兜底（AGENTS.md 规则 #3 错误必须可见）。
-   * 不 throw（consumer fire-and-forget）。compacting 态由 session.compacted 复位（interpreter 发，必达）。
+   * 受理成功 → toast info「后台压缩已启动」（命令回显口径）；受理失败（session 不存在 /
+   * ensureActive 恢复失败 / transport 断连）→ toast error 兜底——新链失败无 runtime 编排的
+   * 呈现侧，全部 renderer 呈现（错误可见性优先）。压缩全程的后续事实不经本函数：完成经
+   * smart-context 落盘信号链（对话流分界行）+ 完成通知到达；扩展侧启动失败（门控拒绝 /
+   * 无可压内容）经 smart-context 通知通道到达；压缩进行中的生命周期广播仍由 interpreter
+   * 从 pi 事件编排。
+   * 不 throw（consumer fire-and-forget）。
    * [R2-A5 失败信号] 返回值（Promise<boolean>）：true = RPC 受理成功；false = RPC reject
-   * （分类码级 / transport 级均算——错误范围已按上述路由消化）——调用方（dispatch send
-   * 的 /compact 分支）据 `=== false` restoreSegments 恢复草稿。
+   * ——调用方（dispatch send 的 /compact 分支）据 `=== false` restoreSegments 恢复草稿。
    *
    * 显式接收 sessionId：per-panel 隔离，不读全局 activeId。
    */
-  async function compact(sessionId: string, customInstructions?: string): Promise<boolean> {
+  async function compactBackground(sessionId: string, customInstructions?: string): Promise<boolean> {
     const sid = sessionId
     ensureStreamSubscription(sid, chat, session, subDeps)
     try {
-      await deps.chatApi.compact(sid, customInstructions)
+      await deps.chatApi.compactBackground(sid, customInstructions)
+      deps.toast.info(deps.t('composable.compactStarted'))
       return true
     } catch (e) {
-      if (isTransportLevelFailure(e, COMPACT_CLASSIFIED_CODES)) {
-        // transport 级失败：runtime 侧无分类码呈现，toast 兜底。分类码级失败由 runtime
-        // 编排的呈现侧（对话流 / session 状态）承担，不在此 toast。
-        const msg = toErrorMessage(e)
-        deps.toast.error(deps.t('composable.compactFailed', { msg }))
-        console.warn(`[useChat] compact RPC failed (transport-level, toast fallback)`, e)
-      } else {
-        console.warn(`[useChat] compact RPC failed (classified envelope, toast suppressed, surfaced via runtime-orchestrated channels)`, e)
-      }
+      const msg = toErrorMessage(e)
+      deps.toast.error(deps.t('composable.compactStartFailed', { msg }))
+      console.warn(`[useChat] compactBackground RPC failed (toast fallback)`, e)
       return false
     }
   }
@@ -1610,7 +1599,7 @@ export function createUseChat(deps: UseChatDeps) {
     send,
     followUp,
     abort,
-    compact,
+    compactBackground,
     editAndResend,
     revokeMessage,
     loadMoreHistory,

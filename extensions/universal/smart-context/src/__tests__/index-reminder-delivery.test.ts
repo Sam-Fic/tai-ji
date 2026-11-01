@@ -65,7 +65,7 @@ function createMockPi(): MockPi {
 	const sendUserMessage = vi.fn();
 	const appendEntry = vi.fn();
 	const pi = {
-		registerTool: vi.fn(),
+		registerTool: vi.fn(), registerCommand: vi.fn(),
 		on: (event: string, handler: (...args: unknown[]) => void) => events.set(event, handler),
 		sendMessage,
 		sendUserMessage,

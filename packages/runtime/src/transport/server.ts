@@ -666,7 +666,7 @@ export class RuntimeServer implements IMessageBroker {
       // 缺席回 idle 形态——renderer 拉到 idle 即「横幅不重现」，见 RollingRestartStatusPayload）。
       ['rollingRestart.status', (msg, ws) => this.broker.reply(ws, msg.id, 'rollingRestart.status',
         this.rollingRestartStatusProvider?.() ?? { state: 'idle', inflight: { inFlight: null } })],
-      ['session.compact', (msg, ws) => this.sessionHandler.handleSessionCompact(msg as Extract<ClientMessage, { type: 'session.compact' }>, ws)],
+      ['session.compactBackground', (msg, ws) => this.sessionHandler.handleSessionCompactBackground(msg as Extract<ClientMessage, { type: 'session.compactBackground' }>, ws)],
       ...this.sessionHandler.handles.map(t => [t, (msg: ClientMessage, ws: WsType) => this.sessionHandler.handleSessionMessage(msg, ws)] as const),
       ...this.extensionHandler.handles.map(t => [t, (msg: ClientMessage, ws: WsType) => this.extensionHandler.handleExtensionMessage(msg, ws)] as const),
       ...this.canvasHandler.handles.map(t => [t, (msg: ClientMessage, ws: WsType) => this.canvasHandler.handleCanvasMessage(msg, ws)] as const),

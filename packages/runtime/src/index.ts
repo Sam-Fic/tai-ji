@@ -32,7 +32,6 @@ import { findPiExecutable } from './infra/pi/find-pi-executable.js'
 import { GenStatsService } from './services/session/gen-stats-service.js'
 import { createSessionDeliveryRegistry, createDiskDeliveryStoreForSession } from './services/session/session-delivery-registry.js'
 // u4（delivery-ownership-kernel D4②）：compaction 掐断 turn 的续跑判定（新模块，无状态单例）。
-import { createResumeDecision } from './services/session/resume-decision.js'
 // u4 追加项（A5/V5）：reattach restore 包装——先建投递运行时再触发对账（reconcile 无运行时即 no-op）。
 import { createReattachRestore } from './services/session/reattach-delivery-trigger.js'
 // notify-once U3（组合根接线，实施计划偏差 D-1）：ClaimLedger 构造 + settle/死亡路径；
@@ -1046,6 +1045,18 @@ async function main(): Promise<void> {
         if (!client) return undefined
         return client.getState()
       },
+      // C1（feat-compaction-closure 分界行实时化）：smart-context 落盘信号 → get_entries 拉取
+      // compaction entry 合成对话流分界行帧。延迟解析 client（pingPi 同款）：interpreter 在
+      // session 创建时构造，client 可能尚未 spawn——返回 undefined 由 interpreter 降级
+      // （不发帧、warn 留痕），不抛错。
+      getPiEntries: async () => {
+        const client = pm.getClient(sessionId)
+        if (!client) return undefined
+        const msg = await client.getEntries()
+        // GetEntriesResponse 形状（pi-session-data）：data 已由 sendCommand 归一（data ?? payload）
+        const data = msg.data as { entries?: unknown[] } | undefined
+        return data?.entries
+      },
       // W18（data-source-governance P3.1）：自描述 record entry（subagent-record /
       // workflow-record）到达 → 派生缓存失效。sessionService 同
       // thinkingLevelState 的延迟解析模式（createAdapter 闭包先于 sessionService 构造，
@@ -1089,35 +1100,13 @@ async function main(): Promise<void> {
     return new EventAdapter(
       sessionId,
       (events) => {
-        // u4（D4②）：续跑判定观察路径——在 interpreter 之前读事件原文（turn 被 abort 掐断
-        // 的事实来自 turn-end{stopReason:'aborted'} 事件序，不读占用派生视图：pi 侧
-        // `await abort()` 保证 agent_end 先于 compaction_start 到达，此时 runtime 派生视图已
-        // 回落 settling/idle）。解释后再收尾（settle）：投递发生时压缩态已复位，内核 lane
-        // 判定看到压缩后状态（direct 直投起续跑 run）。resumeDecision 为闭包前向引用
-        // （先声明后构造，与 sessionService 同款：createAdapter 仅在 session 建立时执行，
-        // 引用恒就绪）。
-        //
-        // observe / settle 各自 try/catch + warn 隔离（fanOutSettled 同款范式）：两路径是
-        // interpret 批次的旁路观察侧，单路径异常不得炸掉 interpret 批次（事件流主链优先），
-        // 也不得互相传染——observe 抛错后 interpret 照常执行、settle 照常收尾。
-        // interpret 刻意保持裸抛：其失败走 adapter 侧既有 logInterpretFailure 隔离边界侧
-        // （[EventAdapter] interpret error 日志），此处不再包一层双重复制。
-        try {
-          resumeDecision.observe(sessionId, events)
-        } catch (e) {
-          // 降级策略（best-effort，fanOutSettled 同款）：观察路径是 interpret 批次的旁路，
-          // 异常仅 warn 隔离不传播——继续 interpret（事件流主链优先），console 经
-          // initLogger monkey-patch 自动落盘。
-          console.warn('[runtime] resumeDecision.observe failed (isolated):', e)
-        }
+        // interpret 保持裸抛：失败走 adapter 侧既有 logInterpretFailure 隔离边界侧
+        // （[EventAdapter] interpret error 日志）。
+        // [C2 /compact 后台化] u4 续跑判定（resume-decision observe/settle/beginRuntimeCompact）
+        // 随同步 compact 链退役：该机制防的是「manual 同步压缩掐断进行中 turn」——GUI 手动
+        // 压缩改走后台管理器（不掐 turn、不发 pi compaction 事件）后，taiji runtime 进程内
+        // 无 manual 压缩来源，判定三条件结构性不可达，机制整体退役。
         interpreter.interpret(events)
-        try {
-          resumeDecision.settle(sessionId)
-        } catch (e) {
-          // 降级策略（best-effort，fanOutSettled 同款）：收尾路径异常仅 warn 隔离不传播——
-          // interpret 已完成，本批次收尾失败不回滚事件流，console 自动落盘。
-          console.warn('[runtime] resumeDecision.settle failed (isolated):', e)
-        }
       },
       (_sid) => sessionService.backgroundTasks?.checkForChanges(),
       // [定向复审缺陷 2] detach 转调 interpreter.dispose：销毁路径（forceQuit/exit/delete/
@@ -1184,33 +1173,10 @@ async function main(): Promise<void> {
   // 编排 getter）——原 getActiveDeliveryRegistry 进程内活动槽已删除，装配经本调用显式流转
   // （server 启动前完成注入，RPC 到达时注册表必已就绪）。
   sessionService.setDeliveryRegistry(sessionDelivery)
-  // u4（delivery-ownership-kernel D4②）：续跑判定装配——工具压缩（manual）掐断的活跃 turn
-  // 在 compaction_end 判定后经内核 FIFO 追加续跑投递（与用户消息同通道，无第二 prompt 发起方）。
-  // 投递出口 = sessionDelivery.submit（D1 单一判定源：lane 判定归内核，本模块不直连 pi）。
-  const resumeDecision = createResumeDecision({
-    listDeliveryEntries: (sid) => sessionDelivery.entries(sid)?.active,
-    submitResumeDelivery: (sid, content) => { sessionDelivery.submit(sid, { content }) },
-    log: (message) => console.log('[resume-decision]', message),
-  })
-  // u4 D4② 条件②（非 runtime 发起）打标：runtime 自己的 /compact 入口 = sessionService.compact
-  //（transport handleSessionCompact → sessionService → dispatcher.compact → pi compact RPC）。
-  // 该链上的文件不在 u4 领地，组合根实例装饰是领地内唯一落点——RPC 生命周期即标记生命周期
-  //（pi compact RPC 的响应在 compaction_end 之后才回，故 compaction_start 观察时标记恒在场）。
-  // 长期方案（登记 deviations）：dispatcher 侧加显式回调/setter，本装饰随 u5 收尾评估移除。
-  const dispatchRuntimeCompact = sessionService.compact.bind(sessionService)
-  sessionService.compact = async (sessionId: string, customInstructions?: string): Promise<void> => {
-    const release = resumeDecision.beginRuntimeCompact(sessionId)
-    try {
-      return await dispatchRuntimeCompact(sessionId, customInstructions)
-    } finally {
-      release()
-    }
-  }
   // session 销毁（主动删 / 进程退出 / restore 清场全部路径）→ 丢弃该 session 的 delivery
   // 队列与订阅（setOnSessionDestroyed 追加式注册，与 server 的 extension timeout 清理路径并存）。
   sessionService.setOnSessionDestroyed((summary) => {
     sessionDelivery.dispose(summary.id)
-    resumeDecision.dispose(summary.id)
   })
   // notify-once D5 销毁汇聚点（追加式列表的第二订阅者）：
   // - 同步 exit 链路径（exitChainLegs 同步标）→ 跳过——respawn 终态事件随后裁决（stash 在挂）；

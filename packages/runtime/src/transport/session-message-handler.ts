@@ -281,8 +281,9 @@ export class SessionMessageHandler {
   /**
    * D1: 本 handler 认领的 ClientMessageType 清单——派生自 routes 表（S1 收敛：单一事实源，
    * 「只改 handles 漏改 routes」的漂移类结构性消灭，RT-1#6 运行时检查随之退为纯防御）。
-   * 不含 session.compact：它由 server 路由表直接接 handleSessionCompact（不经本表分发），
-   * 且 server 装配期 b26-F2 撞键 fail-fast 会把双登记拦死——与退役前手写清单的排除理由一致。
+   * 不含 session.compactBackground：它由 server 路由表直接接 handleSessionCompactBackground
+   * （不经本表分发，旧 session.compact 同款排除），且 server 装配期 b26-F2 撞键 fail-fast
+   * 会把双登记拦死——与退役前手写清单的排除理由一致。
    * 声明必须位于 routes 之后（字段初始化按声明序执行，派生读 this.routes）。
    */
   readonly handles: ClientMessageType[] = Object.keys(this.routes) as ClientMessageType[]
@@ -1525,29 +1526,28 @@ export class SessionMessageHandler {
     }
   }
 
-  async handleSessionCompact(msg: Extract<ClientMessage, { type: 'session.compact' }>, ws: WsType): Promise<void> {
+  /**
+   * 手动压缩触发（C2 /compact 后台化）：受理即 reply（压缩本体在 pi 进程后台执行，
+   * 完成事实经 smart-context 落盘信号链（对话流分界行）与完成通知到达，不经请求级
+   * 回执承载）。本 handler 负责把指令送达 pi（compactBackground 内 sendSystemCommand
+   * requireCommand 在册校验 fail-closed——smart-context 扩展未加载时命令串不进模型，
+   * 拒发经 compact_start_failed error envelope 回执）。扩展侧判定结果（启动成功 /
+   * 进行中幂等 / 启动失败）经 smart-context 通知通道呈现（失败回执即时投递）。
+   */
+  async handleSessionCompactBackground(msg: Extract<ClientMessage, { type: 'session.compactBackground' }>, ws: WsType): Promise<void> {
     const compactId = msg.payload.sessionId
-    // D11: 耗时/启动/完成遥测由 message-dispatcher.compact 统一负责（含 session.compacting/compacted 广播）。
-    // D(round7-must-fix-4): 成功 / 失败 / ensureActive 失败 三条路径都必须携带 msg.id 回复，
-    // 否则 renderer pending.register(msg.id) 的 Promise 永挂、pendingMap 无上限泄漏（与 message.abort 同类 bug）。
-    // dispatcher.compact 的 session.compacted 广播走流式通道（无 id），不能替代请求级 ack。
+    // 成功 / 失败两路都必须携带 msg.id 回复，否则 renderer pending.register(msg.id) 的
+    // Promise 永挂、pendingMap 无上限泄漏（旧 session.compact 同款约束，D round7-must-fix-4）。
     try {
       await this.ctx.sessionService.ensureActive(compactId)
     } catch (e) {
-      return this.ctx.sendError(ws, 'compact_failed', 'Failed to restore session for compact: ' + (toErrorMessage(e)), msg.id, { sessionId: compactId })
+      return this.ctx.sendError(ws, 'compact_start_failed', 'Failed to restore session for compact: ' + (toErrorMessage(e)), msg.id, { sessionId: compactId })
     }
     try {
-      await this.ctx.sessionService.compact(compactId, msg.payload.customInstructions)
+      await this.ctx.sessionService.compactBackground(compactId, msg.payload.customInstructions)
     } catch (e) {
-      // compact 失败：dispatcher.compact 已广播 session.compacted(error)（流式通知），此处补请求级 error envelope。
-      // 分类码（msg-pipeline-debloat D4-2）：busy 预检拒绝的错误携带 code='compact_busy'
-      //（dispatcher 抛出，对话流内联呈现已由 stream_warn 编排）；其余（pi 层失败——interpreter
-      // 对话流呈现 / ensureActive 恢复失败——session 状态侧呈现）归 'compact_failed'。
-      // renderer 据分类码路由 toast 抑制（CompactErrorCode SSOT，未知码保守回退 toast）。
-      const code = (e as { code?: string }).code === 'compact_busy' ? 'compact_busy' : 'compact_failed'
-      return this.ctx.sendError(ws, code, toErrorMessage(e), msg.id, { sessionId: compactId })
+      return this.ctx.sendError(ws, 'compact_start_failed', toErrorMessage(e), msg.id, { sessionId: compactId })
     }
-    // compact 成功：dispatcher.compact 已广播 session.compacted（流式通知，无 id），此处补请求级 ack。
-    return this.ctx.reply(ws, msg.id, 'session.compacted', { sessionId: compactId, status: 'compacted' })
+    return this.ctx.reply(ws, msg.id, 'session.compactBackground', { sessionId: compactId })
   }
 }

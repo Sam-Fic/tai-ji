@@ -39,6 +39,54 @@ export interface CompactionEndFields {
   errorMessage?: string
 }
 
+/**
+ * 落盘信号（smart-context customStart）命中的 compaction entry 判读结果：帧字段口径与
+ * CompactionNotifier.onCompactionEnd 成功分支的 live 帧一致（summary/tokensBefore，消费方
+ * core registry readCompactionSummary 防御读取，缺省字段不进帧）。
+ */
+export interface CompactionEntryView {
+  summary?: string
+  tokensBefore?: number
+}
+
+/**
+ * 从 get_entries entry 列表选落盘信号对应的 compaction entry（C1 分界行实时化，纯函数）。
+ *
+ * 选择序：compactionId 可定位 → 按 id 精确匹配；定位失败 / 未携带 id → 取列表尾部最近一条
+ * compaction entry（信号与落盘同帧产生，尾部即本次 entry；id 查不到的已登记漂移窗口 =
+ * 信号迟到时另有压缩抢先落盘，取尾部仍是「最近一次压缩」的正确呈现）。完全无 compaction
+ * entry → undefined（消费方降级：不发帧、warn 留痕）。
+ *
+ * 入参用 unknown 数组 + 形状收窄（isRecord 式防御解析）：entry 来自 pi get_entries RPC
+ * 响应，services 层不引入 infra/pi 数据模型类型依赖（PI_EVENT 常量先例——跨层只过值与形状，
+ * 不过类型引用）。
+ */
+export function pickCompactionEntryForSignal(
+  entries: readonly unknown[] | undefined,
+  compactionId?: string,
+): CompactionEntryView | undefined {
+  if (!entries || entries.length === 0) return undefined
+  const compactions = entries.filter(isCompactionEntryShape)
+  if (compactions.length === 0) return undefined
+  const byId = compactionId !== undefined ? compactions.find((e) => e.id === compactionId) : undefined
+  const target = byId ?? compactions[compactions.length - 1]
+  return {
+    summary: typeof target.summary === 'string' ? target.summary : undefined,
+    tokensBefore: typeof target.tokensBefore === 'number' ? target.tokensBefore : undefined,
+  }
+}
+
+/** compaction entry 最小形状收窄（pi CompactionEntry：type/id + summary/tokensBefore）。 */
+function isCompactionEntryShape(
+  entry: unknown,
+): entry is { id: unknown; summary: unknown; tokensBefore: unknown } {
+  return (
+    typeof entry === 'object' && entry !== null &&
+    (entry as { type?: unknown }).type === 'compaction' &&
+    'id' in entry
+  )
+}
+
 export class CompactionNotifier {
   constructor(private readonly deps: CompactionNotifierDeps) {}
 

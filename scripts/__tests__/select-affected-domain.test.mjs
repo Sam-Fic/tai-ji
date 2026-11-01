@@ -177,10 +177,10 @@ describe('真实注册表烟测（防注册表与脚本结构漂移无信号）'
     'settings', 'shell', 'sidebar', 'subagent', 'terminal', 'tray',
   ]
 
-  it('39 域（36 功能域 + foundation/host/uncategorized）全部在册且域名唯一', () => {
+  it('40 域（37 功能域 + foundation/host/uncategorized）全部在册且域名唯一', () => {
     const { slices, meta } = loadRegistry()
-    expect(slices.length).toBe(39)
-    expect(new Set(slices.map((s) => s.name)).size).toBe(39)
+    expect(slices.length).toBe(40)
+    expect(new Set(slices.map((s) => s.name)).size).toBe(40)
     expect(meta).toBeTruthy()
     for (const pool of ['foundation', 'host', 'uncategorized']) {
       expect(slices.some((s) => s.name === pool), pool).toBe(true)

@@ -291,11 +291,13 @@ export interface SessionDeliveryRegistry {
   /**
    * hold 解除边沿输入端口（MF-1-9 事件化）：持有判定读的外部维度（occupancy.bash /
    * occupancy.compacting）复位后，由**转移执行方**调用本方法唤醒挂起的出站交接等待者
-   * （waitDeliverable 订阅边沿而非 500ms 轮询）。调用点 = dispatcher 的 bash-end /
-   * compacting-end 转移后；settling 与 handoff 维释放边沿均经 agent_settled 多播自达
-   * （handoff turn 终局必经 agent_settled——handoff-service cleanupInflight 的
-   * handingOff-end 复位先于 settled 事件处理，时序构造性成立）、revoking /
-   * piCompactingBlocked 为注册表内部标志自达，无需经本端口。无等待者时幂等 no-op。
+   * （waitDeliverable 订阅边沿而非 500ms 轮询）。调用点 = bash dispatcher 的 bash-end
+   * 转移后（dispatcher 的 compacting-end 编排已随 C2 /compact 后台化退役）；view 的
+   * compaction 维复位不经本端口（本注册表 compaction_end 监听同事件唤醒 + agent_settled
+   * 多播兜底）；handoff 维释放边沿经 agent_settled 多播自达（handoff turn 终局必经
+   * agent_settled——handoff-service cleanupInflight 的 handingOff-end 复位先于 settled
+   * 事件处理，时序构造性成立）、revoking / piCompactingBlocked 为注册表内部标志自达，
+   * 无需经本端口。无等待者时幂等 no-op。
    */
   notifyHoldRelease(sessionId: string): void
   /** 丢弃单 session 队列（session 删除等场景） */
@@ -813,8 +815,10 @@ export function createSessionDeliveryRegistry(
    * - compacting-pi / compacting（pi 侧事实）：watchClient 的 compaction_end 监听 + 句柄
    *   变更自愈点（piCompactingBlocked 复位处）；
    * - revoking：endRevokeHold（编排 try/finally 必达）；
-   * - view 维度（compacting 派生视图）：转移执行方（dispatcher compacting-end 转移后）经
-   *   notifyHoldRelease 端口驱动。
+   * - view 维度（compacting 派生视图）：本注册表 compaction_end 监听同事件唤醒
+   *   （interpreter 同事件内复位派生视图）+ agent_settled 多播兜底；notifyHoldRelease
+   *   端口仅剩 bash dispatcher 的 bash-end 调用点（dispatcher 的 compacting-end 编排
+   *   已随 C2 /compact 后台化退役，GUI 手动压缩改走后台管理器不经 dispatcher）。
    * - agent_settled 多播（ensureSettledSub 常挂）仍作为多源唤醒路径保留（对 v3 剩余持有
    *   形态幂等无害；对账触发点①同点驱动）。
    * [u5a 退役登记] v2 的 settling / bash 维度随本地队列退役（唤醒路径保留，无对应等待者

@@ -5,7 +5,7 @@
  *
  * 并入来源（基名）：
  *  - panel/panel-container-bottom-drawer（底抽屉纵轴布局集成，8 例；跨目录自 panel/ 搬入）
- *  - useChat（流式状态机 + pendingSend/compact/subagent 转发，21 例）
+ *  - useChat（流式状态机 + pendingSend/compactBackground/subagent 转发，21 例）
  *  - effects/use-message-stream-follow-triggers（RO 双 rAF 流跟随，12 例；跨目录自
  *    effects/ 搬入，_virtua-mock-helper 相对路径已改写）
  *  - composables/derive-status（derivedStatus 联动，2 例；原 node，跨目录搬入）
@@ -38,6 +38,7 @@ import { computed, defineComponent, h, nextTick, reactive, ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { usePanelStore, ROOT_PANEL_ID } from '@/stores/panel'
 import { useChatStore } from '@/stores/chat'
+import { useToast } from '@/composables/useToast'
 import type { Message, ModelInfo, Segment, ServerMessage } from '@taiji/shared'
 import { textToSegments } from '@taiji/shared'
 import * as derivationsModule from '@/composables/features/chat/useSessionDerivations'
@@ -142,7 +143,7 @@ const apiMock = vi.hoisted(() => {
     ),
     getHistory: vi.fn(() => Promise.resolve([])),
     abort: vi.fn(() => Promise.resolve()),
-    compact: vi.fn(() => Promise.resolve()),
+    compactBackground: vi.fn(() => Promise.resolve()),
     followUp: vi.fn(() => Promise.resolve()),
     // useChat subagent 定向消息转发（原 useChat-subagent-directive.test.ts 并入）
     subagentAction: vi.fn(() => Promise.resolve()),
@@ -164,7 +165,7 @@ vi.mock('@/api', async (importOriginal) => {
       submitDelivery: apiMock.submitDelivery,
       getHistory: apiMock.getHistory,
       abort: apiMock.abort,
-      compact: apiMock.compact,
+      compactBackground: apiMock.compactBackground,
       followUp: apiMock.followUp,
     },
     session: {
@@ -642,18 +643,21 @@ describe('useChat（useChat 合并节）', () => {
   })
 
   describe('useChat compact 状态机（#6）', () => {
-    it('compact 调 chatApi.compact 且建立会话级订阅（消费 compacting/compacted）', async () => {
-      const { compact } = useChat()
-      await compact('c-sub')
-      // compact(sessionId, customInstructions?) → chatApi.compact(sid, undefined)（未传自定义指令）
-      expect(apiMock.compact).toHaveBeenCalledWith('c-sub', undefined)
+    it('compactBackground 调 chatApi.compactBackground 且建立会话级订阅（消费 compacting/compacted）+ toast info 受理回执', async () => {
+      useToast().toasts.value = []
+      const { compactBackground } = useChat()
+      await compactBackground('c-sub')
+      // compactBackground(sessionId, customInstructions?) → chatApi.compactBackground(sid, undefined)（未传自定义指令）
+      expect(apiMock.compactBackground).toHaveBeenCalledWith('c-sub', undefined)
       expect(apiMock.streamSubscribe).toHaveBeenCalledTimes(1)
+      // 受理成功 → toast info「后台压缩已启动」（命令回显口径，C2 /compact 后台化）
+      expect(useToast().toasts.value.some((t) => t.type === 'info' && t.message.includes('后台压缩已启动'))).toBe(true)
     })
 
     it('session.compacting + occupancy{compacting:true} → isCompacting=true；occupancy{false} 帧 → false（u5b 派生视图驱动）', async () => {
       const chat = useChatStore()
-      const { compact } = useChat()
-      await compact('c-flow')
+      const { compactBackground } = useChat()
+      await compactBackground('c-flow')
       // [u5b] membership 由 occupancy 派生视图推导（interpreter 同一挂点先发 session.compacting
       // 再发 occupancy——帧序镜像 runtime 实发）；session.compacting 只承载 reason 文案源。
       emit({ type: 'session.compacting', payload: { sessionId: 'c-flow', status: 'compacting', reason: 'manual' } })
@@ -667,11 +671,11 @@ describe('useChat（useChat 合并节）', () => {
       expect(chat.getCompactingReason('c-flow')).toBeUndefined()
     })
 
-    it('compact 失败（pending reject）→ toast 错误提示，不抛出（不卡 UI，M8 toast 方案）', async () => {
+    it('compactBackground 受理失败（pending reject）→ toast 错误提示，不抛出（不卡 UI，M8 toast 方案）', async () => {
       const chat = useChatStore()
-      apiMock.compact.mockRejectedValueOnce(new Error('Session not found'))
-      const { compact } = useChat()
-      await expect(compact('c-err')).resolves.toBe(false)
+      apiMock.compactBackground.mockRejectedValueOnce(new Error('Session not found'))
+      const { compactBackground } = useChat()
+      await expect(compactBackground('c-err')).resolves.toBe(false)
       // M8: compact 错误走 toast 而非 appendSystemNotice，不再插入 system 消息
       const msgs = chat.getMessages('c-err')
       expect(msgs).toEqual([])

@@ -515,7 +515,7 @@ describe("后台事件取消与独立熔断（U2 验收②：RL1）", () => {
 				handlers.set(name, handler);
 			},
 			getAllTools: () => [],
-			registerTool: vi.fn(),
+			registerTool: vi.fn(), registerCommand: vi.fn(),
 			sendMessage: vi.fn(),
 			appendEntry: vi.fn(),
 		} as unknown as ExtensionAPI;
@@ -762,6 +762,8 @@ describe("appendCompaction 直调链路（U3 验收②③：RL3 存在性探测 
 		expect(fromHook).toBe(true); // 与同步接管路径落盘口径一致
 		expect(usage).toEqual({ input: 3, output: 4 }); // usage 随 entry 写入（D6 用量归因消费侧照读）
 		expect(onPersisted).toHaveBeenCalledTimes(1); // D6 档位重置补偿回调
+		// C1：onPersisted 携带落盘 entry id（接线层组装落盘信号的 compactionId 数据源）
+		expect(onPersisted).toHaveBeenCalledWith("entry-persisted");
 		expect(bgState.failureStreak).toBe(0); // validated 清零
 		expect(bgState.active).toBeNull();
 	});
@@ -844,7 +846,7 @@ describe("appendCompaction 直调链路（U3 验收②③：RL3 存在性探测 
 				handlers.set(name, handler);
 			},
 			getAllTools: () => [],
-			registerTool: vi.fn(),
+			registerTool: vi.fn(), registerCommand: vi.fn(),
 			sendMessage,
 			appendEntry: vi.fn(),
 		} as unknown as ExtensionAPI;
@@ -867,9 +869,17 @@ describe("appendCompaction 直调链路（U3 验收②③：RL3 存在性探测 
 		for (let i = 0; i < 50; i++) await Promise.resolve();
 
 		// U5/D6 完成通知：落盘成功 → compact-complete 经 nextTurn 投递（不自起回合），
-		// 含压缩前后 token 数与模式（D6）
-		expect(sendMessage).toHaveBeenCalledTimes(2);
-		const [completeMessage, completeOptions] = sendMessage.mock.calls[1]!;
+		// 含压缩前后 token 数与模式（D6）。C1 落盘信号在 onPersisted 事实点先行投递
+		//（display:false 机器信号，分界行数据源），完成通知随后，两条互不替代
+		expect(sendMessage).toHaveBeenCalledTimes(3);
+		const [signalMessage, signalOptions] = sendMessage.mock.calls[1]!;
+		expect(signalMessage).toMatchObject({
+			customType: "smart-context",
+			display: false,
+			details: { source: "compaction-entry-appended", compactionId: "entry-persisted" },
+		});
+		expect(signalOptions).toEqual({ triggerTurn: false }); // 空闲投递：无 deliverAs，pi 立即 append
+		const [completeMessage, completeOptions] = sendMessage.mock.calls[2]!;
 		expect(completeMessage).toMatchObject({
 			customType: "smart-context",
 			display: true,
@@ -885,8 +895,8 @@ describe("appendCompaction 直调链路（U3 验收②③：RL3 存在性探测 
 			{ type: "agent_settled" },
 			makeBgCtx(sampleEntriesNoCompaction(), { tokens: 420_000, contextWindow: 500_000 }),
 		);
-		expect(sendMessage).toHaveBeenCalledTimes(3); // +1 提醒（firedThresholds 清空的直接行为证据）
-		expect(sendMessage.mock.calls[2]![0]).toMatchObject({ details: { source: "threshold-reminder" } });
+		expect(sendMessage).toHaveBeenCalledTimes(4); // +1 提醒（firedThresholds 清空的直接行为证据）
+		expect(sendMessage.mock.calls[3]![0]).toMatchObject({ details: { source: "threshold-reminder" } });
 		expect(mockedCall).toHaveBeenCalledTimes(1); // 未越触发线，不重复启动任务
 	});
 });
@@ -905,6 +915,16 @@ describe("工具路径启动（U5：互斥 + 门控前置，跳过触发线/熔�
 		expect(() => noProbeManager.startForTool(ctx)).toThrow(/appendCompaction 不可用/);
 		expect(mockedCall).not.toHaveBeenCalled();
 		expect(noProbeManager.isActive()).toBe(false);
+	});
+
+	it("manual 来源跳过门控：enabled=false 时手动启动成功（用户意志，与旧 pi 原生手动压缩对齐）", async () => {
+		const bgState = createBackgroundCompactionState();
+		// enabled=false：tool 来源抛「门控拒绝」（上一用例锁定），manual 来源照常启动
+		const manager = makeBgManager(bgState, normalizeSmartContextConfig({ enabled: false }));
+		mockedCall.mockResolvedValue({ ok: true, text: "s", usage: { input: 1, output: 2 } });
+		expect(manager.startForTool(makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE), undefined, "manual")).toBe(true);
+		expect(mockedCall).toHaveBeenCalledTimes(1);
+		await bgState.active?.done;
 	});
 
 	it("互斥（RL1）：任务进行中 startForTool 返回 false（U4 契约幂等语义）且不触 LLM；收尾回空闲", async () => {
@@ -994,6 +1014,7 @@ describe("工具路径启动（U5：互斥 + 门控前置，跳过触发线/熔�
 			},
 			getAllTools: () => [],
 			registerTool,
+			registerCommand: vi.fn(),
 			sendMessage: vi.fn(),
 			appendEntry: vi.fn(),
 		} as unknown as ExtensionAPI;
@@ -1127,7 +1148,7 @@ describe("终局通知回调 onSettled（U5：D6 失败不静默、不重复）"
 				handlers.set(name, handler);
 			},
 			getAllTools: () => [],
-			registerTool: vi.fn(),
+			registerTool: vi.fn(), registerCommand: vi.fn(),
 			sendMessage,
 			appendEntry: vi.fn(),
 		} as unknown as ExtensionAPI;
@@ -1159,7 +1180,7 @@ describe("终局通知回调 onSettled（U5：D6 失败不静默、不重复）"
 				handlers.set(name, handler);
 			},
 			getAllTools: () => [],
-			registerTool: vi.fn(),
+			registerTool: vi.fn(), registerCommand: vi.fn(),
 			sendMessage,
 			appendEntry: vi.fn(),
 		} as unknown as ExtensionAPI;
@@ -1255,7 +1276,7 @@ describe("落盘段 stale ctx 防线（C-pi-17：guardStaleCtx 接入，dmg-r1-1
 					handlers.set(name, handler);
 				},
 				getAllTools: () => [],
-				registerTool: vi.fn(),
+				registerTool: vi.fn(), registerCommand: vi.fn(),
 				sendMessage,
 				appendEntry: vi.fn(),
 			}) as unknown as ExtensionAPI;

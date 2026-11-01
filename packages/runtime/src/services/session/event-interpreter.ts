@@ -45,7 +45,7 @@ import { SUBAGENT_TOOL_NAMES, WORKFLOW_TOOL_NAMES } from '@taiji/shared'
 import { SUBAGENT_RECORD_CUSTOM_TYPE, WORKFLOW_RECORD_CUSTOM_TYPE } from '@zhushanwen/subagent-core'
 // [chat-flow-consistency D1] occupancy turn 维声明式状态机基建（ADR-0152 第 5 条承接）
 import { defineStateMachine } from '@zhushanwen/state-machine'
-import { CompactionNotifier } from './event-interpreter-compaction.js'
+import { CompactionNotifier, pickCompactionEntryForSignal } from './event-interpreter-compaction.js'
 import { LlmWindowSampler } from './event-interpreter-gen-stats.js'
 import { PingProbe } from './event-interpreter-ping.js'
 import { AgentSettledDelayer } from './event-interpreter-settled-delay.js'
@@ -56,8 +56,14 @@ import { AgentSettledDelayer } from './event-interpreter-settled-delay.js'
 export { PING_INTERVAL_MS, PING_FAIL_THRESHOLD, PING_WARN_FAIL_COUNT } from './event-interpreter-ping.js'
 import { toErrorMessage } from '../../utils/errors.js'
 import type { SessionManagerAction, CanvasMarkerAction } from '@zhushanwen/extension-protocol'
-// notify 通道 customType 词表单源（extension-protocol，与壳写点同源）
-import { SUBAGENT_BG_NOTIFY_CUSTOM_TYPE, WORKFLOW_RESULT_CUSTOM_TYPE } from '@zhushanwen/extension-protocol'
+// notify 通道 customType 词表单源（extension-protocol，与壳写点同源）；smart-context 落盘信号
+// 词表与 details 判读同源（C1 分界行实时化，扩展写侧同源消费）
+import {
+  parseCompactionPersistSignal,
+  SMART_CONTEXT_NOTICE_CUSTOM_TYPE,
+  SUBAGENT_BG_NOTIFY_CUSTOM_TYPE,
+  WORKFLOW_RESULT_CUSTOM_TYPE,
+} from '@zhushanwen/extension-protocol'
 import type { IFileChangeDiff } from '../ports/file-change-diff.js'
 import type {
   ForceQuitSource,
@@ -567,6 +573,16 @@ export interface EventInterpreterOptions {
    * taiji flush 的 live 入流位置与落盘位置一致（级联末）。
    */
   onAgentSettled?: (sessionId: string) => void
+  /**
+   * C1（feat-compaction-closure 分界行实时化）：get_entries 全量 entry 拉取回调（组合根注入
+   * pm.getClient(sessionId)?.getEntries()）。smart-context 落盘信号（customStart 帧的
+   * customType + details.source 双判据命中）到达时，经本通道取该 compaction entry 合成
+   * message.compactionSummary 帧（后台压缩按设计不伪造 pi 事件，分界行的 live 帧经此补发，
+   * 字段口径与 compaction_end 通路一致）。延迟解析 client（pingPi 同款）：interpreter 在
+   * session 创建时构造，client 可能尚未 spawn；未注入 / client 未就绪 / 拉取失败 → 降级
+   * 不发帧（warn 留痕），重开会话仍可见分界行（reload 通路无依赖）。
+   */
+  getPiEntries?: () => Promise<readonly unknown[] | undefined>
 }
 
 /** 可能改文件的工具（baseline diff 触发判定，与原 event-adapter 一致）。 */
@@ -859,6 +875,8 @@ export class EventInterpreter {
         this.handleSubagentBgNotify(ev.message)
         // workflow-result（run 完成）：广播 session.workflows 增量信号
         this.handleWorkflowResult(ev.message)
+        // smart-context 落盘信号（C1）：命中后取 compaction entry 合成对话流分界行帧
+        this.handleCompactionPersistSignal(ev.message)
         return true
       case 'subagent-stream':
         // 路径 A-1：subagent 逐字 streaming → subagent.stream_delta WS 帧
@@ -1345,6 +1363,65 @@ export class EventInterpreter {
     const payload = msg.payload as { customType?: string } | undefined
     if (payload?.customType !== WORKFLOW_RESULT_CUSTOM_TYPE) return
     this.opts.onRecordEntriesInvalidated?.(this.sessionId, WORKFLOW_RECORD_CUSTOM_TYPE)
+  }
+
+  /**
+   * smart-context 后台压缩落盘信号分诊（C1 分界行实时化，handleSubagentBgNotify 先例同款
+   * customType 分诊位）。双判据命中（customType + details.source）→ 异步取 compaction entry
+   * 合成 message.compactionSummary 帧。
+   *
+   * 为什么在这里合成：后台压缩按设计不伪造 pi 事件（UD6：appendCompaction 纯追加无事件），
+   * 分界行的 live 帧原本唯一来源是 pi compaction_end 事件——后台路径落盘后分界行只在重开
+   * 翻译时出现。本方法补 live 帧，字段口径与 compaction_end 通路（CompactionNotifier
+   * onCompactionEnd 成功分支）一致，消费侧 core registry 既有 handler 喂同一 reducer
+   * （live ≡ reload 构造性成立）。
+   *
+   * customStart 帧本身照常转发前端（display:false 消息在 core message-turns 分组管线透明
+   * 跳过，对话流不渲染——信号不是给用户看的）；分界行帧在其后追加，顺序即信号到达序。
+   */
+  private handleCompactionPersistSignal(msg: ServerMessage): void {
+    const payload = msg.payload as { customType?: string; details?: Record<string, unknown> } | undefined
+    if (payload?.customType !== SMART_CONTEXT_NOTICE_CUSTOM_TYPE) return
+    const signal = parseCompactionPersistSignal(payload.details)
+    if (!signal) return
+    void this.emitCompactionSummaryForPersistSignal(signal.compactionId)
+  }
+
+  /**
+   * 落盘信号 → compaction entry 拉取 → 合成 message.compactionSummary 帧（fire-and-forget：
+   * get_entries 是异步 RPC，不阻塞 interpret 批次——handleToolCallStart 异步 handler 同款）。
+   *
+   * 降级契约（信号通道不产生新故障面）：entry 拉取失败 / 未注入 / 目标缺失 → 不发帧、
+   * 不抛错、warn 留痕——最坏结果 = 分界行退回「重开会话才可见」原状，不阻断事件流。
+   */
+  private async emitCompactionSummaryForPersistSignal(compactionId?: string): Promise<void> {
+    try {
+      const entries = await this.opts.getPiEntries?.()
+      const entry = pickCompactionEntryForSignal(entries, compactionId)
+      if (!entry) {
+        console.warn(
+          `[event-interpreter] compaction persist signal: no compaction entry found (id=${compactionId ?? 'none'}), divider frame dropped, sid=${this.sessionId}`,
+        )
+        return
+      }
+      // 帧字段口径与 CompactionNotifier.onCompactionEnd 成功分支一致（timestamp 客户端时钟
+      // 为既有 live/reload 异源差异，registry 端 id 客户端生成 cmp-<uuid> 照旧）
+      this.opts.send({
+        type: 'message.compactionSummary',
+        payload: {
+          sessionId: this.sessionId,
+          summary: entry.summary,
+          tokensBefore: entry.tokensBefore,
+          timestamp: Date.now(),
+        },
+      })
+    } catch (err: unknown) {
+      // 降级策略（best-effort）：信号链路只承载「分界行提前出现」，失败不阻断 interpret
+      // 批次与事件流，最坏结果 = 分界行退回重开可见原状——warn 留痕后吞掉，不上抛。
+      console.warn(
+        `[event-interpreter] compaction persist signal handling failed (divider frame dropped): ${toErrorMessage(err)}`,
+      )
+    }
   }
 
   // ── compaction 生命周期编排已迁 CompactionNotifier（event-interpreter-compaction.ts，T4）──

@@ -10,7 +10,8 @@
  *
  * 与 extension 配置的两层关系（dmg-r2-3 登记，勿再混为一谈）：
  * - 落盘默认基底 = extension DEFAULT_SMART_CONTEXT_CONFIG 的**全字段**镜像（机器对拍锁定）；
- * - GUI 快照 = 其中 4 个 GUI 可编辑字段的扁平视图（ratio 无控件、无消费方，见接口注）。
+ * - GUI 快照 = 其中 5 个 GUI 可编辑字段的扁平视图（C3 独立压缩设置页起 ratio 入快照，
+ *   见接口注）。
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -21,14 +22,12 @@ import { extractRefString, rmwExtConfigField } from './ext-config-rmw.js'
  * GUI 侧的 smart-context 配置快照（extension 侧 SmartContextConfig 的扁平视图：
  * compactModel 折叠为 "provider/modelId" 复合串，空串 = 未设置/跟随当前会话模型）。
  *
- * 射程登记（dmg-r2-3）：本快照只含 4 个 GUI 可编辑字段——设置页「智能上下文压缩」节
- * 的四个控件（开关 / 压缩模型 / 三档提醒阈值 / 排除模型）。autoCompactThresholdRatio
- * 刻意不进快照：该字段无 GUI 控件、无 runtime 消费方，只由 extension 侧读取生效
- * （ADR-0182 D4 的后台自动压缩触发线，extensions/universal/smart-context/src/
- * compact-handler.ts）。它在落盘默认基底里全量镜像（见 smartContextDefaultBase 注），
- * 随 RMW 写出的文件完整携带，extension 读取侧 normalize 不依赖 runtime 补默认。
- * 将来若加 GUI 控件，字段入快照时须同步 packages/shared 的 config.smartContextConfig
- * reply 契约（否则 reply 会携带协议未声明字段）。
+ * 射程沿革（dmg-r2-3 登记 → C3 独立压缩设置页修订）：dmg-r2-3 时本快照只含 4 个
+ * GUI 可编辑字段，autoCompactThresholdRatio 因无控件刻意不进快照；C3 起设置页新增
+ * 触发阈值控件，该字段按其预登记义务入快照并同步 packages/shared 的
+ * config.smartContextConfig reply 契约（shared 协议已同步，无协议外字段）。字段生效
+ * 侧仍在 extension（后台自动压缩触发线，ADR-0182 D4，compact-handler.ts 读时刷新），
+ * runtime 无消费方、只经 RMW 落盘。
  */
 export interface SmartContextConfigSnapshot {
   enabled: boolean
@@ -38,6 +37,8 @@ export interface SmartContextConfigSnapshot {
   reminderThresholds: number[]
   /** 排除模型列表（完整 provider/modelId 精准匹配）。 */
   excludedModels: string[]
+  /** 后台压缩触发线（上下文占窗口比例 0-1，达到即触发；非有限数回默认 0.9）。 */
+  autoCompactThresholdRatio: number
 }
 
 /** 配置文件相对路径（与 pi-smart-context 的 llm-shared getConfigPath('smart-context') 契约一致）。 */
@@ -55,14 +56,14 @@ const SMART_CONTEXT_MAX_THRESHOLD_TIERS = 3
 /**
  * 后台压缩触发线默认值（窗口 90%，与 extension 的 DEFAULT_AUTO_COMPACT_THRESHOLD_RATIO
  * 一致：extensions/universal/smart-context/src/pure.ts:32；ADR-0182 D4）。
- * 只进落盘默认基底、不进 GUI 快照——射程理由见 SmartContextConfigSnapshot 接口注。
+ * 进落盘默认基底与 GUI 快照（C3 起 GUI 有触发阈值控件，快照射程见 SmartContextConfigSnapshot 接口注）。
  */
 const SMART_CONTEXT_DEFAULT_AUTO_COMPACT_THRESHOLD_RATIO = 0.9
 
 /**
  * 落盘默认基底工厂（文件缺失/损坏时用，与 extension 的 DEFAULT_SMART_CONTEXT_CONFIG
  * **全字段**一致：extensions/universal/smart-context/src/pure.ts:50）——含
- * autoCompactThresholdRatio（GUI 快照不含它，射程见 SmartContextConfigSnapshot 接口注）。
+ * autoCompactThresholdRatio（C3 起 GUI 快照同样含它，见 SmartContextConfigSnapshot 接口注）。
  * 工厂形态保证每次全新对象/数组，各 RMW 写点不共享嵌套引用。
  *
  * 全字段一致性由 src/services/__tests__/smart-context-config-default-parity.test.ts
@@ -103,9 +104,17 @@ function normalizeExcludedModels(raw: unknown): string[] {
   return [...new Set(raw.filter((m): m is string => typeof m === 'string' && m.includes('/')))]
 }
 
+/** 触发线归一（与 extension normalizeSmartContextConfig 同款纪律）：非有限数回默认，有限数钳制 [0,1]。 */
+function normalizeAutoCompactThresholdRatio(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return SMART_CONTEXT_DEFAULT_AUTO_COMPACT_THRESHOLD_RATIO
+  }
+  return Math.min(1, Math.max(0, raw))
+}
+
 /**
- * 默认快照（GUI 可编辑四字段的默认值；落盘基底是全字段镜像，见
- * smartContextDefaultBase——两者的字段集差异是刻意的 GUI 快照射程，非漏抄）。
+ * 默认快照（GUI 可编辑五字段的默认值；落盘基底是全字段镜像，见
+ * smartContextDefaultBase——两者字段集一致，形态差异只剩 compactModel 的折叠）。
  */
 function smartContextDefaults(): SmartContextConfigSnapshot {
   return {
@@ -113,6 +122,7 @@ function smartContextDefaults(): SmartContextConfigSnapshot {
     compactModel: '',
     reminderThresholds: defaultThresholds(),
     excludedModels: [],
+    autoCompactThresholdRatio: SMART_CONTEXT_DEFAULT_AUTO_COMPACT_THRESHOLD_RATIO,
   }
 }
 
@@ -132,6 +142,7 @@ export function getSmartContextConfig(): SmartContextConfigSnapshot {
       compactModel: extractRefString(r, 'compactModel'),
       reminderThresholds: normalizeThresholds(r['reminderThresholds']),
       excludedModels: normalizeExcludedModels(r['excludedModels']),
+      autoCompactThresholdRatio: normalizeAutoCompactThresholdRatio(r['autoCompactThresholdRatio']),
     }
   } catch {
     return smartContextDefaults()
@@ -174,5 +185,13 @@ export function setSmartContextExcludedModels(models: string[]): void {
   const normalized = normalizeExcludedModels(models)
   writeSmartContextField((base) => {
     base['excludedModels'] = normalized
+  })
+}
+
+/** 设置后台压缩触发线（0-1 窗口占比；非有限数归默认 0.9、有限数钳制 [0,1]，与 extension normalize 同款）。 */
+export function setSmartContextAutoCompactThresholdRatio(ratio: number): void {
+  const normalized = normalizeAutoCompactThresholdRatio(ratio)
+  writeSmartContextField((base) => {
+    base['autoCompactThresholdRatio'] = normalized
   })
 }
