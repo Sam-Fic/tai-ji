@@ -1,20 +1,15 @@
 // src/execution/engine/common/nesting-guard.ts
 //
-// 嵌套防护（跨进程 env 标记 + 进程内 ALS 深度计数）的 re-export shim：实现体单源
-// @zhushanwen/subagent-engine-sdk（自本文件逐字等价移入 SDK，s4-reuse 簇 2；
-// 设计权威源 D8 / D3-⑤ 注释随实现留在 SDK 侧）。core 内消费方（subagent-service
-// 与本目录测试）import 路径保持不变。唯一行为差异：assertNotNestedSpawn 抛
-// NestedSpawnRejectedError（SDK 形态，code/recovery 文案逐字一致）而非 core
-// EngineError——该函数在 core 非测试代码零调用方，错误类形态差异无生产影响。
-// 错误类随 shim 一并导出（本目录测试断言消费；core barrel 不转发本模块，无对外
-// 导出范围影响）。
+// 嵌套上下文类型的 re-export shim：实现体单源 @zhushanwen/subagent-engine-sdk
+//（自本文件逐字等价移入 SDK，s4-reuse 簇 2）。core 内消费方（subagent-service 与
+// service 层聚合）消费 ExecutionNestingContext（类，值形态 per-Service 实例化）与
+// ExecutionNestingState 类型（身份归属域：parentRecordId / depth 派发身份），import
+// 路径保持不变。
+//
+// 原 assertNotNestedSpawn / NestedSpawnRejectedError（检测到统一标记即拒绝递归派发）
+// 已随禁嵌套派发删除——从未接线（零生产调用方），防线 = 被派发子进程经扩展精简
+// 装配无派发工具。buildNestedSpawnEnv / NESTED_SPAWN_ENV 的消费方在 SDK 与
+// zcode-subagent-cli，core 不经本 shim 转发。
 
-export {
-  assertNotNestedSpawn,
-  buildNestedSpawnEnv,
-  ExecutionNestingContext,
-  type ExecutionNestingState,
-  NestedSpawnRejectedError,
-  NESTED_SPAWN_ENV,
-  type SpawnEnv,
-} from "@zhushanwen/subagent-engine-sdk";
+export { ExecutionNestingContext } from "@zhushanwen/subagent-engine-sdk";
+export type { ExecutionNestingState } from "@zhushanwen/subagent-engine-sdk";

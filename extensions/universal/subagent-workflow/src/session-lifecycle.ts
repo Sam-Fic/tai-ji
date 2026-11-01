@@ -504,6 +504,34 @@ function appendSubagentIdentityEntry(pi: ExtensionAPI): void {
 }
 
 /**
+ * 当前进程是否「被派发的 subagent 子进程」。
+ *
+ * 判据 = PI_SUBAGENT_SELF_RECORD_ID 非空（引擎 spawn 链 child-env 的
+ * applyLinkageIdentityKeys 每次派发注入的自身 record id；主进程与人工 export
+ * 空值均不命中）——与 appendSubagentIdentityEntry 的身份写入判据同一 env 键。
+ * 显式传 env 供测试注入。
+ */
+export function isDispatchedChildProcess(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return Boolean(env.PI_SUBAGENT_SELF_RECORD_ID);
+}
+
+/**
+ * 被派发子进程的精简生命周期装配（禁嵌套派发）。
+ *
+ * 子进程内本扩展只保留支撑件：session_start 写 subagent-identity entry（消费方
+ * session-reader 家族判定 + session-reconstructor 跨重启重建）。派发件（7 工具 /
+ * 3 命令 / 4 注入器 / workflow 域事件族 / 引擎注册 / engines.json 同步）一概不装
+ * ——嵌套派发从能力上不存在；宿主进程形态见 index.ts 全量装配。
+ */
+export function setupChildProcessLifecycle(pi: ExtensionAPI): void {
+  pi.on("session_start", () => {
+    appendSubagentIdentityEntry(pi);
+  });
+}
+
+/**
  * 随迁块 4 的进程级维护三连（各 try-catch「失败记日志不阻断」，设计 §3.4）：
  * 引擎 journal TTL 回收 / ADR-035 manifest tmp 恢复 / ADR-035 worktree reaper 扫描。
  * （[modeless 波5] 原 [E1] sync 批崩溃恢复接线已摘除；[collect 退役] core 侧

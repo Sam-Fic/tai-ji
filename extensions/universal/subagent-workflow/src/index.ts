@@ -56,6 +56,8 @@ import { registerSubagentModelCommand } from "./interface/command/subagent-model
 import { registerSubagentsTool } from "./interface/tool/tool-subagents.ts";
 import { registerWorkflowTool } from "./interface/tool/tool-workflow.ts";
 import { registerWorkflowScriptTool } from "./interface/tool/tool-workflow-script.ts";
+// ═══ 会话生命周期装配 seam（测试可注入 fake 依赖）═══
+import { isDispatchedChildProcess, setupChildProcessLifecycle } from "./session-lifecycle.ts";
 // ═══ workflow 域事件族装配 seam（7 个 pi.on handler + makeDeps/lazyDeps；
 // 与 session-lifecycle.ts 同构，D2 原样搬移 + lazyDeps 样板收敛） ═══
 import { setupWorkflowDomain } from "./workflow-events.ts";
@@ -64,8 +66,17 @@ import { setupWorkflowDomain } from "./workflow-events.ts";
 
 export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
   // 注入 pi handle 给全局 extension-logger，让深层代码（best-effort / error-recovery）
-  // 的 getLogger("subagents") 也能走 appendEntry。
+  // 的 getLogger("subagents") 也能走 appendEntry。两种进程形态（宿主 / 被派发子进程）
+  // 都先注入——子进程形态的 identity 写入失败告警也走该通道。
   setPiHandle(pi);
+
+  // 被派发子进程形态（禁嵌套派发）：只装配 identity 写入支撑，派发工具 / 命令 /
+  // 注入器 / workflow 域不进入子进程——嵌套从能力上不存在。判据与装配件清单见
+  // session-lifecycle.ts 的 isDispatchedChildProcess / setupChildProcessLifecycle。
+  if (isDispatchedChildProcess()) {
+    setupChildProcessLifecycle(pi);
+    return;
+  }
 
   // [u0-wire] core 宿主端口接线：本波端口尚无 core 消费方（消费切换在 u0-log /
   // u0-data-discovery / u0-notify 波次），接线本身零行为变化。紧随 setPiHandle——

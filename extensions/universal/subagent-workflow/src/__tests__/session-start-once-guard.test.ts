@@ -3,8 +3,10 @@
 // u-audit-fix 探针实测（subagent-workflow 侧）：判定「必须接入」的跨 session 副作用
 // 操作经 oncePerProcess 包装后，双派发
 // （factory 二调/handler 累积形态：同一 handler 引用直接调两次）下各执行 1 次；
-// 粒度边界豁免（明令不包装）的 ③identity appendEntry /
-// ⑥service.initSession 保持每 session_start 执行（×2，防误伤反向断言）。
+// 粒度边界豁免（明令不包装）的 ③identity appendEntry / ⑥service.initSession 保持每
+// session_start 执行（×2，防误伤反向断言）。[禁嵌套] ③⑥ 随子进程形态分流拆为两个
+// 用例：env 注入（子进程）验证 ③identity ×2 + 派发件零装配；无 env（宿主）验证
+// ⑥initSession ×2——原「env 注入 + 全装配」组合随分流不再存在。
 //
 // [B1] recoverCrashedRuns 已移出检查清单（原⑪）：W17 后 loadAll 只读本 session
 // entries、save 只写自身 runId 的 state 文件——恢复是 session 级幂等操作，挂进程级
@@ -200,16 +202,20 @@ beforeEach(() => {
 
 // ── helpers（对齐 session-lifecycle.test.ts 形态） ──
 
-/** 创建可观察 eventBus.emit / appendEntry 的 mock ExtensionAPI，捕获 session_start handler。 */
+/** 创建可观察 eventBus.emit / appendEntry / 工具与命令注册的 mock ExtensionAPI，捕获 session_start handler。 */
 function createMockPi(): {
   pi: ExtensionAPI;
   emits: Array<{ channel: string; data: unknown }>;
   appendEntryCalls: Array<{ customType: string; data: unknown }>;
+  toolRegistrations: string[];
+  commandRegistrations: string[];
   getSessionStartHandler: () => ((event: unknown, ctx: unknown) => Promise<void>) | undefined;
 } {
   let sessionStartHandler: ((event: unknown, ctx: unknown) => Promise<void>) | undefined;
   const emits: Array<{ channel: string; data: unknown }> = [];
   const appendEntryCalls: Array<{ customType: string; data: unknown }> = [];
+  const toolRegistrations: string[] = [];
+  const commandRegistrations: string[] = [];
   const events = {
     emit(channel: string, data: unknown): void {
       emits.push({ channel, data });
@@ -233,6 +239,16 @@ function createMockPi(): {
           appendEntryCalls.push({ customType, data });
         };
       }
+      if (prop === "registerTool") {
+        return (tool: { name?: string }) => {
+          toolRegistrations.push(tool?.name ?? "<anonymous>");
+        };
+      }
+      if (prop === "registerCommand") {
+        return (cmd: { name?: string }) => {
+          commandRegistrations.push(cmd?.name ?? "<anonymous>");
+        };
+      }
       if (prop === "sendMessage") return noop;
       if (prop === "registerMessageRenderer") return noop;
       return noop;
@@ -242,6 +258,8 @@ function createMockPi(): {
     pi,
     emits,
     appendEntryCalls,
+    toolRegistrations,
+    commandRegistrations,
     getSessionStartHandler: () => sessionStartHandler,
   };
 }
@@ -324,12 +342,13 @@ describe("session_start 双派发幂等检查（oncePerProcess，u-audit-fix）"
     });
   });
 
-  it("防误伤：③identity appendEntry / ⑥initSession 每 session_start 执行（双派发 ×2）", async () => {
+  it("防误伤（子进程形态）：③identity appendEntry 每 session_start 执行（双派发 ×2）且不装配派发件", async () => {
     // ③ identity 只在子进程 env 注入时写（主进程跳过）——注入后双派发应 ×2
     process.env.PI_SUBAGENT_SELF_RECORD_ID = "rec-once-1";
     process.env.PI_SUBAGENT_AGENT = "reviewer";
     try {
-      const { pi, appendEntryCalls, getSessionStartHandler } = createMockPi();
+      const { pi, appendEntryCalls, toolRegistrations, commandRegistrations, getSessionStartHandler } =
+        createMockPi();
       subagentsExtension(pi);
       vi.clearAllMocks();
 
@@ -342,13 +361,33 @@ describe("session_start 双派发幂等检查（oncePerProcess，u-audit-fix）"
       // ③ 本 session entry：每派发一次（进程级 flag 会杀掉后续 session 的 identity 写入）
       const identityEntries = appendEntryCalls.filter((c) => c.customType === IDENTITY_CUSTOM_TYPE);
       expect(identityEntries).toHaveLength(2);
-      // [④ 账本 bind 断言随波 2 账本退役删除——装配归 base-tool-enhance，本壳零装配]
-      // ⑥ service 覆盖式注入：SR-3 语义要求每 session_start 重新注入
-      expect(mockInitSession).toHaveBeenCalledTimes(2);
-      expect(mockInitModel).toHaveBeenCalledTimes(2);
+      // [禁嵌套] 子进程形态不装配派发件：工具 / 命令零注册、service 不装配——
+      // 嵌套派发从能力上不存在（宿主形态的 ⑥ 断言见下一用例）
+      expect(toolRegistrations).toHaveLength(0);
+      expect(commandRegistrations).toHaveLength(0);
+      expect(mockInitSession).not.toHaveBeenCalled();
+      expect(mockInitModel).not.toHaveBeenCalled();
     } finally {
       delete process.env.PI_SUBAGENT_SELF_RECORD_ID;
       delete process.env.PI_SUBAGENT_AGENT;
     }
+  });
+
+  it("防误伤（宿主形态）：⑥initSession 每 session_start 执行（双派发 ×2）", async () => {
+    // 宿主形态（无子进程 env）下 service 覆盖式注入的防误伤语义保持：SR-3 要求每
+    // session_start 重新注入——原「env 注入 + 全装配」组合验证随禁嵌套分流拆出本用例
+    //（env 注入即子进程精简装配，见上一用例）。
+    const { pi, getSessionStartHandler } = createMockPi();
+    subagentsExtension(pi);
+    vi.clearAllMocks();
+
+    const handler = getSessionStartHandler();
+    expect(handler).toBeDefined();
+    const ctx = createMockCtx();
+    await handler!({ type: "session_start", reason: "startup" }, ctx);
+    await handler!({ type: "session_start", reason: "resume" }, ctx);
+
+    expect(mockInitSession).toHaveBeenCalledTimes(2);
+    expect(mockInitModel).toHaveBeenCalledTimes(2);
   });
 });
