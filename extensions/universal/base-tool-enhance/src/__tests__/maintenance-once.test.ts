@@ -147,10 +147,10 @@ describe("session_start maintenance chain after reap sink (u-bte-remove)", () =>
 		// reapSkipped 字段已随 reap 下沉移除（u-bte-remove 变更登记，S6「批 2 后
 		// reap 类操作不再执行」）
 		expect(loggerMock.debug).toHaveBeenCalledTimes(2);
-		expect(loggerMock.debug).toHaveBeenNthCalledWith(1, "session_start maintenance dispatch", {
+		expect(loggerMock.debug).toHaveBeenNthCalledWith(1, "reconcile maintenance dispatch", {
 			detail: { reason: "startup" },
 		});
-		expect(loggerMock.debug).toHaveBeenNthCalledWith(2, "session_start maintenance dispatch", {
+		expect(loggerMock.debug).toHaveBeenNthCalledWith(2, "reconcile maintenance dispatch", {
 			detail: { reason: "resume" },
 		});
 	});
@@ -191,5 +191,68 @@ describe("session_start maintenance chain after reap sink (u-bte-remove)", () =>
 			"session_start pending reconcile failed; zombies retried next session start",
 			expect.objectContaining({ detail: expect.objectContaining({ err: "sync boom" }) }),
 		);
+	});
+});
+
+// ── agent_settled 回合收尾边沿（completion-signal-delivery D2/D7②：对账第三入口）──
+// RL13：订阅在装配期（extension load 顶层）注册、每 pi 实例恰一次；同进程 session
+// 替换重新 load 时旧实例连同订阅一并消亡（eventBus 重建），新实例重新注册——无死
+// handler 累积。RL12：三入口（session_start / __taiji_bg_reconcile__ / agent_settled）
+// 编排互调同一对账函数，对同一事实状态产出同一判定（此处锁编排面——参数一致；
+// 判据真值面在 pending-reconcile.test.ts）。
+describe("agent_settled edge: third reconcile entry (completion-signal-delivery D2/D7)", () => {
+	function getAgentSettledHandler(pi: ReturnType<typeof createMockPi>) {
+		const handler = pi.on.mock.calls.find((call) => call[0] === "agent_settled")?.[1];
+		expect(handler).toBeTypeOf("function");
+		return handler as (event: { type: "agent_settled" }, ctx: unknown) => Promise<void>;
+	}
+
+	it("registers exactly one agent_settled subscription at load time (RL13: per-instance single subscription)", async () => {
+		const mod = await loadExtension();
+		const pi = createMockPi();
+		mod.default(pi as unknown as ExtensionAPI);
+
+		const registrations = pi.on.mock.calls.filter((call) => call[0] === "agent_settled");
+		expect(registrations).toHaveLength(1);
+		// 重绑形态 = session 替换重新 load：新实例（新 mock pi）再 load 恰一次注册，
+		// 旧实例订阅随旧实例消亡——「新实例恰一订阅」即本断言 + 上行单次注册
+		const piSecond = createMockPi();
+		mod.default(piSecond as unknown as ExtensionAPI);
+		expect(piSecond.on.mock.calls.filter((call) => call[0] === "agent_settled")).toHaveLength(1);
+		expect(pi.on.mock.calls.filter((call) => call[0] === "agent_settled")).toHaveLength(1);
+	});
+
+	it("routes every settle edge through the SAME maintenance chain as session_start (RL12 orchestration face)", async () => {
+		const mod = await loadExtension();
+		const pi = createMockPi();
+		mod.default(pi as unknown as ExtensionAPI);
+		const settleHandler = getAgentSettledHandler(pi);
+		const sessionStartHandler = getSessionStartHandler(pi);
+		const [, reconcileCommand] = pi.registerCommand.mock.calls[0] as [
+			string,
+			{ handler: (args: string, ctx: unknown) => Promise<void> },
+		];
+		const ctx = makeCtx();
+
+		await settleHandler({ type: "agent_settled" }, ctx);
+		expect(reconcileMock).toHaveBeenCalledTimes(1);
+		expect(reconcileMock).toHaveBeenNthCalledWith(1, expect.anything(), dataDirRef.dir, "sid-once", []);
+
+		// 三入口对同一 ctx 状态各派发一次对账、参数形态完全一致（判据单一）
+		await sessionStartHandler(makeEvent("resume"), ctx);
+		await reconcileCommand.handler("", ctx);
+		expect(reconcileMock).toHaveBeenCalledTimes(3);
+		for (const call of reconcileMock.mock.calls) {
+			expect(call[1]).toBe(dataDirRef.dir);
+			expect(call[2]).toBe("sid-once");
+			expect(call[3]).toEqual([]);
+		}
+		// 高频边沿入口 debug 日志带边沿标识（S6 观测通道三入口可辨）
+		expect(loggerMock.debug).toHaveBeenCalledWith("reconcile maintenance dispatch", {
+			detail: { reason: "agent_settled" },
+		});
+		expect(loggerMock.debug).toHaveBeenCalledWith("reconcile maintenance dispatch", {
+			detail: { reason: "resume" },
+		});
 	});
 });

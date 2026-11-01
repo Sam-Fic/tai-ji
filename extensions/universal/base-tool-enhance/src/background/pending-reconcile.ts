@@ -18,13 +18,27 @@
  * isPendingActive 对 entries 现算，而对账 appendEntry 同步入账先于 emit 执行，emit
  * 到达时该 id 必已注销 = 恒 no-op 死路径。）
  *
- * 职责二（收殓终态通知补投，D3 裁决 1）：对「registry 终态 = 收殓（exited
- * process-exit / orphaned）∧ 会话 entries 无送达痕迹」的后台任务，逐任务经
- * port.deliver 补投终态通知（id = taskId 幂等键、terminated 措辞、无业务 details）。
- * 收殓终态无 outbox 条目（收殓时 pi API 不可用不投递），port 的差集重放无从覆盖——
- * 本路径是收殓终态通知的唯一生产者。真实终态（natural/timeout）与投递 throw 形态
- * 已随波 3 退役出补投：主路径入账后丢失由 port 的 outbox 差集重放覆盖（受理前落盘
- * + details-id 凭据未命中即差集）。
+ * 职责二（终态通知对账补投，completion-signal-delivery D2/D6；收殓形态为波 3 既有
+ * 子集）：对「registry 已终态 ∧ 会话 entries 无送达痕迹 ∧ 投递日志无该幂等键条目」
+ * 的后台任务，逐任务经 port.deliver 补投终态通知（id = taskId 幂等键）。三重事实判据
+ * 覆盖两类形态，payload 分层（D6）：
+ *  - rejected 补投（本设计新增候选：exited natural/timeout）——主路径受理被拒
+ *    （rejected 条目幂等键未登记、无投递日志条目，port 的差集重放结构性无从覆盖），
+ *    补投 = 主路径同款 content + details + collectKey（补投的就是主路径本要发的那条
+ *    通知，渲染层 GUI 呈现依赖 details 随补投补齐）；
+ *  - 收殓补投（既有候选：orphaned / exited process-exit）——收殓时 pi API 不可用不
+ *    投递、无投递日志条目，重放无从覆盖；本路径是其通知的唯一生产者，补投维持
+ *    terminated 简报形态（无业务 details——「不谎报」既有裁决：收殓时点不存在时长/
+ *    成败事实，且不存在可对齐的「主路径同一条通知」）。
+ * 判据、幂等与 payload 分层的完整语义登记 = 设计文档 §3.3 D1/D2/D6/D7；判据骨架的
+ * 跨域共享落点 = notify-reconcile-judgement.ts（u3/u5 域侧同构映射进同一骨架）。
+ * killed 终态排除于候选（成因排除位——kill 发令方当次交互已同步获知，补投是重复
+ * 刺激；kill 路径通知不入账的单点归属规则见 notify.ts 文件头）。
+ *
+ * 三边沿入口（session_start / __taiji_bg_reconcile__ 切回 / agent_settled 回合收尾）
+ * 经 index.ts 编排互调本文件的 reconcilePendingEntries——判据单一（RL12）：三入口对
+ * 同一事实状态产出同一判定，跨边沿双投由 port 幂等吞并防住。agent_settled 高频边沿
+ * 的成本下界 = 判据预检先行短路（registry 终态量级扫描，无候选不触 entries 全扫描）。
  *
  * 幂等体系（随载体换 port 收敛）：旧「补投标记 entry + in-flight 单飞检查」退役——
  * 防双投由 port 幂等接管（deliver 幂等预检 + 内核三级判重 + outbox/ack 终态列）：
@@ -56,9 +70,11 @@ import { getDeliveryPort } from "@zhushanwen/pi-delivery-port";
 import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 
-import { collectDeliveredTaskIds } from "./notify-reconcile-judgement.ts";
+import { collectDeliveredTaskIds, collectJournaledDeliveryIds, isReconcileNotifyCandidate, type ReconcileNotifyFacts } from "./notify-reconcile-judgement.ts";
 import {
 	BACKGROUND_BASH_CUSTOM_TYPE,
+	buildNotificationContent,
+	buildNotifyDetails,
 	buildTerminatedNotificationLine,
 	toPendingReason,
 } from "./notify.ts";
@@ -207,12 +223,16 @@ function settledPendingReason(
 }
 
 /**
- * 收殓终态通知补投（D3 裁决 1：registry 全集独立遍历，不挂 pending 差集循环——差集
- * 候选 = pending:register 还挂着的任务，而收殓形态「exit 边沿 unregister 已写、
- * 通知从未投出」下差集为空，挂靠即永久漏补）。逐任务经 port.deliver（幂等键 = taskId）：
+ * 终态通知对账补投（D2：registry 全集独立遍历，不挂 pending 差集循环——差集
+ * 候选 = pending:register 还挂着的任务，而「exit 边沿 unregister 已写、通知从未
+ * 投出」下差集为空，挂靠即永久漏补）。逐候选经 port.deliver（幂等键 = taskId）：
  * accepted 计入 redelivered；swallowed = port 幂等命中（同 id 已在途/已终局）正常
- * 收敛；rejected = 未受理（outbox 未落）warn 留痕——判据仍命中，下一 session_start
- * 幂等重投。
+ * 收敛；rejected = 未受理（outbox 未落）warn 留痕——判据仍命中，下一对账边沿
+ * （session_start / 切回 / agent_settled）幂等重投。
+ *
+ * 成本预检短路（D2/D7：agent_settled 高频边沿的常态成本下界）：registry 侧事实
+ * （终态 ∧ 非 killed）先行短路，无候选不触 entries 全扫描；候选在册才扫 entries，
+ * 且一次遍历产出送达痕迹 + 投递日志两集合（不双倍扫描）。
  */
 function deliverReapNotifications(
 	deliver: ReconcileDeliver | undefined,
@@ -230,22 +250,24 @@ function deliverReapNotifications(
 	const registry = readRegistry(getRegistryPath(dataDir, sessionId));
 	if (registry.size === 0) return;
 
-	const delivered = collectDeliveredTaskIds(entries);
+	// ① 预检短路：registry 侧事实（终态 ∧ 非 killed；痕迹/日志两事实预检置空 =
+	// 只查 registry 侧）——无候选即早退，entries 全扫描不发生（判据单一：预检与
+	// 终判共用同一骨架映射 registryFacts，不另立第二套真值）
+	const candidates: RegistryEntry[] = [];
 	for (const entry of registry.values()) {
-		if (!isReapNotifyCandidate(entry, delivered)) continue;
+		if (isReapNotifyCandidate(entry)) candidates.push(entry);
+	}
+	if (candidates.length === 0) return;
+
+	// ② 候选在册：一次遍历 entries 产出两事实集合，终判三重判据
+	const delivered = collectDeliveredTaskIds(entries);
+	const journaled = collectJournaledDeliveryIds(entries);
+	for (const entry of candidates) {
+		if (!isReapNotifyCandidate(entry, delivered, journaled)) continue;
 		const receipt = deliver(
-			{
-				id: entry.taskId,
-				timing: "steer",
-				payload: {
-					kind: "custom",
-					customType: BACKGROUND_BASH_CUSTOM_TYPE,
-					content: buildTerminatedNotificationLine(entry),
-					display: true,
-				},
-			},
-			// collectKey 债权申报（result-collect 域，现行登记处 = ADR-0146）：与主链
-			// notify.ts 同款——重启后补投的通知条目带键，collect 可收取收殓终态。
+			buildReapNotifyEnvelope(entry),
+			// collectKey 债权申报（result-collect 域，现行登记处 = ADR-0146）：两类补投
+			// 均与主链 notify.ts 同款申报——补投通知条目带键，collect 可收取（D6①②）。
 			{ collectKey: [entry.taskId] },
 		);
 		if (receipt.kind === "accepted") {
@@ -259,21 +281,81 @@ function deliverReapNotifications(
 }
 
 /**
- * 收殓补投候选判据：终态 = 收殓（orphaned，或 exited 且成因 = process-exit）∧ 送达
- * 痕迹未命中。
- *
- *  - 真实终态（exited natural/timeout）不是候选：主路径已入账（outbox），丢失由 port
- *    差集重放覆盖（波 3 补投退役，D3 裁决 1）。
- *  - killed 由「exited 分支只认 process-exit」结构性排除（killed 是 exited 的 reason
- *    枚举值——kill 发令方当次交互已同步获知结果，补投是重复刺激，老能力映射 #10
- *    result 类 silent）。
- *  - killing/running+判死遗留不是候选（非严格终态；退化现状，由 unregister 收尾兜底）。
+ * 补投 payload 分层（D6）：rejected 补投候选（exited natural/timeout）= 主路径
+ * 同款 content + details（buildNotificationContent / buildNotifyDetails 同一构造
+ * ——registry 终态条目已含通知构造所需全部字段，参数侧结构子集 NotificationTaskLike
+ * 由 registry 条目直接满足）；收殓补投候选（orphaned / exited process-exit）= 维持
+ * terminated 简报（无业务 details——「不谎报」既有裁决：收殓时点不存在时长/成败
+ * 事实，且对账路径是其唯一生产者，无「主路径同一条通知」可对齐，波 3 形态原样）。
  */
-function isReapNotifyCandidate(entry: RegistryEntry, delivered: Set<string>): boolean {
-	const isReaped =
-		entry.state === "orphaned" || (entry.state === "exited" && entry.reason === "process-exit");
-	if (!isReaped) return false;
-	// 送达痕迹在（主路径/历史补投的通知消息在 entries）→ 不再投
-	if (delivered.has(entry.taskId)) return false;
-	return true;
+function buildReapNotifyEnvelope(entry: RegistryEntry): ReapNotifyEnvelope {
+	if (isReapedForm(entry)) {
+		return {
+			id: entry.taskId,
+			timing: "steer",
+			payload: {
+				kind: "custom",
+				customType: BACKGROUND_BASH_CUSTOM_TYPE,
+				content: buildTerminatedNotificationLine(entry),
+				display: true,
+			},
+		};
+	}
+	return {
+		id: entry.taskId,
+		timing: "steer",
+		payload: {
+			kind: "custom",
+			customType: BACKGROUND_BASH_CUSTOM_TYPE,
+			content: buildNotificationContent(entry),
+			display: true,
+			details: buildNotifyDetails(entry),
+		},
+	};
 }
+
+/** 收殓形态判定（payload 分层用；判据层不区分两形态——三重事实同一判据）。 */
+function isReapedForm(entry: RegistryEntry): boolean {
+	return entry.state === "orphaned" || (entry.state === "exited" && entry.reason === "process-exit");
+}
+
+/** 补投信封（结构 = ReconcileDeliver 首参；D6 payload 分层后的两形态联合）。 */
+type ReapNotifyEnvelope = Parameters<ReconcileDeliver>[0];
+
+/**
+ * 补投候选判据（D2 三重事实：终态 ∧ 送达痕迹未命中 ∧ 投递日志无该幂等键条目）。
+ * 判据单一导出（RL12 行为锁：三个边沿入口对同一事实状态产出同一判定——判据本体
+ * = notify-reconcile-judgement.isReconcileNotifyCandidate 骨架，本函数是 bash 域
+ * registry 事实映射；delivered/journaled 缺省 = 空（只查 registry 侧事实），即
+ * deliverReapNotifications ① 的预检短路形态，不另立第二套真值）。
+ *
+ * 成因排除位（检查点登记的表达形态 = 成因排除位，非痕迹判据覆盖）：killed 的
+ * kill 发令方当次交互已同步获知结果（notify.ts kill 路径通知不入账的单点归属
+ * 规则），痕迹/日志对 killed 恒未命中——不排除将结构性误报候选（N1 场景）。
+ * killing / running+判死遗留不是候选（isTerminalState 排除非严格终态；退化现状
+ * 由 unregister 收尾兜底，波 3 语义原样）。
+ */
+export function isReapNotifyCandidate(
+	entry: RegistryEntry,
+	delivered: ReadonlySet<string> = EMPTY_ID_SET,
+	journaled: ReadonlySet<string> = EMPTY_ID_SET,
+): boolean {
+	return isReconcileNotifyCandidate(registryFacts(entry, delivered, journaled));
+}
+
+/** bash 域 registry 条目 → 判据骨架事实映射（预检短路与终判共用同一映射）。 */
+function registryFacts(
+	entry: RegistryEntry,
+	delivered: ReadonlySet<string>,
+	journaled: ReadonlySet<string>,
+): ReconcileNotifyFacts {
+	return {
+		isTerminal: isTerminalState(entry.state),
+		excludedByOrigin: entry.reason === "killed",
+		delivered: delivered.has(entry.taskId),
+		journaled: journaled.has(entry.taskId),
+	};
+}
+
+/** 空事实集合常量（isReapNotifyCandidate 预检形态的缺省参数，避免逐调用建集合）。 */
+const EMPTY_ID_SET: ReadonlySet<string> = new Set<string>();
