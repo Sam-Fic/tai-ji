@@ -174,7 +174,7 @@ function piUsageEntry(opts: {
   return JSON.stringify(entry)
 }
 
-/** 构造 branch_summary entry（无 usage，设计文档 §2.1 事实 1 已验证）。 */
+/** 构造 branch_summary entry（无 usage——③ 计入规则的负例，不产出行）。 */
 function branchSummaryEntry(): string {
   return JSON.stringify({
     type: 'branch_summary',
