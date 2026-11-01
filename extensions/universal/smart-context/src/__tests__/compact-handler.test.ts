@@ -515,7 +515,7 @@ describe("后台事件取消与独立熔断（U2 验收②：RL1）", () => {
 				handlers.set(name, handler);
 			},
 			getAllTools: () => [],
-			registerTool: vi.fn(),
+			registerTool: vi.fn(), registerCommand: vi.fn(),
 			sendMessage: vi.fn(),
 			appendEntry: vi.fn(),
 		} as unknown as ExtensionAPI;
@@ -846,7 +846,7 @@ describe("appendCompaction 直调链路（U3 验收②③：RL3 存在性探测 
 				handlers.set(name, handler);
 			},
 			getAllTools: () => [],
-			registerTool: vi.fn(),
+			registerTool: vi.fn(), registerCommand: vi.fn(),
 			sendMessage,
 			appendEntry: vi.fn(),
 		} as unknown as ExtensionAPI;
@@ -1004,6 +1004,7 @@ describe("工具路径启动（U5：互斥 + 门控前置，跳过触发线/熔�
 			},
 			getAllTools: () => [],
 			registerTool,
+			registerCommand: vi.fn(),
 			sendMessage: vi.fn(),
 			appendEntry: vi.fn(),
 		} as unknown as ExtensionAPI;
@@ -1137,7 +1138,7 @@ describe("终局通知回调 onSettled（U5：D6 失败不静默、不重复）"
 				handlers.set(name, handler);
 			},
 			getAllTools: () => [],
-			registerTool: vi.fn(),
+			registerTool: vi.fn(), registerCommand: vi.fn(),
 			sendMessage,
 			appendEntry: vi.fn(),
 		} as unknown as ExtensionAPI;
@@ -1169,7 +1170,7 @@ describe("终局通知回调 onSettled（U5：D6 失败不静默、不重复）"
 				handlers.set(name, handler);
 			},
 			getAllTools: () => [],
-			registerTool: vi.fn(),
+			registerTool: vi.fn(), registerCommand: vi.fn(),
 			sendMessage,
 			appendEntry: vi.fn(),
 		} as unknown as ExtensionAPI;
@@ -1265,7 +1266,7 @@ describe("落盘段 stale ctx 防线（C-pi-17：guardStaleCtx 接入，dmg-r1-1
 					handlers.set(name, handler);
 				},
 				getAllTools: () => [],
-				registerTool: vi.fn(),
+				registerTool: vi.fn(), registerCommand: vi.fn(),
 				sendMessage,
 				appendEntry: vi.fn(),
 			}) as unknown as ExtensionAPI;

@@ -3,7 +3,7 @@
  *
  * 判别形态依据（设计 §3.3 D4 尾注）：本包与消费方（runtime registry）是进程内同包
  * 调用边界——编译期类型可得，instanceof 是最简判别且免词表；与跨进程 WS 边界的
- * 分类码形态（CompactErrorCode）不构成双轨。
+ * error envelope 分类码形态不构成双轨。
  */
 
 /**

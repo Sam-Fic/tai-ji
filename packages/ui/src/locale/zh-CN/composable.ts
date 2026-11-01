@@ -4,7 +4,9 @@ export default {
   //（编辑重发/撤回）被门拒绝——专属文案指引回主会话视图，不落通用失败文案。
   vidViewReadonly: '当前视图为会话快照，该操作仅支持在主会话视图执行',
   nextTurnSendFailed: '下轮消息发送失败：{msg}',
-  compactFailed: '压缩失败：{msg}',
+  // C2 /compact 后台化：受理回执（info，命令回显口径，文案与扩展 busy/完成回执同一事实描述）
+  compactStarted: '后台压缩已启动，可继续对话；完成后会收到结果通知。',
+  compactStartFailed: '后台压缩启动失败：{msg}',
   bashFailed: 'Bash 执行失败：{msg}',
   // [U5 消息撤回 D8] 撤回编排 toast 文案（D8 错误规格表呈现列为 SSOT，与 core useChat 的
   // REVOKE_ERROR_TOAST_KEYS 六键一一对应）+ 在途 cancel 路径与 RPC 传输失败文案

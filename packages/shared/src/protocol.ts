@@ -169,7 +169,10 @@ export type ClientMessageType =
   // 广播」双用消息（广播侧 28 处零参调用点无处传参），过滤参数只放纯查询消息上，避免同一
   // type 的双语义。无参 = 全量（与 config.sessions 查询侧同形）。
   | 'session.list'
-  | 'session.compact' | 'session.rename' | 'session.fork' | 'session.setProject'
+  // session.compactBackground（C2 /compact 后台化）：GUI 手动压缩触发——触发即回执、
+  // 压缩后台执行（完成经 smart-context 落盘信号链出分界行 + 完成通知）。旧同步
+  // session.compact 随本消息退役：GUI 压缩不再同步等待压缩全程（分钟级阻塞链撤销）。
+  | 'session.compactBackground' | 'session.rename' | 'session.fork' | 'session.setProject'
   // composer-gen-stats（D4）：session.getGenStats 拉该 session
   // 当前模型的速度/缓存命中率快照（恢复路径——切 session 主动拉取，规避 broadcast 早于订阅的时序竞争）。
   // reply session.stats_update（payload 消费型，同 session.getContext → context.update 模式）。
@@ -979,7 +982,9 @@ export interface ClientMessageMap {
   'session.getGenStats': { sessionId: string }
   'session.getTraceEntries': { sessionId: string }
   'session.fetchCurrentSystemPrompt': { sessionId: string }
-  'session.compact': { sessionId: string; customInstructions?: string }
+  // session.compactBackground：customInstructions 原样透传扩展侧（runtime 侧 percent 编码
+  // 进内部命令 args，扩展侧解码——编码是传输细节不出 wire 契约）。
+  'session.compactBackground': { sessionId: string; customInstructions?: string }
   'session.rename': { sessionId: string; name: string }
   // session.setProject：手动归类（SessionItem「归入项目」菜单）。
   // runtime 写 `<sessionFile>.project.json` sidecar + 刷新列表广播。projectId 空 = 归回默认项目。
@@ -1605,23 +1610,6 @@ export type WorktreeEnvelopeCode = WorktreeErrorCode | WorktreeUnknownErrorCode
 export const WORKTREE_AUTO_BASE_BRANCH = 'auto'
 
 /**
- * session.compact RPC 失败的分类码（msg-pipeline-debloat D4-2，runtime ↔ renderer 契约 SSOT）。
- *
- * 产生点：session-message-handler.handleSessionCompact 的 error envelope——
- * - compact_busy：dispatcher.compact busy 预检拒绝（压缩/bash/生成互斥，throw 扁平错误
- *   携带 code，handler 原样透传）。
- * - compact_failed：compact 执行失败（pi 层失败——interpreter 已编排对话流呈现；
- *   ensureActive 恢复失败——session 状态面呈现）。
- *
- * 消费点：core useChat 的 compact/sendBash toast 抑制判别——envelope 携带分类码 =
- * runtime 已编排用户可见呈现（对话流内联 / 状态面），抑制全局错误 toast。
- *
- * 新增分类码必须在此登记（编译器强制两端同步）；未登记/未知 code 在 renderer 侧
- * 保守回退为 toast 兜底（错误可见性优先）。
- */
-export type CompactErrorCode = 'compact_busy' | 'compact_failed'
-
-/**
  * hook 否决类 RPC 失败的分类码（msg-pipeline-debloat D4-2，runtime ↔ renderer 契约 SSOT）。
  *
  * 产生点：session-message-handler 的 message.send / message.bash / delivery.submit 三
@@ -1629,8 +1617,8 @@ export type CompactErrorCode = 'compact_busy' | 'compact_failed'
  * dispatcher 已广播 message.error 错误气泡（用户可见呈现已编排）。
  *
  * 消费点：core useChat 的 send / sendBash / delivery toast 抑制判别——envelope 携带本码 =
- * 抑制全局错误 toast（与 CompactErrorCode 同判别框架；未登记/未知 code 保守回退为 toast
- * 兜底，错误可见性优先）。
+ * 抑制全局错误 toast（同款判别框架；未登记/未知 code 保守回退为 toast 兜底，错误可见性
+ * 优先）。
  *
  * 值常量 MESSAGE_BLOCKED_CODE 供 runtime 落码点与 core 判别点统一引用，
  * 禁止跨包手抄字面量（手抄码名漂移时 tsc 不拦，静默退化为保守 toast 路径）。
@@ -1641,7 +1629,7 @@ export const MESSAGE_BLOCKED_CODE: MessageBlockedCode = 'message_blocked'
 
 export type ServerMessageType =
   | 'session.created' | 'session.deleted' | 'session.deletedByCwd' | 'config.sessions' | 'session.history' | 'session.switched'
-  | 'session.compacting' | 'session.compacted' | 'session.renamed' | 'session.forkNotice' | 'session.skillNotice' | 'session.handoffStarted' | 'session.handoffComplete' | 'session.handoffAborted' | 'session.setProject'
+  | 'session.compacting' | 'session.compacted' | 'session.compactBackground' | 'session.renamed' | 'session.forkNotice' | 'session.skillNotice' | 'session.handoffStarted' | 'session.handoffComplete' | 'session.handoffAborted' | 'session.setProject'
   // session.occupancy（session-occupancy-send-closure P3）：占用四维快照（turn/compacting/
   // bash/handingOff）广播（state topic，
   // last-value 语义——重连/切回 session 自动恢复，不依赖广播时序），renderer sessionPhase 唯一数据源。
@@ -2900,6 +2888,10 @@ export interface ServerMessageMapBase {
   // PiCompactionReason，驱动前端 compacting 浮层文案区分手动/自动。
   'session.compacting': { sessionId: string; status: 'compacting'; reason: 'manual' | 'threshold' | 'overflow' }
   'session.compacted': { sessionId: string; status: 'compacted'; error?: string }
+  // session.compactBackground：手动压缩触发受理 ack（触发即回执——压缩本体后台执行，
+  // 完成事实经 smart-context 落盘信号链 + 完成通知到达，不经本帧）。同名 reply（与
+  // rollingRestart.status 同模式）；启动失败走 error envelope code 'compact_start_failed'。
+  'session.compactBackground': { sessionId: string }
   // session.occupancy（session-occupancy-send-closure D3/P3；chat-flow-consistency D1 扩
   // handingOff 第四维）：占用结构快照，state topic（message-bus 分配 seq + 写 last-value 快照、
   // 不入 ring——重连/切回 session 经 stateSnapshot 回放自动恢复）。turn 四相位值域 SSOT =
@@ -3188,7 +3180,8 @@ export interface ServerMessageMapBase {
   // null = 无数据，0 = 真实测量值，禁止 ?? 0 编码（0 物理上可能是真值，null/0 必须可区分）。
   'session.stats_update': GenStatsFrame
   // message.compactionSummary：上下文压缩摘要（compact 执行后推送，进对话流作 SystemNotice）。
-  // runtime message-dispatcher.compact() 从 pi CompactionResult 提取 summary/tokensBefore 广播。
+  // runtime event-interpreter 从 pi compaction_end 事件的 CompactionResult 提取 summary/
+  // tokensBefore 合成广播（live 帧与重载翻译同一条 reducer，C1 分界行实时化）。
   // 前端 chat-message-effects 把它渲染成 system 消息（SystemNotice.vue「上下文已压缩」）。
   'message.compactionSummary': { sessionId: string; summary?: string; tokensBefore?: number; timestamp?: number }
   // session.state_changed：session 级状态变更（model.switch 成功后推送，含新 modelId + 当前
@@ -4153,7 +4146,10 @@ export interface ReplyPayloadMap {
   // mutation-reply-contract.test.ts 的 MUTATION_RPC_REGISTRY（分支一 effective-value，
   // 生效值断言锚 effective 分支）——subagent 域新增 mutation 须同批登记，漏登记即红）。
   'subagent.setModel': ServerMessageMap['subagent.modelSet']
-  'session.compact': void         // reply session.compacted
+  // session.compactBackground：触发受理 ack——fire-and-forget 触发型 mutation，无生效值/
+  // 回显字段；payload 不读（session.handoff 同款 ack 型登记，同名帧 payload 见 ServerMessageMap）。
+  // 启动失败走 error envelope 'compact_start_failed'（MUTATION_RPC_REGISTRY ack-exempt 档登记）。
+  'session.compactBackground': void
   'session.delete': void          // reply session.deleted
   'session.deleteByCwd': BatchDeleteResult // reply session.deletedByCwd（前端读 deleted/failed 列表）
   // session.handoff：触发后 runtime HandoffService 异步让源 session 跑 handoff turn 生成文档，

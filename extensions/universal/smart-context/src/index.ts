@@ -32,7 +32,7 @@
  * 抢占用户消息投递跑道；被压缩掐断的 turn 由 runtime 续跑投递兜底（D4②）。
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { guardStaleCtx, isSubagentProcess, toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { setPiHandle } from "@zhushanwen/pi-extension-logger";
 
@@ -47,7 +47,14 @@ import {
 	type BackgroundCompactionState,
 	type TakeoverState,
 } from "./compact-handler.js";
-import { sendSmartContextNotice, buildCompactCompleteNotice, buildCompactFailureNotice, sendCompactionPersistSignal } from "./notices.js";
+import {
+	sendSmartContextNotice,
+	buildCompactBusyNotice,
+	buildCompactCompleteNotice,
+	buildCompactFailureNotice,
+	buildCompactStartFailureNotice,
+	sendCompactionPersistSignal,
+} from "./notices.js";
 import { buildDownshiftNotice, buildSwitchNotice, buildThresholdReminder } from "./reminder.js";
 import { registerCompactContextTool } from "./tool.js";
 import {
@@ -305,6 +312,52 @@ export default function smartContextExtension(pi: ExtensionAPI): void {
 	// 分诊仅剩事件回调内的 guardStaleCtx 消费（闭包内读变量绑定，天然 live）。
 	registerCompactContextTool(pi, {
 		background: { isActive: background.isActive, start: background.startForTool },
+	});
+
+	// ── 手动触发入口（C2 /compact 后台化）：GUI 手动 /compact 的扩展侧命令 ──
+	// taiji runtime 收到 session.compactBackground RPC 后经 client.prompt fire-and-forget
+	// 发 `/__taiji_compact__ <encoded>`（先例 __taiji_bg_reconcile__，session-service）。
+	// `__` 双下划线前缀 = 内部命令（前端 internal-command-filter 过滤不显示）；命令同步
+	// 执行、不进模型、无 turn（pi agent-session _tryExecuteExtensionCommand）。
+	// args 编码契约（与 runtime 发送侧成对）：runtime 侧 encodeURIComponent(customInstructions)
+	// 后拼在命令名后（percent 编码无空格/换行，args = 首空格后原样余串可逆还原；空串 =
+	// 未携带，pi 切分语义 PS-63 实锚 agent-session.js:1604-1608）。
+	// 回执路径三分：启动成功不发通知（GUI 提示由 runtime reply → renderer toast 承载，
+	// 不双投）；false = 后台任务进行中，幂等回执经通知通道投递（口径与 compact_context
+	// 工具 busy 回执一致）；抛错 = 非互斥失败（门控拒绝/探测失败/无可压内容），失败文案
+	// 经通知通道投递后不再重抛——重抛只进 pi emitError 日志、用户不可见，通知才是用户
+	// 可达的失败呈现（发送失败由 sendSmartContextNotice 内吞留痕，与其他通知同语义）。
+	pi.registerCommand("__taiji_compact__", {
+		description:
+			"Internal: start a background compaction on demand (taiji runtime manual /compact trigger; args = encodeURIComponent(customInstructions), empty = none)",
+		handler: async (args: string, _ctx: ExtensionCommandContext) => {
+			let customInstructions: string | undefined;
+			if (args.trim() !== "") {
+				try {
+					customInstructions = decodeURIComponent(args.trim());
+				} catch (error) {
+					debugLog(`__taiji_compact__ args decode failed: ${toErrorMessage(error)}`);
+					sendSmartContextNotice(
+						pi,
+						buildCompactStartFailureNotice(`压缩指引参数解码失败（预期百分号编码）：${toErrorMessage(error)}`),
+						"compact-start-failed",
+					);
+					return;
+				}
+			}
+			let started = false;
+			try {
+				started = background.startForTool(_ctx, customInstructions, "manual");
+			} catch (error) {
+				debugLog(`__taiji_compact__ start failed: ${toErrorMessage(error)}`);
+				sendSmartContextNotice(pi, buildCompactStartFailureNotice(toErrorMessage(error)), "compact-start-failed");
+				return;
+			}
+			if (!started) {
+				debugLog("__taiji_compact__ busy: background compaction already running (idempotent receipt)");
+				sendSmartContextNotice(pi, buildCompactBusyNotice(), "compact-busy");
+			}
+		},
 	});
 
 	// ── 阈值提醒（D3/D4）：agent_settled 越档检查 + marker 持久化 + nextTurn 一次性投递 ──

@@ -244,7 +244,7 @@ describe("invalidate-stream-subscription", () => {
       // [W1 状态层] session.* 状态帧唯一落点（本用例不触达 session.* 状态帧，注入真实 factory 保持契约形状）
       liveState: createSessionLiveState(),
       // [session-dead 第三环] warning：defer 重投熔断提示的注入点（本用例不触发）
-      toast: { error: vi.fn(), warning: vi.fn() },
+      toast: { error: vi.fn(), warning: vi.fn(), info: vi.fn() },
       t: (k: string) => k,
     }
     return {
@@ -472,7 +472,7 @@ describe("lifecycle-effects", () => {
         },
         // [W1 状态层] session.* 状态帧唯一落点（本用例不触达 session.* 状态帧，注入真实 factory 保持契约形状）
         liveState: createSessionLiveState(),
-        toast: { error: vi.fn(), warning: vi.fn() },
+        toast: { error: vi.fn(), warning: vi.fn(), info: vi.fn() },
         t: (k: string) => k,
       }
       ensureStreamSubscription(sid, f.chat, f.session, deps)
@@ -706,7 +706,7 @@ describe("lru-unsubscribe", () => {
       },
       // [W1 状态层] session.* 状态帧唯一落点（本用例不触达 session.* 状态帧，注入真实 factory 保持契约形状）
       liveState: createSessionLiveState(),
-      toast: { error: vi.fn(), warning: vi.fn() },
+      toast: { error: vi.fn(), warning: vi.fn(), info: vi.fn() },
       t: (k: string) => k,
     }
     const evictDeps: LruUnsubscribeDeps = { unsubscribe: unsubscribeRpc }

@@ -188,7 +188,7 @@ export const HIDDEN_ALLOWLIST = new Map([
   ['packages/runtime/src/services/plugin-service/api/ui-api.ts:271', '插件 ui.updateHeaderAction hidden 透传'],
   ['packages/runtime/src/services/plugin-service/api/ui-api.ts:331', '插件 ui.updateHeaderAction 方法签名 hidden 形参（跨行断言的声明行）'],
   ['packages/runtime/src/services/plugin-service/api/ui-api.ts:352', '插件 ui.updateHeaderAction 实现签名 hidden 形参（346→352 两次分支合并行号漂移同号收口）'],
-  ['packages/shared/src/protocol.ts:713', '协议 plugin headerAction 条目 hidden 字段声明（HeaderActionUpdatePayload；611→624 随 fix-chat-flow-order、624→642 随插件化分支合并加字段漂移、642→703 随 connection-datasync-ssot 协议新增类型漂移、703→712 随启动线 u-m0 协议 readiness/sessionsRecovery 四消息类型登记漂移、712→713 随 feat-compaction-closure ClientMessageType 加 setSmartContextAutoCompactThresholdRatio 漂移）'],
+  ['packages/shared/src/protocol.ts:716', '协议 plugin headerAction 条目 hidden 字段声明（HeaderActionUpdatePayload；611→624 随 fix-chat-flow-order、624→642 随插件化分支合并加字段漂移、642→703 随 connection-datasync-ssot 协议新增类型漂移、703→712 随启动线 u-m0 协议 readiness/sessionsRecovery 四消息类型登记漂移、712→716 随 feat-compaction-closure ClientMessageType 加 setSmartContextAutoCompactThresholdRatio 与 session.compactBackground（含注释）漂移）'],
   // document.hidden（浏览器 API）
   ['packages/renderer/src/composables/features/settings/use-app-update-autocheck.ts:166', 'document.hidden（浏览器 API：页面可见性）'],
   ['packages/ui/src/features/chat/composables/useTurnElapsed.ts:123', 'document.hidden（浏览器 API：页面可见性，计时器暂停判据）'],

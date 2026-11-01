@@ -40,6 +40,8 @@ export { SMART_CONTEXT_NOTICE_CUSTOM_TYPE };
 export type SmartContextNoticeSource =
 	| "compact-complete"
 	| "compact-failed"
+	| "compact-busy"
+	| "compact-start-failed"
 	| "threshold-reminder"
 	| "model-switch"
 	| "model-downshift";
@@ -116,6 +118,24 @@ function compactFailureReasonLine(input: CompactFailureNoticeInput): string {
 		case "error":
 			return `后台压缩失败：${input.error ?? "未知错误"}，上下文保持原样。`;
 	}
+}
+
+/**
+ * 后台压缩进行中幂等回执文案（C2 手动触发入口：`__taiji_compact__` 命令在后台任务
+ * 进行中再触发时的用户回执）。口径与 compact_context 工具的 busy 回执逐字一致（同一
+ * 互斥事实，两入口共用一份事实描述）。
+ */
+export function buildCompactBusyNotice(): string {
+	return "后台压缩进行中，本次请求已并入该任务，无需重复触发。压缩在后台进行，你可以继续任何工作；完成后会收到一条结果消息。";
+}
+
+/**
+ * 后台压缩启动失败文案（C2 手动触发入口：`__taiji_compact__` 命令路径的非互斥失败
+ * ——门控拒绝 / appendCompaction 探测失败 / 无可压内容 / 参数解码失败）。reason 透传
+ * startForTool 的抛错文案（自身已含原因与恢复动作，此处只加前缀定位来源）。
+ */
+export function buildCompactStartFailureNotice(reason: string): string {
+	return `[smart-context] 后台压缩未启动：${reason}`;
 }
 
 /**

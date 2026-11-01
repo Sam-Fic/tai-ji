@@ -63,7 +63,7 @@ describe("live-state-write-paths", () => {
       send: vi.fn(),
       subagentAction: vi.fn(),
       abort: vi.fn(),
-      compact: vi.fn(),
+      compactBackground: vi.fn(),
       bash: vi.fn(),
       abortBash: vi.fn(),
       getHistory: vi.fn(),
@@ -82,7 +82,7 @@ describe("live-state-write-paths", () => {
       getChatStore: () => chatStore,
       getSessionStore: () => sessionStore,
       getLiveStateStore: () => liveState,
-      toast: { error: vi.fn(), warning: vi.fn() },
+      toast: { error: vi.fn(), warning: vi.fn(), info: vi.fn() },
       t: (k: string) => k,
     }
     const useChat = createUseChat(deps)
@@ -217,7 +217,7 @@ describe("truncated-window", () => {
       submitDelivery: vi.fn().mockResolvedValue({ clientUuid: 'u-x', state: 'in-flight', lane: 'direct' }),
       subagentAction: vi.fn().mockResolvedValue(undefined),
       abort: vi.fn().mockResolvedValue(undefined),
-      compact: vi.fn().mockResolvedValue(undefined),
+      compactBackground: vi.fn().mockResolvedValue(undefined),
       bash: vi.fn().mockResolvedValue(undefined),
       abortBash: vi.fn().mockResolvedValue(undefined),
       getHistory: vi.fn().mockResolvedValue({ messages: [], truncated: false, loadedTurns: 0, totalTurnsEstimate: 0 }),
@@ -234,7 +234,7 @@ describe("truncated-window", () => {
       getChatStore: () => chatStore,
       getSessionStore: () => ({ applySnapshot: vi.fn(), revive: vi.fn() }),
       getLiveStateStore: () => createSessionLiveState(),
-      toast: { error: vi.fn(), warning: vi.fn() },
+      toast: { error: vi.fn(), warning: vi.fn(), info: vi.fn() },
       t: (k: string) => k,
     }
     const useChat = scope.run(() => createUseChat(deps))!
@@ -378,7 +378,7 @@ describe("use-chat-disposition", () => {
       streamSubscribe: ReturnType<typeof vi.fn>
     }
     chatStore: ReturnType<typeof createChatStore>
-    toast: { error: ReturnType<typeof vi.fn>; warning: ReturnType<typeof vi.fn> }
+    toast: { error: ReturnType<typeof vi.fn>; warning: ReturnType<typeof vi.fn>; info: ReturnType<typeof vi.fn> }
     /** 主动向 sid 的 streamSubscribe handler 注入一条 ServerMessage（模拟 WS 事件） */
     emit: (sid: string, m: ServerMessage) => void
     dispose: () => void
@@ -398,7 +398,7 @@ describe("use-chat-disposition", () => {
         }
       }),
     }
-    const toast = { error: vi.fn(), warning: vi.fn() }
+    const toast = { error: vi.fn(), warning: vi.fn(), info: vi.fn() }
     const deps: UseChatDeps = {
       chatApi: chatApi as unknown as UseChatDeps['chatApi'],
       writeSegments: vi.fn().mockResolvedValue(undefined),
@@ -781,7 +781,7 @@ describe("useChat", () => {
       send: ReturnType<typeof vi.fn>
       subagentAction: ReturnType<typeof vi.fn>
       abort: ReturnType<typeof vi.fn>
-      compact: ReturnType<typeof vi.fn>
+      compactBackground: ReturnType<typeof vi.fn>
       bash: ReturnType<typeof vi.fn>
       abortBash: ReturnType<typeof vi.fn>
       getHistory: ReturnType<typeof vi.fn>
@@ -792,7 +792,7 @@ describe("useChat", () => {
     chatStore: ReturnType<typeof createChatStore>
     sessionStore: { applySnapshot: ReturnType<typeof vi.fn>; revive: ReturnType<typeof vi.fn> }
     liveState: ReturnType<typeof createSessionLiveState>
-    toast: { error: ReturnType<typeof vi.fn>; warning: ReturnType<typeof vi.fn> }
+    toast: { error: ReturnType<typeof vi.fn>; warning: ReturnType<typeof vi.fn>; info: ReturnType<typeof vi.fn> }
     writeSegments: ReturnType<typeof vi.fn>
     restoreDraft: ReturnType<typeof vi.fn>
     /** 主动向 sid 的 streamSubscribe handler 注入一条 ServerMessage（模拟 WS 事件） */
@@ -812,7 +812,7 @@ describe("useChat", () => {
       send: vi.fn().mockResolvedValue(undefined),
       subagentAction: vi.fn().mockResolvedValue(undefined),
       abort: vi.fn().mockResolvedValue(undefined),
-      compact: vi.fn().mockResolvedValue(undefined),
+      compactBackground: vi.fn().mockResolvedValue(undefined),
       // bash 回执契约（dmg-r1-2）：默认 = 已执行并收尾（BashDispatchReceipt settled）
       bash: vi.fn().mockResolvedValue({ status: 'settled' }),
       abortBash: vi.fn().mockResolvedValue(undefined),
@@ -830,7 +830,7 @@ describe("useChat", () => {
     const sessionStore = { applySnapshot: vi.fn(), revive: vi.fn() }
     // [W1] 状态层：session.* 状态帧的落点（真实 core factory，非 mock）
     const liveState = createSessionLiveState()
-    const toast = { error: vi.fn(), warning: vi.fn() }
+    const toast = { error: vi.fn(), warning: vi.fn(), info: vi.fn() }
     const restoreDraft = vi.fn()
     const deps: UseChatDeps = {
       chatApi,
@@ -1105,69 +1105,26 @@ describe("useChat", () => {
       f.dispose()
     })
 
-    it('compact：ensureStreamSubscription + chatApi.compact 调用', async () => {
+    it('compactBackground：ensureStreamSubscription + chatApi.compactBackground 调用 + toast info 受理回执', async () => {
       const f = makeFixture()
-      await f.useChat.compact('s13')
-      expect(f.chatApi.compact).toHaveBeenCalledTimes(1)
+      await f.useChat.compactBackground('s13')
+      expect(f.chatApi.compactBackground).toHaveBeenCalledTimes(1)
       expect(f.chatApi.streamSubscribe).toHaveBeenCalledTimes(1)
+      // 受理回执：info 通道（命令回显口径，C2 /compact 后台化）
+      expect(f.toast.info).toHaveBeenCalledTimes(1)
+      expect(f.toast.info).toHaveBeenCalledWith(expect.stringContaining('composable.compactStarted'))
       f.dispose()
     })
 
-    it('compact transport 级失败（envelope 无分类码，如 pending 超时）：toast 兜底', async () => {
+    it('compactBackground 受理失败（session 不存在 / transport 断连）：toast error 兜底', async () => {
       const f = makeFixture()
-      // transport 级失败：RPC 未达 runtime（pending sweep 超时 / WS 断连 rejectAll）→
-      // 无 runtime 分类码 → runtime 侧呈现未发生 → toast 兜底（AGENTS.md 规则 #3）
-      f.chatApi.compact.mockRejectedValueOnce(Object.assign(new Error('request timeout after 66000ms'), { code: 'timeout' }))
-      await f.useChat.compact('s15')
+      // 新链失败无 runtime 编排呈现侧（分类码体系随同步链退役）——全部 renderer toast 兜底
+      f.chatApi.compactBackground.mockRejectedValueOnce(new Error('Session s15 not found'))
+      await f.useChat.compactBackground('s15')
       expect(f.toast.error).toHaveBeenCalledTimes(1)
       expect(f.toast.error).toHaveBeenCalledWith(
-        expect.stringContaining('composable.compactFailed')
+        expect.stringContaining('composable.compactStartFailed')
       )
-      f.dispose()
-    })
-
-    it('compact busy 预检拒绝（envelope 分类码 compact_busy）：抑制 toast，对话流呈现由 runtime stream_warn 编排', async () => {
-      const f = makeFixture()
-      // runtime dispatcher.compact busy 预检 throw 带 code（D4-2）→ handler envelope 透传 →
-      // catch 见分类码 → 抑制 toast（对话流 system 提示由 stream_warn 广播承担，非本 catch 职责）
-      f.chatApi.compact.mockRejectedValueOnce(Object.assign(new Error('Cannot compact while agent generating'), { code: 'compact_busy' }))
-      await f.useChat.compact('s15b')
-      expect(f.toast.error).not.toHaveBeenCalled()
-      f.dispose()
-    })
-
-    it('compact pi 层失败（envelope 分类码 compact_failed）：抑制 toast，interpreter 对话流呈现', async () => {
-      const f = makeFixture()
-      // compact RPC reject 携带分类码 compact_failed：pi 层失败必发 compaction_end{errorMessage}
-      // → interpreter 已编排对话流呈现；ensureActive 失败由 session 状态侧呈现。catch 不 toast。
-      f.chatApi.compact.mockRejectedValueOnce(Object.assign(new Error('上下文压缩失败'), { code: 'compact_failed' }))
-      await f.useChat.compact('s16')
-      expect(f.toast.error).not.toHaveBeenCalled()
-      f.dispose()
-    })
-
-    it('compact 未知分类码（runtime 未来新增码）：保守回退 toast 兜底（契约边界）', async () => {
-      const f = makeFixture()
-      // 未知分类码：renderer 未升级的协议演进形态——错误可见性优先，保守 toast
-      f.chatApi.compact.mockRejectedValueOnce(Object.assign(new Error('compact cancelled someday'), { code: 'compact_cancelled_future' }))
-      await f.useChat.compact('s16b')
-      expect(f.toast.error).toHaveBeenCalledTimes(1)
-      expect(f.toast.error).toHaveBeenCalledWith(
-        expect.stringContaining('composable.compactFailed')
-      )
-      f.dispose()
-    })
-
-    it('compact 非法形态 reject（code 非字符串 / 无 code 裸 Error）：保守回退 toast 兜底（契约边界）', async () => {
-      const f = makeFixture()
-      // 非法形态：envelope code 非字符串（协议漂移）与无 code 裸 Error（WS 断连 rejectAll /
-      // 本地异常）均无 runtime 分类呈现 → toast 兜底
-      f.chatApi.compact.mockRejectedValueOnce(Object.assign(new Error('weird envelope'), { code: 42 }))
-      await f.useChat.compact('s16c')
-      expect(f.toast.error).toHaveBeenCalledTimes(1)
-      f.chatApi.compact.mockRejectedValueOnce(new Error('ws closed'))
-      await f.useChat.compact('s16c')
-      expect(f.toast.error).toHaveBeenCalledTimes(2)
       f.dispose()
     })
 

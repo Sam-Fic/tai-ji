@@ -120,6 +120,16 @@ OUTPOST_CALLSITES = [
         "（idle-pi-reaper 退役后空闲时钟判据消失）删除，回归裸命令形态",
     ),
     (
+        "services/session/session-service.ts",
+        "void client.prompt(`${BG_COMPACT_COMMAND}${args}`)",
+        "exempt",
+        "[C2 /compact 后台化] 手动压缩触发内部命令（__taiji_compact__，smart-context "
+        "扩展注册）：args = encodeURIComponent(customInstructions)——用户提供的摘要"
+        "指引经 percent 编码（特殊字符全转义，无 skill 命令语法可展开），扩展侧解码后"
+        "仅进后台压缩的摘要 prompt 组装，不进对话 turn，SkillInjector 注入不适用；"
+        "触发即回执 fire-and-forget",
+    ),
+    (
         "services/session/trace-sync.ts",
         "'/__taiji_get_system_prompt__'",
         "exempt",

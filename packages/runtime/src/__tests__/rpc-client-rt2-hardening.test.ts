@@ -180,30 +180,8 @@ describe('RpcClient RT-2 加固：响应形状检查（#4）', () => {
     await expect(respondWith(client, () => p, { command: 'get_session_stats', data: stats })).resolves.toEqual(stats)
   })
 
-  it('compact：data 缺失 → reject malformed', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const p = client.compact()
-    await expect(respondWith(client, () => p, { command: 'compact' })).rejects.toThrow(
-      'compact: malformed response from pi (data is not a CompactionResult with summary/firstKeptEntryId/tokensBefore)',
-    )
-    warnSpy.mockRestore()
-  })
-
-  it('compact：对象缺必填字段 → reject malformed（字段级检查：port 契约三必填缺一即协议异常）', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const p = client.compact()
-    // 只有 summary，缺 firstKeptEntryId / tokensBefore——顶层对象检查放行、字段级检查拦截的形态
-    await expect(respondWith(client, () => p, { command: 'compact', data: { summary: 's' } })).rejects.toThrow(
-      'compact: malformed response from pi (data is not a CompactionResult with summary/firstKeptEntryId/tokensBefore)',
-    )
-    warnSpy.mockRestore()
-  })
-
-  it('compact：合法 CompactionResult 对象照常 resolve', async () => {
-    const result = { summary: 's', firstKeptEntryId: 'e1', tokensBefore: 100 }
-    const p = client.compact()
-    await expect(respondWith(client, () => p, { command: 'compact', data: result })).resolves.toEqual(result)
-  })
+  // [C2 /compact 后台化] compact 形状检查三用例随 rpc-client.compact 退役（runtime 不再
+  // 直调 pi 同步 compact RPC；压缩走内部命令 → smart-context 后台管理器）。
 })
 
 describe('RpcClient RT-2 加固：proc error terminate 出口（#6）', () => {

@@ -110,7 +110,7 @@ interface ChatTerminals { // oe-exempt:20261018:framework:useChat 动作族结�
   send: (sessionId: string, segments: Segment[]) => Promise<boolean>
   followUp: (sessionId: string, segments: Segment[]) => Promise<boolean>
   abort: (sessionId: string) => Promise<void>
-  compact: (sessionId: string, customInstructions?: string) => Promise<boolean>
+  compactBackground: (sessionId: string, customInstructions?: string) => Promise<boolean>
   sendBash: (sessionId: string, command: string, excludeFromContext: boolean) => Promise<boolean>
 }
 
@@ -121,7 +121,7 @@ export interface LaneAwareTerminals { // oe-exempt:20261018:framework:通道终�
   send: ChatTerminals['send']
   followUp: ChatTerminals['followUp']
   abort: ChatTerminals['abort']
-  compact: ChatTerminals['compact']
+  compactBackground: ChatTerminals['compactBackground']
   sendBash: ChatTerminals['sendBash']
 }
 
@@ -129,7 +129,7 @@ export interface LaneAwareTerminals { // oe-exempt:20261018:framework:通道终�
  * 终端包装（vid 分流，非 lane 输入逐成员透传原实现——主通道行为零变化）：
  * - send / followUp = lane.send（打断入队由 Continuation D2 统一语义承接，无独立通道）；
  * - abort = lane.abort（中止对象 = 当前轮，无压缩分型）；
- * - compact = '/compact …' 文本按字面消息直发（subagent 无压缩流程，拒绝式拦截会
+ * - compactBackground = '/compact …' 文本按字面消息直发（subagent 无压缩流程，拒绝式拦截会
  *   吞掉用户输入）；
  * - sendBash = 恒 false（bash.ts 失败信号契约 = 不分流继续普通提交链，`!` 是普通文本）。
  */
@@ -144,8 +144,8 @@ export function wireSubagentLaneTerminals(
     send: (sid, segments) => (isLane.value ? lane.send(segments) : chat.send(sid, segments)),
     followUp: (sid, segments) => (isLane.value ? lane.send(segments) : chat.followUp(sid, segments)),
     abort: (sid) => (isLane.value ? lane.abort() : chat.abort(sid)),
-    compact: (sid, customInstructions) => {
-      if (!isLane.value) return chat.compact(sid, customInstructions)
+    compactBackground: (sid, customInstructions) => {
+      if (!isLane.value) return chat.compactBackground(sid, customInstructions)
       return lane.send([{ type: 'text', text: customInstructions ? `/compact ${customInstructions}` : '/compact' }])
     },
     sendBash: (sid, command, excludeFromContext) =>

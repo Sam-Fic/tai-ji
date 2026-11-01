@@ -7,7 +7,7 @@ import { getDefaultModel } from './pi-provider-store.js'
 import type { ProviderId } from '@taiji/shared'
 // B3 出站契约唯一构建器（U3 收尾点；实现本体在 @taiji/shared，此处走 runtime 门面）
 import { buildOutboundChildEnv } from '../spawn-env.js'
-import type { IPiEngine, PiSessionStats, PiCompactionResult, PiBashResult, PiCommandInfo } from '../../services/ports/pi-engine.js'
+import type { IPiEngine, PiSessionStats, PiBashResult, PiCommandInfo } from '../../services/ports/pi-engine.js'
 import { createPiSessionLog, migratePiSessionLogTree, writePiCrashLog, captureMemorySnapshot, type PiSessionLog, type PiCrashContext } from '../logger.js'
 import { captureMachinePiSnapshotSection, collectUnifiedLogCorrelation } from '../crash-correlation.js'
 // pi 进程 RPC 公共层（@zhushanwen/pi-rpc；设计 docs/architecture/subagent-permanent-session-model.md
@@ -1029,31 +1029,6 @@ export class RpcClient implements IPiEngine {
    */
   getEntries(since?: string): Promise<PiMessage> {
     return this.sendCommand('get_entries', since !== undefined ? { since } : {})
-  }
-
-  async compact(customInstructions?: string): Promise<PiCompactionResult> {
-    // 压缩 RPC 墙钟（COMPACT_RPC_TIMEOUT_MS 30min，timeout-slow-flow-wallclock D3）
-    // 已随 ADR-0122 退役（见文件头，推翻该量级校准裁决）。
-    const msg = await this.sendCommand('compact', customInstructions ? { customInstructions } : {})
-    // RT-2#4：形状检查（bash 式，对照 getAvailableModels）——pi compact 成功响应恒带
-    // CompactionResult 对象（rpc-mode.js case "compact" → success(id,"compact",result)），
-    // 且三必填字段齐备（pi 1.0.0 dist/core/compaction/compaction.d.ts CompactionResult：
-    // summary:string / firstKeptEntryId:string / tokensBefore:number），与 port 契约
-    // （services/ports/pi-engine.ts
-    // PiCompactionResult）一致。data 缺失/非对象/缺必填字段 = 协议异常。pi 手动 compact 失败
-    // 另有 compaction_end{errorMessage} 事件编排（dispatcher 零广播注释），不走本返回值——
-    // reject 让协议异常显形而非 undefined 字段渗入消费方。
-    const data = msg.data as Record<string, unknown> | undefined
-    if (
-      typeof data !== 'object' || data === null ||
-      typeof data.summary !== 'string' ||
-      typeof data.firstKeptEntryId !== 'string' ||
-      typeof data.tokensBefore !== 'number'
-    ) {
-      console.warn('[rpc] compact: malformed response from pi (data is not a CompactionResult with summary/firstKeptEntryId/tokensBefore). data=', msg.data)
-      throw new Error('[rpc] compact: malformed response from pi (data is not a CompactionResult with summary/firstKeptEntryId/tokensBefore)')
-    }
-    return data as unknown as PiCompactionResult
   }
 
   /**

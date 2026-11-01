@@ -57,7 +57,7 @@ function createMockPi(): { pi: ExtensionAPI; events: Map<string, (...args: unkno
 	const events = new Map<string, (...args: unknown[]) => void>();
 	const sendMessage = vi.fn();
 	const pi = {
-		registerTool: vi.fn(),
+		registerTool: vi.fn(), registerCommand: vi.fn(),
 		getAllTools: () => [],
 		on: (event: string, handler: (...args: unknown[]) => void) => events.set(event, handler),
 		sendMessage,

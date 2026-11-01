@@ -215,7 +215,18 @@ export interface ISessionService {
    */
   abortBash(sessionId: string): Promise<{ sent: boolean }>
   switchModel(sessionId: string, provider: string, modelId: string): Promise<string>
-  compact(sessionId: string, customInstructions?: string): Promise<void>
+  /**
+   * 手动触发后台压缩（C2 /compact 后台化）：经内部命令 `/__taiji_compact__` 送达
+   * smart-context 扩展的后台管理器（互斥/门控在扩展侧判定），fire-and-forget 不等待
+   * 压缩全程——本方法只承载「指令已送达 pi」的受理语义，压缩完成事实经落盘信号链
+   * （分界行）与完成通知到达。customInstructions percent 编码后拼进命令 args（扩展侧
+   * 解码，编码为传输细节）。
+   *
+   * 失败语义：session 无活跃 pi 进程时抛（调用方 error envelope）；命令投递后的扩展侧
+   * 结果（启动成功/进行中幂等/门控拒绝）不经本方法返回——分别经 renderer 受理提示、
+   * smart-context 通知通道到达。
+   */
+  compactBackground(sessionId: string, customInstructions?: string): Promise<void>
   /**
    * 拉取 session 历史（缓存增量三分支重建 + 双预算窗口，crash-resilience §3.3 D4）。
    * truncated=true 表示窗口外仍有历史；loadedTurns=本次返回的完整 turn 数；

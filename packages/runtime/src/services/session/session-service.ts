@@ -160,6 +160,16 @@ export const userStoppedMarkStore: UserStoppedMarkStore = {
 const BG_RECONCILE_COMMAND = '/__taiji_bg_reconcile__'
 
 /**
+ * GUI 手动压缩触发（C2 /compact 后台化）的内部命令。命令名与扩展侧注册
+ * （extensions/universal/smart-context src/index.ts 的 pi.registerCommand）是跨包
+ * 字符串契约，字面量锤定不 import（BG_RECONCILE_COMMAND 同款）——`/__` 双下划线前缀
+ * = 内部命令（前端 internal-command-filter 过滤不显示），两处注释互为指针，改名必须
+ * 同批。customInstructions 经 encodeURIComponent 编码后拼在命令名后（percent 编码无
+ * 空格/换行，pi args 切分 = 首空格后原样余串，扩展侧 decodeURIComponent 可逆还原）。
+ */
+const BG_COMPACT_COMMAND = '/__taiji_compact__'
+
+/**
  * subagent 流状态数据源端口（B2 subagent-stream-chunk §4.1，session.getSubagentStreamState
  * RPC 的数据源路由半）：(sessionId, recordId) → SubagentTee 内存三元组只读派生视图，undefined =
  * 该 record 无在管 tee（未注册 / child exit 已清理 / session 不匹配）。实现由组合根注入
@@ -1040,7 +1050,23 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
    * 经 EventInterpreter.onAgentSettled 回调注入（组合根 index.ts）。
    */
   flushPendingBashResults(sessionId: string): void { this.dispatcher.flushPendingBashResults(sessionId) }
-  async compact(sessionId: string, customInstructions?: string): Promise<void> { return this.dispatcher.compact(sessionId, customInstructions) }
+  /**
+   * 手动触发后台压缩（C2 /compact 后台化，接口契约见 interfaces.ts）：取活跃 client 后
+   * 经内部命令 fire-and-forget 送达 smart-context 扩展后台管理器（先例 maybeTriggerBgReconcile
+   * 的 `/__taiji_bg_reconcile__` 同形态）。
+   *
+   * 执行形态：不 await prompt（压缩全程分钟级，本方法只承载受理语义，reply 立即返回）；
+   * .catch 防 unhandled rejection——投递失败只 console.warn（扩展侧启动失败经通知通道
+   * 自行呈现；投递层失败 = pi 进程级异常，由 session 状态面兜底，无请求级回执可挂）。
+   */
+  async compactBackground(sessionId: string, customInstructions?: string): Promise<void> {
+    const client = this.pm.getClient(sessionId)
+    if (!client) throw new Error(`Session ${sessionId} not found`)
+    const args = customInstructions !== undefined ? ` ${encodeURIComponent(customInstructions)}` : ''
+    void client.prompt(`${BG_COMPACT_COMMAND}${args}`).catch((err) => {
+      console.warn(`[session-service] background compact trigger failed (sessionId=${sessionId}):`, err)
+    })
+  }
   setSendMessageHook(hook: SendMessageHook): void { this.dispatcher.setSendMessageHook(hook) }
   listPersistedSessions(): SessionGroup[] { return this.scanner.listPersistedSessions() }
   /**

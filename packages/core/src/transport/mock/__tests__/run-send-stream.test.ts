@@ -392,12 +392,13 @@ describe("mock-domains", () => {
       un()
     })
 
-    it('compact：compacting → compacted 生命周期', async () => {
+    it('compactBackground：受理即返回，不发生命周期帧（后台压缩不发 pi compaction 事件）', async () => {
       const frames: string[] = []
       const un = chat.streamSubscribe('s-compact', (m) => frames.push(m.type))
-      await chat.compact('s-compact')
-      await waitFor(() => frames.includes('session.compacted'))
-      expect(frames.indexOf('session.compacting')).toBeLessThan(frames.indexOf('session.compacted'))
+      await chat.compactBackground('s-compact')
+      // 受理 ack 已返回且无 compacting/compacted 生命周期帧（真实链路里后台压缩由 pi 事件
+      // 驱动的生命周期态不存在——smart-context 后台管理器落盘不发事件，UD6）
+      expect(frames.filter((t) => t.startsWith('session.compact'))).toHaveLength(0)
       un()
     })
 

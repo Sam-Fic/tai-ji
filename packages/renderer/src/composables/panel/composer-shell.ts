@@ -279,15 +279,15 @@ export function useComposerShell(params: ComposerShellParams) {
   const settingsStore = getSettingsStore()
   const flow = useNewTaskFlow()
   const { info: toastInfo, error: toastError } = useToast()
-  const { send, followUp, abort, compact, sendBash } = useChat()
+  const { send, followUp, abort, compactBackground, sendBash } = useChat()
   // ── subagent 通道（subagent-composer 2026-10-18）：drawer subagent 详情页复用同一
   //    shell，发送/中止/占用三终端按虚拟 id 形状分流到 subagent-composer-lane（通道 =
   //    session.subagentAction message/cancel 既有链路；包装体在 lane 文件）。主通道
   //    deps 逐成员透传原实现，非 vid 输入零变化。──
   const subagentLane = useSubagentComposerLane(sessionIdRef)
   const isSubagentLane = subagentLane.isLane
-  const { activeView, send: laneSend, followUp: laneFollowUp, abort: laneAbort, compact: laneCompact, sendBash: laneSendBash } =
-    wireSubagentLaneTerminals(isSubagentLane, subagentLane, { send, followUp, abort, compact, sendBash }, isActive)
+  const { activeView, send: laneSend, followUp: laneFollowUp, abort: laneAbort, compactBackground: laneCompactBackground, sendBash: laneSendBash } =
+    wireSubagentLaneTerminals(isSubagentLane, subagentLane, { send, followUp, abort, compactBackground, sendBash }, isActive)
   const { handoff: handoffAction, abortHandoff: abortHandoffAction } = useHandoffActions(sessionIdRef)
   const { switchModel, setThinkingLevel } = useModel()
   const sidebar = useSidebar()
@@ -588,7 +588,7 @@ export function useComposerShell(params: ComposerShellParams) {
     localThinkingLevel,
     // [D6] 锚定编辑分流包装：锚定活 → delivery.edit 原位替换；无锚定/离场透传 laneSend 普通发送
     send: sendWithQueueEdit,
-    compact: laneCompact,
+    compactBackground: laneCompactBackground,
     toastError,
     t: t as (key: string, params?: Record<string, unknown>) => string,
   })

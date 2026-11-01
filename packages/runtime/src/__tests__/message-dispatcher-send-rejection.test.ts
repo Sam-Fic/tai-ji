@@ -20,7 +20,7 @@
  * 来源（分节注释见内）：
  * - message-dispatcher-send-rejection（原主文件：错误分类迁移 D6 + 端到端 clientUuid 透传）
  * - message-dispatcher-bash-race（W1 abortBash/sendBash 竞态）
- * - message-dispatcher-compact（compact 零广播 M4）
+ *   [C2 /compact 后台化] message-dispatcher-compact 分节随同步 compact 链退役（见 465 行注）
  * - message-dispatcher-require-command（requireCommand 原子校验 u5a）
  * - plugin-send-path-queued-semantics（检查点 3：{queued} 语义透明性）
  *
@@ -342,13 +342,11 @@ function makeRaceMocks() {
   })
   const bashFn = vi.fn(() => bashPromise)
   const abortBashFn = vi.fn(async () => ({}) as Awaited<ReturnType<IPiEngine['abortBash']>>)
-  const compactFn = vi.fn(async () => ({}) as Awaited<ReturnType<IPiEngine['compact']>>)
 
   const client = {
     prompt: vi.fn(async () => ({})),
     bash: bashFn,
     abortBash: abortBashFn,
-    compact: compactFn,
   } as unknown as IPiEngine
 
   // wave:perf-w09（D1-2）：dispatcher 只依赖 publish 抽象（broker 双写路径已删），mock bus 收集发布消息
@@ -370,7 +368,7 @@ function makeRaceMocks() {
   const workspace = { record: vi.fn() } as unknown as WorkspaceService
 
   const dispatcher = new MessageDispatcher(svc, pm, workspace, bus)
-  return { dispatcher, session, bashFn, abortBashFn, compactFn, broadcasts, bashResolve, bashReject }
+  return { dispatcher, session, bashFn, abortBashFn, broadcasts, bashResolve, bashReject }
 }
 
 describe('MessageDispatcher —— W1 abortBash/sendBash 竞态检查', () => {
@@ -461,130 +459,11 @@ describe('MessageDispatcher —— W1 abortBash/sendBash 竞态检查', () => {
   })
 })
 
-// [2026-09 测试舰队审查 r2-21] 'W3 compact busy 预检' describe（3 用例）已删：
-// 与 message-dispatcher-compact.test.ts 的 TC5-busy预检（isBashRunning/isGenerating）+
-// TC5-成功（正常进入压缩 + 零广播）逐条重复（同断言集合），compact dispatcher
-// 唯一归并地在彼文件；本文件保留 W1 bashRunToken 竞态段（无重复替身）。
-
-// ════════════════ 来源: message-dispatcher-compact.test.ts ════════════════
-
-function makeCompactSession(): IManagedSessionView {
-  return {
-    id: 's1',
-    cwd: '/test',
-    label: 'test',
-    modelId: 'm1',
-    createdAt: 1,
-    lastActiveAt: 1,
-    tokenCount: 0,
-    inputTokens: 0,
-    bashRunToken: undefined,
-  }
-}
-
-interface MockOpts {
-  /** busy 预检占用态的转移序列（经转移原语构造，禁止 fixture 直写 occupancy） */
-  busyTransitions?: SessionOccupancyTransition[]
-  compactResult?: unknown
-  compactError?: Error
-}
-
-function makeCompactMocks(opts: MockOpts = {}) {
-  const session = makeCompactSession()
-  // 占用态经转移原语构造（publish 传 null：本文件只捕获 dispatcher 自身的广播，
-  // occupancy state 帧不参与断言）
-  for (const transition of opts.busyTransitions ?? []) {
-    applySessionOccupancyTransition(session, null, transition)
-  }
-
-  const compactFn = opts.compactError
-    ? vi.fn(async () => { throw opts.compactError! })
-    : vi.fn(async () => opts.compactResult ?? { summary: 'S', tokensBefore: 100, estimatedTokensAfter: 30 })
-
-  const client = { compact: compactFn } as unknown as IPiEngine
-
-  // wave:perf-w09（D1-2）：dispatcher 只依赖 publish 抽象（broker 双写路径已删），mock bus 收集发布消息
-  const broadcasts: ServerMessage[] = []
-  const bus = { publish: vi.fn((_sid: string, m: ServerMessage) => { broadcasts.push(m) }) } as unknown as IMessageBus
-
-  // S2 ISP 化：结构性满足 dispatcher 窄接口（7 方法 = 消费方实际用到的全部），无强转
-  const svc: IDispatcherSessionOps = {
-    ensureActive: vi.fn(async () => client),
-    getSessionByClient: vi.fn(() => session),
-    persistSessionOutcome: vi.fn(),
-    clearSessionOutcome: vi.fn(),
-    getSession: vi.fn(),
-    removeSessionEntry: vi.fn(),
-    detachSession: vi.fn(),
-  }
-
-  const pm = { getClient: vi.fn(() => client) } as unknown as IProcessManager
-  const workspace = { record: vi.fn() } as unknown as WorkspaceService
-
-  const dispatcher = new MessageDispatcher(svc, pm, workspace, bus)
-  return { dispatcher, session, compactFn, broadcasts }
-}
-
-/** compaction 生命周期相关的广播类型（M4 后 dispatcher 应零广播这些） */
-const COMPACTION_TYPES = ['session.compacting', 'session.compacted', 'message.compactionSummary']
-
-describe('MessageDispatcher compact —— 零广播（M4 事件驱动）', () => {
-  beforeEach(() => vi.clearAllMocks())
-
-  it('TC5-成功: compact 成功 → 零 compaction 广播（interpreter 唯一源）+ client.compact 调用 + compacting 不置位', async () => {
-    const { dispatcher, compactFn, session, broadcasts } = makeCompactMocks()
-
-    await dispatcher.compact('s1')
-
-    // client.compact 调用（RPC 触发保留）
-    expect(compactFn).toHaveBeenCalledWith(undefined)
-    // dispatcher 不置位 compacting（置位归 interpreter 的 compaction_start 事件；[D1] 读口迁移）
-    expect(session.occupancy?.compacting).toBe(false)
-    // 零 compaction 广播
-    const compactionBroadcasts = broadcasts.filter((m) => COMPACTION_TYPES.includes(m.type))
-    expect(compactionBroadcasts).toHaveLength(0)
-  })
-
-  it('TC5-busy预检补compacting: occupancy.compacting=true → 抛错 + 零广播（防并发 compact 重入）', async () => {
-    const { dispatcher, compactFn, broadcasts } = makeCompactMocks({ busyTransitions: ['compacting-start'] })
-
-    await expect(dispatcher.compact('s1')).rejects.toThrow(/compaction already running/)
-    expect(compactFn).not.toHaveBeenCalled()
-
-    const compactionBroadcasts = broadcasts.filter((m) => COMPACTION_TYPES.includes(m.type))
-    expect(compactionBroadcasts).toHaveLength(0)
-  })
-
-  it('TC5-busy预检: occupancy.bash=true → 抛错 + 零广播', async () => {
-    const { dispatcher, broadcasts } = makeCompactMocks({ busyTransitions: ['bash-start'] })
-
-    await expect(dispatcher.compact('s1')).rejects.toThrow(/bash running/)
-
-    const compactionBroadcasts = broadcasts.filter((m) => COMPACTION_TYPES.includes(m.type))
-    expect(compactionBroadcasts).toHaveLength(0)
-  })
-
-  it('TC5-busy预检: turn=generating（isGeneratingTurn）→ 抛错 + 零广播', async () => {
-    const { dispatcher, broadcasts } = makeCompactMocks({ busyTransitions: ['generating'] })
-
-    await expect(dispatcher.compact('s1')).rejects.toThrow(/agent generating/)
-
-    const compactionBroadcasts = broadcasts.filter((m) => COMPACTION_TYPES.includes(m.type))
-    expect(compactionBroadcasts).toHaveLength(0)
-  })
-
-  it('TC5-catch: client.compact reject → 传播 error + 零广播 + compacting 复位', async () => {
-    const { dispatcher, session, broadcasts } = makeCompactMocks({ compactError: new Error('pi compact failed') })
-
-    await expect(dispatcher.compact('s1')).rejects.toThrow('pi compact failed')
-
-    // 零广播（失败提示归 interpreter 的 compaction_end{errorMessage} → message.error 对话流）
-    const compactionBroadcasts = broadcasts.filter((m) => COMPACTION_TYPES.includes(m.type))
-    expect(compactionBroadcasts).toHaveLength(0)
-    // finally 兜底复位（对 false 无害，防 transport 级失败 session 卡死）
-    expect(session.occupancy?.compacting).toBe(false)
-  })
-})
+// [2026-09 测试舰队审查 r2-21] 'W3 compact busy 预检' describe 已删（重复替身归并）。
+// [C2 /compact 后台化] 来源 message-dispatcher-compact.test.ts 的整段（makeCompactMocks 工厂
+// + dispatcher.compact 五用例）随同步 compact 链退役：dispatcher 不再持有 compact 编排
+//（GUI 手动压缩 = session.compactBackground fire-and-forget，session-service 直投内部命令），
+// 「零 compaction 广播」约束由 interpreter 事件驱动架构结构性保证（M4），无独立断言面。
 
 // ════════════════ 来源: message-dispatcher-require-command.test.ts ════════════════
 

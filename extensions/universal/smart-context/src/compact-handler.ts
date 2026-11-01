@@ -659,7 +659,7 @@ export function createBackgroundCompactionManager(
 		preparation: SessionBeforeCompactEvent["preparation"],
 		usageTokens: number,
 		customInstructions: string | undefined,
-		source: "auto" | "tool",
+		source: "auto" | "tool" | "manual",
 	): boolean => {
 		const state = getState();
 		if (state.active) return false;
@@ -753,8 +753,9 @@ export function createBackgroundCompactionManager(
 	};
 
 	/**
-	 * 工具路径启动（U5 接线残项）：compact_context 工具显式请求的后台任务启动，即
-	 * tool.ts BackgroundCompactionControls 契约的 start 实装。
+	 * 工具/手动路径启动（U5 接线残项 + C2 手动触发入口）：显式请求的后台任务启动，即
+	 * tool.ts BackgroundCompactionControls 契约的 start 实装与 `__taiji_compact__`
+	 * 命令（GUI 手动 /compact，C2 /compact 后台化）共用入口。
 	 *
 	 * 与自动入口的判定差异（§3.1 入口矩阵①）：
 	 * - 保留：互斥（撞上返回 false——工具按幂等处理，U4 契约唯一 false 语义）与
@@ -768,9 +769,17 @@ export function createBackgroundCompactionManager(
 	 *
 	 * 失败语义：非互斥原因不可启动（门控拒绝 / appendCompaction 探测失败 / 无可压内容）
 	 * 抛错而非返回 false——false 在工具侧按「后台压缩进行中」幂等回执处理，非互斥失败
-	 * 返回 false 会撒谎回执；抛错经工具 execute 上浮为失败回执（诚实、可操作）。
+	 * 返回 false 会撒谎回执；抛错经工具 execute 上浮为失败回执（诚实、可操作），命令路径
+	 * 由命令 handler catch 后经通知通道投递失败文案。
+	 *
+	 * source 标记（观测口径）：tool = compact_context 工具；manual = GUI 手动 /compact
+	 * 经 runtime `__taiji_compact__` 命令触发。仅进 debugLog 观测，不影响判定与通知。
 	 */
-	const startForTool = (ctx: ExtensionContext, customInstructions?: string): boolean => {
+	const startForTool = (
+		ctx: ExtensionContext,
+		customInstructions?: string,
+		source: "tool" | "manual" = "tool",
+	): boolean => {
 		if (isActive()) return false;
 
 		const config = loadConfigFn();
@@ -795,7 +804,7 @@ export function createBackgroundCompactionManager(
 			);
 		}
 
-		return launchTask(ctx, config, modelId, preparation, ctx.getContextUsage()?.tokens ?? 0, customInstructions, "tool");
+		return launchTask(ctx, config, modelId, preparation, ctx.getContextUsage()?.tokens ?? 0, customInstructions, source);
 	};
 
 	return { maybeStart, cancelActive, isActive, startForTool };
