@@ -414,10 +414,11 @@
     },
     {
       "id": "C-data-09",
-      "summary": "跨进程共享文件（≥2 进程写）必须同锁协议：同一把锁 + 锁内读改写 + 只写声明字段域；新共享文件先登记锁协议再写代码",
+      "summary": "跨进程共享文件（≥2 进程写）必须同锁协议：同一把锁 + 锁内读改写 + 只写声明字段域；新共享文件先登记锁协议再写代码。触发前提 = 同一文件存在 ≥2 个写进程；单写者分片（键 = 持久 sessionId，同一 session 同一时刻只有一个 pi 进程）不触发本条。显式豁免条目（scheduler no-session 分片，权威细节见 architecture/data-source-registry.md #88）：`--no-session` 等空/非法 sessionId 在扩展装配点归一固定分片 `<agentDir>/scheduler/<root>/<segments>/no-session.json`（schedulerStoreFilePath，packages/extension-protocol/src/extensions/scheduler/store.ts），同 cwd 并存多个 `pi --no-session` 进程时共写同一文件——写侧整文件 RMW（tmp → fsync → rename，POSIX rename 已保证无半写形态）但**无跨进程锁**，语义 = 后写覆盖先写（整个任务集被覆盖，非字段级冲突）；代价 = 并发 `--no-session` 进程的任务定义与执行 history 可静默丢失。不补锁的理由（已评估，非遗漏）：锁原语（pi-file-lock/core 的 mkdir 原子锁）只能串行化写窗口，而本分片各写方持自有内存任务集（session_start 装载后常驻），锁内读改写仍需按 task id 合并两侧集且无法区分「内存已删」与「尚未装载」（删除语义会复活）——根治需按进程分片或改追加日志，属任务库存储形态重构。重审触发条件：① 同 cwd 多 `pi --no-session` 常驻成为实测场景；② 任务库存储形态重构（按进程分片 / 追加日志 / 单写者服务化）提上日程。scope 已扩到 scheduler store 路径，使本条对触碰该路径的 CR 必载（豁免随行可见，不再是仅 registry 的叙述性登记）",
       "scope": [
         "packages/runtime/src/**",
-        "apps/electron/**"
+        "apps/electron/**",
+        "packages/extension-protocol/src/extensions/scheduler/**"
       ],
       "authority": [
         "architecture/data-source-registry.md"

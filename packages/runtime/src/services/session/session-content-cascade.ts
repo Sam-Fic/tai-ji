@@ -19,6 +19,15 @@
  *   4. pi 树内本体：主 jsonl trash（文件级废纸篓）+ sidecars 6 段硬删
  *      （meta/preset/project/handoff/agent/model + migrate 残留——pi 宿主管辖的
  *      小体量元数据，主 jsonl 已走废纸篓，sidecar 不随树）。
+ *   5. scheduler 任务库分片清点（scheduler-redesign 方案 B 落地后补的第 5 段）：
+ *      任务集快照落 `<agentDir>/scheduler/<root>/<segments>/<sessionId>.json`
+ *      （键 = owner sessionId），该树是 pi agent 数据目录、不在 session 存储树内，
+ *      整树软删够不到——删主会话后分片（含任务定义与执行 history）留盘成孤儿。
+ *      清点经 session meta 的 cwd + sessionId 推导路径后删除（删点经依赖注入，
+ *      本模块不持 fs 删除调用，见 scheduler-shard-purge.ts）；`--no-session`
+ *      归一固定分片由多个 `pi --no-session` 进程共写、无属主，不在清点射程。
+ *      位置在末段：删除主链（trash / 整树）失败即上抛，分片须留到核心步骤成功
+ *      后才清（删到一半失败时会话仍可恢复，任务数据不可先丢）。
  *
  * 退役的旧逐域段（随整树软删收敛，D5 变更声明）：subagent 文件族清单删（旧布局
  * `<agentDir>/subagents/<enc>/` 段——新布局族文件在 session 树内）、A21
@@ -118,6 +127,15 @@ export type SessionContentCascadeInput = {
    */
   sessionStoreRoot: string
   /**
+   * owner session 工作目录（段 5 scheduler 分片清点的推导入参）。
+   *
+   * 分片路径 = `schedulerStoreFilePath(agentDir, cwd, sessionId)`——`<root>/<segments>`
+   * 层是 cwd 的 workspace 路径隔离（同 agentDir 下不同 cwd 互不干扰），缺 cwd 即无法
+   * 定位分片。由调用方经 session meta 取真值（active 分支 = session.cwd，scanned 分支
+   * = scanner 读出的 target.cwd，归档 purge = ledger.cwd）。
+   */
+  cwd: string
+  /**
    * active 分支语义：true = 主文件已不存在时整体零动作（现行 purgeActiveSessionFile
    * 守卫「外部已删则整体零动作」）；false = scanned 分支语义（主文件不存在仍收殓
    * + 整树软删 + 清孤儿 sidecar——树与 sidecar 不依赖主文件内容）。
@@ -153,6 +171,18 @@ export interface SessionContentCascadeDeps { // oe-exempt:20261012:framework:级
   purgeMainSidecars: (filePath: string) => void
   /** A23 前置收殓（现行 reapSessionBackgroundTasks；幂等，双跑无害）。 */
   reapBackgroundTasks: (agentDir: string, sessionId: string) => Promise<unknown>
+  /**
+   * 段 5 scheduler 任务库分片清点（生产实装 = scheduler-shard-purge.ts）。
+   *
+   * 经依赖注入而非模块内直调：分片属扩展协议包（extension-protocol/scheduler-store）
+   * 管辖的文件，删除点放装配侧（lifecycle / archive-service 两调用方各注一次），
+   * 级联模块保持「编排 + 自身暂存域 fs」的既有边界（验收③源码断言：本模块无逐文件
+   * 删除调用）。
+   *
+   * 删除失败上抛——级联按 best-effort 收敛为 warn + failures（残留分片仅占盘，
+   * 不阻断删除主链）。
+   */
+  purgeSchedulerShard: (agentDir: string, cwd: string, sessionId: string) => 'purged' | 'absent' | 'skipped'
   /** 汇总出声通道（生产 console.warn；测试收集断言）。 */
   warn: (message: string) => void
 }
@@ -166,6 +196,8 @@ export type SessionContentCascadeResult = {
   sessionTreeTrashed: boolean
   /** fork 回退：被存活会话引用而保留在 A 树残留内的子代理文件族数。 */
   subagentFamiliesResidual: number
+  /** 段 5 scheduler 分片清点结果：purged（已删）/ absent（无分片，正常路径）/ skipped（sessionId 非路径安全，无分片可定位）/ failed（删除失败，best-effort 留痕）。 */
+  schedulerShard: 'purged' | 'absent' | 'skipped' | 'failed'
   /** 失败项描述（已逐项 warn，此处供调用方/测试核对）。 */
   failures: string[]
 }
@@ -195,7 +227,7 @@ export async function cascadeDeleteSessionContent(
   input: SessionContentCascadeInput,
   deps: SessionContentCascadeDeps,
 ): Promise<SessionContentCascadeResult> {
-  const { sessionId, sessionFilePath, agentDir, sessionsRoot, sessionStoreRoot, skipIfMainFileMissing } = input
+  const { sessionId, sessionFilePath, agentDir, sessionsRoot, sessionStoreRoot, cwd, skipIfMainFileMissing } = input
   const failures: string[] = []
   const mainFileExisted = existsSync(sessionFilePath)
   const result: SessionContentCascadeResult = {
@@ -203,6 +235,7 @@ export async function cascadeDeleteSessionContent(
     referenceScan: 'skipped',
     sessionTreeTrashed: false,
     subagentFamiliesResidual: 0,
+    schedulerShard: 'skipped',
     failures,
   }
   if (!mainFileExisted && skipIfMainFileMissing) {
@@ -300,6 +333,12 @@ export async function cascadeDeleteSessionContent(
 
   // 5. pi 树内 sidecars（scanned 分支主文件缺失时也照清孤儿 sidecar——原语义保持）
   deps.purgeMainSidecars(sessionFilePath)
+
+  // 6. scheduler 任务库分片清点（文件头清单第 5 段；本文件第 6 步——末段：核心删除
+  //    步骤成功后才清，删到一半失败时会话仍可恢复，任务数据不可先丢）。best-effort：
+  //    删除失败只 warn + 记 failures，残留分片仅占盘；`--no-session` 固定分片无属主
+  //    不可按单会话回收，由删点侧按 sessionId 可定位性返回 skipped。
+  result.schedulerShard = purgeSchedulerShardInCascade(agentDir, cwd, sessionId, result, deps)
 
   // 汇总出声（失败必出声；成功+有残留也留一行观测面）
   if (failures.length > 0) {
@@ -746,6 +785,33 @@ function discardStaging(staging: StagedFamilies | null, mode: null | 'restored-o
     }
   } catch {
     void 0 // 暂存区清除失败仅占盘，best-effort（删除主链已完成）
+  }
+}
+
+// ── 6. scheduler 任务库分片清点 ──────────────────────────────────────────────
+
+/**
+ * 段 5（文件头编号第 5 段 / 本文件第 6 步）scheduler 分片清点的失败收敛。
+ *
+ * 与 reapBackgroundTasksBeforeDelete 同型：best-effort + 失败必须出声（warn 逐项 +
+ * failures 汇总，禁静默吞）。skipped / absent 都是正常路径（无分片可定位 / 从未建任务），
+ * 不 warn——只有 failed 留痕，错误信息含恢复动作（重试删除即补清分片）。
+ */
+function purgeSchedulerShardInCascade(
+  agentDir: string,
+  cwd: string,
+  sessionId: string,
+  result: SessionContentCascadeResult,
+  deps: SessionContentCascadeDeps,
+): 'purged' | 'absent' | 'skipped' | 'failed' {
+  try {
+    return deps.purgeSchedulerShard(agentDir, cwd, sessionId)
+  } catch (e: unknown) {
+    const msg = `scheduler task-store shard purge failed for ${sessionId} (residual shard only occupies disk; `
+      + `retry the delete to clear it): ${toMessage(e)}`
+    deps.warn(`[session-content-cascade] ${msg}`)
+    result.failures.push(msg)
+    return 'failed'
   }
 }
 

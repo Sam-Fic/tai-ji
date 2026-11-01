@@ -14,6 +14,10 @@
  *   subagents 根、base-tool-enhance 目录、session-view tmp 导出物删除；lifecycle
  *   不再有图片缓存/产物/附件三段 rmSync）；
  * - ④ btw 孤儿补账退役无残留调用（补账模块文件已删除 + 全仓无 import）。
+ * - 段 ⑤ scheduler 任务库分片清点（独立 describe）：分片在 `<agentDir>/scheduler/` 树、
+ *   不在 session 存储树内，整树软删够不到——删主会话后分片留盘成孤儿；清点经 session
+ *   meta 的 cwd + sessionId 推导路径后删除（生产实装直注入，无 fake），末段执行，
+ *   best-effort 失败收敛。
  *
  * tombstone 时序（迟到写拦截）在文件尾 SessionLifecycle 端到端口断言（删除编排中
  * tombstone 登记先于整树软删）。
@@ -29,6 +33,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { cascadeDeleteSessionContent } from '../session-content-cascade.js'
 import type { SessionContentCascadeDeps } from '../session-content-cascade.js'
+import { purgeSchedulerShard } from '../scheduler-shard-purge.js'
+import { schedulerStoreFilePath } from '../../../utils/protocol-scheduler-store.js'
 import { SessionLifecycle } from '../session-lifecycle.js'
 import { SessionEntryRemovalOrchestrator } from '../session-entry-removal.js'
 import type { ILifecycleSessionOps, ISessionRegisterDeps } from '../session-internal.js'
@@ -58,6 +64,8 @@ type Pool = {
   storeRoot: string
   agentDir: string
   sessionsRoot: string
+  /** owner session 工作目录（scheduler 分片路径的 workspace 隔离键）。 */
+  cwd: string
   /** 建 `<sessionsRoot>/<slug>/<name>.jsonl` 主会话文件并写入 lines。 */
   addMainSession: (slug: string, name: string, lines: string[]) => string
   /** seed 一个子代理文件族（新布局：`<root>/<sid>/subagents/`）。 */
@@ -69,6 +77,8 @@ type Pool = {
   }
   /** seed 树内一个普通域文件（附件/日志等，验证随整树回收）。 */
   seedTreeFile: (sid: string, relPath: string, content?: string) => string
+  /** seed 被删会话的 scheduler 任务库分片（`<agentDir>/scheduler/<root>/<segments>/<sid>.json`）。 */
+  seedSchedulerShard: (sid: string, content?: string) => string
   treeDir: (sid: string) => string
   bgTaskDir: (sid: string) => string
   sessionViewPath: (sid: string) => string
@@ -81,13 +91,16 @@ function makePool(): Pool {
   const storeRoot = join(root, 'ext-sessions')
   const agentDir = join(root, 'agent')
   const sessionsRoot = join(agentDir, 'sessions')
+  const cwd = join(root, 'workspace')
   mkdirSync(sessionsRoot, { recursive: true })
   mkdirSync(storeRoot, { recursive: true })
+  mkdirSync(cwd, { recursive: true })
   const p: Pool = {
     root,
     storeRoot,
     agentDir,
     sessionsRoot,
+    cwd,
     addMainSession: (slug, name, lines) => {
       const dir = join(sessionsRoot, slug)
       mkdirSync(dir, { recursive: true })
@@ -115,6 +128,12 @@ function makePool(): Pool {
       mkdirSync(join(filePath, '..'), { recursive: true })
       writeFileSync(filePath, content, 'utf8')
       return filePath
+    },
+    seedSchedulerShard: (sid, content = '{"schemaVersion":2,"tasks":[]}\n') => {
+      const shardPath = schedulerStoreFilePath(agentDir, cwd, sid)
+      mkdirSync(join(shardPath, '..'), { recursive: true })
+      writeFileSync(shardPath, content, 'utf8')
+      return shardPath
     },
     treeDir: (sid) => join(storeRoot, sid),
     bgTaskDir: (sid) => join(storeRoot, sid, 'background-tasks'),
@@ -161,6 +180,12 @@ function makeDeps(): DepsHandle {
       }),
       purgeMainSidecars: vi.fn((filePath: string) => { events.push(`purge:${filePath}`); mainSidecarsPurged.push(filePath) }),
       reapBackgroundTasks: vi.fn(async () => { events.push('reap') }),
+      // 段 ⑤ scheduler 分片清点：注入**生产实装**（纯 fs 路径推导 + unlink，无服务依赖，
+      // 无需 fake——fixture 的 tmpdir 即全部状态），事件位供顺序断言。
+      purgeSchedulerShard: vi.fn((agentDir: string, cwd: string, sessionId: string) => {
+        events.push('purgeShard')
+        return purgeSchedulerShard(agentDir, cwd, sessionId)
+      }),
       warn: (message: string) => { warnings.push(message) },
     },
     warnings,
@@ -174,7 +199,7 @@ function makeDeps(): DepsHandle {
 /** 跑一次级联（输入按 fixture 装配）。 */
 async function runCascade(sid: string, mainFile: string, p: Pool, h: DepsHandle, skipIfMainFileMissing = true) {
   return cascadeDeleteSessionContent(
-    { sessionId: sid, sessionFilePath: mainFile, agentDir: p.agentDir, sessionsRoot: p.sessionsRoot, sessionStoreRoot: p.storeRoot, skipIfMainFileMissing },
+    { sessionId: sid, sessionFilePath: mainFile, agentDir: p.agentDir, sessionsRoot: p.sessionsRoot, sessionStoreRoot: p.storeRoot, cwd: p.cwd, skipIfMainFileMissing },
     h.deps,
   )
 }
@@ -280,6 +305,7 @@ describe('cascadeDeleteSessionContent 删除链四段（验收①）', () => {
       referenceScan: 'skipped',
       sessionTreeTrashed: false,
       subagentFamiliesResidual: 0,
+      schedulerShard: 'skipped',
       failures: [],
     })
     expect(h.events).toEqual([])
@@ -298,7 +324,7 @@ describe('cascadeDeleteSessionContent 删除链四段（验收①）', () => {
     expect(result.mainFileExisted).toBe(false)
     expect(result.sessionTreeTrashed).toBe(true)
     expect(result.failures).toEqual([])
-    expect(h.events).toEqual(['reap', `treeTrash:${p.treeDir(mainSid)}`, `purge:${missing}`])
+    expect(h.events).toEqual(['reap', `treeTrash:${p.treeDir(mainSid)}`, `purge:${missing}`, 'purgeShard'])
     expectGone(p.treeDir(mainSid))
   })
 })
@@ -497,6 +523,87 @@ describe('cascadeDeleteSessionContent 树内校验', () => {
   })
 })
 
+// ── 段 ⑤ scheduler 任务库分片清点（scheduler-redesign 方案 B 落地后补的删除段）────
+
+describe('cascadeDeleteSessionContent scheduler 分片清点（段 ⑤）', () => {
+  it('分片存在 → 按 schedulerStoreFilePath 推导删除，且清点在核心删除步骤之后', async () => {
+    const p = makePool()
+    const h = makeDeps()
+    const mainSid = 'main-ssss'
+    const shard = p.seedSchedulerShard(mainSid)
+    p.seedTreeFile(mainSid, 'attachments/paste-1.png', 'png')
+    const mainFile = p.addMainSession('slug-a', `2026T_${mainSid}`, ['{"type":"session"}'])
+
+    const result = await runCascade(mainSid, mainFile, p, h)
+
+    expect(result.schedulerShard).toBe('purged')
+    expect(result.failures).toEqual([])
+    expectGone(shard)
+    // 清点在末段：先收殓/整树/主文件/sidecar，后清分片（删到一半失败时任务数据不可先丢）
+    expect(h.events).toEqual(['reap', `treeTrash:${p.treeDir(mainSid)}`, `trash:${mainFile}`, `purge:${mainFile}`, 'purgeShard'])
+  })
+
+  it('无分片（从未建任务）→ absent 正常路径，不 warn 不记 failures', async () => {
+    const p = makePool()
+    const h = makeDeps()
+    const mainSid = 'main-tttt'
+    const mainFile = p.addMainSession('slug-a', `2026T_${mainSid}`, ['{"type":"session"}'])
+
+    const result = await runCascade(mainSid, mainFile, p, h)
+
+    expect(result.schedulerShard).toBe('absent')
+    expect(result.failures).toEqual([])
+    expect(h.warnings).toEqual([])
+  })
+
+  it('sessionId 非路径安全 → skipped，且共写的 no-session 固定分片不被误删', async () => {
+    const p = makePool()
+    const h = makeDeps()
+    // no-session 固定分片由多个 `pi --no-session` 进程共写、无属主（C-data-09 豁免条目），
+    // 不可按单会话回收——非路径安全 id 无分片可定位时必须跳过而非猜路径。
+    const noSessionShard = p.seedSchedulerShard('no-session')
+    const mainFile = p.addMainSession('slug-a', '2026T_main-uuuu', ['{"type":"session"}'])
+
+    const result = await runCascade('not path safe!', mainFile, p, h)
+
+    expect(result.schedulerShard).toBe('skipped')
+    expectPresent(noSessionShard)
+  })
+
+  it('删除失败 → failed best-effort（warn + failures 出声），不阻断删除主链', async () => {
+    const p = makePool()
+    const h = makeDeps()
+    const mainSid = 'main-vvvv'
+    // 分片路径落成目录 → unlink 抛 EPERM（真实 fs 失败形态，无需 chmod 特权技巧）
+    const shard = schedulerStoreFilePath(p.agentDir, p.cwd, mainSid)
+    mkdirSync(shard, { recursive: true })
+    p.seedTreeFile(mainSid, 'attachments/paste-1.png', 'png')
+    const mainFile = p.addMainSession('slug-a', `2026T_${mainSid}`, ['{"type":"session"}'])
+
+    const result = await runCascade(mainSid, mainFile, p, h)
+
+    expect(result.schedulerShard).toBe('failed')
+    expect(result.sessionTreeTrashed).toBe(true) // 主链不受影响（残留分片仅占盘）
+    expect(result.failures.some((f) => f.includes('scheduler task-store shard purge failed'))).toBe(true)
+    expect(h.warnings.some((w) => w.includes('scheduler task-store shard purge failed'))).toBe(true)
+    expectPresent(shard)
+  })
+
+  it('active 分支零动作语义（主文件缺失 + skipIfMainFileMissing）不碰分片', async () => {
+    const p = makePool()
+    const h = makeDeps()
+    const mainSid = 'main-wwww'
+    const shard = p.seedSchedulerShard(mainSid)
+    const missing = join(p.sessionsRoot, 'slug-a', `2026T_${mainSid}.jsonl`)
+
+    const result = await runCascade(mainSid, missing, p, h, true)
+
+    expect(result.schedulerShard).toBe('skipped')
+    expectPresent(shard)
+    expect(h.events).toEqual([])
+  })
+})
+
 // ── 验收③：旧逐域段无残留调用（源码断言）────────────────────────────────────
 
 describe('旧逐域段退役（验收③，源码断言）', () => {
@@ -519,6 +626,10 @@ describe('旧逐域段退役（验收③，源码断言）', () => {
     expect(cascadeSource.includes('await deps.reapBackgroundTasks(')).toBe(true)
     // fork 回退（保留 A 树）实装在位
     expect(cascadeSource.includes('restoreStagedFamilies')).toBe(true)
+    // 段 ⑤ scheduler 分片清点：cwd 入参 + 删点经依赖注入（模块内不持 unlinkSync）
+    expect(cascadeSource.includes('cwd: string')).toBe(true)
+    expect(cascadeSource.includes('purgeSchedulerShard: (agentDir: string, cwd: string, sessionId: string)')).toBe(true)
+    expect(cascadeSource.includes('purgeSchedulerShardInCascade(')).toBe(true)
   })
 
   it('lifecycle 三段衍生数据 rm 退役（图片缓存/产物/附件导入与 rmSync 调用均不在）', () => {
@@ -594,9 +705,10 @@ describe('A23 触发面收窄（E8）', () => {
     const source = readFileSync(join(__dirname, '..', 'session-lifecycle.ts'), 'utf8')
     const callSites = source.match(/this\.cascadeDeletedSessionContent\(/g) ?? []
     expect(callSites.length).toBe(2)
-    // active 分支 = skipIfMainFileMissing: true；scanned 分支 = false
-    expect(source.includes('cascadeDeletedSessionContent(sessionId, session.sessionFilePath, true)')).toBe(true)
-    expect(source.includes('cascadeDeletedSessionContent(sessionId, target.filePath, false)')).toBe(true)
+    // active 分支 = session.cwd + skipIfMainFileMissing: true；scanned 分支 = target.cwd + false
+    // （cwd = 段 ⑤ scheduler 分片清点的 workspace 隔离键，两分支各取 session meta 真值）
+    expect(source.includes('cascadeDeletedSessionContent(sessionId, session.sessionFilePath, session.cwd, true)')).toBe(true)
+    expect(source.includes('cascadeDeletedSessionContent(sessionId, target.filePath, target.cwd, false)')).toBe(true)
   })
 })
 

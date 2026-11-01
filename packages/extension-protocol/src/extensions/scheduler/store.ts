@@ -10,6 +10,16 @@
 //   （等价旧 fork owner 过滤语义，实现从过滤逻辑降为「不同文件天然不共享」）；
 // - `<root>/<segments>` 目录层沿用 workspace 路径隔离（同 agentDir 下不同 cwd 互不干扰）。
 //
+// 免锁前提的已知例外（C-data-09 显式豁免条目，权威登记 = data-source-registry.md #88）：
+// `--no-session` 等空/非法 sessionId 在扩展装配点（extensions/universal/scheduler/src/
+// index.ts）归一固定分片 `no-session`，同 cwd 并存多个 `pi --no-session` 进程时共写
+// 同一文件——该分片**无跨进程锁**，写侧整文件 RMW 的语义是后写覆盖先写（整个任务集
+// 被覆盖，非字段级冲突），并发进程的任务定义与执行 history 可静默丢失。锁协议（mkdir
+// 原子锁）对此无效：各写方持自有内存任务集（session_start 装载后常驻），锁内读改写仍
+// 无法区分「内存已删」与「尚未装载」，删除语义会复活；根治需按进程分片或改追加日志
+// （任务库存储形态重构，重审触发条件见 C-data-09 豁免条目）。单写者分片（键 = 持久
+// sessionId）不在此例外内：同一 session 同一时刻只有一个 pi 进程。
+//
 // 本模块是扩展（pi 进程内，唯一写者）与 taiji scheduler-manager 面板（runtime worker，
 // 只读者）的同源单实现——路径推导与文件形状两侧必须构造性一致，双实现会漂移。
 // 含 node:fs 依赖，**不进 index 桶出口**（浏览器消费方结构性不触达 node 内建，
