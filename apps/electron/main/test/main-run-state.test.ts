@@ -432,8 +432,9 @@ describe('checkpoint 删除属主时序（D3 删除实现语义固定）', () =>
 // ① 杀目标集不含 pi PID：判死处置传 scope='process-only'，树枚举/树杀工具零调用；
 // ② reattach 接管的机制前提：重启链走通（退避后新 runtime 已 spawn——reattach 编排
 //    在 runtime 启动组合根消费 checkpoint 执行，supervisor 侧不直接调用它）；
-// ③ 判死决策日志带事件循环滞后遥测（M1 消费接线：探针侧最后健康应答的 eventLoopLag，
-//    runtime 未上报时显式 null + source 标记——归因留档，不做分支依据）。
+// ③ 判死决策日志带事件循环滞后遥测（探针侧最后健康应答的 eventLoopLag 透传；
+//    runtime 基线 /health 应答体不携带该字段，带值形态靠 mock 前瞻覆盖；未上报时
+//    显式 null + source 标记——归因留档，不做分支依据）。
 
 type SupervisorModule = typeof import('../supervisor/runtime-supervisor.js')
 type ProcessControlModule = typeof import('../supervisor/process-control.js')
@@ -507,7 +508,8 @@ describe('RL5 判死处置降粒度（D4：只重启 runtime 单进程，pi 不�
     expect(port).toBe(43110)
     expect(sup.isRunning).toBe(true)
 
-    // 探针一拍健康应答：/health 体携带 eventLoopLag（M1 遥测消费契约）→ 监视器留存
+    // 探针一拍健康应答：/health 体携带 eventLoopLag（消费口前瞻形态，runtime 基线
+    // 应答体不携带该字段）→ 监视器留存
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,
       status: 200,

@@ -490,7 +490,9 @@ export class RuntimeSupervisor implements IRuntimeSupervisor {
    * 处置范围（projection 一致性设计 D4 判死处置降粒度）：只终止 runtime 自身
    * （stopRuntimeProcess scope='process-only'），不枚举不杀 pi 后代——pi 子进程独立
    * 存活（POSIX 语义，PPID 挂 init），重启后的 runtime 由启动期 orphan sweep 收殓
-   * 旧孤儿 pi（argv 判据 + ppid=1）并由 startup-reattach 编排重新附着接管。
+   * 旧孤儿 pi（argv 四条合取 + ppid=1，SIGKILL），startup-reattach 再按 checkpoint
+   * 重 spawn 恢复——接管语义 = 收割旧 + 进程换代重 spawn，非附着存活的原进程
+   * （U4 前置检查点三通道核对结论：退出覆盖成立，降级条款不触发）。
    *
    * 关键不变量（避免重启竞态）：
    * 1. 先 markStopping：kill 触发的 exit 事件会被 onRuntimeExit 当崩溃 → 重复重启。
@@ -511,9 +513,10 @@ export class RuntimeSupervisor implements IRuntimeSupervisor {
     // action/trigger/target/reason 字段化，经 main-logger 落盘 main-<date>.log）。
     // mainLogger 未 init（单测）时 no-op。pid 必须在清理 child 前捕获。
     //
-    // 事件循环滞后遥测（projection 一致性设计 D4，M1 遥测管道的消费接线）：遥测取自
+    // 事件循环滞后遥测（projection 一致性设计 D4，判死归因留档）：遥测取自
     // 探针侧留存的「最后一次健康应答」——runtime 判死时刻已无响应，eventLoopLag 只能
-    // 是最后健康时点的快照（/health 响应体可选字段）；runtime 未上报时显式记 null +
+    // 是最后健康时点的快照（/health 响应体可选字段，runtime 基线不上报——供给端
+    // 接线前恒记 null + not-reported-by-runtime）；runtime 未上报时显式记 null +
     // source 标记（归因留档，不做分支依据——IO 阻滞与真死锁在滞后分布上同形）。
     const pid = this.child?.pid
     const monitor = this.livenessMonitor

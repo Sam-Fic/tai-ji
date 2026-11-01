@@ -46,10 +46,16 @@ export const LIVENESS_PROBE_TIMEOUT_MS = 2_000
 const HEALTH_ENDPOINT = (port: number) => `http://127.0.0.1:${port}/health`
 
 /**
- * 事件循环滞后遥测（runtime /health 响应体 `eventLoopLag` 可选字段；M1 遥测管道在
- * supervisor 侧的消费契约）。字段名与 runtime 侧事件循环直方图快照同形（ms 单位）；
- * 全字段可选——runtime 未上报或形态不符时探针结果不带该字段，判死归因日志显式记
- * null（归因留档用，不做分支依据——IO 阻滞与真死锁在滞后分布上同形，见 D4）。
+ * 事件循环滞后遥测（判死归因留档字段，D4）——本模块是探针侧透传口：runtime
+ * /health 健康应答体若携带 `eventLoopLag` 对象（字段名与 runtime 侧事件循环直方图
+ * 快照同形，ms 单位）则透传至判死决策日志；未上报或形态不符时探针结果不带该
+ * 字段，判死归因日志显式记 null（归因留档用，不做分支依据——IO 阻滞与真死锁在
+ * 滞后分布上同形，见 D4）。
+ *
+ * 供给端现状：runtime 基线 /health 应答体 = { status, uptime }（packages/runtime/
+ * src/transport/connection-manager.ts），不含本字段；在途 M1 遥测（startup-
+ * readiness）形态 = runtime 结构化日志直方图行，同样不上报 /health——遥测供给
+ * 接线归 runtime 侧，接入前判死日志 eventLoopLag 恒为 null。
  */
 export type EventLoopLagTelemetry = {
   /** 滞后样本数（窗口内采样计数）。 */
@@ -90,7 +96,7 @@ export interface HealthProbeResult {
   ok: boolean
   ms?: number
   /**
-   * 事件循环滞后遥测（健康应答体 `eventLoopLag` 字段透传，M1 消费接线）。
+   * 事件循环滞后遥测（健康应答体 `eventLoopLag` 字段透传，判死归因留档通道）。
    * undefined = runtime 未上报（当前基线 /health 不携带该字段）。
    */
   eventLoopLag?: EventLoopLagTelemetry
@@ -114,7 +120,8 @@ export async function checkHealthEndpoint(port: number): Promise<HealthProbeResu
       signal: AbortSignal.timeout(LIVENESS_PROBE_TIMEOUT_MS),
     })
     if (response.ok) {
-      // 事件循环滞后遥测透出（M1 消费接线）：健康应答体读 eventLoopLag 可选字段。
+      // 事件循环滞后遥测透出：健康应答体读 eventLoopLag 可选字段（runtime 基线
+      // 应答体不携带，供给端现状见 EventLoopLagTelemetry 头注）。
       // 读体失败（非 JSON / 无 json 通道 / 流中断）按无遥测处理——探针判定只看响应
       // 状态，遥测缺席不影响 ok 语义；读体超时由同一 AbortSignal 覆盖。
       const body: unknown = await response.json().catch(() => undefined)
