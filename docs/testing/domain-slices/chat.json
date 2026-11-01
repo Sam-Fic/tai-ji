@@ -108,6 +108,7 @@
     "packages/renderer/src/composables/effects/__tests__/useMessageEffects.test.ts",
     "packages/renderer/src/composables/panel/__tests__/useChatViewDeps.test.ts",
     "packages/runtime/src/__tests__/event-interpreter.test.ts",
+    "packages/runtime/src/__tests__/event-interpreter-compaction-signal.test.ts",
     "packages/runtime/src/__tests__/message-dispatcher-send-rejection.test.ts",
     "packages/runtime/src/__tests__/probes/p-adopt.test.ts",
     "packages/runtime/src/__tests__/replicated-state.test.ts",
