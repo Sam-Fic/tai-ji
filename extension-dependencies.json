@@ -13,7 +13,7 @@
         {
           "package": "@zhushanwen/extension-protocol",
           "type": "package",
-          "reason": "代码层静态 import guiComponent/guiResult/isGuiCapable 等 GUI 原语（interface/helpers.ts、gui-mappers.ts、tool-workflow.ts 等 top-level import），缺失时模块加载即抛 Cannot find module，是强依赖"
+          "reason": "代码层静态 import guiComponent/guiResult/isGuiCapable 等 GUI 原语（src/interface/tool/tool-shared.ts、src/interface/gui/subagent-actions.ts、src/interface/gui/gui-mappers.ts 等 top-level import），缺失时模块加载即抛 Cannot find module，是强依赖"
         },
         {
           "package": "@zhushanwen/pi-structured-output",
@@ -28,12 +28,12 @@
         {
           "package": "@zhushanwen/pi-pending-notifications",
           "type": "package",
-          "reason": "代码层静态 import countActiveFromEntries（src/host/pi-host.ts top-level import），缺失时模块加载即抛 Cannot find module，是强依赖。另有 pending 状态派生视图运行时协作：pending:register/unregister 事件的 emit 端在 subagent-core（notify-host.ts / orchestration/lifecycle.ts / worker-message-pump.ts / registry-reconcile/reconcile-sweep.ts 崩溃恢复 sweep 补注销）与 base-tool-enhance（bash 侧派生视图），subagent-workflow 自身仅在崩溃恢复时 emit pending:unregister（src/session-lifecycle.ts recoverCrashedRuns 回调）；pending-notifications 消费该事件落盘 session entries（活跃 pending 的唯一状态源）。后台任务完成通知不经该事件——由 subagent-workflow 自有通道承担（notifier.ts 设 display+triggerTurn，bg-notify-render 渲染完成块并唤醒父 agent）"
+          "reason": "代码层静态 import countActiveFromEntries（src/host/pi-host.ts top-level import），缺失时模块加载即抛 Cannot find module，是强依赖。另有 pending 状态派生视图运行时协作：pending:register/unregister 事件的 emit 端在 subagent-core（packages/subagent-core/src/execution/notify/notify-host.ts 的 emitPendingRegister/emitPendingUnregister、packages/subagent-core/src/orchestration/lifecycle.ts 的 run 启动注册与崩溃恢复外置回调、packages/subagent-core/src/execution/registry-reconcile/reconcile-sweep.ts 的崩溃恢复 sweep 补注销）与 base-tool-enhance（bash 侧派生视图），subagent-workflow 自身仅在崩溃恢复时 emit pending:unregister（src/session-lifecycle.ts recoverCrashedRuns 回调）；pending-notifications 消费该事件落盘 session entries（活跃 pending 的唯一状态源）。后台任务完成通知不经该事件——由 subagent-workflow 自有通道承担（src/workflow-notify.ts 设 display+triggerTurn，src/interface/gui/bg-notify-render.ts 渲染完成块并唤醒父 agent）"
         },
         {
           "package": "@zhushanwen/subagent-core",
           "type": "package",
-          "reason": "代码层静态 import boundedPrettySerialize/getBoundNotifyLedger/WorkflowRun/LauncherDeps 等（src/interface/helpers.ts、src/interface/commands.ts top-level import），缺失时模块加载即抛 Cannot find module，是强依赖"
+          "reason": "代码层静态 import boundedPrettySerialize/WorkflowRun/LauncherDeps 等（src/workflow-notify.ts、src/interface/command/commands.ts top-level import），缺失时模块加载即抛 Cannot find module，是强依赖"
         },
         {
           "package": "@zhushanwen/pi-subagent-cli",
@@ -80,7 +80,7 @@
         {
           "package": "@zhushanwen/pi-todo",
           "type": "optional",
-          "reason": "goal 的 prompt 软建议 AI 使用 todo 工具分解/跟踪任务（见 prompts.ts），无运行时/编译期耦合（不再读 pi.__todoGetList，budget 不接收 todo 进度），缺失时 AI 自行判断任务分解"
+          "reason": "goal 的 prompt 软建议 AI 使用 todo 工具分解/跟踪任务（见 src/projection/prompts.ts），无运行时/编译期耦合（不再读 pi.__todoGetList，budget 不接收 todo 进度），缺失时 AI 自行判断任务分解"
         },
         {
           "package": "@zhushanwen/pi-pending-notifications",
@@ -142,12 +142,12 @@
         {
           "package": "@zhushanwen/pi-ext-guards",
           "type": "package",
-          "reason": "代码层静态 import guardStaleCtx/toErrorMessage（src/compact.ts top-level import）与 isTaijiGuiHost 宿主谓词（src/state.ts re-export，dmg-r1-7 双实现收敛——谓词单点在 ext-guards，tool.ts / index.ts 原通道共用），缺失时模块加载即抛 Cannot find module，是强依赖"
+          "reason": "代码层静态 import toErrorMessage/isErrnoWithCode（src/execution-notice.ts、src/enter.ts、src/state.ts top-level import）与 isTaijiGuiHost 宿主谓词（src/state.ts re-export，dmg-r1-7 双实现收敛——谓词单点在 ext-guards，tool.ts / index.ts 原通道共用），缺失时模块加载即抛 Cannot find module，是强依赖"
         },
         {
           "package": "@zhushanwen/pi-extension-logger",
           "type": "package",
-          "reason": "代码层静态 import getLogger（src/tool.ts、src/compact.ts top-level import），缺失时模块加载即抛 Cannot find module，是强依赖"
+          "reason": "代码层静态 import getLogger（src/tool.ts、src/state.ts、src/templates.ts、src/execution-notice.ts top-level import），缺失时模块加载即抛 Cannot find module，是强依赖"
         },
         {
           "package": "@zhushanwen/pi-llm-shared",
@@ -251,7 +251,7 @@
         {
           "package": "@zhushanwen/extension-protocol",
           "type": "package",
-          "reason": "代码层静态 import uiFormInteract/isScheduleFormResult/ScheduleDraft/ScheduleFormResult（src/interaction.ts，命令路径创建表单走统一表单协议 ui-form）与 dateToOnceCron/onceCronToDate/ScheduleDraft/ScheduleFormResult（src/create-form-component.ts top-level import），缺失时模块加载即抛 Cannot find module，是强依赖"
+          "reason": "代码层静态 import uiFormInteract/isScheduleFormResult/ScheduleDraft/ScheduleFormResult（src/interaction.ts，命令路径创建表单走统一表单协议 ui-form）与 dateToOnceCron/onceCronToDate/ScheduleDraft/ScheduleFormResult（src/create-form-component.ts top-level import），缺失时模块加载即抛 Cannot find module，是强依赖。另经 ./scheduler-store 子路径出口 import readSchedulerStore/writeSchedulerStore（src/backend.ts top-level import——任务库分片快照读写，文件不存在即空任务集的正常路径由该出口内包）与 schedulerStoreFilePath（src/index.ts top-level import——任务库分片路径推导，ADR-0183 任务库分离的承重依赖边）"
         },
         {
           "package": "@zhushanwen/pi-llm-shared",
@@ -441,7 +441,7 @@
         {
           "package": "@zhushanwen/pi-ext-guards",
           "type": "package",
-          "reason": "代码层静态 import toErrorMessage（src/bash-kill-tool.ts、src/index.ts 及 background/ 下 spawn-background/registry/pending-reconcile/notify/process-exit-guard，替换 inline 错误信息样板，ext-simplify-17 D1）、isRecord（src/config.ts）及 subagent-guard.ts re-export isSubagentProcess（ext-simplify-17 u16）——共 9 文件 top-level import），缺失时模块加载即抛 Cannot find module，是强依赖"
+          "reason": "代码层静态 import toErrorMessage（src/bash-kill-tool.ts、src/index.ts 及 background/ 下 spawn-background/registry/pending-reconcile/notify/process-exit-guard，替换 inline 错误信息样板，ext-simplify-17 D1）、isRecord（src/config.ts）及 src/background/subagent-guard.ts re-export isSubagentProcess（ext-simplify-17 u16）——共 9 文件 top-level import），缺失时模块加载即抛 Cannot find module，是强依赖"
         },
         {
           "package": "@zhushanwen/pi-extension-logger",
@@ -461,12 +461,12 @@
         {
           "package": "@zhushanwen/pi-pending-notifications",
           "type": "optional",
-          "reason": "运行时经 EventBus emit pending:register/pending:unregister + pi.sendMessage 完成通知（代码层零 import，经 notify.ts 模块级 pi 引用投递）；未加载时通知链路缺失但 bash 后台功能完整（D16 peer 门槛：package.json peerDependencies 声明 optional 版本门槛 workspace:*，发布时解析为实际版本；pi 0.84.1 核实时点无已加载 extensions 枚举 API、后续版本未重验，运行时检测降级为静态声明）"
+          "reason": "运行时经 EventBus emit pending:register/pending:unregister + pi.sendMessage 完成通知（代码层零 import，经 src/background/notify.ts 模块级 pi 引用投递）；未加载时通知链路缺失但 bash 后台功能完整（D16 peer 门槛：package.json peerDependencies 声明 optional 版本门槛 workspace:*，发布时解析为实际版本；pi 0.84.1 核实时点无已加载 extensions 枚举 API、后续版本未重验，运行时检测降级为静态声明）"
         },
         {
           "package": "@zhushanwen/extension-protocol",
           "type": "package",
-          "reason": "代码层静态 import readOutputTail/getProcessStartTimeSec/killProcessTree/pidStartMatchesRegistered/trimTerminalEntries/isPidAlive 等（src/background/ 下 output-tail.ts/spawn-background.ts/task-store.ts/poller.ts/pending-reconcile.ts top-level import，后台任务原语复用 extension-protocol background-task 出口），缺失时模块加载即抛 Cannot find module，是强依赖"
+          "reason": "代码层静态 import readOutputTail/getProcessStartTimeSec/killProcessTree/pidStartMatchesRegistered/trimTerminalEntries/isPidAlive 等（src/background/output-tail.ts、src/background/spawn-background.ts、src/background/task-store.ts、src/background/pending-reconcile.ts top-level import，后台任务原语复用 extension-protocol background-task 出口），缺失时模块加载即抛 Cannot find module，是强依赖"
         },
         {
           "package": "@zhushanwen/pi-delivery-port",

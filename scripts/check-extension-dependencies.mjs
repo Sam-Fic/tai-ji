@@ -17,14 +17,15 @@
  *    @zhushanwen/* / @taiji/* 包必须登记进该条目 dependsOn，防漏登记
  *    （ADR-0096/C-ext-30 依赖登记方向机器防线）；③仍声明——type=package 的
  *    登记必须仍在该包 package.json 的 dependencies/peerDependencies 中，防依赖
- *    在 package.json 侧删除后登记单向静默留存（见 3c）
+ *    在 package.json 侧删除后登记单向静默留存（见 3c）；④文件存在——reason
+ *    点名的 .ts 路径必须磁盘存在，防文件改名/搬移/删除后 reason 静默悬空（见 3d）
  * 4. 分组：包必须在 taiji/（taiji 集成）或 universal/（独立通用）分组下；
  *    package.json 的 taiji.role 必须与所在分组一致；role=taiji 的包必须在
  *    mandatory-extensions.json（taiji 集成包随应用打包，见 docs/extensions/extension-conventions.md）
  *
  * 零第三方依赖（node:fs/node:path）。退出码：0 = 通过；1 = 违规。
  */
-import { readFileSync, readdirSync, existsSync } from 'node:fs'
+import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs'
 import { dirname, join, extname, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -176,6 +177,82 @@ for (const entry of entries) {
     if (dep.type !== 'package') continue
     if (!declared.has(dep.package)) {
       fail(`条目 ${entry.name} 登记（type=package）的 ${dep.package} 已不在 ${entry.directory}/package.json 的 dependencies/peerDependencies 中声明（登记残留：package.json 侧依赖已删除，登记需同步删除，见 docs/extensions/extension-conventions.md「Extension 依赖管理」）`)
+    }
+  }
+}
+
+// ── 3d. 反向：reason → 文件存在（dependsOn.reason 点名的路径必须磁盘存在）──
+// 3c 只覆盖「登记 → package.json 仍声明」的包级存在性，管不到 reason 文本。
+// reason 是依赖边的语义说明，惯常点名 import 文件（src/xxx.ts）；文件被改名 /
+// 搬目录 / 删除后（目录分组、模块下沉 core、ADR-0112 砍防御机制），reason 里的
+// 路径静默悬空——读者按图索骥找到不存在文件，登记反而误导。此类漂移曾遍布 20 处
+// （subagent-workflow / plan / goal / base-tool-enhance 等条目），且无任何检查能
+// 发现。故对 reason 点名的 .ts 路径补「必须磁盘存在」校验，与 3c 同批把
+// 「登记 ↔ 磁盘」闭到文件级。
+//
+// 解析三态（按 token 前缀分流，写 reason 时按此选形）：
+//   src/xxx.ts                → <entry.directory>/src/xxx.ts（本包源文件）
+//   packages/…、extensions/…  → 仓库根相对（跨包点名他包内部文件时显式写全，
+//                               如 pending emit 端在 subagent-core 的哪些文件）
+//   dir/xxx.ts（无 src/ 前缀）→ <entry.directory>/src/dir/xxx.ts（分组前遗留的
+//                               简写形态，与 src/ 前缀同解，一并覆盖）
+// 两种简写按单文件展开：斜杠串列的裸文件名清单（a.ts/b.ts/c.ts）逐项拆分；
+// 花括号枚举（src/core/{a,b}.ts）逐项展开。
+//
+// 只检查含 `/` 的路径形 token：裸文件名（tool.ts、index.ts）与行文用词不可分辨
+// （「对齐 tool.ts 的形态」里的 tool.ts 未必指本包文件），纳入会把合法说明误报
+// 成悬空引用。裸文件名不是机器可判定的引用，故不在本检查射程内。
+const REASON_PATH_RE = /(?:src\/)?[\w./{}-]+\.ts/g
+
+/** 花括号枚举展开：`a/{b,c}.ts` → [`a/b.ts`, `a/c.ts`]（无花括号原样返回） */
+function expandBraces(token) {
+  const m = /\{([^{}]*)\}/.exec(token)
+  if (!m) return [token]
+  const out = []
+  for (const alt of m[1].split(',')) {
+    out.push(...expandBraces(token.replace(m[0], alt.trim())))
+  }
+  return out
+}
+
+/** reason 文本 → 待校验的路径单元清单（含花括号展开与斜杠串列拆分） */
+function reasonPathUnits(reason) {
+  const units = []
+  REASON_PATH_RE.lastIndex = 0
+  let m
+  while ((m = REASON_PATH_RE.exec(reason))) {
+    if (!m[0].includes('/')) continue // 裸文件名不可判别，见上方射程说明
+    for (const expanded of expandBraces(m[0])) {
+      const parts = expanded.split('/')
+      // 斜杠串列的裸文件名清单（每段都以 .ts 结尾）→ 逐段当独立文件名解析
+      if (parts.length > 1 && parts.every((p) => p.endsWith('.ts'))) {
+        units.push(...parts)
+      } else {
+        units.push(expanded)
+      }
+    }
+  }
+  return units
+}
+
+/** 路径单元 → 磁盘绝对路径候选（按前缀三态分流；取第一个存在的） */
+function reasonPathCandidates(entryDir, unit) {
+  if (unit.startsWith('src/')) return [join(ROOT, entryDir, unit)]
+  if (unit.startsWith('packages/') || unit.startsWith('extensions/')) {
+    return [join(ROOT, unit)]
+  }
+  return [join(ROOT, entryDir, 'src', unit)]
+}
+
+for (const entry of entries) {
+  for (const dep of entry.dependsOn ?? []) {
+    for (const unit of reasonPathUnits(dep.reason ?? '')) {
+      const hit = reasonPathCandidates(entry.directory, unit).some(
+        (p) => existsSync(p) && statSync(p).isFile(),
+      )
+      if (!hit) {
+        fail(`条目 ${entry.name} 的 dependsOn reason 点名路径不存在: ${unit}（登记目录 ${entry.directory}；文件已改名/搬移/删除？同步修正 reason，或补 src/、packages/、extensions/ 前缀写全路径）`)
+      }
     }
   }
 }
