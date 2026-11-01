@@ -240,7 +240,7 @@ export class LocalEngineTransport implements EngineTransport {
    * intentionalKill（孤儿收割跳过 + 泄漏组杀去重）→ 引擎仍活则 killProcessTree
    * 组杀 + 有界收尸等待。pidfile 删与 onExit 派发由收尸窗口内的 exit 投影承担；
    * 进程已死 / 从未 open 的调用形态幂等直接返回。reason 可选（EngineClient.killAll
-   * 透传排障 reason；契约面无参调用缺省）。
+   * 透传排障 reason；契约上无参调用缺省）。
    */
   async close(reason = "engine channel close"): Promise<void> {
     this.intentionalKill = true;

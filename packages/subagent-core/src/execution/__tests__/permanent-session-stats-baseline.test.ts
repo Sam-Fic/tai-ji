@@ -619,7 +619,7 @@ describe("U7④ 归零覆盖回归：冷复活 entry 派生视图不再以归零
 //     running（[u-arch / §3.4 方案 A] 收起概念删除，可续聊 record = 活跃成员）；
 //   - 双写回读：manifest 源按 executionStatus（两态权威词）优先，settle 产物
 //     （legacy running + executionStatus idle）读回 idle；
-//   - [B-restart manifest 契约面] engine/engineHandle 域下行 + manifest 源回读
+//   - [B-restart manifest 契约] engine/engineHandle 域下行 + manifest 源回读
 //     （zcode record 重启可见性兜底锚）。
 
 

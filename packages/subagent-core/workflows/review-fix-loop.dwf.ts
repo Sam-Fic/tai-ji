@@ -124,7 +124,7 @@ const autoCommit = typeof args.autoCommit === "boolean" ? args.autoCommit : true
 //    仓库、不动 git）后重试一次原命令；仍败返回合成失败对象（exitCode -1），走
 //    调用方既有 exitCode 处理链，不裸 throw 炸 run。诊断回复进日志与失败信息，
 //    不参与重试参数——重试恒为原命令，保持 journal 重放确定性。
-interface RunResult { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约面
+interface RunResult { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约形态
   exitCode: number;
   stdout: string;
   stderr: string;
@@ -250,7 +250,7 @@ const topic = `rfl-${headRes.exitCode === 0 ? headRes.stdout.trim() : "run"}`;
 let runDir = "";
 
 // ── 结果与中间类型（JSDoc 会作为字段描述注入子 agent） ──
-interface ReconEntry { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约面
+interface ReconEntry { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约形态
   /** 上轮问题 id（R2+ 对账；R1 恒返回空数组） */
   prevId: string;
   /** fixed = 亲自核实已修复；not-fixed = 仍存在；regressed = 复发或修复引入新问题；
@@ -261,7 +261,7 @@ interface ReconEntry { // oe-exempt:20261023:framework:zcode dynamic-workflow �
   evidence: string;
 }
 
-interface ReviewerVerdict { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约面
+interface ReviewerVerdict { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约形态
   /** 报告文件路径（绝对路径，<runDir>/round-<n>/review-<dimension>.md）——审查结果与修复指南全部在文档里 */
   reportFile: string;
   /** critical+major 数（与报告一致） */
@@ -276,7 +276,7 @@ interface ReviewerVerdict { // oe-exempt:20261023:framework:zcode dynamic-workfl
   reconciliation: ReconEntry[];
 }
 
-interface AggIssueInput { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约面
+interface AggIssueInput { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约形态
   /** 延续上轮的问题必填（复用原 id）；新问题按 MF-<轮>-<序号> 格式分配（groups.issueIds 引用它） */
   id?: string;
   /** 一行问题标题（跨轮身份锚点） */
@@ -298,7 +298,7 @@ interface AggIssueInput { // oe-exempt:20261023:framework:zcode dynamic-workflow
   sourceRefs?: { round: number; ref: string }[];
 }
 
-interface Aggregation { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约面
+interface Aggregation { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约形态
   /** 聚合报告路径（绝对路径） */
   reportFile: string;
   /** 本轮合并裁决后的全部问题清单（延续复用 id，新问题不填 id） */
@@ -307,7 +307,7 @@ interface Aggregation { // oe-exempt:20261023:framework:zcode dynamic-workflow �
   groups: FixGroup[];
 }
 
-interface FixGroup { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约面
+interface FixGroup { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约形态
   /** 组标识（G1、G2…，报告与日志引用） */
   id: string;
   /** 组内问题 id（必须是本轮活跃 issue id） */
@@ -318,7 +318,7 @@ interface FixGroup { // oe-exempt:20261023:framework:zcode dynamic-workflow 平�
   note: string;
 }
 
-interface FixRecord { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约面
+interface FixRecord { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约形态
   issueId: string;
   /** 一句修复描述 */
   description: string;
@@ -328,7 +328,7 @@ interface FixRecord { // oe-exempt:20261023:framework:zcode dynamic-workflow 平
   affectedFiles: string[];
 }
 
-interface FixOutcome { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约面
+interface FixOutcome { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约形态
   /** 已修复条目 */
   fixes: FixRecord[];
   /** 申述（claim）而非裁决：fixer 怀疑误报，evidence 须含 file:line 反证 + 指明聚合方
@@ -345,7 +345,7 @@ interface FixOutcome { // oe-exempt:20261023:framework:zcode dynamic-workflow �
 // 从 review-fix-loop.shared.ts 拼入（构建：packages/subagent-core/scripts/build-review-fix-loop.mjs；
 // 两平台产物不得手改该段）
 
-interface IssueRecord { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约面
+interface IssueRecord { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约形态
   id: string;
   title: string;
   severity: "critical" | "major" | "minor";
@@ -363,7 +363,7 @@ interface IssueRecord { // oe-exempt:20261023:framework:zcode dynamic-workflow �
   consecutiveUnfixed: number;
 }
 
-interface LoopResult { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约面
+interface LoopResult { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约形态
   /** clean = 首轮全净；converged = 修复后收敛；needs-human = 收敛但有 disputed 申述待人工裁决；
    *  stuck/needs-redesign/max-rounds = 熔断；三类 *-failure = 对应环节失败；
    *  environment-failure = 执行环境缺关键依赖（node 不可定位），fail-fast 带恢复指引 */
@@ -821,7 +821,7 @@ const DRIFTER_POOL = ["business-logic", "monorepo-impact"]; // tie 序：busines
 const SLOW_PKG_THRESHOLD = 5; // diff 触及 >=5 个包 → monorepo-impact 达慢档
 const SLOW_CHURN_THRESHOLD = 3000; // diff 变更 >=3000 行 → business-logic 达慢档
 
-interface DiffStats { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约面
+interface DiffStats { // oe-exempt:20261023:framework:zcode dynamic-workflow 平台形态（TS interface 兼作 agent 结构化 schema 声明），自 git 外实装入库的既有契约形态
   files: string[];
   churnLines: number;
   pkgCount: number;

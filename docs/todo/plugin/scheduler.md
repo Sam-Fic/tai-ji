@@ -32,9 +32,9 @@ scheduler 是全仓唯一「数据面已完全插件化、内容渲染已用通�
 | W7 | `SchedulerOverlayPayload` + `openSchedulerOverlay` 专用 opener | `packages/core/src/domain/overlay/types.ts:40-42`、`coordination.ts:67-69` |
 | W8 | 已消解：SDK 版 `PluginContributesHeaderAction` 已带 `activation?: HeaderActionActivation`，两版契约已对齐（容器扩展点统一 §6.11 阶段 0） | `packages/plugin-sdk/src/types.ts:316` vs `packages/core/src/extension-host/types.ts:205-218` |
 
-距离完全插件化还差 **3 步**（不含可选优化；容器统一批次 743f82e6f 与结构化 activation 落地后，第 1 步契约面与第 2 步的类型面已完成）：
+距离完全插件化还差 **3 步**（不含可选优化；容器统一批次 743f82e6f 与结构化 activation 落地后，第 1 步契约与第 2 步的类型面已完成）：
 
-- **第 1 步：结构化 activation 声明（契约面已落地，分派分支未换）**。W3 契约已结构化（`HeaderActionActivation`：command/overlay/drawer 三成员 + `'scheduler-overlay'` 迁移期兼容值）、W8 已消解（SDK 已对齐）；剩 W1——`HeaderActionsHost.vue` 仍按 `'scheduler-overlay'` 字面量专属分派，且兼容值待退役。渲染端收敛为通用「打开该 tab」动作后，宿主无需知道 `scheduler` 这个词。
+- **第 1 步：结构化 activation 声明（契约已落地，分派分支未换）**。W3 契约已结构化（`HeaderActionActivation`：command/overlay/drawer 三成员 + `'scheduler-overlay'` 迁移期兼容值）、W8 已消解（SDK 已对齐）；剩 W1——`HeaderActionsHost.vue` 仍按 `'scheduler-overlay'` 字面量专属分派，且兼容值待退役。渲染端收敛为通用「打开该 tab」动作后，宿主无需知道 `scheduler` 这个词。
 - **第 2 步：overlay tab 注册表（类型面已落地，派生面未换）**。W4 已消解（`OverlayTab` 已开放 `string` + `isKnownOverlayTab`）；挂载点已注册三族（`drawer.tab` / `overlay.content` / `settings.section`，`bootstrap.ts:94-99`）；`OVERLAY_REGISTRY` 已补齐 4 条。剩 W5+W6+W7——tab 元信息（label/icon/空态）仍内置（`tabSegments` computed 声明对象、数据源非注册表），标题/内容分支未收敛为单条 `<ViewHost>`，payload/opener 未泛化。
 - **第 3 步：headerAction hover 预览面泛化**。消除 W2。QuickCard 里除「底部直开 overlay 条」外全是通用机制（hover 160ms 开、pin、ViewHost 渲染、disabled 挡开合）；把底部动作条改成声明字段后，任意插件都能声明「我的 headerAction 有 hover 预览面板」。
 
@@ -181,11 +181,11 @@ QuickCard（宿主专属 213 行）：
 
 现状骨架其实已通用，只有三处域耦合：
 
-1. `activation` 值域写死成一个域名字面量（L1-5/L1-6）——契约面已随容器统一批次结构化（`HeaderActionActivation` + `'scheduler-overlay'` 迁移期兼容值），声明本体与分派分支仍是域字面量。
+1. `activation` 值域写死成一个域名字面量（L1-5/L1-6）——契约已随容器统一批次结构化（`HeaderActionActivation` + `'scheduler-overlay'` 迁移期兼容值），声明本体与分派分支仍是域字面量。
 2. 分派后落到哪个组件写死（L1-2/L1-4）。
 3. QuickCard 的「底部直开 overlay」把 overlay 语义烧进组件（L1-4 的 `:207-210`）。
 
-改造方案（结构化 activation——契约面已按此落地，core 与 SDK 均已结构化）：
+改造方案（结构化 activation——契约已按此落地，core 与 SDK 均已结构化）：
 
 ```ts
 // packages/core/src/extension-host/types.ts（与 plugin-sdk 同步）

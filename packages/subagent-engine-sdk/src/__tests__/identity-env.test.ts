@@ -3,7 +3,7 @@
 // [M1 u-foundation] 身份 env 契约常量测试：PI_SUBAGENT_TASK_MAX_CHARS（D2 截断上限）
 // + 任务键名稳定性。写入点（pi 引擎 spawn-runner applyContentIdentityKeys，截断实现）
 // 与读取点（appendSubagentIdentityEntry，零改动）在 u-m2-engine-ack / 既有测试覆盖，
-// 本文件锁契约面常量。
+// 本文件锁定契约常量。
 
 import { describe, expect, it } from "vitest";
 

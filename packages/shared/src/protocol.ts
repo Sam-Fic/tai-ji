@@ -406,7 +406,7 @@ export type ClientMessageType =
   //（D1）。payload/reply 形状见 mcp 域登记段；ADR-0065 mutation 归类（add/update/setEnabled/remove）
   // 由 mutation-reply-contract 登记。
   | 'mcp.list' | 'mcp.add' | 'mcp.update' | 'mcp.setEnabled' | 'mcp.remove' | 'mcp.test' | 'mcp.testCancel'
-  // canvas.*（problem-solve-canvas 设计 §3.1，U1 契约面）：画布三 RPC——list（托盘/入口
+  // canvas.*（problem-solve-canvas 设计 §3.1，U1 契约）：画布三 RPC——list（托盘/入口
   // 清单拉取）/ get（单画布全量）/ mutate（GUI 直改唯一写入口，actor=user；agent 走
   // marker 通道不经 WS）。reply 与 request 同名（session.subscribe / rollingRestart.status
   // 同款 payload 消费型同名模式）；canvas.updated 广播登记在 ServerMessageType 段。
@@ -1528,7 +1528,7 @@ export interface ClientMessageMap {
   'mcp.remove': McpRemoveRequest
   'mcp.test': McpTestRequest
   'mcp.testCancel': McpTestCancelRequest
-  // ── canvas.*（problem-solve-canvas U1 契约面）请求 payload：形状 SSOT 在
+  // ── canvas.*（problem-solve-canvas U1 契约）请求 payload：形状 SSOT 在
   // @zhushanwen/extension-protocol canvas 模块（action params 两通道同构——WS RPC 与
   // marker；sessionId 是通道级字段，与 canvas.mutate 的 actor/sessionId 同模式）。
   // 画布按归属会话隔离（session-store-layout-inversion D4）：WS list 按归属过滤
@@ -1946,7 +1946,7 @@ export type ServerMessageType =
   // 广播帧（`mcp.test` 异步任务句柄的完成侧，D8① pi 实测类徽标数据源；冒号形态对齐
   // rollingRestart:* 全局帧先例，payload 无 sessionId 走 broker 纯全局通道）。
   | 'mcp:testResult'
-  // canvas.updated（problem-solve-canvas 设计 §3.1(1) D4，U1 契约面）：画布变更失效提示
+  // canvas.updated（problem-solve-canvas 设计 §3.1(1) D4，U1 契约）：画布变更失效提示
   // 广播。payload 带 sessionId = 画布归属会话（session-store-layout-inversion D4 隔离：
   // 广播仍走 broker 全局通道——broker 豁免清单 GLOBAL_BROADCAST_SESSION_ID_EXEMPT 登记帧，
   // sessionId 仅作归属信息，消费方按会话过滤；非归属会话的订阅忽略本帧）。广播只是
@@ -3757,7 +3757,7 @@ export interface ServerMessageMapBase {
   /** mcp:testResult 广播：probe 终态回填（D8① 徽标 + testId/name 回显，形状 SSOT 在 ./mcp）。 */
   'mcp:testResult': McpTestResultEvent
 
-  // ── canvas 域（problem-solve-canvas U1 契约面；payload 形状 SSOT 直引
+  // ── canvas 域（problem-solve-canvas U1 契约；payload 形状 SSOT 直引
   // @zhushanwen/extension-protocol canvas 模块）──
   // canvas.list reply：画布清单（托盘列表数据源；元素含阶段徽标派生输入）。
   'canvas.list': CanvasListReply
@@ -4227,7 +4227,7 @@ export interface ReplyPayloadMap {
   'tts.speak': ServerMessageMap['tts.speak:result']
   'tts.getCapabilities': ServerMessageMap['tts.getCapabilities:result']
 
-  // ── canvas.*（problem-solve-canvas U1 契约面）：三 RPC reply 与 request 同名
+  // ── canvas.*（problem-solve-canvas U1 契约）：三 RPC reply 与 request 同名
   //（payload 消费型——session.subscribe / rollingRestart.status 同款模式）。
   'canvas.list': ServerMessageMap['canvas.list']
   'canvas.get': ServerMessageMap['canvas.get']
