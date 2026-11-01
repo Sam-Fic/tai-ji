@@ -38,6 +38,8 @@ import { readPiSessionLatestModelChange, DEFAULT_SUBAGENT_ENGINE } from '../suba
 import { extractSubagentsFromSessionFile } from '../subagent-extractor.js'
 import { extractWorkflowsFromSessionFile } from '../workflow-extractor.js'
 import { projectSubagentModelDetailIntoRuns, projectV2Workflow } from '../workflow-record-projection.js'
+// [U3 D3] 同步预算/异步读入用例族：分片扫描器行为直测（软预算行边界停 + 字节级 carry）
+import { scanRecordFamilyEntriesFromSessionFile, scanRecordFamilyInSegments, type RecordFamilyScanResult } from '../session-file-extraction.js'
 
 const loggerInfo = vi.mocked((await import('../../../infra/logger.js')).logger.info)
 const loggerWarn = vi.mocked((await import('../../../infra/logger.js')).logger.warn)
@@ -1627,10 +1629,8 @@ describe('SessionRecords workflowUpdate 发射链路 — 信号发出时数据�
       }),
     } as unknown as IMessageBus
     const sessionFilePath = join(tempDir, 'main.jsonl') // 冷扫描按缺文件空条目处理（pi 延迟写入窗口同形态）
-    // mtime 是文件属性：文件未写入时跨扫描稳定（真实 scanSessions = fstat）。每次调用
-    // 现取 Date.now() 会模拟出「每次 stat mtime 都变」的不可能形态，触发查询通道 mtime
-    // 对账（session-records rebuildProjectionIfSourceChanged）每查必重建投影——测试域
-    // 内会话文件从未变化，必须返回同一 mtime。
+    // 查询核对素材（[U1 续读化] size/游标核对）：核对判据是磁盘 stat 与已读游标比对，
+    // 本域会话文件从未变化（size 恒等于登记游标）→ 每查零重算走缓存，不触发续读/重建。
     const scanTarget = { id: 'sid-gate', filePath: sessionFilePath, cwd: tempDir, timestamp: new Date().toISOString(), name: null, lastModified: Date.now(), size: 0, outcome: null }
     const sessionStore = {
       scanSessions: () => [scanTarget],
@@ -1679,4 +1679,395 @@ describe('SessionRecords workflowUpdate 发射链路 — 信号发出时数据�
     expect(workflows.records.map((r) => r.runId)).toContain('wf-gate-1')
   })
 })
+})
+
+// ── [U1 续读化 RL2] 事件目录独立核对（查询链路级）───────────────────────
+// 主会话文件不动、只动事件目录的跨实例写盘形态：目录级单次 stat 检不出既有事件文件
+// 被追加，核对粒度必须落到 readdir 逐文件 size/游标比对（D2）；readdir 真故障（EIO 等
+// 非 ENOENT）不判删档（读错分通道负判定）——warn 留痕、fold 保留、下轮查询收敛。
+
+/** 实例观察面（摸私有 cache——projection 实例标识与 fold 状态是零重建/删档断言的载体）。 */
+function cacheProjectionOf(records: SessionRecords): {
+  projection: { sources: { recordFolds: Map<string, unknown> } } | null
+} | undefined {
+  return (records as unknown as {
+    recordEntriesCaches: Map<string, { projection: { sources: { recordFolds: Map<string, unknown> } } | null }>
+  }).recordEntriesCaches.get('s1')
+}
+
+/** 最小装置（本 describe 本地版：外层 makeRecords 随来源节作用域下沉，顶层不可见）。 */
+function makeReconcileRecords(scanSessions: () => unknown[]): SessionRecords {
+  const deps: SessionRecordsDeps = {
+    pm: { getClient: vi.fn(() => null) } as unknown as IProcessManager,
+    sessionStore: { scanSessions: vi.fn(scanSessions) } as unknown as ISessionStore,
+    hasSession: vi.fn(() => true),
+    getMessageBus: () => null,
+  }
+  return new SessionRecords(deps)
+}
+
+describe('事件目录独立核对（U1 续读化 RL2）：readdir 逐文件 size/游标比对 + 分通道负判定', () => {
+  let tempDir: string
+  let worldDir: string
+  let sessionFile: string
+  let recordsDir: string
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'event-domain-reconcile-'))
+    worldDir = tempDir
+    sessionFile = join(tempDir, 's1.jsonl')
+    // records 目录 = getSubagentRecordsDir('s1')（单参，与 SessionRecords 内部
+    // getConfigDir() 推导同源——globalSetup 钉扎的 tmp 数据目录，fs-guard 白名单）
+    recordsDir = getSubagentRecordsDir('s1')
+    mkdirSync(recordsDir, { recursive: true })
+  })
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    // 树内 fixture 清理（globalSetup 钉扎的 tmp 数据目录内，fs-guard 白名单）
+    rmSync(join(getSessionStoreDir(), 's1'), { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+  })
+
+  function registeredEntry(id: string): Record<string, unknown> {
+    return {
+      type: 'custom', customType: 'subagent-record', id: 'e-r1', parentId: null,
+      timestamp: '2026-11-01T00:00:00Z',
+      data: {
+        v: 2, kind: 'registered', id, agent: 'worker', task: 'Do work', slug: 'work',
+        origin: 'tool', rootSessionId: 's1', depth: 0, startedAt: 1000,
+      },
+    }
+  }
+
+  function createdLine(id: string, seq = 1): string {
+    return JSON.stringify({ type: 'record-events', id }) + '\n' + JSON.stringify({
+      type: 'record-created', seq, ts: 1000 + seq, id, agent: 'worker', task: 'Do work',
+      slug: 'work', origin: 'tool', rootSessionId: 's1', depth: 0, mode: 'bg', startedAt: 1000,
+    }) + '\n'
+  }
+
+  it('既有事件文件行追加（主文件字节不动）→ 次查询捕获新事实且投影实例不重建', async () => {
+    writeFileSync(join(recordsDir, 'sa-1.events'), createdLine('sa-1'))
+    writeFileSync(sessionFile, JSON.stringify(registeredEntry('sa-1')) + '\n')
+    const records = makeReconcileRecords(() => [{ id: 's1', filePath: sessionFile, cwd: tempDir }])
+    const first = await records.getSubagents('s1')
+    expect(first.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'running' })
+    const projectionBefore = cacheProjectionOf(records)?.projection
+
+    appendFileSync(join(recordsDir, 'sa-1.events'), JSON.stringify({
+      type: 'record-settled', seq: 2, ts: 3000, stopReason: 'completed', endedAt: 3000, turns: 2, totalTokens: 500,
+    }) + '\n')
+
+    const second = await records.getSubagents('s1')
+    expect(second.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'idle', stopReason: 'completed' })
+    // 零重建：同一投影实例续读（补源 + 续读语义，无「丢弃实例 + 从头冷读」）
+    expect(cacheProjectionOf(records)?.projection).toBe(projectionBefore)
+  })
+
+  it('readdir EIO（IO 真故障）不判删档：fold 保留、warn 留痕，下轮（清单无该文件）收敛为删档降级', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    writeFileSync(join(recordsDir, 'sa-1.events'), createdLine('sa-1'))
+    writeFileSync(sessionFile, JSON.stringify(registeredEntry('sa-1')) + '\n')
+    const records = makeReconcileRecords(() => [{ id: 's1', filePath: sessionFile, cwd: tempDir }])
+    const first = await records.getSubagents('s1')
+    expect(first.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'running' })
+
+    const fs = await import('node:fs')
+    const readdirSpy = vi.spyOn(fs, 'readdirSync').mockImplementation(() => {
+      const err = new Error('input/output error') as Error & { code: string }
+      err.code = 'EIO'
+      throw err
+    })
+    try {
+      const duringFault = await records.getSubagents('s1')
+      // 不判删档：派生态保留（running fold 值原样），warn 留痕
+      expect(duringFault.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'running' })
+      expect(warnSpy.mock.calls.some((args) => String(args[0]).includes('readdir failed'))).toBe(true)
+    } finally {
+      readdirSpy.mockRestore()
+    }
+
+    // 下轮：readdir 恢复 + 清单无该文件（fixture 删除事件文件）→ 收敛为删档降级
+    rmSync(join(recordsDir, 'sa-1.events'))
+    const after = await records.getSubagents('s1')
+    expect(after.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'running' }) // entry 末态（无 settled 条目）
+    const cached = cacheProjectionOf(records)
+    expect(cached?.projection?.sources.recordFolds.has('sa-1')).toBe(false)
+    warnSpy.mockRestore()
+  })
+})
+
+// ── [U3 D3] 同步预算 + 异步读入 + 原子切换（RL3/RL6/RL10）───────────────────────
+// 查询通道核对段收进显式同步预算（deps.querySyncBudgetBytes 注入小阈值，fixture 用
+// KB 级行构造超预算形态——单测缩数据量判据，不构造 MB 级文件）：预算内增量就地完成；
+// 超预算增量与截断整建转异步执行——查询立即返回当前快照（AX1 分级契约第③级），
+// 异步读入完成后原子批应用/原子切换并发一次变更信号（水位 diff 裁决帧数）。失败路径
+// = 一条 warn 显形 + 零重试定时器（ADR-0122），下次查询的核对重新调度收敛。
+
+describe('同步预算与异步读入（U3 D3）：快照应答 + 原子收敛 + 信号恰一次 + 失败显形', () => {
+  /** 预算阈值注入值（B）：单条 fixture 行 ~300B，3 条即超预算。 */
+  const BUDGET_BYTES = 400
+  let tempDir: string
+  let sessionFile: string
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'sync-budget-'))
+    sessionFile = join(tempDir, 's1.jsonl')
+    vi.useFakeTimers()
+    loggerInfo.mockClear()
+    loggerWarn.mockClear()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    // 树内 fixture 清理（globalSetup 钉扎的 tmp 数据目录内，fs-guard 白名单）
+    rmSync(join(getSessionStoreDir(), 's1'), { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+  })
+
+  function registeredEntry(id: string): Record<string, unknown> {
+    return {
+      type: 'custom', customType: 'subagent-record', id: 'e-r1', parentId: null,
+      timestamp: '2026-11-01T00:00:00Z',
+      data: {
+        v: 2, kind: 'registered', id, agent: 'worker', task: 'Do work', slug: 'work',
+        origin: 'tool', rootSessionId: 's1', depth: 0, startedAt: 1000,
+      },
+    }
+  }
+
+  /** v2 终态条目（pad 放大字节量构造超预算增量——~300B/条）。 */
+  function bigSettledEntry(id: string, pad: string): Record<string, unknown> {
+    return {
+      type: 'custom', customType: 'subagent-record', id: `e-${id}`, parentId: null,
+      timestamp: '2026-11-01T00:00:01Z',
+      data: {
+        v: 2, kind: 'settled', id, status: 'idle', stopReason: 'completed', endedAt: 2000,
+        result: `result ${pad}`,
+      },
+    }
+  }
+
+  /** 在途任务观察面（cache.projectionAsyncRead——await 确定性完成信号用）。 */
+  function cacheOf(records: SessionRecords): { projectionAsyncRead: Promise<void> | null } | undefined {
+    return (records as unknown as {
+      recordEntriesCaches: Map<string, { projectionAsyncRead: Promise<void> | null }>
+    }).recordEntriesCaches.get('s1')
+  }
+
+  function makeBudgetRecords(): { records: SessionRecords; published: ServerMessage[] } {
+    const published: ServerMessage[] = []
+    const bus = {
+      publish: vi.fn((_sessionId: string, message: ServerMessage) => {
+        published.push(message)
+      }),
+    } as unknown as IMessageBus
+    const deps: SessionRecordsDeps = {
+      pm: { getClient: vi.fn(() => null) } as unknown as IProcessManager,
+      sessionStore: { scanSessions: vi.fn(() => [{ id: 's1', filePath: sessionFile, cwd: tempDir }]) } as unknown as ISessionStore,
+      hasSession: vi.fn(() => true),
+      getMessageBus: () => bus,
+      querySyncBudgetBytes: BUDGET_BYTES,
+    }
+    return { records: new SessionRecords(deps), published }
+  }
+
+  /** 超预算增量 fixture：3 条大 settled 条目（同 id 后到覆盖幂等，终态 idle）。 */
+  function appendOversizeIncrement(): void {
+    appendFileSync(
+      sessionFile,
+      [bigSettledEntry('sa-1', 'p1'), bigSettledEntry('sa-1', 'p2'), bigSettledEntry('sa-1', 'p3')]
+        .map((e) => JSON.stringify(e)).join('\n') + '\n',
+    )
+  }
+
+  it('超预算增量 → 快照应答（旧快照立即可读）→ 异步分片续读原子收敛，信号恰一次（RL3）', async () => {
+    writeFileSync(sessionFile, JSON.stringify(registeredEntry('sa-1')) + '\n')
+    const { records, published } = makeBudgetRecords()
+    const first = await records.getSubagents('s1')
+    expect(first.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'running' })
+    const projectionBefore = cacheProjectionOf(records)?.projection
+
+    appendOversizeIncrement()
+
+    // 快照应答：查询立即返回旧快照（新事实在异步收敛前不可见——非半态，AX1 第③级）
+    const during = await records.getSubagents('s1')
+    expect(during.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'running' })
+    expect(cacheProjectionOf(records)?.projection).toBe(projectionBefore) // 续读不换实例
+    // 快照应答观测行（RL10 占比统计的采集载体）：kind/offset/size/budgetBytes 字段
+    const snapshotRow = loggerInfo.mock.calls.find((args) => String(args[0]).includes('snapshot reply issued'))
+    expect(snapshotRow).toBeDefined()
+    expect(snapshotRow![1]).toMatchObject({ sessionId: 's1', kind: 'oversize-increment', budgetBytes: BUDGET_BYTES })
+    expect((snapshotRow![1] as { size: number }).size).toBeGreaterThan((snapshotRow![1] as { offset: number }).offset ?? 0)
+
+    // 驱动分片链（fake timers）→ 任务完成：一次性原子批应用 + 信号恰一次
+    await cacheOf(records)?.projectionAsyncRead
+    const frames = published.filter((m) => m.type === 'session.subagents')
+    expect(frames).toHaveLength(1)
+    expect((frames[0]!.payload as { subagents: Array<{ status: string }> }).subagents[0]!.status).toBe('idle')
+    // 收敛完成观测行：convergeMs 字段（RL10 收敛延迟观测）
+    const doneRow = loggerInfo.mock.calls.find((args) => String(args[0]).includes('resume completed'))
+    expect(doneRow).toBeDefined()
+    expect((doneRow![1] as { convergeMs: number }).convergeMs).toBeGreaterThanOrEqual(0)
+
+    // 收敛后查询 = 新事实；水位已推进 → 再查询零新帧（无重复消息——检查点：发布链时序）
+    expect((await records.getSubagents('s1')).records[0]).toMatchObject({ status: 'idle' })
+    expect(published.filter((m) => m.type === 'session.subagents')).toHaveLength(1)
+  })
+
+  it('截断/重写（compaction）→ 快照应答 → 异步整建原子切换（换实例），信号恰一次（V4）', async () => {
+    writeFileSync(sessionFile, JSON.stringify(registeredEntry('sa-1')) + '\n' + JSON.stringify(bigSettledEntry('sa-1', 'base')) + '\n')
+    const { records, published } = makeBudgetRecords()
+    const first = await records.getSubagents('s1')
+    expect(first.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'idle' })
+    const projectionBefore = cacheProjectionOf(records)?.projection
+
+    // compaction 重写：更短内容、仅注册条目（新视图 = running 在途态）
+    writeFileSync(sessionFile, JSON.stringify(registeredEntry('sa-1')) + '\n')
+
+    // 快照应答：旧快照（idle）在在途窗口内持续可读，旧实例不 dispose
+    const during = await records.getSubagents('s1')
+    expect(during.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'idle' })
+    expect(cacheProjectionOf(records)?.projection).toBe(projectionBefore)
+    const row = loggerInfo.mock.calls.find((args) => String(args[0]).includes('snapshot reply issued'))
+    expect(row![1]).toMatchObject({ kind: 'truncate-rebuild' })
+
+    await cacheOf(records)?.projectionAsyncRead
+    // 原子切换：投影实例更换（旁路构建完成接线）
+    expect(cacheProjectionOf(records)?.projection).not.toBe(projectionBefore)
+    const frames = published.filter((m) => m.type === 'session.subagents')
+    expect(frames).toHaveLength(1)
+    expect((frames[0]!.payload as { subagents: Array<{ status: string }> }).subagents[0]!.status).toBe('running')
+    const doneRow = loggerInfo.mock.calls.find((args) => String(args[0]).includes('rebuild completed'))
+    expect(doneRow).toBeDefined()
+    expect((doneRow![1] as { convergeMs: number }).convergeMs).toBeGreaterThanOrEqual(0)
+    expect((await records.getSubagents('s1')).records[0]).toMatchObject({ status: 'running' })
+    expect(published.filter((m) => m.type === 'session.subagents')).toHaveLength(1)
+  })
+
+  it('预算内小增量就地续读：新事实立即可见、零快照应答行、零异步任务（RL10 占比判定的逻辑半边）', async () => {
+    writeFileSync(sessionFile, JSON.stringify(registeredEntry('sa-1')) + '\n')
+    const { records, published } = makeBudgetRecords()
+    await records.getSubagents('s1')
+    // 单条小 settled 条目（~250B < 预算 400B）
+    appendFileSync(sessionFile, JSON.stringify(bigSettledEntry('sa-1', '')) + '\n')
+    const second = await records.getSubagents('s1')
+    expect(second.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'idle' })
+    expect(loggerInfo.mock.calls.some((args) => String(args[0]).includes('snapshot reply issued'))).toBe(false)
+    expect(cacheOf(records)?.projectionAsyncRead).toBeNull()
+    expect(published).toHaveLength(0) // 查询通道不触发布链（V3 既有语义）
+  })
+
+  it('在途任务 + 重入查询：复用在途不重复调度，收敛一次信号一次（检查点：重入语义）', async () => {
+    writeFileSync(sessionFile, JSON.stringify(registeredEntry('sa-1')) + '\n')
+    const { records, published } = makeBudgetRecords()
+    await records.getSubagents('s1')
+    appendOversizeIncrement()
+
+    await records.getSubagents('s1') // 调度（快照应答行 ×1）
+    expect(cacheOf(records)?.projectionAsyncRead).not.toBeNull()
+    await records.getSubagents('s1') // 重入：在途复用
+
+    const rows = loggerInfo.mock.calls.filter((args) => String(args[0]).includes('snapshot reply issued'))
+    expect(rows).toHaveLength(1)
+    await cacheOf(records)?.projectionAsyncRead
+    expect(published.filter((m) => m.type === 'session.subagents')).toHaveLength(1)
+  })
+
+  it('异步读入失败：一条 warn（含文件与恢复指引）+ 零重试定时器 + 下次查询触发收敛（V6/RL6）', async () => {
+    writeFileSync(sessionFile, JSON.stringify(registeredEntry('sa-1')) + '\n')
+    const { records } = makeBudgetRecords()
+    await records.getSubagents('s1')
+    appendOversizeIncrement()
+
+    // 注入读错误（fixture 层）：分片任务执行期 readSync 抛 EIO
+    const fs = await import('node:fs')
+    const readSyncSpy = vi.spyOn(fs, 'readSync').mockImplementation(() => {
+      const err = new Error('input/output error') as Error & { code: string }
+      err.code = 'EIO'
+      throw err
+    })
+    const during = await records.getSubagents('s1')
+    expect(during.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'running' }) // 快照保留、不抛错
+    await cacheOf(records)?.projectionAsyncRead
+    readSyncSpy.mockRestore()
+
+    // 恰一条 warn（任务失败显形；零重试 → 无第二条）
+    const warnRows = loggerWarn.mock.calls.filter((args) => String(args[0]).includes('async projection reconcile failed'))
+    expect(warnRows).toHaveLength(1)
+    expect(warnRows[0]![1]).toMatchObject({ sessionId: 's1', kind: 'oversize-increment', file: sessionFile })
+    expect(String(warnRows[0]![0])).toContain('no retry timer')
+    expect(String(warnRows[0]![0])).toContain('next query')
+    // 零重试定时器：失败任务链结束后无任何残留 timer（ADR-0122）
+    expect(vi.getTimerCount()).toBe(0)
+
+    // 下次查询触发收敛：重新调度 → 读入成功 → 新事实可见
+    const third = await records.getSubagents('s1')
+    expect(third.records[0]).toMatchObject({ status: 'running' }) // 仍快照应答（任务重排在途）
+    await cacheOf(records)?.projectionAsyncRead
+    expect((await records.getSubagents('s1')).records[0]).toMatchObject({ status: 'idle' })
+  })
+})
+
+// 分片扫描器行为直测（真实 timers——生成器 setTimeout 让出自然执行；不与上方 fake timers 交互）。
+describe('scanRecordFamilyInSegments 分片节奏（U3）：软预算行边界停 + 字节级行界', () => {
+  function registeredEntry(id: string): Record<string, unknown> {
+    return {
+      type: 'custom', customType: 'subagent-record', id: 'e-r1', parentId: null,
+      timestamp: '2026-11-01T00:00:00Z',
+      data: { v: 2, kind: 'registered', id, agent: 'worker', task: 'Do work', slug: 'work', origin: 'tool', rootSessionId: 's1', depth: 0, startedAt: 1000 },
+    }
+  }
+  function settledEntry(id: string, pad: string): Record<string, unknown> {
+    return {
+      type: 'custom', customType: 'subagent-record', id: `e-${id}`, parentId: null,
+      timestamp: '2026-11-01T00:00:01Z',
+      data: { v: 2, kind: 'settled', id, status: 'idle', stopReason: 'completed', endedAt: 2000, result: `result ${pad}` },
+    }
+  }
+
+  it('增量 > 片预算 → 多片迭代：行边界游标衔接、hasMore 语义、跨片并集 = 全量扫描', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'segments-'))
+    try {
+      const filePath = join(dir, 'main.jsonl')
+      const lines = [JSON.stringify(registeredEntry('sa-0'))]
+      for (let i = 1; i <= 6; i++) lines.push(JSON.stringify(settledEntry(`sa-${i}`, 'p'.repeat(80))))
+      writeFileSync(filePath, lines.join('\n') + '\n')
+      const whole = scanRecordFamilyEntriesFromSessionFile(filePath)!
+      expect(whole.entries.length).toBe(7)
+
+      const segments: RecordFamilyScanResult[] = []
+      for await (const scan of scanRecordFamilyInSegments(filePath, 0, 500)) {
+        if (scan === null) break
+        segments.push(scan)
+        if (!scan.hasMore) break
+      }
+      expect(segments.length).toBeGreaterThan(1)
+      expect(segments[segments.length - 1]!.hasMore).toBeFalsy()
+      expect(segments[0]!.nextOffset).toBeLessThan(statSync(filePath).size) // 中途片停在行边界
+      const merged = segments.flatMap((s) => s.entries)
+      expect(merged).toEqual(whole.entries) // 跨片内容并集与全量扫描逐条等价
+      expect(segments[segments.length - 1]!.nextOffset).toBe(whole.nextOffset) // 游标链衔接闭合
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
+  })
+
+  it('多字节字符跨块边界不截断（字节级行界：0x0A 构造性行界安全）+ 软预算超支 ≤ 一行', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'segments-utf8-'))
+    try {
+      const filePath = join(dir, 'main.jsonl')
+      // ~450KB 单行（跨 2 个 256KiB 读块），中文字符跨块边界
+      const pad = '汉'.repeat(150_000)
+      writeFileSync(filePath, JSON.stringify(settledEntry('sa-1', pad)) + '\n' + JSON.stringify(registeredEntry('sa-2')) + '\n')
+      const scan = scanRecordFamilyEntriesFromSessionFile(filePath)!
+      expect(scan.entries.length).toBe(2)
+      expect((scan.entries[0] as { data: { result: string } }).data.result).toBe(`result ${pad}`)
+      // 分片形态：单行超预算 → 软预算超支到行尾（1 片取全行，不截断字符）
+      const seg = scanRecordFamilyEntriesFromSessionFile(filePath, 0, { maxBytes: 500 })!
+      expect((seg.entries[0] as { data: { result: string } }).data.result).toBe(`result ${pad}`)
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
+  })
 })

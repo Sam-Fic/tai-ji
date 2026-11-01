@@ -21,6 +21,10 @@
  *      投影骨架 created/asks/runSettled 一体产出），runtime 不再自建 fold。
  *   ② 冷读（恢复路径）：attach() 全目录扫读（从当前字节偏移，首次 = 从 0）——
  *      投影创建 / 断连重开（pi 进程死亡 → 推送通道终结 → 重开 session）的收敛读。
+ *   ③ 查询核对（[U1 续读化] 拉取通道）：reconcileEventSources 在查询轮内对两域做
+ *      双向对账（正向 = readdir 逐文件 size/游标比对，size 不变零读零重算 / size 变
+ *      续读；反向 = 派生态在册而清单无该文件 → 删档降级 entry-source-only）——事件
+ *      域核对独立于主文件信号，「只动事件目录不动主文件」的跨实例写盘由此捕获。
  *
  * 终局一致性（设计 §3.3 唯一显式丢失收敛点）：终态条目（entry 通道，独立于推送
  * 通道的第二通道）在场而事件 fold 缺终局事件行、且条目时点晚于 fold 末事件 ts =
@@ -43,11 +47,12 @@
  * tail 原语只读完整行边界。
  */
 
-import { readdirSync } from 'node:fs'
+import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 import type { SubagentJournalReport } from '@zhushanwen/extension-protocol'
 import type { SubagentRecord, WorkflowRunRecord } from '@taiji/shared'
+import { isEnoent } from '../../utils/errors.js'
 import {
   ALL_RUN_OUTCOMES, foldRunEventCheckpoint, INITIAL_RUN_EVENT_FOLD, RUN_EVENTS_SUFFIX,
   RUN_EVENT_TYPES, SUBAGENT_RECORD_CUSTOM_TYPE, WORKFLOW_RECORD_CUSTOM_TYPE,
@@ -62,6 +67,8 @@ import { mergeWorkflowStepRecords } from './workflow-step-merge.js'
 // [subagent-observability u3 F4] lastRound wire 产出单点（独立模块——本文件行数上限顶满）。
 import { resolveSubagentLastRound } from './events-projection-last-round.js'
 import { projectV2Workflow } from "./workflow-record-projection.js"
+// [U3 异步整建通道] 分片扫描生成器（entry 源分片节奏单源，见 session-file-extraction.ts）
+import { scanRecordFamilyInSegments } from './session-file-extraction.js'
 
 // ── run journal 行解析（域无关 tail 原语的 run 域注入）─────────
 
@@ -546,6 +553,13 @@ export class SessionEventProjection {
   private disposed = false
   /** entry 批应用期间的回调抑制（发布归调用方统一执行）。 */
   private applyingEntryBatch = false
+  /**
+   * [U3 异步整建通道] 旁路构建期的回调抑制（与 applyingEntryBatch 同款门语义）：
+   * 异步整建任务构建新实例期间实例不在 cache 上（无发布观察者），attach 冷读的
+   * fireChange 全程静默——切换后的首次发布由调用方原子切换路径统一执行（信号恰
+   * 一次的载体，V4/RL3）。
+   */
+  private buildingSilently = false
 
   /** 补读起点水位：fileKey → 字节偏移（只落在完整行边界；只经 readEventTail 推进）。 */
   private readonly recordOffsets = new Map<string, number>()
@@ -603,6 +617,32 @@ export class SessionEventProjection {
   attach(): void {
     this.coldReadDomain('record')
     this.coldReadDomain('run')
+  }
+
+  /**
+   * [U1 续读化 D1/D2] 查询通道事件域核对（双向对账；查询核对入口在 session-records
+   * reconcileProjectionOnQuery，主文件 size/游标核对与事件域核对在查询轮内同批执行——
+   * 事件目录核对独立于主文件信号，「只动事件目录不动主文件」的跨实例写盘形态由此捕获）。
+   *
+   * 正向：readdir 在册文件逐文件 size/游标比对——size === 游标零读零重算（稳态零成本，
+   * 目录级单次 stat 检不出既有事件文件被追加，核对粒度必须落到逐文件，D2）；size 变化
+   * 交 readFromOffset（增大续读增量段；变小由 readEventTail truncated 分支从 0 全量
+   * 重读 + fold 重置）；无游标的新文件（另一实例新建）全量冷读。
+   *
+   * 反向（删档形态，保留维护轮 / 主会话级联删除编排中途崩溃窗口 / btw 线删除等已裁
+   * 语义）：游标/fold 在册而 readdir 成功且清单无该文件 = 判定事件文件被删除或裁撤
+   * → 该记录派生降级 entry-source-only：游标与 fold 状态失效清理（v2 条目属 entry 源
+   * 保留），不重建整表、删档记录不发生派生态无限滞留。
+   *
+   * 缺席判定读错分通道（D2）：readdir 抛错不判删档——目录级 ENOENT（目录整体缺席）
+   * 对派生态在册的记录按全部事件文件缺席落反向分支（级联删除崩溃窗口的承接形态），
+   * EACCES/EIO 等 IO 真故障 warn 留痕、跳过本轮反向比对（下轮查询重试）。冷读路径
+   * coldReadDomain 的目录缺席静默空读是首建缺省语义，不沿用为反向分支判定形态。
+   */
+  reconcileEventSources(): void {
+    if (this.disposed) return
+    this.reconcileDomain('record')
+    this.reconcileDomain('run')
   }
 
   /** 事件源是否已完整接线（两域目录均非 undefined）——降级投影升级腿的判定面。
@@ -680,7 +720,9 @@ export class SessionEventProjection {
     return events
   }
 
-  /** 单域全目录冷读（attach 的实现半边；目录缺失 = 静默空读——事件源未落盘的缺省语义）。 */
+  /** 单域全目录冷读（attach 的实现半边；目录缺失 = 静默空读——事件源未落盘的缺省语义。
+   *  注意：该缺省只服务首建冷读，查询核对的反向分支（删档判定）不沿用此形态——
+   *  分通道语义见 reconcileDomain。 */
   private coldReadDomain(domain: 'record' | 'run'): void {
     const dir = domain === 'record' ? this.recordsDir : this.runJournalDir
     if (dir === undefined || this.disposed) return
@@ -695,6 +737,80 @@ export class SessionEventProjection {
       if (!name.endsWith(suffix)) continue
       this.readFromOffset(domain, domain === 'record' ? recordIdOfFilename(name) : runIdOfFilename(name))
     }
+  }
+
+  /** reconcileDomain 的单域实现半边（正向逐文件 size/游标比对 + 反向删档分支，见 reconcileEventSources）。 */
+  private reconcileDomain(domain: 'record' | 'run'): void {
+    const dir = domain === 'record' ? this.recordsDir : this.runJournalDir
+    if (dir === undefined || this.disposed) return
+    const suffix = domain === 'record' ? RECORD_EVENTS_SUFFIX : RUN_EVENTS_SUFFIX
+    let names: string[]
+    try {
+      names = readdirSync(dir)
+    } catch (e) {
+      if (isEnoent(e)) {
+        // 目录整体缺席 ∧ 派生态在册 → 全部在册事件文件缺席 = 删档降级（级联删除崩溃窗口承接）
+        this.dropDomainState(domain, new Set<string>())
+        return
+      }
+      // EIO/EACCES 等 IO 真故障：不判删档（D2 分通道语义），warn 留痕、下轮查询重试
+      console.warn(
+        `[events-projection] ${domain} domain reconcile readdir failed, kept fold state (not a deletion signal; retries on next query): ` +
+        `${e instanceof Error ? e.message : String(e)}`,
+      )
+      return
+    }
+    const offsets = domain === 'record' ? this.recordOffsets : this.runOffsets
+    const seen = new Set<string>()
+    for (const name of names) {
+      if (!name.endsWith(suffix)) continue
+      const id = domain === 'record' ? recordIdOfFilename(name) : runIdOfFilename(name)
+      seen.add(id)
+      if (offsets.has(id)) {
+        let size: number
+        try {
+          size = statSync(join(dir, name)).size
+        } catch {
+          continue // stat 失败：本轮跳过该文件（下轮重试；不判删档不重建）
+        }
+        if (size === offsets.get(id)) continue // 零重算零读（稳态零成本）
+      }
+      // 新文件全量冷读 / size 变化续读增量（截断由 readEventTail truncated 分支全量重读 + fold 重置）
+      this.readFromOffset(domain, id)
+    }
+    this.dropDomainState(domain, seen)
+  }
+
+  /**
+   * [U1 反向分支] 游标/fold 在册而核对清单无该文件 → 删档降级：游标与 fold（含
+   * lastEventTs / 终局条目补读 attempted 水位）失效清理。v2 条目（entry 源）保留 =
+   * entry-source-only 降级投影（列表按 entry 末态构建，projectV2Subagent 的
+   * fold === undefined 分支）。有清理才重算发变更（零删档稳态零帧）。
+   */
+  private dropDomainState(domain: 'record' | 'run', seen: ReadonlySet<string>): void {
+    if (this.disposed) return
+    const offsets = domain === 'record' ? this.recordOffsets : this.runOffsets
+    const folds = domain === 'record' ? this.sources.recordFolds : this.sources.runFolds
+    const lastTs = domain === 'record' ? this.recordLastEventTs : this.runLastEventTs
+    const prefix = domain === 'record' ? 'record:' : 'run:'
+    const stale = (id: string): boolean => !seen.has(id)
+    let changed = false
+    for (const id of [...offsets.keys()]) {
+      if (stale(id)) { offsets.delete(id); changed = true }
+    }
+    for (const id of [...folds.keys()]) {
+      // fold 在册而游标不在册（推送喂入未经文件读）同样属派生态在册，缺席即删档
+      if (stale(id)) { folds.delete(id); changed = true }
+    }
+    for (const id of [...lastTs.keys()]) {
+      if (stale(id)) lastTs.delete(id)
+    }
+    for (const key of [...this.finalCatchupAttempted.keys()]) {
+      if (key.startsWith(prefix) && stale(key.slice(prefix.length))) this.finalCatchupAttempted.delete(key)
+    }
+    if (!changed) return
+    this.recompute()
+    this.fireChange()
   }
 
   /**
@@ -804,7 +920,69 @@ export class SessionEventProjection {
   }
 
   private fireChange(): void {
-    if (this.applyingEntryBatch || this.disposed) return
+    if (this.applyingEntryBatch || this.buildingSilently || this.disposed) return
     this.onProjectionChange()
+  }
+
+  /**
+   * [U3 异步整建通道] 旁路分片构建一个全新实例（截断重建后台化的实现半边；调度与
+   * 原子切换在 session-records 的异步读入任务）。
+   *
+   * - entry 源：从 0 起按片续扫（每片 ≤ segmentBudgetBytes，片间 setTimeout(0) 让出
+   *   事件循环——单片同步块有界，分片节奏单源 = scanRecordFamilyInSegments）；每片
+   *   applyEntryBatch 即时并入（applyingEntryBatch 门天然静默，V4 全程无半态的载体：
+   *   实例不在 cache 上，中间态无观察者）。
+   * - 事件源：attach() 单块冷读（两域事件文件全量 fold；观测分布内 ≤ 14ms——D8
+   *   真实存储树分布实测，成本大头在主文件 entry 源的分片侧）。构建期 buildingSilently
+   *   门抑制 fireChange。
+   * - 返回 promise：resolve = 构建完成（entryOffset = 游标；主文件超界 null = oversize
+   *   回落语义，与 buildProjection 一致），实例未接线发布——调用方核对缓存身份后原子
+   *   切换；reject = 构建期读失败（游标未动、旧实例未动——调用方 warn 一条，恢复由
+   *   下一次查询触发的核对重新调度，零重试定时器，ADR-0122）。
+   */
+  static buildInSegments(opts: {
+    sessionId: string
+    recordsDir?: string
+    runJournalDir?: string
+    /** 主会话文件路径（entry 源冷读素材；缺省 = meta 缺席降级形态，entry-only 构建） */
+    sessionFilePath?: string
+    segmentBudgetBytes: number
+    /** 正式发布回调（构建期静默；原子切换后生效） */
+    onProjectionChange: () => void
+  }): { promise: Promise<{ projection: SessionEventProjection; entryOffset: number | null }> } {
+    const projection = new SessionEventProjection({
+      sessionId: opts.sessionId,
+      recordsDir: opts.recordsDir,
+      runJournalDir: opts.runJournalDir,
+      onProjectionChange: opts.onProjectionChange,
+    })
+    const promise = (async (): Promise<{ projection: SessionEventProjection; entryOffset: number | null }> => {
+      projection.buildingSilently = true
+      try {
+        let entryOffset: number | null
+        if (opts.sessionFilePath !== undefined) {
+          let offset: number | null = 0
+          for await (const scan of scanRecordFamilyInSegments(opts.sessionFilePath, 0, opts.segmentBudgetBytes)) {
+            if (scan === null) {
+              // 扫描字节上界外（oversize 回落）：游标 null（未读语义），与 buildProjection 同形；
+              // 已应用的前片内容幂等留存，下一轮从 0 续读补齐
+              offset = null
+              break
+            }
+            projection.applyEntryBatch(scan.entries)
+            offset = scan.nextOffset
+            if (scan.truncated || !scan.hasMore) break
+          }
+          entryOffset = offset
+        } else {
+          entryOffset = null
+        }
+        projection.attach()
+        return { projection, entryOffset }
+      } finally {
+        projection.buildingSilently = false
+      }
+    })()
+    return { promise }
   }
 }

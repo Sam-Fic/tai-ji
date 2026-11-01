@@ -90,7 +90,7 @@ export const DEV_HEALTH_RETRY_COUNT = 1500
  */
 const RESTART_DECISION_REASONS: Record<SupervisorRestartTrigger, string> = {
   process_exit: 'runtime exited unexpectedly (exitCode in context); exponential backoff restart per policy (1-16s, MAX_RESTARTS=5)',
-  liveness_unhealthy: 'half-alive process force-killed by liveness probe; backoff restart per policy',
+  liveness_unhealthy: 'half-alive runtime terminated by liveness probe (runtime process only, pi sessions survive for startup-reattach); backoff restart per policy',
   restart_failure: 'previous restart attempt failed to reach healthy state; continue backoff sequence',
   planned_rolling_restart: 'runtime exited with planned rolling-restart code (86); immediate restart with zero backoff and no crash count (design D5)',
 }
@@ -467,44 +467,71 @@ export class RuntimeSupervisor implements IRuntimeSupervisor {
     // 关闭存活探针（避免 stop 后探针继续打无效端口）
     this.stopLivenessMonitor()
     await stopRuntimeProcess(this.child, timeoutMs)
+    this.clearRuntimeState()
+  }
+
+  /**
+   * 清 runtime 进程状态（child/port/实例标识/目标快照同生命周期——stop 与 liveness
+   * 判死处置两条终止路径的唯一清理出口；seq 不清零——代数单调，下次 start 重新签发）。
+   */
+  private clearRuntimeState(): void {
     this.child = null
     this._port = null
-    // 快照与实例标识同生命周期（下次 start 重新签发；seq 不清零——代数单调）
     this._runtimeId = null
     this._snapshot = null
   }
 
   /**
-   * 强制重启「半活」进程（存活探针触发）。
+   * 强制重启「半活」进程（存活探针触发）——判死处置只重启 runtime 单进程（D4）。
    *
    * [HISTORICAL] W5 改动 3：runtime 进程未退出（exitCode===null）但 HTTP 服务卡死时，
    * 存活探针连续失败达阈值（LIVENESS_FAIL_THRESHOLD）后调用此方法。
    *
+   * 处置范围（projection 一致性设计 D4 判死处置降粒度）：只终止 runtime 自身
+   * （stopRuntimeProcess scope='process-only'），不枚举不杀 pi 后代——pi 子进程独立
+   * 存活（POSIX 语义，PPID 挂 init），重启后的 runtime 由启动期 orphan sweep 收殓
+   * 旧孤儿 pi（argv 判据 + ppid=1）并由 startup-reattach 编排重新附着接管。
+   *
    * 关键不变量（避免重启竞态）：
    * 1. 先 markStopping：kill 触发的 exit 事件会被 onRuntimeExit 当崩溃 → 重复重启。
    *    提前 markStopping 让 onRuntimeExit 短路（视为主动停止，不重启）。
-   * 2. 再 stop() kill 进程树 + 清状态（child/port=null）。
+   * 2. 再按 process-only 范围终止 runtime + 清状态（child/port=null）。
    * 3. 走 onRuntimeExit 走崩溃重启路径：scheduleRestart('crash') 编排退避重启。
    *    但因 markStopping 已设，onRuntimeExit 会短路——所以此处显式调 scheduleRestart。
    *
    * 注意：markStopping 后 scheduleRestart 的 shouldRestart() 会返回 false（stopping 短路）。
    * 因此 reset() 必须在 scheduleRestart 之前调用，清掉 stopping 标志让重启策略放行。
-   * 顺序：markStopping → stop → reset（清 stopping）→ scheduleRestart。
+   * 顺序：markStopping → stopRuntimeProcess(process-only) → reset（清 stopping）→ scheduleRestart。
    *
-   * @returns Promise（异步 kill + 重启编排）
+   * @returns Promise（异步终止 + 重启编排）
    */
   async forceRestartForLiveness(): Promise<void> {
-    console.warn('[runtime] Liveness probe failed threshold — forcing restart of half-alive process')
+    console.warn('[runtime] Liveness probe failed threshold — restarting the runtime process itself (pi sessions survive; startup-reattach re-attaches after restart)')
     // 杀链决策日志（D6-⑥ 第三处「supervisor 重启决策」，u5b 同形态：
     // action/trigger/target/reason 字段化，经 main-logger 落盘 main-<date>.log）。
-    // mainLogger 未 init（单测）时 no-op。pid 必须在 stop() 清 child 前捕获。
+    // mainLogger 未 init（单测）时 no-op。pid 必须在清理 child 前捕获。
+    //
+    // 事件循环滞后遥测（projection 一致性设计 D4，M1 遥测管道的消费接线）：遥测取自
+    // 探针侧留存的「最后一次健康应答」——runtime 判死时刻已无响应，eventLoopLag 只能
+    // 是最后健康时点的快照（/health 响应体可选字段）；runtime 未上报时显式记 null +
+    // source 标记（归因留档，不做分支依据——IO 阻滞与真死锁在滞后分布上同形）。
     const pid = this.child?.pid
+    const monitor = this.livenessMonitor
+    const eventLoopLag = monitor?.lastHealthyResult?.eventLoopLag ?? null
+    const lastHealthyAt = monitor?.lastHealthyAt ?? null
     mainLogger.warn('[supervisor] kill decision', {
       action: 'supervisor_force_kill_halfalive',
       trigger: 'liveness_unhealthy',
       target: { pid },
+      scope: 'runtime-process-only',
+      descendantsKilled: false,
+      eventLoopLag,
+      eventLoopLagSource: eventLoopLag ? 'health-probe' : 'not-reported-by-runtime',
+      outageMs: lastHealthyAt !== null ? Date.now() - lastHealthyAt : null,
       reason: 'process alive (exitCode null) but HTTP liveness probe failed threshold '
-        + `(${LIVENESS_FAIL_THRESHOLD} consecutive times); killing process tree before backoff restart`,
+        + `(${LIVENESS_FAIL_THRESHOLD} consecutive times); terminating the runtime process itself `
+        + '(process-tree kill retired for liveness disposal, D4) — pi child processes survive and are '
+        + 're-attached by the runtime startup-reattach orchestration',
     })
     // 崩溃登记清单双写（crash-forensics D1 第四挂点）：必须与 kill decision 同点在杀链
     // 发起处记——下方 markStopping 后，本强杀的 exit 落 onRuntimeExit 的 stopping
@@ -513,8 +540,13 @@ export class RuntimeSupervisor implements IRuntimeSupervisor {
     crashJournal.append({ layer: 'runtime', event: 'unresponsive', reason: 'liveness-unhealthy' })
     // markStopping 防止 stop 触发的 exit 被 onRuntimeExit 当崩溃重复重启
     this.policy.markStopping()
-    // kill 半活进程 + 清 child/port（不触发 onRuntimeExit 的重启逻辑）
-    await this.stop()
+    this.clearRestartTimer()
+    // 关闭存活探针（避免终止窗口内探针继续打无效端口）
+    this.stopLivenessMonitor()
+    // D4 处置降粒度：只终止 runtime 自身（不枚举不杀 pi 后代——杀树工具保留给
+    // app 退出与启动失败清理路径）
+    await stopRuntimeProcess(this.child, undefined, 'process-only')
+    this.clearRuntimeState()
     // 清 stopping 标志：后续 scheduleRestart 才能放行（shouldRestart 不再短路）
     this.policy.reset()
     // 走与崩溃相同退避/上限/广播编排

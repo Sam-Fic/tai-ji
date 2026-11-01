@@ -2373,24 +2373,94 @@ describe('scanRecordFamilyEntriesFromSessionFile（冷启动流式 entry 源）'
       JSON.stringify({ type: 'message', id: 'm2', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'c1', name: 'subagent', arguments: { action: 'start', startParam: { task: 't', slug: 's' } } }] } }),
     ]
     writeFileSync(filePath, lines.join('\n') + '\n')
-    const entries = scanRecordFamilyEntriesFromSessionFile(filePath)!
+    const scan = scanRecordFamilyEntriesFromSessionFile(filePath)!
+    const entries = scan.entries
     const types = entries.map((e) => (e as { type?: string }).type)
     // 4 条命中：session + 3 个 record 族条目（对话行 m0 不含线索被排除；m1 填充行同）
     expect(types.filter((t) => t === 'message')).toHaveLength(1)
     expect(types.filter((t) => t === 'session')).toHaveLength(1)
     expect(types.filter((t) => t === 'custom')).toHaveLength(3)
     expect(statSync(filePath).size).toBeGreaterThan(300 * 1024) // 填充确实跨块
+    // [U1 续读化] 游标登记 = 读到文件尾（下轮续读起点）
+    expect(scan.truncated).toBe(false)
+    expect(scan.nextOffset).toBe(statSync(filePath).size)
 
     void truncateSync
   })
 
   it('文件缺失 → 空数组（延迟写入合法窗口）；超 32MB → null（回落兼容路径）', async () => {
-    expect(scanRecordFamilyEntriesFromSessionFile(join(dir, 'missing.jsonl'))).toEqual([])
+    expect(scanRecordFamilyEntriesFromSessionFile(join(dir, 'missing.jsonl'))).toEqual({ entries: [], nextOffset: 0, truncated: false })
     const { truncateSync } = await import('node:fs')
     const big = join(dir, 'big.jsonl')
     writeFileSync(big, '\n')
     truncateSync(big, 33 * 1024 * 1024)
     expect(scanRecordFamilyEntriesFromSessionFile(big)).toBeNull()
+  })
+})
+
+// ── [U1 续读化] 起点参数化续读（entry 源字节游标）──────────────────────
+
+describe('scanRecordFamilyEntriesFromSessionFile 续读（startOffset 参数化）', () => {
+  let dir: string
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'jp-scan-resume-')) })
+  afterEach(() => { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }) })
+
+  function sessionLine(payload: Record<string, unknown>): string {
+    return JSON.stringify(payload) + '\n'
+  }
+
+  it('从游标续读只收集增量段；无关对话行追加后增量段无 record 族行（零重算形态）', async () => {
+    const { statSync } = await import('node:fs')
+    const filePath = join(dir, 'session.jsonl')
+    const first = [
+      sessionLine({ type: 'session', id: 's1', cwd: '/proj' }),
+      sessionLine(subagentRegisteredEntry('sa-1')),
+    ].join('')
+    writeFileSync(filePath, first)
+    const firstScan = scanRecordFamilyEntriesFromSessionFile(filePath)!
+    // session 头行 + 注册条目均命中行预过滤线索
+    expect(firstScan.entries.map((e) => (e as { type?: string }).type)).toEqual(['session', 'custom'])
+    expect(firstScan.nextOffset).toBe(first.length)
+
+    // 增量段 = 无关对话行（mtime/size 必变，派生内容不变）→ 续读零命中
+    const delta = sessionLine({ type: 'message', id: 'm1', message: { role: 'user', content: '普通对话' } })
+    appendFileSync(filePath, delta)
+    const resume = scanRecordFamilyEntriesFromSessionFile(filePath, firstScan.nextOffset)!
+    expect(resume.truncated).toBe(false)
+    expect(resume.entries).toHaveLength(0)
+    // 游标是字节偏移：以 stat size 为准（中文内容 UTF-8 字节数 ≠ 字符串 length）
+    expect(resume.nextOffset).toBe(statSync(filePath).size)
+
+    // 增量段 = record 族条目 → 续读收集
+    appendFileSync(filePath, sessionLine(subagentSettledEntry('sa-1')))
+    const resume2 = scanRecordFamilyEntriesFromSessionFile(filePath, resume.nextOffset)!
+    expect(resume2.entries).toHaveLength(1)
+    expect((resume2.entries[0] as { data?: { kind?: string } }).data?.kind).toBe('settled')
+    expect(resume2.nextOffset).toBe(statSync(filePath).size)
+  })
+
+  it('size 小于 startOffset → truncated 判定（截断/重写唯一整体重建形态）', () => {
+    const filePath = join(dir, 'session.jsonl')
+    const body = [sessionLine({ type: 'session', id: 's1', cwd: '/proj' }), sessionLine(subagentRegisteredEntry('sa-1'))].join('')
+    writeFileSync(filePath, body)
+    const first = scanRecordFamilyEntriesFromSessionFile(filePath)!
+    // 重写为更短内容（compaction / pi 版本迁移重写形态）
+    writeFileSync(filePath, sessionLine({ type: 'session', id: 's1', cwd: '/proj' }))
+    const rescanned = scanRecordFamilyEntriesFromSessionFile(filePath, first.nextOffset)!
+    expect(rescanned.truncated).toBe(true)
+    expect(rescanned.entries).toHaveLength(0)
+  })
+
+  it('续读窗口文件缺失 → 空条目且游标原地不动（不归零——重写后文件不得被当增量续读）', () => {
+    const filePath = join(dir, 'session.jsonl')
+    writeFileSync(filePath, sessionLine(subagentRegisteredEntry('sa-1')))
+    const first = scanRecordFamilyEntriesFromSessionFile(filePath)!
+    rmSync(filePath)
+    expect(scanRecordFamilyEntriesFromSessionFile(filePath, first.nextOffset)).toEqual({
+      entries: [],
+      nextOffset: first.nextOffset,
+      truncated: false,
+    })
   })
 })
 describe('SessionEventProjection（冷启动 + 推送增量 + dispose）', () => {
@@ -2536,6 +2606,154 @@ describe('SessionEventProjection（冷启动 + 推送增量 + dispose）', () =>
     appendFileSync(join(recordsDir, 'sa-1.events'), `${recordEventLine(settledRecordEvent())}\n`)
     expect(projection.applyJournalReport(journalReport('record', 'sa-1', [settledRecordEvent()]))).toBe(false)
     expect(projection.subagents.get('sa-1')?.status).toBe('running')
+  })
+
+  // ── [U1 续读化] 查询通道事件域核对（reconcileEventSources）─────────────
+  // 双向对账：正向 = readdir 逐文件 size/游标比对（size 不变零读零重算 / size 变续读）；
+  // 反向 = 派生态在册而清单无该文件 → 删档降级（entry-source-only，D2 分通道语义：
+  // readdir EIO 不判删档、目录级 ENOENT 按全部缺席落降级分支）。
+
+  it('核对正向：size 不变零读零重算（文件内容探针零调用）；追加行后续读捕获（只动事件目录形态）', async () => {
+    writeFileSync(join(recordsDir, 'sa-1.events'), recordJournalLines('sa-1', [createdEvent('sa-1')]).join('\n') + '\n')
+    const onChange = vi.fn()
+    const projection = new SessionEventProjection({
+      sessionId: 's1',
+      recordsDir,
+      runJournalDir: runDir,
+      onProjectionChange: onChange,
+    })
+    try {
+      projection.applyEntryBatch([subagentRegisteredEntry('sa-1')])
+      projection.attach()
+      expect(projection.subagents.get('sa-1')?.status).toBe('running')
+      const fs = await import('node:fs')
+      const readSpy = vi.spyOn(fs, 'readFileSync')
+      const readsAtBaseline = readSpy.mock.calls.length
+      onChange.mockClear() // attach 冷读的首帧触发不计（本用例只断言核对段的零触发）
+      projection.reconcileEventSources()
+      // size === 游标：零文件内容读（稳态零成本核对，D2）
+      expect(readSpy.mock.calls.length).toBe(readsAtBaseline)
+      expect(onChange).not.toHaveBeenCalled()
+      readSpy.mockRestore()
+
+      // 只动事件目录不动主文件：既有事件文件行追加被逐文件 size/游标比对捕获（RL2）
+      appendFileSync(join(recordsDir, 'sa-1.events'), `${recordEventLine(settledRecordEvent())}\n`)
+      projection.reconcileEventSources()
+      expect(projection.subagents.get('sa-1')).toMatchObject({ status: 'idle', stopReason: 'completed' })
+      expect(onChange).toHaveBeenCalled()
+    } finally {
+      projection.dispose()
+    }
+  })
+
+  it('核对反向（删档降级）：事件文件被删除 → 记录保留按 entry 末态呈现，fold/游标失效清理无滞留', () => {
+    writeFileSync(
+      join(recordsDir, 'sa-1.events'),
+      [...recordJournalLines('sa-1', [createdEvent('sa-1')]), recordEventLine(settledRecordEvent())].join('\n') + '\n',
+    )
+    const projection = new SessionEventProjection({
+      sessionId: 's1',
+      recordsDir,
+      runJournalDir: runDir,
+      onProjectionChange: () => {},
+    })
+    try {
+      projection.applyEntryBatch([subagentRegisteredEntry('sa-1'), subagentSettledEntry('sa-1')])
+      projection.attach()
+      expect(projection.subagents.get('sa-1')?.stopReason).toBe('completed') // fold 值胜出
+
+      rmSync(join(recordsDir, 'sa-1.events'))
+      projection.reconcileEventSources()
+      // entry-source-only 降级：记录仍在列，列表按 entry 末态构建（事件源缺席后无事件行可读）
+      expect(projection.subagents.get('sa-1')).toMatchObject({ status: 'idle', stopReason: 'interrupted' })
+      // 派生态无限滞留不发生：游标与 fold 随同一轮核对失效清理（续读链对该文件无残留游标）
+      expect(projection.sources.recordFolds.has('sa-1')).toBe(false)
+    } finally {
+      projection.dispose()
+    }
+  })
+
+  it('核对反向（目录级 ENOENT ∧ 派生态在册）：按全部在册事件文件缺席落降级分支（级联崩溃窗口承接）', () => {
+    writeFileSync(join(recordsDir, 'sa-1.events'), recordJournalLines('sa-1', [createdEvent('sa-1')]).join('\n') + '\n')
+    const projection = new SessionEventProjection({
+      sessionId: 's1',
+      recordsDir,
+      runJournalDir: runDir,
+      onProjectionChange: () => {},
+    })
+    try {
+      projection.applyEntryBatch([subagentRegisteredEntry('sa-1')])
+      projection.attach()
+      expect(projection.sources.recordFolds.has('sa-1')).toBe(true)
+
+      rmSync(recordsDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+      projection.reconcileEventSources()
+      expect(projection.sources.recordFolds.has('sa-1')).toBe(false)
+      expect(projection.subagents.get('sa-1')).toMatchObject({ subagentId: 'sa-1', status: 'running' })
+    } finally {
+      projection.dispose()
+    }
+  })
+
+  it('核对反向（readdir EIO 分通道负判定）：IO 真故障不判删档（fold 保留）+ warn 留痕，下轮收敛', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    writeFileSync(join(recordsDir, 'sa-1.events'), recordJournalLines('sa-1', [createdEvent('sa-1')]).join('\n') + '\n')
+    const projection = new SessionEventProjection({
+      sessionId: 's1',
+      recordsDir,
+      runJournalDir: runDir,
+      onProjectionChange: () => {},
+    })
+    try {
+      projection.applyEntryBatch([subagentRegisteredEntry('sa-1')])
+      projection.attach()
+      expect(projection.subagents.get('sa-1')?.status).toBe('running')
+
+      const fs = await import('node:fs')
+      const readdirSpy = vi.spyOn(fs, 'readdirSync').mockImplementation(() => {
+        const err = new Error('input/output error') as Error & { code: string }
+        err.code = 'EIO'
+        throw err
+      })
+      try {
+        projection.reconcileEventSources()
+      } finally {
+        readdirSpy.mockRestore()
+      }
+      // EIO ≠ 删档：fold/游标保留、派生态不降级、warn 留痕
+      expect(projection.sources.recordFolds.has('sa-1')).toBe(true)
+      expect(projection.subagents.get('sa-1')?.status).toBe('running')
+      expect(warnSpy.mock.calls.some((args) => String(args[0]).includes('readdir failed'))).toBe(true)
+
+      // 下轮（readdir 恢复 + 清单无该文件）收敛为删档降级
+      rmSync(join(recordsDir, 'sa-1.events'))
+      projection.reconcileEventSources()
+      expect(projection.sources.recordFolds.has('sa-1')).toBe(false)
+    } finally {
+      warnSpy.mockRestore()
+      projection.dispose()
+    }
+  })
+
+  it('降级投影升级走「补源 + 续读」：attachEventSources 原位接线（同实例，V8 无丢弃重建形态）', () => {
+    const projection = new SessionEventProjection({
+      sessionId: 's1',
+      recordsDir: undefined,
+      runJournalDir: undefined,
+      onProjectionChange: () => {},
+    })
+    try {
+      projection.applyEntryBatch([subagentRegisteredEntry('sa-1')])
+      expect(projection.hasEventSources()).toBe(false)
+      writeFileSync(join(recordsDir, 'sa-1.events'), recordJournalLines('sa-1', [createdEvent('sa-1')]).join('\n') + '\n')
+      projection.attachEventSources({ recordsDir, runJournalDir: runDir })
+      // 同实例升级（entry 批与 fold 状态原位保留）+ 事件 fold 接管
+      expect(projection.hasEventSources()).toBe(true)
+      expect(projection.subagents.get('sa-1')).toMatchObject({ subagentId: 'sa-1', status: 'running' })
+      expect(projection.sources.recordFolds.has('sa-1')).toBe(true)
+    } finally {
+      projection.dispose()
+    }
   })
 })
 // ── [subagent-observability u3 F4] resolveSubagentLastRound 直测（wire 产出单点）──

@@ -11,7 +11,7 @@
  *   importOriginal 保留），withFileLockSync/atomicWrite 真实执行。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, utimesSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, writeFileSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, truncateSync } from 'node:fs'
 import { logger } from '../../../infra/logger.js'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -20,6 +20,7 @@ import type { IProcessManager, IPiEngine } from '../../ports/pi-engine.js'
 import type { ISessionStore } from '../../ports/session.js'
 import type { SessionRecordsDeps } from '../session-records.js'
 import { SessionRecords, encodeDirectiveText } from '../session-records.js'
+import type { SessionEventProjection } from '../events-projection.js'
 // [event-push-channel] journal 推送喂入生产路径路由（SessionRecords 构造期注册 sink）
 import { routeJournalReport } from '../journal-report-router.js'
 import { SCALAR_STATE_DEBOUNCE_MS } from '../replicated-states.config.js'
@@ -1767,35 +1768,44 @@ describe('[W1] 读侧换源：磁盘 entry-only 派生视图 / v2 读派生视�
   })
 })
 
-// ── 查询真理通道：未激活会话投影 mtime 失效（F1-51/F1-17）───────────────
+// ── 查询真理通道：未激活会话投影 size/游标续读核对（F1-51/F1-17，U1 续读化改写）───
 //
-// 验收对照（设计 §3.3.6，ADR-0097）：未激活会话（无 journal 推送、无 entry 游标增量）
-// 首次读建投影后，磁盘事实补写（启动清点落定形态）在激活前的可见性由「会话文件 mtime
-// 对账」承载——① mtime 变化 → 重建投影，次查询读到新事实；② mtime 未变 → 走缓存不重建。
-// scanSessions mock 返回真实 statSync mtimeMs（生产同式：lastModified = fstat.mtimeMs）；
-// mtime 经 fs.utimesSync 显式设定（写内容与 mtime 解耦，不依赖写入时刻的粒度）。
-describe('查询真理通道：未激活会话事件投影 mtime 失效（F1-51/F1-17）', () => {
-  /** 整数秒 mtime 基线/更新值（utimesSync 数字参数按秒解释，回读 mtimeMs 无粒度歧义）。 */
-  const MTIME_BASE_S = 1000
-  const MTIME_AFTER_S = 2000
+// 验收对照（D1/D2，ADR-0097）：未激活会话（无 journal 推送、无 entry 游标增量）首次读
+// 建投影后，磁盘事实补写在激活前的可见性由「主文件 size/游标核对 + 事件域 readdir 逐
+// 文件核对」承载——append-only 前提下 size 是精确信号：size 不变零重算；size 增大续读
+// 增量段；size 小于游标截断/重写 = 唯一整体重建场景（U3 D3 后台化：快照应答 +
+// 异步整建 + 原子切换）。mtime
+// 对账整建已退役（mtime 是粗粒度信号：追加任意 entry 必变，与派生内容变化无蕴涵关系）。
+// dc801b73d 陈旧缺陷回归断言（磁盘新事实经查询可见）零丢失，改写为续读语义。
 
+/** 续读核对用例的实例观察面（摸私有 cache——projection 实例标识是「零重建」断言的载体）。 */
+function projectionOf(records: SessionRecords, sessionId: string): SessionEventProjection | null {
+  const caches = (records as unknown as { recordEntriesCaches: Map<string, { projection: SessionEventProjection | null }> }).recordEntriesCaches
+  return caches.get(sessionId)?.projection ?? null
+}
+
+describe('查询真理通道：未激活会话投影 size/游标续读核对（F1-51/F1-17）', () => {
   function makeUnactivatedWorld(): {
     world: ReturnType<typeof makeV2World>
     records: SessionRecords
-    rewriteSessionFile: (entries: Array<Record<string, unknown>>, mtimeSeconds: number) => void
+    publish: ReturnType<typeof vi.fn>
+    rewriteSessionFile: (entries: Array<Record<string, unknown>>) => void
+    appendSessionFile: (entries: Array<Record<string, unknown>>) => void
   } {
-    const cwd = '/tmp/mtime-proj'
+    const cwd = '/tmp/resume-proj'
     const world = makeV2World(cwd)
     piAgentDirRef.dir = world.worldDir
-    const rewriteSessionFile = (entries: Array<Record<string, unknown>>, mtimeSeconds: number): void => {
+    const rewriteSessionFile = (entries: Array<Record<string, unknown>>): void => {
       writeFileSync(world.sessionFile, entries.map((e) => JSON.stringify(e)).join('\n') + '\n')
-      utimesSync(world.sessionFile, mtimeSeconds, mtimeSeconds)
+    }
+    const appendSessionFile = (entries: Array<Record<string, unknown>>): void => {
+      writeFileSync(world.sessionFile, entries.map((e) => JSON.stringify(e)).join('\n') + '\n', { flag: 'a' })
     }
     rewriteSessionFile([
       { type: 'session', id: 's1', cwd },
       subagentRegisteredV2('sa-1'),
-    ], MTIME_BASE_S)
-    const { records } = makeRecords({
+    ])
+    const { records, publish } = makeRecords({
       sessionStore: {
         scanSessions: vi.fn(() => [{
           id: 's1',
@@ -1805,46 +1815,163 @@ describe('查询真理通道：未激活会话事件投影 mtime 失效（F1-51/
         }]),
       } as unknown as ISessionStore,
     })
-    return { world, records, rewriteSessionFile }
+    return { world, records, publish, rewriteSessionFile, appendSessionFile }
   }
 
-  it('mtime 变化 → 重建投影：未激活会话首读建缓存后磁盘补写的新事实次查询可见', async () => {
-    const { world, records, rewriteSessionFile } = makeUnactivatedWorld()
+  it('主文件追加新事实（size 增大）→ 次查询续读可见，实例存续不重建（dc801b73d 回归断言零丢失）', async () => {
+    const { world, records, appendSessionFile } = makeUnactivatedWorld()
     try {
       // 首读建事件投影：会话文件只有注册条目 → running 在途态（陈旧快照原缺陷形态）
       const first = await records.getSubagents('s1')
       expect(first.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'running' })
+      const projectionBefore = projectionOf(records, 's1')
+      expect(projectionBefore).not.toBeNull()
 
-      // 磁盘事实补写（清点落定形态：settled 条目追加）+ 显式新 mtime
-      rewriteSessionFile([
-        { type: 'session', id: 's1', cwd: '/tmp/mtime-proj' },
-        subagentRegisteredV2('sa-1'),
-        subagentSettledV2('sa-1'),
-      ], MTIME_AFTER_S)
+      // 磁盘事实补写（清点落定形态：settled 条目追加，append-only）
+      appendSessionFile([subagentSettledV2('sa-1')])
 
-      // 次查询：mtime 对账命中变化 → 投影重建 → 新事实可见
+      // 次查询：size/游标核对命中增长 → 续读增量段 → 新事实可见；同一实例续读（无整建）
       const second = await records.getSubagents('s1')
       expect(second.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'idle' })
+      expect(projectionOf(records, 's1')).toBe(projectionBefore)
     } finally {
       rmSync(world.worldDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
     }
   })
 
-  it('mtime 未变 → 走缓存不重建：盘上补写内容不进入读取结果（缓存仍是判定真值）', async () => {
-    const { world, records, rewriteSessionFile } = makeUnactivatedWorld()
+  it('追加无关 entry（size 变、增量段无 record 族行）→ 零重算零重建零信号（RL1/V3）', async () => {
+    const { world, records, publish, appendSessionFile } = makeUnactivatedWorld()
     try {
       const first = await records.getSubagents('s1')
       expect(first.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'running' })
+      const projectionBefore = projectionOf(records, 's1')
 
-      // 盘上内容已补写，但 mtime 显式设回首读时的值（未变）→ 对账判定缓存有效
+      // 连续追加普通对话 entry（与派生视图无关；mtime 必变、size 必变——现状 mtime 对账
+      // 每条触发一次整建，续读核对零重算）
+      appendSessionFile([{ type: 'message', id: 'm1', message: { role: 'user', content: '普通对话一' } }])
+      expect((await records.getSubagents('s1')).records[0]).toMatchObject({ subagentId: 'sa-1', status: 'running' })
+      appendSessionFile([{ type: 'message', id: 'm2', message: { role: 'assistant', content: [] } }])
+      const third = await records.getSubagents('s1')
+      expect(third.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'running' })
+
+      // 派生视图实例不 dispose 不重建；查询通道不触发布链（发布零帧）
+      expect(projectionOf(records, 's1')).toBe(projectionBefore)
+      expect(publish).not.toHaveBeenCalled()
+    } finally {
+      rmSync(world.worldDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
+  })
+
+  it('只动事件目录不动主文件 → 事件域 readdir 逐文件 size/游标核对捕获（RL2 补建项，目录级单 stat 检不出的形态）', async () => {
+    const { world, records } = makeUnactivatedWorld()
+    try {
+      // 事件源：record-created 已落盘（running）；会话文件仅注册条目
+      writeFileSync(join(world.recordsDir, 'sa-1.events'), [
+        JSON.stringify({ type: 'record-events', id: 'sa-1' }),
+        JSON.stringify({ type: 'record-created', seq: 1, ts: 1000, id: 'sa-1', agent: 'worker', task: 'Do work', slug: 'work', origin: 'workflow', parentRunId: 'wf-1', stepIndex: 0, rootSessionId: 's1', depth: 0, mode: 'bg', startedAt: 1000 }),
+      ].join('\n') + '\n')
+      const first = await records.getSubagents('s1')
+      expect(first.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'running' })
+
+      // 另一写者只向事件文件追加 record-settled 行（主文件字节不动）
+      appendFileSync(join(world.recordsDir, 'sa-1.events'),
+        JSON.stringify({ type: 'record-settled', seq: 2, ts: 3000, stopReason: 'completed', endedAt: 3000, turns: 2, totalTokens: 500 }) + '\n')
+
+      // 次查询：主文件零重算 + 事件域独立核对续读到新事实（事件源胜出仲裁）
+      const second = await records.getSubagents('s1')
+      expect(second.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'idle', stopReason: 'completed' })
+    } finally {
+      rmSync(world.worldDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
+  })
+
+  it('size 小于游标（截断/重写）→ 快照应答 + 异步整建原子切换换实例（U3 D3 后台化；唯一保留 dispose 的场景）', async () => {
+    const { world, records, rewriteSessionFile } = makeUnactivatedWorld()
+    try {
+      // 首建：主文件含终态条目（idle），游标登记到文件尾
       rewriteSessionFile([
-        { type: 'session', id: 's1', cwd: '/tmp/mtime-proj' },
+        { type: 'session', id: 's1', cwd: '/tmp/resume-proj' },
         subagentRegisteredV2('sa-1'),
         subagentSettledV2('sa-1'),
-      ], MTIME_BASE_S)
+      ])
+      const first = await records.getSubagents('s1')
+      expect(first.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'idle' })
+      const projectionBefore = projectionOf(records, 's1')
 
+      // 重写为更短内容（compaction 重写形态：终态条目被重写裁掉）：size < 游标 → 截断判定
+      rewriteSessionFile([
+        { type: 'session', id: 's1', cwd: '/tmp/resume-proj' },
+        subagentRegisteredV2('sa-1'),
+      ])
+
+      // [U3 D3] 截断整建后台化：查询先返回旧快照（在途窗口旧实例可读、不换实例）
       const second = await records.getSubagents('s1')
-      expect(second.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'running' })
+      expect(second.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'idle' })
+      expect(projectionOf(records, 's1')).toBe(projectionBefore)
+      // await 在途整建任务（确定性完成信号）→ 原子切换换实例 → 新视图可见
+      const caches = (records as unknown as { recordEntriesCaches: Map<string, { projectionAsyncRead: Promise<void> | null }> }).recordEntriesCaches
+      await caches.get('s1')!.projectionAsyncRead
+      expect(projectionOf(records, 's1')).not.toBe(projectionBefore)
+      const third = await records.getSubagents('s1')
+      expect(third.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'running' })
+    } finally {
+      rmSync(world.worldDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
+  })
+
+  it('删档反向分支（V9④/检查点）：事件文件被删 → 记录保留按 entry 末态最小行呈现，fold/游标随同一轮核对失效清理', async () => {
+    const { world, records, appendSessionFile } = makeUnactivatedWorld()
+    try {
+      // 主文件补终态条目（删档 fixture 语义：主文件注册与终态条目在册、事件文件缺席）
+      appendSessionFile([subagentSettledV2('sa-1')])
+      writeFileSync(join(world.recordsDir, 'sa-1.events'), [
+        JSON.stringify({ type: 'record-events', id: 'sa-1' }),
+        JSON.stringify({ type: 'record-created', seq: 1, ts: 1000, id: 'sa-1', agent: 'worker', task: 'Do work', slug: 'work', origin: 'workflow', parentRunId: 'wf-1', stepIndex: 0, rootSessionId: 's1', depth: 0, mode: 'bg', startedAt: 1000 }),
+        JSON.stringify({ type: 'record-settled', seq: 2, ts: 3000, stopReason: 'completed', endedAt: 3000, turns: 2, totalTokens: 500 }),
+      ].join('\n') + '\n')
+      // 首查询：fold 值胜出（stopReason completed）
+      const first = await records.getSubagents('s1')
+      expect(first.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'idle', stopReason: 'completed' })
+
+      // fixture 直接删除事件文件（「主文件在册 ∧ 事件文件缺席」磁盘态——保留维护轮/
+      // 级联删除编排中途崩溃窗口/btw 线删除线 jsonl 在册形态共用该 fixture）
+      rmSync(join(world.recordsDir, 'sa-1.events'))
+
+      // 次查询：删档降级 entry-source-only——记录仍在列（主文件注册与终态条目在册），
+      // 状态 = entry 末态且与 fold 列表一致；fold/游标随同一轮核对失效清理（无滞留）
+      const second = await records.getSubagents('s1')
+      expect(second.records).toHaveLength(1)
+      expect(second.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'idle', stopReason: 'interrupted' })
+      expect(projectionOf(records, 's1')?.sources.recordFolds.has('sa-1')).toBe(false)
+    } finally {
+      rmSync(world.worldDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
+  })
+
+  it('原地重写布防（检查点）：同 id 二次注册（会话重开/重新附着）→ 派生缓存与游标失效，重写后内容全量重建可见', async () => {
+    const { world, records, rewriteSessionFile, appendSessionFile } = makeUnactivatedWorld()
+    try {
+      const fire = registerSession(records)
+      fire('s1')
+      const first = await records.getSubagents('s1')
+      expect(first.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'running' })
+      const projectionBefore = projectionOf(records, 's1')
+
+      // 写侧追加普通 entry（游标落后于文件尾）后原地重写整个文件（pi 版本迁移重写形态
+      // ——行字节变短、新 size ≥ 旧游标的错位形态：持旧游标续读会从错位字节流起读、
+      // 漏掉文件头部的新条目）
+      appendSessionFile([{ type: 'message', id: 'm1', message: { role: 'user', content: '追加' } }])
+      rewriteSessionFile([
+        { type: 'session', id: 's1', cwd: '/tmp/resume-proj' },
+        subagentRegisteredV2('sa-1'),
+        { ...subagentSettledV2('sa-1'), id: 'e-s1-rewritten' },
+      ])
+
+      // 同 id 二次注册 = 附着/激活边界：派生缓存与游标失效 → 查询全量重建读到重写后内容
+      fire('s1')
+      const second = await records.getSubagents('s1')
+      expect(second.records[0]).toMatchObject({ subagentId: 'sa-1', status: 'idle', result: 'full result text' })
+      expect(projectionOf(records, 's1')).not.toBe(projectionBefore)
     } finally {
       rmSync(world.worldDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
     }

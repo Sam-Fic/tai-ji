@@ -76,7 +76,7 @@ import {
 } from './subagent-engine-history.js'
 import type { SessionModelChangeEntry } from './subagent-engine-history.js'
 import { extractWorkflowsFromSessionFile } from './workflow-extractor.js'
-import { scanRecordFamilyEntriesFromSessionFile } from './session-file-extraction.js'
+import { scanRecordFamilyEntriesFromSessionFile, scanRecordFamilyInSegments } from './session-file-extraction.js'
 // run 详情侧逐成员透传（覆盖状态 + 最近生效值分发到 agentCalls，subagent-model-switch §9）
 import { projectSubagentModelDetailIntoRuns } from './workflow-record-projection.js'
 // 覆盖查询定位锚透传形态（N+1 全目录扫描修复：调用方一次解析、链内透传）
@@ -109,6 +109,27 @@ import type { SessionRegisteredSource } from './session-state-projection.js'
  * 错误，不静默放大读取窗口）。
  */
 const SUBAGENT_ACTION_RESULT_MAX_BYTES = 262_144
+
+/** [U3 D3 校准锚] 预算字节换算的吞吐口径（KB/ms）：设计 D3 证据段 2026-10-31 本机成本模型实测 ~340MB/s；实施期同形态复测 ~655MB/s，按保守口径定档。 */
+const QUERY_BUDGET_THROUGHPUT_KB_PER_MS = 340
+/** KB → 字节换算（QUERY_SYNC_BUDGET_BYTES 的单位步进）。 */
+const BYTES_PER_KB = 1024
+/** [U3 D3] 查询通道核对段（主文件续读 / 截断整建）的同步预算：预算内增量
+ * 续读就地完成；超预算增量与截断整建转异步执行——查询立即返回当前内存快照（AX1
+ * 分级契约第③级），异步读入完成后原子切换并发一次变更信号。
+ *
+ * 预算初值 8ms 量级（设计 §4.1 V1：活跃 run 查询 P95 < 10ms = 同步预算 + 余量；
+ * AX2 同步段有界——判死窗口 ~12s = liveness-probe 2s 超时 × 3 次 × 5s 间隔）。
+ * 字节阈值 = 预算 × 事实源吞吐换算（慢盘降一个数量级时阈值内字节 ≈ 80ms，仍低于
+ * 判死窗口两个数量级）。真机 P95 分布校准归 A1 真机面（M1 事件循环遥测管道未合入
+ * 本基线，U4 实施期已核实）。
+ *
+ * 事件域核对（readdir + 逐文件 stat 探针，稳态零内容读）不受本预算约束——D3 预算
+ * 对象 = 主文件增量读入与截断整建；事件域常态成本毫秒级（O(事件文件数) 探针，
+ * V1 P95 预算内），其内容读增量由 journal 推送通道常态喂入。
+ */
+const QUERY_SYNC_BUDGET_MS = 8
+const QUERY_SYNC_BUDGET_BYTES = QUERY_SYNC_BUDGET_MS * QUERY_BUDGET_THROUGHPUT_KB_PER_MS * BYTES_PER_KB
 
 /**
  * W18：per-session record entry 派生缓存（subagent/workflow 列表的 runtime 侧 owner）。
@@ -174,13 +195,23 @@ export interface RecordEntriesCache {
    */
   projection: SessionEventProjection | null
   /**
-   * 建投影时的会话文件 mtime（扫描 meta.lastModified，即 fstat.mtimeMs）；null =
-   * 建投影时会话文件不在册（pi 延迟写入窗口）。查询通道（getSubagents/getWorkflows）
-   * 的失效判据：命中缓存后与最新扫描值核对，变化即重建——未激活会话无 journal 推送、
-   * 无 entry 游标增量，磁盘事实（启动清点补写 / 旧实例跨写 / pi 侧重建写入）在激活前
-   * 唯一显形通道就是这次核对（查询是真理通道，ADR-0097）。
+   * [U1 续读化] 主会话文件 entry 源已读字节游标（scanRecordFamilyEntriesFromSessionFile
+   * 的 nextOffset 登记点；append-only 前提下恒落完整行边界）。null = 主文件从未读过
+   * （pi 延迟写入窗口 / 降级投影 / v1 巨文件回落）。查询通道核对判据（D1/D2 size/游标
+   * 核对，替代退役的 mtime 对账）：stat size === 游标零重算；size > 游标续读增量段；
+   * size < 游标截断/重写 = 唯一整体重建场景（U3 D3 后台化：快照应答 + 异步整建 +
+   * 原子切换，见 projectionAsyncRead）。未激活会话无
+   * journal 推送、无 entry 游标增量，磁盘事实（启动清点补写 / 旧实例跨写 / pi 侧重建
+   * 写入）经查询核对续读显形（查询是真理通道，ADR-0097）。
    */
-  projectionSourceMtimeMs: number | null
+  projectionEntryOffset: number | null
+  /**
+   * [U3 异步读入 D3] 在途异步读入任务（超预算续读 / 截断整建；null = 无在途）。
+   * 重入查询复用在途任务不重复调度（并发窗口语义：任务读到它扫描时点的文件尾为止，
+   * 执行期间的新追加留给下一轮核对收敛）；完成/失败后清位——失败路径零重试定时器
+   * （ADR-0122），下次查询的核对重新调度即收敛。
+   */
+  projectionAsyncRead: Promise<void> | null
   /**
    * [pull-push W0] 首次拉取未决标志：收到过 record 失效信号但尚未成功完成一轮拉取。
    * 置位 = invalidateRecordEntries 通过 customType 门；清除 = refreshRecordEntries 成功
@@ -229,8 +260,10 @@ type EntriesSinceResult = { data?: { entries?: unknown[]; leafId?: string | null
  * reconcile-timer = 15s 定时对账路径。
  */
 type RecordRefreshTrigger = 'invalidate' | 'reconcile-settled' | 'reconcile-timer'
-/** 发布归因词表（可观测行 trigger 字段）：entry 批路径透传 refresh trigger，事件派生视图路径恒 'event-projection'。 */
-type RecordPublishSource = RecordRefreshTrigger | 'event-projection'
+/** 发布归因词表（可观测行 trigger 字段）：entry 批路径透传 refresh trigger，事件派生视图路径恒 'event-projection'；异步读入完成路径恒 'async-reconcile'。 */
+type RecordPublishSource = RecordRefreshTrigger | 'event-projection' | 'async-reconcile'
+/** [U3 D3] 异步读入任务形态词表（调度/完成/失败观测行的 kind 字段）。 */
+type AsyncReconcileKind = 'truncate-rebuild' | 'oversize-increment'
 
 /**
  * [RT-4#8] getSubagents/getWorkflows 的读侧结果：records + oversize 降级标志。
@@ -315,6 +348,12 @@ export interface SessionRecordsDeps {
    * 测试注入隔离真实 ~/.zcode 树（缺省会读到宿主真实配置，断言不可控）。
    */
   zcodeModelListPaths?: ZcodeModelListPaths
+  /**
+   * [U3 同步预算 D3] 查询通道核对段的同步预算字节阈值（超阈值增量与截断整建转异步）。
+   * 缺省 = QUERY_SYNC_BUDGET_BYTES（生产常量）；测试注入小阈值即可用 KB 级 fixture
+   * 构造超预算形态（单测缩数据量判据——不构造 MB 级文件）。
+   */
+  querySyncBudgetBytes?: number
   /**
    * [A1 接线] session cwd 查询（subagentAction 的 skill 注入 project 扫描基准，
    * skill-reload-nondestructive D7）——与 SkillRegistry.getSessionCwd 同源（lifecycle
@@ -506,6 +545,17 @@ export class SessionRecords {
    */
   subscribe(source: SessionRegisteredSource): void {
     source.onSessionRegistered((sessionId) => {
+      // [U1 原地重写布防 AS1] 同 id 二次注册 = 会话重开 / 重新附着：pi 侧存在同 id
+      // 原地改写形态（版本迁移重写 _rewriteFile，session-manager.js:719-724，行字节
+      // 变短错位旧游标；同 id 复活整文件替换同族）。持旧游标续读会从错位字节流起读
+      // ——按会话 id 失效对应派生缓存与游标，下轮查询全量重建（与「导入落地失效」
+      // 同族处置；复验防线 = pi 大版本 bump 复验门禁 check-pi-semantics）。
+      const existing = this.recordEntriesCaches.get(sessionId)
+      if (existing !== undefined) {
+        existing.projection?.dispose()
+        existing.projection = null
+        existing.projectionEntryOffset = null
+      }
       // W18：注册 record entry 派生缓存（不播种——首个 entry_appended 失效时全量拉取；
       // 激活后 renderer 的初始列表由 getSubagents/getWorkflows RPC 磁盘扫描承接，同 scan 函数）。
       this.ensureRecordEntriesCache(sessionId)
@@ -633,7 +683,8 @@ export class SessionRecords {
       publishedWorkflows: new Map(),
       publishedPlanState: null,
       projection: null,
-      projectionSourceMtimeMs: null,
+      projectionEntryOffset: null,
+      projectionAsyncRead: null,
       awaitingFirstPull: false,
     }
     this.recordEntriesCaches.set(sessionId, cache)
@@ -665,20 +716,16 @@ export class SessionRecords {
     resolvedMeta?: ScannedSessionMeta,
   ): SessionEventProjection {
     if (cache.projection !== null) {
-      // [查询真理通道失效（F1-51/F1-17）] 命中缓存不等于豁免对账（设计 §3.3.6，ADR-0097
-      // 「查询是真理通道：任何查询必须返回当前真值」）：未激活会话无 journal 推送、无
-      // entry 游标增量，磁盘事实（启动清点补写 / 旧实例跨写 / pi 侧重建路径写入）在
-      // 激活前唯一显形通道 = 查询时与会话文件 mtime 核对，变化即重建。调用方透传扫描
-      // meta 才核对（getSubagents/getWorkflows 等查询通道已 force 扫描，零额外 stat）；
-      // journal 推送 / entry 拉取通道各有自己的事实喂入链，不透传 = 跳过核对。
-      this.rebuildProjectionIfSourceChanged(sessionId, cache, resolvedMeta)
+      // [U1 续读化 D1/D2] 查询通道 size/游标核对（mtime 对账整建退役）：调用方透传
+      // 扫描 meta 才核对（getSubagents/getWorkflows 等查询通道）；journal 推送 / entry
+      // 拉取通道各有自己的事实喂入链，不透传 = 跳过核对。
+      this.reconcileProjectionOnQuery(sessionId, cache, resolvedMeta)
       // [降级闩死修复 2026-10-02；event-push-channel 重演] 事件源迟到升级：创建时
       // meta 不可得（pi flush 前窗口 / 磁盘扫描竞态）建出的目录缺席降级派生视图，推送
       // 对其恒拒（applyJournalReport 目录检查返回 false）——早退永久复用 = fold 通
-      // 道对该 session 终身死亡（「icon 无 agent」形态）。meta 可得后整派生视图重建：
-      // 事件源目录是构造期 readonly 注入，补源 = 换实例（entry 批重放 + attach 冷
-      // 读在新实例重演，fold 从磁盘事实源收敛）。上方 mtime 重建已产出两源齐备实例时
-      // 本路径零成本早退。
+      // 道对该 session 终身死亡（「icon 无 agent」形态）。meta 可得后升级：补源 + 续读
+      // （attachEventSources 原位补目录并重跑 attach 冷读，entry 批与 fold 状态原位
+      // 保留，V8 断言全程无「丢弃实例 + 从头冷读」形态）。
       this.upgradeProjectionEventSources(sessionId, cache)
       return cache.projection
     }
@@ -689,7 +736,12 @@ export class SessionRecords {
     return cache.projection!
   }
 
-  /** 投影构建单点（首建与 mtime 失效重建共用）：换实例语义（事件源目录构造期注入）+ mtime 登记。 */
+  /**
+   * 投影构建单点（[U3 D3] 后 = 首建专用；截断重建走异步整建通道 buildInSegments）：
+   * 换实例语义（事件源目录构造期注入）+ entry 源游标登记。首建冷扫描保持同步全量
+   * （D8 裁决：冷启动全量 fold 观测分布内 ≤ 14ms、每会话重启一次，不预算化——查询
+   * 必须等首建完成才有快照可返回，预算对象是「存量投影的失效收敛」非首建）。
+   */
   private buildProjection(
     sessionId: string,
     cache: RecordEntriesCache,
@@ -702,35 +754,238 @@ export class SessionRecords {
       onProjectionChange: () => this.onEventProjectionChange(sessionId),
     })
     if (meta !== undefined) {
-      const entries = scanRecordFamilyEntriesFromSessionFile(meta.filePath)
-      projection.applyEntryBatch(entries ?? [])
+      const scan = scanRecordFamilyEntriesFromSessionFile(meta.filePath)
+      projection.applyEntryBatch(scan !== null ? scan.entries : [])
+      // 游标登记：null = 未读（v1 巨文件回落——扫描上界外，续读核对不适用该形态）
+      cache.projectionEntryOffset = scan !== null ? scan.nextOffset : null
+    } else {
+      cache.projectionEntryOffset = null
     }
     // attach 前落位：冷启动 attach 的 tail 折叠即时触发 onProjectionChange →
     // onEventProjectionChange 需读到 cache.projection 才能发布首帧
     cache.projection = projection
     projection.attach()
     this.syncCacheFromProjection(cache, projection)
-    cache.projectionSourceMtimeMs =
-      meta !== undefined && typeof meta.lastModified === 'number' ? meta.lastModified : null
   }
 
   /**
-   * 查询通道 mtime 对账（rebuildProjectionIfSourceChanged：ensureProjection 缓存命中
-   * 分支内联）：会话文件 mtime 与建投影时登记值不一致（含降级投影首次对账 null→有值，
-   * 会话文件此间落盘）→ 旧实例 dispose + 重建换新（两源齐备，覆盖迟到升级语义——
-   * 降级期间会话文件已写入的 entry 也随冷读重读，原位补源会漏该批）。mtime 未变走
-   * 缓存；任一侧 mtime 未知（会话不在册 / 扫描 meta 无 lastModified）跳过，交由
-   * 各自事实喂入链收敛。
+   * [U1 续读化] 查询通道核对（D1/D2 size/游标核对；替代退役的 rebuildProjectionIfSourceChanged
+   * mtime 对账整建。mtime 是文件级粗粒度信号——pi 追加任意 entry 必变，与「派生视图内容
+   * 是否变化」无蕴涵关系；append-only 前提下 size 是精确信号：size 不变 = 无新数据）。
+   *
+   * - stat size === 游标 → 零重算；事件域仍独立核对（只动事件目录不动主文件的跨实例
+   *   写盘形态由事件域 readdir 逐文件 size/游标核对捕获，RL2）
+   * - size > 游标（或游标 null 而文件在册 = 首读）→ 续读：增量段在同步预算内（
+   *   QUERY_SYNC_BUDGET_BYTES，[U3 D3]）就地完成——扫描器从游标起扫增量段，
+   *   applyEntryBatch 增量并（同 id 后到覆盖幂等）→ 登记新游标。增量段无 record 族行时
+   *   派生状态零变化（V3 稳态零重算；查询通道本就不触发布链）；超预算（巨量新增
+   *   entry / 大导入）→ 转异步续读，本轮返回当前快照（快照应答）
+   * - size < 游标 → 截断/重写（compaction 重写 / 外部截断）→ 唯一保留整体重建的场景：
+   *   [U3 D3] 后台化——异步整建完成后原子切换（V4），本轮返回当前快照；旧实例在
+   *   在途窗口内持续可读（不 dispose）
+   * - 主文件 >32MB（v1 巨文件形态）→ 跳过核对（查询走 isSessionFileOversize 分流的
+   *   旧格式惰性兼容读路径，oversize 路径不受游标改造影响）
+   * - stat 失败（延迟写入窗口 / 删除竞态——found=false 分形由调用方 scanSessions 承接）
+   *   → 本轮跳过，事实喂入链与下轮查询收敛
    */
-  private rebuildProjectionIfSourceChanged(
+  private reconcileProjectionOnQuery(
     sessionId: string,
     cache: RecordEntriesCache,
     meta: ScannedSessionMeta | undefined,
   ): void {
-    if (meta === undefined || typeof meta.lastModified !== 'number') return
-    if (cache.projectionSourceMtimeMs !== null && cache.projectionSourceMtimeMs === meta.lastModified) return
-    cache.projection?.dispose()
-    this.buildProjection(sessionId, cache, meta)
+    if (meta === undefined || cache.projection === null) return
+    let size: number
+    try {
+      size = statSync(meta.filePath).size
+    } catch {
+      return
+    }
+    if (size > READ_PRECHECK_MAX_BYTES) return
+    const offset = cache.projectionEntryOffset
+    if (offset !== null && size < offset) {
+      // [U3 D3] 截断/重写：整体重建后台化——快照应答 + 异步整建 + 原子切换（V4）
+      this.scheduleAsyncProjectionReconcile(sessionId, cache, meta, size, 'truncate-rebuild')
+      cache.projection.reconcileEventSources()
+      return
+    }
+    if (offset !== null && size === offset) {
+      // 主文件零重算；事件域独立核对（readdir 逐文件 size/游标 + 删档反向分支）
+      cache.projection.reconcileEventSources()
+      return
+    }
+    const budgetBytes = this.deps.querySyncBudgetBytes ?? QUERY_SYNC_BUDGET_BYTES
+    if (size - (offset ?? 0) > budgetBytes) {
+      // [U3 D3] 超预算增量（巨量新增 entry / 大导入）：快照应答 + 异步分片续读
+      this.scheduleAsyncProjectionReconcile(sessionId, cache, meta, size, 'oversize-increment')
+      cache.projection.reconcileEventSources()
+      return
+    }
+    // 预算内：同步续读增量段（offset null = 首读 / 降级投影期主文件补读：从 0 全量）
+    const scan = scanRecordFamilyEntriesFromSessionFile(meta.filePath, offset ?? 0)
+    if (scan === null) return // stat 与读之间增长超界（竞态防御）：游标不动，下轮再核
+    if (scan.truncated) {
+      // 核对窗口内文件被截断（stat 后竞态）：整体重建后台化（同截断分支）
+      this.scheduleAsyncProjectionReconcile(sessionId, cache, meta, size, 'truncate-rebuild')
+      cache.projection.reconcileEventSources()
+      return
+    }
+    cache.projection.applyEntryBatch(scan.entries)
+    cache.projectionEntryOffset = scan.nextOffset
+    cache.projection.reconcileEventSources()
+  }
+
+  /**
+   * [U3 D3] 异步读入任务调度（快照应答的登记点）：超预算增量与截断整建的唯一入口。
+   * 在途任务复用（重入查询不重复调度）；调度即落快照应答观测行（RL10 分布断言的
+   * 采集载体——占比 = 本行频度 / 查询总频度，真机分布归 A1 真机面）。任务自身恒
+   * resolve（失败在内部转 warn），零重试定时器（ADR-0122）。
+   */
+  private scheduleAsyncProjectionReconcile(
+    sessionId: string,
+    cache: RecordEntriesCache,
+    meta: ScannedSessionMeta,
+    size: number,
+    kind: AsyncReconcileKind,
+  ): void {
+    if (cache.projectionAsyncRead !== null) return // 在途复用：重入查询共享同一次读入（检查点：重入语义）
+    const budgetBytes = this.deps.querySyncBudgetBytes ?? QUERY_SYNC_BUDGET_BYTES
+    logger.info('[session-records] query sync budget exceeded — snapshot reply issued, async projection reconcile scheduled', {
+      sessionId,
+      kind,
+      offset: cache.projectionEntryOffset,
+      size,
+      budgetBytes,
+      file: meta.filePath,
+    })
+    const task = kind === 'truncate-rebuild'
+      ? this.runAsyncRebuildTask(sessionId, cache, meta, budgetBytes)
+      : this.runAsyncResumeTask(sessionId, cache, meta, budgetBytes)
+    cache.projectionAsyncRead = task
+    void task.then(() => {
+      if (cache.projectionAsyncRead === task) cache.projectionAsyncRead = null
+    })
+  }
+
+  /**
+   * [U3 D3/V4] 截断整建任务：旁路分片构建全新投影实例（SessionEventProjection.
+   * buildInSegments——构建期发布静默、实例不在 cache 上无观察者），完成后原子切换
+   * （活实例核对 → 换实例 + 游标登记 + 派生缓存同步 → publishRecordChanges 恰一次
+   * 调用——帧数由水位 diff 裁决，同内容零帧即无重复消息）。
+   *
+   * 切换前活实例核对（U1 布防竞态的承接）：同 id 二次注册布防 / 其他换实例路径在
+   * 在途窗口内动过 cache.projection → 本任务作废（丢弃新实例，不切换）——布防语义
+   * 「下轮查询全量重建」由下一轮核对重新调度兑现。
+   */
+  private async runAsyncRebuildTask(
+    sessionId: string,
+    cache: RecordEntriesCache,
+    meta: ScannedSessionMeta,
+    budgetBytes: number,
+  ): Promise<void> {
+    const startedAt = Date.now()
+    const activeAtSchedule = cache.projection
+    try {
+      const { promise } = SessionEventProjection.buildInSegments({
+        sessionId,
+        recordsDir: getSubagentRecordsDir(sessionId, getConfigDir()),
+        runJournalDir: resolvePiWorkflowRunsDir(sessionId, getConfigDir()),
+        sessionFilePath: meta.filePath,
+        segmentBudgetBytes: budgetBytes,
+        onProjectionChange: () => this.onEventProjectionChange(sessionId),
+      })
+      const built = await promise
+      if (this.recordEntriesCaches.get(sessionId) !== cache || cache.projection !== activeAtSchedule) {
+        // 缓存已销毁重建 / 活实例已被布防或首建路径换掉：本任务作废
+        built.projection.dispose()
+        logger.info('[session-records] async projection rebuild discarded (cache identity changed during build)', { sessionId, kind: 'truncate-rebuild' })
+        return
+      }
+      const previous = cache.projection
+      cache.projection = built.projection
+      cache.projectionEntryOffset = built.entryOffset
+      previous?.dispose()
+      this.syncCacheFromProjection(cache, built.projection)
+      if (!this.deps.hasSession(sessionId)) return // 已销毁：fold 已切换但不 publish（与 entry 路径同一检查）
+      this.publishRecordChanges(cache, sessionId, 'async-reconcile')
+      logger.info('[session-records] async projection rebuild completed (atomic switch)', {
+        sessionId,
+        kind: 'truncate-rebuild',
+        convergeMs: Date.now() - startedAt,
+        entryOffset: built.entryOffset,
+      })
+    } catch (e) {
+      this.warnAsyncReconcileFailed(sessionId, 'truncate-rebuild', meta.filePath, e)
+    }
+  }
+
+  /**
+   * [U3 D3/RL3] 超预算续读任务：分片扫描累积（读侧切片让出事件循环，语义上仍一次
+   * 增量批），完成后一次性 applyEntryBatch + 游标登记 + 事件域核对 + publishRecordChanges
+   * 恰一次——「原子切换」在续读形态 = 单次批应用 + 单次发布（无中间态外露，V4 无半态）。
+   *
+   * 中止形态（游标不动、结果丢弃，下一轮核对重新判定）：任务执行期间文件被截断
+   * （aborted-truncated → 下轮判截断调度整建）/ 读侧超扫描上界（aborted-oversize →
+   * 下轮走 oversize 跳过核对门）。活实例核对同整建任务（布防/换实例 → 作废）。
+   */
+  private async runAsyncResumeTask(
+    sessionId: string,
+    cache: RecordEntriesCache,
+    meta: ScannedSessionMeta,
+    budgetBytes: number,
+  ): Promise<void> {
+    const startedAt = Date.now()
+    const activeAtSchedule = cache.projection
+    const startOffset = cache.projectionEntryOffset
+    try {
+      const entries: unknown[] = []
+      let nextOffset = startOffset ?? 0
+      let aborted: 'truncated' | 'oversize' | null = null
+      for await (const scan of scanRecordFamilyInSegments(meta.filePath, nextOffset, budgetBytes)) {
+        if (scan === null) { aborted = 'oversize'; break }
+        for (const entry of scan.entries) entries.push(entry)
+        nextOffset = scan.nextOffset
+        if (scan.truncated) { aborted = 'truncated'; break }
+        if (!scan.hasMore) break
+      }
+      if (aborted !== null) {
+        logger.info('[session-records] async projection resume aborted (source shape changed during read; next reconcile re-judges)', {
+          sessionId, kind: 'oversize-increment', aborted, file: meta.filePath,
+        })
+        return
+      }
+      if (this.recordEntriesCaches.get(sessionId) !== cache || cache.projection !== activeAtSchedule || cache.projectionEntryOffset !== startOffset) {
+        logger.info('[session-records] async projection resume discarded (cache identity changed during read)', { sessionId, kind: 'oversize-increment' })
+        return
+      }
+      const projection = cache.projection
+      if (projection === null) return
+      projection.applyEntryBatch(entries)
+      cache.projectionEntryOffset = nextOffset
+      projection.reconcileEventSources()
+      this.syncCacheFromProjection(cache, projection)
+      if (!this.deps.hasSession(sessionId)) return // 已销毁：fold 已应用但不 publish（与 entry 路径同一检查）
+      this.publishRecordChanges(cache, sessionId, 'async-reconcile')
+      logger.info('[session-records] async projection resume completed (atomic batch apply)', {
+        sessionId,
+        kind: 'oversize-increment',
+        convergeMs: Date.now() - startedAt,
+        entryOffset: nextOffset,
+      })
+    } catch (e) {
+      this.warnAsyncReconcileFailed(sessionId, 'oversize-increment', meta.filePath, e)
+    }
+  }
+
+  /**
+   * [U3 D3/V6/RL6] 异步读入失败显形（一条 warn，含文件与恢复指引语义）：零重试
+   * 定时器（ADR-0122 事实驱动）——游标不动、快照保留，恢复路径 = 下一次查询的
+   * size/游标核对重新调度读入（收敛由事实触发，不由时间触发）。
+   */
+  private warnAsyncReconcileFailed(sessionId: string, kind: AsyncReconcileKind, filePath: string, e: unknown): void {
+    logger.warn(
+      '[session-records] async projection reconcile failed — snapshot retained, no retry timer registered; recovery: the next query re-runs the size/offset reconcile on this file and reschedules the read',
+      { sessionId, kind, file: filePath, error: toErrorMessage(e) },
+    )
   }
 
   /**
@@ -1179,7 +1434,7 @@ export class SessionRecords {
       }
     }
     const cache = this.ensureRecordEntriesCache(sessionId)
-    // target 透传 = mtime 对账素材（查询是真理通道，见 ensureProjection 注释）
+    // target 透传 = 查询核对素材（[U1 续读化] size/游标核对，见 ensureProjection 注释）
     const projection = this.ensureProjection(sessionId, cache, target)
     return {
       records: this.enhanceSubagentDetails(
@@ -1400,7 +1655,7 @@ export class SessionRecords {
       return { records, oversize, found: true }
     }
     const cache = this.ensureRecordEntriesCache(sessionId)
-    // target 透传 = mtime 对账素材（同 getSubagents，查询是真理通道）
+    // target 透传 = 查询核对素材（[U1 续读化] size/游标核对，同 getSubagents，查询是真理通道）
     const projection = this.ensureProjection(sessionId, cache, target)
     // run 详情载荷增强（subagent-model-switch §9 transport 行）：run 级覆盖查询 +
     // 逐成员携带（最近生效值源 = 成员 SubagentRecord 的增强产物——先经
@@ -1503,7 +1758,7 @@ export class SessionRecords {
     const target = this.deps.sessionStore.scanSessions({ force: true }).find((s) => s.id === sessionId)
     if (!target) return undefined
     const cache = this.ensureRecordEntriesCache(sessionId)
-    // target 透传 = mtime 对账素材（同 getSubagents，查询是真理通道）
+    // target 透传 = 查询核对素材（[U1 续读化] size/游标核对，同 getSubagents，查询是真理通道）
     const projection = this.ensureProjection(sessionId, cache, target)
     return projection.sources.v2WorkflowRegistered.get(runId)?.recordPath
   }
