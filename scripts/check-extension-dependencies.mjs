@@ -11,11 +11,13 @@
  *    （name 字段与 package.json.name 精确一致，防改名/误删/错目录）
  * 2. 反向：extensions/{taiji,universal}/ 下每个 @zhushanwen/pi-* 包
  *    必须出现在文件中，directory 与磁盘目录一致
- * 3. 引用（双向）：正向——dependsOn.package 为 workspace 内包（@zhushanwen/pi-* /
+ * 3. 引用（三向）：①解析——dependsOn.package 为 workspace 内包（@zhushanwen/pi-* /
  *    @taiji/*）时必须可解析（条目、extensions/shared/ 下包、或 packages/ 下包），
- *    防悬空引用；反向——包 package.json dependencies/peerDependencies 声明的
+ *    防悬空引用；②登记——包 package.json dependencies/peerDependencies 声明的
  *    @zhushanwen/* / @taiji/* 包必须登记进该条目 dependsOn，防漏登记
- *    （ADR-0096/C-ext-30 依赖登记方向机器防线）
+ *    （ADR-0096/C-ext-30 依赖登记方向机器防线）；③仍声明——type=package 的
+ *    登记必须仍在该包 package.json 的 dependencies/peerDependencies 中，防依赖
+ *    在 package.json 侧删除后登记单向静默留存（见 3c）
  * 4. 分组：包必须在 taiji/（taiji 集成）或 universal/（独立通用）分组下；
  *    package.json 的 taiji.role 必须与所在分组一致；role=taiji 的包必须在
  *    mandatory-extensions.json（taiji 集成包随应用打包，见 docs/extensions/extension-conventions.md）
@@ -145,6 +147,35 @@ for (const pkg of reverseCheckTargets) {
   for (const dep of declared) {
     if (!registered.has(dep)) {
       fail(`包 ${pkg.name} 的 package.json 依赖 ${dep} 未登记进该条目 dependsOn（依赖漏登记，见 docs/extensions/extension-conventions.md「Extension 依赖管理」）`)
+    }
+  }
+}
+
+// ── 3c. 反向：登记 → 仍声明（type=package 的 dependsOn 必须仍在 package.json 声明）──
+// 3b 只防「声明了不登记」，防不了「登记了但 package.json 已不再声明」——依赖在
+// package.json 侧删除后（重构收敛、依赖搬迁），登记条目无人拦截地静默留存，
+// extension-dependencies.json 与磁盘事实单向漂移（scheduler 的
+// @zhushanwen/pi-session-path 即此形态：backend.ts 的该 import 与 package.json
+// dependencies 同删，登记及其 reason 仍指原状）。故对 type=package 的登记补
+// 「仍声明」校验，与 3b 合成声明 ↔ 登记的双向闭环。
+//
+// 只覆盖 type=package：runtime 型登记本就「代码层零 import、不体现于
+// package.json」，optional 型允许纯运行时协作（ask-user ↔ subagent-workflow 的
+// globalThis 握手、goal → todo 的 prompt 软建议）——两者不声明即合法形态，纳入
+// 本检查会误报（见 docs/extensions/extension-conventions.md「Extension 依赖管理」
+// 类型表的「在 package.json 中体现」列）。
+for (const entry of entries) {
+  const pkgFile = join(ROOT, entry.directory, 'package.json')
+  if (!existsSync(pkgFile)) continue // 条目 → 磁盘的不一致已由检查项 1 报过
+  const pkg = JSON.parse(readFileSync(pkgFile, 'utf-8'))
+  const declared = new Set([
+    ...Object.keys(pkg.dependencies ?? {}),
+    ...Object.keys(pkg.peerDependencies ?? {}),
+  ])
+  for (const dep of entry.dependsOn ?? []) {
+    if (dep.type !== 'package') continue
+    if (!declared.has(dep.package)) {
+      fail(`条目 ${entry.name} 登记（type=package）的 ${dep.package} 已不在 ${entry.directory}/package.json 的 dependencies/peerDependencies 中声明（登记残留：package.json 侧依赖已删除，登记需同步删除，见 docs/extensions/extension-conventions.md「Extension 依赖管理」）`)
     }
   }
 }

@@ -246,7 +246,7 @@
         {
           "package": "@zhushanwen/pi-ext-guards",
           "type": "package",
-          "reason": "代码层静态 import guardStaleCtx/isEnoentError/toErrorMessage（src/runtime.ts、replay.ts、service.ts、importer.ts、index.ts top-level import），缺失时模块加载即抛 Cannot find module，是强依赖"
+          "reason": "代码层静态 import guardStaleCtx（src/runtime.ts top-level import）与 toErrorMessage（src/commands.ts、src/interaction.ts、src/service.ts、src/runtime.ts、src/index.ts top-level import），缺失时模块加载即抛 Cannot find module，是强依赖"
         },
         {
           "package": "@zhushanwen/extension-protocol",
@@ -261,12 +261,7 @@
         {
           "package": "@zhushanwen/pi-extension-logger",
           "type": "package",
-          "reason": "代码层静态 import getLogger（src/ack-provider.ts、src/replay.ts、src/runtime.ts 等 top-level import），缺失时模块加载即抛 Cannot find module，是强依赖"
-        },
-        {
-          "package": "@zhushanwen/pi-session-path",
-          "type": "package",
-          "reason": "代码层静态 import filterActivePath（src/backend.ts top-level import，活跃路径裁剪单一实现——todo/plan/goal/scheduler 四包同构副本收编于该共享库），缺失时模块加载即抛 Cannot find module，是强依赖"
+          "reason": "代码层静态 import getLogger（src/interaction.ts、src/runtime.ts、src/index.ts、src/backend.ts top-level import），缺失时模块加载即抛 Cannot find module，是强依赖"
         },
         {
           "package": "@zhushanwen/pi-delivery-port",
