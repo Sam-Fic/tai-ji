@@ -2451,6 +2451,38 @@ describe('scanRecordFamilyEntriesFromSessionFile 续读（startOffset 参数化�
     expect(rescanned.entries).toHaveLength(0)
   })
 
+  it('EOF 无尾随换行的完整末行：可整体解析即消费，游标推进到 EOF（零重算稳定态）', async () => {
+    const { statSync } = await import('node:fs')
+    const filePath = join(dir, 'session.jsonl')
+    const fullLine = JSON.stringify(subagentRegisteredEntry('sa-1')) + '\n'
+    const tailLine = JSON.stringify(subagentSettledEntry('sa-1')) // 恰无尾随换行的完整行
+    writeFileSync(filePath, fullLine + tailLine)
+    const scan = scanRecordFamilyEntriesFromSessionFile(filePath)!
+    expect(scan.entries).toHaveLength(2)
+    expect((scan.entries[1] as { data?: { kind?: string } }).data?.kind).toBe('settled')
+    expect(scan.nextOffset).toBe(statSync(filePath).size)
+  })
+
+  it('EOF 半行（写者并发观测窗口）：不消费、游标停残行起点（恒行边界）；追加完成后下轮续读拼齐收全', async () => {
+    const { statSync } = await import('node:fs')
+    const filePath = join(dir, 'session.jsonl')
+    const fullLine = JSON.stringify(subagentRegisteredEntry('sa-1')) + '\n'
+    // 字节级截半（截断点可能落在多字节字符中间——toString 往返会吞字节，直接持 Buffer 追加）
+    const tailBytes = Buffer.from(JSON.stringify(subagentSettledEntry('sa-1')) + '\n', 'utf8')
+    const half = tailBytes.subarray(0, Math.floor(tailBytes.length / 2))
+    writeFileSync(filePath, fullLine)
+    appendFileSync(filePath, half)
+    const scan = scanRecordFamilyEntriesFromSessionFile(filePath)!
+    expect(scan.entries).toHaveLength(1) // 半行不计入（等拼齐）
+    expect(scan.nextOffset).toBe(fullLine.length) // 游标停残行起点 = 上一行边界，恒行边界
+    // 写者补完剩余字节 → 续读从残行起点拼齐整行收全
+    appendFileSync(filePath, tailBytes.subarray(half.length))
+    const resume = scanRecordFamilyEntriesFromSessionFile(filePath, scan.nextOffset)!
+    expect(resume.entries).toHaveLength(1)
+    expect((resume.entries[0] as { data?: { kind?: string } }).data?.kind).toBe('settled')
+    expect(resume.nextOffset).toBe(statSync(filePath).size)
+  })
+
   it('续读窗口文件缺失 → 空条目且游标原地不动（不归零——重写后文件不得被当增量续读）', () => {
     const filePath = join(dir, 'session.jsonl')
     writeFileSync(filePath, sessionLine(subagentRegisteredEntry('sa-1')))

@@ -11,7 +11,7 @@
  *   派生视图——entry 游标 + 事件 tail 双源单点合并，见 events-projection.ts；v1 巨文件
  *   会话 oversize 分流走旧格式惰性兼容读路径）、getPlanState（[U5 / D6] 与前两者同一
  *   续读链读 cache.planState——plan 派生挂点 = buildProjection 首建 / 续读核对 /
- *   异步续读 / 截断整建四处，独立全文解析已退役）、
+ *   异步续读 / 截断整建 / applyRecordEntries live entry 拉取五处，独立全文解析已退役）、
  *   getSubagentHistory/getAgentCall*（record.sessionFile 直读）、
  *   workflowAction/subagentAction（经扩展 slash command 的生命周期/定向消息操作）、
  *   U7 引擎配置方法族（engines.json/config.json 读写；D5 扩 per-engine 默认模型）。
@@ -1299,11 +1299,10 @@ export class SessionRecords {
 
     if (subagentsDifferFromPublished(cache.subagents, cache.publishedSubagents)) {
       // 覆盖查询定位锚一次解析透传（SessionMetaRef）：原逐 record 查询各扫一遍全目录
-      // → 整帧一次；解析结果仅本帧内使用，不回写缓存。
-      const target = this.deps.sessionStore.scanSessions({ force: true }).find((s) => s.id === sessionId)
-      const resolved: SessionMetaRef | undefined = target !== undefined
-        ? { cwd: target.cwd, filePath: target.filePath }
-        : undefined
+      // → 整帧一次；解析结果仅本帧内使用，不回写缓存。定位走 resolveQuerySessionRef
+      // 直查单点（[U2 D5] 与查询路径同一锚——登记表/缓存反查/force 仅 miss 回退），
+      // subagents 水位差异帧不再触发全目录 force 扫描。
+      const resolved: SessionMetaRef | undefined = this.resolveQuerySessionRef(sessionId)
       bus.publish(sessionId, {
         type: 'session.subagents',
         // 详情载荷增强（覆盖状态 + 最近生效值）在帧构造点施放——派生缓存（cache.subagents）
@@ -1799,7 +1798,8 @@ export class SessionRecords {
    * （直查定位 → oversize 分流 → ensureRecordEntriesCache → ensureProjection size/游标
    * 核对与续读），plan 状态读 cache.planState——与 live planState 同一数据源、同一派生落点
    * （mergePlanState 单源，喂数挂点见 buildProjection / reconcileProjectionOnQuery /
-   * runAsyncResumeTask / runAsyncRebuildTask）。冷启动查询成本 = 首建冷扫描（流式，观测
+   * runAsyncResumeTask / runAsyncRebuildTask / applyRecordEntries——末者为 live
+   * get_entries 拉取路径的喂数点，live 通道本就必须喂 plan）。冷启动查询成本 = 首建冷扫描（流式，观测
    * 分布内 ≤ 14ms，D8）+ 此后续读核对，独立全文解析已退役（V7：无全文件 readFileSync）。
    *
    * 文件不存在、无 plan-state entry 等「从未进过 plan」形态归一为「未激活」缺省 View

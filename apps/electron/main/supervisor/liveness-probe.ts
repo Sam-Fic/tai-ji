@@ -123,8 +123,12 @@ export async function checkHealthEndpoint(port: number): Promise<HealthProbeResu
       // 事件循环滞后遥测透出：健康应答体读 eventLoopLag 可选字段（runtime 基线
       // 应答体不携带，供给端现状见 EventLoopLagTelemetry 头注）。
       // 读体失败（非 JSON / 无 json 通道 / 流中断）按无遥测处理——探针判定只看响应
-      // 状态，遥测缺席不影响 ok 语义；读体超时由同一 AbortSignal 覆盖。
-      const body: unknown = await response.json().catch(() => undefined)
+      // 状态，遥测缺席不影响 ok 语义；读体超时由同一 AbortSignal 覆盖。读体调用本身
+      // 兜底在 Promise 链内（response.json 通道缺席时同步抛错不得翻转 ok——fetch stub
+      // 形态见 supervisor-health-liveness 测试）。
+      const body: unknown = await Promise.resolve()
+        .then(() => response.json())
+        .catch(() => undefined)
       return { ok: true, ms: Date.now() - startedAt, eventLoopLag: extractEventLoopLag(body) }
     }
     return { ok: false }
@@ -155,7 +159,7 @@ export interface LivenessMonitorOptions {
  * - 探测失败 → 计数 +1，达阈值时触发 onUnhealthy 回调并清零（避免一次卡死多次触发）
  *
  * [HISTORICAL] 用 setInterval 而非递归 setTimeout：
- *   间隔固定（30s），不受上次探测耗时影响（探测快则下次仍等满 30s）。
+ *   间隔固定（LIVENESS_INTERVAL_MS），不受上次探测耗时影响（探测快则下次仍等满间隔）。
  *   单次探测不会重入（fetch 不会卡到下一次 tick——即便卡住，onUnhealthy 也只触发一次）。
  */
 export class LivenessMonitor {

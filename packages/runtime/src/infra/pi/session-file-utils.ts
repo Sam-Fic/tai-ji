@@ -603,8 +603,9 @@ function findLastEntryField<R>(
  *   靠，warn 后不裁剪（computeActivePathEntries 的投影语义会静默滤掉无 id 条目，对字段
  *   提取 = 丢数据）。
  *
- * 消费方：extractLatestModelFromJsonl（model binding 随树腿）、plan-state-extractor
- * extractPlanStateFromSessionFile（冷启动腿）。增量/窗口切片语义（链在集合边界终止是正常
+ * 消费方：extractLatestModelFromJsonl（model binding 随树腿）；plan 冷启动已并入统一
+ * 续读链（scanPlanStateEntries 派生，见 plan-state-extractor.ts 头注——独立全文解析
+ * extractPlanStateFromSessionFile 已随 U5/D6 退役，不再消费本函数）。增量/窗口切片语义（链在集合边界终止是正常
  * 边界）由 computeActivePathEntries 契约承载——窗口内活跃链 = 真活跃路径的后缀切片，
  * 逆扫命中语义不损失。
  */
@@ -1097,10 +1098,13 @@ function scanSessionMeta(filePath: string, degraded?: ScanDegradedStats): Scanne
  * 列表（pi 延迟写入：user/assistant 首消息后才落盘——pi 1.0.0 起 user 首消息即建文件，
  * 但 flush 前列表仍无法发现，TTL 过期即重扫）。
  *
- * 正确性敏感的**单 session 路径解析消费方**（getHistoryTailFromFile / getSubagentHistory /
- * getSubagents / getWorkflows / findScannedSession 等）必须传 force 旁路——pi 是外部进程
+ * 正确性敏感的**单 session 路径解析消费方**（getHistoryTailFromFile / findScannedSession /
+ * findScannedSessionFileById 等）必须传 force 旁路——pi 是外部进程
  * 写文件，不在显式失效覆盖内，若走 TTL 缓存，刚落盘 session 的查找会在窗口内静默返回
- * 空（05-scan-caching D9-1 审查修正，plan M-3）。
+ * 空（05-scan-caching D9-1 审查修正，plan M-3）。[U2 路径解析单点直查 D5]
+ * getSubagents / getWorkflows / getPlanState 查询路径已改 resolveQuerySessionRef 直查单点
+ * （登记表 → meta 缓存反查、force 仅 miss 回退兜底），getSubagentHistory 经 getSubagents
+ * 间接定位——均不再每次传 force。
  */
 export const SCAN_DIR_TTL_MS = 1000
 

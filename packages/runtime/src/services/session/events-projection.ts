@@ -1,6 +1,6 @@
 /**
  * 事件投影（event-push-channel：runtime 读侧实时性载体 = journal 写入方推送，
- * 文件只做恢复读——ADR-0112「活状态走订阅推送、存储只做恢复源」）。
+ * 文件只做恢复读——ADR-0122「活状态走订阅推送，存储只做恢复源」）。
  *
  * 双源单点合并（设计 w1-run-record-journal-authority §3.1 环节 B / §3.3 D6）：
  * - entry 源：主 session 条目（v2 注册/终态两条小条目）——
@@ -15,7 +15,7 @@
  *      旁路 → journal-report-router → applyJournalReport 喂入。per 文件持两个水位
  *      （字节偏移 = 补读起点、已折叠最大 seq = 去重判据——域 fold 的 seq 单调守卫
  *      构造性幂等）；报告内最小带 seq 事件 > 水位 + 1 = 缺口 → 以 readEventTail 从
- *      字节偏移本地补读到文件尾（拉取通道，ADR-0112 保留白名单「事件驱动的对账与
+ *      字节偏移本地补读到文件尾（拉取通道，ADR-0122 保留白名单「事件驱动的对账与
  *      拉取通道」）；无 seq 存量行不参与缺口判定（设计 §3.3 兼容条款）。run 域 fold
  *      自 [W2 D7] 起单源 core run-events foldRunEventCheckpoint（状态机检查点 +
  *      投影骨架 created/asks/runSettled 一体产出），runtime 不再自建 fold。

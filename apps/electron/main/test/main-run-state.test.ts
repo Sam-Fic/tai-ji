@@ -13,6 +13,9 @@
  * - **可信度判定真值表**：unclean → 可信（留给新 runtime 的 reattach 编排）；clean exit +
  *   残留 → 忽略 + 隔离（rename 进失败现场家族，保留 3 份）+ 记 reattach-skipped（进程内
  *   一次）；无残留 → no-checkpoint。
+ * - **RL5 判死处置降粒度（projection-consistency D4）**：判死处置 scope='process-only'
+ *   （杀目标集不含 pi PID、树枚举/树杀工具零调用）、重启链走通（退避后新 runtime 已
+ *   spawn = reattach 机制前提）、判死决策日志 eventLoopLag 留档（显式 null + 来源标记）。
  *
  * 装置说明：main.ts 顶层副作用重（import electron + 子系统初始化 + 单实例锁），本测试
  * 以最小 mock 集（electron / 重启动子系统 / 运行态依赖）import 真实 main.ts——**被测的是

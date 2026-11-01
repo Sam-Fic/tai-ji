@@ -9,6 +9,11 @@
  * - workflow-viz-projection.test.ts
  * - session-records-workflow-signal-gate.test.ts
  *
+ * 覆盖族（projection-consistency 交付）：事件目录独立核对（[U1 RL2] readdir 逐文件
+ * size/游标比对 + 读错分通道负判定）、同步预算与异步读入（[U3 D3] 快照应答 + 原子
+ * 收敛 + 信号恰一次 + 失败显形 + RL10 观测字段）、scanRecordFamilyInSegments 分片
+ * 节奏（[U3] 软预算行边界停 + 字节级行界）。
+ *
  * 运行：cd packages/runtime && TAIJI_SKIP_REAL_PI=1 npx vitest run src/services/session/__tests__/session-records-projection.test.ts
  */
 

@@ -124,7 +124,8 @@ export interface RecordFamilyScanResult {
   entries: unknown[]
   /**
    * 扫描到达的字节偏移（下一轮续读起点，恒落在完整行边界——末段无尾随换行的残行
-   * 不计入，等下次拼齐）。append-only 前提下游标只经实际读取推进，size 与游标相等
+   * 不计入，等下次拼齐；恰无尾随换行的完整末行例外：可整体解析即消费，游标推进到
+   * EOF）。append-only 前提下游标只经实际读取推进，size 与游标相等
    * 即「已读到文件尾」（零重算核对判据，见 session-records 续读核对）。
    */
   nextOffset: number
@@ -224,7 +225,25 @@ export function scanRecordFamilyEntriesFromSessionFile(
       pending.copy(pending, 0, lastNewline + 1, pendingLen)
       pendingLen = restLen
     }
-    collectRecordFamilyLine(filePath, pending.toString('utf8', 0, pendingLen), entries) // 末段（无尾随换行的最后一行）
+    // 末段（无尾随换行）：仅当残行可整体解析为完整行（截断点恰在行尾、只缺换行符）
+    // 才消费并把游标推进到 EOF（完整末行的零重算稳定态）；解析失败 = 并发观测到的
+    // 半行，不消费、游标停在残行起点（= 最后一个换行之后，仍是行边界），下次续读
+    // 拼齐——半行其余字节若落在游标之后会被当独立行解析失败跳过（entry 静默丢失面），
+    // 「恒落行边界」的接口语义由此在 EOF 路径成立（分片停点路径同款语义）。
+    if (pendingLen > 0) {
+      const tail = pending.toString('utf8', 0, pendingLen)
+      let tailIsCompleteLine = false
+      try {
+        JSON.parse(tail)
+        tailIsCompleteLine = true
+      } catch {
+        tailIsCompleteLine = false
+      }
+      if (!tailIsCompleteLine) {
+        return { entries, nextOffset: position - pendingLen, truncated: false }
+      }
+      collectRecordFamilyLine(filePath, tail, entries)
+    }
     return { entries, nextOffset: position, truncated: false }
   } finally {
     closeSync(fd)

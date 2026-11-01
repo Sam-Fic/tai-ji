@@ -4,8 +4,8 @@
  *
  * `scanPlanStateEntries(entries)` 是 plan 状态唯一派生函数，也是唯一读入口的数据源：
  * 实时（SessionRecords get_entries 拉取批）与冷启动（[U5 plan 冷路径归一 D6] 续读链扫描
- * 产出——buildProjection 首建 / 续读核对增量 / 异步续读 / 截断整建四挂点，见
- * session-records.ts）共用同一份代码——live ≡ reload 由「派生代码唯一 + 读路径归一」
+ * 产出——buildProjection 首建 / 续读核对增量 / 异步续读 / 截断整建 / applyRecordEntries
+ * live 拉取五挂点，见 session-records.ts）共用同一份代码——live ≡ reload 由「派生代码唯一 + 读路径归一」
  * 构造性保证（session-records.ts:64-79 同款「数据写路径唯一 = entry 扫描」不变量；
  * 独立全文读路径已随 D6 退役——getPlanState 不再独立解析文件，与 getSubagents/getWorkflows
  * 同走统一续读链）。

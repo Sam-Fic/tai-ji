@@ -9,6 +9,12 @@
  * - fake timers（项目规范）：SCALAR_STATE_DEBOUNCE_MS 防抖由 advanceTimersByTimeAsync 推进。
  * - 引擎配置组：vi.mock pi-paths 的 getPiAgentDir 指向 per-test 临时目录（其余导出
  *   importOriginal 保留），withFileLockSync/atomicWrite 真实执行。
+ *
+ * 覆盖族（projection-consistency 交付）：磁盘读侧（extractor 真实执行 + oversize 分流）、
+ * plan-state 派生（live 派生 + [U5 D6] getPlanState 冷路径归一续读链：冷热同源、缺省
+ * View、EISDIR 读错误契约）、[W1 D6] 读侧换源（磁盘 entry-only 派生视图 / v2 读派生
+ * 视图 / 全文路径不调用）、查询真理通道（未激活会话投影 size/游标续读核对、mtime-only
+ * 变化不重建、事件目录反向删档分支）。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { appendFileSync, mkdtempSync, writeFileSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, truncateSync } from 'node:fs'
@@ -1645,6 +1651,24 @@ describe('plan-state 派生视图（D1③④）', () => {
       requirement: null,
       templateName: null,
     })
+  })
+
+  // 读错误契约（原 extractPlanStateFromSessionFile 的 EISDIR/ENAMETOOLONG 两用例随函数
+  // 退役删除；归一后 getPlanState 与列表族共享同一条续读链，本契约属三查询共享路径的
+  // 契约面）：非 ENOENT 读错误不吞、不与「从未进过 plan」缺省 View 混淆——
+  // RPC 层据此走错误 envelope，renderer 不把读失败误判为 plan 未激活。
+  it('[U5 D6] 冷路径 getPlanState：文件形态为目录（EISDIR）→ 读错误原样上抛，与缺省 View 可区分', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'session-records-plan-eisdir-'))
+    const dirAsFile = join(dir, 'not-a-file')
+    mkdirSync(dirAsFile)
+    try {
+      const { records } = makeRecords({
+        sessionStore: { scanSessions: vi.fn(() => [{ id: 's1', filePath: dirAsFile }]) } as unknown as ISessionStore,
+      })
+      await expect(records.getPlanState('s1')).rejects.toThrow()
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
   })
 
   // [MF-1 回归] JSONL append-only 下 entry 不会消失，增量批（cursor delta）的
