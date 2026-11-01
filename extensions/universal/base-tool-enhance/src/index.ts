@@ -37,6 +37,7 @@ import { reconcilePendingEntries } from "./background/pending-reconcile.ts";
 import { resolveTaijiDataDir } from "./background/registry.ts";
 import { setOnTaskExit } from "./background/exit-collector.ts";
 import { setupToolErrorAudit } from "./tool-error-audit.ts";
+import { registerUserBashInterceptor } from "./user-bash-interceptor.ts";
 
 const logger = getLogger("base-tool-enhance");
 
@@ -56,6 +57,10 @@ export default function baseToolEnhanceExtension(pi: ExtensionAPI): void {
 	pi.registerTool(createBashKillToolDefinition());
 	// 进程级收殓（D12）：只认 process 信号/退出，绝不在 session_shutdown / dispose 路径
 	installProcessExitGuard();
+	// `!` 命令 user_bash 拦截（completion-signal-delivery M2 / U2，D3/D4）：extension
+	// load 时注册（事件每次 bash RPC 都发，handler 内部按包装格判定分流，fail-open
+	// 返回 undefined 走官方执行）；转后台登记链同进程可达（task-store 模块级单例）
+	registerUserBashInterceptor(pi);
 	// unified-hooks 退役承接：工具报错审计（D11 落点）
 	setupToolErrorAudit(pi);
 	// pending 对账（M3）：任意 session 启动触发（startup/reload/new/resume/fork 全
