@@ -631,6 +631,41 @@ git -C <barePath> for-each-ref --format='%(refname)' refs/remotes/origin | xargs
 **强杀取证产物（sample 调用栈存档）**：强杀执行前 macOS `sample <pid> 2` 采样 2 秒调用栈，落会话存储树 logs 域 `<数据目录>/ext-sessions/<sessionId>/logs/stall-sample-<时间戳>.txt`；非 macOS 跳过留痕，取证失败不阻断强杀。生命周期 = 随会话删除整树自动回收（ADR-0151 整树软删），无独立保留期——排查历史停滞时产物是否还在取决于会话是否还活着。
 
 **handoff 取消链残留无界悬挂（显式豁免出口）**：交接（handoff，把当前会话交接给新会话的编排）进行中点取消，取消经 `HandoffService.abortHandoff`（packages/runtime/src/services/handoff-service.ts:372）直连 pi client.abort，不经 message-dispatcher 的 abort 升级窗——pi 挂死时该取消无限悬挂（catch 只覆盖显式失败，不覆盖悬挂），且无自动强杀出口。此出口是停止升级链设计（pi-stall-detection D2① 裁决 ⑤）的显式豁免，射程仅此一条路径。判定特征：交接中取消后 handingOff 占用不复位、停止无回执、其余停止入口（升级链覆盖的）正常。手动恢复：侧栏右键强制退出该会话（走强杀编排，不经挂死的 abort 通道），或重启应用。治理登记 = [docs/todo/handoff-abort-hang.md](todo/handoff-abort-hang.md)；生产出现经该出口的悬挂事故（本小节命中）即治理条目登记的重审触发条件之一。
+
+### 43. mock pi 置换点并行争用：验收实例互踩产生假红假绿（pi-stall-detection D3 验收登记，2026-11）
+
+**形态**：verify-taiji §1.3 mock pi 置换（文件级替换 runtime 解析的 pi 可执行文件）在多验收节点并行时互踩——本实例 spawn 到的 pi 是他人 mock 实例（行为断言对不上本剧本 = 假红），或他人实例的请求打进本 mock 的记录（轮次被污染 = 假绿）。置换点 = `<repo>/apps/electron/resources/pi/pi-<platform>-<arch>`，同一 worktree 内单点。
+
+**判定**（三锚全过才采信本实例证据）：
+
+```bash
+ps eww -p <piPid> | tr ' ' '\n' | grep PI_CODING_AGENT_DIR   # 环境锚：运行中 pi 的数据目录须含本实例 dataDir，否则进程归属错
+# mock 请求记录（REQ_LOG 类）逐 pid 对照：出现陌生 pid = 他人实例打过本置换位
+ls -l <repo>/apps/electron/resources/pi/pi-<platform>-<arch> # 置换位形态：mock 在位 / 真 pi 已复原（关键断言时点前后各核一次）
+```
+
+**恢复**：注入类验收（持有 pi 置换位的）在共享同一 worktree 的节点间串行化——一次只允许一个节点置换，其余轮询等空窗；窗口收尾按 verify-taiji §1.3 三核对恢复（备份复原 / `--version` 真实版本 / `ls -l` 形态）并清理各自的 mock 进程与备份文件。
+
+### 44. mock pi 必须写合法 session 文件：恢复链验收的前置契约（pi-stall-detection D3 验收登记，2026-11）
+
+**形态**：mock pi 场景中判死强杀后的自动恢复链报 `Persisted session not found — 该会话无已保存内容`，恢复重试耗尽后降级死亡发声——恢复段断言全红。这是 mock 构造缺陷而非产品缺陷：restore 的前置校验（`findScannedSession` → `scanPiSessions`）只扫标准 sessions 树，mock 把 sessionFile 指向散文件（非 JSONL）时扫不到。
+
+**判定**：查 mock 实例数据目录的标准树有无合法会话文件：
+
+```bash
+ls <dataDir>/agent/sessions/--<cwd>--/              # 有无本会话 <ts>_<sessionId>.jsonl
+head -2 <dataDir>/agent/sessions/--<cwd>--/*.jsonl  # 首行 header entry（type:session / version:3）+ user message entry
+```
+
+**恢复**：mock 按 pi 1.0.0 真实布局，在受理 prompt 时同步写最小合法 session 文件（header + user entry）到 `<agentDir>/sessions/--<cwd>--/`，且 sessionId 跨代固定（判死强杀 → 恢复附着须命中同一文件）。
+
+### 45. 恢复后观测假红：waitTurnEnd 超时但 pi 侧回合完整收尾（pi-stall-detection D3 验收登记，2026-11）
+
+**形态**：判死自动恢复（或 SIGKILL 崩溃恢复）后，剧本/探针的回合终态等待（waitTurnEnd 类，只扫客户端本地累计事件）超时，表现为「恢复后回合零推进」——实为观测通路断了，不是回合没跑。
+
+**判定**：先读 pi RPC 帧序列（runtime 对 pi stdout 的 tee 日志 `ext-sessions/<sessionId>/logs/pi-<date>.jsonl`，决定性证据）：`switch_session` 成功 → prompt started → `agent_start`/`turn_start` → 流式回复 → `turn_end`/`agent_end` 全在 = pi 侧回合完整收尾，假红在观测侧。再对照客户端订阅通路：会话删除路径（含判死强杀、进程异常退出）汇聚 `removeSessionEntry` 步骤 13 = `MessageBus.clearSession` 清除该会话全部订阅者（session-entry-removal.ts:28），restore 后 runtime 不代客户端重订阅（设计预期消费者重订阅，session-lifecycle.ts:512-516 注释）——订阅建立在恢复完成锚之后、且目标帧只出现在 subscribe 应答快照里（live 广播已错过）时，等待器永等超时。
+
+**恢复**：恢复完成锚（restore 应答 / 恢复成功日志行）之后重订阅，从 subscribe 应答快照的 lastSeq 续传并显式消费快照内历史帧，再等 live 广播；禁止在无订阅前提下用「step3 卡且 step4 也卡」推断产品侧问题。
 ### 33. LLM 网络代理分流失效：配了代理规则的服务商仍直连失败（pi 升级后高发）
 
 **症状**：settings「网络代理」页已启用并配置规则，但命中规则的服务商请求仍不走代理（或代理软件侧无新 CONNECT 隧道）；典型触发时点 = pi 版本升级后（分流依赖两个 pi/Node 未承诺前提：上游 SDK 默认 fetch 运行时读 `globalThis.fetch`；外部 undici 包 `setGlobalDispatcher` 写入的槽与 Node 内置 fetch 读取的槽一致——任一被升级打破即静默失效）。
