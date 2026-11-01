@@ -266,6 +266,7 @@ export {
 } from "./execution/notify/notifier.ts";
 export {
   isExcludedReconcileRecord,
+  isReconcileCandidateRecord,
   isReconcileNotifyCandidate,
   NOTIFY_RECONCILE_SCAN_LIMIT,
   runNotifyReconcileMaintenance,

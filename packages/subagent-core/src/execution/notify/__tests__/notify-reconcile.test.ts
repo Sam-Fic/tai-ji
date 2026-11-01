@@ -5,13 +5,17 @@
 //          会导致补投用错键 → 判重失效双投）；
 //   - RL10 rejected 立即单次重提（deliver 计数恰 2 + fake timers 零句柄——与 bash
 //          域同款单次形态）；
-//   - RL9  warn 文案含 recovered by reconcile fallback（弱断言防文案回退）；
+//   - RL9  warn 文案含 recovered by reconcile fallback（弱断言防文案回退）+ 按载荷
+//          形态分流（轮次载荷不承诺补投——reconcileRecoveryHint）；
 //   - RL14 三入口必触发（session_start / agent_settled / 切回 resume——mock 三边沿
 //          各自触发、编排各被调用恰一次、入口来源可辨；漏挂任一入口即红）；
 //   - D5   两排除位真值表（cancelled 全 origin 非候选 / workflow origin 终态整体
 //          排除）+ 三重判据逐行（V10 的单测面承载）；
 //   - D6① 补投 payload 与主路径同构造（closed 终态形态、round 置 undefined——轮次
-//          id 不混入、totalRounds 文案轮次、collectKey 申报）。
+//          id 不混入、totalRounds 文案轮次、collectKey 申报）；
+//   - A4   轮终收尾 idle 候选（canvas reviewer one-shot 形态的完成信号补投——A4
+//          熔断修复回归）：markRoundIdle 落盘形态（idle 无 closedReason）候选命中、
+//          宿主中断/重开族排除、record 级送达痕迹防双投、跨边沿幂等。
 //
 // 测试方法：三重判据全部经注入替身消费（NotifyReconcileSource / DeliveryPortHandle
 // 结构兼容 mock），零真进程零真磁盘；readSessionEntriesFromFile 的坏行容错用 tmpdir
@@ -39,6 +43,7 @@ import {
   collectDeliveredNotifyIds,
   collectJournaledDeliveryIds,
   isExcludedReconcileRecord,
+  isReconcileCandidateRecord,
   isReconcileNotifyCandidate,
   readSessionEntriesFromFile,
   runNotifyReconcileMaintenance,
@@ -83,6 +88,10 @@ const reconcileRecord = (id: string, extra: Partial<ReconcileNotifyRecord> = {})
   result: "done",
   ...extra,
 });
+
+/** 轮终收尾替身（markRoundIdle 落盘形态——idle 无 closedReason，A4 canvas reviewer 形态）。 */
+const roundSettledRecord = (id: string, extra: Partial<ReconcileNotifyRecord> = {}): ReconcileNotifyRecord =>
+  reconcileRecord(id, { status: "idle", closedReason: undefined, stopReason: "stop", ...extra });
 
 /** 静态对账事实源（records / entries 直给，调用计数可断言）。 */
 function makeSource(records: ReconcileNotifyRecord[], entries: unknown[] = []) {
@@ -217,7 +226,7 @@ describe("RL10/RL9 rejected 处置阶梯①——立即单次重提", () => {
     notifier.notify({ id: "bg-retry-2", status: "closed", agent: "a", startedAt: 1, endedAt: 2 });
     expect(fake.deliverCalls).toHaveLength(2);
     expect(loggerMock.warn).toHaveBeenCalledWith(
-      expect.stringContaining("single retry spent, recovered by reconcile fallback"),
+      expect.stringContaining("single retry spent; recovered by reconcile fallback"),
       expect.objectContaining({ detail: expect.objectContaining({ notifyId: "bg-retry-2" }) }),
     );
     notifier.dispose();
@@ -252,6 +261,20 @@ describe("RL10/RL9 rejected 处置阶梯①——立即单次重提", () => {
     expect(firstWarn).toContain("recovered by reconcile fallback");
     expect(firstWarn).not.toContain("lost");
     expect(fake.deliverCalls).toHaveLength(2);
+    notifier.dispose();
+  });
+
+  it("warn 文案按载荷形态分流：轮次载荷 rejected 不承诺 reconcile fallback（对账不补轮次键——恢复通道 = 下一轮边沿自然重发）", async () => {
+    const { notifier, fake, rejectAll } = setup();
+    rejectAll();
+    notifier.notify({ id: "bg-warn-round", status: "running", round: 2, agent: "a", startedAt: 1, endedAt: 2 });
+    expect(fake.deliverCalls).toHaveLength(2); // 首败 + 单次重提（处置阶梯不变）
+    const warns = loggerMock.warn.mock.calls.map((c) => c[0] as string);
+    expect(warns).toHaveLength(2);
+    for (const text of warns) {
+      expect(text).not.toContain("recovered by reconcile fallback");
+      expect(text).toContain("resent naturally at the next round edge");
+    }
     notifier.dispose();
   });
 });
@@ -412,12 +435,11 @@ describe("D5 排除位真值表 + 三重判据逐行（防误补投）", () => {
     expect(result.redelivered).toEqual(["bg-ps", "bg-uc", "bg-dc"]);
   });
 
-  it("非终态形态非候选：running / 轮间 idle（无 closedReason）", async () => {
+  it("running 非候选（轮在途——两态模型活跃位结构性排除）", async () => {
     const submitted: BgNotifyRecord[] = [];
     const result = await reconcile(
       makeSource([
         reconcileRecord("bg-running", { status: "running", closedReason: undefined }),
-        reconcileRecord("bg-round-idle", { status: "idle", closedReason: undefined }),
       ]),
       "resume",
       submitted,
@@ -456,6 +478,123 @@ describe("D5 排除位真值表 + 三重判据逐行（防误补投）", () => {
     expect(isReconcileNotifyCandidate({ isTerminal: true, excludedByOrigin: true, delivered: false, journaled: false })).toBe(false);
     expect(isReconcileNotifyCandidate({ isTerminal: true, excludedByOrigin: false, delivered: true, journaled: false })).toBe(false);
     expect(isReconcileNotifyCandidate({ isTerminal: true, excludedByOrigin: false, delivered: false, journaled: true })).toBe(false);
+  });
+});
+
+// ─── 轮终收尾 idle 候选（A4 熔断修复回归：canvas reviewer one-shot 完成信号补投） ──
+
+describe("轮终收尾 idle 候选（markRoundIdle 形态——A4 缺陷回归锁）", () => {
+  it("候选命中：canvas reviewer one-shot 形态（idle 无 closedReason + 引擎停因 stop）→ 补投恰 1 条（裸 id 终态键 + collectKey 申报 + details 带 result）", async () => {
+    const fake = makeFakePort();
+    configureNotifyDomain({ getDeliveryPort: () => fake.handle });
+    const notifier = createNotifier({ sendMessage: () => {} });
+    const submitted: BgNotifyRecord[] = [];
+    const result = await reconcile(
+      makeSource([roundSettledRecord("sa-one-shot", { agent: "canvas-reviewer", result: "CANARY" })]),
+      "session_start",
+      submitted,
+    );
+    expect(result.candidates).toBe(1);
+    expect(result.redelivered).toEqual(["sa-one-shot"]);
+    // 补投经主路径管道：幂等键 = 裸 id（id[:epoch] 形态，round 不混入）、collectKey
+    // 申报 [record.id]（collect_results 可收取）、details 携带 notifyId 与轮终 result。
+    notifier.notify(submitted[0]!);
+    expect(fake.deliverCalls).toHaveLength(1);
+    expect(fake.deliverCalls[0]?.envelope.id).toBe("sa-one-shot");
+    expect(fake.deliverCalls[0]?.opts).toEqual({ collectKey: ["sa-one-shot"] });
+    const details = fake.deliverCalls[0]?.envelope.payload.details as Record<string, unknown>;
+    expect(details.notifyId).toBe("sa-one-shot");
+    expect(details.result).toBe("CANARY");
+    expect(details.agent).toBe("canvas-reviewer");
+    notifier.dispose();
+  });
+
+  it("失败轮形态如实派生：stopReason=error + error 有值 → 补投 outcome=failed（deriveOutcome 单一权威，不谎报 completed）", async () => {
+    const fake = makeFakePort();
+    configureNotifyDomain({ getDeliveryPort: () => fake.handle });
+    const notifier = createNotifier({ sendMessage: () => {} });
+    const submitted: BgNotifyRecord[] = [];
+    await reconcile(
+      makeSource([roundSettledRecord("sa-failed-round", { stopReason: "error", error: "engine boom" })]),
+      "agent_settled",
+      submitted,
+    );
+    expect(submitted).toHaveLength(1);
+    notifier.notify(submitted[0]!);
+    const details = fake.deliverCalls[0]?.envelope.payload.details as Record<string, unknown>;
+    expect(details.outcome).toBe("failed");
+    expect(String(fake.deliverCalls[0]?.envelope.payload.content)).toContain("engine boom");
+    notifier.dispose();
+  });
+
+  it("宿主中断/重开族排除（V10 同族——取消轮不产生完成通知，主路径不发者不补投）：interrupted / interrupted-by-restart / interrupted-by-parent / reopened 全部非候选", async () => {
+    const submitted: BgNotifyRecord[] = [];
+    const result = await reconcile(
+      makeSource([
+        roundSettledRecord("bg-cancel-round", { stopReason: "interrupted" }),
+        roundSettledRecord("bg-restart-round", { stopReason: "interrupted-by-restart" }),
+        roundSettledRecord("bg-parent-round", { stopReason: "interrupted-by-parent" }),
+        roundSettledRecord("bg-reopen-round", { stopReason: "reopened" }),
+      ]),
+      "resume",
+      submitted,
+    );
+    expect(result.candidates).toBe(0);
+    expect(submitted).toHaveLength(0);
+    // 判据函数直测（域侧单一落点）。
+    expect(isReconcileCandidateRecord({ status: "running" })).toBe(false);
+    expect(isReconcileCandidateRecord({ status: "idle", closedReason: "gc" })).toBe(true);
+    expect(isReconcileCandidateRecord({ status: "idle", stopReason: "stop" })).toBe(true);
+    expect(isReconcileCandidateRecord({ status: "idle" })).toBe(true); // 被接管轮无停因事实
+    expect(isReconcileCandidateRecord({ status: "idle", stopReason: "interrupted" })).toBe(false);
+    expect(isReconcileCandidateRecord({ status: "idle", stopReason: "reopened" })).toBe(false);
+  });
+
+  it("origin 位对轮终收尾形态同样生效：workflow origin 的轮终 idle 整体排除", async () => {
+    const submitted: BgNotifyRecord[] = [];
+    const result = await reconcile(
+      makeSource([roundSettledRecord("bg-wf-round", { origin: "workflow" })]),
+      "resume",
+      submitted,
+    );
+    expect(result.candidates).toBe(0);
+    expect(submitted).toHaveLength(0);
+  });
+
+  it("防双投：主路径轮次应答已送达（details.id 记录级痕迹）→ 补投被阻断（裸键查询对轮次键不可见，record 级通道承接）", async () => {
+    const submitted: BgNotifyRecord[] = [];
+    const result = await reconcile(
+      makeSource(
+        [roundSettledRecord("sa-delivered")],
+        [
+          // 主路径轮次应答条目形态：notifyId/deliveryId 均为轮次键（id:round），
+          // details.id 携带一等 record id。
+          {
+            customType: "subagent-bg-notify",
+            content: "round reply",
+            details: { id: "sa-delivered", notifyId: "sa-delivered:1", deliveryId: "sa-delivered:1" },
+          },
+        ],
+      ),
+      "agent_settled",
+      submitted,
+    );
+    expect(result.candidates).toBe(1);
+    expect(result.skippedDelivered).toEqual(["sa-delivered"]);
+    expect(submitted).toHaveLength(0);
+  });
+
+  it("跨边沿幂等：首轮补投受理后（投递日志裸 id 条目在册）→ 二次对账零第二条", async () => {
+    const submitted: BgNotifyRecord[] = [];
+    const source = makeSource(
+      [roundSettledRecord("sa-idem")],
+      [{ customType: "delivery-port-outbox", data: { id: "sa-idem" } }],
+    );
+    const first = await reconcile(source, "session_start", submitted);
+    expect(first.redelivered).toEqual([]);
+    const second = await reconcile(source, "agent_settled", submitted);
+    expect(second.skippedJournaled).toEqual(["sa-idem"]);
+    expect(submitted).toHaveLength(0);
   });
 });
 

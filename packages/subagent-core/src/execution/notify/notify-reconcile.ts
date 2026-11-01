@@ -5,7 +5,24 @@
 // 判据、不并入其实现——「主路径不发者排除」的排除位语义随域参数化）。
 //
 // 三重磁盘事实判据（bash 域 pending-reconcile 同构）：
-//   候选 = record 已终态 ∧ 排除位未命中 ∧ 送达痕迹未命中 ∧ 投递日志无该幂等键条目
+//   候选 = record 收尾位命中 ∧ 排除位未命中 ∧ 送达痕迹未命中 ∧ 投递日志无该幂等键条目
+//
+// 候选状态位（isReconcileCandidateRecord，域侧单一落点）覆盖两形态：
+//   - legacy closed 终态存量：idle ∧ closedReason 有值（isLegacyClosedSettled 命中
+//     形态——close 归档提示的补投对象）；
+//   - 轮终收尾 idle（永久会话两态模型的现行收尾位，canvas reviewer 等 one-shot 成员
+//     的完成形态）：idle ∧ closedReason 无值 ∧ 停因非宿主中断/重开族（NEW_STOP_
+//     REASONS 排除——取消轮不产生完成通知，重启打断/编排性关闭/reopen 同理，主路径
+//     不发者排除与 V10 成因位同原理）。markRoundIdle 是该形态唯一写点（成功/失败轮
+//     统一落 idle + 引擎停因），补投补的是该轮完成信号（payload 按终态形态构造、
+//     outcome 经 deriveOutcome 单一权威派生——失败轮如实落 failed 文案，不谎报）。
+//   送达痕迹判定分形态：legacy closed 形态查裸键（notifyId/deliveryId——同 record 的
+//   轮次条目不得阻断 close 归档提示补投）；轮终收尾形态扩位到 record 级
+//   （collectDeliveredRecordIds 收 details.id——主路径轮次应答已送达 = 完成信号已在
+//   会话，按裸键查询不可见（轮次键 id:round ≠ 补投键裸 id），无 record 级通道时每次
+//   对账边沿都会对已送达成员重复补投；主路径 rejected 时条目未落盘、痕迹未命中，
+//   补投可达）。跨边沿防重由投递日志幂等键判重承担（补投键 = 裸 id 终态键，首轮
+//   补投受理后 outbox 条目使后续边沿 journaled 命中）。
 //
 // 两个排除位（D5 裁决，「主路径不发者排除」原理）：
 //   排除位一（成因位，全 origin）：closedReason="cancelled" → 非候选。现行该成因
@@ -45,7 +62,8 @@ import * as fs from "node:fs";
 
 import { getLogger } from "../../core/logger.ts";
 import { isLegacyClosedSettled } from "../persistence/execution-record.ts";
-import type { ClosedReason, ExecutionStatus, RecordOrigin } from "../domain/record-types.ts";
+import type { ClosedReason, ExecutionStatus, RecordOrigin, StopReason } from "../domain/record-types.ts";
+import { NEW_STOP_REASONS } from "../domain/record-types.ts";
 import { buildNotifyId, type BgNotifyRecord } from "./notifier.ts";
 
 const logger = getLogger("subagents");
@@ -79,9 +97,22 @@ export interface ReconcileNotifyRecord { // oe-exempt:20261101:wip:共享判据�
   readonly endedAt?: number | undefined;
   readonly sessionFile?: string;
   readonly patchFile?: string;
-  /** 终态判定（isLegacyClosedSettled 的状态位输入）。 */
+  /** 终态判定（isReconcileCandidateRecord 的状态位输入）。 */
   readonly status: ExecutionStatus;
   readonly closedReason?: ClosedReason;
+  /**
+   * 轮收尾停因（isReconcileCandidateRecord 的中断/重开族排除位输入；queries.
+   * collectRecords 快照直读——内存源 recordToSubagent / 磁盘重建 projectFoldToLight
+   * 均投影）。undefined = 被接管轮（promptDisposition=handled，无停因事实）或旧数据
+   * ——非中断族，不排除。
+   */
+  readonly stopReason?: StopReason;
+  /**
+   * 轮终收条事实快照（结构子集 = SubagentListLastRound 的 result 位）。磁盘重建源
+   * （重启后对账的主形态）不恢复顶层 result（fold 投影把轮终 result 放在收条帧
+   * lastRound.result——record-store-rebuild lastRoundFromFold），本位是其读侧通道。
+   */
+  readonly lastRound?: { result?: string };
   readonly origin?: RecordOrigin;
   /** 收尾通知的轮次统计文案输入（notifyClosed 同款——round 置 undefined 后轮数改经此进文案）。 */
   readonly round?: number;
@@ -103,7 +134,7 @@ export interface NotifyReconcileResult { // oe-exempt:20261101:wip:共享判据�
 
   /** 扫描的 record 总数。 */
   scanned: number;
-  /** 预检候选数（终态 ∧ 排除位未命中）。 */
+  /** 预检候选数（收尾位 ∧ 排除位未命中）。 */
   candidates: number;
   /** 补投已受理（deliver 返回 accepted/swallowed——swallowed = 幂等命中，已被更早通道送达）的 record id。 */
   redelivered: string[];
@@ -119,7 +150,7 @@ export interface NotifyReconcileResult { // oe-exempt:20261101:wip:共享判据�
  */
 export interface ReconcileNotifyFacts { // oe-exempt:20261101:wip:共享判据骨架先行，域侧第二实现随 u5 两域映射交付
 
-  /** 事实一：record 已终态（域事实源判定 = isLegacyClosedSettled）。 */
+  /** 事实一：record 收尾位命中（域事实源判定 = isReconcileCandidateRecord）。 */
   isTerminal: boolean;
   /** 排除位（两排除位的合取）：cancelled 成因（全 origin）∨ workflow origin。真 = 非候选。 */
   excludedByOrigin: boolean;
@@ -152,6 +183,35 @@ export function isExcludedReconcileRecord(record: {
 }
 
 /**
+ * 候选状态位（三重判据事实一的域侧单一落点，两形态合取）：
+ *   - legacy closed 终态存量：isLegacyClosedSettled（唯一权威谓词，idle ∧ closedReason
+ *     有值）——close 归档提示的补投对象，语义不变；
+ *   - 轮终收尾 idle：status="idle"（两态模型非活跃位直读——running 轮在途结构性非
+ *     idle，即「回合已收尾且无活跃运行迹象」）∧ closedReason 无值 ∧ 停因非
+ *     NEW_STOP_REASONS（宿主中断/重开族：interrupted / interrupted-by-restart /
+ *     interrupted-by-parent / reopened——取消轮不产生完成通知（record-lifecycle
+ *     cancelBackground 单点裁决），重启打断/编排性关闭/reopen 同不发完成通知，按
+ *     「主路径不发者排除」原理排除，与成因位（V10）同原理不同落位）。
+ *
+ * stopReason 非中断/重开族（含 undefined：被接管轮无停因事实 / 旧数据）= 主路径有
+ * 该轮应答形态（§3.3.7① 轮应答五分支覆盖），完成信号可经补投恢复。
+ *
+ * bash 域同构性：两域事实一都是「本域权威状态机的非活跃位直读」（bash = registry
+ * 终态枚举；本域 = record 两态 idle 位 + 收尾停因排除位），排除位语义随域参数化
+ * （骨架单源见文件头）；域间差异（任务终态 vs 回合收尾）由各自状态机承载，判据
+ * 骨架消费方式一致。
+ */
+export function isReconcileCandidateRecord(record: {
+  status: ExecutionStatus;
+  closedReason?: ClosedReason;
+  stopReason?: StopReason;
+}): boolean {
+  if (record.status !== "idle") return false;
+  if (isLegacyClosedSettled(record)) return true;
+  return !NEW_STOP_REASONS.includes(record.stopReason as (typeof NEW_STOP_REASONS)[number]);
+}
+
+/**
  * 从会话 entries 提取已送达完成通知的幂等键集合（送达痕迹判据的事实源）。
  *
  * 判定通道两条，任一命中即收：details.notifyId（主路径 payload 携带，notifier notify
@@ -176,6 +236,33 @@ export function collectDeliveredNotifyIds(entries: readonly unknown[], notifyCus
     if (typeof notifyId === "string" && notifyId !== "") ids.add(notifyId);
     const deliveryId = fields.deliveryId;
     if (typeof deliveryId === "string" && deliveryId !== "") ids.add(deliveryId);
+  }
+  return ids;
+}
+
+/**
+ * 从会话 entries 提取「已有完成通知条目在册」的 record id 集合（轮终收尾形态的
+ * 送达痕迹通道，见文件头「送达痕迹判定分形态」段）。
+ *
+ * 背景：主路径对轮终收尾形态发的是轮次应答（幂等键 `id:round`），补投键是裸 id
+ * 终态键——裸键痕迹/投递日志对「主路径已送达」结构性不命中，无本通道时每个已完成
+ * 成员会在对账边沿被重复补投。轮次应答条目的 details 携带一等 record id（payload
+ * 展开，notifier notify 物化），按 details.id 收集即完整痕迹。
+ *
+ * 只对轮终收尾形态消费（legacy closed 候选维持裸键判定——同 record 的历史轮次条目
+ * 不得阻断 close 归档提示补投，现行语义不变）。收集宁滥勿缺（多收集 → 漏补投，
+ * 方向保守；反向误判才产生双投）。容错纪律与 collectDeliveredNotifyIds 同款。
+ */
+export function collectDeliveredRecordIds(entries: readonly unknown[], notifyCustomType: string): Set<string> {
+  const ids = new Set<string>();
+  for (const raw of entries) {
+    if (!raw || typeof raw !== "object") continue;
+    const entry = raw as Record<string, unknown>;
+    if (entry.customType !== notifyCustomType) continue;
+    const details = entry.details;
+    if (details === null || typeof details !== "object") continue;
+    const recordId = (details as Record<string, unknown>).id;
+    if (typeof recordId === "string" && recordId !== "") ids.add(recordId);
   }
   return ids;
 }
@@ -236,7 +323,7 @@ export function readSessionEntriesFromFile(sessionFile: string | undefined): unk
  * 通知对账编排（三入口唯一入口；同步——fs 读 + deliver 同步受理，session_start 链
  * 内毫秒级）。幂等：重复执行时已补投键有投递日志条目/送达痕迹抵消，判据不再命中。
  *
- * 成本下界（设计检查点登记）：预检先行短路——record 终态量级扫描（会话内 record
+ * 成本下界（设计检查点登记）：预检先行短路——record 收尾位量级扫描（会话内 record
  * 数，light 头部扫描 + per-file 缓存）先行，无候选不触 entries 全读取。
  *
  * 失败吞掉记 warn（对账/补投失败无害：候选三判据仍命中，下一对账边沿幂等重查）——
@@ -264,15 +351,16 @@ export async function runNotifyReconcileMaintenance(deps: {
   try {
     const records = deps.source.listReconcileRecords();
     result.scanned = records.length;
-    // 预检：终态 ∧ 排除位未命中（内存过滤，不触 entries）。排除位真值在预检内
+    // 预检：收尾位 ∧ 排除位未命中（内存过滤，不触 entries）。排除位真值在预检内
     // 判定（isExcludedReconcileRecord 单一落点），终判对已预检候选只查两磁盘事实
     // 集合——判据函数本体（isReconcileNotifyCandidate）在终判消费，真值表逐行可测。
-    const candidates = records.filter((r) => isLegacyClosedSettled(r) && !isExcludedReconcileRecord(r));
+    const candidates = records.filter((r) => isReconcileCandidateRecord(r) && !isExcludedReconcileRecord(r));
     result.candidates = candidates.length;
     if (candidates.length === 0) return result;
 
     const entries = deps.source.readSessionEntries();
     const delivered = collectDeliveredNotifyIds(entries, deps.notifyCustomType);
+    const deliveredRecordIds = collectDeliveredRecordIds(entries, deps.notifyCustomType);
     const journaled = collectJournaledDeliveryIds(entries);
 
     for (const record of candidates) {
@@ -280,10 +368,13 @@ export async function runNotifyReconcileMaintenance(deps: {
       // epoch 缺省边界见 ReconcileNotifyRecord 注释）。buildNotifyId 单一导出，
       // 与主路径 notify() 同一构造（RL8）。
       const notifyId = buildNotifyId({ id: record.id, epoch: undefined, round: undefined });
+      // 送达痕迹分形态（见文件头）：legacy closed 形态查裸键；轮终收尾形态扩位到
+      // record 级（details.id——主路径轮次应答已送达即完成信号在册，阻断重复补投）。
+      const roundSettledIdle = record.status === "idle" && record.closedReason === undefined;
       const facts: ReconcileNotifyFacts = {
-        isTerminal: isLegacyClosedSettled(record),
+        isTerminal: isReconcileCandidateRecord(record),
         excludedByOrigin: isExcludedReconcileRecord(record),
-        delivered: delivered.has(notifyId),
+        delivered: delivered.has(notifyId) || (roundSettledIdle && deliveredRecordIds.has(record.id)),
         journaled: journaled.has(notifyId),
       };
       if (!isReconcileNotifyCandidate(facts)) {
@@ -291,17 +382,21 @@ export async function runNotifyReconcileMaintenance(deps: {
         if (facts.journaled) result.skippedJournaled.push(record.id);
         continue;
       }
-      // 补投 payload = notifyClosed 同款 closed 终态形态（D6①：补投的就是主路径本要
-      // 发的那条通知）：round 置 undefined（与轮次通知键区分，终态不被判重吞）、轮数
-      // 改经 totalRounds 进文案；outcome 物化与 content 构造由主路径 notify() 内部
-      // 完成（deriveOutcome 单一权威兜底——补投不自行派生第二套文案）。
+      // 补投 payload = notifyClosed 同款 closed 终态形态（D6①：补投的是该 record 的
+      // 完成信号——legacy closed 形态即主路径本要发的那条通知；轮终收尾形态为该轮
+      // 完成信号的终态载体，outcome 经 deriveOutcome 单一权威派生，失败轮如实落
+      // failed 文案）：round 置 undefined（与轮次通知键区分，终态不被判重吞）、轮数
+      // 改经 totalRounds 进文案；content 构造由主路径 notify() 内部完成（deriveOutcome
+      // 单一权威兜底——补投不自行派生第二套文案）。
       const payload: BgNotifyRecord = {
         id: record.id,
         status: "closed",
         closedReason: record.closedReason,
         agent: record.agent,
         model: record.model,
-        result: record.result,
+        // 轮终 result：内存源顶层直读；磁盘重建源顶层不恢复（fold 投影在收条帧）——
+        // lastRound.result 摘要锚回落（截断语义随收条帧，全文走 transcript 指针行）。
+        result: record.result ?? record.lastRound?.result,
         error: record.error,
         startedAt: record.startedAt,
         endedAt: record.endedAt ?? undefined,

@@ -126,10 +126,22 @@ function getSlot(): DeliveryPortSlot {
  * /new 的 session_start）先 dispose 旧实例再绑定新实例（dispose 旧实例 + 重建
  * ——内核态按 session 重建，防跨 session 重投）。
  * 调用方随后应调 handle.recover() 完成差集重放（装配点接线）。
+ *
+ * 出站交接（重绑双投窗口封住）：dispose 前取走前驱「in-flight（已交递 pi，注入由
+ * pi 侧异步完成）」的已受理 id 集合交接给后继预占——session_start 对同会话连发两次
+ * （真机实证，10ms 级间隔）时，前驱在两次 bind 间隙受理并出站的条目（如 subagent
+ * 域对账补投）尚未产生送达凭据，后继构造期扫描只见「outbox 无凭据」→ recover 重放
+ * = 同一条通知双投（A4 真机实证 recoveryReplays=1 + notify=2）。in-flight 条目由
+ * pi 侧必达注入，重放对它们是纯重复；预占后后继 recover 跳过、条目留 state.outbox，
+ * 凭据若最终未落地由后续 rebind 的重放兜底（跨进程重启无前驱可交接，崩溃恢复通道
+ * 不变）。queued / failed（未出站——dispose 丢弃）不在交接集合，后继重放恢复语义
+ * 不变。
  */
 export function bindDeliveryPort(host: DeliveryPortHost): DeliveryPortHandle {
-  getSlot().current?.dispose();
-  const handle = createDeliveryPort(host);
+  const predecessor = getSlot().current;
+  const handoff = predecessor?.takeInFlightHandoff?.();
+  predecessor?.dispose();
+  const handle = createDeliveryPort(host, { predecessorInFlightIds: handoff });
   getSlot().current = handle;
   return handle;
 }
@@ -491,7 +503,10 @@ function createCollectFace(deps: CollectFaceDeps): CollectFace {
  * 构造投递端口（内核装配 + 提交侧机制 + 回执订阅 + 重放）。
  * 事件订阅在构造期建立、dispose 时退订——构造即生效，不依赖调用方再接线。
  */
-export function createDeliveryPort(host: DeliveryPortHost): DeliveryPortHandle {
+export function createDeliveryPort(
+  host: DeliveryPortHost,
+  options?: { predecessorInFlightIds?: ReadonlySet<string> },
+): DeliveryPortHandle {
   const scan = scanJournal(host.readSessionEntries(), Date.now());
   const state = new JournalState(scan);
   const buckets: DeliveryPortMetrics = { settleRejected: 0, recoveryReplays: 0 };
@@ -505,6 +520,10 @@ export function createDeliveryPort(host: DeliveryPortHost): DeliveryPortHandle {
   /** 已受理 id 索引（deliver 幂等预检的全窗口快路径；内核三级判重对已入内核条目
    *  兜底）。仅增量添加，无淘汰——量级 = 每 session 通知总量（数十~数百）。 */
   const seenIds = new Set<string>();
+  // 前驱出站交接预占（重绑双投窗口封住，见 bindDeliveryPort 头注）：预占进 seenIds
+  // 同时封住 recover 重放与同 id 再 deliver 两条路径；条目本身仍在 state.outbox
+  // （构造期扫描收录），凭据最终未落地时由后续 rebind 重放兜底。
+  for (const id of options?.predecessorInFlightIds ?? []) seenIds.add(id);
   /** merge-commit 期标志：默认通道组逐条提交内核期间 hold 注入，使成员聚合为内核
    *  queued 集，最后 kernel.flush() 一次合批出站（见文件头分组放行段）。 */
   let mergeCommitting = false;
@@ -797,6 +816,21 @@ export function createDeliveryPort(host: DeliveryPortHost): DeliveryPortHandle {
 
   // ─── 重放（session_start 差集重放）─────────────────────────
 
+  /**
+   * 重绑交接面（bindDeliveryPort 专用，dispose 前调用）：内核 entriesFull 快照中
+   * state=in-flight 的已受理 id 集。in-flight = 已交递 pi（sendMessage 完成，注入
+   * 由 pi 侧异步完成）——pi 持有必达，后继重放对它们构成同条通知双投（A4 真机实证
+   * recoveryReplays=1 + notify=2），交接预占封住；queued（merge-commit-hold 残留）
+   * 与 failed（retain 留守）未出站——dispose 丢弃后由后继重放恢复，不在交接集合。
+   */
+  function takeInFlightHandoff(): ReadonlySet<string> {
+    const handoff = new Set<string>();
+    for (const entry of kernel.entriesFull().active) {
+      if (entry.state === "in-flight") handoff.add(entry.id);
+    }
+    return handoff;
+  }
+
   function recover(): number {
     if (disposed) return 0;
     let replayed = 0;
@@ -862,6 +896,7 @@ export function createDeliveryPort(host: DeliveryPortHost): DeliveryPortHandle {
     metrics,
     flush,
     dispose,
+    takeInFlightHandoff,
     collectArm: collectFace.collectArm,
     consume: collectFace.consume,
     collectRelease: collectFace.collectRelease,

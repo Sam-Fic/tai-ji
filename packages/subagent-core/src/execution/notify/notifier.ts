@@ -517,6 +517,20 @@ export function createNotifier(host: NotifierHost): BgNotifier {
   }
 
   /**
+   * rejected 恢复通道指引（处置阶梯 warn 的尾注，按通知形态分流——文案承诺必须与
+   * 对账补投的实际判据覆盖一致）：closed 终态载荷由对账补投覆盖（notify-reconcile
+   * 三入口按裸 id 终态键补投，候选判据见该文件头候选状态位段）；running 轮次载荷
+   * 不在对账补投范围（补投只构造终态键——设计范围外②裁决），恢复通道 = 下一轮
+   * 边沿自然重发（轮次通知的既有重发语义），warn 不承诺补投。
+   */
+  function reconcileRecoveryHint(status: BgNotifyRecord["status"]): string {
+    return status === "closed"
+      ? "recovered by reconcile fallback (session_start / resume / agent_settled edge)"
+      : "round reply is not covered by the reconcile fallback (terminal keys only);" +
+          " it is resent naturally at the next round edge";
+  }
+
+  /**
    * 投递主路径：port.deliver（受理前落投递日志 + 直达唯一队列 + details-id 凭据 +
    * 重启差集重放，端口侧内包）。
    *
@@ -525,12 +539,13 @@ export function createNotifier(host: NotifierHost): BgNotifier {
    * 重取当前实例单次重提原 envelope（一次投递尝试的同步收尾动作，非重试循环非
    * 定时器——ADR-0122 红线不越界，RL10）；重提仍 rejected 或重取缺席即停止，恢复
    * 责任移交对账边沿的事实判据兜底（notify-reconcile 三入口：session_start /
-   * resume / agent_settled，warn 文案带恢复指引——RL9/RL11）。
+   * resume / agent_settled，warn 文案带恢复指引——RL9/RL11；指引按载荷形态分流，
+   * 见 reconcileRecoveryHint）。
    */
   function deliverViaPort(
     notifyId: string,
     content: string,
-    details: object,
+    details: BgNotifyRecord,
     collectKey: string[] | undefined,
   ): boolean {
     // envelope 构造单一落点：主投递与单次重提共用同一构造（重提原 payload 语义）。
@@ -551,11 +566,11 @@ export function createNotifier(host: NotifierHost): BgNotifier {
       if (result.kind === "rejected") {
         // 首败留痕（修复信号）+ 处置阶梯①接线：立即单次重提（D1 采用段①）。
         notifyLogger.warn(
-          "delivery port rejected notification — retrying once via re-acquired port," +
-            " recovered by reconcile fallback if the retry fails too",
+          "delivery port rejected notification — retrying once via re-acquired port; " +
+            reconcileRecoveryHint(details.status),
           { detail: { notifyId, reason: result.reason } },
         );
-        retryDeliverOnce(envelope, deliverOptions, notifyId);
+        retryDeliverOnce(envelope, deliverOptions, notifyId, details.status);
         return false;
       }
       return true;
@@ -587,13 +602,16 @@ export function createNotifier(host: NotifierHost): BgNotifier {
     envelope: PortDeliverEnvelope,
     options: { collectKey?: string[] },
     notifyId: string,
+    payloadStatus: BgNotifyRecord["status"],
   ): void {
+    const recovery = reconcileRecoveryHint(payloadStatus);
     const retryPort = getNotifyDomainPorts().getDeliveryPort?.();
     if (retryPort === undefined) {
       // 重取到 undefined（装配缺席窗）：停止转兜底——缺席直发兜底只属主路径缺席
-      // 形态，重提路径不扩该降级；恢复通道 = 对账边沿事实判据。
+      // 形态，重提路径不扩该降级；恢复通道 = 对账边沿事实判据（终态载荷）/ 下一轮
+      // 边沿自然重发（轮次载荷），按形态分流见 reconcileRecoveryHint。
       notifyLogger.warn(
-        "delivery port notify retry skipped: port absent on re-acquire; recovered by reconcile fallback",
+        "delivery port notify retry skipped: port absent on re-acquire; " + recovery,
         { detail: { notifyId } },
       );
       return;
@@ -601,11 +619,11 @@ export function createNotifier(host: NotifierHost): BgNotifier {
     const retryReceipt = retryPort.deliver(envelope, options);
     if (retryReceipt.kind === "rejected") {
       // 单次重提仍 rejected（转换窗旧实例在位 / 持久写失败）：即停报警（RL11——
-      // 持久成因不静默重试，warn 留痕交环境修复；环境修复后的送达由对账边沿的
-      // 事实判据自动承接，判据不区分成因）。
+      // 持久成因不静默重试，warn 留痕交环境修复；环境修复后的送达按载荷形态由
+      // 对账边沿事实判据 / 下一轮边沿承接——reconcileRecoveryHint 分流）。
       notifyLogger.warn(
         "delivery port notify retry rejected after the single re-acquire attempt; single retry" +
-          " spent, recovered by reconcile fallback (session_start / resume / agent_settled edge)",
+          " spent; " + recovery,
         { detail: { notifyId, reason: retryReceipt.reason } },
       );
     }

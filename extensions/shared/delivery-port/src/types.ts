@@ -217,6 +217,15 @@ export interface DeliveryPortHandle { // oe-exempt:20261017:framework:进程级�
   /** 销毁：内核 dispose + 退订全部事件订阅 + 摘进程级槽绑定。 */
   dispose(): void;
   /**
+   * 重绑交接面（bindDeliveryPort 专用消费，dispose 前调用）：返回本实例内核
+   * in-flight（已交递 pi，注入由 pi 侧异步完成）的已受理 id 快照。后继实例把集合
+   * 作为 predecessorInFlightIds 预占——差集重放对这批 id 跳过（消息已在途，重放
+   * 构成同条通知双投，A4 真机实证）；跨进程重启无前驱可交接，崩溃恢复通道不变。
+   * queued / failed（未出站或出站失败——dispose 丢弃）不在集合内，后继重放恢复
+   * 语义不变。
+   */
+  takeInFlightHandoff?(): ReadonlySet<string>;
+  /**
    * collect 面（result-collect 设计 §3.1② 端口挂起行为，方法语义以该节为准）。
    * collectArm：同步段登记在途等待集 + 对每个 key 按五态判据定态（快照形态
    * CollectSnapshotEntry——unknown 态键不登记等待集，由消费方组装 errors）。
