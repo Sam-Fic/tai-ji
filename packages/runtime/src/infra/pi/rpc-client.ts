@@ -160,9 +160,11 @@ function toStringArray(v: unknown): string[] {
 
 // ── pi 进程生命周期状态机（kill-chain-architecture §3.2）────────────────────
 //
-// 显式四态收敛原 `_exited`/`_killing` 裸布尔积（4 组合 2 非法）。kill-failed 是
-// 显式终态不是回退：「杀令已下」不可撤回，客户端整体不可用（进程生死不可控），
-// 吸收态语义正确。表外转移 fail-fast（对齐 RUN_MACHINE errorPolicy:'throw'）。
+// 显式五态词表。「进程生死」与「死亡是否由主动杀令造成」两个领域事实同由本机承载：
+// killed 是 killing 的唯一死亡出口，exited 只可能从 spawned 到达——终态词本身就是
+// 通知抑制判据，不需要机器外的 latched 布尔位并行表达同一事实。kill-failed 是显式
+// 终态不是回退：「杀令已下」不可撤回，客户端整体不可用（进程生死不可控），吸收态
+// 语义正确。表外转移 fail-fast（对齐 RUN_MACHINE errorPolicy:'throw'）。
 //
 // 迟到事件的入口幂等吸收：Node 生命周期内「error 先到、exit 随后」「stream error 置
 // 终态后 exit 到场」是合法事件序列——终态下到达的 process-exit / process-error 不进
@@ -171,7 +173,7 @@ function toStringArray(v: unknown): string[] {
 // 不会到转移入口——kill() 入口按当前态幂等短路）。
 
 /** pi 进程生命周期状态词表。 */
-type PiProcLifecycle = 'spawned' | 'killing' | 'exited' | 'kill-failed'
+type PiProcLifecycle = 'spawned' | 'killing' | 'exited' | 'killed' | 'kill-failed'
 /** pi 进程生命周期事件词表。 */
 type PiProcLifecycleEvent = 'kill-requested' | 'process-exit' | 'process-error' | 'kill-failed'
 
@@ -180,10 +182,10 @@ type PiProcLifecycleEvent = 'kill-requested' | 'process-exit' | 'process-error' 
  *   spawned × kill-requested → killing      发杀链；结果驱动后续转移
  *   spawned × process-exit   → exited       非计划内死亡（crash log + rejectAll + notify）
  *   spawned × process-error  → exited       同上（terminateFromError 处置链）
- *   killing  × process-exit  → exited       杀链收尾（onExit 钩子 rejectAll）
- *   killing  × process-error → exited       杀令已下的进程以 error 形态终结（通知抑制）
+ *   killing  × process-exit  → killed       杀链收割的死亡（通知抑制；rejectAll 归 kill() onExit）
+ *   killing  × process-error → killed       杀令已下的进程以 error 形态终结（通知抑制）
  *   killing  × kill-failed   → kill-failed  杀链 reject（立即 rejectAll + 泄漏告警）
- *   exited / kill-failed     = 吸收态（无表行）
+ *   exited / killed / kill-failed = 吸收态（无表行）
  */
 const PI_PROC_MACHINE = defineStateMachine<PiProcLifecycle, PiProcLifecycleEvent>({
   name: 'pi-proc-lifecycle',
@@ -191,6 +193,7 @@ const PI_PROC_MACHINE = defineStateMachine<PiProcLifecycle, PiProcLifecycleEvent
     spawned: {},
     killing: {},
     exited: { terminal: true },
+    killed: { terminal: true },
     'kill-failed': { terminal: true },
   },
   initial: 'spawned',
@@ -204,8 +207,8 @@ const PI_PROC_MACHINE = defineStateMachine<PiProcLifecycle, PiProcLifecycleEvent
     { from: 'spawned', on: 'kill-requested', to: 'killing' },
     { from: 'spawned', on: 'process-exit', to: 'exited' },
     { from: 'spawned', on: 'process-error', to: 'exited' },
-    { from: 'killing', on: 'process-exit', to: 'exited' },
-    { from: 'killing', on: 'process-error', to: 'exited' },
+    { from: 'killing', on: 'process-exit', to: 'killed' },
+    { from: 'killing', on: 'process-error', to: 'killed' },
     { from: 'killing', on: 'kill-failed', to: 'kill-failed' },
   ],
   errorPolicy: 'throw',
@@ -266,16 +269,13 @@ export class RpcClient implements IPiEngine {
   /**
    * pi 进程生命周期当前态（PI_PROC_MACHINE 的实例态）。写入只经 processExitFrom() /
    * processErrorFrom() / kill() 三个转移入口（表外转移 fail-fast）。
+   *
+   * 终态词同时承载「死亡是否由主动杀令造成」：exited 只从 spawned 到达（非计划内
+   * 死亡），killed 是 killing 的唯一死亡出口（杀链收割），kill-failed 是杀链违约。
+   * exit/error 处置链的通知抑制判据（isUnplannedProcDeath）读终态词即可，无机器外
+   * 并行布尔位。
    */
   private procState: PiProcLifecycle = 'spawned'
-  /**
-   * 「主动杀令已发起」的 latched 事实位（kill-requested 转移时置 true，永不复位）。
-   * 用途单一：exit/error 处置链的通知抑制判据（主动 kill 流程不发死亡通知——通知归
-   * kill 链收尾，exitCallbacks 上层据通知做用户可见的崩溃上报）。状态机 killing 态
-   * 经 process-exit/error 转入 exited 后该事实仍在（kill 成功收割的 exit 事件同样抑制
-   * 通知），四态词表达不了「exited 由 killing 演化而来」，故独立持有。
-   */
-  private plannedKill = false
   /**
    * exitCallbacks 多播是否已发（RT-2#6）：proc 'error' 与 'exit' 合并为单一 terminate
    * 出口后，运行中 error 先通知、exit 随后到场的形态需要幂等检查防双发（spawn 失败
@@ -449,10 +449,10 @@ export class RpcClient implements IPiEngine {
       console.log(`[rpc] process exited with code ${code}`)
       this.piSessionLog?.end()
       this.piSessionLog = null
-      // Only reject pending requests on unexpected exits.
-      // For normal kill flow (plannedKill), rejectAll is called in kill()
-      // via a separate safety net so callers don't hang forever.
-      if (!this.plannedKill) {
+      // 非计划内死亡（exited）才写 crash log / reject pending / 发死亡通知；主动
+      // 杀令收割的死亡（killed / kill-failed）不通知——pending 收尾归 kill() 的
+      // onExit rejectAll 安全网，调用方不悬挂。
+      if (this.isUnplannedProcDeath()) {
         this.writeCrashLogIfNeeded(code)
         this.rejectAll(new Error(`pi process exited with code ${code}${this.formatStderrSuffix()}`))
         this.notifyExitOnce(code, this.getStderrTail())
@@ -490,7 +490,8 @@ export class RpcClient implements IPiEngine {
     // 管道断裂但进程可能仍存活（孤儿泄漏）：handleStreamError 内 SIGKILL 加速其死亡，
     // 让 proc.on('exit') 作为死亡通知的唯一出口（避免「stream error 通知 + exit 通知」
     // 双触发）。刻意调 ChildProcess 原生 kill 而非 this.kill()：后者会走 kill-requested
-    // 转移置 plannedKill，exit 处理器会跳过 exitCallbacks —— 死亡通知整条丢失。
+    // 转移进 killing，其死亡收割落 killed 终态，exit 处理器会跳过 exitCallbacks ——
+    // 死亡通知整条丢失。
     proc.stdout?.on('error', (err: NodeJS.ErrnoException) => this.handleStreamError('stdout', err))
 
     proc.stdin?.on('error', (err: NodeJS.ErrnoException) => this.handleStreamError('stdin', err))
@@ -553,14 +554,14 @@ export class RpcClient implements IPiEngine {
    * 处置链的全部收尾（process-error 转移进终态 + rejectAll 必达）；运行中 error 后
    * exit 若仍到场，各步幂等（终态迟到事件入口吸收，piSessionLog 已置 null /
    * rejectAll 空表 no-op），exitCallbacks 通知由 notifyExitOnce 幂等检查防双发。
-   * plannedKill 语义与 exit handler 对齐：主动 kill 流程不发死亡通知（kill() 的
-   * onExit rejectAll 统一收尾）。
+   * 死亡通知抑制语义与 exit handler 对齐：主动 kill 流程（killed / kill-failed 终态）
+   * 不发死亡通知（kill() 的 onExit rejectAll 统一收尾）。
    */
   private terminateFromError(err: Error): void {
     this.transitionProc('process-error')
     this.piSessionLog?.end()
     this.piSessionLog = null
-    if (!this.plannedKill) {
+    if (this.isUnplannedProcDeath()) {
       this.writeCrashLogIfNeeded(null)
       // 错误消息保留 err.message 原文（Node spawn ENOENT 的 message 自带 'spawn ... ENOENT'，
       // ProcessManager.createSession 的安装指引匹配（includes('spawn')/includes('ENOENT')）不依赖本前缀）
@@ -680,9 +681,22 @@ export class RpcClient implements IPiEngine {
     this.procState = next
   }
 
-  /** 进程生命周期终态判定（exited / kill-failed——客户端不可用，出站请求拒绝）。 */
+  /** 进程生命周期终态判定（exited / killed / kill-failed——客户端不可用，出站请求拒绝）。 */
   private isProcTerminal(): boolean {
-    return this.procState === 'exited' || this.procState === 'kill-failed'
+    return this.procState === 'exited' || this.procState === 'killed' || this.procState === 'kill-failed'
+  }
+
+  /**
+   * 非计划内死亡判定——exit/error 处置链的 crash log / rejectAll / 死亡通知发出判据
+   * （消费点 = wireProcessHandlers 的 exit handler 与 terminateFromError）。
+   *
+   * 「死亡是否由主动杀令造成」由终态词直接承载，无机器外并行布尔位：exited 只可能
+   * 从 spawned 到达（未下杀令的死亡），killed 是 killing 的唯一死亡出口、kill-failed
+   * 是杀链违约——两者必经 killing。主动杀令的 pending 收尾归 kill() 的 onExit
+   * rejectAll 与 kill-failed catch，死亡通知抑制后由上层 kill 流程自行收敛。
+   */
+  private isUnplannedProcDeath(): boolean {
+    return this.procState === 'exited'
   }
 
   private nextId(): string {
@@ -780,7 +794,7 @@ export class RpcClient implements IPiEngine {
    * 多播（可多订阅者，后注册者不再覆盖先注册者），返回 unsubscribe（与 onEvent 对称）。
    * 每个进程恰好通知一次：出口 = proc 'exit' 与 proc 'error'（RT-2#6 合并为单一 terminate
    * 出口，notifyExitOnce 幂等防双发；stream error 只 kill 不通知，死亡通知仍由 exit 承载）；
-   * plannedKill（主动 kill 流程）不通知，语义不变。
+   * 主动 kill 流程（终态 killed / kill-failed）不通知，语义不变。
    */
   onExit(callback: (code: number | null, stderr: string) => void): () => void {
     this.exitCallbacks.add(callback)
@@ -813,7 +827,7 @@ export class RpcClient implements IPiEngine {
    * §3.2-D4 / U3-4）。
    *
    * 触发条件：code≠0 且非主动 kill（调用点在 exit handler 与 terminateFromError 的
-   * !plannedKill 分支内；process error 路径传 code=null）。
+   * 非计划内死亡分支内；process error 路径传 code=null）。
    * code=null（信号死亡 / spawn 失败的 process error，如管道断裂后的 SIGKILL）同属异常退出，落盘。
    * 正常退出（code=0）与主动 kill 流程不写。
    * 文件：合法 sid → `<root>/<sid>/logs/pi-crash-<date>.log`（session 存储树 logs/ 域，
@@ -1176,19 +1190,18 @@ export class RpcClient implements IPiEngine {
   // ── Lifecycle ─────────────────────────────────────────────────────
 
   async kill(): Promise<void> {
-    // 幂等短路（K2 同精神）：进程不在 / 已终结（exited、kill-failed）→ no-op；
+    // 幂等短路（K2 同精神）：进程不在 / 已终结（exited、killed、kill-failed）→ no-op；
     // killing（杀令已下）→ no-op（SIGKILL 已投递或失败已上报，重复请求无事可做）。
     // 吸收态下 kill-requested 不进转移表（表外转移是编程错误形态），入口直接 return。
     if (!this.proc || this.procState !== 'spawned') return
 
     this.transitionProc('kill-requested')
-    this.plannedKill = true
 
     const proc = this.proc
     try {
       // 杀链（pi-rpc kill-chain 部件）：SIGKILL 直杀 + 三值判别（signal-delivered /
       // already-dead 两态都是合法完成，成功路径 resolve 时点不变）。exit 安全网：
-      // plannedKill 使 exit handler 跳过 rejectAll，onExit 回调统一清 pending——
+      // killed 终态使 exit handler 跳过 rejectAll，onExit 回调统一清 pending——
       // 调用方不必悬挂等待。
       await killPiProcess(proc, {
         onExit: () => this.rejectAll(new Error('pi process killed')),
