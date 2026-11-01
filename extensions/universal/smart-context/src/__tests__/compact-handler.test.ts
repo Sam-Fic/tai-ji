@@ -637,7 +637,7 @@ describe("后台事件取消与独立熔断（U2 验收②：RL1）", () => {
 		await bgState.active?.done;
 		expect(bgState.failureStreak).toBe(1); // 递增点②：收缩校验失败（U3 回报）
 
-		afterGen.mockResolvedValue("dropped");
+		afterGen.mockResolvedValue({ outcome: "dropped", reason: "preempted" });
 		expect(manager.maybeStart(ctx)).toBe(true);
 		await bgState.active?.done;
 		expect(bgState.failureStreak).toBe(1); // 会话态失效类放弃：计数不动
@@ -778,22 +778,38 @@ describe("appendCompaction 直调链路（U3 验收②③：RL3 存在性探测 
 		expect(bgState.active).toBeNull();
 	});
 
-	it("RL3 落盘侧探测：appendCompaction 缺失 → 放弃落盘、不抛错（dropped），补偿回调不触发", async () => {
+	it("RL3 落盘侧探测：appendCompaction 缺失 → 放弃落盘、不抛错（dropped/persist-unavailable），补偿回调不触发", async () => {
 		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
 		delete (ctx.sessionManager as { appendCompaction?: unknown }).appendCompaction;
 		const onPersisted = vi.fn();
 		const outcome = await persistBackgroundCompaction(ctx, makeCompactionResult(), makeSnapshot(), { onPersisted });
-		expect(outcome).toBe("dropped");
+		expect(outcome).toEqual({ outcome: "dropped", reason: "persist-unavailable" });
 		expect(onPersisted).not.toHaveBeenCalled();
 	});
 
-	it("被抢先（校验②链路）：落盘前出现新 compaction → 放弃，appendCompaction 不调、档位不重置、计数不动", async () => {
+	it("校验① session-mismatch（落盘侧链路）：触发后 sessionId 已换 → dropped 且 reason 原样透传", async () => {
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
+		const onPersisted = vi.fn();
+		const outcome = await persistBackgroundCompaction(
+			ctx,
+			makeCompactionResult(),
+			// 触发时刻快照属旧会话（s-old），落盘时 ctx 已是 s1 → 校验① 放弃
+			makeSnapshot({ sessionId: "s-old" }),
+			{ onPersisted },
+		);
+		expect(outcome).toEqual({ outcome: "dropped", reason: "session-mismatch" });
+		expect(getAppendMock(ctx)).not.toHaveBeenCalled();
+		expect(onPersisted).not.toHaveBeenCalled();
+	});
+
+	it("被抢先（校验②链路）：落盘前出现新 compaction → 放弃，appendCompaction 不调、档位不重置、计数不动；settlement 透传 preempted", async () => {
 		const entries = sampleEntriesNoCompaction();
 		const bgState = createBackgroundCompactionState();
 		const onPersisted = vi.fn();
+		const onSettled = vi.fn();
 		const hook: AfterGenerationHook = (result, snapshot, ctx) =>
 			persistBackgroundCompaction(ctx, result, snapshot, { onPersisted });
-		const manager = makeBgManager(bgState, normalizeSmartContextConfig({}), hook);
+		const manager = makeBgManager(bgState, normalizeSmartContextConfig({}), hook, undefined, onSettled);
 		const ctx = makeBgCtx(entries, TRIGGER_USAGE);
 		mockedCall.mockResolvedValue({ ok: true, text: "bg summary", usage: { input: 1, output: 2 } });
 
@@ -806,6 +822,8 @@ describe("appendCompaction 直调链路（U3 验收②③：RL3 存在性探测 
 		expect(onPersisted).not.toHaveBeenCalled();
 		expect(bgState.failureStreak).toBe(0); // dropped：会话态失效类放弃，计数不动
 		expect(bgState.active).toBeNull();
+		// verdict.reason 原样传出（通知文案分派依据——preempted 下上下文已被较新压缩结果改变）
+		expect(onSettled.mock.calls[0]![0]).toMatchObject({ outcome: "dropped", droppedReason: "preempted" });
 	});
 
 	it("摘要膨胀（校验③链路）：放弃落盘 + 膨胀段记录回调 + 同段不再触发（共享读取）", async () => {
@@ -1080,13 +1098,14 @@ describe("终局通知回调 onSettled（U5：D6 失败不静默、不重复）"
 		await bgState.active?.done;
 		expect(onSettled.mock.calls[0]![0]).toMatchObject({ outcome: "inflated", failureStreak: 1, circuitBreakerOpen: false });
 
-		// dropped（校验放弃与探测失败在 settlement 层同一 "dropped" 分支——通知文案同一入口）：
-		// 计数不动、无 failureStreak 字段
-		afterGen.mockResolvedValue("dropped");
+		// dropped（校验放弃与探测失败在 settlement 层同一 "dropped" 分支——通知文案按 droppedReason 分派）：
+		// 计数不动、无 failureStreak 字段，droppedReason 原样透传
+		afterGen.mockResolvedValue({ outcome: "dropped", reason: "session-mismatch" });
 		expect(manager.maybeStart(ctx)).toBe(true);
 		await bgState.active?.done;
 		const dropped = onSettled.mock.calls[1]![0] as BackgroundTaskSettlement;
 		expect(dropped.outcome).toBe("dropped");
+		expect(dropped.droppedReason).toBe("session-mismatch");
 		expect(dropped.failureStreak).toBeUndefined();
 		expect(dropped.circuitBreakerOpen).toBeUndefined();
 		expect(bgState.failureStreak).toBe(1); // dropped 不递增
@@ -1204,7 +1223,7 @@ describe("终局通知回调 onSettled（U5：D6 失败不静默、不重复）"
 // ──────────────────────── C-pi-17：后台压缩落盘段 stale ctx 防线（dmg-r1-1）────────────────────────
 
 describe("落盘段 stale ctx 防线（C-pi-17：guardStaleCtx 接入，dmg-r1-1）", () => {
-	it("isCtxStale 命中 → 放弃落盘回报 dropped：appendCompaction 不调、补偿回调不触发", async () => {
+	it("isCtxStale 命中 → 放弃落盘回报 dropped（session-mismatch：代际防线语义同会话已切换）：appendCompaction 不调、补偿回调不触发", async () => {
 		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
 		const onPersisted = vi.fn();
 		const onInflated = vi.fn();
@@ -1215,7 +1234,7 @@ describe("落盘段 stale ctx 防线（C-pi-17：guardStaleCtx 接入，dmg-r1-1
 			{ onPersisted, onInflated },
 			() => true,
 		);
-		expect(outcome).toBe("dropped");
+		expect(outcome).toEqual({ outcome: "dropped", reason: "session-mismatch" });
 		expect(getAppendMock(ctx)).not.toHaveBeenCalled();
 		expect(onPersisted).not.toHaveBeenCalled();
 		expect(onInflated).not.toHaveBeenCalled();

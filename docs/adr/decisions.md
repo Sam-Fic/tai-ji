@@ -1271,7 +1271,7 @@ WorkflowTab 步骤列表的数据源绑定从「workflow-record 全量快照（6
 **C-pi-11 例外登记（本 ADR 的核心目的）**：C-pi-11 首句「扩展状态变更必须 appendEntry 自描述完整记录」对 scheduler 任务库**作例外**——理由与边界：
 - 任务数据不是「会话事实」而是「扩展自有业务数据」，其生命周期不由会话条目序列决定；写进 custom entry 会把它绑到会话流的重放/裁剪/分叉语义上（旧形态必须实装 replay 折叠 + fork owner 过滤 + 活跃路径裁剪三件套才能还原）。
 - 例外**只覆盖首句的 appendEntry 要求**；C-pi-11 后两句（禁借 pi 文件当私有数据库、禁逆向解析 toolCall/toolResult 编码）对 scheduler 完全生效——本形态写的是 taiji/pi 自有的 `<agentDir>/scheduler/` 分片，不碰 pi 会话 JSONL（ADR-0062 唯一写方纪律不破：会话本体仍只由 pi 进程写）。
-- 与 ADR-0151 D7 的关系：原豁免清单第⑥项把 scheduler 列在「存于 session jsonl 内部 custom entry……天然随 jsonl」内，该表述随本 ADR 作废（已同步修订 D7 第⑥项）。分片不在 session 存储树内，**删除级联不回收分片**（孤儿已知例外，无 owner、无清理路径——见 data-source-registry #88）。
+- 与 ADR-0151 D7 的关系：原豁免清单第⑥项把 scheduler 列在「存于 session jsonl 内部 custom entry……天然随 jsonl」内，该表述随本 ADR 作废（已同步修订 D7 第⑥项）。分片不在 session 存储树内，session 属主分片经删除级联回收——级联段 ⑤、btw 线直删分支、purgeArchive 三个注入点统一走 `purgeSchedulerShard`（`packages/runtime/src/services/session/scheduler-shard-purge.ts`）；无属主、不可按单会话回收的仅剩 no-session 固定分片（C-data-09 豁免同射程）与 v1 旧 store 孤儿（清理链与已知例外的权威登记见 data-source-registry #88）。
 - 任务数据存独立文件不进 LLM context（不经 pi context 构建，零 token 污染）。
 
 **不采用**：继续 appendEntry custom entry（任务数据进会话流 = 进 LLM 上下文的 token 污染 + 三件套还原逻辑）；共享单文件 `scheduler.json`（v1 旧形态，多 session 共写无隔离——旧文件按用户裁决不迁移、留盘为孤儿）；写 session 存储树（分片归 session 生命周期，与「跨重启恢复」语义冲突，且 `<agentDir>` 才是 pi 扩展可达的自有目录）。

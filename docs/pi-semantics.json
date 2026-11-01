@@ -234,7 +234,7 @@
   },
   {
     "id": "PS-14",
-    "claim": "session 延迟首写：首条 user 或 assistant 消息前 jsonl 不落盘（_persist 的 _hasConversation 门控——fileEntries 中存在 role 为 user 或 assistant 的 message entry 即开门，setup 条目与 custom 条目不开门），开门前条目只留内存、crash 窗口内丢失；翻转时机 = 首条 user/assistant entry append 的同步点（_appendEntry push 后同步 _persist，_hasConversation 命中即走 wx 全量补写分支，无异步 flush 窗口）——getEntries 读到 user 或 assistant 消息 ⇒ 磁盘文件必已建且含全部内存 entry，scheduler ack 落盘判据①的反向推论以此承重；user 消息在轮次开始（message_end → appendMessage）即落盘、先于首次模型请求（上游有意设计 #10000：首轮未完成也保 prompt 在盘）",
+    "claim": "session 延迟首写：首条 user 或 assistant 消息前 jsonl 不落盘（_persist 的 _hasConversation 门控——fileEntries 中存在 role 为 user 或 assistant 的 message entry 即开门，setup 条目与 custom 条目不开门），开门前条目只留内存、crash 窗口内丢失；翻转时机 = 首条 user/assistant entry append 的同步点（_appendEntry push 后同步 _persist，_hasConversation 命中即走 wx 全量补写分支，无异步 flush 窗口）——getEntries 读到 user 或 assistant 消息 ⇒ 磁盘文件必已建且含全部内存 entry；user 消息在轮次开始（message_end → appendMessage）即落盘、先于首次模型请求（上游有意设计 #10000：首轮未完成也保 prompt 在盘）",
     "piAnchor": [
       {
         "pkg": "pi-coding-agent",
@@ -1080,7 +1080,7 @@
   },
   {
     "id": "PS-50",
-    "claim": "provider registry 两层分层的写入/删除/读取语义：registerProvider 注册时无条件先删 native 重载层条目再 merge 写扩展注册层（undefined 字段保留前值）；unregisterProvider 两层同删且无恢复（register 顶掉的 native 条目不回填）；getRegisteredProviderIds 返回两层 keys 并集。scheduler ack 判据②的 pi 侧前提：providerId 已被任一层持有时，scheduler 覆写注册会静默顶掉该第三方注册（含覆写内置 provider 的第三方注册），故 no-base 短路必须先于 builtin/models.json 的 available 判定——registry 分层语义漂移时判据②前提失效（fail-closed 方向，最坏误降级文案）",
+    "claim": "provider registry 两层分层的写入/删除/读取语义：registerProvider 注册时无条件先删 native 重载层条目再 merge 写扩展注册层（undefined 字段保留前值）；unregisterProvider 两层同删且无恢复（register 顶掉的 native 条目不回填）；getRegisteredProviderIds 返回两层 keys 并集。覆写语义边界：providerId 已被任一层持有时，扩展覆写注册会静默顶掉该第三方注册（含覆写内置 provider 的第三方注册）——taiji 现无消费方（scheduler ack 判据②曾以此承重，ack 机制已随任务库重构退役删除），本条作为 pi 原生行为边界登记保留：任何未来 registerProvider 消费方须以「覆写即顶掉」为前提",
     "piAnchor": [
       {
         "pkg": "pi-coding-agent",
@@ -1103,7 +1103,7 @@
     ],
     "guard": {
       "type": "observe",
-      "note": "消费方：extensions/universal/scheduler/src/ack-provider.ts computeAckAvailability 判据②注释（no-base 短路先于 available 判定）。pi 升级时重验三断言：registerProvider 是否仍无条件删 native 层（若改为保留/合并 native 条目，覆写不再顶掉第三方注册，判据②可放宽）；unregisterProvider 是否仍两层同删无恢复；getRegisteredProviderIds 是否仍两层并集（若改为仅扩展层，isProviderRegistered 漏看 native 层注册）——任一漂移须复审 scheduler ack 判据②的 no-base 前提"
+      "note": "taiji 现无消费方（scheduler ack 已退役）——本条作为 pi 原生行为边界登记保留。pi 升级时重验三断言：registerProvider 是否仍无条件删 native 层（若改为保留/合并 native 条目，覆写不再顶掉第三方注册）；unregisterProvider 是否仍两层同删无恢复；getRegisteredProviderIds 是否仍两层并集（若改为仅扩展层，扩展层视角漏看 native 层注册）——任一漂移须复审「覆写即顶掉」边界的成立前提"
     },
     "verifiedWith": "1.0.0"
   },

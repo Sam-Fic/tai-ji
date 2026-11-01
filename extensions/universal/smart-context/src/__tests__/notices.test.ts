@@ -47,10 +47,32 @@ describe("buildCompactFailureNotice（U5/D6 失败通知：四终局原因行，
 		expect(text).toContain("[smart-context]");
 	});
 
-	it("dropped（校验放弃/探测失败）：说明会话状态变化与未落盘", () => {
+	it("dropped（被抢先）：说明另一轮压缩已生效，不声称「上下文保持原样」", () => {
+		const text = buildCompactFailureNotice({ outcome: "dropped", droppedReason: "preempted" });
+		expect(text).toContain("另一轮压缩已先行落盘");
+		expect(text).toContain("未再写入");
+		expect(text).not.toContain("上下文保持原样"); // 上下文已被较新压缩结果改变
+	});
+
+	it("dropped（会话已切换）：说明切换事实，不声称「上下文保持原样」", () => {
+		const text = buildCompactFailureNotice({ outcome: "dropped", droppedReason: "session-mismatch" });
+		expect(text).toContain("会话已切换");
+		expect(text).toContain("未落盘");
+		expect(text).toContain("不受本次压缩影响");
+		expect(text).not.toContain("上下文保持原样");
+	});
+
+	it("dropped（写入接口不可用）：上下文确实未被触碰，如实声明保持原样", () => {
+		const text = buildCompactFailureNotice({ outcome: "dropped", droppedReason: "persist-unavailable" });
+		expect(text).toContain("写入接口不可用");
+		expect(text).toContain("上下文保持原样");
+	});
+
+	it("dropped（未细分缺省）：只说会话状态变化与未落盘，不声称保持原样", () => {
 		const text = buildCompactFailureNotice({ outcome: "dropped" });
 		expect(text).toContain("会话状态已变化");
 		expect(text).toContain("未落盘");
+		expect(text).not.toContain("上下文保持原样");
 	});
 
 	it("empty（生成空结果）：带重试指引", () => {
@@ -72,9 +94,12 @@ describe("buildCompactFailureNotice（U5/D6 失败通知：四终局原因行，
 		expect(text).toContain("compact_context 工具仍可手动调用"); // SI5：工具路径不受熔断影响
 	});
 
-	it("未达熔断：empty/error 带重试行；inflated/dropped 不带（放弃类无需重试指引）", () => {
+	it("未达熔断：empty/error 带重试行；inflated/dropped（含各细分原因）不带（放弃类无需重试指引）", () => {
 		expect(buildCompactFailureNotice({ outcome: "empty", failureStreak: 1 })).toContain("重试");
 		expect(buildCompactFailureNotice({ outcome: "inflated" })).not.toContain("重试");
+		for (const droppedReason of ["preempted", "session-mismatch", "persist-unavailable"] as const) {
+			expect(buildCompactFailureNotice({ outcome: "dropped", droppedReason })).not.toContain("重试");
+		}
 		expect(buildCompactFailureNotice({ outcome: "dropped" })).not.toContain("重试");
 	});
 });

@@ -233,6 +233,7 @@ export default function smartContextExtension(pi: ExtensionAPI): void {
 		}
 		const text = buildCompactFailureNotice({
 			outcome: settlement.outcome,
+			droppedReason: settlement.droppedReason,
 			error: settlement.error,
 			failureStreak: settlement.failureStreak,
 			circuitBreakerOpen: settlement.circuitBreakerOpen,

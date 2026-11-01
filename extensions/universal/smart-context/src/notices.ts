@@ -38,6 +38,7 @@ import {
 } from "@zhushanwen/extension-protocol";
 
 import { debugLog } from "./compact-handler.js";
+import type { DroppedReason } from "./compact-handler.js";
 import { formatK } from "./pure.js";
 
 // customType 单源在 extension-protocol（runtime 分诊同源消费），此处 re-export 保持既有
@@ -133,6 +134,11 @@ export function buildCompactCompleteNotice(input: CompactCompleteNoticeInput): s
 export interface CompactFailureNoticeInput {
 	/** 失败终局（dropped 涵盖落盘兜底校验放弃与 appendCompaction 探测失败两类）。 */
 	outcome: "inflated" | "dropped" | "empty" | "error";
+	/**
+	 * outcome=dropped 时的细分原因（compact-handler 透传）：按实际终局分文案——
+	 * preempted / session-mismatch 下上下文已被另一轮压缩或新会话改变，不得声称「上下文保持原样」。
+	 */
+	droppedReason?: DroppedReason;
 	/** outcome=error 时的错误消息。 */
 	error?: string;
 	/** 失败类终局的独立熔断计数（文案展示用）。 */
@@ -141,13 +147,26 @@ export interface CompactFailureNoticeInput {
 	circuitBreakerOpen?: boolean;
 }
 
-/** 失败原因行（按终局给短语与恢复动作；「上下文保持原样」是各终局共同的不变量）。 */
+/**
+ * 失败原因行（按终局给短语与恢复动作）。「上下文保持原样」不是各终局共同的不变量——
+ * 只对确认未触碰上下文的终局声明（inflated / empty / error / persist-unavailable）；
+ * preempted / session-mismatch 下上下文已被另一轮压缩或新会话改变，文案如实描述发生了什么。
+ */
 function compactFailureReasonLine(input: CompactFailureNoticeInput): string {
 	switch (input.outcome) {
 		case "inflated":
 			return "后台压缩已放弃：生成的摘要未缩小上下文（无净收益），结果未落盘，上下文保持原样。";
 		case "dropped":
-			return "后台压缩已放弃：生成期间会话状态已变化（被其他压缩抢先或会话已切换），结果未落盘，上下文保持原样。";
+			switch (input.droppedReason) {
+				case "preempted":
+					return "后台压缩已放弃：另一轮压缩已先行落盘，上下文已使用该较新的压缩结果，本次结果未再写入。";
+				case "session-mismatch":
+					return "后台压缩已放弃：生成期间会话已切换，本次结果未落盘；当前会话的上下文不受本次压缩影响。";
+				case "persist-unavailable":
+					return "后台压缩已放弃：会话存储的压缩写入接口不可用，结果未落盘，上下文保持原样。";
+				default:
+					return "后台压缩已放弃：生成期间会话状态已变化，结果未落盘。";
+			}
 		case "empty":
 			return "后台压缩失败：摘要生成未返回结果，上下文保持原样。";
 		case "error":

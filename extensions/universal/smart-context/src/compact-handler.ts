@@ -173,14 +173,30 @@ export function isAutoCompactTriggered(tokens: number, contextWindow: number, ra
 	return tokens >= contextWindow * ratio;
 }
 
+/**
+ * dropped 终局的细分原因（通知文案分派用）：dropped 本身只说明「本次结果未落盘」，不说明
+ * 上下文是否被动过——preempted / session-mismatch 下上下文已被另一轮压缩或新会话改变，
+ * 通知不得再声称「上下文保持原样」。
+ */
+export type DroppedReason =
+	/** 会话已切换（兜底校验① 或 stale ctx 代际防线命中）：本次结果未落盘，原会话不受影响。 */
+	| "session-mismatch"
+	/** 被其他压缩抢先：另一轮压缩已落盘，上下文已使用较新的压缩结果。 */
+	| "preempted"
+	/** appendCompaction 写入接口不可用（RL3 探测失败）：结果未落盘，上下文保持原样。 */
+	| "persist-unavailable";
+
 /** 生成完成后续段的处置回报（U3 收缩校验+落盘的裁决结果，驱动独立熔断计数）。 */
 export type ContinuationOutcome =
 	/** 校验通过且已落盘 → 成功清零。 */
 	| "validated"
 	/** 收缩校验失败（摘要膨胀）放弃落盘 → 熔断递增（递增点之二）。 */
 	| "inflated"
-	/** 落盘兜底校验失败（sessionId 不一致 / 被抢先压缩）放弃 → 会话态失效类放弃，非生成质量问题，计数不动。 */
-	| "dropped";
+	/**
+	 * 落盘兜底校验失败 / 写入接口不可用 / stale ctx 前置命中 → 会话态失效类放弃，非生成
+	 * 质量问题，计数不动。携带细分原因（droppedReason）供通知文案如实分派。
+	 */
+	| { outcome: "dropped"; reason: DroppedReason };
 
 /**
  * 生成完成后续段钩子（U3 接线点：收缩校验 + appendCompaction 落盘 + 补偿）。
@@ -218,6 +234,11 @@ export interface BackgroundTaskSettlement {
 		| "empty"
 		/** 生成异常 → 失败通知（递增点③）。 */
 		| "error";
+	/**
+	 * outcome=dropped 时携带：放弃原因（通知文案分派——preempted / session-mismatch 下
+	 * 上下文已被另一轮压缩或新会话改变，通知不得声称「上下文保持原样」）。
+	 */
+	droppedReason?: DroppedReason;
 	/** 本次任务的模式（完成通知展示「压缩前后 token 数与模式」，D6）。 */
 	mode: "same-model" | "cross-model";
 	/** validated/inflated 时携带：生成的压缩结果（tokensBefore/summary/estimatedTokensAfter 通知数据源）。 */
@@ -339,12 +360,13 @@ export async function persistBackgroundCompaction(
 	isCtxStale?: () => boolean,
 ): Promise<ContinuationOutcome> {
 	const outcome = await guardStaleCtx(
-		async () => {
+		// 显式返回类型：dropped 的对象字面量不经泛型推断宽化（outcome/reason 保持字面量类型）
+		async (): Promise<ContinuationOutcome> => {
 			const host = asAppendCompactionHost(ctx.sessionManager);
 			// RL3 存在性探测：方法缺失 = pi 观察级依赖失效，放弃落盘不抛错（绝不静默）
 			if (!host || typeof host.appendCompaction !== "function") {
 				warnLog("background compaction persist skipped: sessionManager.appendCompaction unavailable");
-				return "dropped";
+				return { outcome: "dropped", reason: "persist-unavailable" };
 			}
 
 			// D3 第二层：三项兜底校验（entriesNow 与 appendCompaction 之间无 await——单线程事件循环
@@ -362,7 +384,8 @@ export async function persistBackgroundCompaction(
 					return "inflated";
 				}
 				debugLog(`background compaction persist rejected: ${verdict.reason} (sessionId=${snapshot.sessionId})`);
-				return "dropped";
+				// 此处 reason 已 narrow 为 session-mismatch | preempted（summary-inflated 上面已分支）
+				return { outcome: "dropped", reason: verdict.reason };
 			}
 
 			try {
@@ -392,8 +415,9 @@ export async function persistBackgroundCompaction(
 				debugLog(`background compaction persist skipped (stale ctx, sessionId=${snapshot.sessionId})`),
 		},
 	);
-	// 前置检查命中时 guardStaleCtx 返回 undefined（fn 未执行、无 Promise 可言）→ 按 dropped 回报
-	return outcome ?? "dropped";
+	// 前置检查命中时 guardStaleCtx 返回 undefined（fn 未执行、无 Promise 可言）→ 按 dropped 回报。
+	// 原因归 session-mismatch：stale ctx 防线命中即会话已替换（C-pi-17），与兜底校验①同类事实。
+	return outcome ?? { outcome: "dropped", reason: "session-mismatch" };
 }
 
 /**
@@ -902,8 +926,10 @@ async function runBackgroundTask(
 				circuitBreakerOpen: state.failureStreak >= TAKEOVER_FAILURE_LIMIT,
 			});
 		} else {
-			debugLog(`background compaction dropped by continuation (stale snapshot, sessionId=${snapshot.sessionId})`);
-			settle({ outcome: "dropped" });
+			debugLog(
+				`background compaction dropped by continuation (reason=${outcome.reason}, sessionId=${snapshot.sessionId})`,
+			);
+			settle({ outcome: "dropped", droppedReason: outcome.reason });
 		}
 	} catch (error) {
 		// 取消引发的异常（abort 竞态）不算失败
