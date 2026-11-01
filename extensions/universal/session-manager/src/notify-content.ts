@@ -69,7 +69,14 @@ export function buildManagedNotifyContent(params: ManagedNotifyContentParams): s
 export interface ManagedNotifyDetails {
 	/** 本批 record 的幂等键 = 批内首个响应的 notifyId（≤1 record/批由合批边界保证） */
 	notifyId: string;
-	sessionId: string;
+	/**
+	 * managed 子会话 id（主路径 = watch 应答 payload 回带）。completion-signal-delivery
+	 * D8⑤：对账补投的骨架简报 details 缺席该字段——判据源（pending 表）落盘的
+	 * sessionId 是 listener 侧父会话 id，非本字段所指的子会话 id，取用即谎报
+	 * （R-1 条款）；core extractNotifyRecords 读侧只消费 notifyId 与 reason，
+	 * sessionId 为诊断冗余，缺席不影响消费。
+	 */
+	sessionId?: string;
 	reason: string;
 	/** 批内处理完毕笔数（runtime fulfillsN 直供，缺省回退批长——见 watch-coordinator） */
 	fulfills: number;

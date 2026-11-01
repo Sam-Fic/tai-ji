@@ -38,8 +38,19 @@ type DeliverCall = {
 	collectKey: string[] | undefined;
 };
 
-function plantPort(behavior: "accept" | "reject" = "accept"): Array<DeliverCall> {
+/**
+ * 桩行为脚本项：accept（受理）| reject（拒收）。序列按 deliver 调用序消费（耗尽
+ * 后循环末项）——「首投 rejected、重提 accepted」的 disposed 窗口重绑恢复形态用
+ * ["reject", "accept"] 表达。reject 行为不进 calls（calls 只收受理）——重提单次
+ * 形态的计数经「deliver 被调次数」断言（attempt 封装在桩内，calls 长度 +
+ * rejected 次数还原总调次）。
+ */
+type DeliverStep = "accept" | "reject";
+
+function plantPort(behavior: DeliverStep | DeliverStep[] = "accept"): Array<DeliverCall> {
 	const calls: Array<DeliverCall> = [];
+	const script = Array.isArray(behavior) ? behavior : [behavior];
+	let attempt = 0;
 	Reflect.set(globalThis, PORT_SLOT_KEY, {
 		current: {
 			deliver: (
@@ -49,7 +60,9 @@ function plantPort(behavior: "accept" | "reject" = "accept"): Array<DeliverCall>
 				},
 				opts?: { collectKey?: string[] },
 			) => {
-				if (behavior === "reject") return { kind: "rejected", reason: "persist-failed (fake)" };
+				const step = script[Math.min(attempt, script.length - 1)]!;
+				attempt += 1;
+				if (step === "reject") return { kind: "rejected", reason: "persist-failed (fake)" };
 				calls.push({
 					id: envelope.id,
 					customType: envelope.payload.customType,
@@ -97,12 +110,33 @@ describe("recordManagedNotify 投递接入纪律（unified-delivery 波 2：port
 		expect(delivered[0]!.collectKey).toEqual(["sm-a", "sm-b"]);
 	});
 
-	it("port rejected（persist-failed）→ warn + false（幂等键未登记，watch 重试合法；不静默吞）", () => {
+	it("port rejected（persist-failed）→ 立即单次重提（D8①）：deliver 被调恰 2（原投 1 + 重提 1）、无第三次投递（RL10 单次形态同锁）、重提仍 rejected → false + warn 含对账恢复指引", () => {
 		plantPort("reject");
 		expect(recordManagedNotify("sm-rej", "content", makeDetails("sm-rej"), ["sm-rej"])).toBe(false);
 		expect(loggerMock.warn).toHaveBeenCalledWith(
 			expect.stringContaining("delivery port rejected notification"),
 			expect.objectContaining({ notifyId: "sm-rej" }),
+		);
+		// RL10：重提仍 rejected 即停（无重试循环无定时器）——warn 文案含单次语义与
+		// 对账边沿恢复指引（RL11 同族：持久成因不静默重试）
+		expect(loggerMock.warn).toHaveBeenCalledWith(
+			expect.stringContaining("notify retry rejected after the single re-acquire attempt"),
+			expect.objectContaining({ notifyId: "sm-rej" }),
+		);
+	});
+
+	it("rejected 后单次重提 accepted（disposed 窗口重绑恢复形态）→ true：重提原 envelope（同幂等键同 collectKey 申报）受理即恢复", () => {
+		const delivered = plantPort(["reject", "accept"]);
+		expect(recordManagedNotify("sm-retry", "hello", makeDetails("sm-retry"), ["sm-retry"])).toBe(true);
+		// 原投 rejected（不进 calls）+ 重提 accepted（进 calls）= 恰 1 条受理
+		expect(delivered).toHaveLength(1);
+		expect(delivered[0]!.id).toBe("sm-retry");
+		expect(delivered[0]!.content).toBe("hello");
+		expect(delivered[0]!.collectKey).toEqual(["sm-retry"]);
+		// 无第三次投递（重提受理即收尾——RL10 的收尾语义）
+		expect(loggerMock.warn).not.toHaveBeenCalledWith(
+			expect.stringContaining("retry rejected"),
+			expect.anything(),
 		);
 	});
 
@@ -120,6 +154,25 @@ describe("recordManagedNotify 投递接入纪律（unified-delivery 波 2：port
 		expect(loggerMock.warn).toHaveBeenCalledWith(
 			expect.stringContaining("notify delivery failed"),
 			expect.objectContaining({ notifyId: "sm-throw-2" }),
+		);
+	});
+
+	it("rejected 后重取缺席（重提前槽被 dispose）→ 即停转对账兜底 + warn（重提路径第二停止位，不扩直发降级）", () => {
+		Reflect.set(globalThis, PORT_SLOT_KEY, {
+			current: {
+				deliver: () => {
+					// 模拟转换窗竞态：主投 rejected 后旧实例被 dispose（槽摘除——
+					// 重提的 getDeliveryPort() 将取到 undefined）
+					Reflect.deleteProperty(globalThis, PORT_SLOT_KEY);
+					return { kind: "rejected", reason: "persist-failed (fake)" };
+				},
+				flush: () => {},
+			},
+		});
+		expect(recordManagedNotify("sm-absent", "content", makeDetails("sm-absent"), ["sm-absent"])).toBe(false);
+		expect(loggerMock.warn).toHaveBeenCalledWith(
+			expect.stringContaining("delivery port absent on re-acquire"),
+			expect.objectContaining({ notifyId: "sm-absent" }),
 		);
 	});
 });

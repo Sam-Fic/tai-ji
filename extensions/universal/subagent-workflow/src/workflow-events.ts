@@ -35,6 +35,7 @@
  */
 
 import type {
+  AgentSettledEvent,
   ExtensionAPI,
   ExtensionContext,
   SessionShutdownEvent,
@@ -43,6 +44,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
+import { runNotifyReconcileMaintenance } from "./workflow-notify-reconcile.ts";
 // ═══ 经 core barrel 消费 workflow 域（引擎与 worker 住 packages/subagent-core） ═══
 import { bestEffort } from "@zhushanwen/subagent-core";
 import { getSubagentService } from "@zhushanwen/subagent-core";
@@ -543,12 +545,51 @@ export function setupWorkflowDomain(
       // [容器扩展点统一 §6.6 U10] workflow 托盘件初始推送（与 subagent 件同位——attach
       // 放装配链完成后，sessionState 条目已在，readRuns 现读 runs Map 做绝对投影）。
       workflowTrayWidgetPusher.attach(ctx);
+      // 通知对账步（completion-signal-delivery D8② 入口①）：wf-done 收尾通知
+      // rejected 丢失形态的事实判据补投——session_start 重绑是确定性边沿（旧 pi
+      // 实例的 rejected 通知在此恢复）。与 agent_settled 入口（下方订阅）互调
+      // 同一对账函数 runNotifyReconcileMaintenance（RL12 判据单一）；幂等由判据
+      // 的投递日志承载/送达痕迹两事实抵消保证（补投受理成功即有 outbox 条目落盘）。
+      // store 健康门（storeHealthy=false = 装配期 loadAll 已 fail-fast）：判据源
+      // record 流不可信，对账不跑（状态留待恢复链收编）。
+      if (result.storeHealthy) {
+        await runNotifyReconcileMaintenance({
+          reason: "session_start",
+          pi,
+          entries: ctx.sessionManager.getEntries(),
+          notifiedRunIds,
+          settledRecordOf: (runId) => result.store.settledRecordOf(runId),
+          loadRuns: () => result.store.loadAll(),
+        });
+      }
     } catch (err) {
       logger.error(
         `[subagent-workflow] session_start handler failed (sessionId=${lsRef.lastSessionId})`,
         { reason: toErrorMessage(err) },
       );
     }
+  });
+
+  // 通知对账步入口②（completion-signal-delivery D8②）：agent_settled 回合收尾
+  // 边沿——进程存活形态（重提失败后不重启不切回）的兜底恢复入口（ADR-0122 保留
+  // 白名单同族：事件驱动、判据现算磁盘事实，无定时器）。订阅生命周期（RL13
+  // 同款）：本注册点 = extension load 装配期，每 pi 实例恰一次；同进程 session
+  // 替换会重建 eventBus 并重新 load extension，旧实例连同其订阅一并消亡、新
+  // 实例重新注册——无死 handler 累积（构造性成立）。fire-and-forget（编排内部
+  // 全量 catch，失败 warn 不反噬回合收尾链）；高频边沿的常态零成本由判据预检
+  // 短路兜住（候选空零 record 读）。sessionState 条目缺席（装配链未完成/已
+  // shutdown）静默早退——对账依赖 store 面，无 store 无判据源。
+  pi.on("agent_settled", (_event: AgentSettledEvent, ctx: ExtensionContext) => {
+    const state = sessionState.get(ctx.sessionManager.getSessionId());
+    if (!state || !state.storeHealthy) return;
+    void runNotifyReconcileMaintenance({
+      reason: "agent_settled",
+      pi,
+      entries: ctx.sessionManager.getEntries(),
+      notifiedRunIds,
+      settledRecordOf: (runId) => state.store.settledRecordOf(runId),
+      loadRuns: () => state.store.loadAll(),
+    });
   });
 
   // ════════════════════════════════════════════════════════════

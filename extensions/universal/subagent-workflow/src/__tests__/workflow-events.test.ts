@@ -1018,10 +1018,13 @@ describe("runSettledEffects：三步固定顺序", () => {
 //（Map 保持插入序），与锁定的事件序列逐位比对。[波 2] session_compact 注册
 //（notify ledger compaction 补写检查）随账本退役删除——pi session append-only
 // 契约排除 entry 被清事件（unified-delivery §3.7②），序列 7 → 6。
+// completion-signal-delivery D8② 增补 agent_settled（wf-done 通知对账步入口②，
+// 注册位 = session_start 之后），序列 6 → 7。
 
-/** 锁定的注册顺序（波 2 后的 6 事件序列，逐位不变契约）。 */
+/** 锁定的注册顺序（波 2 后 6 事件 + D8② 对账订阅 = 7 事件序列，逐位不变契约）。 */
 const EXPECTED_REGISTRATION_ORDER = [
   "session_start",
+  "agent_settled",
   "model_select",
   "session_tree",
   "session_before_fork",
@@ -1030,7 +1033,7 @@ const EXPECTED_REGISTRATION_ORDER = [
 ] as const;
 
 describe("setupWorkflowDomain pi.on 注册顺序", () => {
-  it("6 个事件按锁定序列逐位注册（跨域 setup* 调用原位、不改变序列）", () => {
+  it("7 个事件按锁定序列逐位注册（跨域 setup* 调用原位、不改变序列；agent_settled = D8② 对账步入口②）", () => {
     const { pi, handlers } = makePi();
     setupWorkflowDomain(pi, { inflightReporter: makeReporter() });
 
