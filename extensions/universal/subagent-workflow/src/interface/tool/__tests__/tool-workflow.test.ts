@@ -1112,6 +1112,7 @@ describe("tool-workflow", () => {
       initModel: vi.fn(),
       reloadGlobalConfig: vi.fn(() => ({ status: "absent", config: { version: 1, maxConcurrent: 6 } })),
       getModelRegistry: () => ({ getAvailable: () => entries }),
+      getScopedModels: () => [],
     } as never);
   }
 

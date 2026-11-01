@@ -320,6 +320,7 @@ function assertResumeModelInCatalog(model: string): void {
   }
   assertModelInCatalog(model, modelService.getModelRegistry(), {
     source: "resume model override",
+    scopedAllowList: modelService.getScopedModels(),
   });
 }
 

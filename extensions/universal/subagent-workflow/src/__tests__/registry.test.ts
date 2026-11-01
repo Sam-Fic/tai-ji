@@ -17,7 +17,7 @@ import * as path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { registerFakePiEngine, type FakePiEnginePort } from '@zhushanwen/subagent-core/testing/execution/__tests__/helpers/fake-engine-port.ts'
 import { clearEngines, registerEngine } from '@zhushanwen/subagent-core/execution/engine/registry.ts'
-import { ModelConfigService, RecordStore, SubagentService, buildEngineModelsPromptAppend, buildSubagentEngineSection, formatModelList, type EnginePort, type ModelEntry, closeHandler, forkFromHandler, messageHandler, type GlobalConfigReadResult } from '@zhushanwen/subagent-core'
+import { ModelConfigService, RecordStore, SubagentService, buildEngineModelsPromptAppend, buildSubagentEngineSection, formatModelList, getModelConfigService, setModelConfigService, type EnginePort, type ModelEntry, closeHandler, forkFromHandler, messageHandler, type GlobalConfigReadResult } from '@zhushanwen/subagent-core'
 import { type ModelInfo, type ModelRegistryLike } from '@zhushanwen/subagent-core/execution/assembly/model-resolver.ts'
 import { resetCoreForTests } from '@zhushanwen/subagent-core/core/host-services.ts'
 import { type EnginePort as EnginePortDeep } from '@zhushanwen/subagent-core/execution/engine/port.ts'
@@ -1348,3 +1348,68 @@ describe("engine-awareness", () => {
   	});
   });
 });
+
+
+// ======== scoped-models 白名单过滤（model list injector）========
+describe("model-list-injector scoped filter", () => {
+  /** 自包含最小 fixture（链序 fixture 在外层 describe 作用域内，不跨作用域复用）。 */
+  const ENTRIES: ModelEntry[] = [
+    { provider: "zai-coding-cn", id: "glm-5.3", name: "GLM 5.3", reasoning: true, input: ["text"], contextWindow: 200_000 },
+    { provider: "minimax-cn", id: "MiniMax-M3", name: "MiniMax M3", reasoning: true, input: ["text", "image"], contextWindow: 1_000_000 },
+  ]
+  const BASE_PROMPT = "You are a coding agent."
+
+  async function renderPrompt(): Promise<string> {
+    const handlers: Array<(event: { systemPrompt: string }, ctx: unknown) => unknown> = []
+    const api = {
+      on: (_event: string, handler: (...args: unknown[]) => unknown) => {
+        handlers.push(((event: unknown, ctx: unknown) => handler(event, ctx)) as typeof handlers[number])
+      },
+    } as unknown as ExtensionAPI
+    setupModelListInjector(api)
+    const ctx = { modelRegistry: { getAvailable: () => ENTRIES } }
+    let prompt = BASE_PROMPT
+    for (const handler of handlers) {
+      const result: unknown = await handler({ systemPrompt: prompt }, ctx)
+      if (typeof result === "object" && result !== null && "systemPrompt" in result) {
+        const sp: unknown = (result as { systemPrompt: unknown }).systemPrompt
+        if (typeof sp === "string") prompt = sp
+      }
+    }
+    return prompt
+  }
+
+  afterEach(() => {
+    // 还原进程级单例（本文件其他用例依赖「缺席 → 全量回退」形态）
+    setModelConfigService(null)
+  })
+
+  it("单例缺席（生产不可达形态）→ 全量回退，行为与旧版一致", async () => {
+    setModelConfigService(null)
+    const prompt = await renderPrompt()
+    expect(prompt).toContain("glm-5.3")
+    expect(prompt).toContain("MiniMax-M3")
+  })
+
+  it("白名单非空 → 注入段只含白名单内模型（带后缀条目归一命中）", async () => {
+    const fake = {
+      getModelRegistry: () => undefined,
+      getScopedModels: () => ["zai-coding-cn/glm-5.3:high"],
+    } as unknown as ModelConfigService
+    setModelConfigService(fake)
+    const prompt = await renderPrompt()
+    expect(prompt).toContain("glm-5.3")
+    expect(prompt).not.toContain("MiniMax-M3")
+  })
+
+  it("白名单为空（未启用）→ 全量注入", async () => {
+    const fake = {
+      getModelRegistry: () => undefined,
+      getScopedModels: () => [],
+    } as unknown as ModelConfigService
+    setModelConfigService(fake)
+    const prompt = await renderPrompt()
+    expect(prompt).toContain("glm-5.3")
+    expect(prompt).toContain("MiniMax-M3")
+  })
+})

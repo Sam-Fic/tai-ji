@@ -664,6 +664,7 @@ export async function actionRun(
     } else {
       assertModelInCatalog(params.model, modelService.getModelRegistry(), {
         source: "run-level model override",
+        scopedAllowList: modelService.getScopedModels(),
       });
     }
   }

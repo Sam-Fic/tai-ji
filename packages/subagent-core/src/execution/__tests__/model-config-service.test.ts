@@ -109,3 +109,70 @@ describe("ModelConfigService ctxModel 缓存", () => {
     expect(() => svc.resolveModel("general-purpose")).toThrow(/No available model/);
   });
 });
+
+// ============================================================
+// scoped-models 白名单读取（getScopedModels / resolveModel 自动挂接）
+// ============================================================
+
+describe("ModelConfigService scoped-models", () => {
+  let agentDir: string;
+
+  beforeEach(() => {
+    agentDir = makeTmpAgentDir();
+  });
+
+  afterEach(() => {
+    fs.rmSync(agentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  });
+
+  function writeProvidersJson(scopedModels: unknown): void {
+    fs.mkdirSync(path.join(agentDir, "config"), { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, "config", "providers.json"),
+      JSON.stringify({ scopedModels }),
+      "utf-8",
+    );
+  }
+
+  it("文件缺失 → 空数组（未启用）", () => {
+    expect(makeModelService(agentDir).getScopedModels()).toEqual([]);
+  });
+
+  it("正常 string[] 原样返回（含带后缀条目——写入侧放行形态）", () => {
+    writeProvidersJson(["p/a", "p/b:high"]);
+    expect(makeModelService(agentDir).getScopedModels()).toEqual(["p/a", "p/b:high"]);
+  });
+
+  it("坏 JSON / 字段非数组 / 混入非字符串条目 → 宽松回空 / 过滤", () => {
+    fs.mkdirSync(path.join(agentDir, "config"), { recursive: true });
+    fs.writeFileSync(path.join(agentDir, "config", "providers.json"), "{not json", "utf-8");
+    expect(makeModelService(agentDir).getScopedModels()).toEqual([]);
+
+    writeProvidersJson("not-an-array");
+    expect(makeModelService(agentDir).getScopedModels()).toEqual([]);
+
+    writeProvidersJson(["p/a", 42, null]);
+    expect(makeModelService(agentDir).getScopedModels()).toEqual(["p/a"]);
+  });
+
+  it("resolveModel 显式指定自动过白名单（service 层挂接，调用方零改动）", () => {
+    writeProvidersJson(["p1/allowed"]);
+    const service = makeModelService(agentDir);
+    const allowedModel = { id: "allowed", name: "L", provider: "p1", reasoning: false } as ModelInfo;
+    const deniedModel = { id: "denied", name: "D", provider: "p2", reasoning: false } as ModelInfo;
+    const registry: ModelRegistryLike = {
+      getAvailable: () => [allowedModel, deniedModel],
+      find: (provider, id) =>
+        provider === "p1" && id === "allowed"
+          ? allowedModel
+          : provider === "p2" && id === "denied"
+            ? deniedModel
+            : undefined,
+      hasConfiguredAuth: () => true,
+    };
+    service.initModel({ modelRegistry: registry, sessionId: "s1", ctxModel: undefined });
+    expect(() => service.resolveModel("", { model: "p2/denied" })).toThrow(/scoped-models/);
+    const ok = service.resolveModel("", { model: "p1/allowed" });
+    expect(`${ok.model.provider}/${ok.model.id}`).toBe("p1/allowed");
+  });
+});

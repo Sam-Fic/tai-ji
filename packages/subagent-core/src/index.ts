@@ -274,6 +274,16 @@ export {
   type ModelCatalogSource,
 } from "./shared/model-catalog.ts";
 
+// scoped-models 白名单（taiji 设置域 → 派发校验链）：归一化/断言纯函数单源在
+// shared，providers.json 读取（IO）单源在 assembly；runtime 侧
+// aggregateModelsWithScoped 的 Map key 归一化同经 scopedModelKey（跨进程单源）。
+export {
+  scopedModelKey,
+  assertModelWithinScoped,
+  readScopedModels,
+  getScopedModelsPath,
+} from "./execution/assembly/scoped-models.ts";
+
 // identity 重建常量与类型：session_start identity custom entry 的写入侧契约。
 export {
   IDENTITY_CUSTOM_TYPE,
