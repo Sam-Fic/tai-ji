@@ -375,6 +375,43 @@ describe("RL14 三入口必触发（编排互调同一对账函数，漏挂任�
     );
   });
 
+  // [A5 product-bug 修复回归] 入口③生产接线面 = 装配实例转发通道：扩展侧经
+  // SubagentService.runNotifyReconcileMaintenance → NotifyHost.runReconcile（本用例
+  // 锁 host 公开面）。与包导出直调（③）的区别在事实源/补投出口取自 host 装配——
+  // 扩展侧无法直构 deps，漏挂本通道 = A5 组 a 零补投的缺陷形态。
+  it("③' 切回（resume）转发通道：NotifyHost.runReconcile 外部触发恰一次、reason 透传（V4b 入口③生产接线面）", async () => {
+    const source = makeSource([reconcileRecord("bg-entry-3b")]);
+    const { pi } = makePi();
+    const host = createNotifyHost(makeHostDeps(source, pi));
+
+    // revive（入口①）先行落位；mockClear 后单测入口③通道本身。
+    host.revive();
+    source.listReconcileRecords.mockClear();
+    host.runReconcile("resume");
+    // 恰一次 + 入口来源可辨（RL14——与内部两入口同编排、同 reason 透传）。
+    expect(source.listReconcileRecords).toHaveBeenCalledTimes(1);
+    expect(loggerMock.debug).toHaveBeenCalledWith(
+      "notify reconcile dispatch",
+      expect.objectContaining({ detail: expect.objectContaining({ reason: "resume" }) }),
+    );
+  });
+
+  it("③'' 切回转发通道同样受预检短路护栏约束：无候选不触 entries 全读取", async () => {
+    const source = makeSource([
+      reconcileRecord("bg-live-3c", { status: "running", closedReason: undefined }),
+    ]);
+    const { pi } = makePi();
+    const host = createNotifyHost(makeHostDeps(source, pi));
+
+    host.revive();
+    source.listReconcileRecords.mockClear();
+    source.readSessionEntries.mockClear();
+    host.runReconcile("resume");
+    // 编排已进入（records 扫描发生），但无候选短路——entries 全读取不发生。
+    expect(source.listReconcileRecords).toHaveBeenCalledTimes(1);
+    expect(source.readSessionEntries).not.toHaveBeenCalled();
+  });
+
   it("事实源缺席（deps 未注入 getReconcileSource）→ 对账不挂（缺席 debug 留痕一次，行为兼容既有构造方）", () => {
     const { pi } = makePi();
     const host = createNotifyHost(makeHostDeps(undefined, pi));

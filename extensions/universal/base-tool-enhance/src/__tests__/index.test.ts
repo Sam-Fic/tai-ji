@@ -6,12 +6,18 @@ import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-const { createBashToolDefinitionMock, dataDirRef } = vi.hoisted(() => ({
+const { createBashToolDefinitionMock, dataDirRef, subagentServiceRef } = vi.hoisted(() => ({
 	createBashToolDefinitionMock: vi.fn(),
 	dataDirRef: { dir: "/tmp/bte-fake-agent-dir" },
+	// [A5 缺陷修复回归] 切回入口 subagent 域对账转发的单例桩——mock 包级单例访问器
+	//（真单例由 subagent-workflow 装配链 session_start 时创建，本测试面只锁转发行为）。
+	subagentServiceRef: { current: null as unknown },
 }));
 vi.mock("@earendil-works/pi-coding-agent", () => ({
 	createBashToolDefinition: createBashToolDefinitionMock,
+}));
+vi.mock("@zhushanwen/subagent-core", () => ({
+	getSubagentService: () => subagentServiceRef.current,
 }));
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -24,7 +30,10 @@ function createMockPi() {
 	return {
 		registerTool: vi.fn(),
 		registerCommand: vi.fn(),
-		on: vi.fn(),
+		// pi 1.0.0 契约：on 返回退订函数（delivery-port 装配在 session_start 重绑时
+		// dispose 旧实例兑现退订——mock 需符合真契约，否则重绑 dispose 对 undefined
+		// 退订函数调用即 TypeError；maintenance-once.test.ts 同款形态）
+		on: vi.fn(() => () => {}),
 		appendEntry: vi.fn(),
 		events: { emit: vi.fn(), on: vi.fn() },
 		sendMessage: vi.fn(),
@@ -144,6 +153,104 @@ describe("__taiji_bg_reconcile__ command: runtime-resume trigger face", () => {
 			dataDirRef.dir = "/tmp/bte-fake-agent-dir";
 			vi.unstubAllEnvs();
 			resetNotifyForTest();
+		}
+	});
+});
+
+// [A5 product-bug 修复回归] 切回入口 subagent 域对账转发（completion-signal-delivery
+// V4b 入口③）：漏挂本转发 = 组 a 切回零补投的缺陷形态（RL14 三入口的扩展侧落位）。
+// 转发通道 = 进程单例 SubagentService.runNotifyReconcileMaintenance（事实源与补投出口
+// 在服务内装配，扩展侧无法直构 deps）；只挂本入口，session_start / agent_settled 两
+// 边沿服务内已自挂（revive / agent_settled 订阅），重复转发 = 同边沿双派发。
+describe("__taiji_bg_reconcile__ command: subagent-domain reconcile forward (V4b entry ③)", () => {
+	it("handler forwards the subagent reconcile via the service singleton exactly once with reason=resume", async () => {
+		setupOfficialFactory();
+		const service = { runNotifyReconcileMaintenance: vi.fn() };
+		subagentServiceRef.current = service;
+		try {
+			const pi = createMockPi();
+			baseToolEnhanceExtension(pi as unknown as ExtensionAPI);
+
+			const [, def] = pi.registerCommand.mock.calls[0] as [
+				string,
+				{ description: string; handler: (args: string, ctx: unknown) => Promise<void> },
+			];
+			await def.handler("", {
+				sessionManager: {
+					getSessionId: () => "sid-subagent-fwd",
+					getSessionFile: () => undefined,
+					getEntries: () => [],
+				},
+			});
+
+			expect(service.runNotifyReconcileMaintenance).toHaveBeenCalledTimes(1);
+			expect(service.runNotifyReconcileMaintenance).toHaveBeenCalledWith("resume");
+		} finally {
+			subagentServiceRef.current = null;
+		}
+	});
+
+	it("session_start / agent_settled edges do NOT forward (self-wired inside the service)", async () => {
+		setupOfficialFactory();
+		const service = { runNotifyReconcileMaintenance: vi.fn() };
+		subagentServiceRef.current = service;
+		vi.stubEnv("TAIJI_AGENT_DATA_DIR", dataDirRef.dir);
+		try {
+			const pi = createMockPi();
+			baseToolEnhanceExtension(pi as unknown as ExtensionAPI);
+
+			const sessionStart = pi.on.mock.calls.find((call) => call[0] === "session_start")?.[1] as (
+				event: unknown,
+				ctx: unknown,
+			) => Promise<void>;
+			const agentSettled = pi.on.mock.calls.find((call) => call[0] === "agent_settled")?.[1] as (
+				event: unknown,
+				ctx: unknown,
+			) => Promise<void>;
+			expect(sessionStart).toBeTypeOf("function");
+			expect(agentSettled).toBeTypeOf("function");
+			const ctx = {
+				sessionManager: {
+					getSessionId: () => "sid-no-fwd",
+					getSessionFile: () => undefined,
+					getEntries: () => [],
+				},
+			};
+			await sessionStart({ type: "session_start", reason: "resume" }, ctx);
+			await agentSettled({}, ctx);
+
+			expect(service.runNotifyReconcileMaintenance).not.toHaveBeenCalled();
+		} finally {
+			subagentServiceRef.current = null;
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("absent service singleton (pre-initSession window) is tolerated — handler still resolves", async () => {
+		setupOfficialFactory();
+		subagentServiceRef.current = null;
+		vi.stubEnv("TAIJI_AGENT_DATA_DIR", dataDirRef.dir);
+		try {
+			const pi = createMockPi();
+			baseToolEnhanceExtension(pi as unknown as ExtensionAPI);
+
+			const [, def] = pi.registerCommand.mock.calls[0] as [
+				string,
+				{ description: string; handler: (args: string, ctx: unknown) => Promise<void> },
+			];
+			// 单例缺席（session_start 前进程形态 / 无 subagent 域宿主）= 对账不挂（缺席
+			// 语义非错误）：可选链早退，handler 不抛、bash 域维护链照常落定。
+			await expect(
+				def.handler("", {
+					sessionManager: {
+						getSessionId: () => "sid-absent",
+						getSessionFile: () => undefined,
+						getEntries: () => [],
+					},
+				}),
+			).resolves.toBeUndefined();
+		} finally {
+			vi.unstubAllEnvs();
 		}
 	});
 });

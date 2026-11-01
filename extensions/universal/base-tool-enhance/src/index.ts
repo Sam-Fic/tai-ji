@@ -11,6 +11,10 @@
  * seenIds + 内核三级判重承管——unified-delivery 波 3；投递统一化设计的现行登记处 = ADR-0074 与 docs/CONTEXT.md『统一投递』段）。
  * 维护链双触发点：session_start 事件 + `__taiji_bg_reconcile__` 内部命令（taiji runtime
  * 在 getCommands 时按节流补触发，覆盖「切走切回同进程重挂接、session_start 不重发」场景）。
+ * 切回入口同时补挂 subagent 域对账（completion-signal-delivery V4b 入口③，A5 缺陷修复）：
+ * subagent 域的 session_start / agent_settled 两入口在服务内自挂，切回是唯一需要扩展侧
+ * 补挂的边沿——经进程单例 SubagentService.runNotifyReconcileMaintenance 转发
+ * （reason="resume"；单例缺席 = 对账不挂，缺席语义非错误）。
  * 收殓下沉（u-bte-remove）：M5 孤儿收殓已移交 taiji runtime（background-task-
  * reaper 双触发点——session 销毁时 + 启动期兜底扫描，设计 file-lock-unification-
  * and-reaper-sink.md §3.2 D2），extension 不再做全局扫描/全局锁；session_start
@@ -28,6 +32,7 @@ import type {
 import { bindDeliveryPort, createPiDeliveryPortHost } from "@zhushanwen/pi-delivery-port";
 import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
+import { getSubagentService } from "@zhushanwen/subagent-core";
 
 import { createBashOutputToolDefinition } from "./bash-output-tool.ts";
 import { createBashKillToolDefinition } from "./bash-kill-tool.ts";
@@ -109,10 +114,17 @@ export default function baseToolEnhanceExtension(pi: ExtensionAPI): void {
 	// 命令（60s per-session 节流、fire-and-forget），handler 调同一维护函数（reason 传
 	// 'resume' 语义）。`/__` 双下划线前缀 = 内部命令（前端 internal-command-filter 过滤
 	// 不显示）；无待补任务时维护链三判据早退，零输出零 turn。
+	// subagent 域补挂（V4b 入口③，A5 缺陷修复）：本命令是切回边沿唯一触发源，
+	// bash 域维护链（runReconcileMaintenance）只覆盖本域；subagent 域对账经进程单例
+	// 转发（runNotifyReconcileMaintenance → NotifyHost 对账闭包，事实源与补投出口在
+	// 服务内装配，扩展侧无法直构 deps）。只挂本入口不挂 session_start / agent_settled
+	// ——那两边沿服务内已自挂（revive / agent_settled 订阅），重复转发 = 同边沿双派发。
+	// 单例缺席（session_start 前进程形态 / 无 subagent 域宿主）= 对账不挂，非错误。
 	pi.registerCommand("__taiji_bg_reconcile__", {
 		description:
 			"Internal: rerun pending background-task reconcile + completion-notify redelivery (triggered by taiji runtime on session resume; session_start does not refire for same-process reattach)",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
+			getSubagentService()?.runNotifyReconcileMaintenance("resume");
 			return runReconcileMaintenance(pi, ctx, "resume");
 		},
 	});

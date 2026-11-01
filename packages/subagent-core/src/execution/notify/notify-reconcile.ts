@@ -54,7 +54,9 @@
 //   ① session_start——notify-host revive()（SubagentService.initSession 链内无条件调用）；
 //   ② agent_settled——notify-host 装配期经 pi.on 订阅（回合收尾兜底边沿）；
 //   ③ 切回补强（__taiji_bg_reconcile__）——pi 命令名全局唯一（base-tool-enhance 注册），
-//     core 包内无触发源，生产接线 = 扩展侧/壳侧调包导出的同一编排函数（reason="resume"）。
+//     core 包内无触发源，生产接线 = 扩展侧经 Service 单例转发（SubagentService.
+//     runNotifyReconcileMaintenance → NotifyHost.runReconcile）调本编排函数
+//     （reason="resume"）；本包导出供自装配 source 的宿主直调，非生产接线通道。
 //   编排对三入口完全一致（判据单一）；跨边沿双投由 port 幂等预检吞并（同键先到者
 //   登记，rejected 时幂等键未登记——补投是该键首次有效投递）。
 

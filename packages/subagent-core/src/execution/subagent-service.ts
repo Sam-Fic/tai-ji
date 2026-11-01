@@ -581,6 +581,22 @@ export class SubagentService {
   }
 
   /**
+   * [completion-signal-delivery V4b 入口③（A5 product-bug 修复）] 切回补强边沿对
+   * subagent 域对账补投的转发入口：消费方 = base-tool-enhance 的
+   * `__taiji_bg_reconcile__` handler（pi 命令名全局唯一，扩展侧经进程单例
+   * getSubagentService() 判空调用）。转发到已装配的 NotifyHost 对账闭包——对账
+   * 事实源（records 全量 + 主 session entries）与补投出口（notifier 投递管道）均
+   * 在 host 内装配（NotifyHostDeps.getReconcileSource，u3 装配先例），扩展侧无法
+   * 直构 deps，这是裁决允许的「装配实例转发」通道。单例缺席（session_start 前进程
+   * 形态 / 无 subagent 域宿主）由调用方判空早退 = 对账不挂（缺席语义，非错误）；
+   * 入口① session_start 与入口② agent_settled 在服务内自挂（revive / 订阅），不经
+   * 本方法——扩展侧若对那两边沿转发会造成同边沿双派发。
+   */
+  runNotifyReconcileMaintenance(reason: string): void {
+    this.notifyHost.runReconcile(reason);
+  }
+
+  /**
    * [F6] 当前根 session id 的只读访问——引擎接线方（SAR 等）构造 RunContext 注入
    * `ctx.sessionRootId`（pi 引擎 engine_open 归属键权威源）。initSession 后有值
    * （根进程 = 本 session id；嵌套 = env 贯穿的真 ROOT）。[D3+] 壳终态保留范围。

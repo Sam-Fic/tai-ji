@@ -13,7 +13,10 @@
 //      落位；per-pi 实例恰一次，session 替换随旧 pi 消亡、新实例重新注册——RL13
 //      同款构造性防累积论证）；
 //   ③ 切回补强（__taiji_bg_reconcile__）——pi 命令名全局唯一（base-tool-enhance 注册），
-//      core 包内无触发源，生产接线 = 扩展侧/壳侧调包导出的同一对账函数（reason="resume"）。
+//      core 包内无触发源，生产接线 = 扩展侧经 Service 单例转发方法
+//      （SubagentService.runNotifyReconcileMaintenance）调本 host 公开的 runReconcile
+//      （reason="resume"；对账事实源与补投出口 notifier 均在本 host 内装配，扩展侧
+//      无法直构 deps——包导出的编排函数供自装配 source 的宿主直调，非生产接线通道）。
 // 对账事实源经 NotifyHostDeps.getReconcileSource 注入（可选——缺席 = 对账不挂，
 // 既有构造方零改动行为不变；生产构造点恒注入，见 subagent-service.ts）。
 
@@ -84,6 +87,14 @@ export interface NotifyHost {
   notify(record: BgNotifyRecord): void;
   /** dispose 的逆操作（initSession 复活，原 notifier.revive 委托）。 */
   revive(): void;
+  /**
+   * 对账补投维护链的外部触发通道（completion-signal-delivery V4b 入口③切回补强的
+   * 生产接线面——扩展侧经 SubagentService 单例转发方法调用，reason="resume"）。
+   * 入口① session_start（revive 内自挂）与入口② agent_settled（订阅自挂）不经本
+   * 方法（服务内已自挂，扩展侧重复转发会造成同边沿双派发）；三入口经同一编排函数
+   * （RL12 判据单一），事实源缺席语义与失败吞掉纪律同内部通道。
+   */
+  runReconcile(reason: string): void;
   /** dispose 前冲刷待发通知（原 notifier.flushPendingNotifications 委托）。 */
   flushPendingNotifications(): void;
   /** 丢弃 pending 通知（原 notifier.dispose 委托）。 */
@@ -336,6 +347,10 @@ export function createNotifyHost(deps: NotifyHostDeps): NotifyHost {
       ensureSettledSubscription();
       runReconcile("session_start");
     },
+
+    // 入口③外部触发通道（见接口 runReconcile 注释）——与内部两入口同一闭包，
+    // 缺席/失败语义单点。
+    runReconcile,
 
     flushPendingNotifications(): void {
       notifier.flushPendingNotifications();

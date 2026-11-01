@@ -258,9 +258,12 @@ export { notifyGateAllowsDelivery } from "./execution/subagent-service.ts";
 
 // [u3 通知对账补投] 一次性终态通知补投的公共面（completion-signal-delivery 设计
 // D5/D7②）：三入口唯一对账编排 + 判据真值表面 + 幂等键构造单一导出（RL8——补投
-// 与主路径共用同一构造）。session_start / agent_settled 两入口由 NotifyHost 装配内
-// 自挂（notify-host.ts 头注）；切回补强入口的 pi 命令名全局唯一（base-tool-enhance
-// 注册），生产接线 = 扩展侧/壳侧经本导出消费同一编排函数（reason="resume"）。
+// 与主路径共用同一构造）。三入口生产接线（A5 修复后终态）：① session_start 与
+// ② agent_settled 由 NotifyHost 装配内自挂（notify-host.ts 头注）；③ 切回补强由
+// base-tool-enhance（pi 命令名全局唯一注册方）经进程单例转发——SubagentService.
+// runNotifyReconcileMaintenance → NotifyHost.runReconcile → 本编排函数。本导出块
+// 是机制公共面，供自装配 NotifyReconcileSource 的宿主（非 pi 宿主 / 测试）直调；
+// pi 生产链的补投出口 notifier 在 NotifyHost 内封装，扩展侧不可直构 deps。
 export {
   buildNotifyId,
 } from "./execution/notify/notifier.ts";
