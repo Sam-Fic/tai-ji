@@ -386,9 +386,10 @@ export class UserStoppedGate {
   noteAgentStart(sessionId: string): void {
     if (!this.hasUserStoppedMark(sessionId)) return
     console.warn(`[event-interpreter] userStopped: intercepting unattributed agent_start, re-aborting (sessionId=${sessionId})`)
-    // fire-and-forget：abort RPC 对挂死 pi 悬挂、无超时兜底（ADR-0122 退役登记，处置归用户
-    // 「强制退出」，见 message-dispatcher.abort 注释）；.catch 只防异常逃逸成 unhandledRejection，
-    // 非重试/强杀通道。
+    // 再中止经 dispatcher.abort（'convergence' 分型）升级窗有界完成：窗内回执即达；窗满悬挂
+    // 升级强杀，source=机器判死分型（probe_stall_auto_quit）并进窄化自动恢复——V11/RL16 断言
+    // 载体，升级窗实装见 message-dispatcher.ts ABORT_UPGRADE_WINDOW_MS。.catch 只防异常逃逸成
+    // unhandledRejection——升级/强杀/恢复均由 dispatcher.abort 链内闭环，无需本层补通道。
     this.deps?.abortSession(sessionId).catch((e: unknown) => {
       console.warn(`[event-interpreter] userStopped: re-abort failed, mark kept (sessionId=${sessionId}):`, e)
     })

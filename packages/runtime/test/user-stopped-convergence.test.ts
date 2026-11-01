@@ -11,8 +11,9 @@
  *   放行；agent_settled 不清标记（同边沿补投击穿反例的契约锁）；
  * - interpreter 挂点接线：hook agent_start → noteAgentStart；
  * - dispatcher 置位分型：K1 forceQuit → source='user_force_quit'、K2 abort 超时强杀
- *   → source='abort_timeout'（K1/K2 置位断言均落 message-dispatcher.test.ts——K2 :1618、
- *   K1 :1895，本文件无用例）；
+ *   → source='abort_timeout'（K2 置位断言落 message-dispatcher.test.ts :1618，本文件
+ *   无用例；K1 置位断言双落点——本文件 :283/:289 直接用例 + md-test :1895 RL15 场景
+ *   状态断言，两者断言对象不同：前者 forceQuit 置位行为、后者场景下标记值保持）；
  * - sendPrompt / deliverText 显式投递清标记放行。
  *
  * mock 策略：全部依赖 mock，不 spawn pi。
@@ -38,7 +39,7 @@ import type { IPiEngine, IProcessManager } from '../src/services/ports/pi-engine
 import type { WorkspaceService } from '../src/services/workspace/workspace-service.js'
 import { flushDelivery } from './helpers/flush-delivery.js'
 
-/** 记账式 mock 标记宿主（模拟 session-service.ts 模块级 Map 的语义）。 */
+/** 记账式 mock 标记宿主（模拟 user-stopped-mark-store.ts 模块级 Map 的语义）。 */
 function makeMarkStore(): UserStoppedMarkStore & {
   marks: Map<string, { source: ForceQuitSource }>
 } {
