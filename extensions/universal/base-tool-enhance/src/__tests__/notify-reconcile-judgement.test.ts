@@ -6,6 +6,8 @@
 // 「legacy reconciled marker present WITHOUT trace → still re-notified」用例）
 import { describe, expect, it } from "vitest";
 
+import { scanJournal } from "@zhushanwen/pi-delivery-port";
+
 import { BACKGROUND_BASH_CUSTOM_TYPE } from "../background/notify.ts";
 import {
 	collectDeliveredTaskIds,
@@ -191,5 +193,56 @@ describe("isReconcileNotifyCandidate: triple-fact skeleton truth (D2, cross-doma
 		expect(isReconcileNotifyCandidate({ ...base, excludedByOrigin: true })).toBe(false);
 		expect(isReconcileNotifyCandidate({ ...base, delivered: true })).toBe(false);
 		expect(isReconcileNotifyCandidate({ ...base, journaled: true })).toBe(false);
+	});
+});
+
+// ── RL2（红灯表 §4.2）：投递日志 append-only 抗 compaction 上游行为守护（UD7
+// 观察级前提，pi 升级复验探针）。「投递日志无该幂等键条目 ⇒ 从未成功受理」（三重
+// 判据第三事实）依赖 pi compaction 只追加边界 entry、不删改历史 entry（pi getEntries
+// 契约自述 append-only；CompactionEntry = type:"compaction" 追加条目）。构造含
+// outbox / ack / 送达凭据三类条目的 entries 经 compaction 边沿后形态，scanJournal
+// 全量读取仍完整见三类条目且边界 entry 不污染扫描结果——pi 升级若 compaction 行为
+// 变化，本组红灯即复验信号。
+
+/** pi compaction 边界 entry（SessionManager CompactionEntry 落盘形态，pi 1.0.0）。 */
+function compactionBoundaryEntry(): Record<string, unknown> {
+	return {
+		type: "compaction",
+		summary: "compacted summary",
+		firstKeptEntryId: "c9",
+		tokensBefore: 12345,
+	};
+}
+
+/** 送达凭据消息 entry（details.deliveryId 形态——collectDeliveredIds 命中通道）。 */
+function deliveredCredentialEntry(id: string): Record<string, unknown> {
+	return {
+		type: "custom_message",
+		customType: BACKGROUND_BASH_CUSTOM_TYPE,
+		content: `notify ${id}`,
+		details: { deliveryId: id },
+		display: true,
+	};
+}
+
+describe("scanJournal survives compaction boundary entry (RL2, UD7 upstream guard)", () => {
+	it("outbox / ack / delivered credential all remain visible after compaction appends boundary entry", () => {
+		const afterCompaction = [
+			journaledOutboxEntry(TASK_ID),
+			{ type: "custom", customType: "delivery-port-ack", data: { v: 2, id: TASK_ID, outcome: "delivered" } },
+			deliveredCredentialEntry(TASK_ID),
+			compactionBoundaryEntry(),
+		];
+		const scan = scanJournal(afterCompaction, 1);
+		expect(scan.outbox.has(TASK_ID)).toBe(true);
+		expect(scan.ackedIds.has(TASK_ID)).toBe(true);
+		expect(scan.deliveredIds.has(TASK_ID)).toBe(true);
+	});
+
+	it("compaction boundary entry itself pollutes no scan bucket", () => {
+		const scan = scanJournal([compactionBoundaryEntry()], 1);
+		expect(scan.outbox.size).toBe(0);
+		expect(scan.ackedIds.size).toBe(0);
+		expect(scan.deliveredIds.size).toBe(0);
 	});
 });
