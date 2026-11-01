@@ -1,9 +1,14 @@
 /**
- * session_before_compact 接管 handler（D1/D11/D12/D13 核心）+ 后台压缩任务管理（D2/D3/D4，U2）。
+ * session_before_compact 接管 handler（上一代接管设计核心：门控 / 双模式生成 / 收缩校验 / 熔断）+ 后台压缩任务管理（D2/D3/D4，U2）。
+ *
+ * 编号消歧：本文件旧段（接管 handler 与其状态、组装与生成的注释）引用的
+ * D1（entry 标记）/D2/D7/D11/D12/D13-x/R4/R7/§8.3 指上一代 smart-context 接管设计
+ * 与 pi 观察级清单（文档已不在可达域，按注释内联语义理解）；裸 D2-D6/SI/UD/RL/AS
+ * 指本设计（async-compaction）。两套编号同名不同义，凡与上下文对不上的按旧号处理。
  *
  * 同步接管路径（session_before_compact）：三条压缩路径（agent 工具 / 用户 /compact / 内建 auto）
  * 统一经过这里：
- * - 门控未放行 / 熔断 / 生成失败 → 返回空（pi 原生生成兜底，D2/D7）
+ * - 门控未放行 / 熔断 / 生成失败 → 返回空（pi 原生生成兜底，接管设计 D2/D7）
  * - same-model 模式：完整上下文 + 会话原 system prompt + tools + 末尾追加压缩指令（kv-cache 前缀命中）
  * - cross-model 模式：直接调用包导出的 compact(preparation, 压缩Model, ...)（原生组装零复刻，R4 结论）
  *
@@ -32,9 +37,9 @@
  * - 终局通知（U5/D6 呈现半边）：runBackgroundTask 各终局回调 onSettled 恰一次
  *   （cancelled 不回调），接线层（index.ts）组装完成/失败文案经 nextTurn 投递。
  *
- * 输出 CompactionResult.details 携带 {engine:"smart-context", mode, model} 标记（D1 entry 标记）。
+ * 输出 CompactionResult.details 携带 {engine:"smart-context", mode, model} 标记（接管设计 D1：entry 标记）。
  * model = `${model.provider}/${model.id}`（执行压缩的实际模型）——用量页 compaction 归属数据源
- * （usage-page-fixes §3.3 ①）；pi appendCompaction 对 details 逐字透传落盘（pi-semantics PS-28）。
+ * （pi-semantics.json PS-28：appendCompaction 对 details 逐字透传落盘，归属字段必然随 entry 落盘）。
  */
 
 import {
@@ -52,6 +57,7 @@ import type {
 	CompactionResult,
 	FileOperations,
 	SessionBeforeCompactEvent,
+	SessionBeforeCompactResult,
 	SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -102,9 +108,9 @@ export function createTakeoverState(): TakeoverState {
 export interface BackgroundTaskSnapshot {
 	/** 触发时刻 sessionId（D3 第二层校验①：落盘时须与触发时刻一致）。 */
 	sessionId: string;
-	/** 触发快照末端条目 id（D3 第二层校验②：其后的追加区间内不得出现新 compaction entry）。 */
+	/** 触发快照末端条目 id（观测/遗留字段：生产逻辑零消费——校验②由 compactionIds 集合判定承担，见其注释；测试快照断言在用）。 */
 	lastEntryId: string;
-	/** 触发时刻上下文用量（观测日志用，语义以 preparation.tokensBefore 为准）。 */
+	/** 触发时刻上下文用量（观测/遗留字段：生产逻辑零消费——启动日志与触发线判定均取 launchTask 入参 usageTokens；语义以 preparation.tokensBefore 为准）。 */
 	tokens: number;
 	/**
 	 * 触发时刻 branch 上全部 compaction entry id（D3 第二层校验②的已知集合）：
@@ -157,7 +163,8 @@ export function createBackgroundCompactionState(): BackgroundCompactionState {
 
 /**
  * 后台触发线判定（D4）：tokens 越过 ratio×本模型窗口（越过含等于，与 findCrossedThresholds
- * 同口径）。tokens 为 null（压缩后首响应前，R7）由调用方先短路，本函数只收有限数。
+ * 同口径）。tokens 为 null（压缩后首响应前，pi 观察级 R7——旧编号，见文件头注消歧）由调用方先短路，
+ * 本函数只收有限数。
  */
 export function isAutoCompactTriggered(tokens: number, contextWindow: number, ratio: number): boolean {
 	if (!Number.isFinite(tokens) || !Number.isFinite(contextWindow) || contextWindow <= 0) return false;
@@ -424,7 +431,9 @@ function collectFileOps(
  *   （findProjectedCutPoint，包根不导出）有一格偏移，无 context_edit 时等价；
  * - tokensBefore 用 ctx.getContextUsage() 口径（读不到时 0 兜底——仅日志/展示语义，
  *   投影切分正确性不依赖它）。
- * 返回 undefined = 无可压（条目不足 / 刚压缩完 / 全量在保留预算内）。
+ * system role 消息剔除与 pi 原生一致（compaction.js:50-53 同款过滤，见组装处注释），
+ * 不属于差异项。
+ * 返回 undefined = 无可压（条目不足 / 刚压缩完 / 全量在保留预算内 / 被压段仅 system 消息）。
  */
 export function buildBackgroundPreparation(
 	ctx: ExtensionContext,
@@ -462,8 +471,15 @@ export function buildBackgroundPreparation(
 	const turnPrefixEntries = cutPoint.isSplitTurn
 		? contextEntries.slice(cutPoint.turnStartIndex, cutPoint.firstKeptEntryIndex).filter((e) => e.type !== "compaction")
 		: [];
-	const messagesToSummarize = shadowedEntries.flatMap(sessionEntryToContextMessages);
-	const turnPrefixMessages = turnPrefixEntries.flatMap(sessionEntryToContextMessages);
+	// system role 消息剔除（pi getMessagesFromProjectedEntryForCompaction 同款，compaction.js
+	// :50-53——system message 是 prompt 状态非对话内容，compaction entry 的 systemMessage 承载
+	// 其回放；不剔除会使摘要 LLM 输入混入 system 消息、与 pi 原生组装（已过滤）不同分布）
+	const messagesToSummarize = shadowedEntries
+		.flatMap(sessionEntryToContextMessages)
+		.filter((message) => message.role !== "system");
+	const turnPrefixMessages = turnPrefixEntries
+		.flatMap(sessionEntryToContextMessages)
+		.filter((message) => message.role !== "system");
 	if (messagesToSummarize.length === 0 && turnPrefixMessages.length === 0) return undefined;
 
 	const prevCompaction = head?.type === "compaction" ? head : undefined;
@@ -632,7 +648,7 @@ export function createBackgroundCompactionManager(
 	 * 工具路径启动（U5 接线残项）：compact_context 工具显式请求的后台任务启动，即
 	 * tool.ts BackgroundCompactionControls 契约的 start 实装。
 	 *
-	 * 与自动入口的判定差异（D4 入口矩阵①）：
+	 * 与自动入口的判定差异（§3.1 入口矩阵①）：
 	 * - 保留：互斥（撞上返回 false——工具按幂等处理，U4 契约唯一 false 语义）与
 	 *   isGatingActive 门控前置（工具 execute 已现场校验过，此处防御双检——配置热改
 	 *   窗口兜底）；
@@ -793,7 +809,7 @@ function warnLog(message: string, data?: unknown): void {
 export interface SmartContextDetails {
 	engine: "smart-context";
 	mode: "same-model" | "cross-model";
-	/** 执行压缩的模型 `${provider}/${modelId}`（用量归属数据源，usage-page-fixes §3.3 ①）。 */
+	/** 执行压缩的模型 `${provider}/${modelId}`（用量页 compaction 归属数据源，pi-semantics PS-28：details 逐字透传落盘）。 */
 	model: string;
 }
 
@@ -997,16 +1013,16 @@ async function generateCrossMode(
  * session_before_compact handler 工厂。
  *
  * state 为 session 级闭包（由 src/index.ts 在 session_start 重建后传入）。
- * 返回类型省略标注、由函数体对象字面量推断（{} / {compaction}）——SDK SessionBeforeCompactResult
- * 不在包根导出（仅深层 dist 路径可见），显式标注该名不可 import；推断形状与 SDK 逐字段同形，
- * 注册点 pi.on() 的 ExtensionHandler 泛型按结构兼容校验。
+ * 返回类型显式标注 SessionBeforeCompactResult（{}/ {compaction}）——该名在 SDK
+ * 包根以 export type 提供（dist/index.d.ts:8 导出清单），import type 可用（tsc
+ * --strict 单文件探针实编译通过）。
  */
 export function createBeforeCompactHandler(
 	pi: ExtensionAPI,
 	getState: () => TakeoverState,
 	loadConfigFn: () => SmartContextConfig,
 ) {
-	return async (event: SessionBeforeCompactEvent, ctx: ExtensionContext) => {
+	return async (event: SessionBeforeCompactEvent, ctx: ExtensionContext): Promise<SessionBeforeCompactResult> => {
 		const config = loadConfigFn();
 		const currentModelId = getCurrentModelId(ctx.model);
 

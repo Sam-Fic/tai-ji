@@ -43,8 +43,8 @@ import smartContextExtension from "../index.js";
 import { normalizeSmartContextConfig, type SmartContextConfig } from "../pure.js";
 import type { ExtensionAPI, ExtensionContext, SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 
-// assistant 消息形态锁定为单 text 块（设计 §8.3）：必填标量字段补齐 + content 不得追加
-// thinking/toolCall 块——追加会抬高 shadowedTokens，使「新旧口径数值等价」声明静默失效
+// assistant 消息形态锁定为单 text 块：必填标量字段补齐 + content 不得追加 thinking/toolCall
+// 块——追加会抬高 shadowedTokens（收缩校验分母），使「新旧口径数值等价」断言静默失效
 function makeEvent(overrides?: Partial<SessionBeforeCompactEvent["preparation"]>): SessionBeforeCompactEvent {
 	return {
 		type: "session_before_compact",
@@ -129,7 +129,7 @@ describe("session_before_compact 接管 handler", () => {
 		mockedCall.mockResolvedValue({ ok: true, text: "summary body", usage: { input: 1, output: 2 } });
 		const { handler } = makeHandler(normalizeSmartContextConfig({ compactModel: { type: "ref", ref: "" } }));
 		const decision = await handler(makeEvent(), makeCtx());
-		// details.model = `${ctx.model.provider}/${ctx.model.id}`（§3.3 ①，用量归属数据源）
+		// details.model = `${ctx.model.provider}/${ctx.model.id}`（用量页 compaction 归属数据源，pi-semantics PS-28）
 		expect(decision.compaction?.details).toEqual({ engine: "smart-context", mode: "same-model", model: "zai/glm" });
 		expect(decision.compaction?.summary).toContain("summary body");
 		// D13-9 preamble 在最前；D11-2 fileOps；D13-4 transcript
@@ -172,7 +172,7 @@ describe("session_before_compact 接管 handler", () => {
 			normalizeSmartContextConfig({ compactModel: { type: "ref", ref: "xiaomi/mimo" } }),
 		);
 		const decision = await handler(makeEvent(), makeCtx({ provider: "xiaomi", id: "mimo" }));
-		// details.model = `${resolveModel(...).provider}/${id}`（§3.3 ①）；native details 字段原样保留（spread 增量，不改变其他字段）
+		// details.model = `${resolveModel(...).provider}/${id}`（用量页 compaction 归属数据源，pi-semantics PS-28）；native details 字段原样保留（spread 增量，不改变其他字段）
 		expect(decision.compaction?.details).toEqual({
 			engine: "smart-context",
 			mode: "cross-model",
@@ -405,6 +405,50 @@ describe("后台压缩准备数据组装（U2 验收①：buildContextEntries �
 
 		const justCompacted = [makeCompactionEntry("c9", null, "c9")];
 		expect(buildBackgroundPreparation(makeBgCtx(justCompacted, TRIGGER_USAGE))).toBeUndefined();
+	});
+
+	it("system message 剔除（pi compaction.js:50-53 同款）：被压段混入 system 不进摘要输入", () => {
+		// system message 条目真实产生（agent-session system prompt sections 变化时落盘）；
+		// pi 原生 getMessagesFromProjectedEntryForCompaction 剔除 system role（prompt 状态非
+		// 对话内容，compaction entry 的 systemMessage 承载其回放）。本用例锁定扩展组装同款
+		// 剔除：无 context_edit 场景被压消息与 pi prepareCompaction 逐条一致（不混入 system）
+		const sysEntry: SessionEntry = {
+			type: "message",
+			id: "sys1",
+			parentId: null,
+			timestamp: new Date(0).toISOString(),
+			message: { role: "system", content: "SYS PROMPT STATE", timestamp: 0 },
+		} as SessionEntry;
+		const [e1, ...rest] = sampleEntriesNoCompaction();
+		const entries = [sysEntry, { ...e1, parentId: "sys1" }, ...rest];
+
+		const prep = buildBackgroundPreparation(makeBgCtx(entries, TRIGGER_USAGE));
+		expect(prep).toBeDefined();
+		// 切点不因前置 system 条目移动（保留段倒序累计阈值不变）
+		expect(prep!.firstKeptEntryId).toBe("e3");
+		// 被压段 = [sys1, e1, e2] → 剔除 system 后 [e1, e2]（与 pi 原生组装等价）
+		expect(prep!.messagesToSummarize.map((m) => m.role)).toEqual(["user", "assistant"]);
+	});
+
+	it("被压段仅 system 消息 → undefined（与 pi 原生 prepareCompaction 同判无可压）", () => {
+		// e2 加大（60K chars）驱动切点回退到 e1：被压段 = [sys1] 仅 system，过滤后空 →
+		// 无可压返回 undefined；pi 原生 prepareCompaction 对同条目流同判（探针对照实跑）
+		const sysEntry: SessionEntry = {
+			type: "message",
+			id: "sys1",
+			parentId: null,
+			timestamp: new Date(0).toISOString(),
+			message: { role: "system", content: "SYS PROMPT STATE", timestamp: 0 },
+		} as SessionEntry;
+		const entries = [
+			sysEntry,
+			makeUserEntry("e1", "sys1", BIG),
+			makeAssistantEntry("e2", "e1", "y".repeat(60_000)),
+			makeUserEntry("e3", "e2", "tail"),
+			makeAssistantEntry("e4", "e3", "tail"),
+			makeUserEntry("e5", "e4", "tail"),
+		];
+		expect(buildBackgroundPreparation(makeBgCtx(entries, TRIGGER_USAGE))).toBeUndefined();
 	});
 });
 

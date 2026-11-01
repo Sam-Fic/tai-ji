@@ -106,8 +106,9 @@ export default function smartContextExtension(pi: ExtensionAPI): void {
 	let state: SessionState = createSessionState();
 
 	// G1 代际比对闭包（isCtxStale）：session_start 装配本代比对（读实时模块级代数），
-	// 供下方事件回调与 compact 工具回调的 guardStaleCtx 前置检查使用——stale 分诊不依赖
-	// pi 错误文案。首个 session_start 前无 session，恒 false 为安全默认。
+	// 供下方事件回调的 guardStaleCtx 前置检查使用（工具侧消费已随 U4 纯触发化退役——
+	// 见工具注册点注释）——stale 分诊不依赖 pi 错误文案。首个 session_start 前无
+	// session，恒 false 为安全默认。
 	let isCtxStale: () => boolean = () => false;
 
 	/**
@@ -291,7 +292,7 @@ export default function smartContextExtension(pi: ExtensionAPI): void {
 		seedFiredThresholds(ctx);
 
 		const usage = ctx.getContextUsage();
-		if (!usage) return; // R7：tokens 可能 null（压缩后首响应前）——findCrossedThresholds 容错
+		if (!usage) return; // pi 观察级 R7（旧编号，见 compact-handler.ts 头注消歧）：tokens 可能 null（压缩后首响应前）——findCrossedThresholds 容错
 		const crossed = findCrossedThresholds(config.reminderThresholds, usage.tokens, state.firedThresholds);
 		if (crossed.length === 0) return;
 
