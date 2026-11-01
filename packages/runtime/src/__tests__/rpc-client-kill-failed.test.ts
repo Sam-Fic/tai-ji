@@ -7,8 +7,8 @@
  *   = 永挂，墙钟超时已随 ADR-0122 退役无兜底）。
  * - kill-failed 后客户端不可用：sendCommand 出站拒绝。
  * - 重复 kill 幂等 no-op（吸收态下 kill-requested 入口短路）。
- * - kill-failed 后迟到 exit 事件：无双重收尾（exitCallbacks 不通知——主动杀令的
- *   plannedKill 抑制语义；rejectAll 空表 no-op）。
+ * - kill-failed 后迟到 exit 事件：无双重收尾（exitCallbacks 不通知——主动杀令的死亡
+ *   落 killed / kill-failed 终态，通知抑制语义由终态词承载；rejectAll 空表 no-op）。
  *
  * 策略：rpc-client-mock 单源 mock（makeKillFail 覆盖 kill 为抛 EPERM——「kill 即死」
  * 缺省 mock 语义的失败面补充）。
@@ -125,7 +125,7 @@ describe('RpcClient kill 失败语义（kill-failed 终态）', () => {
     }
   })
 
-  it('kill-failed 后迟到 exit：exitCallbacks 不通知（plannedKill 抑制）+ 无双重收尾', async () => {
+  it('kill-failed 后迟到 exit：exitCallbacks 不通知（killed / kill-failed 终态抑制）+ 无双重收尾', async () => {
     const exits: Array<[number | null, string]> = []
     client.onExit((code, stderr) => { exits.push([code, stderr]) })
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -148,6 +148,16 @@ describe('RpcClient kill 失败语义（kill-failed 终态）', () => {
     const pendingRejected = expect(pending).rejects.toThrow('pi process killed')
     await client.kill() // 缺省 mock「kill 即死」：微任务内 emit exit
     await pendingRejected
+  })
+
+  it('kill 成功路径：exit 收割落 killed 终态，exitCallbacks 不通知（与 kill-failed 同抑制语义）', async () => {
+    const exits: Array<[number | null, string]> = []
+    client.onExit((code, stderr) => { exits.push([code, stderr]) })
+    await client.kill() // 缺省 mock「kill 即死」：微任务内 emit exit，killing → killed
+    // 主动杀令收割的死亡不产生死亡通知（pending 收尾归 kill() 的 onExit rejectAll
+    // 安全网——通知抑制判据由终态词承载：exited 只从 spawned 到达）
+    expect(exits).toEqual([])
+    expect(client.exited).toBe(true) // killed 是终态：客户端不可用
   })
 
   it('已自然退出后再 kill → 幂等 no-op（spawned→exited 的入口短路）', async () => {

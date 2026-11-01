@@ -11,7 +11,7 @@
  * fixture 全部走 mkdtemp 自建自删；不依赖 staged 产物（同 scripts/__tests__ 既有惯例）。
  */
 import { describe, it, expect, afterEach } from 'vitest'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -22,9 +22,13 @@ import {
   buildDocsMdNameIndex,
   extractDataOwnerClaims,
   extractDataOwnerAnnotations,
+  extractRegistryEntries,
   extractAdrRegistry,
   checkAdrRefsInText,
 } from '../check-doc-symbol-drift.mjs'
+
+/** 仓库根（本测试在 scripts/__tests__ 下，上溯两级）。 */
+const PROJECT_ROOT = join(import.meta.dirname, '..', '..')
 
 // ---------- R1 JS/TS 注释区间提取 ----------
 
@@ -234,6 +238,39 @@ describe('R6 extractDataOwnerAnnotations', () => {
 
   it('taste:allow-no-data-owner 豁免族不进入注解集合（不属登记锚点）', () => {
     expect([...extractDataOwnerAnnotations('// taste:allow-no-data-owner W24-EX-B')]).toEqual([])
+  })
+})
+
+describe('R6 extractRegistryEntries', () => {
+  it('主表条目号收行号列表；同号两行 = 重复占用（SSOT 锚点歧义）', () => {
+    const md = [
+      '| #85 | 插件安装登记时间 | ... |',
+      '| #88 | scheduler 任务库分片 | ... |',
+      '| #88 | 插件禁用标记清单 | ... |',
+      '| #89 | ... |',
+    ].join('\n')
+    const entries = extractRegistryEntries(md)
+    expect(entries.get('#85')).toEqual([1])
+    expect(entries.get('#88')).toEqual([2, 3])
+    expect(entries.get('#89')).toEqual([4])
+  })
+
+  it('非主表行不收：§6 跨进程共享表首列是文件路径，正文提及的条目号不算登记行', () => {
+    const md = [
+      '| `<piAgentDir>/settings.json` | 写入方 | 锁协议 | 字段域 | 隔离 | 状态 |',
+      '权威细节见 architecture/data-source-registry.md #88（正文提及非登记行）',
+      '## 2. 字段空值语义三条区分',
+    ].join('\n')
+    expect(extractRegistryEntries(md).size).toBe(0)
+  })
+
+  it('真实登记表零重复占用（#88 改号后的回归锁）', () => {
+    const docAbs = join(PROJECT_ROOT, 'docs/architecture/data-source-registry.md')
+    const entries = extractRegistryEntries(readFileSync(docAbs, 'utf-8'))
+    const dups = [...entries.entries()].filter(([, lines]) => lines.length > 1)
+    expect(dups).toEqual([])
+    expect(entries.has('#88')).toBe(true)
+    expect(entries.has('#89')).toBe(true)
   })
 })
 

@@ -4,7 +4,7 @@
  * 扫描 session JSONL 目录，按四分类聚合 Token 用量，返回 UsageRow[]：
  * ①②③ 为 pi 三分类（assistant / toolResult-with-usage / compaction-with-usage），
  * ④ 为 taiji 自有口径（rename-session custom entry，G3 rename 用量记录通道，
- * usage-page-fixes §3.3 ④；落盘形态锚 docs/pi-semantics.json PS-29，非 pi 语义）。
+ * 落盘形态锚 docs/pi-semantics.json PS-29，非 pi 语义）。
  *
  * 为什么走「读文件」而非实时事件流聚合：runtime 事件链路只透传
  * input/output/totalTokens，cacheRead/cacheWrite/cost 仅存在于 JSONL 落盘数据，
@@ -231,7 +231,7 @@ export class UsageStatsService {
    * ② type==='message' && message.role==='toolResult' && message.usage → compaction 虚拟桶
    * ③ (type==='compaction' || type==='branch_summary') && entry.usage → compaction 虚拟桶
    *    model 归属：details.model（smart-context 落盘的 `${provider}/${id}`）权威优先，
-   *    非 string/空串回退 'compaction'（usage-page-fixes §3.3 ④ 检查与回退字面量）
+   *    非 string/空串回退 'compaction'
    * ④ type==='custom' && customType==='rename-session' && data.usage 为非 null 对象
    *    → rename-session 虚拟桶（G3）
    * ⑤ type==='usage'（pi 1.0.0 新 entry，cache_warm 等非对话操作的用量记录）→ 主桶

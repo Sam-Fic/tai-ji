@@ -167,8 +167,11 @@ export function buildFullTsconfig(formalTsconfigPath, tmpDir) {
   return tmpPath;
 }
 
-// main 职责拆两段：staticChecks = include 形态与 exclude 死路径静态对账；
-// runDebtReconciliation = 双跑债务对账（tsconfig exclude 集 ↔ 全量错误集双向一致）。
+// main 只做流程编排（argv 解析 → 输入装载 → 静态对账 → 双跑对账 → 汇总输出），
+// 各段拆为模块级函数控制圈复杂度（metrics-gate 阈值 maxCyclomatic=15）：
+// parseMainArgs / loadRendererInput / staticChecks / runDebtReconciliation /
+// fullRunSummary / printRecoveryGuidance。输出文案与退出码逐字保持不变
+// （scripts/__tests__/check-test-typecheck-coverage.test.mjs 子进程断言锁定）。
 
 /** [main 拆分] 静态对账（第 1/2 项）：include 全量形态断言 + exclude ⊆ 磁盘测试文件集。
  *  失败明细推入 failures；返回 { failures, missingForms, deadExcludes, diskTests } 供 main 汇总输出。 */
@@ -241,31 +244,77 @@ export function runDebtReconciliation(rendererDir, tsconfigPath, tsconfig, failu
   }
 }
 
-export function main(argv = process.argv.slice(2)) {
+/** [main 拆分] argv 解析：--renderer-dir 取值 + --no-run 开关（缺省 packages/renderer）。 */
+function parseMainArgs(argv) {
   const rendererRel = argv.includes("--renderer-dir") ? argv[argv.indexOf("--renderer-dir") + 1] : "packages/renderer";
-  const noRun = argv.includes("--no-run");
+  return { rendererRel, noRun: argv.includes("--no-run") };
+}
+
+/** [main 拆分] 输入装载：renderer 目录定位 + tsconfig 存在性/解析（失败 = exit 2 输入错误）。
+ *  成功返回 { rendererDir, tsconfigPath, tsconfig }；失败返回 { code: 2, lines }（main 原样打印）。 */
+function loadRendererInput(rendererRel) {
   const rendererDir = resolve(REPO_ROOT, rendererRel);
   const tsconfigPath = join(rendererDir, "tsconfig.typecheck-test.json");
-
   if (!existsSync(tsconfigPath)) {
-    console.error(`[check-test-typecheck-coverage] tsconfig 缺失：${tsconfigPath}`);
-    console.error("  恢复动作：确认在仓库根运行，或用 --renderer-dir 指向 renderer 包目录");
-    return 2;
+    return {
+      code: 2,
+      lines: [
+        `[check-test-typecheck-coverage] tsconfig 缺失：${tsconfigPath}`,
+        "  恢复动作：确认在仓库根运行，或用 --renderer-dir 指向 renderer 包目录",
+      ],
+    };
   }
   const srcDir = join(rendererDir, "src");
   if (!existsSync(srcDir)) {
-    console.error(`[check-test-typecheck-coverage] renderer src 目录缺失：${srcDir}`);
-    console.error("  恢复动作：确认在仓库根运行，或用 --renderer-dir 指向含 src/ 的 renderer 包目录");
-    return 2;
+    return {
+      code: 2,
+      lines: [
+        `[check-test-typecheck-coverage] renderer src 目录缺失：${srcDir}`,
+        "  恢复动作：确认在仓库根运行，或用 --renderer-dir 指向含 src/ 的 renderer 包目录",
+      ],
+    };
   }
-  let tsconfig;
   try {
-    tsconfig = JSON.parse(readFileSync(tsconfigPath, "utf8"));
+    return { rendererDir, tsconfigPath, tsconfig: JSON.parse(readFileSync(tsconfigPath, "utf8")) };
   } catch (err) {
-    console.error(`[check-test-typecheck-coverage] tsconfig 解析失败：${err instanceof Error ? err.message : String(err)}`);
-    console.error("  恢复动作：修复 tsconfig.typecheck-test.json 的 JSON 语法错误（误删/改坏时按 git 历史恢复）");
-    return 2;
+    return {
+      code: 2,
+      lines: [
+        `[check-test-typecheck-coverage] tsconfig 解析失败：${err instanceof Error ? err.message : String(err)}`,
+        "  恢复动作：修复 tsconfig.typecheck-test.json 的 JSON 语法错误（误删/改坏时按 git 历史恢复）",
+      ],
+    };
   }
+}
+
+/** [main 拆分] 全量跑摘要（债务对账跳过 = 全量跑基础设施故障）。 */
+function fullRunSummary(debt) {
+  return debt.infraFailure
+    ? "债务对账跳过（全量跑基础设施故障，先按上方 vue-tsc 原始输出归因）"
+    : `${debt.errorCount} 文件有类型错误`;
+}
+
+/** [main 拆分] 失败恢复指引：按失败类别分流——基础设施故障不得把人导向 exclude 登记
+ *  （exclude 是债务清单，登记不解决 vue-tsc 崩溃 / spawn 失败 / 配置错）。 */
+function printRecoveryGuidance(debt, missingForms, deadExcludes) {
+  if (debt?.formalInfra || debt?.infraFailure) {
+    console.error("  恢复动作（基础设施故障）：按上方 vue-tsc 原始输出归因——确认 pnpm exec vue-tsc");
+    console.error("  可执行、tsconfig 可解析；这类失败与类型错误无关，不得靠 exclude 登记绕过。");
+  }
+  if (debt === null || debt.debtFindings > 0 || missingForms.length > 0 || deadExcludes.length > 0) {
+    console.error("  恢复动作：新类型错误当场修复（不得放宽断言）；确属暂缓的存量债务，在");
+    console.error("  packages/renderer/tsconfig.typecheck-test.json 的 exclude 显式登记；已修复的从 exclude 删行收编。");
+  }
+}
+
+export function main(argv = process.argv.slice(2)) {
+  const { rendererRel, noRun } = parseMainArgs(argv);
+  const input = loadRendererInput(rendererRel);
+  if ("code" in input) {
+    for (const line of input.lines) console.error(line);
+    return input.code;
+  }
+  const { rendererDir, tsconfigPath, tsconfig } = input;
 
   const { failures, missingForms, deadExcludes, diskTests } = staticChecks(tsconfig, rendererDir);
 
@@ -273,36 +322,25 @@ export function main(argv = process.argv.slice(2)) {
   let debt = null;
   if (!noRun) {
     debt = runDebtReconciliation(rendererDir, tsconfigPath, tsconfig, failures);
-    const fullRunSummary = debt.infraFailure
-      ? "债务对账跳过（全量跑基础设施故障，先按上方 vue-tsc 原始输出归因）"
-      : `${debt.errorCount} 文件有类型错误`;
     console.log(
-      `[check-test-typecheck-coverage] 全量跑：${fullRunSummary} / exclude 登记 ${debt.excludeCount} 项 / 磁盘测试文件 ${diskTests.length} 个`,
+      `[check-test-typecheck-coverage] 全量跑：${fullRunSummary(debt)} / exclude 登记 ${debt.excludeCount} 项 / 磁盘测试文件 ${diskTests.length} 个`,
     );
   }
 
+  const excludeCount = (tsconfig.exclude ?? []).length;
   console.log(
     `[check-test-typecheck-coverage] include 形态${missingForms.length === 0 ? "OK" : "FAIL"}；` +
-      `exclude 死路径 ${deadExcludes.length} 项；磁盘测试文件 ${diskTests.length} 个（未 exclude = 受检 ${diskTests.length - (tsconfig.exclude ?? []).length} 个）`,
+      `exclude 死路径 ${deadExcludes.length} 项；磁盘测试文件 ${diskTests.length} 个（未 exclude = 受检 ${diskTests.length - excludeCount} 个）`,
   );
 
-  if (failures.length > 0) {
-    console.error(`\n[check-test-typecheck-coverage] FAIL：`);
-    for (const f of failures) console.error(`  - ${f}`);
-    // 恢复指引按失败类别分流：基础设施故障不得把人导向 exclude 登记
-    // （exclude 是债务清单，登记不解决 vue-tsc 崩溃 / spawn 失败 / 配置错）。
-    if (debt?.formalInfra || debt?.infraFailure) {
-      console.error("  恢复动作（基础设施故障）：按上方 vue-tsc 原始输出归因——确认 pnpm exec vue-tsc");
-      console.error("  可执行、tsconfig 可解析；这类失败与类型错误无关，不得靠 exclude 登记绕过。");
-    }
-    if (debt === null || debt.debtFindings > 0 || missingForms.length > 0 || deadExcludes.length > 0) {
-      console.error("  恢复动作：新类型错误当场修复（不得放宽断言）；确属暂缓的存量债务，在");
-      console.error("  packages/renderer/tsconfig.typecheck-test.json 的 exclude 显式登记；已修复的从 exclude 删行收编。");
-    }
-    return 1;
+  if (failures.length === 0) {
+    console.log("[check-test-typecheck-coverage] PASS：include 全量、债务对账一致、正式跑绿");
+    return 0;
   }
-  console.log("[check-test-typecheck-coverage] PASS：include 全量、债务对账一致、正式跑绿");
-  return 0;
+  console.error(`\n[check-test-typecheck-coverage] FAIL：`);
+  for (const f of failures) console.error(`  - ${f}`);
+  printRecoveryGuidance(debt, missingForms, deadExcludes);
+  return 1;
 }
 
 // pathToFileURL 而非 `new URL(`file://${argv[1]}`)`：后者把路径里的 # / ? 当 URL

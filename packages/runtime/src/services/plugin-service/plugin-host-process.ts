@@ -22,7 +22,7 @@ import { buildOutboundChildEnv } from '../../infra/spawn-env.js'
 import { getCrashJournal } from '../../infra/crash-journal.js'
 import type { ProcessHandle } from './plugin-types.js'
 import { PluginRpcServer, type RpcIdentity } from './plugin-rpc-server.js'
-import { resolveAndValidateFile, dispatchHostRpcMessage, safeDispatchHostMessage, isRecordMessage } from './plugin-host.js'
+import { resolveAndValidateFile, dispatchHostRpcMessage, safeDispatchHostMessage, isRecordMessage, pluginHostPiAgentDirEnv } from './plugin-host.js'
 import { buildPluginCapabilityForkEnv, type PluginCapabilityForkEnvInput } from './plugin-fs-guard.js'
 
 /**
@@ -46,7 +46,7 @@ type CrashCallback = (processId: string, pluginIds: string[], error: string) => 
 type ReplyCallback = (msg: unknown) => void
 
 /**
- * 构建插件宿主 fork 子进程 env（唯一组装点，导出供单测直验）。
+ * 构建插件宿主 fork 子进程 env（出站拷贝 + capability 编码的组装点，导出供单测直验）。
  *
  * D6（docs/architecture/env-propagation-boundary.md §5-U4）：{...process.env} 全量拷贝拓扑
  * 不动（trusted/sandbox 插件兼容性属有意设计）——pass-all 前缀 '' 承载拷贝语义
@@ -57,6 +57,11 @@ type ReplyCallback = (msg: unknown) => void
  * readPaths（buildPluginCapabilityForkEnv 编码的 env 键值）——插件自身的授权范围
  * 非宿主秘密，经同一构建器注入保持 deny 兜底语义（extras 不可覆盖 deny 两键）。
  * 未传 = 无放行清单 → ESM loader 按基线黑名单全拦（fail-closed）。
+ *
+ * 注意：本函数不含 PI_CODING_AGENT_DIR 权威注入——该键由调用方（createProcess）经
+ * pluginHostPiAgentDirEnv 叠加（与 Worker 宿主共用的单一组装点在 plugin-host.ts），
+ * 保持本函数「父 env 拷贝 + capability 编码」的纯粹性，也让 fork/Worker 两宿主的
+ * 目录契约值只有一个来源。
  */
 export function buildPluginHostChildEnv(
   parentEnv: NodeJS.ProcessEnv,
@@ -439,10 +444,18 @@ export class PluginHostProcess implements PluginHostProcessContract {
     // 键值（放行清单 + readPaths），与 sandbox 目录同点注入；未登记插件不注入
     // （loader 按基线黑名单全拦）。
     const capInput = trustLevel === 'sandbox' ? this.capabilityEnvInputs.get(pluginId) : undefined
-    const env: NodeJS.ProcessEnv = buildPluginHostChildEnv(
-      process.env,
-      capInput ? buildPluginCapabilityForkEnv(capInput) : undefined,
-    )
+    const env: NodeJS.ProcessEnv = {
+      ...buildPluginHostChildEnv(
+        process.env,
+        capInput ? buildPluginCapabilityForkEnv(capInput) : undefined,
+      ),
+      // PI_CODING_AGENT_DIR 权威注入（与 Worker 宿主同源同值，单一组装点 =
+      // pluginHostPiAgentDirEnv；extras 后置于父 env 的 ambient 值之上，宿主 shell
+      // 泄漏的系统 pi 目录不会让插件读到错位置）。不并进 capabilityEnv——那是
+      // sandbox 能力放行通道（loader 消费），本键是 trusted/sandbox 两态插件都要读的
+      // 目录契约值，混入会让「未声明能力的 sandbox 插件」拿不到权威值。
+      ...pluginHostPiAgentDirEnv(),
+    }
     if (trustLevel === 'sandbox' && pluginPath) {
       env.TAIJI_PLUGIN_SANDBOX_DIR = pathDirname(pluginPath)
     }

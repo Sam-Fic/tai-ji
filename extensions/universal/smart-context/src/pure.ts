@@ -28,6 +28,9 @@ const DEFAULT_REMINDER_THRESHOLDS: readonly number[] = [
 	DEFAULT_REMINDER_THRESHOLD_TIER_3_TOKENS,
 ];
 
+/** 后台压缩触发线默认值（窗口 90%，用户裁决 2026-10-31；设计 D4）。 */
+export const DEFAULT_AUTO_COMPACT_THRESHOLD_RATIO = 0.9;
+
 /** smart-context 磁盘配置（<agentDir>/config/smart-context-ext-config.json）。 */
 export interface SmartContextConfig {
 	enabled: boolean;
@@ -37,6 +40,11 @@ export interface SmartContextConfig {
 	reminderThresholds: number[];
 	/** 排除模型列表：完整 provider/modelId 精准等值匹配（D5）。 */
 	excludedModels: string[];
+	/**
+	 * 后台压缩触发线：相对当前模型窗口的用量百分比（tokens 越过 ratio×窗口时触发，
+	 * 设计 D4）。与 reminderThresholds 三档提醒是两个独立行为各自配置。
+	 */
+	autoCompactThresholdRatio: number;
 }
 
 export const DEFAULT_SMART_CONTEXT_CONFIG: SmartContextConfig = {
@@ -44,6 +52,7 @@ export const DEFAULT_SMART_CONTEXT_CONFIG: SmartContextConfig = {
 	compactModel: { type: "ref", ref: "" },
 	reminderThresholds: [...DEFAULT_REMINDER_THRESHOLDS],
 	excludedModels: [],
+	autoCompactThresholdRatio: DEFAULT_AUTO_COMPACT_THRESHOLD_RATIO,
 };
 
 /**
@@ -51,6 +60,7 @@ export const DEFAULT_SMART_CONTEXT_CONFIG: SmartContextConfig = {
  * - reminderThresholds：过滤非正数 → 升序 → 截 3 档；空数组回退默认
  * - excludedModels：过滤非字符串与不含 "/" 的条目（精准匹配要求完整 provider/modelId）→ 去重
  * - compactModel：ref 非字符串按空串
+ * - autoCompactThresholdRatio：非有限数回默认 0.9；有限数钳制到 [0, 1]
  */
 export function normalizeSmartContextConfig(raw: unknown): SmartContextConfig {
 	const base = DEFAULT_SMART_CONTEXT_CONFIG;
@@ -78,7 +88,13 @@ export function normalizeSmartContextConfig(raw: unknown): SmartContextConfig {
 		),
 	];
 
-	return { enabled, compactModel, reminderThresholds, excludedModels };
+	const rawRatio = r.autoCompactThresholdRatio;
+	const autoCompactThresholdRatio =
+		typeof rawRatio === "number" && Number.isFinite(rawRatio)
+			? Math.min(1, Math.max(0, rawRatio))
+			: base.autoCompactThresholdRatio;
+
+	return { enabled, compactModel, reminderThresholds, excludedModels, autoCompactThresholdRatio };
 }
 
 /**

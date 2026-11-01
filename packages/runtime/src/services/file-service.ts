@@ -31,11 +31,11 @@ import { resolve as resolvePath, join, relative, isAbsolute } from 'node:path'
 import type { FileNode } from '@taiji/shared'
 import type { IgnoreMatcher } from '../infra/fs/ignore-parser.js'
 import { compileIgnoreRules, matchPath } from '../infra/fs/ignore-parser.js'
-// [startup-readiness U4/D5] 纯读两级解析的第二级源：pi 会话文件扫描链（infra/pi 合法
-// 持有点，cwd 提取在扫描 meta 内）+ btw 线布局定位（重启窗口内线文件不在 sessions/
-// 扫描面的判定通道）
-import { scanPiSessions } from '../infra/pi/session-file-utils.js'
-import { findBtwLineFileByLayout } from '../infra/pi/session-file-locator.js'
+// [startup-readiness U4/D5] 纯读两级解析的第二级源：infra 会话定位单函数
+// （session-file-locator.ts：磁盘段 findScannedSessionFileById 返回 filePath + cwd，
+// btw 布局段 findBtwLineFileByLayout 判在册外形态）——与 SessionStateQuery 冷读定位链
+// 同源同参（dmg-r1-9），本链不做自己的 scan+find，换源只改定位单函数实装。
+import { findBtwLineFileByLayout, findScannedSessionFileById } from '../infra/pi/session-file-locator.js'
 import { isUnderOrEqual, expandHome, canonicalizePath } from '../utils/path-utils.js'
 import type { IFileExecutor, FsEntry } from './ports/file-executor.js'
 import type { ISessionService, IFileService } from '../interfaces.js'
@@ -46,8 +46,10 @@ import { FileError } from './file-error.js'
 // 设计 D5：resolveSessionContext(sessionId) 两级解析——内存活跃表 → 磁盘元数据（带
 // 缓存）。纯读 RPC（file.search / file.tree / git.*）用它；需要 pi 进程的走 ensureActive。
 // 两级解析结构与内存优先级为终态（不随重写退场），第二级源随重写 G11 收敛换源
-// （交接语义 D5：切换不晚于重写 M5 旧文件删除波次）——本实装第二级 = pi 会话文件
-// 扫描链（SC21：未迁移形态），换源时只替换本函数第二级，两级结构与消费方不动。
+// （交接语义 D5：切换不晚于重写 M5 旧文件删除波次）——本实装第二级 = infra 会话定位
+// 单函数（SC21：未迁移形态），换源时只替换定位单函数实装（session-file-locator.ts），
+// 两级结构与消费方不动；冷读链（session-state-query getState 段 2 / 段 4）消费同一批
+// 单函数，两链同源同参由对拍测试机器锁定（见下方同源单函数注记）。
 //
 // btw 两形态处置（D5）：在册 btw 线经既有 registerSession 汇聚点注册进内存活跃表、
 // 线 cwd = 主会话 cwd——第一级照常解析、行为不变；不在册（runtime 重启窗口内的线，
@@ -85,14 +87,18 @@ export function resolveSessionContext(
   if (activeCwd !== undefined && activeCwd !== '') {
     return { kind: 'active', cwd: activeCwd }
   }
-  // [同源登记 dmg-r1-5] 磁盘段 + btw 布局段与 SessionStateQuery 冷读定位链
-  // （session-state-query.ts getState 段 2 / 段 4）同源同参：同走 scanPiSessions({ force: true })
-  // 全扫（冷读链经 findScannedSessionFileById 包装，同一 infra 函数）+ findBtwLineFileByLayout
-  // 布局定位。两链平行实装、判别产物各异（本链出 cwd / btw-line 判别形态；冷读链出
-  // filePath + scannedDirCount 埋点）——重写 G11/M5 换源时两处同步替换，不许只换一链。
-  const meta = scanPiSessions({ force: true }).find((s) => s.id === sessionId)
-  if (meta !== undefined) {
-    return { kind: 'disk', cwd: meta.cwd, filePath: meta.filePath }
+  // [同源单函数 dmg-r1-9] 磁盘段与 btw 布局段都经 infra 会话定位单函数
+  // （session-file-locator.ts），与 SessionStateQuery 冷读定位链（session-state-query.ts
+  // getState 段 2 / 段 4，经注入缝）同源同参：磁盘段 = findScannedSessionFileById
+  // （scanPiSessions({ force: true }) 全扫按 id 匹配的唯一实装，返回 filePath + cwd +
+  // scannedDirCount，两链各取所需）；btw 布局段 = findBtwLineFileByLayout（唯一实装，
+  // 两链同参）。两链判别产物各异（本链出 cwd / btw-line 判别形态；冷读链出 filePath +
+  // scannedDirCount 埋点）——同源同参由 src/services/session/__tests__/
+  // session-locate-single-source.test.ts 对拍锁定（机器绑定：任一链改走别的定位源或
+  // 参数即红）；重写 G11/M5 换源时只替换定位单函数实装，两链同步生效，不许只换一链。
+  const scanned = findScannedSessionFileById(sessionId)
+  if (scanned.filePath !== undefined && scanned.cwd !== undefined) {
+    return { kind: 'disk', cwd: scanned.cwd, filePath: scanned.filePath }
   }
   if (findBtwLineFileByLayout(sessionId).filePath !== undefined) {
     return { kind: 'btw-line' }

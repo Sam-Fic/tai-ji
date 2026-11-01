@@ -192,6 +192,8 @@ function makePool(aPlainLines: string[], bLines: string[]): Pool {
       trashSessionTree: async (dir) => { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }) },
       purgeMainSidecars: () => { void 0 },
       reapBackgroundTasks: async () => { void 0 },
+      // 段 ⑤ scheduler 分片清点：purge 形态断言只关心 keep-all 分支，删点返回 absent（无分片）
+      purgeSchedulerShard: () => 'absent',
       warn: (m) => { warnings.push(m) },
     },
   }
@@ -206,6 +208,7 @@ function purgeInput(p: Pool, enumerationSource?: string) {
     agentDir: p.agentDir,
     sessionsRoot: p.sessionsRoot,
     sessionStoreRoot: p.storeRoot,
+    cwd: p.root,
     skipIfMainFileMissing: false,
     ...(enumerationSource !== undefined ? { referenceEnumerationSource: enumerationSource } : {}),
   }

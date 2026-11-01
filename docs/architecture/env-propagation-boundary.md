@@ -133,6 +133,7 @@
 | 变量 | 设置点 | 消费点 |
 |------|--------|--------|
 | `TAIJI_PLUGIN_SANDBOX_DIR` | `plugin-host-process.ts:394`（fork 时注入） | sandbox bootstrap 插件定位 |
+| `PI_CODING_AGENT_DIR` | `plugin-host.ts` 的 `pluginHostPiAgentDirEnv()`（Worker 与 fork 两宿主同源同值；fork 路径在 `buildPluginHostChildEnv` 输出之上叠加） | builtin 插件读 pi agent 目录（scheduler-manager 任务库分片路径基座）；与 runtime spawn pi 时注入的同一键同值（shared `getPiAgentDir()` SSOT），权威值后置于父 env 的 ambient 值 |
 
 #### D 组：dev / mock / e2e / 测试专用
 

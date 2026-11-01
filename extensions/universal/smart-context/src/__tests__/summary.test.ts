@@ -14,7 +14,7 @@ vi.mock("../pure.js", async (importOriginal) => {
 });
 
 import { DEFAULT_SMART_CONTEXT_CONFIG, loadSmartContextConfig } from "../pure.js";
-import { buildCompactContextSummary, registerCompactContextTool } from "../tool.js";
+import { buildCompactContextSummary, registerCompactContextTool, type BackgroundCompactionControls } from "../tool.js";
 import { renderCompactContextResult } from "../render-result.js";
 
 const mockedLoad = vi.mocked(loadSmartContextConfig);
@@ -22,6 +22,11 @@ const mockedLoad = vi.mocked(loadSmartContextConfig);
 beforeEach(() => {
 	mockedLoad.mockReturnValue({ ...DEFAULT_SMART_CONTEXT_CONFIG });
 });
+
+/** 后台任务依赖注入桩（BackgroundCompactionControls 契约的测试替身，形态对齐 tool.test.ts）。 */
+function makeBackground(): BackgroundCompactionControls {
+	return { isActive: () => false, start: () => true };
+}
 
 interface RegisteredTool { // oe-exempt:20261017:test:测试 harness 契约——断言面引用其字段类型，非抽象接口
 	name: string;
@@ -57,8 +62,8 @@ function makeCtx(): ExtensionContext {
 // ── buildCompactContextSummary ───────────────────────
 
 describe("buildCompactContextSummary", () => {
-	it("恒为 Context compacted（R2 降级态：返回时压缩未完成，无比例数据）", () => {
-		expect(buildCompactContextSummary()).toBe("Context compacted");
+	it("恒为「后台压缩已启动」（后台执行：返回时任务刚启动，完成语义由完成通知承载）", () => {
+		expect(buildCompactContextSummary()).toBe("后台压缩已启动");
 	});
 });
 
@@ -67,11 +72,11 @@ describe("buildCompactContextSummary", () => {
 describe("compact_context execute details.summary", () => {
 	it("details 带现有字段 + summary", async () => {
 		const { pi, tools } = makePi();
-		registerCompactContextTool(pi);
+		registerCompactContextTool(pi, { background: makeBackground() });
 		const res = await tools[0]!.execute("t1", {}, undefined, undefined, makeCtx());
 		expect(res.details).toMatchObject({
 			mode: "same-model",
-			summary: "Context compacted",
+			summary: "后台压缩已启动",
 		});
 	});
 });

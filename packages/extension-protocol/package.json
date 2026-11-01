@@ -16,8 +16,8 @@
       "import": "./src/background-task-entry.ts"
     },
     "./scheduler-store": {
-      "types": "./src/extensions/scheduler/store.ts",
-      "import": "./src/extensions/scheduler/store.ts"
+      "types": "./src/scheduler-store-entry.ts",
+      "import": "./src/scheduler-store-entry.ts"
     }
   },
   "publishConfig": {

@@ -45,6 +45,7 @@
       "packages/runtime/src/services/session/revoke-orchestrator.ts",
       "packages/runtime/src/services/session/rolling-restart.ts",
       "packages/runtime/src/services/session/runtime-checkpoint.ts",
+      "packages/runtime/src/services/session/scheduler-shard-purge.ts",
       "packages/runtime/src/services/session/session-content-cascade.ts",
       "packages/runtime/src/services/session/session-delivery-registry.ts",
       "packages/runtime/src/services/session/session-entry-removal.ts",
@@ -67,7 +68,8 @@
       "packages/runtime/src/services/session/warmup-pi-slot.ts",
       "packages/runtime/src/services/session-history.ts",
       "packages/runtime/src/infra/pi/session-file-locator.ts",
-      "packages/runtime/src/infra/pi/session-file-utils.ts"
+      "packages/runtime/src/infra/pi/session-file-utils.ts",
+      "packages/runtime/src/utils/protocol-scheduler-store.ts"
     ],
     "renderer": [
       "packages/renderer/src/stores/chat.ts",
@@ -130,6 +132,7 @@
     "packages/runtime/src/services/session/__tests__/session-delivery-edit.test.ts",
     "packages/runtime/src/services/session/__tests__/session-lifecycle.test.ts",
     "packages/runtime/src/services/session/__tests__/session-lifecycle2-bundle.test.ts",
+    "packages/runtime/src/services/session/__tests__/session-locate-single-source.test.ts",
     "packages/runtime/src/services/session/__tests__/session-model-bundle.test.ts",
     "packages/runtime/src/services/session/__tests__/session-records-reconcile.test.ts",
     "packages/runtime/src/services/session/__tests__/session-state-projection.test.ts",
@@ -169,6 +172,9 @@
     "packages/ui/src/features/chat/**"
   ],
   "sharedBy": {
+    "packages/runtime/src/services/session/__tests__/session-locate-single-source.test.ts": [
+      "file-tree"
+    ],
     "packages/runtime/src/services/session/__tests__/session-model-bundle.test.ts": [
       "provider"
     ],

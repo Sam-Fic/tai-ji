@@ -72,11 +72,46 @@ import type {
   StatItem,
   TreeItem,
 } from '../../../packages/extension-protocol/src/index.ts'
-// taiji 内嵌 pi agent 目录 SSOT（PI_CODING_AGENT_DIR 对应值 `<dataDir>/agent`）：
-// 与 runtime spawn pi 时注入的 env 同源推导——插件 worker 与 runtime 主进程共享 env，
-// 推导结果构造性一致；scheduler 扩展（pi 进程内经官方 getAgentDir() 读注入 env）
-// 与本插件写读两侧落同一目录。
-import { getPiAgentDir } from '../../../packages/shared/src/paths.ts'
+// taiji 内嵌 pi agent 目录（PI_CODING_AGENT_DIR 对应值 `<dataDir>/agent`）经 env 契约键
+// 读取：值由 runtime 在插件宿主 env 注入时经 shared getPiAgentDir() 现算（单一组装点 =
+// packages/runtime/src/services/plugin-service/plugin-host.ts 的 pluginHostPiAgentDirEnv，
+// fork 与 Worker 两宿主同源同值），与 runtime spawn pi 时注入给 pi 进程的同一键同值——
+// scheduler 扩展（pi 进程内经官方 getAgentDir() 读注入 env）与本插件写读两侧落同一目录。
+//
+// 为什么不 import shared paths.ts（dmg-r1-12）：shared 的 paths.ts 是 env 缺省形态
+// （getPiAgentDir() 无参 → getDataDir() → C-proc-26 准入检查 + node:os/node:path），按
+// session-store-paths.ts 头注与 C-ext-31 同族纪律只归 runtime / main 合法消费；而
+// resources/plugins 不在 shared 准入检查（check-shared-module-admission.mjs /
+// check_shared_node_builtin.py 均只扫 packages/shared/src）与 eslint 扫描根，直引即让
+// 该消费侧边界没有任何机器拦截。改为只读登记键：插件不持 `<dataDir>/agent` 布局字面量、
+// 不依赖 node 内置，shared 侧改推导公式时插件零改动。
+//
+// 仅 trusted 插件可读（manifest trustLevel: 'trusted'）：sandbox 插件的 process.env 在
+// plugin-bootstrap.ts initSandbox 被替换为空 Proxy，读任何键都得 undefined——本插件是
+// trusted，走 Worker 线程不经 initSandbox。若将来改 sandbox，需改走 RPC 取值通道。
+const PI_AGENT_DIR_ENV_KEY = 'PI_CODING_AGENT_DIR'
+
+/**
+ * 取 pi agent 目录（`<dataDir>/agent`，scheduler 任务库分片路径的第一段基座）。
+ *
+ * 通道 = 宿主注入的 env 契约键（见上方 PI_AGENT_DIR_ENV_KEY 注释块）。缺键即抛：
+ * 静默回落任何值都会让任务库读写落到错目录（"任务莫名消失"或写到别处），错误消息
+ * 带恢复动作（权威注入点 + 自建 harness 时的显式设置方法）。
+ */
+function resolveAgentDir(): string {
+  const agentDir = process.env[PI_AGENT_DIR_ENV_KEY]
+  if (!agentDir) {
+    throw new Error(
+      `[scheduler-manager] ${PI_AGENT_DIR_ENV_KEY} is not set in the plugin host env — ` +
+        'the runtime must inject the authoritative pi agent dir (single assembly point: ' +
+        'packages/runtime/src/services/plugin-service/plugin-host.ts pluginHostPiAgentDirEnv; ' +
+        'contract registry: packages/shared/src/spawn-env-contract.ts). ' +
+        'Fix: run the plugin under the tai-ji runtime, or set ' +
+        `${PI_AGENT_DIR_ENV_KEY} explicitly in a standalone harness.`,
+    )
+  }
+  return agentDir
+}
 
 /** 插件可用 API 面（Phase2AgentAPI 的本地别名，签名可读性） */
 type Api = PluginContext['api']
@@ -352,7 +387,7 @@ async function doRefresh(api: Api, mirror: SessionMirror): Promise<void> {
     const info = await api.sessions.get(mirror.sessionId)
     let tasks: ScheduledTask[] = []
     if (info?.cwd) {
-      const filePath = schedulerStoreFilePath(getPiAgentDir(), info.cwd, mirror.sessionId)
+      const filePath = schedulerStoreFilePath(resolveAgentDir(), info.cwd, mirror.sessionId)
       const read = readSchedulerStore(filePath)
       if (read.kind === 'ok') tasks = read.tasks
     } else {

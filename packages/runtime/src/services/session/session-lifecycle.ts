@@ -153,6 +153,9 @@ import { SESSION_SIDECAR_EXTS } from '../archive/archive-paths.js'
 // A23 级联前置收殓（幂等双跑收口在途收殓；removeSessionEntry 汇聚点的 fire-and-forget
 // 挂点不动——本 import 只是级联内的 await 形态复用同一原语）。
 import { reapSessionBackgroundTasks } from './background-task-reaper.js'
+// 段 ⑤ scheduler 任务库分片清点（分片在 `<agentDir>/scheduler/` 树、不在 session 存储
+// 树内，整树软删够不到；路径推导与扩展写方同源单实现）。
+import { purgeSchedulerShard } from './scheduler-shard-purge.js'
 
 // stripSessionEndEntries / applyHeaderCwdFallback / containsSessionEndLine /
 // SESSION_END_RE / normalizeInactiveSessionFileIfNeeded / get_state 生效值解析与
@@ -1008,13 +1011,18 @@ export class SessionLifecycle implements ISessionRegistry {
    *   ③ 整树 trash（cascade 内 trashSessionTree = infra trashDirectory，`<root>/<sid>/`
    *      目录级软删；fork 回退暂存/回迁也在 cascade 内收口）→
    *   ④ pi sidecar 清理（cascade 内 purgeMainSidecars 回调回本类 purgeSessionSidecars）。
+   *   ⑤ scheduler 任务库分片清点（cascade 内 purgeSchedulerShard 回调——分片在
+   *      `<agentDir>/scheduler/` 树、不在 session 存储树内，整树软删够不到；键 = 被删
+   *      sessionId，路径 = schedulerStoreFilePath(agentDir, cwd, sessionId)）。
    * skipIfMainFileMissing 承载两分支的既有语义差异：active 分支 true = 主文件不存在
    * （外部已删）时**整体零动作**（原 purgeActiveSessionFile 守卫）；scanned 分支 false =
    * 仍收殓 + 整树软删 + 清孤儿 sidecar（树与 sidecar 不依赖主文件内容）。
+   * cwd = owner session 工作目录（段 ⑤ 分片路径的 workspace 隔离键）——由调用方经
+   * session meta 取真值后传入（active = session.cwd，scanned = scanner 的 target.cwd）。
    * trash / trashSessionTree 的 rejection 原样上抛（G4/P4-1：trash 失败必须经
    * session-lifecycle 传播——此时树与本体都还在 = 可恢复形态，重试删除即达终态）。
    */
-  private async cascadeDeletedSessionContent(sessionId: string, filePath: string, skipIfMainFileMissing: boolean): Promise<void> {
+  private async cascadeDeletedSessionContent(sessionId: string, filePath: string, cwd: string, skipIfMainFileMissing: boolean): Promise<void> {
     await cascadeDeleteSessionContent(
       {
         sessionId,
@@ -1022,6 +1030,7 @@ export class SessionLifecycle implements ISessionRegistry {
         agentDir: getPiAgentDir(),
         sessionsRoot: getSessionsDir(),
         sessionStoreRoot: getSessionStoreDir(),
+        cwd,
         skipIfMainFileMissing,
       },
       {
@@ -1029,6 +1038,7 @@ export class SessionLifecycle implements ISessionRegistry {
         trashSessionTree: (dirPath) => this.sessionStore.trashDirectory(dirPath),
         purgeMainSidecars: (path) => { this.purgeSessionSidecars(path) },
         reapBackgroundTasks: reapSessionBackgroundTasks,
+        purgeSchedulerShard: purgeSchedulerShard,
         warn: (message) => console.warn(message),
       },
     )
@@ -1129,6 +1139,27 @@ export class SessionLifecycle implements ISessionRegistry {
       // 解绑规则唯一化（「解绑 = 仅 session 真删除」无条件覆盖 btw 线，不因直删分支
       // 早退而漏解绑）。与主删路径同一点位形态（模块级分发，纯同步 Map 摘除）。
       unbindCanvasOnSessionDeleted(sessionId)
+      // scheduler 任务库分片清点（段 ⑤ 的 btw 线半边）：scheduler 是 mandatory 扩展，
+      // btw 线 spawn 经 btw-line-spawn-options 装载全部扩展，线 jsonl 已落盘 → 分片键
+      // 取线自身 sessionId（不走 no-session 归一），故 btw 线有自有分片、且键与 delete()
+      // 入参 sessionId 同值。本分支先于级联 cwd 解析与 cascadeDeletedSessionContent
+      // return，段 ⑤ 整体够不到——不在此处补清点则分片孤儿留盘（#88「可按会话回收
+      // 部分已消解」对该路径不成立）。
+      // best-effort：失败 warn 不阻断删除主链（closeLine 已完成，重试删除即补清），
+      // 形态与级联段 ⑤ 的 failed 收敛同口径。
+      if (session !== undefined && session.cwd !== undefined) {
+        try {
+          purgeSchedulerShard(getPiAgentDir(), session.cwd, sessionId)
+        } catch (e: unknown) {
+          // best-effort 降级：清点失败仅留痕，不阻断删除主链（closeLine 已完成，线本体已删；
+          // 残留分片仅占盘，重试删除即补清——与级联段 ⑤ 的 failed 收敛同口径）。
+          console.warn(`[session-lifecycle] scheduler task-store shard purge failed for btw line ${sessionId} (residual shard only occupies disk; retry the delete to clear it): ${e instanceof Error ? e.message : String(e)}`)
+        }
+      } else {
+        // 冷线不在册（session meta 取不到真值）→ cwd 缺失：分片路径不可推导，按 skipped
+        // 留痕不猜路径（与 scheduler-shard-purge.ts 的 skipped 分支同纪律）。
+        console.warn(`[session-lifecycle] scheduler task-store shard purge skipped for btw line ${sessionId}: cwd unavailable (cold line not in registry)`)
+      }
       return
     }
     // [M4-a] 级联 cwd 解析（两分支各取真值；分支抛出则级联随之跳过——btw 线目录由
@@ -1149,7 +1180,7 @@ export class SessionLifecycle implements ISessionRegistry {
       // didDestroy 投递（fire-and-forget）先行，迟到的 set/delete 由 tombstone 丢弃。
       clearRemovedSessionDataForDelete(sessionId)
       if (session.sessionFilePath) {
-        await this.cascadeDeletedSessionContent(sessionId, session.sessionFilePath, true)
+        await this.cascadeDeletedSessionContent(sessionId, session.sessionFilePath, session.cwd, true)
       }
     } else {
       const target = this.svc.findScannedSession(sessionId)
@@ -1160,7 +1191,7 @@ export class SessionLifecycle implements ISessionRegistry {
       // 经 cascadeDeletedSessionContent 的 skipIfMainFileMissing 显式承载（false =
       // scanned 语义），清单与顺序仍在 cascade 模块单点。
       clearRemovedSessionDataForDelete(sessionId)
-      await this.cascadeDeletedSessionContent(sessionId, target.filePath, false)
+      await this.cascadeDeletedSessionContent(sessionId, target.filePath, target.cwd, false)
     }
     // [M4-a / btw-question D4 消费面① + D9④ 线终结] deleteSession 级联支线：删主 →
     // 杀名下全部 btw 线进程 + 删 `btw/<encodeCwd>/<mainSid>/` 线目录（前端虚拟分区清理经

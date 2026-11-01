@@ -15,10 +15,19 @@
  *    TTL，与 `SessionService.findScannedSession` / `getPlanState` / `getMessageCount`
  *    同一口径——`ISessionStore.scanSessions` 是 `scanPiPessions` 的薄包装，本函数与经
  *    端口调用行为等价）。
+ *    【同源单函数（dmg-r1-9）】`findScannedSessionFileById` 是「按 id 从磁盘定位主会话
+ *    文件」的**唯一实装**：file-service.ts `resolveSessionContext` 磁盘段（取 filePath +
+ *    cwd）与 session-state-query.ts getState 段 2（取 filePath + scannedDirCount，经注入
+ *    缝）都消费它——两链同源同参由
+ *    `src/services/session/__tests__/session-locate-single-source.test.ts` 对拍锁定，
+ *    换源只改本函数实装，两链同步生效，不许只换一链。
  * 3. **btw 线支**：`BtwLineRecord.sessionFilePath`（注册表记录，经 `lifecycle.get(sessionId)`
  *    读——btw 线注册时该值由 registerSession 镜像进注册表记录）优先；未命中（**重启后**
  *    的线：`BtwService.rebuildFromDisk()` 只重建 BtwService.registry，不注册进
  *    lifecycle.sessions）走存储树布局公式定位。
+ *    【同源单函数（dmg-r1-9）】布局公式定位 `findBtwLineFileByLayout` 是唯一实装：
+ *    file-service.ts `resolveSessionContext` btw 布局段与 session-state-query.ts
+ *    getState 段 4（经注入缝）都消费它，同源同参对拍锁定同段 2 注记。
  *
  * 冷读的判别顺序（dmg-r1-3，由 session-state-query 决定）：注册表判别（廉价内存读）
  * → 段 1 → 段 2 → 布局兜底（两段均未命中才枚举存储树）——布局枚举是 O(会话数) 成本，
@@ -48,14 +57,26 @@ export function findCachedSessionFileById(sessionId: string): string | undefined
 }
 
 /**
- * 段 2 定位结果（寻址 + 本轮扫描的 cwd 分组目录数；埋点 `scannedDirCount` 的段 2 部分）。
+ * 段 2 定位结果（寻址 + header cwd + 本轮扫描的 cwd 分组目录数；埋点 `scannedDirCount`
+ * 的段 2 部分）。
  *
  * 与 `BtwLineLayoutLocateResult` 同构：计数经返回值透出——services 层不经模块级可变
  * 计数器反向探 infra 状态，services → infra 只走 deps 注入缝单向流动。
+ *
+ * 同源单函数（dmg-r1-9）：本结果由「按 id 磁盘定位主会话文件」的唯一实装
+ * `findScannedSessionFileById` 返回，两条读链各取所需——file-service.ts
+ * `resolveSessionContext` 磁盘段取 filePath + cwd（纯读链的 cwd 取值来源，该链不做
+ * 自己的 scan+find）；session-state-query.ts getState 段 2 经注入缝取 filePath +
+ * scannedDirCount。两链同源同参由对拍测试锁定（见文件头段 2 注记）。
  */
 export interface MainSessionScanLocateResult {
   /** 定位到的主会话文件（未命中 = undefined） */
   filePath: string | undefined
+  /**
+   * 命中文件 header 登记的 cwd（未命中 = undefined）。invariant：filePath 命中时必有
+   * 值——两者同出 `ScannedSessionMeta` 一条扫描记录。
+   */
+  cwd?: string
   /** 本轮 `scanPiSessions({ force: true })` 枚举的 cwd 分组目录数（未命中也照实返回） */
   scannedDirCount: number
 }
@@ -69,9 +90,10 @@ export interface MainSessionScanLocateResult {
  * @returns 定位结果；未命中（会话不存在 / 文件未落盘 / 已被清理）= `filePath: undefined`
  */
 export function findScannedSessionFileById(sessionId: string): MainSessionScanLocateResult {
-  const scanned = scanPiSessions({ force: true })
+  const meta = scanPiSessions({ force: true }).find((s) => s.id === sessionId)
   return {
-    filePath: scanned.find((s) => s.id === sessionId)?.filePath,
+    filePath: meta?.filePath,
+    cwd: meta?.cwd,
     scannedDirCount: sessionScanDirCount.last,
   }
 }
