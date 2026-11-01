@@ -19,6 +19,7 @@
  */
 
 import type {
+	AgentSettledEvent,
 	ExtensionAPI,
 	ExtensionCommandContext,
 	ExtensionContext,
@@ -79,7 +80,22 @@ export default function baseToolEnhanceExtension(pi: ExtensionAPI): void {
 				// 已随攒批窗整机制退役删除——投递边沿即投，装配宿主无合批控制面。
 			}),
 		).recover();
-		return runSessionStartMaintenance(pi, ctx, event.reason);
+		return runReconcileMaintenance(pi, ctx, event.reason);
+	});
+	// agent_settled 回合收尾边沿对账（completion-signal-delivery D2/D7②）：进程存活
+	// 形态（转换窗内单次重提失败等）的兜底恢复入口——同进程不重启不切回时，
+	// session_start 与 __taiji_bg_reconcile__ 两入口均不可达，回合收尾是仅剩的确定性
+	// 事件边沿（ADR-0122 保留白名单同族：事件驱动、判据现算磁盘事实，无定时器）。
+	// 编排与 session_start / 切回互调同一对账函数（RL12 判据单一）；高频边沿的常态
+	// 零成本由判据预检短路保证（pending-reconcile：registry 量级扫描先行，无候选
+	// 不触 entries 全扫描——设计检查点登记的成本下界）。
+	// 订阅生命周期（RL13）：本注册点 = extension load 装配期，每 pi 实例恰一次；
+	// 同进程 session 替换会重建 eventBus 并重新 load extension（notify.ts 文件头
+	// D17 登记的同一机制），旧实例连同其订阅一并消亡、新实例重新注册——无死
+	// handler 累积（构造性成立；pi.on 返回退订函数的契约由 delivery-port 装配侧
+	// 同源消费，本订阅随 pi 实例生命周期，无独立退订状态需要管理）。
+	pi.on("agent_settled", (_event: AgentSettledEvent, ctx: ExtensionContext) => {
+		return runReconcileMaintenance(pi, ctx, "agent_settled");
 	});
 	// 第二触发点（会话重挂接补强）：桌面「切走会话再切回」是同进程重新
 	// 挂接——pi 进程存活、不重发 session_start（真机实证），挂在 session_start 上的
@@ -92,29 +108,34 @@ export default function baseToolEnhanceExtension(pi: ExtensionAPI): void {
 		description:
 			"Internal: rerun pending background-task reconcile + completion-notify redelivery (triggered by taiji runtime on session resume; session_start does not refire for same-process reattach)",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
-			return runSessionStartMaintenance(pi, ctx, "resume");
+			return runReconcileMaintenance(pi, ctx, "resume");
 		},
 	});
 }
 
 /**
- * session_start 维护链（M3 对账 + 补投——收殓下沉 runtime 后，u-bte-remove）。
+ * 对账维护链（M3 对账 + 补投——收殓下沉 runtime 后，u-bte-remove）。
  *
- * 双入口共用本函数：① session_start 事件（reason 透传）；② `__taiji_bg_reconcile__`
- * 内部命令（runtime 切回触发，reason 恒 'resume'）。维护逻辑与幂等性对两入口完全一致。
+ * 三入口共用本函数（completion-signal-delivery D2/D7② 编排互调）：① session_start
+ * 事件（reason 透传）；② `__taiji_bg_reconcile__` 内部命令（runtime 切回触发，reason
+ * 恒 "resume"）；③ agent_settled 回合收尾（reason 恒 "agent_settled"——进程存活形态
+ * 的兜底恢复入口）。维护逻辑与幂等性对三入口完全一致（RL12 判据单一：三入口对同一
+ * 事实状态产出同一判定；跨边沿双投由 port 幂等吞并，见 pending-reconcile.ts 头注）。
  *
- * 执行形态：async——维护链内部全同步（收殓补投经 port.deliver 同步受理，见
+ * 执行形态：async——维护链内部全同步（补投经 port.deliver 同步受理，见
  * pending-reconcile.ts ReconcilePi 注释的适配登记）。错误吞掉记 warn（对账/补投失败无害：僵尸 register 停留差集、
- * 待补任务三判据仍命中，下一 session_start 幂等重查）——async 捕获防 unhandled
+ * 待补候选三判据仍命中，下一对账入口幂等重查）——async 捕获防 unhandled
  * rejection 复刻已否决的 fire-and-forget 失效形态。
  *
  * 频率语义（D3 检查粒度）：对账是 session 级操作（读当前 session 的 pi entries +
  * 当前 session 的 registry，appendEntry 幂等），属豁免类不挂进程级 once flag，
- * 每 session_start 都执行。桌面端每次激活是 startup+resume 双派发（factory 二调
+ * 每次边沿都执行。桌面端每次激活是 startup+resume 双派发（factory 二调
  * 下 handler 还会累积），对账多次执行幂等无害（补投的重复穿透由 port 幂等接管：
  * 同激活双派发的第二路 deliver 同 id 被 port 吞、已送达任务由送达痕迹判据阻断，
  * 详见 pending-reconcile.ts 头注幂等体系节）；反之若挂进程级 flag，startup 消费
  * flag 后目标 session 的对账将永远被跳过（M3 对账在主链路被禁用，此处是唯一执行点）。
+ * agent_settled 高频边沿的常态成本由判据预检短路兜住（registry 量级扫描先行，
+ * 无候选不触 entries 全扫描）。
  *
  * 入口无条件 debug 日志（S6 观测通道）：每次 handler 派发都打，含 reason——
  * TAIJI_AGENT_DEBUG=1 时落 extension 日志（默认 no-op），供「factory 二调下维护链
@@ -122,12 +143,12 @@ export default function baseToolEnhanceExtension(pi: ExtensionAPI): void {
  * 不再含全局扫描/全局锁，原 reapSkipped 字段随 reap 调用一并移除——对应 S6
  * 场景「批 2 后 reap 类操作不再执行」。
  */
-async function runSessionStartMaintenance(
+async function runReconcileMaintenance(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
-	reason: SessionStartEvent["reason"],
+	reason: SessionStartEvent["reason"] | "agent_settled",
 ): Promise<void> {
-	logger.debug("session_start maintenance dispatch", {
+	logger.debug("reconcile maintenance dispatch", {
 		detail: { reason },
 	});
 	try {

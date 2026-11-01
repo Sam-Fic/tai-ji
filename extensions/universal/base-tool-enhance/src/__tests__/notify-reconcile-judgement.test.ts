@@ -7,7 +7,11 @@
 import { describe, expect, it } from "vitest";
 
 import { BACKGROUND_BASH_CUSTOM_TYPE } from "../background/notify.ts";
-import { collectDeliveredTaskIds } from "../background/notify-reconcile-judgement.ts";
+import {
+	collectDeliveredTaskIds,
+	collectJournaledDeliveryIds,
+	isReconcileNotifyCandidate,
+} from "../background/notify-reconcile-judgement.ts";
 
 const TASK_ID = "bt-1700000000-abcd12";
 const OTHER_TASK_ID = "bt-1700000000-efgh34";
@@ -102,5 +106,90 @@ describe("collectDeliveredTaskIds: content落盘形态与脏数据容错", () =>
 			deliveredEntry({ taskId: OTHER_TASK_ID, details: undefined }),
 		]);
 		expect([...ids].sort()).toEqual([TASK_ID, OTHER_TASK_ID].sort());
+	});
+});
+
+// ── 三重事实判据：投递日志幂等键提取（事实三事实源）+ 骨架真值
+//（completion-signal-delivery D2；bash 域消费在 pending-reconcile.test.ts 真值表组）──
+
+/** 投递日志 outbox entry（journal v2 落盘形态——port 受理前 appendEntry 写入）。 */
+function journaledOutboxEntry(id: string, dataOverrides: Record<string, unknown> = {}) {
+	return {
+		type: "custom",
+		customType: "delivery-port-outbox",
+		data: {
+			v: 2,
+			id,
+			timing: "steer",
+			payload: {
+				kind: "custom",
+				customType: BACKGROUND_BASH_CUSTOM_TYPE,
+				content: `notify ${id}`,
+				display: true,
+			},
+			recordedAt: 1,
+			...dataOverrides,
+		},
+	};
+}
+
+describe("collectJournaledDeliveryIds: journal entry shapes (fact-three source, D2)", () => {
+	it("v2 outbox entry hits via data.id", () => {
+		const ids = collectJournaledDeliveryIds([journaledOutboxEntry(TASK_ID)]);
+		expect([...ids]).toEqual([TASK_ID]);
+	});
+
+	it("legacy v1 ledger entry (subagent-bg-notify-ledger) hits via notifyId mapping", () => {
+		const ids = collectJournaledDeliveryIds([
+			{
+				type: "custom",
+				customType: "subagent-bg-notify-ledger",
+				data: { v: 1, notifyId: TASK_ID, content: "c", record: {} },
+			},
+		]);
+		expect([...ids]).toEqual([TASK_ID]);
+	});
+
+	it("ack terminal entry hits (defensive union with outbox in the same pass)", () => {
+		const ids = collectJournaledDeliveryIds([
+			{
+				type: "custom",
+				customType: "delivery-port-ack",
+				data: { v: 2, id: TASK_ID, outcome: "delivered" },
+			},
+		]);
+		expect([...ids]).toEqual([TASK_ID]);
+	});
+
+	it("malformed / non-journal entries are skipped (tolerance aligned with port scanJournal)", () => {
+		const ids = collectJournaledDeliveryIds([
+			null,
+			42,
+			deliveredEntry(), // custom_message 通知条目——非投递日志
+			{ type: "custom", customType: "delivery-port-outbox", data: { v: 2 } }, // data 畸形
+			{ type: "custom", customType: "delivery-port-outbox" }, // data 缺失
+			journaledOutboxEntry(TASK_ID),
+		]);
+		expect([...ids]).toEqual([TASK_ID]);
+	});
+
+	it("multiple ids across entries collect all", () => {
+		const ids = collectJournaledDeliveryIds([
+			journaledOutboxEntry(TASK_ID),
+			journaledOutboxEntry(OTHER_TASK_ID),
+		]);
+		expect([...ids].sort()).toEqual([TASK_ID, OTHER_TASK_ID].sort());
+	});
+});
+
+describe("isReconcileNotifyCandidate: triple-fact skeleton truth (D2, cross-domain shared semantics)", () => {
+	const base = { isTerminal: true, excludedByOrigin: false, delivered: false, journaled: false };
+
+	it("candidate only when terminal ∧ not excluded ∧ no trace ∧ no journal entry", () => {
+		expect(isReconcileNotifyCandidate(base)).toBe(true);
+		expect(isReconcileNotifyCandidate({ ...base, isTerminal: false })).toBe(false);
+		expect(isReconcileNotifyCandidate({ ...base, excludedByOrigin: true })).toBe(false);
+		expect(isReconcileNotifyCandidate({ ...base, delivered: true })).toBe(false);
+		expect(isReconcileNotifyCandidate({ ...base, journaled: true })).toBe(false);
 	});
 });

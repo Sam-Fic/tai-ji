@@ -34,6 +34,14 @@
  * （收殓时 pi API 不可用，无 outbox 条目，重放无从覆盖）改由对账路径承接
  * （pending-reconcile.ts——收殓终态通知的唯一生产者）。
  *
+ * rejected 处置阶梯（completion-signal-delivery D1/D7，ADR-0122⑧ 边界精确化的落点）：
+ * rejected（幂等键未登记、outbox 未落，重放结构性无从覆盖）不再等于丢失——瞬态成因
+ * 当场单次重提（deliverTaskFinishedNotification rejected 分支内同步单次）；重提未
+ * 恢复的形态由对账边沿的事实判据兜底（pending-reconcile 三入口：session_start /
+ * __taiji_bg_reconcile__ 切回 / agent_settled——natural/timeout 终态已入补投候选，
+ * payload 与本文件主路径同构造）。warn 文案相应从「丢失」改为「recovered by
+ * reconcile fallback」+ 恢复指引（RL9 弱断言防回退）。
+ *
  * kill 路径不入账（bash_kill 终态收尾的单点归属原则，老能力映射 #10 result 类
  * silent 声明）：reason:"killed" 只 emit unregister——kill 调用方就在当前 turn 等结果，
  * 双发是噪音。
@@ -46,6 +54,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { DeliveryDeliverOptions, DeliveryEnvelope } from "@zhushanwen/pi-delivery-port";
 import { getDeliveryPort } from "@zhushanwen/pi-delivery-port";
 import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
@@ -170,38 +179,80 @@ export function handleTaskExit(task: BackgroundTask): void {
  * ⑨ 完成通知入账（port.deliver，id = taskId 幂等键）：受理前落 outbox（丢失由差集
  * 重放覆盖）→ 受理即直达 pi 唯一队列（steer 档，注入形态与直发一致）。deliver 同步
  * 返回受理结果，本通路 fire-and-forget：accepted / swallowed（幂等命中）静默；
- * rejected（persist-failed / disposed）= 幂等键未登记、outbox 未落，通知丢失且重放
- * 无从覆盖（natural/timeout 不在对账补投判据内）——warn 留痕即修复信号。
+ * rejected（persist-failed / disposed）= 幂等键未登记、outbox 未落——处置阶梯①
+ * （completion-signal-delivery D1/D7①）：当场 getDeliveryPort() 重取当前实例单次
+ * 重提原 envelope（一次投递尝试的同步收尾动作，非重试循环非定时器——ADR-0122 红线
+ * 不越界，RL10）；重提仍 rejected 或重取缺席即停止，恢复责任移交对账边沿的事实
+ * 判据兜底（pending-reconcile 三入口，warn 文案带恢复指引——RL9/RL11）。
  */
 function deliverTaskFinishedNotification(task: BackgroundTask): void {
 	const port = getDeliveryPort();
 	if (port !== undefined) {
-		const receipt = port.deliver(
-			{
-				id: task.taskId,
-				timing: "steer",
-				payload: {
-					kind: "custom",
-					customType: BACKGROUND_BASH_CUSTOM_TYPE,
-					content: buildNotificationContent(task),
-					display: true,
-					details: buildNotifyDetails(task),
-				},
-			},
-			// collectKey 债权申报（result-collect 域，现行登记处 = ADR-0146）：
-			// 单债权条目 = 其 pending:register 的 id（bash 域幂等键与债权键同 id），
-			// 对账补投路径（pending-reconcile deliverReapNotifications）同款申报。
-			{ collectKey: [task.taskId] },
-		);
+		const envelope = buildFinishedNotifyEnvelope(task);
+		const receipt = port.deliver(envelope, collectKeyOption(task));
 		if (receipt.kind === "rejected") {
-			logger.warn("background task notify rejected by delivery port; notification lost (no outbox record)", {
-				detail: { taskId: task.taskId, reason: receipt.reason },
-			});
+			// 首败留痕（修复信号）+ 处置阶梯①接线：立即单次重提（D1 采用段①）。
+			logger.warn(
+				"background task notify rejected by delivery port; retrying once via re-acquired port, recovered by reconcile fallback if the retry fails too",
+				{ detail: { taskId: task.taskId, reason: receipt.reason } },
+			);
+			retryDeliverOnce(task, envelope);
 		}
 		return;
 	}
 	// port 缺席（装配异常窗口）：直发兜底（at-most-once 降级代价见文件头）。
 	sendDirectFallback(task);
+}
+
+/**
+ * 立即单次重提（D7①）：getDeliveryPort() 重取当前实例（session_start 重绑后即新
+ * 实例）、重提原 envelope（同幂等键——rejected 条目幂等键未登记，重提合法，
+ * delivery-port types 既有契约）。单次不循环：重提 rejected 或重取 undefined 均
+ * 直接返回（RL10 检查点的两处停止位），无定时器、无重试队列、无第三次投递。
+ */
+function retryDeliverOnce(task: BackgroundTask, envelope: DeliveryEnvelope): void {
+	const retryPort = getDeliveryPort();
+	if (retryPort === undefined) {
+		// 重取到 undefined（装配缺席窗）：停止转兜底——缺席直发兜底只属主路径缺席
+		// 形态，重提路径不扩该降级；恢复通道 = 对账边沿事实判据。
+		logger.warn(
+			"background task notify retry skipped: delivery port absent on re-acquire; recovered by reconcile fallback",
+			{ detail: { taskId: task.taskId } },
+		);
+		return;
+	}
+	const retryReceipt = retryPort.deliver(envelope, collectKeyOption(task));
+	if (retryReceipt.kind === "rejected") {
+		// 单次重提仍 rejected（转换窗旧实例在位 / 持久写失败）：即停报警（RL11——
+		// 持久成因不静默重试，warn 留痕交环境修复；环境修复后的送达由对账边沿的
+		// 事实判据自动承接，判据不区分成因）。
+		logger.warn(
+			"background task notify retry rejected after the single re-acquire attempt; single retry spent, recovered by reconcile fallback (session_start / resume / agent_settled edge)",
+			{ detail: { taskId: task.taskId, reason: retryReceipt.reason } },
+		);
+	}
+}
+
+/** 完成通知 envelope（主投递与单次重提共用同一构造——重提原 payload 语义）。 */
+function buildFinishedNotifyEnvelope(task: BackgroundTask): DeliveryEnvelope {
+	return {
+		id: task.taskId,
+		timing: "steer",
+		payload: {
+			kind: "custom",
+			customType: BACKGROUND_BASH_CUSTOM_TYPE,
+			content: buildNotificationContent(task),
+			display: true,
+			details: buildNotifyDetails(task),
+		},
+	};
+}
+
+function collectKeyOption(task: BackgroundTask): DeliveryDeliverOptions {
+	// collectKey 债权申报（result-collect 域，现行登记处 = ADR-0146）：
+	// 单债权条目 = 其 pending:register 的 id（bash 域幂等键与债权键同 id），
+	// 对账补投路径（pending-reconcile deliverReapNotifications）同款申报。
+	return { collectKey: [task.taskId] };
 }
 
 /** 缺席兜底：pi.sendMessage steer 驱动新 turn（旧 bus 已 dispose 时降级日志不断链）。 */

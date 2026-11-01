@@ -13,8 +13,10 @@
 //    journal.test / delivery-port.test 重启用例锁定）；
 //  - 「进程死亡收殓终态（process-exit / orphaned）」→ 无 outbox 条目，重放无从覆盖，
 //    由对账路径补投（pending-reconcile.test.ts 锁定）；
-//  - rejected（本文件「rejected by delivery port」用例）= 幂等键未登记、无 outbox，
-//    通知丢失——warn 留痕即修复信号（登记丢失风险，与旧机制 throw 降级日志同型）。
+//  - rejected（本文件「rejected by delivery port」用例组）= 幂等键未登记、无 outbox
+//    ——处置阶梯①（completion-signal-delivery D1/D7）：warn 留痕 + 立即单次重提原
+//    envelope（RL10：deliver 计数恰 2、无定时器无重试队列）；重提未恢复的形态由对账
+//    边沿事实判据兜底（warn 文案含 recovered by reconcile fallback——RL9/RL11）。
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -323,22 +325,88 @@ describe("exit-edge notification via delivery port (⑧⑨, unified-delivery wav
 		expect(message.details).toMatchObject({ taskId: "bt-1700000000-test01", endReason: "natural", exitCode: 3 });
 	});
 
-	it("rejected by delivery port (persist failure): notification lost, warn logged (registered loss surface)", () => {
+	it("rejected then transient recovery: single immediate re-delivery succeeds (D1 ladder ①, RL10 count = 2)", () => {
 		const host = attachPort(
 			createPortHost({
-				appendEntry: vi.fn(() => {
+				appendEntry: vi.fn().mockImplementationOnce(() => {
 					throw new Error("session file unwritable");
 				}),
 			}),
 		);
 
 		expect(() => handleTaskExit(finalizedTask())).not.toThrow();
-		// rejected = 幂等键未登记、无 outbox 记录——重放无从覆盖的登记丢失风险
-		//（模块 logger warn 留痕即修复信号；port 侧另有 persist-failed warn 同栈落日志）
-		expect(host.sendMessage).not.toHaveBeenCalled();
+		// 原始尝试 1 + 单次重提 1 = 恰 2（重提受理成功 → 注入恰 1 条，无第三次投递）
+		expect(host.appendEntry).toHaveBeenCalledTimes(2);
+		expect(host.sendMessage).toHaveBeenCalledTimes(1);
+		// 首败 warn 留痕（修复信号）+ 恢复指引——文案不再宣称 lost（RL9）
 		expect(moduleLoggerMock.warn).toHaveBeenCalledWith(
-			"background task notify rejected by delivery port; notification lost (no outbox record)",
+			"background task notify rejected by delivery port; retrying once via re-acquired port, recovered by reconcile fallback if the retry fails too",
 			{ detail: { taskId: "bt-1700000000-test01", reason: "persist-failed" } },
+		);
+	});
+
+	it("retry also rejected: single retry spent, no third attempt, no timers, no retry queue (RL10/RL11)", () => {
+		vi.useFakeTimers();
+		try {
+			// 上一用例的 warn 历史经 afterEach restoreAllMocks 不清普通 vi.fn——本断言
+			// 计数敏感，用例内显式清历史
+			moduleLoggerMock.warn.mockClear();
+			const host = attachPort(
+				createPortHost({
+					appendEntry: vi.fn(() => {
+						throw new Error("session file unwritable");
+					}),
+				}),
+			);
+
+			expect(() => handleTaskExit(finalizedTask())).not.toThrow();
+			// RL10：原始 1 + 单次重提 1 = 恰 2；无循环（第三次投递即红）、无定时器句柄、
+			// 无重试队列残留（ADR-0122 红线——单次重提是一次投递尝试的收尾动作）
+			expect(host.appendEntry).toHaveBeenCalledTimes(2);
+			expect(host.sendMessage).not.toHaveBeenCalled();
+			expect(vi.getTimerCount()).toBe(0);
+			// RL11：连续 rejected → 生产方 warn 留痕产出且含恢复动作指引，无静默重试。
+			// 计数按生产方首参前缀过滤（port 侧 persist-failed warn 同栈落同一 mock
+			// logger——那不是生产方处置，不计入本断言）
+			const productionWarns = moduleLoggerMock.warn.mock.calls.filter((call) =>
+				(call[0] as string).startsWith("background task notify"),
+			);
+			expect(productionWarns).toHaveLength(2);
+			const messages = productionWarns.map((call) => call[0] as string);
+			expect(messages[0]).toContain("recovered by reconcile fallback");
+			expect(messages[1]).toContain("recovered by reconcile fallback");
+			expect(messages[1]).toContain("single retry spent");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("re-acquire returns undefined (assembly absent window): stop, warn, no direct-send fallback (RL10 stop slot)", () => {
+		const pi = createMockPi();
+		attach(pi);
+		let cleared = false;
+		const host = attachPort(
+			createPortHost({
+				appendEntry: vi.fn(() => {
+					if (!cleared) {
+						cleared = true;
+						// 首败落盘瞬间槽被清（模拟重提时装配缺席窗）
+						_resetDeliveryPortForTest();
+					}
+					throw new Error("session file unwritable");
+				}),
+			}),
+		);
+
+		expect(() => handleTaskExit(finalizedTask())).not.toThrow();
+		// 恰 1 次投递尝试（重取到 undefined 即停——单次语义的两处停止位之一）
+		expect(host.appendEntry).toHaveBeenCalledTimes(1);
+		expect(host.sendMessage).not.toHaveBeenCalled();
+		// 不扩直发兜底：缺席直发只属主路径缺席形态，重提路径的恢复通道 = 对账边沿
+		expect(pi.sendMessage).not.toHaveBeenCalled();
+		expect(moduleLoggerMock.warn).toHaveBeenCalledWith(
+			"background task notify retry skipped: delivery port absent on re-acquire; recovered by reconcile fallback",
+			{ detail: { taskId: "bt-1700000000-test01" } },
 		);
 	});
 });
