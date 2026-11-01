@@ -18,10 +18,11 @@ import { setBtwCascadeOps } from '../session-lifecycle.js';
 import { SessionScanner } from '../session-scanner.js';
 import { SessionService } from '../session-service.js';
 import type { ScannedSession } from '../types.js';
+import { schedulerStoreFilePath } from '../../../utils/protocol-scheduler-store.js';
 import { cleanupDir, makeHarness, makeTmpDir, type BtwHarness, useTmpDataDir, writeSessionFile } from './helpers/btw-harness.js';
 import { BUILTIN_PRESET_IDS } from '@taiji/shared';
 import { getSessionBtwDir, getSessionStoreDir } from '@taiji/shared/paths';
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -344,6 +345,69 @@ describe('三路并发收敛（D9④）：单入口 closeLine + 幂等', () => {
     expect(console.warn).toHaveBeenCalledWith(
       expect.stringContaining('[session-lifecycle] btw cascade failed'),
       expect.anything(),
+    )
+  })
+})
+describe('btw 线直删的 scheduler 任务库分片清点（scheduler-redesign 方案 B · 级联段 ⑤ 的 btw 半边）', () => {
+  it('分片存在 → 直删后按 schedulerStoreFilePath 推导删除（键 = 线自身 sessionId）', async () => {
+    await service.initializeManagedSession(MAIN_SID, {} as IPiEngine, CWD, 'main')
+    const { sessionId } = await createLine('linepi-direct-shard')
+    // 线在 runtime 是一等注册会话（session meta 可取 cwd 真值）
+    await service.initializeManagedSession(sessionId, {} as IPiEngine, CWD, 'line', undefined, undefined, undefined, undefined, undefined, undefined, 'btw')
+    const shard = schedulerStoreFilePath(getPiAgentDir(), CWD, sessionId)
+    mkdirSync(join(shard, '..'), { recursive: true })
+    writeFileSync(shard, '{"schemaVersion":2,"tasks":[]}\n')
+    expect(existsSync(shard)).toBe(true)
+
+    await service.delete(sessionId) // btw 线直删分支
+
+    // 分片随线真删除清点（键 = 线 sessionId；直删分支先于级联 return，段 ⑤ 够不到）
+    expect(existsSync(shard)).toBe(false)
+  })
+
+  it('无分片（线从未建任务）→ 删除照常完成，零 warn', async () => {
+    await service.initializeManagedSession(MAIN_SID, {} as IPiEngine, CWD, 'main')
+    const { sessionId } = await createLine('linepi-direct-noshard')
+    await service.initializeManagedSession(sessionId, {} as IPiEngine, CWD, 'line', undefined, undefined, undefined, undefined, undefined, undefined, 'btw')
+    vi.mocked(console.warn).mockClear()
+
+    await expect(service.delete(sessionId)).resolves.toBeUndefined()
+
+    // 无分片是正常路径（线从未建任务）：清点侧零 warn（absent 不属失败）
+    const warnText = vi.mocked(console.warn).mock.calls.map((c) => c.join(' ')).join('\n')
+    expect(warnText).not.toContain('scheduler task-store shard')
+  })
+
+  it('冷线不在册（cwd 取不到）→ skipped 留痕不猜路径，删除主链不阻断', async () => {
+    await service.initializeManagedSession(MAIN_SID, {} as IPiEngine, CWD, 'main')
+    // 线在 btw 注册表（createLine 已登记 → isBtwLine 为真）但不在 lifecycle 注册表
+    // （不 initializeManagedSession → session meta 无 cwd 真值）。
+    const { sessionId } = await createLine('linepi-direct-cold')
+    const shard = schedulerStoreFilePath(getPiAgentDir(), CWD, sessionId)
+    mkdirSync(join(shard, '..'), { recursive: true })
+    writeFileSync(shard, '{"schemaVersion":2,"tasks":[]}\n')
+
+    await expect(service.delete(sessionId)).resolves.toBeUndefined()
+
+    // cwd 缺失 → 不猜路径（分片留着，与 scheduler-shard-purge 的 skipped 分支同纪律）
+    expect(existsSync(shard)).toBe(true)
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.stringContaining('purge skipped for btw line'),
+    )
+  })
+
+  it('删除失败（分片路径落成目录）→ warn 不阻断删除主链，线本体照常删除', async () => {
+    await service.initializeManagedSession(MAIN_SID, {} as IPiEngine, CWD, 'main')
+    const { sessionId } = await createLine('linepi-direct-shardfail')
+    await service.initializeManagedSession(sessionId, {} as IPiEngine, CWD, 'line', undefined, undefined, undefined, undefined, undefined, undefined, 'btw')
+    const shard = schedulerStoreFilePath(getPiAgentDir(), CWD, sessionId)
+    mkdirSync(shard, { recursive: true }) // unlink 对目录抛 EPERM/EISDIR
+
+    await expect(service.delete(sessionId)).resolves.toBeUndefined()
+
+    expect(existsSync(shard)).toBe(true) // 残留分片仅占盘（best-effort）
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.stringContaining('scheduler task-store shard purge failed for btw line'),
     )
   })
 })

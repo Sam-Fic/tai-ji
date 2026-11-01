@@ -1139,6 +1139,27 @@ export class SessionLifecycle implements ISessionRegistry {
       // 解绑规则唯一化（「解绑 = 仅 session 真删除」无条件覆盖 btw 线，不因直删分支
       // 早退而漏解绑）。与主删路径同一点位形态（模块级分发，纯同步 Map 摘除）。
       unbindCanvasOnSessionDeleted(sessionId)
+      // scheduler 任务库分片清点（段 ⑤ 的 btw 线半边）：scheduler 是 mandatory 扩展，
+      // btw 线 spawn 经 btw-line-spawn-options 装载全部扩展，线 jsonl 已落盘 → 分片键
+      // 取线自身 sessionId（不走 no-session 归一），故 btw 线有自有分片、且键与 delete()
+      // 入参 sessionId 同值。本分支先于级联 cwd 解析与 cascadeDeletedSessionContent
+      // return，段 ⑤ 整体够不到——不在此处补清点则分片孤儿留盘（#88「可按会话回收
+      // 部分已消解」对该路径不成立）。
+      // best-effort：失败 warn 不阻断删除主链（closeLine 已完成，重试删除即补清），
+      // 形态与级联段 ⑤ 的 failed 收敛同口径。
+      if (session !== undefined && session.cwd !== undefined) {
+        try {
+          purgeSchedulerShard(getPiAgentDir(), session.cwd, sessionId)
+        } catch (e: unknown) {
+          // best-effort 降级：清点失败仅留痕，不阻断删除主链（closeLine 已完成，线本体已删；
+          // 残留分片仅占盘，重试删除即补清——与级联段 ⑤ 的 failed 收敛同口径）。
+          console.warn(`[session-lifecycle] scheduler task-store shard purge failed for btw line ${sessionId} (residual shard only occupies disk; retry the delete to clear it): ${e instanceof Error ? e.message : String(e)}`)
+        }
+      } else {
+        // 冷线不在册（session meta 取不到真值）→ cwd 缺失：分片路径不可推导，按 skipped
+        // 留痕不猜路径（与 scheduler-shard-purge.ts 的 skipped 分支同纪律）。
+        console.warn(`[session-lifecycle] scheduler task-store shard purge skipped for btw line ${sessionId}: cwd unavailable (cold line not in registry)`)
+      }
       return
     }
     // [M4-a] 级联 cwd 解析（两分支各取真值；分支抛出则级联随之跳过——btw 线目录由
