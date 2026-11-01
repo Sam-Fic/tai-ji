@@ -11,7 +11,7 @@
  *   importOriginal 保留），withFileLockSync/atomicWrite 真实执行。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { appendFileSync, mkdtempSync, writeFileSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, truncateSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, writeFileSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, truncateSync } from 'node:fs'
 import { logger } from '../../../infra/logger.js'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -815,7 +815,7 @@ describe('磁盘读侧（scanSessions → extractor 真实执行）', () => {
     const { records } = makeRecords({
       sessionStore: { scanSessions: vi.fn(() => [{ id: 's-big', filePath }]) } as unknown as ISessionStore,
     })
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       // 反复拉取（面板 retry 场景）：oversize 分形稳定 + warn 每会话只落一次
       const first = await records.getSubagents('s-big')
@@ -830,6 +830,110 @@ describe('磁盘读侧（scanSessions → extractor 真实执行）', () => {
       warnSpy.mockRestore()
       // teardown 递归删除补 maxRetries/retryDelay：与在途异步写竞争时 ENOTEMPTY 瞬态失败可重试
       // （同文件 :962 范式；rm/rmSync 默认 maxRetries=0，一次瞬态失败即抛 → 满载 flake）
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
+  })
+
+  // ── [U2 路径解析单点直查 D5]：查询定位走登记表 + 单文件直查，稳态零扫描；miss 回退
+  // 不静默 found=false；同路径换 id 防御。fixture 首行为真 session header（header 惰性读
+  // 校验的对象）──
+  const U2_SESSION_HEADER: Record<string, unknown> = {
+    type: 'session', id: 's1', cwd: '/tmp/proj', timestamp: '2026-11-01T00:00:00Z',
+  }
+
+  function writeU2SessionFile(filePath: string, entries: Array<Record<string, unknown>>): void {
+    writeFileSync(filePath, jsonlLines([U2_SESSION_HEADER, ...entries]))
+  }
+
+  it('[U2 D5] 稳态查询零扫描（登记表 + 单文件直查）；文件移动后回退扫描重建定位，不静默 found=false', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'session-records-u2-'))
+    try {
+      const filePathV1 = join(dir, '2026-11-01T00-00-00-000Z_s1.jsonl')
+      writeU2SessionFile(filePathV1, subagentRecordEntry('sa-1', 'running', 'e1'))
+      const scanSessions = vi.fn(() => [{ id: 's1', filePath: filePathV1, cwd: '/tmp/proj' }])
+      const { records } = makeRecords({
+        sessionStore: { scanSessions } as unknown as ISessionStore,
+      })
+      // 首查：三级直查全 miss（登记表空 + meta 缓存空）→ 回退 force 扫描命中 → 登记
+      const first = await records.getSubagents('s1')
+      expect(first.found).toBe(true)
+      expect(first.records.map((r) => r.subagentId)).toEqual(['sa-1'])
+      expect(scanSessions).toHaveBeenCalledTimes(1)
+      // 稳态二查：登记表命中（header 校验读首行）→ 零扫描调用——查询成本与全目录会话数解耦
+      const second = await records.getSubagents('s1')
+      expect(second.found).toBe(true)
+      expect(scanSessions).toHaveBeenCalledTimes(1)
+      // 归档/移动形态：文件搬走（旧路径消失）→ 登记条目 header 校验失败 → 回退扫描
+      // （侧栏扫描管线已同步新位置）重建定位——回退路径不静默返回 found=false
+      const filePathV2 = join(dir, 'moved_s1.jsonl')
+      renameSync(filePathV1, filePathV2)
+      writeU2SessionFile(filePathV2, subagentRecordEntry('sa-1', 'running', 'e1'))
+      scanSessions.mockReturnValue([{ id: 's1', filePath: filePathV2, cwd: '/tmp/proj' }])
+      const third = await records.getSubagents('s1')
+      expect(third.found).toBe(true)
+      expect(third.records.map((r) => r.subagentId)).toEqual(['sa-1'])
+      expect(scanSessions).toHaveBeenCalledTimes(2) // 回退确实扫了（非静默 miss）
+      // 新登记后稳态复归零扫描
+      await records.getSubagents('s1')
+      expect(scanSessions).toHaveBeenCalledTimes(2)
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
+  })
+
+  it('[U2 D5] 同路径换 id（外部整文件替换）：登记条目 header 校验失败 → 删条目回退扫描，不拿旧条目错答', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'session-records-u2-swap-'))
+    try {
+      const filePath = join(dir, 'session.jsonl')
+      writeU2SessionFile(filePath, subagentRecordEntry('sa-1', 'running', 'e1'))
+      const scanSessions = vi.fn(() => [{ id: 's1', filePath, cwd: '/tmp/proj' }])
+      const { records } = makeRecords({
+        sessionStore: { scanSessions } as unknown as ISessionStore,
+      })
+      await records.getSubagents('s1') // 首查登记（回退扫描）
+      expect(scanSessions).toHaveBeenCalledTimes(1)
+      // 外部替换：同路径文件换成另一 id 的会话（header.id = s-other）
+      writeFileSync(filePath, jsonlLines([
+        { type: 'session', id: 's-other', cwd: '/tmp/other', timestamp: '2026-11-01T00:00:00Z' },
+        ...subagentRecordEntry('sa-9', 'running', 'e9'),
+      ]))
+      // 二查：登记条目 header 校验失败（id 不符）→ 删条目 → 回退扫描（mock 仍回 s1 meta）
+      const result = await records.getSubagents('s1')
+      expect(scanSessions).toHaveBeenCalledTimes(2) // 校验失败未静默吞掉，回退重扫
+      expect(result.found).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
+  })
+
+  it('[U1 检查点·同 id 复活布防] 导入落地失效（invalidateProjectionAfterImport）：整文件替换后下轮查询全量重建，不漏读新文件头部', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'session-records-import-land-'))
+    try {
+      const filePath = join(dir, 'session.jsonl')
+      // V1：原会话（header + sa-1 注册行）——首查建投影、游标登记到 V1 文件尾
+      writeU2SessionFile(filePath, subagentRecordEntry('sa-1', 'running', 'e1'))
+      const { records } = makeRecords({
+        sessionStore: { scanSessions: vi.fn(() => [{ id: 's1', filePath, cwd: '/tmp/proj' }]) } as unknown as ISessionStore,
+      })
+      const first = await records.getSubagents('s1')
+      expect(first.records.map((r) => r.subagentId)).toEqual(['sa-1'])
+      // 外部删除 + 同 id 导入复活：同路径整文件替换（新文件 size ≥ 旧游标，头部为全新内容）
+      writeU2SessionFile(filePath, [
+        ...subagentRecordEntry('sa-2', 'running', 'e2'),
+        ...subagentRecordEntry('sa-3', 'running', 'e3'),
+      ])
+      // 布防形态对照：不失效时 size/游标核对把新文件误判为增量，从旧游标续读漏掉 sa-2
+      const unguarded = await records.getSubagents('s1')
+      expect(unguarded.records.some((r) => r.subagentId === 'sa-2')).toBe(false)
+      // 导入落地失效：派生缓存与游标按会话 id 失效（旧投影 dispose + 游标清零）
+      records.invalidateProjectionAfterImport('s1')
+      // 下轮查询走 buildProjection 首建全量重建——新文件头部 entry 全量可见（AX1 真值）
+      const after = await records.getSubagents('s1')
+      expect(after.found).toBe(true)
+      expect(after.records.map((r) => r.subagentId).sort()).toEqual(['sa-2', 'sa-3'])
+      // 无缓存条目的会话：no-op（缓存不存在即无失效对象，不抛错）
+      expect(() => records.invalidateProjectionAfterImport('s-never-queried')).not.toThrow()
+    } finally {
       rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
     }
   })

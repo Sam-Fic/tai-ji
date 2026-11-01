@@ -59,6 +59,14 @@ export interface ImportServiceDeps {
    * 版本不匹配（类型封闭联合 + 组合根全注册下不可达，仅 WS JSON 注入未知字面量可达）。
    */
   sources: ReadonlyMap<ImportSourceKind, SessionImportSource>
+  /**
+   * [U1 检查点·同 id 复活布防] 导入落地通知（组合根接线 = SessionRecords
+   * invalidateProjectionAfterImport）：外部删除后同 id 再导入 = 主文件整文件替换，
+   * 落地时按会话 id 失效对应派生缓存与游标——持旧游标的 size/游标核对会把新文件
+   * 误判为增量、从旧游标续读漏掉新文件头部（AX1 真值违约且不自愈）。缺省 undefined
+   * = 不失效（测试窄 mock 可省；失效是布防性动作，异常 warn 不阻断导入主链）。
+   */
+  onSessionLanded?: (sessionId: string) => void
 }
 
 /** 编排层写入的临时名标记（与 session-file-utils 的 TMP_RESIDUE_MARKERS 同族，r2-S1）。 */
@@ -196,6 +204,19 @@ export class ImportService {
     //    不搬入编排层——无消费者依赖其效果（保守动作），且会把外部根的概念（sourcePath
     //    所在目录）泄漏进源无关编排层；pi 源自身列表路径按 TTL 读，不依赖该次重扫。
     invalidateScanDirCache()
+    // [U1 检查点·同 id 复活布防定档] 落地即按会话 id 失效派生缓存与游标（与注册边界
+    // 布防同族；不取内容级次级信号——那会推翻 D2 size/游标级核对粒度裁决）。同 id
+    // 复活窗口内派生缓存在册时持旧游标续读会漏读新文件头部；失效后下轮查询全量重建。
+    // best-effort：失效是布防性动作，异常 warn 不阻断导入 reply（sidecar persist 同款）。
+    if (this.deps.onSessionLanded) {
+      try {
+        this.deps.onSessionLanded(artifact.header.id)
+      } catch (e) {
+        // 降级策略（best-effort）：失效是布防性动作，失败不阻断导入 reply（文件已落地
+        // 不回滚）——旧投影的续读核对由 size<游标截断分支与注册边界布防兜底收敛。
+        console.warn(`[runtime] session.import derived-cache invalidation failed (sessionId=${artifact.header.id}):`, e)
+      }
+    }
 
     // 7. B5 摘碑（双路径②，R4）：import 同 id 复活 session——覆盖「import 后未打开窗口」
     //    的迟到写丢弃风险（路径①的 notifySessionCreated 只在用户点开时触发，此窗口内

@@ -88,11 +88,16 @@ import type { SubagentJournalReport } from '@zhushanwen/extension-protocol'
 import { WorkflowRunEventsReader } from './workflow-run-events-reader.js'
 import type { WorkflowDagReply, WorkflowRunEventsReply } from '@taiji/shared'
 import { getConfigDir, getPiAgentDir } from '../../infra/pi/pi-paths.js'
+// [U2 路径解析单点直查 D5] 单文件直查原语：header 惰性读（parseSessionHeader 只读
+// 首行）+ sessionMetaCache 按 id 反查（零 IO 内存遍历，定位消费只需要 id/cwd/path
+// 三个 mtime 不变字段——不走七项元数据全提取管线，SI6 处置）
+import { parseSessionHeader } from '../../infra/pi/session-file-utils.js'
+import { findCachedSessionFileById } from '../../infra/pi/session-file-locator.js'
 import { logger } from '../../infra/logger.js'
 import { discoverAndRegisterEngines, engineConversationCapable, engineModelTranslationTable } from '@zhushanwen/subagent-core/engine/engine-discovery-scan'
 import { getSubagentMessageResultsDir, translateByTableReverse } from '@zhushanwen/subagent-core'
 import { isStrictlyUnder } from '../../utils/path-utils.js'
-import type { ISessionStore, ScannedSessionMeta } from '../ports/session.js'
+import type { ISessionStore } from '../ports/session.js'
 import { toErrorMessage } from '../../utils/errors.js'
 import { withFileLockSync, type SyncFileLockOptions } from '../../utils/file-lock.js'
 import { atomicWrite } from '../../utils/fs-utils.js'
@@ -278,6 +283,16 @@ export interface OversizeAwareResult<T> {
   records: T[]
   oversize: boolean
   found: boolean
+}
+
+/**
+ * [U2 路径解析单点直查 D5] 查询路径会话定位结果：filePath 必有（返回非 undefined 的
+ * 三级都拿到了路径）；cwd 来自 header（旧 session 文件可缺，可选——消费方
+ * SessionMetaRef 透传链本就按可选收窄）。
+ */
+interface QuerySessionRef {
+  filePath: string
+  cwd?: string
 }
 
 /** workflow 增量信号形状（session.workflowUpdate payload.update；status / reason / 步骤数 / stepStatuses（status@attempts）/ phasesFingerprint 任一变化一条）。 */
@@ -504,6 +519,15 @@ export class SessionRecords {
   private readonly recordEntriesCaches = new Map<string, RecordEntriesCache>()
 
   /**
+   * [U2 路径解析单点直查 D5] 查询路径会话定位登记表（id → filePath/cwd）：进程内
+   * 曾定位过的会话（扫描回退命中 / sessionMetaCache 反查命中）在此登记，稳态查询
+   * 经 resolveQuerySessionRef 零扫描命中（单文件 statSync + header 惰性读校验），
+   * 与全目录会话数解耦（G4）。登记条目随校验失败（归档/移动/同路径换 id）自愈式
+   * 删除，回退扫描重建（U2 验收：miss 回退路径不静默返回 found=false）。
+   */
+  private readonly querySessionRefs = new Map<string, SessionMetaRef>()
+
+  /**
    * [可视化 U3] record 读侧派生视图服务（事件流拉取 + DAG 解析；DAG 成功缓存随本实例
    * 生命周期——与 per-session 派生缓存同寿命，进程级单实例）。
    */
@@ -640,6 +664,27 @@ export class SessionRecords {
   }
 
   /**
+   * [U1 检查点·同 id 复活布防] 导入落地（外部删除后同 id 再导入的整文件替换形态）按
+   * 会话 id 失效对应派生缓存与游标——与 subscribe 注册边界布防（同 id 二次注册）同族
+   * 处置。形态：主文件在 runtime 不知情下被外部替换，新文件 size ≥ 已登记游标时，
+   * size/游标核对会误判「有新数据」从旧游标续读、漏掉新文件头部（AX1 真值违约且不
+   * 自愈）；落地即失效后，下轮查询走 buildProjection 首建全量重建。
+   *
+   * 定档登记（设计 U1 检查点二选一的实施期结论）：取「导入落地时按会话 id 失效派生
+   * 缓存」，不取内容级次级信号（行数 + 末行摘要）——后者需在核对链每查询维护内容
+   * 级校验，推翻 D2「真值判定 = 事实源状态核对（size/游标级）」的 A 级裁决本体；
+   * 导入落地失效与注册边界布防同构，改动最小。会话无缓存条目（从未注册/查询）→
+   * no-op（缓存不存在即无失效对象）。
+   */
+  invalidateProjectionAfterImport(sessionId: string): void {
+    const cache = this.recordEntriesCaches.get(sessionId)
+    if (cache === undefined) return
+    cache.projection?.dispose()
+    cache.projection = null
+    cache.projectionEntryOffset = null
+  }
+
+  /**
    * [reload-closeout D2] 送达水位对账路径入口（agent_settled 触发，interpreter 经组合根
    * 注入 onRecordReconcile → Facade 委托到达）。对账没有第二实现——重跑同一条
    * fetch→merge→publish 管线（refreshRecordEntries），发布门 = 已发布快照水位：fetch
@@ -713,7 +758,7 @@ export class SessionRecords {
   private ensureProjection(
     sessionId: string,
     cache: RecordEntriesCache,
-    resolvedMeta?: ScannedSessionMeta,
+    resolvedMeta?: QuerySessionRef,
   ): SessionEventProjection {
     if (cache.projection !== null) {
       // [U1 续读化 D1/D2] 查询通道 size/游标核对（mtime 对账整建退役）：调用方透传
@@ -745,7 +790,7 @@ export class SessionRecords {
   private buildProjection(
     sessionId: string,
     cache: RecordEntriesCache,
-    meta: ScannedSessionMeta | undefined,
+    meta: QuerySessionRef | undefined,
   ): void {
     const projection = new SessionEventProjection({
       sessionId,
@@ -791,7 +836,7 @@ export class SessionRecords {
   private reconcileProjectionOnQuery(
     sessionId: string,
     cache: RecordEntriesCache,
-    meta: ScannedSessionMeta | undefined,
+    meta: QuerySessionRef | undefined,
   ): void {
     if (meta === undefined || cache.projection === null) return
     let size: number
@@ -843,7 +888,7 @@ export class SessionRecords {
   private scheduleAsyncProjectionReconcile(
     sessionId: string,
     cache: RecordEntriesCache,
-    meta: ScannedSessionMeta,
+    meta: QuerySessionRef,
     size: number,
     kind: AsyncReconcileKind,
   ): void {
@@ -879,7 +924,7 @@ export class SessionRecords {
   private async runAsyncRebuildTask(
     sessionId: string,
     cache: RecordEntriesCache,
-    meta: ScannedSessionMeta,
+    meta: QuerySessionRef,
     budgetBytes: number,
   ): Promise<void> {
     const startedAt = Date.now()
@@ -930,7 +975,7 @@ export class SessionRecords {
   private async runAsyncResumeTask(
     sessionId: string,
     cache: RecordEntriesCache,
-    meta: ScannedSessionMeta,
+    meta: QuerySessionRef,
     budgetBytes: number,
   ): Promise<void> {
     const startedAt = Date.now()
@@ -1407,11 +1452,57 @@ export class SessionRecords {
     )
   }
 
+  /**
+   * [U2 路径解析单点直查 D5] 查询路径（getSubagents/getWorkflows/getPlanState/
+   * getMessageCount/resolveWorkflowRecordPath）的会话定位单点——scanSessions({force:true})
+   * 全目录扫描与七项元数据全提取从查询路径退役（G4/SI6），三级解析：
+   *
+   * 1. 本实例登记表命中 → 单文件直查校验（statSync 隐含在 header 读内 + header 惰性读
+   *    只读首行核对 id）——文件被归档/移动（读失败）或同路径换 id（外部替换）时删条目
+   *    落下一级（不静默返回 found=false，回退路径兜底）；
+   * 2. sessionMetaCache 按 id 反查（零 IO 内存遍历；缓存条目由列表构建消费方的扫描
+   *    管线填充）→ 同款 header 校验后登记；
+   * 3. scanSessions({force:true}) 回退——唯一保留 force 的消费形态（正确性兜底：刚
+   *    落盘会话在目录 TTL 窗口内必须解析到，D5「不采用」段明言路径解析正确性依赖
+   *    force 旁路）；命中即登记（扫描管线产物 header 刚提取过，不重复校验），miss =
+   *    found=false 正当语义（会话不存在 / 延迟落盘窗口，回退已尽力）。
+   *
+   * 稳态成本 = 内存查表 + 至多一次单文件首行读，与会话总数解耦；列表构建消费方
+   * （侧栏）的扫描管线不受影响（force 语义只从查询路径退役，扫描层自身不变——
+   * U2 验收条款②）。
+   */
+  private resolveQuerySessionRef(sessionId: string): QuerySessionRef | undefined {
+    const registered = this.querySessionRefs.get(sessionId)
+    if (registered?.filePath !== undefined) {
+      const header = parseSessionHeader(registered.filePath)
+      if (header !== null && header.id === sessionId) {
+        return { filePath: registered.filePath, cwd: header.cwd }
+      }
+      // 登记 stale（归档/移动/同路径换 id）：删除后走回退，不自愈复活
+      this.querySessionRefs.delete(sessionId)
+    }
+    const cachedFilePath = findCachedSessionFileById(sessionId)
+    if (cachedFilePath !== undefined) {
+      const header = parseSessionHeader(cachedFilePath)
+      if (header !== null && header.id === sessionId) {
+        const ref: QuerySessionRef = { filePath: cachedFilePath, cwd: header.cwd }
+        this.querySessionRefs.set(sessionId, ref)
+        return ref
+      }
+    }
+    // 回退：force 扫描（正确性兜底；命中登记供下轮直查，miss = found=false 正当）
+    const scanned = this.deps.sessionStore
+      .scanSessions({ force: true })
+      .find((s) => s.id === sessionId)
+    if (scanned === undefined) return undefined
+    const ref: QuerySessionRef = { filePath: scanned.filePath, cwd: scanned.cwd }
+    this.querySessionRefs.set(sessionId, ref)
+    return ref
+  }
+
   async getSubagents(sessionId: string): Promise<OversizeAwareResult<SubagentRecord>> {
-    // 找主 session 文件路径（scanSessions 扫 <agentDir>/sessions/，含 cwd-encoded 子目录）。
-    // wave:perf-w26（plan M-3）：路径解析消费方 force 旁路 TTL（刚落盘 session 的
-    // subagent 面板在窗口内不静默返回空）。
-    const target = this.deps.sessionStore.scanSessions({ force: true }).find((s) => s.id === sessionId)
+    // 找主 session 文件路径（[U2 D5] 查询定位走直查单点，扫描仅 miss 回退）。
+    const target = this.resolveQuerySessionRef(sessionId)
     // [待裁决项 4] 会话不在册（延迟落盘窗口 / 扫描竞态）→ found=false 显式分形，
     // 不再与「会话存在但真空列表」共用同一空返回（renderer 据此保留分区）。
     if (!target) return { records: [], oversize: false, found: false }
@@ -1642,8 +1733,8 @@ export class SessionRecords {
    * 与 getSubagents 同款）。
    */
   async getWorkflows(sessionId: string): Promise<OversizeAwareResult<WorkflowRunRecord>> {
-    // wave:perf-w26（plan M-3）：路径解析消费方 force 旁路 TTL（与 getSubagents 同理）。
-    const target = this.deps.sessionStore.scanSessions({ force: true }).find((s) => s.id === sessionId)
+    // [U2 D5] 查询定位走直查单点（与 getSubagents 同理，扫描仅 miss 回退）。
+    const target = this.resolveQuerySessionRef(sessionId)
     // [待裁决项 4] found 透传：语义同 getSubagents。
     if (!target) return { records: [], oversize: false, found: false }
     if (isSessionFileOversize(target.filePath)) {
@@ -1685,9 +1776,8 @@ export class SessionRecords {
    * isActive:false 即不渲染 PlanModeBar）。
    */
   async getPlanState(sessionId: string): Promise<PlanStateView> {
-    // 路径解析消费方 force 旁路 TTL（与 getSubagents/getWorkflows 同理：刚落盘 session 的
-    // plan 面板首次拉取在窗口内不静默返回空）。
-    const target = this.deps.sessionStore.scanSessions({ force: true }).find((s) => s.id === sessionId)
+    // [U2 D5] 查询定位走直查单点（与 getSubagents/getWorkflows 同理）。
+    const target = this.resolveQuerySessionRef(sessionId)
     if (!target) return INACTIVE_PLAN_STATE_VIEW
     return extractPlanStateFromSessionFile(target.filePath)
   }
@@ -1696,13 +1786,13 @@ export class SessionRecords {
    * 获取 session 的对话消息条数（悬停详情卡消息计数，
    * 供 session.getMessageCount RPC handler 调用）。
    *
-   * 路径解析与 getPlanState 同款（scanSessions force 单 session 路径解析口径——刚落盘
-   * session 在 TTL 窗口内不静默返回空；文件不存在 = pi 延迟写入窗口，session 不在册
-   * 同语义）。计数 = countSessionMessagesInFile 流式统计（大文件恒定内存），非对话
+   * 路径解析与 getPlanState 同款（[U2 D5] 直查单点；miss 回退扫描内刚落盘 session
+   * 仍 force 旁路 TTL——窗口内不静默返回空；文件不存在 = pi 延迟写入窗口，session
+   * 不在册同语义）。计数 = countSessionMessagesInFile 流式统计（大文件恒定内存），非对话
    * entry（toolResult/system/compaction/usage 等）不计入，口径证据见该模块头注释。
    */
   async getMessageCount(sessionId: string): Promise<number> {
-    const target = this.deps.sessionStore.scanSessions({ force: true }).find((s) => s.id === sessionId)
+    const target = this.resolveQuerySessionRef(sessionId)
     if (!target) return 0
     return countSessionMessagesInFile(target.filePath)
   }
@@ -1750,12 +1840,13 @@ export class SessionRecords {
   }
 
   /**
-   * [可视化 U3] record 路径发现：session meta（scanSessions force——刚落盘 session 的
-   * 首次拉取不静默空，与 getSubagents/getWorkflows 同理）→ 派生视图源 v2 注册条目 recordPath。
+   * [可视化 U3] record 路径发现：session meta（[U2 D5] 直查单点，与
+   * getSubagents/getWorkflows 同理——miss 回退扫描内刚落盘 session 仍 force 旁路
+   * TTL）→ 派生视图源 v2 注册条目 recordPath。
    * 注册条目缺席（run 非本会话实体 / v1 会话 / pi 延迟写入窗口）返回 undefined。
    */
   private resolveWorkflowRecordPath(sessionId: string, runId: string): string | undefined {
-    const target = this.deps.sessionStore.scanSessions({ force: true }).find((s) => s.id === sessionId)
+    const target = this.resolveQuerySessionRef(sessionId)
     if (!target) return undefined
     const cache = this.ensureRecordEntriesCache(sessionId)
     // target 透传 = 查询核对素材（[U1 续读化] size/游标核对，同 getSubagents，查询是真理通道）

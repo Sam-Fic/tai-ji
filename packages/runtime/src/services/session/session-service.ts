@@ -1139,6 +1139,15 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
   }
 
   /**
+   * [U1 检查点·同 id 复活布防] 导入落地派生缓存失效委托（ImportService 组合根接线）：
+   * 实现迁 session-records.ts invalidateProjectionAfterImport——同 id 再导入 = 主文件
+   * 整文件替换，按会话 id 失效派生缓存与游标（旧游标续读会漏读新文件头部）。
+   */
+  invalidateProjectionAfterImport(sessionId: string): void {
+    return this.records.invalidateProjectionAfterImport(sessionId)
+  }
+
+  /**
    * 确保会话活跃;不存在则自动 restore。返回时该会话必已完整注册（sessions Map 条目在）——
    * 快路径只在「client 存活 + Map 条目在」时直返；恢复窗口内（spawn 已登记 client、
    * registerSession 未落 Map）条目缺失一律经 ensureRestored join 等注册完成，不直返半成品

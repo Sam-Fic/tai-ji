@@ -694,6 +694,9 @@ async function main(): Promise<void> {
   const importService = new ImportService({
     projects: projectStore,
     sources: importSources,
+    // [U1 检查点·同 id 复活布防] 导入落地按会话 id 失效派生缓存与游标（闭包晚绑定：
+    // sessionService 后构造，首次导入 RPC 时已就绪——与 exitCallbacks 引用先例同款）。
+    onSessionLanded: (sessionId) => sessionService.invalidateProjectionAfterImport(sessionId),
   })
   // S1-W4（D3）：built-in 插件目录显式注入（主进程 spawn 时传 --builtin-plugins-dir）。
   // 提供时 registry 只扫该目录、不做 cwd 探测（防用户 repo 预置目录冒充 built-in）；
