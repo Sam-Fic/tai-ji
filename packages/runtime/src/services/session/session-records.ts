@@ -892,8 +892,10 @@ export class SessionRecords {
   /**
    * [U3 D3] 异步读入任务调度（快照应答的登记点）：超预算增量与截断整建的唯一入口。
    * 在途任务复用（重入查询不重复调度）；调度即落快照应答观测行（RL10 分布断言的
-   * 采集载体——占比 = 本行频度 / 查询总频度，真机分布归 A1 真机面）。任务自身恒
-   * resolve（失败在内部转 warn），零重试定时器（ADR-0122）。
+   * 采集载体——占比 = 本行频度 / 查询总频度；分布断言本体无层兑现：A1 断言面不含
+   * 占比/收敛分布项，单次测试基础设施统计不可达，挂 M1（feat-startup-foundation）
+   * 遥测合入基线后履行，D4 分流补登段补 1）。任务自身恒 resolve（失败在内部转
+   * warn），零重试定时器（ADR-0122）。
    */
   private scheduleAsyncProjectionReconcile(
     sessionId: string,
