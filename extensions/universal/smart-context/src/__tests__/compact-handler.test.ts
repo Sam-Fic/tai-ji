@@ -336,8 +336,17 @@ function makeBgManager(
 	afterGeneration?: AfterGenerationHook,
 	getInflatedSegments?: () => ReadonlySet<string>,
 	onSettled?: (settlement: BackgroundTaskSettlement) => void,
+	isCtxStale?: () => boolean,
 ) {
-	const manager = createBackgroundCompactionManager(makePi(), () => bgState, () => config, afterGeneration, getInflatedSegments, onSettled);
+	const manager = createBackgroundCompactionManager(
+		makePi(),
+		() => bgState,
+		() => config,
+		afterGeneration,
+		getInflatedSegments,
+		onSettled,
+		isCtxStale,
+	);
 	return manager;
 }
 
@@ -1168,5 +1177,144 @@ describe("终局通知回调 onSettled（U5：D6 失败不静默、不重复）"
 		expect(String(sendMessage.mock.calls[1]![0].content)).not.toContain("自动触发压缩已暂停");
 		expect(String(sendMessage.mock.calls[2]![0].content)).toContain("自动触发压缩已暂停"); // 熔断并入第 3 条
 		expect(String(sendMessage.mock.calls[2]![0].content)).toContain("compact_context 工具仍可手动调用");
+	});
+});
+
+// ──────────────────────── C-pi-17：后台压缩落盘段 stale ctx 防线（dmg-r1-1）────────────────────────
+
+describe("落盘段 stale ctx 防线（C-pi-17：guardStaleCtx 接入，dmg-r1-1）", () => {
+	it("isCtxStale 命中 → 放弃落盘回报 dropped：appendCompaction 不调、补偿回调不触发", async () => {
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
+		const onPersisted = vi.fn();
+		const onInflated = vi.fn();
+		const outcome = await persistBackgroundCompaction(
+			ctx,
+			makeCompactionResult(),
+			makeSnapshot(),
+			{ onPersisted, onInflated },
+			() => true,
+		);
+		expect(outcome).toBe("dropped");
+		expect(getAppendMock(ctx)).not.toHaveBeenCalled();
+		expect(onPersisted).not.toHaveBeenCalled();
+		expect(onInflated).not.toHaveBeenCalled();
+	});
+
+	it("isCtxStale=false（缺省同语义）→ 正常路径零行为变化：照常落盘回报 validated", async () => {
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
+		const onPersisted = vi.fn();
+		const outcome = await persistBackgroundCompaction(
+			ctx,
+			makeCompactionResult(),
+			makeSnapshot(),
+			{ onPersisted },
+			() => false,
+		);
+		expect(outcome).toBe("validated");
+		expect(getAppendMock(ctx)).toHaveBeenCalledTimes(1);
+		expect(onPersisted).toHaveBeenCalledTimes(1);
+	});
+
+	it("非 stale 落盘异常仍原样上抛（检查不吞真实 bug）→ 交由 runBackgroundTask 递增点③", async () => {
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
+		getAppendMock(ctx).mockImplementation(() => {
+			throw new Error("append boom");
+		});
+		await expect(
+			persistBackgroundCompaction(ctx, makeCompactionResult(), makeSnapshot(), undefined, () => false),
+		).rejects.toThrow(/append boom/);
+	});
+
+	it("manager 注入位把 isCtxStale 转交续段钩子（第四参）；续段判 stale → 放弃落盘、计数不动", async () => {
+		mockedCall.mockResolvedValue({ ok: true, text: "bg summary", usage: { input: 1, output: 2 } });
+		const seen: Array<(() => boolean) | undefined> = [];
+		const hook: AfterGenerationHook = (result, snapshot, ctx, isCtxStale) => {
+			seen.push(isCtxStale);
+			return persistBackgroundCompaction(ctx, result, snapshot, undefined, isCtxStale);
+		};
+		const bgState = createBackgroundCompactionState();
+		const manager = makeBgManager(bgState, normalizeSmartContextConfig({}), hook, undefined, undefined, () => true);
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
+
+		expect(manager.maybeStart(ctx)).toBe(true);
+		await bgState.active?.done;
+
+		expect(seen).toHaveLength(1);
+		expect(seen[0]).toBeTypeOf("function");
+		expect(getAppendMock(ctx)).not.toHaveBeenCalled(); // stale → 放弃落盘
+		expect(bgState.failureStreak).toBe(0); // dropped：会话态失效类放弃，计数不动
+		expect(bgState.active).toBeNull();
+	});
+
+	it("index.ts 全接线：session 替换后旧代任务的落盘段判 stale → 放弃落盘、不发通知", async () => {
+		const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
+		const sendMessage = vi.fn();
+		const makeHookPi = () =>
+			({
+				on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => void) => {
+					handlers.set(name, handler);
+				},
+				getAllTools: () => [],
+				registerTool: vi.fn(),
+				sendMessage,
+				appendEntry: vi.fn(),
+			}) as unknown as ExtensionAPI;
+
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
+		smartContextExtension(makeHookPi()); // 第 1 代
+		handlers.get("session_start")!({ type: "session_start", reason: "startup" }, ctx);
+		const gen = holdGeneration();
+		handlers.get("agent_settled")!({ type: "agent_settled" }, ctx);
+		expect(mockedCall).toHaveBeenCalledTimes(1);
+
+		// session 替换：pi 重跑 extension factory（模块级 sessionGeneration 递增 → 第 1 代的
+		// isCtxStale 从此判 stale；handler map 被第 2 代覆写，故第 1 代的 agent_settled 已先行取用）
+		smartContextExtension(makeHookPi());
+		handlers
+			.get("session_start")!({ type: "session_start", reason: "startup" }, makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE));
+
+		gen.release(true);
+		for (let i = 0; i < 50; i++) await Promise.resolve();
+
+		expect(getAppendMock(ctx)).not.toHaveBeenCalled(); // 第 1 代落盘段判 stale → 放弃
+		expect(sendMessage).not.toHaveBeenCalled(); // 通知链路同一 stale 窗口降级，不谎报成败
+	});
+});
+
+// ──────────────────────── settle 错误边界（dmg-r1-2）────────────────────────
+
+describe("settle 错误边界（dmg-r1-2：通知失败不改写压缩成败事实）", () => {
+	it("validated 终局的通知抛错（非 stale 上抛）→ 落盘事实保留、熔断计数不动、不二次投递", async () => {
+		mockedCall.mockResolvedValue({ ok: true, text: "bg summary", usage: { input: 1, output: 2 } });
+		const onSettled = vi.fn(() => {
+			throw new Error("notice delivery boom");
+		});
+		const hook: AfterGenerationHook = (result, snapshot, ctx) => persistBackgroundCompaction(ctx, result, snapshot);
+		const bgState = createBackgroundCompactionState();
+		const manager = makeBgManager(bgState, normalizeSmartContextConfig({}), hook, undefined, onSettled);
+		const ctx = makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE);
+
+		expect(manager.maybeStart(ctx)).toBe(true);
+		await expect(bgState.active?.done).resolves.toBeUndefined();
+
+		expect(getAppendMock(ctx)).toHaveBeenCalledTimes(1); // 落盘成功（事实未被通知失败篡改）
+		expect(bgState.failureStreak).toBe(0); // 不递增熔断
+		expect(onSettled).toHaveBeenCalledTimes(1); // 恰一次通知（不改走 error 终局重复投递）
+	});
+
+	it("error 终局的通知也抛错 → done 仍 resolve（防 unhandled rejection），递增点③照常", async () => {
+		// 契约锁：settle 内吞是主防线（通知失败不改写成败事实），task.done 的 .catch 是末梢
+		// 兜底（防未预见抛漏泄漏为无人 await 的 rejection）——两者同时失守时本用例转红。
+		mockedCall.mockRejectedValue(new Error("boom"));
+		const onSettled = vi.fn(() => {
+			throw new Error("notice boom");
+		});
+		const bgState = createBackgroundCompactionState();
+		const manager = makeBgManager(bgState, normalizeSmartContextConfig({}), undefined, undefined, onSettled);
+		expect(manager.maybeStart(makeBgCtx(sampleEntriesNoCompaction(), TRIGGER_USAGE))).toBe(true);
+
+		await expect(bgState.active?.done).resolves.toBeUndefined();
+		expect(bgState.failureStreak).toBe(1); // 递增点③照常（通知失败不影响失败计数本身）
+		expect(bgState.active).toBeNull();
 	});
 });

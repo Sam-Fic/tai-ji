@@ -15,8 +15,8 @@
 | 包 | 文件 | 接入点 | 检查配置 |
 |---|---|---|---|
 | ext-guards | `src/index.ts` | 新增 `guardStaleCtx` / `STALE_CTX_MARKER` | —（检查本体） |
-| smart-context | `src/tool.ts` | `compact_context` 的 `onComplete`/`onError` 两处（E1 实锤崩溃点，tool.ts 原 :183/:187） | isCtxStale 注入 + onStale=debugLog |
-| smart-context | `src/index.ts` | `agent_settled` 阈值提醒、`model_select` 跨界通知、`model_select` downshift 三处 `pi.sendUserMessage`（原 :127/:144/:157） | isCtxStale（模块级代数计数器，同 scheduler G1 范式）+ onStale=debugLog |
+| smart-context | `src/compact-handler.ts` | `persistBackgroundCompaction` 落盘段（`getSessionId`/`getEntries` 读取 + `appendCompaction` 直调，现 :337-:390 的 guardStaleCtx 回调体内）——生成完成后跨 await 持有的 ctx，session 替换窗口内裸调即命中 assertActive | isCtxStale 经 manager 注入位（`index.ts:237` 创建点，稳定间接层 `index.ts:235`）+ onStale=debugLog |
+| smart-context | `src/index.ts` | 事件回调内 `notices.ts sendSmartContextNotice` 五处 + `pi.appendEntry` 一处：compact-complete（:206）、compact-failed（:222）、fired marker（:325）、threshold-reminder（:337）、model-switch（:364）、model-downshift（:385） | isCtxStale（模块级代数计数器，同 scheduler G1 范式）+ onStale=debugLog |
 | plan | `src/execution-notice.ts`（原 compact.ts） | 已退役：原接入点 src/compact.ts :218-229 两处回调已随 D-B1-6 形态砍除（文件改名 execution-notice.ts，回调通道不存在，无接入范围；全包 `guardStaleCtx` 零调用） | — |
 | scheduler | `src/runtime.ts` | `startScheduler` 的 tick 回调整体迁移到 `guardStaleCtx`（三件套语义等价，对照见 §5） | isCtxStale + onStale=retireStaleTimer |
 | structured-output | `src/loop-gate.ts` | terminal teardown 的 `ctx.abort()`/`ctx.shutdown()` | onStale=stderr 直出（该包日志惯例） |
@@ -32,7 +32,7 @@
 
 | 包 | 命中点 | 判定 | 理由 |
 |---|---|---|---|
-| **smart-context** | tool.ts compact 两回调（E1 实锤）；index.ts 三处事件回调内 `pi.sendUserMessage` | **接入** | E1 实锤崩溃点（9/3 pi-crash log 堆栈 `assertActive → sendUserMessage`）；三处事件回调为 D1「所有 fire-and-forget 异步回调接入」判定对象（价值见 §1 崩溃侧分层） |
+| **smart-context** | compact-handler.ts 后台压缩落盘段（`runBackgroundTask` → `afterGeneration` → `persistBackgroundCompaction`，跨 await 持有 ctx）；index.ts 六处事件回调内 `pi.appendEntry` / `notices.ts sendSmartContextNotice` | **接入** | 落盘段是 fire-and-forget 后台任务内跨 await 的 ctx 触碰（同 E1 机制：`pi.on` handler 同步派发，但任务续段在微任务内、session 替换窗口无 pi 侧 try/catch 覆盖）；六处事件回调为 D1「所有 fire-and-forget 异步回调接入」判定对象（价值见 §1 崩溃侧分层）。原 tool.ts `compact_context` 的 `onComplete`/`onError` 两处（E1 实锤）已随 U4 工具纯触发化删除，接入点随之退役 |
 | **plan** | 原接入点 compact.ts :218-229 两处回调（已随 D-B1-6 形态砍除——文件改名 execution-notice.ts，回调通道不存在，无接入面，全包 `guardStaleCtx` 零调用）；现存 execution-notice.ts 完成投递（`pi.sendMessage`，经 tool.ts :1235 `handlePlanComplete` 同步调用）；command.ts /plan command handler | **退役**（原 compact 两处接入）；**排除**（完成投递、command handler） | 原接入与 E1 同构（无人接的 Promise 链），形态已删；现存投递在 plan 工具 execute 的同步链（用户批准 plan 的当次工具调用内执行），执行时 session 活跃，无跨 session 存活窗口；command handler 是用户主动触发的同步上下文，同理由 |
 | **scheduler** | runtime.ts tick（setInterval 回调内 `onAfterTick → ctx.ui` / dispatch → `pi.sendMessage`） | **迁移**（共享检查替换原地实现） | 既有已验证范式（G1+F2+retireStaleTimer），迁移语义等价对照见 §5 |
 | **structured-output** | loop-gate.ts terminal 的 `ctx.abort()`/`ctx.shutdown()`（无防御）；workflow-hook.ts :249 `pi.sendUserMessage`（try/catch 有痕降级）；loop-gate forceExit setTimeout（只 `process.stderr.write` + `process.exit`） | **接入**（loop-gate terminal）；**排除**（workflow-hook、forceExit timer） | abort/shutdown 在 assertActive 范围且无任何 try/catch（async handler 内 throw = 无人接 rejection）；workflow-hook 的 turn_end 已有 try/catch + writeSteerFailedLog（无崩溃范围；检查「非 stale 上抛」语义在此处会把有痕降级恶化为崩溃，不接入是行为保持）；forceExit timer 不触碰 pi/ctx |
@@ -60,8 +60,9 @@
 
 | 包:场景 | stale 静默的具体含义 | 用户可见影响 | 恢复路径（用户出路） | 观测（stale 降级日志） |
 |---|---|---|---|---|
-| **smart-context**：compact `onComplete` | 压缩完成的结果消息不投递——**压缩本身已完成并落盘**（compaction entry 已写入），丢的只是结果通报 | 压缩后无「压缩完成」消息；上下文实际已压缩，可继续工作 | 无需恢复；对压缩效果有疑虑可重试 `/compact` 或 `compact_context` | `~/.pi/agent/logs/`（TAIJI_AGENT_DEBUG=1）：`compact result delivery skipped (stale ctx)` |
-| **smart-context**：compact `onError` | 压缩失败的告警消息不投递——用户不知道该轮压缩失败了 | 上下文未变化（压缩失败无副作用），只是没有失败提示 | 稍后重试 `/compact`；反复失败查 smart-context 配置 | 同上：`compact failure notice delivery skipped (stale ctx)` |
+| **smart-context**：后台压缩完成通知（compact-complete，`index.ts:206` 经 notices.ts `sendSmartContextNotice`） | 压缩完成的结果消息不投递——**压缩本身已完成并落盘**（compaction entry 已写入），丢的只是结果通报 | 压缩后无「后台压缩完成」消息；上下文实际已压缩，可继续工作 | 无需恢复；对压缩效果有疑虑可手动 `/compact` 或 `compact_context` | `~/.pi/agent/logs/`（TAIJI_AGENT_DEBUG=1）：`compact complete notice skipped (stale ctx)` |
+| **smart-context**：后台压缩失败通知（compact-failed，`index.ts:222`） | 压缩失败的告警消息不投递——用户不知道该轮后台压缩失败了 | 上下文未变化（放弃落盘无副作用），只是没有失败提示；后台熔断计数照常推进，连续失败 3 次后自动触发暂停（工具路径不受影响） | 稍后重试 `/compact`；反复失败查 smart-context 配置 | 同上：`compact failure notice skipped (stale ctx)` |
+| **smart-context**：后台压缩落盘段（compact-handler.ts `persistBackgroundCompaction`） | 放弃落盘——生成的摘要不写入 session（不产生 compaction entry），已花费的生成费用沉没；续段回报 dropped，熔断计数不动（会话态失效类放弃，非生成质量问题） | 上下文未压缩，也没有完成/失败通知（通知链路同一 stale 窗口内同样降级）；下轮 agent_settled 越线会在新 session 重新触发 | 无需恢复；用户在替换后的新 session 内继续对话即正常触发 | `background compaction persist skipped (stale ctx, sessionId=…)`（debugLog，TAIJI_AGENT_DEBUG=1 落盘） |
 | **smart-context**：agent_settled 阈值提醒 | 一次性越档提醒不投递——fired 标记已置位（旧代闭包内），该提醒本次不重发 | 少收一条「上下文将满」提醒；下轮 settled 若仍在同一 session 会重新评估（标记随 session 重建） | 用户可主动 `/compact`；切回该 session 后提醒机制随新代重建正常工作 | 同上：`threshold reminder delivery skipped (stale ctx)` |
 | **smart-context**：model_select 两处通知 | 模型可用性变化/downshift 提醒不投递（用户切了 session，通知对旧 session 无意义） | 无实际影响（通知对象是已离开的 session 上下文） | 无需恢复 | 同上：`switch/downshift notice delivery skipped (stale ctx)` |
 | **plan**：compact 隔离 `onComplete`/`onError`（已退役） | 场景已随 D-B1-6 形态砍除（回调通道不存在，无检查接入）；现 complete 投递在 plan 工具 execute 的同步链内执行，session 活跃，无 stale 窗口 | — | — | — |

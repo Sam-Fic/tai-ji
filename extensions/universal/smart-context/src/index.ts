@@ -15,8 +15,12 @@
  *   + 越档检查 + marker 持久化（D15）+ nextTurn 投递一次性提醒（D3/D4①）
  * - registerCompactContextTool：注入 background 契约（U5——工具路径与自动触发共享
  *   互斥容器；工具纯触发化后无异步回调，isCtxStale 过渡字段退役）
+ * - 后台压缩落盘段 stale ctx 防线（C-pi-17）：manager 的 isCtxStale 注入位由本文件的
+ *   稳定间接层供给，经续段钩子转交 persistBackgroundCompaction——落盘段跨 await 持有
+ *   ctx，session 替换窗口内放弃落盘回报 dropped（会话态失效类放弃，不递增熔断计数）
  * - 后台任务终局：完成/失败通知经 nextTurn 投递（U5/D6——validated 完成、失败不静默，
- *   熔断达到阈值并入该条通知；cancelled 事件取消不发）
+ *   熔断达到阈值并入该条通知；cancelled 事件取消不发）；通知投递失败由 compact-handler
+ *   的 settle 内吞留痕，不改写压缩成败事实
  * - model_select：跨界通知 + downshift 提醒（D5/D4①）
  *
  * 通知投递路径（D4①，delivery-ownership-kernel）：四类通知全部经 notices.ts 的
@@ -153,27 +157,36 @@ export default function smartContextExtension(pi: ExtensionAPI): void {
 	// getState 读当前代容器（state.background），manager 自身跨代存活无需重建。
 	// 落盘续段（U3/D3 第二层/D2/D6）：三项兜底校验 + appendCompaction 直调，落盘成功回调
 	// 清 firedThresholds（D6 档位重置补偿，与 session_compact 监听共用 resetFiredThresholds），
-	// 收缩校验失败回调写共享膨胀段集合（与同步路径同段不重试同源）。
+	// 收缩校验失败回调写共享膨胀段集合（与同步路径同段不重试同源）。续段跨 await 持有 ctx，
+	// 经下方 isCurrentCtxStale 注入位接 C-pi-17 stale 防线（落盘段内 guardStaleCtx 分诊）。
 	const resetFiredThresholds = (): void => {
 		state.firedThresholds.clear();
 	};
-	const backgroundAfterGeneration: AfterGenerationHook = (result, snapshot, ctx) =>
-		persistBackgroundCompaction(ctx, result, snapshot, {
-			onPersisted: () => {
-				resetFiredThresholds();
-				debugLog(`fired thresholds reset after background compaction (sessionId=${snapshot.sessionId})`);
+	const backgroundAfterGeneration: AfterGenerationHook = (result, snapshot, ctx, isCtxStale) =>
+		persistBackgroundCompaction(
+			ctx,
+			result,
+			snapshot,
+			{
+				onPersisted: () => {
+					resetFiredThresholds();
+					debugLog(`fired thresholds reset after background compaction (sessionId=${snapshot.sessionId})`);
+				},
+				onInflated: (firstKeptEntryId) => {
+					state.takeover.inflatedSegments.add(firstKeptEntryId);
+				},
 			},
-			onInflated: (firstKeptEntryId) => {
-				state.takeover.inflatedSegments.add(firstKeptEntryId);
-			},
-		});
+			isCtxStale,
+		);
 
 	// ── 后台压缩终局通知（U5：D6 补偿的呈现半边）──
 	// 每个终局点恰一条通知（cancelled 事件取消不发——D3 取消非失败）：validated → 完成
 	// 通知（压缩前后 token 数与模式）；inflated/dropped/empty/error → 失败通知不静默，
 	// 熔断达到阈值时文案附加「自动触发已暂停」。压缩后 token 口径：estimatedTokensAfter
 	// （pi 原生可填）优先，缺省按「压缩前 − 被压段 + 摘要」估算（chars/4 口径与收缩校验
-	// 同源）。异步收尾时 session 可能已替换——guardStaleCtx 分诊，stale 静默降级。
+	// 同源）。异步收尾时 session 可能已替换——guardStaleCtx 分诊，stale 静默降级。本回调
+	// 抛错（非 stale 的上抛语义）由 compact-handler 的 settle 内吞留痕：通知失败不得把已
+	// validated 的压缩改记失败并无谓递增熔断计数。
 	const onBackgroundSettled = (settlement: BackgroundTaskSettlement): void => {
 		if (settlement.outcome === "validated") {
 			const result = settlement.result;
@@ -215,6 +228,12 @@ export default function smartContextExtension(pi: ExtensionAPI): void {
 		});
 	};
 
+	// 代际检查的稳定间接层（C-pi-17 注入位）：isCtxStale 在 session_start 被重赋值（本代
+	// 比对），而 manager 在 factory 体内创建、早于首个 session_start——直接传引用会把初始
+	// 的 () => false 冻结成永不 stale，故经箭头读实时绑定（与事件回调内 isCtxStale 的 live
+	// 读取同语义）。
+	const isCurrentCtxStale = (): boolean => isCtxStale();
+
 	const background = createBackgroundCompactionManager(
 		pi,
 		() => state.background,
@@ -222,6 +241,7 @@ export default function smartContextExtension(pi: ExtensionAPI): void {
 		backgroundAfterGeneration,
 		() => state.takeover.inflatedSegments,
 		onBackgroundSettled,
+		isCurrentCtxStale,
 	);
 
 	pi.on("session_start", (event, ctx) => {

@@ -29,13 +29,15 @@
  *   validateBackgroundPersist 三项校验（sessionId 一致 / 无被抢先 compaction / 收缩校验）
  *   任一失败放弃落盘；persistBackgroundCompaction 直调 sessionManager.appendCompaction
  *   （local 形状声明 + 存在性探测，fromHook=true 与同步接管一致）；落盘成功经回调清
- *   firedThresholds（D6，与 session_compact 监听共用）。
+ *   firedThresholds（D6，与 session_compact 监听共用）。落盘段跨 await 持有 ctx，整体包
+ *   guardStaleCtx（C-pi-17：stale 放弃落盘回报 dropped、不递增熔断计数）。
  * - 独立熔断（SI5）：后台失败独立计数，连续 ≥3（沿用 TAKEOVER_FAILURE_LIMIT）停止自动触发；
  *   与同步路径 failStreak 隔离、膨胀段记录（inflatedSegments）共享读取；被抢先取消不计入。
  * - 工具路径启动（U5 接线残项）：startForTool = compact_context 显式请求（互斥 + 门控前置，
  *   跳过触发线与独立熔断——SI5 两者仅约束自动触发；非互斥失败抛错不谎报幂等）。
  * - 终局通知（U5/D6 呈现半边）：runBackgroundTask 各终局回调 onSettled 恰一次
- *   （cancelled 不回调），接线层（index.ts）组装完成/失败文案经 nextTurn 投递。
+ *   （cancelled 不回调），接线层（index.ts）组装完成/失败文案经 nextTurn 投递；通知投递
+ *   失败只留痕（settle 内吞），不改写压缩成败事实与熔断计数。
  *
  * 输出 CompactionResult.details 携带 {engine:"smart-context", mode, model} 标记（接管设计 D1：entry 标记）。
  * model = `${model.provider}/${model.id}`（执行压缩的实际模型）——用量页 compaction 归属数据源
@@ -61,7 +63,7 @@ import type {
 	SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { isRecord, toErrorMessage } from "@zhushanwen/pi-ext-guards";
+import { guardStaleCtx, isRecord, toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { createLogger } from "@zhushanwen/pi-extension-logger";
 import { resolveModel } from "@zhushanwen/pi-llm-shared";
 import { readFileSync } from "node:fs";
@@ -183,11 +185,16 @@ export type ContinuationOutcome =
 /**
  * 生成完成后续段钩子（U3 接线点：收缩校验 + appendCompaction 落盘 + 补偿）。
  * U2 阶段不传（缺省仅记日志）——生成与续段的边界即本契约：续段处置经返回值回流驱动熔断计数。
+ *
+ * isCtxStale 由 createBackgroundCompactionManager 注入（C-pi-17 接入位）：续段跨 await
+ * 持有 ctx，session 替换窗口内裸调会命中 pi 的 assertActive——钩子实装（落盘段）据此前置
+ * 分诊，缺省（不注入）恒视为非 stale，与 guardStaleCtx 的缺省语义一致。
  */
 export type AfterGenerationHook = (
 	result: CompactionResult,
 	snapshot: BackgroundTaskSnapshot,
 	ctx: ExtensionContext,
+	isCtxStale?: () => boolean,
 ) => Promise<ContinuationOutcome>;
 
 /**
@@ -312,57 +319,76 @@ export interface BackgroundPersistCallbacks {
  * 时刻 branch 决定、不干预（AS6：压缩期间新条目天然衔接进保留段）；usage/details 随 entry
  * 写入（D6 用量归因消费侧照读）。不伪造 pi 事件（UD6：appendCompaction 纯追加无事件）。
  * 落盘异常不在此吞——debugLog 标注阶段后原样上抛，由 runBackgroundTask 异常递增点③收口。
+ *
+ * stale ctx 防线（C-pi-17）：落盘段跨 await 持有 ctx（生成窗口内 session 可能已被替换），
+ * sessionManager 读取与 appendCompaction 直调整体包 guardStaleCtx——stale 时 fn 完全不
+ * 执行、回报 "dropped"（会话态失效类放弃，不递增熔断计数；失败通知由接线层同一检查静默
+ * 降级，stale 会话收不到通知是设计内语义）。非 stale 错误按 ext-guards 语义原样上抛，
+ * 检查不吞真实 bug（落盘异常仍走递增点③）。
  */
 export async function persistBackgroundCompaction(
 	ctx: ExtensionContext,
 	result: CompactionResult,
 	snapshot: BackgroundTaskSnapshot,
 	callbacks?: BackgroundPersistCallbacks,
+	isCtxStale?: () => boolean,
 ): Promise<ContinuationOutcome> {
-	const host = asAppendCompactionHost(ctx.sessionManager);
-	// RL3 存在性探测：方法缺失 = pi 观察级依赖失效，放弃落盘不抛错（绝不静默）
-	if (!host || typeof host.appendCompaction !== "function") {
-		warnLog("background compaction persist skipped: sessionManager.appendCompaction unavailable");
-		return "dropped";
-	}
+	const outcome = await guardStaleCtx(
+		async () => {
+			const host = asAppendCompactionHost(ctx.sessionManager);
+			// RL3 存在性探测：方法缺失 = pi 观察级依赖失效，放弃落盘不抛错（绝不静默）
+			if (!host || typeof host.appendCompaction !== "function") {
+				warnLog("background compaction persist skipped: sessionManager.appendCompaction unavailable");
+				return "dropped";
+			}
 
-	// D3 第二层：三项兜底校验（entriesNow 与 appendCompaction 之间无 await——单线程事件循环
-	// 同步帧内连续执行，校验与落盘之间构造性无竞态）
-	const sessionIdNow = ctx.sessionManager.getSessionId();
-	const entriesNow = ctx.sessionManager.getEntries();
-	const verdict = validateBackgroundPersist(snapshot, entriesNow, sessionIdNow, result);
-	if (!verdict.ok) {
-		if (verdict.reason === "summary-inflated") {
-			callbacks?.onInflated?.(result.firstKeptEntryId);
-			warnLog("background compaction persist rejected: summary inflated", {
-				summaryTokens: estimateTextTokens(result.summary),
-				shadowedTokens: snapshot.shadowedTokens,
-			});
-			return "inflated";
-		}
-		debugLog(`background compaction persist rejected: ${verdict.reason} (sessionId=${snapshot.sessionId})`);
-		return "dropped";
-	}
+			// D3 第二层：三项兜底校验（entriesNow 与 appendCompaction 之间无 await——单线程事件循环
+			// 同步帧内连续执行，校验与落盘之间构造性无竞态）
+			const sessionIdNow = ctx.sessionManager.getSessionId();
+			const entriesNow = ctx.sessionManager.getEntries();
+			const verdict = validateBackgroundPersist(snapshot, entriesNow, sessionIdNow, result);
+			if (!verdict.ok) {
+				if (verdict.reason === "summary-inflated") {
+					callbacks?.onInflated?.(result.firstKeptEntryId);
+					warnLog("background compaction persist rejected: summary inflated", {
+						summaryTokens: estimateTextTokens(result.summary),
+						shadowedTokens: snapshot.shadowedTokens,
+					});
+					return "inflated";
+				}
+				debugLog(`background compaction persist rejected: ${verdict.reason} (sessionId=${snapshot.sessionId})`);
+				return "dropped";
+			}
 
-	try {
-		const entryId = host.appendCompaction(
-			result.summary,
-			result.firstKeptEntryId,
-			result.tokensBefore,
-			result.details,
-			true, // fromHook：与同步接管路径落盘口径一致（pi 同参位传 fromExtension=true）
-			result.usage,
-		);
-		callbacks?.onPersisted?.();
-		debugLog(
-			`background compaction persisted: entry=${entryId ?? "?"} firstKept=${result.firstKeptEntryId} ` +
-				`sessionId=${snapshot.sessionId}`,
-		);
-		return "validated";
-	} catch (error) {
-		debugLog(`background compaction persist error: ${toErrorMessage(error)}`);
-		throw error;
-	}
+			try {
+				const entryId = host.appendCompaction(
+					result.summary,
+					result.firstKeptEntryId,
+					result.tokensBefore,
+					result.details,
+					true, // fromHook：与同步接管路径落盘口径一致（pi 同参位传 fromExtension=true）
+					result.usage,
+				);
+				callbacks?.onPersisted?.();
+				debugLog(
+					`background compaction persisted: entry=${entryId ?? "?"} firstKept=${result.firstKeptEntryId} ` +
+						`sessionId=${snapshot.sessionId}`,
+				);
+				return "validated";
+			} catch (error) {
+				debugLog(`background compaction persist error: ${toErrorMessage(error)}`);
+				throw error;
+			}
+		},
+		{
+			isCtxStale,
+			label: "smart-context:background-compaction-persist",
+			onStale: () =>
+				debugLog(`background compaction persist skipped (stale ctx, sessionId=${snapshot.sessionId})`),
+		},
+	);
+	// 前置检查命中时 guardStaleCtx 返回 undefined（fn 未执行、无 Promise 可言）→ 按 dropped 回报
+	return outcome ?? "dropped";
 }
 
 /**
@@ -571,7 +597,9 @@ function collectCompressedFileOps(
  * 旧代任务的回调写旧闭包对象，对新状态天然无害）。afterGeneration 是 U3 续段接线点；
  * onSettled 是 U5 通知接线点（每个终局恰一次，cancelled 除外）；getInflatedSegments 提供
  * 膨胀段共享读取（D3：与同步路径 inflatedSegments 同一集合，同段不再触发防反复烧钱），
- * 缺省视为空集。
+ * 缺省视为空集。isCtxStale 是 C-pi-17 接入位：由接线层注入代际检查，manager 原样转交
+ * 续段钩子（落盘段跨 await 持有 ctx，见 AfterGenerationHook 注释）——注入方不传即该防线
+ * 关闭（guardStaleCtx 缺省语义：仅错误文案兜底分诊）。
  *
  * 两个启动入口共享同一「进行中」单态容器（RL1）：maybeStart = agent_settled 自动触发
  * （互斥 + 门控 + 探测 + 熔断 + 触发线 + 膨胀段全判定）；startForTool = compact_context
@@ -584,6 +612,7 @@ export function createBackgroundCompactionManager(
 	afterGeneration?: AfterGenerationHook,
 	getInflatedSegments?: () => ReadonlySet<string>,
 	onSettled?: (settlement: BackgroundTaskSettlement) => void,
+	isCtxStale?: () => boolean,
 ) {
 	/**
 	 * 事件取消（D3 第一层）：有进行中任务则 abort 放弃结果并回空闲。
@@ -651,7 +680,25 @@ export function createBackgroundCompactionManager(
 		const mode = pickMode(config, modelId);
 		const task: ActiveBackgroundTask = { abort, snapshot, done: Promise.resolve() };
 		state.active = task;
-		task.done = runBackgroundTask(pi, ctx, config, mode, input, abort, state, snapshot, afterGeneration, onSettled, task);
+		// .catch 兜底（dmg-r1-2）：settle 已内吞通知投递失败，此处防其余抛漏（finally 段 /
+		// 未预见路径）形成 unhandled rejection——done 的定位是「测试可确定性收尾 + 调试观测」，
+		// 不是「把失败透传给无人 await 的正常路径」；留痕后任务终局事实已由 settle 落定。
+		task.done = runBackgroundTask(
+			pi,
+			ctx,
+			config,
+			mode,
+			input,
+			abort,
+			state,
+			snapshot,
+			afterGeneration,
+			onSettled,
+			task,
+			isCtxStale,
+		).catch((error: unknown) => {
+			warnLog("background compaction task rejected", { error: toErrorMessage(error) });
+		});
 		debugLog(
 			`background compaction started(${source}): mode=${mode} tokens=${usageTokens} ` +
 				`firstKept=${preparation.firstKeptEntryId}`,
@@ -769,10 +816,25 @@ async function runBackgroundTask(
 	afterGeneration?: AfterGenerationHook,
 	onSettled?: (settlement: BackgroundTaskSettlement) => void,
 	task?: ActiveBackgroundTask,
+	isCtxStale?: () => boolean,
 ): Promise<void> {
-	/** 终局回调适配：sessionId/mode 由本闭包统一补齐，接线层只消费终局语义与数据载荷。 */
+	/**
+	 * 终局回调适配：sessionId/mode 由本闭包统一补齐，接线层只消费终局语义与数据载荷。
+	 *
+	 * 通知失败内吞留痕（dmg-r1-2）：接线层 onBackgroundSettled 的 guardStaleCtx 对非 stale
+	 * 错误按 ext-guards 语义原样上抛——若任其穿出，已 validated 的压缩会被下方 catch 改记
+	 * 失败并无谓递增熔断计数（成败事实被通知投递失败篡改），catch 分支再 settle 一次还会
+	 * 二次投递。故通知失败只 warnLog，不改写 failureStreak、不走 error 终局。
+	 */
 	const settle = (settlement: Omit<BackgroundTaskSettlement, "sessionId" | "mode">): void => {
-		onSettled?.({ ...settlement, sessionId: snapshot.sessionId, mode });
+		try {
+			onSettled?.({ ...settlement, sessionId: snapshot.sessionId, mode });
+		} catch (error) {
+			warnLog("background compaction settlement notification failed", {
+				outcome: settlement.outcome,
+				error: toErrorMessage(error),
+			});
+		}
 	};
 	try {
 		const result = mode === "same-model"
@@ -797,6 +859,7 @@ async function runBackgroundTask(
 		}
 
 		// 生成成功 → 续段（U3 接线：收缩校验 + 落盘 + 补偿）。U2 缺省仅日志。
+		// isCtxStale 由 manager 注入位转交（C-pi-17）：落盘段据此前置分诊 session 替换窗口。
 		if (!afterGeneration) {
 			debugLog(
 				`background compaction generated (continuation not wired yet): firstKept=${result.firstKeptEntryId}`,
@@ -804,7 +867,7 @@ async function runBackgroundTask(
 			state.failureStreak = 0;
 			return;
 		}
-		const outcome = await afterGeneration(result, snapshot, ctx);
+		const outcome = await afterGeneration(result, snapshot, ctx, isCtxStale);
 		if (abort.signal.aborted) {
 			debugLog(`background compaction continuation discarded after cancellation (sessionId=${snapshot.sessionId})`);
 			return;
