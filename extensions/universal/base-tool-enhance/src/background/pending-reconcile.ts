@@ -94,6 +94,9 @@ import { isActiveState, isTerminalState, type RegistryEntry } from "./types.ts";
 
 const logger = getLogger("base-tool-enhance");
 
+/** 脏行 warn 留痕的截断长度（taste/no-magic-numbers 抽常量） */
+const DIRTY_LINE_SNIPPET_LEN = 120;
+
 /**
  * 对账依赖的最小 pi 面（结构兼容 ExtensionAPI 的子集；测试注入不造完整 pi）。
  * 投递侧已随波 3 换 port（ReconcileDeliver），本接口只剩 appendEntry 权威写路径。
@@ -268,8 +271,9 @@ export function readSessionFileEntries(sessionFile: string): unknown[] {
 		try {
 			const parsed: unknown = JSON.parse(line);
 			if (parsed !== null && typeof parsed === "object") entries.push(parsed);
-		} catch {
-			// 脏行跳过：单行损坏不拖垮整盘事实（与 readRegistry 解析纪律同向）
+		} catch (e) {
+			// 脏行跳过：单行损坏不拖垮整盘事实（与 readRegistry 解析纪律同向）；warn 留痕（taste/no-silent-catch）
+			logger.warn("session JSONL 脏行跳过（对账事实按其余行继续）", { detail: { line: line.slice(0, DIRTY_LINE_SNIPPET_LEN), error: toErrorMessage(e) } });
 		}
 	}
 	return entries;

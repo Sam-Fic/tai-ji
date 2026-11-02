@@ -124,7 +124,9 @@ describe("parseWorkflowDag（scriptSource → WorkflowDag，设计 §3.1-3）", 
           expect(result.dag.nodes.length).toBeGreaterThanOrEqual(6);
           expect(result.dag.phases.map((p) => p.name)).toContain("终局三道门禁");
           expect(result.dag.phases.map((p) => p.name)).toContain("条件评审修复循环");
-          expect(result.dag.parallelGroups.length).toBeGreaterThanOrEqual(2);
+          // 2026-11 pr-lifecycle 重写：并行编排从 parallel 数组改为 Promise.all(batch.map)
+          // 循环批（wfAgent 动态名在批内），parallelGroups 提取只认 parallel 数组形态、恒 0——
+          // 并行性锚点改由「并行多维审查」phase 上的 reviewer 节点（下方 129-132 行）承载
           expect(result.dag.loops.length).toBeGreaterThanOrEqual(1);
           const reviewer = result.dag.nodes.find((n) => n.templateName.startsWith("reviewer-"));
           expect(reviewer).toBeDefined();

@@ -120,6 +120,9 @@ import { MANAGED_SESSION_NOTIFY_CUSTOM_TYPE } from "./notify-content.ts";
 
 const logger = getLogger("session-manager");
 
+/** 脏行 warn 留痕的截断长度（taste/no-magic-numbers 抽常量） */
+const DIRTY_LINE_SNIPPET_LEN = 120;
+
 /** 本域通知的送达 customType（域内单源 = notify-content.ts 导出的透传）。 */
 const NOTIFY_CUSTOM_TYPE = MANAGED_SESSION_NOTIFY_CUSTOM_TYPE;
 
@@ -323,8 +326,9 @@ export function readSessionFileEntries(sessionFile: string): unknown[] {
 		try {
 			const parsed: unknown = JSON.parse(line);
 			if (parsed !== null && typeof parsed === "object") entries.push(parsed);
-		} catch {
-			// 脏行跳过：单行损坏不拖垮整盘事实
+		} catch (e) {
+			// 脏行跳过：单行损坏不拖垮整盘事实；warn 留痕（taste/no-silent-catch）
+			logger.warn("session JSONL 脏行跳过（对账事实按其余行继续）", { detail: { line: line.slice(0, DIRTY_LINE_SNIPPET_LEN), error: toErrorMessage(e) } });
 		}
 	}
 	return entries;
