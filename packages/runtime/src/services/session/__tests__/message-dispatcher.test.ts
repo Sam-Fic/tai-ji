@@ -1568,7 +1568,7 @@ function makeStallHarness(opts: StallHarnessOptions = {}) {
       if (opts.sampleRunner) return opts.sampleRunner(4242, '/tmp/stall-sample.txt')
       return undefined
     }),
-    ...(opts.platform ? { platform: opts.platform } : {}),
+    ...(opts.platform ? { platform: opts.platform } : { platform: (): NodeJS.Platform => 'darwin' }),
   }
   dispatcher.setStallAutoDisposePort(port)
   const gateAbort = vi.fn(async () => {})
