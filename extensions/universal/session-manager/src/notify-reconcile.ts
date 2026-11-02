@@ -67,7 +67,8 @@
 //         走静默注销；应投递类 reason 却缺 sessionId = runtime 双重违例，生产
 //         不可达常态且触发即有 flushBatch warn 留痕的漂移信号）；残余危害 =
 //         补投一条骨架简报（label/status 两事实真实，重复刺激级），方向低于
-//         漏补投。已在对账结果 notifyReconcileResiduals 字段如实计数。
+//         漏补投。(c) 形态按上述可达性论证登记为已接受残余（对账结果不建
+//         计数字段）。
 //   ④ 域过滤 = 判据只取 register type === "session" 条目。pending 表混装四域
 //     写方（protocol 写方注释登记），跨域条目不过滤则「无独立主路径投递键 →
 //     三重判据结构性全命中」的误报形态跨域成立（subagent record id ≠ 其通知
@@ -90,10 +91,11 @@
 //   ② agent_settled——index.ts 装配期订阅（回合收尾兜底边沿）；
 //   ③ 切回补强（__taiji_bg_reconcile__）——pi 命令名全局唯一且单 handler 分发
 //     （pi SDK runner.getCommand 取首个同名命中；runtime 只发 base-tool-enhance
-//     注册的那一条命令，字面量契约），本扩展无切回触发源且 runtime /
-//     base-tool-enhance 零改动边界不可接线——物理边沿落位 ①② 两入口，切回
-//     缺口已随单元 deviations 呈报（编排形态三入口互调保持，接线缺口见
-//     实施期裁决登记）。
+//     注册的那一条命令，字面量契约），本扩展无切回触发源且与 base-tool-enhance
+//     无依赖边（跨扩展依赖通道不存在）——经三方共同依赖包 pi-delivery-port 的
+//     进程级注册槽订阅切回派发（index.ts 装配期 subscribeResumeReconcile，
+//     base-tool-enhance handler dispatchResumeReconcile 转发；subagent 域
+//     SubagentService 单例直转的 A5 先例同族，reason="resume"）。
 // 幂等：补投受理成功后投递日志条目（id + collectKey）与送达痕迹抵消判据，
 // 下一边沿不再命中；跨边沿重复对账天然收敛。
 
@@ -379,9 +381,9 @@ export interface NotifyReconcileResult { // oe-exempt:20261101:framework:跨包�
 }
 
 /**
- * 对账编排（session_start / agent_settled 两入口互调的单一函数；同步——entries
- * 现算 + deliver 同步受理，毫秒级）。幂等：重复执行时已补投键有投递日志承载/
-* 送达痕迹抵消，判据不再命中。失败吞掉记 warn（对账/补投失败无害：候选判据
+ * 对账编排（session_start / agent_settled / 切回（resume）三入口互调的单一函数；
+ * 同步——entries 现算 + deliver 同步受理，毫秒级）。幂等：重复执行时已补投键有
+ * 投递日志承载/送达痕迹抵消，判据不再命中。失败吞掉记 warn（对账/补投失败无害：候选判据
  * 仍命中，下一对账边沿幂等重查）——调用方不需自行 try-catch。
  *
  * sessionFile = 当前 session JSONL 路径（pi sessionManager.getSessionFile()）——
@@ -389,7 +391,7 @@ export interface NotifyReconcileResult { // oe-exempt:20261101:framework:跨包�
  * undefined（no-persist 形态）退化内存 entries（现状行为）+ warn。
  */
 export function runNotifyReconcileMaintenance(deps: {
-	/** 入口来源（session_start / agent_settled）——入口来源日志可辨。 */
+	/** 入口来源（session_start / agent_settled / resume 切回）——入口来源日志可辨。 */
 	reason: string;
 	/** 当前 session entries（内存账——预检短路源 + no-persist 退化事实源）。 */
 	entries: readonly unknown[];
