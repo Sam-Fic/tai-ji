@@ -62,7 +62,13 @@ import { killProcessTree, isPidAlive } from "@zhushanwen/extension-protocol/back
 import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 
-import { parsePidFile, registerConvertedTask, resolveFgWrapScriptPath } from "./bash-tool.ts";
+import {
+	FG_BG_MARKER_TAG,
+	parsePidFile,
+	registerConvertedTask,
+	resolveFgWrapScriptPath,
+	textHasFgBgMarker,
+} from "./bash-tool.ts";
 import { isSubagentProcess } from "./background/subagent-guard.ts";
 import { getRegistryPath, resolveTaijiDataDir } from "./background/registry.ts";
 import { generateTaskId } from "./background/spawn-background.ts";
@@ -70,8 +76,13 @@ import { loadBaseToolEnhanceConfig } from "./config.ts";
 
 const logger = getLogger("base-tool-enhance");
 
-/** 转后台标记行前缀（与 bash-tool.ts FG_BG_MARKER_TAG 同值——wrapper 三方协议契约，本模块旁路检测用）。 */
-const FG_BG_MARKER_TAG = "[TAIJI-FG-BG]";
+/**
+ * 标记行旁路检测的滚动窗口（字符数；标记行纯 ASCII，与字节窗口等效）：wrapper 标记行
+ * 单行 printf 一次写入（≤ PIPE_BUF 原子到达，长约数百字符含日志路径），保留流末尾该
+ * 量级即可覆盖完整行并容忍读侧 chunk 边界切分；同时给持续流式输出命令（B1 抄送直通
+ * exec 生命周期）的字符串累积封顶内存。
+ */
+const MARKER_DETECT_WINDOW = 8192;
 
 /**
  * 用户向标记行（D3 产品形态①：bash 气泡 output 尾部的转后台去向说明）。与 wrapper
@@ -240,7 +251,9 @@ async function execWrappedUserBash(
 
 	// 收尾窗口死亡形态判据的标记行旁路检测：wrapper 标记行经 stdout 抄送流到达 onData，是否已发
 	// 在管道上检测（exec 无 result 对象可查——与 bash-tool resultHasFgBgMarker 同判据
-	// 不同载体）
+	// 不同载体）。判定走 textHasFgBgMarker 结构化形态（标记前缀 + 本任务 task_id 同现）：
+	// 命令输出恰含 "[TAIJI-FG-BG]" 字面量不再误置位；读侧滚动窗口见 MARKER_DETECT_WINDOW
+	let markerWindow = "";
 	let hasMarker = false;
 
 	// abort 通道（RL5/V7）：中止杀 wrapper 进程组（killProcessTree 组杀语义——wrapper
@@ -263,7 +276,8 @@ async function execWrappedUserBash(
 				reject(err);
 			});
 			child.stdout?.on("data", (chunk: Buffer) => {
-				if (chunk.includes(FG_BG_MARKER_TAG)) hasMarker = true;
+				markerWindow = (markerWindow + chunk.toString("utf8")).slice(-MARKER_DETECT_WINDOW);
+				if (!hasMarker && textHasFgBgMarker(markerWindow, plan.taskId)) hasMarker = true;
 				options.onData(chunk);
 			});
 			child.stderr?.on("data", (chunk: Buffer) => options.onData(chunk));

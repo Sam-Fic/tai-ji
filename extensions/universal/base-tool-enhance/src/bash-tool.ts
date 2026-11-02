@@ -226,12 +226,12 @@ async function runWrappedForegroundExecute(
 			dataDir,
 			sessionId,
 			config.backgroundTimeoutSeconds ?? undefined,
-			resultHasFgBgMarker(result),
+			resultHasFgBgMarker(result, plan.taskId),
 		);
 		// B5 补标记：wrapper 未及打印标记行（异常死亡）时由本层补齐；B3 已打印
 		// → 透传不动（登记后结果文本透传原则：标记行已在输出内，模型直接可读）。
 		// 与 settle 的 hasMarker 判据双向闭合：标记行在 = 必登记；登记且无标记 = 必补
-		if (converted !== undefined && !resultHasFgBgMarker(result)) {
+		if (converted !== undefined && !resultHasFgBgMarker(result, plan.taskId)) {
 			return appendTextToResult(result, buildConvertedMarkerNote(converted));
 		}
 		return result;
@@ -275,8 +275,12 @@ export function resolveFgWrapScriptPath(): string {
 	return fileURLToPath(new URL("../bin/taiji-fg-wrap", import.meta.url));
 }
 
-/** 包装脚本转后台标记行前缀（设计 §5 部件 3 三方契约；B5 补标记判据 = wrapper 已打印则不重复补）。 */
-const FG_BG_MARKER_TAG = "[TAIJI-FG-BG]";
+/**
+ * 包装脚本转后台标记行前缀（设计 §5 部件 3 三方契约；B5 补标记判据 = wrapper 已打印则不重复补）。
+ * 协议字面量单点定义：user-bash-interceptor 的用户向标记行与管道旁路检测经本导出复用，
+ * 禁止第二份本地定义（双份字面量 = 协议漂移温床）。
+ */
+export const FG_BG_MARKER_TAG = "[TAIJI-FG-BG]";
 
 /** POSIX shell 单引号引用（包装命令串中路径段防空格/特殊字符；win32 不走本层——矩阵 A7）。 */
 function shQuote(pathSegment: string): string {
@@ -500,9 +504,20 @@ function appendTextToResult<T extends AgentToolResult<unknown>>(result: T, note:
 	return result;
 }
 
-/** 结果文本是否已含 wrapper 标记（收尾判定本身走 pidfile，此处仅判 B5 补标记的必要性——B3 已打印则透传不动，不解析标记内容）。 */
-function resultHasFgBgMarker(result: AgentToolResult<unknown>): boolean {
-	return result.content.some((block) => block.type === "text" && block.text.includes(FG_BG_MARKER_TAG));
+/**
+ * 转后台标记行的结构化判定：文本须同时含标记行前缀与本任务 task_id（`{task_id:"<id>"}`
+ * 形态——wrapper 标记行（bin/taiji-fg-wrap 退出 printf）与 B5 补标记（buildConvertedMarkerNote）
+ * 两个写侧同形态携带）才判真。裸子串包含判据会被命令输出恰含 "[TAIJI-FG-BG]" 字面量误置位
+ * （wrapper 抄送流把命令输出原样透传进 result/onData）→ 已死命令被判「标记行在 = 承诺在」
+ * 误登记 → 幽灵完成通知；task_id 每次包装预生成（generateTaskId），命令输出无法偶然同现。
+ */
+export function textHasFgBgMarker(text: string, taskId: string): boolean {
+	return text.includes(FG_BG_MARKER_TAG) && text.includes(`{task_id:"${taskId}"}`);
+}
+
+/** 工具结果是否已含本任务的 wrapper 标记（收尾判定本身走 pidfile，此处仅判 B5 补标记的必要性——已打印则透传不动）。 */
+function resultHasFgBgMarker(result: AgentToolResult<unknown>, taskId: string): boolean {
+	return result.content.some((block) => block.type === "text" && textHasFgBgMarker(block.text, taskId));
 }
 
 /**

@@ -146,8 +146,21 @@ function officialPassthroughWithCapture(): { captured: () => { wrapped: string; 
 	return { captured: () => captured };
 }
 
-/** 官方 execute 真跑 fixture 模拟 wrapper（收尾判定用，pidfile 契约端到端）。 */
-function officialRunsFixture(mode: "alive" | "dead", resultTextOverride?: string): void {
+/**
+ * 真实 wrapper 标记行形态（bin/taiji-fg-wrap 退出 printf 同款）：结构化标记判定
+ * （bash-tool textHasFgBgMarker）消费的载体必须含 `{task_id:"<id>"}` 同现段——
+ * fixture 只写 "[TAIJI-FG-BG]" 前缀的简化形态会被判为非标记（正是防误置位语义）。
+ */
+function wrapperMarkerLine(taskId: string): string {
+	return (
+		`[TAIJI-FG-BG] Command moved to background after 600s without output — still running, NOT finished (no exit code yet). ` +
+		`Full log: ${join(TASKS_DIR, `${taskId}.log`)} Check: bash_output {task_id:"${taskId}"}; ` +
+		`terminate: bash_kill {task_id:"${taskId}"}. It will notify on completion — DO NOT bash sleep while waiting.`
+	);
+}
+
+/** 官方 execute 真跑 fixture 模拟 wrapper（收尾判定用，pidfile 契约端到端）。文本缺省回显包装命令串；函数形态按本次 taskId 构造（标记行 fixture 须携带真实 task_id）。 */
+function officialRunsFixture(mode: "alive" | "dead", resultTextOverride?: string | ((taskId: string) => string)): void {
 	officialExecuteMock.mockImplementation(async (_id: string, args: { command: string }) => {
 		expect(args.command).toContain(resolveFgWrapScriptPath());
 		const fixtureCommand = args.command.replace(
@@ -162,8 +175,12 @@ function officialRunsFixture(mode: "alive" | "dead", resultTextOverride?: string
 			child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`fixture exited ${code}`))));
 			child.on("error", reject);
 		});
+		const text =
+			typeof resultTextOverride === "function"
+				? resultTextOverride(parseWrapped(args.command).taskId)
+				: (resultTextOverride ?? `ran: ${args.command}`);
 		return {
-			content: [{ type: "text" as const, text: resultTextOverride ?? `ran: ${args.command}` }],
+			content: [{ type: "text" as const, text }],
 			details: undefined,
 		};
 	});
@@ -441,7 +458,7 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)("settle by pidfile (断言 #4)", () 
 	it("B3 already-marked result is passed through untouched (no duplicate marker)", async () => {
 		const pi = createMockPi();
 		refreshPiReference(pi as unknown as ExtensionAPI);
-		officialRunsFixture("alive", "ran: ...\n[TAIJI-FG-BG] Command moved to background after 600s without output — still running (wrapper marker).");
+		officialRunsFixture("alive", (taskId) => `ran: ...\n${wrapperMarkerLine(taskId)}`);
 
 		const result = await executeBash("sleep 30");
 
@@ -473,6 +490,31 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)("settle by pidfile (断言 #4)", () 
 		expect(pi.events.emit).not.toHaveBeenCalled();
 	});
 
+	it("B2 + 命令输出恰含标记字面量（无本任务 task_id 同现）→ 不误置位：判死不登记 + 三文件清理（结构化标记判定的虚假状态注入回归）", async () => {
+		const pi = createMockPi();
+		refreshPiReference(pi as unknown as ExtensionAPI);
+		officialRunsFixture(
+			"dead",
+			'ran: ...\necho "[TAIJI-FG-BG] Command moved to background after 600s without output" (marker-like output, no task_id)',
+		);
+
+		const result = await executeBash("echo done");
+
+		// 裸字面量不构成标记行（缺 {task_id:"<本任务 id>"} 同现——task_id 每次包装预生成，
+		// 命令输出无法偶然同现）→ 判死走 B2 清理。修复前裸子串包含误置位 hasMarker →
+		// 已死命令被判「标记行在 = 承诺在」登记 → 幽灵完成通知
+		const wrapped = officialExecuteMock.mock.calls[0]![1] as { command: string };
+		const p = parseWrapped(wrapped.command);
+		expect(getAllTasks()).toHaveLength(0);
+		expect(readRegistry(getRegistryPath(DATA_DIR, SESSION_ID)).get(p.taskId)).toBeUndefined();
+		expect(existsSync(p.cmdSh)).toBe(false);
+		expect(existsSync(p.pidfile)).toBe(false);
+		expect(existsSync(p.log)).toBe(false);
+		// 结果原样透传，无补标记
+		expect(resultText(result)).not.toContain("(the wrapper exited without printing its marker)");
+		expect(pi.events.emit).not.toHaveBeenCalled();
+	});
+
 	it("pidfile missing (wrapper killed in spawn window) → no registration, best-effort cleanup, no crash", async () => {
 		officialExecuteMock.mockImplementation(async () => ({
 			content: [{ type: "text" as const, text: "wrapper died early" }],
@@ -496,7 +538,7 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)("settle by pidfile (断言 #4)", () 
 		// 标记行引用的日志路径也被删
 		officialRunsFixture(
 			"dead",
-			'ran: ...\n[TAIJI-FG-BG] Command moved to background after 600s without output — still running (wrapper printed marker).',
+			(taskId) => `ran: ...\n${wrapperMarkerLine(taskId)}`,
 		);
 
 		const result = await executeBash("echo done");
