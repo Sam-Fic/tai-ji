@@ -44,6 +44,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
+import { subscribeResumeReconcile } from "@zhushanwen/pi-delivery-port";
 import { runNotifyReconcileMaintenance } from "./workflow-notify-reconcile.ts";
 // ═══ 经 core barrel 消费 workflow 域（引擎与 worker 住 packages/subagent-core） ═══
 import { bestEffort } from "@zhushanwen/subagent-core";
@@ -603,6 +604,33 @@ export function setupWorkflowDomain(
       entries: ctx.sessionManager.getEntries(),
       // 补投判据事实源磁盘化（A1 产品缺陷修复，域侧同构落点——session_start 入口
       // 同款注释）：判据读 session JSONL 落盘条目，no-persist 形态退化内存账 + warn。
+      sessionFile: ctx.sessionManager.getSessionFile(),
+      notifiedRunIds,
+      settledRecordOf: (runId) => state.store.settledRecordOf(runId),
+      loadRuns: () => state.store.loadAll(),
+    });
+  });
+
+  // 通知对账步入口③（completion-signal-delivery D8② 三入口同构的切回补强边沿，
+  // U2 修复）：同进程「切走会话再切回」不重发 session_start（真机实证），本域
+  // 入口①② 在该场景不可达——切回边沿唯一触发源是 base-tool-enhance 注册的
+  // `__taiji_bg_reconcile__` 内部命令（runtime 在 getCommands 时按节流触发），本
+  // 扩展与 base-tool-enhance 无依赖边（跨扩展依赖通道不存在），经三方共同依赖
+  // 包 pi-delivery-port 的进程级注册槽订阅其派发（与 session-manager 域同款接线；
+  // subagent 域 SubagentService 单例直转的 A5 先例同族）。订阅生命周期（RL13
+  // 同款论证）：订阅点 = extension load 装配期，同域 key 覆盖旧订阅（reload 后新
+  // 闭包替换旧闭包）。pi 经 resolveCurrentPi 现读（D3 纪律）：槽订阅存活于
+  // globalThis、跨 factory 生命周期，闭包捕获装配期 pi 会在 reload 后 stale
+  //（agent_settled 订阅无此问题——它随 eventBus 消亡；槽订阅不是）；其 throw
+  //（槽缺失时序异常）由派发侧围栏收集 warn。sessionState 条目缺席（装配链未
+  // 完成/已 shutdown）静默早退——与 agent_settled 入口同款。
+  subscribeResumeReconcile("subagent-workflow", (ctx) => {
+    const state = sessionState.get(ctx.sessionManager.getSessionId());
+    if (!state || !state.storeHealthy) return;
+    void runNotifyReconcileMaintenance({
+      reason: "resume",
+      pi: resolveCurrentPi(),
+      entries: ctx.sessionManager.getEntries(),
       sessionFile: ctx.sessionManager.getSessionFile(),
       notifiedRunIds,
       settledRecordOf: (runId) => state.store.settledRecordOf(runId),

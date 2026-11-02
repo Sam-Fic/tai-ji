@@ -53,4 +53,13 @@ export {
   getDeliveryPort,
 } from "./delivery-port.ts";
 
+export {
+  RESUME_RECONCILE_SLOT_KEY,
+  _resetResumeReconcileForTest,
+  dispatchResumeReconcile,
+  subscribeResumeReconcile,
+  type ResumeReconcileContext,
+  type ResumeReconcileListener,
+} from "./reconcile-edge.ts";
+
 export { createPiDeliveryPortHost, type CreatePiDeliveryPortHostOptions } from "./pi-host.ts";

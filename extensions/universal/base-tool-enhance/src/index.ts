@@ -11,10 +11,14 @@
  * seenIds + 内核三级判重承管——unified-delivery 波 3；投递统一化设计的现行登记处 = ADR-0074 与 docs/CONTEXT.md『统一投递』段）。
  * 维护链双触发点：session_start 事件 + `__taiji_bg_reconcile__` 内部命令（taiji runtime
  * 在 getCommands 时按节流补触发，覆盖「切走切回同进程重挂接、session_start 不重发」场景）。
- * 切回入口同时补挂 subagent 域对账（completion-signal-delivery V4b 入口③，A5 缺陷修复）：
+ * 切回入口同时补挂三域对账（subagent 域 = completion-signal-delivery V4b 入口③，A5 缺陷
+ * 修复；session-manager / subagent-workflow 两域 = D8② 三入口同构的切回边沿）：
  * subagent 域的 session_start / agent_settled 两入口在服务内自挂，切回是唯一需要扩展侧
  * 补挂的边沿——经进程单例 SubagentService.runNotifyReconcileMaintenance 转发
- * （reason="resume"；单例缺席 = 对账不挂，缺席语义非错误）。
+ * （reason="resume"；单例缺席 = 对账不挂，缺席语义非错误）；session-manager /
+ * subagent-workflow 两域与 base-tool-enhance 无依赖边（跨扩展依赖通道不存在），
+ * 经 pi-delivery-port 进程级注册槽 dispatchResumeReconcile 派发（两域 extension
+ * load 时 subscribeResumeReconcile 订阅；槽内逐域围栏，失败 warn 不阻断）。
  * 收殓下沉（u-bte-remove）：M5 孤儿收殓已移交 taiji runtime（background-task-
  * reaper 双触发点——session 销毁时 + 启动期兜底扫描，设计 file-lock-unification-
  * and-reaper-sink.md §3.2 D2），extension 不再做全局扫描/全局锁；session_start
@@ -29,7 +33,7 @@ import type {
 	ExtensionContext,
 	SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
-import { bindDeliveryPort, createPiDeliveryPortHost } from "@zhushanwen/pi-delivery-port";
+import { bindDeliveryPort, createPiDeliveryPortHost, dispatchResumeReconcile } from "@zhushanwen/pi-delivery-port";
 import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 import { getSubagentService } from "@zhushanwen/subagent-core";
@@ -120,11 +124,22 @@ export default function baseToolEnhanceExtension(pi: ExtensionAPI): void {
 	// 服务内装配，扩展侧无法直构 deps）。只挂本入口不挂 session_start / agent_settled
 	// ——那两边沿服务内已自挂（revive / agent_settled 订阅），重复转发 = 同边沿双派发。
 	// 单例缺席（session_start 前进程形态 / 无 subagent 域宿主）= 对账不挂，非错误。
+	// session-manager / subagent-workflow 两域补挂（D8② 三入口同构的切回边沿，U2
+	// 修复）：两域同样只在服务/扩展内自挂 session_start / agent_settled 两入口，切回
+	// 边沿经 pi-delivery-port 进程级注册槽派发（两域 extension load 时订阅；本扩展
+	// 与两域无依赖边，槽是三方共同依赖包内的转发通道）。槽内逐域围栏：失败清单
+	// 逐条 warn（域侧围栏漏网的防御位），不阻断 bash 域维护链；空槽（两域未启用）=
+	// 缺席语义非错误。
 	pi.registerCommand("__taiji_bg_reconcile__", {
 		description:
 			"Internal: rerun pending background-task reconcile + completion-notify redelivery (triggered by taiji runtime on session resume; session_start does not refire for same-process reattach)",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
 			getSubagentService()?.runNotifyReconcileMaintenance("resume");
+			for (const failure of dispatchResumeReconcile(ctx)) {
+				logger.warn("resume reconcile listener failed; that domain retried at next reconcile edge", {
+					detail: { domain: failure.domain, err: toErrorMessage(failure.error) },
+				});
+			}
 			return runReconcileMaintenance(pi, ctx, "resume");
 		},
 	});

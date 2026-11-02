@@ -31,11 +31,23 @@ const {
   mockTerminateRunningRuns,
   loggerFns,
   mockRegisterWorkflowsCommand,
+  mockRunNotifyReconcile,
 } = vi.hoisted(() => ({
   mockSetupSessionLifecycle: vi.fn(),
   mockTerminateRunningRuns: vi.fn(async () => {}),
   loggerFns: { debug: vi.fn(), warn: vi.fn(), error: vi.fn(), info: vi.fn() },
   mockRegisterWorkflowsCommand: vi.fn(),
+  // [U2 修复回归] 切回边沿订阅装配锁的观察点：mock 对账编排本体（行为直测权威
+  // 在 workflow-notify-reconcile.test.ts，此处只锁装配接线面）。默认返回空结果
+  //（entries 空 → 真实实现同样早退，行为等价——session_start 用例不受 mock 影响）。
+  mockRunNotifyReconcile: vi.fn(async () => ({
+    scanned: 0,
+    candidates: 0,
+    redelivered: [],
+    skippedNotTerminal: [],
+    skippedDelivered: [],
+    skippedJournaled: [],
+  })),
 }));
 
 vi.mock("../session-lifecycle.ts", async (importOriginal) => {
@@ -43,6 +55,13 @@ vi.mock("../session-lifecycle.ts", async (importOriginal) => {
   // getOrCreateDialogQueue 保留真实实现：走 DIALOG_QUEUE_KEY globalThis 槽，
   // 测试经槽注入 spy queue（覆盖真实 get-or-create 路径，非 mock 短路）。
   return { ...actual, setupSessionLifecycle: mockSetupSessionLifecycle };
+});
+
+vi.mock("../workflow-notify-reconcile.ts", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../workflow-notify-reconcile.ts")
+  >();
+  return { ...actual, runNotifyReconcileMaintenance: mockRunNotifyReconcile };
 });
 
 vi.mock("@zhushanwen/subagent-core/orchestration/lifecycle.ts", async (importOriginal) => {
@@ -63,7 +82,7 @@ vi.mock("../interface/command/commands.ts", () => ({
 }));
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { DELIVERY_PORT_SLOT_KEY } from "@zhushanwen/pi-delivery-port";
+import { DELIVERY_PORT_SLOT_KEY, RESUME_RECONCILE_SLOT_KEY, dispatchResumeReconcile } from "@zhushanwen/pi-delivery-port";
 import { MAX_RETAINED_DONE_RUNS, noteRebuiltSettlement } from "@zhushanwen/subagent-core";
 import type { LauncherDeps, WorkflowRun } from "@zhushanwen/subagent-core";
 import { setSubagentService } from "@zhushanwen/subagent-core";
@@ -287,7 +306,7 @@ async function mountWithSession(
 // ── 槽隔离（提权后槽是进程级共享态，防跨用例 / 跨测试文件串扰） ────────────────
 
 function resetSlots(): void {
-  for (const key of [WORKFLOW_DOMAIN_SLOT_KEY, DIALOG_QUEUE_KEY]) {
+  for (const key of [WORKFLOW_DOMAIN_SLOT_KEY, DIALOG_QUEUE_KEY, RESUME_RECONCILE_SLOT_KEY]) {
     Reflect.deleteProperty(globalThis, key);
   };
   const serviceSlot = Reflect.get(globalThis, SERVICE_SLOT_KEY) as { current: unknown } | undefined;
@@ -1162,5 +1181,53 @@ describe("组合根接线：registerWorkflowsCommand 第三参 lazyDeps.onRunDon
     expect(runs.size).toBe(MAX_RETAINED_DONE_RUNS);
     expect(runs.has("seed-0")).toBe(false);
     expect(runs.has("wf-thin")).toBe(true);
+  });
+});
+
+// ── ⑦ 切回边沿订阅装配锁（completion-signal-delivery D8② 入口③，U2 修复）──────
+//
+// setupWorkflowDomain 经 pi-delivery-port 进程级注册槽（subscribeResumeReconcile）
+// 订阅切回派发——漏挂 = 「进程存活 + rejected + 用户切走再切回」场景本域补投不
+// 触发的缺陷形态（入口①②在该场景不可达：切回不重发 session_start、无新回合则
+// agent_settled 不达）。观察点 = mock 对账编排本体（⑦开头 mock 集调注），此处只
+// 锁装配接线面：reason="resume"、pi 经 resolveCurrentPi 现读（D3 纪律）、
+// sessionState 条目缺席早退、同域覆盖（reload 形态）。
+
+describe("setupWorkflowDomain 切回边沿订阅（D8② 入口③）", () => {
+  it("装配 + session_start 建条目后，切回派发（同 sessionId）→ 本域对账以 reason=resume 被调，pi 现读装配实例", async () => {
+    const sessionId = "sess-resume-edge";
+    const { pi } = await mountWithSession(sessionId);
+    // session_start 链上的编排调用（reason="session_start"）不串入断言
+    mockRunNotifyReconcile.mockClear();
+
+    const failures = dispatchResumeReconcile(makeCtx(sessionId));
+
+    expect(failures).toEqual([]);
+    expect(mockRunNotifyReconcile).toHaveBeenCalledTimes(1);
+    const deps = mockRunNotifyReconcile.mock.calls[0]![0] as {
+      reason: string;
+      pi: unknown;
+    };
+    expect(deps.reason).toBe("resume");
+    expect(deps.pi).toBe(pi);
+  });
+
+  it("重复 setupWorkflowDomain 覆盖旧订阅：派发只打新装配一次（reload 形态，无死 handler 双派发）", async () => {
+    const sessionId = "sess-resume-reload";
+    await mountWithSession(sessionId);
+    const { pi: pi2 } = await mountWithSession(sessionId);
+    mockRunNotifyReconcile.mockClear();
+
+    expect(dispatchResumeReconcile(makeCtx(sessionId))).toEqual([]);
+    expect(mockRunNotifyReconcile).toHaveBeenCalledTimes(1);
+    expect((mockRunNotifyReconcile.mock.calls[0]![0] as { pi: unknown }).pi).toBe(pi2);
+  });
+
+  it("派发 ctx 的 sessionState 条目缺席（装配链未完成/已 shutdown）→ 静默早退零调用", async () => {
+    await mountWithSession("sess-resume-known");
+    mockRunNotifyReconcile.mockClear();
+
+    expect(dispatchResumeReconcile(makeCtx("sess-resume-unknown"))).toEqual([]);
+    expect(mockRunNotifyReconcile).not.toHaveBeenCalled();
   });
 });

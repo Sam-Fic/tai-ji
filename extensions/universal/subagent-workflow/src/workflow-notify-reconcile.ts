@@ -60,10 +60,11 @@
 //   ② agent_settled——workflow-events 装配期订阅（回合收尾兜底边沿）；
 //   ③ 切回补强（__taiji_bg_reconcile__）——pi 命令名全局唯一且单 handler 分发
 //     （pi SDK runner.getCommand 取首个同名命中；runtime 只发 base-tool-enhance
-//     注册的那一条命令，字面量契约），本扩展无切回触发源且 runtime /
-//     base-tool-enhance 零改动边界不可接线——物理边沿落位 ①② 两入口，切回
-//     缺口已随单元 deviations 呈报（编排形态三入口互调保持，接线缺口见
-//     实施期裁决登记）。
+//     注册的那一条命令，字面量契约），本扩展无切回触发源且与 base-tool-enhance
+//     无依赖边（跨扩展依赖通道不存在）——经三方共同依赖包 pi-delivery-port 的
+//     进程级注册槽订阅切回派发（workflow-events 装配期 subscribeResumeReconcile，
+//     base-tool-enhance handler dispatchResumeReconcile 转发；subagent 域
+//     SubagentService 单例直转的 A5 先例同族，reason="resume"）。
 // 幂等：补投受理成功后投递日志条目（id）与送达痕迹抵消判据，下一边沿不再命中；
 // 跨边沿重复对账天然收敛。
 
@@ -308,9 +309,10 @@ export interface NotifyReconcileResult { // oe-exempt:20261101:framework:跨包�
 }
 
 /**
- * 对账编排（session_start / agent_settled 两入口互调的单一函数）。幂等：重复执行
- * 时已补投键有投递日志承载/送达痕迹抵消，判据不再命中。失败吞掉记 warn（对账/
- * 补投失败无害：候选判据仍命中，下一对账边沿幂等重查）——调用方不需自行 try-catch。
+ * 对账编排（session_start / agent_settled / 切回（resume）三入口互调的单一函数）。
+ * 幂等：重复执行时已补投键有投递日志承载/送达痕迹抵消，判据不再命中。失败吞掉记
+ * warn（对账/补投失败无害：候选判据仍命中，下一对账边沿幂等重查）——调用方不需
+ * 自行 try-catch。
  *
  * sessionFile = 当前 session JSONL 路径（pi sessionManager.getSessionFile()）——
  * manifest 面与痕迹/日志两抵消事实读它的落盘条目（磁盘事实，机制见文件头「判据
@@ -322,7 +324,7 @@ export interface NotifyReconcileResult { // oe-exempt:20261101:framework:跨包�
  * 才读盘 + loadRuns（全量聚合重建，会话内 run 十级量级小文件）。
  */
 export async function runNotifyReconcileMaintenance(deps: {
-	/** 入口来源（session_start / agent_settled）——入口来源日志可辨。 */
+	/** 入口来源（session_start / agent_settled / resume 切回）——入口来源日志可辨。 */
 	reason: string;
 	/** 当前 pi（补投出口 notifyDone 的投递参数——与主路径同一投递管道）。 */
 	pi: ExtensionAPI;

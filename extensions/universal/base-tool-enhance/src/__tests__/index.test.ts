@@ -4,14 +4,18 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { createBashToolDefinitionMock, dataDirRef, subagentServiceRef } = vi.hoisted(() => ({
+const { createBashToolDefinitionMock, dataDirRef, subagentServiceRef, dispatchResumeReconcileMock } = vi.hoisted(() => ({
 	createBashToolDefinitionMock: vi.fn(),
 	dataDirRef: { dir: "/tmp/bte-fake-agent-dir" },
 	// [A5 缺陷修复回归] 切回入口 subagent 域对账转发的单例桩——mock 包级单例访问器
 	//（真单例由 subagent-workflow 装配链 session_start 时创建，本测试面只锁转发行为）。
 	subagentServiceRef: { current: null as unknown },
+	// [U2 修复回归] 两域（session-manager / subagent-workflow）切回对账转发 = 经
+	// delivery-port 进程级注册槽派发。mock 槽派发函数锁「handler 转发面」；两域
+	// 订阅行为在各自扩展包的装配测试锁（真实槽行为在 delivery-port 包锁）。
+	dispatchResumeReconcileMock: vi.fn((): Array<{ domain: string; error: unknown }> => []),
 }));
 vi.mock("@earendil-works/pi-coding-agent", () => ({
 	createBashToolDefinition: createBashToolDefinitionMock,
@@ -19,6 +23,12 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 vi.mock("@zhushanwen/subagent-core", () => ({
 	getSubagentService: () => subagentServiceRef.current,
 }));
+vi.mock("@zhushanwen/pi-delivery-port", async (importOriginal) => {
+	// 部分替身：bindDeliveryPort / createPiDeliveryPortHost 等保真（session_start
+	// 装配链依赖），只替 dispatchResumeReconcile（本测试面的观察点）。
+	const actual = await importOriginal<typeof import("@zhushanwen/pi-delivery-port")>();
+	return { ...actual, dispatchResumeReconcile: dispatchResumeReconcileMock };
+});
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -249,6 +259,110 @@ describe("__taiji_bg_reconcile__ command: subagent-domain reconcile forward (V4b
 					},
 				}),
 			).resolves.toBeUndefined();
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+});
+
+// [U2 修复回归] 切回入口两域（session-manager / subagent-workflow）对账转发
+// （completion-signal-delivery D8② 三入口同构的切回边沿）：漏挂本转发 = 两域
+// 「切走再切回同进程」场景补投不触发（延迟至下一 agent_settled 或重启
+// session_start）的缺陷形态。转发通道 = pi-delivery-port 进程级注册槽
+// dispatchResumeReconcile（两域 extension load 时订阅；两域与 base-tool-enhance
+// 无依赖边，槽是三方共同依赖包内的转发通道）。
+describe("__taiji_bg_reconcile__ command: two-domain reconcile dispatch via delivery-port slot (D8② entry ③)", () => {
+	// 共享模块 mock：调用历史每用例清零（前面用例的 handler 派发不串入计数断言）
+	beforeEach(() => {
+		dispatchResumeReconcileMock.mockClear();
+	});
+
+	it("handler dispatches the slot exactly once, forwarding the command ctx as-is", async () => {
+		setupOfficialFactory();
+		vi.stubEnv("TAIJI_AGENT_DATA_DIR", dataDirRef.dir);
+		try {
+			const pi = createMockPi();
+			baseToolEnhanceExtension(pi as unknown as ExtensionAPI);
+
+			const [, def] = pi.registerCommand.mock.calls[0] as [
+				string,
+				{ description: string; handler: (args: string, ctx: unknown) => Promise<void> },
+			];
+			const ctx = {
+				sessionManager: {
+					getSessionId: () => "sid-two-domain-fwd",
+					getSessionFile: () => undefined,
+					getEntries: () => [],
+				},
+			};
+			await def.handler("", ctx);
+
+			expect(dispatchResumeReconcileMock).toHaveBeenCalledTimes(1);
+			expect(dispatchResumeReconcileMock).toHaveBeenCalledWith(ctx);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("slot listener failures do not block the handler (per-domain fence; bash-domain maintenance chain still settles)", async () => {
+		setupOfficialFactory();
+		dispatchResumeReconcileMock.mockReturnValueOnce([
+			{ domain: "session-manager", error: new Error("fence leak") },
+		]);
+		vi.stubEnv("TAIJI_AGENT_DATA_DIR", dataDirRef.dir);
+		try {
+			const pi = createMockPi();
+			baseToolEnhanceExtension(pi as unknown as ExtensionAPI);
+
+			const [, def] = pi.registerCommand.mock.calls[0] as [
+				string,
+				{ description: string; handler: (args: string, ctx: unknown) => Promise<void> },
+			];
+			// 单域失败（域侧围栏漏网的防御位）不阻断其余域与 bash 域维护链：handler
+			// 正常落定（失败清单由 handler 逐条 warn 留痕，不向 runtime 上抛）。
+			await expect(
+				def.handler("", {
+					sessionManager: {
+						getSessionId: () => "sid-slot-failure",
+						getSessionFile: () => undefined,
+						getEntries: () => [],
+					},
+				}),
+			).resolves.toBeUndefined();
+			expect(dispatchResumeReconcileMock).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("session_start / agent_settled edges do NOT dispatch the slot (two domains self-wire those edges)", async () => {
+		setupOfficialFactory();
+		vi.stubEnv("TAIJI_AGENT_DATA_DIR", dataDirRef.dir);
+		try {
+			const pi = createMockPi();
+			baseToolEnhanceExtension(pi as unknown as ExtensionAPI);
+
+			const sessionStart = pi.on.mock.calls.find((call) => call[0] === "session_start")?.[1] as (
+				event: unknown,
+				ctx: unknown,
+			) => Promise<void>;
+			const agentSettled = pi.on.mock.calls.find((call) => call[0] === "agent_settled")?.[1] as (
+				event: unknown,
+				ctx: unknown,
+			) => Promise<void>;
+			expect(sessionStart).toBeTypeOf("function");
+			expect(agentSettled).toBeTypeOf("function");
+			const ctx = {
+				sessionManager: {
+					getSessionId: () => "sid-no-slot-dispatch",
+					getSessionFile: () => undefined,
+					getEntries: () => [],
+				},
+			};
+			await sessionStart({ type: "session_start", reason: "resume" }, ctx);
+			await agentSettled({}, ctx);
+
+			expect(dispatchResumeReconcileMock).not.toHaveBeenCalled();
 		} finally {
 			vi.unstubAllEnvs();
 		}

@@ -16,6 +16,7 @@ import {
 	type MarkerRpcResult,
 	type SessionManagerAction,
 } from "@zhushanwen/extension-protocol";
+import { subscribeResumeReconcile } from "@zhushanwen/pi-delivery-port";
 import { getLogger, setPiHandle } from "@zhushanwen/pi-extension-logger";
 import { Type, type Static, type TObject } from "typebox";
 
@@ -184,6 +185,16 @@ async function executeTool(
 
 // ── Extension 入口 ──
 
+/** 对账步 deps 的 ctx 侧最小输入（session_start / agent_settled 两入口的
+ * ExtensionContext 与切回槽的 ResumeReconcileContext 结构兼容本子集——对账编排
+ * 只读这两个成员，见 runNotifyReconcileSafely 的消费点）。 */
+interface ReconcileSessionContext {
+	sessionManager: {
+		getEntries(): readonly unknown[];
+		getSessionFile(): string | undefined;
+	};
+}
+
 /**
  * 通知对账步的安全包装（completion-signal-delivery D8② 三入口编排的接线形态）：
  * entries 读取异常吞掉记 warn（对账失败无害：候选判据仍在，下一边沿幂等重查），
@@ -200,8 +211,8 @@ async function executeTool(
  */
 function runNotifyReconcileSafely(
 	pi: ExtensionAPI,
-	ctx: ExtensionContext,
-	reason: "session_start" | "agent_settled",
+	ctx: ReconcileSessionContext,
+	reason: "session_start" | "agent_settled" | "resume",
 ): void {
 	logger.debug("notify reconcile dispatch", { detail: { reason } });
 	try {
@@ -326,6 +337,20 @@ export default function sessionManagerExtension(pi: ExtensionAPI): void {
 	// 判据预检短路兜住（无 register 条目不进终判循环）。
 	pi.on("agent_settled", (_event: unknown, ctx: ExtensionContext) => {
 		runNotifyReconcileSafely(pi, ctx, "agent_settled");
+	});
+
+	// 通知对账步入口③（completion-signal-delivery D8② 三入口同构的切回补强边沿，
+	// U2 修复）：同进程「切走会话再切回」不重发 session_start（真机实证），本域
+	// 入口①② 在该场景不可达——切回边沿唯一触发源是 base-tool-enhance 注册的
+	// `__taiji_bg_reconcile__` 内部命令（runtime 在 getCommands 时按节流触发），本
+	// 扩展与 base-tool-enhance 无依赖边（跨扩展依赖通道不存在），经三方共同依赖
+	// 包 pi-delivery-port 的进程级注册槽订阅其派发（subagent 域 SubagentService
+	// 单例直转的 A5 先例同族接线）。订阅生命周期（RL13 同款论证）：订阅点 =
+	// extension load 装配期，同进程 session 替换重新 load extension，新闭包经同域
+	// key 覆盖旧订阅，无死 handler 累积；域侧围栏 = runNotifyReconcileSafely 内
+	// catch，异常原则上不向派发方传播。
+	subscribeResumeReconcile("session-manager", (ctx) => {
+		runNotifyReconcileSafely(pi, ctx, "resume");
 	});
 
 	registerSessionTool(pi, {
