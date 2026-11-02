@@ -420,6 +420,12 @@ export function createChatStore(options: ChatStoreOptions = {}) {
    * Map 是呈现派生视图（ActivityStrip stall 行文案源）；无记录 = 无提示在显。
    * 断连收尾（resetTransientStates）与 disposeSession 删分区——重连后 stateSnapshot 回放
    * 恢复真实值（与 occupancies 分区同语义）。
+   *
+   * // @data-owner #88 —— 权威源 = runtime SilenceMatrix 判定（event-interpreter-silence.ts，
+   * T/T_hint 单源推导，renderer 不复制推导）。唯一写入口 = message-bus state topic 广播链
+   *（message-bus.ts TOPIC_TABLE/STATE_TYPE_KEY_MAP）+ renderer 侧 setStallHint 单点
+   *（useChat handler，live 广播与 stateSnapshot 回放同入口）。登记见
+   * docs/architecture/data-source-registry.md §1 #88。
    */
   const stallHints = ref<Map<string, StallHintState>>(new Map())
   /**

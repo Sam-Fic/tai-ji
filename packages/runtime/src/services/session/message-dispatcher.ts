@@ -48,6 +48,7 @@ import { getSessionLogsDir } from '@taiji/shared/paths'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
 import type { IMessageBus } from '../message-bus/message-bus.js'
 import { toErrorMessage } from '../../utils/errors.js'
+import { createInflightDedup } from '@taiji/core/foundation/create-inflight-dedup'
 import { applySessionOccupancyTransition, IDLE_SESSION_OCCUPANCY, userStoppedGate } from './event-interpreter.js'
 import { buildOutboundChildEnv } from '../../infra/spawn-env.js'
 import type { SessionDeliveryRegistry, DeliverySubmitResult } from './session-delivery-registry.js'
@@ -235,12 +236,13 @@ export class MessageDispatcher {
   private delivery?: SessionDeliveryRegistry
 
   /**
-   * 强杀编排 in-flight 注册表（sessionId → Promise；pi-stall-detection U2 双入口并发幂等，
-   * U2 检查点「升级强杀 × 右键 / restore 兜底并发」）：并发到达的第二调用方 join 同一
-   * Promise（单次编排、单次 markUserStopped 置位、单次 session.exited 广播），对齐
-   * pi-respawn.ensureRestored 的 join 语义先例。
+   * 强杀编排 in-flight 去重器（C-data-18 共享原语组装；pi-stall-detection U2 双入口并发
+   * 幂等，U2 检查点「升级强杀 × 右键 / restore 兜底并发」）：并发到达的第二调用方 join
+   * 同一 Promise（单次编排、单次 markUserStopped 置位、单次 session.exited 广播）。同 key
+   * 复用 / settle 即清 / 引用比对防误删 / rejection 接管由原语内建（create-idempotency.ts:40
+   * 同款组装先例），禁止手写 Map<key, Promise> 同构实现。
    */
-  private readonly forceQuitInFlight = new Map<string, Promise<void>>()
+  private readonly forceQuitInFlight = createInflightDedup<void>()
 
   /**
    * 停滞自动处置链端口（pi-stall-detection U2；组合根后置注入，null = 未接线——恢复链
@@ -953,19 +955,15 @@ export class MessageDispatcher {
    * 自动恢复由调用点之后的独立触发链承担，不在本编排内）。
    */
   private async forceQuitSession(sessionId: string, outcomeReason: string, exitReason: string, source: ForceQuitSource): Promise<void> {
-    const inFlight = this.forceQuitInFlight.get(sessionId)
-    if (inFlight) {
+    // 原语 run 同步段内无竞态：has 判定即「join 在途编排」（幂等单杀），未命中才首次发起
+    const joining = this.forceQuitInFlight.has(sessionId)
+    const entry = this.forceQuitInFlight.run(sessionId, () =>
+      this.runForceQuitSession(sessionId, outcomeReason, exitReason, source),
+    )
+    if (joining) {
       console.warn(`[message-dispatcher] forceQuitSession already in flight — joining (idempotent single kill), sid=${sessionId}, requested source=${source}`)
-      return inFlight
     }
-    const run = this.runForceQuitSession(sessionId, outcomeReason, exitReason, source)
-    this.forceQuitInFlight.set(sessionId, run)
-    void run
-      .catch(() => undefined)
-      .then(() => {
-        if (this.forceQuitInFlight.get(sessionId) === run) this.forceQuitInFlight.delete(sessionId)
-      })
-    return run
+    return entry.promise
   }
 
   /** 强杀编排体（经 forceQuitSession 的 in-flight join 包装进入；一次会话窗口恰跑一次）。 */

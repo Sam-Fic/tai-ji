@@ -29,6 +29,7 @@ import {
   DEFAULT_MCP_TIMEOUT_MS,
   SILENCE_TICK_MS,
   deriveSilenceThresholds,
+  mergeMcpServers,
   resolveStallMatrixArms,
   stallMatrixActionForKind,
   stallMatrixActionForEvent,
@@ -161,6 +162,79 @@ describe('RL4/RL14 配置维：超界降级触发 + 禁用分支 + 噪音边界'
     const arms = resolveStallMatrixArms({ ...DEFAULT_SNAPSHOT, idleBackgroundSec: null })
     expect(arms.judge).toBe(false)
     expect(arms.hint).toBe(true)
+  })
+})
+
+// ── MCP 合并语义（锚 pi dist/extensions/mcp/config.js:70 同名整体替换）────────
+
+describe('MCP 合并语义：同名条目整体替换（无字段级合并）', () => {
+  it('项目同名条目整体替换全局条目（command/url 形态）', () => {
+    const merged = mergeMcpServers(
+      { g: { command: 'gcmd', timeout: 60 }, other: { url: 'http://o' } },
+      { g: { command: 'pcmd', timeout: 120 } },
+    )
+    expect(merged.get('g')).toEqual({ command: 'pcmd', timeout: 120 })
+    expect(merged.get('other')).toEqual({ url: 'http://o' })
+  })
+
+  it('项目条目缺 command/url/type（pi 校验不通过形态）同样整体替换——不残留全局字段', () => {
+    // 修复前的字段级合并（`{ ...base, ...entry }`）会留下全局 command/env：该形态在 pi 侧
+    // 被 validateMcpServerConfig 整体丢弃，合并残留等于算出 pi 侧不存在的生效值
+    const merged = mergeMcpServers(
+      { g: { command: 'gcmd', timeout: 60, env: { A: '1' } } },
+      { g: { timeout: 120 } },
+    )
+    expect(merged.get('g')).toEqual({ timeout: 120 })
+    expect(merged.get('g')?.['command']).toBeUndefined()
+  })
+
+  it('项目独有条目进入合并结果；非对象条目（null / 数组 / 标量）两侧均跳过', () => {
+    const merged = mergeMcpServers(
+      { bad: null, arr: [1], scalar: 'x', good: { command: 'c' } },
+      { p: { command: 'pcmd' }, pbad: 3 },
+    )
+    expect([...merged.keys()].sort()).toEqual(['good', 'p'])
+    expect(merged.get('p')).toEqual({ command: 'pcmd' })
+  })
+})
+
+// ── RL14 降级留痕：三类 judge=false 形态各发 warn（写明形态与生效阈值）──────
+
+describe('RL14 降级留痕：判死分支不装配不得静默（三类形态各一条 warn）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('httpIdleTimeoutMs=0（AS15 禁用）→ warn 含禁用形态、AS15 与生效阈值', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    resolveStallMatrixArms({ ...DEFAULT_SNAPSHOT, httpIdleTimeoutMs: 0 })
+    const t = deriveSilenceThresholds(DEFAULT_IDLE_BACKGROUND_SEC)
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('httpIdleTimeoutMs=0'))
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('AS15'))
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(`T=${t.judgeMs}ms`))
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(`T_hint=${t.hintMs}ms`))
+  })
+
+  it('idleBackgroundSec=null（转后台关闭）→ warn 含关闭形态与生效阈值', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    resolveStallMatrixArms({ ...DEFAULT_SNAPSHOT, idleBackgroundSec: null })
+    const t = deriveSilenceThresholds(DEFAULT_IDLE_BACKGROUND_SEC)
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('idleBackgroundSec=null'))
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(`T=${t.judgeMs}ms`))
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(`T_hint=${t.hintMs}ms`))
+  })
+
+  it('自愈窗或 mcpMaxMs ≥ T（AS13 超界）→ warn 含超界形态、两个生效窗值与 T', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    resolveStallMatrixArms({ ...DEFAULT_SNAPSHOT, mcpMaxTimeoutMs: 1_200_000 })
+    const t = deriveSilenceThresholds(DEFAULT_IDLE_BACKGROUND_SEC)
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('mcpMax=1200000ms'))
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('AS13'))
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(`T=${t.judgeMs}ms`))
+  })
+
+  it('反向：双分支装配（默认配置）不发降级 warn', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(resolveStallMatrixArms(DEFAULT_SNAPSHOT).judge).toBe(true)
+    expect(warnSpy).not.toHaveBeenCalled()
   })
 })
 

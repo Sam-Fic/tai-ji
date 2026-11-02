@@ -94,7 +94,8 @@ export function deriveSilenceThresholds(idleBackgroundSec: number): SilenceThres
 // ── 配置快照与分支装配（RL14 / AS13 / AS15）────────────────────────────
 
 /**
- * 静默判定矩阵的配置快照（读侧产出、纯函数消费——测试注入快照即确定性）。
+ * 静默判定矩阵的配置快照（读侧产出、resolveStallMatrixArms 消费——测试注入快照即确定性；
+ * 消费侧另发降级 warn 留痕，返回值与装配判定不受日志影响）。
  * 字段语义（未设统一 null，区别于 0 类显式值）：
  * - idleBackgroundSec：base-tool-enhance 配置；null = 用户显式关闭转后台（前台命令静默无界）；
  * - httpIdleTimeoutMs：pi settings 全局+项目合并值；null = 未设（默认 300s 生效）；0 = 禁用（AS15）；
@@ -134,16 +135,32 @@ export interface StallMatrixArms { // oe-exempt:20261101:framework:静默判定�
  * 提示分支在三类降级形态下照常装配（温和提示非判定动作，AX5 约束的是判定类动作）；
  * 阈值统一取覆盖公式 T_hint——降级形态下提示可能落在大自愈窗内（呈现噪音，与
  * idleBackgroundSec ≤ 60s 边界同族，U4 裁决：接受呈现噪音，不建第二参数）。
+ *
+ * 降级留痕（判死分支不装配不得静默）：三类形态各发一条 warn，写明降级形态与生效阈值
+ * （T / T_hint 毫秒值）——装配只发生在会话 adapter 构造一次，量级有界。
  */
 export function resolveStallMatrixArms(snap: StallMatrixConfigSnapshot): StallMatrixArms {
   const thresholds = deriveSilenceThresholds(snap.idleBackgroundSec ?? DEFAULT_IDLE_BACKGROUND_SEC)
   if (snap.idleBackgroundSec === null || snap.httpIdleTimeoutMs === 0) {
+    if (snap.httpIdleTimeoutMs === 0) {
+      console.warn(
+        `[silence-matrix] judge branch disabled: httpIdleTimeoutMs=0 (AS15 — model requests have no pi self-heal window), T=${thresholds.judgeMs}ms, T_hint=${thresholds.hintMs}ms`,
+      )
+    }
+    if (snap.idleBackgroundSec === null) {
+      console.warn(
+        `[silence-matrix] judge branch disabled: idleBackgroundSec=null (user turned off backgrounding — foreground silence window unbounded), T=${thresholds.judgeMs}ms, T_hint=${thresholds.hintMs}ms`,
+      )
+    }
     return { hint: true, judge: false, ...thresholds }
   }
   const T = thresholds.judgeMs
   const modelWindowMs = snap.providerTimeoutMs ?? snap.httpIdleTimeoutMs ?? MODEL_WINDOW_FALLBACK_MS
   const mcpMaxMs = snap.mcpMaxTimeoutMs ?? DEFAULT_MCP_TIMEOUT_MS
   if (modelWindowMs >= T || mcpMaxMs >= T) {
+    console.warn(
+      `[silence-matrix] judge branch disabled: effective self-heal window (provider/httpIdle=${modelWindowMs}ms, mcpMax=${mcpMaxMs}ms) >= T=${T}ms (AS13 over-bound config), T_hint=${thresholds.hintMs}ms`,
+    )
     return { hint: true, judge: false, ...thresholds }
   }
   return { hint: true, judge: true, ...thresholds }
@@ -207,10 +224,25 @@ function readMergedPiSettings(cwd: string | undefined): Record<string, unknown> 
 }
 
 /**
- * MCP 各条目生效 timeout 最大值（毫秒）。合并语义锚 pi mcp/config.ts：全局
- * `<agentDir>/mcp.json` + 项目 `<cwd>/.pi/mcp.json`——项目同名条目「含 command/url/type =
- * 整体替换；否则仅覆盖 enabled/exposure/toolExposure（保留全局 timeout）」；enabled=false
- * 条目不参与（server 不连接，其窗无意义）。条目未配 timeout → 默认 60s 计入（AS12）。
+ * MCP 各条目生效 timeout 最大值（毫秒）——**保守上界估计**，不是 pi 实装的逐字段等价复刻。
+ *
+ * 合并语义锚 pi 实装（node_modules/@earendil-works/pi-coding-agent 1.0.0
+ * dist/extensions/mcp/config.js）：全局 `<agentDir>/mcp.json` + 项目
+ * `<cwd>/.pi/mcp.json` 两级，同名条目**整体替换**（:70 `servers.set(name, …)` 无条件
+ * 覆盖，无字段级合并）。项目级读入门恒真：taiji spawn 契约 `--mode rpc --approve`
+ * （packages/pi-rpc/src/spawn-args.ts:161-168 buildPiMainAgentArgs 恒带；`--approve`
+ * 映射 pi projectTrustOverride=true，dist/cli/args.js:215-217，且 main.js:592-597 该
+ * 覆盖优先于 trustStore 判定、cachedProjectTrust 仅在无覆盖时的解析闭包内赋值）使 pi 侧
+ * `projectTrusted` 恒为 true（dist/core/agent-session.js:2719 → settings-manager，
+ * dist/extensions/mcp/index.js:1063 loadMcpConfig 消费），故本读侧无条件读项目级与 pi
+ * 在 taiji 部署下的实态一致；`--approve` 移除时（spawn-args.ts:163 已登记 TODO
+ * follow-up）本读侧须同步补项目信任门，否则会漏掉 pi 仍在读的项目级条目。
+ *
+ * 与 pi 实装的已知差异（方向上只抬高上界，不漏报）：pi 侧另有逐条目校验
+ * validateMcpServerConfig（非法条目整体丢弃）与 namespace clash 拒绝（`-`/`_` 归一后
+ * 同名互斥），本读侧不复制——坏条目按原值计入只会把最大值算得更大（判死分支更易降级
+ * 为只提示），不会漏掉 pi 实际生效的更长窗。enabled=false 条目不参与（server 不连接，
+ * 其窗无意义）。条目未配 timeout → 默认 60s 计入（AS12）。
  *
  * 编排三段（复杂度拆解：读两侧 → 合并 → 求最大值，逐段独立 helper）。
  */
@@ -222,8 +254,11 @@ function readMcpServersAt(path: string | undefined): Record<string, unknown> {
     : {}
 }
 
-/** 项目同名条目合并（含 command/url/type = 整体替换；否则字段级覆盖）。 */
-function mergeMcpServers(
+/**
+ * 全局 + 项目两级条目合并：同名条目**整体替换**（锚 pi config.js:70 无条件覆盖语义）。
+ * 导出供测试钉住替换语义（resolveStallMatrixArms 同款「导出供测试」先例）。
+ */
+export function mergeMcpServers(
   globalServers: Record<string, unknown>,
   projectServers: Record<string, unknown>,
 ): Map<string, Record<string, unknown>> {
@@ -233,16 +268,12 @@ function mergeMcpServers(
       effective.set(name, config as Record<string, unknown>)
     }
   }
+  // 项目级同名条目整体覆盖全局条目。禁止字段级合并（`{ ...base, ...entry }`）：pi 对缺
+  // command/url/type 的条目校验不通过、整体丢弃，字段级合并却把该条目的一部分应用到全局
+  // 条目上，算出 pi 侧不存在的生效值——合并粒度偏差即此。
   for (const [name, config] of Object.entries(projectServers)) {
     if (typeof config !== 'object' || config === null || Array.isArray(config)) continue
-    const entry = config as Record<string, unknown>
-    const isReplacement = entry['command'] !== undefined || entry['url'] !== undefined || entry['type'] !== undefined
-    if (isReplacement) {
-      effective.set(name, entry)
-    } else {
-      const base = effective.get(name)
-      if (base) effective.set(name, { ...base, ...entry })
-    }
+    effective.set(name, config as Record<string, unknown>)
   }
   return effective
 }
