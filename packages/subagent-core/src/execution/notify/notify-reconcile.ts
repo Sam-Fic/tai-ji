@@ -16,13 +16,18 @@
 //     不发者排除与 V10 成因位同原理）。markRoundIdle 是该形态唯一写点（成功/失败轮
 //     统一落 idle + 引擎停因），补投补的是该轮完成信号（payload 按终态形态构造、
 //     outcome 经 deriveOutcome 单一权威派生——失败轮如实落 failed 文案，不谎报）。
-//   送达痕迹判定分形态：legacy closed 形态查裸键（notifyId/deliveryId——同 record 的
-//   轮次条目不得阻断 close 归档提示补投）；轮终收尾形态扩位到 record 级
-//   （collectDeliveredRecordIds 收 details.id——主路径轮次应答已送达 = 完成信号已在
-//   会话，按裸键查询不可见（轮次键 id:round ≠ 补投键裸 id），无 record 级通道时每次
-//   对账边沿都会对已送达成员重复补投；主路径 rejected 时条目未落盘、痕迹未命中，
-//   补投可达）。跨边沿防重由投递日志幂等键判重承担（补投键 = 裸 id 终态键，首轮
-//   补投受理后 outbox 条目使后续边沿 journaled 命中）。
+//   送达痕迹判定分形态 + 世代匹配（F1-13 结论 A：epoch 透传后三通道全按世代判定，
+//   旧世代在册条目不阻断新世代查询）：
+//     - legacy closed 形态查裸键（notifyId/deliveryId——同 record 的轮次条目不得
+//       阻断 close 归档提示补投；可达集内该形态恒世代 0，跨世代不适用）；
+//     - 轮终收尾形态扩位到 record 级（details.id + details.epoch 世代匹配——主路径
+//       轮次应答已送达 = 完成信号已在会话；按裸 id 无世代查询会命中旧世代条目，
+//       reopen 后误阻断新世代完成信号）。键通道（notifyId/deliveryId）同样世代
+//       匹配：世代 0 轮次键 `id:round` 与世代 e 终态键 `id:epoch` 存在字符串同形
+//       （`x:1` 双义），只有条目侧世代字段（payload.epoch 透传）能消歧。
+//   主路径 rejected 时条目未落盘、痕迹未命中，补投可达。跨边沿防重由投递日志幂等
+//   键判重承担（补投键 = `id[:epoch]` 终态键，首轮补投受理后 outbox 条目使后续
+//   边沿 journaled 按世代命中）。
 //
 // 两个排除位（D5 裁决，「主路径不发者排除」原理）：
 //   排除位一（成因位，全 origin）：closedReason="cancelled" → 非候选。现行该成因
@@ -47,7 +52,8 @@
 // 依赖方向 core ← extensions），物理 import 不可达——本文件的骨架与收集器按同构
 // 形态落位，真值组合与字段结构逐一锚定该单源；漂移防线 = 两域真值表测试
 // （u3/u1 各自）+ 全量测试门对账。口径差异显式登记：本域幂等键提取用宽容口径
-// （entry.data.id 直读，见 collectJournaledDeliveryIds 注释），方向保守（误判无条目
+// （entry.data.id 直读 + payload.details.epoch 世代读取，见 collectJournaledDeliveryGenerations
+// 注释），方向保守（误判无条目
 // → 补投被 port 幂等吞并，无实害）。
 //
 // 入口形态（D5/D7② 三入口同构，编排互调本文件的唯一对账函数 runNotifyReconcileMaintenance）：
@@ -64,6 +70,12 @@ import * as fs from "node:fs";
 
 import { getLogger } from "../../core/logger.ts";
 import { isLegacyClosedSettled } from "../persistence/execution-record.ts";
+import {
+  foldRecordEvents,
+  parseRecordEventFileLine,
+  recordEventsPath,
+  type RecordEvent,
+} from "../persistence/record-events.ts";
 import type { ClosedReason, ExecutionStatus, RecordOrigin, StopReason } from "../domain/record-types.ts";
 import { NEW_STOP_REASONS } from "../domain/record-types.ts";
 import { buildNotifyId, type BgNotifyRecord } from "./notifier.ts";
@@ -82,11 +94,13 @@ export const NOTIFY_RECONCILE_SCAN_LIMIT = 10_000;
  * 对账侧 record 事实的结构子集（queries.collectRecords 返回的 SubagentRecord 天然
  * 满足；deps 注入形态使编排与 store 形态解耦，单测可造轻量替身）。
  *
- * 无 epoch 字段（SubagentRecord 公开面不携带）——键构造按 epoch 缺省（裸 id 形态）。
- * 边界锚定：可达候选集上不构成键漂移——「epoch>0 的 legacy closed」现行唯一写点 =
- * settleWorkflowRecord 契约（全 workflow origin 前置）被排除位二封住；历史 CAS 时代
- * record 无 epoch（epoch 与 reopen/binding 同批后引入，旧数据早于该批机制——D5
- * 证据链「binding 缺失/旧数据无 binding 时 origin 缺席」自证）。
+ * epoch 字段由生产装配点补齐（resolveReconcileRecordEpoch：内存源 getMutable 直读，
+ * 磁盘重建源读 record 事件流 fold）——SubagentRecord 公开面不携带该字段（notify 域
+ * 自有投影类型承载，不扩散到 list 读模型）。前版「无 epoch 字段、键恒裸 id」的边界
+ * 论证（「epoch>0 的 legacy closed 被 workflow origin 排除位封住」）只覆盖 legacy
+ * closed 形态；A4 扩位新增的轮终收尾 idle 形态在 reopen 过的 record（epoch>0）上
+ * 可达——补投键裸 id 与主路径 notifyClosed 对同 record 的 `id:epoch` 构造漂移
+ * （RL8），且旧世代裸 id 条目在册会经送达痕迹通道误阻断新世代完成信号（F1-13）。
  */
 export interface ReconcileNotifyRecord { // oe-exempt:20261101:wip:共享判据骨架先行，域侧第二实现随 u5 两域映射交付
 
@@ -118,6 +132,18 @@ export interface ReconcileNotifyRecord { // oe-exempt:20261101:wip:共享判据�
   readonly origin?: RecordOrigin;
   /** 收尾通知的轮次统计文案输入（notifyClosed 同款——round 置 undefined 后轮数改经此进文案）。 */
   readonly round?: number;
+  /**
+   * 世代（reopen 防撞维度，§3.2.3）：补投幂等键 `id[:epoch]` 构造与送达痕迹 /
+   * 投递日志判据的世代匹配输入。undefined/0 = 世代 0（裸 id 旧格式，磁盘零迁移）。
+   *
+   * 数据源（生产装配 resolveReconcileRecordEpoch 单点提取）：内存源 ExecutionRecord.
+   * epoch 直读；磁盘重建源读 `.events` 事件流 fold（record-bound / record-round-started
+   * / record-reopened 三类帧携带 epoch，事件流是唯一事实源）。主 session entry 源与
+   * manifest 源不携带该字段——两源只补「扫描缺员的 zcode record」与「重建失败
+   * orphan」，这些形态 epoch 缺省按世代 0 语义退化 = 旧格式裸 id 键，行为与透传前
+   * 一致（不引入新缺陷）。
+   */
+  readonly epoch?: number;
 }
 
 /**
@@ -214,19 +240,57 @@ export function isReconcileCandidateRecord(record: {
 }
 
 /**
- * 从会话 entries 提取已送达完成通知的幂等键集合（送达痕迹判据的事实源）。
+ * 通知条目的世代索引：幂等键或 record id → 已在册世代集合。
+ *
+ * 世代 = 条目 payload 的 epoch 字段（BgNotifyRecord 透传，notifier notify 物化）；
+ * 缺席/0/非正数归世代 0——世代字段引入前的存量条目恒为世代 0 产物（epoch 是
+ * reopen 防撞维度，世代>0 的 record 经主路径构造的 payload 恒携带该字段）。
+ * 判据查询按世代命中（generationHit）：旧世代在册条目不阻断新世代查询（F1-13
+ * 跨世代误阻断修复的判定基元）。
+ */
+export type NotifyGenerationIndex = Map<string, Set<number>>;
+
+/** 条目世代读取（details.epoch 正数即世代；缺席/0/畸形归 0）。 */
+function generationOf(fields: Record<string, unknown>): number {
+  const epoch = fields.epoch;
+  return typeof epoch === "number" && epoch > 0 ? epoch : 0;
+}
+
+/** 世代索引命中判定（key 在册且世代集合含查询世代）。 */
+export function generationHit(index: NotifyGenerationIndex, key: string, epoch: number): boolean {
+  return index.get(key)?.has(epoch) ?? false;
+}
+
+/** 世代索引收键（单条 details 的一个键位——命中世代并入集合）。 */
+function indexGenerationKey(index: NotifyGenerationIndex, key: unknown, gen: number): void {
+  if (typeof key !== "string" || key === "") return;
+  const set = index.get(key);
+  if (set !== undefined) {
+    set.add(gen);
+    return;
+  }
+  index.set(key, new Set([gen]));
+}
+
+/**
+ * 从会话 entries 提取已送达完成通知的幂等键世代索引（送达痕迹判据的事实源——
+ * 键通道）。
  *
  * 判定通道两条，任一命中即收：details.notifyId（主路径 payload 携带，notifier notify
  * 物化）/ details.deliveryId（port 受理时统一写入 details 的送达凭据键——与
- * envelope.id 同值）。刻意不用 content 文本兜底、不收 details.id（record id）：
+ * envelope.id 同值）。世代 = details.epoch（payload 透传）。刻意不用 content 文本
+ * 兜底、不收 details.id（record id）：
  * content 内的 record id 文本会让轮次条目误命中终态键 → 漏补投。痕迹收集宁滥勿缺
  * （多收集 → 该键漏补投，方向保守——反向误判才产生双投）。
  *
  * 容错对齐 bash 域同款纪律：null/非对象元素跳过；只扫本域 customType 条目
  * （通知词表单源——与非本域条目互斥，调用方传 notifier NOTIFY_CUSTOM_TYPE）。
  */
-export function collectDeliveredNotifyIds(entries: readonly unknown[], notifyCustomType: string): Set<string> {
-  const ids = new Set<string>();
+export function collectDeliveredNotifyGenerations(
+  entries: readonly unknown[],
+  notifyCustomType: string,
+): NotifyGenerationIndex {
+  const index: NotifyGenerationIndex = new Map();
   for (const raw of entries) {
     if (!raw || typeof raw !== "object") continue;
     const entry = raw as Record<string, unknown>;
@@ -234,52 +298,92 @@ export function collectDeliveredNotifyIds(entries: readonly unknown[], notifyCus
     const details = entry.details;
     if (details === null || typeof details !== "object") continue;
     const fields = details as Record<string, unknown>;
-    const notifyId = fields.notifyId;
-    if (typeof notifyId === "string" && notifyId !== "") ids.add(notifyId);
-    const deliveryId = fields.deliveryId;
-    if (typeof deliveryId === "string" && deliveryId !== "") ids.add(deliveryId);
+    const gen = generationOf(fields);
+    indexGenerationKey(index, fields.notifyId, gen);
+    indexGenerationKey(index, fields.deliveryId, gen);
   }
-  return ids;
+  return index;
 }
 
 /**
- * 从会话 entries 提取「已有完成通知条目在册」的 record id 集合（轮终收尾形态的
+ * 从会话 entries 提取「已有完成通知条目在册」的 record id 世代索引（轮终收尾形态的
  * 送达痕迹通道，见文件头「送达痕迹判定分形态」段）。
  *
- * 背景：主路径对轮终收尾形态发的是轮次应答（幂等键 `id:round`），补投键是裸 id
- * 终态键——裸键痕迹/投递日志对「主路径已送达」结构性不命中，无本通道时每个已完成
- * 成员会在对账边沿被重复补投。轮次应答条目的 details 携带一等 record id（payload
- * 展开，notifier notify 物化），按 details.id 收集即完整痕迹。
+ * 背景：主路径对轮终收尾形态发的是轮次应答（幂等键 `id[:epoch]:round`），补投键是
+ * `id[:epoch]` 终态键——裸键痕迹/投递日志对「主路径已送达」结构性不命中，无本通道时
+ * 每个已完成成员会在对账边沿被重复补投。轮次应答条目的 details 携带一等 record id
+ * （payload 展开，notifier notify 物化）+ 世代（payload.epoch 透传），按 (details.id,
+ * details.epoch) 收集即按世代完整的痕迹——旧世代条目不阻断新世代查询（F1-13：reopen
+ * 过的 record 世代 0 旧条目在册时，按裸 id 无世代查询会误阻断新世代完成信号）。
  *
  * 只对轮终收尾形态消费（legacy closed 候选维持裸键判定——同 record 的历史轮次条目
  * 不得阻断 close 归档提示补投，现行语义不变）。收集宁滥勿缺（多收集 → 漏补投，
- * 方向保守；反向误判才产生双投）。容错纪律与 collectDeliveredNotifyIds 同款。
+ * 方向保守；反向误判才产生双投）。容错纪律与 collectDeliveredNotifyGenerations 同款。
  */
-export function collectDeliveredRecordIds(entries: readonly unknown[], notifyCustomType: string): Set<string> {
-  const ids = new Set<string>();
+export function collectDeliveredRecordGenerations(
+  entries: readonly unknown[],
+  notifyCustomType: string,
+): NotifyGenerationIndex {
+  const index: NotifyGenerationIndex = new Map();
   for (const raw of entries) {
     if (!raw || typeof raw !== "object") continue;
     const entry = raw as Record<string, unknown>;
     if (entry.customType !== notifyCustomType) continue;
     const details = entry.details;
     if (details === null || typeof details !== "object") continue;
-    const recordId = (details as Record<string, unknown>).id;
-    if (typeof recordId === "string" && recordId !== "") ids.add(recordId);
+    const fields = details as Record<string, unknown>;
+    indexGenerationKey(index, fields.id, generationOf(fields));
   }
-  return ids;
+  return index;
 }
 
 /**
- * 从会话 entries 提取投递日志已登记的幂等键集合（事实三的事实源）。
+ * 投递日志已登记幂等键的世代索引（事实三的事实源）。
  *
- * 宽容口径（与 bash 域经 port 解析单点的实现存在形态分叉，登记见文件头）：outbox /
- * ack 两类条目的 data.id 直读即收——受理成功必有 outbox 条目（受理前落盘，
- * append-only 契约），ack 并入是同次遍历的防御性冗余。v2 data.id 即幂等键；v1 存量
- * 的 data 形态可能解析不出（误判「无条目」→ 补投 → port 幂等预检吞并，无实害——
- * 方向对齐「漏补投优于重复投」保守取向）。坏行/畸形 data 跳过。
+ * outbox 条目的 payload 是调用方业务原样（delivery-port journal schema v2——notify
+ * 域 payload.details 即 BgNotifyRecord，epoch 字段透传），世代随条目可枚举；ack
+ * 终局条目结构上只有 id（无世代字段）——归 wildcard 兜底位。
  */
-export function collectJournaledDeliveryIds(entries: readonly unknown[]): Set<string> {
-  const ids = new Set<string>();
+export interface JournaledDeliveryGenerations {
+  /** outbox 条目的世代索引（payload.details.epoch 读取；details 缺席的非本域 payload 不入索引）。 */
+  readonly generations: NotifyGenerationIndex;
+  /**
+   * 世代不可判定的条目 id（ack 终局 / outbox 载荷缺 details 的形态）。判定仅在
+   * 该键完全无 outbox 世代记录时保守兜底命中（journaledGenerationHit）——outbox
+   * 世代记录在场时以世代为准，wildcard 一票阻断会让跨世代消歧失效（同键的旧世代
+   * ack 会重新遮住新世代查询，F1-13 修复失效）。
+   */
+  readonly wildcard: Set<string>;
+}
+
+/**
+ * 投递日志世代判定：outbox 世代记录在场以世代为准；键完全无 outbox 记录时
+ * wildcard（ack 终局 / 载荷缺 details）保守兜底——对齐现行「ack 并入是防御性
+ * 冗余」的宽容口径（误判有条目 → 补投被 port 幂等吞并，无实害——方向保守）。
+ */
+export function journaledGenerationHit(
+  journal: JournaledDeliveryGenerations,
+  key: string,
+  epoch: number,
+): boolean {
+  const gens = journal.generations.get(key);
+  if (gens !== undefined) return gens.has(epoch);
+  return journal.wildcard.has(key);
+}
+
+/**
+ * 从会话 entries 提取投递日志已登记幂等键的世代索引（事实三的事实源）。
+ *
+ * 宽容口径（与 bash 域经 port 解析单点的实现存在形态分叉，登记见文件头）：outbox
+ * 条目 data.id 直读 + payload.details.epoch 世代读取——受理成功必有 outbox 条目
+ * （受理前落盘，append-only 契约）。ack 并入 wildcard 兜底位（同次遍历的防御性
+ * 冗余，判定语义见 journaledGenerationHit）。v2 data.id 即幂等键；v1 存量的 data
+ * 形态可能解析不出（误判「无条目」→ 补投 → port 幂等预检吞并，无实害——方向
+ * 对齐「漏补投优于重复投」保守取向）。坏行/畸形 data 跳过。
+ */
+export function collectJournaledDeliveryGenerations(entries: readonly unknown[]): JournaledDeliveryGenerations {
+  const generations: NotifyGenerationIndex = new Map();
+  const wildcard = new Set<string>();
   for (const raw of entries) {
     if (!raw || typeof raw !== "object") continue;
     const entry = raw as Record<string, unknown>;
@@ -289,10 +393,29 @@ export function collectJournaledDeliveryIds(entries: readonly unknown[]): Set<st
     if (customType !== "delivery-port-outbox" && customType !== "delivery-port-ack") continue;
     const data = entry.data;
     if (data === null || typeof data !== "object") continue;
-    const id = (data as Record<string, unknown>).id;
-    if (typeof id === "string" && id !== "") ids.add(id);
+    const fields = data as Record<string, unknown>;
+    const id = fields.id;
+    if (typeof id !== "string" || id === "") continue;
+    if (customType === "delivery-port-ack") {
+      // ack 终局条目无世代字段（schema 只承载 id/outcome）——归兜底位。
+      wildcard.add(id);
+      continue;
+    }
+    // outbox：payload.details 携带调用方 payload 原样（notify 域 = BgNotifyRecord，
+    // epoch 透传）；details 缺席/畸形（非本域 payload 形态）→ 兜底位（保守对齐
+    // 现行「无条件收入即阻断」方向，不猜测世代）。
+    const payload = fields.payload;
+    const details =
+      payload !== null && typeof payload === "object"
+        ? (payload as Record<string, unknown>).details
+        : undefined;
+    if (details === null || typeof details !== "object") {
+      wildcard.add(id);
+      continue;
+    }
+    indexGenerationKey(generations, id, generationOf(details as Record<string, unknown>));
   }
-  return ids;
+  return { generations, wildcard };
 }
 
 /**
@@ -319,6 +442,46 @@ export function readSessionEntriesFromFile(sessionFile: string | undefined): unk
     }
   }
   return entries;
+}
+
+/**
+ * 单 record 世代提取（生产装配点 listReconcileRecords 的逐条映射用——ReconcileNotifyRecord.
+ * epoch 的唯一填充通道，F1-13 结论 A）。
+ *
+ * 提取序：内存源优先（store.getMutable 返回的 ExecutionRecord.epoch 直读——运行时
+ * 权威值，零 fs 成本）；磁盘重建源读 `.events` 事件流 fold（record-bound /
+ * record-round-started / record-reopened 三类帧携带 epoch，行解析与 fold 语义单源
+ * 复用 record-events 导出原语——RecordEventsWriteFace.foldOf 的同义装载组合）。
+ *
+ * 缺席语义（恒返回 undefined = 世代 0）：内存未命中且 recordsDir 缺席（纯内存测试
+ * 形态）/ 事件文件不可读（ENOENT / 权限）——对齐 readSessionEntriesFromFile 的宽容
+ * 读侧纪律，键退化为旧格式裸 id（透传前行为），不抛不阻塞对账。
+ */
+export function resolveReconcileRecordEpoch(
+  id: string,
+  deps: {
+    /** 内存源世代查询（store.getMutable(id)?.epoch 闭包——调用方装配）。 */
+    memoryEpochOf: (id: string) => number | undefined;
+    /** recordsDir 晚绑定取值（`.events` 文件目录，与 manifest 同源）。 */
+    recordsDir: () => string | undefined;
+  },
+): number | undefined {
+  const memory = deps.memoryEpochOf(id);
+  if (memory !== undefined) return memory;
+  const dir = deps.recordsDir();
+  if (dir === undefined) return undefined;
+  let content: string;
+  try {
+    content = fs.readFileSync(recordEventsPath(dir, id), "utf8");
+  } catch {
+    return undefined;
+  }
+  const events: RecordEvent[] = [];
+  for (const line of content.split("\n")) {
+    const event = parseRecordEventFileLine(line);
+    if (event !== undefined) events.push(event); // 空行/头行/坏行跳过（u0 行解析器内消化）
+  }
+  return foldRecordEvents(events).epoch;
 }
 
 /**
@@ -361,23 +524,30 @@ export async function runNotifyReconcileMaintenance(deps: {
     if (candidates.length === 0) return result;
 
     const entries = deps.source.readSessionEntries();
-    const delivered = collectDeliveredNotifyIds(entries, deps.notifyCustomType);
-    const deliveredRecordIds = collectDeliveredRecordIds(entries, deps.notifyCustomType);
-    const journaled = collectJournaledDeliveryIds(entries);
+    const delivered = collectDeliveredNotifyGenerations(entries, deps.notifyCustomType);
+    const deliveredRecordGens = collectDeliveredRecordGenerations(entries, deps.notifyCustomType);
+    const journaled = collectJournaledDeliveryGenerations(entries);
 
     for (const record of candidates) {
       // 补投幂等键 = 主路径同构造的终态键（round 置 undefined——轮次 id 不混入；
-      // epoch 缺省边界见 ReconcileNotifyRecord 注释）。buildNotifyId 单一导出，
-      // 与主路径 notify() 同一构造（RL8）。
-      const notifyId = buildNotifyId({ id: record.id, epoch: undefined, round: undefined });
+      // epoch 透传 = record 当前世代，`id[:epoch]` 形态与主路径 notifyClosed 对同
+      // record 的构造一致（RL8——F1-13 结论 A：裸 id 恒定构造在 reopen record 的
+      // 轮终收尾形态上与主路径漂移）。buildNotifyId 单一导出。
+      const recordEpoch = record.epoch ?? 0;
+      const notifyId = buildNotifyId({ id: record.id, epoch: record.epoch, round: undefined });
       // 送达痕迹分形态（见文件头）：legacy closed 形态查裸键；轮终收尾形态扩位到
-      // record 级（details.id——主路径轮次应答已送达即完成信号在册，阻断重复补投）。
+      // record 级（details.id + 世代匹配——主路径轮次应答已送达即完成信号在册，
+      // 阻断重复补投）。三通道全按世代命中：旧世代在册条目不阻断新世代查询
+      // （世代 0 轮次键 `id:round` 与世代 e 终态键 `id:epoch` 存在字符串同形，
+      // 只有条目侧世代字段能消歧）。
       const roundSettledIdle = record.status === "idle" && record.closedReason === undefined;
       const facts: ReconcileNotifyFacts = {
         isTerminal: isReconcileCandidateRecord(record),
         excludedByOrigin: isExcludedReconcileRecord(record),
-        delivered: delivered.has(notifyId) || (roundSettledIdle && deliveredRecordIds.has(record.id)),
-        journaled: journaled.has(notifyId),
+        delivered:
+          generationHit(delivered, notifyId, recordEpoch) ||
+          (roundSettledIdle && generationHit(deliveredRecordGens, record.id, recordEpoch)),
+        journaled: journaledGenerationHit(journaled, notifyId, recordEpoch),
       };
       if (!isReconcileNotifyCandidate(facts)) {
         if (facts.delivered) result.skippedDelivered.push(record.id);
@@ -388,8 +558,11 @@ export async function runNotifyReconcileMaintenance(deps: {
       // 完成信号——legacy closed 形态即主路径本要发的那条通知；轮终收尾形态为该轮
       // 完成信号的终态载体，outcome 经 deriveOutcome 单一权威派生，失败轮如实落
       // failed 文案）：round 置 undefined（与轮次通知键区分，终态不被判重吞）、轮数
-      // 改经 totalRounds 进文案；content 构造由主路径 notify() 内部完成（deriveOutcome
-      // 单一权威兜底——补投不自行派生第二套文案）。
+      // 改经 totalRounds 进文案、epoch 透传（payload.epoch 经 notifier notify 再次
+      // 构造 notifyId——与上方判据键同源，且送达条目 details 携带世代供后续对账
+      // 边沿按世代判定；缺失会使本轮补投条目退化为裸 id 旧格式，下一边沿判据查
+      // `id:epoch` 不命中 → 重复补投）；content 构造由主路径 notify() 内部完成
+      //（deriveOutcome 单一权威兜底——补投不自行派生第二套文案）。
       const payload: BgNotifyRecord = {
         id: record.id,
         status: "closed",
@@ -406,6 +579,7 @@ export async function runNotifyReconcileMaintenance(deps: {
         sessionFile: record.sessionFile,
         round: undefined,
         ...(record.round != null ? { totalRounds: record.round } : {}),
+        ...(record.epoch != null ? { epoch: record.epoch } : {}),
       };
       deps.submitNotify(payload);
       result.redelivered.push(record.id);

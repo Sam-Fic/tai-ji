@@ -38,8 +38,11 @@ import type { ModelConfigService } from "./assembly/model-config-service.ts";
 import type { AgentConfig, ModelInfo, ResolvedModel } from "./assembly/model-resolver.ts";
 import { type NotifyHost, type PiLike, createNotifyHost } from "./notify/notify-host.ts";
 import {
+  isExcludedReconcileRecord,
+  isReconcileCandidateRecord,
   NOTIFY_RECONCILE_SCAN_LIMIT,
   readSessionEntriesFromFile,
+  resolveReconcileRecordEpoch,
 } from "./notify/notify-reconcile.ts";
 // [H1 U2] notify 门迁 notifier.ts（Continuation 双闸共用），此处 re-export 保持既有
 // import 路径（测试消费方 `from "../subagent-service.ts"` 不变）。
@@ -210,7 +213,23 @@ export class SubagentService {
     // 头注与 notify-reconcile.ts 文件头。
     getReconcileSource: () => ({
       listReconcileRecords: () =>
-        this.queries.collectRecords(NOTIFY_RECONCILE_SCAN_LIMIT, "all", true),
+        this.queries.collectRecords(NOTIFY_RECONCILE_SCAN_LIMIT, "all", true).map((r) => {
+          // [F1-13 结论 A] 世代透传：补投幂等键 `id[:epoch]` 与主路径同构 +
+          // 送达痕迹/投递日志判据按世代匹配的判定输入。生产装配是 ReconcileNotifyRecord
+          // 的构建点（SubagentRecord 公开面不携带 epoch——notify 域自有投影类型承载）。
+          // 提取成本收窄：预检同款判据（notify-reconcile 导出的同一纯函数，非第二套
+          // 逻辑）先行——非候选 record（running 在途 / 排除位命中）零 fs 成本直落；
+          // 候选集内存源 getMutable 命中也零 fs，仅磁盘重建候选读一次 `.events` fold
+          // （对账低频边沿的毫秒级量级，与编排自身 readSessionEntries 同级）。
+          if (!isReconcileCandidateRecord(r) || isExcludedReconcileRecord(r)) return r;
+          return {
+            ...r,
+            epoch: resolveReconcileRecordEpoch(r.id, {
+              memoryEpochOf: (id) => this.store.getMutable(id)?.epoch,
+              recordsDir: () => this.recordsDir(),
+            }),
+          };
+        }),
       readSessionEntries: () => readSessionEntriesFromFile(this.mainSessionFile),
     }),
   });

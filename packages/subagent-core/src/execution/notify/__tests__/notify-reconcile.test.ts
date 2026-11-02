@@ -2,7 +2,9 @@
 //
 // 通知对账补投（completion-signal-delivery u3）行为锁：
 //   - RL8  notifyId 构造一致（补投路径与主路径对同 record 产出相同 id——构造漂移
-//          会导致补投用错键 → 判重失效双投）；
+//          会导致补投用错键 → 判重失效双投；F1-13 起 epoch 透传：reopen record 的
+//          补投键 = `id:epoch` 与主路径 notifyClosed 同构，且送达痕迹/投递日志判据
+//          按世代命中——旧世代在册条目不误阻断新世代完成信号）；
 //   - RL10 rejected 立即单次重提（deliver 计数恰 2 + fake timers 零句柄——与 bash
 //          域同款单次形态）；
 //   - RL9  warn 文案含 recovered by reconcile fallback（弱断言防文案回退）+ 按载荷
@@ -40,13 +42,15 @@ import {
 } from "../../../core/notify-ports.ts";
 import { createNotifier, buildNotifyId, type BgNotifyRecord } from "../notifier.ts";
 import {
-  collectDeliveredNotifyIds,
-  collectJournaledDeliveryIds,
+  collectDeliveredNotifyGenerations,
+  collectJournaledDeliveryGenerations,
   isExcludedReconcileRecord,
   isReconcileCandidateRecord,
   isReconcileNotifyCandidate,
   readSessionEntriesFromFile,
+  resolveReconcileRecordEpoch,
   runNotifyReconcileMaintenance,
+  type NotifyGenerationIndex,
   type NotifyReconcileSource,
   type ReconcileNotifyRecord,
 } from "../notify-reconcile.ts";
@@ -181,6 +185,153 @@ describe("RL8 notifyId 构造一致（补投路径与主路径共用 buildNotify
     expect(fake.deliverCalls[0]?.envelope.id).toBe("bg-rounds");
     expect(fake.deliverCalls[0]?.envelope.id).not.toContain(":4");
     notifier.dispose();
+  });
+});
+
+// ─── RL8 epoch>0：reopen record 的键构造与跨世代判定（F1-13） ──────────────────
+
+describe("RL8 epoch>0（F1-13：补投键 id[:epoch] 与主路径同构 + 跨世代条目不误阻断）", () => {
+  it("补投键与主路径 notifyClosed 同 record 构造一致（epoch=2 → id:2），payload 透传 epoch", async () => {
+    const fake = makeFakePort();
+    configureNotifyDomain({ getDeliveryPort: () => fake.handle });
+    const notifier = createNotifier({ sendMessage: () => {} });
+
+    // 主路径 notifyClosed 同款：closed 终态 + round 置 undefined + epoch 透传（基准键）。
+    notifier.notify({
+      id: "bg-epoch",
+      status: "closed",
+      closedReason: "gc",
+      agent: "explorer",
+      result: "done",
+      startedAt: 1,
+      endedAt: 2,
+      epoch: 2,
+    });
+    const mainPathId = fake.deliverCalls[0]?.envelope.id;
+    expect(mainPathId).toBe("bg-epoch:2");
+
+    // 补投路径：record 带 epoch=2 → 判据键与 payload 同构造。
+    const submitted: BgNotifyRecord[] = [];
+    await reconcile(makeSource([reconcileRecord("bg-epoch", { epoch: 2 })]), "resume", submitted);
+    expect(submitted[0]?.epoch).toBe(2); // payload 透传（送达条目 details 携带世代——后续边沿世代判定的事实源）
+    notifier.notify(submitted[0]!);
+    expect(fake.deliverCalls[1]?.envelope.id).toBe("bg-epoch:2");
+    notifier.dispose();
+  });
+
+  it("跨 epoch 旧条目不误阻断（F1-13 叠加场景复现）：世代 0 归档/补投裸 id 条目 + 世代 0 轮次条目在册 → 新世代完成信号补投仍触发", async () => {
+    const submitted: BgNotifyRecord[] = [];
+    // reopen 过的 record（epoch=2）轮终收尾 idle；会话在册的全是世代 0 旧条目：
+    //   - 世代 0 归档提示/补投条目（键与 details.id 均裸 id，epoch 字段缺席）；
+    //   - 世代 0 轮次应答（键 id:1——与世代 1 终态键 `bg-gen:1` 字符串同形的形态歧义
+    //     撞键源，只有条目侧世代字段能消歧）；
+    //   - 投递日志同名条目（outbox 裸 id / outbox `bg-gen:1` 携带世代 0 payload）。
+    const result = await reconcile(
+      makeSource(
+        [roundSettledRecord("bg-gen", { epoch: 2 })],
+        [
+          { customType: "subagent-bg-notify", content: "old close", details: { id: "bg-gen", notifyId: "bg-gen", deliveryId: "bg-gen" } },
+          { customType: "subagent-bg-notify", content: "old round", details: { id: "bg-gen", notifyId: "bg-gen:1", deliveryId: "bg-gen:1" } },
+          { customType: "delivery-port-outbox", data: { id: "bg-gen", payload: { details: { id: "bg-gen" } } } },
+          { customType: "delivery-port-outbox", data: { id: "bg-gen:1", payload: { details: { id: "bg-gen", epoch: 0 } } } },
+        ],
+      ),
+      "session_start",
+      submitted,
+    );
+    expect(result.candidates).toBe(1);
+    expect(result.redelivered).toEqual(["bg-gen"]);
+    expect(result.skippedDelivered).toEqual([]);
+    expect(result.skippedJournaled).toEqual([]);
+    expect(submitted).toHaveLength(1);
+  });
+
+  it("世代 0 轮次键与世代 1 终态键字符串同形（x:1 双义）不互相阻断——世代匹配消歧的最小用例", async () => {
+    const submitted: BgNotifyRecord[] = [];
+    const result = await reconcile(
+      makeSource(
+        [roundSettledRecord("bg-amb", { epoch: 1 })],
+        [
+          // 世代 0 轮次应答键 `bg-amb:1`（epoch 字段缺席 → 世代 0）——字符串上等于
+          // 世代 1 补投终态键 `bg-amb:1`。无世代判定时 delivered 精确查询会误阻断。
+          { customType: "subagent-bg-notify", content: "old round", details: { id: "bg-amb", notifyId: "bg-amb:1", deliveryId: "bg-amb:1" } },
+        ],
+      ),
+      "resume",
+      submitted,
+    );
+    expect(result.redelivered).toEqual(["bg-amb"]);
+    expect(submitted).toHaveLength(1);
+  });
+
+  it("本世代完成信号在册仍阻断：世代 2 轮次应答已送达（details.epoch=2）→ skippedDelivered", async () => {
+    const submitted: BgNotifyRecord[] = [];
+    const result = await reconcile(
+      makeSource(
+        [roundSettledRecord("bg-cur", { epoch: 2 })],
+        [
+          // 本世代轮次应答：details 携带 record id + 世代 2（payload.epoch 透传形态）。
+          { customType: "subagent-bg-notify", content: "round reply", details: { id: "bg-cur", notifyId: "bg-cur:2:3", deliveryId: "bg-cur:2:3", epoch: 2 } },
+        ],
+      ),
+      "agent_settled",
+      submitted,
+    );
+    expect(result.candidates).toBe(1);
+    expect(result.skippedDelivered).toEqual(["bg-cur"]);
+    expect(submitted).toHaveLength(0);
+  });
+
+  it("本世代补投受理后跨边沿幂等：outbox id:2 条目（payload.details.epoch=2）→ journaled 世代命中阻断", async () => {
+    const submitted: BgNotifyRecord[] = [];
+    const result = await reconcile(
+      makeSource(
+        [roundSettledRecord("bg-jr", { epoch: 2 })],
+        [
+          // 首轮补投受理条目（补投键 `bg-jr:2`，payload 携带 epoch=2）。
+          { customType: "delivery-port-outbox", data: { id: "bg-jr:2", payload: { details: { id: "bg-jr", epoch: 2 } } } },
+        ],
+      ),
+      "agent_settled",
+      submitted,
+    );
+    expect(result.skippedJournaled).toEqual(["bg-jr"]);
+    expect(submitted).toHaveLength(0);
+  });
+
+  it("resolveReconcileRecordEpoch：内存源优先；磁盘源读 .events fold（reopened 帧世代）；文件缺席/目录缺席归 undefined", () => {
+    const dir = fs.mkdtempSync(join(tmpdir(), "taiji-notify-epoch-"));
+    try {
+      const id = "sa-epoch-file";
+      // 事件文件：头行 + created + round-idle（世代 0 段）+ reopened（epoch=2）+ 新轮 idle。
+      const lines = [
+        JSON.stringify({ type: "record-events", id }),
+        JSON.stringify({ type: "record-created", seq: 1, ts: 1, id, agent: "a", task: "t", slug: "s", origin: "tool", rootSessionId: "r", depth: 0, mode: "chat", startedAt: 1 }),
+        JSON.stringify({ type: "record-round-idle", seq: 2, ts: 2, round: 1, turns: 1, totalTokens: 0 }),
+        JSON.stringify({ type: "record-reopened", seq: 3, ts: 3, epoch: 2, round: 0 }),
+        JSON.stringify({ type: "record-round-idle", seq: 4, ts: 4, round: 1, turns: 1, totalTokens: 0 }),
+      ];
+      fs.writeFileSync(join(dir, `${id}.events`), `${lines.join("\n")}\n`, "utf-8");
+
+      const viaFile = resolveReconcileRecordEpoch(id, {
+        memoryEpochOf: () => undefined,
+        recordsDir: () => dir,
+      });
+      expect(viaFile).toBe(2); // fold 世代 = 最后携带世代帧（reopened）的 epoch
+
+      // 内存源优先（磁盘文件在场也不读——直返内存值）。
+      const viaMemory = resolveReconcileRecordEpoch(id, {
+        memoryEpochOf: () => 5,
+        recordsDir: () => dir,
+      });
+      expect(viaMemory).toBe(5);
+
+      // 文件缺席（ENOENT）/ 目录缺席 → undefined（世代 0 语义，键退化旧格式）。
+      expect(resolveReconcileRecordEpoch("sa-missing", { memoryEpochOf: () => undefined, recordsDir: () => dir })).toBeUndefined();
+      expect(resolveReconcileRecordEpoch(id, { memoryEpochOf: () => undefined, recordsDir: () => undefined })).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    }
   });
 });
 
@@ -692,28 +843,33 @@ describe("补投 payload 与受理形态（D6①：补投的是主路径本要�
     notifier.dispose();
   });
 
-  it("送达痕迹双通道：details.notifyId 与 details.deliveryId 任一命中即判已送达", () => {
-    const ids = collectDeliveredNotifyIds(
+  it("送达痕迹双通道：details.notifyId 与 details.deliveryId 任一命中即收（世代索引，epoch 缺席归 0）", () => {
+    const index = collectDeliveredNotifyGenerations(
       [
         { customType: "subagent-bg-notify", content: "a", details: { notifyId: "k-notify" } },
-        { customType: "subagent-bg-notify", content: "b", details: { deliveryId: "k-delivery" } },
+        { customType: "subagent-bg-notify", content: "b", details: { deliveryId: "k-delivery", epoch: 3 } },
         { customType: "other-type", details: { notifyId: "k-other" } }, // 非本域条目不收
         { customType: "subagent-bg-notify", content: "c" }, // 无 details 跳过
       ],
       "subagent-bg-notify",
     );
-    expect(ids).toEqual(new Set(["k-notify", "k-delivery"]));
+    expect(index.get("k-notify")).toEqual(new Set([0]));
+    expect(index.get("k-delivery")).toEqual(new Set([3]));
+    expect(index.has("k-other")).toBe(false);
   });
 
-  it("投递日志宽容口径：outbox / ack 的 data.id 直读即收；畸形跳过", () => {
-    const ids = collectJournaledDeliveryIds([
-      { customType: "delivery-port-outbox", data: { id: "j-outbox" } },
+  it("投递日志宽容口径：outbox 按世代收（payload.details.epoch）；ack / 载荷缺 details 归兜底位；畸形跳过", () => {
+    const journal = collectJournaledDeliveryGenerations([
+      { customType: "delivery-port-outbox", data: { id: "j-outbox", payload: { details: { epoch: 2 } } } },
+      { customType: "delivery-port-outbox", data: { id: "j-legacy" } }, // 载荷缺 details → 兜底位
       { customType: "delivery-port-ack", data: { id: "j-ack" } },
       { customType: "delivery-port-outbox", data: null },
       { customType: "delivery-port-outbox" },
       { customType: "delivery-port-outbox", data: { id: 42 } },
     ]);
-    expect(ids).toEqual(new Set(["j-outbox", "j-ack"]));
+    expect(journal.generations.get("j-outbox")).toEqual(new Set([2]));
+    expect(journal.generations.has("j-legacy")).toBe(false);
+    expect(journal.wildcard).toEqual(new Set(["j-legacy", "j-ack"]));
   });
 });
 
