@@ -162,6 +162,10 @@
       "purpose": "Coding Plan 额度查询 — 共享类型定义。"
     },
     {
+      "file": "readiness.ts",
+      "purpose": "readiness 域跨进程契约（startup-readiness-and-current-state 设计 §7.1：RemoteCapability 枚举 + ReadinessSnapshot 封闭形状，协议 SSOT 进 shared；core 登记表 requires 与 runtime 广播/RPC 共同消费）。"
+    },
+    {
       "file": "recommended-extensions.json",
       "purpose": "数据清单（机器可读 SSOT）"
     },

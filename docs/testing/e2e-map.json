@@ -4504,7 +4504,7 @@
       "trigger": "on-diff",
       "authority": "docs/TEST-STRATEGY.md#subagent-轮收条事实化与债权结清",
       "serial": false,
-      "run": "cd packages/subagent-core && pnpm vitest run src/execution/__tests__/notifier-round-facts.test.ts",
+      "run": "cd packages/subagent-core && pnpm vitest run src/execution/__tests__/notifier.test.ts",
       "owner": "packages/subagent-core"
     },
     {
@@ -4795,7 +4795,7 @@
       ],
       "trigger": "on-diff",
       "serial": false,
-      "run": "cd packages/runtime && npx vitest run test/event-adapter.test.ts",
+      "run": "cd packages/runtime && npx vitest run test/domains-bundle.test.ts",
       "owner": "packages/runtime",
       "authority": "docs/TEST-STRATEGY.md#2-测试分层",
       "note": "round5-g 收尾波合并产物（event-adapter-new-events / -extension / -message-stream / -toolresult 四源节，来源分节注释见产物头），与 src/infra/pi/__tests__/event-adapter.test.ts（C07 产物，协议翻译域）为同被测对象的两个分层产物。防漏门禁对新增文件要求 rule 覆盖而登记。"
@@ -4815,7 +4815,7 @@
       ],
       "trigger": "on-diff",
       "serial": false,
-      "run": "cd packages/runtime && npx vitest run test/plugin-service.test.ts",
+      "run": "cd packages/runtime && npx vitest run test/plugin-service-bundle.test.ts",
       "owner": "packages/runtime",
       "authority": "docs/TEST-STRATEGY.md#2-测试分层",
       "note": "round5-g 收尾波合并产物（plugin-commands-views / plugin-modal-headeraction-contract / plugin-esm-loader-argv 三源节，来源分节注释见产物头）。防漏门禁对新增文件要求 rule 覆盖而登记。"
