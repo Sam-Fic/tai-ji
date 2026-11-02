@@ -5,7 +5,9 @@
 //   ①使用者（宿主 widget 区视角）——树形状：meta head（title/status/progress/icon/badge）
 //     + tab-bar 双段（进行中/已结束）行集；成员进度 N/M 拼进行 label（list-tree 无进度
 //     条原语——原宿主托盘 workflow 行的进度条信息经 label 承载，不静默丢弃）；interrupted
-//     落已结束段（无活体暂停态不算进行中，原宿主 [D2] 裁决同口径）且行无圆点 pause 图标。
+//     落已结束段（无活体暂停态不算进行中，原宿主 [D2] 裁决同口径）且行无圆点 pause 图标；
+//     行 action.hostAction 声明（M2 入口复活：overlay → ui.workflow + params.runId，逐行取
+//     该行 run.runId——workflow 可视化的第一用户入口，G3 零入口问题的单测承载）；
 //   ②构建者——空 runs 清屏（undefined）/ 推送器 attach 初始推送 + notifyRunsChanged
 //     变更驱动重推（微任务合并）+ detach 停推；readRuns 抛错按清屏投影不反噬调用方。
 //   ③观察者——纯函数入参出参；推送失败 warn 留痕后继续（绝对投影，下一事件自愈）。
@@ -43,7 +45,7 @@ import {
   runSummary,
 } from "@zhushanwen/subagent-core";
 import type { DoneReason } from "@zhushanwen/subagent-core";
-import type { GuiComponent } from "@zhushanwen/extension-protocol";
+import type { GuiComponent, HostContainerAction, TreeItem } from "@zhushanwen/extension-protocol";
 import {
   WORKFLOW_TRAY_VIEW_ID,
   buildWorkflowTrayWidget,
@@ -105,13 +107,20 @@ function makeRun(opts: {
   return run;
 }
 
-/** tab-bar 树的段 items 提取（sections[i][0].items——段 = 子树数组，单组件子树取首项）。 */
-function segmentItems(component: GuiComponent, index: number): Array<Record<string, unknown>> {
+/** tab-bar 树的段 items 提取（M3 起段 = 逐行「list-tree 行 + action-bar 操作」对，
+ *  行集展平段内全部 list-tree——scheduler-manager 同款逐行形态）。 */
+function segmentItems(component: GuiComponent, index: number): TreeItem[] {
   expect(component.type).toBe("tab-bar");
   const sections = (component.props as { sections?: GuiComponent[][] }).sections ?? [];
-  const seg = sections[index]?.[0];
-  expect(seg?.type).toBe("list-tree");
-  return (seg.props as { items: Array<Record<string, unknown>> }).items;
+  const seg = sections[index] ?? [];
+  return seg
+    .filter((c) => c.type === "list-tree")
+    .flatMap((c) => (c.props as { items: TreeItem[] }).items);
+}
+
+/** 行 action 的 hostAction 提取（行不可点 = action 缺省，断言处显式判 undefined）。 */
+function rowHostAction(item: TreeItem): HostContainerAction | undefined {
+  return item.action?.hostAction;
 }
 
 beforeEach(() => {
@@ -184,6 +193,30 @@ describe("buildWorkflowTrayWidget —— 树构造（使用者视角）", () => 
 
   it("空 runs → undefined（清屏语义；调用方推 setWidgetDual(…, undefined)）", () => {
     expect(buildWorkflowTrayWidget([])).toBeUndefined();
+  });
+
+  it("行 action.hostAction：overlay → ui.workflow + params.runId = 该行 run.runId（M2 入口复活）", () => {
+    const widget = buildWorkflowTrayWidget([
+      makeRun({ runId: "wf-run-live", scriptName: "build", slug: "ci", status: "running", calls: [{ settled: false }] }),
+      makeRun({ runId: "wf-run-done", scriptName: "ship", slug: "v2", status: "done", reason: "completed" }),
+    ]);
+    // 两段行同权可点（进行中与已结束都能打开该 run 的可视化浮层）；runId 逐行取该行 run.runId
+    expect(rowHostAction(segmentItems(widget!.gui.component, 0)[0])).toEqual({
+      kind: "overlay",
+      tabId: "ui.workflow",
+      params: { runId: "wf-run-live" },
+    });
+    expect(rowHostAction(segmentItems(widget!.gui.component, 1)[0])).toEqual({
+      kind: "overlay",
+      tabId: "ui.workflow",
+      params: { runId: "wf-run-done" },
+    });
+    // 行 action 只声明导航、不声明 commandId（导航不经命令链，与 action-bar item 的两条路径互斥）
+    for (const segment of [0, 1]) {
+      for (const item of segmentItems(widget!.gui.component, segment)) {
+        expect(item.action?.commandId).toBeUndefined();
+      }
+    }
   });
 
   it("text 臂 = TUI 原生文本行（[status] 前缀 + 行 label）", () => {

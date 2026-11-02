@@ -28,7 +28,9 @@ import {
   setWidgetDual,
   type DualWidgetContent,
   type GuiComponent,
+  type GuiComponentProps,
   type GuiContext,
+  type HostContainerAction,
 } from "@zhushanwen/extension-protocol";
 import { runSummary } from "@zhushanwen/subagent-core";
 import type { WorkflowRun } from "@zhushanwen/subagent-core";
@@ -37,6 +39,26 @@ import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
 
 /** 托盘 widget 的 viewId（宿主 widget 区分区键；todo/goal/subagent 同形短名）。 */
 export const WORKFLOW_TRAY_VIEW_ID = "workflow";
+
+/**
+ * 行点击导航目标（M2 入口复活，tray-panel-interact 设计 §3.3 D1/D2 消费侧 + AX2）：
+ * workflow 可视化浮层内容的全局 id（§6.12 内置保留命名空间 'ui' + 内容名）。浮层内置
+ * 内容不经容器位声明通道（§6.8），宿主 lookup 侧按 OVERLAY_REGISTRY 投影补全局 id 空间
+ * 解析（id = 'ui.<kind>'）——插件声明侧只给完整全局 id，不感知宿主内部特判。
+ */
+const WORKFLOW_OVERLAY_CONTENT_ID = "ui.workflow";
+
+/**
+ * 宿主薄命令 id（M3 生命周期操作，设计 §3.3 D4）：action-bar commandId 命中后经宿主
+ * commandExecutor 分叉直转 session.workflowAction RPC（不经 plugin.executeCommand——pi
+ * 扩展命令不在 provider 型插件命令表，设计 AS4 分叉）。命令表与执行体在宿主侧
+ * （renderer host-thin-commands.ts），插件侧只声明 id 与 args，不感知执行形态。
+ */
+const WORKFLOW_ABORT_COMMAND_ID = "taiji.workflowAbort";
+const WORKFLOW_RESUME_COMMAND_ID = "taiji.workflowResume";
+
+/** action-bar item 声明形状（协议 action-bar items 元素；字段契约见协议 types.ts）。 */
+type ActionBarItem = GuiComponentProps["action-bar"]["items"][number];
 
 /** 单次推送的 run 行上限（托盘是概览面不是全量列表；序 = runs Map 插入序截断）。 */
 const TRAY_RUN_LIMIT = 50;
@@ -91,21 +113,87 @@ function rowLabelOf(run: WorkflowRun): string {
     .join(" · ");
 }
 
-/** 段清单（tab-bar sections 的段 = 子树数组）：两段共用同一行构造（仅过滤条件不同）。 */
+/**
+ * 行内操作按钮声明（M3 生命周期操作，设计 §3.3 D4/D5 消费侧 + AX4/AX5）：running 行
+ * 中止（danger 档 + confirm 两段式——abort 落 terminal 终局态不可恢复，D5 判定表定
+ * 其必须带 confirm，恢复手段 = 从头重跑新 run）；interrupted 行续跑（断点恢复操作
+ * 本体，无破坏面故无 confirm）。终局行（done/failed）无行内操作——workflow 运行中
+ * 形态为一次性（abort-only，无 pause/resume；重派发是 subagent start 语义，workflow
+ * 无同构通道，AX5）。
+ *
+ * 按钮文案用字面量（i18n 接线归 u-polish-shell 的 readUiLocale 波次——与本节两个 tab
+ * 标签「进行中/已结束」硬编码同形态，M4 随全文案一起随 UI 语言）。
+ */
+function rowActionsOf(run: WorkflowRun): ActionBarItem[] {
+  const summary = runSummary(run);
+  if (summary.status === "running") {
+    return [
+      {
+        id: `abort-${run.runId}`,
+        label: "中止",
+        kind: "danger",
+        commandId: WORKFLOW_ABORT_COMMAND_ID,
+        args: { runId: run.runId },
+        confirm: "确认中止？",
+      },
+    ];
+  }
+  if (summary.status === "interrupted") {
+    return [
+      {
+        id: `resume-${run.runId}`,
+        label: "续跑",
+        commandId: WORKFLOW_RESUME_COMMAND_ID,
+        args: { runId: run.runId },
+      },
+    ];
+  }
+  return [];
+}
+
+/**
+ * 段清单（tab-bar sections 的段 = 子树数组）：逐行「list-tree 行 + action-bar 操作」对
+ * （scheduler-manager 浮层面板同款形态——仓内 action-bar 唯一消费先例，设计 AS3）。
+ * 行集从「一段一棵 list-tree」改为逐行一棵：按钮 args 逐行承载该行 runId，段级共享
+ * action-bar 表达不了行级参数；无操作按钮的行只推 list-tree（段内零按钮时不出现空
+ * action-bar）。
+ *
+ * 行 action（M2 入口复活）：声明 hostAction 后行渲染为可点原生 button，点击经宿主容器
+ * 导航执行器打开全屏浮层并用 params.runId 定位该 run（overlay.content 族登记键；core
+ * openOverlayContent 命中 workflow 且带 runId 时走参数化通道，经 drawer 域 openWorkflow
+ * → bindWorkflowOverlayOpener 注入桥调 openWorkflowVizOverlay 同款编排）。这是 workflow
+ * 可视化的第一用户入口（G3：整套可视化此前零入口）。导航是安全操作，不随 pin 态门控
+ * （D6 只门控行内操作按钮）——两段（进行中/已结束）行同权可点。
+ */
 function traySegment(runs: readonly WorkflowRun[]): GuiComponent[] {
-  return [
-    guiComponent("list-tree", {
-      items: runs.map((run) => {
-        const presentation = rowPresentation(runSummary(run));
-        return {
-          label: rowLabelOf(run),
-          status: presentation.status,
-          icon: presentation.icon,
-          depth: 0,
-        };
+  const children: GuiComponent[] = [];
+  for (const run of runs) {
+    const presentation = rowPresentation(runSummary(run));
+    children.push(
+      guiComponent("list-tree", {
+        items: [
+          {
+            label: rowLabelOf(run),
+            status: presentation.status,
+            icon: presentation.icon,
+            depth: 0,
+            action: {
+              hostAction: {
+                kind: "overlay",
+                tabId: WORKFLOW_OVERLAY_CONTENT_ID,
+                params: { runId: run.runId },
+              } satisfies HostContainerAction,
+            },
+          },
+        ],
       }),
-    }),
-  ];
+    );
+    const actions = rowActionsOf(run);
+    if (actions.length > 0) {
+      children.push(guiComponent("action-bar", { items: actions }));
+    }
+  }
+  return children;
 }
 
 /** TUI 文本臂（pi 原生 widget 行——非 rpc/TUI 模式经 setWidgetDual 的 text 分支呈现）。 */
@@ -128,7 +216,9 @@ type MetaStatus = NonNullable<import("@zhushanwen/extension-protocol").WidgetMet
  *   'workflow'（宿主 widget icon registry 在册——U10 随件迁移登记）。
  * - gui 臂内容 = tab-bar 双段互斥覆盖全量：进行中段 = status==="running" 行；
  *   已结束段 = 其余（done / interrupted——interrupted 计已结束与原宿主 [D2] 显式
- *   裁决同口径：interrupted 是无活体暂停态不算进行中）。
+ *   裁决同口径：interrupted 是无活体暂停态不算进行中）。段内逐行「list-tree 行 +
+ *   action-bar 操作」对：running 行带中止按钮、interrupted 行带续跑按钮，commandId
+ *   指向宿主薄命令（M3，见 rowActionsOf）。
  * - text 臂 = TUI 原生文本行。
  * - 空 runs → undefined（调用方按清屏语义推 setWidgetDual(…, undefined)——与 todo /
  *   subagent 空列表清屏同款，宿主 widget 区「有 entry 即渲染、清屏即消失」）。
