@@ -107,7 +107,7 @@ import {
 import {
 	collectJournaledDeliveryIds,
 	isReconcileNotifyCandidate,
-	readSessionFileEntries,
+	resolveReconcileFactEntries,
 	type ReconcileNotifyFacts,
 } from "@zhushanwen/pi-delivery-port";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
@@ -284,22 +284,9 @@ export interface NotifyReconcileResult { // oe-exempt:20261101:framework:跨包�
  * 判据全部事实源读它的落盘条目（磁盘事实，机制见文件头「判据事实源磁盘化」段）；
  * undefined（no-persist 形态）退化内存 entries（现状行为）+ warn。
  */
-/**
- * 判据事实源解析（复杂度拆出）：五源判据事实全部从 session JSONL 落盘条目产出；
- * sessionFile 缺席（no-persist 形态，磁盘事实结构性不存在）退化内存 entries——
- * 该形态 _persist no-op 恒成功、无幽灵态，内存账即完整事实。
- */
-function resolveFactEntries(deps: {
-	reason: string;
-	entries: readonly unknown[];
-	sessionFile?: string;
-}): readonly unknown[] {
-	if (deps.sessionFile !== undefined) return readSessionFileEntries(deps.sessionFile);
-	logger.warn("managed notify reconcile journal facts fell back to in-memory entries: session file unavailable (no-persist session?); ghost in-memory entries would misjudge delivered/journaled facts", {
-		detail: { reason: deps.reason },
-	});
-	return deps.entries;
-}
+// resolveFactEntries 已收编 @zhushanwen/pi-delivery-port 单源（session-journal-read.ts
+// resolveReconcileFactEntries，barrel import）——no-persist 退化内存账 + warn 的域侧
+// 形态两域一致，随判据链收编退役本地副本；domain 标签 = "managed notify reconcile"。
 
 /**
  * 预检过滤（复杂度拆出——四项规则①-④）：全量落盘条目现算（scanPendingEntries 单点
@@ -397,7 +384,12 @@ export function runNotifyReconcileMaintenance(deps: {
 		const memScan = scanPendingEntries(deps.entries);
 		if (memScan.registerEntries.length === 0) return result;
 
-		const factEntries = resolveFactEntries(deps);
+		const factEntries = resolveReconcileFactEntries({
+			domain: "managed notify reconcile",
+			reason: deps.reason,
+			entries: deps.entries,
+			sessionFile: deps.sessionFile,
+		});
 		// 四项规则①：全量落盘条目现算（scanPendingEntries 单点——registerEntries
 		// 含已注销条目，非 active 差集视图）；四源辅助事实同盘单次遍历全产
 		const scan = scanPendingEntries(factEntries);

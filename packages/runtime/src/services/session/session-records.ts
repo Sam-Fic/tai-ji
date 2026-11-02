@@ -563,12 +563,9 @@ export class SessionRecords {
       // 变短错位旧游标；同 id 复活整文件替换同族）。持旧游标续读会从错位字节流起读
       // ——按会话 id 失效对应派生缓存与游标，下轮查询全量重建（与「导入落地失效」
       // 同族处置；复验防线 = pi 大版本 bump 复验门禁 check-pi-semantics）。
-      const existing = this.recordEntriesCaches.get(sessionId)
-      if (existing !== undefined) {
-        existing.projection?.dispose()
-        existing.projection = null
-        existing.projectionEntryOffset = null
-      }
+      // 失效实现复用 invalidateProjectionAfterImport（同一失效动作单点——注册边界
+      // 布防与导入落地布防是同一动作的两个触发场景）。
+      this.invalidateProjectionAfterImport(sessionId)
       // W18：注册 record entry 派生缓存（不播种——首个 entry_appended 失效时全量拉取；
       // 激活后 renderer 的初始列表由 getSubagents/getWorkflows RPC 磁盘扫描承接，同 scan 函数）。
       this.ensureRecordEntriesCache(sessionId)

@@ -579,12 +579,19 @@ export class MessageDispatcher {
     reasonHint: string | undefined,
   ): Promise<void> {
     const upgradeSource: ForceQuitSource = source === 'user' ? 'abort_timeout' : PROBE_STALL_AUTO_QUIT
-    const [outcomeReason, exitReason] =
-      source === 'user'
-        ? [ABORT_TIMEOUT_OUTCOME_REASON, ABORT_TIMEOUT_EXIT_REASON]
-        : source === 'agent'
-          ? [AGENT_ABORT_TIMEOUT_OUTCOME_REASON, AGENT_ABORT_TIMEOUT_EXIT_REASON]
-          : [STALL_OUTCOME_REASON, STALL_EXIT_REASON]
+    // 终态文案按发起方分型（if/else 链——三组分型文案常量已模块级具名，链式选择直读）。
+    let outcomeReason: string
+    let exitReason: string
+    if (source === 'user') {
+      outcomeReason = ABORT_TIMEOUT_OUTCOME_REASON
+      exitReason = ABORT_TIMEOUT_EXIT_REASON
+    } else if (source === 'agent') {
+      outcomeReason = AGENT_ABORT_TIMEOUT_OUTCOME_REASON
+      exitReason = AGENT_ABORT_TIMEOUT_EXIT_REASON
+    } else {
+      outcomeReason = STALL_OUTCOME_REASON
+      exitReason = STALL_EXIT_REASON
+    }
     console.warn(
       `[message-dispatcher] abort hung past upgrade window (${ABORT_UPGRADE_WINDOW_MS}ms, source=${source}) — escalating to forceQuitSession (source=${upgradeSource}), sid=${sessionId}`,
     )

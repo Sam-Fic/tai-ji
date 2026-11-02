@@ -299,18 +299,21 @@ interface ForegroundWrapPlan {
 	idleSec: number;
 }
 
+/** 三文件路径组（包装格协议载体——agent 侧 A5 格与 user_bash 格共享，见 prepareWrapFiles）。 */
+export interface WrapFiles {
+	taskId: string;
+	cmdShPath: string;
+	logFile: string;
+	pidfilePath: string;
+}
+
 /**
- * A5 改写：命令原文写 cmd.sh（零转义、零长度限制——bash 直接解释文件，无注入面）
- * 并构造包装命令串交官方 execute。taskId 预生成（generateTaskId 同款形态）：--task-id
- * 传包装脚本，--log/--pidfile 路径与（可能的）登记条目共用同一 id——登记发生在收尾，
- * 包装脚本的标记行在退出时打印，id 必须事前已定（B2 正常完成时 id 弃用，无冲突）。
+ * 三文件构造（协议单点，两格共用）：taskId 预生成（--task-id 传包装脚本，--log/--pidfile
+ * 路径与（可能的）登记条目共用同一 id——登记发生在收尾，包装脚本的标记行在退出时打印，
+ * id 必须事前已定）；命令原文写 cmd.sh（零转义、零长度限制——bash 直接解释文件，无注入面）。
+ * 「taskId 三文件同目录同命名」是 wrapper 参数与登记条目的共享契约，双份实现 = 漂移温床。
  */
-function prepareForegroundWrap(
-	command: string,
-	dataDir: string,
-	sessionId: string,
-	idleSec: number,
-): ForegroundWrapPlan {
+export function prepareWrapFiles(command: string, dataDir: string, sessionId: string): WrapFiles {
 	const taskId = generateTaskId();
 	const tasksDir = dirname(getRegistryPath(dataDir, sessionId));
 	const cmdShPath = join(tasksDir, `${taskId}.sh`);
@@ -318,20 +321,33 @@ function prepareForegroundWrap(
 	const pidfilePath = join(tasksDir, `${taskId}.pid`);
 	mkdirSync(tasksDir, { recursive: true });
 	writeFileSync(cmdShPath, command.endsWith("\n") ? command : `${command}\n`, "utf8");
+	return { taskId, cmdShPath, logFile, pidfilePath };
+}
+
+/**
+ * A5 改写：命令原文写 cmd.sh（prepareWrapFiles 单点）并构造包装命令串交官方 execute。
+ */
+function prepareForegroundWrap(
+	command: string,
+	dataDir: string,
+	sessionId: string,
+	idleSec: number,
+): ForegroundWrapPlan {
+	const files = prepareWrapFiles(command, dataDir, sessionId);
 	const wrappedCommand = [
 		shQuote(resolveFgWrapScriptPath()),
 		"--idle",
 		String(idleSec),
 		"--task-id",
-		taskId,
+		files.taskId,
 		"--log",
-		shQuote(logFile),
+		shQuote(files.logFile),
 		"--pidfile",
-		shQuote(pidfilePath),
+		shQuote(files.pidfilePath),
 		"--",
-		shQuote(cmdShPath),
+		shQuote(files.cmdShPath),
 	].join(" ");
-	return { taskId, command, cmdShPath, logFile, pidfilePath, wrappedCommand, idleSec };
+	return { ...files, command, wrappedCommand, idleSec };
 }
 
 /**
@@ -431,13 +447,16 @@ export function registerConvertedTask(opts: {
 	return task;
 }
 
-/** 三文件清理（cmd.sh/pidfile/日志，B2 无登记条目则文件无消费方，输出已经官方管道完整透传；防「调用频次 × 会话寿命」的单调累积）。对中途异常尽力而为（rmSync force，缺哪个删哪个）。 */
-function cleanupWrapFiles(plan: ForegroundWrapPlan): void {
-	for (const path of [plan.cmdShPath, plan.pidfilePath, plan.logFile]) {
+/**
+ * 三文件清理（cmd.sh/pidfile/日志，B2 无登记条目则文件无消费方，输出已经官方管道完整透传；防「调用频次 × 会话寿命」的单调累积）。对中途异常尽力而为（rmSync force，缺哪个删哪个）。
+ * 导出供 user-bash-interceptor 复用（两格同一三文件协议、同一清理动作单点）。
+ */
+export function cleanupWrapFiles(files: Pick<WrapFiles, "cmdShPath" | "pidfilePath" | "logFile">): void {
+	for (const path of [files.cmdShPath, files.pidfilePath, files.logFile]) {
 		try {
 			rmSync(path, { force: true });
 		} catch (err) {
-			logger.debug("foreground-wrap cleanup failed (best-effort)", {
+			logger.debug("fg-wrap cleanup failed (best-effort)", {
 				detail: { path, err: toErrorMessage(err) },
 			});
 		}

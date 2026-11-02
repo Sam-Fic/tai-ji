@@ -520,6 +520,33 @@ export function setupWorkflowDomain(
   //  §3.1/D1/D2 原样搬移）。此处仅接线：lastSessionId 先行赋值（时序与原 handler
   //  开头一致）+ 装配结果写入 per-session sessionState。
   // ════════════════════════════════════════════════════════════
+  // 三入口（session_start / agent_settled / resume）对账 deps 的单一构造（重复收敛）：
+  // reason 与 pi 是入口侧差异（resume 经 resolveCurrentPi 现读——D3 纪律），其余五项
+  // 对三入口完全一致；lifecycle 健康门（storeHealthy 早退）由调用方先判。
+  function reconcileDeps(
+    reason: string,
+    reconcilePi: ExtensionAPI,
+    lifecycle: SessionLifecycleResult,
+    reconcileCtx: {
+      sessionManager: { getEntries(): readonly unknown[]; getSessionFile(): string | undefined };
+    },
+  ) {
+    return {
+      reason,
+      pi: reconcilePi,
+      // 补投判据事实源磁盘化（A1 产品缺陷修复，域侧同构落点）：getSessionFile() 传
+      // session JSONL 路径，manifest/痕迹/日志判据读落盘条目而非内存账——pi
+      // _appendEntry persist 失败无回滚的幽灵内存 entry 曾使 journaled 误真、补投
+      // 静默失效（机制见 workflow-notify-reconcile.ts 文件头「判据事实源磁盘化」段）；
+      // no-persist 形态 getSessionFile() 返回 undefined，对账侧退化内存账（现状行为）。
+      entries: reconcileCtx.sessionManager.getEntries(),
+      sessionFile: reconcileCtx.sessionManager.getSessionFile(),
+      notifiedRunIds,
+      settledRecordOf: (runId: string) => lifecycle.store.settledRecordOf(runId),
+      loadRuns: () => lifecycle.store.loadAll(),
+    };
+  }
+
   pi.on("session_start", async (event: SessionStartEvent, ctx: ExtensionContext) => {
     // 装配链异常不向 pi 事件分发逃逸（0.84.4 的 extension handler 未捕获 rejection
     // 直接炸进程——E1 同机制；1.0.0 起 runner.emit 以 try/catch 吸收转 emitError 上报，
@@ -562,21 +589,7 @@ export function setupWorkflowDomain(
       // store 健康门（storeHealthy=false = 装配期 loadAll 已 fail-fast）：判据源
       // record 流不可信，对账不跑（状态留待恢复链收编）。
       if (result.storeHealthy) {
-        await runNotifyReconcileMaintenance({
-          reason: "session_start",
-          pi,
-          entries: ctx.sessionManager.getEntries(),
-          // 补投判据事实源磁盘化（A1 产品缺陷修复，域侧同构落点）：getSessionFile()
-          // 传 session JSONL 路径，manifest/痕迹/日志判据读落盘条目而非内存账——pi
-          // _appendEntry persist 失败无回滚的幽灵内存 entry 曾使 journaled 误真、
-          // 补投静默失效（机制见 workflow-notify-reconcile.ts 文件头「判据事实源
-          // 磁盘化」段）；no-persist 形态 getSessionFile() 返回 undefined，对账侧
-          // 退化内存账（现状行为）。
-          sessionFile: ctx.sessionManager.getSessionFile(),
-          notifiedRunIds,
-          settledRecordOf: (runId) => result.store.settledRecordOf(runId),
-          loadRuns: () => result.store.loadAll(),
-        });
+        await runNotifyReconcileMaintenance(reconcileDeps("session_start", pi, result, ctx));
       }
     } catch (err) {
       logger.error(
@@ -598,17 +611,7 @@ export function setupWorkflowDomain(
   pi.on("agent_settled", (_event: AgentSettledEvent, ctx: ExtensionContext) => {
     const state = sessionState.get(ctx.sessionManager.getSessionId());
     if (!state || !state.storeHealthy) return;
-    void runNotifyReconcileMaintenance({
-      reason: "agent_settled",
-      pi,
-      entries: ctx.sessionManager.getEntries(),
-      // 补投判据事实源磁盘化（A1 产品缺陷修复，域侧同构落点——session_start 入口
-      // 同款注释）：判据读 session JSONL 落盘条目，no-persist 形态退化内存账 + warn。
-      sessionFile: ctx.sessionManager.getSessionFile(),
-      notifiedRunIds,
-      settledRecordOf: (runId) => state.store.settledRecordOf(runId),
-      loadRuns: () => state.store.loadAll(),
-    });
+    void runNotifyReconcileMaintenance(reconcileDeps("agent_settled", pi, state, ctx));
   });
 
   // 通知对账步入口③（completion-signal-delivery D8② 三入口同构的切回补强边沿，
@@ -629,15 +632,7 @@ export function setupWorkflowDomain(
   subscribeResumeReconcile("subagent-workflow", (ctx) => {
     const state = sessionState.get(ctx.sessionManager.getSessionId());
     if (!state || !state.storeHealthy) return;
-    void runNotifyReconcileMaintenance({
-      reason: "resume",
-      pi: resolveCurrentPi(),
-      entries: ctx.sessionManager.getEntries(),
-      sessionFile: ctx.sessionManager.getSessionFile(),
-      notifiedRunIds,
-      settledRecordOf: (runId) => state.store.settledRecordOf(runId),
-      loadRuns: () => state.store.loadAll(),
-    });
+    void runNotifyReconcileMaintenance(reconcileDeps("resume", resolveCurrentPi(), state, ctx));
   });
 
   // ════════════════════════════════════════════════════════════

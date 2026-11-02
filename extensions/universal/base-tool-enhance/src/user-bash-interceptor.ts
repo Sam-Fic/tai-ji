@@ -48,8 +48,6 @@
  */
 
 import { spawn } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 
 import type {
 	BashOperations,
@@ -63,15 +61,16 @@ import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 
 import {
+	cleanupWrapFiles,
 	FG_BG_MARKER_TAG,
 	parsePidFile,
+	prepareWrapFiles,
 	registerConvertedTask,
 	resolveFgWrapScriptPath,
 	textHasFgBgMarker,
 } from "./bash-tool.ts";
 import { isSubagentProcess } from "./background/subagent-guard.ts";
-import { getRegistryPath, resolveTaijiDataDir } from "./background/registry.ts";
-import { generateTaskId } from "./background/spawn-background.ts";
+import { resolveTaijiDataDir } from "./background/registry.ts";
 import { loadBaseToolEnhanceConfig } from "./config.ts";
 
 const logger = getLogger("base-tool-enhance");
@@ -122,44 +121,23 @@ export function shouldWrapUserBash(): boolean {
 }
 
 /**
- * 构造三文件（命令原文写 cmd.sh 零转义——bash 直接解释文件无注入面）与登记参数。
- * 形态与 bash-tool.ts prepareForegroundWrap 逐段对齐（taskId 三文件同目录同命名），
- * spawn 形态差异见文件头。写失败（目录只读等）原样抛出——handler fail-open 的注入点。
+ * 构造三文件与登记参数（路径组与 cmd.sh 写入走 bash-tool prepareWrapFiles 单点——
+ * 「taskId 三文件同目录同命名」协议防漂移；本格只补 user_bash 侧字段）。形态与
+ * bash-tool.ts prepareForegroundWrap 对齐，spawn 形态差异见文件头。写失败（目录只读
+ * 等）原样抛出——handler fail-open 的注入点。
  */
 function prepareUserBashWrap(command: string, sessionId: string): UserBashWrapPlan {
-	const taskId = generateTaskId();
 	const dataDir = resolveTaijiDataDir();
-	const tasksDir = dirname(getRegistryPath(dataDir, sessionId));
-	const cmdShPath = join(tasksDir, `${taskId}.sh`);
-	const logFile = join(tasksDir, `${taskId}.log`);
-	const pidfilePath = join(tasksDir, `${taskId}.pid`);
-	mkdirSync(tasksDir, { recursive: true });
-	writeFileSync(cmdShPath, command.endsWith("\n") ? command : `${command}\n`, "utf8");
+	const files = prepareWrapFiles(command, dataDir, sessionId);
 	const config = loadBaseToolEnhanceConfig();
 	return {
-		taskId,
+		...files,
 		command,
-		cmdShPath,
-		logFile,
-		pidfilePath,
 		idleSec: config.idleBackgroundSec ?? 0,
 		dataDir,
 		sessionId,
 		backgroundTimeoutSec: config.backgroundTimeoutSeconds ?? undefined,
 	};
-}
-
-/** 三文件清理（先例 cleanupWrapFiles 同款：rmSync force 尽力而为，缺哪个删哪个）。 */
-function cleanupWrapFiles(plan: UserBashWrapPlan): void {
-	for (const path of [plan.cmdShPath, plan.pidfilePath, plan.logFile]) {
-		try {
-			rmSync(path, { force: true });
-		} catch (err) {
-			logger.debug("user-bash wrap cleanup failed (best-effort)", {
-				detail: { path, err: toErrorMessage(err) },
-			});
-		}
-	}
 }
 
 /**

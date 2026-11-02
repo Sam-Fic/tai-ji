@@ -323,27 +323,17 @@ function deliverReapNotifications(
  * 事实，且对账路径是其唯一生产者，无「主路径同一条通知」可对齐，波 3 形态原样）。
  */
 function buildReapNotifyEnvelope(entry: RegistryEntry): ReapNotifyEnvelope {
-	if (isReapedForm(entry)) {
-		return {
-			id: entry.taskId,
-			timing: "steer",
-			payload: {
-				kind: "custom",
-				customType: BACKGROUND_BASH_CUSTOM_TYPE,
-				content: buildTerminatedNotificationLine(entry),
-				display: true,
-			},
-		};
-	}
+	const reaped = isReapedForm(entry);
 	return {
 		id: entry.taskId,
 		timing: "steer",
 		payload: {
 			kind: "custom",
 			customType: BACKGROUND_BASH_CUSTOM_TYPE,
-			content: buildNotificationContent(entry),
+			content: reaped ? buildTerminatedNotificationLine(entry) : buildNotificationContent(entry),
 			display: true,
-			details: buildNotifyDetails(entry),
+			// 收殓形态无业务 details（见方法头注「不谎报」裁决）；rejected 补投形态补齐。
+			...(reaped ? {} : { details: buildNotifyDetails(entry) }),
 		},
 	};
 }
