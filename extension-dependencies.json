@@ -49,6 +49,11 @@
           "package": "@zhushanwen/pi-delivery-port",
           "type": "package",
           "reason": "代码层静态 import getDeliveryPort（src/workflow-notify.ts notifyDone 投递主投；src/host/pi-host.ts 访问器本体直传 subagent-core 宿主壳——notify-ports 端口注入通道；unified-delivery 波 2 切换——C-ext-19 语义由 port 投递日志+notifyId 幂等+差集重放内包），缺失时模块加载即抛 Cannot find module，是强依赖"
+        },
+        {
+          "package": "@zhushanwen/pi-llm-shared",
+          "type": "package",
+          "reason": "top-level 静态 import readUiLocale（src/i18n.ts，经 ./ui-locale 子路径出口，ui-preferences.json locale 读取单点），缺失即模块加载抛 Cannot find module"
         }
       ]
     },
