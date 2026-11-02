@@ -63,6 +63,7 @@ vi.mock("../interface/command/commands.ts", () => ({
 }));
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { DELIVERY_PORT_SLOT_KEY } from "@zhushanwen/pi-delivery-port";
 import { MAX_RETAINED_DONE_RUNS, noteRebuiltSettlement } from "@zhushanwen/subagent-core";
 import type { LauncherDeps, WorkflowRun } from "@zhushanwen/subagent-core";
 import { setSubagentService } from "@zhushanwen/subagent-core";
@@ -1007,6 +1008,70 @@ describe("runSettledEffects：三步固定顺序", () => {
     expect(h.runs.size).toBe(MAX_RETAINED_DONE_RUNS);
     expect(h.runs.has("seed-0")).toBe(false);
     expect(h.runs.has("wf-nosettlement")).toBe(true);
+  });
+
+  // ── A15 缺陷修复回归（track 只在受理后标）──────────────────────────────
+  //
+  // 缺陷形态（A15 真机 6 红实证）：主路径 port.deliver rejected（persist-failed，
+  // 受理未发生）后本管线无条件 track → runId 占去重窗口 → 对账边沿补投调
+  // notifyDone 被幂等早退静默吞掉（受理假象：对账受理日志照打、消息从未出站，
+  // 会话文件/事件流/runtime outbox 三处全无）。修复：notifyDone 返回受理布尔，
+  // rejected 时 track 不标——补投出口重新可达，恢复通道（对账边沿事实判据）
+  // 与 notifyDone rejected 注释的「recovered by reconcile fallback」承诺一致。
+  // port 槽桩形态 = workflow-notify-rejected-retry.test.ts plantPort 同款
+  // （Reflect.set 进程槽；workflow-events.test.ts 首次引入 port 路径）。
+
+  it("A15 回归：port.deliver rejected（受理未发生）→ track 不标（对账补投出口可达）；evict 照常", () => {
+    const h = makeEnv();
+    const run = makeRun({ runId: "wf-rejected", status: "done", completedAt: new Date(10_000).toISOString() });
+    seedRunsWithCapOverflow(h, run);
+    Reflect.set(globalThis, DELIVERY_PORT_SLOT_KEY, {
+      current: {
+        deliver: () => ({ kind: "rejected", reason: "persist-failed (fake)" }),
+        flush: () => {},
+      },
+    });
+    try {
+      expect(() => runSettledEffects(h.env, run)).not.toThrow();
+
+      // rejected 双 warn + error 留痕已发生（首败 + single retry spent——处置阶梯照旧）
+      expect(h.sendMessage).not.toHaveBeenCalled();
+      // 本缺陷的核心断言：rejected 不标窗口（修复前此处为 true——补投被堵死）
+      expect(h.notifiedRunIds.has("wf-rejected")).toBe(false);
+      // evict 照常（内存有界性独立于通知）
+      expect(h.runs.size).toBe(MAX_RETAINED_DONE_RUNS);
+      expect(h.runs.has("seed-0")).toBe(false);
+      expect(h.runs.has("wf-rejected")).toBe(true);
+    } finally {
+      Reflect.deleteProperty(globalThis, DELIVERY_PORT_SLOT_KEY);
+    }
+  });
+
+  it("A15 回归正向锁：port.deliver accepted → track 标（受理语义不变）", () => {
+    const h = makeEnv();
+    const run = makeRun({ runId: "wf-accepted", status: "done", completedAt: new Date(10_000).toISOString() });
+    seedRunsWithCapOverflow(h, run);
+    const deliverCalls: string[] = [];
+    Reflect.set(globalThis, DELIVERY_PORT_SLOT_KEY, {
+      current: {
+        deliver: (envelope: { id?: string }) => {
+          deliverCalls.push(envelope.id ?? "");
+          return { kind: "accepted", id: envelope.id ?? "gen" };
+        },
+        flush: () => {},
+      },
+    });
+    try {
+      expect(() => runSettledEffects(h.env, run)).not.toThrow();
+
+      // port 主投受理：直发降级零调用，受理恰 1 次（单幂等键）
+      expect(h.sendMessage).not.toHaveBeenCalled();
+      expect(deliverCalls).toEqual(["wf-done:wf-accepted"]);
+      expect(h.notifiedRunIds.has("wf-accepted")).toBe(true);
+      expect(h.runs.size).toBe(MAX_RETAINED_DONE_RUNS);
+    } finally {
+      Reflect.deleteProperty(globalThis, DELIVERY_PORT_SLOT_KEY);
+    }
   });
 });
 

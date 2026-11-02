@@ -31,7 +31,10 @@ vi.mock("@zhushanwen/pi-extension-logger", () => ({
 
 vi.mock("../workflow-notify.ts", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../workflow-notify.ts")>();
-	return { ...actual, notifyDone: vi.fn() };
+	// 默认替身 = 受理（返回 true）：本文件主体测编排判据面，notifyDone 出口按受理
+	// 语义替身（A15 修复后编排按返回值分流——undefined 会误入「未受理」分支）。
+	// 「未受理不计 redelivered」的编排分支在底部专门 describe 用 mockReturnValue 覆盖。
+	return { ...actual, notifyDone: vi.fn((): boolean => true) };
 });
 
 import { ACK_CUSTOM_TYPE, OUTBOX_CUSTOM_TYPE } from "@zhushanwen/pi-delivery-port";
@@ -457,5 +460,43 @@ describe("readSessionFileEntries（磁盘读侧容错）", () => {
 		} finally {
 			chmodSync(file, 0o644);
 		}
+	});
+});
+
+// ── A15 缺陷修复回归：补投出口按 notifyDone 受理结果分流 ──
+// 缺陷形态（A15 真机 6 红实证）：主路径 rejected 被 runSettledEffects 无条件
+// track 进去重窗口 → 补投 notifyDone 幂等早退静默返回 → 编排 reconciled 日志
+// 照打（受理假象）——port 侧零受理行、消息从未出站。修复后编排按返回值分流：
+// false（未受理）不计 redelivered + warn 留痕（修复信号）；true 才计受理。
+describe("补投出口受理分流（A15 缺陷修复回归）", () => {
+	it("notifyDone 返回 false（窗口拦截/投递 rejected）→ 不计 redelivered + warn 留痕（受理假象防线）", async () => {
+		vi.mocked(notifyDone).mockReturnValueOnce(false);
+		const deps = makeDeps([registeredEntry("wf-1")]);
+
+		const result = await runNotifyReconcileMaintenance(deps);
+
+		expect(vi.mocked(notifyDone)).toHaveBeenCalledTimes(1);
+		// 未受理不计 redelivered：受理日志与真实受理一致（A15 的「reconciled 照打」
+		// 假阳性不再发生）
+		expect(result.redelivered).toEqual([]);
+		expect(loggerMock.warn).toHaveBeenCalledWith(
+			expect.stringContaining("redelivery not accepted"),
+			expect.objectContaining({ detail: expect.objectContaining({ runId: "wf-1", notifyId: "wf-done:wf-1" }) }),
+		);
+		expect(loggerMock.debug).not.toHaveBeenCalledWith(
+			"workflow notify reconciled via delivery port",
+			expect.anything(),
+		);
+	});
+
+	it("notifyDone 返回 true（受理）→ redelivered 计入 + 受理 debug 照打", async () => {
+		const deps = makeDeps([registeredEntry("wf-1")]);
+
+		const result = await runNotifyReconcileMaintenance(deps);
+
+		expect(result.redelivered).toEqual(["wf-1"]);
+		expect(loggerMock.debug).toHaveBeenCalledWith("workflow notify reconciled via delivery port", {
+			detail: { reason: "test", runId: "wf-1", notifyId: "wf-done:wf-1" },
+		});
 	});
 });

@@ -172,6 +172,9 @@ interface WorkflowNotifyDetails { // oe-exempt:20260929:framework:workflow/recor
  * @param notifiedRunIds 去重 Set（调用方持有，scope 到 factory 实例）
  * @param artifactsDir [D7] 产物目录指针（`<root>/<rootSid>/workflow/runs/`，onRunDone
  *   桥注入；缺省 undefined = 旧调用兼容，载荷与文案指针段双双省略）
+ * @returns 是否已受理投递（true = accepted/swallowed / 降级直发成功 / stale 终态 /
+ *   幂等早退；false = 主投与单次重提均 rejected——受理未发生，**窗口未标**，调用方
+ *   不 track，对账边沿补投可达。语义细则见 deliverDoneNotify 注释）
  */
 /**
  * notifyDone 构建面（content + details 一次成型）。
@@ -328,12 +331,18 @@ export function buildDoneNotifyDetails(
  * triggerTurn 单通道）。
  *
  * **内存去重**：notifiedRunIds Set 由调用方（factory/extension instance）持有，
- * 同 runId 的重复收尾回调拦截（跨 session_shutdown 等边界防重复）；标记在 port
- * 受理（accepted/swallowed）后落下。**已知丢失情形（如实登记）**：主投与单次重提
- * 均 rejected = 受理未发生、投递日志未落，恢复通道 = 对账边沿事实判据
- * （notify-reconcile：run journal/manifest 终态事实，rejected 注释自述的手工补偿
- * 路径同一事实源——已自动化）；error 留痕含恢复指引（不再宣称永久丢失）。
+ * 同 runId 的重复收尾回调拦截（跨 session_shutdown 等边界防重复）；标记只在
+ * **投递受理后**落下（accepted/swallowed / 降级直发成功 / stale 终态）。
+ * **rejected = 受理未发生，不标窗口**（A15 缺陷修复）：rejected 的恢复通道 =
+ * 对账边沿事实判据（notify-reconcile：run journal/manifest 终态事实），其补投
+ * 出口重新走本函数——若 rejected 时标了窗口，补投会被幂等早退静默吞掉（受理
+ * 假象：对账日志照打、消息从未出站）。调用方（runSettledEffects）按本函数返回
+ * 值决定是否补标窗口（与 notifyDone 内部 track 同一语义，双写幂等）。
  * 持久层幂等由 notifyId 幂等键承接（内存窗口挤出 / 重启后的重复仍被 port 判重吞）。
+ *
+ * @returns 是否已受理投递（true = accepted/swallowed / 降级直发成功 / stale 终态 /
+ *   幂等早退——窗口已含即已通知语义；false = 主投与单次重提均 rejected，受理未
+ *   发生，窗口不标，对账边沿恢复）。
  */
 function deliverDoneNotify(
   pi: ExtensionAPI,
@@ -341,7 +350,7 @@ function deliverDoneNotify(
   notifiedRunIds: Set<string>,
   content: string,
   details: WorkflowNotifyDetails,
-): void {
+): boolean {
   const port = getDeliveryPort();
   if (port) {
     const envelope = buildDoneNotifyEnvelope(runId, content, details);
@@ -352,11 +361,10 @@ function deliverDoneNotify(
         "workflow completion notify rejected by delivery port; retrying once via re-acquired port, recovered by reconcile fallback if the retry fails too",
         { runId, notifyId: details.notifyId, reason: result.reason },
       );
-      retryDeliverDoneNotifyOnce(runId, notifiedRunIds, envelope, details);
-      return;
+      return retryDeliverDoneNotifyOnce(runId, notifiedRunIds, envelope, details);
     }
     trackNotifiedRunId(notifiedRunIds, runId);
-    return;
+    return true;
   }
 
   // 降级：port 缺席（base-tool-enhance session_start 装配异常 / 版本混装窗口——
@@ -372,6 +380,7 @@ function deliverDoneNotify(
     "delivery port not bound - workflow completion notify falls back to direct-send (at-most-once; check base-tool-enhance session_start bindDeliveryPort wiring)",
     { runId, notifyId: details.notifyId },
   );
+  let delivered = false;
   guardStaleCtx(
     () => {
       const sent = pi.sendMessage(
@@ -384,12 +393,14 @@ function deliverDoneNotify(
         { triggerTurn: true },
       );
       trackNotifiedRunId(notifiedRunIds, runId);
+      delivered = true;
       return sent;
     },
     {
       label: "subagent-workflow:notifyDone",
       onStale: (error) => {
         trackNotifiedRunId(notifiedRunIds, runId);
+        delivered = true;
         logger.warn("workflow completion notify delivery skipped (stale ctx)", {
           runId,
           error: toErrorMessage(error),
@@ -397,6 +408,7 @@ function deliverDoneNotify(
       },
     },
   );
+  return delivered;
 }
 
 /**
@@ -433,27 +445,31 @@ function doneNotifyCollectOption(runId: string): { collectKey: string[] } {
  * 停止位），无定时器、无重试队列、无第三次投递；重提受理则与主投受理同语义
  * 标记去重窗口。重取缺席不扩直发降级（缺席直发只属主路径缺席形态），恢复通道
  * = 对账边沿事实判据。
+ *
+ * @returns 重提是否受理（true = accepted/swallowed，窗口已标；false = rejected /
+ *   port 缺席，窗口不标——对账边沿恢复，见 deliverDoneNotify 返回值注释）。
  */
 function retryDeliverDoneNotifyOnce(
   runId: string,
   notifiedRunIds: Set<string>,
   envelope: DeliveryEnvelope,
   details: WorkflowNotifyDetails,
-): void {
+): boolean {
   const retryPort = getDeliveryPort();
   if (retryPort === undefined) {
     logger.warn(
       "workflow completion notify retry skipped: delivery port absent on re-acquire; recovered by reconcile fallback",
       { runId, notifyId: details.notifyId },
     );
-    return;
+    return false;
   }
   const retryReceipt = retryPort.deliver(envelope, doneNotifyCollectOption(runId));
   if (retryReceipt.kind === "rejected") {
     // 单次重提仍 rejected（转换窗旧实例在位 / 持久写失败）：即停报警（RL11——
     // 持久成因不静默重试，error 留痕带恢复指引；环境修复/进程恢复后的送达由
     // 对账边沿的事实判据自动承接（notify-reconcile：run journal/manifest 终态
-    // 事实），判据不区分成因。
+    // 事实），判据不区分成因。窗口不标：受理未发生，标了会堵死对账补投出口
+    // （A15 缺陷形态——notifyDone 幂等早退静默吞补投）。
     logger.error(
       "workflow completion notify retry rejected after the single re-acquire attempt; single retry spent, recovered by reconcile fallback (session_start / agent_settled edge)",
       {
@@ -463,8 +479,7 @@ function retryDeliverDoneNotifyOnce(
         contentPreview: envelope.payload.content.slice(0, RECORD_FAIL_CONTENT_PREVIEW_LENGTH),
       },
     );
-    // 去重不标记：进程内的重复收尾回调不被去重阻断（防御形态，不改变丢失事实）。
-    return;
+    return false;
   }
   // 重提受理（accepted/swallowed）：与主投受理同语义，标记去重窗口。
   logger.debug("workflow completion notify retry accepted via re-acquired port", {
@@ -472,6 +487,7 @@ function retryDeliverDoneNotifyOnce(
     notifyId: details.notifyId,
   });
   trackNotifiedRunId(notifiedRunIds, runId);
+  return true;
 }
 
 export function notifyDone(
@@ -481,11 +497,13 @@ export function notifyDone(
   notifiedRunIds: Set<string>,
   artifactsDir: string | undefined,
   settlement: RunSettlementRecord,
-): void {
-  if (notifiedRunIds.has(runId)) return;
+): boolean {
+  // 幂等早退 = 已通知语义（窗口已含 runId）：返回 true（调用方按受理处理，
+  // 补 track 是幂等 no-op）——false 只保留给「rejected 受理未发生」。
+  if (notifiedRunIds.has(runId)) return true;
   const { content, eventsJournalPath } = buildDoneNotifyContent(run, runId, artifactsDir, settlement);
   const details = buildDoneNotifyDetails(run, runId, artifactsDir, eventsJournalPath, settlement);
-  deliverDoneNotify(pi, runId, notifiedRunIds, content, details);
+  return deliverDoneNotify(pi, runId, notifiedRunIds, content, details);
 }
 
 /**

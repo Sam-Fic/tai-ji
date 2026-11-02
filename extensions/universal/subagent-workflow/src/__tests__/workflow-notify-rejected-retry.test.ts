@@ -127,6 +127,51 @@ describe("notifyDone rejected 处置阶梯（D8①：立即单次重提，RL10 �
 	});
 });
 
+describe("notifyDone 受理返回值（A15 缺陷修复：调用方按返回值决定是否占去重窗口）", () => {
+	it("首投 rejected → 重提 accepted → true（已受理）", () => {
+		plantPort(["reject", "accept"]);
+		expect(
+			notifyDone(makePi(), "wf-r1", makeRun({ scriptName: "review" }), new Set(), "/runs", makeSettlement()),
+		).toBe(true);
+	});
+
+	it("主投与重提均 rejected → false（受理未发生——窗口不标，对账补投出口可达）", () => {
+		plantPort(["reject"]);
+		const notifiedRunIds = new Set<string>();
+		expect(
+			notifyDone(makePi(), "wf-r2", makeRun({ scriptName: "review" }), notifiedRunIds, "/runs", makeSettlement()),
+		).toBe(false);
+		expect(notifiedRunIds.has("wf-r2")).toBe(false);
+	});
+
+	it("重取缺席（重提路径停止位）→ false", () => {
+		Reflect.set(globalThis, DELIVERY_PORT_SLOT_KEY, {
+			current: {
+				deliver: () => {
+					Reflect.deleteProperty(globalThis, DELIVERY_PORT_SLOT_KEY);
+					return { kind: "rejected", reason: "persist-failed (fake)" };
+				},
+				flush: () => {},
+			},
+		});
+		expect(
+			notifyDone(makePi(), "wf-r3", makeRun({ scriptName: "review" }), new Set(), "/runs", makeSettlement()),
+		).toBe(false);
+	});
+
+	it("首投 accepted → true；幂等早退（窗口已含）→ true（已通知语义）", () => {
+		plantPort(["accept"]);
+		const notifiedRunIds = new Set<string>();
+		expect(
+			notifyDone(makePi(), "wf-r4", makeRun({ scriptName: "review" }), notifiedRunIds, "/runs", makeSettlement()),
+		).toBe(true);
+		notifiedRunIds.add("wf-r4");
+		expect(
+			notifyDone(makePi(), "wf-r4", makeRun({ scriptName: "review" }), notifiedRunIds, "/runs", makeSettlement()),
+		).toBe(true);
+	});
+});
+
 describe("补投/主投 payload 形态（D8⑤ 分层：可构造段同构 + 两段缺席省略）", () => {
 	it("journal 重建形态（scriptResult 结构性缺席）：可构造段齐备 + Script Result 段与 details.resultSummary 缺席（不缺席即红）", () => {
 		const calls = plantPort(["accept"]);

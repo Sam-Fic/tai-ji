@@ -713,8 +713,13 @@ export function createDeliveryPort(
   ): void {
     // collect 挂起分流（result-collect 设计 §3.1②，先于放行）：键集 ∩ 在途
     // 等待集 ≠ ∅ → 挂起缓冲（不进内核，push 管线零感知）+ 唤醒等待器；否则 push
-    // 现状零变化。
+    // 现状零变化。分流命中 debug 留痕：挂起条目对 push 读面（对话流/事件流）完全
+    // 不可见，无留痕时「受理成功但消息未出站」无从与下游断裂区分（A15 排障
+    // 9 轮迷路于此）。
     if (collectKeys !== undefined && collectKeys.length > 0 && collectFace.hasWaiterFor(collectKeys)) {
+      host.logger.debug("delivery-port accepted entry suspended by collect waiter (redelivery deferred until consume/collectRelease)", {
+        detail: { id, collectKey: [...collectKeys] },
+      });
       collectFace.suspend(id, record);
       seenIds.add(id);
       return;

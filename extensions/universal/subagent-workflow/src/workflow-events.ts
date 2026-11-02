@@ -223,8 +223,13 @@ export interface RunSettledEffectsEnv {
  *——notifyDone 抛错（唯一来源 = 降级直发非 stale 失败）时后续 track/evict
  * 不执行、异常原样上抛，由调用方 finalizeRun 的 onRunDone 独立 try 围栏接住
  * （core worker-message-pump，OR-4/B-4：真实副作用失败 error 留痕不崩宿主）。
- * port.deliver rejected（persist-failed 等）不抛错：notifyDone error 留痕后正常
- * 返回，track/evict 照常执行（该通知属已知丢失，可见性 = notifyDone 内 error 留痕）。
+ * **track 只在受理后标**（A15 缺陷修复）：notifyDone 返回 false（主投与单次重提
+ * 均 rejected，受理未发生）时 track 不标——rejected 的恢复通道 = 对账边沿事实
+ * 判据（notify-reconcile 补投出口重新调 notifyDone），若 rejected 也标了窗口，
+ * 补投会被 notifyDone 幂等早退静默吞掉（受理假象：对账受理日志照打、消息从未
+ * 出站，A15 真机 6 红实证）。与 settlement 缺席分支的「track 不标」同一原则：
+ * 未发通知不占去重窗口。notifyDone 返回 true（受理 / 幂等早退）时 track 照标
+ * （受理路径 notifyDone 内部已 track，此处补标幂等 no-op）。
  * notifyDone 幂等早退（notifiedRunIds 已含 runId）不是错误：后两步照常执行。
  *
  * [D7] notifyDone 注入产物目录指针（`<root>/<rootSid>/workflow/runs/`——
@@ -238,7 +243,7 @@ export interface RunSettledEffectsEnv {
 export function runSettledEffects(env: RunSettledEffectsEnv, run: WorkflowRun): void {
   const settlement = env.settledRecordOf(run.runId);
   if (settlement !== undefined) {
-    notifyDone(
+    const notified = notifyDone(
       env.resolvePi(),
       run.runId,
       run,
@@ -246,7 +251,10 @@ export function runSettledEffects(env: RunSettledEffectsEnv, run: WorkflowRun): 
       env.state.runsDir,
       settlement,
     );
-    trackNotifiedRunId(env.notifiedRunIds, run.runId);
+    // 受理才占去重窗口（rejected 受理未发生——窗口标了会堵死对账补投出口，见上）。
+    // notifyDone 内部在受理路径已 track（同一语义双写，幂等）；此处补标覆盖
+    // 幂等早退分支（窗口已含，no-op）。
+    if (notified) trackNotifiedRunId(env.notifiedRunIds, run.runId);
   } else {
     logger.error(
       `[workflow] done notify skipped: settlement record unavailable (runId=${run.runId}) — ` +

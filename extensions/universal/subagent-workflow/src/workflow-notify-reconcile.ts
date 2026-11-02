@@ -297,7 +297,7 @@ export interface NotifyReconcileResult { // oe-exempt:20261101:framework:跨包�
 	scanned: number;
 	/** 预检候选数（未被承载未被送达——含终局事实待核）。 */
 	candidates: number;
-	/** 补投已提交（notifyDone 已调）的 runId。 */
+	/** 补投已受理（notifyDone 返回 true——受理/幂等早退，消息已出站或已送达过）的 runId。 */
 	redelivered: string[];
 	/** 终局事实缺席（流缺失/损坏/无终局帧/聚合重建缺席）而跳过的 runId。 */
 	skippedNotTerminal: string[];
@@ -421,8 +421,19 @@ export async function runNotifyReconcileMaintenance(deps: {
 			}
 			// 补投出口 = notifyDone 直调（构造面/投递面/重提链与主路径全共用——
 			// 可构造段同构由此构造性成立；artifactsDir = recordPath 锚点目录，
-			// 与 store 装配 runsDir 同值）。notifyDone 幂等早退（窗口已含）无害。
-			notifyDone(deps.pi, candidate.runId, run, deps.notifiedRunIds, dirname(candidate.recordPath), settlement);
+			// 与 store 装配 runsDir 同值）。返回值 = 是否受理（A15 缺陷修复）：
+			// false = 被 notifiedRunIds 窗口幂等早退（rejected 主路径误标窗口的
+			// 修复信号——正常语义下 rejected 不标窗口，见 runSettledEffects）或
+			// 投递 rejected，通知未出站；warn 留痕 + 不计 redelivered（受理假象
+			// 防线：日志「已补投」必须与真实受理一致）。notifyDone 幂等早退返回
+			// true（已通知语义）无害照计——窗口已含即上一轮补投已受理。
+			const accepted = notifyDone(deps.pi, candidate.runId, run, deps.notifiedRunIds, dirname(candidate.recordPath), settlement);
+			if (!accepted) {
+				logger.warn("workflow notify reconcile redelivery not accepted (deduped by notifiedRunIds window or deliver rejected); message not dispatched, candidates retried at next reconcile edge", {
+					detail: { reason: deps.reason, runId: candidate.runId, notifyId },
+				});
+				continue;
+			}
 			result.redelivered.push(candidate.runId);
 			logger.debug("workflow notify reconciled via delivery port", {
 				detail: { reason: deps.reason, runId: candidate.runId, notifyId },
