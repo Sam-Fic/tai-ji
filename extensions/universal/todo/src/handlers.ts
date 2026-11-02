@@ -160,39 +160,31 @@ export function registerTodoEventHandlers(
 		state.userMessageCount++;
 	});
 
+	// handler 出错由 pi ExtensionRunner.emit 逐 handler try/catch 兜底并进诊断链
+	// （runner.js），扩展侧不再叠 catch——那会把错误从诊断链转走成 debug 日志。
 	pi.on("before_agent_start", async (_event: unknown, ctx: ExtensionContext) => {
-		try {
-			const pendingTodos = state.todos.filter(isPending);
-			if (pendingTodos.length > 0) {
-				// 文案与 refreshDisplay 共用 renderStatusText（N/M 口径），避免同一 status 槽两种格式交替
-				ctx.ui.setStatus("todo", renderStatusText(state.todos, ctx.ui.theme));
-			}
-			// 优先级 1: agent_end 设置的延迟 steer
-			if (state.pendingSteerMessage) {
-				const msg = state.pendingSteerMessage;
-				state.pendingSteerMessage = null;
-				return { message: { customType: "todo-context", content: msg, display: false } };
-			}
-
-			return buildBeforeAgentStartMessage(state);
-		} catch (e) {
-			logger.debug("before_agent_start error", { error: String(e) });
-			return undefined;
+		const pendingTodos = state.todos.filter(isPending);
+		if (pendingTodos.length > 0) {
+			// 文案与 refreshDisplay 共用 renderStatusText（N/M 口径），避免同一 status 槽两种格式交替
+			ctx.ui.setStatus("todo", renderStatusText(state.todos, ctx.ui.theme));
 		}
+		// 优先级 1: agent_end 设置的延迟 steer
+		if (state.pendingSteerMessage) {
+			const msg = state.pendingSteerMessage;
+			state.pendingSteerMessage = null;
+			return { message: { customType: "todo-context", content: msg, display: false } };
+		}
+
+		return buildBeforeAgentStartMessage(state);
 	});
 
 	pi.on("agent_end", async (_event: unknown, ctx: ExtensionContext) => {
-		try {
-			if (state.todos.length === 0) return;
+		if (state.todos.length === 0) return;
 
-			// 全部 completed → 总检查 steer（仅一次）
-			handleCompletionSteer(state);
+		// 全部 completed → 总检查 steer（仅一次）
+		handleCompletionSteer(state);
 
-			// auto-clear（全部完成后延迟清理；已清空才需要刷新显示）
-			if (handleAutoClear(state)) refreshDisplay(ctx);
-		} catch (e) {
-			// best-effort：agent_end 事件处理器出错不阻断会话主流程，仅记录调试日志
-			logger.debug("agent_end error", { error: String(e) });
-		}
+		// auto-clear（全部完成后延迟清理；已清空才需要刷新显示）
+		if (handleAutoClear(state)) refreshDisplay(ctx);
 	});
 }

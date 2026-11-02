@@ -15,6 +15,10 @@
  *   #12 打包约束：本模块只 spawn（经注入 piCommand），不拼 ESM 模块元数据 URL 类路径
  *      （该属性在 CJS bundle 下恒为 undefined——原文随段从 btw-service 迁入此处）；
  *      bootstrap 出站 env 经 buildOutboundChildEnv（C-proc-09）。
+ *   [跨域登记 2026-10-31] fork bootstrap argv（forkViaCliPi 的 args 字面量）不带
+ *      --no-extensions——runtime 孤儿收割判据②（services/reap-orphan-pi.ts 判据②
+ *      主判别位）的已知例外：判据②不命中即不在收割射程（fail-safe 只漏收不误杀）；
+ *      该 argv 是否收编 pi-rpc spawn 常量单源（PI_SPAWN_*，startup 设计 §7.2）待本域裁决。
  */
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'

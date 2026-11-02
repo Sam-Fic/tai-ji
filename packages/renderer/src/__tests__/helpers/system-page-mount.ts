@@ -14,7 +14,7 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { ref, type Component } from 'vue'
 import { vi } from 'vitest'
-import type { ProviderInfo, ModelInfo } from '@taiji/shared'
+import type { ProviderInfo, ModelInfo, ProviderId } from '@taiji/shared'
 import {
   getSettingsStore,
   provideSettingsTransport,
@@ -40,7 +40,8 @@ export function createSettingsApiMocks() {
     setSmartContextCompactModel: vi.fn(),
     setSmartContextThresholds: vi.fn(),
     setSmartContextExcludedModels: vi.fn(),
-    // 消费方：SystemSmartContextSection（SystemPage mount 时消费，缺导出即 "No export defined"）；rename 相关桩另供 RenameSessionPage 测试经 settings-transport-stub 覆盖
+    setSmartContextAutoCompactThresholdRatio: vi.fn(),
+    // 消费方：SmartContextCompactionPage（独立菜单页 mount 时消费，缺导出即 "No export defined"）；rename 相关桩另供 RenameSessionPage 测试经 settings-transport-stub 覆盖
   }
 }
 
@@ -100,24 +101,27 @@ export function systemFixture(): SystemSettings {
 
 /** 有凭证 provider fixture（模型挂在 providers[].models —— extension 模型配置候选的正确数据源）。 */
 export function authedProvider(): ProviderInfo {
-  return { id: 'p1', name: 'Prov One', apiKeySet: true, status: 'connected', models: [{ id: 'm1', name: 'Model One' }] }
+  return { id: 'p1' as ProviderId, name: 'Prov One', apiKeySet: true, status: 'connected', models: [{ id: 'm1', name: 'Model One' }] }
 }
 
 /** 无凭证 provider fixture（apiKeySet=false，其模型不应出现在下拉）。 */
 export function unauthedProvider(): ProviderInfo {
-  return { id: 'p2', name: 'Prov Two', apiKeySet: false, status: 'not_configured', models: [{ id: 'm2', name: 'Model Two' }] }
+  return { id: 'p2' as ProviderId, name: 'Prov Two', apiKeySet: false, status: 'not_configured', models: [{ id: 'm2', name: 'Model Two' }] }
 }
 
 /** 聚合模型 fixture（scoped 过滤后形态，仅含白名单内 m1）。注入用于检查：
  *  useAuthedModelGroups 改为 providers 派生后，下拉候选必须不受 store.models 内容影响。 */
 export function modelFixtures(): ModelInfo[] {
   return [
-    { id: 'm1', name: 'Model One', providerId: 'p1', providerName: 'Prov One' },
+    { id: 'm1', name: 'Model One', providerId: 'p1' as ProviderId, providerName: 'Prov One' },
   ]
 }
 
 /** smart-context 默认提醒阈值档（绝对 token 数，与 extension DEFAULT_REMINDER_THRESHOLDS 一致）。 */
 const SMART_CONTEXT_DEFAULT_THRESHOLDS = [400_000, 500_000, 600_000] as const
+
+/** smart-context 默认触发线（与 extension DEFAULT_AUTO_COMPACT_THRESHOLD_RATIO / runtime 基底一致）。 */
+const SMART_CONTEXT_DEFAULT_AUTO_COMPACT_RATIO = 0.9
 
 /** smart-context 默认配置 fixture（与 extension 默认值一致）。 */
 export function smartContextFixture(excludedModels: string[] = []): {
@@ -125,8 +129,15 @@ export function smartContextFixture(excludedModels: string[] = []): {
   compactModel: string
   reminderThresholds: number[]
   excludedModels: string[]
+  autoCompactThresholdRatio: number
 } {
-  return { enabled: true, compactModel: '', reminderThresholds: [...SMART_CONTEXT_DEFAULT_THRESHOLDS], excludedModels }
+  return {
+    enabled: true,
+    compactModel: '',
+    reminderThresholds: [...SMART_CONTEXT_DEFAULT_THRESHOLDS],
+    excludedModels,
+    autoCompactThresholdRatio: SMART_CONTEXT_DEFAULT_AUTO_COMPACT_RATIO,
+  }
 }
 
 /** 注入非空 providers/models 到 settings store 单例（模块级 store 的 ref，直接写 .value）。 */
@@ -179,4 +190,5 @@ export function resetSettingsApiMocks(m: SettingsApiMocks): void {
   m.setSmartContextCompactModel.mockResolvedValue({ model: '' })
   m.setSmartContextThresholds.mockResolvedValue({ thresholds: [...SMART_CONTEXT_DEFAULT_THRESHOLDS] })
   m.setSmartContextExcludedModels.mockResolvedValue({ models: [] })
+  m.setSmartContextAutoCompactThresholdRatio.mockResolvedValue({ ratio: SMART_CONTEXT_DEFAULT_AUTO_COMPACT_RATIO })
 }

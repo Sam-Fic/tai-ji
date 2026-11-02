@@ -14,8 +14,8 @@
 /**
  * entry 的树结构字段视图（duck-typed 收窄，无断言）。含 type?: unknown 只为通过
  * weak-type 检查（全 optional 目标须与源共享属性名——各消费包的最小 entry 形状
- * SessionEntryLike/SchedulerEntryLike 只声明 type）；真实 pi SessionEntry 恒有
- * id/parentId（SessionEntryBase），缺失时按线性文件语义处理（见 filterActivePath）。
+ * SessionEntryLike 只声明 type）；真实 pi SessionEntry 恒有 id/parentId
+ * （SessionEntryBase），缺失时按线性文件语义处理（见 filterActivePath）。
  */
 interface TreeEntryFields { // oe-exempt:20261001:framework:duck-typed 树字段收窄视图（weak-type 检查要求的独立 interface 形态）——共享实现内部结构，非待变体抽象
 	type?: unknown;

@@ -552,6 +552,32 @@ describe("session_start 差集重放", () => {
 		// sent 2 条 = first 实例注入 1（投出未送达——无回执无 ack，差集合法重投）+ 重放 1
 		expect(h.sent).toHaveLength(2);
 	});
+
+	it("重绑交接（in-flight 预占）：前驱已出站条目后继不重放（bindDeliveryPort 双投窗口封住，A4 真机回归）；崩溃形态（无前驱交接）照旧重放", () => {
+		const h = makeHost();
+		// 同一 session 的两次 bind（session_start 连发，真机 10ms 级间隔）：第一次
+		// bind 后受理并出站一条（注入完成、凭据未落——pi 异步写 entry 的窗口）。
+		const first = bindDeliveryPort(h.host);
+		first.deliver(defaultEnvelope({ id: "rb-1", payload: { kind: "custom", customType: DEFAULT_NOTIFY_CUSTOM_TYPE, content: "redelivered", display: true } }));
+		expect(h.sent).toHaveLength(1); // 已出站（sendMessage 交递完成）
+		expect(h.outboxEntries()).toHaveLength(1);
+		const deliveredProofCount = (): number =>
+			h.host.readSessionEntries().filter(
+				(e) => (e as Record<string, unknown>)["type"] === "custom_message",
+			).length;
+		expect(deliveredProofCount()).toBe(0); // 凭据未落（注入异步——重放窗口的构成条件）
+
+		// 第二次 bind：交接 in-flight 集合 + dispose 前驱 → 后继 recover 跳过该条
+		// （消息在途必达，重放 = 双投）。sent 恒 1、recoveryReplays 零计数。
+		const second = bindDeliveryPort(h.host);
+		expect(second.recover()).toBe(0);
+		expect(h.sent).toHaveLength(1);
+
+		// 对照（崩溃形态）：无前驱交接的新实例（进程重启语义）对同一未凭据 outbox
+		// 照旧重放——崩溃恢复通道不受交接影响。
+		const third = createDeliveryPort(h.host);
+		expect(third.recover()).toBe(1);
+	});
 });
 
 // ─── 耐久承诺 ───────────────────────────────────────────────
@@ -574,6 +600,54 @@ describe("受理前落盘（耐久承诺）", () => {
 		fail = false;
 		expect(port.deliver(defaultEnvelope({ id: "pf-1" })).kind).toBe("accepted");
 		expect(h.sent).toHaveLength(1);
+	});
+});
+
+// ─── 终局持久化失败（磁盘权威）──────────────────────────────
+
+describe("终局持久化失败（磁盘权威：ack 写盘失败 → 内核内存不登记终态）", () => {
+	it("ack entry 写失败 → message_end 边沿不炸、ack 未落、分型错误经 warn 留痕；写盘恢复后下一边沿补落", () => {
+		const h = makeHost();
+		const orig = h.host.appendEntry;
+		let ackBroken = true;
+		h.host.appendEntry = (customType, data) => {
+			if (ackBroken && customType === ACK_CUSTOM_TYPE) throw new Error("disk full (fake)");
+			orig(customType, data);
+		};
+		const port = createDeliveryPort(h.host);
+		port.deliver(defaultEnvelope({ id: "af-1" }));
+		expect(h.sent).toHaveLength(1);
+		// message_end 命中 → 内核终局 ack → appendEntry(ack) 抛错：边沿回调不炸
+		//（内核捕获分型错误返回 false，异常不上抛 pi 事件循环）
+		expect(() => h.injectAndEmit(h.sent[0].message)).not.toThrow();
+		expect(h.ackEntries()).toHaveLength(0); // 持久终局未落
+		expect(h.warn.mock.calls.some((c) => String(c[0]).includes("store.ack failed"))).toBe(true);
+		// 写盘恢复：同一 message 的下一 message_end 边沿重驱动 → ack 补落（重试路径）
+		ackBroken = false;
+		h.fireMessageEnd({ role: "custom", ...h.sent[0].message, timestamp: Date.now() });
+		expect(h.ackEntries()).toHaveLength(1);
+		expect(h.ackEntries()[0]!["data"]).toMatchObject({ v: 2, id: "af-1" });
+		expect(port.recover()).toBe(0); // 终局已落，差集清零
+	});
+
+	it("ack 写失败期间「重启」（新实例重扫）：注入事实（custom_message entry）保持判重——不重投", () => {
+		const h = makeHost();
+		const orig = h.host.appendEntry;
+		h.host.appendEntry = (customType, data) => {
+			if (customType === ACK_CUSTOM_TYPE) throw new Error("disk full (fake)");
+			orig(customType, data);
+		};
+		const port = createDeliveryPort(h.host);
+		port.deliver(defaultEnvelope({ id: "af-2" }));
+		h.injectAndEmit(h.sent[0].message); // 注入事实已落 custom_message entry；ack 写失败
+		expect(h.ackEntries()).toHaveLength(0);
+		port.dispose();
+		// 磁盘权威的送达事实 = 注入 entry 携带的 deliveryId（非 ack entry）：新实例差集
+		// 不含该条，不重投（ack entry 缺席不破坏判重）
+		const revived = createDeliveryPort(h.host);
+		expect(revived.recover()).toBe(0);
+		expect(h.sent).toHaveLength(1);
+		revived.dispose();
 	});
 });
 

@@ -46,6 +46,23 @@ describe("normalizeSmartContextConfig", () => {
 		const c = normalizeSmartContextConfig({ compactModel: { type: "regex", pattern: "x" } });
 		expect(c.compactModel).toEqual({ type: "ref", ref: "" });
 	});
+
+	it("autoCompactThresholdRatio 缺省/非法类型回默认 0.9（D4 用户裁决）", () => {
+		expect(DEFAULT_SMART_CONTEXT_CONFIG.autoCompactThresholdRatio).toBe(0.9);
+		expect(normalizeSmartContextConfig({}).autoCompactThresholdRatio).toBe(0.9);
+		expect(normalizeSmartContextConfig({ autoCompactThresholdRatio: "0.8" }).autoCompactThresholdRatio).toBe(0.9);
+		expect(normalizeSmartContextConfig({ autoCompactThresholdRatio: null }).autoCompactThresholdRatio).toBe(0.9);
+		expect(normalizeSmartContextConfig({ autoCompactThresholdRatio: Number.NaN }).autoCompactThresholdRatio).toBe(0.9);
+		expect(normalizeSmartContextConfig({ autoCompactThresholdRatio: Number.POSITIVE_INFINITY }).autoCompactThresholdRatio).toBe(0.9);
+	});
+
+	it("autoCompactThresholdRatio 有限数越界钳制到 [0,1]，区间内直通", () => {
+		expect(normalizeSmartContextConfig({ autoCompactThresholdRatio: 1.5 }).autoCompactThresholdRatio).toBe(1);
+		expect(normalizeSmartContextConfig({ autoCompactThresholdRatio: -0.2 }).autoCompactThresholdRatio).toBe(0);
+		expect(normalizeSmartContextConfig({ autoCompactThresholdRatio: 0.95 }).autoCompactThresholdRatio).toBe(0.95);
+		expect(normalizeSmartContextConfig({ autoCompactThresholdRatio: 0 }).autoCompactThresholdRatio).toBe(0);
+		expect(normalizeSmartContextConfig({ autoCompactThresholdRatio: 1 }).autoCompactThresholdRatio).toBe(1);
+	});
 });
 
 describe("门控与模式判定（D5/D12）", () => {
@@ -78,7 +95,7 @@ describe("门控与模式判定（D5/D12）", () => {
 });
 
 describe("阈值检查（D3/D6）", () => {
-	it("findCrossedThresholds：null tokens 容错为空（R7）；已 fired 排除", () => {
+	it("findCrossedThresholds：null tokens 容错为空（R7 旧编号，见 compact-handler.ts 头注消歧）；已 fired 排除", () => {
 		const tiers = [5_000, 10_000, 15_000];
 		expect(findCrossedThresholds(tiers, null, new Set())).toEqual([]);
 		expect(findCrossedThresholds(tiers, 11_000, new Set([5_000]))).toEqual([10_000]);
@@ -185,7 +202,8 @@ describe("deriveFiredThresholds（D15：session entries → 已提醒档位）",
 
 describe("estimateShadowedTokens 口径契约（D2：与 pi estimateTokens 同源）", () => {
 	// 合法 AssistantMessage 形状的 fixture（block 数组 content，禁止 as 硬塞 string content——
-	// estimateTokens 对 string content 计 0，口径用例会静默失去判别力；设计 §8.3）。
+	// estimateTokens 对 string content 计 0，口径用例会静默失去判别力；上一代接管设计 §8.3，
+	// 旧编号，文档已不在可达域，见 compact-handler.ts 头注消歧）。
 	// 不 import 名义类型：const 泛型保留 block 字面量形状，由 estimateShadowedTokens
 	// 参数类型（Parameters<typeof estimateTokens>[0]）在调用点结构校验。
 	function makeAssistantMessage<const C extends readonly unknown[]>(content: C) {

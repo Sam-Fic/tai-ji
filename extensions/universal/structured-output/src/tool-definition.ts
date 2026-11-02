@@ -247,18 +247,10 @@ export function createDailyToolDefinition() {
 			_toolCallId: string,
 			params: { schema: unknown; data: unknown },
 		) {
-			// 运行假设：workflow 子进程是单 session 进程（由 applySchemaEnvToChildEnv 在
-			// session-runner 注入 PI_WORKFLOW_SCHEMA）。装配分岔下日常变体注册时 env 为空，
-			// 但桥接判定保留（ENV_SCHEMA 存在 = workflow 模式）：env 有值时注入
-			// authoritativeSchema 走 execute 的 workflow 透传分支。
-			// 判空用 `|| undefined` 归一空串为 undefined（truthy 语义），与 entry 的
-			// `if (schemaEnv)` 统一：空串 env 视为未设置。
-			const authoritativeSchema = process.env[ENV_SCHEMA] || undefined;
-			return executeStructuredOutput(
-				authoritativeSchema !== undefined
-					? { ...params, authoritativeSchema }
-					: params,
-			);
+			// env 读取与 authoritativeSchema 注入的旧桥接分支已删（装配分岔下日常变体
+			// 注册时 env 恒空，读到的值结构性不可达非空）：workflow 模式由 index.ts 分岔
+			// 注册 workflow 变体，本变体恒走日常自报校验。
+			return executeStructuredOutput(params);
 		},
 
 		// 摘要不进 details：同 workflow 变体（details = 数据本体，parsedOutput 契约）；

@@ -70,7 +70,7 @@ const chatApiPort: ChatApiPort = {
   // 撤回在途条目（delivery.cancel RPC，内核 D6 统一入口的在途路由路径）
   cancelDelivery: (sid, clientUuid) => chatApi.cancelDelivery(sid, clientUuid),
   abort: chatApi.abort,
-  compact: chatApi.compact,
+  compactBackground: chatApi.compactBackground,
   bash: chatApi.bash,
   abortBash: chatApi.abortBash,
   getHistory: chatApi.getHistory,
@@ -135,8 +135,13 @@ type CoreChannelDeps = Pick<UseChatDeps, 'chatApi' | 'writeSegments' | 'toast' |
 // core toast 通道的移动呈现（remote-use A7/U14 接线）：单点定义、两处注入共用
 // （coreChannelDeps 与 subDeps 引同一对象，防 toast 通道漂移回 console）。error/warning
 // 同入错误条单槽（移动壳无分级 toast 组件，可见性优先；core 传入文案已经 deps.t 翻译，
-// 直入错误条无需二次处理）。
-const errorBarToast: UseChatDeps['toast'] = { error: showErrorBar, warning: showErrorBar }
+// 直入错误条无需二次处理）。info（受理回执，C2 /compact 后台化）走同槽——移动壳无
+// info 分级，可见性优先于通道分级。
+const errorBarToast: UseChatDeps['toast'] = {
+  error: showErrorBar,
+  warning: showErrorBar,
+  info: showErrorBar,
+}
 
 function coreChannelDeps(): CoreChannelDeps {
   return {
@@ -469,7 +474,7 @@ export const activeSessionId = sessionStore.activeId
 /** session 列表扁平视图（响应式派生，列表页消费） */
 export const sessionList = sessionStore.list
 
-/** 载入 session 分组列表（App 挂载 / 列表页刷新入口；错误态落 store.listLoadError） */
+/** 载入 session 分组列表（App connected 边沿触发（App.vue watch）/ 列表页重试入口；错误态落 store.listLoadError） */
 export function loadSessions(): Promise<void> {
   return useSessionInstance.loadSessions()
 }
@@ -623,7 +628,7 @@ export function networkKindFromHost(hostname: string): 'tailscale' | 'lan' {
 // 设置页「已连接时长」的客户端派生源；null = 尚无 connected 边沿）
 export const connectedSince = ref<number | null>(null)
 
-/** connected 边沿记录（App.vue watch isConnected 消费；每次重连重算——显示本次连接会话时长） */
+/** connected 边沿记录（App.vue watch shellConnectionState === 'connected' 消费；每次重连重算——显示本次连接会话时长） */
 export function markConnectedNow(): void {
   connectedSince.value = Date.now()
 }

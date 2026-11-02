@@ -68,6 +68,8 @@ export type SmartContextCompactModelReply = ServerMessageMap['config.smartContex
 export type SmartContextThresholdsReply = ServerMessageMap['config.smartContextThresholds']
 /** 智能上下文排除模型配置 reply 类型。 */
 export type SmartContextExcludedModelsReply = ServerMessageMap['config.smartContextExcludedModels']
+/** 智能上下文后台压缩触发线配置 reply 类型。 */
+export type SmartContextAutoCompactThresholdRatioReply = ServerMessageMap['config.smartContextAutoCompactThresholdRatio']
 
 /** 设置 worktree 专用目录（持久化到 settings.json）。 */
 export async function setWorktreeRootDir(dir: string): Promise<WorktreeRootDirReply> {
@@ -200,6 +202,11 @@ export async function setSmartContextThresholds(thresholds: number[]): Promise<S
 /** 设置排除模型列表（每条完整 provider/modelId，runtime 侧过滤无 "/" 条目去重）。 */
 export async function setSmartContextExcludedModels(models: string[]): Promise<SmartContextExcludedModelsReply> {
   return command('config.setSmartContextExcludedModels', { models }, RPC_BACKSTOP_TIMEOUT_MS)
+}
+
+/** 设置后台压缩触发线（0-1 窗口占比，runtime 侧钳制；reply 回钳制后生效值）。 */
+export async function setSmartContextAutoCompactThresholdRatio(ratio: number): Promise<SmartContextAutoCompactThresholdRatioReply> {
+  return command('config.setSmartContextAutoCompactThresholdRatio', { ratio }, RPC_BACKSTOP_TIMEOUT_MS)
 }
 
 // ── codemode 开关（config.getCodemodeEnabled / config.setCodemodeEnabled）──

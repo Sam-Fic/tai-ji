@@ -789,7 +789,9 @@ describe('ArchiveService.unarchive', () => {
     expect(existsSync(`${mainPath}.project.json`)).toBe(true)
     expect(existsSync(join(f.storeRoot, sid, 'attachments', 'item-attachments.dat'))).toBe(true)
     // 恢复置顶排序语义：重建主文件 mtime = 恢复时刻（远新于 2020 锚点）。
-    expect(statSync(mainPath).mtimeMs).toBeGreaterThanOrEqual(restoreStartedAt)
+    // 5s 容差：FS 亚毫秒 mtime 与整数毫秒 Date.now() 下限紧贴比较会吃进墙钟斜率
+    //（CI 实测 0.31ms 差 flake），断言语义「≈ 恢复时刻、绝不落回 2020」不受影响。
+    expect(statSync(mainPath).mtimeMs).toBeGreaterThanOrEqual(restoreStartedAt - 5_000)
     // 归档单元清空（簿记/压缩体/旁挂/assets 全消失——目录壳可留）。
     const unitDir = join(f.archiveRoot, ENC_A)
     expect(existsSync(join(unitDir, `2026-10-20T00-00-00-000Z_${sid}.jsonl.archive.json`))).toBe(false)

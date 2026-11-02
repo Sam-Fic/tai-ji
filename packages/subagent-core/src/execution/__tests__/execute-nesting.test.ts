@@ -1,10 +1,11 @@
 // src/__tests__/execute-nesting.test.ts
 //
-// D-030~D-033 嵌套 / 并发池 / 节流回归锁。独立于 execute-integration.test.ts。
+// D-030~D-032 并发池回归锁。独立于 execute-integration.test.ts。
 //
 // 用例：
 //   D-032  background 进并发池（分层配额：max(1, maxConcurrent - depth)）
-//   D-033  execute 入口通用嵌套护栏（execCtxAls 计 fork+非 fork 嵌套，深度>MAX 拒）
+//   （D-033 通用嵌套护栏已随禁嵌套派发退役——被派发子进程经扩展精简装配无派发
+//   工具，深度嵌套从能力上不存在；用例组一并移除）
 //   （原「嵌套抑制 onUpdate」「节流清理 throttleState」用例组已随 onEventThrottled
 //   死路径删除一并移除——swf-perf-impl ledger #22 / cleanup-slice TC4）
 //
@@ -20,7 +21,7 @@
 //   manifest-store 的完整桩形与动机注释）。
 //
 //   所有断言语义不变：它们测的是 SubagentService 的 **编排逻辑**
-//   （pool.acquire / execCtxAls 深度），这些逻辑
+//   （pool.acquire），这些逻辑
 //   无论事件来自 fakeSession.subscribe 还是 FakeChild.stdout 都一致。
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -28,7 +29,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   aliveStoreModule,
   childProcessModule,
-  driveChildToCompletion,
   stateMarkerModule,
   fsSyncModule,
   manifestStoreModule,
@@ -40,17 +40,12 @@ vi.mock("../persistence/alive-store.ts", async (importOriginal) => aliveStoreMod
 vi.mock("../persistence/state-marker.ts", () => stateMarkerModule());
 vi.mock("../persistence/manifest-store.ts", () => manifestStoreModule());
 
-import { spawn } from "node:child_process";
-
 import { registerFakePiEngine, type FakePiEnginePort } from "./helpers/fake-engine-port.ts";
 import { CTX_MODEL as ctxModel, emptyRegistry } from "./helpers/model-registry-mock.ts";
 import { makePi } from "./helpers/pi-mock.ts";
 import { clearEngines } from "../engine/registry.ts";
 import { ModelConfigService } from "../assembly/model-config-service.ts";
-import { MAX_FORK_DEPTH } from "../assembly/session-context-resolver.ts";
 import { SubagentService } from "../subagent-service.ts";
-
-const mockSpawn = vi.mocked(spawn);
 
 // ============================================================
 // 辅助：service 构造（与旧 setup 等价，但不再装配 fakeSdk）
@@ -92,7 +87,7 @@ interface ExecCtxAls {
   run: <T>(store: { recordId: string | undefined; depth: number }, cb: () => T) => T;
 }
 
-describe("嵌套护栏 / 并发池 / 节流（D-030~D-033 回归锁）", () => {
+describe("并发池（D-030~D-032 回归锁）", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -123,48 +118,7 @@ describe("嵌套护栏 / 并发池 / 节流（D-030~D-033 回归锁）", () => {
   });
 
   // ============================================================
-  // D-033: 通用嵌套护栏（execute 入口，execCtxAls 非 fork 路径）
-  // ============================================================
-
-  it("[D-033] execCtxAls depth=MAX 时 execute 抛错（nestingDepth=MAX+1 被拒）", async () => {
-    const { service } = setup();
-
-    // [R1 深绑改写] execNesting 随域 #2 聚合迁入 SessionBaselines（壳转发 getter 透传），
-    // 深绑路径改为 service → baselines 聚合实例（断言对象与强度不变，路径对齐终态结构）。
-    const execNesting = (Reflect.get(service, "baselines") as { execNesting: ExecCtxAls }).execNesting;
-
-    await expect(
-      execNesting.run({ recordId: "parent", depth: MAX_FORK_DEPTH }, () =>
-        service.execute({ task: "too deep", slug: "test", ctxModel }),
-      ),
-    ).rejects.toThrow(/nesting depth/);
-
-    // 无副作用：guard 在 createRecordForMode 之前，record 未创建
-    expect(service.queries.collectRecords(10)).toHaveLength(0);
-    // guard 在 spawn 之前——不应 spawn 任何子进程
-    expect(mockSpawn).not.toHaveBeenCalled();
-  });
-
-  it("[D-033] execCtxAls depth=MAX-1 时 execute 不抛（nestingDepth=MAX 允许）", async () => {
-    const { service, fake } = setupWithFakeEngine();
-
-    // [R1 深绑改写] 同上：execNesting 经 baselines 聚合路径取用。
-    const execNesting = (Reflect.get(service, "baselines") as { execNesting: ExecCtxAls }).execNesting;
-
-    const execPromise = execNesting.run({ recordId: "parent", depth: MAX_FORK_DEPTH - 1 }, () =>
-      service.execute({ task: "at limit", slug: "test", ctxModel }),
-    );
-    await vi.waitFor(() => expect(fake.runs.length).toBe(1), { interval: 1 });
-    fake.runs[0]!.settle({ content: "ok" });
-    const result = await execPromise;
-
-    expect(result.mode).toBe("background");
-    clearEngines();
-  });
-
-  // ============================================================
-  // 原嵌套抑制 onUpdate / 节流清理 throttleState 用例组（:322-355）已删除——
-  // onEventThrottled 死路径删除（swf-perf-impl ledger #22 / cleanup-slice TC4/IF14，
-  // 详见 .cw/swf-perf-impl/cleanup-slice-design.json）。恢复点：本 slice 前的 git 历史。
+  // D-033 通用嵌套护栏用例组已随护栏退役删除（禁嵌套派发——防线移至扩展
+  // 精简装配层，见 session-start-once-guard.test.ts 子进程形态用例）。
   // ============================================================
 });

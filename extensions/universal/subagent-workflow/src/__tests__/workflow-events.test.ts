@@ -31,11 +31,23 @@ const {
   mockTerminateRunningRuns,
   loggerFns,
   mockRegisterWorkflowsCommand,
+  mockRunNotifyReconcile,
 } = vi.hoisted(() => ({
   mockSetupSessionLifecycle: vi.fn(),
   mockTerminateRunningRuns: vi.fn(async () => {}),
   loggerFns: { debug: vi.fn(), warn: vi.fn(), error: vi.fn(), info: vi.fn() },
   mockRegisterWorkflowsCommand: vi.fn(),
+  // [U2 修复回归] 切回边沿订阅装配锁的观察点：mock 对账编排本体（行为直测权威
+  // 在 workflow-notify-reconcile.test.ts，此处只锁装配接线面）。默认返回空结果
+  //（entries 空 → 真实实现同样早退，行为等价——session_start 用例不受 mock 影响）。
+  mockRunNotifyReconcile: vi.fn(async () => ({
+    scanned: 0,
+    candidates: 0,
+    redelivered: [],
+    skippedNotTerminal: [],
+    skippedDelivered: [],
+    skippedJournaled: [],
+  })),
 }));
 
 vi.mock("../session-lifecycle.ts", async (importOriginal) => {
@@ -43,6 +55,13 @@ vi.mock("../session-lifecycle.ts", async (importOriginal) => {
   // getOrCreateDialogQueue 保留真实实现：走 DIALOG_QUEUE_KEY globalThis 槽，
   // 测试经槽注入 spy queue（覆盖真实 get-or-create 路径，非 mock 短路）。
   return { ...actual, setupSessionLifecycle: mockSetupSessionLifecycle };
+});
+
+vi.mock("../workflow-notify-reconcile.ts", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../workflow-notify-reconcile.ts")
+  >();
+  return { ...actual, runNotifyReconcileMaintenance: mockRunNotifyReconcile };
 });
 
 vi.mock("@zhushanwen/subagent-core/orchestration/lifecycle.ts", async (importOriginal) => {
@@ -63,6 +82,7 @@ vi.mock("../interface/command/commands.ts", () => ({
 }));
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { DELIVERY_PORT_SLOT_KEY, RESUME_RECONCILE_SLOT_KEY, dispatchResumeReconcile } from "@zhushanwen/pi-delivery-port";
 import { MAX_RETAINED_DONE_RUNS, noteRebuiltSettlement } from "@zhushanwen/subagent-core";
 import type { LauncherDeps, WorkflowRun } from "@zhushanwen/subagent-core";
 import { setSubagentService } from "@zhushanwen/subagent-core";
@@ -189,6 +209,9 @@ function makeLifecycleResult(
     store: {
       dispose: storeDisposeSpy,
       settledRecordOf: () => ({ outcome: "completed", settledAt: 0 }),
+      // 对账入口（D8②）settledRecordOf 旁的第二判据源：loadRuns 回调真实执行时读。
+      // 生产 JsonlRunStore 两成员成对在座；fixture 缺 loadAll 时对账回调体内执行即 TypeError。
+      loadAll: async () => [],
     } as never,
     runs,
     runsDir: "/tmp/subagent-workflow-test",
@@ -286,7 +309,7 @@ async function mountWithSession(
 // ── 槽隔离（提权后槽是进程级共享态，防跨用例 / 跨测试文件串扰） ────────────────
 
 function resetSlots(): void {
-  for (const key of [WORKFLOW_DOMAIN_SLOT_KEY, DIALOG_QUEUE_KEY]) {
+  for (const key of [WORKFLOW_DOMAIN_SLOT_KEY, DIALOG_QUEUE_KEY, RESUME_RECONCILE_SLOT_KEY]) {
     Reflect.deleteProperty(globalThis, key);
   };
   const serviceSlot = Reflect.get(globalThis, SERVICE_SLOT_KEY) as { current: unknown } | undefined;
@@ -1008,6 +1031,70 @@ describe("runSettledEffects：三步固定顺序", () => {
     expect(h.runs.has("seed-0")).toBe(false);
     expect(h.runs.has("wf-nosettlement")).toBe(true);
   });
+
+  // ── A15 缺陷修复回归（track 只在受理后标）──────────────────────────────
+  //
+  // 缺陷形态（A15 真机 6 红实证）：主路径 port.deliver rejected（persist-failed，
+  // 受理未发生）后本管线无条件 track → runId 占去重窗口 → 对账边沿补投调
+  // notifyDone 被幂等早退静默吞掉（受理假象：对账受理日志照打、消息从未出站，
+  // 会话文件/事件流/runtime outbox 三处全无）。修复：notifyDone 返回受理布尔，
+  // rejected 时 track 不标——补投出口重新可达，恢复通道（对账边沿事实判据）
+  // 与 notifyDone rejected 注释的「recovered by reconcile fallback」承诺一致。
+  // port 槽桩形态 = workflow-notify-rejected-retry.test.ts plantPort 同款
+  // （Reflect.set 进程槽；workflow-events.test.ts 首次引入 port 路径）。
+
+  it("A15 回归：port.deliver rejected（受理未发生）→ track 不标（对账补投出口可达）；evict 照常", () => {
+    const h = makeEnv();
+    const run = makeRun({ runId: "wf-rejected", status: "done", completedAt: new Date(10_000).toISOString() });
+    seedRunsWithCapOverflow(h, run);
+    Reflect.set(globalThis, DELIVERY_PORT_SLOT_KEY, {
+      current: {
+        deliver: () => ({ kind: "rejected", reason: "persist-failed (fake)" }),
+        flush: () => {},
+      },
+    });
+    try {
+      expect(() => runSettledEffects(h.env, run)).not.toThrow();
+
+      // rejected 双 warn + error 留痕已发生（首败 + single retry spent——处置阶梯照旧）
+      expect(h.sendMessage).not.toHaveBeenCalled();
+      // 本缺陷的核心断言：rejected 不标窗口（修复前此处为 true——补投被堵死）
+      expect(h.notifiedRunIds.has("wf-rejected")).toBe(false);
+      // evict 照常（内存有界性独立于通知）
+      expect(h.runs.size).toBe(MAX_RETAINED_DONE_RUNS);
+      expect(h.runs.has("seed-0")).toBe(false);
+      expect(h.runs.has("wf-rejected")).toBe(true);
+    } finally {
+      Reflect.deleteProperty(globalThis, DELIVERY_PORT_SLOT_KEY);
+    }
+  });
+
+  it("A15 回归正向锁：port.deliver accepted → track 标（受理语义不变）", () => {
+    const h = makeEnv();
+    const run = makeRun({ runId: "wf-accepted", status: "done", completedAt: new Date(10_000).toISOString() });
+    seedRunsWithCapOverflow(h, run);
+    const deliverCalls: string[] = [];
+    Reflect.set(globalThis, DELIVERY_PORT_SLOT_KEY, {
+      current: {
+        deliver: (envelope: { id?: string }) => {
+          deliverCalls.push(envelope.id ?? "");
+          return { kind: "accepted", id: envelope.id ?? "gen" };
+        },
+        flush: () => {},
+      },
+    });
+    try {
+      expect(() => runSettledEffects(h.env, run)).not.toThrow();
+
+      // port 主投受理：直发降级零调用，受理恰 1 次（单幂等键）
+      expect(h.sendMessage).not.toHaveBeenCalled();
+      expect(deliverCalls).toEqual(["wf-done:wf-accepted"]);
+      expect(h.notifiedRunIds.has("wf-accepted")).toBe(true);
+      expect(h.runs.size).toBe(MAX_RETAINED_DONE_RUNS);
+    } finally {
+      Reflect.deleteProperty(globalThis, DELIVERY_PORT_SLOT_KEY);
+    }
+  });
 });
 
 // ── ⑤ setupWorkflowDomain 的 pi.on 注册顺序锁（逐位不变契约） ──────────────────
@@ -1018,10 +1105,13 @@ describe("runSettledEffects：三步固定顺序", () => {
 //（Map 保持插入序），与锁定的事件序列逐位比对。[波 2] session_compact 注册
 //（notify ledger compaction 补写检查）随账本退役删除——pi session append-only
 // 契约排除 entry 被清事件（unified-delivery §3.7②），序列 7 → 6。
+// completion-signal-delivery D8② 增补 agent_settled（wf-done 通知对账步入口②，
+// 注册位 = session_start 之后），序列 6 → 7。
 
-/** 锁定的注册顺序（波 2 后的 6 事件序列，逐位不变契约）。 */
+/** 锁定的注册顺序（波 2 后 6 事件 + D8② 对账订阅 = 7 事件序列，逐位不变契约）。 */
 const EXPECTED_REGISTRATION_ORDER = [
   "session_start",
+  "agent_settled",
   "model_select",
   "session_tree",
   "session_before_fork",
@@ -1030,7 +1120,7 @@ const EXPECTED_REGISTRATION_ORDER = [
 ] as const;
 
 describe("setupWorkflowDomain pi.on 注册顺序", () => {
-  it("6 个事件按锁定序列逐位注册（跨域 setup* 调用原位、不改变序列）", () => {
+  it("7 个事件按锁定序列逐位注册（跨域 setup* 调用原位、不改变序列；agent_settled = D8② 对账步入口②）", () => {
     const { pi, handlers } = makePi();
     setupWorkflowDomain(pi, { inflightReporter: makeReporter() });
 
@@ -1094,5 +1184,120 @@ describe("组合根接线：registerWorkflowsCommand 第三参 lazyDeps.onRunDon
     expect(runs.size).toBe(MAX_RETAINED_DONE_RUNS);
     expect(runs.has("seed-0")).toBe(false);
     expect(runs.has("wf-thin")).toBe(true);
+  });
+});
+
+// ── ⑦ 切回边沿订阅装配锁（completion-signal-delivery D8② 入口③，U2 修复）──────
+//
+// setupWorkflowDomain 经 pi-delivery-port 进程级注册槽（subscribeResumeReconcile）
+// 订阅切回派发——漏挂 = 「进程存活 + rejected + 用户切走再切回」场景本域补投不
+// 触发的缺陷形态（入口①②在该场景不可达：切回不重发 session_start、无新回合则
+// agent_settled 不达）。观察点 = mock 对账编排本体（⑦开头 mock 集调注），此处只
+// 锁装配接线面：reason="resume"、pi 经 resolveCurrentPi 现读（D3 纪律）、
+// sessionState 条目缺席早退、同域覆盖（reload 形态）。
+
+describe("setupWorkflowDomain 切回边沿订阅（D8② 入口③）", () => {
+  it("装配 + session_start 建条目后，切回派发（同 sessionId）→ 本域对账以 reason=resume 被调，pi 现读装配实例", async () => {
+    const sessionId = "sess-resume-edge";
+    const { pi } = await mountWithSession(sessionId);
+    // session_start 链上的编排调用（reason="session_start"）不串入断言
+    mockRunNotifyReconcile.mockClear();
+
+    const failures = dispatchResumeReconcile(makeCtx(sessionId));
+
+    expect(failures).toEqual([]);
+    expect(mockRunNotifyReconcile).toHaveBeenCalledTimes(1);
+    const deps = mockRunNotifyReconcile.mock.calls[0]![0] as {
+      reason: string;
+      pi: unknown;
+    };
+    expect(deps.reason).toBe("resume");
+    expect(deps.pi).toBe(pi);
+  });
+
+  it("重复 setupWorkflowDomain 覆盖旧订阅：派发只打新装配一次（reload 形态，无死 handler 双派发）", async () => {
+    const sessionId = "sess-resume-reload";
+    await mountWithSession(sessionId);
+    const { pi: pi2 } = await mountWithSession(sessionId);
+    mockRunNotifyReconcile.mockClear();
+
+    expect(dispatchResumeReconcile(makeCtx(sessionId))).toEqual([]);
+    expect(mockRunNotifyReconcile).toHaveBeenCalledTimes(1);
+    expect((mockRunNotifyReconcile.mock.calls[0]![0] as { pi: unknown }).pi).toBe(pi2);
+  });
+
+  it("派发 ctx 的 sessionState 条目缺席（装配链未完成/已 shutdown）→ 静默早退零调用", async () => {
+    await mountWithSession("sess-resume-known");
+    mockRunNotifyReconcile.mockClear();
+
+    expect(dispatchResumeReconcile(makeCtx("sess-resume-unknown"))).toEqual([]);
+    expect(mockRunNotifyReconcile).not.toHaveBeenCalled();
+  });
+});
+
+// ── ⑧ 对账入口判据源回调面（D8② 三入口的 settledRecordOf / loadRuns 注入体） ──
+//
+// 上述接线锁只断言编排被调（reason / pi），注入的判据源回调体（settledRecordOf /
+// loadRuns 箭头体）从未被执行——覆盖盲区。本组用 per-test mockImplementation 让
+// mock 编排真实执行回调，锁定：agent_settled 入口（入口②）体端到端触发 +
+// 三入口注入的判据源回调可执行且读到 fixture store 的两成员。
+
+/** 让 mock 对账编排真实执行注入的判据源回调（返回空结果，形态同默认 mock）。 */
+function mockReconcileExecutesCallbacks(): void {
+  mockRunNotifyReconcile.mockImplementation(async (opts: {
+    settledRecordOf: (runId: string) => unknown;
+    loadRuns: () => Promise<unknown[]>;
+  }) => {
+    // 判据源可执行：settledRecordOf 读 fixture store 终局记录、loadRuns 读全量 runs
+    expect(opts.settledRecordOf("probe")).toMatchObject({ outcome: "completed" });
+    await expect(opts.loadRuns()).resolves.toEqual([]);
+    return {
+      scanned: 0,
+      candidates: 0,
+      redelivered: [],
+      skippedNotTerminal: [],
+      skippedDelivered: [],
+      skippedJournaled: [],
+    };
+  });
+}
+
+describe("对账入口判据源回调面（D8② settledRecordOf / loadRuns 注入体）", () => {
+  it("agent_settled 触发：sessionState 条目在座 → 编排以 reason=agent_settled 被调且判据源回调真实执行", async () => {
+    const sessionId = "sess-agent-settled";
+    const { handlers, ctx } = await mountWithSession(sessionId);
+    mockRunNotifyReconcile.mockClear();
+    mockReconcileExecutesCallbacks();
+
+    await handlers.get("agent_settled")!({ type: "agent_settled" }, ctx);
+
+    expect(mockRunNotifyReconcile).toHaveBeenCalledTimes(1);
+    const deps = mockRunNotifyReconcile.mock.calls[0]![0] as { reason: string };
+    expect(deps.reason).toBe("agent_settled");
+  });
+
+  it("session_start 入口：storeHealthy 条目下对账编排收到可执行的判据源回调（session_start 边沿补投接线）", async () => {
+    const sessionId = "sess-start-callbacks";
+    mockReconcileExecutesCallbacks();
+    // 双 tray pusher 必须注入 fake：真实 createSubagentTrayWidgetPusher().attach 订阅
+    // service.queries.onChange（fake service 无 queries 成员）——attach 抛错被 handler
+    // 围栏吞掉，对账步（attach 之后）永不达。既有接线锁用例不依赖链内对账故未暴露。
+    await mountWithSession(sessionId, {
+      wiring: { trayWidgetPusher: makeTrayPusher(), workflowTrayWidgetPusher: makeWorkflowTrayPusher() },
+    });
+    expect(mockRunNotifyReconcile).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "session_start" }),
+    );
+  });
+
+  it("resume 入口：切回派发时判据源回调真实执行（订阅回调体的 settledRecordOf / loadRuns 体）", async () => {
+    const sessionId = "sess-resume-callbacks";
+    await mountWithSession(sessionId);
+    mockRunNotifyReconcile.mockClear();
+    mockReconcileExecutesCallbacks();
+
+    expect(dispatchResumeReconcile(makeCtx(sessionId))).toEqual([]);
+    expect(mockRunNotifyReconcile).toHaveBeenCalledTimes(1);
+    expect((mockRunNotifyReconcile.mock.calls[0]![0] as { reason: string }).reason).toBe("resume");
   });
 });

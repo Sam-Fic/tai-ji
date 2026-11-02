@@ -9,7 +9,8 @@
  *     映射（runtime entry-tree-builder / revoke-orchestrator × host-internals 扩展的
  *     msg-id-mapper 模块）
  *   - 'taiji:revoked'：LabelEntry 撤回信号，runtime 侧以 custom entry 补记失效，
- *     host-internals 扩展（host-commands 模块）与 scheduler-manager 插件消费
+ *     host-internals 扩展（host-commands 模块）消费（scheduler-manager 面板撤回镜像链
+ *     已随任务库方案 B 退役，不再登记）
  *
  * 检查逻辑（TypeScript 编译器 API 语法级 AST 解析，同 check-chat-ops-sync.mjs
  * 惯例）：对每个登记文件提取代码字符串字面量集合（模板串无插值形态同算；注释
@@ -55,7 +56,6 @@ const GROUPS = [
     files: [
       'packages/runtime/src/services/session/revoke-orchestrator.ts',
       'extensions/taiji/host-internals/src/host-commands.ts',
-      'resources/plugins/scheduler-manager/index.ts',
     ],
   },
 ]

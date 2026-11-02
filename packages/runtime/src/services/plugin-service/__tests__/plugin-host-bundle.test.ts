@@ -6,11 +6,13 @@ import { HOOK_ANOMALY_WARN_EVERY, HookPipeline } from '../hook-pipeline.js';
 import { buildPluginCapabilityForkEnv } from '../plugin-fs-guard.js';
 import { buildPluginHostChildEnv } from '../plugin-host-process.js';
 import type { PluginHost } from '../plugin-host.js';
+import { pluginHostPiAgentDirEnv } from '../plugin-host.js';
 import type { PluginRpcServer } from '../plugin-rpc-server.js';
 import { PluginService } from '../plugin-service.js';
 import type { ToolEntry, HookEntry, HookContext, HookType, PluginDescriptor } from '../plugin-types.js';
 import { WORKER_STDERR_MAX_BYTES, createWorkerStderrCollector } from '../worker-stderr-collector.js';
 import { PluginCapabilityConstants, resolveAllowedModules } from '@taiji/shared/plugin-capability-map';
+import { getPiAgentDir } from '@taiji/shared/paths';
 import { fork, type ChildProcess } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -428,6 +430,49 @@ describe('build-plugin-host-child-env', () => {
       buildPluginHostChildEnv(parent)
 
       expect(parent).toEqual(snapshot)
+    })
+  })
+
+  // ════════════════ 来源: plugin-host-agent-dir-env.test.ts ════════════════
+  /**
+   * pluginHostPiAgentDirEnv 单测（dmg-r1-12：scheduler-manager 插件不再相对路径直引
+   * shared paths.ts 的 env 缺省形态，改经 env 契约键 PI_CODING_AGENT_DIR 取值）。
+   *
+   * 覆盖验收断言点：
+   *   ① 键名与 shared 登记一致（SPAWN_ENV_FORWARD_REFERENCE 的 PI_CODING_AGENT_DIR 条目）；
+   *   ② 值 = shared getPiAgentDir() 现算结果（fork 与 Worker 两宿主同源同值的单一来源）；
+   *   ③ 父 env 的 ambient 同名键被覆盖（宿主 shell 泄漏的系统 pi 目录不得让插件读到错位置）。
+   */
+  describe('pluginHostPiAgentDirEnv（PI_CODING_AGENT_DIR 权威注入）', () => {
+    it('键名 = PI_CODING_AGENT_DIR，值 = shared getPiAgentDir() 现算结果', () => {
+      const env = pluginHostPiAgentDirEnv()
+
+      expect(Object.keys(env)).toEqual(['PI_CODING_AGENT_DIR'])
+      expect(env.PI_CODING_AGENT_DIR).toBe(getPiAgentDir())
+    })
+
+    it('权威值后置于父 env 的 ambient 同名键（宿主 shell 泄漏不生效）', () => {
+      const parent: NodeJS.ProcessEnv = {
+        PATH: '/usr/bin:/bin',
+        HOME: '/Users/tester',
+        // 宿主 shell 泄漏形态：指向系统 pi 的 ~/.pi/agent（错误目录）
+        PI_CODING_AGENT_DIR: '/Users/tester/.pi/agent',
+      }
+
+      // fork 路径：buildPluginHostChildEnv 的 extras 后置于父 env 拷贝之上
+      const forked = {
+        ...buildPluginHostChildEnv(parent),
+        ...pluginHostPiAgentDirEnv(),
+      }
+      // Worker 路径：spread 父 env 后再覆盖（new Worker 的 env 是整体替换语义）
+      const worked = { ...parent, ...pluginHostPiAgentDirEnv() }
+
+      expect(forked.PI_CODING_AGENT_DIR).toBe(getPiAgentDir())
+      expect(worked.PI_CODING_AGENT_DIR).toBe(getPiAgentDir())
+      expect(forked.PI_CODING_AGENT_DIR).not.toBe('/Users/tester/.pi/agent')
+      // 其余父 env 键在两条路径都保持拷贝（ Worker 的 env 替换语义要求 spread 父 env）
+      expect(forked.PATH).toBe('/usr/bin:/bin')
+      expect(worked.PATH).toBe('/usr/bin:/bin')
     })
   })
 });

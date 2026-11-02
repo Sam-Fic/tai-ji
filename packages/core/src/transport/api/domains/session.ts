@@ -323,7 +323,8 @@ export function setSubagentEngineDefaultModel(
 }
 
 /**
- * 获取 session 派生的 workflow 列表（runtime 从主 session JSONL 的 workflow-state-link 提取）。
+ * 获取 session 派生的 workflow 列表（runtime 侧数据源 = events-projection 派生视图，
+ * 由 v2 workflow 注册/终态条目 + record 流 fold 得出，见 runtime workflow-extractor）。
  * reply payload 是 { sessionId, workflows, oversize?, found? }——结构化返回（oversize 语义同
  * getSubagents：true = 文件过大列表不可用，恒空数组；found 语义同 getSubagents：false =
  * 会话不在册，store 保留既有分区）。

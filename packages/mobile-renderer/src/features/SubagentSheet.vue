@@ -61,7 +61,8 @@ function reloadList(sid: string): void {
       // 直落意图单次消费（found=false / 不在册均放弃直落落列表态——失败形态不阻塞清单呈现）
       const initial = pendingInitialId
       pendingInitialId = undefined
-      // found=false = 会话不在册（pi 延迟落盘窗口/扫描竞态）——保留既有分区数据不覆盖
+      // found=false = 会话不在册（pi 延迟落盘窗口/扫描竞态）——保留组件态已拉数据（SC9 容器）不覆盖，
+      // 不回写壳级分区（SC8，拉取结果不回写 SC8 为 D10 裁决）
       if (reply.found === false) return
       records.value = reply.subagents
       oversize.value = reply.oversize === true

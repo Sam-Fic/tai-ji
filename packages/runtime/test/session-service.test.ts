@@ -13,7 +13,7 @@
  * - existsSync 用真实 node:fs，测试数据用真实存在的 cwd（tmpdir）。
  *
  * 覆盖分类（对应 plan 归属表）：
- * - dispatcher：sendMessage / abort / compact（steerMessage/followUpMessage 已随 MF-1-8 退役）
+ * - dispatcher：sendMessage / abort（steerMessage/followUpMessage 已随 MF-1-8 退役；compact 编排随 C2 /compact 后台化退役——compactBackground 直投内部命令不经 dispatcher）
  *   （[HISTORICAL] sendSubagentMessage 已随 marker 通道废弃删除，composer 四符号设计 D2）
  * - lifecycle：create / delete / renameSession / restoreSession
  * - Facade：switchModel / setThinkingLevel / getHistory / hasActiveSession / getRpcClient /
@@ -168,7 +168,6 @@ interface MockClient {
   setThinkingLevel: MockInstance<(level: string) => Promise<unknown>>
   /** set_session_name RPC mock（W1 数据源治理：活跃 label 持久化唯一写入口）。 */
   setSessionName: MockInstance<(name: string) => Promise<unknown>>
-  compact: MockInstance<() => Promise<unknown>>
   clear: MockInstance<() => Promise<unknown>>
   getHistory: MockInstance<() => Promise<unknown>>
   /** get_entries RPC mock（entry 树重建路径）。默认空 entries（触发 fallback 尾读）。 */
@@ -201,7 +200,6 @@ function makeMockClient(overrides: Partial<MockClient> = {}): MockClient {
     setModel: vi.fn<(provider: string, modelId: string) => Promise<unknown>>().mockResolvedValue(undefined),
     setThinkingLevel: vi.fn<(level: string) => Promise<unknown>>().mockResolvedValue(undefined),
     setSessionName: vi.fn<(name: string) => Promise<unknown>>().mockResolvedValue(undefined),
-    compact: vi.fn<() => Promise<unknown>>().mockResolvedValue(undefined),
     clear: vi.fn<() => Promise<unknown>>().mockResolvedValue(undefined),
     getHistory: vi.fn<() => Promise<unknown>>().mockResolvedValue({ data: { messages: [] } }),
     // 默认空 entries → getHistory 走 fallback 尾读（与旧 getHistory 空 messages 行为一致）
@@ -781,12 +779,18 @@ describe('SessionService · dispatcher', () => {
     // 与 useChat 提交链测试承接。
   })
 
-  describe('compact', () => {
-    it('M4 事件驱动：零 compaction 广播 + client.compact 调用', async () => {
-      const client = setup.mountClient('sid-c')
-      await setup.service.compact('sid-c')
-      expect(client.compact).toHaveBeenCalledTimes(1)
-      // 零 compaction 广播（compacting/compacted/summary 由 interpreter 从 pi 事件唯一编排）
+  describe('compactBackground', () => {
+    /** seedSession 的在册命令清单（requireCommand 探测命中形态：pi getCommands 返回注册名，无斜杠）。 */
+    const compactRegistered = [{ name: '__taiji_compact__', description: '', source: 'extension' }]
+
+    it('命令在册 → prompt 发内部命令（受理即回，不等待压缩全程）+ 零 compaction 广播', async () => {
+      // seedSession 注册完整 session 态（ensureActive 快路径需要 sessions Map 条目）+ 命令在册
+      const { id, client } = await setup.seedSession({ commands: compactRegistered })
+      await setup.service.compactBackground(id)
+      expect(client.prompt).toHaveBeenCalledTimes(1)
+      expect(client.prompt).toHaveBeenCalledWith('/__taiji_compact__')
+      // 零 compaction 广播（后台压缩不发 pi compaction 事件；生命周期态由 interpreter 从
+      // pi 事件唯一编排——本 RPC 只承载受理语义）
       const types = [
         ...vi.mocked(setup.broker.broadcast).mock.calls.map(c => c[0].type),
         ...vi.mocked(setup.messageBus.publish).mock.calls.map(c => c[1].type),
@@ -797,17 +801,36 @@ describe('SessionService · dispatcher', () => {
       expect(compactionTypes).toHaveLength(0)
     })
 
-    it('M4 事件驱动：client.compact 失败 → rethrow + 零 compaction 广播（失败提示归 interpreter）', async () => {
-      const client = setup.mountClient('sid-c')
-      client.compact.mockRejectedValueOnce(new Error('compact fail'))
-      await expect(setup.service.compact('sid-c')).rejects.toThrow('compact fail')
-      // 零 compaction 广播（pi 手动失败必发 compaction_end{errorMessage}，interpreter 统一编排提示）
-      const compacted = findBroadcast(setup, 'session.compacted')
-      expect(compacted).toBeUndefined()
+    it('customInstructions percent 编码进命令 args（含空格/引号可逆还原）', async () => {
+      const { id, client } = await setup.seedSession({ commands: compactRegistered })
+      const instructions = '保留 关键决策 与 "引号" 内容'
+      await setup.service.compactBackground(id, instructions)
+      const sent = vi.mocked(client.prompt).mock.calls[0]?.[0] ?? ''
+      // 命令名后恰一个空格 + 编码段（无原始空格——pi args = 首空格后原样余串）
+      expect(sent.startsWith('/__taiji_compact__ ')).toBe(true)
+      const encoded = sent.slice('/__taiji_compact__ '.length)
+      expect(encoded).not.toContain(' ')
+      expect(decodeURIComponent(encoded)).toBe(instructions)
     })
 
-    it('throws when session has no client', async () => {
-      await expect(setup.service.compact('missing')).rejects.toThrow('Session missing not found')
+    it('命令不在册（扩展未加载）→ 拒发抛错且 prompt 零调用（命令串不进模型，E14 结构性防线）', async () => {
+      // seedSession 不传 commands = getCommands 返回 []（smart-context 扩展未加载形态）
+      const { id, client } = await setup.seedSession()
+      await expect(setup.service.compactBackground(id)).rejects.toThrow(/后台压缩未启动.*smart-context/)
+      // 拒发 = 命令串未被 prompt 直投（pi 未注册命令时会把原文当用户消息发给模型）
+      expect(client.prompt).not.toHaveBeenCalled()
+    })
+
+    it('prompt reject（传输级失败）→ 上抛（renderer toast compactStartFailed 承载）', async () => {
+      const { id, client } = await setup.seedSession({ commands: compactRegistered })
+      vi.mocked(client.prompt).mockRejectedValueOnce(new Error('pi gone'))
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      await expect(setup.service.compactBackground(id)).rejects.toThrow('后台压缩未启动')
+      errSpy.mockRestore()
+    })
+
+    it('session 无注册（ensureActive 拉活失败）→ 抛错（pi-reclaimed 回执文案）', async () => {
+      await expect(setup.service.compactBackground('missing')).rejects.toThrow('后台压缩未启动')
     })
   })
 })

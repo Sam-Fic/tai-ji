@@ -41,7 +41,7 @@ describe("send", () => {
     restoreSegments: Spy<(segments: Segment[]) => void>
     submitFirstMessage: Spy<ComposerSendDeps['flow']['submitFirstMessage']>
     send: Spy<(sessionId: string, segments: Segment[]) => Promise<boolean>>
-    compact: Spy<(sessionId: string, customInstructions?: string) => Promise<boolean>>
+    compactBackground: Spy<(sessionId: string, customInstructions?: string) => Promise<boolean>>
     toastError: Spy<(msg: string) => void>
     trySendBash: Spy<(rawText: string) => Promise<boolean>>
     extractBashCommand: Spy<(text: string) => BashCommandExtract>
@@ -81,7 +81,7 @@ describe("send", () => {
       submitFirstMessage: vi.fn(async () => {}) as unknown as Spies['submitFirstMessage'],
       // 默认 resolve true = 契约成功路径（useChat 失败信号契约：false = RPC 失败已 toast）
       send: vi.fn(async (_sessionId: string, _segments: Segment[]) => true),
-      compact: vi.fn(async (_sessionId: string, _customInstructions?: string) => true),
+      compactBackground: vi.fn(async (_sessionId: string, _customInstructions?: string) => true),
       toastError: vi.fn((_msg: string) => {}),
       trySendBash: vi.fn(async (_rawText: string) => ctrl.bashTryReturn),
       extractBashCommand: vi.fn((_text: string) => ctrl.bashExtract),
@@ -120,7 +120,7 @@ describe("send", () => {
       flow: { submitFirstMessage: spies.submitFirstMessage },
       localThinkingLevel: ref(ctrl.localThinkingLevel),
       send: spies.send,
-      compact: spies.compact,
+      compactBackground: spies.compactBackground,
       toastError: spies.toastError,
       t: ((k: string) => k) as ComposerSendDeps['t'],
     }
@@ -133,7 +133,7 @@ describe("send", () => {
       await useComposerSend(deps).onSend()
       expect(spies.stagingSend).not.toHaveBeenCalled()
       expect(spies.send).not.toHaveBeenCalled()
-      expect(spies.compact).not.toHaveBeenCalled()
+      expect(spies.compactBackground).not.toHaveBeenCalled()
     })
 
     it('①b [GUI 快修④] blocked 不再静默：有输入被拦 → toast「占用中」反馈（区分空输入）', async () => {
@@ -287,7 +287,7 @@ describe("send", () => {
       await useComposerSend(deps).onSend()
       // 归位产物 = '/compact 整理一下focus on auth'（slash→text 补边界空格，text→text 不补），
       // args（slice 后）= 命令后剩余全部文本。
-      expect(spies.compact).toHaveBeenCalledWith('s1', '整理一下focus on auth')
+      expect(spies.compactBackground).toHaveBeenCalledWith('s1', '整理一下focus on auth')
       expect(spies.send).not.toHaveBeenCalled()
     })
 
@@ -296,7 +296,7 @@ describe("send", () => {
       const { deps, spies } = setup({ variant: 'panel', draft: '/compact' })
       spies.getSegments.mockReturnValue([{ type: 'slash', name: 'compact' }])
       await useComposerSend(deps).onSend()
-      expect(spies.compact).toHaveBeenCalledWith('s1', undefined)
+      expect(spies.compactBackground).toHaveBeenCalledWith('s1', undefined)
       expect(spies.send).not.toHaveBeenCalled()
     })
 
@@ -307,14 +307,14 @@ describe("send", () => {
         { type: 'text', text: 'focus on auth' },
       ])
       await useComposerSend(deps).onSend()
-      expect(spies.compact).toHaveBeenCalledWith('s1', 'focus on auth')
+      expect(spies.compactBackground).toHaveBeenCalledWith('s1', 'focus on auth')
     })
 
     it('⑩ 普通发送 → send(sessionId, segments)（统一 submit 终端）', async () => {
       const { deps, spies } = setup({ variant: 'panel', draft: 'hello' })
       await useComposerSend(deps).onSend()
       expect(spies.send).toHaveBeenCalledWith('s1', SEGMENTS)
-      expect(spies.compact).not.toHaveBeenCalled()
+      expect(spies.compactBackground).not.toHaveBeenCalled()
     })
 
     it('⑪ 普通发送失败 → restoreSegments + toastError 回滚', async () => {
@@ -351,9 +351,9 @@ describe("send", () => {
         { type: 'slash', name: 'compact' },
         { type: 'text', text: 'focus on auth' },
       ])
-      spies.compact.mockResolvedValueOnce(false)
+      spies.compactBackground.mockResolvedValueOnce(false)
       await useComposerSend(deps).onSend()
-      expect(spies.compact).toHaveBeenCalledWith('s1', 'focus on auth')
+      expect(spies.compactBackground).toHaveBeenCalledWith('s1', 'focus on auth')
       // clearInput 后输入区为空（fixture 真实语义）→ 检查放行恢复
       expect(spies.restoreSegments).toHaveBeenCalledTimes(1)
       expect(spies.toastError).not.toHaveBeenCalled()
@@ -363,11 +363,12 @@ describe("send", () => {
     it('⑨e [compaction-input-unlock] compact RPC 期间不置 isSending（压缩期 composer 可输入）', async () => {
       // 旧契约（已废）：compact 期间 isSending 置位双发锁——锁住整个压缩期（runtime compact
       // RPC 同步等压缩全程）→ composer 置灰不可输入。新契约：UI 锁只保留给受理往返型提交，
-      // 压缩期输入/发送由投递内核 queued 投递路径承接；并发 /compact 互斥交还 runtime compact_busy。
+      // 压缩后台执行（C2）输入/发送由投递内核 queued 投递路径承接；并发 /compact 由扩展侧
+      // 后台管理器幂等回执（「进行中已并入」，不重复启动）。
       const { deps, spies } = setup({ variant: 'panel', draft: '/compact' })
       spies.getSegments.mockReturnValue([{ type: 'slash', name: 'compact' }])
       let sendingDuringRpc: boolean | undefined
-      spies.compact.mockImplementationOnce(async () => {
+      spies.compactBackground.mockImplementationOnce(async () => {
         sendingDuringRpc = deps.isSending.value
         return true
       })
@@ -379,7 +380,7 @@ describe("send", () => {
     it('⑨f [compaction-input-unlock] compact 失败但压缩期用户已输入新文本 → 不恢复（防覆盖用户输入）', async () => {
       const { deps, spies, ctrl } = setup({ variant: 'panel', draft: '/compact focus' })
       spies.getSegments.mockReturnValue([{ type: 'slash', name: 'compact' }, { type: 'text', text: 'focus' }])
-      spies.compact.mockImplementationOnce(async () => {
+      spies.compactBackground.mockImplementationOnce(async () => {
         // 模拟压缩期间用户输入新内容（fixture 真实语义：输入 → hasInput 翻 true + segments 非空）
         ctrl.hasInput = true
         ctrl.draft = '压缩期间新输入'
@@ -396,7 +397,7 @@ describe("send", () => {
       // getSegments().length 兑现「有 chip 也不覆盖」
       const { deps, spies } = setup({ variant: 'panel', draft: '/compact' })
       spies.getSegments.mockReturnValue([{ type: 'slash', name: 'compact' }])
-      spies.compact.mockImplementationOnce(async () => {
+      spies.compactBackground.mockImplementationOnce(async () => {
         // 模拟压缩期插入 chip：无文本（hasInput false）但 segments 非空
         spies.getSegments.mockReturnValue([{ type: 'slash', name: 'review' }])
         return false
@@ -409,7 +410,7 @@ describe("send", () => {
       const { deps, spies } = setup({ variant: 'panel', sessionId: null, draft: '!ls' })
       await useComposerSend(deps).onSend()
       expect(spies.trySendBash).not.toHaveBeenCalled()
-      expect(spies.compact).not.toHaveBeenCalled()
+      expect(spies.compactBackground).not.toHaveBeenCalled()
       expect(spies.send).not.toHaveBeenCalled()
       expect(spies.clearInput).not.toHaveBeenCalled()
     })

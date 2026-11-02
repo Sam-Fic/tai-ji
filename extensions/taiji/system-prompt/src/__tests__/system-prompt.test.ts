@@ -386,24 +386,6 @@ describe('fail-safe（外层 catch return undefined，永不阻断 agent loop）
     )
   })
 
-  it('logger 自身抛错的终极兜底 → stderr 兜底，仍 return undefined', () => {
-    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
-    loggerMock.error.mockImplementation(() => {
-      throw new Error('logger gone')
-    })
-    const h = createHarness()
-    const event = { type: 'before_agent_start', prompt: 'hi' } as unknown as BeforeAgentStartEvent
-    Object.defineProperty(event, 'systemPrompt', {
-      get() {
-        throw new Error('getter boom')
-      },
-    })
-    expect(h.beforeAgentStart(event)).toBeUndefined()
-    expect(stderrSpy).toHaveBeenCalledWith(
-      expect.stringContaining('logHookFailure also failed'),
-    )
-  })
-
   it('systemPrompt 非法类型（undefined）且无 append → 旧 quirk 锚定：返回仅含 capability 段的结果而非 undefined', () => {
     // R3 复核锚定的返回值检查 quirk（index.ts newPrompt === event.systemPrompt 比较）：
     // base 收敛 ''，capability 默认开 → newPrompt 非空且 !== undefined → 必然返回对象。

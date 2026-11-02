@@ -4,6 +4,8 @@
 //
 // 职责：
 //   - buildLlmContent：格式化通知文案（本文件唯一逻辑职责）
+//   - buildNotifyId：幂等键构造单一导出（RL8——补投路径 notify-reconcile 与主路径
+//     notify() 共用同一构造，构造漂移会使补投用错键 → 判重失效双投）
 //   - createNotifier：薄工厂——投递统一走 pi 半区投递端口（getDeliveryPort 进程级
 //     槽，unified-delivery 波 2 切换）：port.deliver 主投（受理前落投递日志 + 直达
 //     pi 原生唯一队列 + details-id 送达凭据 + 重启差集重放）；port 缺席（装配异常 /
@@ -11,6 +13,13 @@
 //     诊断计数——降级代价显式登记：无判重无耐久（重复提交可能双投），仅覆盖装配
 //     异常窗口，不作为常态路径（fail-fast 导向：warn 即修复信号）。
 //
+// rejected 处置阶梯（completion-signal-delivery D1①/D7①，ADR-0122⑧ 边界精确化的
+// 落点）：rejected（幂等键未登记、投递日志未落盘，差集重放结构性无从覆盖）不再等于
+// 丢失——瞬态成因当场单次重提（deliverViaPort rejected 分支内同步单次）；重提未恢复
+// 的形态由对账边沿的事实判据兜底（notify-reconcile 三入口：session_start / 切回 /
+// agent_settled——终态通知已入补投候选，payload 与本文件主路径同构造）。warn 文案
+// 从「丢失」改为「recovered by reconcile fallback」+ 恢复指引（RL9 弱断言防回退）。
+
 // [collect 退役] 原 notifyBatch / buildBatchLlmContent / computeBatchBudget /
 // buildBatchNotifyId（sync 批通知三件套 + 批幂等键）已随 collect 批机制整体删除。
 // [波 2 退役] 通知账本（notify-ledger 四步生命周期）随波 2 shadow 比对通过退役，
@@ -27,6 +36,7 @@ import {
   getNotifyDomainPorts,
   type DeliveryHandle,
   type DeliveryPort,
+  type PortDeliverEnvelope,
 } from "../../core/notify-ports.ts";
 
 import { deriveOutcome } from "../persistence/execution-record.ts";
@@ -51,46 +61,34 @@ export const NOTIFY_CUSTOM_TYPE = SUBAGENT_BG_NOTIFY_CUSTOM_TYPE;
  * 全部从 ExecutionRecord 同名字段直传——调用点 `notifyGateAllowsDelivery(record)`）。
  */
 export interface NotifyGateRecordState {
-  /** record 当前世代（两步判定的比较基准——非标记槽 epoch，§3.2.7 显式两步）。 */
+  /** record 当前世代（标记判定的比较基准——非标记槽 epoch；跨世代重复帧由
+   *  notifyId（id:epoch:round）投递日志判重承接）。 */
   readonly epoch?: Epoch;
   /** 放弃轮标记（gate 判据，单槽）：abort（cancel / 编排性关闭打断）时置在途轮。 */
   readonly lastAbandonedRound?: AbandonedRoundMark | null;
-  /** 当前轮次（gate 第二步的回注轮缺省源——settle 推进后的值，正常轮通知凭此
+  /** 当前轮次（gate 回注轮缺省源——settle 推进后的值，正常轮通知凭此
    *  越过旧标记；被中断轮不推进，迟到回注轮 ≤ 标记轮被丢弃）。 */
-  readonly round?: number;
-}
-
-/**
- * notify 门的回注声明身份（迟到帧自带；缺省 = 读 record 自身——同世代、当前轮）。
- * 现有消费点的回注均从 record 派生视图（无独立世代/轮载体），缺省路径恒命中「同世代」，
- * 拦截由第二步标记判定承担；跨世代重复帧的最终防线 = notifyId（id:epoch:round）
- * 投递日志判重（reopen 前最后轮必已同步入账，晚到回注必为重复帧——设计 §3.2.7 论证）。
- */
-export interface NotifyGateInbound {
-  /** 回注声明世代（缺省 = record 当前 epoch，第一步恒同世代）。 */
-  readonly epoch?: Epoch;
-  /** 回注声明轮（缺省 = record.round ?? 0）。 */
   readonly round?: number;
 }
 
 /**
  * [U5 / §3.2.7 通知 gate] 轮次完成回注的投递门。
  *
- * 两个阻断维度承接旧 closedReason 集合门的事故防御（v4 A-6 僵尸回执 / cancelled
+ * 阻断维度承接旧 closedReason 集合门的事故防御（v4 A-6 僵尸回执 / cancelled
  * 防双发），判据源 = 「放弃标记」单维（收尾/静默场景由放弃轮标记 + 轮身份检查 +
  * notifyId 账本三层承接——原 intent=archived 静默 gate 随 intent 概念删除退役）：
  *
- *   ① 回注 epoch ≠ record 当前 epoch → 丢弃（跨世代回注）；
- *   ② 放弃轮标记命中 → 阻断（承接原 cancelled 阻断防双发）。**显式两步**（比较基准
- *      = record 当前 epoch，非标记槽 epoch——reopen 后标记残留旧 epoch，按标记槽比较
- *      会把新世代全部正常轮通知吞掉）：
- *        第一步：回注 epoch ≠ record 当前 epoch → 丢弃；
- *        第二步：同 epoch 时标记非空、标记槽世代 = 当前世代且回注轮 ≤ 标记轮 → 丢弃。
+ *   放弃轮标记命中 → 阻断（承接原 cancelled 阻断防双发）。比较基准 = record 当前
+ *   epoch，非标记槽 epoch——reopen 后标记残留旧 epoch，按标记槽比较会把新世代
+ *   全部正常轮通知吞掉：标记非空、标记槽世代 = 当前世代且回注轮 ≤ 标记轮 → 丢弃。
+ *   标记槽世代 ≠ 当前世代（reopen 残留）→ 标记自然失效；跨世代重复帧的最终防线 =
+ *   notifyId（id:epoch:round）投递日志判重（reopen 前最后轮必已同步入账，晚到
+ *   回注必为重复帧——设计 §3.2.7 论证）。
  *
  * 收尾轮豁免（构造性）：close 挂起等待的最后一轮（closeAfterRound 消费）通知正常
  * 送达——close 不置放弃轮标记（标记只由 cancel/编排性关闭的 abort 置位），且收尾
  * 写入 journal 记录的编排挂在轮次通知送达之后（§3.2.5 顺序约束 [写死]），settle 时点 record 仍
- * running 非放弃轮，①②均不命中。收尾后的残余迟到回注由轮身份检查（Continuation
+ * running 非放弃轮，不命中。收尾后的残余迟到回注由轮身份检查（Continuation
  * abortAndClearQueue 废弃轮身份）+ 投递日志 notifyId 判重承接。
  *
  * 正常轮通知不该被旧标记吞的论证（为何比较 record.round 而非标记槽）：正常轮 N settle
@@ -103,17 +101,13 @@ export interface NotifyGateInbound {
  */
 export function notifyGateAllowsDelivery(
   state: NotifyGateRecordState,
-  inbound: NotifyGateInbound = {},
 ): boolean {
   const currentEpoch = state.epoch ?? 0;
-  // ① 第一步：跨世代回注丢弃（比较基准 = record 当前 epoch）。
-  const inboundEpoch = inbound.epoch ?? currentEpoch;
-  if (inboundEpoch !== currentEpoch) return false;
-  // ② 第二步：标记槽在当前世代且回注轮 ≤ 标记轮 → 丢弃（防双发）。标记槽世代 ≠
+  // 标记槽在当前世代且回注轮 ≤ 标记轮 → 丢弃（防双发）。标记槽世代 ≠
   // 当前世代（reopen 残留）→ 标记自然失效，跨世代重复帧由 notifyId 去重承接。
   const mark = state.lastAbandonedRound;
   if (mark != null && mark.epoch === currentEpoch) {
-    const inboundRound = inbound.round ?? state.round ?? 0;
+    const inboundRound = state.round ?? 0;
     if (inboundRound <= mark.round) return false;
   }
   return true;
@@ -122,6 +116,38 @@ export function notifyGateAllowsDelivery(
 /** U4：delivery warn 出口注入用——facade 同 component 同引用，与 index.ts 的
  *  getLogger("subagents") 共享单例；configureCore 后透明切换到宿主实现。 */
 const notifyLogger = getLogger("subagents");
+
+/**
+ * notifyId 构造输入（结构子集——主路径 BgNotifyRecord 与补投路径的终态事实
+ * （notify-reconcile）都满足）。
+ */
+export interface NotifyIdParts {
+  /** record id（幂等键主干）。 */
+  readonly id: string;
+  /** 当前轮次（!= null 时键带轮次段）。 */
+  readonly round?: number;
+  /** 世代（>0 时键带世代段）。 */
+  readonly epoch?: number;
+  /** 显式覆盖（派生通知的独立去重身份，优先级最高——BgNotifyRecord.dedupKey 同名直传）。 */
+  readonly dedupKey?: string;
+}
+
+/**
+ * notifyId 构造单一导出（RL8 行为锁前提：补投与主路径共用同一构造——构造漂移会
+ * 导致补投用错键 → 判重失效双投）。
+ *
+ * 形态 = `id` / `id:round` / `id:epoch` / `id:epoch:round`（[U5 / §3.2.3] epoch>0 时
+ * 两种形态都带世代段——reopen 后 round 归零不与历史轮撞键；epoch=0 恒旧格式，磁盘
+ * 投递日志零迁移）；dedupeKey 显式覆盖优先（drain 丢弃通知等派生通知）。
+ */
+export function buildNotifyId(record: NotifyIdParts): string {
+  const withEpoch = record.epoch !== undefined && record.epoch > 0;
+  const roundKey =
+    record.round != null
+      ? (withEpoch ? `${record.id}:${record.epoch}:${record.round}` : `${record.id}:${record.round}`)
+      : (withEpoch ? `${record.id}:${record.epoch}` : record.id);
+  return record.dedupKey ?? roundKey;
+}
 
 /**
  * 一条待发送的完成通知记录。
@@ -475,41 +501,60 @@ export function createNotifier(host: NotifierHost): BgNotifier {
   }
 
   /**
+   * rejected 恢复通道指引（处置阶梯 warn 的尾注，按通知形态分流——文案承诺必须与
+   * 对账补投的实际判据覆盖一致）：closed 终态载荷由对账补投覆盖（notify-reconcile
+   * 三入口按裸 id 终态键补投，候选判据见该文件头候选状态位段）；running 轮次载荷
+   * 不在对账补投范围（补投只构造终态键——设计范围外②裁决），恢复通道 = 下一轮
+   * 边沿自然重发（轮次通知的既有重发语义），warn 不承诺补投。
+   */
+  function reconcileRecoveryHint(status: BgNotifyRecord["status"]): string {
+    return status === "closed"
+      ? "recovered by reconcile fallback (session_start / resume / agent_settled edge)"
+      : "round reply is not covered by the reconcile fallback (terminal keys only);" +
+          " it is resent naturally at the next round edge";
+  }
+
+  /**
    * 投递主路径：port.deliver（受理前落投递日志 + 直达唯一队列 + details-id 凭据 +
    * 重启差集重放，端口侧内包）。
    *
-   * rejected（persist-failed = 受理前落盘失败）不降级直发：绕过耐久承诺制造
-   * at-most-once 双语义，首败即停 + warn 显式上报（ADR-0122 ⑧）。
+   * rejected 处置阶梯（completion-signal-delivery D1①/D7①）：rejected（幂等键未
+   * 登记、投递日志未落盘，重放结构性无从覆盖）不再等于丢失——当场 getDeliveryPort()
+   * 重取当前实例单次重提原 envelope（一次投递尝试的同步收尾动作，非重试循环非
+   * 定时器——ADR-0122 红线不越界，RL10）；重提仍 rejected 或重取缺席即停止，恢复
+   * 责任移交对账边沿的事实判据兜底（notify-reconcile 三入口：session_start /
+   * resume / agent_settled，warn 文案带恢复指引——RL9/RL11；指引按载荷形态分流，
+   * 见 reconcileRecoveryHint）。
    */
   function deliverViaPort(
     notifyId: string,
     content: string,
-    details: object,
+    details: BgNotifyRecord,
     collectKey: string[] | undefined,
   ): boolean {
+    // envelope 构造单一落点：主投递与单次重提共用同一构造（重提原 payload 语义）。
+    const envelope: PortDeliverEnvelope = {
+      payload: {
+        kind: "custom",
+        customType: NOTIFY_CUSTOM_TYPE,
+        content,
+        display: true,
+        details,
+      },
+      id: notifyId,
+    };
+    const deliverOptions = { ...(collectKey !== undefined ? { collectKey } : {}) };
     const port = getNotifyDomainPorts().getDeliveryPort?.();
     if (port) {
-      const result = port.deliver(
-        {
-          payload: {
-            kind: "custom",
-            customType: NOTIFY_CUSTOM_TYPE,
-            content,
-            display: true,
-            details,
-          },
-          id: notifyId,
-        },
-        // [subagent-observability §3.3.7③] 攒批窗退役后边沿即投：无合批选项，
-        // collectKey 债权申报（result-collect 设计 §3.4）保留——世代首个通知携带
-        // （见 notify() 内申报判据），后续轮次 undefined。
-        { ...(collectKey !== undefined ? { collectKey } : {}) },
-      );
+      const result = port.deliver(envelope, deliverOptions);
       if (result.kind === "rejected") {
+        // 首败留痕（修复信号）+ 处置阶梯①接线：立即单次重提（D1 采用段①）。
         notifyLogger.warn(
-          "delivery port rejected notification (idempotency key not registered; will retry on next notify)",
+          "delivery port rejected notification — retrying once via re-acquired port; " +
+            reconcileRecoveryHint(details.status),
           { detail: { notifyId, reason: result.reason } },
         );
+        retryDeliverOnce(envelope, deliverOptions, notifyId, details.status);
         return false;
       }
       return true;
@@ -531,6 +576,43 @@ export function createNotifier(host: NotifierHost): BgNotifier {
     return true;
   }
 
+  /**
+   * 立即单次重提（D7①）：getDeliveryPort() 重取当前实例（session_start 重绑后即新
+   * 实例）、重提原 envelope（同幂等键——rejected 条目幂等键未登记，重提合法，
+   * notify-ports 交付契约既有登记）。单次不循环：重提 rejected 或重取 undefined 均
+   * 直接返回（RL10 的两处停止位），无定时器、无重试队列、无第三次投递。
+   */
+  function retryDeliverOnce(
+    envelope: PortDeliverEnvelope,
+    options: { collectKey?: string[] },
+    notifyId: string,
+    payloadStatus: BgNotifyRecord["status"],
+  ): void {
+    const recovery = reconcileRecoveryHint(payloadStatus);
+    const retryPort = getNotifyDomainPorts().getDeliveryPort?.();
+    if (retryPort === undefined) {
+      // 重取到 undefined（装配缺席窗）：停止转兜底——缺席直发兜底只属主路径缺席
+      // 形态，重提路径不扩该降级；恢复通道 = 对账边沿事实判据（终态载荷）/ 下一轮
+      // 边沿自然重发（轮次载荷），按形态分流见 reconcileRecoveryHint。
+      notifyLogger.warn(
+        "delivery port notify retry skipped: port absent on re-acquire; " + recovery,
+        { detail: { notifyId } },
+      );
+      return;
+    }
+    const retryReceipt = retryPort.deliver(envelope, options);
+    if (retryReceipt.kind === "rejected") {
+      // 单次重提仍 rejected（转换窗旧实例在位 / 持久写失败）：即停报警（RL11——
+      // 持久成因不静默重试，warn 留痕交环境修复；环境修复后的送达按载荷形态由
+      // 对账边沿事实判据 / 下一轮边沿承接——reconcileRecoveryHint 分流）。
+      notifyLogger.warn(
+        "delivery port notify retry rejected after the single re-acquire attempt; single retry" +
+          " spent; " + recovery,
+        { detail: { notifyId, reason: retryReceipt.reason } },
+      );
+    }
+  }
+
   return {
     notify(record: BgNotifyRecord): void {
       if (disposed) return;
@@ -541,19 +623,15 @@ export function createNotifier(host: NotifierHost): BgNotifier {
       // 构造）。running（轮次通知）语义上无 outcome，不物化。消源自 record 的浅拷贝
       // ——不改写入方对象（BgNotifyRecord 由调用方持有）。notifyId 同批物化（U2：
       // dedupe key 与账本身份键同源，details 携带供回执匹配）。
-      // notifyId 构造：dedupKey 显式覆盖优先（drain 丢弃通知等派生通知的独立去重
-      // 身份），缺省 = `id:round` / `id` 旧格式；[U5 / §3.2.3] epoch>0 时两种形态都
-      // 带 epoch 段——轮次通知 `id:epoch:round`（reopen 后 round 归零不与历史轮撞
-      // 键）、无轮通知 `id:epoch`（notifyClosed 显式清 round，reopen 后第二次 close
-      // 的终态提示若沿用裸 id 会与首轮 close 撞键，被投递日志按「同 notifyId 已
-      // 终局」永久判重吞掉——同 key 撞车吞通知是本代码库已修复过的事故类，epoch 是
-      // 同族防御的构造性根治）。epoch=0 恒旧格式，磁盘投递日志零迁移。
-      const withEpoch = record.epoch !== undefined && record.epoch > 0;
-      const roundKey =
-        record.round != null
-          ? (withEpoch ? `${record.id}:${record.epoch}:${record.round}` : `${record.id}:${record.round}`)
-          : (withEpoch ? `${record.id}:${record.epoch}` : record.id);
-      const notifyId = record.dedupKey ?? roundKey;
+      // notifyId 构造（单一导出 buildNotifyId——主路径与补投路径共用，RL8）：
+      // dedupKey 显式覆盖优先（drain 丢弃通知等派生通知的独立去重身份），缺省 =
+      // `id:round` / `id` 旧格式；[U5 / §3.2.3] epoch>0 时两种形态都带 epoch 段——
+      // 轮次通知 `id:epoch:round`（reopen 后 round 归零不与历史轮撞键）、无轮通知
+      // `id:epoch`（notifyClosed 显式清 round，reopen 后第二次 close 的终态提示若
+      // 沿用裸 id 会与首轮 close 撞键，被投递日志按「同 notifyId 已终局」永久判重
+      // 吞掉——同 key 撞车吞通知是本代码库已修复过的事故类，epoch 是同族防御的
+      // 构造性根治）。epoch=0 恒旧格式，磁盘投递日志零迁移。
+      const notifyId = buildNotifyId(record);
       // collectKey 债权申报判据（result-collect 设计 §3.3 多轮通知条目）= 该操作
       // 世代的第一个通知：
       //  - round === 1：markRoundIdle 同位的首个轮终通知——轮终簿记先于通知发出

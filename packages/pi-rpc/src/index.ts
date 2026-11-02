@@ -14,6 +14,10 @@ export type {
 } from './types.ts'
 
 export {
+  PI_SPAWN_MODE_ARGS,
+  PI_SPAWN_NO_EXTENSIONS,
+  PI_SPAWN_SKILL_FLAG,
+  PI_SPAWN_EXTENSION_FLAG,
   appendSkillArgs,
   appendExtensionArgs,
   appendToolArgs,
@@ -57,8 +61,8 @@ export {
 } from './commands.ts'
 export type { PromptImageAttachment, UiResponseShape } from './commands.ts'
 
-export { killPiProcess } from './kill-chain.ts'
-export type { KillableChild } from './kill-chain.ts'
+export { killPiProcess, KillSignalError } from './kill-chain.ts'
+export type { KillableChild, KillOutcome } from './kill-chain.ts'
 
 export { buildPiOutboundEnv } from './env.ts'
 export type { BuildChildEnvFn, PiOutboundEnvOptions } from './env.ts'

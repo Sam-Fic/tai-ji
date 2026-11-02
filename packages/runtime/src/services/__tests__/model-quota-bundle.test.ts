@@ -814,6 +814,13 @@ describe('羊毛聚合特例移除后：config.providers 直读形态（provider
     ])
   })
 
+  it('带 :thinkingLevel 后缀的 scoped 条目归一命中（写入侧放行形态不再静默失效）', () => {
+    const svc = new ModelService(stubSource)
+    // 写入侧 isModelRef 放行 "openai/gpt-4o:high" 落盘；比对经 scopedModelKey 剥后缀
+    const scoped = svc.aggregateModelsWithScoped(PROVIDERS, ['openai/gpt-4o:high'])
+    expect(scoped.map((m) => `${m.providerId}/${m.id}`)).toEqual(['openai/gpt-4o'])
+  })
+
   it('羊毛条目 enabled=false 时其模型不进结果（与既有来源同过滤语义）', () => {
     const svc = new ModelService(stubSource)
     const out = svc.aggregateModelsWithScoped(

@@ -1,6 +1,5 @@
-import type { SchedulerBackend, SchedulerProviderOverride } from '../backend.js'
-import { replayFoldEntries, type SchedulerEntryLike } from '../replay.js'
-import type { ScheduledTask, SchedulerEntryOp } from '../types.js'
+import type { SchedulerBackend } from '../backend.js'
+import type { ScheduledTask } from '../types.js'
 
 // 测试专用 mock（ext-simplify-08 L9：从 backend.ts 迁出——导出范围即测试范围的收敛，
 // 生产模块不再携带测试脚手架；MockSchedulerBackend/SentMessage 零生产引用）。
@@ -13,36 +12,21 @@ export interface SentMessage {
 }
 
 /**
- * Mock 后端：零 session/FS 副作用，记录 sendMessage/deliverDispatch/appendEntry/
- * registerProvider/unregisterProvider 调用，支持注入固定时间与 fake entries。
+ * Mock 后端：零 FS 副作用，记录 deliverDispatch/persistTasks 调用，支持注入固定时间。
  *
  * 能力：
- * - sentMessages: 每次 sendMessage / deliverDispatch 的 {msg, opts, idempotencyKey} 记录
- * - appendedOps: 每次 appendEntry 收到的 SchedulerEntryOp（测 runtime 各 op 断言）
- * - registeredProviders / unregisteredProviders: ack 覆写注册/注销记录
- * - fakeEntries / fakeSessionFile: loadTasks 经 replayFoldEntries 的注入源（测 backend→replay 委托）
+ * - sentMessages: 每次 deliverDispatch 的 {msg, opts, idempotencyKey} 记录
+ * - persistedSnapshots: 每次 persistTasks 收到的任务集快照（测各 mutation 的落盘断言）
  * - nowValue: now() 返回固定值，缺省 Date.now()
- * - appendError: 注入后 appendEntry 抛该错（测 ER-APPEND-FAIL 捕获路径）
+ * - persistError: 注入后 persistTasks 抛该错（测落盘失败降级路径）
  */
 export class MockSchedulerBackend implements SchedulerBackend {
   sentMessages: SentMessage[] = []
-  appendedOps: SchedulerEntryOp[] = []
-  registeredProviders: Array<{ providerId: string; config: SchedulerProviderOverride }> = []
-  unregisteredProviders: string[] = []
-  fakeEntries: SchedulerEntryLike[] = []
-  fakeSessionFile: string | undefined = '/test/session.json'
+  persistedSnapshots: ScheduledTask[][] = []
   nowValue: number | undefined
-  appendError: Error | null = null
+  persistError: Error | null = null
 
-  async sendMessage(
-    msg: { content: string; customType: string; display: boolean },
-    opts?: { deliverAs?: 'steer'; triggerTurn?: boolean },
-  ): Promise<void> {
-    this.sentMessages.push({ msg, opts })
-  }
-
-  /** 到期 dispatch 投递入口的 mock 记录（unified-delivery 迁移）：与 sendMessage
-   * 共用 sentMessages（同一「注入消息」概念），幂等键随记录携带供跨轮唯一性断言。 */
+  /** 到期 dispatch 投递入口的 mock 记录（unified-delivery 迁移）。 */
   async deliverDispatch(
     msg: { content: string; customType: string; display: boolean },
     opts: { deliverAs?: 'steer'; triggerTurn?: boolean } | undefined,
@@ -51,36 +35,17 @@ export class MockSchedulerBackend implements SchedulerBackend {
     this.sentMessages.push({ msg, opts, idempotencyKey })
   }
 
-  appendEntry(op: SchedulerEntryOp): void {
-    if (this.appendError) throw this.appendError
-    this.appendedOps.push(op)
+  persistTasks(tasks: ScheduledTask[]): void {
+    if (this.persistError) throw this.persistError
+    this.persistedSnapshots.push(tasks)
   }
 
-  getSessionFile(): string | undefined {
-    return this.fakeSessionFile
+  /** 最近一次落盘快照（未落盘时 undefined）。 */
+  get persistedTasks(): ScheduledTask[] | undefined {
+    return this.persistedSnapshots.at(-1)
   }
 
   now(): number {
     return this.nowValue ?? Date.now()
-  }
-
-  registerProvider(providerId: string, config: SchedulerProviderOverride): void {
-    this.registeredProviders.push({ providerId, config })
-  }
-
-  unregisterProvider(providerId: string): void {
-    this.unregisteredProviders.push(providerId)
-  }
-
-  getEntries(): SchedulerEntryLike[] {
-    return this.fakeEntries
-  }
-
-  /**
-   * 读路径（非接口成员，与 PiSchedulerBackend.loadTasks 对称）：经 replayFoldEntries 折叠
-   * fakeEntries + fakeSessionFile 恢复任务。测试用它验证 backend→replay 委托（TC-W-BACKEND-REPLAY）。
-   */
-  loadTasks(): ScheduledTask[] {
-    return [...replayFoldEntries(this.fakeEntries, this.fakeSessionFile).values()]
   }
 }

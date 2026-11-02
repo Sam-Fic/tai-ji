@@ -146,7 +146,7 @@ export function computeNextCronRuns(
 // ── 统一解析 ──
 
 /**
- * 统一解析 schedule 输入为 ScheduleSpec（L7：不包装单字段结果对象）。
+ * 统一解析 schedule 输入为 ScheduleSpec（不包装单字段结果对象）。
  * 不含空格 → duration 解析 → interval mode
  * 含空格 → cron 解析 → cron mode
  * 都失败 → undefined（语义 = 表达式无效，service 层归一为 INVALID_SCHEDULE 单一错误通道）

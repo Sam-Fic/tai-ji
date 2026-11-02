@@ -93,9 +93,6 @@ import type { NotifyHost } from "../notify/notify-host.ts";
 // 本聚合单向 type import（D-R3-2 同款非环形态）。
 import type { ResolvedIdentity } from "./record-access.ts";
 import { createBackgroundStream, type StreamSink } from "../assembly/stream-sink.ts";
-// 嵌套深度护栏单点（与 run-orchestration 同源；聚合间零互调不受影响——共同 import
-// 叶子 helper 文件是既有形态，G2 禁的是两聚合互相 import）。
-import { assertNestingDepthWithinLimit } from "../assembly/session-context-resolver.ts";
 import type { UiRequestObservability } from "../ui/ui-request-observability.ts";
 import { DEFAULT_AGENT_NAME } from "../domain/record-model.ts";
 import type { ExecutionMode } from "../domain/record-types.ts";
@@ -280,11 +277,9 @@ export class WorkflowDispatch {
     stepIndex?: number,
   ): Promise<WorkflowAgentResult> {
     this.deps.assertReady();
-    // 入口校验与嵌套护栏（与 execute/executeAndAwait 同款 BC-12 / T4②；护栏单源
-    // session-context-resolver）。
+    // 入口校验（与 execute/executeAndAwait 同款 T4②）。
     const execOpts = workflowCallToExecuteOptions(opts);
     this.deps.assertIdleTimeoutMsSafe(execOpts);
-    assertNestingDepthWithinLimit(this.deps.getExecNesting().current());
 
     // ── 八步迁移 ①②③：路由 → 预检 → identity（含非 pi 引擎 model 校验）──
     // 全部先于 record 创建与池 acquire（D3 失败零池占用）。agentConfig 取宽松读取侧
@@ -551,8 +546,10 @@ export class WorkflowDispatch {
     if (isPiRoute) {
       const declaredModel = opts.model ?? agentConfig?.model;
       if (declaredModel !== undefined) {
-        assertModelInCatalog(declaredModel, this.deps.getModelService().getModelRegistry(), {
+        const modelService = this.deps.getModelService();
+        assertModelInCatalog(declaredModel, modelService.getModelRegistry(), {
           source: "workflow agent call",
+          scopedAllowList: modelService.getScopedModels(),
         });
       }
     }

@@ -55,7 +55,7 @@ describe("hashOf（stable stringify 语义经公有面断言）", () => {
 	});
 });
 
-describe("extractSystem（payload 四口径）", () => {
+describe("extractSystem（payload 三口径）", () => {
 	it("OpenAI 兼容：messages 内 role=system", () => {
 		expect(extractSystem({ messages: [{ role: "system", content: "s" }, { role: "user", content: "u" }] })).toEqual([
 			{ role: "system", content: "s" },
@@ -74,11 +74,8 @@ describe("extractSystem（payload 四口径）", () => {
 		]);
 	});
 
-	it("伪造对象形态：顶层 systemInstruction（实装恒传 string，仅测试构造可达）", () => {
-		expect(extractSystem({ systemInstruction: { role: "system", parts: [] } })).toEqual({
-			role: "system",
-			parts: [],
-		});
+	it("Google 实装形态：string systemInstruction 不提取（已知失明行为锁，README 已知限制）", () => {
+		expect(extractSystem({ systemInstruction: "You are an agent.", messages: [] })).toBeNull();
 	});
 
 	it("无 system 内容返回 null", () => {

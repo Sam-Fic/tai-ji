@@ -173,7 +173,7 @@ export interface BtwCreateResult {
  * PiXxx 类型只许 infra/pi 内部——本服务只消费以下三键，故本地定义、不 import
  * ports 面 PiXxx 类型）。组合根 buildLineSpawnOptions 返回的 ports 面完整类型
  * 结构性满足本接口（多余字段协变放行），消费出口 = deps.processes.createSession
- *（Pick<IProcessManager> 契约面），pi 侧类型翻译归 ports/infra，不泄漏进本文件。
+ *（Pick<IProcessManager> 类型契约），pi 侧类型翻译归 ports/infra，不泄漏进本文件。
  */
 export interface BtwLineSpawnOptions {
   /** 进程工作目录（= 线 cwd）。 */

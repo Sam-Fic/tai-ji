@@ -18,6 +18,7 @@ import type { PluginCapabilityForkEnvInput } from './plugin-fs-guard.js'
 // 采集器本体在 worker-stderr-collector.ts（独立模块可单测，本文件 max-lines 预算内）。
 import { writePluginCrashLog, captureMemorySnapshot } from '../../infra/logger.js'
 import { createWorkerStderrCollector } from './worker-stderr-collector.js'
+import { getPiAgentDir } from '@taiji/shared/paths'
 
 /**
  * 解析 plugin-host.ts 所在目录（即 dist/runtime/）。
@@ -56,6 +57,42 @@ function resolvePluginHostDir(): string {
     'both __dirname and import.meta.url are unavailable. ' +
     'Ensure this module runs in Node.js (CJS bundle or ESM).',
   )
+}
+
+/**
+ * 插件宿主 env 的 PI_CODING_AGENT_DIR 权威注入（fork 与 Worker 两宿主共用的单一组装点）。
+ *
+ * 背景（dmg-r1-12）：builtin 插件 scheduler-manager 任务库面板要读
+ * `<agentDir>/scheduler/<root>/<segments>/<sessionId>.json`，此前经相对路径直引
+ * `packages/shared/src/paths.ts` 的 env 缺省形态（`getPiAgentDir()` 无参 → `getDataDir()`
+ * → C-proc-26 准入检查 + node:os/node:path）——而 resources/plugins 不在 shared 准入检查
+ * （check-shared-module-admission.mjs / check_shared_node_builtin.py 均只扫
+ * packages/shared/src）与 eslint 扫描根，该消费侧边界没有任何机器拦截。按
+ * session-store-paths.ts 头注与 C-ext-31 同族纪律，env 缺省形态只归 runtime / main
+ * 合法消费，故改为插件只读 env 契约键、值由本函数在宿主侧现算强制写入。
+ *
+ * 为什么必须显式写入而不能依赖继承：`PI_` 整域在 ENV_WHITELIST_PREFIXES 内，宿主 shell
+ * 泄漏的 ambient PI_CODING_AGENT_DIR（典型 = 系统 pi 的 `~/.pi/agent`）会随 spawn 链
+ * 流转到插件宿主——与 SPAWN_ENV_FORWARD_REFERENCE 对 PI_CODING_AGENT_DIR 的既有登记
+ * 同口径「目录权威值恒由派发链终态强制写入覆盖，不依赖白名单继承」。fork 路径经
+ * buildOutboundChildEnv 的 extras 后置生效，Worker 路径经 spread 后置赋值，两处均不可
+ * 被父 env 覆盖。
+ *
+ * 值域契约：与 runtime spawn pi 时注入给 pi 进程的 PI_CODING_AGENT_DIR 同源同值
+ * （同一 shared getPiAgentDir() SSOT），故 pi 侧 scheduler 扩展经官方 getAgentDir()
+ * 写出的分片与本插件读到的路径构造性一致。
+ *
+ * 计算点必须在 runtime 父进程、不能挪进插件进程：getPiAgentDir() 内含 C-proc-26 准入
+ * 检查（assertNotLeakedProdDataDir），而插件宿主 env 的出站 deny 清单恰好剥除
+ * TAIJI_AGENT_PACKAGED、pass-all 前缀又保留 TAIJI_AGENT_DATA_DIR——打包态下
+ * 「prod 数据目录值 + 非 packaged 进程」组合在插件进程内必抛（实测探针复现：
+ * fork 形态 env 调 getPiAgentDir() 抛 C-proc-26，父进程成对注入形态正常返回值）。
+ * 原插件代码直引 shared paths.ts 即踩此坑（sandbox/fork 路径打包态必抛；trusted
+ * Worker 路径因 spread 父 env 侥幸带上了 PACKAGED 才没暴露）。在父进程现算 + 注入
+ * 字面量后，插件侧不再持有该调用，坑结构性消失。
+ */
+export function pluginHostPiAgentDirEnv(): Record<string, string> {
+  return { PI_CODING_AGENT_DIR: getPiAgentDir() }
 }
 
 /**
@@ -518,6 +555,12 @@ export class PluginHost implements PluginHostContract {
       worker = new Worker(bootstrapPath, {
         name: workerId,
         stderr: true,
+        // PI_CODING_AGENT_DIR 权威注入（与 fork 宿主同源同值，单一组装点见
+        // pluginHostPiAgentDirEnv）：不传 env 时 Node 复制父进程 env，而 runtime 自身
+        // env 无此键（权威值只在 spawn pi/引擎时注入，engine-launch-env.ts 头注），故
+        // 必须显式补齐；传 env 是整体替换语义（Node worker_threads 实测：只传 env 会
+        // 丢掉其余父 env 键），父 env 须 spread 保留后再覆盖本键。
+        env: { ...process.env, ...pluginHostPiAgentDirEnv() },
       })
     } catch (err: unknown) {
       // 区分路径错误 vs Worker 创建错误

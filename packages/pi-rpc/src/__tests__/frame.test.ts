@@ -153,6 +153,23 @@ describe('createPendingRegistry', () => {
     expect(registry.hasPending('x')).toBe(false)
   })
 
+  it('RL8: 观测超时 cancel 后迟到响应无害——resolveResponse 查无表项返回 false，无 throw 无副作用（pi-stall-detection D1/AS8）', () => {
+    const registry = createPendingRegistry()
+    const resolve = vi.fn()
+    const reject = vi.fn()
+    registry.register('probe-1', { resolve, reject })
+    // 观测超时窗满：探测变体（rpc-client probeState）cancel 摘表（防悬挂表项累积）
+    registry.cancel('probe-1')
+    // 迟到的 get_state 响应帧在 cancel 之后到达
+    const lateMsg: PiMessage = { type: 'response', id: 'probe-1', success: true, data: { isStreaming: false } }
+    expect(() => registry.resolveResponse('probe-1', lateMsg)).not.toThrow()
+    expect(registry.resolveResponse('probe-1', lateMsg)).toBe(false)
+    // 无副作用：resolve / reject 均未被调用（迟到响应被忽略，探测 promise 已按超时失败收尾）
+    expect(resolve).not.toHaveBeenCalled()
+    expect(reject).not.toHaveBeenCalled()
+    expect(registry.pendingSize).toBe(0)
+  })
+
   it('rejectAll：全部仍 pending 的 reject，已 settle 的不重复', () => {
     const registry = createPendingRegistry()
     const rejects = [vi.fn(), vi.fn()]

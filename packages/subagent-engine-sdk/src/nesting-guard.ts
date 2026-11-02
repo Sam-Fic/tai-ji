@@ -1,23 +1,23 @@
 // src/nesting-guard.ts
 //
-// 嵌套防护（引擎侧原语，自 core execution/engine/common/nesting-guard.ts 迁入
-// @zhushanwen/subagent-engine-sdk，实现体逐字等价）。迁移处置：无 core 内部依赖 →
-// 直接搬（impl-plan §2.1 原语迁移处置表）；唯二差异：
-//   1. nestedSpawnRejectedError 自 core common/errors.ts 内联进本模块（errors.ts 不在
-//      迁移清单，本模块只消费它这一个构造器；文案与恢复指引逐字保留）；
-//   2. 头部注释的模块路径改为 SDK 落点。
+// 嵌套 spawn env 构造原语（自 core execution/engine/common/nesting-guard.ts 迁入
+// @zhushanwen/subagent-engine-sdk，实现体逐字等价）。
 //
-// 设计决策（嵌套防护双层）：
-//   统一 TAIJI_AGENT_SUBAGENT=1 标记（所有引擎 spawn 都注入，引擎 adapter 检测到即拒绝
-//   递归派发）+ 剥离各引擎原生标记（CC 的 CLAUDECODE / zsub 的 ZSW_NESTED / pi 的
-//   PI_SUBAGENT_*）防继承泄漏——子代理环境的旧标记会让孙代理误判自己已在嵌套层。
+// 机制：统一 TAIJI_AGENT_SUBAGENT=1 标记（所有引擎 spawn 都注入，供 isSubagentProcess
+// 判定与下游观测识别子代理进程）+ 剥离各引擎原生标记（CC 的 CLAUDECODE / zsub 的
+// ZSW_NESTED / pi 的 PI_SUBAGENT_*）防继承泄漏——子代理环境的旧标记会让孙代理误判
+// 自己已在嵌套层。
 //
 // 为什么 env 标记是唯一跨引擎可靠手段（不采用的方案见设计）：「隔离目录里不装扩展」
 // 依赖配置洁癖，且 opencode/CC 会吃项目级配置；env 由宿主显式控制，随 spawn 必达。
 //
+// 原「检测到标记即拒绝递归派发」的 assertNotNestedSpawn / NestedSpawnRejectedError
+// 已随禁嵌套派发删除——从未接线（零生产调用方），且现行防线 = 被派发子进程经扩展
+// 精简装配无派发工具（subagent-workflow 扩展 setupChildProcessLifecycle），无需
+// env 检测式拒绝。
+//
 // [D3-⑤ 嵌套防护合一] 进程内执行嵌套上下文（原 SubagentService.execCtxAls，pi 路径
-// 私有）并入本文件——「嵌套防护」的两层机制（跨进程 env 标记 / 进程内 ALS 深度计数）
-// 单点于公共层。设计权威源：docs/design/dual-track（已删 git 可追溯）§3.3 D3-⑤
+// 私有）并入本文件。设计权威源：docs/design/dual-track（已删 git 可追溯）§3.3 D3-⑤
 // + 双轨清单 #10。
 
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -35,26 +35,6 @@ const NATIVE_NESTED_PREFIXES: readonly string[] = ["PI_SUBAGENT_"];
 export type SpawnEnv = Record<string, string | undefined>;
 
 /**
- * nested_spawn_rejected 的结构化错误（自 core errors.ts 内联；code/recovery 与 core
- * 词表逐字一致，EngineError 类形态对齐 SDK protocol/error-codes.ts 的 EngineSdkError）。
- */
-export class NestedSpawnRejectedError extends Error {
-  readonly code = "nested_spawn_rejected";
-  /** 恢复指引：指向具体下一步，非安慰性文案。 */
-  readonly recovery: string;
-
-  constructor() {
-    super(
-      "nested_spawn_rejected: this process is already a subagent (TAIJI_AGENT_SUBAGENT=1)",
-    );
-    this.name = "NestedSpawnRejectedError";
-    this.recovery =
-      "Subagents must not spawn further subagents (unbounded recursion guard). " +
-      "Do the work directly inside the current task instead of delegating.";
-  }
-}
-
-/**
  * 构造子代理 spawn env：注入 TAIJI_AGENT_SUBAGENT=1 + 剥离引擎原生嵌套标记。
  * 返回新对象，不改入参（spawn env 组装链中的多层 spread 安全）。
  */
@@ -69,22 +49,11 @@ export function buildNestedSpawnEnv(baseEnv: SpawnEnv): SpawnEnv {
   return env;
 }
 
-/**
- * 嵌套 spawn 防护断言：检测到统一标记（本进程已是 subagent）抛
- * nested_spawn_rejected——文案说明防护规则、指向 task 内自行完成。
- * 调用点：subagent 工具入口（进程创建前拒绝，D11 处置三级）。
- */
-export function assertNotNestedSpawn(env: SpawnEnv): void {
-  if (env[NESTED_SPAWN_ENV] === "1") {
-    throw new NestedSpawnRejectedError();
-  }
-}
-
 // ============================================================
 // [D3-⑤] 进程内执行嵌套上下文（原 SubagentService.execCtxAls 下沉）
 // ============================================================
 
-/** 执行嵌套状态：当前正在跑的 record 身份 + 递归深度（D-033 通用嵌套深度护栏的计数载体）。 */
+/** 执行嵌套状态：当前正在跑的 record 身份 + 递归深度（身份归属域的计数载体）。 */
 export interface ExecutionNestingState {
   recordId: string | undefined;
   depth: number;

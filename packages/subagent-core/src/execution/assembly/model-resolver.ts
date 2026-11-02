@@ -18,6 +18,7 @@ import {
   parseModelSelector,
 } from "../../shared/model-ref";
 import { getLogger } from "../../core/logger.ts";
+import { assertModelWithinScoped } from "../../shared/scoped-models.ts";
 
 const logger = getLogger("model-resolver");
 
@@ -144,6 +145,7 @@ export function resolveModel(
   paramOverride?: { model?: string; thinkingLevel?: string },
   ctxModel?: ModelInfo,
   userOverride?: { model: string; thinkingLevel?: string },
+  scopedAllowList?: readonly string[],
 ): ResolvedModel {
   // 0. [subagent-model-switch 第 0 层] 用户覆盖记账（最高优先级——用户覆盖赢，
   // 优先于调用参数与 agent frontmatter 显式指定的模型，裁决记录「覆盖优先级」行）。
@@ -162,6 +164,7 @@ export function resolveModel(
       ),
       modelRegistry,
       "userOverride",
+      scopedAllowList,
     );
   }
 
@@ -180,6 +183,7 @@ export function resolveModel(
       ),
       modelRegistry,
       "paramOverride",
+      scopedAllowList,
     );
   }
 
@@ -196,6 +200,7 @@ export function resolveModel(
       ),
       modelRegistry,
       "agentConfig",
+      scopedAllowList,
     );
   }
 
@@ -244,7 +249,12 @@ function lookupAndResolve(
   requestedThinking: string | undefined,
   registry: ModelRegistryLike,
   source: "paramOverride" | "agentConfig" | "userOverride",
+  scopedAllowList?: readonly string[],
 ): ResolvedModel {
+  // [scoped-models 白名单] 显式指定路径先过白名单（存在性检查之前——白名单外的
+  // 模型无需再查 registry/auth，错误信息点破「校验源是白名单而非 registry」）。
+  // ctxModel 继承层不经本函数 = 不拦（2026-11-01 裁决）。空数组 = 未启用全量放行。
+  assertModelWithinScoped(modelStr, scopedAllowList ?? [], source);
   const ref = assertCanonicalModelRef(modelStr, registry, { source });
   const model = registry.find(ref.provider, ref.id);
   if (!model) {

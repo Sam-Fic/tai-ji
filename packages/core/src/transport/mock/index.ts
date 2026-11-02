@@ -1131,17 +1131,14 @@ const chatImpl = {
   },
 
   /**
-   * compact（#6）：模拟 session.compact 生命周期（compacting → compacted）。
-   * [G4 锚定 ChatDomain] customInstructions 形参补齐与 real 域全等；mock 不支持仿真——
-   * 无 pi 会话可挂自定义压缩指令（显式登记，非静默丢弃）。
-   * 不推 compactionSummary——那是 pi 自主压缩才推的 system 行，与用户主动 /compact 语义不同
-   * （§4.4：compactionSummary 走 message.compactionSummary，由 pi 驱动，mock 捆绑会造成语义混淆）。
+   * compactBackground（#6，C2 /compact 后台化）：模拟受理回执——触发即返回，不发生命
+   * 周期帧。真实链路里后台压缩不产生 pi compaction_start/end（smart-context 后台管理器
+   * 落盘不发事件，UD6），完成反馈走 smart-context custom_message 通知 + 分界行（pi 驱动，
+   * mock 无 pi 不模拟——显式登记，非静默丢弃）。
+   * [G4 锚定 ChatDomain] customInstructions 形参补齐与 real 域全等。
    */
-  async compact(sessionId: string, _customInstructions?: string): Promise<void> {
+  async compactBackground(_sessionId: string, _customInstructions?: string): Promise<void> {
     await sleep(TIMING.ack)
-    emit(sessionId, { type: 'session.compacting', payload: { sessionId, status: 'compacting', reason: 'manual' } })
-    await sleep(TIMING.fileChangesGap)
-    emit(sessionId, { type: 'session.compacted', payload: { sessionId, status: 'compacted' } })
   },
 
   async abort(sessionId: string): Promise<void> {
@@ -2162,6 +2159,7 @@ const mockSmartContextPrefs = {
   compactModel: '',
   reminderThresholds: [] as number[],
   excludedModels: [] as string[],
+  autoCompactThresholdRatio: 0.9,
 }
 // codemode 开关内存态（默认开 = 产品裁决「常驻默认打开」，与启动迁移写 +codemode 后的读侧一致）
 const mockCodemodePrefs = { enabled: true }
@@ -2260,6 +2258,7 @@ export const settings = {
       compactModel: mockSmartContextPrefs.compactModel,
       reminderThresholds: [...mockSmartContextPrefs.reminderThresholds],
       excludedModels: [...mockSmartContextPrefs.excludedModels],
+      autoCompactThresholdRatio: mockSmartContextPrefs.autoCompactThresholdRatio,
     }
   },
   async setSmartContextEnabled(enabled: boolean): Promise<ServerMessageMap['config.smartContextEnabled']> {
@@ -2277,6 +2276,10 @@ export const settings = {
   async setSmartContextExcludedModels(models: string[]): Promise<ServerMessageMap['config.smartContextExcludedModels']> {
     mockSmartContextPrefs.excludedModels = [...models]
     return { models: [...models] }
+  },
+  async setSmartContextAutoCompactThresholdRatio(ratio: number): Promise<ServerMessageMap['config.smartContextAutoCompactThresholdRatio']> {
+    mockSmartContextPrefs.autoCompactThresholdRatio = ratio
+    return { ratio }
   },
   // ── [C3] system 设置项字段（codemode）：内存态 fixture（不持久化；损坏错误态为 runtime
   //    读侧 raw 预检行为，mock 模式文件系统态不模拟，恒 corruption=null）──

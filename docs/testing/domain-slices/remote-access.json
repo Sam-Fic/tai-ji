@@ -1,6 +1,6 @@
 {
   "name": "remote-access",
-  "summary": "远程访问（runtime infra/remote-access token 读侧 + transport/connection-manager + electron main/remote-access 目录与四测试 + mobile 连接流 + shared remote-access 契约；renderer 远程访问页面 W2-B 冻结在 settings 域，mobile 其余装配测试归 host 池）",
+  "summary": "远程访问（runtime infra/remote-access token 读侧 + transport/connection-manager + electron main/remote-access 目录与四测试 + mobile 连接流 + shared remote-access 契约与 readiness 启动就绪契约（RemoteCapability/ReadinessSnapshot/sessionsRecoveryProgress，消费方为远程连接链路）；renderer 远程访问页面 W2-B 冻结在 settings 域，mobile 其余装配测试归 host 池）",
   "layers": [
     "runtime",
     "electron",
@@ -19,7 +19,8 @@
       "packages/mobile-renderer/src/platform/connection-profile.ts"
     ],
     "shared": [
-      "packages/shared/src/remote-access.ts"
+      "packages/shared/src/remote-access.ts",
+      "packages/shared/src/readiness.ts"
     ]
   },
   "tests": [
@@ -59,6 +60,7 @@
     "packages/mobile-renderer/src/shell/__tests__/sheet-manager.test.ts",
     "packages/mobile-renderer/src/shell/__tests__/subagent-records.test.ts",
     "packages/mobile-renderer/src/shell/__tests__/use-visual-viewport.test.ts",
+    "packages/shared/src/__tests__/readiness.test.ts",
     "packages/shared/src/__tests__/remote-access.test.ts"
   ],
   "sharedBy": {},

@@ -1,0 +1,30 @@
+{
+  "name": "smart-context",
+  "summary": "上下文压缩功能域（extensions/universal/smart-context 整包：阈值触发/后台压缩管理器/通知/提醒/摘要；extension-protocol smart-context 契约词表；runtime 侧 smart-context 配置存储与消息 handler）",
+  "layers": [
+    "extension",
+    "protocol",
+    "runtime"
+  ],
+  "scope": {
+    "extension": [
+      "extensions/universal/smart-context/**"
+    ],
+    "protocol": [
+      "packages/extension-protocol/src/extensions/smart-context/**"
+    ],
+    "runtime": [
+      "packages/runtime/src/services/smart-context-config.ts",
+      "packages/runtime/src/transport/smart-context-config-message-handler.ts"
+    ]
+  },
+  "tests": [
+    "extensions/universal/smart-context/src/__tests__/**",
+    "packages/runtime/src/services/__tests__/smart-context-config-default-parity.test.ts",
+    "packages/runtime/src/services/__tests__/smart-context-config-threshold-ratio.test.ts",
+    "packages/runtime/src/transport/__tests__/smart-context-config-message-handler.test.ts"
+  ],
+  "sharedBy": {},
+  "contracts": [],
+  "e2eRules": []
+}

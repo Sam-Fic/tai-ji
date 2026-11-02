@@ -16,14 +16,14 @@
  * readRegistry 与锁内 RMW 写壳。
  *
  * 写入协议：
- *  - 原子写 temp+rename、损坏读取防御（§3.6 重命名 .corrupt 保留现场 + 按空表
+ *  - 原子写 temp+rename、损坏读取防御（解析失败重命名 .corrupt 保留现场 + 按空表
  *    重建）、终态条目 LRU 上限 50 均由 protocol 原语承担；诊断日志（corrupt 隔离
  *    warn 等）经 onLog 注入本包 logger，落盘通道不变
  *  - 锁内 RMW（@zhushanwen/pi-file-lock withFileLockSync）——同 sessionId 目录可能
  *    被桌面端 ephemeral 附着进程与发起进程并发写，跨进程互斥只依赖同一 lockfile
  *    （runtime 收殓器写终态用 taiji 统一锁，与该 lockfile 互斥）
  *  - 锁获取失败不降级无锁写：返回 {success:false}，条目停留 running 由 runtime
- *    收殓兜底（§3.5「registry/entry 写不进则条目停留 running」）
+ *    收殓兜底（registry/entry 写不进则条目停留 running，收殓侧按 ownerPiPid 判属）
  */
 
 import { join, resolve } from "node:path";
@@ -96,9 +96,10 @@ export function getRegistryPath(dataDir: string, sessionId: string): string {
 }
 
 /**
- * 读取 registry 全量条目（Map 映射薄壳）。文件不存在 / 读失败 / 解析失败均返回
- * 空表（工具范围不因 registry 问题崩溃）；解析失败由 protocol 原语重命名 .corrupt
- * 保留现场 + warn（§3.6）。
+ * 读取 registry 全量条目（Map 映射薄壳）。文件不存在 / 解析失败返回空表（解析失败由
+ * protocol 原语重命名 .corrupt 保留现场 + warn，§3.6）；读失败（权限等）上抛——
+ * bash_output / bash_kill 的 execute 报错给模型（显式失败，不伪装成「无任务」），
+ * pending 对账链由 runReconcileMaintenance 的 catch 降级（warn + 下轮幂等重查）。
  */
 export function readRegistry(registryPath: string): Map<string, RegistryEntry> {
 	const { entries } = readRegistryEntries(registryPath, registryFileLog);
@@ -130,7 +131,9 @@ export function taskToRegistryEntry(task: BackgroundTask): RegistryEntry {
  * 原子写；读 / 裁剪 / 序列化 / 原子写由 protocol 原语承担）。任务登记（running）、
  * killing intent、终态三条路径共用。
  * 失败返回 {success:false}——调用方按「写不进则条目停留 running，runtime 收殓
- * 兜底」处理（M2 只 warn，不重试不阻断主流程）。
+ * 兜底」处理（M2 只 warn，不重试不阻断主流程）。读失败（protocol readRegistry
+ * 抛错）同走本 catch：停止写回、绝不在读失败的空表视图上合并写回（空表重建唯一
+ * 登记文件 = 静默丢失全部既有条目）。
  */
 export function writeRegistryEntry(
 	registryPath: string,

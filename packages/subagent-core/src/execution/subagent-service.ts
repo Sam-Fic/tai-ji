@@ -37,6 +37,13 @@ import { ManifestStore } from "./persistence/manifest-store.ts";
 import type { ModelConfigService } from "./assembly/model-config-service.ts";
 import type { AgentConfig, ModelInfo, ResolvedModel } from "./assembly/model-resolver.ts";
 import { type NotifyHost, type PiLike, createNotifyHost } from "./notify/notify-host.ts";
+import {
+  isExcludedReconcileRecord,
+  isReconcileCandidateRecord,
+  NOTIFY_RECONCILE_SCAN_LIMIT,
+  readSessionEntriesFromFile,
+  resolveReconcileRecordEpoch,
+} from "./notify/notify-reconcile.ts";
 // [H1 U2] notify 门迁 notifier.ts（Continuation 双闸共用），此处 re-export 保持既有
 // import 路径（测试消费方 `from "../subagent-service.ts"` 不变）。
 export { notifyGateAllowsDelivery } from "./notify/notifier.ts";
@@ -198,6 +205,33 @@ export class SubagentService {
   private readonly notifyHost: NotifyHost = createNotifyHost({
     getPi: () => this.pi,
     getIsIdle: () => this.isIdleFn,
+    // [u3 通知对账补投事实源装配] NotifyHostDeps.getReconcileSource 生产供给：
+    // 全量 record（含终态、includeWorkflow=true——origin 排除位在 notify-reconcile
+    // 判据内落位、真值表逐行可测）+ 主 session entries 读取（送达痕迹/投递日志两
+    // 事实源）。惰性闭包（session 级状态运行时可变——mainSessionFile initSession
+    // 注入；字段初始化器闭包先例 = 上方 getPi）。接线说明与缺席语义见 notify-host.ts
+    // 头注与 notify-reconcile.ts 文件头。
+    getReconcileSource: () => ({
+      listReconcileRecords: () =>
+        this.queries.collectRecords(NOTIFY_RECONCILE_SCAN_LIMIT, "all", true).map((r) => {
+          // [F1-13 结论 A] 世代透传：补投幂等键 `id[:epoch]` 与主路径同构 +
+          // 送达痕迹/投递日志判据按世代匹配的判定输入。生产装配是 ReconcileNotifyRecord
+          // 的构建点（SubagentRecord 公开面不携带 epoch——notify 域自有投影类型承载）。
+          // 提取成本收窄：预检同款判据（notify-reconcile 导出的同一纯函数，非第二套
+          // 逻辑）先行——非候选 record（running 在途 / 排除位命中）零 fs 成本直落；
+          // 候选集内存源 getMutable 命中也零 fs，仅磁盘重建候选读一次 `.events` fold
+          // （对账低频边沿的毫秒级量级，与编排自身 readSessionEntries 同级）。
+          if (!isReconcileCandidateRecord(r) || isExcludedReconcileRecord(r)) return r;
+          return {
+            ...r,
+            epoch: resolveReconcileRecordEpoch(r.id, {
+              memoryEpochOf: (id) => this.store.getMutable(id)?.epoch,
+              recordsDir: () => this.recordsDir(),
+            }),
+          };
+        }),
+      readSessionEntries: () => readSessionEntriesFromFile(this.mainSessionFile),
+    }),
   });
 
   private readonly manifestStore: ManifestStore;
@@ -563,6 +597,22 @@ export class SubagentService {
    */
   invalidatePiBinding(reason: string): void {
     this.baselines.invalidatePiBinding(reason);
+  }
+
+  /**
+   * [completion-signal-delivery V4b 入口③（A5 product-bug 修复）] 切回补强边沿对
+   * subagent 域对账补投的转发入口：消费方 = base-tool-enhance 的
+   * `__taiji_bg_reconcile__` handler（pi 命令名全局唯一，扩展侧经进程单例
+   * getSubagentService() 判空调用）。转发到已装配的 NotifyHost 对账闭包——对账
+   * 事实源（records 全量 + 主 session entries）与补投出口（notifier 投递管道）均
+   * 在 host 内装配（NotifyHostDeps.getReconcileSource，u3 装配先例），扩展侧无法
+   * 直构 deps，这是裁决允许的「装配实例转发」通道。单例缺席（session_start 前进程
+   * 形态 / 无 subagent 域宿主）由调用方判空早退 = 对账不挂（缺席语义，非错误）；
+   * 入口① session_start 与入口② agent_settled 在服务内自挂（revive / 订阅），不经
+   * 本方法——扩展侧若对那两边沿转发会造成同边沿双派发。
+   */
+  runNotifyReconcileMaintenance(reason: string): void {
+    this.notifyHost.runReconcile(reason);
   }
 
   /**

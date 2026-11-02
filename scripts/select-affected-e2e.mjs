@@ -6,6 +6,11 @@
  *   - scope 含于 diff 的 on-diff rule + 全部 always rule = 受影响面
  *   - --release 输出 on-release / on-pi-bump 面（发布与 pi 升级必跑清单）
  *   - --check 门禁：diff 文件落在 watched root 下却不被任何 rule 覆盖 → exit 1（防漏登记）
+ *   - --json 机器可读输出（CI 执行消费者 scripts/run-affected-e2e-ci.mjs 消费）：
+ *     JSON 数组 [{id, layer, trigger, serial, run, summary, ci?}]，与人读 markdown
+ *     互斥（--json 时只输出 JSON 到 stdout，日志类信息全走 stderr）。ci 为可选
+ *     字段，只在 rule 登记了 CI 可执行性（{runnable, skipReason}）时透传——CI
+ *     消费侧据此决定执行还是登记跳过，不另维护白名单。
  *
  * glob 匹配与 scripts/select-constraints.mjs 同款零依赖语义（<prefix>/** → startsWith，
  * 精确路径 → 全等），不引 minimatch——两调度器保持一套匹配语义。
@@ -103,6 +108,19 @@ export function releaseRules(map, { layer } = {}) {
   return map.rules.filter((rule) => RELEASE_TRIGGERS.includes(rule.trigger) && (!layer || rule.layer === layer));
 }
 
+/** --json 输出载荷（CI 执行消费者契约：字段子集 + 顺序稳定；ci 仅在 rule 登记时透传）。 */
+export function toJsonPayload(rules) {
+  return rules.map(({ id, layer, trigger, serial, run, summary, ci }) => ({
+    id,
+    layer,
+    trigger,
+    serial,
+    run,
+    summary,
+    ...(ci ? { ci } : {}),
+  }));
+}
+
 // ---------- main ----------
 
 function loadMap() {
@@ -172,63 +190,99 @@ function renderRules(rules, map) {
   return lines.join("\n");
 }
 
-function main() {
-  const args = process.argv.slice(2);
-  function argValue(name) {
-    const i = args.indexOf(name);
-    return i !== -1 ? args[i + 1] : undefined;
-  }
-  const base = argValue("--base") ?? "origin/main";
-  const release = args.includes("--release");
-  const check = args.includes("--check");
-  const layer = argValue("--layer");
+// main 原把参数解析与四种形态（--staged / --json / --release / --check）全内联在
+// 一个函数体，圈复杂度 18 超门禁阈值（15）。按下述子函数拆分，行为逐字保持：
+//   parseArgs —— argv 解析 + --layer 校验
+//   runStagedGate —— --staged 防漏登记门禁
+//   emitJson —— --json 机器可读输出
+//   printHumanReport —— 人读 markdown（--release 与默认 on-diff 两形态）
+//   runCheckGate —— --check 防漏登记门禁
+
+/** [main 拆分] argv 取值：--flag value 空格分隔，缺值返回 undefined。 */
+function argValue(args, name) {
+  const i = args.indexOf(name);
+  return i !== -1 ? args[i + 1] : undefined;
+}
+
+/** [main 拆分] argv 解析 + --layer 合法性校验（非法 exit 2）。 */
+function parseArgs(args) {
+  const layer = argValue(args, "--layer");
   if (layer && !LAYERS.includes(layer)) {
     console.error(`[select-affected-e2e] --layer 非法 "${layer}"（合法值 ${LAYERS.join(" | ")}）`);
     process.exit(2);
   }
+  return {
+    base: argValue(args, "--base") ?? "origin/main",
+    layer,
+    release: args.includes("--release"),
+    check: args.includes("--check"),
+    json: args.includes("--json"),
+    staged: args.includes("--staged"),
+  };
+}
 
-  const map = loadMap();
-
-  // --staged：pre-commit 门禁形态——只做防漏登记判定，不渲染受影响清单（与 --check 同判定逻辑）
-  if (args.includes("--staged")) {
-    const unregistered = unregisteredWatchedFiles(map, stagedAddedFiles());
-    if (unregistered.length > 0) {
-      console.error("[select-affected-e2e] --staged FAIL：以下暂存文件落在 e2e-map 看护目录内但无任何 rule 覆盖（防漏登记）：");
-      for (const f of unregistered) console.error(`  - ${f}`);
-      console.error("  恢复动作：在 docs/testing/e2e-map.json 为该文件新增 rule（E2E-<域>-<序号>），或扩展既有 rule 的 scope/assets 后重试提交。");
-      console.error("  若该目录不应被看护：先修订造成 watched root 的 scope/asset 登记，再重试。");
-      process.exit(1);
-    }
+/** [main 拆分] --staged：pre-commit 门禁形态——只做防漏登记判定，不渲染受影响清单（与 --check 同判定逻辑）。 */
+function runStagedGate(map) {
+  const unregistered = unregisteredWatchedFiles(map, stagedAddedFiles());
+  if (unregistered.length === 0) {
     console.log("e2e-map staged check PASS");
     return;
   }
+  console.error("[select-affected-e2e] --staged FAIL：以下暂存文件落在 e2e-map 看护目录内但无任何 rule 覆盖（防漏登记）：");
+  for (const f of unregistered) console.error(`  - ${f}`);
+  console.error("  恢复动作：在 docs/testing/e2e-map.json 为该文件新增 rule（E2E-<域>-<序号>），或扩展既有 rule 的 scope/assets 后重试提交。");
+  console.error("  若该目录不应被看护：先修订造成 watched root 的 scope/asset 登记，再重试。");
+  process.exit(1);
+}
 
-  const files = release ? [] : changedFiles(base);
+/** [main 拆分] --json：机器可读输出（CI 执行消费者形态）——JSON 独占 stdout，进度信息走 stderr 不混流。 */
+function emitJson(rules, { base, release, layer }) {
+  const payload = toJsonPayload(rules);
+  console.error(`[select-affected-e2e] --json：${payload.length} 条（base=${base}${release ? " release" : ""}${layer ? ` layer=${layer}` : ""}）`);
+  process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+}
 
+/** [main 拆分] 人读 markdown 输出（--release 与默认 on-diff 两形态共壳，仅标题段不同）。 */
+function printHumanReport(rules, map, { base, files, release, layer }) {
   if (release) {
-    const rules = releaseRules(map, { layer });
     console.log(`# e2e release / pi-bump 面（--release${layer ? ` --layer ${layer}` : ""}）\n`);
-    console.log(renderRules(rules, map));
+  } else {
+    console.log(`# 受影响 e2e 清单（select-affected-e2e）\n`);
+    console.log(`- 变更范围：\`git diff ${base}...HEAD\`，共 ${files.length} 个文件${layer ? `（--layer ${layer} 过滤）` : ""}`);
+    console.log("");
+  }
+  console.log(renderRules(rules, map));
+}
+
+/** [main 拆分] --check 门禁：watched root 下无任何 rule 覆盖的变更文件 → exit 1。 */
+function runCheckGate(map, base) {
+  const unregistered = unregisteredWatchedFiles(map, changedAddedFiles(base));
+  if (unregistered.length === 0) {
+    console.log("e2e-map-check PASS");
     return;
   }
+  console.error("[select-affected-e2e] --check FAIL：以下变更文件落在 e2e-map 看护目录内但无任何 rule 覆盖（防漏登记）：");
+  for (const f of unregistered) console.error(`  - ${f}`);
+  console.error("  恢复动作：在 docs/testing/e2e-map.json 为该文件新增 rule（E2E-<域>-<序号>），或扩展既有 rule 的 scope/assets 后重跑。");
+  console.error("  若该目录不应被看护：先修订造成 watched root 的 scope/asset 登记，再重跑。");
+  process.exit(1);
+}
 
-  const rules = selectRules(map, files, { layer });
-  console.log(`# 受影响 e2e 清单（select-affected-e2e）\n`);
-  console.log(`- 变更范围：\`git diff ${base}...HEAD\`，共 ${files.length} 个文件${layer ? `（--layer ${layer} 过滤）` : ""}`);
-  console.log("");
-  console.log(renderRules(rules, map));
+function main() {
+  const opts = parseArgs(process.argv.slice(2));
+  const map = loadMap();
 
-  if (check) {
-    const unregistered = unregisteredWatchedFiles(map, changedAddedFiles(base));
-    if (unregistered.length > 0) {
-      console.error("[select-affected-e2e] --check FAIL：以下变更文件落在 e2e-map 看护目录内但无任何 rule 覆盖（防漏登记）：");
-      for (const f of unregistered) console.error(`  - ${f}`);
-      console.error("  恢复动作：在 docs/testing/e2e-map.json 为该文件新增 rule（E2E-<域>-<序号>），或扩展既有 rule 的 scope/assets 后重跑。");
-      console.error("  若该目录不应被看护：先修订造成 watched root 的 scope/asset 登记，再重跑。");
-      process.exit(1);
-    }
-    console.log("e2e-map-check PASS");
-  }
+  if (opts.staged) return runStagedGate(map);
+
+  const files = opts.release ? [] : changedFiles(opts.base);
+  // on-diff 与 --release 两形态各自取 rules 后统一序列化
+  const rules = opts.release ? releaseRules(map, { layer: opts.layer }) : selectRules(map, files, { layer: opts.layer });
+  if (opts.json) return emitJson(rules, opts);
+
+  printHumanReport(rules, map, { ...opts, files });
+  // --check 门禁仅在默认 on-diff 形态执行：--release 形态只出发布面清单不跑防漏登记
+  // 门禁（与拆分前 main 的 --release 渲染后提前 return 形态一致）
+  if (!opts.release && opts.check) runCheckGate(map, opts.base);
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(join(process.argv[1])).href;

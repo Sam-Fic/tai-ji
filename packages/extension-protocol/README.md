@@ -8,7 +8,7 @@ pi extension 跨层契约包：类型 + helper 函数 + 共享行为原语，零
 - `extensions/` —— 有运行时定制逻辑的 extension（marker + helper）
   - `ask-user/` —— 富交互（select 通道 + marker）
   - `plan/` —— plan 生命周期状态机 + 审阅回传值域契约 + 旧 entry legacy 读取（纯函数零 pi 依赖，扩展 / runtime / renderer 三层共用）
-  - `scheduler/` —— scheduler 任务条目契约 + entry 重放折叠（replayFoldEntries）+ 时间格式化（纯契约与纯函数，零 pi/node 依赖）
+  - `scheduler/` —— scheduler 任务条目契约 + 时间格式化（纯契约与纯函数，零 pi/node 依赖）；任务库快照文件契约 `store.ts`（含 node:fs/node:path，走独立子出口）
   - `scheduler-create/` —— scheduler 创建确认共享资产（ScheduleDraft / ScheduleFormResult 类型 + 形状与时间折叠检查 + marker）
   - `session-manager/` —— agent-managed session 嵌套 `{action, params}` 契约（select 通道 + marker）
   - `subagent-engine/` —— 引擎可发现性（`engines.json` 状态文件 + 引擎配置视图）
@@ -19,6 +19,7 @@ pi extension 跨层契约包：类型 + helper 函数 + 共享行为原语，零
 - `pending-entries` —— pending 事件流差集核心（register 去重 + unregister 抵消，纯算法）
 - `background-task` —— base-tool-enhance 后台任务 `registry.json` 文件契约
 - 子出口 `@zhushanwen/extension-protocol/background-task` —— 后台任务行为原语（进程处置 / registry 文件 IO / output tail，含 node 内建依赖，不进 index 桶出口）
+- 子出口 `@zhushanwen/extension-protocol/scheduler-store` —— scheduler 任务库快照文件契约（路径推导 `schedulerStoreFilePath` + 读改写原语，含 node 内建依赖，不进 index 桶出口）
 
 ## 设计原则
 

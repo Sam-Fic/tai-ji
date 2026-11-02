@@ -21,7 +21,7 @@ describe('formatSchedule', () => {
     expect(formatSchedule({ mode: 'cron', cronExpression: '*/10 * * * *' }, 'recurring', 'zh-CN')).toBe('*/10 * * * *')
   })
 
-  // zh 分支（设计 §7.5：`every 5m` ↔ `每 5 分钟`）
+  // zh 分支（`every 5m` ↔ `每 5 分钟`）
   it('formats interval spec in zh-CN', () => {
     expect(formatSchedule({ mode: 'interval', intervalMs: 300_000 }, 'recurring', 'zh-CN')).toBe('每 5 分钟')
     expect(formatSchedule({ mode: 'interval', intervalMs: 3_600_000 }, 'recurring', 'zh-CN')).toBe('每 1 小时')
@@ -70,7 +70,7 @@ describe('formatRelativeTime', () => {
     expect(formatRelativeTime(base + 5000, 'en-US', base)).toBe('in 5s')
   })
 
-  // zh 分支（设计 §7.5：`in 4m` ↔ `4 分钟后`）
+  // zh 分支（`in 4m` ↔ `4 分钟后`）
   it('formats relative time in zh-CN', () => {
     const now = 1_700_000_000_000
     expect(formatRelativeTime(now + 240_000, 'zh-CN', now)).toBe('4 分钟后')

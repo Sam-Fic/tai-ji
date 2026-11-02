@@ -102,14 +102,13 @@ describe("domains", () => {
       expect(mockCommand.mock.calls[0]).toEqual(['message.abort', { sessionId: 's1' }, RPC_BACKSTOP_TIMEOUT_MS])
     })
 
-    it('compact 超时 = COMPACT_RPC_TIMEOUT_MS + RENDERER_RPC_MARGIN_MS（校准链不变量）', async () => {
-      await chat.compact('s1', 'instr')
+    it('compactBackground 受理档超时 = RPC_BACKSTOP_TIMEOUT_MS（触发即回执，压缩全程不占请求窗口）', async () => {
+      await chat.compactBackground('s1', 'instr')
       const [type, payload, timeout] = mockCommand.mock.calls[0]
-      expect(type).toBe('session.compact')
+      expect(type).toBe('session.compactBackground')
       expect(payload).toEqual({ sessionId: 's1', customInstructions: 'instr' })
-      // 钉字面毫秒值（COMPACT_RPC_TIMEOUT_MS 1_800_000 + RENDERER_RPC_MARGIN_MS 60_000）：
-      // 不引用同批常量防镜像互证，compact/bash 两档互换（1860s ↔ 3660s）即红
-      expect(timeout).toBe(1_860_000)
+      // 受理型回执走普通 RPC backstop 档（65s）——旧 30min 压缩墙钟随同步链退役
+      expect(timeout).toBe(65_000)
     })
 
     it('bash：excludeFromContext 未传时不带该键，传了透传；超时用 BASH 档', async () => {

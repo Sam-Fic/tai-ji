@@ -77,11 +77,11 @@
 
 **设计要求**：统一 tab 声明形态 + 注册表派生。三处容器共用同一个 `ContentSlotRegistry` 抽象（声明项 = `{ id, label, icon, order, renderer }`，`renderer` 可以是 `{kind:'view', viewId}` 或 `{kind:'host', component}`）。
 
-### GAP-3 `activation` 单值字面量（契约面已结构化，分派分支待换）
+### GAP-3 `activation` 单值字面量（契约已结构化，分派分支待换）
 
 `scheduler` 分册：`activation?: 'scheduler-overlay'` 本质是「渲染端存在一个同名 if 分支」的镜像。加一个 tab 就要加一个字面量 + 一个 if 分支。
 
-契约面已落地（容器扩展点统一 §6.3/§6.11）：`activation` 已结构化为 `HeaderActionActivation`（`{ kind: 'command' | 'overlay' | 'drawer' }` 成员，`core/extension-host/types.ts:205-218`），SDK 版已对齐补齐 `activation?`——原契约双版本漂移已消除。`'scheduler-overlay'` 作为迁移期兼容值保留（注释自证「下一版本删除」），`HeaderActionsHost.vue:235` 的同名 if 分支仍按字面量分派。
+契约已落地（容器扩展点统一 §6.3/§6.11）：`activation` 已结构化为 `HeaderActionActivation`（`{ kind: 'command' | 'overlay' | 'drawer' }` 成员，`core/extension-host/types.ts:205-218`），SDK 版已对齐补齐 `activation?`——原契约双版本漂移已消除。`'scheduler-overlay'` 作为迁移期兼容值保留（注释自证「下一版本删除」），`HeaderActionsHost.vue:235` 的同名 if 分支仍按字面量分派。
 
 **剩余工作**：渲染端分派改按 `activation.kind` 消费（overlay/drawer 走容器导航），随后退役 `'scheduler-overlay'` 兼容值与声明本体。这同时是 GAP-1 在 headerAction 上的落地形态。
 

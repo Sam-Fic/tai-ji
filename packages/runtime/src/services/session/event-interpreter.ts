@@ -24,7 +24,9 @@
  *   - event-interpreter-settled-delay.ts：AgentSettledDelayer——agent_settled V7 延迟注入
  *     + disposed 销毁短路（登记方向 ②）
  *   - event-interpreter-ping.ts：PingProbe——ADR-0047 进程健康探测循环（登记五域之外，
- *     同为独立状态侧、挂点仅 turn-start/turn-end/dispose 三处）
+ *     同为独立状态侧；生命期挂点 = turn-start 启动 + 受理出站边沿前置启动
+ *     （pi-stall-detection D4，经 probeRegistry 门面）+ agent_settled finally / onSilentAbort
+ *     / dispose / 收回 idle 转移边沿（applySessionOccupancyTransition 单点）停止）
  *   - event-interpreter-compaction.ts：CompactionNotifier——compaction 双事件到 WS 帧 +
  *     副作用回调的纯同步编排（无内部状态，不牵动主循环时序，评估为低风险）
  * 保留在本类：file_changes 帧序三件套（diffChain/turnGen/turnFinalizing 与 turn-start/end、
@@ -45,19 +47,28 @@ import { SUBAGENT_TOOL_NAMES, WORKFLOW_TOOL_NAMES } from '@taiji/shared'
 import { SUBAGENT_RECORD_CUSTOM_TYPE, WORKFLOW_RECORD_CUSTOM_TYPE } from '@zhushanwen/subagent-core'
 // [chat-flow-consistency D1] occupancy turn 维声明式状态机基建（ADR-0152 第 5 条承接）
 import { defineStateMachine } from '@zhushanwen/state-machine'
-import { CompactionNotifier } from './event-interpreter-compaction.js'
+import { CompactionNotifier, pickCompactionEntryForSignal } from './event-interpreter-compaction.js'
 import { LlmWindowSampler } from './event-interpreter-gen-stats.js'
 import { PingProbe } from './event-interpreter-ping.js'
 import { AgentSettledDelayer } from './event-interpreter-settled-delay.js'
+import { SilenceMatrix, type StallJudgePayload, type StallMatrixConfigSnapshot } from './event-interpreter-silence.js'
 
 // [T4 协作对象拆分] 常量本体随域迁至协作对象文件（ping 三常量 → event-interpreter-ping.ts），
 // 此处 re-export 保住既有导出清单
 //（event-interpreter-ping-dispose.test.ts 等直接 import 本文件；SR6 SSOT）。
 export { PING_INTERVAL_MS, PING_FAIL_THRESHOLD, PING_WARN_FAIL_COUNT } from './event-interpreter-ping.js'
 import { toErrorMessage } from '../../utils/errors.js'
+// [fix-chat-flow-stuck A-6] occupancy 转移边沿 → runtime-checkpoint 占用快照搭车刷新（best-effort 旁路）
+import { refreshCheckpointOnOccupancyEdge } from './crash-forensics-hooks.js'
 import type { SessionManagerAction, CanvasMarkerAction } from '@zhushanwen/extension-protocol'
-// notify 通道 customType 词表单源（extension-protocol，与壳写点同源）
-import { SUBAGENT_BG_NOTIFY_CUSTOM_TYPE, WORKFLOW_RESULT_CUSTOM_TYPE } from '@zhushanwen/extension-protocol'
+// notify 通道 customType 词表单源（extension-protocol，与壳写点同源）；smart-context 落盘信号
+// 词表与 details 判读同源（C1 分界行实时化，扩展写侧同源消费）
+import {
+  parseCompactionPersistSignal,
+  SMART_CONTEXT_NOTICE_CUSTOM_TYPE,
+  SUBAGENT_BG_NOTIFY_CUSTOM_TYPE,
+  WORKFLOW_RESULT_CUSTOM_TYPE,
+} from '@zhushanwen/extension-protocol'
 import type { IFileChangeDiff } from '../ports/file-change-diff.js'
 import type {
   ForceQuitSource,
@@ -198,6 +209,10 @@ export function updateSessionOccupancy(
   ) return
   session.occupancy = next
   publish?.publish(session.id, { type: 'session.occupancy', payload: occupancyFramePayload(session.id, next) })
+  // [fix-chat-flow-stuck A-6] 占用快照随转移边沿刷进 runtime-checkpoint（best-effort 旁路，
+  // hooks 内异常隔离 + 归并值翻转才落盘——否则「占用中 runtime 崩溃」的磁盘快照恒 idle，
+  // reattach 的 occupied 豁免判据永不命中）。广播主链先行，旁路收尾。
+  refreshCheckpointOnOccupancyEdge(session.id, prev, next)
 }
 
 /**
@@ -246,6 +261,15 @@ export function applySessionOccupancyTransition(
     // 其余纯 turn 事件无布尔维声明，展开为 no-op。
     const booleanPatch = BOOLEAN_DIMENSION_PATCHES[transition]
     updateSessionOccupancy(session, publish, { turn: result.state as SessionTurnPhase, ...booleanPatch })
+    // [pi-stall-detection D4/RL7] 收回 idle 边沿停止探测：idle / reject-other / full-reset
+    // 三事件目标态均为 idle——受理出站（dispatching）起的探测窗口在这些边沿收口，防计时器
+    // 在 idle 会话以探测周期常驻。接线在转移原语单点而非逐写方调用点挂（写方 7 处：registry
+    // reject-other 收回 / settleDispatching 两态、dispatcher abort 收尾两 idle 与 pi exit
+    // full-reset、session-service onSessionExit full-reset——构造性覆盖，D4）；
+    // PingProbe.stop 幂等，重复通知（含已在跑的 agent_settled finally 停止点）无害。
+    if (IDLE_RETURN_EVENTS.has(transition)) {
+      probeRegistry.get(session.id)?.stop()
+    }
     return
   }
   const patch = BOOLEAN_DIMENSION_PATCHES[transition]
@@ -255,6 +279,40 @@ export function applySessionOccupancyTransition(
   }
   // 枚举封闭 + 机器/布尔维两表覆盖全词表，此分支运行时不可达；防御性兜底保持 fail-fast。
   throw new Error(`[event-interpreter] unknown occupancy transition: ${String(transition)}`)
+}
+
+// ── 探测生命期扩展（pi-stall-detection D4）─────────────────────────────────
+
+/**
+ * 探测循环注册表：sessionId → 本会话 PingProbe。
+ *
+ * 为什么模块级：interpreter 由组合根 createAdapter（index.ts）构造、由 EventAdapter 持有，
+ * 投递内核（session-delivery-registry）触达不了实例——与下方 userStoppedGate 同款解法
+ * （模块级门面 + 子模块 import，session-service 单向依赖约束下唯一无环通路；registry 已
+ * 值导入本文件，同模块家族内接线，无新跨模块依赖，D4/U3 约束）。
+ *
+ * 登记/注销：interpreter 构造时 set（同 sessionId 重建覆盖旧条目）；dispose 时条件删
+ * （身份比对防旧实例迟到 dispose 误删后继实例条目）。
+ */
+const probeRegistry = new Map<string, PingProbe>()
+
+/** 收回 idle 的 turn 维事件集：三者目标态均为 idle（转移表全组合合法表）——受理出站起的
+ * 探测窗口在这些边沿收口（D4 停止挂点接转移原语单点的判定依据）。 */
+const IDLE_RETURN_EVENTS: ReadonlySet<string> = new Set(['idle', 'reject-other', 'full-reset'])
+
+/**
+ * [pi-stall-detection D4/RL7] 受理出站边沿启动探测（幂等入口）。
+ *
+ * 挂点 = session-delivery-registry.markDispatchingIfIdle 置位处（idle→dispatching 真置位
+ * 边沿，prompt RPC 发出前）——dispatching 窗口（prompt 已受理、turn-start 未到）内 pi 挂死
+ * 时 turn-start 永不到达，探测不能等 turn-start 启动（PR4 形态）。
+ *
+ * 幂等语义与 turn-start 既有 start() 完全同一（PingProbe.start 先 stop 再清零
+ * failCount/warned）：重复受理边沿重置计数，与「每次投递独立」口径一致；turn-start 到达时
+ * 受理期累计清零、回合期从零独立累计。无注册条目（interpreter 未建 / 已 dispose）时 no-op。
+ */
+export function startPingProbeFromDeliveryEdge(sessionId: string): void {
+  probeRegistry.get(sessionId)?.start()
 }
 
 // ── userStopped 标记门面（ADR-0122 事件顺序契约）──
@@ -284,9 +342,12 @@ export function applySessionOccupancyTransition(
    * 差集重放 / scheduler 旁路源起的 turn 被 noteAgentStart 拦截再 abort（被掐通知已
    * 注入上下文，回执关闭由投递日志 details-id 凭据承接，不重复投递）。
  *
- * 「被掐 turn 的 settled 永不到达」（pi 收尾挂死）归显式上报链：PingProbe（ADR-0047，
- * 60s ping × 3 连续失败）→ onSilentAbort → forceQuitSession。
- */
+   * 「被掐 turn 的 settled 永不到达」（pi 收尾挂死）归显式上报链：PingProbe（ADR-0047，
+   * 60s ping × 3 连续失败）→ onSilentAbort → 组合根接线 sessionService.handleStallDetermination
+   *（pi-stall-detection U2/D2② 按第 0 层进程存活信号分型的自动处置链：进程死维持协作式
+   * abort 显式收尾路由，进程存活 → sample 取证 → 判死强杀 → 窄化自动恢复 → 注入原因提示
+   *——见 index.ts onSilentAbort 接线与同文件 onSilentAbort JSDoc）。
+   */
 export class UserStoppedGate {
   /** 宿主存取 + abort 能力（SessionService 构造时注入；未注入时全部 no-op——测试友好）。 */
   private deps: {
@@ -331,7 +392,10 @@ export class UserStoppedGate {
   noteAgentStart(sessionId: string): void {
     if (!this.hasUserStoppedMark(sessionId)) return
     console.warn(`[event-interpreter] userStopped: intercepting unattributed agent_start, re-aborting (sessionId=${sessionId})`)
-    // fire-and-forget：abort 内部已含失败链（超时 → forceQuitSession 强杀收敛）。
+    // 再中止经 dispatcher.abort（'convergence' 分型）升级窗有界完成：窗内回执即达；窗满悬挂
+    // 升级强杀，source=机器判死分型（probe_stall_auto_quit）并进窄化自动恢复——V11/RL16 断言
+    // 载体，升级窗实装见 message-dispatcher.ts ABORT_UPGRADE_WINDOW_MS。.catch 只防异常逃逸成
+    // unhandledRejection——升级/强杀/恢复均由 dispatcher.abort 链内闭环，无需本层补通道。
     this.deps?.abortSession(sessionId).catch((e: unknown) => {
       console.warn(`[event-interpreter] userStopped: re-abort failed, mark kept (sessionId=${sessionId}):`, e)
     })
@@ -465,11 +529,14 @@ export interface EventInterpreterOptions {
    */
   onCanvasRequest?: (requestId: string, sessionId: string, action: CanvasMarkerAction | '__malformed__', params: Record<string, unknown>) => void
   /**
-   * pi 卡死 abort 回调（ADR-0047 ping 探测机制）。
+   * pi 停滞 abort 回调（ADR-0047 ping 探测机制）。
    *
-   * turn 进行中每 60s ping get_state，连续 3 次（180s）失败时判定 pi 进程真死，
-   * 触发本回调由组合根调 sessionService.abort（复用现有 abort 兜底广播路径）。
-   * payload 携带 sessionId，供上层定位要 abort 的 session。
+   * turn 进行中每 60s ping get_state，连续 3 次（180s）失败时判定 pi 停滞（未响应
+   * 健康探测：进程死或事件循环挂死——失败判定内涵三态见 pingPi 注释），触发本回调；
+   * 组合根按第 0 层进程存活信号分型接自动处置链（pi-stall-detection U2/D2②：进程死
+   * 维持协作式 abort 显式收尾路由，进程存活 → 取证 → 判死强杀 → 窄化自动恢复 →
+   * 注入原因提示）。
+   * payload 携带 sessionId，供上层定位要处置的 session。
    */
   onSilentAbort?: (payload: { sessionId: string }) => void
   /**
@@ -521,20 +588,25 @@ export interface EventInterpreterOptions {
    */
   onCompactionContextRewritten?: (sessionId: string) => void
   /**
-   * [ADR-0047] ping get_state 进程健康探测回调（组合根注入）。
+   * [ADR-0047] ping get_state 探测回调（组合根注入）。
    *
    * 延迟解析 client：interpreter 在 session 创建时构造，那时 client 可能尚未 spawn。
-   * 回调内部按当前 sessionId 取 pm.getClient(sessionId)?.getState()，client 未就绪时
+   * 回调内部按当前 sessionId 取 pm.getClient(sessionId)?.probeState(PING_OBSERVE_TIMEOUT_MS)
+   * （观测变体：请求级有界等待 + 窗满 cancel pending），client 未就绪时
    * 返回 undefined（计为一次失败但不抛错——AC-9：client 偶发未就绪不应让 interpret 批次崩溃）。
    *
-   * 返回值语义：
+   * 返回值语义（失败判定内涵三态，pi-stall-detection D1）：
    *   - resolve(非 undefined) → pi 健康（事件循环活，能响应 get_state）→ 清零失败计数
    *   - resolve(undefined)   → client 未就绪或拿不到 state → 计失败但不抛错（AC-9）
-   *   - reject               → pi 真卡死（get_state 超时）→ 计失败
+   *   - reject               → 探测失败 → 计失败。来源含三态：进程死（exit 链
+   *                            rejectAll）/ 探测请求观测超时（probeState 窗满 reject，
+   *                            事件循环挂死形态）/ stdin 写失败
    *
    * 设计权衡：ping 能穿透所有「pi 合理等待」场景（ask_user / 网络 / 文件锁）——
-   * pi 阻塞在 await 时事件循环仍活，get_state 必响应。只有进程真死才连续 3 次失败。
-   * 详见 ADR-0047「ping 可行性验证」。
+   * pi 阻塞在 await 时事件循环仍活，get_state 必快速响应（毫秒级）。观测超时窗
+   * （PING_OBSERVE_TIMEOUT_MS）远大于正常 RTT，窗满即事件循环挂死或进程死的信号。
+   * 详见 ADR-0047「ping 可行性验证」与 pi-stall-detection D1。
+   * （本注释是 event-interpreter-ping.ts PingProbeDeps.pingPi 的同文副本，改动须双侧同步。）
    */
   pingPi?: () => Promise<Record<string, unknown> | undefined> | undefined
   /**
@@ -567,6 +639,28 @@ export interface EventInterpreterOptions {
    * taiji flush 的 live 入流位置与落盘位置一致（级联末）。
    */
   onAgentSettled?: (sessionId: string) => void
+  /**
+   * C1（feat-compaction-closure 分界行实时化）：get_entries 全量 entry 拉取回调（组合根注入
+   * pm.getClient(sessionId)?.getEntries()）。smart-context 落盘信号（customStart 帧的
+   * customType + details.source 双判据命中）到达时，经本通道取该 compaction entry 合成
+   * message.compactionSummary 帧（后台压缩按设计不伪造 pi 事件，分界行的 live 帧经此补发，
+   * 字段口径与 compaction_end 通路一致）。延迟解析 client（pingPi 同款）：interpreter 在
+   * session 创建时构造，client 可能尚未 spawn；未注入 / client 未就绪 / 拉取失败 → 降级
+   * 不发帧（warn 留痕），重开会话仍可见分界行（reload 通路无依赖）。
+   */
+  getPiEntries?: () => Promise<readonly unknown[] | undefined>
+  /**
+   * [pi-stall-detection U4 / D3] 静默判定矩阵装配（未注入 = 矩阵不装配，存量测试形态）。
+   *
+   * - configSnapshot：配置快照（组合根构造 adapter 时经 readStallMatrixConfigSnapshot(cwd)
+   *   读定——AS11 联动通道；分支装配（RL14 判死/提示）由矩阵构造时按快照求值）；
+   * - onJudge：判死触发回调（组合根接 sessionService.handleSilenceJudgeDetermination →
+   *   dispatcher：自动 abort 复用 U2 有界等待 + 悬挂升级判死强杀分型 + steer 注入）。
+   */
+  stallMatrix?: {
+    configSnapshot: StallMatrixConfigSnapshot
+    onJudge: (payload: StallJudgePayload) => void
+  }
 }
 
 /** 可能改文件的工具（baseline diff 触发判定，与原 event-adapter 一致）。 */
@@ -575,7 +669,7 @@ const FILE_MUTATING_TOOLS = new Set(['write', 'edit', 'bash'])
 /**
  * [RT-4#9] PiTranslatedEvent.kind 编译期穷尽检查：五段处理（handle 结构 case +
  * handleConversationEvent / handleTurnLifecycleEvent / handleRoutingEvent / handleMetaEvent）
- * 的 case 并集必须 == kind 全集（当前 24 个）。types.ts 新增 kind 而五段未接线时，
+ * 的 case 并集必须 == kind 全集（当前 26 个）。types.ts 新增 kind 而五段未接线时，
  * 本登记表缺键 → `Record<PiTranslatedEvent['kind'], true>` 注解编译红（多键同理），
  * 接线遗漏在编译期显形（此前仅靠人工核对，新增 kind = 该类型事件永久静默丢弃）。
  * 运行时兜底 = handleMetaEvent default warn。
@@ -608,6 +702,8 @@ const HANDLED_EVENT_KINDS: Record<PiTranslatedEvent['kind'], true> = {
   'compaction-end': true,
   'trace-trigger': true,
   'record-reconcile-trigger': true,
+  'bash-execution-update': true,
+  'summarization-retry-scheduled': true,
 }
 
 function assertTranslatedEventHandled(ev: PiTranslatedEvent): void {
@@ -636,6 +732,8 @@ export class EventInterpreter {
   private readonly settledDelayer: AgentSettledDelayer
   /** pi 进程健康探测循环（ADR-0047，登记五域外独立状态侧）。 */
   private readonly pingProbe: PingProbe
+  /** 静默判定矩阵（pi-stall-detection U4 / D3，第 2 层判定权威；未装配 = null 存量形态）。 */
+  private readonly silence: SilenceMatrix | null
   /** compaction 双事件编排（M4，纯同步无内部状态，评估低风险）。 */
   private readonly compaction: CompactionNotifier
   /** turn-end 压制标记：true 后到达的 accumulating 直接 no-op（同回合迟到 tool-call-end 不产生新帧） */
@@ -649,7 +747,8 @@ export class EventInterpreter {
 
   /**
    * 会话销毁清理（组合根经 EventAdapter.detach 转调）：清在途 settling 延迟 timer + 置
-   * disposed 短路标志 + 停 ping 探测循环。幂等。仅 V7 开关生效时存在真实 settling timer；
+   * disposed 短路标志 + 停 ping 探测循环 + 注销探测注册表条目（pi-stall-detection D4）。
+   * 幂等。仅 V7 开关生效时存在真实 settling timer；
    * 未设开关时该 timer 恒 null（零开销）。
    *
    * B1（memory-leak-remediation §3.2-B1，2026-09-14）：pi turn 中崩溃 → onSessionExit →
@@ -661,6 +760,14 @@ export class EventInterpreter {
   dispose(): void {
     this.settledDelayer.dispose()
     this.pingProbe.stop()
+    // [pi-stall-detection U4] 静默判定矩阵停止（settled/dispose 停止的 dispose 侧；幂等，
+    // 在途提示顺带清除）。
+    this.silence?.stop()
+    // [pi-stall-detection D4] 注销探测注册表条目。身份比对：同 sessionId 重建后旧实例的
+    // 迟到 dispose（detach 扇出时序）不得误删后继实例的条目。
+    if (probeRegistry.get(this.sessionId) === this.pingProbe) {
+      probeRegistry.delete(this.sessionId)
+    }
   }
 
   constructor(
@@ -673,8 +780,30 @@ export class EventInterpreter {
       sessionId,
       send: opts.send,
       pingPi: opts.pingPi,
-      onSilentAbort: opts.onSilentAbort,
+      onSilentAbort: opts.onSilentAbort
+        ? (payload) => {
+          // [pi-stall-detection U4] 第 1 层判定接管：探测判死（进程死/事件循环挂死）后
+          // 第 2 层静默矩阵退出（该会话的终止编排已由自动处置链接管，静默计时/提示失去
+          // 消费对象）。矩阵 stop 幂等，先于处置链执行（处置链内部 destroy → detach →
+          // dispose 亦兜底停止）。
+          this.silence?.stop()
+          opts.onSilentAbort?.(payload)
+        }
+        : undefined,
     })
+    // [pi-stall-detection U4] 静默判定矩阵（同域协作对象；未装配 = null——存量测试零改动）。
+    this.silence = opts.stallMatrix
+      ? new SilenceMatrix({
+        sessionId,
+        send: opts.send,
+        configSnapshot: opts.stallMatrix.configSnapshot,
+        onJudge: opts.stallMatrix.onJudge,
+      })
+      : null
+    // [pi-stall-detection D4] 登记探测循环查找通道：受理出站边沿启动
+    //（startPingProbeFromDeliveryEdge）与收回 idle 边沿停止（转移原语单点）经本表到达。
+    // 同 sessionId 重建（restore 清场后重建 adapter）时 Map.set 覆盖旧条目。
+    probeRegistry.set(sessionId, this.pingProbe)
     this.compaction = new CompactionNotifier({
       sessionId,
       send: opts.send,
@@ -703,6 +832,10 @@ export class EventInterpreter {
       //   - message.complete 不送达前端（streaming 永远不停）
       // 故单事件失败仅记日志不中断批次（复用 event-adapter.logInterpretFailure 的隔离思路）。
       try {
+        // [pi-stall-detection U4] 静默判定矩阵单点喂入（先于 kind 路由——text/thinking delta
+        // 快速路径 continue 跳过 handle，矩阵消费必须在分流之前；矩阵内部按 AS16 三分类
+        // 自行过滤，未装配 = null 零开销）。observe 在 try 内：send 抛错不中断批次（W1 隔离）。
+        this.silence?.observe(ev)
         // 微项 4（wave:perf-w09）：高频 delta 帧快速路径——kind 路由（handle 的大 switch）
         // 与 subagent-bg-notify / workflow-result 的 payload 检查全部跳过，纯转发。
         // text_delta / thinking_delta 占 streaming 期事件量绝对大头，等价性依据：
@@ -859,6 +992,8 @@ export class EventInterpreter {
         this.handleSubagentBgNotify(ev.message)
         // workflow-result（run 完成）：广播 session.workflows 增量信号
         this.handleWorkflowResult(ev.message)
+        // smart-context 落盘信号（C1）：命中后取 compaction entry 合成对话流分界行帧
+        this.handleCompactionPersistSignal(ev.message)
         return true
       case 'subagent-stream':
         // 路径 A-1：subagent 逐字 streaming → subagent.stream_delta WS 帧
@@ -903,6 +1038,9 @@ export class EventInterpreter {
         // 停止点 = runAgentSettledEffects finally / onSilentAbort / dispose。
         // turn 间（settled 后）不探测（AC-3）：start 在 turn-start 挂点调用。
         this.pingProbe.start()
+        // [pi-stall-detection U4] 静默判定矩阵启动（占用中——与探测同挂点；生命期 =
+        // turn-start → agent_settled finally / dispose，RL14 装配在构造时已按配置固定）。
+        this.silence?.start()
         return true
       case 'turn-end':
         this.handleTurnEnd(ev)
@@ -935,6 +1073,14 @@ export class EventInterpreter {
         // [reload-closeout D2] 送达水位对账路径（agent_settled，fire-and-forget——回调内部
         // 重跑 record 派生管线并按已发布快照水位补发，不阻塞本批次）
         this.opts.onRecordReconcile?.(this.sessionId)
+        return true
+      case 'bash-execution-update':
+        // [pi-stall-detection U4] bash 执行流 chunk：矩阵在途信号（interpret 循环单点已喂入），
+        // 前端零消费（不产 WS 帧）——本 case 仅登记消费完成。
+        return true
+      case 'summarization-retry-scheduled':
+        // [pi-stall-detection U4] 摘要重试退避调度：矩阵带窗在途信号（delayMs 宽限已在
+        // observe 消费），呈现层零消费——本 case 仅登记消费完成。
         return true
       default:
         return false
@@ -999,6 +1145,9 @@ export class EventInterpreter {
       }
     } finally {
       this.pingProbe.stop()
+      // [pi-stall-detection U4] 静默判定矩阵停止（settled/dispose 停止的 settled 侧；
+      // 幂等——judge 已自停时 no-op，在途提示顺带清除）。
+      this.silence?.stop()
     }
   }
 
@@ -1345,6 +1494,65 @@ export class EventInterpreter {
     const payload = msg.payload as { customType?: string } | undefined
     if (payload?.customType !== WORKFLOW_RESULT_CUSTOM_TYPE) return
     this.opts.onRecordEntriesInvalidated?.(this.sessionId, WORKFLOW_RECORD_CUSTOM_TYPE)
+  }
+
+  /**
+   * smart-context 后台压缩落盘信号分诊（C1 分界行实时化，handleSubagentBgNotify 先例同款
+   * customType 分诊位）。双判据命中（customType + details.source）→ 异步取 compaction entry
+   * 合成 message.compactionSummary 帧。
+   *
+   * 为什么在这里合成：后台压缩按设计不伪造 pi 事件（UD6：appendCompaction 纯追加无事件），
+   * 分界行的 live 帧原本唯一来源是 pi compaction_end 事件——后台路径落盘后分界行只在重开
+   * 翻译时出现。本方法补 live 帧，字段口径与 compaction_end 通路（CompactionNotifier
+   * onCompactionEnd 成功分支）一致，消费侧 core registry 既有 handler 喂同一 reducer
+   * （live ≡ reload 构造性成立）。
+   *
+   * customStart 帧本身照常转发前端（display:false 消息在 core message-turns 分组管线透明
+   * 跳过，对话流不渲染——信号不是给用户看的）；分界行帧在其后追加，顺序即信号到达序。
+   */
+  private handleCompactionPersistSignal(msg: ServerMessage): void {
+    const payload = msg.payload as { customType?: string; details?: Record<string, unknown> } | undefined
+    if (payload?.customType !== SMART_CONTEXT_NOTICE_CUSTOM_TYPE) return
+    const signal = parseCompactionPersistSignal(payload.details)
+    if (!signal) return
+    void this.emitCompactionSummaryForPersistSignal(signal.compactionId)
+  }
+
+  /**
+   * 落盘信号 → compaction entry 拉取 → 合成 message.compactionSummary 帧（fire-and-forget：
+   * get_entries 是异步 RPC，不阻塞 interpret 批次——handleToolCallStart 异步 handler 同款）。
+   *
+   * 降级契约（信号通道不产生新故障面）：entry 拉取失败 / 未注入 / 目标缺失 → 不发帧、
+   * 不抛错、warn 留痕——最坏结果 = 分界行退回「重开会话才可见」原状，不阻断事件流。
+   */
+  private async emitCompactionSummaryForPersistSignal(compactionId?: string): Promise<void> {
+    try {
+      const entries = await this.opts.getPiEntries?.()
+      const entry = pickCompactionEntryForSignal(entries, compactionId)
+      if (!entry) {
+        console.warn(
+          `[event-interpreter] compaction persist signal: no compaction entry found (id=${compactionId ?? 'none'}), divider frame dropped, sid=${this.sessionId}`,
+        )
+        return
+      }
+      // 帧字段口径与 CompactionNotifier.onCompactionEnd 成功分支一致（timestamp 客户端时钟
+      // 为既有 live/reload 异源差异，registry 端 id 客户端生成 cmp-<uuid> 照旧）
+      this.opts.send({
+        type: 'message.compactionSummary',
+        payload: {
+          sessionId: this.sessionId,
+          summary: entry.summary,
+          tokensBefore: entry.tokensBefore,
+          timestamp: Date.now(),
+        },
+      })
+    } catch (err: unknown) {
+      // 降级策略（best-effort）：信号链路只承载「分界行提前出现」，失败不阻断 interpret
+      // 批次与事件流，最坏结果 = 分界行退回重开可见原状——warn 留痕后吞掉，不上抛。
+      console.warn(
+        `[event-interpreter] compaction persist signal handling failed (divider frame dropped): ${toErrorMessage(err)}`,
+      )
+    }
   }
 
   // ── compaction 生命周期编排已迁 CompactionNotifier（event-interpreter-compaction.ts，T4）──

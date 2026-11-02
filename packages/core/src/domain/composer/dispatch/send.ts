@@ -137,9 +137,9 @@ export interface ComposerSendDeps {
    *  [R2-A5 失败信号契约] 返回 false = RPC 失败（useChat 内部已 toast + 回滚乐观气泡），
    *  调用方据此 restoreSegments 恢复草稿（对齐 steer 先例）；true = 已受理。 */
   send: (sessionId: string, segments: Segment[]) => Promise<boolean>
-  /** 压缩上下文（useChat 提供）。[R2-A5 失败信号契约] 同 send：false = RPC 失败（内部
-   *  双分型反馈：compaction 级进对话流 / transport 级 toast），调用方恢复草稿。 */
-  compact: (sessionId: string, customInstructions?: string) => Promise<boolean>
+  /** 手动触发后台压缩（useChat 提供，触发即回执不等待压缩全程）。[R2-A5 失败信号契约]
+   *  同 send：false = RPC 受理失败（内部已 toast），调用方恢复草稿。 */
+  compactBackground: (sessionId: string, customInstructions?: string) => Promise<boolean>
   // ── 反馈 ──
   /** toast 错误（useToast 提供） */
   toastError: (msg: string) => void
@@ -260,16 +260,14 @@ async function sendActiveMessage(deps: ComposerSendDeps, segments: Segment[], te
       ? trimmed.slice('/compact '.length).trim() || undefined
       : undefined
     deps.clearInput()
-    // [compaction-input-unlock] 不置 isSending：compact RPC 同步等待压缩全程完成（runtime
-    // dispatcher.compact await client.compact 全程，可达分钟级），置锁 = 整个压缩期 composer
-    // 置灰不可输入。压缩期输入/发送通道已由投递内核承接（compacting hold → queued →
-    // compaction-end flush），UI 锁只保留给「受理往返」型提交（send/staging/landing）。
-    // 并发互斥交还 runtime：压缩中再提交 /compact 被 compact_busy 预检拒绝（对话流 system
-    // 提示呈现 + 本分支 false 信号走下方检查恢复）。
-    // 失败恢复空检查：本分支不再持 UI 锁，压缩期间用户可能已输入新内容——restoreSegments
+    // [compaction-input-unlock] 不置 isSending：压缩后台执行（C2 /compact 后台化——受理
+    // RPC 触发即回执，分钟级压缩全程在 pi 进程后台跑），置锁 = 无谓置灰。压缩期输入/发送
+    // 通道由投递内核承接，UI 锁只保留给「受理往返」型提交（send/staging/landing）。
+    // 并发语义交还扩展侧：压缩进行中再提交 /compact，后台管理器幂等回执（smart-context
+    // 通知通道呈现「进行中已并入」，不重复启动）。
+    // 失败恢复空检查：本分支不持 UI 锁，受理往返期间用户可能已输入新内容——restoreSegments
     // 是 setText 整体覆盖语义，输入区非空（有文本或有 chip）时禁止恢复（覆盖用户输入 =
-    // 数据丢失）；失败呈现已由 useChat 分型路由兜底（分类码 → 对话流 / transport 级 →
-    // toast），此处只放弃本次 /compact 草稿回填。
+    // 数据丢失）；受理失败呈现已由 useChat toast 兜底，此处只放弃本次 /compact 草稿回填。
     const restoreIfComposerEmpty = (): void => {
       const composerEmpty =
         !deps.hasInput.value && (deps.inputRef.value?.getSegments().length ?? 0) === 0
@@ -277,12 +275,12 @@ async function sendActiveMessage(deps: ComposerSendDeps, segments: Segment[], te
     }
     try {
       // 严格比较 false：只认显式失败信号，真值判断会把成功发送误判为失败
-      const delivered = await deps.compact(sessionId, customInstructions)
+      const delivered = await deps.compactBackground(sessionId, customInstructions)
       if (delivered === false) restoreIfComposerEmpty()
     } catch (e) {
-      // 契约外异常防御（useChat.compact 契约内不 throw）——同空检查语义，防覆盖并发输入
+      // 契约外异常防御（useChat.compactBackground 契约内不 throw）——同空检查语义，防覆盖并发输入
       restoreIfComposerEmpty()
-      deps.toastError(deps.t('composable.compactFailed', { msg: toErrorMessage(e) }))
+      deps.toastError(deps.t('composable.compactStartFailed', { msg: toErrorMessage(e) }))
     }
     return
   }

@@ -14,7 +14,7 @@
  * TC1/TC2/TC5/TC6（dev/packaged 发会话、permission 解析 bash、source map）是 integration/e2e/manual，留 T7/T8。
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { existsSync, readFileSync, rmSync, mkdirSync, copyFileSync, readdirSync, writeFileSync, mkdtempSync, cpSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, mkdirSync, copyFileSync, readdirSync, writeFileSync, mkdtempSync, cpSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -131,6 +131,23 @@ describe("builtin-ext-bundle (wave:builtin-ext-bundle)", () => {
 		} finally {
 			fx.cleanup();
 		}
+	});
+
+	it("TC9: base-tool-enhance staged 含 bin/taiji-fg-wrap、可执行位保留、与源逐字节一致（B-1 打包断裂回归防护）", () => {
+		// bin/ 不入 staged 时：bash-tool.ts inline 进 index.js 后 resolveFgWrapScriptPath
+		// 双形态探测回退 ../bin（打包态错位一级）→ 每条包装命令串指向不存在的脚本
+		// → 打包版全部常规前台命令 exit 127，核心路径断裂。
+		const script = join(STAGED, "pi-base-tool-enhance/bin/taiji-fg-wrap");
+		expect(existsSync(script), "staged bin/taiji-fg-wrap 存在").toBe(true);
+		// 可执行位保留：node fs.cp 底层 copyFile 携带源 mode（0755）——丢位时包装命令
+		// 经 shell 执行报 permission denied，前台命令整体断裂
+		expect(statSync(script).mode & 0o111, "可执行位（any of ugo x）保留").not.toBe(0);
+		// 拷贝无漂移：与源码逐字节一致
+		const srcScript = join(REPO, "extensions/universal/base-tool-enhance/bin/taiji-fg-wrap");
+		expect(readFileSync(script).equals(readFileSync(srcScript)), "bin/taiji-fg-wrap 与源逐字节一致").toBe(true);
+		// bundle 内联了包装脚本路径探测（resolveFgWrapScriptPath 被打包进 index.js）
+		const bundleSrc = readFileSync(join(STAGED, "pi-base-tool-enhance/index.js"), "utf8");
+		expect(bundleSrc, "index.js 内联 taiji-fg-wrap 路径探测").toContain("taiji-fg-wrap");
 	});
 
 	it("TC8: bundle 拷贝 pi.skills 资源目录（M6a-04，manifest 资源拷贝分支）", () => {
@@ -332,22 +349,28 @@ describe("verify-staged per-package asset dirs (MF-1-6)", () => {
 	/**
 	 * 组装 tmp mirror。planTemplates 三形态：undefined = 不建 templates/（缺失）、
 	 * "empty" = 空目录、nonempty = 含一个 .md（正向对照）。
+	 * baseToolBin 三形态（B-1 登记条目）："missing" = 不建 bin/（缺失）、"empty" =
+	 * 空目录、nonempty = 含 taiji-fg-wrap。默认 nonempty：templates 用例防 bin 缺失
+	 * 连坐红灯（多登记条目各用例只让自己测的目录残缺）。缺形态必须显式传
+	 * "missing"——显式传 undefined 会触发参数默认值（= nonempty），缺失形态失效
+	 * 用例恒绿（首版实测即此假绿形态）。
 	 */
-	function makeMirror({ planTemplates } = {}) {
+	function makeMirror({ planTemplates, baseToolBin = "nonempty" } = {}) {
 		const root = mkdtempSync(join(tmpdir(), "verify-staged-assets-"));
 		stageVerifyGuardInto(root);
-		// SSOT fixture：最小两包集，不含 permission（绕开 wasm 专项校验的无关面）
+		// SSOT fixture：最小三包集，不含 permission（绕开 wasm 专项校验的无关面）
 		mkdirSync(join(root, "packages/shared/src"), { recursive: true });
 		writeFileSync(
 			join(root, "packages/shared/src/mandatory-extensions.json"),
 			JSON.stringify([
 				{ name: "@zhushanwen/pi-plan", description: "fixture", tier: "feature" },
 				{ name: "@zhushanwen/pi-ask-user", description: "fixture", tier: "feature" },
+				{ name: "@zhushanwen/pi-base-tool-enhance", description: "fixture", tier: "feature" },
 			]),
 			"utf8",
 		);
 		const scoped = join(root, "staged/@zhushanwen");
-		for (const pkgDirName of ["pi-plan", "pi-ask-user"]) {
+		for (const pkgDirName of ["pi-plan", "pi-ask-user", "pi-base-tool-enhance"]) {
 			const pkgDir = join(scoped, pkgDirName);
 			mkdirSync(pkgDir, { recursive: true });
 			writeFileSync(join(pkgDir, "index.js"), "export default {};\n", "utf8");
@@ -362,6 +385,12 @@ describe("verify-staged per-package asset dirs (MF-1-6)", () => {
 		} else if (planTemplates === "nonempty") {
 			mkdirSync(join(scoped, "pi-plan/templates"));
 			writeFileSync(join(scoped, "pi-plan/templates/feature-plan.md"), "# plan\n", "utf8");
+		}
+		if (baseToolBin === "empty") {
+			mkdirSync(join(scoped, "pi-base-tool-enhance/bin"));
+		} else if (baseToolBin === "nonempty") {
+			mkdirSync(join(scoped, "pi-base-tool-enhance/bin"));
+			writeFileSync(join(scoped, "pi-base-tool-enhance/bin/taiji-fg-wrap"), "#!/usr/bin/env bash\n", "utf8");
 		}
 		const run = () =>
 			spawnSync(
@@ -399,6 +428,28 @@ describe("verify-staged per-package asset dirs (MF-1-6)", () => {
 		try {
 			const r = fx.run();
 			expect(r.status, "资产齐备应通过").toBe(0);
+		} finally {
+			fx.cleanup();
+		}
+	});
+
+	it("pi-base-tool-enhance 缺 bin/ → exit 1 + stderr 定位 bin（B-1：打包版前台命令 exit 127 的断裂形态）", () => {
+		const fx = makeMirror({ planTemplates: "nonempty", baseToolBin: "missing" });
+		try {
+			const r = fx.run();
+			expect(r.status, "缺 bin/ 必须 fail-fast").toBe(1);
+			expect(r.stderr, "失败原因定位到 bin（非 SSOT/manifest 假绿）").toContain("bin");
+		} finally {
+			fx.cleanup();
+		}
+	});
+
+	it("pi-base-tool-enhance bin/ 空目录 → exit 1 + stderr 定位 bin（空与缺失同罪）", () => {
+		const fx = makeMirror({ planTemplates: "nonempty", baseToolBin: "empty" });
+		try {
+			const r = fx.run();
+			expect(r.status, "空 bin/ 必须 fail-fast").toBe(1);
+			expect(r.stderr, "失败原因定位到 bin").toContain("bin");
 		} finally {
 			fx.cleanup();
 		}

@@ -19,6 +19,7 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { guardStaleCtx, toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
+import type { DeliveryEnvelope } from "@zhushanwen/pi-delivery-port";
 import { getDeliveryPort } from "@zhushanwen/pi-delivery-port";
 
 // bounded JSON pretty 序列化（IF13/#19，TC5/ES5）已下沉 core shared
@@ -159,10 +160,13 @@ interface WorkflowNotifyDetails { // oe-exempt:20260929:framework:workflow/recor
  *
  * **内存去重**：notifiedRunIds Set 由调用方（factory/extension instance）持有，
  * 同 runId 的重复收尾回调拦截（跨 session_shutdown 等边界防重复）；标记在 port
- * 受理（accepted/swallowed）后落下。**已知丢失情形（如实登记）**：port rejected
- * （persist-failed 等）= 受理未发生、投递日志未落，而 notifyDone 的唯一调用点
- * onRunDone 每终态恰好一次、port 差集重放无源可读——该终局通知**永久丢失**，仅
- * error 日志留痕（含 notifyId/content 摘要，供事后手工补偿）。持久层幂等由
+ * 受理（accepted/swallowed）后落下。**rejected 处置（D8① 处置阶梯，如实登记）**：
+ * port rejected（persist-failed 等）= 受理未发生、幂等键未登记——deliverDoneNotify
+ * 当场单次重提（retryDeliverDoneNotifyOnce）；主投与单次重提均失败时受理仍未发生、
+ * 窗口不标（A15），error 日志留痕（含 notifyId/content 摘要与恢复指引），恢复由
+ * 对账边沿（workflow-notify-reconcile：run journal/manifest 终态事实）承接——其
+ * 补投出口直调本函数，是 onRunDone 主路径之外的第二调用点，受理机会未丢失、无需
+ * 人工补救。持久层幂等由
  * notifyId 幂等键承接（内存窗口挤出 / 重启后的重复仍被 port 判重吞）。
  *
  * @param pi ExtensionAPI（仅降级路径直发用）
@@ -171,6 +175,9 @@ interface WorkflowNotifyDetails { // oe-exempt:20260929:framework:workflow/recor
  * @param notifiedRunIds 去重 Set（调用方持有，scope 到 factory 实例）
  * @param artifactsDir [D7] 产物目录指针（`<root>/<rootSid>/workflow/runs/`，onRunDone
  *   桥注入；缺省 undefined = 旧调用兼容，载荷与文案指针段双双省略）
+ * @returns 是否已受理投递（true = accepted/swallowed / 降级直发成功 / stale 终态 /
+ *   幂等早退；false = 主投与单次重提均 rejected——受理未发生，**窗口未标**，调用方
+ *   不 track，对账边沿补投可达。语义细则见 deliverDoneNotify 注释）
  */
 /**
  * notifyDone 构建面（content + details 一次成型）。
@@ -184,7 +191,7 @@ interface WorkflowNotifyDetails { // oe-exempt:20260929:framework:workflow/recor
  * （有 scriptResult 时）Script Result 段 → Agent Trace 段 →（artifactsDir 有时）
  * Artifacts 指针段。
  */
-function buildDoneNotifyContent(
+export function buildDoneNotifyContent(
   run: WorkflowRun,
   runId: string,
   artifactsDir: string | undefined,
@@ -265,7 +272,7 @@ function buildDoneNotifyContent(
  * 送达通道保持 "workflow-result"（runtime W18 失效信号 + taiji display 覆写 SSOT
  * 按该类型识别；迁移不改变消息类型与文案字节，只改变投递可靠性机制）。
  */
-function buildDoneNotifyDetails(
+export function buildDoneNotifyDetails(
   run: WorkflowRun,
   runId: string,
   artifactsDir: string | undefined,
@@ -313,8 +320,32 @@ function buildDoneNotifyDetails(
 /**
  * notifyDone 投递侧：pi 半区投递端口 port.deliver 主投（受理前落投递日志 +
  * details-id 送达凭据 + notifyId 幂等 + session_start 差集重放，端口侧内包；
- * workflow-result 外部通道逐条不合批——port 批组隔离原生承载）；port 缺席（装配
- * 异常窗口）→ fire-once 直发降级（stale ctx 静默）。见 notifyDone 主注释。
+ * workflow-result 外部通道逐条不合批——port 批组隔离原生承载）。
+ *
+ * rejected 处置阶梯（completion-signal-delivery D1/D8①）：deliver rejected
+ * （disposed / persist-failed 等——幂等键未登记、受理未发生）当场 getDeliveryPort()
+ * 重取当前实例单次重提原 envelope（一次投递尝试的同步收尾动作，非重试循环非
+ * 定时器——ADR-0122 红线不越界，RL10 同锁：重提 rejected 或重取 undefined 即停，
+ * 无第三次投递、无定时器句柄）；重提仍失败恢复责任移交对账边沿的事实判据兜底
+ * （notify-reconcile 编排，error 文案带 recovered 指引——RL9/RL11 同族）。
+ * 重提 accepted/swallowed 与主投受理同语义：标记 notifiedRunIds 去重窗口。
+ *
+ * port 缺席时（装配异常窗口，生产不可达常态）降级为 fire-once 直发（at-most-once；
+ * triggerTurn 单通道）。
+ *
+ * **内存去重**：notifiedRunIds Set 由调用方（factory/extension instance）持有，
+ * 同 runId 的重复收尾回调拦截（跨 session_shutdown 等边界防重复）；标记只在
+ * **投递受理后**落下（accepted/swallowed / 降级直发成功 / stale 终态）。
+ * **rejected = 受理未发生，不标窗口**（A15 缺陷修复）：rejected 的恢复通道 =
+ * 对账边沿事实判据（notify-reconcile：run journal/manifest 终态事实），其补投
+ * 出口重新走本函数——若 rejected 时标了窗口，补投会被幂等早退静默吞掉（受理
+ * 假象：对账日志照打、消息从未出站）。调用方（runSettledEffects）按本函数返回
+ * 值决定是否补标窗口（与 notifyDone 内部 track 同一语义，双写幂等）。
+ * 持久层幂等由 notifyId 幂等键承接（内存窗口挤出 / 重启后的重复仍被 port 判重吞）。
+ *
+ * @returns 是否已受理投递（true = accepted/swallowed / 降级直发成功 / stale 终态 /
+ *   幂等早退——窗口已含即已通知语义；false = 主投与单次重提均 rejected，受理未
+ *   发生，窗口不标，对账边沿恢复）。
  */
 function deliverDoneNotify(
   pi: ExtensionAPI,
@@ -322,45 +353,21 @@ function deliverDoneNotify(
   notifiedRunIds: Set<string>,
   content: string,
   details: WorkflowNotifyDetails,
-): void {
+): boolean {
   const port = getDeliveryPort();
   if (port) {
-    const result = port.deliver(
-      {
-        payload: {
-          kind: "custom",
-          customType: WORKFLOW_RESULT_CUSTOM_TYPE,
-          content,
-          display: true,
-          details,
-        },
-        id: details.notifyId,
-      },
-      // collectKey 债权申报（result-collect 设计 §3.4）：workflow 域键 = runId
-      // （collect 以 runId 命中收取，§3.3 申报形态）。
-      { collectKey: [runId] },
-    );
+    const envelope = buildDoneNotifyEnvelope(runId, content, details);
+    const result = port.deliver(envelope, doneNotifyCollectOption(runId));
     if (result.kind === "rejected") {
-      // 已知丢失情形（如实登记，承原账本 record 抛错同形态）：rejected = 未受理
-      // （persist-failed 等，幂等键未登记）、notifyDone 每终态恰好一次（无重复收尾
-      // 可重试）、port 重放无源可读（账未落）——该终局通知**永久丢失**，error 级
-      // 留痕含 notifyId 与 content 摘要，供事后按 run 手工补偿（从 run
-      // journal/manifest 读取终态）。deliver 同步返回结果无抛错通道（原 record 抛错
-      // 上抛 finalizeRun 围栏的链路随账本退役消失），丢失可见性 = 本 error 留痕。
-      logger.error(
-        "workflow completion notice delivery rejected — this terminal notification is LOST (no journal record, no replay source); compensate manually from run artifacts",
-        {
-          runId,
-          notifyId: details.notifyId,
-          contentPreview: content.slice(0, RECORD_FAIL_CONTENT_PREVIEW_LENGTH),
-          reason: result.reason,
-        },
+      // 首败留痕（修复信号）+ 处置阶梯①接线（D8①）：立即单次重提。
+      logger.warn(
+        "workflow completion notify rejected by delivery port; retrying once via re-acquired port, recovered by reconcile fallback if the retry fails too",
+        { runId, notifyId: details.notifyId, reason: result.reason },
       );
-      // 去重不标记：进程内的重复收尾回调不被去重阻断（防御形态，不改变丢失事实）。
-      return;
+      return retryDeliverDoneNotifyOnce(runId, notifiedRunIds, envelope, details);
     }
     trackNotifiedRunId(notifiedRunIds, runId);
-    return;
+    return true;
   }
 
   // 降级：port 缺席（base-tool-enhance session_start 装配异常 / 版本混装窗口——
@@ -373,9 +380,10 @@ function deliverDoneNotify(
   // stale 瞬态发送失败（同步抛错上抛）后进程内仍可重试（去重不阻断）；stale 分支由
   // onStale 补标记保持现语义——stale = 通知对旧 session 已无意义，不重试。
   logger.warn(
-    "delivery port not bound - workflow completion notice falls back to direct-send (at-most-once; check base-tool-enhance session_start bindDeliveryPort wiring)",
+    "delivery port not bound - workflow completion notify falls back to direct-send (at-most-once; check base-tool-enhance session_start bindDeliveryPort wiring)",
     { runId, notifyId: details.notifyId },
   );
+  let delivered = false;
   guardStaleCtx(
     () => {
       const sent = pi.sendMessage(
@@ -388,19 +396,101 @@ function deliverDoneNotify(
         { triggerTurn: true },
       );
       trackNotifiedRunId(notifiedRunIds, runId);
+      delivered = true;
       return sent;
     },
     {
       label: "subagent-workflow:notifyDone",
       onStale: (error) => {
         trackNotifiedRunId(notifiedRunIds, runId);
-        logger.warn("workflow completion notice delivery skipped (stale ctx)", {
+        delivered = true;
+        logger.warn("workflow completion notify delivery skipped (stale ctx)", {
           runId,
           error: toErrorMessage(error),
         });
       },
     },
   );
+  return delivered;
+}
+
+/**
+ * [D7] 收尾通知 envelope（主投与单次重提共用同一构造——重提原 payload 语义；
+ * 原 deliverDoneNotify 内联字面量提出，投递拒绝重提时同键同载荷原样重投）。
+ */
+function buildDoneNotifyEnvelope(
+  runId: string,
+  content: string,
+  details: WorkflowNotifyDetails,
+): DeliveryEnvelope {
+  return {
+    payload: {
+      kind: "custom",
+      customType: WORKFLOW_RESULT_CUSTOM_TYPE,
+      content,
+      display: true,
+      details,
+    },
+    id: details.notifyId,
+  };
+}
+
+/** collectKey 债权申报（result-collect 设计 §3.4）：workflow 域键 = runId。 */
+function doneNotifyCollectOption(runId: string): { collectKey: string[] } {
+  return { collectKey: [runId] };
+}
+
+/**
+ * 立即单次重提（D8①，与 bash 域 retryDeliverOnce 同款单次形态——RL10 同锁）：
+ * getDeliveryPort() 重取当前实例（session_start 重绑后即新实例）、重提原 envelope
+ * （同幂等键——rejected 条目幂等键未登记，重提合法，delivery-port types 既有
+ * 契约）。单次不循环：重提 rejected 或重取 undefined 均直接返回（RL10 的两处
+ * 停止位），无定时器、无重试队列、无第三次投递；重提受理则与主投受理同语义
+ * 标记去重窗口。重取缺席不扩直发降级（缺席直发只属主路径缺席形态），恢复通道
+ * = 对账边沿事实判据。
+ *
+ * @returns 重提是否受理（true = accepted/swallowed，窗口已标；false = rejected /
+ *   port 缺席，窗口不标——对账边沿恢复，见 deliverDoneNotify 返回值注释）。
+ */
+function retryDeliverDoneNotifyOnce(
+  runId: string,
+  notifiedRunIds: Set<string>,
+  envelope: DeliveryEnvelope,
+  details: WorkflowNotifyDetails,
+): boolean {
+  const retryPort = getDeliveryPort();
+  if (retryPort === undefined) {
+    logger.warn(
+      "workflow completion notify retry skipped: delivery port absent on re-acquire; recovered by reconcile fallback",
+      { runId, notifyId: details.notifyId },
+    );
+    return false;
+  }
+  const retryReceipt = retryPort.deliver(envelope, doneNotifyCollectOption(runId));
+  if (retryReceipt.kind === "rejected") {
+    // 单次重提仍 rejected（转换窗旧实例在位 / 持久写失败）：即停报警（RL11——
+    // 持久成因不静默重试，error 留痕带恢复指引；环境修复/进程恢复后的送达由
+    // 对账边沿的事实判据自动承接（notify-reconcile：run journal/manifest 终态
+    // 事实），判据不区分成因。窗口不标：受理未发生，标了会堵死对账补投出口
+    // （A15 缺陷形态——notifyDone 幂等早退静默吞补投）。
+    logger.error(
+      "workflow completion notify retry rejected after the single re-acquire attempt; single retry spent, recovered by reconcile fallback (session_start / agent_settled edge)",
+      {
+        runId,
+        notifyId: details.notifyId,
+        reason: retryReceipt.reason,
+        contentPreview: envelope.payload.content.slice(0, RECORD_FAIL_CONTENT_PREVIEW_LENGTH),
+      },
+    );
+    return false;
+  }
+  // 重提受理（accepted/swallowed）：与主投受理同语义，标记去重窗口。
+  logger.debug("workflow completion notify retry accepted via re-acquired port", {
+    runId,
+    notifyId: details.notifyId,
+  });
+  trackNotifiedRunId(notifiedRunIds, runId);
+  return true;
 }
 
 export function notifyDone(
@@ -410,11 +500,13 @@ export function notifyDone(
   notifiedRunIds: Set<string>,
   artifactsDir: string | undefined,
   settlement: RunSettlementRecord,
-): void {
-  if (notifiedRunIds.has(runId)) return;
+): boolean {
+  // 幂等早退 = 已通知语义（窗口已含 runId）：返回 true（调用方按受理处理，
+  // 补 track 是幂等 no-op）——false 只保留给「rejected 受理未发生」。
+  if (notifiedRunIds.has(runId)) return true;
   const { content, eventsJournalPath } = buildDoneNotifyContent(run, runId, artifactsDir, settlement);
   const details = buildDoneNotifyDetails(run, runId, artifactsDir, eventsJournalPath, settlement);
-  deliverDoneNotify(pi, runId, notifiedRunIds, content, details);
+  return deliverDoneNotify(pi, runId, notifiedRunIds, content, details);
 }
 
 /**
@@ -434,9 +526,10 @@ export function notifyDone(
  *
  * 调用点：notifyDone 内部（port 受理后 + 降级直发受理/stale 后）+ workflow-events
  * onRunDone 回调（notifyDone 之后，幂等二次添加）。port.deliver rejected 不抛错也
- * 不标记（notifyDone 内 error 留痕后直接返回）。notifyDone 抛出（非 stale 发送失败等）
- * 时内外都不标记——进程内的重复收尾回调不被去重阻断（防御形态；port.deliver
- * rejected 的已知丢失情形登记见 notifyDone 注释）。
+ * 不标记（rejected 受理未发生——当场单次重提仍失败才返回 false，恢复由对账边沿
+ * 承接，登记见 notifyDone 注释）。notifyDone 抛出（非 stale 发送失败等）
+ * 时内外都不标记——进程内的重复收尾回调不被去重阻断（防御形态；rejected 的
+ * 处置阶梯登记见 notifyDone 注释）。
  *
  * @param notifiedRunIds 去重 Set（调用方持有，scope 到 factory 实例）
  * @param runId run 标识

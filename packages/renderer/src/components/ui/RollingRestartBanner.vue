@@ -6,7 +6,7 @@
     重连/刷新不丢）。
     挂载点 AppShell（连接后主界面；restarting 全屏过渡态由 App.vue 承接，横幅无需在场）。
     **横幅唯一性（D5「同一时刻只有一条横幅」）**：z-[var(--z-banner)]（--z-banner 2100 = 梯队
-    最高层，高于 toast 2000/modal 1100）顶部同位唯一横幅（不透明完整覆盖下层同位元素）。
+    最高层，高于 toast 2000/dialog 1100/modal 1000）顶部同位唯一横幅（不透明完整覆盖下层同位元素）。
     形态 = demo 浮层语言（ui-replica M2）：bg-elevated 浮层底 + border-strong 硬边界 +
     shadow-2 + 12px 圆角（radius-card；demo 弹层主流 r-lg 档），功能与状态机不动。
   -->

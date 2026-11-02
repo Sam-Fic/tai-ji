@@ -94,8 +94,6 @@ import type { RecordStore } from "../persistence/record-store.ts";
 // [R3] ResolvedIdentity 接口本体在 record-access.ts（生产者 resolveIdentity 所属聚合），
 // 本聚合单向 type import（D-R3-2 同款非环形态）。
 import type { ResolvedIdentity } from "./record-access.ts";
-// 嵌套深度护栏单点（D-033 共享判据 + MAX_FORK_DEPTH 上限常量同源）。
-import { assertNestingDepthWithinLimit } from "../assembly/session-context-resolver.ts";
 import { writeRecordBinding } from "../persistence/state-marker.ts";
 // [§3.1.5 binding 载荷单源] 身份域载荷与 settle 全载荷共用同一构造器
 // （identityBindingPayload；差异段由 fullBindingPayload 追加）——两处手写的人肉
@@ -281,9 +279,6 @@ export class RunOrchestration {
     // [T4② / PS-4] idleTimeoutMs 配置错误在首个副作用前同步 fail-fast（错误含合法范围）。
     this.assertIdleTimeoutMsSafe(opts);
 
-    // 通用嵌套深度护栏（D-033，单源 session-context-resolver）：在所有副作用之前拦截。
-    assertNestingDepthWithinLimit(this.deps.getExecNesting().current());
-
     // mode 固定 background（sync 模式已删除）
     const mode: ExecutionMode = "background";
 
@@ -357,9 +352,6 @@ export class RunOrchestration {
     this.deps.assertReady();
     // [T4② / PS-4] 与 execute() 同款入口校验（两入口共享 runAndFinalize → armIdleTimer 链）。
     this.assertIdleTimeoutMsSafe(opts);
-
-    // ── BC-12 嵌套护栏：与 execute() 同款单点检查（session-context-resolver）──
-    assertNestingDepthWithinLimit(this.deps.getExecNesting().current());
 
     // ── 步骤 1: IDENTITY 解析 ──
     const identity = await this.deps.resolveIdentity(opts);

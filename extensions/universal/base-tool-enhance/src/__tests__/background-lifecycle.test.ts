@@ -15,13 +15,16 @@
 //     属「代码 + OS 组合行为」，本地默认跳过（门控 SSOT = test-guard/integration-gate.ts）。
 //   - 预算：单测用例走 vitest 默认；集成组用例单独挂 20s（原文件级预算随拆组下沉到
 //     用例级，非抬升），轮询 deadline 常量（10s / 8s）仅集成组消费。
-import { existsSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { EventEmitter } from "node:events";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { BashOperations, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { clearConfigCache } from "@zhushanwen/pi-llm-shared";
 
 import { INTEGRATION_TESTS_ENABLED, INTEGRATION_TESTS_SKIP_REASON } from "../../../../../test-guard/integration-gate.ts";
 
@@ -86,6 +89,7 @@ import type { BackgroundTask, RegistryEntry } from "../background/types.ts";
 import { DEFAULT_MAX_CONCURRENT_BACKGROUND, spawnBackgroundTask } from "../background/spawn-background.ts";
 import { clearTaskStoreForTest, getActiveTasks, getTask, markKillingIntent } from "../background/task-store.ts";
 import { reapBackgroundTasksNow, resetProcessExitGuardForTest } from "../background/process-exit-guard.ts";
+import { handleUserBash } from "../user-bash-interceptor.ts";
 
 const DATA_DIR = mkdtempSync(join(tmpdir(), "bte-data-"));
 
@@ -353,7 +357,7 @@ describe("bash_output tool", () => {
 		await expect(outputTool({ task_id: "bt-none" })).rejects.toThrow(/No such task/);
 	});
 
-	it("P0-1: list merges only TERMINAL registry entries — running entries stay invisible (§3.5)", async () => {
+	it("P0-1: list merges only TERMINAL registry entries — running entries stay invisible", async () => {
 		// 独立 session 目录：单例表空 + registry 含 running 与 exited 两条他进程条目
 		// （模拟 resume 被强杀 session：runtime 收殓转终态前的窗口里 registry 残留 running）
 		const sid = "sess-p0-list";
@@ -369,7 +373,7 @@ describe("bash_output tool", () => {
 		expect(ids).not.toContain("bt-xrun"); // running 条目不并入——无幻影 running 行
 	});
 
-	it("P0-1: detail registry fallback is terminal-only — cross-process running entry not queryable (§3.5)", async () => {
+	it("P0-1: detail registry fallback is terminal-only — cross-process running entry not queryable", async () => {
 		const sid = "sess-p0-detail";
 		const path = getRegistryPath(DATA_DIR, sid);
 		writeRegistryEntry(path, makeRegistryEntry({ taskId: "bt-xrun2", state: "running" }));
@@ -383,7 +387,7 @@ describe("bash_output tool", () => {
 		expect(detail.exitCode).toBe(3);
 	});
 
-	it("deleted output file degrades to <lost> without crashing (§3.6)", async () => {
+	it("deleted output file degrades to <lost> without crashing", async () => {
 		const task = spawnOk("sleep 0.1 && echo gone");
 		emitFakeExit(task, 0);
 		unlinkSync(task.outputFile);
@@ -816,9 +820,9 @@ describe("D15: abort signal does not propagate to background tasks", () => {
 	});
 });
 
-// ──────────────────────── 单测层：spawn 失败路径（§3.6） ────────────────────────
+// ──────────────────────── 单测层：spawn 失败路径 ────────────────────────
 
-describe("spawn failure paths (§3.6)", () => {
+describe("spawn failure paths", () => {
 	it("nonexistent cwd reports the builtin-style error", () => {
 		const result = spawnBackgroundTask({
 			command: "echo hi",
@@ -1003,6 +1007,216 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
 				);
 				expect(killTreeCalls.length).toBe(before);
 				expect(getTask(task.taskId)?.state).toBe("exited");
+			},
+		);
+	},
+);
+
+// ──────────────────────── 集成组：user_bash 拦截层真进程形态（M2/U2，RL4/RL5/B5）────────────────────────
+//
+// completion-signal-delivery M2 门控集成（testCommand 第二条精确覆盖本组）：真 spawn
+// taiji-fg-wrap + 真实时钟空闲触发（idleBackgroundSec=2 经配置注入）+ 真信号组杀。
+// RL4 转后台 = settled 的 exec 侧前提（resolve 不 reject）/ RL5 abort 通道组杀 / B5
+// wrapper 异常死亡兜底登记。真实时钟与进程信号时序无确定性完成信号——挂门控
+// （test-guard/integration-gate.ts），等待写法 = 等 exec promise + pollUntilTicked。
+describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
+	`user_bash interceptor real process (M2/U2: idle-to-background / abort / B5)${INTEGRATION_TESTS_SKIP_REASON ? `｜skip：${INTEGRATION_TESTS_SKIP_REASON}` : ""}`,
+	() => {
+		const TASKS_DIR = dirname(REGISTRY_PATH);
+		const USER_MARKER_PREFIX = "[TAIJI-FG-BG] 已转后台";
+		// 空闲阈值注入：config 文件 idleBackgroundSec=2（门控用例秒级实测，先例 --idle 2 形态）
+		let configDir = "";
+		// 本组快照（相对断言基线）：同文件既有用例共享 DATA_DIR，磁盘 registry 与
+		// tasks 目录非空，「无本次残留」必须按快照差集断言，不能断言全空
+		let taskIdsBefore = new Set<string>();
+		let filesBefore = new Set<string>();
+
+		function createMockPi() {
+			return { events: { emit: vi.fn() }, sendMessage: vi.fn(), appendEntry: vi.fn() };
+		}
+
+		/** 轮询直到 getter 产出非 undefined 值（pidfile 出现等文件系统就绪信号）。 */
+		async function pollForValue<T>(get: () => T | undefined, deadlineMs: number, what: string): Promise<T> {
+			const deadline = Date.now() + deadlineMs;
+			for (;;) {
+				const value = get();
+				if (value !== undefined) return value;
+				if (Date.now() > deadline) {
+					throw new Error(`timed out after ${deadlineMs}ms waiting for ${what}`);
+				}
+				await sleep(25);
+			}
+		}
+
+		function snapshotBefore(): void {
+			taskIdsBefore = new Set(readRegistry(REGISTRY_PATH).keys());
+			filesBefore = new Set(existsSync(TASKS_DIR) ? readdirSync(TASKS_DIR) : []);
+		}
+
+		/** 本次 exec 新产生的磁盘文件（与快照差集）。 */
+		function newFilesSince(): string[] {
+			return (existsSync(TASKS_DIR) ? readdirSync(TASKS_DIR) : []).filter((f) => !filesBefore.has(f));
+		}
+
+		/**
+		 * 等 pidfile 出现并返回（wrapperPid, cmdPid）：pidfile 写的是真实命令 pid（wrapper
+		 * 协议），wrapper 自身 pid = 命令的进程组 id（wrapper detached 成组长）——经
+		 * ps 查 pgid 得组长（B5 单杀 wrapper 用）。
+		 */
+		async function waitForPidfile(): Promise<{ wrapperPid: number; cmdPid: number; pidfilePath: string }> {
+			const pidfilePath = await pollForValue(() => {
+				const file = readdirSync(TASKS_DIR).find((f) => f.endsWith(".pid") && !filesBefore.has(f));
+				return file === undefined ? undefined : join(TASKS_DIR, file);
+			}, POLL_DEADLINE_MS, "pidfile to appear");
+			const cmdPid = (JSON.parse(readFileSync(pidfilePath, "utf8")) as { pid: number }).pid;
+			const pgid = Number.parseInt(execFileSync("ps", ["-o", "pgid=", "-p", String(cmdPid)], { encoding: "utf8" }).trim(), 10);
+			return { wrapperPid: pgid, cmdPid, pidfilePath };
+		}
+
+		/** 经真实 handler（格判定 + 构造）取包装 ops（门控组默认档全命中）。 */
+		function wrappedOps(command: string): BashOperations["exec"] {
+			const handlerResult = handleUserBash(
+				{ type: "user_bash", command, excludeFromContext: false, cwd: process.cwd() },
+				makeCtx() as never,
+			);
+			if (handlerResult === undefined || !("operations" in handlerResult)) {
+				throw new Error(`expected wrapped operations for: ${command}`);
+			}
+			return handlerResult.operations.exec;
+		}
+
+		beforeEach(() => {
+			spawnMode.real = true;
+			snapshotBefore();
+			// idle 阈值 2s：config 注入（loadBaseToolEnhanceConfig 读时刷新即生效）
+			configDir = mkdtempSync(join(tmpdir(), "bte-ubash-cfg-"));
+			vi.stubEnv("PI_CODING_AGENT_DIR", configDir);
+			const configPath = join(configDir, "config", "base-tool-enhance-ext-config.json");
+			mkdirSync(dirname(configPath), { recursive: true });
+			writeFileSync(configPath, `${JSON.stringify({ idleBackgroundSec: 2 })}\n`, "utf8");
+			clearConfigCache();
+		});
+
+		afterEach(() => {
+			clearConfigCache();
+			if (configDir !== "") {
+				rmSync(configDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+				configDir = "";
+			}
+		});
+
+		it(
+			"RL4 转后台形态：空闲阈值触发 → exec resolve({exitCode:null}) 不 reject + 登记运行态 + 用户向标记行 + 三文件保留（settled 已执行已收尾的 exec 侧前提）",
+			{ timeout: 20_000 },
+			async () => {
+				const pi = createMockPi();
+				refreshPiReference(pi as unknown as ExtensionAPI);
+				const chunks: Buffer[] = [];
+				// sleep 4 > idle 2：转后台后命令继续跑；输出静默 2s 触发 wrapper 标记行
+				const result = await wrappedOps("sleep 4 && echo done")("sleep 4 && echo done", process.cwd(), {
+					onData: (chunk: Buffer) => chunks.push(chunk),
+				});
+
+				// exec resolve 不 reject、exitCode null（官方组装层呈现 exitCode undefined +
+				// cancelled false，AS11 → rpc success → runtime settled 回执；bash 通道占用
+				// 随 RPC 返回复位——D3 V6 断言的通道复用前提）
+				expect(result).toEqual({ exitCode: null });
+
+				// 登记：单例表 running + registry running + pending:register emit
+				const task = getActiveTasks()[0];
+				expect(task).toBeDefined();
+				expect(task?.command).toBe("sleep 4 && echo done");
+				expect(readRegistry(REGISTRY_PATH).get(task!.taskId)?.state).toBe("running");
+				expect(pi.events.emit).toHaveBeenCalledWith(
+					"pending:register",
+					{ id: task!.taskId, type: "bash", name: "sleep 4 && echo done" },
+				);
+
+				// 用户向标记行经 onData 到达（D3 产品形态①）。禁词断言只约束 exec 补发的
+				// 用户向行——wrapper 协议标记行（模型向，含 bash_output/bash_kill 语法）经
+				// 抄送流先到是三方协议原样透传，不属于本断言对象
+				const output = Buffer.concat(chunks).toString("utf8");
+				const userMarker = output.split("\n").find((line) => line.startsWith(USER_MARKER_PREFIX));
+				expect(userMarker).toBeDefined();
+				expect(userMarker).toContain("侧边栏");
+				expect(userMarker).not.toContain("bash_output");
+				expect(userMarker).not.toContain("bash_kill");
+
+				// 三文件保留（转后台任务日志 = bash_output 数据源）
+				expect(existsSync(task!.outputFile)).toBe(true);
+				expect(existsSync(join(TASKS_DIR, `${task!.taskId}.sh`))).toBe(true);
+				expect(existsSync(join(TASKS_DIR, `${task!.taskId}.pid`))).toBe(true);
+
+				// 守望收尾链可达（先例设施零重建的端到端证据）：命令自然退出后 exited + 通知
+				await pollUntilTicked(() => getTask(task!.taskId)?.state === "exited", POLL_DEADLINE_MS, "watch finalization");
+				expect(getTask(task!.taskId)?.reason).toBe("natural");
+				expect(pi.sendMessage).toHaveBeenCalled();
+				const notified = pi.sendMessage.mock.calls[0]![0] as { customType: string };
+				expect(notified.customType).toBe("background-bash");
+			},
+		);
+
+		it(
+			"RL5 abort 通道：signal 中止 → wrapper 进程组整组被杀（真实命令无残留）+ exec 抛 aborted + 无登记 + 三文件清理",
+			{ timeout: 20_000 },
+			async () => {
+				const pi = createMockPi();
+				refreshPiReference(pi as unknown as ExtensionAPI);
+				const controller = new AbortController();
+				const execPromise = wrappedOps("sleep 300")("sleep 300", process.cwd(), {
+					onData: () => {},
+					signal: controller.signal,
+				});
+
+				// 等 wrapper 写 pidfile（spawn 后毫秒级窗口）取真实命令 pid，供组杀后判死断言
+				const { cmdPid } = await waitForPidfile();
+				expect(cmdPid).toBeGreaterThan(0);
+
+				controller.abort();
+				// 官方式 aborted 上抛（executor catch signal.aborted → cancelled: true 组装）
+				await expect(execPromise).rejects.toThrow("aborted");
+
+				// 组杀生效：真实命令（与 wrapper 同组）轮询判死（SIGKILL 生效延迟满载不可预估）
+				await pollUntilTicked(() => !isPidAlive(cmdPid), POLL_DEADLINE_MS, "aborted command group to die");
+
+				// 用户中止无登记（与 agent 侧 B4 同语义）：运行时权威（单例表）零新增 +
+				// 磁盘 registry 零新增条目 + 三文件零残留（同文件既有用例共享 DATA_DIR，
+				// 按快照差集断言）+ 通知链零接触
+				expect(getActiveTasks()).toHaveLength(0);
+				expect([...readRegistry(REGISTRY_PATH).keys()].filter((id) => !taskIdsBefore.has(id))).toEqual([]);
+				expect(newFilesSince()).toEqual([]);
+				expect(pi.events.emit).not.toHaveBeenCalled();
+				expect(pi.sendMessage).not.toHaveBeenCalled();
+			},
+		);
+
+		it(
+			"B5 兜底：wrapper 异常死亡（单杀 wrapper 自身）且命令进程存活 → 照常登记转后台 + 用户向标记行补发 + resolve({exitCode:null})",
+			{ timeout: 20_000 },
+			async () => {
+				const pi = createMockPi();
+				refreshPiReference(pi as unknown as ExtensionAPI);
+				const chunks: Buffer[] = [];
+				const execPromise = wrappedOps("sleep 30")("sleep 30", process.cwd(), {
+					onData: (chunk: Buffer) => chunks.push(chunk),
+				});
+
+				// 等 pidfile 出现后单杀 wrapper 自身（wrapper pid = 命令的 pgid，组长；单杀
+				// 组长非组杀——真实命令同组存活 = B5 判定形态「wrapper 异常死亡且命令进程活着」）
+				const { wrapperPid } = await waitForPidfile();
+				process.kill(wrapperPid, "SIGKILL");
+
+				const result = await execPromise;
+				expect(result).toEqual({ exitCode: null });
+
+				// 照常登记（命令进程活着 = 承诺在）+ 用户向标记行补发（wrapper 未及打印）
+				const task = getActiveTasks()[0];
+				expect(task).toBeDefined();
+				expect(task?.command).toBe("sleep 30");
+				expect(readRegistry(REGISTRY_PATH).get(task!.taskId)?.state).toBe("running");
+				expect(Buffer.concat(chunks).toString("utf8")).toContain(USER_MARKER_PREFIX);
+				// 登记的原 pid 仍是存活的命令进程（B5 兜底语义：任务接管不丢）
+				expect(isPidAlive(task!.pid)).toBe(true);
 			},
 		);
 	},

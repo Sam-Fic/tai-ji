@@ -82,8 +82,8 @@ export interface ChatApiPort {
   // `deps.chatApi.steer` / `followUp` 零调用（grep 实测），chat 域客户端封装同批删除。
   /** 中断当前回合（message.abort）*/
   abort(sessionId: string): Promise<void>
-  /** 压缩上下文（session.compact）*/
-  compact(sessionId: string, customInstructions?: string): Promise<void>
+  /** 手动触发后台压缩（session.compactBackground，触发即回执）*/
+  compactBackground(sessionId: string, customInstructions?: string): Promise<void>
   /**
    * 直接执行 bash 命令（message.bash，不经 LLM turn）。
    *

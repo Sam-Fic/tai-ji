@@ -78,8 +78,11 @@
            视图切换方向滑入（spec §3.1 裁决 P1-6，demo vt-slide 同语言）：各分支各挂
            viewSlideCls——目标视图序号更大自右滑入、反之自左；v-if 分支重挂载使动画每次
            切换重播；首次进入不播（方向类初始为空，watch 置值前无类）。
-           [session-archive D10，u-renderer-entry] sessions tab 内容区二态视图：
-           archive store.viewOpen 时切为归档列表（ArchiveListView），否则会话列表。 -->
+           [session-archive D10，u-renderer-entry] sessions tab 内容区三支互斥链：
+           S5 加载失败态（v-if="session.listLoadError"）→ 归档列表 ArchiveListView
+           （v-else-if="archiveStore.viewOpen"）→ 会话列表 SessionList（v-else）。
+           M2 恢复期状态行（未实装）挂三支链外层独立 v-if（D11 R4 裁决、RL13 结构
+           单测看守）：三态均与状态行同屏、不随分支存亡。 -->
       <div class="min-h-0 flex-1 overflow-hidden">
         <template v-if="sidebar.activeTab === SIDEBAR_TAB_SESSIONS">
           <div class="h-full min-h-0" :class="viewSlideCls">

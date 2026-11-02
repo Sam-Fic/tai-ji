@@ -75,6 +75,7 @@ describe("rpc-command-handling", () => {
   function injectModelServiceWith(entries: Array<{ provider: string; id: string }>): void {
     setModelConfigService({
       getModelRegistry: () => ({ getAvailable: () => entries }),
+      getScopedModels: () => [],
     } as never);
   }
 
@@ -1075,6 +1076,7 @@ describe("commands-resume", () => {
   function injectModelServiceWith(entries: Array<{ provider: string; id: string }>): void {
     setModelConfigService({
       getModelRegistry: () => ({ getAvailable: () => entries }),
+      getScopedModels: () => [],
     } as never);
   }
 

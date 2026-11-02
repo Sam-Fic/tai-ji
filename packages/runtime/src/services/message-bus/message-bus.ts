@@ -148,6 +148,10 @@ export const TOPIC_TABLE: Readonly<Record<string, TopicKind>> = {
   // 故不入 outbound-frame-registry 大字段表。装配点 = transport 侧
   // （session-message-handler.ts + session-delivery-topic.ts，u3a；本表只认类型）。
   'session.delivery': 'state',
+  // session.stall_hint（pi-stall-detection U4 / D3）：静默辅助提示 last-value 状态帧。
+  // state topic——重连/切回 session 经 stateSnapshot 回放恢复（重连后提示不丢，呈现当前
+  // 静默事实）；T/T_hint 推导单源 runtime，本帧只携带呈现事实。
+  'session.stall_hint': 'state',
   // widget 两类型 state 类化（scheduler-widget-push D3）：widget 显示侧是覆盖式 last-value
   // （消费端只关心每 (session, widgetKey) 最后一帧）——分配 seq、写 stateSnapshot（typeKey
   // 从 payload.widgetKey 派生，见 STATE_TYPE_KEY_PAYLOAD_DERIVED）、不入 ring、照常广播
@@ -283,6 +287,9 @@ export const STATE_TYPE_KEY_MAP: Readonly<Record<string, string>> = {
   // 时 subscribe 的 stateSnapshot 含此帧，renderer 队列区从快照恢复（V5/G2「断连不丢队列」）。
   // 同 key 覆盖：同一次队列变更序列只留最新一帧（帧本身即全量快照，无需历史）。
   'session.delivery': 'delivery',
+  // session.stall_hint（pi-stall-detection U4 / D3）：静默辅助提示 last-value 快照 key——
+  // 重连/切回 session 经 subscribe 应答的 stateSnapshot 回放，辅助提示从快照恢复。
+  'session.stall_hint': 'stall_hint',
   // 原 btw 线列表 typeKey 'btw'（btw-question D6，M2-a）随 btw.list 消息退役删除——
   // 线列表读取入口 = session.list 通用查询（设计 §3.3.1/§5-W4b），无 state 帧需回放。
 }

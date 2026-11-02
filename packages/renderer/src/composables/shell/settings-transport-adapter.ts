@@ -112,6 +112,7 @@ export function createSettingsTransport(): SettingsTransport {
     setSmartContextCompactModel: (model) => settings.setSmartContextCompactModel(model),
     setSmartContextThresholds: (thresholds) => settings.setSmartContextThresholds(thresholds),
     setSmartContextExcludedModels: (models) => settings.setSmartContextExcludedModels(models),
+    setSmartContextAutoCompactThresholdRatio: (ratio) => settings.setSmartContextAutoCompactThresholdRatio(ratio),
     setCodemodeEnabled: (enabled) => settings.setCodemodeEnabled(enabled),
     setSubagentDefaultEngine: (engineId) => session.setSubagentDefaultEngine(engineId),
     setSubagentEngineDefaultModel: (engineId, modelRef) => session.setSubagentEngineDefaultModel(engineId, modelRef),

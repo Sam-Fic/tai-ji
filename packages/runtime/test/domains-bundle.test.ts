@@ -11014,7 +11014,6 @@ describe('MessageDispatcher occupancy 挂点', () => {
     promptError?: Error
     abortBehavior?: 'ok' | 'error' | 'rpc-timeout'
     bashBehavior?: 'ok' | 'error'
-    compactBehavior?: 'ok' | 'error'
   } = {}) {
     const session = opts.session ?? makeMockSession()
     /** 时序记录（D-18：受理先于置位的帧序断言用）。 */
@@ -11030,13 +11029,9 @@ describe('MessageDispatcher occupancy 挂点', () => {
       : opts.abortBehavior === 'error'
         ? vi.fn(async () => { throw new Error('EPIPE') })
         : vi.fn(async () => {})
-    const compactFn = opts.compactBehavior === 'error'
-      ? vi.fn(async () => { throw new Error('compact transport exploded') })
-      : vi.fn(async () => ({ summary: 's', tokensBefore: 1, estimatedTokensAfter: 1 }))
     const client = {
       prompt: promptFn, bash: bashFn, abort: abortFn,
       abortBash: vi.fn(async () => {}), steer: vi.fn(async () => {}), followUp: vi.fn(async () => {}),
-      compact: compactFn,
       // touchActivity：sendPrompt 入口同步 touch（idle-pi-reclamation D6-1）——fake 补齐接口成员
       touchActivity: vi.fn(),
     } as unknown as IPiEngine
@@ -11068,7 +11063,7 @@ describe('MessageDispatcher occupancy 挂点', () => {
     cleanupRegistry = () => registry.disposeAll()
     const dispatcher = new MessageDispatcher(svc, pm, workspace, { publish } as unknown as IMessageBus)
     dispatcher.setDeliveryRegistry(registry)
-    return { dispatcher, session, svc, pm, publish, promptFn, bashFn, abortFn, compactFn, client, seq, registry }
+    return { dispatcher, session, svc, pm, publish, promptFn, bashFn, abortFn, client, seq, registry }
   }
 
   it('#1 sendMessage 受理后 → turn=dispatching（[RT-4#10] occupancy 置位先于 prompt）', async () => {
@@ -11220,25 +11215,9 @@ describe('MessageDispatcher occupancy 挂点', () => {
     expect(frameTypes(publish)).toContain('message.bashAborted')
   })
 
-  it('#6 兜底：compact transport 失败 → finally 复位 compacting=false（compaction_end 不到达时）', async () => {
-    // 真实时序镜像：预检（isCompacting=false）通过 → compact RPC 发出 → compaction_start 到达
-    //（interpreter 置 isCompacting + occupancy.compacting=true）→ transport 断 reject →
-    // finally 兜底复位（interpreter 的 compaction_end #6 不到达）。
-    const { dispatcher, publish, session, compactFn } = makeDispatcher({ compactBehavior: 'error' })
-    compactFn.mockImplementation(async () => {
-      // 模拟 compaction_start 已到达（interpreter #5 语义）：经原语置位（u3c readonly 收尾；
-      // publish 传 null 与改前直写一致不广播）。
-      // 注：RT-4#10 起 dispatcher 预检通过后自己先广播一帧 compacting=true（关重入窗口），
-      // 故本用例应见「true → false」两帧：前者是预检后置位帧，后者是 finally 复位帧。
-      applySessionOccupancyTransition(session, null, 'compacting-start')
-      throw new Error('compact transport exploded')
-    })
-    await expect(dispatcher.compact('s1')).rejects.toThrow('compact transport exploded')
-    expect(occupancyFrames(publish)).toEqual([
-      { sessionId: 's1', turn: 'idle', compacting: true, bash: false, handingOff: false },
-      { sessionId: 's1', turn: 'idle', compacting: false, bash: false, handingOff: false },
-    ])
-  })
+  // [C2 /compact 后台化] #6 兜底用例随 dispatcher.compact 同步链退役：compacting 置位/复位
+  // 的预检原子化与 finally 兜底复位编排已删，occupancy.compacting 由 interpreter 从 pi
+  // compaction_start/end 事件唯一驱动（#5/#6 挂点）。
 
   it('messageBus 未注入 → 挂点 no-op 不抛（null-safety，存量语义：状态照写、广播跳过）', async () => {
     const session = makeMockSession()

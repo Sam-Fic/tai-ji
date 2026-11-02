@@ -23,6 +23,8 @@
  *  - plan 额外含 templates/（内置计划模板 .md，<available-plans> 清单注入与
  *    select-template 数据源，登记与缺失后果见 scripts/lib/staged-asset-dirs.mjs
  *    登记表注释）
+ *  - base-tool-enhance 额外含 bin/（前台空闲转后台包装脚本 taiji-fg-wrap，可执行位
+ *    随拷贝保留，登记与缺失后果见同一登记表注释）
  *
  * external 边界权威源：0.84.1 pi binary virtualModules 实测（0.80.3 首测，2026-08-12
  * 随 pi 0.84.1 升级重测 10 包 get_state 加载全绿后更新；见
@@ -252,15 +254,35 @@ async function copyTemplatesDir(srcDir, outDir, extraAssets) {
 	extraAssets.push("templates/");
 }
 
+// base-tool-enhance 可执行脚本目录：bin/taiji-fg-wrap 整目录拷到 staged 包根（bundle
+// 形态路径探测由 bash-tool.ts resolveFgWrapScriptPath 同级 existsSync 完成）。与
+// templates 性质差异 = 可执行脚本：node fs.cp 底层 copyFile 保留源文件 mode，包装脚本
+// 的 0755 可执行位随拷贝携带（builtin-ext-bundle.test.mjs 有可执行位断言钉住——丢位
+// 时包装命令串经 shell 执行报 permission denied，前台命令整体断裂）。登记与缺失后果
+// 见 scripts/lib/staged-asset-dirs.mjs 登记表注释。
+async function copyBinDir(srcDir, outDir, extraAssets) {
+	const src = join(srcDir, "bin");
+	if (!existsSync(src)) {
+		throw new Error(
+			`bin dir missing: ${src}（base-tool-enhance 包包装脚本资产缺失 = 打包配置回归）`,
+		);
+	}
+	await cp(src, join(outDir, "bin"), { recursive: true });
+	extraAssets.push("bin/");
+}
+
 // 按包名 short 分发的特殊资产拷贝（顺序敏感：permission → workflows → agents →
-// templates，与 extraAssets 汇总顺序及 fail-fast 先后一致）。templates 条目是否拷贝
-// 由共享登记表驱动（PACKAGE_ASSET_DIRS[short] 含 "templates" 即拷，MF-1-17）
+// templates → bin，与 extraAssets 汇总顺序及 fail-fast 先后一致）。templates / bin
+// 条目是否拷贝由共享登记表驱动（PACKAGE_ASSET_DIRS[short] 含对应目录名即拷，MF-1-17）
 async function copySpecialAssets(short, srcDir, outDir, extraAssets) {
 	if (short === "permission") await copyPermissionWasm(outDir, extraAssets);
 	if (WORKFLOW_DIR_PACKAGES.has(short)) await copyWorkflowDir(outDir, extraAssets);
 	if (AGENTS_DIR_PACKAGES.has(short)) await copyAgentsDir(outDir, extraAssets);
 	if ((PACKAGE_ASSET_DIRS[short] ?? []).includes("templates")) {
 		await copyTemplatesDir(srcDir, outDir, extraAssets);
+	}
+	if ((PACKAGE_ASSET_DIRS[short] ?? []).includes("bin")) {
+		await copyBinDir(srcDir, outDir, extraAssets);
 	}
 }
 

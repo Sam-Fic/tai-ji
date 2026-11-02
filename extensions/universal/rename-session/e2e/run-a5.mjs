@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * A5 场景：超时兜底（hang provider）。
+ * A5 场景：挂死直报（hang provider）。
  *
  * 本地 node 起 accept 后不响应的 stub socket（startHangServer），标题 provider 指向它：
  * - models.json 新增独立 customProvider stub-hang（不动主 provider）
@@ -8,11 +8,15 @@
  * - config/rename-session-ext-config.json 写 model ref 指向 stub
  * 主对话 --model mimo-v2.6-flash 不受影响。
  *
- * 断言：主 round 正常完成（turn_end stop）；rename LLM 调用约 30s 超时后 session JSONL 出现
- * 子串 `rename LLM call failed`（logger.warn(msg,{error}) 形态——error 详情在 entry 的结构化
- * data 字段，message 本体不含冒号拼接；探针 5：超时路径 error 为空串 → 归一为 unknown error，
- * 故只匹配该子串不匹配具体文案）；从 LLM request 到失败日志 ≥25s（区分超时路径与连接错误路径）；
- * 无自动 session_info；pi 存活（getState 正常响应）。
+ * 实装语义（ADR-0122）：rename LLM 调用不设包内超时，挂死由 provider SDK/HTTP 层默认
+ * 超时直报（OpenAI/Anthropic SDK 默认 10 分钟；undici fetch 介入时 headers 超时更短）。
+ *
+ * 断言：主 round 正常完成（turn_end stop）；rename LLM 调用挂死至 SDK/HTTP 层默认超时后
+ * session JSONL 出现子串 `rename LLM call failed`（logger.warn(msg,{error}) 形态——error
+ * 详情在 entry 的结构化 data 字段，message 本体不含冒号拼接；挂死路径 error 为空串 →
+ * 归一为 unknown error，故只匹配该子串不匹配具体文案）；从 LLM request 到失败日志
+ * ≥25s（区分挂死/超时路径与连接错误路径——后者毫秒级即失败）；无自动 session_info；
+ * pi 存活（getState 正常响应）。等待上限 720s 覆盖 10 分钟级 SDK 默认超时。
  */
 
 import {
@@ -72,14 +76,15 @@ export async function runA5() {
 
 			// rename LLM request 发出（指向 hang server）
 			const llmReq = await pi.rpc.waitForSessionLog(LLM_REQUEST_MARKER, { timeoutMs: 30_000 });
-			// 等 ≥30s 超时失败日志 entry（message 子串匹配 includes；探针 5：约 30s，上限 45s 含余量）
-			const fail = await pi.rpc.waitForSessionLog("rename LLM call failed", { timeoutMs: 45_000 });
+			// 等挂死至 SDK/HTTP 层默认超时后的失败日志 entry（无包内超时（ADR-0122），
+			// SDK 默认 10 分钟级 → 上限 720s 含余量；默认上限 45s 只够成功路径，须显式覆盖）
+			const fail = await pi.rpc.waitForSessionLog("rename LLM call failed", { timeoutMs: 720_000 });
 			const hangMs = fail.t - llmReq.t;
 			assert(
 				hangMs >= 25_000,
-				`失败日志过早（LLM request 后 ${hangMs}ms < 25s，可能是连接错误路径而非超时路径）: ${fail.message}`,
+				`失败日志过早（LLM request 后 ${hangMs}ms < 25s，可能是连接错误路径而非挂死/超时路径）: ${fail.message}`,
 			);
-			log(`rename 超时失败（LLM request 后 ${(hangMs / 1000).toFixed(1)}s）: ${fail.message}`);
+			log(`rename 挂死失败（LLM request 后 ${(hangMs / 1000).toFixed(1)}s）: ${fail.message}`);
 
 			await sleep(600);
 			const lines = await pi.readSessionLines();

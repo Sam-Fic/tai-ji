@@ -20,7 +20,7 @@ import Ajv from "ajv";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // 被测主入口（src/index.ts 导出 executeStructuredOutput 供直接调用；
-// 双变体工厂供注册期防御/合成与 env→execute 桥接测试调用）
+// workflow / daily 变体工厂供注册期防御、合成与 execute 包装测试调用）
 import {
   createDailyToolDefinition,
   createWorkflowToolDefinition,
@@ -500,6 +500,33 @@ describe("Tool execute (real call via executeStructuredOutput)", () => {
   it("accepts boolean root schema (draft-07: true = accept all)", async () => {
     const result = await executeStructuredOutput({ schema: true, data: { ok: 1 } });
     expect(result.details).toEqual({ ok: 1 });
+  });
+});
+
+// ── 日常变体注册体（createDailyToolDefinition.execute）──────────────────
+//
+// 覆盖注册对象的 execute 封装层：日常变体恒走自报校验（env 桥接分支已删），
+// workflow 模式由 index.ts 分岔注册 workflow 变体，不经过本包装。
+
+describe("createDailyToolDefinition — execute wrapper", () => {
+  it("delegates to the self-reported schema/data validation path", async () => {
+    const tool = createDailyToolDefinition();
+    const result = await tool.execute("call-daily-1", {
+      schema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
+      data: { ok: true },
+    });
+    expect(result.content[0]!.text).toContain("recorded successfully");
+    expect(result.details).toEqual({ ok: true });
+  });
+
+  it("propagates validation errors from the shared execute path", async () => {
+    const tool = createDailyToolDefinition();
+    await expect(
+      tool.execute("call-daily-2", {
+        schema: { type: "object", properties: { n: { type: "number" } }, required: ["n"] },
+        data: { n: "not-a-number" },
+      }),
+    ).rejects.toThrow(/Schema validation failed/);
   });
 });
 
@@ -999,69 +1026,5 @@ describe("index assembly fork (D1)", () => {
     const pi = createMockPi();
     await expect(loadExtension(pi, "true")).rejects.toThrow(/boolean true/);
     expect(pi.registerTool).not.toHaveBeenCalled();
-  });
-});
-
-// ── 日常变体 execute 的 env 桥接（createDailyToolDefinition.execute 读 PI_WORKFLOW_SCHEMA）──
-//
-// 装配分岔下日常变体注册时 env 为空，但 execute 的 env 桥接判定保留
-// （ENV_SCHEMA 存在 = workflow 模式）：env 有值时注入 authoritativeSchema
-// 走 workflow 透传分支。用真实的 execute（不 mock）覆盖 env 读取 + 注入全链路。
-
-describe("createDailyToolDefinition.execute env bridge (PI_WORKFLOW_SCHEMA → workflow passthrough)", () => {
-  const originalSchemaEnv = process.env[SCHEMA_ENV_NAME];
-
-  // 用真实的 execute（不 mock executeStructuredOutput），覆盖 env 读取 + 注入 + 分支选择全链路。
-  // createDailyToolDefinition().execute 签名是 (toolCallId, params)；toolCallId 在内部未使用。
-  const toolDef = createDailyToolDefinition();
-  const exec = (params: { schema?: unknown; data: unknown }) =>
-    toolDef.execute("call-id-1", params);
-
-  afterEach(() => {
-    if (originalSchemaEnv === undefined) delete process.env[SCHEMA_ENV_NAME];
-    else process.env[SCHEMA_ENV_NAME] = originalSchemaEnv;
-  });
-
-  const AUTHORITY = JSON.stringify({
-    type: "object",
-    properties: { count: { type: "number" } },
-    required: ["count"],
-  });
-
-  it("env set + data 不合权威 schema → 透传成功（D2：权威 ajv 复核已删）", async () => {
-    process.env[SCHEMA_ENV_NAME] = AUTHORITY;
-    // 旧断言 'Schema validation failed (authoritative)' 已失效：workflow 分支不再校验。
-    // 此用例锁死「桥接注入 authoritativeSchema → 透传」的新行为。
-    const result = await exec({ schema: { type: "object" }, data: {} });
-    expect(result.content[0]!.text).toContain("recorded successfully");
-    expect(result.details).toEqual({});
-  });
-
-  it("env set + data conformant → passes, details = data", async () => {
-    process.env[SCHEMA_ENV_NAME] = AUTHORITY;
-    const result = await exec({ schema: undefined, data: { count: 7 } });
-    expect(result.content[0]!.text).toContain("recorded successfully");
-    expect(result.details).toEqual({ count: 7 });
-  });
-
-  it("env set（非 object 根）→ 桥接 + 解包 value", async () => {
-    process.env[SCHEMA_ENV_NAME] = JSON.stringify({ type: "array", items: { type: "string" } });
-    const result = await exec({ data: { value: ["a", "b"] } });
-    expect(result.details).toEqual(["a", "b"]);
-  });
-
-  it("env unset → falls through to daily mode (no authoritativeSchema injected)", async () => {
-    delete process.env[SCHEMA_ENV_NAME];
-    // env 未设 → execute 不注入 authoritativeSchema → 走日常防御链。
-    // 用一个合规的 LLM schema + 合规 data 验证它通过（证明没误入 workflow 透传分支）。
-    const result = await exec({
-      schema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
-      data: { ok: true },
-    });
-    expect(result.details).toEqual({ ok: true });
-    // 日常防御链仍然生效（keyword-less 拒绝）
-    await expect(
-      exec({ schema: { a: 1 }, data: { ok: true } }),
-    ).rejects.toThrow(/recognized keyword/i);
   });
 });

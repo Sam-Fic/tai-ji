@@ -130,9 +130,8 @@ describe("具名构造器", () => {
     expect(engineRunFailedDetail("crash", null, "t")).toContain("killed by signal");
   });
 
-  // nestedSpawnRejectedError 用例已随构造器删除（nesting-guard 收编 SDK 后导出但无任何调用点，
-  // 活体单源 SDK nesting-guard.ts NestedSpawnRejectedError，其行为由 SDK
-  // __tests__/primitives.test.ts + 本目录 nesting-guard.test.ts 覆盖）。
+  // nestedSpawnRejectedError / assertNotNestedSpawn 已随禁嵌套派发删除（从未接线，
+  // 防线 = 被派发子进程经扩展精简装配无派发工具）。
   // schemaEmulationFailedDetail 用例已随函数删除（test-only 死镜像收尾，活体单源
   // SDK error-codes.ts，其行为由 SDK __tests__/primitives.test.ts 覆盖）。
 });

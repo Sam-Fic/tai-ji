@@ -70,6 +70,9 @@ import { buildCrashDetailDigest, registerCrashLedgerAttachHooks } from './crash-
 // registry 读 + mtime 轮询 + kill 矩阵实现在 services/background-task/（u-runtime-svc），
 // 本 Facade 只做组装接线（组装点注释见构造器 backgroundTasks 赋值处）。
 import { BackgroundTaskService } from '../background-task/background-task-service.js'
+// backgroundTask:updated 广播组装（自本 Facade 行为保持迁出，max-lines 门禁——先例
+// crash-forensics-hooks.ts；组装点一行接线在 assembleSubmodules backgroundTasks 赋值处）。
+import { publishBackgroundTasksUpdate } from '../background-task/update-broadcast.js'
 // [B5 触发点收窄 2026-09-15] plugin sessionData 清理分发已从本模块迁出——真删除路径
 // （lifecycle.delete）侧 import 并调用（见 session-lifecycle.ts delete 内 B5 注释）；本模块
 // 的 removeSessionEntry 汇聚点同时收三条 session 存活路径（pi 崩溃 exit / forceQuit /
@@ -93,7 +96,9 @@ import { SessionEntryRemovalOrchestrator, runDestroyStepIsolated } from './sessi
 // 空闲回收占座原语与等待观测超时（idle-pi-reclamation D6-2，u2）。type-only import：
 // Seat 实例由 u3 组合根创建后 setter 注入，本模块不持有创建权（不引入运行时依赖环）。
 import { RespawnOrchestrator } from './pi-respawn.js'
-import { MessageDispatcher, type SystemCommandOutcome } from './message-dispatcher.js'
+import { MessageDispatcher, type SystemCommandOutcome, type StallAutoDisposePort } from './message-dispatcher.js'
+// [pi-stall-detection U4] 判死载荷类型（静默判定矩阵单源，D3）。
+import type { StallJudgePayload } from './event-interpreter-silence.js'
 // [A1 接线] skill 注入映射源（skill-reload-nondestructive D7）：records/dispatcher 的
 // SkillInjector 共享同一晚绑定占位，组合根在 SkillRegistry 构造后 bind 真源（构造顺序环
 // 见 LateBoundSkillSource 注释）。
@@ -109,52 +114,36 @@ import { PresetService, type PresetResolution } from '../preset-service.js'
 //（MessageBus 不反向依赖 SessionService）。
 import type { IMessageBus } from '../message-bus/message-bus.js'
 import { isGeneratingTurn } from './types.js'
-import type { ForceQuitSource, UserStoppedMarkStore } from './types.js'
+import { userStoppedMarkStore } from './user-stopped-mark-store.js'
+
+
 
 /**
- * userStopped 标记宿主（session-dead-structural-fixes D4）：sessionId 键控的模块级独立 Map。
- * 数据源登记 = 主表 #30（docs/architecture/data-source-registry.md，2026-09-10 u3b 补登）。
- *
- * 为什么是模块级、为什么独立于 ManagedSession：forceQuit 尾步 removeSessionEntry 会删
- * sessions Map 条目、销毁 session 对象，而标记必须存活到后续 restore（用户点开 dead session
- * 时 restoreSession 读它决定是否 restore-abort）——挂在 session 对象 / 实例字段上都会随条目
- * 删除消亡。清理路径全列（D4）：restore 收敛消费（gate 静默窗满清，主路径）/ delete /
- * destroyAll / 进程退出（内存态整体消亡，天然清理）；removeSessionEntry 刻意不清（forceQuit
- * 尾步经过它，只停收敛环定时器，见 gate.disposeForEntryRemoval）。
- *
- * 子模块（dispatcher/lifecycle/interpreter 挂点）不直接 import 本模块（模块依赖单向性：
- * 本 Facade 值导入全部子模块，反向 import 成环），统一经 event-interpreter.ts 的
- * userStoppedGate 门面存取——本构造器经 gate.configure 注入下方 store 实现与 abort 能力。
- */
-// @data-owner #30（data-source-registry.md）：跨 ManagedSession 生命周期存活的用户停止
-// 意图标记（模块级 Map 是存在理由而非偶发形态，D4）；写方唯一 = userStoppedMarkStore。
-const userStoppedMarks = new Map<string, { source: ForceQuitSource; markedAt: number }>()
-
-/** 宿主 Map 的存取实现（gate.configure 注入 + 测试直断言用）。 */
-export const userStoppedMarkStore: UserStoppedMarkStore = {
-  markUserStopped(sessionId: string, source: ForceQuitSource): void {
-    userStoppedMarks.set(sessionId, { source, markedAt: Date.now() })
-    console.warn(`[session-service] userStopped mark set (sessionId=${sessionId}, source=${source})`)
-  },
-  hasUserStoppedMark(sessionId: string): boolean {
-    return userStoppedMarks.has(sessionId)
-  },
-  clearUserStoppedMark(sessionId: string): void {
-    userStoppedMarks.delete(sessionId)
-  },
-  clearAllUserStoppedMarks(): void {
-    userStoppedMarks.clear()
-  },
-}
-
-/**
- * background 任务完成通知补投触发（bg-task-notify-durability 第二触发点）的内部命令与
- * per-session 节流窗口。命令名与扩展侧注册（extensions/universal/base-tool-enhance
+ * background 任务完成通知补投触发（bg-task-notify-durability 第二触发点）的内部命令。
+ * 触发无节流——原 60s per-session 节流窗已随 ADR-0122 防御机制清查退役，高频防护
+ * 由扩展侧三判据早退承担。命令名与扩展侧注册（extensions/universal/base-tool-enhance
  * src/index.ts 的 pi.registerCommand）是跨包字符串契约，字面量锤定不 import（先例
  * trace-sync 的 /__taiji_get_system_prompt__）——`/__` 双下划线前缀 = 内部命令（前端
  * internal-command-filter 过滤不显示），两处注释互为指针，改名必须同批。
  */
 const BG_RECONCILE_COMMAND = '/__taiji_bg_reconcile__'
+
+/**
+ * GUI 手动压缩触发（C2 /compact 后台化）的内部命令。命令名与扩展侧注册
+ * （extensions/universal/smart-context src/index.ts 的 pi.registerCommand）是跨包
+ * 字符串契约，字面量锤定不 import（BG_RECONCILE_COMMAND 同款）——`/__` 双下划线前缀
+ * = 内部命令（前端 internal-command-filter 过滤不显示），两处注释互为指针，改名必须
+ * 同批。customInstructions 经 encodeURIComponent 编码后拼在命令名后（percent 编码无
+ * 空格/换行，pi args 切分 = 首空格后原样余串，扩展侧 decodeURIComponent 可逆还原）。
+ */
+const BG_COMPACT_COMMAND = '/__taiji_compact__'
+
+/**
+ * 同一命令的注册名形态（无斜杠）：pi getCommands 返回的扩展命令 name = 注册名
+ * （invocationName，无 `/` 前缀），sendSystemCommand 的 requireCommand 在册探测按此
+ * 形态匹配（与 BG_COMPACT_COMMAND 同一契约的两个形态，改名必须同批）。
+ */
+const BG_COMPACT_COMMAND_NAME = '__taiji_compact__'
 
 /**
  * subagent 流状态数据源端口（B2 subagent-stream-chunk §4.1，session.getSubagentStreamState
@@ -164,6 +153,10 @@ const BG_RECONCILE_COMMAND = '/__taiji_bg_reconcile__'
  * 约束，见 rollingRestart engineChannelsInFlight 接线注释）。
  */
 export type SubagentStreamStateSource = (sessionId: string, recordId: string) => SubagentTeeStreamState | undefined
+
+// [pi-stall-detection 拆分兼容出口] 宿主实现搬移至 user-stopped-mark-store.ts（行为零变化），
+// 既有 import 路径（index.ts / 测试直断言）经此 re-export 保持。
+export { userStoppedMarkStore } from './user-stopped-mark-store.js'
 
 export class SessionService implements ISessionService, ILifecycleSessionOps, IDispatcherSessionOps, IScannerSessionOps {
   /**
@@ -617,7 +610,9 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
     // no-op；组合根在 setServices 前注入 bus，晚于首个 2s 轮询拍）。piAgentDir 用默认
     // getPiAgentDir() 动态推导（生产正确；测试经 vi.mock pi-paths 指向 tmp）。
     this.backgroundTasks = new BackgroundTaskService({
-      onTasksChanged: (sessionId) => this.publishBackgroundTasksUpdate(sessionId),
+      // 广播组装迁 background-task/update-broadcast.ts（行为保持抽取，max-lines 门禁）；
+      // 闭包内 backgroundTasks/messageBus 均调用时刻动态读（getter 语义不变）。
+      onTasksChanged: (sessionId) => publishBackgroundTasksUpdate(this.backgroundTasks, this.messageBus, sessionId),
     })
     this.backgroundTasks.start()
 
@@ -1021,9 +1016,33 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
   // [HISTORICAL] sendSubagentMessage（marker 半成品通道）已删除（composer 四符号设计 D2）：
   // base64 隐藏注释前缀在 extension 侧零消费方，且经主 agent 转发违背
   // 「直达 subagent」目标——定向消息改走 subagentAction(message/start)。
-  async abort(sessionId: string): Promise<void> { return this.dispatcher.abort(sessionId) }
+  // [pi-stall-detection U4] source：session_manager abort 工具通路的机器分型传参（'agent'）——
+  // agent 发起的 abort 不是用户操作，升级窗窗满强杀置判死强杀分型而非 abort_timeout 用户
+  // 分型（D2① 消费方 ④ / RL16 分型不变量；transport 层唯一非缺省调用点）。
+  async abort(sessionId: string, source?: 'agent'): Promise<void> { return this.dispatcher.abort(sessionId, source) }
   /** 强制退出卡死 session（sidebar 右键入口，杀 pi 进程 + stopped 收敛）。 */
   async forceQuit(sessionId: string): Promise<void> { return this.dispatcher.forceQuit(sessionId) }
+  /**
+   * 停滞判定自动处置链入口（pi-stall-detection U2，D2②）：onSilentAbort（探测 3 次观测
+   * 超时判定）的组合根接线点——按第 0 层进程存活信号分型分流（进程死维持既有协作式 abort
+   * 显式收尾路由；存活 → sample 取证 → 判死强杀 → 窄化自动恢复触发链）。编排本体在
+   * MessageDispatcher.handleStallDetermination，本方法仅转发（组合根不经 dispatcher 直达）。
+   */
+  async handleStallDetermination(sessionId: string): Promise<void> { return this.dispatcher.handleStallDetermination(sessionId) }
+  /**
+   * 第 2 层静默判死入口（pi-stall-detection U4，D3）：静默判定矩阵判死的组合根接线点——
+   * 自动 abort 复用 U2 有界等待 + 悬挂升级判死强杀分型（RL16）+ steer 注入原因提示。
+   * 编排本体在 MessageDispatcher.handleSilenceJudgeDetermination，本方法仅转发。
+   */
+  async handleSilenceJudgeDetermination(sessionId: string, payload: StallJudgePayload): Promise<void> {
+    return this.dispatcher.handleSilenceJudgeDetermination(sessionId, payload)
+  }
+  /**
+   * 后置注入停滞自动处置链端口（pi-stall-detection U2；组合根装配序：恢复执行/注入/发声
+   * 依赖 respawn 编排器与死亡发声闭包，均晚于 dispatcher 构造——对齐 setMessageBus /
+   * setDeliveryRegistry 后置注入先例）。null = 拆除（测试隔离用）。
+   */
+  setStallAutoDisposePort(port: StallAutoDisposePort | null): void { this.dispatcher.setStallAutoDisposePort(port) }
   /** bash 投递回执（started/settled/rejected + 可选失败原因），1:1 透传 dispatcher（翻译层在 transport）。 */
   async sendBash(sessionId: string, command: string, excludeFromContext?: boolean): Promise<{ status: 'started' | 'settled' | 'rejected'; error?: string }> {
     return this.dispatcher.sendBash(sessionId, command, excludeFromContext)
@@ -1035,7 +1054,29 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
    * 经 EventInterpreter.onAgentSettled 回调注入（组合根 index.ts）。
    */
   flushPendingBashResults(sessionId: string): void { this.dispatcher.flushPendingBashResults(sessionId) }
-  async compact(sessionId: string, customInstructions?: string): Promise<void> { return this.dispatcher.compact(sessionId, customInstructions) }
+  /**
+   * 手动触发后台压缩（C2 /compact 后台化，接口契约见 interfaces.ts）：经 sendSystemCommand
+   * 旁路通道送达 smart-context 扩展后台管理器（requireCommand = 命令在册校验）。
+   *
+   * 投递前校验（C2 复审）：`__taiji_compact__` 命令未注册（smart-context 扩展未加载）时
+   * pi 会把 `/__taiji_compact__ ...` 原文当用户消息直投 LLM——requireCommand 探测
+   * （client.getCommands 实时查询）fail-closed 拦截该形态，命令串永不进模型（E14 结构性
+   * 防线）。旁路通道自带 ensureActive 交接（pi 被空闲回收时先拉活）+ touchActivity。
+   *
+   * 执行形态：await 命令执行（内部命令同步跑、不进模型、无 turn，命令 handler 只做启动
+   * 判定不等待压缩全程——毫秒级）后 reply，受理语义保持。非 'sent' 终态（extension-missing /
+   * pi-reclaimed / error）抛错 → RPC reject → renderer useChat.compactBackground catch 后
+   * toast compactStartFailed 兜底（受理≠成功，扩展侧启动失败的独立通知在 smart-context
+   * 侧即时投递，两回执链互补）。
+   */
+  async compactBackground(sessionId: string, customInstructions?: string): Promise<void> {
+    const args = customInstructions !== undefined ? ` ${encodeURIComponent(customInstructions)}` : ''
+    const outcome = await this.sendSystemCommand(sessionId, `${BG_COMPACT_COMMAND}${args}`, BG_COMPACT_COMMAND_NAME)
+    if (outcome.kind === 'sent') return
+    // 三终态各自的恢复动作：extension-missing 查扩展启用状态；pi-reclaimed 重试或重启会话；error 看传输错误详情
+    const detail = outcome.kind === 'extension-missing' ? '压缩扩展（smart-context）未加载或命令未注册，命令未发送。请检查扩展是否启用后重试。' : outcome.kind === 'pi-reclaimed' ? '会话引擎无法激活（pi 进程拉起失败），命令未发送。请稍后重试或重启会话。' : `命令投递失败：${outcome.message ?? '未知错误'}`
+    throw new Error(`后台压缩未启动：${detail}`)
+  }
   setSendMessageHook(hook: SendMessageHook): void { this.dispatcher.setSendMessageHook(hook) }
   listPersistedSessions(): SessionGroup[] { return this.scanner.listPersistedSessions() }
   /**
@@ -1140,6 +1181,15 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
    */
   reconcileRecordEntries(sessionId: string): void {
     return this.records.reconcileRecordEntries(sessionId)
+  }
+
+  /**
+   * [U1 检查点·同 id 复活布防] 导入落地派生缓存失效委托（ImportService 组合根接线）：
+   * 实现迁 session-records.ts invalidateProjectionAfterImport——同 id 再导入 = 主文件
+   * 整文件替换，按会话 id 失效派生缓存与游标（旧游标续读会漏读新文件头部）。
+   */
+  invalidateProjectionAfterImport(sessionId: string): void {
+    return this.records.invalidateProjectionAfterImport(sessionId)
   }
 
   /**
@@ -1604,23 +1654,6 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
   // ── 私有协作者 ────────────────────────────────────────────────
 
   /**
-   * backgroundTask:updated 广播组装（background-task-sidebar D3，u-runtime-rpc①）：
-   * onTasksChanged（mtime 轮询 / 自写自检触发）时重读该 session registry 全量 → messageBus
-   * session 级 publish（Server→Client 冒号 camelCase，对齐 backgroundTask:updated 命名规则；
-   * stream 类入 ring，晚订阅 renderer 由 snapshot 重放兜底）。bus 未注入时 no-op（nullable
-   * 注入语义与域内其余 publish 点一致）。entry 形状为 extension-protocol 契约，shared 侧
-   * 逐字段镜像（u-proto D9，结构兼容直赋）。
-   */
-  private publishBackgroundTasksUpdate(sessionId: string): void {
-    const { entries, corrupted } = this.backgroundTasks.listTasks(sessionId)
-    const msg: ServerMessage = {
-      type: 'backgroundTask:updated',
-      payload: { sessionId, tasks: entries, corrupted },
-    }
-    this.messageBus?.publish(sessionId, msg)
-  }
-
-  /**
    * 归属 project sidecar 延迟写入兜底（D14 语义修正，2026-08-04）。
    *
    * [V9-④ 从根源修复后] create 路径 persistProjectBinding 已传 skipJsonlExistsGuard 放行
@@ -1668,7 +1701,8 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
    * emit、reload 场景显式 reason="reload"；切回 = runtime 重新挂接同一存活进程，
    * 不经 AgentSession 构造），扩展侧挂在 session_start 上的维护链在「投递失败但
    * 进程存活」场景（设计 G2 核心场景）永不触发。getCommands 是切回后 renderer
-   * 主动拉取的必经查询（broadcast 与订阅时序竞争的既有补偿点），在此按节流补触发。
+   * 主动拉取的必经查询（broadcast 与订阅时序竞争的既有补偿点），在此补触发
+   * （fire-and-forget，无节流——退役登记见下）。
    *
    * 执行形态：fire-and-forget——不 await（getCommands 延迟敏感，补投结果不阻塞查询）、
    * 失败只 console.warn（补投失败无害：扩展侧三判据幂等，下次触发重查）。

@@ -67,12 +67,13 @@ const fakeProc = {
     }),
   },
   kill: vi.fn((_signal?: NodeJS.Signals | number) => {
-    // kill 即死（mock 语义）：微任务内 emit exit 让 killPiProcess 的 grace 立即短路。
-    // [HISTORICAL] 2026-09-14 审计：此前 kill 是空 vi.fn() 永不发 exit → 每次收尾
-    // 真等 DEFAULT_PI_KILL_GRACE_MS(2s) SIGKILL 兕底，27 个用例 × 2.5s ≈ 68s 纯等待，
-    // 是 runtime 测试 top10 慢因的头号构成。微任务而非同步 emit：kill-chain 先注册
-    // exit listener 再发信号（同步亦可），微任务对「kill 后断言信号序列」的用例更宽容；
-    // 重复驱动（killAndDriveExit 手动 emitExit）由链内 settled 幂等检查兜底。
+    // kill 即死（mock 语义）：微任务内 emit exit，杀链 signal-delivered 后的收尾
+    // 钩子立即到达。[HISTORICAL] 2026-09-14 审计：此前 kill 是空 vi.fn() 永不发 exit
+    // → 每次收尾真等 DEFAULT_PI_KILL_GRACE_MS(2s) SIGKILL 兜底，27 个用例 × 2.5s
+    // ≈ 68s 纯等待，是 runtime 测试 top10 慢因的头号构成。微任务而非同步 emit：
+    // kill-chain 先注册 exit listener 再发信号（同步亦可），微任务对「kill 后断言
+    // 信号序列」的用例更宽容；重复驱动（killAndDriveExit 手动 emitExit）由链内
+    // settled 幂等检查兜底。
     queueMicrotask(() => {
       if (procExitHandlers.length === 0) return
       const handlers = procExitHandlers
@@ -210,6 +211,18 @@ export function emitProcExit(code: number | null): void {
 /** kill 调用的信号序列（断言 stream error 后 SIGKILL 自愈强杀用）。 */
 export function killSignals(): Array<string | number | undefined> {
   return fakeProc.kill.mock.calls.map((call) => call[0] as string | number | undefined)
+}
+
+/**
+ * [kill-chain 失败语义] 覆盖 fakeProc.kill 为抛错形态（EPERM 等）——驱动 kill 链
+ * reject(KillSignalError) 路径（「kill 即死」缺省 mock 语义的失败面补充）。
+ * 返回 restore 函数（恢复 kill 即死形态）。
+ */
+export function makeKillFail(err: Error): () => void {
+  const impl = fakeProc.kill.mockImplementation(() => {
+    throw err
+  })
+  return () => impl.mockRestore()
 }
 
 /** 从 stdin 写入里解析出最后一条 JSON 对象（取 sendCommand 注册的 pending id 用）。 */

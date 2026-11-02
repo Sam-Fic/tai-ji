@@ -4,7 +4,7 @@
  * 覆盖：
  * - 写入时机：session_start 不写（emit 早于 resources_discover 的 prompt 重建，必误报——设计 D2 校正），
  *   首个 turn_start 写 initial/resume
- * - hash 去重：相同不重写；变化写 change 且 parentVersionDiffSummary 生成
+ * - hash 去重：相同不重写；变化写 change
  * - SessionStartEvent.reason 原生 5 值（startup/reload/new/resume/fork）的落盘映射：
  *   initial←startup/new、resume←resume/fork/reload（设计 D2 v5 定案：fork 基线取源文件
  *   最后留痕、reload 为同 session 运行时重建，均属重开语义）
@@ -88,7 +88,6 @@ describe("A11 留痕时机与去重", () => {
 			charCount: P1.length,
 			hash: computePromptHash(P1),
 		});
-		expect(entry.parentVersionDiffSummary).toBeUndefined();
 	});
 
 	it("new 与 startup 同映射 initial（previousSessionFile 存在也不误作基线）", () => {
@@ -117,7 +116,7 @@ describe("A11 留痕时机与去重", () => {
 		expect(h.entries).toHaveLength(1);
 	});
 
-	it("prompt 变化写 change v2 且 parentVersionDiffSummary 生成", () => {
+	it("prompt 变化写 change v2", () => {
 		const h = makeHarness(P1);
 		h.logic.onSessionStart("startup", undefined, h.ctx);
 		h.logic.onTurnStart(h.ctx);
@@ -132,8 +131,6 @@ describe("A11 留痕时机与去重", () => {
 			hash: computePromptHash(P2),
 			charCount: P2.length,
 		});
-		expect(entry.parentVersionDiffSummary).toContain("+1 -0 lines");
-		expect(entry.parentVersionDiffSummary).toContain("+ [Available Models]");
 	});
 
 	it("F1b 模式回落事实：env 携带 from/to → 本进程每条 entry 均带 presetFallback（resume 快照与 change 一致），既有字段不削弱", () => {

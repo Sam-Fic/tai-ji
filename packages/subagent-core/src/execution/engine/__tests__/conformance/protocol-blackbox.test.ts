@@ -23,7 +23,7 @@
 // ── round5-g C22 合并产物说明 ──
 // 本文件吸收同目录 contract.agent-events.test.ts 与 golden-replay.pi.test.ts（来源
 // 区块 describe("contract.agent-events") / describe("golden-replay.pi")，用例逐字
-// 并入）：断言器正反例与 golden 回放是黑盒套件的契约面与回放面（三文件头互引为
+// 并入）：断言器正反例与 golden 回放是黑盒套件的契约锚点与回放清单（三文件头互引为
 // 同一 conformance 套件），同目录合并零路径重写。
 //
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";

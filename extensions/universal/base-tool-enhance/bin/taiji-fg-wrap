@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+# taiji-fg-wrap —— 前台命令空闲转后台包装脚本
+#
+# 设计依据：foreground-idle-to-background 设计文档 §5 部件 1 / §2.5 关键术语 / 矩阵 B（包装期事件）。
+# 由 execute 改写层注入到前台命令外层执行（矩阵 A5 格）：
+#   taiji-fg-wrap --idle <秒> --task-id <id> --log <日志路径> --pidfile <pid文件路径> -- <cmd.sh>
+#
+# 行为（矩阵 B）：
+#   - spawn 真实命令 `bash <cmd.sh>`：同进程组（后台子进程继承本脚本进程组，官方中止杀
+#     本组时真实命令一并被杀——B4）、非 detached、stdin 重定向 /dev/null（对齐官方前台
+#     spawn stdio ["ignore","pipe","pipe"]——命令读 stdin 立即 EOF，而非挂住）、
+#     stdout/stderr 追加重定向 --log 文件（命令输出通道与本脚本 stdout 物理分离——
+#     本脚本退出无管道关闭副作用，真实命令继续落盘——SIGPIPE 规避，B3 结构性保证）。
+#   - 写 pidfile：真实命令 pid + 启动时间（epoch 秒，spawn 时刻近似）。读者 = execute
+#     改写层收尾判定（B2 已死不登记 / B3·B5 活则登记为后台任务）。
+#   - 监控循环（间隔 = sleep 0.15 + 单轮固定开销，实测单轮 182-193ms ≤ 200ms——设计
+#     §5 部件 1「循环间隔 ≤200ms 与抄送延迟上限（矩阵 B1）同源、两口径必须一致」；
+#     校准实测（2026-10-31 darwin arm64，§9 检查点）：单轮固定开销 = now_ms（perl
+#     fork ~6ms）+ log_size（wc fork ~8ms），有新增输出时 +tail ~5ms；sleep 0.2 实测
+#     单轮 236-238ms 系统性超 200ms 口径，故取 0.15；同轮外层已取的日志 size 经参数
+#     传入 flush_log 复用，省去第二次 wc fork）：每轮先查命令死活
+#     （B6 单进程内顺序判定，天然串行无竞态）→ 死则抄完剩余输出、exit 透传真实退出码
+#     （B2）；活且空闲累积超阈值（当前时刻 − 最后输出字节时刻 ≥ 阈值，真实时钟度量，
+#     非按轮次计数）→ 打印转后台标记行、exit 0（B3，不杀命令）；活且未超 → 抄送日志
+#     新增字节到自身 stdout（B1，官方管道流式显示）。
+#
+# 标记协议（§5 部件 3，三方契约逐字实现，主要消费者 = 模型）：
+#   [TAIJI-FG-BG] Command moved to background after Ns without output — still running,
+#   NOT finished (no exit code yet). Full log: <path> Check: bash_output {task_id:"<id>"};
+#   terminate: bash_kill {task_id:"<id>"}. It will notify on completion — DO NOT bash
+#   sleep while waiting.
+#
+# 已接受代价（设计登记，不加防）：spawn 与写 pidfile 之间的毫秒级窗口内本脚本被杀时
+# pidfile 缺失、B5 兜底对该次失效（命令可能残留，与现状 pi 原生执行中宿主崩溃残留同级）。
+#
+# 兼容性：bash 3.2（macOS /bin/bash）子集——无关联数组 / mapfile / ${var,,} 等特性。
+# 亚秒时钟源 = perl Time::HiRes（darwin/linux 自带；空闲阈值触发精度依赖亚秒时刻，
+# 秒级 date 会使 idle 2s 触发窗漂移至 3.2s）；perl 不可用时回退秒级粒度。
+
+set -u
+
+usage_exit() {
+	echo "taiji-fg-wrap: usage: taiji-fg-wrap --idle <sec> --task-id <id> --log <path> --pidfile <path> -- <cmd.sh>" >&2
+	exit 64
+}
+
+IDLE_SEC=""
+TASK_ID=""
+LOG_PATH=""
+PIDFILE_PATH=""
+CMD_SH=""
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--idle)
+		[ $# -ge 2 ] || usage_exit
+		IDLE_SEC="$2"
+		shift 2
+		;;
+	--task-id)
+		[ $# -ge 2 ] || usage_exit
+		TASK_ID="$2"
+		shift 2
+		;;
+	--log)
+		[ $# -ge 2 ] || usage_exit
+		LOG_PATH="$2"
+		shift 2
+		;;
+	--pidfile)
+		[ $# -ge 2 ] || usage_exit
+		PIDFILE_PATH="$2"
+		shift 2
+		;;
+	--)
+		shift
+		break
+		;;
+	*)
+		echo "taiji-fg-wrap: unknown argument: $1" >&2
+		usage_exit
+		;;
+	esac
+done
+
+[ $# -ge 1 ] || {
+	echo "taiji-fg-wrap: missing cmd.sh path after --" >&2
+	exit 64
+}
+CMD_SH="$1"
+shift
+[ $# -eq 0 ] || {
+	echo "taiji-fg-wrap: unexpected extra arguments after cmd.sh" >&2
+	exit 64
+}
+
+case "$IDLE_SEC" in
+'' | *[!0-9]*)
+	echo "taiji-fg-wrap: --idle requires a non-negative integer (seconds), got: $IDLE_SEC" >&2
+	exit 64
+	;;
+esac
+for required in "$TASK_ID" "$LOG_PATH" "$PIDFILE_PATH"; do
+	[ -n "$required" ] || {
+		echo "taiji-fg-wrap: --task-id / --log / --pidfile are all required" >&2
+		usage_exit
+	}
+done
+[ -f "$CMD_SH" ] || {
+	echo "taiji-fg-wrap: cmd.sh not found: $CMD_SH (confirm the injector wrote the command file before invoking)" >&2
+	exit 66
+}
+
+# 毫秒时刻。perl 失败回退 date +%s 的秒级粒度（精度降级，功能不中断）。
+now_ms() {
+	local t
+	t=$(perl -MTime::HiRes=time -e 'printf("%d\n", time() * 1000)' 2>/dev/null) || t=""
+	[ -n "$t" ] || t=$(( $(date +%s) * 1000 ))
+	printf '%s\n' "$t"
+}
+
+# 日志当前字节数；读取失败保持传入基线（调用方传当前 offset）。
+# wc 输出按平台可能带前导空白（macOS BSD wc 对 stdin 输入补空格），先剥空白再校验。
+log_size() {
+	local size
+	size=$(wc -c <"$1" 2>/dev/null) || size="$2"
+	size="${size//[[:space:]]/}"
+	case "$size" in
+	'' | *[!0-9]*) size="$2" ;;
+	esac
+	printf '%s\n' "$size"
+}
+
+# 抄送日志新增字节到自身 stdout（B1），推进 offset。
+# 按字节 offset 接续 = 累积缓冲形态：UTF-8 多字节字符跨批次时字节流无损（管道字节
+# 拼接完整），仅中间批次的渲染可能临时切半，由后续批次补全——不丢不重。
+# 输出量以快照 size 为准（head -c 截断）：快照与 tail 执行之间存在毫秒级窗口，窗口内
+# 命令新写的字节会被 tail 一并读到 EOF——若照单输出而 offset 只推进到快照值，下一轮
+# 将重复抄送该段（同段字节两次进入抄送流）。head 按 $((size - log_offset)) 截断后，
+# 快照后新字节留给下一轮，不重不丢。head 读满即退，tail 后续写入收 SIGPIPE 是预期
+# （本脚本无 pipefail / errexit，不影响退出码透传）。
+# $1 可选 = 外层本轮已取的日志 size：复用可省同轮第二次 wc fork（单轮固定开销
+# 校准项，见文件头实测登记）；缺省时内部自取（B2 收尾路径仅调一次，开销不敏感）。
+flush_log() {
+	local size
+	if [ $# -ge 1 ]; then
+		size="$1"
+	else
+		size=$(log_size "$LOG_PATH" "$log_offset")
+	fi
+	if [ "$size" -gt "$log_offset" ]; then
+		tail -c +$((log_offset + 1)) "$LOG_PATH" | head -c $((size - log_offset))
+		log_offset="$size"
+	fi
+}
+
+# spawn 真实命令：同进程组（继承）、非 detached、stdin=/dev/null（读即 EOF）、
+# stdout/stderr 追加落日志。日志文件由改写层保证父目录存在；append 而非 truncate。
+bash "$CMD_SH" >>"$LOG_PATH" 2>&1 </dev/null &
+child_pid=$!
+
+# 写 pidfile（spawn 后毫秒级窗口内完成；该窗口被杀时 pidfile 缺失 = 设计已接受代价）。
+# pidStartTimeSec 为 spawn 时刻近似值（epoch 秒）——跨平台 ps lstart 解析（BSD/GNU
+# date 语法分裂 + locale 脆弱）不值当；秒级精度下近似值与进程真实启动时刻几乎总同秒，
+# pid 复用防御的精确身份校验由消费方按 getProcessStartTimeSec 复核。
+pid_spawn_ms=$(now_ms)
+printf '{"pid":%d,"pidStartTimeSec":%d}\n' "$child_pid" "$((pid_spawn_ms / 1000))" >"$PIDFILE_PATH"
+
+idle_threshold_ms=$((IDLE_SEC * 1000))
+log_offset=0
+last_byte_ms=$(now_ms)
+
+while true; do
+	sleep 0.15
+
+	# B6：每轮先查死活（判死 = kill -0 ESRCH = bash 已收割后台作业，wait 立即返回状态）
+	if ! kill -0 "$child_pid" 2>/dev/null; then
+		flush_log # B2：抄完剩余输出再透传
+		wait "$child_pid" 2>/dev/null
+		exit $?
+	fi
+
+	# B1：先感知新增输出刷新空闲计时（防「刚有输出未感知即误判空闲」），再判空闲
+	now=$(now_ms)
+	size=$(log_size "$LOG_PATH" "$log_offset")
+	if [ "$size" -gt "$log_offset" ]; then
+		flush_log "$size"
+		last_byte_ms="$now"
+	fi
+
+	# B3：空闲累积超阈值（真实时钟静默时长，非轮次计数）→ 不杀命令，打印标记行，exit 0
+	if [ $((now - last_byte_ms)) -ge "$idle_threshold_ms" ]; then
+		elapsed_s=$(( (now - last_byte_ms) / 1000 ))
+		printf '[TAIJI-FG-BG] Command moved to background after %ds without output — still running, NOT finished (no exit code yet). Full log: %s Check: bash_output {task_id:"%s"}; terminate: bash_kill {task_id:"%s"}. It will notify on completion — DO NOT bash sleep while waiting.\n' "$elapsed_s" "$LOG_PATH" "$TASK_ID" "$TASK_ID"
+		exit 0
+	fi
+done

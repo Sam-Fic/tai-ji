@@ -42,6 +42,34 @@ vi.mock('node:child_process', async (importOriginal) => {
   return { ...actual, execFileSync: execFileSync as unknown as typeof realExecFileSync }
 })
 
+// ── 回滚失败路径注入点（架构审计候选 4 行为锁）──────────────────────
+// 回滚的每一步都是 renameSync/rmSync：对特定路径抛错模拟 IO 故障（跨设备/权限），
+// 其余路径透传真实 fs（现场布置、断言读取、afterEach 清理均走真实实现）。
+// mock 的是文件系统端点的故障注入，不是被测回滚逻辑；stub 抛错即拦截该次调用，
+// 不抛则照常执行真实操作。
+const fsOpsStub = vi.hoisted(() => ({
+  rename: null as null | ((from: string, to: string) => void),
+  rm: null as null | ((target: string) => void),
+}))
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  const realRenameSync = actual.renameSync
+  const realRmSync = actual.rmSync
+  const renameSync = (...args: Parameters<typeof realRenameSync>) => {
+    if (fsOpsStub.rename) fsOpsStub.rename(String(args[0]), String(args[1]))
+    realRenameSync(...args)
+  }
+  const rmSync = (...args: Parameters<typeof realRmSync>) => {
+    if (fsOpsStub.rm) fsOpsStub.rm(String(args[0]))
+    realRmSync(...args)
+  }
+  return {
+    ...actual,
+    renameSync: renameSync as unknown as typeof realRenameSync,
+    rmSync: rmSync as unknown as typeof realRmSync,
+  }
+})
+
 // ── 必须在 import constants（间接被 self-healer import）前设 ────────
 const TMP_DATA_DIR = mkdtempSync(path.join(tmpdir(), 'w3-healer-'))
 process.env.TAIJI_AGENT_DATA_DIR = TMP_DATA_DIR
@@ -242,6 +270,280 @@ describe('W3: update-self-healer (W3TC11)', () => {
     expect(result).toBe(false)
     expect(errSpy).toHaveBeenCalled()
     errSpy.mockRestore()
+  })
+})
+
+// ════════════════════════════════════════════════════════════════
+// 回滚失败路径行为锁（架构审计候选 4）：任何已捕获失败都保留可恢复应用
+// —— rename 失败即中止（禁 rm 当前应用兜底）；双重失败保留 .broken 与 .old
+// 原位并显式报错；mac 与 Linux 共用同一组场景（审计修复方向要求）。
+// ════════════════════════════════════════════════════════════════
+describe('回滚失败路径：rename/rm 失败时保留可恢复应用（候选 4 行为锁）', () => {
+  const updateDir3 = path.join(TMP_DATA_DIR, 'update')
+  const resultFile3 = path.join(updateDir3, 'update-result.json')
+  let originalPlatform: PropertyDescriptor | undefined
+  let originalExecPath: string
+  let tmpAppRoot: string | undefined
+
+  beforeEach(() => {
+    originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
+    originalExecPath = process.execPath
+    vi.clearAllMocks()
+    fsOpsStub.rename = null
+    fsOpsStub.rm = null
+    mkdirSync(updateDir3, { recursive: true })
+  })
+
+  afterEach(() => {
+    fsOpsStub.rename = null
+    fsOpsStub.rm = null
+    if (originalPlatform) Object.defineProperty(process, 'platform', originalPlatform)
+    Object.defineProperty(process, 'execPath', { value: originalExecPath, configurable: true })
+    delete process.env.APPIMAGE
+    if (tmpAppRoot) {
+      rmSync(tmpAppRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+      tmpAppRoot = undefined
+    }
+    if (existsSync(updateDir3)) rmSync(updateDir3, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+  })
+
+  /** 伪造 mac 回滚现场：.app（半截态）+ .old（备份）+ replacing result */
+  function seedMacScene(): { appBundle: string; oldBundle: string; brokenBundle: string; binary: string } {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+    tmpAppRoot = mkdtempSync(path.join(tmpdir(), 'w3-rollback-fail-'))
+    const appBundle = path.join(tmpAppRoot, 'TaiJi.app')
+    const oldBundle = `${appBundle}.old`
+    const brokenBundle = `${appBundle}.broken`
+    const binary = path.join(appBundle, 'Contents', 'MacOS', 'TaiJi')
+    mkdirSync(path.dirname(binary), { recursive: true })
+    writeFileSync(binary, 'half-installed')
+    const oldBinary = path.join(oldBundle, 'Contents', 'MacOS', 'TaiJi')
+    mkdirSync(path.dirname(oldBinary), { recursive: true })
+    writeFileSync(oldBinary, 'old-good-version')
+    Object.defineProperty(process, 'execPath', { value: binary, configurable: true })
+    writeFileSync(resultFile3, JSON.stringify({ status: 'replacing', version: '0.9.0', at: '2025-12-01T00:00:00Z' }))
+    return { appBundle, oldBundle, brokenBundle, binary }
+  }
+
+  /** 伪造 linux 回滚现场：AppImage（半截态）+ .old（备份）+ replacing result */
+  function seedLinuxScene(): { appImage: string; oldImage: string; brokenImage: string } {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
+    tmpAppRoot = mkdtempSync(path.join(tmpdir(), 'w3-rollback-fail-'))
+    const appImage = path.join(tmpAppRoot, 'TaiJi-x86_64.AppImage')
+    writeFileSync(appImage, 'half-installed')
+    writeFileSync(`${appImage}.old`, 'old-good-version')
+    process.env.APPIMAGE = appImage
+    writeFileSync(resultFile3, JSON.stringify({ status: 'replacing', version: '0.9.0', at: '2025-12-01T00:00:00Z' }))
+    return { appImage, oldImage: `${appImage}.old`, brokenImage: `${appImage}.broken` }
+  }
+
+  it('mac 第一次 rename（.app→.broken）失败 → 中止回滚：当前 .app 原位保留、.old 保留、显式报错，不写 rolled-back', async () => {
+    const { appBundle, oldBundle, brokenBundle, binary } = seedMacScene()
+    fsOpsStub.rename = (from) => {
+      if (from === appBundle) throw new Error('simulated rename failure (EACCES)')
+    }
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { maybeRollbackInterruptedUpdate } = await loadModule()
+      const result = await maybeRollbackInterruptedUpdate()
+
+      // 回滚失败 → 返回 false（不阻塞启动）
+      expect(result).toBe(false)
+      // 当前 .app 原位保留、内容未动（未被 rm 兜底删除）
+      expect(existsSync(appBundle)).toBe(true)
+      expect(readFileSync(binary, 'utf-8')).toBe('half-installed')
+      // .old 备份原位保留（下次启动可重试回滚）
+      expect(existsSync(oldBundle)).toBe(true)
+      expect(existsSync(brokenBundle)).toBe(false)
+      // result 仍为 replacing（未误标 rolled-back）
+      expect(JSON.parse(readFileSync(resultFile3, 'utf-8')).status).toBe('replacing')
+      // 显式报错：中止回滚 + 保留现状
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/rename to \.broken failed, abort rollback/),
+        expect.any(Error),
+      )
+    } finally {
+      errSpy.mockRestore()
+    }
+  })
+
+  it('mac 第二次 rename（.old→.app）失败但 .broken 还回成功 → 当前路径保留可用 app、.old 保留、返回 false', async () => {
+    const { appBundle, oldBundle, brokenBundle, binary } = seedMacScene()
+    fsOpsStub.rename = (from) => {
+      if (from === oldBundle) throw new Error('simulated .old restore failure')
+    }
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { maybeRollbackInterruptedUpdate } = await loadModule()
+      const result = await maybeRollbackInterruptedUpdate()
+
+      expect(result).toBe(false)
+      // .broken 已还回当前路径（至少保留一个可用 app，内容是原半截态）
+      expect(existsSync(appBundle)).toBe(true)
+      expect(readFileSync(binary, 'utf-8')).toBe('half-installed')
+      expect(existsSync(brokenBundle)).toBe(false)
+      // .old 备份保留在原位（其 rename 失败未被消耗）
+      expect(existsSync(oldBundle)).toBe(true)
+      expect(JSON.parse(readFileSync(resultFile3, 'utf-8')).status).toBe('replacing')
+      // 外层 catch 显式报错（自愈失败不阻塞启动）
+      expect(errSpy).toHaveBeenCalledWith('[update-self-healer] failed:', expect.any(Error))
+    } finally {
+      errSpy.mockRestore()
+    }
+  })
+
+  it('mac 双重失败（.old 恢复失败且 .broken 还回失败）→ .broken 与 .old 均原位保留，显式报错含恢复路径', async () => {
+    const { appBundle, oldBundle, brokenBundle } = seedMacScene()
+    fsOpsStub.rename = (from) => {
+      if (from === oldBundle || from === brokenBundle) throw new Error('simulated double failure')
+    }
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { maybeRollbackInterruptedUpdate } = await loadModule()
+      const result = await maybeRollbackInterruptedUpdate()
+
+      expect(result).toBe(false)
+      // 两次 rename 均失败：app 路径无法就位，但两份可恢复副本均原位保留（未删除/清空）
+      expect(existsSync(appBundle)).toBe(false)
+      expect(existsSync(brokenBundle)).toBe(true)
+      expect(existsSync(oldBundle)).toBe(true)
+      expect(JSON.parse(readFileSync(resultFile3, 'utf-8')).status).toBe('replacing')
+      // 显式报错：双重失败 + 可恢复副本路径
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/both failed; recoverable copies kept:/),
+        brokenBundle,
+        oldBundle,
+        expect.any(Error),
+      )
+    } finally {
+      errSpy.mockRestore()
+    }
+  })
+
+  it('mac 清理 .broken 失败 → 回滚仍成功：.old 已就位、rolled-back 已写、.broken 残留无害', async () => {
+    const { appBundle, oldBundle, brokenBundle, binary } = seedMacScene()
+    fsOpsStub.rm = (target) => {
+      if (target === brokenBundle) throw new Error('simulated cleanup failure')
+    }
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { maybeRollbackInterruptedUpdate } = await loadModule()
+      const result = await maybeRollbackInterruptedUpdate()
+
+      // 回滚本身成功（清理失败只留无害残留）
+      expect(result).toBe(true)
+      expect(existsSync(appBundle)).toBe(true)
+      expect(readFileSync(binary, 'utf-8')).toBe('old-good-version')
+      expect(existsSync(oldBundle)).toBe(false)
+      // .broken 残留本身即一份可恢复副本（best-effort 清理，不影响回滚结果）
+      expect(existsSync(brokenBundle)).toBe(true)
+      expect(JSON.parse(readFileSync(resultFile3, 'utf-8')).status).toBe('rolled-back')
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/cleanup \.broken failed/),
+        expect.any(Error),
+      )
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('linux 第一次 rename（AppImage→.broken）失败 → 中止回滚：当前 AppImage 原位保留、.old 保留', async () => {
+    const { appImage, oldImage, brokenImage } = seedLinuxScene()
+    fsOpsStub.rename = (from) => {
+      if (from === appImage) throw new Error('simulated rename failure (EACCES)')
+    }
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { maybeRollbackInterruptedUpdate } = await loadModule()
+      const result = await maybeRollbackInterruptedUpdate()
+
+      expect(result).toBe(false)
+      // 当前 AppImage 原位保留、内容未动（未被 rm 兜底删除）
+      expect(existsSync(appImage)).toBe(true)
+      expect(readFileSync(appImage, 'utf-8')).toBe('half-installed')
+      expect(existsSync(oldImage)).toBe(true)
+      expect(existsSync(brokenImage)).toBe(false)
+      expect(JSON.parse(readFileSync(resultFile3, 'utf-8')).status).toBe('replacing')
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/linux rename to \.broken failed, abort rollback/),
+        expect.any(Error),
+      )
+    } finally {
+      errSpy.mockRestore()
+    }
+  })
+
+  it('linux 第二次 rename（.old→AppImage）失败但 .broken 还回成功 → 当前路径保留可用 app、.old 保留', async () => {
+    const { appImage, oldImage, brokenImage } = seedLinuxScene()
+    fsOpsStub.rename = (from) => {
+      if (from === oldImage) throw new Error('simulated .old restore failure')
+    }
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { maybeRollbackInterruptedUpdate } = await loadModule()
+      const result = await maybeRollbackInterruptedUpdate()
+
+      expect(result).toBe(false)
+      expect(existsSync(appImage)).toBe(true)
+      expect(readFileSync(appImage, 'utf-8')).toBe('half-installed')
+      expect(existsSync(brokenImage)).toBe(false)
+      expect(existsSync(oldImage)).toBe(true)
+      expect(JSON.parse(readFileSync(resultFile3, 'utf-8')).status).toBe('replacing')
+      expect(errSpy).toHaveBeenCalledWith('[update-self-healer] failed:', expect.any(Error))
+    } finally {
+      errSpy.mockRestore()
+    }
+  })
+
+  it('linux 双重失败（.old 恢复失败且 .broken 还回失败）→ .broken 与 .old 均原位保留，显式报错', async () => {
+    const { appImage, oldImage, brokenImage } = seedLinuxScene()
+    fsOpsStub.rename = (from) => {
+      if (from === oldImage || from === brokenImage) throw new Error('simulated double failure')
+    }
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { maybeRollbackInterruptedUpdate } = await loadModule()
+      const result = await maybeRollbackInterruptedUpdate()
+
+      expect(result).toBe(false)
+      expect(existsSync(appImage)).toBe(false)
+      expect(existsSync(brokenImage)).toBe(true)
+      expect(existsSync(oldImage)).toBe(true)
+      expect(JSON.parse(readFileSync(resultFile3, 'utf-8')).status).toBe('replacing')
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/linux restore \.old and put-back \.broken both failed/),
+        brokenImage,
+        oldImage,
+        expect.any(Error),
+      )
+    } finally {
+      errSpy.mockRestore()
+    }
+  })
+
+  it('linux 清理 .broken 失败 → 回滚仍成功：.old 已就位、rolled-back 已写、.broken 残留无害', async () => {
+    const { appImage, oldImage, brokenImage } = seedLinuxScene()
+    fsOpsStub.rm = (target) => {
+      if (target === brokenImage) throw new Error('simulated cleanup failure')
+    }
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { maybeRollbackInterruptedUpdate } = await loadModule()
+      const result = await maybeRollbackInterruptedUpdate()
+
+      expect(result).toBe(true)
+      expect(existsSync(appImage)).toBe(true)
+      expect(readFileSync(appImage, 'utf-8')).toBe('old-good-version')
+      expect(existsSync(oldImage)).toBe(false)
+      expect(existsSync(brokenImage)).toBe(true)
+      expect(JSON.parse(readFileSync(resultFile3, 'utf-8')).status).toBe('rolled-back')
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/linux cleanup \.broken failed/),
+        expect.any(Error),
+      )
+    } finally {
+      warnSpy.mockRestore()
+    }
   })
 })
 

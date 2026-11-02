@@ -1,5 +1,5 @@
 /**
- * ConnectionManager — WS 连接生命周期 + 认证握手 + 心跳 + 连接池管理（C2 从 server.ts 抽出）。
+ * ConnectionManager — WS 连接生命周期 + 认证握手 + 连接池管理（C2 从 server.ts 抽出）。
  *
  * 职责：
  * - 持有 clients 连接池（Set<WebSocket>），供 broker.broadcast 遍历。
@@ -121,7 +121,8 @@ export class ConnectionManager {
   private authedConnections = new Set<WsType>()
   /**
    * 已对 pre-auth 丢弃告警过的连接（code-harden P2 连接级频控）：每连接只 warn 首条
-   * 非 auth 消息，后续静默丢弃——防 10s 握手窗口内逐条刷屏；连接清理时随之删除。
+   * 非 auth 消息，后续静默丢弃——防认证前窗口（连接建立到 auth 消息之间，由连接生命
+   * 周期界定、无定时器）内逐条刷屏；连接清理时随之删除。
    */
   private preAuthWarned = new Set<WsType>()
   /**

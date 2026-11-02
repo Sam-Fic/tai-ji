@@ -14,9 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   NESTED_SPAWN_ENV,
   buildNestedSpawnEnv,
-  assertNotNestedSpawn,
   ExecutionNestingContext,
-  NestedSpawnRejectedError,
 } from "../nesting-guard.ts";
 import {
   TAIJI_DATA_DIR_ENV,
@@ -45,7 +43,7 @@ import {
 } from "../schema-emulation.ts";
 import type { AgentEvent, Turn } from "../protocol/contract-types.ts";
 
-describe("nesting-guard（D8 双层防护）", () => {
+describe("nesting-guard（嵌套标记 env 构造）", () => {
   it("buildNestedSpawnEnv：注入统一标记 + 剥离引擎原生标记，不改入参", () => {
     const base: Record<string, string | undefined> = {
       PATH: "/usr/bin",
@@ -65,18 +63,8 @@ describe("nesting-guard（D8 双层防护）", () => {
     expect(base.CLAUDECODE).toBe("1");
   });
 
-  it("assertNotNestedSpawn：已嵌套抛 nested_spawn_rejected（含可操作恢复指引）", () => {
-    expect(() => assertNotNestedSpawn({ [NESTED_SPAWN_ENV]: "1" })).toThrowError(
-      NestedSpawnRejectedError,
-    );
-    try {
-      assertNotNestedSpawn({ [NESTED_SPAWN_ENV]: "1" });
-    } catch (err) {
-      expect((err as NestedSpawnRejectedError).code).toBe("nested_spawn_rejected");
-      expect((err as NestedSpawnRejectedError).recovery).toMatch(/directly inside the current task/);
-    }
-    expect(() => assertNotNestedSpawn({})).not.toThrow();
-  });
+  // assertNotNestedSpawn 用例已随禁嵌套派发删除（从未接线；防线 = 被派发子进程
+  // 经扩展精简装配无派发工具）。
 
   it("ExecutionNestingContext：ALS 链传递 + 基线兜底（ALS 断裂修复语义）", () => {
     const ctx = new ExecutionNestingContext();

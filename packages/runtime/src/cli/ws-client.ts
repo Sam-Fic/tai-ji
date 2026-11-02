@@ -159,17 +159,17 @@ export async function rpc<T = Record<string, unknown>>(
     }
 
     /**
-     * RT-8#13：非 JSON 帧（runtime 握手期 keepalive / 半帧 / 协议变更）计数 + warn-once
-     * （附帧样本）让「有帧被丢」显形。心跳帧是本路径的常态流量，逐帧 warn 会刷屏，
-     * 故每连接只出声一次（CLI 一次 RPC 一连接，等价每命令一次）。
+     * RT-8#13：非 JSON 帧（半帧 / runtime 与 CLI 协议版本不匹配）计数 + warn-once
+     * （附帧样本）让「有帧被丢」显形。逐帧 warn 会刷屏，故每连接只出声一次
+     * （CLI 一次 RPC 一连接，等价每命令一次）。
      */
     const onMalformedFrame = (data: RawData, e: unknown): void => {
       dropCount += 1
       warnOnce(
         `cli-ws-malformed:${type}`,
         `[cli-ws-client] 丢弃 ${dropCount} 帧无法解析为非 JSON 的消息（type=${type}，` +
-          `首帧样本: ${malformedFrameSample(data)}）。若是 runtime 心跳帧可忽略；` +
-          '否则说明 runtime 协议与 CLI 版本不匹配——恢复动作：重启应用让 runtime 与 CLI 同版本后重试',
+          `首帧样本: ${malformedFrameSample(data)}）。通常是 runtime 协议与 CLI 版本不匹配或传输半帧——` +
+          '恢复动作：重启应用让 runtime 与 CLI 同版本后重试',
         e,
       )
     }

@@ -195,18 +195,10 @@ export function createWatchCoordinator(deps: WatchCoordinatorDeps): WatchCoordin
 	//   ② 畸形对象 / 词表外 reason / error envelope {error,...}（runtime params 检查
 		//      拒绝态）= 协议漂移信号 → 必须 warn 留痕（同上方 non-json/channel-error
 		//      分支形态：notifyId + 漂移形态摘要），再折叠 cancelled 清 stale register。
-		let parsed: unknown;
-		try {
-			parsed = JSON.parse(result.value);
-		} catch {
-			// unreachable 防御（callMarkerRpc ok:true 已过 JSON 合法性检测）——真到即漂移
-			logger.warn(
-				"[session-manager] watch respond unparsable — folding cancelled (protocol drift)",
-				{ notifyId, drift: "unparsable-json" },
-			);
-			unregisterPending(notifyId, "cancelled");
-			return;
-		}
+		// callMarkerRpc 返回 ok:true 前已对同一字符串做过无 reviver 的 JSON.parse
+		// 合法性校验（select-rpc.ts），确定性重放恒成功；若真抛错属协议漂移，由外层
+		// openWatch 的 error catch 留痕，残留 pending 交下次 session_start 收尾。
+		const parsed: unknown = JSON.parse(result.value);
 		if (parsed === null) {
 			unregisterPending(notifyId, "cancelled");
 			return;
@@ -314,8 +306,9 @@ export function createWatchCoordinator(deps: WatchCoordinatorDeps): WatchCoordin
 			fulfills,
 			label: first.label,
 		};
-		// 默认投递（unified-delivery 波 2：port.deliver）；false（port 缺席 / rejected /
-		// 幂等拒收）不改 unregister 语义。collectKeys = 批内全部债权键（result-collect
+		// 默认投递（unified-delivery 波 2：port.deliver）；false（port 缺席 / rejected
+		// 含单次重提链失败——幂等命中 swallowed 按已投递返回 true，不产 false）不改
+		// unregister 语义。collectKeys = 批内全部债权键（result-collect
 		// 设计 §3.4 managed 行）：合批条目载荷幂等键 = 批首债权键，collect 按键集逐键
 		// 展开定位——键集申报经 recordManagedNotify 必传参数构造性防漏。三类「注销
 		// pending 而无投递日志条目」分支不经此申报点——成员键不入任何条目键集，collect

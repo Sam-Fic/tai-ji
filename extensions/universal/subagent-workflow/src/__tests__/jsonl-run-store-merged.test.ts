@@ -770,6 +770,8 @@ describe("workflow-notify", () => {
     }[];
     /** 下一次 deliver 返回 rejected（persist-failed 形态）。 */
     rejectNext: () => void;
+    /** deliver 持续返回 rejected（持久失败形态——D8① 重提链的 RL11 用例）。 */
+    rejectPersist: () => void;
   };
 
     /** fake 投递端口（deliver 消费方：同 id 幂等吞 + 受理即记录；port 本体行为由
@@ -778,9 +780,11 @@ describe("workflow-notify", () => {
     const seen = new Set<string>();
     const sentMessages: FakePortMock["sentMessages"] = [];
     let rejectNextFlag = false;
+    let rejectPersistFlag = false;
     const handle: DeliveryPortHandle = {
       deliver(envelope, opts) {
-        if (rejectNextFlag) {
+        if (rejectPersistFlag || rejectNextFlag) {
+          // 一次性旗标先复位（持久旗标不复位）——一次性语义不受持久模式影响
           rejectNextFlag = false;
           return { kind: "rejected", reason: "persist-failed (fake)" };
         }
@@ -803,6 +807,9 @@ describe("workflow-notify", () => {
       sentMessages,
       rejectNext: () => {
         rejectNextFlag = true;
+      },
+      rejectPersist: () => {
+        rejectPersistFlag = true;
       },
     };
   }
@@ -893,32 +900,48 @@ describe("workflow-notify", () => {
       expect(mock.sentMessages).toHaveLength(1);
     });
 
-    it("port rejected（persist-failed 形态）→ error 留痕（含 notifyId/content 摘要），去重不标记、不上抛", () => {
+    it("port rejected → 处置阶梯①（D8①）：单次重提自动恢复（一次性拒收形态）→ 重提受理 + 去重标记 + 首败 warn 留痕", () => {
       const { pi } = makePi();
       const run = makeRun();
       const notified = new Set<string>();
 
-      // 已知丢失情形（如实登记，见 notifyDone 注释）：rejected = 受理未发生、投递日志
-      // 未落、重放无源——该终局通知丢失，仅 error 日志留痕供手工补偿。deliver 同步
-      // 返回无抛错通道（原账本 record 抛错上抛 finalizeRun 围栏的链路随退役消失）。
+      // rejected = 受理未发生、投递日志未落（幂等键未登记）——处置阶梯①接线：
+      // 立即单次重提（getDeliveryPort() 重取同桩，一次性拒收旗标已复位 → 重提受理）
       mock.rejectNext();
       notifyDone(pi, "wf-stale", runAsParam(run), notified, undefined, settlementFor(run.state.reason));
-      expect(loggerFns.error).toHaveBeenCalledWith(
-        expect.stringContaining("delivery rejected"),
+      // 首败 warn 留痕（修复信号 + 重提接线指引）
+      expect(loggerFns.warn).toHaveBeenCalledWith(
+        expect.stringContaining("notify rejected by delivery port"),
         expect.objectContaining({
           runId: "wf-stale",
           notifyId: `${WORKFLOW_DONE_NOTIFY_ID_PREFIX}wf-stale`,
+        }),
+      );
+      // 重提受理：同幂等键补投 + 去重标记（与主投受理同语义）
+      expect(mock.sentMessages).toHaveLength(1);
+      expect(notified.has("wf-stale")).toBe(true);
+    });
+
+    it("port rejected → 重提仍 rejected（persist-failed 持久形态）→ error 留痕（含 notifyId/content 摘要与对账恢复指引），去重不标记、不上抛（RL11）", () => {
+      const { pi } = makePi();
+      const run = makeRun();
+      const notified = new Set<string>();
+
+      // 持久失败形态：rejectPersist（主投 + 单次重提均拒收）——即停报警，恢复通道 =
+      // 对账边沿事实判据（workflow-notify-reconcile，run journal/manifest 同一事实源）
+      mock.rejectPersist();
+      notifyDone(pi, "wf-stale2", runAsParam(run), notified, undefined, settlementFor(run.state.reason));
+      expect(loggerFns.error).toHaveBeenCalledWith(
+        expect.stringContaining("retry rejected after the single re-acquire attempt"),
+        expect.objectContaining({
+          runId: "wf-stale2",
+          notifyId: `${WORKFLOW_DONE_NOTIFY_ID_PREFIX}wf-stale2`,
           contentPreview: expect.stringContaining("Workflow 'build' done"),
         }),
       );
-      // 去重未标记：进程内的重复收尾回调不被去重阻断（防御形态）
-      expect(notified.has("wf-stale")).toBe(false);
+      // 去重未标记：进程内的重复收尾回调不被去重阻断（防御形态；对账补投不被拦）
+      expect(notified.has("wf-stale2")).toBe(false);
       expect(mock.sentMessages).toHaveLength(0);
-
-      // 重复收尾回调（若到达）：rejected 消退 → 受理成功 + 去重标记
-      notifyDone(pi, "wf-stale", runAsParam(run), notified, undefined, settlementFor(run.state.reason));
-      expect(mock.sentMessages).toHaveLength(1);
-      expect(notified.has("wf-stale")).toBe(true);
     });
 
       // [③ 回执逐条处理完毕（关闭） / ④ 断连重启重放随账本退役] 两用例的行为锁由 port 内包语义承接：

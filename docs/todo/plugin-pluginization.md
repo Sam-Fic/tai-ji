@@ -27,7 +27,7 @@ taiji 已完成插件化基础设施（`PluginService` / `ContributionRegistry` 
 | workflow | 同上（同包） | `panel/workflow-viz/` 4814 行 + 托盘写死 + overlay `runs` tab | **C** |
 | btw | 无 pi 扩展 | `BtwPanel.vue` 467 行 + runtime `btw-*.ts` 5 文件 + 前端 1987 行 | **C（纯自建）** |
 | trace | 无 pi 扩展 | `panel/trace/` 1573 行 + 卡头写死两段 | **C（纯自建）** |
-| smart-context | `pi-smart-context` 1572 行 | `SystemSmartContextSection.vue` 246 行 + 专属 RPC handler 49 行 | **C（配置页）** |
+| smart-context | `pi-smart-context` 1572 行 | `SmartContextCompactionPage.vue` 291 行 + 专属 RPC handler 56 行 | **C（配置页）** |
 | rename-session | `pi-rename-session` | `RenameSessionPage.vue` 460 行 + handler 73 行 | **C（配置页）** |
 | network-proxy | `pi-network-proxy` | `settings/network/` 4 文件 769 行 + handler 68 行 | **C（配置页）** |
 | base-tool-enhance / llm-retry | 各自 ext-config JSON | `SystemLlmRetrySection.vue` 436 行 + handler 50 行 | **C（配置页）** |

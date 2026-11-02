@@ -7,7 +7,7 @@
  * 视图出现、另一个容器的实例缺失），声明灌入/清理走桥内单一写路径，无成对写。
  *
  * 内置项登记（§6.1「内置三项为注册表初始项」；core 无侧栏/设置页静态表，消费单元以
- * 声明形态登记进 core 单例）：侧栏 3 项（placement='sidebar.tab'）+ 设置页 17 项
+ * 声明形态登记进 core 单例）：侧栏 3 项（placement='sidebar.tab'）+ 设置页 18 项
  *（placement='settings.section'，group 决定归属）。内置文案走 labelKey（§6.16④），
  * 插件项文案走声明 label 原文。
  *
@@ -107,6 +107,7 @@ const SETTINGS_SECTION_SPECS: SettingsSectionSlotSpec[] = [
   { id: 'remote-access', labelKey: 'settings.menu.remoteAccess', icon: 'wifi', group: SETTINGS_GROUP_ENV_SYSTEM },
   { id: 'network-proxy', labelKey: 'settings.menu.networkProxy', icon: 'waypoints', group: SETTINGS_GROUP_ENV_SYSTEM },
   { id: 'system', labelKey: 'settings.menu.system', icon: 'sliders-horizontal', group: SETTINGS_GROUP_ENV_SYSTEM },
+  { id: 'smart-context-compaction', labelKey: 'settings.menu.smartContextCompaction', icon: 'gauge', group: SETTINGS_GROUP_ENV_SYSTEM, contentMaxWidth: 'medium' },
   { id: 'usage', labelKey: 'settings.menu.usage', icon: 'chart-column', group: SETTINGS_GROUP_ENV_SYSTEM, contentMaxWidth: 'wide' },
 ]
 
@@ -177,7 +178,7 @@ export function useSidebarTabs(): ComputedRef<ContentSlotView[]> {
   })
 }
 
-/** 设置页分组二级结构（内置 17 项 ∪ 插件声明项，group 归属、无组归 undefined 组）。 */
+/** 设置页分组二级结构（内置 18 项 ∪ 插件声明项，group 归属、无组归 undefined 组）。 */
 export function useSettingsNavGroups(): ComputedRef<SettingsSectionGroupView[]> {
   return computed(() => {
     const registry = getContentSlotRegistry()

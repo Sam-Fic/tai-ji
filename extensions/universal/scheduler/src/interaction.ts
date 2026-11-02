@@ -87,7 +87,7 @@ export interface ScheduleDraftSeed {
 export interface ScheduleFormChannelState {
   /**
    * 本会话已检测到表单通道不可用（channel-error）→ 后续 `/schedule` 直接给提示、
-   * 不重复试探（设计 §6.1 步骤 8「本会话后续直接给提示」）。
+   * 不重复试探。
    */
   unavailable: boolean
 }
@@ -98,8 +98,8 @@ function modelRef(m: { provider: string; id: string }): string {
 }
 
 /**
- * Draft.models 组装单点（设计 §3.4 / P-SCOPED 探针结论）：ctx.scopedModels 优先
- * （pi /scoped-models 同集语义）；taiji builtin 装配下恒空（S12）→ 回退
+ * Draft.models 组装单点（P-SCOPED 探针结论）：ctx.scopedModels 优先
+ * （pi /scoped-models 同集语义）；taiji builtin 装配下恒空 → 回退
  * modelRegistry.getAvailable()（已配 auth 的可用模型全集）。
  */
 export function collectModelIds(ctx: ExtensionContext): string[] {
@@ -177,7 +177,7 @@ async function interactScheduleFormRpc(
     if (interacted.reason === 'channel-error') {
       // 通道契约破坏：命令路径无工具可禁用 → 设会话状态 + 抛错（调用方提示升级/走 agent）。
       // echo 命中态的升级指引（协议层英文）不再拼接：词典 `form.channelUnavailable` 已含
-      // 「宿主版本过旧」语义，避免中文界面中英混排（设计 §7.5）。
+      // 「宿主版本过旧」语义，避免中文界面中英混排。
       throw new FormChannelUnavailableError()
     }
     if (interacted.reason === 'non-json') {
@@ -251,7 +251,7 @@ function parseScheduleFormAnswerValue(rawResult: unknown): ScheduleFormResult {
  * 挂起期间 `session_shutdown` abort → 取消收尾）。因此调用点的 `void openScheduleFormAsync(...)`
  * 不构成漏口。
  *
- * 时序（设计 §6.2）：`rpc` 模式 **异步打开**——handler 不 await 表单，立即返回（规避 prompt
+ * 时序：`rpc` 模式 **异步打开**——handler 不 await 表单，立即返回（规避 prompt
  * RPC 的 60s 回包窗口）；`tui` 模式就地渲染，无 RPC 回包窗口，可 await。
  */
 export async function openScheduleFormAsync(

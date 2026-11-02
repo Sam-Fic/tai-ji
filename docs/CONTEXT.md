@@ -447,9 +447,9 @@ Session 级状态，表示 pi 进程正在工作（从用户发送消息到 agen
 
 **裸标记（bare marker）/ 投递身份（delivery identity）**：文本投递路径机制不变——出站文本尾附 `<!--taiji:msg:<uuid>-->` 为逐消息身份；判定权威 = `DELIVERY_MARKER_ID_RE`（session-delivery-registry.ts）；出站尾附锚口径见 [decisions.md ADR-0077](adr/decisions.md)。
 
-**对账器（Reconciler，文本投递路径保留）**：registry 侧既有组件，事件触发（`delivery.cancel` 复用同一路径为撤销入口）执行对账，处置 = `clear_queue` 全收后按裸标记三分（reclaim 重投 / rebuild 重建记账 / adopt 收养）。通知域**无运行中对账**（全链路事件驱动 + 崩溃重放，ADR-0122）。
+**对账器（Reconciler，文本投递路径保留）**：registry 侧既有组件，事件触发（`delivery.cancel` 复用同一路径为撤销入口）执行对账，处置 = `clear_queue` 全收后按裸标记三分（reclaim 重投 / rebuild 重建记账 / adopt 收养）。通知域无 `clear_queue` 式对账组件，对账 = 事件驱动边沿补投（session_start / 切回 / agent_settled 回合收尾三入口共用三重磁盘事实现算判据，事件驱动非定时器——ADR-0122「投递受理失败场景的首败即停边界」段③）。
 
-**重放（replay）**：崩溃恢复的唯一机制——重启后按投递日志差集把未送达条目重新入队。文本 = runtime 磁盘 outbox（`<getDataDir()>/delivery-outbox/<sessionId>.jsonl`）启动 loadUndelivered + reattach transcript 判重；通知 = DeliveryPort 的 session_start 差集扫描（outbox − delivered − ack）。运行中被 `clear_queue` 牵连清除的通知运行中不可恢复（扩展范围无队列事实源），悬置至重启重放。
+**重放（replay）**：重启后按投递日志差集把未送达条目重新入队的恢复机制。文本 = runtime 磁盘 outbox（`<getDataDir()>/delivery-outbox/<sessionId>.jsonl`）启动 loadUndelivered + reattach transcript 判重（文本路径唯一恢复通道）；通知 = 差集重放与补投双通道——差集重放 = DeliveryPort 的 session_start 差集扫描（outbox − delivered − ack，覆盖已受理未送达形态）；补投 = 三重磁盘事实现算判据（收尾位命中 ∧ 送达痕迹未命中 ∧ 投递日志无该幂等键条目——rejected 受理失败丢失形态日志无条目、差集重放结构性无从覆盖）在 session_start / 切回（`__taiji_bg_reconcile__`）/ agent_settled 回合收尾三入口边沿触发，含进程存活形态的运行中恢复（ADR-0122「投递受理失败场景的首败即停边界」段③）。收尾位按域参数化：bash 域 = registry 条目终态；subagent 域 = record 轮终 idle 收尾位 + 停因非宿主中断/重开族（万物可续生命周期模型下 closedReason 终态门已退役）或 legacy closed 终态存量；session-manager 域 = pending 表注销条目且 reason 应投递类（「应投递而注销」）；subagent-workflow 域 = run journal/manifest 终局帧。判据骨架单源 = `extensions/universal/base-tool-enhance/src/background/notify-reconcile-judgement.ts`（subagent-core / session-manager / subagent-workflow 域侧因 core ← extensions 依赖方向红线按同构形态落位并锚定该单源，漂移防线 = 各域真值表测试）；切回边沿的跨域转发 = `extensions/shared/delivery-port/src/reconcile-edge.ts`（三方共同依赖包内进程级注册槽）。已知边界（2026-11-02 D5 终态同步裁决）：主路径轮次应答在注入途中（steer 队列 / merge-commit-hold 窗口）时终态补投可产生同 record 双通知（轮次应答键与终态键异键不判重）——重复刺激级危害，已接受，不为它建 record 级在途排除通道。运行中被 `clear_queue` 牵连清除的通知运行中不可恢复（扩展范围无队列事实源——投递日志已有条目、不满足补投第三重判据），悬置至重启重放。
 
 **已完结 id 索引**：判重的内存缓存（已完结条目 id 集合），由 DeliveryStore 终局记录在启动 / 重放时构建（loadTerminalIds）；判重顺序 = 在途条目 → 内存索引 → 持久记录。撤销防复活凭据在持久终局记录（v2 的 tombstone 独立机制退役）。
 
@@ -749,7 +749,7 @@ pi 内置模型目录内的 provider（pi-ai 编译期目录快照；`getBuiltin
 **代码映射**: `extensions/shared/llm-shared/src/catalog-overlay.ts`（`getCatalogOverlayState`）；runtime 侧同名实现 `packages/runtime/src/services/provider-catalog-refresh.ts`（`getCatalogOverlayState`）。
 
 ### 模型可见性投喂
-目录投喂通道承载的写入单点约束命名：把 taiji 侧可见的目录数据常驻写入 pi 注册表，写入单点 = provider-live-sync 包（投喂模块 `catalog-bridge.ts`）——新增模型数据来源只改该模块输入，禁止在其他扩展新开 `registerProvider` / `registerNativeProvider` / `registerVirtualModel` 常驻注入；消费方（--model 解析 / rpc set_model / rename / smart-context 等）零改动自动受益。约束登记 [C-ext-32](constraints.json)；守则章节 extension-conventions「模型可见性投喂单点 [MANDATORY]」；机器执行点 = 调用点白名单检查 `check_register_allowlist.py`。与 [目录投喂](#目录投喂catalog-overlay) 的边界：彼词条描述机制与数据流（缓存文件载体、注入语义），本词条是该通道写入单点约束的登记名（constraints / 守则 / 机器检查引用的形态）；scheduler 的 ack 合成轮是执行通道覆写、非可见性投喂，不在禁列。
+目录投喂通道承载的写入单点约束命名：把 taiji 侧可见的目录数据常驻写入 pi 注册表，写入单点 = provider-live-sync 包（投喂模块 `catalog-bridge.ts`）——新增模型数据来源只改该模块输入，禁止在其他扩展新开 `registerProvider` / `registerNativeProvider` / `registerVirtualModel` 常驻注入；消费方（--model 解析 / rpc set_model / rename / smart-context 等）零改动自动受益。约束登记 [C-ext-32](constraints.json)；守则章节 extension-conventions「模型可见性投喂单点 [MANDATORY]」；机器执行点 = 调用点白名单检查 `check_register_allowlist.py`。与 [目录投喂](#目录投喂catalog-overlay) 的边界：彼词条描述机制与数据流（缓存文件形态、注入语义），本词条是该通道写入单点约束的登记名（constraints / 守则 / 机器检查引用的形态）；scheduler 的 ack 合成轮已随任务库分离退役，扩展侧现无第二个注册表注入通道。
 
 ## v3 UI 结构术语（2026-06 重构）
 

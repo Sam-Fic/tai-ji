@@ -33,8 +33,6 @@ export interface MachineCore<S extends string, E extends string, Ctx = undefined
   name: string
   definition: StateMachineDefinition<S, E, Ctx>
   stateSet: ReadonlySet<S>
-  eventSet: ReadonlySet<E>
-  rows: readonly NormalizedRow<S, E, Ctx>[]
   rowIndex: ReadonlyMap<string, readonly NormalizedRow<S, E, Ctx>[]>
   legalEvents: ReadonlyMap<S, readonly E[]>
 }
@@ -49,7 +47,6 @@ export function buildMachineCore<S extends string, E extends string, Ctx>(
   definition: StateMachineDefinition<S, E, Ctx>,
 ): MachineCore<S, E, Ctx> {
   const stateList = Object.keys(definition.states) as S[]
-  const eventList = Object.keys(definition.events) as E[]
   const rows: NormalizedRow<S, E, Ctx>[] = []
   for (const row of definition.transitions) {
     const froms = Array.isArray(row.from) ? row.from : [row.from]
@@ -79,8 +76,6 @@ export function buildMachineCore<S extends string, E extends string, Ctx>(
     name: definition.name,
     definition,
     stateSet: new Set(stateList),
-    eventSet: new Set(eventList),
-    rows,
     rowIndex,
     legalEvents,
   }

@@ -1,10 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
 	buildBeforeAgentStartMessage,
 	handleAutoClear,
 	handleCompletionSteer,
 	reconstructState,
+	registerTodoEventHandlers,
+	type RefreshDisplayFn,
 } from "../handlers";
 import type { Todo } from "../model";
 import { createTodoSessionState, type TodoSessionState } from "../state";
@@ -247,5 +249,90 @@ describe("agent_end short-circuit order", () => {
 		expect(s.todos).toEqual([]);
 		// pendingSteerMessage 仍保留，由下一 turn before_agent_start 消费（此时 todos 已空）
 		expect(s.pendingSteerMessage).toBe("<queued>");
+	});
+});
+
+// ── 事件注册体（pi.on 回调：before_agent_start / agent_end）────────────
+// handler 不再自带 try/catch（错误统一由 pi ExtensionRunner.emit 逐 handler
+// 兜底进诊断链），注册体本身的行为需要直接驱动：状态栏渲染 / 延迟 steer 优先 /
+// completion steer / auto-clear 刷新。
+
+type RegisteredHandler = (event: unknown, ctx: unknown) => Promise<unknown>;
+
+function registerHandlers(state: TodoSessionState): {
+	handlers: Map<string, RegisteredHandler>;
+	refreshDisplay: ReturnType<typeof vi.fn>;
+} {
+	const handlers = new Map<string, RegisteredHandler>();
+	const pi = {
+		on: (event: string, handler: RegisteredHandler) => handlers.set(event, handler),
+	} as unknown as Parameters<typeof registerTodoEventHandlers>[0];
+	const refreshDisplay = vi.fn();
+	registerTodoEventHandlers(pi, state, refreshDisplay as unknown as RefreshDisplayFn);
+	return { handlers, refreshDisplay };
+}
+
+/** before_agent_start / agent_end 的 ctx 只消费 ui.setStatus / ui.theme。 */
+function uiCtx(): { setStatus: ReturnType<typeof vi.fn>; ctx: unknown } {
+	const setStatus = vi.fn();
+	const theme = { fg: (_color: string, text: string) => text };
+	return { setStatus, ctx: { ui: { setStatus, theme }, sessionManager: {} } };
+}
+
+describe("注册体 before_agent_start", () => {
+	it("pending 任务：状态栏渲染 N/M + 返回隐藏上下文消息", async () => {
+		const s = makeState([{ id: 1, text: "a", status: "pending" }]);
+		const { handlers } = registerHandlers(s);
+		const { setStatus, ctx } = uiCtx();
+		const out = await handlers.get("before_agent_start")!({}, ctx);
+		expect(setStatus).toHaveBeenCalledWith("todo", expect.stringContaining("0/1"));
+		expect(out).toMatchObject({ message: { customType: "todo-context", display: false } });
+	});
+
+	it("延迟 steer 优先：消费后清空，不再走重建上下文", async () => {
+		const s = makeState([{ id: 1, text: "a", status: "completed" }], { pendingSteerMessage: "<queued>" });
+		const { handlers } = registerHandlers(s);
+		const { setStatus, ctx } = uiCtx();
+		const out = await handlers.get("before_agent_start")!({}, ctx);
+		expect(out).toMatchObject({ message: { content: "<queued>" } });
+		expect(s.pendingSteerMessage).toBeNull();
+		expect(setStatus).not.toHaveBeenCalled();
+	});
+
+	it("无 pending 任务：不做状态渲染，返回 undefined", async () => {
+		const s = makeState([]);
+		const { handlers } = registerHandlers(s);
+		const { setStatus, ctx } = uiCtx();
+		expect(await handlers.get("before_agent_start")!({}, ctx)).toBeUndefined();
+		expect(setStatus).not.toHaveBeenCalled();
+	});
+});
+
+describe("注册体 agent_end", () => {
+	it("空任务列表：直接返回，不 steer 不刷新", async () => {
+		const s = makeState([]);
+		const { handlers, refreshDisplay } = registerHandlers(s);
+		await handlers.get("agent_end")!({}, uiCtx().ctx);
+		expect(s.completionSteered).toBe(false);
+		expect(refreshDisplay).not.toHaveBeenCalled();
+	});
+
+	it("全完成：置 completion steer；延迟未到不清空、不刷新", async () => {
+		const s = makeState([{ id: 1, text: "a", status: "completed" }], { userMessageCount: 1 });
+		const { handlers, refreshDisplay } = registerHandlers(s);
+		await handlers.get("agent_end")!({}, uiCtx().ctx);
+		expect(s.completionSteered).toBe(true);
+		expect(s.pendingSteerMessage).toContain("交付质量");
+		expect(refreshDisplay).not.toHaveBeenCalled();
+	});
+
+	it("auto-clear 到达延迟：清空任务并刷新显示", async () => {
+		const s = makeState([{ id: 1, text: "a", status: "completed" }], {
+			userMessageCount: 2, allCompletedAtCount: 0, completionSteered: true,
+		});
+		const { handlers, refreshDisplay } = registerHandlers(s);
+		await handlers.get("agent_end")!({}, uiCtx().ctx);
+		expect(s.todos).toEqual([]);
+		expect(refreshDisplay).toHaveBeenCalledTimes(1);
 	});
 });

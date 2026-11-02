@@ -22,12 +22,12 @@ const WIDGET_NAME_MAX_WIDTH = 20
  * `readUiLocale()` 解析后传入，再经 `setSchedulerWidget` 双模推送）。
  * 格式：[定时任务] 3 条 · check-build 每 5 分钟（en: [scheduler] 3 scheduled · …）
  *
- * 静态范围契约（scheduler widget 推送修正设计 D1-a）：行内容只由任务集稳定字段 + locale
+ * 静态范围契约：行内容只由任务集稳定字段 + locale
  * 派生，**无任何 now 参与的元素**——相对时间与「[!] n 条已逾期」标记已整体移除（时间流逝
  * 不是状态变化，静态范围恒定是 index.ts 指纹跳推「无变化零推送」的前提）。
  * 「最近任务」= nextRunAt 升序首个**启用**任务、**不用 now 过滤**：若保留
  * `nextRunAt > now` 过滤，任务 dispatch 失败未推进 nextRunAt 时越过时间点后「最近任务」
- * 会切换——显示变化而指纹不变，重新引入冻结缺口（设计 D1-a 反例论证）。
+ * 会切换——显示变化而指纹不变，重新引入冻结缺口。
  *
  * 不接受 theme 参数：string[] 重载本身不提供 theme，着色交给 Pi 默认渲染。
  */
@@ -56,14 +56,14 @@ export function renderSchedulerWidgetTui(tasks: ScheduledTask[], locale: UiLocal
 }
 
 /**
- * GUI 臂结构化载荷（设计 §6.8 D8）：body = 逐任务 list-tree（行文本走 `renderTaskLineStatic`
+ * GUI 臂结构化载荷（scheduler-redesign 方案 B，2026-10-30 裁决）：body = 逐任务 list-tree（行文本走 `renderTaskLineStatic`
  * 静态变体单点），head 元数据由宿主壳层渲染——**标题由扩展自产**（`meta.title = t('tray.title')`），
  * 宿主零改动（三处渲染范围：前两面 trim / `TrayAggregatePanel` nullish，非空标题均正确）。
  *
- * icon 点名 lucide key 'clock'（与设计 §6.8 一致）；badge = 启用任务数；status 两态 =
- * 有启用任务 running / 空 idle（D1-a：「有逾期 → failed」翻牌已移除——逾期是 now 派生
- * 显示，且 lastStatus 不在指纹字段集内）。刷新节拍 = 状态变化驱动 + 保活底线帧
- * （scheduler widget 推送修正设计 D1/D2）。
+ * icon 点名 lucide key 'clock'；badge = 启用任务数；status 两态 =
+ * 有启用任务 running / 空 idle（「有逾期 → failed」翻牌已移除——逾期是 now 派生
+ * 显示，且 lastStatus 不在指纹字段集内）。刷新节拍 = 状态变化驱动（指纹跳推：任务集
+ * 不变即零推送，判定在 index.ts refreshWidget；保活底线帧已随 idle reaper 退役）。
  */
 export function buildSchedulerWidgetGui(tasks: ScheduledTask[], locale: UiLocale): GuiRenderResult {
   const enabledCount = tasks.filter(t => t.enabled).length
@@ -97,13 +97,13 @@ function widgetStatus(enabledCount: number): WidgetMeta['status'] {
 }
 
 /**
- * 任务集稳定指纹（scheduler widget 推送修正设计 D1-b）：index.ts 的 refreshWidget 推送前
+ * 任务集稳定指纹：index.ts 的 refreshWidget 推送前
  * 对比本指纹，不变则跳过 setWidgetDual（推送与任务集状态变化同频，时间流逝零推送）。
  * rpc/tui 两模式同效（指纹在 setWidgetDual 之前判定）。
  *
  * **维护不变量：指纹字段集 ⊇ widget 显示决定因素全集。** widget 两臂的显示内容必须完全是
- * 本序列化字段集（id/name/schedule/kind/enabled/nextRunAt/locale）的纯函数——D1 静态化
- * 保证（P6：dispatch 失败四路径不推进 nextRunAt，now 派生显示元素会造出「显示已变而指纹
+ * 本序列化字段集（id/name/schedule/kind/enabled/nextRunAt/locale）的纯函数——静态化
+ * 保证（dispatch 失败四路径不推进 nextRunAt，now 派生显示元素会造出「显示已变而指纹
  * 不变」的冻结缺口）。**未来给 widget 行新增任何显示字段时，必须同步加入本序列化字段集**，
  * 否则冻结缺口静默回归。
  *
@@ -145,7 +145,7 @@ export function buildSchedulerWidgetContent(
  * 推送 scheduler widget（结构化 meta + TUI 双模）。index.ts 经本入口接线（u-p2b），
  * 调用方传 `ctx as GuiContext`（pi 的 ExtensionContext.ui.custom 与 GuiContext
  * 静态不完全兼容，先例见 todo/src/index.ts makeRefreshDisplay）。
- * 跳推/保活判定在 index.ts 的 refreshWidget（实例态存 factory 闭包），本入口保持无条件推送。
+ * 跳推判定在 index.ts 的 refreshWidget（实例态存 factory 闭包），本入口保持无条件推送。
  */
 export function setSchedulerWidget(ctx: GuiContext, tasks: ScheduledTask[]): void {
   setWidgetDual(ctx, 'scheduler', buildSchedulerWidgetContent(tasks))

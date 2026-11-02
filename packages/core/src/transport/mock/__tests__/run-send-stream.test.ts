@@ -392,12 +392,13 @@ describe("mock-domains", () => {
       un()
     })
 
-    it('compact：compacting → compacted 生命周期', async () => {
+    it('compactBackground：受理即返回，不发生命周期帧（后台压缩不发 pi compaction 事件）', async () => {
       const frames: string[] = []
       const un = chat.streamSubscribe('s-compact', (m) => frames.push(m.type))
-      await chat.compact('s-compact')
-      await waitFor(() => frames.includes('session.compacted'))
-      expect(frames.indexOf('session.compacting')).toBeLessThan(frames.indexOf('session.compacted'))
+      await chat.compactBackground('s-compact')
+      // 受理 ack 已返回且无 compacting/compacted 生命周期帧（真实链路里后台压缩由 pi 事件
+      // 驱动的生命周期态不存在——smart-context 后台管理器落盘不发事件，UD6）
+      expect(frames.filter((t) => t.startsWith('session.compact'))).toHaveLength(0)
       un()
     })
 
@@ -1071,12 +1072,13 @@ describe("mock-settings-system-fields", () => {
   })
 
   describe('mock settings system 字段（智能上下文）：set 回显 + 写后读回 + 拷贝隔离', () => {
-    it('enabled / compactModel / thresholds / excludedModels', async () => {
+    it('enabled / compactModel / thresholds / excludedModels / autoCompactThresholdRatio', async () => {
       expect(await settings.setSmartContextEnabled(true)).toEqual({ enabled: true })
       expect(await settings.setSmartContextCompactModel('glm-flash')).toEqual({ model: 'glm-flash' })
 
       expect(await settings.setSmartContextThresholds([80, 92])).toEqual({ thresholds: [80, 92] })
       expect(await settings.setSmartContextExcludedModels(['a/b', 'c/d'])).toEqual({ models: ['a/b', 'c/d'] })
+      expect(await settings.setSmartContextAutoCompactThresholdRatio(0.85)).toEqual({ ratio: 0.85 })
 
       const cfg = await settings.getSmartContextConfig()
       expect(cfg).toEqual({
@@ -1084,6 +1086,7 @@ describe("mock-settings-system-fields", () => {
         compactModel: 'glm-flash',
         reminderThresholds: [80, 92],
         excludedModels: ['a/b', 'c/d'],
+        autoCompactThresholdRatio: 0.85,
       })
     })
 

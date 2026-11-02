@@ -4,6 +4,7 @@
     容器：header + 8 Section 纵向编排。业务逻辑在各 Section 内。
     （v6 demo 回填：版本检查区块已移至 UpdatePage 自动更新卡，本页不再渲染。）
     （rename-prompt-config：会话自动重命名区块已迁至独立 RenameSessionPage 菜单页。）
+    （smart-context-compaction：智能上下文压缩区块已迁至独立 SmartContextCompactionPage 菜单页。）
     [w2] 卡间距 = demo `.pg-set .gcard + .gcard` 16px：容器不设 gap，靠 GroupCard
     自带相邻 margin（var(--space-4)=16px）；页头间距由壳层共享 page-head mb-4 承担。
   -->
@@ -18,7 +19,6 @@
     <SystemAppearanceSection :system="system" @update="emit('update', $event)" />
     <SystemSoundSection :system="system" @update="emit('update', $event)" />
     <SystemShortcutSection :system="system" @update="emit('update', $event)" />
-    <SystemSmartContextSection />
     <SystemLlmRetrySection />
     <SystemRetryRulesSection />
     <SystemCodemodeSection />
@@ -31,7 +31,6 @@ import { useI18n } from 'vue-i18n'
 import SystemAppearanceSection from './SystemAppearanceSection.vue'
 import SystemSoundSection from './SystemSoundSection.vue'
 import SystemShortcutSection from './SystemShortcutSection.vue'
-import SystemSmartContextSection from './SystemSmartContextSection.vue'
 import SystemLlmRetrySection from './SystemLlmRetrySection.vue'
 import SystemRetryRulesSection from './SystemRetryRulesSection.vue'
 import SystemCodemodeSection from './SystemCodemodeSection.vue'

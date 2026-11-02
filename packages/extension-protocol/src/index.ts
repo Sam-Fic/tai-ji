@@ -72,25 +72,26 @@ export {
   isAskUserQuestion,
 } from './extensions/ask-user/helpers'
 
-// ── ./extensions/scheduler：scheduler 任务条目契约 + 折叠器 + 时间格式化（扩展与插件同源单实现；entry 实现在 extensions/universal/scheduler，写侧经 /schedule 扩展命令，本分组只承载纯契约与纯函数）──
+// ── ./extensions/scheduler：scheduler 任务契约 + 时间格式化（扩展与插件同源单实现；任务库
+// 快照文件契约 store.ts 含 node:fs，走 `./scheduler-store` 独立子出口，不进本桶出口——
+// 浏览器消费方结构性不触达 node 内建，先例 = background-task-entry。判形契约三符号
+// （schema 版本常量 / 文件形状类型 / 形状校验函数）已移入零 node 依赖的 types.js，
+// 经本桶出口供 @taiji/shared/execution 的 M0 scheduler 小域契约单源消费）──
 export type {
   ScheduleSpec,
   TaskKind,
   TaskStatus,
   ScheduledTask,
   ExecutionRecord,
-  TaskSnapshot,
-  SchedulerEntryOp,
+  SchedulerStoreFile,
 } from './extensions/scheduler/types'
 export {
-  TASK_ENTRY_TYPE,
   HISTORY_LIMIT,
   appendExecutionRecord,
-  snapshotToTask,
   SCHEDULER_MODAL_VIEW_ID,
+  SCHEDULER_STORE_SCHEMA_VERSION,
+  isSchedulerStoreFile,
 } from './extensions/scheduler/types'
-export type { SchedulerEntryLike, ReplayFoldOptions } from './extensions/scheduler/replay'
-export { replayFoldEntries } from './extensions/scheduler/replay'
 export {
   MS_PER_DAY,
   MS_PER_HOUR,
@@ -240,6 +241,16 @@ export {
   SUBAGENT_BG_NOTIFY_CUSTOM_TYPE,
   SUBAGENT_DIRECTIVE_CUSTOM_TYPE,
 } from './extensions/subagent-notify/custom-types'
+
+// ── ./extensions/smart-context：smart-context 通知通道词表（custom_message customType 单源：
+// 写侧 = @zhushanwen/pi-smart-context 通知与后台压缩落盘信号，读侧 = runtime event-interpreter
+// 落盘信号分诊；历史上扩展本地常量，runtime 分诊引入后收敛单源）──
+export {
+  SMART_CONTEXT_NOTICE_CUSTOM_TYPE,
+  COMPACTION_ENTRY_APPENDED_SOURCE,
+  parseCompactionPersistSignal,
+} from './extensions/smart-context/notify-types'
+export type { CompactionPersistSignal } from './extensions/smart-context/notify-types'
 
 // [pi1-disposition-chat-flow D7①] plugin-bridge 协议段（marker/types/guards + 桶导出）
 // 随 plugin-bridge 整体退役删除；select 通道原语（core/select-rpc.ts）为公共层保留。
@@ -410,3 +421,10 @@ export {
   isTerminalBackgroundTaskState,
   isBackgroundTaskRegistryEntry,
 } from './background-task'
+
+// ── background-idle-config 协议（base-tool-enhance 空闲转后台阈值 idleBackgroundSec 跨层契约；配置权威在 extension，runtime 静默判定矩阵 T 公式消费同一实现）──
+export {
+  DEFAULT_IDLE_BACKGROUND_SEC,
+  normalizeIdleBackgroundSec,
+} from './background-idle-config'
+export type { IdleBackgroundSecNormalization } from './background-idle-config'

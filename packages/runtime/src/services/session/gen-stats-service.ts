@@ -553,7 +553,9 @@ export class GenStatsService {
   }
 
   private async resolveModelKey(sid: string): Promise<string | null> {
-    // ① 实时 get_state（ getState 内部 FAST_TIMEOUT 10s；失败/超时/离线 → 降级链下一级）
+    // ① 实时 get_state（getState = sendCommand 直通：无墙钟超时、无内部超时常量——失败
+    //   仅来自 reject（进程死 exit 链 / stdin 写失败），离线 = client 未就绪 undefined；
+    //   降级序列 = 本方法 catch 与下方 ②③④，非 getState 内部机制）
     try {
       const state = await this.deps.pm.getClient(sid)?.getState()
       const model = (state as { model?: unknown } | undefined)?.model

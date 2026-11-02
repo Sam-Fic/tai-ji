@@ -4,7 +4,8 @@
  * 语义 SSOT = packages/shared/src/network-proxy.ts 的同名函数——extension bundle 自包含
  * 不 import shared 运行时代码（extensions 对 shared 的既有惯例：结构类型本地声明 + 行为
  * 真值表镜像锁定，见 rename-session RENAME_INSTRUCTION_MAX_LENGTH 先例），本文件是复制体；
- * 漂移时以 shared 为准，__tests__/match.test.ts 的真值表锁两侧行为一致。
+ * 漂移时以 shared 为准，__tests__/match.test.ts 锁本侧真值表，
+ * __tests__/network-proxy-shared-parity.test.ts 跨包对拍锁两侧一致。
  *
  * 匹配语义（设计 .tmp/tech-design/llm-network-proxy.md §3.1 配置 schema）：
  * suffix = 主机名等于或以 `.pattern` 结尾；点边界必须对齐——`xapi.anthropic.com` 不命中

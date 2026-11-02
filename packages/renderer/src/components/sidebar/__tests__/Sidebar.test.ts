@@ -7,9 +7,10 @@
  * - TC2: activeTab='ui.plugins' + 无焦点 session 态→ sidebar-plugin-no-session 占位 DOM
  * - TC3: activeTab='ui.sessions'（非 plugins）→ 不挂 PluginViewContainer（回归）
  *
- * mock 策略对齐 sidebar-ondeletefolder.test.ts 先例（Sidebar.vue 整体 mount 依赖
- * 10+ store/composable，shallowMount + store/composable mock；activeTab/focusedSessionId
- * 经 hoisted 容器注入可变 ref 控制两个用例分支）。
+ * mock 策略对齐 sidebar-mount-bundle.test.ts 先例（Sidebar.vue 整体 mount 依赖
+ * 10+ store/composable，shallowMount + store/composable mock——范式封装见
+ * __tests__/helpers/sidebar-mount.ts；activeTab/focusedSessionId 经 hoisted 容器
+ * 注入可变 ref 控制两个用例分支）。
  *
  * 运行：cd packages/renderer && npx vitest run src/components/sidebar/__tests__/Sidebar.test.ts
  */

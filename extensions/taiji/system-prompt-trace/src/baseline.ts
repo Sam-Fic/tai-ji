@@ -22,7 +22,7 @@ import type { PromptBaseline } from "./types.js";
  * pi 落盘形状：{"type":"custom","customType":"taiji:system-prompt","data":{...},...}
  * （pi 1.0.0 实装 session-manager.js:901 appendCustomEntry）。
  */
-function parseTraceEntryData(line: string): { hash: string; version: number; fullText: string } | null {
+function parseTraceEntryData(line: string): { hash: string; version: number } | null {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(line);
@@ -33,7 +33,7 @@ function parseTraceEntryData(line: string): { hash: string; version: number; ful
 	if (parsed["type"] !== "custom" || parsed["customType"] !== SYSTEM_PROMPT_CUSTOM_TYPE) return null;
 	const data = parsed["data"];
 	if (!isSystemPromptTraceEntryData(data)) return null;
-	return { hash: data.hash, version: data.version, fullText: data.fullText };
+	return { hash: data.hash, version: data.version };
 }
 
 /**
@@ -53,7 +53,7 @@ export function readLastPromptFromSessionFile(sessionFilePath: string): PromptBa
 		if (line === "") continue;
 		const parsed = parseTraceEntryData(line);
 		if (parsed !== null) {
-			return { hash: parsed.hash, version: parsed.version, fullText: parsed.fullText };
+			return { hash: parsed.hash, version: parsed.version };
 		}
 	}
 	return null;

@@ -5,7 +5,7 @@
 // [W3 改写] inproc 过渡桥并读用例随 inproc pi 引擎目录 删除消亡——镜像成为唯一数据源
 // （host/childSpawned 上报 + 终止意图置死位），等价性用例的「并读」语义不再存在。
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
 import {
   armIdleTimer,
@@ -50,6 +50,13 @@ function makeRecord(overrides: Partial<ExecutionRecord> = {}): ExecutionRecord {
 
 describe("lifecycle-predicates (v4 B-1)", () => {
   beforeEach(() => {
+    _resetLifecycleState();
+    _resetCoreSpawnedChildrenMirrorForTest();
+  });
+
+  afterEach(() => {
+    // 用例注册的镜像条目/armed timer 只靠下一用例 beforeEach 清——文件收尾后残留
+    // 会泄漏进 shared 池同 worker 的后续文件（isolate:false，globalThis 跨文件复用）。
     _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
   });

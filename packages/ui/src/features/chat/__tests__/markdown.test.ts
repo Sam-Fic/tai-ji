@@ -1459,7 +1459,6 @@ async function createIncrementalDeps() {
   }
   const deps = createMockChatDeps({
     renderMarkdownIncremental,
-    streamingFenceSilenceMs: m.STREAMING_FENCE_SILENCE_MS,
   })
   return { m, deps, results }
 }
@@ -1534,11 +1533,8 @@ describe('W23 ①: 增量更新只重渲染尾段（真实 renderIncremental）'
 
 describe('W23 ②: streaming-fence 占位（语言名 + loader 行，不跑 shiki/mermaid）', () => {
   it('未结束代码 fence：占位可见（lang=ts），零 shiki 高亮', async () => {
-    // 冻结静默时钟：silenceMs = performance.now() - lastContentAt 每帧重读（useMarkdownStreaming
-    // runIncrementalRender），满载下 mount→首帧的 macrotask 边界可越过 200ms 阈值 → 首帧直接
-    // finalize（占位转完整代码块）→ 占位断言假红。冻结后 silenceMs 恒 0、finalize 定时器不
-    // advance 不触发，占位可见成为确定性行为。flushRaf 用模块级捕获的真实 setTimeout，不受影响。
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    // finalize 只由 complete 触发（审计候选 3 契约化）：流式期占位可见是确定性行为，
+    // 无静默时钟参与
     const { deps } = await createIncrementalDeps()
     const wrapper = mountMd({ content: 'intro paragraph\n\n```ts\nconst a = 1', streaming: true }, deps)
     await flushRaf()
@@ -1555,8 +1551,6 @@ describe('W23 ②: streaming-fence 占位（语言名 + loader 行，不跑 shik
   })
 
   it('未结束 mermaid fence：占位可见（lang=mermaid），不加载 mermaid', async () => {
-    // 同上：冻结静默时钟，堵「满载首帧 silenceMs 越阈值 → 占位未现先 finalize」的假红窗口
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
     const { deps } = await createIncrementalDeps()
     const renderMermaid = vi.fn(deps.renderMermaid)
     const wrapper = mountMd(
@@ -1574,21 +1568,24 @@ describe('W23 ②: streaming-fence 占位（语言名 + loader 行，不跑 shik
   })
 })
 
-describe('W23 ③: 静默期 finalize 后完整渲染', () => {
-  it('token 静默 ≥200ms → 占位转完整代码块（fence 已到达内容呈现）', async () => {
-    // performance.now 一并冻结：flushRaf 后的占位存在断言与 ② 同暴露面（真实时钟下满载
-    // 首帧可提前 finalize）；advanceTimersByTimeAsync 命中的是 armFenceFinalizeTimer 挂的
-    // 静默定时器（remaining = 阈值 - 冻结差值 = 200ms），finalize 语义不变
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+describe('W23 ③: finalize 事件契约（流中停顿不 finalize，complete 后完整渲染）', () => {
+  it('流中长时间停顿 → 占位保持不 finalize；消息 complete（streaming 翻 false）→ 占位转完整代码块', async () => {
     const { deps } = await createIncrementalDeps()
     const wrapper = mountMd({ content: 'intro paragraph\n\n```ts\nconst a = 1', streaming: true }, deps)
     await flushRaf()
     expect(wrapper.find('[data-testid="md-streaming-fence"]').exists()).toBe(true)
+    expect(fakeCodeToHtml).not.toHaveBeenCalled()
 
-    await vi.advanceTimersByTimeAsync(250)
-    await new Promise((r) => realSetTimeout(r, 0))
-    await nextTick()
-    // 占位消失，未结束 fence 以完整代码块呈现（header 语言标签 + shiki pre + 源码可见）
+    // 流中停顿 250ms（真实时钟流逝，无静默定时器）→ 占位保持，不提前 finalize
+    await new Promise((r) => realSetTimeout(r, 250))
+    await flushRaf()
+    expect(wrapper.find('[data-testid="md-streaming-fence"]').exists()).toBe(true)
+    expect(fakeCodeToHtml).not.toHaveBeenCalled()
+
+    // 消息 complete → finalize：占位消失，未结束 fence 以完整代码块呈现
+    // （header 语言标签 + shiki pre + 源码可见）
+    await wrapper.setProps({ streaming: false } as never)
+    await flushRaf()
     expect(wrapper.find('[data-testid="md-streaming-fence"]').exists()).toBe(false)
     expect(wrapper.find('.md-codeblock').exists()).toBe(true)
     expect(wrapper.find('.md-codeblock__lang').text()).toContain('ts')

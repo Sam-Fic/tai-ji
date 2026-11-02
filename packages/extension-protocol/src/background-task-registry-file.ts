@@ -76,9 +76,12 @@ export function corruptPathFor(registryPath: string): string {
  * 读取 registry 全量条目 + 损坏标记（runtime 现形态为超集；extension 侧 Map 形态
  * 由各侧薄壳派生）。UI 读侧需要区分「真的空表」与「损坏被隔离的空表」。
  *
- * 文件不存在 / 读失败 → 空表 + corrupted:false（常态/降级，非损坏）；解析失败 →
- * 重命名 .corrupt 保留现场 + onLog warn + 空表 + corrupted:true（「空表重建」由
- * 后续写入自然完成，不立即写空文件）。
+ * 文件不存在 → 空表 + corrupted:false（合法空态）；读失败（权限等，文件存在但不可读）
+ * → onLog warn + 抛错（禁止折叠成空表——读改写按空表合并写回会以空表重建唯一登记
+ * 文件，静默丢失全部既有条目；降级决策归调用方：写侧锁壳 {success:false} 留待重试、
+ * 收殓器跳过本目录下轮重试、读侧工具上抛为显式失败）；解析失败 → 重命名 .corrupt
+ * 保留现场 + onLog warn + 空表 + corrupted:true（「空表重建」由后续写入自然完成，
+ * 不立即写空文件）。
  */
 export function readRegistry(registryPath: string, onLog?: RegistryFileLogFn): { entries: BackgroundTaskRegistryEntry[]; corrupted: boolean } {
   if (!existsSync(registryPath)) return { entries: [], corrupted: false }
@@ -86,9 +89,10 @@ export function readRegistry(registryPath: string, onLog?: RegistryFileLogFn): {
   try {
     raw = readFileSync(registryPath, 'utf8')
   } catch (err) {
-    // best-effort 降级：读失败（权限等）按空表继续——调用方不因 registry 问题崩溃
-    onLog?.('warn', 'registry read failed, treating as empty', { path: registryPath, err })
-    return { entries: [], corrupted: false }
+    // 读失败显式上抛：warn 先留排障痕迹，不返回可被读改写当合法空表的结果——
+    // 空表重建唯一登记文件 = 静默丢失全部登记
+    onLog?.('warn', 'registry read failed; propagating to caller (not treated as empty)', { path: registryPath, err })
+    throw err
   }
   const parsed = parseRegistryContent(raw)
   if (parsed === undefined) {

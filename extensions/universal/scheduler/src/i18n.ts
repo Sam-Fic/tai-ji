@@ -8,30 +8,29 @@ export type { UiLocale } from './format.js'
 export { readUiLocale }
 
 /**
- * L2 extension 侧词典 + locale 读取接线（设计 §6.6 D6 / §7.1）。
+ * L2 extension 侧词典 + locale 读取接线。
  *
- * 语言归属原则（D6）：跨边界只走数据——renderer 是语言权威，进程只读派生态。
+ * 语言归属原则：跨边界只走数据——renderer 是语言权威，进程只读派生态。
  * 读取器（readUiLocale + mtime+size 双键读缓存 + 降级）下沉在
  * `@zhushanwen/pi-llm-shared` 单一实现（@data-owner #39 注解随实现持有）；
  * 需求方（本包与 plan 的 i18n 层）经 import 消费，不再各自就地实现。
  *
- * 三个渲染入口按受众分工（设计 §6.9「双受众」）：
+ * 三个渲染入口按受众分工（双受众：L4 tool result 用英文 `message` / L2 呈现层走词典）：
  * - `t(key, params)`：单条词典模板
  * - `renderResult(messageKey, params, locale)`：toast / 命令反馈（12+ 条命令反馈）
  * - `renderTaskLine(taskParams, locale)`：**命令变体**任务行（状态●/○ + id + name + 摘要 +
  *   相对时间 + 执行状态摘要），调用点 = list 行 / toast 内部组合，`renderResult` 内部复用、
  *   不重实现
  * - `renderTaskLineStatic(taskParams, locale)`：**widget 静态变体**（状态●/○ + id + name +
- *   静态调度描述，无任何 now 派生段），仅供 widget GUI body——两变体拆分是 scheduler
- *   widget 推送修正设计 D1-a 的渲染单点裁决：命令层是按需呈现侧（保留相对时间），widget
- *   显示侧静态化是指纹跳推的前置
+ *   静态调度描述，无任何 now 派生段），仅供 widget GUI body——两变体拆分是渲染单点裁决：
+ *   命令层是按需呈现侧（保留相对时间），widget 显示侧静态化是指纹跳推的前置
  *
  * L4（模型可见的 tool result）**不**经本模块——`service.ts` 的 `message` 字段保留英文回退。
  */
 
 export const DEFAULT_UI_LOCALE: UiLocale = 'en-US'
 
-// ── messageKey ↔ params 判别联合（设计 §7.1：按 messageKey 分型的 locale-neutral 原始值）──
+// ── messageKey ↔ params 判别联合（按 messageKey 分型的 locale-neutral 原始值）──
 //
 // 命名避开 `errorCode` 族（刚被 ext-simplify-08 删除）：语义 = 本地化键（呈现层查词典），
 // **非**错误分类——成功/失败均可用同一字段。消费者 = commands/interaction 的 notify 路径
@@ -55,7 +54,7 @@ export interface ScheduleInvalidParams {
 /**
  * 单任务 locale-neutral 原始值（create toast / list 行 / widget 共用形状）。
  *
- * 判别联合：调度规格按 `mode` **显式**分支（设计 r4 M1「禁 nullable 推断」）——
+ * 判别联合：调度规格按 `mode` **显式**分支（禁 nullable 推断）——
  * 不得靠 `intervalMs === undefined` / `cron === undefined` 推断类型；`kind`
  * （once / recurring）与 `mode`（interval / cron）是正交维度，两者均保留。
  */
@@ -75,7 +74,7 @@ export type TaskParams = TaskScheduleParams & {
   /**
    * 执行状态摘要（可选；仅命令层 `task.list` 行尾消费，见 renderLastExecSummary）。
    * widget 静态变体**不消费**本字段：摘要不在 widget 指纹字段集内，进显示侧会造出
-   * 「显示已变、指纹未变」的冻结缺口（scheduler widget 推送修正设计 D1-a/不采用③）；
+   * 「显示已变、指纹未变」的冻结缺口；
    * 失败可见性补偿只进命令查询结果（按需呈现，零推送成本）。
    */
   lastExec?: { lastStatus: TaskStatus; recentFailures: number }
@@ -163,19 +162,7 @@ export const SERVICE_MESSAGE_KEYS: readonly ServiceMessageKey[] = [
   'form.protocolMismatch',
 ]
 
-// ── ack 文案键（u-ack-fallback 单点）──
-//
-// ack 文案**不经** ServiceMessage 通道（设计 §3.3 D7）：它不是服务结果——`ack.confirm` 是
-// 合成 assistant 行的正文，`ack.notPersisted*` 是同步/异步通知文案（一个键两阶段共用）。
-// 故不做 messageKey↔params 判别联合，只以键常量露出：ack-notify.ts 消费常量而非字面量，
-// 键名改动由编译期兜住（改词典键漏改消费侧曾是本仓高频漂移形态）。
-
-/** 合成确认行正文（合成 assistant 消息 body）。插值参数：`{name}`、`{schedule}`。 */
-export const ACK_CONFIRM_KEY = 'ack.confirm'
-/** 落盘失败如实文案（同步与异步共用同一键）。插值参数：`{name}`。 */
-export const ACK_NOT_PERSISTED_KEY = 'ack.notPersisted'
-
-// ── 词典（zh-CN / en-US，文案表见设计 §7.5）──
+// ── 词典（zh-CN / en-US）──
 
 type Dictionary = Record<string, string>
 
@@ -192,7 +179,7 @@ const ZH_CN: Dictionary = {
   'task.notDispatched': '任务 {id} 未派发（已停用 / 触发受限 / 正在派发中）',
   'task.limit': '任务数已达上限（{max}），请先删除一个',
   'schedule.invalid': '无法解析的时间表达式：{input}',
-  // 执行状态摘要（task.list 行尾；widget 静态范围不带——scheduler widget 推送修正设计 D1）
+  // 执行状态摘要（task.list 行尾；widget 静态范围不带——摘要属按需呈现，不进静态推送侧）
   // 失败可见性优先裁决：窗口内有失败即失败形态（n = 近期失败计数），否则成功形态
   'task.lastOk': '上次: 成功',
   'task.lastFailures': '上次: 失败×{n}',
@@ -209,12 +196,6 @@ const ZH_CN: Dictionary = {
   'no-interaction': '当前模式无交互表单：请带参数创建，或让 agent 创建',
   'form.channelUnavailable': '表单通道不可用（宿主版本过旧）：请改用对话让 agent 创建',
   'form.protocolMismatch': '表单协议版本不匹配：请升级宿主或改用 agent 路径',
-
-  // ack 确认轮（合成确认行 + 落盘失败如实文案）
-  // 措辞边界：只承诺「写入会话文件」（本机制的唯一保证），不得写「已持久化 / 已保存到磁盘」
-  // 之类存储级承诺——ack.notPersisted 是失败情形，confirm 是成功情形，两者都不越界。
-  'ack.confirm': '已保存任务：{name}（{schedule}）。',
-  'ack.notPersisted': '已创建任务 {name}，但未写入会话文件。在本会话说一句话即可保存。',
 
   // 托盘标题（扩展自产，宿主零改动）
   'tray.title': '定时任务',
@@ -256,11 +237,6 @@ const EN_US: Dictionary = {
   'form.channelUnavailable': 'Form channel unavailable (host too old) — ask the agent instead',
   'form.protocolMismatch': 'Form protocol mismatch — upgrade the host or use the agent path',
 
-  // ack 确认轮（合成确认行 + 落盘失败如实文案）——措辞边界同 zh 侧
-  'ack.confirm': 'Task saved: {name} ({schedule}).',
-  'ack.notPersisted':
-    'Created task {name}, but it was not written to the session file. Say anything in this session to save it.',
-
   // 托盘标题（扩展自产，宿主零改动）
   'tray.title': 'Scheduled tasks',
 
@@ -284,7 +260,7 @@ export function dictionaryKeys(locale: UiLocale): string[] {
 // ── 模板渲染 ──
 
 /**
- * 渲染词典模板。键缺失 → 回落 en 值 → 再回落键名本身（**禁返回空串**，设计 r4 S1）：
+ * 渲染词典模板。键缺失 → 回落 en 值 → 再回落键名本身（**禁返回空串**）：
  * 所有经 `t()` 赋值的字段因此天然非空——防「空标题在 nullish 渲染范围显示空白段头」
  * 从词典后门回潮（`meta.title` 依赖本保证）。占位符缺参时保留 `{name}` 原样（非空）。
  */
@@ -309,7 +285,7 @@ function interpolate(template: string, params?: Record<string, string | number>)
  * recentFailures = history 定长窗口（HISTORY_LIMIT=20）内失败计数；无任何执行记录
  * （history 空且 lastStatus 缺）→ undefined = 行尾不显示摘要段。
  * 失败记账为进程内存态（失败 dispatch 无 jsonl op），跨 resume/重启后计数归零、
- * lastStatus 回落 success——已披露边界，见 scheduler widget 推送修正设计 D1 代价四要素。
+ * lastStatus 回落 success——已披露边界（失败记账为进程内存态、不落盘的代价）。
  */
 function toLastExec(task: ScheduledTask): TaskParams['lastExec'] {
   const recentFailures = task.history.filter(h => h.status === 'failed').length
@@ -336,7 +312,7 @@ export function toTaskParams(task: ScheduledTask, now: number): TaskParams {
 }
 
 function toScheduleSpec(task: TaskParams): ScheduleSpec {
-  // 显式按 mode 分支（设计 r4 M1）：不靠 intervalMs/cron 空值推断
+  // 显式按 mode 分支：不靠 intervalMs/cron 空值推断
   return task.mode === 'interval'
     ? { mode: 'interval', intervalMs: task.intervalMs }
     : { mode: 'cron', cronExpression: task.cron }
@@ -363,7 +339,7 @@ function renderLastExecSummary(lastExec: TaskParams['lastExec'], locale: UiLocal
  * **代码**派生（r5 追补：不得把 ●/○ 做成词典固定字面量，否则停用任务本地化后会显示为
  * 启用）；摘要/相对时间走带 locale 的格式化器现算（params 只携带原始值）。
  * 相对时间**保留**：命令层是按需呈现侧（用户主动触发，无推送放大成本），schedule tool
- * 的「next run time」承诺依赖它（scheduler widget 推送修正设计 D1-a）。
+ * 的「next run time」承诺依赖它。
  */
 export function renderTaskLine(taskParams: TaskParams, locale: UiLocale): string {
   const state = taskParams.enabled ? '●' : '○'
@@ -379,7 +355,7 @@ export function renderTaskLine(taskParams: TaskParams, locale: UiLocale): string
  * **widget 静态变体**任务行（仅供 widget GUI body，`buildSchedulerWidgetItems` 单点消费）：
  * `{状态} {id} {name} · {静态调度描述}`——无任何 now 派生段（相对时间/逾期标记/执行摘要
  * 都不进 widget 行），显示侧 = f(稳定字段, locale)。这是 index.ts 任务集指纹跳推的完备性
- * 前提（D1-a）：now 派生元素会造出「显示已变而指纹不变」的冻结缺口（P6 反例基线）。
+ * 前提：now 派生元素会造出「显示已变而指纹不变」的冻结缺口。
  */
 export function renderTaskLineStatic(taskParams: TaskParams, locale: UiLocale): string {
   const state = taskParams.enabled ? '●' : '○'
@@ -395,9 +371,9 @@ function renderTaskCreated(params: TaskParams, locale: UiLocale): string {
 }
 
 function renderTaskList(params: TaskListParams, locale: UiLocale): string {
-  // list 在词典层单点拼装（设计 v6）：行格式化复用 renderTaskLine（命令变体），命令层不得逐行拼。
-  // 执行状态摘要由 renderTaskLine 行尾追加（D1 失败可见性补偿）——task.created toast 不加
-  // （e2e S18 断言锚定其全行文本，scheduler widget 推送修正设计宿主不变量）。
+  // list 在词典层单点拼装：行格式化复用 renderTaskLine（命令变体），命令层不得逐行拼。
+  // 执行状态摘要由 renderTaskLine 行尾追加（失败可见性补偿）——task.created toast 不加
+  // （e2e S18 断言锚定其全行文本，宿主不变量）。
   const header = t('task.list', { n: params.n }, locale)
   return [header, ...params.tasks.map(task => renderTaskLine(task, locale))].join('\n')
 }
@@ -449,7 +425,7 @@ export type LocalizableResult = { message: string } & (
 /**
  * 结果 → L2 文本（commands / interaction 呈现层的单入口）：有 `messageKey` 走
  * `renderResult` 词典渲染（含命令层自有串）；未分类失败（无 key，如 `service.ts` 的
- * `id is required` / `toErrorMessage` catch-all）回落英文 `message`（设计 §6.9 已声明）。
+ * `id is required` / `toErrorMessage` catch-all）回落英文 `message`（双受众既定语义）。
  * 两受众不串：L4 tool result 直接用 `message`，不经本函数。
  */
 export function renderResultText(result: LocalizableResult, locale: UiLocale): string {

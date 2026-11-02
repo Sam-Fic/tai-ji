@@ -718,3 +718,57 @@ describe("resolveModel — 覆盖值 canonical ref 裁决（不变量 3）", () 
     );
   });
 });
+
+// ============================================================
+// scoped-models 白名单（显式指定路径拦截；ctxModel 继承层不拦——2026-11-01 裁决）
+// ============================================================
+
+describe("resolveModel — scoped-models allowlist", () => {
+  const inList = makeModel({ id: "in-list", provider: "p1" });
+  const outList = makeModel({ id: "out-list", provider: "p2" });
+  const registry = makeRegistry([inList, outList]);
+
+  it("paramOverride 白名单外抛错（文案含 allowlist 指引）", () => {
+    expect(() =>
+      resolveModel(undefined, registry, { model: "p2/out-list" }, ctxModel, undefined, ["p1/in-list"]),
+    ).toThrow(/outside the scoped-models allowlist/);
+  });
+
+  it("paramOverride 白名单内放行（含带档位后缀形态）", () => {
+    const r = resolveModel(undefined, registry, { model: "p1/in-list:high" }, ctxModel, undefined, [
+      "p1/in-list",
+    ]);
+    expect(`${r.model.provider}/${r.model.id}`).toBe("p1/in-list");
+  });
+
+  it("agentConfig.model 白名单外抛错", () => {
+    const agentConfig: AgentConfig = { model: "p2/out-list" } as AgentConfig;
+    expect(() =>
+      resolveModel(agentConfig, registry, undefined, ctxModel, undefined, ["p1/in-list"]),
+    ).toThrow(/scoped-models/);
+  });
+
+  it("userOverride 白名单外抛错（第 0 层同样受限）", () => {
+    expect(() =>
+      resolveModel(undefined, registry, undefined, ctxModel, { model: "p2/out-list" }, ["p1/in-list"]),
+    ).toThrow(/scoped-models/);
+  });
+
+  it("ctxModel 继承层不拦（白名单外的主 agent 模型照常透传）", () => {
+    const outOfScope = makeModel({ id: "inherit-me", provider: "p2" });
+    const r = resolveModel(undefined, makeRegistry([outOfScope]), undefined, outOfScope, undefined, [
+      "p1/in-list",
+    ]);
+    expect(`${r.model.provider}/${r.model.id}`).toBe("p2/inherit-me");
+  });
+
+  it("空数组 = 未启用 = 全量放行", () => {
+    const r = resolveModel(undefined, registry, { model: "p2/out-list" }, ctxModel, undefined, []);
+    expect(`${r.model.provider}/${r.model.id}`).toBe("p2/out-list");
+  });
+
+  it("缺省（不传 allowList）行为不变（直调纯函数的旧调用方零影响）", () => {
+    const r = resolveModel(undefined, registry, { model: "p2/out-list" }, ctxModel);
+    expect(`${r.model.provider}/${r.model.id}`).toBe("p2/out-list");
+  });
+});

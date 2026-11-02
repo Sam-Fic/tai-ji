@@ -11,8 +11,8 @@ Coding-agent session 的 canonical 模型与纯 JSONL 原语基座。**零运行
 | 导出 | 说明 |
 |------|------|
 | `Entry` / `ParseResult` / `SessionHeader` / `NormalizedSession` | canonical 模型（D1）：严格 Entry 树，坏行丢弃不占位 |
-| `parseSessionContent(content)` | JSONL 文本 → `ParseResult`（坏行计 `skippedLines`，末行半行记 `lastLinePartial`） |
-| `parseSessionFile(path)` | `parseSessionContent` 的 async 文件版（ENOENT 等按 fs 原生错误抛出） |
+| `parseSessionContent(content)` | JSONL 文本 → `ParseResult`（坏行计 `skippedLines`；message 存在但 role 不在词表时整文件抛 `UnknownMessageRoleError`——fail-fast，不静默丢内容） |
+| `parseSessionFile(path)` | `parseSessionContent` 的 async 文件版（ENOENT 等按 fs 原生错误抛出；非法 role 同样抛 `UnknownMessageRoleError`） |
 | `serializeSession(entries)` | `Entry[]` → JSONL，与 pi 产物逐字节兼容（`JSON.stringify(entry) + '\n'`） |
 | `readFirstJsonlLine(path)` / `readFirstJsonlLineSync(path)` | 首行字节原语（async/sync 双形态）：只读首行、处理 CRLF/LF、跨块多字节安全；空文件/纯空白 → `undefined`；IO 错误上抛由消费方分流 |
 | `sessionIdFromFileName(fileName)` | 文件名不变量：剥 `.jsonl` 后最后一个 `_` 之后的尾段；提取不出 → `undefined` |

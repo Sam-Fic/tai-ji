@@ -45,7 +45,9 @@ import {
  *
  * [同源锚定] packages/subagent-core 的 agent-opts-resolver.ts（src/orchestration/）
  * 持有本函数的本地副本（两包独立 npm 不能直接 import，optional peer 不保证存在），
- * 其 ASP 文案按本判定同源条件化——改动本函数判定逻辑必须同步该副本。
+ * 其 ASP 文案按本判定同源条件化——改动本函数判定逻辑必须同步该副本；两侧一致由
+ * __tests__/object-root-schema-parity.test.ts 跨包对拍锁定（行为级：本侧判定 ↔
+ * 对端 formatSchemaInstruction 契约文案选行），副本漂移即红。
  */
 export function isObjectRootSchema(schema: unknown): schema is Record<string, unknown> {
 	if (!isRecord(schema)) return false;

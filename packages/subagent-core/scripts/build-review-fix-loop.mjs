@@ -23,7 +23,7 @@
 // 用法：node scripts/build-review-fix-loop.mjs [--check]
 //   默认构建产物并同步 saved；--check 校验产物与重生成结果一致（防改源忘构建/忘同步）
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
@@ -229,10 +229,17 @@ export function runBuildOrCheck({ check }) {
   const targets = [
     [join(WF, `${NAME}.dwf.ts`), zcOut],
     [join(WF, `${NAME}.js`), piOut],
-    // zcode saved 副本与仓内产物同内容（CreateWorkflow 的 saved 发现目录；滞后时实际
-    // 执行的是旧版，故 build 一并同步、--check 一并拦截——zsw-skills 同款教训）
-    [join(SAVED_DIR, `${NAME}.dwf.ts`), zcOut],
   ];
+  // zcode saved 副本与仓内产物同内容（CreateWorkflow 的 saved 发现目录；滞后时实际
+  // 执行的是旧版，故 build 一并同步、--check 一并拦截——zsw-skills 同款教训）。
+  // saved 副本是每台机器的发现目录而非仓库产物：不存在（CI 全新 runner）时跳过比对，
+  // 仅对账仓内产物——存在即拦滞后（rfl-parity「不在本机即 SKIP」同语义）。
+  const savedPath = join(SAVED_DIR, `${NAME}.dwf.ts`);
+  if (existsSync(savedPath)) {
+    targets.push([savedPath, zcOut]);
+  } else if (check) {
+    console.log(`- ~/.zcode/workflows/${NAME}.dwf.ts 不在本机（CI/未装 zcode）——saved 副本对账跳过`);
+  }
   for (const [path, content] of targets) {
     const rel = path.startsWith(PKG_ROOT) ? path.slice(PKG_ROOT.length + 1) : path.replace(homedir(), "~");
     const existing = (() => { try { return readFileSync(path, "utf8"); } catch { return null; } })();

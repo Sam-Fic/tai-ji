@@ -24,7 +24,7 @@
  * 生命周期对账（D5 ③：镜像挂 session 生命周期，消灭 stale-high 永久残留）：
  * - 条目建立的完整事件集 = 初始上报到达 ∪ 五形态 spawn 预置 0（新 session / respawn / reattach /
  *   lazy restore / fork）——收敛为 registerSession 单挂点调用 presetZero（u4/u5 接线，
- *   见 session-service.ts「一挂点覆盖全部附着形态」）。
+ *   论证段见 crash-forensics-hooks.ts「一挂点覆盖全部附着形态」）。
  * - 预置/对账重置同时清 `hasEverReported`：重置后的 pi 进程 = 新 reporting epoch，旧 epoch 的
  *   「曾上报」不可继承——继承会让 respawn 后的通道结构性故障形态永久绕过 errs 判别（漏推迟、
  *   在途被杀，D5 ⑤ 偏低方向）；清空方向 errs-safe（最坏进 errs 推迟，30min 有界）。

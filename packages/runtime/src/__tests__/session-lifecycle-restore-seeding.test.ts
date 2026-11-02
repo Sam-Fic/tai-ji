@@ -19,7 +19,7 @@
  *
  * 运行：cd packages/runtime && pnpm vitest run src/__tests__/session-lifecycle-restore-seeding.test.ts
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest'
 import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -125,6 +125,14 @@ describe('U2 restoreSession 播种（D2 设计）', () => {
   let assertPiSessionFileMock: ReturnType<typeof vi.fn>
   let normalizeSessionFileInPlaceMock: ReturnType<typeof vi.fn>
   let tmpDir: string
+
+  // transform 预热：session-lifecycle 模块图在 worker 内首载 = vite transform 冷编译
+  // ~4s（单跑 verbose 实测首个接线用例 4326ms、后续用例 ~39ms），gate 全量满载下放大
+  // 即顶满用例超时窗与 2s 慢用例门禁。beforeAll 预热付一次冷编译（hookTimeout 显式
+  // 30s 留满载余量），beforeEach 的 resetModules 后 import 命中 transform 缓存。
+  beforeAll(async () => {
+    await import('../services/session/session-lifecycle.js')
+  }, 30_000)
 
   beforeEach(async () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'u2-seeding-'))

@@ -44,7 +44,7 @@ import {
 // 导入领域对外单一 import 点的既有惯例（handler/server 消费方与测试不改路径）。
 export { ImportServiceError } from './import-source.js'
 export type { ImportArtifact, ImportSourceDeps, SessionImportSource } from './import-source.js'
-import { ImportServiceError, type SessionImportSource } from './import-source.js'
+import { ImportServiceError, type ImportArtifact, type SessionImportSource } from './import-source.js'
 
 /** projectId 存在性校验的最小依赖范围（结构化接口：组合根传 ProjectStore，测试可注入 stub）。 */
 export interface ImportProjectSource {
@@ -59,6 +59,14 @@ export interface ImportServiceDeps {
    * 版本不匹配（类型封闭联合 + 组合根全注册下不可达，仅 WS JSON 注入未知字面量可达）。
    */
   sources: ReadonlyMap<ImportSourceKind, SessionImportSource>
+  /**
+   * [U1 检查点·同 id 复活布防] 导入落地通知（组合根接线 = SessionRecords
+   * invalidateProjectionAfterImport）：外部删除后同 id 再导入 = 主文件整文件替换，
+   * 落地时按会话 id 失效对应派生缓存与游标——持旧游标的 size/游标核对会把新文件
+   * 误判为增量、从旧游标续读漏掉新文件头部（AX1 真值违约且不自愈）。缺省 undefined
+   * = 不失效（测试窄 mock 可省；失效是布防性动作，异常 warn 不阻断导入主链）。
+   */
+  onSessionLanded?: (sessionId: string) => void
 }
 
 /** 编排层写入的临时名标记（与 session-file-utils 的 TMP_RESIDUE_MARKERS 同族，r2-S1）。 */
@@ -139,6 +147,62 @@ export class ImportService {
     return enqueueImport(() => this.doImport(request))
   }
 
+  /**
+   * 原子落地（D1/r2）：mkdir(recursive) + artifact.write(tmp) + rename。失败主动清理
+   * 临时名，正式名从未落地 → 重试不被去重拦截。
+   *
+   * 相位分离（§3.6）：write 闭包内的领域错误（zcode 源转换相位抛的
+   * import_source_missing / import_invalid_session）原样透传——错误码承载恢复
+   * 动作路由（刷新重选/升级太极），重包装 import_copy_failed 会把指引降格成
+   * 「写入目标目录出错」；仅环境故障（磁盘满/权限等非领域错误）才映射
+   * import_copy_failed。tmp 清理对两条路径同样生效。
+   */
+  private async commitImportArtifact(targetPath: string, artifact: ImportArtifact): Promise<void> {
+    const tmpPath = `${targetPath}${TMP_IMPORT_MARKER}${Date.now()}.jsonl`
+    try {
+      await mkdir(dirname(targetPath), { recursive: true })
+      await artifact.write(tmpPath)
+      await rename(tmpPath, targetPath)
+    } catch (e) {
+      try {
+        await unlink(tmpPath)
+      // eslint-disable-next-line taste/no-silent-catch -- tmp cleanup: best-effort，正确性由「正式名未落地」保证而非本删除
+      } catch {
+        // tmp 未创建/已被清理：忽略
+      }
+      if (e instanceof ImportServiceError) throw e
+      throw new ImportServiceError('import_copy_failed', `导入失败（写入目标目录出错）：${toErrorMessage(e)}`)
+    }
+  }
+
+  /**
+   * warning 聚合（r4-INFO 单字段 + D4 结构化降级）：优先序 sidecar_failed >
+   * conversion_unclassified > conversion_degraded——sidecar 失败需用户手动归类
+   * （动作不可延迟）优先显形；unclassified（L4 未知消息，需上报/重导）优先于
+   * degraded（知情提示，无需动作）。代价 = 同轮并存时被遮蔽码的计数不进 toast、
+   * 仅日志可见（设计 §7.4 已接受，恢复动作 = 查当日 runtime 日志或删除后重导）。
+   * degradations 明细无论如何结构化日志留痕（全量明细不入 wire，D6）。
+   */
+  private resolveImportWarning(
+    sourceKind: string,
+    sidecarVerified: boolean,
+    degradations: readonly ImportDegradation[],
+  ): Partial<ImportReply> {
+    if (degradations.length > 0) {
+      console.warn(`[runtime] session.import conversion degraded (source=${sourceKind}):`, degradations)
+    }
+    if (!sidecarVerified) {
+      return { warning: 'sidecar_failed' }
+    }
+    if (degradations.some((d) => d.code === 'unclassified')) {
+      return { warning: 'conversion_unclassified', degradationSummary: buildDegradationSummary(degradations) }
+    }
+    if (degradations.length > 0) {
+      return { warning: 'conversion_degraded', degradationSummary: buildDegradationSummary(degradations) }
+    }
+    return {}
+  }
+
   private async doImport(request: ImportRequest): Promise<ImportReply> {
     const { projectId } = request
     const source = this.resolveSource(request.source ?? DEFAULT_SOURCE)
@@ -162,27 +226,8 @@ export class ImportService {
       throw new ImportServiceError('import_project_invalid', projectId ? `目标项目不存在：${projectId}` : '目标项目不存在（空 projectId）')
     }
 
-    // 4. mkdir(recursive) + artifact.write(tmp) + rename 原子落地（D1/r2：失败主动清理临时名，正式名从未落地 → 重试不被去重拦截）
-    const tmpPath = `${targetPath}${TMP_IMPORT_MARKER}${Date.now()}.jsonl`
-    try {
-      await mkdir(dirname(targetPath), { recursive: true })
-      await artifact.write(tmpPath)
-      await rename(tmpPath, targetPath)
-    } catch (e) {
-      try {
-        await unlink(tmpPath)
-      // eslint-disable-next-line taste/no-silent-catch -- tmp cleanup: best-effort，正确性由「正式名未落地」保证而非本删除
-      } catch {
-        // tmp 未创建/已被清理：忽略
-      }
-      // 相位分离（§3.6）：write 闭包内的领域错误（zcode 源转换相位抛的
-      // import_source_missing / import_invalid_session）原样透传——错误码承载恢复
-      // 动作路由（刷新重选/升级太极），重包装 import_copy_failed 会把指引降格成
-      // 「写入目标目录出错」；仅环境故障（磁盘满/权限等非领域错误）才映射
-      // import_copy_failed。tmp 清理对两条路径同样生效。
-      if (e instanceof ImportServiceError) throw e
-      throw new ImportServiceError('import_copy_failed', `导入失败（写入目标目录出错）：${toErrorMessage(e)}`)
-    }
+    // 4. mkdir(recursive) + artifact.write(tmp) + rename 原子落地（见 commitImportArtifact）
+    await this.commitImportArtifact(targetPath, artifact)
 
     // 5. project sidecar + readback（r2-S2）：persistBindingSidecar 吞错 best-effort，
     //    不校验会假成功 + 静默误归组默认项目。不符 → warning 降级，文件已落地不回滚。
@@ -196,31 +241,30 @@ export class ImportService {
     //    不搬入编排层——无消费者依赖其效果（保守动作），且会把外部根的概念（sourcePath
     //    所在目录）泄漏进源无关编排层；pi 源自身列表路径按 TTL 读，不依赖该次重扫。
     invalidateScanDirCache()
+    // [U1 检查点·同 id 复活布防定档] 落地即按会话 id 失效派生缓存与游标（与注册边界
+    // 布防同族；不取内容级次级信号——那会推翻 D2 size/游标级核对粒度裁决）。同 id
+    // 复活窗口内派生缓存在册时持旧游标续读会漏读新文件头部；失效后下轮查询全量重建。
+    // best-effort：失效是布防性动作，异常 warn 不阻断导入 reply（sidecar persist 同款）。
+    if (this.deps.onSessionLanded) {
+      try {
+        this.deps.onSessionLanded(artifact.header.id)
+      } catch (e) {
+        // 降级策略（best-effort）：失效是布防性动作，失败不阻断导入 reply（文件已落地
+        // 不回滚）——旧投影的续读核对由 size<游标截断分支与注册边界布防兜底收敛。
+        console.warn(`[runtime] session.import derived-cache invalidation failed (sessionId=${artifact.header.id}):`, e)
+      }
+    }
 
     // 7. B5 摘碑（双路径②，R4）：import 同 id 复活 session——覆盖「import 后未打开窗口」
     //    的迟到写丢弃风险（路径①的 notifySessionCreated 只在用户点开时触发，此窗口内
     //    插件对新 session 的合法 set 会被 tombstone 误杀）。导入失败路径不至此，碑保留。
     clearSessionDataTombstone(artifact.header.id)
 
-    // 8. warning 聚合（r4-INFO 单字段 + D4 结构化降级）：优先序 sidecar_failed >
-    //    conversion_unclassified > conversion_degraded——sidecar 失败需用户手动归类
-    //    （动作不可延迟）优先显形；unclassified（L4 未知消息，需上报/重导）优先于
-    //    degraded（知情提示，无需动作）。代价 = 同轮并存时被遮蔽码的计数不进 toast、
-    //    仅日志可见（设计 §7.4 已接受，恢复动作 = 查当日 runtime 日志或删除后重导）。
-    //    degradations 明细无论如何结构化日志留痕（全量明细不入 wire，D6）。
-    const degradations = artifact.degradations
-    if (degradations.length > 0) {
-      console.warn(`[runtime] session.import conversion degraded (source=${source.kind}):`, degradations)
-    }
-    const reply: ImportReply = { sessionId: artifact.header.id, targetPath }
-    if (!sidecarVerified) {
-      reply.warning = 'sidecar_failed'
-    } else if (degradations.some((d) => d.code === 'unclassified')) {
-      reply.warning = 'conversion_unclassified'
-      reply.degradationSummary = buildDegradationSummary(degradations)
-    } else if (degradations.length > 0) {
-      reply.warning = 'conversion_degraded'
-      reply.degradationSummary = buildDegradationSummary(degradations)
+    // 8. warning 聚合（优先序与代价见 resolveImportWarning）
+    const reply: ImportReply = {
+      sessionId: artifact.header.id,
+      targetPath,
+      ...this.resolveImportWarning(source.kind, sidecarVerified, artifact.degradations),
     }
     return reply
   }

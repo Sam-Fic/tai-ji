@@ -180,14 +180,14 @@ describe('SchedulerRuntime', () => {
     })
   })
 
-  // ── R3-S1：dispatchTask in-flight 检查 ──
+  // ── dispatchTask in-flight 检查 ──
   // tick 为 fire-and-forget：tick1 的 await sendMessage 挂起超过 TICK_INTERVAL_MS（如 pi
   // 卡死）时，tick2 的 step2 再标 pending → step3 对同一 task 并发第二个 dispatch → 同一
   // prompt 双注入。检查：同任务在途（Set<taskId>）
   // 时 skip 本轮并 warn；不同任务不受影响。
   // 末两条为调用方 API 层验收：不经 tick，直接并发/串行调 dispatchTask，
   // 验证检查在调用方入口同样拦截（warn + 第二次 false）与完成后放行。
-  describe('dispatchTask in-flight 检查（R3-S1）', () => {
+  describe('dispatchTask in-flight 检查', () => {
     beforeEach(() => {
       vi.useFakeTimers()
       vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
@@ -418,28 +418,28 @@ describe('SchedulerRuntime', () => {
       expect(updated!.lastError).toBe('cron expression invalid')
     })
 
-    // ── TC-W-APPEND-FAIL：appendEntry 失败捕获（ER-APPEND-FAIL）──
-    it('TC-W-APPEND-FAIL: appendEntry 失败不抛、保留内存态、不污染 lastError', async () => {
+    // ── TC-W-PERSIST-FAIL：快照落盘失败捕获（原 ER-APPEND-FAIL 语义延续）──
+    it('TC-W-PERSIST-FAIL: persistTasks 失败不抛、保留内存态、不污染 lastError', async () => {
       loggerMock.warn.mockClear()
-      backend.appendError = new Error('pi internal')
+      backend.persistError = new Error('disk full')
 
-      // addTask 内 appendEntry 抛错 → 被捕获（console.warn），不 rethrow；内存态已更新（task 仍在）
+      // addTask 内 persistTasks 抛错 → 被捕获（logger.warn），不 rethrow；内存态已更新（task 仍在）
       const task = await runtime.addTask('test', { mode: 'interval', intervalMs: 60000 })
       expect(runtime.getTask(task.id)).toBeDefined()
       expect(task.enabled).toBe(true)
-      // appendEntrySafe 不污染业务态（append 失败是 transient，不设 lastError）
+      // persistTasksSafe 不污染业务态（落盘失败是 transient，不设 lastError）
       expect(task.lastError).toBeUndefined()
       expect(loggerMock.warn).toHaveBeenCalled()
 
-      // tickScheduler 同样不抛：dispatch 成功后 append advance 抛错被捕获，nextRunAt 已推进（内存态正确）
+      // tickScheduler 同样不抛：dispatch 成功后快照落盘抛错被捕获，nextRunAt 已推进（内存态正确）
       task.nextRunAt = Date.now() - 1000
       await expect(runtime.tickScheduler()).resolves.toBeUndefined()
       const updated = runtime.getTask(task.id)!
       expect(updated.enabled).toBe(true)
       expect(updated.runCount).toBe(1)
-      // nextRunAt 已推进到未来（内存态正确，append 失败只丢持久化）
+      // nextRunAt 已推进到未来（内存态正确，落盘失败只丢持久化）
       expect(updated.nextRunAt).toBe(Date.now() + 60000)
-      expect(updated.lastError).toBeUndefined() // 不被 append 失败污染
+      expect(updated.lastError).toBeUndefined() // 不被落盘失败污染
     })
 
     // ── TC-W-ON-AFTER-TICK：onAfterTick 回调（W2）──
@@ -505,15 +505,14 @@ describe('SchedulerRuntime', () => {
       expect(controllableBackend.sentMessages).toHaveLength(2)
     })
 
-    // ── P1：toggle enable 重算的 nextRunAt 跨 session 重放后保持未来值 ──
-    // 场景：addTask → nextRunAt 过期 → disable → enable 重算到未来（内存）→
-    //   新建第二个 SchedulerRuntime + backend.loadTasks() 重放 appendedOps（模拟 resume）→
-    //   重放后 nextRunAt = 重算的未来值（非 upsert 快照旧过期值）+ enabled=true + tick 不立即 dispatch。
-    // 修复前：toggle op 不带 nextRunAt，重放回退到 upsert 快照旧过期值 → 首个 tick 立即 dispatch（跨 session 数据丢失）。
-    it('P1: toggle enable 重算的 nextRunAt 跨 session 重放后保持未来值，不回退到旧过期值', async () => {
+    // ── P1：toggle enable 重算的 nextRunAt 跨 session 恢复后保持未来值 ──
+    // 场景：addTask → nextRunAt 过期 → disable → enable 重算到未来（内存 + 快照落盘）→
+    //   新建第二个 SchedulerRuntime，以最后落盘的快照任务集恢复（模拟 resume 直读任务库）→
+    //   恢复后 nextRunAt = 重算的未来值 + enabled=true + tick 不立即 dispatch。
+    it('P1: toggle enable 重算的 nextRunAt 跨 session 恢复后保持未来值，不回退到旧过期值', async () => {
       vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
       const task = await runtime.addTask('cross-session', { mode: 'interval', intervalMs: 60000 })
-      const oldNextRunAt = task.nextRunAt // T0+60s（upsert 快照值）
+      const oldNextRunAt = task.nextRunAt // T0+60s（创建时快照值）
 
       // T0+120s：nextRunAt(T0+60s) 已过期
       vi.setSystemTime(new Date('2026-01-01T00:02:00Z'))
@@ -526,29 +525,22 @@ describe('SchedulerRuntime', () => {
       expect(recalcedNext).toBeGreaterThan(Date.now()) // 内存态已重算到未来
       expect(recalcedNext).not.toBe(oldNextRunAt) // 确实重算，非旧值
 
-      // 模拟 resume：把第一个 runtime 的 appendedOps 包装成 entries，喂给第二个 backend 重放。
-      // appendedOps = [upsert(T0+60s), toggle(enabled=false), toggle(enabled=true, nextRunAt=T0+180s)]
-      const replayBackend = new MockSchedulerBackend()
-      replayBackend.fakeEntries = backend.appendedOps.map(op => ({
-        type: 'custom',
-        customType: 'pi-scheduler:task',
-        data: op,
-      }))
-      // fakeSessionFile 默认 '/test/session.json'，与第一个 backend 一致 → owner 过滤放行
-      const replayRuntime = new SchedulerRuntime(replayBackend)
-      replayRuntime.loadTasks(replayBackend.loadTasks())
+      // 模拟 resume：新 runtime 以最后落盘的快照任务集恢复（生产 = session_start 直读任务库文件）
+      const resumeBackend = new MockSchedulerBackend()
+      const resumeRuntime = new SchedulerRuntime(resumeBackend)
+      resumeRuntime.loadTasks(backend.persistedTasks ?? [])
 
-      const replayed = replayRuntime.getTask(task.id)
-      expect(replayed).toBeDefined()
-      expect(replayed!.enabled).toBe(true)
-      // 重放后是重算的未来值（修复核心），非 upsert 快照的旧过期值
-      expect(replayed!.nextRunAt).toBe(recalcedNext)
-      expect(replayed!.nextRunAt).not.toBe(oldNextRunAt)
+      const resumed = resumeRuntime.getTask(task.id)
+      expect(resumed).toBeDefined()
+      expect(resumed!.enabled).toBe(true)
+      // 恢复后是重算的未来值（修复核心），非创建时的旧过期值
+      expect(resumed!.nextRunAt).toBe(recalcedNext)
+      expect(resumed!.nextRunAt).not.toBe(oldNextRunAt)
 
       // 再 tick 一次（now=T0+120s < 重算 nextRunAt T0+180s）：不应 dispatch。
       // 修复前此断言会失败：nextRunAt 回退到 oldNextRunAt(T0+60s) < now → 首个 tick 立即触发
-      await replayRuntime.tickScheduler()
-      expect(replayBackend.sentMessages).toHaveLength(0)
+      await resumeRuntime.tickScheduler()
+      expect(resumeBackend.sentMessages).toHaveLength(0)
     })
   })
 
@@ -595,12 +587,12 @@ describe('SchedulerRuntime', () => {
     })
   })
 
-  // ── F2：tick 错误分诊（crash-fix）──
+  // ── tick 错误分诊 ──
   // startScheduler 的 interval 回调对 fire-and-forget 的 tickScheduler() 加 catch：
   // stale 类错误（session 替换后泄漏 timer 访问 stale ctx）→ warn "tick stopped" + stopScheduler
   // 自停；其他错误 → warn "tick error" 继续调度。修复前 tick 内异常无人接住 →
   // unhandledRejection → pi 主进程 exit 1。
-  describe('tick 错误分诊（F2）', () => {
+  describe('tick 错误分诊', () => {
 
     beforeEach(() => {
       vi.useFakeTimers()
@@ -665,15 +657,15 @@ describe('SchedulerRuntime', () => {
     })
   })
 
-  // ── G1：代际检测分诊（S9 review 修复 / R3-M1 模块级化）──
+  // ── 代际检测分诊 ──
   // isCtxStale（index.ts 注入的模块级代数比对）为主判，替代对 pi 错误文案的依赖：
-  // - G1-a：in-flight tick 内代际翻转 + 任意非文案错误 → catch 分诊走 stale 自停（不依赖文案）
-  // - G1-b：代际翻转后（无任何错误）泄漏 timer 在下个 tick 前置检查自停，不进入 tick
-  // - G1-c：显式注入 isCtxStale=false + 非 stale 错误 → 仍 "tick error" 继续调度（不误伤）
-  // - G1-d：isCtxStale=false 但错误文案含 stale 片段 → 文案兜底仍自停（覆盖 reload 盲区：
+  // - in-flight tick 内代际翻转 + 任意非文案错误 → catch 分诊走 stale 自停（不依赖文案）
+  // - 代际翻转后（无任何错误）泄漏 timer 在下个 tick 前置检查自停，不进入 tick
+  // - 显式注入 isCtxStale=false + 非 stale 错误 → 仍 "tick error" 继续调度（不误伤）
+  // - isCtxStale=false 但错误文案含 stale 片段 → 文案兜底仍自停（覆盖 reload 盲区：
   //   clearExtensionCache 后 jiti 重 import 全新模块环境，旧闭包的模块级代数冻结不再递增，
   //   只剩文案能识别 stale；模块级方案的装配级验证见 index-generation.test.ts factory 重跑用例）
-  describe('G1: 代际检测分诊（S9）', () => {
+  describe('代际检测分诊', () => {
     let staleFlag: boolean
     let genRuntime: SchedulerRuntime
 
@@ -689,7 +681,7 @@ describe('SchedulerRuntime', () => {
       vi.useRealTimers()
     })
 
-    it('G1-a: in-flight tick 期间代际翻转 + 非文案错误 → warn "tick stopped" + 自停（不依赖 pi 错误文案）', async () => {
+    it('in-flight tick 期间代际翻转 + 非文案错误 → warn "tick stopped" + 自停（不依赖 pi 错误文案）', async () => {
       loggerMock.warn.mockClear()
       const nowSpy = vi.spyOn(backend, 'now')
       // tick 内先翻世代（模拟 session 替换交错发生在 dispatch await 窗口），再抛与
@@ -700,7 +692,7 @@ describe('SchedulerRuntime', () => {
       })
 
       genRuntime.startScheduler()
-      await vi.advanceTimersByTimeAsync(TICK_INTERVAL_MS) // tick1：catch 分诊走 G1 代际 → 自停
+      await vi.advanceTimersByTimeAsync(TICK_INTERVAL_MS) // tick1：catch 分诊走代际主判 → 自停
 
       const warnText = loggerMock.warn.mock.calls.map(c => String(c[0])).join('\n')
       expect(warnText).toContain('tick stopped')
@@ -714,11 +706,11 @@ describe('SchedulerRuntime', () => {
       nowSpy.mockRestore()
     })
 
-    it('G1-b: 代际翻转后泄漏 timer 在下个 tick 前置检查自停——不进入 tick（backend.now 零调用）', async () => {
+    it('代际翻转后泄漏 timer 在下个 tick 前置检查自停——不进入 tick（backend.now 零调用）', async () => {
       loggerMock.warn.mockClear()
       const nowSpy = vi.spyOn(backend, 'now')
       genRuntime.startScheduler()
-      // session 替换：代际翻转（F1 未能触达的泄漏 timer 场景；无任何错误发生）
+      // session 替换：代际翻转（session_start 停旧 timer 主防线未能触达的泄漏 timer 场景；无任何错误发生）
       staleFlag = true
 
       await vi.advanceTimersByTimeAsync(TICK_INTERVAL_MS) // tick1：前置检查命中 → 自停
@@ -734,7 +726,7 @@ describe('SchedulerRuntime', () => {
       nowSpy.mockRestore()
     })
 
-    it('G1-c: isCtxStale 注入但返回 false + 非 stale 错误 → warn "tick error" 且调度继续', async () => {
+    it('isCtxStale 注入但返回 false + 非 stale 错误 → warn "tick error" 且调度继续', async () => {
       loggerMock.warn.mockClear()
       const nowSpy = vi.spyOn(backend, 'now')
       // staleFlag 恒 false（beforeEach 初始化）：代际未翻转，注入存在不改变分诊结果
@@ -757,7 +749,7 @@ describe('SchedulerRuntime', () => {
       nowSpy.mockRestore()
     })
 
-    it('G1-d: isCtxStale 返回 false 但错误文案含 stale 片段 → 文案兜底仍自停（覆盖 reload 盲区）', async () => {
+    it('isCtxStale 返回 false 但错误文案含 stale 片段 → 文案兜底仍自停（覆盖 reload 盲区）', async () => {
       loggerMock.warn.mockClear()
       const nowSpy = vi.spyOn(backend, 'now')
       // reload 场景模拟：factory 重跑后旧闭包代际计数不再递增（staleFlag 恒 false），

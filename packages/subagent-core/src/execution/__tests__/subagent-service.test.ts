@@ -408,8 +408,9 @@ describe("SubagentService", () => {
 
       // sync record 的 controller 是 undefined，running 状态下 dispose 不应抛
       // （abortRunningControllers 检查 r.controller 才 abort，sync 跳过）
-      // [C1] sync 子进程的 kill 由 markAllSpawnedChildrenDead 兜底（spawnedChildren Set 注册），
-      //      集成验证见 run-spawn-integration.test.ts 的 C1 用例（mock spawn + spy kill）。
+      // [C1] sync record 的状态清理走 disposeAllRecords（parent-shutdown）的
+      //      killRecordChildWithEscalation 记账（镜像置死，不发进程信号）；真实终止
+      //      在引擎进程内（stdin-EOF 自灭链），宿主侧无 kill 动作。
       const syncRecord = registerRunningSync(service, "sync-1");
       expect(syncRecord.controller).toBeUndefined();
 
@@ -1140,6 +1141,10 @@ function setup(initOverrides: Partial<{ isIdle: () => boolean }> = {}): {
   pi: MockPi;
 } {
   const agentDir = makeTmpAgentDir();
+  // records 树落盘隔离（同本文件 initSession describe 的 stubEnv 先例——不注入则
+  // records 树跨用例共享，initSession 的通知对账会把前一用例的收尾 idle record
+  // 补投进本用例的 pi，计数断言漂移）。
+  vi.stubEnv("TAIJI_AGENT_DATA_DIR", agentDir);
   const modelService = new ModelConfigService({ agentDir, cwd: agentDir });
   const service = new SubagentService({ cwd: agentDir, modelService });
   const pi = makePi();
@@ -1148,18 +1153,11 @@ function setup(initOverrides: Partial<{ isIdle: () => boolean }> = {}): {
   return { agentDir, service, store, pi };
 }
 
-describe("T4① notify gate 二元组（[U5 / §3.2.7] 放弃轮标记阻断 + 跨世代丢弃 / 其余放行）", () => {
-  it("blocks abandoned-round hits and cross-epoch inbound; allows settled/running without marks", () => {
+describe("T4① notify gate（[U5 / §3.2.7] 放弃轮标记阻断 / 其余放行）", () => {
+  it("blocks abandoned-round hits; allows settled/running without marks", () => {
     // 放弃轮标记命中（承接原 cancelled 阻断防双发）：同世代回注轮 ≤ 标记轮 → 丢弃。
     expect(
       notifyGateAllowsDelivery({ lastAbandonedRound: { epoch: 0, round: 2 }, round: 2 }),
-    ).toBe(false);
-    // 两步判定第一步：回注声明世代 ≠ record 当前世代 → 丢弃。
-    expect(
-      notifyGateAllowsDelivery(
-        { epoch: 1, lastAbandonedRound: { epoch: 0, round: 2 } },
-        { epoch: 0, round: 2 },
-      ),
     ).toBe(false);
     // 标记槽世代 ≠ 当前世代（reopen 残留）→ 标记自然失效，新世代正常轮放行。
     expect(
