@@ -9,7 +9,8 @@
 //      旧实例后缓存引用的 deliver 静默 rejected，对半概率丢全部通知的 D3⑤ 同律）；
 //   通道 = managed-session-notify 外部通道（payload.customType，port 批组隔离恒
 //   逐条不合批）；槽空降级（port 缺席 → warn + false，STANDARDS §11.1）；port
-//   rejected（persist-failed）→ warn + false（幂等键未登记，watch 重试合法）。
+//   rejected（persist-failed）→ warn + 立即单次重提（D8①：deliver 被调恰 2），重提
+//   仍 rejected 才 false（幂等键未登记，恢复 = 对账边沿，见下方两用例）。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLoggerModuleMock, getLoggerMock } from "./helpers/logger-mock.ts";

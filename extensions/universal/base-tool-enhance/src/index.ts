@@ -9,8 +9,11 @@
  * 入账，缺席兜底 sendMessage steer）+ session_start 对账 + 收殓终态通知补投
  * （对账路径 = 唯一生产者，session_start 差集逐任务 port.deliver，幂等由 port
  * seenIds + 内核三级判重承管——unified-delivery 波 3；投递统一化设计的现行登记处 = ADR-0074 与 docs/CONTEXT.md『统一投递』段）。
- * 维护链双触发点：session_start 事件 + `__taiji_bg_reconcile__` 内部命令（taiji runtime
- * 在 getCommands 时按节流补触发，覆盖「切走切回同进程重挂接、session_start 不重发」场景）。
+ * 维护链三触发点（completion-signal-delivery D2/D7）：session_start 事件 +
+ * `__taiji_bg_reconcile__` 切回内部命令（taiji runtime 在 getCommands 时补触发，
+ * 覆盖「切走切回同进程重挂接、session_start 不重发」场景；60s 节流窗已随 ADR-0122
+ * 防御机制清查退役，高频触发由三判据早退承担零成本）+ agent_settled 回合收尾事件
+ * （进程存活形态的对账兜底边沿，注册点见下方 agent_settled 订阅注释）。
  * 切回入口同时补挂三域对账（subagent 域 = completion-signal-delivery V4b 入口③，A5 缺陷
  * 修复；session-manager / subagent-workflow 两域 = D8② 三入口同构的切回边沿）：
  * subagent 域的 session_start / agent_settled 两入口在服务内自挂，切回是唯一需要扩展侧
@@ -115,7 +118,8 @@ export default function baseToolEnhanceExtension(pi: ExtensionAPI): void {
 	// 挂接——pi 进程存活、不重发 session_start（真机实证），挂在 session_start 上的
 	// 维护链在「投递失败但进程存活」场景（设计 G2 核心场景）永不触发。taiji runtime 在
 	// getCommands（切回后 renderer 主动拉取命令的必经查询）时经 client.prompt 发起本
-	// 命令（60s per-session 节流、fire-and-forget），handler 调同一维护函数（reason 传
+	// 命令（fire-and-forget；原 60s per-session 节流窗已随 ADR-0122 防御机制清查退役，
+	// 高频触发由维护链三判据早退承担零成本），handler 调同一维护函数（reason 传
 	// 'resume' 语义）。`/__` 双下划线前缀 = 内部命令（前端 internal-command-filter 过滤
 	// 不显示）；无待补任务时维护链三判据早退，零输出零 turn。
 	// subagent 域补挂（V4b 入口③，A5 缺陷修复）：本命令是切回边沿唯一触发源，

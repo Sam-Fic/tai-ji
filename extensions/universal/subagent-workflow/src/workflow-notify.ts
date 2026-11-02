@@ -160,10 +160,13 @@ interface WorkflowNotifyDetails { // oe-exempt:20260929:framework:workflow/recor
  *
  * **内存去重**：notifiedRunIds Set 由调用方（factory/extension instance）持有，
  * 同 runId 的重复收尾回调拦截（跨 session_shutdown 等边界防重复）；标记在 port
- * 受理（accepted/swallowed）后落下。**已知丢失情形（如实登记）**：port rejected
- * （persist-failed 等）= 受理未发生、投递日志未落，而 notifyDone 的唯一调用点
- * onRunDone 每终态恰好一次、port 差集重放无源可读——该终局通知**永久丢失**，仅
- * error 日志留痕（含 notifyId/content 摘要，供事后手工补偿）。持久层幂等由
+ * 受理（accepted/swallowed）后落下。**rejected 处置（D8① 处置阶梯，如实登记）**：
+ * port rejected（persist-failed 等）= 受理未发生、幂等键未登记——deliverDoneNotify
+ * 当场单次重提（retryDeliverDoneNotifyOnce）；主投与单次重提均失败时受理仍未发生、
+ * 窗口不标（A15），error 日志留痕（含 notifyId/content 摘要与恢复指引），恢复由
+ * 对账边沿（workflow-notify-reconcile：run journal/manifest 终态事实）承接——其
+ * 补投出口直调本函数，是 onRunDone 主路径之外的第二调用点，受理机会未丢失、无需
+ * 人工补救。持久层幂等由
  * notifyId 幂等键承接（内存窗口挤出 / 重启后的重复仍被 port 判重吞）。
  *
  * @param pi ExtensionAPI（仅降级路径直发用）
@@ -523,9 +526,10 @@ export function notifyDone(
  *
  * 调用点：notifyDone 内部（port 受理后 + 降级直发受理/stale 后）+ workflow-events
  * onRunDone 回调（notifyDone 之后，幂等二次添加）。port.deliver rejected 不抛错也
- * 不标记（notifyDone 内 error 留痕后直接返回）。notifyDone 抛出（非 stale 发送失败等）
- * 时内外都不标记——进程内的重复收尾回调不被去重阻断（防御形态；port.deliver
- * rejected 的已知丢失情形登记见 notifyDone 注释）。
+ * 不标记（rejected 受理未发生——当场单次重提仍失败才返回 false，恢复由对账边沿
+ * 承接，登记见 notifyDone 注释）。notifyDone 抛出（非 stale 发送失败等）
+ * 时内外都不标记——进程内的重复收尾回调不被去重阻断（防御形态；rejected 的
+ * 处置阶梯登记见 notifyDone 注释）。
  *
  * @param notifiedRunIds 去重 Set（调用方持有，scope 到 factory 实例）
  * @param runId run 标识

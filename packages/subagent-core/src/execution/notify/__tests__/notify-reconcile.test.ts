@@ -580,7 +580,7 @@ describe("D5 排除位真值表 + 三重判据逐行（防误补投）", () => {
     const submitted: BgNotifyRecord[] = [];
     const result = await reconcile(
       makeSource([
-        reconcileRecord("bg-cancel-tool", { closedReason: "cancelled" }),
+        reconcileRecord("bg-cancel-tool", { closedReason: "cancelled", origin: "tool" }),
         reconcileRecord("bg-cancel-wf", { closedReason: "cancelled", origin: "workflow" }),
       ]),
       "resume",

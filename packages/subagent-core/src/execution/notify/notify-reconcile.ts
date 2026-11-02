@@ -84,9 +84,12 @@ const logger = getLogger("subagents");
 
 /**
  * 对账扫描的 record 上界（queries.collectRecords 的 limit 截断参数，生产装配消费）。
- * 会话内 record 数百级；limit 只是 slice（四源合并在截断前已完成），放大该值无
- * 扫描成本差异——取足够大常量防极端膨胀截断（截断尾部 = 最老 record 的 rejected
- * 补投永远排不进；全量扫描语义最干净，检查点结论见 runlog）。
+ * 量级权衡（U3 检查点「record 扫描范围」实施期结论，就地登记）：会话内 record 数百
+ * 级，10_000 已是数量级冗余上限；collectRecords 的 limit 只是合并内存(running) +
+ * 磁盘(重建) 两源后的 slice（截断前合并不做 IO 放大），该值取大取小无扫描成本差异
+ * ——取足够大常量防极端膨胀截断（截断尾部 = 最老 record 的 rejected 补投永远排不
+ * 进；全量扫描语义最干净）。对照 subagent-actions-core collectRecords 的 limit 夹紧
+ * （下限 1 / 上限 MAX_LIST_LIMIT）与「防截断下沉 store 层」注释，语义一致。
  */
 export const NOTIFY_RECONCILE_SCAN_LIMIT = 10_000;
 

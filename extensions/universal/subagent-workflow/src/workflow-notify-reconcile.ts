@@ -428,14 +428,14 @@ export async function runNotifyReconcileMaintenance(deps: {
 			// 补投出口 = notifyDone 直调（构造面/投递面/重提链与主路径全共用——
 			// 可构造段同构由此构造性成立；artifactsDir = recordPath 锚点目录，
 			// 与 store 装配 runsDir 同值）。返回值 = 是否受理（A15 缺陷修复）：
-			// false = 被 notifiedRunIds 窗口幂等早退（rejected 主路径误标窗口的
-			// 修复信号——正常语义下 rejected 不标窗口，见 runSettledEffects）或
-			// 投递 rejected，通知未出站；warn 留痕 + 不计 redelivered（受理假象
-			// 防线：日志「已补投」必须与真实受理一致）。notifyDone 幂等早退返回
-			// true（已通知语义）无害照计——窗口已含即上一轮补投已受理。
+			// false = 主投与单次重提均 rejected、重提时端口重取缺席、或降级直发
+			// 未送达——通知未出站（成因清单 = notifyDone 全部 return false 路径；
+			// 窗口幂等早退恒返回 true，不在此列）；warn 留痕 + 不计 redelivered
+			//（受理假象防线：日志「已补投」必须与真实受理一致）。notifyDone 幂等
+			// 早退返回 true（已通知语义）无害照计——窗口已含即上一轮补投已受理。
 			const accepted = notifyDone(deps.pi, candidate.runId, run, deps.notifiedRunIds, dirname(candidate.recordPath), settlement);
 			if (!accepted) {
-				logger.warn("workflow notify reconcile redelivery not accepted (deduped by notifiedRunIds window or deliver rejected); message not dispatched, candidates retried at next reconcile edge", {
+				logger.warn("workflow notify reconcile redelivery not accepted (deliver rejected after main attempt and single retry, or port absent on re-acquire / direct-send undelivered); message not dispatched, candidates retried at next reconcile edge", {
 					detail: { reason: deps.reason, runId: candidate.runId, notifyId },
 				});
 				continue;

@@ -314,8 +314,9 @@ export function createWatchCoordinator(deps: WatchCoordinatorDeps): WatchCoordin
 			fulfills,
 			label: first.label,
 		};
-		// 默认投递（unified-delivery 波 2：port.deliver）；false（port 缺席 / rejected /
-		// 幂等拒收）不改 unregister 语义。collectKeys = 批内全部债权键（result-collect
+		// 默认投递（unified-delivery 波 2：port.deliver）；false（port 缺席 / rejected
+		// 含单次重提链失败——幂等命中 swallowed 按已投递返回 true，不产 false）不改
+		// unregister 语义。collectKeys = 批内全部债权键（result-collect
 		// 设计 §3.4 managed 行）：合批条目载荷幂等键 = 批首债权键，collect 按键集逐键
 		// 展开定位——键集申报经 recordManagedNotify 必传参数构造性防漏。三类「注销
 		// pending 而无投递日志条目」分支不经此申报点——成员键不入任何条目键集，collect

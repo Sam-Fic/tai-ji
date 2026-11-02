@@ -469,7 +469,7 @@ describe("readSessionFileEntries（磁盘读侧容错）", () => {
 // 照打（受理假象）——port 侧零受理行、消息从未出站。修复后编排按返回值分流：
 // false（未受理）不计 redelivered + warn 留痕（修复信号）；true 才计受理。
 describe("补投出口受理分流（A15 缺陷修复回归）", () => {
-	it("notifyDone 返回 false（窗口拦截/投递 rejected）→ 不计 redelivered + warn 留痕（受理假象防线）", async () => {
+	it("notifyDone 返回 false（主投与单次重提均 rejected 等受理未发生形态）→ 不计 redelivered + warn 留痕（受理假象防线）", async () => {
 		vi.mocked(notifyDone).mockReturnValueOnce(false);
 		const deps = makeDeps([registeredEntry("wf-1")]);
 

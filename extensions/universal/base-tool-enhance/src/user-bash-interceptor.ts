@@ -177,8 +177,14 @@ export function registerUserBashInterceptor(pi: ExtensionAPI): void {
 }
 
 /**
- * 包装执行 operations（单次命令一个实例——exec 闭包绑定 plan，command 参数与
- * plan.command 同源同值；官方契约的 command 形参仅为接口对齐）。
+ * 包装执行 operations（单次命令一个实例——exec 闭包绑定 plan；exec 忽略 command
+ * 形参、恒执行 plan 绑定的命令，官方契约的 command 形参仅为接口对齐）。已知边界
+ * （设计 §4.3 V5 豁免登记）：pi executeBash 组装层在传给 operations.exec 的
+ * command 前可能前置 shellCommandPrefix 高级设置（resolvedCommand = prefix ?
+ * `${prefix}\n${command}` : command，pi agent-session.js；该设置默认缺席）。本实现
+ * 的 cmd.sh 只写命令原文（plan.command，D4 包装形态），配置了 prefix 的环境下
+ * 包装形态与官方直跑存在已知差异（prefix 在包装执行下不生效）；默认环境两者
+ * 逐字一致（RL7）。
  */
 function createUserBashOperations(plan: UserBashWrapPlan): BashOperations {
 	return {
@@ -239,7 +245,10 @@ async function execWrappedUserBash(
 
 	// abort 通道（RL5/V7）：中止杀 wrapper 进程组（killProcessTree 组杀语义——wrapper
 	// 是 detached 组长，真实命令同组一并死）→ 抛官方式 aborted（executor catch
-	// signal.aborted → cancelled: true 组装）——用户中止无登记（与 agent 侧 B4 同语义），
+	// signal.aborted → cancelled: true 组装）——用户中止无登记（agent 侧同款语义 =
+	// bash-tool.ts 文件头的「B4 用户中止→跳过判活直接清理」；注意与上方收尾判定表
+	// 及 bash-tool settleConvertedCommand 注释里的 B4（收尾窗口死亡照常登记）编号
+	// 同字不同义——bash-tool 文件头与 settle 判据两处 B4 历史上指向不同形态），
 	// 通道占用随 RPC 返回复位
 	const onAbort = (): void => {
 		if (child.pid !== undefined) killProcessTree(child.pid);
