@@ -8,12 +8,17 @@ export default {
   close: 'Close',
   minimize: 'Minimize',
   maximize: 'Maximize',
-  // Host thin-command failure receipts (tray-panel-interact §3.3 D4, RL6): the
-  // commandExecutor fork routes taiji.* hits straight to session-domain RPCs; a
-  // rejection surfaces via useToast (reason + recovery guidance). No row state is
-  // written and nothing flips optimistically (source of truth = extension
-  // RecordStore re-push).
+  // Host thin-command receipts (tray-panel-interact §3.3 D4, RL6): the
+  // commandExecutor fork routes taiji.* hits straight to session-domain RPCs. An
+  // info toast echoes the target id on success (terminal interaction sample / V3/V4
+  // "toast receipt appears"); a rejection surfaces via useToast (reason + recovery
+  // guidance). Neither path writes row state or flips optimistically (source of
+  // truth = extension RecordStore re-push).
   hostCommand: {
+    cancelDone: 'Canceled {target}',
+    retryDone: 'Redispatched {target}',
+    abortDone: 'Aborted {target}',
+    resumeDone: 'Resumed {target}',
     cancelFailed: 'Cancel failed: {error}. Retry in the session that owns this subagent',
     retryFailed: 'Retry failed: {error}. Retry in the session that owns this subagent',
     abortFailed: 'Abort failed: {error}. Retry in the session that owns this workflow',

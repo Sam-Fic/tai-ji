@@ -5,12 +5,15 @@
  * 被测行为（commandExecutor 分叉 + 四条 taiji.* 薄命令登记）：
  * - RL6-A（四条逐一）：action-bar commandId 命中薄命令表 → 直调 session 域 RPC
  *   （session.subagentAction / session.workflowAction），参数映射 recordId→subagentId /
- *   slug+task / runId；不经 plugin.executeCommand（provider 链零帧）；
+ *   slug+task / runId；不经 plugin.executeCommand（provider 链零帧）；成功后 info toast
+ *   回执（目标 id 回显——终态交互样例 / V3/V4「toast 回执出现」）；
  * - 未命中：provider 插件命令照旧发 plugin.executeCommand 帧（scheduler-manager 形态，
  *   既有链零变化）；
  * - RL6-B：execute reject → 错误 toast 通道触发（失败原因 + 恢复指引 + 目标会话定位），
  *   且无行状态写入（不乐观翻转）；
- * - RL2：未注册 commandId 点击后 ERR6 error 事件出声（不静默失效）、不泄漏进 provider 链。
+ * - RL2：未注册 commandId 点击后 ERR6 error 事件出声（不静默失效）、不泄漏进 provider 链；
+ *   且按钮本地置灰渲染禁用（E3 同款——impl-plan u-lifecycle-main 验收②「渲染禁用断言」），
+ *   置灰后再击被 guard 拦下（零重复分派）。
  *
  * 渲染路径与生产同链：guiTree action-bar 条目 → GuiComponentRenderer（TrayWidgetPanel
  * 同款渲染器）→ Actionbar 原语 → 壳层 provide 的 ACTION_EXECUTOR_KEY（initExtensionHostBridge
@@ -171,6 +174,8 @@ describe('RL6-A 宿主薄命令分叉：taiji.* 命中直转 session 域 RPC（�
     expect(subagentActionSpy).toHaveBeenCalledWith(FOCUS_SESSION, 'cancel', { subagentId: 'sub-42' })
     expect(workflowActionSpy).not.toHaveBeenCalled()
     expect(providerFrames()).toHaveLength(0)
+    // 成功回执（终态交互样例 / V3「toast 回执出现」）：info 档 + 目标 id 回显 + 会话定位
+    expect(lastToast()).toEqual({ type: 'info', message: '已取消 sub-42', sessionId: FOCUS_SESSION })
     wrapper.unmount()
   })
 
@@ -199,6 +204,7 @@ describe('RL6-A 宿主薄命令分叉：taiji.* 命中直转 session 域 RPC（�
     })
     expect(workflowActionSpy).not.toHaveBeenCalled()
     expect(providerFrames()).toHaveLength(0)
+    expect(lastToast()).toEqual({ type: 'info', message: '已重新派发 reviewer', sessionId: FOCUS_SESSION })
     wrapper.unmount()
   })
 
@@ -219,6 +225,7 @@ describe('RL6-A 宿主薄命令分叉：taiji.* 命中直转 session 域 RPC（�
     expect(workflowActionSpy).toHaveBeenCalledWith(FOCUS_SESSION, 'abort', 'run-7')
     expect(subagentActionSpy).not.toHaveBeenCalled()
     expect(providerFrames()).toHaveLength(0)
+    expect(lastToast()).toEqual({ type: 'info', message: '已中止 run-7', sessionId: FOCUS_SESSION })
     wrapper.unmount()
   })
 
@@ -239,6 +246,7 @@ describe('RL6-A 宿主薄命令分叉：taiji.* 命中直转 session 域 RPC（�
     expect(workflowActionSpy).toHaveBeenCalledWith(FOCUS_SESSION, 'resume', 'run-7')
     expect(subagentActionSpy).not.toHaveBeenCalled()
     expect(providerFrames()).toHaveLength(0)
+    expect(lastToast()).toEqual({ type: 'info', message: '已续跑 run-7', sessionId: FOCUS_SESSION })
     wrapper.unmount()
   })
 })
@@ -287,7 +295,7 @@ describe('未命中走既有 provider 链（scheduler-manager 形态零变化）
 // ── RL2：未注册 commandId 不静默失效 ──────────────────────────────────────
 
 describe('RL2 未注册 commandId 不静默失效', () => {
-  it('点击未注册 commandId → ERR6 error 事件出声 + 不泄漏进 provider 链', async () => {
+  it('点击未注册 commandId → ERR6 出声 + 按钮本地置灰渲染禁用（E3 同款）+ 不泄漏进 provider 链', async () => {
     const executor = initBridge()
     const errors: Array<{ source: string; message: string }> = []
     const off = getExtensionBus().on('error', (e) => errors.push({ source: e.source, message: e.message }))
@@ -298,6 +306,8 @@ describe('RL2 未注册 commandId 不静默失效', () => {
     )
     const btn = wrapper.find('[data-testid="gui-action-bar-item-ghost-1"]')
     expect(btn.exists()).toBe(true)
+    // 首击放行（置灰发生在命令回执之后）：点击前按钮为可点形态
+    expect(btn.attributes('disabled')).toBeUndefined()
 
     await btn.trigger('click')
     await flush()
@@ -306,8 +316,17 @@ describe('RL2 未注册 commandId 不静默失效', () => {
     expect(errors).toEqual([
       { source: 'CommandRegistry', message: 'command not found: taiji.notRegistered' },
     ])
+    // E3 同款本地置灰（RL2 渲染禁用断言，impl-plan u-lifecycle-main 验收②）：执行器回报
+    // 命令缺失 → 按钮渲染禁用；零 RPC、零 provider 帧（误指 id 不泄漏进任何执行链）
+    expect(wrapper.find('[data-testid="gui-action-bar-item-ghost-1"]').attributes('disabled')).toBeDefined()
     expect(subagentActionSpy).not.toHaveBeenCalled()
     expect(workflowActionSpy).not.toHaveBeenCalled()
+    expect(providerFrames()).toHaveLength(0)
+
+    // 置灰后再击：组件内 guard 拦截（与 disabled 属性双重一致），无重复分派、无重复 ERR6
+    await wrapper.find('[data-testid="gui-action-bar-item-ghost-1"]').trigger('click')
+    await flush()
+    expect(errors).toHaveLength(1)
     expect(providerFrames()).toHaveLength(0)
     off()
     wrapper.unmount()

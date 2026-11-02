@@ -11,9 +11,12 @@
  * 侧命令不在其命令表，设计 AS4 分叉）。全程不开 agent turn：subagentAction 直连不经 LLM；
  * workflowAction 是 runtime 拼 /workflows 命令注入、命令轮无模型调用。
  *
- * 失败契约（AX4 失败半边 / RL6）：RPC reject → 错误 toast（失败原因 + 恢复指引），不写行
- * 状态、不乐观翻转——行状态事实源是扩展进程 RecordStore 全量重推（SC5/SC7），宿主只读；
- * SubagentTab store 的 cancelSubagent 乐观翻边归 drawer 详情页自己回滚，托盘行不复制该形态。
+ * 回执契约（AX4 / tray-panel-interact §3.1 终态交互样例与 V3/V4 通过标准：成功路径也要求
+ * 「toast 回执出现」，与行状态翻转并存）：RPC 成功 → info toast 回执（useToast 词表
+ * error/info/warning 无 success 档，info = 命令回显语义）；RPC reject → 错误 toast（失败
+ * 原因 + 恢复指引），不写行状态、不乐观翻转——行状态事实源是扩展进程 RecordStore 全量重推
+ * （SC5/SC7），宿主只读；SubagentTab store 的 cancelSubagent 乐观翻边归 drawer 详情页自己
+ * 回滚，托盘行不复制该形态。
  */
 import { HOST_PLUGIN_ID, toErrorMessage, type CommandRegistry } from '@taiji/core'
 import { getBoundSessionId } from '@taiji/core/domain/drawer'
@@ -27,11 +30,16 @@ const tFn = i18n.global.t as (key: string, params?: Record<string, unknown>) => 
 /** 宿主命令 id 前缀（与 BUILTIN_NAMESPACE 的 ui. 同思路：id 前缀区分宿主域，防与插件命令表撞名）。 */
 const HOST_COMMAND_PREFIX = 'taiji.'
 
-/** 宿主薄命令记录：标题 + RPC 失败回执键 + 执行体。 */
+/** 宿主薄命令记录：标题 + 成功/失败回执键 + 执行体。 */
 type HostThinCommand = {
   title: string
   /** RPC 失败 toast 的 i18n key（失败原因 + 恢复指引）。 */
   failureKey: string
+  /** RPC 成功回执 toast 的 i18n key（终态交互样例「已取消 reviewer」形态，V3/V4）。 */
+  successKey: string
+  /** 成功回执的目标参数键（args 内承载用户可辨识 id 的键；宿主拿不到显示名——扩展
+   *  按钮声明只承载标量 id，回执回显该 id 供用户对回记录）。 */
+  targetArg: string
   /** 执行体；sessionId 由调用方传入（drawer 域绑定的焦点会话）。 */
   run: (sessionId: string, args: Record<string, unknown>) => Promise<void>
 }
@@ -64,6 +72,8 @@ const HOST_THIN_COMMANDS = new Map<string, HostThinCommand>([
     {
       title: '取消子代理',
       failureKey: 'shell.hostCommand.cancelFailed',
+      successKey: 'shell.hostCommand.cancelDone',
+      targetArg: 'recordId',
       run: (sessionId, args) =>
         sessionApi.subagentAction(sessionId, 'cancel', { subagentId: hostStringArg(args, 'recordId') }),
     },
@@ -73,6 +83,8 @@ const HOST_THIN_COMMANDS = new Map<string, HostThinCommand>([
     {
       title: '重试子代理',
       failureKey: 'shell.hostCommand.retryFailed',
+      successKey: 'shell.hostCommand.retryDone',
+      targetArg: 'slug',
       run: (sessionId, args) =>
         sessionApi.subagentAction(sessionId, 'start', {
           slug: hostStringArg(args, 'slug'),
@@ -85,6 +97,8 @@ const HOST_THIN_COMMANDS = new Map<string, HostThinCommand>([
     {
       title: '中止工作流',
       failureKey: 'shell.hostCommand.abortFailed',
+      successKey: 'shell.hostCommand.abortDone',
+      targetArg: 'runId',
       run: (sessionId, args) => sessionApi.workflowAction(sessionId, 'abort', hostStringArg(args, 'runId')),
     },
   ],
@@ -93,6 +107,8 @@ const HOST_THIN_COMMANDS = new Map<string, HostThinCommand>([
     {
       title: '续跑工作流',
       failureKey: 'shell.hostCommand.resumeFailed',
+      successKey: 'shell.hostCommand.resumeDone',
+      targetArg: 'runId',
       run: (sessionId, args) => sessionApi.workflowAction(sessionId, 'resume', hostStringArg(args, 'runId')),
     },
   ],
@@ -103,8 +119,9 @@ const HOST_THIN_COMMANDS = new Map<string, HostThinCommand>([
  * （taiji. 前缀 + 表内）→ 执行并返回 true；未命中 → 返回 false，调用方回落既有 provider 链
  * （scheduler-manager 三按钮实证零变化）。taiji. 前缀的 id 永不泄漏进 provider 链。
  *
- * sessionId 取 drawer 域绑定的焦点会话（托盘面板分区恒等于焦点会话）；RPC reject → 错误
- * toast（失败原因 + 恢复指引，RL6），不写行状态、不乐观翻转。
+ * sessionId 取 drawer 域绑定的焦点会话（托盘面板分区恒等于焦点会话）；回执走 toast 双档
+ * （AX4 可见反馈）：RPC 成功 → info 回执（目标 id 回显，V3/V4「toast 回执出现」）；RPC
+ * reject → 错误 toast（失败原因 + 恢复指引，RL6）。两条路径都不写行状态、不乐观翻转。
  */
 export async function executeHostThinCommand(id: string, args: unknown): Promise<boolean> {
   if (!id.startsWith(HOST_COMMAND_PREFIX)) return false
@@ -116,8 +133,13 @@ export async function executeHostThinCommand(id: string, args: unknown): Promise
     useToast().error(tFn('shell.hostCommand.noTargetSession'))
     return true
   }
+  const scalarArgs = toScalarArgs(args)
   try {
-    await cmd.run(sessionId, toScalarArgs(args))
+    await cmd.run(sessionId, scalarArgs)
+    // 成功回执（终态交互样例 / V3/V4「toast 回执出现」）：目标 id 回显供用户对回记录；
+    // targetArg 在成功路径必为非空串（缺失已被 hostStringArg fail-fast 走 catch），无
+    // undefined 字面风险。行状态翻转仍由扩展 RecordStore 重推承担（宿主只读）。
+    useToast().info(tFn(cmd.successKey, { target: String(scalarArgs[cmd.targetArg]) }), { sessionId })
   } catch (e) {
     useToast().error(tFn(cmd.failureKey, { error: toErrorMessage(e) }), { sessionId })
   }

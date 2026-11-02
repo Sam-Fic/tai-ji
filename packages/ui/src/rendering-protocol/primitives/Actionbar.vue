@@ -56,6 +56,11 @@ export const TRAY_PIN_STATE_KEY: InjectionKey<boolean | Ref<boolean> | undefined
  * （对齐 TabBar 降级出声范式——降级 ≠ 吞错）；纯展示项（含 pin 门控中降级的项——已无可点
  * 形态，本就不需要执行器）不出声。
  *
+ * 命令缺失置灰（tray-panel-interact §4.2 RL2）：点击后命令执行器回报 false（壳层命令表
+ * 查无此 commandId，HeaderActionsHost E3 同款先例）→ 该项本地置灰 + guard 拦再击——
+ * 误指/未注册 commandId 不静默失效（ERR6 已在执行链内出声，置灰是用户可见的后续反馈）；
+ * 随推送重建复位（命令重注册后恢复可点）。
+ *
  * 降级契约（D8）：未含本 type 的旧宿主由 core resolveComponent 降级 ansi-text
  * （label 经 JSON 序列化保留可读，P5 断言），本组件不参与降级决策。**旧宿主忽略 confirm
  * 字段 = 按钮照常渲染、点击即执行**（新增可选字段不 bump PROTOCOL_VERSION，与 action-bar
@@ -116,6 +121,12 @@ const phases = ref<Record<string, ConfirmPhase>>({})
 /** 每 item 的超时 timer 句柄（复位确认态用；离开/再击/重推时清）。 */
 const timers = new Map<string, ReturnType<typeof setTimeout>>()
 
+// ── 命令缺失本地置灰（tray-panel-interact §4.2 RL2）──
+/** 点击后命令执行器回报 false（壳层命令表查无此 commandId，HeaderActionsHost E3 同款）→
+ *  记入本地置灰集合：按钮渲染禁用 + guard 拦再击。ERR6 已在执行链内出声（不静默），
+ *  置灰是用户可见的后续反馈。随推送重建复位（命令重注册后随下帧恢复可点）。 */
+const commandMissing = ref(new Set<string>())
+
 const phaseOf = (item: ActionBarItem): ConfirmPhase => phases.value[item.id] ?? 'idle'
 
 const clearTimer = (id: string): void => {
@@ -153,9 +164,11 @@ const resetConfirm = (item: ActionBarItem): void => {
 /** 点击：组件内 guard 是唯一权威防线（不依赖宿主对 disabled button 吞事件的浏览器行为），
  *  与 :disabled 属性双重一致。args 原样透传（协议层只许标量，校验在协议入口）。
  *  confirm 项两段式：首击翻确认态（不执行），再击进在途态并执行；在途态重复点击被
- *  guard 直接拦下（与 disabled 属性双重一致，防重复 RPC）。 */
+ *  guard 直接拦下（与 disabled 属性双重一致，防重复 RPC）。
+ *  命令缺失置灰项同样被 guard 拦下（已出声过 ERR6，重复点击不再分派）。 */
 const activate = (item: ActionBarItem): void => {
   if (item.disabled === true || !isExecutable(item) || !executorReady(item)) return
+  if (commandMissing.value.has(item.id)) return
   if (hasConfirm(item)) {
     const phase = phaseOf(item)
     if (phase === 'idle') {
@@ -168,7 +181,7 @@ const activate = (item: ActionBarItem): void => {
     clearTimer(item.id)
     phases.value = { ...phases.value, [item.id]: 'in-flight' }
   }
-  dispatchTreeInteraction({
+  const dispatched = dispatchTreeInteraction({
     commandId: item.commandId,
     args: item.args,
     hostAction: item.hostAction,
@@ -176,11 +189,16 @@ const activate = (item: ActionBarItem): void => {
     navigationExecutor,
     viewSessionId,
   })
+  // 执行器回报命令缺失（false）→ 本地置灰（RL2 渲染禁用）；void = 执行器不回报，不动
+  if (dispatched === false) commandMissing.value.add(item.id)
 }
 
-/** 按钮是否禁用：协议 disabled / 执行器缺位 / confirm 在途态（三源合一）。 */
+/** 按钮是否禁用：协议 disabled / 执行器缺位 / confirm 在途态 / 命令缺失置灰（四源合一）。 */
 const isDisabled = (item: ActionBarItem): boolean =>
-  item.disabled === true || !executorReady(item) || phaseOf(item) === 'in-flight'
+  item.disabled === true ||
+  !executorReady(item) ||
+  phaseOf(item) === 'in-flight' ||
+  commandMissing.value.has(item.id)
 
 /** 视觉档位：协议 danger 或 confirm 确认态 → danger 档（危险操作的视觉确认信号）。 */
 const variantOf = (item: ActionBarItem): 'danger' | 'ghost' =>
@@ -212,12 +230,14 @@ watch(hasBlockedExecutableItem, (has) => {
 }, { immediate: true })
 
 // 推送重建（新 items 数组 = 记录重推）：确认态与超时随旧实例一起失效——清句柄防泄漏。
-// 新树里同 id 项回到 idle（在途态自然终止，无需跨树保持）。
+// 新树里同 id 项回到 idle（在途态自然终止，无需跨树保持）；命令缺失置灰同步复位
+// （命令重注册后随下帧恢复可点，同 HeaderActionsHost E3 让位规则的简化形态）。
 watch(
   () => props.items,
   () => {
     for (const id of [...timers.keys()]) clearTimer(id)
     phases.value = {}
+    commandMissing.value = new Set()
   },
 )
 
@@ -229,7 +249,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="action-bar flex flex-wrap items-center gap-2" data-testid="gui-action-bar">
     <template v-for="item in items" :key="item.id">
-      <!-- 按钮（有 commandId 或 hostAction 且未被 pin 门控）：danger 档走 Button 危险样式；所需执行器缺位/在途态禁用 -->
+      <!-- 按钮（有 commandId 或 hostAction 且未被 pin 门控）：danger 档走 Button 危险样式；执行器缺位/在途态/命令缺失置灰禁用 -->
       <Button
         v-if="isExecutable(item) && !pinGated"
         size="dense"

@@ -39,6 +39,10 @@ export const VIEW_SCOPE_SESSION_KEY: InjectionKey<string | undefined> = Symbol('
  * 必须一致——分派优先级漂移会让同名声明在按钮与列表行行为不同）。commandId 缺省时
  * hostAction 走容器导航执行器。执行器缺位静默返回（禁用态由各组件的渲染侧 guard 承担，
  * 本函数只做分派不做降级出声）。
+ *
+ * 返回值：commandId 分支透传命令执行器的回报（boolean | void——命令缺失 false 供
+ * action-bar 本地置灰，tray-panel-interact §4.2 RL2；hostAction 分支导航执行器无
+ * 回报，恒 undefined）。
  */
 export function dispatchTreeInteraction(input: {
   commandId?: string
@@ -47,11 +51,10 @@ export function dispatchTreeInteraction(input: {
   commandExecutor?: ActionExecutor
   navigationExecutor?: ContainerNavigationExecutor
   viewSessionId?: string
-}): void {
+}): boolean | void {
   const commandId = input.commandId
   if (typeof commandId === 'string' && commandId !== '') {
-    input.commandExecutor?.execute(commandId, input.args)
-    return
+    return input.commandExecutor?.execute(commandId, input.args)
   }
   if (input.hostAction !== undefined) {
     input.navigationExecutor?.navigate(input.hostAction, { viewSessionId: input.viewSessionId })

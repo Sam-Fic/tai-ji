@@ -14,9 +14,14 @@ import type { InjectionKey } from 'vue'
 /** 操作参数——与 GuiComponentProps['action-bar'] items[].args 同形（只许标量，防注入结构化 payload） */
 export type ActionArgs = Record<string, string | number | boolean>
 
-/** 最小结构接口：壳层命令执行器的兼容范围（core commandRegistry.execute 结构兼容此形状） */
+/** 最小结构接口：壳层命令执行器的兼容范围（core commandRegistry.execute 结构兼容此形状）。
+ *  execute 返回 boolean | void：命中返回 true；命令缺失（壳层命令表查无此 id）返回 false
+ *  供原语本地置灰——tray-panel-interact §4.2 RL2「误指/未注册 commandId 不静默失效」，
+ *  先例 = HeaderActionsHost E3（useExtensionHostBridge HEADER_ACTIONS_SOURCE_KEY.executeCommand
+ *  同款「缺失也走 execute（内部 emit ERR6 出声）+ 返回 false 供组件置灰」）。返回 void =
+ *  执行器不回报可用性（如 settings 挂载位的插件 fork 直发执行器），置灰半边不生效、行为不变。 */
 export interface ActionExecutor {
-  execute(id: string, args?: ActionArgs): void
+  execute(id: string, args?: ActionArgs): boolean | void
 }
 
 export const ACTION_EXECUTOR_KEY: InjectionKey<ActionExecutor> = Symbol('action-executor')
