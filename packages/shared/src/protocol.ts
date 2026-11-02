@@ -1057,7 +1057,9 @@ export interface ClientMessageMap {
   'session.getWorkflows': { sessionId: string }
   'session.getAgentCallHistory': { sessionId: string; agentCallSessionId: string }
   'session.getAgentCallFilePath': { sessionId: string; agentCallSessionId: string }
-  'session.workflowAction': { sessionId: string; action: 'abort'; runId: string }
+  // workflow 生命周期操作（tray-panel-interact §3.3 D4：abort 与 resume 同款 slash command
+  // 转发通道，命令轮无模型调用）。resume 仅对 interrupted 形态（terminal 由扩展侧资格校验拒绝）。
+  'session.workflowAction': { sessionId: string; action: 'abort' | 'resume'; runId: string }
   // workflow 可视化两条拉取 RPC（workflow-visualization 设计 §3.1-4/§3.1-5）：
   // sessionId 定位 session 的 run journal 目录（workflow/runs/，record 流所在）+ 对齐 workflowAction
   // 的双参数先例；runId 为 run 级标识（wf- 前缀）。
@@ -3111,7 +3113,7 @@ export interface ServerMessageMapBase {
     fetchedAt: string
   }
   // session.workflowActionDone：workflow 操作完成确认（session.workflowAction RPC reply）
-  'session.workflowActionDone': { sessionId: string; action: 'abort'; runId: string }
+  'session.workflowActionDone': { sessionId: string; action: 'abort' | 'resume'; runId: string }
   // session.workflowRunEvents：session.getWorkflowRunEvents 的 reply（workflow-visualization
   // 设计 §3.1-4 D4 事件流拉模式）。成功/结构化错误两形态见 WorkflowRunEventsReply——
   // 大字段截断与 truncatedFields 标注的行形态 = WorkflowRunEventEntry（shared/workflow.ts）；

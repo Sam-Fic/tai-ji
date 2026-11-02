@@ -1,7 +1,7 @@
 import type { TreeItem } from '@zhushanwen/extension-protocol';
 import GuiComponentRenderer from '../GuiComponentRenderer.vue';
 import { ACTION_EXECUTOR_KEY, type ActionArgs, type ActionExecutor } from '../action-executor-key';
-import Actionbar from '../primitives/Actionbar.vue';
+import Actionbar, { TRAY_PIN_STATE_KEY } from '../primitives/Actionbar.vue';
 import AnsiText from '../primitives/AnsiText.vue';
 import Card from '../primitives/Card.vue';
 import Columns from '../primitives/Columns.vue';
@@ -190,6 +190,211 @@ describe('Actionbar 执行器缺位降级（对齐 TabBar 降级出声范式）'
   })
 })
 
+// ── confirm 两段式状态机（tray-panel-interact §3.3 D5 / RL3 组件侧）────
+
+describe('Actionbar confirm 两段式（D5：首击确认态 / 再击执行 / 在途禁用 / 超时复位）', () => {
+  /** confirm 声明项：abort 按钮（不可恢复，D5 判定表必须带 confirm） */
+  const confirmItem = (): Items => [
+    {
+      id: 'abort-1',
+      label: '中止',
+      kind: 'danger',
+      commandId: 'taiji.workflowAbort',
+      args: { runId: 'wf-1' },
+      confirm: '确认中止？',
+    },
+  ]
+
+  const mountConfirm = () => {
+    const executor = makeExecutor()
+    const wrapper = mount(Actionbar, {
+      props: { items: confirmItem() },
+      global: { provide: { [ACTION_EXECUTOR_KEY as symbol]: executor } },
+    })
+    return { executor, wrapper }
+  }
+
+  it('首击 → 翻确认态：danger 档 + confirm 文案可见，执行器未调用', async () => {
+    const { executor, wrapper } = mountConfirm()
+    const btn = wrapper.find('[data-testid="gui-action-bar-item-abort-1"]')
+    expect(btn.attributes('data-confirm-phase')).toBe('idle')
+    await btn.trigger('click')
+    // 首击不执行：只翻本地确认态（用户可见 DOM 断言）
+    expect(executor.execute).not.toHaveBeenCalled()
+    expect(btn.attributes('data-confirm-phase')).toBe('confirming')
+    expect(btn.text()).toContain('确认中止？')
+    expect(btn.classes()).toContain('text-danger')
+  })
+
+  it('再击 → 执行：执行器收到 (commandId, args)，进入在途态且按钮禁用', async () => {
+    const { executor, wrapper } = mountConfirm()
+    const btn = wrapper.find('[data-testid="gui-action-bar-item-abort-1"]')
+    await btn.trigger('click')
+    await btn.trigger('click')
+    expect(executor.execute).toHaveBeenCalledTimes(1)
+    expect(executor.execute).toHaveBeenCalledWith('taiji.workflowAbort', { runId: 'wf-1' })
+    expect(btn.attributes('data-confirm-phase')).toBe('in-flight')
+    expect(btn.attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="gui-action-bar-item-spinner"]').exists()).toBe(true)
+  })
+
+  it('在途态防重复执行：第三击不再触发执行器（disabled + 组件内 guard 双拦）', async () => {
+    const { executor, wrapper } = mountConfirm()
+    const btn = wrapper.find('[data-testid="gui-action-bar-item-abort-1"]')
+    await btn.trigger('click')
+    await btn.trigger('click')
+    await btn.trigger('click')
+    await btn.trigger('click')
+    expect(executor.execute).toHaveBeenCalledTimes(1)
+  })
+
+  it('指针离开 → 确认态复位 idle（label 回原文案，再击重新走两段式）', async () => {
+    const { executor, wrapper } = mountConfirm()
+    const btn = wrapper.find('[data-testid="gui-action-bar-item-abort-1"]')
+    await btn.trigger('click')
+    expect(btn.attributes('data-confirm-phase')).toBe('confirming')
+    await btn.trigger('mouseleave')
+    expect(btn.attributes('data-confirm-phase')).toBe('idle')
+    expect(btn.text()).toContain('中止')
+    // 复位后首击重新进确认态而非直接执行（两段式未被离开破坏）
+    await btn.trigger('click')
+    expect(btn.attributes('data-confirm-phase')).toBe('confirming')
+    expect(executor.execute).not.toHaveBeenCalled()
+  })
+
+  it('超时复位：确认态 5s 无第二击 → 自动回 idle', async () => {
+    vi.useFakeTimers()
+    try {
+      const { executor, wrapper } = mountConfirm()
+      const btn = wrapper.find('[data-testid="gui-action-bar-item-abort-1"]')
+      await btn.trigger('click')
+      expect(btn.attributes('data-confirm-phase')).toBe('confirming')
+      await vi.advanceTimersByTimeAsync(5000)
+      await flushPromises()
+      expect(btn.attributes('data-confirm-phase')).toBe('idle')
+      expect(executor.execute).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('字段缺失直执行（降级）：无 confirm 的项点击即执行，不进确认态', async () => {
+    const executor = makeExecutor()
+    const wrapper = mount(Actionbar, {
+      props: { items: [{ id: 'run-1', label: '立即执行', commandId: 'sched.run' }] },
+      global: { provide: { [ACTION_EXECUTOR_KEY as symbol]: executor } },
+    })
+    const btn = wrapper.find('[data-testid="gui-action-bar-item-run-1"]')
+    expect(btn.attributes('data-confirm-phase')).toBe('idle')
+    await btn.trigger('click')
+    expect(executor.execute).toHaveBeenCalledTimes(1)
+    expect(executor.execute).toHaveBeenCalledWith('sched.run', undefined)
+    // 执行后仍停留 idle（无 confirm = 无两段式，旧行为零变化）
+    expect(btn.attributes('data-confirm-phase')).toBe('idle')
+    expect(wrapper.find('[data-testid="gui-action-bar-item-spinner"]').exists()).toBe(false)
+  })
+
+  it('空串 confirm = 未声明：点击即执行（空串不进两段式）', async () => {
+    const executor = makeExecutor()
+    const wrapper = mount(Actionbar, {
+      props: { items: [{ id: 'run-1', label: '立即执行', commandId: 'sched.run', confirm: '' }] },
+      global: { provide: { [ACTION_EXECUTOR_KEY as symbol]: executor } },
+    })
+    await wrapper.find('[data-testid="gui-action-bar-item-run-1"]').trigger('click')
+    expect(executor.execute).toHaveBeenCalledTimes(1)
+  })
+
+  it('记录重推重建按钮实例：新 items 到达即清确认态与超时（在途态自然终止）', async () => {
+    vi.useFakeTimers()
+    try {
+      const { executor, wrapper } = mountConfirm()
+      const btn = wrapper.find('[data-testid="gui-action-bar-item-abort-1"]')
+      await btn.trigger('click')
+      expect(btn.attributes('data-confirm-phase')).toBe('confirming')
+      // 扩展重推同 id 项（回执到达后的新树）：确认态复位，in-flight 也随实例重建终止
+      await wrapper.setProps({ items: confirmItem() })
+      const btn2 = wrapper.find('[data-testid="gui-action-bar-item-abort-1"]')
+      expect(btn2.attributes('data-confirm-phase')).toBe('idle')
+      expect(btn2.attributes('disabled')).toBeUndefined()
+      expect(executor.execute).not.toHaveBeenCalled()
+      // 重推后旧超时已清：推进时间不再触发任何状态变化
+      await vi.advanceTimersByTimeAsync(10000)
+      await flushPromises()
+      expect(btn2.attributes('data-confirm-phase')).toBe('idle')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('protocol disabled 与 confirm 正交：disabled 项首击既不翻确认态也不执行', async () => {
+    const executor = makeExecutor()
+    const wrapper = mount(Actionbar, {
+      props: {
+        items: [
+          {
+            id: 'abort-1',
+            label: '中止',
+            kind: 'danger',
+            disabled: true,
+            commandId: 'taiji.workflowAbort',
+            confirm: '确认中止？',
+          },
+        ],
+      },
+      global: { provide: { [ACTION_EXECUTOR_KEY as symbol]: executor } },
+    })
+    const btn = wrapper.find('[data-testid="gui-action-bar-item-abort-1"]')
+    expect(btn.attributes('disabled')).toBeDefined()
+    await btn.trigger('click')
+    expect(btn.attributes('data-confirm-phase')).toBe('idle')
+    expect(executor.execute).not.toHaveBeenCalled()
+  })
+
+  it('hostAction 项同样走两段式（confirm 与执行路径正交，导航也需防误触）', async () => {
+    const nav = makeNavigationExecutor()
+    const wrapper = mount(Actionbar, {
+      props: {
+        items: [
+          {
+            id: 'open-1',
+            label: '打开',
+            hostAction: { kind: 'drawer', tabId: 'ui.doc' },
+            confirm: '确认打开？',
+          },
+        ],
+      },
+      global: { provide: { [CONTAINER_NAVIGATION_KEY as symbol]: nav } },
+    })
+    const btn = wrapper.find('[data-testid="gui-action-bar-item-open-1"]')
+    await btn.trigger('click')
+    expect(nav.navigate).not.toHaveBeenCalled()
+    expect(btn.attributes('data-confirm-phase')).toBe('confirming')
+    await btn.trigger('click')
+    expect(nav.navigate).toHaveBeenCalledTimes(1)
+    expect(nav.navigate).toHaveBeenCalledWith({ kind: 'drawer', tabId: 'ui.doc' }, { viewSessionId: undefined })
+  })
+
+  it('confirming 态 label 替代原文案；同栏其他项不受影响（状态按 item.id 隔离）', async () => {
+    const executor = makeExecutor()
+    const wrapper = mount(Actionbar, {
+      props: {
+        items: [
+          { id: 'abort-1', label: '中止', kind: 'danger', commandId: 'taiji.workflowAbort', confirm: '确认中止？' },
+          { id: 'run-1', label: '立即执行', commandId: 'sched.run' },
+        ],
+      },
+      global: { provide: { [ACTION_EXECUTOR_KEY as symbol]: executor } },
+    })
+    await wrapper.find('[data-testid="gui-action-bar-item-abort-1"]').trigger('click')
+    expect(wrapper.find('[data-testid="gui-action-bar-item-abort-1"]').text()).toContain('确认中止？')
+    // 未声明 confirm 的兄弟项仍显原 label、仍可点击即执行
+    const other = wrapper.find('[data-testid="gui-action-bar-item-run-1"]')
+    expect(other.text()).toContain('立即执行')
+    await other.trigger('click')
+    expect(executor.execute).toHaveBeenCalledWith('sched.run', undefined)
+  })
+})
+
 // ── 容器导航执行器（§6.4 hostAction 交互路径，Actionbar / ListTree 两节共用）────
 
 type NavigateFn = (action: HostContainerAction, options?: { viewSessionId?: string }) => void
@@ -286,6 +491,109 @@ describe('Actionbar 容器导航（§6.4 hostAction 交互路径，U5 验收③�
     await wrapper.find('[data-testid="gui-action-bar-item-open-1"]').trigger('click')
     expect(nav.navigate).toHaveBeenCalledTimes(1)
     expect(nav.navigate).toHaveBeenCalledWith(drawerHostAction, { viewSessionId: 'view-sid' })
+  })
+})
+
+// ── pin 门控（tray-panel-interact §3.3 D6 / RL4 原语侧）────
+
+describe('Actionbar pin 门控（D6：注入缺省 = 门控不生效；未 pin = 交互项纯展示）', () => {
+  /** 交互项样本：命令按钮 + hostAction 按钮 + confirm 危险按钮 + 纯展示项 */
+  const pinItems = (): Items => [
+    { id: 'cancel-1', label: '取消', commandId: 'taiji.subagentCancel', args: { recordId: 'r-1' } },
+    { id: 'open-1', label: '打开', hostAction: { kind: 'drawer', tabId: 'ui.subagent' } },
+    { id: 'abort-1', label: '中止', kind: 'danger', commandId: 'taiji.workflowAbort', confirm: '确认中止？' },
+    { id: 'stat-1', label: '共 1 项' },
+  ]
+
+  /** 挂载（pin 缺省 = 不 provide 键 = 非托盘挂载位；asRef = provide 响应式源） */
+  const mountPinned = (pin?: boolean, asRef = false) => {
+    const executor = makeExecutor()
+    const nav = makeNavigationExecutor()
+    const provide: Record<string | symbol, unknown> = {
+      [ACTION_EXECUTOR_KEY as symbol]: executor,
+      [CONTAINER_NAVIGATION_KEY as symbol]: nav,
+    }
+    if (pin !== undefined) provide[TRAY_PIN_STATE_KEY as symbol] = asRef ? ref(pin) : pin
+    const wrapper = mount(Actionbar, { props: { items: pinItems() }, global: { provide } })
+    return { executor, nav, wrapper }
+  }
+
+  it('注入缺省（非托盘挂载位）= 门控不生效：交互项照常渲染可点按钮，点击即走各自执行路径', async () => {
+    const { executor, nav, wrapper } = mountPinned()
+    const cancel = wrapper.find('[data-testid="gui-action-bar-item-cancel-1"]')
+    const open = wrapper.find('[data-testid="gui-action-bar-item-open-1"]')
+    expect(cancel.element.tagName).toBe('BUTTON')
+    expect(cancel.attributes('disabled')).toBeUndefined()
+    await cancel.trigger('click')
+    expect(executor.execute).toHaveBeenCalledWith('taiji.subagentCancel', { recordId: 'r-1' })
+    await open.trigger('click')
+    expect(nav.navigate).toHaveBeenCalledTimes(1)
+  })
+
+  it('pin=false：交互项降级纯展示——span 非按钮语义（confirm 项不进两段式），点击不触发任何执行器', async () => {
+    const { executor, nav, wrapper } = mountPinned(false)
+    for (const id of ['cancel-1', 'open-1', 'abort-1', 'stat-1']) {
+      const node = wrapper.find(`[data-testid="gui-action-bar-item-${id}"]`)
+      expect(node.element.tagName, `${id} 未 pin 态应为纯展示 span`).toBe('SPAN')
+      expect(node.classes()).toContain('text-neutral-dim')
+      await node.trigger('click')
+    }
+    expect(executor.execute).not.toHaveBeenCalled()
+    expect(nav.navigate).not.toHaveBeenCalled()
+    // confirm 项同样无可点形态：无两段式相位属性（门控是 confirm 形态降级的上游）
+    expect(wrapper.find('[data-testid="gui-action-bar-item-abort-1"]').attributes('data-confirm-phase')).toBeUndefined()
+  })
+
+  it('pin=true：交互项照常可点；confirm 项两段式不受门控影响（首击确认态、再击执行）', async () => {
+    const { executor, wrapper } = mountPinned(true)
+    const cancel = wrapper.find('[data-testid="gui-action-bar-item-cancel-1"]')
+    expect(cancel.element.tagName).toBe('BUTTON')
+    await cancel.trigger('click')
+    expect(executor.execute).toHaveBeenCalledWith('taiji.subagentCancel', { recordId: 'r-1' })
+
+    const abort = wrapper.find('[data-testid="gui-action-bar-item-abort-1"]')
+    await abort.trigger('click')
+    expect(abort.attributes('data-confirm-phase')).toBe('confirming')
+    expect(executor.execute).toHaveBeenCalledTimes(1)
+    await abort.trigger('click')
+    expect(executor.execute).toHaveBeenCalledWith('taiji.workflowAbort', undefined)
+  })
+
+  it('pin 响应式契约：provide 响应式源，值翻转即切换门控形态（hover ↔ pin 实时联动）', async () => {
+    const executor = makeExecutor()
+    const nav = makeNavigationExecutor()
+    const pin = ref(false)
+    const wrapper = mount(Actionbar, {
+      props: { items: pinItems() },
+      global: {
+        provide: {
+          [ACTION_EXECUTOR_KEY as symbol]: executor,
+          [CONTAINER_NAVIGATION_KEY as symbol]: nav,
+          [TRAY_PIN_STATE_KEY as symbol]: pin,
+        },
+      },
+    })
+    expect(wrapper.find('[data-testid="gui-action-bar-item-cancel-1"]').element.tagName).toBe('SPAN')
+
+    pin.value = true
+    await flushPromises()
+    const btn = wrapper.find('[data-testid="gui-action-bar-item-cancel-1"]')
+    expect(btn.element.tagName).toBe('BUTTON')
+    await btn.trigger('click')
+    expect(executor.execute).toHaveBeenCalledTimes(1)
+
+    pin.value = false
+    await flushPromises()
+    expect(wrapper.find('[data-testid="gui-action-bar-item-cancel-1"]').element.tagName).toBe('SPAN')
+  })
+
+  it('pin=false 且执行器缺位不出声（交互项已降级纯展示，不需要执行器）', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    mount(Actionbar, {
+      props: { items: pinItems() },
+      global: { provide: { [TRAY_PIN_STATE_KEY as symbol]: false } },
+    })
+    expect(warn).not.toHaveBeenCalled()
   })
 })
 
@@ -1010,6 +1318,82 @@ describe('ListTree 行点击动作（§6.4 导航原语，U5 验收③④）', (
     const { wrapper } = mountWithExecutors([{ label: '空动作', action: {} }])
     expect(wrapper.find('[data-testid="gui-list-tree-action-0"]').exists()).toBe(false)
     expect(wrapper.findAll('.list-tree__item')[0]!.element.tagName).toBe('DIV')
+  })
+})
+
+describe('ListTree pin 门控（D6：命令行门控，导航行不门控）', () => {
+  const drawerHostAction: HostContainerAction = { kind: 'drawer', tabId: 'ui.subagent', params: { recordId: 'r-1' } }
+
+  /** 行样本：导航行（hostAction）+ 命令行（commandId）+ 纯展示行 */
+  const pinItems = (): TreeItem[] => [
+    { label: '查看详情', action: { hostAction: drawerHostAction } },
+    { label: '取消', action: { commandId: 'taiji.subagentCancel' } },
+    { label: '纯展示行' },
+  ]
+
+  /** 挂载（pin 缺省 = 不 provide 键 = 非托盘挂载位） */
+  const mountPinned = (pin?: boolean) => {
+    const cmd = makeExecutor()
+    const nav = makeNavigationExecutor()
+    const provide: Record<string | symbol, unknown> = {
+      [ACTION_EXECUTOR_KEY as symbol]: cmd,
+      [CONTAINER_NAVIGATION_KEY as symbol]: nav,
+      [VIEW_SCOPE_SESSION_KEY as symbol]: 'view-sid',
+    }
+    if (pin !== undefined) provide[TRAY_PIN_STATE_KEY as symbol] = pin
+    const wrapper = mount(ListTree, { props: { items: pinItems() }, global: { provide } })
+    return { cmd, nav, wrapper }
+  }
+
+  it('注入缺省 = 门控不生效：导航行与命令行均渲染可点 button，点击各走各路', async () => {
+    const { cmd, nav, wrapper } = mountPinned()
+    const navRow = wrapper.find('[data-testid="gui-list-tree-action-0"]')
+    const cmdRow = wrapper.find('[data-testid="gui-list-tree-action-1"]')
+    expect(navRow.element.tagName).toBe('BUTTON')
+    expect(cmdRow.element.tagName).toBe('BUTTON')
+    await cmdRow.trigger('click')
+    expect(cmd.execute).toHaveBeenCalledWith('taiji.subagentCancel', undefined)
+    await navRow.trigger('click')
+    expect(nav.navigate).toHaveBeenCalledWith(drawerHostAction, { viewSessionId: 'view-sid' })
+  })
+
+  it('pin=false：命令行降级纯展示（div 不可点、无 action testid）；导航行仍可点（导航是安全操作）', async () => {
+    const { cmd, nav, wrapper } = mountPinned(false)
+    const rows = wrapper.findAll('.list-tree__item')
+    // 导航行不门控：仍为可点 button
+    expect(rows[0]!.element.tagName).toBe('BUTTON')
+    // 命令行门控：降级 div 纯展示（无 hover 可点视觉、无 action testid）
+    expect(rows[1]!.element.tagName).toBe('DIV')
+    expect(rows[1]!.classes()).not.toContain('cursor-pointer')
+    expect(wrapper.find('[data-testid="gui-list-tree-action-1"]').exists()).toBe(false)
+    // 纯展示行维持 div
+    expect(rows[2]!.element.tagName).toBe('DIV')
+    // 门控行点击不触发命令（div 上 click 监听仍会触发，被组件内 guard 拦下）
+    await rows[1]!.trigger('click')
+    expect(cmd.execute).not.toHaveBeenCalled()
+    // 导航行照常派发
+    await rows[0]!.trigger('click')
+    expect(nav.navigate).toHaveBeenCalledTimes(1)
+  })
+
+  it('commandId 与 hostAction 并存行按命令行门控（commandId 优先分派，同源规则）', async () => {
+    const { cmd, nav, wrapper } = mountPinned(false)
+    await wrapper.setProps({
+      items: [{ label: '两路', action: { commandId: 'taiji.subagentCancel', hostAction: drawerHostAction } }],
+    })
+    const row = wrapper.findAll('.list-tree__item')[0]!
+    expect(row.element.tagName).toBe('DIV')
+    await row.trigger('click')
+    expect(cmd.execute).not.toHaveBeenCalled()
+    expect(nav.navigate).not.toHaveBeenCalled()
+  })
+
+  it('pin=true：命令行恢复可点按钮，点击走命令链', async () => {
+    const { cmd, wrapper } = mountPinned(true)
+    const cmdRow = wrapper.find('[data-testid="gui-list-tree-action-1"]')
+    expect(cmdRow.element.tagName).toBe('BUTTON')
+    await cmdRow.trigger('click')
+    expect(cmd.execute).toHaveBeenCalledWith('taiji.subagentCancel', undefined)
   })
 })
 

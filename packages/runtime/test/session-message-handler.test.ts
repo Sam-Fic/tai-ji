@@ -149,6 +149,16 @@ describe('SessionMessageHandler — error envelope 回归', () => {
       expect(cap.errors).toHaveLength(0)
     })
 
+    it('workflowAction resume 与 abort 同款透传：service 收到 resume 动作 + reply 回显 resume', async () => {
+      const workflowAction = vi.fn().mockResolvedValue(undefined)
+      const { cap, handler } = makeHandler({ workflowAction })
+      await handler.handleSessionMessage(msg('session.workflowAction', { sessionId: 's1', action: 'resume', runId: 'wf-1' }), WS)
+      // action 经 payload 原样透传，handler 侧零分支（差异在 session-records 的拼串）
+      expect(workflowAction).toHaveBeenCalledWith('s1', 'resume', 'wf-1')
+      expect(cap.replies[0]).toMatchObject({ id: 'm1', type: 'session.workflowActionDone', payload: { sessionId: 's1', action: 'resume', runId: 'wf-1' } })
+      expect(cap.errors).toHaveLength(0)
+    })
+
     it('subagentAction 成功 → reply session.subagentActionDone', async () => {
       const { cap, handler } = makeHandler({ subagentAction: vi.fn().mockResolvedValue(undefined) })
       await handler.handleSessionMessage(msg('session.subagentAction', { sessionId: 's1', action: 'cancel', subagentId: 'bg-1' }), WS)
