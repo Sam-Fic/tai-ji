@@ -43,6 +43,10 @@ function makeFakeChild(): ChildProcess & EventEmitter {
 }
 
 beforeEach(() => {
+  // shared 池 isolate:false 同 worker 跨文件复用 globalThis——镜像不清则上游文件
+  // （如 lifecycle-predicates.test.ts）残留的活条目会让「空态 → 0」前提失效
+  // （coverage-gate 第 2 轮实 fault：残留 sa-test 条目致 inFlight 误为 1）。
+  _resetCoreSpawnedChildrenMirrorForTest();
   _resetLifecycleState();
   setInFlightListener(null);
 });
