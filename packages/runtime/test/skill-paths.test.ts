@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest'
+import { INTEGRATION_TESTS_ENABLED, INTEGRATION_TESTS_SKIP_REASON } from '../../../test-guard/integration-gate.ts'
 import path from 'node:path'
 import { PiConfigStore } from '../src/infra/pi/pi-config-store.js'
 import { PiSessionStore } from '../src/infra/pi/session-store.js'
@@ -240,110 +241,49 @@ describe('skillPaths passing chain', () => {
     expect(skillArgs).toEqual([])
   })
 
-  it('getSkillPaths passes configured skill dirs to spawned process', async () => {
-    const service = await createSessionService()
 
-    const skillDirA = '/project/.agents/skills/skill-a'
-    const skillDirB = '/project/.agents/skills/skill-b'
-
-    // pi-config-bridge.getSkillPaths() returns these paths directly
-    mockSkillPaths.push(skillDirA, skillDirB)
-
-    // These paths must "exist" on filesystem for validation
-    existingPaths.add(path.normalize(skillDirA))
-    existingPaths.add(path.normalize(skillDirB))
-
-    try {
-      await service.create('/project')
-    } catch {
-      // create() calls get_state which fails since mock proc exits immediately
-    }
-
-    expect(spawnArgsCapture.length).toBeGreaterThanOrEqual(1)
-    const skillArgs = extractSkillArgs(spawnArgsCapture[0].args)
-    expect(skillArgs).toEqual([skillDirA, skillDirB])
-  })
-
-  it('no --skill args when no skill paths configured', async () => {
-    const service = await createSessionService()
-
-    // No skill paths configured
-    try {
-      await service.create('/empty-project')
-    } catch {
-      // expected
-    }
-
-    expect(spawnArgsCapture.length).toBeGreaterThanOrEqual(1)
-    const skillArgs = extractSkillArgs(spawnArgsCapture[0].args)
-    expect(skillArgs).toEqual([])
-  })
-
-  it('restoreSession passes skillPaths to spawned process', async () => {
-    const service = await createSessionService()
-
-    const skillDirA = '/project/.agents/skills/skill-a'
-    mockSkillPaths.push(skillDirA)
-    // 路径必须“存在”于文件系统才能通过 existsSync 过滤
-    existingPaths.add(path.normalize(skillDirA))
-
-    // Set up a scanned session for restoreSession to find
-    mockScannedSessions.push({
-      id: 'existing-session-id',
-      filePath: '/mock/home/.taiji/sessions/test.jsonl',
-      cwd: '/project',
-      timestamp: new Date().toISOString(),
-      name: null,
-      lastModified: Date.now(),
-      size: 100,
-    })
-
-    try {
-      await service.restoreSession('existing-session-id')
-    } catch {
-      // restoreSession calls switch_session which fails since mock proc exits
-    }
-
-    // restoreSession should have spawned with skill args
-    expect(spawnArgsCapture.length).toBeGreaterThanOrEqual(1)
-    const lastSpawn = spawnArgsCapture[spawnArgsCapture.length - 1]
-    const skillArgs = extractSkillArgs(lastSpawn.args)
-    expect(skillArgs).toEqual([skillDirA])
-  })
-
-  // ── W1（cw-2026-07-21-scan-project-agents-skills）：getSkillPaths(cwd) 相对路径 resolve ──
-  // 修复现状 bug：getSkillPaths(_cwd) 忽略 cwd 参数，discovery.json 中的相对路径（.agents/skills）
-  // 按 runtime 进程 cwd 解析（app.getAppPath/resourcesPath），在该 cwd 下不存在被 filter 掉 →
-  // pi 启动 --skill 参数为空 → pi 加载不到项目 skill。
-  // 修复：相对路径按传入的 session cwd resolve 成绝对路径再 existsSync filter。
-  describe('getSkillPaths relative-path cwd resolution (W1, AC-1/AC-2/AC-3)', () => {
-    it('AC-1: 相对路径 .agents/skills 按 cwd resolve，<cwd>/.agents/skills 存在时返回该绝对路径', async () => {
+/**
+ * 集成门控说明（TAIJI_TEST_INTEGRATION，SSOT = test-guard/integration-gate.ts）：
+ * 本簇用例经 createSessionService() 动态 import session-service 真模块图（session-lifecycle /
+ * process-manager / rpc-client 全链），冷编译成本由簇内首个用例支付——runtime 全量满并行
+ * 落盘 junit 实测 2.71s（超默认组 2s 阈值，docs/TEST-STRATEGY.md「新写测试判据」），后续
+ * 用例命中 vite 变换缓存仅毫秒级；单跑本文件首例 972ms 同形态。判据第三档（负载下拉长无
+ * 稳定上界）不满足单测层「只测逻辑、高负载极快」定位，且只挂首例会把冷编译成本转嫁给簇内
+ * 下一例，故整簇挂门控：本地默认跳过，CI 与按改动范围触发时 TAIJI_TEST_INTEGRATION=1
+ * 真跑（run 命令见 e2e-map E2E-INTEG-72）。
+ * 文件头部三个 RpcClient 用例（spawn 全 mock、无 session-service 模块图）留无门控默认组。
+ */
+  describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
+    `SessionService skillPaths 传递链（session-service 真模块图冷编译）${INTEGRATION_TESTS_SKIP_REASON ? `｜skip：${INTEGRATION_TESTS_SKIP_REASON}` : ''}`,
+    () => {
+    it('getSkillPaths passes configured skill dirs to spawned process', async () => {
       const service = await createSessionService()
-      // discovery 配置含相对路径（用户现状）
-      mockSkillPaths.push('.agents/skills')
-      // session-lifecycle 会 existsSync(cwd) 检查，cwd 必须存在才不 fallback home
-      existingPaths.add(path.normalize('/user-project'))
-      // 模拟 <sessionCwd>/.agents/skills 存在（resolve 后的绝对路径）
-      const resolved = path.resolve('/user-project', '.agents/skills')
-      existingPaths.add(path.normalize(resolved))
+
+      const skillDirA = '/project/.agents/skills/skill-a'
+      const skillDirB = '/project/.agents/skills/skill-b'
+
+      // pi-config-bridge.getSkillPaths() returns these paths directly
+      mockSkillPaths.push(skillDirA, skillDirB)
+
+      // These paths must "exist" on filesystem for validation
+      existingPaths.add(path.normalize(skillDirA))
+      existingPaths.add(path.normalize(skillDirB))
 
       try {
-        await service.create('/user-project')
+        await service.create('/project')
       } catch {
-        // create 调 get_state mock 立即 exit，预期抛
+        // create() calls get_state which fails since mock proc exits immediately
       }
 
       expect(spawnArgsCapture.length).toBeGreaterThanOrEqual(1)
       const skillArgs = extractSkillArgs(spawnArgsCapture[0].args)
-      // 关键断言：相对路径被 resolve 成 <cwd>/.agents/skills 绝对路径注入 --skill
-      expect(skillArgs).toEqual([resolved])
+      expect(skillArgs).toEqual([skillDirA, skillDirB])
     })
 
-    it('AC-2: <cwd>/.agents/skills 不存在时 filter 掉（不注入不存在的路径）', async () => {
+    it('no --skill args when no skill paths configured', async () => {
       const service = await createSessionService()
-      mockSkillPaths.push('.agents/skills')
-      // cwd 本身存在（避免 session-lifecycle fallback），但 .agents/skills 不存在
-      existingPaths.add(path.normalize('/empty-project'))
+
+      // No skill paths configured
       try {
         await service.create('/empty-project')
       } catch {
@@ -355,65 +295,142 @@ describe('skillPaths passing chain', () => {
       expect(skillArgs).toEqual([])
     })
 
-    it('AC-3: 绝对路径（如 /global/skills）不依赖 cwd，直接 existsSync', async () => {
+    it('restoreSession passes skillPaths to spawned process', async () => {
       const service = await createSessionService()
-      const absPath = '/global/.pi/agent/skills'
-      mockSkillPaths.push(absPath)
-      existingPaths.add(path.normalize('/some-cwd'))
-      existingPaths.add(path.normalize(absPath))
+
+      const skillDirA = '/project/.agents/skills/skill-a'
+      mockSkillPaths.push(skillDirA)
+      // 路径必须“存在”于文件系统才能通过 existsSync 过滤
+      existingPaths.add(path.normalize(skillDirA))
+
+      // Set up a scanned session for restoreSession to find
+      mockScannedSessions.push({
+        id: 'existing-session-id',
+        filePath: '/mock/home/.taiji/sessions/test.jsonl',
+        cwd: '/project',
+        timestamp: new Date().toISOString(),
+        name: null,
+        lastModified: Date.now(),
+        size: 100,
+      })
 
       try {
-        await service.create('/some-cwd')
+        await service.restoreSession('existing-session-id')
       } catch {
-        // expected
+        // restoreSession calls switch_session which fails since mock proc exits
       }
 
+      // restoreSession should have spawned with skill args
       expect(spawnArgsCapture.length).toBeGreaterThanOrEqual(1)
-      const skillArgs = extractSkillArgs(spawnArgsCapture[0].args)
-      // 绝对路径原样注入，不经 cwd resolve
-      expect(skillArgs).toEqual([absPath])
+      const lastSpawn = spawnArgsCapture[spawnArgsCapture.length - 1]
+      const skillArgs = extractSkillArgs(lastSpawn.args)
+      expect(skillArgs).toEqual([skillDirA])
     })
 
-    it('AC-1 补充：混合相对+绝对路径，各自正确处理', async () => {
-      const service = await createSessionService()
-      const absPath = '/global/skills'
-      mockSkillPaths.push('.agents/skills', absPath)
-      existingPaths.add(path.normalize('/proj'))
-      const resolved = path.resolve('/proj', '.agents/skills')
-      existingPaths.add(path.normalize(resolved))
-      existingPaths.add(path.normalize(absPath))
+    // ── W1（cw-2026-07-21-scan-project-agents-skills）：getSkillPaths(cwd) 相对路径 resolve ──
+    // 修复现状 bug：getSkillPaths(_cwd) 忽略 cwd 参数，discovery.json 中的相对路径（.agents/skills）
+    // 按 runtime 进程 cwd 解析（app.getAppPath/resourcesPath），在该 cwd 下不存在被 filter 掉 →
+    // pi 启动 --skill 参数为空 → pi 加载不到项目 skill。
+    // 修复：相对路径按传入的 session cwd resolve 成绝对路径再 existsSync filter。
+    describe('getSkillPaths relative-path cwd resolution (W1, AC-1/AC-2/AC-3)', () => {
+      it('AC-1: 相对路径 .agents/skills 按 cwd resolve，<cwd>/.agents/skills 存在时返回该绝对路径', async () => {
+        const service = await createSessionService()
+        // discovery 配置含相对路径（用户现状）
+        mockSkillPaths.push('.agents/skills')
+        // session-lifecycle 会 existsSync(cwd) 检查，cwd 必须存在才不 fallback home
+        existingPaths.add(path.normalize('/user-project'))
+        // 模拟 <sessionCwd>/.agents/skills 存在（resolve 后的绝对路径）
+        const resolved = path.resolve('/user-project', '.agents/skills')
+        existingPaths.add(path.normalize(resolved))
 
-      try {
-        await service.create('/proj')
-      } catch {
-        // expected
-      }
+        try {
+          await service.create('/user-project')
+        } catch {
+          // create 调 get_state mock 立即 exit，预期抛
+        }
 
-      expect(spawnArgsCapture.length).toBeGreaterThanOrEqual(1)
-      const skillArgs = extractSkillArgs(spawnArgsCapture[0].args)
-      expect(skillArgs).toEqual([resolved, absPath])
-    })
+        expect(spawnArgsCapture.length).toBeGreaterThanOrEqual(1)
+        const skillArgs = extractSkillArgs(spawnArgsCapture[0].args)
+        // 关键断言：相对路径被 resolve 成 <cwd>/.agents/skills 绝对路径注入 --skill
+        expect(skillArgs).toEqual([resolved])
+      })
 
-    // R1（review fix）：~/xxx 家目录前缀展开（与 W2 loadSkills 对称）
-    it('R1: ~/xxx 前缀路径 expandHome 展开后 existsSync（不 resolve 到 cwd 下）', async () => {
-      const service = await createSessionService()
-      // discovery.json 实际配置用 ~ 前缀（如 ~/.pi/agent/skills）
-      mockSkillPaths.push('~/.agents/skills')
-      // mock home 是 /mock/home（node:os homedir mock），展开后 = /mock/home/.agents/skills
-      existingPaths.add(path.normalize('/mock/home/.agents/skills'))
-      // cwd 必须存在（避免 session-lifecycle fallback）
-      existingPaths.add(path.normalize('/proj'))
+      it('AC-2: <cwd>/.agents/skills 不存在时 filter 掉（不注入不存在的路径）', async () => {
+        const service = await createSessionService()
+        mockSkillPaths.push('.agents/skills')
+        // cwd 本身存在（避免 session-lifecycle fallback），但 .agents/skills 不存在
+        existingPaths.add(path.normalize('/empty-project'))
+        try {
+          await service.create('/empty-project')
+        } catch {
+          // expected
+        }
 
-      try {
-        await service.create('/proj')
-      } catch {
-        // expected
-      }
+        expect(spawnArgsCapture.length).toBeGreaterThanOrEqual(1)
+        const skillArgs = extractSkillArgs(spawnArgsCapture[0].args)
+        expect(skillArgs).toEqual([])
+      })
 
-      expect(spawnArgsCapture.length).toBeGreaterThanOrEqual(1)
-      const skillArgs = extractSkillArgs(spawnArgsCapture[0].args)
-      // 关键断言：~/.agents/skills 展开为 /mock/home/.agents/skills（不是 /proj/~/.agents/skills 错位）
-      expect(skillArgs).toEqual(['/mock/home/.agents/skills'])
+      it('AC-3: 绝对路径（如 /global/skills）不依赖 cwd，直接 existsSync', async () => {
+        const service = await createSessionService()
+        const absPath = '/global/.pi/agent/skills'
+        mockSkillPaths.push(absPath)
+        existingPaths.add(path.normalize('/some-cwd'))
+        existingPaths.add(path.normalize(absPath))
+
+        try {
+          await service.create('/some-cwd')
+        } catch {
+          // expected
+        }
+
+        expect(spawnArgsCapture.length).toBeGreaterThanOrEqual(1)
+        const skillArgs = extractSkillArgs(spawnArgsCapture[0].args)
+        // 绝对路径原样注入，不经 cwd resolve
+        expect(skillArgs).toEqual([absPath])
+      })
+
+      it('AC-1 补充：混合相对+绝对路径，各自正确处理', async () => {
+        const service = await createSessionService()
+        const absPath = '/global/skills'
+        mockSkillPaths.push('.agents/skills', absPath)
+        existingPaths.add(path.normalize('/proj'))
+        const resolved = path.resolve('/proj', '.agents/skills')
+        existingPaths.add(path.normalize(resolved))
+        existingPaths.add(path.normalize(absPath))
+
+        try {
+          await service.create('/proj')
+        } catch {
+          // expected
+        }
+
+        expect(spawnArgsCapture.length).toBeGreaterThanOrEqual(1)
+        const skillArgs = extractSkillArgs(spawnArgsCapture[0].args)
+        expect(skillArgs).toEqual([resolved, absPath])
+      })
+
+      // R1（review fix）：~/xxx 家目录前缀展开（与 W2 loadSkills 对称）
+      it('R1: ~/xxx 前缀路径 expandHome 展开后 existsSync（不 resolve 到 cwd 下）', async () => {
+        const service = await createSessionService()
+        // discovery.json 实际配置用 ~ 前缀（如 ~/.pi/agent/skills）
+        mockSkillPaths.push('~/.agents/skills')
+        // mock home 是 /mock/home（node:os homedir mock），展开后 = /mock/home/.agents/skills
+        existingPaths.add(path.normalize('/mock/home/.agents/skills'))
+        // cwd 必须存在（避免 session-lifecycle fallback）
+        existingPaths.add(path.normalize('/proj'))
+
+        try {
+          await service.create('/proj')
+        } catch {
+          // expected
+        }
+
+        expect(spawnArgsCapture.length).toBeGreaterThanOrEqual(1)
+        const skillArgs = extractSkillArgs(spawnArgsCapture[0].args)
+        // 关键断言：~/.agents/skills 展开为 /mock/home/.agents/skills（不是 /proj/~/.agents/skills 错位）
+        expect(skillArgs).toEqual(['/mock/home/.agents/skills'])
+      })
     })
   })
 })

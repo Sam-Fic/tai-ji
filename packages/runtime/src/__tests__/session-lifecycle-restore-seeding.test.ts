@@ -20,6 +20,7 @@
  * 运行：cd packages/runtime && pnpm vitest run src/__tests__/session-lifecycle-restore-seeding.test.ts
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { INTEGRATION_TESTS_ENABLED, INTEGRATION_TESTS_SKIP_REASON } from '../../../../test-guard/integration-gate.ts'
 import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -119,7 +120,19 @@ function makePm(clientStateData?: Record<string, unknown> | Error): IProcessMana
 
 // ── 测试 ─────────────────────────────────────────────────────
 
-describe('U2 restoreSession 播种（D2 设计）', () => {
+/**
+ * 集成门控说明（TAIJI_TEST_INTEGRATION，SSOT = test-guard/integration-gate.ts）：
+ * 本 describe 的 beforeEach 经 vi.resetModules() + 动态 import 加载 session-lifecycle 真模块图，
+ * 冷编译成本由首个用例支付——runtime 全量满并行落盘 junit 实测场景 1 达 2.81s（超默认组 2s
+ * 阈值，docs/TEST-STRATEGY.md「新写测试判据」），后续用例命中 vite 变换缓存仅毫秒级；单跑
+ * 本文件场景 1 亦 788ms。判据第三档（负载下拉长无稳定上界）不满足单测层「只测逻辑、高负载
+ * 极快」定位，且只挂首例会把冷编译成本转嫁给场景 2，故整 describe 挂门控：本地默认跳过，
+ * CI 与按改动范围触发时 TAIJI_TEST_INTEGRATION=1 真跑（run 命令见 e2e-map E2E-INTEG-73）。
+ * applyHeaderCwdFallback describe（纯字符串变换，零 IO）留无门控默认组。
+ */
+describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
+  `U2 restoreSession 播种（D2 设计，session-lifecycle 真模块图冷编译）${INTEGRATION_TESTS_SKIP_REASON ? `｜skip：${INTEGRATION_TESTS_SKIP_REASON}` : ''}`,
+  () => {
   // 动态 import SessionLifecycle（避免 ESM 循环）
   let SessionLifecycle: typeof import('../services/session/session-lifecycle.js').SessionLifecycle
   let assertPiSessionFileMock: ReturnType<typeof vi.fn>

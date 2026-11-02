@@ -5872,6 +5872,51 @@
       "owner": "packages/runtime",
       "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
       "note": "REAL_PI_READY 门控资产（真实凭证层，check-slow-tests 门控豁免登记 2026-10-31）：本地有凭证时该 describe 真跑、用例耗时 2.8-4.4s 超 2s 阈值，属门控资产不占默认组预算；faux 层（同文件前半 7 条）mock 化单测在默认组，无慢用例；trigger=on-diff 仅为清单触发提示形态，实际执行保持开发机手动（凭证相关），不进 CI 自动执行"
+    },
+    {
+      "id": "E2E-INTEG-72",
+      "summary": "skillPaths 传递链集成簇：SessionService create/restoreSession spawn --skill 注入与 getSkillPaths 相对路径 resolve（session-service 真模块图冷编译，TAIJI_TEST_INTEGRATION 门控）",
+      "scope": [
+        "packages/runtime/src/services/session/launch-params.ts",
+        "packages/runtime/src/services/session/session-service.ts",
+        "packages/runtime/src/services/session/session-lifecycle.ts",
+        "packages/runtime/src/infra/pi/rpc-client.ts",
+        "packages/runtime/src/infra/pi/pi-config-store.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "packages/runtime/test/skill-paths.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "TAIJI_TEST_INTEGRATION=1 pnpm --filter @taiji/runtime exec vitest run test/skill-paths.test.ts",
+      "owner": "packages/runtime",
+      "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
+      "note": "R2 态 + 簇级门控（2026-11-02 测试范围收缩：session-service 真模块图（session-lifecycle / process-manager / rpc-client 全链）冷编译成本由簇内首个用例支付，runtime 全量满并行落盘 junit 实测 2.71s 超默认组 2s 阈值、单跑本文件首例 972ms 同形态；只挂首例会把冷编译成本转嫁给簇内下一例，故 SessionService 传递链 8 例整簇全挂）。触发条件 = scope 内 skillPaths 传递链 diff 命中。断言本质 = create/restoreSession spawn 参数 --skill 注入 + getSkillPaths 相对路径按 session cwd resolve 与 ~ 前缀 expandHome 过滤。serial=真 的理由 = 真模块图冷编译在满载下无稳定上界。文件头部 3 条 RpcClient 用例（spawn 全 mock、不触该模块图）留无门控默认组，其满载抖动余量由本规则文件级豁免覆盖。"
+    },
+    {
+      "id": "E2E-INTEG-73",
+      "summary": "U2 restoreSession 播种集成簇：get_state 读回 → metaOverride 播种链（session-lifecycle 真模块图冷编译，TAIJI_TEST_INTEGRATION 门控）",
+      "scope": [
+        "packages/runtime/src/services/session/session-lifecycle.ts",
+        "packages/runtime/src/services/session/restore-seeding.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "packages/runtime/src/__tests__/session-lifecycle-restore-seeding.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "TAIJI_TEST_INTEGRATION=1 pnpm --filter @taiji/runtime exec vitest run src/__tests__/session-lifecycle-restore-seeding.test.ts",
+      "owner": "packages/runtime",
+      "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
+      "note": "R2 态 + describe 级门控（2026-11-02 测试范围收缩：beforeEach 经 vi.resetModules() + 动态 import 加载 session-lifecycle 真模块图，冷编译成本由场景 1 支付，runtime 全量满并行落盘 junit 实测 2.81s 超默认组 2s 阈值、单跑场景 1 788ms 同形态；只挂首例会把冷编译成本转嫁场景 2，故 U2 describe 11 例整挂）。触发条件 = scope 内 restoreSession 播种 / header cwd 降级 diff 命中。断言本质 = get_state 读回值 → 扫描 meta 值 → '' 兜底链的 metaOverride 播种（restore 任何情况不播种全局默认）+ hydrateBindingMeta restore='none' 不覆写播种值。serial=真 的理由 = 真模块图冷编译在满载下无稳定上界。同文件 applyHeaderCwdFallback describe（纯字符串变换、零 IO）留无门控默认组。"
     }
   ]
 }
