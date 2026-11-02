@@ -2,7 +2,8 @@
 //
 // 三视角：
 //   ①使用者（宿主 widget 区视角）——树形状：meta head（title/status/progress/icon/badge）
-//     + tab-bar 双段（进行中/已结束）行集；失败轮行 label 承载 class.kind 失败分类且
+//     + tab-bar 双段（进行中/已结束）行集（M3 起段内逐行「list-tree + action-bar」对）；
+//     失败轮行 label 承载 class.kind 失败分类且
 //     status=failed（§6.6 风险②「lastRound.failure 不得静默丢弃」的单测承载——原宿主
 //     托盘行的失败分类 chip 随件迁移，信息原语承载位 = TreeItem label + status 圆点）；
 //     行 action.hostAction 声明（M2 入口复活：drawer → ui.subagent + params.recordId，
@@ -99,13 +100,19 @@ function makeRecord(over: Partial<SubagentRecord> = {}): SubagentRecord {
   } as SubagentRecord;
 }
 
-/** tab-bar 树的段 items 提取（sections[i][0].items——段 = 子树数组，单组件子树取首项）。 */
-function segmentItems(component: GuiComponent, index: number): TreeItem[] {
+/** tab-bar 树的段组件清单（sections[i]——段 = 子树数组）。 */
+function segmentComponents(component: GuiComponent, index: number): GuiComponent[] {
   expect(component.type).toBe("tab-bar");
   const sections = (component.props as { sections?: GuiComponent[][] }).sections ?? [];
-  const seg = sections[index]?.[0];
-  expect(seg?.type).toBe("list-tree");
-  return (seg.props as { items: TreeItem[] }).items;
+  return sections[index] ?? [];
+}
+
+/** 段内行集（M3 起段 = 逐行「list-tree 行 + action-bar 操作」对——展平段内全部
+ *  list-tree 的 items，与 workflow-tray-widget.test / tray-widget-buttons.test 同口径）。 */
+function segmentItems(component: GuiComponent, index: number): TreeItem[] {
+  return segmentComponents(component, index)
+    .filter((c) => c.type === "list-tree")
+    .flatMap((c) => (c.props as { items: TreeItem[] }).items);
 }
 
 /** 行 action 的 hostAction 提取（行不可点 = action 缺省，断言处显式判 undefined）。 */
@@ -253,6 +260,46 @@ describe("buildSubagentTrayWidget 树构造（纯函数）", () => {
     ]);
     expect(segmentItems(result!.gui.component, 0)).toHaveLength(1);
     expect(segmentItems(result!.gui.component, 1)).toHaveLength(1);
+  });
+
+  it("多行段逐行成对（M3 段结构）：首行无按钮 + 次行有按钮 → 段内 list-tree/action-bar 按行交替", () => {
+    const result = buildWidget([
+      makeRecord({ id: "r-done", agent: "worker", slug: "done", status: "idle" }),
+      makeRecord({
+        id: "r-fail",
+        agent: "reviewer",
+        slug: "rev",
+        status: "idle",
+        stopReason: "error",
+        lastRound: {
+          engineStopReason: "error",
+          failure: { class: "provider", kind: "rate_limited", retryable: "conditional", raw: "rpm 101/100" },
+        },
+      }),
+    ]);
+    const component = result!.gui.component;
+    // 组件序列 = 逐行「list-tree 行 + action-bar（该行有按钮时）」对：首行收尾无按钮
+    // 只推 list-tree，次行失败行带重试按钮——按钮挂次行之后（args 逐行承载，不串台）。
+    expect(segmentComponents(component, 1).map((c) => c.type)).toEqual([
+      "list-tree",
+      "list-tree",
+      "action-bar",
+    ]);
+    // 行集展平覆盖两行——旧「段取首项」断言只能看到首行，次行的段结构回归被掩盖。
+    expect(segmentItems(component, 1)).toHaveLength(2);
+    const actionItems = (
+      segmentComponents(component, 1)[2].props as {
+        items: Array<{ id: string; label: string; commandId: string; args: Record<string, unknown> }>;
+      }
+    ).items;
+    expect(actionItems).toEqual([
+      {
+        id: "retry-r-fail",
+        label: "重试",
+        commandId: "taiji.subagentRetry",
+        args: { slug: "rev", task: "do the thing" },
+      },
+    ]);
   });
 });
 
