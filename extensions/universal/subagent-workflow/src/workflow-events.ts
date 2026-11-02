@@ -185,6 +185,38 @@ function createLazy<K extends keyof LauncherDeps>(
 
 // ── run 终局固定顺序副作用（makeDeps onRunDone 管线提级，可直测） ─────────────
 
+/**
+ * 托盘投影的磁盘折叠补装（restore/重启冷读收敛，[fix-tray-restore]）：当前 session 的
+ * store.loadAll 幂等重建 → runs Map 补缺 upsert（已含内存态的 runId 跳过——内存聚合是
+ * 活体权威，磁盘重建产物只填装配链恢复段未达投影面的缺口；产物与 recoverCrashedRuns
+ * 同一 fold 代码，终局事实经 store 侧 noteRebuiltSettlement 进注册表）。
+ *
+ * 为什么在推送侧触发而不是装配件再跑一轮：装配链的 recoverCrashedRuns 正常路径已把
+ * 重建产物放进 Map（本函数恒 no-op）；restore 实测（a2-lifecycle-ops V4b）暴露的是
+ * 「托盘 attach 推送时刻投影空」的时序形态——折叠问询挂在推送器的空投影分支（每
+ * attach 一次）上，投影面就绪与否在推送时刻自证，不预测装配段时序。storeHealthy=false
+ * （loadAll 曾失败）短路返回 false——与 MF-1 fail-fast 同一口径，本进程内不重试。
+ *
+ * loadAll 抛错（record 流损坏，RecordStreamCorruptionError）原样上抛——消费方（推送器）
+ * warn 留痕后按空投影继续，不反噬推送链。
+ *
+ * @returns 是否补到产物（true = Map 有新增，调用方可重读投影）
+ */
+export async function reloadTrayRunsFromDisk(
+  state: Pick<SessionLifecycleResult, "store" | "runs" | "storeHealthy">,
+): Promise<boolean> {
+  if (!state.storeHealthy) return false;
+  const rebuilt = await state.store.loadAll();
+  let added = false;
+  for (const run of rebuilt) {
+    if (!state.runs.has(run.runId)) {
+      state.runs.set(run.runId, run);
+      added = true;
+    }
+  }
+  return added;
+}
+
 /** runSettledEffects 的注入点（生产装配点 = makeDeps；直测注入 fake——模块行为
  *  可脱离装配侧独立测试）。 */
 export interface RunSettledEffectsEnv {
@@ -329,11 +361,22 @@ export function setupWorkflowDomain(
   // readRuns = 当前 session 的 runs Map 值集（聚合根内存投影；装配链完成前条目缺席
   // 返回空集——推送器按清屏投影，session_start attach 在装配后时序保证正常路径有值）。
   // 变更信号经下方 journal 出口组合分发（run 域帧落盘 = run 生命周期转移的权威出口）。
+  // [fix-tray-restore] reloadFromDisk = 磁盘折叠冷读源（推送器在空投影时触发，每 attach
+  // 一次）：restore 实测（a2-lifecycle-ops V4b）暴露内存投影面在 restore 双 spawn 形态下
+  // 的空投影窗口，且 interrupted 静态态无后续事件重推、空投影无自愈——推送时刻对当前
+  // session 的 store.loadAll 折叠补装一次（reloadTrayRunsFromDisk，上方具名导出可直测），
+  // 与 subagent 件 collectRecords 磁盘重建源同款重启恢复语义。session 条目缺席（键位
+  // 未就绪）返回 false，推送器按空投影清屏（与既有行为一致）。
   const workflowTrayWidgetPusher =
     wiring.workflowTrayWidgetPusher ??
     createWorkflowTrayWidgetPusher(() => {
       const state = sessionState.get(lsRef.lastSessionId);
       return state ? [...state.runs.values()] : [];
+    }, {
+      reloadFromDisk: () => {
+        const state = sessionState.get(lsRef.lastSessionId);
+        return state ? reloadTrayRunsFromDisk(state) : Promise.resolve(false);
+      },
     });
   // [skill-reload D2] handle.state 即槽对象本身（不做解构重包装——否则容器每次
   //  factory 重跑新建，调用方拿不到「同一 domain state 引用」的接管前提）。

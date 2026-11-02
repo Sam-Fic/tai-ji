@@ -10,6 +10,9 @@
 //     该行 run.runId——workflow 可视化的第一用户入口，G3 零入口问题的单测承载）；
 //   ②构建者——空 runs 清屏（undefined）/ 推送器 attach 初始推送 + notifyRunsChanged
 //     变更驱动重推（微任务合并）+ detach 停推；readRuns 抛错按清屏投影不反噬调用方。
+//   ②b restore 冷读收敛（[fix-tray-restore]）——内存投影空时磁盘折叠补装（每 attach
+//     一次预算）后重读投影：重建产物含 interrupted 行（已结束段 + 续跑按钮）；折叠
+//     无新增/抛错按清屏继续；内存非空不触发折叠（正常路径零磁盘 IO）；attach 复位预算。
 //   ③观察者——纯函数入参出参；推送失败 warn 留痕后继续（绝对投影，下一事件自愈）。
 //
 // WorkflowRun fixture 用真聚合根（WorkflowRun.reconstruct——runSummary/calls 派生消费
@@ -129,6 +132,23 @@ function segmentItems(component: GuiComponent, index: number): TreeItem[] {
   return seg
     .filter((c) => c.type === "list-tree")
     .flatMap((c) => (c.props as { items: TreeItem[] }).items);
+}
+
+/** 段内 action-bar 的 items 提取（逐行成对形态中与 list-tree 交替的按钮承载位）。 */
+function segmentActionBarItems(component: GuiComponent, index: number): Array<Record<string, unknown>> {
+  expect(component.type).toBe("tab-bar");
+  const sections = (component.props as { sections?: GuiComponent[][] }).sections ?? [];
+  const seg = sections[index] ?? [];
+  return seg
+    .filter((c) => c.type === "action-bar")
+    .flatMap((c) => (c.props as { items: Array<Record<string, unknown>> }).items);
+}
+
+/** 微任务清空（push 异步化的折叠 await 链：微任务边界数轮冲刷后断言）。 */
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 5; i++) {
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+  }
 }
 
 /** 行 action 的 hostAction 提取（行不可点 = action 缺省，断言处显式判 undefined）。 */
@@ -314,5 +334,101 @@ describe("createWorkflowTrayWidgetPusher —— 推送器（构建者视角）",
     pusher.notifyRunsChanged();
     await new Promise<void>((resolve) => queueMicrotask(resolve));
     expect(setWidgetDualMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("createWorkflowTrayWidgetPusher —— 磁盘折叠冷读收敛（[fix-tray-restore] restore 场景锁定）", () => {
+  function makeCtx(): unknown {
+    return { mode: "rpc", hasUI: true };
+  }
+
+  it("restore 冷读收敛：内存投影空 → 磁盘折叠补装 → 初始推送即含重建产物（interrupted 行带续跑按钮）", async () => {
+    // restore 形态：attach 时投影面尚未含恢复产物（readRuns 空），磁盘折叠源补装后重读。
+    const runs: WorkflowRun[] = [];
+    const rebuilt = [
+      makeRun({ runId: "wf-restore-int", scriptName: "fanout-canary", slug: "canary", status: "running", interrupted: true }),
+      makeRun({ runId: "wf-restore-done", scriptName: "older", status: "done", reason: "completed" }),
+    ];
+    const reloadFromDisk = vi.fn(async () => {
+      runs.push(...rebuilt);
+      return true;
+    });
+    const pusher = createWorkflowTrayWidgetPusher(() => runs, { reloadFromDisk });
+
+    pusher.attach(makeCtx() as never);
+    await flushMicrotasks();
+
+    expect(reloadFromDisk).toHaveBeenCalledTimes(1);
+    expect(setWidgetDualMock).toHaveBeenCalledTimes(1);
+    const pushed = setWidgetDualMock.mock.calls[0]![2];
+    expect(pushed).toBeDefined();
+    // interrupted 重建行落已结束段 + 行内续跑按钮（任务书目标 1 的投影形态；推送器
+    // 路径 locale = readUiLocale 回落 en-US——与 subagent 件推送器路径断言同口径）
+    const ended = segmentItems(pushed.gui.component, 1);
+    expect(ended.map((item) => item.label)).toContain("fanout-canary · canary · 0/0");
+    const buttons = segmentActionBarItems(pushed.gui.component, 1);
+    const resume = buttons.find((item) => item.id === "resume-wf-restore-int");
+    expect(resume).toBeDefined();
+    expect(resume!.label).toBe("Resume");
+    expect(resume!.commandId).toBe("taiji.workflowResume");
+  });
+
+  it("磁盘折叠无新增（返回 false）→ 按空投影清屏；预算一次性（后续空投影不再触发 reload）", async () => {
+    const reloadFromDisk = vi.fn(async () => false);
+    const pusher = createWorkflowTrayWidgetPusher(() => [], { reloadFromDisk });
+
+    pusher.attach(makeCtx() as never);
+    await flushMicrotasks();
+    expect(setWidgetDualMock).toHaveBeenCalledWith(expect.anything(), WORKFLOW_TRAY_VIEW_ID, undefined);
+
+    // 变更信号驱动的空投影重推不再触发第二次折叠（真无 run 的 session 不重复付磁盘读成本）
+    pusher.notifyRunsChanged();
+    await flushMicrotasks();
+    expect(reloadFromDisk).toHaveBeenCalledTimes(1);
+    expect(setWidgetDualMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("内存投影非空 → 不触发磁盘折叠（正常路径零磁盘 IO）", async () => {
+    const reloadFromDisk = vi.fn(async () => false);
+    const pusher = createWorkflowTrayWidgetPusher(
+      () => [makeRun({ runId: "wf-live", scriptName: "build", status: "running" })],
+      { reloadFromDisk },
+    );
+
+    pusher.attach(makeCtx() as never);
+    await flushMicrotasks();
+
+    expect(reloadFromDisk).not.toHaveBeenCalled();
+    expect(setWidgetDualMock.mock.calls[0]![2]).toBeDefined();
+  });
+
+  it("detach 后重新 attach（切回 session）→ 折叠预算复位，重新触发一次 reload（RE3 切回即现）", async () => {
+    const reloadFromDisk = vi.fn(async () => false);
+    const pusher = createWorkflowTrayWidgetPusher(() => [], { reloadFromDisk });
+    const ctx = makeCtx();
+
+    pusher.attach(ctx as never);
+    await flushMicrotasks();
+    expect(reloadFromDisk).toHaveBeenCalledTimes(1);
+
+    pusher.detach();
+    pusher.attach(ctx as never);
+    await flushMicrotasks();
+    expect(reloadFromDisk).toHaveBeenCalledTimes(2);
+  });
+
+  it("磁盘折叠抛错 → warn 留痕后按空投影清屏，不反噬推送链", async () => {
+    const reloadFromDisk = vi.fn(async () => {
+      throw new Error("record stream corrupted");
+    });
+    const pusher = createWorkflowTrayWidgetPusher(() => [], { reloadFromDisk });
+
+    pusher.attach(makeCtx() as never);
+    await flushMicrotasks();
+
+    expect(extensionLoggerMock.instance.warn).toHaveBeenCalledWith(
+      expect.stringContaining("disk reload failed"),
+    );
+    expect(setWidgetDualMock).toHaveBeenCalledWith(expect.anything(), WORKFLOW_TRAY_VIEW_ID, undefined);
   });
 });

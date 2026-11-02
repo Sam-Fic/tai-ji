@@ -6,6 +6,7 @@
 //   ③ handler 围栏（session_shutdown 的 dispose 抛错不阻断清理 / session_start
 //      装配链异常不逃逸）；
 //   ④ runSettledEffects 四步终局副作用管线直测；
+//   ④b reloadTrayRunsFromDisk 磁盘折叠补装直测（[fix-tray-restore] 托盘 restore 冷读收敛）；
 //   ⑤ setupWorkflowDomain pi.on 注册顺序锁（逐位不变契约）；
 //   ⑥ 组合根薄接线（registerWorkflowsCommand 第三参 lazyDeps.onRunDone → 真实
 //      runSettledEffects 管线，session_start 装配域行为的完整重放由 session-lifecycle
@@ -70,7 +71,7 @@ import type { InFlightReporter } from "../host/inflight-reporter.ts";
 import type { SubagentTrayWidgetPusher } from "../interface/gui/tray-widget.ts";
 import type { WorkflowTrayWidgetPusher } from "../interface/gui/workflow-tray-widget.ts";
 import type { WorkflowDomainHandle } from "../workflow-events.ts";
-import { runSettledEffects, type RunSettledEffectsEnv } from "../workflow-events.ts";
+import { reloadTrayRunsFromDisk, runSettledEffects, type RunSettledEffectsEnv } from "../workflow-events.ts";
 import { GLOBAL_SLOT_KEYS } from "@zhushanwen/subagent-core";
 
 // 槽 key（Symbol.for 同 key 即同一 symbol——与被测实现登记的 key 一致）
@@ -1094,5 +1095,101 @@ describe("组合根接线：registerWorkflowsCommand 第三参 lazyDeps.onRunDon
     expect(runs.size).toBe(MAX_RETAINED_DONE_RUNS);
     expect(runs.has("seed-0")).toBe(false);
     expect(runs.has("wf-thin")).toBe(true);
+  });
+});
+
+// ── [fix-tray-restore] reloadTrayRunsFromDisk：托盘投影磁盘折叠补装直测 ─────────
+//
+// restore 实测（a2-lifecycle-ops V4b）暴露托盘 attach 推送时刻内存投影空的形态，
+// 组合根经推送器 reloadFromDisk 注入本函数在推送时刻折叠补装。直测不挂装配（与
+// runSettledEffects 同款）：只注入 fake store / runs Map / storeHealthy。
+
+describe("reloadTrayRunsFromDisk：磁盘折叠补装（restore 冷读收敛）", () => {
+  function makeState(opts: {
+    loadAll: ReturnType<typeof vi.fn>;
+    storeHealthy?: boolean;
+    seed?: Array<WorkflowRun>;
+  }) {
+    const runs = new Map<string, WorkflowRun>();
+    for (const run of opts.seed ?? []) runs.set(run.runId, run);
+    return {
+      runs,
+      state: {
+        store: { loadAll: opts.loadAll },
+        runs,
+        storeHealthy: opts.storeHealthy ?? true,
+      },
+    };
+  }
+
+  it("loadAll 产物补缺 upsert 进 runs Map，返回 true（有新增）", async () => {
+    const rebuilt = [makeRun({ runId: "wf-int", status: "running" }), makeRun({ runId: "wf-old", status: "done" })];
+    const loadAll = vi.fn(async () => rebuilt);
+    const { state, runs } = makeState({ loadAll });
+
+    const added = await reloadTrayRunsFromDisk(state);
+
+    expect(added).toBe(true);
+    expect(runs.has("wf-int")).toBe(true);
+    expect(runs.has("wf-old")).toBe(true);
+    expect(runs.size).toBe(2);
+  });
+
+  it("补缺不覆盖既有内存态：Map 已持有的 runId 跳过（内存活体聚合权威，磁盘产物只填缺口）", async () => {
+    const liveRun = makeRun({ runId: "wf-live", status: "running" });
+    const diskTwin = makeRun({ runId: "wf-live", status: "running" });
+    const fresh = makeRun({ runId: "wf-fresh", status: "done" });
+    const loadAll = vi.fn(async () => [diskTwin, fresh]);
+    const { state, runs } = makeState({ loadAll, seed: [liveRun] });
+
+    const added = await reloadTrayRunsFromDisk(state);
+
+    // wf-live 保留内存引用（未被磁盘孪生覆盖）；只补了 wf-fresh
+    expect(runs.get("wf-live")).toBe(liveRun);
+    expect(runs.has("wf-fresh")).toBe(true);
+    expect(added).toBe(true);
+  });
+
+  it("storeHealthy=false（loadAll 曾失败）→ 短路返回 false，不触达 store（MF-1 fail-fast 同口径）", async () => {
+    const loadAll = vi.fn(async () => [makeRun({ runId: "wf-x", status: "running" })]);
+    const { state, runs } = makeState({ loadAll, storeHealthy: false });
+
+    const added = await reloadTrayRunsFromDisk(state);
+
+    expect(added).toBe(false);
+    expect(loadAll).not.toHaveBeenCalled();
+    expect(runs.size).toBe(0);
+  });
+
+  it("storeHealthy=true 且无新增（重建集 ⊆ 既有 Map）→ 返回 false（推送器不重读投影）", async () => {
+    const existing = makeRun({ runId: "wf-have", status: "running" });
+    const loadAll = vi.fn(async () => [makeRun({ runId: "wf-have", status: "running" })]);
+    const { state } = makeState({ loadAll, seed: [existing] });
+
+    const added = await reloadTrayRunsFromDisk(state);
+
+    expect(added).toBe(false);
+  });
+
+  it("loadAll 抛错（record 流损坏）原样上抛——推送器侧围栏承接，本函数不吞", async () => {
+    const loadAll = vi.fn(async () => {
+      throw new Error("record stream corrupted");
+    });
+    const { state } = makeState({ loadAll });
+
+    await expect(reloadTrayRunsFromDisk(state)).rejects.toThrow("record stream corrupted");
+  });
+
+  it("按传入条目隔离：只 upsert 进本 state.runs（RE3 磁盘重建源按当前 session 过滤的承载语义）", async () => {
+    const loadAll = vi.fn(async () => [makeRun({ runId: "wf-a", status: "running" })]);
+    const a = makeState({ loadAll });
+    const otherLoadAll = vi.fn(async () => []);
+    const b = makeState({ loadAll: otherLoadAll });
+
+    await reloadTrayRunsFromDisk(a.state);
+
+    expect(a.runs.has("wf-a")).toBe(true);
+    expect(b.runs.size).toBe(0);
+    expect(otherLoadAll).not.toHaveBeenCalled();
   });
 });

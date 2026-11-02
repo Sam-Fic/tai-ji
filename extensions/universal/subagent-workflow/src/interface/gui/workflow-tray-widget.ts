@@ -7,7 +7,12 @@
 //
 // 数据源 = workflow 域 per-session 的 runs Map（WorkflowRun 聚合根，LauncherDeps.runs
 // 同源——经注入的 readRuns 现读，组合根 workflow-events 在 session_start 装配链后注入
-// 当前 session 条目；聚合根内存投影即绝对状态，重启后经 loadAll 磁盘重建覆盖冷读）。
+// 当前 session 条目；聚合根内存投影即绝对状态）+ 磁盘折叠冷读源（reloadFromDisk，组合根
+// 注入 store.loadAll 的 upsert 包装）：内存投影空时触发一次折叠补装再重读——restore/
+// 重启形态下内存投影面（per-session Map + lsRef 单值键位）任一环未就绪即投影空，且
+// interrupted 是静态暂停态、后续无 journal 事件驱动重推，空投影无自愈；磁盘折叠源让
+// attach 投影不依赖装配链恢复段的成果（subagent 件 collectRecords 四源合并中「磁盘重建」
+// 的同款语义——与 subagent 件同款重启恢复收敛）。
 // 行级信息 = core runSummary 派生视图（三态 done>interrupted>running + DoneReason 终局
 // 因）+ state.calls 成员计数（N/M 进度的原语承载位——list-tree 无进度条原语，拼进行
 // label，信息不静默丢弃）。
@@ -273,10 +278,24 @@ export function buildWorkflowTrayWidget(
 export type WorkflowRunsReader = () => readonly WorkflowRun[];
 
 /**
- * workflow 托盘 widget 推送器。attach = 初始推送（绝对投影——聚合根内存态即当前真值）；
- * notifyRunsChanged = run 域 journal 出口的变更信号（组合根分发，同 tick 多次合并为
- * 一次重推）；detach = 摘 ctx 停推。推送失败首败 warn 留痕（不重试——下一次 journal
- * 事件驱动重推，绝对投影语义下任何一帧成功即整镜恢复，subagent 件同款方向）。
+ * 磁盘折叠冷读源（restore/重启收敛）：内存投影为空时由推送器触发（每 attach 生命周期
+ * 一次）。实现方（组合根）读当前 session 的 store.loadAll 幂等重建并 upsert 进内存
+ * 投影面（runs Map 补缺，不覆盖活体态），返回是否补到产物——true 时推送器重读 readRuns。
+ * 故障由推送器围栏（warn 留痕后按空投影继续），不反噬推送链。
+ */
+export type WorkflowRunsDiskReloader = () => Promise<boolean>;
+
+/** 推送器工厂可选项（缺省 = 无磁盘折叠源，纯内存投影——既有行为）。 */
+export interface WorkflowTrayWidgetPusherOptions {
+  reloadFromDisk?: WorkflowRunsDiskReloader;
+}
+
+/**
+ * workflow 托盘 widget 推送器。attach = 初始推送（绝对投影——聚合根内存态即当前真值；
+ * 投影空且有磁盘折叠源时先折叠补装再投影，见 push 内注释）；notifyRunsChanged = run 域
+ * journal 出口的变更信号（组合根分发，同 tick 多次合并为一次重推）；detach = 摘 ctx 停推。
+ * 推送失败首败 warn 留痕（不重试——下一次 journal 事件驱动重推，绝对投影语义下任何一帧
+ * 成功即整镜恢复，subagent 件同款方向）。
  *
  * ctx 为 null 期间（attach 前 / detach 后）push 为 no-op；readRuns 抛错（session 装配
  * 链未完成的时序窗）按无数据清屏投影——不反噬 journal 出口调用方（core 写链不得被
@@ -291,23 +310,53 @@ export interface WorkflowTrayWidgetPusher { // oe-exempt:20261025:framework:托�
 
 export function createWorkflowTrayWidgetPusher(
   readRuns: WorkflowRunsReader,
+  options: WorkflowTrayWidgetPusherOptions = {},
 ): WorkflowTrayWidgetPusher {
   const logger = getLogger("subagents");
+  const reloadFromDisk = options.reloadFromDisk;
   let ctx: ExtensionContext | null = null;
   /** 同 tick 多次变更信号合并为一次推送（微任务边界 = 合并点，无 timer）。 */
   let flushScheduled = false;
   let firstFailureLogged = false;
+  /**
+   * 磁盘折叠预算（每 attach 生命周期一次）：restore 收敛只需一问，常态空投影（真无 run
+   * 的 session）不重复付 loadAll 的全量 session 读成本；attach 复位（切回该 session 重算）。
+   */
+  let diskReloadUsed = false;
+  /** 折叠单飞：await 间隙重入的 push 不重复发起折叠（第一次完成后由重推链收敛）。 */
+  let diskReloadInFlight = false;
 
-  function push(): void {
-    if (ctx === null) return;
-    let runs: readonly WorkflowRun[] = [];
+  /** readRuns 围栏：读侧故障按空集 + 留痕（不静默），下一事件自然重推。 */
+  function readRunsSafe(): readonly WorkflowRun[] {
     try {
-      runs = readRuns();
+      return readRuns();
     } catch (err) {
-      // 读侧故障按清屏投影 + 留痕（不静默）——下一事件自然重推。
       logger.warn(`[workflow-tray] runs read failed; projecting empty: ${toErrorMessage(err)}`);
-      runs = [];
+      return [];
     }
+  }
+
+  async function push(): Promise<void> {
+    if (ctx === null) return;
+    let runs = readRunsSafe();
+    if (runs.length === 0 && reloadFromDisk && !diskReloadUsed && !diskReloadInFlight) {
+      // restore/重启冷读收敛：内存投影空 ≠ 无 run（装配链恢复段产物可能未达投影面，
+      // 且 interrupted 静态态无后续事件重推）——磁盘折叠补装一次后重读。补装只补缺
+      // （组合根 upsert 语义），不覆盖内存活体态；无 reloadFromDisk（测试/纯内存形态）
+      // 或预算已用尽时直接按空投影清屏。
+      diskReloadUsed = true;
+      diskReloadInFlight = true;
+      try {
+        const added = await reloadFromDisk();
+        if (added) runs = readRunsSafe();
+      } catch (err) {
+        logger.warn(`[workflow-tray] disk reload failed; projecting empty: ${toErrorMessage(err)}`);
+      } finally {
+        diskReloadInFlight = false;
+      }
+    }
+    // 折叠 await 间隙可能 detach（session 切换/终结）——醒来后核对再推，防 stale ctx 推帧。
+    if (ctx === null) return;
     // locale 每次推送时读（D9，subagent 件同款）：界面语言切换后下一次推送即生效。
     const locale = readUiLocale();
     try {
@@ -331,13 +380,16 @@ export function createWorkflowTrayWidgetPusher(
     flushScheduled = true;
     queueMicrotask(() => {
       flushScheduled = false;
-      push();
+      void push();
     });
   }
 
   return {
     attach(target: ExtensionContext): void {
       ctx = target;
+      // 切回该 session（attach 重算）恢复磁盘折叠预算：上一 attach 的「已问过磁盘」
+      // 不跨 session 生命周期记忆。
+      diskReloadUsed = false;
       scheduleFlush();
     },
 
