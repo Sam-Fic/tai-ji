@@ -21,7 +21,8 @@
  * pi 升级时需同步维护（编译器 exhaustive check 会提示）。
  */
 // ThinkingLevel 值域双向防漂移锁的比对对象（import type：类型位置消费，保持本文件零运行时依赖）。
-import type { PI_THINKING_LEVELS } from '@taiji/shared'
+// ExtensionInteractMethod（extension_ui_request method 词表 SSOT）：INTERACTIVE_UI_METHODS 穷举检查消费（import type）。
+import type { PI_THINKING_LEVELS, ExtensionInteractMethod } from '@taiji/shared'
 // disposition 词表（PiMessage.disposition 同源；本文件 re-export 供既有 import 路径使用）。
 import type { PiInputDisposition } from '@zhushanwen/pi-rpc'
 
@@ -589,7 +590,7 @@ export interface PiExtensionUiRequestEvent extends PiBaseMessage {
    * 丢弃无功能损失——event-adapter 落 default 分支 warn + noop，预决策只补类型不实现宿主）。
    * 全集对照 pi rpc-mode.js createExtensionUIContext 的 output 调用点（RT-2#7 补全
    * set_editor_text/setTitle——此前缺失使 `as string` 成为掩盖穷举缺口的必要转换）。
-   * event-adapter.ts INTERACTIVE_UI_METHODS 只含 dialog 子集，与此类型保持同步。
+   * 交互式 dialog 子集词表 = 本文件下方 INTERACTIVE_UI_METHODS（含 pi 源码锚点），与此类型保持同步。
    */
   method: 'confirm' | 'select' | 'input' | 'notify' | 'editor' | 'setStatus' | 'setWidget' | 'set_editor_text' | 'setTitle'
   /** Unique id for correlating the response back. */
@@ -606,6 +607,30 @@ export interface PiExtensionUiRequestEvent extends PiBaseMessage {
   /** The original tool call context (forwarded to frontend for approval UI). */
   [key: string]: unknown
 }
+
+/**
+ * extension_ui_request 的交互式 dialog 方法词表——产生 extension.ui_request WS 帧、
+ * 需前端回复的阻塞子集（pi 协议词汇，本文件是 pi 协议真契约，ADR-0037）。
+ *
+ * pi 源码锚点：ExtensionUIContext 的阻塞方法（await 用户应答，返回 Promise）——pi@1.0.0
+ * node_modules/@earendil-works/pi-coding-agent dist/core/extensions/types.d.ts：
+ * select :74 / confirm :76 / input :78 / editor :139。pi 升级新增阻塞 UI 方法时漏置
+ * 本词表 = 请求被静默矩阵误判死（extension-ui 交互等待无豁免锚点），同步维护点即本处。
+ *
+ * notify 不在此列——它是 fire-and-forget（pi rpc-mode.ts notify 发后不等回复），
+ * 走独立 extension:notify WS 帧 + 前端 toast 渲染（非阻塞）。
+ * setWidget/set_editor_text 也不在此列——它们走独立分支，不产 dialog 帧
+ * （setStatus 曾同列，状态栏退役后改为静默 noop，见 event-adapter translateStatusRequest）。
+ *
+ * 用 `as const satisfies readonly ExtensionInteractMethod[]` 实现编译期穷举检查：
+ * ExtensionInteractMethod 扩展新方法时，若此数组遗漏，tsc 报错（而非静默 noop 丢弃）。
+ * 消费方（event-adapter handleExtensionUIRequest gate + silence-matrix ask_user 锚点
+ * 判定）统一经下方 INTERACTIVE_UI_METHOD_SET 查询——词表本体单源本文件，禁本地重写。
+ */
+export const INTERACTIVE_UI_METHODS = ['confirm', 'select', 'input', 'editor'] as const satisfies readonly ExtensionInteractMethod[]
+
+/** 运行时查询形态（上方词表本体同模块内一行派生，无漂移面；ReadonlySet<string> 直接收窄消费方 `method: string` 的成员查询）。 */
+export const INTERACTIVE_UI_METHOD_SET: ReadonlySet<string> = new Set(INTERACTIVE_UI_METHODS)
 
 // ── Event messages: status / error ─────────────────────────────────
 

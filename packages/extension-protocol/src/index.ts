@@ -410,3 +410,10 @@ export {
   isTerminalBackgroundTaskState,
   isBackgroundTaskRegistryEntry,
 } from './background-task'
+
+// ── background-idle-config 协议（base-tool-enhance 空闲转后台阈值 idleBackgroundSec 跨层契约；配置权威在 extension，runtime 静默判定矩阵 T 公式消费同一实现）──
+export {
+  DEFAULT_IDLE_BACKGROUND_SEC,
+  normalizeIdleBackgroundSec,
+} from './background-idle-config'
+export type { IdleBackgroundSecNormalization } from './background-idle-config'

@@ -13,6 +13,10 @@
 import { getConfigPath as getLlmSharedConfigPath, loadConfig } from "@zhushanwen/pi-llm-shared";
 import { isRecord, toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
+import {
+	DEFAULT_IDLE_BACKGROUND_SEC,
+	normalizeIdleBackgroundSec as normalizeIdleBackgroundSecShared,
+} from "@zhushanwen/extension-protocol";
 
 import { DEFAULT_MAX_CONCURRENT_BACKGROUND } from "./background/spawn-background.ts";
 
@@ -26,10 +30,11 @@ const MS_PER_SECOND = 1000;
 const INT32_MAX_MS = 2_147_483_647;
 
 /**
- * idleBackgroundSec 默认值（秒）：正常工具调用分钟级、编译静默常见 1-5 分钟，10 分钟
- * 输出静默在交互会话已是强异常信号（设计 §4.2 量级依据）。
+ * idleBackgroundSec 默认值（跨层单源：implementation 与量级依据在
+ * @zhushanwen/extension-protocol background-idle-config——runtime 静默判定矩阵 T 公式
+ * 消费同一常量，禁止本地重写）。re-export 保持既有导出面。
  */
-export const DEFAULT_IDLE_BACKGROUND_SEC = 600;
+export { DEFAULT_IDLE_BACKGROUND_SEC };
 
 export interface BaseToolEnhanceConfig {
 	/** 用户正则（源字符串），追加到内置两组白名单之后（compile 在 force-patterns.ts）。 */
@@ -78,14 +83,15 @@ function warnInvalid(key: string, value: unknown, fallback: string): void {
 }
 
 /**
- * 秒类配置键归一化（timeout 双键与 idleBackgroundSec 共用）：undefined（未配置）→
+ * 秒类配置键归一化（timeout 双键共用）：undefined（未配置）→
  * fallback；null（显式 null）→ null；正有限数 → 原值；类型错/负数/0/非有限 → fallback
  * + warn；换算毫秒超 int32 上限 → clamp + warn。
  *
  * null 与 undefined 分流的理由：timeout 键默认即 null（不注入，D4），两落点合一无分叉；
  * idleBackgroundSec 默认 600，必须三分——undefined = 未配置（默认开启）、显式 null =
  * 用户关闭（透传，下游据此回落官方原生）、坏值 = 回退默认而非关闭（显式 null 是唯一
- * 关闭通道，坏值不得意外关闭机制）。
+ * 关闭通道，坏值不得意外关闭机制）。（idleBackgroundSec 的归一化已下沉跨层共享实现
+ * normalizeIdleBackgroundSec @zhushanwen/extension-protocol，不再经本函数。）
  */
 function normalizeSecondsKey(raw: unknown, key: string, fallback: number | null): number | null {
 	if (raw === undefined) return fallback;
@@ -107,16 +113,22 @@ function normalizeSecondsKey(raw: unknown, key: string, fallback: number | null)
 }
 
 /**
- * idleBackgroundSec 归一化：normalizeSecondsKey 基础上向下取整（消费者 = 包装脚本
- * --idle 参数，bash 文本协议只接受非负整数秒——放行小数会使配置层值空间与执行层
- * 可接受值空间出现差集，差集配置下全部 A5 前台命令 exit 64 立即失败、机制整体
- * 断裂）。正小数 floor 后 <1 的（如 0.5）抬到 1：--idle 0 语义是「首轮监控即转
- * 后台」，不是亚秒阈值的合理近似。timeout 双键不取整——消费者是 pi 官方 timeout
- * 参数（数字秒，小数合法）。
+ * idleBackgroundSec 归一化（值语义 = 跨层共享实现 @zhushanwen/extension-protocol
+ * background-idle-config，两侧同源禁镜像；本函数只承担扩展配置系统的 warn UX——
+ * anomaly → 可操作文案，与 timeout 双键的 warnInvalid/clamp 文案同族）。
  */
 function normalizeIdleBackgroundSec(raw: unknown): number | null {
-	const normalized = normalizeSecondsKey(raw, "idleBackgroundSec", DEFAULT_IDLE_BACKGROUND_SEC);
-	return normalized === null ? null : Math.max(1, Math.floor(normalized));
+	const { value, anomaly } = normalizeIdleBackgroundSecShared(raw);
+	if (anomaly === "invalid") {
+		warnInvalid("idleBackgroundSec", raw, `${DEFAULT_IDLE_BACKGROUND_SEC} (default)`);
+	}
+	if (anomaly === "clamped") {
+		logger.warn(
+			`Config key 'idleBackgroundSec' ${String(raw)}s exceeds int32 ms limit, clamped to ${value}s ` +
+				`(${getLlmSharedConfigPath(CONFIG_PKG)}).`,
+		);
+	}
+	return value;
 }
 
 /**

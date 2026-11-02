@@ -1,6 +1,6 @@
 ---
 name: base-tool-enhance-ext-config
-description: "使用或排查 @zhushanwen/pi-base-tool-enhance 的 bash 后台/白名单配置时加载。说明配置文件路径与热重载生效时机、5 键 schema（forceBackgroundPatterns / disableBuiltinForcePatterns / foregroundTimeoutSeconds / backgroundTimeoutSeconds / maxConcurrentBackground）与默认值、force-background 白名单命中语义（测试命令自动转后台、忽略显式 timeout、返回 task_id）、用户正则自动命令位置锚定约定（无需自带 ^）。触发词：bash background、后台任务配置、force-background 白名单、测试命令自动后台、dev server 自动后台、backgroundTimeoutSeconds、foregroundTimeoutSeconds、maxConcurrentBackground、base-tool-enhance-ext-config。"
+description: "使用或排查 @zhushanwen/pi-base-tool-enhance 的 bash 后台/白名单配置时加载。说明配置文件路径与热重载生效时机、6 键 schema（forceBackgroundPatterns / disableBuiltinForcePatterns / foregroundTimeoutSeconds / backgroundTimeoutSeconds / idleBackgroundSec / maxConcurrentBackground）与默认值、force-background 白名单命中语义（测试命令自动转后台、忽略显式 timeout、返回 task_id）、用户正则自动命令位置锚定约定（无需自带 ^）。触发词：bash background、后台任务配置、force-background 白名单、测试命令自动后台、dev server 自动后台、backgroundTimeoutSeconds、foregroundTimeoutSeconds、idleBackgroundSec、maxConcurrentBackground、base-tool-enhance-ext-config。"
 ---
 
 # base-tool-enhance 配置指南
@@ -23,7 +23,7 @@ description: "使用或排查 @zhushanwen/pi-base-tool-enhance 的 bash 后台/�
 
 文件不存在 / JSON 解析失败 → 全默认值继续工作（工具不报错，warn 落扩展日志）。单键类型错/非法值 → **仅该键**回退默认 + warn，不整体拒载；未知键忽略（前向兼容）。
 
-## 字段表（5 键）
+## 字段表（6 键）
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
@@ -31,6 +31,7 @@ description: "使用或排查 @zhushanwen/pi-base-tool-enhance 的 bash 后台/�
 | `disableBuiltinForcePatterns` | boolean | `false` | `true` = 关闭内置 force-test / force-longrun 两组，只用用户正则 |
 | `foregroundTimeoutSeconds` | number \| null | `null` | `null` = 不注入（pi 原生不限时）；正数 = 前台命令未填 timeout 时注入的默认秒数。非正数/非有限数 → 回退 null + warn；超 int32 毫秒上限自动 clamp |
 | `backgroundTimeoutSeconds` | number \| null | `null` | 同上，后台任务未填 timeout 时的默认秒数 |
+| `idleBackgroundSec` | number \| null | `600` | 前台命令输出静默满此值转后台（不杀命令，只解除阻塞）；显式 null = 关闭机制；坏值回退默认 + warn，小数 floor 至 ≥1 |
 | `maxConcurrentBackground` | number | `8` | 后台任务并发上限，正整数（小数取 floor） |
 
 示例（最小可用——只关内置白名单 + 给用户正则 + 后台默认超时）：
@@ -41,6 +42,7 @@ description: "使用或排查 @zhushanwen/pi-base-tool-enhance 的 bash 后台/�
   "forceBackgroundPatterns": ["pnpm\\s+typecheck", "make\\s+-j\\d+"],
   "foregroundTimeoutSeconds": null,
   "backgroundTimeoutSeconds": 600,
+  "idleBackgroundSec": 600,
   "maxConcurrentBackground": 8
 }
 ```

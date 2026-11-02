@@ -42,6 +42,7 @@ import { inflightMirror } from '../../services/session/inflight-mirror.js'
 import { routeJournalReport } from '../../services/session/journal-report-router.js'
 import { randomUUID } from 'node:crypto'
 import { stripAnsi, normalizePiToolResult } from './normalize-tool-result.js'
+import { INTERACTIVE_UI_METHOD_SET } from './pi-protocol.js'
 import type {
   PiEvent,
   PiMessageStartEvent,
@@ -93,20 +94,10 @@ const STOP_REASON_MAP: Record<string, string> = {
 }
 
 /**
- * Interactive extension UI dialog methods that produce extension.ui_request WS events.
- * Must stay in sync with ExtensionInteractMethod SSOT (shared/extension.ts).
- *
- * notify 不在此列——它是 fire-and-forget（pi rpc-mode.ts notify 发后不等回复），
- * 走独立 extension:notify WS 帧 + 前端 toast 渲染（非阻塞）。
- * setWidget/set_editor_text 也不在此列——它们走独立分支，不产 dialog 帧
- * （setStatus 曾同列，状态栏退役后改为静默 noop，见 translateStatusRequest）。
- *
- * 用 `as const satisfies readonly ExtensionInteractMethod[]` 实现编译期穷举检查：
- * ExtensionInteractMethod 扩展新方法时，若此数组遗漏，tsc 报错（而非静默 noop 丢弃）。
+ * Interactive extension UI dialog methods 词表本体已迁 pi-protocol.ts（INTERACTIVE_UI_METHODS，
+ * as const satisfies 编译期穷举形态 + pi 源码锚点随迁；handleExtensionUIRequest 与
+ * silence-matrix 两消费方统一查其派生 INTERACTIVE_UI_METHOD_SET）。
  */
-const INTERACTIVE_UI_METHODS = new Set(
-  ['confirm', 'select', 'input', 'editor'] as const satisfies readonly ExtensionInteractMethod[]
-)
 
 /**
  * 扩展交互表面 kind 词表（pi1-disposition-chat-flow D6①，三值）：dialog / notify / widget——
@@ -1085,7 +1076,7 @@ function handleExtensionUIRequest(event: PiExtensionUiRequestEvent, sid: string)
 
   if (method === 'notify') return translateNotifyRequest(event, sid)
 
-  if (INTERACTIVE_UI_METHODS.has(method as ExtensionInteractMethod)) {
+  if (INTERACTIVE_UI_METHOD_SET.has(method)) {
     return translateInteractiveRequest(event, sid)
   }
 

@@ -32,9 +32,20 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ServerMessage } from '@taiji/shared'
+import {
+  DEFAULT_IDLE_BACKGROUND_SEC,
+  normalizeIdleBackgroundSec as normalizeIdleBackgroundSecShared,
+} from '@zhushanwen/extension-protocol'
 import { getPiAgentDir, getSettingsPath, getMcpConfigPath } from '../../infra/pi/pi-paths.js'
-import { PI_EVENT } from '../../infra/pi/pi-protocol.js'
+import { PI_EVENT, INTERACTIVE_UI_METHOD_SET } from '../../infra/pi/pi-protocol.js'
 import type { StallMatrixEvent } from './types.js'
+
+/**
+ * idleBackgroundSec 默认值跨层单源：实装在 @zhushanwen/extension-protocol
+ * background-idle-config（扩展 config.ts 与本矩阵 T 公式消费同一常量，禁镜像副本）。
+ * re-export 保持既有导出面（silence-matrix 测试从本模块 import）。
+ */
+export { DEFAULT_IDLE_BACKGROUND_SEC }
 
 /**
  * T_hint 提前量（D3 双阈值裁决：T_hint = T − 60s）。初值 60s；提示形态落点定稿后如需
@@ -49,17 +60,11 @@ export const SILENCE_HINT_LEAD_MS = 60_000
  */
 export const MODEL_WINDOW_FALLBACK_MS = 300_000
 
-/** base-tool-enhance idleBackgroundSec 默认值（AS5：600s 转后台；与扩展 config.ts DEFAULT 同源）。 */
-export const DEFAULT_IDLE_BACKGROUND_SEC = 600
-
 /** MCP 工具调用默认超时（AS12：DEFAULT_TIMEOUT_SECONDS = 60s；条目可经 config.timeout 覆盖）。 */
 export const DEFAULT_MCP_TIMEOUT_MS = 60_000
 
 /** 静默检查 tick（D3：runtime 侧秒级定时检查一个/会话，仅占用中启动）。 */
 export const SILENCE_TICK_MS = 1_000
-
-/** extension-ui 交互式方法（阻塞 agent 循环等待用户应答的子集——notify 是 fire-and-forget，不阻塞）。 */
-const INTERACTIVE_UI_METHODS: ReadonlySet<string> = new Set(['confirm', 'select', 'input', 'editor'])
 
 // ── 阈值单源推导（RL4）─────────────────────────────────────────────────
 
@@ -182,17 +187,8 @@ function readJsonRecord(path: string): Record<string, unknown> | null {
 }
 
 /**
- * idleBackgroundSec 归一化（镜像 extensions/universal/base-tool-enhance config.ts 语义，
- * 不 import 扩展包——runtime 不依赖扩展 npm 包）：undefined/缺失 → 默认 600；显式 null →
- * null（用户关闭）；正有限数 → max(1, floor)；其余坏值 → 默认 600。
+ * 数值键读取：有限数且 ≥ min 才生效，否则 null（未设语义）。
  */
-function normalizeIdleBackgroundSec(raw: unknown): number | null {
-  if (raw === null) return null
-  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return Math.max(1, Math.floor(raw))
-  return DEFAULT_IDLE_BACKGROUND_SEC
-}
-
-/** 数值键读取：有限数且 ≥ min 才生效，否则 null（未设语义）。 */
 function readFiniteNumber(value: unknown, min: number): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= min ? value : null
 }
@@ -310,7 +306,9 @@ export function readStallMatrixConfigSnapshot(cwd: string | undefined): StallMat
   const extConfig = readJsonRecord(join(agentDir, 'config', 'base-tool-enhance-ext-config.json'))
   const settings = readMergedPiSettings(cwd)
   return {
-    idleBackgroundSec: normalizeIdleBackgroundSec(extConfig?.['idleBackgroundSec']),
+    // idleBackgroundSec 归一化 = 跨层共享实现（@zhushanwen/extension-protocol
+    // background-idle-config，与扩展 config.ts 同源——含 int32 clamp + floor ≥ 1）。
+    idleBackgroundSec: normalizeIdleBackgroundSecShared(extConfig?.['idleBackgroundSec']).value,
     httpIdleTimeoutMs: readFiniteNumber(settings['httpIdleTimeoutMs'], 0),
     providerTimeoutMs: (() => {
       const retry = typeof settings['retry'] === 'object' && settings['retry'] !== null
@@ -565,7 +563,9 @@ export class SilenceMatrix {
         this.refresh('stream')
         return
       case 'ask-user-anchor':
-        if (ev.kind === 'extension-ui' && INTERACTIVE_UI_METHODS.has(ev.method)) {
+        // 词表 = pi-protocol INTERACTIVE_UI_METHOD_SET（单源，含 pi@1.0.0 源码锚点——
+        // pi 升级新增阻塞 UI 方法时改词表一处，本矩阵判定同步）。
+        if (ev.kind === 'extension-ui' && INTERACTIVE_UI_METHOD_SET.has(ev.method)) {
           this.askUser = true
         }
         return

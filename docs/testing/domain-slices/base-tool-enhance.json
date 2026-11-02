@@ -6,11 +6,13 @@
   ],
   "scope": {
     "extension": [
-      "extensions/universal/base-tool-enhance/**"
+      "extensions/universal/base-tool-enhance/**",
+      "packages/extension-protocol/src/background-idle-config.ts"
     ]
   },
   "tests": [
-    "extensions/universal/base-tool-enhance/**"
+    "extensions/universal/base-tool-enhance/**",
+    "packages/extension-protocol/src/background-idle-config.test.ts"
   ],
   "sharedBy": {},
   "contracts": [],
