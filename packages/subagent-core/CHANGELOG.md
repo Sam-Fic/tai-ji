@@ -1,5 +1,13 @@
 # @zhushanwen/subagent-core
 
+## 2.2.0
+
+### Minor Changes
+
+- d2b945a20: 通知投递门 `notifyGateAllowsDelivery` 收窄为单维判定（放弃轮标记命中阻断），删除第二参数与 `NotifyGateInbound` 导出类型（跨世代重复帧改由 notifyId 投递日志判重承接）；孤儿 run 对账的存活引用集只解析 v2 注册条目，v1 快照与 pre-W17 link 指针条目按不存在处理（已裁决无存量数据）。
+
+- d2b945a20: 派发模型校验新增 scoped-models 白名单：显式指定的模型（工具参数 / agent frontmatter / 用户热切覆盖）须落在 `<agentDir>/config/providers.json` 的 `scopedModels` 清单内（空清单 = 未启用，ctxModel 继承层不拦），并新增导出 `scopedModelKey` / `assertModelWithinScoped` / `readScopedModels` / `getScopedModelsPath` 与 `ModelConfigService.getScopedModels()`。
+
 ## 2.1.2
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # @zhushanwen/pi-provider-live-sync
 
+## 0.3.1
+
+### Patch Changes
+
+- d2b945a20: chore: refresh dependency range (triggered by @zhushanwen/pi-llm-shared@0.12.0 → @zhushanwen/pi-llm-shared@0.12.1)
+
 ## 0.3.0
 
 ### Minor Changes

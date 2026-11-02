@@ -1,5 +1,11 @@
 # @zhushanwen/pi-plan
 
+## 1.2.6
+
+### Patch Changes
+
+- d2b945a20: Documentation-only alignment: internal decision-record references updated to the renumbered registry. No behavior change.
+
 ## 1.2.5
 
 ### Patch Changes

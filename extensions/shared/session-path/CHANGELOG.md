@@ -1,5 +1,11 @@
 # @zhushanwen/pi-session-path
 
+## 0.1.1
+
+### Patch Changes
+
+- d2b945a20: Documentation-only alignment: internal decision-record references updated to the renumbered registry. No behavior change.
+
 ## 0.1.0
 
 ### Minor Changes

@@ -1,5 +1,11 @@
 # @zhushanwen/pi-structured-output
 
+## 6.2.6
+
+### Patch Changes
+
+- d2b945a20: Trimmed the additional-properties loop gate: the uppercase ajv-form branch was removed because the gate is only assembled in workflow mode, where that error text can never occur; the lowercase pi-ai bullet form is unchanged. Tool-definition validation docs and tests updated to match.
+
 ## 6.2.5
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # @zhushanwen/pi-retry-rules
 
+## 0.2.1
+
+### Patch Changes
+
+- d2b945a20: Added a vocabulary parity test that machine-locks the retryable-error anchors against the current pi AI vocabulary, so a pi upgrade that changes the word list turns the suite red instead of silently un-matching. No behavior change.
+
 ## 0.2.0
 
 ### Minor Changes

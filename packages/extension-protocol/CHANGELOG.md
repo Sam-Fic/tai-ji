@@ -1,5 +1,15 @@
 # @zhushanwen/extension-protocol
 
+## 0.27.0
+
+### Minor Changes
+
+- d2b945a20: 后台任务登记文件读失败（权限等，文件存在但不可读）从折叠成空表改为 warn 留痕后上抛，读改写不再可能在空表视图上合并写回、以空表重建唯一登记文件而静默丢失全部条目，重试 / 跳过 / 显式失败的取舍交归调用方。
+
+- d2b945a20: 破坏性变更：scheduler 任务存储从「会话 JSONL 事件条目 + 重放折叠」改为独立 JSON 快照任务库。桶出口删除 `replayFoldEntries` / `TASK_ENTRY_TYPE` / `SchedulerEntryOp` / `TaskSnapshot` 族导出；新增 `./scheduler-store` 子出口（`readSchedulerStore` / `schedulerStoreFilePath`，node:fs 依赖不进桶出口）。任务快照按 sessionId 分片存放于 `getAgentDir()/scheduler/` 下，原子替换写；`--no-session` 模式任务照常持久化。
+
+- d2b945a20: 新增 smart-context 通知通道词表导出 `SMART_CONTEXT_NOTICE_CUSTOM_TYPE` / `COMPACTION_ENTRY_APPENDED_SOURCE` / `parseCompactionPersistSignal` 与 `CompactionPersistSignal` 类型，后台压缩落盘信号的 customType 与 details 判据收敛为写侧扩展与读侧 runtime 同引的单源。
+
 ## 0.26.0
 
 ### Minor Changes

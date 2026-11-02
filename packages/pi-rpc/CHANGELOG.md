@@ -1,5 +1,13 @@
 # @zhushanwen/pi-rpc
 
+## 1.4.0
+
+### Minor Changes
+
+- d2b945a20: 杀链完成判别改为三值：`killPiProcess` 返回新导出的 `KillOutcome`（already-dead / signal-delivered），发信号失败（进程仍活）改为 reject 新导出的 `KillSignalError`（携带 pid/reason/errno 诊断字段），不再吞错后按成功 resolve——杀失败不再折叠成假成功（下游 pending 永挂、收割计数虚高）。
+
+- d2b945a20: spawn argv 判据常量导出为单源 `PI_SPAWN_MODE_ARGS` / `PI_SPAWN_NO_EXTENSIONS` / `PI_SPAWN_SKILL_FLAG` / `PI_SPAWN_EXTENSION_FLAG`，runtime 按 argv 形态识别 pi 进程的孤儿收割判据与 spawn 构造同引这组常量，避免构造侧改动 flag 后收割判据静默失效。
+
 ## 1.3.0
 
 ### Minor Changes

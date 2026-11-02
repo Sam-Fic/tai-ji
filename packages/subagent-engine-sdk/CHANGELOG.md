@@ -1,5 +1,11 @@
 # @zhushanwen/subagent-engine-sdk
 
+## 0.13.0
+
+### Minor Changes
+
+- d2b945a20: Removed the never-wired env-based nested-spawn rejection API (`assertNotNestedSpawn`, `NestedSpawnRejectedError`) as part of retiring nested dispatch: child processes are assembled without dispatch tools, so env detection was dead code. The env marking and native-marker stripping primitives (`NESTED_SPAWN_ENV`, `buildNestedSpawnEnv`, `ExecutionNestingContext`) are unchanged.
+
 ## 0.12.1
 
 ### Patch Changes

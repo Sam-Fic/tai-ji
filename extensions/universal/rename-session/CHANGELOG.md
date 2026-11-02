@@ -1,5 +1,11 @@
 # @zhushanwen/pi-rename-session
 
+## 0.14.4
+
+### Patch Changes
+
+- d2b945a20: Removed the in-flight dedup flag from first-prompt auto renaming: the second-user-prompt intercept already rules out double dispatch by construction, so the flag was unreachable. Behavior equivalent.
+
 ## 0.14.3
 
 ### Patch Changes

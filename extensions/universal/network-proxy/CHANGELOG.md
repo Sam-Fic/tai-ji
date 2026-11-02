@@ -1,5 +1,11 @@
 # @zhushanwen/pi-network-proxy
 
+## 0.3.3
+
+### Patch Changes
+
+- d2b945a20: Added a cross-package parity test suite that locks the extension-side proxy config parsing and host-matching behavior to the shared implementation across a common input matrix, so the two sides can no longer drift silently. No behavior change.
+
 ## 0.3.2
 
 ### Patch Changes

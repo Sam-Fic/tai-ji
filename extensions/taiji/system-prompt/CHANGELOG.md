@@ -1,5 +1,11 @@
 # @zhushanwen/pi-system-prompt
 
+## 1.4.1
+
+### Patch Changes
+
+- d2b945a20: Removed stale prompt-assembly remnants and their obsolete tests. No behavior change.
+
 ## 1.4.0
 
 ### Minor Changes
