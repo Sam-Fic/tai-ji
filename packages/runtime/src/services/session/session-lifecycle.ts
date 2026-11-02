@@ -1087,6 +1087,8 @@ export class SessionLifecycle implements ISessionRegistry {
     try {
       purgeSchedulerShard(getPiAgentDir(), session.cwd, sessionId)
     } catch (e: unknown) {
+      // best-effort：分片清理失败不阻断删除主链——线本体已删，残留分片仅占盘无害，
+      // 重试删除即补清（降级语义见方法 JSDoc），留痕后放行
       console.warn(`[session-lifecycle] scheduler task-store shard purge failed for btw line ${sessionId} (residual shard only occupies disk; retry the delete to clear it): ${e instanceof Error ? e.message : String(e)}`)
     }
   }

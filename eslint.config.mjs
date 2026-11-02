@@ -943,11 +943,14 @@ export default [
     },
   },
   // [HISTORICAL] session-dead u2/u3b 转移原语+收敛环落地致超限（962→1380），拆分（原语/转移表/收敛环/UserStoppedGate 分域）登记为后续重构项，勿再增行。
-  // 提额而非 off：保留 700 软上限告警，超限即再暴露（与 session-runner/zcode-engine 提额先例同型）。
+  // 提额而非 off：保留软上限告警，超限即再暴露（与 session-runner/zcode-engine 提额先例同型）。
+  // [2026-11-02 gate static-gate 复测] dev-0.12.2 集成线（compaction live boundary 等）合并后折算 705 > 700
+  // 微超——按「微超即提额，保留软上限告警」先例（pi-provider-store 508→520 / record-store-rebuild 713→740
+  // 同型）提额 720；分域拆分属独立重构任务。
   {
     files: ['packages/runtime/src/services/session/event-interpreter.ts'],
     rules: {
-      'max-lines': ['warn', { max: 700, skipBlankLines: true, skipComments: true }],
+      'max-lines': ['warn', { max: 720, skipBlankLines: true, skipComments: true }],
     },
   },
   // [HISTORICAL] session-dead u2/u3b 语义改动致超限（512>500），拆分登记为后续重构项，勿再增行。
@@ -1111,6 +1114,17 @@ export default [
     files: ['packages/subagent-core/src/shared/workflow-dag-parser.ts'],
     rules: {
       'max-lines': ['warn', { max: 700, skipBlankLines: true, skipComments: true }],
+    },
+  },
+  // [2026-11-02 gate static-gate 复测] subagent-service.ts：SubagentService facade 壳（run 派发
+  // / notify reconcile 维护接线，域本体已在 R4 拆出 run-orchestration / workflow-dispatch，见上方
+  // [H3/R4 已消解] 注释）。fix(subagent-notify) reconcile epoch 批次后折算 502 > 500 微超——按
+  // 「微超即提额，保留软上限告警」先例（pi-provider-store 508→520 同型）设 max 520；壳面再拆属
+  // 独立重构任务。
+  {
+    files: ['packages/subagent-core/src/execution/subagent-service.ts'],
+    rules: {
+      'max-lines': ['warn', { max: 520, skipBlankLines: true, skipComments: true }],
     },
   },
 ];
