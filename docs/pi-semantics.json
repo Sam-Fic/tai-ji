@@ -2065,5 +2065,22 @@
       "note": "taiji 消费方 = 第 2 层判死降级判定（RL14 禁用分支 + AS13 超界降级，pi-stall-detection D3/U4 W2）与 packages/runtime/src/services/llm-retry-config-helper.ts（provider.timeoutMs 合法域 1-600000、未设跟随全局）。pi 升级时重验：grep dist/core/http-dispatcher.js 'DEFAULT_HTTP_IDLE_TIMEOUT_MS'（是否仍 300_000）+ dist/core/sdk.js '2147483647'（0=禁用替换语义是否保留）+ settings-manager.js 'getHttpIdleTimeoutMs'（缺省链是否保留）"
     },
     "verifiedWith": "1.0.0"
+  },
+  {
+    "id": "PS-96",
+    "claim": "SessionManager._appendEntry 先内存入账后 _persist、persist 失败无回滚——「幽灵内存 entry」形态：_appendEntry 先 fileEntries.push（并推进 byId/leafId）后调 _persist，_persist 内 openSync/appendFileSync 抛错（EACCES 等）向上传播且无回滚/补偿路径，内存账已含该 entry 而 JSONL 无行。no-persist 形态（persist 关闭或 sessionFile 缺席）_persist 首行即 return——no-op 恒成功、无幽灵态；未 flush 且无对话内容同样早退（session 首条对话消息前文件不存在）。taiji 对账补投判据承重（completion-signal-delivery A1 缺陷修复）：判据事实源一律读 session JSONL 落盘条目而非内存账——内存账口径曾把幽灵的送达痕迹/投递日志条目当真，「拒收未受理」的键被误判已受理 → 补投结构性静默失效",
+    "piAnchor": [
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/session-manager.js",
+        "symbol": "_appendEntry / _persist",
+        "note": "_appendEntry :815-820——fileEntries.push :816 → byId.set :817 → leafId 推进 :818 → this._persist(entry) :819（先内存入账后落盘，persist 抛错无回滚）；_persist :794-814——:795-796 !this.persist || !this.sessionFile 直接 return（no-persist no-op 恒成功、无幽灵态），:797-799 未 flush 且 _hasConversation false 早退（首条对话消息前 sessionFile 不存在），:812 appendFileSync 落盘、抛错无 catch 无回滚【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      }
+    ],
+    "guard": {
+      "type": "observe",
+      "note": "taiji 消费方 = 四域对账补投判据的磁盘事实源（base-tool-enhance background/pending-reconcile.ts、session-manager notify-reconcile.ts、subagent-workflow workflow-notify-reconcile.ts 的 readSessionFileEntries + packages/subagent-core execution/notify/notify-reconcile.ts 的 readSessionEntriesFromFile，各文件头「判据事实源磁盘化」段）。pi 升级时重验：grep dist/core/session-manager.js '_appendEntry'（内存 push 是否仍先于 _persist、persist 抛错是否仍无回滚）+ '_persist'（no-persist / 未 flush 早退分支是否保留；若改为 persist 成功后才入内存账或失败回滚，幽灵态消失——磁盘化读侧可简化，保留向后兼容无害）"
+    },
+    "verifiedWith": "1.0.0"
   }
 ]

@@ -424,17 +424,30 @@ export function collectJournaledDeliveryGenerations(entries: readonly unknown[])
 }
 
 /**
- * 从主 session 文件读取会话 entries（宽容口径：逐行 JSON.parse、坏行跳过、文件不可
- * 读返回空——对齐 registry-reconcile collectActiveRegisterEntries 的读侧纪律；落盘
- * 延迟窗口（首条对话消息前未 flush）内文件可能不存在，空读 = 本轮空跑，下一对账
- * 边沿重查）。
+ * 从主 session 文件读取会话 entries（宽容口径：逐行 JSON.parse、坏行跳过、ENOENT
+ * 静默空、其他读错误 warn + 空——对齐 registry-reconcile collectActiveRegisterEntries
+ * 的读侧纪律；落盘延迟窗口（首条对话消息前未 flush）内文件可能不存在，空读 = 本轮
+ * 空跑，下一对账边沿重查）。
+ *
+ * 读错误 warn 口径（收编轮口径对齐）：extensions 域同构读原语
+ * readSessionFileEntries（@zhushanwen/pi-delivery-port session-journal-read.ts
+ * 单源）对读错误 warn + []（warn 即修复信号——静默空跑会把磁盘事实不可得伪装成
+ * 「无条目」，沿幽灵态吞补投且无留痕）；本域受 core ← extensions 依赖方向红线
+ * 不能反向共享该实现（文件头），读错误静默 catch 与 extensions 域 warn 口径的
+ * 分叉在此收敛为一致——warn 文本与 extensions 域同串，排障 grep 两侧互通。
+ * ENOENT 保持静默空（首条对话消息前的常态，非异常，不刷 warn）。
  */
 export function readSessionEntriesFromFile(sessionFile: string | undefined): unknown[] {
   if (!sessionFile) return [];
   let content: string;
   try {
     content = fs.readFileSync(sessionFile, "utf-8");
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") return [];
+    logger.warn(
+      "reconcile journal facts read failed; disk entries treated as empty (candidates retried at next reconcile edge)",
+      { detail: { sessionFile, err: err instanceof Error ? err.message : String(err) } },
+    );
     return [];
   }
   const entries: unknown[] = [];

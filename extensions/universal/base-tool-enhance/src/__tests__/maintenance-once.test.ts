@@ -43,6 +43,11 @@ vi.mock("../background/pending-reconcile.ts", () => ({
 
 import type { ExtensionAPI, SessionStartEvent } from "@earendil-works/pi-coding-agent";
 
+// 顶层静态导入（index.test.ts / delivery-port-assembly.test.ts 同款）：extension 模块图
+// 的一次性加载在文件作用域完成，不被记入首个用例的 junit 用例耗时（check-slow-tests
+// 门禁按用例级耗时判定；vi.mock 工厂经 hoist 对静态导入同样生效，模块仍只初始化一次）
+import baseToolEnhanceExtension from "../index.ts";
+
 function createMockPi() {
 	return {
 		registerTool: vi.fn(),
@@ -76,10 +81,6 @@ function makeCtx() {
 	return {
 		sessionManager: { getSessionId: () => "sid-once", getEntries: () => [], getSessionFile: () => undefined },
 	};
-}
-
-async function loadExtension() {
-	return import("../index.ts");
 }
 
 beforeEach(() => {
@@ -117,9 +118,8 @@ describe("session_start maintenance chain after reap sink (u-bte-remove)", () =>
 	});
 
 	it("runs reconcilePendingEntries on EVERY session_start dispatch (session-scoped exempt, D3)", async () => {
-		const mod = await loadExtension();
 		const pi = createMockPi();
-		mod.default(pi as unknown as ExtensionAPI);
+		baseToolEnhanceExtension(pi as unknown as ExtensionAPI);
 		const handler = getSessionStartHandler(pi);
 		const ctx = makeCtx();
 
@@ -138,9 +138,8 @@ describe("session_start maintenance chain after reap sink (u-bte-remove)", () =>
 	});
 
 	it("emits the unconditional entry debug log per dispatch with reason only (S6 observation channel)", async () => {
-		const mod = await loadExtension();
 		const pi = createMockPi();
-		mod.default(pi as unknown as ExtensionAPI);
+		baseToolEnhanceExtension(pi as unknown as ExtensionAPI);
 		const handler = getSessionStartHandler(pi);
 		const ctx = makeCtx();
 
@@ -166,9 +165,8 @@ describe("session_start maintenance chain after reap sink (u-bte-remove)", () =>
 		// 记录」。两个断言缺一即红：吞掉后不打日志 = 观测丢失；打日志但 reject = fire
 		// 调用点 unhandled rejection。
 		reconcileMock.mockImplementation(() => Promise.reject(new Error("reconcile boom")));
-		const mod = await loadExtension();
 		const pi = createMockPi();
-		mod.default(pi as unknown as ExtensionAPI);
+		baseToolEnhanceExtension(pi as unknown as ExtensionAPI);
 		const handler = getSessionStartHandler(pi);
 
 		// 对账 reject 被维护链 async 捕获记 warn（僵尸停留差集，下一 session_start 幂等重查）
@@ -185,9 +183,8 @@ describe("session_start maintenance chain after reap sink (u-bte-remove)", () =>
 		reconcileMock.mockImplementation(() => {
 			throw new Error("sync boom");
 		});
-		const mod = await loadExtension();
 		const pi = createMockPi();
-		mod.default(pi as unknown as ExtensionAPI);
+		baseToolEnhanceExtension(pi as unknown as ExtensionAPI);
 		const handler = getSessionStartHandler(pi);
 
 		await expect(handler(makeEvent("resume"), makeCtx())).resolves.toBeUndefined();
@@ -212,24 +209,22 @@ describe("agent_settled edge: third reconcile entry (completion-signal-delivery 
 	}
 
 	it("registers exactly one agent_settled subscription at load time (RL13: per-instance single subscription)", async () => {
-		const mod = await loadExtension();
 		const pi = createMockPi();
-		mod.default(pi as unknown as ExtensionAPI);
+		baseToolEnhanceExtension(pi as unknown as ExtensionAPI);
 
 		const registrations = pi.on.mock.calls.filter((call) => call[0] === "agent_settled");
 		expect(registrations).toHaveLength(1);
 		// 重绑形态 = session 替换重新 load：新实例（新 mock pi）再 load 恰一次注册，
 		// 旧实例订阅随旧实例消亡——「新实例恰一订阅」即本断言 + 上行单次注册
 		const piSecond = createMockPi();
-		mod.default(piSecond as unknown as ExtensionAPI);
+		baseToolEnhanceExtension(piSecond as unknown as ExtensionAPI);
 		expect(piSecond.on.mock.calls.filter((call) => call[0] === "agent_settled")).toHaveLength(1);
 		expect(pi.on.mock.calls.filter((call) => call[0] === "agent_settled")).toHaveLength(1);
 	});
 
 	it("routes every settle edge through the SAME maintenance chain as session_start (RL12 orchestration face)", async () => {
-		const mod = await loadExtension();
 		const pi = createMockPi();
-		mod.default(pi as unknown as ExtensionAPI);
+		baseToolEnhanceExtension(pi as unknown as ExtensionAPI);
 		const settleHandler = getAgentSettledHandler(pi);
 		const sessionStartHandler = getSessionStartHandler(pi);
 		const [, reconcileCommand] = pi.registerCommand.mock.calls[0] as [

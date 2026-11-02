@@ -3,10 +3,9 @@
 // 与 bash/subagent 域同构处置阶梯的域侧落位）。
 //
 // 三重事实判据（域事实映射进共享骨架——判据逻辑零新增，真值组合单源锚定
-// base-tool-enhance background/notify-reconcile-judgement.ts 的
-// isReconcileNotifyCandidate；跨扩展无依赖通道（本包 package.json 不依赖
-// base-tool-enhance），按 subagent-core notify-reconcile.ts 先例同构落位，
-// 真值表测试逐行对拍锁定）：
+// @zhushanwen/pi-delivery-port reconcile-judgement.ts 的 isReconcileNotifyCandidate
+// （判据链收编单源，真值表测试随迁该包锁定）；本域曾按 subagent-core 先例同构
+// 落位，收编轮起改直依共享包）：
 //   候选 = run 已终局（isTerminal）∧ 域排除位未命中 ∧ 送达痕迹未命中 ∧
 //          投递日志无该幂等键承载
 //
@@ -25,7 +24,8 @@
 // 送达痕迹/投递日志两抵消事实读 session JSONL 落盘条目（readSessionFileEntries），
 // 不读 pi 内存账——pi SessionManager._appendEntry 先 fileEntries.push 后 _persist、
 // persist 失败（EACCES 等）无回滚，留下「幽灵内存 entry」（内存账在册、JSONL 无
-// 行）；内存账口径曾把幽灵的痕迹/日志条目当真 → 「拒收未受理」的 run 被误判已受
+// 行；pi 侧机制实锚登记 pi-semantics PS-96：dist/core/session-manager.js
+// :815-820 _appendEntry / :794-814 _persist）；内存账口径曾把幽灵的痕迹/日志条目当真 → 「拒收未受理」的 run 被误判已受
 // 理 → 补投结构性静默失效。磁盘事实使 delivered/journaled 语义 = 「JSONL 实际含
 // 该键条目」，与受理落盘契约一物一名；sessionFile 缺席（no-persist 形态——
 // _persist no-op 恒成功、无幽灵态）退化内存 entries（该形态内存账即完整事实）+
@@ -68,20 +68,15 @@
 // 幂等：补投受理成功后投递日志条目（id）与送达痕迹抵消判据，下一边沿不再命中；
 // 跨边沿重复对账天然收敛。
 
-import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
-	ACK_CUSTOM_TYPE,
-	V1_ACK_CUSTOM_TYPE,
-	V1_OUTBOX_CUSTOM_TYPE,
-	OUTBOX_CUSTOM_TYPE,
-	mapV1OutboxData,
-	readAckId,
-	readOutboxDataV2,
+	collectJournaledDeliveryIds,
+	isReconcileNotifyCandidate,
+	readSessionFileEntries,
+	type ReconcileNotifyFacts,
 } from "@zhushanwen/pi-delivery-port";
-import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 import {
 	WORKFLOW_RECORD_CUSTOM_TYPE,
@@ -99,47 +94,17 @@ import type { RunSettlementRecord } from "./jsonl-run-store.ts";
 
 const logger = getLogger("subagents");
 
-/** 脏行 warn 留痕的截断长度（taste/no-magic-numbers 抽常量） */
-const DIRTY_LINE_SNIPPET_LEN = 120;
-
 /** 本域收尾通知的送达 customType（词表单源 = extension-protocol 透传）。 */
 const NOTIFY_CUSTOM_TYPE = WORKFLOW_RESULT_CUSTOM_TYPE;
 
 /** 本域 run journal 条目的 customType（core barrel 单源）。 */
 const RECORD_CUSTOM_TYPE = WORKFLOW_RECORD_CUSTOM_TYPE;
 
-// ─── 三重事实判据骨架（同构落位，锚定 u1 单源）───
-
-/**
- * 三重事实判据的输入（与 base-tool-enhance notify-reconcile-judgement /
- * subagent-core notify-reconcile 两处同构——字段结构逐一锚定；真值组合由
- * 真值表测试与 bash 域对拍锁定，判据演化不产生第二套真值逻辑）。
- */
-export interface ReconcileNotifyFacts { // oe-exempt:20261101:framework:跨包不可达的同形结构副本（权威源 packages/subagent-core notify-reconcile.ts，载体关系登记文件头），域侧映射随本设计交付
-
-	/** 事实一：run 已终局（record 流 run-settled 帧在——journal 判终唯一判法）。 */
-	isTerminal: boolean;
-	/**
-	 * 域排除位（「主路径不发者排除」原理，D8④ 本域判定）：workflow 域恒 false——
-	 * 主路径 notifyDone 对全部终态 outcome（completed/failed/cancelled）均发收尾
-	 * 通知（D7 载荷扩展「取消亦通知」），无成因排除位；域过滤由候选源
-	 * customType（workflow-record）构造性承载。
-	 */
-	excludedByOrigin: boolean;
-	/** 事实二：送达痕迹命中（该键的收尾通知条目已在会话 entries）。 */
-	delivered: boolean;
-	/** 事实三：投递日志已承载该键（条目 id 命中 ∪ collectKey 键集命中）。 */
-	journaled: boolean;
-}
-
-/**
- * 三重事实判据（骨架真值组合：终局 ∧ 未排除 ∧ 无痕迹 ∧ 无日志承载）。
- * 与 bash/subagent 域同一真值组合（判据语义单源的域侧同构落位——跨扩展无
- * 依赖通道，真值表测试逐行对拍锁定）。
- */
-export function isReconcileNotifyCandidate(facts: ReconcileNotifyFacts): boolean {
-	return facts.isTerminal && !facts.excludedByOrigin && !facts.delivered && !facts.journaled;
-}
+// ─── 三重事实判据骨架（收编单源 = @zhushanwen/pi-delivery-port
+// reconcile-judgement.ts，本文件经 barrel import 消费；域侧只留「域事实 → 布尔」
+// 映射：excludedByOrigin 恒 false——主路径 notifyDone 对全部终态 outcome 均发收尾
+// 通知（D7「取消亦通知」），域过滤由候选源 customType（workflow-record）构造性
+// 承载，映射见 reconcileOneCandidate）───
 
 // ─── 域事实收集器（当前 session entries 的单次遍历事实源）───
 
@@ -203,90 +168,13 @@ export function collectDeliveredWorkflowNotifyIds(entries: readonly unknown[]): 
 	return ids;
 }
 
-/**
- * 从会话 entries 提取投递日志已登记的幂等键与承载键集（事实三事实源）。
- * outbox（受理落盘，collectKey 键集随条目申报）与 ack/discard（终局列）v2/v1
- * 四类 entry 兼容读；解析复用 port 包单点（readOutboxDataV2 / mapV1OutboxData /
- * readAckId），宽容口径与 port scanJournal 一致：data 畸形按无条目——误判
- * 「无承载」的残余风险由 port 幂等预检承接（补投重投被 swallowed 吞并，无实害）。
- */
-export function collectJournaledDeliveryIds(entries: readonly unknown[]): Set<string> {
-	const ids = new Set<string>();
-	for (const raw of entries) {
-		if (!raw || typeof raw !== "object") continue;
-		const entry = raw as Record<string, unknown>;
-		if (entry["type"] !== "custom") continue;
-		switch (entry["customType"]) {
-			case OUTBOX_CUSTOM_TYPE: {
-				const record = readOutboxDataV2(entry["data"]);
-				if (record === undefined) break;
-				ids.add(record.id);
-				if (record.collectKey !== undefined) {
-					for (const key of record.collectKey) ids.add(key);
-				}
-				break;
-			}
-			case V1_OUTBOX_CUSTOM_TYPE: {
-				// v1 存量（旧通知账本）兼容读；scannedAt 只填 record.recordedAt 元数据，
-				// 本判据只取 id——传 0 保持纯函数无时钟依赖
-				const record = mapV1OutboxData(entry["data"], 0);
-				if (record !== undefined) ids.add(record.id);
-				break;
-			}
-			case ACK_CUSTOM_TYPE:
-			case V1_ACK_CUSTOM_TYPE: {
-				const id = readAckId(entry["data"]);
-				if (id !== undefined) ids.add(id);
-				break;
-			}
-			default:
-				break;
-		}
-	}
-	return ids;
-}
-
 // ─── 判据事实源读侧（session JSONL 落盘条目）───
 
-/**
- * 读 session JSONL 文件的落盘条目（判据事实源的磁盘读侧；动机与退化语义见文件头
- * 「判据事实源磁盘化」段，与 base-tool-enhance pending-reconcile.ts 同名函数同构
- * 落位——跨扩展无依赖通道，域侧副本）。pi _persist 落盘形态 = 每条 entry 一行
- * JSON.stringify，逐行 parse 产出与 getEntries() 同构的条目数组。
- *
- * 容错口径（与 collectJournaledDeliveryIds「data 畸形按无条目」宽容口径同源）：
- *  - ENOENT → []：session 首条对话消息前文件不存在（pi _persist 首次 flush 前置
- *    条件），常态非异常；
- *  - 其他读错误（EACCES 等）→ warn + []：磁盘事实不可得按「无条目」，manifest 面
- *    与抵消事实同按空（保守 miss + warn 修复信号——按内存账退化则会沿幽灵态静默
- *    吞补投，即 A1 缺陷形态本身）；
- *  - 脏行（JSON.parse 失败 / 非对象）单行跳过（JSONL 容错纪律，record 流扫描
- *    同款）。
- */
-export function readSessionFileEntries(sessionFile: string): unknown[] {
-	let text: string;
-	try {
-		text = readFileSync(sessionFile, "utf8");
-	} catch (err) {
-		if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") return [];
-		logger.warn("reconcile journal facts read failed; disk entries treated as empty (candidates retried at next reconcile edge)", {
-			detail: { sessionFile, err: toErrorMessage(err) },
-		});
-		return [];
-	}
-	const entries: unknown[] = [];
-	for (const line of text.split("\n")) {
-		if (line.trim() === "") continue;
-		try {
-			const parsed: unknown = JSON.parse(line);
-			if (parsed !== null && typeof parsed === "object") entries.push(parsed);
-		} catch (e) {
-			// 脏行跳过：单行损坏不拖垮整盘事实；warn 留痕（taste/no-silent-catch）
-			logger.warn("session JSONL 脏行跳过（对账事实按其余行继续）", { detail: { line: line.slice(0, DIRTY_LINE_SNIPPET_LEN), error: toErrorMessage(e) } });
-		}
-	}
-	return entries;
-}
+// collectJournaledDeliveryIds / readSessionFileEntries 已收编
+// @zhushanwen/pi-delivery-port 单源（reconcile-judgement.ts / session-journal-
+// read.ts，barrel import）——三域物理副本随判据链收编退役；读侧容错口径
+// （ENOENT 常态空 / 读错误 warn + [] / 脏行单行跳过）与退化语义登记见该函数
+// 头注与文件头「判据事实源磁盘化」段（PS-96）。
 
 /** 补投幂等键（主路径 notifyDone 同构造——RL8 同锁）。 */
 export function buildDoneNotifyId(runId: string): string {

@@ -45,12 +45,8 @@ import { notifyDone } from "../workflow-notify.ts";
 import {
 	buildDoneNotifyId,
 	collectDeliveredWorkflowNotifyIds,
-	collectJournaledDeliveryIds,
 	collectRegisteredWorkflowRuns,
-	isReconcileNotifyCandidate,
-	readSessionFileEntries,
 	runNotifyReconcileMaintenance,
-	type ReconcileNotifyFacts,
 } from "../workflow-notify-reconcile.ts";
 
 // notifyDone 是跨用例共享的模块 mock——调用历史每用例清零（not.toHaveBeenCalled
@@ -142,28 +138,9 @@ function makeRun(runId: string) {
 	};
 }
 
-// ── 骨架真值表（同构对拍）──
-
-describe("isReconcileNotifyCandidate 骨架真值表（跨域同构——u1 单源对拍）", () => {
-	const base: ReconcileNotifyFacts = {
-		isTerminal: true,
-		excludedByOrigin: false,
-		delivered: false,
-		journaled: false,
-	};
-	const truthTable: Array<[Partial<ReconcileNotifyFacts>, boolean, string]> = [
-		[{ ...base }, true, "rejected 丢失形态（四事实全命中）→ 候选"],
-		[{ isTerminal: false }, false, "run 未终局（无 run-settled 帧）→ 非候选"],
-		[{ excludedByOrigin: true }, false, "域排除位命中 → 非候选"],
-		[{ delivered: true }, false, "送达痕迹命中 → 非候选"],
-		[{ journaled: true }, false, "投递日志承载命中 → 非候选"],
-	];
-	for (const [facts, expected, label] of truthTable) {
-		it(label, () => {
-			expect(isReconcileNotifyCandidate({ ...base, ...facts })).toBe(expected);
-		});
-	}
-});
+// ── 骨架真值表已随判据链收编迁 @zhushanwen/pi-delivery-port
+// reconcile-judgement.test.ts 单点锁定（三域物理对拍副本退役）；本文件只锁
+// 域侧「域事实 → 布尔」映射与编排行为 ──
 
 // ── manifest 面（SC11）──
 
@@ -202,17 +179,9 @@ describe("送达痕迹与投递日志承载收集器", () => {
 		expect(ids.has("wf-done:wf-c")).toBe(false);
 	});
 
-	it("collectJournaledDeliveryIds 展开条目 id ∪ collectKey 键集 + ack 终局并入 + 畸形跳过", () => {
-		const ids = collectJournaledDeliveryIds([
-			outboxEntry("wf-done:wf-a", ["wf-a"]),
-			ackEntry("wf-done:wf-b"),
-			{ type: "custom", customType: OUTBOX_CUSTOM_TYPE, data: { broken: true } },
-		]);
-		expect(ids.has("wf-done:wf-a")).toBe(true);
-		expect(ids.has("wf-a")).toBe(true); // collectKey 承载键
-		expect(ids.has("wf-done:wf-b")).toBe(true);
-		expect(ids.size).toBe(3);
-	});
+	// collectJournaledDeliveryIds 行为锁（id ∪ collectKey 展开 / ack 并入 / 畸形跳过）
+	// 已随判据链收编迁 @zhushanwen/pi-delivery-port reconcile-judgement.test.ts
+	// 单点锁定；域侧经编排用例（id / collectKey 双通道抵消）覆盖组合行为。
 
 	it("buildDoneNotifyId（RL8 同族：补投与主路径同幂等键构造）", () => {
 		expect(buildDoneNotifyId("wf-a")).toBe("wf-done:wf-a");
@@ -425,43 +394,9 @@ describe("判据事实源磁盘化（幽灵内存 entry 回归，A1 域侧同构
 	});
 });
 
-// ── readSessionFileEntries 容错（JSONL 读侧；口径登记见函数头注）──
-
-describe("readSessionFileEntries（磁盘读侧容错）", () => {
-	const DATA_DIR = mkdtempSync(join(tmpdir(), "wf-readfile-"));
-
-	it("文件缺失（ENOENT，首条对话消息前常态）→ 空数组", () => {
-		expect(readSessionFileEntries(join(DATA_DIR, "no-such-file.jsonl"))).toEqual([]);
-	});
-
-	it("脏行跳过、合法行解析（JSONL 逐行容错）", () => {
-		mkdirSync(DATA_DIR, { recursive: true });
-		const file = join(DATA_DIR, "dirty.jsonl");
-		writeFileSync(
-			file,
-			['{"type":"custom","customType":"x"}', "not-json", "", '{"type":"message"}'].join("\n"),
-		);
-		const entries = readSessionFileEntries(file);
-		expect(entries).toHaveLength(2);
-		expect(entries[0]).toEqual({ type: "custom", customType: "x" });
-	});
-
-	it("不可读文件（chmod 0000）→ 空 + warn（宽容口径：磁盘事实不可得 = 无条目）", () => {
-		mkdirSync(DATA_DIR, { recursive: true });
-		const file = join(DATA_DIR, "locked.jsonl");
-		writeFileSync(file, "{}\n");
-		chmodSync(file, 0o000);
-		try {
-			expect(readSessionFileEntries(file)).toEqual([]);
-			expect(loggerMock.warn).toHaveBeenCalledWith(
-				expect.stringContaining("disk entries treated as empty"),
-				expect.anything(),
-			);
-		} finally {
-			chmodSync(file, 0o644);
-		}
-	});
-});
+// ── readSessionFileEntries 容错段已随判据链收编迁 @zhushanwen/pi-delivery-port
+// reconcile-judgement.test.ts 单点锁定（三域物理副本退役）；域侧经「session file
+// 不可读 → 盘事实按空 + warn」编排用例覆盖组合行为。──
 
 // ── A15 缺陷修复回归：补投出口按 notifyDone 受理结果分流 ──
 // 缺陷形态（A15 真机 6 红实证）：主路径 rejected 被 runSettledEffects 无条件

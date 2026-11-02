@@ -205,8 +205,10 @@ interface ReconcileSessionContext {
  *
  * sessionFile = ctx.sessionManager.getSessionFile()（补投判据事实源磁盘化，A1
  * 缺陷修复的域侧同构落点）：判据事实读 session JSONL 落盘条目而非内存账——pi
- * _appendEntry persist 失败无回滚的幽灵内存 entry 曾使 delivered/journaled 误真、
- * 补投静默失效（机制见 notify-reconcile.ts 文件头「判据事实源磁盘化」段）；
+ * _appendEntry persist 失败无回滚的幽灵内存 entry（pi-semantics PS-96：dist/core/
+ * session-manager.js :815-820 _appendEntry / :794-814 _persist）曾使
+ * delivered/journaled 误真、补投静默失效（机制见 notify-reconcile.ts 文件头
+ * 「判据事实源磁盘化」段）；
  * no-persist 形态 getSessionFile() 返回 undefined，对账侧退化内存账（现状行为）。
  */
 function runNotifyReconcileSafely(

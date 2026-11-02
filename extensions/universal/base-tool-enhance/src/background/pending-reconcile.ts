@@ -31,14 +31,17 @@
  *    terminated 简报形态（无业务 details——「不谎报」既有裁决：收殓时点不存在时长/
  *    成败事实，且不存在可对齐的「主路径同一条通知」）。
  * 判据、幂等与 payload 分层的完整语义登记 = 设计文档 §3.3 D1/D2/D6/D7；判据骨架的
- * 跨域共享落点 = notify-reconcile-judgement.ts（u3/u5 域侧同构映射进同一骨架）。
+ * 跨域共享落点 = @zhushanwen/pi-delivery-port reconcile-judgement.ts（判据链收编
+ * 单源；本域送达痕迹提取留 notify-reconcile-judgement.ts）。
  * killed 终态排除于候选（成因排除位——kill 发令方当次交互已同步获知，补投是重复
  * 刺激；kill 路径通知不入账的单点归属规则见 notify.ts 文件头）。
  *
  * 判据事实源磁盘化（A1 产品缺陷修复，completion-signal-delivery D3 验收挖出）：
  * 送达痕迹与投递日志两事实读 session JSONL 落盘条目（readSessionFileEntries），
  * 不读 pi 内存账——pi SessionManager._appendEntry 先 fileEntries.push 后 _persist、
- * persist 失败（EACCES 等）无回滚，留下「幽灵内存 entry」（内存账在册、JSONL 无行）。
+ * persist 失败（EACCES 等）无回滚，留下「幽灵内存 entry」（内存账在册、JSONL 无行；
+ * pi 侧机制实锚登记 pi-semantics PS-96：dist/core/session-manager.js :815-820
+ * _appendEntry / :794-814 _persist）。
  * 投递契约 rejected = 拒收未受理、幂等键未登记（delivery-port types「条目可重试」），
  * 幽灵内存态曾把该 taskId 误判「受理已发生」→ 三重判据 journaled 位误真 → 补投
  * 结构性静默失效。磁盘事实使 journaled/delivered 语义 = 「JSONL 实际含该键条目」，
@@ -76,12 +79,11 @@ import {
 	mapReasonToStatus,
 } from "@zhushanwen/extension-protocol";
 import { isPidAlive } from "@zhushanwen/extension-protocol/background-task";
-import { getDeliveryPort } from "@zhushanwen/pi-delivery-port";
+import { collectJournaledDeliveryIds, getDeliveryPort, isReconcileNotifyCandidate, readSessionFileEntries, type ReconcileNotifyFacts } from "@zhushanwen/pi-delivery-port";
 import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
-import { readFileSync } from "node:fs";
 
-import { collectDeliveredTaskIds, collectJournaledDeliveryIds, isReconcileNotifyCandidate, type ReconcileNotifyFacts } from "./notify-reconcile-judgement.ts";
+import { collectDeliveredTaskIds } from "./notify-reconcile-judgement.ts";
 import {
 	BACKGROUND_BASH_CUSTOM_TYPE,
 	buildNotificationContent,
@@ -93,9 +95,6 @@ import { getRegistryPath, readRegistry } from "./registry.ts";
 import { isActiveState, isTerminalState, type RegistryEntry } from "./types.ts";
 
 const logger = getLogger("base-tool-enhance");
-
-/** 脏行 warn 留痕的截断长度（taste/no-magic-numbers 抽常量） */
-const DIRTY_LINE_SNIPPET_LEN = 120;
 
 /**
  * 对账依赖的最小 pi 面（结构兼容 ExtensionAPI 的子集；测试注入不造完整 pi）。
@@ -240,44 +239,10 @@ function settledPendingReason(
 	return "cancelled";
 }
 
-/**
- * 读 session JSONL 文件的落盘条目（补投判据事实源的磁盘读侧；动机与退化语义见
- * 文件头「判据事实源磁盘化」段）。pi _persist 落盘形态 = 每条 entry 一行 JSON，
- * 逐行 parse 产出与 getEntries() 同构的条目数组。
- *
- * 容错口径（与 collectJournaledDeliveryIds「data 畸形按无条目」宽容口径同源）：
- *  - ENOENT → []：session 首条对话消息前文件不存在（pi _persist 首次 flush 前置
- *    条件），常态非异常；
- *  - 其他读错误（EACCES 等）→ warn + []：磁盘事实不可得按「无条目」，判据放行
- *    补投、重投由 port 幂等预检收敛（方向 = 暴露问题类，warn 即修复信号——按
- *    内存账退化则会沿幽灵态静默吞掉补投，即 A1 缺陷形态本身）；
- *  - 脏行（JSON.parse 失败 / 非对象）单行跳过（JSONL 容错纪律，protocol
- *    pending-entries 扫描同款）。
- */
-export function readSessionFileEntries(sessionFile: string): unknown[] {
-	let text: string;
-	try {
-		text = readFileSync(sessionFile, "utf8");
-	} catch (err) {
-		if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") return [];
-		logger.warn("reap-notify journal facts read failed; disk entries treated as empty (candidates retry at next reconcile edge)", {
-			detail: { sessionFile, err: toErrorMessage(err) },
-		});
-		return [];
-	}
-	const entries: unknown[] = [];
-	for (const line of text.split("\n")) {
-		if (line.trim() === "") continue;
-		try {
-			const parsed: unknown = JSON.parse(line);
-			if (parsed !== null && typeof parsed === "object") entries.push(parsed);
-		} catch (e) {
-			// 脏行跳过：单行损坏不拖垮整盘事实（与 readRegistry 解析纪律同向）；warn 留痕（taste/no-silent-catch）
-			logger.warn("session JSONL 脏行跳过（对账事实按其余行继续）", { detail: { line: line.slice(0, DIRTY_LINE_SNIPPET_LEN), error: toErrorMessage(e) } });
-		}
-	}
-	return entries;
-}
+// readSessionFileEntries 已收编 @zhushanwen/pi-delivery-port 单源
+// （session-journal-read.ts，barrel import）——原 bash 域物理副本随判据链收编
+// 退役；容错口径（ENOENT 常态空 / 读错误 warn + [] / 脏行单行跳过）与退化语义
+// 登记见该函数头注与文件头「判据事实源磁盘化」段（PS-96）。
 
 /**
  * 终态通知对账补投（D2：registry 全集独立遍历，不挂 pending 差集循环——差集
@@ -394,7 +359,8 @@ type ReapNotifyEnvelope = Parameters<ReconcileDeliver>[0];
 /**
  * 补投候选判据（D2 三重事实：终态 ∧ 送达痕迹未命中 ∧ 投递日志无该幂等键条目）。
  * 判据单一导出（RL12 行为锁：三个边沿入口对同一事实状态产出同一判定——判据本体
- * = notify-reconcile-judgement.isReconcileNotifyCandidate 骨架，本函数是 bash 域
+ * = @zhushanwen/pi-delivery-port reconcile-judgement.isReconcileNotifyCandidate
+ * 骨架，本函数是 bash 域
  * registry 事实映射；delivered/journaled 缺省 = 空（只查 registry 侧事实），即
  * deliverReapNotifications ① 的预检短路形态，不另立第二套真值）。
  *

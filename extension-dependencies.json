@@ -566,6 +566,16 @@
           "package": "@zhushanwen/session-delivery",
           "type": "package",
           "reason": "peerDependency + 代码层 import createDelivery 与 type-only import 内核契约类型（src/delivery-port.ts——本包即该内核的 port 半区装配，unified-delivery 设计 §3.7），缺失时模块加载即抛 Cannot find module，是强依赖"
+        },
+        {
+          "package": "@zhushanwen/pi-extension-logger",
+          "type": "package",
+          "reason": "代码层静态 import getLogger（src/session-journal-read.ts top-level import——判据事实源磁盘读侧收编后的 warn 留痕通道），缺失时模块加载即抛 Cannot find module，是强依赖"
+        },
+        {
+          "package": "@zhushanwen/pi-ext-guards",
+          "type": "package",
+          "reason": "代码层静态 import toErrorMessage（src/session-journal-read.ts top-level import——读失败/脏行 warn 的错误消息化单点），缺失时模块加载即抛 Cannot find module，是强依赖"
         }
       ]
     },

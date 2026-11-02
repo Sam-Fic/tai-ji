@@ -37,13 +37,9 @@ import { MANAGED_SESSION_NOTIFY_CUSTOM_TYPE } from "../notify-content.ts";
 import {
 	collectDeliveredDeathPairs,
 	collectDeliveredManagedNotifyIds,
-	collectJournaledDeliveryIds,
 	collectUnregisterReasons,
 	buildManagedReconcileBriefing,
-	isReconcileNotifyCandidate,
-	readSessionFileEntries,
 	runNotifyReconcileMaintenance,
-	type ReconcileNotifyFacts,
 } from "../notify-reconcile.ts";
 
 // ── entries 构造（落盘契约锚定形态）──
@@ -100,28 +96,9 @@ function makeDeps(entries: unknown[], submitNotify = vi.fn(() => true)) {
 	return { reason: "test", entries, submitNotify };
 }
 
-// ── 骨架真值表（同构对拍：终态 ∧ 未排除 ∧ 无痕迹 ∧ 无承载）──
-
-describe("isReconcileNotifyCandidate 骨架真值表（跨域同构——u1 单源对拍）", () => {
-	const base: ReconcileNotifyFacts = {
-		isTerminal: true,
-		excludedByOrigin: false,
-		delivered: false,
-		journaled: false,
-	};
-	const truthTable: Array<[Partial<ReconcileNotifyFacts>, boolean, string]> = [
-		[{ ...base }, true, "rejected 丢失形态（四事实全命中）→ 候选"],
-		[{ isTerminal: false }, false, "在途/未注销 → 非候选"],
-		[{ excludedByOrigin: true }, false, "域排除位命中 → 非候选"],
-		[{ delivered: true }, false, "送达痕迹命中 → 非候选"],
-		[{ journaled: true }, false, "投递日志承载命中 → 非候选"],
-	];
-	for (const [facts, expected, label] of truthTable) {
-		it(label, () => {
-			expect(isReconcileNotifyCandidate({ ...base, ...facts })).toBe(expected);
-		});
-	}
-});
+// ── 骨架真值表已随判据链收编迁 @zhushanwen/pi-delivery-port
+// reconcile-judgement.test.ts 单点锁定（三域物理对拍副本退役）；本文件只锁
+// 域侧「域事实 → 布尔」映射与编排行为 ──
 
 // ── 四项读取规则①：全量 entries 现算（注销条目是判据对象）──
 
@@ -222,17 +199,9 @@ describe("四项读取规则③(a) 合批非首成员排除（承载反查：jou
 		expect(result.redelivered).toEqual(["sm-head", "sm-member"]);
 	});
 
-	it("collectJournaledDeliveryIds 展开 collectKey 键集（承载反查的事实源）+ ack 终局并入", () => {
-		const ids = collectJournaledDeliveryIds([
-			outboxEntry("sm-head", ["sm-head", "sm-member"]),
-			ackEntry("sm-acked"),
-			{ type: "custom", customType: OUTBOX_CUSTOM_TYPE, data: { broken: true } }, // 畸形跳过
-		]);
-		expect(ids.has("sm-head")).toBe(true);
-		expect(ids.has("sm-member")).toBe(true); // 承载键
-		expect(ids.has("sm-acked")).toBe(true);
-		expect(ids.size).toBe(3);
-	});
+	// collectJournaledDeliveryIds 行为锁（collectKey 展开 / ack 并入 / 畸形跳过）
+	// 已随判据链收编迁 @zhushanwen/pi-delivery-port reconcile-judgement.test.ts
+	// 单点锁定；域侧经编排用例（批首承载反查）覆盖组合行为。
 });
 
 describe("四项读取规则③(b) 死亡新闻对排除（死亡槽去重的判据侧磁盘投影）", () => {
@@ -528,40 +497,6 @@ describe("判据事实源磁盘化（幽灵内存 entry 回归，A1 域侧同构
 	});
 });
 
-// ── readSessionFileEntries 容错（JSONL 读侧；口径登记见函数头注）──
-
-describe("readSessionFileEntries（磁盘读侧容错）", () => {
-	const DATA_DIR = mkdtempSync(join(tmpdir(), "sm-readfile-"));
-
-	it("文件缺失（ENOENT，首条对话消息前常态）→ 空数组", () => {
-		expect(readSessionFileEntries(join(DATA_DIR, "no-such-file.jsonl"))).toEqual([]);
-	});
-
-	it("脏行跳过、合法行解析（JSONL 逐行容错）", () => {
-		mkdirSync(DATA_DIR, { recursive: true });
-		const file = join(DATA_DIR, "dirty.jsonl");
-		writeFileSync(
-			file,
-			['{"type":"custom","customType":"x"}', "not-json", "", '{"type":"message"}'].join("\n"),
-		);
-		const entries = readSessionFileEntries(file);
-		expect(entries).toHaveLength(2);
-		expect(entries[0]).toEqual({ type: "custom", customType: "x" });
-	});
-
-	it("不可读文件（chmod 0000）→ 空 + warn（宽容口径：磁盘事实不可得 = 无条目）", () => {
-		mkdirSync(DATA_DIR, { recursive: true });
-		const file = join(DATA_DIR, "locked.jsonl");
-		writeFileSync(file, "{}\n");
-		chmodSync(file, 0o000);
-		try {
-			expect(readSessionFileEntries(file)).toEqual([]);
-			expect(loggerMock.warn).toHaveBeenCalledWith(
-				expect.stringContaining("disk entries treated as empty"),
-				expect.anything(),
-			);
-		} finally {
-			chmodSync(file, 0o644);
-		}
-	});
-});
+// ── readSessionFileEntries 容错段已随判据链收编迁 @zhushanwen/pi-delivery-port
+// reconcile-judgement.test.ts 单点锁定（三域物理副本退役）；域侧经「session file
+// 不可读 → 盘事实按空 + warn」编排用例覆盖组合行为。

@@ -62,4 +62,12 @@ export {
   type ResumeReconcileListener,
 } from "./reconcile-edge.ts";
 
+export {
+  collectJournaledDeliveryIds,
+  isReconcileNotifyCandidate,
+  type ReconcileNotifyFacts,
+} from "./reconcile-judgement.ts";
+
+export { readSessionFileEntries } from "./session-journal-read.ts";
+
 export { createPiDeliveryPortHost, type CreatePiDeliveryPortHostOptions } from "./pi-host.ts";

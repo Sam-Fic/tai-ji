@@ -1,7 +1,9 @@
 // src/__tests__/notify-reconcile-judgement.test.ts —— 收殓终态补投的送达痕迹提取
 // （unified-delivery D3 裁决 1，现行登记处 = ADR-0074 与 docs/CONTEXT.md『统一投递』段）：collectDeliveredTaskIds 五形态（正常消息/fork 副本/
 // 缺 details 旧消息/非 bash 通知/killed 无痕迹任务）+ content 双落盘形态容错。
-// 旧补投标记（background-bash:reconciled）随波 3 补投机制退役：防双投由 port 幂等
+// 原骨架段（collectJournaledDeliveryIds / isReconcileNotifyCandidate 真值）已随判据
+// 链收编迁 @zhushanwen/pi-delivery-port reconcile-judgement.test.ts；旧补投标记
+// （background-bash:reconciled）随波 3 补投机制退役：防双投由 port 幂等
 // 接管，marker 判据/读写形态及其测试一并删除（反向锁见 pending-reconcile.test.ts
 // 「legacy reconciled marker present WITHOUT trace → still re-notified」用例）
 import { describe, expect, it } from "vitest";
@@ -9,11 +11,7 @@ import { describe, expect, it } from "vitest";
 import { scanJournal } from "@zhushanwen/pi-delivery-port";
 
 import { BACKGROUND_BASH_CUSTOM_TYPE } from "../background/notify.ts";
-import {
-	collectDeliveredTaskIds,
-	collectJournaledDeliveryIds,
-	isReconcileNotifyCandidate,
-} from "../background/notify-reconcile-judgement.ts";
+import { collectDeliveredTaskIds } from "../background/notify-reconcile-judgement.ts";
 
 const TASK_ID = "bt-1700000000-abcd12";
 const OTHER_TASK_ID = "bt-1700000000-efgh34";
@@ -111,8 +109,10 @@ describe("collectDeliveredTaskIds: content落盘形态与脏数据容错", () =>
 	});
 });
 
-// ── 三重事实判据：投递日志幂等键提取（事实三事实源）+ 骨架真值
-//（completion-signal-delivery D2；bash 域消费在 pending-reconcile.test.ts 真值表组）──
+// ── 投递日志幂等键提取（collectJournaledDeliveryIds）与骨架真值
+//（isReconcileNotifyCandidate）已随判据链收编迁 @zhushanwen/pi-delivery-port
+// reconcile-judgement.test.ts 单点锁定；journaledOutboxEntry helper 保留——
+// 下方 RL2 compaction 上游行为守护段仍消费。──
 
 /** 投递日志 outbox entry（journal v2 落盘形态——port 受理前 appendEntry 写入）。 */
 function journaledOutboxEntry(id: string, dataOverrides: Record<string, unknown> = {}) {
@@ -134,67 +134,6 @@ function journaledOutboxEntry(id: string, dataOverrides: Record<string, unknown>
 		},
 	};
 }
-
-describe("collectJournaledDeliveryIds: journal entry shapes (fact-three source, D2)", () => {
-	it("v2 outbox entry hits via data.id", () => {
-		const ids = collectJournaledDeliveryIds([journaledOutboxEntry(TASK_ID)]);
-		expect([...ids]).toEqual([TASK_ID]);
-	});
-
-	it("legacy v1 ledger entry (subagent-bg-notify-ledger) hits via notifyId mapping", () => {
-		const ids = collectJournaledDeliveryIds([
-			{
-				type: "custom",
-				customType: "subagent-bg-notify-ledger",
-				data: { v: 1, notifyId: TASK_ID, content: "c", record: {} },
-			},
-		]);
-		expect([...ids]).toEqual([TASK_ID]);
-	});
-
-	it("ack terminal entry hits (defensive union with outbox in the same pass)", () => {
-		const ids = collectJournaledDeliveryIds([
-			{
-				type: "custom",
-				customType: "delivery-port-ack",
-				data: { v: 2, id: TASK_ID, outcome: "delivered" },
-			},
-		]);
-		expect([...ids]).toEqual([TASK_ID]);
-	});
-
-	it("malformed / non-journal entries are skipped (tolerance aligned with port scanJournal)", () => {
-		const ids = collectJournaledDeliveryIds([
-			null,
-			42,
-			deliveredEntry(), // custom_message 通知条目——非投递日志
-			{ type: "custom", customType: "delivery-port-outbox", data: { v: 2 } }, // data 畸形
-			{ type: "custom", customType: "delivery-port-outbox" }, // data 缺失
-			journaledOutboxEntry(TASK_ID),
-		]);
-		expect([...ids]).toEqual([TASK_ID]);
-	});
-
-	it("multiple ids across entries collect all", () => {
-		const ids = collectJournaledDeliveryIds([
-			journaledOutboxEntry(TASK_ID),
-			journaledOutboxEntry(OTHER_TASK_ID),
-		]);
-		expect([...ids].sort()).toEqual([TASK_ID, OTHER_TASK_ID].sort());
-	});
-});
-
-describe("isReconcileNotifyCandidate: triple-fact skeleton truth (D2, cross-domain shared semantics)", () => {
-	const base = { isTerminal: true, excludedByOrigin: false, delivered: false, journaled: false };
-
-	it("candidate only when terminal ∧ not excluded ∧ no trace ∧ no journal entry", () => {
-		expect(isReconcileNotifyCandidate(base)).toBe(true);
-		expect(isReconcileNotifyCandidate({ ...base, isTerminal: false })).toBe(false);
-		expect(isReconcileNotifyCandidate({ ...base, excludedByOrigin: true })).toBe(false);
-		expect(isReconcileNotifyCandidate({ ...base, delivered: true })).toBe(false);
-		expect(isReconcileNotifyCandidate({ ...base, journaled: true })).toBe(false);
-	});
-});
 
 // ── RL2（红灯表 §4.2）：投递日志 append-only 抗 compaction 上游行为守护（UD7
 // 观察级前提，pi 升级复验探针）。「投递日志无该幂等键条目 ⇒ 从未成功受理」（三重

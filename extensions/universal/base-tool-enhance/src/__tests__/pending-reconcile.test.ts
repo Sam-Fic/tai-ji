@@ -37,7 +37,6 @@ vi.mock("@zhushanwen/pi-extension-logger", () => ({
 
 import {
 	isReapNotifyCandidate,
-	readSessionFileEntries,
 	reconcilePendingEntries,
 	type ReconcileDeliver,
 	type ReconcilePi,
@@ -836,37 +835,6 @@ describe("reap-notify: disk-fact journal source (ghost in-memory entry regressio
 	});
 });
 
-// ── readSessionFileEntries 容错（JSONL 读侧；口径登记见函数头注）──
-describe("readSessionFileEntries (disk read-side tolerance)", () => {
-	it("missing file → empty array (pre-first-flush is normal, not an error)", () => {
-		expect(readSessionFileEntries(join(DATA_DIR, "no-such-file.jsonl"))).toEqual([]);
-	});
-
-	it("malformed lines skipped, valid lines parsed (JSONL per-line tolerance)", () => {
-		mkdirSync(DATA_DIR, { recursive: true });
-		const file = join(DATA_DIR, "dirty.jsonl");
-		writeFileSync(
-			file,
-			['{"type":"custom","customType":"x"}', "not-json", "", '{"type":"message"}'].join("\n"),
-		);
-		const entries = readSessionFileEntries(file);
-		expect(entries).toHaveLength(2);
-		expect(entries[0]).toEqual({ type: "custom", customType: "x" });
-	});
-
-	it("unreadable file (chmod 0000) → empty + warn (lenient: disk facts unavailable = no entries)", () => {
-		mkdirSync(DATA_DIR, { recursive: true });
-		const file = join(DATA_DIR, "locked.jsonl");
-		writeFileSync(file, "{}\n");
-		chmodSync(file, 0o000);
-		try {
-			expect(readSessionFileEntries(file)).toEqual([]);
-			expect(loggerMock.warn).toHaveBeenCalledWith(
-				expect.stringContaining("disk entries treated as empty"),
-				expect.anything(),
-			);
-		} finally {
-			chmodSync(file, 0o644);
-		}
-	});
-});
+// readSessionFileEntries 容错段已随判据链收编迁 @zhushanwen/pi-delivery-port
+// reconcile-judgement.test.ts 单点锁定（三域物理副本退役）；域侧经「session file
+// 不可读 → 盘事实按空 + warn」编排用例（deliverReapNotifications 段）覆盖组合行为。
