@@ -211,15 +211,22 @@ function readMergedPiSettings(cwd: string | undefined): Record<string, unknown> 
  * `<agentDir>/mcp.json` + 项目 `<cwd>/.pi/mcp.json`——项目同名条目「含 command/url/type =
  * 整体替换；否则仅覆盖 enabled/exposure/toolExposure（保留全局 timeout）」；enabled=false
  * 条目不参与（server 不连接，其窗无意义）。条目未配 timeout → 默认 60s 计入（AS12）。
+ *
+ * 编排三段（复杂度拆解：读两侧 → 合并 → 求最大值，逐段独立 helper）。
  */
-function readMcpMaxTimeoutMs(cwd: string | undefined): number | null {
-  const globalMcp = readJsonRecord(getMcpConfigPath())
-  const globalServers = typeof globalMcp?.['mcpServers'] === 'object' && globalMcp?.['mcpServers'] !== null
-    ? globalMcp['mcpServers'] as Record<string, unknown> : {}
-  const projectMcp = cwd ? readJsonRecord(join(cwd, '.pi', 'mcp.json')) : null
-  const projectServers = typeof projectMcp?.['mcpServers'] === 'object' && projectMcp?.['mcpServers'] !== null
-    ? projectMcp['mcpServers'] as Record<string, unknown> : {}
+function readMcpServersAt(path: string | undefined): Record<string, unknown> {
+  const doc = path === undefined ? null : readJsonRecord(path)
+  const servers = doc?.['mcpServers']
+  return typeof servers === 'object' && servers !== null
+    ? servers as Record<string, unknown>
+    : {}
+}
 
+/** 项目同名条目合并（含 command/url/type = 整体替换；否则字段级覆盖）。 */
+function mergeMcpServers(
+  globalServers: Record<string, unknown>,
+  projectServers: Record<string, unknown>,
+): Map<string, Record<string, unknown>> {
   const effective = new Map<string, Record<string, unknown>>()
   for (const [name, config] of Object.entries(globalServers)) {
     if (typeof config === 'object' && config !== null && !Array.isArray(config)) {
@@ -237,6 +244,13 @@ function readMcpMaxTimeoutMs(cwd: string | undefined): number | null {
       if (base) effective.set(name, { ...base, ...entry })
     }
   }
+  return effective
+}
+
+function readMcpMaxTimeoutMs(cwd: string | undefined): number | null {
+  const globalServers = readMcpServersAt(getMcpConfigPath())
+  const projectServers = readMcpServersAt(cwd ? join(cwd, '.pi', 'mcp.json') : undefined)
+  const effective = mergeMcpServers(globalServers, projectServers)
 
   let max: number | null = null
   for (const entry of effective.values()) {
@@ -333,41 +347,37 @@ export const STALL_MATRIX_EVENT_ASSEMBLY: ReadonlyArray<{
   { event: PI_EVENT.extensionUiRequest, action: 'ask-user-anchor', note: '② 豁免锚点置位：交互式方法（confirm/select/input/editor）= ask_user pending（C7 格）；notify 不阻塞不置锚' },
 ]
 
+/**
+ * kind → 矩阵动作查找表（AS16 全清单的 kind 级落位；表驱动替换原 18-case switch——
+ * 逐 case 语义不变，switch 圈复杂度 19 拆解）。表外 kind（message 族 text/thinking
+ * delta、tool_call_update、auto_retry_*、complete/error 等对话内容流帧 + turn-start /
+ * turn-usage / turn-end / hook / subagent-stream / llm-first-output）= 在途信号
+ * （pi 进程在产出 = 回合推进证据），由 ?? 'refresh' 兜底。
+ */
+const STALL_KIND_TO_ACTION: Partial<Record<StallMatrixEvent['kind'], StallEventAction>> = {
+  'llm-request-start': 'refresh-model-first-byte',
+  'tool-call-index': 'refresh-tool',
+  'tool-call-start': 'refresh-tool',
+  'tool-call-end': 'refresh-tool',
+  'bash-execution-update': 'refresh-tool',
+  'compaction-start': 'anchor-compacting',
+  'compaction-end': 'anchor-release',
+  'extension-ui': 'ask-user-anchor',
+  'summarization-retry-scheduled': 'backoff',
+  'agent-settled': 'settle',
+  'session-renamed': 'filtered',
+  'thinking-level': 'filtered',
+  'record-entry-appended': 'filtered',
+  noop: 'filtered',
+  'session-manager-ui': 'filtered',
+  'canvas-ui': 'filtered',
+  'trace-trigger': 'filtered',
+  'record-reconcile-trigger': 'filtered',
+}
+
 /** kind 级分类（observe 内部消费；导出供测试逐 kind 断言）。 */
 export function stallMatrixActionForKind(kind: StallMatrixEvent['kind']): StallEventAction {
-  switch (kind) {
-    case 'llm-request-start':
-      return 'refresh-model-first-byte'
-    case 'tool-call-index':
-    case 'tool-call-start':
-    case 'tool-call-end':
-    case 'bash-execution-update':
-      return 'refresh-tool'
-    case 'compaction-start':
-      return 'anchor-compacting'
-    case 'compaction-end':
-      return 'anchor-release'
-    case 'extension-ui':
-      return 'ask-user-anchor'
-    case 'summarization-retry-scheduled':
-      return 'backoff'
-    case 'agent-settled':
-      return 'settle'
-    case 'session-renamed':
-    case 'thinking-level':
-    case 'record-entry-appended':
-    case 'noop':
-    case 'session-manager-ui':
-    case 'canvas-ui':
-    case 'trace-trigger':
-    case 'record-reconcile-trigger':
-      return 'filtered'
-    default:
-      // message 族（text/thinking delta、tool_call_update、auto_retry_*、complete/error 等
-      // 对话内容流帧）+ turn-start / turn-usage / turn-end / hook / subagent-stream /
-      // llm-first-output：全部是在途信号（pi 进程在产出 = 回合推进证据）。
-      return 'refresh'
-  }
+  return STALL_KIND_TO_ACTION[kind] ?? 'refresh'
 }
 
 /**

@@ -394,6 +394,93 @@ export interface NotifyReconcileResult { // oe-exempt:20261101:framework:跨包�
  * 判据全部事实源读它的落盘条目（磁盘事实，机制见文件头「判据事实源磁盘化」段）；
  * undefined（no-persist 形态）退化内存 entries（现状行为）+ warn。
  */
+/**
+ * 判据事实源解析（复杂度拆出）：五源判据事实全部从 session JSONL 落盘条目产出；
+ * sessionFile 缺席（no-persist 形态，磁盘事实结构性不存在）退化内存 entries——
+ * 该形态 _persist no-op 恒成功、无幽灵态，内存账即完整事实。
+ */
+function resolveFactEntries(deps: {
+	reason: string;
+	entries: readonly unknown[];
+	sessionFile?: string;
+}): readonly unknown[] {
+	if (deps.sessionFile !== undefined) return readSessionFileEntries(deps.sessionFile);
+	logger.warn("managed notify reconcile journal facts fell back to in-memory entries: session file unavailable (no-persist session?); ghost in-memory entries would misjudge delivered/journaled facts", {
+		detail: { reason: deps.reason },
+	});
+	return deps.entries;
+}
+
+/**
+ * 预检过滤（复杂度拆出——四项规则①-④）：全量落盘条目现算（scanPendingEntries 单点
+ * ——registerEntries 含已注销条目，非 active 差集视图）后的四项规则：
+ *  ① 域过滤：只取 type === "session" 条目（registerTypes 首见视图；跨域条目互斥
+ *     排除——防四域混装的跨域三重全命中误报）；
+ *  ② 静默注销类排除（unregister reason 原词分流）+ 应投递类词表过滤（非在册词 =
+ *     词表外/防御形态，不虚构）；无注销条目 = 债权仍在途（新闻未到达）。
+ */
+function prefilterManagedCandidates(
+	scan: ReturnType<typeof scanPendingEntries>,
+	unregisterReasons: ReadonlyMap<string, string>,
+): Array<{ notifyId: string; label: string; reason: string }> {
+	const prefiltered: Array<{ notifyId: string; label: string; reason: string }> = [];
+	for (const { data } of scan.registerEntries) {
+		const notifyId = stringField(data, "id");
+		if (notifyId === undefined) continue;
+		if (scan.registerTypes.get(notifyId) !== "session") continue;
+		const reason = unregisterReasons.get(notifyId);
+		if (reason === undefined) continue;
+		if (SILENT_UNREGISTER_REASONS.has(reason)) continue;
+		if (!DELIVERABLE_UNREGISTER_REASONS.has(reason)) continue;
+		const name = stringField(data, "name");
+		prefiltered.push({ notifyId, label: name ?? notifyId, reason });
+	}
+	return prefiltered;
+}
+
+/**
+ * 单候选补投终判 + 补投出口（复杂度拆出——终判循环体）：facts 三事实（isTerminal /
+ * excludedByOrigin 预检已保证）+ delivered 双源（(a) 通知幂等键已送达 ∧ (b) 死亡对
+ * 排除：死亡类 reason 且同 (label, reason) 新闻已送达）+ journaled（载荷键已落盘）。
+ * submitNotify false（port 缺席/重提链失败）不留痕跳过：判据仍命中，下一对账边沿
+ * 幂等重查；true（accepted/swallowed）→ 已投递。
+ */
+function reconcileOneManagedCandidate(deps: {
+	reason: string;
+	submitNotify: (notifyId: string, content: string, details: ManagedReconcileNotifyDetails) => boolean;
+}, candidate: { notifyId: string; label: string; reason: string }, deliveredIds: ReadonlySet<string>, deathPairs: ReadonlySet<string>, journaledIds: ReadonlySet<string>, result: NotifyReconcileResult): void {
+	const facts: ReconcileNotifyFacts = {
+		isTerminal: true, // 预检已保证：已注销 ∧ reason 应投递类
+		excludedByOrigin: false, // 预检已保证：域过滤命中 ∧ 非静默注销类
+		delivered:
+			deliveredIds.has(candidate.notifyId) ||
+			(DEATH_NEWS_REASONS.has(candidate.reason) &&
+				deathPairs.has(`${candidate.label}\u0000${candidate.reason}`)),
+		journaled: journaledIds.has(candidate.notifyId),
+	};
+	if (!isReconcileNotifyCandidate(facts)) {
+		if (facts.delivered) result.skippedDelivered.push(candidate.notifyId);
+		if (facts.journaled) result.skippedJournaled.push(candidate.notifyId);
+		return;
+	}
+	const briefing = buildManagedReconcileBriefing(
+		candidate.notifyId,
+		candidate.label,
+		candidate.reason,
+	);
+	const accepted = deps.submitNotify(
+		candidate.notifyId,
+		briefing.content,
+		briefing.details,
+	);
+	if (accepted) {
+		result.redelivered.push(candidate.notifyId);
+		logger.debug("managed notify reconciled via delivery port", {
+			detail: { reason: deps.reason, notifyId: candidate.notifyId },
+		});
+	}
+}
+
 export function runNotifyReconcileMaintenance(deps: {
 	/** 入口来源（session_start / agent_settled / resume 切回）——入口来源日志可辨。 */
 	reason: string;
@@ -420,18 +507,7 @@ export function runNotifyReconcileMaintenance(deps: {
 		const memScan = scanPendingEntries(deps.entries);
 		if (memScan.registerEntries.length === 0) return result;
 
-		// 候选在册：事实源磁盘化（文件头「判据事实源磁盘化」段）——五源判据事实
-		// 全部从 session JSONL 落盘条目产出；sessionFile 缺席（no-persist 形态，
-		// 磁盘事实结构性不存在）退化内存 entries——该形态 _persist no-op 恒成功、
-		// 无幽灵态，内存账即完整事实。
-		const factEntries = deps.sessionFile !== undefined
-			? readSessionFileEntries(deps.sessionFile)
-			: deps.entries;
-		if (deps.sessionFile === undefined) {
-			logger.warn("managed notify reconcile journal facts fell back to in-memory entries: session file unavailable (no-persist session?); ghost in-memory entries would misjudge delivered/journaled facts", {
-				detail: { reason: deps.reason },
-			});
-		}
+		const factEntries = resolveFactEntries(deps);
 		// 四项规则①：全量落盘条目现算（scanPendingEntries 单点——registerEntries
 		// 含已注销条目，非 active 差集视图）；四源辅助事实同盘单次遍历全产
 		const scan = scanPendingEntries(factEntries);
@@ -441,60 +517,11 @@ export function runNotifyReconcileMaintenance(deps: {
 		const journaledIds = collectJournaledDeliveryIds(factEntries);
 
 		result.scanned = scan.registerEntries.length;
-		// 预检短路（u1/u3 同款成本下界）：无 register 条目不触后续三源提取——
-		// 提取已在本函数头部单次遍历完成，此处的短路语义 = 无候选不进终判循环
-		const prefiltered: Array<{ notifyId: string; label: string; reason: string }> = [];
-		for (const { data } of scan.registerEntries) {
-			const notifyId = stringField(data, "id");
-			if (notifyId === undefined) continue;
-			// 四项规则④ 域过滤：只取 type === "session" 条目（registerTypes 首见
-			// 视图；跨域条目互斥排除——防四域混装的跨域三重全命中误报）
-			if (scan.registerTypes.get(notifyId) !== "session") continue;
-			// 四项规则②：静默注销类排除（unregister reason 原词分流）
-			const reason = unregisterReasons.get(notifyId);
-			if (reason === undefined) continue; // 无注销条目 = 债权仍在途（新闻未到达）
-			if (SILENT_UNREGISTER_REASONS.has(reason)) continue;
-			// 四项规则②：应投递类词表过滤（非在册词 = 词表外/防御形态，不虚构）
-			if (!DELIVERABLE_UNREGISTER_REASONS.has(reason)) continue;
-			const name = stringField(data, "name");
-			prefiltered.push({ notifyId, label: name ?? notifyId, reason });
-		}
+		const prefiltered = prefilterManagedCandidates(scan, unregisterReasons);
 
 		for (const candidate of prefiltered) {
 			result.candidates += 1;
-			const facts: ReconcileNotifyFacts = {
-				isTerminal: true, // 预检已保证：已注销 ∧ reason 应投递类
-				excludedByOrigin: false, // 预检已保证：域过滤命中 ∧ 非静默注销类
-				delivered:
-					deliveredIds.has(candidate.notifyId) ||
-					// (b) 死亡对排除：死亡类 reason 且同 (label, reason) 新闻已送达
-					(DEATH_NEWS_REASONS.has(candidate.reason) &&
-						deathPairs.has(`${candidate.label}\u0000${candidate.reason}`)),
-				journaled: journaledIds.has(candidate.notifyId),
-			};
-			if (!isReconcileNotifyCandidate(facts)) {
-				if (facts.delivered) result.skippedDelivered.push(candidate.notifyId);
-				if (facts.journaled) result.skippedJournaled.push(candidate.notifyId);
-				continue;
-			}
-			const briefing = buildManagedReconcileBriefing(
-				candidate.notifyId,
-				candidate.label,
-				candidate.reason,
-			);
-			const accepted = deps.submitNotify(
-				candidate.notifyId,
-				briefing.content,
-				briefing.details,
-			);
-			// submitNotify false（port 缺席/重提链失败）不留痕跳过：判据仍命中，
-			// 下一对账边沿幂等重查；true（accepted/swallowed）→ 已投递。
-			if (accepted) {
-				result.redelivered.push(candidate.notifyId);
-				logger.debug("managed notify reconciled via delivery port", {
-					detail: { reason: deps.reason, notifyId: candidate.notifyId },
-				});
-			}
+			reconcileOneManagedCandidate(deps, candidate, deliveredIds, deathPairs, journaledIds, result);
 		}
 	} catch (err) {
 		logger.warn("managed notify reconcile failed; candidates retried at next reconcile edge", {

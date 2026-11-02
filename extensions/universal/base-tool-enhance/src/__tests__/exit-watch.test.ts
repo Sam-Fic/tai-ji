@@ -17,20 +17,29 @@ import { once } from "node:events";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { INTEGRATION_TESTS_ENABLED } from "../../../../../test-guard/integration-gate.ts";
 
-const { pstMock, handleTaskExitSpy, origRefs } = vi.hoisted(() => ({
+const { pstMock, isPidAliveMock, handleTaskExitSpy, origRefs } = vi.hoisted(() => ({
 	pstMock: vi.fn(),
+	isPidAliveMock: vi.fn(),
 	handleTaskExitSpy: vi.fn(),
-	origRefs: {} as { getProcessStartTimeSec?: (pid: number) => number | undefined },
-}));
+	origRefs: {} as {
+		getProcessStartTimeSec?: (pid: number) => number | undefined
+		isPidAlive?: (pid: number) => boolean
+	},
+}))
 
-// ps 原语可控（默认委托真实实现）；handleTaskExit spy（finalize 链落点断言）
+// ps 原语可控（默认委托真实实现）；handleTaskExit spy（finalize 链落点断言）。
+// isPidAlive 一并收编：常驻单测层（下方 describe）纯 mock 驱动真值表，不依赖
+// TAIJI_TEST_INTEGRATION 门控——coverage 门禁跑默认单测层，门控用例全跳时本
+// 文件的常驻用例保证 exit-watch 行为行不落盲区（真进程语义仍由门控用例锁定）。
 vi.mock("@zhushanwen/extension-protocol/background-task", async (importOriginal) => {
 	const orig = await importOriginal<
 		typeof import("@zhushanwen/extension-protocol/background-task")
 	>();
 	origRefs.getProcessStartTimeSec = orig.getProcessStartTimeSec;
+	origRefs.isPidAlive = orig.isPidAlive;
 	pstMock.mockImplementation((pid: number) => origRefs.getProcessStartTimeSec!(pid));
-	return { ...orig, getProcessStartTimeSec: pstMock };
+	isPidAliveMock.mockImplementation((pid: number) => origRefs.isPidAlive!(pid));
+	return { ...orig, getProcessStartTimeSec: pstMock, isPidAlive: isPidAliveMock };
 });
 vi.mock("../background/notify.ts", async (importOriginal) => {
 	const orig = await importOriginal<typeof import("../background/notify.ts")>();
@@ -108,6 +117,7 @@ function makeConvertedTask(pid: number, pidStartTime?: number): BackgroundTask {
 beforeEach(() => {
 	handleTaskExitSpy.mockReset();
 	pstMock.mockImplementation((pid: number) => origRefs.getProcessStartTimeSec!(pid));
+	isPidAliveMock.mockImplementation((pid: number) => origRefs.isPidAlive!(pid));
 });
 
 afterEach(() => {
@@ -238,6 +248,144 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)("interval-driven attach (module-leve
 		attachExitWatch(task); // 重复挂接被忽略
 		vi.advanceTimersByTime(EXIT_WATCH_INTERVAL_MS);
 
+		expect(handleTaskExitSpy).toHaveBeenCalledTimes(1);
+	});
+});
+
+// ── 常驻单测层：纯 mock 驱动的谓词真值表（无真进程，不进门控） ────────────────
+//
+// 下方门控用例用真死 pid / 真进程锁原语语义（ESRCH 内核判定等），本地默认跳过；
+// coverage 门禁跑默认单测层，全部行为测试在门控层 = 源文件行为行零覆盖。本组用
+// mock 原语（isPidAlive / getProcessStartTimeSec 已在工厂收编为可控替身）常驻
+// 锁定 pollConvertedTaskOnce 的判定逻辑与 finalizeConvertedExit 收尾链——逻辑
+// 分支与进程语义正交，真值表在此为常驻权威，门控层补真进程语义。
+
+/** 常驻层用例的假 pid（isPidAlive / pst 全 mock，pid 无需真实存在）。 */
+const FAKE_PID = 999_001;
+
+/** 常驻层条目工厂：同 makeConvertedTask 但 pid 为假（不走 spawnAlive / spawnDeadPid）。 */
+function makeMockedConvertedTask(overrides: Partial<BackgroundTask> = {}): BackgroundTask {
+	taskSeq += 1;
+	const task: BackgroundTask = {
+		taskId: `bt-1700000000-ewm${String(taskSeq).padStart(3, "0")}`,
+		pid: FAKE_PID,
+		command: "sleep 30",
+		outputFile: join(DATA_DIR, `mocked-${taskSeq}.log`),
+		registryPath: REGISTRY_PATH,
+		startedAt: Date.now(),
+		state: "running",
+		ownerPiPid: process.pid,
+		sessionId: SESSION_ID,
+		pidStartTime: 1_000,
+		...overrides,
+	};
+	registerSpawnedTask(task);
+	writeRegistryEntry(REGISTRY_PATH, taskToRegistryEntry(task));
+	return task;
+}
+
+describe("exit watch predicate truth table (mocked primitives, resident)", () => {
+	it("ESRCH (isPidAlive false) → finalize chain: intent absent reads back reason from registry (running → natural)", () => {
+		const task = makeMockedConvertedTask();
+		isPidAliveMock.mockReturnValueOnce(false);
+
+		pollConvertedTaskOnce(task);
+
+		const finalized = getTask(task.taskId);
+		expect(finalized?.state).toBe("exited");
+		expect(finalized?.exitCode).toBeNull();
+		expect(finalized?.reason).toBe("natural");
+		expect(readRegistry(REGISTRY_PATH).get(task.taskId)?.state).toBe("exited");
+		expect(handleTaskExitSpy).toHaveBeenCalledTimes(1);
+		expect(handleTaskExitSpy).toHaveBeenCalledWith(expect.objectContaining({ taskId: task.taskId }));
+		// 终态后重 poll 是 no-op（早退分支）
+		pollConvertedTaskOnce(task);
+		expect(handleTaskExitSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("ESRCH + registry entry killing (cross-process UI kill prewrite) → reason=killed via readBackReasonFromRegistry", () => {
+		const task = makeMockedConvertedTask();
+		// 模拟跨进程代杀预写：registry 条目 state=killing（内存 intent 不设）
+		const entry = taskToRegistryEntry(task);
+		writeRegistryEntry(REGISTRY_PATH, { ...entry, state: "killing" });
+		isPidAliveMock.mockReturnValueOnce(false);
+
+		pollConvertedTaskOnce(task);
+
+		expect(getTask(task.taskId)?.reason).toBe("killed");
+	});
+
+	it("registry read-back misses entry / non-killing state → natural (does not block finalization)", () => {
+		const task = makeMockedConvertedTask();
+		// 条目在但状态非 killing（running）→ natural
+		isPidAliveMock.mockReturnValueOnce(false);
+		pollConvertedTaskOnce(task);
+		expect(getTask(task.taskId)?.reason).toBe("natural");
+
+		// 条目完全缺席（registry 另一条目空间）→ natural
+		const orphan = makeMockedConvertedTask();
+		const orphanTask = { ...orphan, registryPath: join(DATA_DIR, "nonexistent-registry.json") };
+		isPidAliveMock.mockReturnValueOnce(false);
+		pollConvertedTaskOnce(orphanTask);
+		expect(getTask(orphan.taskId)?.reason).toBe("natural");
+	});
+
+	it("alive + start time unreadable (pst undefined) → conservative skip, NEVER finalizes", () => {
+		const task = makeMockedConvertedTask();
+		isPidAliveMock.mockReturnValueOnce(true);
+		pstMock.mockReturnValueOnce(undefined);
+
+		pollConvertedTaskOnce(task);
+
+		expect(getTask(task.taskId)?.state).toBe("running");
+		expect(handleTaskExitSpy).not.toHaveBeenCalled();
+		expect(readRegistry(REGISTRY_PATH).get(task.taskId)?.state).toBe("running");
+	});
+
+	it("alive + start time matches registered → keep watching (no finalize)", () => {
+		const task = makeMockedConvertedTask();
+		isPidAliveMock.mockReturnValueOnce(true);
+		pstMock.mockReturnValueOnce(1_000); // = task.pidStartTime（匹配）
+
+		pollConvertedTaskOnce(task);
+
+		expect(getTask(task.taskId)?.state).toBe("running");
+		expect(handleTaskExitSpy).not.toHaveBeenCalled();
+	});
+
+	it("alive + start time drift (pid reuse) → finalize WITHOUT killing (unrelated process untouched)", () => {
+		const task = makeMockedConvertedTask();
+		isPidAliveMock.mockReturnValueOnce(true);
+		pstMock.mockReturnValueOnce(1_001); // ≠ task.pidStartTime（漂移）
+
+		pollConvertedTaskOnce(task);
+
+		expect(getTask(task.taskId)?.state).toBe("exited");
+		expect(handleTaskExitSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("task entry absent from store (already collected) → stopWatch early-exit, zero finalize", () => {
+		const task = makeMockedConvertedTask();
+		clearTaskStoreForTest(); // 条目不在表（并发收尾先到的形态）
+
+		pollConvertedTaskOnce(task);
+
+		expect(handleTaskExitSpy).not.toHaveBeenCalled();
+	});
+
+	it("attachExitWatch (mocked ESRCH) polls on interval, finalizes once, idempotent re-attach ignored", () => {
+		vi.useFakeTimers();
+		const task = makeMockedConvertedTask();
+		isPidAliveMock.mockReturnValue(false); // 恒 ESRCH
+
+		attachExitWatch(task);
+		attachExitWatch(task); // 幂等：重复挂接被忽略
+		vi.advanceTimersByTime(EXIT_WATCH_INTERVAL_MS);
+
+		expect(getTask(task.taskId)?.state).toBe("exited");
+		expect(handleTaskExitSpy).toHaveBeenCalledTimes(1);
+		// 终态后守望已摘除：再走间隔不重复收尾
+		vi.advanceTimersByTime(EXIT_WATCH_INTERVAL_MS * 3);
 		expect(handleTaskExitSpy).toHaveBeenCalledTimes(1);
 	});
 });

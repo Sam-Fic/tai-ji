@@ -162,6 +162,45 @@ export interface RecordFamilyScanResult {
  * 序列的续字节均 ≥ 0x80，0x0A 只出现在 ASCII 区间，按字节切行构造性不截断
  * 多字节字符（替代早前的字符串 carry 拼接——块边界截断多字节字符会产生 U+FFFD）。
  */
+/** 软预算用尽判定（行边界停点）：分片预算满且未到 EOF（剩余交下片，hasMore 语义）。 */
+function isSoftBudgetExhausted(
+  maxBytes: number | undefined,
+  boundaryOffset: number,
+  startOffset: number,
+  size: number,
+): boolean {
+  return maxBytes !== undefined && boundaryOffset - startOffset >= maxBytes && boundaryOffset < size
+}
+
+/**
+ * 末段（无尾随换行）消费（复杂度拆出）：仅当残行可整体解析为完整行（截断点恰在行尾、
+ * 只缺换行符）才消费并把游标推进到 EOF（完整末行的零重算稳定态）；解析失败 = 并发
+ * 观测到的半行，不消费、游标停在残行起点（= 最后一个换行之后，仍是行边界），下次
+ * 续读拼齐——半行其余字节若落在游标之后会被当独立行解析失败跳过（entry 静默丢失面），
+ * 「恒落行边界」的接口语义由此在 EOF 路径成立（分片停点路径同款语义）。
+ */
+function consumeTailSegment(
+  filePath: string,
+  pending: Buffer,
+  pendingLen: number,
+  eofPosition: number,
+  entries: unknown[],
+): number {
+  const tail = pending.toString('utf8', 0, pendingLen)
+  let tailIsCompleteLine = false
+  try {
+    JSON.parse(tail)
+    tailIsCompleteLine = true
+  } catch {
+    tailIsCompleteLine = false
+  }
+  if (!tailIsCompleteLine) {
+    return eofPosition - pendingLen
+  }
+  collectRecordFamilyLine(filePath, tail, entries)
+  return eofPosition
+}
+
 export function scanRecordFamilyEntriesFromSessionFile(
   filePath: string,
   startOffset = 0,
@@ -217,7 +256,7 @@ export function scanRecordFamilyEntriesFromSessionFile(
       for (const line of pending.toString('utf8', 0, lastNewline).split('\n')) {
         collectRecordFamilyLine(filePath, line, entries)
       }
-      if (maxBytes !== undefined && boundaryOffset - startOffset >= maxBytes && boundaryOffset < size) {
+      if (isSoftBudgetExhausted(maxBytes, boundaryOffset, startOffset, size)) {
         // 软预算用尽：停在行边界，剩余交下片（hasMore 语义）
         return { entries, nextOffset: boundaryOffset, truncated: false, hasMore: true }
       }
@@ -225,24 +264,10 @@ export function scanRecordFamilyEntriesFromSessionFile(
       pending.copy(pending, 0, lastNewline + 1, pendingLen)
       pendingLen = restLen
     }
-    // 末段（无尾随换行）：仅当残行可整体解析为完整行（截断点恰在行尾、只缺换行符）
-    // 才消费并把游标推进到 EOF（完整末行的零重算稳定态）；解析失败 = 并发观测到的
-    // 半行，不消费、游标停在残行起点（= 最后一个换行之后，仍是行边界），下次续读
-    // 拼齐——半行其余字节若落在游标之后会被当独立行解析失败跳过（entry 静默丢失面），
-    // 「恒落行边界」的接口语义由此在 EOF 路径成立（分片停点路径同款语义）。
+    // 末段（无尾随换行）：仅当残行可整体解析为完整行才消费并把游标推进到 EOF
+    // （consumTailSegment 头注）；解析失败 = 并发半行，游标停残行起点。
     if (pendingLen > 0) {
-      const tail = pending.toString('utf8', 0, pendingLen)
-      let tailIsCompleteLine = false
-      try {
-        JSON.parse(tail)
-        tailIsCompleteLine = true
-      } catch {
-        tailIsCompleteLine = false
-      }
-      if (!tailIsCompleteLine) {
-        return { entries, nextOffset: position - pendingLen, truncated: false }
-      }
-      collectRecordFamilyLine(filePath, tail, entries)
+      return { entries, nextOffset: consumeTailSegment(filePath, pending, pendingLen, position, entries), truncated: false }
     }
     return { entries, nextOffset: position, truncated: false }
   } finally {

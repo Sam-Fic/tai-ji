@@ -152,6 +152,108 @@ function startBackgroundAndReply(
 	};
 }
 
+/**
+ * 白名单强制后台分支（D3/M4，execute 复杂度拆出）：判定在 execute 内部、不改写
+ * input——permission 审批的永远是原始 command/background/timeout（P1 探针结论的
+ * 前提）。命中 → 强制走 background，无视 background:false/缺省；D13：忽略 LLM 显式
+ * timeout（unified-hooks 时代「跑测试带 timeout」习惯会精确复刻 §2.2 要解决的失败
+ * 模式），按「配置默认 → 不限」取值。未命中返回 undefined（execute 继续后续分支）。
+ */
+function forcedBackgroundReply(
+	args: { command: string; timeout?: number },
+	ctx: ExtensionToolContext,
+	config: BaseToolEnhanceConfig,
+): ReturnType<typeof startBackgroundAndReply> | undefined {
+	const forceMatch = matchForceBackground(
+		args.command,
+		compileForcePatterns(config.forceBackgroundPatterns, config.disableBuiltinForcePatterns),
+	);
+	if (forceMatch === undefined) return undefined;
+	const timeoutSec = resolveBackgroundTimeoutSec(
+		undefined,
+		config.backgroundTimeoutSeconds ?? undefined,
+	);
+	const notes = [
+		`Forced to background: command matched force-background whitelist ${describeForceMatch(forceMatch)}.`,
+		...(args.timeout !== undefined
+			? [
+					`Ignored explicit timeout ${args.timeout}s for whitelisted command ` +
+						`(background timeout: ${timeoutSec !== undefined ? `${timeoutSec}s (config default)` : "unlimited"}).`,
+				]
+			: []),
+	];
+	return startBackgroundAndReply(args.command, ctx, config, timeoutSec, notes);
+}
+
+/**
+ * 矩阵 A5 包装执行（execute 复杂度拆出）：包装执行 + 空闲转后台。执行本体仍是官方
+ * delegate（包装命令串交官方原样跑，timeout 缺省 = 官方无超时语义；转后台后的超时 =
+ * backgroundTimeoutSeconds，由 registerConvertedTask 的 armBackgroundTimeout 接线
+ * 承担）。收尾统一读 pidfile 判定命令进程存活性：还活着（B3 静默转后台 / B5 包装
+ * 异常）→ 登记；已死（B2 正常完成）→ 不登记零感知 + 三文件清理。
+ *
+ * B4 用户中止（abort 按进程组整组杀）前置跳过判活收尾：pi 组杀后抛错不等真实命令
+ * 被系统收尸，收尾判活 isPidAlive（kill -0 只查 pid 存在性）对僵尸进程返回 true →
+ * 误登记转后台任务 → 守望 2s 后 ESRCH 收尾发幽灵「finished」通知唤醒新回合。abort
+ * 信号已置即属用户中止形态：直接清理三文件后原样上抛（无登记 = 无守望 = 无通知）。
+ */
+async function runWrappedForegroundExecute(
+	toolCallId: string,
+	args: { command: string },
+	idleSec: number,
+	signal: AbortSignal | undefined,
+	onUpdate: AgentToolUpdateCallback<BashToolDetails | undefined> | undefined,
+	ctx: ExtensionToolContext,
+	config: BaseToolEnhanceConfig,
+	delegate: ReturnType<typeof createBashToolDefinition>,
+) {
+	const dataDir = resolveTaijiDataDir();
+	const sessionId = ctx.sessionManager.getSessionId();
+	const plan = prepareForegroundWrap(args.command, dataDir, sessionId, idleSec);
+	try {
+		const result = await delegate.execute(
+			toolCallId,
+			{ command: plan.wrappedCommand, timeout: undefined },
+			signal,
+			onUpdate,
+			ctx,
+		);
+		// 收尾判据（settleConvertedCommand 注释）：标记行在 = 承诺在 = 必登记——
+		// pid 判死也不清理（收尾窗口死亡形态：命令恰在收尾窗口死亡时通知承诺
+		// 不落空；矩阵 B4「用户中止」是另一形态，见下方 catch 分支）
+		const converted = settleConvertedCommand(
+			plan,
+			dataDir,
+			sessionId,
+			config.backgroundTimeoutSeconds ?? undefined,
+			resultHasFgBgMarker(result),
+		);
+		// B5 补标记：wrapper 未及打印标记行（异常死亡）时由本层补齐；B3 已打印
+		// → 透传不动（登记后结果文本透传原则：标记行已在输出内，模型直接可读）。
+		// 与 settle 的 hasMarker 判据双向闭合：标记行在 = 必登记；登记且无标记 = 必补
+		if (converted !== undefined && !resultHasFgBgMarker(result)) {
+			return appendTextToResult(result, buildConvertedMarkerNote(converted));
+		}
+		return result;
+	} catch (err) {
+		if (signal?.aborted === true) {
+			cleanupWrapFiles(plan);
+			throw err;
+		}
+		// 非 abort 的官方 execute 抛错（spawn 失败等形态——命令进程死活未定，
+		// 判活收尾仍需执行）→ 收尾判定照走（抛错路径无 result 可判标记，恒
+		// hasMarker=false 走 pid 判定），官方式错误原样上抛（不吞不改写）
+		settleConvertedCommand(
+			plan,
+			dataDir,
+			sessionId,
+			config.backgroundTimeoutSeconds ?? undefined,
+			false,
+		);
+		throw err;
+	}
+}
+
 // ───────────── 空闲转后台包装层（foreground-idle-to-background，矩阵 A5）─────────────
 
 /**
@@ -467,30 +569,10 @@ export function createBashOverrideToolDefinition() {
 
 			// 白名单强制后台（D3/M4）：判定在 execute 内部、不改写 input——permission
 			// 审批的永远是原始 command/background/timeout（P1 探针结论的前提）。命中 →
-			// 强制走 background，无视 background:false/缺省
+			// 强制走 background，无视 background:false/缺省（分支本体见 forcedBackgroundReply）
 			if (!subagent) {
-				const forceMatch = matchForceBackground(
-					args.command,
-					compileForcePatterns(config.forceBackgroundPatterns, config.disableBuiltinForcePatterns),
-				);
-				if (forceMatch !== undefined) {
-					// D13：忽略 LLM 显式 timeout（unified-hooks 时代「跑测试带 timeout」习惯
-					// 会精确复刻 §2.2 要解决的失败模式），按「配置默认 → 不限」取值
-					const timeoutSec = resolveBackgroundTimeoutSec(
-						undefined,
-						config.backgroundTimeoutSeconds ?? undefined,
-					);
-					const notes = [
-						`Forced to background: command matched force-background whitelist ${describeForceMatch(forceMatch)}.`,
-						...(args.timeout !== undefined
-							? [
-									`Ignored explicit timeout ${args.timeout}s for whitelisted command ` +
-										`(background timeout: ${timeoutSec !== undefined ? `${timeoutSec}s (config default)` : "unlimited"}).`,
-								]
-							: []),
-					];
-					return startBackgroundAndReply(args.command, ctx, config, timeoutSec, notes);
-				}
+				const forced = forcedBackgroundReply(args, ctx, config);
+				if (forced !== undefined) return forced;
 			}
 
 			// background 分支（M2）：显式 background:true 且非 subagent 降级（D14——
@@ -547,62 +629,17 @@ export function createBashOverrideToolDefinition() {
 				);
 			}
 
-			// 矩阵 A5：包装执行 + 空闲转后台。执行本体仍是官方 delegate（包装命令串交
-			// 官方原样跑，timeout 缺省 = 官方无超时语义；转后台后的超时 =
-			// backgroundTimeoutSeconds，由 registerConvertedTask 的 armBackgroundTimeout
-			// 接线承担）。收尾统一读 pidfile 判定命令进程存活性：还活着（B3 静默转后台 /
-			// B5 包装异常）→ 登记；已死（B2 正常完成）→ 不登记零感知 + 三文件清理。
-			const dataDir = resolveTaijiDataDir();
-			const sessionId = ctx.sessionManager.getSessionId();
-			const plan = prepareForegroundWrap(args.command, dataDir, sessionId, idleSec);
-			try {
-				const result = await delegate.execute(
-					toolCallId,
-					{ command: plan.wrappedCommand, timeout: undefined },
-					signal,
-					onUpdate,
-					ctx,
-				);
-				// 收尾判据（settleConvertedCommand 注释）：标记行在 = 承诺在 = 必登记——
-				// pid 判死也不清理（收尾窗口死亡形态：命令恰在收尾窗口死亡时通知承诺
-				// 不落空；矩阵 B4「用户中止」是另一形态，见下方 catch 分支）
-				const converted = settleConvertedCommand(
-					plan,
-					dataDir,
-					sessionId,
-					config.backgroundTimeoutSeconds ?? undefined,
-					resultHasFgBgMarker(result),
-				);
-				// B5 补标记：wrapper 未及打印标记行（异常死亡）时由本层补齐；B3 已打印
-				// → 透传不动（登记后结果文本透传原则：标记行已在输出内，模型直接可读）。
-				// 与 settle 的 hasMarker 判据双向闭合：标记行在 = 必登记；登记且无标记 = 必补
-				if (converted !== undefined && !resultHasFgBgMarker(result)) {
-					return appendTextToResult(result, buildConvertedMarkerNote(converted));
-				}
-				return result;
-			} catch (err) {
-				// 矩阵 B4 用户中止（abort 按进程组整组杀——wrapper 与真实命令同组一并死）
-				// 前置跳过判活收尾：pi 组杀后抛错不等真实命令被系统收尸，收尾判活
-				// isPidAlive（kill -0 只查 pid 存在性）对僵尸进程返回 true → 误登记转
-				// 后台任务 → 守望 2s 后 ESRCH 收尾发幽灵「finished」通知唤醒新回合（B4
-				// 设计矩阵「用户中止无登记」）。abort 信号已置即属用户中止形态：直接
-				// 清理三文件后原样上抛（无登记 = 无守望 = 无通知）。
-				if (signal?.aborted === true) {
-					cleanupWrapFiles(plan);
-					throw err;
-				}
-				// 非 abort 的官方 execute 抛错（spawn 失败等形态——命令进程死活未定，
-				// 判活收尾仍需执行）→ 收尾判定照走（抛错路径无 result 可判标记，恒
-				// hasMarker=false 走 pid 判定），官方式错误原样上抛（不吞不改写）
-				settleConvertedCommand(
-					plan,
-					dataDir,
-					sessionId,
-					config.backgroundTimeoutSeconds ?? undefined,
-					false,
-				);
-				throw err;
-			}
+			// 矩阵 A5：包装执行 + 空闲转后台（执行本体见 runWrappedForegroundExecute）。
+			return runWrappedForegroundExecute(
+				toolCallId,
+				args,
+				idleSec,
+				signal,
+				onUpdate,
+				ctx,
+				config,
+				delegate,
+			);
 		},
 	};
 }

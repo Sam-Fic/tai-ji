@@ -510,6 +510,18 @@ function recordIdOfFilename(filename: string): string {
     : filename
 }
 
+/** 删档降级的逐键清理（dropDomainState 三处同构循环收敛）：删全部 stale 键，返回是否有删除。 */
+function deleteStaleKeys<K>(map: Map<K, unknown>, stale: (key: K) => boolean): boolean {
+  let deleted = false
+  for (const key of [...map.keys()]) {
+    if (stale(key)) {
+      map.delete(key)
+      deleted = true
+    }
+  }
+  return deleted
+}
+
 function runIdOfFilename(filename: string): string {
   return filename.endsWith(RUN_EVENTS_SUFFIX)
     ? filename.slice(0, -RUN_EVENTS_SUFFIX.length)
@@ -794,17 +806,13 @@ export class SessionEventProjection {
     const lastTs = domain === 'record' ? this.recordLastEventTs : this.runLastEventTs
     const prefix = domain === 'record' ? 'record:' : 'run:'
     const stale = (id: string): boolean => !seen.has(id)
-    let changed = false
-    for (const id of [...offsets.keys()]) {
-      if (stale(id)) { offsets.delete(id); changed = true }
-    }
-    for (const id of [...folds.keys()]) {
-      // fold 在册而游标不在册（推送喂入未经文件读）同样属派生态在册，缺席即删档
-      if (stale(id)) { folds.delete(id); changed = true }
-    }
-    for (const id of [...lastTs.keys()]) {
-      if (stale(id)) lastTs.delete(id)
-    }
+    // offsets/folds 删除才算 changed（lastTs 是派生水位，单独清理不计入——
+    // 零删档稳态零帧语义以 offsets/folds 为判据）。三者都必须执行（不可短路——
+    // offsets 有删除时 folds/lastTs 的清理仍要发生）
+    const offsetsChanged = deleteStaleKeys(offsets, stale)
+    const foldsChanged = deleteStaleKeys(folds, stale)
+    const changed = offsetsChanged || foldsChanged
+    deleteStaleKeys(lastTs, stale)
     for (const key of [...this.finalCatchupAttempted.keys()]) {
       if (key.startsWith(prefix) && stale(key.slice(prefix.length))) this.finalCatchupAttempted.delete(key)
     }

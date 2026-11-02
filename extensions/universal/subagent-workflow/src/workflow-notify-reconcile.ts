@@ -327,6 +327,101 @@ export interface NotifyReconcileResult { // oe-exempt:20261101:framework:跨包�
  * 条目——幽灵态只会多不会少，早退 = 盘上亦无，高频边沿常态零文件读）；候选非空
  * 才读盘 + loadRuns（全量聚合重建，会话内 run 十级量级小文件）。
  */
+/**
+ * 判据事实源解析（复杂度拆出）：候选在册时事实源磁盘化（文件头「判据事实源磁盘化」段）
+ * ——manifest 面与痕迹/日志两抵消事实全部从 session JSONL 落盘条目产出；sessionFile
+ * 缺席（no-persist 形态，磁盘事实结构性不存在）退化内存 entries——该形态 _persist
+ * no-op 恒成功、无幽灵态，内存账即完整事实。
+ */
+function resolveFactEntries(deps: {
+	reason: string;
+	entries: readonly unknown[];
+	sessionFile?: string;
+}): readonly unknown[] {
+	if (deps.sessionFile !== undefined) return readSessionFileEntries(deps.sessionFile);
+	logger.warn("workflow notify reconcile journal facts fell back to in-memory entries: session file unavailable (no-persist session?); ghost in-memory entries would misjudge delivered/journaled facts", {
+		detail: { reason: deps.reason },
+	});
+	return deps.entries;
+}
+
+/**
+ * 预检抵消键过滤（复杂度拆出——磁盘承载两事实先行，终局事实后核）：承载判据双键
+ * （本域键形态双轨——RL8 注释登记）：幂等键 wf-done:<runId>（通知 envelope id 与
+ * 送达凭据）∧ 裸 runId（主路径 deliverDoneNotify 的 collectKey 申报键 = runId 本身，
+ * result-collect 债权语义）——collectKey 通道只查裸键会漏「主路径成功受理」形态
+ * （误补投由 port 幂等吞并，多余但无害；判据侧直接补齐）。抵消键分类记录进
+ * skippedDelivered/skippedJournaled（观测面——u1/u3 终判记账语义同源），短路语义
+ * 保持：被抵消键不进终判循环、不触 loadRuns。
+ */
+function prefilterReconcileCandidates(
+	registered: readonly RegisteredWorkflowRun[],
+	deliveredIds: ReadonlySet<string>,
+	journaledIds: ReadonlySet<string>,
+	result: NotifyReconcileResult,
+): RegisteredWorkflowRun[] {
+	const prefiltered: RegisteredWorkflowRun[] = [];
+	for (const candidate of registered) {
+		const notifyId = buildDoneNotifyId(candidate.runId);
+		const delivered = deliveredIds.has(notifyId);
+		const journaled = journaledIds.has(notifyId) || journaledIds.has(candidate.runId);
+		if (delivered) result.skippedDelivered.push(candidate.runId);
+		if (journaled) result.skippedJournaled.push(candidate.runId);
+		if (!delivered && !journaled) prefiltered.push(candidate);
+	}
+	return prefiltered;
+}
+
+/**
+ * 单候选补投终判 + 补投出口（复杂度拆出——终判循环体）：
+ *  - 终局事实（journal 面）：settledRecordOf 单点——run-settled 帧在即终局；
+ *    undefined（流缺失/损坏/无终局帧）= 不可判定，保守 miss 跳过（通知链纪律，
+ *    与主路径载荷链同款），下一边沿幂等重查。
+ *  - 补投出口 = notifyDone 直调（构造面/投递面/重提链与主路径全共用——可构造段
+ *    同构由此构造性成立；artifactsDir = recordPath 锚点目录，与 store 装配 runsDir
+ *    同值）。返回值 = 是否受理（A15 缺陷修复）：false = 主投与单次重提均 rejected、
+ *    重提时端口重取缺席、或降级直发未送达——通知未出站（成因清单 = notifyDone 全部
+ *    return false 路径；窗口幂等早退恒返回 true，不在此列）；warn 留痕 + 不计
+ *    redelivered（受理假象防线：日志「已补投」必须与真实受理一致）。notifyDone 幂等
+ *    早退返回 true（已通知语义）无害照计——窗口已含即上一轮补投已受理。
+ */
+function reconcileOneCandidate(deps: {
+	reason: string;
+	pi: ExtensionAPI;
+	notifiedRunIds: Set<string>;
+	settledRecordOf: (runId: string) => RunSettlementRecord | undefined;
+}, candidate: RegisteredWorkflowRun, run: WorkflowRun, deliveredIds: ReadonlySet<string>, journaledIds: ReadonlySet<string>, result: NotifyReconcileResult): void {
+	const notifyId = buildDoneNotifyId(candidate.runId);
+	const settlement = deps.settledRecordOf(candidate.runId);
+	if (settlement === undefined) {
+		result.skippedNotTerminal.push(candidate.runId);
+		return;
+	}
+	const facts: ReconcileNotifyFacts = {
+		isTerminal: true,
+		// 域排除位恒 false：主路径对全部终态发通知（无成因排除位——文件头）
+		excludedByOrigin: false,
+		delivered: deliveredIds.has(notifyId),
+		journaled: journaledIds.has(notifyId),
+	};
+	if (!isReconcileNotifyCandidate(facts)) {
+		if (facts.delivered) result.skippedDelivered.push(candidate.runId);
+		if (facts.journaled) result.skippedJournaled.push(candidate.runId);
+		return;
+	}
+	const accepted = notifyDone(deps.pi, candidate.runId, run, deps.notifiedRunIds, dirname(candidate.recordPath), settlement);
+	if (!accepted) {
+		logger.warn("workflow notify reconcile redelivery not accepted (deliver rejected after main attempt and single retry, or port absent on re-acquire / direct-send undelivered); message not dispatched, candidates retried at next reconcile edge", {
+			detail: { reason: deps.reason, runId: candidate.runId, notifyId },
+		});
+		return;
+	}
+	result.redelivered.push(candidate.runId);
+	logger.debug("workflow notify reconciled via delivery port", {
+		detail: { reason: deps.reason, runId: candidate.runId, notifyId },
+	});
+}
+
 export async function runNotifyReconcileMaintenance(deps: {
 	/** 入口来源（session_start / agent_settled / resume 切回）——入口来源日志可辨。 */
 	reason: string;
@@ -360,40 +455,13 @@ export async function runNotifyReconcileMaintenance(deps: {
 		// （幽灵态只会多不会少），无注册条目早退 = 盘上亦无，零文件读。
 		if (collectRegisteredWorkflowRuns(deps.entries).length === 0) return result;
 
-		// 候选在册：事实源磁盘化（文件头「判据事实源磁盘化」段）——manifest 面与
-		// 痕迹/日志两抵消事实全部从 session JSONL 落盘条目产出；sessionFile 缺席
-		// （no-persist 形态，磁盘事实结构性不存在）退化内存 entries——该形态
-		// _persist no-op 恒成功、无幽灵态，内存账即完整事实。
-		const factEntries = deps.sessionFile !== undefined
-			? readSessionFileEntries(deps.sessionFile)
-			: deps.entries;
-		if (deps.sessionFile === undefined) {
-			logger.warn("workflow notify reconcile journal facts fell back to in-memory entries: session file unavailable (no-persist session?); ghost in-memory entries would misjudge delivered/journaled facts", {
-				detail: { reason: deps.reason },
-			});
-		}
+		const factEntries = resolveFactEntries(deps);
 		const registered = collectRegisteredWorkflowRuns(factEntries);
 		result.scanned = registered.length;
 		const deliveredIds = collectDeliveredWorkflowNotifyIds(factEntries);
 		const journaledIds = collectJournaledDeliveryIds(factEntries);
 
-		// 预检（磁盘承载两事实先行，终局事实后核——record 读只在候选上发生）。
-		// 抵消键分类记录进 skippedDelivered/skippedJournaled（观测面——u1/u3 终判
-		// 记账语义同源），短路语义保持：被抵消键不进终判循环、不触 loadRuns。
-		// 承载判据双键（本域键形态双轨——RL8 注释登记）：幂等键 wf-done:<runId>
-		// （通知 envelope id 与送达凭据）∧ 裸 runId（主路径 deliverDoneNotify 的
-		// collectKey 申报键 = runId 本身，result-collect 债权语义）——collectKey
-		// 通道只查裸键会漏「主路径成功受理」形态（误补投由 port 幂等吞并，多余
-		// 但无害；判据侧直接补齐）。
-		const prefiltered: RegisteredWorkflowRun[] = [];
-		for (const candidate of registered) {
-			const notifyId = buildDoneNotifyId(candidate.runId);
-			const delivered = deliveredIds.has(notifyId);
-			const journaled = journaledIds.has(notifyId) || journaledIds.has(candidate.runId);
-			if (delivered) result.skippedDelivered.push(candidate.runId);
-			if (journaled) result.skippedJournaled.push(candidate.runId);
-			if (!delivered && !journaled) prefiltered.push(candidate);
-		}
+		const prefiltered = prefilterReconcileCandidates(registered, deliveredIds, journaledIds, result);
 		result.candidates = prefiltered.length;
 		if (prefiltered.length === 0) return result;
 
@@ -403,47 +471,13 @@ export async function runNotifyReconcileMaintenance(deps: {
 			runs.set(run.runId, run);
 		}
 		for (const candidate of prefiltered) {
-			const notifyId = buildDoneNotifyId(candidate.runId);
-			// 终局事实（journal 面）：store.settledRecordOf 单点——run-settled 帧在
-			// 即终局；undefined（流缺失/损坏/无终局帧）= 不可判定，保守 miss 跳过
-			// （通知链纪律，与主路径载荷链同款），下一边沿幂等重查。
-			const settlement = deps.settledRecordOf(candidate.runId);
 			const run = runs.get(candidate.runId);
-			if (settlement === undefined || run === undefined) {
+			// run 缺席（聚合重建无此 run）= 不可判定，与 settlement 缺席同路径保守 miss
+			if (run === undefined) {
 				result.skippedNotTerminal.push(candidate.runId);
 				continue;
 			}
-			const facts: ReconcileNotifyFacts = {
-				isTerminal: true,
-				// 域排除位恒 false：主路径对全部终态发通知（无成因排除位——文件头）
-				excludedByOrigin: false,
-				delivered: deliveredIds.has(notifyId),
-				journaled: journaledIds.has(notifyId),
-			};
-			if (!isReconcileNotifyCandidate(facts)) {
-				if (facts.delivered) result.skippedDelivered.push(candidate.runId);
-				if (facts.journaled) result.skippedJournaled.push(candidate.runId);
-				continue;
-			}
-			// 补投出口 = notifyDone 直调（构造面/投递面/重提链与主路径全共用——
-			// 可构造段同构由此构造性成立；artifactsDir = recordPath 锚点目录，
-			// 与 store 装配 runsDir 同值）。返回值 = 是否受理（A15 缺陷修复）：
-			// false = 主投与单次重提均 rejected、重提时端口重取缺席、或降级直发
-			// 未送达——通知未出站（成因清单 = notifyDone 全部 return false 路径；
-			// 窗口幂等早退恒返回 true，不在此列）；warn 留痕 + 不计 redelivered
-			//（受理假象防线：日志「已补投」必须与真实受理一致）。notifyDone 幂等
-			// 早退返回 true（已通知语义）无害照计——窗口已含即上一轮补投已受理。
-			const accepted = notifyDone(deps.pi, candidate.runId, run, deps.notifiedRunIds, dirname(candidate.recordPath), settlement);
-			if (!accepted) {
-				logger.warn("workflow notify reconcile redelivery not accepted (deliver rejected after main attempt and single retry, or port absent on re-acquire / direct-send undelivered); message not dispatched, candidates retried at next reconcile edge", {
-					detail: { reason: deps.reason, runId: candidate.runId, notifyId },
-				});
-				continue;
-			}
-			result.redelivered.push(candidate.runId);
-			logger.debug("workflow notify reconciled via delivery port", {
-				detail: { reason: deps.reason, runId: candidate.runId, notifyId },
-			});
+			reconcileOneCandidate(deps, candidate, run, deliveredIds, journaledIds, result);
 		}
 	} catch (err) {
 		logger.warn("workflow notify reconcile failed; candidates retried at next reconcile edge", {

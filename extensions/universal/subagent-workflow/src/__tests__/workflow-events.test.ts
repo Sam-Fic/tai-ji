@@ -209,6 +209,9 @@ function makeLifecycleResult(
     store: {
       dispose: storeDisposeSpy,
       settledRecordOf: () => ({ outcome: "completed", settledAt: 0 }),
+      // 对账入口（D8②）settledRecordOf 旁的第二判据源：loadRuns 回调真实执行时读。
+      // 生产 JsonlRunStore 两成员成对在座；fixture 缺 loadAll 时对账回调体内执行即 TypeError。
+      loadAll: async () => [],
     } as never,
     runs,
     runsDir: "/tmp/subagent-workflow-test",
@@ -1229,5 +1232,72 @@ describe("setupWorkflowDomain 切回边沿订阅（D8② 入口③）", () => {
 
     expect(dispatchResumeReconcile(makeCtx("sess-resume-unknown"))).toEqual([]);
     expect(mockRunNotifyReconcile).not.toHaveBeenCalled();
+  });
+});
+
+// ── ⑧ 对账入口判据源回调面（D8② 三入口的 settledRecordOf / loadRuns 注入体） ──
+//
+// 上述接线锁只断言编排被调（reason / pi），注入的判据源回调体（settledRecordOf /
+// loadRuns 箭头体）从未被执行——覆盖盲区。本组用 per-test mockImplementation 让
+// mock 编排真实执行回调，锁定：agent_settled 入口（入口②）体端到端触发 +
+// 三入口注入的判据源回调可执行且读到 fixture store 的两成员。
+
+/** 让 mock 对账编排真实执行注入的判据源回调（返回空结果，形态同默认 mock）。 */
+function mockReconcileExecutesCallbacks(): void {
+  mockRunNotifyReconcile.mockImplementation(async (opts: {
+    settledRecordOf: (runId: string) => unknown;
+    loadRuns: () => Promise<unknown[]>;
+  }) => {
+    // 判据源可执行：settledRecordOf 读 fixture store 终局记录、loadRuns 读全量 runs
+    expect(opts.settledRecordOf("probe")).toMatchObject({ outcome: "completed" });
+    await expect(opts.loadRuns()).resolves.toEqual([]);
+    return {
+      scanned: 0,
+      candidates: 0,
+      redelivered: [],
+      skippedNotTerminal: [],
+      skippedDelivered: [],
+      skippedJournaled: [],
+    };
+  });
+}
+
+describe("对账入口判据源回调面（D8② settledRecordOf / loadRuns 注入体）", () => {
+  it("agent_settled 触发：sessionState 条目在座 → 编排以 reason=agent_settled 被调且判据源回调真实执行", async () => {
+    const sessionId = "sess-agent-settled";
+    const { handlers, ctx } = await mountWithSession(sessionId);
+    mockRunNotifyReconcile.mockClear();
+    mockReconcileExecutesCallbacks();
+
+    await handlers.get("agent_settled")!({ type: "agent_settled" }, ctx);
+
+    expect(mockRunNotifyReconcile).toHaveBeenCalledTimes(1);
+    const deps = mockRunNotifyReconcile.mock.calls[0]![0] as { reason: string };
+    expect(deps.reason).toBe("agent_settled");
+  });
+
+  it("session_start 入口：storeHealthy 条目下对账编排收到可执行的判据源回调（session_start 边沿补投接线）", async () => {
+    const sessionId = "sess-start-callbacks";
+    mockReconcileExecutesCallbacks();
+    // 双 tray pusher 必须注入 fake：真实 createSubagentTrayWidgetPusher().attach 订阅
+    // service.queries.onChange（fake service 无 queries 成员）——attach 抛错被 handler
+    // 围栏吞掉，对账步（attach 之后）永不达。既有接线锁用例不依赖链内对账故未暴露。
+    await mountWithSession(sessionId, {
+      wiring: { trayWidgetPusher: makeTrayPusher(), workflowTrayWidgetPusher: makeWorkflowTrayPusher() },
+    });
+    expect(mockRunNotifyReconcile).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "session_start" }),
+    );
+  });
+
+  it("resume 入口：切回派发时判据源回调真实执行（订阅回调体的 settledRecordOf / loadRuns 体）", async () => {
+    const sessionId = "sess-resume-callbacks";
+    await mountWithSession(sessionId);
+    mockRunNotifyReconcile.mockClear();
+    mockReconcileExecutesCallbacks();
+
+    expect(dispatchResumeReconcile(makeCtx(sessionId))).toEqual([]);
+    expect(mockRunNotifyReconcile).toHaveBeenCalledTimes(1);
+    expect((mockRunNotifyReconcile.mock.calls[0]![0] as { reason: string }).reason).toBe("resume");
   });
 });

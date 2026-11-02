@@ -558,17 +558,125 @@ export class MessageDispatcher {
    * 着死因提示继续）；悬挂升级路径经 scheduleAutoRecovery 携带同文案（恢复成功后注入）。
    * 两路径互斥（升级即强杀，成功路径不可达），无双注入。
    */
-  async abort(sessionId: string, source: AbortSource = 'user', opts?: { reasonHint?: string }): Promise<void> {
-    const client = this.getClientOrThrow(sessionId)
-    // 中止意图快照先于 await 取（事件流与 RPC reply 到达序不定，await 后读会因
-    // compaction_end / agent_settled 已处理而漂移）。压缩期无回合在跑（¬isGenerating）时
-    // 用户的「停止」中止的是压缩流程而非回合——成功路径走压缩取消语义（见方法头注）。
+  /**
+   * abort 悬挂升级：协作式请求窗满（AbortUpgradeWindowError）→ 强制退出完成停止意图，
+   * 并按入口 source 分流恢复语义（升级窗编排拆出——abort 主流程只留 try/catch 接线）。
+   *
+   * 编排唯一实现 forceQuitSession（幂等 join 防与右键/restore 兜底双杀）。升级文案随
+   * upgradeSource 分流（D2 消费裁决：判死分型 reason 含「会话停滞已自动终止与恢复」语义、
+   * 机器路径套用户停止文案 = 终态谎报）。恢复语义按入口分型（D2① 消费方裁决 ①③④ + U4
+   * 判死分流）：① 用户停止 → 显式重开（不进自动恢复）；③ convergence → 窄化自动恢复
+   * （再次恢复属同一恢复过程）；④ agent 显式停止 → 不进自动恢复（防强杀-恢复循环）；
+   * ② stall_auto → 窄化自动恢复（判死自动恢复是设计内承诺）——reasonHint 随恢复链注入
+   * （恢复成功后 steer）。
+   */
+  private async escalateAbortUpgrade(
+    sessionId: string,
+    source: AbortSource,
+    reasonHint: string | undefined,
+  ): Promise<void> {
+    const upgradeSource: ForceQuitSource = source === 'user' ? 'abort_timeout' : PROBE_STALL_AUTO_QUIT
+    const [outcomeReason, exitReason] =
+      source === 'user'
+        ? [ABORT_TIMEOUT_OUTCOME_REASON, ABORT_TIMEOUT_EXIT_REASON]
+        : source === 'agent'
+          ? [AGENT_ABORT_TIMEOUT_OUTCOME_REASON, AGENT_ABORT_TIMEOUT_EXIT_REASON]
+          : [STALL_OUTCOME_REASON, STALL_EXIT_REASON]
+    console.warn(
+      `[message-dispatcher] abort hung past upgrade window (${ABORT_UPGRADE_WINDOW_MS}ms, source=${source}) — escalating to forceQuitSession (source=${upgradeSource}), sid=${sessionId}`,
+    )
+    await this.forceQuitSession(sessionId, outcomeReason, exitReason, upgradeSource)
+    if (source === 'convergence' || source === 'stall_auto') this.scheduleAutoRecovery(sessionId, reasonHint)
+  }
+
+  /**
+   * abort await 失败收尾（非窗满：pi 已退出/流错误等显式失败）。[HISTORICAL] 失败也必须
+   * 广播终态（规则 #3）：否则前端 isStreaming / runtime isGenerating 永不复位，UI 卡在
+   * 「思考中」。失败信号来源 = pi 进程退出/流错误经 exit/error 事件链 rejectAll
+   * （rpc-client.ts）。先取 active 再 destroy——destroySession 会删 processes/clientToId
+   * 条目，之后再经 getSessionByClient 反查会拿 undefined。
+   */
+  private handleAbortFailure(
+    sessionId: string,
+    client: ReturnType<MessageDispatcher['getClientOrThrow']>,
+    error: unknown,
+  ): void {
+    const errMsg = toErrorMessage(error)
+    console.error(`[message-dispatcher] abort failed: sessionId=${sessionId}`, errMsg)
+    const active = this.svc.getSessionByClient(client)
+    if (active) {
+      // occupancy #9（D2 迁移）：abort await 失败收尾 → 'idle' 行（进入此分支的都是 pi 已
+      // 退出/流错误等显式失败，agent_settled 不会再到达，turn 不能停留在
+      // dispatching/generating/settling）。
+      applySessionOccupancyTransition(active, this.messageBus, 'idle')
+    }
+    // 非超时错误（EPIPE / 进程已退出 / RPC 显式失败等）：显式上报收尾（规则 #3）。
+    // W4：abort 失败（异常退出）写 stopped 终态
+    this.svc.persistSessionOutcome(sessionId, 'stopped', `Abort failed: ${errMsg}`)
+    const abortErrMsg = { type: 'message.error' as const, payload: { sessionId, message: `Abort failed: ${errMsg}` } }
+    this.messageBus?.publish(sessionId, abortErrMsg)
+  }
+
+  /**
+   * abort 成功回执的 stopped 终态按发起方分型（W4 + [U2]）：收敛环 re-abort（restore-abort
+   * 收敛环掐补发 turn / 掐 idle pi）是 runtime 自动收敛而非用户操作，写区分性文案——
+   * 终态 entry 是「谁 stopped 了 session」的权威记录，语义不得谎报。'agent'（session_manager
+   * abort 工具）同理：agent 发起的显式停止不是用户操作；stall_auto（U4 判死）= 机器判定
+   * 终态。[第一终态优先] persistSessionOutcome 统一层已带已有终态跳过（abort 与 pi 自发
+   * agent_end 并发的竞态兜底：done 先写则本写跳过——回合自然完成）。
+   */
+  private persistAbortOutcome(sessionId: string, source: AbortSource): void {
+    if (source === 'convergence') {
+      console.warn(`[message-dispatcher] convergence abort (runtime auto, userStopped convergence loop), sid=${sessionId}`)
+      this.svc.persistSessionOutcome(sessionId, 'stopped', 'Convergence abort (auto)')
+    } else if (source === 'agent') {
+      console.warn(`[message-dispatcher] agent abort accepted (session_manager tool), sid=${sessionId}`)
+      this.svc.persistSessionOutcome(sessionId, 'stopped', 'Agent aborted (session_manager)')
+    } else if (source === 'stall_auto') {
+      console.warn(`[message-dispatcher] silence judge auto abort accepted (T elapsed, no in-flight signal), sid=${sessionId}`)
+      this.svc.persistSessionOutcome(sessionId, 'stopped', 'Silence judge auto abort (stall_auto)')
+    } else {
+      console.warn(`[message-dispatcher] user abort accepted, sid=${sessionId}`)
+      this.svc.persistSessionOutcome(sessionId, 'stopped', 'User aborted')
+    }
+  }
+
+  /**
+   * abort 入口意图快照（先于 await 取——事件流与 RPC reply 到达序不定，await 后读会因
+   * compaction_end / agent_settled 已处理而漂移）。压缩期无回合在跑（¬isGenerating）时
+   * 用户的「停止」中止的是压缩流程而非回合——成功路径走压缩取消语义（见 abort 方法头注）。
+   */
+  private snapshotAbortIntent(
+    client: ReturnType<MessageDispatcher['getClientOrThrow']>,
+    source: AbortSource,
+  ): { compactionCancel: boolean; turnAbortableAtEntry: boolean } {
     const activeAtEntry = this.svc.getSessionByClient(client)
     const entryOcc = activeAtEntry?.occupancy
-    const compactionCancel =
-      source === 'user' && !!activeAtEntry && entryOcc?.compacting === true && !isGeneratingTurn(entryOcc.turn)
-    // 型 1 判定（有回合可中止）：dispatching/generating 两相；settling/idle 归型 3。
-    const turnAbortableAtEntry = isGeneratingTurn(entryOcc?.turn)
+    return {
+      compactionCancel:
+        source === 'user' && !!activeAtEntry && entryOcc?.compacting === true && !isGeneratingTurn(entryOcc.turn),
+      // 型 1 判定（有回合可中止）：dispatching/generating 两相；settling/idle 归型 3。
+      turnAbortableAtEntry: isGeneratingTurn(entryOcc?.turn),
+    }
+  }
+
+  /**
+   * 型 2（压缩取消）/ 型 3（收尾窗口/已空闲，无回合可中止）的留痕 + 队列对账：无 turn
+   * 被中止 → 不写 stopped 终态、不广播 message.complete{aborted}（理由见 abort 方法头注）；
+   * 队列对账照跑（压缩期/收尾期排队的消息按对账器正常投出）。
+   */
+  private reconcileAbortNoOp(sessionId: string, compactionCancel: boolean): void {
+    if (compactionCancel) {
+      console.warn(`[message-dispatcher] compaction cancel accepted (no turn in flight), sid=${sessionId}`)
+    } else {
+      console.warn(`[message-dispatcher] abort no-op (turn not abortable at entry), sid=${sessionId}`)
+    }
+    void this.delivery?.reconcile(sessionId, 'abort-idle')
+  }
+
+  async abort(sessionId: string, source: AbortSource = 'user', opts?: { reasonHint?: string }): Promise<void> {
+    const client = this.getClientOrThrow(sessionId)
+    const { compactionCancel, turnAbortableAtEntry } = this.snapshotAbortIntent(client, source)
     try {
       // [pi-stall-detection U2] 有界等待包装：窗内 settle 透传（成功/显式失败原样走既有
       // 路径）；窗满抛 AbortUpgradeWindowError → 升级分支。迟到的 abort 回执经包装内
@@ -576,53 +684,14 @@ export class MessageDispatcher {
       await abortWithUpgradeWindow(client, ABORT_UPGRADE_WINDOW_MS)
     } catch (e) {
       if (e instanceof AbortUpgradeWindowError) {
-        // 升级窗窗满：协作式请求不可达已证，自动升级强杀完成停止意图（编排唯一实现
-        // forceQuitSession；幂等 join 防与右键/restore 兜底双杀）。
-        const upgradeSource: ForceQuitSource = source === 'user' ? 'abort_timeout' : PROBE_STALL_AUTO_QUIT
-        // 升级文案随 upgradeSource 分流（D2 消费裁决：判死分型 reason 含「会话停滞已
-        // 自动终止与恢复」语义、机器路径套用户停止文案 = 终态谎报）：user →
-        // ABORT_TIMEOUT_*；convergence/stall_auto（升级后进窄化自动恢复）→ STALL_*；
-        // agent（显式停止意图、不进自动恢复——V11 e）→ AGENT_ABORT_TIMEOUT_*（不含
-        // 自动恢复承诺，「重新打开即可恢复」与显式重开事实一致）。
-        const [outcomeReason, exitReason] =
-          source === 'user'
-            ? [ABORT_TIMEOUT_OUTCOME_REASON, ABORT_TIMEOUT_EXIT_REASON]
-            : source === 'agent'
-              ? [AGENT_ABORT_TIMEOUT_OUTCOME_REASON, AGENT_ABORT_TIMEOUT_EXIT_REASON]
-              : [STALL_OUTCOME_REASON, STALL_EXIT_REASON]
-        console.warn(
-          `[message-dispatcher] abort hung past upgrade window (${ABORT_UPGRADE_WINDOW_MS}ms, source=${source}) — escalating to forceQuitSession (source=${upgradeSource}), sid=${sessionId}`,
-        )
-        await this.forceQuitSession(sessionId, outcomeReason, exitReason, upgradeSource)
-        // 恢复语义按入口分型（D2① 消费方裁决 ①③④ + U4 判死分流）：① 用户停止 → 显式
-        // 重开（不进自动恢复）；③ convergence（noteAgentStart 掐的是恢复回放 turn）→ 升级
-        // 强杀后进窄化自动恢复（再次恢复属同一恢复过程）；④ agent 显式停止 → 不进自动恢复
-        // （自动接回与意图相悖，防强杀-恢复循环；恢复归 agent/用户显式重开）；② 静默判死
-        // （stall_auto，U4/RL16）→ 进窄化自动恢复（判死自动恢复是设计内承诺）——reasonHint
-        // 随恢复链注入（恢复成功后 steer）。
-        if (source === 'convergence' || source === 'stall_auto') this.scheduleAutoRecovery(sessionId, opts?.reasonHint)
+        // 升级窗窗满：协作式请求不可达已证，自动升级强杀完成停止意图（编排见 escalateAbortUpgrade）。
+        await this.escalateAbortUpgrade(sessionId, source, opts?.reasonHint)
         return
       }
       // [HISTORICAL] abort await 失败也必须广播终态（规则 #3）：否则前端 isStreaming / runtime
       // isGenerating 永不复位，UI 卡在「思考中」。失败信号来源 = pi 进程退出/流错误经 exit/error
       // 事件链 rejectAll（rpc-client.ts），靠这条收尾；窗满悬挂不再走此路径（上方升级分支承接）。
-      const errMsg = toErrorMessage(e)
-      console.error(`[message-dispatcher] abort failed (source=${source}): sessionId=${sessionId}`, errMsg)
-      // 先取 active 再 destroy——destroySession 会删 processes/clientToId 条目，
-      // 之后再经 getSessionByClient 反查会拿 undefined。
-      const active = this.svc.getSessionByClient(client)
-      if (active) {
-        // occupancy #9（D2 迁移）：abort await 失败收尾 → 'idle' 行（进入此分支的都是 pi 已
-        // 退出/流错误等显式失败，agent_settled 不会再到达，turn 不能停留在
-        // dispatching/generating/settling）。
-        applySessionOccupancyTransition(active, this.messageBus, 'idle')
-      }
-
-      // 非超时错误（EPIPE / 进程已退出 / RPC 显式失败等）：显式上报收尾（规则 #3）。
-      // W4：abort 失败（异常退出）写 stopped 终态
-      this.svc.persistSessionOutcome(sessionId, 'stopped', `Abort failed: ${errMsg}`)
-      const abortErrMsg = { type: 'message.error' as const, payload: { sessionId, message: `Abort failed: ${errMsg}` } }
-      this.messageBus?.publish(sessionId, abortErrMsg)
+      this.handleAbortFailure(sessionId, client, e)
       return
     }
     // [HISTORICAL] abort 成功后必须主动广播 message.complete{stopReason:'aborted'} + 复位
@@ -641,35 +710,11 @@ export class MessageDispatcher {
     // 终态、不广播 message.complete{aborted}（理由见方法头注）；队列对账照跑（压缩期/收尾期
     // 排队的消息按对账器正常投出）。
     if (!turnAbortableAtEntry) {
-      if (compactionCancel) {
-        console.warn(`[message-dispatcher] compaction cancel accepted (no turn in flight), sid=${sessionId}`)
-      } else {
-        console.warn(`[message-dispatcher] abort no-op (turn not abortable at entry), sid=${sessionId}`)
-      }
-      void this.delivery?.reconcile(sessionId, 'abort-idle')
+      this.reconcileAbortNoOp(sessionId, compactionCancel)
       return
     }
-    // W4：abort 写 stopped 终态。[U2] reason 按发起方分型：收敛环 re-abort（restore-abort
-    // 收敛环掐补发 turn / 掐 idle pi）是 runtime 自动收敛而非用户操作，写区分性文案——
-    // 终态 entry 是「谁 stopped 了 session」的权威记录，语义不得谎报。'agent'（session_manager
-    // abort 工具）同理：agent 发起的显式停止不是用户操作。
-    // [第一终态优先] persistSessionOutcome 统一层已带已有终态跳过（abort 与 pi 自发 agent_end
-    // 并发的竞态兜底：done 先写则本写跳过——回合自然完成）。
-    if (source === 'convergence') {
-      console.warn(`[message-dispatcher] convergence abort (runtime auto, userStopped convergence loop), sid=${sessionId}`)
-      this.svc.persistSessionOutcome(sessionId, 'stopped', 'Convergence abort (auto)')
-    } else if (source === 'agent') {
-      console.warn(`[message-dispatcher] agent abort accepted (session_manager tool), sid=${sessionId}`)
-      this.svc.persistSessionOutcome(sessionId, 'stopped', 'Agent aborted (session_manager)')
-    } else if (source === 'stall_auto') {
-      // [pi-stall-detection U4] 静默判死自动 abort 成功回执（abort 信号即时生效形态——LLM
-      // 请求类悬挂）：机器判定终态，文案区分于用户停止。
-      console.warn(`[message-dispatcher] silence judge auto abort accepted (T elapsed, no in-flight signal), sid=${sessionId}`)
-      this.svc.persistSessionOutcome(sessionId, 'stopped', 'Silence judge auto abort (stall_auto)')
-    } else {
-      console.warn(`[message-dispatcher] user abort accepted, sid=${sessionId}`)
-      this.svc.persistSessionOutcome(sessionId, 'stopped', 'User aborted')
-    }
+    // W4：abort 写 stopped 终态（按发起方分型，见 persistAbortOutcome）。
+    this.persistAbortOutcome(sessionId, source)
     const completeMsg = { type: 'message.complete' as const, payload: { sessionId, stopReason: 'aborted' as const } }
     this.messageBus?.publish(sessionId, completeMsg)
     // [pi-stall-detection U4 / D3 / RL13] 判死 steer 注入（成功回执路径）：agent 循环带着

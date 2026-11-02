@@ -499,6 +499,67 @@ export function resolveReconcileRecordEpoch(
  * 失败吞掉记 warn（对账/补投失败无害：候选三判据仍命中，下一对账边沿幂等重查）——
  * 调用方（notify-host 两入口 / 扩展侧切回接线）不需自行 try-catch。
  */
+/**
+ * 单 record 的三事实装配（复杂度拆出——终判循环体的 facts 构造）：
+ *  - isTerminal / excludedByOrigin：预检判定的复判（内存过滤已保证为真，判据函数
+ *    真值表逐行可测）；
+ *  - delivered 分形态（见文件头）：legacy closed 形态查裸键；轮终收尾形态扩位到
+ *    record 级（details.id + 世代匹配——主路径轮次应答已送达即完成信号在册，阻断
+ *    重复补投）。三通道全按世代命中：旧世代在册条目不阻断新世代查询（世代 0 轮次
+ *    键 `id:round` 与世代 e 终态键 `id:epoch` 存在字符串同形，只有条目侧世代字段
+ *    能消歧）。
+ */
+function buildReconcileFacts(
+  record: ReconcileNotifyRecord,
+  notifyId: string,
+  recordEpoch: number,
+  delivered: NotifyGenerationIndex,
+  deliveredRecordGens: NotifyGenerationIndex,
+  journaled: JournaledDeliveryGenerations,
+): ReconcileNotifyFacts {
+  const roundSettledIdle = record.status === 'idle' && record.closedReason === undefined
+  return {
+    isTerminal: isReconcileCandidateRecord(record),
+    excludedByOrigin: isExcludedReconcileRecord(record),
+    delivered:
+      generationHit(delivered, notifyId, recordEpoch) ||
+      (roundSettledIdle && generationHit(deliveredRecordGens, record.id, recordEpoch)),
+    journaled: journaledGenerationHit(journaled, notifyId, recordEpoch),
+  }
+}
+
+/**
+ * 补投 payload 构造（复杂度拆出——终判循环体的 payload 组装）= notifyClosed 同款
+ * closed 终态形态（D6①：补投的是该 record 的完成信号——legacy closed 形态即主路径
+ * 本要发的那条通知；轮终收尾形态为该轮完成信号的终态载体，outcome 经 deriveOutcome
+ * 单一权威派生，失败轮如实落 failed 文案）：round 置 undefined（与轮次通知键区分，
+ * 终态不被判重吞）、轮数改经 totalRounds 进文案、epoch 透传（payload.epoch 经
+ * notifier notify 再次构造 notifyId——与判据键同源，且送达条目 details 携带世代供
+ * 后续对账边沿按世代判定；缺失会使本轮补投条目退化为裸 id 旧格式，下一边沿判据查
+ * `id:epoch` 不命中 → 重复补投）；content 构造由主路径 notify() 内部完成
+ *（deriveOutcome 单一权威兜底——补投不自行派生第二套文案）。
+ */
+function buildReconcileRedeliverPayload(record: ReconcileNotifyRecord): BgNotifyRecord {
+  return {
+    id: record.id,
+    status: 'closed',
+    closedReason: record.closedReason,
+    agent: record.agent,
+    model: record.model,
+    // 轮终 result：内存源顶层直读；磁盘重建源顶层不恢复（fold 投影在收条帧）——
+    // lastRound.result 摘要锚回落（截断语义随收条帧，全文走 transcript 指针行）。
+    result: record.result ?? record.lastRound?.result,
+    error: record.error,
+    startedAt: record.startedAt,
+    endedAt: record.endedAt ?? undefined,
+    patchFile: record.patchFile,
+    sessionFile: record.sessionFile,
+    round: undefined,
+    ...(record.round != null ? { totalRounds: record.round } : {}),
+    ...(record.epoch != null ? { epoch: record.epoch } : {}),
+  }
+}
+
 export async function runNotifyReconcileMaintenance(deps: {
   /** 入口来源（session_start / resume / agent_settled / 扩展侧自定义）——入口来源日志可辨（RL14）。 */
   reason: string;
@@ -540,53 +601,14 @@ export async function runNotifyReconcileMaintenance(deps: {
       // 轮终收尾形态上与主路径漂移）。buildNotifyId 单一导出。
       const recordEpoch = record.epoch ?? 0;
       const notifyId = buildNotifyId({ id: record.id, epoch: record.epoch, round: undefined });
-      // 送达痕迹分形态（见文件头）：legacy closed 形态查裸键；轮终收尾形态扩位到
-      // record 级（details.id + 世代匹配——主路径轮次应答已送达即完成信号在册，
-      // 阻断重复补投）。三通道全按世代命中：旧世代在册条目不阻断新世代查询
-      // （世代 0 轮次键 `id:round` 与世代 e 终态键 `id:epoch` 存在字符串同形，
-      // 只有条目侧世代字段能消歧）。
-      const roundSettledIdle = record.status === "idle" && record.closedReason === undefined;
-      const facts: ReconcileNotifyFacts = {
-        isTerminal: isReconcileCandidateRecord(record),
-        excludedByOrigin: isExcludedReconcileRecord(record),
-        delivered:
-          generationHit(delivered, notifyId, recordEpoch) ||
-          (roundSettledIdle && generationHit(deliveredRecordGens, record.id, recordEpoch)),
-        journaled: journaledGenerationHit(journaled, notifyId, recordEpoch),
-      };
+      const facts = buildReconcileFacts(record, notifyId, recordEpoch, delivered, deliveredRecordGens, journaled);
       if (!isReconcileNotifyCandidate(facts)) {
         if (facts.delivered) result.skippedDelivered.push(record.id);
         if (facts.journaled) result.skippedJournaled.push(record.id);
         continue;
       }
-      // 补投 payload = notifyClosed 同款 closed 终态形态（D6①：补投的是该 record 的
-      // 完成信号——legacy closed 形态即主路径本要发的那条通知；轮终收尾形态为该轮
-      // 完成信号的终态载体，outcome 经 deriveOutcome 单一权威派生，失败轮如实落
-      // failed 文案）：round 置 undefined（与轮次通知键区分，终态不被判重吞）、轮数
-      // 改经 totalRounds 进文案、epoch 透传（payload.epoch 经 notifier notify 再次
-      // 构造 notifyId——与上方判据键同源，且送达条目 details 携带世代供后续对账
-      // 边沿按世代判定；缺失会使本轮补投条目退化为裸 id 旧格式，下一边沿判据查
-      // `id:epoch` 不命中 → 重复补投）；content 构造由主路径 notify() 内部完成
-      //（deriveOutcome 单一权威兜底——补投不自行派生第二套文案）。
-      const payload: BgNotifyRecord = {
-        id: record.id,
-        status: "closed",
-        closedReason: record.closedReason,
-        agent: record.agent,
-        model: record.model,
-        // 轮终 result：内存源顶层直读；磁盘重建源顶层不恢复（fold 投影在收条帧）——
-        // lastRound.result 摘要锚回落（截断语义随收条帧，全文走 transcript 指针行）。
-        result: record.result ?? record.lastRound?.result,
-        error: record.error,
-        startedAt: record.startedAt,
-        endedAt: record.endedAt ?? undefined,
-        patchFile: record.patchFile,
-        sessionFile: record.sessionFile,
-        round: undefined,
-        ...(record.round != null ? { totalRounds: record.round } : {}),
-        ...(record.epoch != null ? { epoch: record.epoch } : {}),
-      };
-      deps.submitNotify(payload);
+      // 补投 payload = notifyClosed 同款 closed 终态形态（组装见 buildReconcileRedeliverPayload）
+      deps.submitNotify(buildReconcileRedeliverPayload(record));
       result.redelivered.push(record.id);
       logger.debug("notify reconcile redelivered terminal notification via delivery port", {
         detail: { reason: deps.reason, recordId: record.id, notifyId },
