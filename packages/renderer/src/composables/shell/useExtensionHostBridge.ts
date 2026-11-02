@@ -28,6 +28,11 @@
  * headerAction 声明镜像（响应式，E2 清理/重放后刷新）+ E2 触发链
  *（plugin:statusChange/plugin:crashed → 容器清理 + 命令注销）+
  * ACTION_EXECUTOR_KEY / HEADER_ACTIONS_SOURCE_KEY 两个 provide。
+ *
+ * 宿主薄命令（tray-panel-interact §3.3 D4）：四条 taiji. 前缀命令登记进
+ * CommandRegistry + commandExecutor 分叉（命中直转 session 域 RPC、未命中走既有
+ * provider 链）——托盘行内生命周期操作（取消/重试/中止/续跑）的宿主执行通道，
+ * 不开 agent turn、不写行状态。
  */
 import type { App, InjectionKey } from 'vue'
 import { reactive, shallowReactive, shallowRef, watch } from 'vue'
@@ -55,9 +60,9 @@ import {
   type SessionScopedMap,
   type ViewCacheEntry,
 } from '@taiji/core'
-import { openDrawerTab, getBoundSessionId, ensureBuiltinsAssembled } from '@taiji/core/domain/drawer'
+import { openDrawerTab, getBoundSessionId, ensureBuiltinsAssembled, bindSubagentRecordLookup, OVERLAY_REGISTRY } from '@taiji/core/domain/drawer'
 import type { ContentSlotDeclaration, PluginDescriptorLike } from '@taiji/core'
-import { contentSlotRegistry, HOST_PLUGIN_ID } from '@taiji/core'
+import { contentSlotRegistry, HOST_PLUGIN_ID, BUILTIN_NAMESPACE, stripBuiltinNamespace } from '@taiji/core'
 import { openOverlayContent } from '@taiji/core/domain/overlay'
 import { getState as getWsState, send } from '@taiji/core/transport/ws-client'
 import {
@@ -77,7 +82,10 @@ import { onPlugins, getPluginUiSnapshot } from '@taiji/core/transport/api/domain
 import type { PluginContributesView, PluginInfo, PluginUiSnapshotPayload, PluginViewScope } from '@taiji/shared'
 import { createNotifyToastHandler } from './notify-toast'
 import { notifyUiResponseNotDelivered } from './ui-response-feedback'
+import { executeHostThinCommand, registerHostThinCommands } from './host-thin-commands'
 import { useChatStore } from '@/stores/chat'
+import { useSubagentStore } from '@/stores/subagent'
+import { useWorkflowStore } from '@/stores/workflow'
 import { useCommandStore } from '@/composables/features/command/useCommandStore'
 
 /**
@@ -501,10 +509,14 @@ export function initExtensionHostBridge(app: App): void {
   // 接口签名只有 id——壳层补查）。未注册命令 no-op（CommandRegistry.execute 已先发 ERR6 error 事件）。
   // 契约（S3-W1 命令链复合键）：payload 携带分离的 pluginId + commandId，runtime 侧按
   // `pluginId:commandId` 复合键查注册表——命令表按插件隔离，插件 B 无法覆盖/注销插件 A 的同名命令。
+  // 宿主薄命令分叉（tray-panel-interact §3.3 D4）：taiji. 前缀命中薄命令表 → 直调 session 域
+  // RPC（不开 agent turn、不经 provider 插件 worker 链）；未命中走既有 provider 链
+  // （scheduler-manager 三按钮实证零变化）。表与执行体在 host-thin-commands.ts（叶子模块）。
   const commandExecutor: CommandExecutor = {
     execute: async (id, args) => {
       const cmd = commandRegistry.get(id)
       if (!cmd) return
+      if (await executeHostThinCommand(id, args)) return
       send({
         type: 'plugin.executeCommand',
         payload: { pluginId: cmd.pluginId, commandId: id, args: args as Record<string, unknown> | undefined },
@@ -513,6 +525,9 @@ export function initExtensionHostBridge(app: App): void {
   }
   // execute 闭包引用 commandRegistry，最早调用时序在本行创建 registry 实例之后，const 无 TDZ 风险
   const commandRegistry = new CommandRegistry({ bus, activationManager, executor: commandExecutor })
+  // 宿主薄命令登记（D4）：四条 taiji.* 命令进 CommandRegistry（幂等；可见性结论见
+  // host-thin-commands.ts registerHostThinCommands 注释）
+  registerHostThinCommands(commandRegistry)
   // builtin command + slashCommand 声明同步进 CommandRegistry（收编后是 slash 命令统一消费源，
   // 03 文档 D3-1：声明提供 description 元数据，执行仍走 pi）。装配期 contributions 尚空
   // （注册已收敛 bootstrap 第 5 步），改 connected 后重放同步（见 ensureCommandDeclarationsSync 注释）。
@@ -725,34 +740,66 @@ export function initExtensionHostBridge(app: App): void {
   // 壳层装配两个端口的真实实现：
   // - lookup：容器位注册表（core 单例 contentSlotRegistry）的真实查询——resolveTargets 投影
   //   注册表 findById（全局 id 空间解析，§6.12）；查询前确保抽屉内置声明在册（内置装配
-  //   既有触发点在抽屉首渲，导航点击可能先于首渲）。hasData 的按族数据事实查询（view 类
-  //   = ViewHostStore 分区读）待声明面出现 openableWithoutData=false 成员时随端口扩形落地：
-  //   现声明面无 false 成员（内置项恒 true、插件清单声明无该字段缺省 true），本端口仅
-  //   false 声明可达——保守判无数据，不打开空容器（§5.4 行 7，warn 出声可诊断），不谎报。
+  //   既有触发点在抽屉首渲，导航点击可能先于首渲）。浮层内置内容不经声明通道（§6.8），
+  //   注册表无其条目——按 OVERLAY_REGISTRY 投影补解析（id = 'ui.<kind>'），否则内置浮层
+  //   目标恒 unknown-target。hasData 的按族数据事实查询：仅 openableWithoutData=false
+  //   成员可达本端口——现唯一成员 = 内置 workflow 内容（按焦点会话 workflow runs 判据，
+  //   无数据不开空浮层）；view 类（ViewHostStore 分区读）待声明面出现 false 成员时随扩形。
   // - sink.openDrawerTab：接 core drawer coordination openDrawerTab（瞬时参数 + 开合态一次
-  //   写入）。RightDrawerTab 已去枚举（开放 string，types.ts），目标存在性/族匹配已由执行器
-  //   对注册表校验先行（§6.4 先校验后动作），tabId 直接透传。sessionId 形参为浮层级联
-  //   （§6.8）保留统一签名：drawer 选中态分区键走 bindDrawerSessionId 绑定的焦点会话
-  //   （ADR-0053 单例抽屉语义），本分支不消费。
+  //   写入）。tabId 是全局 id（§6.12 命名空间前缀）——经 stripBuiltinNamespace 剥内置
+  //   前缀还原选中态 key 后传 core（D1：剥前缀规则单源在 content-slot-registry，生成/
+  //   还原同源；插件声明 id 恒不命中该前缀，原样透传）。RightDrawerTab 已去枚举（开放
+  //   string，types.ts），目标存在性/族匹配已由执行器对注册表校验先行（§6.4 先校验后动作）。
+  //   sessionId 形参为浮层级联（§6.8）保留统一签名：drawer 选中态分区键走
+  //   bindDrawerSessionId 绑定的焦点会话（ADR-0053 单例抽屉语义），本分支不消费。
   // - sink.openOverlayContent：接 core overlay 协调函数 openOverlayContent（内置 scheduler
-  //   走既有组装，其余按声明 id 走 §6.8 plugin 载体；core 形参序 (contentId, sessionId)）。
+  //   走既有组装、workflow 凭 params.runId 走参数化通道、其余按声明 id 走 §6.8 plugin
+  //   载体）。contentId 同样剥内置前缀后传 core（core 特判吃无前缀内容名）；params 为
+  //   执行器已知键过滤后的容器选项透传（与 drawer 分支同款，D1/D2）。
+  // - D3 subagent 记录反查绑定：openDrawerTab 的 recordId 定位经 core 注入端口读本壳
+  //   subagent store 分区（记录存在才写选中态；未命中落默认标签页 + warning）。
+  bindSubagentRecordLookup((sessionId, recordId) =>
+    useSubagentStore().getRecordsBySession(sessionId).some((r) => r.subagentId === recordId),
+  )
   const containerNavigationExecutor = new ContainerNavigationExecutor({
     lookup: {
       resolveTargets: (tabId) => {
         ensureBuiltinsAssembled()
-        return contentSlotRegistry.findById(tabId).map((d) => ({
+        const declared = contentSlotRegistry.findById(tabId).map((d) => ({
           id: d.id,
           placement: d.placement,
           pluginId: d.pluginId,
           scope: d.scope,
           openableWithoutData: d.openableWithoutData ?? true,
         }))
+        if (declared.length > 0) return declared
+        // 浮层内置内容不经声明通道（§6.8：开合/渲染由浮层壳显式分支承载）——注册表无其
+        // 条目，按 OVERLAY_REGISTRY 投影补全局 id 空间解析（id = 'ui.<kind>'，与
+        // builtinOverlayTypeViews 生成规则同源），否则内置浮层目标恒 unknown-target。
+        // openableWithoutData 与 builtinOverlayTypeViews 判据一致（workflow 显式 false）。
+        const builtin = OVERLAY_REGISTRY.find((e) => `${BUILTIN_NAMESPACE}.${e.content}` === tabId)
+        if (builtin === undefined) return []
+        return [{
+          id: tabId,
+          placement: 'overlay.content',
+          pluginId: HOST_PLUGIN_ID,
+          scope: 'session',
+          openableWithoutData: builtin.content !== 'workflow',
+        }]
       },
-      hasData: () => false,
+      hasData: (target) => {
+        // §6.15 可打开性数据事实：仅 openableWithoutData=false 成员可达本端口。当前唯一
+        // 成员 = 内置 workflow 内容（无数据不开空浮层）——按焦点会话的 workflow runs
+        // 分区判据（托盘面板随焦点会话挂载，分区恒等于焦点会话）。
+        if (stripBuiltinNamespace(target.id) !== 'workflow') return false
+        const sid = getBoundSessionId()
+        return sid !== null && useWorkflowStore().getRecordsBySession(sid).length > 0
+      },
     },
     sink: {
-      openDrawerTab: (_sessionId, tabId, params) => openDrawerTab(tabId, params),
-      openOverlayContent: (sessionId, contentId) => openOverlayContent(contentId, sessionId),
+      openDrawerTab: (_sessionId, tabId, params) => openDrawerTab(stripBuiltinNamespace(tabId), params),
+      openOverlayContent: (sessionId, contentId, params) =>
+        openOverlayContent(stripBuiltinNamespace(contentId), sessionId, params),
     },
     // 焦点会话复用 drawer 域绑定（useSideDrawer 模块加载时绑到 panel store 的 focusedSessionId）
     getBoundSessionId,

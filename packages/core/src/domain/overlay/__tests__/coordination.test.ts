@@ -22,6 +22,9 @@ import {
 } from '../coordination'
 import { getOverlayControlState, useOverlayControl } from '../state'
 import { type OverlayContent } from '../types'
+// AC10 跨域铁律：drawer 域经公开 barrel 消费（与 overlay/coordination.ts 生产 import 同路径）
+// ——D2 workflow 参数化分支的注入桥断言
+import { bindWorkflowOverlayOpener } from '../../drawer'
 
 beforeEach(() => {
   _resetOverlayForTest()
@@ -268,15 +271,36 @@ describe('openOverlayContent（容器扩展点统一 §6.4 浮层落点：conten
     expect(state.current).toEqual({ kind: 'scheduler', payload: { sessionId: 'sess-a' } })
   })
 
-  it('内置 kind 需专属参数（browser/workflow/canvas）：warn + no-op（载荷需 url/runId/canvasId，各有专属入口）', () => {
+  it('内置 kind 需专属参数（browser/canvas）：warn + no-op（载荷需 url/canvasId，各有专属入口；workflow 凭 runId 出表见下条）', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     openOverlayContent('browser', 'sess-a')
-    openOverlayContent('workflow', 'sess-a')
     openOverlayContent('canvas', 'sess-a')
-    // 三次调用全部 no-op（零状态写入）且各出一行带恢复指引的 warning
+    // 两次调用全部 no-op（零状态写入）且各出一行带恢复指引的 warning
     expect(getOverlayControlState().isOpen).toBe(false)
     expect(getOverlayControlState().current).toBeNull()
-    expect(warn).toHaveBeenCalledTimes(3)
+    expect(warn).toHaveBeenCalledTimes(2)
+  })
+
+  it('内置 kind workflow 无 runId：warn + no-op（载荷不完整不进浮层——排除表语义收窄为「无参数不可开」）', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    openOverlayContent('workflow', 'sess-a')
+    expect(getOverlayControlState().isOpen).toBe(false)
+    expect(getOverlayControlState().current).toBeNull()
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('内置 kind workflow 带 runId（D2 参数化通道）：经 bindWorkflowOverlayOpener 注入桥打开（opener 收到 runId + 归属会话，core 不直写载荷）', () => {
+    const opener = vi.fn<(nameOrRunId: string, slug?: string, sessionId?: string) => void>()
+    bindWorkflowOverlayOpener(opener)
+    try {
+      openOverlayContent('workflow', 'sess-a', { runId: 'run-1' })
+      expect(opener).toHaveBeenCalledTimes(1)
+      expect(opener).toHaveBeenCalledWith('run-1', undefined, 'sess-a')
+      // 桥未绑定时 core 侧无写入（renderer opener 承载 openWorkflowVizOverlay 同款编排）
+      expect(getOverlayControlState().isOpen).toBe(false)
+    } finally {
+      bindWorkflowOverlayOpener(null)
+    }
   })
 
   it('插件声明 id：走 §6.8 插件载体 {kind:"plugin", payload:{contentId, sessionId}}（sessionId 宿主注入）', () => {

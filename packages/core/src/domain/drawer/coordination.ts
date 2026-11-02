@@ -19,7 +19,8 @@
  */
 import { ref } from 'vue'
 import type { WorkflowRunRecord } from '@taiji/shared'
-import { drawerControl, getDrawerControlState, _resetDrawerControlForTest } from './control'
+import { subagentVirtualId } from '@taiji/shared'
+import { drawerControl, getBoundSessionId, getDrawerControlState, _resetDrawerControlForTest } from './control'
 import { setSubagentView, clearSubagentView, clearSubagentViewFor } from './selection/subagent'
 import { setBackgroundTaskView } from './selection/bash-task'
 import { selectedCommandName, detailFilePath } from './selection/transient'
@@ -29,13 +30,42 @@ import type { RightDrawerTab, OpenDrawerOptions, OpenSubagentOptions } from './t
 // ── 模块级公开 API（C2）──
 
 /**
- * 打开抽屉，可指定初始 tab + Doc tab 的选中命令 / Detail tab 的文件路径。
+ * 打开抽屉，可指定初始 tab + Doc tab 的选中命令 / Detail tab 的文件路径 / subagent tab
+ * 的记录定位（D3）。
  * 瞬时参数写入当前会话分区（selection/transient.ts；undefined 字段不写——缺省不覆盖已有值）。
  */
 export function openDrawerTab(tab?: RightDrawerTab, opts?: OpenDrawerOptions): void {
   if (opts?.commandName !== undefined) selectedCommandName.value = opts.commandName
   if (opts?.filePath !== undefined) detailFilePath.value = opts.filePath
+  if (tab === 'subagent' && opts?.recordId !== undefined) {
+    locateSubagentByRecordId(opts.recordId)
+    return
+  }
   drawerControl.open(tab)
+}
+
+/**
+ * subagent tab 记录定位（D3：与 doc tab 的 commandName/filePath 定位参数同构）：
+ * 命中（记录存在）→ 经 openSubagent 编排写选中态（virtualId = subagent:<mainSid>:<recordId>，
+ * mainSid = drawer 域绑定的焦点会话——托盘面板随焦点会话的 Composer 挂载，分区恒等于焦点
+ * 会话）；未命中（已删除/已清理/未加载，或反查端口未绑定）→ 落 subagent 默认标签页 +
+ * 一行 console warning，不弹错不打断（选中态不写——残留 vid 会复活错误的对话流）。
+ */
+function locateSubagentByRecordId(recordId: unknown): void {
+  const mainSid = getBoundSessionId()
+  if (
+    typeof recordId === 'string'
+    && recordId !== ''
+    && mainSid !== null
+    && boundSubagentRecordLookup.value?.(mainSid, recordId) === true
+  ) {
+    openSubagent({ virtualId: subagentVirtualId(mainSid, recordId) })
+    return
+  }
+  console.warn(
+    `[drawer] openDrawerTab: subagent tab recordId '${String(recordId)}' 无对应记录（已删除/已清理/未加载，或记录反查端口未绑定）——落 subagent 默认标签页，不写选中态`,
+  )
+  drawerControl.open('subagent')
 }
 
 /** 关闭抽屉 */
@@ -114,10 +144,17 @@ export type WorkflowOverlayOpener = (nameOrRunId: string, slug?: string, session
 /** workflow run 反查回调（renderer 注入）：从 workflowStore 分区读，(scriptName, slug) → record */
 export type WorkflowRunLookup = (sessionId: string, scriptName: string, slug?: string) => WorkflowRunRecord | undefined
 
+/** subagent 记录存在性反查回调（renderer 注入，D3）：从 subagentStore 分区读，
+ *  (mainSid, recordId) → 记录是否存在。未绑定（headless/测试）返回 undefined——
+ *  调用方按「记录不可知」处理（落默认标签页 + warning，不写选中态）。 */
+export type SubagentRecordLookup = (sessionId: string, recordId: string) => boolean
+
 // taste:allow-no-data-owner W24-EX-B（模块级单例 UI 瞬态，已登记 §4 ⑧ 2026-10-02）：overlay 桥接绑定单例 ref
 const boundOverlayOpener = ref<WorkflowOverlayOpener | null>(null)
 // taste:allow-no-data-owner W24-EX-B（同上，已登记 §4 ⑧ 2026-10-02）：同组桥接绑定的第二声明
 const boundWorkflowRunLookup = ref<WorkflowRunLookup | null>(null)
+// taste:allow-no-data-owner W24-EX-B（同上，已登记 §4 ⑧ 2026-10-02）：同组桥接绑定的第三声明（D3 subagent 记录反查）
+const boundSubagentRecordLookup = ref<SubagentRecordLookup | null>(null)
 
 /**
  * 绑定 overlay 打开回调（renderer 装配调用；幂等，传 null 解绑——测试隔离用）。
@@ -129,6 +166,15 @@ export function bindWorkflowOverlayOpener(opener: WorkflowOverlayOpener | null):
 /** 绑定 workflow run 反查回调（renderer 装配调用；幂等，传 null 解绑）。 */
 export function bindWorkflowRunLookup(lookup: WorkflowRunLookup | null): void {
   boundWorkflowRunLookup.value = lookup
+}
+
+/**
+ * 绑定 subagent 记录存在性反查回调（renderer 装配调用；幂等，传 null 解绑——测试隔离用）。
+ * D3 openDrawerTab 的 subagent recordId 定位消费：记录存在才写选中态，未命中（含未绑定）
+ * 落 subagent 默认标签页 + 一行 warning。
+ */
+export function bindSubagentRecordLookup(lookup: SubagentRecordLookup | null): void {
+  boundSubagentRecordLookup.value = lookup
 }
 
 /**
