@@ -188,10 +188,18 @@ async function createSessionService() {
 describe('skillPaths passing chain', () => {
   let savedPackaged: string | undefined
 
-  beforeAll(() => {
+  // SessionService 模块图预加载：createSessionService 的 await import(session-service.js)
+  // 首次执行 = 全模块图 transform + 装载，安静机器 ~3s（探针实测 2.8s），gate 全量满载
+  // （257 文件 9 worker）下放大 2-3 倍——首个执行该 import 的用例独自承担这笔成本，超
+  // vitest 默认 5s testTimeout 超时（本轮 gate 失败与「2 例负载敏感 flaky」的根因）。
+  // 挪进 beforeAll 后成本计入 hookTimeout（默认 10s，此处显式 30s 留满载余量），用例内
+  // import 命中模块缓存为微秒级，超时窗内只剩业务断言。
+  beforeAll(async () => {
     savedPackaged = process.env.TAIJI_AGENT_PACKAGED
     delete process.env.TAIJI_AGENT_PACKAGED
-  })
+    await import('../src/infra/pi/process-manager.js')
+    await import('../src/services/session/session-service.js')
+  }, 30_000)
 
   afterAll(() => {
     if (savedPackaged !== undefined) process.env.TAIJI_AGENT_PACKAGED = savedPackaged
