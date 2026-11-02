@@ -46,11 +46,24 @@ import {
 } from "@zhushanwen/subagent-core";
 import type { DoneReason } from "@zhushanwen/subagent-core";
 import type { GuiComponent, HostContainerAction, TreeItem } from "@zhushanwen/extension-protocol";
+import type { UiLocale } from "../i18n.ts";
 import {
   WORKFLOW_TRAY_VIEW_ID,
   buildWorkflowTrayWidget,
   createWorkflowTrayWidgetPusher,
 } from "../interface/gui/workflow-tray-widget.ts";
+
+/**
+ * 面板文案 locale（D9：标题 / 分段标签随 UI 语言）。构造函数是纯函数、显式收 locale
+ * 实参（scheduler widget 臂同款）；本文件断言中文文案，故固定传 zh-CN——不依赖进程环境
+ * （readUiLocale 的 env 与 ui-preferences.json 读取）。
+ */
+const LOCALE: UiLocale = "zh-CN";
+
+/** workflow 托盘 widget 构造（中文文案 locale 固定）。 */
+function workflowWidget(runs: readonly WorkflowRun[]): ReturnType<typeof buildWorkflowTrayWidget> {
+  return buildWorkflowTrayWidget(runs, LOCALE);
+}
 
 /** run fixture（字段集与 tool-workflow.test 的 makeRun 同源：reconstruct 真聚合根）。
  *  calls 经 AgentCall.markDone 注入成员进度事实（result 有无 = 落定判据；error 有无
@@ -133,7 +146,7 @@ afterEach(() => {
 
 describe("buildWorkflowTrayWidget —— 树构造（使用者视角）", () => {
   it("running run → 进行中段 1 行（status=running），meta status=running + badge 计数", () => {
-    const widget = buildWorkflowTrayWidget([
+    const widget = workflowWidget([
       makeRun({ runId: "wf-run-1", scriptName: "build", slug: "ci", status: "running", calls: [{ settled: false }] }),
     ]);
     expect(widget).toBeDefined();
@@ -146,9 +159,9 @@ describe("buildWorkflowTrayWidget —— 树构造（使用者视角）", () => 
     expect(running).toHaveLength(1);
     expect(running[0].status).toBe("running");
     expect(running[0].icon).toBe("circle");
-    // meta head：标题/状态点/进度/icon/badge（宿主壳层唯一渲染 head）
+    // meta head：标题/状态点/进度/icon/badge（宿主壳层唯一渲染 head）；标题随 locale（D9）
     const meta = widget!.gui.meta;
-    expect(meta.title).toBe("Workflows");
+    expect(meta.title).toBe("工作流");
     expect(meta.status).toBe("running");
     expect(meta.badge).toBe("1");
     expect(meta.icon).toBe("workflow");
@@ -156,7 +169,7 @@ describe("buildWorkflowTrayWidget —— 树构造（使用者视角）", () => 
   });
 
   it("行 label 携带成员进度 N/M（原宿主进度条信息的原语承载位，不静默丢弃）", () => {
-    const widget = buildWorkflowTrayWidget([
+    const widget = workflowWidget([
       makeRun({
         runId: "wf-run-2",
         scriptName: "ship",
@@ -170,7 +183,7 @@ describe("buildWorkflowTrayWidget —— 树构造（使用者视角）", () => 
   });
 
   it("done(completed) run → 已结束段（status=done）；interrupted run 落已结束段且无圆点 pause", () => {
-    const widget = buildWorkflowTrayWidget([
+    const widget = workflowWidget([
       makeRun({ runId: "wf-run-3", scriptName: "ok", status: "done", reason: "completed" }),
       makeRun({ runId: "wf-run-4", scriptName: "halt", status: "running", interrupted: true }),
     ]);
@@ -183,7 +196,7 @@ describe("buildWorkflowTrayWidget —— 树构造（使用者视角）", () => 
   });
 
   it("failed 终局 → 行 status=failed + meta status=failed（失败可见不吞）", () => {
-    const widget = buildWorkflowTrayWidget([
+    const widget = workflowWidget([
       makeRun({ runId: "wf-run-5", scriptName: "boom", status: "done", reason: "failed" }),
     ]);
     const ended = segmentItems(widget!.gui.component, 1);
@@ -192,11 +205,11 @@ describe("buildWorkflowTrayWidget —— 树构造（使用者视角）", () => 
   });
 
   it("空 runs → undefined（清屏语义；调用方推 setWidgetDual(…, undefined)）", () => {
-    expect(buildWorkflowTrayWidget([])).toBeUndefined();
+    expect(workflowWidget([])).toBeUndefined();
   });
 
   it("行 action.hostAction：overlay → ui.workflow + params.runId = 该行 run.runId（M2 入口复活）", () => {
-    const widget = buildWorkflowTrayWidget([
+    const widget = workflowWidget([
       makeRun({ runId: "wf-run-live", scriptName: "build", slug: "ci", status: "running", calls: [{ settled: false }] }),
       makeRun({ runId: "wf-run-done", scriptName: "ship", slug: "v2", status: "done", reason: "completed" }),
     ]);
@@ -220,7 +233,7 @@ describe("buildWorkflowTrayWidget —— 树构造（使用者视角）", () => 
   });
 
   it("text 臂 = TUI 原生文本行（[status] 前缀 + 行 label）", () => {
-    const widget = buildWorkflowTrayWidget([
+    const widget = workflowWidget([
       makeRun({ runId: "wf-run-6", scriptName: "build", status: "running" }),
     ]);
     expect(widget!.text).toEqual(["[running] build · 0/0"]);
@@ -229,7 +242,7 @@ describe("buildWorkflowTrayWidget —— 树构造（使用者视角）", () => 
   it("runSummary 派生视图单源（行状态 = core 三态投影，不经本地第二套判定）", () => {
     const run = makeRun({ runId: "wf-run-7", scriptName: "x", status: "running" });
     expect(runSummary(run).status).toBe("running");
-    const widget = buildWorkflowTrayWidget([run]);
+    const widget = workflowWidget([run]);
     expect(segmentItems(widget!.gui.component, 0)[0].status).toBe("running");
   });
 });

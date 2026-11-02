@@ -888,6 +888,9 @@ importers:
       '@zhushanwen/pi-extension-logger':
         specifier: workspace:*
         version: link:../../shared/extension-logger
+      '@zhushanwen/pi-llm-shared':
+        specifier: workspace:*
+        version: link:../../shared/llm-shared
       '@zhushanwen/pi-pending-notifications':
         specifier: workspace:*
         version: link:../pending-notifications

@@ -36,6 +36,7 @@ import { runSummary } from "@zhushanwen/subagent-core";
 import type { WorkflowRun } from "@zhushanwen/subagent-core";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
+import { t, readUiLocale, type UiLocale } from "../../i18n.ts";
 
 /** 托盘 widget 的 viewId（宿主 widget 区分区键；todo/goal/subagent 同形短名）。 */
 export const WORKFLOW_TRAY_VIEW_ID = "workflow";
@@ -121,20 +122,20 @@ function rowLabelOf(run: WorkflowRun): string {
  * 形态为一次性（abort-only，无 pause/resume；重派发是 subagent start 语义，workflow
  * 无同构通道，AX5）。
  *
- * 按钮文案用字面量（i18n 接线归 u-polish-shell 的 readUiLocale 波次——与本节两个 tab
- * 标签「进行中/已结束」硬编码同形态，M4 随全文案一起随 UI 语言）。
+ * 按钮文案经 i18n 词典（D9：随 UI 语言）——locale 由构造调用方显式传入（纯函数），
+ * 文案主权在推送方（扩展），宿主持 title 模板不持按钮文案（D9 已否决宿主翻译插件文案）。
  */
-function rowActionsOf(run: WorkflowRun): ActionBarItem[] {
+function rowActionsOf(run: WorkflowRun, locale: UiLocale): ActionBarItem[] {
   const summary = runSummary(run);
   if (summary.status === "running") {
     return [
       {
         id: `abort-${run.runId}`,
-        label: "中止",
+        label: t("tray.action.abort", undefined, locale),
         kind: "danger",
         commandId: WORKFLOW_ABORT_COMMAND_ID,
         args: { runId: run.runId },
-        confirm: "确认中止？",
+        confirm: t("tray.action.abortConfirm", undefined, locale),
       },
     ];
   }
@@ -142,7 +143,7 @@ function rowActionsOf(run: WorkflowRun): ActionBarItem[] {
     return [
       {
         id: `resume-${run.runId}`,
-        label: "续跑",
+        label: t("tray.action.resume", undefined, locale),
         commandId: WORKFLOW_RESUME_COMMAND_ID,
         args: { runId: run.runId },
       },
@@ -165,7 +166,7 @@ function rowActionsOf(run: WorkflowRun): ActionBarItem[] {
  * 可视化的第一用户入口（G3：整套可视化此前零入口）。导航是安全操作，不随 pin 态门控
  * （D6 只门控行内操作按钮）——两段（进行中/已结束）行同权可点。
  */
-function traySegment(runs: readonly WorkflowRun[]): GuiComponent[] {
+function traySegment(runs: readonly WorkflowRun[], locale: UiLocale): GuiComponent[] {
   const children: GuiComponent[] = [];
   for (const run of runs) {
     const presentation = rowPresentation(runSummary(run));
@@ -188,7 +189,7 @@ function traySegment(runs: readonly WorkflowRun[]): GuiComponent[] {
         ],
       }),
     );
-    const actions = rowActionsOf(run);
+    const actions = rowActionsOf(run, locale);
     if (actions.length > 0) {
       children.push(guiComponent("action-bar", { items: actions }));
     }
@@ -222,9 +223,14 @@ type MetaStatus = NonNullable<import("@zhushanwen/extension-protocol").WidgetMet
  * - text 臂 = TUI 原生文本行。
  * - 空 runs → undefined（调用方按清屏语义推 setWidgetDual(…, undefined)——与 todo /
  *   subagent 空列表清屏同款，宿主 widget 区「有 entry 即渲染、清屏即消失」）。
+ *
+ * locale 形参（D9）：head 标题与 tab-bar 分段标签随 UI 语言；由推送方在每次推送时读
+ * （readUiLocale）后显式传入——本函数保持纯函数（入参出参），显示决定因素不含隐藏的
+ * 进程态读取。界面语言切换后下一次推送即生效（无指纹跳推，见推送器）。
  */
 export function buildWorkflowTrayWidget(
   runs: readonly WorkflowRun[],
+  locale: UiLocale,
 ): DualWidgetContent | undefined {
   if (runs.length === 0) return undefined;
   const running = runs.filter((r) => runSummary(r).status === "running");
@@ -240,13 +246,13 @@ export function buildWorkflowTrayWidget(
       guiComponent("tab-bar", {
         tabs: [
           // 首段带 active：容器化宿主据此建立初始 tab（此后本地切换不被推送重置）
-          { label: `进行中 ${running.length}`, active: true },
-          { label: `已结束 ${ended.length}` },
+          { label: t("tray.segment.running", { n: running.length }, locale), active: true },
+          { label: t("tray.segment.ended", { n: ended.length }, locale) },
         ],
-        sections: [traySegment(running), traySegment(ended)],
+        sections: [traySegment(running, locale), traySegment(ended, locale)],
       }),
       {
-        title: "Workflows",
+        title: t("tray.workflow.title", undefined, locale),
         status,
         progress: {
           current: running.length,
@@ -302,11 +308,13 @@ export function createWorkflowTrayWidgetPusher(
       logger.warn(`[workflow-tray] runs read failed; projecting empty: ${toErrorMessage(err)}`);
       runs = [];
     }
+    // locale 每次推送时读（D9，subagent 件同款）：界面语言切换后下一次推送即生效。
+    const locale = readUiLocale();
     try {
       setWidgetDual(
         ctx as GuiContext,
         WORKFLOW_TRAY_VIEW_ID,
-        buildWorkflowTrayWidget(runs.slice(0, TRAY_RUN_LIMIT)),
+        buildWorkflowTrayWidget(runs.slice(0, TRAY_RUN_LIMIT), locale),
       );
       firstFailureLogged = false;
     } catch (err) {

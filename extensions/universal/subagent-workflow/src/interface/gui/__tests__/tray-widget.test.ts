@@ -5,6 +5,8 @@
 //     + tab-bar 双段（进行中/已结束）行集；失败轮行 label 承载 class.kind 失败分类且
 //     status=failed（§6.6 风险②「lastRound.failure 不得静默丢弃」的单测承载——原宿主
 //     托盘行的失败分类 chip 随件迁移，信息原语承载位 = TreeItem label + status 圆点）；
+//     行 action.hostAction 声明（M2 入口复活：drawer → ui.subagent + params.recordId，
+//     逐行取该行 record.id——AX2「面板交互能力与目标容器等价」的入口半边）；
 //   ②构建者——分桶判据（占用谓词镜像）/ 空记录清屏 / 推送器 attach 初始推送 +
 //     onChange 事件驱动重推（微任务合并）+ detach 退订；
 //   ③观察者——纯函数入参出参；推送失败不反噬调用方（warn 留痕后继续）。
@@ -49,12 +51,26 @@ vi.mock("@zhushanwen/subagent-core", () => ({
 }));
 
 import type { SubagentRecord } from "@zhushanwen/subagent-core";
+import type { UiLocale } from "../../../i18n.ts";
 import {
   SUBAGENT_TRAY_VIEW_ID,
   buildSubagentTrayWidget,
   createSubagentTrayWidgetPusher,
 } from "../tray-widget.ts";
-import type { GuiComponent } from "@zhushanwen/extension-protocol";
+
+/**
+ * 面板文案 locale（D9：标题 / 分段标签随 UI 语言）。构造函数是纯函数、显式收 locale
+ * 实参（scheduler widget 臂同款）；本文件断言中文文案，故固定传 zh-CN——不依赖进程环境
+ * （readUiLocale 的 env 与 ui-preferences.json 读取）。推送器路径的 locale 由推送时读取
+ * 决定（en-US 缺省），其标题断言按该口径单独断言。
+ */
+const LOCALE: UiLocale = "zh-CN";
+
+/** subagent 托盘 widget 构造（中文文案 locale 固定）。 */
+function buildWidget(records: readonly SubagentRecord[]): ReturnType<typeof buildSubagentTrayWidget> {
+  return buildSubagentTrayWidget(records, LOCALE);
+}
+import type { GuiComponent, HostContainerAction, TreeItem } from "@zhushanwen/extension-protocol";
 
 /** record fixture（字段见 core assembly/types.ts SubagentRecord）。 */
 function makeRecord(over: Partial<SubagentRecord> = {}): SubagentRecord {
@@ -84,12 +100,17 @@ function makeRecord(over: Partial<SubagentRecord> = {}): SubagentRecord {
 }
 
 /** tab-bar 树的段 items 提取（sections[i][0].items——段 = 子树数组，单组件子树取首项）。 */
-function segmentItems(component: GuiComponent, index: number): Array<{ label: string; status?: string }> {
+function segmentItems(component: GuiComponent, index: number): TreeItem[] {
   expect(component.type).toBe("tab-bar");
   const sections = (component.props as { sections?: GuiComponent[][] }).sections ?? [];
   const seg = sections[index]?.[0];
   expect(seg?.type).toBe("list-tree");
-  return (seg.props as { items: Array<{ label: string; status?: string }> }).items;
+  return (seg.props as { items: TreeItem[] }).items;
+}
+
+/** 行 action 的 hostAction 提取（行不可点 = action 缺省，断言处显式判 undefined）。 */
+function rowHostAction(item: TreeItem): HostContainerAction | undefined {
+  return item.action?.hostAction;
 }
 
 beforeEach(() => {
@@ -99,17 +120,17 @@ beforeEach(() => {
 
 describe("buildSubagentTrayWidget 树构造（纯函数）", () => {
   it("空记录 → undefined（宿主清屏语义——widget 区「清屏即消失」）", () => {
-    expect(buildSubagentTrayWidget([])).toBeUndefined();
+    expect(buildWidget([])).toBeUndefined();
   });
 
   it("meta head：title/icon/badge/progress（badge = 进行中数，icon 点名 bot）与状态点（running>0 → running）", () => {
-    const result = buildSubagentTrayWidget([
+    const result = buildWidget([
       makeRecord({ id: "r-run", status: "running", stopReason: undefined }),
       makeRecord({ id: "r-idle", status: "idle" }),
     ]);
     expect(result).toBeDefined();
     expect(result?.gui.meta).toMatchObject({
-      title: "Subagents",
+      title: "子代理",
       status: "running",
       icon: "bot",
       badge: "1",
@@ -118,22 +139,60 @@ describe("buildSubagentTrayWidget 树构造（纯函数）", () => {
   });
 
   it("分桶：占用谓词命中行落进行中段，其余落已结束段；行 label = agent · slug", () => {
-    const result = buildSubagentTrayWidget([
+    const result = buildWidget([
       makeRecord({ id: "r-run", agent: "reviewer", slug: "rev", status: "running", stopReason: undefined }),
       makeRecord({ id: "r-end", agent: "worker", slug: "wrk", status: "idle" }),
     ]);
     expect(result?.gui.meta?.status).toBe("running");
     const runningItems = segmentItems(result!.gui.component, 0);
     const endedItems = segmentItems(result!.gui.component, 1);
-    expect(runningItems).toEqual([{ label: "reviewer · rev", status: "running", depth: 0 }]);
-    expect(endedItems).toEqual([{ label: "worker · wrk", status: "done", depth: 0 }]);
+    expect(runningItems).toEqual([
+      {
+        label: "reviewer · rev",
+        status: "running",
+        depth: 0,
+        action: { hostAction: { kind: "drawer", tabId: "ui.subagent", params: { recordId: "r-run" } } },
+      },
+    ]);
+    expect(endedItems).toEqual([
+      {
+        label: "worker · wrk",
+        status: "done",
+        depth: 0,
+        action: { hostAction: { kind: "drawer", tabId: "ui.subagent", params: { recordId: "r-end" } } },
+      },
+    ]);
+  });
+
+  it("行 action.hostAction：drawer → ui.subagent + params.recordId = 该行 record.id（M2 入口复活）", () => {
+    const result = buildWidget([
+      makeRecord({ id: "rec-alpha", agent: "reviewer", slug: "rev", status: "running", stopReason: undefined }),
+      makeRecord({ id: "rec-beta", agent: "worker", slug: "wrk", status: "idle" }),
+    ]);
+    // 两段行同权可点（进行中与已结束都能查看对话流）；recordId 逐行取该行 record.id
+    expect(rowHostAction(segmentItems(result!.gui.component, 0)[0])).toEqual({
+      kind: "drawer",
+      tabId: "ui.subagent",
+      params: { recordId: "rec-alpha" },
+    });
+    expect(rowHostAction(segmentItems(result!.gui.component, 1)[0])).toEqual({
+      kind: "drawer",
+      tabId: "ui.subagent",
+      params: { recordId: "rec-beta" },
+    });
+    // 行 action 只声明导航、不声明 commandId（导航不经命令链，与 action-bar item 的两条路径互斥）
+    for (const segment of [0, 1]) {
+      for (const item of segmentItems(result!.gui.component, segment)) {
+        expect(item.action?.commandId).toBeUndefined();
+      }
+    }
   });
 
   it("全部收尾 → status=done；失败轮在场 → status=failed（head 状态点反映最重事实）", () => {
-    const clean = buildSubagentTrayWidget([makeRecord({ id: "r1", status: "idle" })]);
+    const clean = buildWidget([makeRecord({ id: "r1", status: "idle" })]);
     expect(clean?.gui.meta?.status).toBe("done");
 
-    const failed = buildSubagentTrayWidget([
+    const failed = buildWidget([
       makeRecord({
         id: "r2",
         status: "idle",
@@ -148,7 +207,7 @@ describe("buildSubagentTrayWidget 树构造（纯函数）", () => {
   });
 
   it("失败分类承载（§6.6 风险②不静默丢弃）：失败轮行 label 含 class.kind 且 status=failed", () => {
-    const result = buildSubagentTrayWidget([
+    const result = buildWidget([
       makeRecord({
         id: "r-fail",
         agent: "reviewer",
@@ -168,7 +227,7 @@ describe("buildSubagentTrayWidget 树构造（纯函数）", () => {
   });
 
   it("user.cancelled 是用户主动中止非失败：行不标 failed、label 不拼失败词、head 不落 failed", () => {
-    const result = buildSubagentTrayWidget([
+    const result = buildWidget([
       makeRecord({
         id: "r-cancel",
         agent: "worker",
@@ -188,7 +247,7 @@ describe("buildSubagentTrayWidget 树构造（纯函数）", () => {
   });
 
   it("占用判据（protocol 单点）：running + 轮收条停因（stopReason 已写）落已结束段（「轮收条已写 = 本轮不在途」）", () => {
-    const result = buildSubagentTrayWidget([
+    const result = buildWidget([
       makeRecord({ id: "r-dead", status: "running", stopReason: "failed" }),
       makeRecord({ id: "r-live", status: "running", stopReason: undefined }),
     ]);

@@ -39,9 +39,22 @@
 
   ── badge fallback 链（D4）──
   `meta.badge` → `meta.progress.label ?? String(meta.progress.current)` → 无
-  超长 truncate 至 BADGE_MAX_CHARS 字符，全文进按钮 aria-label（§3.5；2026-10-19 左簇
-  浮层优化：原生 title 退役——badge 全文从 badge 的 title 移到按钮 aria-label 括注，
-  hover 面板承载视觉说明，屏幕阅读器保留全文）
+  超长 truncate 至 BADGE_MAX_CHARS 字符，全文进按钮 aria-label（§3.5）与悬停 title（D8）。
+
+  ── 悬停 title（D8：推翻 2026-10-19「原生 title 退役」裁决）──
+  title 文案 = 宿主模板拼接（i18n 模板归宿主——title 是宿主渲染行为；事实字段 title/badge/total
+  全部来自扩展 meta，单一事实源：扩展给事实、宿主给文案模板）。分段省略规则：
+  ① 进度段「{badge} 运行中 / {progress.total}」仅用于 viewId 封闭集合成员（见
+     RUNNING_PROGRESS_VIEW_IDS：progress 语义 = 运行数/全量数的条目）；
+  ② 集合外条目（todo/goal 等：progress.label 语义为完成计数「2/5」或百分比「42%」，无
+     「运行中」概念）title = 「{title} · {badge ?? progress.label}」；
+  ③ badge 与 progress 均缺 → 第二段整段略去；meta 整体缺（v1 旧 extension）→ title 仅
+     viewId 兜底（与 aria-label/面板标题同源）。任何缺字段分支不输出 undefined 字面。
+  与 aria-label 并存（通道不同不互斥）：视觉 hover 即时反馈走 title、屏幕阅读器全文走
+  aria-label「badge 全文进括注」（§3.5 契约保留，本决策不改写它）。
+
+  推翻依据（2026-10-19 退役裁决 → D8 恢复）：① 用户在本次问题链明确要求悬停内容；② 160ms
+  面板延迟期间 title 是唯一即时反馈（aria-label 对鼠标用户不可见，空窗内无任何反馈）。
 
   ── status 视觉（D4：running=accent+呼吸点 / done=success / failed=danger / idle=dim）──
   视觉序列 = `[icon][呼吸点（仅 running，size-[6px] + animate-pulse，与统一表单 overlay
@@ -58,6 +71,7 @@
     data-testid="tray-widget-button"
     :data-widget-key="viewId"
     :aria-label="badgeFull ? `${displayTitle}（${badgeFull}）` : displayTitle"
+    :title="buttonTitle"
     :aria-expanded="expanded ? 'true' : 'false'"
     :aria-pressed="pinned ? 'true' : 'false'"
     :class="trayItemButtonClass(pinned || expanded)"
@@ -118,6 +132,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { Component } from 'vue'
 import { LayoutGrid, ListChecks, Target } from '@lucide/vue'
 import { normalizeIconKey, resolveContributionIcon } from '@taiji/core'
@@ -152,6 +167,8 @@ const emit = defineEmits<{
   /** 点击 icon（外壳切换 pin） */
   'toggle-pin': []
 }>()
+
+const { t } = useI18n()
 
 /** badge 截断上限（D4/§3.5：建议 extension ≤6 字符，超出由宿主 truncate 且全文进 title） */
 const BADGE_MAX_CHARS = 6
@@ -240,6 +257,49 @@ const badgeFull = computed<string | undefined>(() => {
 const badgeText = computed<string | undefined>(() =>
   badgeFull.value === undefined ? undefined : badgeFull.value.slice(0, BADGE_MAX_CHARS),
 )
+
+/**
+ * 运行数进度语义的封闭 viewId 集合（D8 成员判别输入）：成员 = meta.progress 的
+ * current/total 语义为「进行中数 / 全量数」的条目（subagent 与 workflow 两件，扩展侧
+ * viewId 常量 SUBAGENT_TRAY_VIEW_ID / WORKFLOW_TRAY_VIEW_ID 同值——宿主不 import 扩展，
+ * 常量在宿主消费侧定义并按登记义务同步）。
+ *
+ * 为什么按 viewId 判别而非字段存在性：协议侧 progress 结构全体条目同构
+ * （current/total 必填、label?/severity? 可选），「label 有无」「progress 有无」任何
+ * 字段存在性维度都分不开集合成员与非成员——subagent 与 goal 都有 label 而语义不同
+ * （运行数 vs 百分比），todo 与 subagent 在「badge 有 × progress 有」形态上同构。
+ *
+ * 边界：本清单是宿主渲染判据（title 模板分段形态的适用范围登记），不承载文案翻译、
+ * 不构成文案双源（D9 已否决「宿主按 viewId 翻译插件文案」）。登记义务 = 新增运行数
+ * 进度语义条目时同步扩充；漏登后果 = 该条目不输出进度段（安全方向降级——无错乱文案，
+ * 仅少一段即时反馈），由 title 分段矩阵单测兜底。
+ */
+const RUNNING_PROGRESS_VIEW_IDS: ReadonlySet<string> = new Set(['subagent', 'workflow'])
+
+/**
+ * 悬停 title（D8：宿主模板拼接 + 分段省略规则，事实字段全部来自扩展 meta）。
+ * 组装分支（任何缺字段分支不输出 undefined 字面）：
+ * - 集合成员且 progress 在场 → 「{title} · {badge} 运行中 / {total}」；
+ * - 其余（集合外条目 / 成员缺 progress）→ 「{title} · {badge}」，badge 缺省时整段略去；
+ * - meta 整体缺（v1 旧 extension）→ 仅 viewId 兜底（与 aria-label、面板标题同源）。
+ * badge 取 badgeFull（badge ?? progress.label ?? String(current) 回落链）——成员件
+ * 无显式 badge 时进度段仍有可读计数，不出「undefined 运行中」。
+ */
+const buttonTitle = computed<string>(() => {
+  const meta = props.meta
+  if (meta === undefined) return props.viewId
+  const badge = badgeFull.value
+  const progress = meta.progress
+  if (badge !== undefined && progress !== undefined && RUNNING_PROGRESS_VIEW_IDS.has(props.viewId)) {
+    return t('panel.tray.widgetTitle.running', {
+      title: displayTitle.value,
+      badge,
+      total: progress.total,
+    })
+  }
+  if (badge === undefined) return displayTitle.value
+  return t('panel.tray.widgetTitle.plain', { title: displayTitle.value, badge })
+})
 
 const isRunning = computed(() => props.meta?.status === 'running')
 

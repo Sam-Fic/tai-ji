@@ -33,6 +33,7 @@ import {
 import { getSubagentService, type SubagentRecord } from "@zhushanwen/subagent-core";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
+import { t, readUiLocale, type UiLocale } from "../../i18n.ts";
 
 /** 托盘 widget 的 viewId（宿主 widget 区分区键；todo/goal 同形短名）。 */
 export const SUBAGENT_TRAY_VIEW_ID = "subagent";
@@ -96,19 +97,19 @@ function rowLabelOf(record: SubagentRecord): string {
  * 重试渲染条件：仅当 record 含可重派发任务原文时渲染（判据见下方行内注释）；无原文
  * 的失败行只保留 hostAction「查看」入口（行点击导航不受影响）。
  *
- * 按钮文案用字面量（i18n 接线归 u-polish-shell 的 readUiLocale 波次——与本节两个 tab
- * 标签「进行中/已结束」硬编码同形态，M4 随全文案一起随 UI 语言）。
+ * 按钮文案经 i18n 词典（D9：随 UI 语言）——locale 由构造调用方显式传入（纯函数），
+ * 文案主权在推送方（扩展），宿主持 title 模板不持按钮文案（D9 已否决宿主翻译插件文案）。
  */
-function rowActionsOf(record: SubagentRecord): ActionBarItem[] {
+function rowActionsOf(record: SubagentRecord, locale: UiLocale): ActionBarItem[] {
   if (isRunningProjection(record)) {
     return [
       {
         id: `cancel-${record.id}`,
-        label: "取消",
+        label: t("tray.action.cancel", undefined, locale),
         kind: "danger",
         commandId: SUBAGENT_CANCEL_COMMAND_ID,
         args: { recordId: record.id },
-        confirm: "确认取消？",
+        confirm: t("tray.action.cancelConfirm", undefined, locale),
       },
     ];
   }
@@ -118,7 +119,7 @@ function rowActionsOf(record: SubagentRecord): ActionBarItem[] {
     return [
       {
         id: `retry-${record.id}`,
-        label: "重试",
+        label: t("tray.action.retry", undefined, locale),
         commandId: SUBAGENT_RETRY_COMMAND_ID,
         args: { slug: record.slug, task: record.task },
       },
@@ -141,7 +142,7 @@ function rowActionsOf(record: SubagentRecord): ActionBarItem[] {
  * 的 commandName/filePath 定位参数同构）。导航是安全操作，不随 pin 态门控（D6 只门控
  * 行内操作按钮）——两段（进行中/已结束）行同权可点，终态行同样可查看对话流。
  */
-function traySegment(records: readonly SubagentRecord[]): GuiComponent[] {
+function traySegment(records: readonly SubagentRecord[], locale: UiLocale): GuiComponent[] {
   const children: GuiComponent[] = [];
   for (const record of records) {
     children.push(
@@ -164,7 +165,7 @@ function traySegment(records: readonly SubagentRecord[]): GuiComponent[] {
         ],
       }),
     );
-    const actions = rowActionsOf(record);
+    const actions = rowActionsOf(record, locale);
     if (actions.length > 0) {
       children.push(guiComponent("action-bar", { items: actions }));
     }
@@ -197,9 +198,14 @@ type MetaStatus = NonNullable<import("@zhushanwen/extension-protocol").WidgetMet
  * - text 臂 = TUI 原生文本行（setWidgetDual 模式分派到非 rpc 臂的呈现）。
  * - 空记录 → undefined（调用方按清屏语义推 setWidgetDual(…, undefined)——与 todo
  *   空列表清屏同款，宿主 widget 区「有 entry 即渲染、清屏即消失」）。
+ *
+ * locale 形参（D9）：head 标题与 tab-bar 分段标签随 UI 语言；由推送方在每次推送时读
+ * （readUiLocale）后显式传入——本函数保持纯函数（入参出参），显示决定因素不含隐藏的
+ * 进程态读取。界面语言切换后下一次推送即生效（无指纹跳推，见本文件推送器）。
  */
 export function buildSubagentTrayWidget(
   records: readonly SubagentRecord[],
+  locale: UiLocale,
 ): DualWidgetContent | undefined {
   if (records.length === 0) return undefined;
   const running = records.filter((r) => isRunningProjection(r));
@@ -212,13 +218,13 @@ export function buildSubagentTrayWidget(
       guiComponent("tab-bar", {
         tabs: [
           // 首段带 active：容器化宿主据此建立初始 tab（此后本地切换不被推送重置）
-          { label: `进行中 ${running.length}`, active: true },
-          { label: `已结束 ${ended.length}` },
+          { label: t("tray.segment.running", { n: running.length }, locale), active: true },
+          { label: t("tray.segment.ended", { n: ended.length }, locale) },
         ],
-        sections: [traySegment(running), traySegment(ended)],
+        sections: [traySegment(running, locale), traySegment(ended, locale)],
       }),
       {
-        title: "Subagents",
+        title: t("tray.subagent.title", undefined, locale),
         status,
         progress: {
           current: running.length,
@@ -263,10 +269,12 @@ export function createSubagentTrayWidgetPusher(): SubagentTrayWidgetPusher {
     const service = getSubagentService();
     const records =
       service?.queries.collectRecords(TRAY_RECORD_LIMIT, "all", false) ?? [];
+    // locale 每次推送时读（D9，scheduler widget 臂同款）：界面语言切换后下一次推送即生效。
+    const locale = readUiLocale();
     try {
       // todo makeRefreshDisplay 同款断言（协议侧既有先例）：pi 的 ExtensionContext.ui.custom
       // 泛型签名与 GuiContext 静态不兼容，setWidgetDual 只读 mode/hasUI/ui.setWidget。
-      setWidgetDual(ctx as GuiContext, SUBAGENT_TRAY_VIEW_ID, buildSubagentTrayWidget(records));
+      setWidgetDual(ctx as GuiContext, SUBAGENT_TRAY_VIEW_ID, buildSubagentTrayWidget(records, locale));
       firstFailureLogged = false;
     } catch (err) {
       // 推送失败不反噬 onChange 调用方（core 写链不得被渲染侧故障打断）；

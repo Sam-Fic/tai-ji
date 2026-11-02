@@ -53,7 +53,25 @@ import type {
   TreeItem,
 } from "@zhushanwen/extension-protocol";
 import { buildSubagentTrayWidget } from "../interface/gui/tray-widget.ts";
+import type { UiLocale } from "../../i18n.ts";
 import { buildWorkflowTrayWidget } from "../interface/gui/workflow-tray-widget.ts";
+
+/**
+ * 面板文案 locale（D9：标题 / 分段标签 / 按钮与确认文案随 UI 语言）。构造函数是纯函数、
+ * 显式收 locale 实参（scheduler widget 臂同款）；本文件断言中文文案，故固定传 zh-CN——
+ * 不依赖进程环境（readUiLocale 的 env 与 ui-preferences.json 读取）。
+ */
+const LOCALE: UiLocale = "zh-CN";
+
+/** subagent 托盘 widget 构造（中文文案 locale 固定）。 */
+function subagentWidget(records: readonly SubagentRecord[]): ReturnType<typeof buildSubagentTrayWidget> {
+  return buildSubagentTrayWidget(records, LOCALE);
+}
+
+/** workflow 托盘 widget 构造（中文文案 locale 固定）。 */
+function workflowWidget(runs: readonly WorkflowRun[]): ReturnType<typeof buildWorkflowTrayWidget> {
+  return buildWorkflowTrayWidget(runs, LOCALE);
+}
 
 /** action-bar item 声明形状（协议 action-bar items 元素；协议包不导出该别名，消费方本地定义——Actionbar.vue 同款）。 */
 type ActionBarItem = GuiComponentProps["action-bar"]["items"][number];
@@ -186,7 +204,7 @@ beforeEach(() => {
 
 describe("buildSubagentTrayWidget 行内操作按钮（M3，使用者视角）", () => {
   it("running 行取消按钮：commandId=taiji.subagentCancel + args.recordId + danger 档 + confirm「确认取消？」", () => {
-    const widget = buildSubagentTrayWidget([
+    const widget = subagentWidget([
       makeRecord({ id: "rec-run", agent: "reviewer", slug: "rev", status: "running", stopReason: undefined }),
     ]);
     const runningItems = segmentItems(widget!.gui.component, 0);
@@ -210,7 +228,7 @@ describe("buildSubagentTrayWidget 行内操作按钮（M3，使用者视角）",
   });
 
   it("failed 行重试按钮：commandId=taiji.subagentRetry + args={slug, task}（任务原文在场）；无 danger/confirm", () => {
-    const widget = buildSubagentTrayWidget([makeFailedRecord()]);
+    const widget = subagentWidget([makeFailedRecord()]);
     const endedItems = segmentItems(widget!.gui.component, 1);
     expect(endedItems).toHaveLength(1);
     const items = segmentActionItems(widget!.gui.component, 1);
@@ -228,7 +246,7 @@ describe("buildSubagentTrayWidget 行内操作按钮（M3，使用者视角）",
   });
 
   it("failed 行无任务原文（task 空串）→ 不渲染重试按钮，只剩 list-tree 行（「查看」入口在场）", () => {
-    const widget = buildSubagentTrayWidget([makeFailedRecord({ id: "rec-fail-notask", task: "" })]);
+    const widget = subagentWidget([makeFailedRecord({ id: "rec-fail-notask", task: "" })]);
     const endedItems = segmentItems(widget!.gui.component, 1);
     expect(endedItems).toHaveLength(1);
     expect(segmentActionItems(widget!.gui.component, 1)).toEqual([]);
@@ -241,7 +259,7 @@ describe("buildSubagentTrayWidget 行内操作按钮（M3，使用者视角）",
   });
 
   it("user.cancelled 行（主动中止非失败，failedRoundOf 排除）→ 无行内操作按钮", () => {
-    const widget = buildSubagentTrayWidget([
+    const widget = subagentWidget([
       makeRecord({
         id: "rec-cancel",
         status: "idle",
@@ -257,13 +275,13 @@ describe("buildSubagentTrayWidget 行内操作按钮（M3，使用者视角）",
   });
 
   it("正常收尾行 → 无行内操作按钮", () => {
-    const widget = buildSubagentTrayWidget([makeRecord({ id: "rec-done", status: "idle" })]);
+    const widget = subagentWidget([makeRecord({ id: "rec-done", status: "idle" })]);
     expect(segmentItems(widget!.gui.component, 1)).toHaveLength(1);
     expect(segmentActionItems(widget!.gui.component, 1)).toEqual([]);
   });
 
   it("段结构（观察者）：逐行「list-tree 行 + action-bar 操作」对；无按钮行只推 list-tree（无空 action-bar）", () => {
-    const widget = buildSubagentTrayWidget([
+    const widget = subagentWidget([
       makeRecord({ id: "rec-run", agent: "reviewer", slug: "rev", status: "running", stopReason: undefined }),
       makeFailedRecord({ id: "rec-fail" }),
       makeRecord({ id: "rec-done", agent: "worker", slug: "wrk", status: "idle" }),
@@ -276,7 +294,7 @@ describe("buildSubagentTrayWidget 行内操作按钮（M3，使用者视角）",
   });
 
   it("同段多 failed 行：按钮 id 逐行唯一（cancel-/retry-<recordId>，同段多行不串台）", () => {
-    const widget = buildSubagentTrayWidget([
+    const widget = subagentWidget([
       makeFailedRecord({ id: "rec-fail-a", slug: "rev-a" }),
       makeFailedRecord({ id: "rec-fail-b", slug: "rev-b", task: "第二个任务" }),
     ]);
@@ -291,7 +309,7 @@ describe("buildSubagentTrayWidget 行内操作按钮（M3，使用者视角）",
   });
 
   it("按钮声明只走 commandId 路径（不声明 hostAction——行内操作不经容器导航，与行 action 两条路径互斥）", () => {
-    const widget = buildSubagentTrayWidget([
+    const widget = subagentWidget([
       makeRecord({ id: "rec-run", status: "running", stopReason: undefined }),
       makeFailedRecord({ id: "rec-fail" }),
     ]);
@@ -306,7 +324,7 @@ describe("buildSubagentTrayWidget 行内操作按钮（M3，使用者视角）",
 
 describe("buildWorkflowTrayWidget 行内操作按钮（M3，使用者视角）", () => {
   it("running 行中止按钮：commandId=taiji.workflowAbort + args.runId + danger 档 + confirm「确认中止？」（abort 不可恢复必须带确认）", () => {
-    const widget = buildWorkflowTrayWidget([
+    const widget = workflowWidget([
       makeRun({ runId: "wf-run-live", scriptName: "build", slug: "ci", status: "running", calls: [{ settled: false }] }),
     ]);
     expect(segmentItems(widget!.gui.component, 0)).toHaveLength(1);
@@ -323,7 +341,7 @@ describe("buildWorkflowTrayWidget 行内操作按钮（M3，使用者视角）",
   });
 
   it("interrupted 行续跑按钮：commandId=taiji.workflowResume + args.runId（恢复操作本体，无 danger/confirm）", () => {
-    const widget = buildWorkflowTrayWidget([
+    const widget = workflowWidget([
       makeRun({ runId: "wf-run-halt", scriptName: "halt", status: "running", interrupted: true }),
     ]);
     const endedItems = segmentItems(widget!.gui.component, 1);
@@ -342,7 +360,7 @@ describe("buildWorkflowTrayWidget 行内操作按钮（M3，使用者视角）",
   });
 
   it("终局行（done/failed）→ 无行内操作按钮（abort-only 无 pause/resume；workflow 无重派发通道，AX5）", () => {
-    const widget = buildWorkflowTrayWidget([
+    const widget = workflowWidget([
       makeRun({ runId: "wf-run-ok", scriptName: "ok", status: "done", reason: "completed" }),
       makeRun({ runId: "wf-run-boom", scriptName: "boom", status: "done", reason: "failed" }),
     ]);
@@ -351,7 +369,7 @@ describe("buildWorkflowTrayWidget 行内操作按钮（M3，使用者视角）",
   });
 
   it("段结构（观察者）：running 行 = list-tree + action-bar(abort)；interrupted 行 = list-tree + action-bar(resume)", () => {
-    const widget = buildWorkflowTrayWidget([
+    const widget = workflowWidget([
       makeRun({ runId: "wf-run-live", scriptName: "build", status: "running", calls: [{ settled: false }] }),
       makeRun({ runId: "wf-run-halt", scriptName: "halt", status: "running", interrupted: true }),
     ]);
@@ -366,7 +384,7 @@ describe("buildWorkflowTrayWidget 行内操作按钮（M3，使用者视角）",
   });
 
   it("行 hostAction（查看入口）与行内按钮并存：导航声明不受按钮增删影响", () => {
-    const widget = buildWorkflowTrayWidget([
+    const widget = workflowWidget([
       makeRun({ runId: "wf-run-live", scriptName: "build", status: "running", calls: [{ settled: false }] }),
     ]);
     expect(rowHostAction(segmentItems(widget!.gui.component, 0)[0])).toEqual({

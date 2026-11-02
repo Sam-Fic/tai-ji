@@ -25,6 +25,10 @@
     基类 reka-popover-transition（style.css 浮层进出场过渡段，同参实现）——reka 浮层经 Teleport
     渲染，scoped 选择器不命中浮层元素，且 @starting-style 无法用 Tailwind 表达，两者由该全局段
     统一承载（机制先例 = CollapsibleContent.vue 的 reka data-state 过渡 escape hatch）。
+  - pin 态注入（tray-panel-interact §3.3 D6）：本组件把外壳持有的 pinned 位经 provide 下传给
+    面板内容（slot 内的 TrayWidgetPanel 及其协议原语子树）。交互原语（Actionbar / list-tree
+    可点命令行）读该注入决定交互项是否降级纯展示——hover 浏览零误触。注入缺失（非托盘挂载位，
+    如浮层 ViewHost 的 scheduler-manager 面板）= 门控不生效、按钮照常可点（RL4 方向）。
 
   交互（pointer 热区 / 层外拦截 / 打开不抢焦点）经 emit 上抛给 ComposerTray 状态机消费。
 -->
@@ -51,14 +55,29 @@
 </template>
 
 <script setup lang="ts">
+import { computed, provide } from 'vue'
 import { PopoverContent } from '@/components/ui/popover'
+import { TRAY_PIN_STATE_KEY } from '@taiji/ui/rendering-protocol'
 
-defineProps<{
+const props = defineProps<{
   /** 面板键（外壳 single activeKey 的键空间，原样写入 data-panel-key） */
   panelKey: string
   /** pin 态（外壳持有，原样写入 data-pinned） */
   pinned: boolean
 }>()
+
+/**
+ * pin 态注入（tray-panel-interact §3.3 D6）：pinned 经 provide 下传给面板内容——
+ * slot 内的 TrayWidgetPanel 及其协议原语（Actionbar / list-tree 可点命令行） inject
+ * 同键，未 pin 时交互项降级纯展示（导航行不门控：导航是安全操作）。
+ *
+ * 必须 provide **响应式源**（computed）：pinned 是外壳交互态（点图标即变），而 provide
+ * 只在 setup 执行一次——静态布尔无法随 pin 翻转更新，hover 点 pin 后按钮不出现
+ * （契约与键定义见 packages/ui 的 Actionbar.vue 头注，本组件经 barrel 消费同一 symbol
+ * 实例）。缺省方向由消费侧原语定死：注入缺失（非托盘挂载位，如浮层 ViewHost 的
+ * scheduler-manager 面板）= 门控不生效、按钮照常可点（RL4，既有独立挂载位零变化）。
+ */
+provide(TRAY_PIN_STATE_KEY, computed(() => props.pinned))
 
 const emit = defineEmits<{
   /** 指针进入内容区（外壳取消待收起计时） */
