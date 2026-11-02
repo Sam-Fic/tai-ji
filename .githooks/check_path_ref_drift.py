@@ -44,6 +44,15 @@ PATH_REF_EXEMPT = {
      "scripts/check-wool-retirement.mjs"): "retirement-guard",
     ("packages/shared/src/wool.ts",
      "packages/shared/src/__tests__/wool.test.ts"): "retirement-guard",
+    # mock→真实进程层迁移史叙述（e2e/tray-entry-real.spec.ts 头注）：tray-panel-interact
+    # 设计 §3.4 M2 原文把入口链断言落点写在两个 mock spec，动笔前核实发现该链路在 mock 层
+    # 结构性不可达，断言整体迁到真实进程层 spec；两个旧 spec 收窄后零可跑用例、随迁移删除
+    # （对账登记 = docs/testing/e2e-map.json E2E-MOCK-01 / E2E-REAL-01），无新路径可指，
+    # 头注引用属历史叙述非功能性引用
+    ("e2e/workflow-viz-overlay.spec.ts",
+     "e2e/tray-entry-real.spec.ts"): "migration-narrative：tray-entry-real.spec.ts 头注记载设计 §3.4 M2 原文落点与 mock→真实进程层迁移史，两个旧 spec 已随迁移删除、无新路径可指，属历史叙述引用非功能性引用",
+    ("e2e/workflow-sidebar-sync.spec.ts",
+     "e2e/tray-entry-real.spec.ts"): "migration-narrative：tray-entry-real.spec.ts 头注记载设计 §3.4 M2 原文落点与 mock→真实进程层迁移史，两个旧 spec 已随迁移删除、无新路径可指，属历史叙述引用非功能性引用",
 }
 
 SCAN_PATHSPEC = [

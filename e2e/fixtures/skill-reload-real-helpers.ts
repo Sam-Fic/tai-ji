@@ -34,8 +34,11 @@
  * - composer skill 浮层候选行：CommandPopover.vue `.pop-item`（portal 到 body，00-overview §6.4），
  *   skill 项 displayName = 裸名（command-popover-skill-candidates.ts:68，`/skill:` 前缀已去）。
  *   触发 = 行中空白后 `/`（非换行空白 + `/`，空 query 合法——dom-core skill-trigger.test.ts 锁定语义）。
- * - 托盘：`[data-testid="tray-builtin-button"][data-kind="workflow"]` +
- *   `[data-testid="tray-builtin-count"]`（ComposerTray.vue:81/106-110；data-state running|idle）。
+ * - 托盘：`[data-testid="tray-widget-button"][data-widget-key="workflow"]` +
+ *   `[data-testid="tray-widget-pulse"]` / `[data-testid="tray-widget-badge"]`
+ *   （TrayWidgetButton.vue；running 判据 = 呼吸点在场——托盘 workflow 件随容器扩展点统一
+ *   §6.6 U9/U10 迁插件推 widget 树，built-in `tray-builtin-button[data-kind]` 与
+ *   data-state 属性随 built-in 分支退役）。
  * - 引擎 CLI 进程 marker：`pi-subagent-cli.mjs`（faux 层 seedFauxDataDir 的 subagents/config.json
  *   command/args，launch-app-real.ts:185-193）；真实 pi 子进程 marker：bundled pi 二进制
  *   `resources/pi/`（findPiExecutable 缺省）。
@@ -152,10 +155,20 @@ export function writeUserWorkflowScripts(dataDir: string, scripts: Array<{ name:
   })
 }
 
-/** 主对话 faux 队列：逐轮 toolCall workflow run → 收尾文本（run 后台启动，turn 随即结束） */
+/**
+ * 主对话 faux 队列：逐轮 toolCall workflow_run → 收尾文本（run 后台启动，turn 随即结束）。
+ *
+ * [2026-11-02 tray-panel-interact M2 同批修] 工具名与参数形态对齐 tool-declaration-slimming
+ * 的 u-b1 拆分（提交 a3882ff00，2026-10-13：`workflow` 工具拆为常驻 `workflow_run` +
+ * deferred `workflow_control`，legacy 名已删）——旧字面 `{name:'workflow',
+ * args:{action:'run', name}}` 在现行 pi 下恒 "Tool workflow not found"（workflow-disconnect-recovery
+ * 与该 helper 自 2026-10-13 起静默腐坏；真实进程层 spec 不进 CI 门禁故未被捕获）。现行形态：
+ * 工具 = `workflow_run`，参数 = 平铺 `{ name: <脚本绝对路径> }`（action 段随拆分删除，
+ * WorkflowRunParams 见 extensions/universal/subagent-workflow/src/interface/tool/tool-workflow.ts）。
+ */
 export function mainDispatchSteps(runPaths: string[], closingText: string): FauxStep[] {
   const steps: FauxStep[] = runPaths.map((p) => ({
-    toolCalls: [{ name: 'workflow', args: { action: 'run', name: p } }],
+    toolCalls: [{ name: 'workflow_run', args: { name: p } }],
   }))
   steps.push({ text: closingText })
   return steps

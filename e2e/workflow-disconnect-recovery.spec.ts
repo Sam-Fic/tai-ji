@@ -22,7 +22,7 @@
  *   state topic 写快照、subscribe 回放，断连期消息丢弃不碍快照写入）；
  * - 恢复来源②（主动拉取）：session.getWorkflows RPC 返回该 run 终态 done 记录
  *   （renderer WS 重连主动拉取同一 RPC，useSidebar.onConnected → loadWorkflows）；
- * - GUI 收敛：run 完成后托盘 workflow 条目 data-state 回 idle（≤30s，G1 用户可见窗口）；
+ * - GUI 收敛：run 完成后托盘 workflow 条目退出 running 态（呼吸点摘除，≤30s，G1 用户可见窗口）；
  * - 重连稳态：不出现重复的 done workflowUpdate live 帧（断连期消息丢弃下 publish 已完成、
  *   重连后 diff 恒空——A3 单测锁定结构属性的 e2e 面防回归）。
  *
@@ -229,8 +229,15 @@ test('A2: WS 断开期间 run 完成 → 重连后 stateSnapshot 回放/主动�
     }, 'a2-send', 30_000)
 
     // ── run 在途确认：running 增量信号帧到 spec WS + 托盘 running ──
-    const workflowBtn = page.locator('[data-testid="tray-builtin-button"][data-kind="workflow"]')
-    await expect(workflowBtn).toHaveAttribute('data-state', 'running', { timeout: 60_000 })
+    // [tray-panel-interact M2 同批修] 托盘 workflow 件已随容器扩展点统一 §6.6 U9/U10 从宿主
+    // built-in 三件迁插件推 widget 树，旧锚点 `tray-builtin-button[data-kind="workflow"]` 与
+    // 其 data-state="running|idle" 随 built-in 分支退役（D10「入口断链同批修」）。新锚点 =
+    // 协议 widget 区按钮 `tray-widget-button[data-widget-key="workflow"]`；该按钮不持
+    // data-state 属性，running 判据改走同源视觉信号——呼吸点 `tray-widget-pulse` 仅在
+    // meta.status==='running' 时渲染（「归零不虚亮」：非 running 态零呼吸点元素），
+    // 与原 data-state 的 running>0 判据同语义。
+    const workflowBtn = page.locator('[data-testid="tray-widget-button"][data-widget-key="workflow"]')
+    await expect(workflowBtn.getByTestId('tray-widget-pulse')).toBeVisible({ timeout: 60_000 })
     const runId = await pollRunningRunId(listen1.events, 30_000)
     expect(runId, 'spec WS 应收到 run 的 running 增量信号帧（断连前在途确认）').not.toBe('')
 
@@ -247,11 +254,12 @@ test('A2: WS 断开期间 run 完成 → 重连后 stateSnapshot 回放/主动�
     const tDoneRecord = await waitForDoneRecordAt(sessionFile!, runId, 150_000)
     expect(tDoneRecord, '断连期间 run 应完成（主 session JSONL 终态 done）').not.toBe(0)
 
-    // ── GUI 收敛（用户可见）：run 完成后托盘 workflow 条目回 idle（≤30s）──
+    // ── GUI 收敛（用户可见）：run 完成后托盘 workflow 条目退出 running 态（≤30s）──
+    // 收敛判据同锚点改写：呼吸点摘除（DOM 层不存在，非 opacity:0 空壳）= 无进行中 run。
     await expect(
-      workflowBtn,
-      'GUI 收敛：run 完成后托盘 workflow 条目回 idle（G1 用户可见窗口）',
-    ).toHaveAttribute('data-state', 'idle', { timeout: 30_000 })
+      workflowBtn.getByTestId('tray-widget-pulse'),
+      'GUI 收敛：run 完成后托盘 workflow 条目退出 running 态（G1 用户可见窗口）',
+    ).toHaveCount(0, { timeout: 30_000 })
 
     // ── 恢复来源①：重连 re-subscribe → reply.stateSnapshot 回放 done last-value 帧 ──
     // 断连期消息丢弃不碍快照写入（message-bus publishState 无条件写 stateSnapshot，与订阅者
