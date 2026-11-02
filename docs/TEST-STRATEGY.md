@@ -410,7 +410,7 @@ taste/no-silent-catch 处理：纯 console.warn 仍报（要求传播/重抛）�
 
 ### 行为 mock 层 mock spec 归宿标注（2026-09-15 初判）
 
-10 个 mock spec / 47 用例（2026-09-15 腐烂清理后：44 可跑绿 / 1 fixme 待修；同批 8 条腐烂中 7 条已退役删除——R3，1 条 SM-E2E-6 查证为真回归 fixme 保留，处置见各行登记）。smoke 子集成员（10 条 `@p0-smoke`，目标 P0 面：布局 / 对话流渲染布局 / session 切换与隔离 / 首条消息流 / composer slash / 侧栏文件树 / 失败路径入口 / 升级残留清理）标 R1；其余 R2 初判如下（触发条件 = 改动这些路径时在 dev-flow 验收阶段跑对应 spec）：
+9 个 mock spec / 47 用例（2026-09-15 腐烂清理后：44 可跑绿 / 1 fixme 待修；同批 8 条腐烂中 7 条已退役删除——R3，1 条 SM-E2E-6 查证为真回归 fixme 保留，处置见各行登记。47 与逐例明细为 2026-09-15 时点登记；2026-11-02 tray-panel-interact M2 后 workflow-sidebar-sync.spec.ts 随入口链迁移删除、其 3 条断言迁真实进程层 tray-entry-real.spec.ts——见下方真实进程层小节，磁盘现存 44 个 test 声明，grep 粗核口径）。smoke 子集成员（10 条 `@p0-smoke`，目标 P0 面：布局 / 对话流渲染布局 / session 切换与隔离 / 首条消息流 / composer slash / 侧栏文件树 / 失败路径入口 / 升级残留清理）标 R1；其余 R2 初判如下（触发条件 = 改动这些路径时在 dev-flow 验收阶段跑对应 spec）：
 
 > **容量状态（2026-09-20）**：smoke 现 10 条 = 规则 2「目标 5-10 条」的上限。后续新 P0 面成员进 smoke 前，须先按规则 2 评估挤掉低价值现存成员（降级回 R2），防止每 PR 关键路径继续膨胀。
 
@@ -423,11 +423,16 @@ taste/no-silent-catch 处理：纯 console.warn 仍报（要求传播/重抛）�
 | `search-modal.spec.ts` | R1（1 条：SM-E2E-7）+ R2（harness smoke / SM-E2E-1~5 / SM-E2E-8~10）+ **R2 fixme 待修**（SM-E2E-6） | R2 触发：改 SearchModal / `useSearch` / `commandStore`（pendingSlash 一次性通道）时跑。SM-E2E-6（2026-09-15 查证定性：**真回归**，fixme 保留）：confirm 文件项后浮层未关闭（`search-modal-root` 仍可见）——UI 意图明确是关闭（AC-6.7），根因 = `useSearchModalDeps.ts:62` fileRead 直连 core real file 域绕过 `@/api` 门面 isMock 切换，mock 层下 `file.read` RPC 挂 65s backstop；修复方向 = fileRead 改走 `@/api` 门面 |
 | `file-tree.spec.ts` | R1（1 条：E2E-1）+ R2（其余 9 条） | R2 触发：改 `FileView` / `FileTreeRow` / `useFileTree` / fileTreeStore / mock `file.tree` 时跑。E2E-3b 已退役 R3（2026-09-15 清理）：diff 视图已从 raw diff 文本（`diff --git` 头）改为结构化 hunk 渲染（`@@ … @@`），断言过期；git 可追溯 |
 | `failure-paths.spec.ts` | R1（1 条：A12）+ **R3 初判**（A13：pi 崩溃→重建） | A13 退役理由初判：TAIJI_MOCK=1 不起 runtime，崩溃重建链路在 mock 层不可达，现断言范围（title + 基础 UI 可见）与 harness smoke 重复、无守护价值；真实崩溃重建由 L2.5（真 pi 进程线）承接。**待 L2.5 调研线终判后再动文件** |
-| `tray-entry-real.spec.ts` | R2（3 条：RE1 入口链 / RE2 D11 收起联动 / RE3 挂载回归） | R2 触发：改托盘 widget 区（`TrayWidgetButton` / `TrayWidgetPanel` / `ComposerTray` 外壳）/ 容器导航执行器（`container-navigation` + `useExtensionHostBridge` sink）/ 两个 tray widget 推树（`extensions/universal/subagent-workflow/src/interface/gui/tray-widget.ts` + `workflow-tray-widget.ts`）时跑。2026-11-02 tray-panel-interact M2：原 mock 层 `workflow-sidebar-sync.spec.ts` 与 `workflow-viz-overlay.spec.ts` 的入口链断言迁入本 spec（托盘件迁移后入口链在 mock 层结构性不可达，证据与迁移登记见 e2e-map.json E2E-MOCK-01 / E2E-REAL-01 note）；空载串行 |
 | `workspace.spec.ts` | R2（3 条） | 触发：改 `workspaceStore` / DirSelectPopover / mockApi.workspace 门面时跑（含 §4「store 必须走 @/api 门面」基线） |
 | `gui-components.spec.ts` | R2（2 条） | 触发：改 `Block.vue`（`__gui__` tool result 渲染）/ SideDrawer terminal/browser tab 时跑。路径 A ×2 已退役 R3（2026-09-15 清理）：SideDrawer 内 `gui-stats-line` / `gui-list-tree` testid 不存在（widgetGui 渲染链路改版）；git 可追溯 |
 
-**行为 mock 层 real spec（`*-real.spec.ts`，6 个）**：需真实 runtime（不设 TAIJI_MOCK）+ real renderer bundle，其中 ask-user-real / tasks-drawer-real / workflow-thinkinglevel-real 含真实 LLM 调用——**不在此终判**，移交 L2.5（真 pi + faux LLM 调研线）/ L3（触发式回归设计线）终判；倾向初判：models-json-sanitize-real / update-cleanup-real / workspace-real 为凭证无关 real 进程资产（create session 不调 LLM），适合 L2.5 承接。
+**行为 mock 层 real spec（`*-real.spec.ts`，6 个）**：需真实 runtime（不设 TAIJI_MOCK）+ real renderer bundle，其中 ask-user-real / tasks-drawer-real / workflow-thinkinglevel-real 含真实 LLM 调用——**不在此终判**，移交 L2.5（真 pi + faux LLM 调研线）/ L3（触发式回归设计线）终判；倾向初判：models-json-sanitize-real / workspace-real 为凭证无关 real 进程资产（create session 不调 LLM），适合 L2.5 承接（update-cleanup-real 已于 2026-09-15 升级进 CI 固定环节并更名 update-cleanup.spec.ts，见上表；tray-entry-real 归宿见下方真实进程层小节）。
+
+### 真实进程层 spec 归宿标注（R2 态）
+
+| spec | 归宿 | 触发条件（R2 必填）/ 说明 |
+|------|------|--------------------------|
+| `tray-entry-real.spec.ts` | R2（3 条：RE1 入口链 / RE2 D11 收起联动 / RE3 挂载回归） | R2 触发：改托盘 widget 区（`TrayWidgetButton` / `TrayWidgetPanel` / `ComposerTray` 外壳）/ 容器导航执行器（`container-navigation` + `useExtensionHostBridge` sink）/ 两个 tray widget 推树（`extensions/universal/subagent-workflow/src/interface/gui/tray-widget.ts` + `workflow-tray-widget.ts`）时跑。2026-11-02 tray-panel-interact M2：原 mock 层 `workflow-sidebar-sync.spec.ts` 与 `workflow-viz-overlay.spec.ts` 的入口链断言迁入本 spec（托盘件迁移后入口链在 mock 层结构性不可达，证据与迁移登记见 e2e-map.json E2E-MOCK-01 / E2E-REAL-01 note）；空载串行 |
 
 ### 2026-09-15 盘点发现并已修复的存量问题 [HISTORICAL]
 

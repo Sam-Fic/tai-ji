@@ -30,7 +30,8 @@
  *   挂载（徽标/呼吸点/面板 head 计数/tab-bar 段标签/list-tree 行集同行 label 对账）+
  *   点行经容器导航执行器打开浮层并定位该 run（header scriptName 对账）+ ESC 关闭后
  *   composer 恢复。
- * - RE2（原 workflow-viz-overlay OV11，设计 §3.3 D11 / RL8）：导航后面板收起联动——pin 态
+ * - RE2（D11/RL8 新建断言——设计 §4.2 RL8：D11 为新行为、现状无既有断言，落点随入口链
+ *   迁入本 spec；设计 §3.3 D11）：导航后面板收起联动——pin 态
  *   托盘面板在「容器从关到开」边沿让位（面板 DOM 摘除 + pin 清除）；反向边沿（关浮层）不
  *   动作，面板不被 watch 复活。
  * - RE3（原 workflow-sidebar-sync T2 挂载回归）：切到无 workflow 数据的 session → widget

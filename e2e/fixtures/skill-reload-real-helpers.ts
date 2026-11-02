@@ -36,9 +36,9 @@
  *   触发 = 行中空白后 `/`（非换行空白 + `/`，空 query 合法——dom-core skill-trigger.test.ts 锁定语义）。
  * - 托盘：`[data-testid="tray-widget-button"][data-widget-key="workflow"]` +
  *   `[data-testid="tray-widget-pulse"]` / `[data-testid="tray-widget-badge"]`
- *   （TrayWidgetButton.vue；running 判据 = 呼吸点在场——托盘 workflow 件随容器扩展点统一
- *   §6.6 U9/U10 迁插件推 widget 树，built-in `tray-builtin-button[data-kind]` 与
- *   data-state 属性随 built-in 分支退役）。
+ *   （TrayWidgetButton.vue；running 判据 = 呼吸点在场——托盘 workflow/subagent 两件随
+ *   容器扩展点统一 §6.6 U9/U10 迁插件推 widget 树；built-in bash/session/canvas 三件
+ *   仍在宿主分支，仍持 `tray-builtin-button[data-kind]` + data-state——ComposerTray.vue）。
  * - 引擎 CLI 进程 marker：`pi-subagent-cli.mjs`（faux 层 seedFauxDataDir 的 subagents/config.json
  *   command/args，launch-app-real.ts:185-193）；真实 pi 子进程 marker：bundled pi 二进制
  *   `resources/pi/`（findPiExecutable 缺省）。

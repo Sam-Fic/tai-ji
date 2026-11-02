@@ -229,9 +229,11 @@ test('A2: WS 断开期间 run 完成 → 重连后 stateSnapshot 回放/主动�
     }, 'a2-send', 30_000)
 
     // ── run 在途确认：running 增量信号帧到 spec WS + 托盘 running ──
-    // [tray-panel-interact M2 同批修] 托盘 workflow 件已随容器扩展点统一 §6.6 U9/U10 从宿主
-    // built-in 三件迁插件推 widget 树，旧锚点 `tray-builtin-button[data-kind="workflow"]` 与
-    // 其 data-state="running|idle" 随 built-in 分支退役（D10「入口断链同批修」）。新锚点 =
+    // [tray-panel-interact M2 同批修] 托盘 workflow/subagent 两件已随容器扩展点统一 §6.6 U9/U10
+    // 从宿主 built-in 分支迁插件推 widget 树，旧锚点 `tray-builtin-button[data-kind="workflow"]`
+    // 与其 data-state="running|idle" 随之失效（D10「入口断链同批修」；built-in bash/session/canvas
+    // 三件仍在该分支，仍持 tray-builtin-button[data-kind] + data-state——ComposerTray.vue）。
+    // 新锚点 =
     // 协议 widget 区按钮 `tray-widget-button[data-widget-key="workflow"]`；该按钮不持
     // data-state 属性，running 判据改走同源视觉信号——呼吸点 `tray-widget-pulse` 仅在
     // meta.status==='running' 时渲染（「归零不虚亮」：非 running 态零呼吸点元素），
