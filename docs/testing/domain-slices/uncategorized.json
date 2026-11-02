@@ -1,6 +1,6 @@
 {
   "name": "uncategorized",
-  "summary": "池：孤儿与在途混合（跨域混合 bundle 按精确路径登记 + sharedBy 注记内含域；equivalence 混沌组；主题/i18n 横切；10 个未入词表扩展包整包清单与 background-task/retry-rules/network-proxy/migration 聚簇见 pendingDomains 注记——立新城时整簇迁出；棘轮只降不升，基线 = _meta.uncategorizedBaseline）",
+  "summary": "池：孤儿与在途混合（跨域混合 bundle 按精确路径登记 + sharedBy 注记内含域；equivalence 混沌组；主题/i18n 横切；9 个未入词表扩展包整包清单与 retry-rules/network-proxy/migration 聚簇见 pendingDomains 注记——立新城时整簇迁出；background-task 读侧/契约 9 件留池——ext 写侧已立城 base-tool-enhance 域，runtime reaper/service/bundle 5 件 + extension-protocol 契约 3 件 + core transport api 1 件；棘轮只降不升，基线 = _meta.uncategorizedBaseline）",
   "layers": [],
   "scope": {
     "runtime": [
@@ -12,22 +12,6 @@
     "extensions/taiji/system-prompt-trace/src/__tests__/index-wiring.test.ts",
     "extensions/taiji/system-prompt-trace/src/__tests__/trace.a11.test.ts",
     "extensions/taiji/system-prompt/src/__tests__/system-prompt.test.ts",
-    "extensions/universal/base-tool-enhance/src/__tests__/background-lifecycle.test.ts",
-    "extensions/universal/base-tool-enhance/src/__tests__/bash-tool.test.ts",
-    "extensions/universal/base-tool-enhance/src/__tests__/command-display.test.ts",
-    "extensions/universal/base-tool-enhance/src/__tests__/config.test.ts",
-    "extensions/universal/base-tool-enhance/src/__tests__/delivery-port-assembly.test.ts",
-    "extensions/universal/base-tool-enhance/src/__tests__/force-patterns.test.ts",
-    "extensions/universal/base-tool-enhance/src/__tests__/index.test.ts",
-    "extensions/universal/base-tool-enhance/src/__tests__/maintenance-once.test.ts",
-    "extensions/universal/base-tool-enhance/src/__tests__/notify-reconcile-judgement.test.ts",
-    "extensions/universal/base-tool-enhance/src/__tests__/notify.test.ts",
-    "extensions/universal/base-tool-enhance/src/__tests__/pending-reconcile.test.ts",
-    "extensions/universal/base-tool-enhance/src/__tests__/registry.test.ts",
-    "extensions/universal/base-tool-enhance/src/__tests__/render-result.test.ts",
-    "extensions/universal/base-tool-enhance/src/__tests__/subagent-guard.test.ts",
-    "extensions/universal/base-tool-enhance/src/__tests__/task-store.test.ts",
-    "extensions/universal/base-tool-enhance/src/__tests__/tool-error-audit.test.ts",
     "extensions/universal/cache-probe/src/__tests__/fingerprint.test.ts",
     "extensions/universal/cache-probe/src/__tests__/state-machine.test.ts",
     "extensions/universal/network-proxy/src/__tests__/config.test.ts",
@@ -525,7 +509,6 @@
   "contracts": [],
   "e2eRules": [],
   "pendingDomains": {
-    "base-tool-enhance+background-task": "后台任务全链聚簇（base-tool-enhance 写侧 ext 16 件 + runtime 收殓读侧 reaper/service + extension-protocol 契约 3 件 + core transport api 1 件；消费方证据 = packages/extension-protocol/src/index.ts 头注释「写侧实现在 base-tool-enhance，收殓读侧在 runtime」；renderer 详情面板按 W2-B 冻结在 tray 域）——立新城候选",
     "network-proxy": "ext 11 件 + runtime network-proxy-config/network-proxy-stats + shared network-proxy 契约——代理功能域候选",
     "retry-rules": "ext 5 件 + runtime remote-config/remote-retry-rules + shared retry-rules/llm-retry——LLM 重试规则功能域候选",
     "rename-session": "ext 6 件——会话重命名功能域候选",

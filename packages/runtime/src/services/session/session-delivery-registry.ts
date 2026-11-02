@@ -66,7 +66,11 @@ import { isGeneratingTurn } from './types.js'
 import { LateBoundSkillSource, SkillInjector } from './skill-injector.js'
 import { publishSkillNotices } from './skill-notice-publisher.js'
 import type { IMessageBus } from '../message-bus/message-bus.js'
-import { applySessionOccupancyTransition, userStoppedGate } from './event-interpreter.js'
+import {
+  applySessionOccupancyTransition,
+  startPingProbeFromDeliveryEdge,
+  userStoppedGate,
+} from './event-interpreter.js'
 import { extractExtensionCommandNames, extractSkillTemplateCommandNames, matchCommandName } from '../../infra/pi/pi-protocol.js'
 import type { InputDisposition } from '../../infra/pi/pi-protocol.js'
 import { classifyPromptRejection, type PromptRejectionReason } from '../../infra/pi/pi-rejection.js'
@@ -934,11 +938,20 @@ export function createSessionDeliveryRegistry(
    * dispatching 置位（idle 门，D3①）：view 缺席或生成中 no-op——生成中出站保持 generating
    * 不覆盖（原回合脉冲全程不错乱，★3）。occupancy 置位先于 prompt（RT-4#10，RPC 往返窗
    * 内对预检/回收豁免不再呈 idle）。
+   *
+   * [pi-stall-detection D4/RL7] 置位边沿同时前置启动探测（幂等）：dispatching 窗口
+   * （prompt 已受理、turn-start 未到）纳入第 1 层探测覆盖——窗口内 pi 挂死时 prompt RPC
+   * 悬挂、turn-start 永不到达，探测不能等 turn-start 启动（PR4 形态）。turn-start 既有
+   * start() 重置语义保留（受理期累计清零、回合期从零独立累计）。收回 idle 边沿的停止接线
+   * 不在本文件逐点挂：接在转移原语单点（applySessionOccupancyTransition 对 idle /
+   * reject-other / full-reset 统一停止），本文件三处收回写方（:895 busy 拒收、:1022 真失败
+   * settleDispatching、:1026 handled 回落）与其余文件写方构造性覆盖。
    */
   function markDispatchingIfIdle(sessionId: string): void {
     const view = viewOf(sessionId)
     if (view && (view.occupancy?.turn ?? 'idle') === 'idle') {
       applySessionOccupancyTransition(view, deps.getMessageBus(), 'dispatching')
+      startPingProbeFromDeliveryEdge(sessionId)
     }
   }
 

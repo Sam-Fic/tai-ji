@@ -12,7 +12,7 @@
  * 幂等：exit 事件与 bash_kill / timeout 收尾并发时，finalizeTask 的终态检查
  * （isTerminalState）保证单一终态归属，先到者写、后到者 no-op。
  *
- * 已知竞态（设计文档 §3.5 原样登记，不修）：同进程 session 替换 dispose → 新实例
+ * 已知竞态（设计定案不修）：同进程 session 替换 dispose → 新实例
  * load 间毫秒窗口任务恰好完成时通知可能落旧 bus——窗口极窄且后果可恢复（bash_output
  * 可查、对账可补），不加同步握手。父进程死亡场景不归本模块（exit 监听随进程消失，
  * 由 process-exit-guard 收殓 + runtime 孤儿收殓兜底）。

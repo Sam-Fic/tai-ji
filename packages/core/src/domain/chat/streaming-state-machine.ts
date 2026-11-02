@@ -19,7 +19,7 @@
  */
 import { ref } from 'vue'
 import type { ContentBlock, Message, ServerMessageMap, ToolCall } from '@taiji/shared'
-import { extractMainSessionId, isSubagentVirtualId } from '@taiji/shared'
+import { extractMainSessionId, isActiveTurnPhase, isSubagentVirtualId } from '@taiji/shared'
 import {
   commitMessages,
   isErrorFinalizeReason,
@@ -525,14 +525,20 @@ export function createStreamingStateMachine(deps: StreamingStateMachineDeps) {
    * finalizeAllStreaming 的候选 session 集合构造（W3 / W-S3，模块作用域）。
    *
    * 遍历所有可能持有瞬态态的 session 的 key 并集：messages.keys() ∪ occupancy 分区中
-   * compacting / handingOff 的 sid ∪ retryStates ∪ pendingSend。
-   * 不能只遍历 messages.keys()——compacting / handingOff / retry / pendingSend 可能独立于
-   * 消息存在，仅遍历 messages 会漏掉这些 session。
+   * turn 非 idle（ACTIVE_TURN_PHASES：dispatching/generating/settling）/ compacting /
+   * handingOff 的 sid ∪ retryStates ∪ pendingSend。
+   * 不能只遍历 messages.keys()——occupancy turn / compacting / handingOff / retry /
+   * pendingSend 可能独立于消息存在，仅遍历 messages 会漏掉这些 session。
    *
    * [u5b] compacting 候选来源从 compactingSessions Set 改为 occupancy 派生视图过滤（membership
    * 单一来源）。
    * [chat-flow-consistency §6 裁决表「状态机｜交接在途状态归属」行] handingOff 候选同型改 occupancy 派生视图过滤（第四维；
    * handingOffSessions Set 已退役）。
+   * [fix-chat-flow-stuck A-3] turn 维并入候选：settling 残留（turn-end 后断连、实体已定稿
+   * 无 streaming 消息）此前不在候选集也不在守卫五条件内，断连收尾跳过 → occupancy 分区
+   * 残留 settling，发送位/停止按钮形态永久卡「进行中」（直到 runtime 重启后重连回放才能
+   * 恢复）。occupancy 是重建型状态（重连 stateSnapshot 回放即恢复，见
+   * clearIndependentTransient 注释），随断连收尾清分区无损。
    *
    * [W3 / W-S3] pendingSend 并入：纯 pendingSend 态（用户已发起、message_start 空窗、无消息实体）
    * 不在 messages.keys() 内，断连时不会立即收尾，UI 卡「发送中」。
@@ -540,7 +546,7 @@ export function createStreamingStateMachine(deps: StreamingStateMachineDeps) {
   function collectFinalizeCandidates(): Set<string> {
     const candidateSids = new Set<string>(messages.value.keys())
     for (const [sid, occ] of occupancies.value) {
-      if (occ.compacting || occ.handingOff) candidateSids.add(sid)
+      if (isActiveTurnPhase(occ.turn) || occ.compacting || occ.handingOff) candidateSids.add(sid)
     }
     for (const sid of retryStates.value.keys()) candidateSids.add(sid)
     for (const sid of pendingSend.value) candidateSids.add(sid)

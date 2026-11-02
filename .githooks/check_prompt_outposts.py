@@ -112,6 +112,17 @@ OUTPOST_CALLSITES = [
         "workflowAction 生命周期命令（action/runId 均 runtime 域枚举与 id）",
     ),
     (
+        "index.ts",
+        "await client.prompt(reasonText, undefined, 'steer')",
+        "exempt",
+        "[pi-stall-detection U2+U4] 判死自动恢复 steer 注入原因提示（出站点唯一，两链共用）："
+        "U2/D2② 第 1 层探测判死链（onSilentAbort→handleStallDetermination）恢复链无 "
+        "reasonHint，回落固定常量 STALL_REASON_HINT；U4/D3 第 2 层静默判死链"
+        "（stallMatrix.onJudge→handleSilenceJudgeDetermination）注入 composeStallJudgeHintText"
+        " 模板（判定依据/静默时长/在途阶段定位）——均机器生成诊断文案，非用户内容，"
+        "SkillInjector 的技能/命令注入语义不适用于机器诊断注入",
+    ),
+    (
         "services/session/session-service.ts",
         "void client.prompt(BG_RECONCILE_COMMAND)",
         "exempt",

@@ -1141,6 +1141,10 @@ function setup(initOverrides: Partial<{ isIdle: () => boolean }> = {}): {
   pi: MockPi;
 } {
   const agentDir = makeTmpAgentDir();
+  // records 树落盘隔离（同本文件 initSession describe 的 stubEnv 先例——不注入则
+  // records 树跨用例共享，initSession 的通知对账会把前一用例的收尾 idle record
+  // 补投进本用例的 pi，计数断言漂移）。
+  vi.stubEnv("TAIJI_AGENT_DATA_DIR", agentDir);
   const modelService = new ModelConfigService({ agentDir, cwd: agentDir });
   const service = new SubagentService({ cwd: agentDir, modelService });
   const pi = makePi();

@@ -2,15 +2,28 @@
  * plan-state-extractor — plan 模式状态派生视图域（plan 模式重设计 D1④，照 subagent-extractor /
  * workflow-extractor 同族形态）。
  *
- * `scanPlanStateEntries(entries)` 是 plan 状态唯一派生函数：实时（SessionRecords 增量拉取）
- * 与冷启动（getPlanState 磁盘全量，D1⑥ 冷路径）共用同一份代码——live ≡ reload 由「派生代码
- * 唯一」构造性保证（session-records.ts:64-79 同款「数据写路径唯一 = entry 扫描」不变量）。
+ * `scanPlanStateEntries(entries)` 是 plan 状态唯一派生函数，也是唯一读入口的数据源：
+ * 实时（SessionRecords get_entries 拉取批）与冷启动（[U5 plan 冷路径归一 D6] 续读链扫描
+ * 产出——buildProjection 首建 / 续读核对增量 / 异步续读 / 截断整建 / applyRecordEntries
+ * live 拉取五挂点，见 session-records.ts）共用同一份代码——live ≡ reload 由「派生代码唯一 + 读路径归一」
+ * 构造性保证（session-records.ts:64-79 同款「数据写路径唯一 = entry 扫描」不变量；
+ * 独立全文读路径已随 D6 退役——getPlanState 不再独立解析文件，与 getSubagents/getWorkflows
+ * 同走统一续读链）。
  *
  * 派生语义 = 读 session **活跃路径内最后一条**合法 plan-state entry（extension 侧
  * reconstructPlanState 的逆序取首同构——entry 顺序即时间顺序，每次状态迁移整体重写快照，
  * 无 per-key merge；[message-revoke U6d] 活跃路径裁剪 = G2 二分的未来状态随树路径，被撤
  * 子树的 plan-state entry 不进派生态——live（SessionRecords 全量重建传 leafId）/ 冷启
- * （文件路径 trimFileEntriesToActivePath）三处同批，见 scanPlanStateEntries 注释）。
+ * （续读链扫描产出直取，见下「冷启动裁剪边界」）三处同批，见 scanPlanStateEntries 注释）。
+ *
+ * 冷启动裁剪边界（[U5 D6] 实施期登记）：续读链扫描产出是行预过滤子集（对话行不进产出），
+ * 活跃路径裁剪需要的全量 parent 链构造不出来——冷启动派生走 scanPlanStateEntries 缺省
+ * 分支（不传 leafId = 全集逆序取首）。与非撤回形态的全文裁剪语义等价（plan entry 写入时
+ * parentId=当时 leaf，非撤回下文件序末条 plan entry 恒在活跃链上）；pi branch 撤回（纯内存
+ * leaf 指针、不落盘，pi 1.0.0 session-manager.js branch 实锚）后仅写对话/record 族条目、
+ * 未再进 plan 模式即冷启动查看的形态，冷启动派生会短暂显示被撤残影——激活会话后 live
+ * 全量轮（pi 内存 leafId）恒正确裁剪并经水位补帧修正。全文读形态在「撤回后无写入」形态
+ * 同有残影（文件尾 leaf 链含被撤条目），本边界是续读产物子集下的收窄而非新增缺口。
  *
  * schema 兼容（D4）：entry data 无版本字段（版本号字段 + 迁移逻辑已被 D1 明文否决），新旧
  * schema 靠**字段级 optional 判存在**消解——skills/docs 逐字段检查透传，不做
@@ -28,9 +41,7 @@
  * entry data 按防御式逐字段检查消费；extension-protocol 是包依赖（tsup noExternal 已打包，
  * 与 event-adapter 的 marker 常量同引法）。
  */
-import { readFileSync, statSync } from 'node:fs'
 import type { PlanDocMeta, PlanStateView } from '@taiji/shared'
-import { READ_PRECHECK_MAX_BYTES } from '@taiji/shared'
 // 生命周期值域与 legacy entry 映射 canonical = extension-protocol（包依赖，非 extensions/
 // 源码——tsup noExternal 已打包该包，与 event-adapter 的 marker 常量同引法）
 import {
@@ -38,12 +49,9 @@ import {
   readLifecycleState,
   readResumeHint,
 } from '@zhushanwen/extension-protocol'
-import { parseJsonl } from '../../utils/jsonl.js'
-import { isEnoent } from '../../utils/errors.js'
-// 活跃路径裁剪（message-revoke U6d）：U6a 交付的导出 SSOT 纯函数 + 文件路径喂数单点
-//（剥 header / 文件尾 leaf 派生），plan 派生读者按 census §4.2 复用、不自含重复实现
+// 活跃路径裁剪（message-revoke U6d）：U6a 导出的 SSOT 纯函数（live 全量重建传 leafId 的
+// 裁剪单点；冷启动续读链产出因对话行缺席走缺省直通分支，见头注释「冷启动裁剪边界」）
 import { computeActivePathEntries } from '../../infra/pi/session-entry-mapper.js'
-import { trimFileEntriesToActivePath } from '../../infra/pi/session-file-utils.js'
 
 /** JSONL 中的 custom entry 结构（照 subagent-extractor JsonlCustomEntry 简化形态）。 */
 interface JsonlCustomEntry {
@@ -51,10 +59,6 @@ interface JsonlCustomEntry {
   customType?: string
   data?: unknown
 }
-
-/** MB 换算常数（oversize 降级 warn 文案的体积展示，对齐 workflow-extractor BYTES_PER_MB）。 */
-// eslint-disable-next-line no-magic-numbers -- 1MB = 1024 * 1024 bytes
-const BYTES_PER_MB = 1024 * 1024
 
 /**
  * requirement 读侧封顶上限（64KB = 64 * 1024 字节）：与 extension 写侧
@@ -198,52 +202,4 @@ function parsePlanDocMeta(v: unknown): PlanDocMeta | null {
     return null
   }
   return { fileName: d.fileName, absPath: d.absPath, sourceSkill: d.sourceSkill, version: d.version }
-}
-
-/**
- * 从主 session JSONL 文件提取 plan 状态视图（冷启动 / getPlanState RPC 路径，D1⑥ 冷路径）。
- *
- * 读取文件 → parseJsonl → [message-revoke U6d] trimFileEntriesToActivePath（剥 header +
- * 文件尾 leaf 回溯——pi 树重放规则保证文件尾即活跃叶子（PS-60 实锚 dist/core/
- * session-manager.js:673 `_buildIndex` 文件序循环置 leafId=entry.id、:616
- * `_setSessionFile` 加载路径），撤回后 label 锚落文件尾，被撤
- * 子树的 plan-state entry 经 parentId 回溯滤除）→ scanPlanStateEntries（与实时增量拉取
- * 同一份派生代码；live ≡ reload 由「派生代码唯一 + 裁剪单点」构造性保持）。
- *
- * 读失败分级（照 subagent-extractor extractSubagentsFromSessionFile 契约）：
- * - 文件不存在（ENOENT）→ 「未激活」缺省 View（合法边界：pi session 文件延迟写入，文件
- *   都不存在必然无 plan-state entry；缺省形态对齐 extension DEFAULT_PLAN_STATE 的 View 域
- *   派生——isActive:false + 三 string 字段 null）。
- * - 其他读错误（EACCES / EISDIR 等）→ 原样上抛（RPC 报错；降级缺省 View 会把「读失败」
- *   与「从未进过 plan」混淆）。
- * - oversize（> READ_PRECHECK_MAX_BYTES 32MB）→ warn 留痕 + 缺省 View 降级（G3 峰值治理
- *   同款裁决：全文扫描语义不做尾读部分提取；降级形态与 ENOENT 同为「未激活」——
- *   PlanStateView 无降级标记位（shared 协议已 committed），失败可观测性由 warn 承担）。
- */
-export function extractPlanStateFromSessionFile(filePath: string): PlanStateView {
-  let fileSize = -1
-  try {
-    fileSize = statSync(filePath).size
-  } catch {
-    // 预检失败不改变错误契约：fall through 到读路径，由 readFileSync 产生原分级错误
-    fileSize = -1
-  }
-  if (fileSize > READ_PRECHECK_MAX_BYTES) {
-    console.warn(
-      `[plan-state-extractor] session file oversize ` +
-      `(${(fileSize / BYTES_PER_MB).toFixed(1)} MB > ${(READ_PRECHECK_MAX_BYTES / BYTES_PER_MB).toFixed(0)} MB), ` +
-      `skip plan-state extraction (degraded to inactive view): ${filePath}`,
-    )
-    return INACTIVE_PLAN_STATE_VIEW
-  }
-
-  let content: string
-  try {
-    content = readFileSync(filePath, 'utf-8')
-  } catch (e) {
-    if (isEnoent(e)) return INACTIVE_PLAN_STATE_VIEW
-    throw e
-  }
-
-  return scanPlanStateEntries(trimFileEntriesToActivePath(parseJsonl(content))) ?? INACTIVE_PLAN_STATE_VIEW
 }

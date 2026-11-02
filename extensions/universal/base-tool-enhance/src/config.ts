@@ -1,5 +1,5 @@
 /**
- * 配置体系（M4，设计文档 §3.5「配置文件」段 + §3.6「config 解析失败」行）。
+ * 配置体系（M4，配置原则由本文件头注释直接承载，见下）。
  *
  * 委托 llm-shared loadConfig（mtime+size 读时刷新热重载，同 smart-context/permission
  * 范式）——【热重载契约】每次需要配置直接调 loadBaseToolEnhanceConfig，禁止上层
@@ -13,6 +13,10 @@
 import { getConfigPath as getLlmSharedConfigPath, loadConfig } from "@zhushanwen/pi-llm-shared";
 import { isRecord, toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
+import {
+	DEFAULT_IDLE_BACKGROUND_SEC,
+	normalizeIdleBackgroundSec as normalizeIdleBackgroundSecShared,
+} from "@zhushanwen/extension-protocol";
 
 import { DEFAULT_MAX_CONCURRENT_BACKGROUND } from "./background/spawn-background.ts";
 
@@ -25,6 +29,13 @@ const MS_PER_SECOND = 1000;
 /** setTimeout 延迟上限（int32 ms）：timeout 配置换算毫秒后的 clamp 上限。 */
 const INT32_MAX_MS = 2_147_483_647;
 
+/**
+ * idleBackgroundSec 默认值（跨层单源：implementation 与量级依据在
+ * @zhushanwen/extension-protocol background-idle-config——runtime 静默判定矩阵 T 公式
+ * 消费同一常量，禁止本地重写）。re-export 保持既有导出面。
+ */
+export { DEFAULT_IDLE_BACKGROUND_SEC };
+
 export interface BaseToolEnhanceConfig {
 	/** 用户正则（源字符串），追加到内置两组白名单之后（compile 在 force-patterns.ts）。 */
 	forceBackgroundPatterns: string[];
@@ -34,15 +45,22 @@ export interface BaseToolEnhanceConfig {
 	foregroundTimeoutSeconds: number | null;
 	/** null = 不注入；数字 = 后台未填 timeout 时的默认秒数。 */
 	backgroundTimeoutSeconds: number | null;
+	/**
+	 * 空闲转后台阈值（秒）：前台命令输出静默满此值时转后台（不杀命令，只解除阻塞——
+	 * 是「转后台阈值」不是超时）；null = 关闭（回落官方原生无限等待）。归一化取整为
+	 * ≥1 整数（消费者 = 包装脚本 --idle 参数，只接受非负整数秒）。
+	 */
+	idleBackgroundSec: number | null;
 	maxConcurrentBackground: number;
 }
 
-/** 默认配置（零配置状态：内置白名单两组全生效、双模式不注入 timeout、并发 8）。 */
+/** 默认配置（零配置状态：内置白名单两组全生效、双模式不注入 timeout、空闲转后台 600s、并发 8）。 */
 export const DEFAULT_BASE_TOOL_ENHANCE_CONFIG: BaseToolEnhanceConfig = {
 	forceBackgroundPatterns: [],
 	disableBuiltinForcePatterns: false,
 	foregroundTimeoutSeconds: null,
 	backgroundTimeoutSeconds: null,
+	idleBackgroundSec: DEFAULT_IDLE_BACKGROUND_SEC,
 	// 单一来源：与 spawnBackgroundTask 的 opts.maxConcurrent 缺省同值（M2 常量）
 	maxConcurrentBackground: DEFAULT_MAX_CONCURRENT_BACKGROUND,
 };
@@ -65,14 +83,23 @@ function warnInvalid(key: string, value: unknown, fallback: string): void {
 }
 
 /**
- * timeout 键归一化：null/缺省 → null（不注入，D4）；正有限数 → 原值；
- * 类型错/负数/0/非有限 → null + warn；换算毫秒超 int32 上限 → clamp + warn。
+ * 秒类配置键归一化（timeout 双键共用）：undefined（未配置）→
+ * fallback；null（显式 null）→ null；正有限数 → 原值；类型错/负数/0/非有限 → fallback
+ * + warn；换算毫秒超 int32 上限 → clamp + warn。
+ *
+ * null 与 undefined 分流的理由：timeout 键默认即 null（不注入，D4），两落点合一无分叉；
+ * idleBackgroundSec 默认 600，必须三分——undefined = 未配置（默认开启）、显式 null =
+ * 用户关闭（透传，下游据此回落官方原生）、坏值 = 回退默认而非关闭（显式 null 是唯一
+ * 关闭通道，坏值不得意外关闭机制）。（idleBackgroundSec 的归一化已下沉跨层共享实现
+ * normalizeIdleBackgroundSec @zhushanwen/extension-protocol，不再经本函数。）
  */
-function normalizeTimeoutSeconds(raw: unknown, key: string): number | null {
-	if (raw === null || raw === undefined) return null;
+function normalizeSecondsKey(raw: unknown, key: string, fallback: number | null): number | null {
+	if (raw === undefined) return fallback;
+	if (raw === null) return null;
 	if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
-		warnInvalid(key, raw, "null (no timeout injection)");
-		return null;
+		const fallbackDesc = fallback === null ? "null (no timeout injection)" : `${fallback} (default)`;
+		warnInvalid(key, raw, fallbackDesc);
+		return fallback;
 	}
 	if (raw * MS_PER_SECOND > INT32_MAX_MS) {
 		const clamped = INT32_MAX_MS / MS_PER_SECOND;
@@ -83,6 +110,25 @@ function normalizeTimeoutSeconds(raw: unknown, key: string): number | null {
 		return clamped;
 	}
 	return raw;
+}
+
+/**
+ * idleBackgroundSec 归一化（值语义 = 跨层共享实现 @zhushanwen/extension-protocol
+ * background-idle-config，两侧同源禁镜像；本函数只承担扩展配置系统的 warn UX——
+ * anomaly → 可操作文案，与 timeout 双键的 warnInvalid/clamp 文案同族）。
+ */
+function normalizeIdleBackgroundSec(raw: unknown): number | null {
+	const { value, anomaly } = normalizeIdleBackgroundSecShared(raw);
+	if (anomaly === "invalid") {
+		warnInvalid("idleBackgroundSec", raw, `${DEFAULT_IDLE_BACKGROUND_SEC} (default)`);
+	}
+	if (anomaly === "clamped") {
+		logger.warn(
+			`Config key 'idleBackgroundSec' ${String(raw)}s exceeds int32 ms limit, clamped to ${value}s ` +
+				`(${getLlmSharedConfigPath(CONFIG_PKG)}).`,
+		);
+	}
+	return value;
 }
 
 /**
@@ -147,15 +193,16 @@ export function normalizeBaseToolEnhanceConfig(raw: unknown): BaseToolEnhanceCon
 	return {
 		forceBackgroundPatterns: normalizeForceBackgroundPatterns(raw.forceBackgroundPatterns),
 		disableBuiltinForcePatterns: normalizeDisableBuiltinForcePatterns(raw.disableBuiltinForcePatterns),
-		foregroundTimeoutSeconds: normalizeTimeoutSeconds(raw.foregroundTimeoutSeconds, "foregroundTimeoutSeconds"),
-		backgroundTimeoutSeconds: normalizeTimeoutSeconds(raw.backgroundTimeoutSeconds, "backgroundTimeoutSeconds"),
+		foregroundTimeoutSeconds: normalizeSecondsKey(raw.foregroundTimeoutSeconds, "foregroundTimeoutSeconds", null),
+		backgroundTimeoutSeconds: normalizeSecondsKey(raw.backgroundTimeoutSeconds, "backgroundTimeoutSeconds", null),
+		idleBackgroundSec: normalizeIdleBackgroundSec(raw.idleBackgroundSec),
 		maxConcurrentBackground: normalizeMaxConcurrentBackground(raw.maxConcurrentBackground),
 	};
 }
 
 /**
  * 加载配置（每次调用直接走 loadConfig 读时刷新——热重载契约，禁止上层缓存）。
- * 文件不存在 / 坏 JSON → 全默认值 + warn（§3.6：工具按默认值继续工作）。
+ * 文件不存在 / 坏 JSON → 全默认值 + warn（工具按默认值继续工作）。
  */
 export function loadBaseToolEnhanceConfig(): BaseToolEnhanceConfig {
 	return loadConfig(CONFIG_PKG, DEFAULT_BASE_TOOL_ENHANCE_CONFIG, normalizeBaseToolEnhanceConfig, (msg) => {

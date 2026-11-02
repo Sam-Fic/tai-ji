@@ -4,6 +4,9 @@ export default {
   //（编辑重发/撤回）被门拒绝——专属文案指引回主会话视图，不落通用失败文案。
   vidViewReadonly: '当前视图为会话快照，该操作仅支持在主会话视图执行',
   nextTurnSendFailed: '下轮消息发送失败：{msg}',
+  // [fix-chat-flow-stuck C-4] 停止请求 65s 兜底超时：pi 大概率挂死（abort RPC 无回执），
+  // 唯一收敛出口 = 侧栏右键「强制退出」——toast 指引恢复动作，不得静默
+  abortTimedOut: '停止请求超时：会话可能已无响应，请在侧边栏右键该会话选择「强制退出」',
   // C2 /compact 后台化：受理回执（info，命令回显口径，文案与扩展 busy/完成回执同一事实描述）
   compactStarted: '后台压缩已启动，可继续对话；完成后会收到结果通知。',
   compactStartFailed: '后台压缩启动失败：{msg}',

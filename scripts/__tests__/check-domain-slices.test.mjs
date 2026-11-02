@@ -265,10 +265,10 @@ describe('纯函数', () => {
 })
 
 describe('真实仓库全量校验（全域注册终态）', () => {
-  it('40 域全部 filled 且 W2-B 14 域全部 enforced（未覆盖仅报告）', () => {
+  it('41 域全部 filled 且 W2-B 14 域全部 enforced（未覆盖仅报告）', () => {
     const r = spawnSync('node', [SCRIPT], { encoding: 'utf8', cwd: SCRIPT_DIR })
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('[domain-slices] OK：40 域（filled 40 / pending 0）')
+    expect(r.stdout).toContain('[domain-slices] OK：41 域（filled 41 / pending 0）')
     expect(r.stdout).toContain('W2-B 交叉核对 enforced 14 / pending 0')
   }, 120_000)
 })

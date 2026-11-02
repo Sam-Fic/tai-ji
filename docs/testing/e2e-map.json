@@ -314,7 +314,8 @@
         "packages/runtime/src/transport/session-message-handler.ts",
         "packages/shared/src/protocol.ts",
         "packages/shared/src/virtual-session-id.ts",
-        "e2e/btw-turn-isolation.spec.ts"
+        "e2e/btw-turn-isolation.spec.ts",
+        "extensions/universal/base-tool-enhance/**"
       ],
       "layer": "L3",
       "assets": [
@@ -1384,7 +1385,8 @@
       "scope": [
         "packages/subagent-core/src/execution/engine/**",
         "packages/subagent-core/src/execution/service/workflow-dispatch.ts",
-        "packages/pi-subagent-cli/src/**"
+        "packages/pi-subagent-cli/src/**",
+        "extensions/universal/base-tool-enhance/**"
       ],
       "layer": "L3",
       "assets": [
@@ -1412,7 +1414,8 @@
         "packages/subagent-core/src/execution/service/workflow-dispatch.ts",
         "packages/pi-subagent-cli/src/**",
         "packages/subagent-core/src/execution/service/member-reuse-pool.ts",
-        "packages/subagent-core/workflows/fan-out.js"
+        "packages/subagent-core/workflows/fan-out.js",
+        "extensions/universal/base-tool-enhance/**"
       ],
       "layer": "L3",
       "assets": [
@@ -1447,7 +1450,8 @@
         "packages/subagent-core/src/execution/engine/**",
         "packages/subagent-core/src/execution/service/workflow-dispatch.ts",
         "packages/subagent-core/src/execution/service/chat-rounds.ts",
-        "packages/pi-subagent-cli/src/**"
+        "packages/pi-subagent-cli/src/**",
+        "extensions/universal/base-tool-enhance/**"
       ],
       "layer": "L3",
       "assets": [
@@ -1473,7 +1477,8 @@
       "scope": [
         "packages/subagent-core/src/execution/engine/**",
         "packages/subagent-core/src/execution/service/workflow-dispatch.ts",
-        "packages/zcode-subagent-cli/src/**"
+        "packages/zcode-subagent-cli/src/**",
+        "extensions/universal/base-tool-enhance/**"
       ],
       "layer": "L3",
       "assets": [
@@ -5222,6 +5227,66 @@
       "note": "手动门登记（非 TAIJI_TEST_INTEGRATION 族 env：门控 = ENGINE_CONFORMANCE_LIVE，方向与集成门控相反——本地按需跑、CI 不跑，需引擎已装 + 有效凭据 + 公网可达，缺省 ZCODE_E2E_MODEL / PI_LIVE_MODEL 指定真调模型；trigger=on-diff 仅声明「scope 内引擎适配层 diff 命中才需重跑」，实际执行为手动 / 验收节点，登记口径同 E2E-UPDATER-01 的 E2E 档先例）。两包 conformance live 是同一资产族，合一条 rule 双 asset（zcode-subagent-cli 覆盖 schema 全链 3 例；subagent-core 跑 conformance 最小子集 4 例）；两文件已各自独立 live 池（两包 vitest.config.ts）：可手动以 --project '!live' 排除该池（当前全量入口 test 脚本未接该旗标，env 未设时收集即 skip 的 7 条计数仍进全量输出），显式路径单独跑不受影响。断言本质 = 引擎适配层对真实引擎进程的真实调用链不变量（事件流不变量 + 关键终态，不做逐字段 diff）。serial=真 的理由 = 公网真调模型，重载荷 + 速率敏感。"
     },
     {
+      "id": "E2E-INTEG-72",
+      "summary": "base-tool-enhance 空闲转后台包装脚本真进程层：idle 触发转后台存活 / 触发时序 / 退出码透传 / 逐字抄送（含 UTF-8 多字节跨批次） / N1 持续输出不转后台（TAIJI_TEST_INTEGRATION 门控）",
+      "scope": [
+        "extensions/universal/base-tool-enhance/bin/taiji-fg-wrap"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "extensions/universal/base-tool-enhance/src/__tests__/wrapper-foreground-idle.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "TAIJI_TEST_INTEGRATION=1 pnpm --filter @zhushanwen/pi-base-tool-enhance exec vitest run src/__tests__/wrapper-foreground-idle.test.ts",
+      "owner": "extensions/universal/base-tool-enhance",
+      "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
+      "note": "R2 态 + 用例级门控（文件留 main 默认组；门控 = TAIJI_TEST_INTEGRATION，SSOT = test-guard/integration-gate.ts，skip 理由注入 describe 名）。被测对象 = bin/taiji-fg-wrap 包装脚本本体（foreground-idle-to-background 设计 §5 部件 1），自包含真进程集成：真 spawn 包装脚本 + 真实时钟空闲触发，不依赖扩展运行时。触发条件 = scope 内包装脚本 diff 命中（bash-tool.ts 侧收尾判定改动另由 E2E-INTEG-73 承接）。断言本质 = idle 满阈值转后台（命令进程存活 + 输出抄送逐字不丢）+ 触发时序窗 + 退出码透传 + N1 持续输出刷新空闲计时不转后台；serial=真 的理由 = 真子进程 + 真实时钟空闲窗（idle 2s 窗 ±0.5s 判定），OS 调度延迟无稳定上界（fake timers 控制不了子进程时钟，全部用短 idle 实测）。CI test-extensions job 已带 env=1。（fix-chat-flow-stuck 合并时自 E2E-INTEG-70 重编号为 E2E-INTEG-72）"
+    },
+    {
+      "id": "E2E-INTEG-73",
+      "summary": "base-tool-enhance execute 改写层真 shell 集成：矩阵 A 七格分流 / 包装命令构造 / 收尾 pid 判定两分支 / registerConvertedTask 三步登记（TAIJI_TEST_INTEGRATION 门控）",
+      "scope": [
+        "extensions/universal/base-tool-enhance/src/bash-tool.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "extensions/universal/base-tool-enhance/src/__tests__/injector-foreground-branch.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "TAIJI_TEST_INTEGRATION=1 pnpm --filter @zhushanwen/pi-base-tool-enhance exec vitest run src/__tests__/injector-foreground-branch.test.ts",
+      "owner": "extensions/universal/base-tool-enhance",
+      "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
+      "note": "R2 态 + 用例级门控（文件留 main 默认组；门控 = TAIJI_TEST_INTEGRATION，SSOT = test-guard/integration-gate.ts，skip 理由注入 describe 名）。被测对象 = bash-tool.ts 的 createBashOverrideToolDefinition（foreground-idle-to-background M1）；真 wrapper 由本文件用本地 fixture bash 脚本模拟 pidfile 契约——officialExecute mock 真跑 fixture，包装命令串经真实 shell 解析（引号/空格路径一并覆盖），真 wrapper 集成由 E2E-INTEG-72 承接。触发条件 = scope 内 execute 改写层 diff 命中。断言本质 = 矩阵 A 分流（A5 包装构造全参 / A3/A4 不包装 / A7 win32 回落 / A6 子代理 / N3 关闭）+ 收尾 pid 判定（活=登记 / 死=不登记且三文件删除）+ registerConvertedTask 三步落点与池满计数；serial=真 的理由 = fixture 真子进程 spawn + 真实 shell 解析，进程退出时序无稳定上界。CI test-extensions job 已带 env=1。（fix-chat-flow-stuck 合并时自 E2E-INTEG-71 重编号为 E2E-INTEG-73）"
+    },
+    {
+      "id": "E2E-INTEG-74",
+      "summary": "base-tool-enhance 转后台任务退出守望：谓词三分支真值表（ESRCH 收尾 / 存活继续 / pid 复用不杀）+ ps 失败保守跳过 + finalize 链落点（TAIJI_TEST_INTEGRATION 门控）",
+      "scope": [
+        "extensions/universal/base-tool-enhance/src/background/exit-watch.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "extensions/universal/base-tool-enhance/src/__tests__/exit-watch.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "TAIJI_TEST_INTEGRATION=1 pnpm --filter @zhushanwen/pi-base-tool-enhance exec vitest run src/__tests__/exit-watch.test.ts",
+      "owner": "extensions/universal/base-tool-enhance",
+      "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
+      "note": "R2 态 + 用例级门控（文件留 main 默认组；门控 = TAIJI_TEST_INTEGRATION，SSOT = test-guard/integration-gate.ts，skip 理由注入 describe 名）。被测对象 = exit-watch.ts 退出守望（foreground-idle-to-background 设计 §5 部件 5）：转后台命令 reparent 到 init 后无 exit 事件，轮询 isPidAlive + start-time 身份校验收尾（exitCode 恒 null 落中性通知链，同 E2E-INTEG-50 的 notify 收尾口径）。触发条件 = scope 内守望源 diff 命中。断言本质 = 谓词三分支真值表（ESRCH→finalize / 存活且 start time 匹配→继续守望 / start time 漂移=pid 复用→按退出收尾且不杀无关进程）+ ps 原语失败（读不到 start time）绝不触发 finalize + 间隔驱动 attach 接线；serial=真 的理由 = 真子进程生死时序 + 守望间隔轮询窗口，无确定性完成信号。CI test-extensions job 已带 env=1。（fix-chat-flow-stuck 合并时自 E2E-INTEG-72 重编号为 E2E-INTEG-74）"
+    },
+    {
       "id": "E2E-PIPE-23",
       "summary": "测试执行域触发档机制（round6 Wave2）：domain-map.json 单一权威源（14 域 / 99 个挂载渲染重型文件）+ run-domain-tests 按域跑 + check-domain-map 健康度检查（结构/存在性/唯一归属/挂载特征/消费方接线）+ 两包 vitest exclude 派生",
       "scope": [
@@ -5872,6 +5937,25 @@
       "owner": "packages/runtime",
       "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
       "note": "REAL_PI_READY 门控资产（真实凭证层，check-slow-tests 门控豁免登记 2026-10-31）：本地有凭证时该 describe 真跑、用例耗时 2.8-4.4s 超 2s 阈值，属门控资产不占默认组预算；faux 层（同文件前半 7 条）mock 化单测在默认组，无慢用例；trigger=on-diff 仅为清单触发提示形态，实际执行保持开发机手动（凭证相关），不进 CI 自动执行"
+    },
+    {
+      "id": "E2E-INTEG-75",
+      "summary": "静默判定矩阵单测组：T/T_hint 阈值推导、豁免锚点、在途信号刷新、判死触发与分型（pi-stall-detection U4；纯单测无真实 pi；fix-chat-flow-stuck 合并时自 E2E-INTEG-73 重编号为 E2E-INTEG-75）",
+      "scope": [
+        "packages/runtime/src/services/session/event-interpreter-silence.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "packages/runtime/test/silence-matrix.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "owner": "packages/runtime",
+      "serial": true,
+      "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
+      "run": "pnpm --filter @taiji/runtime exec vitest run test/silence-matrix.test.ts"
     }
   ]
 }

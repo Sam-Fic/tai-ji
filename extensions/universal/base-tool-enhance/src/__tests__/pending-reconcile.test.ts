@@ -1,17 +1,22 @@
-// src/__tests__/pending-reconcile.test.ts —— M3 session_start 对账单元（§3.5 接入细则 4）
-// + 收殓终态通知补投（unified-delivery D3 裁决 1 / §5 波 3）：
+// src/__tests__/pending-reconcile.test.ts —— M3 session_start 对账单元
+// + 终态通知对账补投（completion-signal-delivery D2/D6 三重事实判据；收殓形态 =
+// unified-delivery 波 3 既有子集；投递统一化设计的现行登记处 =
+// ADR-0074 与 docs/CONTEXT.md「统一投递（unified delivery，v3）」段）：
 //  - bt- 差集（protocol collectActivePendingIds 单点消费）/ 三类僵尸场景 appendEntry
 //    权威路径（唯一写路径，无 emit）/ 活任务与缺条目保守跳过
-//  - 收殓补投：候选 = 收殓终态（orphaned / exited+process-exit）∧ 送达痕迹未命中，
-//    逐任务经 port.deliver（id=taskId、terminated 措辞、无 details）；真实终态
-//    （natural/timeout）退役出补投——主路径入账后丢失由 port 的 outbox 差集重放覆盖
-//    （对位说明：投递 throw → 内核 retain + 边沿重放；落盘后崩溃 → outbox 差集重放；
-//    两形态由 delivery-port 包测试锁定，本文件锁定「对账不再覆盖它们」）
+//  - 终态补投候选 = 三重磁盘事实（registry 终态 ∧ 送达痕迹未命中 ∧ 投递日志无该
+//    幂等键条目；killed 成因排除位）。payload 分层（D6）：rejected 补投（exited
+//    natural/timeout——主路径受理被拒、投递日志无条目，差集重放结构性无从覆盖）=
+//    主路径同款 content + details + collectKey；收殓补投（orphaned / process-exit，
+//    无投递日志条目形态）维持 terminated 简报、无 details（「不谎报」既有裁决，
+//    断言不删）
+//  - killed 成因排除位：kill 发令方当次交互已同步获知结果（notify.ts kill 路径
+//    通知不入账单点归属规则），补投是重复刺激（N1 场景）
 //  - 旧补投标记 / in-flight 单飞检查随波 3 退役：防双投由 port 幂等接管（deliver
 //    幂等预检 + 内核三级判重 + outbox/ack 终态列）——本文件锁定「marker 在场不再
 //    阻断重投」（痕迹缺失即重投，旧 marker「标记在而消息丢」残余失败域随之修复）
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -31,11 +36,16 @@ vi.mock("@zhushanwen/pi-extension-logger", () => ({
 }));
 
 import {
+	isReapNotifyCandidate,
 	reconcilePendingEntries,
 	type ReconcileDeliver,
 	type ReconcilePi,
 } from "../background/pending-reconcile.ts";
-import { BACKGROUND_BASH_CUSTOM_TYPE } from "../background/notify.ts";
+import {
+	BACKGROUND_BASH_CUSTOM_TYPE,
+	buildNotificationContent,
+	buildNotifyDetails,
+} from "../background/notify.ts";
 import { getRegistryPath, writeRegistryEntry } from "../background/registry.ts";
 import type { RegistryEntry } from "../background/types.ts";
 
@@ -105,6 +115,35 @@ function legacyMarkerEntry(taskId: string) {
 	};
 }
 
+/** 投递日志 outbox entry（journal v2 落盘形态——port 受理前 appendEntry 写入）。 */
+function journaledOutboxEntry(id: string) {
+	return {
+		type: "custom",
+		customType: "delivery-port-outbox",
+		data: {
+			v: 2,
+			id,
+			timing: "steer",
+			payload: {
+				kind: "custom",
+				customType: BACKGROUND_BASH_CUSTOM_TYPE,
+				content: `notify ${id}`,
+				display: true,
+			},
+			recordedAt: 1,
+		},
+	};
+}
+
+/** 投递日志终局 entry（ack 列——delivered 终局形态）。 */
+function journaledAckEntry(id: string) {
+	return {
+		type: "custom",
+		customType: "delivery-port-ack",
+		data: { v: 2, id, outcome: "delivered" },
+	};
+}
+
 afterEach(() => {
 	rmSync(DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 	vi.clearAllMocks();
@@ -149,7 +188,7 @@ describe("bt- diff via protocol collectActivePendingIds (single-source diff core
 		expect([...ids]).toEqual(["bt-a"]);
 	});
 
-	it("register→unregister→register same id stays settled (global cancellation, §5.4①)", () => {
+	it("register→unregister→register same id stays settled (global cancellation)", () => {
 		const ids = collectActivePendingIds(
 			[
 				registerEntry("bt-a"),
@@ -187,6 +226,10 @@ describe("reconcile scenario ①: graceful-exit leftover (registry exited, entry
 	it("maps exited reason/exitCode through the same mapping as the exit edge", async () => {
 		const cases: Array<[RegistryEntry, string]> = [
 			[makeRegistryEntry({ state: "exited", reason: "natural", exitCode: 3 }), "failed"],
+			// natural + 无退出码 = 结果未知形态（转后台任务 reparent 无父权，退出码结构性
+			// 不可得——foreground-idle-to-background §5 部件 5）：session_start 对账落
+			// reason/status 双 unknown，与 exit 边沿同引 toPendingReason 单点
+			[makeRegistryEntry({ state: "exited", reason: "natural", exitCode: null }), "unknown"],
 			[makeRegistryEntry({ state: "exited", reason: "timeout", exitCode: null }), "time_limited"],
 			[makeRegistryEntry({ state: "exited", reason: "killed", exitCode: null }), "cancelled"],
 			[makeRegistryEntry({ state: "exited", reason: "process-exit", exitCode: null }), "cancelled"],
@@ -209,14 +252,17 @@ describe("entry status maps via protocol mapReasonToStatus (D10 single-source, i
 	// bte 写侧 status 与 pending-notifications unregister listener 同引 protocol 单点
 	// （ext-simplify-17 D10）——原 status: reason 的 identity 假设在非 identity reason
 	// （budget_limited→failed 等）上会静默漂移，映射表演化时两写侧不再可能分叉。
-	// settle 产域四值当前恰为 identity 映射，但断言范围按「status === mapReasonToStatus
+	// settle 产域各值当前恰为 identity 映射，但断言范围按「status === mapReasonToStatus
 	// (reason)」表述：映射表日后改任何一行的口径，本组用例随实现同源自洽。
 	it("appended status equals the authoritative mapping for every reason the settle path can produce", () => {
-		// settledPendingReason 全产域：exited 三分支（natural/timeout/killed|process-exit
-		// 经 toPendingReason）+ orphaned/判死兜底 cancelled + reason 缺失防御分支
-		const settleReasons = ["completed", "failed", "time_limited", "cancelled"] as const;
+		// settledPendingReason 全产域：exited 三分支（natural 按 exitCode 分流 completed/
+		// failed/unknown——null = 结果未知形态；timeout；killed|process-exit 经
+		// toPendingReason）+ orphaned/判死兜底 cancelled + reason 缺失防御分支。
+		// unknown 经 mapReasonToStatus 的 fail-visible 缺省档返回 'unknown'（词表未显式
+		// 登记该键、走 default，结果仍 identity）
+		const settleReasons = ["completed", "failed", "time_limited", "cancelled", "unknown"] as const;
 		for (const reason of settleReasons) {
-			expect(mapReasonToStatus(reason)).toBe(reason); // 当前口径下四值均为 identity 映射
+			expect(mapReasonToStatus(reason)).toBe(reason); // 当前口径下各值均为 identity 映射
 		}
 	});
 
@@ -228,7 +274,7 @@ describe("entry status maps via protocol mapReasonToStatus (D10 single-source, i
 		expect(mapReasonToStatus("interrupted-by-restart")).toBe("aborted");
 		expect(mapReasonToStatus("interrupted-by-parent")).toBe("aborted");
 		expect(mapReasonToStatus("reopened")).toBe("completed");
-		// 词表外 reason 缺省 unknown（fail-visible——§3.3.11④ fail-open=completed 废除）
+		// 词表外 reason 缺省 unknown（fail-visible——fail-open=completed 已废除，登记处见文件头）
 		expect(mapReasonToStatus("some-future-reason")).toBe("unknown");
 	});
 });
@@ -362,7 +408,7 @@ describe("appendEntry failure tolerance", () => {
 });
 
 // ============================================================================
-// 收殓终态通知补投（unified-delivery D3 裁决 1 / §5 波 3：对账路径 = 收殓终态
+// 收殓终态通知补投（unified-delivery D3 裁决 1 / 波 3，登记处见文件头：对账路径 = 收殓终态
 // 通知的唯一生产者，载体 = port.deliver）
 // ============================================================================
 
@@ -389,8 +435,8 @@ describe("reap-notify: candidates (reaped terminal × trace absent) via port.del
 		// 收殓终态无业务 details（old decision 3 保持：无时长、不谎报成败）
 		expect(envelope.payload).not.toHaveProperty("details");
 		expect(envelope.payload.content).not.toMatch(/\d+[smh]/);
-		// collectKey 债权申报 = [taskId]（result-collect 设计 §3.4：对账补投条目带键，
-		// 与主链 notify.ts 同款，collect 可收取收殓终态）
+		// collectKey 债权申报 = [taskId]（result-collect 域，现行登记处 = ADR-0146：
+		// 对账补投条目带键，与主链 notify.ts 同款，collect 可收取收殓终态）
 		const opts = deliver.mock.calls[0][1] as { collectKey?: string[] } | undefined;
 		expect(opts?.collectKey).toEqual([entry.taskId]);
 		expect(result.redelivered).toEqual([entry.taskId]);
@@ -438,37 +484,59 @@ describe("reap-notify: candidates (reaped terminal × trace absent) via port.del
 	});
 });
 
-describe("reap-notify: exclusion criteria (real terminal retired, killed/active excluded, trace blocks)", () => {
-	it("exited natural (real terminal) is NOT re-notified — outbox replay owns it now (wave-3 retirement)", async () => {
+describe("reap-notify: rejected redelivery candidates (exited natural/timeout, main-path payload)", () => {
+	it("exited natural with no trace and no journal entry IS re-notified with main-path-equivalent payload (D6①)", async () => {
 		const entry = makeRegistryEntry({
 			taskId: "bt-1700000000-genu01",
 			state: "exited",
 			reason: "natural",
 			exitCode: 0,
 			durationMs: 192_000,
+			tailSummary: "Tests: 42 passed",
 		});
 		writeRegistryEntry(getRegistryPath(DATA_DIR, SESSION_ID), entry);
 		const deliver = createMockDeliver();
 
 		const result = await reconcilePendingEntries(createMockPi(), DATA_DIR, SESSION_ID, [], deliver);
 
-		// 主路径丢失两形态（投递 throw / 落盘后崩溃）由 port outbox 差集重放覆盖
-		// （delivery-port 包测试锁定）；对账补投不再兜它们（D3 裁决 1 波 3）
-		expect(deliver).not.toHaveBeenCalled();
-		expect(result.redelivered).toEqual([]);
+		// rejected 补投（completion-signal-delivery D2/D6①）：主路径受理被拒时投递日志
+		// 无条目、差集重放结构性无从覆盖——对账补投的就是主路径本要发的那条通知，
+		// content/details 与主链（notify.ts）同一构造单点（registry 条目直接满足
+		// NotificationTaskLike 参数子集）
+		expect(deliver).toHaveBeenCalledTimes(1);
+		const envelope = deliver.mock.calls[0][0] as DeliverEnvelope;
+		expect(envelope.id).toBe(entry.taskId);
+		expect(envelope.timing).toBe("steer");
+		expect(envelope.payload.customType).toBe(BACKGROUND_BASH_CUSTOM_TYPE);
+		expect(envelope.payload.content).toBe(buildNotificationContent(entry));
+		expect(envelope.payload.details).toEqual(buildNotifyDetails(entry));
+		const opts = deliver.mock.calls[0][1] as { collectKey?: string[] } | undefined;
+		expect(opts?.collectKey).toEqual([entry.taskId]);
+		expect(result.redelivered).toEqual([entry.taskId]);
 	});
 
-	it("exited timeout (real terminal) is NOT re-notified either", async () => {
-		const entry = makeRegistryEntry({ taskId: "bt-1700000000-time01", state: "exited", reason: "timeout", exitCode: null });
+	it("exited timeout is re-notified the same way (D6①: same content/details constructors)", async () => {
+		const entry = makeRegistryEntry({
+			taskId: "bt-1700000000-time01",
+			state: "exited",
+			reason: "timeout",
+			exitCode: null,
+			durationMs: 15_000,
+		});
 		writeRegistryEntry(getRegistryPath(DATA_DIR, SESSION_ID), entry);
 		const deliver = createMockDeliver();
 
 		await reconcilePendingEntries(createMockPi(), DATA_DIR, SESSION_ID, [], deliver);
 
-		expect(deliver).not.toHaveBeenCalled();
+		expect(deliver).toHaveBeenCalledTimes(1);
+		const envelope = deliver.mock.calls[0][0] as DeliverEnvelope;
+		expect(envelope.payload.content).toBe(buildNotificationContent(entry));
+		expect(envelope.payload.details).toEqual(buildNotifyDetails(entry));
 	});
+});
 
-	it("exited reason=killed is NOT re-notified (excluded via the process-exit-only branch — silent rule)", async () => {
+describe("reap-notify: exclusion criteria (journaled/trace/killed/active excluded)", () => {
+	it("exited reason=killed is NOT re-notified (cause exclusion slot — kill requester already knows, N1)", async () => {
 		const entry = makeRegistryEntry({ taskId: "bt-1700000000-kill01", state: "exited", reason: "killed", exitCode: null });
 		writeRegistryEntry(getRegistryPath(DATA_DIR, SESSION_ID), entry);
 		const deliver = createMockDeliver();
@@ -583,3 +651,190 @@ describe("reap-notify: receipt handling & port absence (idempotence owned by por
 		expect(pi.appendEntry).toHaveBeenCalledWith("pending:unregister", expect.anything());
 	});
 });
+
+// ── RL3：三重判据四态真值表（V3 场景单测化；每态各归各通道，completion-signal-delivery D2）──
+describe("RL3: triple-fact judgement truth table (four states, each owned by its channel)", () => {
+	async function runTruthTable(entries: unknown[]): Promise<ReturnType<typeof createMockDeliver>> {
+		const entry = makeRegistryEntry({
+			taskId: "bt-1700000000-rl3001",
+			state: "exited",
+			reason: "natural",
+			exitCode: 0,
+			durationMs: 5_000,
+		});
+		writeRegistryEntry(getRegistryPath(DATA_DIR, SESSION_ID), entry);
+		const deliver = createMockDeliver();
+		await reconcilePendingEntries(createMockPi(), DATA_DIR, SESSION_ID, entries, deliver);
+		return deliver;
+	}
+
+	it("state① rejected loss (terminal × no trace × no journal entry) → re-notify exactly once", async () => {
+		const deliver = await runTruthTable([]);
+		expect(deliver).toHaveBeenCalledTimes(1);
+	});
+
+	it("state② accepted in-flight (journal entry, no trace yet) → NOT re-notified (outbox replay owns it)", async () => {
+		// 受理已发生（投递日志有条目）未送达 = port 差集重放的职责——补投与重放职责
+		// 不重叠（D2 采用段；重投被幂等吞并徒增 swallowed warn 噪音）
+		const deliver = await runTruthTable([journaledOutboxEntry("bt-1700000000-rl3001")]);
+		expect(deliver).not.toHaveBeenCalled();
+	});
+
+	it("state③ main path delivered-and-terminal (outbox + ack) → NOT re-notified", async () => {
+		const deliver = await runTruthTable([
+			journaledOutboxEntry("bt-1700000000-rl3001"),
+			journaledAckEntry("bt-1700000000-rl3001"),
+		]);
+		expect(deliver).not.toHaveBeenCalled();
+	});
+
+	it("state④ delivered trace present (notify message in entries) → NOT re-notified", async () => {
+		const deliver = await runTruthTable([deliveredEntry("bt-1700000000-rl3001")]);
+		expect(deliver).not.toHaveBeenCalled();
+	});
+});
+
+// ── RL12：判据单一导出行为锁（判据面；三入口共享同一函数的编排面在 maintenance-once.test.ts）──
+describe("RL12: single exported judgement — same facts, same verdict from any edge", () => {
+	it("isReapNotifyCandidate is deterministic per (entry, delivered, journaled); exclusion/trace/journal facts are orthogonal", () => {
+		const entry = makeRegistryEntry({
+			taskId: "bt-1700000000-judg01",
+			state: "exited",
+			reason: "natural",
+			exitCode: 0,
+		});
+		const empty = new Set<string>();
+		// 同一事实状态任意次调用恒同输出（三边沿入口共用本函数——不存在第二套真值）
+		expect(isReapNotifyCandidate(entry, empty, empty)).toBe(true);
+		expect(isReapNotifyCandidate(entry, empty, empty)).toBe(true);
+		// 三事实正交：任一命中即非候选
+		expect(isReapNotifyCandidate(entry, new Set([entry.taskId]), empty)).toBe(false);
+		expect(isReapNotifyCandidate(entry, empty, new Set([entry.taskId]))).toBe(false);
+		// 排除位：killed 即便三重其余全缺也非候选（N1）
+		const killedEntry = makeRegistryEntry({
+			taskId: "bt-1700000000-judg02",
+			state: "exited",
+			reason: "killed",
+			exitCode: null,
+		});
+		expect(isReapNotifyCandidate(killedEntry, empty, empty)).toBe(false);
+	});
+});
+
+// ── A1 产品缺陷修复回归：补投判据事实源磁盘化 ──
+// 缺陷链（A1 验收 4 次确定性复现）：pi SessionManager._appendEntry 先 fileEntries.push
+// 后 _persist、persist 失败（真机注入形态 = session JSONL chmod 0444，EACCES 挡写不挡
+// 读）无回滚 → 幽灵内存 outbox entry（内存账在册、JSONL 无行）；判据曾消费
+// getEntries() 内存账 → journaled 误真 → 补投静默失效。修复后事实源 = session JSONL
+// 落盘条目（reconcilePendingEntries 第 6 参 sessionFile，index.ts 经
+// getSessionFile() 传入）。单测模拟形态 = 内存 entries 与磁盘文件不一致（幽灵态的
+// 定义特征），与真机 chmod 注入同族（同是「内存有、盘上无」的产物）。
+describe("reap-notify: disk-fact journal source (ghost in-memory entry regression, A1 fix)", () => {
+	const TASK_ID = "bt-1700000000-ghst01";
+	const SESSION_FILE = join(DATA_DIR, "session.jsonl");
+
+	function exitedNaturalEntry(): RegistryEntry {
+		return makeRegistryEntry({
+			taskId: TASK_ID,
+			state: "exited",
+			reason: "natural",
+			// 转后台任务退出码结构性不可得（A1 场景 exit code unknown 形态）
+			exitCode: null,
+			durationMs: 16_034,
+			tailSummary: "done",
+		});
+	}
+
+	function writeSessionFile(lines: unknown[]): void {
+		mkdirSync(DATA_DIR, { recursive: true });
+		writeFileSync(SESSION_FILE, lines.map((l) => JSON.stringify(l)).join("\n") + (lines.length > 0 ? "\n" : ""));
+	}
+
+	it("ghost in-memory outbox entry (in memory, absent on disk) → re-notify (A1 regression)", async () => {
+		writeRegistryEntry(getRegistryPath(DATA_DIR, SESSION_ID), exitedNaturalEntry());
+		// 磁盘事实：JSONL 只含一条无关行（EACCES 实况——outbox persist 被挡，盘上无该 taskId 任何行）
+		writeSessionFile([{ type: "message", id: "m1", message: { role: "user", content: "hi" } }]);
+		// 内存账：幽灵 outbox entry（rejected 首败即留一条，含单次重提则两条，取其一已足命中）
+		const ghostEntries = [journaledOutboxEntry(TASK_ID)];
+		const deliver = createMockDeliver();
+
+		const result = await reconcilePendingEntries(createMockPi(), DATA_DIR, SESSION_ID, ghostEntries, deliver, SESSION_FILE);
+
+		expect(deliver).toHaveBeenCalledTimes(1);
+		expect(result.redelivered).toEqual([TASK_ID]);
+	});
+
+	it("ghost delivered trace (notify message in memory, absent on disk) → re-notify (delivered fact reads disk)", async () => {
+		writeRegistryEntry(getRegistryPath(DATA_DIR, SESSION_ID), exitedNaturalEntry());
+		writeSessionFile([]);
+		const ghostEntries = [deliveredEntry(TASK_ID)];
+		const deliver = createMockDeliver();
+
+		const result = await reconcilePendingEntries(createMockPi(), DATA_DIR, SESSION_ID, ghostEntries, deliver, SESSION_FILE);
+
+		expect(deliver).toHaveBeenCalledTimes(1);
+		expect(result.redelivered).toEqual([TASK_ID]);
+	});
+
+	it("outbox entry present on disk → NOT re-notified (disk fact positive: journaled reads JSONL)", async () => {
+		writeRegistryEntry(getRegistryPath(DATA_DIR, SESSION_ID), exitedNaturalEntry());
+		writeSessionFile([journaledOutboxEntry(TASK_ID)]);
+		const deliver = createMockDeliver();
+
+		const result = await reconcilePendingEntries(createMockPi(), DATA_DIR, SESSION_ID, [], deliver, SESSION_FILE);
+
+		expect(deliver).not.toHaveBeenCalled();
+		expect(result.redelivered).toEqual([]);
+	});
+
+	it("session file missing (ENOENT, pre-first-flush) → re-notify (normal path, empty disk facts)", async () => {
+		writeRegistryEntry(getRegistryPath(DATA_DIR, SESSION_ID), exitedNaturalEntry());
+		const deliver = createMockDeliver();
+
+		const result = await reconcilePendingEntries(createMockPi(), DATA_DIR, SESSION_ID, [], deliver, SESSION_FILE);
+
+		expect(deliver).toHaveBeenCalledTimes(1);
+		expect(result.redelivered).toEqual([TASK_ID]);
+	});
+
+	it("session file unreadable (chmod 0000, read-side EACCES) → treated as empty, re-notify + warn (expose-problem direction)", async () => {
+		writeRegistryEntry(getRegistryPath(DATA_DIR, SESSION_ID), exitedNaturalEntry());
+		writeSessionFile([journaledOutboxEntry(TASK_ID)]);
+		chmodSync(SESSION_FILE, 0o000);
+		const deliver = createMockDeliver();
+		try {
+			const result = await reconcilePendingEntries(createMockPi(), DATA_DIR, SESSION_ID, [], deliver, SESSION_FILE);
+			// 读失败按宽容口径空集（与 journaled「畸形按无条目」同向）：判据放行补投，
+			// 重投由 port 幂等预检收敛；按内存账退化则沿幽灵态静默吞补投 = 缺陷形态本身
+			expect(deliver).toHaveBeenCalledTimes(1);
+			expect(result.redelivered).toEqual([TASK_ID]);
+			expect(loggerMock.warn).toHaveBeenCalledWith(
+				expect.stringContaining("journal facts read failed"),
+				expect.anything(),
+			);
+		} finally {
+			chmodSync(SESSION_FILE, 0o644);
+		}
+	});
+
+	it("sessionFile absent (no-persist form) → falls back to in-memory entries + warn (registered degradation)", async () => {
+		writeRegistryEntry(getRegistryPath(DATA_DIR, SESSION_ID), exitedNaturalEntry());
+		// no-persist 形态 _persist no-op 恒成功、无幽灵态，内存账即完整事实：内存
+		// outbox entry = 真受理 → 不补投（现状行为，磁盘事实结构性不存在时的唯一事实源）
+		const inMemoryEntries = [journaledOutboxEntry(TASK_ID)];
+		const deliver = createMockDeliver();
+
+		const result = await reconcilePendingEntries(createMockPi(), DATA_DIR, SESSION_ID, inMemoryEntries, deliver);
+
+		expect(deliver).not.toHaveBeenCalled();
+		expect(result.redelivered).toEqual([]);
+		expect(loggerMock.warn).toHaveBeenCalledWith(
+			expect.stringContaining("fell back to in-memory entries"),
+			expect.anything(),
+		);
+	});
+});
+
+// readSessionFileEntries 容错段已随判据链收编迁 @zhushanwen/pi-delivery-port
+// reconcile-judgement.test.ts 单点锁定（三域物理副本退役）；域侧经「session file
+// 不可读 → 盘事实按空 + warn」编排用例（deliverReapNotifications 段）覆盖组合行为。

@@ -1,14 +1,15 @@
 /**
- * bash_output 工具（D9：独立小工具，查询与 kill 权限语义分离）。
+ * bash_output 工具（D9：独立小工具，查询与 kill 权限语义分离；规格与查询
+ * 归属边界由本文件头注释直接承载，见下）。
  *
- * 规格（§3.5）：{task_id?}。
+ * 规格：{task_id?}。
  *  - 省略 = list：单例表与 registry 终态条目合并（同 task_id 以单例表为准——它的
  *    状态更新），返回 {tasks:[...]}，按 startedAt 升序
  *  - 指定 = 详情：{state, exitCode?, reason?, durationMs?, output(tail 2000 行/50KB
  *    截断，同内置规则), outputFile, truncated}；输出文件被删后返回
- *    {output:"<lost>", state} 不崩溃（§3.6）
+ *    {output:"<lost>", state} 不崩溃（降级返回占位而非报错）
  *
- * 查询归属边界（§3.5 跨进程边界）：单例表 = 本进程全部任务（含同进程 session 替换
+ * 查询归属边界（跨进程边界）：单例表 = 本进程全部任务（含同进程 session 替换
  * 前发起的）；registry 侧只读当前 sessionId 目录。他进程任务查不到（回发起 session）。
  */
 
@@ -39,7 +40,7 @@ const BASH_OUTPUT_DESCRIPTION = [
 	"Omit task_id to list known background tasks (process-wide; may include tasks started under earlier sessions).",
 ].join("\n");
 
-/** list 视图条目（§3.5：command 前 80 字符）。 */
+/** list 视图条目（command 前 80 字符截断，同内置 list 口径）。 */
 function toListRow(source: BackgroundTask | RegistryEntry) {
 	return {
 		task_id: source.taskId,
@@ -60,8 +61,7 @@ function textResultWithSummary(text: string, summary: string): AgentToolResult<u
 /**
  * list 视图：单例表优先，registry 终态条目补差（同 id 已在单例表则跳过）。
  * registry 侧只并入终态（exited/orphaned）——running/killing 条目属他进程
- * 任务（本进程活跃任务必在单例表），并入会显示幻影 running 行（§3.5
- * 「单例表与 registry 终态条目合并」）。
+ * 任务（本进程活跃任务必在单例表），并入会显示幻影 running 行。
  */
 function listTasksText(registry: Map<string, RegistryEntry>): string {
 	const rows = new Map<string, ReturnType<typeof toListRow>>();
@@ -76,7 +76,7 @@ function listTasksText(registry: Map<string, RegistryEntry>): string {
 
 /**
  * 按 taskId 定位任务：单例表 → 当前 session registry（回落限定终态条目——
- * 他进程 running 条目不可查，§3.5 跨进程边界）。
+ * 他进程 running 条目不可查，同头注释跨进程边界）。
  */
 function findTask(
 	taskId: string,
@@ -89,7 +89,7 @@ function findTask(
 	);
 }
 
-/** 详情视图：tail 输出（丢失时 "<lost>"，§3.6）+ 终态字段按存在性展开。 */
+/** 详情视图：tail 输出（丢失时 "<lost>" 降级占位）+ 终态字段按存在性展开。 */
 function taskDetailText(task: BackgroundTask | RegistryEntry): string {
 	// protocol 原语返回 {text, truncated}；50KB/2000 行口径（本包产品决策）在此传参。
 	// 返回 JSON 的 `output` 字段名是 LLM 可见契约（工具 schema/描述零变化），仅在

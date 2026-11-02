@@ -30,7 +30,8 @@
     "src/workflow-notify.ts",
     "src/host/",
     "src/injectors/",
-    "src/interface/"
+    "src/interface/",
+    "src/workflow-notify-reconcile.ts"
   ],
   "taiji": {
     "role": "universal",

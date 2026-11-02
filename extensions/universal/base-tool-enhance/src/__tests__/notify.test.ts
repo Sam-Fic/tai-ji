@@ -1,7 +1,8 @@
-// src/__tests__/notify.test.ts —— M3 通知入账单元（unified-delivery 波 3）：
+// src/__tests__/notify.test.ts —— M3 通知入账单元（unified-delivery 波 3；投递统一化
+// 设计的现行登记处 = ADR-0074 与 docs/CONTEXT.md「统一投递（unified delivery，v3）」段）：
 // register emit 形态（数据流 ⑤）/ exit 边沿入账（⑧⑨，含 killed 零投递零入账）/
 // port.deliver 接线（id=taskId、details 业务字段保持 + deliveryId 追加）/
-// port 缺席降级直发（设计 §3.7 缺席语义）/ 通知文案 / D17 pi 引用刷新（兜底通路）/
+// port 缺席降级直发（缺席语义，登记处见文件头）/ 通知文案 / D17 pi 引用刷新（兜底通路）/
 // 收殓路径（process-exit 不经主路径，零投递零入账——对账承接）
 //
 // 主路径补投退役的丢失覆盖对位（D3 裁决 1，测试注释级）：
@@ -12,8 +13,10 @@
 //    journal.test / delivery-port.test 重启用例锁定）；
 //  - 「进程死亡收殓终态（process-exit / orphaned）」→ 无 outbox 条目，重放无从覆盖，
 //    由对账路径补投（pending-reconcile.test.ts 锁定）；
-//  - rejected（本文件「rejected by delivery port」用例）= 幂等键未登记、无 outbox，
-//    通知丢失——warn 留痕即修复信号（登记丢失风险，与旧机制 throw 降级日志同型）。
+//  - rejected（本文件「rejected by delivery port」用例组）= 幂等键未登记、无 outbox
+//    ——处置阶梯①（completion-signal-delivery D1/D7）：warn 留痕 + 立即单次重提原
+//    envelope（RL10：deliver 计数恰 2、无定时器无重试队列）；重提未恢复的形态由对账
+//    边沿事实判据兜底（warn 文案含 recovered by reconcile fallback——RL9/RL11）。
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,6 +38,7 @@ import {
 	handleTaskExit,
 	refreshPiReference,
 	resetNotifyForTest,
+	toPendingReason,
 } from "../background/notify.ts";
 import { setOnTaskExit } from "../background/exit-collector.ts";
 import { spawnBackgroundTask } from "../background/spawn-background.ts";
@@ -321,27 +325,93 @@ describe("exit-edge notification via delivery port (⑧⑨, unified-delivery wav
 		expect(message.details).toMatchObject({ taskId: "bt-1700000000-test01", endReason: "natural", exitCode: 3 });
 	});
 
-	it("rejected by delivery port (persist failure): notification lost, warn logged (registered loss surface)", () => {
+	it("rejected then transient recovery: single immediate re-delivery succeeds (D1 ladder ①, RL10 count = 2)", () => {
 		const host = attachPort(
 			createPortHost({
-				appendEntry: vi.fn(() => {
+				appendEntry: vi.fn().mockImplementationOnce(() => {
 					throw new Error("session file unwritable");
 				}),
 			}),
 		);
 
 		expect(() => handleTaskExit(finalizedTask())).not.toThrow();
-		// rejected = 幂等键未登记、无 outbox 记录——重放无从覆盖的登记丢失风险
-		//（模块 logger warn 留痕即修复信号；port 侧另有 persist-failed warn 同栈落日志）
-		expect(host.sendMessage).not.toHaveBeenCalled();
+		// 原始尝试 1 + 单次重提 1 = 恰 2（重提受理成功 → 注入恰 1 条，无第三次投递）
+		expect(host.appendEntry).toHaveBeenCalledTimes(2);
+		expect(host.sendMessage).toHaveBeenCalledTimes(1);
+		// 首败 warn 留痕（修复信号）+ 恢复指引——文案不再宣称 lost（RL9）
 		expect(moduleLoggerMock.warn).toHaveBeenCalledWith(
-			"background task notify rejected by delivery port; notification lost (no outbox record)",
+			"background task notify rejected by delivery port; retrying once via re-acquired port, recovered by reconcile fallback if the retry fails too",
 			{ detail: { taskId: "bt-1700000000-test01", reason: "persist-failed" } },
+		);
+	});
+
+	it("retry also rejected: single retry spent, no third attempt, no timers, no retry queue (RL10/RL11)", () => {
+		vi.useFakeTimers();
+		try {
+			// 上一用例的 warn 历史经 afterEach restoreAllMocks 不清普通 vi.fn——本断言
+			// 计数敏感，用例内显式清历史
+			moduleLoggerMock.warn.mockClear();
+			const host = attachPort(
+				createPortHost({
+					appendEntry: vi.fn(() => {
+						throw new Error("session file unwritable");
+					}),
+				}),
+			);
+
+			expect(() => handleTaskExit(finalizedTask())).not.toThrow();
+			// RL10：原始 1 + 单次重提 1 = 恰 2；无循环（第三次投递即红）、无定时器句柄、
+			// 无重试队列残留（ADR-0122 红线——单次重提是一次投递尝试的收尾动作）
+			expect(host.appendEntry).toHaveBeenCalledTimes(2);
+			expect(host.sendMessage).not.toHaveBeenCalled();
+			expect(vi.getTimerCount()).toBe(0);
+			// RL11：连续 rejected → 生产方 warn 留痕产出且含恢复动作指引，无静默重试。
+			// 计数按生产方首参前缀过滤（port 侧 persist-failed warn 同栈落同一 mock
+			// logger——那不是生产方处置，不计入本断言）
+			const productionWarns = moduleLoggerMock.warn.mock.calls.filter((call) =>
+				(call[0] as string).startsWith("background task notify"),
+			);
+			expect(productionWarns).toHaveLength(2);
+			const messages = productionWarns.map((call) => call[0] as string);
+			expect(messages[0]).toContain("recovered by reconcile fallback");
+			expect(messages[1]).toContain("recovered by reconcile fallback");
+			expect(messages[1]).toContain("single retry spent");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("re-acquire returns undefined (assembly absent window): stop, warn, no direct-send fallback (RL10 stop slot)", () => {
+		const pi = createMockPi();
+		attach(pi);
+		let cleared = false;
+		const host = attachPort(
+			createPortHost({
+				appendEntry: vi.fn(() => {
+					if (!cleared) {
+						cleared = true;
+						// 首败落盘瞬间槽被清（模拟重提时装配缺席窗）
+						_resetDeliveryPortForTest();
+					}
+					throw new Error("session file unwritable");
+				}),
+			}),
+		);
+
+		expect(() => handleTaskExit(finalizedTask())).not.toThrow();
+		// 恰 1 次投递尝试（重取到 undefined 即停——单次语义的两处停止位之一）
+		expect(host.appendEntry).toHaveBeenCalledTimes(1);
+		expect(host.sendMessage).not.toHaveBeenCalled();
+		// 不扩直发兜底：缺席直发只属主路径缺席形态，重提路径的恢复通道 = 对账边沿
+		expect(pi.sendMessage).not.toHaveBeenCalled();
+		expect(moduleLoggerMock.warn).toHaveBeenCalledWith(
+			"background task notify retry skipped: delivery port absent on re-acquire; recovered by reconcile fallback",
+			{ detail: { taskId: "bt-1700000000-test01" } },
 		);
 	});
 });
 
-describe("port-absent fallback (assembly anomaly window, §3.7 absence semantics)", () => {
+describe("port-absent fallback (assembly anomaly window, absence semantics)", () => {
 	it("port absent: direct steer fallback with exact params (at-most-once registered degradation)", () => {
 		const pi = createMockPi();
 		attach(pi);
@@ -379,7 +449,7 @@ describe("port-absent fallback (assembly anomaly window, §3.7 absence semantics
 	});
 });
 
-describe("notification content (§3.1 sample)", () => {
+describe("notification content (user-view sample)", () => {
 	it("finished: contains task_id, exit code, duration, command, Full output path, bash_output hint", () => {
 		const content = buildNotificationContent(finalizedTask());
 		expect(content).toContain("bt-1700000000-test01");
@@ -422,7 +492,7 @@ describe("notification details (D1 schema + deliveryId append; business fields b
 			endReason: "natural",
 			exitCode: 0,
 		});
-		// deliveryId = port 注入的送达凭据（§3.3 词条：身份由注入端附加，业务字段保持原样）
+		// deliveryId = port 注入的送达凭据（词条语义：身份由注入端附加，业务字段保持原样）
 		expect(message.details.deliveryId).toBe("bt-1700000000-test01");
 		// content 是 triggerTurn:true 给 LLM 接力的载荷：入账不得改动一个字节
 		expect(message.content).toBe(
@@ -570,5 +640,52 @@ describe("register emit direct unit (no spawn)", () => {
 	it("does nothing when reference unset; payload unchanged when attached late", () => {
 		resetNotifyForTest();
 		expect(() => emitPendingRegister(finalizedTask({ state: "running" }))).not.toThrow();
+	});
+});
+
+// ── natural + 无退出码 → 「结果未知」形态（断言 #12，foreground-idle-to-background
+//    §5 部件 5）：转后台任务退出码结构性不可得（reparent init 无父权），被信号终止的
+//    显式后台任务同样无退出码——无退出码即如实报未知，不再保守误报 failed ──
+
+describe("natural + null exit code: unknown-outcome form (断言 #12)", () => {
+	it("toPendingReason(natural, null/undefined) → 'unknown'; existing mappings unchanged", () => {
+		expect(toPendingReason("natural", null)).toBe("unknown");
+		expect(toPendingReason("natural", undefined)).toBe("unknown");
+		// 既有映射核对（修订只动 natural + 无退出码一格）
+		expect(toPendingReason("natural", 0)).toBe("completed");
+		expect(toPendingReason("natural", 3)).toBe("failed");
+		expect(toPendingReason("timeout", null)).toBe("time_limited");
+		expect(toPendingReason("killed", null)).toBe("cancelled");
+		expect(toPendingReason("process-exit", null)).toBe("cancelled");
+		// "unknown" 是 mapReasonToStatus 词表外键 → fail-visible 缺省落 'unknown'
+		//（extension-protocol/pending-entries.ts；protocol 零改动）
+	});
+
+	it("completion content reads 'finished (exit code unknown, …)' with tail lines — never 'failed'", () => {
+		const content = buildNotificationContent(
+			finalizedTask({ exitCode: null, tailSummary: "build ok", durationMs: 1_391_000 }),
+		);
+		expect(content).toContain("finished (exit code unknown, 23m11s)");
+		expect(content).not.toContain("failed");
+		expect(content).toContain("Last lines: build ok");
+	});
+
+	it("port path steers the unknown form; details keep endReason natural + exitCode null", () => {
+		const host = attachPort();
+		handleTaskExit(finalizedTask({ exitCode: null, durationMs: 5000 }));
+
+		expect(host.sendMessage).toHaveBeenCalledTimes(1);
+		const message = portSentMessage(host);
+		expect(message.content).toContain("finished (exit code unknown, 5s)");
+		expect(message.details).toMatchObject({ endReason: "natural", exitCode: null });
+	});
+
+	it("signal-terminated explicit background task (natural + null) uses the same unknown form", () => {
+		// 修订统一适用于 natural + null 全部来源（设计 §9）——exit 事件 code 为 null 的
+		// 既有显式后台形态不再报 failed
+		const content = buildNotificationContent(finalizedTask({ exitCode: null, reason: "natural" }));
+		expect(content).toContain("finished (exit code unknown");
+		expect(content).not.toContain("failed");
+		expect(buildNotifyDetails(finalizedTask({ exitCode: null })).exitCode).toBeNull();
 	});
 });

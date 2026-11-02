@@ -7,8 +7,8 @@
  * Facade 保留一行调用（订阅注册时序契约不变：组装根内先 projection → records →
  * reconciler → 本域两订阅，见 session-service.ts assembleSubmodules 注释）。
  */
-import type { IManagedSessionView } from './types.js'
-import { getRuntimeCheckpointStore } from './runtime-checkpoint.js'
+import type { IManagedSessionView, SessionOccupancy } from './types.js'
+import { getRuntimeCheckpointStore, type CheckpointOccupancy } from './runtime-checkpoint.js'
 import { inflightMirror } from './inflight-mirror.js'
 
 /**
@@ -71,6 +71,55 @@ export function registerCrashLedgerAttachHooks(
       console.error(`[session-service] mirror preset failed (sessionId=${sessionId}):`, e)
     }
   })
+}
+
+/**
+ * occupancy → checkpoint 二元占用快照投影（三维判定：turn/compacting/bash 任一命中即
+ * occupied；handingOff 不参与快照投影，与 attach 挂点 upsert 的归并式及
+ * RuntimeCheckpointEntry.occupancy 注释同口径）。
+ */
+function projectOccupancySnapshot(occupancy: SessionOccupancy): CheckpointOccupancy {
+  return occupancy.turn !== 'idle' || occupancy.compacting || occupancy.bash ? 'occupied' : 'idle'
+}
+
+/**
+ * occupancy 转移边沿的 checkpoint 搭车刷新（fix-chat-flow-stuck A-6）：updateSessionOccupancy
+ * 值变化写回后调用，把占用快照 + 活动时刻刷进 checkpoint（经 refreshSessions，只更新已存在
+ * 条目、不新增/不复活）。
+ *
+ * 为什么需要：attach 挂点只在 registerSession（create/restore/fork 注册汇聚点）写 checkpoint，
+ * 注册时刻占用恒 idle（pi 刚 spawn）——此后整个进程生命周期内占用翻转从不落盘，「占用中
+ * runtime 崩溃」的磁盘快照恒 idle，startup-reattach 的 occupancy==='occupied' 豁免判据永不
+ * 命中（安静长 turn 反例④漏恢复）；lastActivityAt 同冻结在注册时刻。
+ *
+ * 落盘成本（事件边沿过滤，非时间节流——不引入周期任务）：只在归并快照翻转（idle↔occupied）
+ * 时落盘——每回合最多 2 次（进入占用 / 退出占用），turn 内相位推进（dispatching→generating→
+ * settling）归并值不变、不落盘。activityAt 取边沿时刻（占用状态变化时刻 ≤ 真实最后活动，
+ * errs 方向 = 偏「漏恢复」，与 runtime-checkpoint.ts 文件头时效性声明同口径；occupied 期间
+ * activityAt 冻结无害——occupancy 命中即恢复，不走 idle 窗口判据）。
+ *
+ * best-effort 异常隔离（与 attach 挂点同范式）：checkpoint 是崩溃恢复的旁路设施，刷新异常
+ * 绝不外抛——外抛会把旁路故障放大进 occupancy 写回主链（打断 turn 状态机）。
+ */
+export function refreshCheckpointOnOccupancyEdge(
+  sessionId: string,
+  prev: SessionOccupancy,
+  next: SessionOccupancy,
+): void {
+  const prevSnapshot = projectOccupancySnapshot(prev)
+  const nextSnapshot = projectOccupancySnapshot(next)
+  if (prevSnapshot === nextSnapshot) return
+  try {
+    getRuntimeCheckpointStore().refreshSessions([{
+      sessionId,
+      occupancy: nextSnapshot,
+      activityAt: Date.now(),
+    }])
+  } catch (e: unknown) {
+    // best-effort 降级：刷新失败不外抛——磁盘快照停留上一版（errs = 漏恢复，退化 lazy），
+    // 不得打断 occupancy 写回主链。
+    console.error(`[session-service] checkpoint occupancy refresh failed (sessionId=${sessionId}):`, e)
+  }
 }
 
 /**

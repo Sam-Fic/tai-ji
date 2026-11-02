@@ -151,7 +151,7 @@ export class SessionEntryRemovalOrchestrator {
       inflightMirror.dropSession(sessionId)
     })
     // userStopped 标记不在本汇聚点清理：forceQuit（K1/K2）尾步经过本链，标记必须存活到
-    // 后续 restore（标记宿主独立于 ManagedSession 生命周期的原因，见 session-service.ts
+    // 后续 restore（标记宿主独立于 ManagedSession 生命周期的原因，见 user-stopped-mark-store.ts
     // 模块级 Map 注释）；delete 路径的标记清理由 lifecycle.delete 显式调 gate.disposeForDelete。
     // （原 D4 收敛环定时器清理已随 ADR-0122 时间窗删除移除。）
 

@@ -35,6 +35,7 @@
  */
 
 import type {
+  AgentSettledEvent,
   ExtensionAPI,
   ExtensionContext,
   SessionShutdownEvent,
@@ -43,6 +44,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
+import { subscribeResumeReconcile } from "@zhushanwen/pi-delivery-port";
+import { runNotifyReconcileMaintenance } from "./workflow-notify-reconcile.ts";
 // ═══ 经 core barrel 消费 workflow 域（引擎与 worker 住 packages/subagent-core） ═══
 import { bestEffort } from "@zhushanwen/subagent-core";
 import { getSubagentService } from "@zhushanwen/subagent-core";
@@ -221,8 +224,13 @@ export interface RunSettledEffectsEnv {
  *——notifyDone 抛错（唯一来源 = 降级直发非 stale 失败）时后续 track/evict
  * 不执行、异常原样上抛，由调用方 finalizeRun 的 onRunDone 独立 try 围栏接住
  * （core worker-message-pump，OR-4/B-4：真实副作用失败 error 留痕不崩宿主）。
- * port.deliver rejected（persist-failed 等）不抛错：notifyDone error 留痕后正常
- * 返回，track/evict 照常执行（该通知属已知丢失，可见性 = notifyDone 内 error 留痕）。
+ * **track 只在受理后标**（A15 缺陷修复）：notifyDone 返回 false（主投与单次重提
+ * 均 rejected，受理未发生）时 track 不标——rejected 的恢复通道 = 对账边沿事实
+ * 判据（notify-reconcile 补投出口重新调 notifyDone），若 rejected 也标了窗口，
+ * 补投会被 notifyDone 幂等早退静默吞掉（受理假象：对账受理日志照打、消息从未
+ * 出站，A15 真机 6 红实证）。与 settlement 缺席分支的「track 不标」同一原则：
+ * 未发通知不占去重窗口。notifyDone 返回 true（受理 / 幂等早退）时 track 照标
+ * （受理路径 notifyDone 内部已 track，此处补标幂等 no-op）。
  * notifyDone 幂等早退（notifiedRunIds 已含 runId）不是错误：后两步照常执行。
  *
  * [D7] notifyDone 注入产物目录指针（`<root>/<rootSid>/workflow/runs/`——
@@ -236,7 +244,7 @@ export interface RunSettledEffectsEnv {
 export function runSettledEffects(env: RunSettledEffectsEnv, run: WorkflowRun): void {
   const settlement = env.settledRecordOf(run.runId);
   if (settlement !== undefined) {
-    notifyDone(
+    const notified = notifyDone(
       env.resolvePi(),
       run.runId,
       run,
@@ -244,7 +252,10 @@ export function runSettledEffects(env: RunSettledEffectsEnv, run: WorkflowRun): 
       env.state.runsDir,
       settlement,
     );
-    trackNotifiedRunId(env.notifiedRunIds, run.runId);
+    // 受理才占去重窗口（rejected 受理未发生——窗口标了会堵死对账补投出口，见上）。
+    // notifyDone 内部在受理路径已 track（同一语义双写，幂等）；此处补标覆盖
+    // 幂等早退分支（窗口已含，no-op）。
+    if (notified) trackNotifiedRunId(env.notifiedRunIds, run.runId);
   } else {
     logger.error(
       `[workflow] done notify skipped: settlement record unavailable (runId=${run.runId}) — ` +
@@ -543,12 +554,90 @@ export function setupWorkflowDomain(
       // [容器扩展点统一 §6.6 U10] workflow 托盘件初始推送（与 subagent 件同位——attach
       // 放装配链完成后，sessionState 条目已在，readRuns 现读 runs Map 做绝对投影）。
       workflowTrayWidgetPusher.attach(ctx);
+      // 通知对账步（completion-signal-delivery D8② 入口①）：wf-done 收尾通知
+      // rejected 丢失形态的事实判据补投——session_start 重绑是确定性边沿（旧 pi
+      // 实例的 rejected 通知在此恢复）。与 agent_settled 入口（下方订阅）互调
+      // 同一对账函数 runNotifyReconcileMaintenance（RL12 判据单一）；幂等由判据
+      // 的投递日志承载/送达痕迹两事实抵消保证（补投受理成功即有 outbox 条目落盘）。
+      // store 健康门（storeHealthy=false = 装配期 loadAll 已 fail-fast）：判据源
+      // record 流不可信，对账不跑（状态留待恢复链收编）。
+      if (result.storeHealthy) {
+        await runNotifyReconcileMaintenance({
+          reason: "session_start",
+          pi,
+          entries: ctx.sessionManager.getEntries(),
+          // 补投判据事实源磁盘化（A1 产品缺陷修复，域侧同构落点）：getSessionFile()
+          // 传 session JSONL 路径，manifest/痕迹/日志判据读落盘条目而非内存账——pi
+          // _appendEntry persist 失败无回滚的幽灵内存 entry 曾使 journaled 误真、
+          // 补投静默失效（机制见 workflow-notify-reconcile.ts 文件头「判据事实源
+          // 磁盘化」段）；no-persist 形态 getSessionFile() 返回 undefined，对账侧
+          // 退化内存账（现状行为）。
+          sessionFile: ctx.sessionManager.getSessionFile(),
+          notifiedRunIds,
+          settledRecordOf: (runId) => result.store.settledRecordOf(runId),
+          loadRuns: () => result.store.loadAll(),
+        });
+      }
     } catch (err) {
       logger.error(
         `[subagent-workflow] session_start handler failed (sessionId=${lsRef.lastSessionId})`,
         { reason: toErrorMessage(err) },
       );
     }
+  });
+
+  // 通知对账步入口②（completion-signal-delivery D8②）：agent_settled 回合收尾
+  // 边沿——进程存活形态（重提失败后不重启不切回）的兜底恢复入口（ADR-0122 保留
+  // 白名单同族：事件驱动、判据现算磁盘事实，无定时器）。订阅生命周期（RL13
+  // 同款）：本注册点 = extension load 装配期，每 pi 实例恰一次；同进程 session
+  // 替换会重建 eventBus 并重新 load extension，旧实例连同其订阅一并消亡、新
+  // 实例重新注册——无死 handler 累积（构造性成立）。fire-and-forget（编排内部
+  // 全量 catch，失败 warn 不反噬回合收尾链）；高频边沿的常态零成本由判据预检
+  // 短路兜住（候选空零 record 读）。sessionState 条目缺席（装配链未完成/已
+  // shutdown）静默早退——对账依赖 store 面，无 store 无判据源。
+  pi.on("agent_settled", (_event: AgentSettledEvent, ctx: ExtensionContext) => {
+    const state = sessionState.get(ctx.sessionManager.getSessionId());
+    if (!state || !state.storeHealthy) return;
+    void runNotifyReconcileMaintenance({
+      reason: "agent_settled",
+      pi,
+      entries: ctx.sessionManager.getEntries(),
+      // 补投判据事实源磁盘化（A1 产品缺陷修复，域侧同构落点——session_start 入口
+      // 同款注释）：判据读 session JSONL 落盘条目，no-persist 形态退化内存账 + warn。
+      sessionFile: ctx.sessionManager.getSessionFile(),
+      notifiedRunIds,
+      settledRecordOf: (runId) => state.store.settledRecordOf(runId),
+      loadRuns: () => state.store.loadAll(),
+    });
+  });
+
+  // 通知对账步入口③（completion-signal-delivery D8② 三入口同构的切回补强边沿，
+  // U2 修复）：同进程「切走会话再切回」不重发 session_start（真机实证），本域
+  // 入口①② 在该场景不可达——切回边沿唯一触发源是 base-tool-enhance 注册的
+  // `__taiji_bg_reconcile__` 内部命令（runtime 在 getCommands 时 fire-and-forget
+  // 触发，无节流——原 60s per-session 节流窗已随 ADR-0122 防御机制清查退役，
+  // 高频防护由本域对账链预检判据早退承担），本
+  // 扩展与 base-tool-enhance 无依赖边（跨扩展依赖通道不存在），经三方共同依赖
+  // 包 pi-delivery-port 的进程级注册槽订阅其派发（与 session-manager 域同款接线；
+  // subagent 域 SubagentService 单例直转的 A5 先例同族）。订阅生命周期（RL13
+  // 同款论证）：订阅点 = extension load 装配期，同域 key 覆盖旧订阅（reload 后新
+  // 闭包替换旧闭包）。pi 经 resolveCurrentPi 现读（D3 纪律）：槽订阅存活于
+  // globalThis、跨 factory 生命周期，闭包捕获装配期 pi 会在 reload 后 stale
+  //（agent_settled 订阅无此问题——它随 eventBus 消亡；槽订阅不是）；其 throw
+  //（槽缺失时序异常）由派发侧围栏收集 warn。sessionState 条目缺席（装配链未
+  // 完成/已 shutdown）静默早退——与 agent_settled 入口同款。
+  subscribeResumeReconcile("subagent-workflow", (ctx) => {
+    const state = sessionState.get(ctx.sessionManager.getSessionId());
+    if (!state || !state.storeHealthy) return;
+    void runNotifyReconcileMaintenance({
+      reason: "resume",
+      pi: resolveCurrentPi(),
+      entries: ctx.sessionManager.getEntries(),
+      sessionFile: ctx.sessionManager.getSessionFile(),
+      notifiedRunIds,
+      settledRecordOf: (runId) => state.store.settledRecordOf(runId),
+      loadRuns: () => state.store.loadAll(),
+    });
   });
 
   // ════════════════════════════════════════════════════════════

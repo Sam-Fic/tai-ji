@@ -811,7 +811,11 @@ export class SessionManagerHandler {
       const batch = claims.abortClaims(sessionId)
       deliverRespondTargets(claims, batch.targets, this.watchRespond)
     }
-    await this.opts.sessionService.abort(sessionId)
+    // [pi-stall-detection U4 / RL16] source='agent'：agent 经 session_manager 工具发起的
+    // abort 不是用户操作——悬挂升级置判死强杀分型（PROBE_STALL_AUTO_QUIT）而非 abort_timeout
+    // 用户分型（置用户分型 = 终态谎报）；升级后不进自动恢复接线、无 steer 注入（D2① 消费方
+    // ④ 恢复语义豁免：agent 显式停止意图，恢复归 agent/用户显式重开）。
+    await this.opts.sessionService.abort(sessionId, 'agent')
     return { success: true }
   }
 

@@ -1,5 +1,6 @@
 // src/__tests__/delivery-port-assembly.test.ts —— 统一投递端口装配点行为锁
-//（unified-delivery 波 2 前半，设计 §3.7 装配点：base-tool-enhance 的 session_start）。
+//（unified-delivery 波 2 前半，装配点 = base-tool-enhance 的 session_start；投递统一化
+// 设计的现行登记处 = ADR-0074 与 docs/CONTEXT.md「统一投递（unified delivery，v3）」段）。
 // 锁三类装配行为：
 // ① session_start 触发端口装配且经进程级槽可达（getDeliveryPort）；
 // ② 装配后端口是活的投递通路（deliver → pi.appendEntry outbox + pi.sendMessage
@@ -72,7 +73,7 @@ function fireSessionStart(pi: ReturnType<typeof createMockPi>, ctx: ExtensionCon
 	);
 }
 
-describe("session_start 装配统一投递端口（unified-delivery §3.7）", () => {
+describe("session_start 装配统一投递端口（unified-delivery 波 2 装配点；登记处见文件头）", () => {
 	it("session_start 后端口经进程级槽可达", () => {
 		setupOfficialFactory();
 		const pi = createMockPi();
@@ -112,7 +113,7 @@ describe("session_start 装配统一投递端口（unified-delivery §3.7）", (
 		_resetDeliveryPortForTest();
 	});
 
-	it("重复 session_start 重绑：旧实例 dispose（deliver 拒收）、新实例差集重放", () => {
+	it("重复 session_start 重绑：旧实例 dispose（deliver 拒收）、in-flight 条目交接预占不重投（A4 双投窗口封住）", () => {
 		setupOfficialFactory();
 		const entries: unknown[] = [];
 		const pi = createMockPi(entries);
@@ -120,7 +121,9 @@ describe("session_start 装配统一投递端口（unified-delivery §3.7）", (
 		fireSessionStart(pi, createMockCtx(entries));
 
 		const first = getDeliveryPort()!;
-		// 落一条账（已注入未送达——无 custom_message entry 无 ack，差集合法重投）
+		// 落一条账（已出站——sendMessage 已交递，注入由 pi 侧异步完成；custom_message
+		// 凭据未落。in-flight 交接预占后新实例 recover 不重投：消息 pi 必达在途，
+		// 重放构成同条通知双投——A4 真机实证 recoveryReplays=1 + notify=2）
 		first.deliver({ id: "w-1", payload: { kind: "custom", customType: "workflow-result", content: "x", display: true } });
 		(pi.sendMessage as ReturnType<typeof vi.fn>).mockClear();
 
@@ -129,11 +132,9 @@ describe("session_start 装配统一投递端口（unified-delivery §3.7）", (
 		const second = getDeliveryPort()!;
 		expect(second).not.toBe(first);
 		expect(first.deliver({ id: "w-2", payload: { kind: "custom", customType: "workflow-result", content: "y", display: true } }).kind).toBe("rejected");
-		// 差集重放：w-1 未送达未处理完毕 → 重投（经新实例 sendMessage）
-		expect(pi.sendMessage).toHaveBeenCalledWith(
-			expect.objectContaining({ customType: "workflow-result", details: expect.objectContaining({ deliveryId: "w-1" }) }),
-			expect.anything(),
-		);
+		// in-flight 预占：w-1 不重投；w-2 的 deliver 拒收也不产生注入（旧实例已销毁）
+		expect(pi.sendMessage).not.toHaveBeenCalled();
+		// 崩溃形态（无前驱交接）的重放恢复由 delivery-port 包测试承载（重绑交接 describe）
 		_resetDeliveryPortForTest();
 	});
 });

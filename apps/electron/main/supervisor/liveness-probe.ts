@@ -45,10 +45,61 @@ export const LIVENESS_PROBE_TIMEOUT_MS = 2_000
 /** 健康端点 URL（仅本地回环） */
 const HEALTH_ENDPOINT = (port: number) => `http://127.0.0.1:${port}/health`
 
+/**
+ * 事件循环滞后遥测（判死归因留档字段，D4）——本模块是探针侧透传口：runtime
+ * /health 健康应答体若携带 `eventLoopLag` 对象（字段名与 runtime 侧事件循环直方图
+ * 快照同形，ms 单位）则透传至判死决策日志；未上报或形态不符时探针结果不带该
+ * 字段，判死归因日志显式记 null（归因留档用，不做分支依据——IO 阻滞与真死锁在
+ * 滞后分布上同形，见 D4）。
+ *
+ * 供给端现状：runtime 基线 /health 应答体 = { status, uptime }（packages/runtime/
+ * src/transport/connection-manager.ts），不含本字段；在途 M1 遥测（startup-
+ * readiness）形态 = runtime 结构化日志直方图行，同样不上报 /health——遥测供给
+ * 接线归 runtime 侧，接入前判死日志 eventLoopLag 恒为 null。
+ */
+export type EventLoopLagTelemetry = {
+  /** 滞后样本数（窗口内采样计数）。 */
+  count?: number
+  p50ms?: number
+  p90ms?: number
+  p99ms?: number
+  maxMs?: number
+  meanMs?: number
+}
+
+/** 遥测透传的数值字段清单（未登记键与非有限数值一律丢弃，防任意载荷透传）。 */
+const TELEMETRY_NUMERIC_KEYS = ['count', 'p50ms', 'p90ms', 'p99ms', 'maxMs', 'meanMs'] as const
+
+/**
+ * 从 /health 响应体提取 `eventLoopLag` 遥测（纯函数）。响应体缺失 / 非 JSON /
+ * `eventLoopLag` 非对象 / 六字段全非有限数值 = undefined（按「runtime 未上报」处理）。
+ */
+export function extractEventLoopLag(body: unknown): EventLoopLagTelemetry | undefined {
+  if (body === null || typeof body !== 'object') return undefined
+  const raw = (body as { eventLoopLag?: unknown }).eventLoopLag
+  if (raw === null || typeof raw !== 'object') return undefined
+  const record = raw as Record<string, unknown>
+  const telemetry: EventLoopLagTelemetry = {}
+  let picked = 0
+  for (const key of TELEMETRY_NUMERIC_KEYS) {
+    const value = record[key]
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      telemetry[key] = value
+      picked += 1
+    }
+  }
+  return picked > 0 ? telemetry : undefined
+}
+
 /** 探针结果：ok=是否健康，ms=响应耗时（仅健康时带，用于日志） */
 export interface HealthProbeResult {
   ok: boolean
   ms?: number
+  /**
+   * 事件循环滞后遥测（健康应答体 `eventLoopLag` 字段透传，判死归因留档通道）。
+   * undefined = runtime 未上报（当前基线 /health 不携带该字段）。
+   */
+  eventLoopLag?: EventLoopLagTelemetry
 }
 
 /**
@@ -69,7 +120,16 @@ export async function checkHealthEndpoint(port: number): Promise<HealthProbeResu
       signal: AbortSignal.timeout(LIVENESS_PROBE_TIMEOUT_MS),
     })
     if (response.ok) {
-      return { ok: true, ms: Date.now() - startedAt }
+      // 事件循环滞后遥测透出：健康应答体读 eventLoopLag 可选字段（runtime 基线
+      // 应答体不携带，供给端现状见 EventLoopLagTelemetry 头注）。
+      // 读体失败（非 JSON / 无 json 通道 / 流中断）按无遥测处理——探针判定只看响应
+      // 状态，遥测缺席不影响 ok 语义；读体超时由同一 AbortSignal 覆盖。读体调用本身
+      // 兜底在 Promise 链内（response.json 通道缺席时同步抛错不得翻转 ok——fetch stub
+      // 形态见 supervisor-health-liveness 测试）。
+      const body: unknown = await Promise.resolve()
+        .then(() => response.json())
+        .catch(() => undefined)
+      return { ok: true, ms: Date.now() - startedAt, eventLoopLag: extractEventLoopLag(body) }
     }
     return { ok: false }
   } catch {
@@ -99,12 +159,16 @@ export interface LivenessMonitorOptions {
  * - 探测失败 → 计数 +1，达阈值时触发 onUnhealthy 回调并清零（避免一次卡死多次触发）
  *
  * [HISTORICAL] 用 setInterval 而非递归 setTimeout：
- *   间隔固定（30s），不受上次探测耗时影响（探测快则下次仍等满 30s）。
+ *   间隔固定（LIVENESS_INTERVAL_MS），不受上次探测耗时影响（探测快则下次仍等满间隔）。
  *   单次探测不会重入（fetch 不会卡到下一次 tick——即便卡住，onUnhealthy 也只触发一次）。
  */
 export class LivenessMonitor {
   private timer: ReturnType<typeof setInterval> | null = null
   private consecutiveFailures = 0
+  /** 最后一次健康应答的探针结果（含遥测）——判死归因日志的读取口，stop 不清（实例随 stop 一起被丢弃）。 */
+  private lastHealthySnapshot: HealthProbeResult | null = null
+  /** 最后一次健康应答时刻（epoch ms；null = 启动以来无健康应答）。 */
+  private lastHealthyTime: number | null = null
   private readonly port: number
   private readonly onUnhealthy: () => void
   private readonly intervalMs: number
@@ -115,6 +179,20 @@ export class LivenessMonitor {
     this.onUnhealthy = opts.onUnhealthy
     this.intervalMs = opts.intervalMs ?? LIVENESS_INTERVAL_MS
     this.failThreshold = opts.failThreshold ?? LIVENESS_FAIL_THRESHOLD
+  }
+
+  /**
+   * 最后一次健康应答的探针结果（判死归因日志的遥测读取口：`eventLoopLag` 来自
+   * runtime 最后一次能响应 /health 时的上报——判死时刻 runtime 已无响应，遥测只能
+   * 是最后健康时点的快照）。无健康应答历史 = null。
+   */
+  get lastHealthyResult(): HealthProbeResult | null {
+    return this.lastHealthySnapshot
+  }
+
+  /** 最后一次健康应答时刻（epoch ms；null = 启动以来无健康应答，判死日志据此记失联时长 null）。 */
+  get lastHealthyAt(): number | null {
+    return this.lastHealthyTime
   }
 
   /** 启动周期探针（幂等：已启动则无操作） */
@@ -135,11 +213,13 @@ export class LivenessMonitor {
     this.consecutiveFailures = 0
   }
 
-  /** 单次探测：成功清零，失败累计，达阈值触发回调 */
+  /** 单次探测：成功清零并留存健康快照，失败累计，达阈值触发回调 */
   private async tick(): Promise<void> {
     const result = await checkHealthEndpoint(this.port)
     if (result.ok) {
       this.consecutiveFailures = 0
+      this.lastHealthySnapshot = result
+      this.lastHealthyTime = Date.now()
       return
     }
     this.consecutiveFailures++

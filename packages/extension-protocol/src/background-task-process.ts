@@ -3,18 +3,21 @@
  *
  * 契约两端（此前各持一份逐字同构实现，对齐手段是注释，已归一到本模块）：
  *  - extension 侧：@zhushanwen/pi-base-tool-enhance（bash_kill 前校验 / 后台 timeout
- *    到点校验 / 对账判死），原实现在其 kill-tree.ts
+ *    到点校验 / 对账判死），原实现在其 kill-tree.ts（归一前原仓库文件，本仓不可考）
  *  - runtime 侧：taiji background-task-reaper（孤儿收殓三分支判定），原实现在
- *    background-task-reaper.ts 原语区
+ *    background-task-reaper.ts 原语区（原语已归一迁出至本模块，该文件余部仍在 runtime）
  *
  * 分支语义（与 pi 实装对齐，勿单侧擅改）：Windows `taskkill /F /T`；POSIX 按进程组终止
- * `kill -- -<pgid>`（后台任务 detached spawn 自成进程组，pgid = pid）；按进程组终止不到时
- * 回退单 pid + `pgrep -P` 递归杀残留子进程。
+ * `kill -- -<pgid>`（后台任务 detached spawn 自成进程组，pgid = pid）；快路径落空时解析
+ * 目标真实 pgid（`ps -o pgid=`）按组杀——转后台任务组成员非组长形态（ADR-0184，组长
+ * 死后组仍有效）；解析出的组等于调用者自身进程组时跳过组杀（防自杀）落回退；均不可达
+ * 才回退单 pid + `pgrep -P` 递归杀残留子进程（先孙后子最后目标，防 reparent 逃逸枚举）。
  *
  * 日志通道：本模块零日志依赖（protocol 零运行时依赖纪律）——回退路径的诊断经可选
  * 回调 `onFallback(step, err)` 上报，extension 侧注入 logger.debug 适配、runtime 侧
  * 注入 console.debug 适配。step 为稳定短标识符：
  *  - 'process-group-kill-missed'      POSIX 进程组 kill 失败（组长已死），走回退
+ *  - 'resolved-group-kill-missed'     解析真实 pgid 的组 kill 失败，走回退（ADR-0184）
  *  - 'single-pid-kill-missed'         单 pid kill 失败（目标已死，幂等语义）
  *  - 'taskkill-failed'                Windows taskkill 失败
  *  - 'descendant-enumeration-failed'  pgrep 不可用/失败，放弃子孙枚举
@@ -47,10 +50,13 @@ export function isPidAlive(pid: number): boolean {
 
 /**
  * 杀整棵进程树（同步；收殓路径在 process.on("exit") 里跑，必须同步）。
- * POSIX 按进程组终止（pgid = pid）一次性覆盖全部子孙；按进程组终止不到（组长已死）回退
- * 单 pid + pgrep -P 递归清理残留子进程（先杀孙辈再杀子辈，防孙辈在父死后被
- * reparent 逃逸枚举）。Windows taskkill /F /T。幂等：目标已死时静默成功
- * （回退路径的诊断经 onFallback 上报，无回调则静默）。
+ * POSIX：优先按进程组终止——detached spawn 形态（显式后台任务）pgid = pid，kill(-pid)
+ * 一次覆盖全部子孙；pid 非组长（前台转后台任务复用前台进程链，pgid ≠ pid）时解析真实
+ * pgid 按组杀（reparent 不换组，组长死后组仍在）；均不可达时回退单 pid + pgrep -P
+ * 递归清理（先枚举杀孙辈再杀子辈、最后杀目标本身——防目标死后子进程被 reparent 逃逸
+ * 枚举）。解析出的 pgid 等于调用者自身进程组时跳过组杀（防自杀），走回退。
+ * Windows taskkill /F /T。幂等：目标已死时静默成功（回退路径的诊断经 onFallback
+ * 上报，无回调则静默）。
  */
 export function killProcessTree(pid: number, onFallback?: ProcessFallbackLogger): void {
   if (!Number.isInteger(pid) || pid <= 0) return
@@ -62,16 +68,40 @@ export function killProcessTree(pid: number, onFallback?: ProcessFallbackLogger)
     process.kill(-pid, 'SIGKILL')
     return
   } catch (err) {
-    // best-effort 降级：组长已死（进程组不复存在）时走单 pid + 子孙递归兜底
     onFallback?.('process-group-kill-missed', err)
   }
+  const ownPgid = readPgid(process.pid)
+  const pgid = readPgid(pid)
+  if (pgid !== null && pgid > 1 && pgid !== ownPgid) {
+    try {
+      process.kill(-pgid, 'SIGKILL')
+      return
+    } catch (err) {
+      onFallback?.('resolved-group-kill-missed', err)
+    }
+  }
+  killDescendantsRecursive(pid, onFallback)
   try {
     process.kill(pid, 'SIGKILL')
   } catch (err) {
     // best-effort：目标已死（kill 幂等语义），仅留诊断
     onFallback?.('single-pid-kill-missed', err)
   }
-  killDescendantsRecursive(pid, onFallback)
+}
+
+/** 读 pid 的真实 pgid（ps -o pgid=）；失败/不可解析 → null（调用方按不可达处理走回退）。 */
+function readPgid(pid: number): number | null {
+  try {
+    const result = spawnSync('ps', ['-o', 'pgid=', '-p', String(pid)], {
+      encoding: 'utf8',
+      timeout: PS_TIMEOUT_MS,
+    })
+    if (result.error || result.status !== 0 || !result.stdout) return null
+    const pgid = Number.parseInt(result.stdout.trim(), 10)
+    return Number.isInteger(pgid) && pgid > 0 ? pgid : null
+  } catch {
+    return null
+  }
 }
 
 function killProcessTreeWindows(pid: number, onFallback?: ProcessFallbackLogger): void {
@@ -91,7 +121,9 @@ function killProcessTreeWindows(pid: number, onFallback?: ProcessFallbackLogger)
 function killDescendantsRecursive(pid: number, onFallback?: ProcessFallbackLogger): void {
   let stdout: string
   try {
-    const result = spawnSync('pgrep', ['-P', String(pid)], { encoding: 'utf8' })
+    // timeout 与 ps 同款（PS_TIMEOUT_MS）：本函数在 process.on("exit") 收殓路径同步执行，
+    // 卡死的 pgrep 不得无限阻塞收殓；超时落 result.error → 按空表处理，残留交下个收殓周期
+    const result = spawnSync('pgrep', ['-P', String(pid)], { encoding: 'utf8', timeout: PS_TIMEOUT_MS })
     if (result.error || result.status !== 0 || !result.stdout) return
     stdout = result.stdout
   } catch (err) {

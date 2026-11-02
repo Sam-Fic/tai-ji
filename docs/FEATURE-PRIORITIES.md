@@ -38,7 +38,7 @@
 |------|-----------|---------|
 | 应用启动与进程编排 | Electron 窗口创建、runtime 子进程拉起、WS 握手、renderer 加载、单实例锁 | `apps/electron/main/` + `packages/runtime/src/server.ts` |
 | 会话创建与首发 | 新建任务旅程（Landing → 选目录 → 首发提交）、模式选择（landing 第三 chip，模式 id 创建时锁定）、pi 进程绑定 | `useSidebar` / `SessionService`（testing 01） |
-| 对话发送与流式渲染 | composer 发送位内容驱动双形态（有内容=发送±队列角标 / 无内容=停止·禁用占位，spinner 最高优先）、发送、流式 delta 回显、错误作为 assistant 消息入流、occupancy 四维状态机驱动收起时机（工作态回合不收起 + 计时持续、回合结束定格）、回合中插话入队与回流开新回合、settling 窗口追问即时受理（steer）、队列区原位编辑（✎ 编辑保位 / × 撤销回填）与反复操作幂等 | composer / `run-send-stream`（testing 02/03）+ verify-taiji p1-turn-interject-collapse / p1-settling-steer-delivery / A10a 发送位双形态状态矩阵（composer-send-button-states.test.ts 节点封装，见 verify-taiji P0-P1-COVERAGE 登记；无独立 p1 剧本）/ p1-queue-inline-edit / p1-queue-ops-idempotent（chat-flow-consistency 交付） |
+| 对话发送与流式渲染 | composer 发送位内容驱动双形态（有内容=发送±队列角标 / 无内容=停止·禁用占位，spinner 最高优先）、发送、流式 delta 回显、错误作为 assistant 消息入流、occupancy 四维状态机驱动收起时机（工作态回合不收起 + 计时持续、回合结束定格）、回合中插话入队与回流开新回合、settling 窗口追问即时受理（steer）、队列区原位编辑（✎ 编辑保位 / × 撤销回填）与反复操作幂等、停滞辅助提示（静默超提示阈值活动条 stall 行温和提示「已静默 N 分钟，可点停止或继续等待」——呈现层只做辅助，判定权在 runtime 健康分层，第 1/2 层判死有自动处置出口） | composer / `run-send-stream`（testing 02/03）+ verify-taiji p1-turn-interject-collapse / p1-settling-steer-delivery / A10a 发送位双形态状态矩阵（composer-send-button-states.test.ts 节点封装，见 verify-taiji P0-P1-COVERAGE 登记；无独立 p1 剧本）/ p1-queue-inline-edit / p1-queue-ops-idempotent（chat-flow-consistency 交付） |
 | pi RPC 适配 | EventAdapter 协议翻译、session-pool、sendCommand success 检查、pi stdout tee 落盘 | `packages/runtime/src/` pi 适配层 |
 | session 持久化与恢复 | pi session 文件延迟写入、live ≡ reload（同一 applyEntry reducer）、重开一致、全 entry 类型 | entry reducer 链（关键规则 9） |
 | per-session 隔离 | 消息 sessionId 路由三层过滤、ADR-0049 Map 分区、updateFor(capturedSid) | `useSessionScopedState` 工厂（ADR-0049） |
@@ -122,7 +122,7 @@ harness 必备能力（业务价值视角，2026-09-12 用户裁决）：
 | ask-user | universal | **P0** | 边界判例 #3（2026-09-12 用户裁决升 P0） |
 | subagent-workflow | universal | **P0** | 边界判例 #2（2026-09-12 用户裁决升 P0） |
 | host-internals | taiji | P1 | taiji 集成基座，挂了集成能力降级但 pi 主链路存活 |
-| base-tool-enhance | universal | P1 | bash 前台链挂了 agent 失去执行能力（原生回退仅保底） |
+| base-tool-enhance | universal | P1 | bash 前台链挂了 agent 失去执行能力（原生回退仅保底）；2026-10-31 增前台空闲转后台机制（静默超阈值自动转后台 + 完成通知 + 可查可杀，挂了回到停滞假象事故形态，fix-chat-flow-stuck） |
 | permission | universal | P1 | 审批闭环（边界判例 #7） |
 | provider-live-sync | universal | **P0** | 挂了 = 运行中会话看不到新增/变更的 provider·模型·凭据，切新模型报 `Model not found` 且只能重开会话；目录投喂（catalog overlay）同挂于此包——投喂的 overlay-only 模型对新会话不可见（模型控制主链路的实时性前提；与 ask-user/subagent-workflow 同族的「能力静默失效」形态，故 tier=infrastructure 不可禁） |
 | system-prompt | taiji | P1 | 挂了 agent 裸人格、所有会话质量崩 |

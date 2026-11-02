@@ -254,6 +254,31 @@ export {
 // 投递内核与壳侧 notify 链的共同语义锚点（execution 生产域消费，A2a/U5）。
 export { notifyGateAllowsDelivery } from "./execution/subagent-service.ts";
 
+// [u3 通知对账补投] 一次性终态通知补投的公共面（completion-signal-delivery 设计
+// D5/D7②）：三入口唯一对账编排 + 判据真值表面 + 幂等键构造单一导出（RL8——补投
+// 与主路径共用同一构造）。三入口生产接线（A5 修复后终态）：① session_start 与
+// ② agent_settled 由 NotifyHost 装配内自挂（notify-host.ts 头注）；③ 切回补强由
+// base-tool-enhance（pi 命令名全局唯一注册方）经进程单例转发——SubagentService.
+// runNotifyReconcileMaintenance → NotifyHost.runReconcile → 本编排函数。本导出块
+// 是机制公共面，供自装配 NotifyReconcileSource 的宿主（非 pi 宿主 / 测试）直调；
+// pi 生产链的补投出口 notifier 在 NotifyHost 内封装，扩展侧不可直构 deps。
+export {
+  buildNotifyId,
+} from "./execution/notify/notifier.ts";
+export {
+  isExcludedReconcileRecord,
+  isReconcileCandidateRecord,
+  isReconcileNotifyCandidate,
+  NOTIFY_RECONCILE_SCAN_LIMIT,
+  runNotifyReconcileMaintenance,
+} from "./execution/notify/notify-reconcile.ts";
+export type {
+  NotifyReconcileResult,
+  NotifyReconcileSource,
+  ReconcileNotifyFacts,
+  ReconcileNotifyRecord,
+} from "./execution/notify/notify-reconcile.ts";
+
 // ModelConfigService 聚合范围 + 单例访问器四件中的 model 侧两件（D8）。
 // ModelConfigServiceInit 已随 2026-09-13 barrel 收窄出公共范围（定义文件内部
 // 类型闭包，形状经 `new ModelConfigService({cwd, agentDir})` 签名约束，
@@ -344,6 +369,7 @@ export {
   foldRecordEvents,
   INITIAL_RECORD_EVENT_FOLD_STATE,
   parseRecordEventFileLine,
+  isRecordEventHeaderLine,
   recordEventsPath,
   RECORD_EVENTS_SUFFIX,
   type RecordCreatedEvent,

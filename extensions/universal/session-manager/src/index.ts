@@ -16,10 +16,13 @@ import {
 	type MarkerRpcResult,
 	type SessionManagerAction,
 } from "@zhushanwen/extension-protocol";
+import { subscribeResumeReconcile } from "@zhushanwen/pi-delivery-port";
 import { getLogger, setPiHandle } from "@zhushanwen/pi-extension-logger";
 import { Type, type Static, type TObject } from "typebox";
 
 import { renderSessionManagerResult } from "./render.ts";
+import { runNotifyReconcileMaintenance } from "./notify-reconcile.ts";
+import { recordManagedNotify } from "./notify-delivery.ts";
 import { createWatchCoordinator } from "./watch-coordinator.ts";
 
 // 模块级 logger（default export 首行 setPiHandle 注入后自动走 appendEntry 持久化，
@@ -182,6 +185,54 @@ async function executeTool(
 
 // ── Extension 入口 ──
 
+/** 对账步 deps 的 ctx 侧最小输入（session_start / agent_settled 两入口的
+ * ExtensionContext 与切回槽的 ResumeReconcileContext 结构兼容本子集——对账编排
+ * 只读这两个成员，见 runNotifyReconcileSafely 的消费点）。 */
+interface ReconcileSessionContext {
+	sessionManager: {
+		getEntries(): readonly unknown[];
+		getSessionFile(): string | undefined;
+	};
+}
+
+/**
+ * 通知对账步的安全包装（completion-signal-delivery D8② 三入口编排的接线形态）：
+ * entries 读取异常吞掉记 warn（对账失败无害：候选判据仍在，下一边沿幂等重查），
+ * 对账编排本体（runNotifyReconcileMaintenance）内部已有同款纪律——本包装再挡
+ * entries 读取（ctx.sessionManager.getEntries）一层。补投出口 = recordManagedNotify
+ * 直通（与主路径同一投递管道与重提链——补投 payload 走骨架简报，幂等键与主路径
+ * 同构造 notifyId，collectKey 申报 = 自身键）。
+ *
+ * sessionFile = ctx.sessionManager.getSessionFile()（补投判据事实源磁盘化，A1
+ * 缺陷修复的域侧同构落点）：判据事实读 session JSONL 落盘条目而非内存账——pi
+ * _appendEntry persist 失败无回滚的幽灵内存 entry（pi-semantics PS-97：dist/core/
+ * session-manager.js :815-820 _appendEntry / :794-814 _persist）曾使
+ * delivered/journaled 误真、补投静默失效（机制见 notify-reconcile.ts 文件头
+ * 「判据事实源磁盘化」段）；
+ * no-persist 形态 getSessionFile() 返回 undefined，对账侧退化内存账（现状行为）。
+ */
+function runNotifyReconcileSafely(
+	pi: ExtensionAPI,
+	ctx: ReconcileSessionContext,
+	reason: "session_start" | "agent_settled" | "resume",
+): void {
+	logger.debug("notify reconcile dispatch", { detail: { reason } });
+	try {
+		const entries = ctx.sessionManager.getEntries();
+		runNotifyReconcileMaintenance({
+			reason,
+			entries,
+			sessionFile: ctx.sessionManager.getSessionFile(),
+			submitNotify: (notifyId, content, details) =>
+				recordManagedNotify(notifyId, content, details, [notifyId]),
+		});
+	} catch (err) {
+		logger.warn("notify reconcile dispatch failed; retried at next reconcile edge", {
+			detail: { reason, err: err instanceof Error ? err.message : String(err) },
+		});
+	}
+}
+
 /** 单个 session 工具的声明式配置（registerSessionTool 的输入）。 */
 interface SessionToolConfig<S extends TObject> {
 	name: string
@@ -271,6 +322,39 @@ export default function sessionManagerExtension(pi: ExtensionAPI): void {
 	// 活跃集回归基线；每 entry 独立 handler（禁串行 await）在 coordinator 内保证。
 	pi.on("session_start", (_event: SessionStartEvent, ctx: ExtensionContext) => {
 		coordinator.recoverStaleRegisters(ctx);
+		// 通知对账步（completion-signal-delivery D8② 入口①）：rejected 丢失形态的
+		// 事实判据补投（session_start 重绑后的确定性边沿——旧 pi 实例的 rejected
+		// 通知在此恢复）。与 agent_settled 入口（下方）互调同一对账函数
+		// （runNotifyReconcileMaintenance，RL12 判据单一）；幂等由判据的投递日志
+		// 承载/送达痕迹两事实抵消保证（补投受理成功即有 outbox 条目落盘）。
+		runNotifyReconcileSafely(pi, ctx, "session_start");
+	});
+
+	// 通知对账步入口②（completion-signal-delivery D8②）：agent_settled 回合收尾
+	// 边沿——进程存活形态（重提失败后不重启不切回）的兜底恢复入口（ADR-0122 保留
+	// 白名单同族：事件驱动、判据现算磁盘事实，无定时器）。订阅生命周期（RL13
+	// 同款）：本注册点 = extension load 装配期，每 pi 实例恰一次；同进程 session
+	// 替换会重建 eventBus 并重新 load extension，旧实例连同其订阅一并消亡、新
+	// 实例重新注册——无死 handler 累积（构造性成立）。高频边沿的常态零成本由
+	// 判据预检短路兜住（无 register 条目不进终判循环）。
+	pi.on("agent_settled", (_event: unknown, ctx: ExtensionContext) => {
+		runNotifyReconcileSafely(pi, ctx, "agent_settled");
+	});
+
+	// 通知对账步入口③（completion-signal-delivery D8② 三入口同构的切回补强边沿，
+	// U2 修复）：同进程「切走会话再切回」不重发 session_start（真机实证），本域
+	// 入口①② 在该场景不可达——切回边沿唯一触发源是 base-tool-enhance 注册的
+	// `__taiji_bg_reconcile__` 内部命令（runtime 在 getCommands 时 fire-and-forget
+	// 触发，无节流——原 60s per-session 节流窗已随 ADR-0122 防御机制清查退役，
+	// 高频防护由本域对账链预检判据早退承担），本
+	// 扩展与 base-tool-enhance 无依赖边（跨扩展依赖通道不存在），经三方共同依赖
+	// 包 pi-delivery-port 的进程级注册槽订阅其派发（subagent 域 SubagentService
+	// 单例直转的 A5 先例同族接线）。订阅生命周期（RL13 同款论证）：订阅点 =
+	// extension load 装配期，同进程 session 替换重新 load extension，新闭包经同域
+	// key 覆盖旧订阅，无死 handler 累积；域侧围栏 = runNotifyReconcileSafely 内
+	// catch，异常原则上不向派发方传播。
+	subscribeResumeReconcile("session-manager", (ctx) => {
+		runNotifyReconcileSafely(pi, ctx, "resume");
 	});
 
 	registerSessionTool(pi, {

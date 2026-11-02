@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // mock pi 官方工厂：前台行为是委托（方案 B），测试断言「透传侧」而非真实 spawn
 // 行为——真实行为由 pi 上游保证 + 探针 P2 实测。
@@ -48,9 +48,19 @@ vi.mock("../background/subagent-guard.ts", () => ({
 import { clearConfigCache } from "@zhushanwen/pi-llm-shared";
 
 import { createBashOverrideToolDefinition } from "../bash-tool.ts";
+import { clearExitWatchesForTest } from "../background/exit-watch.ts";
+import { clearTaskStoreForTest, getAllTasks } from "../background/task-store.ts";
+import { resetNotifyForTest } from "../background/notify.ts";
 
 // M4：临时 agentDir 生命周期——写配置用例切 agentDirRef，afterEach 统一还原 + 清缓存
 const configTempDirs: string[] = [];
+
+/**
+ * 空闲转后台（M1）成为无超时前台命令的默认路径后，任何无超时 execute 都会经 A5 改写
+ * （prepareForegroundWrap 落盘 cmd.sh / 收尾清理）——dataDir 全局 stub 到本用例专属
+ * tmp，防落盘真实目录；用例内自 stub（background 分支的 /tmp/bte-fake-agent-dir）优先。
+ */
+let fgDataDir: string;
 
 /** 切到全新临时 agentDir 并写入配置文件（loadBaseToolEnhanceConfig 读时刷新即生效）。 */
 function useConfig(config: Record<string, unknown>): void {
@@ -62,11 +72,22 @@ function useConfig(config: Record<string, unknown>): void {
 	writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 }
 
+beforeEach(() => {
+	fgDataDir = mkdtempSync(join(tmpdir(), "bte-bashtool-fg-"));
+	vi.stubEnv("TAIJI_AGENT_DATA_DIR", fgDataDir);
+});
+
 afterEach(() => {
 	for (const dir of configTempDirs.splice(0)) {
 		rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 	}
 	agentDirRef.dir = "/tmp/bte-fake-agent-dir";
+	// A5 改写/登记链路的模块级状态复位（走 A5 的用例可能登记任务/挂守望）
+	clearExitWatchesForTest();
+	clearTaskStoreForTest();
+	resetNotifyForTest();
+	expect(getAllTasks()).toHaveLength(0);
+	rmSync(fgDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 	clearConfigCache();
 	// background 分支的 dataDir 来源是 env（resolveTaijiDataDir），逐用例 stub 后在此还原
 	vi.unstubAllEnvs();
@@ -147,6 +168,23 @@ describe("createBashOverrideToolDefinition", () => {
 		expect(tool.description).toContain("DO NOT bash sleep");
 	});
 
+	it("description covers the idle-to-background mechanism (M1: no-timeout default, marker ≠ completion, G8 mitigation)", () => {
+		setupFactory();
+		const tool = createBashOverrideToolDefinition();
+		// 机制段存在（设了超时不转后台 / 未设静默 600s 可配 / 标记非完成无退出码）
+		expect(tool.description).toContain("Idle-to-background");
+		expect(tool.description).toContain("NO timeout");
+		expect(tool.description).toContain("600s (configurable)");
+		expect(tool.description).toContain("NOT completion");
+		expect(tool.description).toContain("no exit code yet");
+		// 先查输出再决策 + 勿空等轮询（DO NOT bash sleep 同款约束）
+		expect(tool.description).toContain("Read the captured output");
+		expect(tool.description).toContain("DO NOT bash sleep or busy-wait");
+		// G8 零成本缓解：持续输出/无限循环类命令引导自带 timeout 或显式 background
+		expect(tool.description).toContain("while loops");
+		expect(tool.description).toContain("pass an explicit timeout");
+	});
+
 	it("passes through official promptSnippet/promptGuidelines (system-prompt parity)", () => {
 		setupFactory();
 		const tool = createBashOverrideToolDefinition();
@@ -204,8 +242,11 @@ describe("createBashOverrideToolDefinition", () => {
 		expect(spawnBackgroundTaskMock).not.toHaveBeenCalled();
 	});
 
-	it("delegates without timeout when absent (undefined preserved)", async () => {
+	it("delegates without timeout when absent (undefined preserved; idle-to-background disabled)", async () => {
+		// M1 语义变更：无超时默认走 A5 包装（injector-foreground-branch.test.ts 承载）；
+		// 本用例保留「timeout undefined 透传」的 D4 语义断言——机制关闭（N3）时回归现状
 		setupFactory();
+		useConfig({ idleBackgroundSec: null });
 		officialExecuteMock.mockResolvedValue({ content: [], details: undefined });
 		const tool = createBashOverrideToolDefinition();
 
@@ -229,17 +270,27 @@ describe("createBashOverrideToolDefinition", () => {
 		expect(createBashToolDefinitionMock).toHaveBeenCalledTimes(1);
 		expect(createBashToolDefinitionMock).toHaveBeenCalledWith(process.cwd());
 
-		// execute 的 ctx.cwd 与缓存不一致 → 以 ctx.cwd 重建
-		await tool.execute("c1", { command: "ls" }, undefined, undefined, { cwd: "/tmp/alt" } as never);
+		// execute 的 ctx.cwd 与缓存不一致 → 以 ctx.cwd 重建（无超时 → A5 包装路径，
+		// ctx 需含 sessionManager；只断言工厂重建次数，与 session id 无关）
+		await tool.execute("c1", { command: "ls" }, undefined, undefined, {
+			cwd: "/tmp/alt",
+			sessionManager: { getSessionId: () => "sess-cwd-1" },
+		} as never);
 		expect(createBashToolDefinitionMock).toHaveBeenCalledWith("/tmp/alt");
 		expect(createBashToolDefinitionMock).toHaveBeenCalledTimes(2);
 
 		// 同 cwd 复用缓存（不再新建）
-		await tool.execute("c2", { command: "ls" }, undefined, undefined, { cwd: "/tmp/alt" } as never);
+		await tool.execute("c2", { command: "ls" }, undefined, undefined, {
+			cwd: "/tmp/alt",
+			sessionManager: { getSessionId: () => "sess-cwd-2" },
+		} as never);
 		expect(createBashToolDefinitionMock).toHaveBeenCalledTimes(2);
 
 		// cwd 再变 → 重建
-		await tool.execute("c3", { command: "ls" }, undefined, undefined, { cwd: "/tmp/alt2" } as never);
+		await tool.execute("c3", { command: "ls" }, undefined, undefined, {
+			cwd: "/tmp/alt2",
+			sessionManager: { getSessionId: () => "sess-cwd-3" },
+		} as never);
 		expect(createBashToolDefinitionMock).toHaveBeenCalledTimes(3);
 	});
 });
@@ -535,8 +586,11 @@ describe("timeout injection dual-mode (M4, 优先级 LLM 显式 > 配置默认 >
 		expect(officialExecuteMock).toHaveBeenCalledWith("t2", { command: "ls", timeout: 7 }, undefined, undefined, expect.anything());
 	});
 
-	it("前台：均未配置 → 不注入（timeout undefined = pi 原生不限时，D4）", async () => {
+	it("前台：均未配置 → 不注入（idle 关闭时 timeout undefined = pi 原生不限时，D4）", async () => {
+		// M1 语义变更：无超时默认走 A5 包装（timeout 同为 undefined 透传）——本用例在
+		// 机制关闭形态下保留「不注入」断言；A5 形态断言见 injector-foreground-branch
 		setupFactory();
+		useConfig({ idleBackgroundSec: null });
 		officialExecuteMock.mockResolvedValue({ content: [], details: undefined });
 		const tool = createBashOverrideToolDefinition();
 		await tool.execute("t3", { command: "ls" }, undefined, undefined, createCtx() as never);

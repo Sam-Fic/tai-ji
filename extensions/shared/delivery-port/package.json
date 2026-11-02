@@ -21,7 +21,9 @@
     "test": "vitest run --pool=threads"
   },
   "dependencies": {
-    "@zhushanwen/extension-protocol": "workspace:*"
+    "@zhushanwen/extension-protocol": "workspace:*",
+    "@zhushanwen/pi-ext-guards": "workspace:*",
+    "@zhushanwen/pi-extension-logger": "workspace:*"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "^1.0.0",

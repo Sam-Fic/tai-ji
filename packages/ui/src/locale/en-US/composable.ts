@@ -5,6 +5,9 @@ export default {
   // user back to the main session view instead of a generic failure toast.
   vidViewReadonly: 'This view is a read-only snapshot; perform this action in the main session view',
   nextTurnSendFailed: 'Failed to send next turn: {msg}',
+  // [fix-chat-flow-stuck C-4] Stop request hit the 65s backstop timeout: pi is likely hung
+  // (abort RPC got no reply); the only convergence exit is sidebar "Force quit".
+  abortTimedOut: 'Stop request timed out: the session may be unresponsive. Right-click it in the sidebar and choose "Force quit"',
   // C2 background /compact: acceptance receipt (info, command-echo register; same fact
   // description as the extension busy/completion notices)
   compactStarted: 'Background compaction started; keep chatting — a result notice will arrive when it finishes.',

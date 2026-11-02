@@ -16,7 +16,7 @@ import { userStoppedGate } from '../src/services/session/event-interpreter.js';
 import { MessageDispatcher } from '../src/services/session/message-dispatcher.js';
 import { type ILifecycleSessionOps, ISessionRegisterDeps, type IDispatcherSessionOps } from '../src/services/session/session-internal.js';
 import { SessionLifecycle, setMigrationGate } from '../src/services/session/session-lifecycle.js';
-import { ScannedSession, type IManagedSessionView } from '../src/services/session/types.js';
+import { ScannedSession, type ForceQuitSource, type IManagedSessionView } from '../src/services/session/types.js';
 import type { WorkspaceService } from '../src/services/workspace/workspace-service.js';
 import { ServerMessage, type SessionSummary, type ProviderId } from '@taiji/shared';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -428,9 +428,16 @@ describe('D4 restore-abort 失败链：fallback 也失败吞错（R3 S-3）', ()
   let filePath: string
   let warnSpy: ReturnType<typeof vi.spyOn>
   const markStore = {
-    marks: new Map<string, { source: string }>(),
-    markUserStopped: vi.fn((id: string, source: string) => { markStore.marks.set(id, { source }) }),
+    marks: new Map<string, { source: ForceQuitSource }>(),
+    markUserStopped: vi.fn((id: string, source: ForceQuitSource) => { markStore.marks.set(id, { source }) }),
     hasUserStoppedMark: vi.fn((id: string) => markStore.marks.has(id)),
+    getUserStoppedSource: vi.fn((id: string) => markStore.marks.get(id)?.source),
+    consumeUserStoppedMarkOfSource: vi.fn((id: string, allowed: readonly ForceQuitSource[]) => {
+      const mark = markStore.marks.get(id)
+      if (!mark || !allowed.includes(mark.source)) return false
+      markStore.marks.delete(id)
+      return true
+    }),
     clearUserStoppedMark: vi.fn((id: string) => { markStore.marks.delete(id) }),
     clearAllUserStoppedMarks: vi.fn(() => markStore.marks.clear()),
   }

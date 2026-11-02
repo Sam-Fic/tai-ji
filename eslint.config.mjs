@@ -246,10 +246,16 @@ export default [
   // 单点合并）。降级派生视图升级路径恢复（W-P2 重构回归修复）净增 9 行代码，509 > 500 微超
   // 即提额（先例 pi-provider-store / server.ts「微超即提额，保留软上限告警」同型）——
   // 再拆属独立重构任务。
+  // [U3 同步预算/异步整建] buildInSegments 分片构建通道 + 静默门净增 ~60 行代码，
+  // 615 > 520 同型提额至 620（异步整建与投影实例生命周期同链内聚；静默门依赖实例
+  // 私有喂入门状态，拆出需公开内部门语义，不拆）。
+  // [U5 plan 冷路径归一 D6] buildInSegments planEntries 收集上浮（截断整建场景 plan
+  // 派生的喂数：收集在扫描产出消费点、派生在 session-records 切换点——实例本体不持
+  // plan，上浮是唯一不出实例边界的形态）净增 ~13 行代码，624 > 620 微超即提额至 640。
   {
     files: ['packages/runtime/src/services/session/events-projection.ts'],
     rules: {
-      'max-lines': ['warn', { max: 520, skipBlankLines: true, skipComments: true }],
+      'max-lines': ['warn', { max: 640, skipBlankLines: true, skipComments: true }],
     },
   },
   // [2026-10 归档边缘输入修复] ArchiveService 三操作编排服务：零消息 session 空归档 +

@@ -25,7 +25,8 @@
   "files": [
     "src/",
     "index.ts",
-    "skills/"
+    "skills/",
+    "bin/"
   ],
   "dependencies": {
     "@zhushanwen/extension-protocol": "workspace:*",
@@ -33,7 +34,8 @@
     "@zhushanwen/pi-ext-guards": "workspace:*",
     "@zhushanwen/pi-extension-logger": "workspace:*",
     "@zhushanwen/pi-file-lock": "workspace:*",
-    "@zhushanwen/pi-llm-shared": "workspace:*"
+    "@zhushanwen/pi-llm-shared": "workspace:*",
+    "@zhushanwen/subagent-core": "workspace:*"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.9",

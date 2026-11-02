@@ -1,6 +1,20 @@
 /**
- * 收殓终态补投的送达痕迹提取（unified-delivery D3 裁决 1：对账路径 = 收殓终态通知
- * 的唯一生产者，pending-reconcile.ts 消费）——纯函数，无 I/O、无 pi 依赖。
+ * 对账补投判据的送达痕迹提取（bash 域专属层）——无 I/O、无 pi 依赖。
+ *
+ * 本文件原是三重事实判据骨架的「跨域共享语义落点」（u1 抽出：骨架
+ * isReconcileNotifyCandidate / ReconcileNotifyFacts / 投递日志幂等键提取
+ * collectJournaledDeliveryIds 曾在此单源登记，session-manager / subagent-workflow
+ * 两域按同构落位持物理副本、真值表测试逐行对拍锁定）。判据链已收编
+ * @zhushanwen/pi-delivery-port（reconcile-judgement.ts / session-journal-read.ts
+ * 单源，真值表测试随迁该包、域侧对拍的人工同步义务退役），骨架三件随迁，本文件
+ * 只留 bash 域专属的送达痕迹提取——补投候选 = 任务已终态 ∧ 送达痕迹未命中 ∧
+ * 投递日志无该幂等键条目，其中后两事实的事实源函数（痕迹提取在此、日志键提取在
+ * port 包）与骨架真值组合（port 包 reconcile-judgement）按域侧调用组合。
+ *
+ * 职责：collectDeliveredTaskIds 从会话 entries 提取送达痕迹集合（D3 裁决 1 /
+ * 波 3 载体形态；completion-signal-delivery D2/D7 的送达痕迹判据事实源）。
+ *
+ * 投递统一化设计的现行登记处 = ADR-0074 与 docs/CONTEXT.md「统一投递」段。
  *
  * collectDeliveredTaskIds：从会话 entries 提取「已送达完成通知的 taskId 集合」。
  * 送达痕迹 = 会话文件里的完成通知消息本身（custom_message，customType =

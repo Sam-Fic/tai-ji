@@ -728,6 +728,19 @@ function handleSessionOccupancy(
   }
 }
 
+/** [pi-stall-detection U4 / D3] 静默辅助提示消费（session.stall_hint state topic：live 广播 +
+ * stateSnapshot 回放同路径到达）。判定权在 runtime——T/T_hint 推导单源 runtime（review-main#1
+ * 双阈值裁决），本 handler 只把 last-value 帧写进 chat store 派生视图分区（ActivityStrip
+ * stall 行文案源），不复制推导、不做任何判定动作。active=false = 清除边沿（帧流恢复 /
+ * 判死触发 / 回合收尾），setStallHint 内部删记录回落「无提示在显」。 */
+function handleSessionStallHint(
+  sid: string,
+  chat: ChatStoreInstance,
+  msg: ServerMessage<'session.stall_hint'>,
+): void {
+  chat.setStallHint(sid, msg.payload)
+}
+
 /** pi 改写 session 名（session_info_changed → session.renamed，见 event-adapter.ts）。
  * guard：payload.name 为空时跳过 —— 防 pi 推空名/旧名覆盖用户手动 rename 的值。
  * 用闭包 sid（对称 compacting/compacted handler）：session.* 走 session 级通道
@@ -835,6 +848,12 @@ function handleSessionFrame(
     }
     case 'session.occupancy': {
       handleSessionOccupancy(sid, chat, msg, deps)
+      break
+    }
+    // [pi-stall-detection U4 / D3] 静默辅助提示 last-value 帧（呈现派生视图写入，
+    // 判定权在 runtime——renderer 只呈现）
+    case 'session.stall_hint': {
+      handleSessionStallHint(sid, chat, msg)
       break
     }
     // [投递所有权内核 u3b / D7] 内核条目状态快照：队列区/气泡 morph 的单一数据源
@@ -1308,6 +1327,15 @@ export function createUseChat(deps: UseChatDeps) {
       // pendingSend 已清（乐观），实体收尾靠 runtime 广播 message.complete{aborted} 兜底。
       // [chat-flow R4] 停止失败 toast 已删：pi 层失败的呈现由 runtime message.error 气泡承担
       // （dispatcher.abort 吞错广播）；WS 断由断连全局提示覆盖，RPC reject 落 warn 不打扰。
+      // [fix-chat-flow-stuck C-4] 超时形态例外升级 toast：renderer pending 层 65s backstop
+      // 超时（error.code='timeout'）= abort 请求无回执且 pi 大概率挂死（abort RPC 对挂死 pi
+      // 悬挂、无服务端超时兜底，ADR-0122 退役登记），message.error 气泡与断连提示都不会来
+      // ——静默 warn 会把用户留在「点了停止但毫无反馈」的僵局，toast 指引唯一收敛出口
+      // （侧栏右键「强制退出」）。
+      if ((e as { code?: unknown } | null)?.code === 'timeout') {
+        deps.toast.error(deps.t('composable.abortTimedOut'))
+        return
+      }
       console.warn(`[useChat] abort RPC failed (sid=${sid})`, e)
     }
   }

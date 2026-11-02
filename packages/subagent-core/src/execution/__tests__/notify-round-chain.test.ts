@@ -144,6 +144,10 @@ describe("[N2] chatMode 轮次通知正文：真实执行链路（协议引擎�
     // lifecycle-manager 模块级单例（idleTimers Map 跨用例共享），每用例前清空防泄漏。
     _resetLifecycleState();
     agentDir = makeTmpAgentDir();
+    // journal/records 落盘隔离（测试红线：不触真实数据目录）。initSession 的通知
+    // 对账会补投 records 树内的收尾 idle record——数据目录跨用例共享时前一用例的
+    // record 会被补投进本用例的 pi 计数（对账判据覆盖轮终收尾形态后暴露的隔离欠账）。
+    process.env.TAIJI_AGENT_DATA_DIR = path.join(agentDir, "engine-data");
     const modelService = new ModelConfigService({ agentDir, cwd: agentDir });
     modelService.initModel({
       modelRegistry: emptyRegistry(),
@@ -238,6 +242,8 @@ describe("首轮闭环独有断言范围（迁自壳 first-round-closure-service
     _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
     agentDir = makeTmpAgentDir();
+    // journal/records 落盘隔离（同 [N2] describe 先例——initSession 对账读 records 树）。
+    process.env.TAIJI_AGENT_DATA_DIR = path.join(agentDir, "engine-data");
     const modelService = new ModelConfigService({ agentDir, cwd: agentDir });
     modelService.initModel({
       modelRegistry: emptyRegistry(),

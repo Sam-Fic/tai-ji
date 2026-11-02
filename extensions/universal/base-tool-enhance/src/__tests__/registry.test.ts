@@ -89,7 +89,7 @@ describe("writeRegistryEntry / readRegistry roundtrip", () => {
 	});
 });
 
-describe("corruption defense (§3.6)", () => {
+describe("corruption defense", () => {
 	it("bad JSON → renamed .corrupt + empty table rebuild + no crash", () => {
 		const path = freshRegistryPath();
 		writeRegistryEntry(path, taskToRegistryEntry(makeEntry()));

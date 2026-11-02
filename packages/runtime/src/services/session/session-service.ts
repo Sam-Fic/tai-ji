@@ -96,7 +96,9 @@ import { SessionEntryRemovalOrchestrator, runDestroyStepIsolated } from './sessi
 // 空闲回收占座原语与等待观测超时（idle-pi-reclamation D6-2，u2）。type-only import：
 // Seat 实例由 u3 组合根创建后 setter 注入，本模块不持有创建权（不引入运行时依赖环）。
 import { RespawnOrchestrator } from './pi-respawn.js'
-import { MessageDispatcher, type SystemCommandOutcome } from './message-dispatcher.js'
+import { MessageDispatcher, type SystemCommandOutcome, type StallAutoDisposePort } from './message-dispatcher.js'
+// [pi-stall-detection U4] 判死载荷类型（静默判定矩阵单源，D3）。
+import type { StallJudgePayload } from './event-interpreter-silence.js'
 // [A1 接线] skill 注入映射源（skill-reload-nondestructive D7）：records/dispatcher 的
 // SkillInjector 共享同一晚绑定占位，组合根在 SkillRegistry 构造后 bind 真源（构造顺序环
 // 见 LateBoundSkillSource 注释）。
@@ -112,47 +114,14 @@ import { PresetService, type PresetResolution } from '../preset-service.js'
 //（MessageBus 不反向依赖 SessionService）。
 import type { IMessageBus } from '../message-bus/message-bus.js'
 import { isGeneratingTurn } from './types.js'
-import type { ForceQuitSource, UserStoppedMarkStore } from './types.js'
+import { userStoppedMarkStore } from './user-stopped-mark-store.js'
+
+
 
 /**
- * userStopped 标记宿主（session-dead-structural-fixes D4）：sessionId 键控的模块级独立 Map。
- * 数据源登记 = 主表 #30（docs/architecture/data-source-registry.md，2026-09-10 u3b 补登）。
- *
- * 为什么是模块级、为什么独立于 ManagedSession：forceQuit 尾步 removeSessionEntry 会删
- * sessions Map 条目、销毁 session 对象，而标记必须存活到后续 restore（用户点开 dead session
- * 时 restoreSession 读它决定是否 restore-abort）——挂在 session 对象 / 实例字段上都会随条目
- * 删除消亡。清理路径全列（D4）：restore 收敛消费（gate 静默窗满清，主路径）/ delete /
- * destroyAll / 进程退出（内存态整体消亡，天然清理）；removeSessionEntry 刻意不清（forceQuit
- * 尾步经过它，只停收敛环定时器，见 gate.disposeForEntryRemoval）。
- *
- * 子模块（dispatcher/lifecycle/interpreter 挂点）不直接 import 本模块（模块依赖单向性：
- * 本 Facade 值导入全部子模块，反向 import 成环），统一经 event-interpreter.ts 的
- * userStoppedGate 门面存取——本构造器经 gate.configure 注入下方 store 实现与 abort 能力。
- */
-// @data-owner #30（data-source-registry.md）：跨 ManagedSession 生命周期存活的用户停止
-// 意图标记（模块级 Map 是存在理由而非偶发形态，D4）；写方唯一 = userStoppedMarkStore。
-const userStoppedMarks = new Map<string, { source: ForceQuitSource; markedAt: number }>()
-
-/** 宿主 Map 的存取实现（gate.configure 注入 + 测试直断言用）。 */
-export const userStoppedMarkStore: UserStoppedMarkStore = {
-  markUserStopped(sessionId: string, source: ForceQuitSource): void {
-    userStoppedMarks.set(sessionId, { source, markedAt: Date.now() })
-    console.warn(`[session-service] userStopped mark set (sessionId=${sessionId}, source=${source})`)
-  },
-  hasUserStoppedMark(sessionId: string): boolean {
-    return userStoppedMarks.has(sessionId)
-  },
-  clearUserStoppedMark(sessionId: string): void {
-    userStoppedMarks.delete(sessionId)
-  },
-  clearAllUserStoppedMarks(): void {
-    userStoppedMarks.clear()
-  },
-}
-
-/**
- * background 任务完成通知补投触发（bg-task-notify-durability 第二触发点）的内部命令与
- * per-session 节流窗口。命令名与扩展侧注册（extensions/universal/base-tool-enhance
+ * background 任务完成通知补投触发（bg-task-notify-durability 第二触发点）的内部命令。
+ * 触发无节流——原 60s per-session 节流窗已随 ADR-0122 防御机制清查退役，高频防护
+ * 由扩展侧三判据早退承担。命令名与扩展侧注册（extensions/universal/base-tool-enhance
  * src/index.ts 的 pi.registerCommand）是跨包字符串契约，字面量锤定不 import（先例
  * trace-sync 的 /__taiji_get_system_prompt__）——`/__` 双下划线前缀 = 内部命令（前端
  * internal-command-filter 过滤不显示），两处注释互为指针，改名必须同批。
@@ -184,6 +153,10 @@ const BG_COMPACT_COMMAND_NAME = '__taiji_compact__'
  * 约束，见 rollingRestart engineChannelsInFlight 接线注释）。
  */
 export type SubagentStreamStateSource = (sessionId: string, recordId: string) => SubagentTeeStreamState | undefined
+
+// [pi-stall-detection 拆分兼容出口] 宿主实现搬移至 user-stopped-mark-store.ts（行为零变化），
+// 既有 import 路径（index.ts / 测试直断言）经此 re-export 保持。
+export { userStoppedMarkStore } from './user-stopped-mark-store.js'
 
 export class SessionService implements ISessionService, ILifecycleSessionOps, IDispatcherSessionOps, IScannerSessionOps {
   /**
@@ -1043,9 +1016,33 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
   // [HISTORICAL] sendSubagentMessage（marker 半成品通道）已删除（composer 四符号设计 D2）：
   // base64 隐藏注释前缀在 extension 侧零消费方，且经主 agent 转发违背
   // 「直达 subagent」目标——定向消息改走 subagentAction(message/start)。
-  async abort(sessionId: string): Promise<void> { return this.dispatcher.abort(sessionId) }
+  // [pi-stall-detection U4] source：session_manager abort 工具通路的机器分型传参（'agent'）——
+  // agent 发起的 abort 不是用户操作，升级窗窗满强杀置判死强杀分型而非 abort_timeout 用户
+  // 分型（D2① 消费方 ④ / RL16 分型不变量；transport 层唯一非缺省调用点）。
+  async abort(sessionId: string, source?: 'agent'): Promise<void> { return this.dispatcher.abort(sessionId, source) }
   /** 强制退出卡死 session（sidebar 右键入口，杀 pi 进程 + stopped 收敛）。 */
   async forceQuit(sessionId: string): Promise<void> { return this.dispatcher.forceQuit(sessionId) }
+  /**
+   * 停滞判定自动处置链入口（pi-stall-detection U2，D2②）：onSilentAbort（探测 3 次观测
+   * 超时判定）的组合根接线点——按第 0 层进程存活信号分型分流（进程死维持既有协作式 abort
+   * 显式收尾路由；存活 → sample 取证 → 判死强杀 → 窄化自动恢复触发链）。编排本体在
+   * MessageDispatcher.handleStallDetermination，本方法仅转发（组合根不经 dispatcher 直达）。
+   */
+  async handleStallDetermination(sessionId: string): Promise<void> { return this.dispatcher.handleStallDetermination(sessionId) }
+  /**
+   * 第 2 层静默判死入口（pi-stall-detection U4，D3）：静默判定矩阵判死的组合根接线点——
+   * 自动 abort 复用 U2 有界等待 + 悬挂升级判死强杀分型（RL16）+ steer 注入原因提示。
+   * 编排本体在 MessageDispatcher.handleSilenceJudgeDetermination，本方法仅转发。
+   */
+  async handleSilenceJudgeDetermination(sessionId: string, payload: StallJudgePayload): Promise<void> {
+    return this.dispatcher.handleSilenceJudgeDetermination(sessionId, payload)
+  }
+  /**
+   * 后置注入停滞自动处置链端口（pi-stall-detection U2；组合根装配序：恢复执行/注入/发声
+   * 依赖 respawn 编排器与死亡发声闭包，均晚于 dispatcher 构造——对齐 setMessageBus /
+   * setDeliveryRegistry 后置注入先例）。null = 拆除（测试隔离用）。
+   */
+  setStallAutoDisposePort(port: StallAutoDisposePort | null): void { this.dispatcher.setStallAutoDisposePort(port) }
   /** bash 投递回执（started/settled/rejected + 可选失败原因），1:1 透传 dispatcher（翻译层在 transport）。 */
   async sendBash(sessionId: string, command: string, excludeFromContext?: boolean): Promise<{ status: 'started' | 'settled' | 'rejected'; error?: string }> {
     return this.dispatcher.sendBash(sessionId, command, excludeFromContext)
@@ -1184,6 +1181,15 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
    */
   reconcileRecordEntries(sessionId: string): void {
     return this.records.reconcileRecordEntries(sessionId)
+  }
+
+  /**
+   * [U1 检查点·同 id 复活布防] 导入落地派生缓存失效委托（ImportService 组合根接线）：
+   * 实现迁 session-records.ts invalidateProjectionAfterImport——同 id 再导入 = 主文件
+   * 整文件替换，按会话 id 失效派生缓存与游标（旧游标续读会漏读新文件头部）。
+   */
+  invalidateProjectionAfterImport(sessionId: string): void {
+    return this.records.invalidateProjectionAfterImport(sessionId)
   }
 
   /**
@@ -1695,7 +1701,8 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
    * emit、reload 场景显式 reason="reload"；切回 = runtime 重新挂接同一存活进程，
    * 不经 AgentSession 构造），扩展侧挂在 session_start 上的维护链在「投递失败但
    * 进程存活」场景（设计 G2 核心场景）永不触发。getCommands 是切回后 renderer
-   * 主动拉取的必经查询（broadcast 与订阅时序竞争的既有补偿点），在此按节流补触发。
+   * 主动拉取的必经查询（broadcast 与订阅时序竞争的既有补偿点），在此补触发
+   * （fire-and-forget，无节流——退役登记见下）。
    *
    * 执行形态：fire-and-forget——不 await（getCommands 延迟敏感，补投结果不阻塞查询）、
    * 失败只 console.warn（补投失败无害：扩展侧三判据幂等，下次触发重查）。

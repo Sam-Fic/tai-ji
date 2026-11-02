@@ -42,6 +42,7 @@ import { inflightMirror } from '../../services/session/inflight-mirror.js'
 import { routeJournalReport } from '../../services/session/journal-report-router.js'
 import { randomUUID } from 'node:crypto'
 import { stripAnsi, normalizePiToolResult } from './normalize-tool-result.js'
+import { INTERACTIVE_UI_METHOD_SET } from './pi-protocol.js'
 import type {
   PiEvent,
   PiMessageStartEvent,
@@ -67,6 +68,8 @@ import type {
   PiEntryAppendedEvent,
   PiAssistantMessageSubEvent,
   PiToolcallEndSubEvent,
+  PiBashExecutionUpdateEvent,
+  PiSummarizationRetryScheduledEvent,
 } from './pi-protocol.js'
 
 // ── Sub-handler types ──────────────────────────────────────────────
@@ -91,20 +94,10 @@ const STOP_REASON_MAP: Record<string, string> = {
 }
 
 /**
- * Interactive extension UI dialog methods that produce extension.ui_request WS events.
- * Must stay in sync with ExtensionInteractMethod SSOT (shared/extension.ts).
- *
- * notify 不在此列——它是 fire-and-forget（pi rpc-mode.ts notify 发后不等回复），
- * 走独立 extension:notify WS 帧 + 前端 toast 渲染（非阻塞）。
- * setWidget/set_editor_text 也不在此列——它们走独立分支，不产 dialog 帧
- * （setStatus 曾同列，状态栏退役后改为静默 noop，见 translateStatusRequest）。
- *
- * 用 `as const satisfies readonly ExtensionInteractMethod[]` 实现编译期穷举检查：
- * ExtensionInteractMethod 扩展新方法时，若此数组遗漏，tsc 报错（而非静默 noop 丢弃）。
+ * Interactive extension UI dialog methods 词表本体已迁 pi-protocol.ts（INTERACTIVE_UI_METHODS，
+ * as const satisfies 编译期穷举形态 + pi 源码锚点随迁；handleExtensionUIRequest 与
+ * silence-matrix 两消费方统一查其派生 INTERACTIVE_UI_METHOD_SET）。
  */
-const INTERACTIVE_UI_METHODS = new Set(
-  ['confirm', 'select', 'input', 'editor'] as const satisfies readonly ExtensionInteractMethod[]
-)
 
 /**
  * 扩展交互表面 kind 词表（pi1-disposition-chat-flow D6①，三值）：dialog / notify / widget——
@@ -1083,7 +1076,7 @@ function handleExtensionUIRequest(event: PiExtensionUiRequestEvent, sid: string)
 
   if (method === 'notify') return translateNotifyRequest(event, sid)
 
-  if (INTERACTIVE_UI_METHODS.has(method as ExtensionInteractMethod)) {
+  if (INTERACTIVE_UI_METHOD_SET.has(method)) {
     return translateInteractiveRequest(event, sid)
   }
 
@@ -1465,6 +1458,28 @@ function handleAutoRetryEnd(event: PiAutoRetryEndEvent, sid: string): PiTranslat
   }]
 }
 
+/**
+ * [pi-stall-detection U4 / AS16①] bash_execution_update → bash-execution-update 中间事件
+ * （静默判定矩阵在途信号：刷新计时；前端零消费——不产 WS 帧，UI 形态不变）。
+ */
+function handleBashExecutionUpdate(_event: PiBashExecutionUpdateEvent, _sid: string): PiTranslatedEvent[] {
+  return [{ kind: 'bash-execution-update' }]
+}
+
+/**
+ * [pi-stall-detection U4 / AS16②] summarization_retry_scheduled → summarization-retry-scheduled
+ * 中间事件（静默判定矩阵带窗在途信号：按载荷 delayMs 给 backoff 宽限，RL11）。载荷缺失/
+ * 畸形（非有限数）时 delayMs=null——矩阵按无宽限处理（fail-safe 收窄，不放大豁免）。
+ */
+function handleSummarizationRetryScheduled(event: PiSummarizationRetryScheduledEvent, _sid: string): PiTranslatedEvent[] {
+  return [{
+    kind: 'summarization-retry-scheduled',
+    delayMs: typeof event.delayMs === 'number' && Number.isFinite(event.delayMs) && event.delayMs > 0
+      ? event.delayMs
+      : null,
+  }]
+}
+
 /** session_info_changed → session.renamed + 内存态 label 回写（interpreter 编排） */
 function handleSessionInfoChanged(event: PiSessionInfoChangedEvent, sid: string): PiTranslatedEvent[] {
   return [
@@ -1605,24 +1620,25 @@ function handleAgentSettled(_event: PiAgentSettledEvent, _sid: string): PiTransl
 // [session-trace A33] agent_settled / message_end / entry_appended 同时追加 trace-trigger 输出
 // （interpreter 调 onTraceSync 做追赶式 since 拉取）——与 W1/W18/W21 的 handler 经
 // withTraceTrigger 组合注册，互不取代（见 DISPATCHER）。
-// bash_execution_update：pi 0.84.1 新增 live bash 流事件（dist/core/agent-session.d.ts:103-106
-// {type:"bash_execution_update", id?, delta}，emit 点 agent-session.js:2210 executeBash 的
-// onChunk 回调），复用发起 bash RPC 的 id（docs/rpc.md:26）。rpc-client 的 resolve 检查修复后
-// 该事件正确流入本层，但 taiji 暂不做 live bash 流式 UI 消费（最终 output 经 bash RPC response
-// 全量到达）——显式登记为已知 no-op，防止落入 default 分支被误判为「事件丢失」。
+// bash_execution_update：[pi-stall-detection U4 起] 翻译为 bash-execution-update kind
+// （静默判定矩阵在途信号：连续流式命令的 chunk 是回合推进信号，丢弃构成 C1 格假阳性）；
+// 前端呈现仍零消费（翻译产物不产 WS 帧）。pi 0.84.1 新增 live bash 流事件（dist/core/
+// agent-session.d.ts:103-106 {type:"bash_execution_update", id?, delta}，emit 点
+// agent-session.js:2210 executeBash 的 onChunk 回调），复用发起 bash RPC 的 id（docs/rpc.md:26）。
 // queue_update：[u5a 退役] message.queue_update 帧已随协议条目整链退役（core 消费方 /
 // renderer UI 消费 / shared payload 声明均已删，队列深度展示归 session.delivery 快照帧）。
-// pi 侧仍恒发该事件，登记为已知 no-op（同 bash_execution_update 理由——不落 default warn）。
-// summarization_retry_* 三事件（pi1-disposition-chat-flow U3⑤，D12 显式 no-op 登记）：
-// 压缩/分支摘要重试状态（scheduled / attempt_start / finished），呈现层已有 compaction
-// 主链路（compaction-start/end 双事件 → session.compacting 帧）覆盖，重试过程不产前端
-// 行为。显式登记后「未登记」与「裁决不处理」恢复可区分——每次压缩重试不再刷 Unhandled
-// pi event type 告警。
+// pi 侧仍恒发该事件，登记为已知 no-op（不落 default warn）。静默判定矩阵同理不消费
+// （AS16③ 过滤帧——队列元操作不证明回合推进）。
+// summarization_retry_* 三事件（pi1-disposition-chat-flow U3⑤，D12 登记）：
+// - scheduled：[pi-stall-detection U4 起] 翻译为 summarization-retry-scheduled kind（矩阵按
+//   载荷 delayMs 给 backoff 宽限，RL11——backoff 窗内无帧流是合法有界静默）；
+// - attempt_start / finished：维持 no-op——compaction 形态由 compacting 豁免锚点整体覆盖
+//   （compaction_start→end 窗口内重试含退避全豁免），branchSummary 形态发生在树操作 RPC
+//   （非回合占用期，矩阵不武装），两形态均无矩阵消费需求；呈现层已有 compaction 主链路
+//   覆盖。显式登记后「未登记」与「裁决不处理」恢复可区分——不再刷 Unhandled pi event 告警。
 const NULL_EVENTS = new Set([
   'extension_config', 'extension_ui_response', 'response',
-  'bash_execution_update',
   'queue_update',
-  'summarization_retry_scheduled',
   'summarization_retry_attempt_start',
   'summarization_retry_finished',
 ])
@@ -1703,6 +1719,10 @@ const DISPATCHER = new Map<string, Handler>()
   // 见 handleAgentSettled 注释）；[session-trace A33] 组合追加 trace-trigger；
   // [reload-closeout D2] 组合追加 record-reconcile-trigger（送达水位对账路径）
   DISPATCHER.set('agent_settled', withRecordReconcileTrigger(withTraceTrigger(handleAgentSettled as Handler)))
+  // [pi-stall-detection U4] bash 执行流 chunk → 矩阵在途信号（AS16①）；摘要重试退避调度
+  // → 矩阵带窗在途信号（AS16②，delayMs 宽限）。两事件此前 NULL_EVENTS 登记，见上方注释。
+  DISPATCHER.set('bash_execution_update', handleBashExecutionUpdate as Handler)
+  DISPATCHER.set('summarization_retry_scheduled', handleSummarizationRetryScheduled as Handler)
 })()
 
 /**

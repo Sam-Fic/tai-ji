@@ -552,6 +552,32 @@ describe("session_start 差集重放", () => {
 		// sent 2 条 = first 实例注入 1（投出未送达——无回执无 ack，差集合法重投）+ 重放 1
 		expect(h.sent).toHaveLength(2);
 	});
+
+	it("重绑交接（in-flight 预占）：前驱已出站条目后继不重放（bindDeliveryPort 双投窗口封住，A4 真机回归）；崩溃形态（无前驱交接）照旧重放", () => {
+		const h = makeHost();
+		// 同一 session 的两次 bind（session_start 连发，真机 10ms 级间隔）：第一次
+		// bind 后受理并出站一条（注入完成、凭据未落——pi 异步写 entry 的窗口）。
+		const first = bindDeliveryPort(h.host);
+		first.deliver(defaultEnvelope({ id: "rb-1", payload: { kind: "custom", customType: DEFAULT_NOTIFY_CUSTOM_TYPE, content: "redelivered", display: true } }));
+		expect(h.sent).toHaveLength(1); // 已出站（sendMessage 交递完成）
+		expect(h.outboxEntries()).toHaveLength(1);
+		const deliveredProofCount = (): number =>
+			h.host.readSessionEntries().filter(
+				(e) => (e as Record<string, unknown>)["type"] === "custom_message",
+			).length;
+		expect(deliveredProofCount()).toBe(0); // 凭据未落（注入异步——重放窗口的构成条件）
+
+		// 第二次 bind：交接 in-flight 集合 + dispose 前驱 → 后继 recover 跳过该条
+		// （消息在途必达，重放 = 双投）。sent 恒 1、recoveryReplays 零计数。
+		const second = bindDeliveryPort(h.host);
+		expect(second.recover()).toBe(0);
+		expect(h.sent).toHaveLength(1);
+
+		// 对照（崩溃形态）：无前驱交接的新实例（进程重启语义）对同一未凭据 outbox
+		// 照旧重放——崩溃恢复通道不受交接影响。
+		const third = createDeliveryPort(h.host);
+		expect(third.recover()).toBe(1);
+	});
 });
 
 // ─── 耐久承诺 ───────────────────────────────────────────────

@@ -25,7 +25,9 @@
 //
 // 层归属：本模块零领域依赖（不 import run-events / record-events）——行解析器
 // 经 parseLine 注入（record 域 = parseRecordEventFileLine；run 域 =
-// parseWorkflowRunEventFileLine，runtime 侧单源）。日志策略同构注入
+// parseWorkflowRunEventFileLine，runtime 侧单源）；头行判定经 isHeader 注入
+// （record 域 = isRecordEventHeaderLine；命中静默跳过不计坏行，与
+// JsonlEventStream.scanFile 的 strategy.isHeader 同构）。日志策略同构注入
 // （调用方按 skippedLines 自持），判定与策略分离。
 
 import { readFileSync, statSync } from "node:fs";
@@ -50,7 +52,7 @@ export function splitCompleteLines(buffer: string): { lines: string[]; remainder
 
 // ── offset 续读（无状态单文件原语）────────────────────────────
 
-/** 域注入的行解析器：合法事件返回 T；空行/头行/坏行返回 undefined（跳过 + 计数）。 */
+/** 域注入的行解析器：合法事件返回 T；空行/头行/坏行返回 undefined（头行可经 isHeader 注入进一步二分）。 */
 export type EventLineParser<T> = (line: string) => T | undefined;
 
 /** 单次续读结果。 */
@@ -60,8 +62,10 @@ export interface EventTailChunk<T> { // oe-exempt:20260929:framework:workflow/re
   /** 下次续读起点（字节偏移；只落在完整行边界——不完整尾行不计入）。 */
   nextOffset: number;
   /**
-   * 跳过行计数 = 解析器拒绝的行（头行 + 坏行——头行是合法存在，计入是为
-   * 「跳过并记日志计数」的单通道；每文件每生命周期至多 1 次头行，量级可忽略）。
+   * 跳过行计数 = 真坏行数（解析器拒绝且非头行的行——JSON 解析失败 / 词表外 /
+   * 信封坏值）。头行经 isHeader 注入判定，命中静默跳过不计（合法存在非坏行，
+   * 与 JsonlEventStream.scanFile 的 isHeader 同构）；未注入 isHeader 的调用方
+   * （run 域无头行，天然不受影响）头行按坏行计入。
    */
   skippedLines: number;
   /** 文件比 offset 短（截断/重建）→ 已从文件头全量重读（幂等全量重读原语）。 */
@@ -82,6 +86,12 @@ export function readEventTail<T>(
   filePath: string,
   offset: number,
   parseLine: EventLineParser<T>,
+  /**
+   * 可选头行判定注入（头行形态由调用域提供，保持本层零领域依赖）。判定时点 =
+   * parseLine 拒绝之后（正常事件行零额外开销——头行每文件恰一行，重复解析成本
+   * 可忽略）；命中 = 合法头行静默跳过、不计 skippedLines。
+   */
+  isHeader?: (line: string) => boolean,
 ): EventTailChunk<T> {
   let size: number;
   try {
@@ -122,11 +132,13 @@ export function readEventTail<T>(
   let skippedLines = 0;
   for (const line of lines) {
     const parsed = parseLine(line);
-    if (parsed === undefined) {
-      skippedLines += 1;
-    } else {
+    if (parsed !== undefined) {
       events.push(parsed);
+      continue;
     }
+    // 解析器拒绝的行二分：头行命中（合法存在）静默跳过不计数，其余 = 真坏行计数
+    if (isHeader !== undefined && isHeader(line)) continue;
+    skippedLines += 1;
   }
   return { events, nextOffset: lastNewline + 1, skippedLines, truncated };
 }
