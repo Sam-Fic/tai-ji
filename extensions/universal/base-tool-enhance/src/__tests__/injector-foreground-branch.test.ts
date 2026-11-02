@@ -487,7 +487,7 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)("settle by pidfile (断言 #4)", () 
 		expect(existsSync(join(TASKS_DIR))).toBe(true);
 	});
 
-	it("B4 修复: 标记行存在 + pid 已死 → 照常登记 + 日志保留 + 守望通知兑现（exit code unknown），结果不重复补标记", { timeout: 20_000 }, async () => {
+	it("收尾窗口死亡形态: 标记行存在 + pid 已死 → 照常登记 + 日志保留 + 守望通知兑现（exit code unknown），结果不重复补标记", { timeout: 20_000 }, async () => {
 		const pi = createMockPi();
 		refreshPiReference(pi as unknown as ExtensionAPI);
 		// wrapper 已打印标记行（结果含 [TAIJI-FG-BG]）+ 命令恰在收尾窗口死亡
@@ -567,7 +567,7 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)("execute error path catch settle (ab
 		});
 	}
 
-	it("B2 修复: abort 抛错（signal.aborted=true）→ 跳过判活收尾，不登记 + 三文件删除 + 无通知（设计矩阵 B4「用户中止无登记」）", async () => {
+	it("B4 用户中止形态: abort 抛错（signal.aborted=true）→ 跳过判活收尾，不登记 + 三文件删除 + 无通知（设计矩阵 B4「用户中止无登记」）", async () => {
 		const pi = createMockPi();
 		refreshPiReference(pi as unknown as ExtensionAPI);
 		let fixturePid: number | undefined;

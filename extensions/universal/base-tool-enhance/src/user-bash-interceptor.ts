@@ -29,7 +29,7 @@
  *    登记 + onData 发用户向标记行 + resolve({ exitCode: null })
  *  - pid 判死且无标记行（B2 正常完成）→ 不登记零感知 + 三文件清理 + 透传 wrapper
  *    退出码（wrapper wait 真实命令的原样透传）
- *  - pid 判死但有标记行（B4：命令恰在收尾窗口死亡）→ 照常登记（标记行在 = 承诺在）
+ *  - pid 判死但有标记行（收尾窗口死亡形态：命令恰在收尾窗口死亡）→ 照常登记（标记行在 = 承诺在）
  *  - pidfile 不可读 → 不登记 + 尽力清理 + 透传退出码（wrapper spawn 毫秒窗口被杀的
  *    设计已接受代价 / usage 参数错误 exit 64·66 同落此分支，错误消息经 stderr 抄送可见）
  *
@@ -76,7 +76,7 @@ const FG_BG_MARKER_TAG = "[TAIJI-FG-BG]";
 /**
  * 用户向标记行（D3 产品形态①：bash 气泡 output 尾部的转后台去向说明）。与 wrapper
  * 模型向标记行（三方协议、含 bash_output/bash_kill 工具语法、经抄送流先到）并存：
- * 用户没有工具，指引指向侧边栏；转后台登记成功即补发本行，恒一次（B3/B4/B5 不分叉）。
+ * 用户没有工具，指引指向侧边栏；转后台登记成功即补发本行，恒一次（B3/B5 与收尾窗口死亡形态不分叉）。
  */
 const USER_MARKER_NOTE =
 	`${FG_BG_MARKER_TAG} 已转后台：命令仍在运行、尚未完成（暂无退出码）。` +
@@ -238,7 +238,7 @@ async function execWrappedUserBash(
 		{ cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] },
 	);
 
-	// B4 判据的标记行旁路检测：wrapper 标记行经 stdout 抄送流到达 onData，是否已发
+	// 收尾窗口死亡形态判据的标记行旁路检测：wrapper 标记行经 stdout 抄送流到达 onData，是否已发
 	// 在管道上检测（exec 无 result 对象可查——与 bash-tool resultHasFgBgMarker 同判据
 	// 不同载体）
 	let hasMarker = false;
@@ -246,10 +246,9 @@ async function execWrappedUserBash(
 	// abort 通道（RL5/V7）：中止杀 wrapper 进程组（killProcessTree 组杀语义——wrapper
 	// 是 detached 组长，真实命令同组一并死）→ 抛官方式 aborted（executor catch
 	// signal.aborted → cancelled: true 组装）——用户中止无登记（agent 侧同款语义 =
-	// bash-tool.ts 文件头的「B4 用户中止→跳过判活直接清理」；注意与上方收尾判定表
-	// 及 bash-tool settleConvertedCommand 注释里的 B4（收尾窗口死亡照常登记）编号
-	// 同字不同义——bash-tool 文件头与 settle 判据两处 B4 历史上指向不同形态），
-	// 通道占用随 RPC 返回复位
+	// bash-tool.ts 文件头的「B4 用户中止→跳过判活直接清理」；矩阵 B4 只指用户中止
+	// 形态，上方收尾判定表与 bash-tool settleConvertedCommand 注释里的「收尾窗口
+	// 死亡形态」是另一形态，勿混淆），通道占用随 RPC 返回复位
 	const onAbort = (): void => {
 		if (child.pid !== undefined) killProcessTree(child.pid);
 	};
@@ -296,9 +295,9 @@ async function execWrappedUserBash(
 	// 登记转后台（同进程直调登记链——registerConvertedTask 内部完成单例表 + registry +
 	// pending:register + 守望 + 超时接线），三形态同一条登记路径：
 	//  - B3 静默转后台 / B5 wrapper 异常死亡但命令存活（pid 活）
-	//  - B4 命令恰在收尾窗口死亡但 wrapper 已打标记行（标记行在 = 通知承诺在 = 必登记，
-	//    守望首轮 ESRCH 兑现通知）
-	// 登记后 onData 补发用户向标记行（恒一次，B3/B4/B5 不分叉）→ resolve({ exitCode:
+	//  - 收尾窗口死亡形态：命令恰在收尾窗口死亡但 wrapper 已打标记行（标记行在 =
+	//    通知承诺在 = 必登记，守望首轮 ESRCH 兑现通知）
+	// 登记后 onData 补发用户向标记行（恒一次，B3/B5 与收尾窗口死亡形态不分叉）→ resolve({ exitCode:
 	// null })（官方组装层呈现 exitCode undefined + cancelled false，AS11；bash 通道占用
 	// 随 RPC 返回复位——既有 release 路径自然结果，D3）
 	registerConvertedTask({

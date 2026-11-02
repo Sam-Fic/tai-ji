@@ -339,11 +339,12 @@ function cleanupWrapFiles(plan: ForegroundWrapPlan): void {
 }
 
 /**
- * execute 收尾统一判定（§4.3 登记判据 = pid 存活性 × 标记行，B2/B3/B4/B5 形态收口）：
+ * execute 收尾统一判定（§4.3 登记判据 = pid 存活性 × 标记行，B2/B3/B5 与收尾窗口
+ * 死亡形态收口；矩阵 B4「用户中止」不经此——调用方 catch 分支 abort 前置跳过判活）：
  *  - pidfile 可读且 pid 活 → 登记为后台任务（返回条目，调用方按需补标记行）
  *  - 判死且无标记行 → 不登记零感知 + 删除本次三文件（B2 正常完成：输出已经官方
  *    管道完整透传，无登记条目则文件无消费方）
- *  - 判死但有标记行（B4 修复）→ 照常登记：标记行在 = 承诺在（"It will notify on
+ *  - 判死但有标记行（收尾窗口死亡形态）→ 照常登记：标记行在 = 承诺在（"It will notify on
  *    completion"）= 必登记——无登记无守望则通知永不到来，且三文件清理会让标记行引用
  *    的日志路径落空。登记后 attachExitWatch 首轮（≤2s）ESRCH 收尾、通知兑现，退出码
  *    如实报 unknown（转后台任务退出码结构性不可得，notify.ts 已登记形态）。
@@ -563,7 +564,8 @@ export function createBashOverrideToolDefinition() {
 					ctx,
 				);
 				// 收尾判据（settleConvertedCommand 注释）：标记行在 = 承诺在 = 必登记——
-				// pid 判死也不清理（B4：命令恰在收尾窗口死亡时通知承诺不落空）
+				// pid 判死也不清理（收尾窗口死亡形态：命令恰在收尾窗口死亡时通知承诺
+				// 不落空；矩阵 B4「用户中止」是另一形态，见下方 catch 分支）
 				const converted = settleConvertedCommand(
 					plan,
 					dataDir,

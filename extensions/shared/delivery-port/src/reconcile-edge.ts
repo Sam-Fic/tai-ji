@@ -2,8 +2,10 @@
 //
 // 切回边沿对账转发注册槽（completion-signal-delivery D8② 三入口同构的跨扩展
 // 接线件）：`__taiji_bg_reconcile__` 内部命令（切回补强边沿——taiji runtime 在
-// getCommands 时按节流触发，覆盖「切走切回同进程重挂接、session_start 不重发」
-// 场景）的注册方是 @zhushanwen/pi-base-tool-enhance，而 session-manager /
+// getCommands 时 fire-and-forget 触发，无节流——原 60s per-session 节流窗已随
+// ADR-0122 防御机制清查退役，高频防护由订阅域对账预检判据早退承担；覆盖
+// 「切走切回同进程重挂接、session_start 不重发」场景）的注册方是
+// @zhushanwen/pi-base-tool-enhance，而 session-manager /
 // subagent-workflow 两域的对账编排在各自扩展内装配（deps 需当前 pi / session
 // entries / 域闭包状态，外部无法直构）。subagent 域的同类转发走 SubagentService
 // 进程单例（base-tool-enhance 直依 subagent-core，A5 先例）；两域与

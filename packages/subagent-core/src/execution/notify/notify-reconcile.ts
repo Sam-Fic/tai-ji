@@ -88,8 +88,10 @@ const logger = getLogger("subagents");
  * 级，10_000 已是数量级冗余上限；collectRecords 的 limit 只是合并内存(running) +
  * 磁盘(重建) 两源后的 slice（截断前合并不做 IO 放大），该值取大取小无扫描成本差异
  * ——取足够大常量防极端膨胀截断（截断尾部 = 最老 record 的 rejected 补投永远排不
- * 进；全量扫描语义最干净）。对照 subagent-actions-core collectRecords 的 limit 夹紧
- * （下限 1 / 上限 MAX_LIST_LIMIT）与「防截断下沉 store 层」注释，语义一致。
+ * 进；全量扫描语义最干净）。对照 subagent-actions-core listHandler 的 limit 夹紧
+ * （下限 1 / 上限 MAX_LIST_LIMIT，list 工具消费面对用户输入 rawLimit 的防御——
+ * 对账装配路径不经此：record-access 直转 store，本常量全额生效）与 store 层
+ * 「防截断下沉」注释。
  */
 export const NOTIFY_RECONCILE_SCAN_LIMIT = 10_000;
 

@@ -614,7 +614,9 @@ export function setupWorkflowDomain(
   // 通知对账步入口③（completion-signal-delivery D8② 三入口同构的切回补强边沿，
   // U2 修复）：同进程「切走会话再切回」不重发 session_start（真机实证），本域
   // 入口①② 在该场景不可达——切回边沿唯一触发源是 base-tool-enhance 注册的
-  // `__taiji_bg_reconcile__` 内部命令（runtime 在 getCommands 时按节流触发），本
+  // `__taiji_bg_reconcile__` 内部命令（runtime 在 getCommands 时 fire-and-forget
+  // 触发，无节流——原 60s per-session 节流窗已随 ADR-0122 防御机制清查退役，
+  // 高频防护由本域对账链预检判据早退承担），本
   // 扩展与 base-tool-enhance 无依赖边（跨扩展依赖通道不存在），经三方共同依赖
   // 包 pi-delivery-port 的进程级注册槽订阅其派发（与 session-manager 域同款接线；
   // subagent 域 SubagentService 单例直转的 A5 先例同族）。订阅生命周期（RL13

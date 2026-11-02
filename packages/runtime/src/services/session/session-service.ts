@@ -116,8 +116,9 @@ import { userStoppedMarkStore } from './user-stopped-mark-store.js'
 
 
 /**
- * background 任务完成通知补投触发（bg-task-notify-durability 第二触发点）的内部命令与
- * per-session 节流窗口。命令名与扩展侧注册（extensions/universal/base-tool-enhance
+ * background 任务完成通知补投触发（bg-task-notify-durability 第二触发点）的内部命令。
+ * 触发无节流——原 60s per-session 节流窗已随 ADR-0122 防御机制清查退役，高频防护
+ * 由扩展侧三判据早退承担。命令名与扩展侧注册（extensions/universal/base-tool-enhance
  * src/index.ts 的 pi.registerCommand）是跨包字符串契约，字面量锤定不 import（先例
  * trace-sync 的 /__taiji_get_system_prompt__）——`/__` 双下划线前缀 = 内部命令（前端
  * internal-command-filter 过滤不显示），两处注释互为指针，改名必须同批。
@@ -1673,7 +1674,8 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
    * emit、reload 场景显式 reason="reload"；切回 = runtime 重新挂接同一存活进程，
    * 不经 AgentSession 构造），扩展侧挂在 session_start 上的维护链在「投递失败但
    * 进程存活」场景（设计 G2 核心场景）永不触发。getCommands 是切回后 renderer
-   * 主动拉取的必经查询（broadcast 与订阅时序竞争的既有补偿点），在此按节流补触发。
+   * 主动拉取的必经查询（broadcast 与订阅时序竞争的既有补偿点），在此补触发
+   * （fire-and-forget，无节流——退役登记见下）。
    *
    * 执行形态：fire-and-forget——不 await（getCommands 延迟敏感，补投结果不阻塞查询）、
    * 失败只 console.warn（补投失败无害：扩展侧三判据幂等，下次触发重查）。
