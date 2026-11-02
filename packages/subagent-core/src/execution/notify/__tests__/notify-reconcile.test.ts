@@ -52,8 +52,17 @@ import {
   runNotifyReconcileMaintenance,
   type NotifyGenerationIndex,
   type NotifyReconcileSource,
+  type ReconcileNotifyFacts,
   type ReconcileNotifyRecord,
 } from "../notify-reconcile.ts";
+// 跨包判据对拍（delivery-port 侧同构实现——相对路径源码消费，registry-fork-filter.
+// test.ts 同款先例：subagent-core 无该 workspace 依赖声明，不加 phantom dep；D9 闭包
+// 检查对 __tests__ 整体豁免）。只消费 reconcile-judgement.ts 单文件（不进包 index——
+// 避免 index 全量模块图拖入 typecheck 程序面）。
+import {
+  isReconcileNotifyCandidate as isReconcileNotifyCandidateViaDeliveryPort,
+  type ReconcileNotifyFacts as DeliveryPortReconcileNotifyFacts,
+} from "../../../../../../extensions/shared/delivery-port/src/reconcile-judgement.ts";
 import { createNotifyHost, type NotifyHostDeps } from "../notify-host.ts";
 
 // ─── 替身构造 ────────────────────────────────────────────────────────────────
@@ -870,6 +879,36 @@ describe("补投 payload 与受理形态（D6①：补投的是主路径本要�
     expect(journal.generations.get("j-outbox")).toEqual(new Set([2]));
     expect(journal.generations.has("j-legacy")).toBe(false);
     expect(journal.wildcard).toEqual(new Set(["j-legacy", "j-ack"]));
+  });
+});
+
+// ─── 跨包判据同构对拍（notify-reconcile.ts 文件头「漂移防线 = 全量测试门对账」的机器化落点） ──
+
+// core 与 delivery-port 各持一份逐字同逻辑的 ReconcileNotifyFacts + isReconcileNotifyCandidate
+// （core ← extensions 依赖方向红线物理不可达，两域 oe-exempt 同构落位——见两侧实现文件头）。
+// TS 结构化类型下单侧判据表达式或字段集演化不报编译错，两域候选判定会静默分叉；本 describe
+// 是该形态的机器防线：16 真值组合全等对拍 + 交叉类型字段集互锁。两侧实现文件只读参照。
+describe("跨包判据一致性：core 与 delivery-port 两份 isReconcileNotifyCandidate 16 真值组合全等", () => {
+  it("四布尔字段 16 真值组合枚举对拍：任一侧判据表达式或必填字段集漂移即红", () => {
+    // 交叉类型互锁：任一侧接口增必填字段 / 改字段名，字面量或函数实参在 tsc 亮红；
+    // 判据表达式真值漂移由下方运行时全等断言承接。
+    const combos: (ReconcileNotifyFacts & DeliveryPortReconcileNotifyFacts)[] = [];
+    for (const isTerminal of [false, true]) {
+      for (const excludedByOrigin of [false, true]) {
+        for (const delivered of [false, true]) {
+          for (const journaled of [false, true]) {
+            combos.push({ isTerminal, excludedByOrigin, delivered, journaled });
+          }
+        }
+      }
+    }
+    expect(combos).toHaveLength(16);
+    for (const facts of combos) {
+      expect(
+        isReconcileNotifyCandidateViaDeliveryPort(facts),
+        `两域候选判定分叉 @ ${JSON.stringify(facts)}`,
+      ).toBe(isReconcileNotifyCandidate(facts));
+    }
   });
 });
 
