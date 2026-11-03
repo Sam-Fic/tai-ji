@@ -149,11 +149,11 @@ export type WorkflowRunLookup = (sessionId: string, scriptName: string, slug?: s
  *  调用方按「记录不可知」处理（落默认标签页 + warning，不写选中态）。 */
 export type SubagentRecordLookup = (sessionId: string, recordId: string) => boolean
 
-// taste:allow-no-data-owner W24-EX-B（模块级单例 UI 瞬态，已登记 §4 ⑧ 2026-10-02）：overlay 桥接绑定单例 ref
+// taste:allow-no-data-owner W24-EX-B（模块级单例 UI 瞬态，§4 ⑧ 登记补录于 2026-11-03）：overlay 桥接绑定单例 ref
 const boundOverlayOpener = ref<WorkflowOverlayOpener | null>(null)
-// taste:allow-no-data-owner W24-EX-B（同上，已登记 §4 ⑧ 2026-10-02）：同组桥接绑定的第二声明
+// taste:allow-no-data-owner W24-EX-B（同上，§4 ⑧ 登记补录于 2026-11-03）：同组桥接绑定的第二声明
 const boundWorkflowRunLookup = ref<WorkflowRunLookup | null>(null)
-// taste:allow-no-data-owner W24-EX-B（同上，已登记 §4 ⑧ 2026-10-02）：同组桥接绑定的第三声明（D3 subagent 记录反查）
+// taste:allow-no-data-owner W24-EX-B（同上，§4 ⑧ 登记补录于 2026-11-03）：同组桥接绑定的第三声明（D3 subagent 记录反查）
 const boundSubagentRecordLookup = ref<SubagentRecordLookup | null>(null)
 
 /**
