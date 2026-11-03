@@ -52,12 +52,17 @@
   - 面板打开不抢焦点（onOpenAutoFocus preventDefault）：hover 预览打开时用户可能正在 composer 输入。
   - 条目消失（widget 被 setWidget(key, undefined) 清屏 / built-in 该类记录归零）→ 面板与 pin 一并
     作废（判据 = renderedPanelKeys）；条目重新出现时不继承旧交互态（不「诈尸」弹回）。
+  - [tray-panel-interact D11] 导航后面板收起联动：watch 右抽屉与浮层开合态（core 单例公开读口
+    getDrawerControlState / getOverlayControlState），观察到「从关到开」边沿即 closePanel（清
+    activeKey 与 pin）——语义 = 任何容器打开时托盘面板让位。只动边沿：容器已开时再导航是单例
+    换内容（isOpen 恒 true），不反复开关面板。
 
   ── widget 区依赖追踪契约（u-tray-widget 头注；断链症状 = 推送后不重算）──
   entries computed 必须**在同一调用路径内**同时触碰 `getViewIds(sessionId)`（分区键迭代）与
   `getView(sessionId, viewId)`（分区值读），顺序由 tray-order 的 orderTrayWidgetIds（known-order
   ['todo','goal'] 优先 + 当前插入序）决定；拆开即断链。可运行复刻样例见
-  __tests__/panel/tray/tray-widget.test.ts 的「外壳契约复刻」宿主。
+  __tests__/panel/tray/tray-widget-bundle.test.ts 的「外壳契约复刻」宿主
+  （TrayWidgetStrip；原 tray-widget.test.ts 已并入该 bundle）。
 
   ── 数据范围归属（D2/D13）──
   计数/首次拉取/错误态全部在 useTrayCounts，**唯一实例在本外壳创建**（面板随 Popover 开合反复
@@ -287,6 +292,9 @@ import type { Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Layers, Network, SquareTerminal, Waypoints } from '@lucide/vue'
 import { VIEW_HOST_SOURCE_KEY, ViewHost } from '@taiji/ui/extension-host'
+// D11 收起联动的容器开合态读口（core 单例公开读口；drawer 域控制态 + overlay 域开合态）
+import { getDrawerControlState } from '@taiji/core/domain/drawer'
+import { getOverlayControlState } from '@taiji/core/domain/overlay'
 import { usePluginToolbarContribution } from '@/components/panel/tray/use-plugin-toolbar'
 import type { ViewCacheEntry } from '@taiji/ui/extension-host'
 import {
@@ -591,7 +599,7 @@ function onOpenAutoFocus(event: Event): void {
   event.preventDefault()
 }
 
-// ── 会话切换 / 条目消失 / 卸载清理 ──
+// ── 会话切换 / 条目消失 / 容器开合联动 / 卸载清理 ──
 
 // 切 session：面板与 pin 一并作废（否则新 session 下会沿用旧态，A6「不残留旧任务」）
 watch(() => props.sessionId, () => {
@@ -604,6 +612,21 @@ watch(renderedPanelKeys, (keys) => {
   const key = activeKey.value
   if (key !== null && !keys.includes(key)) closePanel()
 })
+
+// ── D11 导航后面板收起联动（tray-panel-interact §3.3 D11 / RL8）──
+// 语义 = 任何容器打开时托盘面板让位：观察到右抽屉或浮层「从关到开」的边沿即 closePanel
+//（清 activeKey 与 pin）。以容器开合态为信号而非行点击事件——行点击分派链（原语组件
+// → 容器导航执行器 → sink）无回调通道，容器开合态是 core 单例的公开读口
+//（getDrawerControlState / getOverlayControlState），watch 边沿简单可靠且天然覆盖一切
+// 导航来源（托盘行 / SubagentTab / 命令面板 / 快捷键，不限于本托盘）。
+// 只动边沿不反复开关：容器已开时再导航到另一目标是单例换内容（isOpen 恒 true），不触发
+// 边沿；watch 源取两容器开合态的并集，任一从无到有即收起一次。
+watch(
+  () => getDrawerControlState().isOpen || getOverlayControlState().isOpen,
+  (open, wasOpen) => {
+    if (open && !wasOpen) closePanel()
+  },
+)
 
 onBeforeUnmount(() => {
   clearTimers()

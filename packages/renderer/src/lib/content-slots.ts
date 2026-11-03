@@ -27,6 +27,7 @@ import {
   BUILTIN_NAMESPACE,
   contentSlotRegistry,
   HOST_PLUGIN_ID,
+  stripBuiltinNamespace,
   type ContentSlotDeclaration,
   type ContentSlotRegistry,
   type ContentSlotView,
@@ -195,14 +196,11 @@ export function useSettingsNavSections(): ComputedRef<ContentSlotView[]> {
 
 // ── 消费端映射（分区键 / 文案 / 分组头 / 限宽档 / 图标）──────────────────
 
-const BUILTIN_ID_PREFIX = `${BUILTIN_NAMESPACE}.`
-
 /** 视图条目 → 分区键：内置 = id 去 'ui.' 前缀（既有 testid/深链/内容分支键不变）；
- * 插件 = 声明 id 全值。 */
+ *  插件 = 声明 id 全值。剥前缀规则单源 = core stripBuiltinNamespace（D1：插件声明 id
+ *  恒不命中 'ui' 命名空间——validateContentSlotId 拒绝，剥前缀对插件项恒原样）。 */
 export function settingsNavKey(view: ContentSlotView): string {
-  return view.source === 'builtin' && view.id.startsWith(BUILTIN_ID_PREFIX)
-    ? view.id.slice(BUILTIN_ID_PREFIX.length)
-    : view.id
+  return stripBuiltinNamespace(view.id)
 }
 
 /** 文案谓词（§6.16④）：内置项恒走 labelKey（内置 label 是 id 占位值，非渲染文案）；

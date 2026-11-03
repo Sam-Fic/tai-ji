@@ -1293,3 +1293,12 @@ WorkflowTab 步骤列表的数据源绑定从「workflow-record 全量快照（6
 **依据**：D3 验收 verify-a1 独立探针实测复现全链（kill(-pid) ESRCH → 单杀父成功 → pgrep -P 空 → sleep 残留 PPID=1，与现场 pid/pgid 形态逐字同构）；「按目标真实进程组终止」是 killProcessTree 全部消费方（bash_kill / 后台超时到点杀（spawn-background）/ reaper 补杀 / background-task-service kill / process-exit-guard / subagent-control）语义「杀整棵进程树」的准确实现，比「假设组长=登记 pid」少一个隐含前提。
 
 **登记**：实装（commit ded112065）——`packages/extension-protocol/src/background-task-process.ts`（pgid 解析层 + 回退顺序修正）+ 同文件测试（新增转后台形态真实进程回归用例；632 用例绿）。设计文档：`~/.agents/skill-data/tech-design/fix-chat-flow-stuck-84f23fa0/foreground-idle-to-background.md`（D3 验收熔断项闭环）。
+### ADR-0186 托盘按钮悬停 title 恢复：推翻 2026-10-19「原生 title 退役」裁决（2026-11-03 用户裁决，tray-panel-interact D8）
+
+2026-10-19 裁决托盘按钮原生 title 随状态提示退役（即时反馈归 160ms 悬停面板）；本交付恢复原生 title。title 文案 = 宿主 i18n 模板拼接（title 是宿主渲染行为；事实字段 title/badge/progress 全部来自扩展 `WidgetMeta`，单一事实源：扩展给事实、宿主给文案模板）。分段省略规则：进度段「{badge} 运行中 / {total}」仅用于 viewId 封闭集合（progress 语义 = 运行数/全量数的条目）；集合外条目 title = 「{title} · {badge ?? progress.label}」；字段缺失分支整段略去、不输出 undefined 字面。与 aria-label 并存不互斥（视觉 hover 即时反馈走 title，屏幕阅读器全文走 aria-label）。完整规则与推翻依据登记于 `packages/renderer/src/components/panel/tray/TrayWidgetButton.vue:44-56` 头注（本条即其决策登记处）。
+
+**推翻依据**：① 用户在托盘交互问题链明确要求悬停内容；② 160ms 面板延迟期间 title 是鼠标用户唯一即时反馈（aria-label 对鼠标用户不可见，空窗内无任何反馈）。
+
+### ADR-0187 断连告知的壳层分工：面板级断连提示条降为组件级防御契约（2026-11-03 裁决，tray-panel-interact 发现 2/F1）
+
+桌面壳 App.vue 以 `connectionState !== 'connected'` 整屏摘除 AppShell（waiting-runtime / 连接族过渡屏 / restarting / failed 四态各有壳级呈现），WS 任意非 connected 态托盘面板随壳卸载——面板级断连提示条（TrayWidgetPanel「连接已断开，内容可能过期」banner，wsState !== 'connected' 即显示）在桌面壳**结构性无触发窗**（壳层门控自初始导入即存在，非本批回归）。裁决：断连告知由壳层四态过渡屏/错误页承担；面板级提示条保留为组件级防御契约（RL5 单测 6/6 承载），真机断言按壳层呈现判定。**不采用**：改壳层门控让面板在断连态保持可达（属启动/连接架构域的 UX 决策——面板脱离会话数据源后的信息时效与误导读风险未论证，超出本交付范围）。

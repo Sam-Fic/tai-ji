@@ -99,7 +99,8 @@ export interface GuiComponentProps {
    * 点击经宿主壳 provide 的执行器走既有命令链（commandRegistry.execute → WS
    * plugin.executeCommand），协议不新增回调通道（设计 §3.3 D2）。
    * 未含此 type 的旧宿主自动降级 ansi-text 可读文本，PROTOCOL_VERSION 不 bump
-   * （设计 §3.3 D8，降级契约 P5）。
+   * （降级契约权威描述见 docs/architecture/extension-gui-protocol.md「降级行为」节：
+   * 降级判定单点在 core resolveComponent）。
    */
   'action-bar': {
     items: {
@@ -118,6 +119,19 @@ export interface GuiComponentProps {
        * 执行路径（commandId 优先走既有命令链，宿主执行器裁决）。
        */
       hostAction?: HostContainerAction
+      /**
+       * 两段式确认提示文案（tray-panel-interact 设计 §3.3 D5）：声明后宿主渲染两段式——
+       * 首击翻确认态（danger 色 + 本文案），再击才执行（在途态禁用防重复 RPC），
+       * 超时或指针离开复位确认态。确认闸是插件侧产品判断、宿主按声明渲染
+       * （2026-10-19「宿主不擅自加闸」裁决的声明式落地），不声明 = 点击即执行（旧行为）。
+       *
+       * **降级契约**：不认识本字段的旧宿主忽略字段、按钮照常渲染、点击即执行——
+       * 与 action-bar type 本身的降级先例同款（新增可选字段不 bump PROTOCOL_VERSION，
+       * types.ts 上方头注）。危险操作（abort 不可恢复）靠 confirm 声明与按钮同波交付
+       * 消除「有按钮无确认」的独立暴露窗口；扩展侧无宿主能力探测通道，残余降级暴露
+       * 窗口 = dev 混跑环境，登记为部署纪律约束。
+       */
+      confirm?: string
     }[]
   }
 

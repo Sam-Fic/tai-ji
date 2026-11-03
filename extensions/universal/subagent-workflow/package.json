@@ -21,6 +21,7 @@
     "index.ts",
     "skills/",
     "scripts/",
+    "src/i18n.ts",
     "src/index.ts",
     "src/jsonl-run-store.ts",
     "src/session-lifecycle.ts",
@@ -67,6 +68,7 @@
     "@zhushanwen/pi-delivery-port": "workspace:*",
     "@zhushanwen/pi-ext-guards": "workspace:*",
     "@zhushanwen/pi-extension-logger": "workspace:*",
+    "@zhushanwen/pi-llm-shared": "workspace:*",
     "@zhushanwen/pi-subagent-cli": "workspace:*",
     "@zhushanwen/subagent-core": "workspace:*",
     "@zhushanwen/zcode-subagent-cli": "workspace:*"

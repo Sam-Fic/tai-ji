@@ -882,6 +882,9 @@ export class SessionMessageHandler {
     }
   }
 
+  /** workflow 生命周期操作（tray-panel-interact §3.3 D4：abort 与 resume 同款转发通道——
+   *  action 经 payload 原样透传，runtime 侧零分支；差异全在 session-records 的
+   *  `/workflows <action> <runId>` 拼串（命令轮无模型调用，resume 资格归扩展侧）。 */
   private async handleSessionWorkflowAction(msg: Extract<ClientMessage, { type: 'session.workflowAction' }>, ws: WsType): Promise<void> {
     await this.ctx.sessionService.workflowAction(msg.payload.sessionId, msg.payload.action, msg.payload.runId)
     return this.ctx.reply(ws, msg.id, 'session.workflowActionDone', { sessionId: msg.payload.sessionId, action: msg.payload.action, runId: msg.payload.runId })

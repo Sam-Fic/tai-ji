@@ -31,8 +31,8 @@ import { test, expect } from './fixtures/launch-app'
  */
 async function gotoFileTree(page: import('@playwright/test').Page): Promise<void> {
   // 先切到 sessions tab——用 button[title="会话"] 属性选择器（icon-only 模式下 count>0 时按钮
-  // 文本变数字、盖掉 title 的 accessible name，getByRole(/会话/) 在 session 加载后定位不到，
-  // 同 workflow-sidebar-sync.spec.ts 的成熟解法）
+  // 文本变数字、盖掉 title 的 accessible name，getByRole(/会话/) 在 session 加载后定位不到；
+  // 属性选择器不受文本篡改影响）
   await page.locator('button[title="会话"]').click()
   // 等 session list 渲染（mock session.list 40ms 延迟）
   await expect(page.getByText('E2E 文件树测试')).toBeVisible({ timeout: 10_000 })

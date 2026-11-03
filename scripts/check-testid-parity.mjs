@@ -52,8 +52,12 @@ const TESTID_CHARS = "[a-zA-Z0-9_@.-]";
  * 「悬空 e2e 重建」）重建断言或删除引用 spec；届时删除对应登记行，对账器恢复拦截。
  */
 const KNOWN_DANGLING = {
-  "tray-workflow-row": "引用已删托盘 workflow 行 DOM（workflow-sidebar-sync / workflow-viz-overlay spec）；随推树退役在 u-m4 重建断言",
-  "tray-workflow-slug": "引用已删托盘 workflow 行 DOM（workflow-sidebar-sync / workflow-viz-overlay spec）；随推树退役在 u-m4 重建断言",
+  // 原引用方 workflow-sidebar-sync / workflow-viz-overlay 两 mock spec 已随 tray-panel-interact
+  // 交付删除（mock 层托盘 widget 区结构性不可达，证据链见 e2e-map E2E-MOCK-01 note）；
+  // 协议 widget 行形态的重建位 = e2e/tray-entry-real.spec.ts（E2E-REAL-01），testid 不同源，
+  // 两登记行保留为死登记（脚本头注约定：spec 整体删除 = 死登记不强制清理）。
+  "tray-workflow-row": "引用已删托盘 workflow 行 DOM（原 workflow-sidebar-sync / workflow-viz-overlay spec，两 spec 已删）；协议 widget 行形态现由 e2e/tray-entry-real.spec.ts（E2E-REAL-01）承载，testid 不同源",
+  "tray-workflow-slug": "引用已删托盘 workflow 行 DOM（原 workflow-sidebar-sync / workflow-viz-overlay spec，两 spec 已删）；协议 widget 行形态现由 e2e/tray-entry-real.spec.ts（E2E-REAL-01）承载，testid 不同源",
   "workspace-item": "引用已删工作区切换 DOM（workspace / workspace-real spec）；随推树退役重建或删除引用 spec",
   "action-default-session": "引用已删工作区动作菜单 DOM（workspace spec）；随推树退役重建或删除引用 spec",
   "action-open-dir": "引用已删工作区动作菜单 DOM（workspace spec）；随推树退役重建或删除引用 spec",

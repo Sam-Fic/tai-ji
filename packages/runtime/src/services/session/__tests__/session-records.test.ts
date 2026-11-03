@@ -1075,6 +1075,19 @@ describe('workflowAction / subagentAction：命令转发', () => {
     await expect(records.workflowAction('s1', 'abort', 'run-1')).rejects.toThrow('Session s1 not active')
   })
 
+  it('workflowAction resume 与 abort 同款注入通道：拼 /workflows resume <runId>（命令轮无模型调用）', async () => {
+    const { records, client } = makeRecords()
+    await records.workflowAction('s1', 'resume', 'run-1')
+    expect(client.prompt).toHaveBeenCalledWith('/workflows resume run-1')
+    // 与 abort 同款 = 只走 client.prompt 单次注入，不另开 sendMessage / 不发起模型轮
+    expect(client.prompt).toHaveBeenCalledTimes(1)
+  })
+
+  it('workflowAction resume：session 不活跃 throw（与 abort 同款 fail-fast）', async () => {
+    const { records } = makeRecords({ pm: { getClient: vi.fn(() => undefined) } as unknown as IProcessManager })
+    await expect(records.workflowAction('s1', 'resume', 'run-x')).rejects.toThrow('Session s1 not active')
+  })
+
   it('subagentAction cancel 转发 /subagents cancel <subagentId> --req=<uuid> 并消费回执（结果回执契约 2026-10-18）', async () => {
     const channel = armReceiptChannel()
     const { records, client } = makeRecords({ getSessionCwd: () => channel.cwd })

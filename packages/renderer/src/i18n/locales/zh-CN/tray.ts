@@ -63,6 +63,24 @@ export default {
     /** 面板顶部提示条（bash） */
     corruptBanner: '任务数据损坏，已忽略（.corrupt 保留现场）',
     disconnectBanner: '连接断开，重连后自动刷新',
+    /**
+     * 协议 widget 面板断连提示条（tray-panel-interact §3.3 D7）：ws 连接状态非 connected
+     * 且面板打开时置顶，重连自动消失。与 bash 的 disconnectBanner 不同文案——widget 面板
+     * 内容由扩展推送（绝对投影），断连期间显示的是上一帧，「内容可能过期」是如实表述；
+     * bash 是宿主拉取，重连即重拉，故说「重连后自动刷新」。
+     */
+    widgetDisconnectBanner: '连接已断开，内容可能过期',
+    /**
+     * 协议 widget 按钮悬停 title（D8：宿主模板拼接，事实字段来自扩展 meta——扩展给事实、
+     * 宿主给文案模板）。{title} = meta.title、{badge} = badge 回落链取值、{total} =
+     * progress.total。分段省略规则与成员判别（viewId 封闭集合）见 TrayWidgetButton.vue。
+     */
+    widgetTitle: {
+      /** 运行数进度语义条目（集合成员 subagent / workflow） */
+      running: '{title} · {badge} 运行中 / {total}',
+      /** 集合外条目（todo / goal 等：完成计数或百分比语义，无「运行中」概念） */
+      plain: '{title} · {badge}',
+    },
     /** 序 4 聚合入口（单图标 layers + 运行数数字角标，W3a）：title / aria-label 恒为「全部工具」（运行数走角标不进 title） */
     aggregate: {
       allTools: '全部工具',

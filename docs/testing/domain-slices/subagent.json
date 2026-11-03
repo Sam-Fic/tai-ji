@@ -44,6 +44,7 @@
       "packages/renderer/src/stores/subagent.ts",
       "packages/renderer/src/stores/workflow.ts",
       "packages/renderer/src/composables/features/subagent/**",
+      "packages/renderer/src/composables/shell/host-thin-commands.ts",
       "packages/renderer/src/components/panel/SubagentTab.vue",
       "packages/renderer/src/components/panel/workflow-viz/**"
     ],
@@ -61,6 +62,8 @@
     "packages/extension-protocol/src/extensions/subagent-journal/**",
     "packages/extension-protocol/src/extensions/subagent-projection/predicates.test.ts",
     "packages/pi-subagent-cli/src/**",
+    "packages/renderer/src/__tests__/composables/useExtensionHostBridge-container-navigation.test.ts",
+    "packages/renderer/src/__tests__/composables/useExtensionHostBridge-host-commands.test.ts",
     "packages/renderer/src/__tests__/composables/useSubagentTabData.test.ts",
     "packages/renderer/src/__tests__/panel/session-trace/trace-i18n.test.ts",
     "packages/renderer/src/__tests__/panel/session-trace/trace-inspector.test.ts",

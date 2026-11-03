@@ -7,7 +7,7 @@
  * - 使用者（黑盒 DOM）：每条用例至少一个用户可见断言——行渲染（命令/耗时/pid/exit）、
  *   tab 切换、空态按钮、两段式首击确认态
  *   [容器扩展点统一 §6.6/U9+U10] subagent / workflow 面板用例已随件迁移删（插件推
- *   widget 树，渲染面归宿主 widget 区 tray-widget.test.ts 与扩展侧单测
+ *   widget 树，渲染面归宿主 widget 区 tray-widget-bundle.test.ts 与扩展侧单测
  *   workflow-tray-widget.test.ts；workflow abort / 错误态 retry / oversize 降级态 /
  *   D13 首拉不重发守卫随宿主自建面一并退役）
  * - 观察者（形态）：pin 门控（hover 态无行内按钮）、断连提示条、加载态

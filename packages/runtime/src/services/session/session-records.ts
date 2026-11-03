@@ -1922,12 +1922,14 @@ export class SessionRecords {
   }
 
   /**
-   * 触发 workflow 生命周期操作（abort；pause/resume 已随扩展 D-2 一次性生命周期移除）。
+   * 触发 workflow 生命周期操作（abort / resume；pause 已随扩展 D-2 一次性生命周期移除）。
    * 经 client.prompt("/workflows <action> <runId>") 调扩展 slash command，
    * pi 检测 / 开头直接执行 command handler（不经 LLM）。
    * 扩展侧 RPC 分支已实现（commands.ts ctx.mode==='rpc'）。
+   * resume 与 abort 同款注入通道（tray-panel-interact §3.3 D4）：命令轮无模型调用；
+   * resume 资格（仅 interrupted 形态可续跑）由扩展侧 lifecycle 校验，runtime 不扩语义。
    */
-  async workflowAction(sessionId: string, action: 'abort', runId: string): Promise<void> {
+  async workflowAction(sessionId: string, action: 'abort' | 'resume', runId: string): Promise<void> {
     const client = this.deps.pm.getClient(sessionId)
     if (!client) throw new Error(`Session ${sessionId} not active`)
     await client.prompt(`/workflows ${action} ${runId}`)

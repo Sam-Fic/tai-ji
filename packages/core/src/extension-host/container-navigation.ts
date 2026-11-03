@@ -44,13 +44,15 @@ export const PLACEMENT_BY_KIND: Record<HostContainerAction['kind'], string> = {
 /**
  * 各位置族认识的 params 键（§6.4「显式登记为对外契约的内部字段名」登记处）。
  * 键名 = 目标容器选项的字段名；新增容器选项字段须同步登记本表。
- * - drawer.tab：OpenDrawerOptions 的字段（commandName = Doc tab 命令名 / filePath = Detail tab 文件路径）
- * - overlay.content：openOverlayContent(contentId, sessionId) 无额外选项字段（空表——
- *   任何 params 键都落「未知键忽略 + warning」）
+ * - drawer.tab：OpenDrawerOptions 的字段（commandName = Doc tab 命令名 / filePath = Detail
+ *   tab 文件路径 / recordId = subagent tab 定位键，D3——与 doc tab 定位参数同构）
+ * - overlay.content：openOverlayContent 的可选 params 字段（runId = workflow 内容定位键，
+ *   D2——凭 runId 走参数化打开通道；canvasId 不登记：canvas 维持排除语义，需专属参数且
+ *   无声明方会传）
  */
 export const KNOWN_PARAMS_KEYS_BY_PLACEMENT: Record<string, readonly string[]> = {
-  'drawer.tab': ['commandName', 'filePath'],
-  'overlay.content': [],
+  'drawer.tab': ['commandName', 'filePath', 'recordId'],
+  'overlay.content': ['runId'],
 } as const
 
 // ── 端口：目标查询（容器位注册表的消费侧抽象）──
@@ -93,8 +95,12 @@ export interface ContainerNavigationSink { // oe-exempt:20261025:framework:port 
    * 单例抽屉语义），本参数为浮层级联（§6.8）保留统一签名。
    */
   openDrawerTab(sessionId: string, tabId: string, params: Record<string, string | number | boolean>): void
-  /** 打开浮层内容（contentId = 目标声明 id；sessionId 进 payload 级联判据，§6.8）。 */
-  openOverlayContent(sessionId: string, contentId: string): void
+  /**
+   * 打开浮层内容（contentId = 目标声明 id；sessionId 进 payload 级联判据，§6.8）。
+   * params = 目标容器选项字段的透传（已知键过滤后）——overlay.content 族登记 runId
+   * （D2：workflow 内容凭 runId 走参数化打开通道），与 drawer 分支同款透传。
+   */
+  openOverlayContent(sessionId: string, contentId: string, params: Record<string, string | number | boolean>): void
 }
 
 // ── 执行器 ──
@@ -224,7 +230,7 @@ export class ContainerNavigationExecutor {
       )
     }
     if (action.kind === 'drawer') this.deps.sink.openDrawerTab(sessionId, action.tabId, filtered)
-    else this.deps.sink.openOverlayContent(sessionId, action.tabId)
+    else this.deps.sink.openOverlayContent(sessionId, action.tabId, filtered)
     return { ok: true }
   }
 
