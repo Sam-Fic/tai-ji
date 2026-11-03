@@ -37,10 +37,15 @@ import type {
 import type { IMessageBus } from '../src/services/message-bus/message-bus.js'
 import type { IProcessManager, IPiEngine, PiEventListener } from '../src/services/ports/pi-engine.js'
 import type { SessionSummary, SessionGroup, Message, ServerMessage, ProviderId, SegmentsMetadataEntry, SegmentsMetadataFile } from '@taiji/shared'
-import { HISTORY_BUDGET, decodeNewlineEscapes } from '@taiji/shared'
+import { decodeNewlineEscapes } from '@taiji/shared'
 import { getAttachmentsDir } from '@taiji/shared/paths'
 import { getSubagentMessageResultsDir } from '@zhushanwen/subagent-core'
 import { getConfigDir } from '../src/infra/pi/pi-paths.js'
+// 索引窗口读模型（turn-boundary-index）：getHistory 用例直 import infra 同源扫描器装配
+// （services 层禁 value import infra 实装，测试侧同源装配是 port 注释钦定的恢复动作，
+// turn-index-store.ts scanner fail-fast 提示语同款）
+import { scanTurnBoundariesForward, verifyTurnBoundaries } from '../src/infra/pi/turn-index-scanner.js'
+import type { ITurnIndexScanner } from '../src/services/ports/turn-index-scanner.js'
 import { flushDelivery } from './helpers/flush-delivery.js'
 
 // ── vi.hoisted：在 vi.mock 工厂执行前就绪的 mock 句柄 ───────────────
@@ -69,13 +74,10 @@ const mocks = vi.hoisted(() => ({
   convertPiHistoryMock: vi.fn((raw: unknown) => raw),
   // entry-tree-builder.rebuildHistoryFromEntries mock：默认 identity-ish（返 entries 当 messages），
   // 单测按需 mockReturnValueOnce 控制重建结果。与 convertPiHistoryMock 同范式（隔离重建逻辑）。
-  // orphanToolResults 可选：仅增量路径消费（getHistory 缓存命中分支直接访问），增量用例显式提供。
+  // [turn-boundary-index] getHistory 数据路径已不经该函数（history-reader 索引窗口编排）；
+  // 保留 mock 仅因 PiSessionStore（infra）实装仍消费该符号，隔离其在其他用例中的重建逻辑。
   rebuildHistoryFromEntriesMock: vi.fn((entries: unknown[]): { messages: unknown[]; clientUuidMap: Map<string, string>; orphanToolResults?: unknown[] } => ({ messages: entries as unknown[], clientUuidMap: new Map<string, string>() })),
-  getHistoryFromFileMock: vi.fn().mockResolvedValue([]),
   getHistoryFromFilePathMock: vi.fn().mockResolvedValue([]),
-  // [session-cold-switch-perf §3.3-1] 尾读 mock 默认返回对齐 HistoryWindowResult 契约
-  // （u4b 双预算窗口字段齐全——态 2/态 3 首屏直返尾读结果）
-  getHistoryTailFromFileMock: vi.fn().mockResolvedValue({ messages: [], truncated: false, loadedTurns: 0, totalTurnsEstimate: 0 }),
 }))
 
 const { mockScannedSessions } = mocks
@@ -115,12 +117,26 @@ vi.mock('../src/infra/pi/pi-paths.js', async (importOriginal) => {
 
 vi.mock('../src/infra/system/trash.js', () => ({ trash: mocks.trashMock }))
 vi.mock('../src/infra/pi/message-converter.js', () => ({ convertPiHistory: mocks.convertPiHistoryMock }))
-vi.mock('../src/infra/pi/entry-tree-builder.js', () => ({ rebuildHistoryFromEntries: mocks.rebuildHistoryFromEntriesMock }))
-vi.mock('../src/services/session-history.js', () => ({
-  getHistoryFromFile: mocks.getHistoryFromFileMock,
-  getHistoryFromFilePath: mocks.getHistoryFromFilePathMock,
-  getHistoryTailFromFile: mocks.getHistoryTailFromFileMock,
-}))
+// importOriginal 形态（非整模块替换）：history-reader 索引窗口编排消费 session-history 的
+// 转换复用出口（convertWindowEntries / filterObjectEntries / activePathEntriesOf）与尾读
+// 兼容链（tailReadHistory）——这些走实装（真转换 + 真文件读，与 history-bundle 索引用例
+// 同范式）；仅隔离 IO 包装（session-records 的 fork 定位链消费 getHistoryFromFilePath）。
+// getHistoryFromFile / getHistoryTailFromFile 已随全量通路退役（session-history.ts 无此
+// 导出），不再提供。
+vi.mock('../src/infra/pi/entry-tree-builder.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/infra/pi/entry-tree-builder.js')>()
+  return {
+    ...actual,
+    rebuildHistoryFromEntries: mocks.rebuildHistoryFromEntriesMock,
+  }
+})
+vi.mock('../src/services/session-history.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/services/session-history.js')>()
+  return {
+    ...actual,
+    getHistoryFromFilePath: mocks.getHistoryFromFilePathMock,
+  }
+})
 
 // [session-cold-switch-perf §3.3-2] restoreSession 经 acquireRestoreClient 消费预热槽：
 // 槽空回退现状 spawn 链时会「顺带补位」——补位 spawn 经同一构造链再调一次 pm.createSession
@@ -232,7 +248,6 @@ function resetMockState(): void {
   mocks.defaultModel.value = { provider: 'test-provider', modelId: 'test-model' }
   mocks.convertPiHistoryMock.mockImplementation((raw: unknown) => raw)
   mocks.rebuildHistoryFromEntriesMock.mockImplementation((entries: unknown[]) => ({ messages: entries as unknown[], clientUuidMap: new Map<string, string>() }))
-  mocks.getHistoryFromFileMock.mockResolvedValue([])
 }
 
 /** 一份完整测试装置：service + 各 mock 依赖 + clientMap + exit 触发器。 */
@@ -278,7 +293,7 @@ function trackScalarStates(service: SessionService, sids: () => Iterable<string>
   liveScalarStateOwners.push({ service, sids })
 }
 
-function createSetup(): Setup {
+function createSetup(opts?: { turnIndexScanner?: ITurnIndexScanner }): Setup {
   const clientMap = new Map<string, MockClient>()
   let exitCb: ((sessionId: string, code: number | null, stderr: string) => void) | null = null
 
@@ -363,6 +378,10 @@ function createSetup(): Setup {
     gitInfoReader,
     workspaceService as unknown as ConstructorParameters<typeof SessionService>[8],
     messageBus,
+    // [turn-boundary-index] turn 边界扫描 port（SessionService 末位可选构造参，透传给
+    // SessionHistoryReader）。缺省不注入 = 索引路径用即抛（scannerPort fail-fast），
+    // 存量用例零波及；getHistory 块经 realTurnIndexScanner 注入后索引窗口路径可达。
+    opts?.turnIndexScanner,
   )
   service.setMessageBus(messageBus)
 
@@ -524,12 +543,22 @@ function stubNextCreatedClient(
 }
 
 /**
- * flush 足够多轮 setImmediate 让出段，等待被测编排的异步任务终态落定后再断言。
+ * pi message entry JSONL 行（turn 边界 = role:'user'，scanner isTurnBoundary 同语义）。
+ * getHistory 索引窗口用例的 fixture 行构造（与 src/__tests__/history-bundle.test.ts 同范式）。
  */
-async function flushBackgroundRebuild(rounds = 10): Promise<void> {
-  for (let i = 0; i < rounds; i++) {
-    await new Promise<void>((resolve) => setImmediate(resolve))
-  }
+function piEntryLine(id: string, role: 'user' | 'assistant', text: string): string {
+  return JSON.stringify({
+    type: 'message',
+    id,
+    parentId: null,
+    timestamp: '2026-11-03T00:00:00.000Z',
+    message: { role, content: [{ type: 'text', text }] },
+  })
+}
+
+/** pi session header JSONL 行（文件首行；索引路径剥 header，转换链单根检查要求剥除）。 */
+function piHeaderLine(sid: string): string {
+  return JSON.stringify({ type: 'session', id: sid, version: 3 })
 }
 
 /**
@@ -1569,149 +1598,138 @@ describe('SessionService · Facade', () => {
   })
 
   describe('getHistory', () => {
-    it('rebuilds history via entry-tree-builder when getEntries returns entries', async () => {
-      const fakeEntries = [{ type: 'message', id: 'e1', message: { role: 'user', content: 'hi' } }]
-      const client = setup.mountClient('sid-hist')
-      client.getEntries.mockResolvedValueOnce({ data: { entries: fakeEntries, leafId: 'e1' } })
-      mocks.rebuildHistoryFromEntriesMock.mockReturnValueOnce({ messages: ['rebuilt' as unknown as Message], clientUuidMap: new Map() })
-      // [session-cold-switch-perf §3.3-1 态 2] 缓存 miss + 进程在场：尾读首屏立即返回
-      //（getHistoryTailFromFile），全量重建转后台（fire-and-forget，不阻塞首屏）
-      const result = await setup.service.getHistory('sid-hist')
-      expect(result).toEqual({ messages: [], truncated: false, loadedTurns: 0, totalTurnsEstimate: 0 })
-      // 后台任务用在场进程 get_entries 全量重建（rebuildHistoryFromEntries 收到原始 entries，
-      // 取代旧 get_messages + convertPiHistory）
-      await flushBackgroundRebuild()
-      expect(mocks.rebuildHistoryFromEntriesMock).toHaveBeenCalledWith(fakeEntries, null)
+    // [turn-boundary-index] 索引窗口读模型（设计 §3.1 AX4）：正常历史查看只有索引窗口这一条
+    // 数据路径，读取分派与 pi 进程在场性解耦。旧「缓存×进程四态分派 / 尾读先行首屏 / 后台
+    // 全量重建 / 增量合并」用例随 history-rebuild-cache 退役删除（D4），本块钉新终态语义。
+    // 装置：createSetup 末位构造参注入 infra 同源扫描器（services 层禁 value import infra，
+    // 测试直 import 同源装配 = scannerPort fail-fast 提示的恢复动作）；会话定位经
+    // pushScannedSession 喂 scanPiSessions mock（reader.locateMainSessionFile =
+    // sessionStore.scanSessions({force:true}) 按 id 查找）+ withTempSessionFile 真实落盘
+    // JSONL（索引构建与窗口字节读是真实文件 IO）。各用例 sid 唯一——索引按 sessionId 落盘
+    // 到测试 tmp dataDir（vitest globalSetup 钉 TAIJI_AGENT_DATA_DIR），同 sid 跨用例会读到
+    // 上一用例的磁盘索引快照。
+    beforeEach(() => {
+      setup = createSetup({ turnIndexScanner: { scanTurnBoundariesForward, verifyTurnBoundaries } })
     })
 
-    it('R-12: returns empty array (short-circuit) when getEntries returns empty and session is idle', async () => {
-      const { id } = await setup.seedSession()
-      const client = setup.clientMap.get(id)!
-      client.getEntries.mockResolvedValueOnce({ data: { entries: [], leafId: null } })
-      // [session-cold-switch-perf §3.3-1 态 2] 缓存 miss + 进程在场：首屏 = 尾读先行（四态
-      // 分派只看缓存×进程，get_entries 空的权威空视图由后台任务解析且不写缓存——R-12
-      // 空短路语义保留在缓存命中的增量分支，见下方浅拷贝用例）
-      const result = await setup.service.getHistory(id)
-      expect(result).toEqual({ messages: [], truncated: false, loadedTurns: 0, totalTurnsEstimate: 0 })
-      expect(mocks.getHistoryTailFromFileMock).toHaveBeenCalledWith(
-        id, expect.anything(), expect.anything(),
-        { cursor: undefined, maxBytes: HISTORY_BUDGET.MAX_BYTES }, { segmentsMetadata: null },
-      )
-      // 后台 R-12 同语义：get_entries 空视图不写缓存 → 下一次派单仍尾读先行
-      await flushBackgroundRebuild()
-      client.getEntries.mockResolvedValueOnce({ data: { entries: [], leafId: null } })
-      await setup.service.getHistory(id)
-      expect(mocks.getHistoryTailFromFileMock).toHaveBeenCalledTimes(2)
-    })
+    /** 标准三 turn fixture（每 turn = user + assistant 相邻行），header 用传入 sid。 */
+    function threeTurnContent(sid: string): string {
+      return [
+        piHeaderLine(sid),
+        piEntryLine('u1', 'user', 'q1'),
+        piEntryLine('a1', 'assistant', 'r1'),
+        piEntryLine('u2', 'user', 'q2'),
+        piEntryLine('a2', 'assistant', 'r2'),
+        piEntryLine('u3', 'user', 'q3'),
+        piEntryLine('a3', 'assistant', 'r3'),
+      ].join('\n') + '\n'
+    }
 
-    it('returns empty array when getEntries empty and session is generating', async () => {
-      const { id, client } = await setup.seedSession()
-      // 进入 generating：发一条消息
-      await setup.service.sendMessage(id, 'x')
-      client.getEntries.mockResolvedValueOnce({ data: { entries: [], leafId: null } })
-      const result = await setup.service.getHistory(id)
-      // [session-cold-switch-perf §3.3-1] generating 不参与四态分派（只看缓存×进程）——
-      // 缓存 miss + 进程在场即尾读首屏，后台任务解析空权威视图
-      expect(result).toEqual({ messages: [], truncated: false, loadedTurns: 0, totalTurnsEstimate: 0 })
-      expect(mocks.getHistoryTailFromFileMock).toHaveBeenCalledWith(
-        id, expect.anything(), expect.anything(),
-        { cursor: undefined, maxBytes: HISTORY_BUDGET.MAX_BYTES }, { segmentsMetadata: null },
-      )
-    })
-
-    it('态 2 首屏走尾读——getEntries 失败不在首屏路径（D4 尾读带字节预算缺省 + sidecar）', async () => {
-      const { id, client } = await setup.seedSession()
-      client.getEntries.mockRejectedValueOnce(new Error('rpc boom'))
-      mocks.getHistoryTailFromFileMock.mockResolvedValueOnce({ messages: [], truncated: false, loadedTurns: 0, totalTurnsEstimate: 0 })
-      const result = await setup.service.getHistory(id)
-      expect(result).toEqual({ messages: [], truncated: false, loadedTurns: 0, totalTurnsEstimate: 0 })
-      // [D4] 尾读带字节预算缺省（与游标分支同源 HISTORY_BUDGET.MAX_BYTES——原样透传
-      // undefined 会退化为仅 turn 数截取，20 大 turn 的 reply 超 32MB 被 payload_too_large 拒绝）；
-      // [§3.3-1 实现项①] 第 5 参 = segments sidecar（读缺失 → null 全降级）
-      expect(mocks.getHistoryTailFromFileMock).toHaveBeenCalledWith(
-        id, expect.anything(), expect.anything(),
-        { cursor: undefined, maxBytes: HISTORY_BUDGET.MAX_BYTES }, { segmentsMetadata: null },
-      )
-    })
-
-    it('D4: 增量路径非 EntryNotFound 错误降级尾读——同样带字节预算缺省', async () => {
-      const client = setup.mountClient('sid-inc-fallback')
-      const e1 = { type: 'message', id: 'e1', parentId: null, message: { role: 'user', content: 'q1' } }
-      const m1 = { id: 'm1', role: 'user', content: 'q1', piEntryId: 'e1' } as unknown as Message
-      client.getEntries.mockResolvedValueOnce({ data: { entries: [e1], leafId: 'e1' } })
-      mocks.rebuildHistoryFromEntriesMock.mockReturnValueOnce({ messages: [m1], clientUuidMap: new Map() })
-      await setup.service.getHistory('sid-inc-fallback') // 尾读首屏；后台全量写缓存（leafId='e1'）
-      await flushBackgroundRebuild() // 等后台重建写缓存完成，下一次派单走态 1 增量
-
-      // 增量拉取抛非 EntryNotFound 错误 → 降级尾读（缓存不动）
-      client.getEntries.mockRejectedValueOnce(new Error('rpc boom'))
-      mocks.getHistoryTailFromFileMock.mockResolvedValueOnce({ messages: [], truncated: false, loadedTurns: 0, totalTurnsEstimate: 0 })
-      await setup.service.getHistory('sid-inc-fallback')
-      expect(mocks.getHistoryTailFromFileMock).toHaveBeenCalledWith(
-        'sid-inc-fallback', expect.anything(), expect.anything(),
-        { cursor: undefined, maxBytes: HISTORY_BUDGET.MAX_BYTES }, { segmentsMetadata: null },
-      )
-    })
-
-    it('终审 minor：全量重建与缓存新鲜路径返回浅拷贝——调用方就地变更不打穿缓存', async () => {
-      const client = setup.mountClient('sid-alias')
-      const e1 = { type: 'message', id: 'e1', parentId: null, message: { role: 'user', content: 'q1' } }
-      const m1 = { id: 'm1', role: 'user', content: 'q1' } as unknown as Message
-      // 全量重建路径：getEntries() → entries [e1] → rebuild → 写缓存（leafId='e1'）
-      client.getEntries.mockResolvedValueOnce({ data: { entries: [e1], leafId: 'e1' } })
-      mocks.rebuildHistoryFromEntriesMock.mockReturnValueOnce({ messages: [m1], clientUuidMap: new Map() })
-      const first = await setup.service.getHistory('sid-alias')
-      await flushBackgroundRebuild() // [§3.3-1] 全量重建转后台；等缓存写入完成
-      expect(first.messages).toHaveLength(0) // 首屏 = 尾读先行（mock 默认空窗）
-
-      // 后台重建写缓存后（态 1）：返回缓存副本；调用方就地污染返回数组
-      //（模拟未来消费方就地 sort/splice/push）
-      client.getEntries.mockResolvedValueOnce({ data: { entries: [], leafId: 'e1' } })
-      const second = await setup.service.getHistory('sid-alias')
-      expect(second.messages).toHaveLength(1)
-      second.messages.push({ id: 'polluted' } as unknown as Message)
-      // 且 second 与缓存本体分离：就地清空后第三次读取仍干净
-      second.messages.length = 0
-      client.getEntries.mockResolvedValueOnce({ data: { entries: [], leafId: 'e1' } })
-      const third = await setup.service.getHistory('sid-alias')
-      expect(third.messages).toHaveLength(1)
-      expect(third.messages[0]).toBe(m1)
-    })
-
-    it('终审 minor：增量合并路径返回浅拷贝——就地清空返回数组不影响缓存', async () => {
-      const client = setup.mountClient('sid-alias-inc')
-      const m1 = { id: 'm1', role: 'user', content: 'q1', piEntryId: 'e1' } as unknown as Message
-      client.getEntries.mockResolvedValueOnce({ data: { entries: [{ type: 'message', id: 'e1' }], leafId: 'e1' } })
-      mocks.rebuildHistoryFromEntriesMock.mockReturnValueOnce({ messages: [m1], clientUuidMap: new Map() })
-      await setup.service.getHistory('sid-alias-inc') // 尾读首屏；后台全量写缓存（leafId='e1'）
-      await flushBackgroundRebuild() // 等缓存写入完成，后续派单走态 1 增量
-
-      // 增量路径：delta 首条 parentId === cached.leafId → merge → 写缓存 → 返回 merged 副本
-      const m2 = { id: 'm2', role: 'assistant', content: 'a1', piEntryId: 'e2' } as unknown as Message
-      client.getEntries.mockResolvedValueOnce({
-        data: { entries: [{ type: 'message', id: 'e2', parentId: 'e1' }], leafId: 'e2' },
+    it('无活跃 client（离线）：首屏返回索引窗口真实内容——读取不依赖 pi 进程（GL1）', async () => {
+      await withTempSessionFile('gethist-', 'idx-offline.jsonl', threeTurnContent('idx-offline'), async (dir, filePath) => {
+        pushScannedSession({ id: 'idx-offline', filePath, cwd: dir })
+        const result = await setup.service.getHistory('idx-offline')
+        // identity convertPiHistory 下 messages = pi message 体透传（mapSessionEntries 单点映射）
+        expect(result.messages).toEqual([
+          { role: 'user', content: [{ type: 'text', text: 'q1' }] },
+          { role: 'assistant', content: [{ type: 'text', text: 'r1' }] },
+          { role: 'user', content: [{ type: 'text', text: 'q2' }] },
+          { role: 'assistant', content: [{ type: 'text', text: 'r2' }] },
+          { role: 'user', content: [{ type: 'text', text: 'q3' }] },
+          { role: 'assistant', content: [{ type: 'text', text: 'r3' }] },
+        ])
+        expect(result.truncated).toBe(false)
+        expect(result.loadedTurns).toBe(3)
+        // totalTurnsEstimate = 完整索引精确总数（设计「cursor 未命中」段改写的字段口径）
+        expect(result.totalTurnsEstimate).toBe(3)
       })
-      // 增量路径直接访问 rebuilt.orphanToolResults（无 undefined 保护），mock 必须带该字段
-      mocks.rebuildHistoryFromEntriesMock.mockReturnValueOnce({ messages: [m2], clientUuidMap: new Map(), orphanToolResults: [] })
-      const inc = await setup.service.getHistory('sid-alias-inc')
-      expect(inc.messages).toHaveLength(2)
-
-      // 就地清空返回数组 → 缓存本体不受影响（随后空增量仍返回 2 条）
-      inc.messages.length = 0
-      client.getEntries.mockResolvedValueOnce({ data: { entries: [], leafId: 'e2' } })
-      const after = await setup.service.getHistory('sid-alias-inc')
-      expect(after.messages).toHaveLength(2)
     })
 
-    it('reads from file directly when no active client', async () => {
-      mocks.getHistoryTailFromFileMock.mockResolvedValueOnce({ messages: [], truncated: false, loadedTurns: 0, totalTurnsEstimate: 0 })
-      await setup.service.getHistory('no-client')
-      // [D4] 离线尾读带字节预算缺省（与游标分支同源——原样透传 undefined 时仅按 turn 数截取）；
-      // [§3.3-1 实现项①] 第 5 参 = segments sidecar
-      expect(mocks.getHistoryTailFromFileMock).toHaveBeenCalledWith(
-        'no-client', expect.anything(), expect.anything(),
-        { cursor: undefined, maxBytes: HISTORY_BUDGET.MAX_BYTES }, { segmentsMetadata: null },
-      )
+    it('pi client 在场：get_entries 零调用，窗口仍来自索引文件（AX4 单一路径）', async () => {
+      await withTempSessionFile('gethist-', 'idx-attached.jsonl', threeTurnContent('idx-attached'), async (dir, filePath) => {
+        pushScannedSession({ id: 'idx-attached', filePath, cwd: dir })
+        const client = setup.mountClient('idx-attached')
+        const result = await setup.service.getHistory('idx-attached')
+        // 旧链经 client.getEntries 全量重建（rebuildHistoryFromEntries）已退役——
+        // 进程在场也不改变读取口径（执行进程是否存在不得改变消息口径）
+        expect(client.getEntries).not.toHaveBeenCalled()
+        expect(result.messages).toHaveLength(6)
+        expect(result.totalTurnsEstimate).toBe(3)
+      })
+    })
+
+    it('generating 会话不分派：读取仍走索引窗口（执行状态不改变消息口径，AX4）', async () => {
+      await withTempSessionFile('gethist-', 'idx-generating.jsonl', threeTurnContent('idx-generating'), async (dir, filePath) => {
+        pushScannedSession({ id: 'idx-generating', filePath, cwd: dir })
+        const client = setup.mountClient('idx-generating')
+        await setup.service.initializeManagedSession('idx-generating', client as unknown as IPiEngine, tmpdir(), 'seed')
+        // 经转移原语置 generating（与 abort 用例同款，禁止直写状态字段）
+        applySessionOccupancyTransition(setup.service.getSession('idx-generating')!, setup.messageBus, 'generating')
+        const result = await setup.service.getHistory('idx-generating')
+        // 旧「generating 参与四态分派」语义退役——任意执行状态下窗口照常返回
+        expect(result.messages).toHaveLength(6)
+        expect(result.loadedTurns).toBe(3)
+      })
+    })
+
+    it('零 turn 文件（无 user 边界）：索引落盘 turns=[] 后走尾读兼容分支（现有计数口径）', async () => {
+      await withTempSessionFile('gethist-', 'idx-zero-turn.jsonl', [
+        piHeaderLine('idx-zero-turn'),
+        piEntryLine('a1', 'assistant', 'only-reply'),
+      ].join('\n') + '\n', async (dir, filePath) => {
+        pushScannedSession({ id: 'idx-zero-turn', filePath, cwd: dir })
+        const result = await setup.service.getHistory('idx-zero-turn')
+        // 兼容分支 = tailReadHistory 现状语义：无 user turn 文件 loadedTurns 0（不视作 1 turn），
+        // assistant 行内容照常返回；出现首个 user turn 后自然回到索引路径
+        expect(result.messages).toEqual([
+          { role: 'assistant', content: [{ type: 'text', text: 'only-reply' }] },
+        ])
+        expect(result.truncated).toBe(false)
+        expect(result.loadedTurns).toBe(0)
+        expect(result.totalTurnsEstimate).toBe(0)
+      })
+    })
+
+    it('定位 miss（无扫描条目）→ 空页静默降级（scanSessions 按 id 查找 miss = 现状空）', async () => {
+      const result = await setup.service.getHistory('idx-loc-miss')
+      expect(result.messages).toEqual([])
+      expect(result.truncated).toBe(false)
+      expect(result.loadedTurns).toBe(0)
+      expect(result.totalTurnsEstimate).toBe(0)
+    })
+
+    it('cursor 未命中 turns → 尾读 cursor 兼容链：真正未知 cursor 空页 truncated=false（不报错）', async () => {
+      await withTempSessionFile('gethist-', 'idx-cursor-miss.jsonl', threeTurnContent('idx-cursor-miss'), async (dir, filePath) => {
+        pushScannedSession({ id: 'idx-cursor-miss', filePath, cwd: dir })
+        await setup.service.getHistory('idx-cursor-miss') // 先建索引
+        const page = await setup.service.getHistory('idx-cursor-miss', { cursor: 'gone-entry' })
+        // 兼容链定位失败 → 空页 + truncated=false（翻页到头语义，与旧未知 cursor 行为一致）
+        expect(page.messages).toEqual([])
+        expect(page.truncated).toBe(false)
+      })
+    })
+
+    it('cursor 命中翻页：锚前窗口 + limitTurns 透传；两次读取返回独立数组实例（就地变更不打穿）', async () => {
+      await withTempSessionFile('gethist-', 'idx-cursor-page.jsonl', threeTurnContent('idx-cursor-page'), async (dir, filePath) => {
+        pushScannedSession({ id: 'idx-cursor-page', filePath, cwd: dir })
+        const page = await setup.service.getHistory('idx-cursor-page', { cursor: 'u3', limitTurns: 2 })
+        // 锚（u3 所在 turn 3）之前最近 2 turns；锚所在 turn 只进校验集合不返回（D3）
+        expect(page.messages).toEqual([
+          { role: 'user', content: [{ type: 'text', text: 'q1' }] },
+          { role: 'assistant', content: [{ type: 'text', text: 'r1' }] },
+          { role: 'user', content: [{ type: 'text', text: 'q2' }] },
+          { role: 'assistant', content: [{ type: 'text', text: 'r2' }] },
+        ])
+        expect(page.truncated).toBe(false) // 锚前窗口含首条 turn（无更早历史）
+        expect(page.loadedTurns).toBe(2)
+
+        // 实例隔离（旧「浅拷贝」用例的索引版语义）：每次读取新数组交付，调用方可就地变更，
+        // 不影响后续读取（emptyPage/窗口 messages 均为每次新对象）
+        const latest = await setup.service.getHistory('idx-cursor-page')
+        latest.messages.push({ role: 'user', content: [] } as unknown as Message)
+        const again = await setup.service.getHistory('idx-cursor-page')
+        expect(again.messages).toHaveLength(6)
+      })
     })
   })
 
