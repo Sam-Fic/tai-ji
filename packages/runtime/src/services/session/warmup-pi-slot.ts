@@ -48,6 +48,13 @@
  * 摘除（P4 探针显示命中率持续偏低时的对冲设计）：本模块自包含；session-lifecycle 侧
  * 接线仅两处且同文件（构造器内槽实例组装 + restoreSession 进程获取的 acquireRestoreClient
  * 单一接线点），删除即整体摘除，行为回退 = 现状 restoreSession 全链。
+ *
+ * TODO(observe-warmup-necessity, 2026-11-03 用户裁决「先标记观察」)：整体性能优化
+ * （bundle 去重 / turn 边界索引直读 / 显示链路改造）落地后复测首开耗时——若冷首开
+ * restore 全程已降到用户可接受量级（参考基线：优化前 dev 冷首开 ~3s、prod 9-11s、
+ * 槽命中 959ms），本模块可整体摘除（槽只省进程冷启动段，createRuntime 每次重建与
+ * 查看路径无关；查看链路直读文件后槽仅服务「首开即发消息」场景）。观察数据 =
+ * 既有 [warmup] slot outcome 四态日志 + restore-timing 分段日志。
  */
 import type { IPiEngine } from '../ports/pi-engine.js'
 import { DEFAULT_HARVEST_WAIT_BOUND_MS, isStartupReattachActive } from '../startup-reattach.js'
