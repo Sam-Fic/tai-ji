@@ -365,7 +365,8 @@ export class TurnIndexStore {
   /**
    * 持久提交（写入点①②③）。从取消复检到 renameSync 全程无 await——onSessionDeleted
    * 的标记不可能插入复检与提交之间；写失败只损失加速能力，warn 不抛（历史已由内存
-   * 快照返回，下次读取自动重试持久化）。
+   * 快照返回；持久化在下次完整构建/重建——失配/touch/版本变化触发——时重试，纯复用
+   * 与续扫路径不落盘，写入点全集①）。
    */
   private commitToDisk(sessionId: string, snapshot: TurnIndexSnapshot): void {
     if (this.deleted.has(sessionId)) return
@@ -377,10 +378,12 @@ export class TurnIndexStore {
       renameSync(tmpPath, finalPath)
     } catch (error) {
       // 降级策略（设计 D5）：索引是辅助加速副本，写失败不阻断 P0 历史查看——快照已在
-      // 内存返回本次请求，warn 后由下次读取自然重试持久化，不自动循环重试。
+      // 内存返回本次请求，不自动循环重试；持久化在下次完整构建/重建（失配/touch/版本
+      // 变化触发）时重试，纯复用与续扫路径不落盘（写入点全集①）。
       console.warn(
         `[turn-index-store] 索引落盘失败 sessionId=${sessionId} path=${finalPath}: ${errorMessage(error)}；` +
-          '恢复动作 = 无需处理，本次历史已由内存索引返回，下次读取自动重试持久化',
+          '恢复动作 = 无需处理，本次历史已由内存索引返回；下次完整构建/重建（失配/touch/版本变化触发）时自动重试持久化，' +
+          '纯复用与续扫路径不落盘（写入点全集①）',
       )
     }
   }
