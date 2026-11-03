@@ -195,7 +195,7 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
    * 状态派生视图域（S5 迁出至 session-state-projection.ts）：replicated states 快照派生视图族 +
    * context/usage 副作用域。onSessionRegistered 订阅者 = projection 自身（构造器组装期
    * 先于本 Facade 剩余订阅体注册，播种顺序与迁移前逐一等价）；销毁经 onSessionDisposed
-   * 由 removeSessionEntry 第 ⑤ 步直调。
+   * 由 removeSessionEntry 第 12 步直调。
    */
   private projection!: SessionStateProjection
   /** trace/system-prompt 同步域（S4 迁出，构造器内组装 deps——见构造器注释） */
@@ -337,7 +337,7 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
   /**
    * history 读编排域（S6 迁出、turn-boundary-index 落位于 history-reader.ts）：索引窗口
    * 读取（TurnIndexStore reader 自持 + 单次快照选窗）+ [u6] 游标翻页 + inflight 合并。
-   * 销毁经 onSessionDisposed 由 removeSessionEntry 第 ⑤ 步直调（与 traceSync/projection/
+   * 销毁经 onSessionDisposed 由 removeSessionEntry 第 12 步直调（与 traceSync/projection/
    * records 并列）；真删除专属取消经 onSessionDeleted 转发（u-lifecycle 挂点接线）。
    */
   private historyReader!: SessionHistoryReader
@@ -346,7 +346,7 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
    * 磁盘读侧/动作/引擎配置。onSessionRegistered 订阅者 = records 自身（构造器组装期
    * 注册顺序在 projection 之后、reconciler 之前——播种 → record 注册 → 对账，与迁移前
    * Facade 订阅体内顺序逐一等价）；销毁经 onSessionDisposed 由 removeSessionEntry
-   * 第 ⑤ 步直调（与 traceSync/projection 并列）。
+   * 第 12 步直调（与 traceSync/projection 并列）。
    */
   private records!: SessionRecords
   /**

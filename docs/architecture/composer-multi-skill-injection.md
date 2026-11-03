@@ -113,7 +113,7 @@ runtime 解析 pi stdout JSONL 曾用 node `readline`（**已随本 feature D10 
     ↓ pi _expandSkillCommand —— 只认开头第一个 /skill: token
 [provider]  ← 超限无防线（§2.3 失败模式 C）
     ↓ 落盘 session JSONL（展开后文本）
-[重开 session] runtime history-rebuild-cache.ts 读 JSONL + segments.json sidecar → badge 恢复
+[重开 session] runtime history-reader.ts 读 JSONL + segments.json sidecar → badge 恢复
 ```
 
 根因归纳：**「命令模型」（一条消息 = 行首一个命令 + args）与用户要的「标记模型」（内联、多处、混排）结构性冲突**；pi 协议里没有标记式 skill 的表达，所以注入必须由 taiji 自己做——这决定了方案的形态。
@@ -234,7 +234,7 @@ runtime 解析 pi stdout JSONL 曾用 node `readline`（**已随本 feature D10 
 **D7：降级标记形态与 resume 反渲染（选定；R4 修订：降级块并入 `<taiji-skill-data>`，反渲染升级为三形态 + 剥块优先规则）**
 - **采用**：降级时 prompt 里的形态（见 §3.1 场景 2，R4 起与正常形态共用同一 `<taiji-skill-data>` 包裹，旧 `<taiji-skills>` tag 退役但反解析保留识别以兼容存量落盘消息）：所有 chip 标记归拢在包裹块内（每项 `<taiji-skill name location/>` 无需结束标签）+ 一行指引文本「Use the read tool to load the skill files above before continuing the task」（定稿时为中文「请使用 read 工具加载上述 skill 文件后再继续任务」，C5——adversarial-review-fixes §3.4——改英文对齐 pi available_skills 措辞）。归拢成块（而非散在原位）理由：降级形态只需模型理解一次，块状 + 单指引行的指令遵循率高于散点。
 - **resume 反渲染多通道**：
-  - **主通道（已有，零新增）**：`segments.json` sidecar + `<!--taiji:msg:<uuid>-->` 标记机制按 clientUuid 恢复 Segment[]（`history-rebuild-cache.ts:233`），chip badge 显示不受 JSONL 文本形态影响。展开态/降级态都走这条。
+  - **主通道（已有，零新增）**：`segments.json` sidecar + `<!--taiji:msg:<uuid>-->` 标记机制按 clientUuid 恢复 Segment[]（`history-reader.ts:466` 的 `readSegmentsMetadataFile`，历史读编排随 turn-boundary-index 落位于 history-reader.ts），chip badge 显示不受 JSONL 文本形态影响。展开态/降级态都走这条。
   - **兜底通道（新增，实现位置 = core 转换 SSOT）**：sidecar 丢失/旧版本会话时，**`packages/core/src/domain/chat/apply-entry-convert.ts` 的反解析升级为三形态，按优先序处理**（R4）：① **剥块（最高优先，新增）**——任意位置匹配 `<taiji-skill-data>...</taiji-skill-data>` 整块剔除，块内内容整体丢弃、不参与后续标记解析（块是注入器产物非用户内容）；任意位置而非仅末尾：防御 hook 改写/复述把块挪位，规则更鲁棒；② **标记还原**——全局匹配 `<taiji-skill name="..." location="..."/>`（与降级清单项同语法形态；R4 起块内清单项随 ① 剥除、不经 ② 还原）还原为 skill segment；③ **存量形态兼容（保留）**——`<skill name="..." location="...">…</skill>` block（pi 原生 + 升级前旧展开形态）与 `<taiji-skills>` 降级块（升级前落盘）的原有反解析规则不变，产出交错 `text + skill + text + …` segments。该函数是三条链路共用的转换 SSOT（① live `message_end(user)` 帧喂 reducer，② runtime 历史重建 `convertPiHistory`，③ 文件重放），在此一处升级即全覆盖。现状「block 前后正文保留」已实现（历史轮已修复前置正文丢失缺陷），存量行为不变。
   - **兜底已知边界**：SKILL.md 正文含 `</skill>` 字面量时非贪婪正则截断误还原——与 pi 原生 `parseSkillBlock` 同款局限（对齐 pi 可接受），且仅 sidecar 未命中时启用；正文手打 `<taiji-skill` 字样且 sidecar 同时丢失时误还原为 chip——四要素登记于 §3.5-③。另：反解析为**全局匹配**，用户正文手打 `<skill` 字样（pi tag 前缀）的误误匹配范围从「仅消息第一个」扩大到「任意位置」——与 `<taiji-skill` 同属手打机器标记前缀的极低概率场景，同 §3.5-③ 判定可接受；R4 新增同族项：手打完整 `<taiji-skill-data>` 块形态字样且 sidecar 丢失时被误剥（§3.5-⑥ 合并登记）；**存量兼容**：pi 原生格式消息（block 前置 + args 在后）反解析产出 `[skill, args-text]` segments，与既有行为等价（回归断言见场景 4⑤）。
 - **效果**：G4 成立（§3.1 场景 1/2 的「仍显示为 chip badge」，验收场景 4 含正文保留断言）；R4 附加收益：复制/编辑重发的 normalizeContent 派生视图恒为「正文占位形态」（不含全文/块）。

@@ -843,7 +843,7 @@
     ],
     "guard": {
       "type": "observe",
-      "note": "消费方：packages/runtime/src/services/session/history-rebuild-cache.ts 的 since=leafId 游标翻页（头注 :25 自述「compact 是 append-only → since 不会因 compact 失效」）+ cache-governance 批 3 extractLatestModelFromJsonl 尾扫（U7/U8 落地后生效）。pi 升级时重验与 PS-18 同点：_rewriteFile 触发范围是否仍限加载期、是否新增删除/改写路径——PS-18 登记 pi 侧机制，本条登记 taiji 消费侧前提，pi bump 双条同验【行号锚基于 pi@0.84.4；1.0.0 复核按符号名定位】"
+      "note": "消费方：packages/runtime/src/services/plugin-service/api/session-api.ts readEntries 的 sinceEntryId 游标读通道（getEntries(since)，session-readers-census §4.1 末行登记的插件派生视图生成点；since 游标有效性依赖「compact 是 append-only → since 不会因 compact 失效」——原 P0 历史侧消费方随 turn-boundary-index 退役，历史读取改走索引窗口不经 since 游标）+ cache-governance 批 3 extractLatestModelFromJsonl 尾扫（U7/U8 落地后生效）。pi 升级时重验与 PS-18 同点：_rewriteFile 触发范围是否仍限加载期、是否新增删除/改写路径——PS-18 登记 pi 侧机制，本条登记 taiji 消费侧前提，pi bump 双条同验【行号锚基于 pi@0.84.4；1.0.0 复核按符号名定位】"
     },
     "verifiedWith": "1.0.0"
   },

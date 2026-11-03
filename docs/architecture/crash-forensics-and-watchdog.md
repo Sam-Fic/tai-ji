@@ -179,7 +179,7 @@ pi 崩溃（exit 1）
 **D4：看门狗采样与两级阈值 + 降级（E5b，武装挂 Gate W）**
 
 - **采用**：runtime 内建 60s 采样环（`process.memoryUsage()` + `v8.getHeapStatistics().heap_size_limit`，内存环形数组保 24h——对齐「水位打点」既有形态升级，5min 日志行保留不动）→ 两级阈值（相对 heap_size_limit：告警 70% / 临界 85%，具体值 **Gate W 校准**）→ 告警级先降级 → 临界级进入 D5 滚动重启决策。系统级 `memPressure`（swap/物理空闲）作为**第二输入维度**（案例三的真实死法是系统级而非 runtime 自身视角——架构 D3 已论证）。**采样形态裁决**：heap 百分比用 60s 采样环（趋势判定需要历史）；memPressure 用**即时系统级查询**（判定时刻一拍即得、无历史依赖——D3 高水位延迟与 D5 硬升级同源此查询，冷启动不空转）。【修订 2026-09-12，oe-audit C4】24h 采样环已删：运行期趋势判定实际走连续拍计数器（consecutiveAboveWarn）+ 单拍样本，环零读者（无 RPC / 不进诊断包 / 重启即丢），Gate W 复审明细走既有 5min 水位日志行——判定侧统一为「即时判定」形态（计数器 + lastSample）；武装后若需分钟级历史，加密水位日志采样即可（落盘可复盘）。
-  **memory-relief 降级代价（四要素）**：可回收物清单 × 重建成本——① history-rebuild-cache：清后该 session 下次 getHistory 走全量重建（大 session 数秒级 + 文件量级内存尖峰，idle 设计代价声明 2 的实测形态）；② renderer 侧 LRU 收紧：**通道归属 = runtime 看门狗 → WS 广播 → renderer composable 消费**（runtime 自有信号驱动，不引入 main 侧 getAppMetrics 反向通道——那是 E4 增量的事）。**已交付形态**：renderer `useMemoryPressure` composable 消费（refCount 单物理订阅 + 收紧动作可注入），默认动作 = core `setLruMaxSessions` 可变窗压窗 + chat store `evictIfNeeded` 幂等驱逐（实施期补齐了原设计未落实的运行时压窗 API，偏差 #28②）。**降级反弹风险显式声明**：70% 告警清缓存后用户随即切入大 session，重建尖峰可能把水位直推 85% 临界（降级动作制造升级触发）——缓解：memory-relief 只在告警档**持续存在**（连续 2 个采样周期）且执行后水位未回落时才执行，且 Gate W 校准清单显式纳入「降级反弹」项；重审触发：memory-relief 执行后 10min 内水位不降反升 >5% 的比例周均 >30% → 降级清单重审（已回流附录 A #17——判据依赖采样环内存态，消费方 = Gate W 人工复审而非评估器）。恢复路径：可回收物全部自动重建（用户无感，代价是下次访问延迟）；显式判定：可接受。
+  **memory-relief 降级代价（四要素）**：可回收物清单 × 重建成本——renderer 侧 LRU 收紧（现役唯一 memory-relief 动作）：**通道归属 = runtime 看门狗 → WS 广播 → renderer composable 消费**（runtime 自有信号驱动，不引入 main 侧 getAppMetrics 反向通道——那是 E4 增量的事）；全量历史缓存清空通道已随 turn-boundary-index 退役（runtime 不再持有完整消息镜像，看门狗 relief 无「清历史缓存」可执行，历史读取改走 history-reader 索引窗口）。**已交付形态**：renderer `useMemoryPressure` composable 消费（refCount 单物理订阅 + 收紧动作可注入），默认动作 = core `setLruMaxSessions` 可变窗压窗 + chat store `evictIfNeeded` 幂等驱逐（实施期补齐了原设计未落实的运行时压窗 API，偏差 #28②）。**降级反弹风险显式声明**：压窗/驱逐后用户随即切回大 session，重读尖峰可能把水位直推 85% 临界（降级动作制造升级触发）——缓解：memory-relief 只在告警档**持续存在**（连续 2 个采样周期）且执行后水位未回落时才执行，且 Gate W 校准清单显式纳入「降级反弹」项；重审触发：memory-relief 执行后 10min 内水位不降反升 >5% 的比例周均 >30% → 降级清单重审（已回流附录 A #17——判据依赖采样环内存态，消费方 = Gate W 人工复审而非评估器）。恢复路径：可回收物全部自动重建（用户无感，代价是下次访问延迟）；显式判定：可接受。
 - **不采用**：① 「固定 RSS 阈值」——架构已否（机器差异）；② 「只靠 GC/不设看门狗」——30 天碎片化与三方库泄漏不可控（架构已否）；③ 「降级动作里加『杀最大 session』」——过度设计，降级只动可回收物，重启才是第二档。
 - **效果**：G-C 的观测与第一响应成立；阈值武装前先有 24h 环数据可校准。
 
@@ -410,8 +410,8 @@ pi-*.jsonl tee 累计流量达 198MB = 长会话高频大 entry 真实流入的�
 单条工具结果体积受 pi 工具上游约束：read/bash 类工具自截输出 50KB/2000 行、图片 ≤16MB）
 │
 ├─【活跃 session】pi 进程内存 entry 树
-│    → RPC get_entries（不截断）
-│    → history-rebuild-cache doGetHistory 全量重建 Message[]，truncated:false
+│    → history-reader 索引窗口读取（turn 边界索引 + 实际 entryId 校验；v1 基线的
+│      「RPC get_entries 不截断 → 全量重建 Message[]」节点已随 turn-boundary-index 退役）
 │
 └─【离线 session】session-history.ts 尾读窗口 640KB
      → 窗口内凑不够 20 个 user turn → fallback readFile 全量 + parseJsonl

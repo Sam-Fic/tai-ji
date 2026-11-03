@@ -79,7 +79,7 @@ function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
-/** 非负有限数判定（mtimeMs 专用：Node stat.mtimeMs 是浮点秒，非整数）。 */
+/** 非负有限数判定（mtimeMs 专用：Node stat.mtimeMs 是浮点毫秒，非整数）。 */
 function isNonNegativeNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
 }

@@ -21,6 +21,8 @@
     "runtime": [
       "packages/runtime/src/infra/pi/session-file-locator.ts",
       "packages/runtime/src/infra/pi/session-file-utils.ts",
+      "packages/runtime/src/infra/pi/turn-index-scanner.ts",
+      "packages/runtime/src/infra/pi/turn-index-types.ts",
       "packages/runtime/src/services/ports/turn-index-scanner.ts",
       "packages/runtime/src/services/session-history.ts",
       "packages/runtime/src/services/session/agent-settled-fanout.ts",
