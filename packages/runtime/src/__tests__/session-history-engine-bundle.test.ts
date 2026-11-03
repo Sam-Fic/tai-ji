@@ -942,8 +942,8 @@ describe('tail-read-history', () => {
    *    → 仅按 turn 数截取，20 个大 turn（合计 >32MB）的 session.history reply 被
    *    payload_too_large 拒绝且 truncated 未置位（「加载更早」入口不存在）——历史打不开。
    *    修复后离线路径传 maxBytes 缺省 HISTORY_BUDGET.MAX_BYTES（与游标分支同源），且
-   *    collectRecentTurnEntriesFromTail 的预算语义与活跃路径 applyHistoryBudgetWindow
-   *    对齐：首个 turn 豁免、后续 turn 超界不入窗（窗口总字节 ≤ 预算）。
+   *    collectRecentTurnEntriesFromTail 的预算语义与索引窗口选择（history-reader
+   *    selectIndexWindow）对齐：首个 turn 豁免、后续 turn 超界不入窗（窗口总字节 ≤ 预算）。
    * 2. 恰好 maxTurns turns 的文件 truncated 误报：原实现凑够 turn 数即停 → stopped=true →
    *    truncated=true，而文件实无更早历史（A6 要求无截断提示）。修复后凑够 turn 数只停止
    *    收集，继续向前确认是否真有更早 turn 边界：扫到文件头仍无 → false；发现边界或
@@ -1018,10 +1018,10 @@ describe('tail-read-history', () => {
       expect(totalBytes).toBeLessThan(OUTBOUND_FRAME_TRUNCATE_BYTES)
     })
 
-    it('D4 语义对齐: 超界 turn 不入窗（与活跃路径 applyHistoryBudgetWindow 一致，窗口总字节 ≤ 预算）', async () => {
+    it('D4 语义对齐: 超界 turn 不入窗（与索引窗口选择 history-reader selectIndexWindow 一致，窗口总字节 ≤ 预算）', async () => {
       // 6 turns × ~200KB，maxBytes=640KB：最近 3 turns（~600KB）入窗后，第 4 新的 turn
       // 会使累计超预算 → 不入窗（回退该 turn 行）。旧实现会把超界 turn 完整放行（窗口
-      // ~800KB > 预算），与活跃路径「accBytes + turnBytes > maxBytes 即截取」不一致。
+      // ~800KB > 预算），与索引窗口选择「accBytes + turnBytes > maxBytes 即截取」不一致。
       const padding = 'x'.repeat(200 * 1024)
       const lines: string[] = [makeHeader()]
       for (let i = 0; i < 6; i++) lines.push(...makePaddedTurn(i, padding))

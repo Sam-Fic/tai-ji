@@ -299,6 +299,7 @@ describe('ProcessManager 信号取证环 restart 路径（MF-3）', () => {
 import type { ISessionStore } from '../services/ports/session.js'
 const { SessionHistoryReader } = await import('../services/session/history-reader.js')
 const { PiSessionStore } = await import('../infra/pi/session-store.js')
+const { scanTurnBoundariesForward, verifyTurnBoundaries } = await import('../infra/pi/turn-index-scanner.js')
 const fsExtra = await import('node:fs')
 const osExtra = await import('node:os')
 const fsPath = await import('node:path')
@@ -327,6 +328,7 @@ function makeIdxReader(sessionId: string, filePath: string) {
   const reader = new SessionHistoryReader({
     pm: { getClient: vi.fn(() => undefined) } as unknown as IProcessManager,
     sessionStore,
+    scanner: { scanTurnBoundariesForward, verifyTurnBoundaries },
   })
   return { reader, sessionStore }
 }
@@ -844,6 +846,7 @@ describe('SessionHistoryReader —— 验收② fixture 对拍（索引窗口 vs
           scanSessions: vi.fn(() => [{ id: sessionId, filePath }]),
           convertHistory: realStore.convertHistory.bind(realStore),
         } as unknown as ISessionStore,
+        scanner: { scanTurnBoundariesForward, verifyTurnBoundaries },
       })
       const viaIndex = await reader.getHistory(sessionId)
 
