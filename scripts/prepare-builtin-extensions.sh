@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # prepare-builtin-extensions.sh — 准备 builtin pi extensions 打包产物。
 #
-# 机制（重构后）：调用 bundle-extensions.mjs，用 esbuild 把每个 builtin extension
-# bundle 成自包含 index.js（所有 JS value dep inline，仅 pi virtualModules external）。
+# 机制（重构后）：调用 bundle-extensions.mjs，用 esbuild 一次 build 全部 builtin
+# extension 入口（code splitting：共享依赖提取为 _shared/chunk-<hash>.js，包内独有
+# 代码在各包 index.js；仅 pi virtualModules external）。
 #
 # 根治旧机制（"拷源码 + 人工声明 PKG_DEPS + 从根 node_modules 拷依赖"）的缺陷：
 # workspace 包（@taiji/*、@zhushanwen/*）不在根 node_modules（pnpm hoisted），
@@ -13,8 +14,9 @@
 # builtin 包清单 SSOT：packages/shared/src/mandatory-extensions.json
 # （由 bundle-extensions.mjs 读取，本脚本不再硬编码包列表）
 #
-# 产物（apps/electron/resources/extensions/@zhushanwen/<pkg>/）：
-#  - index.js + index.js.map（bundle 产物，自包含，无 node_modules）
+# 产物（apps/electron/resources/extensions/@zhushanwen/）：
+#  - pi-<pkg>/index.js + index.js.map（包内独有代码，相对 import 共享 chunk）
+#  - _shared/chunk-<hash>.js（跨包共享依赖，全局去重）
 #  - package.json（pi.extensions 改指 ./index.js；源码 package.json 不动）
 #  - README.md / ARCHITECTURE.md（有则拷，供产物自描述；bundle-extensions.mjs 拷贝）
 #  - pi-permission 额外含 tree-sitter-bash.wasm + web-tree-sitter.wasm
@@ -51,8 +53,10 @@ echo ""
 rm -rf "$STAGED_SCOPED"
 mkdir -p "$STAGED_SCOPED"
 
-# 2. esbuild bundle builtin extension（数量以 mandatory-extensions.json SSOT 为准）成自包含 index.js；
-#    README/ARCHITECTURE 文档与 manifest 资源由 bundle-extensions.mjs 一并拷入 staged
+# 2. esbuild bundle builtin extension（数量以 mandatory-extensions.json SSOT 为准）：
+#    一次 build 多 entry + splitting，包内独有代码在各包 index.js、共享依赖提取为
+#    _shared/chunk-<hash>.js；README/ARCHITECTURE 文档与 manifest 资源由
+#    bundle-extensions.mjs 一并拷入 staged
 #    （「mandatory 包 → 源码目录 → staged 产物」在 bundle 脚本内单一 owner，本脚本不再
 #    重复推导源码目录）
 node "$REPO_ROOT/scripts/bundle-extensions.mjs"
