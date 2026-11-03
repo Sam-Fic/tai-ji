@@ -114,25 +114,25 @@ interface SelectedIndexWindow { // oe-exempt:20261103:framework:索引窗口选�
   loadedTurns: number
 }
 
+/** 选窗循环产物（字节区间推导中间态）。 */
+interface WindowRange {
+  /** 窗口首 turn 下标（含）。 */
+  startIdx: number
+  /** 窗口内 turn 数。 */
+  loadedTurns: number
+  /** 窗口 budgetBytes 合计（不计行尾换行的尾读口径）。 */
+  accBytes: number
+}
+
 /**
- * 从索引快照选窗（设计「窗口选择与单次快照」）：最新窗口从 S.turns 末尾向前选 limitTurns
- * 与 budgetBytes 双预算内的完整 turn；cursor 命中时选该 turn 之前的窗口（cursor turn 只进
- * 校验集合，返回时排除）。首个 turn 豁免字节条件（单 turn 超预算完整放行，与既有尾读
- * collectRecentTurnEntriesFromTail 的 hitsByteBudgetCap 语义一致）；窗口起点恒落在 turn
- * 边界（索引记录天然是边界），单 turn 内 entry 不切分（entry 原子性）。
+ * 从 turns[endIdx-1] 向前按 limitTurns + maxBytes 双预算选窗：首个 turn 豁免字节条件
+ * （单 turn 超预算完整放行，与既有尾读 collectRecentTurnEntriesFromTail 的
+ * hitsByteBudgetCap 语义一致）。
  *
  * 纯函数（无 IO）；budgetBytes 是尾读口径（不计行尾换行）的预算字节，与 tailReadHistory
  * 同源，同一 query 在两条链上选出同量级窗口。
  */
-export function selectIndexWindow(
-  snapshot: TurnIndexSnapshot,
-  cursorIdx: number | undefined,
-  query?: HistoryWindowQuery,
-): SelectedIndexWindow {
-  const turns = snapshot.turns
-  const limitTurns = query?.limitTurns ?? HISTORY_BUDGET.RECENT_TURNS
-  const maxBytes = query?.maxBytes ?? HISTORY_BUDGET.MAX_BYTES
-  const endIdx = cursorIdx ?? turns.length
+function pickWindowRange(turns: readonly TurnIndexTurnRecord[], endIdx: number, limitTurns: number, maxBytes: number): WindowRange {
   let startIdx = endIdx
   let loadedTurns = 0
   let accBytes = 0
@@ -143,6 +143,26 @@ export function selectIndexWindow(
     loadedTurns++
     startIdx = i
   }
+  return { startIdx, loadedTurns, accBytes }
+}
+
+/**
+ * 从索引快照选窗（设计「窗口选择与单次快照」）：最新窗口从 S.turns 末尾向前选 limitTurns
+ * 与 budgetBytes 双预算内的完整 turn；cursor 命中时选该 turn 之前的窗口（cursor turn 只进
+ * 校验集合，返回时排除）。首个 turn 豁免字节条件（单 turn 超预算完整放行，与既有尾读
+ * collectRecentTurnEntriesFromTail 的 hitsByteBudgetCap 语义一致）；窗口起点恒落在 turn
+ * 边界（索引记录天然是边界），单 turn 内 entry 不切分（entry 原子性）。
+ */
+export function selectIndexWindow(
+  snapshot: TurnIndexSnapshot,
+  cursorIdx: number | undefined,
+  query?: HistoryWindowQuery,
+): SelectedIndexWindow {
+  const turns = snapshot.turns
+  const limitTurns = query?.limitTurns ?? HISTORY_BUDGET.RECENT_TURNS
+  const maxBytes = query?.maxBytes ?? HISTORY_BUDGET.MAX_BYTES
+  const endIdx = cursorIdx ?? turns.length
+  const { startIdx, loadedTurns, accBytes } = pickWindowRange(turns, endIdx, limitTurns, maxBytes)
   if (accBytes > maxBytes) {
     // 单 turn 豁免所致的字节超出（随本改造退役的 Message[] 预算窗口纯函数的 warn 同语义）：
     // 极端 turn 由帧检查兜底，warn 如实暴露。

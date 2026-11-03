@@ -96,6 +96,23 @@ function turnRecordProblem(turn: unknown, i: number): string | null {
 }
 
 /**
+ * 顶层标量字段校验（含 scannedOffset ≤ fileSize 跨字段不变量）。
+ * problem 非空 = 结构损坏；否则返回对象携带已收窄为 number 的标量字段（构造 index 用，
+ * 免二次断言）。
+ */
+function checkTopLevelFields(
+  obj: Record<string, unknown>,
+): { problem: string } | { fileSize: number; mtimeMs: number; scannedOffset: number } {
+  if (!isNonNegativeInteger(obj.fileSize)) return { problem: 'fileSize 非非负整数' }
+  if (!isNonNegativeInteger(obj.scannedOffset)) return { problem: 'scannedOffset 非非负整数' }
+  if (!isNonNegativeNumber(obj.mtimeMs)) return { problem: 'mtimeMs 非非负有限数' }
+  if ((obj.scannedOffset as number) > (obj.fileSize as number)) {
+    return { problem: 'scannedOffset > fileSize（越出文件）' }
+  }
+  return { fileSize: obj.fileSize, mtimeMs: obj.mtimeMs, scannedOffset: obj.scannedOffset }
+}
+
+/**
  * 索引文件内容运行时收窄 guard。
  *
  * 收窄规则（超出即 corrupted）：
@@ -125,17 +142,9 @@ export function parseTurnIndexContent(raw: string): TurnIndexParseResult {
   if (obj.version !== TURN_INDEX_VERSION) {
     return { ok: false, reason: 'unsupported-version', version: obj.version }
   }
-  if (!isNonNegativeInteger(obj.fileSize)) {
-    return { ok: false, reason: 'corrupted', detail: 'fileSize 非非负整数' }
-  }
-  if (!isNonNegativeInteger(obj.scannedOffset)) {
-    return { ok: false, reason: 'corrupted', detail: 'scannedOffset 非非负整数' }
-  }
-  if (!isNonNegativeNumber(obj.mtimeMs)) {
-    return { ok: false, reason: 'corrupted', detail: 'mtimeMs 非非负有限数' }
-  }
-  if (obj.scannedOffset > obj.fileSize) {
-    return { ok: false, reason: 'corrupted', detail: 'scannedOffset > fileSize（越出文件）' }
+  const scalar = checkTopLevelFields(obj)
+  if ('problem' in scalar) {
+    return { ok: false, reason: 'corrupted', detail: scalar.problem }
   }
   if (!Array.isArray(obj.turns)) {
     return { ok: false, reason: 'corrupted', detail: 'turns 非数组' }
@@ -154,9 +163,9 @@ export function parseTurnIndexContent(raw: string): TurnIndexParseResult {
     ok: true,
     index: {
       version: TURN_INDEX_VERSION,
-      fileSize: obj.fileSize,
-      mtimeMs: obj.mtimeMs,
-      scannedOffset: obj.scannedOffset,
+      fileSize: scalar.fileSize,
+      mtimeMs: scalar.mtimeMs,
+      scannedOffset: scalar.scannedOffset,
       turns: obj.turns as TurnIndexTurnRecord[],
     },
   }
