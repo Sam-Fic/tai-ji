@@ -524,9 +524,7 @@ function stubNextCreatedClient(
 }
 
 /**
- * [session-cold-switch-perf §3.3-1] 等待态 2 后台全量重建任务跑完（runRebuildJob 经
- * getEntries RPC + 多个 setImmediate 让出段后写缓存/发帧）。flush 足够轮次保证
- * 「后台任务终态已落定」后再断言 rebuild mock / 缓存行为。
+ * flush 足够多轮 setImmediate 让出段，等待被测编排的异步任务终态落定后再断言。
  */
 async function flushBackgroundRebuild(rounds = 10): Promise<void> {
   for (let i = 0; i < rounds; i++) {

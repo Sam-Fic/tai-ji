@@ -224,11 +224,16 @@ export class SessionEntryRemovalOrchestrator {
 
     // ── 第 12-13 步：per-session 域状态销毁与 MessageBus 分区清理 ──
     // wave:perf-w20（D6-1）：session 删除 / pi 进程退出时清历史重建缓存 + lastLeafId
-    // ——真删除后缓存必须清，清理行为本身正确。本汇聚链只覆盖真删除；撤回链对缓存的
-    // 驱逐经 SessionService.evictHistoryRebuildCache 直调 historyReader
-    //（onSessionReclaimed），不经本汇聚链（撤回 ≠ 销毁，session 条目保留）。
+    // ——真删除后缓存必须清，清理行为本身正确。本汇聚链只覆盖真删除（撤回 ≠ 销毁，
+    // session 条目保留，不经本汇聚链）。
     // S6 起清理随域迁入 historyReader（onSessionDisposed 直调形态，traceSync/projection
     // 同款）。
+    // [turn-boundary-index D5] 本步（onSessionDisposed）只清内存索引、不取消在途文件
+    // 读取（回调还覆盖 pi 进程退出、强杀与恢复清场——读取继续，被取消才是错误）。真
+    // 删除专属的取消挂点（onSessionDeleted：取消在途索引构建 + 清内存 LRU）刻意不在
+    // 本共享链——三个真删除入口各自在整树删除前显式调用（lifecycle.delete 主会话分支 /
+    // btw closeLine / archive purgeArchive；purgeArchive 不经本链，挂点下沉共享层会丢
+    // 顺序约束，设计 D5 不采用段）。
     runDestroyStepIsolated('historyReader.onSessionDisposed', sessionId, () => {
       this.deps.disposeHistoryReader(sessionId)
     })
