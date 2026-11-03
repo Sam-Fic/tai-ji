@@ -985,6 +985,16 @@ jobs:
         continue-on-error: true
         run: node scripts/check-rfl-parity.mjs
 
+      # 历史读取读模型防回流（turn-boundary-index RL1，与 u-retire-protocol commit 门
+      # 同源直调）：退役通知协议裸词与 runtime 旧链符号零回流 + 历史读取编排不引用
+      # pi get_entries。脚本自身全量扫描（无 staged 上下文依赖）——on-diff e2e 清单
+      # E2E-PIPE-30 的 scope 仅 4 文件，本步骤是 PR 面的等价全量拦截点（D7 通则，
+      # 同上行各 guard 的挂载理由）。
+      - name: History read-model anti-regression guard (RL1)
+        id: history-read-model
+        continue-on-error: true
+        run: node scripts/check-history-read-model.mjs
+
       # 解掩蔽（同 lint job 聚合语义）：全部检查步骤并列暴露，任一非 success
       #（含 skipped）由聚合步骤判红——一次 run 暴露全部失败；前置依赖步骤
       #（checkout / 安装依赖 / Build dist / Materialize .agents / setup-bun）
@@ -1026,6 +1036,7 @@ jobs:
           if [ "${{ steps.suite-wiring.outcome }}" != "success" ]; then echo "::error title=suite-wiring::failed"; failed=1; fi
           if [ "${{ steps.hook-antipattern.outcome }}" != "success" ]; then echo "::error title=hook-antipattern::failed"; failed=1; fi
           if [ "${{ steps.rfl-parity.outcome }}" != "success" ]; then echo "::error title=rfl-parity::failed"; failed=1; fi
+          if [ "${{ steps.history-read-model.outcome }}" != "success" ]; then echo "::error title=history-read-model::failed"; failed=1; fi
           exit $failed
 
   # 红灯② on-diff e2e 清单 CI 执行消费者（D13 三红灯之一）：消费

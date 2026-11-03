@@ -6,11 +6,16 @@
  * 未知 params 键忽略 + 一行 warning；会话注入优先级（视图 scope sessionId >
  * getBoundSessionId）。U13 增量：§5.4 判定表行 5-8 对账（判定者/恢复动作逐行确定）+
  * 先校验后动作独立断言（六条失败行 sink 零写入组合断言 + 校验短路 + 失败可恢复）。
+ * M1 增量（tray-panel-interact D1/D2/D3）：内置容器目标参数化导航（drawer.tab 登记
+ * recordId / overlay.content 登记 runId，params 与 drawer 分支同款透传）+ sink 映射
+ * 生产形态用例（剥内置前缀 + core 协调函数端到端：ui.subagent→打开+选中 subagent tab /
+ * ui.workflow+runId→浮层参数化载荷经注入桥 / recordId 定位失败落默认 tab+warning）。
  * lookup/sink 经 mock 端口注入（本模块不感知容器位注册表实装）。
  *
  * 运行：cd packages/core && npx vitest run src/extension-host/__tests__/container-navigation.test.ts
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { ref } from 'vue'
 import type { HostContainerAction } from '@zhushanwen/extension-protocol'
 import {
   ContainerNavigationExecutor,
@@ -19,6 +24,17 @@ import {
   type ContainerNavigationSink,
   type ContainerNavigationResult,
 } from '../container-navigation'
+import { stripBuiltinNamespace } from '../content-slot-registry'
+import {
+  bindDrawerSessionId,
+  bindSubagentRecordLookup,
+  bindWorkflowOverlayOpener,
+  getDrawerControlState,
+  openDrawerTab,
+  readSubagentSelectionFor,
+  _resetDrawerForTest,
+} from '../../domain/drawer'
+import { openOverlayContent, _resetOverlayForTest } from '../../domain/overlay'
 import { FAILURE_JUDGEMENT_TABLE } from '../failure-degradation'
 
 /** 构造注册表命中声明（缺省 = drawer 族、session 归属、默认可打开）。 */
@@ -77,13 +93,13 @@ describe('成功路径（先校验全通过才写状态）', () => {
     expect(sink.openOverlayContent).not.toHaveBeenCalled()
   })
 
-  it('overlay 导航 → sink.openOverlayContent 收到 (sessionId, contentId)', () => {
+  it('overlay 导航 → sink.openOverlayContent 收到 (sessionId, contentId, params)（params 与 drawer 分支同款透传，缺省为空对象）', () => {
     const { executor, sink, lookup } = makeHarness()
     lookup.resolveTargets.mockReturnValue([makeTarget({ id: 'probe.panel', placement: 'overlay.content' })])
     const result = executor.navigate({ kind: 'overlay', tabId: 'probe.panel' }, { viewSessionId: 'view-sid' })
     expect(result.ok).toBe(true)
     expect(sink.openOverlayContent).toHaveBeenCalledTimes(1)
-    expect(sink.openOverlayContent).toHaveBeenCalledWith('view-sid', 'probe.panel')
+    expect(sink.openOverlayContent).toHaveBeenCalledWith('view-sid', 'probe.panel', {})
     expect(sink.openDrawerTab).not.toHaveBeenCalled()
   })
 
@@ -206,7 +222,7 @@ describe('未知 params 键（忽略 + 一行 warning，不阻断动作）', () 
     expect(String(vi.mocked(console.warn).mock.calls[0]?.[0])).toContain('mystery')
   })
 
-  it('overlay 族词表为空集：任何 params 键都是未知键，忽略后动作照常', () => {
+  it('overlay 族未登记键（overlay.content 仅登记 runId）：任何其他 params 键都是未知键，忽略后动作照常', () => {
     const { executor, sink, lookup } = makeHarness()
     lookup.resolveTargets.mockReturnValue([makeTarget({ id: 'probe.panel', placement: 'overlay.content' })])
     const result = executor.navigate(
@@ -240,6 +256,152 @@ describe('会话注入优先级（视图 scope sessionId > getBoundSessionId()�
     expect(result.ok).toBe(false)
     expect(result.reason).toBe('no-session')
     expect(sink.openDrawerTab).not.toHaveBeenCalled()
+  })
+})
+
+// ── M1（tray-panel-interact D2/D3）：内置容器目标参数化导航 ──────────
+
+describe('M1 内置容器目标参数化导航（drawer.tab 登记 recordId / overlay.content 登记 runId）', () => {
+  it('drawer + ui.subagent + recordId → 已知键透传（recordId 是 drawer.tab 族登记键，无未知键 warning）', () => {
+    const { executor, sink } = makeHarness()
+    const result = executor.navigate(
+      drawerAction({ tabId: 'ui.subagent', params: { recordId: 'rec-1' } }),
+      { viewSessionId: 'view-sid' },
+    )
+    expect(result.ok).toBe(true)
+    expect(sink.openDrawerTab).toHaveBeenCalledWith('view-sid', 'ui.subagent', { recordId: 'rec-1' })
+    expect(console.warn).not.toHaveBeenCalled()
+  })
+
+  it('overlay + ui.workflow + runId → sink.openOverlayContent 收到 (sessionId, contentId, {runId})（params 与 drawer 分支同款透传）', () => {
+    const { executor, sink, lookup } = makeHarness()
+    lookup.resolveTargets.mockReturnValue([makeTarget({ id: 'ui.workflow', placement: 'overlay.content' })])
+    const result = executor.navigate(
+      { kind: 'overlay', tabId: 'ui.workflow', params: { runId: 'run-1' } },
+      { viewSessionId: 'view-sid' },
+    )
+    expect(result.ok).toBe(true)
+    expect(sink.openOverlayContent).toHaveBeenCalledWith('view-sid', 'ui.workflow', { runId: 'run-1' })
+    expect(sink.openDrawerTab).not.toHaveBeenCalled()
+    expect(console.warn).not.toHaveBeenCalled()
+  })
+
+  it('canvasId 不登记（overlay.content 族仅 runId）：未知键忽略 + 一行 warning，runId 照常透传', () => {
+    const { executor, sink, lookup } = makeHarness()
+    lookup.resolveTargets.mockReturnValue([makeTarget({ id: 'ui.workflow', placement: 'overlay.content' })])
+    const result = executor.navigate(
+      { kind: 'overlay', tabId: 'ui.workflow', params: { runId: 'run-1', canvasId: 'cvs-1' } },
+      { viewSessionId: 'view-sid' },
+    )
+    expect(result.ok).toBe(true)
+    expect(sink.openOverlayContent).toHaveBeenCalledWith('view-sid', 'ui.workflow', { runId: 'run-1' })
+    expect(console.warn).toHaveBeenCalledTimes(1)
+    expect(String(vi.mocked(console.warn).mock.calls[0]?.[0])).toContain('canvasId')
+  })
+
+  it('drawer.tab 族未知键同样忽略 + warning（新登记键不放宽既有口径：runId 对 drawer 族仍是未知键）', () => {
+    const { executor, sink } = makeHarness()
+    const result = executor.navigate(
+      drawerAction({ tabId: 'ui.subagent', params: { recordId: 'rec-1', runId: 'run-1' } }),
+      { viewSessionId: 'view-sid' },
+    )
+    expect(result.ok).toBe(true)
+    expect(sink.openDrawerTab).toHaveBeenCalledWith('view-sid', 'ui.subagent', { recordId: 'rec-1' })
+    expect(console.warn).toHaveBeenCalledTimes(1)
+    expect(String(vi.mocked(console.warn).mock.calls[0]?.[0])).toContain('runId')
+  })
+})
+
+// ── M1 sink 映射（生产形态：剥内置前缀 + core 协调函数，D1/D2/D3 端到端；RL1 承载）───
+//
+// mock sink 族锁定执行器行为；本族用生产形态 sink（与 useExtensionHostBridge 壳层装配
+// 逐行同源：全局 id 经 stripBuiltinNamespace 剥内置前缀后传 core 协调函数）锁定
+// 「点击 → 校验 → sink → core 状态写入」整链——内置目标从两头堵变为可达且定位正确。
+
+describe('sink 映射（生产形态：剥内置前缀 + core 协调函数——RL1 ui.subagent → 打开 + 选中 subagent tab）', () => {
+  /** 与 useExtensionHostBridge 装配逐行同源的 sink（core headless：drawer/overlay 协调函数 + 单源剥前缀）。 */
+  const productionSink: ContainerNavigationSink = {
+    openDrawerTab: (_sessionId, tabId, params) => openDrawerTab(stripBuiltinNamespace(tabId), params),
+    openOverlayContent: (sessionId, contentId, params) =>
+      openOverlayContent(stripBuiltinNamespace(contentId), sessionId, params),
+  }
+
+  const makeProductionHarness = () => {
+    const lookup = {
+      resolveTargets: vi.fn<(tabId: string) => ContainerNavigationTarget[]>(() => [makeTarget()]),
+      hasData: vi.fn<(t: ContainerNavigationTarget) => boolean>(() => true),
+    }
+    const getBoundSessionId = vi.fn<() => string | null>(() => 'main-sid')
+    const executor = new ContainerNavigationExecutor({ lookup, sink: productionSink, getBoundSessionId })
+    return { executor, lookup }
+  }
+
+  beforeEach(() => {
+    // drawer 域分区键绑定（mainSid = 焦点会话；生产由 renderer 兼容层绑 panel store）
+    bindDrawerSessionId(ref('main-sid'))
+  })
+
+  afterEach(() => {
+    bindSubagentRecordLookup(null)
+    bindWorkflowOverlayOpener(null)
+    bindDrawerSessionId(ref(null))
+    _resetDrawerForTest()
+    _resetOverlayForTest()
+  })
+
+  it('ui.subagent + recordId → 抽屉打开且选中该 subagent（activeTab=subagent + 选中态 = subagent:<mainSid>:<recordId>）', () => {
+    const { executor, lookup } = makeProductionHarness()
+    lookup.resolveTargets.mockReturnValue([
+      makeTarget({ id: 'ui.subagent', placement: 'drawer.tab', pluginId: 'taiji-host', openableWithoutData: true }),
+    ])
+    bindSubagentRecordLookup((sid, recordId) => sid === 'main-sid' && recordId === 'rec-1')
+
+    const result = executor.navigate(
+      drawerAction({ tabId: 'ui.subagent', params: { recordId: 'rec-1' } }),
+      { viewSessionId: 'main-sid' },
+    )
+
+    expect(result.ok).toBe(true)
+    expect(getDrawerControlState()).toEqual({ isOpen: true, activeTab: 'subagent' })
+    expect(readSubagentSelectionFor('main-sid', (s) => s.selectedSubagentId)).toBe('subagent:main-sid:rec-1')
+    expect(console.warn).not.toHaveBeenCalled()
+  })
+
+  it('recordId 无对应记录 → 落 subagent 默认标签页（不写选中态）+ 一行 warning，导航本身不失败不打断', () => {
+    const { executor, lookup } = makeProductionHarness()
+    lookup.resolveTargets.mockReturnValue([
+      makeTarget({ id: 'ui.subagent', placement: 'drawer.tab', pluginId: 'taiji-host', openableWithoutData: true }),
+    ])
+    bindSubagentRecordLookup(() => false)
+
+    const result = executor.navigate(
+      drawerAction({ tabId: 'ui.subagent', params: { recordId: 'ghost-rec' } }),
+      { viewSessionId: 'main-sid' },
+    )
+
+    expect(result.ok).toBe(true)
+    expect(getDrawerControlState()).toEqual({ isOpen: true, activeTab: 'subagent' })
+    expect(readSubagentSelectionFor('main-sid', (s) => s.selectedSubagentId)).toBe(null)
+    expect(console.warn).toHaveBeenCalledTimes(1)
+    expect(String(vi.mocked(console.warn).mock.calls[0]?.[0])).toContain('ghost-rec')
+  })
+
+  it('ui.workflow + runId → 浮层参数化载荷经 bindWorkflowOverlayOpener 注入桥打开（opener 收到 runId + 归属会话）', () => {
+    const { executor, lookup } = makeProductionHarness()
+    lookup.resolveTargets.mockReturnValue([
+      makeTarget({ id: 'ui.workflow', placement: 'overlay.content', pluginId: 'taiji-host', openableWithoutData: false }),
+    ])
+    const opener = vi.fn<(nameOrRunId: string, slug?: string, sessionId?: string) => void>()
+    bindWorkflowOverlayOpener(opener)
+
+    const result = executor.navigate(
+      { kind: 'overlay', tabId: 'ui.workflow', params: { runId: 'run-1' } },
+      { viewSessionId: 'main-sid' },
+    )
+
+    expect(result.ok).toBe(true)
+    expect(opener).toHaveBeenCalledTimes(1)
+    expect(opener).toHaveBeenCalledWith('run-1', undefined, 'main-sid')
   })
 })
 

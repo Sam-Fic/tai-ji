@@ -61,6 +61,27 @@ export default {
     /** Panel top banners (bash) */
     corruptBanner: 'Task data corrupted; ignored (.corrupt snapshot kept)',
     disconnectBanner: 'Disconnected; refreshes automatically after reconnect',
+    /**
+     * Protocol widget panel disconnect banner (tray-panel-interact §3.3 D7): shown while the
+     * ws connection is not connected and the panel is open; disappears on reconnect. Worded
+     * differently from bash's disconnectBanner — widget content is extension-pushed (absolute
+     * projection), so a disconnect shows the previous frame and "may be stale" is the honest
+     * wording; bash is host-fetched and refetches on reconnect.
+     */
+    widgetDisconnectBanner: 'Disconnected; content may be stale',
+    /**
+     * Protocol widget button hover title (D8: host-side template; fact fields come from
+     * extension meta — extension supplies facts, host supplies the copy template).
+     * {title} = meta.title, {badge} = badge fallback chain value, {total} = progress.total.
+     * Segment omission rules and membership judging (viewId closed set) live in
+     * TrayWidgetButton.vue.
+     */
+    widgetTitle: {
+      /** Running-count progress entries (set members subagent / workflow) */
+      running: '{title} · {badge} running / {total}',
+      /** Entries outside the set (todo / goal etc.: completion count or percentage, no "running" notion) */
+      plain: '{title} · {badge}',
+    },
     /** Order-4 aggregate entry (single layers icon + running-count badge, W3a): title / aria-label is always "All tools" (count lives in the badge, not the title) */
     aggregate: {
       allTools: 'All tools',

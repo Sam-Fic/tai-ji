@@ -44,6 +44,7 @@ import {
   getSessionSubagentMessageDir,
   getSessionWorkflowDir,
   getSessionWorkflowRunsDir,
+  getSessionHistoryIndexFile,
 } from '../paths'
 
 const DATA = '/tmp/taiji-shared-test-data'
@@ -176,6 +177,15 @@ describe('session 存储树各域推导函数', () => {
     expect(getSessionLogsDir(SID, DATA)).toBe(join(DATA, 'ext-sessions', SID, 'logs'))
   })
 
+  it('域 12 turn 边界索引：getSessionHistoryIndexFile → <root>/<sid>/history-index/turns.json（turn-boundary-index D1）', () => {
+    expect(getSessionHistoryIndexFile(SID, DATA)).toBe(
+      join(DATA, 'ext-sessions', SID, 'history-index', 'turns.json'),
+    )
+    expect(getSessionHistoryIndexFile('sess.AB_01', DATA)).toBe(
+      join(DATA, 'ext-sessions', 'sess.AB_01', 'history-index', 'turns.json'),
+    )
+  })
+
   it('缺省形态：读 TAIJI_AGENT_DATA_DIR env（vi.stubEnv 桩，不触 fs）', () => {
     vi.stubEnv('TAIJI_AGENT_DATA_DIR', DATA)
     expect(getAttachmentsDir(SID)).toBe(join(DATA, 'ext-sessions', SID, 'attachments'))
@@ -207,6 +217,7 @@ describe('sessionId 穿越拒绝（isPiSessionId 同域校验，非法 id throw�
     getSessionSubagentMessageDir,
     getSessionWorkflowDir,
     getSessionWorkflowRunsDir,
+    getSessionHistoryIndexFile,
   ]
 
   it('全部树内推导函数对非法 id 一律 throw（路径遍历防护守卫，含 btw 虚拟 id 冒号形态）', () => {

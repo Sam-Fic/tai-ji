@@ -197,7 +197,7 @@ export const HIDDEN_ALLOWLIST = new Map([
   ['packages/renderer/src/components/canvas/canvas-display.ts:229', 'canvas 布局 opts.hidden 形参声明'],
   ['packages/renderer/src/components/canvas/canvas-display.ts:232', 'canvas 布局 opts.hidden 属性访问'],
   // renderer 扩展宿主桥的插件条目 hidden（帧面透传）
-  ['packages/renderer/src/composables/shell/useExtensionHostBridge.ts:341', '插件 headerAction hidden 开关读取（isVisibleHeaderAction 谓词：显式推送 hidden 即隐藏，两类入口一视同仁；256→267 随插件化分支合并漂移、267→341 随 refactor-plugin-implement isVisibleHeaderAction 注释扩写漂移）'],
+  ['packages/renderer/src/composables/shell/useExtensionHostBridge.ts:349', '插件 headerAction 运行时 hidden 开关消费（isVisibleHeaderAction 谓词：显式推送 hidden 即隐藏，两类入口一视同仁，入口整体不渲染；与「会话隐藏」同形不同义；256→267 随插件化分支合并漂移、267→341 随 refactor-plugin-implement isVisibleHeaderAction 注释扩写漂移、341→349 随 feat-tray-panel-interact 文件头注宿主薄命令段（+5）与 import 块（+3）扩写漂移）'],
   // locale 键（设置页「注册但不可达」开关的字面键名；1393/1392→1394/1393 随插件化分支合并漂移；
   // 1394/1393→1399/1398 随 feat-quota-cookie-refresh 在 quota 段加 5 行漂移；
   // 1399/1398→1398/1396 随 main 合并（stepfun i18n 键 + genstats locale 编辑）漂移；

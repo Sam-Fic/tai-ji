@@ -1057,7 +1057,9 @@ export interface ClientMessageMap {
   'session.getWorkflows': { sessionId: string }
   'session.getAgentCallHistory': { sessionId: string; agentCallSessionId: string }
   'session.getAgentCallFilePath': { sessionId: string; agentCallSessionId: string }
-  'session.workflowAction': { sessionId: string; action: 'abort'; runId: string }
+  // workflow 生命周期操作（tray-panel-interact §3.3 D4：abort 与 resume 同款 slash command
+  // 转发通道，命令轮无模型调用）。resume 仅对 interrupted 形态（terminal 由扩展侧资格校验拒绝）。
+  'session.workflowAction': { sessionId: string; action: 'abort' | 'resume'; runId: string }
   // workflow 可视化两条拉取 RPC（workflow-visualization 设计 §3.1-4/§3.1-5）：
   // sessionId 定位 session 的 run journal 目录（workflow/runs/，record 流所在）+ 对齐 workflowAction
   // 的双参数先例；runId 为 run 级标识（wf- 前缀）。
@@ -1723,16 +1725,6 @@ export type ServerMessageType =
   //（data-source-registry.md #20）。对账漂移发现仍由 runtime 记日志，不再占协议帧。
   | 'session.thinkingLevelSet'
   | 'session.state_changed'
-  // session.historyCacheReady（session-cold-switch-perf §3.3-1）：后台全量重建任务完成的
-  // 轻通知广播（一次性事件，非 last-value 快照——同 session.deliveryHandled 不登记
-  // message-bus TOPIC_TABLE / STATE_TYPE_KEY_MAP，miss fallback 'stream'——按 stream 语义
-  // 入 per-session ring，断连重连/重订阅在 ring 容量与字节预算内经回放补见（session.restored
-  // 同款既有通路），断连窗口内发出的帧多数会补达 renderer；回放缺席（ring 逐出/分区已清）
-  // 时收敛由下一次 getHistory 拉取承接，ADR-0097 拉为主推补充）。
-  // 成功/失败都推，失败带 error（renderer 收失败帧不重拉，收敛为既有 loadMore 失败态）；
-  // snapshotLeafId = 重建快照末条 entry id，renderer 做快照版本对账（过期不重拉）。
-  // runtime 构造点与 renderer 监听点引用同一类型定义，帧名对账由类型层承载。
-  | 'session.historyCacheReady'
   // wave:runtime-wiring：session.subscribe 的 RPC reply type（payload 消费型，含 snapshot/lastSeq/gap）。
   // 与 ClientMessageType 的 'session.subscribe'（request）同名——request/reply 同名是本项目惯用模式
   //（见 session.compact→session.compacted 等多数用不同名，但 session.subscribe 因其「订阅」语义
@@ -3121,7 +3113,7 @@ export interface ServerMessageMapBase {
     fetchedAt: string
   }
   // session.workflowActionDone：workflow 操作完成确认（session.workflowAction RPC reply）
-  'session.workflowActionDone': { sessionId: string; action: 'abort'; runId: string }
+  'session.workflowActionDone': { sessionId: string; action: 'abort' | 'resume'; runId: string }
   // session.workflowRunEvents：session.getWorkflowRunEvents 的 reply（workflow-visualization
   // 设计 §3.1-4 D4 事件流拉模式）。成功/结构化错误两形态见 WorkflowRunEventsReply——
   // 大字段截断与 truncatedFields 标注的行形态 = WorkflowRunEventEntry（shared/workflow.ts）；
@@ -3205,16 +3197,6 @@ export interface ServerMessageMapBase {
     sessionId: string
     modelId: string
     thinkingLevel?: string
-  }
-  // session.historyCacheReady：后台全量重建任务完成的轻通知广播（session-cold-switch-perf
-  // §3.3-1，同上方 'session.state_changed' 广播帧形态）。payload 字段语义：
-  // snapshotLeafId = 本次重建快照的末条 entry id（renderer 丢弃过期快照的版本对账依据——
-  // 重建期间会话有新追加则基准不匹配，不重拉等下一轮）；error 非空 = 失败帧
-  // （成功/失败都推；失败帧 renderer 不重拉）。帧名对账由类型层承载，禁手抄字面量。
-  'session.historyCacheReady': {
-    sessionId: string
-    snapshotLeafId: string
-    error?: string
   }
   // session.thinkingLevelSet：pi thinking_level_changed → event-adapter 广播 + setThinkingLevel RPC
   // reply（settings-message-handler）双发送点，payload 形状一致（R1 type-safety S4 补登记——

@@ -6,8 +6,9 @@ import type { ArchiveConversationSummary, ArchiveSummaryTurn } from '@taiji/shar
  * 消费方 = u-archive-service 后台压缩任务（读归档目录内明文 JSONL → parseJsonl 产物
  * 喂入本函数 → 摘要随簿记终态落盘）。算法确定性 = 归档可重放（同输入恒同摘要，D4）：
  *
- * - turn 边界 = user message entry 开新 turn，判定口径逐字对齐 session-history.ts
- *   isTurnBoundary（type === 'message' && message.role === 'user'）；compaction entry
+ * - turn 边界 = user message entry 开新 turn，判定口径逐字对齐 infra/pi/
+ *   turn-index-types.ts isUserMessageBoundary（type === 'message' && message.role ===
+ *   'user'）；compaction entry
  *   不作边界——与 session-reader segmentTurns 的 compaction 断点语义刻意不同，摘要
  *   只按 user 分段，不受上下文压缩点影响（D4 采用理由）。
  * - 用户文本 = message.content 的 string 形态或 blocks 中 type === 'text' 块拼接
@@ -55,9 +56,9 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 /**
  * message entry 的 role 收窄（非 message entry / 畸形形态返回 null）。
- * `messageRoleOf(entry) === 'user'` 与 session-history.ts isTurnBoundary 语义逐字
- * 等价（该函数为 session-history 包内私有、且本处还需 assistant 分派，收窄形状
- * 不同故本地持有；对齐由单测锚定用例双保险）。
+ * `messageRoleOf(entry) === 'user'` 与 infra/pi/turn-index-types.ts
+ * isUserMessageBoundary（turn 边界判定单点）语义逐字等价（本处还需 assistant 分派，
+ * 收窄形状〔返回 role 字符串〕不同故本地持有；对齐由单测锚定用例双保险）。
  */
 function messageRoleOf(entry: Record<string, unknown>): string | null {
   if (entry.type !== 'message') return null

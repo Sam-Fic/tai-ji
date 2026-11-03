@@ -1,20 +1,30 @@
 #!/usr/bin/env node
 /**
  * bundle-extensions.mjs — 用 esbuild 把 builtin pi extension（数量以
- * packages/shared/src/mandatory-extensions.json SSOT 为准，不写死计数）各自 bundle 成
- * 自包含 .js，解决 prepare-builtin-extensions.sh 旧机制的根本缺陷。
+ * packages/shared/src/mandatory-extensions.json SSOT 为准，不写死计数）bundle 到
+ * staged 根，解决 prepare-builtin-extensions.sh 旧机制的根本缺陷。
  *
  * 旧机制（"拷源码 + 人工声明 PKG_DEPS + 从根 node_modules 拷依赖"）的两个根因：
  *  1. workspace 包（@taiji/*、@zhushanwen/*）不在根 node_modules（pnpm hoisted），
  *     copy_dep 从根 node_modules 拷不到 → staged 缺依赖 → pi 加载报 Cannot find module。
  *  2. PKG_DEPS 人工维护，与 package.json 无机械同步，新增 value import 漏声明即断链。
  *
- * 新机制：esbuild 在构建期静态分析 import，把所有可 inline 的 value 依赖打进单个
- * index.js。只有 pi 运行时 virtualModules 标 external（pi 进程注入，无需 staged 自带）。
+ * 新机制：esbuild 在构建期静态分析 import，把所有可 inline 的 value 依赖打进产物。
+ * 只有 pi 运行时 virtualModules 标 external（pi 进程注入，无需 staged 自带）。
  * 从结构上消除上述两个根因，并兑现 G3（新增静态 value 依赖不改脚本）。
  *
+ * 共享 chunk（2026-11-03 冷启动优化）：全部扩展入口走**一次 build 多 entry +
+ * splitting:true**（ESM only），被多个扩展共同引用的依赖（@zhushanwen/* 共享库，
+ * 含 subagent-core 等大库）由 esbuild 自动提取为 _shared/chunk-<hash>.js，不再
+ * 逐包重复内联——21 包曾把同一份 subagent-core 内联 4+ 次（index.js 合计 6.0MB，
+ * prod 冷缓存首开 3478ms 的主构成）。运行时收益依据（toy 实验已证）：pi loader 的
+ * jiti moduleCache:false 只作用于扩展入口（reload 重读入口），入口相对 import 的
+ * chunk 仍走 Node 模块缓存——同进程共享模块只加载/执行一次。npm 发布形态不受影响
+ * （npm 发 src/ 源码，splitting 只作用于 Electron staged）。
+ *
  * 产物（apps/electron/resources/extensions/@zhushanwen/<pkg>/）：
- *  - index.js + index.js.map（所有 JS value dep inline）
+ *  - index.js + index.js.map（本扩展独有代码 + import "../_shared/chunk-<hash>.js"）
+ *  - _shared/chunk-<hash>.js（跨扩展共享依赖，一次构建全局去重）
  *  - package.json（pi.extensions 改指 ./index.js；源码 package.json 不动）
  *  - permission 额外含 tree-sitter-bash.wasm + web-tree-sitter.wasm（手动拷贝，与 index.js 同目录）
  *  - subagent-workflow 额外含 workflows/ + agents/
@@ -64,6 +74,14 @@ const BUILTIN_PACKAGES = JSON.parse(
 
 const EXTENSIONS_DIR = join(REPO_ROOT, "extensions");
 const STAGED_ROOT = join(REPO_ROOT, "apps/electron/resources/extensions/@zhushanwen");
+/**
+ * 跨扩展共享 chunk 输出目录（相对 STAGED_ROOT）：esbuild splitting 的 chunkNames
+ * 前缀。独立于任何 pi-* 包目录——verify-staged-extensions.mjs 的 SSOT 集合断言只
+ * 枚举 pi-* 前缀目录（listStagedPackageDirs），chunk 目录不会被误当包校验；
+ * electron-builder extraResources 对 resources/extensions 按目录通配（递归全量）
+ * 拷贝，chunk 随目录自然入包，无需单独登记。
+ */
+const SHARED_CHUNK_DIR = "_shared";
 /** 引擎包 staged 根（W9，设计 §3.7 Electron 打包态：apps/electron/resources/engines/<id>/）。 */
 const ENGINES_STAGED_ROOT = join(REPO_ROOT, "apps/electron/resources/engines");
 /** 引擎包源码目录前缀（packages/ 下，设计 §3.7「引擎包落位 packages/」）。 */
@@ -342,34 +360,64 @@ async function copyManifestResourceDirs(pkg, srcDir, outDir) {
 	return copiedManifestDirs;
 }
 
-async function bundleOne(pkgName) {
-	const short = pkgName.replace(/^@zhushanwen\/pi-/, "");
-	const srcDir = srcDirFor(pkgName);
-	const entry = join(srcDir, "index.ts");
-	// staged 目录名用 pkgName 的 name 部分（pi-ask-user），不含 scope 前缀
-	// （STAGED_ROOT 已含 @zhushanwen scope 目录）
-	const pkgDirName = pkgName.split("/")[1];
-	const outDir = join(STAGED_ROOT, pkgDirName);
-
-	if (!existsSync(entry)) {
-		throw new Error(`entry not found: ${entry} (源码目录 ${srcDir} 缺 index.ts)`);
+/**
+ * 全部扩展入口一次 esbuild build（code splitting 共享 chunk）。
+ *
+ * 一次 build（而非逐包独立 build）是 splitting 的前提：esbuild 只在同一 build 的
+ * 多个 entry 之间提取共享模块。entryPoints 用 {in,out} 对象形态把产物路径钉在
+ * pi-<short>/index（与逐包 outfile 形态逐字节一致，pi.extensions/pi manifest/
+ * loader 的 import.meta.url 定位逻辑均无感）；共享 chunk 落 _shared/chunk-<hash>.js。
+ * 任一 entry 编译失败 → 整体 build 抛错（fail-fast，逐包时代的单包失败即退出语义
+ * 等价——错误列表带 entry 路径，归因不丢）。
+ */
+async function bundleAllExtensions() {
+	const entryPoints = [];
+	for (const { name } of BUILTIN_PACKAGES) {
+		const srcDir = srcDirFor(name);
+		const entry = join(srcDir, "index.ts");
+		if (!existsSync(entry)) {
+			throw new Error(`entry not found: ${entry} (源码目录 ${srcDir} 缺 index.ts)`);
+		}
+		const short = name.replace(/^@zhushanwen\/pi-/, "");
+		entryPoints.push({ in: entry, out: `pi-${short}/index` });
 	}
 
-	await mkdir(outDir, { recursive: true });
+	try {
+		return await build({
+			entryPoints,
+			bundle: true,
+			format: "esm",
+			// ESM only：splitting 是 esbuild 的 ESM 专属能力（CJS 产物不支持）
+			splitting: true,
+			platform: "node",
+			target: "node18",
+			sourcemap: true,
+			keepNames: true,
+			external: EXTERNAL,
+			outdir: STAGED_ROOT,
+			chunkNames: `${SHARED_CHUNK_DIR}/chunk-[hash]`,
+			// import.meta.url 在 ESM format 下保留（已实测），loader.ts 用它定位 bundle 目录
+			logLevel: "warning",
+		});
+	} catch (err) {
+		console.error("\n[bundle-extensions] 扩展打包失败:");
+		for (const e of err.errors ?? []) {
+			console.error(`  ${e.location ? `${e.location.file}:${e.location.line}` : ""} ${e.text}`);
+		}
+		if (!err.errors?.length) console.error(err.stack || err.message);
+		process.exit(1);
+	}
+}
 
-	const result = await build({
-		entryPoints: [entry],
-		bundle: true,
-		format: "esm",
-		platform: "node",
-		target: "node18",
-		sourcemap: true,
-		keepNames: true,
-		external: EXTERNAL,
-		outfile: join(outDir, "index.js"),
-		// import.meta.url 在 ESM format 下保留（已实测），loader.ts 用它定位 bundle 目录
-		logLevel: "warning",
-	});
+/**
+ * 单包 staged 资产装配（build 之后的产物侧工作，与 esbuild 解耦）：
+ * 特殊资产目录拷贝 + staged package.json + 文档 + manifest 资源目录 + 体积统计。
+ */
+async function stageOne(pkgName) {
+	const short = pkgName.replace(/^@zhushanwen\/pi-/, "");
+	const srcDir = srcDirFor(pkgName);
+	const outDir = join(STAGED_ROOT, `pi-${short}`);
+	await mkdir(outDir, { recursive: true });
 
 	const extraAssets = [];
 	await copySpecialAssets(short, srcDir, outDir, extraAssets);
@@ -383,11 +431,24 @@ async function bundleOne(pkgName) {
 		pkgName,
 		short,
 		size: jsStat.size,
-		warnings: result.warnings || [],
 		extraAssets,
 		manifestDirs,
 		docAssets,
 	};
+}
+
+/** 统计共享 chunk 产物（_shared/ 下 *.js 的个数与字节数；目录不存在 = 零共享依赖）。 */
+async function measureSharedChunks() {
+	const dir = join(STAGED_ROOT, SHARED_CHUNK_DIR);
+	if (!existsSync(dir)) return { count: 0, bytes: 0 };
+	let count = 0;
+	let bytes = 0;
+	for (const entry of await readdir(dir)) {
+		if (!entry.endsWith(".js")) continue;
+		bytes += (await stat(join(dir, entry))).size;
+		count += 1;
+	}
+	return { count, bytes };
 }
 
 async function main() {
@@ -395,31 +456,33 @@ async function main() {
 	// （extension-resolver resolveExtensionEntries 的 pi.extensions 优先级最高，
 	// 但若 staged package.json 退化或缺 pi.extensions，fallback 顺序 index.ts 优先于
 	// index.js，残留 .ts 会让 pi 加载源码旁路 bundle，bug 原样存在）。
+	// _shared/chunk-<hash>.js 随 STAGED_ROOT 清空——hash 变化后旧 chunk 不会残留。
 	await rm(STAGED_ROOT, { recursive: true, force: true });
 	await mkdir(STAGED_ROOT, { recursive: true });
 
 	await rm(ENGINES_STAGED_ROOT, { recursive: true, force: true });
 	await mkdir(ENGINES_STAGED_ROOT, { recursive: true });
 
-	console.log("=== bundle-extensions: esbuild self-contained bundles ===");
+	console.log("=== bundle-extensions: esbuild multi-entry build with shared chunks ===");
 	console.log(`staged root: ${STAGED_ROOT}`);
 	console.log(`packages: ${BUILTIN_PACKAGES.length}`);
 	console.log("");
 
+	const buildResult = await bundleAllExtensions();
+
 	const results = [];
 	for (const { name } of BUILTIN_PACKAGES) {
-		process.stdout.write(`  bundling ${name}...`);
+		process.stdout.write(`  staging ${name}...`);
 		try {
-			const r = await bundleOne(name);
+			const r = await stageOne(name);
 			results.push(r);
-			const warn = r.warnings.length ? ` (${r.warnings.length} warnings)` : "";
 			const assets = r.extraAssets.length ? ` + ${r.extraAssets.join(", ")}` : "";
 			const dirs = r.manifestDirs.length ? ` + manifest[${r.manifestDirs.join(", ")}]` : "";
 			const docs = r.docAssets.length ? ` + docs[${r.docAssets.join(", ")}]` : "";
-			console.log(` ${fmtSize(r.size)}${assets}${dirs}${docs}${warn}`);
+			console.log(` ${fmtSize(r.size)}${assets}${dirs}${docs}`);
 		} catch (err) {
 			console.log(" FAILED");
-			console.error(`\n[bundle-extensions] ${name} 打包失败:`);
+			console.error(`\n[bundle-extensions] ${name} staging 失败:`);
 			console.error(err.stack || err.message);
 			process.exit(1);
 		}
@@ -436,9 +499,13 @@ async function main() {
 	const total = results.reduce((s, r) => s + r.size, 0);
 	console.log(`  ────────────`);
 	console.log(`  total index.js: ${fmtSize(total)} (${results.length} packages)`);
+	const chunks = await measureSharedChunks();
+	console.log(
+		`  shared chunks (${SHARED_CHUNK_DIR}/): ${chunks.count} file(s), ${fmtSize(chunks.bytes)}` +
+			` — grand total ${fmtSize(total + chunks.bytes)}`,
+	);
 
-	// 有 esbuild warning 时汇总提示（不阻断，warning 多为 tree-shaking 建议）
-	const totalWarnings = results.reduce((s, r) => s + r.warnings.length, 0);
+	const totalWarnings = (buildResult?.warnings ?? []).length;
 	if (totalWarnings > 0) {
 		console.log("");
 		console.log(`[hint] ${totalWarnings} esbuild warning(s) — 多为 tree-shaking 建议，详见上方输出`);

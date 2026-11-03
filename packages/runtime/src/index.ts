@@ -129,6 +129,10 @@ import { GitChangeTrigger } from './services/git/git-change-trigger.js'
 import { GitRepoResolver } from './infra/system/git-repo-resolver.js'
 import { GitHeadWatcher } from './infra/system/git-head-watcher.js'
 import { GitInfoReader } from './infra/system/git-info-reader.js'
+// turn 边界索引扫描 port 的生产装配（C-comm-03：services 层 IO 须经 port——scan/verify 两
+// 原语同名函数在组合根简写属性装配，经 SessionService 构造透传 historyReader/TurnIndexStore）。
+import { scanTurnBoundariesForward, verifyTurnBoundaries } from './infra/pi/turn-index-scanner.js'
+import type { ITurnIndexScanner } from './services/ports/turn-index-scanner.js'
 import { ShellRunner } from './infra/shell-runner.js'
 import { WorktreeService } from './services/worktree/worktree-service.js'
 import { TerminalService } from './services/terminal/terminal-service.js'
@@ -1161,6 +1165,12 @@ async function main(): Promise<void> {
     // messageBus：注入 dispatcher 的 session 级事件通道（wave:perf-w09 D1-2 后单通道——
     // dispatcher 只依赖 publish 抽象，bus.publish 是唯一出口，broker 依赖已随接口收敛删除）。
     messageBus,
+    // ITurnIndexScanner 生产装配（C-comm-03）：turn 边界扫描 infra 原语同名函数组合根装配，
+    // 供 history 索引构建（TurnIndexStore）与窗口校验（history-reader verify）消费。
+    {
+      scanTurnBoundariesForward,
+      verifyTurnBoundaries,
+    } satisfies ITurnIndexScanner,
   )
 
   // sd-u5（session-delivery）：delivery 内核的 runtime 装配（design.md §3.1 调用方 B）。
@@ -1550,6 +1560,9 @@ async function main(): Promise<void> {
       // 永久退场，removeSessionEntry 内 clearSession 登记的高水位随之回收（幂等）。
       messageBus.forgetSession(sessionId)
     },
+    // [turn-boundary-index D5] 真删除专属挂点：closeLine 在线树 trashDirectory 之前经本
+    // 闭包转发 SessionService 的 historyReader（取消在途索引构建 + 清内存索引 LRU）。
+    onSessionDeleted: (sessionId) => sessionService.onSessionDeleted(sessionId),
     // [BU2] 交互中转 pending 快照（respond/expired/失效三终态共同落点，server 薄委托）。
     hasPendingUiRequests: (sessionId) => server.getPendingUiRequests(sessionId).length > 0,
     // [BU6 / V6·⑤a] D9⑤ 行为契约注入生产 trace（运行期可达；最终裁决角色 对账单测层见
@@ -1594,6 +1607,10 @@ async function main(): Promise<void> {
     removeSessionEntry: (sid) => sessionService.removeSessionEntry(sid),
     reapBackgroundTasks: (agentDir, sid) => reapSessionBackgroundTasks(agentDir, sid),
     clearRemovedSessionData,
+    // [turn-boundary-index D5] 真删除专属挂点：runPurge 步骤 2.5（tombstone 之后、cascade
+    // 删树之前）经本闭包转发 SessionService 的 historyReader——purgeArchive 不经
+    // removeSessionEntry，内存索引 LRU 只能由本挂点清理。
+    onSessionDeleted: (sessionId) => sessionService.onSessionDeleted(sessionId),
     unbindCanvas: unbindCanvasOnSessionDeleted,
     trash: (path) => sessionStore.trash(path),
     trashDirectory: (dirPath) => sessionStore.trashDirectory(dirPath),
@@ -1942,15 +1959,11 @@ async function main(): Promise<void> {
   // 取「listen 后与 background-init 并行」的端口先就绪序）。武装门 Gate W 默认 off
   // （TAIJI_RUNTIME_WATCHDOG_ARMED）——off 时纯观测：采样环照跑补全水位数据，relief 与
   // renderer 通知不执行（设计 §3.2 方案 B）。
-  // u7c 接线两处：① onRelief = 清全部历史重建缓存（D4 可回收物 ①，偏差 #28①——
-  // renderer LRU 收紧 ② 走 broadcast → renderer useMemoryPressure 通道，动作本体随
-  // u7d 落地）；② broadcast 出口同拍喂滚动重启编排（critical 档 = D5 决策输入，warn
-  // 档编排侧忽略）。stop 挂 shutdown 序（上方）。
+  // u7c 接线：broadcast 出口同拍喂滚动重启编排（critical 档 = D5 决策输入，warn
+  // 档编排侧忽略；renderer 侧走 broadcast → renderer useMemoryPressure 通道，动作本体
+  // 随 u7d 落地）。stop 挂 shutdown 序（上方）。
   watchdogHandle = startWatchdog({
     ...watchdogConfig,
-    onRelief: () => {
-      sessionService.clearHistoryRebuildCache()
-    },
     broadcast: (payload) => {
       server.broadcast({ type: 'watchdog:memoryPressure', payload })
       rollingRestartHandleLocal.onMemoryPressure(payload)

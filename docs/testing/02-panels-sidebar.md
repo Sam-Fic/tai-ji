@@ -1173,9 +1173,9 @@ ForkGroup（当前会话的「本会话的分支」折叠区）已整体退役�
 
 ## §W workflow 可视化 overlay（workflow-viz）
 
-> 来源：workflow-visualization 设计（2026-10-02 交付）。全屏 overlay = 左 DAG 蓝图 + 右多级 tab 实况面板；双入口（托盘 workflow 行 / 对话流 workflow block）改向 overlay，drawer WorkflowTab 保留作回落载体。
+> 来源：workflow-visualization 设计（2026-10-02 交付）。全屏 overlay = 左 DAG 蓝图 + 右多级 tab 实况面板；入口 = 托盘 workflow 行（对话流 workflow block 入口已随 §7.4/U10 退役，drawer WorkflowTab 已删）。
 >
-> **mock 层 e2e**：`e2e/workflow-viz-overlay.spec.ts`（OV1-OV6：双入口/三子页对账/钻取与 tab 编排/DAG 降级/三通道关闭，挂 E2E-MOCK-01）；同域 `e2e/workflow-sidebar-sync.spec.ts` T1-T3（托盘同步 + 入口改向）。
+> **真实进程层 e2e**：`e2e/tray-entry-real.spec.ts`（RE1 托盘 workflow widget 分桶挂载 + 行点击经容器导航执行器打开浮层并定位该 run / RE2 导航后面板收起联动（D11）/ RE3 无 workflow 数据会话的挂载回归；挂 E2E-REAL-01）。原 mock 层的托盘同步 spec 与 overlay spec 已随托盘件迁移（容器扩展点统一 §6.6 U9/U10：workflow 件从宿主 built-in 托盘改插件推 widget 树）删除——入口链在 mock 层结构性不可达（mock 推帧只走 session 通道，托盘 widget 区数据源经 ExtensionHost bridge 的 crossSession 订阅投递，mock 不进 route-inbound），断言整体迁真实进程层；overlay 内部行为（原 OV 层，依赖 mock 冻结演员表）的确定性半边由组件测试承担，迁移登记见 e2e-map.json E2E-MOCK-01 / E2E-REAL-01 的 note。
 >
 > **组件测试**：`packages/renderer/src/components/panel/workflow-viz/__tests__/`（gantt-segments 分段派生 fixture 单测含 rebuild/resume 代际样本断言、blueprint-match 匹配规则、panel 面板、workflow-store 缓存生命周期）。
 
@@ -1192,4 +1192,4 @@ ForkGroup（当前会话的「本会话的分支」折叠区）已整体退役�
 | 事件流 | 事件流子页（RunEventStream）含截断标注与错误二分形态 | record 原文（2KB 截断 + truncatedFields） |
 | Gantt | `wfvz-gantt`（`data-frozen` 标记停止冻结） | attempt 分段横条/phase 色带/游标 |
 
-**坑位**：① mock 层 getWorkflowDag 恒 record_not_found 降级（T3/OV4 共用断言范围，勿改成功）；② block 反查名字形态归一（路径/basename/带扩展名互通，workflow-viz-overlay.ts findRun）——主 agent 传路径是常态；③ e2e 像素对比层不覆盖 overlay（交互层不进 shell/composer 基线视口，视觉验证走 L4 截图）。
+**坑位**：① mock 层 getWorkflowDag 恒 record_not_found 降级（断言承载 = 组件测试 `workflow-viz-overlay/overlay/__tests__/workflow-viz-overlay-bundle.test.ts` 的 DAG 降级用例；原 T3/OV4 两条 e2e 断言随 `workflow-sidebar-sync.spec.ts` / `workflow-viz-overlay.spec.ts` 删除退役，git 可追溯），勿改成功；② block 反查名字形态归一（路径/basename/带扩展名互通，workflow-viz-overlay.ts findRun）——主 agent 传路径是常态；③ e2e 像素对比层不覆盖 overlay（交互层不进 shell/composer 基线视口，视觉验证走 L4 截图）。

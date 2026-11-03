@@ -305,7 +305,7 @@ describe('副作用域：applyContextUpdate / handleTurn* / fetchAndBroadcastCon
   })
 })
 
-// ── 销毁清理（Facade removeSessionEntry 第 ⑤ 步直调面）──
+// ── 销毁清理（Facade removeSessionEntry 第 12 步直调面）──
 
 describe('onSessionDisposed：实例组与 diff 基线清理', () => {
   it('dispose 后 markDirty/refetch 不再拉取 + 访问器清空 + 幂等', async () => {

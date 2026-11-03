@@ -19,9 +19,9 @@
  * 触发重算。drawerTabViews() 必须在响应式作用域内调用，裸调（非响应上下文）只做一次性投影。
  */
 import {
-  BUILTIN_NAMESPACE,
   builtinDrawerSlots,
   contentSlotRegistry,
+  stripBuiltinNamespace,
   type ContentSlotRenderer,
   type ContentSlotView,
 } from '../../extension-host/content-slot-registry'
@@ -63,12 +63,6 @@ export function ensureBuiltinsAssembled(): void {
   builtinsAssembled = true
 }
 
-/** 内置项 key 还原：声明 id 恒为 '<保留命名空间>.<内容 id>'（builtinDrawerSlots 生成式），去前缀即内容 id。 */
-function builtinTabKey(declarationId: string): RightDrawerTab {
-  const prefix = `${BUILTIN_NAMESPACE}.`
-  return declarationId.startsWith(prefix) ? declarationId.slice(prefix.length) : declarationId
-}
-
 /** 内置项文案不透传（§6.16④ 内置项恒走 labelKey）：投影单点表达「内置 label = 声明结构
  *  占位值、非渲染文案」，消费端的 label ?? labelKey 判据无需各自复刻 source 分叉。 */
 function viewLabel(view: ContentSlotView): string | undefined {
@@ -82,7 +76,9 @@ function viewLabel(view: ContentSlotView): string | undefined {
 export function drawerTabViews(): DrawerTabView[] {
   ensureBuiltinsAssembled()
   return contentSlotRegistry.deriveDrawerTabs().map((view) => ({
-    key: view.source === 'builtin' ? builtinTabKey(view.id) : view.id,
+    // key 归一：内置项经 stripBuiltinNamespace 去保留命名空间前缀（'ui.git' → 'git'，
+    // 剥前缀规则单源在 extension-host/content-slot-registry——生成/还原同源，D1）
+    key: view.source === 'builtin' ? stripBuiltinNamespace(view.id) : view.id,
     source: view.source,
     pluginId: view.pluginId,
     label: viewLabel(view),

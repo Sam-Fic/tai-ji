@@ -612,7 +612,7 @@ describe('fetchCurrentSystemPrompt 编排（常驻扩展现取通道）', () => 
 
 // ── onSessionDisposed（销毁清理）──
 
-describe('onSessionDisposed（Facade removeSessionEntry 第 ⑤ 步直调）', () => {
+describe('onSessionDisposed（Facade removeSessionEntry 第 12 步直调）', () => {
   it('清基线与串行链：dispose 后 sync no-op（不发 RPC）', async () => {
     const { traceSync, client } = makeEnv({ active: true })
     const sid = 'sid-disposed'

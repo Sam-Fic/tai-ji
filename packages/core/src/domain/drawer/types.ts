@@ -19,7 +19,8 @@
  * / bashTask 后台命令详情 / plan 计划文档 / btw 旁路线 / trace session-trace 条目详情）。
  * workflow 不入右抽屉（[2026-10-19 用户裁决] drawer workflow tab 删除，workflow 唯一入口 =
  * 浮层，见 OVERLAY_REGISTRY）；terminal 迁底抽屉、browser 走浮层（§7.6）。
- * 无打开参数（OpenDrawerOptions 零加员）；自动打开经 ADR-0053 per-session pendingOpen
+ * 打开参数（OpenDrawerOptions）= 定位参数三键（commandName / filePath / recordId，均为可选，
+ * 与内容 tab 先例同构扩展）；自动打开经 ADR-0053 per-session pendingOpen
  * 语义（renderer 接线，core 只持 tab 位标识）。 */
 export type RightDrawerTab = string
 
@@ -42,12 +43,17 @@ export function isKnownRightDrawerTab(tab: string): tab is RightDrawerTab {
   return (RIGHT_DRAWER_TAB_IDS as readonly string[]).includes(tab)
 }
 
-/** drawer open 的可选参数：打开时指定要展示的 slash 命令名（Doc tab）/ 文件路径（Detail tab） */
+/** drawer open 的可选参数：打开时指定要展示的 slash 命令名（Doc tab）/ 文件路径（Detail tab）/
+ *  subagent 记录 id（subagent tab 定位键，D3——与 commandName/filePath 同构的定位参数） */
 export interface OpenDrawerOptions { // oe-exempt:20261003:framework:类型契约先行——容器契约层声明，D1 下游单元即为消费方
   /** Doc tab 当前展示的命令名（如 '/commit'），CommandDocPanel 据此 + commandStore/skills 解析文档 */
   commandName?: string
   /** Detail tab 打开后立即展示的文件路径（变更集卡点击文件行时传入，强制 diff 模式） */
   filePath?: string
+  /** subagent tab 定位键（D3）：打开时经 openSubagent 编排选中该 record 的对话流
+   *  （virtualId = subagent:<mainSid>:<recordId>，mainSid = drawer 域绑定的焦点会话）；
+   *  无对应记录时落 subagent 默认标签页 + 一行 warning（不弹错不打断） */
+  recordId?: string
 }
 
 /** per-session 控制态（ADR-0053 Map 分区）。

@@ -8,24 +8,31 @@
  * （不改开合态——无效内容不进浮层，调用方（renderer controller）已有同口径检查）。
  *
  * W2 扩展位（u-w2-browser-mount）：openBrowser(url, sessionId) 协调函数落本文件（URL 注入链）。
- * 入口语义分立（§6.4）：openWorkflow（drawer/coordination，改向开浮层）不并入本层。
+ * 入口语义分立（§6.4）：openWorkflow 的实现体在 drawer 域（drawer/coordination，改向开
+ * 浮层），不并入本层——本层 D2 参数化分支经公开 barrel 消费它（注入桥在 drawer 域绑定）。
  * （openWorkflowInDrawer 显式 drawer 回落语义 2026-10-19 随 drawer workflow tab 删除移除。）
- * 容器扩展点统一（§6.4/§6.8）：openOverlayContent(contentId, sessionId) 通用寻址入口
- * （内置走既有组装、插件走 plugin 载体）+ closeOverlayForSession 级联统一判据落本文件。
+ * 容器扩展点统一（§6.4/§6.8）：openOverlayContent(contentId, sessionId, params?) 通用寻址入口
+ * （内置 scheduler 走既有组装、workflow 凭 params.runId 走参数化通道、插件走 plugin 载体）
+ * + closeOverlayForSession 级联统一判据落本文件。
  */
 import { overlayControl, getOverlayControlState } from './state'
 import type { OverlayContent, OverlayKind } from './types'
+// AC10 跨域铁律：drawer 域经 '@taiji/core/domain/drawer' 公开 index API 消费（禁内部模块相对路径）
+// ——D2 workflow 参数化分支经 drawer 域 openWorkflow 走 bindWorkflowOverlayOpener 注入桥
+import { openWorkflow } from '@taiji/core/domain/drawer'
 
 /**
  * 内置内容类型词表（与 @taiji/shared OverlayContentKind / domain/drawer OVERLAY_REGISTRY
  * 对账——registry 单测锚定成员序一致；satisfies 保证词表漂移编译期报错）。
- * openOverlayContent 的寻址分派依据：命中 = 内置（scheduler 可组装、其余走专属入口），
- * 未命中 = 插件声明 id（§6.8 载体）。
+ * openOverlayContent 的寻址分派依据：命中 = 内置（scheduler 可组装、workflow 凭 runId
+ * 走参数化通道），未命中 = 插件声明 id（§6.8 载体）。
  */
 const BUILTIN_OVERLAY_KINDS = ['browser', 'workflow', 'scheduler', 'canvas'] as const satisfies readonly OverlayKind[]
 
-/** 内置词表中 openOverlayContent 不可寻址的成员（载荷需专属参数，走专属入口）。 */
-const BUILTIN_ADDRESSABLE_EXCLUDED = BUILTIN_OVERLAY_KINDS.filter((k) => k !== 'scheduler')
+/** 内置词表中 openOverlayContent 不可寻址的成员（载荷需专属参数，走专属入口）。
+ *  D2 起 workflow 凭 params.runId 出表（参数化通道 + 专属入口并存）；canvas 与 browser
+ *  维持排除（canvasId / url 无声明方会传，本设计零需求方）。 */
+const BUILTIN_ADDRESSABLE_EXCLUDED = BUILTIN_OVERLAY_KINDS.filter((k) => k !== 'scheduler' && k !== 'workflow')
 
 /** 载荷有效性判据（browser:url+sessionId 非空 / workflow:sessionId+runId 均非空 / scheduler:sessionId 非空 / canvas:canvasId+sessionId 均非空 / plugin:contentId+sessionId 均非空——§6.8 插件载体，sessionId 由宿主注入） */
 function isValidContent(content: OverlayContent): boolean {
@@ -114,9 +121,11 @@ export function closeCanvasOverlayForSession(sessionId: string): void {
  * 打开浮层内容（§6.4「请求宿主打开容器」原语的浮层落点协调函数）：contentId 全局寻址。
  *
  * - 内置内容类型词表成员：走既有 payload 组装。能凭 (contentId, sessionId) 组装完整
- *   载荷的仅 scheduler（载荷只持归属会话）；browser/workflow/canvas 的载荷需专属参数
- *   （url / runId / canvasId），各有专属入口（openBrowser / openWorkflowVizOverlay /
- *   openCanvasOverlay），不经本通道——命中时 warn + no-op（不静默）。
+ *   载荷的仅 scheduler（载荷只持归属会话）；workflow 凭 params.runId 走参数化通道
+ *   （D2：经 bindWorkflowOverlayOpener 注入桥走 openWorkflowVizOverlay 同款编排——
+ *   DAG 拉取/tab 归位随桥发生，core 不直写载荷）；无 runId 时 warn + no-op（载荷不完整
+ *   不进浮层）。browser/canvas 的载荷需专属参数（url / canvasId），各有专属入口
+ *   （openBrowser / openCanvasOverlay），不经本通道——命中时 warn + no-op（不静默）。
  * - 其余 contentId = 插件声明 id（§6.12 命名空间形态）：走 §6.8 插件载体
  *   {kind:'plugin', payload:{contentId, sessionId}}。sessionId 由宿主在执行打开时注入
  *   当前会话（插件不传，避免自报不一致），同时是会话删除级联的唯一判据；scope:'global'
@@ -126,14 +135,32 @@ export function closeCanvasOverlayForSession(sessionId: string): void {
  * 校验归导航执行器（§6.4 先校验后动作）——本函数是校验通过后的写入端，不查注册表
  * （core domain 不依赖 extension-host）。
  */
-export function openOverlayContent(contentId: string, sessionId: string): void {
+export function openOverlayContent(
+  contentId: string,
+  sessionId: string,
+  params?: Record<string, string | number | boolean>,
+): void {
   if (contentId === 'scheduler') {
     openSchedulerOverlay(sessionId)
     return
   }
+  if (contentId === 'workflow') {
+    // D2 参数化分支：runId 在场 → 经 drawer 域 openWorkflow 走 bindWorkflowOverlayOpener
+    // 注入桥（renderer opener 反查 run + openWorkflowVizOverlay 同款编排）；缺 runId =
+    // 载荷不完整，warn + no-op（排除表语义收窄为「无参数不可开」）。
+    const runId = params?.runId
+    if (typeof runId === 'string' && runId.trim() !== '') {
+      openWorkflow(runId, { sessionId })
+      return
+    }
+    console.warn(
+      `[overlay] openOverlayContent: 内置内容 'workflow' 需 params.runId 定位 run（no-op）——导航声明带 runId（KNOWN_PARAMS_KEYS_BY_PLACEMENT['overlay.content']）或走专属入口 openWorkflowVizOverlay`,
+    )
+    return
+  }
   if ((BUILTIN_ADDRESSABLE_EXCLUDED as readonly string[]).includes(contentId)) {
     console.warn(
-      `[overlay] openOverlayContent: 内置内容 '${contentId}' 的载荷需专属参数（browser:url / workflow:runId / canvas:canvasId），不经本通道打开（no-op）——改走专属入口 openBrowser / openWorkflowVizOverlay / openCanvasOverlay`,
+      `[overlay] openOverlayContent: 内置内容 '${contentId}' 的载荷需专属参数（browser:url / canvas:canvasId），不经本通道打开（no-op）——改走专属入口 openBrowser / openCanvasOverlay`,
     )
     return
   }

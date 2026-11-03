@@ -13,6 +13,8 @@
   "tests": [
     "packages/renderer/src/__tests__/components/background-task-detail-panel.test.ts",
     "packages/renderer/src/__tests__/panel/tray/tray-native-bundle.test.ts",
+    "packages/renderer/src/__tests__/panel/tray/tray-widget-panel-disconnect.test.ts",
+    "packages/renderer/src/__tests__/panel/tray/composer-tray-shell.test.ts",
     "packages/renderer/src/components/panel/tray/__tests__/tray-widget-bundle.test.ts"
   ],
   "sharedBy": {},

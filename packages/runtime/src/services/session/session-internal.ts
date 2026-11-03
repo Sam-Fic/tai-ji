@@ -120,7 +120,9 @@ export interface ISessionRegisterDeps {
 }
 
 /**
- * lifecycle 消费的窄接口（SessionLifecycle.svc，10 方法，调用点实测）。
+ * lifecycle 消费的窄接口（SessionLifecycle.svc，10 必选方法 + 1 可选挂点，调用点实测）。
+ * 可选成员 = onSessionDeleted（turn-boundary-index D5 真删除专属挂点，既有测试 fake
+ * 不实现 = no-op，见成员注释）。
  *
  * S3 写点归位（设计 D2②）：initializeManagedSession 移出本接口——注册逻辑迁入
  * SessionLifecycle.registerSession（sessions Map 所有者内部直调），lifecycle 不再
@@ -163,6 +165,14 @@ export interface ILifecycleSessionOps {
   notifySessionCreated(summary: SessionSummary): void
   /** 当前活跃会话的 summary 列表（已含 git 信息）。 */
   getActiveSummaries(): SessionSummary[]
+  /**
+   * turn-boundary-index D5：真删除专属挂点（onSessionDeleted）——lifecycle.delete 主
+   * 会话分支（active + scanned）在整树 trash（cascadeDeletedSessionContent）之前调用，
+   * 取消在途索引构建 + 清内存索引 LRU（btw 线直删分支不经本成员：线挂点在 btw closeLine
+   * 内，三路删除收敛单入口覆盖）。可选成员：既有测试 svc fake 不实现 = no-op；生产
+   * SessionService 实现 = 经 historyReader 转发到 reader 自持的 TurnIndexStore。
+   */
+  onSessionDeleted?(sessionId: string): void
 }
 
 /**

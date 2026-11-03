@@ -237,7 +237,7 @@ function makeCanvas(overrides: Partial<CanvasListEntry> & { canvasId: string }):
   }
 }
 
-// ── widget 区响应式数据源 mock（同构壳层桥；与 tray-widget.test.ts 共用 tray-view-host-mock）──
+// ── widget 区响应式数据源 mock（同构壳层桥；本文件全部段落共用，含「外壳契约复刻」段）──
 
 // ── 挂载与查询工具 ──
 
@@ -1493,7 +1493,7 @@ describe('TrayWidgetButton icon fallback 链（D4）', () => {
 // ── ② badge fallback 链 + truncate（D4/§3.5）──
 
 describe('TrayWidgetButton badge fallback 链与 truncate（D4/§3.5）', () => {
-  it('meta.badge 直用；超长 truncate 至 6 字符，全文进按钮 aria-label 括注（原生 title 退役）', () => {
+  it('meta.badge 直用；超长 truncate 至 6 字符，全文进按钮 aria-label 括注与悬停 title（D8 恢复）', () => {
     const short = mountButton({ viewId: 'todo', meta: makeMeta({ badge: '42%' }) })
     const shortBadge = short.find('[data-testid="tray-widget-badge"]')
     expect(shortBadge.text()).toBe('42%')
@@ -1600,7 +1600,7 @@ describe('TrayWidgetButton 外壳契约（hover/pin 状态由外壳持有）', (
     expect(button.classes()).toContain('bg-surface-hover')
   })
 
-  it('aria-label 取 meta.title（面板标题同源；原生 title 退役），viewId 落 data-widget-key', () => {
+  it('aria-label 取 meta.title（面板标题同源；悬停 title 与 aria-label 并存，D8），viewId 落 data-widget-key', () => {
     const wrapper = mountButton({ viewId: 'todo', meta: makeMeta({ title: '待办清单' }) })
     const button = wrapper.find('[data-testid="tray-widget-button"]')
     expect(button.attributes('aria-label')).toBe('待办清单')

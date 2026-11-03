@@ -219,10 +219,8 @@ export function computeActivePathEntries<T extends { id?: unknown; parentId?: un
  * 把 pi session JSONL entry 数组映射为 { messages, entryIds, customDataEntries }。
  *
  * [message-revoke U6a] leafId 可选参数：提供时先经 computeActivePathEntries 裁剪为活跃
- * 路径再映射（RPC 全量重建与文件直读两链在此共用同一裁剪语义——mapper 是两路 reload
- * 链的共享单点，裁剪收在同一单点保证 by construction 一致）；缺省 = 现行为（全文件）。
- * 增量窗口调用方不传 leafId（delta 是活跃路径后缀切片，裁剪是全树语义——见
- * history-rebuild-cache getIncrementalHistory 的契约注释）。
+ * 路径再映射（裁剪收在这一共享单点，保证各读取链 by construction 一致）；缺省 = 原样
+ * 全文件映射。
  *
  * 映射规则（迁移自 mapEntriesToPiMessages）：
  * - message → 透传 message 体（不注入 __entryId，改用平行 entryIds）

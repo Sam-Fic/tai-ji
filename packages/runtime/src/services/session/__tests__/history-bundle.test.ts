@@ -1,14 +1,19 @@
-import { IPiEngine, type IProcessManager } from '../../ports/pi-engine.js';
+import type { IProcessManager } from '../../ports/pi-engine.js';
 import type { ISessionStore } from '../../ports/session.js';
-import { getHistoryTailFromFile } from '../../session-history.js';
-import { HistoryRebuildCache, SessionHistoryReader, applyHistoryBudgetWindow } from '../history-rebuild-cache.js';
+import { SessionHistoryReader, selectIndexWindow } from '../history-reader.js';
+import { getHistoryFromFilePath } from '../../session-history.js';
 import { SessionEntryRemovalOrchestrator, type SessionEntryRemovalDeps } from '../session-entry-removal.js';
 import { countSessionMessagesInFile } from '../session-message-count.js';
 import type { IManagedSessionView } from '../types.js';
 import { HISTORY_BUDGET, type CrashJournalEvent, type Message, type SessionSummary } from '@taiji/shared';
+import type { TurnIndexSnapshot } from '../../../infra/pi/turn-index-types.js';
+import { scanTurnBoundariesForward, verifyTurnBoundaries } from '../../../infra/pi/turn-index-scanner.js';
+import { convertPiHistory } from '../../../infra/pi/message-converter.js';
+import type { PiHistoryToolResult } from '../../../infra/pi/pi-protocol.js';
+import { _resetWarnOnceForTest } from '../../../utils/warn-once.js';
 import { createZcodeEngine, registerZcodeEngine, routeEngine } from '@zhushanwen/subagent-core';
 import { CONTROL_ENV_ROOT_SESSION_ID, CONTROL_ENV_SOCKET } from '@zhushanwen/subagent-engine-sdk';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,631 +35,622 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 // ======================================================================
 // ← src/services/session/__tests__/history-budget-window.test.ts
+//   （turn-boundary-index 重写：预算窗口语义改在索引快照上断言——退役纯函数
+//   applyHistoryBudgetWindow 的语义由 history-reader selectIndexWindow 承载，
+//   快照 turns 手工构造，逐条对应原断言①-④与病态兜底）
 // ======================================================================
 
-// ── fixture 工厂 ───────────────────────────────────────────────────
+// ── fixture 工厂（索引窗口纯函数段：turn 记录手工构造）──────────────
 
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
 let seq = 0
 
-function userMsg(text = 'u'): Message {
-  return { id: `m-${seq++}`, role: 'user', content: text, status: 'complete', timestamp: 1 }
+/** 一条索引 turn 记录（entryId/偏移/预算字节按测试语义给定）。 */
+function turnRecord(entryId: string, budgetBytes: number): { entryId: string; byteOffset: number; byteLength: number; budgetBytes: number } {
+  seq += 1
+  return { entryId, byteOffset: seq * 1000, byteLength: budgetBytes + 1, budgetBytes }
 }
 
-function assistantMsg(text = 'a'): Message {
-  return { id: `m-${seq++}`, role: 'assistant', content: text, status: 'complete', timestamp: 2 }
+/** 手工索引快照（只含窗口选择消费的字段：turns）。 */
+function snapshotOf(turns: Array<ReturnType<typeof turnRecord>>): TurnIndexSnapshot {
+  return { fileSize: 0, mtimeMs: 0, scannedOffset: 0, turns }
 }
 
-/** 带 toolCall 的 assistant + 对应 toolResult（同 turn 内的 entry 原子组）。 */
-function toolTurnPair(toolCallId: string, output: string): Message[] {
-  return [
-    {
-      id: `m-${seq++}`,
-      role: 'assistant',
-      content: '',
-      status: 'complete',
-      timestamp: 3,
-      toolCalls: [{ id: toolCallId, toolName: 'read', input: { file: 'a.ts' }, output, status: 'completed', startTime: 1, endTime: 2 }],
-    },
-    { id: `m-${seq++}`, role: 'assistant', content: '', status: 'complete', timestamp: 4, toolCalls: [] },
-  ]
-}
-
-/** 一个 turn = 1 条 user + 1 条 assistant（小内容）。 */
-function smallTurn(text: string): Message[] {
-  return [userMsg(text), assistantMsg(`reply-${text}`)]
-}
-
-
-/** 估算单消息 wire 字节（与实现同口径）。 */
-function msgBytes(m: Message): number {
-  return Buffer.byteLength(JSON.stringify(m), 'utf-8')
-}
-
-
-// ── helper：断言里重建期望值（避免复用同一对象引用造成 toEqual 恒真） ──
-function userMsgDefined(content: string): Message {
-  return { id: expect.any(String), role: 'user', content, status: 'complete', timestamp: expect.any(Number) } as unknown as Message
-}
-
-function assistantMsgDefined(content: string): Message {
-  return { id: expect.any(String), role: 'assistant', content, status: 'complete', timestamp: expect.any(Number) } as unknown as Message
+/** 波浪线口径对齐断言辅助：窗口内 budgetBytes 合计。 */
+function windowBytes(turns: Array<ReturnType<typeof turnRecord>>, start: number, end: number): number {
+  return turns.slice(start, end).reduce((acc, t) => acc + t.budgetBytes, 0)
 }
 
 // wave3 包装：本段原文件顶层语句收进 describe 作用域（顶层 hook 不再外溢到同文件其他来源的用例）
-describe('history-budget-window', () => {
+describe('history-budget-window（索引窗口选择语义）', () => {
 describe('断言①：预算内不截断（truncated:false，A6 回归）', () => {
-  it('5 turns 全部入窗（<20 turns 且 <640KB）→ 返回全量、loadedTurns=totalTurnsEstimate', () => {
-    const turns = Array.from({ length: 5 }, (_, i) => smallTurn(`t${i}`)).flat()
+  it('5 turns 全部入窗（<20 turns 且 <640KB）→ 窗口含全部、loadedTurns=5、truncated=false', () => {
+    const turns = Array.from({ length: 5 }, (_, i) => turnRecord(`t${i}`, 100))
 
-    const result = applyHistoryBudgetWindow(turns)
+    const selected = selectIndexWindow(snapshotOf(turns), undefined)
 
-    expect(result.truncated).toBe(false)
-    expect(result.messages).toEqual(turns) // 全量返回（数组级浅拷贝、内容一致）
-    expect(result.loadedTurns).toBe(5)
-    expect(result.totalTurnsEstimate).toBe(5)
+    expect(selected.truncated).toBe(false)
+    expect(selected.windowTurns).toEqual(turns) // 全量入选（窗口 = turns.slice(0)）
+    expect(selected.loadedTurns).toBe(5)
   })
 
   it('恰好 20 turns 且字节未超 → 仍不截断（边界内）', () => {
-    const turns = Array.from({ length: HISTORY_BUDGET.RECENT_TURNS }, (_, i) => smallTurn(`t${i}`)).flat()
+    const turns = Array.from({ length: HISTORY_BUDGET.RECENT_TURNS }, (_, i) => turnRecord(`t${i}`, 100))
 
-    const result = applyHistoryBudgetWindow(turns)
+    const selected = selectIndexWindow(snapshotOf(turns), undefined)
 
-    expect(result.truncated).toBe(false)
-    expect(result.messages).toEqual(turns)
-    expect(result.loadedTurns).toBe(HISTORY_BUDGET.RECENT_TURNS)
-  })
-
-  it('窗口扩到最老 turn 时带上前导孤儿段（startIdx=0，不误报 truncated）', () => {
-    // 病态前导：首条非 user（如增量合并边界的孤儿 toolResult 派生视图）
-    const orphan = assistantMsg('orphan-tail')
-    const turns = Array.from({ length: 3 }, (_, i) => smallTurn(`t${i}`)).flat()
-    const all = [orphan, ...turns]
-
-    const result = applyHistoryBudgetWindow(all)
-
-    expect(result.truncated).toBe(false)
-    expect(result.messages[0]).toEqual(orphan)
+    expect(selected.truncated).toBe(false)
+    expect(selected.windowTurns).toHaveLength(HISTORY_BUDGET.RECENT_TURNS)
+    expect(selected.loadedTurns).toBe(HISTORY_BUDGET.RECENT_TURNS)
   })
 })
-describe('断言②：超预算截断（truncated:true + loadedTurns/totalTurnsEstimate 正确）', () => {
-  it('30 turns（turn 数超 20）→ 最近 20 turns、truncated:true、totalTurnsEstimate=30', () => {
-    const turns = Array.from({ length: 30 }, (_, i) => smallTurn(`t${i}`)).flat()
+describe('断言②：超预算截断（truncated:true + loadedTurns 正确）', () => {
+  it('30 turns（turn 数超 20）→ 最近 20 turns、truncated:true（窗口起点 = 从尾数第 20 个边界）', () => {
+    const turns = Array.from({ length: 30 }, (_, i) => turnRecord(`t${i}`, 100))
 
-    const result = applyHistoryBudgetWindow(turns)
+    const selected = selectIndexWindow(snapshotOf(turns), undefined)
 
-    expect(result.truncated).toBe(true)
-    expect(result.loadedTurns).toBe(20)
-    expect(result.totalTurnsEstimate).toBe(30)
-    // 窗口起点 = 第 11 个 turn 的 user（从尾数第 20 个 turn 边界，turn 编号 t10）
-    expect(result.messages[0]).toMatchObject({ role: 'user', content: 't10' })
-    expect(result.messages).toHaveLength(20 * 2)
-    // 恒含最新 turn（尾部不丢）
-    expect(result.messages.at(-1)).toMatchObject({ role: 'assistant', content: 'reply-t29' })
+    expect(selected.truncated).toBe(true)
+    expect(selected.loadedTurns).toBe(20)
+    // 窗口 = 最新 20 个 turn（t10..t29），恒含最新 turn（尾部不丢）
+    expect(selected.windowTurns[0].entryId).toBe('t10')
+    expect(selected.windowTurns.at(-1)?.entryId).toBe('t29')
   })
 
-  it('字节预算截断：20+ turns 但每 turn ~100KB → 只放最近 6 turns（640KB 帽）', () => {
-    const pad = 'x'.repeat(100 * 1024)
-    const turns = Array.from({ length: 12 }, (_, i) => [userMsg(`big-${i}`), assistantMsg(pad)]).flat()
+  it('字节预算截断：12 turns 每条 ~100KB → 只放最近 6 turns（640KB 帽）', () => {
+    const big = 100 * 1024
+    const turns = Array.from({ length: 12 }, (_, i) => turnRecord(`big-${i}`, big))
 
-    const result = applyHistoryBudgetWindow(turns)
+    const selected = selectIndexWindow(snapshotOf(turns), undefined)
 
-    expect(result.truncated).toBe(true)
+    expect(selected.truncated).toBe(true)
     // 从新到旧累加：每 turn ≈ 100KB，640KB 帽容纳 6 个 turn（第 7 个超）
-    expect(result.loadedTurns).toBe(6)
-    // 6 turn 窗口总字节 ≤ 预算（实现精确逐 turn 计入）
-    const windowBytes = result.messages.reduce((acc, m) => acc + msgBytes(m), 0)
-    expect(windowBytes).toBeLessThanOrEqual(HISTORY_BUDGET.MAX_BYTES)
-    // 窗口 = 最新 6 个 turn（t6..t11）
-    expect(result.messages[0]).toMatchObject({ role: 'user', content: 'big-6' })
-    expect(result.totalTurnsEstimate).toBe(12)
+    expect(selected.loadedTurns).toBe(6)
+    // 窗口字节 ≤ 预算（实现精确逐 turn 计入 budgetBytes）
+    expect(windowBytes(turns, turns.length - selected.loadedTurns, turns.length)).toBeLessThanOrEqual(HISTORY_BUDGET.MAX_BYTES)
+    // 窗口 = 最新 6 个 turn（big-6..big-11）
+    expect(selected.windowTurns[0].entryId).toBe('big-6')
   })
 
-  it('40 turns 大文件 → totalTurnsEstimate 精确（全量 Message[] 上计数）', () => {
-    const turns = Array.from({ length: 40 }, (_, i) => smallTurn(`t${i}`)).flat()
-    const result = applyHistoryBudgetWindow(turns)
-    expect(result.totalTurnsEstimate).toBe(40)
-    expect(result.loadedTurns).toBe(20)
+  it('40 turns → loadedTurns=20（窗口选择恒从尾向前）', () => {
+    const turns = Array.from({ length: 40 }, (_, i) => turnRecord(`t${i}`, 100))
+    const selected = selectIndexWindow(snapshotOf(turns), undefined)
+    expect(selected.loadedTurns).toBe(20)
+    expect(selected.truncated).toBe(true)
   })
 })
 describe('断言③：单 turn 超预算完整放行', () => {
-  it('唯一 turn 自身超 640KB → 完整放行、truncated:false、warn 反映超出', () => {
-    const big = 'x'.repeat(700 * 1024)
-    const turn = [userMsg('huge'), assistantMsg(big)]
+  it('唯一 turn 自身超 640KB → 完整放行、truncated:false（首 turn 豁免）', () => {
+    const turn = [turnRecord('huge', 700 * 1024)]
 
-    const result = applyHistoryBudgetWindow(turn)
+    const selected = selectIndexWindow(snapshotOf(turn), undefined)
 
-    // 单 turn 豁免字节条件：完整返回（对话可见性连续），无更早历史 → truncated:false
-    expect(result.messages).toEqual(turn)
-    expect(result.truncated).toBe(false)
-    expect(result.loadedTurns).toBe(1)
-    expect(result.totalTurnsEstimate).toBe(1)
+    expect(selected.windowTurns).toEqual(turn)
+    expect(selected.truncated).toBe(false)
+    expect(selected.loadedTurns).toBe(1)
   })
 
-  it('最新 turn 超预算 + 更早 2 个小 turn → 窗口只含大 turn、truncated:true', () => {
-    const big = 'x'.repeat(700 * 1024)
-    const messages = [...smallTurn('old-1'), ...smallTurn('old-2'), userMsg('huge'), assistantMsg(big)]
+  it('最新 turn 超预算 + 更早 2 个小 turn → 窗口只含大 turn、truncated:true（字节如实超出）', () => {
+    const turns = [turnRecord('old-1', 100), turnRecord('old-2', 100), turnRecord('huge', 700 * 1024)]
 
-    const result = applyHistoryBudgetWindow(messages)
+    const selected = selectIndexWindow(snapshotOf(turns), undefined)
 
-    expect(result.truncated).toBe(true)
-    expect(result.loadedTurns).toBe(1)
-    expect(result.totalTurnsEstimate).toBe(3)
-    // 大 turn 完整放行（不因超预算被切）
-    expect(result.messages).toEqual([userMsgDefined('huge'), assistantMsgDefined(big)])
-    // 字节统计如实反映超出：窗口字节 > 预算（warn 日志路径）
-    const windowBytes = result.messages.reduce((acc, m) => acc + msgBytes(m), 0)
-    expect(windowBytes).toBeGreaterThan(HISTORY_BUDGET.MAX_BYTES)
+    expect(selected.truncated).toBe(true)
+    expect(selected.loadedTurns).toBe(1)
+    expect(selected.windowTurns.map((t) => t.entryId)).toEqual(['huge'])
+    // 字节统计如实反映超出：窗口 budgetBytes > 预算（首 turn 豁免）
+    expect(windowBytes(turns, turns.length - selected.loadedTurns, turns.length)).toBeGreaterThan(HISTORY_BUDGET.MAX_BYTES)
   })
 })
-describe('断言④：turn 内 entry 不切分（entry 原子性）', () => {
-  it('超预算截断后窗口边界恒落在 turn 起点：toolCall 与 toolResult 同 turn 不拆', () => {
-    // turn1..turn9 小；最新 turn 含 toolCall+toolResult + 大输出（自身超预算也被放行）
-    const messages: Message[] = []
-    for (let i = 1; i <= 9; i++) messages.push(...smallTurn(`t${i}`))
-    const bigOutput = 'o'.repeat(700 * 1024)
-    messages.push(userMsg('tool-turn'))
-    messages.push(...toolTurnPair('tc-atomic-1', bigOutput))
+describe('断言④：窗口起点恒在 turn 边界（entry 原子性）', () => {
+  it('窗口 = 完整 turn 记录切片：字节读区间由边界偏移围成（含首条 turn 时从 byte 0 读前导段）', () => {
+    const turns = Array.from({ length: 25 }, (_, i) => turnRecord(`t${i}`, 100))
 
-    const result = applyHistoryBudgetWindow(messages)
+    const selected = selectIndexWindow(snapshotOf(turns), undefined)
 
-    expect(result.truncated).toBe(true)
-    expect(result.loadedTurns).toBe(1)
-    // 窗口 = 完整最新 turn：toolCall（含大 output）与后续消息同在，不被从中间切开
-    const withTool = result.messages.find((m) => m.toolCalls?.length)
-    expect(withTool?.toolCalls?.[0]).toMatchObject({ id: 'tc-atomic-1', output: bigOutput })
+    expect(selected.truncated).toBe(true)
+    expect(selected.windowTurns).toHaveLength(20)
+    // 窗口起点 = turn 边界记录（非 turn 中间切片）；首条 turn 窗口才从 byte 0 读
+    expect(selected.startByte).toBe(turns[5].byteOffset)
+    // cursor 窗口：endByte = cursor turn 起点（cursor turn 只进校验集合）
+    const cursorSelected = selectIndexWindow(snapshotOf(turns), 10, { limitTurns: 2 })
+    expect(cursorSelected.windowTurns.map((t) => t.entryId)).toEqual(['t8', 't9'])
+    expect(cursorSelected.cursorTurn?.entryId).toBe('t10')
+    expect(cursorSelected.endByte).toBe(turns[10].byteOffset)
+    expect(cursorSelected.truncated).toBe(true)
   })
 
-  it('turn 数截断：窗口起点必为 user 消息（切在 turn 边界，不落在 turn 中间）', () => {
-    const messages: Message[] = []
-    for (let i = 0; i < 25; i++) messages.push(...smallTurn(`t${i}`))
-
-    const result = applyHistoryBudgetWindow(messages)
-
-    expect(result.truncated).toBe(true)
-    expect(result.messages[0].role).toBe('user') // 窗口起点 = turn 边界
-    // 窗口内 turn 数恰好 20，每 turn 的 user/assistant 相邻完整
-    expect(result.messages).toHaveLength(40)
-    for (let i = 0; i < 40; i += 2) {
-      expect(result.messages[i].role).toBe('user')
-      expect(result.messages[i + 1].role).toBe('assistant')
-    }
+  it('cursor 为最早 turn → 锚前无 turn（loadedTurns=0，调用方按翻页到头返回空页）', () => {
+    const turns = [turnRecord('t0', 100), turnRecord('t1', 100)]
+    const selected = selectIndexWindow(snapshotOf(turns), 0, { limitTurns: 2 })
+    expect(selected.loadedTurns).toBe(0)
+    expect(selected.windowTurns).toEqual([])
+    expect(selected.truncated).toBe(false)
   })
 })
 describe('病态输入兜底', () => {
-  it('空数组 → 全零结果', () => {
-    expect(applyHistoryBudgetWindow([])).toEqual({ messages: [], truncated: false, loadedTurns: 0, totalTurnsEstimate: 0 })
-  })
-
-  it('无 user 消息（纯 assistant/custom 窗口）→ 整段视为一个 turn 完整放行', () => {
-    const messages = [assistantMsg('a1'), assistantMsg('a2')]
-    const result = applyHistoryBudgetWindow(messages)
-    expect(result.messages).toEqual(messages)
-    expect(result.truncated).toBe(false)
-    expect(result.loadedTurns).toBe(1)
-    expect(result.totalTurnsEstimate).toBe(1)
+  it('空 turns → 全零结果（零 turn 走尾读兼容分支的索引侧形态）', () => {
+    const selected = selectIndexWindow(snapshotOf([]), undefined)
+    expect(selected.windowTurns).toEqual([])
+    expect(selected.truncated).toBe(false)
+    expect(selected.loadedTurns).toBe(0)
   })
 })
 });
 
 // ======================================================================
 // ← src/services/session/__tests__/history-rebuild.test.ts
+//   （turn-boundary-index 重写：旧三分支重建/缓存/后台任务测试随 D4 退役；本段改载
+//   SessionHistoryReader 索引窗口编排测试——真实 JSONL fixture 驱动，索引落共享 tmp
+//   dataDir 的 history-index 域（fs-guard 白名单内），sessionId 每用例唯一防 store
+//   内存态跨用例污染）
 // ======================================================================
 
-vi.mock('../../session-history.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../session-history.js')>()
-  return { ...actual, // [u6] getHistoryFromFilePath 不再被 history-rebuild-cache 消费（getFullHistory 退役），
-  // mock 同点移除；①档函数本体保留（session-records 的 subagent/agentcall 通路消费）。
-  getHistoryTailFromFile: vi.fn(async () => ({ messages: [{ id: 'tail-1', role: 'user', content: 'tail', status: 'complete', timestamp: 1 } as Message], truncated: true, loadedTurns: 1, totalTurnsEstimate: 1 })), }
-})
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
-
-/** pi entry 最小形态（编排只消费 parentId / 传给 rebuild mock）。 */
-function entry(id: string, parentId: string | null): Record<string, unknown> {
-  return { type: 'message', id, parentId, timestamp: '2026-08-19T00:00:00Z' }
+/** pi message entry JSONL 行（turn 边界 = role:'user'）。 */
+function entryLine(id: string, role: 'user' | 'assistant' | 'toolResult', text: string): string {
+  const message = role === 'toolResult'
+    ? { role, toolCallId: `tc-${id}`, toolName: 'bash', content: [{ type: 'text', text }] }
+    : { role, content: [{ type: 'text', text }] }
+  return JSON.stringify({ type: 'message', id, parentId: null, timestamp: '2026-11-03T00:00:00.000Z', message })
 }
 
-
-function msg(id: string, piEntryId?: string): Message {
-  return { id, role: 'user', content: `content-${id}`, status: 'complete', timestamp: 1, piEntryId } as Message
+function headerLine(sid: string): string {
+  return JSON.stringify({ type: 'session', id: sid, version: 3 })
 }
 
-
-/** get_entries RPC 返回形态（pi GetEntriesResponse：{entries, leafId}）。 */
-type GetEntriesResult = { data?: { entries?: Array<Record<string, unknown>>; leafId?: string | null } }
-
-
-function makeReader(rebuildImpl?: (entries: Array<Record<string, unknown>>) => Message[]) {
-  const client = {
-    getEntries: vi.fn(async (_since?: string) => ({ data: { entries: [], leafId: null } }) as GetEntriesResult),
-  }
-  const rebuild = vi.fn((entries: Array<Record<string, unknown>>): { messages: Message[]; orphanToolResults: [] } => ({
-    // 缺省实现：每 entry 产一条消息，piEntryId = entry.id
-    messages: (rebuildImpl ?? ((es) => es.map((e) => msg(`m-${String(e.id)}`, String(e.id)))))(entries),
-    orphanToolResults: [],
-  }))
-  const sessionStore = {
-    scanSessions: vi.fn(() => [] as Array<{ id: string; filePath: string }>),
-    rebuildHistoryFromEntries: rebuild,
-  } as unknown as ISessionStore
-  const reader = new SessionHistoryReader({
-    pm: { getClient: vi.fn(() => client as unknown as IPiEngine) } as unknown as IProcessManager,
-    sessionStore,
+/** 测试用 fake convertHistory：entry.message 体 → Message（text 拼接），供内容断言。 */
+function fakeConvertHistory(raw: unknown[]): Message[] {
+  return raw.map((m, i) => {
+    const body = m as { role?: string; content?: unknown }
+    const text = Array.isArray(body.content)
+      ? body.content
+          .map((c) => (typeof c === 'object' && c !== null && (c as { text?: unknown }).text != null ? String((c as { text: unknown }).text) : ''))
+          .join('')
+      : String(body.content ?? '')
+    return { id: `m-${i}`, role: body.role, content: text, status: 'complete', timestamp: 1 } as Message
   })
-  return { reader, client, rebuild, sessionStore }
+}
+
+let fixtureSeq = 0
+
+/** 唯一 sessionId（防共享 tmp dataDir 上 store 内存态/磁盘索引的跨用例污染）。 */
+function uniqueSid(prefix: string): string {
+  return `${prefix}-${++fixtureSeq}`
 }
 
 /**
- * [session-cold-switch-perf §3.3-1 态 2] 等待后台全量重建任务完成写缓存（写缓存无外部
- * 句柄）。确定性锚：rebuild mock 是 fetchAndRebuildFull 的末端同步段，rebuild 之后到
- * runRebuildJob 写缓存之间的唯一中间 await 是 yieldToEventLoop（setImmediate）——
- * rebuild 达标次数 + 一次 setImmediate 排空后，写缓存必已落定。
+ * 索引编排直构环境：主会话文件经 scanSessions mock 定位（同生产定位语义），sessionStore
+ * 带 fake convertHistory（entry 内容断言）。TurnIndexStore 由 reader 构造时自持（组合接线
+ * 裁定），索引落盘走缺省推导（getSessionHistoryIndexFile → vitest 固定 tmp dataDir）。
  */
-async function waitForBackgroundRebuild(rebuild: ReturnType<typeof vi.fn>, times = 1): Promise<void> {
-  await vi.waitFor(() => expect(rebuild).toHaveBeenCalledTimes(times))
-  await new Promise((resolve) => setImmediate(resolve))
+function makeIndexReader(files: Record<string, string>, opts?: { clientPresent?: boolean; realConvert?: boolean }) {
+  const sessionStore = {
+    scanSessions: vi.fn(() => Object.entries(files).map(([id, filePath]) => ({ id, filePath }))),
+    // realConvert = 走真实转换链（convertPiHistory：replayEntries fold + toolCall/toolResult
+    // 配对），供跨窗口配对与消息形状对齐断言；缺省 fake（纯文本翻译，轻量编排断言用）
+    convertHistory: opts?.realConvert
+      ? vi.fn((raw: unknown[], entryIds?: string[], orphanToolResults?: unknown[]) =>
+          convertPiHistory(raw, entryIds, orphanToolResults as PiHistoryToolResult[] | undefined))
+      : vi.fn((raw: unknown[]) => fakeConvertHistory(raw)),
+  } as unknown as ISessionStore
+  const client = { getEntries: vi.fn(async () => { throw new Error('get_entries must not be called in index orchestration') }) }
+  const pm = {
+    getClient: vi.fn(() => (opts?.clientPresent ? client : undefined)),
+  } as unknown as IProcessManager
+  const reader = new SessionHistoryReader({ pm, sessionStore, scanner: { scanTurnBoundariesForward, verifyTurnBoundaries } })
+  return { reader, sessionStore, client }
+}
+
+/** 写会话 JSONL（header + 各 turn 的 user/assistant 行）。 */
+const readerFixtureDirs: string[] = []
+
+function writeSessionFile(lines: string[]): string {
+  const dir = mkdtempSync(join(tmpdir(), 'history-reader-'))
+  readerFixtureDirs.push(dir)
+  const filePath = join(dir, 'session.jsonl')
+  writeFileSync(filePath, lines.join('\n') + '\n', 'utf-8')
+  return filePath
+}
+
+/** 标准 fixture：3 turns（每 turn = user + assistant），返回行集合。 */
+function threeTurnLines(sid: string): string[] {
+  return [
+    headerLine(sid),
+    entryLine('u1', 'user', 'q1'),
+    entryLine('a1', 'assistant', 'r1'),
+    entryLine('u2', 'user', 'q2'),
+    entryLine('a2', 'assistant', 'r2'),
+    entryLine('u3', 'user', 'q3'),
+    entryLine('a3', 'assistant', 'r3'),
+  ]
 }
 
 // wave3 包装：本段原文件顶层语句收进 describe 作用域（顶层 hook 不再外溢到同文件其他来源的用例）
-describe('history-rebuild', () => {
-// session-history 模块级 mock：调用计数跨用例累积，前置清零（r1-S16 尾读用例引入后
-// 「not.toHaveBeenCalled」类断言会被先前用例的历史调用打穿）
-beforeEach(() => {
-  vi.mocked(getHistoryTailFromFile).mockClear()
+describe('history-reader 索引窗口编排', () => {
+afterEach(() => {
+  while (readerFixtureDirs.length > 0) {
+    const dir = readerFixtureDirs.pop()
+    if (dir !== undefined) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+  }
 })
-// [session-cold-switch-perf §3.3-1] 四态分派后「无缓存 + client 在场」= 态 2：尾读首屏
-// 立即返回 + 后台全量任务重建写缓存（fire-and-forget 单例）。原「分支 3 同步全量」仅存于
-// 缓存命中后的增量丢失重整（getLatestWindow fall-through）与游标翻页无缓存路径。
-describe('态 2：尾读首屏 + 后台全量重建（无缓存 + client 在场）', () => {
-  it('尾读首屏立即返回，后台全量重建写缓存，后续走缓存且浅拷贝隔离', async () => {
-    const { reader, client, rebuild } = makeReader()
-    client.getEntries.mockResolvedValue({ data: { entries: [entry('e1', null)], leafId: 'e1' } })
-    const result = await reader.getHistory('s1')
-    expect(result.messages.map((m) => m.id)).toEqual(['tail-1']) // 首屏 = 尾读窗口
-    await waitForBackgroundRebuild(rebuild) // 后台任务：getEntries 全量 → rebuild → 写缓存
-    expect(client.getEntries).toHaveBeenCalledWith() // 全量调用（无 since 参数）
-    const again = await reader.getHistory('s1')
-    expect(again.messages.map((m) => m.id)).toEqual(['m-e1']) // 缓存基线（空增量短路）
-    // 返回浅拷贝：就地 push 不打穿缓存基底
-    again.messages.push(msg('intruder'))
-    const third = await reader.getHistory('s1')
-    expect(third.messages.some((m) => m.id === 'intruder')).toBe(false)
-  })
+describe('索引就绪读取（单一数据路径，AX4）', () => {
+  it('首次读取建索引并返回最近窗口（20 turn 预算内全量），totalTurnsEstimate=完整索引 turn 总数', async () => {
+    const sid = uniqueSid('idx')
+    const filePath = writeSessionFile(threeTurnLines(sid))
+    const { reader, client } = makeIndexReader({ [sid]: filePath }, { clientPresent: true })
 
-  it('边界（r1-S16）：缓存存在但 leafId 为 null → 跳过增量直接全量重建（分支 1/2 与 3 交界）', async () => {
-    const { reader, client, rebuild } = makeReader()
-    // 首轮态 2：尾读首屏 + 后台重建落 leafId null 的缓存条目（pi 未给叶子 id）
-    client.getEntries.mockResolvedValueOnce({ data: { entries: [entry('e1', null)], leafId: null } })
-    await reader.getHistory('s1')
-    await waitForBackgroundRebuild(rebuild)
-    // 第二轮：cached 存在但 leafId null → 不走 since 增量，同步全量拉取重建
-    client.getEntries.mockResolvedValueOnce({ data: { entries: [entry('e1', null), entry('e2', 'e1')], leafId: 'e2' } })
-    const result = await reader.getHistory('s1')
-    expect(client.getEntries).toHaveBeenLastCalledWith() // 全量调用（无 since 参数）
-    expect(rebuild).toHaveBeenCalledTimes(2)
-    expect(result.messages.map((m) => m.id)).toEqual(['m-e1', 'm-e2'])
-  })
+    const result = await reader.getHistory(sid)
 
-  it('R-12（后台形态）：RPC entries 空 → 后台重建不写缓存（权威空视图），首屏与后续仍尾读', async () => {
-    const { reader, client } = makeReader()
-    client.getEntries.mockResolvedValue({ data: { entries: [], leafId: null } })
-    const result = await reader.getHistory('s1')
-    expect(result.messages.map((m) => m.id)).toEqual(['tail-1']) // 态 2 尾读首屏
-    // 后台全量任务在首屏返回前已同步发起（ensureRebuildJob 于返回路径同步调用）
-    expect(client.getEntries).toHaveBeenCalledTimes(1)
-    // 空权威视图不写缓存（R-12 语义在后台形态的承载）：缓存恒 miss，后续请求仍尾读
-    const again = await reader.getHistory('s1')
-    expect(again.messages.map((m) => m.id)).toEqual(['tail-1'])
-  })
-
-  it('后台全量 getEntries 抛错（r1-S16）：首屏仍尾读返回，重建失败不写缓存', async () => {
-    const { reader, client } = makeReader()
-    client.getEntries.mockRejectedValue(new Error('pi internal error'))
-    const degraded = await reader.getHistory('s1')
-    expect(degraded.truncated).toBe(true)
-    expect(degraded.messages.map((m) => m.id)).toEqual(['tail-1']) // 首屏 = 尾读窗口（不被后台失败阻塞）
-    // 后台任务失败不写缓存（首败即停，不自动重起）：缓存恒 miss，后续请求仍尾读
-    expect(client.getEntries).toHaveBeenCalled() // 后台任务已拉取并失败
-    const again = await reader.getHistory('s1')
-    expect(again.messages.map((m) => m.id)).toEqual(['tail-1'])
-  })
-})
-describe('分支 1/2：缓存命中 → since 增量', () => {
-  it('空增量 = 缓存新鲜：R-12 短路返回缓存，零重建零尾读', async () => {
-    const { reader, client, rebuild } = makeReader()
-    client.getEntries.mockResolvedValueOnce({ data: { entries: [entry('e1', null), entry('e2', 'e1')], leafId: 'e2' } })
-    await reader.getHistory('s1') // 态 2：尾读首屏 + 后台全量重建建缓存
-    await waitForBackgroundRebuild(rebuild)
-    client.getEntries.mockClear()
-    vi.mocked(getHistoryTailFromFile).mockClear()
-    client.getEntries.mockResolvedValueOnce({ data: { entries: [], leafId: 'e2' } })
-    const result = await reader.getHistory('s1')
-    expect(client.getEntries).toHaveBeenCalledTimes(1)
-    expect(client.getEntries).toHaveBeenCalledWith('e2')
-    expect(result.messages.map((m) => m.id)).toEqual(['m-e1', 'm-e2'])
-    expect(rebuild).toHaveBeenCalledTimes(1) // 增量窗口未重建
-    expect(getHistoryTailFromFile).not.toHaveBeenCalled() // 零尾读（缓存命中路径）
-  })
-
-  it('增量非空且 parentId 不变量成立：merge 合并入缓存并推进 leafId', async () => {
-    const { reader, client, rebuild } = makeReader()
-    client.getEntries.mockResolvedValueOnce({ data: { entries: [entry('e1', null)], leafId: 'e1' } })
-    await reader.getHistory('s1') // 态 2 建缓存
-    await waitForBackgroundRebuild(rebuild)
-    client.getEntries.mockResolvedValueOnce({ data: { entries: [entry('e2', 'e1')], leafId: 'e2' } })
-    const result = await reader.getHistory('s1')
-    expect(result.messages.map((m) => m.id)).toEqual(['m-e1', 'm-e2'])
-    expect(result.truncated).toBe(false)
-    // 缓存已推进：下次增量以新 leafId 为 since
-    client.getEntries.mockResolvedValueOnce({ data: { entries: [], leafId: 'e2' } })
-    await reader.getHistory('s1')
-    expect(client.getEntries).toHaveBeenLastCalledWith('e2')
-  })
-
-  it('增量消息与缓存 piEntryId 重复时去重（D6-3，mergeIncrementalMessages 真跑）', async () => {
-    const { reader, client, rebuild } = makeReader()
-    client.getEntries.mockResolvedValueOnce({ data: { entries: [entry('e1', null), entry('e2', 'e1')], leafId: 'e2' } })
-    await reader.getHistory('s1') // 态 2 建缓存
-    await waitForBackgroundRebuild(rebuild)
-    // 增量窗口首条 parent 匹配缓存 leafId，窗口尾部混入已缓存的 e2（pi slice 异常时序防御）
-    client.getEntries.mockResolvedValueOnce({ data: { entries: [entry('e3', 'e2'), entry('e2', 'e1')], leafId: 'e3' } })
-    const result = await reader.getHistory('s1')
-    expect(result.messages.map((m) => m.id)).toEqual(['m-e1', 'm-e2', 'm-e3'])
-  })
-
-  it('parentId 不变量违反（branch/rewrite）：丢缓存 fall-through 全量重建', async () => {
-    const { reader, client, rebuild } = makeReader()
-    client.getEntries.mockResolvedValueOnce({ data: { entries: [entry('e1', null)], leafId: 'e1' } })
-    await reader.getHistory('s1') // 态 2 建缓存
-    await waitForBackgroundRebuild(rebuild)
-    // delta 首条 parent ≠ 缓存 leafId → 丢缓存 → 同次调用内全量重建
-    client.getEntries.mockImplementation(async (since?: string) => {
-      if (since !== undefined) return { data: { entries: [entry('branch-head', 'old-point')], leafId: 'branch-head' } } as GetEntriesResult
-      return { data: { entries: [entry('r1', null), entry('r2', 'r1')], leafId: 'r2' } } as GetEntriesResult
-    })
-    const result = await reader.getHistory('s1')
-    expect(result.messages.map((m) => m.id)).toEqual(['m-r1', 'm-r2'])
-    expect(client.getEntries).toHaveBeenCalledWith()
-  })
-
-  it('增量 Entry not found：丢缓存 → 全量重新拉取（D6-4 自愈）', async () => {
-    const { reader, client, rebuild } = makeReader()
-    client.getEntries.mockResolvedValueOnce({ data: { entries: [entry('e1', null)], leafId: 'e1' } })
-    await reader.getHistory('s1') // 态 2 建缓存
-    await waitForBackgroundRebuild(rebuild)
-    client.getEntries.mockImplementation(async (since?: string) => {
-      if (since !== undefined) throw new Error('Entry not found: e1')
-      return { data: { entries: [entry('f1', null)], leafId: 'f1' } } as GetEntriesResult
-    })
-    const result = await reader.getHistory('s1')
-    expect(result.messages.map((m) => m.id)).toEqual(['m-f1'])
-  })
-
-  it('增量其他错误：尾读降级 + 缓存保留（下次重试仍走 since）', async () => {
-    const { reader, client, rebuild } = makeReader()
-    client.getEntries.mockResolvedValueOnce({ data: { entries: [entry('e1', null)], leafId: 'e1' } })
-    await reader.getHistory('s1') // 态 2 建缓存
-    await waitForBackgroundRebuild(rebuild)
-    client.getEntries.mockRejectedValueOnce(new Error('rpc timeout'))
-    const degraded = await reader.getHistory('s1')
-    expect(degraded.truncated).toBe(true)
-    expect(degraded.messages.map((m) => m.id)).toEqual(['tail-1'])
-    // 缓存未被丢弃：恢复后重试走 since
-    client.getEntries.mockResolvedValueOnce({ data: { entries: [], leafId: 'e1' } })
-    const retry = await reader.getHistory('s1')
-    expect(client.getEntries).toHaveBeenLastCalledWith('e1')
-    expect(retry.truncated).toBe(false)
-  })
-})
-describe('无 client（离线 session）与全量文件读', () => {
-  it('无 RPC client：直接尾读降级（不读不写缓存）', async () => {
-    const reader = new SessionHistoryReader({
-      pm: { getClient: vi.fn(() => undefined) } as unknown as IProcessManager,
-      sessionStore: {} as unknown as ISessionStore,
-    })
-    const result = await reader.getHistory('s1')
-    expect(result.truncated).toBe(true)
-    expect(getHistoryTailFromFile).toHaveBeenCalled()
-  })
-
-  // ── [u6] 游标翻页（crash-resilience §3.3 D4 中期；必测断言①⑥）──
-
-  it('游标翻页：缓存命中 → 全量基线切前缀，返回锚点前最近 limitTurns turns（零 RPC）', async () => {
-    const { reader, client, rebuild } = makeReader()
-    // 5 turn 基线（rebuild mock 每 entry 产一条 user 消息 = 每 entry 一个 turn）
-    client.getEntries.mockResolvedValue({
-      data: { entries: [entry('e1', null), entry('e2', 'e1'), entry('e3', 'e2'), entry('e4', 'e3'), entry('e5', 'e4')], leafId: 'e5' },
-    })
-    await reader.getHistory('s1') // 态 2：尾读首屏 + 后台全量重建建缓存
-    await waitForBackgroundRebuild(rebuild) // 确保缓存基线已落定（零 RPC 断言的前提）
-    client.getEntries.mockClear()
-    const page = await reader.getHistory('s1', { cursor: 'e5', limitTurns: 2 })
-    // 缓存基线直读，零 RPC（锚前内容 append-only，对基线新鲜度不敏感）
+    // 单一数据路径：pi client 在场也零 RPC（读取分派与进程解耦，AX4；验收③ get_entries 零引用）
     expect(client.getEntries).not.toHaveBeenCalled()
-    // 锚点 e5 之前最近 2 turns = e3、e4（e5 自身不返回——已在 renderer 分区）
-    expect(page.messages.map((m) => m.id)).toEqual(['m-e3', 'm-e4'])
-    expect(page.truncated).toBe(true) // 锚前仍有更早 turn（e1、e2）
-    expect(page.loadedTurns).toBe(2)
-    expect(page.totalTurnsEstimate).toBe(4) // 锚前缀内精确 turn 总数
+    expect(result.messages.map((m) => m.content)).toEqual(['q1', 'r1', 'q2', 'r2', 'q3', 'r3'])
+    expect(result.truncated).toBe(false)
+    expect(result.loadedTurns).toBe(3)
+    expect(result.totalTurnsEstimate).toBe(3)
+    // 第二次读取：索引就绪后直接按偏移读窗（内容一致 = stat 线索命中复用）
+    const again = await reader.getHistory(sid)
+    expect(again.messages.map((m) => m.content)).toEqual(['q1', 'r1', 'q2', 'r2', 'q3', 'r3'])
   })
 
-  it('游标翻页：翻页到头（锚点为最早 turn）→ 前缀空 → 空页 + truncated=false', async () => {
-    const { reader, client, rebuild } = makeReader()
-    client.getEntries.mockResolvedValue({
-      data: { entries: [entry('e1', null), entry('e2', 'e1')], leafId: 'e2' },
-    })
-    await reader.getHistory('s1')
-    await waitForBackgroundRebuild(rebuild) // 缓存基线路径（锚点切前缀）的前提
-    const page = await reader.getHistory('s1', { cursor: 'e1' })
+  it('turn 数超预算：窗口只含最近 20 turns，truncated=true（窗口起点 = turn 边界）', async () => {
+    const sid = uniqueSid('budget')
+    const lines: string[] = [headerLine(sid)]
+    const turns = 25
+    for (let i = 1; i <= turns; i++) {
+      lines.push(entryLine(`u${i}`, 'user', `q${i}`))
+      lines.push(entryLine(`a${i}`, 'assistant', `r${i}`))
+    }
+    const filePath = writeSessionFile(lines)
+    const { reader } = makeIndexReader({ [sid]: filePath })
+
+    const result = await reader.getHistory(sid)
+
+    expect(result.truncated).toBe(true)
+    expect(result.loadedTurns).toBe(20)
+    expect(result.totalTurnsEstimate).toBe(turns)
+    // 窗口起点 = 从尾数第 20 个 turn 边界（q6），窗口内每 turn 的 user/assistant 相邻完整
+    expect(result.messages[0].content).toBe('q6')
+    expect(result.messages).toHaveLength(40)
+    expect(result.messages.at(-1)?.content).toBe('r25')
+  })
+
+  it('字节预算截断：大 turn 后超预算的更早 turn 不入窗（单 turn 超限自身完整放行）', async () => {
+    const sid = uniqueSid('bytes')
+    const big = 'x'.repeat(700 * 1024) // 单 turn ~700KB > 640KB 预算（首 turn 豁免）
+    const lines = [
+      headerLine(sid),
+      entryLine('u1', 'user', 'old'),
+      entryLine('a1', 'assistant', 'old-reply'),
+      entryLine('u2', 'user', big),
+      entryLine('a2', 'assistant', 'big-reply'),
+    ]
+    const filePath = writeSessionFile(lines)
+    const { reader } = makeIndexReader({ [sid]: filePath })
+
+    const result = await reader.getHistory(sid)
+
+    expect(result.truncated).toBe(true)
+    expect(result.loadedTurns).toBe(1)
+    expect(result.messages.map((m) => m.content)).toEqual([big, 'big-reply'])
+    expect(result.totalTurnsEstimate).toBe(2)
+  })
+
+  it('主会话文件未被 scanSessions 定位（含 subagent 虚拟 id）：静默空页（现状语义）', async () => {
+    const { reader } = makeIndexReader({})
+    const result = await reader.getHistory('subagent:main-1:sub-1')
+    expect(result).toEqual({ messages: [], truncated: false, loadedTurns: 0, totalTurnsEstimate: 0 })
+  })
+})
+
+describe('cursor 游标翻页（索引路径）', () => {
+  it('cursor 命中：返回锚点前最近 limitTurns turns，cursor turn 只进校验集合不返回', async () => {
+    const sid = uniqueSid('cursor')
+    const filePath = writeSessionFile(threeTurnLines(sid))
+    const { reader } = makeIndexReader({ [sid]: filePath })
+
+    const page = await reader.getHistory(sid, { cursor: 'u3', limitTurns: 2 })
+
+    // 锚点（u3 所在 turn 3）之前最近 2 turns = turn1+turn2；锚所在 turn 不返回
+    expect(page.messages.map((m) => m.content)).toEqual(['q1', 'r1', 'q2', 'r2'])
+    expect(page.truncated).toBe(false) // 锚前窗口含首条 turn（无更早历史）
+    expect(page.loadedTurns).toBe(2)
+    expect(page.totalTurnsEstimate).toBe(3) // 完整索引精确总数（不再随窗口退化为前缀计数）
+  })
+
+  it('cursor 为最早 turn → 空页 + truncated=false（翻页到头，D4 空游标边界）', async () => {
+    const sid = uniqueSid('cursor-head')
+    const filePath = writeSessionFile(threeTurnLines(sid))
+    const { reader } = makeIndexReader({ [sid]: filePath })
+
+    const page = await reader.getHistory(sid, { cursor: 'u1' })
+
     expect(page.messages).toEqual([])
     expect(page.truncated).toBe(false)
     expect(page.loadedTurns).toBe(0)
   })
 
-  it('游标翻页：cursor 未命中（已被清理）→ 空页 + truncated=false，不报错', async () => {
-    const { reader, client } = makeReader()
-    client.getEntries.mockResolvedValue({ data: { entries: [entry('e1', null)], leafId: 'e1' } })
-    const page = await reader.getHistory('s1', { cursor: 'gone-entry' })
+  it('cursor 未命中 turns → 尾读 cursor 兼容链：真正未知 cursor 返回空页 truncated=false', async () => {
+    const sid = uniqueSid('cursor-miss')
+    const filePath = writeSessionFile(threeTurnLines(sid))
+    const { reader } = makeIndexReader({ [sid]: filePath })
+    await reader.getHistory(sid) // 先建索引
+
+    // 未知 cursor（不在索引也不在文件）：兼容链定位失败 → 空页（不报错）
+    const page = await reader.getHistory(sid, { cursor: 'gone-entry' })
     expect(page.messages).toEqual([])
     expect(page.truncated).toBe(false)
   })
 
-  it('游标翻页：无缓存 → getEntries 全量重建写缓存后切前缀；RPC 失败 → 文件游标读降级', async () => {
-    const { reader, client } = makeReader()
-    client.getEntries.mockResolvedValue({
-      data: { entries: [entry('e1', null), entry('e2', 'e1'), entry('e3', 'e2')], leafId: 'e3' },
-    })
-    const page = await reader.getHistory('s1', { cursor: 'e3', limitTurns: 1 })
-    expect(client.getEntries).toHaveBeenCalledWith() // 无缓存 → 全量重建
-    expect(page.messages.map((m) => m.id)).toEqual(['m-e2'])
-    expect(page.truncated).toBe(true)
+  it('cursor 为合法非边界 entryId（assistant 行）→ 尾读 cursor 兼容链定位（现状行级语义）', async () => {
+    const sid = uniqueSid('cursor-mid')
+    const filePath = writeSessionFile(threeTurnLines(sid))
+    const { reader } = makeIndexReader({ [sid]: filePath })
+    await reader.getHistory(sid) // 先建索引
 
-    // RPC 失败（无缓存）→ 文件游标读降级（cursor/maxBytes 透传 + sidecar 注入）
-    const { reader: reader2, client: client2 } = makeReader()
-    client2.getEntries.mockRejectedValue(new Error('rpc down'))
-    await reader2.getHistory('s1', { cursor: 'e9', maxBytes: 123 })
-    expect(getHistoryTailFromFile).toHaveBeenCalledWith(
-      's1',
-      expect.anything(),
-      20, // limitTurns 缺省回落 HISTORY_BUDGET.RECENT_TURNS
-      { cursor: 'e9', maxBytes: 123 },
-      expect.anything(), // [§3.3-1 实现项①] 尾读路径 segments sidecar 注入对象（第 5 参）
-    )
-  })
-
-  it('游标翻页：离线 session（无 client）→ 文件游标读', async () => {
-    const reader = new SessionHistoryReader({
-      pm: { getClient: vi.fn(() => undefined) } as unknown as IProcessManager,
-      sessionStore: {} as unknown as ISessionStore,
-    })
-    await reader.getHistory('s1', { cursor: 'e2' })
-    expect(getHistoryTailFromFile).toHaveBeenCalledWith('s1', expect.anything(), 20, { cursor: 'e2', maxBytes: expect.any(Number) }, expect.anything())
+    // 'a2' 是 turn 2 内的非边界 entryId：索引未命中 → 兼容链按行定位。现状语义（AS4：正常
+    // 翻页 cursor 恒为 turn 边界，非边界形态是防御路径）= 丢弃锚行及其更新侧，返回锚行之前
+    // 的全部行（含锚所在 turn 的边界行 u2——兼容链不做「所在 turn 整体回退」）。
+    const page = await reader.getHistory(sid, { cursor: 'a2', limitTurns: 2 })
+    expect(page.messages.map((m) => m.content)).toEqual(['q1', 'r1', 'q2'])
+    expect(page.truncated).toBe(false)
+    expect(page.loadedTurns).toBe(2)
   })
 })
-describe('inflight 合并与 onSessionDisposed', () => {
-  it('并发 getHistory 同 session 共享一次请求（W20 Fix-5）：inflight 复用尾读 + 后台任务单例', async () => {
-    const { reader, client } = makeReader()
-    let release!: (v: GetEntriesResult) => void
-    client.getEntries.mockImplementation(async () => new Promise<GetEntriesResult>((resolve) => { release = resolve }))
-    const p1 = reader.getHistory('s1')
-    const p2 = reader.getHistory('s1')
-    await vi.waitFor(() => expect(release).toBeDefined()) // 后台任务（单例）已发起全量 RPC
-    release({ data: { entries: [entry('e1', null)], leafId: 'e1' } })
-    const [r1, r2] = await Promise.all([p1, p2])
-    expect(client.getEntries).toHaveBeenCalledTimes(1) // 后台任务单例：一次全量 RPC（不重复重建）
-    expect(r1).toEqual(r2)
-    expect(r1.messages.map((m) => m.id)).toEqual(['tail-1']) // 首屏 = 尾读窗口（态 2）
-  })
 
-  it('onSessionDisposed：清缓存 + 在途任务置 disposed（后续 getHistory 重新尾读 + 后台全量重建）', async () => {
-    const { reader, client, rebuild } = makeReader()
-    client.getEntries.mockResolvedValue({ data: { entries: [entry('e1', null)], leafId: 'e1' } })
-    await reader.getHistory('s1')
-    await waitForBackgroundRebuild(rebuild) // 后台重建建缓存
-    reader.onSessionDisposed('s1')
-    client.getEntries.mockClear()
-    await reader.getHistory('s1') // 缓存已清 → 再次态 2：尾读首屏 + 后台全量重建
-    expect(client.getEntries).toHaveBeenCalledWith() // 全量（无参调用）
-  })
+describe('跨窗口 toolCall/toolResult 配对补读（设计 §4.4/§5）', () => {
+  /** 链式 parentId 的 message entry 行（真实 pi 树形态：leaf 裁剪与 fold 配对正常工作）。 */
+  function chainLine(id: string, parentId: string | null, message: Record<string, unknown>): string {
+    return JSON.stringify({ type: 'message', id, parentId, timestamp: '2026-11-03T00:00:00.000Z', message })
+  }
 
-  it('onSessionDisposed：未缓存 session 幂等 no-op', () => {
-    const { reader } = makeReader()
-    expect(() => reader.onSessionDisposed('s-none')).not.toThrow()
-  })
-})
-// ════════════════════════════════════════════════════════════════════
-// 活跃路径裁剪接入（message-revoke U6a）：调用点契约 = 仅全量重建裁剪、增量不裁剪
-// ════════════════════════════════════════════════════════════════════
-// get_entries 返回全文件 entries + leafId；全量重建路径（rebuildFullHistoryAndCache）在
-// 调用点预过滤（port 签名不含 leafId，预过滤与 rebuildHistoryFromEntries 第三参等价——
-// 同一 computeActivePathEntries SSOT）。缓存基线 = 完整活跃路径派生视图。
+  let warnMessages: string[] = []
+  let warnSpy: { mockRestore: () => void } | undefined
 
-describe('活跃路径裁剪接入（message-revoke U6a）', () => {
-  it('全量重建调用点：有分支 entries + leafId → rebuild 收到裁剪后 entries，旧分支不进缓存基线', async () => {
-    const { reader, client, rebuild } = makeReader()
-    // 单根链式树：e1(root) → e2(旧分支尾) / b1(e1) → b2(新分支尾，leafId)
-    client.getEntries.mockResolvedValue({
-      data: { entries: [entry('e1', null), entry('e2', 'e1'), entry('b1', 'e1'), entry('b2', 'b1')], leafId: 'b2' },
+  beforeEach(() => {
+    warnMessages = []
+    const spy = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+      warnMessages.push(String(args[0]))
     })
-    const result = await reader.getHistory('s1')
-    expect(result.messages.map((m) => m.id)).toEqual(['tail-1']) // 首屏 = 尾读窗口（态 2）
-    // rebuild（port 直通 mock）在后台任务中收到的是裁剪后活跃路径子集（e2 旧分支被滤）
-    await waitForBackgroundRebuild(rebuild)
-    expect(rebuild).toHaveBeenCalledTimes(1)
-    expect(rebuild).toHaveBeenCalledWith([entry('e1', null), entry('b1', 'e1'), entry('b2', 'b1')], null)
-    // 缓存基线 = 裁剪后活跃路径（后续 getHistory 走缓存增量返回基线）
-    const again = await reader.getHistory('s1')
-    expect(again.messages.map((m) => m.id)).toEqual(['m-e1', 'm-b1', 'm-b2'])
+    warnSpy = spy
+  })
+  afterEach(() => {
+    warnSpy?.mockRestore()
+    // warn-once 去重集跨用例复位（本段断言 warn 出场与否，须防前序用例占 key）
+    _resetWarnOnceForTest()
   })
 
-  it('全量重建调用点：leafId null（缺省）→ rebuild 收到全量 entries（现行为回归）', async () => {
-    const { reader, client, rebuild } = makeReader()
-    const full = [entry('e1', null), entry('e2', 'e1')]
-    client.getEntries.mockResolvedValue({ data: { entries: full, leafId: null } })
-    await reader.getHistory('s1')
-    await waitForBackgroundRebuild(rebuild) // 后台任务中的 rebuild 收到全量（leafId null 不裁剪）
-    expect(rebuild).toHaveBeenCalledWith(full, null)
+  it('窗口首 turn 的孤儿 toolResult（toolCall 在前一 turn）→ 按索引向前扩一个 turn 段重 fold，消息形状与全量重建路径一致', async () => {
+    const sid = uniqueSid('orphan-pair')
+    const lines = [
+      headerLine(sid),
+      // turn 1：assistant 带 toolCall tc-x（配对目标在窗口外更早 turn 段）
+      chainLine('u1', null, { role: 'user', content: [{ type: 'text', text: 'q1' }], timestamp: 1 }),
+      chainLine('a1', 'u1', { role: 'assistant', content: [{ type: 'text', text: 'r1' }, { type: 'toolCall', id: 'tc-x', name: 'bash', arguments: { command: 'ls' } }], timestamp: 2 }),
+      // turn 2：首条 entry 即 toolResult（其 toolCall 在 turn 1 —— 窗口边界孤儿形态）
+      chainLine('u2', 'a1', { role: 'user', content: [{ type: 'text', text: 'q2' }], timestamp: 3 }),
+      chainLine('tr2', 'u2', { role: 'toolResult', toolCallId: 'tc-x', toolName: 'bash', content: [{ type: 'text', text: 'out-x' }], timestamp: 4 }),
+      chainLine('a2', 'tr2', { role: 'assistant', content: [{ type: 'text', text: 'r2' }], timestamp: 5 }),
+      // turn 3
+      chainLine('u3', 'a2', { role: 'user', content: [{ type: 'text', text: 'q3' }], timestamp: 6 }),
+      chainLine('a3', 'u3', { role: 'assistant', content: [{ type: 'text', text: 'r3' }], timestamp: 7 }),
+    ]
+    const filePath = writeSessionFile(lines)
+    const { reader, client } = makeIndexReader({ [sid]: filePath }, { clientPresent: true, realConvert: true })
+
+    // 窗口 = 最近 2 turns（turn2+turn3）：tr2 在窗口内 fold 成孤儿（窗口内无带 toolCalls 的
+    // assistant）→ 向前扩 turn1 段重读重 fold → a1 入窗、tr2 配对回填
+    const result = await reader.getHistory(sid, { limitTurns: 2 })
+
+    // 对照全量重建路径（getHistoryFromFilePath <32MB 全量读，同一 convertWindowEntries 链）
+    const full = await getHistoryFromFilePath(filePath, {
+      scanSessions: vi.fn(() => []),
+      convertHistory: (raw: unknown[], entryIds?: string[], orphans?: unknown[]) =>
+        convertPiHistory(raw, entryIds, orphans as PiHistoryToolResult[] | undefined),
+    } as unknown as ISessionStore)
+    expect(result.messages).toEqual(full.messages)
+    // 配对形状实质断言：a1 的 toolCall 已回填 output/endTime（全量重建同值）
+    const a1 = result.messages.find((m) => m.content === 'r1')
+    expect(a1?.toolCalls).toHaveLength(1)
+    expect(a1?.toolCalls?.[0]).toMatchObject({ id: 'tc-x', toolName: 'bash', output: 'out-x', endTime: 4 })
+    // 扩段计入窗口口径：3 turns（2 + 1 扩展）、扩到 turn 0 → truncated=false
+    expect(result.loadedTurns).toBe(3)
+    expect(result.truncated).toBe(false)
+    expect(result.totalTurnsEstimate).toBe(3)
+    // 配对成功：reader 层孤儿观测不出声；零 RPC（补读走文件偏移，不经 pi）
+    expect(warnMessages.some((w) => w.includes('窗口向前扩段'))).toBe(false)
+    expect(client.getEntries).not.toHaveBeenCalled()
   })
 
-  it('增量路径不裁剪（反直觉契约锚）：delta 条目原样进 rebuild，不做 leafId 回溯', async () => {
-    // 契约（设计 D3/U6 定死）：delta 是活跃路径的后缀切片（Fix-2 不变量保证首条 parent =
-    // 缓存 leafId），构造性全在活跃路径上；裁剪是「回溯到根」的全树语义，在窗口切片上
-    // 执行会把窗口边界误当树边界。canary 构造：delta 内混一条 parent 指向集合外的条目
-    // （d2.parent=missing）——若增量被误接 leafId 裁剪，d2 的回溯链在窗口内断裂会把 d1
-    // 误滤（链 missing→d2 只含 d2）；不裁剪时 d1/d2 全部进入合并。
-    const { reader, client, rebuild } = makeReader()
-    client.getEntries.mockResolvedValueOnce({ data: { entries: [entry('e1', null), entry('e2', 'e1')], leafId: 'e2' } })
-    await reader.getHistory('s1') // 态 2：尾读首屏 + 后台重建建缓存 {leafId: e2}
-    await waitForBackgroundRebuild(rebuild)
-    client.getEntries.mockResolvedValueOnce({ data: { entries: [entry('d1', 'e2'), entry('d2', 'missing')], leafId: 'd2' } })
-    const second = await reader.getHistory('s1')
-    // 增量条目全量并入（d1 不因窗口内回溯断裂被滤）
-    expect(second.messages.map((m) => m.piEntryId)).toEqual(['e1', 'e2', 'd1', 'd2'])
+  it('连续孤儿链（toolCall 在 2 段之外）→ 有界扩段耗尽后按现状丢弃并计数观测，不退化为全量读', async () => {
+    const sid = uniqueSid('orphan-bound')
+    const lines: string[] = [headerLine(sid)]
+    // turn 1：assistant 带 toolCall tc-far（距窗口 5 段 —— 有界 2 次扩展内不可达）
+    lines.push(chainLine('u1', null, { role: 'user', content: [{ type: 'text', text: 'q1' }], timestamp: 1 }))
+    lines.push(chainLine('a1', 'u1', { role: 'assistant', content: [{ type: 'text', text: 'r1' }, { type: 'toolCall', id: 'tc-far', name: 'bash', arguments: {} }], timestamp: 2 }))
+    // turn 2..5：普通 turn（无 toolCall/toolResult），链式挂在上一 turn 的 assistant
+    for (let i = 2; i <= 5; i++) {
+      lines.push(chainLine(`u${i}`, `a${i - 1}`, { role: 'user', content: [{ type: 'text', text: `q${i}` }], timestamp: i * 10 }))
+      lines.push(chainLine(`a${i}`, `u${i}`, { role: 'assistant', content: [{ type: 'text', text: `r${i}` }], timestamp: i * 10 + 1 }))
+    }
+    // turn 6：首条 entry 即孤儿 toolResult（toolCall tc-far 在 turn 1）
+    lines.push(chainLine('u6', 'a5', { role: 'user', content: [{ type: 'text', text: 'q6' }], timestamp: 61 }))
+    lines.push(chainLine('tr6', 'u6', { role: 'toolResult', toolCallId: 'tc-far', toolName: 'bash', content: [{ type: 'text', text: 'far-out' }], timestamp: 62 }))
+    lines.push(chainLine('a6', 'tr6', { role: 'assistant', content: [{ type: 'text', text: 'r6' }], timestamp: 63 }))
+
+    const filePath = writeSessionFile(lines)
+    const { reader } = makeIndexReader({ [sid]: filePath }, { realConvert: true })
+
+    // 窗口 = 最近 2 turns（turn5+turn6）：tr6 孤儿 → 扩 turn4 → 仍孤儿 → 扩 turn3 → 有界耗尽丢弃
+    const result = await reader.getHistory(sid, { limitTurns: 2 })
+
+    // 有界口径：2 原始 + 2 扩展 = 4 turns；窗口外仍有更早 turn → truncated=true
+    expect(result.loadedTurns).toBe(4)
+    expect(result.truncated).toBe(true)
+    // 窗口消息 = turn3..turn6（a1 不在窗口，未退化为全量读）；user content 是 Segment[]
+    // 形态，assistant 是拼接文本——统一按文本提取断言
+    const textOf = (m: Message) =>
+      typeof m.content === 'string' ? m.content : m.content.map((s) => (s as { text?: string }).text ?? '').join('')
+    expect(result.messages.map(textOf)).toEqual(['q3', 'r3', 'q4', 'r4', 'q5', 'r5', 'q6', 'r6'])
+    // 观测出场：reader 层计数 warn（含丢弃数）+ reducer 层逐条孤儿 warn
+    expect(warnMessages.some((w) => w.includes('[history-reader] 窗口向前扩段 2 次后仍有 1 条孤儿 toolResult 未配对'))).toBe(true)
+    expect(warnMessages.some((w) => w.includes('toolResult has no matching toolCall in window'))).toBe(true)
   })
-})
 });
 
-// ======================================================================
-// ← src/services/session/__tests__/history-rebuild-clearall.test.ts
-// ======================================================================
+describe('索引窗口畸形行观测（RT-8#13 与尾读/全量读同款归因）', () => {
+  it('窗口内半截 JSON 行（崩溃残留形态）→ 读取成功 + warn-once 归因（不静默丢弃）', async () => {
+    const sid = uniqueSid('malformed')
+    const lines = threeTurnLines(sid)
+    // turn1 与 turn2 之间夹一行半截 JSON（无换行内截断的完整行位，但内容非法 JSON）
+    lines.splice(3, 0, '{"type":"message","id":"half",')
+    const filePath = writeSessionFile(lines)
+    const { reader } = makeIndexReader({ [sid]: filePath })
 
-function entry_m2(): { leafId: string | null; messages: []; truncated: boolean } {
-  return { leafId: 'leaf-1', messages: [], truncated: false }
-}
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const result = await reader.getHistory(sid)
 
-// wave3 包装：本段原文件顶层语句收进 describe 作用域（顶层 hook 不再外溢到同文件其他来源的用例）
-describe('history-rebuild-clearall', () => {
-describe('HistoryRebuildCache.clearAll（u7c memory-relief 可回收物 ①）', () => {
-  it('清空全部条目并返回清除条目数', () => {
-    const cache = new HistoryRebuildCache()
-    cache.set('a', entry_m2())
-    cache.set('b', entry_m2())
-    cache.set('c', entry_m2())
+      // 半截行被滤除，其余消息照常返回（entry 级丢失只影响该行）
+      expect(result.messages.map((m) => m.content)).toEqual(['q1', 'r1', 'q2', 'r2', 'q3', 'r3'])
+      expect(result.loadedTurns).toBe(3)
+      // 归因出场：与尾读/全量读同款 warn-once（含路径与丢弃计数）
+      const warned = warnSpy.mock.calls.map((c) => String(c[0]))
+      expect(warned.some((w) => w.includes('session 文件含 1 行畸形 JSON') && w.includes(filePath))).toBe(true)
+      // 第二次读取（索引就绪复用路径）：同文件 warn-once 不重复出声
+      warnSpy.mockClear()
+      await reader.getHistory(sid)
+      expect(warnSpy.mock.calls.map((c) => String(c[0])).some((w) => w.includes('畸形 JSON'))).toBe(false)
+    } finally {
+      warnSpy.mockRestore()
+      _resetWarnOnceForTest()
+    }
+  })
+});
 
-    expect(cache.clearAll()).toBe(3)
-    expect(cache.size).toBe(0)
-    expect(cache.get('a')).toBeUndefined()
-    expect(cache.get('b')).toBeUndefined()
-    expect(cache.get('c')).toBeUndefined()
+describe('零 turn 兼容分支与重写失配重建', () => {
+  it('无 user turn 的文件（纯 assistant 行）→ 零 turn 索引走尾读兼容分支（保持现有计数 0）', async () => {
+    const sid = uniqueSid('zero')
+    const filePath = writeSessionFile([headerLine(sid), entryLine('a1', 'assistant', 'only-reply')])
+    const { reader } = makeIndexReader({ [sid]: filePath })
+
+    const result = await reader.getHistory(sid)
+
+    // 兼容分支 = 现有 tailReadHistory 语义：无 user turn 文件的计数保持现状（0，不视作 1 turn）
+    expect(result.messages.map((m) => m.content)).toEqual(['only-reply'])
+    expect(result.truncated).toBe(false)
+    expect(result.loadedTurns).toBe(0)
+    expect(result.totalTurnsEstimate).toBe(0)
   })
 
-  it('空缓存 clearAll 返回 0（幂等，重复 relief 不误报）', () => {
-    const cache = new HistoryRebuildCache()
-    expect(cache.clearAll()).toBe(0)
-    cache.set('a', entry_m2())
-    expect(cache.clearAll()).toBe(1)
-    expect(cache.clearAll()).toBe(0)
+  it('同尺寸重写且保留 mtime（V4 攻击形态）→ 边界不变时读窗如实反映新内容（无旧拼接）', async () => {
+    const sid = uniqueSid('rewrite')
+    const oldLines = threeTurnLines(sid)
+    const filePath = writeSessionFile(oldLines)
+    const { reader } = makeIndexReader({ [sid]: filePath })
+    await reader.getHistory(sid) // 建索引（旧内容）
+    // stat 伪装：等长替换 turn 正文 + 恢复原 mtime（stat 线索完全不变 → 复用旧索引快照）
+    const newLines = threeTurnLines(sid).map((l) => l.replaceAll('"r1"', '"z1"').replaceAll('"r2"', '"z2"'))
+    expect(Buffer.byteLength(newLines.join('\n') + '\n')).toBe(Buffer.byteLength(oldLines.join('\n') + '\n')) // 同尺寸前提成立
+    const prevMtime = fs.statSync(filePath).mtime
+    writeFileSync(filePath, newLines.join('\n') + '\n', 'utf-8')
+    fs.utimesSync(filePath, prevMtime, prevMtime)
+
+    const result = await reader.getHistory(sid)
+
+    // 边界 entryId 未变 → 校验通过 → 读出的窗口 = 当前文件字节（不出现旧正文残留）
+    expect(result.messages.map((m) => m.content)).toEqual(['q1', 'z1', 'q2', 'z2', 'q3', 'r3'])
+    expect(result.truncated).toBe(false)
+  })
+
+  it('同尺寸重写且换掉边界 entryId → 校验失配 → 重建后返回新内容（不静默拼接旧历史）', async () => {
+    const sid = uniqueSid('rewrite-id')
+    const oldLines = threeTurnLines(sid)
+    const filePath = writeSessionFile(oldLines)
+    const { reader } = makeIndexReader({ [sid]: filePath })
+    await reader.getHistory(sid)
+    const newLines = threeTurnLines(sid).map((l) => l.replaceAll('"u1"', '"X1"').replaceAll('"u2"', '"X2"').replaceAll('"u3"', '"X3"'))
+    expect(Buffer.byteLength(newLines.join('\n') + '\n')).toBe(Buffer.byteLength(oldLines.join('\n') + '\n'))
+    const prevMtime = fs.statSync(filePath).mtime
+    writeFileSync(filePath, newLines.join('\n') + '\n', 'utf-8')
+    fs.utimesSync(filePath, prevMtime, prevMtime)
+
+    const result = await reader.getHistory(sid)
+
+    // 旧索引的 entryId（u1..）在新文件中不存在 → verify 失配 → 全量重建 → 新边界内容
+    expect(result.messages.map((m) => m.content)).toEqual(['q1', 'r1', 'q2', 'r2', 'q3', 'r3'])
+    expect(result.truncated).toBe(false)
+    // 失配重建后 cursor 按新索引解析：新 entryId X3 = 最新 turn 边界，锚前最近 1 turn = turn 2
+    const page = await reader.getHistory(sid, { cursor: 'X3', limitTurns: 1 })
+    expect(page.messages.map((m) => m.content)).toEqual(['q2', 'r2'])
+  })
+
+  it('追加新 turn → 索引续扫纳入（S 之后追加不进本次读取，下一次请求可见）', async () => {
+    const sid = uniqueSid('append')
+    const filePath = writeSessionFile(threeTurnLines(sid))
+    const { reader } = makeIndexReader({ [sid]: filePath })
+    const first = await reader.getHistory(sid)
+    expect(first.totalTurnsEstimate).toBe(3)
+    // 真实追加（pi append 形态：文件尾补一行）
+    fs.appendFileSync(filePath, entryLine('u4', 'user', 'q4') + '\n')
+    fs.appendFileSync(filePath, entryLine('a4', 'assistant', 'r4') + '\n')
+
+    const second = await reader.getHistory(sid)
+
+    expect(second.messages.map((m) => m.content)).toEqual(['q1', 'r1', 'q2', 'r2', 'q3', 'r3', 'q4', 'r4'])
+    expect(second.totalTurnsEstimate).toBe(4)
+    expect(second.truncated).toBe(false)
   })
 })
-describe('SessionHistoryReader.clearHistoryCache 透传出口（组合根 onRelief 接线点）', () => {
-  it('出口在场且转发 clearAll（窄注入 deps 仅类型约束，clearAll 不触达 deps）', () => {
-    const reader = new SessionHistoryReader({
-      pm: {} as IProcessManager,
-      sessionStore: {} as ISessionStore,
-    })
-    expect(reader.clearHistoryCache()).toBe(0)
+
+describe('inflight 合并与生命周期挂点', () => {
+  it('并发 getHistory 同 session 共享同一 promise（W20 Fix-5 保留）；完成后 inflight 清槽', async () => {
+    const sid = uniqueSid('inflight')
+    const filePath = writeSessionFile(threeTurnLines(sid))
+    const { reader, sessionStore } = makeIndexReader({ [sid]: filePath })
+    // 并发两调：第二个在第一个的同步段（定位 + ensureFresh 启动）后命中 inflight——
+    // scanSessions 定位只执行 1 次（分派合并），两结果一致（无交错写）
+    const [r1, r2] = await Promise.all([reader.getHistory(sid), reader.getHistory(sid)])
+    expect(r1).toEqual(r2)
+    expect(sessionStore.scanSessions).toHaveBeenCalledTimes(1)
+    // inflight 完成后清槽：第三次调用重新走完整分派
+    const third = await reader.getHistory(sid)
+    expect(third.messages.map((m) => m.content)).toEqual(['q1', 'r1', 'q2', 'r2', 'q3', 'r3'])
+    expect(sessionStore.scanSessions).toHaveBeenCalledTimes(2)
+  })
+
+  it('onSessionDisposed：只清内存索引（幂等 no-op），不取消文件读取——后续读取仍正常', async () => {
+    const sid = uniqueSid('disposed')
+    const filePath = writeSessionFile(threeTurnLines(sid))
+    const { reader } = makeIndexReader({ [sid]: filePath })
+    await reader.getHistory(sid)
+    expect(() => reader.onSessionDisposed(sid)).not.toThrow()
+    expect(() => reader.onSessionDisposed('s-none')).not.toThrow() // 未缓存 session 幂等
+    const again = await reader.getHistory(sid) // 文件读取不被取消：内容照常返回
+    expect(again.messages.map((m) => m.content)).toEqual(['q1', 'r1', 'q2', 'r2', 'q3', 'r3'])
+  })
+
+  it('onSessionDeleted（真删除专属转发）：后续读取按 ENOENT 空页语义收尾（挂点转发到自持 store）', async () => {
+    const sid = uniqueSid('deleted')
+    const filePath = writeSessionFile(threeTurnLines(sid))
+    const { reader } = makeIndexReader({ [sid]: filePath })
+    await reader.getHistory(sid)
+    reader.onSessionDeleted(sid)
+    // 真删除后读取：取消标记 → ensureFresh null → 空页（被取消请求语义，D5）
+    const result = await reader.getHistory(sid)
+    expect(result).toEqual({ messages: [], truncated: false, loadedTurns: 0, totalTurnsEstimate: 0 })
+  })
+
+  it('主会话文件被删（ENOENT）→ 空页（现有空页语义，非 ENOENT IO 错误显式上抛由 store 分级）', async () => {
+    const sid = uniqueSid('enoent')
+    const filePath = writeSessionFile(threeTurnLines(sid))
+    const { reader } = makeIndexReader({ [sid]: filePath })
+    await reader.getHistory(sid) // 建索引
+    fs.rmSync(filePath, { force: true })
+    const result = await reader.getHistory(sid)
+    expect(result).toEqual({ messages: [], truncated: false, loadedTurns: 0, totalTurnsEstimate: 0 })
   })
 })
 });

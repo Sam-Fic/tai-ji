@@ -274,7 +274,7 @@ describe("mock-domains", () => {
       // D5 per-engine 默认模型写入：回执 = 请求值回显（setSubagentDefaultEngine mock 同模式）
       expect(await session.setSubagentEngineDefaultModel('eng-x', 'prov-a/m-1')).toEqual({ engineId: 'eng-x', modelRef: 'prov-a/m-1' })
       expect(await session.getAgentCallFilePath('s1', 'ac1')).toBe('')
-      // workflowAction 仅 'abort'（pause/resume 已随扩展 D-2 移除，real 域参数为 'abort' 字面量）
+      // workflowAction action 为 'abort' | 'resume'（resume 与 abort 同款 stub resolve——tray-panel-interact §3.3 D4；本用例以 'abort' 字面量调用）
       await expect(session.workflowAction('s3', 'abort', 'r1')).resolves.toBeUndefined()
       await expect(session.subagentAction('s3', 'message', { text: 'hi' })).resolves.toBeUndefined()
       await expect(session.handoff('s1', 'ok')).resolves.toBeUndefined()

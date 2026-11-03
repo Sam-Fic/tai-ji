@@ -20,7 +20,7 @@
  * 订阅接线（D2③「S5/S6 后订阅者换成 record 模块自身」）：组装根（Facade 构造器）
  * 先调 subscribe(lifecycle)——注册顺序在 projection（播种）之后、reconciler 对账之前，
  * 与迁移前 Facade 订阅体内顺序逐一等价（播种 → record 注册 → reconciler）。
- * 销毁侧无事件——onSessionDisposed 由 Facade removeSessionEntry 第 ⑤ 步直调
+ * 销毁侧无事件——onSessionDisposed 由 Facade removeSessionEntry 第 12 步直调
  * （与 TraceSync/SessionStateProjection.onSessionDisposed 并列）。
  *
  * Facade 消费方：对外 9 方法 + invalidateRecordEntries 一行委托（ISessionService 契约
@@ -1922,12 +1922,14 @@ export class SessionRecords {
   }
 
   /**
-   * 触发 workflow 生命周期操作（abort；pause/resume 已随扩展 D-2 一次性生命周期移除）。
+   * 触发 workflow 生命周期操作（abort / resume；pause 已随扩展 D-2 一次性生命周期移除）。
    * 经 client.prompt("/workflows <action> <runId>") 调扩展 slash command，
    * pi 检测 / 开头直接执行 command handler（不经 LLM）。
    * 扩展侧 RPC 分支已实现（commands.ts ctx.mode==='rpc'）。
+   * resume 与 abort 同款注入通道（tray-panel-interact §3.3 D4）：命令轮无模型调用；
+   * resume 资格（仅 interrupted 形态可续跑）由扩展侧 lifecycle 校验，runtime 不扩语义。
    */
-  async workflowAction(sessionId: string, action: 'abort', runId: string): Promise<void> {
+  async workflowAction(sessionId: string, action: 'abort' | 'resume', runId: string): Promise<void> {
     const client = this.deps.pm.getClient(sessionId)
     if (!client) throw new Error(`Session ${sessionId} not active`)
     await client.prompt(`/workflows ${action} ${runId}`)
@@ -2049,7 +2051,7 @@ export class SessionRecords {
     // scope:'ok'（或未知 scope 的宽容读：无 error 即成功——写读两侧同仓，畸形面归通道守卫）
   }
 
-  // ── 销毁清理（Facade removeSessionEntry 第 ⑤ 步直调，与 TraceSync/SessionStateProjection.onSessionDisposed 并列）──
+  // ── 销毁清理（Facade removeSessionEntry 第 12 步直调，与 TraceSync/SessionStateProjection.onSessionDisposed 并列）──
 
   /**
    * W18：销毁 record entry 派生缓存（主动删 + 进程退出汇聚点）。停防抖定时器

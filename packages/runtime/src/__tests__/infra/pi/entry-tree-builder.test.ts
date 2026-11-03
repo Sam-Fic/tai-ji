@@ -1000,9 +1000,10 @@ describe('rebuildHistoryFromEntries 活跃路径裁剪（message-revoke U6a）',
     expect(withoutLeaf.messages.map((m) => m.piEntryId)).toEqual(['l1', 'l2', 'l3'])
   })
 
-  it('leafId 缺省 + 有分支（现行为）：不裁剪，旧分支照文件序渲染（撤回链清缓存前的旧行为基线）', () => {
-    // 该基线正是撤回编排必须显式清 history-rebuild-cache 的原因：缓存未清时旧分支
-    // 仍按全文件渲染；显式清缓存 → 下次全量重建带 leafId → 映射正确。
+  it('leafId 缺省 + 有分支（现行为）：不裁剪，旧分支照文件序渲染（无 leafId 直读的旧行为基线）', () => {
+    // 该基线是「不带 leafId 的直读不裁剪」的锚：撤回后索引窗口读取由索引续扫 +
+    // 实际 entryId 校验兜住新快照（history-reader 编排），本函数的裁剪只在显式传
+    // leafId 的调用点生效。
     const { messages } = rebuildHistoryFromEntries(branchedEntries(), null)
     expect(messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user'])
     expect(messages.some((m) => contentToText(m.content) === '发错的消息')).toBe(true)

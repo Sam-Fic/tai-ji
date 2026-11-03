@@ -69,6 +69,20 @@ export const HOST_PLUGIN_ID = 'taiji-host'
 /** 内置声明的保留命名空间（§6.12：内置项命名空间登记为 ui，如 ui.git、ui.scheduler）。 */
 export const BUILTIN_NAMESPACE = 'ui'
 
+/**
+ * 剥内置保留命名空间前缀（id 空间映射的单一实现，tray-panel-interact D1/AX1）：
+ * 声明 id 'ui.<内容 id>' → 内容 id；非内置前缀原样返回（插件声明 id 恒不命中——
+ * validateContentSlotId 拒绝插件的 'ui' 命名空间）。
+ *
+ * 生成侧（builtinDrawerSlots 拼前缀）与还原侧（drawer 标签条派生 key / renderer sink
+ * 两分支还原选中态 key）必须同源消费本函数——两层各自实现即 PR1「两头堵」的复现形态
+ * （前缀改动时漂移且无机器检查报警）。core headless 纯函数，零依赖。
+ */
+export function stripBuiltinNamespace(declarationId: string): string {
+  const prefix = `${BUILTIN_NAMESPACE}.`
+  return declarationId.startsWith(prefix) ? declarationId.slice(prefix.length) : declarationId
+}
+
 /** renderer 分派（§6.1）：view = 插件推树（ViewHost 按 (sessionId, viewId) 消费）；
  * host = 宿主内置组件（component 必须命中白名单）。 */
 export type ContentSlotRenderer =

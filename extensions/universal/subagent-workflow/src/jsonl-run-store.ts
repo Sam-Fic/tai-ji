@@ -127,7 +127,7 @@ function collectV2RecordEntry(entry: CustomEntry, entryIndex: number, sources: E
   sources.settledEntries.set(v2.runId, v2);
 }
 
-/** loadAll 的 entry 扫描：主 session entries → v2 注册定界 + 终态条目抑制（唯一发现
+/** loadAll 的 entry 扫描：主 session entries → v2 注册定界 + 终局条目抑制（唯一发现
  *  通道）。v2-only：v1 全量快照 / 旧 workflow-state-link 指针等旧格式条目按不存在
  *  处理——不识别、不拒读、不报错（用户 2026-10-30 裁决：无 v1/link 存量数据）；
  *  未知 entry 的容忍面不受影响。 */
@@ -143,6 +143,20 @@ function collectEntrySources(entries: SessionEntry[]): EntrySources {
     collectV2RecordEntry(entry, i, sources);
   }
   return sources;
+}
+
+/**
+ * 条目是否构成终局证明（status 感知）：WorkflowRecordSettledEntryData 的 status
+ * 词表 = "done" | "interrupted"——interrupted 是暂停态非终局（收编中断条目与终态
+ * 条目同 kind "settled"，仅 status 可判别）。重建侧凡以「条目在场」充当终局证明
+ * 的分支必须经本判别：把中断条目当终局证明会把可续跑 run 对全部重建路径永久
+ * 隐藏（restore 双 session_start 装配窗实测：装配 1 收编写中断条目 → 装配 2
+ * loadAll 误判跳过 → 投影空 → 托盘恢复推送被清屏帧抹掉）。
+ */
+function entryClaimsTerminalSettlement(
+  entry: WorkflowRecordSettledEntryData | undefined,
+): boolean {
+  return entry !== undefined && entry.status !== "interrupted";
 }
 
 // ── run-settled 帧判读（DoneReason 映射 + 终局记录派生视图）────────────
@@ -838,9 +852,10 @@ export class JsonlRunStore implements RunStore {
 
   /**
    * 逐注册条目重建 run：record 流全量读（严格解析）→ fold 重建 → 终局判定
-   * （fold 唯一判法）。条目范围的唯一参与 = 终态条目幂等补写抑制
-   * （settledEntries）——条目不再作为终局证据（旧「journal 无帧而条目在 → 按条
-   * 目重建」的双面证据分支随 D1 判读单一裁决删除：条目是派生视图锚，不是第二判据）。
+   * （fold 唯一判法）。条目范围的唯一参与 = 终局条目幂等补写抑制
+   * （settledEntries，经 entryClaimsTerminalSettlement 按 status 判别）——条目不再
+   * 作为终局证据（旧「journal 无帧而条目在 → 按条目重建」的双面证据分支随 D1
+   * 判读单一裁决删除：条目是派生视图锚，不是第二判据）。
    */
   private rebuildRunsFromRecordStreams(
     registered: Map<string, WorkflowRecordRegisteredEntryData>,
@@ -862,8 +877,8 @@ export class JsonlRunStore implements RunStore {
         events = readRecordStream(recordPath);
       } catch (err) {
         if (isEnoentError(err)) {
-          if (settledEntries.has(runId)) {
-            // 流缺失而终态条目在：实体的呈现范围归条目读者（runtime 派生视图 /
+          if (entryClaimsTerminalSettlement(settledEntries.get(runId))) {
+            // 流缺失而终局条目在：实体的呈现范围归条目读者（runtime 派生视图 /
             // session-reader），壳侧不重建——不交恢复链（对不在场的流伪造收编
             // 事实）。判读单一不受影响：壳侧不产生任何 done 聚合（条目不是判据，
             // 只是「流已被清理/缺失、无需收编」的存续分流信号）。
@@ -872,9 +887,10 @@ export class JsonlRunStore implements RunStore {
             );
             continue;
           }
-          // 新形态实体的 record 流缺失（无终态条目）= 注册后首帧前崩溃：degraded
-          // running 基线交恢复链按中断收编（静默跳过会让该实体对恢复链/扫描全部
-          // 不可见）。
+          // 流缺失而无终局证明（无条目，或仅 interrupted 中断条目 = 暂停态非终局）
+          // = 注册后首帧前崩溃 / 收编后流缺失：degraded 基线交恢复链按中断收编
+          //（静默跳过会让该实体对恢复链/扫描全部不可见；中断条目仅参与预算会计
+          // 重建，状态收敛归恢复链——interruptRun 对已中断 run 表内让位幂等）。
           logger.warn(
             `[subagent-workflow] record store: record stream missing, degraded rebuild for interruption adoption (runId=${runId}, path=${recordPath})`,
           );
@@ -885,10 +901,12 @@ export class JsonlRunStore implements RunStore {
         throw err;
       }
       const settledEvent = lastRunSettledEvent(events);
-      if (settledEvent === undefined && settledEntries.has(runId)) {
+      if (settledEvent === undefined && entryClaimsTerminalSettlement(settledEntries.get(runId))) {
         // 条目已判终局而 record 流无终局帧（空流/残流）：与流缺失同款存续分流——
         // 实体呈现侧归条目读者，壳侧不重建不交恢复链。warn 留证条目与流的分叉
         //（流被外部清空/篡改的信号侧；恢复侧的拒绝语义只在坏行，空流不拒）。
+        // 仅 interrupted 条目在场不进本分支：中断 run 的 run-interrupted 帧在流上，
+        // 必须走 fold 重建（可续跑态对托盘冷读与后续重启恢复可见）。
         logger.warn(
           `[subagent-workflow] record store: settled entry present but record stream has no run-settled frame, run skipped (runId=${runId})`,
         );
@@ -903,10 +921,12 @@ export class JsonlRunStore implements RunStore {
       if (settledEvent !== undefined) {
         noteRebuiltSettlement(runId, settlementRecordOfRunSettledFrame(settledEvent));
       }
-      // 终态条目幂等补写：record 已终局而主 session 终态条目缺失（终局 coda 的
-      // 条目半边写失败 / 旧版本写点形态）→ 补写；条目已在 → 跳过（双重启不重复
-      // 追加的构造性保证）。无 pi（测试/非 Pi 环境）跳过。
-      if (settledEvent !== undefined && !settledEntries.has(runId)) {
+      // 终态条目幂等补写：record 已终局而主 session 终局条目缺失（终局 coda 的
+      // 条目半边写失败 / 旧版本写点形态）→ 补写；终局条目已在 → 跳过（双重启不重复
+      // 追加的构造性保证）。仅 interrupted 中断条目在场不抑制补写——续跑后终局的
+      // run 条目半边要落终局（陈旧暂停条目留作历史，读者侧后写覆盖）。无 pi（测试/
+      // 非 Pi 环境）跳过。
+      if (settledEvent !== undefined && !entryClaimsTerminalSettlement(settledEntries.get(runId))) {
         this.appendSettledEntryFallback(runId, settledEvent, events);
       }
     }

@@ -46,7 +46,8 @@ import { spawnRuntimeProcess, stopRuntimeProcess } from './process-control.js'
 import { waitForHealth, type WaitForHealthOptions } from './health-checker.js'
 import { writePortFile } from './port-file.js'
 import { RestartPolicy, MAX_RESTARTS } from './restart-policy.js'
-import { LivenessMonitor, LIVENESS_FAIL_THRESHOLD } from './liveness-probe.js'
+import { LivenessMonitor, LIVENESS_ZOMBIE_THRESHOLD_MS, type LivenessVerdict } from './liveness-probe.js'
+import { collectZombieForensics, type ZombieForensicsResult } from './zombie-forensics.js'
 import { mainLogger } from '../logs/main-logger.js'
 import { crashJournal } from '../logs/crash-journal.js'
 // u7c（crash-forensics D5 ④）：planned 退出码 SSOT 在 shared（RUNTIME_PLANNED_EXIT_CODE）
@@ -60,7 +61,7 @@ import type { RuntimeTargetSnapshot } from '@taiji/shared'
 /**
  * 重启决策的触发源（杀链决策日志 D6-⑥ 的 trigger 字段）：
  * - process_exit：runtime 意外退出（onRuntimeExit 崩溃路径）
- * - liveness_unhealthy：存活探针判死半活进程（forceRestartForLiveness）
+ * - liveness_unhealthy：存活探针判死（dead=确证死 / zombie=假死取证后杀）runtime 进程（forceRestartForLiveness）
  * - restart_failure：上一次重启尝试未达健康态（handleRestartFailure 递归）
  */
 type SupervisorRestartTrigger = 'process_exit' | 'liveness_unhealthy' | 'restart_failure' | 'planned_rolling_restart'
@@ -90,7 +91,7 @@ export const DEV_HEALTH_RETRY_COUNT = 1500
  */
 const RESTART_DECISION_REASONS: Record<SupervisorRestartTrigger, string> = {
   process_exit: 'runtime exited unexpectedly (exitCode in context); exponential backoff restart per policy (1-16s, MAX_RESTARTS=5)',
-  liveness_unhealthy: 'half-alive runtime terminated by liveness probe (runtime process only, pi sessions survive for startup-reattach); backoff restart per policy',
+  liveness_unhealthy: 'runtime terminated by liveness probe verdict (dead=process gone/port refused, zombie=unanswered for full zombie threshold with forensics collected; runtime process only, pi sessions survive for startup-reattach); backoff restart per policy',
   restart_failure: 'previous restart attempt failed to reach healthy state; continue backoff sequence',
   planned_rolling_restart: 'runtime exited with planned rolling-restart code (86); immediate restart with zero backoff and no crash count (design D5)',
 }
@@ -132,6 +133,22 @@ export function classifyRuntimeExit(input: {
   if (input.exitCode === PLANNED_EXIT_CODE) return 'planned-shutdown'
   if (input.appQuitting || input.stopping) return 'suppressed'
   return 'crash'
+}
+
+/**
+ * liveness 杀链决策日志的 reason 句子（dead / zombie 各一句；判据句形态对齐
+ * RESTART_DECISION_REASONS：可机械回答归因，不写自由文本）。
+ */
+function livenessKillReason(verdict: LivenessVerdict): string {
+  if (verdict === 'zombie') {
+    return 'zombie: port reachable but /health unanswered for the full zombie threshold '
+      + `(=${LIVENESS_ZOMBIE_THRESHOLD_MS}ms) — forensics (sample callstack + process table) `
+      + 'collected before killing; terminating the runtime process itself, pi child processes '
+      + 'survive and are re-attached by the runtime startup-reattach orchestration'
+  }
+  return 'dead: runtime process gone or port refused (confirmed death); terminating the runtime process itself '
+    + '(process-tree kill retired for liveness disposal, D4) — pi child processes survive and are '
+    + 're-attached by the runtime startup-reattach orchestration'
 }
 
 /**
@@ -395,10 +412,31 @@ export class RuntimeSupervisor implements IRuntimeSupervisor {
     this.lastStartError = null
 
     // [HISTORICAL] W5 改动 3：启动存活探针，监测 runtime「半活」状态。
-    // 探针在 stop() 时关闭，不会泄漏 timer。连续失败达阈值调 forceRestartForLiveness。
+    // 探针在 stop() 时关闭，不会泄漏 timer。2026-11-03 判据分级：探针回调携带
+    // 裁决类别（dead=确证死 / zombie=假死先取证），forceRestartForLiveness 只由
+    // 这两类进入；「忙」（event-loop 重算期 /health 超时）走 onBusy 沿 WARN，
+    // 不再触发杀链（误杀在判据结构上消除）。
+    const spawnedPid = spawned.child.pid
+    if (spawnedPid === undefined) {
+      // 不可达防御：waitForHealth 通过 = 进程在场且应答过 HTTP，pid 必有值。
+      // 触发即 spawn 编排被破坏，fail-fast 显式暴露而非带病起探针。
+      throw new Error('[runtime] spawned child pid missing after healthy start')
+    }
     this.livenessMonitor = new LivenessMonitor({
       port,
-      onUnhealthy: () => { void this.forceRestartForLiveness() },
+      pid: spawnedPid,
+      onUnhealthy: (verdict) => { void this.forceRestartForLiveness(verdict) },
+      onBusy: (info) => {
+        // 忙态沿 WARN（每轮忙态一次）：重算堵 event-loop 的可见性信号（治理告警入口），
+        // 不参与杀链。lag 遥测取最后健康时点快照（runtime 未上报 = undefined）。
+        mainLogger.warn('[supervisor] liveness busy (not killing)', {
+          action: 'supervisor_liveness_busy',
+          target: { pid: spawnedPid },
+          unansweredMs: info.unansweredMs,
+          eventLoopLag: info.eventLoopLag ?? null,
+          reason: 'port reachable but /health unanswered — runtime busy (event-loop recomputation?), no kill',
+        })
+      },
     })
     this.livenessMonitor.start()
 
@@ -482,10 +520,16 @@ export class RuntimeSupervisor implements IRuntimeSupervisor {
   }
 
   /**
-   * 强制重启「半活」进程（存活探针触发）——判死处置只重启 runtime 单进程（D4）。
+   * 强制重启「确证死 / 假死」的 runtime（存活探针触发，2026-11-03 判据分级）。
+   *
+   * 探针回调携带裁决类别（LivenessVerdict），杀链只由这两类进入：
+   * - dead：进程不存在 / 端口拒绝（确证死）——直接杀。
+   * - zombie：端口可连但连续 LIVENESS_ZOMBIE_THRESHOLD_MS（5min）无 HTTP 应答——
+   *   先死因取证（sample 抓栈 + 进程表快照落 crash-journal 目录）再杀。「忙」
+   *   （event-loop 重算期 /health 超时）不进入本方法（onBusy 沿 WARN，不杀）。
    *
    * [HISTORICAL] W5 改动 3：runtime 进程未退出（exitCode===null）但 HTTP 服务卡死时，
-   * 存活探针连续失败达阈值（LIVENESS_FAIL_THRESHOLD）后调用此方法。
+   * 存活探针判定后调用此方法。
    *
    * 处置范围（projection 一致性设计 D4 判死处置降粒度）：只终止 runtime 自身
    * （stopRuntimeProcess scope='process-only'），不枚举不杀 pi 后代——pi 子进程独立
@@ -503,44 +547,25 @@ export class RuntimeSupervisor implements IRuntimeSupervisor {
    *
    * 注意：markStopping 后 scheduleRestart 的 shouldRestart() 会返回 false（stopping 短路）。
    * 因此 reset() 必须在 scheduleRestart 之前调用，清掉 stopping 标志让重启策略放行。
-   * 顺序：markStopping → stopRuntimeProcess(process-only) → reset（清 stopping）→ scheduleRestart。
+   * 顺序：zombie 取证 → markStopping → stopRuntimeProcess(process-only) → reset（清 stopping）→ scheduleRestart。
    *
-   * @returns Promise（异步终止 + 重启编排）
+   * @param verdict 探针裁决（dead=确证死直接杀；zombie=先取证再杀；缺省 dead 兼容
+   *                无参调用——语义 = 按确证死处置）
+   * @returns Promise（异步取证 + 终止 + 重启编排）
    */
-  async forceRestartForLiveness(): Promise<void> {
-    console.warn('[runtime] Liveness probe failed threshold — restarting the runtime process itself (pi sessions survive; startup-reattach re-attaches after restart)')
-    // 杀链决策日志（D6-⑥ 第三处「supervisor 重启决策」，u5b 同形态：
-    // action/trigger/target/reason 字段化，经 main-logger 落盘 main-<date>.log）。
-    // mainLogger 未 init（单测）时 no-op。pid 必须在清理 child 前捕获。
-    //
-    // 事件循环滞后遥测（projection 一致性设计 D4，判死归因留档）：遥测取自
-    // 探针侧留存的「最后一次健康应答」——runtime 判死时刻已无响应，eventLoopLag 只能
-    // 是最后健康时点的快照（/health 响应体可选字段，runtime 基线不上报——供给端
-    // 接线前恒记 null + not-reported-by-runtime）；runtime 未上报时显式记 null +
-    // source 标记（归因留档，不做分支依据——IO 阻滞与真死锁在滞后分布上同形）。
-    const pid = this.child?.pid
-    const monitor = this.livenessMonitor
-    const eventLoopLag = monitor?.lastHealthyResult?.eventLoopLag ?? null
-    const lastHealthyAt = monitor?.lastHealthyAt ?? null
-    mainLogger.warn('[supervisor] kill decision', {
-      action: 'supervisor_force_kill_halfalive',
-      trigger: 'liveness_unhealthy',
-      target: { pid },
-      scope: 'runtime-process-only',
-      descendantsKilled: false,
-      eventLoopLag,
-      eventLoopLagSource: eventLoopLag ? 'health-probe' : 'not-reported-by-runtime',
-      outageMs: lastHealthyAt !== null ? Date.now() - lastHealthyAt : null,
-      reason: 'process alive (exitCode null) but HTTP liveness probe failed threshold '
-        + `(${LIVENESS_FAIL_THRESHOLD} consecutive times); terminating the runtime process itself `
-        + '(process-tree kill retired for liveness disposal, D4) — pi child processes survive and are '
-        + 're-attached by the runtime startup-reattach orchestration',
-    })
-    // 崩溃登记清单双写（crash-forensics D1 第四挂点）：必须与 kill decision 同点在杀链
-    // 发起处记——下方 markStopping 后，本强杀的 exit 落 onRuntimeExit 的 stopping
-    // 早退分支无行可写（D1：按 stopping 写 crash 会把正常退出记假 crash，故该分支
-    // 零写入），不在发起处记则 liveness 判死在登记清单永久缺席。
-    crashJournal.append({ layer: 'runtime', event: 'unresponsive', reason: 'liveness-unhealthy' })
+  async forceRestartForLiveness(verdict: LivenessVerdict = 'dead'): Promise<void> {
+    // zombie 先取证后杀：取证失败（sample 不存在/超时/ps 失败）不阻塞杀链
+    // （best-effort，错误随 forensics.errors 落 kill decision 日志）。
+    const pidForForensics = this.child?.pid
+    let forensics: ZombieForensicsResult | null = null
+    if (verdict === 'zombie' && pidForForensics !== undefined) {
+      forensics = await collectZombieForensics(pidForForensics)
+    }
+    console.warn(`[runtime] Liveness probe verdict=${verdict} — restarting the runtime process itself (pi sessions survive; startup-reattach re-attaches after restart)`)
+    // 双写（kill decision 日志 + 崩溃登记清单行）必须在下方首个 await 之前完成——
+    // markStopping 后本强杀的 exit 落 stopping 早退分支零写入，测试契约钉住同步段双写。
+    this.logLivenessKillDecision(verdict, forensics)
+    this.appendLivenessCrashJournal(verdict, forensics)
     // markStopping 防止 stop 触发的 exit 被 onRuntimeExit 当崩溃重复重启
     this.policy.markStopping()
     this.clearRestartTimer()
@@ -556,6 +581,65 @@ export class RuntimeSupervisor implements IRuntimeSupervisor {
     this.scheduleRestart('crash', 'liveness_unhealthy')
   }
 
+  /**
+   * 杀链决策日志（D6-⑥ 第三处「supervisor 重启决策」，u5b 同形态：action/trigger/
+   * target/reason 字段化，经 main-logger 落盘 main-<date>.log；mainLogger 未 init
+   * （单测）时 no-op）。pid 必须在清理 child 前捕获（本方法先于 clearRuntimeState
+   * 调用）。
+   *
+   * 事件循环滞后遥测（projection 一致性设计 D4，判死归因留档）：遥测取自探针侧留存
+   * 的「最后一次健康应答」——runtime 判死时刻已无响应，eventLoopLag 只能是最后健康
+   * 时点的快照（/health 响应体可选字段，runtime 基线不上报——供给端接线前恒记 null +
+   * not-reported-by-runtime）；runtime 未上报时显式记 null + source 标记（归因留档，
+   * 不做分支依据——IO 阻滞与真死锁在滞后分布上同形）。
+   */
+  private logLivenessKillDecision(verdict: LivenessVerdict, forensics: ZombieForensicsResult | null): void {
+    const pid = this.child?.pid
+    const monitor = this.livenessMonitor
+    const eventLoopLag = monitor?.lastHealthyResult?.eventLoopLag ?? null
+    const lastHealthyAt = monitor?.lastHealthyAt ?? null
+    mainLogger.warn('[supervisor] kill decision', {
+      action: 'supervisor_force_kill_halfalive',
+      trigger: 'liveness_unhealthy',
+      verdict,
+      target: { pid },
+      scope: 'runtime-process-only',
+      descendantsKilled: false,
+      eventLoopLag,
+      eventLoopLagSource: eventLoopLag ? 'health-probe' : 'not-reported-by-runtime',
+      outageMs: lastHealthyAt !== null ? Date.now() - lastHealthyAt : null,
+      zombieThresholdMs: LIVENESS_ZOMBIE_THRESHOLD_MS,
+      forensics: forensics ? {
+        callstackFile: forensics.callstackFile,
+        procTableFile: forensics.procTableFile,
+        errors: forensics.errors,
+      } : undefined,
+      reason: livenessKillReason(verdict),
+    })
+  }
+
+  /**
+   * 崩溃登记清单行（crash-forensics D1 第四挂点）：必须与 kill decision 同点在杀链
+   * 发起处记——markStopping 后，本强杀的 exit 落 onRuntimeExit 的 stopping 早退分支
+   * 无行可写（D1：按 stopping 写 crash 会把正常退出记假 crash，故该分支零写入），
+   * 不在发起处记则 liveness 判死在登记清单永久缺席。zombie 行携带取证文件路径
+   * （detailPath，相对 dataDir）——死因归因从条目清单行直达证据。
+   */
+  private appendLivenessCrashJournal(verdict: LivenessVerdict, forensics: ZombieForensicsResult | null): void {
+    const pid = this.child?.pid
+    crashJournal.append(verdict === 'zombie'
+      ? {
+        layer: 'runtime',
+        event: 'unresponsive',
+        reason: 'liveness-zombie',
+        pid: pid ?? null,
+        detailPath: forensics?.callstackFile
+          ? `logs/crashes/${forensics.callstackFile.split('/').pop()}`
+          : null,
+      }
+      : { layer: 'runtime', event: 'unresponsive', reason: 'liveness-unhealthy' })
+  }
+
   /** 关闭存活探针（幂等：未启动则无操作） */
   private stopLivenessMonitor(): void {
     if (this.livenessMonitor) {
@@ -566,6 +650,11 @@ export class RuntimeSupervisor implements IRuntimeSupervisor {
 
   /**
    * runtime 子进程退出处理（自然崩溃路径）。
+   *
+   * 不变量：进程退出即停存活探针。退出是 supervisor 已知其死的权威信号，探针不再
+   * 独立判第二次——否则退避窗口内旧探针带已死 pid tick 会 ESRCH 判 dead，经
+   * forceRestartForLiveness 产出虚假裁决（取消在途退避重启、写 target pid=null 的
+   * kill decision 与重复 crash 行、双计崩溃计数）。
    *
    * [HISTORICAL] 核心重启编排：
    * 1. 清 child/port（幂等检查不再误判存活）
@@ -579,6 +668,8 @@ export class RuntimeSupervisor implements IRuntimeSupervisor {
   private onRuntimeExit(code: number | null): void {
     // 先捕获 pid 再清状态：杀链决策日志需要「谁死了」（u5b kill decision 的 target 语义）
     const pid = this.child?.pid
+    // 进程退出即停探针：旧探针带着已死 pid 继续 tick 会产出虚假 dead 裁决（理由见方法注释）
+    this.stopLivenessMonitor()
     // 清状态（幂等检查据此判定无活进程）；实例标识 / 目标快照随进程死亡失效
     // （防旧代快照——含其中 token——把重连目标拉回死实例）
     this.child = null

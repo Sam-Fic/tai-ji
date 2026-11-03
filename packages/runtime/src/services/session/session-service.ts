@@ -49,7 +49,7 @@ import { createModelOverrideQuery } from './model-override-query.js'
 import type { OversizeAwareResult } from './session-records.js'
 import { SessionModelControl } from './session-model-control.js'
 import { isModelInRegistry, providerHasCredential } from './session-model-guards.js'
-import { SessionHistoryReader } from './history-rebuild-cache.js'
+import { SessionHistoryReader } from './history-reader.js'
 import type { HistoryFileReadResult, HistoryWindowResult } from '../session-history.js'
 import { resolveSkillPaths, resolveExtensionPaths, resolveReplaceSystemPrompt, resolveLaunchPresetOptions } from './launch-params.js'
 // 行为保持抽取的实现体外移（max-lines 门禁）：summary 派生视图 / projection bus 视图构建，
@@ -82,6 +82,7 @@ import { publishBackgroundTasksUpdate } from '../background-task/update-broadcas
 import type { IConfigStore } from '../ports/config.js'
 import type { ISessionStore, SessionOutcome } from '../ports/session.js'
 import type { IGitInfoReader } from '../ports/git-info.js'
+import type { ITurnIndexScanner } from '../ports/turn-index-scanner.js'
 import type { IManagedSessionView, ScannedSession, SendMessageHook } from './types.js'
 import type { DeliverySubmitResult, SessionDeliveryRegistry } from './session-delivery-registry.js'
 import type { WorkspaceService } from '../workspace/workspace-service.js'
@@ -176,9 +177,9 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
    */
   private sessionListQuery!: SessionListQueryService
   /**
-   * 消息撤回编排域（message-revoke 设计 §3.3 D2，U4）：revokeMessage 七步编排——
-   * revoking hold 置位/释放 + cancel active + 定位 + 清缓存 + 信令前校验 + nav 信令 +
-   * reply。构造点在 dispatcher 之后（sendSystemCommand 依赖其实例），见 assembleSubmodules。
+   * 消息撤回编排域（message-revoke 设计 §3.3 D2，U4）：revokeMessage 六步编排——
+   * revoking hold 置位/释放 + cancel active + 定位 + 信令前校验 + nav 信令 + reply。
+   * 构造点在 dispatcher 之后（sendSystemCommand 依赖其实例），见 assembleSubmodules。
    */
   private revokeOrchestrator!: RevokeOrchestrator
   /**
@@ -194,7 +195,7 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
    * 状态派生视图域（S5 迁出至 session-state-projection.ts）：replicated states 快照派生视图族 +
    * context/usage 副作用域。onSessionRegistered 订阅者 = projection 自身（构造器组装期
    * 先于本 Facade 剩余订阅体注册，播种顺序与迁移前逐一等价）；销毁经 onSessionDisposed
-   * 由 removeSessionEntry 第 ⑤ 步直调。
+   * 由 removeSessionEntry 第 12 步直调。
    */
   private projection!: SessionStateProjection
   /** trace/system-prompt 同步域（S4 迁出，构造器内组装 deps——见构造器注释） */
@@ -334,10 +335,10 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
    */
   backgroundTasks!: BackgroundTaskService
   /**
-   * history 读编排域（S6 迁出至 history-rebuild-cache.ts）：getHistory 三分支重建
-   * （缓存增量/RPC 全量/尾读降级）+ [u6] 游标翻页 + inflight 合并（getFullHistory 文件
-   * 直读已随全量通路退役）。销毁经 onSessionDisposed 由 removeSessionEntry 第 ⑤ 步直调
-   * （与 traceSync/projection/records 并列）。
+   * history 读编排域（S6 迁出、turn-boundary-index 落位于 history-reader.ts）：索引窗口
+   * 读取（TurnIndexStore reader 自持 + 单次快照选窗）+ [u6] 游标翻页 + inflight 合并。
+   * 销毁经 onSessionDisposed 由 removeSessionEntry 第 12 步直调（与 traceSync/projection/
+   * records 并列）；真删除专属取消经 onSessionDeleted 转发（u-lifecycle 挂点接线）。
    */
   private historyReader!: SessionHistoryReader
   /**
@@ -345,7 +346,7 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
    * 磁盘读侧/动作/引擎配置。onSessionRegistered 订阅者 = records 自身（构造器组装期
    * 注册顺序在 projection 之后、reconciler 之前——播种 → record 注册 → 对账，与迁移前
    * Facade 订阅体内顺序逐一等价）；销毁经 onSessionDisposed 由 removeSessionEntry
-   * 第 ⑤ 步直调（与 traceSync/projection 并列）。
+   * 第 12 步直调（与 traceSync/projection 并列）。
    */
   private records!: SessionRecords
   /**
@@ -399,6 +400,13 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
     private readonly gitInfoReader: IGitInfoReader,
     private readonly workspaceService: WorkspaceService,
     messageBus?: IMessageBus,
+    /**
+     * turn 边界索引扫描 port（historyReader 索引构建与窗口校验的 infra IO 原语，C-comm-03
+     * 须经 port）。可选 = 存量测试构造零波及；infra 实装由组合根 index.ts 装配注入（services
+     * 层禁 value import infra 实现），未注入时 history 索引路径 fail-fast（reader.store 的
+     * scannerPort 抛错并给恢复动作），尾读兼容分支不受影响。
+     */
+    private readonly turnIndexScanner?: ITurnIndexScanner,
   ) {
     // 构造器瘦身（H2）：9 子模块组装 + 创建侧订阅接线与 pi 崩溃 exit 编排分离为两个
     // 私有方法（行为零变化——语句顺序逐行保持，时序不变式钉在各方法 JSDoc）。
@@ -466,24 +474,22 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
       isModelRegistered: (provider, modelId) => isModelInRegistry(this.configService, provider, modelId),
       hasProviderCredential: (provider) => providerHasCredential(this.configService, provider),
     })
-    // history 读编排域（S6 迁出至 history-rebuild-cache.ts）：deps 窄注入——pm（活跃判定
-    // + RPC client）与 sessionStore（重建/尾读/全量文件读转换链），无私有状态耦合。
-    // [btw-question 重载链修复] resolveBtwThreadFile：btw 线离线尾读的线文件解析，查
+    // history 读编排域（S6 迁出、turn-boundary-index 落位 history-reader.ts）：deps 窄注入——pm（在场性
+    // 查询 + 兼容链）与 sessionStore（定位/转换链）。[组合接线裁定] 构造点签名冻结：TurnIndexStore
+    // 由 reader 构造时自持，删除挂点经 reader.onSessionDeleted 转发（u-lifecycle），不在本文件
+    // 重复实例化 store。
+    // [btw-question 重载链修复] resolveBtwThreadFile：btw 线历史读取的线文件解析，查
     // BtwService 注册表（rebuildFromDisk 启动重建的内存派生视图）。late-bound 闭包——btwService
     // 在组合根晚于本构造（setBtwService 注入），未注入（存量测试构造）时 resolve 返回
-    // undefined → btw 尾读 warn 空页，主会话路径零影响。
+    // undefined → btw 判别 miss 走主会话定位，主会话路径零影响。
+    // [C-comm-03] scanner：turn 边界扫描 port 从本 Facade 构造参透传（组合根 index.ts 装配
+    // infra 实装——services 层禁 value import infra 实现，无缺省绑定；未注入走索引路径 fail-fast）。
     this.historyReader = new SessionHistoryReader({
       pm: this.pm,
       sessionStore: this.sessionStore,
       resolveBtwThreadFile: (sessionId) => this.btwService?.getLine?.(sessionId)?.sessionFilePath,
-      // [session-cold-switch-perf §3.3-1] historyCacheReady 帧出口（session 级 publish，
-      // 与 session.deliveryHandled 同形态；bus 未注入时 no-op——存量测试构造形态）。
-      publishToBus: (sessionId, msg) => this.messageBus?.publish(sessionId, msg),
+      scanner: this.turnIndexScanner,
     })
-    // [session-cold-switch-perf §3.3-1 态 3] 待启动任务的事件驱动启动挂点：唯一触发点 =
-    // switch 成功分支的 notifySessionActivated（此刻进程已获取；getHistory 分派自身不消费
-    // 槽不 spawn——查看路径永不消费执行槽）。回调异常由 notifySessionActivated 逐个隔离。
-    this.onSessionActivatedHandlers.push((summary) => this.historyReader.startPendingRebuild(summary.id))
     // 状态派生视图域（S5 迁出至 session-state-projection.ts）：deps 窄注入——session 查询经
     // lifecycle（Map 所有者）只读侧，messageBus 经 getter 每次调用动态读（setter 晚期注入
     // 语义与原 Facade 字段直读逐字等价）；fetchContext / persistSessionOutcome /
@@ -586,13 +592,12 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
 
     // 消息撤回编排域（message-revoke D2，U4）：deps 窄注入——occupancy 经 lifecycle 只读侧、
     // workflow 检查经 records 磁盘扫描（W17 workflow-record entry，run 启动冷路径立即落盘）、
-    // history 缓存清理绑本 Facade 既有入口、信令经 dispatcher.sendSystemCommand 旁路。
+    // 信令经 dispatcher.sendSystemCommand 旁路。
     this.revokeOrchestrator = new RevokeOrchestrator({
       getSession: (sessionId) => this.lifecycle.get(sessionId),
       ensureActive: (sessionId) => this.ensureActive(sessionId),
       hasRunningWorkflow: async (sessionId) =>
         (await this.records.getWorkflows(sessionId)).records.some((r) => r.status === 'running'),
-      evictHistoryRebuildCache: (sessionId) => this.evictHistoryRebuildCache(sessionId),
       // [message-revoke U6d] 撤回派生态失效：SessionRecords 丢 cursor + forceFullRebuild
       // 强制全量重建（plan 路径接 leafId 裁剪、subagent/workflow 照实保留）——复审 F2 拆边
       // 窄接口已接线（U4 曾以 no-op 占位，U6d 交付后核销；session 无激活缓存条目时
@@ -1233,31 +1238,28 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
     return client
   }
 
-  // ── history 读编排域（S6 迁出至 history-rebuild-cache.ts；三分支重建/inflight 合并/尾读降级详见该模块）──
+  // ── history 读编排域（S6 迁出、turn-boundary-index 落位 history-reader.ts；索引窗口编排/inflight 合并/兼容分支详见该模块）──
 
   /**
-   * 拉取 session 历史（缓存增量三分支重建 + 双预算窗口，实现迁 history-rebuild-cache.ts）。
+   * 拉取 session 历史（索引窗口读取 + 双预算选窗，实现迁 history-reader.ts）。
    * [u6] query 透传游标翻页参数（cursor/limitTurns/maxBytes，crash-resilience §3.3 D4 中期）。
    * [u6] getFullHistory 全量通路已退役（「加载更早」改走本方法的游标翻页，游标翻页完全替代）。
    */
   async getHistory(sessionId: string, query?: { cursor?: string; limitTurns?: number; maxBytes?: number }): Promise<HistoryWindowResult> { return this.historyReader.getHistory(sessionId, query) }
 
   /**
-   * 清空全部历史重建缓存（u7c：crash-forensics D4 memory-relief 可回收物 ① 的透传
-   * 出口——组合根 watchdog onRelief 接线调此方法，偏差 #28①；实现与语义见
-   * history-rebuild-cache.ts SessionHistoryReader.clearHistoryCache）。
+   * 真删除专属挂点（turn-boundary-index D5）：转发 historyReader.onSessionDeleted 到
+   * reader 自持的同一 TurnIndexStore 实例（组合接线裁定：不在本文件重复实例化 store）。
+   * 消费方 = 三个真删除入口在整树删除前的显式调用——lifecycle.delete 主会话分支（经
+   * ILifecycleSessionOps 可选成员）、btw closeLine（经 BtwServiceDeps 注入）、archive
+   * purgeArchive（经 ArchiveServiceDeps 注入）。普通销毁路径（pi 进程退出 / 强杀 /
+   * restore 清场）不经本方法——那四路走 removeSessionEntry 第 12 步的 onSessionDisposed
+   * （只清内存索引，不取消文件读取）。
    */
-  clearHistoryRebuildCache(): number { return this.historyReader.clearHistoryCache() }
+  onSessionDeleted(sessionId: string): void { this.historyReader.onSessionDeleted(sessionId) }
 
   /**
-   * 驱逐单 session 的历史重建缓存条目（B8，memory-leak-remediation §3.3-B8 候选 C）。
-   * 驱逐后重激活走单次全量重建（P7 张力四要素显式登记的代价）。实现与语义见
-   * history-rebuild-cache.ts SessionHistoryReader.onSessionReclaimed。
-   */
-  evictHistoryRebuildCache(sessionId: string): void { this.historyReader.onSessionReclaimed(sessionId) }
-
-  /**
-   * 消息撤回编排入口（message-revoke D2，U4）：七步编排全在 RevokeOrchestrator，reply
+   * 消息撤回编排入口（message-revoke D2，U4）：六步编排全在 RevokeOrchestrator，reply
    * 形状见 shared SessionRevokeMessageReply（D8 错误规格表 SSOT）。领域回执（六码）不走
    * error envelope；编排 throw（装配缺失类）由 transport handler 收尾。
    */
@@ -1331,8 +1333,8 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
   async getAgentCallHistory(sessionId: string, agentCallSessionId: string): Promise<HistoryFileReadResult> { return this.records.getAgentCallHistory(sessionId, agentCallSessionId) }
   /** agent call JSONL 路径（展示型，找不到返回空串；实现迁 session-records.ts）。 */
   async getAgentCallFilePath(sessionId: string, agentCallSessionId: string): Promise<string> { return this.records.getAgentCallFilePath(sessionId, agentCallSessionId) }
-  /** workflow 生命周期操作（经扩展 slash command，实现迁 session-records.ts）。 */
-  async workflowAction(sessionId: string, action: 'abort', runId: string): Promise<void> { return this.records.workflowAction(sessionId, action, runId) }
+  /** workflow 生命周期操作（abort / resume，经扩展 slash command，实现迁 session-records.ts）。 */
+  async workflowAction(sessionId: string, action: 'abort' | 'resume', runId: string): Promise<void> { return this.records.workflowAction(sessionId, action, runId) }
   /** [可视化 U3] 单 run 事件流原文拉取（大字段截断形态；实现详见 session-records.ts / workflow-run-events-reader.ts）。 */
   async getWorkflowRunEvents(sessionId: string, runId: string): Promise<WorkflowRunEventsReply> { return this.records.getWorkflowRunEvents(sessionId, runId) }
   /** [可视化 U3] 单 run DAG 静态蓝图拉取（core 解析器 + 成功缓存；实现详见 session-records.ts / workflow-run-events-reader.ts）。 */

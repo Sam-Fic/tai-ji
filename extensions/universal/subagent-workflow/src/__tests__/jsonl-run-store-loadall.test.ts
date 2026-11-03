@@ -416,3 +416,174 @@ describe("fold 覆盖事件消费（model-override → meta.modelOverride 派生
     expect(isRunSettled(run)).toBe(true);
   });
 });
+
+// ── 条目终局证明的 status 感知（restore 双装配窗实测回归锚）─────────────────────
+//
+// WorkflowRecordSettledEntryData.status 词表 = "done" | "interrupted"：收编中断条目
+// 与终态条目同 kind "settled"，仅 status 可判别。重建侧以「条目在场」充当终局证明的
+// 分支必须按 status 区分——把中断条目当终局证明会把可续跑 run 对全部重建路径
+//（托盘冷读 / 后续重启恢复）永久隐藏（实测链：装配 1 收编写中断条目 → 装配 2
+// loadAll 误判跳过 → 投影空 → 托盘恢复推送被清屏帧抹掉）。
+
+/** v2 settled 条目夹具（status 由用例给：done = 终局 / interrupted = 暂停态）。 */
+function v2SettledEntry(
+  runId: string,
+  status: "done" | "interrupted",
+  extra: Record<string, unknown> = {},
+): CustomEntry {
+  return {
+    type: "custom",
+    customType: WORKFLOW_RECORD_CUSTOM_TYPE,
+    data: {
+      v: WORKFLOW_RECORD_ENTRY_VERSION,
+      kind: "settled",
+      runId,
+      status,
+      settledAt: Date.now(),
+      callCount: 1,
+      usedTokens: 0,
+      ...(status === "interrupted" ? { errorCode: "crashed" } : { reason: "completed", outcome: "done" }),
+      ...extra,
+    },
+    id: `seed-v2-settled-${runId}`,
+    parentId: null,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+/** run-interrupted 转移帧（收编写点形态，terminal-actions dispatchRunTrigger 同构）。 */
+function interruptedLine(seq: number): string {
+  return JSON.stringify({
+    type: "run-interrupted",
+    seq,
+    ts: Date.now(),
+    errorCode: "crashed",
+    reason: "Process killed (kill-9 or crash recovery)",
+  });
+}
+
+describe("loadAll 条目终局证明 status 感知：interrupted 条目 ≠ 终局证明", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-loadall-status-"));
+    loggerMock.warn.mockClear();
+    loggerMock.error.mockClear();
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    setRunEventJournalDirForTest(undefined);
+  });
+
+  it("中断条目 + 流带 run-interrupted 帧（无 run-settled 帧）→ 重建为 interrupted（不跳过，可续跑）", async () => {
+    const runId = "wf-status-interrupted";
+    const recordPath = recordPathOf(tmpDir, runId);
+    fs.mkdirSync(path.dirname(recordPath), { recursive: true });
+    fs.writeFileSync(
+      recordPath,
+      [
+        JSON.stringify({
+          type: "run-created",
+          seq: 1,
+          ts: Date.now(),
+          runId,
+          workflowName: "test-script",
+          argsSummary: "{}",
+          scriptSource: "agent('a')",
+        }),
+        interruptedLine(2),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    const store = new JsonlRunStore({
+      runsDir: tmpDir,
+      ctx: mkCtx([v2RegisteredEntry(runId, recordPath), v2SettledEntry(runId, "interrupted")]),
+    });
+
+    const loaded = await store.loadAll();
+    // 核心回归：条目在场不再触发「条目判终局而流无终局帧」跳过——run 必须重建
+    expect(loaded.map((r) => r.runId)).toEqual([runId]);
+    expect(isRunSettled(loaded[0]!)).toBe(false);
+    expect(runSummary(loaded[0]!).status).toBe("interrupted");
+  });
+
+  it("终局条目 + 流无 run-settled 帧（残流）→ 跳过不重建（终局证明语义保持）", async () => {
+    const runId = "wf-status-terminal-residue";
+    const recordPath = recordPathOf(tmpDir, runId);
+    fs.mkdirSync(path.dirname(recordPath), { recursive: true });
+    fs.writeFileSync(
+      recordPath,
+      `${JSON.stringify({
+        type: "run-created",
+        seq: 1,
+        ts: Date.now(),
+        runId,
+        workflowName: "test-script",
+        argsSummary: "{}",
+        scriptSource: "agent('a')",
+      })}\n`,
+      "utf8",
+    );
+    const store = new JsonlRunStore({
+      runsDir: tmpDir,
+      ctx: mkCtx([v2RegisteredEntry(runId, recordPath), v2SettledEntry(runId, "done")]),
+    });
+
+    const loaded = await store.loadAll();
+    expect(loaded).toEqual([]);
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.stringContaining("settled entry present but record stream has no run-settled frame"),
+    );
+  });
+
+  it("流缺失 + 中断条目 → degraded 重建交恢复链（不按终局证明跳过）", async () => {
+    const runId = "wf-status-stream-missing";
+    const recordPath = recordPathOf(tmpDir, runId);
+    const store = new JsonlRunStore({
+      runsDir: tmpDir,
+      ctx: mkCtx([v2RegisteredEntry(runId, recordPath), v2SettledEntry(runId, "interrupted")]),
+    });
+
+    const loaded = await store.loadAll();
+    expect(loaded.map((r) => r.runId)).toEqual([runId]);
+    expect(isRunSettled(loaded[0]!)).toBe(false);
+  });
+
+  it("流缺失 + 终局条目 → 跳过（呈现范围归条目读者，语义保持）", async () => {
+    const runId = "wf-status-stream-gone-terminal";
+    const recordPath = recordPathOf(tmpDir, runId);
+    const store = new JsonlRunStore({
+      runsDir: tmpDir,
+      ctx: mkCtx([v2RegisteredEntry(runId, recordPath), v2SettledEntry(runId, "done")]),
+    });
+
+    const loaded = await store.loadAll();
+    expect(loaded).toEqual([]);
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.stringContaining("record stream missing but settled entry present"),
+    );
+  });
+
+  it("仅中断条目在场不抑制终局条目补写（续跑后终局：条目半边落终局）", async () => {
+    const runId = "wf-status-resumed-then-done";
+    const recordPath = recordPathOf(tmpDir, runId);
+    fs.mkdirSync(path.dirname(recordPath), { recursive: true });
+    fs.writeFileSync(recordPath, `${settledLine()}\n`, "utf8");
+    const appendEntry = vi.fn();
+    const store = new JsonlRunStore({
+      runsDir: tmpDir,
+      pi: { appendEntry } as unknown as Parameters<typeof JsonlRunStore>[0]["pi"],
+      ctx: mkCtx([v2RegisteredEntry(runId, recordPath), v2SettledEntry(runId, "interrupted")]),
+    });
+
+    const loaded = await store.loadAll();
+    expect(loaded.map((r) => r.runId)).toEqual([runId]);
+    expect(isRunSettled(loaded[0]!)).toBe(true);
+    // 流终局帧在场而 session 只有陈旧中断条目 → 终局条目必须补写（customType 同 v2 词表）
+    expect(appendEntry).toHaveBeenCalledWith(
+      WORKFLOW_RECORD_CUSTOM_TYPE,
+      expect.objectContaining({ kind: "settled", runId, status: "done" }),
+    );
+  });
+});

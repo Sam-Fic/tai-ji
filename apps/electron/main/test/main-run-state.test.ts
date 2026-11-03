@@ -136,6 +136,9 @@ vi.mock('../supervisor/port-discoverer.js', () => ({
 vi.mock('../supervisor/health-checker.js', () => ({
   waitForHealth: supervisorDepsMock.waitForHealth,
   isPortInUse: supervisorDepsMock.isPortInUse,
+  // 探针默认进程活性探测（liveness-probe 从本模块 import）：恒 alive 让 tick 走
+  // /health fetch 链（本文件用 fetch stub + fake timers 驱动探针，进程活性面不在此测）
+  probeProcessAlive: vi.fn(async () => ({ kind: 'alive' })),
 }))
 vi.mock('../supervisor/port-file.js', () => ({
   writePortFile: supervisorDepsMock.writePortFile,

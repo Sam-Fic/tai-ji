@@ -23,14 +23,19 @@
  *   与 Actionbar 同源单点）；两执行器均由壳层 provide，缺位时点击静默 no-op（导航目标
  *   的存在性/可打开性校验归 core 执行器，本组件不重复校验）。无 action 的行维持 div
  *   纯展示（旧行为零变化）。
+ * - pin 门控（tray-panel-interact §3.3 D6）：读 TRAY_PIN_STATE_KEY 注入（键定义与导出在
+ *   Actionbar.vue，本组件 import 同键）。commandId 命令行门控——面板未 pin 时降级为 div
+ *   纯展示行（不可点，与 Actionbar 按钮同形态）；hostAction 导航行**不门控**（导航是安全
+ *   操作）。注入缺省（undefined，非托盘挂载位）= 门控不生效，行照常可点（RL4 锁定方向）。
  */
 import type { TreeItem, TreeItemIcon } from '@zhushanwen/extension-protocol'
 import {
   ChevronRight, Check, X, Circle, Dot, Pause, GitBranch,
 } from '@lucide/vue'
 import type { Component } from 'vue'
-import { inject } from 'vue'
+import { computed, inject, unref } from 'vue'
 import { ACTION_EXECUTOR_KEY } from '../action-executor-key'
+import { TRAY_PIN_STATE_KEY } from './Actionbar.vue'
 import {
   CONTAINER_NAVIGATION_KEY,
   VIEW_SCOPE_SESSION_KEY,
@@ -60,6 +65,10 @@ const ICON_MAP: Record<TreeItemIcon, Component> = {
 const commandExecutor = inject(ACTION_EXECUTOR_KEY, undefined)
 const navigationExecutor = inject(CONTAINER_NAVIGATION_KEY, undefined)
 const viewSessionId = inject(VIEW_SCOPE_SESSION_KEY, undefined)
+/** pin 门控状态（托盘面板外壳 provide；缺省 undefined = 非托盘挂载位 = 门控不生效，RL4）。 */
+const trayPinState = inject(TRAY_PIN_STATE_KEY, undefined)
+/** 门控生效 = 注入值显式为 false（未 pin）；undefined（缺省）/ true 均不门控。 */
+const pinGated = computed(() => unref(trayPinState) === false)
 
 /** 行是否可点：action 下 commandId / hostAction 至少一个在场（缺省 = 纯展示行，旧行为）。 */
 const hasAction = (item: TreeItem): boolean =>
@@ -67,9 +76,19 @@ const hasAction = (item: TreeItem): boolean =>
   ((typeof item.action.commandId === 'string' && item.action.commandId !== '') ||
     item.action.hostAction !== undefined)
 
-/** 可点行的点击分派（单点 = dispatchTreeInteraction，与 Actionbar 同源；执行器缺位 no-op）。 */
+/** 命令行（commandId 在场即走命令链——与 hostAction 并存时 commandId 优先，分派优先级同源）。 */
+const isCommandRow = (item: TreeItem): boolean =>
+  typeof item.action?.commandId === 'string' && item.action.commandId !== ''
+
+/** 行是否可点（渲染为原生 button）：有 action，且非「pin 门控中的命令行」。
+ *  导航行（仅 hostAction）不门控——导航是安全操作（§3.3 D6）；命令行未 pin 时降级纯展示行。 */
+const isClickable = (item: TreeItem): boolean =>
+  hasAction(item) && (!isCommandRow(item) || !pinGated.value)
+
+/** 可点行的点击分派（单点 = dispatchTreeInteraction，与 Actionbar 同源；执行器缺位 no-op）。
+ *  门控中的命令行已降级为 div 纯展示行（div 上的 click 监听仍会触发），guard 一并拦下。 */
 const activate = (item: TreeItem): void => {
-  if (!hasAction(item)) return
+  if (!isClickable(item)) return
   dispatchTreeInteraction({
     commandId: item.action?.commandId,
     hostAction: item.action?.hostAction,
@@ -98,14 +117,15 @@ const depthPadding = () => ({ paddingLeft: `${currentDepth() * INDENT_PX}px` })
 <template>
   <div class="list-tree font-mono text-[length:var(--text-sm)] leading-relaxed" data-testid="gui-list-tree">
     <template v-for="(item, i) in items" :key="i">
-      <!-- 可点行 = 原生 button（键盘可达 + 语义正确）；纯展示行 = div（旧行为） -->
+      <!-- 可点行 = 原生 button（键盘可达 + 语义正确）；纯展示行 = div（旧行为）；
+           pin 门控中的命令行降级 div（与 Actionbar 按钮同形态） -->
       <component
-        :is="hasAction(item) ? 'button' : 'div'"
+        :is="isClickable(item) ? 'button' : 'div'"
         class="list-tree__item flex items-center gap-1.5"
-        :class="hasAction(item) ? 'w-full cursor-pointer text-left hover:bg-surface-hover' : ''"
-        :type="hasAction(item) ? 'button' : undefined"
+        :class="isClickable(item) ? 'w-full cursor-pointer text-left hover:bg-surface-hover' : ''"
+        :type="isClickable(item) ? 'button' : undefined"
         :style="depthPadding()"
-        :data-testid="hasAction(item) ? `gui-list-tree-action-${i}` : undefined"
+        :data-testid="isClickable(item) ? `gui-list-tree-action-${i}` : undefined"
         @click="activate(item)"
       >
         <!-- numbered：行首弱化序号（编辑器行号范式，占据 icon 槽位） -->

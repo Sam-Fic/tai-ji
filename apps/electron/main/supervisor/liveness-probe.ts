@@ -1,7 +1,7 @@
 /**
- * 存活探针（liveness probe）—— 检测 runtime「半活」状态。
+ * 存活探针（liveness probe）—— 检测 runtime「死 / 忙 / 假死」分级状态。
  *
- * 对应 spec §4.2 M2 子职责「存活探针」（W5 新增）。
+ * 对应 spec §4.2 M2 子职责「存活探针」（W5 新增；2026-11-03 判据分级改造）。
  *
  * [HISTORICAL] 为什么需要它：
  * supervisor 原本只监听 child_process 的 'exit' 事件判定 runtime 是否存活。
@@ -12,9 +12,21 @@
  * 解决：周期性调 /health 端点，连续失败达阈值则判定「半活」，
  * 触发回调让 supervisor 强制重启（forceRestartForLiveness）。
  *
+ * 判据分级（2026-11-03）：/health 跑在 runtime 主 event-loop 上（connection-manager
+ * 的 http server），重算单块期间 /health 必超时——「忙被判成死」是单布尔判据的结构
+ * 必然（历史事故：重算洪流期 liveness 3 连败强杀 runtime）。分级后：
+ * - 进程活性信号（probeProcessAlive：kill(pid,0) + net.connect）先判「死」——
+ *   进程消失 / 端口拒绝才可杀（连接建立由 OS accept 队列保证，与目标 JS 执行无关，
+ *   event-loop 堵死时仍可连 =「忙」的可判定分界）。
+ * - 端口可连但 /health 无应答 = 忙：不杀，记 WARN（进入忙沿一次）。
+ * - 忙持续超假死阈值（LIVENESS_ZOMBIE_THRESHOLD_MS，5min——历史最重同步块实测
+ *   11-12s，留 25 倍余量）= 假死（zombie）：回调 supervisor 先取证再杀。
+ * - /health 结果携带的 eventLoopLag 遥测仍只作归因留档，不参与判死（IO 阻滞与
+ *   真死锁在滞后分布上同形，D4 结论不变）。
+ *
  * 设计为纯函数 + 独立 class（无 electron 依赖）：
  * - checkHealthEndpoint 可被单测（fetch 用 vi.stubGlobal 替换）
- * - LivenessMonitor 管理定时器，supervisor 组合它
+ * - LivenessMonitor 管理定时器，supervisor 组合它；进程活性探测可注入（probe 参数）
  *
  * 注意：本模块的 checkHealthEndpoint 与 health-checker.ts 的同名函数语义不同——
  *   health-checker 版本返回 boolean（给 waitForHealth 启动期轮询用，越简单越好）；
@@ -22,10 +34,18 @@
  *   两者独立维护，避免启动期轮询逻辑被存活探针的字段需求污染。
  *
  * 依赖方向：liveness-probe → 全局 fetch（Electron/Node 18+ 内置）
+ *           + health-checker.probeProcessAlive（进程活性信号）
  */
+import { probeProcessAlive, type ProcessProbeOutcome } from './health-checker.js'
 
-/** 连续失败达此阈值则判定「半活」，触发强制重启（逐请求 2s 超时 × 3 次 × 5s 间隔 = 最迟 ~12s 发现卡死） */
-export const LIVENESS_FAIL_THRESHOLD = 3
+/**
+ * 假死（zombie）阈值（ms）：端口可连但 /health 连续 5min 无应答，才从「忙」升级
+ * 为「假死」（先取证后杀）。判据取纯时间阈值，不附加 eventLoopLag 条件：/health
+ * 无应答期间 runtime 无法上报 lag，滞后遥测只有最后健康时点的快照，「lag 持续顶格」
+ * 在结构上不可观测；该意图已由时间阈值覆盖——历史最重同步块实测 11-12s，5min 留
+ * 25 倍余量，重算单块是秒级~十秒级，5 分钟无应答才可能是真挂死。
+ */
+export const LIVENESS_ZOMBIE_THRESHOLD_MS = 300_000
 
 /**
  * 存活探针轮询间隔（ms）：本地回环 GET 轮询（0.2 QPS）对 runtime 压力可忽略，
@@ -35,10 +55,11 @@ export const LIVENESS_INTERVAL_MS = 5_000
 
 /**
  * 单次探针请求超时（ms）：/health 为本地回环轻端点（正常响应毫秒级，2s = 20 倍裕度），
- * fetch 逐请求硬超时（AbortSignal.timeout）保证 SIGSTOP 冻结等无响应形态快速判死，
- * 不会挂到 undici 默认 headersTimeout（300s）——判死窗口按上式 ~12s 兑现。
- * 健康期 event loop 短暂抖动至多误计一次失败（成功即清零），连续 3 次失败 = 持续 ~12s
- * 无响应，本身即半活判定，无误杀面。
+ * fetch 逐请求硬超时（AbortSignal.timeout）保证单次请求不挂住——SIGSTOP 冻结等无
+ * 响应形态按本次无应答计入，不会挂到 undici 默认 headersTimeout（300s）。超时只
+ * 贡献无应答时长累计，是否升级忙/假死由 LIVENESS_ZOMBIE_THRESHOLD_MS 时间窗判定：
+ * 健康期 event loop 短暂抖动至多误计一次无应答（下次成功即清零），秒级~十秒级重算
+ * 单块只落 busy 记 WARN，不判死。
  */
 export const LIVENESS_PROBE_TIMEOUT_MS = 2_000
 
@@ -138,47 +159,94 @@ export async function checkHealthEndpoint(port: number): Promise<HealthProbeResu
   }
 }
 
+/** 探针判定不可杀进程时回调的裁决类别：
+ * - dead：进程不存在 / 端口拒绝连接（确证死，直接杀）
+ * - zombie：端口可连但连续 LIVENESS_ZOMBIE_THRESHOLD_MS 无任何 HTTP 应答（假死，先取证再杀）
+ */
+export type LivenessVerdict = 'dead' | 'zombie'
+
+/** 进入忙态时的上下文（busy 沿回调载荷，WARN 归因留档用）。 */
+export interface LivenessBusyInfo {
+  /** 本次忙态的起点时刻：最近一次健康（或启动）以来首个无应答 tick 的 epoch ms */
+  unansweredSince: number
+  /** 无应答已持续时长 ms（回调时刻快照） */
+  unansweredMs: number
+  /** 最后一次健康应答的 eventLoopLag 遥测（runtime 未上报/无健康历史 = undefined） */
+  eventLoopLag?: EventLoopLagTelemetry
+}
+
 /** LivenessMonitor 构造参数 */
 export interface LivenessMonitorOptions {
   /** 要探测的 runtime 端口 */
   port: number
-  /** 连续失败达阈值时调（触发 supervisor.forceRestartForLiveness） */
-  onUnhealthy: () => void
+  /** runtime 进程 pid（进程活性探测的输入；一次 monitor 生命周期绑定一次 spawn） */
+  pid: number
+  /** 判定不可杀级别时调（dead=杀 / zombie=先取证再杀；触发后探针自停，不重复触发） */
+  onUnhealthy: (verdict: LivenessVerdict) => void
+  /** 进入忙态沿回调（每轮忙态触发一次，busy 期间不重复；省略 = 静默，探针行为不变） */
+  onBusy?: (info: LivenessBusyInfo) => void
   /** 轮询间隔 ms（默认 LIVENESS_INTERVAL_MS） */
   intervalMs?: number
-  /** 连续失败阈值（默认 LIVENESS_FAIL_THRESHOLD） */
-  failThreshold?: number
+  /** 假死阈值 ms（默认 LIVENESS_ZOMBIE_THRESHOLD_MS；测试注入短阈值） */
+  zombieThresholdMs?: number
+  /**
+   * 进程活性探测注入点（默认 health-checker.probeProcessAlive）。测试注入 stub，
+   * 免起真实进程/端口。
+   */
+  probe?: (pid: number, port: number) => Promise<ProcessProbeOutcome>
 }
 
 /**
- * 存活探针定时器管理器。
+ * 存活探针定时器管理器（四态状态机：healthy / busy / dead / zombie）。
  *
  * supervisor 在 start() 成功后创建并 start()，在 stop() 时 stop()。
- * 内部维护连续失败计数：
- * - 探测成功 → 清零计数
- * - 探测失败 → 计数 +1，达阈值时触发 onUnhealthy 回调并清零（避免一次卡死多次触发）
+ *
+ * 状态转移表（tick 事件 × 现态 → 次态；探测输入 = 进程活性 + /health 两级）：
+ *
+ * | 现态    | 事件（探测结果）                       | 次态    | 动作 |
+ * |---------|----------------------------------------|---------|------|
+ * | *       | 进程消失 / 端口拒绝                    | dead    | onUnhealthy('dead')，探针自停 |
+ * | any     | 端口可连 + /health 2xx                 | healthy | 清无应答窗口，留存健康快照 |
+ * | healthy | 端口可连 + /health 无应答              | busy    | 记无应答起点，onBusy 沿回调 |
+ * | busy    | 端口可连 + /health 无应答（未超阈值）  | busy    | 累计无应答时长 |
+ * | busy    | 无应答持续 ≥ zombieThreshold           | zombie  | onUnhealthy('zombie')，探针自停 |
+ * | busy    | 端口连接超时（非拒绝）                 | busy    | 同无应答累计（冻结形态按忙处理） |
+ *
+ * 杀只用于「确证死」（dead）与「持续无应答超 25 倍余量」（zombie）；
+ * 「忙」（重算堵 event-loop）只记 WARN 不杀——误杀在判据结构上消除，不靠调参。
  *
  * [HISTORICAL] 用 setInterval 而非递归 setTimeout：
  *   间隔固定（LIVENESS_INTERVAL_MS），不受上次探测耗时影响（探测快则下次仍等满间隔）。
- *   单次探测不会重入（fetch 不会卡到下一次 tick——即便卡住，onUnhealthy 也只触发一次）。
+ *   单次探测不会重入（探测链不会卡到下一次 tick——probeProcessAlive 与 fetch 均带硬超时）。
  */
 export class LivenessMonitor {
   private timer: ReturnType<typeof setInterval> | null = null
-  private consecutiveFailures = 0
+  /** 状态机现态（探针内部态，不外泄——supervisor 只消费回调） */
+  private state: 'healthy' | 'busy' = 'healthy'
+  /** 本次无应答窗口起点（null = 无在途无应答窗口，healthy 态） */
+  private unansweredSince: number | null = null
+  /** 已触发的不可杀裁决（dead/zombie 回调只发一次，触发后探针自停） */
+  private triggered = false
   /** 最后一次健康应答的探针结果（含遥测）——判死归因日志的读取口，stop 不清（实例随 stop 一起被丢弃）。 */
   private lastHealthySnapshot: HealthProbeResult | null = null
   /** 最后一次健康应答时刻（epoch ms；null = 启动以来无健康应答）。 */
   private lastHealthyTime: number | null = null
   private readonly port: number
-  private readonly onUnhealthy: () => void
+  private readonly pid: number
+  private readonly onUnhealthy: (verdict: LivenessVerdict) => void
+  private readonly onBusy: ((info: LivenessBusyInfo) => void) | null
   private readonly intervalMs: number
-  private readonly failThreshold: number
+  private readonly zombieThresholdMs: number
+  private readonly probe: (pid: number, port: number) => Promise<ProcessProbeOutcome>
 
   constructor(opts: LivenessMonitorOptions) {
     this.port = opts.port
+    this.pid = opts.pid
     this.onUnhealthy = opts.onUnhealthy
+    this.onBusy = opts.onBusy ?? null
     this.intervalMs = opts.intervalMs ?? LIVENESS_INTERVAL_MS
-    this.failThreshold = opts.failThreshold ?? LIVENESS_FAIL_THRESHOLD
+    this.zombieThresholdMs = opts.zombieThresholdMs ?? LIVENESS_ZOMBIE_THRESHOLD_MS
+    this.probe = opts.probe ?? probeProcessAlive
   }
 
   /**
@@ -198,35 +266,80 @@ export class LivenessMonitor {
   /** 启动周期探针（幂等：已启动则无操作） */
   start(): void {
     if (this.timer) return
-    this.consecutiveFailures = 0
+    this.state = 'healthy'
+    this.unansweredSince = null
+    this.triggered = false
     this.timer = setInterval(() => { void this.tick() }, this.intervalMs)
     // unref：探针定时器不应阻止进程退出（Electron 主进程正常退出时无需等它）
     this.timer.unref()
   }
 
-  /** 停止探针并清零计数（幂等：未启动则无操作） */
+  /** 停止探针并复位状态（幂等：未启动则无操作） */
   stop(): void {
     if (this.timer) {
       clearInterval(this.timer)
       this.timer = null
     }
-    this.consecutiveFailures = 0
+    this.state = 'healthy'
+    this.unansweredSince = null
+    this.triggered = false
   }
 
-  /** 单次探测：成功清零并留存健康快照，失败累计，达阈值触发回调 */
+  /**
+   * 单次探测（状态机 tick）。探测自停语义：dead/zombie 回调发出后本实例不再
+   * 探测（triggered 标志）——处置链（杀 + 重启）会新建生命周期，旧探针静默退场，
+   * 不依赖调用方及时 stop。
+   */
   private async tick(): Promise<void> {
-    const result = await checkHealthEndpoint(this.port)
-    if (result.ok) {
-      this.consecutiveFailures = 0
-      this.lastHealthySnapshot = result
-      this.lastHealthyTime = Date.now()
+    if (this.triggered) return
+    const processProbe = await this.probe(this.pid, this.port)
+    if (processProbe.kind === 'dead') {
+      this.trigger('dead')
       return
     }
-    this.consecutiveFailures++
-    if (this.consecutiveFailures >= this.failThreshold) {
-      // 达阈值：清零（避免一次卡死反复触发）后通知 supervisor
-      this.consecutiveFailures = 0
-      this.onUnhealthy()
+    if (processProbe.kind === 'unreachable' && processProbe.reason === 'refused') {
+      // 进程在但 listen 句柄已不在 = HTTP 服务死透，与进程消失同判（确证死）
+      this.trigger('dead')
+      return
     }
+
+    // 进程活性无虞（alive 或 connect 超时的冻结形态）→ /health 服务健康探测
+    const result = await checkHealthEndpoint(this.port)
+    const now = Date.now()
+    if (result.ok) {
+      this.state = 'healthy'
+      this.unansweredSince = null
+      this.lastHealthySnapshot = result
+      this.lastHealthyTime = now
+      return
+    }
+
+    if (this.unansweredSince === null) {
+      this.unansweredSince = now
+    }
+    const unansweredMs = now - this.unansweredSince
+    if (this.state !== 'busy') {
+      // busy 沿：只在本轮转入忙态时回调一次（每轮忙态一条 WARN，不逐 tick 刷屏）
+      this.state = 'busy'
+      this.onBusy?.({
+        unansweredSince: this.unansweredSince,
+        unansweredMs,
+        eventLoopLag: this.lastHealthySnapshot?.eventLoopLag,
+      })
+    }
+    if (unansweredMs >= this.zombieThresholdMs) {
+      this.trigger('zombie')
+    }
+  }
+
+  /** 触发不可杀裁决：回调一次 + 探针自停（状态保持，实例随即被处置链丢弃） */
+  private trigger(verdict: LivenessVerdict): void {
+    if (this.triggered) return
+    this.triggered = true
+    if (this.timer) {
+      clearInterval(this.timer)
+      this.timer = null
+    }
+    this.onUnhealthy(verdict)
   }
 }
