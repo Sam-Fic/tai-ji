@@ -832,7 +832,7 @@
   },
   {
     "id": "PS-40",
-    "claim": "session JSONL append-only 是 taiji 两条消费链的共同前提：①runtime HistoryRebuildCache 增量拉取以「上次 get_entries 响应的 leafId」为 since 游标翻页，前提 = 旧 entry 永不删除/改写（compaction 也是 entry 追加）→ since 游标持续有效、增量 delta 有界；②cache-governance 批 3 sidecar 退役后的 model 反向读（沿文件物理尾逆序扫 model_change/assistant）同以 append-only 为前提——新 append 只会更靠近尾部，尾扫单调收敛且新数据自然可见。pi 若引入加载期以外的就地改写/删除（_rewriteFile 触发范围扩大、entry 修剪等），两条链同时失真（游标失效 / 反向读漏读错位）",
+    "claim": "session JSONL append-only 是 taiji 两条消费链的共同前提：①plugin 族派生视图读侧 session-api readEntries 的 sinceEntryId 游标增量（getEntries(since)，以「上次 get_entries 响应的 leafId」为游标翻页、回包 leafEntryId 供下次调用续传，与 guard.note 同源；原 P0 历史侧消费方随 turn-boundary-index 退役，历史读取改走 session.history 索引窗口不经 since 游标），前提 = 旧 entry 永不删除/改写（compaction 也是 entry 追加）→ since 游标持续有效、增量 delta 有界；②cache-governance 批 3 sidecar 退役后的 model 反向读（沿文件物理尾逆序扫 model_change/assistant）同以 append-only 为前提——新 append 只会更靠近尾部，尾扫单调收敛且新数据自然可见。pi 若引入加载期以外的就地改写/删除（_rewriteFile 触发范围扩大、entry 修剪等），两条链同时失真（游标失效 / 反向读漏读错位）",
     "piAnchor": [
       {
         "pkg": "pi-coding-agent",
