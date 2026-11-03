@@ -17,7 +17,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { existsSync, readFileSync, rmSync, mkdirSync, copyFileSync, readdirSync, writeFileSync, mkdtempSync, cpSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname, resolve, sep } from "node:path";
 // C-ext-31 禁入标记登记表（门禁单一实现导出）——fixture 植入的标记取自本表，
 // 不硬编码字面量：标记形态调整时红灯用例自动跟随
 import { PI_ENV_ADMISSION_GUARD_MARKERS } from "../lib/pi-env-admission-gate.mjs";
@@ -27,6 +27,31 @@ const STAGED = join(REPO, "apps/electron/resources/extensions/@zhushanwen");
 const VERIFY_SRC = join(REPO, "scripts/verify-staged-extensions.mjs");
 const ASSET_DIR_LIB_SRC = join(REPO, "scripts/lib/staged-asset-dirs.mjs");
 const GATE_LIB_SRC = join(REPO, "scripts/lib/pi-env-admission-gate.mjs");
+
+/**
+ * 读 bundle 产物图的全文本：index.js + 递归收集它相对 import 的本地产物
+ * （共享 chunk _shared/chunk-<hash>.js，含嵌套）。splitting 后扩展独有的代码在
+ * 入口、共享依赖在 chunk——「某标识符被 inline」类断言必须沿 import 图拼接
+ * 才与产物形态解耦（只读入口会在符号落 chunk 时假红，只读 chunk 会假绿）。
+ * 匹配相对 import 语句（含 from 形态与 side-effect 形态），仅追 .js 本地文件。
+ */
+function bundleGraphText(entryPath) {
+	const seen = new Set([entryPath]);
+	const queue = [entryPath];
+	let text = "";
+	while (queue.length > 0) {
+		const cur = queue.pop();
+		const src = readFileSync(cur, "utf8");
+		text += src;
+		for (const m of src.matchAll(/["'](\.\.?\/[^"']+\.js)["']/g)) {
+			const target = resolve(dirname(cur), m[1]);
+			if (seen.has(target) || !existsSync(target)) continue;
+			seen.add(target);
+			queue.push(target);
+		}
+	}
+	return text;
+}
 
 /**
  * mirror 复制检查脚本进 <tmp>/scripts/ 时同步带 scripts/lib/ 下两个被 import 的
@@ -45,10 +70,12 @@ describe("builtin-ext-bundle (wave:builtin-ext-bundle)", () => {
 	it("TC3: bundle 自动 inline 静态 value 依赖（pi-ask-user 含 @zhushanwen/extension-protocol 的 runtime export）", () => {
 		const idx = join(STAGED, "pi-ask-user/index.js");
 		expect(existsSync(idx), "staged pi-ask-user/index.js 存在").toBe(true);
-		const src = readFileSync(idx, "utf8");
+		// splitting 后 protocol runtime value 可能落共享 chunk（_shared/chunk-<hash>.js）
+		// 而非入口——沿 import 图拼接入口 + chunk 全文本断言（bundleGraphText）
+		const src = bundleGraphText(idx);
 		// @zhushanwen/extension-protocol 有 runtime value export（u5 迁移后 = uiFormInteract /
 		// UI_FORM_MARKER，旧 ASK_USER_MARKER / PROTOCOL_VERSION 已随 a384df59d 换血移除），
-		// esbuild 应将其 inline 进 bundle（非 external）。若 inline 失败，bundle 里不会有这些标识符。
+		// esbuild 应将其 inline 进产物图（非 external）。若 inline 失败，产物里不会有这些标识符。
 		// 锚点换血记录（MF-2-1）：u5（a384df59d）ASK_USER_MARKER|PROTOCOL_VERSION →
 		// uiFormInteract|UI_FORM_MARKER——协议范围再迁移时须同步更新此锚点，防过时恒红。
 		expect(src, "protocol runtime value 被 inline").toMatch(/uiFormInteract|UI_FORM_MARKER/);
@@ -59,7 +86,8 @@ describe("builtin-ext-bundle (wave:builtin-ext-bundle)", () => {
 	it("TC4: bundle 自动 inline 跨 ext workspace value import（pi-goal 含 pi-pending-notifications 的 countActiveFromEntries）", () => {
 		const idx = join(STAGED, "pi-goal/index.js");
 		expect(existsSync(idx)).toBe(true);
-		const src = readFileSync(idx, "utf8");
+		// 同 TC3：符号可能落共享 chunk，沿 import 图拼接断言
+		const src = bundleGraphText(idx);
 		// countActiveFromEntries 是 goal 从 @zhushanwen/pi-pending-notifications 的 value import
 		// （extensions/universal/goal/src/adapters/event-handlers/agent-end.ts），esbuild 应 inline。
 		// 这正是本 bug 的根因形态（workspace value import 旧机制拷不到），bundle 从结构上消除。
@@ -91,9 +119,13 @@ describe("builtin-ext-bundle (wave:builtin-ext-bundle)", () => {
 		const scoped = join(root, "staged/@zhushanwen");
 		const perm = join(scoped, "pi-permission");
 		mkdirSync(perm, { recursive: true });
-		// 构造残缺 staged：复制 permission（index.js + package.json），wasm 按 withWasm 决定是否拷
+		// 构造残缺 staged：复制 permission（index.js + package.json），wasm 按 withWasm 决定是否拷。
+		// 共享 chunk（2026-11-03 splitting 后）必须随真实产物一并拷入：index.js 相对 import
+		// ../_shared/chunk-<hash>.js，mirror 缺该目录时 dry-run import 报 Cannot find module，
+		// 红灯源漂移（负向用例的 wasm 断言被 chunk 缺失噪音污染、正向用例恒红）。
 		copyFileSync(join(STAGED, "pi-permission/index.js"), join(perm, "index.js"));
 		copyFileSync(join(STAGED, "pi-permission/package.json"), join(perm, "package.json"));
+		cpSync(join(STAGED, "_shared"), join(scoped, "_shared"), { recursive: true });
 		if (withWasm) {
 			for (const w of ["tree-sitter-bash.wasm", "web-tree-sitter.wasm"]) {
 				copyFileSync(join(STAGED, "pi-permission", w), join(perm, w));
@@ -145,9 +177,45 @@ describe("builtin-ext-bundle (wave:builtin-ext-bundle)", () => {
 		// 拷贝无漂移：与源码逐字节一致
 		const srcScript = join(REPO, "extensions/universal/base-tool-enhance/bin/taiji-fg-wrap");
 		expect(readFileSync(script).equals(readFileSync(srcScript)), "bin/taiji-fg-wrap 与源逐字节一致").toBe(true);
-		// bundle 内联了包装脚本路径探测（resolveFgWrapScriptPath 被打包进 index.js）
-		const bundleSrc = readFileSync(join(STAGED, "pi-base-tool-enhance/index.js"), "utf8");
+		// bundle 内联了包装脚本路径探测（resolveFgWrapScriptPath 被打包进产物图——
+		// splitting 后沿入口 import 图拼接，防路径探测代码落共享 chunk 时只读入口假红）
+		const bundleSrc = bundleGraphText(join(STAGED, "pi-base-tool-enhance/index.js"));
 		expect(bundleSrc, "index.js 内联 taiji-fg-wrap 路径探测").toContain("taiji-fg-wrap");
+	});
+
+	/**
+	 * 共享 chunk 去重实质断言（2026-11-03 冷启动优化）：subagent-core（最大的共享库，
+	 * 曾被 subagent-workflow / canvas / base-tool-enhance 逐包重复内联）的定义在全部
+	 * staged 产物中恰好出现一次（落在共享 chunk），且引用它的入口 ≥ 2（证明确为
+	 * 跨包共享依赖，去重有意义）。
+	 *
+	 * 防 splitting 静默失效：有人关掉 splitting / 退回逐包 build 时，本断言红灯
+	 * （定义符会在 ≥2 个入口各出现一次）——其余用例（TC3/TC4）在退化形态下恒绿，
+	 * 无法拦住「优化悄悄丢失」。
+	 */
+	it("TC10: 共享依赖去重（subagent-core 定义全 staged 恰好一份，消费入口 ≥2）", () => {
+		const scopedDirs = readdirSync(STAGED, { withFileTypes: true })
+			.filter((e) => e.isDirectory())
+			.map((e) => e.name);
+		const pkgIndexes = scopedDirs
+			.filter((d) => d.startsWith("pi-"))
+			.map((d) => join(STAGED, d, "index.js"))
+			.filter((p) => existsSync(p));
+		const chunkDir = join(STAGED, "_shared");
+		const chunkFiles = existsSync(chunkDir)
+			? readdirSync(chunkDir).filter((f) => f.endsWith(".js")).map((f) => join(chunkDir, f))
+			: [];
+		expect(chunkFiles.length, "共享 chunk 目录存在且非空（splitting 在场）").toBeGreaterThan(0);
+
+		// 定义锚：esbuild keepNames 保留类名，产物定义形态 `SubagentService = class …`
+		//（源码 class 声明经转换；不含 = 的纯引用行不匹配）
+		const DEFINE_ANCHOR = /SubagentService\s*=/;
+		const definers = [...pkgIndexes, ...chunkFiles].filter((p) => DEFINE_ANCHOR.test(readFileSync(p, "utf8")));
+		expect(definers.length, "subagent-core 定义在全 staged 产物恰好一份（去重生效）").toBe(1);
+		expect(definers[0].split(sep).includes("_shared"), "定义落在共享 chunk 目录").toBe(true);
+
+		const consumers = pkgIndexes.filter((p) => readFileSync(p, "utf8").includes("SubagentService"));
+		expect(consumers.length, "引用该依赖的入口 ≥2（确为跨包共享，去重有意义）").toBeGreaterThanOrEqual(2);
 	});
 
 	it("TC8: bundle 拷贝 pi.skills 资源目录（M6a-04，manifest 资源拷贝分支）", () => {
