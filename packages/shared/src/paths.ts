@@ -249,6 +249,7 @@ export const PI_SESSION_TREE_SEGMENTS = ['sessions', 'subagents', 'btw', 'archiv
 //     logs/{pi-<date>.jsonl(.N.gz), pi-crash-<date>.log, signal-forensics-<date>.jsonl}
 //     subagents/{sessions/, records/, model-switch/}
 //     workflow/runs/<runId>.record.jsonl
+//     history-index/turns.json
 //
 // 新域接入规约（两步）：① 树内新增 domain 目录；② session-store-paths.ts 新增一个
 // 具名纯推导函数（join(getSessionStoreDir(dataDir), sessionId, '<domain>')）+ 本文件
@@ -519,6 +520,26 @@ export function getImageCacheDir(sessionId: string, dataDir?: string): string {
 export function getSessionArtifactsDir(sessionId: string, dataDir?: string): string {
   assertPiSessionId(sessionId)
   return join(getSessionStoreDir(dataDir), sessionId, 'artifacts')
+}
+
+/**
+ * turn 边界索引文件（`<root>/<sessionId>/history-index/turns.json`，域 12，turn-boundary-index D1）。
+ *
+ * 历史读取的持久派生加速副本：只保存 user turn 边界 entryId 与字节范围，不含消息
+ * 正文、永不回写主 JSONL（AX1：session JSONL 是唯一事实源，删除索引只损失速度）。
+ * 维护（首次建索引 / stat 失效重建 / 追加续扫）由 runtime TurnIndexStore 承担；目录与
+ * 文件随整树删除回收，tmp 残留（turns.json.tmp，固定名）读取侧忽略、清收随整树删除。
+ * 主会话用主 sessionId，btw 线用线 sessionId。
+ *
+ * 纯函数无副作用——不创建目录（首次提交 turns.json 前的同步段内 mkdir），仅做路径推导。
+ *
+ * @param sessionId 会话 id（子目录分区，须与 `isPiSessionId` 同域）
+ * @param dataDir   可选数据根目录（测试注入）；缺省读 getDataDir()
+ * @throws Error 当 sessionId 含路径分隔符、冒号、空串或首尾非字母数字
+ */
+export function getSessionHistoryIndexFile(sessionId: string, dataDir?: string): string {
+  assertPiSessionId(sessionId)
+  return join(getSessionStoreDir(dataDir), sessionId, 'history-index', 'turns.json')
 }
 
 // ── run 目录运行态（crash-forensics D1/D3）────────────────────────────────────

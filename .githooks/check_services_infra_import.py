@@ -85,6 +85,15 @@ DOCUMENTED_MODULES = {
     # 无意义间接层，同 argv-redact / pi-protocol 门面族裁决形态。
     # 登记同步见 docs/architecture/runtime-layering.md §3 ③h
     "entry-tree-builder",
+    # turn-index-types（2026-11-03，turn-boundary-index）：kernel 类纯常量 + 纯函数 + 契约
+    # 类型（无状态、无 IO、无副作用：TURN_INDEX_VERSION 常量、索引契约接口三件、
+    # parseTurnIndexContent 字符串收窄 guard / snapshotToTurnIndexFile / turnIndexFileToSnapshot
+    # 纯对象变换，grep 核实文件零 import 语句）——services 侧消费方仅 turn-index-store
+    # （sidecar 读写时的收窄与序列化变换），为纯函数定义 port 只会增加无意义间接层，
+    # 同 argv-redact / pi-protocol 门面族裁决形态；扫描原语 turn-index-scanner 含文件 IO
+    # 不属本豁免，走 ITurnIndexScanner port（services/ports/turn-index-scanner.ts）注入。
+    # 登记同步见 docs/architecture/runtime-layering.md §3 ③i
+    "turn-index-types",
 
 }
 
