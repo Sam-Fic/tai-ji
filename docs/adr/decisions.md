@@ -1277,3 +1277,13 @@ WorkflowTab 步骤列表的数据源绑定从「workflow-record 全量快照（6
 **不采用**：继续 appendEntry custom entry（任务数据进会话流 = 进 LLM 上下文的 token 污染 + 三件套还原逻辑）；共享单文件 `scheduler.json`（v1 旧形态，多 session 共写无隔离——旧文件按用户裁决不迁移、留盘为孤儿）；写 session 存储树（分片归 session 生命周期，与「跨重启恢复」语义冲突，且 `<agentDir>` 才是 pi 扩展可达的自有目录）。
 
 **登记**：实装 = `packages/extension-protocol/src/extensions/scheduler/store.ts`（快照契约单源）+ `./scheduler-store` 子出口（package.json exports / publishConfig / tsup entry 三处）+ `extensions/universal/scheduler/src/{backend,index}.ts`（唯一写方与装配点）+ `resources/plugins/scheduler-manager/index.ts`（只读面板）。数据治理登记 = [data-source-registry.md](../architecture/data-source-registry.md) #88（含 no-session 免锁例外与孤儿例外的已知例外列）。v1 旧 store 孤儿不迁移（与新分片同目录不同名互不冲突，不读不写留盘）。设计文档 scheduler-redesign（过程产物不入库），本条即该裁决的现行登记处。
+
+### ADR-0184 托盘按钮悬停 title 恢复：推翻 2026-10-19「原生 title 退役」裁决（2026-11-03 用户裁决，tray-panel-interact D8）
+
+2026-10-19 裁决托盘按钮原生 title 随状态提示退役（即时反馈归 160ms 悬停面板）；本交付恢复原生 title。title 文案 = 宿主 i18n 模板拼接（title 是宿主渲染行为；事实字段 title/badge/progress 全部来自扩展 `WidgetMeta`，单一事实源：扩展给事实、宿主给文案模板）。分段省略规则：进度段「{badge} 运行中 / {total}」仅用于 viewId 封闭集合（progress 语义 = 运行数/全量数的条目）；集合外条目 title = 「{title} · {badge ?? progress.label}」；字段缺失分支整段略去、不输出 undefined 字面。与 aria-label 并存不互斥（视觉 hover 即时反馈走 title，屏幕阅读器全文走 aria-label）。完整规则与推翻依据登记于 `packages/renderer/src/components/panel/tray/TrayWidgetButton.vue:44-56` 头注（本条即其决策登记处）。
+
+**推翻依据**：① 用户在托盘交互问题链明确要求悬停内容；② 160ms 面板延迟期间 title 是鼠标用户唯一即时反馈（aria-label 对鼠标用户不可见，空窗内无任何反馈）。
+
+### ADR-0185 断连告知的壳层分工：面板级断连提示条降为组件级防御契约（2026-11-03 裁决，tray-panel-interact 发现 2/F1）
+
+桌面壳 App.vue 以 `connectionState !== 'connected'` 整屏摘除 AppShell（waiting-runtime / 连接族过渡屏 / restarting / failed 四态各有壳级呈现），WS 任意非 connected 态托盘面板随壳卸载——面板级断连提示条（TrayWidgetPanel「连接已断开，内容可能过期」banner，wsState !== 'connected' 即显示）在桌面壳**结构性无触发窗**（壳层门控自初始导入即存在，非本批回归）。裁决：断连告知由壳层四态过渡屏/错误页承担；面板级提示条保留为组件级防御契约（RL5 单测 6/6 承载），真机断言按壳层呈现判定。**不采用**：改壳层门控让面板在断连态保持可达（属启动/连接架构域的 UX 决策——面板脱离会话数据源后的信息时效与误导读风险未论证，超出本交付范围）。
