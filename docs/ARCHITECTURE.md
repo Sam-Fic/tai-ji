@@ -93,6 +93,8 @@ pi 子进程事件 → infra/pi/event-adapter(翻译) → ServerMessage(WS)
 
 **workflow/subagent 运行态数据流（介质归位 [ADR-0094](adr/decisions.md)，record 单源 [ADR-0082](adr/decisions.md) D1）**：run 与 record 的运行态唯一事实写 = 事件流追加（run `<runId>.record.jsonl`——D1 由 `.events.jsonl` 更名、run 侧 state 快照已删，旧两件套不读不写；record `<sa-id>.events`）；主 session JSONL 每实体只写注册 + 终态两条 v2 小条目；manifest 是事件流 fold 的物化派生视图（可删可重建）。runtime 读请求只读内存派生视图——派生视图由「pi entry 游标 + journal tail」双增量源喂入（`packages/runtime/src/services/session/events-projection.ts`，同实体冲突 journal 胜出），旧格式会话走 v1 惰性兼容读。崩溃恢复统一「journal 重放 + 收编」（run 侧有注册无终局 → 幂等落 run-interrupted 转暂停态；record 侧有注册无终态 → 补追加终态事件）。
 
+**历史查看读模型数据流（turn 边界索引 [ADR-0180](adr/decisions.md) 修订段）**：`session.history` 请求 → runtime session-history 按 turn 边界索引窗口读取——先 ensureFresh（size 变大从 `scannedOffset` 续扫 / stat 失配全量重建），再按 `history-index/turns.json` 的 `{entryId, byteOffset, byteLength}` 偏移读窗 + 实际边界 entryId 校验，读出字节进现有转换链（mapSessionEntries / 工具配对 / segments / 中断判定）出 Message。正常历史查看只有这一条数据路径：runtime 不等待或调用 pi 取得历史（索引缺失时本次请求完成首次边界扫描后返回），无后台全量重建、无完成通知与第二次精化合并；索引是只读派生数据（不含消息正文、永不回写 JSONL、可删可重建），落 session 存储树 `history-index/`（btw 线用线 sessionId 独立树）。
+
 ## 关键状态机
 
 | 状态机 | 状态流 | 来源 |

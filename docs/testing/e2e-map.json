@@ -5956,6 +5956,29 @@
       "serial": true,
       "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
       "run": "pnpm --filter @taiji/runtime exec vitest run test/silence-matrix.test.ts"
+    },
+    {
+      "id": "E2E-PIPE-30",
+      "summary": "check-history-read-model：历史读取读模型防回流静态检查（L0，turn-boundary-index RL1）——退役通知协议与 runtime 旧链符号零回流 + 正常历史读取编排不引用 pi get_entries（范围外消费链除外）",
+      "scope": [
+        "scripts/check-history-read-model.mjs",
+        "packages/runtime/src/services/session-history.ts",
+        "packages/runtime/src/services/session/history-reader.ts",
+        "packages/shared/src/protocol.ts"
+      ],
+      "layer": "L1",
+      "assets": [
+        {
+          "kind": "script",
+          "ref": "scripts/check-history-read-model.mjs"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": false,
+      "run": "node scripts/check-history-read-model.mjs",
+      "owner": "packages/runtime",
+      "authority": "scripts/check-history-read-model.mjs",
+      "note": "R2 态：跑绿门挂 u-retire-protocol commit 门 + CI invariants（接线随 turn-boundary-index 交付批次落地）。断言依赖实现终态——history-rebuild-cache.ts 迁移为 history-reader.ts 之前实跑 exit 1 是预期红（基线形态 13 处回流命中已实测登记）。范围外消费链（TraceSync / SessionRecords / 撤回定位 / 投递判重 / 插件读取 / 压缩分界的 get_entries）不在检查范围，见脚本头注。"
     }
   ]
 }
