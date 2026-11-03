@@ -62,7 +62,7 @@ const chatApiPort: ChatApiPort = {
   // [u5a 退役] steer / followUp 注入已删除（u3b 统一 submit 化后 core 零调用，chat 域客户端
   // 封装同批删除）；发送链一律走 submitDelivery（lane 判定在 runtime 内核）。
   abort: chatApi.abort,
-  compact: chatApi.compact,
+  compactBackground: chatApi.compactBackground,
   bash: chatApi.bash,
   abortBash: chatApi.abortBash,
   getHistory: chatApi.getHistory,

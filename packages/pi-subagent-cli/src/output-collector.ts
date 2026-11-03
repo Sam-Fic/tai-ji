@@ -18,6 +18,7 @@ import {
   ENGINE_SPAWN_DELIVERY_ERROR_RECOVERY,
 } from "@zhushanwen/subagent-engine-sdk";
 import type { ReplayRecordView } from "@zhushanwen/subagent-engine-sdk";
+import { KillSignalError } from "@zhushanwen/pi-rpc";
 
 import {
   classificationMatchInputs,
@@ -368,6 +369,27 @@ export function buildExitErrorText(
   return childErrorMessage !== undefined
     ? `pi child error: ${childErrorMessage} (exit code ${exitCode})`
     : `pi child exited with code ${exitCode}`;
+}
+
+/**
+ * [kill-chain-architecture §3.3] 杀链失败的终态 error 文案（与 describePromptAckFailure
+ * 同族：码前缀 + 诊断 + Recovery 内联）。KillSignalError 携带 pid/reason/errno 诊断
+ * （对齐诊断五元组形态）；其他 reject 形态（冒出的编程错误）按原始消息合成。
+ */
+export function describeKillFailure(err: unknown): string {
+  if (err instanceof KillSignalError) {
+    return (
+      `engine_kill_failed: SIGKILL could not be delivered to pi child ` +
+      `(pid=${String(err.pid)}, reason=${err.reason}${err.errno !== undefined ? `, errno=${err.errno}` : ""}); ` +
+      `the child is still alive and this run was finalized as failure without waiting for it. ` +
+      `Recovery: inspect the child process (it may leak — check ownership with ps) and retry the run.`
+    );
+  }
+  return (
+    `engine_kill_failed: kill chain failed before signal delivery (` +
+    `${err instanceof Error ? err.message : String(err)}); the child may still be alive. ` +
+    `Recovery: inspect the child process and retry the run.`
+  );
 }
 
 // ============================================================

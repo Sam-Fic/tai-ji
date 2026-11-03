@@ -35,6 +35,10 @@
  * 5. 进程树 kill 顺序：先杀后代（倒序：孙→子），再杀根。
  *
  * 6. Windows 用 taskkill /PID /T /F 原子终止整棵进程树；Unix 保留上述信号时序。
+ *    判死处置（liveness 强杀）走 scope='process-only'：只终止 runtime 自身，不枚举
+ *    不杀后代（pi 子进程独立存活，由 runtime 的 startup-reattach 编排接管——projection
+ *    一致性设计 D4）；taskkill 单进程变体（不带 /T）由本文件承载，树变体在
+ *    windows-process.ts。'process-tree'（缺省）保留给 app 退出与启动失败清理路径。
  *
  * 依赖方向：process-control → node:child_process + safe-env + windows-process + electron(app)
  */
@@ -43,7 +47,7 @@ import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, writeFi
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { app } from 'electron'
-import { RUNTIME_ID_ENV } from '@taiji/shared'
+import { RUNTIME_ID_ENV, buildOutboundChildEnv } from '@taiji/shared'
 import { getDataDir } from '@taiji/shared/paths'
 import { readMainLogMaxBytes, mainLogger } from '../logs/main-logger.js'
 import { buildSafeEnv } from './safe-env.js'
@@ -600,15 +604,60 @@ export function killProcessTree(rootPid: number, precomputedDescendants?: number
 }
 
 /**
- * 优雅停止 runtime 进程树（SIGTERM → 等 → SIGKILL 残留后代）。
+ * stopRuntimeProcess 处置范围（projection 一致性设计 D4 判死处置降粒度）：
+ * - 'process-tree'（缺省）：SIGTERM → 等退出 → 处置整棵进程树（预记录后代后逐个
+ *   SIGTERM/SIGKILL）。app 退出（supervisor.stop()）与启动失败清理路径用——「关闭应用
+ *   = 全部任务停止」行为面载体。
+ * - 'process-only'：只终止 runtime 自身，不枚举不杀任何后代——liveness 判死处置用。
+ *   runtime 死后 pi 的 PPID 变 1 独立存活，由 runtime 启动期 orphan sweep
+ *   （reapOrphanPiProcesses，argv 判据 + ppid=1）与 startup-reattach 编排接管。
+ */
+export type RuntimeStopScope = 'process-tree' | 'process-only'
+
+/** taskkill 单进程强杀的「进程不存在」退出码（与 windows-process.ts 树变体同值，模块未导出故本地对齐登记）。 */
+const WINDOWS_NO_PROCESS_EXIT_CODE = 128
+
+/**
+ * Windows 单进程强杀（taskkill 不带 /T）：只终止目标进程本身，不触碰其后代——
+ * 判死处置 scope='process-only' 的 Windows 分支（树变体 terminateWindowsProcessTree
+ * 会 /T 连坐全部 pi，与 D4 处置降粒度相反，判死路径禁用）。
+ */
+function terminateWindowsProcessOnly(pid: number): void {
+  try {
+    execFileSync('taskkill.exe', ['/PID', String(pid), '/F'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      // C-proc-09 出站契约：kill 不回传数据，但仍须防自身凭证类变量随 spawn 泄漏
+      env: buildOutboundChildEnv({ parentEnv: process.env }),
+    })
+  } catch (error) {
+    const status = error && typeof error === 'object' && 'status' in error ? error.status : undefined
+    if (status !== WINDOWS_NO_PROCESS_EXIT_CODE) {
+      console.warn(
+        `[runtime] taskkill failed for PID ${pid}:`,
+        error instanceof Error ? error.message : String(error),
+      )
+    }
+  }
+}
+
+/**
+ * 优雅停止 runtime（SIGTERM → 等 → 超时 SIGKILL），处置范围由 scope 决定。
  *
- * 时序见文件顶部 [HISTORICAL] 注释。关键：先预记录后代 PID 再 SIGTERM。
+ * 'process-tree'（缺省）时序见文件顶部 [HISTORICAL] 注释。关键：先预记录后代 PID 再
+ * SIGTERM。'process-only' 只对 runtime 本体走同一信号时序（SIGTERM → 等 → 超时 SIGKILL
+ * 根进程），不枚举后代、不向任何后代发信号。
  *
  * @param child runtime 子进程（null 直接 resolve）
- * @param timeoutMs SIGTERM 后等 exit 的超时，超时则 SIGKILL 进程树
- * @returns 全部子进程退出后 resolve
+ * @param timeoutMs SIGTERM 后等 exit 的超时，超时则按 scope SIGKILL
+ * @param scope 处置范围（缺省 'process-tree'；判死处置传 'process-only'，D4）
+ * @returns 处置完成后 resolve
  */
-export function stopRuntimeProcess(child: ChildProcess | null, timeoutMs = STOP_TIMEOUT_MS): Promise<void> {
+export function stopRuntimeProcess(
+  child: ChildProcess | null,
+  timeoutMs = STOP_TIMEOUT_MS,
+  scope: RuntimeStopScope = 'process-tree',
+): Promise<void> {
   return new Promise((resolve) => {
     if (!child || child.killed) {
       resolve()
@@ -620,8 +669,13 @@ export function stopRuntimeProcess(child: ChildProcess | null, timeoutMs = STOP_
       return
     }
     if (process.platform === 'win32') {
-      // taskkill /T /F handles descendants atomically and is safe to repeat when the tree already exited.
-      terminateWindowsProcessTree(childPid)
+      if (scope === 'process-only') {
+        // taskkill 不带 /T：只终止 runtime 自身（判死处置降粒度，D4——pi 后代不连坐）
+        terminateWindowsProcessOnly(childPid)
+      } else {
+        // taskkill /T /F handles descendants atomically and is safe to repeat when the tree already exited.
+        terminateWindowsProcessTree(childPid)
+      }
       void flushStderrSink().finally(resolve)
       return
     }
@@ -629,8 +683,9 @@ export function stopRuntimeProcess(child: ChildProcess | null, timeoutMs = STOP_
     let resolved = false
 
     // [HISTORICAL] 在发 SIGTERM 之前记录所有后代 PID
-    // （runtime 退出后 pi 的 PPID 变为 1，pgrep -P 查不到）
-    const descendantPids = getDescendantPids(childPid)
+    // （runtime 退出后 pi 的 PPID 变为 1，pgrep -P 查不到）。
+    // scope='process-only'（判死处置，D4）：后代清单恒空——不枚举、不向后代发信号。
+    const descendantPids = scope === 'process-tree' ? getDescendantPids(childPid) : []
 
     // [HISTORICAL] timer 在 done 闭包外具名持有，done() 顶部 clearTimeout。
     // 否则 exit 先到 → done() resolve → 2s 后 timer 仍执行 killProcessTree，
@@ -675,8 +730,15 @@ export function stopRuntimeProcess(child: ChildProcess | null, timeoutMs = STOP_
     // 此 timer 不会在 2s 后误杀 PID 复用的新进程。
     timer = setTimeout(() => {
       child.removeListener('exit', done)
-      // 强制杀进程树：runtime + 所有子进程
-      killProcessTree(childPid, descendantPids)
+      if (scope === 'process-only') {
+        // 只强杀 runtime 本体（显式单点信号，不经杀树工具——杀树工具保留给
+        // 'process-tree' 路径，判死处置对后代的全部处置 = 不处置，D4）
+        // eslint-disable-next-line taste/no-silent-catch -- process may have already exited
+        try { process.kill(childPid, 'SIGKILL') } catch { /* 可能已退出 */ }
+      } else {
+        // 强制杀进程树：runtime + 所有子进程
+        killProcessTree(childPid, descendantPids)
+      }
       done()
     }, timeoutMs)
   })

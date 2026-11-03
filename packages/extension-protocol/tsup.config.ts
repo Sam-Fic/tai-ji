@@ -1,8 +1,9 @@
 import { defineConfig } from 'tsup'
 
 export default defineConfig({
-  // index 桶出口（纯契约/纯算法）+ background-task 子出口（含 node 内建依赖的行为原语）
-  entry: ['src/index.ts', 'src/background-task-entry.ts'],
+  // index 桶出口（纯契约/纯算法）+ background-task / scheduler-store 子出口
+  // （后两者含 node 内建依赖，不进桶出口——浏览器消费方结构性不触达 node 内建）
+  entry: ['src/index.ts', 'src/background-task-entry.ts', 'src/scheduler-store-entry.ts'],
   format: ['esm'],
   dts: true,
   clean: true,

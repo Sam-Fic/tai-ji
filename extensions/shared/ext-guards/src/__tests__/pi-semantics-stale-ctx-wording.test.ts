@@ -2,7 +2,9 @@
  * PS-30 探针：pi ExtensionRunner 的 stale ctx 错误文案契约（crash-resilience D1 检查
  * 分诊词锁，docs/pi-semantics.json PS-30）。
  *
- * 断言方式（静态直读 dist，同 packages/runtime pi-semantics-prompt-rejection.test.ts 范式）：
+ * 断言方式（静态直读 dist，同 packages/runtime pi-semantics-prompt-rejection.test.ts 范式；
+ * 文案检查串用 ext-guards STALE_CTX_MARKER 常量插值而非硬编码字面量——pi 侧文案与
+ * 常量任一侧漂移都会红，对拍链双侧闭合）：
  * - runner.js：`invalidate()` 默认 message 含 "stale after session replacement"
  *   （staleMessage 的唯一写入点）+ `assertActive()` 的 `throw new Error(this.staleMessage)`
  *   形态（E1 崩溃堆栈帧 `assertActive → sendUserMessage` 的实装机制）。
@@ -20,6 +22,8 @@
 import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { STALE_CTX_MARKER } from "../index.ts";
 
 /** 定位实装 pi-coding-agent dist（cwd 逐级上溯，同 runtime 探针范式）。 */
 function locatePiCodingAgentDist(): string | null {
@@ -48,8 +52,8 @@ describe.skipIf(!PI_DIST)(
 	() => {
 		it("invalidate() 默认 message 含 stale after session replacement（检查兜底分诊词的 pi 侧源头）", () => {
 			expect(
-				RUNNER_SRC.includes("stale after session replacement"),
-				"PS-30 漂移：stale 默认文案消失/变更——guardStaleCtx 文案兜底分诊失效退化为全部上抛（回到现状崩溃链路），同步 ext-guards STALE_CTX_MARKER 后更新 verifiedWith",
+				RUNNER_SRC.includes(STALE_CTX_MARKER),
+				"PS-30 漂移：pi stale 默认文案与 STALE_CTX_MARKER 不一致——pi 改文案则同步 ext-guards STALE_CTX_MARKER 后更新 verifiedWith；常量被误改则恢复为 pi 实装文案",
 			).toBe(true);
 		});
 

@@ -564,7 +564,7 @@ describe('SessionManagerHandler', () => {
 
       await handler.handle('req-1', 'sid-parent', 'abort', { sessionId: 's1' })
 
-      expect(opts.sessionService.abort).toHaveBeenCalledWith('s1')
+      expect(opts.sessionService.abort).toHaveBeenCalledWith('s1', 'agent')
       expect(opts.sendExtensionUiResponse).toHaveBeenCalledWith(
         'sid-parent',
         'req-1',

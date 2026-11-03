@@ -11,7 +11,8 @@
     ],
     "protocol": [
       "packages/extension-protocol/src/extensions/scheduler/**",
-      "packages/extension-protocol/src/extensions/scheduler-create/**"
+      "packages/extension-protocol/src/extensions/scheduler-create/**",
+      "packages/extension-protocol/src/scheduler-store-entry.ts"
     ]
   },
   "tests": [

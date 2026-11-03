@@ -21,11 +21,16 @@
  *      源码注释引用，引用范围无法局部化）。只扫注释（AST trivia，字符串/模板/
  *      正则字面量内的 docs/ 字样不进检查范围），性能：日常只扫 staged 文件。
  *   5. 数据源登记锚点反向校验：`docs/architecture/data-source-registry.md` 行内
- *      声称「声明处 `@data-owner #N`」时，源码里必须真存在 `@data-owner #N` 注解。
+ *      声称「声明处 `@data-owner #N`」时，源码里必须真存在 `@data-owner #N` 注解；
+ *      且主表条目号不得重复占用（同号两条 = SSOT 锚点歧义——`@data-owner #N` 与
+ *      外部引用都无法消歧指向哪一条，形态对齐检查 6 的 ADR 编号唯一占用断言）。
  *      [2026-09-17] 起因：缓存治理批删掉缓存实现时，`@data-owner #20` 注解随实现
  *      体一起消失而登记表未同步（taste-lint 只查反向：注解→条目号存在），无任何
  *      机器信号；此检查把「登记表声称有注解」变成可机检的失败。注解采集走
  *      `git grep`（索引级，毫秒级），无 git 上下文时降级跳过。
+ *      [2026-11-01] 起因：分支 diff 把「插件禁用标记清单（disabled.json）」误编为
+ *      #88，与既有「scheduler 任务库分片」同号（后者有五处外部锚点指向）——条目号
+ *      唯一性此前无任何机器断言；误编行重编为 #89 后把该不变量补成失败项防复发。
  *   6. ADR 编号唯一占用与引用存在性：decisions.md 内 `### ADR-XXXX` 标题编号
  *      不得重复占用（同号两条 = 引用无法消歧）；引用域（根 AGENTS.md + docs/
  *      递归 .md）内的 `ADR-XXXX` 引用必须命中现行标题编号 ∪ 已否谱系编号
@@ -683,10 +688,11 @@ function reportCommentRefs(commentScan) {
   return true
 }
 
-/** 报告段 4：数据源登记锚点（两个子段各自带 footer；无违规返回 false） */
+/** 报告段 4：数据源登记锚点（三个子段各自带 footer；无违规返回 false） */
 function reportDataOwnerAnchors(dataOwner) {
   const ownerMissing = dataOwner.available ? dataOwner.missing : []
   const ownerUnknown = dataOwner.available ? (dataOwner.unknown ?? []) : []
+  const ownerDuplicates = dataOwner.available ? (dataOwner.duplicates ?? []) : []
   if (ownerMissing.length > 0) {
     console.error(`[data-owner-anchor] 发现 ${ownerMissing.length} 处登记表声称「声明处 \`@data-owner\`」但源码中零命中：`)
     for (const m of ownerMissing) {
@@ -702,7 +708,16 @@ function reportDataOwnerAnchors(dataOwner) {
     console.error('')
     console.error('恢复动作：先在 docs/architecture/data-source-registry.md 登记对应条目（或改用既有条目号）。')
   }
-  return ownerMissing.length > 0 || ownerUnknown.length > 0
+  if (ownerDuplicates.length > 0) {
+    console.error(`[data-owner-anchor] 发现 ${ownerDuplicates.length} 个条目号被登记表多条重复占用：`)
+    for (const d of ownerDuplicates) {
+      console.error(`  ✗ ${DATA_OWNER_REGISTRY_REL}:${d.lines.join(',')}  ${d.entry} 重复占用——把新条目改号为现有最大编号顺延，并同步修正其外部锚点引用`)
+    }
+    console.error('')
+    console.error('恢复动作：条目号是全仓 SSOT 锚点（`@data-owner` 注解、constraints.json、ADR 登记段均按号指向），')
+    console.error('同号两条即引用无法消歧——保留既有条目号，把新条目重编为顺延空号。')
+  }
+  return ownerMissing.length > 0 || ownerUnknown.length > 0 || ownerDuplicates.length > 0
 }
 
 /** 报告段 5：ADR 编号唯一占用与引用存在性（无违规返回 false） */
@@ -770,7 +785,7 @@ function reportOk(commentScan, dataOwner, adr, pathRefDocs, skipped) {
     ? `注释 docs 引用（${commentScan.fullScan ? '全仓' : 'staged'} ${commentScan.fileCount} 文件）零悬空`
     : '注释 docs 引用（无 git staged 上下文，跳过）'
   const ownerPart = dataOwner.available
-    ? `数据源登记锚点（${dataOwner.claims.length} 条「声明处」声明 × 源码 ${dataOwner.annotationCount} 个注解）零悬空`
+    ? `数据源登记锚点（${dataOwner.claims.length} 条「声明处」声明 × 源码 ${dataOwner.annotationCount} 个注解，${dataOwner.registryEntryCount} 个条目号唯一占用）零悬空`
     : '数据源登记锚点（无 git 上下文，跳过）'
   const adrPart = adr.available
     ? `ADR 编号（${adr.defined.size} 个现行 + ${adr.deprecated.size} 个已否，唯一占用；引用域 ${adr.refDocCount} 文档）零悬空`
@@ -783,11 +798,32 @@ function reportOk(commentScan, dataOwner, adr, pathRefDocs, skipped) {
 // [2026-09-17] 起因：缓存治理批删掉缓存实现时 `@data-owner #20` 注解随实现体消失，
 // 登记表却仍声称「声明处 `@data-owner #20` 注解」——taste-lint 的 require-data-owner-
 // annotation 只查反向（注解 → 条目号存在），此方向无机器信号。
+// [2026-11-01] 同面补第二不变量：主表条目号唯一占用。起因 = 分支 diff 把
+// 「插件禁用标记清单（disabled.json）」误编为 #88，与「scheduler 任务库分片」同号
+// 存活多日无机器信号（后者有五处外部锚点：constraints.json / decisions.md /
+// scheduler-shard-purge.ts / protocol-scheduler-store.ts / scheduler-manager）。
+// 同号 = SSOT 锚点歧义，`@data-owner #N` 与外部引用都无法消歧指向哪一条——形态
+// 对齐检查 6 的 ADR 编号唯一占用断言（重复 = 行号列表 >1）。
 const DATA_OWNER_REGISTRY_REL = 'docs/architecture/data-source-registry.md'
 /** 登记表行内「声明处 `@data-owner #N`」声明（带行号定位）。 */
 const DATA_OWNER_CLAIM_RE = /声明处\s*`?@data-owner\s+(#[0-9]+)/g
 /** 源码注解形态：`@data-owner #N`（taste:allow-no-data-owner 豁免族不在此面）。 */
 const DATA_OWNER_ANNOTATION_RE = /@data-owner[ \t]+(#[0-9]+)/g
+/** 主表条目行首的条目号单元格（`| #N | 描述 ...`）；§6 跨进程共享表首列是文件路径，不命中。 */
+const REGISTRY_ENTRY_ROW_RE = /^\|\s*(#[0-9]+)\s*\|/
+
+/** 纯函数：从登记表文本提取主表条目号清单。
+ * @returns {Map<string, number[]>} 条目号 → 行号列表（>1 条 = 重复占用） */
+export function extractRegistryEntries(mdText) {
+  const entries = new Map()
+  mdText.split('\n').forEach((line, i) => {
+    const m = REGISTRY_ENTRY_ROW_RE.exec(line)
+    if (!m) return
+    if (!entries.has(m[1])) entries.set(m[1], [])
+    entries.get(m[1]).push(i + 1)
+  })
+  return entries
+}
 
 /** 纯函数：从登记表文本提取「声明处 @data-owner #N」声明（含行号）。 */
 export function extractDataOwnerClaims(mdText) {
@@ -836,20 +872,24 @@ function collectDataOwnerAnnotations() {
   return { available: true, entries }
 }
 
-/** 检查 5：双向锁定—登记表声称的注解必须真在（且注解引用的条目号必须在登记表）。 */
+/** 检查 5：双向锁定—登记表声称的注解必须真在（且注解引用的条目号必须在登记表），
+ *  且主表条目号唯一占用（同号两条 = SSOT 锚点歧义）。 */
 function checkDataOwnerAnchors() {
   const docAbs = path.join(PROJECT_ROOT, DATA_OWNER_REGISTRY_REL)
-  if (!existsSync(docAbs)) return { available: false, claims: [], missing: [], unknown: [], annotationCount: 0 }
+  if (!existsSync(docAbs)) return { available: false, claims: [], missing: [], unknown: [], duplicates: [], annotationCount: 0 }
   const docText = readFileSync(docAbs, 'utf-8')
   const claims = extractDataOwnerClaims(docText)
-  const registryEntries = new Set()
-  for (const m of docText.matchAll(/^\|\s*(#[0-9]+)\s*\|/gm)) registryEntries.add(m[1])
+  const registryEntries = extractRegistryEntries(docText)
   const { available, entries } = collectDataOwnerAnnotations()
   return {
     available,
     claims,
     missing: claims.filter((c) => !entries.has(c.entry)),
     unknown: [...entries].filter((e) => !registryEntries.has(e)),
+    duplicates: [...registryEntries.entries()]
+      .filter(([, lines]) => lines.length > 1)
+      .map(([entry, lines]) => ({ entry, lines })),
+    registryEntryCount: registryEntries.size,
     annotationCount: entries.size,
   }
 }

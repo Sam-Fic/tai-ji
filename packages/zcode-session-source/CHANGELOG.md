@@ -1,5 +1,11 @@
 # @zhushanwen/zcode-session-source
 
+## 0.2.10
+
+### Patch Changes
+
+- d2b945a20: Single-sourced schema-version reading: the SQL and row extraction for reading the latest applied schema version now live in one place shared by the best-effort diagnostic reader and the known-schema gate, and the gate's observed-version reporting is covered by new tests. Behavior equivalent.
+
 ## 0.2.9
 
 ### Patch Changes

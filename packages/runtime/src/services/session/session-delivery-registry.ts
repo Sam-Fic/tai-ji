@@ -40,8 +40,9 @@
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createDelivery, createDiskDeliveryStore, DeliveryReclaimError } from '@zhushanwen/session-delivery'
+import { createDelivery, createDiskDeliveryStore, DeliveryAckPersistError, DeliveryReclaimError } from '@zhushanwen/session-delivery'
 import type {
+  DeliveryCancelResult,
   DeliveryEntriesFull,
   DeliveryEntryState,
   DeliveryHandleV2,
@@ -65,7 +66,11 @@ import { isGeneratingTurn } from './types.js'
 import { LateBoundSkillSource, SkillInjector } from './skill-injector.js'
 import { publishSkillNotices } from './skill-notice-publisher.js'
 import type { IMessageBus } from '../message-bus/message-bus.js'
-import { applySessionOccupancyTransition, userStoppedGate } from './event-interpreter.js'
+import {
+  applySessionOccupancyTransition,
+  startPingProbeFromDeliveryEdge,
+  userStoppedGate,
+} from './event-interpreter.js'
 import { extractExtensionCommandNames, extractSkillTemplateCommandNames, matchCommandName } from '../../infra/pi/pi-protocol.js'
 import type { InputDisposition } from '../../infra/pi/pi-protocol.js'
 import { classifyPromptRejection, type PromptRejectionReason } from '../../infra/pi/pi-rejection.js'
@@ -219,7 +224,10 @@ export interface SessionDeliveryRegistry {
    * 丢弃（防泄漏），cancel/drain 回草稿时随全文返回并出册。rebuild/adopt 条目无快照。
    */
   attachSegments(sessionId: string, clientUuid: string, segments: readonly Segment[]): void
-  /** 单条撤销（delivery.cancel）：queued 本地移除；投递中走 clear_queue 收回-重投路径 */
+  /** 单条撤销（delivery.cancel）：queued 本地移除；投递中走 clear_queue 收回-重投路径。
+   * 终局写盘失败（DeliveryAckPersistError）收敛为显式应答（cancelled:false + reason
+   * 「终态未持久化，请稍后重试」）——本入口不向调用方抛该分型错误，条目由内核 failed
+   * 留守，重试即补落终局（dmg-r1-4）。 */
   cancel(sessionId: string, clientUuid: string): Promise<DeliveryCancelOutcome>
   /**
    * 条目全文取回（delivery.peek，chat-flow-consistency D6）：✎ 编辑预填的只读通道——
@@ -287,11 +295,13 @@ export interface SessionDeliveryRegistry {
   /**
    * hold 解除边沿输入端口（MF-1-9 事件化）：持有判定读的外部维度（occupancy.bash /
    * occupancy.compacting）复位后，由**转移执行方**调用本方法唤醒挂起的出站交接等待者
-   * （waitDeliverable 订阅边沿而非 500ms 轮询）。调用点 = dispatcher 的 bash-end /
-   * compacting-end 转移后；settling 与 handoff 维释放边沿均经 agent_settled 多播自达
-   * （handoff turn 终局必经 agent_settled——handoff-service cleanupInflight 的
-   * handingOff-end 复位先于 settled 事件处理，时序构造性成立）、revoking /
-   * piCompactingBlocked 为注册表内部标志自达，无需经本端口。无等待者时幂等 no-op。
+   * （waitDeliverable 订阅边沿而非 500ms 轮询）。调用点 = bash dispatcher 的 bash-end
+   * 转移后（dispatcher 的 compacting-end 编排已随 C2 /compact 后台化退役）；view 的
+   * compaction 维复位不经本端口（本注册表 compaction_end 监听同事件唤醒 + agent_settled
+   * 多播兜底）；handoff 维释放边沿经 agent_settled 多播自达（handoff turn 终局必经
+   * agent_settled——handoff-service cleanupInflight 的 handingOff-end 复位先于 settled
+   * 事件处理，时序构造性成立）、revoking / piCompactingBlocked 为注册表内部标志自达，
+   * 无需经本端口。无等待者时幂等 no-op。
    */
   notifyHoldRelease(sessionId: string): void
   /** 丢弃单 session 队列（session 删除等场景） */
@@ -809,8 +819,10 @@ export function createSessionDeliveryRegistry(
    * - compacting-pi / compacting（pi 侧事实）：watchClient 的 compaction_end 监听 + 句柄
    *   变更自愈点（piCompactingBlocked 复位处）；
    * - revoking：endRevokeHold（编排 try/finally 必达）；
-   * - view 维度（compacting 派生视图）：转移执行方（dispatcher compacting-end 转移后）经
-   *   notifyHoldRelease 端口驱动。
+   * - view 维度（compacting 派生视图）：本注册表 compaction_end 监听同事件唤醒
+   *   （interpreter 同事件内复位派生视图）+ agent_settled 多播兜底；notifyHoldRelease
+   *   端口仅剩 bash dispatcher 的 bash-end 调用点（dispatcher 的 compacting-end 编排
+   *   已随 C2 /compact 后台化退役，GUI 手动压缩改走后台管理器不经 dispatcher）。
    * - agent_settled 多播（ensureSettledSub 常挂）仍作为多源唤醒路径保留（对 v3 剩余持有
    *   形态幂等无害；对账触发点①同点驱动）。
    * [u5a 退役登记] v2 的 settling / bash 维度随本地队列退役（唤醒路径保留，无对应等待者
@@ -926,11 +938,20 @@ export function createSessionDeliveryRegistry(
    * dispatching 置位（idle 门，D3①）：view 缺席或生成中 no-op——生成中出站保持 generating
    * 不覆盖（原回合脉冲全程不错乱，★3）。occupancy 置位先于 prompt（RT-4#10，RPC 往返窗
    * 内对预检/回收豁免不再呈 idle）。
+   *
+   * [pi-stall-detection D4/RL7] 置位边沿同时前置启动探测（幂等）：dispatching 窗口
+   * （prompt 已受理、turn-start 未到）纳入第 1 层探测覆盖——窗口内 pi 挂死时 prompt RPC
+   * 悬挂、turn-start 永不到达，探测不能等 turn-start 启动（PR4 形态）。turn-start 既有
+   * start() 重置语义保留（受理期累计清零、回合期从零独立累计）。收回 idle 边沿的停止接线
+   * 不在本文件逐点挂：接在转移原语单点（applySessionOccupancyTransition 对 idle /
+   * reject-other / full-reset 统一停止），本文件三处收回写方（:895 busy 拒收、:1022 真失败
+   * settleDispatching、:1026 handled 回落）与其余文件写方构造性覆盖。
    */
   function markDispatchingIfIdle(sessionId: string): void {
     const view = viewOf(sessionId)
     if (view && (view.occupancy?.turn ?? 'idle') === 'idle') {
       applySessionOccupancyTransition(view, deps.getMessageBus(), 'dispatching')
+      startPingProbeFromDeliveryEdge(sessionId)
     }
   }
 
@@ -1939,7 +1960,8 @@ export function createSessionDeliveryRegistry(
         // transcript 校验」流程，撤销意图由 pendingRevoke 持有直至兑现。
         return await revokeInFlight(sessionId, rt, clientUuid, segmentsSnapshot)
       }
-      const first = rt.handle.cancel(clientUuid)
+      const first = cancelKernelEntry(rt, clientUuid)
+      if (first.kind === 'persist-failed') return cancelPersistFailedOutcome()
       if (first.kind === 'cancelled') {
         rt.pendingRevoke.delete(clientUuid) // 终态兜底清集（正常路径已由流程点清除）
         // 撤销即出册（R2-A2）：判定锚随条目终结清除，防同文本后续条目被反查到死记录
@@ -2149,6 +2171,32 @@ export function createSessionDeliveryRegistry(
   }
 
   /**
+   * 内核查 cancel 的安全包装（dmg-r1-4）：cancel 的终局化（内核 cancelFinalize）在
+   * 持久终局写盘失败时抛 DeliveryAckPersistError——条目已由内核 parkAsFailed 转
+   * failed 留守（磁盘上仍是未投递记录、恢复重放可能重投；本地「结果未定、不自动
+   * 重投」）。本包装把该分型错误收敛为 'persist-failed' 哨兵结果，四个 cancel 调用
+   * 点（cancel 主路径 / revokeInFlight / settleRevokedEntry /
+   * settleCancelWithoutReclaim）据此统一转显式应答：撤销未兑现但失败形态对调用方
+   * 可见，错误不再穿出 registry 边界（RPC 入口 / 撤销编排 / 对账兑现路径只消费显式
+   * 应答，错误气泡归 server.ts 中央 catch）。非本类错误原样上抛（编程错误不遮掩）。
+   * 重试语义：cancel 接受 failed 态，写盘恢复后重试即补落终局。
+   */
+  function cancelKernelEntry(rt: SessionRuntime, id: string): DeliveryCancelResult | { kind: 'persist-failed' } {
+    try {
+      return rt.handle.cancel(id)
+    } catch (err) {
+      if (!(err instanceof DeliveryAckPersistError)) throw err
+      warn(`cancel: terminal record not persisted; entry parked failed, retry to finalize, sid=${rt.sessionId}, id=${id}`, err)
+      return { kind: 'persist-failed' }
+    }
+  }
+
+  /** 终局未持久化的显式撤销应答（dmg-r1-4）：条目 failed 留守、重试即补落终局。 */
+  function cancelPersistFailedOutcome(): DeliveryCancelOutcome {
+    return { cancelled: false, reason: '终态未持久化，请稍后重试' }
+  }
+
+  /**
    * in-flight 撤销的收回兑现流程（cancel 首次与 pendingRevoke 再入共用，dmg-r1-2）：
    * clear_queue 全收 → 三分处置（目标 exclude 沉默回草稿；其余撤销待收回条目一并兑现）
    * → transcript 校验（delivered 事实优先）→ 收回命中即终态撤销。pendingRevoke 登记
@@ -2198,7 +2246,8 @@ export function createSessionDeliveryRegistry(
       warn('cancel: target not in reclaimed set nor transcript, sid=', sessionId, clientUuid)
       return { cancelled: false, reason: '已投递不可撤（未找到在途文本）' }
     }
-    const second = rt.handle.cancel(clientUuid)
+    const second = cancelKernelEntry(rt, clientUuid)
+    if (second.kind === 'persist-failed') return cancelPersistFailedOutcome()
     if (second.kind === 'cancelled') {
       rt.pendingRevoke.delete(clientUuid) // 撤销兑现 → 意图了结
       rt.submitted.delete(bareMarkerId(clientUuid)) // 撤销即出册（R2-A2，同 cancel 主路径）
@@ -2220,11 +2269,17 @@ export function createSessionDeliveryRegistry(
    * 返回 cancelled:true 携带全文——他径兑现不再让并发撤销方拿到「已投递不可撤」。
    * peek 必须先于 handle.cancel：onChange 剪枝在 cancel 内同步发生（终态条目离场 →
    * 快照出表），先持引用后取消之即丢。
+   *
+   * 持久终局写盘失败（DeliveryAckPersistError，dmg-r1-4）：内核已把条目 parkAsFailed
+   * 转 failed 留守（撤销意图未兑现），本函数不出意图集、不写移交表、不上抛——交由
+   * 用户重试（cancel 接受 failed 态，写盘恢复后重试即补落终局）。waiter reject 走回收
+   * 语义（无错误气泡），内核 warn 已留痕。
    */
   function settleRevokedEntry(rt: SessionRuntime, id: string): void {
-    rt.pendingRevoke.delete(id)
     const segments = peekSegments(rt, id)
-    const result = rt.handle.cancel(id) // cancelRequested 短路终态 cancelled；waiter reject 走回收语义（无错误气泡）
+    const result = cancelKernelEntry(rt, id)
+    if (result.kind === 'persist-failed') return
+    rt.pendingRevoke.delete(id)
     if (result.kind === 'cancelled') {
       rt.submitted.delete(bareMarkerId(id))
       rt.redeemedRevokes.set(id, {
@@ -2241,7 +2296,8 @@ export function createSessionDeliveryRegistry(
     clientUuid: string,
   ): Promise<DeliveryCancelOutcome> {
     const segmentsSnapshot = peekSegments(rt, clientUuid) // 引用先持（同 cancel 主路径）
-    const second = rt.handle.cancel(clientUuid)
+    const second = cancelKernelEntry(rt, clientUuid)
+    if (second.kind === 'persist-failed') return cancelPersistFailedOutcome()
     if (second.kind === 'cancelled') {
       rt.pendingRevoke.delete(clientUuid) // 撤销兑现（无 pi 附着的本地终结）→ 意图了结
       rt.submitted.delete(bareMarkerId(clientUuid)) // 撤销即出册（R2-A2，同 cancel 主路径）

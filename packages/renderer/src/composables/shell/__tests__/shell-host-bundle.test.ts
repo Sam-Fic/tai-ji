@@ -1740,6 +1740,9 @@ describe('settings-transport-adapter · @/api 门面八元全量转发矩阵（u
     setSmartContextExcludedModels: fwd('settings', 'setSmartContextExcludedModels', [['probe/excluded']], (t, models) =>
       t.setSmartContextExcludedModels(models),
     ),
+    setSmartContextAutoCompactThresholdRatio: fwd('settings', 'setSmartContextAutoCompactThresholdRatio', [0.95], (t, ratio) =>
+      t.setSmartContextAutoCompactThresholdRatio(ratio),
+    ),
     setCodemodeEnabled: fwd('settings', 'setCodemodeEnabled', [true], (t, enabled) => t.setCodemodeEnabled(enabled)),
     setSubagentDefaultEngine: fwd('session', 'setSubagentDefaultEngine', ['probe-engine'], (t, engineId) =>
       t.setSubagentDefaultEngine(engineId),

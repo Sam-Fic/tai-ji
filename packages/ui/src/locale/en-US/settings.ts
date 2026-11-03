@@ -47,6 +47,8 @@ export default {
     remoteAccessDesc: 'Access taiji from a mobile browser (LAN / Tailscale)',
     networkProxy: 'Network Proxy',
     networkProxyDesc: 'Configure LLM outbound proxy server and routing rules',
+    smartContextCompaction: 'Context Compaction',
+    smartContextCompactionDesc: 'Smart context compaction behavior: compact model, reminder thresholds, and background compaction trigger',
   },
   // ── Appearance page (AppearancePage) ──
   appearance: {
@@ -709,6 +711,9 @@ export default {
     smartContextExcludedDesc: 'Session models in the list fully disable this feature; matched by full provider/modelId',
     smartContextExcludedAdd: 'Add model',
     smartContextExcludedRemove: 'Remove',
+    smartContextAutoCompactLabel: 'Auto-compaction trigger threshold',
+    smartContextAutoCompactDesc: 'Trigger background compaction automatically when context usage reaches this ratio of the window (0-1, step 0.05)',
+    smartContextRatioInvalid: 'Trigger threshold must be a number',
     // ── LLM retry (SystemLlmRetrySection, llm-retry-settings) ──
     llmRetryTitle: 'LLM Calls',
     llmRetryConfiguredBadge: 'Customized',

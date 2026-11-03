@@ -1,13 +1,13 @@
 ---
 name: scheduler-ext-config
-description: "使用或排查 @zhushanwen/pi-scheduler（定时任务调度）时加载。说明任务创建/管理方式（/schedule 命令与 schedule 工具）、调度格式（interval duration 与 cron）、数据存储机制（session JSONL 的 append-only event sourcing，无独立配置文件）、旧版 store 迁移、运行限制。触发词：配置定时任务、scheduler 配置、定时调度、cron 任务、interval 任务、scheduler 存储、scheduler 数据在哪、定时任务排查、scheduler-ext-config。"
+description: "使用或排查 @zhushanwen/pi-scheduler（定时任务调度）时加载。说明任务创建/管理方式（/schedule 命令与 schedule 工具）、调度格式（interval duration 与 cron）、数据存储机制（按 sessionId 分片的独立 JSON 快照任务库）、运行限制。触发词：配置定时任务、scheduler 配置、定时调度、cron 任务、interval 任务、scheduler 存储、scheduler 数据在哪、定时任务排查、scheduler-ext-config。"
 ---
 
 # scheduler 使用与存储指南
 
 > @zhushanwen/pi-scheduler：定时任务调度扩展。任务到期时向当前 session 注入一条 message（`deliverAs: 'steer'` + `triggerTurn: true`，steer 直投：busy 时插入当前 turn、idle 时开新 turn），唤醒 agent 处理。
 
-**重要前提**：scheduler **没有独立的配置文件**。任务通过命令/工具交互创建，数据以 append-only event sourcing 方式存储在 session JSONL 中（见下文「数据存储位置」）。排查「任务存哪 / 为什么 resume 后任务变了 / fork 后任务是否继承」都必须基于此模型理解，不要去找独立的 `scheduler.json`（那是已废弃的旧版格式，仅迁移探测时使用）。
+**重要前提**：任务数据存在**独立的 JSON 快照任务库**（按 sessionId 分片，见下文「数据存储位置」），不在会话 JSONL 里——会话 JSONL 只承载到期注入的提醒消息与用户对话。排查「任务存哪 / 为什么 resume 后任务变了 / fork 后任务是否继承」都必须基于此模型理解。
 
 ## 如何创建/管理定时任务
 
@@ -72,46 +72,34 @@ description: "使用或排查 @zhushanwen/pi-scheduler（定时任务调度）�
 
 ## 数据存储位置（排查必读）
 
-**当前版本采用 session JSONL 的 append-only event sourcing，没有独立数据文件。**
-
-- 任务的所有变更以 custom entry 写入**创建该任务的 session 的 JSONL 文件**：
-  - 调用 `pi.appendEntry('pi-scheduler:task', op)`，`customType` 固定为 `pi-scheduler:task`。
-  - op 有四种：`upsert`（创建，携带全量 `TaskSnapshot`）、`advance`（recurring dispatch 成功后推进 `nextRunAt`）、`toggle`（启用/禁用）、`delete`（删除 / once 执行后 / 过期清理）。
-- session 启动时（`session_start` 事件），`PiSchedulerBackend.loadTasks()` 调 `replayFoldEntries` 折叠当前 session 的全部 `pi-scheduler:task` custom entries，重放出当前任务状态。**append-only 不做全量 persist**——没有「保存」动作，每次操作即时 append。
-- 因此「任务存哪」的答案是：**创建它的那个 session 的 JSONL 文件**。该文件位于 pi agent 目录下（`getAgentDir()` 读 `PI_CODING_AGENT_DIR`，默认 `~/.pi/agent`；taiji 数据目录隔离时指向隔离目录如 `~/.taiji/...`）。
-
-### owner 隔离（fork 行为）
-
-- 每个 `upsert` op 顶层带 `ownerSessionFile`（创建任务时所属 session 的 JSONL 路径）。
-- `replayFoldEntries` 重放时**过滤掉 owner 不是当前 session 的任务**（防 fork/branch 继承导致同一逻辑任务跨 session 重复触发）。
-- 含义：在 session A 创建的任务，fork 出 session B 后，B 的 replay 看不到 A 的任务（owner 不匹配）。任务「归属」于创建它的 session。
-
-### 为什么找不到 `scheduler.json`
-
-当前版本**不写** `scheduler.json`。如果你在文档或旧讨论里看到 `scheduler.json`，那是指**已废弃的旧版 store 格式**（npm 0.1.1 及更早），仅用于一次性迁移探测（见下文「旧版数据迁移」）。不要试图手动编辑或查找该文件来管理当前任务。
-
-## 旧版数据迁移
-
-旧版（npm ≤ 0.1.1）用独立 store 文件，按 **cwd 隔离**存储：
+**任务库 = 按 sessionId 分片的独立 JSON 快照文件**（任务库与会话事实分离）：
 
 ```
-<agentDir>/schedule/<root>/<segments>/schedule.json
+<agentDir>/scheduler/<root>/<segments>/<sessionId>.json
 ```
 
-- `<agentDir>` = `getAgentDir()`（候选 1）或 `~/.pi/agent`（候选 2，旧版硬编码）。
-- `<root>` = cwd 根盘符 sanitize：mac/linux 的 `/` → `root`；Windows `C:\` → `c`（非字母数字转 `-`，trim 首尾，小写）。
-- `<segments>` = cwd 去根盘符后的路径段，按 `path.sep` 拆分。例 cwd `/Users/foo/project` → `Users/foo/project`。
-- 完整示例（mac）：`~/.pi/agent/schedule/root/Users/foo/project/schedule.json`。
+- `<agentDir>` = pi 的 `getAgentDir()`（读 `PI_CODING_AGENT_DIR`，默认 `~/.pi/agent`；taiji 数据目录隔离时指向隔离目录如 `~/.taiji/.../agent`）。
+- `<root>`/`<segments>` = 创建任务时 cwd 的 workspace 隔离段（根盘符 sanitize + 路径段）。
+- `<sessionId>` = pi `SessionManager.getSessionId()`（分片键）。
+- 文件内容：`{schemaVersion: 2, sessionFile?, tasks: [...]}` 全量快照；每次任务集变化（创建/toggle/删除/dispatch 记账/过期清理）整体重写——写临时文件 + fsync + `rename` 原子替换，无半写形态。
+- 恢复：`session_start` 时 `PiSchedulerBackend.loadTasks()` 一次 `JSON.parse` 重建任务集。文件不存在 = 空任务集（新 session / fork / 从未建任务，正常路径）。
+- 损坏处理：读时解析失败 → 原文件改名 `.corrupt-<ts>` 留证 + 按空任务集继续（调度不中断，warn 留痕）。
 
-**迁移机制**（`importLegacyStore`，session_start 时自动执行，无需用户介入）：
+### fork / resume 行为
 
-1. 双候选探测：优先 `getAgentDir()` 路径，不存在则 fallback `~/.pi/agent/schedule/...`（兼容 taiji 数据目录隔离前的旧版写入位置）。
-2. 原子 rename `scheduler.json` → `scheduler.json.imported` 独占迁移；rename 抛 ENOENT 说明并发/崩溃已被别人处理，走 `.imported` 残留恢复。
-3. 读取 `.imported`，逐任务 `appendEntry('pi-scheduler:task', upsert)` 写入当前 session（owner 归属当前 session）。
-4. 删除 `.imported`：**新 session 首次 flush 前（尚未收到 assistant 消息）延迟删除**，由首个 `turn_end` / `session_shutdown` 确认 flush 后再删（防未 flush 即退出导致任务永久丢失 + 源文件已毁）。
-5. 迁移失败（read/parse/append 异常）整体降级：`console.warn` + 不阻断 session 启动，`.imported` 保留供下次重试。
+- **resume**：同 sessionId → 同分片文件，任务直接恢复。
+- **fork**：新 sessionId → 对应分片不存在 → 空任务集。在 session A 创建的任务 fork 出 B 后不进 B（不同文件天然不共享），任务归属创建它的 session。
+- **树回退（撤回消息）**：不删除任务——任务库独立于会话树，需显式 `rm`。
+- **`--no-session` 模式**：任务照常持久化（分片键归一为 `no-session`）。
 
-迁移是一次性的：迁移完成后旧 `scheduler.json` 已被 rename 走并删除，后续 session 不再有旧格式数据。
+### 排障口径
+
+任务真实状态 = `cat` 分片 JSON 文件本身；写失败（磁盘满等）内存态照常推进 + warn + 下写点重试，进程崩溃时至多丢「自上次成功写之后的变化」。
+
+### taiji 任务面板（scheduler-manager 插件）
+
+面板直读同一分片文件（`sessions.get` 取 cwd → 推导路径 → 读取），刷新 = 写后主动拉取 + 10s 轮询 + 会话激活拉取；写操作仍经 `/schedule` 白名单子命令。
+
 
 ## 运行限制与 dispatch 行为
 
@@ -125,11 +113,11 @@ description: "使用或排查 @zhushanwen/pi-scheduler（定时任务调度）�
 
 dispatch 行为（`dispatchTask`，scheduler-steer-direct-dispatch 直投模型）：
 
-- **steer 直投**：到期任务 `backend.sendMessage(..., {deliverAs: 'steer', triggerTurn: true})` 直接投递——agent busy 时消息插入当前 turn（立即被模型看到）、idle 时开新 turn。不排队、不等 idle、不丢弃。
+- **steer 直投（经投递端口）**：到期任务经投递端口 `port.deliver` 注入（幂等键 `${taskId}:${epoch}`，失败 forget），形态与直发 `sendMessage(..., {deliverAs: 'steer', triggerTurn: true})` 逐字一致——agent busy 时消息插入当前 turn（立即被模型看到）、idle 时开新 turn。不排队、不等 idle、不丢弃。端口缺席（装配异常窗口）降级直发 + warn。
 - **受理即记账**：`sendMessage` 是 fire-and-forget（返回 void），await 立即通过，`nextRunAt` 调用即推进——无「入队未终态」窗口。
 - **同任务 in-flight 检查**：该任务 dispatch 在途（如 `/schedule run` 与 tick dispatch 并发）时本 tick 跳过，防双投。
-- **模型切换**（`task.model` 设定且 ≠ 会话当前模型）：sendMessage 前 `setModel` 切到目标任务模型、记未决切换记录，事件恢复（turn_end + isIdle 复核）后切回原模型；切换失败降级——照常 dispatch（模型字段不阻塞核心调度）。
-- dispatch 成功后：recurring 推进 `nextRunAt` 并 append `advance`；once 删除任务并 append `delete`；失败（`sendMessage` 同步抛错，如 session 关闭）记 `lastStatus='failed'` 不 rethrow，下个 tick 重试（transient 失败重试语义，不 append advance）。
+- **模型切换**（`task.model` 设定且 ≠ 会话当前模型）：dispatch 前 `setModel` 切到目标任务模型、记未决切换记录（纯内存），恢复锚点 = `agent_settled` 事件 + isIdle 事实查询双通道，恢复后切回原模型；切换失败降级——照常 dispatch（模型字段不阻塞核心调度）。
+- dispatch 成功后：记账（`runCount++` / history / `lastStatus='success'`）+ recurring 推进 `nextRunAt` / once 删除任务，快照整体落盘一次；失败（投递端口拒收 / 直发抛错）记 `lastStatus='failed'` 落盘不 rethrow，下个 tick 重试（nextRunAt 未推进，重试轮取新幂等键）。
 - 注入的消息：`{content: task.prompt, customType: 'pi-scheduler:dispatched', display: true}`，投递选项 `{deliverAs: 'steer', triggerTurn: true}`。
 
 ## 任务数据结构
@@ -146,10 +134,9 @@ dispatch 行为（`dispatchTask`，scheduler-steer-direct-dispatch 直投模型�
 - `createdAt` / `nextRunAt` / `expiresAt?`：时间戳（ms）。
 - `runCount` / `lastRunAt?` / `lastStatus?`（`success`|`failed`）/ `lastError?`：执行统计。
 - `history`：最近 20 条 `ExecutionRecord`（`{at, status}`）。
-- `ownerSessionFile?`：归属 session JSONL 路径（fork 过滤用，非持久化业务字段）。
-- `pending?`：运行时标记「到期待 dispatch」，非持久化（与 `enabled` 正交）。
+- `pending?`：运行时标记「到期待 dispatch」，快照写入口统一剥离（与 `enabled` 正交）。
 
-持久化写入 session JSONL 的是 `TaskSnapshot`（剥离 `ownerSessionFile`/`pending` 后的 15 字段）。
+快照文件里的任务即上述字段的全量（`pending` 被剥离）。
 
 ## 示例
 
@@ -187,6 +174,6 @@ schedule({ prompt: "...", schedule: "1h", kind: "recurring", model: "anthropic/c
 ## 备注
 
 - **croner 依赖**：cron 模式依赖 `croner`（dependencies，随包自动安装 + 静态 import，2026-09 0.6.0 起；此前为 optional peer，独立安装形态下 cron 任务会静默失败）。cron 解析失败（`INVALID_SCHEDULE`）= 表达式无效，不存在「解析器未安装」形态。
-- **数据目录隔离**：任务存储在 `getAgentDir()` 指向的 session JSONL。taiji 通过 `TAIJI_AGENT_DATA_DIR` / `PI_CODING_AGENT_DIR` 隔离实例时，任务随 session 落在隔离目录，与 `~/.pi/agent` 互不干扰。
-- **无配置 schema 可编辑**：scheduler 的所有状态都由运行时命令产生，没有可手动编辑的配置文件。要「批量预置任务」只能在 session 内逐条创建（或迁移旧 store）。
+- **数据目录隔离**：任务库在 `getAgentDir()` 下的 `scheduler/` 子目录。taiji 通过 `TAIJI_AGENT_DATA_DIR` / `PI_CODING_AGENT_DIR` 隔离实例时，任务库落在隔离目录，与 `~/.pi/agent` 互不干扰。
+- **快照可 cat 但勿手改**：任务由运行时命令产生与管理；快照文件是排障观测点，手改会在下一次运行时写点被覆盖。要「批量预置任务」只能在 session 内逐条创建。
 - **无参 `/schedule`**：打开创建表单（不是提示语）。任务管理用 `list`/`on`/`off`/`rm`/`run` 子命令或 `schedule_control` 工具。

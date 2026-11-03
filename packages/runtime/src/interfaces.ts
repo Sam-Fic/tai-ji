@@ -193,7 +193,11 @@ export interface ISessionService {
 
   // [HISTORICAL] sendSubagentMessage 已删除（composer 四符号设计 D2，marker 半成品通道废弃）：
   // 定向消息改走 subagentAction(message/start) 直达 subagent。
-  abort(sessionId: string): Promise<void>
+  // [pi-stall-detection U4] source：session_manager abort 工具通路的机器分型传参（唯一非
+  // 缺省调用点 = session-manager-handler abort 分支——agent 发起的 abort 不是用户操作，
+  // 悬挂升级置判死强杀分型而非 abort_timeout 用户分型，RL16 分型不变量；缺省 undefined =
+  // 用户语义不变）。
+  abort(sessionId: string, source?: 'agent'): Promise<void>
   /** 强制退出卡死 session（sidebar 右键入口，杀 pi 进程 + stopped 收敛）。 */
   forceQuit(sessionId: string): Promise<void>
   /**
@@ -215,7 +219,18 @@ export interface ISessionService {
    */
   abortBash(sessionId: string): Promise<{ sent: boolean }>
   switchModel(sessionId: string, provider: string, modelId: string): Promise<string>
-  compact(sessionId: string, customInstructions?: string): Promise<void>
+  /**
+   * 手动触发后台压缩（C2 /compact 后台化）：经内部命令 `/__taiji_compact__` 送达
+   * smart-context 扩展的后台管理器（互斥/门控在扩展侧判定），fire-and-forget 不等待
+   * 压缩全程——本方法只承载「指令已送达 pi」的受理语义，压缩完成事实经落盘信号链
+   * （分界行）与完成通知到达。customInstructions percent 编码后拼进命令 args（扩展侧
+   * 解码，编码为传输细节）。
+   *
+   * 失败语义：session 无活跃 pi 进程时抛（调用方 error envelope）；命令投递后的扩展侧
+   * 结果（启动成功/进行中幂等/门控拒绝）不经本方法返回——分别经 renderer 受理提示、
+   * smart-context 通知通道到达。
+   */
+  compactBackground(sessionId: string, customInstructions?: string): Promise<void>
   /**
    * 拉取 session 历史（缓存增量三分支重建 + 双预算窗口，crash-resilience §3.3 D4）。
    * truncated=true 表示窗口外仍有历史；loadedTurns=本次返回的完整 turn 数；
@@ -702,6 +717,8 @@ export interface IConfigService {
   setSmartContextThresholds(thresholds: number[]): void
   /** 设置排除模型列表（过滤无 "/" 条目去重后写入 excludedModels 字段）。 */
   setSmartContextExcludedModels(models: string[]): void
+  /** 设置后台压缩触发线（读改写 extension 配置文件的 autoCompactThresholdRatio 字段，钳制 [0,1]）。 */
+  setSmartContextAutoCompactThresholdRatio(ratio: number): void
   // ── LLM 网络代理配置（llm-network-proxy 设计 §5 U3）──
   /** 读取网络代理配置快照（ext-config 文件，缺失/坏 JSON/字段非法回默认值）。 */
   getNetworkProxyConfig(): NetworkProxyConfig

@@ -1,6 +1,8 @@
 /**
- * 完成通知入账与 pending-notifications 接入（M3 + unified-delivery 波 3 入账切换，
- * 设计 .tmp/tech-design/unified-delivery.md D3 裁决 1 / §5 波 3 / 老能力映射 #4）。
+ * 完成通知入账与 pending-notifications 接入（M3 + unified-delivery 投递统一化设计的
+ * 波 3 入账切换，D3 裁决 1 / 老能力映射 #4；投递统一化设计的现行登记处 = ADR-0074
+ * 与 docs/CONTEXT.md「统一投递（unified delivery，v3）」段，语义由本文件头注释
+ * 直接承载，见下）。
  *
  * 通道形态：
  *  - register/unregister 经 pi.events.emit（EventBus，pending 侧 pi.events.on 消费）
@@ -12,7 +14,7 @@
  *    C-ext-19 的 at-most-once 直发禁令由此在通道无关层面满足（结果语义 = at-least-once
  *    + 幂等）。
  *  - port 缺席（装配异常 / 版本混装窗口）= 直发兜底：pi.sendMessage steer + warn
- *    留痕（设计 §3.7 缺席语义；降级代价 = 无判重无耐久的 at-most-once，只覆盖装配
+ *    留痕（port 缺席语义；降级代价 = 无判重无耐久的 at-most-once，只覆盖装配
  *    异常窗口、不作为常态路径——warn 即修复信号）。
  *
  * D17 pi 引用刷新：直发兜底与 pending emit 通路持模块级「当前 pi 引用」——同进程
@@ -32,7 +34,15 @@
  * （收殓时 pi API 不可用，无 outbox 条目，重放无从覆盖）改由对账路径承接
  * （pending-reconcile.ts——收殓终态通知的唯一生产者）。
  *
- * kill 路径不入账（§3.5「bash_kill 终态收尾的单点归属」，老能力映射 #10 result 类
+ * rejected 处置阶梯（completion-signal-delivery D1/D7，ADR-0122⑧ 边界精确化的落点）：
+ * rejected（幂等键未登记、outbox 未落，重放结构性无从覆盖）不再等于丢失——瞬态成因
+ * 当场单次重提（deliverTaskFinishedNotification rejected 分支内同步单次）；重提未
+ * 恢复的形态由对账边沿的事实判据兜底（pending-reconcile 三入口：session_start /
+ * __taiji_bg_reconcile__ 切回 / agent_settled——natural/timeout 终态已入补投候选，
+ * payload 与本文件主路径同构造）。warn 文案相应从「丢失」改为「recovered by
+ * reconcile fallback」+ 恢复指引（RL9 弱断言防回退）。
+ *
+ * kill 路径不入账（bash_kill 终态收尾的单点归属原则，老能力映射 #10 result 类
  * silent 声明）：reason:"killed" 只 emit unregister——kill 调用方就在当前 turn 等结果，
  * 双发是噪音。
  *
@@ -44,6 +54,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { DeliveryDeliverOptions, DeliveryEnvelope } from "@zhushanwen/pi-delivery-port";
 import { getDeliveryPort } from "@zhushanwen/pi-delivery-port";
 import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
@@ -55,7 +66,7 @@ const logger = getLogger("base-tool-enhance");
 
 /**
  * 通知消息 customType：桌面 custom_message 通用渲染通道（subagent-bg-notify 先例，
- * §3.1 用户视角「对话流中以 custom entry 形式出现」）。
+ * 用户视角 = 完成通知在对话流中以 custom entry 形式出现）。
  */
 export const BACKGROUND_BASH_CUSTOM_TYPE = "background-bash";
 
@@ -77,10 +88,15 @@ export function resetNotifyForTest(): void {
 
 /**
  * 本包终态 reason → pending reason 字符串。
- * 映射值全部落在 pending-notifications mapReasonToStatus 的已知分支（四个值在该
- * switch 全部直通同名 status），保证 emit 后 listener 算出的 status 与本包预期一致：
+ * 映射值全部落在 pending-notifications mapReasonToStatus 的已知分支或其 fail-visible
+ * 缺省，保证 emit 后 listener 算出的 status 与本包预期一致：
  *  - natural + exitCode 0 → "completed"（正常完成）
- *  - natural + 非零/不可知 → "failed"（§3.1 失败路径：通知带 error 与末尾输出摘要）
+ *  - natural + 非零 → "failed"（失败路径：通知带 error 与末尾输出摘要）
+ *  - natural + null/undefined（无退出码）→ "unknown"（结果未知——转后台任务退出码
+ *    结构性不可得：命令 reparent 到 init、无父权 wait 不可用；被信号终止的显式后台
+ *    任务同样无退出码。"unknown" 不在 mapReasonToStatus 词表内 → 经其 fail-visible
+ *    缺省落 'unknown' status（protocol 零改动，foreground-idle-to-background §5
+ *    部件 5），不再保守误报为失败引导）
  *  - timeout   → "time_limited"
  *  - killed    → "cancelled"
  *  - process-exit → "cancelled"（进程退出收殓终止，非任务自身成败）
@@ -88,7 +104,7 @@ export function resetNotifyForTest(): void {
 export function toPendingReason(
 	reason: BackgroundTaskEndReason,
 	exitCode: number | null | undefined,
-): "completed" | "failed" | "time_limited" | "cancelled" {
+): "completed" | "failed" | "unknown" | "time_limited" | "cancelled" {
 	switch (reason) {
 		case "timeout":
 			return "time_limited";
@@ -96,13 +112,16 @@ export function toPendingReason(
 		case "process-exit":
 			return "cancelled";
 		default:
-			// natural：exit 0 = 成功；非零（含 null 不可知，保守按失败处理引导查看输出）
-			return exitCode === 0 ? "completed" : "failed";
+			// natural：exit 0 = 成功；非零 = 失败；无退出码 = 结果未知（如实上报，
+			// 不谎报 failed——成功长任务曾恒被报为失败）
+			if (exitCode === 0) return "completed";
+			if (exitCode === null || exitCode === undefined) return "unknown";
+			return "failed";
 	}
 }
 
 /**
- * ⑤ 登记成功后 emit pending:register（§3.5 数据流 ⑤）。
+ * ⑤ 登记成功后 emit pending:register（后台任务生命周期数据流步骤 ⑤）。
  * 形态对齐 pending-notifications parseRegisterEvent 期望：{id, type, name}——
  * type:"bash" 经 D16 直通（process 档），**不携带 expiresAt**（该字段由 pending 侧
  * listener 按分档决定，process 档落盘省略）。引用未注入或 emit throw（旧 bus）时
@@ -122,7 +141,7 @@ export function emitPendingRegister(task: BackgroundTask): void {
 }
 
 /**
- * ⑧ emit pending:unregister（§3.5 数据流 ⑧）。
+ * ⑧ emit pending:unregister（后台任务生命周期数据流步骤 ⑧）。
  * data 形态对齐 pending-notifications parseUnregisterEvent 期望：{id, reason}——
  * status 不在 emit data 里（listener 用 mapReasonToStatus(reason) 自行计算）；
  * appendEntry 侧（对账/收殓）的落盘形态 {id, reason, status} 见 pending-reconcile.ts。
@@ -160,38 +179,80 @@ export function handleTaskExit(task: BackgroundTask): void {
  * ⑨ 完成通知入账（port.deliver，id = taskId 幂等键）：受理前落 outbox（丢失由差集
  * 重放覆盖）→ 受理即直达 pi 唯一队列（steer 档，注入形态与直发一致）。deliver 同步
  * 返回受理结果，本通路 fire-and-forget：accepted / swallowed（幂等命中）静默；
- * rejected（persist-failed / disposed）= 幂等键未登记、outbox 未落，通知丢失且重放
- * 无从覆盖（natural/timeout 不在对账补投判据内）——warn 留痕即修复信号。
+ * rejected（persist-failed / disposed）= 幂等键未登记、outbox 未落——处置阶梯①
+ * （completion-signal-delivery D1/D7①）：当场 getDeliveryPort() 重取当前实例单次
+ * 重提原 envelope（一次投递尝试的同步收尾动作，非重试循环非定时器——ADR-0122 红线
+ * 不越界，RL10）；重提仍 rejected 或重取缺席即停止，恢复责任移交对账边沿的事实
+ * 判据兜底（pending-reconcile 三入口，warn 文案带恢复指引——RL9/RL11）。
  */
 function deliverTaskFinishedNotification(task: BackgroundTask): void {
 	const port = getDeliveryPort();
 	if (port !== undefined) {
-		const receipt = port.deliver(
-			{
-				id: task.taskId,
-				timing: "steer",
-				payload: {
-					kind: "custom",
-					customType: BACKGROUND_BASH_CUSTOM_TYPE,
-					content: buildNotificationContent(task),
-					display: true,
-					details: buildNotifyDetails(task),
-				},
-			},
-			// collectKey 债权申报（result-collect 设计 §3.4）：单债权条目 = 其
-			// pending:register 的 id（bash 域幂等键与债权键同 id，设计 §3.3），对账
-			// 补投路径（pending-reconcile deliverReapNotifications）同款申报。
-			{ collectKey: [task.taskId] },
-		);
+		const envelope = buildFinishedNotifyEnvelope(task);
+		const receipt = port.deliver(envelope, collectKeyOption(task));
 		if (receipt.kind === "rejected") {
-			logger.warn("background task notify rejected by delivery port; notification lost (no outbox record)", {
-				detail: { taskId: task.taskId, reason: receipt.reason },
-			});
+			// 首败留痕（修复信号）+ 处置阶梯①接线：立即单次重提（D1 采用段①）。
+			logger.warn(
+				"background task notify rejected by delivery port; retrying once via re-acquired port, recovered by reconcile fallback if the retry fails too",
+				{ detail: { taskId: task.taskId, reason: receipt.reason } },
+			);
+			retryDeliverOnce(task, envelope);
 		}
 		return;
 	}
 	// port 缺席（装配异常窗口）：直发兜底（at-most-once 降级代价见文件头）。
 	sendDirectFallback(task);
+}
+
+/**
+ * 立即单次重提（D7①）：getDeliveryPort() 重取当前实例（session_start 重绑后即新
+ * 实例）、重提原 envelope（同幂等键——rejected 条目幂等键未登记，重提合法，
+ * delivery-port types 既有契约）。单次不循环：重提 rejected 或重取 undefined 均
+ * 直接返回（RL10 检查点的两处停止位），无定时器、无重试队列、无第三次投递。
+ */
+function retryDeliverOnce(task: BackgroundTask, envelope: DeliveryEnvelope): void {
+	const retryPort = getDeliveryPort();
+	if (retryPort === undefined) {
+		// 重取到 undefined（装配缺席窗）：停止转兜底——缺席直发兜底只属主路径缺席
+		// 形态，重提路径不扩该降级；恢复通道 = 对账边沿事实判据。
+		logger.warn(
+			"background task notify retry skipped: delivery port absent on re-acquire; recovered by reconcile fallback",
+			{ detail: { taskId: task.taskId } },
+		);
+		return;
+	}
+	const retryReceipt = retryPort.deliver(envelope, collectKeyOption(task));
+	if (retryReceipt.kind === "rejected") {
+		// 单次重提仍 rejected（转换窗旧实例在位 / 持久写失败）：即停报警（RL11——
+		// 持久成因不静默重试，warn 留痕交环境修复；环境修复后的送达由对账边沿的
+		// 事实判据自动承接，判据不区分成因）。
+		logger.warn(
+			"background task notify retry rejected after the single re-acquire attempt; single retry spent, recovered by reconcile fallback (session_start / resume / agent_settled edge)",
+			{ detail: { taskId: task.taskId, reason: retryReceipt.reason } },
+		);
+	}
+}
+
+/** 完成通知 envelope（主投递与单次重提共用同一构造——重提原 payload 语义）。 */
+function buildFinishedNotifyEnvelope(task: BackgroundTask): DeliveryEnvelope {
+	return {
+		id: task.taskId,
+		timing: "steer",
+		payload: {
+			kind: "custom",
+			customType: BACKGROUND_BASH_CUSTOM_TYPE,
+			content: buildNotificationContent(task),
+			display: true,
+			details: buildNotifyDetails(task),
+		},
+	};
+}
+
+function collectKeyOption(task: BackgroundTask): DeliveryDeliverOptions {
+	// collectKey 债权申报（result-collect 域，现行登记处 = ADR-0146）：
+	// 单债权条目 = 其 pending:register 的 id（bash 域幂等键与债权键同 id），
+	// 对账补投路径（pending-reconcile deliverReapNotifications）同款申报。
+	return { collectKey: [task.taskId] };
 }
 
 /** 缺席兜底：pi.sendMessage steer 驱动新 turn（旧 bus 已 dispose 时降级日志不断链）。 */
@@ -231,14 +292,18 @@ export type NotificationTaskLike = Pick<
 >;
 
 /**
- * 通知文案（§3.1 终态样例）：
+ * 通知文案（终态样例）：
  *
  *   [background-bash] bt-x finished (exit 0, 3m12s): pnpm test
  *   Last lines: ... Tests: 42 passed ...
  *   Full output: <path>; use bash_output {task_id:"bt-x"} for details.
  *
  * 失败任务 head 行标 failed（exit code 即 error 摘要，尾部输出佐证）；timeout 标
- * timed out；tailSummary 为空（无输出/文件丢失）时省略 Last lines 行。
+ * timed out；natural + 无退出码标「结果未知」形态 `finished (exit code unknown, …)`
+ * （foreground-idle-to-background §5 部件 5：转后台任务退出码结构性不可得，被信号
+ * 终止的显式后台任务同样无退出码——无退出码即如实报未知，措辞沿用
+ * buildTerminatedNotificationLine 的 exit code unknown 先例；渲染层对 exitCode null
+ * 已归中性档）；tailSummary 为空（无输出/文件丢失）时省略 Last lines 行。
  */
 export function buildNotificationContent(task: NotificationTaskLike): string {
 	const duration = formatDurationMs(task.durationMs ?? 0);
@@ -248,8 +313,10 @@ export function buildNotificationContent(task: NotificationTaskLike): string {
 		head = `[background-bash] ${task.taskId} timed out (${duration}): ${command}`;
 	} else if (task.exitCode === 0) {
 		head = `[background-bash] ${task.taskId} finished (exit 0, ${duration}): ${command}`;
+	} else if (task.exitCode === null || task.exitCode === undefined) {
+		head = `[background-bash] ${task.taskId} finished (exit code unknown, ${duration}): ${command}`;
 	} else {
-		head = `[background-bash] ${task.taskId} failed (exit ${task.exitCode ?? "unknown"}, ${duration}): ${command}`;
+		head = `[background-bash] ${task.taskId} failed (exit ${task.exitCode}, ${duration}): ${command}`;
 	}
 	const lines = [head];
 	if (task.tailSummary !== undefined && task.tailSummary.length > 0) {
@@ -260,7 +327,7 @@ export function buildNotificationContent(task: NotificationTaskLike): string {
 }
 
 /**
- * sendMessage details 载荷（设计 §3.3 D1 schema）。
+ * sendMessage details 载荷（D1 schema）。
  *
  * 为什么另立 details 而非让上层解析 content：content 是本模块内部模板字符串、写给
  * LLM 接力的日志行，格式漂移即静默打破解析；details 经既有透传管道（event-adapter
@@ -281,7 +348,7 @@ export interface BackgroundBashDetails {
 	/** 存活时长（毫秒），与 content 中的耗时同源同口径。 */
 	durationMs: number;
 	endReason: "natural" | "timeout";
-	/** 无退出码时为 null（timeout / 被信号终止语义，D1 可空字段）。 */
+	/** 无退出码时为 null（timeout / 被信号终止 / 转后台任务自然完成——无父权不可得，D1 可空字段）。 */
 	exitCode: number | null;
 }
 

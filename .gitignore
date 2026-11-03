@@ -156,3 +156,6 @@ package-lock.json.*
 # === 项目级 AI skill 实体已迁 workspace 根（各 worktree 以相对 symlink 共享同一实体，脱离分支版本化；
 # 裁决见 docs/adr/decisions.md ADR-0076；恢复通道见 docs/TROUBLESHOOTING.md §27）===
 .agents
+
+# AI 会话工作流产物（archify 可视化缓存，非项目源码）
+/.archify/

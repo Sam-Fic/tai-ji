@@ -1,5 +1,5 @@
 // src/__tests__/registry.test.ts —— registry 持久化白盒：原子写 / 损坏防御 / LRU / 条目剥离
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -89,7 +89,7 @@ describe("writeRegistryEntry / readRegistry roundtrip", () => {
 	});
 });
 
-describe("corruption defense (§3.6)", () => {
+describe("corruption defense", () => {
 	it("bad JSON → renamed .corrupt + empty table rebuild + no crash", () => {
 		const path = freshRegistryPath();
 		writeRegistryEntry(path, taskToRegistryEntry(makeEntry()));
@@ -146,5 +146,26 @@ describe("terminal LRU (cap 50, symmetric with task store)", () => {
 		expect(map.has("bt-1003-aaaa")).toBe(false);
 		expect(map.has("bt-1004-aaaa")).toBe(false);
 		expect(map.has(`bt-${1000 + TOTAL - 1}-aaaa`)).toBe(true);
+	});
+});
+
+describe("读失败防御（失败语义折叠修复：读失败禁止空表重建）", () => {
+	it("registry 读失败 → writeRegistryEntry 拒绝写回 {success:false}，文件保持原内容不重建", () => {
+		const path = freshRegistryPath();
+		expect(writeRegistryEntry(path, taskToRegistryEntry(makeEntry())).success).toBe(true);
+		const before = readFileSync(path, "utf8");
+
+		chmodSync(path, 0o000);
+		try {
+			const result = writeRegistryEntry(path, taskToRegistryEntry(makeEntry({ taskId: "bt-2000-ffff", pid: 222 })));
+			// 读失败上抛进锁壳 catch：不写回（空表合并写回 = 丢失既有条目），条目停留原状
+			expect(result.success).toBe(false);
+			expect(typeof result.error).toBe("string");
+		} finally {
+			chmodSync(path, 0o644);
+		}
+		// 原文件逐字节未动——未被空表重建
+		expect(readFileSync(path, "utf8")).toBe(before);
+		expect(readRegistry(path).size).toBe(1);
 	});
 });

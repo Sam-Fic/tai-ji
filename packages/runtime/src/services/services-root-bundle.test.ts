@@ -5,6 +5,7 @@ import { findOrphanPiRows, matchesOwnPiArgv, parsePsOutput, reapOrphanPiProcesse
 import { ensureAutoRenameDefault, getAutoRenameEnabled, getAutoRenameEnabledPath, getRenameConfigPath, getRenameMaxLength, getRenameMode, getRenameModel, getRenamePrompt, setAutoRenameEnabled, setRenameConfigLockTimingForTest, setRenameMaxLength, setRenameMode, setRenameModel, setRenamePrompt } from './rename-session-config.js';
 import { DEFAULT_UI_LOCALE, readUiPreferences, uiPreferencesPath, writeUiPreferences } from './ui-preferences-helper.js';
 import { RENAME_INSTRUCTION_MAX_LENGTH } from '@taiji/shared';
+import { buildPiMainAgentArgs, buildPiSubagentSpawnArgs, PI_SPAWN_NO_EXTENSIONS } from '@zhushanwen/pi-rpc';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -342,6 +343,36 @@ describe('matchesOwnPiArgv（判据 v2 四条合取的 ①②③）', () => {
   it('引号包裹的空格路径清单值：分词后精确相等命中', () => {
     const staged = '/Users/John Doe/app/Contents/Resources/extensions/my-ext'
     expect(matchesOwnPiArgv(row_m2(1, 1, `pi --mode rpc --no-extensions --extension "${staged}"`), [staged])).toBe(true)
+  })
+})
+describe('spawn argv 判据对账（startup 设计 §7.2「孤儿收割判据单源」）', () => {
+  // 对账方向：判据 flag 与 spawn 构造经 pi-rpc 判据常量同源同引（PI_SPAWN_MODE_ARGS /
+  // PI_SPAWN_NO_EXTENSIONS / PI_SPAWN_EXTENSION_FLAG / PI_SPAWN_SKILL_FLAG）。构造侧改
+  // flag 形态（改名/删除）而不同步判据 → 本段对账测试红——替代「两侧各自硬编码时的静默漏收」。
+  // 看守拓扑补登（2026-10-31 终态同步）：subagent 包装层（pi-subagent-cli buildSpawnArgs）
+  // push 的 --no-extensions 变更不在本段红灯射程——本段在下方用例中以本地 args.push 模拟
+  // 包装层而非实调它；该半边的红灯由 pi-subagent-cli spawn-args.test 的 toEqual 锚定承担
+  // （断言产物含 "--no-extensions"），CI 同批可拦。本段锚定的是 pi-rpc 模板产物 + 判据合取。
+
+  it('buildPiMainAgentArgs 产物满足四条合取①②③（主 agent spawn 形态对账）', () => {
+    const argv = buildPiMainAgentArgs({ extensionPaths: [MARKERS[0]] }, undefined)
+    // ps command 列形态：可执行 + argv 空白连接（无空格路径下 tokenizeArgv 还原 token 序列）
+    expect(matchesOwnPiArgv(row_m2(1, 1, ['/opt/pi/pi', ...argv].join(' ')), [MARKERS[0]])).toBe(true)
+  })
+
+  it('buildPiSubagentSpawnArgs + 包装层 --no-extensions 后满足①②③（subagent spawn 形态对账，--skill 值承载）', () => {
+    const args = buildPiSubagentSpawnArgs({
+      modelRef: { provider: 'p', id: 'm' },
+      thinkingLevel: undefined,
+      agentTools: undefined,
+      appendSystemPromptPath: undefined,
+      sessionDir: '/tmp/subagent-sd',
+      forkSource: undefined,
+      skillPaths: [MARKERS[1]],
+    })
+    // pi-subagent-cli 包装层（buildSpawnArgs）在模板产物尾部追加 --no-extensions + 白名单
+    args.push(PI_SPAWN_NO_EXTENSIONS)
+    expect(matchesOwnPiArgv(row_m2(1, 1, ['/opt/pi/pi', ...args].join(' ')), [MARKERS[1]])).toBe(true)
   })
 })
 describe('findOrphanPiRows（判据④：ppid=1 reparent 证据）', () => {

@@ -94,7 +94,9 @@ const lifecycleEffects = createLifecycleEffects(
 // - onSessionExited 壳扩展段 = exited 分通道重置（companion-bridge 出口：dialog
 //   queue.resetFor + form Map 具名清理，M8 防御；禁走 triggerSessionCleanups 销毁语义）；
 // - onSessionError/onGlobalError = U14 错误条回调（errorBarEffects）；
-// - onSubagents = 壳侧直挂 applySubagentRecords（U15/A9：写 subagent 分区驱动运行状态行；
+// - onSubagents = 壳侧直挂 applySubagentRecords（U15/A9：写 subagent 分区驱动 RunBand
+//   运行带计数与列表状态点 working 态——v1 状态行呈现已由 M-10 升级为两级运行带，
+//   startup-readiness D11 的会话域「状态行」是另一机制，无数据关联；
 //   factory 不含 subagent 语义，接线位在壳扩展层，D5 去留表）。
 // D5 去留表：onMessageComplete/onWorkflowUpdate/onSubagentEntries 本波不接
 //（W4 通知体系 / 桌面面板族）。

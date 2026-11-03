@@ -153,11 +153,6 @@ export default function renameSessionExtension(pi: ExtensionAPI): void {
 		registerRenameSessionTool(pi);
 	}
 
-	// 在途去重标志：工厂闭包级而非模块级——pi 的 extensionCache 缓存 factory、每次
-	// session 创建重执行工厂函数，闭包变量 = per-session 生命周期；模块顶层变量进程级存活，
-	// 进程内 /fork、/session 切换 session 时会跨 session 污染、吞掉新 session 的唯一命名机会。
-	let firstPromptInFlight = false;
-
 	// message_end 入口（first-prompt 模式）：首条 user 消息发出即命名，不等回复完成。
 	pi.on("message_end", async (event: MessageEndLikeEvent, ctx: ExtensionContext) => {
 		// handler 侧 debug 日志（C3 同款契约）：firstPrompt 前缀区分触发入口（与 turn_end 路径
@@ -201,17 +196,13 @@ export default function renameSessionExtension(pi: ExtensionAPI): void {
 				return;
 			}
 
-			// 7. 在途去重：by construction 第二条 user 到达时首条已 append（步 5 拦截），本
-			//    标志兜住极端交错双发；settle 后释放（首条窗口已消费，释放后新到达靠步 5 拦截）
-			if (firstPromptInFlight) return;
-			firstPromptInFlight = true;
-
-			// 8. fire-and-forget（同 turn_end 契约）：handler 立即 resolve，LLM 调用与 setSessionName
+			// 7. fire-and-forget（同 turn_end 契约）：handler 立即 resolve，LLM 调用与 setSessionName
 			//    在后台异步完成。finalMessage 传空 content——first-prompt 语义即「不等回复」，
-			//    finalText 为空串走 buildTitleMessages 两条降级（标题只基于 prompt）
-			void landTitle(pi, ctx, config, { content: [] }, { debugLog, promptText }).finally(() => {
-				firstPromptInFlight = false;
-			});
+			//    finalText 为空串走 buildTitleMessages 两条降级（标题只基于 prompt）。
+			//    重复触发由步 5 计数拦截（pi 事件链 emit await 先于 append，第二条 user 到达
+			//    时首条已入 entries，计数 ≥1）；旧 firstPromptInFlight 在途标志已删——pi 单进程
+			//    事件模型下「首条未 append 且第二条 message_end 已到」不可达。
+			void landTitle(pi, ctx, config, { content: [] }, { debugLog, promptText });
 			// rename 是 best-effort，任何 LLM 失败（网络/提取/auth/model 不可用）都静默跳过保留原 label，
 			// 不进 session history。
 		} catch (e) {

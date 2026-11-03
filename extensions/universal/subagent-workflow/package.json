@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-subagent-workflow",
-  "version": "10.3.0",
+  "version": "10.4.0",
   "type": "module",
   "main": "index.ts",
   "description": "Unified subagent execution and multi-agent workflow orchestration for Pi — spawned-process agent runtime with sync/background modes, stateful workflow management with persistence, state machine, and execution tracing.",
@@ -30,7 +30,8 @@
     "src/workflow-notify.ts",
     "src/host/",
     "src/injectors/",
-    "src/interface/"
+    "src/interface/",
+    "src/workflow-notify-reconcile.ts"
   ],
   "taiji": {
     "role": "universal",

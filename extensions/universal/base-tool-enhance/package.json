@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-base-tool-enhance",
-  "version": "0.10.4",
+  "version": "0.11.0",
   "description": "Base tool enhancement - override builtin bash tool: foreground delegates to pi official factory, incremental background mode (design decisions documented in source comments)",
   "type": "module",
   "main": "src/index.ts",
@@ -25,7 +25,8 @@
   "files": [
     "src/",
     "index.ts",
-    "skills/"
+    "skills/",
+    "bin/"
   ],
   "dependencies": {
     "@zhushanwen/extension-protocol": "workspace:*",
@@ -33,7 +34,8 @@
     "@zhushanwen/pi-ext-guards": "workspace:*",
     "@zhushanwen/pi-extension-logger": "workspace:*",
     "@zhushanwen/pi-file-lock": "workspace:*",
-    "@zhushanwen/pi-llm-shared": "workspace:*"
+    "@zhushanwen/pi-llm-shared": "workspace:*",
+    "@zhushanwen/subagent-core": "workspace:*"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.9",

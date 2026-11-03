@@ -35,7 +35,7 @@ export interface UsageRow extends UsageMetrics {
    * （`${provider}/${id}` 复合串）权威优先、缺失诚实回退 'compaction'；rename-session
    * 桶 = custom entry data.model（复合串）检查回退 'rename-session'。归属组
    * （compaction/rename）的 model 为复合串属归属语境刻意——与主桶组裸 id 形态并存
-   * 是预期，展示层用 provider/model 分量渲染（usage-page-fixes §3.3 ⑤）。
+   * 是预期，展示层用 provider/model 分量渲染。
    */
   model: string
   /** session entry cwd 的 basename；无 cwd → '(unknown)'。 */

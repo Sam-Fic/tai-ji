@@ -1,6 +1,6 @@
 # taiji 领域模型登记
 
-> **本文件定位**：领域聚合、不变量与状态机的登记处（统一语言词条在 [CONTEXT.md](CONTEXT.md)）。当前登记域：**画布（problem-solve canvas，聚合与不变量，2026-10）**；**状态机基建与六域状态机（run / 画布节点 / plan / goal / permanent-session + 归档单元 + session occupancy turn，2026-10，见下「状态机基建」节）**；**session 存储归档域（归档单元聚合 + 不变量 + 转移表，2026-10，见下「session 存储归档域」节）**；**subagent 会话轮债权域（record 会话 / 轮 / 债权聚合不变量，2026-10，见下「subagent 会话轮债权域」节）**。
+> **本文件定位**：领域聚合、不变量与状态机的登记处（统一语言词条在 [CONTEXT.md](CONTEXT.md)）。当前登记域：**画布（problem-solve canvas，聚合与不变量，2026-10）**；**状态机基建与六域状态机（run / 画布节点 / plan / goal / permanent-session + 归档单元 + session occupancy turn，2026-10，见下「状态机基建」节）**；**会话健康分层（停滞判定三层信号源与判定权归属，2026-11，见下「会话健康分层」节）**；**session 存储归档域（归档单元聚合 + 不变量 + 转移表，2026-10，见下「session 存储归档域」节）**；**subagent 会话轮债权域（record 会话 / 轮 / 债权聚合不变量，2026-10，见下「subagent 会话轮债权域」节）**。
 >
 ## 状态机基建（@zhushanwen/state-machine）
 
@@ -16,7 +16,7 @@
 
 | 域 | 状态词表 | 机器声明（实现载体 = 本基建） | 错误策略 / 表外处置 |
 |----|---------|------------------------------|---------------------|
-| workflow run 生命周期（outcome 四值正交，仅 terminal 产生） | created / running / settling / terminal + interrupted 暂停态（resume 流回 running） | `RUN_MACHINE`（packages/subagent-core/src/orchestration/run-events.ts） | throw——`IllegalTransitionError` 保形（errorFactory 构造既有类实例，消息含合法事件清单） |
+| workflow run 生命周期（outcome 五值正交 `done/failed/cancelled/time_limited/partially_succeeded`，仅 terminal 产生——partially_succeeded 见 [ADR-0159](adr/decisions.md)：run 终局吸收成员交付，run 级终局优先于成员集合派生） | created / running / settling / terminal + interrupted 暂停态（resume 流回 running） | `RUN_MACHINE`（packages/subagent-core/src/orchestration/run-events.ts） | throw——`IllegalTransitionError` 保形（errorFactory 构造既有类实例，消息含合法事件清单） |
 | 画布节点生命周期 | draft / under-review / passed（terminal）/ rejected / shelved | `canvasLifecycleMachine`（packages/runtime/src/services/canvas/canvas-foundation.ts） | throw——`CanvasDomainError` 保形（`lifecycle_transition_illegal` 错误码 + recover 指引） |
 | plan 计划生命周期 | idle / planning / reviewing / revising / approved / dispatching / completed / exited（终态 + enter 重启出边并存） | `PLAN_MACHINE`（packages/extension-protocol/src/extensions/plan/state-machine.ts） | result——表外 `{ok:false}` 不炸 turn |
 | goal 目标状态 | active / paused / blocked / complete / budget_limited / cancelled（后三 terminal） | `GOAL_MACHINE`（extensions/universal/goal/src/engine/goal.ts；`transitionStatus` 保形包装对外） | throw |
@@ -30,13 +30,32 @@
 
 session 的会话占用（occupancy）是四维结构：turn 维（状态机，见上表 `SESSION_TURN_MACHINE`）+ compacting / bash / handingOff 三个与 turn 正交的两态布尔维（ADR-0080 先例：两态域布尔判定比表级 fail-fast 更早更严，不建机器）。唯一写入口 = `applySessionOccupancyTransition`（event-interpreter.ts），内部编排「turn 机器 transition + 布尔维 patch」一次合并写；值变化才广播 `session.occupancy` 状态事件（全等去重）。原「同点双写」的派生三布尔（isGenerating/isCompacting/isBashRunning）已删除，消费方一律从 occupancy 派生（`isGeneratingTurn` = turn ∈ {dispatching, generating} 单点定义；「回合进行中」判定集合 = shared `ACTIVE_TURN_PHASES`，含 settling——投递判定、发送位预测、前端回合判定引用判定集合；活动条（ActivityStrip）消费 sessionPhase 派生视图按阶段分行，不直接引用集合）。
 
-- **事件词表与挂点**（词表派发点静态审计锁定每项必有派发点）：dispatching（投递受理出站）/ generating（message_start）/ settling（agent_end）/ idle（agent_settled + abort 型 1 + abort await 失败收尾 + 异常兜底 + handled 终局回落）/ reject-other（prompt 真失败收尾）/ full-reset（进程死亡四维全复位）；compacting± / bash±（压缩与 bash 窗口）/ handingOff±（交接编排在途，挂点 handoff-service：编排开始置位、cleanupInflight 统一复位）。announce-idle 事件退出词表（宣告语义归广播层原语 `announceSessionOccupancy`，跳过全等去重强制广播）；abort-stall 两死行与 reject-processing（随 u5a 忙闲门禁退役——processing 分型重试随忙闲门禁退役、转移行零消费）已删（派发点审计防死行复发，退役词清单一一对应 session-turn-machine.test.ts 静态审计 it.each 清单）。
+- **事件词表与挂点**（词表派发点静态审计锁定每项必有派发点）：dispatching（投递受理出站）/ generating（message_start）/ settling（agent_end）/ idle（agent_settled + abort 型 1 + abort await 失败收尾 + 异常兜底 + handled 终局回落）/ reject-other（prompt 真失败收尾）/ full-reset（进程死亡四维全复位）；compacting± / bash±（压缩与 bash 窗口）/ handingOff±（交接编排在途，挂点 handoff-service：编排开始置位、cleanupInflight 统一复位）。后台压缩（smart-context 自管路径，ADR-0182）不进入 compacting 维：不经 AgentSession、不置 pi 压缩锁、不产 compaction_start/end 事件，compacting± 挂点仅由 pi 同步压缩路径驱动。announce-idle 事件退出词表（宣告语义归广播层原语 `announceSessionOccupancy`，跳过全等去重强制广播）；abort-stall 两死行与 reject-processing（随 u5a 忙闲门禁退役——processing 分型重试随忙闲门禁退役、转移行零消费）已删（派发点审计防死行复发，退役词清单一一对应 session-turn-machine.test.ts 静态审计 it.each 清单）。
 - **不变量**：
   1. occupancy 四维唯一合法写点 = 转移原语（绕开直写在编译期红）；session 记录不存任何平行忙闲布尔
   2. turn 维转移行为 = 全组合合法表（绝对式幂等 patch 保形：任何状态收任何事件都写事件目标值，乱序/重复事件不产生错误状态——读侧零回归是迁移约束）
   3. abort 链的 idle 转移只允许在型 1（入口快照 turn ∈ {dispatching, generating}，有回合被中止）内调用；压缩取消与收尾窗口不写终态、不广播、不动 turn
   4. 终态 sidecar 写入纪律 = 第一终态优先（persistSessionOutcome 统一层：已有 done/error/stopped 则跳过；willRetry=true 的 attempt 级中间失败跳过终态写入、settling 转移保留）
 - **穷举与审计**：`generateTableTests` 全组合穷举（4 态 × 6 事件）+ 词表派发点静态审计 + 退役词零残留断言（session-turn-machine.test.ts）。
+
+## 会话健康分层（pi-stall-detection，2026-11）
+> 机制纪律：健康信号分层独立——每层信号源只探测本层，不跨层外推（事件循环挂死与回合推进停滞共用单层信号必然产生盲区）；观测通道与业务通道分离——请求级有界等待只存在于健康探测请求，业务 RPC（prompt / steer / bash / compact）永不携带墙钟超时，失败信号归 pi exit/error 事件链（[ADR-0122](adr/decisions.md) 保留白名单「PingProbe 无进展检测」行承载的观测通道例外）。判定与处置的机制单点在 runtime session 域：探测 = `PingProbe`（event-interpreter-ping.ts），第 2 层判定 = 静默判定矩阵（event-interpreter-silence.ts），自动处置链编排 = message-dispatcher.ts；renderer 只做辅助呈现，不复制判定规则。排障入口见 [TROUBLESHOOTING.md](TROUBLESHOOTING.md)「会话停滞判定与恢复」条目。
+
+会话健康由三层各自独立的信号源判定，与上节 occupancy 正交——occupancy 回答「回合处于哪个进行阶段」，健康分层回答「占用中的会话是否停滞」：
+
+| 层 | 信号源 | 判定权威 | 判定语义 |
+|----|--------|---------|---------|
+| 第 0 层 进程存活 | pi exit / error 事件链 | RpcClient exit 链（进程生死唯一权威） | 进程死 → 全部在途 RPC 显式失败（rejectAll）→ 错误入流 + 显式收尾广播 |
+| 第 1 层 事件循环活性 | get_state 探测请求有界等待（`PING_OBSERVE_TIMEOUT_MS` 5s 窗，60s 周期） | `PingProbe` 失败计数（每回合瞬态，探测生命期随 occupancy 转移边沿启停） | 窗内响应 = 事件循环活（失败计数清零）；超时计一次失败——2 次广播停滞 WARN，3 次判停滞（get_state 同步内存读必响应，连续观测超时即停滞确定性成立，无误杀范围） |
+| 第 2 层 回合推进 | 帧流事件静默计时 + 在途阶段定位 + 豁免锚点检查 | runtime 静默判定矩阵（event-interpreter-silence.ts；判定阈值 T = idleBackgroundSec + 300s 与提示阈值 T_hint = T − 60s 同源联动推导，经广播携带，renderer 不复制推导） | 静默超 T_hint → 活动条温和提示（判定权在 runtime，呈现只是辅助）；超 T 且无在途信号、无豁免锚点（ask_user 等待 / 压缩中）→ 判死；前台命令转后台不设锚点——防线 = T 公式恒盖过转后台窗 + 转后台早退边沿帧（tool_execution_end）刷新计时 + 转后台关闭配置不装配判死分支 |
+
+**非 occupancy 第五维**：停滞判定是信号驱动的瞬态判定与广播，不产生持久状态、不进 occupancy 状态机（上节四维结构与 `SESSION_TURN_MACHINE` 转移表不受影响）；与 occupancy 的唯一交点是生命期——探测与静默计时只在回合占用期运行、随 occupancy 转移边沿启停。
+
+**自动处置分型**（处置经强杀编排 forceQuitSession 唯一实现，按来源分型）：
+
+- 第 1 层判停滞且进程存活（事件循环挂死形态）→ 自动处置链：sample 调用栈取证 → 判死强杀（`probe_stall_auto_quit` 机器分型）→ 窄化自动恢复接回会话 → steer 注入原因提示；恢复失败降级死亡发声 + 用户手动重开。进程已死形态不进自动链，维持错误入流 + 用户显式重开。
+- 第 2 层判死 → 自动 abort + steer 注入原因提示（含静默时长与判定依据）；abort 悬挂超升级窗升级判死强杀（与第 1 层共用机器分型与自动恢复接线）。边界：转后台后同回合仍占用且静默超 T 照常判死——pending 后台任务无帧流信号可作锚点（完成通知经 steer 注入开新回合），占用回合的持续静默即停滞目标形态；pi 整体挂死由第 1 层探测兜底。禁用超时配置（httpIdleTimeoutMs=0）、自愈窗实际配置值超出 T 覆盖公式、或转后台关闭（idleBackgroundSec=null）的会话不启用第 2 层判死，降级仅提示（显式登记边界，非缺陷）。
+- 用户停止分型（`abort_timeout` / `user_force_quit`）语义不变：升级窗强杀后恢复归用户显式重开，不进自动恢复接线。
 
 ## 画布域
 > 机制纪律：不变量与状态机转移表的实现单点在 runtime CanvasService（`packages/runtime/src/services/canvas/`）——renderer / extension 侧不复制领域规则，全部写操作经唯一入口 `mutate`（契约 = `packages/extension-protocol/src/extensions/canvas/`，agent 工具实现 = `extensions/taiji/canvas/`，GUI 写通道 = WS RPC `canvas.mutate`）。

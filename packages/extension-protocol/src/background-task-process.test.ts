@@ -9,14 +9,14 @@ import {
 } from './background-task-process'
 
 // 真实进程用例（detached spawn / 孙子组 kill）走 libuv reap，满载下延迟不可预估；
-// 孙子用例三段轮询串联最坏 15s，默认 5s 超时不够（基线 kill-tree.test 同款放宽）
+// 孙子用例三段轮询串联最坏 15s，默认 5s 超时不够，故 testTimeout 放宽至 20s
 vi.setConfig({ testTimeout: 20_000 })
 
 // ── node:child_process 部分 mock：spawnSync 全接管（ps / pgrep / taskkill 不真跑）──
 // 实现直接 import node:child_process（无依赖注入缝），算法矩阵的失败注入打在模块 mock
 // 上；默认经 importOriginal 委托真实实现——真实进程用例（deadPid / detached spawn /
-// 孙子组 kill）不受影响，矩阵用例内按需覆写（对齐 runtime
-// background-task-reaper-primitives.test.ts 的 mock 边界惯例）
+// 孙子组 kill）不受影响，矩阵用例内按需覆写（对齐 runtime 现行
+// background-task-reaper.test.ts 的 vi.mock + importOriginal 部分 mock 边界惯例）
 const childMock = vi.hoisted(() => ({
   spawnSync: vi.fn(),
   actual: null as unknown as typeof import('node:child_process'),
@@ -262,7 +262,8 @@ describe('killProcessTree（幂等语义 + onFallback 注入；POSIX 分支）',
 
     it('detached 进程组整组覆盖含孙子进程（组长 + 两个子 sleep；reparent 不换组 → 组 kill 覆盖）', async () => {
       const { spawn } = await import('node:child_process')
-      // 组长 sh + 两个子 sleep：进程组 kill 必须全部覆盖（基线 kill-tree.test 同款形态）
+      // 组长 sh + 两个子 sleep：进程组 kill 必须全部覆盖（孙子与组长同组、组长死后
+      // reparent 不换组的形态基础）
       const child = spawn('/bin/sh', ['-c', 'sleep 30 & sleep 30 & wait'], { detached: true, stdio: 'ignore' })
       child.on('error', () => {})
       child.unref()
@@ -300,6 +301,92 @@ describe('killProcessTree（幂等语义 + onFallback 注入；POSIX 分支）',
       } finally {
         try {
           process.kill(-pid, 'SIGKILL')
+        } catch {
+          /* 已死 */
+        }
+      }
+    })
+    it('组成员非组长（前台转后台形态：登记 pid 复用前台进程链，pgid ≠ pid）→ 解析真实 pgid 按组杀，组长与全部成员消亡', async () => {
+      const { spawn } = await import('node:child_process')
+      // 官方前台链同构：detached 组长 sh（模拟 pi 官方 shell，自成进程组）→ 子 sleep；
+      // 登记形态 = 杀「子 sleep 的 pid」（组成员非组长，与转后台任务 registerConvertedTask 登记一致）
+      const leader = spawn('/bin/sh', ['-c', 'sleep 30 & sleep 30 & wait'], { detached: true, stdio: 'ignore' })
+      leader.on('error', () => {})
+      leader.unref()
+      const leaderPid = leader.pid
+      if (leaderPid === undefined) throw new Error('no pid')
+      try {
+        let memberPids: number[] = []
+        await pollUntil(
+          () => {
+            memberPids = listChildPids(leaderPid)
+            return isPidAlive(leaderPid) && memberPids.length >= 2
+          },
+          5000,
+          'group members to spawn',
+        )
+        const registeredPid = memberPids[0]
+        expect(registeredPid).not.toBe(leaderPid)
+        const { steps, logger } = collectFallback()
+        killProcessTree(registeredPid, logger)
+        // 快路径 kill(-pid) 落空（pid 非组长）→ 解析真实 pgid = leaderPid 按组杀命中
+        await pollUntil(() => !isPidAlive(leaderPid), 5000, 'group leader to die')
+        await pollUntil(
+          () => memberPids.every((mpid) => !isPidAlive(mpid)),
+          5000,
+          'recorded group members to die',
+        )
+        expect(steps).toEqual(['process-group-kill-missed'])
+      } finally {
+        try {
+          process.kill(-leaderPid, 'SIGKILL')
+        } catch {
+          /* 已死 */
+        }
+      }
+    })
+
+    it('组长先死（转后台核心语义：reparent 不换组，组长死后解析组杀仍收残员）→ 成员经真实 pgid 组杀消亡', async () => {
+      const { spawn } = await import('node:child_process')
+      // 组长 sh：两个后台 sleep 30 + 前台 sleep 1（保组长存活 ≥1s，给轮询留记录窗口）。
+      // 组长退出后两个 sleep 30 reparent 到 init 但保留原进程组——登记形态 = 杀「存活
+      // 成员的 pid」（组长已死，ADR-0184 依据的核心场景：kill(-member) 落空、解析真实
+      // pgid = 已死组长的 pid 组杀仍可达）
+      const leader = spawn('/bin/sh', ['-c', 'sleep 30 & sleep 30 & sleep 1'], { detached: true, stdio: 'ignore' })
+      leader.on('error', () => {})
+      leader.unref()
+      const leaderPid = leader.pid
+      if (leaderPid === undefined) throw new Error('no pid')
+      try {
+        let memberPids: number[] = []
+        await pollUntil(
+          () => {
+            memberPids = listChildPids(leaderPid)
+            return isPidAlive(leaderPid) && memberPids.length >= 3
+          },
+          5000,
+          'group members to spawn',
+        )
+        // 等组长自然退出（前台 sleep 1 结束）；成员 reparent、进程组保留
+        await pollUntil(() => !isPidAlive(leaderPid), 5000, 'group leader to exit naturally')
+        // 登记目标取仍存活的成员（前台 sleep 1 可能已自然退出，不选它）
+        const registeredPid = memberPids.find((mpid) => isPidAlive(mpid))
+        expect(registeredPid).toBeDefined()
+
+        const { steps, logger } = collectFallback()
+        killProcessTree(registeredPid!, logger)
+        // 快路径 kill(-member) 落空（成员非组长）→ 解析真实 pgid = leaderPid（组长已死
+        // 但组仍在）按组杀命中 → 组内全部存活成员（另一个 sleep 30）一并消亡
+        await pollUntil(
+          () => memberPids.every((mpid) => !isPidAlive(mpid)),
+          5000,
+          'recorded group members to die via resolved group kill',
+        )
+        // 解析组杀命中：仅快路径一条诊断，无 resolved-group-kill-missed / 回退诊断
+        expect(steps).toEqual(['process-group-kill-missed'])
+      } finally {
+        try {
+          process.kill(-leaderPid, 'SIGKILL')
         } catch {
           /* 已死 */
         }
@@ -347,25 +434,27 @@ describe('killProcessTree（Windows taskkill 分支；platform 桩 win32，spawn
 
 describe('killProcessTree 回退路径（组长已死 → 单 pid kill + pgrep 递归；process.kill spy + mock spawnSync）', () => {
   describePosix('pgrep 递归矩阵', () => {
-    it('组长已死（组 kill ESRCH）→ 降级单 pid kill + pgrep 递归，先孙后子顺序', () => {
+    it('组长已死（组 kill ESRCH）→ 降级单 pid kill + pgrep 递归，先孙后子最后杀目标', () => {
       const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid: number) => {
         if (pid < 0) throw errnoLike('ESRCH', 'process group gone')
         return true
       })
       const { steps, logger } = collectFallback()
-      // 进程树：4321 → {5100, 5101}；5100 → 5200（孙辈）；其余 pgrep 无子
-      childMock.spawnSync.mockImplementation((_cmd: string, args: string[]) => {
+      // 进程树：4321 → {5100, 5101}；5100 → 5200（孙辈）；其余 pgrep 无子；
+      // ps pgid 解析按不可解析返回（readPgid null → 跳过解析组杀，走纯回退）
+      childMock.spawnSync.mockImplementation((cmd: string, args: string[]) => {
+        if (cmd === 'ps') return { status: 0, error: undefined, stdout: 'garbage' }
         const target = args[1]
         if (target === '4321') return { status: 0, error: undefined, stdout: '5100\n5101\n' }
         if (target === '5100') return { status: 0, error: undefined, stdout: '5200\n' }
         return { status: 1, error: undefined, stdout: '' }
       })
       killProcessTree(4321, logger)
-      // kill 调用序列（含失败尝试）：组 kill(-4321) 抛错降级 → 单 kill(4321) →
-      // 子孙递归先杀孙辈 5200 再杀子辈 5100 / 5101（防孙辈在父死后被 reparent
-      // 逃逸枚举的顺序保证）
-      expect(killSpy.mock.calls.map((c) => c[0])).toEqual([-4321, 4321, 5200, 5100, 5101])
-      expect(childMock.spawnSync).toHaveBeenCalledWith('pgrep', ['-P', '4321'], { encoding: 'utf8' })
+      // kill 调用序列（含失败尝试）：组 kill(-4321) 抛错降级 → 先枚举子孙递归
+      // （杀孙辈 5200 再杀子辈 5100 / 5101，防目标死后子进程被 reparent 逃逸枚举）
+      // → 最后杀目标 4321 本身
+      expect(killSpy.mock.calls.map((c) => c[0])).toEqual([-4321, 5200, 5100, 5101, 4321])
+      expect(childMock.spawnSync).toHaveBeenCalledWith('pgrep', ['-P', '4321'], { encoding: 'utf8', timeout: 5_000 })
       // 全程仅组 kill 一处失败诊断
       expect(steps).toEqual(['process-group-kill-missed'])
     })
@@ -375,14 +464,16 @@ describe('killProcessTree 回退路径（组长已死 → 单 pid kill + pgrep �
         throw errnoLike('ESRCH', 'already dead')
       })
       const { steps, logger } = collectFallback()
-      childMock.spawnSync.mockImplementation((_cmd: string, args: string[]) => {
+      childMock.spawnSync.mockImplementation((cmd: string, args: string[]) => {
+        if (cmd === 'ps') return { status: 0, error: undefined, stdout: 'garbage' }
         if (args[1] === '4321') return { status: 0, error: undefined, stdout: '5100\nnot-a-pid\n\n' }
         return { status: 1, error: undefined, stdout: '' }
       })
       expect(() => killProcessTree(4321, logger)).not.toThrow()
-      // 非 pid 行（NaN / 空行）被 parseInt guard 跳过，只对 5100 发 kill
-      expect(killSpy.mock.calls.map((c) => c[0])).toEqual([-4321, 4321, 5100])
-      expect(steps).toEqual(['process-group-kill-missed', 'single-pid-kill-missed', 'descendant-kill-missed'])
+      // 非 pid 行（NaN / 空行）被 parseInt guard 跳过，只对 5100 发 kill；
+      // 顺序 = 组 kill 失败 → 枚举杀子孙（先）→ 杀目标本身（后）
+      expect(killSpy.mock.calls.map((c) => c[0])).toEqual([-4321, 5100, 4321])
+      expect(steps).toEqual(['process-group-kill-missed', 'descendant-kill-missed', 'single-pid-kill-missed'])
     })
 
     it('pgrep 抛异常（不可用）→ descendant-enumeration-failed 诊断，放弃子孙枚举', () => {
@@ -410,6 +501,57 @@ describe('killProcessTree 回退路径（组长已死 → 单 pid kill + pgrep �
       expect(killSpy.mock.calls.map((c) => c[0])).toEqual([-4321, 4321])
       // result.error 走静默 return 分支（区别于抛异常的 descendant-enumeration-failed 诊断）
       expect(steps).toEqual(['process-group-kill-missed'])
+    })
+
+    it('解析出的 pgid 等于调用者自身进程组（防自杀，ADR-0184）→ 跳过解析组杀走回退，绝不组杀自身组', () => {
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid: number) => {
+        if (pid < 0) throw errnoLike('ESRCH', 'process group gone')
+        return true
+      })
+      const { steps, logger } = collectFallback()
+      // ps 对目标（4321）与对 process.pid（自身组探测）返回同一合法 pgid 4242 → 解析组杀
+      // 被防自杀条件（pgid !== ownPgid）拦下。区别于「解析失败跳过」（ps 返回 garbage、
+      // readPgid null）：本用例 ps 解析成功，跳过只可能来自防自杀判定——该判定被误删时
+      // kill 序列出现 -4242（对 mock 下即组杀调用者自身组），断言当场变红、错误指向根因
+      childMock.spawnSync.mockImplementation((cmd: string, args: string[]) => {
+        if (cmd === 'ps') return { status: 0, error: undefined, stdout: '4242\n' }
+        const target = args[1]
+        if (target === '4321') return { status: 0, error: undefined, stdout: '5100\n' }
+        return { status: 1, error: undefined, stdout: '' }
+      })
+      killProcessTree(4321, logger)
+      // 序列 = 组 kill(-4321) 快路径落空 → 防自杀跳过解析组杀（无 -4242）→ 枚举杀子孙 → 杀目标
+      expect(killSpy.mock.calls.map((c) => c[0])).toEqual([-4321, 5100, 4321])
+      // 无 resolved-group-kill-missed（未尝试组杀）；子孙与目标命中（kill spy mock 返回 true）
+      expect(steps).toEqual(['process-group-kill-missed'])
+    })
+
+    it('解析组杀落空（解析出合法 pgid ≠ 自身组，组 kill ESRCH）→ resolved-group-kill-missed 诊断不中断，继续走 pgrep 回退杀子孙与目标', () => {
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid: number) => {
+        if (pid < 0) throw errnoLike('ESRCH', 'process group gone')
+        return true
+      })
+      const { steps, logger } = collectFallback()
+      // ps 按被探测 pid 区分（args = ['-o','pgid=','-p','<pid>']，args[3] 即 pid）：目标 4321
+      // 解析出合法 pgid 4343，自身组探测返回 4242 → pgid ≠ ownPgid 越过防自杀判定进入解析
+      // 组杀；kill spy 对一切负 pid 抛 ESRCH → 解析组杀落空（组长已死、组残留但组 kill 不可
+      // 达的形态）。守护点：该分支必须发出 resolved-group-kill-missed 诊断且不中断（如 catch
+      // 后误 return 不走回退，kill 序列止步于 -4343，断言当场变红），继续 pgrep 回退
+      childMock.spawnSync.mockImplementation((cmd: string, args: string[]) => {
+        if (cmd === 'ps') {
+          return args[3] === '4321'
+            ? { status: 0, error: undefined, stdout: '4343\n' }
+            : { status: 0, error: undefined, stdout: '4242\n' }
+        }
+        const target = args[1]
+        if (target === '4321') return { status: 0, error: undefined, stdout: '5100\n' }
+        return { status: 1, error: undefined, stdout: '' }
+      })
+      killProcessTree(4321, logger)
+      // kill 序列 = 快路径组杀(-4321) 落空 → 解析组杀(-4343) 落空 → 回退：枚举杀子孙(5100) → 杀目标(4321)
+      expect(killSpy.mock.calls.map((c) => c[0])).toEqual([-4321, -4343, 5100, 4321])
+      // 两条组杀落空诊断各一条；回退 kill 全命中（spy 返回 true），无额外回退诊断
+      expect(steps).toEqual(['process-group-kill-missed', 'resolved-group-kill-missed'])
     })
   })
 })

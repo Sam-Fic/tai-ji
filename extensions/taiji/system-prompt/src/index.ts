@@ -452,22 +452,15 @@ function buildSystemPrompt(event: BeforeAgentStartEvent, ctx?: ExtensionContext)
  * 落盘诊断，不泄露配置内容。
  *
  * 通道：extension-logger 的 error → appendEntry 写入 session JSONL（需 setPiHandle
- * 注入 pi handle 后生效）；TAIJI_AGENT_DEBUG=1 时另落文件日志。仅当 logger 自身抛错
- * 时才兜底 process.stderr.write（下方 catch），不外泄到 agent loop。
+ * 注入 pi handle 后生效）；TAIJI_AGENT_DEBUG=1 时另落文件日志。logger 全程吞错
+ * （appendEntry 与 fileLog 通道内部各自整体 try/catch，实装见 extension-logger
+ * error 方法），不会抛错到本调用方——旧的两层嵌套兜底（stderr 终极兜底 + 静默
+ * catch）已删，恒不命中。若未来 logger 改为可抛实现，异常由外层 handler 的
+ * try/catch 兜住（同样不外泄到 agent loop）。
  */
 function logHookFailure(err: unknown): void {
-  try {
-    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
-    logger.error(`before_agent_start hook failed: ${msg}`)
-  } catch (nestedErr) {
-    // best-effort：logger 抛错时的终极兜底 process.stderr.write——其内部吞错不会抛，仍不外泄到 agent loop。
-    try {
-      process.stderr.write(`[taiji-system-prompt-extension] logHookFailure also failed: ${String(nestedErr)}\n`)
-    } catch (finalErr) {
-      /* 完全静默：两层兜底都失败时无处可写 */
-      void finalErr
-    }
-  }
+  const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+  logger.error(`before_agent_start hook failed: ${msg}`)
 }
 
 export default function (pi: ExtensionAPI): void {

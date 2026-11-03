@@ -1,5 +1,11 @@
 # @zhushanwen/pi-goal
 
+## 0.16.5
+
+### Patch Changes
+
+- d2b945a20: chore: refresh dependency range (triggered by @zhushanwen/extension-protocol@0.26.0 → @zhushanwen/extension-protocol@0.27.0, @zhushanwen/pi-session-path@0.1.0 → @zhushanwen/pi-session-path@0.1.1, @zhushanwen/state-machine@0.2.0 → @zhushanwen/state-machine@0.2.1)
+
 ## 0.16.4
 
 ### Patch Changes

@@ -16,6 +16,9 @@
  *     scripts/select-constraints.mjs 同款零依赖匹配语义，minimatch 等价子集）
  *   - assets 非空，kind 枚举合法，ref 磁盘真实存在（强校验，防幽灵资产）
  *   - authority 非空且文件存在（剥离 #锚点后按仓库根解析）
+ *   - ci（可选）：对象，runnable 显式 boolean；runnable=false 必须带非空
+ *     skipReason（CI 执行消费者据此跳过，跳过不得静默），runnable=true 不得带
+ *     skipReason（自相矛盾）
  *
  * 退出码：0 成功 / 2 校验失败（含 JSON 解析失败）
  *
@@ -119,6 +122,23 @@ export function validateAuthority(rule, at, errors) {
   }
 }
 
+export function validateCi(rule, at, errors) {
+  if (rule.ci === undefined) return;
+  const ci = rule.ci;
+  if (!ci || typeof ci !== "object" || Array.isArray(ci)) {
+    errors.push(`${at}: ci 须为对象 {runnable, skipReason}`);
+    return;
+  }
+  if (typeof ci.runnable !== "boolean") errors.push(`${at}: ci.runnable 必须显式 boolean`);
+  if (ci.runnable === false) {
+    if (typeof ci.skipReason !== "string" || ci.skipReason.trim() === "") {
+      errors.push(`${at}: ci.runnable=false 必须给非空 skipReason（CI 跳过不得静默）`);
+    }
+  } else if (ci.skipReason !== undefined) {
+    errors.push(`${at}: ci.runnable=true 时不应登记 skipReason（自相矛盾：可跑却写了跳过理由）`);
+  }
+}
+
 /** 校验整张登记表，返回错误清单（空数组 = 通过）。 */
 export function validate(data) {
   const errors = [];
@@ -140,6 +160,7 @@ export function validate(data) {
     validateScope(rule, at, errors);
     validateAssets(rule, at, errors);
     validateAuthority(rule, at, errors);
+    validateCi(rule, at, errors);
     if (rule.note !== undefined && typeof rule.note !== "string") errors.push(`${at}: note 须为字符串`);
   }
   return errors;

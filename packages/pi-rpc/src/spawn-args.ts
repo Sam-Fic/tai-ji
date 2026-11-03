@@ -25,11 +25,30 @@
 // 共享分段原语
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ── spawn argv 判据常量（构造与收割判据单源同引）─────────────────────────────
+// startup 设计 §7.2「孤儿收割判据单源」：reap-orphan-pi（runtime）按「argv 形态」识别
+// taiji spawn 的 pi 进程，其判据 flag 必须与本包的 spawn 构造同引一组常量——两侧各自
+// 硬编码字符串时，构造侧改 flag（改名/删除）会让收割判据静默失效（漏收方向，无红灯）。
+// 落点在本包而非 @taiji/shared：spawn 构造的 SSOT 在此（U1 收敛后 rpc-client 经本包
+// 构造），判据常量贴着构造走；runtime 已依赖本包，不新增依赖方向。
+
+/** 主/subagent 模板共用的 mode 段（`--mode rpc`；收割判据①同引）。 */
+export const PI_SPAWN_MODE_ARGS = ['--mode', 'rpc'] as const
+
+/** 主 agent 基座与 subagent 包装层恒带的抑制 flag（收割判据②主判别位同引）。 */
+export const PI_SPAWN_NO_EXTENSIONS = '--no-extensions'
+
+/** skill 注入 flag（收割判据③值承载 flag 之一同引）。 */
+export const PI_SPAWN_SKILL_FLAG = '--skill'
+
+/** extension 注入 flag（收割判据③值承载 flag 之一同引；基座 builtin:* 也用它）。 */
+export const PI_SPAWN_EXTENSION_FLAG = '--extension'
+
 /** 每个路径独立 --skill token（pi 原生 loader 逐个加载）。 */
 export function appendSkillArgs(args: string[], skillPaths: readonly string[] | undefined): void {
   if (skillPaths?.length) {
     for (const skillPath of skillPaths) {
-      args.push('--skill', skillPath)
+      args.push(PI_SPAWN_SKILL_FLAG, skillPath)
     }
   }
 }
@@ -38,7 +57,7 @@ export function appendSkillArgs(args: string[], skillPaths: readonly string[] | 
 export function appendExtensionArgs(args: string[], extensionPaths: readonly string[] | undefined): void {
   if (extensionPaths?.length) {
     for (const extPath of extensionPaths) {
-      args.push('--extension', extPath)
+      args.push(PI_SPAWN_EXTENSION_FLAG, extPath)
     }
   }
 }
@@ -165,8 +184,8 @@ function toInlinePromptValue(value: string): string {
  */
 export function buildPiMainAgentArgs(options: PiMainAgentSpawnOptions, model: string | undefined): string[] {
   const args = [
-    '--mode', 'rpc', '--no-extensions', '--approve',
-    '--extension', 'builtin:codemode', '--extension', 'builtin:mcp', '--extension', 'builtin:tool-search',
+    ...PI_SPAWN_MODE_ARGS, PI_SPAWN_NO_EXTENSIONS, '--approve',
+    PI_SPAWN_EXTENSION_FLAG, 'builtin:codemode', PI_SPAWN_EXTENSION_FLAG, 'builtin:mcp', PI_SPAWN_EXTENSION_FLAG, 'builtin:tool-search',
   ]
   if (model) args.push('--model', model)
   // --system-prompt: 替换 pi 核心系统提示词（身份/工具列表/指引/pi 文档路径 4 段）。
@@ -237,7 +256,7 @@ export interface PiSubagentSpawnParams {
  * subagent sessionDir，任何改动不得让两个进程指向同一 session 文件写路径。
  */
 export function buildPiSubagentSpawnArgs(params: PiSubagentSpawnParams): string[] {
-  const args: string[] = ['--mode', 'rpc', '--session-dir', params.sessionDir]
+  const args: string[] = [...PI_SPAWN_MODE_ARGS, '--session-dir', params.sessionDir]
   // resume：紧跟 --session-dir 追加 --session <file>，pi 续写原 session 文件。
   if (params.sessionFile) {
     args.push('--session', params.sessionFile)
@@ -263,6 +282,6 @@ export function buildPiSubagentSpawnArgs(params: PiSubagentSpawnParams): string[
   // enabled:true）。subagent 侧所有调用方经本模板传导自动携带；pi-subagent-cli
   // 包装层在其后追加 --no-extensions 与 --extension 白名单。落点选尾部：不触碰
   // --session 紧跟 --session-dir 的既有位置锚定。
-  args.push('--extension', 'builtin:codemode')
+  args.push(PI_SPAWN_EXTENSION_FLAG, 'builtin:codemode')
   return args
 }

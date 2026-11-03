@@ -1,5 +1,11 @@
 # @zhushanwen/pi-llm-shared
 
+## 0.12.1
+
+### Patch Changes
+
+- d2b945a20: chore: refresh dependency range (triggered by @zhushanwen/pi-ext-guards@0.5.0 → @zhushanwen/pi-ext-guards@0.5.1)
+
 ## 0.12.0
 
 ### Minor Changes

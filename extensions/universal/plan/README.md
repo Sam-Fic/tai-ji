@@ -62,4 +62,4 @@
 
 ## 依赖
 
-依赖：`@zhushanwen/extension-protocol`（PLAN_REVIEW_MARKER + PlanReviewRequest/Response 契约 + plan 生命周期状态机与审阅值域契约（`src/extensions/plan/`：transition/derivePhase + 值域检查/selfReview 截断）+ ui-form（`uiFormInteract` / `FormQuestion`，统一提问表单协议），dependencies）；`@zhushanwen/pi-exec-skills`（plan-exec 技能发现/执行门禁单源，ADR-0074，dependencies）；peer 依赖：`@zhushanwen/pi-goal`（plan 完成后衔接 goal 驱动执行）。
+依赖：`@zhushanwen/extension-protocol`（PLAN_REVIEW_MARKER + PlanReviewRequest/Response 契约 + plan 生命周期状态机与审阅值域契约（`src/extensions/plan/`：transition/derivePhase + 值域检查/selfReview 截断）+ ui-form（`uiFormInteract` / `FormQuestion`，统一提问表单协议），dependencies）；`@zhushanwen/pi-exec-skills`（plan-exec 技能发现/执行门禁单源，ADR-0096，dependencies）；peer 依赖：`@zhushanwen/pi-goal`（plan 完成后衔接 goal 驱动执行）。

@@ -171,35 +171,35 @@ describe('rpc-client', () => {
     // 唯一调用方（runtime 内部应答通道）已全改 JSON.stringify + 'select'（value 通道），该形态无
     // 生产调用方；该通道整体随 plugin-bridge 退役删除（pi1-disposition-chat-flow D7）。
 
-    // ── U6: compact/getCommands/getSessionStats 用归一后的 data（删 readRpcData 后仍工作） ──
-    it('U6a: compact returns normalized data (works without readRpcData)', async () => {
-      const p = client.compact()
+    // ── U6: getSessionStats/getCommands 用归一后的 data（删 readRpcData 后仍工作） ──
+    // [C2 /compact 后台化] compact 载体两用例随 rpc-client.compact 退役，data/payload 双形态
+    // 归一覆盖由 U6c（getCommands，payload 形态）与 RT-2 getSessionStats 用例承载。
+    it('U6a: getSessionStats returns normalized data (works without readRpcData)', async () => {
+      const stats = { contextUsage: { tokens: 5, contextWindow: 128000 } }
+      const p = client.getSessionStats()
       await Promise.resolve()
       const sent = lastWrittenJson()
       emitPiLine({
         type: 'response',
         id: sent.id,
         success: true,
-        data: { summary: 's', firstKeptEntryId: 'e1', tokensBefore: 100 },
+        data: stats,
       })
-      const result = await p
-      expect(result.summary).toBe('s')
-      expect(result.firstKeptEntryId).toBe('e1')
-      expect(result.tokensBefore).toBe(100)
+      await expect(p).resolves.toEqual(stats)
     })
 
-    it('U6b: compact returns data normalized from payload (data absent)', async () => {
-      const p = client.compact()
+    it('U6b: getSessionStats returns data normalized from payload (data absent)', async () => {
+      const stats = { contextUsage: { tokens: 6, contextWindow: 128000 } }
+      const p = client.getSessionStats()
       await Promise.resolve()
       const sent = lastWrittenJson()
       emitPiLine({
         type: 'response',
         id: sent.id,
         success: true,
-        payload: { summary: 's2', firstKeptEntryId: 'e2', tokensBefore: 200 },
+        payload: stats,
       })
-      const result = await p
-      expect(result.summary).toBe('s2')
+      await expect(p).resolves.toEqual(stats)
     })
 
     it('U6c: getCommands returns normalized data.commands (含 sourceInfo 透传)', async () => {
@@ -288,7 +288,7 @@ describe('rpc-client', () => {
       clearExitHandlers()
     })
 
-    it('stdin emit error → pending reject + _exited 置位 + SIGKILL 自愈强杀', async () => {
+    it('stdin emit error → pending reject + 终态置位 + SIGKILL 自愈强杀', async () => {
       // 先注册一条 pending（挂起的 RPC，stream error 后必须被 reject 而非挂满超时）
       const commandPromise = client.sendCommand('get_state')
       await Promise.resolve()
@@ -297,8 +297,9 @@ describe('rpc-client', () => {
 
       // ① pending reject（消息含流名，可归因 stdin 而非「pi 无响应」）
       await expect(commandPromise).rejects.toThrow(/stdin stream error/)
-      // ② _exited 置位（后续 sendRaw / isAlive 立即可见死亡态）
-      expect((client as unknown as { _exited: boolean })._exited).toBe(true)
+      // ② 进程生命周期终态（后续 sendRaw / isAlive 立即可见死亡态；四态状态机的
+      // exited / kill-failed 均为终态，经公开 exited getter 断言）
+      expect(client.exited).toBe(true)
       // ③ 自愈强杀触发（SIGKILL 加速进程死亡，exit 为死亡通知唯一出口）
       expect(killSignals()).toContain('SIGKILL')
     })

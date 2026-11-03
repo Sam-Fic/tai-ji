@@ -45,8 +45,9 @@ type Payload = Record<string, unknown>
 // conversation-turn-attribution-closure）：形态保留 bash-effects 模块级分区 Map——store 是
 // factory 模式（createChatStore，renderer 经 pinia 包装），渲染层 getExecutingBash 是模块级
 // import（MessageStream computed 直调），迁入 store 实例会迫使读方改走 pinia 解包（超出
-// 「读方签名不变」约束）；架构目标以「cleanup 编排可达」达成——store.disposeSession 同点
-// 调 clearExecutingBash（session 删除无残留，与 messages 分区同编排清理）。
+// 「读方签名不变」约束）；架构目标以「cleanup 编排可达」达成——store.disposeSession 与
+// lifecycle-effects markSessionDead（session.exited：pi 进程已死、bashResult 永不再达）
+// 同点调 clearExecutingBash（session 删除 / 死亡无残留，与 messages 分区同编排清理）。
 // 不进 messages、不持久化（live 瞬时态）。
 // 唯一写方（成对保证）：bashStartEffect 置 / bashResultEffect 清 / bashAbortedEffect 清
 // （abortBash 兜底终态）/ markBashError 清（abortBash RPC 失败的前端兜底错误路径）。
@@ -76,7 +77,8 @@ function setExecutingBash(sessionId: string, state: ExecutingBash): void {
   executingBashMap.value = new Map(executingBashMap.value).set(sessionId, state)
 }
 
-/** 清指定 session 执行态（幂等）。写方三路径 + store.disposeSession cleanup 编排共四处调用。 */
+/** 清指定 session 执行态（幂等）。写方三路径 + store.disposeSession / markSessionDead
+ *  cleanup 编排共五处调用（markSessionDead = session.exited 死亡清理，fix-chat-flow-stuck C-1）。 */
 export function clearExecutingBash(sessionId: string): void {
   if (!executingBashMap.value.has(sessionId)) return
   const next = new Map(executingBashMap.value)

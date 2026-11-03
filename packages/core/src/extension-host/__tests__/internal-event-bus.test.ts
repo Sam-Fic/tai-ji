@@ -1332,6 +1332,23 @@ describe("message-bus-bridge", () => {
       })
     })
 
+    describe('「已知不归一」型：plugin:event / uiRequestExpired / permissionRequestExpired', () => {
+      // 三型消费方在 bridge 之外独立订阅 WS global 通道（settings/transport onPluginEvent、
+      // shell-adapters onGlobal、permission-request-controller onGlobal），bridge 登记只为
+      // 脱离 unknown 路径 → 安全忽略：不 emit error、不 emit 任何事件（不双重处理）
+      it.each([
+        ['plugin:event', { pluginId: 'wool', channel: 'credential.status', payload: { valid: true } }],
+        ['plugin:uiRequestExpired', { requestId: 'r1', pluginId: 'tasks' }],
+        ['plugin:permissionRequestExpired', { pluginId: 'tasks', requestId: 'req-1' }],
+      ])('%s → 不走 unknown 路径、零事件 emit（安全忽略）', (type, payload) => {
+        const { source, bus } = makeBridge()
+        const { emitted } = spyEmit(bus)
+        source.emit({ type, payload })
+        expect(emitted).toHaveLength(0)
+        expect(emitted.some((x) => x.kind === 'error')).toBe(false)
+      })
+    })
+
     describe('ERR2: 未知 type + payload 解析失败 → error 事件', () => {
       it('未知 type → error（source=msg.type）', () => {
         const { source, bus } = makeBridge()

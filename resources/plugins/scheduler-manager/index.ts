@@ -1,35 +1,43 @@
 /**
- * scheduler-manager —— taiji builtin plugin（任务管理面板；数据范围零 scheduler 专属 API）。
+ * scheduler-manager —— taiji builtin plugin（任务管理面板；数据范围零 scheduler 专属会话 API）。
  *
  * 点位使用：
  * - headerAction：本会话启用任务数徽标（空任务无数字）+ 入口可见性（hidden）——
  *   任务清单为空推 hidden=true（宿主渲染端整体不渲染该入口，与 disabled 灰置正交；
  *   声明侧静态形状由 core builtinContributions 承担），有任务推 false 恢复显示。
- *   刷新触发 = entry 失效订阅 + onDidActivateSession 补充拉取 + 写命令成功后的清 notice
- *   推送（「任务集合可能变化」的时点统一汇聚在 pushTreeAndBadge → pushHeaderAction
- *   出口，非写入驱动，场景 9）；读失败态不重算 hidden（保持上次值，「恢复中」语义）。
+ *   刷新触发 = 写命令成功后的主动拉取 + 周期轮询 + onDidActivateSession 补充拉取
+ *   （「任务集合可能变化」的时点统一汇聚在 pushTreeAndBadge → pushHeaderAction
+ *   出口，非写入驱动）；读失败态不重算 hidden（保持上次值，「读取中」语义）。
  *   入口点击由宿主渲染端直开 workflow-viz overlay 定时任务 tab（activation 声明驱动
  *   分派，不经插件命令链）；本插件只经 views.update 持续推树，overlay 的 ViewHost
  *   消费（SCHEDULER_MODAL_VIEW_ID 分区）。内容树严格按 §3.1.1 字段操作对账表组装，表外零元素（G6）。
  * - action-bar：每任务三动作（暂停/恢复 toggle、立即执行 run、删除 rm）。
- * - 数据范围：per-session 累计 entries（首次拉取全量 + sinceEntryId 增量 append），
- *   折叠始终对累计全量调共享 replayFoldEntries（前缀依赖语义不被破坏）；游标失效
- *   （Entry not found）→ 丢弃累计全量重新拉取自愈（E11）；无 client → SESSION_NOT_ACTIVE
- *   → 按会话 status 分「恢复中/不可用」两态（E4）。树回退（消息撤回）经
- *   'taiji:revoked' 失效信号触发镜像重建（丢弃累计 → 全量重新拉取，runtime readEntries
- *   已按活跃路径裁剪，被撤子树的 task op 不在回包——面板/徽标残留随之清除）。
+ * - 数据范围（任务库直读，2026-10-30 任务库分离改线）：scheduler 扩展把任务定义与
+ *   记账写独立 JSON 快照（`<piAgentDir>/scheduler/<root>/<segments>/<sessionId>.json`，
+ *   原子替换写），不再写会话 JSONL custom entry——本插件数据源从「readEntries 游标
+ *   增量拉取 + replayFoldEntries 折叠 + 游标失效重拉 + 撤回镜像重建」整条链改为
+ *   直读该快照文件：sessions.get(sessionId) 取 cwd → schedulerStoreFilePath 推导
+ *   路径 → readSchedulerStore 一次 JSON.parse。读写两侧共用 extension-protocol
+ *   store 模块（路径推导与文件形状构造性一致）。快照读取不依赖 pi 进程存活——
+ *   dead/恢复中会话的任务列表照常可读。
+ * - 刷新触发：任务库写入不产生会话 entry（无失效信号可订阅），改三通道——
+ *   ① 写路径快照自检：操作前快照无该 id 时立即 scheduleRefresh 重拉（handleWrite E5）；
+ *      写命令受理后不主动刷新，变更由 ② 收敛；
+ *   ② 周期轮询（POLL_INTERVAL_MS，覆盖对话内 schedule tool 创建/删除与到点 dispatch
+ *     的记账变化；非活跃会话无 pi 进程、快照不变，轮询读同一文件成本为一次小文件读）；
+ *   ③ onDidActivateSession 补充拉取（切换会话即时刷新）。
  *
  * 写路径（设计 §3.3 D6）：三个动作（toggle/run/delete，overlay 树内 action-bar 按钮）
- * 只拼白名单子命令字面量 on|off|rm|run + 折叠快照中存在的 8 位 hex id（快照无该 id →
+ * 只拼白名单子命令字面量 on|off|rm|run + 快照中存在的 8 位 hex id（快照无该 id →
  * TASK_NOT_FOUND 行内提示、不发命令，E5——防 /schedule 参数路由落空进创建分支，
  * §2.4 坑 3），经 sendMessage({requireCommand: 'schedule'}) 原子校验后发 /schedule 命令；
  * 回执 {accepted, reason?} 驱动行内 notice（E7/E14；运行态分支只看 accepted，reason 仅
- * 文案）。不乐观更新——快照与游标由失效订阅驱动刷新（C-pi-13 不撒谎）。
+ * 文案）。不乐观更新——快照由三通道刷新收敛（不撒谎）。
  *
  * 按钮灰置（E13，插件侧判定）：getCommands(sessionId) 查 'schedule' 命令名（纯查询）
  * → 未注册 = disabled + tooltip（宿主渲染端按 availability 三态合成 i18n tooltip，
  * SDK 无 i18n 能力、插件不推文案）；SESSION_NOT_ACTIVE = 无法判定 → 保持上次值
- * （首次缺省可点，失败由 E14 写路径兜底）；会话激活/从恢复窗口走出后重判。
+ * （首次缺省可点，失败由 E14 写路径兜底）；会话激活后重判。
  *
  * 写命令的 sessionId 来源：树内 action-bar 点击链（ViewHost onClick →
  * CommandRegistry.execute(commandId)）不携带会话上下文，插件以 onDidActivateSession
@@ -37,32 +45,73 @@
  * selectSession 亦经 switch）+ activate 时 sessions.list() 取 lastActiveAt 最大者
  * 兜底冷启动竞态（显式 list API，不用 getActive()——其语义是"正在生成的会话"）。
  *
- * 生命周期：订阅挂点 = 会话首次需要徽标/列表时（ensureMirror 唯一入口；didCreate /
+ * 生命周期：镜像挂点 = 会话首次需要徽标/列表时（ensureMirror 唯一入口；didCreate /
  * didActivate / 冷启动 list() 三来源汇聚于此）；会话销毁由 onDidDestroySession 拆订阅
- * 清镜像；Worker 侧资源（timer/订阅）全部入 Disposable 由 runtime 清理族兜底。
+ * 清镜像；轮询 timer 与 Worker 侧资源全部入 Disposable 由 runtime 清理族兜底。
  */
 import type { PluginContext } from '../../../packages/runtime/src/services/plugin-service/plugin-types.js'
-// 共享折叠器/格式化器导入形态：**相对路径直指包源码 barrel**，不用裸包名。
+// 共享模块导入形态：**相对路径直指包源码**，不用裸包名（含 store 子出口）。
 // 根因（P4 真机实测）：dev 形态 runtime 以 tsx 运行，Worker 的 import 对产物
-// index.js 走 tsx 的 .js→.ts 映射、实际加载 index.ts 源码——resources/plugins 不在
+// index.js 走 tsx 的 .js→.ts 映射、实际加载 .ts 源码——resources/plugins 不在
 // pnpm workspace、目录链上无 node_modules，裸包名 '@zhushanwen/extension-protocol'
 // 在源码形态下解析不到（ERR_MODULE_NOT_FOUND，打包版走产物不受影响）。相对路径在
 // 两种形态下都成立：esbuild --bundle 把包源码内联进产物（自包含），tsx 直接编译 .ts。
 // prepare-builtin-plugins.sh 的 --alias 保留作裸包名兜底，不再被本插件消费。
 import {
-  TASK_ENTRY_TYPE,
   SCHEDULER_MODAL_VIEW_ID,
-  replayFoldEntries,
   formatSchedule,
   formatRelativeTime,
 } from '../../../packages/extension-protocol/src/index.ts'
+import {
+  readSchedulerStore,
+  schedulerStoreFilePath,
+} from '../../../packages/extension-protocol/src/extensions/scheduler/store.ts'
 import type {
   ScheduledTask,
-  SchedulerEntryLike,
   GuiComponent,
   StatItem,
   TreeItem,
 } from '../../../packages/extension-protocol/src/index.ts'
+// taiji 内嵌 pi agent 目录（PI_CODING_AGENT_DIR 对应值 `<dataDir>/agent`）经 env 契约键
+// 读取：值由 runtime 在插件宿主 env 注入时经 shared getPiAgentDir() 现算（单一组装点 =
+// packages/runtime/src/services/plugin-service/plugin-host.ts 的 pluginHostPiAgentDirEnv，
+// fork 与 Worker 两宿主同源同值），与 runtime spawn pi 时注入给 pi 进程的同一键同值——
+// scheduler 扩展（pi 进程内经官方 getAgentDir() 读注入 env）与本插件写读两侧落同一目录。
+//
+// 为什么不 import shared paths.ts（dmg-r1-12）：shared 的 paths.ts 是 env 缺省形态
+// （getPiAgentDir() 无参 → getDataDir() → C-proc-26 准入检查 + node:os/node:path），按
+// session-store-paths.ts 头注与 C-ext-31 同族纪律只归 runtime / main 合法消费；而
+// resources/plugins 不在 shared 准入检查（check-shared-module-admission.mjs /
+// check_shared_node_builtin.py 均只扫 packages/shared/src）与 eslint 扫描根，直引即让
+// 该消费侧边界没有任何机器拦截。改为只读登记键：插件不持 `<dataDir>/agent` 布局字面量、
+// 不依赖 node 内置，shared 侧改推导公式时插件零改动。
+//
+// 仅 trusted 插件可读（manifest trustLevel: 'trusted'）：sandbox 插件的 process.env 在
+// plugin-bootstrap.ts initSandbox 被替换为空 Proxy，读任何键都得 undefined——本插件是
+// trusted，走 Worker 线程不经 initSandbox。若将来改 sandbox，需改走 RPC 取值通道。
+const PI_AGENT_DIR_ENV_KEY = 'PI_CODING_AGENT_DIR'
+
+/**
+ * 取 pi agent 目录（`<dataDir>/agent`，scheduler 任务库分片路径的第一段基座）。
+ *
+ * 通道 = 宿主注入的 env 契约键（见上方 PI_AGENT_DIR_ENV_KEY 注释块）。缺键即抛：
+ * 静默回落任何值都会让任务库读写落到错目录（"任务莫名消失"或写到别处），错误消息
+ * 带恢复动作（权威注入点 + 自建 harness 时的显式设置方法）。
+ */
+function resolveAgentDir(): string {
+  const agentDir = process.env[PI_AGENT_DIR_ENV_KEY]
+  if (!agentDir) {
+    throw new Error(
+      `[scheduler-manager] ${PI_AGENT_DIR_ENV_KEY} is not set in the plugin host env — ` +
+        'the runtime must inject the authoritative pi agent dir (single assembly point: ' +
+        'packages/runtime/src/services/plugin-service/plugin-host.ts pluginHostPiAgentDirEnv; ' +
+        'contract registry: packages/shared/src/spawn-env-contract.ts). ' +
+        'Fix: run the plugin under the tai-ji runtime, or set ' +
+        `${PI_AGENT_DIR_ENV_KEY} explicitly in a standalone harness.`,
+    )
+  }
+  return agentDir
+}
 
 /** 插件可用 API 面（Phase2AgentAPI 的本地别名，签名可读性） */
 type Api = PluginContext['api']
@@ -82,22 +131,15 @@ const MAX_TASKS = 50
 /** pi 侧 /schedule 扩展命令名（requireCommand 与 E13 判定同源） */
 const SCHEDULE_COMMAND_NAME = 'schedule'
 
-/**
- * 撤回失效信号 customType（双侧同构字面量：与 host-internals navigateTree 的 LabelEntry
- * label 'taiji:revoked'、runtime revoke-orchestrator REVOKED_SIGNAL_CUSTOM_TYPE 三侧
- * 同串——插件不能 import runtime 包，按 CLIENT_MSG_ID_TYPE 双侧同构先例自持）。
- * 语义 = 该会话发生过树回退（消息撤回），累计镜像按活跃路径权威态重建。
- */
-const REVOKED_SIGNAL_CUSTOM_TYPE = 'taiji:revoked'
-
-/** 失效信号防抖合并窗口（ms）：风暴合并成一次重新拉取（对齐 session-records 先例量级） */
+/** 快照刷新防抖合并窗口（ms）：写后连续触发合并成一次读取 */
 const READ_DEBOUNCE_MS = 200
 /**
- * E4 恢复窗口自动重试间隔/次数（2s × 5 = 10s 上界）。耗尽后停自动重试、提示升级为
- * 「恢复超时」（含恢复动作）；失效/激活信号（scheduleRefresh）重置预算后可获得新一轮重试。
+ * 周期轮询间隔（ms）：任务库写入不产生会话 entry（无失效信号），轮询兜覆盖——
+ * 对话内 schedule tool 创建/删除、到点 dispatch 记账、扩展侧任何快照落盘。
+ * 读成本 = 一次会话元信息查询 + 一个小 JSON 文件读，10s 量级可忽略。
+ * 导出供测试 import 复用（fake timers 推进量与生产节奏同源）。
  */
-const READ_RETRY_MS = 2_000
-const READ_RETRY_MAX = 5
+export const POLL_INTERVAL_MS = 10_000
 
 const EMPTY_HINT =
   '本会话还没有定时任务 —— 在对话里说，或手敲 /schedule <排期> <内容> 创建。'
@@ -226,38 +268,26 @@ function toMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-/** SESSION_NOT_ACTIVE（u2d 读 API 的 live-only 拒绝，错误码 + message 双匹配） */
+/** SESSION_NOT_ACTIVE（getCommands 的 live-only 拒绝，错误码 + message 双匹配） */
 function isSessionNotActive(e: unknown): boolean {
   const code = (e as { code?: unknown } | null)?.code
   if (code === 'SESSION_NOT_ACTIVE') return true
   return /SESSION_NOT_ACTIVE/.test(toMessage(e))
 }
 
-/** 游标失效（pi 抛 Entry not found；与 runtime trace-sync 同款判定） */
-function isEntryNotFound(e: unknown): boolean {
-  return /^entry not found/i.test(toMessage(e))
-}
-
-// ── per-session 镜像状态机（游标 / 防抖 / E4 两态 / E13 判定值）─────────────────
+// ── per-session 镜像（快照任务集 / 防抖 / E13 判定值）────────────────────────
 
 interface ReadFailure {
-  kind: 'recovering' | 'unavailable'
   reason: string
 }
 
 interface SessionMirror {
   sessionId: string
-  /** 累计 entries（首次拉取全量 + 增量 append；事件只做失效不直写——数据唯一入口是 readEntries） */
-  entries: SchedulerEntryLike[]
-  /** 游标（末条 entryId → sinceEntryId 增量） */
-  cursor?: string
-  /** 折叠过滤必需：replayFoldEntries 按 ownerSessionFile 剔非 owner 任务（fork 继承） */
-  sessionFile?: string
+  /** 最近一次快照读取结果（数据唯一入口 = 任务库快照文件直读） */
+  tasks: ScheduledTask[]
   debounceTimer: ReturnType<typeof setTimeout> | null
   refreshInFlight: Promise<void> | null
   readFailure: ReadFailure | null
-  retryTimer: ReturnType<typeof setTimeout> | null
-  retryCount: number
   /** E13 上次判定值：null = 未判定（首次缺省可点）；true/false = 上次 disabled 值（unknown 态保持） */
   commandDisabled: boolean | null
   /** 徽标当前值（空任务 undefined；读失败态保持上次值——全量覆盖语义下插件每次重推完整状态） */
@@ -270,13 +300,16 @@ interface SessionMirror {
   hidden?: boolean
   /**
    * 最近一次操作结果（行内 notice，至多 1 行）。清零点 = 写命令成功路径（setNoticeAndPush
-   * null）；modal 关闭清零点已随 modal 链退役删除——overlay 常驻形态下 notice 停留到
-   * 下一次写操作（成功清零或新提示覆盖）。
+   * null）；overlay 常驻形态下 notice 停留到下一次写操作（成功清零或新提示覆盖）。
    */
   notice: string | null
   disposables: DisposableLike[]
 }
 
+// @data-owner #88 —— per-session 任务集镜像（数据唯一入口 = 任务库快照文件直读；权威源 =
+// 分片快照，刷新 = 首拉 / 周期轮询 / onDidActivateSession 补充拉取 / 写路径无该 id 时重拉，
+// 清理 = teardownMirror〔onDidDestroySession〕。resources/plugins 不在 @data-owner 全仓扫描根内，
+// 登记见 docs/architecture/data-source-registry.md #88）。
 const mirrors = new Map<string, SessionMirror>()
 /** 渲染端焦点会话（open 链无会话上下文，见头注；didActivate 维护 + list() 兜底） */
 let focusSessionId: string | null = null
@@ -285,9 +318,7 @@ function teardownMirror(sessionId: string): void {
   const mirror = mirrors.get(sessionId)
   if (!mirror) return
   if (mirror.debounceTimer) clearTimeout(mirror.debounceTimer)
-  if (mirror.retryTimer) clearTimeout(mirror.retryTimer)
   mirror.debounceTimer = null
-  mirror.retryTimer = null
   for (const d of mirror.disposables) {
     try {
       d.dispose()
@@ -300,51 +331,32 @@ function teardownMirror(sessionId: string): void {
 }
 
 /**
- * 订阅挂点 = 会话首次需要徽标/列表时（didActivate / 冷启动兜底两入口汇聚于此）。
- * badge 更新与面板树推送依赖同一失效订阅（树持续推送，不随入口显隐挂解）。
+ * 镜像挂点 = 会话首次需要徽标/列表时（didActivate / 冷启动兜底两入口汇聚于此）。
+ * badge 更新与面板树推送依赖同一刷新链（树持续推送，不随入口显隐挂解）。
  */
 function ensureMirror(api: Api, sessionId: string, sink: DisposableLike[]): SessionMirror {
   const existing = mirrors.get(sessionId)
   if (existing) return existing
   const mirror: SessionMirror = {
     sessionId,
-    entries: [],
+    tasks: [],
     debounceTimer: null,
     refreshInFlight: null,
     readFailure: null,
-    retryTimer: null,
-    retryCount: 0,
     commandDisabled: null,
     notice: null,
     disposables: [],
   }
   mirrors.set(sessionId, mirror)
-  const sub = api.sessions.onEntriesInvalidated(sessionId, TASK_ENTRY_TYPE, (sid) => {
-    scheduleRefresh(api, sid)
-  })
-  mirror.disposables.push(sub)
-  sink.push(sub)
-  // 树回退（消息撤回）信号：累计镜像按活跃路径权威态重建（与 TASK_ENTRY_TYPE 订阅
-  // 并列，同一 disposables 管理）——丢弃累计 + 全量重新拉取，被撤 task op 随 runtime 侧
-  // 活跃路径裁剪从回包消失，面板/徽标残留清除。
-  const revokedSub = api.sessions.onEntriesInvalidated(sessionId, REVOKED_SIGNAL_CUSTOM_TYPE, (sid) => {
-    const revokedMirror = mirrors.get(sid)
-    if (!revokedMirror) return
-    discardAccumulatedMirror(revokedMirror)
-    scheduleRefresh(api, sid)
-  })
-  mirror.disposables.push(revokedSub)
-  sink.push(revokedSub)
   scheduleRefresh(api, sessionId)
   void reevaluateCommandAvailability(api, mirror)
   return mirror
 }
 
-/** 失效信号 → 防抖合并 → 一次重新拉取。外部信号 = 会话侧新证据，重置恢复重试预算。 */
+/** 刷新触发 → 防抖合并 → 一次快照读取（写后主动 / 轮询 / 激活信号三通道共用出口）。 */
 function scheduleRefresh(api: Api, sessionId: string): void {
   const mirror = mirrors.get(sessionId)
   if (!mirror) return
-  mirror.retryCount = 0
   if (mirror.debounceTimer) clearTimeout(mirror.debounceTimer)
   mirror.debounceTimer = setTimeout(() => {
     mirror.debounceTimer = null
@@ -352,7 +364,7 @@ function scheduleRefresh(api: Api, sessionId: string): void {
   }, READ_DEBOUNCE_MS)
 }
 
-/** 并发失效共享一次拉取（in-flight 复用） */
+/** 并发触发共享一次读取（in-flight 复用） */
 function refresh(api: Api, sessionId: string): Promise<void> {
   const mirror = mirrors.get(sessionId)
   if (!mirror) return Promise.resolve()
@@ -364,139 +376,57 @@ function refresh(api: Api, sessionId: string): Promise<void> {
 }
 
 /**
- * 丢弃累计镜像（E11 游标失效自愈 / 'taiji:revoked' 撤回信号镜像重建共用的小函数）：
- * 清 entries + cursor，下一次 doRefresh 因 cursor undefined 走全量重新拉取。全量回包已经
- * runtime 活跃路径过滤（readEntries 裁剪），折叠输入天然不含被撤子树 op。
+ * 快照直读：sessions.get 取 cwd（workspace 分片键）→ schedulerStoreFilePath 推导
+ * 路径 → readSchedulerStore 一次 JSON.parse。missing / corrupt 按 store 模块语义折叠
+ * 为空任务集（corrupt 已由 store 模块 warn 留证）；会话元信息缺失 / fs 错误 →
+ * 读失败态提示（不渲染陈旧行、不显示假空态）。快照读取不依赖 pi 进程存活——
+ * dead / 恢复中会话照常可读（任务库分离红利）。
  */
-function discardAccumulatedMirror(mirror: SessionMirror): void {
-  mirror.entries = []
-  mirror.cursor = undefined
-}
-
 async function doRefresh(api: Api, mirror: SessionMirror): Promise<void> {
   try {
-    const envelope = await api.sessions.readEntries(
-      mirror.sessionId,
-      mirror.cursor !== undefined ? { customType: TASK_ENTRY_TYPE, sinceEntryId: mirror.cursor } : { customType: TASK_ENTRY_TYPE },
-    )
-    if (envelope.sessionFile !== undefined) mirror.sessionFile = envelope.sessionFile
-    if (envelope.entries.length > 0) mirror.entries.push(...envelope.entries)
-    if (envelope.leafEntryId !== undefined) mirror.cursor = envelope.leafEntryId
-    const hadFailure = mirror.readFailure !== null
+    const info = await api.sessions.get(mirror.sessionId)
+    let tasks: ScheduledTask[] = []
+    if (info?.cwd) {
+      const filePath = schedulerStoreFilePath(resolveAgentDir(), info.cwd, mirror.sessionId)
+      const read = readSchedulerStore(filePath)
+      if (read.kind === 'ok') tasks = read.tasks
+    } else {
+      // 会话元信息不可得（已删除的 session 目录等）：按读失败态提示，不静默当空集
+      throw new Error(`session metadata unavailable (cwd missing for ${mirror.sessionId})`)
+    }
     mirror.readFailure = null
-    mirror.retryCount = 0
-    if (mirror.retryTimer) {
-      clearTimeout(mirror.retryTimer)
-      mirror.retryTimer = null
-    }
+    mirror.tasks = tasks
     await pushTreeAndBadge(api, mirror)
-    // 从恢复窗口走出后重判 E13（restore 完成 → /schedule 已注册）
-    if (hadFailure) await reevaluateCommandAvailability(api, mirror)
   } catch (e) {
-    if (isEntryNotFound(e)) {
-      // E11 游标失效 → 丢弃累计全量重新拉取（自愈，用户无感）。全量（无 cursor）理论上
-      // 不会再触发该错误；若触发按恢复窗口处理防循环。
-      if (mirror.cursor !== undefined || mirror.entries.length > 0) {
-        // 自愈对用户无感，但必须对排查可见（pi 侧 entry 截断/会话重建的证据链入口）
-        console.warn(
-          `[scheduler-manager] cursor invalidated, full re-pull (session=${mirror.sessionId})`,
-        )
-        discardAccumulatedMirror(mirror)
-        // 重新拉取必须挂在当前 in-flight 结束之后：此刻 refresh() 仍能看见本轮登记的
-        // promise（finally 未跑、refreshInFlight 未清），直接调会被并发合并复用返回，
-        // 自愈拉取静默丢失（E11 用例实测抓出）。挂到 settle 之后登记已清空，
-        // refresh() 才真正发起全量重新拉取。
-        const settle = mirror.refreshInFlight ?? Promise.resolve()
-        void settle.then(() => refresh(api, mirror.sessionId))
-        return
-      }
-    }
-    await handleReadFailure(api, mirror, e)
-  }
-}
-
-/** E4 读两态：dead/error 终态 → 「会话不可用」；其余（active/idle/done/stopped）→ 恢复中 + 自动重试 */
-async function handleReadFailure(api: Api, mirror: SessionMirror, e: unknown): Promise<void> {
-  const reason = toMessage(e)
-  let terminal = false
-  try {
-    const status = (await api.sessions.get(mirror.sessionId))?.status
-    terminal = status === 'dead' || status === 'error'
-  } catch (e) {
-    // 状态查询失败：按可恢复处理（保守——不因元信息缺失宣判会话死亡；读错误本身
-    // 已写入 readFailure 推给用户），出声仅补诊断
-    console.warn(
-      '[scheduler-manager] status query failed, treating as recovering:',
-      toMessage(e),
-    )
-  }
-  if (terminal) {
-    mirror.readFailure = { kind: 'unavailable', reason }
-    if (mirror.retryTimer) {
-      clearTimeout(mirror.retryTimer)
-      mirror.retryTimer = null
-    }
+    mirror.readFailure = { reason: toMessage(e) }
     await pushTreeAndBadge(api, mirror)
-    return
   }
-  mirror.readFailure = { kind: 'recovering', reason }
-  await pushTreeAndBadge(api, mirror)
-  scheduleRetry(api, mirror)
-}
-
-/** 恢复窗口自动重试（有界：READ_RETRY_MAX 次后停自动重试，等失效/激活信号重置预算再试） */
-function scheduleRetry(api: Api, mirror: SessionMirror): void {
-  if (mirror.retryTimer) return
-  if (mirror.retryCount >= READ_RETRY_MAX) return // 预算耗尽：不重置不清零（耗尽态必须稳定，提示才停在「恢复超时」）
-  mirror.retryCount = 0
-  const tick = (): void => {
-    mirror.retryTimer = null
-    mirror.retryCount += 1
-    void refresh(api, mirror.sessionId)
-    if (mirror.retryCount < READ_RETRY_MAX && mirror.readFailure?.kind === 'recovering') {
-      mirror.retryTimer = setTimeout(tick, READ_RETRY_MS)
-    }
-  }
-  mirror.retryTimer = setTimeout(tick, READ_RETRY_MS)
-}
-
-/** 折叠当前快照（始终对累计全量——前缀依赖语义，设计 §3.4 增量衔接） */
-function foldTasks(mirror: SessionMirror): Map<string, ScheduledTask> {
-  return replayFoldEntries(mirror.entries, mirror.sessionFile, {
-    warn: (message) => console.warn(`[scheduler-manager] ${message}`),
-  })
 }
 
 /**
  * 推面板树（overlay 定时任务 tab ViewHost 消费）+ headerAction 徽标（每轮数据刷新统一出口）。
- * 读失败态 = 列表区提示（不渲染陈旧行、不显示假空态，E4）；徽标保持上次值。
+ * 读失败态 = 列表区提示（不渲染陈旧行、不显示假空态）；徽标保持上次值。
  */
 async function pushTreeAndBadge(api: Api, mirror: SessionMirror): Promise<void> {
   const failure = mirror.readFailure
   let tree: GuiComponent[]
   if (failure) {
-    // F4：重试预算耗尽（retryCount 停在 MAX，scheduleRetry 不再武装）→ 提示升级为含
-    // 恢复动作；重试进行中（预算内）保持原文案
-    const line =
-      failure.kind === 'unavailable'
-        ? `会话不可用：${failure.reason} —— 请从侧栏重新打开该会话`
-        : mirror.retryCount >= READ_RETRY_MAX
-          ? '会话恢复超时，请从侧栏重新打开该会话'
-          : '会话正在恢复，请稍候…'
-    tree = [{ type: 'ansi-text', props: { lines: [line] } }]
+    tree = [
+      { type: 'ansi-text', props: { lines: [`任务库读取失败：${failure.reason} —— 稍后自动重试；若持续失败请检查数据目录权限`] } },
+    ]
   } else {
-    const tasks = Array.from(foldTasks(mirror).values())
+    const tasks = mirror.tasks
     tree = buildModalTree(tasks, { notice: mirror.notice ?? undefined })
     const enabledCount = tasks.filter((t) => t.enabled).length
     mirror.badge = enabledCount > 0 ? String(enabledCount) : undefined
     // 「无任务不显示」：任务清单为空 → 入口整体不渲染（hidden=true）；有任务恢复显示。
-    // 读失败分支不重算（保持上次值，与徽标「恢复中」语义一致）。
+    // 读失败分支不重算（保持上次值，与徽标「读取中」语义一致）。
     mirror.hidden = tasks.length === 0
   }
   try {
     await api.views.update(SCHEDULER_MODAL_VIEW_ID, tree, { sessionId: mirror.sessionId })
   } catch (e) {
-    // best-effort：ViewHost 分区可能尚未挂载（overlay tab 未打开），不重抛——下一轮失效刷新/推送重试收敛
+    // best-effort：ViewHost 分区可能尚未挂载（overlay tab 未打开），不重抛——下一轮刷新推送重试收敛
     console.warn('[scheduler-manager] views.update failed:', toMessage(e))
   }
   await pushHeaderAction(api, mirror)
@@ -512,7 +442,7 @@ async function pushHeaderAction(api: Api, mirror: SessionMirror): Promise<void> 
       ...(mirror.hidden !== undefined ? { hidden: mirror.hidden } : {}),
     })
   } catch (e) {
-    // best-effort：徽标推送失败不重抛——下一轮失效刷新/推送重试收敛
+    // best-effort：徽标推送失败不重抛——下一轮刷新推送重试收敛
     console.warn('[scheduler-manager] updateHeaderAction failed:', toMessage(e))
   }
 }
@@ -541,7 +471,7 @@ async function reevaluateCommandAvailability(api: Api, mirror: SessionMirror): P
   await pushHeaderAction(api, mirror)
 }
 
-// ── 写路径（E5 白名单 + E7/E14 回执文案 + E4 恢复提示）────────────────────────
+// ── 写路径（E5 白名单 + E7/E14 回执文案）────────────────────────
 
 interface WriteArgs {
   id: string
@@ -587,8 +517,8 @@ async function handleWrite(
     await setNoticeAndPush(api, sessionId, `操作未生效：无效的任务标识（/schedule ${fallbackSub} <8位id>）`)
     return
   }
-  // E5：折叠快照无该 id → TASK_NOT_FOUND，不发命令 + 重新拉取
-  if (!mirror || !foldTasks(mirror).has(parsed.id)) {
+  // E5：快照无该 id → TASK_NOT_FOUND，不发命令 + 重新拉取
+  if (!mirror || !mirror.tasks.some((t) => t.id === parsed.id)) {
     await setNoticeAndPush(api, sessionId, '任务已不存在，列表已刷新')
     scheduleRefresh(api, sessionId)
     return
@@ -600,7 +530,6 @@ async function handleWrite(
     await setNoticeAndPush(api, sessionId, `操作未生效：无效的任务标识（/schedule ${sub} ${parsed.id}）`)
     return
   }
-  const wasRecovering = mirror.readFailure !== null
   try {
     const receipt = await api.sessions.sendMessage({
       sessionId,
@@ -609,22 +538,14 @@ async function handleWrite(
       requireCommand: SCHEDULE_COMMAND_NAME,
     })
     if (receipt.accepted) {
-      // 写成功：旧失败 notice 必须清掉再推——不清则下一次失效驱动刷新会把陈旧
+      // 写成功：旧失败 notice 必须清掉再推——不清则下一次刷新会把陈旧
       // 「操作未生效」与已变更行一起重推（操作已生效却仍挂失败提示）。主动 push 让
-      // 清除立即可见、不依赖失效事件是否到来（重复推送幂等）；数据不乐观更新，快照
-      // 与游标仍由失效订阅驱动刷新（C-pi-13）。恢复窗口写成功 → 显式提示 restore
-      // 副作用（E4：到期的 enabled 任务将照常触发）。
-      await setNoticeAndPush(
-        api,
-        sessionId,
-        wasRecovering ? '会话已恢复，未完成的排期任务将照常触发' : null,
-      )
+      // 清除立即可见（重复推送幂等）；数据不乐观更新，快照由轮询与激活信号刷新收敛。
+      await setNoticeAndPush(api, sessionId, null)
       return
     }
     // 回执失败：reason 是诊断/文案，行为分支只看 accepted（E7 词表纪律）。
-    // busy/compacting/bash 退役值已随 SendPromptReason 词表收窄删除（「排队取代拒绝」
-    // 后投递内核对暂不可收时态只排队不回拒）——除 command-missing 外的失败统一走
-    // 通用重试文案。
+    // 除 command-missing 外的失败统一走通用重试文案。
     const line =
       receipt.reason === 'command-missing'
         ? '命令不可用，操作未生效 —— 若持续失败，请到 设置 → 扩展检查 该会话的 scheduler 扩展'
@@ -635,10 +556,7 @@ async function handleWrite(
     await setNoticeAndPush(
       api,
       sessionId,
-      wasRecovering
-        ? `会话恢复失败：${msg} —— 请从侧栏手动打开该会话后再管理`
-        // 错误提示必须携带可执行的恢复动作（手敲子命令重试）
-        : `操作未生效：${msg}（可手敲 /schedule ${sub} ${parsed.id} 重试）`,
+      `操作未生效：${msg}（可手敲 /schedule ${sub} ${parsed.id} 重试）`,
     )
   }
 }
@@ -649,27 +567,37 @@ export async function activate(context: PluginContext): Promise<void> {
   const { api } = context
   const sink = context.subscriptions
 
-  // 焦点会话追踪（写命令链 sessionId 唯一来源）+ 激活补充拉取（场景 9：重启后仍正确）
+  // 焦点会话追踪（写命令链 sessionId 唯一来源）+ 激活补充拉取（切换会话即时刷新）
   sink.push(
     api.sessions.onDidActivateSession((session) => {
       focusSessionId = session.id
       const mirror = ensureMirror(api, session.id, sink)
-      // 已存在镜像若停在恢复窗口（读失败重试耗尽、文案停「恢复超时」），激活信号 =
-      // 进程就绪后的新证据（didActivate 在会话激活完成后投递），重置预算重新拉取自愈；
+      // 已存在镜像若停在读失败态，激活信号 = 新证据（会话刚被宿主触达），立即重拉自愈；
       // 新建镜像的首次拉取已由 ensureMirror 武装，此处不重复
       if (mirror.readFailure !== null) scheduleRefresh(api, session.id)
     }),
   )
   // 新建会话补挂点（ADR-0097 拉为主改造配套）：session.create 不触发 didActivate
-  //（runtime handleSessionCreate 只 reply + 广播会话列表），无镜像则收不到 entry 失效
-  // 事件——新会话首轮 /schedule 创建任务后按钮与面板将不出现（漏显示），直到用户切走
-  // 再切回。didCreate 即建镜像，首拉推 hidden=true（新会话零任务）+ 失效订阅就位。
+  //（runtime handleSessionCreate 只 reply + 广播会话列表），无镜像则收不到刷新触发
+  // ——新会话首轮 /schedule 创建任务后按钮与面板将不出现（漏显示），直到用户切走
+  // 再切回。didCreate 即建镜像，首拉推 hidden=true（新会话零任务）。
   sink.push(
     api.sessions.onDidCreateSession((session) => {
       ensureMirror(api, session.id, sink)
     }),
   )
   sink.push(api.sessions.onDidDestroySession((session) => teardownMirror(session.id)))
+
+  // 周期轮询（任务库写入无会话 entry 失效信号，轮询兜覆盖对话内创建/删除与到点记账）：
+  // 只轮询有镜像的会话；无镜像 = 从未需要徽标/列表，不主动建镜像（保持懒挂点语义）。
+  const pollTimer = setInterval(() => {
+    for (const mirror of mirrors.values()) {
+      refresh(api, mirror.sessionId)
+    }
+  }, POLL_INTERVAL_MS)
+  sink.push({
+    dispose: () => clearInterval(pollTimer),
+  })
 
   // 命令注册（id 与 builtinContributions 声明逐字一致；'.' 合法、':' 被
   // INVALID_COMMAND_ID 拒——复合键 = pluginId:commandId，声明/注册两端同串对上）。
@@ -702,5 +630,5 @@ export async function activate(context: PluginContext): Promise<void> {
     console.warn('[scheduler-manager] cold-start list() failed:', toMessage(e))
   }
 
-  console.log('[scheduler-manager] activated: headerAction + overlay tree consumer ready')
+  console.log('[scheduler-manager] activated: headerAction + overlay tree consumer ready (task-store polling)')
 }

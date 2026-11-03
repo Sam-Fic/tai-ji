@@ -1,5 +1,13 @@
 # @zhushanwen/pi-smart-context
 
+## 0.5.0
+
+### Minor Changes
+
+- d2b945a20: 上下文压缩后台化：compact_context 工具触发立即返回成功回执，压缩生成期间对话不被拒绝、不被掐断（后台执行，完成后下一次请求自动切换到压缩后上下文）；新增 autoCompactThresholdRatio 配置（默认 0.9，相对模型窗口的自动触发线，smart-context-ext-config.json 可改）；落盘形态与原生压缩完全一致（可重载、可 fork）；完成/失败经通知通道播报。/compact 手动命令与溢出恢复压缩保持同步行为（设计例外，ADR-0182）。
+
+- d2b945a20: compact_context 工具 details 删除 launched / fellBack 两个字段（压缩结果以注入消息与 summary 字段为准）；窗口告警的压缩触发线改读 pi 包导出的 `DEFAULT_COMPACTION_SETTINGS.reserveTokens`（当前值不变，pi 升级调整默认值时自动跟随）。
+
 ## 0.4.4
 
 ### Patch Changes

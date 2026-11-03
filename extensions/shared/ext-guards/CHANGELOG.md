@@ -1,5 +1,11 @@
 # @zhushanwen/pi-ext-guards
 
+## 0.5.1
+
+### Patch Changes
+
+- d2b945a20: Internal documentation wording cleanup in the stale-context guard comments and tests (dropped internal gate codenames). No behavior change.
+
 ## 0.5.0
 
 ### Minor Changes

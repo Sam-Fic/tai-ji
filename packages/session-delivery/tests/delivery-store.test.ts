@@ -1,17 +1,19 @@
 /**
  * v3 DeliveryStore 持久化存储端口契约（设计 unified-delivery §3.5.1 / §3.5.5）：
  * - persist 先于投递尝试（耐久承诺先于投递，与账本 record 先于 deliver 同律）
- * - 终局 delivered / cancelled 后 ack（含 drain 全量终局）
+ * - 终局 delivered / cancelled 时 ack（含 drain 全量终局）
  * - persist 失败 = 承诺未落 → 拒收（send rejected / sendChecked throw），不投递
  * - forget 失败 discard（无终局语义的记录无痕移除）/ retain 失败记录保留
  * - loadUndelivered / loadTerminalIds（内存假实现的差集 / 终局视图）
- * - ack 异常降级：终局事实已发生，状态机不回滚，warn 留痕
+ * - ack 写盘失败 = 磁盘权威（2026-10-30 用户裁决）：内存不登记终态（条目留守活跃集
+ *   非终态）+ 分型错误 DeliveryAckPersistError 显式上报；外部送达事实不回滚，恢复后
+ *   可能重投（at-least-once 显式接受）
  *
  * 内核零 fs 知识锚：store 由测试注入内存假实现（tests/helpers MemoryDeliveryStore），
  * 内核仅经端口方法交互。
  */
 import { describe, expect, it, vi } from 'vitest'
-import { createDelivery } from '../src/delivery.js'
+import { createDelivery, DeliveryAckPersistError } from '../src/index.js'
 import type { DeliveryMessage, DeliveryPort } from '../src/types.js'
 import { MemoryDeliveryStore, customMsg, makeMockPort, textMsg } from './helpers.js'
 
@@ -132,20 +134,135 @@ describe('DeliveryStore 契约：终局 ack', () => {
     }
   })
 
-  it('ack 抛错降级：终局事实已发生，状态机不回滚，warn 留痕', () => {
+  it('ack 写盘失败（磁盘权威）：confirmDelivered false、内存不登记终态、条目留守活跃集、错误显式留痕', () => {
     const { store, port } = makeStoreWithPort()
-    vi.spyOn(store, 'ack').mockImplementation(() => {
-      throw new Error('disk full')
+    const originalAck = store.ack.bind(store)
+    let ackBroken = true
+    vi.spyOn(store, 'ack').mockImplementation((id: string) => {
+      if (ackBroken) throw new Error('disk full')
+      originalAck(id)
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const onSettled = vi.fn()
+    const handle = createDelivery(port, { store, onSettled })
+    try {
+      handle.send(textMsg('m-1'), { id: 'sid-1' }) // port.send 受理成功 → in-flight 等回执
+      expect(handle.confirmDelivered('sid-1')).toBe(false) // 终局未落定
+      expect(handle.entriesFull().tombstones).toHaveLength(0) // 内存终局记录不登记
+      const active = handle.entriesFull().active
+      expect(active.map((e) => e.id)).toEqual(['sid-1']) // 条目留守活跃集
+      expect(active[0]!.state).toBe('in-flight') // 原态保持（未终态）
+      expect(onSettled).not.toHaveBeenCalled() // 终态未落定，送达回调不触发
+      // 判重一级（在途集）仍含该 id：同 id 重报照常被吞（在途 = 未终态，口径一致）
+      expect(handle.send(textMsg('m-1', { dedupeKey: 'k2' }), { id: 'sid-1' })).toEqual({
+        kind: 'swallowed',
+        reason: 'already-seen',
+      })
+      // 显式失败面：warn 携带分型错误（含「已送达但终态未持久化，恢复后可能重投」文案）
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('store.ack failed'),
+        expect.any(DeliveryAckPersistError),
+      )
+      const logged = warnSpy.mock.calls.find((c) => String(c[0]).includes('store.ack failed'))![1] as DeliveryAckPersistError
+      expect(logged.message).toContain('recovery may redeliver')
+      expect(logged.entryId).toBe('sid-1')
+      expect(logged.state).toBe('delivered')
+    } finally {
+      warnSpy.mockRestore()
+      handle.dispose()
+    }
+  })
+
+  it('ack 写盘失败重试路径：写盘恢复后同一回执入口重驱动 → 终局补落（回调补触发）', () => {
+    const { store, port } = makeStoreWithPort()
+    const originalAck = store.ack.bind(store)
+    let ackBroken = true
+    vi.spyOn(store, 'ack').mockImplementation((id: string) => {
+      if (ackBroken) throw new Error('disk full')
+      originalAck(id)
     })
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const onSettled = vi.fn()
     const handle = createDelivery(port, { store, onSettled })
     try {
       handle.send(textMsg('m-1'), { id: 'sid-1' })
-      expect(handle.confirmDelivered('sid-1')).toBe(true) // 终局照常
-      expect(onSettled).toHaveBeenCalledWith(expect.anything(), 'delivered')
-      expect(handle.entriesFull().tombstones).toHaveLength(1) // 终局记录已登记
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('store.ack failed'), expect.any(Error))
+      expect(handle.confirmDelivered('sid-1')).toBe(false) // 写盘失败：未终态
+      ackBroken = false // 磁盘故障恢复
+      expect(handle.confirmDelivered('sid-1')).toBe(true) // 同一入口重驱动即重试
+      expect(store.terminals.has('sid-1')).toBe(true) // 持久终局补落
+      expect(handle.entriesFull().tombstones.map((t) => t.id)).toEqual(['sid-1'])
+      expect(handle.entriesFull().active).toHaveLength(0)
+      expect(onSettled).toHaveBeenCalledWith(expect.anything(), 'delivered') // 送达回调补触发
+    } finally {
+      warnSpy.mockRestore()
+      handle.dispose()
+    }
+  })
+
+  it('ack 写盘失败（磁盘权威）：cancel 上抛 DeliveryAckPersistError、条目转 failed 留守；恢复后重试 cancel 补落终局', () => {
+    const { store, port } = makeStoreWithPort({
+      // port.send 永不 settle：条目留守 queued（cancel 直终局分支）
+      send: () => new Promise(() => {}),
+    })
+    const originalAck = store.ack.bind(store)
+    let ackBroken = true
+    vi.spyOn(store, 'ack').mockImplementation((id: string) => {
+      if (ackBroken) throw new Error('disk full')
+      originalAck(id)
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const handle = createDelivery(port, { store })
+    try {
+      handle.send(textMsg('m-1'), { id: 'sid-1' })
+      expect(() => handle.cancel('sid-1')).toThrow(DeliveryAckPersistError) // 用户驱动入口：显式失败上抛
+      const active = handle.entriesFull().active
+      expect(active.map((e) => e.id)).toEqual(['sid-1']) // 留守活跃集（未终态）
+      expect(active[0]!.state).toBe('failed') // 歧义留守：不参与 pump 重投
+      expect(handle.entriesFull().tombstones).toHaveLength(0)
+      expect(store.terminals.has('sid-1')).toBe(false) // 磁盘无终局（唯一权威）
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('store.ack failed'),
+        expect.any(DeliveryAckPersistError),
+      )
+      ackBroken = false // 磁盘故障恢复
+      const result = handle.cancel('sid-1') // cancel 接受 failed 态：重试即补落
+      expect(result.kind).toBe('cancelled')
+      expect(store.terminals.has('sid-1')).toBe(true)
+      expect(handle.entriesFull().active).toHaveLength(0)
+    } finally {
+      warnSpy.mockRestore()
+      handle.dispose()
+    }
+  })
+
+  it('ack 写盘失败（磁盘权威）：drain 逐条降级——失败条目文本照常取回 + 转 failed 留守，成功条目照常终局', () => {
+    const { store, port } = makeStoreWithPort()
+    const originalAck = store.ack.bind(store)
+    let brokenId: string | undefined = 'sid-2'
+    vi.spyOn(store, 'ack').mockImplementation((id: string) => {
+      if (id === brokenId) throw new Error('disk full')
+      originalAck(id)
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const handle = createDelivery(port, { store })
+    try {
+      handle.send(textMsg('m-1'), { id: 'sid-1' })
+      handle.send(textMsg('m-2'), { id: 'sid-2' })
+      const drained = handle.drain()
+      expect(drained.map((d) => d.id)).toEqual(['sid-1', 'sid-2']) // 文本照常取回（本地取回事实成立）
+      expect(store.terminals).toEqual(new Set(['sid-1'])) // 成功条目持久终局
+      expect(handle.entriesFull().tombstones.map((t) => t.id)).toEqual(['sid-1'])
+      const active = handle.entriesFull().active
+      expect(active.map((e) => e.id)).toEqual(['sid-2']) // 失败条目留守（未终态）
+      expect(active[0]!.state).toBe('failed')
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('store.ack failed in drain'),
+        expect.any(DeliveryAckPersistError),
+      )
+      brokenId = undefined // 磁盘故障恢复
+      expect(handle.cancel('sid-2').kind).toBe('cancelled') // cancel 接受 failed 态：补落终局
+      expect(handle.entriesFull().active).toHaveLength(0)
+      expect(store.terminals.has('sid-2')).toBe(true)
     } finally {
       warnSpy.mockRestore()
       handle.dispose()

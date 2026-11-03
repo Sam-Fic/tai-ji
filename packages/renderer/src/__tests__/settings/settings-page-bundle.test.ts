@@ -2,7 +2,7 @@
  * settings 页合并产物（round 5-G S4）：三文件同产物，环境全默认（happy-dom）。
  *
  * 并入来源（基名）：
- *  - system-page-smart-context（SystemSmartContextSection 智能上下文压缩，10 例）
+ *  - system-page-smart-context（SmartContextCompactionPage 智能上下文压缩，原 SystemSmartContextSection 迁独立页后承接，10+3 例）
  *  - update-page（UpdatePage 全功能区，26 例）
  *  - rename-session-page（RenameSessionPage 三视角，20 例）
  *
@@ -100,14 +100,14 @@ function setupSystemPageTest(sectionLoader: () => Promise<{ default: Component }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 来源节：system-page-smart-context（SystemSmartContextSection，原文件顶层 hook 下沉节内）
+// 来源节：system-page-smart-context（原 SystemSmartContextSection，C3 迁独立页 SmartContextCompactionPage 后承接）
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('SystemSmartContextSection 智能上下文压缩', () => {
+describe('SmartContextCompactionPage 智能上下文压缩', () => {
   // 工厂引用 helper 单例（seam 桩与断言共享同一 mock fn 实例）
   const loadSmartContextSection = () =>
-    import('@/components/settings/system/SystemSmartContextSection.vue')
-  const { settingsMock, mountSection, pageWrapper } = setupSystemPageTest(loadSmartContextSection)
+    import('@/components/settings/smart-context/SmartContextCompactionPage.vue')
+  const { settingsMock, mountSection, mountPage, pageWrapper } = setupSystemPageTest(loadSmartContextSection)
 
   // Section 模块图预热一次（h 类整治）：依赖链（@taiji/ui GroupCard / @taiji/core transport /
   // useAuthedModelGroups 等）装载成本落节级 beforeAll，首条用例只付 mount 成本。vi.mock
@@ -120,17 +120,18 @@ describe('SystemSmartContextSection 智能上下文压缩', () => {
     settingsMock.setSmartContextEnabled.mockResolvedValue({ enabled: false })
   })
 
-  it('mount 后 DOM 含 switch / model Select / 3 档阈值 input / 排除容器', async () => {
+  it('mount 后 DOM 含 switch / model Select / 3 档阈值 input / 触发线 input / 排除容器', async () => {
     await mountSection()
     expect(pageWrapper()!.find('[data-testid="setting-smart-context-switch"]').exists()).toBe(true)
     expect(pageWrapper()!.find('[data-testid="setting-smart-context-model"]').exists()).toBe(true)
     expect(pageWrapper()!.find('[data-testid="setting-smart-context-threshold-1"]').exists()).toBe(true)
     expect(pageWrapper()!.find('[data-testid="setting-smart-context-threshold-2"]').exists()).toBe(true)
     expect(pageWrapper()!.find('[data-testid="setting-smart-context-threshold-3"]').exists()).toBe(true)
+    expect(pageWrapper()!.find('[data-testid="setting-smart-context-ratio"]').exists()).toBe(true)
     expect(pageWrapper()!.find('[data-testid="setting-smart-context-excluded"]').exists()).toBe(true)
   })
 
-  it('初始值：Switch 开 + 阈值 input 显示 K 值（400/500/600）', async () => {
+  it('初始值：Switch 开 + 阈值 input 显示 K 值（400/500/600）+ 触发线显示 0.9', async () => {
     await mountSection()
     const sw = pageWrapper()!.find('[data-testid="setting-smart-context-switch"]')
     expect(sw.attributes('data-state')).toBe('checked')
@@ -138,6 +139,8 @@ describe('SystemSmartContextSection 智能上下文压缩', () => {
     const t3 = pageWrapper()!.find('[data-testid="setting-smart-context-threshold-3"]').element as HTMLInputElement
     expect(t1.value).toBe('400')
     expect(t3.value).toBe('600')
+    const ratio = pageWrapper()!.find('[data-testid="setting-smart-context-ratio"]').element as HTMLInputElement
+    expect(ratio.value).toBe('0.9')
   })
 
   it('enabled=false 时 Switch 为关且阈值 input disabled', async () => {
@@ -194,6 +197,34 @@ describe('SystemSmartContextSection 智能上下文压缩', () => {
     await t1.trigger('change')
     await flushPromises()
     expect(settingsMock.setSmartContextThresholds).toHaveBeenCalledWith([300_000, 500_000, 600_000])
+  })
+
+  it('触发线保存：input 改 0.95 → change 后 setSmartContextAutoCompactThresholdRatio 收到 0.95（C3）', async () => {
+    await mountSection()
+    const ratio = pageWrapper()!.find('[data-testid="setting-smart-context-ratio"]')
+    ;(ratio.element as HTMLInputElement).value = '0.95'
+    await ratio.trigger('input')
+    await ratio.trigger('change')
+    await flushPromises()
+    expect(settingsMock.setSmartContextAutoCompactThresholdRatio).toHaveBeenCalledWith(0.95)
+  })
+
+  it('触发线越界 clamp 回填：input 1.5 → runtime reply 1 → input 显示 1（C3）', async () => {
+    settingsMock.setSmartContextAutoCompactThresholdRatio.mockResolvedValue({ ratio: 1 })
+    await mountSection()
+    const ratio = pageWrapper()!.find('[data-testid="setting-smart-context-ratio"]')
+    ;(ratio.element as HTMLInputElement).value = '1.5'
+    await ratio.trigger('input')
+    await ratio.trigger('change')
+    await flushPromises()
+    expect(settingsMock.setSmartContextAutoCompactThresholdRatio).toHaveBeenCalledWith(1.5)
+    expect(((ratio.element as HTMLInputElement).value)).toBe('1')
+  })
+
+  it('C3 迁出否定断言：SystemPage 编排下不再渲染智能上下文区块（已迁独立页）', async () => {
+    await mountPage()
+    expect(document.body.querySelector('[data-testid="setting-smart-context-switch"]')).toBeNull()
+    expect(document.body.querySelector('[data-testid="smart-context-compaction-page"]')).toBeNull()
   })
 
   it('排除模型 tag 渲染 + 点 × 移除后 setSmartContextExcludedModels 收到剩余列表', async () => {

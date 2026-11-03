@@ -1,5 +1,11 @@
 # @zhushanwen/zcode-subagent-cli
 
+## 0.8.6
+
+### Patch Changes
+
+- d2b945a20: Test-infrastructure only: vitest project configuration reworked (no runtime code change).
+
 ## 0.8.5
 
 ### Patch Changes

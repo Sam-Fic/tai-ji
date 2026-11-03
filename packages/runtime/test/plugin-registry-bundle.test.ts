@@ -1477,6 +1477,26 @@ describe('PluginService 卸载编排', () => {
     expect(registry.getDescriptor('zhushanwen__plugin-wool-qoder')).toBeUndefined()
   })
 
+  it('安装登记清理失败 → warn 不阻断：插件目录与注册表照常清理（卸载不抛）', async () => {
+    // 原型 spy 拦截 PluginService 内部构造的 InstalledStore 实例（installedStore 非注入依赖）
+    const recordUninstalledSpy = vi.spyOn(InstalledStore.prototype, 'recordUninstalled')
+      .mockRejectedValue(new Error('EACCES: installed.json 写入被拒'))
+    const { service, registry } = buildService()
+    await writePluginDir('reg-fail-plugin', pkgJson('reg-fail-plugin'))
+    await registry.scan()
+
+    await expect(service.uninstallPlugin('reg-fail-plugin')).resolves.toBeDefined()
+
+    expect(recordUninstalledSpy).toHaveBeenCalledWith('reg-fail-plugin')
+    expect(console.warn).toHaveBeenCalledWith(
+      '[plugin-service] failed to remove registration entries (installed.json/disabled.json) for reg-fail-plugin:',
+      'EACCES: installed.json 写入被拒',
+    )
+    // 登记残留可重试且无碍安装判定（目录 + package.json 才是事实源）——内存与磁盘清理不受影响
+    expect(existsSync(join(pluginsDir, 'reg-fail-plugin'))).toBe(false)
+    expect(registry.getDescriptor('reg-fail-plugin')).toBeUndefined()
+  })
+
   it('包内 package.json 缺 name（异常包）→ 跳过扩展卸载，卸载照常完成', async () => {
     const piExtensionInstaller = makePiExtensionInstaller()
     const { service, registry } = buildService({ piExtensionInstaller })

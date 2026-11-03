@@ -36,6 +36,7 @@ import {
   foldRecordEvents,
   INITIAL_RECORD_EVENT_FOLD_STATE,
   isRecordEventHeader,
+  isRecordEventHeaderLine,
   parseRecordEventFileLine,
   parseRecordEventLine,
   RECORD_EVENT_TYPES,
@@ -474,7 +475,7 @@ describe("readEventTail（offset 续读原语）", () => {
   afterEach(() => {
     fs.rmSync(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });
-  it("首次全量读：头行 + 事件行（域解析器注入）", async () => {
+  it("首次全量读：头行 + 事件行（域解析器 + 头行判定注入，头行不计坏行）", async () => {
     const journal = createRecordEventStream(() => workDir);
     await journal.append("sa-1", {
       type: "record-created",
@@ -490,12 +491,38 @@ describe("readEventTail（offset 续读原语）", () => {
       startedAt: 1,
     });
     const filePath = path.join(workDir, "sa-1.events");
-    const chunk = readEventTail(filePath, 0, parseRecordEventFileLine);
+    const chunk = readEventTail(filePath, 0, parseRecordEventFileLine, isRecordEventHeaderLine);
     expect(chunk.events).toHaveLength(1);
     expect(chunk.events[0]?.type).toBe("record-created");
-    expect(chunk.skippedLines).toBe(1); // 头行 = 解析器拒绝的合法行（计数语义见 EventTailChunk 注释）
+    expect(chunk.skippedLines).toBe(0); // 头行经 isHeader 判定静默跳过（合法存在，非坏行）
     expect(chunk.nextOffset).toBe(fs.statSync(filePath).size);
     expect(chunk.truncated).toBe(false);
+  });
+
+  it("不注入 isHeader 时头行按坏行计入（向后兼容缺省）；注入后真坏行才计数", async () => {
+    const journal = createRecordEventStream(() => workDir);
+    await journal.append("sa-2", {
+      type: "record-created",
+      ts: 1,
+      id: "sa-2",
+      agent: "a",
+      task: "t",
+      slug: "s",
+      origin: "tool",
+      rootSessionId: "root",
+      depth: 0,
+      mode: "background",
+      startedAt: 1,
+    });
+    const filePath = path.join(workDir, "sa-2.events");
+    fs.appendFileSync(filePath, "{broken\n"); // 追加一条真坏行
+    // 不注入（run 域形态的缺省调用）：头行 + 坏行都计入
+    const noInject = readEventTail(filePath, 0, parseRecordEventFileLine);
+    expect(noInject.skippedLines).toBe(2);
+    // 注入（record 域接线形态）：只计真坏行
+    const injected = readEventTail(filePath, 0, parseRecordEventFileLine, isRecordEventHeaderLine);
+    expect(injected.skippedLines).toBe(1);
+    expect(injected.events).toHaveLength(1);
   });
 
   it("offset 续读：只返回新增行（尾组一）", async () => {
@@ -590,9 +617,10 @@ describe("验收⑤：续读拼接 ≡ 全量 fold（fixture 含中部坏行 + �
     );
     const filePath = path.join(recordsDir, "sa-1.events");
 
-    // 段 1：读走头行 + created
-    const seg1 = readEventTail(filePath, 0, parseRecordEventFileLine);
+    // 段 1：读走头行 + created（头行经 isHeader 注入静默跳过，不计坏行）
+    const seg1 = readEventTail(filePath, 0, parseRecordEventFileLine, isRecordEventHeaderLine);
     expect(seg1.events).toHaveLength(1);
+    expect(seg1.skippedLines).toBe(0); // 头行不再产出「skipped 1 bad lines」误报
 
     // 段间注入①：不完整尾行（无换行结尾——模拟磁盘半写进行中）
     fs.appendFileSync(filePath, '{"type":"record-bound","seq":2');
@@ -609,17 +637,17 @@ describe("验收⑤：续读拼接 ≡ 全量 fold（fixture 含中部坏行 + �
 
     // 段 3：坏行之后的 settled 事件照常续读
     appended.push(await journal.append("sa-1", { type: "record-settled", ts: 3, stopReason: "completed", endedAt: 3, turns: 1, totalTokens: 10 }));
-    const seg3 = readEventTail(filePath, seg2.nextOffset, parseRecordEventFileLine);
+    const seg3 = readEventTail(filePath, seg2.nextOffset, parseRecordEventFileLine, isRecordEventHeaderLine);
     expect(seg3.events.map((e) => e.type)).toEqual(["record-bound", "record-settled"]);
     expect(seg3.skippedLines).toBe(1); // 中部坏行：跳过 + 计数
 
     // 续读拼接 ≡ 全量读（验收⑤等价性）：事件序列逐条相等 + fold 等价双锚
     const tailEvents = [...seg1.events, ...seg2.events, ...seg3.events];
-    const fullChunk = readEventTail(filePath, 0, parseRecordEventFileLine);
+    const fullChunk = readEventTail(filePath, 0, parseRecordEventFileLine, isRecordEventHeaderLine);
     expect(tailEvents).toEqual(fullChunk.events);
     expect(foldRecordEvents(tailEvents)).toEqual(foldRecordEvents(fullChunk.events));
-    // 全量读 skipped = 头行 1 + 坏行 1（tail 续读不重算头行）
-    expect(fullChunk.skippedLines).toBe(2);
+    // 全量读 skipped = 仅中部坏行 1（头行不计——tail 续读不重算头行，两形态一致）
+    expect(fullChunk.skippedLines).toBe(1);
   });
 });
 // 来源段：record-identity-fold.test.ts

@@ -870,6 +870,11 @@ function makeService(): {
   fake: FakePiEnginePort;
 } {
   const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "cont-integration-"));
+  // journal/records 落盘隔离（同 live-usage describe 先例——测试红线：不触真实数据
+  // 目录）。initSession 的通知对账会补投 records 树内的收尾 idle record，数据目录
+  // 跨用例共享时前一用例的 record 会被补投进本用例的 pi 计数（对账判据覆盖轮终
+  // 收尾形态后暴露的隔离欠账）。
+  process.env.TAIJI_AGENT_DATA_DIR = path.join(agentDir, "engine-data");
   clearEngines();
   const fake = registerFakePiEngine();
   const modelService = new ModelConfigService({ agentDir, cwd: agentDir });
@@ -2211,6 +2216,8 @@ type MockPi = PiMock;
 
 function setup(): { agentDir: string; service: SubagentService; store: RecordStore; pi: MockPi; fake: FakePiEnginePort } {
   const agentDir = makeTmpAgentDir();
+  // journal/records 落盘隔离（同 makeService 先例——initSession 对账会读 records 树）。
+  process.env.TAIJI_AGENT_DATA_DIR = path.join(agentDir, "engine-data");
   clearEngines();
   const fake = registerFakePiEngine();
   const modelService = new ModelConfigService({ agentDir, cwd: agentDir });

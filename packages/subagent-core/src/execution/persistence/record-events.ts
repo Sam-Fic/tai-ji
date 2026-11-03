@@ -27,7 +27,8 @@
 // 2026-10-12 裁决；统一保留维护轮不再是其回收通道）。
 //
 // tail 增量读取（offset 续读 / 完整行边界 / 坏行宽容）不在本模块——event-tail.ts
-// 是域无关的 tail 原语层，本模块只提供 parseRecordEventFileLine 行解析器注入。
+// 是域无关的 tail 原语层，本模块只提供 parseRecordEventFileLine 行解析器与
+// isRecordEventHeaderLine 头行判定两注入件。
 
 import { join } from "node:path";
 
@@ -107,6 +108,21 @@ export function isRecordEventHeader(value: unknown): value is RecordEventHeader 
   if (typeof value !== "object" || value === null) return false;
   const rec = value as { type?: unknown; id?: unknown };
   return rec.type === RECORD_EVENTS_HEADER_TYPE && typeof rec.id === "string" && rec.id.length > 0;
+}
+
+/**
+ * 行级头行判定（readEventTail 的 isHeader 注入用——值级判定 isRecordEventHeader
+ * 的行级包装：parse 失败/空行/非头行均 false）。头行命中后 readEventTail 静默跳过
+ * 不计坏行，record `.events` 文件每次冷读不再产出「skipped 1 bad lines」误报。
+ */
+export function isRecordEventHeaderLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (trimmed.length === 0) return false;
+  try {
+    return isRecordEventHeader(JSON.parse(trimmed));
+  } catch {
+    return false;
+  }
 }
 
 // ── 事件词表（D3 映射表，恰好 6 类）────────────────────────────
@@ -409,8 +425,10 @@ export function parseRecordEventLine(value: unknown): RecordEvent | null {
 
 /**
  * 文件行解析器（event-tail / scan 共用）：空行静默跳过、头行静默跳过（合法
- * 存在，非坏行——计数语义见 readEventTail 的 skippedLines 注释）、坏行（JSON
- * 解析失败 / 词表外 / 信封坏值）返回 undefined 交调用方计数。
+ * 存在，非坏行）、坏行（JSON 解析失败 / 词表外 / 信封坏值）返回 undefined 交
+ * 调用方计数。readEventTail 侧配合 isRecordEventHeaderLine 注入，头行不计入
+ * skippedLines（真坏行语义）；不经 isHeader 的调用方（scan / report 校验）头行
+ * 照旧在此返回 undefined 跳过。
  */
 export function parseRecordEventFileLine(line: string): RecordEvent | undefined {
   const trimmed = line.trim();

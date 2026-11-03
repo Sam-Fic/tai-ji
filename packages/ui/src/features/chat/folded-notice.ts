@@ -44,7 +44,8 @@ type Translate = (key: string, named?: Record<string, unknown>) => string
 
 /**
  * 展开明细行状态词（§3.4：bash 显 exit N 字面量 / 超时词；其余类型三态词；
- * 中性 bash 非 timeout（exitCode 缺失，生产不可达形态）不显状态——不冒充成败）。
+ * 中性 bash 非 timeout（exitCode null——转后台任务与被信号终止的显式后台任务，
+ * 生产可达）不显状态——不冒充成败）。
  */
 export function foldedStatusText(row: FoldedNoticeRow, t: Translate): string {
   if (row.type === 'bash') {

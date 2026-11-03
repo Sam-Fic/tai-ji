@@ -12,7 +12,7 @@
  * 运行：cd packages/session-delivery && npx vitest run tests/errors.test.ts
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { createDelivery, DeliveryReclaimError } from '../src/index.js'
+import { createDelivery, DeliveryAckPersistError, DeliveryReclaimError } from '../src/index.js'
 import { makeMockPort } from './helpers.js'
 
 /** port.send 永不 settle：sendChecked 挂起等待（受理口径 resolve 不触发），供 cancel/drain/dispose reject。 */
@@ -43,6 +43,31 @@ describe('DeliveryReclaimError 结构化字段与文案形态', () => {
     expect(e.kind).toBe('drained')
     expect(e.entryId).toBeUndefined()
     expect(e.message).toBe('delivery drained')
+  })
+})
+
+describe('DeliveryAckPersistError 结构化字段与文案形态（磁盘权威裁决）', () => {
+  it('delivered：entryId + state + 「已送达但终态未持久化，恢复后可能重投」恢复提示 + cause 链', () => {
+    const cause = new Error('ENOSPC')
+    const e = new DeliveryAckPersistError('sid-9', 'delivered', cause)
+    expect(e).toBeInstanceOf(DeliveryAckPersistError)
+    expect(e).toBeInstanceOf(Error)
+    expect(e.entryId).toBe('sid-9')
+    expect(e.state).toBe('delivered')
+    expect(e.name).toBe('DeliveryAckPersistError')
+    expect(e.message).toBe(
+      'delivery delivered but terminal record not persisted; recovery may redeliver (id=sid-9)',
+    )
+    expect(e.cause).toBe(cause)
+  })
+
+  it('cancelled：state=cancelled + 本地撤销口径文案（cause 缺省 undefined）', () => {
+    const e = new DeliveryAckPersistError('sid-9', 'cancelled')
+    expect(e.state).toBe('cancelled')
+    expect(e.message).toBe(
+      'entry cancelled locally but terminal record not persisted; recovery may redeliver (id=sid-9)',
+    )
+    expect(e.cause).toBeUndefined()
   })
 })
 

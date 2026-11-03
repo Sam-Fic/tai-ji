@@ -20,6 +20,7 @@ import {
   unregisteredWatchedFiles,
   selectRules,
   releaseRules,
+  toJsonPayload,
 } from '../select-affected-e2e.mjs'
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -232,5 +233,24 @@ describe('真实 e2e-map.json 烟测（防 map 与脚本结构漂移无信号）
     for (const root of watchedRoots(realMap)) {
       expect(root.endsWith('/'), root).toBe(true)
     }
+  })
+})
+
+
+describe('toJsonPayload：--json 消费者契约', () => {
+  it('字段子集稳定（id/layer/trigger/serial/run/summary）且保序', () => {
+    const rules = fixtureMap().rules
+    const payload = toJsonPayload(rules)
+    expect(payload.map((r) => r.id)).toEqual(rules.map((r) => r.id))
+    expect(Object.keys(payload[0])).toEqual(['id', 'layer', 'trigger', 'serial', 'run', 'summary'])
+    expect(payload[0].run).toBe('echo fake-01')
+  })
+
+  it('ci（CI 可执行性登记）只在 rule 登记时透传，未登记项不产生该键', () => {
+    const [plain, withCi] = fixtureMap().rules
+    withCi.ci = { runnable: false, skipReason: '需桌面环境' }
+    const payload = toJsonPayload([plain, withCi])
+    expect('ci' in payload[0]).toBe(false)
+    expect(payload[1].ci).toEqual({ runnable: false, skipReason: '需桌面环境' })
   })
 })

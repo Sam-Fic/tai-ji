@@ -22,6 +22,8 @@ import { basename, join } from 'node:path'
 import type { ArchiveErrorCode, ArchiveLedger, ArchiveLedgerStaging, ArchiveSummary, SessionSummary } from '@taiji/shared'
 import { getSessionStoreDir } from '@taiji/shared/paths'
 import { cascadeDeleteSessionContent } from '../session/session-content-cascade.js'
+// 段 ⑤ scheduler 任务库分片清点（purge 与 delete 同一删点，purge 走 ledger.cwd）
+import { purgeSchedulerShard } from '../session/scheduler-shard-purge.js'
 import { parseJsonl } from '../../utils/jsonl.js'
 import { extractSessionName, readProjectBinding } from '../../infra/pi/session-file-utils.js'
 import { getSessionsDir, getPiAgentDir } from '../../infra/pi/pi-paths.js'
@@ -587,6 +589,7 @@ export class ArchiveService {
         agentDir: this.agentDir,
         sessionsRoot: this.sessionsRoot,
         sessionStoreRoot: this.sessionStoreRoot,
+        cwd: ledger.cwd, // 段 ⑤ scheduler 分片清点的 workspace 隔离键（归档簿记已存 owner session cwd）
         skipIfMainFileMissing: false, // scanned 语义：主文件恒不在 sessions/（在归档目录），仍收殓 + 整树软删 + 清孤儿 sidecar
         referenceEnumerationSource: enumerationSource,
       },
@@ -603,6 +606,7 @@ export class ArchiveService {
           }
         },
         reapBackgroundTasks: (dir, sid) => this.deps.reapBackgroundTasks(dir, sid),
+        purgeSchedulerShard: purgeSchedulerShard,
         warn: this.deps.warn,
       },
     )

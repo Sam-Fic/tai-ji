@@ -2,7 +2,7 @@
  * RuntimeServer — 编排层：路由表装配（D1）+ service 编排 + 连接/消息协调。
  *
  * C2 拆分后只保留传输编排职责：
- * - 组合 ConnectionManager（连接生命周期 + 心跳 + 连接池）与 ServerMessageBroker（发送/广播/initial state）。
+ * - 组合 ConnectionManager（连接生命周期 + 连接池）与 ServerMessageBroker（发送/广播/initial state）。
  * - D1 中央分发表：handler 的 handles 清单 + Map spread → O(N→M) 路由映射（亮点，勿动）。
  * - setServices：四阶段编排（assignServices → createBroker → assembleHandlers → buildRoutes），
  *   装配全部 message handler 并注入各 handler 的 context（messaging + 领域依赖）。
@@ -666,7 +666,7 @@ export class RuntimeServer implements IMessageBroker {
       // 缺席回 idle 形态——renderer 拉到 idle 即「横幅不重现」，见 RollingRestartStatusPayload）。
       ['rollingRestart.status', (msg, ws) => this.broker.reply(ws, msg.id, 'rollingRestart.status',
         this.rollingRestartStatusProvider?.() ?? { state: 'idle', inflight: { inFlight: null } })],
-      ['session.compact', (msg, ws) => this.sessionHandler.handleSessionCompact(msg as Extract<ClientMessage, { type: 'session.compact' }>, ws)],
+      ['session.compactBackground', (msg, ws) => this.sessionHandler.handleSessionCompactBackground(msg as Extract<ClientMessage, { type: 'session.compactBackground' }>, ws)],
       ...this.sessionHandler.handles.map(t => [t, (msg: ClientMessage, ws: WsType) => this.sessionHandler.handleSessionMessage(msg, ws)] as const),
       ...this.extensionHandler.handles.map(t => [t, (msg: ClientMessage, ws: WsType) => this.extensionHandler.handleExtensionMessage(msg, ws)] as const),
       ...this.canvasHandler.handles.map(t => [t, (msg: ClientMessage, ws: WsType) => this.canvasHandler.handleCanvasMessage(msg, ws)] as const),

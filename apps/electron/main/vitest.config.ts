@@ -19,6 +19,17 @@ import { taijiTestConfig, GLOBAL_SETUP_PATH, guardProjectSetup } from '../../../
 //   正确拦截但该用例需 mock execPath 才能修，文件在 u5a 领地外，缺陷已上报主 agent）。
 //   存量池接入 guard 是独立单元的工作，不在本配置内打折处理；globalSetup 层（env 固定 +
 //   真实数据目录 fail-fast）对 legacy 池仍生效。
+// - live：TAIJI_E2E_UPDATER 手动门资产（test/updater.e2e.test.ts，mac 真链三段：真
+//   hdiutil/ditto/bash 全链、env 未设时整段 skip）。独立成池使全量门禁可用
+//   --project '!live' 排除（env 未设时收集即 skip 的 14 条计数不再进门禁输出；显式
+//   路径 / E2E 档全文件跑不受影响——legacy 池已 exclude 该文件防跨池重复收集）。
+//   注意：package.json 的 test:main 入口未接该旗标——它同时是带文件参数真跑 live
+//   资产的唯一正确入口（vitest 直跑因 config 上浮 no tests found，见 TEST-STRATEGY.md），
+//   接旗标会堵死该入口；直接跑 test:main 时 env 未设的收集即 skip 计数仍进其输出。
+//   隔离语义对齐 legacy 池（默认每文件新 worker，无 fs-guard——E2E 段全程只在
+//   mkdtemp tmpdir 与 HFS+ 小容量镜像上操作，无真实数据目录触点）；root 级
+//   globalSetup 对本池生效（env 钉 tmp + 真实数据目录 fail-fast 属环境防线，
+//   E2E 档同受保护，无理由豁免）。执行登记 = e2e-map E2E-UPDATER-01。
 export default taijiTestConfig({
   test: {
     globalSetup: [GLOBAL_SETUP_PATH],
@@ -68,9 +79,20 @@ export default taijiTestConfig({
             '!test/main-run-state.test.ts',
             // window-state（真实文件 IO）已进 guarded 池，此处排除防跨池重复收集
             '!test/window-state.test.ts',
+            // updater E2E 档（TAIJI_E2E_UPDATER 门控的 mac 真链三段）已进 live 池，
+            // 此处排除防跨池重复收集（显式路径 / E2E 档全文件跑由 live 池承载）
+            '!test/updater.e2e.test.ts',
             'update/__tests__/**/*.test.ts',
             '../scripts/__tests__/**/*.test.mjs',
           ],
+        },
+      },
+      {
+        test: {
+          // live 池：TAIJI_E2E_UPDATER 手动门资产（E2E 档，CI 不跑；全量门禁以
+          // --project '!live' 排除本池，见文件头 live 池契约注释）
+          name: 'live',
+          include: ['test/updater.e2e.test.ts'],
         },
       },
     ],

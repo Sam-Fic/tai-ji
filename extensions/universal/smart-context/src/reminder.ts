@@ -7,6 +7,8 @@
  * 避免 agent 见提醒就压缩。
  */
 
+import { DEFAULT_COMPACTION_SETTINGS } from "@earendil-works/pi-coding-agent";
+
 import {
 	DEGRADATION_HINT_MIN_COMPACTIONS,
 	formatK,
@@ -14,8 +16,6 @@ import {
 
 /** 百分比换算基数（tokens/contextWindow 比例 → 百分数显示）。 */
 const PERCENT_SCALE = 100;
-/** pi 内建自动压缩触发线的 reserveTokens 默认值（window − 16K）。 */
-const PI_DEFAULT_RESERVE_TOKENS = 16_384;
 
 /**
  * 阈值提醒消息（D3/D4/D4'）：越档信息 + 工具名 + 三条件自查 + 可忽略出口。
@@ -72,7 +72,8 @@ export function buildDownshiftNotice(
 		return null;
 	}
 	if (newWindow >= previousWindow) return null;
-	const triggerLine = newWindow - PI_DEFAULT_RESERVE_TOKENS; // pi 内建触发线（window − reserveTokens 默认值）
+	// pi 内建自动压缩触发线（window − reserveTokens 默认值，权威值经 pi 包导出直读）
+	const triggerLine = newWindow - DEFAULT_COMPACTION_SETTINGS.reserveTokens;
 	if (tokens < triggerLine) return null;
 	return `[smart-context] 当前上下文 ${formatK(tokens)} tokens，已接近新模型窗口上限（${formatK(newWindow)}）。建议尽快压缩（调用 compact_context 或 /compact），否则内建自动压缩将在触线时强制执行。`;
 }

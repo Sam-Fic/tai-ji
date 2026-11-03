@@ -1,5 +1,17 @@
 # @zhushanwen/pi-subagent-workflow
 
+## 10.4.0
+
+### Minor Changes
+
+- d2b945a20: 被派发的子进程改为精简装配：只写 subagent identity entry，不再注册派发工具 / 命令 / 模型清单注入器 / workflow 域事件族与引擎注册，嵌套派发从能力上不存在，宿主进程的全量装配不变。
+
+- d2b945a20: 孤儿 run 对账的存活引用集与 jsonl-run-store 的发现通道只解析 v2 注册条目，v1 全量快照与旧 workflow-state-link 指针条目按不存在处理（2026-10-30 裁决：无 v1/link 存量数据）。
+
+- d2b945a20: `<available_provider_models>` 注入段按 scoped-models 白名单过滤（白名单非空时只列出清单内模型），resume 与 run 级模型覆盖校验同步加白名单断言，与派发校验同一清单同一归一化口径。
+
+- d2b945a20: 退役进程级 shutdown 收割兜底（SIGTERM / SIGINT / beforeExit 时调 `markAllSpawnedChildrenDead` 的镜像记账 no-op，及测试钩子导出 `_resetProcessShutdownGuardForTest`）：子进程真实回收链（stdin-EOF 自灭 + dispose）不变，session_shutdown 优雅链照常执行。
+
 ## 10.3.0
 
 ### Minor Changes

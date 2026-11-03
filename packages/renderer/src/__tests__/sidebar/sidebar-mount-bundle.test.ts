@@ -188,7 +188,7 @@ describe('Sidebar 导入会话入口接线（import-session u6）', () => {
 })
 
 // ======================================================================
-// ← sidebar-ondeletefolder.test.ts
+// ← 原 sidebar-ondeletefolder.test.ts（a8e070cba 并入）
 // ======================================================================
 
 // __APP_VERSION__ 是 vite define 注入的全局常量，vitest 下不存在，stub 之

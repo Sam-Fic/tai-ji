@@ -112,12 +112,33 @@ OUTPOST_CALLSITES = [
         "workflowAction 生命周期命令（action/runId 均 runtime 域枚举与 id）",
     ),
     (
+        "index.ts",
+        "await client.prompt(reasonText, undefined, 'steer')",
+        "exempt",
+        "[pi-stall-detection U2+U4] 判死自动恢复 steer 注入原因提示（出站点唯一，两链共用）："
+        "U2/D2② 第 1 层探测判死链（onSilentAbort→handleStallDetermination）恢复链无 "
+        "reasonHint，回落固定常量 STALL_REASON_HINT；U4/D3 第 2 层静默判死链"
+        "（stallMatrix.onJudge→handleSilenceJudgeDetermination）注入 composeStallJudgeHintText"
+        " 模板（判定依据/静默时长/在途阶段定位）——均机器生成诊断文案，非用户内容，"
+        "SkillInjector 的技能/命令注入语义不适用于机器诊断注入",
+    ),
+    (
         "services/session/session-service.ts",
         "void client.prompt(BG_RECONCILE_COMMAND)",
         "exempt",
         "bg-notify redelivery 触发命令（无参字面命令，[2026-09-25] 替换退役的"
         " /__taiji_reload__ 条目）；maintenance 标记参数已随 ADR-0112 防御清理"
         "（idle-pi-reaper 退役后空闲时钟判据消失）删除，回归裸命令形态",
+    ),
+    (
+        "services/session/session-service.ts",
+        "void client.prompt(`${BG_COMPACT_COMMAND}${args}`)",
+        "exempt",
+        "[C2 /compact 后台化] 手动压缩触发内部命令（__taiji_compact__，smart-context "
+        "扩展注册）：args = encodeURIComponent(customInstructions)——用户提供的摘要"
+        "指引经 percent 编码（特殊字符全转义，无 skill 命令语法可展开），扩展侧解码后"
+        "仅进后台压缩的摘要 prompt 组装，不进对话 turn，SkillInjector 注入不适用；"
+        "触发即回执 fire-and-forget",
     ),
     (
         "services/session/trace-sync.ts",

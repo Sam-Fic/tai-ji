@@ -14,11 +14,11 @@ import { getLogger } from "@zhushanwen/pi-extension-logger";
 const logger = getLogger("pi-exec-skills");
 
 /**
- * 技能目录扫描共享能力（ADR-0074 落地包）：项目内一切「发现可执行 skill」的磁盘
+ * 技能目录扫描共享能力（ADR-0096 落地包）：项目内一切「发现可执行 skill」的磁盘
  * 扫描单源，禁止各扩展自扫目录或直用 pi 注册表快照形成第二实现（pi 的
  * getCommands 返回 resource loader 启动加载集——reload 才刷新的滞后快照）。
  *
- * 与 ./resolve-skills.js 的两段消费语义闭环（ADR-0074）：
+ * 与 ./resolve-skills.js 的两段消费语义闭环（ADR-0096）：
  * - 本模块 = 「发现」：自研扫描直读磁盘，技能安装即时可见；用于向用户提议
  *   （表单列出可用执行方式）。
  * - resolve-skills = 「执行门禁」：注入前经 pi 注册表确认 pi 实际认得该技能。

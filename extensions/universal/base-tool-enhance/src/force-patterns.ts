@@ -1,5 +1,5 @@
 /**
- * 强制后台白名单（M4，设计文档 §3.5「内置正则基线」+「匹配语义」段）。
+ * 强制后台白名单（M4，内置清单与匹配语义由本文件头注释直接承载，见下）。
  *
  * 两组内置正则 + 用户配置正则合并：
  *  - force-test：逐条迁自 unified-hooks test-timeout-guard.ts（主体逐条迁移；锚定
@@ -31,7 +31,8 @@ export interface BuiltinForcePatternEntry {
  *    命中，锚定后不再命中
  *  - 新增漏报：wrapper 形态 `sudo npm test` / `timeout 300 npm test` /
  *    `xargs npm test` 原靠 `\s` 前缀命中，锚定后 wrapper 名占命令位置、目标命令退到
- *    参数位不再命中（§3.5 匹配语义的 wrapper 局限），由模型显式 background:true 兜底
+ *    参数位不再命中（命令位置锚定的固有漏报形态，文件头「固有局限」同类登记），
+ *    由模型显式 background:true 兜底
  */
 export const FORCE_TEST_PATTERN_ENTRIES: readonly BuiltinForcePatternEntry[] = [
 	// === Node.js / JS / TS ===
@@ -186,7 +187,7 @@ function compileUserPattern(source: string): ForcePattern | undefined {
 }
 
 /**
- * 合并白名单（§3.5 行为矩阵）：
+ * 合并白名单（行为矩阵）：
  *  - 零配置（无用户正则、不 disable）→ 两组内置全生效
  *  - disableBuiltinForcePatterns:true → 两组内置关闭
  *  - 用户正则始终追加（与内置并存时匹配任一即命中）

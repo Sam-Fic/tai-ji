@@ -243,18 +243,16 @@ fi
 #     （private ∨ config.ignore），唯一判定源 = scripts/changeset-versionable.mjs
 #     （Gate-1a.5 反方向检查同源）。按 R1 惯例不设独立 SKIP 开关，走 SKIP_ALL_CHECKS。
 # ============================================================================
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    CHANGESET_STAGED=$(echo "$STAGED_FILES" | grep -E "^\.changeset/[^/]+\.md$" | grep -vE "^\.changeset/(README\.md|config\.json)$" || true)
-    if [ -n "$CHANGESET_STAGED" ]; then
-        echo -e "${BLUE}[INFO] 运行 changeset 声明包合法性检查...${NC}"
-        if [ ! -f ".githooks/check_changeset_packages.mjs" ]; then
-            echo -e "${YELLOW}[WARN] 找不到检查脚本 .githooks/check_changeset_packages.mjs${NC}"
-        else
-            # shellcheck disable=SC2086 —— 文件路径无空格（.changeset/<random>.md），词切分即列表
-            if ! node .githooks/check_changeset_packages.mjs $CHANGESET_STAGED; then
-                echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-                exit 1
-            fi
+CHANGESET_STAGED=$(echo "$STAGED_FILES" | grep -E "^\.changeset/[^/]+\.md$" | grep -vE "^\.changeset/(README\.md|config\.json)$" || true)
+if [ -n "$CHANGESET_STAGED" ]; then
+    echo -e "${BLUE}[INFO] 运行 changeset 声明包合法性检查...${NC}"
+    if [ ! -f ".githooks/check_changeset_packages.mjs" ]; then
+        echo -e "${YELLOW}[WARN] 找不到检查脚本 .githooks/check_changeset_packages.mjs${NC}"
+    else
+        # shellcheck disable=SC2086 —— 文件路径无空格（.changeset/<random>.md），词切分即列表
+        if ! node .githooks/check_changeset_packages.mjs $CHANGESET_STAGED; then
+            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+            exit 1
         fi
     fi
 fi
@@ -267,14 +265,12 @@ fi
 #     .githooks/check-test-blind-wait.mjs（豁免登记表 BLIND_WAIT_EXEMPT 同文件）。
 #     按 R1 惯例不设独立 SKIP 开关，走 SKIP_ALL_CHECKS。
 # ============================================================================
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    TEST_BLIND_WAIT_STAGED=$(echo "$STAGED_FILES" | grep -E "\.(test|spec)\.tsx?$" || true)
-    if [ -n "$TEST_BLIND_WAIT_STAGED" ]; then
-        echo -e "${BLUE}[INFO] 运行测试盲等形态检查...${NC}"
-        if ! node .githooks/check-test-blind-wait.mjs $TEST_BLIND_WAIT_STAGED; then
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
+TEST_BLIND_WAIT_STAGED=$(echo "$STAGED_FILES" | grep -E "\.(test|spec)\.tsx?$" || true)
+if [ -n "$TEST_BLIND_WAIT_STAGED" ]; then
+    echo -e "${BLUE}[INFO] 运行测试盲等形态检查...${NC}"
+    if ! node .githooks/check-test-blind-wait.mjs $TEST_BLIND_WAIT_STAGED; then
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
     fi
 fi
 
@@ -286,14 +282,12 @@ fi
 #     .githooks/check_edge_fade_scope.mjs（白名单 ALLOWLIST 同文件）。
 #     按 R1 惯例不设独立 SKIP 开关，走 SKIP_ALL_CHECKS。
 # ============================================================================
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    EDGE_FADE_STAGED=$(echo "$STAGED_FILES" | grep -E "^packages/.*\.(vue|tsx?)$" || true)
-    if [ -n "$EDGE_FADE_STAGED" ]; then
-        echo -e "${BLUE}[INFO] 运行 EdgeFade 消费范围检查...${NC}"
-        if ! node .githooks/check_edge_fade_scope.mjs $EDGE_FADE_STAGED; then
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
+EDGE_FADE_STAGED=$(echo "$STAGED_FILES" | grep -E "^packages/.*\.(vue|tsx?)$" || true)
+if [ -n "$EDGE_FADE_STAGED" ]; then
+    echo -e "${BLUE}[INFO] 运行 EdgeFade 消费范围检查...${NC}"
+    if ! node .githooks/check_edge_fade_scope.mjs $EDGE_FADE_STAGED; then
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
     fi
 fi
 
@@ -1075,7 +1069,7 @@ fi
 SIDECAR_CHECKER=".githooks/check_sidecar_session.py"
 SIDECAR_SERVER="apps/electron/sidecar/src/server.ts"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ] && [ "$SKIP_SIDECAR_SESSION_CHECK" != "1" ]; then
+if [ "$SKIP_SIDECAR_SESSION_CHECK" != "1" ]; then
     if [ -f "$SIDECAR_SERVER" ]; then
         echo -e "${BLUE}[INFO] 运行 Sidecar session 隔离检查...${NC}"
 
@@ -1106,7 +1100,7 @@ fi
 CSS_CHECKER=".githooks/check_css_tokens.py"
 CSS_FILE="packages/renderer/src/style.css"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ] && [ "$SKIP_CSS_TOKENS_CHECK" != "1" ]; then
+if [ "$SKIP_CSS_TOKENS_CHECK" != "1" ]; then
     if [ -f "$CSS_FILE" ]; then
         echo -e "${BLUE}[INFO] 运行 CSS tokens 检查...${NC}"
 
@@ -1135,7 +1129,7 @@ fi
 CSS_SSOT_CHECKER=".githooks/check_css_token_ssot.py"
 CSS_SSOT_FILES="packages/renderer/src/style.css docs/DESIGN.md"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ] && [ "$SKIP_CSS_TOKEN_SSOT_CHECK" != "1" ]; then
+if [ "$SKIP_CSS_TOKEN_SSOT_CHECK" != "1" ]; then
     # 仅当 style.css 或 DESIGN.md 变更时才检查（v6-tokens.css 已随 page-design 目录退役，git 可追溯）
     SSOT_CHANGED=$(echo "$STAGED_FILES" | grep -E "^packages/renderer/src/style\.css$|^docs/DESIGN\.md$" || true)
     if [ -n "$SSOT_CHANGED" ]; then
@@ -1166,24 +1160,22 @@ fi
 FONT_SCALE_CHECKER=".githooks/check_font_scale_viewport.py"
 FONT_SCALE_FILES="packages/renderer/src/style.css packages/mobile-renderer/src/styles/tokens.css docs/DESIGN.md"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    # 仅当三个字号 token 权威文件之一变更时才检查（R1 惯例：不设独立 SKIP 开关）
-    FONT_SCALE_CHANGED=$(echo "$STAGED_FILES" | grep -E "^packages/renderer/src/style\.css$|^packages/mobile-renderer/src/styles/tokens\.css$|^docs/DESIGN\.md$" || true)
-    if [ -n "$FONT_SCALE_CHANGED" ]; then
-        echo -e "${BLUE}[INFO] 运行视口字号自动档禁令检查...${NC}"
+# 仅当三个字号 token 权威文件之一变更时才检查（R1 惯例：不设独立 SKIP 开关）
+FONT_SCALE_CHANGED=$(echo "$STAGED_FILES" | grep -E "^packages/renderer/src/style\.css$|^packages/mobile-renderer/src/styles/tokens\.css$|^docs/DESIGN\.md$" || true)
+if [ -n "$FONT_SCALE_CHANGED" ]; then
+    echo -e "${BLUE}[INFO] 运行视口字号自动档禁令检查...${NC}"
 
-        if [ ! -f "$FONT_SCALE_CHECKER" ]; then
-            echo -e "${YELLOW}[WARN] 找不到检查脚本 $FONT_SCALE_CHECKER${NC}"
-        else
-            python3 "$FONT_SCALE_CHECKER"
-            EXIT_CODE=$?
+    if [ ! -f "$FONT_SCALE_CHECKER" ]; then
+        echo -e "${YELLOW}[WARN] 找不到检查脚本 $FONT_SCALE_CHECKER${NC}"
+    else
+        python3 "$FONT_SCALE_CHECKER"
+        EXIT_CODE=$?
 
-            if [ $EXIT_CODE -ne 0 ]; then
-                echo ""
-                echo -e "${RED}[ERROR] 视口字号自动档禁令检查失败：字号 token 文件出现视口驱动字号缩放${NC}"
-                echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-                exit 1
-            fi
+        if [ $EXIT_CODE -ne 0 ]; then
+            echo ""
+            echo -e "${RED}[ERROR] 视口字号自动档禁令检查失败：字号 token 文件出现视口驱动字号缩放${NC}"
+            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+            exit 1
         fi
     fi
 fi
@@ -1194,7 +1186,7 @@ fi
 
 RENDERER_DEPS_CHECKER=".githooks/check_renderer_deps.py"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ] && [ "$SKIP_RENDERER_DEPS_CHECK" != "1" ]; then
+if [ "$SKIP_RENDERER_DEPS_CHECK" != "1" ]; then
     # 仅当 renderer src 或 package.json 变更时才检查
     DEPS_CHANGED=$(echo "$STAGED_FILES" | grep -E "^packages/renderer/(src/.*\.(ts|vue|tsx)|package\.json)$" || true)
     if [ -n "$DEPS_CHANGED" ]; then
@@ -1224,7 +1216,7 @@ fi
 
 ENV_WHITELIST_CHECKER=".githooks/check_env_whitelist_sync.py"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ] && [ "$SKIP_ENV_WHITELIST_CHECK" != "1" ]; then
+if [ "$SKIP_ENV_WHITELIST_CHECK" != "1" ]; then
     echo -e "${BLUE}[INFO] 运行 ENV_WHITELIST_PREFIXES SSOT 检查..."
 
     if [ ! -f "$ENV_WHITELIST_CHECKER" ]; then
@@ -1256,27 +1248,23 @@ fi
 
 SPAWN_ENV_BOUNDARY_CHECKER=".githooks/check_spawn_env_boundary.py"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    print_section "[出站 env 契约检查]"
-    echo -e "${BLUE}[INFO] 运行 runtime 子进程 env 出站契约检查（C-proc-09）...${NC}"
+print_section "[出站 env 契约检查]"
+echo -e "${BLUE}[INFO] 运行 runtime 子进程 env 出站契约检查（C-proc-09）...${NC}"
 
-    if [ ! -f "$SPAWN_ENV_BOUNDARY_CHECKER" ]; then
-        echo -e "${YELLOW}[WARN] 找不到检查脚本 $SPAWN_ENV_BOUNDARY_CHECKER${NC}"
-    else
-        python3 "$SPAWN_ENV_BOUNDARY_CHECKER"
-        EXIT_CODE=$?
-
-        if [ $EXIT_CODE -ne 0 ]; then
-            echo ""
-            echo -e "${RED}[ERROR] runtime 子进程 env 出站契约检查失败${NC}"
-            echo -e "${YELLOW}[INFO] 新增子进程必须经 buildOutboundChildEnv 组装 env；修复指引见上方脚本输出；设计依据 docs/architecture/env-propagation-boundary.md${NC}"
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-        echo -e "${GREEN}[OK] runtime 子进程 env 出站契约检查通过${NC}"
-    fi
+if [ ! -f "$SPAWN_ENV_BOUNDARY_CHECKER" ]; then
+    echo -e "${YELLOW}[WARN] 找不到检查脚本 $SPAWN_ENV_BOUNDARY_CHECKER${NC}"
 else
-    echo -e "${YELLOW}[SKIP] runtime 子进程 env 出站契约检查已跳过${NC}"
+    python3 "$SPAWN_ENV_BOUNDARY_CHECKER"
+    EXIT_CODE=$?
+
+    if [ $EXIT_CODE -ne 0 ]; then
+        echo ""
+        echo -e "${RED}[ERROR] runtime 子进程 env 出站契约检查失败${NC}"
+        echo -e "${YELLOW}[INFO] 新增子进程必须经 buildOutboundChildEnv 组装 env；修复指引见上方脚本输出；设计依据 docs/architecture/env-propagation-boundary.md${NC}"
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}[OK] runtime 子进程 env 出站契约检查通过${NC}"
 fi
 
 # ============================================================================
@@ -1295,27 +1283,23 @@ fi
 ENGINE_SDK_BOUNDARY_CHECKER=".githooks/check-engine-sdk-boundary.mjs"
 ENGINE_PACKAGE_BOUNDARY_CHECKER="scripts/check-engine-package-boundary.mjs"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    print_section "[引擎包边界检查]"
-    echo -e "${BLUE}[INFO] 运行引擎 SDK / 引擎包边界检查...${NC}"
+print_section "[引擎包边界检查]"
+echo -e "${BLUE}[INFO] 运行引擎 SDK / 引擎包边界检查...${NC}"
 
-    if [ ! -f "$ENGINE_SDK_BOUNDARY_CHECKER" ] || [ ! -f "$ENGINE_PACKAGE_BOUNDARY_CHECKER" ]; then
-        echo -e "${YELLOW}[WARN] 找不到检查脚本（$ENGINE_SDK_BOUNDARY_CHECKER / $ENGINE_PACKAGE_BOUNDARY_CHECKER）${NC}"
-    else
-        node "$ENGINE_SDK_BOUNDARY_CHECKER" && node "$ENGINE_PACKAGE_BOUNDARY_CHECKER"
-        EXIT_CODE=$?
-
-        if [ $EXIT_CODE -ne 0 ]; then
-            echo ""
-            echo -e "${RED}[ERROR] 引擎包边界检查失败${NC}"
-            echo -e "${YELLOW}[INFO] 引擎包只依赖 @zhushanwen/subagent-engine-sdk；共享实现下沉 SDK（core → SDK 是合法方向）；修复指引见上方脚本输出${NC}"
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-        echo -e "${GREEN}[OK] 引擎包边界检查通过${NC}"
-    fi
+if [ ! -f "$ENGINE_SDK_BOUNDARY_CHECKER" ] || [ ! -f "$ENGINE_PACKAGE_BOUNDARY_CHECKER" ]; then
+    echo -e "${YELLOW}[WARN] 找不到检查脚本（$ENGINE_SDK_BOUNDARY_CHECKER / $ENGINE_PACKAGE_BOUNDARY_CHECKER）${NC}"
 else
-    echo -e "${YELLOW}[SKIP] 引擎包边界检查已跳过${NC}"
+    node "$ENGINE_SDK_BOUNDARY_CHECKER" && node "$ENGINE_PACKAGE_BOUNDARY_CHECKER"
+    EXIT_CODE=$?
+
+    if [ $EXIT_CODE -ne 0 ]; then
+        echo ""
+        echo -e "${RED}[ERROR] 引擎包边界检查失败${NC}"
+        echo -e "${YELLOW}[INFO] 引擎包只依赖 @zhushanwen/subagent-engine-sdk；共享实现下沉 SDK（core → SDK 是合法方向）；修复指引见上方脚本输出${NC}"
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}[OK] 引擎包边界检查通过${NC}"
 fi
 
 # ============================================================================
@@ -1324,7 +1308,7 @@ fi
 
 TOOL_SCHEMA_CHECKER=".githooks/check_tool_schema.py"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ] && [ "$SKIP_TOOL_SCHEMA_CHECK" != "1" ]; then
+if [ "$SKIP_TOOL_SCHEMA_CHECK" != "1" ]; then
     echo -e "${BLUE}[INFO] 运行 Pi extension tool schema 顶层 Object 合规检查...${NC}"
 
     if [ ! -f "$TOOL_SCHEMA_CHECKER" ]; then
@@ -1351,7 +1335,7 @@ fi
 
 PATH_WHITELIST_CHECKER=".githooks/check_path_whitelist.py"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ] && [ "$SKIP_PATH_WHITELIST_CHECK" != "1" ]; then
+if [ "$SKIP_PATH_WHITELIST_CHECK" != "1" ]; then
     echo -e "${BLUE}[INFO] 运行路径白名单动态化检查..."
 
     if [ ! -f "$PATH_WHITELIST_CHECKER" ]; then
@@ -1381,27 +1365,23 @@ fi
 
 PI_DIRECT_WRITE_CHECKER=".githooks/check_pi_direct_write.py"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    print_section "[R1 pi session 直写检查]"
-    echo -e "${BLUE}[INFO] 运行 pi session JSONL 直写检查（R1）...${NC}"
+print_section "[R1 pi session 直写检查]"
+echo -e "${BLUE}[INFO] 运行 pi session JSONL 直写检查（R1）...${NC}"
 
-    if [ ! -f "$PI_DIRECT_WRITE_CHECKER" ]; then
-        echo -e "${YELLOW}[WARN] 找不到检查脚本 $PI_DIRECT_WRITE_CHECKER${NC}"
-    else
-        python3 "$PI_DIRECT_WRITE_CHECKER"
-        EXIT_CODE=$?
-
-        if [ $EXIT_CODE -ne 0 ]; then
-            echo ""
-            echo -e "${RED}[ERROR] R1 pi session JSONL 直写检查失败${NC}"
-            echo -e "${YELLOW}[INFO] session JSONL 本体唯一写方 = pi；例外与豁免登记见 docs/architecture/data-source-registry.md${NC}"
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-        echo -e "${GREEN}[OK] R1 pi session 直写检查通过${NC}"
-    fi
+if [ ! -f "$PI_DIRECT_WRITE_CHECKER" ]; then
+    echo -e "${YELLOW}[WARN] 找不到检查脚本 $PI_DIRECT_WRITE_CHECKER${NC}"
 else
-    echo -e "${YELLOW}[SKIP] R1 pi session 直写检查已跳过${NC}"
+    python3 "$PI_DIRECT_WRITE_CHECKER"
+    EXIT_CODE=$?
+
+    if [ $EXIT_CODE -ne 0 ]; then
+        echo ""
+        echo -e "${RED}[ERROR] R1 pi session JSONL 直写检查失败${NC}"
+        echo -e "${YELLOW}[INFO] session JSONL 本体唯一写方 = pi；例外与豁免登记见 docs/architecture/data-source-registry.md${NC}"
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}[OK] R1 pi session 直写检查通过${NC}"
 fi
 
 # ============================================================================
@@ -1410,7 +1390,7 @@ fi
 
 WS_SEND_CHECKER=".githooks/check_no_direct_ws_send.py"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ] && [ "$SKIP_WS_SEND_CHECK" != "1" ]; then
+if [ "$SKIP_WS_SEND_CHECK" != "1" ]; then
     echo -e "${BLUE}[INFO] 运行 ws-client send 直调检查...${NC}"
 
     if [ ! -f "$WS_SEND_CHECKER" ]; then
@@ -1437,7 +1417,7 @@ fi
 
 SERVICE_CYCLE_CHECKER=".githooks/check_no_service_cycle.py"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ] && [ "$SKIP_NO_SERVICE_CYCLE_CHECK" != "1" ]; then
+if [ "$SKIP_NO_SERVICE_CYCLE_CHECK" != "1" ]; then
     echo -e "${BLUE}[INFO] 运行 runtime services 循环依赖检查...${NC}"
 
     if [ ! -f "$SERVICE_CYCLE_CHECKER" ]; then
@@ -1473,30 +1453,26 @@ fi
 #   注：与 R1 同例不设独立跳过开关，仅受 SKIP_ALL_CHECKS 总开关管辖。
 # ============================================================================
 
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    print_section "[架构约束登记检查]"
+print_section "[架构约束登记检查]"
 
-    for CONSTRAINT_CHECKER in check_pi_type_leak.py check_services_infra_import.py check_infra_services_import.py check_shared_node_builtin.py check_runtime_meta_url.py check_staged_forbidden_lines.py check_layering_registry_sync.py; do
-        CHECKER_PATH=".githooks/$CONSTRAINT_CHECKER"
-        if [ ! -f "$CHECKER_PATH" ]; then
-            echo -e "${YELLOW}[WARN] 找不到检查脚本 $CHECKER_PATH${NC}"
-            continue
-        fi
-        echo -e "${BLUE}[INFO] 运行 $CONSTRAINT_CHECKER ...${NC}"
-        python3 "$CHECKER_PATH"
-        EXIT_CODE=$?
-        if [ $EXIT_CODE -ne 0 ]; then
-            echo ""
-            echo -e "${RED}[ERROR] $CONSTRAINT_CHECKER 检查失败${NC}"
-            echo -e "${YELLOW}[INFO] 约束登记见 docs/constraints.json（机器 SSOT）${NC}"
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-    done
-    echo -e "${GREEN}[OK] 架构约束登记检查通过${NC}"
-else
-    echo -e "${YELLOW}[SKIP] 架构约束登记检查已跳过${NC}"
-fi
+for CONSTRAINT_CHECKER in check_pi_type_leak.py check_services_infra_import.py check_infra_services_import.py check_shared_node_builtin.py check_runtime_meta_url.py check_staged_forbidden_lines.py check_layering_registry_sync.py; do
+    CHECKER_PATH=".githooks/$CONSTRAINT_CHECKER"
+    if [ ! -f "$CHECKER_PATH" ]; then
+        echo -e "${YELLOW}[WARN] 找不到检查脚本 $CHECKER_PATH${NC}"
+        continue
+    fi
+    echo -e "${BLUE}[INFO] 运行 $CONSTRAINT_CHECKER ...${NC}"
+    python3 "$CHECKER_PATH"
+    EXIT_CODE=$?
+    if [ $EXIT_CODE -ne 0 ]; then
+        echo ""
+        echo -e "${RED}[ERROR] $CONSTRAINT_CHECKER 检查失败${NC}"
+        echo -e "${YELLOW}[INFO] 约束登记见 docs/constraints.json（机器 SSOT）${NC}"
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
+    fi
+done
+echo -e "${GREEN}[OK] 架构约束登记检查通过${NC}"
 
 # ============================================================================
 # 非.workspace 结构接线对账（S1，PR #20 组 D 检查化）
@@ -1509,25 +1485,23 @@ fi
 #   注：不设独立跳过开关，仅受 SKIP_ALL_CHECKS 总开关管辖。
 # ============================================================================
 
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    print_section "[结构接线对账]"
-    STRUCT_WIRING_TRIGGER=0
-    if echo "$STAGED_FILES" | grep -qE "^(pnpm-workspace\.yaml|docs/structure-wiring\.json)$|^(packages|extensions|resources/plugins)/.*package\.json$"; then
-        STRUCT_WIRING_TRIGGER=1
+print_section "[结构接线对账]"
+STRUCT_WIRING_TRIGGER=0
+if echo "$STAGED_FILES" | grep -qE "^(pnpm-workspace\.yaml|docs/structure-wiring\.json)$|^(packages|extensions|resources/plugins)/.*package\.json$"; then
+    STRUCT_WIRING_TRIGGER=1
+fi
+if [ "$STRUCT_WIRING_TRIGGER" -eq 1 ]; then
+    echo -e "${BLUE}[INFO] 结构接线相关变更，运行对账...${NC}"
+    node scripts/check-structure-wiring.mjs
+    EXIT_CODE=$?
+    if [ $EXIT_CODE -ne 0 ]; then
+        echo ""
+        echo -e "${RED}[ERROR] 结构接线对账失败${NC}"
+        echo -e "${YELLOW}[INFO] 新顶层结构第一笔 commit 只做接线与登记（docs/structure-wiring.json SSOT）${NC}"
+        exit 1
     fi
-    if [ "$STRUCT_WIRING_TRIGGER" -eq 1 ]; then
-        echo -e "${BLUE}[INFO] 结构接线相关变更，运行对账...${NC}"
-        node scripts/check-structure-wiring.mjs
-        EXIT_CODE=$?
-        if [ $EXIT_CODE -ne 0 ]; then
-            echo ""
-            echo -e "${RED}[ERROR] 结构接线对账失败${NC}"
-            echo -e "${YELLOW}[INFO] 新顶层结构第一笔 commit 只做接线与登记（docs/structure-wiring.json SSOT）${NC}"
-            exit 1
-        fi
-    else
-        echo -e "${GREEN}[OK] 无结构接线相关变更，跳过对账${NC}"
-    fi
+else
+    echo -e "${GREEN}[OK] 无结构接线相关变更，跳过对账${NC}"
 fi
 
 # ============================================================================
@@ -1536,17 +1510,15 @@ fi
 #   防止死链、非法 id、缺失 enforcement 的登记入库。
 # ============================================================================
 
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    if echo "$STAGED_FILES" | grep -q "^docs/constraints\.json$"; then
-        echo -e "${BLUE}[INFO] constraints.json 有变更，运行结构校验...${NC}"
-        node scripts/validate-constraints.mjs
-        EXIT_CODE=$?
-        if [ $EXIT_CODE -ne 0 ]; then
-            echo ""
-            echo -e "${RED}[ERROR] docs/constraints.json 结构校验失败${NC}"
-            echo -e "${YELLOW}[INFO] 按上方明细修正登记后重新提交${NC}"
-            exit 1
-        fi
+if echo "$STAGED_FILES" | grep -q "^docs/constraints\.json$"; then
+    echo -e "${BLUE}[INFO] constraints.json 有变更，运行结构校验...${NC}"
+    node scripts/validate-constraints.mjs
+    EXIT_CODE=$?
+    if [ $EXIT_CODE -ne 0 ]; then
+        echo ""
+        echo -e "${RED}[ERROR] docs/constraints.json 结构校验失败${NC}"
+        echo -e "${YELLOW}[INFO] 按上方明细修正登记后重新提交${NC}"
+        exit 1
     fi
 fi
 
@@ -1556,7 +1528,7 @@ fi
 
 CSP_COMPAT_CHECKER=".githooks/check_csp_compatibility.py"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ] && [ "$SKIP_CSP_COMPAT_CHECK" != "1" ]; then
+if [ "$SKIP_CSP_COMPAT_CHECK" != "1" ]; then
     echo -e "${BLUE}[INFO] 运行 CSP 能力一致性检查...${NC}"
 
     if [ ! -f "$CSP_COMPAT_CHECKER" ]; then
@@ -1585,7 +1557,7 @@ fi
 RUNTIME_BUNDLE_CHECKER="scripts/validate-runtime-bundle.sh"
 RUNTIME_SRC="packages/runtime/src"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ] && [ "$SKIP_RUNTIME_BUNDLE_CHECK" != "1" ]; then
+if [ "$SKIP_RUNTIME_BUNDLE_CHECK" != "1" ]; then
     if echo "$STAGED_FILES" | grep -q "^$RUNTIME_SRC/"; then
         print_section "[Runtime Bundle 验证]"
         echo -e "${BLUE}[INFO] runtime 源码有变更，运行 Bundle 验证...${NC}"
@@ -1623,21 +1595,19 @@ fi
 
 DOMAIN_BOUNDARY_CHECKER="scripts/check-domain-boundaries.sh"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    if echo "$STAGED_FILES" | grep -q "^packages/core/src/"; then
-        print_section "[core 域边界铁律 gate]"
-        bash "$DOMAIN_BOUNDARY_CHECKER"
-        EXIT_CODE=$?
-        if [ $EXIT_CODE -ne 0 ]; then
-            echo ""
-            echo -e "${RED}[ERROR] core 域边界检查失败（C-state-04）${NC}"
-            echo -e "${YELLOW}[INFO] AC10 跨域 import 经 '@taiji/core/domain/<域>' 公开 API；AC11 per-session 状态经 useSessionScopedState 分区${NC}"
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-    else
-        echo -e "${GREEN}[OK] core/src 无变更，跳过域边界检查${NC}"
+if echo "$STAGED_FILES" | grep -q "^packages/core/src/"; then
+    print_section "[core 域边界铁律 gate]"
+    bash "$DOMAIN_BOUNDARY_CHECKER"
+    EXIT_CODE=$?
+    if [ $EXIT_CODE -ne 0 ]; then
+        echo ""
+        echo -e "${RED}[ERROR] core 域边界检查失败（C-state-04）${NC}"
+        echo -e "${YELLOW}[INFO] AC10 跨域 import 经 '@taiji/core/domain/<域>' 公开 API；AC11 per-session 状态经 useSessionScopedState 分区${NC}"
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
     fi
+else
+    echo -e "${GREEN}[OK] core/src 无变更，跳过域边界检查${NC}"
 fi
 
 # ============================================================================
@@ -1654,27 +1624,25 @@ fi
 
 UNSAFE_STREAM_CHECKER="scripts/check-unsafe-stream-writes.mjs"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    if echo "$STAGED_FILES" | grep -q "^$RUNTIME_SRC/"; then
-        print_section "[流写逃逸护栏]"
-        echo -e "${BLUE}[INFO] runtime 源码有变更，扫描流写逃逸风险...${NC}"
+if echo "$STAGED_FILES" | grep -q "^$RUNTIME_SRC/"; then
+    print_section "[流写逃逸护栏]"
+    echo -e "${BLUE}[INFO] runtime 源码有变更，扫描流写逃逸风险...${NC}"
 
-        if [ ! -f "$UNSAFE_STREAM_CHECKER" ]; then
-            echo -e "${RED}[ERROR] 找不到 $UNSAFE_STREAM_CHECKER${NC}"
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-
-        node "$UNSAFE_STREAM_CHECKER"
-        EXIT_CODE=$?
-
-        if [ $EXIT_CODE -ne 0 ]; then
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-    else
-        echo -e "${GREEN}[OK] runtime 源码无变更，跳过流写逃逸护栏${NC}"
+    if [ ! -f "$UNSAFE_STREAM_CHECKER" ]; then
+        echo -e "${RED}[ERROR] 找不到 $UNSAFE_STREAM_CHECKER${NC}"
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
     fi
+
+    node "$UNSAFE_STREAM_CHECKER"
+    EXIT_CODE=$?
+
+    if [ $EXIT_CODE -ne 0 ]; then
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
+    fi
+else
+    echo -e "${GREEN}[OK] runtime 源码无变更，跳过流写逃逸护栏${NC}"
 fi
 
 # ============================================================================
@@ -1689,27 +1657,25 @@ fi
 
 PROMPT_OUTPOSTS_CHECKER=".githooks/check_prompt_outposts.py"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    if echo "$STAGED_FILES" | grep -q "^$RUNTIME_SRC/"; then
-        print_section "[用户内容出站点检查]"
-        echo -e "${BLUE}[INFO] runtime 源码有变更，扫描用户内容出站点...${NC}"
+if echo "$STAGED_FILES" | grep -q "^$RUNTIME_SRC/"; then
+    print_section "[用户内容出站点检查]"
+    echo -e "${BLUE}[INFO] runtime 源码有变更，扫描用户内容出站点...${NC}"
 
-        if [ ! -f "$PROMPT_OUTPOSTS_CHECKER" ]; then
-            echo -e "${RED}[ERROR] 找不到 $PROMPT_OUTPOSTS_CHECKER${NC}"
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-
-        python3 "$PROMPT_OUTPOSTS_CHECKER"
-        EXIT_CODE=$?
-
-        if [ $EXIT_CODE -ne 0 ]; then
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-    else
-        echo -e "${GREEN}[OK] runtime 源码无变更，跳过用户内容出站点检查${NC}"
+    if [ ! -f "$PROMPT_OUTPOSTS_CHECKER" ]; then
+        echo -e "${RED}[ERROR] 找不到 $PROMPT_OUTPOSTS_CHECKER${NC}"
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
     fi
+
+    python3 "$PROMPT_OUTPOSTS_CHECKER"
+    EXIT_CODE=$?
+
+    if [ $EXIT_CODE -ne 0 ]; then
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
+    fi
+else
+    echo -e "${GREEN}[OK] runtime 源码无变更，跳过用户内容出站点检查${NC}"
 fi
 
 # ============================================================================
@@ -1719,7 +1685,7 @@ fi
 BOUNDARY_CHECKER="scripts/verify-extension-host-boundaries.mjs"
 CORE_SRC="packages/core/src"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ] && [ "$SKIP_BOUNDARY_CHECK" != "1" ]; then
+if [ "$SKIP_BOUNDARY_CHECK" != "1" ]; then
     if echo "$STAGED_FILES" | grep -q "^$CORE_SRC/"; then
         print_section "[AC7 extension-host 边界检查]"
         echo -e "${BLUE}[INFO] core 源码有变更，运行 AC7 边界检查...${NC}"
@@ -1753,29 +1719,27 @@ fi
 
 EFI_CHECKER="scripts/check-error-form-invariant.mjs"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    if echo "$STAGED_FILES" | grep -qE "^packages/(core|ui|renderer)/src/"; then
-        print_section "[error-form-invariant 消息错误形态检查]"
-        echo -e "${BLUE}[INFO] chat 域源码有变更，扫描 error 终态消息字面量形态...${NC}"
+if echo "$STAGED_FILES" | grep -qE "^packages/(core|ui|renderer)/src/"; then
+    print_section "[error-form-invariant 消息错误形态检查]"
+    echo -e "${BLUE}[INFO] chat 域源码有变更，扫描 error 终态消息字面量形态...${NC}"
 
-        if [ ! -f "$EFI_CHECKER" ]; then
-            echo -e "${RED}[ERROR] 找不到验证脚本: $EFI_CHECKER${NC}"
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-
-        node "$EFI_CHECKER"
-        EXIT_CODE=$?
-
-        if [ $EXIT_CODE -ne 0 ]; then
-            echo ""
-            echo -e "${RED}[ERROR] error-form-invariant 检查失败：role:'assistant' + status:'error' 字面量必须含 error: 键${NC}"
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-    else
-        echo -e "${GREEN}[OK] chat 域源码无变更，跳过 error-form-invariant 检查${NC}"
+    if [ ! -f "$EFI_CHECKER" ]; then
+        echo -e "${RED}[ERROR] 找不到验证脚本: $EFI_CHECKER${NC}"
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
     fi
+
+    node "$EFI_CHECKER"
+    EXIT_CODE=$?
+
+    if [ $EXIT_CODE -ne 0 ]; then
+        echo ""
+        echo -e "${RED}[ERROR] error-form-invariant 检查失败：role:'assistant' + status:'error' 字面量必须含 error: 键${NC}"
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
+    fi
+else
+    echo -e "${GREEN}[OK] chat 域源码无变更，跳过 error-form-invariant 检查${NC}"
 fi
 
 # ============================================================================
@@ -1784,7 +1748,7 @@ fi
 
 PREFLIGHT_CHECKER="scripts/preflight-check.sh"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ] && [ "$SKIP_PREFLIGHT_CHECK" != "1" ]; then
+if [ "$SKIP_PREFLIGHT_CHECK" != "1" ]; then
     if echo "$STAGED_FILES" | grep -qE "^apps/electron/electron-builder\.yml$|^packages/runtime/tsup\.config\.ts$|^resources/pi/[^/]+$"; then
         print_section "[打包配置预检查]"
         echo -e "${BLUE}[INFO] 打包配置有变更，运行 preflight 检查...${NC}"
@@ -1830,7 +1794,7 @@ fi
 
 DIRECTORY_RULES_CHECKER=".githooks/check_directory_rules.py"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ] && [ "$SKIP_DIRECTORY_RULES_CHECK" != "1" ]; then
+if [ "$SKIP_DIRECTORY_RULES_CHECK" != "1" ]; then
     echo -e "${BLUE}[INFO] 运行目录规范检查..."
 
     if [ ! -f "$DIRECTORY_RULES_CHECKER" ]; then
@@ -1859,7 +1823,7 @@ fi
 
 PATH_REF_DRIFT_CHECKER=".githooks/check_path_ref_drift.py"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ] && [ "$SKIP_PATH_REF_DRIFT_CHECK" != "1" ]; then
+if [ "$SKIP_PATH_REF_DRIFT_CHECK" != "1" ]; then
     if [ ! -f "$PATH_REF_DRIFT_CHECKER" ]; then
         echo -e "${YELLOW}[WARN] 找不到检查脚本 $PATH_REF_DRIFT_CHECKER${NC}"
     elif python3 "$PATH_REF_DRIFT_CHECKER"; then
@@ -1880,7 +1844,7 @@ fi
 
 I18N_CJK_CHECKER=".githooks/check_i18n_cjk.py"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ] && [ "$SKIP_I18N_CJK_CHECK" != "1" ]; then
+if [ "$SKIP_I18N_CJK_CHECK" != "1" ]; then
     # 仅当 staged 含 .vue 文件时检查（双根与 check_i18n_cjk.py 的 SCAN_ROOTS 对齐；
     # mobile-renderer 根缺席曾致其下 .vue 不触发检查）
     STAGED_VUE=$(echo "$STAGED_FILES" | grep -E "^packages/(renderer/src|mobile-renderer/src)/.*\.vue$" || true)
@@ -1916,7 +1880,7 @@ fi
 
 I18N_LOCALE_CHECKER=".githooks/check_i18n_locale_sync.py"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ] && [ "$SKIP_I18N_LOCALE_SYNC_CHECK" != "1" ]; then
+if [ "$SKIP_I18N_LOCALE_SYNC_CHECK" != "1" ]; then
     # 仅当 staged 含 locale .ts 文件时检查
     LOCALE_CHANGED=$(echo "$STAGED_FILES" | grep -E "^packages/renderer/src/i18n/locales/.*\.ts$" || true)
     if [ -n "$LOCALE_CHANGED" ]; then
@@ -1948,21 +1912,19 @@ fi
 #   在测试文件内维护）。无独立 SKIP 开关（R1 后惯例，SKIP_ALL_CHECKS 兜底）。
 # ============================================================================
 
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    # staged 触及 renderer / ui 源码即检查（使用面与定义面两侧入口都在这两根下）
-    I18N_USAGE_TRIGGER=$(echo "$STAGED_FILES" | grep -E "^packages/(renderer/src|ui/src)/" || true)
-    if [ -n "$I18N_USAGE_TRIGGER" ]; then
-        echo -e "${BLUE}[INFO] 运行 i18n 使用面-定义面比对守卫...${NC}"
+# staged 触及 renderer / ui 源码即检查（使用面与定义面两侧入口都在这两根下）
+I18N_USAGE_TRIGGER=$(echo "$STAGED_FILES" | grep -E "^packages/(renderer/src|ui/src)/" || true)
+if [ -n "$I18N_USAGE_TRIGGER" ]; then
+    echo -e "${BLUE}[INFO] 运行 i18n 使用面-定义面比对守卫...${NC}"
 
-        (cd packages/renderer && npx vitest run src/i18n/__tests__/i18n.test.ts)
-        EXIT_CODE=$?
+    (cd packages/renderer && npx vitest run src/i18n/__tests__/i18n.test.ts)
+    EXIT_CODE=$?
 
-        if [ $EXIT_CODE -ne 0 ]; then
-            echo ""
-            echo -e "${RED}[ERROR] i18n 使用面-定义面守卫失败：源码引用的 key 在定义树不存在（或动态前缀无落点）${NC}"
-            echo -e "${RED}[FIX] 修 key 拼写 / 补词条（zh+en 双侧同步），确认合法的非 i18n 同形字面量登记白名单（src/i18n/__tests__/i18n.test.ts 内 locale-key-usage-guard 节的 USAGE_WHITELIST，附理由）${NC}"
-            exit 1
-        fi
+    if [ $EXIT_CODE -ne 0 ]; then
+        echo ""
+        echo -e "${RED}[ERROR] i18n 使用面-定义面守卫失败：源码引用的 key 在定义树不存在（或动态前缀无落点）${NC}"
+        echo -e "${RED}[FIX] 修 key 拼写 / 补词条（zh+en 双侧同步），确认合法的非 i18n 同形字面量登记白名单（src/i18n/__tests__/i18n.test.ts 内 locale-key-usage-guard 节的 USAGE_WHITELIST，附理由）${NC}"
+        exit 1
     fi
 fi
 
@@ -1975,28 +1937,26 @@ fi
 
 DOC_EMOJI_CHECKER=".githooks/check_doc_emoji.py"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    STAGED_README=$(echo "$STAGED_FILES" | grep -E "^README(_EN)?\.md$" || true)
-    if [ -n "$STAGED_README" ]; then
-        echo -e "${BLUE}[INFO] 运行文档 emoji 检测（README 系）...${NC}"
+STAGED_README=$(echo "$STAGED_FILES" | grep -E "^README(_EN)?\.md$" || true)
+if [ -n "$STAGED_README" ]; then
+    echo -e "${BLUE}[INFO] 运行文档 emoji 检测（README 系）...${NC}"
 
-        if [ ! -f "$DOC_EMOJI_CHECKER" ]; then
-            echo -e "${YELLOW}[WARN] 找不到检查脚本 $DOC_EMOJI_CHECKER${NC}"
-        else
-            ABSOLUTE_README=""
-            for FILE in $STAGED_README; do
-                ABSOLUTE_README="$ABSOLUTE_README $PROJECT_ROOT/$FILE"
-            done
+    if [ ! -f "$DOC_EMOJI_CHECKER" ]; then
+        echo -e "${YELLOW}[WARN] 找不到检查脚本 $DOC_EMOJI_CHECKER${NC}"
+    else
+        ABSOLUTE_README=""
+        for FILE in $STAGED_README; do
+            ABSOLUTE_README="$ABSOLUTE_README $PROJECT_ROOT/$FILE"
+        done
 
-            python3 "$DOC_EMOJI_CHECKER" $ABSOLUTE_README
-            EXIT_CODE=$?
+        python3 "$DOC_EMOJI_CHECKER" $ABSOLUTE_README
+        EXIT_CODE=$?
 
-            if [ $EXIT_CODE -ne 0 ]; then
-                echo ""
-                echo -e "${RED}[ERROR] README 含装饰 emoji${NC}"
-                echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-                exit 1
-            fi
+        if [ $EXIT_CODE -ne 0 ]; then
+            echo ""
+            echo -e "${RED}[ERROR] README 含装饰 emoji${NC}"
+            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+            exit 1
         fi
     fi
 fi
@@ -2017,206 +1977,207 @@ fi
 #   注：不设独立 SKIP_* 开关（R1 后惯例，总开关 SKIP_ALL_CHECKS 兜底）。
 # ============================================================================
 
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    print_section "[pi 边界可靠性护栏]"
+print_section "[pi 边界可靠性护栏]"
 
-    # G1：pi 语义登记检查
-    if [ ! -f "scripts/check-pi-semantics.mjs" ]; then
-        echo -e "${RED}[ERROR] 找不到 scripts/check-pi-semantics.mjs（U7a 交付物缺失）${NC}"
+# G1：pi 语义登记检查
+if [ ! -f "scripts/check-pi-semantics.mjs" ]; then
+    echo -e "${RED}[ERROR] 找不到 scripts/check-pi-semantics.mjs（U7a 交付物缺失）${NC}"
+    exit 1
+fi
+if ! node scripts/check-pi-semantics.mjs; then
+    echo -e "${RED}[ERROR] G1 pi 语义登记检查未通过——按上方 ✗ 明细逐条恢复（每条自带动作）后重试${NC}"
+    echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+    exit 1
+fi
+
+# pi-sync 派生锚点检查（pi-evolution-consistency §3.2 D2，按路径触发——性能考虑，
+# 只在触碰派生锚点文件时全量跑：根 package.json / lockfile / build.yml / prepare 脚本 /
+# 快照 / gen 脚本 / shared constants / extensions 任一 package.json / 检查脚本自身）。
+# 触发范围在主 STAGED_FILES（ACMR）外并入 staged 删除列表（--diff-filter=D）：删除派生锚点
+# 必须触发检查——各 S 项对锚点文件不存在自带 fail 分支（S1/S2/S3/S6），漏触发 = 删除场景
+# 静默放行。主 STAGED_FILES 保持 ACMR 不放行 D：会把已删除的 .ts/package.json 路径喂给
+# ESLint / manifest 等文件存在性检查段致 ERR，影响面大，仅检查挂载点需要 D。
+# 与 G1 逐项零重叠（设计 §2.1 分工声明）；不占 G 编号（G1/G3/G4 属 pi-boundary-reliability 体系）。
+STAGED_DELETED=$(git diff --cached --name-only --diff-filter=D)
+PI_SYNC_TRIGGER_FILES="${STAGED_FILES}
+${STAGED_DELETED}"
+if echo "$PI_SYNC_TRIGGER_FILES" | grep -qE "(^|/)(package\.json|pnpm-lock\.yaml)$|^(\.github/workflows/build\.yml|scripts/prepare-pi-resources\.sh|scripts/check-pi-sync\.mjs|packages/runtime/src/generated/builtin-providers\.json|packages/runtime/scripts/gen-builtin-providers\.mjs|packages/shared/src/constants\.ts)$|^extensions/.*/package\.json$"; then
+    echo -e "${BLUE}[INFO] pi 派生锚点文件有变更，运行 pi-sync 派生锚点检查...${NC}"
+    if [ ! -f "scripts/check-pi-sync.mjs" ]; then
+        echo -e "${RED}[ERROR] 找不到 scripts/check-pi-sync.mjs（u2 交付物缺失）${NC}"
         exit 1
     fi
-    if ! node scripts/check-pi-semantics.mjs; then
-        echo -e "${RED}[ERROR] G1 pi 语义登记检查未通过——按上方 ✗ 明细逐条恢复（每条自带动作）后重试${NC}"
+    if ! node scripts/check-pi-sync.mjs; then
+        echo -e "${RED}[ERROR] pi-sync 派生锚点检查未通过——按上方 ✗ 明细逐条恢复（每条自带动作）后重试${NC}"
         echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
         exit 1
     fi
+else
+    echo -e "${GREEN}[OK] 无 pi 派生锚点文件变更，跳过 pi-sync 检查${NC}"
+fi
 
-    # pi-sync 派生锚点检查（pi-evolution-consistency §3.2 D2，按路径触发——性能考虑，
-    # 只在触碰派生锚点文件时全量跑：根 package.json / lockfile / build.yml / prepare 脚本 /
-    # 快照 / gen 脚本 / shared constants / extensions 任一 package.json / 检查脚本自身）。
-    # 触发范围在主 STAGED_FILES（ACMR）外并入 staged 删除列表（--diff-filter=D）：删除派生锚点
-    # 必须触发检查——各 S 项对锚点文件不存在自带 fail 分支（S1/S2/S3/S6），漏触发 = 删除场景
-    # 静默放行。主 STAGED_FILES 保持 ACMR 不放行 D：会把已删除的 .ts/package.json 路径喂给
-    # ESLint / manifest 等文件存在性检查段致 ERR，影响面大，仅检查挂载点需要 D。
-    # 与 G1 逐项零重叠（设计 §2.1 分工声明）；不占 G 编号（G1/G3/G4 属 pi-boundary-reliability 体系）。
-    STAGED_DELETED=$(git diff --cached --name-only --diff-filter=D)
-    PI_SYNC_TRIGGER_FILES="${STAGED_FILES}
-${STAGED_DELETED}"
-    if echo "$PI_SYNC_TRIGGER_FILES" | grep -qE "(^|/)(package\.json|pnpm-lock\.yaml)$|^(\.github/workflows/build\.yml|scripts/prepare-pi-resources\.sh|scripts/check-pi-sync\.mjs|packages/runtime/src/generated/builtin-providers\.json|packages/runtime/scripts/gen-builtin-providers\.mjs|packages/shared/src/constants\.ts)$|^extensions/.*/package\.json$"; then
-        echo -e "${BLUE}[INFO] pi 派生锚点文件有变更，运行 pi-sync 派生锚点检查...${NC}"
-        if [ ! -f "scripts/check-pi-sync.mjs" ]; then
-            echo -e "${RED}[ERROR] 找不到 scripts/check-pi-sync.mjs（u2 交付物缺失）${NC}"
-            exit 1
-        fi
-        if ! node scripts/check-pi-sync.mjs; then
-            echo -e "${RED}[ERROR] pi-sync 派生锚点检查未通过——按上方 ✗ 明细逐条恢复（每条自带动作）后重试${NC}"
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-    else
-        echo -e "${GREEN}[OK] 无 pi 派生锚点文件变更，跳过 pi-sync 检查${NC}"
+# thinking 档位词表检查（ext-simplify-17 §3.2 D5 机器检查补强 + ext-simplify-18 §3.4
+# D6 扩大范围，按路径触发）：
+# pi-ai ModelThinkingLevel 联合 ↔ 本地词表副本（llm-shared Set / pi-rpc 数组 /
+# subagent-core THINKING_ORDER 有序数组）双向比对。
+# 钉值单测只锚副本自身字面量，pi 升级改联合成员时副本静默过期（P1-a 漏 xhigh 实证），
+# 仅此检查红灯。触发范围：pnpm-lock.yaml（pi-ai 版本变化）/ 三副本文件 / 检查脚本自身；
+# 复用上方 pi-sync 段拼好的 PI_SYNC_TRIGGER_FILES（staged ACMR + deleted D——副本文件
+# 被删除也必须触发，脚本对文件缺失自带 fail 分支）。与 pi-sync 触发范围有意部分重叠
+# （lockfile 同为触发文件）但职责不同：pi-sync 守构建派生锚点且 S6 只比 KnownApi，
+# 本检查守两个比对面：subagent-core 的 THINKING_ORDER（宿主侧校验词表）与 shared 的
+# PI_THINKING_LEVELS（前端派生源，core/renderer 从它派生）。llm-shared / pi-rpc 的副本已删除，
+# 触发范围随之摘除。不设独立 SKIP_* 开关（R1 后惯例，
+# 总开关 SKIP_ALL_CHECKS 兜底）。
+if echo "$PI_SYNC_TRIGGER_FILES" | grep -qE "^scripts/check-thinking-levels\.mjs$|(^|/)pnpm-lock\.yaml$|^packages/subagent-core/src/shared/model-ref\.ts$|^packages/shared/src/pi-preset\.ts$"; then
+    echo -e "${BLUE}[INFO] thinking 档位词表文件有变更，运行档位词表比对检查...${NC}"
+    if [ ! -f "scripts/check-thinking-levels.mjs" ]; then
+        echo -e "${RED}[ERROR] 找不到 scripts/check-thinking-levels.mjs（D5 机器检查交付物缺失）${NC}"
+        exit 1
     fi
-
-    # thinking 档位词表检查（ext-simplify-17 §3.2 D5 机器检查补强 + ext-simplify-18 §3.4
-    # D6 扩大范围，按路径触发）：
-    # pi-ai ModelThinkingLevel 联合 ↔ 本地词表副本（llm-shared Set / pi-rpc 数组 /
-    # subagent-core THINKING_ORDER 有序数组）双向比对。
-    # 钉值单测只锚副本自身字面量，pi 升级改联合成员时副本静默过期（P1-a 漏 xhigh 实证），
-    # 仅此检查红灯。触发范围：pnpm-lock.yaml（pi-ai 版本变化）/ 三副本文件 / 检查脚本自身；
-    # 复用上方 pi-sync 段拼好的 PI_SYNC_TRIGGER_FILES（staged ACMR + deleted D——副本文件
-    # 被删除也必须触发，脚本对文件缺失自带 fail 分支）。与 pi-sync 触发范围有意部分重叠
-    # （lockfile 同为触发文件）但职责不同：pi-sync 守构建派生锚点且 S6 只比 KnownApi，
-    # 本检查守两个比对面：subagent-core 的 THINKING_ORDER（宿主侧校验词表）与 shared 的
-    # PI_THINKING_LEVELS（前端派生源，core/renderer 从它派生）。llm-shared / pi-rpc 的副本已删除，
-    # 触发范围随之摘除。不设独立 SKIP_* 开关（R1 后惯例，
-    # 总开关 SKIP_ALL_CHECKS 兜底）。
-    if echo "$PI_SYNC_TRIGGER_FILES" | grep -qE "^scripts/check-thinking-levels\.mjs$|(^|/)pnpm-lock\.yaml$|^packages/subagent-core/src/shared/model-ref\.ts$|^packages/shared/src/pi-preset\.ts$"; then
-        echo -e "${BLUE}[INFO] thinking 档位词表文件有变更，运行档位词表比对检查...${NC}"
-        if [ ! -f "scripts/check-thinking-levels.mjs" ]; then
-            echo -e "${RED}[ERROR] 找不到 scripts/check-thinking-levels.mjs（D5 机器检查交付物缺失）${NC}"
-            exit 1
-        fi
-        if ! node scripts/check-thinking-levels.mjs; then
-            echo -e "${RED}[ERROR] thinking 档位词表检查未通过——按上方 ✗ 明细逐条恢复（每条自带动作）后重试${NC}"
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-    else
-        echo -e "${GREEN}[OK] 无 thinking 档位词表文件变更，跳过档位词表比对检查${NC}"
-    fi
-
-    # capability 清单 ↔ 渲染管线白名单对拍检查（chat-html-support §6.1 D1 / §10 u1，
-    # 按路径触发）：system prompt 的能力清单常量（CAPABILITY_INLINE_TAG_FAMILIES /
-    # CAPABILITY_PRESENTATION_ATTRS / CAPABILITY_FORBIDDEN）与 markdown-sanitize.ts 的
-    # ALLOWED_TAGS / ALLOWED_ATTR 源文件字面量集合对拍（零散文解析）——正面清单双向一致 +
-    # 负面清单与剥除语义一致（含 data-* 通配 ↔ ALLOW_DATA_ATTR=false 锚点）。渲染白名单改了
-    # 而能力文案忘跟 = agent 被教会的能力与实际渲染行为漂移，仅此检查红灯。
-    # 与 thinking 档位检查同型（读双侧源文件字面量对拍），触发范围：检查脚本自身 /
-    # system-prompt 源 / 渲染净化源（文件被删除也必须触发，脚本对文件缺失自带 fail 分支）。
-    # 不设独立 SKIP_* 开关（R1 后惯例，总开关 SKIP_ALL_CHECKS 兜底）。
-    if echo "$PI_SYNC_TRIGGER_FILES" | grep -qE "^scripts/check-capability-allowlist-sync\.mjs$|^extensions/taiji/system-prompt/src/index\.ts$|^packages/ui/src/features/chat/markdown-sanitize\.ts$"; then
-        echo -e "${BLUE}[INFO] capability 清单/渲染白名单文件有变更，运行清单对拍检查...${NC}"
-        if [ ! -f "scripts/check-capability-allowlist-sync.mjs" ]; then
-            echo -e "${RED}[ERROR] 找不到 scripts/check-capability-allowlist-sync.mjs（D1 对拍机器检查交付物缺失）${NC}"
-            exit 1
-        fi
-        if ! node scripts/check-capability-allowlist-sync.mjs; then
-            echo -e "${RED}[ERROR] capability 清单对拍检查未通过——按上方 ✗ 明细逐条恢复（每条自带动作）后重试${NC}"
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-    else
-        echo -e "${GREEN}[OK] 无 capability 清单/渲染白名单文件变更，跳过清单对拍检查${NC}"
-    fi
-
-    # 产物目录公式对拍检查（chat-html-support §6.7 D7 / §11 检查点 8 / §10 u-artifacts，
-    # 按路径触发）：shared getSessionArtifactsDir 与 system-prompt 包内镜像推导（
-    # SESSION_ARTIFACTS_DIR_SEGMENT + resolveSessionArtifactsDir）的**段名字面量与 sessionId
-    # 校验正则字面量**对拍（读源文件文本，零散文解析；与 u1 的 capability 清单对拍同型）。
-    # 任一漂移 = agent 收到的路径与实际目录不符（写偏或预览 404），仅此检查红灯。
-    # 触发范围：检查脚本自身 / shared paths 源 / shared session-store-paths 源（存储树
-    # 纯公式模块，C-ext-31 拆分）/ system-prompt 源 / runtime pi-paths 第三源
-    # （sessionId 正则三方对拍的第三源）/ base-tool-enhance registry 源（域 5 镜像）/
-    # session-reader tool-handler 源（域 6 镜像）——对拍源文件被删除也必须触发，脚本对
-    # 文件缺失自带 fail 分支。不设独立 SKIP_* 开关（R1 后惯例，总开关 SKIP_ALL_CHECKS 兜底）。
-    if echo "$PI_SYNC_TRIGGER_FILES" | grep -qE "^scripts/check-artifact-dir-formula-sync\.mjs$|^packages/shared/src/paths\.ts$|^packages/shared/src/session-store-paths\.ts$|^extensions/taiji/system-prompt/src/index\.ts$|^packages/runtime/src/infra/pi/pi-paths\.ts$|^extensions/universal/base-tool-enhance/src/background/registry\.ts$|^extensions/universal/session-reader/src/tool-handler\.ts$"; then
-        echo -e "${BLUE}[INFO] 产物目录公式文件有变更，运行公式对拍检查...${NC}"
-        if [ ! -f "scripts/check-artifact-dir-formula-sync.mjs" ]; then
-            echo -e "${RED}[ERROR] 找不到 scripts/check-artifact-dir-formula-sync.mjs（D7 对拍机器检查交付物缺失）${NC}"
-            exit 1
-        fi
-        if ! node scripts/check-artifact-dir-formula-sync.mjs; then
-            echo -e "${RED}[ERROR] 产物目录公式对拍检查未通过——按上方 ✗ 明细逐条恢复（每条自带动作）后重试${NC}"
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-    else
-        echo -e "${GREEN}[OK] 无产物目录公式文件变更，跳过公式对拍检查${NC}"
-    fi
-
-    # pi 子树源码级 shared import 边界检查（C-ext-31 源码级判定，按路径触发）：
-    # bundle 门禁（bundle-extensions 构建期 / verify-staged-extensions postbuild）只做
-    # 标记字符串匹配，"import '@taiji/shared/paths' 的纯符号（如 encodeCwd）"不带守卫
-    # 码、暂未调用 getDataDir 时门禁恒绿。本检查扫 packages/subagent-core/src 与
-    # extensions/ 源码的 import/from 语句，命中 '@taiji/shared/paths' 或裸根
-    # '@taiji/shared' 即红灯并列行号（stderr 附恢复动作）——不等 bundle，源码层拦截。
-    # 合法形态 = '@taiji/shared/session-store-paths' 纯公式 + resolveSessionStoreBase
-    # 显式传 base；注释引用旧路径（说明边界的文档形态）与 __tests__/*.test.ts
-    # （存量测试造 packaged env 场景）不拦。
-    # 触发范围：pi 子树两个源根 + 检查脚本自身（源文件被删除也必须触发——删除是
-    # 把 import 挪去别处的前兆，且脚本对扫描根缺失自带 fail 分支；复用 PI_SYNC_TRIGGER_FILES
-    # 的 staged ACMR + deleted D 清单）。不设独立 SKIP_* 开关（R1 后惯例，总开关兜底）。
-    if echo "$PI_SYNC_TRIGGER_FILES" | grep -qE "^packages/subagent-core/src/|^extensions/|^scripts/check-pi-subtree-shared-imports\.mjs$"; then
-        echo -e "${BLUE}[INFO] pi 子树源码有变更，运行 shared import 边界检查...${NC}"
-        if [ ! -f "scripts/check-pi-subtree-shared-imports.mjs" ]; then
-            echo -e "${RED}[ERROR] 找不到 scripts/check-pi-subtree-shared-imports.mjs（C-ext-31 源码级检查交付物缺失）${NC}"
-            exit 1
-        fi
-        if ! node scripts/check-pi-subtree-shared-imports.mjs; then
-            echo -e "${RED}[ERROR] pi 子树源码级 shared import 边界检查未通过——按上方 ✗ 明细改 import '@taiji/shared/session-store-paths' + resolveSessionStoreBase 后重试${NC}"
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-        echo -e "${GREEN}[OK] pi 子树 shared import 边界检查通过${NC}"
-    else
-        echo -e "${GREEN}[OK] 无 pi 子树源码变更，跳过 shared import 边界检查${NC}"
-    fi
-
-    # POSIX resolve 折叠实现三份镜像对拍检查（chat-html-support v16 内联容器 / markdown
-    # sanitize D4 镜像纪律机检补强，按路径触发）：ui html-preview-path.ts resolvePosixPath /
-    # ui markdown-sanitize.ts（renderer 迁入）resolveResourcePath / ui MarkdownRenderer.vue
-    # resolveHrefPath 三份逐字同款折叠实现（跨包不可 import 的镜像纪律）——任一份漂移 =
-    # 两侧对同一相对路径解析出不同绝对路径（iframe src 与 markdown 链接点击落点不一致）。
-    # 读三侧源文件文本，剥签名行后函数体逐字对拍 + 折叠语义锚点在场断言（防三份一致退化）。
-    # renderer lib/path-utils.resolvePreviewPath 非本族镜像（相对路径仅前缀拼接不折叠 `..`），
-    # 不参与对拍。触发范围：检查脚本自身 / 三份源文件（文件被删除也必须触发，脚本对文件缺失
-    # 自带 fail 分支）。不设独立 SKIP_* 开关（R1 后惯例，总开关 SKIP_ALL_CHECKS 兜底）。
-    if echo "$PI_SYNC_TRIGGER_FILES" | grep -qE "^scripts/check-posix-resolve-mirror-sync\.mjs$|^packages/ui/src/features/chat/html-preview-path\.ts$|^packages/ui/src/features/chat/markdown-sanitize\.ts$|^packages/ui/src/features/chat/MarkdownRenderer\.vue$"; then
-        echo -e "${BLUE}[INFO] POSIX resolve 镜像文件有变更，运行三份折叠实现对拍检查...${NC}"
-        if [ ! -f "scripts/check-posix-resolve-mirror-sync.mjs" ]; then
-            echo -e "${RED}[ERROR] 找不到 scripts/check-posix-resolve-mirror-sync.mjs（镜像对拍机器检查交付物缺失）${NC}"
-            exit 1
-        fi
-        if ! node scripts/check-posix-resolve-mirror-sync.mjs; then
-            echo -e "${RED}[ERROR] POSIX resolve 镜像对拍检查未通过——按上方 ✗ 明细逐条恢复（每条自带动作）后重试${NC}"
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-    else
-        echo -e "${GREEN}[OK] 无 POSIX resolve 镜像文件变更，跳过三份折叠实现对拍检查${NC}"
-    fi
-
-    # G3：registry vs pi-ai 差分探针（触发文件：档位链路四文件任一 staged，basename 匹配。
-    # [C4] use-provider-edit 拆分后思考预设/反推归位 provider-edit-models.ts，触发范围同步跟随）
-    if echo "$STAGED_FILES" | grep -qE "(^|/)(thinking-levels\.ts|provider-edit-models\.ts|builtin-providers\.json|model-capability\.ts)$"; then
-        echo -e "${BLUE}[INFO] 档位链路文件有变更，运行 G3 差分探针...${NC}"
-        if ! node scripts/diff-probe-thinking.mjs; then
-            echo -e "${RED}[ERROR] G3 差分探针失败：registry 计算路径与 pi-ai 同源函数不一致${NC}"
-            echo -e "${YELLOW}[INFO] 恢复动作：按上方 ✗ 明细核对 model-capability.ts 的档位计算后重试${NC}"
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-    else
-        echo -e "${GREEN}[OK] 无档位链路文件变更，跳过 G3 差分探针${NC}"
-    fi
-
-    # G4：subagent-workflow 通道禁则（staged 含该包文件时；检查器内部全包扫描）
-    if echo "$STAGED_FILES" | grep -q "^extensions/universal/subagent-workflow/"; then
-        echo -e "${BLUE}[INFO] subagent-workflow 有变更，运行 G4 通道禁则检查...${NC}"
-        if [ ! -f ".githooks/check_subagent_channels.py" ]; then
-            echo -e "${YELLOW}[WARN] 找不到检查脚本 .githooks/check_subagent_channels.py${NC}"
-        else
-            if ! python3 .githooks/check_subagent_channels.py; then
-                echo -e "${RED}[ERROR] G4 subagent 通道禁则检查失败（C-ext-19）——按上方明细与修复指引处理${NC}"
-                echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-                exit 1
-            fi
-        fi
-    else
-        echo -e "${GREEN}[OK] 无 subagent-workflow 变更，跳过 G4 通道禁则${NC}"
+    if ! node scripts/check-thinking-levels.mjs; then
+        echo -e "${RED}[ERROR] thinking 档位词表检查未通过——按上方 ✗ 明细逐条恢复（每条自带动作）后重试${NC}"
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
     fi
 else
-    echo -e "${YELLOW}[SKIP] pi 边界可靠性护栏已跳过${NC}"
+    echo -e "${GREEN}[OK] 无 thinking 档位词表文件变更，跳过档位词表比对检查${NC}"
+fi
+
+# capability 清单 ↔ 渲染管线白名单对拍检查（chat-html-support §6.1 D1 / §10 u1，
+# 按路径触发）：system prompt 的能力清单常量（CAPABILITY_INLINE_TAG_FAMILIES /
+# CAPABILITY_PRESENTATION_ATTRS / CAPABILITY_FORBIDDEN）与 markdown-sanitize.ts 的
+# ALLOWED_TAGS / ALLOWED_ATTR 源文件字面量集合对拍（零散文解析）——正面清单双向一致 +
+# 负面清单与剥除语义一致（含 data-* 通配 ↔ ALLOW_DATA_ATTR=false 锚点）。渲染白名单改了
+# 而能力文案忘跟 = agent 被教会的能力与实际渲染行为漂移，仅此检查红灯。
+# 与 thinking 档位检查同型（读双侧源文件字面量对拍），触发范围：检查脚本自身 /
+# system-prompt 源 / 渲染净化源（文件被删除也必须触发，脚本对文件缺失自带 fail 分支）。
+# 不设独立 SKIP_* 开关（R1 后惯例，总开关 SKIP_ALL_CHECKS 兜底）。
+if echo "$PI_SYNC_TRIGGER_FILES" | grep -qE "^scripts/check-capability-allowlist-sync\.mjs$|^extensions/taiji/system-prompt/src/index\.ts$|^packages/ui/src/features/chat/markdown-sanitize\.ts$"; then
+    echo -e "${BLUE}[INFO] capability 清单/渲染白名单文件有变更，运行清单对拍检查...${NC}"
+    if [ ! -f "scripts/check-capability-allowlist-sync.mjs" ]; then
+        echo -e "${RED}[ERROR] 找不到 scripts/check-capability-allowlist-sync.mjs（D1 对拍机器检查交付物缺失）${NC}"
+        exit 1
+    fi
+    if ! node scripts/check-capability-allowlist-sync.mjs; then
+        echo -e "${RED}[ERROR] capability 清单对拍检查未通过——按上方 ✗ 明细逐条恢复（每条自带动作）后重试${NC}"
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
+    fi
+else
+    echo -e "${GREEN}[OK] 无 capability 清单/渲染白名单文件变更，跳过清单对拍检查${NC}"
+fi
+
+# 产物目录公式对拍检查（chat-html-support §6.7 D7 / §11 检查点 8 / §10 u-artifacts，
+# 按路径触发）：shared getSessionArtifactsDir 与 system-prompt 包内镜像推导（
+# SESSION_ARTIFACTS_DIR_SEGMENT + resolveSessionArtifactsDir）的**段名字面量与 sessionId
+# 校验正则字面量**对拍（读源文件文本，零散文解析；与 u1 的 capability 清单对拍同型）。
+# 任一漂移 = agent 收到的路径与实际目录不符（写偏或预览 404），仅此检查红灯。
+# 触发范围（= 检查脚本 readSourcesOrFail 读取的全部源文件 + 脚本自身，加域时两侧
+# 同步）：shared paths 源 / shared session-store-paths 源（存储树纯公式模块，
+# C-ext-31 拆分）/ system-prompt 源 / runtime pi-paths 第三源（sessionId 正则三方
+# 对拍的第三源）/ base-tool-enhance registry 源（域 5 镜像）/ session-reader
+# tool-handler 源（域 6 镜像）/ session-reader discovery roots 源（域 9 镜像）/
+# 域 10 四源（session-reader archive-ledger / runtime archive-paths / shared
+# archive schema / renderer agent-reference-format）/ retry-rules 四源（runtime
+# remote-retry-rules 写侧 / pi-subagent-cli 引擎读侧 / llm-shared config /
+# retry-rules package.json）——对拍源文件被删除也必须触发，脚本对文件缺失自带
+# fail 分支。不设独立 SKIP_* 开关（R1 后惯例，总开关 SKIP_ALL_CHECKS 兜底）。
+if echo "$PI_SYNC_TRIGGER_FILES" | grep -qE "^scripts/check-artifact-dir-formula-sync\.mjs$|^packages/shared/src/paths\.ts$|^packages/shared/src/session-store-paths\.ts$|^extensions/taiji/system-prompt/src/index\.ts$|^packages/runtime/src/infra/pi/pi-paths\.ts$|^extensions/universal/base-tool-enhance/src/background/registry\.ts$|^extensions/universal/session-reader/src/tool-handler\.ts$|^extensions/universal/session-reader/src/discovery/roots\.ts$|^extensions/universal/session-reader/src/discovery/archive-ledger\.ts$|^packages/runtime/src/services/archive/archive-paths\.ts$|^packages/shared/src/archive\.ts$|^packages/renderer/src/components/archive/agent-reference-format\.ts$|^packages/runtime/src/services/remote-config/remote-retry-rules\.ts$|^packages/pi-subagent-cli/src/retry-rules-classification\.ts$|^extensions/shared/llm-shared/src/config\.ts$|^extensions/universal/retry-rules/package\.json$"; then
+    echo -e "${BLUE}[INFO] 产物目录公式文件有变更，运行公式对拍检查...${NC}"
+    if [ ! -f "scripts/check-artifact-dir-formula-sync.mjs" ]; then
+        echo -e "${RED}[ERROR] 找不到 scripts/check-artifact-dir-formula-sync.mjs（D7 对拍机器检查交付物缺失）${NC}"
+        exit 1
+    fi
+    if ! node scripts/check-artifact-dir-formula-sync.mjs; then
+        echo -e "${RED}[ERROR] 产物目录公式对拍检查未通过——按上方 ✗ 明细逐条恢复（每条自带动作）后重试${NC}"
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
+    fi
+else
+    echo -e "${GREEN}[OK] 无产物目录公式文件变更，跳过公式对拍检查${NC}"
+fi
+
+# pi 子树源码级 shared import 边界检查（C-ext-31 源码级判定，按路径触发）：
+# bundle 门禁（bundle-extensions 构建期 / verify-staged-extensions postbuild）只做
+# 标记字符串匹配，"import '@taiji/shared/paths' 的纯符号（如 encodeCwd）"不带守卫
+# 码、暂未调用 getDataDir 时门禁恒绿。本检查扫 packages/subagent-core/src 与
+# extensions/ 源码的 import/from 语句，命中 '@taiji/shared/paths' 或裸根
+# '@taiji/shared' 即红灯并列行号（stderr 附恢复动作）——不等 bundle，源码层拦截。
+# 合法形态 = '@taiji/shared/session-store-paths' 纯公式 + resolveSessionStoreBase
+# 显式传 base；注释引用旧路径（说明边界的文档形态）与 __tests__/*.test.ts
+# （存量测试造 packaged env 场景）不拦。
+# 触发范围：pi 子树两个源根 + 检查脚本自身（源文件被删除也必须触发——删除是
+# 把 import 挪去别处的前兆，且脚本对扫描根缺失自带 fail 分支；复用 PI_SYNC_TRIGGER_FILES
+# 的 staged ACMR + deleted D 清单）。不设独立 SKIP_* 开关（R1 后惯例，总开关兜底）。
+if echo "$PI_SYNC_TRIGGER_FILES" | grep -qE "^packages/subagent-core/src/|^extensions/|^scripts/check-pi-subtree-shared-imports\.mjs$"; then
+    echo -e "${BLUE}[INFO] pi 子树源码有变更，运行 shared import 边界检查...${NC}"
+    if [ ! -f "scripts/check-pi-subtree-shared-imports.mjs" ]; then
+        echo -e "${RED}[ERROR] 找不到 scripts/check-pi-subtree-shared-imports.mjs（C-ext-31 源码级检查交付物缺失）${NC}"
+        exit 1
+    fi
+    if ! node scripts/check-pi-subtree-shared-imports.mjs; then
+        echo -e "${RED}[ERROR] pi 子树源码级 shared import 边界检查未通过——按上方 ✗ 明细改 import '@taiji/shared/session-store-paths' + resolveSessionStoreBase 后重试${NC}"
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}[OK] pi 子树 shared import 边界检查通过${NC}"
+else
+    echo -e "${GREEN}[OK] 无 pi 子树源码变更，跳过 shared import 边界检查${NC}"
+fi
+
+# POSIX resolve 折叠实现三份镜像对拍检查（chat-html-support v16 内联容器 / markdown
+# sanitize D4 镜像纪律机检补强，按路径触发）：ui html-preview-path.ts resolvePosixPath /
+# ui markdown-sanitize.ts（renderer 迁入）resolveResourcePath / ui MarkdownRenderer.vue
+# resolveHrefPath 三份逐字同款折叠实现（跨包不可 import 的镜像纪律）——任一份漂移 =
+# 两侧对同一相对路径解析出不同绝对路径（iframe src 与 markdown 链接点击落点不一致）。
+# 读三侧源文件文本，剥签名行后函数体逐字对拍 + 折叠语义锚点在场断言（防三份一致退化）。
+# renderer lib/path-utils.resolvePreviewPath 非本族镜像（相对路径仅前缀拼接不折叠 `..`），
+# 不参与对拍。触发范围：检查脚本自身 / 三份源文件（文件被删除也必须触发，脚本对文件缺失
+# 自带 fail 分支）。不设独立 SKIP_* 开关（R1 后惯例，总开关 SKIP_ALL_CHECKS 兜底）。
+if echo "$PI_SYNC_TRIGGER_FILES" | grep -qE "^scripts/check-posix-resolve-mirror-sync\.mjs$|^packages/ui/src/features/chat/html-preview-path\.ts$|^packages/ui/src/features/chat/markdown-sanitize\.ts$|^packages/ui/src/features/chat/MarkdownRenderer\.vue$"; then
+    echo -e "${BLUE}[INFO] POSIX resolve 镜像文件有变更，运行三份折叠实现对拍检查...${NC}"
+    if [ ! -f "scripts/check-posix-resolve-mirror-sync.mjs" ]; then
+        echo -e "${RED}[ERROR] 找不到 scripts/check-posix-resolve-mirror-sync.mjs（镜像对拍机器检查交付物缺失）${NC}"
+        exit 1
+    fi
+    if ! node scripts/check-posix-resolve-mirror-sync.mjs; then
+        echo -e "${RED}[ERROR] POSIX resolve 镜像对拍检查未通过——按上方 ✗ 明细逐条恢复（每条自带动作）后重试${NC}"
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
+    fi
+else
+    echo -e "${GREEN}[OK] 无 POSIX resolve 镜像文件变更，跳过三份折叠实现对拍检查${NC}"
+fi
+
+# G3：registry vs pi-ai 差分探针（触发文件：档位链路四文件任一 staged，basename 匹配。
+# [C4] use-provider-edit 拆分后思考预设/反推归位 provider-edit-models.ts，触发范围同步跟随）
+if echo "$STAGED_FILES" | grep -qE "(^|/)(thinking-levels\.ts|provider-edit-models\.ts|builtin-providers\.json|model-capability\.ts)$"; then
+    echo -e "${BLUE}[INFO] 档位链路文件有变更，运行 G3 差分探针...${NC}"
+    if ! node scripts/diff-probe-thinking.mjs; then
+        echo -e "${RED}[ERROR] G3 差分探针失败：registry 计算路径与 pi-ai 同源函数不一致${NC}"
+        echo -e "${YELLOW}[INFO] 恢复动作：按上方 ✗ 明细核对 model-capability.ts 的档位计算后重试${NC}"
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
+    fi
+else
+    echo -e "${GREEN}[OK] 无档位链路文件变更，跳过 G3 差分探针${NC}"
+fi
+
+# G4：subagent-workflow 通道禁则（staged 含该包文件时；检查器内部全包扫描）
+if echo "$STAGED_FILES" | grep -q "^extensions/universal/subagent-workflow/"; then
+    echo -e "${BLUE}[INFO] subagent-workflow 有变更，运行 G4 通道禁则检查...${NC}"
+    if [ ! -f ".githooks/check_subagent_channels.py" ]; then
+        echo -e "${YELLOW}[WARN] 找不到检查脚本 .githooks/check_subagent_channels.py${NC}"
+    else
+        if ! python3 .githooks/check_subagent_channels.py; then
+            echo -e "${RED}[ERROR] G4 subagent 通道禁则检查失败（C-ext-19）——按上方明细与修复指引处理${NC}"
+            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+            exit 1
+        fi
+    fi
+else
+    echo -e "${GREEN}[OK] 无 subagent-workflow 变更，跳过 G4 通道禁则${NC}"
 fi
 
 # ============================================================================
@@ -2510,26 +2471,22 @@ fi
 FLAKE_HYGIENE_CHECKER=".githooks/check_test_flake_hygiene.py"
 TEST_FILE_STAGED=$(echo "$STAGED_FILES" | grep -E "(/test/|/__tests__/|\.test\.(ts|mjs)|\.spec\.ts$)" | grep -v "node_modules" || true)
 
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    print_section "[测试 flake 卫生检查]"
-    if [ ! -f "$FLAKE_HYGIENE_CHECKER" ]; then
-        echo -e "${RED}[ERROR] 找不到检查脚本 $FLAKE_HYGIENE_CHECKER${NC}"
-        exit 1
-    fi
-    if [ -n "$TEST_FILE_STAGED" ]; then
-        echo -e "${BLUE}[INFO] staged 含测试文件，同时扫描 recursive 删除 maxRetries 规则...${NC}"
-    fi
-    # if ! 形态跑 checker：set -e 下非零退出会先于 EXIT_CODE=$? 捕获终止本 hook
-    if ! python3 "$FLAKE_HYGIENE_CHECKER"; then
-        echo ""
-        echo -e "${RED}[ERROR] 测试 flake 卫生检查失败${NC}"
-        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-        exit 1
-    fi
-    echo -e "${GREEN}[OK] 测试 flake 卫生检查通过${NC}"
-else
-    echo -e "${YELLOW}[SKIP] 测试 flake 卫生检查已跳过${NC}"
+print_section "[测试 flake 卫生检查]"
+if [ ! -f "$FLAKE_HYGIENE_CHECKER" ]; then
+    echo -e "${RED}[ERROR] 找不到检查脚本 $FLAKE_HYGIENE_CHECKER${NC}"
+    exit 1
 fi
+if [ -n "$TEST_FILE_STAGED" ]; then
+    echo -e "${BLUE}[INFO] staged 含测试文件，同时扫描 recursive 删除 maxRetries 规则...${NC}"
+fi
+# if ! 形态跑 checker：set -e 下非零退出会先于 EXIT_CODE=$? 捕获终止本 hook
+if ! python3 "$FLAKE_HYGIENE_CHECKER"; then
+    echo ""
+    echo -e "${RED}[ERROR] 测试 flake 卫生检查失败${NC}"
+    echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+    exit 1
+fi
+echo -e "${GREEN}[OK] 测试 flake 卫生检查通过${NC}"
 
 # ============================================================================
 # 单测层极端形态静态检查（判据权威 = docs/TEST-STRATEGY.md「新写测试判据」节）
@@ -2544,24 +2501,22 @@ fi
 TEST_EXTREMES_CHECKER=".githooks/check-test-extremes.mjs"
 TEST_EXTREMES_STAGED=$(echo "$STAGED_FILES" | grep -E "\.test\.(ts|mjs)$|\.spec\.ts$" | grep -v "node_modules" | grep -v "^e2e/" || true)
 
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    print_section "[单测层极端形态检查]"
-    if [ ! -f "$TEST_EXTREMES_CHECKER" ]; then
-        echo -e "${RED}[ERROR] 找不到检查脚本 $TEST_EXTREMES_CHECKER${NC}"
+print_section "[单测层极端形态检查]"
+if [ ! -f "$TEST_EXTREMES_CHECKER" ]; then
+    echo -e "${RED}[ERROR] 找不到检查脚本 $TEST_EXTREMES_CHECKER${NC}"
+    exit 1
+fi
+if [ -n "$TEST_EXTREMES_STAGED" ]; then
+    # if ! 形态跑 checker：set -e 下非零退出会先于 EXIT_CODE=$? 捕获终止本 hook
+    if ! node "$TEST_EXTREMES_CHECKER"; then
+        echo ""
+        echo -e "${RED}[ERROR] 单测层极端形态检查失败${NC}"
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
         exit 1
     fi
-    if [ -n "$TEST_EXTREMES_STAGED" ]; then
-        # if ! 形态跑 checker：set -e 下非零退出会先于 EXIT_CODE=$? 捕获终止本 hook
-        if ! node "$TEST_EXTREMES_CHECKER"; then
-            echo ""
-            echo -e "${RED}[ERROR] 单测层极端形态检查失败${NC}"
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-        echo -e "${GREEN}[OK] 单测层极端形态检查通过${NC}"
-    else
-        echo -e "${GREEN}[OK] staged 无测试文件，跳过极端形态扫描${NC}"
-    fi
+    echo -e "${GREEN}[OK] 单测层极端形态检查通过${NC}"
+else
+    echo -e "${GREEN}[OK] staged 无测试文件，跳过极端形态扫描${NC}"
 fi
 
 # ============================================================================
@@ -2576,27 +2531,25 @@ fi
 
 PROVIDER_CRED_READS_CHECKER="scripts/check-provider-credential-reads.mjs"
 
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    if echo "$STAGED_FILES" | grep -q "^$RUNTIME_SRC/"; then
-        print_section "[Provider 凭据读取单通道检查]"
-        echo -e "${BLUE}[INFO] runtime 源码有变更，扫描凭据直查与 upsertProvider 直调...${NC}"
+if echo "$STAGED_FILES" | grep -q "^$RUNTIME_SRC/"; then
+    print_section "[Provider 凭据读取单通道检查]"
+    echo -e "${BLUE}[INFO] runtime 源码有变更，扫描凭据直查与 upsertProvider 直调...${NC}"
 
-        if [ ! -f "$PROVIDER_CRED_READS_CHECKER" ]; then
-            echo -e "${RED}[ERROR] 找不到 $PROVIDER_CRED_READS_CHECKER${NC}"
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-
-        node "$PROVIDER_CRED_READS_CHECKER"
-        EXIT_CODE=$?
-
-        if [ $EXIT_CODE -ne 0 ]; then
-            echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
-            exit 1
-        fi
-    else
-        echo -e "${GREEN}[OK] runtime 源码无变更，跳过 Provider 凭据读取检查${NC}"
+    if [ ! -f "$PROVIDER_CRED_READS_CHECKER" ]; then
+        echo -e "${RED}[ERROR] 找不到 $PROVIDER_CRED_READS_CHECKER${NC}"
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
     fi
+
+    node "$PROVIDER_CRED_READS_CHECKER"
+    EXIT_CODE=$?
+
+    if [ $EXIT_CODE -ne 0 ]; then
+        echo -e "${RED}[原则] 无论是否本次改动引入的问题，都必须当场直接修复解决，不允许跳过。${NC}"
+        exit 1
+    fi
+else
+    echo -e "${GREEN}[OK] runtime 源码无变更，跳过 Provider 凭据读取检查${NC}"
 fi
 
 # ============================================================================
@@ -2885,14 +2838,12 @@ fi
 #   注：不设独立 SKIP_* 开关（R1 后惯例，总开关 SKIP_ALL_CHECKS 兜底）。
 # ============================================================================
 
-if [ "$SKIP_ALL_CHECKS" != "1" ]; then
-    print_section "[oe-assert 过度设计自动初筛]"
-    if [ ! -f ".githooks/oe-assert.sh" ]; then
-        echo -e "${RED}[ERROR] 找不到 .githooks/oe-assert.sh（调用行在位而脚本本体缺失）${NC}"
-        exit 1
-    fi
-    bash ".githooks/oe-assert.sh" # oe-audit-assert
+print_section "[oe-assert 过度设计自动初筛]"
+if [ ! -f ".githooks/oe-assert.sh" ]; then
+    echo -e "${RED}[ERROR] 找不到 .githooks/oe-assert.sh（调用行在位而脚本本体缺失）${NC}"
+    exit 1
 fi
+bash ".githooks/oe-assert.sh" # oe-audit-assert
 
 # ============================================================================
 # chat store facet 双清单对账检查（E2E-CHATOPS-01 的 pre-commit 执行点；

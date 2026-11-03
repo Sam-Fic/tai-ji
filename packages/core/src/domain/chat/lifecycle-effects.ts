@@ -10,8 +10,10 @@
  *
  * 语义清单（设计 §3.3 D5 采用段）：
  * - markSessionDead：markSessionError（流式终结或追加 error 消息，chat store 单一入口）
- *   + markDead（列表置灰）+ invalidateStreamSubscription（本地订阅簿记失效——服务端订阅
-   *   已随 bus.clearSession 清除，不失效则 respawn 后 ensureStreamSubscription 被幂等检查短路）。
+ *   + markDead（列表置灰）+ clearExecutingBash（执行中 !command 瞬时执行态——pi 已死，
+ *   bashResult 永不再达，不清理则「命令 + 转圈」行残留）+ invalidateStreamSubscription
+ *   （本地订阅簿记失效——服务端订阅已随 bus.clearSession 清除，不失效则 respawn 后
+ *   ensureStreamSubscription 被幂等检查短路）。
  *   保序依据：错误消息 / dead 态等 UI 反馈先落地（useMessageEffects 既有契约）。
  * - openRestoreWindow：恢复窗口订阅——invalidate 之后立即重发 subscribeSession（幂等，
  *   fire-and-forget，失败 console.warn 由 WS 重连 resubscribeAll 兜底自愈）。这是 restored /
@@ -34,6 +36,7 @@
 import type { ChatStoreInstance } from './store'
 import type { PiRespawnNoticeVariant } from '@taiji/shared'
 import { invalidateStreamSubscription } from './useChat'
+import { clearExecutingBash } from './bash-effects'
 import { subscribeSession } from '../../coordination/subscription-state'
 
 /** session store 生命周期动作侧（markDead 置灰 / revive 复位；createSessionStore 产物子集）。 */
@@ -67,8 +70,8 @@ export interface LifecycleNoticeTexts { // oe-exempt:20261003:framework:D5 设�
 export interface LifecycleEffects { // oe-exempt:20261003:framework:D5 设计裁决的 core factory 契约范围——factory 即唯一实现点是设计形态，非待扩展口
   /**
    * session.exited 的 core 序列：markSessionError（含流式终结 / error 消息追加）+ markDead
-   * （列表置灰）+ 订阅簿记失效。壳扩展（弹窗分区清理 / toast / 强杀分流 / 过渡态）由调用方
-   * 在本原语之后叠加。
+   * （列表置灰）+ executingBash 瞬时执行态清理（pi 已死、bashResult 永不再达）+ 订阅簿记失效。
+   * 壳扩展（弹窗分区清理 / toast / 强杀分流 / 过渡态）由调用方在本原语之后叠加。
    */
   markSessionDead(sessionId: string, reason: string): void
   /**
@@ -110,6 +113,10 @@ export function createLifecycleEffects(deps: LifecycleEffectsDeps, notices: Life
       // 保序：错误消息 / dead 态 UI 反馈先落地，订阅簿记失效收尾（useMessageEffects 既有契约）
       deps.chat.markSessionError(sessionId, reason)
       deps.session.markDead(sessionId)
+      // [fix-chat-flow-stuck C-1] 执行中 !command 的瞬时执行态清理：session.exited = pi 进程
+      // 已死，bashResult 帧永不再达，不清理则「命令 + 转圈」行永久残留。挂接点对齐
+      // bash-effects 模块级分区 Map 的 cleanup 编排架构目标（store.disposeSession 同款调用）。
+      clearExecutingBash(sessionId)
       invalidateStreamSubscription(sessionId)
     },
 

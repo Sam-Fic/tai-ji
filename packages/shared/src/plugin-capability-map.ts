@@ -21,7 +21,7 @@
  * 供插件作者消费——manifest 声明与放行计算共用同一词表，单一事实源。
  */
 
-/** 业务能力词常量（manifest taijiPlugin.capabilities 的词表，SDK 契约面） */
+/** 业务能力词常量（manifest taijiPlugin.capabilities 的词表，SDK 契约） */
 export const PluginCapabilityConstants = Object.freeze({
   /** 发起网络请求（调上游查额度 / 拉模型目录） */
   NETWORK_HTTP: 'network.http',

@@ -57,6 +57,9 @@ import { isPackaged } from '../utils/runtime-env.js'
 // endAndAwait 单一实现（偏差 #32①：原模块私有复刻与 crash-journal 同构，收敛共享原语；
 import { endAndAwaitStream } from './stream-end-await.js'
 import { getCrashJournal } from './crash-journal.js'
+// [startup-readiness §7.1/RL4] 常驻事件循环滞后遥测（monitorEventLoopDelay 直方图进
+// 结构化日志；telemetry 零 import 本模块——落盘口经参数注入，无循环引用）
+import { startEventLoopDelayTelemetry } from './event-loop-telemetry.js'
 
 // ── 级别 ────────────────────────────────────────────────────────────
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
@@ -184,6 +187,9 @@ export function initLogger(dataDir: string): void {
   cleanExpiredLogs()
   patchConsole()
   writeLogEntry('info', '[logger] initialized', { level: currentLevel, dir: logsDir })
+  // [startup-readiness §7.1/RL4] 常驻滞后遥测接线：与日志管线同生命周期（initLogger
+  // 启动即常驻；unref 定时器不钉住进程退出）。落盘口注入 logger.info。
+  startEventLoopDelayTelemetry((message, meta) => logger.info(message, meta))
 }
 
 /**

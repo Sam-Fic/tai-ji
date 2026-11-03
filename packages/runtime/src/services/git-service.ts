@@ -5,11 +5,14 @@
  * XY 码解析、numstat 聚合、冲突判定全部隐藏。handler 只需 catch → error envelope。
  *
  * 分层：GitService 调 IGitExecutor（port）做写操作 IO，调 git-status-parser（纯函数 kernel，
- * 本仓 infra/git/）做 commit 冲突预检解析，经 ISessionService 取 cwd，getStatus 经
+ * 本仓 infra/git/）做 commit 冲突预检解析，cwd 经 resolveSessionContext 两级解析（U4/D5，
+ * file-service 单点：内存活跃表 → 磁盘元数据带缓存，第一级读 ISessionService），getStatus 经
  * IGitStateService（状态统一读取：去重/缓存/失效，perf W16-W17）。不直接 import infra 实现。
  *
  * 安全：
- * - cwd 取自 sessionService.getSession(sid).cwd（session.create 时确立的受信工作目录）
+ * - cwd 经 resolveSessionCwd 两级解析（U4/D5，论证见 resolveSessionCwd 注释）：第一级 =
+ *   内存活跃表在册会话（session.create 时确立的受信工作目录）；第二级 = 磁盘会话文件
+ *   header 登记的 cwd（session.create 时确立的同一事实源的落盘形态，非推断值）
  * - stage/unstage 的 filePaths：逐个 path.resolve 后必须落在 cwd 之下（isUnderOrEqual），
  *   防止 `../../etc/passwd` 之类的路径穿越 → 越界抛 GitPathError（→ 'path_not_allowed'）
  *
@@ -24,6 +27,9 @@ import type { ISessionService, IGitService } from '../interfaces.js'
 import type { GitCommand, GitExecutorResult, IGitExecutor } from './ports/git-executor.js'
 import { GitExecutorError } from './ports/git-executor.js'
 import type { IGitStateService } from './ports/git-state.js'
+// [startup-readiness U4/D5] 纯读两级解析单点（file-service 定义；git 纯读共享同一
+// 定位语义——内存活跃表 → 磁盘元数据，btw 两形态处置与错误分形一致）
+import { resolveSessionContext } from './file-service.js'
 import { isUnderOrEqual } from '../utils/path-utils.js'
 import { toErrorMessage } from '../utils/errors.js'
 
@@ -59,9 +65,26 @@ const VALID_BRANCH_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/
 export class GitService implements IGitService {
   constructor(private opts: GitServiceOptions) {}
 
-  private getCwd(sessionId: string): string {
-    const summary = this.opts.sessionService.getSummary(sessionId)
-    return summary?.cwd ?? ''
+  /**
+   * [startup-readiness U4/D5] 纯读/写操作统一的 cwd 定位：两级解析（内存活跃表 →
+   * 磁盘元数据）。恢复期纯读（git.* 面板）在活跃表空时经第二级照常解析（A2：无
+   * 「Session 不存在或无 cwd」）；btw 不在册线（重启窗口）→ `btw_line_inactive`
+   * （与 session_not_found 可区分，D5 两形态处置）；两级 miss → session_not_found
+   * （现状语义）。写操作经同一解析——第二级命中的 cwd 是会话 header 登记的受信
+   * 工作目录（session.create 时确立的同一事实源，非推断值）。
+   */
+  private resolveSessionCwd(sessionId: string): string {
+    const resolution = resolveSessionContext(sessionId, (sid) =>
+      this.opts.sessionService.getSummary(sid)?.cwd,
+    )
+    if (resolution.kind === 'active' || resolution.kind === 'disk') return resolution.cwd
+    if (resolution.kind === 'btw-line') {
+      throw new GitError(
+        'btw_line_inactive',
+        `该 btw 线不在册（runtime 重启窗口内），文件/git 操作不支持: ${sessionId}`,
+      )
+    }
+    throw new GitError('session_not_found', `Session 不存在或无 cwd: ${sessionId}`)
   }
 
   /**
@@ -85,6 +108,7 @@ export class GitService implements IGitService {
   /**
    * 查询 cwd 的全量 git 状态（FR-12）。
    * - session 不存在 → 抛 GitError('session_not_found')（handler 转 error envelope）
+   * - btw 不在册线（重启窗口）→ 抛 GitError('btw_line_inactive')（U4/D5 可区分分形）
    * - cwd 为空 / 非 git 仓库 / git 不可用 → 返回 isRepo=false 降级结果
    *
    * perf W17 收编（03-git-state-service D4-4 U2）：执行/聚合/解析下沉 GitStateService
@@ -94,10 +118,13 @@ export class GitService implements IGitService {
    * reply 形状零变化——renderer 无感。
    */
   async getStatus(sessionId: string): Promise<GitStatusResult> {
-    const cwd = this.getCwd(sessionId)
-    if (!cwd) {
-      throw new GitError('session_not_found', `Session 不存在或无 cwd: ${sessionId}`)
-    }
+    // [U4] resolveSessionCwd 两级解析直接抛可分型 GitError（session_not_found /
+    // btw_line_inactive），getStatus 不持空 cwd 兜底分支——空串输入在上游被结构性
+    // 排除：第一级 resolveSessionContext 对空串按未命中（file-service.ts），第二级
+    // scanSessionMeta 对 header id/cwd 缺失或空串 badHeader fail-fast 跳过该文件
+    // （session-file-utils.ts）——磁盘命中的 cwd 恒非空，「解析成功但 cwd 为空串」
+    // 不可达，无需兜底。
+    const cwd = this.resolveSessionCwd(sessionId)
     return this.opts.stateService.getStatus(sessionId, cwd)
   }
 
@@ -115,7 +142,7 @@ export class GitService implements IGitService {
   /**
    * 取单文件 diff（#5，UC-6 点文件预览的后端）。
    *
-   * 数据流：getCwd → 新写越界校验（K-6，仿 resolveFilePaths 但 diff 路径无先例）→
+   * 数据流：resolveSessionCwd → 新写越界校验（K-6，仿 resolveFilePaths 但 diff 路径无先例）→
    *   executor.exec(cwd, 'diff', ['--', path])（NFR-AC-S3 经 port 数组形式）。
    *
    * 边界（AC-5.1~5.5）：
@@ -276,12 +303,8 @@ export class GitService implements IGitService {
     }
   }
 
-  /** 取 cwd；空 → session_not_found（写操作不允许在无 cwd 的 session 上执行）。 */
+  /** 取 cwd（[U4] 两级解析，未命中直接抛可分型 GitError——见 resolveSessionCwd）。 */
   private requireCwd(sessionId: string): string {
-    const cwd = this.getCwd(sessionId)
-    if (!cwd) {
-      throw new GitError('session_not_found', `Session 不存在或无 cwd: ${sessionId}`)
-    }
-    return cwd
+    return this.resolveSessionCwd(sessionId)
   }
 }

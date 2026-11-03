@@ -150,6 +150,12 @@ export interface SpawnEnvForwardEntry {
   injectionPath: string
   /** pi 子树内消费锚点（forward 依据；行号为本分支 grep 复核值，源码漂移后须回查） */
   piConsumerAnchors: readonly string[]
+  /**
+   * pi 子树之外的跨界消费锚点（可选）。凡条目经 spawn 链进入非 pi 子树的 taiji
+   * 自有进程（如 builtin 插件宿主），其消费点登记在此——与 piConsumerAnchors 分开
+   * 持，避免把「插件宿主读同一键」误记成 pi 子树消费证据。
+   */
+  nonPiConsumerAnchors?: readonly string[]
 }
 
 /**
@@ -168,15 +174,23 @@ export const SPAWN_ENV_FORWARD_REFERENCE: readonly SpawnEnvForwardEntry[] = [
   {
     name: 'PI_CODING_AGENT_DIR',
     // 非 TAIJI_ 前缀，白名单 PI_ 整域准入后 ambient 值可随链流转，但目录权威值恒由
-    // 两条派发链终态强制写入覆盖（见 injectionPath），不依赖白名单继承
+    // 各派发链终态强制写入覆盖（见 injectionPath），不依赖白名单继承
     injectionPath: '主会话链 = B3 显式追加（pi-rpc buildPiOutboundEnv env.PI_CODING_AGENT_DIR = piAgentDir，'
       + 'rpc-client.ts start() 接线）；引擎链 = core 发现管线 EngineClient identityEnv L0 注入'
       + '（engine-inspect-package.ts piHostedAgentDirIdentityEnv，2026-10-23 裁决：taiji 派发的'
-      + 'pi 参数一切由 taiji 控制，配置目录对齐 <dataDir>/agent）',
+      + 'pi 参数一切由 taiji 控制，配置目录对齐 <dataDir>/agent）；builtin 插件宿主链 = '
+      + 'plugin-host.ts pluginHostPiAgentDirEnv（fork 与 Worker 两宿主，值经 shared '
+      + 'getPiAgentDir() 现算，extras/spread 后置覆盖 ambient 值）',
     piConsumerAnchors: [
       'extensions/taiji/system-prompt/src/index.ts:77（process.env.PI_CODING_AGENT_DIR 直读，上推两级同源推导 dataDir）',
       '全 extensions 面经 pi 导出的 getAgentDir() 间接消费（如 llm-shared/src/config.ts:8 注释点名禁止自实现路径推导，须尊重 PI_CODING_AGENT_DIR）',
       'pi-subagent-cli engine-query.ts resolvePiAgentDir（引擎查询范围数据目录）',
+    ],
+    nonPiConsumerAnchors: [
+      // 2026-11-01 dmg-r1-12：scheduler-manager 任务库面板原经相对路径直引 shared
+      // paths.ts 的 env 缺省形态取 agentDir（resources/plugins 不在 shared 准入检查
+      // 扫描根，消费侧边界无机器拦截）——改为只读本登记键，值由宿主强制写入。
+      'resources/plugins/scheduler-manager/index.ts（resolveAgentDir 读 process.env.PI_CODING_AGENT_DIR，拼 scheduler 任务库分片路径）',
     ],
   },
   {

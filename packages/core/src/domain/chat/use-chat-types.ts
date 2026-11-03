@@ -69,9 +69,10 @@ export interface EnsureStreamSubDeps {
   liveState: SessionLiveStateLike
   /**
    * [session-dead 第三环] error = 操作失败；warning = 需用户处置的信号（与 error 语义区分，
-   * 壳侧 useToast().warning 对接）。
+   * 壳侧 useToast().warning 对接）；info = 中性受理回执（命令回显口径，壳侧 useToast().info
+   * 对接——后台压缩启动提示 C2 起消费）。
    */
-  toast: { error: (msg: string) => void; warning: (msg: string) => void }
+  toast: { error: (msg: string) => void; warning: (msg: string) => void; info: (msg: string) => void }
   t: (key: string, params?: Record<string, unknown>) => string
 }
 
@@ -94,8 +95,8 @@ export interface UseChatDeps {
   getSessionStore: () => SessionStoreLike
   /** 状态层（会话运行时状态按 id 寄存）：session.* 状态帧的唯一落点（W1） */
   getLiveStateStore: () => SessionLiveStateLike
-  /** [session-dead 第三环] warning 同 EnsureStreamSubDeps */
-  toast: { error: (msg: string) => void; warning: (msg: string) => void }
+  /** [session-dead 第三环] warning/info 同 EnsureStreamSubDeps */
+  toast: { error: (msg: string) => void; warning: (msg: string) => void; info: (msg: string) => void }
   t: (key: string, params?: Record<string, unknown>) => string
   /**
    * [U5 消息撤回 D7] 撤回 reply 的草稿回填注入（壳层 composer 输入区能力）。optional：

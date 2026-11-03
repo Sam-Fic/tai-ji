@@ -36,6 +36,7 @@ import {
   runCapabilityReconcile,
   type CapabilityDrift,
 } from './model-capability.js'
+import { scopedModelKey } from '@zhushanwen/subagent-core'
 
 /** discoverModelsFromApi 错误码（domain→文案映射归 service）。 */
 export type ModelDiscoveryErrorCode =
@@ -285,7 +286,10 @@ export class ModelService implements IModelService, ProviderConnectionTestServic
     // scoped model 过滤/排序（design §3.3 D2）：scopedModels 非空时按白名单过滤 + 按序重排
     if (scopedModels.length === 0) return allModels
 
-    // 建立 model 索引（provider/modelId → ModelInfo）
+    // 建立 model 索引（provider/modelId → ModelInfo）。比对键经 scopedModelKey 归一
+    //（剥 :thinkingLevel 后缀）——写入侧 isModelRef 放行带后缀条目落盘，无归一的
+    // 直接全等比对会让这类条目永远 miss 静默失效。归一化单源 =
+    // @zhushanwen/subagent-core（派发校验同一口径，跨进程单源）。
     const modelIndex = new Map<string, ModelInfo>()
     for (const m of allModels) {
       modelIndex.set(`${m.providerId}/${m.id}`, m)
@@ -294,7 +298,7 @@ export class ModelService implements IModelService, ProviderConnectionTestServic
     // 按 scopedModels 序输出（跨 provider 交错序保留）
     const result: ModelInfo[] = []
     for (const scoped of scopedModels) {
-      const m = modelIndex.get(scoped)
+      const m = modelIndex.get(scopedModelKey(scoped))
       if (m) result.push(m) // 解析不到模型的 scoped 条目静默跳过
     }
     return result

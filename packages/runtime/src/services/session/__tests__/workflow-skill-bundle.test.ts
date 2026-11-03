@@ -1,13 +1,13 @@
 import type { IPiEngine } from '../../ports/pi-engine.js';
 import { FORCED_PROJECT_SKILL_DIR, resolveGlobalSkillDirs, resolveProjectSkillDirs, type SkillDirConfigSource } from '../../skill-dirs.js';
 import { BOGUS_DURATION_THRESHOLD_MS, BOGUS_OUTPUT_THRESHOLD, CACHE_TTL_MS, PAIR_RECORD_TUPLE_LENGTH, SPEED_RETENTION_DAYS, TTFT_RECORD_TUPLE_LENGTH, aggregateCacheRatio, aggregateSpeedDistribution, aggregateTtftDistribution, cacheRatioFilePath, classifyCacheMiss, getCacheRatioDir, getGenStatsDir, getSpeedDir, getTtftDir, hasReportedCacheFields, isBogusSpeedSample, isDisplayedZeroCacheRatio, localDayKey, percentileNearestRank, pruneExpiredDays, readDayRecords, safeModelFileName, speedFilePath, summarizeDistribution, ttftFilePath, type CacheRatioRecord, type GenStatsDayRecords, type SpeedRecord, type TtftRecord, writeDayRecords } from '../gen-stats-store.js';
-import { INACTIVE_PLAN_STATE_VIEW, extractPlanStateFromSessionFile, scanPlanStateEntries } from '../plan-state-extractor.js';
+import { scanPlanStateEntries } from '../plan-state-extractor.js';
 import { encodeDirectiveText } from '../session-records.js';
 import { LateBoundSkillSource, SkillInjector, type SkillMappingSource } from '../skill-injector.js';
 import { projectSubagentModelDetailIntoRuns } from '../workflow-record-projection.js';
 import { WorkflowRunEventsReader } from '../workflow-run-events-reader.js';
-import { CODE_DENSE_NON_CJK_CHARS_PER_TOKEN, READ_PRECHECK_MAX_BYTES, SKILL_DATA_BLOCK_TAG, SKILL_FALLBACK_GUIDANCE, WorkflowRunRecord, buildSkillMarker, type SkillInfo, type SubagentRecord } from '@taiji/shared';
-import { closeSync, existsSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { CODE_DENSE_NON_CJK_CHARS_PER_TOKEN, SKILL_DATA_BLOCK_TAG, SKILL_FALLBACK_GUIDANCE, WorkflowRunRecord, buildSkillMarker, type SkillInfo, type SubagentRecord } from '@taiji/shared';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -885,17 +885,6 @@ function extendedData(extra: Record<string, unknown> = {}): Record<string, unkno
 }
 
 
-let tmpDirs: string[] = []
-
-function makeTmpJsonl(lines: unknown[]): string {
-  const dir = mkdtempSync(join(tmpdir(), 'plan-state-extractor-'))
-  tmpDirs.push(dir)
-  const filePath = join(dir, 'session.jsonl')
-  writeFileSync(filePath, lines.map((l) => JSON.stringify(l)).join('\n'), 'utf-8')
-  return filePath
-}
-
-
 // ════════════════════════════════════════════════════════════════════
 // 活跃路径裁剪（message-revoke U6d）：G2 二分的未来状态随树路径——plan 状态 =
 // 当前状态，被撤子树的 plan-state entry 不进派生态
@@ -930,10 +919,6 @@ function branchedTreeEntries(): Array<Record<string, unknown>> {
 
 // wave3 包装：本段原文件顶层语句收进 describe 作用域（顶层 hook 不再外溢到同文件其他来源的用例）
 describe('plan-state-extractor', () => {
-afterEach(() => {
-  for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
-  tmpDirs = []
-})
 describe('scanPlanStateEntries：派生', () => {
   it('旧四字段 entry：四必填派生正确 + state 归一（无 reviewState → planning 按 isActive），optional 缺省不设键', () => {
     const view = scanPlanStateEntries([planStateEntry(legacyData(), 'e1')])
@@ -1072,75 +1057,6 @@ describe('scanPlanStateEntries：派生', () => {
     expect(scanPlanStateEntries([{ type: 'message', id: 'e1' }, { type: 'custom', customType: 'other', data: {} }])).toBeNull()
   })
 })
-describe('extractPlanStateFromSessionFile：冷路径', () => {
-  it('ENOENT（session 文件延迟写入）→ 未激活缺省 View', () => {
-    expect(extractPlanStateFromSessionFile(join(tmpdir(), 'plan-state-extractor-nonexistent.jsonl')))
-      .toEqual(INACTIVE_PLAN_STATE_VIEW)
-  })
-
-  it('真实临时 JSONL：与 scanPlanStateEntries 派生一致（冷热同一份派生代码）', () => {
-    const filePath = makeTmpJsonl([
-      { type: 'message', id: 'm1' },
-      planStateEntry(legacyData(), 'e1'),
-      planStateEntry(extendedData({ reviewState: 'revising' }), 'e2'),
-    ])
-    const view = extractPlanStateFromSessionFile(filePath)
-    expect(view.isActive).toBe(true)
-    expect(view.state).toBe('revising')
-    expect('reviewState' in view).toBe(false)
-    expect(view.skills).toEqual(['tech-design', 'dev-flow'])
-  })
-
-  it('空 JSONL（无任何 plan entry）→ 未激活缺省 View', () => {
-    const filePath = makeTmpJsonl([{ type: 'message', id: 'm1' }])
-    expect(extractPlanStateFromSessionFile(filePath)).toEqual(INACTIVE_PLAN_STATE_VIEW)
-  })
-
-  // [MF-12] G3 峰值治理冷路径降级契约：oversize 不全文扫描、不 throw、不部分提取——
-  // 回归为 throw 会把 getPlanState RPC 打成 error envelope，回归为漏 warn 则静默吞失败。
-  it('oversize（> READ_PRECHECK_MAX_BYTES）：warn 留痕 + 降级未激活缺省 View（不全文扫描）', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'plan-state-extractor-oversize-'))
-    tmpDirs.push(dir)
-    const filePath = join(dir, 'session.jsonl')
-    // 稀疏文件（ftruncate 只拉长度不写数据块，APFS/ext4 秒级）——绕开 32MB 物理写入
-    const fd = openSync(filePath, 'w')
-    try {
-      ftruncateSync(fd, READ_PRECHECK_MAX_BYTES + 1)
-    } finally {
-      closeSync(fd)
-    }
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      expect(extractPlanStateFromSessionFile(filePath)).toEqual({
-        isActive: false,
-        planFilePath: null,
-        requirement: null,
-        templateName: null,
-      })
-      expect(warnSpy).toHaveBeenCalledTimes(1)
-      expect(String(warnSpy.mock.calls[0]![0])).toContain('oversize')
-    } finally {
-      warnSpy.mockRestore()
-    }
-  })
-
-  // 错误契约：非 ENOENT 读错误原样上抛（RPC 报错），不降级缺省 View（会把「读失败」
-  // 与「从未进过 plan」混淆）。
-  it('路径为目录：statSync 预检通过（目录项非 oversize），EISDIR 经 readFileSync 原样上抛', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'plan-state-extractor-dir-'))
-    tmpDirs.push(dir)
-    expect(() => extractPlanStateFromSessionFile(dir)).toThrowError(/EISDIR/)
-  })
-
-  it('statSync 预检失败 fall-through：文件名超 NAME_MAX（ENAMETOOLONG）双抛，仍经 readFileSync 原样上抛', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'plan-state-extractor-statfail-'))
-    tmpDirs.push(dir)
-    // > NAME_MAX 255：statSync 与 readFileSync 均拒——预检 catch（fileSize = -1）
-    // fall-through 到读路径后错误契约不变（非 ENOENT 不吞）
-    const longPath = join(dir, 'x'.repeat(300))
-    expect(() => extractPlanStateFromSessionFile(longPath)).toThrowError(/ENAMETOOLONG/)
-  })
-})
 describe('scanPlanStateEntries：leafId 活跃路径裁剪', () => {
   it('传 leafId（全量重建调用点）：被撤子树的 plan-state entry 不进派生，取活跃路径内最后一条', () => {
     const view = scanPlanStateEntries(branchedTreeEntries(), 'lbl')!
@@ -1170,40 +1086,6 @@ describe('scanPlanStateEntries：leafId 活跃路径裁剪', () => {
       treeEntry('lbl', 'q', { type: 'label', label: 'taiji:revoked', targetId: 'p2' }),
     ]
     expect(scanPlanStateEntries(entries, 'lbl')).toBeNull()
-  })
-})
-describe('extractPlanStateFromSessionFile：文件读路径的活跃路径裁剪（冷启动）', () => {
-  /** 真实 pi 文件首行 header（有 id 无 parentId——pi getEntries() 排除、文件直读包含）。 */
-  function sessionHeaderLine(): Record<string, unknown> {
-    return { type: 'session', version: 1, id: 'sid-branched', timestamp: '2026-09-24T00:00:00Z', cwd: '/tmp' }
-  }
-
-  it('有分支真实文件形态（header + 撤回分支 + label 锚落文件尾）→ 派生不含被撤子树 entry', () => {
-    const filePath = makeTmpJsonl([sessionHeaderLine(), ...branchedTreeEntries()])
-    const view = extractPlanStateFromSessionFile(filePath)
-    expect(view.isActive).toBe(true)
-    expect(view.requirement).toBe('活跃路径上的 plan')
-  })
-
-  it('撤回带走唯一 plan entry → 「未激活」缺省 View（活跃路径空收敛的冷路径形态）', () => {
-    const filePath = makeTmpJsonl([
-      sessionHeaderLine(),
-      treeEntry('q', null, { type: 'message', message: { role: 'user', content: 'hi' } }),
-      chainedPlanEntry('p2', 'q', '被撤子树的 plan'),
-      treeEntry('lbl', 'q', { type: 'label', label: 'taiji:revoked', targetId: 'p2' }),
-    ])
-    expect(extractPlanStateFromSessionFile(filePath)).toEqual(INACTIVE_PLAN_STATE_VIEW)
-  })
-
-  it('无分支真实文件形态（header + 链式 entries）→ 现行为：最后一条 plan entry 生效（回归）', () => {
-    const filePath = makeTmpJsonl([
-      sessionHeaderLine(),
-      treeEntry('q', null, { type: 'message', message: { role: 'user', content: 'hi' } }),
-      chainedPlanEntry('p1', 'q', '第一条 plan'),
-      chainedPlanEntry('p3', 'p1', '第二条 plan'),
-    ])
-    const view = extractPlanStateFromSessionFile(filePath)
-    expect(view.requirement).toBe('第二条 plan')
   })
 })
 });

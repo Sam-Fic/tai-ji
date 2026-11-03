@@ -47,6 +47,7 @@ import { getPiInvocation } from "./pi-invocation.ts";
 import {
   buildExitErrorText,
   collectOutcome,
+  describeKillFailure,
   describePromptAckFailure,
   type CollectedOutcome,
   type CollectResultArgs,
@@ -68,6 +69,7 @@ import {
   createPromptRunCounters,
   createSessionIdentityTracker,
   reportChildSpawned,
+  settleExitAsKillFailed,
   wireChildStdoutPump,
   type PromptRunCounters,
   type RunEndState,
@@ -367,9 +369,10 @@ function sendPromptWithAck(
  *
  * 生命周期（[modeless 波2] 唯一语义）：正常轮终 = agent_settled（真空闲）resolve
  * （exit 0 口径）并收割子进程；异常/abort = 子进程 close（exit/error，128+ 折算
- * 判据）。abort（signal）经 spawnEngineChild 的 signal 通道发 SIGTERM，升级链由
- * killPiProcess 兜底；[M2 ⑦] prepare 期已 abort（spawn 前 signal 置位）= 不 spawn
- * 短路取消终态（见 collectCancelledBeforeSpawn）。
+ * 判据）。abort（signal）经 spawnEngineChild 的 signal 通道发 SIGTERM，SIGKILL
+ * 兜底由 killPiProcess 承担（杀链失败经 runEnd.killFailed 事实位立即终态，不等
+ * close——见 killChild）；[M2 ⑦] prepare 期已 abort（spawn 前 signal 置位）= 不
+ * spawn 短路取消终态（见 collectCancelledBeforeSpawn）。
  */
 /**
  * stderr tee（W11）：实例维度路径 + 懒打开 + 尺寸轮转（超 TAIJI_LOG_MAX_BYTES rename
@@ -614,8 +617,9 @@ function resolveTerminalErrorFact(runEnd: RunEndState, params: SpawnRunParams): 
  *（endedCleanly=true 且有真实轮数，如外部杀死）不受本判据影响（有轮 = 有工作证据，
  * 非空成功）；abort 已裁决的同窗被杀由取消事实收口，不落成功。
  *
- * 错误文案优先序：送达失败（tracker 结算事实）> 停因事实（收尾边沿 / 取消竞窗补落，
- * 死因事实优先于推断与裸退出码）> 未解释空轮（失联推断）> 退出码裸文案。
+ * 错误文案优先序：送达失败（tracker 结算事实）> 杀链失败（killFailed——引擎侧杀链
+ * 违约，进程仍活，run 终态在此合成）> 停因事实（收尾边沿 / 取消竞窗补落，死因事实
+ * 优先于推断与裸退出码）> 未解释空轮（失联推断）> 退出码裸文案。
  */
 function deriveRunVerdict(
   record: ReturnType<typeof createReplayRecord>,
@@ -624,6 +628,11 @@ function deriveRunVerdict(
   ackFailure: PromptAckResult | undefined,
   terminalErrorFact: EngineRoundErrorFact | undefined,
 ): { success: boolean; error: string | undefined } {
+  // [kill-chain-architecture §3.3] 杀链失败事实位在场 = 引擎侧杀链违约（进程仍活），
+  // run 终态在此合成——退出码是本侧手动 settle 的 KILL_FAILED_EXIT_CODE（非
+  // 128+signo 收割口径）。文案优先序在 ackFailure 之后：送达失败是「为什么杀」的
+  // 既有契约事实（S7/S7b 锁定），kill 失败是其后的杀链违约。
+  const killFailed = runEnd.killFailed;
   const unexplainedEmptyExit =
     exitCode === 0 &&
     ackFailure === undefined &&
@@ -631,9 +640,10 @@ function deriveRunVerdict(
     runEnd.promptHandledNoRun !== true &&
     recordHasNoWork(record);
   const success =
-    exitCode === 0 && ackFailure === undefined && terminalErrorFact === undefined && !unexplainedEmptyExit;
+    exitCode === 0 && ackFailure === undefined && killFailed === undefined && terminalErrorFact === undefined && !unexplainedEmptyExit;
   if (success) return { success, error: undefined };
   if (ackFailure !== undefined) return { success, error: describePromptAckFailure(ackFailure) };
+  if (killFailed !== undefined) return { success, error: describeKillFailure(killFailed) };
   if (terminalErrorFact !== undefined) return { success, error: terminalErrorFact.errorMessage };
   if (unexplainedEmptyExit) {
     return {
@@ -808,11 +818,13 @@ export async function runSpawnOnce(
     // wireChildStdoutPump）；env 未宣告时 undefined（零 fd3 触点，既有路径不变）。
     rawMirror = createFd3RawMirrorWriter({ recordId: params.recordId, env: process.env });
 
-    // [U1 归并] 杀链切 pi-rpc killPiProcess（SIGKILL 直杀 + 立即 resolve，与
-    // runtime 主链路同源；原「SIGCONT → SIGTERM → grace → SIGKILL」阶梯随
-    // ADR-0122 防御清理退役）。killChild 是 fire-and-forget，无 settle 消费方。
+    // [U1 归并 + kill-chain-architecture §3.3] 杀链切 pi-rpc killPiProcess（SIGKILL
+    // 直杀 + 三值判别，与 runtime 主链路同源）。成功两类（signal-delivered /
+    // already-dead）无后续动作——close 收尾照常；失败（进程仍活）经 pump 的手动
+    // settle 通道落终态（settleExitAsKillFailed：killFailed 事实位 + exitPromise
+    // 立即 settle，幂等门吸收赛跑）——杀不死的进程永不发 close，等事件 = run 永悬挂。
     const killChild = (): void => {
-      void killPiProcess(child);
+      void killPiProcess(child).catch((err) => settleExitAsKillFailed({ child, recordId: params.recordId, runEnd }, err));
     };
     // agent_settled 收割（[modeless 波2] 唯一终结语义）：轮终（真空闲）resolve 后的
     // 主动 kill，close 带信号但语义是成功（旧 core waitForChildExit 的 code ?? 0

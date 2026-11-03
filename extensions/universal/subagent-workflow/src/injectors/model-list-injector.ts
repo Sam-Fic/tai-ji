@@ -41,7 +41,7 @@ import type {
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 
 // C5①/C5⑦：渲染统一走 core barrel（formatModelList + ModelEntry 类型为 barrel 导出范围）
-import { formatModelList, type ModelEntry } from "@zhushanwen/subagent-core";
+import { formatModelList, getModelConfigService, scopedModelKey, type ModelEntry } from "@zhushanwen/subagent-core";
 import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
 
 const logger = getLogger("injector");
@@ -68,9 +68,12 @@ function toModelEntry(model: Model<Api>): ModelEntry {
 /**
  * 注册 before_agent_start handler，注入 `<available_provider_models>` 段。
  *
- * 每 turn 从 ctx.modelRegistry.getAvailable() 同步取快照渲染注入；空列表不
- * 返回 systemPrompt；任何异常被吞掉（记日志），不阻断 agent turn。与 subagent/
- * workflow 注入 handler 链式（pi 串联多 handler 的 systemPrompt 返回值）。
+ * 每 turn 从 ctx.modelRegistry.getAvailable() 同步取快照，经 scoped-models 白名单
+ * 过滤后渲染注入（白名单非空时 LLM 只看到白名单内模型——与派发校验
+ * assertModelWithinScoped 同一清单同一归一化口径，源头减少白名单外派发）；
+ * 白名单为空 = 未启用 = 全量。单例缺席（生产不可达：宿主形态 before_agent_start
+ * 前必有 session_start 装配；被派发子进程不装注入器）回退全量。
+ * 空列表不返回 systemPrompt；任何异常被吞掉（记日志），不阻断 agent turn。
  */
 export function setupModelListInjector(pi: ExtensionAPI): void {
 	pi.on(
@@ -80,10 +83,13 @@ export function setupModelListInjector(pi: ExtensionAPI): void {
 			ctx: ExtensionContext,
 		): Promise<BeforeAgentStartEventResult | void> => {
 			try {
-				const injection = formatModelList(
-					ctx.modelRegistry.getAvailable().map(toModelEntry),
-					{ guide: MODEL_LIST_GUIDE },
-				);
+				let models = ctx.modelRegistry.getAvailable().map(toModelEntry);
+				const scoped = getModelConfigService()?.getScopedModels() ?? [];
+				if (scoped.length > 0) {
+					const allowed = new Set(scoped.map(scopedModelKey));
+					models = models.filter((m) => allowed.has(`${m.provider}/${m.id}`));
+				}
+				const injection = formatModelList(models, { guide: MODEL_LIST_GUIDE });
 				if (!injection) return;
 				return { systemPrompt: event.systemPrompt + injection };
 			} catch (err) {

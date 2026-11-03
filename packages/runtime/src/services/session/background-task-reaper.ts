@@ -118,9 +118,11 @@ export function readRegistryEntriesWithStatus(
 }
 
 /**
- * 读取 registry 全量条目。文件不存在 / 读失败 / 解析失败均返回空表（收殓不因
- * registry 问题崩溃）；解析失败时重命名 .corrupt 保留现场 + warn + 按空表继续
- * （「空表重建」由后续写入自然完成，不立即写空文件）。
+ * 读取 registry 全量条目。文件不存在 / 解析失败返回空表（解析失败时重命名 .corrupt
+ * 保留现场 + warn + 按空表继续，「空表重建」由后续写入自然完成，不立即写空文件）；
+ * 读失败（权限等）上抛——收殓扫描侧由 reapOneSessionSync 目录级 catch 跳过本目录
+ * （下个收殓事件重试），RMW 写侧由 writeOrphanedTerminal catch 返回 false（条目
+ * 停留原状重试）。禁止折叠成空表：空表合并写回 = 空表重建唯一登记文件。
  */
 export function readRegistryEntries(registryPath: string): BackgroundTaskRegistryEntry[] {
   return readRegistryEntriesWithStatus(registryPath).entries

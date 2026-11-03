@@ -3,15 +3,22 @@
  *
  * 职责（单一变化原因「文件树编排」）：cwd 解析 / 越界统一守门 / 懒加载分层 / ignore 标记 / readFile 截断。
  *
- * 数据流（§4 功能1）：listTree → sessionService.getSummary(sid).cwd → isUnderOrEqual 守门 →
+ * 数据流（§4 功能1）：listTree → requireCwd → resolveSessionContext 两级解析（内存活跃表 →
+ *   磁盘元数据带缓存，btw 两形态处置，U4/D5，见下方注释块）→ isUnderOrEqual 守门 →
  *   executor.listDir ×N（1+M 次，F-1：顶层 1 次 + 每个顶层 dir 再 1 次拿一级子）→
  *   ignore-parser 标记（命中的节点标 ignored=true，前端按开关过滤）→ FileNode[]（path 相对 cwd，不含前导斜杠）。
  *
  * 分层：FileService 经 IFileExecutor（port）做 IO，经 ignore-parser 纯函数 kernel（本仓 infra/fs/，
- *   compileIgnoreRules/matchPath）做 ignore 计算，经 ISessionService 取 cwd。不直接 import node:fs（AC-2 grep 验证）。
+ *   compileIgnoreRules/matchPath）做 ignore 计算，cwd 经 resolveSessionContext 两级解析
+ *   （U4/D5：内存活跃表 → 磁盘元数据带缓存，第一级读 ISessionService 内存活跃表）。
+ *   不直接 import node:fs（AC-2 grep 验证）。
  *
  * 安全（NFR-AC-S2 越界统一守门）：
- * - cwd 取自 sessionService.getSummary(sid).cwd（session.create 时确立的受信工作目录）
+ * - cwd 经 resolveSessionContext 两级解析（U4/D5，见下方注释块与 requireCwd）：
+ *   第一级 = 内存活跃表在册会话（ISessionService，session.create 时确立的受信工作目录）；
+ *   第二级 = 磁盘会话文件 header 登记的 cwd——session.create 时确立的同一事实源的落盘
+ *   形态，非推断值（受信论证同 git-service resolveSessionCwd）；btw 不在册线两级 miss →
+ *   btw-line 形态（消费方转「不支持」错误），不以布局推断的 cwd 作守门基准
  * - expandDir/readFile 的 path：path.resolve(cwd, path) 后必须落在 cwd 之下（isUnderOrEqual），
  *   防 `../../etc/passwd` 路径穿越 → 越界抛 FileError('out_of_cwd')。
  *   （listTree 入口对 cwd 自身守门，恒 true，保持入口统一守门模式。）
@@ -24,10 +31,80 @@ import { resolve as resolvePath, join, relative, isAbsolute } from 'node:path'
 import type { FileNode } from '@taiji/shared'
 import type { IgnoreMatcher } from '../infra/fs/ignore-parser.js'
 import { compileIgnoreRules, matchPath } from '../infra/fs/ignore-parser.js'
+// [startup-readiness U4/D5] 纯读两级解析的第二级源：infra 会话定位单函数
+// （session-file-locator.ts：磁盘段 findScannedSessionFileById 返回 filePath + cwd，
+// btw 布局段 findBtwLineFileByLayout 判在册外形态）——与 SessionStateQuery 冷读定位链
+// 同源同参（dmg-r1-9），本链不做自己的 scan+find，换源只改定位单函数实装。
+import { findBtwLineFileByLayout, findScannedSessionFileById } from '../infra/pi/session-file-locator.js'
 import { isUnderOrEqual, expandHome, canonicalizePath } from '../utils/path-utils.js'
 import type { IFileExecutor, FsEntry } from './ports/file-executor.js'
 import type { ISessionService, IFileService } from '../interfaces.js'
 import { FileError } from './file-error.js'
+
+// ── [startup-readiness U4/D5] 纯读会话上下文两级解析 ─────────────────────────
+//
+// 设计 D5：resolveSessionContext(sessionId) 两级解析——内存活跃表 → 磁盘元数据（带
+// 缓存）。纯读 RPC（file.search / file.tree / git.*）用它；需要 pi 进程的走 ensureActive。
+// 两级解析结构与内存优先级为终态（不随重写退场），第二级源随重写 G11 收敛换源
+// （交接语义 D5：切换不晚于重写 M5 旧文件删除波次）——本实装第二级 = infra 会话定位
+// 单函数（SC21：未迁移形态），换源时只替换定位单函数实装（session-file-locator.ts），
+// 两级结构与消费方不动；冷读链（session-state-query getState 段 2 / 段 4）消费同一批
+// 单函数，两链同源同参由对拍测试机器锁定（见下方同源单函数注记）。
+//
+// btw 两形态处置（D5）：在册 btw 线经既有 registerSession 汇聚点注册进内存活跃表、
+// 线 cwd = 主会话 cwd——第一级照常解析、行为不变；不在册（runtime 重启窗口内的线，
+// 其会话文件落 ext-sessions/<mainSid>/btw/、不在 sessions/ 扫描面）两级 miss 且
+// 布局定位命中 → 显式返回 btw-line 形态（消费方转「不支持」可区分错误，不静默走
+// 布局推断 cwd——推断出的 cwd 未经活跃注册确认，纯读语义不成立）。
+//
+// 扫描纪律（SC18 force 旁路）：第二级是正确性敏感的单 session 定位消费方，强制
+// force 旁路目录 TTL（pi 是外部写方，刚落盘会话在 TTL 窗口内必须解析到）。
+
+/** 纯读会话上下文解析结果（D5 两级解析的判别产物）。 */
+export type SessionContextResolution =
+  /** 第一级命中：内存活跃表在册（含在册 btw 线——cwd = 主会话 cwd，行为不变）。 */
+  | { kind: 'active'; cwd: string }
+  /** 第二级命中：磁盘元数据（未迁移形态会话，cwd 来自会话文件 header）。 */
+  | { kind: 'disk'; cwd: string; filePath: string }
+  /** 两级 miss + btw 布局命中：重启窗口内的不在册 btw 线（纯读「不支持」形态）。 */
+  | { kind: 'btw-line' }
+  /** 两级 miss 且非 btw 线：会话不存在（含延迟落盘窗口 / 已清理）。 */
+  | { kind: 'not-found' }
+
+/**
+ * 纯读会话上下文两级解析（D5；file-service / git-service 纯读 RPC 共用的定位单点）。
+ *
+ * @param sessionId 目标会话 id（主会话或 btw 线 id——线 id 第一级经注册表在册、
+ *   第二级经 btw 布局定位判定，两形态见上方 btw 处置注释）
+ * @param lookupActiveCwd 第一级读口（注入 sessionService 内存活跃表的 cwd 读取闭包，
+ *   services → 接口单向；返回空串按未命中处理）
+ */
+export function resolveSessionContext(
+  sessionId: string,
+  lookupActiveCwd: (sessionId: string) => string | undefined,
+): SessionContextResolution {
+  const activeCwd = lookupActiveCwd(sessionId)
+  if (activeCwd !== undefined && activeCwd !== '') {
+    return { kind: 'active', cwd: activeCwd }
+  }
+  // [同源单函数 dmg-r1-9] 磁盘段与 btw 布局段都经 infra 会话定位单函数
+  // （session-file-locator.ts），与 SessionStateQuery 冷读定位链（session-state-query.ts
+  // getState 段 2 / 段 4，经注入缝）同源同参：磁盘段 = findScannedSessionFileById
+  // （scanPiSessions({ force: true }) 全扫按 id 匹配的唯一实装，返回 filePath + cwd +
+  // scannedDirCount，两链各取所需）；btw 布局段 = findBtwLineFileByLayout（唯一实装，
+  // 两链同参）。两链判别产物各异（本链出 cwd / btw-line 判别形态；冷读链出 filePath +
+  // scannedDirCount 埋点）——同源同参由 src/services/session/__tests__/
+  // session-locate-single-source.test.ts 对拍锁定（机器绑定：任一链改走别的定位源或
+  // 参数即红）；重写 G11/M5 换源时只替换定位单函数实装，两链同步生效，不许只换一链。
+  const scanned = findScannedSessionFileById(sessionId)
+  if (scanned.filePath !== undefined && scanned.cwd !== undefined) {
+    return { kind: 'disk', cwd: scanned.cwd, filePath: scanned.filePath }
+  }
+  if (findBtwLineFileByLayout(sessionId).filePath !== undefined) {
+    return { kind: 'btw-line' }
+  }
+  return { kind: 'not-found' }
+}
 
 /** FileService 依赖（accept deps，可测性：executor + sessionService 经构造注入）。 */
 export interface FileServiceOptions {
@@ -343,12 +420,27 @@ export class FileService implements IFileService {
 
   // ── 私有编排方法 ──
 
-  /** 取 cwd；空（session 不存在）→ session_not_found。 */
+  /**
+   * 取 cwd；空（session 不存在）→ session_not_found。
+   *
+   * [startup-readiness U4/D5] 纯读两级解析换源：第一级内存活跃表（现状语义不变——
+   * kill -9 恢复期活跃表空时不再直接报错），第二级磁盘元数据（未迁移形态会话的
+   * header cwd，恢复期纯读可用）；btw 不在册线（重启窗口）→ 独立错误码
+   * `btw_line_inactive`（与 session_not_found 可区分——该形态纯读不支持是设计裁决，
+   * 不是「会话不存在」）；两级 miss → session_not_found（现状语义）。
+   */
   private requireCwd(sessionId: string): string {
-    const summary = this.opts.sessionService.getSummary(sessionId)
-    const cwd = summary?.cwd ?? ''
-    if (!cwd) throw new FileError('session_not_found', `Session 不存在或无 cwd: ${sessionId}`)
-    return cwd
+    const resolution = resolveSessionContext(sessionId, (sid) =>
+      this.opts.sessionService.getSummary(sid)?.cwd,
+    )
+    if (resolution.kind === 'active' || resolution.kind === 'disk') return resolution.cwd
+    if (resolution.kind === 'btw-line') {
+      throw new FileError(
+        'btw_line_inactive',
+        `btw 线未在册（runtime 重启窗口内），纯读不支持: ${sessionId}`,
+      )
+    }
+    throw new FileError('session_not_found', `Session 不存在或无 cwd: ${sessionId}`)
   }
 
   /**

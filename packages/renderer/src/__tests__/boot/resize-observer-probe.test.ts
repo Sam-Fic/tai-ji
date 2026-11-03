@@ -48,8 +48,8 @@ async function installProbe(): Promise<unknown> {
 /** console.debug 中带探针前缀的窗尾输出行（与 installed 提示行按 ' window #N' 互斥区分）。 */
 function probeDebugLines(spy: ReturnType<typeof vi.spyOn>): string[] {
   return spy.mock.calls
-    .map((c) => c[0])
-    .filter((a): a is string => typeof a === 'string' && a.startsWith('[ro-probe]'))
+    .map((c: unknown[]) => c[0])
+    .filter((a: unknown): a is string => typeof a === 'string' && a.startsWith('[ro-probe]'))
 }
 
 /** 安装后 new 一个 RO 实例并触发回调 n 次（模拟该观察点的窗口内活动）。 */

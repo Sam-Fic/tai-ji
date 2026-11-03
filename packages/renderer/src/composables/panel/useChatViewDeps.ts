@@ -55,7 +55,6 @@ import { renderMarkdownSegments } from '@taiji/ui/features/chat/markdown'
 import {
   createIncrementalRenderCache,
   renderIncremental,
-  STREAMING_FENCE_SILENCE_MS,
 } from '@taiji/ui/features/chat/markdown-incremental'
 import { renderMermaid } from '@taiji/ui/features/chat/mermaid'
 import { collectBasenames, collectFilePaths } from '@/lib/file-basename'
@@ -328,7 +327,6 @@ export function useChatViewDeps(
       )
       return { ...result, cache: c }
     },
-    streamingFenceSilenceMs: STREAMING_FENCE_SILENCE_MS,
     renderMermaid: (source: string, theme: 'dark' | 'light') => renderMermaid(source, theme),
 
     // [tool-detail-rich] 工具展开细节富渲染（read 代码块 / write git diff / edit patch）：

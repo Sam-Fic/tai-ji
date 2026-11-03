@@ -21,7 +21,6 @@ import type {
 } from '@taiji/shared'
 import {
   BASH_RPC_TIMEOUT_MS,
-  COMPACT_RPC_TIMEOUT_MS,
   RENDERER_RPC_MARGIN_MS,
 } from '@taiji/shared'
 import { isNotDeliveredError } from '../../errors'
@@ -205,17 +204,17 @@ export function editDelivery(
 // runtime transport 路由 + dispatcher 转发路径删除同批退役（u5a 退役条件兑现）。
 
 /**
- * 压缩上下文（#6：触发 runtime session.compact）。
- * runtime 生命周期推送：session.compacting（开始）→ session.compacted（完成/失败）。
- * 这些广播走 session 通道，由 useChat 的会话级订阅消费，驱动 store 的 isCompacting 状态。
+ * 手动触发后台压缩（C2 /compact 后台化：session.compactBackground，#6 触发语义不变、
+ * 等待语义变更）——触发即回执（runtime 受理后 fire-and-forget 送达扩展后台管理器），
+ * 压缩本体分钟级在 pi 进程后台执行，完成事实经 smart-context 落盘信号链（对话流分界行）
+ * 与完成通知到达。压缩进行中的 session.compacting / compaction_end 生命周期推送仍由
+ * interpreter 从 pi 事件编排（会话级订阅消费），本 RPC 不再同步等待压缩全程。
  *
- * 超时 = COMPACT_RPC_TIMEOUT_MS + RENDERER_RPC_MARGIN_MS（30min + 60s = 1860s，backstop）：
- * 校准链「renderer = runtime 第一刀 + 余量」（timeout-slow-flow-wallclock D3），双端引用
- * 同一 shared 常量编译期对齐——结构保证 renderer 恒不先于 runtime 判死（现状双端同值
- * 300s 零余量、renderer 因传输延迟恒先报错的竞态由此外科切除；65s 误杀大 session 前科同根）。
+ * 超时 = RPC_BACKSTOP_TIMEOUT_MS：受理型回执（reply 在 ensureActive + 命令投递前即返回，
+ * 分钟级压缩全程不占请求窗口），旧 30min 压缩墙钟随同步链退役。
  */
-export function compact(sessionId: string, customInstructions?: string): Promise<void> {
-  return sendCommand('session.compact', { sessionId, customInstructions }, COMPACT_RPC_TIMEOUT_MS + RENDERER_RPC_MARGIN_MS)
+export function compactBackground(sessionId: string, customInstructions?: string): Promise<void> {
+  return sendCommand('session.compactBackground', { sessionId, customInstructions }, RPC_BACKSTOP_TIMEOUT_MS)
 }
 
 /** 中断当前回合（DEFERRED 流转，§9 G-025） */

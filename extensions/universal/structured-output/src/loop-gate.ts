@@ -110,19 +110,15 @@ function requiredBulletPrefix(bulletPath: string, firstField: string): string {
  * 的字段）——keys 分桶被错误激活，与常规 token 并集对流（同分桶陷阱的伪 AP 变体，
  * 漏杀方向）。精确化后逐行匹配路径位之后的固定文案，字段名在冒号前不可能命中：
  *
- * 覆盖两种实装形态（均为固定文案，字段名不可能携带）：
- *   1. pi-ai 参数层 bullet（pi-ai 0.84.1 dist/utils/validation.js + typebox 1.3.7
- *      Compile 探针核实：message 恒为小写 "must not have additional properties"，
- *      行形态 `  - <path>: must not have additional properties`）——行级后缀匹配
- *      AP_LINE_SUFFIX_RE；路径位即 AP 层路径（root / a / a.b / list.0，
- *      formatValidationPath 对 instancePath 点分），供嵌套 keys 下钻（R4-F2）。
- *   2. 日常模式 ajv（execute.ts instancePath 拼接形态，ajv locale 模板大写 "must
- *      NOT have additional properties"）——模板词组含空格与固定语序，字段名不可能
- *      携带。该形态无 "Received arguments:" 回显段，keys 分桶天然不激活
- *      （hasApError 仅作标记；门禁仅 workflow 模式装配，此形态实为防御性保留）。
+ * 覆盖实装形态（固定文案，字段名不可能携带）：pi-ai 参数层 bullet（pi-ai 0.84.1
+ * dist/utils/validation.js + typebox 1.3.7 Compile 探针核实：message 恒为小写
+ * "must not have additional properties"，行形态 `  - <path>: must not have
+ * additional properties`）——行级后缀匹配 AP_LINE_SUFFIX_RE；路径位即 AP 层路径
+ * （root / a / a.b / list.0，formatValidationPath 对 instancePath 点分），供嵌套
+ * keys 下钻（R4-F2）。（日常模式 ajv 大写 "must NOT" 形态分支已删：门禁仅
+ * workflow 模式装配，日常 ajv 错误文本到不了这里。）
  */
 const AP_LINE_SUFFIX_RE = /^(.*):\s*must not have additional properties\s*$/;
-const AP_AJV_MESSAGE_RE = /must NOT have additional properties/;
 /** pi-ai bullet message 位（冒号后）的 AP 固定文案原文（见上方探针核实记录）。 */
 const AP_BULLET_MESSAGE = "must not have additional properties";
 
@@ -197,7 +193,7 @@ function extractErrorFieldTokens(errorLines: string): {
 	}
 	return {
 		tokens: [...tokens],
-		hasApError: apPaths.size > 0 || AP_AJV_MESSAGE_RE.test(errorLines),
+		hasApError: apPaths.size > 0,
 		apPaths: [...apPaths],
 	};
 }

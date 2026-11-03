@@ -41,6 +41,14 @@
  * - extension.ui_request method 可超界（editor）→ kind 兜底 'input' + 原始 method 经
  *   DialogRequest 索引签名保留（request.method 不丢信息，s4 适配层可恢复）
  *
+ * 3 个「已知不归一」型（handler = ignoreFrame，返回 undefined）：plugin:event、
+ *   plugin:uiRequestExpired、plugin:permissionRequestExpired——消费方均在 bridge
+ *   之外独立订阅 WS global 通道（settings/transport.ts onPluginEvent、
+ *   shell-adapters.ts onGlobal、permission-request-controller.ts onGlobal），bridge
+ *   再转发只会造出无订阅者的死事件或与既有消费方双重处理。登记仅为让它们脱离
+ *   unknown 路径（source filter 对 plugin:* 前缀全放行，不登记则每次触发打一条
+ *   error 噪音），行为 = 安全忽略（不 emit 任何事件）。
+ *
  * ERR2（C2 契约）：未知 type → error（'unknown message type: <type>'）；payload 解析
  * 失败 → error（'<type> payload parse failed: ...'）。两条路径都不静默吞。
  */
@@ -365,7 +373,16 @@ function parseExtensionUiRequest(msg: IncomingPluginMessage): InternalEvent | nu
 
 // ── MessageBusBridge ───────────────────────────────────────────────
 
-const PLUGIN_HANDLERS: Record<string, (msg: IncomingPluginMessage) => InternalEvent | null> = {
+/**
+ * 「已知不归一」帧的安全忽略（返回 undefined，与 null 的 parse-failed 语义区分）。
+ * 三型消费方均在 bridge 之外独立订阅 WS global 通道（见文件头「已知不归一」节），
+ * payload 校验/消费归那些订阅点，bridge 不做第二次解释。
+ */
+function ignoreFrame(_msg: IncomingPluginMessage): undefined {
+  return undefined
+}
+
+const PLUGIN_HANDLERS: Record<string, (msg: IncomingPluginMessage) => InternalEvent | null | undefined> = {
   'plugin:permissionRequest': parsePermissionRequest,
   'plugin:permissionRequestResolved': parsePermissionRequestResolved,
   'plugin:crashed': parseCrashed,
@@ -377,6 +394,10 @@ const PLUGIN_HANDLERS: Record<string, (msg: IncomingPluginMessage) => InternalEv
   'plugin:viewUpdate': parseViewUpdate,
   'plugin:headerActionUpdate': parseHeaderActionUpdate,
   'plugin:commandRegistered': parseCommandRegistered,
+  // 三型「已知不归一」（见 ignoreFrame）：登记脱离 unknown 路径，bridge 侧不转发
+  'plugin:event': ignoreFrame,
+  'plugin:uiRequestExpired': ignoreFrame,
+  'plugin:permissionRequestExpired': ignoreFrame,
 }
 
 const EXTENSION_HANDLERS: Record<string, (msg: IncomingPluginMessage) => InternalEvent | null> = {
@@ -413,7 +434,8 @@ export class MessageBusBridge {
     this.unsubscribe = deps.source.subscribe((msg) => this.handleMessage(msg))
   }
 
-  /** 归一分发一条下行消息。未知 type / payload 解析失败 → error 事件（ERR2，不静默吞）。 */
+  /** 归一分发一条下行消息。未知 type / payload 解析失败 → error 事件（ERR2，不静默吞）；
+   *  handler 返回 undefined（「已知不归一」型）→ 安全忽略，不 emit 任何事件。 */
   private handleMessage(msg: IncomingPluginMessage): void {
     const handler = PLUGIN_HANDLERS[msg.type] ?? EXTENSION_HANDLERS[msg.type]
     if (!handler) {
@@ -421,6 +443,7 @@ export class MessageBusBridge {
       return
     }
     const event = handler(msg)
+    if (event === undefined) return
     if (event === null) {
       this.bus.emit({ kind: 'error', source: msg.type, message: `${msg.type} payload parse failed: unparseable shape` })
       return

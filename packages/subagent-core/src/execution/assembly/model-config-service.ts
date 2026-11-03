@@ -13,6 +13,7 @@ import {
   readGlobalConfig,
   type GlobalConfigReadResult,
 } from "./config.ts";
+import { readScopedModels } from "./scoped-models.ts";
 import {
   type AgentConfig,
   type ModelInfo,
@@ -217,8 +218,25 @@ export class ModelConfigService {
   ): ResolvedModel {
     this.assertReady();
     const config = agentConfig ?? (agentRef ? this.agentRegistry.loadByPath(agentRef) : undefined);
-    // ctxModel 优先用显式传入（execute 路径），其次用 session 缓存（renderCall 路径）
-    return resolveModel(config, this.modelRegistry!, override, ctxModel ?? this._ctxModel, userOverride);
+    // ctxModel 优先用显式传入（execute 路径），其次用 session 缓存（renderCall 路径）。
+    // scopedAllowList 现读 providers.json（文件即真相，无快照陈旧；空数组 = 未启用）。
+    return resolveModel(
+      config,
+      this.modelRegistry!,
+      override,
+      ctxModel ?? this._ctxModel,
+      userOverride,
+      readScopedModels(this.agentRegistryDir),
+    );
+  }
+
+  /**
+   * scoped-models 白名单（现读 `<agentDir>/config/providers.json`；读取与归一化
+   * 单源见 assembly/scoped-models.ts）。消费方 = catalog 断言调用方（workflow
+   * 创建期 / 派发期 / resume）与模型清单注入器。
+   */
+  getScopedModels(): string[] {
+    return readScopedModels(this.agentRegistryDir);
   }
 
   /** 查询 agent 配置（SubagentService 内部判定 defaultBackground 用）。

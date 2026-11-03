@@ -4,7 +4,7 @@ import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isErrnoWithCode } from "@zhushanwen/pi-ext-guards";
 
-// 技能执行门禁（resolveSkills + SkillResolution）单源在 ADR-0074 共享包
+// 技能执行门禁（resolveSkills + SkillResolution）单源在 ADR-0096 共享包
 // @zhushanwen/pi-exec-skills（plan-mode-audit-remediation 批次 4②b 迁入，含空请求
 // fail-fast 契约）；经此处 re-export 维持既有消费路径（tool.ts / command.ts / 测试
 // import "./enter.js"）不动

@@ -40,7 +40,7 @@ export {
   extractAgentCallSessionId,
 } from '@taiji/shared'
 import { createInflightDedup } from '@taiji/core/foundation/create-inflight-dedup'
-import { createEmptyResultStrikeGuard, createPartitionedLoadState, createPartitionedRecords } from '../lib/partitioned-session-records'
+import { createPartitionedLoadState, createPartitionedRecords } from '../lib/partitioned-session-records'
 import { session as sessionApi } from '@/api'
 
 // ── [P3/D6] progress 派生视图消费（纯函数）──
@@ -164,14 +164,6 @@ export const useWorkflowStore = defineStore('workflow', () => {
     inflightDedup.delete(sessionId)
     dirtyWorkflows.delete(sessionId)
   }
-
-  /**
-   * loadWorkflows 空结果检查（R1 business-logic S3，与 subagent.ts 同款）：达到 LIMIT 判
-   * 真实删空放行覆盖。strike 语义单源在 createEmptyResultStrikeGuard JSDoc
-   * （lib/partitioned-session-records），此处只声明本 store 的阈值与 log tag。
-   */
-  const EMPTY_RESULT_STRIKE_LIMIT = 2
-  const strikeGuard = createEmptyResultStrikeGuard(EMPTY_RESULT_STRIKE_LIMIT, 'workflow-store', 'getWorkflows')
 
   // [W15] 防御性清理：inflightDedup / dirtyWorkflows 是非响应式 Map（不在 ref 里），HMR /
   // store dispose 时主动 clear，防旧实例的 drainDirty 读到已废弃 store 的簿记。参照
@@ -518,16 +510,18 @@ export const useWorkflowStore = defineStore('workflow', () => {
    */
   function triggerWorkflowReload(sessionId: string, status: string): void {
     const sid = sessionId
-    // 增量信号 → 立即拉取完整列表；running 信号后列表为空且本次拉取成功 = v2 注册/终态
-    // 条目可能未落盘（pi 延迟写入时序），显式 warn 出声（诊断信号，非补偿——不延迟重新
-    // 拉取）。拉取失败（loadError 分区在场）不打本 warn：此时列表空是「RPC 拉不到」的
-    // 后果而非「数据未落盘」，失败留痕已在 performLoadWorkflows 的 console.error +
-    // loadError 分区，双重出声会把断连期间的拉取失败误报成未落盘（2026-10-30 prod 实例）。
+    // 增量信号 → 立即拉取完整列表；running 信号后列表为空先归因再出声（两级分流，
+    // 空列表 ≠ 未落盘）：① 拉取失败（loadError 分区置位）→ console.error 已留痕，不打
+    // 「未落盘」warn（RPC 拉不到 ≠ 数据未落盘）；② oversize 降级读（主 session 文件
+    // >32MB，records 恒空、分区不覆盖）→ 已知设计内行为（[RT-4#8]，runtime 预检已有
+    // warn 留痕 + oversizeOf facet 驱动面板降级提示），此处静默跳过；③ 两者皆无且列表
+    // 真空 → 才可能是「未落盘」，显式 warn（诊断信号，非补偿——不延迟重新拉取）
     void loadWorkflows(sid).then(() => {
       if (status !== 'running' || getRecordsBySession(sid).length > 0) return
       if (loadErrorOf(sid) !== null) return
+      if (oversizeOf(sid)) return
       console.warn(
-        '[workflow-store] running 信号后 workflow 列表为空：v2 注册/终态条目可能未落盘（pi 延迟写入），events-projection 派生视图为空，终态显示缺失',
+        '[workflow-store] running 信号后 workflow 列表为空：workflow 注册/终态条目可能未落盘（pi 延迟写入），终态显示缺失',
         sid,
       )
     })
@@ -548,8 +542,6 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   /** 清空所有 workflow 分区 + 清 agentcall 映射（全局重置场景用） */
   function clearWorkflows(): void {
-    // strike 簿记按当前分区键重置（残留 strike → 重新预置后首次空结果误判删空）。
-    for (const sid of partition.recordsBySession.value.keys()) strikeGuard.reset(sid)
     // RD-3#12：整表替换 records + 全清 loading/error（+ oversize）三 facet，与 clearSession
     // 全清对齐——残留 loading=true → spinner 永转 / 残留 error → 错误态卡死。
     partition.recordsBySession.value = new Map()

@@ -111,9 +111,11 @@ BASELINE_MODULES = {
     # getState 冷读三支定位（主会话两段扫描 + btw 线存储树布局兜底），自 session-file-utils
     # 拆出（max-lines 软上限；本模块只做「按 id 找文件路径」一类事，与 sidecar IO / 扫描实现
     # 各自单文件一概念）。fs 只读三支 + scanPiSessions force 全扫（spawn 风险点 3：禁
-    # withEphemeralPi），services 侧唯一消费方 = session-state-projection 的冷读 query deps
+    # withEphemeralPi）。services 侧消费方 ×2：① session-state-projection 的冷读 query deps
     # （SessionStateQueryDeps 已留窄注入缝——locateMainSessionFileFromCache/Disk/
-    # locateBtwLineFile 三注入项 docstring 已注明生产绑定目标，端口收编随 R3）。同
+    # locateBtwLineFile 三注入项 docstring 已注明生产绑定目标，端口收编随 R3）；
+    # ② file-service 直引 findBtwLineFileByLayout（file-service.ts import 块，dmg-r1-5
+    # 同源新增：startup-readiness U4/D5 纯读两级解析第二级的 btw 布局定位源）。同
     # session-file-external-scan 族：max-lines 拆分 + 同族受控例外随 R3 收编。
     "session-file-locator",
     # session-model-tail-read（2026-10-07，dmg-r1-5）：session JSONL 的 model_change 显式

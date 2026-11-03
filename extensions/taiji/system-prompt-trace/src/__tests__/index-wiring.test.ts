@@ -157,7 +157,7 @@ describe("index.ts wiring SDK 契约", () => {
 		expect(injected).toBe(h.pi);
 	});
 
-	it("startup（无 previousSessionFile、session 未落盘）→ 首 turn 写 initial v1（appendEntry 形状）；prompt 变化写 change v2 带 diff 摘要", async () => {
+	it("startup（无 previousSessionFile、session 未落盘）→ 首 turn 写 initial v1（appendEntry 形状）；prompt 变化写 change v2", async () => {
 		const ext = await loadExtension();
 		const h = createWiringHarness();
 		ext(h.pi);
@@ -182,7 +182,6 @@ describe("index.ts wiring SDK 契约", () => {
 		expect(h.entries).toHaveLength(2);
 		const change = entryData(h, 1);
 		expect(change).toMatchObject({ version: 2, reason: "change", hash: computePromptHash(P2) });
-		expect(change.parentVersionDiffSummary).toContain("+1 -0 lines");
 	});
 
 	it("fork（previousSessionFile 为 string）→ 直读该文件最后留痕作基线（D2 v5 定案）；hash 未变不写", async () => {
@@ -287,7 +286,7 @@ describe("index.ts wiring SDK 契约", () => {
 		expect(newH.entries).toHaveLength(0);
 	});
 
-	it("stash 基线 hash 与当前不同 → 新 runtime 写 resume 续接版本，diff 摘要 parent 全文来自目标文件", async () => {
+	it("stash 基线 hash 与当前不同 → 新 runtime 写 resume 续接版本（version 自目标文件留痕 +1）", async () => {
 		const targetFile = join(rootDir, "target-session.jsonl");
 		writeSessionEntry(targetFile, {
 			version: 2,
@@ -317,7 +316,6 @@ describe("index.ts wiring SDK 契约", () => {
 		expect(newH.entries).toHaveLength(1);
 		const entry = entryData(newH, 0);
 		expect(entry).toMatchObject({ version: 3, reason: "resume", hash: computePromptHash(P2) });
-		expect(entry.parentVersionDiffSummary).toContain("+1 -0 lines");
 	});
 
 	it("session_before_switch 无 targetSessionFile → 不读文件；resume 兜底必写 v1", async () => {

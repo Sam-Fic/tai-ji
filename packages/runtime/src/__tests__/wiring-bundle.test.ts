@@ -477,6 +477,15 @@ const MUTATION_RPC_REGISTRY: readonly MutationRegistryEntry[] = [
     effectiveFields: ['models'],
   },
   {
+    // C3 独立压缩设置页：触发线 setter——原样落盘（非有限数归默认 / 越界钳制在 helper 层，
+    // 与 renameMaxLength 同款归一位置），reply 读回钳制后生效值
+    type: 'config.setSmartContextAutoCompactThresholdRatio',
+    branch: 'verbatim',
+    contract: 'echo-value',
+    replyKey: 'config.smartContextAutoCompactThresholdRatio',
+    effectiveFields: ['ratio'],
+  },
+  {
     // provider CRUD 的 set 通道：set 原值落盘 + reply 回显 providerId + broadcastProviderList
     // 全量广播（provider-message-handler handleSetProvider）。quotaAutoEnabled（optional，仅新建
     // 分支携带）供 renderer toast（provider-edit-form save 消费 → ProviderPage
@@ -3637,7 +3646,6 @@ function makeMocks_m3_m3_m3_m3(opts: {
   const abortBashFn = vi.fn(async () => {})
   const steerFn = vi.fn(async () => {})
   const followUpFn = vi.fn(async () => {})
-  const compactFn = vi.fn(async () => ({ summary: 'compacted summary', tokensBefore: 100, estimatedTokensAfter: 50 }))
   const client = {
     prompt: promptFn,
     bash: bashFn,
@@ -3645,7 +3653,6 @@ function makeMocks_m3_m3_m3_m3(opts: {
     abortBash: abortBashFn,
     steer: steerFn,
     followUp: followUpFn,
-    compact: compactFn,
     // touchActivity：sendPrompt 入口同步 touch（idle-pi-reclamation D6-1）经 pm.getClient
     // 到达 fake client——fake 须补齐该接口成员
     touchActivity: vi.fn(),
@@ -3685,7 +3692,7 @@ function makeMocks_m3_m3_m3_m3(opts: {
   // [MF-1-7] 注册表经 setDeliveryRegistry 后置注入（审计候选 12：构造期注入参已删）
   const dispatcher = new MessageDispatcher(svc, pm, workspace, messageBus as unknown as IMessageBus)
   dispatcher.setDeliveryRegistry(registry)
-  return { dispatcher, session, promptFn, bashFn, abortFn, abortBashFn, compactFn, svc, pm, messageBus }
+  return { dispatcher, session, promptFn, bashFn, abortFn, abortBashFn, svc, pm, messageBus }
 }
 
 describe('message-dispatcher bus integration', () => {
@@ -3875,93 +3882,10 @@ describe('message-dispatcher bus integration', () => {
     expect(bashAbortedCall![1].payload).toMatchObject({ sessionId: 's1' })
   })
 
-  // ── compact paths ──
-
-  it('compact busy reject → 零 compaction 广播（M4：错误归 interpreter）', async () => {
-    const { dispatcher, messageBus } = makeMocks_m3_m3_m3_m3({ isGenerating: true })
-    await expect(dispatcher.compact('s1')).rejects.toThrow()
-    // 零 compaction bus.publish（dispatcher 退化为预检+RPC+复位，生命周期由 interpreter 唯一编排）
-    const compactionCalls = messageBus.publish.mock.calls.filter(
-      (c: unknown[]) => ['session.compacting', 'session.compacted', 'message.compactionSummary'].includes((c[1] as ServerMessage).type),
-    )
-    expect(compactionCalls).toHaveLength(0)
-  })
-
-  it('compact start → 零 compaction 广播（compacting 由 interpreter 从 compaction_start 驱动）', async () => {
-    const { dispatcher, messageBus, compactFn } = makeMocks_m3_m3_m3_m3()
-    compactFn.mockResolvedValue({ summary: '', tokensBefore: 0, estimatedTokensAfter: 0 })
-    await dispatcher.compact('s1')
-    expect(compactFn).toHaveBeenCalled()
-    const compactionCalls = messageBus.publish.mock.calls.filter(
-      (c: unknown[]) => ['session.compacting', 'session.compacted', 'message.compactionSummary'].includes((c[1] as ServerMessage).type),
-    )
-    expect(compactionCalls).toHaveLength(0)
-  })
-
-  it('compact fail → 零 compaction 广播（失败提示归 interpreter 的 compaction_end{errorMessage}）', async () => {
-    const { dispatcher, messageBus, compactFn } = makeMocks_m3_m3_m3_m3()
-    compactFn.mockRejectedValue(new Error('compact exploded'))
-    await expect(dispatcher.compact('s1')).rejects.toThrow('compact exploded')
-    const compactionCalls = messageBus.publish.mock.calls.filter(
-      (c: unknown[]) => ['session.compacting', 'session.compacted', 'message.compactionSummary'].includes((c[1] as ServerMessage).type),
-    )
-    expect(compactionCalls).toHaveLength(0)
-  })
-
-  it('compact summary → 零 compaction 广播（compactionSummary 由 interpreter 从 compaction_end 驱动）', async () => {
-    const { dispatcher, messageBus, compactFn } = makeMocks_m3_m3_m3_m3()
-    compactFn.mockResolvedValue({ summary: 'Did stuff', tokensBefore: 200, estimatedTokensAfter: 100 })
-    await dispatcher.compact('s1')
-    const compactionCalls = messageBus.publish.mock.calls.filter(
-      (c: unknown[]) => ['session.compacting', 'session.compacted', 'message.compactionSummary'].includes((c[1] as ServerMessage).type),
-    )
-    expect(compactionCalls).toHaveLength(0)
-  })
-
-  it('compact success → 零 compaction 广播（compacted 由 interpreter 从 compaction_end 驱动）', async () => {
-    const { dispatcher, messageBus, compactFn } = makeMocks_m3_m3_m3_m3()
-    compactFn.mockResolvedValue({ summary: 'ok', tokensBefore: 100, estimatedTokensAfter: 50 })
-    await dispatcher.compact('s1')
-    expect(compactFn).toHaveBeenCalled()
-    const compactionCalls = messageBus.publish.mock.calls.filter(
-      (c: unknown[]) => ['session.compacting', 'session.compacted', 'message.compactionSummary'].includes((c[1] as ServerMessage).type),
-    )
-    expect(compactionCalls).toHaveLength(0)
-  })
-
-  it('[RT-4#10] compact 两连发：预检通过即置位（先于 RPC），第二发在事件回流前已被预检拦截', async () => {
-    // 第一发 RPC 挂起（模拟压缩进行中、pi compaction_start 事件未回流的窗口——
-    // 旧实现此窗口 isCompacting 恒 false，第二发预检照样通过 → 双 compaction 事件流）
-    let releaseFirst!: (v: { summary: string; tokensBefore: number; estimatedTokensAfter: number }) => void
-    const firstGate = new Promise<{ summary: string; tokensBefore: number; estimatedTokensAfter: number }>((resolve) => { releaseFirst = resolve })
-    const { dispatcher, compactFn, session } = makeMocks_m3_m3_m3_m3()
-    compactFn.mockImplementation(() => firstGate)
-
-    const first = dispatcher.compact('s1')
-    // async 函数体同步执行到第一个 await（client.compact）：置位（compacting-start）已落 session 视图
-    expect(session.occupancy?.compacting).toBe(true)
-
-    // 第二发：预检读 compacting=true → 拒绝（不发出第二个 RPC）
-    const second = dispatcher.compact('s1')
-    await expect(second).rejects.toThrow('Cannot compact while compaction already running')
-    // 锁定 error envelope code 属性（产生点 = message-dispatcher compact 预检的
-    // Object.assign(new Error(errMsg), { code: 'compact_busy' })）
-    await expect(second).rejects.toMatchObject({ code: 'compact_busy' })
-    expect(compactFn).toHaveBeenCalledTimes(1)
-
-    // 第一发完成：finally 复位（compacting-end）
-    releaseFirst({ summary: 'ok', tokensBefore: 100, estimatedTokensAfter: 50 })
-    await first
-    expect(session.occupancy?.compacting).toBe(false)
-  })
-
-  it('[RT-4#10] compact RPC 失败：finally 复位置位（transport 级失败不卡 compacting）', async () => {
-    const { dispatcher, compactFn, session } = makeMocks_m3_m3_m3_m3()
-    compactFn.mockRejectedValue(new Error('transport gone'))
-    await expect(dispatcher.compact('s1')).rejects.toThrow('transport gone')
-    expect(session.occupancy?.compacting).toBe(false)
-  })
-
+  // [C2 /compact 后台化] compact paths 段（busy 预检 / start / fail / summary / success /
+  // RT-4#10 两连发置位与失败复位，7 用例）随 dispatcher.compact 同步链退役——dispatcher
+  // 不再持有 compact 编排，生命周期前端态由 interpreter 从 pi compaction_start/end 事件
+  // 唯一编排（M4），互斥幂等由扩展侧后台管理器承接（RL1）。
   // ── null safety ──
 
   it('messageBus undefined → no crash on sendMessage', async () => {
@@ -4004,31 +3928,6 @@ describe('message-dispatcher bus integration', () => {
     await dispatcher.abort('s1')
     // wave:perf-w09：messageBus 未注入时 abort 的 complete 终态静默丢失（旧 broadcast 路径已删），
     // 但不得 throw——组合根恒注入 bus，此处只锁 null-safety
-  })
-
-  it('messageBus undefined → no crash on compact（零广播，null-safety）', async () => {
-    const session = makeMockSession_m3_m3_m3_m3()
-    const compactFn = vi.fn(async () => ({ summary: 'done', tokensBefore: 100, estimatedTokensAfter: 50 }))
-    const client = { compact: compactFn } as unknown as IPiEngine
-    const messageBus = { publish: vi.fn() }
-    const svc: IDispatcherSessionOps = {
-      getSessionByClient: vi.fn(() => session),
-      ensureActive: vi.fn(),
-      persistSessionOutcome: vi.fn(),
-      clearSessionOutcome: vi.fn(),
-      getSession: vi.fn(),
-      removeSessionEntry: vi.fn(),
-      detachSession: vi.fn(),
-    }
-    const pm = { getClient: vi.fn(() => client) } as unknown as IProcessManager
-    const workspace = { record: vi.fn() } as unknown as WorkspaceService
-    const dispatcher = new MessageDispatcher(svc, pm, workspace, messageBus as unknown as IMessageBus)
-    await dispatcher.compact('s1')
-    // M4：零 compaction 发布（no crash + 无 compaction 消息）
-    const compactionCalls = messageBus.publish.mock.calls.filter(
-      (c: unknown[]) => ['session.compacting', 'session.compacted', 'message.compactionSummary'].includes((c[1] as ServerMessage).type),
-    )
-    expect(compactionCalls).toHaveLength(0)
   })
 
   // ── 单通道语义（wave:perf-w09 D1-2）──

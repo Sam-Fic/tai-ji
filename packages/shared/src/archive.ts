@@ -317,8 +317,8 @@ export type ArchiveSummary =
  * 先改设计再同步此处与 archive.test.ts 锚定集）。
  *
  * **失败通道**：三 RPC 的领域错误走统一 error envelope（code = 本词表值 +
- * message，sessionId 随 envelope 携带——同 ImportErrorCode / CompactErrorCode
- * 先例；impl-plan u-rpc-wiring 验收条款「错误码 envelope」）。renderer 按 code
+ * message，sessionId 随 envelope 携带——同 ImportErrorCode 先例，跨进程 envelope
+ * 分类码形态；impl-plan u-rpc-wiring 验收条款「错误码 envelope」）。renderer 按 code
  * 分流显示 §5.2 对应恢复指引文案。**闭集指领域码**：transport 层另有两个码不在
  * 本词表——archive_failed（handler 对词表外意外 throw 的归一兜底，杜绝 fs 系统码
  * 泄漏到 renderer）与 archive_unsupported（archiveService 未注入的防御码，生产组合

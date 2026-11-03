@@ -234,13 +234,13 @@
   },
   {
     "id": "PS-14",
-    "claim": "session 延迟首写：首条 assistant 消息前 jsonl 不落盘（_persist 的 hasAssistant 门控），新 session crash 窗口内内存记账丢失；翻转时机 = assistant entry append 的同步点（_appendEntry push 后同步 _persist，hasAssistant 命中即走 wx 全量补写分支，无异步 flush 窗口）——getEntries 读到 assistant ⇒ 磁盘文件必已含全部内存 entry，scheduler ack 落盘判据①的反向推论以此承重",
+    "claim": "session 延迟首写：首条 user 或 assistant 消息前 jsonl 不落盘（_persist 的 _hasConversation 门控——fileEntries 中存在 role 为 user 或 assistant 的 message entry 即开门，setup 条目与 custom 条目不开门），开门前条目只留内存、crash 窗口内丢失；翻转时机 = 首条 user/assistant entry append 的同步点（_appendEntry push 后同步 _persist，_hasConversation 命中即走 wx 全量补写分支，无异步 flush 窗口）——getEntries 读到 user 或 assistant 消息 ⇒ 磁盘文件必已建且含全部内存 entry；user 消息在轮次开始（message_end → appendMessage）即落盘、先于首次模型请求（上游有意设计 #10000：首轮未完成也保 prompt 在盘）",
     "piAnchor": [
       {
         "pkg": "pi-coding-agent",
         "distPath": "dist/core/session-manager.js",
-        "symbol": "_persist(entry) 的 hasAssistant 门控",
-        "note": ":726-756 —— hasAssistant 检查 :729；!hasAssistant 分支 :730-740（flushed 已真则 appendFileSync :732，否则置 false 内存持有）；!flushed 全量补写分支 :741-752 同步执行（openSync \"wx\" :742 → for writeFileSync :744-746 → flushed=true :751）；_appendEntry :757-762（push :758 → _persist :761）——0.84.4 无 _flushSoon/异步 flush，全链同步 I/O"
+        "symbol": "_persist(entry) 的 _hasConversation 门控",
+        "note": ":785-820 —— _hasConversation :791-793（fileEntries.some(type===\"message\" && role∈{user,assistant})；:785-790 上游注释声明有意从 user message 起算 #10000）；_persist :794-814（persist=false/无 sessionFile 首行 return :795-796；!flushed 且门控未开 return、条目只留内存 :797-799；开门即 openSync \"wx\" :800 同步全量补写、flushed=true :809，无异步窗口；已 flush 则 appendFileSync 增量 :812）；_appendEntry :815-820（push → _persist）；appendCustomEntry :901-912（custom 条目同链过门控）；user 消息落盘点 = dist/core/agent-session.js message_end → appendMessage :738-753。【门控语义与锚行号按 pi@1.0.0 dist 源码核实（2026-10-30）；0.84.4 实装仅判 assistant（hasAssistant，:726-756），1.0.0 起为 user‖assistant 双判】"
       }
     ],
     "guard": {
@@ -1080,7 +1080,7 @@
   },
   {
     "id": "PS-50",
-    "claim": "provider registry 两层分层的写入/删除/读取语义：registerProvider 注册时无条件先删 native 重载层条目再 merge 写扩展注册层（undefined 字段保留前值）；unregisterProvider 两层同删且无恢复（register 顶掉的 native 条目不回填）；getRegisteredProviderIds 返回两层 keys 并集。scheduler ack 判据②的 pi 侧前提：providerId 已被任一层持有时，scheduler 覆写注册会静默顶掉该第三方注册（含覆写内置 provider 的第三方注册），故 no-base 短路必须先于 builtin/models.json 的 available 判定——registry 分层语义漂移时判据②前提失效（fail-closed 方向，最坏误降级文案）",
+    "claim": "provider registry 两层分层的写入/删除/读取语义：registerProvider 注册时无条件先删 native 重载层条目再 merge 写扩展注册层（undefined 字段保留前值）；unregisterProvider 两层同删且无恢复（register 顶掉的 native 条目不回填）；getRegisteredProviderIds 返回两层 keys 并集。覆写语义边界：providerId 已被任一层持有时，扩展覆写注册会静默顶掉该第三方注册（含覆写内置 provider 的第三方注册）——taiji 现无消费方（scheduler ack 判据②曾以此承重，ack 机制已随任务库重构退役删除），本条作为 pi 原生行为边界登记保留：任何未来 registerProvider 消费方须以「覆写即顶掉」为前提",
     "piAnchor": [
       {
         "pkg": "pi-coding-agent",
@@ -1103,7 +1103,7 @@
     ],
     "guard": {
       "type": "observe",
-      "note": "消费方：extensions/universal/scheduler/src/ack-provider.ts computeAckAvailability 判据②注释（no-base 短路先于 available 判定）。pi 升级时重验三断言：registerProvider 是否仍无条件删 native 层（若改为保留/合并 native 条目，覆写不再顶掉第三方注册，判据②可放宽）；unregisterProvider 是否仍两层同删无恢复；getRegisteredProviderIds 是否仍两层并集（若改为仅扩展层，isProviderRegistered 漏看 native 层注册）——任一漂移须复审 scheduler ack 判据②的 no-base 前提"
+      "note": "taiji 现无消费方（scheduler ack 已退役）——本条作为 pi 原生行为边界登记保留。pi 升级时重验三断言：registerProvider 是否仍无条件删 native 层（若改为保留/合并 native 条目，覆写不再顶掉第三方注册）；unregisterProvider 是否仍两层同删无恢复；getRegisteredProviderIds 是否仍两层并集（若改为仅扩展层，扩展层视角漏看 native 层注册）——任一漂移须复审「覆写即顶掉」边界的成立前提"
     },
     "verifiedWith": "1.0.0"
   },
@@ -1356,7 +1356,7 @@
   },
   {
     "id": "PS-61",
-    "claim": "manual 压缩掐断语义与事件序：AgentSession.compact() 第一步 await this.abort() 掐当前 run（abort() 只置 activeRun.abortController 为 aborted——不清 steering/followUp 队列、无补投副作用），JSDoc 明文 \"Manual compaction never retries or continues the interrupted agent turn\"；被掐 run 以 agent_end（末条 assistant message stopReason='aborted'，实机探针 P-reason(c) 断言）收尾且该事件先于 compaction_start 到达（compact 头 await this.abort() 先于 compaction_start emit 的 await 序形态 + P-reason(c) 真机实测）。承重（delivery-ownership-kernel D4② 续跑判定条件①③）：runtime 以「reason==='manual' + compaction_start 前 turn 被掐断」判定补投续跑——pi 若在 abort 后自动续跑/补投队列，续跑投递即变重复起 run",
+    "claim": "manual 压缩掐断语义与事件序：AgentSession.compact() 第一步 await this.abort() 掐当前 run（abort() 只置 activeRun.abortController 为 aborted——不清 steering/followUp 队列、无补投副作用），JSDoc 明文 \"Manual compaction never retries or continues the interrupted agent turn\"；被掐 run 以 agent_end（末条 assistant message stopReason='aborted'，实机探针 P-reason(c) 断言）收尾且该事件先于 compaction_start 到达（compact 头 await this.abort() 先于 compaction_start emit 的 await 序形态 + P-reason(c) 真机实测）。taiji 现无 manual compact 触发方（GUI 手动压缩走 smart-context 后台管理器不掐 turn；runtime 侧 compact 调用已删）——本条作为 pi 原生行为边界登记保留：compact() 掐断当前 run 且不补投，任何未来消费方（恢复同步 manual 压缩链）须以此边界为前提，pi 若在 abort 后自动续跑/补投队列即行为漂移",
     "piAnchor": [
       {
         "pkg": "pi-agent-core",
@@ -1379,7 +1379,7 @@
   },
   {
     "id": "PS-62",
-    "claim": "compaction_start/end 的 reason 词表恒三值：manual 路径（AgentSession.compact）start 恒字面量 'manual'（全 dist 唯一 emit 点），end 成功/aborted 两处均 'manual'；auto 路径 _runAutoCompaction(reason, willRetry) 变量透传，reason 仅 'threshold'（阈值命中，2 调用点）与 'overflow'（溢出/截断恢复，2 调用点）两值。auto 路径收尾有 hasQueuedMessages→continue 补投（设计 F6：不丢消息、不掐 turn，无需续跑），与 manual 路径无补投（PS-61）互为对照——runtime 续跑判定以 reason==='manual' 识别「掐 turn 的压缩」；pi 引入第四 reason 值或改 manual 判定名时判定侧须复审（漏判 = 不续跑；误判 = 多一条被投递内核吸收的投递）。pi 1.0.0 附带变化：threshold 字面量调用点 2→3（新增 _checkCompaction post-run 复查段超限即压缩路径），词表仍恒三值、auto 路径仍变量透传",
+    "claim": "compaction_start/end 的 reason 词表恒三值：manual 路径（AgentSession.compact）start 恒字面量 'manual'（全 dist 唯一 emit 点），end 成功/aborted 两处均 'manual'；auto 路径 _runAutoCompaction(reason, willRetry) 变量透传，reason 仅 'threshold'（阈值命中，2 调用点）与 'overflow'（溢出/截断恢复，2 调用点）两值。auto 路径收尾有 hasQueuedMessages→continue 补投（设计 F6：不丢消息、不掐 turn，无需续跑），与 manual 路径无补投（PS-61）互为对照——taiji 消费方 = event-adapter 原样透传 reason → interpreter 广播 session.compacting{reason}，前端 compacting 浮层文案区分手动（'manual'）/自动（'threshold'|'overflow'）；pi 引入第四 reason 值或改 manual 判定名时，runtime 类型 PiCompactionReason（pi-protocol.ts）与前端文案分派须复审。pi 1.0.0 附带变化：threshold 字面量调用点 2→3（新增 _checkCompaction post-run 复查段超限即压缩路径），词表仍恒三值、auto 路径仍变量透传",
     "piAnchor": [
       {
         "pkg": "pi-coding-agent",
@@ -1977,6 +1977,132 @@
     "guard": {
       "type": "observe",
       "note": "消费方（C-ext-05 direct 常驻全集，2026-10-23 ADR-0136 重划终态）：goal_control（extensions/universal/goal）、schedule / schedule_control（extensions/universal/scheduler）、compact_context（extensions/universal/smart-context）、create_managed_session（extensions/universal/session-manager，direct 档经 registerSessionTool 条件展开不写字段）、plan（extensions/universal/plan）、workflow-script / subagent_batch（extensions/universal/subagent-workflow）的注册断言与 JSDoc 注释。与 PS-79 分工：PS-79 登记 ToolExposure 五档分级与 setActiveTools 声明语义，本条登记「缺字段 = direct 缺省」本身。pi 升级时重验：grep dist/core/agent-session.js '_getToolExposure'（?? 兜底值是否仍为 direct）+ types.d.ts exposure 注释 Default 值是否漂移"
+    },
+    "verifiedWith": "1.0.0"
+  },
+  {
+    "id": "PS-92",
+    "claim": "pi 会话 header 首行 version 字段现行恒写 3：CURRENT_SESSION_VERSION = 3（session-manager.js 模块常量），全部三处 header 构造点统一引用该常量——newSession 首建首写（header 为文件首行）/ createBranchedSession branch 换新文件 / forkFrom fork 换 cwd 新文件（writeFileSync wx 首行直写）；读侧历史版本兼容：加载期 migrateToCurrentVersion 按 header.version（缺省视为 1）级联迁移 v1→v2→v3 后 _rewriteFile 重写，纯读 loadEntriesFromFile 无版本校验直读。taiji 侧 MAX_KNOWN_SESSION_HEADER_VERSION = 3（packages/runtime/src/infra/pi/session-header-version.ts，startup 设计 §7.2 版本防御）以本条为 pi 侧行为锚：高于 3 = 未来 pi 升级产物、字段语义未经验证",
+    "piAnchor": [
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/session-manager.js",
+        "symbol": "CURRENT_SESSION_VERSION / 三处 header 构造",
+        "note": ":11 export const CURRENT_SESSION_VERSION = 3；:697-705 newSession 首建 header（:705 fileEntries = [header]，文件首行）；:1242-1249 createBranchedSession header；:1398-1406 forkFrom newHeader + writeFileSync 首行直写——三处统一 version: CURRENT_SESSION_VERSION【行号锚基于 pi@1.0.0 实装实测】"
+      },
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/session-manager.js",
+        "symbol": "migrateToCurrentVersion / _loadEntries / loadEntriesFromFile",
+        "note": ":75-85 —— :77 header?.version ?? 1、:80-83 version<2 → migrateV1ToV2（:31-54）、version<3 → migrateV2ToV3（:56-70，in place 抬到 3）；:722-723 _loadEntries 迁移发生即 _rewriteFile；:325 loadEntriesFromFile 纯读无版本校验【行号锚基于 pi@1.0.0 实装实测】"
+      }
+    ],
+    "guard": {
+      "type": "observe",
+      "note": "消费方：packages/runtime/src/infra/pi/session-header-version.ts 的 MAX_KNOWN_SESSION_HEADER_VERSION = 3（高于已知最高版本的未知 header 告警计数，模块头注锚本条；解析入口 session-file-utils parseSessionHeader 宽松解析、版本未知不拒读）。pi 升级时重验：grep dist/core/session-manager.js 'CURRENT_SESSION_VERSION'（常量值是否仍为 3、header 构造点是否仍统一引用）+ migrateToCurrentVersion 是否仍兼容 v1/v2 在档历史文件"
+    },
+    "verifiedWith": "1.0.0"
+  },
+  {
+    "id": "PS-93",
+    "claim": "get_state 是同步内存读的轻量命令、事件循环活时必响应：rpc-mode get_state 分支对 session 的 13 个属性纯同步直读构造响应（无 await、无 IO、分发链无扩展 hook 可拦截点——handleInputLine 直入 switch 分发），事件循环活时毫秒级返回。taiji 第 1 层停滞判定承重（pi-stall-detection D1/AX2）：PingProbe 探测（probeState 观测变体，请求级有界等待）3 次观测超时 = 该强不变量被破坏 = 确定性停滞、无误杀范围。pi 升级重验（UD1 退场条件）：若 get_state 变为异步/可被 hook 拦截/携带 IO，慢尾形态出现——观测超时窗（PING_OBSERVE_TIMEOUT_MS）须按实测重新校准，且「确定性判定、无误杀」前提须重审（fix-chat-flow-stuck 合并时自 PS-92 重编号——PS-92 已被 dev 线 session header version 词条占用）",
+    "piAnchor": [
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/modes/rpc/rpc-mode.js",
+        "symbol": "get_state case 分支",
+        "note": ":345-360 —— 13 属性对象字面量直读（model/thinkingLevel/isStreaming/isCompacting/steeringMode/followUpMode/sessionFile/sessionId/sessionName/autoCompactionEnabled/messageCount/pendingMessageCount）+ success() 同步返回，分支体内无 await【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      },
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/modes/rpc/rpc-mode.js",
+        "symbol": "handleInputLine",
+        "note": "分发入口直入 switch 命令分发；rpc-mode 全文无 hook 调用可拦截 get_state（pi-stall-detection U1 检查点亲读核实——慢尾形态无设计内来源）【行号锚基于 pi@1.0.0 实装实测】"
+      }
+    ],
+    "guard": {
+      "type": "observe",
+      "note": "taiji 消费方 = PingProbe 探测链（event-interpreter-ping.ts pingPi → rpc-client probeState；pi-stall-detection D1 观测超时）。pi 升级时重验：grep dist/modes/rpc/rpc-mode.js 'get_state' 分支是否仍为纯同步字段读取（无 await / 无 IO / 无 hook）+ 分发链是否新增可拦截点；慢尾形态出现则 PING_OBSERVE_TIMEOUT_MS 按实测重新校准并复审确定性判定前提"
+    },
+    "verifiedWith": "1.0.0"
+  },
+  {
+    "id": "PS-94",
+    "claim": "abort 是协作式请求、回执 = 回合收尾完成：AgentSession.abort() 置中止标记 + abortRetry/abortCompaction/abortBranchSummary + agent.abort()（AbortController 即时取消在途 await 点）后 await waitForIdle()（已 idle 立即返回，否则等当前回合收尾）——正常协作形态秒级回执；事件循环挂死形态永不回执（taiji 停止升级链 ABORT_UPGRADE_WINDOW_MS 窗满升级强杀所依赖的 pi 侧事实，pi-stall-detection D2/SI7：pi 侧 abort 后合法收尾全部即时有界——LLM 流/压缩/摘要即刻取消、MCP signal 转发即抛、bash 杀进程树）。与 PS-74 分工：PS-74 登记 abort 对 idle pi 的幂等 no-op 形态，本条登记 abort 的协作收尾语义本身（fix-chat-flow-stuck 合并时自 PS-93 重编号）",
+    "piAnchor": [
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/agent-session.js",
+        "symbol": "abort / waitForIdle",
+        "note": ":1873-1881 async abort = 置 _agentRunAbortRequested（run 活跃时）+ abortRetry + abortCompaction + abortBranchSummary + beforeSettle 标记 + agent.abort() + await this.waitForIdle()；:1883-1888 async waitForIdle = isIdle 即返回，否则 await _getIdleWaitPromise()【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      }
+    ],
+    "guard": {
+      "type": "observe",
+      "note": "taiji 消费方 = message-dispatcher abort 升级链（await client.abort() 施加有界等待，窗满自动升级 forceQuitSession——pi-stall-detection U2/D2①）。pi 升级时重验：grep dist/core/agent-session.js 'async abort'（收尾序列是否仍以 await waitForIdle 结尾）与 'async waitForIdle'（isIdle 快路径是否保留）；若 abort 改为即时回执（不等收尾），升级窗语义需重审"
+    },
+    "verifiedWith": "1.0.0"
+  },
+  {
+    "id": "PS-95",
+    "claim": "pi 内 MCP 工具调用默认 60s 超时自愈、条目级可覆盖：DEFAULT_TIMEOUT_SECONDS = 60，生效超时 = (entry.config.timeout ?? 60) * 1000（每条目可配置覆盖）；服务端 progress 通知重挂超时计时器（持续有进展的调用不被超时打断），窗满取消 pending 抛 McpTimeoutError、以错误工具结果收尾（tool_execution_end isError）。taiji 第 2 层静默判定的自愈窗①承重（pi-stall-detection AS12）：tool_execution_update 在途 = MCP 工具自愈中的合法静默；条目级覆盖生效值超出 T 覆盖公式配置分量的会话不启用判死（AS13 超界降级）（fix-chat-flow-stuck 合并时自 PS-94 重编号）",
+    "piAnchor": [
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/extensions/mcp/runtime.js",
+        "symbol": "DEFAULT_TIMEOUT_SECONDS / timeoutMs",
+        "note": ":17 const DEFAULT_TIMEOUT_SECONDS = 60；:155 return (this.entry.config.timeout ?? DEFAULT_TIMEOUT_SECONDS) * 1000（条目级覆盖表达式）【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      }
+    ],
+    "guard": {
+      "type": "observe",
+      "note": "taiji 消费方 = 第 2 层静默判定矩阵在途信号行（静默判定矩阵，pi-stall-detection D3/U4 W2）与 T 覆盖公式的 MCP 配置分量（自愈窗实际生效值超界降级，AS13）。pi 升级时重验：grep dist/extensions/mcp/runtime.js 'DEFAULT_TIMEOUT_SECONDS'（默认值是否仍 60）+ 'entry.config.timeout'（条目级覆盖表达式是否保留）"
+    },
+    "verifiedWith": "1.0.0"
+  },
+  {
+    "id": "PS-96",
+    "claim": "模型请求自愈窗 httpIdleTimeoutMs 默认 300s 且一身三用：① undici dispatcher 的 bodyTimeout 与 headersTimeout（同一 normalizedTimeoutMs）；② SDK 请求 timeoutMs 的全局兜底（effectiveTimeoutMs）；③ 数值 0 = 用户显式禁用——SDK 侧替换为 2147483647ms（事实性无超时）。配置链：settings httpIdleTimeoutMs（parseHttpIdleTimeoutMs 接受任意有限 ≥0 值，0 不被拒绝）→ getHttpIdleTimeoutMs 缺省回 300_000；请求级 timeoutMs = options.timeoutMs ?? providerRetrySettings.timeoutMs（taiji provider.timeoutMs，合法域 1-600000，未设跟随全局）?? effectiveTimeoutMs（provider 覆盖优先于全局）。taiji 第 2 层静默判定自愈窗②承重（pi-stall-detection AS13/AS15）：禁用（0）或生效值超出 T 覆盖公式配置分量的会话不启用第 2 层判死、降级温和提示（fix-chat-flow-stuck 合并时自 PS-95 重编号）",
+    "piAnchor": [
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/http-dispatcher.js",
+        "symbol": "DEFAULT_HTTP_IDLE_TIMEOUT_MS / configureHttpDispatcher / parseHttpIdleTimeoutMs",
+        "note": ":3 export const DEFAULT_HTTP_IDLE_TIMEOUT_MS = 300_000；:15 parseHttpIdleTimeoutMs（任意有限 ≥0 值取 floor）；:68-81 configureHttpDispatcher 将同一 normalizedTimeoutMs 同时设为 bodyTimeout 与 headersTimeout【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      },
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/settings-manager.js",
+        "symbol": "getHttpIdleTimeoutMs",
+        "note": ":667-669 return parseTimeoutSetting(this.settings.httpIdleTimeoutMs, 'httpIdleTimeoutMs') ?? DEFAULT_HTTP_IDLE_TIMEOUT_MS（缺省回 300s；0 为合法配置值不被拒绝）【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      },
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/sdk.js",
+        "symbol": "buildRequestOptions",
+        "note": ":182-188 httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs()；effectiveTimeoutMs = httpIdleTimeoutMs === 0 ? 2147483647 : httpIdleTimeoutMs（0 = 禁用 → 事实性无超时）；timeoutMs: options.timeoutMs ?? providerRetrySettings.timeoutMs ?? effectiveTimeoutMs（provider 覆盖优先于全局）【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      }
+    ],
+    "guard": {
+      "type": "observe",
+      "note": "taiji 消费方 = 第 2 层判死降级判定（RL14 禁用分支 + AS13 超界降级，pi-stall-detection D3/U4 W2）与 packages/runtime/src/services/llm-retry-config-helper.ts（provider.timeoutMs 合法域 1-600000、未设跟随全局）。pi 升级时重验：grep dist/core/http-dispatcher.js 'DEFAULT_HTTP_IDLE_TIMEOUT_MS'（是否仍 300_000）+ dist/core/sdk.js '2147483647'（0=禁用替换语义是否保留）+ settings-manager.js 'getHttpIdleTimeoutMs'（缺省链是否保留）"
+    },
+    "verifiedWith": "1.0.0"
+  },
+  {
+    "id": "PS-97",
+    "claim": "SessionManager._appendEntry 先内存入账后 _persist、persist 失败无回滚——「幽灵内存 entry」形态：_appendEntry 先 fileEntries.push（并推进 byId/leafId）后调 _persist，_persist 内 openSync/appendFileSync 抛错（EACCES 等）向上传播且无回滚/补偿路径，内存账已含该 entry 而 JSONL 无行。no-persist 形态（persist 关闭或 sessionFile 缺席）_persist 首行即 return——no-op 恒成功、无幽灵态；未 flush 且无对话内容同样早退（session 首条对话消息前文件不存在）。taiji 对账补投判据承重（completion-signal-delivery A1 缺陷修复）：判据事实源一律读 session JSONL 落盘条目而非内存账——内存账口径曾把幽灵的送达痕迹/投递日志条目当真，「拒收未受理」的键被误判已受理 → 补投结构性静默失效（fix-chat-flow-stuck 合并时自 PS-96 重编号，代码注释引用同步更新）",
+    "piAnchor": [
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/session-manager.js",
+        "symbol": "_appendEntry / _persist",
+        "note": "_appendEntry :815-820——fileEntries.push :816 → byId.set :817 → leafId 推进 :818 → this._persist(entry) :819（先内存入账后落盘，persist 抛错无回滚）；_persist :794-814——:795-796 !this.persist || !this.sessionFile 直接 return（no-persist no-op 恒成功、无幽灵态），:797-799 未 flush 且 _hasConversation false 早退（首条对话消息前 sessionFile 不存在），:812 appendFileSync 落盘、抛错无 catch 无回滚【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      }
+    ],
+    "guard": {
+      "type": "observe",
+      "note": "taiji 消费方 = 四域对账补投判据的磁盘事实源（base-tool-enhance background/pending-reconcile.ts、session-manager notify-reconcile.ts、subagent-workflow workflow-notify-reconcile.ts 的 readSessionFileEntries + packages/subagent-core execution/notify/notify-reconcile.ts 的 readSessionEntriesFromFile，各文件头「判据事实源磁盘化」段）。pi 升级时重验：grep dist/core/session-manager.js '_appendEntry'（内存 push 是否仍先于 _persist、persist 抛错是否仍无回滚）+ '_persist'（no-persist / 未 flush 早退分支是否保留；若改为 persist 成功后才入内存账或失败回滚，幽灵态消失——磁盘化读侧可简化，保留向后兼容无害）"
     },
     "verifiedWith": "1.0.0"
   }

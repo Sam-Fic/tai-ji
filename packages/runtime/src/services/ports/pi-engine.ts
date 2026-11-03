@@ -43,18 +43,6 @@ export interface PiCommandInfo {
 }
 
 /**
- * pi compact RPC 返回的压缩结果（agent-session.ts CompactionResult）。
- * dispatcher 用 summary/tokensBefore 广播 message.compactionSummary，
- * 用 estimatedTokensAfter 触发 context.update 刷新用量。
- */
-export interface PiCompactionResult {
-  summary: string
-  firstKeptEntryId: string
-  tokensBefore: number
-  estimatedTokensAfter?: number
-}
-
-/**
  * pi bash RPC 返回的执行结果（agent-session.ts BashResult）。
  *
  * dispatcher.sendBash 调 client.bash 后读 output/exitCode/cancelled/truncated 广播
@@ -198,8 +186,9 @@ export interface IPiEngine {
   onEvent(listener: PiEventListener): () => void
 
   // ── session 级命令 ──
-  /** 压缩当前会话上下文（pi compact 命令）。customInstructions 透传给 pi 压缩 prompt。返回 CompactionResult 供 dispatcher 广播 summary + 刷新 context 用量。 */
-  compact(customInstructions?: string): Promise<PiCompactionResult>
+  // compact 已退役（C2 /compact 后台化）：runtime 不再直调 pi 同步 compact RPC——GUI
+  // 手动压缩经内部命令走 smart-context 后台管理器；pi 内部压缩（overflow/threshold 同步
+  // 兜底）仍走 pi 自身 agent-session，不经本 port。
   /**
    * 直接执行 bash 命令（pi bash 命令，不经 LLM turn）。
    *

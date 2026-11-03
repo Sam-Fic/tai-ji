@@ -1,6 +1,6 @@
 /**
  * Sidebar 整体 mount 测试共享 helper（sidebar-assign-project-wiring / sidebar-import-entry，
- * 范式同 sidebar-ondeletefolder.test.ts：Sidebar.vue 依赖 10+ store/composable，完整真实
+ * 范式同 sidebar-mount-bundle.test.ts：Sidebar.vue 依赖 10+ store/composable，完整真实
  * mount 成本过高，shallowMount + store/composable mock）。
  *
  * 收敛两测试文件逐字重复的 mock 段（fallow duplication 告警）：mock 模块工厂 /

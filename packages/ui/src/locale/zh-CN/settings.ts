@@ -47,6 +47,8 @@ export default {
     remoteAccessDesc: '从手机浏览器访问 taiji（局域网 / Tailscale）',
     networkProxy: '网络代理',
     networkProxyDesc: '配置 LLM 出站代理服务器与分流规则',
+    smartContextCompaction: '上下文压缩',
+    smartContextCompactionDesc: '智能上下文压缩行为：压缩模型、提醒阈值与后台压缩触发线',
   },
   // ── Appearance 页（AppearancePage）──
   appearance: {
@@ -707,6 +709,9 @@ export default {
     smartContextExcludedDesc: '命中列表的会话模型完全关闭本功能，按完整 provider/modelId 精准匹配',
     smartContextExcludedAdd: '添加模型',
     smartContextExcludedRemove: '移除',
+    smartContextAutoCompactLabel: '自动压缩触发阈值',
+    smartContextAutoCompactDesc: '上下文占用达到窗口该比例时自动触发后台压缩（0-1，步进 0.05）',
+    smartContextRatioInvalid: '触发阈值必须是数值',
     // ── LLM 调用重试（SystemLlmRetrySection，llm-retry-settings）──
     llmRetryTitle: 'LLM 调用',
     llmRetryConfiguredBadge: '已自定义',

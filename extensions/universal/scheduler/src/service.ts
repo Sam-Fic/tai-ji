@@ -11,13 +11,13 @@ import type { AddOptions, ScheduledTask } from './types.js'
 const PREVIEW_RUN_COUNT = 5
 
 // runtime 以普通 Error 抛任务上限（typed error `TaskLimitError` 归后续单元）——分类
-// 收敛在本单点（设计 §6.9「失败键赋值」），禁字符串匹配散落。括号内即 runtime MAX_TASKS。
+// 收敛在本单点（错误分类赋值只此一处），禁字符串匹配散落。括号内即 runtime MAX_TASKS。
 const TASK_LIMIT_RE = /^Task limit reached \((\d+)\)/
 
 // ── 结构化结果 ──
 
 /**
- * 结构化结果（设计 §6.9「双受众」/ §7.1）：
+ * 结构化结果（双受众分派，`messageKey` 分型判别联合见 `i18n.ts`）：
  * - `messageKey`：本地化键（语义 = 呈现层查词典，**非错误分类**；命名刻意避开刚被
  *   ext-simplify-08 删除的 errorCode 族）。消费者 = commands / interaction 的 L2 呈现层。
  * - `params`：locale-neutral 原始值，按 messageKey 判别（见 `i18n.ts` ServiceMessageParamsMap）。
@@ -48,10 +48,10 @@ export class SchedulerService {
     public readonly runtime: SchedulerRuntime,
     private readonly now: () => number,
     /**
-     * 创建成功后的汇聚点回调（可选；u-ack-turn 接线）：addTask 成功且 nextRuns 算好后
-     * 调用一次。fire-and-forget —— create 不 await（触发是后台编排，不得阻塞用户可见的
-     * 创建反馈时延）；调用方（index.ts）自行 catch 回调内的异步失败。
-     * 既有调用点（interaction.ts / commands.ts / tool.ts）不传，行为不变。
+     * 创建成功后的汇聚点回调（可选；index.ts 接线 = widget 即时刷新）：addTask 成功且
+     * nextRuns 算好后调用一次。fire-and-forget —— create 不 await（反馈不得阻塞用户可见
+     * 的创建时延）。三个创建入口（tool / command / interaction）自然经此被覆盖，无需
+     * 各自动手。
      */
     private readonly onTaskCreated?: (task: ScheduledTask) => void,
   ) {}
@@ -70,7 +70,7 @@ export class SchedulerService {
     scheduleInput: string,
     options: AddOptions = {},
   ): Promise<ServiceResult<{ task: ScheduledTask; nextRuns: number[] }>> {
-    // parseSchedule 同步化（D2）后返回值即 ScheduleSpec（L7：不再包装 { spec }）；
+    // parseSchedule 同步化后返回值即 ScheduleSpec（不再包装 { spec }）；
     // undefined 唯一语义 = 表达式无效——croner 是 dependencies 恒在盘，不存在解析器缺失
     const parsed = parseSchedule(scheduleInput)
     if (!parsed) {
@@ -121,7 +121,7 @@ export class SchedulerService {
       runPreview,
     ].join('\n')
 
-    // 创建汇聚点（u-ack-turn）：ack 确认轮触发。调用点在成功返回前、nextRuns 算好之后——
+    // 创建汇聚点：UI 反馈触发（widget 即时刷新）。调用点在成功返回前、nextRuns 算好之后——
     // 三个创建入口（tool / command / interaction）自然经此被覆盖，无需各自动手。
     this.onTaskCreated?.(task)
 

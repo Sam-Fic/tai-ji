@@ -1,6 +1,6 @@
 /**
- * Smart context 配置域 config.* message handler（getSmartContextConfig + 4 个 setter，
- * 5 条 case）。
+ * Smart context 配置域 config.* message handler（getSmartContextConfig + 5 个 setter，
+ * 6 条 case）。
  *
  * Extracted from settings-message-handler.ts to reduce file size（该文件同类先例：
  * config-preferences-message-handler.ts 同款 class + handle() switch 形态；case 体自
@@ -40,6 +40,13 @@ export class SmartContextConfigMessageHandler {
       case 'config.setSmartContextExcludedModels': {
         this.ctx.configService.setSmartContextExcludedModels(msg.payload.models)
         this.ctx.reply(ws, msg.id, 'config.smartContextExcludedModels', { models: this.ctx.configService.getSmartContextConfig().excludedModels })
+        return true
+      }
+      case 'config.setSmartContextAutoCompactThresholdRatio': {
+        this.ctx.configService.setSmartContextAutoCompactThresholdRatio(msg.payload.ratio)
+        this.ctx.reply(ws, msg.id, 'config.smartContextAutoCompactThresholdRatio', {
+          ratio: this.ctx.configService.getSmartContextConfig().autoCompactThresholdRatio,
+        })
         return true
       }
       default:

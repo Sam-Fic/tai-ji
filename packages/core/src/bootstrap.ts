@@ -39,9 +39,11 @@ export async function initConnection(): Promise<void> {
   await useConnection().init()
 }
 
-// no-op 占位——subscribed sessions 现状是 subscription-state 内存态（无持久化），真实实现等
-// core SessionService + 订阅持久化 + ws-client auth 扩展三件套（remote/mobile 波次）后归 core
-// coordination，本波不伪造语义（R3 减法修正）。
+// no-op 空壳（仅一行日志；subscribed sessions 现状是 subscription-state 内存态，无持久化）。
+// [M2 退场] D13 裁决：本步骤随 M2 删除、编排变四步——会话恢复是 runtime 的 sessions 能力，
+// renderer 启动编排里对应动作是「等能力」（调度器三段式承担），不存在名为「恢复会话」的
+// renderer 动作；subscribed sessions 持久化若仍有需求，归 remote/mobile 波次独立设计，
+// 不经本启动编排。
 export async function restoreSessions(): Promise<void> {
   console.log('[bootstrap] step 3/5 restoreSessions')
 }

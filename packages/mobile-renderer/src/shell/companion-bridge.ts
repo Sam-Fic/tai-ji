@@ -449,7 +449,7 @@ export type MobileFormRequests = {
   /** 取消（等价 respond(requestId, null)） */
   cancel(requestId: string): void
   /**
-   * 快照对账立即执行（App.vue watch(isConnected) connected 边沿消费）。§6.23 恢复链
+   * 快照对账立即执行（App.vue watch(shellConnectionState === 'connected') connected 边沿消费）。§6.23 恢复链
    * 去合取化——挂起解除不依赖 activeSessionId 置位：活跃 sid 照常对账（sid 首次置位的
    * 补跑由本 hook 内 watch 承接），另对在场分区逐个对账（用户停留列表页、无活跃会话时，
    * 任一分区对账完成即触发 onSnapshotReconciled 解除提交挂起）。无 sid 且分区为空时
@@ -495,7 +495,8 @@ export function useMobileDialogRequests(): MobileDialogRequests {
  * form/planReview 通道的会话视图（App.vue 聊天视图编排消费）：
  * - 按 activeSessionId 派生队首请求（无 sid 恒空，分区隔离；切 session 读不同分区）；
  * - 快照对账（factory reconcile：差集剔除 + 富交互帧补入，空快照也剔除）两处触发：
- *   sid 变化（本模块 watch）+ 连接恢复边沿（App.vue watch(isConnected) connected 边沿调
+ *   sid 变化（本模块 watch）+ 连接恢复边沿（App.vue watch(shellConnectionState === 'connected')
+ *   connected 边沿调
  *   reconcileNow——静默重连保持视图挂载、sid 不变，断连期间到达的请求经此补挂 / 已终结
  *   的经此剔除）；模块级实时订阅保证不漏帧，快照是权威对账面。
  */

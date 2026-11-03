@@ -612,6 +612,60 @@ git -C <barePath> for-each-ref --format='%(refname)' refs/remotes/origin | xargs
 ```
 
 已受害的分支用 `git merge main` 补齐（快进或常规合并均可）。
+### 42. 会话停滞判定与恢复：怎么判定哪层、各层恢复动作（pi-stall-detection，2026-11 登记）
+
+会话健康分三层各自独立判定（每层信号源只探测本层，不跨层外推；分层语义权威登记见 [domain-model.md](domain-model.md)「会话健康分层」词条）。排障时先按症状定位层，再按层取恢复动作：
+
+| 层 | 信号源与判定 | 用户可见表现 |
+|---|---|---|
+| 第 0 层 进程存活 | pi exit / error 事件链（进程生死唯一权威） | 会话错误消息入流 + 显式收尾广播；恢复 = 用户显式重开会话（崩溃不自动恢复） |
+| 第 1 层 事件循环活性 | get_state 探测请求 5s 有界等待窗（60s 周期，`PING_OBSERVE_TIMEOUT_MS`）；连续失败计数 | 2 次失败广播停滞 WARN（「pi 停滞」）；3 次判停滞 → 进自动处置链 |
+| 第 2 层 回合推进 | 帧流静默计时：判定阈值 T = idleBackgroundSec + 300s（默认 900s）、提示阈值 T_hint = T − 60s；判死前查在途信号与豁免锚点（ask_user 等待 / 压缩中，锚点在场不判死）；前台命令转后台不设锚点——防线 = T 公式恒盖过转后台窗 + 转后台早退边沿帧（tool_execution_end）刷新计时 + 转后台关闭配置不装配判死分支 | T_hint 到达：活动条（ActivityStrip）stall 行温和提示「已静默 N 分钟，可点停止或继续等待」（非红色警告非弹窗）；超 T 判死 → 自动 abort + 注入原因提示 |
+
+**各层恢复动作**：
+
+- **第 1 层判停滞且进程存活**（事件循环挂死形态）→ 自动处置链，无需人工：sample 调用栈取证 → 强杀 → 自动恢复接回会话 → steer 注入原因提示（agent 带死因上下文继续）；恢复重试耗尽降级死亡发声 + 用户手动重开。进程已死形态不进自动链，维持第 0 层显式重开语义。
+- **第 2 层判死** → 自动 abort（pi 事件循环活可接收）+ steer 注入原因提示；abort 悬挂超升级窗自动升级强杀（机器判死分型 `probe_stall_auto_quit`，走同上自动恢复）。边界：转后台后同回合仍占用且静默超 T 照常判死——pending 后台任务无帧流信号可作锚点（完成通知经 steer 注入开新回合），占用回合的持续静默即停滞目标形态；pi 整体挂死由第 1 层探测兜底。降级形态只有提示无判死：`httpIdleTimeoutMs=0`（禁用模型请求超时）、自愈窗实际配置值 ≥ T、转后台关闭（idleBackgroundSec=null）——三类配置下第 2 层自动判定出口缺失，属显式登记边界非缺陷。
+- **用户停止**（停止按钮 / 右键强制退出）语义不变：挂死对象上停止经升级窗自动强杀收尾，恢复归用户显式重开。
+
+**强杀取证产物（sample 调用栈存档）**：强杀执行前 macOS `sample <pid> 2` 采样 2 秒调用栈，落会话存储树 logs 域 `<数据目录>/ext-sessions/<sessionId>/logs/stall-sample-<时间戳>.txt`；非 macOS 跳过留痕，取证失败不阻断强杀。生命周期 = 随会话删除整树自动回收（ADR-0151 整树软删），无独立保留期——排查历史停滞时产物是否还在取决于会话是否还活着。
+
+**handoff 取消链残留无界悬挂（显式豁免出口）**：交接（handoff，把当前会话交接给新会话的编排）进行中点取消，取消经 `HandoffService.abortHandoff`（packages/runtime/src/services/handoff-service.ts:372）直连 pi client.abort，不经 message-dispatcher 的 abort 升级窗——pi 挂死时该取消无限悬挂（catch 只覆盖显式失败，不覆盖悬挂），且无自动强杀出口。此出口是停止升级链设计（pi-stall-detection D2① 裁决 ⑤）的显式豁免，射程仅此一条路径。判定特征：交接中取消后 handingOff 占用不复位、停止无回执、其余停止入口（升级链覆盖的）正常。手动恢复：侧栏右键强制退出该会话（走强杀编排，不经挂死的 abort 通道），或重启应用。治理登记 = [docs/todo/handoff-abort-hang.md](todo/handoff-abort-hang.md)；生产出现经该出口的悬挂事故（本小节命中）即治理条目登记的重审触发条件之一。
+
+### 43. mock pi 置换点并行争用：验收实例互踩产生假红假绿（pi-stall-detection D3 验收登记，2026-11）
+
+**形态**：verify-taiji §1.3 mock pi 置换（文件级替换 runtime 解析的 pi 可执行文件）在多验收节点并行时互踩——本实例 spawn 到的 pi 是他人 mock 实例（行为断言对不上本剧本 = 假红），或他人实例的请求打进本 mock 的记录（轮次被污染 = 假绿）。置换点 = `<repo>/apps/electron/resources/pi/pi-<platform>-<arch>`，同一 worktree 内单点。
+
+**判定**（三锚全过才采信本实例证据）：
+
+```bash
+ps eww -p <piPid> | tr ' ' '\n' | grep PI_CODING_AGENT_DIR   # 环境锚：运行中 pi 的数据目录须含本实例 dataDir，否则进程归属错
+# mock 请求记录（REQ_LOG 类）逐 pid 对照：出现陌生 pid = 他人实例打过本置换位
+ls -l <repo>/apps/electron/resources/pi/pi-<platform>-<arch> # 置换位形态：mock 在位 / 真 pi 已复原（关键断言时点前后各核一次）
+```
+
+**恢复**：注入类验收（持有 pi 置换位的）在共享同一 worktree 的节点间串行化——一次只允许一个节点置换，其余轮询等空窗；窗口收尾按 verify-taiji §1.3 三核对恢复（备份复原 / `--version` 真实版本 / `ls -l` 形态）并清理各自的 mock 进程与备份文件。
+
+### 44. mock pi 必须写合法 session 文件：恢复链验收的前置契约（pi-stall-detection D3 验收登记，2026-11）
+
+**形态**：mock pi 场景中判死强杀后的自动恢复链报 `Persisted session not found — 该会话无已保存内容`，恢复重试耗尽后降级死亡发声——恢复段断言全红。这是 mock 构造缺陷而非产品缺陷：restore 的前置校验（`findScannedSession` → `scanPiSessions`）只扫标准 sessions 树，mock 把 sessionFile 指向散文件（非 JSONL）时扫不到。
+
+**判定**：查 mock 实例数据目录的标准树有无合法会话文件：
+
+```bash
+ls <dataDir>/agent/sessions/--<cwd>--/              # 有无本会话 <ts>_<sessionId>.jsonl
+head -2 <dataDir>/agent/sessions/--<cwd>--/*.jsonl  # 首行 header entry（type:session / version:3）+ user message entry
+```
+
+**恢复**：mock 按 pi 1.0.0 真实布局，在受理 prompt 时同步写最小合法 session 文件（header + user entry）到 `<agentDir>/sessions/--<cwd>--/`，且 sessionId 跨代固定（判死强杀 → 恢复附着须命中同一文件）。
+
+### 45. 恢复后观测假红：waitTurnEnd 超时但 pi 侧回合完整收尾（pi-stall-detection D3 验收登记，2026-11）
+
+**形态**：判死自动恢复（或 SIGKILL 崩溃恢复）后，剧本/探针的回合终态等待（waitTurnEnd 类，只扫客户端本地累计事件）超时，表现为「恢复后回合零推进」——实为观测通路断了，不是回合没跑。
+
+**判定**：先读 pi RPC 帧序列（runtime 对 pi stdout 的 tee 日志 `ext-sessions/<sessionId>/logs/pi-<date>.jsonl`，决定性证据）：`switch_session` 成功 → prompt started → `agent_start`/`turn_start` → 流式回复 → `turn_end`/`agent_end` 全在 = pi 侧回合完整收尾，假红在观测侧。再对照客户端订阅通路：会话删除路径（含判死强杀、进程异常退出）汇聚 `removeSessionEntry` 步骤 13 = `MessageBus.clearSession` 清除该会话全部订阅者（session-entry-removal.ts:28），restore 后 runtime 不代客户端重订阅（设计预期消费者重订阅，session-lifecycle.ts:512-516 注释）——订阅建立在恢复完成锚之后、且目标帧只出现在 subscribe 应答快照里（live 广播已错过）时，等待器永等超时。
+
+**恢复**：恢复完成锚（restore 应答 / 恢复成功日志行）之后重订阅，从 subscribe 应答快照的 lastSeq 续传并显式消费快照内历史帧，再等 live 广播；禁止在无订阅前提下用「step3 卡且 step4 也卡」推断产品侧问题。
 ### 33. LLM 网络代理分流失效：配了代理规则的服务商仍直连失败（pi 升级后高发）
 
 **症状**：settings「网络代理」页已启用并配置规则，但命中规则的服务商请求仍不走代理（或代理软件侧无新 CONNECT 隧道）；典型触发时点 = pi 版本升级后（分流依赖两个 pi/Node 未承诺前提：上游 SDK 默认 fetch 运行时读 `globalThis.fetch`；外部 undici 包 `setGlobalDispatcher` 写入的槽与 Node 内置 fetch 读取的槽一致——任一被升级打破即静默失效）。
@@ -680,7 +734,7 @@ bare repo + worktree 结构下，`.bare/hooks/pre-commit` 是全部 worktree 共
 | 类 | 判据 | 规则 | 实例 |
 |---|---|---|---|
 | ① 自有状态对账 | 状态变化 100% 经由自身请求/事件路径 | **禁止周期轮询**。主链路 = 回执 + 事件失效；周期 pull 会掩盖主链路 bug | thinkingLevel 30s 轮询（已随设计定案删除，附录 C.4） |
-| ② 活性探测 | 对端死掉/卡死时无法自报 | 允许，但**优先升级式触发**（事件静默超时 / 请求失败再探），无条件周期须论证 | pingPi 60s、WS 15s ping+45s watchdog、Electron 30s /health |
+| ② 活性探测 | 对端死掉/卡死时无法自报 | 允许，但**优先升级式触发**（事件静默超时 / 请求失败再探），无条件周期须论证 | pingPi 60s、WS 15s ping+45s watchdog、Electron 30s /health、ping 观测超时（get_state 探测请求 5s 有界等待窗，pi-stall-detection D1）、静默判定矩阵（回合帧流静默计时 + 判死自动处置，pi-stall-detection D3——见上「会话停滞判定与恢复」条目） |
 | ③ 外部世界 | 数据源在外部、无 push 通道 | 允许轮询；频率 = 外部约束（API 限额 / 下游缓存 TTL），不做无依据加密 | 应用更新检查（GitHub + GitCode 双源，全源限流退避——rateLimited = 全部源均在退避窗口才报；周期 60min 不变） |
 | ④ 空转 | 有 push 通道仍轮询，或产出数据无消费者 | **删除或事件化** | plugin-host 30s memory monitor（lastActiveAt 只写不读，已删）、handoff 2s 轮询（onExit 多播化后已事件化） |
 

@@ -65,7 +65,7 @@ const FAUX_LLM_EXT = join(
 /** faux 层模型（faux 装配的 --model）。 */
 export const FAUX_MODEL = "faux/faux-1";
 
-/** rename LLM 超时（固定 30s，与 llm.ts RENAME_TIMEOUT_MS 同值）+ 余量，waitForSessionLog 等 rename 结果日志的默认上限。 */
+/** waitForSessionLog 等 rename 结果日志的默认上限——成功路径调用（数十秒内）+ 余量；挂死路径（无包内超时，SDK 默认 10 分钟级）须显式传大 timeoutMs（见 run-a5.mjs）。 */
 const RENAME_SETTLE_TIMEOUT_MS = 45_000;
 
 // ──────────────────────── 错误与失败分类 ────────────────────────

@@ -238,15 +238,10 @@ export function createClassifier(deps: ClassifierDeps): {
 		const timeoutMs = config.timeout > 0 ? config.timeout * MILLIS_PER_SECOND : undefined;
 		const callPromise = callLLM(buildCallOptions(model, ctx, config, timeoutMs, signal, onLog));
 
-		// 3. 等待 callLLM + 外层超时/中止兜底（provider 不支持 timeoutMs/signal 时防永挂）
-		let settled: SettledRace;
-		try {
-			settled = await raceResultWithDeadline(callPromise, timeoutMs, signal);
-		} catch (error) {
-			const message = toErrorMessage(error);
-			onLog?.(`[pi-permission] classifier: callLLM race threw: ${message}`);
-			return { ...CLASSIFY_FALLBACK_RESULT };
-		}
+		// 3. 等待 callLLM + 外层超时/中止兜底（provider 不支持 timeoutMs/signal 时防永挂）。
+		//    raceResultWithDeadline 恒 resolve（callLLM reject 已在 racer 内归一为
+		//    ok:false，timeout/abort racer 均 resolve-only），无需外层 catch。
+		const settled: SettledRace = await raceResultWithDeadline(callPromise, timeoutMs, signal);
 
 		// 4. timeout / aborted / ok:false → fail-closed fallback；成功 → 收窄透传
 		const settledOutcome = settleRacedResult(settled, timeoutMs, onLog);

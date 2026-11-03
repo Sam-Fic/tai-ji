@@ -1,10 +1,14 @@
 // src/__tests__/notify-reconcile-judgement.test.ts —— 收殓终态补投的送达痕迹提取
-// （unified-delivery D3 裁决 1）：collectDeliveredTaskIds 五形态（正常消息/fork 副本/
+// （unified-delivery D3 裁决 1，现行登记处 = ADR-0074 与 docs/CONTEXT.md『统一投递』段）：collectDeliveredTaskIds 五形态（正常消息/fork 副本/
 // 缺 details 旧消息/非 bash 通知/killed 无痕迹任务）+ content 双落盘形态容错。
-// 旧补投标记（background-bash:reconciled）随波 3 补投机制退役：防双投由 port 幂等
+// 原骨架段（collectJournaledDeliveryIds / isReconcileNotifyCandidate 真值）已随判据
+// 链收编迁 @zhushanwen/pi-delivery-port reconcile-judgement.test.ts；旧补投标记
+// （background-bash:reconciled）随波 3 补投机制退役：防双投由 port 幂等
 // 接管，marker 判据/读写形态及其测试一并删除（反向锁见 pending-reconcile.test.ts
 // 「legacy reconciled marker present WITHOUT trace → still re-notified」用例）
 import { describe, expect, it } from "vitest";
+
+import { scanJournal } from "@zhushanwen/pi-delivery-port";
 
 import { BACKGROUND_BASH_CUSTOM_TYPE } from "../background/notify.ts";
 import { collectDeliveredTaskIds } from "../background/notify-reconcile-judgement.ts";
@@ -102,5 +106,82 @@ describe("collectDeliveredTaskIds: content落盘形态与脏数据容错", () =>
 			deliveredEntry({ taskId: OTHER_TASK_ID, details: undefined }),
 		]);
 		expect([...ids].sort()).toEqual([TASK_ID, OTHER_TASK_ID].sort());
+	});
+});
+
+// ── 投递日志幂等键提取（collectJournaledDeliveryIds）与骨架真值
+//（isReconcileNotifyCandidate）已随判据链收编迁 @zhushanwen/pi-delivery-port
+// reconcile-judgement.test.ts 单点锁定；journaledOutboxEntry helper 保留——
+// 下方 RL2 compaction 上游行为守护段仍消费。──
+
+/** 投递日志 outbox entry（journal v2 落盘形态——port 受理前 appendEntry 写入）。 */
+function journaledOutboxEntry(id: string, dataOverrides: Record<string, unknown> = {}) {
+	return {
+		type: "custom",
+		customType: "delivery-port-outbox",
+		data: {
+			v: 2,
+			id,
+			timing: "steer",
+			payload: {
+				kind: "custom",
+				customType: BACKGROUND_BASH_CUSTOM_TYPE,
+				content: `notify ${id}`,
+				display: true,
+			},
+			recordedAt: 1,
+			...dataOverrides,
+		},
+	};
+}
+
+// ── RL2（红灯表 §4.2）：投递日志 append-only 抗 compaction 上游行为守护（UD7
+// 观察级前提，pi 升级复验探针）。「投递日志无该幂等键条目 ⇒ 从未成功受理」（三重
+// 判据第三事实）依赖 pi compaction 只追加边界 entry、不删改历史 entry（pi getEntries
+// 契约自述 append-only；CompactionEntry = type:"compaction" 追加条目）。构造含
+// outbox / ack / 送达凭据三类条目的 entries 经 compaction 边沿后形态，scanJournal
+// 全量读取仍完整见三类条目且边界 entry 不污染扫描结果——pi 升级若 compaction 行为
+// 变化，本组红灯即复验信号。
+
+/** pi compaction 边界 entry（SessionManager CompactionEntry 落盘形态，pi 1.0.0）。 */
+function compactionBoundaryEntry(): Record<string, unknown> {
+	return {
+		type: "compaction",
+		summary: "compacted summary",
+		firstKeptEntryId: "c9",
+		tokensBefore: 12345,
+	};
+}
+
+/** 送达凭据消息 entry（details.deliveryId 形态——collectDeliveredIds 命中通道）。 */
+function deliveredCredentialEntry(id: string): Record<string, unknown> {
+	return {
+		type: "custom_message",
+		customType: BACKGROUND_BASH_CUSTOM_TYPE,
+		content: `notify ${id}`,
+		details: { deliveryId: id },
+		display: true,
+	};
+}
+
+describe("scanJournal survives compaction boundary entry (RL2, UD7 upstream guard)", () => {
+	it("outbox / ack / delivered credential all remain visible after compaction appends boundary entry", () => {
+		const afterCompaction = [
+			journaledOutboxEntry(TASK_ID),
+			{ type: "custom", customType: "delivery-port-ack", data: { v: 2, id: TASK_ID, outcome: "delivered" } },
+			deliveredCredentialEntry(TASK_ID),
+			compactionBoundaryEntry(),
+		];
+		const scan = scanJournal(afterCompaction, 1);
+		expect(scan.outbox.has(TASK_ID)).toBe(true);
+		expect(scan.ackedIds.has(TASK_ID)).toBe(true);
+		expect(scan.deliveredIds.has(TASK_ID)).toBe(true);
+	});
+
+	it("compaction boundary entry itself pollutes no scan bucket", () => {
+		const scan = scanJournal([compactionBoundaryEntry()], 1);
+		expect(scan.outbox.size).toBe(0);
+		expect(scan.ackedIds.size).toBe(0);
+		expect(scan.deliveredIds.size).toBe(0);
 	});
 });

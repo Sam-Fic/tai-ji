@@ -5,33 +5,42 @@
  * 与注册的 command handlers，覆盖：
  * ① handleWrite 回执分支矩阵（accepted/command-missing/其余（hook-blocked/error）
  *    + 无效 id + TASK_NOT_FOUND 自愈）
- * ② doRefresh 的 E11 游标失效全量重新拉取与 E4 恢复两态（terminal vs recovering）
- * ③ 重试预算耗尽态稳定（不重试不清零，外部信号重置预算）
- * ④ 生命周期拆镜（onDidDestroySession → teardownMirror 后失效信号冻结）
- * ⑤ 恢复窗口写路径两支用户文案（写成功提示 restore 副作用 / 写抛错提示手动打开）
+ * ② 快照直读数据链（sessions.get 取 cwd → 任务库分片文件读取 → 镜像任务集）
+ * ③ 读失败态（sessions.get 抛错 / cwd 缺失 → 失败提示，hidden 保持上次值）
+ * ④ 周期轮询刷新（外部写快照（模拟 pi 扩展落盘）→ 轮询捕获任务集变化）
+ * ⑤ 生命周期拆镜（onDidDestroySession → teardownMirror 后轮询不再刷新该会话）
  * ⑥ onDidActivateSession 焦点切换（focusSessionId → 写命令链指向新会话 +
- *    ensureMirror 为新 sid 补挂 + 恢复超时失败态的激活时重新拉取自愈）
+ *    ensureMirror 为新 sid 补挂 + 读失败态的激活时重新拉取自愈）
  * ⑦ 展示层三态分支（已过期「即将触发」两态文案 / 上次成败标记 + 失败原因行 /
  *    成功标记且无原因行——经首次拉取推树断言）
- * ⑧ 撤回信号镜像重建（'taiji:revoked' → 丢弃累计 + 全量重新拉取，折叠不含被撤任务；
- *    任务域订阅仍走增量不误重建）
- * ⑨ hidden 入口可见性（空清单 true / 有任务 false；读失败态保持上次值）
+ * ⑧ hidden 入口可见性（空清单 true / 有任务 false；读失败态保持上次值）
+ * ⑨ onDidCreateSession 新会话即建镜像（didCreate 即首拉，非等 didActivate）
+ *
+ * 数据源形态（2026-10-30 任务库分离改线）：任务数据在独立快照文件
+ * `<piAgentDir>/scheduler/<root>/<segments>/<sessionId>.json`（真实 FS 写入 fixture，
+ * 走与插件同源的 extension-protocol store 模块——路径推导构造性一致），
+ * sessions.get 提供会话 cwd；不再有 readEntries 游标/折叠/失效订阅链。
  *
  * 隔离：被测模块持有模块级状态（mirrors Map / focusSessionId），每条用例
- * vi.resetModules() 后动态 import 取 fresh 模块。timer 面（防抖 200ms / 重试 2s）
+ * vi.resetModules() 后动态 import 取 fresh 模块。timer 面（防抖 200ms / 轮询 10s）
  * 全部走 fake timers。
  *
  * 相对路径 import 的理由见 vitest.config.ts 头注（resources/plugins 不在 workspace，
  * 裸包名解析不到；type-only import 运行时被剥离，.js 后缀仅 typecheck 期解析）。
  */
+import { rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMockAgentAPI } from '../../../../packages/plugin-sdk/src/index.ts'
-import type {
-  PluginSessionEntries,
-  SessionInfo,
-} from '../../../../packages/plugin-sdk/src/index.ts'
+import type { SessionInfo } from '../../../../packages/plugin-sdk/src/index.ts'
 import type { PluginContext } from '../../../../packages/runtime/src/services/plugin-service/plugin-types.js'
 import type { GuiComponent, ScheduledTask, TreeItem } from '../../../../packages/extension-protocol/src/index.ts'
+import {
+  schedulerStoreFilePath,
+  writeSchedulerStore,
+} from '../../../../packages/extension-protocol/src/extensions/scheduler/store.ts'
 
 /** sendMessage 回执 reason 词表（与 SDK sendMessage 签名的闭集同源 = SendPromptReason 三值；
  *  busy/compacting/bash 退役值已删，运行态不再产出，mock 不得注入） */
@@ -44,11 +53,12 @@ type PluginModule = typeof import('../index.ts')
 
 // ── 常量（与 index.ts 内部实现值同步；断言依赖）─────────────────────────────
 
-const TASK_ENTRY_TYPE = 'pi-scheduler:task'
 const READ_DEBOUNCE_MS = 200
-const READ_RETRY_MS = 2_000
-const READ_RETRY_MAX = 5
-const SESSION_FILE = '/sessions/s-1.jsonl'
+const SESSION_CWD = '/w/proj'
+/** 插件宿主 env 契约键（与 index.ts resolveAgentDir 同键；生产值由 runtime 注入） */
+const PI_AGENT_DIR_ENV_KEY = 'PI_CODING_AGENT_DIR'
+/** 测试固定的 agentDir（tmp 下，与 global-setup 钉的 TAIJI_AGENT_DATA_DIR 同域隔离） */
+const TEST_AGENT_DIR = join(tmpdir(), 'scheduler-manager-test-agent')
 
 // ── fixture 构造 ─────────────────────────────────────────────────
 
@@ -56,7 +66,7 @@ function makeSession(overrides: Partial<SessionInfo> = {}): SessionInfo {
   return {
     id: 's-1',
     label: 'test-session',
-    cwd: '/w',
+    cwd: SESSION_CWD,
     status: 'idle',
     createdAt: 1,
     lastActiveAt: 100,
@@ -64,19 +74,13 @@ function makeSession(overrides: Partial<SessionInfo> = {}): SessionInfo {
   }
 }
 
-/**
- * upsert custom entry（event sourcing 起点）——过 isSchedulerEntryOp 守卫的最小形状。
- * taskOverride 覆写快照字段（展示层三态等场景：过期 nextRunAt / lastStatus + lastError），
- * 默认空对象 = 原最小形状，既有用例零影响。
- */
-function upsertEntry(
+/** 构造 base 任务（快照文件 fixture 用）。 */
+function makeTask(
   taskId: string,
   enabled: boolean,
-  entryId: string,
-  ownerFile: string = SESSION_FILE,
-  taskOverride: Partial<Omit<ScheduledTask, 'ownerSessionFile' | 'pending'>> = {},
-): PluginSessionEntries['entries'][number] {
-  const snapshot: Omit<ScheduledTask, 'ownerSessionFile' | 'pending'> = {
+  overrides: Partial<ScheduledTask> = {},
+): ScheduledTask {
+  return {
     id: taskId,
     name: `task-${taskId}`,
     prompt: 'do it',
@@ -87,15 +91,13 @@ function upsertEntry(
     nextRunAt: Date.now() + 3_600_000,
     runCount: 0,
     history: [],
-    ...taskOverride,
+    ...overrides,
   }
-  return {
-    id: entryId,
-    timestamp: '1970-01-01T00:00:00.000Z',
-    type: 'custom',
-    customType: TASK_ENTRY_TYPE,
-    data: { op: 'upsert', taskId, ownerSessionFile: ownerFile, task: snapshot },
-  }
+}
+
+/** 写任务库快照 fixture（与插件读取同源：store 模块路径推导 + 原子写）。 */
+function writeStore(sessionId: string, cwd: string, tasks: ScheduledTask[]): void {
+  writeSchedulerStore(schedulerStoreFilePath(TEST_AGENT_DIR, cwd, sessionId), { tasks })
 }
 
 /** ansi-text 节点判别（GuiComponent 是泛型接口非 union，narrow 用显式 guard） */
@@ -108,10 +110,8 @@ interface Harness {
   api: ReturnType<typeof createMockAgentAPI>
   /** activate() 注册的 command handlers（id → handler） */
   handlers: Map<string, (args?: unknown) => unknown>
-  /** onEntriesInvalidated 捕获的失效回调（外部信号注入口；customType 缺省 = 任务域） */
-  invalidate: (sessionId: string, customType?: string) => void
-  /** readEntries 调用记录 */
-  readCalls: Array<{ sessionId: string; opts: { customType: string; sinceEntryId?: string } }>
+  /** sessions.get 调用记录（快照直读的会话元信息查询） */
+  getCalls: string[]
   /** sendMessage 调用记录 */
   sendCalls: Array<{
     sessionId: string
@@ -119,8 +119,6 @@ interface Harness {
     content: string
     requireCommand?: string
   }>
-  /** notify.warning 调用记录（用户可见提示断言入口） */
-  notifyWarnings: string[]
   /** onDidDestroySession 捕获的回调（会话销毁信号注入口） */
   destroySession: (session: SessionInfo) => void
   /** onDidActivateSession 捕获的回调（会话激活/焦点切换信号注入口） */
@@ -133,35 +131,34 @@ interface Harness {
 
 /**
  * 装配被测插件：fresh 模块 + mock API + activate()。
- * readScript 是 readEntries 的顺序脚本（逐条消费，耗尽后返回空 envelope）。
+ * 快照 fixture 由用例经 writeStore 落盘（真实 FS，走 TAIJI_AGENT_DATA_DIR 固定 tmp）。
  */
 async function setup(opts: {
-  readScript?: Array<PluginSessionEntries | Error>
   session?: SessionInfo
   /** 冷启动 list() 返回值（空数组 → 无焦点会话分支） */
   sessions?: SessionInfo[]
   sendMessageReceipt?: SendReceipt
   sendMessageError?: Error
-  /** 失效订阅 dispose 抛错（teardown 防御分支：释放失败不阻断其余清理） */
-  invalidateDisposeError?: Error
+  /** sessions.get 抛错（读失败态注入） */
+  getError?: Error
+  /** sessions.get 返回值覆写（undefined 模拟元信息缺失） */
+  getOverride?: SessionInfo | undefined
 }): Promise<Harness> {
   vi.resetModules()
   const mod = await import('../index.ts')
   const api = createMockAgentAPI()
 
-  const readCalls: Harness['readCalls'] = []
-  const script = [...(opts.readScript ?? [{ entries: [] }])]
-  api.sessions.readEntries = vi.fn(
-    async (
-      sessionId: string,
-      readOpts: { customType: string; sinceEntryId?: string },
-    ): Promise<PluginSessionEntries> => {
-      readCalls.push({ sessionId, opts: readOpts })
-      const next = script.shift()
-      if (next instanceof Error) throw next
-      return next ?? { entries: [] }
-    },
+  // 会话表（sessions.get 按 sessionId 查表——cwd 是快照分片键，会话间必须互异）
+  const sessionTable = new Map(
+    (opts.sessions ?? [opts.session ?? makeSession()]).map((s) => [s.id, s]),
   )
+  const getCalls: Harness['getCalls'] = []
+  api.sessions.get = vi.fn(async (sessionId: string): Promise<SessionInfo | undefined> => {
+    getCalls.push(sessionId)
+    if (opts.getError) throw opts.getError
+    if ('getOverride' in opts) return opts.getOverride
+    return sessionTable.get(sessionId)
+  })
 
   const sendCalls: Harness['sendCalls'] = []
   api.sessions.sendMessage = vi.fn(
@@ -178,8 +175,6 @@ async function setup(opts: {
   )
 
   api.sessions.list = vi.fn(async () => opts.sessions ?? [opts.session ?? makeSession()])
-  // get 面向 E4 两态断言开放覆写（default = idle，可恢复路径之外不触发终态分支）
-  api.sessions.get = vi.fn(async () => opts.session ?? makeSession())
   // getCommands 返回空 → E13 判定 disabled: true（按钮灰置不是本组用例焦点，固定即可）
   api.sessions.getCommands = vi.fn(async () => [])
 
@@ -201,29 +196,6 @@ async function setup(opts: {
     },
   )
   api.ui.updateHeaderAction = vi.fn(async () => ({ updated: true }))
-
-  let invalidateHandlers = new Map<string, (sessionId: string, customType: string) => void>()
-  api.sessions.onEntriesInvalidated = vi.fn(
-    (
-      _sessionId: string,
-      customType: string,
-      handler: (sessionId: string, customType: string) => void,
-    ): { dispose: () => void } => {
-      // 按 customType 分键捕获（插件对 TASK_ENTRY_TYPE 与 'taiji:revoked' 各订一条，
-      // 同一 mock 承载双订阅；dispose 注入错误对两条订阅同样生效）
-      invalidateHandlers.set(customType, handler)
-      return {
-        dispose: () => {
-          if (opts.invalidateDisposeError) throw opts.invalidateDisposeError
-        },
-      }
-    },
-  )
-
-  const notifyWarnings: Harness['notifyWarnings'] = []
-  api.notify.warning = vi.fn(async (message: string): Promise<void> => {
-    notifyWarnings.push(message)
-  })
 
   let destroyHandler: ((session: SessionInfo) => void) | null = null
   api.sessions.onDidDestroySession = vi.fn(
@@ -256,11 +228,8 @@ async function setup(opts: {
     mod,
     api,
     handlers,
-    invalidate: (sessionId: string, customType: string = TASK_ENTRY_TYPE) =>
-      invalidateHandlers.get(customType)?.(sessionId, customType),
-    readCalls,
+    getCalls,
     sendCalls,
-    notifyWarnings,
     destroySession: (session: SessionInfo) => destroyHandler?.(session),
     activateSession: (session: SessionInfo) => activateHandler?.(session),
     createSession: (session: SessionInfo) => createHandler?.(session),
@@ -306,34 +275,33 @@ beforeEach(() => {
   vi.useFakeTimers()
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.spyOn(console, 'log').mockImplementation(() => {})
+  // 插件经 env 契约键取 agentDir（生产值由 runtime 的 pluginHostPiAgentDirEnv 注入）；
+  // 测试固定到 tmp 下的独立目录，先清残留再设键（宿主机 shell 若泄漏同键会被覆盖）
+  rmSync(TEST_AGENT_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+  vi.stubEnv(PI_AGENT_DIR_ENV_KEY, TEST_AGENT_DIR)
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
   vi.useRealTimers()
+  // 快照 fixture 清理：TEST_AGENT_DIR 固定 tmp 在同次运行内跨用例共享，
+  // 不清则前序用例写入的分片会污染后续「快照不存在」类用例
+  rmSync(join(TEST_AGENT_DIR, 'scheduler'), { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
 })
 
-// ── 激活链 + 首次拉取（其余用例的前置语义，独立断言）────────────────────────────
+// ── 激活链 + 首次快照读取（其余用例的前置语义，独立断言）──────────────────────
 
-describe('activate: 冷启动兜底 + 首次拉取折叠 + 徽标', () => {
-  it('list() 兜底焦点会话，防抖后全量首次拉取，徽标 = 启用任务数', async () => {
-    const h = await setup({
-      readScript: [
-        {
-          sessionFile: SESSION_FILE,
-          entries: [upsertEntry('aaaabbbb', true, 'e1'), upsertEntry('ccccdddd', false, 'e2')],
-          leafEntryId: 'e2',
-        },
-      ],
-    })
+describe('activate: 冷启动兜底 + 首次快照读取 + 徽标', () => {
+  it('list() 兜底焦点会话，防抖后快照直读，徽标 = 启用任务数', async () => {
+    writeStore('s-1', SESSION_CWD, [makeTask('aaaabbbb', true), makeTask('ccccdddd', false)])
+    const h = await setup({})
 
     // 防抖窗口内未拉取
-    expect(h.readCalls).toHaveLength(0)
+    expect(h.getCalls).toHaveLength(0)
     await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
 
-    expect(h.readCalls).toEqual([
-      { sessionId: 's-1', opts: { customType: TASK_ENTRY_TYPE } },
-    ])
+    expect(h.getCalls).toEqual(['s-1'])
     // 徽标只数 enabled
     expect(lastHeaderAction(h.api).badge).toBe('1')
     // 树含统计行与两个任务的操作条（每任务 list-tree + action-bar 一对）
@@ -342,58 +310,88 @@ describe('activate: 冷启动兜底 + 首次拉取折叠 + 徽标', () => {
     expect(tree.filter((n) => n.type === 'action-bar')).toHaveLength(2)
   })
 
-  it('增量拉取：游标后 append，不动累计前缀', async () => {
-    const h = await setup({
-      readScript: [
-        { sessionFile: SESSION_FILE, entries: [upsertEntry('aaaabbbb', true, 'e1')], leafEntryId: 'e1' },
-        {
-          sessionFile: SESSION_FILE,
-          entries: [upsertEntry('ccccdddd', false, 'e2')],
-          leafEntryId: 'e2',
-        },
-      ],
-    })
+  it('快照不存在（新会话零任务）→ 空态提示 + hidden=true', async () => {
+    const h = await setup({})
     await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
 
-    h.invalidate('s-1')
-    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-
-    // 第二次带 sinceEntryId 游标，累计 entries 两任务同屏
-    expect(h.readCalls[1]?.opts.sinceEntryId).toBe('e1')
-    expect(lastHeaderAction(h.api).badge).toBe('1')
-    expect(h.lastTree().filter((n) => n.type === 'action-bar')).toHaveLength(2)
+    expect(lastHeaderAction(h.api).hidden).toBe(true)
+    expect(ansiLines(h.lastTree())).toContain(
+      '本会话还没有定时任务 —— 在对话里说，或手敲 /schedule <排期> <内容> 创建。',
+    )
   })
 
-  it('hidden 可见性：空任务清单推 hidden=true（无任务不显示），任务出现后推 false 恢复显示', async () => {
-    const h = await setup({
-      readScript: [
-        { sessionFile: SESSION_FILE, entries: [], leafEntryId: 'e0' },
-        { sessionFile: SESSION_FILE, entries: [upsertEntry('aaaabbbb', true, 'e1')], leafEntryId: 'e1' },
-      ],
-    })
+  it('hidden 可见性：任务出现（写快照 + 轮询）→ 推 false 恢复显示', async () => {
+    const h = await setup({})
     await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
     expect(lastHeaderAction(h.api).hidden).toBe(true)
 
-    // 任务出现（失效驱动增量刷新）→ 入口恢复显示
-    h.invalidate('s-1')
+    // 模拟 pi 扩展侧落盘（对话内 schedule tool 创建任务）：外部写快照 → 轮询捕获
+    writeStore('s-1', SESSION_CWD, [makeTask('aaaabbbb', true)])
+    await vi.advanceTimersByTimeAsync(h.mod.POLL_INTERVAL_MS)
+    expect(lastHeaderAction(h.api)).toMatchObject({ sessionId: 's-1', badge: '1', hidden: false })
+  })
+})
+
+// ── 周期轮询刷新（任务库写入无会话 entry 失效信号，轮询兜覆盖）─────────────────
+
+describe('轮询刷新: 外部写快照 → 轮询捕获任务集变化', () => {
+  it('到点 dispatch 记账变化（runCount 推进 + once 删除）随轮询收敛', async () => {
+    writeStore('s-1', SESSION_CWD, [makeTask('aaaabbbb', true), makeTask('dddd4444', true, { kind: 'once' })])
+    const h = await setup({})
     await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-    expect(lastHeaderAction(h.api).hidden).toBe(false)
+    expect(h.lastTree().filter((n) => n.type === 'action-bar')).toHaveLength(2)
+
+    // 模拟 pi 扩展侧 dispatch：once 任务执行后从快照删除（once 触发即删语义）
+    writeStore('s-1', SESSION_CWD, [makeTask('aaaabbbb', true, { runCount: 1 })])
+    await vi.advanceTimersByTimeAsync(h.mod.POLL_INTERVAL_MS)
+
+    expect(h.lastTree().filter((n) => n.type === 'action-bar')).toHaveLength(1)
+    expect(treeLabels(h.lastTree())).toContain('已执行 1 次')
   })
 
-  it('hidden 读失败态保持上次值：恢复窗口不重算，数据恢复后随刷新收敛', async () => {
-    const h = await setup({
-      readScript: [
-        { sessionFile: SESSION_FILE, entries: [upsertEntry('aaaabbbb', true, 'e1')], leafEntryId: 'e1' },
-        new Error('session read blew up'),
-      ],
-    })
+  it('轮询只触达有镜像的会话（懒挂点语义：未建镜像的会话不被主动查询）', async () => {
+    const h = await setup({})
+    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
+    const countAfterFirst = h.getCalls.length
+
+    await vi.advanceTimersByTimeAsync(h.mod.POLL_INTERVAL_MS * 3)
+    // 只有 s-1 一个镜像：每轮恰一次 get
+    expect(h.getCalls.length).toBe(countAfterFirst + 3)
+    expect(new Set(h.getCalls)).toEqual(new Set(['s-1']))
+  })
+})
+
+// ── 读失败态（快照直读链路错误 → 失败提示，不显示假空态）─────────────────────
+
+describe('doRefresh: 读失败态', () => {
+  it('sessions.get 抛错 → 失败提示（不渲染陈旧行、不显示假空态），hidden 保持上次值', async () => {
+    writeStore('s-1', SESSION_CWD, [makeTask('aaaabbbb', true)])
+    const h = await setup({})
     await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
     expect(lastHeaderAction(h.api).hidden).toBe(false)
 
-    // 读失败（恢复窗口）：hidden 保持上次值 false 原样重推，不误判为「无任务」
-    h.invalidate('s-1')
-    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
+    // 元信息查询失败注入（轮询周期捕获——快照直读的刷新兜底通道）
+    vi.mocked(h.api.sessions.get).mockRejectedValue(new Error('session store scan failed'))
+    await vi.advanceTimersByTimeAsync(h.mod.POLL_INTERVAL_MS)
+
+    const lines = ansiLines(h.lastTree())
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('任务库读取失败')
+    // hidden 保持上次值（不误判为「无任务」）
     expect(lastHeaderAction(h.api).hidden).toBe(false)
+
+    // 恢复：查询正常后（激活信号重拉）任务列表回归
+    vi.mocked(h.api.sessions.get).mockResolvedValue(makeSession())
+    h.activateSession(makeSession())
+    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
+    expect(lastHeaderAction(h.api).badge).toBe('1')
+    expect(ansiLines(h.lastTree())).toEqual([])
+  })
+
+  it('会话元信息缺失（get → undefined）→ 失败提示，不静默当空集', async () => {
+    const h = await setup({ getOverride: undefined })
+    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
+    expect(ansiLines(h.lastTree())[0]).toContain('任务库读取失败')
   })
 })
 
@@ -403,16 +401,8 @@ describe('handleWrite: 回执分支矩阵', () => {
   const TASK = 'aaaabbbb'
 
   async function writeSetup(receipt: SendReceipt): Promise<Harness> {
-    return setup({
-      readScript: [
-        {
-          sessionFile: SESSION_FILE,
-          entries: [upsertEntry(TASK, true, 'e1')],
-          leafEntryId: 'e1',
-        },
-      ],
-      sendMessageReceipt: receipt,
-    })
+    writeStore('s-1', SESSION_CWD, [makeTask(TASK, true)])
+    return setup({ sendMessageReceipt: receipt })
   }
 
   it('reason=error → 命令已发出 + 通用重试文案', async () => {
@@ -464,12 +454,8 @@ describe('handleWrite: 回执分支矩阵', () => {
   })
 
   it('sendMessage 抛错 → 错误提示携带手敲恢复动作', async () => {
-    const h = await setup({
-      readScript: [
-        { sessionFile: SESSION_FILE, entries: [upsertEntry(TASK, true, 'e1')], leafEntryId: 'e1' },
-      ],
-      sendMessageError: new Error('channel closed'),
-    })
+    writeStore('s-1', SESSION_CWD, [makeTask(TASK, true)])
+    const h = await setup({ sendMessageError: new Error('channel closed') })
     await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
 
     await h.handlers.get('scheduler-manager.delete')?.({ id: TASK })
@@ -490,229 +476,35 @@ describe('handleWrite: 回执分支矩阵', () => {
   })
 
   it('TASK_NOT_FOUND：快照无该 id → 不发命令 + 刷新自愈', async () => {
-    const h = await setup({
-      readScript: [
-        { sessionFile: SESSION_FILE, entries: [upsertEntry(TASK, true, 'e1')], leafEntryId: 'e1' },
-        { sessionFile: SESSION_FILE, entries: [], leafEntryId: 'e1' },
-      ],
-      sendMessageReceipt: { accepted: true },
-    })
+    writeStore('s-1', SESSION_CWD, [makeTask(TASK, true)])
+    const h = await setup({ sendMessageReceipt: { accepted: true } })
     await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
 
     await h.handlers.get('scheduler-manager.run')?.({ id: 'deadbeef' })
 
     expect(h.sendCalls).toHaveLength(0)
     expect(ansiLines(h.lastTree())).toContain('任务已不存在，列表已刷新')
-    // 自愈：防抖重新拉取已武装，推进后 readEntries 第二次（带游标增量）
+    // 自愈：防抖重新拉取已武装，推进后 get 第二次
     await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-    expect(h.readCalls).toHaveLength(2)
-    expect(h.readCalls[1]?.opts.sinceEntryId).toBe('e1')
+    expect(h.getCalls.length).toBeGreaterThanOrEqual(2)
   })
 })
 
-// ── ② E11 游标失效 + E4 恢复两态（guidance MF-1-7 第 2 块）───────────────────
-
-describe('doRefresh: E11 游标失效全量重新拉取', () => {
-  it('增量抛 Entry not found → 清累计清游标 → 无 sinceEntryId 全量重新拉取', async () => {
-    const h = await setup({
-      readScript: [
-        { sessionFile: SESSION_FILE, entries: [upsertEntry('aaaabbbb', true, 'e1')], leafEntryId: 'e1' },
-        new Error('Entry not found: e1'),
-        {
-          sessionFile: SESSION_FILE,
-          entries: [upsertEntry('aaaabbbb', true, 'e1'), upsertEntry('ccccdddd', true, 'e2')],
-          leafEntryId: 'e2',
-        },
-      ],
-    })
-    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-    expect(h.readCalls).toHaveLength(1)
-
-    h.invalidate('s-1')
-    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-
-    // 第二次带游标 → E11；第三次无游标全量（自愈对用户无感、对排查出声）
-    expect(h.readCalls[1]?.opts.sinceEntryId).toBe('e1')
-    expect(h.readCalls).toHaveLength(3)
-    expect(h.readCalls[2]?.opts).toEqual({ customType: TASK_ENTRY_TYPE })
-    expect(console.warn).toHaveBeenCalledWith(
-      expect.stringContaining('cursor invalidated, full re-pull'),
-    )
-    // 折叠结果 = 全量重新拉取后的 2 任务
-    expect(lastHeaderAction(h.api).badge).toBe('2')
-  })
-})
-
-describe('doRefresh: E4 读失败两态', () => {
-  it('会话 dead → terminal「会话不可用」，不武装重试', async () => {
-    const h = await setup({ readScript: [new Error('pi exited')] })
-    vi.mocked(h.api.sessions.get).mockResolvedValue(makeSession({ status: 'dead' }))
-    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-
-    expect(ansiLines(h.lastTree())).toEqual([
-      '会话不可用：pi exited —— 请从侧栏重新打开该会话',
-    ])
-    // terminal 不自动重试：推进远超重试窗口仍只有初始一次读
-    await vi.advanceTimersByTimeAsync(READ_RETRY_MS * (READ_RETRY_MAX + 2))
-    expect(h.readCalls).toHaveLength(1)
-  })
-
-  it('会话 active → 「正在恢复」+ 自动重试，恢复成功后列表/徽标回归', async () => {
-    const h = await setup({
-      readScript: [
-        new Error('SESSION_NOT_ACTIVE: no live pi'),
-        {
-          sessionFile: SESSION_FILE,
-          entries: [upsertEntry('aaaabbbb', true, 'e1')],
-          leafEntryId: 'e1',
-        },
-      ],
-    })
-    vi.mocked(h.api.sessions.get).mockResolvedValue(makeSession({ status: 'active' }))
-    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-
-    expect(ansiLines(h.lastTree())).toEqual(['会话正在恢复，请稍候…'])
-
-    // 恢复窗口重试（2s 间隔）→ 第 2 次读成功 → 失败态清除 + 徽标回归
-    await vi.advanceTimersByTimeAsync(READ_RETRY_MS)
-    expect(h.readCalls).toHaveLength(2)
-    expect(ansiLines(h.lastTree())).toEqual([])
-    expect(lastHeaderAction(h.api).badge).toBe('1')
-  })
-})
-
-// ── ③ 重试预算耗尽态稳定（guidance MF-1-7 第 3 块）──────────────────────────
-
-describe('scheduleRetry: 预算耗尽态稳定', () => {
-  it('恒败 + 可恢复会话 → 恰好 READ_RETRY_MAX 次重试后停，文案升级「恢复超时」', async () => {
-    const h = await setup({
-      readScript: Array.from({ length: 20 }, () => new Error('still down')),
-    })
-    vi.mocked(h.api.sessions.get).mockResolvedValue(makeSession({ status: 'active' }))
-    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-
-    // 初始 1 次 + 5 次重试 = 6 次；预算内保持「正在恢复」
-    await vi.advanceTimersByTimeAsync(READ_RETRY_MS * 2)
-    expect(ansiLines(h.lastTree())).toEqual(['会话正在恢复，请稍候…'])
-
-    await vi.advanceTimersByTimeAsync(READ_RETRY_MS * (READ_RETRY_MAX - 2))
-    expect(h.readCalls).toHaveLength(1 + READ_RETRY_MAX)
-    // 耗尽：提示升级为恢复超时（含恢复动作）
-    expect(ansiLines(h.lastTree())).toEqual(['会话恢复超时，请从侧栏重新打开该会话'])
-
-    // 耗尽态稳定：不重试（调用数冻结）不清零（长时间推进无第 7 次读）
-    await vi.advanceTimersByTimeAsync(READ_RETRY_MS * 30)
-    expect(h.readCalls).toHaveLength(1 + READ_RETRY_MAX)
-  })
-
-  it('外部失效信号重置预算 → 耗尽后可获新一轮重试', async () => {
-    const h = await setup({
-      readScript: Array.from({ length: 20 }, () => new Error('down')),
-    })
-    vi.mocked(h.api.sessions.get).mockResolvedValue(makeSession({ status: 'active' }))
-    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-    await vi.advanceTimersByTimeAsync(READ_RETRY_MS * READ_RETRY_MAX)
-    expect(h.readCalls).toHaveLength(1 + READ_RETRY_MAX)
-
-    // 外部信号（会话侧新证据）→ scheduleRefresh 重置预算 + 防抖重新拉取
-    h.invalidate('s-1')
-    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-    expect(h.readCalls).toHaveLength(1 + READ_RETRY_MAX + 1)
-    // 新一轮预算在身：再推进重试窗口，读次数继续增长
-    await vi.advanceTimersByTimeAsync(READ_RETRY_MS)
-    expect(h.readCalls).toHaveLength(1 + READ_RETRY_MAX + 2)
-  })
-})
-
-// ── ④ 生命周期：onDidDestroySession 拆镜（MF-2-7）────────────────────────────
+// ── ④ 生命周期拆镜（拆镜后轮询不再刷新该会话）───────────────────────────────
 
 describe('onDidDestroySession: 生命周期拆镜', () => {
   const TASK = 'aaaabbbb'
 
-  it('会话销毁 → 拆订阅清镜像；其后失效信号不再触发拉取', async () => {
-    const h = await setup({
-      readScript: [
-        { sessionFile: SESSION_FILE, entries: [upsertEntry(TASK, true, 'e1')], leafEntryId: 'e1' },
-      ],
-    })
+  it('会话销毁 → 清镜像；其后轮询周期不再触发该会话的读取', async () => {
+    writeStore('s-1', SESSION_CWD, [makeTask(TASK, true)])
+    const h = await setup({})
     await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-    expect(h.readCalls).toHaveLength(1)
+    expect(h.getCalls).toHaveLength(1)
 
     h.destroySession(makeSession())
-    h.invalidate('s-1')
-    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS + READ_RETRY_MS * (READ_RETRY_MAX + 2))
-    // 镜像已删：防抖不武装，长时间推进读次数冻结
-    expect(h.readCalls).toHaveLength(1)
-  })
-
-  it('dispose 抛错不阻断 teardown：出声留诊断，镜像仍删除', async () => {
-    const h = await setup({
-      readScript: [
-        { sessionFile: SESSION_FILE, entries: [upsertEntry(TASK, true, 'e1')], leafEntryId: 'e1' },
-      ],
-      invalidateDisposeError: new Error('subscription table gone'),
-    })
-    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-
-    h.destroySession(makeSession())
-
-    expect(console.warn).toHaveBeenCalledWith(
-      '[scheduler-manager] dispose failed during teardown:',
-      'subscription table gone',
-    )
-    // 清理未被 dispose 失败阻断：镜像已删，失效信号冻结
-    h.invalidate('s-1')
-    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-    expect(h.readCalls).toHaveLength(1)
-  })
-})
-
-// ── ⑤ 恢复窗口写路径两支用户文案（MF-2-7）────────────────────────────────────
-
-describe('handleWrite: 恢复窗口两支文案', () => {
-  const TASK = 'aaaabbbb'
-
-  /** 前置 = 首次拉取成功（快照留任务）→ 失效重新拉取抛 SESSION_NOT_ACTIVE → 恢复窗口中 */
-  async function recoveringSetup(opts: {
-    sendMessageReceipt?: SendReceipt
-    sendMessageError?: Error
-  }): Promise<Harness> {
-    return setup({
-      readScript: [
-        { sessionFile: SESSION_FILE, entries: [upsertEntry(TASK, true, 'e1')], leafEntryId: 'e1' },
-        new Error('SESSION_NOT_ACTIVE: no live pi'),
-      ],
-      ...opts,
-    })
-  }
-
-  async function enterRecoveringWindow(h: Harness): Promise<void> {
-    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-    h.invalidate('s-1')
-    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-    // 前置自证：读失败进恢复态（快照保留，写路径可达）
-    expect(ansiLines(h.lastTree())).toEqual(['会话正在恢复，请稍候…'])
-  }
-
-  it('恢复窗口写成功 → 显式提示 restore 副作用（到期任务照常触发）', async () => {
-    const h = await recoveringSetup({ sendMessageReceipt: { accepted: true } })
-    await enterRecoveringWindow(h)
-
-    await h.handlers.get('scheduler-manager.run')?.({ id: TASK })
-
-    // 重试窗口走出失败态后，恢复提示作为行内 notice 可见
-    await vi.advanceTimersByTimeAsync(READ_RETRY_MS)
-    expect(ansiLines(h.lastTree())).toContain('会话已恢复，未完成的排期任务将照常触发')
-  })
-
-  it('恢复窗口写抛错 → 提示手动打开会话的恢复动作', async () => {
-    const h = await recoveringSetup({ sendMessageError: new Error('boom') })
-    await enterRecoveringWindow(h)
-
-    await h.handlers.get('scheduler-manager.run')?.({ id: TASK })
-
-    await vi.advanceTimersByTimeAsync(READ_RETRY_MS)
-    expect(ansiLines(h.lastTree())).toContain('会话恢复失败：boom —— 请从侧栏手动打开该会话后再管理')
+    await vi.advanceTimersByTimeAsync(h.mod.POLL_INTERVAL_MS * 3)
+    // 镜像已删：轮询遍历不到 s-1，读取次数冻结
+    expect(h.getCalls).toHaveLength(1)
   })
 })
 
@@ -720,19 +512,9 @@ describe('handleWrite: 恢复窗口两支文案', () => {
 
 describe('onDidActivateSession: 焦点切换 + ensureMirror 补挂', () => {
   it('激活另一会话 → 焦点切换，写命令链与新会话镜像均指向新 sid', async () => {
-    const SESSION_FILE_2 = '/sessions/s-2.jsonl'
-    const h = await setup({
-      readScript: [
-        // s-1 冷启动兜底首次拉取（1 个启用任务，供 toggle 快照命中发命令）
-        { sessionFile: SESSION_FILE, entries: [upsertEntry('aaaa1111', true, 'e1')], leafEntryId: 'e1' },
-        // s-2 激活补挂首次拉取（1 个启用任务）
-        {
-          sessionFile: SESSION_FILE_2,
-          entries: [upsertEntry('aaaa1111', true, 'e1', SESSION_FILE_2)],
-          leafEntryId: 'e1',
-        },
-      ],
-    })
+    writeStore('s-1', SESSION_CWD, [makeTask('aaaa1111', true)])
+    writeStore('s-2', '/w/other', [makeTask('aaaa1111', true)])
+    const h = await setup({ sessions: [makeSession(), makeSession({ id: 's-2', label: 'other-session', cwd: '/w/other' })] })
     await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
 
     // 前置：冷启动兜底焦点 = s-1，写命令链指向 s-1
@@ -742,15 +524,12 @@ describe('onDidActivateSession: 焦点切换 + ensureMirror 补挂', () => {
     ])
 
     // 用户激活另一会话 s-2：焦点切换 + ensureMirror 为新 sid 补挂（防抖武装）
-    h.activateSession(makeSession({ id: 's-2', label: 'other-session' }))
+    h.activateSession(makeSession({ id: 's-2', label: 'other-session', cwd: '/w/other' }))
     await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
 
-    // 补挂证明：readEntries 出现 s-2 的全量首次拉取（新镜像游标从零起，无 sinceEntryId）
-    expect(h.readCalls).toEqual([
-      { sessionId: 's-1', opts: { customType: TASK_ENTRY_TYPE } },
-      { sessionId: 's-2', opts: { customType: TASK_ENTRY_TYPE } },
-    ])
-    // 新会话树 + 徽标推到 s-2（折叠出 1 个启用任务）
+    // 补挂证明：s-2 的快照读取发生（新会话镜像首拉）
+    expect(h.getCalls).toContain('s-2')
+    // 新会话树 + 徽标推到 s-2（快照 1 个启用任务）
     expect(lastHeaderAction(h.api)).toMatchObject({ sessionId: 's-2', badge: '1' })
     expect(h.lastTree().filter((n) => n.type === 'action-bar')).toHaveLength(1)
 
@@ -759,115 +538,48 @@ describe('onDidActivateSession: 焦点切换 + ensureMirror 补挂', () => {
     expect(h.sendCalls.at(-1)?.sessionId).toBe('s-2')
   })
 
-  it('恢复超时后 didActivate：失败态镜像重置预算重新拉取成功，任务列表回归', async () => {
-    const h = await setup({
-      readScript: [
-        // 兜底建镜首次拉取 + 恢复窗口 5 次重试全败（共 6 次），第 7 次（激活触发）成功
-        ...Array.from({ length: 1 + READ_RETRY_MAX }, () => new Error('SESSION_NOT_ACTIVE: no live pi')),
-        { sessionFile: SESSION_FILE, entries: [upsertEntry('aaaabbbb', true, 'e1')], leafEntryId: 'e1' },
-      ],
-    })
-    vi.mocked(h.api.sessions.get).mockResolvedValue(makeSession({ status: 'active' }))
-
-    // 冷启动兜底建镜：重试预算耗尽 → 文案停「恢复超时」（前置自证）
+  it('读失败态后 didActivate：激活信号立即重拉成功，任务列表回归', async () => {
+    writeStore('s-1', SESSION_CWD, [makeTask('aaaabbbb', true)])
+    const h = await setup({ getError: new Error('scan unavailable') })
+    // 冷启动兜底建镜：首拉失败（前置自证）
     await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-    await vi.advanceTimersByTimeAsync(READ_RETRY_MS * READ_RETRY_MAX)
-    expect(h.readCalls).toHaveLength(1 + READ_RETRY_MAX)
-    expect(ansiLines(h.lastTree())).toEqual(['会话恢复超时，请从侧栏重新打开该会话'])
+    expect(ansiLines(h.lastTree())[0]).toContain('任务库读取失败')
 
-    // 用户从侧栏重新打开该会话 → didActivate（会话激活完成后投递，进程必已就绪）
+    // 用户切走再切回 → didActivate（会话激活完成后投递）+ 查询已恢复
+    vi.mocked(h.api.sessions.get).mockResolvedValue(makeSession())
     h.activateSession(makeSession())
     await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
 
-    // 失败态镜像重置预算重新拉取成功：失败文案清除，任务列表/徽标回归
-    expect(h.readCalls).toHaveLength(1 + READ_RETRY_MAX + 1)
+    // 失败态镜像重拉成功：失败文案清除，任务列表/徽标回归
     expect(ansiLines(h.lastTree())).toEqual([])
     expect(lastHeaderAction(h.api).badge).toBe('1')
   })
 })
 
-// ── ⑧ 撤回信号镜像重建（U7：'taiji:revoked' → 丢弃累计 + 全量重新拉取）────────────
-
-describe('onEntriesInvalidated(taiji:revoked): 树回退镜像重建', () => {
-  const REVOKED = 'taiji:revoked'
-
-  it('创建任务 op 累计后撤回信号到达 → 丢弃累计 + 无游标全量重新拉取 → 折叠不含被撤任务', async () => {
-    const h = await setup({
-      readScript: [
-        // 首次拉取全量：任务 op 在累计镜像内（缺陷形态：被撤任务残留启用态徽标 1）
-        { sessionFile: SESSION_FILE, entries: [upsertEntry('aaaabbbb', true, 'e1')], leafEntryId: 'e1' },
-        // 撤回后全量重新拉取：runtime 活跃路径过滤使被撤 op 不在回包（空集 + 新游标）
-        { sessionFile: SESSION_FILE, entries: [], leafEntryId: 'L-e2' },
-      ],
-    })
-    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-    expect(h.readCalls).toHaveLength(1)
-    expect(lastHeaderAction(h.api).badge).toBe('1')
-
-    // 撤回信号（runtime 树回退确认后广播）→ 镜像重建路径
-    h.invalidate('s-1', REVOKED)
-    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-
-    // 全量重新拉取（无 sinceEntryId——累计与游标均已丢弃，不带走被撤 op 的增量基线）
-    expect(h.readCalls).toHaveLength(2)
-    expect(h.readCalls[1]?.opts).toEqual({ customType: TASK_ENTRY_TYPE })
-    // 折叠结果 = 干净集合：徽标清空、面板回空态提示、零任务操作条
-    expect(lastHeaderAction(h.api).badge).toBeUndefined()
-    expect(h.lastTree().filter((n) => n.type === 'action-bar')).toHaveLength(0)
-    expect(ansiLines(h.lastTree())).toContain(
-      '本会话还没有定时任务 —— 在对话里说，或手敲 /schedule <排期> <内容> 创建。',
-    )
-  })
-
-  it('任务域订阅与撤回域订阅并存：TASK_ENTRY_TYPE 信号仍走增量（不误重建）', async () => {
-    const h = await setup({
-      readScript: [
-        { sessionFile: SESSION_FILE, entries: [upsertEntry('aaaabbbb', true, 'e1')], leafEntryId: 'e1' },
-        // 任务域失效 → 增量 append（游标仍在，不全量）
-        { sessionFile: SESSION_FILE, entries: [upsertEntry('ccccdddd', false, 'e2')], leafEntryId: 'e2' },
-      ],
-    })
-    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-
-    h.invalidate('s-1') // TASK_ENTRY_TYPE（缺省）
-    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-
-    expect(h.readCalls[1]?.opts.sinceEntryId).toBe('e1')
-    expect(lastHeaderAction(h.api).badge).toBe('1')
-  })
-})
-
-// ── ⑦ 展示层三态分支（MF-4-3：buildTaskRows 经首次拉取推树断言）───────────
+// ── ⑦ 展示层三态分支（经首次拉取推树断言）──────────────────────────────
 
 describe('buildTaskRows: 展示层三态', () => {
   it('已过期 → 即将触发；失败 → 成败标记 + 独立原因行；成功 → 标记且无原因行', async () => {
-    const h = await setup({
-      readScript: [
-        {
-          sessionFile: SESSION_FILE,
-          entries: [
-            // ① 已过期 enabled 任务：nextRunAt 在过去 → 「即将触发」两态文案
-            upsertEntry('aaaa1111', true, 'e1', SESSION_FILE, { nextRunAt: Date.now() - 60_000 }),
-            // ② 失败任务：lastRunAt + lastStatus='failed' + lastError → 「· 失败」标记 + 独立原因行
-            upsertEntry('bbbb2222', true, 'e2', SESSION_FILE, {
-              nextRunAt: Date.now() + 2 * 86_400_000,
-              runCount: 3,
-              lastRunAt: Date.now() - 120_000,
-              lastStatus: 'failed',
-              lastError: 'boom',
-            }),
-            // ③ 成功任务：lastStatus='success' → 「· 成功」标记、无原因行
-            upsertEntry('cccc3333', true, 'e3', SESSION_FILE, {
-              nextRunAt: Date.now() + 2 * 86_400_000,
-              runCount: 2,
-              lastRunAt: Date.now() - 86_400_000,
-              lastStatus: 'success',
-            }),
-          ],
-          leafEntryId: 'e3',
-        },
-      ],
-    })
+    writeStore('s-1', SESSION_CWD, [
+      // ① 已过期 enabled 任务：nextRunAt 在过去 → 「即将触发」两态文案
+      makeTask('aaaa1111', true, { nextRunAt: Date.now() - 60_000 }),
+      // ② 失败任务：lastRunAt + lastStatus='failed' + lastError → 「· 失败」标记 + 独立原因行
+      makeTask('bbbb2222', true, {
+        nextRunAt: Date.now() + 2 * 86_400_000,
+        runCount: 3,
+        lastRunAt: Date.now() - 120_000,
+        lastStatus: 'failed',
+        lastError: 'boom',
+      }),
+      // ③ 成功任务：lastStatus='success' → 「· 成功」标记、无原因行
+      makeTask('cccc3333', true, {
+        nextRunAt: Date.now() + 2 * 86_400_000,
+        runCount: 2,
+        lastRunAt: Date.now() - 86_400_000,
+        lastStatus: 'success',
+      }),
+    ])
+    const h = await setup({})
     await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
 
     // 启用按 nextRunAt 升序：过期任务最前；b/c nextRunAt 相等 → 稳定排序保持插入序。
@@ -888,38 +600,25 @@ describe('buildTaskRows: 展示层三态', () => {
   })
 })
 
-// ── ⑩ onDidCreateSession 补挂点（ADR-0097 拉为主配套：新建会话即建镜像）──────
+// ── ⑨ onDidCreateSession 补挂点（ADR-0097 拉为主配套：新建会话即建镜像）──────
 
-describe('onDidCreateSession: 新会话即建镜像（didCreate 即挂失效订阅，非等 didActivate）', () => {
-  it('新建会话 didCreate → 首拉推 hidden=true（新会话零任务），失效信号可达（readEntries 触发）', async () => {
-    const h = await setup({
-      readScript: [
-        // 冷启动兜底 s-1 首拉（空）
-        { entries: [] },
-        // s-2 didCreate 补挂首拉（空——新会话零任务）
-        { entries: [] },
-        // s-2 失效信号触发后增量拉取（出现一个任务：按钮出现）
-        { sessionFile: '/sessions/s-2.jsonl', entries: [upsertEntry('cccc2222', true, 'e1', '/sessions/s-2.jsonl')], leafEntryId: 'e1' },
-      ],
-    })
+describe('onDidCreateSession: 新会话即建镜像（didCreate 即首拉，非等 didActivate）', () => {
+  it('新建会话 didCreate → 首拉推 hidden=true（新会话零任务），轮询可达（任务出现即按钮出现）', async () => {
+    const h = await setup({ sessions: [makeSession(), makeSession({ id: 's-2', label: 'fresh-session', cwd: '/w/fresh' })] })
     await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
 
     // 新建会话 s-2（session.create 不触发 didActivate——runtime handleSessionCreate 只
     // reply + 广播会话列表）：didCreate 即建镜像，首拉推 hidden=true（零任务不显示）
-    h.createSession(makeSession({ id: 's-2', label: 'fresh-session' }))
+    h.createSession(makeSession({ id: 's-2', label: 'fresh-session', cwd: '/w/fresh' }))
     await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
 
-    expect(h.readCalls).toEqual([
-      { sessionId: 's-1', opts: { customType: TASK_ENTRY_TYPE } },
-      { sessionId: 's-2', opts: { customType: TASK_ENTRY_TYPE } },
-    ])
+    expect(h.getCalls).toContain('s-2')
     expect(lastHeaderAction(h.api)).toMatchObject({ sessionId: 's-2', hidden: true })
 
-    // 失效订阅就位：s-2 任务 entry 失效信号 → 重新拉取（首拉空 envelope 无游标 → 仍全量）
-    // → 徽标推送（按钮出现）。若无 didCreate 挂点，此信号无镜像可达、按钮永不出现
-    h.invalidate('s-2')
-    await vi.advanceTimersByTimeAsync(READ_DEBOUNCE_MS)
-    expect(h.readCalls.at(-1)).toEqual({ sessionId: 's-2', opts: { customType: TASK_ENTRY_TYPE } })
+    // 轮询可达：s-2 快照出现任务（模拟 pi 扩展落盘）→ 轮询捕获
+    // → 徽标推送（按钮出现）。若无 didCreate 挂点，该会话无镜像、按钮永不出现
+    writeStore('s-2', '/w/fresh', [makeTask('cccc2222', true)])
+    await vi.advanceTimersByTimeAsync(h.mod.POLL_INTERVAL_MS)
     expect(lastHeaderAction(h.api)).toMatchObject({ sessionId: 's-2', badge: '1', hidden: false })
   })
 })

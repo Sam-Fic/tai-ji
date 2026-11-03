@@ -19,7 +19,7 @@
     "packages/state-machine/src/**",
     "packages/core/src/transport/**"
   ],
-  "uncategorizedBaseline": 161,
+  "uncategorizedBaseline": 133,
   "coverageEnforced": true,
   "version": 1,
   "maintenance": "维护说明：① 新增测试文件产生登记义务——pre-commit 2f-4 跑 select-affected-domain --staged 拦未归域文件，归入所属域 tests（整目录可用 <prefix>/** glob）或 uncategorized 精确清单；② uncategorized 棘轮只降不升——check 校验展开数 ≤ uncategorizedBaseline，缩趋手段 = 按内含域拆注 sharedBy / 归 host/foundation / 按 pendingDomains 注记整簇立新城迁出（新城建立 = 新建 <域>.json + uncategorized 删对应条目 + 下调基线）；③ coverageEnforced=true：任何未覆盖测试文件都由 check 红灯拦截，新增文件必须同 commit 归域；④ W2-B 14 域已全部 enforced，domain-map.json 冻结不变，两表一致性由 check 交叉核对。"

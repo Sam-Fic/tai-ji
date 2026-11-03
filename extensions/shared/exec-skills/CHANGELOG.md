@@ -1,5 +1,11 @@
 # @zhushanwen/pi-exec-skills
 
+## 0.2.2
+
+### Patch Changes
+
+- d2b945a20: Documentation-only alignment: internal decision-record references updated to the renumbered registry. No behavior change.
+
 ## 0.2.1
 
 ### Patch Changes

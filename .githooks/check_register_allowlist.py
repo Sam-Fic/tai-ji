@@ -11,12 +11,6 @@
     （models.json/auth.json 监视 + modelRegistry.refresh）同属该通道。
     语义 = 「taiji 侧数据 → pi 注册表常驻条目」的可见性投喂。
 
-  - extensions/universal/scheduler/ —— ack 合成轮与 backend 转发，**语义不同**。
-    src/ack-turn.ts 在确认轮窗口内临时注册合成 provider 覆写 streamSimple、
-    one-shot 注销（src/backend.ts 的 registerProvider 只是转发 pi 的适配层）。
-    语义 = 执行通道覆写（临时、有注销），不是可见性投喂，故不在禁列。
-    两包语义区分写在此处防后来者误把 scheduler 当「第二投喂方」清掉。
-
 为什么禁「白名单外新开注入点」：注入修的是 pi 进程注册表这一事实源，注册表
 的全部消费方（--model 解析 / rpc set_model / rename / smart-context /
 permission 分类器 / scheduler / subagent 模型校验 / provider 对账）零改动即
@@ -24,9 +18,7 @@ permission 分类器 / scheduler / subagent 模型校验 / provider 对账）零
 「展示可见 ≠ 执行可用」在该子集反向复现。
 
 测试目录排除（`__tests__/`、`tests/`）：仓内既有测试 mock 桩是白名单外的
-**合法引用**，不属注入调用点——scheduler `src/__tests__/`（ack-contract.test.ts
-的 backend 桩、active-path.test.ts 的 `registerProvider = vi.fn()`、
-mock-backend.ts 的桩实现）与 structured-output `tests/mock-pi-fixture.ts`
+**合法引用**，不属注入调用点——structured-output `tests/mock-pi-fixture.ts`
 的 `registerProvider: vi.fn()` / `registerVirtualModel: vi.fn()` 都是对 pi API
 的桩化，不是真实注入。不排除会对既有测试资产误报红。**禁止删除本排除规则**——
 新增测试 mock 桩同样落在排除范围内。
@@ -65,7 +57,6 @@ SCAN_ROOT = PROJECT_ROOT / "extensions"
 # 白名单（包/路径粒度，前缀按仓库根相对 posix 路径判定）
 WHITELIST_PREFIXES = (
     "extensions/universal/provider-live-sync/",
-    "extensions/universal/scheduler/",
 )
 
 # 测试目录排除（路径片段判定，任意层级命中即排除）

@@ -1,5 +1,5 @@
 // src/__tests__/force-patterns.test.ts —— M4 白名单：内置两组命中样例 / 锚定语义 /
-// 合并矩阵三态 / 用户正则。锚定四例（参数文本不误伤）是设计 §3.5 的强制断言。
+// 合并矩阵三态 / 用户正则。锚定四例（参数文本不误伤）是设计定案的强制断言。
 import { describe, expect, it } from "vitest";
 
 import {
@@ -144,7 +144,7 @@ describe("内置 force-longrun 组命中样例（M4 定稿清单）", () => {
 	}
 });
 
-describe("锚定语义（命令位置锚定，防参数文本误伤——§3.5 强制四例）", () => {
+describe("锚定语义（命令位置锚定，防参数文本误伤——强制四例）", () => {
 	const cases: Array<{ command: string; hit: boolean; why: string }> = [
 		// ① 必须不命中：commit message 参数里的 "npm test" 是文本不是命令
 		{ command: `git commit -m "fix: npm test"`, hit: false, why: "参数文本不是命令位置" },
@@ -177,7 +177,7 @@ describe("锚定语义（命令位置锚定，防参数文本误伤——§3.5 �
 	});
 });
 
-describe("合并矩阵（§3.5 配置开关 × 组）", () => {
+describe("合并矩阵（配置开关 × 组）", () => {
 	it("零配置：两组内置均生效", () => {
 		const patterns = compileForcePatterns([], false);
 		expect(match("npm test", patterns)?.source).toBe("builtin-test");

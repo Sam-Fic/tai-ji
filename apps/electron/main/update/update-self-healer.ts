@@ -20,6 +20,8 @@
  * - 区分 .old 是否存在：避免误把"下载期失败"标成 rolled-back（语义误导，监控/用户
  *   会以为回滚了一个其实没动过的安装）
  * - 自愈失败绝不阻塞 app 启动（返回 false，仅 console.error 记录）
+ * - 失败路径禁破坏性兜底：当前应用未成功移到 .broken 前不得删除它（rename 失败即
+ *   中止回滚）；任何已捕获失败都保留至少一个可恢复的应用路径（原位 / .broken / .old）
  * - mac 回滚依赖 updater.sh 写的 .old 备份（rm-then-mv 决策树产物）
  * - linux 回滚依赖 updater-linux.sh 的 mv .old 备份（v2 起 unlink → mv .old）
  * - result.json 解析失败时，若内容含 'replacing' 且 .old 存在，仍尝试回滚
@@ -646,10 +648,13 @@ function getOldBackupPath(): string | undefined {
 /**
  * mac .app bundle 回滚：.old 存在 → 原子化恢复。
  *
- * 原子化策略（避免 rm 后 rename 失败导致 app 路径为空）：
- *   1. 先把破损 .app rename 到 .broken（rename 失败才退回 rmSync）
- *   2. rename .old 回 .app（失败则把 .broken 还回去，至少有 app 可用）
- *   3. 成功后清理 .broken
+ * 原子化策略（失败路径上不删除任何应用副本，至少保留一个可恢复路径）：
+ *   1. 先把破损 .app rename 到 .broken；rename 失败 → 立即中止回滚（原 .app 原位
+ *      保留，.old 备份未动，下次启动可重试）——禁止 rm 当前应用作兜底：那会让
+ *      后续 .old 恢复也失败时应用路径为空
+ *   2. rename .old 回 .app（失败则把 .broken 还回去，至少有 app 可用；还回去也
+ *      失败 → 双重失败，显式抛错，.broken 与 .old 均原位保留供手动恢复）
+ *   3. 成功后才清理 .broken（恢复副本已就位，删除的是冗余副本）
  *
  * execPath 推导 .app 路径：.../TaiJi.app/Contents/MacOS/TaiJi → dirname×3
  */
@@ -662,9 +667,13 @@ function rollbackMacBundle(): void {
     try {
       renameSync(appBundle, brokenBundle)
     } catch (renameErr) {
-      // rename 失败（跨设备/权限）：rm 作为最后手段
-      console.warn('[update-self-healer] rename to .broken failed, falling back to rm:', renameErr)
-      rmSync(appBundle, { recursive: true, force: true })
+      // fail-safe：改名失败即中止回滚，原 .app 与 .old 均原位保留（宁可回滚失败
+      // 也不毁掉可用安装；rm 当前应用会让后续恢复双失败时无任何可恢复路径）
+      console.error(
+        '[update-self-healer] rename to .broken failed, abort rollback (current app kept in place):',
+        renameErr,
+      )
+      throw renameErr
     }
   }
   // 2. 恢复 .old 到原位
@@ -675,9 +684,19 @@ function rollbackMacBundle(): void {
     if (existsSync(brokenBundle)) {
       try {
         renameSync(brokenBundle, appBundle)
-      // eslint-disable-next-line taste/no-silent-catch -- best-effort：.broken 无法恢复，记录即可
       } catch (restoreErr) {
-        console.warn('[update-self-healer] restore .broken failed:', restoreErr)
+        // 双重失败：app 路径为空，但 .broken（原破损 app）与 .old（备份）均保留在
+        // 原位可手动恢复——不删除、不清空，抛显式错误（含恢复指引）交外层记录
+        console.error(
+          '[update-self-healer] restore .old and put-back .broken both failed; recoverable copies kept:',
+          brokenBundle,
+          oldBundle,
+          restoreErr,
+        )
+        throw new Error(
+          `rollback double failure: app path empty, recoverable copies kept at ${brokenBundle} and ${oldBundle}`,
+          { cause: restoreErr },
+        )
       }
     }
     throw e
@@ -694,8 +713,10 @@ function rollbackMacBundle(): void {
 /**
  * linux AppImage 回滚：.old 存在 → 原子化恢复。
  *
- * 原子化策略与 mac 一致：先把破损 AppImage rename 到 .broken，再 rename .old 回原位，
- * 最后清理 .broken。AppImage 是单文件（非目录）。
+ * 原子化策略与 mac 一致：先把破损 AppImage rename 到 .broken（失败即中止，原 AppImage
+ * 原位保留，禁止 rm 兜底），再 rename .old 回原位（失败则把 .broken 还回去；还回去也
+ * 失败 → 双重失败显式抛错，.broken 与 .old 均原位保留），最后清理 .broken。
+ * AppImage 是单文件（非目录）。
  */
 function rollbackLinuxAppImage(): void {
   const appImage = process.env.APPIMAGE
@@ -707,9 +728,13 @@ function rollbackLinuxAppImage(): void {
     try {
       renameSync(appImage, brokenImage)
     } catch (renameErr) {
-      // rename 失败：rm 作为最后手段
-      console.warn('[update-self-healer] linux rename to .broken failed, falling back to rm:', renameErr)
-      rmSync(appImage, { force: true })
+      // fail-safe：改名失败即中止回滚，原 AppImage 与 .old 均原位保留（宁可回滚
+      // 失败也不毁掉可用安装）
+      console.error(
+        '[update-self-healer] linux rename to .broken failed, abort rollback (current AppImage kept in place):',
+        renameErr,
+      )
+      throw renameErr
     }
   }
   // 2. 恢复 .old 到原位
@@ -720,9 +745,19 @@ function rollbackLinuxAppImage(): void {
     if (existsSync(brokenImage)) {
       try {
         renameSync(brokenImage, appImage)
-      // eslint-disable-next-line taste/no-silent-catch -- best-effort：.broken 无法恢复，记录即可
       } catch (restoreErr) {
-        console.warn('[update-self-healer] linux restore .broken failed:', restoreErr)
+        // 双重失败：app 路径为空，但 .broken 与 .old 均保留在原位可手动恢复——
+        // 不删除、不清空，抛显式错误（含恢复指引）交外层记录
+        console.error(
+          '[update-self-healer] linux restore .old and put-back .broken both failed; recoverable copies kept:',
+          brokenImage,
+          oldImage,
+          restoreErr,
+        )
+        throw new Error(
+          `rollback double failure: app path empty, recoverable copies kept at ${brokenImage} and ${oldImage}`,
+          { cause: restoreErr },
+        )
       }
     }
     throw e

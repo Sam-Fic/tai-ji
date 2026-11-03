@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-smart-context",
-  "version": "0.4.4",
+  "version": "0.5.0",
   "type": "module",
   "main": "index.ts",
   "taiji": {
@@ -19,7 +19,8 @@
             500000,
             600000
           ],
-          "excludedModels": []
+          "excludedModels": [],
+          "autoCompactThresholdRatio": 0.9
         }
       }
     ]

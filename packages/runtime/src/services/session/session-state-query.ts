@@ -94,11 +94,15 @@ export interface SessionStateQueryDeps { // oe-exempt:20261024:framework:DI 装�
   locateMainSessionFileFromCache(sessionId: string): string | undefined
   /**
    * 主会话冷读段 2：`scanPiSessions({ force: true })` 全扫（目录枚举 + stat + 解析）。
-   * 生产注入 `findScannedSessionFileById`。
+   * 生产注入 `findScannedSessionFileById`——该函数（session-file-locator.ts）是「按 id
+   * 从磁盘定位主会话文件」的唯一实装，file-service.ts `resolveSessionContext` 磁盘段
+   * 直接消费同一函数（dmg-r1-9 同源单函数）；两链同源同参由
+   * `./__tests__/session-locate-single-source.test.ts` 对拍锁定，换源只改定位单函数。
    *
-   * 返回 filePath + 本轮全扫的 cwd 分组目录数——与 `locateBtwLineFileByLayout` 同构：
-   * 段 2 枚举是 O(cwd 分组数) 的磁盘成本，计数经返回值进冷读埋点 `scannedDirCount`
+   * 返回 filePath + cwd + 本轮全扫的 cwd 分组目录数——与 `locateBtwLineFileByLayout`
+   * 同构：段 2 枚举是 O(cwd 分组数) 的磁盘成本，计数经返回值进冷读埋点 `scannedDirCount`
    * （services 层不反向探 infra 模块级 `sessionScanDirCount`，只经注入缝单向流动）。
+   * cwd 字段供 file-service 纯读链取值（本链不消费）。
    */
   locateMainSessionFileFromDisk(sessionId: string): MainSessionScanLocateResult
   /**
@@ -118,7 +122,9 @@ export interface SessionStateQueryDeps { // oe-exempt:20261024:framework:DI 装�
   locateBtwLineFile(sessionId: string): string | undefined
   /**
    * btw 线存储树布局定位兜底（段 1 / 段 2 均未命中后才调）。生产注入
-   * `findBtwLineFileByLayout`。
+   * `findBtwLineFileByLayout`——btw 布局定位的唯一实装，file-service.ts
+   * `resolveSessionContext` btw 布局段直接消费同一函数（dmg-r1-9 同源单函数，对拍锁定
+   * 见 `locateMainSessionFileFromDisk` 注释）。
    *
    * btw 线文件在 `<dataDir>/ext-sessions/<mainSid>/btw/`，**构造性不在 scanPiSessions
    * 与 sessionMetaCache 范围**（设计 §1.5 E-5），故不能走段 1/段 2；也正因如此，
@@ -194,6 +200,15 @@ export class SessionStateQuery {
    * 为何布局兜底沉到第 4 步：它是对整棵存储树的 O(会话数) 枚举，放在最前会让**每个冷
    * 主会话**都先付这笔成本（而主会话占冷读的绝大多数）；btw 线构造性不在段 1/段 2 的
    * 扫描范围，两段 miss 后兜底寻址结果与旧顺序不变（重启后的线只有本支能寻址）。
+   *
+   * 同源单函数（dmg-r1-9）：段 2 / 段 4 与 file-service.ts `resolveSessionContext` 的
+   * 磁盘段 / btw 布局段消费同一批 infra 定位单函数（session-file-locator.ts 的
+   * `findScannedSessionFileById` / `findBtwLineFileByLayout`；本链经 deps 注入缝取，彼链
+   * 直接 import，同一函数实装——不再各持一份 scan+find）。两链判别产物各异（本链
+   * filePath + scannedDirCount 埋点，彼链 cwd / btw-line 判别形态）——同源同参由
+   * `./__tests__/session-locate-single-source.test.ts` 对拍锁定（机器绑定，取代原
+   * 「仅注释承载」的纪律）；重写 G11/M5 换源时只替换定位单函数实装，两链同步生效，
+   * 不许只换一链。
    */
   async getState(sessionId: string): Promise<SessionStateReply> {
     // ── live 分支：只读实例快照（风险点 1/2）──

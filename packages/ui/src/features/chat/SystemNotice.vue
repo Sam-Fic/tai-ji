@@ -287,8 +287,8 @@ const TEXT_DETAIL_THRESHOLD = 40
  *   退出码，行内无可钉右的语义数字；耗时在详情 facts 补足）；
  * - `endReason === 'natural'` 且 exitCode === 0 → 「后台命令已完成」+ `exit 0 · 耗时`（绿）；
  * - `endReason === 'natural'` 且 exitCode !== 0 → 「后台命令执行失败」+ `exit N · 耗时`（warn）；
- * - `endReason === 'natural'` 且 exitCode === null（D2 错误规格表「部分可选字段缺失」形态，
- *   生产路径不可达）→ 归中性完成档，无 meta。
+ * - `endReason === 'natural'` 且 exitCode === null（转后台任务与被信号终止的显式后台任务
+ *   生产可达——无父权 wait 不可得，退出码结构性恒 null）→ 归中性完成档，无 meta。
  *
  * `exit N · 耗时` 为技术 token（与压缩 meta 的 `tokens` 同类），不进 i18n 键；自然语言短语
  * 走键。耗时格式消费共享单点 format-utils.formatDurationHms（与 Turn bg-notify 边界行
@@ -304,7 +304,7 @@ function bashNotice(d: BackgroundBashDetails): NoticeView {
     text = t('panel.message.bashTimedOut')
     facts = [t('panel.message.bashTimeout'), duration]
   } else if (d.exitCode === null || d.exitCode === 0) {
-    // null（生产不可达形态）与 0 同归中性完成档：主体同为「已完成」，仅 0 有 exit meta
+    // null（转后台/信号终止形态，生产可达）与 0 同归中性完成档：主体同为「已完成」，仅 0 有 exit meta
     text = t('panel.message.bashFinished')
     if (d.exitCode === 0) {
       meta = `exit 0 · ${duration}`

@@ -25,6 +25,7 @@
  */
 
 import { parseModelSelector } from "./model-ref.ts";
+import { assertModelWithinScoped } from "./scoped-models.ts";
 
 /** 报错信息中列出的可用模型上限（防超长错误信息；与 shared/model-ref 同量级口径）。 */
 const MODEL_LIST_LIMIT = 20;
@@ -71,6 +72,11 @@ export type ModelCatalogResolution = ModelCatalogHit | ModelCatalogMiss;
 /** 来源标签（进错误首行辅助定位，与 shared/model-ref 的 opts.source 同口径）。 */
 export interface ModelCatalogOptions { // oe-exempt:20260929:framework:workflow/record 协议契约类型——ports 类型契约先行、单实现常态（dev-0.10.5 已验收代码 merge 带入）
   source?: string;
+  /**
+   * scoped-models 白名单（taiji 设置域）：非空时 catalog 命中后追加白名单断言。
+   * 值来源 = ModelConfigService.getScopedModels()（现读 providers.json）。
+   */
+  scopedAllowList?: readonly string[];
 }
 
 /**
@@ -164,6 +170,12 @@ function classifyMiss(
 /**
  * 创建期/派发期共享的拒单入口：命中放行，未命中同步抛分类化错误（零 spawn 零 token
  * ——两挂点都在引擎 run 启动之前）。系统绝不代改输入：不自动纠正、不放行变体。
+ *
+ * [scoped-models] opts.scopedAllowList 在场（非空）时，catalog 命中后追加白名单
+ * 断言（存在但被白名单排除 → 白名单口径的错误，与「不存在」分类区分）。空数组 /
+ * 缺席 = 白名单未启用，行为不变。白名单语义与读取单源见
+ * execution/assembly/scoped-models.ts（本函数在 shared 层，消费方从
+ * ModelConfigService.getScopedModels() 取值经 opts 传入）。
  */
 export function assertModelInCatalog(
   input: string,
@@ -171,6 +183,7 @@ export function assertModelInCatalog(
   opts: ModelCatalogOptions = {},
 ): ModelCatalogHit {
   const resolution = resolveModelInCatalog(input, source, opts);
-  if (resolution.ok) return resolution;
-  throw new Error(resolution.message);
+  if (!resolution.ok) throw new Error(resolution.message);
+  assertModelWithinScoped(input, opts.scopedAllowList ?? [], opts.source ?? "model catalog");
+  return resolution;
 }

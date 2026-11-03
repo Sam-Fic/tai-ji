@@ -268,9 +268,10 @@ export class PiEngine implements EnginePort {
     }
   }
 
-  /** dispose：全量收割活跃子进程（幂等）。 */
+  /** dispose：全量收割活跃子进程（幂等）。await 三分类记账完成（杀链 promise 同步
+   *  settle，微任务级返回——leaked 形态的取证日志在 dispose 返回前必达）。 */
   async dispose(): Promise<void> {
-    killAllActiveChildren();
+    await killAllActiveChildren();
   }
 
   // ── 反向通道注入点（server 构造后接线 host/askUser） ──

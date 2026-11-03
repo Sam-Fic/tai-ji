@@ -1,5 +1,11 @@
 # @zhushanwen/pi-system-prompt-trace
 
+## 0.2.5
+
+### Patch Changes
+
+- d2b945a20: 删除无消费方的 diff 模块（`summarizePromptDiff` 导出及配套类型），trace 采集与落盘行为不变。
+
 ## 0.2.4
 
 ### Patch Changes

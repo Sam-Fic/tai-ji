@@ -1209,9 +1209,9 @@ describe('workflow store — triggerWorkflowReload（信号驱动重新拉取）
     expect(sessionApi.getWorkflows).toHaveBeenCalledWith('session-1')
   })
 
-  it('running 信号后列表为空：显式 warn（v2 注册/终态条目可能未落盘，缺失出声不补偿）', async () => {
+  it('running 信号后列表真空（无 loadError / 非 oversize）：显式 warn（注册/终态条目可能未落盘，缺失出声不补偿）', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    vi.mocked(sessionApi.getWorkflows).mockResolvedValue({ workflows: [], oversize: false })
+    vi.mocked(sessionApi.getWorkflows).mockResolvedValue({ workflows: [], oversize: false, found: true })
     const store = useWorkflowStore()
 
     store.triggerWorkflowReload('session-1', 'running')
@@ -1220,34 +1220,35 @@ describe('workflow store — triggerWorkflowReload（信号驱动重新拉取）
       expect.stringContaining('workflow 列表为空'),
       'session-1',
     )
-    // 文案锚定现行机制语义：v2 注册/终态条目 + events-projection 派生视图（v1
-    // workflow-state-link 格式已随 ADR-0095 废弃，不得回潮）
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('v2 注册/终态条目'),
-      'session-1',
-    )
-    expect(warnSpy).not.toHaveBeenCalledWith(
-      expect.stringContaining('workflow-state-link'),
-      'session-1',
-    )
     warnSpy.mockRestore()
   })
 
-  it('running 信号后拉取失败：不打「未落盘」warn（归因 RPC 通道失败，留痕在 console.error + loadError 分区）', async () => {
+  it('running 信号后列表为空但拉取失败：不打「未落盘」warn（loadError 分区留痕，console.error 已出声）', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    // 断连等场景：RPC reject → performLoadWorkflows catch 写 loadError 分区 + console.error，
-    // 列表同样为空——不得误报成「数据未落盘」（2026-10-30 prod 实例的误报形态）
     vi.mocked(sessionApi.getWorkflows).mockRejectedValue(new Error('rpc down'))
     const store = useWorkflowStore()
 
     store.triggerWorkflowReload('session-1', 'running')
     await vi.advanceTimersByTimeAsync(0)
-    expect(store.getRecordsBySession('session-1')).toEqual([])
-    expect(store.loadErrorOf('session-1')).toContain('rpc down')
+    // RPC 拉不到 ≠ 数据未落盘：失败经 performLoadWorkflows 的 console.error 留痕
+    expect(errorSpy).toHaveBeenCalledWith('[workflow-store] loadWorkflows failed:', expect.any(Error))
     expect(warnSpy).not.toHaveBeenCalled()
     warnSpy.mockRestore()
     errorSpy.mockRestore()
+  })
+
+  it('running 信号后列表为空但 oversize 降级读：不打「未落盘」warn（文件过大归因，非未落盘）', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(sessionApi.getWorkflows).mockResolvedValue({ workflows: [], oversize: true })
+    const store = useWorkflowStore()
+
+    store.triggerWorkflowReload('session-1', 'running')
+    await vi.advanceTimersByTimeAsync(0)
+    // 主 session 文件 >32MB 降级读是设计内行为（runtime 预检 warn + oversizeOf facet 已
+    // 驱动面板降级提示），此处静默跳过，不误报「未落盘」
+    expect(warnSpy).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
   })
 
   it('running 信号后有数据：不 warn（正常路径零噪音）', async () => {

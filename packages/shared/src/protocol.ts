@@ -74,6 +74,9 @@ import type { GenStatsFrame } from './gen-stats'
 // quota.configure payload 形状 SSOT 引用（coding-plan-quota-config-ux §7.1 契约收敛）
 import type { QuotaConfigurePayload } from './quota-types'
 import type { QuotaPreset } from './quota-presets'
+// readiness 域（startup-readiness-and-current-state 设计 §7.1，u-m0 M0 契约期）：
+// 形状 SSOT 在 ./readiness，本文件仅登记 type→payload 映射
+import type { ReadinessSnapshot, SessionsRecoveryProgressPayload } from './readiness'
 
 // plan 生命周期状态类型（plan 状态机显式化 D2）：经包出口（@zhushanwen/extension-protocol）
 // 直接引用 PlanLifecycleState（canonical = packages/extension-protocol/src/extensions/plan/state-machine，barrel 已 re-export），
@@ -166,7 +169,10 @@ export type ClientMessageType =
   // 广播」双用消息（广播侧 28 处零参调用点无处传参），过滤参数只放纯查询消息上，避免同一
   // type 的双语义。无参 = 全量（与 config.sessions 查询侧同形）。
   | 'session.list'
-  | 'session.compact' | 'session.rename' | 'session.fork' | 'session.setProject'
+  // session.compactBackground（C2 /compact 后台化）：GUI 手动压缩触发——触发即回执、
+  // 压缩后台执行（完成经 smart-context 落盘信号链出分界行 + 完成通知）。旧同步
+  // session.compact 随本消息退役：GUI 压缩不再同步等待压缩全程（分钟级阻塞链撤销）。
+  | 'session.compactBackground' | 'session.rename' | 'session.fork' | 'session.setProject'
   // composer-gen-stats（D4）：session.getGenStats 拉该 session
   // 当前模型的速度/缓存命中率快照（恢复路径——切 session 主动拉取，规避 broadcast 早于订阅的时序竞争）。
   // reply session.stats_update（payload 消费型，同 session.getContext → context.update 模式）。
@@ -338,6 +344,7 @@ export type ClientMessageType =
   | 'config.setSmartContextCompactModel'
   | 'config.setSmartContextThresholds'
   | 'config.setSmartContextExcludedModels'
+  | 'config.setSmartContextAutoCompactThresholdRatio'
   // codemode 开关命令对（codemode 设计 D1/A1）：get 读激活态（损坏错误态经 corruption 字段返回），
   // set 写增量条目（损坏拒入走 ok:false 信封）；payload/reply 形状见 codemode 域登记段。
   | 'config.getCodemodeEnabled' | 'config.setCodemodeEnabled'
@@ -403,7 +410,7 @@ export type ClientMessageType =
   //（D1）。payload/reply 形状见 mcp 域登记段；ADR-0065 mutation 归类（add/update/setEnabled/remove）
   // 由 mutation-reply-contract 登记。
   | 'mcp.list' | 'mcp.add' | 'mcp.update' | 'mcp.setEnabled' | 'mcp.remove' | 'mcp.test' | 'mcp.testCancel'
-  // canvas.*（problem-solve-canvas 设计 §3.1，U1 契约面）：画布三 RPC——list（托盘/入口
+  // canvas.*（problem-solve-canvas 设计 §3.1，U1 契约）：画布三 RPC——list（托盘/入口
   // 清单拉取）/ get（单画布全量）/ mutate（GUI 直改唯一写入口，actor=user；agent 走
   // marker 通道不经 WS）。reply 与 request 同名（session.subscribe / rollingRestart.status
   // 同款 payload 消费型同名模式）；canvas.updated 广播登记在 ServerMessageType 段。
@@ -411,6 +418,12 @@ export type ClientMessageType =
   // 全量状态经 canvas.get 拉取 + canvas.updated 广播失效收敛（拉为主，ADR-0097），
   // mutate reply 只回事件回执（eventId/evType/summary）或结构化错误，不进 MUTATION_DOMAINS。
   | 'canvas.list' | 'canvas.get' | 'canvas.mutate'
+  // runtime.readiness（startup-readiness-and-current-state 设计 §7.1/D1，u-m0 M0 契约期）：
+  // readiness 快照拉取 RPC（出口三件套之一——按需与重连拉取，持续态唯一真相）。无参数；
+  // reply 与 request 同名（rollingRestart.status 同款 payload 消费型同名模式）。payload/reply
+  // 形状 SSOT 在 ./readiness（ReadinessSnapshot），消息映射登记见 ServerMessageMap /
+  // ReplyPayloadMap 对应条目。实装随 M2（U6 其余实装）；M0 契约期先行定形。
+  | 'runtime.readiness'
 
 // ── Payload 类型定义 ────────────────────────────────────────────
 
@@ -969,7 +982,9 @@ export interface ClientMessageMap {
   'session.getGenStats': { sessionId: string }
   'session.getTraceEntries': { sessionId: string }
   'session.fetchCurrentSystemPrompt': { sessionId: string }
-  'session.compact': { sessionId: string; customInstructions?: string }
+  // session.compactBackground：customInstructions 原样透传扩展侧（runtime 侧 percent 编码
+  // 进内部命令 args，扩展侧解码——编码是传输细节不出 wire 契约）。
+  'session.compactBackground': { sessionId: string; customInstructions?: string }
   'session.rename': { sessionId: string; name: string }
   // session.setProject：手动归类（SessionItem「归入项目」菜单）。
   // runtime 写 `<sessionFile>.project.json` sidecar + 刷新列表广播。projectId 空 = 归回默认项目。
@@ -1036,13 +1051,15 @@ export interface ClientMessageMap {
   // engine-provider-unification D5：per-engine 默认模型写入（runtime 写 config.json engineDefaults
   // 键，写入前校验 modelRef ∈ 该引擎模型清单；engineId/modelRef 回显见 mutation reply）。
   'session.setSubagentEngineDefaultModel': { engineId: string; modelRef: string }
-  // workflow 列表/agent call 对话流读取（runtime 直读主 session JSONL + workflow-state JSONL，不依赖扩展）
+  // workflow 列表/agent call 对话流读取（不依赖扩展）：getWorkflows 走 runtime 每会话
+  // 内存派生视图（[W1 读路径换源]，主 session JSONL 全文重读已退役，oversize 兼容
+  // 路径除外——见下方 reply 段注释）；agent call 对话流按 trace[].sessionId 直读对应 JSONL
   'session.getWorkflows': { sessionId: string }
   'session.getAgentCallHistory': { sessionId: string; agentCallSessionId: string }
   'session.getAgentCallFilePath': { sessionId: string; agentCallSessionId: string }
   'session.workflowAction': { sessionId: string; action: 'abort'; runId: string }
   // workflow 可视化两条拉取 RPC（workflow-visualization 设计 §3.1-4/§3.1-5）：
-  // sessionId 定位 session 的 workflow-state 目录（record 流所在）+ 对齐 workflowAction
+  // sessionId 定位 session 的 run journal 目录（workflow/runs/，record 流所在）+ 对齐 workflowAction
   // 的双参数先例；runId 为 run 级标识（wf- 前缀）。
   'session.getWorkflowRunEvents': { sessionId: string; runId: string }
   'session.getWorkflowDag': { sessionId: string; runId: string }
@@ -1409,6 +1426,8 @@ export interface ClientMessageMap {
   'config.setSmartContextThresholds': { thresholds: number[] }
   /** config.setSmartContextExcludedModels：设置排除模型列表（每条完整 provider/modelId，runtime 侧过滤去重）。 */
   'config.setSmartContextExcludedModels': { models: string[] }
+  /** config.setSmartContextAutoCompactThresholdRatio：设置后台压缩触发线（0-1 窗口占比，runtime 侧钳制）。 */
+  'config.setSmartContextAutoCompactThresholdRatio': { ratio: number }
   /** config.getCodemodeEnabled：读取 codemode 开关（无参数）。 */
   'config.getCodemodeEnabled': Record<string, never>
   /** config.setCodemodeEnabled：设置 codemode 开关目标态（写入语义归 runtime 侧字段域）。 */
@@ -1517,7 +1536,7 @@ export interface ClientMessageMap {
   'mcp.remove': McpRemoveRequest
   'mcp.test': McpTestRequest
   'mcp.testCancel': McpTestCancelRequest
-  // ── canvas.*（problem-solve-canvas U1 契约面）请求 payload：形状 SSOT 在
+  // ── canvas.*（problem-solve-canvas U1 契约）请求 payload：形状 SSOT 在
   // @zhushanwen/extension-protocol canvas 模块（action params 两通道同构——WS RPC 与
   // marker；sessionId 是通道级字段，与 canvas.mutate 的 actor/sessionId 同模式）。
   // 画布按归属会话隔离（session-store-layout-inversion D4）：WS list 按归属过滤
@@ -1528,6 +1547,10 @@ export interface ClientMessageMap {
   'canvas.list': { sessionId: string }
   'canvas.get': { canvasId: string; sessionId: string }
   'canvas.mutate': { actor: CanvasActor; sessionId: string } & CanvasMutateRequest
+  // runtime.readiness：无参只读查询（rollingRestart.status 同款 Record<string, never>；
+  // startup-readiness-and-current-state 设计 §7.1，u-m0 M0 契约期）。reply 同名，
+  // 载荷形状 SSOT 在 ./readiness（ReadinessSnapshot）。
+  'runtime.readiness': Record<string, never>
 }
 
 // ClientMessage 由 ClientMessageMap 直接派生：每个 type 字面量映射到
@@ -1587,23 +1610,6 @@ export type WorktreeEnvelopeCode = WorktreeErrorCode | WorktreeUnknownErrorCode
 export const WORKTREE_AUTO_BASE_BRANCH = 'auto'
 
 /**
- * session.compact RPC 失败的分类码（msg-pipeline-debloat D4-2，runtime ↔ renderer 契约 SSOT）。
- *
- * 产生点：session-message-handler.handleSessionCompact 的 error envelope——
- * - compact_busy：dispatcher.compact busy 预检拒绝（压缩/bash/生成互斥，throw 扁平错误
- *   携带 code，handler 原样透传）。
- * - compact_failed：compact 执行失败（pi 层失败——interpreter 已编排对话流呈现；
- *   ensureActive 恢复失败——session 状态面呈现）。
- *
- * 消费点：core useChat 的 compact/sendBash toast 抑制判别——envelope 携带分类码 =
- * runtime 已编排用户可见呈现（对话流内联 / 状态面），抑制全局错误 toast。
- *
- * 新增分类码必须在此登记（编译器强制两端同步）；未登记/未知 code 在 renderer 侧
- * 保守回退为 toast 兜底（错误可见性优先）。
- */
-export type CompactErrorCode = 'compact_busy' | 'compact_failed'
-
-/**
  * hook 否决类 RPC 失败的分类码（msg-pipeline-debloat D4-2，runtime ↔ renderer 契约 SSOT）。
  *
  * 产生点：session-message-handler 的 message.send / message.bash / delivery.submit 三
@@ -1611,8 +1617,8 @@ export type CompactErrorCode = 'compact_busy' | 'compact_failed'
  * dispatcher 已广播 message.error 错误气泡（用户可见呈现已编排）。
  *
  * 消费点：core useChat 的 send / sendBash / delivery toast 抑制判别——envelope 携带本码 =
- * 抑制全局错误 toast（与 CompactErrorCode 同判别框架；未登记/未知 code 保守回退为 toast
- * 兜底，错误可见性优先）。
+ * 抑制全局错误 toast（同款判别框架；未登记/未知 code 保守回退为 toast 兜底，错误可见性
+ * 优先）。
  *
  * 值常量 MESSAGE_BLOCKED_CODE 供 runtime 落码点与 core 判别点统一引用，
  * 禁止跨包手抄字面量（手抄码名漂移时 tsc 不拦，静默退化为保守 toast 路径）。
@@ -1623,7 +1629,7 @@ export const MESSAGE_BLOCKED_CODE: MessageBlockedCode = 'message_blocked'
 
 export type ServerMessageType =
   | 'session.created' | 'session.deleted' | 'session.deletedByCwd' | 'config.sessions' | 'session.history' | 'session.switched'
-  | 'session.compacting' | 'session.compacted' | 'session.renamed' | 'session.forkNotice' | 'session.skillNotice' | 'session.handoffStarted' | 'session.handoffComplete' | 'session.handoffAborted' | 'session.setProject'
+  | 'session.compacting' | 'session.compacted' | 'session.compactBackground' | 'session.renamed' | 'session.forkNotice' | 'session.skillNotice' | 'session.handoffStarted' | 'session.handoffComplete' | 'session.handoffAborted' | 'session.setProject'
   // session.occupancy（session-occupancy-send-closure P3）：占用四维快照（turn/compacting/
   // bash/handingOff）广播（state topic，
   // last-value 语义——重连/切回 session 自动恢复，不依赖广播时序），renderer sessionPhase 唯一数据源。
@@ -1760,6 +1766,9 @@ export type ServerMessageType =
   // session 归档域 reply（与 request 同名，payload 消费型——session.getSubagentStreamState 同模式）
   | 'session.archive' | 'session.unarchive' | 'session.purgeArchive' | 'config.archives'
   | 'session.exited'
+  // session.stall_hint（pi-stall-detection U4 / D3）：静默辅助提示 last-value 状态帧
+  //（state topic，payload 见 ServerMessageMapBase 对应条目；T/T_hint 推导单源 runtime）。
+  | 'session.stall_hint'
   // D7（u8-pi-respawn）：pi 崩溃自动恢复结果推送（payload 见
   // ServerMessageMapBase 两行注释）。
   | 'session.restored' | 'session.restoreFailed'
@@ -1864,6 +1873,7 @@ export type ServerMessageType =
   | 'config.smartContextCompactModel'
   | 'config.smartContextThresholds'
   | 'config.smartContextExcludedModels'
+  | 'config.smartContextAutoCompactThresholdRatio'
   // codemode 开关命令对 reply（codemode 设计 D1/A1）：get 回激活态 + 损坏错误态；set 回两态信封
   //（成功终态 / 损坏拒入含 error + corruption）。
   | 'config.codemodeEnabled' | 'config.codemodeSetEnabled'
@@ -1908,6 +1918,16 @@ export type ServerMessageType =
   // 启动 reattach 高水位延迟推送（Server→Client 冒号 camelCase；进入单发 + 缓解退出单发，
   // payload 见 ReattachDeferredPayload）。
   | 'reattach:deferred'
+  // readiness 域（startup-readiness-and-current-state 设计 §7.1/D1，u-m0 M0 契约期定形，
+  // 实装随 M2）：readiness = 拉取 RPC reply（与 ClientMessageType 的 'runtime.readiness'
+  // request 同名——rollingRestart.status 同款），同时是初始推送 readiness 段的帧型
+  //（sendInitialState 批内 additive 下发、首连一次到达，旧客户端不消费无影响）；
+  // readinessChanged = 能力翻转边沿广播（仅翻转发，不承载连续进度——D11），载荷为翻转后
+  // 全量快照（消费端整体覆盖，与「拉取为持续态唯一真相」的三段式对齐）；sessionsRecoveryProgress =
+  // sessions 恢复进度节流通知（500ms 级时间节流，仅 sessions 恢复期发送，D11）。三帧均
+  // 无 sessionId 走 broker 纯全局通道（mcp:testResult / rollingRestart:* 先例）。载荷形状
+  // SSOT 在 ./readiness；登记清单共四消息（含 Client 侧拉取 RPC），见 §3.4 M0。
+  | 'runtime.readiness' | 'runtime.readinessChanged' | 'runtime.sessionsRecoveryProgress'
   // btw.*（btw-question D6；W4b 线枚举帧退役后剩 2 帧）：2 个控制帧的 RPC reply（同名
   // request/reply——session.subscribe / session.import 同款模式），纯 RPC reply（走 reply
   // 通道不经 publish，不入 TOPIC_TABLE——session.subscribe 同族）。原 btw.list 兼作线列表
@@ -1926,7 +1946,7 @@ export type ServerMessageType =
   // 广播帧（`mcp.test` 异步任务句柄的完成侧，D8① pi 实测类徽标数据源；冒号形态对齐
   // rollingRestart:* 全局帧先例，payload 无 sessionId 走 broker 纯全局通道）。
   | 'mcp:testResult'
-  // canvas.updated（problem-solve-canvas 设计 §3.1(1) D4，U1 契约面）：画布变更失效提示
+  // canvas.updated（problem-solve-canvas 设计 §3.1(1) D4，U1 契约）：画布变更失效提示
   // 广播。payload 带 sessionId = 画布归属会话（session-store-layout-inversion D4 隔离：
   // 广播仍走 broker 全局通道——broker 豁免清单 GLOBAL_BROADCAST_SESSION_ID_EXEMPT 登记帧，
   // sessionId 仅作归属信息，消费方按会话过滤；非归属会话的订阅忽略本帧）。广播只是
@@ -1984,7 +2004,9 @@ export interface SkillCacheInvalidatedPayload {
 }
 
 // ── backgroundTask 域 payload 辅助类型（docs/architecture/background-task-sidebar-view.md §3.3 D3/D9，u-proto）──
-// shared 仅 type-only 直引 @zhushanwen/extension-protocol（PlanLifecycleState 直引先例）；
+// 本域 type-only 直引 @zhushanwen/extension-protocol（PlanLifecycleState 直引先例；shared 对
+// 该包的依赖已登记在 packages/shared/package.json 与 check-shared-module-admission.mjs 的
+// ALLOWED_WORKSPACE_DEPS——本文件只引类型，值级 import/re-export 在 message.ts）；
 // 本域仍走值形状镜像惯例（SubagentEngineConfigView / SessionTraceHeaderPayload
 // 同先例：契约 SSOT 在彼处，shared 侧放结构镜像，结构兼容即协议兼容）。任务条目逐字段镜像
 // extension-protocol background-task.ts 的 BackgroundTaskRegistryEntry（D9 数据契约零新造——
@@ -2820,6 +2842,13 @@ export interface ServerMessageMapBase {
   // reason: 人类可读的错误原因（含 stderr 尾部截断），供诊断面板展开显示。
   // code: pi 进程退出码（null 表示进程被信号杀死无退出码）。
   'session.exited': { sessionId: string; code: number | null; reason: string }
+  // session.stall_hint（pi-stall-detection U4 / D3 双阈值裁决）：静默辅助提示的 last-value
+  // 状态帧（state topic，重连/切回经 stateSnapshot 回放恢复）。判定权在 runtime——T/T_hint
+  // 推导单源 runtime（review-main#1），本帧只携带呈现所需事实，renderer 不复制推导：
+  // active=true = 静默已过 T_hint（判死阈值前 60s 行动窗）；active=false = 帧流恢复 /
+  // 判死触发 / 回合收尾的清除边沿。silentMs = 提示发出时刻的累计静默时长（毫秒）；phase =
+  // 静默前最后在途阶段（'tool' | 'model-first-byte' | 'stream'），仅呈现用。
+  'session.stall_hint': { sessionId: string; active: boolean; silentMs: number; phase: 'tool' | 'model-first-byte' | 'stream' }
   // session.restored / session.restoreFailed（D7，u8-pi-respawn）：
   // pi 非主动退出后的自动恢复结果推送（恢复编排点 = ProcessManager onSessionExit 链 →
   // pi-respawn.ts 编排；5s 延迟 + 连续 2 次失败熔断）。两者只在「非主动退出触发的自动
@@ -2892,6 +2921,10 @@ export interface ServerMessageMapBase {
   // PiCompactionReason，驱动前端 compacting 浮层文案区分手动/自动。
   'session.compacting': { sessionId: string; status: 'compacting'; reason: 'manual' | 'threshold' | 'overflow' }
   'session.compacted': { sessionId: string; status: 'compacted'; error?: string }
+  // session.compactBackground：手动压缩触发受理 ack（触发即回执——压缩本体后台执行，
+  // 完成事实经 smart-context 落盘信号链 + 完成通知到达，不经本帧）。同名 reply（与
+  // rollingRestart.status 同模式）；启动失败走 error envelope code 'compact_start_failed'。
+  'session.compactBackground': { sessionId: string }
   // session.occupancy（session-occupancy-send-closure D3/P3；chat-flow-consistency D1 扩
   // handingOff 第四维）：占用结构快照，state topic（message-bus 分配 seq + 写 last-value 快照、
   // 不入 ring——重连/切回 session 经 stateSnapshot 回放自动恢复）。turn 四相位值域 SSOT =
@@ -2994,7 +3027,12 @@ export interface ServerMessageMapBase {
   //   消息前延迟落盘窗口 / 扫描竞态），「读不到会话」与「会话存在但列表为空」显式分形，
   //   消费方（store）拿 false 保留既有分区不覆盖、true 的空列表是真实空（直接覆盖）；缺省
   //   true（广播帧不带 = 权威数据帧 / mock / 旧 runtime）。
-  'session.subagents': { sessionId: string; subagents: SubagentRecord[]; oversize?: boolean; found?: boolean }
+  // batchInProgress（U1-lite D10）：additive「批进行中」标志——true = 本载荷可能是部分数据
+  //   （查询落在投影批加载 / entry 拉取轮在途的 await 间隙）。呈现半边（骨架屏消费——对
+  //   无旧数据的会话显示骨架屏、不把部分数据当全量照显）归后续波次（u-m2/SC9）接线，
+  //   本字段当前仅机制半边；缺省 false（mock / 旧 runtime 不带，消费方按 false 处理）。
+  //   广播帧（批末快照）与 RPC reply 均携带。
+  'session.subagents': { sessionId: string; subagents: SubagentRecord[]; oversize?: boolean; found?: boolean; batchInProgress?: boolean }
   // session.planState：plan 模式状态派生视图（runtime 读 session JSONL 最后一条 plan-state entry
   // 派生，冷热两路径共用同一份派生代码）。live 路径 = 派生视图链 stateSnapshot('plan') 广播；
   // 冷读路径 = session.getPlanState RPC reply 复用本 payload。docs 缺省 = 旧 schema entry（D4 降级）。
@@ -3042,13 +3080,14 @@ export interface ServerMessageMapBase {
   //（推送只是「drawer 已打开且无后续 chunk」场景的即时性补强，缺席丢失由接入拉取兜底）。
   'session.subagentStreamDegraded': { sessionId: string; recordId: string }
   // session.workflows：当前 session 派生的 workflow 列表。
-  // [W1 读路径换源] 数据源 = runtime 每会话内存派生视图（pi entry 游标 + run journal（workflow-state
+  // [W1 读路径换源] 数据源 = runtime 每会话内存派生视图（pi entry 游标 + run journal（workflow/runs/
   //   目录）tail 双增量源喂入）——主 session JSONL 全文重读退役；条目源自 workflow-record v2
   //   注册/终态两条小条目（W17 前旧指针 / W17~W1 v1 快照为兼容读层）。信号形态不动（W3 领地）。
   // oversize（RT-4#8）：与 session.subagents 同款降级标志——W1 起仅旧格式惰性兼容读路径可产生
   //   （32MB 预检保留在兼容层），恒空数组语义不变。
   // found（待裁决项 4）：与 session.subagents 同款会话存在性标志（RPC reply 专用，缺省 true）。
-  'session.workflows': { sessionId: string; workflows: WorkflowRunRecord[]; oversize?: boolean; found?: boolean }
+  // batchInProgress（U1-lite D10）：与 session.subagents 同款 additive 批进行中标志（缺省 false）。
+  'session.workflows': { sessionId: string; workflows: WorkflowRunRecord[]; oversize?: boolean; found?: boolean; batchInProgress?: boolean }
   // session.agentCallHistory：workflow 内 agent call 的对话流消息（runtime 按 trace[].sessionId 查找 JSONL）。
   // truncated：u4b（D5①）巨型 JSONL 超预检阈值后逆序窗口降级标志（optional，消费方按 false 处理）。
   'session.agentCallHistory': { sessionId: string; agentCallSessionId: string; messages: import('./message').Message[]; truncated?: boolean }
@@ -3174,7 +3213,8 @@ export interface ServerMessageMapBase {
   // null = 无数据，0 = 真实测量值，禁止 ?? 0 编码（0 物理上可能是真值，null/0 必须可区分）。
   'session.stats_update': GenStatsFrame
   // message.compactionSummary：上下文压缩摘要（compact 执行后推送，进对话流作 SystemNotice）。
-  // runtime message-dispatcher.compact() 从 pi CompactionResult 提取 summary/tokensBefore 广播。
+  // runtime event-interpreter 从 pi compaction_end 事件的 CompactionResult 提取 summary/
+  // tokensBefore 合成广播（live 帧与重载翻译同一条 reducer，C1 分界行实时化）。
   // 前端 chat-message-effects 把它渲染成 system 消息（SystemNotice.vue「上下文已压缩」）。
   'message.compactionSummary': { sessionId: string; summary?: string; tokensBefore?: number; timestamp?: number }
   // session.state_changed：session 级状态变更（model.switch 成功后推送，含新 modelId + 当前
@@ -3331,12 +3371,13 @@ export interface ServerMessageMapBase {
   'config.renamePrompt': RenamePromptReply
   /** config.renameMaxLength：config.getRenameMaxLength / config.setRenameMaxLength 的 reply（归一后生效值，默认 50）。 */
   'config.renameMaxLength': { maxLength: number }
-  /** config.smartContextConfig：config.getSmartContextConfig 的 reply（compactModel 为 "provider/modelId" 复合串，空串 = 未设置；thresholds 为 token 绝对数）。 */
+  /** config.smartContextConfig：config.getSmartContextConfig 的 reply（compactModel 为 "provider/modelId" 复合串，空串 = 未设置；thresholds 为 token 绝对数；ratio 为 0-1 窗口占比）。 */
   'config.smartContextConfig': {
     enabled: boolean
     compactModel: string
     reminderThresholds: number[]
     excludedModels: string[]
+    autoCompactThresholdRatio: number
   }
   /** config.smartContextEnabled：config.setSmartContextEnabled 的 reply。 */
   'config.smartContextEnabled': { enabled: boolean }
@@ -3346,6 +3387,8 @@ export interface ServerMessageMapBase {
   'config.smartContextThresholds': { thresholds: number[] }
   /** config.smartContextExcludedModels：config.setSmartContextExcludedModels 的 reply（过滤去重后）。 */
   'config.smartContextExcludedModels': { models: string[] }
+  /** config.smartContextAutoCompactThresholdRatio：config.setSmartContextAutoCompactThresholdRatio 的 reply（钳制后生效值，非有限数归默认 0.9）。 */
+  'config.smartContextAutoCompactThresholdRatio': { ratio: number }
   /** config.codemodeEnabled：config.getCodemodeEnabled 的 reply（corruption 非空 = settings.json 损坏错误态，此时 enabled 恒 false）。 */
   'config.codemodeEnabled': CodemodeEnabledResult
   /** config.codemodeSetEnabled：config.setCodemodeEnabled 的 reply（两态信封：写后落盘终态 / 损坏拒入）。 */
@@ -3699,6 +3742,18 @@ export interface ServerMessageMapBase {
   // 消费——高压延迟横幅路径；active 进入/缓解退出两态，字段语义见 payload 类型）。
   'reattach:deferred': ReattachDeferredPayload
 
+  // ── readiness 域（startup-readiness-and-current-state 设计 §7.1/D1，u-m0 M0 契约期）──
+  // readiness：拉取 RPC reply + 初始推送 readiness 段共用帧型（sendInitialState 批内
+  // additive 下发；三通道同源——广播加速显示、拉取为持续态唯一真相）。字段语义见
+  // ReadinessSnapshot（./readiness）。
+  'runtime.readiness': ReadinessSnapshot
+  // readinessChanged：能力翻转边沿广播（仅翻转发），载荷 = 翻转后全量快照（消费端
+  // 整体覆盖，无增量合并状态）。连续进度不走本帧——sessions 恢复进度走下方节流通知。
+  'runtime.readinessChanged': ReadinessSnapshot
+  // sessionsRecoveryProgress：sessions 恢复进度节流通知（500ms 级，D11；reason 迁移
+  // 无能力翻转边沿可借，状态行刷新走本通知；仅 sessions 恢复期发送）。
+  'runtime.sessionsRecoveryProgress': SessionsRecoveryProgressPayload
+
   // ── btw.*（btw-question D6 控制帧 reply；W4b 后线枚举帧与其状态广播已退役）──
   /** btw.create reply：新建线的 sessionId（pi 真实 id）+ 归属主会话 + fork 快照状态（创建期 pill 数据源）。 */
   'btw.create': { sessionId: string; mainSid: string; forkState: BtwForkState }
@@ -3735,7 +3790,7 @@ export interface ServerMessageMapBase {
   /** mcp:testResult 广播：probe 终态回填（D8① 徽标 + testId/name 回显，形状 SSOT 在 ./mcp）。 */
   'mcp:testResult': McpTestResultEvent
 
-  // ── canvas 域（problem-solve-canvas U1 契约面；payload 形状 SSOT 直引
+  // ── canvas 域（problem-solve-canvas U1 契约；payload 形状 SSOT 直引
   // @zhushanwen/extension-protocol canvas 模块）──
   // canvas.list reply：画布清单（托盘列表数据源；元素含阶段徽标派生输入）。
   'canvas.list': CanvasListReply
@@ -4078,6 +4133,7 @@ export interface ReplyPayloadMap {
   'config.setSmartContextCompactModel': ServerMessageMap['config.smartContextCompactModel']
   'config.setSmartContextThresholds': ServerMessageMap['config.smartContextThresholds']
   'config.setSmartContextExcludedModels': ServerMessageMap['config.smartContextExcludedModels']
+  'config.setSmartContextAutoCompactThresholdRatio': ServerMessageMap['config.smartContextAutoCompactThresholdRatio']
   // codemode 开关命令对（codemode 设计 D1/A1）
   'config.getCodemodeEnabled': ServerMessageMap['config.codemodeEnabled']
   'config.setCodemodeEnabled': ServerMessageMap['config.codemodeSetEnabled']
@@ -4160,7 +4216,12 @@ export interface ReplyPayloadMap {
   // mutation-reply-contract.test.ts 的 MUTATION_RPC_REGISTRY（分支一 effective-value，
   // 生效值断言锚 effective 分支）——subagent 域新增 mutation 须同批登记，漏登记即红）。
   'subagent.setModel': ServerMessageMap['subagent.modelSet']
-  'session.compact': void         // reply session.compacted
+  // session.compactBackground：触发受理 ack——动作型 RPC（触发后台压缩，无配置状态改值、
+  // 无生效值/回显字段），在 MUTATION_RPC_REGISTRY 登记范围之外（ADR-0065 谓词只框定配置
+  // 状态 mutation；动作型非候选，无需豁免登记）。payload 不读（reply 只确认指令已受理送达，
+  // 同名帧 payload 见 ServerMessageMap）；失败走 error envelope 'compact_start_failed'
+  //（投递前命令在册校验失败 / pi 拉活失败 / 传输级失败——renderer toast compactStartFailed 消费）。
+  'session.compactBackground': void
   'session.delete': void          // reply session.deleted
   'session.deleteByCwd': BatchDeleteResult // reply session.deletedByCwd（前端读 deleted/failed 列表）
   // session.handoff：触发后 runtime HandoffService 异步让源 session 跑 handoff turn 生成文档，
@@ -4219,6 +4280,9 @@ export interface ReplyPayloadMap {
   // rollingRestart.status（crash-forensics-and-watchdog §3.3 D5，u7b）：只读查询 reply
   //（payload 消费型；与 request 同名——session.subscribe / backgroundTask.list 同款模式）。
   'rollingRestart.status': ServerMessageMap['rollingRestart.status']
+  // runtime.readiness（startup-readiness-and-current-state 设计 §7.1，u-m0 M0 契约期）：
+  // 只读查询 reply（payload 消费型；与 request 同名——rollingRestart.status 同款模式）。
+  'runtime.readiness': ServerMessageMap['runtime.readiness']
 
   // terminal.* 都是 ack 型，统一 reply 'terminal.ack'（前端 command() 按 id 匹配 resolve；
   // spawn 回包携 terminalId、list 回包携 instances，见 ServerMessageMap['terminal.ack']）
@@ -4239,7 +4303,7 @@ export interface ReplyPayloadMap {
   'tts.speak': ServerMessageMap['tts.speak:result']
   'tts.getCapabilities': ServerMessageMap['tts.getCapabilities:result']
 
-  // ── canvas.*（problem-solve-canvas U1 契约面）：三 RPC reply 与 request 同名
+  // ── canvas.*（problem-solve-canvas U1 契约）：三 RPC reply 与 request 同名
   //（payload 消费型——session.subscribe / rollingRestart.status 同款模式）。
   'canvas.list': ServerMessageMap['canvas.list']
   'canvas.get': ServerMessageMap['canvas.get']

@@ -358,12 +358,13 @@ function zeroResult(): BackgroundTaskReapResult {
 // ── registry / fs 错误分支（真实入口 + 条件失败注入）─────────────────────────
 
 describe('registry 读写错误分支（收殓不因 fs 问题崩溃）', () => {
-  it('registry 读失败（EACCES）→ 按空表继续 + warn，结果全零', async () => {
+  it('registry 读失败（EACCES）→ 上抛跳过本目录 + 双 warn，结果全零、文件不重建', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       const agentDir = makeAgentDir()
       const { deps } = makeDeps()
       const p = writeRegistryFile(agentDir, 's1', [makeEntry()])
+      const before = fsMock.actual.readFileSync(p, 'utf8')
       fsMock.readFileSync.mockImplementation((path: unknown, enc?: unknown) => {
         if (path === p) throw errnoLike('EACCES', 'permission denied')
         return fsMock.actual.readFileSync(path as string, enc as 'utf8')
@@ -371,12 +372,21 @@ describe('registry 读写错误分支（收殓不因 fs 问题崩溃）', () => 
 
       const result = await reapSessionBackgroundTasks(agentDir, 's1', deps)
 
+      // 读失败上抛进 reapOneSessionSync 目录级 catch：本轮放弃该目录（条目停留原状，
+      // 下个收殓事件重试），不按空表继续处置
       expect(result).toEqual({ ...zeroResult(), scannedDirs: 1 })
-      // protocol readRegistry 经 onLog 注入 console 适配：事件文案 + detail 对象（path/err）
+      // protocol readRegistry warn（读失败显式留痕，经 onLog 注入 console 适配）
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('registry read failed, treating as empty'),
+        expect.stringContaining('registry read failed'),
         expect.objectContaining({ path: p, err: expect.anything() }),
       )
+      // 收殓器目录级 catch warn（跳过本目录 + 下轮重试）
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('session dir reap failed, skipping dir'),
+        expect.anything(),
+      )
+      // 文件逐字节未动——未被空表重建
+      expect(fsMock.actual.readFileSync(p, 'utf8')).toBe(before)
     } finally {
       warnSpy.mockRestore()
     }
@@ -529,13 +539,15 @@ describe('目录级错误跳过（warn 后不中断、不外抛）', () => {
     }
   })
 
-  it('触发面 B：单目录 registry 读失败 → readRegistry 按空表继续，不中断其余目录扫描', async () => {
+  it('触发面 B：单目录 registry 读失败 → 跳过该目录不重建，不中断其余目录扫描', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       const agentDir = makeAgentDir()
       const { deps } = makeDeps()
-      writeRegistryFile(agentDir, 's1', [makeEntry()])
-      writeRegistryFile(agentDir, 's2', [makeEntry()])
+      const p1 = writeRegistryFile(agentDir, 's1', [makeEntry()])
+      const p2 = writeRegistryFile(agentDir, 's2', [makeEntry()])
+      const before1 = fsMock.actual.readFileSync(p1, 'utf8')
+      const before2 = fsMock.actual.readFileSync(p2, 'utf8')
       fsMock.readFileSync.mockImplementation((path: unknown) => {
         if (String(path).endsWith('registry.json')) throw errnoLike('EACCES', 'read denied')
         return fsMock.actual.readFileSync(path as string)
@@ -543,10 +555,15 @@ describe('目录级错误跳过（warn 后不中断、不外抛）', () => {
 
       const result = await reapAllSessionsBackgroundTasks(agentDir, deps)
 
-      // 两个目录都已计入扫描且都按空表继续（错误容忍：不中断整体）
+      // 两个目录都已计入扫描、各自读失败上抛进目录级 catch 跳过（错误容忍：不中断整体）
       expect(result).toEqual({ ...zeroResult(), scannedDirs: 2 })
-      expect(warnSpy).toHaveBeenCalledTimes(2)
-      expect(warnSpy).toHaveBeenCalledWith('[bg-task-reaper] registry read failed, treating as empty', expect.anything())
+      // 每目录两条 warn：protocol read failed + 触发面 B 扫描层 catch（scan failed）
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('registry read failed'), expect.anything())
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('session dir scan failed, skipping dir'), expect.anything())
+      expect(warnSpy).toHaveBeenCalledTimes(4)
+      // 两个 registry 均逐字节未动——未被空表重建
+      expect(fsMock.actual.readFileSync(p1, 'utf8')).toBe(before1)
+      expect(fsMock.actual.readFileSync(p2, 'utf8')).toBe(before2)
     } finally {
       warnSpy.mockRestore()
       fsMock.readFileSync.mockImplementation(fsMock.actual.readFileSync)

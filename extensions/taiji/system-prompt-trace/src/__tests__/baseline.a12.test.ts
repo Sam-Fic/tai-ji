@@ -152,7 +152,7 @@ describe("A12 hash 基线跨重启恢复", () => {
 		expect(h.sessionLines()).toHaveLength(1);
 	});
 
-	it("路径 1（进程内 resume）：基线 hash 变化 → 写 resume v2，diff 摘要的 parent 全文来自目标文件", () => {
+	it("路径 1（进程内 resume）：基线 hash 变化 → 写 resume v2（version 自 stash 基线续接）", () => {
 		const h = makeHarness(P1);
 		h.logic.onSessionStart("startup", undefined, h.ctx);
 		h.logic.onTurnStart(h.ctx); // v1 initial
@@ -164,8 +164,6 @@ describe("A12 hash 基线跨重启恢复", () => {
 		logic2.onTurnStart(h.ctx);
 		expect(h.entries).toHaveLength(2);
 		expect(h.entries[1]).toMatchObject({ version: 2, reason: "resume", hash: computePromptHash(P2) });
-		expect(typeof h.entries[1]?.parentVersionDiffSummary).toBe("string");
-		expect(h.entries[1]?.parentVersionDiffSummary).toContain("+1 -0 lines");
 	});
 
 	it("直读档（app 重启直 spawn resume）：getSessionFile() 目标文件命中且 hash 未变 → 不写（reason=startup、无 switch 事件）", () => {
@@ -183,7 +181,7 @@ describe("A12 hash 基线跨重启恢复", () => {
 		expect(h.sessionLines()).toHaveLength(1);
 	});
 
-	it("直读档（app 重启直 spawn resume）：基线命中但 prompt 已变 → 写 resume v2，diff 摘要来自直读留痕 fullText（persisted 时代的数据层缺口已修复）", () => {
+	it("直读档（app 重启直 spawn resume）：基线命中但 prompt 已变 → 写 resume v2（版本续接直读基线，非 initial 重新计数）", () => {
 		const h = makeHarness(P1);
 		h.logic.onSessionStart("startup", undefined, h.ctx);
 		h.logic.onTurnStart(h.ctx); // v1
@@ -195,8 +193,6 @@ describe("A12 hash 基线跨重启恢复", () => {
 		expect(h.entries).toHaveLength(2);
 		// 基线存在 → 该 session 已有历史版本 → resume（而非 initial 重新计数）
 		expect(h.entries[1]).toMatchObject({ version: 2, reason: "resume", hash: computePromptHash(P2) });
-		// 直读档基线含 fullText → parentVersionDiffSummary 不再缺省（F1 修复）
-		expect(h.entries[1]?.parentVersionDiffSummary).toContain("+1 -0 lines");
 	});
 
 	it("路径 4（兜底）：三档基线都读不到（getSessionFile 未落盘返回 undefined）且 reason=resume → 必写一条", () => {
@@ -260,7 +256,7 @@ describe("A12 hash 基线跨重启恢复", () => {
 		expect(h.entries).toHaveLength(1);
 	});
 
-	it("fork（V6 第二步）：fork 基线命中确立 current 后配置回变 → 写 change，version 自源留痕续接 +1，diff 相对源留痕 fullText", () => {
+	it("fork（V6 第二步）：fork 基线命中确立 current 后配置回变 → 写 change，version 自源留痕续接 +1", () => {
 		// 源 session 预置两条留痕：v1（配置 A prompt）→ v2（配置 B prompt）
 		const h = makeHarness(P1);
 		h.logic.onSessionStart("startup", undefined, h.ctx);
@@ -288,8 +284,6 @@ describe("A12 hash 基线跨重启恢复", () => {
 			hash: computePromptHash(P1),
 			fullText: P1,
 		});
-		// diff 相对源留痕 v2 的 fullText（B）：P2 → P1 为删 1 行（"+N -M lines" 头形态）
-		expect(h.entries[2]?.parentVersionDiffSummary).toContain("+0 -1 lines");
 		// fork 新文件恰好落盘这一条留痕
 		expect(h.sessionLines()).toHaveLength(1);
 	});
@@ -308,11 +302,10 @@ describe("A12 hash 基线跨重启恢复", () => {
 			data: { version: 2, hash: "hash-v2", reason: "change", fullText: "new text", charCount: 8 },
 		};
 		writeFileSync(file, [JSON.stringify(entryV1), "{ broken json", JSON.stringify(entryV2), ""].join("\n"));
-		expect(readLastPromptFromSessionFile(file)).toMatchObject({
-			hash: "hash-v2",
-			version: 2,
-			fullText: "new text",
-		});
+	expect(readLastPromptFromSessionFile(file)).toMatchObject({
+		hash: "hash-v2",
+		version: 2,
+	});
 		expect(readLastPromptFromSessionFile(join(scanDir, "missing.jsonl"))).toBeNull();
 	});
 });

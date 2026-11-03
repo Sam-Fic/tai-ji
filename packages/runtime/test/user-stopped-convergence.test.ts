@@ -1,14 +1,19 @@
 /**
  * userStopped 标记单测（原 D4 收敛环时间窗已随 ADR-0122 清查删除；本文件锁定
  * 事件顺序契约终态：标记存活期 = 旁路 turn 拦截存续期，标记清除只由显式意图
- * 事件驱动——显式投递 / 会话删除 / shutdown，无任何自动收敛）。
+ * 事件驱动——显式投递 / 会话删除 / shutdown，无任何自动收敛。例外：判死分型
+ * probe_stall_auto_quit 的标记由自动恢复接线同权消费（consumeUserStoppedMarkOfSource，
+ * pi-stall-detection D2 显式裁决例外，types.ts 契约登记；断言落点 =
+ * message-dispatcher.test.ts RL15 分型消费用例）。
  *
  * 覆盖映射：
  * - UserStoppedGate 契约：标记存活 → agent_start 一律拦截再 abort；显式投递清标记
  *   放行；agent_settled 不清标记（同边沿补投击穿反例的契约锁）；
  * - interpreter 挂点接线：hook agent_start → noteAgentStart；
  * - dispatcher 置位分型：K1 forceQuit → source='user_force_quit'、K2 abort 超时强杀
- *   → source='abort_timeout'；
+ *   → source='abort_timeout'（K2 置位断言落 message-dispatcher.test.ts :1618，本文件
+ *   无用例；K1 置位断言双落点——本文件 :283/:289 直接用例 + md-test :1895 RL15 场景
+ *   状态断言，两者断言对象不同：前者 forceQuit 置位行为、后者场景下标记值保持）；
  * - sendPrompt / deliverText 显式投递清标记放行。
  *
  * mock 策略：全部依赖 mock，不 spawn pi。
@@ -25,9 +30,8 @@ import { MessageDispatcher } from '../src/services/session/message-dispatcher.js
 import {
   createSessionDeliveryRegistry,
 } from '../src/services/session/session-delivery-registry.js'
-import { RpcTimeoutError } from '../src/utils/errors.js'
 import type { ServerMessage } from '@taiji/shared'
-import type { UserStoppedMarkStore } from '../src/services/session/types.js'
+import type { ForceQuitSource, UserStoppedMarkStore } from '../src/services/session/types.js'
 import type { IDispatcherSessionOps } from '../src/services/session/session-internal.js'
 import type { IManagedSessionView } from '../src/services/session/types.js'
 import type { IMessageBus } from '../src/services/message-bus/message-bus.js'
@@ -35,15 +39,22 @@ import type { IPiEngine, IProcessManager } from '../src/services/ports/pi-engine
 import type { WorkspaceService } from '../src/services/workspace/workspace-service.js'
 import { flushDelivery } from './helpers/flush-delivery.js'
 
-/** 记账式 mock 标记宿主（模拟 session-service.ts 模块级 Map 的语义）。 */
+/** 记账式 mock 标记宿主（模拟 user-stopped-mark-store.ts 模块级 Map 的语义）。 */
 function makeMarkStore(): UserStoppedMarkStore & {
-  marks: Map<string, { source: string }>
+  marks: Map<string, { source: ForceQuitSource }>
 } {
-  const marks = new Map<string, { source: string }>()
+  const marks = new Map<string, { source: ForceQuitSource }>()
   return {
     marks,
-    markUserStopped: vi.fn((sessionId: string, source: string) => { marks.set(sessionId, { source }) }),
+    markUserStopped: vi.fn((sessionId: string, source: ForceQuitSource) => { marks.set(sessionId, { source }) }),
     hasUserStoppedMark: vi.fn((sessionId: string) => marks.has(sessionId)),
+    getUserStoppedSource: vi.fn((sessionId: string) => marks.get(sessionId)?.source),
+    consumeUserStoppedMarkOfSource: vi.fn((sessionId: string, allowed: readonly string[]) => {
+      const mark = marks.get(sessionId)
+      if (!mark || !allowed.includes(mark.source)) return false
+      marks.delete(sessionId)
+      return true
+    }),
     clearUserStoppedMark: vi.fn((sessionId: string) => { marks.delete(sessionId) }),
     clearAllUserStoppedMarks: vi.fn(() => marks.clear()),
   }
@@ -183,7 +194,6 @@ describe('MessageDispatcher 置位分型与显式投递清标记', () => {
 
   function makeDispatcher(opts: {
     session?: IManagedSessionView
-    abortBehavior?: 'ok' | 'rpc-timeout'
     /** U3 用例：pm.getClient 无条目（forceQuit 早退分支）。 */
     clientMissing?: boolean
     /**
@@ -194,9 +204,7 @@ describe('MessageDispatcher 置位分型与显式投递清标记', () => {
     turnOccupied?: boolean
   } = {}) {
     const session = opts.session ?? makeMockSession()
-    const abortFn = opts.abortBehavior === 'rpc-timeout'
-      ? vi.fn(async () => { throw new RpcTimeoutError('abort', 60000) })
-      : vi.fn(async () => {})
+    const abortFn = vi.fn(async () => {})
     /** prompt 时刻的标记快照（时序构造性断言：清标记必须先于 prompt）。 */
     let markAtPrompt: boolean | undefined
     const client = {

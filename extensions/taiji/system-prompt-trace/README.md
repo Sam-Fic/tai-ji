@@ -13,7 +13,6 @@ appendEntry("taiji:system-prompt", {
   reason: "initial" | "resume" | "change";
   fullText: string;                   // 完整 system prompt
   charCount: number;                  // fullText.length
-  parentVersionDiffSummary?: string;  // 与上一版的行级 diff 摘要（有 parent 全文时）
 });
 ```
 

@@ -1,5 +1,11 @@
 # @zhushanwen/pi-permission
 
+## 1.6.9
+
+### Patch Changes
+
+- d2b945a20: Simplified the LLM permission classifier's race wrapper: the deadline racer is resolve-only by construction, so the redundant outer catch around it was removed. Behavior equivalent.
+
 ## 1.6.8
 
 ### Patch Changes
