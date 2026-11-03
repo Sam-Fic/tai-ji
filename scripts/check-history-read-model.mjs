@@ -3,12 +3,15 @@
  * check-history-read-model —— 历史读取读模型防回流静态检查（L0，RL1）。
  *
  * 来源：turn-boundary-index 设计 §4.2 RL1（正常历史查看不再调用 get_entries，也不存在
- * 后台全量重建与跨进程通知）。跑绿门挂协议退役单元的 commit 门 + CI invariants。
+ * 后台全量重建与跨进程通知）。跑绿门挂协议退役单元的 commit 门 + CI invariants job
+ * 全量直调（.github/workflows/ci.yml，PR 面每次核对）。
  *
  * 检查三组（任一命中即 exit 1，逐条给出文件:行与恢复动作）：
  *
- * 1. 退役通知协议零回流：缓存就绪通知帧名与其跨包监听器名（两个模式串均在下方以
- *    拼接形态持有，防本脚本被仓库级零回流检索命中）在
+ * 1. 退役通知协议零回流：缓存就绪通知裸词（覆盖帧名 session.historyCacheReady 与
+ *    任意无前缀的变量名 / 注释 / 文档提及，检索口径与 u-retire-protocol 验收①一致）
+ *    与其跨包监听器名（两个模式串均在下方以拼接形态持有，防本脚本被仓库级零回流
+ *    检索命中）在
  *    packages / apps / e2e / extensions / scripts / docs / AGENTS.md 范围（排除
  *    node_modules 与本脚本自身）零命中——协议类型、发布端、跨包消费与文档登记
  *    全链退役后不得回流。
@@ -76,9 +79,9 @@ function scanFiles(files, patterns, label) {
 // ── 组 1：退役通知协议零回流（代码 + 文档全链） ────────────────────────
 // 通知帧名与监听器名在脚本内以拼接形态持有，防自匹配（本脚本也是 scan 范围的一员，
 // 且仓库级零回流检索含 scripts/——字面量在脚本内出现会同时命中两类门）。
-const RETIRED_EVENT = ['session.historyCache', 'Ready'].join('')
+const RETIRED_EVENT = ['historyCache', 'Ready'].join('')
 const RETIRED_LISTENER = ['onHistoryCache', 'Ready'].join('')
-const CODE_DIRS = ['packages', 'apps', 'e2e', 'extensions', 'scripts']
+const CODE_DIRS = ['packages', 'apps', 'e2e', 'extensions', 'scripts', 'docs']
 const DOC_FILES = ['AGENTS.md']
 const codeFiles = CODE_DIRS.flatMap((d) => walk(path.join(ROOT, d)))
 const docFiles = DOC_FILES.map((f) => path.join(ROOT, f)).filter((f) => fs.existsSync(f))

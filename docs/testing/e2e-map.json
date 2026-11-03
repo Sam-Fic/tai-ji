@@ -5978,7 +5978,7 @@
       "run": "node scripts/check-history-read-model.mjs",
       "owner": "packages/runtime",
       "authority": "scripts/check-history-read-model.mjs",
-      "note": "R2 态：跑绿门挂 u-retire-protocol commit 门 + CI invariants（接线随 turn-boundary-index 交付批次落地）。断言依赖实现终态——history-rebuild-cache.ts 迁移为 history-reader.ts 之前实跑 exit 1 是预期红（基线形态 13 处回流命中已实测登记）。范围外消费链（TraceSync / SessionRecords / 撤回定位 / 投递判重 / 插件读取 / 压缩分界的 get_entries）不在检查范围，见脚本头注。"
+      "note": "跑绿门挂 u-retire-protocol commit 门 + CI invariants job 全量直调（.github/workflows/ci.yml history-read-model 步）；本条目 on-diff scope 是增量触发面，与 CI 全量直调互补。断言依赖实现终态——history-rebuild-cache.ts 迁移为 history-reader.ts 之前实跑 exit 1 是预期红（基线形态 13 处回流命中已实测登记）。范围外消费链（TraceSync / SessionRecords / 撤回定位 / 投递判重 / 插件读取 / 压缩分界的 get_entries）不在检查范围，见脚本头注。"
     }
   ]
 }
