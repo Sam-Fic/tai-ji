@@ -270,6 +270,10 @@ test('RE1: 托盘 workflow 行点击 → 浮层打开且定位该 run（T1 行�
     await page.keyboard.press('Escape')
     await expect(overlay).toHaveCount(0)
     await expect(page.getByTestId('composer-box')).toBeVisible({ timeout: 5_000 })
+    // drawer 恢复半边（原 workflow-sidebar-sync T3 尾段语义，偏差表 #7「断言本体未丢」承接）：
+    // ESC 后 drawer-toggle 仍可正常打开 drawer——Panel 状态未被临时层改变
+    await page.getByTestId('drawer-toggle').click()
+    await expect(page.getByTestId('drawer-area')).toBeVisible({ timeout: 5_000 })
   } finally {
     run.closeListen()
     await cleanupRealApp(cleanup, dataDir, run.projectDir)

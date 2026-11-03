@@ -159,7 +159,7 @@
                aggregated = 序 2 生效：托盘 + 插件 toolbar 收为**单图标**聚合按钮（角标仅运行数数字，
                禁多 icon 重叠），面板内分段展示。
                **可见性不吃 `leftCluster === 'absent'`**：若按「无条目」卸载托盘，emitter 永冻
-               false → 切回有条目会话时托盘永不重挂（e2e workflow-sidebar-sync T2 死锁回归）。
+               false → 切回有条目会话时托盘永不重挂（e2e/tray-entry-real.spec.ts RE3 挂载回归，原 workflow-sidebar-sync T2，git 可追溯）。
                无条目/零贡献的「不留死入口」由托盘内部三态（逐件不渲染）与聚合按钮自身可见条件
                （有条目或有贡献才出）承接。
                @update:has-items = 托盘三态上抛（托盘数据范围唯一实例在外壳，Composer 不建第二份）。 -->

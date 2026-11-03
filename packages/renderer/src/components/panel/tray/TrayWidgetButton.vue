@@ -21,7 +21,8 @@
   ── 依赖追踪契约（承自已退役的对话流 widget pill entries computed 头注，托盘为唯一消费端）──
   外壳父级 computed 必须在**同一调用路径内**同时触碰 `getViewIds(sessionId)`（分区键迭代）
   与 `getView(sessionId, viewId)`（分区值读），否则 Vue 不建依赖链 → widget 推送后条目不重算。
-  可运行的复刻样例见 __tests__/panel/tray/tray-widget.test.ts 的「外壳契约复刻」宿主。
+  可运行的复刻样例见 __tests__/panel/tray/tray-widget-bundle.test.ts 的「外壳契约复刻」宿主
+  （TrayWidgetStrip；原 tray-widget.test.ts 已并入该 bundle）。
 
   ── icon fallback 链（D4，四档）──
   ① `meta.icon` 为 `{ paths }` 且过 `validateWidgetIconPaths` 白名单 → 渲染自定义形状

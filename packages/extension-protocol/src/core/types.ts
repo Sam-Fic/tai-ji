@@ -99,7 +99,8 @@ export interface GuiComponentProps {
    * 点击经宿主壳 provide 的执行器走既有命令链（commandRegistry.execute → WS
    * plugin.executeCommand），协议不新增回调通道（设计 §3.3 D2）。
    * 未含此 type 的旧宿主自动降级 ansi-text 可读文本，PROTOCOL_VERSION 不 bump
-   * （设计 §3.3 D8，降级契约 P5）。
+   * （降级契约权威描述见 docs/architecture/extension-gui-protocol.md「降级行为」节：
+   * 降级判定单点在 core resolveComponent）。
    */
   'action-bar': {
     items: {

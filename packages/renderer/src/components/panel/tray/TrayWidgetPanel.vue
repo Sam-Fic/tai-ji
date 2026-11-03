@@ -21,7 +21,8 @@
   本组件只渲染传入的 entry 切片。guiTree 为空（异常 payload / 清屏竞态）→ 整体零 DOM，不出空壳。
   依赖追踪契约：外壳 entries computed 必须 `getViewIds` + `getView` 同路径（承自已退役的对话流
   widget pill entries 头注；拆开即断链 → 推送后不重算）。可运行样例见
-  __tests__/panel/tray/tray-widget.test.ts 的「外壳契约复刻」宿主。
+  __tests__/panel/tray/tray-widget-bundle.test.ts 的「外壳契约复刻」宿主
+  （TrayWidgetStrip；原 tray-widget.test.ts 已并入该 bundle）。
 
   ── 形态（与原对话流 widget 详情卡同视觉语言，该卡已随 pill 退役、形态迁入托盘）──
   head：状态点（7px，D4 色：running=accent / done=success / failed=danger / idle=dim）+ 标题

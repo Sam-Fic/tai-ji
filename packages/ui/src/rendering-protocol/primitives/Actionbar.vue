@@ -61,8 +61,9 @@ export const TRAY_PIN_STATE_KEY: InjectionKey<boolean | Ref<boolean> | undefined
  * 误指/未注册 commandId 不静默失效（ERR6 已在执行链内出声，置灰是用户可见的后续反馈）；
  * 随推送重建复位（命令重注册后恢复可点）。
  *
- * 降级契约（D8）：未含本 type 的旧宿主由 core resolveComponent 降级 ansi-text
- * （label 经 JSON 序列化保留可读，P5 断言），本组件不参与降级决策。**旧宿主忽略 confirm
+ * 降级契约（权威描述见 docs/architecture/extension-gui-protocol.md「降级行为」节）：
+ * 未含本 type 的旧宿主由 core resolveComponent 降级 ansi-text（label 经 JSON 序列化
+ * 保留可读），本组件不参与降级决策。**旧宿主忽略 confirm
  * 字段 = 按钮照常渲染、点击即执行**（新增可选字段不 bump PROTOCOL_VERSION，与 action-bar
  * type 本身的降级先例同款；协议侧降级矩阵由 extension-protocol navigation-types.test.ts 锁定）。
  */

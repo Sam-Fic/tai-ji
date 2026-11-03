@@ -5,7 +5,7 @@
 // 来源：
 //   - src/domain/overlay/__tests__/coordination.test.ts（15 用例，skip 0）
 //   - src/domain/overlay/__tests__/state.test.ts（10 用例，skip 0）
-//   - 容器扩展点统一追加：openOverlayContent / closeOverlayForSession 两段（9 用例）
+//   - 容器扩展点统一追加：openOverlayContent（§6.4 浮层落点）/ closeOverlayForSession（§6.8/§11.1-2 级联判据）两段（用例数以各 describe 分段为准，此处不记数防追加漂移）
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import {

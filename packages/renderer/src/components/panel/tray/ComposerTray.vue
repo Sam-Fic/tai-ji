@@ -61,7 +61,8 @@
   entries computed 必须**在同一调用路径内**同时触碰 `getViewIds(sessionId)`（分区键迭代）与
   `getView(sessionId, viewId)`（分区值读），顺序由 tray-order 的 orderTrayWidgetIds（known-order
   ['todo','goal'] 优先 + 当前插入序）决定；拆开即断链。可运行复刻样例见
-  __tests__/panel/tray/tray-widget.test.ts 的「外壳契约复刻」宿主。
+  __tests__/panel/tray/tray-widget-bundle.test.ts 的「外壳契约复刻」宿主
+  （TrayWidgetStrip；原 tray-widget.test.ts 已并入该 bundle）。
 
   ── 数据范围归属（D2/D13）──
   计数/首次拉取/错误态全部在 useTrayCounts，**唯一实例在本外壳创建**（面板随 Popover 开合反复

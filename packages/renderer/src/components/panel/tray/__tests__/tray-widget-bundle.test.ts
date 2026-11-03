@@ -237,7 +237,7 @@ function makeCanvas(overrides: Partial<CanvasListEntry> & { canvasId: string }):
   }
 }
 
-// ── widget 区响应式数据源 mock（同构壳层桥；与 tray-widget.test.ts 共用 tray-view-host-mock）──
+// ── widget 区响应式数据源 mock（同构壳层桥；本文件全部段落共用，含「外壳契约复刻」段）──
 
 // ── 挂载与查询工具 ──
 
