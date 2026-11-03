@@ -45,7 +45,7 @@ import { probeProcessAlive, type ProcessProbeOutcome } from './health-checker.js
  * 在结构上不可观测；该意图已由时间阈值覆盖——历史最重同步块实测 11-12s，5min 留
  * 25 倍余量，重算单块是秒级~十秒级，5 分钟无应答才可能是真挂死。
  */
-export const LIVENESS_ZOMBIE_THRESHOLD_MS = 5 * 60 * 1000
+export const LIVENESS_ZOMBIE_THRESHOLD_MS = 300_000
 
 /**
  * 存活探针轮询间隔（ms）：本地回环 GET 轮询（0.2 QPS）对 runtime 压力可忽略，
