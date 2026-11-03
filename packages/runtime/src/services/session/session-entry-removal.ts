@@ -77,7 +77,7 @@ export interface SessionEntryRemovalDeps {
   getOnSessionDestroyedHandlers: () => ReadonlyArray<(summary: SessionSummary) => void>
   /** D8③：后台任务 watched 集合退订。 */
   unwatchBackgroundTasks: (sessionId: string) => void
-  /** wave:perf-w20：历史重建缓存 + lastLeafId 清理（historyReader.onSessionDisposed）。 */
+  /** wave:perf-w20 → turn-boundary-index：TurnIndexStore 内存索引 LRU + 采样计数清理（TurnIndexStore.onSessionDisposed 经 historyReader.onSessionDisposed 转发）。 */
   disposeHistoryReader: (sessionId: string) => void
   /** session-trace（A33）：trace 增量路径基线与串行链清理。 */
   disposeTraceSync: (sessionId: string) => void
@@ -223,9 +223,10 @@ export class SessionEntryRemovalOrchestrator {
     })
 
     // ── 第 12-13 步：per-session 域状态销毁与 MessageBus 分区清理 ──
-    // wave:perf-w20（D6-1）：session 删除 / pi 进程退出时清历史重建缓存 + lastLeafId
-    // ——真删除后缓存必须清，清理行为本身正确。本汇聚链只覆盖真删除（撤回 ≠ 销毁，
-    // session 条目保留，不经本汇聚链）。
+    // wave:perf-w20（D6-1）→ turn-boundary-index（现行）：session 删除 / pi 进程退出时
+    // 清 TurnIndexStore 内存索引 LRU + 采样计数（TurnIndexStore.onSessionDisposed 经
+    // historyReader.onSessionDisposed 转发）。覆盖口径以本块 [turn-boundary-index D5]
+    // 段为准：四路销毁路径全覆盖，只清内存态、不取消文件读取。
     // S6 起清理随域迁入 historyReader（onSessionDisposed 直调形态，traceSync/projection
     // 同款）。
     // [turn-boundary-index D5] 本步（onSessionDisposed）只清内存索引、不取消在途文件
@@ -237,14 +238,14 @@ export class SessionEntryRemovalOrchestrator {
     runDestroyStepIsolated('historyReader.onSessionDisposed', sessionId, () => {
       this.deps.disposeHistoryReader(sessionId)
     })
-    // session-trace（A33）：同汇聚点清 trace 增量路径基线与串行链（与 historyCache 同因——
-    // 基线跨进程存活无意义；链已 settled，删 Map 条目只释放槽位）。S4：清理随域迁入
+    // session-trace（A33）：同汇聚点清 trace 增量路径基线与串行链（基线跨进程存活无
+    // 意义；链已 settled，删 Map 条目只释放槽位）。S4：清理随域迁入
     // TraceSync（各域 onSessionDisposed 直调形态）。
     runDestroyStepIsolated('traceSync.onSessionDisposed', sessionId, () => {
       this.deps.disposeTraceSync(sessionId)
     })
-    // W7/W8 + W12：销毁 per-session 实例组与 state_changed diff 基线（与 historyCache.delete
-    // 同汇聚点——主动删 + 进程退出）。dispose 停防抖/退避/周期兜底全部定时器。S5 起清理
+    // W7/W8 + W12：销毁 per-session 实例组与 state_changed diff 基线（同汇聚点——主动删
+    // + 进程退出）。dispose 停防抖/退避/周期兜底全部定时器。S5 起清理
     // 随域迁入 projection（onSessionDisposed 直调形态，traceSync 同款）。
     runDestroyStepIsolated('projection.onSessionDisposed', sessionId, () => {
       this.deps.disposeProjection(sessionId)
