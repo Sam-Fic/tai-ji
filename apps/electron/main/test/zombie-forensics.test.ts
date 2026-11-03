@@ -7,13 +7,14 @@
  *
  * 运行：cd apps/electron && npx vitest run main/test/zombie-forensics.test.ts
  */
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach } from 'vitest'
 import { mkdtempSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { collectZombieForensics } from '../supervisor/zombie-forensics.js'
 
 const tempDirs: string[] = []
+const REAL_PLATFORM = process.platform
 
 function makeTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'zombie-forensics-test-'))
@@ -21,7 +22,15 @@ function makeTempDir(): string {
   return dir
 }
 
+beforeEach(() => {
+  // sample 抓栈分支按 process.platform === 'darwin' 门控（zombie-forensics.ts），
+  // 本组用例都是 darwin 形态断言——不钉平台时 linux CI 上该分支结构性不可达。
+  // 桩法沿用 orchestrator.test.ts / preloaded-update.test.ts 既有惯例。
+  Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+})
+
 afterEach(() => {
+  Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true })
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
   }
