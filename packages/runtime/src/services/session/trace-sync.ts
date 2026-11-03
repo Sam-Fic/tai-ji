@@ -16,7 +16,7 @@
  * getTraceEntries（全量拉取 + RPC→文件→empty 混合路由）/ syncTraceEntries（增量路径
  * 串行链 + traceEntryAppended 广播）/ fetchCurrentSystemPrompt（常驻扩展现取通道轮询）
  * + 私有状态 traceLeafCache / traceSyncChains（per-session 基线与串行链，销毁经
- * onSessionDisposed 由 Facade removeSessionEntry 第 ⑤ 步直调清理）。
+ * onSessionDisposed 由 Facade removeSessionEntry 第 12 步直调清理）。
  *
  * SessionService 保留一行委托（ISessionService 对外契约不变，D3 形态）。日志前缀保留
  * `[session-trace]`（G3 行为等价：错误诊断流也是可观察行为，迁出不改写日志归属）。
@@ -225,7 +225,7 @@ export class TraceSync {
    * 哨兵 ''（review round1 MUST_FIX）：空 session（pi leafId=null）也要建立基线，语义 =
    * 「基线已建立但当前无叶子」——后续 sync 经 getEntriesSince 无参全量拉（'' 不是合法
    * entry id，不可下传 pi 当 since），拉到真实 leaf 后推进；否则空 session 条目清单冻结空态
-   * 且无恢复出口。removeSessionEntry 第 ⑤ 步经 onSessionDisposed 清除（与 historyCache
+   * 且无恢复出口。removeSessionEntry 第 12 步经 onSessionDisposed 清除（与 historyCache
    * 同汇聚点）。
    */
   private readonly traceLeafCache = new Map<string, string>()
@@ -471,7 +471,7 @@ export class TraceSync {
   }
 
   /**
-   * session 销毁的域清理（Facade removeSessionEntry 第 ⑤ 步直调，S4 各域清理汇聚形态）：
+   * session 销毁的域清理（Facade removeSessionEntry 第 12 步直调，S4 各域清理汇聚形态）：
    * 清 trace 增量路径基线与串行链（与 historyCache 同因——基线跨进程存活无意义；链已
    * settled，删 Map 条目只释放槽位）。
    */
