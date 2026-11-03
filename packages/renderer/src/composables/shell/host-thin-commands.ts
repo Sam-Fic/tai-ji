@@ -122,6 +122,12 @@ const HOST_THIN_COMMANDS = new Map<string, HostThinCommand>([
  * sessionId 取 drawer 域绑定的焦点会话（托盘面板分区恒等于焦点会话）；回执走 toast 双档
  * （AX4 可见反馈）：RPC 成功 → info 回执（目标 id 回显，V3/V4「toast 回执出现」）；RPC
  * reject → 错误 toast（失败原因 + 恢复指引，RL6）。两条路径都不写行状态、不乐观翻转。
+ *
+ * 失败信号双通道（tray-panel-interact §3.3 D5 in-flight settle）：toast 是用户可见的失败
+ * 反馈；出 toast 后原错重抛，让 commandRegistry.execute 的 Promise 以 reject 落地——壳层
+ * ACTION_EXECUTOR_KEY 执行器把该 Promise 透传给 Actionbar confirm 两段式的在途态复位
+ * （reject → 相位回 idle + RL2 置灰）。只吞不抛时回执恒 resolve，WS 断连下点击取消/中止/
+ * 续跑/重试后无重推、按钮永久滞留转圈+禁用（D5 修复前实测形态）。
  */
 export async function executeHostThinCommand(id: string, args: unknown): Promise<boolean> {
   if (!id.startsWith(HOST_COMMAND_PREFIX)) return false
@@ -142,6 +148,9 @@ export async function executeHostThinCommand(id: string, args: unknown): Promise
     useToast().info(tFn(cmd.successKey, { target: String(scalarArgs[cmd.targetArg]) }), { sessionId })
   } catch (e) {
     useToast().error(tFn(cmd.failureKey, { error: toErrorMessage(e) }), { sessionId })
+    // 失败信号上浮（见函数头「失败信号双通道」）：toast 已给用户可见反馈，重抛让 dispatch
+    // 链回执以 reject 落地，Actionbar 在途态据此复位（不重抛则恒 resolve，按钮永久滞留）
+    throw e
   }
   return true
 }

@@ -40,9 +40,14 @@ export const VIEW_SCOPE_SESSION_KEY: InjectionKey<string | undefined> = Symbol('
  * hostAction 走容器导航执行器。执行器缺位静默返回（禁用态由各组件的渲染侧 guard 承担，
  * 本函数只做分派不做降级出声）。
  *
- * 返回值：commandId 分支透传命令执行器的回报（boolean | void——命令缺失 false 供
- * action-bar 本地置灰，tray-panel-interact §4.2 RL2；hostAction 分支导航执行器无
- * 回报，恒 undefined）。
+ * 返回值：commandId 分支透传命令执行器的回报（boolean | void | Promise<boolean | void>
+ * ——命令缺失 false 供 action-bar 本地置灰，tray-panel-interact §4.2 RL2；Promise 回执的
+ * reject = RPC 失败，供 confirm 两段式在途态 settle，§3.3 D5）；hostAction 分支导航执行器
+ * 无回报，恒 undefined。
+ *
+ * 未处理拒绝防线：commandId 分支对 Promise 回执预挂 no-op 拒绝处理——不消费回执的调用方
+ * （ListTree 行点击丢弃返回值）不会让 reject 逸出成未处理拒绝；需要回执的调用方
+ * （Actionbar）自行 then 仍能收到 reject（同一 promise 可挂多个处理器）。
  */
 export function dispatchTreeInteraction(input: {
   commandId?: string
@@ -51,10 +56,12 @@ export function dispatchTreeInteraction(input: {
   commandExecutor?: ActionExecutor
   navigationExecutor?: ContainerNavigationExecutor
   viewSessionId?: string
-}): boolean | void {
+}): boolean | void | Promise<boolean | void> {
   const commandId = input.commandId
   if (typeof commandId === 'string' && commandId !== '') {
-    return input.commandExecutor?.execute(commandId, input.args)
+    const receipt = input.commandExecutor?.execute(commandId, input.args)
+    if (receipt instanceof Promise) void receipt.catch(() => {})
+    return receipt
   }
   if (input.hostAction !== undefined) {
     input.navigationExecutor?.navigate(input.hostAction, { viewSessionId: input.viewSessionId })

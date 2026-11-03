@@ -30,7 +30,7 @@ import type { GuiComponent, GuiComponentProps } from '@zhushanwen/extension-prot
 import { ACTION_EXECUTOR_KEY, GuiComponentRenderer, type ActionExecutor } from '@taiji/ui/rendering-protocol'
 import { bindDrawerSessionId } from '@taiji/core/domain/drawer'
 import type { SubagentRecord } from '@taiji/shared'
-import { getExtensionBus, initExtensionHostBridge, __testing } from '@/composables/shell/useExtensionHostBridge'
+import { getExtensionBus, initExtensionHostBridge, HEADER_ACTIONS_SOURCE_KEY, __testing } from '@/composables/shell/useExtensionHostBridge'
 import { useToast } from '@/composables/useToast'
 import { useSubagentStore } from '@/stores/subagent'
 import { useWorkflowStore } from '@/stores/workflow'
@@ -100,6 +100,23 @@ function initBridge(): ActionExecutor {
   const executor = provided.find((p) => p.key === ACTION_EXECUTOR_KEY)?.value as ActionExecutor | undefined
   if (!executor) throw new Error('ACTION_EXECUTOR_KEY 未 provide')
   return executor
+}
+
+/** 装配桥并捕获 HEADER_ACTIONS_SOURCE_KEY（headerAction 点击的生产入口，E3 端口）。 */
+function initHeaderActionsSource(): { executeCommand: (commandId: string) => boolean } {
+  const provided: Array<{ key: unknown; value: unknown }> = []
+  const app = {
+    provide(key: unknown, value: unknown) {
+      provided.push({ key, value })
+      return app
+    },
+  }
+  initExtensionHostBridge(app as never)
+  const source = provided.find((p) => p.key === HEADER_ACTIONS_SOURCE_KEY)?.value as
+    | { executeCommand: (commandId: string) => boolean }
+    | undefined
+  if (!source) throw new Error('HEADER_ACTIONS_SOURCE_KEY 未 provide')
+  return source
 }
 
 /** 生产同链渲染：guiTree action-bar → GuiComponentRenderer → Actionbar（壳层执行器注入）。 */
@@ -417,5 +434,56 @@ describe('RL6-B 失败回执：execute reject → 错误 toast，无行状态写
       message: '操作未执行：未定位到目标会话，请先打开一个会话再试',
     })
     wrapper.unmount()
+  })
+
+  it('confirm 项再击后 RPC reject → 在途态复位 idle（转圈消失）+ 置灰，按钮脱离永久滞留', async () => {
+    // WS 断连点击取消/中止即触发（D5 in-flight settle 的实测场景）：失败后无重推，
+    // 修复前相位滞留 in-flight（转圈 + 禁用直到下次推送）；修复后回执 reject 落地即复位
+    const executor = initBridge()
+    seedRunningRecord('sub-42')
+    subagentActionSpy.mockRejectedValue(new Error('runtime unavailable (ws not open)'))
+
+    const wrapper = mountActionBar(
+      [{
+        id: 'cancel-1',
+        label: '取消',
+        commandId: 'taiji.subagentCancel',
+        args: { recordId: 'sub-42' },
+        confirm: '确认取消？',
+      }],
+      executor,
+    )
+    const btn = wrapper.find('[data-testid="gui-action-bar-item-cancel-1"]')
+    await btn.trigger('click') // 首击 → 确认态
+    expect(btn.attributes('data-confirm-phase')).toBe('confirming')
+    await btn.trigger('click') // 再击 → 在途态 + 分派
+    expect(btn.attributes('data-confirm-phase')).toBe('in-flight')
+    await flush()
+
+    // settle 失败 → 相位回 idle：转圈消失，不再滞留「执行中」形态
+    expect(btn.attributes('data-confirm-phase')).toBe('idle')
+    expect(wrapper.find('[data-testid="gui-action-bar-item-spinner"]').exists()).toBe(false)
+    // RL2 置灰通道（render 禁用 + guard 拦再击）：失败反馈可见，零重复分派
+    expect(btn.attributes('disabled')).toBeDefined()
+    await btn.trigger('click')
+    await flush()
+    expect(subagentActionSpy).toHaveBeenCalledTimes(1)
+    expect(providerFrames()).toHaveLength(0)
+    // 错误 toast 照旧（RL6 用户可见失败反馈不回退）
+    expect(lastToast().type).toBe('error')
+    wrapper.unmount()
+  })
+
+  it('headerAction 端口（E3）执行薄命令失败 → 拒绝在端口内收口，同步可用性回执不变', async () => {
+    // 薄命令 RPC/参数失败时 commandRegistry.execute 以 reject 落地（失败信号双通道）；
+    // 本端口只消费同步可用性回执、无在途态——拒绝必须在此 catch 收口，逸出即成未处理
+    // 拒绝（vitest 红灯）
+    const source = initHeaderActionsSource()
+    await source.executeCommand('taiji.workflowAbort')
+    await flush()
+
+    // 可用性回执（已注册 → true）与失败 toast 照旧；provider 链零帧（薄命令不回落）
+    expect(providerFrames()).toHaveLength(0)
+    expect(lastToast().type).toBe('error')
   })
 })

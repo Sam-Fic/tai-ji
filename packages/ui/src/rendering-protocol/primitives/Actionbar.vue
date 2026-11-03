@@ -51,6 +51,10 @@ export const TRAY_PIN_STATE_KEY: InjectionKey<boolean | Ref<boolean> | undefined
  *   重建按钮实例（推送新 items 时确认态自然复位）。
  * 复位：超时（CONFIRM_TIMEOUT_MS）或指针离开按钮区域即回 idle——确认是面板本地瞬态，
  * 不跨推送保持（重推重建实例即终止在途态，无需跨树保持）。
+ * 回执 settle（D5）：在途态的分派回执可能是 Promise（壳层 execute 透传 RPC Promise）——
+ * reject（RPC 失败，WS 断连即触发）或 resolve false（命令缺失）时相位复位 idle 并走
+ * 命令缺失置灰通道（RL2）给可见反馈；resolve（命令已执行）留在在途态直至重推。只吞
+ * 回执不消费时（旧形态 void 丢弃 Promise），失败后无重推即永久滞留转圈+禁用。
  *
  * 执行器缺位（standalone 挂载 / 壳层未 provide）：所需执行器缺位的交互项禁用 + warn 一次
  * （对齐 TabBar 降级出声范式——降级 ≠ 吞错）；纯展示项（含 pin 门控中降级的项——已无可点
@@ -59,7 +63,8 @@ export const TRAY_PIN_STATE_KEY: InjectionKey<boolean | Ref<boolean> | undefined
  * 命令缺失置灰（tray-panel-interact §4.2 RL2）：点击后命令执行器回报 false（壳层命令表
  * 查无此 commandId，HeaderActionsHost E3 同款先例）→ 该项本地置灰 + guard 拦再击——
  * 误指/未注册 commandId 不静默失效（ERR6 已在执行链内出声，置灰是用户可见的后续反馈）；
- * 随推送重建复位（命令重注册后恢复可点）。
+ * 同步 false 与异步回执 resolve false / reject（RPC 失败）同走此通道。随推送重建复位
+ * （命令重注册 / 连接恢复重推后恢复可点）。
  *
  * 降级契约（权威描述见 docs/architecture/extension-gui-protocol.md「降级行为」节）：
  * 未含本 type 的旧宿主由 core resolveComponent 降级 ansi-text（label 经 JSON 序列化
@@ -80,7 +85,7 @@ import {
 
 type ActionBarItem = GuiComponentProps['action-bar']['items'][number]
 
-/** 单 item 的 confirm 本地状态机：idle → confirming → in-flight（终态由重推/超时复位）。 */
+/** 单 item 的 confirm 本地状态机：idle → confirming → in-flight（终态由回执 settle / 重推 / 超时复位）。 */
 type ConfirmPhase = 'idle' | 'confirming' | 'in-flight'
 
 /** 确认态超时：超时后自动复位 idle（防确认态长期滞留造成误触第二击）。 */
@@ -125,7 +130,9 @@ const timers = new Map<string, ReturnType<typeof setTimeout>>()
 // ── 命令缺失本地置灰（tray-panel-interact §4.2 RL2）──
 /** 点击后命令执行器回报 false（壳层命令表查无此 commandId，HeaderActionsHost E3 同款）→
  *  记入本地置灰集合：按钮渲染禁用 + guard 拦再击。ERR6 已在执行链内出声（不静默），
- *  置灰是用户可见的后续反馈。随推送重建复位（命令重注册后随下帧恢复可点）。 */
+ *  置灰是用户可见的后续反馈。同步 false 与异步回执（resolve false / RPC reject）同走此
+ *  通道（markCommandMissing，后者同时把在途态复位 idle）。随推送重建复位（命令重注册 /
+ *  连接恢复重推后恢复可点，同 HeaderActionsHost E3 让位规则的简化形态）。 */
 const commandMissing = ref(new Set<string>())
 
 const phaseOf = (item: ActionBarItem): ConfirmPhase => phases.value[item.id] ?? 'idle'
@@ -166,7 +173,11 @@ const resetConfirm = (item: ActionBarItem): void => {
  *  与 :disabled 属性双重一致。args 原样透传（协议层只许标量，校验在协议入口）。
  *  confirm 项两段式：首击翻确认态（不执行），再击进在途态并执行；在途态重复点击被
  *  guard 直接拦下（与 disabled 属性双重一致，防重复 RPC）。
- *  命令缺失置灰项同样被 guard 拦下（已出声过 ERR6，重复点击不再分派）。 */
+ *  命令缺失置灰项同样被 guard 拦下（已出声过 ERR6，重复点击不再分派）。
+ *  回执 settle（tray-panel-interact §3.3 D5）：dispatch 可能回 Promise（壳层执行器透传
+ *  RPC Promise）——落地后 reject 或 resolve false 时把在途态复位 idle 并走置灰通道
+ *  （markCommandMissing），防 RPC 失败（WS 断连）后无重推、按钮永久滞留转圈+禁用；
+ *  resolve（命令已执行）留在在途态直至记录重推重建（防重复 RPC 的设计语义不变）。 */
 const activate = (item: ActionBarItem): void => {
   if (item.disabled === true || !isExecutable(item) || !executorReady(item)) return
   if (commandMissing.value.has(item.id)) return
@@ -190,8 +201,31 @@ const activate = (item: ActionBarItem): void => {
     navigationExecutor,
     viewSessionId,
   })
-  // 执行器回报命令缺失（false）→ 本地置灰（RL2 渲染禁用）；void = 执行器不回报，不动
-  if (dispatched === false) commandMissing.value.add(item.id)
+  // 执行器同步回报命令缺失（false）→ 本地置灰（RL2 渲染禁用）
+  if (dispatched === false) {
+    markCommandMissing(item)
+    return
+  }
+  // 异步回执（壳层 execute 透传的 RPC Promise）：settle 后按结果处理（见函数头注释）。
+  // 同步 void（执行器不回报，如 settings 插件 fork 直发执行器）不进本路径，行为不变。
+  if (dispatched instanceof Promise) {
+    void dispatched.then(
+      (ok) => {
+        if (ok === false) markCommandMissing(item)
+      },
+      () => markCommandMissing(item),
+    )
+  }
+}
+
+/** 命令缺失/执行失败的本地置灰（RL2）：记入置灰集合（渲染禁用 + guard 拦再击），并把
+ *  在途态相位复位 idle——失败后按钮脱离「永久转圈 + 禁用」，随推送重建恢复可点
+ *  （命令重注册 / 连接恢复重推后自然复位，同 HeaderActionsHost E3 让位规则）。 */
+const markCommandMissing = (item: ActionBarItem): void => {
+  commandMissing.value.add(item.id)
+  if (phases.value[item.id] === 'in-flight') {
+    phases.value = { ...phases.value, [item.id]: 'idle' }
+  }
 }
 
 /** 按钮是否禁用：协议 disabled / 执行器缺位 / confirm 在途态 / 命令缺失置灰（四源合一）。 */

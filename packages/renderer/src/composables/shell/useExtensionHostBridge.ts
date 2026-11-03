@@ -730,13 +730,19 @@ export function initExtensionHostBridge(app: App): void {
   // action-bar 执行器（AP-3）：ui 侧 ACTION_EXECUTOR_KEY（跨包 symbol 同一实例），
   // 实现 = core CommandRegistry.execute 包装（结构兼容 ui 最小接口，无 ui→core 依赖边）。
   // 返回值接 E3 形态（HeaderActionsHost executeCommand 同款，tray-panel-interact §4.2 RL2）：
-  // 缺失命令也走 execute（内部 emit ERR6 error 出声），返回 false 供原语本地置灰——
+  // 缺失命令也走 execute（内部 emit ERR6 error 出声），resolve false 供原语本地置灰——
   // 误指/未注册 commandId 不静默失效（按钮渲染禁用 + guard 拦再击）。
+  // 回执是 RPC Promise 的落地（tray-panel-interact §3.3 D5 in-flight settle）：旧形态
+  // `void commandRegistry.execute(...)` 丢弃 Promise、只回同步可用性，RPC 失败（WS 断连）
+  // 时 Actionbar confirm 两段式的在途态等不到 settle、无重推 → 按钮永久滞留转圈+禁用。
+  // 透传后：resolve 可用性布尔（false = 命令缺失，同步判定）；reject = RPC 失败（薄命令
+  // 已在 host-thin-commands 出错误 toast，此处原错上浮供在途态复位 + 置灰）。
   app.provide(ACTION_EXECUTOR_KEY, {
     execute: (id, args) => {
       const missing = !commandRegistry.get(id)
-      void commandRegistry.execute(id, args as Record<string, unknown> | undefined)
-      return !missing
+      return commandRegistry
+        .execute(id, args as Record<string, unknown> | undefined)
+        .then(() => !missing)
     },
   })
   // 容器导航执行器（容器扩展点统一 §6.4）：core 执行器装配后直接 provide（与 ui
@@ -820,7 +826,11 @@ export function initExtensionHostBridge(app: App): void {
     executeCommand: (commandId) => {
       // E3：缺失命令也走 execute（内部 emit ERR6 error 出声），返回 false 供组件本地置灰
       const missing = !commandRegistry.get(commandId)
-      void commandRegistry.execute(commandId)
+      // 失败回执（薄命令 RPC reject，已由 host-thin-commands 出错误 toast）在此收口：
+      // 本端口只消费同步可用性回执、无在途态，拒绝不应逸出成未处理拒绝（不重复出声）
+      void commandRegistry.execute(commandId).catch((e: unknown) => {
+        console.debug(`[extension-host] headerAction 命令执行失败（已 toast 出声）: ${commandId}`, e)
+      })
       return !missing
     },
   })
