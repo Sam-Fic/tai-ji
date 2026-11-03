@@ -1460,6 +1460,23 @@ describe('config.listQuotaPresets（W3c quota presets 下发）', () => {
     expect(ctx.reply).toHaveBeenCalledTimes(1)
     expect(ctx.reply).toHaveBeenCalledWith(WS_m3, 'msg-1', 'config.quotaPresets', { presets: PRESETS })
   })
+
+  // 回归：两条 RPC 曾只登记进 ProviderMessageHandler 子表、漏登记 SettingsCaseRoutes
+  // 外层转发表，经 server 分发即 unknown_type（子表直测测不到该层，必须走外层入口）。
+  it('外层 SettingsCaseRoutes 转发可达（config.listQuotaPresets / config.setProviderCatalogWatch）', async () => {
+    const ctx = mockContext_m2()
+    const handler = new SettingsMessageHandler(ctx)
+    const handled = await handler.handleSettingsMessage(msg_m3('config.listQuotaPresets'), WS_m3)
+    expect(handled).toBe(true)
+    expect(ctx.reply).toHaveBeenCalledWith(WS_m3, 'msg-1', 'config.quotaPresets', { presets: PRESETS })
+
+    const handledWatch = await handler.handleSettingsMessage(
+      msg_m3('config.setProviderCatalogWatch', { enable: true }, 'msg-2'), WS_m3,
+    )
+    expect(handledWatch).toBe(true)
+    expect(startWatchMock).toHaveBeenCalledTimes(1)
+    expect(ctx.reply).toHaveBeenCalledWith(WS_m3, 'msg-2', 'message.status', { status: 'watch-enabled' })
+  })
 })
 describe('config.refreshProviderCatalogs（远程目录刷新 + 顺带 remote-config 同步）', () => {
   it('reply 成功 envelope + 广播一次，返回 true', async () => {

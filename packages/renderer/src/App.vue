@@ -172,7 +172,7 @@ void getRuntimeStartError().then((message) => {
 const { onConnected } = useSidebar()
 // settings 订阅的 dispose（HMR/App 卸载销毁）+ models 兜底拉取（防订阅时序竞态）。
 // 订阅注册在 bootstrapSettingsCore（上见），此处只持有 dispose/refreshModels 句柄。
-const { dispose: disposeSettings, refreshModels } = useSettings()
+const { dispose: disposeSettings, refreshModels, refreshQuotaPresets } = useSettings()
 // RV1+RV2：fork 反馈行 + 后台分支通知全局订阅（session.forkNotice 广播 → transient feed；
 // useForkBranchNotify diff 分支状态 → 状态变化反馈行）。App setup 是全局 effect 作用域，
 // onScopeDispose 随 App 卸载退订（单实例，与 events.onGlobalType 范式一致）。
@@ -261,10 +261,11 @@ watch(connectionState, (s) => {
     runtimeStartError.value = null
     bootstrapError.value = null
     void onConnected()
-    // 兜底：连接后主动拉一次 models（对齐 refreshProviders 范式，防订阅时序竞态未来回归）。
-    // mock 平台 WS 桩仅 ping/pong 不回 model.list reply → pending 65s 超时，跳过避免 boot 卡顿。
+    // 兜底：连接后主动拉一次 models 与 quota presets（对齐 refreshProviders 范式，防订阅时序竞态未来回归）。
+    // mock 平台 WS 桩仅 ping/pong 不回 reply → pending 65s 超时，跳过避免 boot 卡顿。
     if (import.meta.env.VITE_MOCK !== 'true') {
       void refreshModels()
+      void refreshQuotaPresets()
     }
   }
 })
