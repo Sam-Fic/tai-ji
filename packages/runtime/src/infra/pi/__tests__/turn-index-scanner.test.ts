@@ -7,7 +7,7 @@
  * fixture 均为 mkdtempSync 自建自删的几行小文件（TEST-STRATEGY 新写测试判据第②档：
  * 异步有确定性完成信号）。
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -174,9 +174,28 @@ describe('scanTurnBoundariesForward 边界输入', () => {
   it('文件打开失败返回 null（ENOENT 不抛）', async () => {
     expect(await scanTurnBoundariesForward(join(root, 'missing.jsonl'))).toBeNull()
   })
+
+  it('文件不可读（EACCES）显式上抛，不伪装成 null（D5 错误分级：主文件故障不伪装成空历史）', async () => {
+    const file = writeJsonl('scan-eacces.jsonl', [userJson('u1', 'one')])
+    chmodSync(file, 0o000)
+    try {
+      await expect(scanTurnBoundariesForward(file)).rejects.toThrow()
+    } finally {
+      chmodSync(file, 0o644)
+    }
+  })
 })
 
 describe('verifyTurnBoundaries（RL2 校验原语）', () => {
+  it('文件不可读（EACCES）显式上抛，不伪装成 parse-failed 失配（D5 错误分级）', async () => {
+    const file = writeJsonl('verify-eacces.jsonl', [userJson('u1', 'one')])
+    chmodSync(file, 0o000)
+    try {
+      await expect(verifyTurnBoundaries(file, [{ entryId: 'u1', byteOffset: 0, byteLength: 1, budgetBytes: 1 }])).rejects.toThrow()
+    } finally {
+      chmodSync(file, 0o644)
+    }
+  })
   it('记录与实际边界精确相等时 ok', async () => {
     const file = writeJsonl('verify-ok.jsonl', [userJson('u1', 'one'), otherJson('assistant', 'x'), userJson('u2', 'two')])
     const scan = await scanTurnBoundariesForward(file)

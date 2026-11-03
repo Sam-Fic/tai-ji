@@ -28,6 +28,8 @@
  * 不依赖 stat 元数据（SI4）。
  */
 import { open } from 'node:fs/promises'
+
+import { isEnoent } from '../../utils/errors.js'
 import type { TurnIndexTurnRecord } from './turn-index-types.js'
 
 /* eslint-disable no-magic-numbers -- 块大小与 '\n' 字节值是设计标定量（对齐
@@ -142,7 +144,9 @@ function processLine(state: ForwardScanState, line: string): void {
  * @param filePath pi session JSONL 绝对路径
  * @param resume 续扫状态（缺省 = 从 0 全量扫描）
  * @param options chunkBytes 块大小（测试注入小块验证跨块行拼接）
- * @returns null = 文件打开失败（ENOENT/EACCES——INVAR-tail-4 同语义不抛）
+ * @returns null = 文件打开 ENOENT（pi 延迟落盘 / 竞态删除——空页语义由调用方承接）；
+ *          EACCES/EIO 等其它打开失败显式上抛（设计 D5 错误分级：主文件故障不伪装成空历史，
+ *          基线 stat 预检同款分级 RT-5#4）
  */
 export async function scanTurnBoundariesForward(
   filePath: string,
@@ -153,8 +157,9 @@ export async function scanTurnBoundariesForward(
   let handle: Awaited<ReturnType<typeof open>>
   try {
     handle = await open(filePath, 'r')
-  } catch {
-    return null
+  } catch (e) {
+    if (isEnoent(e)) return null
+    throw e
   }
   try {
     const size = (await handle.stat()).size
@@ -229,10 +234,15 @@ export async function verifyTurnBoundaries(
   let handle: Awaited<ReturnType<typeof open>>
   try {
     handle = await open(filePath, 'r')
-  } catch {
-    // 主文件打开失败（含 ENOENT 竞态删除）：校验无法成立，按首记录 parse-failed
-    // 报告——reader 对主文件 ENOENT 有独立的空页语义，本函数只在文件可开时逐条校验
-    return { ok: false, index: 0, reason: 'parse-failed', expected: records[0].entryId }
+  } catch (e) {
+    if (isEnoent(e)) {
+      // ENOENT 竞态删除：校验无法成立，按首记录 parse-failed 报告失配（重建扫描对已删
+      // 文件返回 null → ensureFresh null → 空页语义）
+      return { ok: false, index: 0, reason: 'parse-failed', expected: records[0].entryId }
+    }
+    // EACCES/EIO 等显式上抛（设计 D5 错误分级：主文件故障不伪装成失配重建——伪装会让
+    // 权限故障先烧一次无谓重建再在重建扫描处失败，还污染失配分类观测）
+    throw e
   }
   try {
     for (let i = 0; i < records.length; i++) {
