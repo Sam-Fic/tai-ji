@@ -53,7 +53,7 @@ import type {
   TreeItem,
 } from "@zhushanwen/extension-protocol";
 import { buildSubagentTrayWidget } from "../interface/gui/tray-widget.ts";
-import type { UiLocale } from "../../i18n.ts";
+import type { UiLocale } from "../i18n.ts";
 import { buildWorkflowTrayWidget } from "../interface/gui/workflow-tray-widget.ts";
 
 /**
