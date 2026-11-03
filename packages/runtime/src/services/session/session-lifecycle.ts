@@ -1345,10 +1345,14 @@ export class SessionLifecycle implements ISessionRegistry {
     // 前置校验 + 旧进程清场 + cwd 解析（顺序即语义，勿调换，与拆分前同序）：
     // findScannedSession → SESSION_NOT_FOUND → model 门禁 → 旧 pi 清场（detach →
     // safeDestroy → 移 Map 条目）→ cwd 降级判定。
+    const preludeT0 = Date.now()
     const target = this.resolveRestoreTarget(sessionId)
     await this.clearExistingSessionForRestore(sessionId)
     const { sessionCwd, cwdFellBack } = this.resolveRestoreCwd(target)
+    const preludeMs = Date.now() - preludeT0
+    const attachT0 = Date.now()
     const { client, presetId, allExtPaths, fellBackFromPresetId } = await this.attachRestoredClient(target, sessionId, sessionCwd, cwdFellBack)
+    const attachMs = Date.now() - attachT0
 
     // U2: get_state 读回 pi 生效 model + thinkingLevel（D2 设计）。
     // switchSession 成功后 pi 已附着会话文件，get_state 返回当前生效值
@@ -1359,10 +1363,14 @@ export class SessionLifecycle implements ISessionRegistry {
     // registerSession 的 ?? 短路阻断 modelOverride/fallbackModelId，composer 按 D3
     // 显示占位而非假值，快照收敛自愈。
     // hydrateBindingMeta restore='none' 不覆写播种值（D1 裁决），所以兜底链在此完成不经过 hydrate。
+    const metaT0 = Date.now()
     const restoreMetaOverride = await seedRestoreMetaOverride(client, sessionId, target)
+    const metaMs = Date.now() - metaT0
 
     // M3: registerSession 失败时清理 pi 进程（与 create 同模式，收口在 registerRestoredSession）
+    const regT0 = Date.now()
     const session = await this.registerRestoredSession(sessionId, client, sessionCwd, target, restoreMetaOverride, allExtPaths)
+    const regMs = Date.now() - regT0
     // 恢复后兜底广播一次上下文用量（pi 从历史估算 contextUsage）。
     // 注意：此广播可能早于前端订阅新 sessionId 通道（时序竞争，见架构约定 #7），
     // 前端 useContextUsage composable 的恢复腿（每次切入视图拉 session.getContext）保证到达。
@@ -1399,7 +1407,9 @@ export class SessionLifecycle implements ISessionRegistry {
     // S3-W2：创建入口收敛点（restoreSession 路径）——session 复活进 Map，插件 didCreate 投递。
     this.svc.notifySessionCreated(restoredSummary)
     // D5：恢复耗时一行日志（典型 ~600ms；大 session 数秒——P8 观测数据源）。
-    console.log(`[session-lifecycle] restore ${sessionId} elapsed=${Date.now() - restoreStartedAt}ms`)
+    // 分段字段：prelude=扫描/清场/cwd，attach=acquire(pi 冷启动)+attach(文件附着)，
+    // meta=get_state 回读，register=登记（attach 内部细分见 acquire/attach 各自一行）。
+    console.log(`[session-lifecycle] restore ${sessionId} elapsed=${Date.now() - restoreStartedAt}ms (prelude=${preludeMs}ms attach=${attachMs}ms meta=${metaMs}ms register=${regMs}ms)`)
     return restoredSummary
   }
 
@@ -1526,18 +1536,27 @@ export class SessionLifecycle implements ISessionRegistry {
     sessionCwd: string,
     cwdFellBack: boolean,
   ): Promise<{ client: IPiEngine; presetId: string; allExtPaths: string[]; fellBackFromPresetId?: string }> {
+    const acquireT0 = Date.now()
     const acquired = await this.acquireRestoreClient(target, sessionId, sessionCwd)
+    console.log(`[session-lifecycle] restore-timing acquire(pi 冷启动/handshake) ${Date.now() - acquireT0}ms (fromWarmupSlot=${acquired.fromWarmupSlot})`)
+    const attachT0 = Date.now()
     if (!acquired.fromWarmupSlot) {
       await this.attachRestoreFile(acquired.client, target, sessionId, cwdFellBack)
+      console.log(`[session-lifecycle] restore-timing attach(归一化+switchSession+断言) ${Date.now() - attachT0}ms`)
       return acquired
     }
     try {
       await this.attachRestoreFile(acquired.client, target, sessionId, cwdFellBack)
+      console.log(`[session-lifecycle] restore-timing attach(归一化+switchSession+断言) ${Date.now() - attachT0}ms`)
       return acquired
     } catch (e) {
       console.warn(`[session-lifecycle] warmup slot client attach failed for ${sessionId}, falling back to spawn chain: ${toErrorMessage(e)}`)
+      const respawnT0 = Date.now()
       const respawned = await this.spawnRestoreClient(target, sessionId, sessionCwd)
+      console.log(`[session-lifecycle] restore-timing respawn(pi 冷启动/handshake) ${Date.now() - respawnT0}ms`)
+      const attach2T0 = Date.now()
       await this.attachRestoreFile(respawned.client, target, sessionId, cwdFellBack)
+      console.log(`[session-lifecycle] restore-timing attach(归一化+switchSession+断言) ${Date.now() - attach2T0}ms`)
       return respawned
     }
   }
@@ -1635,9 +1654,15 @@ export class SessionLifecycle implements ISessionRegistry {
     cwdFellBack: boolean,
   ): Promise<void> {
     try {
+      const normT0 = Date.now()
       normalizeInactiveSessionFileIfNeeded(target.filePath, cwdFellBack, this.sessionStore)
+      const normMs = Date.now() - normT0
+      const swT0 = Date.now()
       await client.switchSession(target.filePath)
+      const swMs = Date.now() - swT0
+      const asT0 = Date.now()
       await assertPiSessionFile(client, target.filePath, `restoreSession(${sessionId})`)
+      console.log(`[session-lifecycle] restore-timing attach-detail normalize=${normMs}ms switchSession=${swMs}ms assert=${Date.now() - asT0}ms`)
       try { unlinkSync(target.filePath + '.meta.json') } catch { void 0 }
     } catch (e) {
       // switch_session 失败时清理已创建的资源,避免子进程/监听器泄漏
