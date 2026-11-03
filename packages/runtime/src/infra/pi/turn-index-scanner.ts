@@ -69,24 +69,37 @@ export interface TurnScanResult { // oe-exempt:20261103:framework:扫描器 IO �
 }
 
 /**
- * 边界行解析：返回 user message 边界的 entryId；非边界（含畸形 JSON / 非 object /
- * message.role 非 user / id 非非空 string）返回 null。
+ * 边界行单次 parse 三分类（processLine 取 id 与 verifyTurnBoundaries 失配归类的共用单点：
+ * 同一行只 JSON.parse 一次，parse 失败 / 非边界 / 边界携带 entryId 三态分开交付）。
  *
  * 边界判定经 turn-index-types.ts isUserMessageBoundary 单点（与 session-history 尾读
  * 同源实现，见该函数注释）；id 收窄是索引专属叠加。
  */
-function userBoundaryIdOf(line: string): string | null {
-  const trimmed = line.trim()
-  if (!trimmed) return null
+function classifyBoundaryLine(
+  trimmed: string,
+): { ok: false; reason: 'parse-failed' | 'not-user-boundary' } | { ok: true; entryId: string } {
   let parsed: unknown
   try {
     parsed = JSON.parse(trimmed)
   } catch {
-    return null
+    return { ok: false, reason: 'parse-failed' }
   }
-  if (!isUserMessageBoundary(parsed)) return null
+  if (!isUserMessageBoundary(parsed)) return { ok: false, reason: 'not-user-boundary' }
   const id = (parsed as Record<string, unknown>).id
-  return typeof id === 'string' && id.length > 0 ? id : null
+  return typeof id === 'string' && id.length > 0
+    ? { ok: true, entryId: id }
+    : { ok: false, reason: 'not-user-boundary' }
+}
+
+/**
+ * 边界行解析：返回 user message 边界的 entryId；非边界（含畸形 JSON / 非 object /
+ * message.role 非 user / id 非非空 string）返回 null。
+ */
+function userBoundaryIdOf(line: string): string | null {
+  const trimmed = line.trim()
+  if (!trimmed) return null
+  const classified = classifyBoundaryLine(trimmed)
+  return classified.ok ? classified.entryId : null
 }
 
 /** 扫描跨行累积状态（processLine 与主循环共享）。 */
@@ -243,30 +256,20 @@ export async function verifyTurnBoundaries(
     for (let i = 0; i < records.length; i++) {
       const record = records[i]
       const trimmed = (await readLineAt(handle, record.byteOffset)).trim()
-      if (trimmed.length === 0 || !isJsonParsable(trimmed)) {
-        return { ok: false, index: i, reason: 'parse-failed', expected: record.entryId }
+      // 空行读不到行内容，与 parse 失败同归 parse-failed（单次 parse 分类，见 classifyBoundaryLine）
+      const classified = trimmed.length === 0
+        ? ({ ok: false, reason: 'parse-failed' } as const)
+        : classifyBoundaryLine(trimmed)
+      if (!classified.ok) {
+        return { ok: false, index: i, reason: classified.reason, expected: record.entryId }
       }
-      const boundaryId = userBoundaryIdOf(trimmed)
-      if (boundaryId === null) {
-        return { ok: false, index: i, reason: 'not-user-boundary', expected: record.entryId }
-      }
-      if (boundaryId !== record.entryId) {
+      if (classified.entryId !== record.entryId) {
         return { ok: false, index: i, reason: 'entry-id-mismatch', expected: record.entryId }
       }
     }
     return { ok: true }
   } finally {
     await handle.close()
-  }
-}
-
-/** JSON.parse 布尔探测（verify 的 parse-failed / not-user-boundary 分类用）。 */
-function isJsonParsable(text: string): boolean {
-  try {
-    JSON.parse(text)
-    return true
-  } catch {
-    return false
   }
 }
 

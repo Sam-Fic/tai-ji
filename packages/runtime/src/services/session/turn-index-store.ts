@@ -144,28 +144,7 @@ export class TurnIndexStore {
    * @param jsonlPath pi session JSONL 绝对路径
    */
   async ensureFresh(sessionId: string, jsonlPath: string): Promise<TurnIndexSnapshot | null> {
-    if (this.deleted.has(sessionId)) {
-      this.warnCancelled(sessionId)
-      return null
-    }
-    const existing = this.inflight.get(sessionId)
-    if (existing !== undefined) return existing
-    const task = this.runFresh(sessionId, jsonlPath)
-    const guarded = task.finally(() => {
-      if (this.inflight.get(sessionId) === guarded) this.inflight.delete(sessionId)
-    })
-    this.inflight.set(sessionId, guarded)
-    const snapshot = await guarded
-    // 完成后复检真删除标记：编排期间被 onSessionDeleted 取消的请求不返回半完成结果，
-    // 按现有 ENOENT 空页语义收尾（设计「生命周期与错误」）；收尾同时回收内存态——
-    // runFresh 内的 touchMemory 不感知删除标记，构建后完成会把条目复活回 LRU（竞态
-    // 收尾清理，RL5「内存 LRU 清理」的竞态形态承载点）。
-    if (this.deleted.has(sessionId)) {
-      this.warnCancelled(sessionId)
-      this.dropSessionState(sessionId)
-      return null
-    }
-    return snapshot
+    return await this.runGuarded(sessionId, jsonlPath)
   }
 
   /**
@@ -175,23 +154,45 @@ export class TurnIndexStore {
    * @param detail 校验失败原因（进日志，供 SI2 归因之外的人工定位）
    */
   async rebuildAfterMismatch(sessionId: string, jsonlPath: string, detail: string): Promise<TurnIndexSnapshot | null> {
+    return await this.runGuarded(sessionId, jsonlPath, {
+      forceMismatchRebuild: true,
+      // 失配 warn 仅在发起方出声（加入在途的并发请求不重复告警）——onLaunch 挂在
+      // 在途复用判定之后，与提取前语句序逐行等价
+      onLaunch: () => {
+        console.warn(
+          `[turn-index-store] 索引失配 sessionId=${sessionId}: ${detail}；恢复动作 = 已全量重建并刷新落盘，返回新快照`,
+        )
+      },
+    })
+  }
+
+  /**
+   * 在途合并编排壳（ensureFresh / rebuildAfterMismatch 共用的守护体，语句序与提取前
+   * 逐行等价）：入口删除标记短路 → 在途复用 → onLaunch（仅发起新编排时执行）→
+   * runFresh 编排 → 完成后删除标记复检。
+   */
+  private async runGuarded(
+    sessionId: string,
+    jsonlPath: string,
+    opts: { forceMismatchRebuild?: boolean; onLaunch?: () => void } = {},
+  ): Promise<TurnIndexSnapshot | null> {
     if (this.deleted.has(sessionId)) {
       this.warnCancelled(sessionId)
       return null
     }
     const existing = this.inflight.get(sessionId)
     if (existing !== undefined) return existing
-    console.warn(
-      `[turn-index-store] 索引失配 sessionId=${sessionId}: ${detail}；恢复动作 = 已全量重建并刷新落盘，返回新快照`,
-    )
-    const task = this.runFresh(sessionId, jsonlPath, true)
+    opts.onLaunch?.()
+    const task = this.runFresh(sessionId, jsonlPath, opts.forceMismatchRebuild === true)
     const guarded = task.finally(() => {
       if (this.inflight.get(sessionId) === guarded) this.inflight.delete(sessionId)
     })
     this.inflight.set(sessionId, guarded)
     const snapshot = await guarded
-    // 完成后复检真删除标记：与 ensureFresh 同语义（不返回半完成结果 + 竞态收尾回收
-    // touchMemory 复活的内存条目）。
+    // 完成后复检真删除标记：编排期间被 onSessionDeleted 取消的请求不返回半完成结果，
+    // 按现有 ENOENT 空页语义收尾（设计「生命周期与错误」）；收尾同时回收内存态——
+    // runFresh 内的 touchMemory 不感知删除标记，构建后完成会把条目复活回 LRU（竞态
+    // 收尾清理，RL5「内存 LRU 清理」的竞态形态承载点）。
     if (this.deleted.has(sessionId)) {
       this.warnCancelled(sessionId)
       this.dropSessionState(sessionId)
