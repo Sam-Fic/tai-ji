@@ -338,6 +338,11 @@ export function createWorkflowTrayWidgetPusher(
 
   async function push(): Promise<void> {
     if (ctx === null) return;
+    // 折叠单飞期间到达的并发 push：此刻读到的仍是折叠前的空内存投影（补装未达投影面），
+    // 且 diskReloadUsed 已被发起方置位使其跳过折叠 → 只会推出无信息量的瞬态清屏帧
+    // （托盘条目毫秒级闪烁后又被数据帧覆盖）。折叠发起方 await 返回后按最新投影重推，
+    // 中间帧直接丢弃，不参与推送。
+    if (diskReloadInFlight) return;
     let runs = readRunsSafe();
     if (runs.length === 0 && reloadFromDisk && !diskReloadUsed && !diskReloadInFlight) {
       // restore/重启冷读收敛：内存投影空 ≠ 无 run（装配链恢复段产物可能未达投影面，

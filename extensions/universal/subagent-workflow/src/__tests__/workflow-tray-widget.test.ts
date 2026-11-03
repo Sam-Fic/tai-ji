@@ -431,4 +431,37 @@ describe("createWorkflowTrayWidgetPusher —— 磁盘折叠冷读收敛（[fix-
     );
     expect(setWidgetDualMock).toHaveBeenCalledWith(expect.anything(), WORKFLOW_TRAY_VIEW_ID, undefined);
   });
+
+  it("折叠 await 间隙的并发 push 不推瞬态清屏帧（托盘条目不闪）", async () => {
+    // 竞态锁定：attach 触发折叠后，await 间隙到达的并发 push 读到的仍是折叠前的空内存
+    // 投影，且 diskReloadUsed 已置位使其跳过折叠 → 旧行为推 setWidgetDual(…, undefined)
+    // 清屏帧，折叠发起方醒来后才被数据帧覆盖（托盘条目毫秒级闪失）。修复后中间帧直接
+    // 丢弃：全程只推一帧，且是折叠完成后的最新投影。
+    let releaseFold: () => void = () => {};
+    const foldGate = new Promise<void>((resolve) => {
+      releaseFold = resolve;
+    });
+    const runs: WorkflowRun[] = [];
+    const reloadFromDisk = vi.fn(async () => {
+      await foldGate;
+      runs.push(makeRun({ runId: "wf-fold-race", scriptName: "build", status: "running" }));
+      return true;
+    });
+    const pusher = createWorkflowTrayWidgetPusher(() => runs, { reloadFromDisk });
+
+    pusher.attach(makeCtx() as never);
+    // 让 push 走到 await reloadFromDisk()（折叠单飞已置位，磁盘折叠尚未返回）
+    await Promise.resolve();
+
+    // 折叠进行中的并发变更信号：不产生任何推送帧
+    pusher.notifyRunsChanged();
+    await flushMicrotasks();
+    expect(setWidgetDualMock).not.toHaveBeenCalled();
+
+    // 折叠完成后：恰好一帧，且带最新投影（非清屏帧）
+    releaseFold();
+    await flushMicrotasks();
+    expect(setWidgetDualMock).toHaveBeenCalledTimes(1);
+    expect(setWidgetDualMock.mock.calls[0]![2]).toBeDefined();
+  });
 });

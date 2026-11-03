@@ -94,8 +94,9 @@ function rowLabelOf(record: SubagentRecord): string {
  * 统一防误触形态，M4 pin 门控到位前 confirm 是唯一防误触闸）；failed 行重试（同任务
  * 重派发新记录，天然可恢复故无 confirm）。
  *
- * 重试渲染条件：仅当 record 含可重派发任务原文时渲染（判据见下方行内注释）；无原文
- * 的失败行只保留 hostAction「查看」入口（行点击导航不受影响）。
+ * 重试渲染条件：仅当 record 同时含可重派发任务原文（task）与短标签（slug）时渲染
+ * （判据见下方行内注释）；缺任一字段的失败行只保留 hostAction「查看」入口（行点击
+ * 导航不受影响）。
  *
  * 按钮文案经 i18n 词典（D9：随 UI 语言）——locale 由构造调用方显式传入（纯函数），
  * 文案主权在推送方（扩展），宿主持 title 模板不持按钮文案（D9 已否决宿主翻译插件文案）。
@@ -113,9 +114,12 @@ function rowActionsOf(record: SubagentRecord, locale: UiLocale): ActionBarItem[]
       },
     ];
   }
-  // task 是 SubagentRecord 必需字段（string，磁盘/内存源均有）；空串/缺值 = 无原文
-  // 可派（存量或异常构造路径）→ 按设计降级不渲染，防渲染出点击必错的按钮。
-  if (failedRoundOf(record) !== undefined && record.task) {
+  // task 是 SubagentRecord 必需字段（string，磁盘/内存源均有）；slug 磁盘重建源旧文件
+  // 可能缺失、契约明示兜底空串（core assembly/types.ts「磁盘重建源旧文件可能缺失→兜底
+  // 空串」）。任一为空串 = 无原文可派（存量或异常构造路径）→ 按设计降级不渲染，防渲染出
+  // 点击必错的按钮：retry args 原样携带 slug，宿主 hostStringArg 对空串 throw（数据缺失
+  // 被误报成「按钮未提供 {param} 参数（扩展声明缺失）」——行级降级而非误导性报错）。
+  if (failedRoundOf(record) !== undefined && record.task && record.slug) {
     return [
       {
         id: `retry-${record.id}`,

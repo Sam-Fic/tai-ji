@@ -258,6 +258,33 @@ describe("buildSubagentTrayWidget 行内操作按钮（M3，使用者视角）",
     });
   });
 
+  it("failed 行 slug 兜底空串（磁盘重建源旧文件缺失，类型契约明示的合法形态）→ 不渲染重试按钮，只剩 list-tree 行", () => {
+    // slug 空串是契约明示合法形态（core assembly/types.ts「磁盘重建源旧文件可能缺失→
+    // 兜底空串」）：retry args 原样携带 slug，宿主 hostStringArg 对空串 throw（点击必失败，
+    // 且 toast 把数据缺失误报成扩展声明缺失）→ 行级降级不渲染，与 task 空串同款。
+    const widget = subagentWidget([makeFailedRecord({ id: "rec-fail-noslug", slug: "" })]);
+    const endedItems = segmentItems(widget!.gui.component, 1);
+    expect(endedItems).toHaveLength(1);
+    expect(segmentActionItems(widget!.gui.component, 1)).toEqual([]);
+    expect(rowHostAction(endedItems[0])).toEqual({
+      kind: "drawer",
+      tabId: "ui.subagent",
+      params: { recordId: "rec-fail-noslug" },
+    });
+  });
+
+  it("failed 行 task 与 slug 均在场 → 渲染重试按钮（判据收紧不误伤正常行）", () => {
+    const widget = subagentWidget([makeFailedRecord({ id: "rec-fail-both", slug: "rev-both", task: "两份都在场" })]);
+    expect(segmentActionItems(widget!.gui.component, 1)).toEqual([
+      {
+        id: "retry-rec-fail-both",
+        label: "重试",
+        commandId: "taiji.subagentRetry",
+        args: { slug: "rev-both", task: "两份都在场" },
+      },
+    ]);
+  });
+
   it("user.cancelled 行（主动中止非失败，failedRoundOf 排除）→ 无行内操作按钮", () => {
     const widget = subagentWidget([
       makeRecord({
