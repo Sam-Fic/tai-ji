@@ -10,7 +10,8 @@ import type { ISessionStore } from '../../ports/session.js';
 import { BtwService } from '../btw-service.js';
 import { resolveSubagentLastRound } from '../events-projection-last-round.js';
 import { SessionEventProjection, initialEventProjectionSources, mergeEventProjection, parseWorkflowRunEventFileLine, projectV2Subagent, scanV2RecordEntries } from '../events-projection.js';
-import { SessionHistoryReader } from '../history-rebuild-cache.js';
+import { SessionHistoryReader } from '../history-reader.js';
+import { scanTurnBoundariesForward, verifyTurnBoundaries } from '../../../infra/pi/turn-index-scanner.js';
 import { createProjectionBusView } from '../projection-bus-view.js';
 import type { ReplicatedState } from '../replicated-state.js';
 import { ThinkingLevelSnapshot, type ModelIdSnapshot } from '../replicated-states.config.js';
@@ -101,7 +102,7 @@ function fakeConvertHistory(raw: unknown[]): Message[] {
 function makeOfflineReader(resolveBtwThreadFile?: (sessionId: string) => string | undefined) {
   const resolve = vi.fn(resolveBtwThreadFile)
   const sessionStore = {
-    // 非 btw 线（主会话）回归路径走通用链 getHistoryTailFromFile → scanSessions
+    // 非 btw 线（主会话）路径走通用定位 scanSessions → 索引窗口/兼容链
     scanSessions: vi.fn(() => [] as Array<{ id: string; filePath: string }>),
     convertHistory: vi.fn((raw: unknown[]) => fakeConvertHistory(raw)),
   } as unknown as ISessionStore
@@ -109,6 +110,7 @@ function makeOfflineReader(resolveBtwThreadFile?: (sessionId: string) => string 
     pm: { getClient: vi.fn(() => undefined) } as unknown as IProcessManager,
     sessionStore,
     resolveBtwThreadFile: resolve,
+    scanner: { scanTurnBoundariesForward, verifyTurnBoundaries },
   })
   return { reader, resolve, sessionStore }
 }
@@ -440,8 +442,8 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
 })
-describe('btw 线离线尾读（btw 面解析路径；W4a 判别器 = 注册表成员查询）', () => {
-  it('注册表命中 + 文件在场：entries 经同一尾读链回放（2 turns）', async () => {
+describe('btw 线历史读取（线 sessionId 独立索引；W4a 判别器 = 注册表成员查询）', () => {
+  it('注册表命中 + 文件在场：entries 经索引窗口链回放（2 turns）', async () => {
     const { registry } = seedThreadFile('line-a', [
       messageEntry('e1', 'user', 'turn 1 q'),
       messageEntry('e2', 'assistant', 'turn 1 a'),
@@ -458,7 +460,7 @@ describe('btw 线离线尾读（btw 面解析路径；W4a 判别器 = 注册表�
     expect(result.totalTurnsEstimate).toBe(2)
   })
 
-  it('注册表命中但文件缺失：空页 + warn（含线 session id 与期望路径）', async () => {
+  it('注册表命中但文件缺失：空页 + warn（含线 session id 与期望路径），不建索引', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       const missing = join(dir, 'never-flushed.jsonl') // 故意不写盘
@@ -474,23 +476,21 @@ describe('btw 线离线尾读（btw 面解析路径；W4a 判别器 = 注册表�
     }
   })
 
-  it('判别器未命中（未注入解析 / 无条目）：走通用链空页，不炸（W4a 后与主会话不可区分）', async () => {
+  it('判别器未命中（未注入解析 / 无条目）：走主会话定位链空页，不炸（W4a 后与主会话不可区分）', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       const { reader, resolve, sessionStore } = makeOfflineReader(undefined)
       const result = await reader.getHistory('unknown-line')
       expect(result.messages).toEqual([])
-      // 判别器即成员查询，[session-cold-switch-perf §3.3-1 态 3] 后双调：一次在
-      // getTailFirstOfflineWindow（登记排除判据）、一次在 tailReadOffline（读路径分支），
-      // 两处均为纯查询（设计允许的同源双判定）
-      expect(resolve).toHaveBeenCalledTimes(2)
-      expect(sessionStore.scanSessions).toHaveBeenCalledWith({ force: true }) // 落通用链
+      // 判别器即成员查询（索引编排单次判别：命中走线文件，miss 走主会话 scanSessions 定位）
+      expect(resolve).toHaveBeenCalledTimes(1)
+      expect(sessionStore.scanSessions).toHaveBeenCalledWith({ force: true }) // 落主会话定位链
     } finally {
       warnSpy.mockRestore()
     }
   })
 
-  it('合法空线（文件在场 0 字节）：空页且不触发 btw 文件缺失 warn（与异常态区分）', async () => {
+  it('合法空线（文件在场 0 字节）：零 turn 兼容分支空页且不触发 btw 文件缺失 warn（与异常态区分）', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       const { registry } = seedThreadFile('empty-line', [])
@@ -503,7 +503,7 @@ describe('btw 线离线尾读（btw 面解析路径；W4a 判别器 = 注册表�
     }
   })
 
-  it('cursor 游标翻页（离线 btw 线）：同一解析路径，返回锚点前最近窗口', async () => {
+  it('cursor 游标翻页（索引路径 btw 线）：同一解析路径，返回锚点前最近窗口', async () => {
     const { registry } = seedThreadFile('line-cursor', [
       messageEntry('e1', 'user', 'turn 1'),
       messageEntry('e2', 'assistant', 'reply 1'),
@@ -512,14 +512,14 @@ describe('btw 线离线尾读（btw 面解析路径；W4a 判别器 = 注册表�
     ])
     const { reader } = makeOfflineReader(registry)
     const page = await reader.getHistory('line-cursor', { cursor: 'e3', limitTurns: 2 })
-    // e3 是最新 turn 起点：锚前窗口 = 第 1 个 turn（e1+e2），锚所在 turn 不返回
+    // e3 是最新 turn 起点：锚前窗口 = 第 1 个 turn（e1+e2），锚所在 turn 只进校验集合不返回
     expect(page.messages.map((m) => m.content)).toEqual(['turn 1', 'reply 1'])
     expect(page.loadedTurns).toBe(1)
     expect(page.truncated).toBe(false)
   })
 })
-describe('附着 btw 线 RPC 失败降级的中断判定门禁（U8 tailReadOffline 剥除门禁）', () => {
-  /** 附着态 reader：pm.getClient(线 id) 返回 getEntries 恒抛错的 fake client（活跃线 RPC 失败 → getLatestWindow catch → tailReadOffline 缺省关闭判定） */
+describe('interrupted 判定的未附着前提门禁（U8 语义在索引路径的保留形态）', () => {
+  /** 附着态 reader：pm.getClient(线 id) 返回在场 client（附着线不判中断——前提不成立） */
   function makeAttachedReader(registry: (sessionId: string) => string | undefined) {
     const resolve = vi.fn(registry)
     const sessionStore = {
@@ -533,12 +533,13 @@ describe('附着 btw 线 RPC 失败降级的中断判定门禁（U8 tailReadOffl
       pm: { getClient: vi.fn(() => client) } as unknown as IProcessManager,
       sessionStore,
       resolveBtwThreadFile: resolve,
+      scanner: { scanTurnBoundariesForward, verifyTurnBoundaries },
     })
     return { reader, client }
   }
 
-  it('附着 btw 线 RPC 失败降级尾读：interrupted 不出场（判定前提「会话未附着」不成立——线尾 user entry 不得误标活线）', async () => {
-    // 线文件尾 = user entry（中断形态）：若降级路径透传 interrupted，附着中的活线被误标
+  it('附着 btw 线（client 在场）：interrupted 不出场（判定前提「会话未附着」不成立——线尾 user entry 不得误标活线），且不触任何 RPC', async () => {
+    // 线文件尾 = user entry（中断形态）：若判定未按在场性关闭，附着中的活线被误标
     const { registry } = seedThreadFile('attached-line', [
       messageEntry('e1', 'assistant', 'reply'),
       messageEntry('e2', 'user', 'generating'),
@@ -547,7 +548,8 @@ describe('附着 btw 线 RPC 失败降级的中断判定门禁（U8 tailReadOffl
     try {
       const { reader, client } = makeAttachedReader(registry)
       const result = await reader.getHistory('attached-line')
-      expect(client.getEntries).toHaveBeenCalled() // 确认走的是附着 RPC 降级链，非离线分支
+      // 终态读取分派与进程解耦（AX4）：历史查看零 RPC（client 在场只关中断判定）
+      expect(client.getEntries).not.toHaveBeenCalled()
       expect(result.messages.map((m) => m.content)).toEqual(['reply', 'generating'])
       // 剥除语义 = 值 undefined（消费方按 !== undefined 判「无判定」），非键删除
       expect(result.interrupted).toBeUndefined()
@@ -556,7 +558,7 @@ describe('附着 btw 线 RPC 失败降级的中断判定门禁（U8 tailReadOffl
     }
   })
 
-  it('对照：未附着（离线）同形态线文件中断判定照常出场（门禁只拦附着降级，不废 btw 判定链）', async () => {
+  it('对照：未附着（离线）同形态线文件中断判定照常出场（门禁只拦附着态，不废中断判定链）', async () => {
     const { registry } = seedThreadFile('offline-line', [
       messageEntry('e1', 'assistant', 'reply'),
       messageEntry('e2', 'user', 'interrupted tail'),
@@ -567,17 +569,16 @@ describe('附着 btw 线 RPC 失败降级的中断判定门禁（U8 tailReadOffl
   })
 })
 describe('非 btw 线回归路径（原行为不变）', () => {
-  it('普通 sid 离线尾读：判别器未命中即走通用链（scanSessions miss → 静默空）', async () => {
-    // 生产注入语义：非线 id 查注册表 miss → undefined → 通用链；[session-cold-switch-perf
-    // §3.3-1 态 3] 后判别器双调（登记排除判据 + 尾读分支各一次，纯查询）
+  it('普通 sid：判别器未命中即走主会话定位链（scanSessions miss → 静默空）', async () => {
+    // 生产注入语义：非线 id 查注册表 miss → undefined → 主会话定位链（索引编排单次判别）
     const { reader, resolve, sessionStore } = makeOfflineReader(() => undefined)
     const result = await reader.getHistory('plain-session-id')
-    expect(resolve).toHaveBeenCalledTimes(2)
+    expect(resolve).toHaveBeenCalledTimes(1)
     expect(sessionStore.scanSessions).toHaveBeenCalledWith({ force: true })
     expect(result).toEqual({ messages: [], truncated: false, loadedTurns: 0, totalTurnsEstimate: 0 })
   })
 
-  it('subagent 三段式虚拟 id 同样不走 btw 解析路径（判别器 miss → 通用链）', async () => {
+  it('subagent 三段式虚拟 id 同样不走 btw 解析路径（判别器 miss → 主会话定位链）', async () => {
     const { reader, sessionStore } = makeOfflineReader(() => undefined)
     await reader.getHistory('subagent:main-1:sub-1')
     expect(sessionStore.scanSessions).toHaveBeenCalledWith({ force: true })
@@ -862,8 +863,8 @@ afterEach(() => {
   warnSpy.mockRestore()
   rmSync(dir_m2, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
 })
-describe('history-rebuild-cache：segments.json sidecar 降级 warn（RT-5#6）', () => {
-  it('sidecar 结构损坏（entries 非数组）→ 全降级占位文本前 warn（含路径）', async () => {
+describe('history-reader：segments.json sidecar 降级 warn（RT-5#6）', () => {
+  it('sidecar 结构损坏（entries 非数组）→ 回填降级前 warn（含路径），读取不炸仍返回文件内容', async () => {
     const sessionId = 'warn-rt5-s1'
     // getAttachmentsDir(sessionId) 落在测试固定为的 tmp dataDir（白名单内），mkdtemp 额外
     // 证据目录由 fixture 语义自持：直接写坏 sidecar
@@ -871,23 +872,22 @@ describe('history-rebuild-cache：segments.json sidecar 降级 warn（RT-5#6）'
     mkdirSync(sidecarDir, { recursive: true })
     const sidecarPath = join(sidecarDir, 'segments.json')
     writeFileSync(sidecarPath, JSON.stringify({ entries: 'not-an-array' }), 'utf-8')
+    // 主会话文件定位（终态经 scanSessions）：真实文件 + 1 个 user turn（索引路径读到窗口转换）
+    const sessionFile = join(dir_m2, 'warn-rt5-s1.jsonl')
+    writeFileSync(sessionFile, messageEntry('e1', 'user', 'hello') + '\n', 'utf-8')
 
-    const client = {
-      getEntries: vi.fn(async () => ({
-        data: { entries: [{ type: 'message', id: 'e1', parentId: null, timestamp: '2026-01-01T00:00:00Z' }], leafId: 'e1' },
-      })),
-    }
     const sessionStore = {
-      scanSessions: vi.fn(() => []),
-      rebuildHistoryFromEntries: vi.fn(() => ({ messages: [], orphanToolResults: [] })),
+      scanSessions: vi.fn(() => [{ id: sessionId, filePath: sessionFile }]),
+      convertHistory: vi.fn((raw: unknown[]) => fakeConvertHistory(raw)),
     } as unknown as ISessionStore
     const reader = new SessionHistoryReader({
-      pm: { getClient: vi.fn(() => client) } as unknown as IProcessManager,
+      pm: { getClient: vi.fn(() => undefined) } as unknown as IProcessManager,
       sessionStore,
+      scanner: { scanTurnBoundariesForward, verifyTurnBoundaries },
     })
 
     const result = await reader.getHistory(sessionId)
-    expect(result.messages).toEqual([]) // 降级不炸重建
+    expect(result.messages.map((m) => m.content)).toEqual(['hello']) // sidecar 降级不炸读取（占位降级 = 不回填结构化 segments）
     const msg = warnSpy.mock.calls.map((c) => String(c[0])).find((m) => m.includes('segments.json sidecar'))
     expect(msg).toBeDefined()
     expect(msg).toContain('结构损坏')

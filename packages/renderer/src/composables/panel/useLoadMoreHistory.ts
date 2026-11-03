@@ -29,8 +29,8 @@
  * 视口往下推（virtua 单一 scrollTop owner，最小可靠形态）；同时也构造了自动续载的节流：
  * 插入后 offset 随新内容高度抬升，用户需再次主动上滑触顶才会触发下一页。
  * [session-cold-switch-perf §3.3-3 滚动位置保持] isPrepend 的第二驱动源 = chat store 基线
- * 前置替换事件计数（getBaselinePrependTick，全量精化头部插入时跳变）——见下方 watch；
- * 手动翻页与基线前置共用同一 :shift 保位通路。
+ * 前置替换事件计数（getBaselinePrependTick，reconcileHistory 基线替换头部插入时跳变）——
+ * 见下方 watch；手动翻页与基线前置共用同一 :shift 保位通路。
  *
  * 不含：load-more 按钮的 DOM 渲染 + 高度断言（容器 useConstantHeightAssert 负责）。
  *
@@ -123,18 +123,14 @@ export function useLoadMoreHistory(
   // 消费方 computed：读当前 sid 分区（切 sid 自动切视图，无需手动复位）
   const loadingMore = computed(() => state.current.value.loadingMore)
   const isPrepend = computed(() => state.current.value.isPrepend)
-  // [session-cold-switch-perf §3.3-3] 合并后台重建失败态：historyCacheReady 失败帧把
-  // 「正在加载更早」指示收敛为同一失败重试行（复用 loadMore 失败态形态，与手动翻页失败
-  // 共用同一呈现）；重试动作（handleLoadMore 成功）或任意 history 重拉成功即清除。
-  const loadMoreError = computed(
-    () => state.current.value.loadMoreError || useChatStore().isHistoryCacheFailed(sessionId()),
-  )
+  // [RD-1#4] 上一次「加载更早」失败（顶部条渲染可重试错误行；按分区归属本 session）
+  const loadMoreError = computed(() => state.current.value.loadMoreError)
   const slowLine = computed(() => state.current.value.slowLine)
 
-  // [session-cold-switch-perf §3.3-3 滚动位置保持] 全量精化（historyCacheReady 重拉 →
-  // reconcileHistory 基线替换）在分区头部插入更早历史——virtua 仅 shift=true 时对该形态
-  // 做滚动补偿（reverse scroll adjustment），而 :shift 此前的唯一驱动是本 composable 的
-  // 手动翻页。此 watch 把 store 的基线前置事件计数（getBaselinePrependTick）转成一拍
+  // [session-cold-switch-perf §3.3-3 滚动位置保持] reconcileHistory 基线替换（整体合并）
+  // 可能在分区头部插入更早历史——virtua 仅 shift=true 时对该形态做滚动补偿（reverse
+  // scroll adjustment），而 :shift 此前的唯一驱动是本 composable 的手动翻页。此 watch
+  // 把 store 的基线前置事件计数（getBaselinePrependTick）转成一拍
   // isPrepend：tick 跳变与 messages 更新同源于 store 同步写 → 同一 flush 内 :shift 先于
   // Virtualizer 的 data.length watcher 生效（watcher 创建序：本 composable setup 先于子组件）；
   // nextTick 后复位对齐 handleLoadMore 的既有时序（shift 在 virtua 消费 length change 后

@@ -106,6 +106,14 @@ export interface ArchiveServiceDeps { // oe-exempt:20261020:framework:服务依�
   reapBackgroundTasks(agentDir: string, sessionId: string): Promise<unknown>
   /** 插件 KV tombstone（purge 步骤 ②，先于删树——防插件 worker 迟到写重建孤儿树）。 */
   clearRemovedSessionData(sessionId: string): void
+  /**
+   * [turn-boundary-index D5] 真删除专属挂点（purge 步骤 2.5：与步骤 ② 插件 KV tombstone
+   * 同段次序、先于步骤 ③ cascadeDeleteSessionContent 整树 trash）——取消在途索引构建 +
+   * 清内存索引 LRU。purgeArchive 不经 lifecycle.delete 也不经 removeSessionEntry（归档态
+   * 无销毁链，onSessionDisposed 不会触发），内存索引 LRU 只能由本挂点清理。可选成员：
+   * 既有测试 deps 不注入 = no-op；组合根注入 = 经 SessionService 的 historyReader 转发。
+   */
+  onSessionDeleted?(sessionId: string): void
   /** 画布绑定解绑（purge 步骤 ⑤；真删除点，归档刻意不解绑）。 */
   unbindCanvas(sessionId: string): void
   /** 文件级废纸篓（purge 步骤 ⑥ 压缩体处置；sessionStore.trash 同款 G4 语义）。 */
@@ -577,6 +585,13 @@ export class ArchiveService {
     } catch (e: unknown) {
       this.deps.warn(`[archive] 插件 KV tombstone 失败，继续彻底删除 (sessionId=${sessionId}): ${toMessage(e)}`)
     }
+
+    // 步骤 2.5：真删除专属挂点（turn-boundary-index D5，与步骤 ② 插件 KV tombstone 同段
+    // 次序、先于步骤 ③ cascadeDeleteSessionContent 的整树 trash）——取消在途索引构建 +
+    // 清内存索引 LRU。purgeArchive 是归档态彻底删除，既不经 lifecycle.delete 也不经
+    // removeSessionEntry（后者四路均不含归档路径），onSessionDisposed 不会被触发——内存
+    // 索引 LRU 只能由本挂点清理。未注入（既有测试 deps）= no-op。
+    this.deps.onSessionDeleted?.(sessionId)
 
     // 步骤 3：残树处置（先于归档物处置——引用枚举源在归档单元内，须在其被删除前取出
     // 消费）。引用枚举源：staging 明文直读；archived 先过 sha256 校验再解压为临时产物

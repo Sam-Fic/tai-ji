@@ -14,7 +14,7 @@
  *   composerChildStubs，mock 段各自内联（见下方差异化清单）
  * - composer-bar-density-wiring / composer-smoke：session mock / 子组件 stub /
  *   ComposerInput 共用部分复用
- * - composer-history-cache：仅 composerChildStubs
+ * - composer-history-cache：已并入 panel/composer-fork-mode.test.ts（源文件已删除，见其「来源：composer-history-cache.test.ts」段注）
  *
  * 另供两类变体工厂：makeComposerChatApiMock（useChat 的 spy 对象——断言需直接引用
  * send/steer/followUp 的文件持有单例后自建 vi.mock 包装）；makeFocusableComposerInputMock
@@ -295,10 +295,9 @@ export function composerChatStoreModule() {
       sessionPhase: () => ({ turn: 'idle', compacting: false, bash: false }),
       getMessages: () => [],
       getOccupancy: () => ({ turn: 'idle', compacting: false, bash: false }),
-      // useLoadMoreHistory 的 watch getter / 失败态派生读 store（core createChatStore 成员）：
-      // tick=0 让基线前置 watch 恒不置位，failed=false 不注入失败行
+      // useLoadMoreHistory 的 watch getter 读 store（core createChatStore 成员）：
+      // tick=0 让基线前置 watch 恒不置位
       getBaselinePrependTick: () => 0,
-      isHistoryCacheFailed: () => false,
     }),
   }
 }

@@ -1,16 +1,16 @@
 /**
- * RevokeOrchestrator — 消息撤回七步编排（message-revoke 设计 §3.3 D2 的 runtime 落点）。
+ * RevokeOrchestrator — 消息撤回六步编排（message-revoke 设计 §3.3 D2 的 runtime 落点）。
  *
  * 职责：`session.revokeMessage {sessionId, targetId}` 的领域编排——入口同步临界区（置位
  * revoking + 空闲/互斥检查）→ cancel 全部 active（D4）→ 定位 entryId（targetId 双形态
- * 分派）→ 清 history 重建缓存 → 信令前校验（幂等判定 + 顺取 expectedParentId）→
- * sendSystemCommand 触发 pi navigateTree + prompt resolve 后 get_entries 校验 →
- * 派生态失效（校验通过后，时序契约见④段注释）→ reply（D2 ⑦/D7/D8）。
+ * 分派）→ 信令前校验（幂等判定 + 顺取 expectedParentId）→ sendSystemCommand 触发
+ * pi navigateTree + prompt resolve 后 get_entries 校验 → 派生态失效（校验通过后，
+ * 时序契约见 acquireTargetContext 的派生态失效时序注释）→ reply（D2 ⑥/D7/D8）。
  *
  * 关键契约（注释锚三处——hold 释放 / 末尾锚 / entry.id 集合谓词，见各 inline 注释）：
  * - revoking hold 的置位在编排最前（入口同步临界区内）、释放 = try/finally 全路径；
  * - ③ b 裸标记通道锚定 entry 文本**末尾位置**命中（恒尾附构造）；
- * - ⑥ 校验谓词按回溯链 **entry.id 集合**判定，禁字符串包含判法。
+ * - ⑤ 校验谓词按回溯链 **entry.id 集合**判定，禁字符串包含判法。
  *
  * 依赖经构造注入（窄接口）：投递内核注册表经 deps.registry（getter 形态——组合根装配序
  * 下注册表晚于编排构造，对齐 SessionDeliveryDeps.getMessageBus 同款晚期读取）；
@@ -51,7 +51,7 @@ export const REVOKED_SIGNAL_CUSTOM_TYPE = 'taiji:revoked'
 export interface RevokeOrchestratorDeps {
   /** occupancy 空闲检查数据源（①——四维 turn/compacting/bash/handingOff 的权威派生视图）。 */
   getSession(sessionId: string): IManagedSessionView | undefined
-  /** pi 拉活（⑤ 数据范围 + ⑥ 信令前置交接共用；失败回 pi-reclaimed——D1/A10 无感拉活）。 */
+  /** pi 拉活（④ 数据范围 + ⑤ 信令前置交接共用；失败回 pi-reclaimed——D1/A10 无感拉活）。 */
   ensureActive(sessionId: string): Promise<IPiEngine>
   /**
    * workflow running 检查（①——D2 待验证② 落点核实结论：subagent-workflow 内存态在
@@ -61,14 +61,13 @@ export interface RevokeOrchestratorDeps {
    * 同段的二层加固（设计 D2 ①原文）。
    */
   hasRunningWorkflow(sessionId: string): Promise<boolean>
-  /** history 重建缓存清理（④——Facade evictHistoryRebuildCache 既有入口，复审 F1 核实）。 */
-  evictHistoryRebuildCache(sessionId: string): void
   /**
-   * 派生态失效（⑥ 树回退校验通过后——注入窄接口：plan-state 等未来状态派生视图失效。
+   * 派生态失效（⑤ 树回退校验通过后——注入窄接口：plan-state 等未来状态派生视图失效。
    * 组合根以 no-op 占位实现，U6d 接线点——SessionRecords 丢 cursor 强制全量重建；U6d
    * committed 后替换为真实调用，主 agent 核销该接线点）。调用时点契约：失效经
    * SessionRecords 同步触发 fire-and-forget 全量重算，重算消费调用时点的树快照——
-   * 必须后置到树回退确认之后，信令前触发是无效失效（重建消费撤回前数据，见④段注释）。
+   * 必须后置到树回退确认之后，信令前触发是无效失效（重建消费撤回前数据，时序推导见
+   * acquireTargetContext 的派生态失效时序注释）。
    */
   invalidateDerivedState(sessionId: string): void
   /**
@@ -83,7 +82,7 @@ export interface RevokeOrchestratorDeps {
    * undefined = 组合根未接线 → revokeMessage 显式抛错（fail-fast 语义保持）。
    */
   registry(): SessionDeliveryRegistry | undefined
-  /** 系统信令入口（⑥——MessageDispatcher.sendSystemCommand，不经 hook / 不经内核）。 */
+  /** 系统信令入口（⑤——MessageDispatcher.sendSystemCommand，不经 hook / 不经内核）。 */
   sendSystemCommand(
     sessionId: string,
     commandLine: string,
@@ -101,13 +100,13 @@ interface RawTreeEntry {
   data?: unknown
 }
 
-/** get_entries 快照（③⑤ 共用一次拉取——目标定位与活跃路径校验同一份数据）。 */
+/** get_entries 快照（③④ 共用一次拉取——目标定位与活跃路径校验同一份数据）。 */
 interface TreeSnapshot {
   byId: Map<string, RawTreeEntry>
   leafId: string | null
 }
 
-/** leafId 沿 parentId 回溯的活跃链（⑥ 校验谓词的数据范围）。 */
+/** leafId 沿 parentId 回溯的活跃链（⑤ 校验谓词的数据范围）。 */
 interface ActiveChain {
   /** 回溯链上的 entry.id 集合（活跃路径派生——谓词按此集合判定，非字符串包含）。 */
   ids: Set<string>
@@ -157,7 +156,7 @@ function walkActiveChain(snapshot: TreeSnapshot): ActiveChain {
   return { ids, complete: true }
 }
 
-/** user message entry → transcript 原文（含投递裸标记，raw 不剥——⑦ D7 分界裁定：剥标记与整批切条在 renderer）。 */
+/** user message entry → transcript 原文（含投递裸标记，raw 不剥——⑥ D7 分界裁定：剥标记与整批切条在 renderer）。 */
 function userEntryText(entry: RawTreeEntry): string {
   if (entry.type !== 'message' || entry.message?.role !== 'user') return ''
   return piContentText(entry.message.content)
@@ -221,7 +220,7 @@ function locateViaBareMarker(
  * - 裸 uuid 子形态（U8 保留原 id）→ 仅通道 b：mapper 只写 u- 形态，custom entry 映射对裸
  *   uuid 恒 miss（审计候选 1 删除该恒 miss 兜底——通道 b 的末尾锚经 bareMarkerId 恒等
  *   归一同样命中，行为不变）。
- * - 其余形态（基线/重开态 pi entryId，8 位 hex）→ 直接用作 entryId（⑤ 活跃路径校验兜底
+ * - 其余形态（基线/重开态 pi entryId，8 位 hex）→ 直接用作 entryId（④ 活跃路径校验兜底
  *   语义错误目标——不在全文件即 no-mapping）；content 尽力查取（目标非 user message 时空串）。
  */
 function locateTarget(
@@ -284,12 +283,12 @@ export class RevokeOrchestrator {
       // ── ② 内核 active 条目全量 cancel（D4：等价 exclude=全部，走既有 cancel 管道）────
       await this.cancelAllActiveEntries(registry, sessionId)
 
-      // ── 数据范围拉活 + ③ 定位 + ④ 缓存清除 + ⑤ 信令前校验（含全部前置终态分支）──────
+      // ── 数据范围拉活 + ③ 定位 + ④ 信令前校验（含全部前置终态分支）────────────────
       const prelude = await this.acquireTargetContext(sessionId, targetId)
       if (!('client' in prelude)) return prelude // 前置终态（busy 码族 / no-mapping / 幂等 revoked）
       const { client, located, expectedParentId } = prelude
 
-      // ── ⑥ 信令 + prompt resolve 后校验 ──────────────────────────────────────────
+      // ── ⑤ 信令 + prompt resolve 后校验 ──────────────────────────────────────────
       const outcome = await this.deps.sendSystemCommand(
         sessionId,
         `/${TAIJI_NAV_COMMAND} ${located.entryId}`,
@@ -299,7 +298,7 @@ export class RevokeOrchestrator {
         return { sessionId, revoked: false, error: outcome.kind }
       }
       if (outcome.kind === 'error') {
-        // prompt 传输级失败：无法确认树状态——nav-failed（重试安全：⑤ 幂等判定兜住）
+        // prompt 传输级失败：无法确认树状态——nav-failed（重试安全：④ 幂等判定兜住）
         warn(`nav-failed: nav command transport error, sid=${sessionId}, targetId=${targetId}, entryId=${located.entryId}, message=${outcome.message}`)
         return { sessionId, revoked: false, error: 'nav-failed' }
       }
@@ -307,20 +306,20 @@ export class RevokeOrchestrator {
       // parentReached 不过）的共同前提：nav 信令已送达 pi（sendSystemCommand 已 resolve），
       // 树可能已实际回退而校验未能确证——三处均补派生态失效。失效幂等：树未回退时全量
       // 重算消费未变树，收敛到同态零副作用；已回退时立即按撤回后树清残影，不等用户重试
-      // （重试前存在残影窗口）。与⑥′的差别 = 时机证据强度：⑥′是树回退确证后的失效，
+      // （重试前存在残影窗口）。与⑤′的差别 = 时机证据强度：⑤′是树回退确证后的失效，
       // 此处是不确定态的防御性失效。
       const verifyOutcome = await this.verifyRewind(sessionId, client, targetId, located, expectedParentId)
       if (verifyOutcome !== null) return verifyOutcome
 
-      // ── ⑥′ 派生态失效（树回退确认后——时序契约见④段注释）：此刻触发的全量重算
-      // 消费撤回后树，被撤派生（plan 残影等）随活跃路径裁剪收敛清除。
+      // ── ⑤′ 派生态失效（树回退确认后——时序契约见 acquireTargetContext 的派生态失效时序注释）：
+      // 此刻触发的全量重算消费撤回后树，被撤派生（plan 残影等）随活跃路径裁剪收敛清除。
       this.invalidateDerived(sessionId)
 
-      // ── ⑦ reply：revoked:true + transcript 原文（含投递裸标记，raw 不剥）──────────
+      // ── ⑥ reply：revoked:true + transcript 原文（含投递裸标记，raw 不剥）──────────
       return { sessionId, revoked: true, content: located.content }
     } finally {
       // ── revoking hold 释放（注释锚①——D2 硬契约）─────────────────────────────────
-      // try/finally 覆盖①-⑦全部路径含 busy / workflow-running / no-mapping /
+      // try/finally 覆盖①-⑥全部路径含 busy / workflow-running / no-mapping /
       // pi-reclaimed / nav-failed 提前 return：泄漏形态 = 该 session 后续提交永久
       // queued 死轮询（恢复通道仅重启 app）。幂等（dispose 已清场时 no-op）。
       registry.endRevokeHold(sessionId)
@@ -328,11 +327,11 @@ export class RevokeOrchestrator {
   }
 
   /**
-   * ② 后数据范围前置段：拉活 + 一次 get_entries（③⑤ 共用——设计 D2 ③「同一次
-   * get_entries」）+ ③ 定位 + ④ 缓存清除 + ⑤ 信令前校验。返回上下文（含 ⑤ 校验取出的
+   * ② 后数据范围前置段：拉活 + 一次 get_entries（③④ 共用——设计 D2 ③「同一次
+   * get_entries」）+ ③ 定位 + ④ 信令前校验。返回上下文（含 ④ 校验取出的
    * expectedParentId）或前置终态 reply（拉活失败 pi-reclaimed / 读失败 nav-failed /
    * 定位失败与不在活跃链 no-mapping / 幂等已撤 revoked:true）——调用方按 `'client' in`
-   * 判别后原样返回或继续 ⑥。
+   * 判别后原样返回或继续 ⑤。
    */
   private async acquireTargetContext(
     sessionId: string,
@@ -349,8 +348,8 @@ export class RevokeOrchestrator {
       console.error(`[revoke-orchestrator] ensureActive failed, sid=${sessionId}`, e)
       return { sessionId, revoked: false, error: 'pi-reclaimed' }
     }
-    // get_entries 失败归 nav-failed（可重试语义——与 ⑥ 校验读失败同族；重试时若撤回
-    // 实际已成功，⑤ 幂等判定兜住不误报 no-mapping）
+    // get_entries 失败归 nav-failed（可重试语义——与 ⑤ 校验读失败同族；重试时若撤回
+    // 实际已成功，④ 幂等判定兜住不误报 no-mapping）
     const before = await readTreeSnapshot(client)
     if (!before) {
       warn(`nav-failed: pre-signal get_entries read failed, sid=${sessionId}, targetId=${targetId}`)
@@ -361,24 +360,23 @@ export class RevokeOrchestrator {
     const located = locateTarget(before, targetId)
     if (!located) return { sessionId, revoked: false, error: 'no-mapping' }
 
-    // ── ④ 清 history 重建缓存（惰性清除——下次重建时才读树，无数据时序问题）──────
-    // 派生态失效不在此触发（后置到⑥ 校验通过后，见调用点注释）：失效经 SessionRecords
-    // 同步触发 fire-and-forget 全量重算，重算消费的是调用时点的树快照——信令前调用时
-    // 树尚未回退，无参 getEntries 先于信令到达 pi（同一 client 顺序处理），返回撤回前
-    // 快照 → 全量重建派生被撤残影 + cursor 回写撤回前 leafId，信令生效后增量批
-    // 「保持基线」→ 残影永续。信令前失效 = 无效失效（时序错位缺陷的从根源修复落点）。
-    this.deps.evictHistoryRebuildCache(sessionId)
+    // ── 派生态失效时序（不在信令前触发——后置到⑤ 校验通过后的失效点）──────────────
+    // 失效经 SessionRecords 同步触发 fire-and-forget 全量重算，重算消费的是调用时点的
+    // 树快照——信令前调用时树尚未回退，无参 getEntries 先于信令到达 pi（同一 client
+    // 顺序处理），返回撤回前快照 → 全量重建派生被撤残影 + cursor 回写撤回前 leafId，
+    // 信令生效后增量批「保持基线」→ 残影永续。信令前失效 = 无效失效（时序错位缺陷的
+    // 从根源修复落点）。
 
-    // ── ⑤ 信令前校验（用 nav 前数据——放⑥则恒假/恒真皆失效）──────────────────────
+    // ── ④ 信令前校验（用 nav 前数据——放⑤则恒假/恒真皆失效）──────────────────────
     const pre = walkActiveChain(before)
     if (!pre.ids.has(located.entryId)) {
       // 二次判定：目标在全文件存在 → 已被前序撤回带走（含 reply 丢失重试形态）→
       // 幂等回 revoked:true + 原文（重试同样完成 D7 草稿回填闭环）；不存在 → no-mapping。
       // 两分支均不发信令——防复活性跳转（对旧分支目标的 navigateTree 会把叶子挪回去）。
       if (before.byId.has(located.entryId)) {
-        // 幂等分支同样触发派生态失效：首次尝试可能已「信令送达 + 树回退、但⑥校验读失败
+        // 幂等分支同样触发派生态失效：首次尝试可能已「信令送达 + 树回退、但⑤校验读失败
         // 归 nav-failed」（失效未触发，残影仍在）；重试此刻触发的全量重算消费的已是撤回
-        // 后树（时序合法——与⑥′同款后置契约）。
+        // 后树（时序合法——与⑤′同款后置契约）。
         this.invalidateDerived(sessionId)
         return { sessionId, revoked: true, content: located.content }
       }
@@ -390,8 +388,8 @@ export class RevokeOrchestrator {
   }
 
   /**
-   * ⑥ post-signal 校验（prompt resolve 后）：读 post 快照 + 活跃链三判定。返回 null =
-   * 树回退确证（调用方走⑥′/⑦ 收尾）；返回 reply = 终态回复（调用方原样返回——三防御
+   * ⑤ post-signal 校验（prompt resolve 后）：读 post 快照 + 活跃链三判定。返回 null =
+   * 树回退确证（调用方走⑤′/⑥ 收尾）；返回 reply = 终态回复（调用方原样返回——三防御
    * 分支的失效语义见调用点 [post-signal 防御性失效] 注释）。
    */
   private async verifyRewind(
@@ -418,7 +416,7 @@ export class RevokeOrchestrator {
     if (post.ids.has(located.entryId)) {
       // 此分支刻意不失效（与上方三分支相反）：目标仍在活跃链 = 树确证未回退（回退后
       // 目标必不在活跃链），无残影产生——树未回退时失效收敛到同态，纯冗余调用；
-      // nav-failed 语义 = 本轮未完成，重试走⑤正常路径。
+      // nav-failed 语义 = 本轮未完成，重试走④正常路径。
       warn(`nav-failed: target still on active path after rewind, sid=${sessionId}, targetId=${targetId}, entryId=${located.entryId}`)
       return { sessionId, revoked: false, error: 'nav-failed' }
     }
@@ -439,7 +437,7 @@ export class RevokeOrchestrator {
    * deps.notifyEntryInvalidation 注入回调广播 REVOKED_SIGNAL_CUSTOM_TYPE）消费同一
    * 「活跃路径已变更」事实，只失效 records 路径会
    * 复现 scheduler-manager 面板残留缺陷（插件镜像折叠输入含被撤子树 op）。调用点 =
-   * ⑤ 幂等分支 + ⑥ post-signal 三防御分支 + ⑥′ 确认点——均为树回退已确认或防御性
+   * ④ 幂等分支 + ⑤ post-signal 三防御分支 + ⑤′ 确认点——均为树回退已确认或防御性
    * 不确定态，广播的镜像重建幂等（重新拉取经 readEntries 活跃路径过滤，树未回退时收敛到
    * 同态）。「目标仍在活跃链」分支刻意双双不调用（树确证未回退，无残影产生）。
    */

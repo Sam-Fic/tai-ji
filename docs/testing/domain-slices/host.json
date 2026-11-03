@@ -72,6 +72,7 @@
     "apps/electron/main/test/supervisor-health-liveness.test.ts",
     "apps/electron/main/test/trigger-evaluator.test.ts",
     "apps/electron/main/test/types.test.ts",
+    "apps/electron/main/test/zombie-forensics.test.ts",
     "apps/electron/main/test/update-handlers-orchestration.test.ts",
     "apps/electron/main/test/update-handlers.test.ts",
     "apps/electron/main/test/update-self-healer.test.ts",

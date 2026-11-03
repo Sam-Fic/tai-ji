@@ -832,7 +832,7 @@
   },
   {
     "id": "PS-40",
-    "claim": "session JSONL append-only 是 taiji 两条消费链的共同前提：①runtime HistoryRebuildCache 增量拉取以「上次 get_entries 响应的 leafId」为 since 游标翻页，前提 = 旧 entry 永不删除/改写（compaction 也是 entry 追加）→ since 游标持续有效、增量 delta 有界；②cache-governance 批 3 sidecar 退役后的 model 反向读（沿文件物理尾逆序扫 model_change/assistant）同以 append-only 为前提——新 append 只会更靠近尾部，尾扫单调收敛且新数据自然可见。pi 若引入加载期以外的就地改写/删除（_rewriteFile 触发范围扩大、entry 修剪等），两条链同时失真（游标失效 / 反向读漏读错位）",
+    "claim": "session JSONL append-only 是 taiji 两条消费链的共同前提：①plugin 族派生视图读侧 session-api readEntries 的 sinceEntryId 游标增量（getEntries(since)，以「上次 get_entries 响应的 leafId」为游标翻页、回包 leafEntryId 供下次调用续传，与 guard.note 同源；原 P0 历史侧消费方随 turn-boundary-index 退役，历史读取改走 session.history 索引窗口不经 since 游标），前提 = 旧 entry 永不删除/改写（compaction 也是 entry 追加）→ since 游标持续有效、增量 delta 有界；②cache-governance 批 3 sidecar 退役后的 model 反向读（沿文件物理尾逆序扫 model_change/assistant）同以 append-only 为前提——新 append 只会更靠近尾部，尾扫单调收敛且新数据自然可见。pi 若引入加载期以外的就地改写/删除（_rewriteFile 触发范围扩大、entry 修剪等），两条链同时失真（游标失效 / 反向读漏读错位）",
     "piAnchor": [
       {
         "pkg": "pi-coding-agent",
@@ -843,7 +843,7 @@
     ],
     "guard": {
       "type": "observe",
-      "note": "消费方：packages/runtime/src/services/session/history-rebuild-cache.ts 的 since=leafId 游标翻页（头注 :25 自述「compact 是 append-only → since 不会因 compact 失效」）+ cache-governance 批 3 extractLatestModelFromJsonl 尾扫（U7/U8 落地后生效）。pi 升级时重验与 PS-18 同点：_rewriteFile 触发范围是否仍限加载期、是否新增删除/改写路径——PS-18 登记 pi 侧机制，本条登记 taiji 消费侧前提，pi bump 双条同验【行号锚基于 pi@0.84.4；1.0.0 复核按符号名定位】"
+      "note": "消费方：packages/runtime/src/services/plugin-service/api/session-api.ts readEntries 的 sinceEntryId 游标读通道（getEntries(since)，session-readers-census §4.1 末行登记的插件派生视图生成点；since 游标有效性依赖「compact 是 append-only → since 不会因 compact 失效」——原 P0 历史侧消费方随 turn-boundary-index 退役，历史读取改走索引窗口不经 since 游标）+ cache-governance 批 3 extractLatestModelFromJsonl 尾扫（U7/U8 落地后生效）。pi 升级时重验与 PS-18 同点：_rewriteFile 触发范围是否仍限加载期、是否新增删除/改写路径——PS-18 登记 pi 侧机制，本条登记 taiji 消费侧前提，pi bump 双条同验【行号锚基于 pi@0.84.4；1.0.0 复核按符号名定位】"
     },
     "verifiedWith": "1.0.0"
   },

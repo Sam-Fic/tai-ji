@@ -1170,6 +1170,14 @@ export class SessionLifecycle implements ISessionRegistry {
       this.purgeSchedulerShardForDeletedSession(sessionId, session)
       return
     }
+    // [turn-boundary-index D5] 真删除专属挂点（主会话分支，active + scanned 两分支共用
+    // 前置）：整树 trash（下方两分支的 cascadeDeletedSessionContent）之前取消在途索引
+    // 构建 + 清内存索引 LRU。btw 直删分支已在上方 return——线的挂点在 btw closeLine 内
+    // （三路删除收敛单入口覆盖），不经本调用。经 svc 可选成员转发 SessionService 的
+    // historyReader 引用（不在本文件实例化 store）；未注入（存量测试 svc fake）= no-op。
+    // 普通销毁路径（pi 进程退出 / 强杀 / restore 清场）不经本挂点——那四路在
+    // removeSessionEntry 第 12 步走 onSessionDisposed（只清内存索引，不取消文件读取）。
+    this.svc.onSessionDeleted?.(sessionId)
     // [M4-a] 级联 cwd 解析（两分支各取真值；分支抛出则级联随之跳过——btw 线目录由
     // closeAllForMain 同步软删线树（主树内 btw/ 域随整树回收），无外部补账兜底）。
     let cascadeCwd: string | undefined

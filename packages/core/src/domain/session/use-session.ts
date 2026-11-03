@@ -27,7 +27,7 @@
  * （createSessionStore/createChatStore/createUseChat 先例），故命名 createUseSession。
  */
 import { computed, onScopeDispose } from 'vue'
-import type { BatchDeleteResult, Message, ServerMessageMap, SessionGroup, SessionSummary } from '@taiji/shared'
+import type { BatchDeleteResult, Message, SessionGroup, SessionSummary } from '@taiji/shared'
 import { triggerSessionCleanups } from '../../foundation/use-session-scoped-state'
 // [W2 权威拉取与冷读] 状态层契约（读口 liveStateOf + 唯一写口 applyLiveState）。core 侧
 // 拉取对账经此把 session.getState 的 reply 落进状态层——与状态消息（state_changed /
@@ -94,23 +94,6 @@ export interface ChatHydratePort {
   clearHistoryError(sessionId: string): void
   /** 标记历史加载失败（landing 显重试出口，不永久卡住） */
   markHistoryFailed(sessionId: string): void
-  /**
-   * [session-cold-switch-perf §3.3-3] historyCacheReady 通知编排的 chat store 读写子端口
-   * （后台全量重建失败态 + 快照版本对账，SSOT 在 chat store 分区）。可选成员：壳未注入
-   * （headless / mock 装配）时通知编排的相关分支跳过——重拉/失败收敛由下一次 getHistory
-   * 拉取自然承接（ADR-0097 拉为主推补充）。
-   */
-  historyCache?: {
-    /** 后台全量重建失败（historyCacheReady 失败帧）→「加载更早」收敛失败重试入口 */
-    markCacheFailed(sessionId: string): void
-    /** 清除后台重建失败态（该会话任一次 history 拉取成功收敛） */
-    clearCacheFailed(sessionId: string): void
-    /**
-     * 快照版本对账：分区尾消息的文件侧身份 === snapshotLeafId（true = 重建期间无新追加，
-     * 重拉安全；false = 过期/未 hydrate，不重拉由尾部保护段衔接）。
-     */
-    isSnapshotFresh(sessionId: string, snapshotLeafId: string): boolean
-  }
 }
 
 /**
@@ -275,48 +258,13 @@ export function resetSessionListSubForTest(): void {
   sessionListSubCount = 0
 }
 
-// ── session.historyCacheReady 通知订阅（session-cold-switch-perf §3.3-3；refCount 单飞）──
-// 与上方 session.list 订阅同构：useSidebar 被 6+ 组件实例化，factory 每实例注册一次会
-// 重复消费通知（重拉 ×N）。模块级 refCount：首个实例注册，末个实例卸载时取消。
-// 消费通道 = crossSession（帧带 sessionId，ROUTE_TABLE 'session.historyCacheReady' 条目
-// 声明），handler 只该有一份（全局单消费面）——非活跃会话/btw 线分区的帧在编排内按
-// activeId 匹配判定静默忽略。
-let historyCacheSubCount = 0
-let historyCacheUnsub: (() => void) | null = null
-
-function bindHistoryCacheReady(
-  api: SessionApiPort,
-  handle: (sessionId: string, payload: ServerMessageMap['session.historyCacheReady']) => void,
-): void {
-  historyCacheSubCount += 1
-  if (historyCacheSubCount === 1 && api.onHistoryCacheReady) {
-    historyCacheUnsub = api.onHistoryCacheReady(handle)
-  }
-}
-
-function unbindHistoryCacheReady(): void {
-  historyCacheSubCount = Math.max(0, historyCacheSubCount - 1)
-  if (historyCacheSubCount === 0 && historyCacheUnsub) {
-    historyCacheUnsub()
-    historyCacheUnsub = null
-  }
-}
-
-/** 测试隔离：重置通知订阅计数（beforeEach 调，防上一用例的 handler 残留单槽）。 */
-export function resetHistoryCacheSubForTest(): void {
-  if (historyCacheUnsub) {
-    historyCacheUnsub()
-    historyCacheUnsub = null
-  }
-  historyCacheSubCount = 0
-}
-
 /**
  * createUseSession factory —— session 管理编排（IF4 落地）。
  *
  * 使用方式：壳（w5）注入六端口 + 可选 flow，包装为 renderer composable（useSidebar）；
  * 测试注入 mock 端口断言编排（见 __tests__/store.test.ts 的 selectSession describe 与
- * __tests__/use-session-history-cache.test.ts——原 use-session.test.ts 已并入 store.test.ts）。
+ * __tests__/use-session-history-cache.test.ts 的切入链并行切口节——原 use-session.test.ts
+ * 已并入 store.test.ts）。
  */
 export function createUseSession(deps: UseSessionDeps) {
   const { store, api, panel, navigation, chat, hooks } = deps
@@ -352,12 +300,6 @@ export function createUseSession(deps: UseSessionDeps) {
    */
   bindSessionListBroadcast(api, (groups) => store.applySnapshot({ groups }))
   onScopeDispose(unbindSessionListBroadcast)
-  // [session-cold-switch-perf §3.3-3] historyCacheReady 通知订阅（refCount 单飞；端口未
-  // 注入 = 整体不注册，重拉/失败收敛由下一次 getHistory 拉取自然承接）
-  bindHistoryCacheReady(api, (sessionId, payload) => {
-    void handleHistoryCacheReady(sessionId, payload)
-  })
-  onScopeDispose(unbindHistoryCacheReady)
 
   /**
    * 同步 session 到 panel（sidebar 选 session 与 ⌘[/⌘] 导航共用）。
@@ -455,8 +397,7 @@ export function createUseSession(deps: UseSessionDeps) {
    *
    * 落库语义与旧步 9 两分支对齐：未 hydrate = reconcile + clearHistoryError（失败
    * markHistoryFailed 走 landing 重试出口）；已 hydrate = 静默刷新（refreshHistory 同款，
-   * 失败 warn 不抛——失败态语义属未 hydrate 通路的 landing 重试出口）。拉取成功同时
-   * 收敛后台重建失败态（historyCacheReady 失败帧的「重试成功」收敛点之一）。
+   * 失败 warn 不抛——失败态语义属未 hydrate 通路的 landing 重试出口）。
    */
   function startEntryHistoryPull(id: string): Promise<void> {
     return chat.getHistory(id).then(
@@ -464,7 +405,6 @@ export function createUseSession(deps: UseSessionDeps) {
         const wasHydrated = chat.isHydrated(id)
         reconcileFromReply(id, reply)
         if (!wasHydrated) chat.clearHistoryError(id)
-        chat.historyCache?.clearCacheFailed(id)
       },
       (e) => {
         if (chat.isHydrated(id)) {
@@ -475,59 +415,6 @@ export function createUseSession(deps: UseSessionDeps) {
         }
       },
     )
-  }
-
-  /**
-   * [session-cold-switch-perf §3.3-3] session.historyCacheReady 通知编排（后台全量重建
-   * 完成后的显示合并：尾读首屏 → 全量精化）。
-   *
-   * 帧语义（shared protocol SSOT）：成功/失败都推；snapshotLeafId = 重建快照末条 entry id。
-   * 四步判定（任一不过即静默忽略，通知帧按 sessionId 定向不串显示）：
-   * ① 活跃会话匹配——非活跃会话与 btw 线分区（drawer 选中线 ≠ activeId）不动作：
-   *    btw 回放窗口保持（尾读 + live 帧按现状继续填充），缓存收益在下次重开回放兑现；
-   * ② 失败帧（error 非空）不重拉（ADR-0122 失败显式上报、首败即停，不建自动重试）——
-   *    「正在加载更早」指示收敛为「加载更早失败 + 重试入口」（复用手动翻页失败呈现，
-   *    renderer useLoadMoreHistory 合并 chat store historyCacheFailed 分区）；重试由
-   *    下一次 getHistory 派单（手动重试/切入/重连对账）按四态重新决策，消费驱动；
-   * ③ 未 hydrate 跳过——首屏加载由切入链并行 pull 承担（它按四态重新分派，命中缓存
-   *    即毫秒级），防双拉；
-   * ④ 快照版本对账（isHistorySnapshotFresh）——重建期间会话有新追加（用户发送过消息）
-   *    则快照基准不匹配，不重拉：由尾部保护段继续衔接 live 数据，等下一轮索引。
-   *
-   * 通过后重拉 getHistory（此时命中缓存，毫秒级）→ reconcileFromReply → 现有
-   * reconcileHistory 合并上屏（基线替换 + 尾部 live 保护段承载「全量精化不打扰用户当前
-   * 阅读与在途消息」）。await 窗口后二次核对活跃态：用户切走则放弃落库（切回时切入链
-   * 重新拉取），per-session 分区本身无串话。滚动位置保持：贴底场景由 follow 机制承载；
-   * 用户已上滑时基线替换在分区头部插入更早历史，chat store 记基线前置事件计数
-   * （getBaselinePrependTick）→ renderer useLoadMoreHistory 转一拍 isPrepend 喂
-   * virtua :shift 保位（shift=false 时 virtua 对头部插入无补偿，scrollTop 不变 +
-   * 前方插入 = 视口内容前移跳变）。
-   */
-  async function handleHistoryCacheReady(
-    sessionId: string,
-    payload: ServerMessageMap['session.historyCacheReady'],
-  ): Promise<void> {
-    // ① 活跃会话匹配（btw 线分区 / 非活跃会话静默忽略）
-    if (store.getActiveId() !== sessionId) return
-    // ② 失败帧：不重拉，收敛失败重试入口
-    if (payload.error !== undefined) {
-      chat.historyCache?.markCacheFailed(sessionId)
-      return
-    }
-    // ③ 未 hydrate：首屏加载由切入链并行 pull 承担
-    if (!chat.isHydrated(sessionId)) return
-    // ④ 快照版本对账：过期快照不重拉（尾部保护段衔接，等下一轮索引）
-    if (!chat.historyCache?.isSnapshotFresh(sessionId, payload.snapshotLeafId)) return
-    try {
-      const reply = await chat.getHistory(sessionId)
-      if (store.getActiveId() !== sessionId) return
-      reconcileFromReply(sessionId, reply)
-      chat.historyCache?.clearCacheFailed(sessionId)
-    } catch (e) {
-      // 缓存快路径失败（罕见）：保持现状（尾读数据 + truncated 入口仍在），warn 留痕，
-      // 下一次 getHistory 派单按四态重新决策
-      console.warn(`[use-session] history cache refresh failed for ${sessionId}:`, e)
-    }
   }
 
   /**

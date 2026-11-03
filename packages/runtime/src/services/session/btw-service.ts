@@ -230,6 +230,14 @@ export interface BtwServiceDeps {
    * 入参 = 线 session id（W4a 键统一后 = piSessionId）。
    */
   onLineTerminated?(sessionId: string): void
+  /**
+   * [turn-boundary-index D5] 真删除专属挂点（线树软删前）：closeLine 是三路删除收敛
+   * 单入口（btw.remove 直调 / delete 对 btw 线直删 / 主删级联 closeAllForMain 逐线转调），
+   * 本挂点在 resolveLineTreeDir 的整树 trashDirectory 之前取消在途索引构建 + 清内存
+   * 索引 LRU（线用线 sessionId 的独立索引）。可选成员：既有测试 deps 不注入 = no-op；
+   * 组合根注入 = 经 SessionService 的 historyReader 转发到 reader 自持的 TurnIndexStore。
+   */
+  onSessionDeleted?(sessionId: string): void
   /** 时钟注入（测试）。 */
   now?(): number
 }
@@ -674,6 +682,10 @@ export class BtwService {
     // 恢复），失败原生结构化错误上抛不吞。线 jsonl 的 .meta.json sidecar 不随关线
     // 清理（随主树整删回收；rebuild 只扫 *.jsonl，残留无幽灵复活面）。
     const lineTree = resolveLineTreeDir(rec.piSessionId)
+    // [turn-boundary-index D5] 真删除专属挂点：线树软删（trashDirectory）之前取消在途
+    // 索引构建 + 清内存索引 LRU。三路删除（直删 / 直删级联 / 主删级联）都收敛到本方法，
+    // 挂点单点覆盖；未注入（存量测试 deps）= no-op。
+    this.deps.onSessionDeleted?.(sessionId)
     if (existsSync(lineTree)) {
       await this.deps.trashDirectory(lineTree)
     }

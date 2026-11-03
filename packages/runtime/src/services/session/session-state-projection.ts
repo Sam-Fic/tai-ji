@@ -18,7 +18,7 @@
  * 订阅接线（S5 核心，设计 D2②「换订阅者」）：onSessionRegistered 订阅者从 Facade
  * 换为本模块自身——组装根（Facade 构造器）先调 subscribe(lifecycle)，播种先于
  * record 注册与 reconciler 对账（lifecycle 按订阅顺序同步直发，扇出不设异常隔离）。
- * 销毁侧无事件——onSessionDisposed 由 Facade removeSessionEntry 第 ⑤ 步直调
+ * 销毁侧无事件——onSessionDisposed 由 Facade removeSessionEntry 第 12 步直调
  * （与 TraceSync.onSessionDisposed 并列）。
  *
  * 日志/错误消息前缀保留 `[session-service]`（G3 行为等价：错误诊断流也是可观察
@@ -613,7 +613,7 @@ export class SessionStateProjection {
     }
   }
 
-  // ── 销毁清理（Facade removeSessionEntry 第 ⑤ 步直调，与 TraceSync.onSessionDisposed 并列）──
+  // ── 销毁清理（Facade removeSessionEntry 第 12 步直调，与 TraceSync.onSessionDisposed 并列）──
 
   /**
    * W7/W8 + W12：销毁 per-session 实例组与 state_changed diff 基线（主动删 + 进程退出

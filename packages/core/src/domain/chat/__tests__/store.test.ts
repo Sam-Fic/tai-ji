@@ -163,14 +163,14 @@ describe('createChatStore factory', () => {
       })
 
       // ── [session-cold-switch-perf §3.3-3 滚动位置保持]
-      //    全量精化（historyCacheReady 重拉）走整体合并路径时，基线相对尾读窗口在分区
-      //    头部插入更早历史——virtua 仅 shift=true 时对该形态补偿滚动，store 侧记事件
-      //    计数交 renderer 转一拍 isPrepend。触发面 = 「分区非空 + 变长 + 首条文件侧身份
-      //    变化」三条件同时成立，其余刷新形态一律不触发。──
+      //    reconcileHistory 基线替换（整体合并路径）相对当前窗口可能在分区头部插入更早
+      //    历史——virtua 仅 shift=true 时对该形态补偿滚动，store 侧记事件计数交 renderer
+      //    转一拍 isPrepend。触发面 = 「分区非空 + 变长 + 首条文件侧身份变化」三条件同时
+      //    成立，其余刷新形态一律不触发。──
       describe('基线前置替换信号（getBaselinePrependTick）', () => {
         it('全量基线替换头部插入更早历史 → tick 递增', () => {
           const sid = 's1'
-          // 冷切入形态：hydrate 尾读窗口（最近 2 条）→ 后台全量到达重拉（基线多出更早 e0）
+          // 基线替换形态：hydrate 尾读窗口（最近 2 条）→ reconcile 基线替换（基线多出更早 e0）
           sut.store.hydrate(sid, [baselineUser('e1'), baselineUser('e2')])
           expect(sut.store.getBaselinePrependTick(sid)).toBe(0)
           sut.store.reconcileHistory(sid, [baselineUser('e0'), baselineUser('e1'), baselineUser('e2')])

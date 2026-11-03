@@ -5996,6 +5996,29 @@
       "owner": "packages/runtime",
       "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
       "note": "R2 态 + describe 级门控（2026-11-02 测试范围收缩：beforeEach 经 vi.resetModules() + 动态 import 加载 session-lifecycle 真模块图，冷编译成本由场景 1 支付，runtime 全量满并行落盘 junit 实测 2.81s 超默认组 2s 阈值、单跑场景 1 788ms 同形态；只挂首例会把冷编译成本转嫁场景 2，故 U2 describe 11 例整挂）。触发条件 = scope 内 restoreSession 播种 / header cwd 降级 diff 命中。断言本质 = get_state 读回值 → 扫描 meta 值 → '' 兜底链的 metaOverride 播种（restore 任何情况不播种全局默认）+ hydrateBindingMeta restore='none' 不覆写播种值。serial=真 的理由 = 真模块图冷编译在满载下无稳定上界。同文件 applyHeaderCwdFallback describe（纯字符串变换、零 IO）留无门控默认组。"
+    },
+    {
+      "id": "E2E-PIPE-30",
+      "summary": "check-history-read-model：历史读取读模型防回流静态检查（L0，turn-boundary-index RL1）——退役通知协议与 runtime 旧链符号零回流 + 正常历史读取编排不引用 pi get_entries（范围外消费链除外）",
+      "scope": [
+        "scripts/check-history-read-model.mjs",
+        "packages/runtime/src/services/session-history.ts",
+        "packages/runtime/src/services/session/history-reader.ts",
+        "packages/shared/src/protocol.ts"
+      ],
+      "layer": "L1",
+      "assets": [
+        {
+          "kind": "script",
+          "ref": "scripts/check-history-read-model.mjs"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": false,
+      "run": "node scripts/check-history-read-model.mjs",
+      "owner": "packages/runtime",
+      "authority": "scripts/check-history-read-model.mjs",
+      "note": "跑绿门挂 u-retire-protocol commit 门 + CI invariants job 全量直调（.github/workflows/ci.yml history-read-model 步）；本条目 on-diff scope 是增量触发面，与 CI 全量直调互补。断言依赖实现终态——history-rebuild-cache.ts 迁移为 history-reader.ts 之前实跑 exit 1 是预期红（基线形态 13 处回流命中已实测登记）。范围外消费链（TraceSync / SessionRecords / 撤回定位 / 投递判重 / 插件读取 / 压缩分界的 get_entries）不在检查范围，见脚本头注。"
     }
   ]
 }

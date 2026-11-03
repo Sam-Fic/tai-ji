@@ -53,6 +53,10 @@ PATH_REF_EXEMPT = {
      "e2e/tray-entry-real.spec.ts"): "migration-narrative：tray-entry-real.spec.ts 头注记载设计 §3.4 M2 原文落点与 mock→真实进程层迁移史，两个旧 spec 已随迁移删除、无新路径可指，属历史叙述引用非功能性引用",
     ("e2e/workflow-sidebar-sync.spec.ts",
      "e2e/tray-entry-real.spec.ts"): "migration-narrative：tray-entry-real.spec.ts 头注记载设计 §3.4 M2 原文落点与 mock→真实进程层迁移史，两个旧 spec 已随迁移删除、无新路径可指，属历史叙述引用非功能性引用",
+    # 旧链回流守卫（scripts/check-history-read-model.mjs 组2）：断言已退役的
+    # history-rebuild-cache.ts 保持不存在（防回流），引用即检查语义本身
+    ("packages/runtime/src/services/session/history-rebuild-cache.ts",
+     "scripts/check-history-read-model.mjs"): "retirement-guard",
 }
 
 SCAN_PATHSPEC = [

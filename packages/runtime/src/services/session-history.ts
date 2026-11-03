@@ -20,8 +20,9 @@
  *
  * 游标翻页（crash-resilience §3.3 D4 中期，u6-paging-protocol）：collectRecentTurnEntriesFromTail
  * 扩展 cursorId 定位——逆序扫描遇 cursor entry 行时丢弃已收集的更新侧行，从更旧行继续
- * 凑 N turns，即「锚点之前的最近窗口」；与活跃路径（sliceMessagesBeforeCursor +
- * applyHistoryBudgetWindow）共用 turn 边界/首 turn 豁免/字节预算参数语义。
+ * 凑 N turns，即「锚点之前的最近窗口」；与 SessionHistoryReader 的索引窗口选择
+ *（history-reader.ts selectIndexWindow）共用 turn 边界判定与首 turn 豁免/字节预算判定实现
+ *（infra/pi/turn-index-types.ts 的 isUserMessageBoundary / exceedsTurnByteBudget 单点）。
  */
 
 import { readFile } from 'node:fs/promises'
@@ -34,6 +35,7 @@ import { parseJsonl, type JsonlParseOptions } from '../utils/jsonl.js'
 import { warnOnce } from '../utils/warn-once.js'
 import { applyEntryEndTimes, mapSessionEntries, isInterruptedTail, computeActivePathEntries } from '../infra/pi/session-entry-mapper.js'
 import { backfillConvertedSegments } from '../infra/pi/entry-tree-builder.js'
+import { exceedsTurnByteBudget, isUserMessageBoundary } from '../infra/pi/turn-index-types.js'
 import type { PiSessionEntry } from '../infra/pi/pi-protocol.js'
 import { forEachReversedLineChunk } from '../utils/history-reverse-read.js'
 
@@ -41,15 +43,19 @@ import { forEachReversedLineChunk } from '../utils/history-reverse-read.js'
  * 过滤出 object entry 并收窄为 PiSessionEntry[]（供 mapSessionEntries 消费）。
  *
  * parseJsonl 可能返回非 object JSON 值（裸数字/字符串/null/畸形行 parse 出的非对象值——
- * 本文件读路径数据来源 = 全量 readFile + forEachReversedLineChunk 交付行，经 parseJsonl 解析），
- * 而 mapSessionEntries 的 switch(entry.type) 要求 entry 是 object（非 object 访问 .type 会抛错）。
- * 此处前置过滤，mapper 只处理 object entry。
+ * 本文件读路径数据来源 = 全量 readFile + forEachReversedLineChunk 交付行 + history-reader
+ * 索引窗口字节区间交付行，经 parseJsonl 解析），而 mapSessionEntries 的 switch(entry.type)
+ * 要求 entry 是 object（非 object 访问 .type 会抛错）。此处前置过滤，mapper 只处理 object
+ * entry。
+ *
+ * [turn-boundary-index 复用出口] 导出供 history-reader.ts 的 readEntriesAtOffset 复用
+ *（索引窗口字节区间逐行 parse 后的同款前置过滤，单点不复制）。
  *
  * bashExecution 以 type:'message' + message.role:'bashExecution' 存储（W2 已验证：pi
  * session-manager appendMessage 把 message 包成 SessionMessageEntry），走 mapper 的 message
  * 分支透传，convertPiHistory 的 bashExecution 分支正确还原，无需单独处理。
  */
-function filterObjectEntries(entries: unknown[]): PiSessionEntry[] {
+export function filterObjectEntries(entries: unknown[]): PiSessionEntry[] {
   // parseJsonl 可能返回非 object（裸数字/字符串/null），mapSessionEntries 的
   // switch(entry.type) 要求 entry 是 object。前置过滤后 cast 为 PiSessionEntry[]（运行时降级，
   // mapper 按 entry.type 结构访问，非合规字段走 default 跳过）。不用类型谓词，保留 unknown[]
@@ -203,19 +209,6 @@ export async function getHistoryFromFilePath(filePath: string, sessionStore: ISe
 }
 
 /**
- * turn 边界判定：entry 是否为 user message（turn 起点）。
- * D11：turn = user message 到下一个 user message 之前。
- */
-function isTurnBoundary(entry: unknown): boolean {
-  if (typeof entry !== 'object' || entry === null) return false
-  const e = entry as Record<string, unknown>
-  if (e.type !== 'message') return false
-  const msg = e.message
-  if (typeof msg !== 'object' || msg === null) return false
-  return (msg as Record<string, unknown>).role === 'user'
-}
-
-/**
  * 历史窗口读取结果（通用形状：①②档文件读与活跃 getHistory 预算窗口共用）。
  * truncated=true 表示窗口外仍有历史（前端据此显隐「加载更多」）。
  * totalTurnsEstimate：turn 总数估计——读到文件头时是精确总量；分块扩窗提前停止时
@@ -249,7 +242,7 @@ interface TailWindowScan {
    * turn 边界入列快照（栈顶 = 最近收集的 turn）：idx = 边界行落入的 linesDesc 下标，
    * accBefore = 边界行入列前的累计字节（= 更新侧完整 turns 字节合计）。字节预算
    * 超界回退最后一个 turn 时据此截断——扫描序里 turn 的尾部行先于其边界行收集，
-   * 回退必须连同尾部行一并截除（对齐活跃路径 applyHistoryBudgetWindow「超界 turn
+   * 回退必须连同尾部行一并截除（对齐索引窗口选择 selectIndexWindow「超界 turn
    * 不入窗」）。
    */
   turnStartStack: Array<{ idx: number; accBefore: number }>
@@ -288,15 +281,6 @@ function resetScanForCursor(scan: TailWindowScan): void {
   scan.turnCount = 0
   scan.accBytes = 0
   scan.collecting = true
-}
-
-/**
- * 字节预算超界判定（D4 双条件，与活跃路径 applyHistoryBudgetWindow 对齐）：turn 边界处
- * 判定已收集 turns 的累计字节；首个 turn 豁免（超限完整放行，turnCount === 0 时不判）；
- * 后续 turn 超界不入窗（回退已收集的该 turn 行），turn 原子性不切。
- */
-function hitsByteBudgetCap(isTurn: boolean, scan: TailWindowScan, maxBytes: number | undefined): boolean {
-  return isTurn && scan.turnCount > 0 && maxBytes !== undefined && scan.accBytes > maxBytes
 }
 
 /** 字节预算超界回退最后一个已收集 turn（含其尾部行）。 */
@@ -339,7 +323,7 @@ function collectLineIntoWindow(scan: TailWindowScan, line: string, isTurn: boole
  * 32MB 上限仍未遇）→ cursorMiss=true（调用方按翻页到头返回空页，不报错——D4 空游标边界）。
  *
  * [u6] 字节预算（maxBytes 传入时启用；游标翻页路径与离线尾读路径由 reader 归一默认
- * 传入 HISTORY_BUDGET.MAX_BYTES）：与活跃路径 applyHistoryBudgetWindow 同语义——首个
+ * 传入 HISTORY_BUDGET.MAX_BYTES）：与索引窗口选择 history-reader selectIndexWindow 同语义——首个
  * turn 豁免（超限完整放行）、后续 turn 超界**不入窗**（回退该 turn 已收集行，含其先于
  * 边界行收集的尾部行），turn 原子性不切。超界停止处必有更早 turn（触发停止的边界行
  * 本身）→ truncated=true 如实置位。
@@ -388,7 +372,7 @@ function collectRecentTurnEntriesFromTail(
           if (lineMatchesCursor(parsed, cursorId)) resetScanForCursor(scan)
           continue
         }
-        const isTurn = parsed.length > 0 && isTurnBoundary(parsed[0])
+        const isTurn = parsed.length > 0 && isUserMessageBoundary(parsed[0])
         if (!scan.collecting) {
           // 确认扫描：发现任一更早 turn 边界即可定论（提前终止，不读更早块）；
           // 扫到文件头仍无 → truncated=false（A6：无更早历史不给截断提示）
@@ -398,7 +382,10 @@ function collectRecentTurnEntriesFromTail(
           }
           continue
         }
-        if (hitsByteBudgetCap(isTurn, scan, maxBytes)) {
+        // 边界行处判定：accBytes 已含最后 turn 全部行（该 turn 已完整入列），首 turn
+        // 豁免与字节帽判定经 exceedsTurnByteBudget 单点（与索引窗口选择同源）——超界
+        // 不入窗（回退已收集的该 turn 行），turn 原子性不切。
+        if (isTurn && exceedsTurnByteBudget(scan.turnCount, scan.accBytes, maxBytes)) {
           if (scan.turnCount > 1) rollbackLastTurn(scan)
           scan.stopReason = 'budget'
           return false
@@ -457,8 +444,11 @@ function collectRecentTurnEntriesFromTail(
  * 回填步骤 applyEntryEndTimes：用 entry 时间戳写 assistant 消息的产出结束时刻（Message.endedAt，
  * pi 落盘于 message_end → ≈ 该消息产出结束）；turn 聚合口径（「已工作」时长/时刻区间）
  * 依赖它，且该数据只在持久化 entry 上有（live 链路走自己的时钟，见 shared Message.endedAt 注释）。
+ *
+ * [turn-boundary-index 复用出口] 导出供 history-reader.ts 的索引窗口转换复用（设计 §3.1
+ * 「消息转换」：读出的原始窗口继续进入本链，AX5——性能改造不另写一套消息语义）。
  */
-function convertWindowEntries(
+export function convertWindowEntries(
   entries: PiSessionEntry[],
   sessionStore: ISessionStore,
   segmentsMetadata?: SegmentsMetadataFile | null,
@@ -493,10 +483,10 @@ function convertWindowEntries(
  * 中断判定（isInterruptedTail）的喂数：活跃路径裁剪后的窗口 entries。推导与
  * convertWindowEntries 同款（剥 session header——header 有 id 无 parentId 会把单根检查
  * 顶成多根降级；leafId = 剥除后窗口末条 entry 的 string id），裁剪语义共享 mapper 的
- * computeActivePathEntries SSOT。tailReadHistory 的中断判定专用——渲染链仍走
- * convertWindowEntries，两处判定输入经同一 SSOT 保持一致。
+ * computeActivePathEntries SSOT。中断判定专用（tailReadHistory 与 history-reader 的索引
+ * 窗口共用本单点）——渲染链仍走 convertWindowEntries，两处判定输入经同一 SSOT 保持一致。
  */
-function activePathEntriesOf(entries: PiSessionEntry[]): PiSessionEntry[] {
+export function activePathEntriesOf(entries: PiSessionEntry[]): PiSessionEntry[] {
   const scoped = entries.filter((e) => (e as { type?: unknown }).type !== 'session')
   const last = scoped[scoped.length - 1]
   const leafId = last !== undefined && typeof last.id === 'string' ? last.id : undefined
