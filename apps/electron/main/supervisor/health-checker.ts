@@ -83,6 +83,74 @@ export async function checkHealthEndpoint(port: number): Promise<boolean> {
 }
 
 /**
+ * 进程活性探测结果（liveness 判据分级的三态，2026-11-03「死/忙分级」改造）。
+ *
+ * - dead：进程不存在（kill(pid,0) ESRCH）——确证死，可杀。
+ * - refused：进程在但端口拒绝连接（ECONNREFUSED）——listen 句柄已不在，
+ *   HTTP 服务死透，等同确证死（方案处置表：端口连接拒绝 = 死）。
+ * - timeout：进程在但连接未在超时窗内建立——本地回环下极罕见（OS accept
+ *   队列不依赖目标进程 JS 执行），主要对应 SIGSTOP 冻结等人为暂停形态，
+ *   按忙处理（不杀，进假死持续窗口累计）。
+ * - alive：进程在且端口接受连接——进程活性无虞，服务健康与否交给 /health 探测。
+ */
+export type ProcessProbeOutcome =
+  | { kind: 'dead' }
+  | { kind: 'unreachable'; reason: 'refused' | 'timeout' }
+  | { kind: 'alive' }
+
+/**
+ * 进程活性探测（独立于 /health 的低层信号，判定「忙」与「死」的分界）。
+ *
+ * 两段探测：
+ * 1. `process.kill(pid, 0)`：0 号信号不发送任何信号，仅做进程存在性检查。
+ *    ESRCH = 进程不存在（确证死）；EPERM 等其他错误 = 进程存在但无权限
+ *    发信号，继续端口探测（不误判死）。
+ * 2. `net.connect(127.0.0.1:port)`：TCP 连接建立由 OS 内核 accept 队列保证，
+ *    不需要目标进程的 JS 执行——event-loop 被重算堵死时仍可连。这是「忙」
+ *    （端口可连但 /health 超时）与「死」（端口拒绝/进程消失）的可判定分界。
+ *    连接建立后立即销毁 socket，不等任何应用层应答。
+ *
+ * 永不抛错（探针失败是判定输入，不是异常路径）。
+ *
+ * @param pid runtime 进程 pid
+ * @param port runtime 监听端口
+ * @param timeoutMs 连接超时，默认 CONNECT_TIMEOUT_MS
+ */
+export async function probeProcessAlive(
+  pid: number,
+  port: number,
+  timeoutMs = CONNECT_TIMEOUT_MS,
+): Promise<ProcessProbeOutcome> {
+  try {
+    process.kill(pid, 0)
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ESRCH') return { kind: 'dead' }
+    // 非 ESRCH（EPERM 等）：进程存在，继续端口探测
+  }
+  return await new Promise((resolve) => {
+    const socket = createConnection({ port, host: '127.0.0.1' }, () => {
+      socket.destroy()
+      resolve({ kind: 'alive' })
+    })
+    let settled = false
+    const settle = (outcome: ProcessProbeOutcome) => {
+      if (settled) return
+      settled = true
+      resolve(outcome)
+    }
+    socket.on('error', (err) => {
+      socket.destroy()
+      const refused = (err as NodeJS.ErrnoException).code === 'ECONNREFUSED'
+      settle(refused ? { kind: 'unreachable', reason: 'refused' } : { kind: 'unreachable', reason: 'timeout' })
+    })
+    socket.setTimeout(timeoutMs, () => {
+      socket.destroy()
+      settle({ kind: 'unreachable', reason: 'timeout' })
+    })
+  })
+}
+
+/**
  * waitForHealth 的可选参数（W5：支持测试缩短轮询间隔，避免用例过慢）。
  */
 export interface WaitForHealthOptions {

@@ -82,6 +82,7 @@ const IMPLEMENTED_KNOWN_REASONS = [
   // runtime supervisor / window factory（main 侧监督与 renderer 守护）
   'process_exit',
   'liveness-unhealthy',
+  'liveness-zombie',
   'renderer-unresponsive',
   'circuit-breaker',
   // renderer 入站超界帧丢弃（renderer-log-handler.ts）

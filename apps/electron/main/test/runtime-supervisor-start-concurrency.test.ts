@@ -52,6 +52,7 @@ vi.mock('../supervisor/port-file.js', () => ({
 
 vi.mock('../supervisor/liveness-probe.js', () => ({
   LIVENESS_FAIL_THRESHOLD: 3,
+  LIVENESS_ZOMBIE_THRESHOLD_MS: 5 * 60 * 1000,
   LivenessMonitor: class {
     start(): void {}
     stop(): void {}
