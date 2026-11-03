@@ -1,12 +1,16 @@
 import type { IProcessManager } from '../../ports/pi-engine.js';
 import type { ISessionStore } from '../../ports/session.js';
 import { SessionHistoryReader, selectIndexWindow } from '../history-reader.js';
+import { getHistoryFromFilePath } from '../../session-history.js';
 import { SessionEntryRemovalOrchestrator, type SessionEntryRemovalDeps } from '../session-entry-removal.js';
 import { countSessionMessagesInFile } from '../session-message-count.js';
 import type { IManagedSessionView } from '../types.js';
 import { HISTORY_BUDGET, type CrashJournalEvent, type Message, type SessionSummary } from '@taiji/shared';
 import type { TurnIndexSnapshot } from '../../../infra/pi/turn-index-types.js';
 import { scanTurnBoundariesForward, verifyTurnBoundaries } from '../../../infra/pi/turn-index-scanner.js';
+import { convertPiHistory } from '../../../infra/pi/message-converter.js';
+import type { PiHistoryToolResult } from '../../../infra/pi/pi-protocol.js';
+import { _resetWarnOnceForTest } from '../../../utils/warn-once.js';
 import { createZcodeEngine, registerZcodeEngine, routeEngine } from '@zhushanwen/subagent-core';
 import { CONTROL_ENV_ROOT_SESSION_ID, CONTROL_ENV_SOCKET } from '@zhushanwen/subagent-engine-sdk';
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
@@ -222,10 +226,15 @@ function uniqueSid(prefix: string): string {
  * 带 fake convertHistory（entry 内容断言）。TurnIndexStore 由 reader 构造时自持（组合接线
  * 裁定），索引落盘走缺省推导（getSessionHistoryIndexFile → vitest 固定 tmp dataDir）。
  */
-function makeIndexReader(files: Record<string, string>, opts?: { clientPresent?: boolean }) {
+function makeIndexReader(files: Record<string, string>, opts?: { clientPresent?: boolean; realConvert?: boolean }) {
   const sessionStore = {
     scanSessions: vi.fn(() => Object.entries(files).map(([id, filePath]) => ({ id, filePath }))),
-    convertHistory: vi.fn((raw: unknown[]) => fakeConvertHistory(raw)),
+    // realConvert = 走真实转换链（convertPiHistory：replayEntries fold + toolCall/toolResult
+    // 配对），供跨窗口配对与消息形状对齐断言；缺省 fake（纯文本翻译，轻量编排断言用）
+    convertHistory: opts?.realConvert
+      ? vi.fn((raw: unknown[], entryIds?: string[], orphanToolResults?: unknown[]) =>
+          convertPiHistory(raw, entryIds, orphanToolResults as PiHistoryToolResult[] | undefined))
+      : vi.fn((raw: unknown[]) => fakeConvertHistory(raw)),
   } as unknown as ISessionStore
   const client = { getEntries: vi.fn(async () => { throw new Error('get_entries must not be called in index orchestration') }) }
   const pm = {
@@ -390,6 +399,106 @@ describe('cursor 游标翻页（索引路径）', () => {
     expect(page.loadedTurns).toBe(2)
   })
 })
+
+describe('跨窗口 toolCall/toolResult 配对补读（设计 §4.4/§5）', () => {
+  /** 链式 parentId 的 message entry 行（真实 pi 树形态：leaf 裁剪与 fold 配对正常工作）。 */
+  function chainLine(id: string, parentId: string | null, message: Record<string, unknown>): string {
+    return JSON.stringify({ type: 'message', id, parentId, timestamp: '2026-11-03T00:00:00.000Z', message })
+  }
+
+  let warnMessages: string[] = []
+  let warnSpy: { mockRestore: () => void } | undefined
+
+  beforeEach(() => {
+    warnMessages = []
+    const spy = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+      warnMessages.push(String(args[0]))
+    })
+    warnSpy = spy
+  })
+  afterEach(() => {
+    warnSpy?.mockRestore()
+    // warn-once 去重集跨用例复位（本段断言 warn 出场与否，须防前序用例占 key）
+    _resetWarnOnceForTest()
+  })
+
+  it('窗口首 turn 的孤儿 toolResult（toolCall 在前一 turn）→ 按索引向前扩一个 turn 段重 fold，消息形状与全量重建路径一致', async () => {
+    const sid = uniqueSid('orphan-pair')
+    const lines = [
+      headerLine(sid),
+      // turn 1：assistant 带 toolCall tc-x（配对目标在窗口外更早 turn 段）
+      chainLine('u1', null, { role: 'user', content: [{ type: 'text', text: 'q1' }], timestamp: 1 }),
+      chainLine('a1', 'u1', { role: 'assistant', content: [{ type: 'text', text: 'r1' }, { type: 'toolCall', id: 'tc-x', name: 'bash', arguments: { command: 'ls' } }], timestamp: 2 }),
+      // turn 2：首条 entry 即 toolResult（其 toolCall 在 turn 1 —— 窗口边界孤儿形态）
+      chainLine('u2', 'a1', { role: 'user', content: [{ type: 'text', text: 'q2' }], timestamp: 3 }),
+      chainLine('tr2', 'u2', { role: 'toolResult', toolCallId: 'tc-x', toolName: 'bash', content: [{ type: 'text', text: 'out-x' }], timestamp: 4 }),
+      chainLine('a2', 'tr2', { role: 'assistant', content: [{ type: 'text', text: 'r2' }], timestamp: 5 }),
+      // turn 3
+      chainLine('u3', 'a2', { role: 'user', content: [{ type: 'text', text: 'q3' }], timestamp: 6 }),
+      chainLine('a3', 'u3', { role: 'assistant', content: [{ type: 'text', text: 'r3' }], timestamp: 7 }),
+    ]
+    const filePath = writeSessionFile(lines)
+    const { reader, client } = makeIndexReader({ [sid]: filePath }, { clientPresent: true, realConvert: true })
+
+    // 窗口 = 最近 2 turns（turn2+turn3）：tr2 在窗口内 fold 成孤儿（窗口内无带 toolCalls 的
+    // assistant）→ 向前扩 turn1 段重读重 fold → a1 入窗、tr2 配对回填
+    const result = await reader.getHistory(sid, { limitTurns: 2 })
+
+    // 对照全量重建路径（getHistoryFromFilePath <32MB 全量读，同一 convertWindowEntries 链）
+    const full = await getHistoryFromFilePath(filePath, {
+      scanSessions: vi.fn(() => []),
+      convertHistory: (raw: unknown[], entryIds?: string[], orphans?: unknown[]) =>
+        convertPiHistory(raw, entryIds, orphans as PiHistoryToolResult[] | undefined),
+    } as unknown as ISessionStore)
+    expect(result.messages).toEqual(full.messages)
+    // 配对形状实质断言：a1 的 toolCall 已回填 output/endTime（全量重建同值）
+    const a1 = result.messages.find((m) => m.content === 'r1')
+    expect(a1?.toolCalls).toHaveLength(1)
+    expect(a1?.toolCalls?.[0]).toMatchObject({ id: 'tc-x', toolName: 'bash', output: 'out-x', endTime: 4 })
+    // 扩段计入窗口口径：3 turns（2 + 1 扩展）、扩到 turn 0 → truncated=false
+    expect(result.loadedTurns).toBe(3)
+    expect(result.truncated).toBe(false)
+    expect(result.totalTurnsEstimate).toBe(3)
+    // 配对成功：reader 层孤儿观测不出声；零 RPC（补读走文件偏移，不经 pi）
+    expect(warnMessages.some((w) => w.includes('窗口向前扩段'))).toBe(false)
+    expect(client.getEntries).not.toHaveBeenCalled()
+  })
+
+  it('连续孤儿链（toolCall 在 2 段之外）→ 有界扩段耗尽后按现状丢弃并计数观测，不退化为全量读', async () => {
+    const sid = uniqueSid('orphan-bound')
+    const lines: string[] = [headerLine(sid)]
+    // turn 1：assistant 带 toolCall tc-far（距窗口 5 段 —— 有界 2 次扩展内不可达）
+    lines.push(chainLine('u1', null, { role: 'user', content: [{ type: 'text', text: 'q1' }], timestamp: 1 }))
+    lines.push(chainLine('a1', 'u1', { role: 'assistant', content: [{ type: 'text', text: 'r1' }, { type: 'toolCall', id: 'tc-far', name: 'bash', arguments: {} }], timestamp: 2 }))
+    // turn 2..5：普通 turn（无 toolCall/toolResult），链式挂在上一 turn 的 assistant
+    for (let i = 2; i <= 5; i++) {
+      lines.push(chainLine(`u${i}`, `a${i - 1}`, { role: 'user', content: [{ type: 'text', text: `q${i}` }], timestamp: i * 10 }))
+      lines.push(chainLine(`a${i}`, `u${i}`, { role: 'assistant', content: [{ type: 'text', text: `r${i}` }], timestamp: i * 10 + 1 }))
+    }
+    // turn 6：首条 entry 即孤儿 toolResult（toolCall tc-far 在 turn 1）
+    lines.push(chainLine('u6', 'a5', { role: 'user', content: [{ type: 'text', text: 'q6' }], timestamp: 61 }))
+    lines.push(chainLine('tr6', 'u6', { role: 'toolResult', toolCallId: 'tc-far', toolName: 'bash', content: [{ type: 'text', text: 'far-out' }], timestamp: 62 }))
+    lines.push(chainLine('a6', 'tr6', { role: 'assistant', content: [{ type: 'text', text: 'r6' }], timestamp: 63 }))
+
+    const filePath = writeSessionFile(lines)
+    const { reader } = makeIndexReader({ [sid]: filePath }, { realConvert: true })
+
+    // 窗口 = 最近 2 turns（turn5+turn6）：tr6 孤儿 → 扩 turn4 → 仍孤儿 → 扩 turn3 → 有界耗尽丢弃
+    const result = await reader.getHistory(sid, { limitTurns: 2 })
+
+    // 有界口径：2 原始 + 2 扩展 = 4 turns；窗口外仍有更早 turn → truncated=true
+    expect(result.loadedTurns).toBe(4)
+    expect(result.truncated).toBe(true)
+    // 窗口消息 = turn3..turn6（a1 不在窗口，未退化为全量读）；user content 是 Segment[]
+    // 形态，assistant 是拼接文本——统一按文本提取断言
+    const textOf = (m: Message) =>
+      typeof m.content === 'string' ? m.content : m.content.map((s) => (s as { text?: string }).text ?? '').join('')
+    expect(result.messages.map(textOf)).toEqual(['q3', 'r3', 'q4', 'r4', 'q5', 'r5', 'q6', 'r6'])
+    // 观测出场：reader 层计数 warn（含丢弃数）+ reducer 层逐条孤儿 warn
+    expect(warnMessages.some((w) => w.includes('[history-reader] 窗口向前扩段 2 次后仍有 1 条孤儿 toolResult 未配对'))).toBe(true)
+    expect(warnMessages.some((w) => w.includes('toolResult has no matching toolCall in window'))).toBe(true)
+  })
+});
 
 describe('零 turn 兼容分支与重写失配重建', () => {
   it('无 user turn 的文件（纯 assistant 行）→ 零 turn 索引走尾读兼容分支（保持现有计数 0）', async () => {

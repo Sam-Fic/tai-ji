@@ -161,8 +161,12 @@ export interface ISessionStore {
    * entryIds 与 raw 平行对齐的来源 entry id（文件路径经 mapSessionEntries 产出），
    * 透传给 convertPiHistory 使 user/assistant message 带 piEntryId（fork 定位截断点用，MF5）。
    * 不传时行为不变（兼容旧调用方 / 不需 piEntryId 的场景）。
+   *
+   * orphanToolResults 可选 out 数组（turn-boundary-index 跨窗口配对）：窗口内无法配对的
+   * toolResult（其 toolCall 在窗口外）push 进来供读取编排补读配对段后重 fold；不传时保持
+   * 原行为（reducer 内 warn 丢弃）。pi 协议结构不暴露给 service，数组元素收 unknown。
    */
-  convertHistory(raw: unknown[], entryIds?: string[]): import('@taiji/shared').Message[]
+  convertHistory(raw: unknown[], entryIds?: string[], orphanToolResults?: unknown[]): import('@taiji/shared').Message[]
   /**
    * 从 pi get_entries 返回的 entry 树重建 taiji Message[]。
    *

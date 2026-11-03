@@ -447,11 +447,17 @@ function collectRecentTurnEntriesFromTail(
  *
  * [turn-boundary-index 复用出口] 导出供 history-reader.ts 的索引窗口转换复用（设计 §3.1
  * 「消息转换」：读出的原始窗口继续进入本链，AX5——性能改造不另写一套消息语义）。
+ *
+ * orphanToolResults 可选 out 数组（turn-boundary-index 跨窗口配对，设计 §4.4/§5）：窗口内
+ * 无法配对的 toolResult（其 toolCall 在窗口外更早 turn 段）经本链 push 出来，供索引窗口
+ * 读取编排（history-reader）按索引补读配对 turn 段后重 fold；不传时行为不变（reducer 内
+ * warn 丢弃，全量读 / ①②档窗口无跨窗口配对需求）。
  */
 export function convertWindowEntries(
   entries: PiSessionEntry[],
   sessionStore: ISessionStore,
   segmentsMetadata?: SegmentsMetadataFile | null,
+  orphanToolResults?: unknown[],
 ): Message[] {
   // 文件路径喂入前剥 session header 行：pi getEntries() RPC 已滤除（dist/core/
   // session-manager.js getEntries 的 `e.type !== "session"`，0.84.4 实锚），而 parseJsonl
@@ -467,7 +473,7 @@ export function convertWindowEntries(
   const last = scoped[scoped.length - 1]
   const leafId = last !== undefined && typeof last.id === 'string' ? last.id : undefined
   const { messages, entryIds, customDataEntries } = mapSessionEntries(scoped, leafId)
-  const converted = sessionStore.convertHistory(messages, entryIds)
+  const converted = sessionStore.convertHistory(messages, entryIds, orphanToolResults)
   // [session-cold-switch-perf] segments.json sidecar 回填（尾读窗口对齐全量路径的消息
   // 内容——图片/文件/技能 chip）：与 rebuildHistoryFromEntries 第 2-4 步同一判定链
   //（backfillConvertedSegments 单源复用）。回填先于 endedAt 回填，顺序对齐全量路径
@@ -543,7 +549,8 @@ export async function tailReadHistory(
   if (!loaded || loaded.cursorMiss) return emptyPage
 
   // AC-5 turn 外扩（D14）：若窗口首条是孤立 toolResult（窗口外有对应 assistant），
-  // convertHistory 内部 warn 丢弃（不额外拉取，外扩逻辑在 convertHistory 处理）。
+  // 本尾读链 warn 丢弃（不额外拉取）；索引窗口读取链（history-reader）已按 turn 边界
+  // 索引实现跨窗口补读配对（convertWindowEntries 的 orphanToolResults out 参数）。
   // [U8 重启中断标记] 仅最新窗口请求（无 cursor——cursor 翻页返回锚前区域，尾部不是文件
   // 尾）做尾部形态判定；判定读活跃路径裁剪后的窗口 entries（喂数推导与 convertWindowEntries
   // 同款：剥 session header + leafId = 文件最后 entry id → computeActivePathEntries）——

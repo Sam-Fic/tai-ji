@@ -13,7 +13,7 @@ import type { ISessionStore, ScannedSessionMeta, SessionOutcome, SessionHeader, 
 import type { Message, SegmentsMetadataFile } from '@taiji/shared'
 import { READ_PRECHECK_MAX_BYTES } from '@taiji/shared'
 import { readFileSync, statSync } from 'node:fs'
-import type { PiSessionEntry } from './pi-protocol.js'
+import type { PiHistoryToolResult, PiSessionEntry } from './pi-protocol.js'
 import {
   scanPiSessions,
   persistSessionEnd,
@@ -71,10 +71,12 @@ export class PiSessionStore implements ISessionStore {
     invalidateSessionMetaCache(filePath)
   }
 
-  convertHistory(raw: unknown[], entryIds?: string[]): Message[] {
+  convertHistory(raw: unknown[], entryIds?: string[], orphanToolResults?: unknown[]): Message[] {
     // MF5：透传平行 entryIds 给 convertPiHistory，使文件路径产出的 user/assistant message
     // 带 piEntryId（fork 定位用）。entryIds 与 raw 按 index 对齐（mapSessionEntries 产出）。
-    return convertPiHistory(raw, entryIds)
+    // orphanToolResults（turn-boundary-index 跨窗口配对）透传 convertPiHistory out 参数
+    //（port 形态见 ISessionStore.convertHistory 注释）。
+    return convertPiHistory(raw, entryIds, orphanToolResults as PiHistoryToolResult[] | undefined)
   }
 
   rebuildHistoryFromEntries(entries: unknown[], segmentsMetadata: SegmentsMetadataFile | null): RebuiltHistory {

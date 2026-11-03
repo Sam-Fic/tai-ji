@@ -5,6 +5,8 @@
  * 取得不可变索引快照 S（本次读取右端固定为 S.scannedOffset），再从 S.turns 按 limitTurns +
  * budgetBytes 双预算选窗（首个 turn 豁免，同既有尾读语义），按记录的字节范围读有限窗口，
  * 经实际 entryId 校验（verifyTurnBoundaries）后进入既有转换链（convertWindowEntries）。
+ * 跨窗口 toolCall/toolResult 配对（设计 §4.4/§5）：fold 产出孤儿 toolResult 时按索引向前
+ * 扩 turn 段重读重 fold（有界，不退化为全量读），消息形状与全量重建路径对齐。
  * 执行进程是否存在不参与读取分派——pi 进程不存在时同样可打开并连续翻阅长会话（GL1）。
  *
  * 兼容分支（仅两处，设计「cursor 未命中」段）：
@@ -93,6 +95,13 @@ function emptyPage(): HistoryWindowResult {
   return { messages: [], truncated: false, loadedTurns: 0, totalTurnsEstimate: 0 }
 }
 
+/**
+ * 孤儿驱动的向前扩段上限（设计 §5「跨窗口 toolCall/toolResult 配对」的有界口径）：
+ * 连续孤儿链（每扩一段又见更早孤儿）若不设界会逐步扩到 turn 0，等价退化为全量读
+ *（设计红线「不读全量」）；超过本数仍有孤儿按现状丢弃并计数观测。
+ */
+const MAX_ORPHAN_TURN_EXTENSIONS = 2
+
 /** 单次「校验 + 读窗 + 转换」的产出（ok=false = 实际 entryId 校验失配，detail 供归因）。 */
 type WindowRead =
   | { ok: true; result: HistoryWindowResult }
@@ -100,6 +109,8 @@ type WindowRead =
 
 /** 索引窗口选择产物（字节区间与校验集合的推导中间态，readIndexWindow 消费）。 */
 interface SelectedIndexWindow { // oe-exempt:20261103:framework:索引窗口选择推导中间态（reader 私有形状，非对外扩展点）
+  /** 窗口首 turn 在 snapshot.turns 的下标（孤儿驱动的向前扩段起点；loadedTurns=0 时 = endIdx）。 */
+  startIdx: number
   /** 选中窗口的 turn 记录（byteOffset 升序；校验与转换共用）。 */
   windowTurns: TurnIndexTurnRecord[]
   /** cursor 所在 turn（仅进校验集合，不进转换窗口）。 */
@@ -173,6 +184,7 @@ export function selectIndexWindow(
   const windowTurns = turns.slice(startIdx, endIdx)
   const first = windowTurns[0]
   return {
+    startIdx,
     windowTurns,
     cursorTurn: cursorIdx !== undefined ? turns[cursorIdx] : undefined,
     startByte: startIdx === 0 ? 0 : (first?.byteOffset ?? snapshot.scannedOffset),
@@ -235,6 +247,11 @@ export class SessionHistoryReader {
   private readonly indexStore: TurnIndexStore
   /** per-request inflight（W20 Fix-5 语义保留：finally 清理，无泄漏）。 */
   private readonly inflightGetHistory = new Map<string, Promise<HistoryWindowResult>>()
+  /**
+   * 扩段耗尽后仍未配对的孤儿 toolResult 累计计数（观测：SI2 之外的数据异常形态归因，
+   * 正常 pi 会话恒 0；量级 = 会话数，不随请求增长）。
+   */
+  private readonly unpairedOrphanToolResults = new Map<string, number>()
 
   constructor(private readonly deps: SessionHistoryReaderDeps) {
     this.indexStore = new TurnIndexStore({ scanner: deps.scanner })
@@ -343,7 +360,7 @@ export class SessionHistoryReader {
     sidecar: TailReadSidecarOpts,
     detectInterrupted: boolean,
   ): Promise<HistoryWindowResult> {
-    const first = await this.readSelectedWindow(filePath, snapshot, selectIndexWindow(snapshot, cursorIdx, query), sidecar, detectInterrupted)
+    const first = await this.readSelectedWindow(sessionId, filePath, snapshot, selectIndexWindow(snapshot, cursorIdx, query), sidecar, detectInterrupted)
     if (first.ok) return first.result
     // 失配：丢弃索引、全量重建、按新快照重读一次（设计 D3）
     const fresh = await this.indexStore.rebuildAfterMismatch(
@@ -360,6 +377,7 @@ export class SessionHistoryReader {
       return await this.tailReadCompat(sessionId, filePath, query, { detectInterrupted: false })
     }
     const second = await this.readSelectedWindow(
+      sessionId,
       filePath,
       fresh,
       selectIndexWindow(fresh, freshCursorIdx === -1 ? undefined : freshCursorIdx, query),
@@ -376,7 +394,7 @@ export class SessionHistoryReader {
   }
 
   /**
-   * 单次快照上的一次「校验 + 读窗 + 转换」。
+   * 单次快照上的一次「校验 + 读窗 + 转换（孤儿驱动有界扩段）」。
    *
    * 校验集合 = 窗口 turns + cursor turn（如有），按 byteOffset 升序（cursor turn 恰在窗口
    * 右侧紧邻位，天然升序——SI4 直接反证，不依赖 stat 元数据）。校验通过后读有限字节窗口进
@@ -384,10 +402,18 @@ export class SessionHistoryReader {
    * mapSessionEntries + port 翻译 → segments sidecar 回填 → endedAt 回填——与尾读兼容链
    * 同一条 convertWindowEntries 单点，不另写一套消息语义。
    *
+   * 跨窗口 toolCall/toolResult 配对（设计 §4.4/§5）：fold 产出孤儿 toolResult（其
+   * toolCall 在窗口外更早 turn 段）时，按索引向前扩一个 turn 段重读重 fold——扩段把
+   * toolCall 所在 assistant 消息纳入窗口，toolResult 在同一 fold 内配对回填（消息形状与
+   * 全量重建路径一致）。扩进的 turn 段边界行同样过实际 entryId 校验（SI4 同源反证）；
+   * 有界 ≤ MAX_ORPHAN_TURN_EXTENSIONS 次扩展（连续孤儿链不得退化为全量读），扩到 turn 0
+   * 或扩满仍有孤儿 → 按现状丢弃（reducer 已逐条 warn）+ 计数观测。
+   *
    * loadedTurns === 0（cursor 为最早 turn：锚前无 turn）与读取期 ENOENT（校验后删除竞态
    * 窗口）都按现有空页语义值返回；失配走 ok=false。
    */
   private async readSelectedWindow(
+    sessionId: string,
     filePath: string,
     snapshot: TurnIndexSnapshot,
     selected: SelectedIndexWindow,
@@ -400,9 +426,40 @@ export class SessionHistoryReader {
     if (!verify.ok) {
       return { ok: false, mismatchDetail: `turn#${verify.index} ${verify.reason} (expected ${verify.expected})` }
     }
-    const entries = await readEntriesAtOffset(filePath, selected.startByte, selected.endByte)
+    let startIdx = selected.startIdx
+    let orphans: unknown[] = []
+    let entries = await readEntriesAtOffset(filePath, selected.startByte, selected.endByte)
     if (entries === null) return { ok: true, result: emptyPage() }
-    const messages = convertWindowEntries(entries, this.deps.sessionStore, sidecar.segmentsMetadata)
+    let messages = convertWindowEntries(entries, this.deps.sessionStore, sidecar.segmentsMetadata, orphans)
+    let extensions = 0
+    while (orphans.length > 0 && startIdx > 0 && extensions < MAX_ORPHAN_TURN_EXTENSIONS) {
+      // 向前扩一个 turn 段：扩进段先过边界 entryId 反证（失配交 rebuildAfterMismatch 重建）
+      const prevIdx = startIdx - 1
+      const prevVerify = await this.scannerPort().verifyTurnBoundaries(filePath, [snapshot.turns[prevIdx]])
+      if (!prevVerify.ok) {
+        return { ok: false, mismatchDetail: `extended turn#${prevIdx} ${prevVerify.reason} (expected ${prevVerify.expected})` }
+      }
+      startIdx = prevIdx
+      // 扩到 turn 0 时从 byte 0 读（前导段 header 不单独建记录，与 selectIndexWindow 同口径）
+      const startByte = startIdx === 0 ? 0 : snapshot.turns[startIdx].byteOffset
+      const reEntries = await readEntriesAtOffset(filePath, startByte, selected.endByte)
+      if (reEntries === null) return { ok: true, result: emptyPage() }
+      entries = reEntries
+      orphans = []
+      messages = convertWindowEntries(entries, this.deps.sessionStore, sidecar.segmentsMetadata, orphans)
+      extensions++
+    }
+    if (orphans.length > 0) {
+      // 扩段耗尽仍有孤儿：不可配对已由 reducer 逐条 warn，此处补累计计数观测（同会话
+      // warn-once，防历史翻页刷屏；计数随读取累计）。
+      const total = (this.unpairedOrphanToolResults.get(sessionId) ?? 0) + orphans.length
+      this.unpairedOrphanToolResults.set(sessionId, total)
+      warnOnce(
+        `history-reader:unpaired-tool-results:${sessionId}`,
+        `[history-reader] 窗口向前扩段 ${extensions} 次后仍有 ${orphans.length} 条孤儿 toolResult 未配对（该会话累计 ${total} 条），已按现状丢弃: sessionId=${sessionId}。` +
+          '恢复动作 = 检查会话 JSONL 中这些 toolCallId 是否存在对应 toolCall entry（写入中断/异常落盘形态）；正常 pi 会话不应出现',
+      )
+    }
     // 中断判定（U8 语义保留在索引路径）：喂数 = 活跃路径裁剪后的窗口 entries（与
     // tailReadHistory 同一 activePathEntriesOf 单点）。索引窗口右端 = scannedOffset（最后
     // 完整行），残尾半截行不进窗口，判定输入是文件尾完整行的等价物。
@@ -411,8 +468,8 @@ export class SessionHistoryReader {
       ok: true,
       result: {
         messages,
-        truncated: selected.truncated,
-        loadedTurns: selected.loadedTurns,
+        truncated: startIdx > 0,
+        loadedTurns: selected.loadedTurns + extensions,
         // 索引就绪后的精确总数：完整索引原始 user turn 总数（含被撤分支），不再随窗口提前
         // 停止退化为下界（设计「cursor 未命中」段明确改写的字段口径）。
         totalTurnsEstimate: snapshot.turns.length,
