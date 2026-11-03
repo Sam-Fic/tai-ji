@@ -19,9 +19,10 @@
  * - 每块处理后让出事件循环（setImmediate）：单块同步计算有界（≤1MB 解析量），
  *   全量扫描不长时间独占事件循环。
  *
- * 边界判定复用 session-history.ts isTurnBoundary 语义（type === 'message' &&
- * message.role === 'user'，D11 turn 定义），叠加索引必需的 string id 收窄（无 id
- * 的 user 行不可索引，按普通行降级留在当前 turn 内——防御形态，pi 正常写入恒有 id）。
+ * 边界判定经 turn-index-types.ts isUserMessageBoundary 单点（type === 'message' &&
+ * message.role === 'user'，D11 turn 定义；与 session-history 尾读同源实现），叠加索引
+ * 必需的 string id 收窄（无 id 的 user 行不可索引，按普通行降级留在当前 turn 内——
+ * 防御形态，pi 正常写入恒有 id）。
  *
  * 实际 entryId 校验（verifyTurnBoundaries，D3）：按记录 byteOffset 只读边界行本身，
  * 解析失败 / 非 user message / entryId 不符都按失配返回——窗口读取前的直接反证，
@@ -30,7 +31,7 @@
 import { open } from 'node:fs/promises'
 
 import { isEnoent } from '../../utils/errors.js'
-import type { TurnIndexTurnRecord } from './turn-index-types.js'
+import { isUserMessageBoundary, type TurnIndexTurnRecord } from './turn-index-types.js'
 
 /* eslint-disable no-magic-numbers -- 块大小与 '\n' 字节值是设计标定量（对齐
  * utils/history-reverse-read.ts DEFAULT_REVERSE_CHUNK_BYTES 的同款豁免形态），
@@ -71,9 +72,8 @@ export interface TurnScanResult { // oe-exempt:20261103:framework:扫描器 IO �
  * 边界行解析：返回 user message 边界的 entryId；非边界（含畸形 JSON / 非 object /
  * message.role 非 user / id 非非空 string）返回 null。
  *
- * 与 session-history.ts isTurnBoundary 逐字同语义（type / message.role 两级判定）；
- * 独立持有而非 import——该函数未导出且 services→infra 反向依赖不成层
- * （archive/summary-extractor 同款先例）。
+ * 边界判定经 turn-index-types.ts isUserMessageBoundary 单点（与 session-history 尾读
+ * 同源实现，见该函数注释）；id 收窄是索引专属叠加。
  */
 function userBoundaryIdOf(line: string): string | null {
   const trimmed = line.trim()
@@ -84,13 +84,8 @@ function userBoundaryIdOf(line: string): string | null {
   } catch {
     return null
   }
-  if (typeof parsed !== 'object' || parsed === null) return null
-  const entry = parsed as Record<string, unknown>
-  if (entry.type !== 'message') return null
-  const message = entry.message
-  if (typeof message !== 'object' || message === null) return null
-  if ((message as Record<string, unknown>).role !== 'user') return null
-  const id = entry.id
+  if (!isUserMessageBoundary(parsed)) return null
+  const id = (parsed as Record<string, unknown>).id
   return typeof id === 'string' && id.length > 0 ? id : null
 }
 

@@ -41,7 +41,7 @@ import { isPiSessionId } from '@taiji/shared/session-store-paths'
 import type { IProcessManager } from '../ports/pi-engine.js'
 import type { ISessionStore } from '../ports/session.js'
 import type { ITurnIndexScanner } from '../ports/turn-index-scanner.js'
-import type { TurnIndexSnapshot, TurnIndexTurnRecord } from '../../infra/pi/turn-index-types.js'
+import { exceedsTurnByteBudget, type TurnIndexSnapshot, type TurnIndexTurnRecord } from '../../infra/pi/turn-index-types.js'
 import { TurnIndexStore } from './turn-index-store.js'
 import {
   activePathEntriesOf,
@@ -126,8 +126,8 @@ interface WindowRange {
 
 /**
  * 从 turns[endIdx-1] 向前按 limitTurns + maxBytes 双预算选窗：首个 turn 豁免字节条件
- * （单 turn 超预算完整放行，与既有尾读 collectRecentTurnEntriesFromTail 的
- * hitsByteBudgetCap 语义一致）。
+ *（单 turn 超预算完整放行，与尾读 collectRecentTurnEntriesFromTail 共用
+ * exceedsTurnByteBudget 单点判定）。
  *
  * 纯函数（无 IO）；budgetBytes 是尾读口径（不计行尾换行）的预算字节，与 tailReadHistory
  * 同源，同一 query 在两条链上选出同量级窗口。
@@ -138,7 +138,7 @@ function pickWindowRange(turns: readonly TurnIndexTurnRecord[], endIdx: number, 
   let accBytes = 0
   for (let i = endIdx - 1; i >= 0 && loadedTurns < limitTurns; i--) {
     const budget = turns[i].budgetBytes
-    if (loadedTurns > 0 && accBytes + budget > maxBytes) break
+    if (exceedsTurnByteBudget(loadedTurns, accBytes + budget, maxBytes)) break
     accBytes += budget
     loadedTurns++
     startIdx = i
@@ -149,8 +149,8 @@ function pickWindowRange(turns: readonly TurnIndexTurnRecord[], endIdx: number, 
 /**
  * 从索引快照选窗（设计「窗口选择与单次快照」）：最新窗口从 S.turns 末尾向前选 limitTurns
  * 与 budgetBytes 双预算内的完整 turn；cursor 命中时选该 turn 之前的窗口（cursor turn 只进
- * 校验集合，返回时排除）。首个 turn 豁免字节条件（单 turn 超预算完整放行，与既有尾读
- * collectRecentTurnEntriesFromTail 的 hitsByteBudgetCap 语义一致）；窗口起点恒落在 turn
+ * 校验集合，返回时排除）。首个 turn 豁免字节条件（单 turn 超预算完整放行，与尾读
+ * collectRecentTurnEntriesFromTail 共用 exceedsTurnByteBudget 单点判定）；窗口起点恒落在 turn
  * 边界（索引记录天然是边界），单 turn 内 entry 不切分（entry 原子性）。
  */
 export function selectIndexWindow(

@@ -191,3 +191,41 @@ export function turnIndexFileToSnapshot(file: TurnIndexFile): TurnIndexSnapshot 
     turns: file.turns.map((t) => ({ ...t })),
   }
 }
+
+/**
+ * turn 边界判定谓词（D11 turn 定义的判定单点）：entry 是 user message 边界
+ *（type === 'message' 且 message.role === 'user' 两级判定）。
+ *
+ * 索引扫描链（turn-index-scanner userBoundaryIdOf 对行文本 JSON.parse 产物调用）与
+ * 尾读兼容链（session-history collectRecentTurnEntriesFromTail 对窗口行 parse 产物调用）
+ * 共用本实现——turn 定义变化只改这一处，索引窗与尾读兼容链不会静默分叉。
+ */
+export function isUserMessageBoundary(entry: unknown): boolean {
+  if (typeof entry !== 'object' || entry === null) return false
+  const e = entry as Record<string, unknown>
+  if (e.type !== 'message') return false
+  const msg = e.message
+  if (typeof msg !== 'object' || msg === null) return false
+  return (msg as Record<string, unknown>).role === 'user'
+}
+
+/**
+ * turn 级字节预算超界判定（首 turn 豁免 + budgetBytes 口径的判定单点）：
+ * collectedTurnCount > 0（首个 turn 豁免——单 turn 超预算完整放行）且 budgetBytesSum
+ *（拟纳入窗口内容的预算字节合计）> maxBytes → 超界。budgetBytes 口径 = 各行
+ * Buffer.byteLength 合计、不计行尾换行（turns[].budgetBytes 与尾读 accBytes 同一口径，
+ * 见文件头字段口径段）。
+ *
+ * 索引窗口选择（history-reader pickWindowRange：budgetBytesSum = 已入窗 turns 的
+ * budgetBytes 合计 + 拟入窗 turn 的 budgetBytes）与尾读逆序扫描（session-history
+ * collectRecentTurnEntriesFromTail 的 turn 边界行判定：budgetBytesSum = 已收集行字节
+ * 合计，最后 turn 已完整入列）两读链共用本实现——预算口径变化只改这一处，索引窗
+ * 与尾读兼容链不会静默分叉。
+ */
+export function exceedsTurnByteBudget(
+  collectedTurnCount: number,
+  budgetBytesSum: number,
+  maxBytes: number | undefined,
+): boolean {
+  return collectedTurnCount > 0 && maxBytes !== undefined && budgetBytesSum > maxBytes
+}

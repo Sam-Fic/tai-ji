@@ -21,7 +21,8 @@
  * 游标翻页（crash-resilience §3.3 D4 中期，u6-paging-protocol）：collectRecentTurnEntriesFromTail
  * 扩展 cursorId 定位——逆序扫描遇 cursor entry 行时丢弃已收集的更新侧行，从更旧行继续
  * 凑 N turns，即「锚点之前的最近窗口」；与 SessionHistoryReader 的索引窗口选择
- *（history-reader.ts selectIndexWindow）共用 turn 边界/首 turn 豁免/字节预算参数语义。
+ *（history-reader.ts selectIndexWindow）共用 turn 边界判定与首 turn 豁免/字节预算判定实现
+ *（infra/pi/turn-index-types.ts 的 isUserMessageBoundary / exceedsTurnByteBudget 单点）。
  */
 
 import { readFile } from 'node:fs/promises'
@@ -34,6 +35,7 @@ import { parseJsonl, type JsonlParseOptions } from '../utils/jsonl.js'
 import { warnOnce } from '../utils/warn-once.js'
 import { applyEntryEndTimes, mapSessionEntries, isInterruptedTail, computeActivePathEntries } from '../infra/pi/session-entry-mapper.js'
 import { backfillConvertedSegments } from '../infra/pi/entry-tree-builder.js'
+import { exceedsTurnByteBudget, isUserMessageBoundary } from '../infra/pi/turn-index-types.js'
 import type { PiSessionEntry } from '../infra/pi/pi-protocol.js'
 import { forEachReversedLineChunk } from '../utils/history-reverse-read.js'
 
@@ -207,19 +209,6 @@ export async function getHistoryFromFilePath(filePath: string, sessionStore: ISe
 }
 
 /**
- * turn 边界判定：entry 是否为 user message（turn 起点）。
- * D11：turn = user message 到下一个 user message 之前。
- */
-function isTurnBoundary(entry: unknown): boolean {
-  if (typeof entry !== 'object' || entry === null) return false
-  const e = entry as Record<string, unknown>
-  if (e.type !== 'message') return false
-  const msg = e.message
-  if (typeof msg !== 'object' || msg === null) return false
-  return (msg as Record<string, unknown>).role === 'user'
-}
-
-/**
  * 历史窗口读取结果（通用形状：①②档文件读与活跃 getHistory 预算窗口共用）。
  * truncated=true 表示窗口外仍有历史（前端据此显隐「加载更多」）。
  * totalTurnsEstimate：turn 总数估计——读到文件头时是精确总量；分块扩窗提前停止时
@@ -292,15 +281,6 @@ function resetScanForCursor(scan: TailWindowScan): void {
   scan.turnCount = 0
   scan.accBytes = 0
   scan.collecting = true
-}
-
-/**
- * 字节预算超界判定（D4 双条件，与索引窗口选择 history-reader selectIndexWindow 对齐）：turn 边界处
- * 判定已收集 turns 的累计字节；首个 turn 豁免（超限完整放行，turnCount === 0 时不判）；
- * 后续 turn 超界不入窗（回退已收集的该 turn 行），turn 原子性不切。
- */
-function hitsByteBudgetCap(isTurn: boolean, scan: TailWindowScan, maxBytes: number | undefined): boolean {
-  return isTurn && scan.turnCount > 0 && maxBytes !== undefined && scan.accBytes > maxBytes
 }
 
 /** 字节预算超界回退最后一个已收集 turn（含其尾部行）。 */
@@ -392,7 +372,7 @@ function collectRecentTurnEntriesFromTail(
           if (lineMatchesCursor(parsed, cursorId)) resetScanForCursor(scan)
           continue
         }
-        const isTurn = parsed.length > 0 && isTurnBoundary(parsed[0])
+        const isTurn = parsed.length > 0 && isUserMessageBoundary(parsed[0])
         if (!scan.collecting) {
           // 确认扫描：发现任一更早 turn 边界即可定论（提前终止，不读更早块）；
           // 扫到文件头仍无 → truncated=false（A6：无更早历史不给截断提示）
@@ -402,7 +382,10 @@ function collectRecentTurnEntriesFromTail(
           }
           continue
         }
-        if (hitsByteBudgetCap(isTurn, scan, maxBytes)) {
+        // 边界行处判定：accBytes 已含最后 turn 全部行（该 turn 已完整入列），首 turn
+        // 豁免与字节帽判定经 exceedsTurnByteBudget 单点（与索引窗口选择同源）——超界
+        // 不入窗（回退已收集的该 turn 行），turn 原子性不切。
+        if (isTurn && exceedsTurnByteBudget(scan.turnCount, scan.accBytes, maxBytes)) {
           if (scan.turnCount > 1) rollbackLastTurn(scan)
           scan.stopReason = 'budget'
           return false

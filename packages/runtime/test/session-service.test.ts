@@ -543,7 +543,8 @@ function stubNextCreatedClient(
 }
 
 /**
- * pi message entry JSONL 行（turn 边界 = role:'user'，scanner isTurnBoundary 同语义）。
+ * pi message entry JSONL 行（turn 边界 = role:'user'，scanner 边界判定
+ * isUserMessageBoundary 同语义）。
  * getHistory 索引窗口用例的 fixture 行构造（与 src/__tests__/history-bundle.test.ts 同范式）。
  */
 function piEntryLine(id: string, role: 'user' | 'assistant', text: string): string {

@@ -99,6 +99,9 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+// @data-owner #91 —— 数据源登记表主表 #91：turn 边界索引 sidecar（history-index/turns.json）
+// 的 owner 与唯一写方（commitToDisk tmp+rename 原子提交；读编排 ensureFresh / rebuildAfterMismatch），
+// 内存 LRU / inflight / deleted 标记 / counters 四态同属一条登记（docs/architecture/data-source-registry.md）。
 export class TurnIndexStore {
   /** 内存索引 LRU（Map 插入序即访问序：touchMemory 先删后插维持 recency）。 */
   private readonly memory = new Map<string, TurnIndexSnapshot>()
