@@ -136,14 +136,13 @@ vi.mock('@/api', () => {
     },
   }
 })
-// ── useLoadMoreHistory 基线前置 watch / 失败态合并的可控源：helper 恒值（tick=0、failed=false）
-//    驱不动 watch 正向路径（gate-suite round2 文件级覆盖缺口）。必须是真 vue ref——
-//    普通对象值变化不产生响应式依赖，watch/computed 不会重算；默认值与恒值一致，其余节不变 ──
-const { baselinePrependTickRef, historyCacheFailedRef } = await vi.hoisted(async () => {
+// ── useLoadMoreHistory 基线前置 watch 的可控源：helper 恒值（tick=0）驱不动 watch 正向
+//    路径（gate-suite round2 文件级覆盖缺口）。必须是真 vue ref——普通对象值变化不产生
+//    响应式依赖，watch/computed 不会重算；默认值与恒值一致，其余节不变 ──
+const { baselinePrependTickRef } = await vi.hoisted(async () => {
   const { ref } = await import('vue')
   return {
     baselinePrependTickRef: ref(0),
-    historyCacheFailedRef: ref(false),
   }
 })
 vi.mock('@/stores/chat', () => {
@@ -152,7 +151,6 @@ vi.mock('@/stores/chat', () => {
     useChatStore: () => ({
       ...module.useChatStore(),
       getBaselinePrependTick: () => baselinePrependTickRef.value,
-      isHistoryCacheFailed: () => historyCacheFailedRef.value,
     }),
   }
 })
@@ -357,13 +355,12 @@ describe('handleLoadMore（载荷与 isPrepend 生命周期）', () => {
   })
 })
 
-describe('基线前置 watch + 失败态合并（session-cold-switch-perf §3.3-3 / RD-1#4）', () => {
+describe('基线前置 watch（session-cold-switch-perf §3.3-3 / RD-1#4）', () => {
   beforeEach(() => {
     loadMoreHistoryMock.mockReset()
     loadMoreHistoryMock.mockResolvedValue(true)
     hasMoreRef.value = true
     baselinePrependTickRef.value = 0
-    historyCacheFailedRef.value = false
   })
 
   it('store tick 跳变（基线前置替换）→ isPrepend 一拍置位，nextTick 后复位', async () => {
@@ -404,15 +401,6 @@ describe('基线前置 watch + 失败态合并（session-cold-switch-perf §3.3-
     await nextTick()
     await Promise.resolve()
     expect(loadMore.isPrepend.value).toBe(false)
-  })
-
-  it('loadMoreError 合并 store 后台重建失败态（isHistoryCacheFailed）', async () => {
-    const loadMore = setup()
-    expect(loadMore.loadMoreError.value).toBe(false)
-
-    historyCacheFailedRef.value = true
-    await nextTick() // computed 重算：分区失败 || store 失败
-    expect(loadMore.loadMoreError.value).toBe(true)
   })
 })
 })
