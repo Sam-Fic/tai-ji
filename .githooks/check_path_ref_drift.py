@@ -44,6 +44,10 @@ PATH_REF_EXEMPT = {
      "scripts/check-wool-retirement.mjs"): "retirement-guard",
     ("packages/shared/src/wool.ts",
      "packages/shared/src/__tests__/wool.test.ts"): "retirement-guard",
+    # 旧链回流守卫（scripts/check-history-read-model.mjs 组2）：断言已退役的
+    # history-rebuild-cache.ts 保持不存在（防回流），引用即检查语义本身
+    ("packages/runtime/src/services/session/history-rebuild-cache.ts",
+     "scripts/check-history-read-model.mjs"): "retirement-guard",
 }
 
 SCAN_PATHSPEC = [
