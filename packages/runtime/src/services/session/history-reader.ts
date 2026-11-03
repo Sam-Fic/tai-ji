@@ -49,6 +49,7 @@ import {
   activePathEntriesOf,
   convertWindowEntries,
   filterObjectEntries,
+  makeMalformedLineWatcher,
   tailReadHistory,
   type HistoryWindowQuery,
   type HistoryWindowResult,
@@ -206,6 +207,10 @@ type RawWindowEntry = ReturnType<typeof filterObjectEntries>[number]
  * 集合，无 UTF-8 多字节截断形态。逐行 parse + object 过滤（parseJsonl 可能返回裸数字/
  * 字符串/null，复用 session-history 的 filterObjectEntries 单点）。
  *
+ * 畸形行观测（RT-8#13，与尾读/全量读同款）：窗口内半截 JSON 行（崩溃残留等）经
+ * makeMalformedLineWatcher warn-once 归因（同文件跨次读只出声一次；watcher 按调用创建，
+ * key 含文件路径按文件隔离），不静默丢弃。
+ *
  * @returns null = 文件打开 ENOENT（校验通过后的删除竞态窗口——调用方按现有空页语义收尾）；
  *          其余 IO 错误显式上抛（设计 D5 错误分级：主文件故障不伪装成空历史）。
  */
@@ -228,7 +233,10 @@ async function readEntriesAtOffset(filePath: string, startByte: number, endByte:
       read += bytesRead
     }
     const text = buf.subarray(0, read).toString('utf-8')
-    return filterObjectEntries(text.split('\n').flatMap((line) => (line.trim() === '' ? [] : parseJsonl(line))))
+    const malformed = makeMalformedLineWatcher(filePath)
+    const entries = filterObjectEntries(text.split('\n').flatMap((line) => (line.trim() === '' ? [] : parseJsonl(line, malformed.opts))))
+    malformed.report()
+    return entries
   } finally {
     await handle.close()
   }

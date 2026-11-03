@@ -500,6 +500,36 @@ describe('跨窗口 toolCall/toolResult 配对补读（设计 §4.4/§5）', () 
   })
 });
 
+describe('索引窗口畸形行观测（RT-8#13 与尾读/全量读同款归因）', () => {
+  it('窗口内半截 JSON 行（崩溃残留形态）→ 读取成功 + warn-once 归因（不静默丢弃）', async () => {
+    const sid = uniqueSid('malformed')
+    const lines = threeTurnLines(sid)
+    // turn1 与 turn2 之间夹一行半截 JSON（无换行内截断的完整行位，但内容非法 JSON）
+    lines.splice(3, 0, '{"type":"message","id":"half",')
+    const filePath = writeSessionFile(lines)
+    const { reader } = makeIndexReader({ [sid]: filePath })
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const result = await reader.getHistory(sid)
+
+      // 半截行被滤除，其余消息照常返回（entry 级丢失只影响该行）
+      expect(result.messages.map((m) => m.content)).toEqual(['q1', 'r1', 'q2', 'r2', 'q3', 'r3'])
+      expect(result.loadedTurns).toBe(3)
+      // 归因出场：与尾读/全量读同款 warn-once（含路径与丢弃计数）
+      const warned = warnSpy.mock.calls.map((c) => String(c[0]))
+      expect(warned.some((w) => w.includes('session 文件含 1 行畸形 JSON') && w.includes(filePath))).toBe(true)
+      // 第二次读取（索引就绪复用路径）：同文件 warn-once 不重复出声
+      warnSpy.mockClear()
+      await reader.getHistory(sid)
+      expect(warnSpy.mock.calls.map((c) => String(c[0])).some((w) => w.includes('畸形 JSON'))).toBe(false)
+    } finally {
+      warnSpy.mockRestore()
+      _resetWarnOnceForTest()
+    }
+  })
+});
+
 describe('零 turn 兼容分支与重写失配重建', () => {
   it('无 user turn 的文件（纯 assistant 行）→ 零 turn 索引走尾读兼容分支（保持现有计数 0）', async () => {
     const sid = uniqueSid('zero')

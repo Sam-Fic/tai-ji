@@ -67,8 +67,12 @@ export function filterObjectEntries(entries: unknown[]): PiSessionEntry[] {
 /**
  * 畸形行 dropCount 观测（RT-8#13）：半截 JSONL 此前静默丢轮次（entry 级丢失无归因）。
  * 累计后 report() warn-once（同文件跨次读只出声一次，防历史翻页刷屏）。
+ *
+ * [turn-boundary-index 复用出口] 导出供 history-reader.ts 的 readEntriesAtOffset 复用
+ *（索引窗口字节区间逐行 parse 的同款归因，单点不复制；watcher 按调用创建，warn-once
+ * key 含文件路径天然按文件隔离）。
  */
-function makeMalformedLineWatcher(filePath: string): { opts: JsonlParseOptions; report: () => void } {
+export function makeMalformedLineWatcher(filePath: string): { opts: JsonlParseOptions; report: () => void } {
   let dropped = 0
   return {
     opts: {
