@@ -24,7 +24,9 @@
  * u3 render-process-gone 落盘 · supervisor/process-control.ts（size 帽常量复用）。
  */
 import { createWriteStream, mkdirSync, renameSync, statSync, type WriteStream } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
+import { buildOutboundChildEnv } from '@taiji/shared'
 import { getDataDir } from '@taiji/shared/paths'
 import { startLogRetentionTimer, runLogRetentionNow } from './log-retention.js'
 
@@ -175,6 +177,27 @@ const MEMORY_WATERMARK_INTERVAL_MS = MEMORY_WATERMARK_INTERVAL_MINUTES * MS_PER_
  * "heapTotal":...,"external":...}`——崩溃取证（G5）回答「崩前内存水位」的数据源。
  * initMainLogger 时自动挂载（dev/prod 同频——水位是取证基线不是调试项）。
  */
+/**
+ * 主进程 VM region 总数采样（仅 darwin）：spawn `vmmap --summary` 解析 TOTAL 行 COUNT 列。
+ * 用途：2026-11-03 闪退取证（PartitionAlloc OnNoMemory + Memory Tag 253 达 122600 regions
+ * 伪装 OOM）——region 数是 node 堆观测（memoryUsage）覆盖不到的 Chromium 原生层信号。
+ * 采样失败（非 darwin / vmmap 缺失 / 超时）静默省略字段，不拖垮水位打点。
+ */
+function sampleVmRegionCount(): number | undefined {
+  if (process.platform !== 'darwin') return undefined
+  try {
+    const out = execFileSync('vmmap', ['--summary', String(process.pid)], {
+      timeout: 8000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: buildOutboundChildEnv({ parentEnv: process.env }),
+    }).toString()
+    const m = out.match(/^TOTAL[^\n]*?(\d+)\s*$/m)
+    return m ? Number(m[1]) : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function startMemoryWatermarkTimer(): () => void {
   if (!currentLevel || watermarkTimer) return () => {} // 未 init / 已挂载：no-op
   watermarkTimer = setInterval(() => {
@@ -184,6 +207,7 @@ export function startMemoryWatermarkTimer(): () => void {
       heapUsed: mem.heapUsed,
       heapTotal: mem.heapTotal,
       external: mem.external,
+      ...({ vmRegions: sampleVmRegionCount() } as Record<string, unknown>),
     })
   }, MEMORY_WATERMARK_INTERVAL_MS)
   watermarkTimer.unref?.()
