@@ -38,13 +38,12 @@
  */
 import { probeProcessAlive, type ProcessProbeOutcome } from './health-checker.js'
 
-/** 连续失败达此阈值则判定「半活」，触发强制重启（逐请求 2s 超时 × 3 次 × 5s 间隔 = 最迟 ~12s 发现卡死） */
-export const LIVENESS_FAIL_THRESHOLD = 3
-
 /**
- * 假死（zombie）阈值（ms）：端口可连但 /health 连续无应答持续超过此时长，才从
- * 「忙」升级为「假死」（先取证后杀）。依据：历史最重同步块实测 11-12s，5min 留
- * 25 倍余量——重算单块是秒级~十秒级，5 分钟无应答才可能是真挂死。
+ * 假死（zombie）阈值（ms）：端口可连但 /health 连续 5min 无应答，才从「忙」升级
+ * 为「假死」（先取证后杀）。判据取纯时间阈值，不附加 eventLoopLag 条件：/health
+ * 无应答期间 runtime 无法上报 lag，滞后遥测只有最后健康时点的快照，「lag 持续顶格」
+ * 在结构上不可观测；该意图已由时间阈值覆盖——历史最重同步块实测 11-12s，5min 留
+ * 25 倍余量，重算单块是秒级~十秒级，5 分钟无应答才可能是真挂死。
  */
 export const LIVENESS_ZOMBIE_THRESHOLD_MS = 5 * 60 * 1000
 
@@ -56,10 +55,11 @@ export const LIVENESS_INTERVAL_MS = 5_000
 
 /**
  * 单次探针请求超时（ms）：/health 为本地回环轻端点（正常响应毫秒级，2s = 20 倍裕度），
- * fetch 逐请求硬超时（AbortSignal.timeout）保证 SIGSTOP 冻结等无响应形态快速判死，
- * 不会挂到 undici 默认 headersTimeout（300s）——判死窗口按上式 ~12s 兑现。
- * 健康期 event loop 短暂抖动至多误计一次失败（成功即清零），连续 3 次失败 = 持续 ~12s
- * 无响应，本身即半活判定，无误杀面。
+ * fetch 逐请求硬超时（AbortSignal.timeout）保证单次请求不挂住——SIGSTOP 冻结等无
+ * 响应形态按本次无应答计入，不会挂到 undici 默认 headersTimeout（300s）。超时只
+ * 贡献无应答时长累计，是否升级忙/假死由 LIVENESS_ZOMBIE_THRESHOLD_MS 时间窗判定：
+ * 健康期 event loop 短暂抖动至多误计一次无应答（下次成功即清零），秒级~十秒级重算
+ * 单块只落 busy 记 WARN，不判死。
  */
 export const LIVENESS_PROBE_TIMEOUT_MS = 2_000
 
