@@ -291,508 +291,121 @@ describe('ProcessManager 信号取证环 restart 路径（MF-3）', () => {
 
 // ======================================================================
 // ← src/__tests__/session-history-incremental.test.ts
+//   （turn-boundary-index 重写：缓存容量帽/增量合并/后台全量任务/reclaim 驱逐随 D4
+//   一次退役；本段改载 SessionHistoryReader 索引路径集成——真实 JSONL fixture +
+//   PiSessionStore 真实 convertHistory 转换链，定位经 scanSessions mock 指向 fixture）
 // ======================================================================
 
-// spy 尾读 fallback（「不走尾读」的判定依据）
-vi.mock('../services/session-history.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../services/session-history.js')>()
-  return {
-    ...actual,
-    getHistoryTailFromFile: vi.fn(async () => ({ messages: [], truncated: true, loadedTurns: 0, totalTurnsEstimate: 0 })),
-  }
-})
+import type { ISessionStore } from '../services/ports/session.js'
+const { SessionHistoryReader } = await import('../services/session/history-reader.js')
+const { PiSessionStore } = await import('../infra/pi/session-store.js')
+const fsExtra = await import('node:fs')
+const osExtra = await import('node:os')
+const fsPath = await import('node:path')
 
-const { getHistoryTailFromFile } = await import('../services/session-history.js')
+/** 唯一 sessionId（防共享 tmp dataDir 上磁盘索引/内存态的跨用例污染）。 */
+let idxSeq = 0
+function uniqueIdxSid(prefix: string): string {
+  return `${prefix}-idx-${++idxSeq}`
+}
 
-
-// SUT 在 vi.mock 之后 import（session-service 内部引用 mocked 模块）
-const { SessionService } = await import('../services/session/session-service.js')
-
-const { HistoryRebuildCache, SessionHistoryReader, mergeIncrementalMessages } = await import('../services/session/history-rebuild-cache.js')
-
-// Fix-1/7 回归用真实重建（不 mock rebuildHistoryFromEntries，验证孤儿回填补丢失工具输出）
-const { rebuildHistoryFromEntries } = await import('../infra/pi/entry-tree-builder.js')
-
+/** 写会话 JSONL 行（pi message entry 形态，message 体透传）。 */
+function idxEntryLine(id: string, message: unknown): string {
+  return JSON.stringify({ type: 'message', id, parentId: null, timestamp: '2026-11-03T00:00:00.000Z', message })
+}
 
 /**
- * 最小 PiSessionEntry（rebuildHistoryFromEntries 是直通 mock，只消费 id/parentId）。
- * parentId 默认 null——增量 delta 的首条 entry 必须显式传「上次缓存 leafId」，
- * 否则触发 Fix-2 parentId 不变量检测（丢缓存全量重建），非预期路径。
+ * 索引路径集成直构环境：定位经 scanSessions mock 指向 mkdtemp fixture（fs-guard 白名单
+ * 内），转换链 = PiSessionStore.convertHistory 真实实装（消息语义断言不落 mock）。
  */
-function entry(id: string, parentId: string | null = null): PiSessionEntry {
-  return { id, type: 'message', parentId, timestamp: '2026-08-16T00:00:00.000Z' } as unknown as PiSessionEntry
-}
-
-
-function msg(piEntryId: string) {
-  return {
-    id: `m-${piEntryId}`,
-    role: 'user' as const,
-    content: `content-${piEntryId}`,
-    status: 'complete' as const,
-    piEntryId,
-    timestamp: 1,
-  }
-}
-
-
-interface GetEntriesCall {  // oe-exempt:20261027:test:
-  since?: string
-}
-
-
-/**
- * 构造 SessionService + 可编排的 getEntries mock。
- * getEntriesScript 按调用序出队：每项是 {data} 成功响应或 Error（reject）。
- * 每次调用记录 since 参数（断言增量路径的传递）。
- * opts.realRebuild = true 时 rebuildHistoryFromEntries 用真实实现（entry-tree-builder），
- * 供 Fix-1/7 窗口语义回归（不 mock 重建，验证孤儿回填与 compaction 并入）。
- */
-function makeService(
-  getEntriesScript: Array<{ data?: { entries: PiSessionEntry[]; leafId: string | null } } | Error>,
-  opts?: { realRebuild?: boolean },
-) {
-  const calls: GetEntriesCall[] = []
-  const client = {
-    getEntries: vi.fn(async (since?: string) => {
-      calls.push({ since })
-      const step = getEntriesScript.shift()
-      if (step instanceof Error) throw step
-      if (!step) throw new Error('getEntries script exhausted')
-      return step
-    }),
-  } as unknown as IPiEngine
-
-  const broker = { broadcast: vi.fn((_m: ServerMessage) => {}) } as unknown as IMessageBroker
-  const pm = {
-    onSessionExit: vi.fn(),
-    getClient: vi.fn(() => client),
-  } as unknown as IProcessManager
-
+function makeIdxReader(sessionId: string, filePath: string) {
+  const realStore = new PiSessionStore()
   const sessionStore = {
-    // 直通 mock：entry.id → Message.piEntryId（getHistory 的分支逻辑与重建实现解耦）；
-    // realRebuild 时换真实 entry-tree-builder（含孤儿 toolResult 收集，Fix-1）
-    rebuildHistoryFromEntries: opts?.realRebuild
-      ? (entries: PiSessionEntry[]) => rebuildHistoryFromEntries(entries, null)
-      : vi.fn((entries: PiSessionEntry[]) => ({
-          messages: entries.map((e) => msg(e.id)),
-          orphanToolResults: [],
-        })),
-    scanSessions: vi.fn(() => []),
-    extractSessionOutcome: vi.fn(() => null),
-    persistSessionEnd: vi.fn(),
-  } as never
-
-  const svc = new SessionService(
-    pm,
-    broker,
-    () => ({ attach: vi.fn(), detach: vi.fn() }) as never,
-    '/test/project-root',
-    {} as never,
-    { getDefaultModel: () => null } as never,
+    scanSessions: vi.fn(() => [{ id: sessionId, filePath }]),
+    convertHistory: realStore.convertHistory.bind(realStore),
+  } as unknown as ISessionStore
+  const reader = new SessionHistoryReader({
+    pm: { getClient: vi.fn(() => undefined) } as unknown as IProcessManager,
     sessionStore,
-    { pruneStaleCache: vi.fn() } as never,
-    {} as never,
-  )
-  // [session-cold-switch-perf u1] messageBus 记录器：后台全量重建任务无外部完成信号，
-  // 完成回执 = session.historyCacheReady 帧（publishToBus → messageBus.publish），
-  // 用例据此 vi.waitFor 等任务终态（消除「后台任务在途 vs 已完成」的时序竞态）。
-  const busPublishes: ServerMessage[] = []
-  svc.setMessageBus({
-    publish: (_sid: string, m: ServerMessage) => { busPublishes.push(m) },
-    // removeSessionEntry 汇聚链消费的其余 IMessageBus 方法（本用例只观测 publish，其余 no-op）
-    subscribe: vi.fn(() => ({ snapshot: [], stateSnapshot: [], lastSeq: 0 })),
-    unsubscribe: vi.fn(),
-    unsubscribeAll: vi.fn(),
-    clearSession: vi.fn(),
-    forgetSession: vi.fn(),
-  } as never)
-  return { svc, calls, busPublishes }
-}
-
-/**
- * 等待后台全量重建任务终态（historyCacheReady 帧到达 ≥ count 条）。
- * 后台任务 fire-and-forget，无 await 句柄；帧是它唯一的完成回执（成功/失败都发）。
- */
-async function waitForCacheReady(busPublishes: ServerMessage[], count: number): Promise<void> {
-  await vi.waitFor(() => {
-    const ready = busPublishes.filter((m) => (m as { type?: string }).type === 'session.historyCacheReady')
-    expect(ready.length).toBeGreaterThanOrEqual(count)
-  }, { interval: 2 })
+  })
+  return { reader, sessionStore }
 }
 
 // wave3 包装：本段原文件顶层语句收进 describe 作用域（顶层 hook 不再外溢到同文件其他来源的用例）
-describe('session-history-incremental', () => {
-beforeEach(() => {
-  vi.clearAllMocks()
-})
-// ── 单元：HistoryRebuildCache（D6-1 容量帽 LRU）────────────────
-
-describe('HistoryRebuildCache', () => {
-  it('超容量帽驱逐最久未访问的 session 条目（帽 8，对齐 renderer LRU 窗口）', () => {
-    const cache = new HistoryRebuildCache()
-    const e = () => ({ leafId: `leaf-${Math.random()}`, messages: [], truncated: false })
-    for (let i = 0; i < 10; i++) cache.set(`s-${i}`, e())
-    expect(cache.size).toBe(8)
-    // 最久的 s-0/s-1 被驱逐，最新的 s-2..s-9 保留
-    expect(cache.get('s-0')).toBeUndefined()
-    expect(cache.get('s-1')).toBeUndefined()
-    expect(cache.get('s-9')).toBeDefined()
-  })
-
-  it('get 刷新 LRU 位置——访问过的条目不被后续超帽驱逐', () => {
-    const cache = new HistoryRebuildCache(2)
-    const e = () => ({ leafId: 'l', messages: [], truncated: false })
-    cache.set('a', e())
-    cache.set('b', e())
-    cache.get('a') // a 移到最近使用
-    cache.set('c', e()) // 超帽驱逐 b（最久未访问），a 保留
-    expect(cache.get('b')).toBeUndefined()
-    expect(cache.get('a')).toBeDefined()
-    expect(cache.get('c')).toBeDefined()
-  })
-
-  it('delete 清除指定 session 条目', () => {
-    const cache = new HistoryRebuildCache()
-    cache.set('s', { leafId: 'l', messages: [], truncated: false })
-    cache.delete('s')
-    expect(cache.get('s')).toBeUndefined()
-  })
-})
-// ── 单元：mergeIncrementalMessages（D6-3 piEntryId 去重）────────
-
-describe('mergeIncrementalMessages', () => {
-  it('同 piEntryId 跳过（不重复），新 piEntryId 追加尾部', () => {
-    const cached = [msg('e1'), msg('e2')]
-    const incremental = [msg('e2'), msg('e3')] // e2 已在缓存（compact/异常时序的重复兜底）
-    const merged = mergeIncrementalMessages(cached, incremental)
-    expect(merged.map((m) => m.piEntryId)).toEqual(['e1', 'e2', 'e3'])
-    // 不修改入参
-    expect(cached).toHaveLength(2)
-    expect(incremental).toHaveLength(2)
-  })
-
-  it('无 piEntryId 的增量消息防御性追加（宁可重复不可丢消息）', () => {
-    const cached = [msg('e1')]
-    const noId = { id: 'm-x', role: 'user' as const, content: 'x', status: 'complete' as const, timestamp: 1 }
-    const merged = mergeIncrementalMessages(cached, [noId])
-    expect(merged).toHaveLength(2)
-  })
-
-  it('幂等：同批增量重复合并无副作用', () => {
-    const cached = [msg('e1')]
-    const inc = [msg('e2')]
-    const once = mergeIncrementalMessages(cached, inc)
-    const twice = mergeIncrementalMessages(once, inc)
-    expect(twice.map((m) => m.piEntryId)).toEqual(['e1', 'e2'])
-  })
-})
-// ── 集成：SessionService.getHistory 三分支（D6 + R-12 + D6-4）────
-
-describe('SessionService.getHistory —— D6 历史增量', () => {
-  it('① [态2] 首次尾读首屏+后台全量铺缓存 → 第二次缓存命中走 since 增量合并（增量条目 < 全量）', async () => {
-    // 后台全量 5 条，leafId=leaf-1；第二次调用走 since 增量 2 条（<5），leafId=leaf-2。
-    // e6.parentId=leaf-1 满足 Fix-2 不变量（正常 append：delta 首条 parent = 缓存 leafId）
-    const { svc, calls, busPublishes } = makeService([
-      { data: { entries: [entry('e1'), entry('e2'), entry('e3'), entry('e4'), entry('e5')], leafId: 'leaf-1' } },
-      { data: { entries: [entry('e6', 'leaf-1'), entry('e7', 'e6')], leafId: 'leaf-2' } },
-    ])
-
-    const first = await svc.getHistory('s1')
-    // [态2] 首屏 = 尾读窗口（mock 空页），不阻塞等全量；后台用在场进程全量（无 since）
-    expect(first.truncated).toBe(true)
-    expect(calls[0]?.since).toBeUndefined()
-    expect(getHistoryTailFromFile).toHaveBeenCalledTimes(1)
-    await waitForCacheReady(busPublishes, 1) // 后台全量落缓存
-
-    const second = await svc.getHistory('s1')
-    expect(second.messages.map((m) => m.piEntryId)).toEqual(['e1', 'e2', 'e3', 'e4', 'e5', 'e6', 'e7'])
-    expect(second.truncated).toBe(false)
-    // 第二次缓存命中走 since=leaf-1 增量（增量窗口 2 条 < 全量 5 条）
-    expect(calls[1]?.since).toBe('leaf-1')
-    expect(second.messages).toHaveLength(7) // 5 缓存 + 2 增量（piEntryId 去重合并）
-    expect(getHistoryTailFromFile).toHaveBeenCalledTimes(1) // 态1 增量路径不经尾读
-  })
-
-  it('② R-12：增量空 entries 短路——直接返回缓存，不走尾读 fallback，getEntries 只调一次', async () => {
-    const { svc, calls, busPublishes } = makeService([
-      { data: { entries: [entry('e1'), entry('e2')], leafId: 'leaf-1' } },
-      { data: { entries: [], leafId: 'leaf-1' } }, // 空增量 = leafId 未变 = 缓存新鲜
-    ])
-
-    await svc.getHistory('s2') // [态2] 尾读首屏 + 后台全量铺缓存
-    await waitForCacheReady(busPublishes, 1)
-    const second = await svc.getHistory('s2') // [态1] 缓存命中 → 空增量短路
-    expect(second.messages.map((m) => m.piEntryId)).toEqual(['e1', 'e2'])
-    expect(second.truncated).toBe(false)
-    expect(calls[1]?.since).toBe('leaf-1')
-    expect(getHistoryTailFromFile).toHaveBeenCalledTimes(1) // 仅首次态2尾读；R-12 短路不走尾读
-  })
-
-  it('② R-12（后台全量侧）：无缓存 + pi 返回空 entries → 后台任务发空快照成功帧，不写缓存', async () => {
-    const { svc, calls, busPublishes } = makeService([{ data: { entries: [], leafId: null } }])
-    const result = await svc.getHistory('s3')
-    // [态2] 首屏 = 尾读窗口（mock 空页）；后台全量拉到空 entries → 权威空视图
-    expect(result.truncated).toBe(true)
-    expect(getHistoryTailFromFile).toHaveBeenCalledTimes(1)
-    await waitForCacheReady(busPublishes, 1)
-    expect((busPublishes[0] as { payload?: { snapshotLeafId?: string } }).payload?.snapshotLeafId).toBe('')
-    expect(calls[0]?.since).toBeUndefined() // 后台全量（无 since）
-  })
-
-  it('③ D6-4：增量 "Entry not found" → 丢缓存 → 全量重新拉取并覆盖缓存', async () => {
-    const { svc, calls, busPublishes } = makeService([
-      { data: { entries: [entry('e1')], leafId: 'leaf-1' } },
-      new Error('Entry not found: leaf-1'), // since 失效（防御场景：缓存跨 pi 进程存活）
-      { data: { entries: [entry('e1'), entry('e2'), entry('e3')], leafId: 'leaf-3' } }, // 全量重新拉取
-      { data: { entries: [entry('e4', 'leaf-3')], leafId: 'leaf-4' } }, // 验证缓存已被全量结果覆盖（新基线 leaf-3）
-    ])
-
-    await svc.getHistory('s4') // [态2] 尾读首屏 + 后台全量 → 缓存 {leaf-1, [e1]}
-    await waitForCacheReady(busPublishes, 1)
-    const afterFallback = await svc.getHistory('s4') // [态1] Entry not found → 丢缓存 → 分支3同步全量 → {leaf-3, [e1,e2,e3]}
-    expect(afterFallback.messages.map((m) => m.piEntryId)).toEqual(['e1', 'e2', 'e3'])
-    expect(calls[1]?.since).toBe('leaf-1')
-    expect(calls[2]?.since).toBeUndefined() // fallback 是全量（无 since）
-    expect(getHistoryTailFromFile).toHaveBeenCalledTimes(1) // fallback 是同步全量，不经尾读（仅首次态2尾读）
-
-    // 缓存基线已更新为 leaf-3：下次走 since=leaf-3 增量
-    const third = await svc.getHistory('s4')
-    expect(calls[3]?.since).toBe('leaf-3')
-    expect(third.messages).toHaveLength(4)
-  })
-
-  it('其他错误（非 Entry not found）→ 尾读降级，缓存不动（下次重试仍走 since）', async () => {
-    const { svc, calls, busPublishes } = makeService([
-      { data: { entries: [entry('e1')], leafId: 'leaf-1' } },
-      new Error('RPC command "get_entries" timed out after 60000ms'),
-      { data: { entries: [entry('e2')], leafId: 'leaf-2' } }, // 缓存未丢：仍以 leaf-1 为基线走增量
-    ])
-
-    await svc.getHistory('s5') // [态2] 尾读首屏（尾读第1次）+ 后台全量铺缓存
-    await waitForCacheReady(busPublishes, 1)
-    const degraded = await svc.getHistory('s5') // [态1] 增量超时 → 尾读降级（尾读第2次）
-    expect(getHistoryTailFromFile).toHaveBeenCalledTimes(2)
-    expect(degraded.truncated).toBe(true) // 尾读路径的截断标志（mock 尾读返回 truncated:true）
-    expect(calls[1]?.since).toBe('leaf-1')
-
-    // 缓存未被尾读结果覆盖：下次 getHistory 仍走 since 增量（基线还是 leaf-1）
-    await svc.getHistory('s5')
-    expect(calls[2]?.since).toBe('leaf-1')
-  })
-
-  it('⑤ lastLeafId 生命周期：removeSessionEntry（session 删除/pi 退出汇聚点）清除缓存 → 下次后台全量', async () => {
-    const { svc, calls, busPublishes } = makeService([
-      { data: { entries: [entry('e1')], leafId: 'leaf-1' } },
-      { data: { entries: [entry('e2')], leafId: 'leaf-2' } }, // 清除后的全量（脚本顺序：清后再 getHistory）
-      { data: { entries: [], leafId: 'leaf-2' } }, // 重建后缓存命中：空增量短路（验证新基线）
-    ])
-
-    await svc.getHistory('s6') // [态2] 尾读首屏 + 后台全量 → 缓存 leaf-1
-    await waitForCacheReady(busPublishes, 1)
-    expect(calls[0]?.since).toBeUndefined()
-
-    svc.removeSessionEntry('s6') // pi 进程退出/删除汇聚点 → 缓存清除
-
-    await svc.getHistory('s6') // 无缓存 → [态2] 尾读 + 后台全量（脚本第2步）
-    await waitForCacheReady(busPublishes, 2)
-    expect(calls[1]?.since).toBeUndefined() // 清除后的重建走全量
-
-    const third = await svc.getHistory('s6') // 新缓存生效：since=leaf-2 空增量短路 → 返回 [e2]
-    expect(calls[2]?.since).toBe('leaf-2')
-    expect(third.messages.map((m) => m.piEntryId)).toEqual(['e2'])
-  })
-
-  it('离线路径（无 RPC client）：走尾读，不读不写缓存', async () => {
-    // pm.getClient 返回 undefined 的独立环境
-    const broker = { broadcast: vi.fn() } as unknown as IMessageBroker
-    const pm = { onSessionExit: vi.fn(), getClient: vi.fn(() => undefined) } as unknown as IProcessManager
-    const svc = new SessionService(
-      pm, broker,
-      () => ({ attach: vi.fn(), detach: vi.fn() }) as never,
-      '/test', {} as never, {} as never,
-      { scanSessions: vi.fn(() => []), extractSessionOutcome: vi.fn(() => null), persistSessionEnd: vi.fn() } as never,
-      { pruneStaleCache: vi.fn() } as never, {} as never,
-    )
-    const result = await svc.getHistory('s-offline')
-    expect(getHistoryTailFromFile).toHaveBeenCalledTimes(1)
-    expect(result).toEqual({ messages: [], truncated: true, loadedTurns: 0, totalTurnsEstimate: 0 })
-  })
-
-  it('Fix-2：delta 首条 parentId ≠ 缓存 leafId（branch）→ 丢缓存全量重新拉取，不合出混合历史', async () => {
-    // pi append-only + branch（extension navigateTree）后：since=旧 leaf 不报 "Entry not found"，
-    // 但新分支首条 entry 的 parentId 是 branch 点（e0）而非旧 leaf（e2）→ 不变量检测 → 全量
-    const { svc, calls, busPublishes } = makeService([
-      { data: { entries: [entry('e1'), entry('e2')], leafId: 'e2' } }, // 全量，缓存 {e2, [e1,e2]}
-      { data: { entries: [entry('b1', 'e0'), entry('b2', 'b1')], leafId: 'b2' } }, // 增量：head parentId=e0 ≠ e2
-      { data: { entries: [entry('e1'), entry('e2'), entry('b1'), entry('b2')], leafId: 'b2' } }, // 全量重新拉取（新分支完整历史）
-    ])
-
-    await svc.getHistory('s-branch') // [态2] 尾读首屏 + 后台全量铺缓存
-    await waitForCacheReady(busPublishes, 1)
-    const second = await svc.getHistory('s-branch') // [态1] 不变量 violation → 丢缓存 → 同步全量
-
-    expect(calls[1]?.since).toBe('e2') // 第二拍确实走了增量（since 传递正确）
-    expect(calls[2]?.since).toBeUndefined() // 不变量 violation → 丢缓存 → 全量重新拉取
-    // 返回的是全量重新拉取结果（新分支权威视图），不是「缓存老分支尾 + 新分支」的拼接
-    expect(second.messages.map((m) => m.piEntryId)).toEqual(['e1', 'e2', 'b1', 'b2'])
-    expect(getHistoryTailFromFile).toHaveBeenCalledTimes(1) // 仅首次态2尾读；后续全量是同步路径
-
-    // 缓存基线已被全量结果覆盖：下次走 since=b2 增量
-    // （不需要第三次脚本——空 delta 短路即证明 since=b2 传递；此处直接断言第三次调用参数）
-  })
-
-  it('Fix-5：并发 getHistory 复用同一 inflight——后台全量只触发一次，两调用结果一致', async () => {
-    // 脚本只有 1 个响应：若无 inflight/单例复用，第二个并发调用会 script exhausted reject
-    const { svc, calls, busPublishes } = makeService([
-      { data: { entries: [entry('e1'), entry('e2')], leafId: 'e2' } },
-    ])
-
-    const [a, b] = await Promise.all([svc.getHistory('s-race'), svc.getHistory('s-race')])
-    expect(calls).toHaveLength(1) // 后台全量只触发一次
-    expect(a).toEqual(b) // 两调用共享同一 promise（尾读首屏窗口）
-    expect(a.truncated).toBe(true) // [态2] 首屏 = 尾读 mock 窗口
-    await waitForCacheReady(busPublishes, 1)
-    expect(calls[0]?.since).toBeUndefined() // 后台全量（无 since）
-  })
-})
-// ── 集成：增量窗口语义（W20 review Fix-1/7，真实 rebuildHistoryFromEntries）────
-
-describe('SessionService.getHistory —— 增量窗口语义（真实重建，不 mock rebuildHistoryFromEntries）', () => {
-  /** 真实 pi message entry（type:'message'，透传 message 体）。 */
-  function messageEntry(id: string, parentId: string | null, message: unknown): PiSessionEntry {
-    return { type: 'message', id, parentId, timestamp: '2026-08-16T00:00:00.000Z', message } as unknown as PiSessionEntry
+describe('session-history-reader-index（索引路径集成，真实转换链）', () => {
+const fixtureDirs: string[] = []
+afterEach(() => {
+  while (fixtureDirs.length > 0) {
+    const dir = fixtureDirs.pop()
+    if (dir !== undefined) fsExtra.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
   }
-
-  it('Fix-1：delta 以 toolResult 开头 → 孤儿回填到缓存 assistant 的 toolCall，输出不丢', async () => {
-    // 场景：后台 session 生成中 getHistory 写缓存，leafId 切在 assistant(toolCalls) 与其
-    // toolResults 之间（缓存 leafId=e2，但 t1 的 toolResult 尚未 append）→ 下次增量窗口
-    // 以 toolResult(e3) 开头 → convertPiHistory 窗口局部配对失败 → 无 Fix-1 时 t1 永久无输出
-    const userMsg = { role: 'user', content: [{ type: 'text', text: 'question' }], timestamp: 1 }
-    const assistantToolCallMsg = {
-      role: 'assistant',
-      content: [{ type: 'toolCall', id: 't1', name: 'bash', arguments: { command: 'ls' } }],
-      timestamp: 2,
-    }
-    const toolResultMsg = {
-      role: 'toolResult',
-      toolCallId: 't1',
-      toolName: 'bash',
-      content: [{ type: 'text', text: 'RESULT-OUTPUT' }],
-      timestamp: 3,
-    }
-    const assistantTextMsg = { role: 'assistant', content: [{ type: 'text', text: 'done' }], timestamp: 4 }
-
-    const { svc, busPublishes } = makeService([
-      // 全量：user(e1) + assistant(e2, toolCall t1 无输出)，leafId=e2（切点场景基线）
-      { data: { entries: [messageEntry('e1', null, userMsg), messageEntry('e2', 'e1', assistantToolCallMsg)], leafId: 'e2' } },
-      // 增量：toolResult(e3) 开头（head parentId=e2 满足 Fix-2 不变量）+ assistant(e4)
-      { data: { entries: [messageEntry('e3', 'e2', toolResultMsg), messageEntry('e4', 'e3', assistantTextMsg)], leafId: 'e4' } },
-    ], { realRebuild: true })
-
-    await svc.getHistory('s-fix1') // [态2] 尾读首屏 + 后台全量铺缓存（真实重建）
-    await waitForCacheReady(busPublishes, 1)
-    const second = await svc.getHistory('s-fix1') // [态1] 增量合并 + 孤儿回填
-
-    // 合并结果：user(e1) + assistant(e2) + assistant(e4)（toolResult 不产独立消息）
-    expect(second.messages.map((m) => m.piEntryId)).toEqual(['e1', 'e2', 'e4'])
-    // 核心断言：缓存中 assistant(e2) 的 toolCall t1 拿到了窗口孤儿回填的输出
-    const assistant = second.messages.find((m) => m.piEntryId === 'e2')
-    expect(assistant?.toolCalls).toHaveLength(1)
-    expect(assistant?.toolCalls?.[0]?.id).toBe('t1')
-    expect(assistant?.toolCalls?.[0]?.output).toBe('RESULT-OUTPUT')
-  })
-
-  it('Fix-7：delta 以 compaction entry 开头 → compaction 系统消息正常并入缓存', async () => {
-    const userMsg = { role: 'user', content: [{ type: 'text', text: 'question' }], timestamp: 1 }
-    const assistantTextMsg = { role: 'assistant', content: [{ type: 'text', text: 'answer' }], timestamp: 2 }
-    const compactionEntry = {
-      type: 'compaction',
-      id: 'e2',
-      parentId: 'e1',
-      timestamp: '2026-08-16T00:00:01.000Z',
-      summary: 'compacted-history',
-      tokensBefore: 1000,
-    } as unknown as PiSessionEntry
-
-    const { svc, busPublishes } = makeService([
-      { data: { entries: [messageEntry('e1', null, userMsg)], leafId: 'e1' } },
-      { data: { entries: [compactionEntry, messageEntry('e3', 'e2', assistantTextMsg)], leafId: 'e3' } },
-    ], { realRebuild: true })
-
-    await svc.getHistory('s-fix7') // [态2] 尾读首屏 + 后台全量铺缓存（真实重建）
-    await waitForCacheReady(busPublishes, 1)
-    const second = await svc.getHistory('s-fix7') // [态1] 增量：compaction 并入
-
-    // user + compaction 系统消息 + assistant（compaction 重建消息无 piEntryId → 防御追加）
-    expect(second.messages).toHaveLength(3)
-    expect(second.messages[0]?.piEntryId).toBe('e1')
-    const compactionMsg = second.messages[1]
-    expect(compactionMsg?.role).toBe('system')
-    expect(compactionMsg?.content).toBe('compacted-history')
-    expect(compactionMsg?.compactionSummary?.tokensBefore).toBe(1000)
-    expect(second.messages[2]?.piEntryId).toBe('e3')
-  })
 })
-// ── 集成：SessionHistoryReader reclaim 驱逐（memory-leak-remediation §3.3-B8 候选 C）──
 
-describe('SessionHistoryReader —— reclaim 驱逐', () => {
-  /**
-   * 直构 SessionHistoryReader（SUT = reader 编排 + 缓存实例；
-   * mock 分层同 makeService：getEntries 脚本出队 + rebuildHistoryFromEntries 直通）。
-   */
-  function makeReader(
-    script: Array<{ data?: { entries: PiSessionEntry[]; leafId: string | null } } | Error>,
-  ) {
-    const calls: GetEntriesCall[] = []
-    const client = {
-      getEntries: vi.fn(async (since?: string) => {
-        calls.push({ since })
-        const step = script.shift()
-        if (step instanceof Error) throw step
-        if (!step) throw new Error('getEntries script exhausted')
-        return step
-      }),
-    } as unknown as IPiEngine
-    const pm = {
-      onSessionExit: vi.fn(),
-      getClient: vi.fn(() => client),
-    } as unknown as IProcessManager
-    const sessionStore = {
-      rebuildHistoryFromEntries: vi.fn((entries: PiSessionEntry[]) => ({
-        messages: entries.map((e) => msg(e.id)),
-        orphanToolResults: [],
-      })),
-      scanSessions: vi.fn(() => []),
-      extractSessionOutcome: vi.fn(() => null),
-      persistSessionEnd: vi.fn(),
-    } as never
-    const cache = new HistoryRebuildCache()
-    const reader = new SessionHistoryReader({ pm, sessionStore }, cache)
-    return { reader, cache, calls }
-  }
+it('全类型窗口回放：user/assistant(toolCall)/toolResult/compaction/custom 经索引窗口 + 真实 convertHistory 还原（原 Fix-1/Fix-7 转换语义的文件链等价覆盖）', async () => {
+  const sessionId = uniqueIdxSid('types')
+  const dir = fsExtra.mkdtempSync(fsPath.join(osExtra.tmpdir(), 'history-reader-idx-'))
+  fixtureDirs.push(dir)
+  const filePath = fsPath.join(dir, `${sessionId}.jsonl`)
+  const lines = [
+    JSON.stringify({ type: 'session', id: sessionId, version: 3 }),
+    idxEntryLine('u1', { role: 'user', content: [{ type: 'text', text: 'question' }], timestamp: 1 }),
+    idxEntryLine('c1', { type: 'custom', customType: 'taiji.client-msg-id', data: { clientUuid: 'u-1', userEntryId: 'u1' } }),
+    idxEntryLine('e2', { role: 'assistant', content: [{ type: 'toolCall', id: 't1', name: 'bash', arguments: { command: 'ls' } }], timestamp: 2 }),
+    idxEntryLine('e3', { role: 'toolResult', toolCallId: 't1', toolName: 'bash', content: [{ type: 'text', text: 'RESULT-OUTPUT' }], timestamp: 3 }),
+    idxEntryLine('e4', { role: 'assistant', content: [{ type: 'text', text: 'done' }], timestamp: 4 }),
+    idxEntryLine('e5', { role: 'user', content: [{ type: 'text', text: 'second' }], timestamp: 5 }),
+    JSON.stringify({ type: 'compaction', id: 'e6', parentId: 'e5', timestamp: '2026-11-03T00:00:01.000Z', summary: 'compacted-history', tokensBefore: 1000 }),
+  ]
+  fsExtra.writeFileSync(filePath, lines.join('\n') + '\n', 'utf-8')
+  const { reader } = makeIdxReader(sessionId, filePath)
 
-  it('reclaim 驱逐缓存条目——重激活走全量重建并写回新缓存（后续增量命中）', async () => {
-    const full = { data: { entries: [entry('e1'), entry('e2')], leafId: 'leaf-1' } }
-    const { reader, cache, calls } = makeReader([full, { ...full }, { data: { entries: [], leafId: 'leaf-1' } }])
+  const result = await reader.getHistory(sessionId)
 
-    await reader.getHistory('s-re') // [态2] 尾读首屏 + 后台全量 → 写缓存
-    await vi.waitFor(() => expect(cache.size).toBe(1)) // 后台任务终态 = 缓存落定（直构无 bus，以 cache.size 为信号）
+  // 窗口从 user 边界开始（AX5：正常 assistant 与对应 toolResult 同 turn，无需跨窗口补读）
+  expect(result.truncated).toBe(false)
+  expect(result.loadedTurns).toBe(2)
+  expect(result.totalTurnsEstimate).toBe(2)
+  // 工具配对：toolCall 输出回填（同 turn 内 toolResult，无孤儿）
+  const assistant = result.messages.find((m) => m.toolCalls?.length)
+  expect(assistant?.toolCalls?.[0]).toMatchObject({ id: 't1', output: 'RESULT-OUTPUT' })
+  // compaction entry 并入：system 消息语义保持（原 Fix-7 的文件链形态）
+  const compactionMsg = result.messages.find((m) => m.compactionSummary !== undefined)
+  expect(compactionMsg?.role).toBe('system')
+  expect(compactionMsg?.content).toBe('compacted-history')
+  expect(compactionMsg?.compactionSummary?.tokensBefore).toBe(1000)
+})
 
-    reader.onSessionReclaimed('s-re') // reclaim 驱逐（reclaimManagedSession 经 deps 接线）
-    expect(cache.size).toBe(0)
-    expect(cache.get('s-re')).toBeUndefined()
+it('cursor 翻页：锚前窗口 + cursor turn 只进校验集合；锚为最早 turn → 空页（翻页到头）', async () => {
+  const sessionId = uniqueIdxSid('cursor')
+  const dir = fsExtra.mkdtempSync(fsPath.join(osExtra.tmpdir(), 'history-reader-idx-'))
+  fixtureDirs.push(dir)
+  const filePath = fsPath.join(dir, `${sessionId}.jsonl`)
+  const lines = [
+    JSON.stringify({ type: 'session', id: sessionId, version: 3 }),
+    idxEntryLine('u1', { role: 'user', content: [{ type: 'text', text: 'q1' }], timestamp: 1 }),
+    idxEntryLine('e2', { role: 'assistant', content: [{ type: 'text', text: 'r1' }], timestamp: 2 }),
+    idxEntryLine('u2', { role: 'user', content: [{ type: 'text', text: 'q2' }], timestamp: 3 }),
+    idxEntryLine('e4', { role: 'assistant', content: [{ type: 'text', text: 'r2' }], timestamp: 4 }),
+  ]
+  fsExtra.writeFileSync(filePath, lines.join('\n') + '\n', 'utf-8')
+  const { reader } = makeIdxReader(sessionId, filePath)
+  await reader.getHistory(sessionId) // 先建索引
 
-    await reader.getHistory('s-re') // 重激活：无缓存 → [态2] 尾读 + 后台全量 → 写回新缓存
-    await vi.waitFor(() => expect(cache.size).toBe(1))
+  const page = await reader.getHistory(sessionId, { cursor: 'u2', limitTurns: 2 })
+  // 真实 convertHistory 保留结构化 content（不拼接 text parts），按 text part 提取断言
+  const textOf = (m: { content: unknown }): string =>
+    Array.isArray(m.content) ? m.content.map((c) => (typeof c === 'object' && c !== null && 'text' in c ? String((c as { text: unknown }).text) : '')).join('') : String(m.content)
+  expect(page.messages.map(textOf)).toEqual(['q1', 'r1'])
+  expect(page.truncated).toBe(false)
+  expect(page.loadedTurns).toBe(1)
+  expect(page.totalTurnsEstimate).toBe(2) // 索引精确总数（不再随窗口退化为前缀计数）
 
-    const third = await reader.getHistory('s-re') // 后续：新缓存生效（since 增量 + 空 delta 短路）
-    expect(calls.map((c) => c.since)).toEqual([undefined, undefined, 'leaf-1'])
-    expect(third.messages.map((m) => m.piEntryId)).toEqual(['e1', 'e2'])
-    expect(getHistoryTailFromFile).toHaveBeenCalledTimes(2) // 两次态2尾读首屏；态1增量不经尾读
-  })
+  const head = await reader.getHistory(sessionId, { cursor: 'u1' })
+  expect(head.messages).toEqual([])
+  expect(head.truncated).toBe(false)
 })
 });
+
 
 // ======================================================================
 // ← src/__tests__/session-manager-e2e-probe.test.ts
@@ -1158,351 +771,26 @@ describe('U4-E3 malformed e2e probe', () => {
 
 // ======================================================================
 // ← src/__tests__/session-history-four-state.test.ts
+//   （turn-boundary-index 重写：四态分派/后台全量任务/缓存就绪通知帧/快照对账
+//   随 D4 一次退役；验收② fixture 对拍改载「索引窗口读取 vs 尾读兼容链」逐条一致
+//   ——两条链共用 convertWindowEntries + segments sidecar 回填，对照防任一侧漏注入）
 // ======================================================================
 
-// [session-cold-switch-perf u1] getHistory 四态分派 + 后台全量任务单例 + 尾读 sidecar 回填。
-// SUT = SessionHistoryReader 直构（mock 分层同 makeReader：getEntries 脚本出队/挂起 +
-// rebuildHistoryFromEntries 直通；尾读走文件级 vi.mock 的 getHistoryTailFromFile，按用例
-// mockImplementation 覆盖）。fixture 对拍用例走真实 tailReadHistory + 真实 entry 树重建
-//（vi.mock 工厂 spread actual，tailReadHistory 未被覆盖）。
 const fs4 = await import('node:fs')
 const os4 = await import('node:os')
 const path4 = await import('node:path')
-const { parseJsonl: parseJsonl4 } = await import('../utils/jsonl.js')
 const { tailReadHistory: tailReadHistoryReal } = await import('../services/session-history.js')
-const { PiSessionStore } = await import('../infra/pi/session-store.js')
 const { getAttachmentsDir: getAttachmentsDir4 } = await import('@taiji/shared/paths')
 const { HISTORY_BUDGET: HISTORY_BUDGET4 } = await import('@taiji/shared')
-const { applyHistoryBudgetWindow } = await import('../services/session/history-rebuild-cache.js')
 
-/** 后台 get_entries 挂起的放行材料（resolve 值 = 脚本步）。 */
-interface GetEntriesScriptStep {  // oe-exempt:20261029:test:
-  data?: { entries: PiSessionEntry[]; leafId: string | null }
-  error?: Error
-  /** hang=true：getEntries 返回永不自行 settle 的 promise，由 releaseHanging 手动放行。 */
-  hang?: true
-}
-
-/** 事件驱动启动的排队等待上限（负向断言用分片采样，正向断言用 vi.waitFor）。 */
-const PUMP_WAIT_MS = 10
-
-/**
- * 四态分派直构环境：client 在场性可切换（态 2↔态 3 演进）、getEntries 脚本可控
- *（成功/失败/挂起）、historyCacheReady 帧出口记录、btw 判别器可注入。
- */
-function makeFourStateReader(config?: {
-  clientPresent?: boolean
-  btwFile?: string
-  script?: GetEntriesScriptStep[]
-}) {
-  const calls: GetEntriesCall[] = []
-  const hangingResolvers: Array<(step: GetEntriesScriptStep) => void> = []
-  const client = {
-    getEntries: vi.fn((since?: string) => {
-      calls.push({ since })
-      const step = config?.script?.shift()
-      if (!step) return Promise.reject(new Error('getEntries script exhausted'))
-      if (step.error) return Promise.reject(step.error)
-      if (step.hang) {
-        return new Promise<GetEntriesScriptStep>((resolve) => { hangingResolvers.push(resolve) })
-      }
-      return Promise.resolve(step)
-    }),
-  } as unknown as IPiEngine
-
-  let clientVisible = config?.clientPresent ?? false
-  const pm = {
-    onSessionExit: vi.fn(),
-    getClient: vi.fn(() => (clientVisible ? client : undefined)),
-  } as unknown as IProcessManager
-
-  const sessionStore = {
-    rebuildHistoryFromEntries: vi.fn((entries: PiSessionEntry[]) => ({
-      messages: entries.map((e) => msg(e.id)),
-      orphanToolResults: [],
-    })),
-    scanSessions: vi.fn(() => []),
-    extractSessionOutcome: vi.fn(() => null),
-    persistSessionEnd: vi.fn(),
-  } as never
-
-  const publishes: Array<ServerMessage<'session.historyCacheReady'>> = []
-  const cache = new HistoryRebuildCache()
-  const reader = new SessionHistoryReader(
-    {
-      pm,
-      sessionStore,
-      ...(config?.btwFile !== undefined && { resolveBtwThreadFile: () => config.btwFile }),
-      publishToBus: (_sid, m) => publishes.push(m as ServerMessage<'session.historyCacheReady'>),
-    },
-    cache,
-  )
-  return {
-    reader,
-    cache,
-    calls,
-    publishes,
-    client,
-    setClientVisible(v: boolean): void { clientVisible = v },
-    releaseHanging(step: GetEntriesScriptStep): void {
-      const resolve = hangingResolvers.shift()
-      if (!resolve) throw new Error('no hanging getEntries to release')
-      resolve(step)
-    },
-  }
-}
-
-describe('SessionHistoryReader —— getHistory 四态分派与后台全量任务（session-cold-switch-perf u1）', () => {
-  const defaultTail = async () => ({ messages: [], truncated: true, loadedTurns: 0, totalTurnsEstimate: 0 })
-
-  beforeEach(() => {
-    vi.mocked(getHistoryTailFromFile).mockImplementation(defaultTail)
-    vi.mocked(getHistoryTailFromFile).mockClear() // 共享文件级 mock：清前段用例的调用计数
-  })
-  afterEach(() => {
-    vi.mocked(getHistoryTailFromFile).mockImplementation(defaultTail)
-  })
-
-  // ── 态 1：缓存命中 → 现状快路径 ──
-
-  it('态1 缓存命中走现状增量快路径：空增量短路返回，不触发尾读、不启动后台任务、不发帧', async () => {
-    const h = makeFourStateReader({ clientPresent: true, script: [{ data: { entries: [], leafId: 'leaf-1' } }] })
-    h.cache.set('s4-state1', { leafId: 'leaf-1', messages: [msg('e1')], truncated: false })
-
-    const result = await h.reader.getHistory('s4-state1')
-
-    expect(result.messages.map((m) => m.piEntryId)).toEqual(['e1'])
-    expect(h.calls).toHaveLength(1)
-    expect(h.calls[0]?.since).toBe('leaf-1') // 现状 since 增量
-    expect(getHistoryTailFromFile).not.toHaveBeenCalled()
-    expect(h.publishes).toHaveLength(0)
-  })
-
-  // ── 态 2：缓存 miss + 进程在场 → 尾读首屏 + 后台全量 ──
-
-  it('态2 缓存miss+进程在场：尾读首屏立即返回，后台用在场进程全量重建写缓存并发 historyCacheReady 帧', async () => {
-    vi.mocked(getHistoryTailFromFile).mockImplementation(async () => ({
-      messages: [msg('tail-1')], truncated: true, loadedTurns: 2, totalTurnsEstimate: 9,
-    }))
-    const h = makeFourStateReader({
-      clientPresent: true,
-      script: [{ data: { entries: [entry('e1'), entry('e2')], leafId: 'leaf-2' } }],
-    })
-
-    const first = await h.reader.getHistory('s4-state2')
-
-    // 首屏 = 尾读窗口（不被全量重建阻塞）
-    expect(first.messages.map((m) => m.piEntryId)).toEqual(['tail-1'])
-    expect(first.truncated).toBe(true)
-    // 后台任务已用在场进程触发（无 since 全量）
-    expect(h.calls).toHaveLength(1)
-    expect(h.calls[0]?.since).toBeUndefined()
-    // 后台完成：写缓存 + 发帧（快照基准 = 重建快照末条 entry id）
-    await vi.waitFor(() => expect(h.publishes).toHaveLength(1))
-    expect(h.cache.get('s4-state2')?.leafId).toBe('leaf-2')
-    expect(h.publishes[0]).toMatchObject({
-      type: 'session.historyCacheReady',
-      payload: { sessionId: 's4-state2', snapshotLeafId: 'leaf-2' },
-    })
-  })
-
-  // ── 态 3：缓存 miss + 进程不在 → 尾读 + 待启动登记 + 事件驱动启动 ──
-
-  it('态3 缓存miss+进程不在：尾读首屏返回+登记待启动（分派自身不spawn不消费槽），switch侧激活事件驱动启动', async () => {
-    vi.mocked(getHistoryTailFromFile).mockImplementation(async () => ({
-      messages: [msg('tail-2')], truncated: false, loadedTurns: 1, totalTurnsEstimate: 1,
-    }))
-    const h = makeFourStateReader({
-      clientPresent: false, // 冷启动首点态
-      script: [{ data: { entries: [entry('e1')], leafId: 'leaf-1' } }],
-    })
-
-    const first = await h.reader.getHistory('s4-state3')
-    expect(first.messages.map((m) => m.piEntryId)).toEqual(['tail-2'])
-    expect(h.calls).toHaveLength(0) // getHistory 分派自身不启动任务（无进程不 spawn）
-
-    // switch 侧进程获取完成（client 注册）→ onSessionActivated 挂点 → startPendingRebuild
-    h.setClientVisible(true)
-    h.reader.startPendingRebuild('s4-state3')
-    await vi.waitFor(() => expect(h.calls).toHaveLength(1))
-    expect(h.calls[0]?.since).toBeUndefined() // 全量重建
-    await vi.waitFor(() => expect(h.publishes).toHaveLength(1))
-    expect(h.cache.get('s4-state3')?.leafId).toBe('leaf-1')
-  })
-
-  it('态3 btw 线排除登记：死线回放尾读返回即止（无 switch 侧完成时点），startPendingRebuild no-op', async () => {
-    const h = makeFourStateReader({ clientPresent: false, btwFile: '/tmp/nonexistent-btw-line.jsonl' })
-
-    const first = await h.reader.getHistory('s4-btw-line')
-    expect(first.messages).toEqual([]) // 线文件缺失 → warn 空页（现状离线 btw 分支语义）
-
-    // 线被继续（进程在场）后 startPendingRebuild：无登记 → no-op（btw 线从不登记）
-    h.setClientVisible(true)
-    h.reader.startPendingRebuild('s4-btw-line')
-    // 负向断言无完成信号可等——分片采样替代盲等（8×10ms 先例）
-    for (let i = 0; i < 6; i++) {
-      await new Promise((r) => setTimeout(r, PUMP_WAIT_MS))
-      expect(h.calls).toHaveLength(0)
-      expect(h.publishes).toHaveLength(0)
-    }
-  })
-
-  // ── 态 4：尾读 IO 失败 ──
-
-  it('态4 尾读IO失败+进程在场：挂后台任务等全量返回（promise 恒有终态，不无限等待）', async () => {
-    vi.mocked(getHistoryTailFromFile).mockImplementation(async () => { throw new Error('EIO: tail read failed') })
-    const h = makeFourStateReader({
-      clientPresent: true,
-      script: [{ hang: true, data: { entries: [entry('e1'), entry('e2')], leafId: 'leaf-x' } }],
-    })
-
-    const pending = h.reader.getHistory('s4-state4')
-    await vi.waitFor(() => expect(h.calls).toHaveLength(1)) // 后台任务已启动
-    h.releaseHanging({ data: { entries: [entry('e1'), entry('e2')], leafId: 'leaf-x' } })
-
-    const result = await pending // 挂靠返回全量窗口（= 现状等待语义）
-    expect(result.messages.map((m) => m.piEntryId)).toEqual(['e1', 'e2'])
-    expect(h.cache.get('s4-state4')?.leafId).toBe('leaf-x')
-  })
-
-  it('态4 后台全量失败 → 按现状失败语义 reject（不无限等待），失败帧带 error', async () => {
-    vi.mocked(getHistoryTailFromFile).mockImplementation(async () => { throw new Error('EIO') })
-    const h = makeFourStateReader({
-      clientPresent: true,
-      script: [{ error: new Error('get_entries failed') }],
-    })
-
-    await expect(h.reader.getHistory('s4-state4f')).rejects.toThrow(/background rebuild failed/)
-    expect(h.publishes).toHaveLength(1)
-    expect(h.publishes[0]?.payload.error).toBeDefined() // 失败帧（renderer 收失败帧不重拉）
-  })
-
-  it('态4 尾读IO失败+进程不在：按现状失败语义返回（登记待启动但无完成时点，不等待）', async () => {
-    vi.mocked(getHistoryTailFromFile).mockImplementation(async () => { throw new Error('EACCES: offline tail read') })
-    const h = makeFourStateReader({ clientPresent: false })
-
-    await expect(h.reader.getHistory('s4-state4o')).rejects.toThrow('EACCES')
-    expect(h.calls).toHaveLength(0) // 不等待（任务未启动）
-  })
-
-  // ── 后台任务单例（验收③）──
-
-  it('验收③ 同 sessionId 重复派单挂同一在途任务：不触发第二次全量重建，帧只发一条', async () => {
-    const h = makeFourStateReader({
-      clientPresent: true,
-      script: [{ hang: true, data: { entries: [entry('e1')], leafId: 'leaf-1' } }],
-    })
-
-    await h.reader.getHistory('s4-single') // 首派单：尾读返回，任务在途（挂起）
-    expect(h.calls).toHaveLength(1)
-
-    const second = await h.reader.getHistory('s4-single') // 二次派单：缓存仍无 → 复用在途任务
-    expect(h.calls).toHaveLength(1) // 关键断言：无第二次 getEntries（单例）
-    h.releaseHanging({ data: { entries: [entry('e1')], leafId: 'leaf-1' } })
-
-    await vi.waitFor(() => expect(h.publishes).toHaveLength(1)) // 单例 → 恰一条帧
-    expect(h.cache.get('s4-single')?.leafId).toBe('leaf-1')
-  })
-
-  // ── 游标翻页挂靠（设计：态 2 叠加点）──
-
-  it('游标翻页与在途后台任务并发：挂同一 promise 复用，不重复触发全量重建', async () => {
-    const h = makeFourStateReader({
-      clientPresent: true,
-      script: [{ hang: true, data: { entries: [entry('e1'), entry('e2')], leafId: 'leaf-2' } }],
-    })
-
-    await h.reader.getHistory('s4-cursor') // 任务在途（挂起）
-    const pagePromise = h.reader.getHistory('s4-cursor', { cursor: 'e2' }) // 翻页挂靠在途任务
-    h.releaseHanging({ data: { entries: [entry('e1'), entry('e2')], leafId: 'leaf-2' } })
-
-    const page = await pagePromise
-    expect(h.calls).toHaveLength(1) // 复用，无第二次 getEntries
-    expect(page.messages.map((m) => m.piEntryId)).toEqual(['e1']) // 锚点（e2）之前的窗口
-  })
-
-  // ── snapshotLeafId 版本对账（验收④）──
-
-  it('验收④ 过期快照不覆盖：任务在途期间缓存被活跃链写入（更新基线），完成时保留现缓存、帧照发', async () => {
-    const h = makeFourStateReader({
-      clientPresent: true,
-      script: [{ hang: true, data: { entries: [entry('stale-1')], leafId: 'leaf-stale' } }],
-    })
-
-    await h.reader.getHistory('s4-stale') // 任务在途
-    // 模拟任务在途期间活跃链写入缓存（leafId 非 null = 带增量校验的新鲜基线）
-    h.cache.set('s4-stale', { leafId: 'leaf-live', messages: [msg('live-1')], truncated: false })
-
-    h.releaseHanging({ data: { entries: [entry('stale-1')], leafId: 'leaf-stale' } })
-    await vi.waitFor(() => expect(h.publishes).toHaveLength(1))
-
-    expect(h.cache.get('s4-stale')?.leafId).toBe('leaf-live') // 过期快照不覆盖
-    expect(h.publishes[0]?.payload.snapshotLeafId).toBe('leaf-stale') // 帧照发（renderer 按 snapshotLeafId 对账）
-  })
-
-  // ── 会话删除丢弃在途结果（验收⑤）──
-
-  it('验收⑤ 会话删除后在途任务结果丢弃：不写缓存、不发帧、挂靠方按失败语义收敛（有终态）', async () => {
-    vi.mocked(getHistoryTailFromFile).mockImplementation(async () => { throw new Error('EIO') })
-    const h = makeFourStateReader({
-      clientPresent: true,
-      script: [{ hang: true, data: { entries: [entry('e1')], leafId: 'leaf-1' } }],
-    })
-
-    const pending = h.reader.getHistory('s4-disposed') // 态 4 挂靠等待
-    await vi.waitFor(() => expect(h.calls).toHaveLength(1))
-
-    h.reader.onSessionDisposed('s4-disposed') // 删除挂点（removeSessionEntry 汇聚链直调）
-    h.releaseHanging({ data: { entries: [entry('e1')], leafId: 'leaf-1' } })
-
-    await expect(pending).rejects.toThrow(/disposed/) // 挂靠方失败语义（不无限等待）
-    // 负向断言无完成信号可等——分片采样（不写缓存、不发帧）
-    for (let i = 0; i < 6; i++) {
-      await new Promise((r) => setTimeout(r, PUMP_WAIT_MS))
-      expect(h.cache.get('s4-disposed')).toBeUndefined()
-      expect(h.publishes).toHaveLength(0)
-    }
-  })
-
-  // ── session-service 挂点接线（态 3 事件驱动的组合根形态）──
-
-  it('session-service 集成：notifySessionActivated 驱动待启动任务（onSessionActivated 挂点接线）', async () => {
-    let clientVisible = false
-    const client = {
-      getEntries: vi.fn(async () => ({ data: { entries: [entry('e1')], leafId: 'leaf-1' } })),
-    } as unknown as IPiEngine
-    const pm = { onSessionExit: vi.fn(), getClient: vi.fn(() => (clientVisible ? client : undefined)) } as unknown as IProcessManager
-    const svc = new SessionService(
-      pm, { broadcast: vi.fn() } as unknown as IMessageBroker,
-      () => ({ attach: vi.fn(), detach: vi.fn() }) as never,
-      '/test', {} as never, {} as never,
-      {
-        scanSessions: vi.fn(() => []),
-        extractSessionOutcome: vi.fn(() => null),
-        persistSessionEnd: vi.fn(),
-        // 后台任务启动后走真实重建链（rebuildHistoryFromEntries 直通，同 makeService 形态）
-        rebuildHistoryFromEntries: vi.fn((entries: PiSessionEntry[]) => ({ messages: entries.map((e) => msg(e.id)), orphanToolResults: [] })),
-      } as never,
-      { pruneStaleCache: vi.fn() } as never, {} as never,
-    )
-
-    const first = await svc.getHistory('s4-svc-hook') // 态 3：尾读 + 登记
-    expect(first.truncated).toBe(true)
-    expect(client.getEntries).not.toHaveBeenCalled()
-
-    clientVisible = true
-    svc.notifySessionActivated({ id: 's4-svc-hook' } as never) // switch 成功分支的激活通知
-    await vi.waitFor(() => expect(client.getEntries).toHaveBeenCalledTimes(1))
-  })
-
-  // ── 验收② fixture 对拍：尾读（含 sidecar 回填）与全量切片逐条一致 ──
-
-  it('验收② fixture 对拍：尾读（含 segments sidecar 回填）与全量切片逐条一致，图片/技能 badge 不丢', async () => {
+describe('SessionHistoryReader —— 验收② fixture 对拍（索引窗口 vs 尾读兼容链）', () => {
+  it('索引窗口读取（含 segments sidecar 回填）与尾读链逐条一致，图片/技能 badge 不丢', async () => {
     const dir = fs4.mkdtempSync(path4.join(os4.tmpdir(), 'taiji-u1-fixture-'))
     const sessionId = 'fixture-session-01'
-    // dataDir 显式注入（第二参）：@taiji/shared/paths 被 vi.mock 固定到 /mock/home，
-  // 缺省推导会落 fs-guard 白名单外——对拍 fixture 的 sidecar 与 session 文件同放 mkdtemp tmp 目录
-  const sidecarPath = path4.join(getAttachmentsDir4(sessionId, dir), 'segments.json')
+    // sidecar 落共享 tmp dataDir（readSegmentsMetadataFile 缺省推导 = getAttachmentsDir(sessionId)，
+    // vitest 防线固定 tmp、fs-guard 白名单内）；session 文件在 mkdtemp fixture 目录
+    const sidecarPath = path4.join(getAttachmentsDir4(sessionId), 'segments.json')
+    let existsSpy: ReturnType<typeof vi.spyOn> | undefined
     try {
       // ── 组装 fixture：user(+image sidecar) → assistant → user(+skill sidecar) → assistant(toolCall) → toolResult ──
       const userMsg = (text: string) => ({ role: 'user', content: [{ type: 'text', text }], timestamp: 1 })
@@ -1525,7 +813,7 @@ describe('SessionHistoryReader —— getHistory 四态分派与后台全量任�
         mkEntry('e5', 'e4', { role: 'toolResult', toolCallId: 't1', toolName: 'bash', content: [{ type: 'text', text: 'OUT' }], timestamp: 4 }),
       ]
       const lines = [
-        JSON.stringify({ type: 'session', id: sessionId, version: 1 }), // session header（尾读链剥除）
+        JSON.stringify({ type: 'session', id: sessionId, version: 1 }), // session header（转换链剥除）
         ...entries.map((e) => JSON.stringify(e)),
       ]
       const filePath = path4.join(dir, `${sessionId}.jsonl`)
@@ -1538,33 +826,44 @@ describe('SessionHistoryReader —— getHistory 四态分派与后台全量任�
           { clientUuid: 'u-fix-2', segments: [{ type: 'text', text: 'second ' }, { type: 'skill', name: 'review' }], timestamp: 2 },
         ],
       }
-      fs4.mkdirSync(getAttachmentsDir4(sessionId, dir), { recursive: true })
+      fs4.mkdirSync(getAttachmentsDir4(sessionId), { recursive: true })
       fs4.writeFileSync(sidecarPath, JSON.stringify(segments))
       const metadata = JSON.parse(fs4.readFileSync(sidecarPath, 'utf-8')) as SegmentsMetadataFile
+      // 本文件 process-manager-exit 段注入的文件级 vi.mock('node:fs') 把 existsSync 钉成
+      // 恒 false——reader 的 sidecar 存在性检查会被拦（旧对拍两侧手动传 metadata 绕开，
+      // 新对拍走 reader 内部读取）。用例内恢复真实 existsSync，finally 复原不影响他段。
+      const realFs = await vi.importActual<typeof import('node:fs')>('node:fs')
+      existsSpy = vi.spyOn(fs4, 'existsSync').mockImplementation(realFs.existsSync)
 
-      // ── 全量切片基准：真实 entry 树重建 + 预算切窗（与活跃 getHistory 全量路径同链）──
-      const fileEntries = parseJsonl4(fs4.readFileSync(filePath, 'utf-8'), {}).filter(
-        (e) => typeof e === 'object' && e !== null,
-      ) as PiSessionEntry[]
-      const scoped = fileEntries.filter((e) => (e as { type?: unknown }).type !== 'session')
-      const full = rebuildHistoryFromEntries(scoped, metadata)
-      const fullWindow = applyHistoryBudgetWindow(full.messages)
+      // ── 侧 1：索引窗口读取（真实 PiSessionStore.convertHistory + scanSessions mock 指向 fixture）──
+      const { PiSessionStore } = await import('../infra/pi/session-store.js')
+      const realStore = new PiSessionStore()
+      const reader = new SessionHistoryReader({
+        pm: { getClient: vi.fn(() => undefined) } as unknown as IProcessManager,
+        sessionStore: {
+          scanSessions: vi.fn(() => [{ id: sessionId, filePath }]),
+          convertHistory: realStore.convertHistory.bind(realStore),
+        } as unknown as ISessionStore,
+      })
+      const viaIndex = await reader.getHistory(sessionId)
 
-      // ── 尾读：真实 tailReadHistory + sidecar 回填 ──
-      const tail = await tailReadHistoryReal(
-        filePath, new PiSessionStore(), HISTORY_BUDGET4.RECENT_TURNS, undefined, { segmentsMetadata: metadata },
+      // ── 侧 2：尾读兼容链（真实 tailReadHistory + 同一 sidecar 回填）──
+      const viaTail = await tailReadHistoryReal(
+        filePath, realStore, HISTORY_BUDGET4.RECENT_TURNS, undefined, { segmentsMetadata: metadata },
       )
 
-      // 逐条一致（含 segments 回填后的结构化 content）
-      expect(tail.messages).toEqual(fullWindow.messages)
+      // 逐条一致（含 segments 回填后的结构化 content——两条链同一转换出口的构造性对照）
+      expect(viaIndex.messages).toEqual(viaTail.messages)
       // 回填生效的正面断言（防「双方同错」的空等价）：图片/技能 badge 从 sidecar 还原
-      const user1 = tail.messages.find((m) => m.piEntryId === 'e1')
+      const user1 = viaIndex.messages.find((m) => m.piEntryId === 'e1')
       expect(user1?.content).toEqual(segments.entries[0]?.segments)
-      const user2 = tail.messages.find((m) => m.piEntryId === 'e3')
+      const user2 = viaIndex.messages.find((m) => m.piEntryId === 'e3')
       expect(user2?.content).toEqual(segments.entries[1]?.segments)
     } finally {
+      existsSpy?.mockRestore()
       fs4.rmSync(dir, { recursive: true, force: true })
       fs4.rmSync(sidecarPath, { force: true })
     }
   })
 });
+
