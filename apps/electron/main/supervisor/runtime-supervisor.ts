@@ -626,6 +626,11 @@ export class RuntimeSupervisor implements IRuntimeSupervisor {
   /**
    * runtime 子进程退出处理（自然崩溃路径）。
    *
+   * 不变量：进程退出即停存活探针。退出是 supervisor 已知其死的权威信号，探针不再
+   * 独立判第二次——否则退避窗口内旧探针带已死 pid tick 会 ESRCH 判 dead，经
+   * forceRestartForLiveness 产出虚假裁决（取消在途退避重启、写 target pid=null 的
+   * kill decision 与重复 crash 行、双计崩溃计数）。
+   *
    * [HISTORICAL] 核心重启编排：
    * 1. 清 child/port（幂等检查不再误判存活）
    * 2. stopping 检查（主动退出短路）
@@ -638,6 +643,8 @@ export class RuntimeSupervisor implements IRuntimeSupervisor {
   private onRuntimeExit(code: number | null): void {
     // 先捕获 pid 再清状态：杀链决策日志需要「谁死了」（u5b kill decision 的 target 语义）
     const pid = this.child?.pid
+    // 进程退出即停探针：旧探针带着已死 pid 继续 tick 会产出虚假 dead 裁决（理由见方法注释）
+    this.stopLivenessMonitor()
     // 清状态（幂等检查据此判定无活进程）；实例标识 / 目标快照随进程死亡失效
     // （防旧代快照——含其中 token——把重连目标拉回死实例）
     this.child = null

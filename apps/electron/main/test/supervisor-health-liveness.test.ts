@@ -16,11 +16,11 @@
  * 运行：cd apps/electron/main && npx vitest run test/supervisor-health-liveness.test.ts
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import type { ChildProcess } from 'node:child_process'
 
 // --- 存活探针纯函数（supervisor/liveness-probe.ts）---
 import {
   checkHealthEndpoint,
-  LIVENESS_FAIL_THRESHOLD,
   LIVENESS_PROBE_TIMEOUT_MS,
 } from '../supervisor/liveness-probe.js'
 
@@ -58,6 +58,11 @@ vi.mock('../supervisor/port-file.js', () => ({
 }))
 
 import { RuntimeSupervisor } from '../supervisor/runtime-supervisor.js'
+
+// --- supervisor 子依赖（本文件上方已 mock；此处取 mock 引用配行为）---
+import { spawnRuntimeProcess } from '../supervisor/process-control.js'
+import { waitForHealth } from '../supervisor/health-checker.js'
+import { findAvailablePort } from '../supervisor/port-discoverer.js'
 
 // --- liveness 判据分级（2026-11-03）：进程活性信号 + 四态状态机 ---
 import net from 'node:net'
@@ -129,13 +134,6 @@ describe('W5 checkHealthEndpoint 存活探针（纯函数）', () => {
 
     // 关键：探针不得向调用方抛错（supervisor 据此累计失败次数，而非崩溃）
     expect(result.ok).toBe(false)
-  })
-})
-
-// ============ 存活探针失败阈值 ============
-describe('W5 存活探针失败阈值常量', () => {
-  it('LIVENESS_FAIL_THRESHOLD=3（连续 3 次失败才触发强制重启）', () => {
-    expect(LIVENESS_FAIL_THRESHOLD).toBe(3)
   })
 })
 
@@ -337,5 +335,81 @@ describe('liveness 判据分级：forceRestartForLiveness 分级处置', () => {
     const ret = (supervisor as any).forceRestartForLiveness?.bind(supervisor)()
     expect(ret).toBeInstanceOf(Promise)
     await (ret as Promise<void>).catch(() => {})
+  })
+})
+
+// ============ liveness 探针生命周期：runtime 进程退出即停探针 ============
+describe('liveness 探针生命周期：runtime 退出即停探针', () => {
+  /**
+   * 不存在的 pid：probeProcessAlive 的 kill(pid,0) 恒 ESRCH → dead。
+   * 探针若在 runtime 退出后还在跑，此 pid 让它必然产出 dead 裁决。
+   */
+  const DEAD_PID = 999_999_999
+  /** 崩溃退避序列前三档（restart-policy：1/2/4s）：把计数推到 3，第 4 次崩溃退避 8s */
+  const FIRST_THREE_BACKOFF_MS = [1_000, 2_000, 4_000]
+  /** 第 4 次崩溃的退避窗口（8s）大于一个 tick 间隔（5s）：窗口内必中一次 tick */
+  const ONE_TICK_PLUS_MS = 6_000
+
+  /** 最小 fake 子进程：supervisor 只读 pid/exitCode/killed，终止交给 mock 的 stopRuntimeProcess */
+  function fakeChild(pid: number): ChildProcess {
+    return {
+      exitCode: null,
+      pid,
+      killed: false,
+      on: vi.fn(),
+      kill: vi.fn(),
+    } as unknown as ChildProcess
+  }
+
+  beforeEach(() => {
+    // fake timers 先于 start()：探针的 setInterval 必须注册在假时钟上（后装时钟管不到已注册的真定时器）
+    vi.useFakeTimers()
+    vi.mocked(findAvailablePort).mockResolvedValue(43211)
+    vi.mocked(spawnRuntimeProcess).mockReturnValue({
+      child: fakeChild(DEAD_PID),
+      token: 'test-token',
+      runtimeId: 'test-runtime-id',
+    })
+    vi.mocked(waitForHealth).mockResolvedValue(undefined)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    vi.mocked(findAvailablePort).mockReset()
+    vi.mocked(spawnRuntimeProcess).mockReset()
+    vi.mocked(waitForHealth).mockReset()
+  })
+
+  it('runtime 崩溃后退避窗口内旧探针不得产出虚假 dead 裁决', async () => {
+    const sup = new RuntimeSupervisor()
+    await sup.start()
+    // 探针随启动成功创建（pid 指向已不存在的进程）
+    expect((sup as unknown as { livenessMonitor: unknown }).livenessMonitor).not.toBeNull()
+
+    // 前三轮「崩溃 → 退避重启」：退避 1/2/4s 均短于一个 tick 间隔，窗口内不命中 tick
+    for (let round = 0; round < FIRST_THREE_BACKOFF_MS.length; round++) {
+      const onExit = vi.mocked(spawnRuntimeProcess).mock.calls[round]?.[1]
+      if (!onExit) throw new Error(`spawn call ${round} has no onExit callback`)
+      onExit(137)
+      await vi.advanceTimersByTimeAsync(FIRST_THREE_BACKOFF_MS[round])
+    }
+
+    // 第 4 次崩溃（信号杀死）：此刻 child 已清、退避 timer 在途（8s），探针理论上还在跑
+    const forceSpy = vi.spyOn(sup, 'forceRestartForLiveness').mockResolvedValue(undefined)
+    const onExit4 = vi.mocked(spawnRuntimeProcess).mock.calls[3]?.[1]
+    if (!onExit4) throw new Error('spawn call 3 has no onExit callback')
+    onExit4(null)
+
+    // 修复缺失时：窗口内的 tick 对已死 pid 判 dead → onUnhealthy → forceRestartForLiveness
+    await vi.advanceTimersByTimeAsync(ONE_TICK_PLUS_MS)
+    expect(forceSpy).not.toHaveBeenCalled()
+    // 状态面：exit 后探针实例即释放（无遗留 tick 源）
+    expect((sup as unknown as { livenessMonitor: unknown }).livenessMonitor).toBeNull()
+
+    // 退避窗口完整兑现：第 4 次重启照旧在 8s 后发生，崩溃计数停在 4（不被杀链双计）
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(vi.mocked(spawnRuntimeProcess)).toHaveBeenCalledTimes(5)
+    expect((sup as unknown as { policy: { count: number } }).policy.count).toBe(4)
   })
 })
