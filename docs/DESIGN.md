@@ -361,8 +361,12 @@ demo 阶段功能做到「可见 + 可交互 + 数据 mock」即够。不接 run
 ### 4.6 字体 / 字号 scale
 
 ```css
---font-sans: system-ui, 'PingFang SC', 'Helvetica Neue', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
---font-mono: 'JetBrains Mono', 'IBM Plex Mono', ui-monospace, Menlo, monospace;
+/* 两层结构（font-system D8）：槽位由 applySystemToDom 写入用户选择的家族名，
+   终值变量 = 槽位 + 构建期系统栈。槽位必须「不声明」——绝不写成 `--font-ui: ;`
+   （已声明但值为空 token 流的自定义属性不触发 var() 缺省参数，会代入空 token，
+   mono 侧前导逗号让整条声明非法，默认态就击穿全站字体栈）。 */
+--font-sans: var(--font-ui, system-ui, 'PingFang SC', 'Helvetica Neue'), 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
+--font-mono: var(--font-mono-ui, 'JetBrains Mono', 'IBM Plex Mono'), ui-monospace, Menlo, monospace;
 
 /* 字重三档（2026-10-06 对话流视觉裁决 + 整体上移一档 500/600/700）：消费方用 Tailwind 任意值类 [font-weight:var(--fw-*)] */
 --fw-text: 500;  /* 日常文字 */
@@ -371,6 +375,8 @@ demo 阶段功能做到「可见 + 可交互 + 数据 mock」即够。不接 run
 
 /* 字号 scale：--text-* = 基准px × 用户全局档位 × 分区档位（demo 固定 px，无视口档）*/
 > 2026-08-25：--font-sans 改系统栈，supersede ADR-0019 的 Inter 字体子决策（chat-visual-font-optimize）
+> 2026-11-04：字体成为可配置维度（font-system）——终值变量改为「用户槽位 + 构建期栈」两层形态，
+>   槽位由设置页写入；`--font-mono` 的权威从 Tailwind preset 硬编码收回变量（preset `mono` 键改 `['var(--font-mono)']`）
 --font-scale-u: 1;   /* 用户全局档位（AppearancePage 选：small 0.929 / medium 1.0 / large 1.143）*/
 --text-3xs: calc(10px * var(--font-scale-u));
 --text-2xs: calc(11px * var(--font-scale-u));

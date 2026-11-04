@@ -2,6 +2,8 @@
 
 状态：**CJK 三档观感核验完成（2026-10-12，核验通过，无发糊/拥挤/变形）**；三档令牌维持 500/600/700 不动。「加重」整体模式维持「等真实使用反馈」挂起（无既定时点）。登记来源：ui-signal-density 设计 D8「本轮移出本次范围」
 
+> **适用范围收窄（2026-11-04，font-system 落地）**：本核验的结论建立在「`--font-sans` 为固定构建期系统栈、macOS 命中 PingFang SC」这一前提上。字体成为可配置维度后（设置页可换界面正文字体），用户换成其他字体时的字重观感属于**该字体自身的度量事实**，不在本核验结论的覆盖范围内——本核验仍然有效，但它断言的是「默认栈下三档令牌的观感」，不是「任意字体下都成立」。若收到「换了某字体后某档位发糊/过重」的反馈，按该字体单点复核。
+
 ## 现状（终态）
 
 `packages/renderer/src/style.css` 三档字重令牌为 `--fw-text: 500` / `--fw-mid: 600` / `--fw-bold: 700`（2026-10-08 commit 28f1c8555 将 400/500/600 整体上移一档，档差不变；docs/DESIGN.md §4.6 同批回写）。正文 500、行容器/块标签/工具名 600、markdown 标题与强调 700（消费点以代码为准：`packages/ui/src/features/chat/Block.vue` 系列行头 `[font-weight:var(--fw-mid)]`、`MarkdownRenderer.vue` 标题 `--fw-bold`）。demo 的「加重」整体切换模式（各档 +100，对标 xterm fontWeight/fontWeightBold）未实现。
