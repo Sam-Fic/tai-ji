@@ -37,6 +37,9 @@ const ZH_CN: Dictionary = {
   'tray.action.abort': '中止',
   'tray.action.abortConfirm': '确认中止？',
   'tray.action.resume': '续跑',
+  // interrupted 行状态覆盖字（composer-tray-protocol D3/D8：三值枚举装不下的特殊语义
+  // 经 TreeItem.statusLabel 表达——渲染序 = statusLabel ?? 宿主按 status 枚举映射）
+  'tray.workflow.interruptedLabel': '已中断（可续跑）',
 }
 
 const EN_US: Dictionary = {
@@ -53,6 +56,10 @@ const EN_US: Dictionary = {
   'tray.action.abort': 'Abort',
   'tray.action.abortConfirm': 'Confirm abort?',
   'tray.action.resume': 'Resume',
+  // Interrupted row status override (composer-tray-protocol D3/D8: semantics beyond the
+  // closed three-value enum go through TreeItem.statusLabel — render order =
+  // statusLabel ?? host enum mapping)
+  'tray.workflow.interruptedLabel': 'Interrupted (resumable)',
 }
 
 const DICTIONARIES: Record<UiLocale, Dictionary> = {

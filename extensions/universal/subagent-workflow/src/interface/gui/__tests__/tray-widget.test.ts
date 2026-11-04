@@ -2,10 +2,15 @@
 //
 // 三视角：
 //   ①使用者（宿主 widget 区视角）——树形状：meta head（title/status/progress/icon/badge）
-//     + tab-bar 双段（进行中/已结束）行集（M3 起段内逐行「list-tree + action-bar」对）；
-//     失败轮行 label 承载 class.kind 失败分类且
-//     status=failed（§6.6 风险②「lastRound.failure 不得静默丢弃」的单测承载——原宿主
-//     托盘行的失败分类 chip 随件迁移，信息原语承载位 = TreeItem label + status 圆点）；
+//     + tab-bar 双段（进行中/已结束）行集（composer-tray-protocol D8 富行形态：行信息按
+//     协议字段承载——agent 名→label / slug→subLabel / 失败分类→subLabel，取消/重试挂行内
+//     actions 槽，不再推兄弟 action-bar 块）；
+//     树形对账用例锁定旧 label 拼接信息逐项映射到新字段不丢（RL5：§6.6 风险②
+//     「lastRound.failure 不得静默丢弃」——失败分类的原语承载位 = subLabel + status 圆点）；
+//     text 臂（TUI）自行组装完整拼接文本 `[state] agent · slug · 失败分类`——GUI 拆字段
+//     后 TUI 与 GUI 信息量等价（D8 TUI 文本臂语义）；
+//     badge/progress.label 条件 = running>0 才推（demo v3 角标规则——红色 0 根因即推送侧
+//     0 照推），progress.current/total 恒保留（面板 head 计数回落「0/2」）；
 //     行 action.hostAction 声明（M2 入口复活：drawer → ui.subagent + params.recordId，
 //     逐行取该行 record.id——AX2「面板交互能力与目标容器等价」的入口半边）；
 //   ②构建者——分桶判据（占用谓词镜像）/ 空记录清屏 / 推送器 attach 初始推送 +
@@ -107,8 +112,8 @@ function segmentComponents(component: GuiComponent, index: number): GuiComponent
   return sections[index] ?? [];
 }
 
-/** 段内行集（M3 起段 = 逐行「list-tree 行 + action-bar 操作」对——展平段内全部
- *  list-tree 的 items，与 workflow-tray-widget.test / tray-widget-buttons.test 同口径）。 */
+/** 段内行集（D8 富行形态：段 = 每行一棵单行 list-tree——展平段内全部 list-tree 的
+ *  items，与 workflow-tray-widget.test / tray-widget-buttons.test 同口径）。 */
 function segmentItems(component: GuiComponent, index: number): TreeItem[] {
   return segmentComponents(component, index)
     .filter((c) => c.type === "list-tree")
@@ -130,7 +135,7 @@ describe("buildSubagentTrayWidget 树构造（纯函数）", () => {
     expect(buildWidget([])).toBeUndefined();
   });
 
-  it("meta head：title/icon/badge/progress（badge = 进行中数，icon 点名 bot）与状态点（running>0 → running）", () => {
+  it("meta head（running>0 档）：badge/progress.label = 进行中数、progress.current/total 恒在场（icon 点名 bot）", () => {
     const result = buildWidget([
       makeRecord({ id: "r-run", status: "running", stopReason: undefined }),
       makeRecord({ id: "r-idle", status: "idle" }),
@@ -145,7 +150,28 @@ describe("buildSubagentTrayWidget 树构造（纯函数）", () => {
     });
   });
 
-  it("分桶：占用谓词命中行落进行中段，其余落已结束段；行 label = agent · slug", () => {
+  it("badge 条件（demo v3 角标规则，RL5）：running=0 → badge 与 progress.label 双缺省、progress.current/total 恒保留", () => {
+    // 红色 0 根因 = 推送侧 0 照推 + 宿主无过滤；修复在推送侧（判定信号在语义所有方）——
+    // 推送载荷里就不出现 badge/label 字段，非靠宿主渲染层过滤。
+    const result = buildWidget([
+      makeRecord({ id: "r-done-1", status: "idle" }),
+      makeRecord({
+        id: "r-fail",
+        status: "idle",
+        stopReason: "error",
+        lastRound: {
+          engineStopReason: "error",
+          failure: { class: "provider", kind: "rate_limited", retryable: "conditional", raw: "rpm 101/100" },
+        },
+      }),
+    ]);
+    const meta = result?.gui.meta;
+    expect(meta?.status).toBe("failed");
+    expect(meta).not.toHaveProperty("badge");
+    expect(meta?.progress).toEqual({ current: 0, total: 2 });
+  });
+
+  it("分桶：占用谓词命中行落进行中段，其余落已结束段；行信息按字段承载（agent→label / slug→subLabel）", () => {
     const result = buildWidget([
       makeRecord({ id: "r-run", agent: "reviewer", slug: "rev", status: "running", stopReason: undefined }),
       makeRecord({ id: "r-end", agent: "worker", slug: "wrk", status: "idle" }),
@@ -155,20 +181,39 @@ describe("buildSubagentTrayWidget 树构造（纯函数）", () => {
     const endedItems = segmentItems(result!.gui.component, 1);
     expect(runningItems).toEqual([
       {
-        label: "reviewer · rev",
+        label: "reviewer",
         status: "running",
         depth: 0,
+        subLabel: "rev",
+        actions: [
+          {
+            id: "cancel-r-run",
+            label: "取消",
+            kind: "danger",
+            commandId: "taiji.subagentCancel",
+            args: { recordId: "r-run" },
+            confirm: "确认取消？",
+          },
+        ],
         action: { hostAction: { kind: "drawer", tabId: "ui.subagent", params: { recordId: "r-run" } } },
       },
     ]);
     expect(endedItems).toEqual([
       {
-        label: "worker · wrk",
+        label: "worker",
         status: "done",
         depth: 0,
+        subLabel: "wrk",
         action: { hostAction: { kind: "drawer", tabId: "ui.subagent", params: { recordId: "r-end" } } },
       },
     ]);
+  });
+
+  it("slug 缺省（磁盘重建源旧文件兜底空串）→ 行无 subLabel 字段（不留空值分支）", () => {
+    const result = buildWidget([makeRecord({ id: "r-noslug", slug: "", status: "idle" })]);
+    const endedItems = segmentItems(result!.gui.component, 1);
+    expect(endedItems[0].label).toBe("worker");
+    expect(endedItems[0]).not.toHaveProperty("subLabel");
   });
 
   it("行 action.hostAction：drawer → ui.subagent + params.recordId = 该行 record.id（M2 入口复活）", () => {
@@ -213,7 +258,7 @@ describe("buildSubagentTrayWidget 树构造（纯函数）", () => {
     expect(failed?.gui.meta?.status).toBe("failed");
   });
 
-  it("失败分类承载（§6.6 风险②不静默丢弃）：失败轮行 label 含 class.kind 且 status=failed", () => {
+  it("树形对账（RL5）：旧 label 拼接信息逐项映射到新字段——agent→label / slug→subLabel / 失败分类→subLabel，逐项不丢", () => {
     const result = buildWidget([
       makeRecord({
         id: "r-fail",
@@ -229,11 +274,13 @@ describe("buildSubagentTrayWidget 树构造（纯函数）", () => {
     ]);
     const endedItems = segmentItems(result!.gui.component, 1);
     expect(endedItems).toHaveLength(1);
-    expect(endedItems[0].label).toContain("harness.turn_budget_exhausted");
+    // 逐项对账（旧单行拼接 `reviewer · rev · harness.turn_budget_exhausted` 的信息全集）：
+    expect(endedItems[0].label).toBe("reviewer");
+    expect(endedItems[0].subLabel).toBe("rev · harness.turn_budget_exhausted");
     expect(endedItems[0].status).toBe("failed");
   });
 
-  it("user.cancelled 是用户主动中止非失败：行不标 failed、label 不拼失败词、head 不落 failed", () => {
+  it("user.cancelled 是用户主动中止非失败：行不标 failed、subLabel 不拼失败词、head 不落 failed", () => {
     const result = buildWidget([
       makeRecord({
         id: "r-cancel",
@@ -248,7 +295,8 @@ describe("buildSubagentTrayWidget 树构造（纯函数）", () => {
       }),
     ]);
     const endedItems = segmentItems(result!.gui.component, 1);
-    expect(endedItems[0].label).toBe("worker · wrk");
+    expect(endedItems[0].label).toBe("worker");
+    expect(endedItems[0].subLabel).toBe("wrk");
     expect(endedItems[0].status).toBe("done");
     expect(result?.gui.meta?.status).toBe("done");
   });
@@ -262,7 +310,7 @@ describe("buildSubagentTrayWidget 树构造（纯函数）", () => {
     expect(segmentItems(result!.gui.component, 1)).toHaveLength(1);
   });
 
-  it("多行段逐行成对（M3 段结构）：首行无按钮 + 次行有按钮 → 段内 list-tree/action-bar 按行交替", () => {
+  it("多行段富行形态（D8）：行内操作挂行 actions 槽——段为纯 list-tree 序列、无兄弟 action-bar 块", () => {
     const result = buildWidget([
       makeRecord({ id: "r-done", agent: "worker", slug: "done", status: "idle" }),
       makeRecord({
@@ -278,27 +326,44 @@ describe("buildSubagentTrayWidget 树构造（纯函数）", () => {
       }),
     ]);
     const component = result!.gui.component;
-    // 组件序列 = 逐行「list-tree 行 + action-bar（该行有按钮时）」对：首行收尾无按钮
-    // 只推 list-tree，次行失败行带重试按钮——按钮挂次行之后（args 逐行承载，不串台）。
-    expect(segmentComponents(component, 1).map((c) => c.type)).toEqual([
-      "list-tree",
-      "list-tree",
-      "action-bar",
-    ]);
-    // 行集展平覆盖两行——旧「段取首项」断言只能看到首行，次行的段结构回归被掩盖。
+    // 段结构 = 每行一棵 list-tree（富行），无独立 action-bar 兄弟块（AX3：行内操作槽
+    // 由协议字段承载，禁止独立兄弟组件模拟）。
+    expect(segmentComponents(component, 1).map((c) => c.type)).toEqual(["list-tree", "list-tree"]);
     expect(segmentItems(component, 1)).toHaveLength(2);
-    const actionItems = (
-      segmentComponents(component, 1)[2].props as {
-        items: Array<{ id: string; label: string; commandId: string; args: Record<string, unknown> }>;
-      }
-    ).items;
-    expect(actionItems).toEqual([
+    // 重试按钮挂失败行的行内 actions（args 逐行承载，不串台）；收尾行无 actions 字段
+    const failRow = segmentItems(component, 1)[1];
+    expect(failRow.actions).toEqual([
       {
         id: "retry-r-fail",
         label: "重试",
         commandId: "taiji.subagentRetry",
         args: { slug: "rev", task: "do the thing" },
       },
+    ]);
+    expect(segmentItems(component, 1)[0]).not.toHaveProperty("actions");
+  });
+
+  it("text 臂（TUI 文本臂语义，RL5）：自行组装完整拼接文本——slug 与失败分类不随 GUI 字段拆分丢弃", () => {
+    const result = buildWidget([
+      makeRecord({ id: "r-run", agent: "reviewer", slug: "rev", status: "running", stopReason: undefined }),
+      makeRecord({
+        id: "r-fail",
+        agent: "worker",
+        slug: "wrk",
+        status: "idle",
+        stopReason: "error",
+        lastRound: {
+          engineStopReason: "error",
+          failure: { class: "provider", kind: "rate_limited", retryable: "conditional", raw: "rpm 101/100" },
+        },
+      }),
+      makeRecord({ id: "r-noslug", agent: "lone", slug: "", status: "idle" }),
+    ]);
+    // 每行 = `[state] agent · slug · 失败分类`（slug 缺省跳段）——TUI 与 GUI 信息量等价
+    expect(result?.text).toEqual([
+      "[running] reviewer · rev",
+      "[failed] worker · wrk · provider.rate_limited",
+      "[done] lone",
     ]);
   });
 });

@@ -75,13 +75,18 @@ function rowStatusOf(record: SubagentRecord): "running" | "done" | "failed" | un
   return "done";
 }
 
-/** 行 label：agent · slug · 失败分类（失败分类拼进行尾——TreeItem 无独立严重度文本
- *  字段，label 是该信息的原语承载位；迁移前宿主行的 failure chip 同为文本呈现，
- *  信息不静默丢弃，§6.6 风险②）。user.cancelled 是用户主动中止非失败（判据同源
- *  排除）：不拼失败词也不落 failed 点——拼上会与真失败同视觉，违反原宿主行的
- *  中性/危险二分（中止事实仍以「已结束」段行可见，非丢弃）。 */
+/** 行主名（composer-tray-protocol D8 富行迁移，demo v3 .cname 规格）：label 只放
+ *  agent 名——slug 与失败分类迁 subLabel 副文本位，不再「 · 」拼接单行文本。 */
 function rowLabelOf(record: SubagentRecord): string {
-  const parts = [record.agent];
+  return record.agent;
+}
+
+/** 行副文本（demo v3 .csub 规格）：slug · 失败分类。user.cancelled 是用户主动中止
+ *  非失败（failedRoundOf 判据同源排除）：不拼失败词也不落 failed 点——拼上会与真
+ *  失败同视觉，违反行的中性/危险二分（中止事实仍以「已结束」段行可见，非丢弃）。
+ *  返回空串 = 无副文本（推送侧转字段缺省，ListTree 空串同「未声明」口径）。 */
+function rowSubLabelOf(record: SubagentRecord): string {
+  const parts: string[] = [];
   if (record.slug) parts.push(record.slug);
   const failure = failedRoundOf(record)?.failure;
   if (failure !== undefined) parts.push(failureCauseLabel(failure));
@@ -134,11 +139,10 @@ function rowActionsOf(record: SubagentRecord, locale: UiLocale): ActionBarItem[]
 }
 
 /**
- * 单段清单（sections 的段 = 子树数组）：逐行「list-tree 行 + action-bar 操作」对
- * （scheduler-manager 浮层面板同款形态——仓内 action-bar 唯一消费先例，设计 AS3）。
- * 行集从「一段一棵 list-tree」改为逐行一棵：按钮 args 逐行承载该行 recordId，段级
- * 共享 action-bar 表达不了行级参数；无操作按钮的行只推 list-tree（段内零按钮时不
- * 出现空 action-bar）。
+ * 单段清单（sections 的段 = 子树数组）：富行形态（composer-tray-protocol D8）——
+ * 每行一棵单行 list-tree，行信息按协议字段承载（label 主名 / subLabel 副文本 /
+ * actions 行内操作槽），行内取消/重试不再推兄弟 action-bar 块（AX3：视觉层级由
+ * 协议字段显式承载，禁止独立兄弟组件模拟）。
  *
  * 行 action（M2 入口复活）：声明 hostAction 后行渲染为可点原生 button，点击经宿主容器
  * 导航执行器打开右抽屉 subagent tab 并用 params.recordId 定位该子代理（drawer.tab 族
@@ -149,6 +153,8 @@ function rowActionsOf(record: SubagentRecord, locale: UiLocale): ActionBarItem[]
 function traySegment(records: readonly SubagentRecord[], locale: UiLocale): GuiComponent[] {
   const children: GuiComponent[] = [];
   for (const record of records) {
+    const subLabel = rowSubLabelOf(record);
+    const actions = rowActionsOf(record, locale);
     children.push(
       guiComponent("list-tree", {
         items: [
@@ -156,6 +162,10 @@ function traySegment(records: readonly SubagentRecord[], locale: UiLocale): GuiC
             label: rowLabelOf(record),
             status: rowStatusOf(record),
             depth: 0,
+            // 空串 = 无副文本/无行内操作 → 字段缺省（与 confirm「空串 = 未声明」同口径，
+            // 不给宿主渲染层留空值分支）
+            ...(subLabel !== "" ? { subLabel } : {}),
+            ...(actions.length > 0 ? { actions } : {}),
             // satisfies 而非 as const：保字面量窄化（kind 须落在 'overlay'|'drawer' 联合）同时
             // 受 HostContainerAction 契约校验——裸对象字面量在宽泛上下文里会被拓宽成 string。
             action: {
@@ -169,19 +179,25 @@ function traySegment(records: readonly SubagentRecord[], locale: UiLocale): GuiC
         ],
       }),
     );
-    const actions = rowActionsOf(record, locale);
-    if (actions.length > 0) {
-      children.push(guiComponent("action-bar", { items: actions }));
-    }
   }
   return children;
+}
+
+/** TUI text 臂行组装（D8 TUI 文本臂语义，R1 修复轮）：GUI 行拆字段后 text 臂自行
+ *  组装完整拼接文本 `agent · slug · 失败分类`——slug/失败分类不随 GUI 字段拆分静默
+ *  丢弃，TUI 与 GUI 信息量等价（独立 pi CLI 用户经 setWidgetDual 的 text 分支呈现）。 */
+function rowTextOf(record: SubagentRecord): string {
+  const parts = [record.agent];
+  const sub = rowSubLabelOf(record);
+  if (sub !== "") parts.push(sub);
+  return parts.join(" · ");
 }
 
 /** TUI 文本臂（pi 原生 widget 行——非 rpc/TUI 模式经 setWidgetDual 的 text 分支呈现）。 */
 function trayTextLines(records: readonly SubagentRecord[]): string[] {
   return records.map((record) => {
     const state = isRunningProjection(record) ? "running" : failedRoundOf(record) ? "failed" : "done";
-    return `[${state}] ${rowLabelOf(record)}`;
+    return `[${state}] ${rowTextOf(record)}`;
   });
 }
 
@@ -192,13 +208,13 @@ type MetaStatus = NonNullable<import("@zhushanwen/extension-protocol").WidgetMet
  * 托盘 widget 双模内容（meta head + tab-bar 双段，形态对齐 todo 的双段架构与原宿主
  * 托盘两桶语义「进行中 / 已结束」）：
  * - gui 臂 meta：宿主壳层唯一渲染 head（标题/状态点/进度/icon/badge）；status = running>0
- *   亮运行态（宿主呼吸点），有失败轮落 failed，否则 done；badge/progress = 进行中条数
- *   （托盘 `[bot N]` 计数语义与原宿主按钮角标同源）；icon 点名 'bot'（宿主
+ *   亮运行态（宿主呼吸点），有失败轮落 failed，否则 done；badge/progress.label = 进行中
+ *   条数且 running>0 才推（demo v3 角标规则，见构造函数内注释）；icon 点名 'bot'（宿主
  *   WIDGET_ICON_ENTRIES 在册）。
  * - gui 臂内容 = tab-bar 双段互斥覆盖全量：运行中段 = 占用谓词命中行；已结束段 = 其余
- *   （含失败轮——失败分类在行 label 承载，状态点 failed 红，不静默丢弃）。段内逐行
- *   「list-tree 行 + action-bar 操作」对：running 行带取消按钮、failed 行（任务原文
- *   在场）带重试按钮，commandId 指向宿主薄命令（M3，见 rowActionsOf）。
+ *   （含失败轮——失败分类在行 subLabel 副文本承载，状态点 failed 红，不静默丢弃）。
+ *   段内富行形态：running 行带行内取消 actions、failed 行（任务原文在场）带行内重试
+ *   actions，commandId 指向宿主薄命令（M3，见 rowActionsOf）。
  * - text 臂 = TUI 原生文本行（setWidgetDual 模式分派到非 rpc 臂的呈现）。
  * - 空记录 → undefined（调用方按清屏语义推 setWidgetDual(…, undefined)——与 todo
  *   空列表清屏同款，宿主 widget 区「有 entry 即渲染、清屏即消失」）。
@@ -217,6 +233,12 @@ export function buildSubagentTrayWidget(
   const hasFailure = ended.some((r) => failedRoundOf(r) !== undefined);
   const status: MetaStatus =
     running.length > 0 ? "running" : hasFailure ? "failed" : "done";
+  // demo v3 角标规则（D8，PR5 红色 0 根因 = 推送侧 0 照推 + 宿主无过滤）：running>0
+  // 才推 badge 与 progress.label 计数文本；0 时双不推（判定信号在语义所有方——宿主
+  // 无法区分「0 有语义」与「0 无语义」，不采用宿主渲染层过滤）。0 时面板 head 计数
+  // 回落 current/total 拼接（「0/2」）、迷你进度条 0% 照常（progress.current/total
+  // 恒保留，宿主 progressLabel 缺省链）。
+  const runningCountText = running.length > 0 ? String(running.length) : undefined;
   return {
     gui: guiResult(
       guiComponent("tab-bar", {
@@ -233,10 +255,10 @@ export function buildSubagentTrayWidget(
         progress: {
           current: running.length,
           total: records.length,
-          label: String(running.length),
+          ...(runningCountText !== undefined ? { label: runningCountText } : {}),
         },
         icon: "bot",
-        badge: String(running.length),
+        ...(runningCountText !== undefined ? { badge: runningCountText } : {}),
       },
     ),
     text: trayTextLines(records),

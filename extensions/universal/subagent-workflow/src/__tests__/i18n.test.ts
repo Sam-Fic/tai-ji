@@ -27,7 +27,7 @@ import {
   type UiLocale,
 } from "../i18n.ts";
 
-/** 托盘面板全部文案键（标题 / 分段标签 / 行内操作按钮与确认文案）——新增键必须同批补两侧词典。 */
+/** 托盘面板全部文案键（标题 / 分段标签 / 行内操作按钮与确认文案 / interrupted 状态覆盖字）——新增键必须同批补两侧词典。 */
 const TRAY_COPY_KEYS = [
   "tray.subagent.title",
   "tray.workflow.title",
@@ -39,6 +39,7 @@ const TRAY_COPY_KEYS = [
   "tray.action.abort",
   "tray.action.abortConfirm",
   "tray.action.resume",
+  "tray.workflow.interruptedLabel",
 ] as const;
 
 describe("subagent-workflow i18n（D9 消费端）", () => {
@@ -90,6 +91,8 @@ describe("subagent-workflow i18n（D9 消费端）", () => {
     expect(t("tray.action.abortConfirm", undefined, "en-US")).toBe("Confirm abort?");
     expect(t("tray.action.retry", undefined, "en-US")).toBe("Retry");
     expect(t("tray.action.resume", undefined, "en-US")).toBe("Resume");
+    expect(t("tray.workflow.interruptedLabel", undefined, "zh-CN")).toBe("已中断（可续跑）");
+    expect(t("tray.workflow.interruptedLabel", undefined, "en-US")).toBe("Interrupted (resumable)");
   });
 
   it("t() 回落链：locale 命中 → 键缺失回落键名（禁空串）；缺参占位符原样保留", () => {

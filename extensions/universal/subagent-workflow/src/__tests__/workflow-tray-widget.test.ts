@@ -3,16 +3,23 @@
 //
 // 三视角（与 subagent 件 tray-widget.test 同族）：
 //   ①使用者（宿主 widget 区视角）——树形状：meta head（title/status/progress/icon/badge）
-//     + tab-bar 双段（进行中/已结束）行集；成员进度 N/M 拼进行 label（list-tree 无进度
-//     条原语——原宿主托盘 workflow 行的进度条信息经 label 承载，不静默丢弃）；interrupted
-//     落已结束段（无活体暂停态不算进行中，原宿主 [D2] 裁决同口径）且行无圆点 pause 图标；
+//     + tab-bar 双段（进行中/已结束）行集（composer-tray-protocol D8 富行形态：行信息按
+//     协议字段承载——run 名→label / slug→subLabel / 成员进度 N/M→subLabel，中止/续跑挂
+//     行内 actions 槽，不再推兄弟 action-bar 块；interrupted 经 statusLabel 覆盖字表达
+//     「已中断（可续跑）」——三值枚举装不下的语义，D3/D8）；树形对账用例锁定旧 label
+//     拼接信息逐项映射到新字段不丢（RL5）；interrupted 落已结束段（无活体暂停态不算
+//     进行中，原宿主 [D2] 裁决同口径）且行无圆点 pause 图标；badge/progress.label =
+//     running>0 才推（demo v3 角标规则），progress.current/total 恒保留；
 //     行 action.hostAction 声明（M2 入口复活：overlay → ui.workflow + params.runId，逐行取
 //     该行 run.runId——workflow 可视化的第一用户入口，G3 零入口问题的单测承载）；
+//     text 臂（TUI）自行组装完整拼接文本 `[state] name · slug · N/M`——GUI 拆字段后
+//     TUI 与 GUI 信息量等价（D8 TUI 文本臂语义）；
 //   ②构建者——空 runs 清屏（undefined）/ 推送器 attach 初始推送 + notifyRunsChanged
 //     变更驱动重推（微任务合并）+ detach 停推；readRuns 抛错按清屏投影不反噬调用方。
 //   ②b restore 冷读收敛（[fix-tray-restore]）——内存投影空时磁盘折叠补装（每 attach
-//     一次预算）后重读投影：重建产物含 interrupted 行（已结束段 + 续跑按钮）；折叠
-//     无新增/抛错按清屏继续；内存非空不触发折叠（正常路径零磁盘 IO）；attach 复位预算。
+//     一次预算）后重读投影：重建产物含 interrupted 行（已结束段 + 行内续跑 actions +
+//     statusLabel 覆盖字）；折叠无新增/抛错按清屏继续；内存非空不触发折叠（正常路径
+//     零磁盘 IO）；attach 复位预算。
 //   ③观察者——纯函数入参出参；推送失败 warn 留痕后继续（绝对投影，下一事件自愈）。
 //
 // WorkflowRun fixture 用真聚合根（WorkflowRun.reconstruct——runSummary/calls 派生消费
@@ -123,8 +130,8 @@ function makeRun(opts: {
   return run;
 }
 
-/** tab-bar 树的段 items 提取（M3 起段 = 逐行「list-tree 行 + action-bar 操作」对，
- *  行集展平段内全部 list-tree——scheduler-manager 同款逐行形态）。 */
+/** tab-bar 树的段 items 提取（D8 富行形态：段 = 每行一棵单行 list-tree，行集展平段内
+ *  全部 list-tree——scheduler-manager 同款富行形态）。 */
 function segmentItems(component: GuiComponent, index: number): TreeItem[] {
   expect(component.type).toBe("tab-bar");
   const sections = (component.props as { sections?: GuiComponent[][] }).sections ?? [];
@@ -132,16 +139,6 @@ function segmentItems(component: GuiComponent, index: number): TreeItem[] {
   return seg
     .filter((c) => c.type === "list-tree")
     .flatMap((c) => (c.props as { items: TreeItem[] }).items);
-}
-
-/** 段内 action-bar 的 items 提取（逐行成对形态中与 list-tree 交替的按钮承载位）。 */
-function segmentActionBarItems(component: GuiComponent, index: number): Array<Record<string, unknown>> {
-  expect(component.type).toBe("tab-bar");
-  const sections = (component.props as { sections?: GuiComponent[][] }).sections ?? [];
-  const seg = sections[index] ?? [];
-  return seg
-    .filter((c) => c.type === "action-bar")
-    .flatMap((c) => (c.props as { items: Array<Record<string, unknown>> }).items);
 }
 
 /** 微任务清空（push 异步化的折叠 await 链：微任务边界数轮冲刷后断言）。 */
@@ -188,7 +185,7 @@ describe("buildWorkflowTrayWidget —— 树构造（使用者视角）", () => 
     expect(meta.progress).toEqual({ current: 1, total: 1, label: "1" });
   });
 
-  it("行 label 携带成员进度 N/M（原宿主进度条信息的原语承载位，不静默丢弃）", () => {
+  it("树形对账（RL5）：旧 label 拼接信息逐项映射到新字段——run 名→label / slug→subLabel / 成员进度→subLabel，逐项不丢", () => {
     const widget = workflowWidget([
       makeRun({
         runId: "wf-run-2",
@@ -199,10 +196,12 @@ describe("buildWorkflowTrayWidget —— 树构造（使用者视角）", () => 
       }),
     ]);
     const running = segmentItems(widget!.gui.component, 0);
-    expect(running[0].label).toBe("ship · v2 · 2/3");
+    // 逐项对账（旧单行拼接 `ship · v2 · 2/3` 的信息全集）
+    expect(running[0].label).toBe("ship");
+    expect(running[0].subLabel).toBe("v2 · 2/3");
   });
 
-  it("done(completed) run → 已结束段（status=done）；interrupted run 落已结束段且无圆点 pause", () => {
+  it("done(completed) run → 已结束段（status=done）；interrupted run 落已结束段、pause 图标 + statusLabel 覆盖字（D3/D8，RL5）", () => {
     const widget = workflowWidget([
       makeRun({ runId: "wf-run-3", scriptName: "ok", status: "done", reason: "completed" }),
       makeRun({ runId: "wf-run-4", scriptName: "halt", status: "running", interrupted: true }),
@@ -210,9 +209,21 @@ describe("buildWorkflowTrayWidget —— 树构造（使用者视角）", () => 
     const ended = segmentItems(widget!.gui.component, 1);
     expect(ended).toHaveLength(2);
     expect(ended[0].status).toBe("done");
-    // interrupted：无圆点（不作成败断言）+ pause 图标
+    expect(ended[0].statusLabel).toBeUndefined();
+    // interrupted：无圆点（不作成败断言）+ pause 图标 + statusLabel 覆盖字（三值枚举
+    // 装不下的特殊语义——渲染序 = statusLabel ?? 宿主枚举映射，宿主侧无枚举可映射）
     expect(ended[1].status).toBeUndefined();
     expect(ended[1].icon).toBe("pause");
+    expect(ended[1].statusLabel).toBe("已中断（可续跑）");
+  });
+
+  it("running/done 行不推 statusLabel（覆盖字只承载枚举外语义——三值枚举行走宿主 i18n 映射档）", () => {
+    const widget = workflowWidget([
+      makeRun({ runId: "wf-run-live", scriptName: "build", status: "running", calls: [{ settled: false }] }),
+      makeRun({ runId: "wf-run-ok", scriptName: "ok", status: "done", reason: "completed" }),
+    ]);
+    expect(segmentItems(widget!.gui.component, 0)[0].statusLabel).toBeUndefined();
+    expect(segmentItems(widget!.gui.component, 1)[0].statusLabel).toBeUndefined();
   });
 
   it("failed 终局 → 行 status=failed + meta status=failed（失败可见不吞）", () => {
@@ -222,6 +233,17 @@ describe("buildWorkflowTrayWidget —— 树构造（使用者视角）", () => 
     const ended = segmentItems(widget!.gui.component, 1);
     expect(ended[0].status).toBe("failed");
     expect(widget!.gui.meta.status).toBe("failed");
+  });
+
+  it("badge 条件（demo v3 角标规则，RL5）：running=0 → badge 与 progress.label 双缺省、progress.current/total 恒保留", () => {
+    const widget = workflowWidget([
+      makeRun({ runId: "wf-run-ok", scriptName: "ok", status: "done", reason: "completed" }),
+      makeRun({ runId: "wf-run-halt", scriptName: "halt", status: "running", interrupted: true }),
+    ]);
+    const meta = widget!.gui.meta;
+    expect(meta.status).toBe("done");
+    expect(meta).not.toHaveProperty("badge");
+    expect(meta.progress).toEqual({ current: 0, total: 2 });
   });
 
   it("空 runs → undefined（清屏语义；调用方推 setWidgetDual(…, undefined)）", () => {
@@ -252,7 +274,7 @@ describe("buildWorkflowTrayWidget —— 树构造（使用者视角）", () => 
     }
   });
 
-  it("text 臂 = TUI 原生文本行（[status] 前缀 + 行 label）", () => {
+  it("text 臂（TUI 文本臂语义，RL5）：自行组装完整拼接文本 `[status] name · slug · N/M`——不随 GUI 字段拆分丢弃", () => {
     const widget = workflowWidget([
       makeRun({ runId: "wf-run-6", scriptName: "build", status: "running" }),
     ]);
@@ -362,12 +384,15 @@ describe("createWorkflowTrayWidgetPusher —— 磁盘折叠冷读收敛（[fix-
     expect(setWidgetDualMock).toHaveBeenCalledTimes(1);
     const pushed = setWidgetDualMock.mock.calls[0]![2];
     expect(pushed).toBeDefined();
-    // interrupted 重建行落已结束段 + 行内续跑按钮（任务书目标 1 的投影形态；推送器
-    // 路径 locale = readUiLocale 回落 en-US——与 subagent 件推送器路径断言同口径）
+    // interrupted 重建行落已结束段：富行字段（label 主名 / subLabel 副文本）+ statusLabel
+    // 覆盖字 + 行内续跑 actions（任务书目标 1 的投影形态；推送器路径 locale = readUiLocale
+    // 回落 en-US——与 subagent 件推送器路径断言同口径）
     const ended = segmentItems(pushed.gui.component, 1);
-    expect(ended.map((item) => item.label)).toContain("fanout-canary · canary · 0/0");
-    const buttons = segmentActionBarItems(pushed.gui.component, 1);
-    const resume = buttons.find((item) => item.id === "resume-wf-restore-int");
+    const interruptedRow = ended.find((item) => item.label === "fanout-canary");
+    expect(interruptedRow).toBeDefined();
+    expect(interruptedRow!.subLabel).toBe("canary · 0/0");
+    expect(interruptedRow!.statusLabel).toBe("Interrupted (resumable)");
+    const resume = interruptedRow!.actions?.find((item) => item.id === "resume-wf-restore-int");
     expect(resume).toBeDefined();
     expect(resume!.label).toBe("Resume");
     expect(resume!.commandId).toBe("taiji.workflowResume");

@@ -95,9 +95,12 @@ async function openWidgetPanel(page: Page, viewId: 'subagent' | 'workflow'): Pro
   return panel
 }
 
-/** 面板内的 list-tree 行集（行声明 action.hostAction 后渲染为原生 button，按根 testid + button 定位） */
+/** 面板内的 list-tree 行集：行声明 action.hostAction 后渲染为原生 button（行按钮 testid
+ *  = gui-list-tree-action-<i>，ListTree 渲染契约）；composer-tray-protocol M3 富行迁移后
+ *  行内操作（中止/续跑）挂行 actions 槽内嵌渲染——不匹配行按钮 testid 前缀，不混计入行数
+ *  （旧口径 locator('button') 会把行内按钮计入行数）。 */
 function workflowRows(panel: Locator): Locator {
-  return panel.getByTestId('gui-list-tree').locator('button')
+  return panel.getByTestId('gui-list-tree').locator('[data-testid^="gui-list-tree-action-"]')
 }
 
 async function selectSessionInSidebar(page: Page, label: string): Promise<void> {
