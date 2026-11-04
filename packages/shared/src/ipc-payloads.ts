@@ -389,3 +389,31 @@ export interface QuotaRefreshCookieResult {
   cookie?: string
   error?: string
 }
+
+// ── 自定义字体文件字节读取（READ_FONT_BYTES = 'font:read-bytes' invoke 通道）
+//    [font-system §3.3 D10，u-foundation] ───────────────────────
+
+/**
+ * `font:read-bytes` 请求 payload（renderer → main）。
+ *
+ * `path` 是**半可信输入**（来自 `pickFile` 返回值或 `fontLibrary[].path` 重放值）：main 侧
+ * 必须先做凭据目录禁区判定（符号链接解析后的真实路径）+ 内容三关校验（扩展名 / 字节数 /
+ * magic bytes），校验通过才读字节——校验拒绝与读盘失败包成 `ok: false` 的 reason 返回，
+ * 不向 renderer 抛 invoke rejection。
+ */
+export interface ReadFontBytesPayload {
+  /** 字体文件绝对路径 */
+  path: string
+}
+
+/**
+ * `font:read-bytes` 返回（renderer → main → renderer）。
+ *
+ * - `ok: true`  → `bytes` 携带字体文件字节，renderer 直接 `new FontFace(family, bytes)`
+ * - `ok: false` → `reason` 是一句**人可读的失败原因**（如「不是受支持的字体文件」/
+ *   「文件过大」/「无法读取，可能已损坏」），**不是错误码枚举**——它直接用于导入失败
+ *   提示与重放失效标注文案，消费方无需维护码 → 文案映射表。
+ */
+export type ReadFontBytesResult =
+  | { ok: true; bytes: Uint8Array }
+  | { ok: false; reason: string }

@@ -111,6 +111,26 @@ export const LOCAL_FILE_SERVABLE = 'localFile:servable' as const
  */
 export const LOCAL_FILE_READ = 'localFile:read' as const
 
+// ── font:* 族（用户导入字体文件字节读取）────────────────────────────────────
+
+/**
+ * 自定义字体文件字节读取通道 [font-system §3.3 D10]。
+ *
+ * invoke 通道：renderer（`FileFontSource` 导入动作与启动重放两条路径）持**绝对路径**
+ * 经此委托 main 读字体文件字节，返回 `Uint8Array` 供 `new FontFace(family, buffer)` +
+ * `document.fonts.add()` 注册。renderer 是无 Node 的浏览器沙箱（nodeIntegration=false /
+ * contextIsolation=true）没有 fs；且不复用 `localFile:read`——该通道准入前缀被刻意收窄
+ * 为会话产物子树，用户任意选中的字体文件不在其内。
+ *
+ * **准入模型 = 无状态内容校验，不做「本次选择」白名单**：白名单会与 D11 的启动重放
+ * （按 `fontLibrary[].path` 重读，无「本次选择」概念）在状态模型上互斥。三关校验
+ * （扩展名 ∈ {ttf,otf,woff,woff2} / ≤20MB / magic bytes 匹配）+ 凭据目录禁区
+ * （`~/.ssh` / `~/.aws` / `~/Library/Keychains` / `<dataDir>/agent/**` 解析真实路径后拒绝）
+ * 均在 main handler 侧执行；系统字体目录不禁（`~/Library/Fonts` 是合法来源）。
+ * 选冒号式 `font:*`：对齐 'image-cache:*' / 'quota:*' 领域族惯例。
+ */
+export const READ_FONT_BYTES = 'font:read-bytes' as const
+
 // ── runtime 域（端口 / token / 启动失败 / 重启）──────────────────────────────
 // 生产点：main gateway/bridge-handlers（invoke 族）+ supervisor（推送族）；
 // 消费点：preload electronAPI + renderer 连接编排（use-connection / transport）。

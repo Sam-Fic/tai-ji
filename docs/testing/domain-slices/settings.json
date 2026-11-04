@@ -10,7 +10,8 @@
   ],
   "scope": {
     "renderer": [
-      "packages/renderer/src/components/settings/**"
+      "packages/renderer/src/components/settings/**",
+      "packages/renderer/src/features/fonts/**"
     ],
     "ui": [
       "packages/ui/src/features/settings/**"

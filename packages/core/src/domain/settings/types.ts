@@ -43,6 +43,48 @@ export interface SystemSettings {
   successSound?: string
   /** 失败完成提示音：语义同 successSound，默认 mac=Funk / win=Windows Notify Email / linux=message-new-instant */
   errorSound?: string
+  /**
+   * 字体选择（font-system §3.3 D2/D3）：槽位 → 字体家族名。
+   * 核心层只存家族名字符串（如 'Maple Mono'），不存路径、不存来源类型、不存字重映射——
+   * 系统已装字体在 API 层根本不提供路径（`queryLocalFonts()` 只有 family/style/blob），
+   * 存路径会让两种来源的数据模型分裂（D3）。字体文件位置的知识完全归来源层。
+   * 缺省（字段省略 / 槽位省略）= 落到构建期系统栈（style.css 的 var() 缺省参数）。
+   */
+  fonts?: FontsConfig
+  /**
+   * 用户导入的字体登记表（font-system §3.3 D11）：启动时按表重放注册为可用字体。
+   * 唯一写方 = 用户导入/删除动作；启动重放只读不写。
+   */
+  fontLibrary?: FontLibraryEntry[]
+}
+
+/**
+ * 字体选择槽位（font-system §3.3 D2）：两个独立槽位各存一个家族名。
+ *
+ * 两个槽位是兄弟字段——写入时必须 spread 既有值（`{ ...settings.fonts, ui }`），
+ * 照抄 fontScales 的整体替换模式而漏 spread 会互相清空。
+ */
+export interface FontsConfig {
+  /** 界面正文字体家族名；省略 = 构建期系统栈 */
+  ui?: string
+  /** 代码与等宽字体家族名；省略 = 构建期等宽栈 */
+  mono?: string
+}
+
+/**
+ * 导入字体登记项（font-system §3.3 D11）。
+ *
+ * **只有三个字段**（不加 `byteSize`：校验发生在读字节时，持久化值在源文件被替换后会失真，
+ * 构成第二权威；不加 `source`：v1 只有 file 一种；不加 `broken`：失效标注是本次会话内的
+ * 内存态，写进本表会造成「重放只读不写」的自相矛盾）。
+ */
+export interface FontLibraryEntry {
+  /** 用户可见的家族名（导入时派生；与系统字体同名时改名） */
+  family: string
+  /** 源文件绝对路径——**仅供来源层重建使用（启动重放按它重读字节），渲染路径不读** */
+  path: string
+  /** 导入时刻毫秒 epoch（列表按导入时间倒序） */
+  addedAt: number
 }
 
 /** 外观模式：暗色 / 亮色 / 跟随系统（与 SystemSettings.theme 对齐） */
