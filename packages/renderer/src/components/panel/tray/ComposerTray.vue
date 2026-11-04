@@ -439,7 +439,7 @@ const viewHostSource = inject(VIEW_HOST_SOURCE_KEY, null)
  * placement 过滤（composer-tray-protocol D1 / AX1 展示位资格公理）：托盘是声明制容器，
  * 只渲染条目带托盘章（placement === 'composer.tray'）的条目——扩展源由 bridge 写入点统一
  * 盖印（API 即声明），插件源由 runtime 按清单声明盖印随帧携带；非托盘位（drawer.tab 等）、
- * 未声明（旧帧无章）与坏 placement 值一律不出按钮（第三道防线语义：存储资格由 runtime
+ * 未声明（旧帧无章）与坏 placement 值一律不出按钮（兜底防线语义：存储资格由 runtime
  * 写入校验承担，此处过滤保证「存储里有什么」与「托盘出什么」解耦）。
  */
 const widgetItems = computed<WidgetItem[]>(() => {

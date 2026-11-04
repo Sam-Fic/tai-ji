@@ -274,11 +274,11 @@ describe("buildWorkflowTrayWidget —— 树构造（使用者视角）", () => 
     }
   });
 
-  it("text 臂（TUI 文本臂语义，RL5）：自行组装完整拼接文本 `[status] name · slug · N/M`——不随 GUI 字段拆分丢弃", () => {
+  it("text 臂（TUI 文本臂语义，RL5）：自行组装完整拼接文本 `[status] name · slug · N/M`——不随 GUI 字段拆分丢弃（含 slug 段）", () => {
     const widget = workflowWidget([
-      makeRun({ runId: "wf-run-6", scriptName: "build", status: "running" }),
+      makeRun({ runId: "wf-run-6", scriptName: "build", status: "running", slug: "ci" }),
     ]);
-    expect(widget!.text).toEqual(["[running] build · 0/0"]);
+    expect(widget!.text).toEqual(["[running] build · ci · 0/0"]);
   });
 
   it("runSummary 派生视图单源（行状态 = core 三态投影，不经本地第二套判定）", () => {

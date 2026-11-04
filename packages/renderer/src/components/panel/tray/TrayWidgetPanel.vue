@@ -158,8 +158,9 @@ const progressFillClass = computed(() => {
 
 /**
  * [RD-2#8] 进度数值有限性闸：第三方 widget 的 meta.progress.current/total 非有限
- * （NaN/Infinity）→ 无进度可画。ViewHostStore.narrowMeta 只校验 title 是 string，
- * progress 深度字段由本消费端按可选处理——这里是协议指定的数值把关层，非纯纵深防御。
+ * （NaN/Infinity）→ 无进度可画。ViewHostStore.narrowMeta 按锚四字段族（title/badge/
+ * status/progress）做最小形状校验、非法形状丢弃，progress 深度字段（current/total
+ * 数值有限性）由本消费端把关——这里是协议指定的数值把关层，非纯纵深防御。
  */
 const progressFinite = computed(() => {
   const p = props.meta?.progress
