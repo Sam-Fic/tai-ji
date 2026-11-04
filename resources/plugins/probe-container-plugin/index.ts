@@ -9,8 +9,10 @@
  * - S2/A2：probe.panel（overlay.content）声明 + headerAction activation
  *   {kind:'overlay', tabId:'probe.panel'} → 浮层标签条派生「探针浮层」段，
  *   头部按钮点击经容器导航执行器开浮层并渲染本插件推树；
- * - S3/A3：list-tree item.hostAction 双向导航（抽屉树 → 开浮层；浮层树 → 开抽屉）
- *   + params 标量透传（unknownKey 反例 → §5.4 行 8 未知键 warning、动作照常）；
+ * - S3/A3：list-tree 行 action.hostAction 嵌套位双向导航（抽屉树 → 开浮层；浮层树 → 开抽屉）
+ *   + params 标量透传（unknownKey 反例 → §5.4 行 8 未知键 warning、动作照常）——导航声明
+ *   必须落在 TreeItem.action.hostAction 嵌套位（渲染层 hasAction 判据只读该位，顶层
+ *   hostAction 无兼容读取路径，2026-11-04 修复前曾因此点不动）；
  * - S4/A4：probe.bad（placement=nonexistent.slot）→ 不可用声明（不派生进任何容器，
  *   插件管理页标记 + §5.4 行 2 warning）；
  * - A8/S8：无禁用/卸载分支由 verify 剧本经宿主操作驱动（本插件被动配合重放）。
@@ -48,13 +50,13 @@ function buildDrawerTree(sessionId: string): GuiComponent[] {
         items: [
           {
             id: 'probe-row-open-overlay',
-            label: '打开探针浮层（hostAction → overlay.content）',
-            hostAction: { kind: 'overlay', tabId: OVERLAY_VIEW_ID },
+            label: '打开探针浮层（action.hostAction → overlay.content）',
+            action: { hostAction: { kind: 'overlay', tabId: OVERLAY_VIEW_ID } },
           },
           {
             id: 'probe-row-unknown-params',
             label: '未知参数反例（§5.4 行 8：warning + 动作照常）',
-            hostAction: { kind: 'drawer', tabId: VIEW_ID, params: { unknownKey: 1 } },
+            action: { hostAction: { kind: 'drawer', tabId: VIEW_ID, params: { unknownKey: 1 } } },
           },
         ],
       },
@@ -75,8 +77,8 @@ function buildOverlayTree(): GuiComponent[] {
         items: [
           {
             id: 'probe-row-open-drawer',
-            label: '回到探针面板（hostAction → drawer.tab）',
-            hostAction: { kind: 'drawer', tabId: VIEW_ID },
+            label: '回到探针面板（action.hostAction → drawer.tab）',
+            action: { hostAction: { kind: 'drawer', tabId: VIEW_ID } },
           },
         ],
       },
