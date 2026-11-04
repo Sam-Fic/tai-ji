@@ -58,6 +58,19 @@ export default {
       succeeded: 'Succeeded',
       failed: 'Failed',
     },
+    /**
+     * Closed-enum mapping for list-tree row status pills (composer-tray-protocol D3):
+     * host i18n fallback for the protocol's three-value TreeItem.status set, consumed by
+     * the ListTree primitive; the pusher's statusLabel field is the first-tier override
+     * (render order = override ?? mapping). Distinct family from `status` above (bash
+     * process-domain six states): this maps only the protocol status enum — judging
+     * lives with the pusher, not an extension of the bash status vocabulary.
+     */
+    statusLabel: {
+      running: 'Running',
+      done: 'Done',
+      failed: 'Failed',
+    },
     /** Panel top banners (bash) */
     corruptBanner: 'Task data corrupted; ignored (.corrupt snapshot kept)',
     disconnectBanner: 'Disconnected; refreshes automatically after reconnect',

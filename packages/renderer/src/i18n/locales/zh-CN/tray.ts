@@ -60,6 +60,17 @@ export default {
       succeeded: '已成功',
       failed: '已失败',
     },
+    /**
+     * list-tree 行状态胶囊的封闭枚举映射（composer-tray-protocol D3）：TreeItem.status
+     * 三值协议封闭集的宿主 i18n 兜底文案，ListTree 原语消费；推送方 statusLabel 字段为
+     * 第一档覆盖（渲染序 = 覆盖 ?? 映射）。与上方 status（bash 进程域六态）不同族——
+     * 本表只映射协议状态枚举，判定权在推送方，不是 bash 状态词表的延伸。
+     */
+    statusLabel: {
+      running: '运行中',
+      done: '已结束',
+      failed: '失败',
+    },
     /** 面板顶部提示条（bash） */
     corruptBanner: '任务数据损坏，已忽略（.corrupt 保留现场）',
     disconnectBanner: '连接断开，重连后自动刷新',

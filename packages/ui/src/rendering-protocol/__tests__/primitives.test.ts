@@ -22,6 +22,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, ref } from 'vue';
 // 机械合并产物（同目录合并，vi.mock 相对路径不变）；源文件见各节横幅。重名顶层标识符已加 _mN 后缀。
 
+// ── ListTree 富行 i18n mock（composer-tray-protocol M2b / RL4-2）────
+// 字典 = panel.tray.statusLabel.* 三枚举键（键位与文案锚定 renderer zh-CN/tray.ts
+// statusLabel 子树的现行值；该文件在 renderer 包、跨包 import 违反本包 tsconfig
+// rootDir，故此处手写同值——文案演进时两处同步，renderer 侧组件测试经
+// vitest-i18n-setup 从真实 locale 取值，兜住真实文案正确性）。
+// 文件级覆盖 vitest.setup.ts 的「返回 key」全局口径：仅本文件 useI18n 消费方（ListTree）
+// 受影响，其余原语（Actionbar/AnsiText/Card 等）不消费 i18n，行为不变。
+vi.mock('vue-i18n', async () => {
+  const { i18nMock } = await import('../../__tests__/helpers/i18n-mock')
+  return i18nMock({
+    'panel.tray.statusLabel.running': '运行中',
+    'panel.tray.statusLabel.done': '已结束',
+    'panel.tray.statusLabel.failed': '失败',
+  })
+})
+
 // ======================================================================
 // ← Actionbar.test.ts
 // ======================================================================
@@ -1112,7 +1128,7 @@ describe('GuiComponentRenderer 路由', () => {
 // ======================================================================
 
 describe('ListTree', () => {
-  it('递归渲染：parent 含嵌套 children + status 圆点', () => {
+  it('递归渲染：parent 含嵌套 children + status 胶囊（M2b 圆点退役，i18n 枚举文字）', () => {
     const items: TreeItem[] = [
       {
         label: 'parent',
@@ -1128,19 +1144,24 @@ describe('ListTree', () => {
     expect(wrapper.text()).toContain('parent')
     expect(wrapper.text()).toContain('child1')
     expect(wrapper.text()).toContain('child2')
-    // v6: status 是圆点（bg-*），done→bg-success，running→bg-accent
+    // v7（M2b D3）：status 是胶囊文字标签，done→「已结束」(success)、running→「运行中」(accent)
     const statuses = wrapper.findAll('[data-testid="list-tree-status"]')
     expect(statuses).toHaveLength(2)
-    expect(statuses[0].classes()).toContain('bg-success')
-    expect(statuses[1].classes()).toContain('bg-accent')
+    expect(statuses[0].text()).toBe('已结束')
+    expect(statuses[0].classes()).toContain('text-success')
+    expect(statuses[1].text()).toBe('运行中')
+    expect(statuses[1].classes()).toContain('text-accent')
   })
 
-  it('failed status 圆点 bg-danger', () => {
+  it('failed status 胶囊 text-danger + bg-danger-soft + 「失败」文字', () => {
     const items: TreeItem[] = [
       { label: 'failed-item', status: 'failed' },
     ]
     const wrapper = mount(ListTree, { props: { items } })
-    expect(wrapper.find('[data-testid="list-tree-status"]').classes()).toContain('bg-danger')
+    const pill = wrapper.find('[data-testid="list-tree-status"]')
+    expect(pill.text()).toBe('失败')
+    expect(pill.classes()).toContain('text-danger')
+    expect(pill.classes()).toContain('bg-danger-soft')
   })
 
   it('v6: depth 缩进 16px/层，depth=2 时 padding-left=32px', () => {
@@ -1170,7 +1191,7 @@ describe('ListTree', () => {
     expect(allItems[1].attributes('style')).toContain('padding-left: 16px')
   })
 
-  it('v6: status 改圆点后无文字标签（无进行中/完成/失败文本）', () => {
+  it('M2b D3: status 行渲染胶囊文字标签（v6 圆点形态退役——设计声明的有意变更）', () => {
     const items: TreeItem[] = [
       { label: 'a', status: 'running' },
       { label: 'b', status: 'done' },
@@ -1179,26 +1200,26 @@ describe('ListTree', () => {
     const wrapper = mount(ListTree, { props: { items } })
     const statuses = wrapper.findAll('[data-testid="list-tree-status"]')
     expect(statuses).toHaveLength(3)
-    // 圆点无文字内容
-    for (const s of statuses) {
-      expect(s.text()).toBe('')
-    }
-    // 整体文本不含旧 STATUS_LABEL 中文
-    expect(wrapper.text()).not.toContain('进行中')
-    expect(wrapper.text()).not.toContain('完成')
-    expect(wrapper.text()).not.toContain('失败')
+    // 胶囊有 i18n 枚举文字（非空标签）
+    expect(statuses[0].text()).toBe('运行中')
+    expect(statuses[1].text()).toBe('已结束')
+    expect(statuses[2].text()).toBe('失败')
   })
 
-  it('v6: status 圆点右对齐 + 7px 尺寸 + rounded-full', () => {
+  it('M2b D3: 状态胶囊形态（rounded-xs 胶囊 + 10px 档 + shrink-0，AS7 .cstate 规格）', () => {
     const items: TreeItem[] = [
       { label: 'a', status: 'done' },
     ]
     const wrapper = mount(ListTree, { props: { items } })
-    const dot = wrapper.find('[data-testid="list-tree-status"]')
-    expect(dot.classes()).toContain('ml-auto')
-    expect(dot.classes()).toContain('size-[7px]')
-    expect(dot.classes()).toContain('rounded-full')
-    expect(dot.classes()).toContain('bg-success')
+    const pill = wrapper.find('[data-testid="list-tree-status"]')
+    expect(pill.classes()).toContain('rounded-xs')
+    expect(pill.classes()).toContain('px-1.5')
+    expect(pill.classes()).toContain('py-px')
+    expect(pill.classes()).toContain('text-[length:var(--text-3xs)]')
+    expect(pill.classes()).toContain('shrink-0')
+    // v6 圆点形态退役
+    expect(pill.classes()).not.toContain('rounded-full')
+    expect(pill.classes()).not.toContain('size-[7px]')
   })
 
   it('v6: icon size-3(12px) 且中性（无 status text-* 着色）', () => {
@@ -1236,8 +1257,27 @@ describe('ListTree', () => {
     const wrapper = mount(ListTree, { props: { items } })
     const label = wrapper.findAll('span').find((s) => s.text().includes('sidecar'))!
     expect(label.classes()).toContain('min-w-0')
-    expect(label.classes()).toContain('flex-1')
     expect(label.classes()).toContain('truncate')
+    // M2b D5：flex-1 让位给 subLabel 副文本层（主名自然宽度可收缩截断）
+    expect(label.classes()).not.toContain('flex-1')
+  })
+
+  it('M2b D5: 根类无衬线（去 font-mono），numbered 序号保留 mono（编辑器行号范式）', () => {
+    const items: TreeItem[] = [{ label: 'a' }]
+    const plain = mount(ListTree, { props: { items } })
+    expect(plain.find('[data-testid="gui-list-tree"]').classes()).not.toContain('font-mono')
+
+    const numbered = mount(ListTree, { props: { items, numbered: true } })
+    const index = numbered.findAll('span').find((s) => s.text() === '1')!
+    expect(index.classes()).toContain('font-mono')
+  })
+
+  it('M2b D5: 主名恒 neutral-fg（v6 done 项 label 弱化退役——状态强调由胶囊承担）', () => {
+    const items: TreeItem[] = [{ label: 'finished-row', status: 'done' }]
+    const wrapper = mount(ListTree, { props: { items } })
+    const label = wrapper.findAll('span').find((s) => s.text() === 'finished-row')!
+    expect(label.classes()).toContain('text-neutral-fg')
+    expect(label.classes()).not.toContain('text-neutral-dim')
   })
 })
 
@@ -1394,6 +1434,183 @@ describe('ListTree pin 门控（D6：命令行门控，导航行不门控）', (
     expect(cmdRow.element.tagName).toBe('BUTTON')
     await cmdRow.trigger('click')
     expect(cmd.execute).toHaveBeenCalledWith('taiji.subagentCancel', undefined)
+  })
+})
+
+// ── ListTree 富行渲染（composer-tray-protocol §3.4 M2b / RL4 富行用例组）────
+// subLabel 副文本层 / statusLabel ?? i18n 枚举渲染序 / actions 行内槽 pin 门控与
+// 两段式确认（复用 Actionbar 状态机）。i18n 文案断言走文件级真实 tray 词条 mock。
+
+describe('ListTree 富行 subLabel（RL4-1：副文本层渲染）', () => {
+  it('有 subLabel 行渲染副文本层：dim 小字截断 + flex-1 + 文本可见（用户可见 DOM 断言）', () => {
+    const items: TreeItem[] = [
+      { label: 'research-agent', subLabel: 'slug: deep-dive · 失败：超时' },
+    ]
+    const wrapper = mount(ListTree, { props: { items } })
+    const sub = wrapper.find('[data-testid="list-tree-sub-label"]')
+    expect(sub.exists()).toBe(true)
+    expect(sub.text()).toContain('slug: deep-dive')
+    expect(sub.classes()).toContain('text-neutral-dim')
+    expect(sub.classes()).toContain('text-[length:var(--text-2xs)]')
+    expect(sub.classes()).toContain('truncate')
+    expect(sub.classes()).toContain('flex-1')
+  })
+
+  it('无 subLabel 行单行不退化：无副文本节点，主名照常渲染（旧行为零变化）', () => {
+    const items: TreeItem[] = [{ label: 'plain-row' }]
+    const wrapper = mount(ListTree, { props: { items } })
+    expect(wrapper.find('[data-testid="list-tree-sub-label"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('plain-row')
+  })
+
+  it('空串 subLabel = 无副文本：不渲染副文本节点', () => {
+    const wrapper = mount(ListTree, { props: { items: [{ label: 'a', subLabel: '' }] } })
+    expect(wrapper.find('[data-testid="list-tree-sub-label"]').exists()).toBe(false)
+  })
+})
+
+describe('ListTree 富行状态标签渲染序（RL4-2 / D3：statusLabel ?? i18n 枚举，三态）', () => {
+  it('仅 status 走 i18n 枚举映射：三枚举出「运行中 / 已结束 / 失败」胶囊文字', () => {
+    const items: TreeItem[] = [
+      { label: 'r', status: 'running' },
+      { label: 'd', status: 'done' },
+      { label: 'f', status: 'failed' },
+    ]
+    const wrapper = mount(ListTree, { props: { items } })
+    const pills = wrapper.findAll('[data-testid="list-tree-status"]')
+    expect(pills).toHaveLength(3)
+    expect(pills[0].text()).toBe('运行中')
+    expect(pills[1].text()).toBe('已结束')
+    expect(pills[2].text()).toBe('失败')
+  })
+
+  it('statusLabel 优先覆盖：文字 = 推送方文案（非枚举映射），色仍取该行 status 枚举色（D3 同源）', () => {
+    const items: TreeItem[] = [
+      { label: 'wf', status: 'running', statusLabel: '已中断（可续跑）' },
+    ]
+    const wrapper = mount(ListTree, { props: { items } })
+    const pill = wrapper.find('[data-testid="list-tree-status"]')
+    expect(pill.text()).toBe('已中断（可续跑）')
+    // 颜色与文字同源取该行 status 语义：running 枚举色（覆盖不换判据）
+    expect(pill.classes()).toContain('text-accent')
+    expect(pill.classes()).toContain('bg-accent-soft')
+  })
+
+  it('仅 statusLabel（无 status）：中性胶囊——dim 文字 + bg-input 弱底（demo .cstate.idle 形态）', () => {
+    const items: TreeItem[] = [
+      { label: 'stalled', statusLabel: '等待输入' },
+    ]
+    const wrapper = mount(ListTree, { props: { items } })
+    const pill = wrapper.find('[data-testid="list-tree-status"]')
+    expect(pill.text()).toBe('等待输入')
+    expect(pill.classes()).toContain('text-neutral-dim')
+    expect(pill.classes()).toContain('bg-bg-input')
+    expect(pill.classes()).not.toContain('text-accent')
+    expect(pill.classes()).not.toContain('text-danger')
+  })
+
+  it('双无行（无 status 且无 statusLabel）不渲染标签（纯文本行现状）', () => {
+    const wrapper = mount(ListTree, { props: { items: [{ label: 'plain' }] } })
+    expect(wrapper.find('[data-testid="list-tree-status"]').exists()).toBe(false)
+  })
+
+  it('空串 statusLabel = 未声明（confirm 同款口径）：无 status 时同双无不渲染', () => {
+    const wrapper = mount(ListTree, { props: { items: [{ label: 'a', statusLabel: '' }] } })
+    expect(wrapper.find('[data-testid="list-tree-status"]').exists()).toBe(false)
+  })
+})
+
+describe('ListTree 富行 actions 行内槽（RL4-3 / D4：pin 门控 + 两段式确认复用）', () => {
+  const rowWithActions = (): TreeItem[] => [
+    {
+      label: 'agent-row',
+      actions: [
+        { id: 'cancel-1', label: '取消', commandId: 'taiji.subagentCancel', confirm: '确认取消？' },
+      ],
+    },
+  ]
+
+  const mountWithActions = (pin?: boolean) => {
+    const cmd = makeExecutor()
+    const provide: Record<string | symbol, unknown> = {
+      [ACTION_EXECUTOR_KEY as symbol]: cmd,
+    }
+    if (pin !== undefined) provide[TRAY_PIN_STATE_KEY as symbol] = pin
+    const wrapper = mount(ListTree, {
+      props: { items: rowWithActions() },
+      global: { provide },
+    })
+    return { cmd, wrapper }
+  }
+
+  it('pin 后行尾按钮出现：Actionbar 按钮可点，点击执行器收到 (commandId, undefined)', async () => {
+    const cmd = makeExecutor()
+    const wrapper = mount(ListTree, {
+      props: {
+        // 无 confirm 项：点击即执行（两段式见下一条用例）
+        items: [{ label: 'agent-row', actions: [{ id: 'retry-1', label: '重试', commandId: 'taiji.subagentRetry' }] }],
+      },
+      global: { provide: { [ACTION_EXECUTOR_KEY as symbol]: cmd, [TRAY_PIN_STATE_KEY as symbol]: true } },
+    })
+    const btn = wrapper.find('[data-testid="gui-action-bar-item-retry-1"]')
+    expect(btn.exists()).toBe(true)
+    expect(btn.element.tagName).toBe('BUTTON')
+    await btn.trigger('click')
+    expect(cmd.execute).toHaveBeenCalledTimes(1)
+    expect(cmd.execute).toHaveBeenCalledWith('taiji.subagentRetry', undefined)
+  })
+
+  it('未 pin 降级纯展示：行内操作项为 span（非按钮语义），点击不触发执行器', async () => {
+    const { cmd, wrapper } = mountWithActions(false)
+    const item = wrapper.find('[data-testid="gui-action-bar-item-cancel-1"]')
+    expect(item.exists()).toBe(true)
+    expect(item.element.tagName).toBe('SPAN')
+    await item.trigger('click')
+    expect(cmd.execute).not.toHaveBeenCalled()
+  })
+
+  it('两段式确认（复用 Actionbar 状态机）：首击翻确认态显示 confirm 文案不执行，再击执行', async () => {
+    const { cmd, wrapper } = mountWithActions(true)
+    const btn = wrapper.find('[data-testid="gui-action-bar-item-cancel-1"]')
+    expect(btn.attributes('data-confirm-phase')).toBe('idle')
+    await btn.trigger('click')
+    // 首击：确认态 + 「确认取消？」文案，执行器未调用
+    expect(btn.attributes('data-confirm-phase')).toBe('confirming')
+    expect(btn.text()).toContain('确认取消？')
+    expect(cmd.execute).not.toHaveBeenCalled()
+    // 再击：执行
+    await btn.trigger('click')
+    expect(cmd.execute).toHaveBeenCalledTimes(1)
+    expect(cmd.execute).toHaveBeenCalledWith('taiji.subagentCancel', undefined)
+    // 在途禁用
+    expect(btn.attributes('data-confirm-phase')).toBe('in-flight')
+    expect(btn.attributes('disabled')).toBeDefined()
+  })
+
+  it('行内按钮点击不触发行 action 分派（@click.stop 阻断冒泡，行点击与行内操作互不串扰）', async () => {
+    const cmd = makeExecutor()
+    const wrapper = mount(ListTree, {
+      props: {
+        items: [
+          {
+            label: 'openable-row',
+            action: { commandId: 'row.open' },
+            actions: [{ id: 'act-1', label: '取消', commandId: 'row.cancel' }],
+          },
+        ],
+      },
+      global: { provide: { [ACTION_EXECUTOR_KEY as symbol]: cmd } },
+    })
+    await wrapper.find('[data-testid="gui-action-bar-item-act-1"]').trigger('click')
+    // 只有行内按钮的命令执行，行自身 action 不被冒泡误触
+    expect(cmd.execute).toHaveBeenCalledTimes(1)
+    expect(cmd.execute).toHaveBeenCalledWith('row.cancel', undefined)
+  })
+
+  it('无 actions 行不渲染操作槽（旧行为零变化）', () => {
+    const wrapper = mount(ListTree, { props: { items: [{ label: 'no-actions' }] } })
+    expect(wrapper.find('[data-testid="gui-action-bar-item-no-actions"]').exists()).toBe(false)
+    expect(wrapper.findComponent(Actionbar).exists()).toBe(false)
   })
 })
 
