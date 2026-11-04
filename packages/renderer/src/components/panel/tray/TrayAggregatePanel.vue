@@ -14,7 +14,8 @@
     本组件不自建 useTrayCounts 实例）
   props.sections: 段头 + 段体所需的 built-in 切片（kind / icon / running / total；由外壳
     ComposerTray 从同一份 `useTrayCounts` 计数派生传入——计数只有一份口径）
-  props.widgets: 协议 widget 切片（viewId + entry；entry 的 meta/guiTree 直接喂 TrayWidgetPanel）
+  props.widgets: 协议 widget 切片（viewId + entry；entry 的 meta/guiTree/pluginId 喂
+    TrayWidgetPanel——pluginId 是声明标题匹配键）
   props.pinned: pin 态（透传段内面板：行内操作仅 pin 态渲染，D8 防误触）
   emits: 无 —— 段内组件自持交互（与两面板契约一致）
   尺寸：不设宽高（外壳内容区固定高 h-[340px] / 宽 400px 由 TrayPanelSurface 承载）；段超出
@@ -73,12 +74,13 @@
           <div
             class="flex shrink-0 items-center gap-1.5 px-1.5 pb-[5px] pt-[3px] font-mono text-[length:var(--text-3xs)] uppercase tracking-[0.08em] text-neutral-dim"
           >
-            <span class="min-w-0 flex-1 truncate">{{ widget.entry.meta?.title ?? widget.viewId }}</span>
+            <span class="min-w-0 flex-1 truncate">{{ widgetTitleOf(widget) }}</span>
           </div>
           <div :class="[SEGMENT_HEIGHT_CLASS, 'flex min-h-0 flex-col']">
             <TrayWidgetPanel
               :view-id="widget.viewId"
               :meta="widget.entry.meta"
+              :plugin-id="widget.entry.pluginId"
               :gui-tree="widget.entry.guiTree"
             />
           </div>
@@ -97,6 +99,7 @@ import TrayCanvasPanel from '@/components/panel/tray/TrayCanvasPanel.vue'
 import TrayNativePanel from '@/components/panel/tray/TrayNativePanel.vue'
 import TraySessionPanel from '@/components/panel/tray/TraySessionPanel.vue'
 import TrayWidgetPanel from '@/components/panel/tray/TrayWidgetPanel.vue'
+import { findTrayWidgetDeclaration } from '@/components/panel/tray/use-tray-widget-declaration'
 import type { TrayBuiltinKind } from '@/components/panel/tray/useTrayCounts'
 
 /** 单个 built-in 类别段（kind / 图标 / 进行中与全量计数） */
@@ -107,10 +110,11 @@ export interface TrayAggregateSection {
   total: number
 }
 
-/** 协议 widget 段切片（entry 只取面板渲染所需两字段，形状与 ViewCacheEntry 结构兼容） */
+/** 协议 widget 段切片（entry 取面板渲染所需字段，形状与 ViewCacheEntry 结构兼容；
+ *  pluginId 是声明标题匹配键之一，外壳从条目透传） */
 export interface TrayAggregateWidget {
   viewId: string
-  entry: { meta?: WidgetMeta; guiTree: GuiComponent[] }
+  entry: { meta?: WidgetMeta; guiTree: GuiComponent[]; pluginId?: string }
 }
 
 defineProps<{
@@ -128,4 +132,16 @@ const { t } = useI18n()
 
 /** 段体定高（3 段同屏可扫读；同时给段内面板的内部滚动一个上界） */
 const SEGMENT_HEIGHT_CLASS = 'h-[190px]'
+
+/**
+ * widget 段头标题（D7 单一兜底链与按钮/面板同源）：声明 title ?? meta.title ?? viewId。
+ * 逐条取数（条目数个位级，O(n×m) 快照扫描无热路径压力）经共用谓词 findTrayWidgetDeclaration，
+ * 不在本组件复制第二份 placement/viewId 过滤（谓词单点 = use-tray-widget-declaration）。
+ */
+function widgetTitleOf(widget: TrayAggregateWidget): string {
+  const declared = findTrayWidgetDeclaration(widget.viewId, widget.entry.pluginId)?.title
+  if (declared !== undefined && declared.trim() !== '') return declared
+  const title = widget.entry.meta?.title
+  return title !== undefined && title.trim() !== '' ? title : widget.viewId
+}
 </script>

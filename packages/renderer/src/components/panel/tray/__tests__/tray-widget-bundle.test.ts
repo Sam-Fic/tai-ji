@@ -31,14 +31,17 @@ import type { DOMWrapper, VueWrapper } from '@vue/test-utils'
 import { computed, nextTick, reactive } from 'vue'
 import type { Ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
+import { COMPOSER_TRAY_PLACEMENT } from '@taiji/core'
 import { VIEW_HOST_SOURCE_KEY } from '@taiji/ui/extension-host'
 import type { ViewHostSource } from '@taiji/ui/extension-host'
 import { ansiLine, makeEntry, makeWidgetSource } from '@/__tests__/panel/tray/tray-view-host-mock'
 import type { MockWidgetSource } from '@/__tests__/panel/tray/tray-view-host-mock'
 import { makeTrayCountsStub } from '@/__tests__/panel/tray/tray-counts-stub'
 import { __clearSessionCleanupRegistryForTest } from '@/composables/useSessionScopedState'
+import { __resetContentSlotsForTesting, getContentSlotRegistry } from '@/lib/content-slots'
 import { HEADER_ACTIONS_SOURCE_KEY } from '@/composables/shell/useExtensionHostBridge'
 import ComposerTray from '@/components/panel/tray/ComposerTray.vue'
+import TrayAggregatePanel from '@/components/panel/tray/TrayAggregatePanel.vue'
 import type { TrayBuiltinKind as TrayKind, UseTrayCountsReturn } from '@/components/panel/tray/useTrayCounts'
 import type { BackgroundTaskEntry } from '@/lib/background-task-bucket'
 import type { CanvasListEntry } from '@zhushanwen/extension-protocol'
@@ -870,6 +873,71 @@ describe('ComposerTray widget 区与面板分流', () => {
   })
 })
 
+// ── ⑤b 托盘章过滤（composer-tray-protocol RL1 五态矩阵：placement === 'composer.tray' 才出按钮）──
+
+describe('ComposerTray widget 区托盘章过滤（RL1 五态矩阵）', () => {
+  /**
+   * 五态共用驱动：推一条 entry → 挂真实外壳 → 返回托盘 widget 按钮键集。
+   * 条目带托盘章与否是唯一变量（guiTree 恒非空——按钮存在性由「有树」驱动的现状语义不变）。
+   */
+  async function pushAndMount(mock: MockWidgetSource, entry: ViewCacheEntry): Promise<string[]> {
+    mock.push(entry)
+    mountTray(mock)
+    await flushPromises()
+    await nextTick()
+    return widgetKeys()
+  }
+
+  it('① 扩展盖印（setWidget 通道 bridge 统一盖 composer.tray 章）有树 → 按钮出现', async () => {
+    const mock = makeWidgetSource(SID)
+    const keys = await pushAndMount(
+      mock,
+      makeEntry('todo', [ansiLine('清单行')], { title: '清单', badge: '2' }),
+    )
+    expect(keys).toEqual(['todo'])
+  })
+
+  it('② 插件声明 composer.tray 位（runtime 按声明盖章）有树 → 按钮出现（无 meta 插件形态，GL4）', async () => {
+    const mock = makeWidgetSource(SID)
+    const keys = await pushAndMount(
+      mock,
+      makeEntry('probe.panel', [ansiLine('面板行')], undefined, { pluginId: 'probe-container-plugin' }),
+    )
+    expect(keys).toEqual(['probe.panel'])
+  })
+
+  it('③ 插件声明非托盘位（drawer.tab 章）有树 → 不出按钮（AX1：托盘不渲染未指向自己的树）', async () => {
+    const mock = makeWidgetSource(SID)
+    const keys = await pushAndMount(
+      mock,
+      makeEntry('probe.tab', [ansiLine('抽屉行')], undefined, { placement: 'drawer.tab', pluginId: 'probe-container-plugin' }),
+    )
+    expect(keys).toEqual([])
+  })
+
+  it('④ 未声明（无章旧帧形态）→ 不出按钮（「不声明就没有」，旧 wire 帧不泄漏进托盘）', async () => {
+    const mock = makeWidgetSource(SID)
+    const keys = await pushAndMount(
+      mock,
+      makeEntry('legacy.view', [ansiLine('旧帧行')], undefined, { placement: undefined }),
+    )
+    expect(keys).toEqual([])
+  })
+
+  it('⑤ 已声明坏 placement 值（nonexistent.slot）有树 → 入存储但托盘过滤不匹配不出（设计内行为：全容器零渲染的托盘侧投影）', async () => {
+    const mock = makeWidgetSource(SID)
+    const keys = await pushAndMount(
+      mock,
+      makeEntry('probe.bad', [ansiLine('坏声明行')], undefined, { placement: 'nonexistent.slot', pluginId: 'probe-container-plugin' }),
+    )
+    expect(keys).toEqual([])
+    // 入存储断言：runtime 存储资格只校验 viewId 命中 raw 声明集合、不校验 placement 族值
+    //（V7 交叉组合场景）——条目在存储里，只是托盘过滤不匹配（renderer 注册表装载链对该
+    // 声明已标 unavailable，属另一道校验，不归本外壳判定）
+    expect(mock.source.getView(SID, 'probe.bad')?.placement).toBe('nonexistent.slot')
+  })
+})
+
 // ── ⑥ 会话切换与归属（D12 / A6）──
 
 describe('ComposerTray 会话切换（D12/A6：不残留旧 session 交互态）', () => {
@@ -1268,6 +1336,7 @@ function mountButton(props: {
 function mountPanel(props: {
   viewId: string
   meta?: WidgetMeta
+  pluginId?: string
   guiTree: GuiComponent[]
 }): VueWrapper {
   return mount(TrayWidgetPanel, { props })
@@ -1309,6 +1378,9 @@ const TrayWidgetStrip = defineComponent({
           (e): e is WidgetEntry =>
             e.entry !== undefined && e.entry.guiTree.length > 0,
         )
+        // 托盘章过滤复刻（composer-tray-protocol D1/M2 与生产外壳 ComposerTray.widgetItems
+        // 同构——复刻样例必须反映现行外壳契约，缺这条会误导后来读者以为托盘不过滤）
+        .filter((e) => e.entry.placement === COMPOSER_TRAY_PLACEMENT)
     })
 
     return () => {
@@ -1318,6 +1390,7 @@ const TrayWidgetStrip = defineComponent({
           key: e.viewId,
           viewId: e.viewId,
           meta: e.entry.meta,
+          pluginId: e.entry.pluginId,
           pinned: e.viewId === openKey.value,
           expanded: e.viewId === openKey.value,
           onTogglePin: () => {
@@ -1331,6 +1404,7 @@ const TrayWidgetStrip = defineComponent({
             key: `panel-${openEntry.viewId}`,
             viewId: openEntry.viewId,
             meta: openEntry.entry.meta,
+            pluginId: openEntry.entry.pluginId,
             guiTree: openEntry.entry.guiTree,
           }),
         )
@@ -1506,18 +1580,31 @@ describe('TrayWidgetButton badge fallback 链与 truncate（D4/§3.5）', () => 
     expect(long.find('[data-testid="tray-widget-button"]').attributes('aria-label')).toBe('Todo（1234567890）')
   })
 
-  it('badge 缺省 → progress.label；无 label → String(progress.current)', () => {
+  it('badge 缺省 → progress.label 照常；双缺（badge 无 × label 无）→ 不渲染角标（D8 第三档 String(progress.current) 退役）', () => {
+    // 第一档：meta.badge 显式值照常（badge 有值态）
+    const explicit = mountButton({
+      viewId: 'scheduler',
+      meta: makeMeta({ badge: '3', progress: { current: 3, total: 9, label: '3/9' } }),
+    })
+    expect(explicit.find('[data-testid="tray-widget-badge"]').text()).toBe('3')
+
+    // 第二档：badge 缺省 → progress.label 照常（label 有值态）
     const withLabel = mountButton({
       viewId: 'goal',
       meta: makeMeta({ progress: { current: 2, total: 5, label: '2/5' } }),
     })
     expect(withLabel.find('[data-testid="tray-widget-badge"]').text()).toBe('2/5')
 
+    // 第三档退役：badge 无 × progress.label 无（progress 仅剩 current/total）→ 角标不渲染
+    //（元素不存在而非空文本——既有推送方零消费者：scheduler 显式推 badge / todo 无 meta /
+    // goal 走 label / subagent-workflow 两档同推）
     const noLabel = mountButton({
       viewId: 'goal',
       meta: makeMeta({ progress: { current: 42, total: 100 } }),
     })
-    expect(noLabel.find('[data-testid="tray-widget-badge"]').text()).toBe('42')
+    expect(noLabel.find('[data-testid="tray-widget-badge"]').exists()).toBe(false)
+    // 悬停 title 同链退役：进度段整段略去，不出「42」裸计数（undefined/NaN 字面零出现）
+    expect(noLabel.find('[data-testid="tray-widget-button"]').attributes('title')).not.toContain('42')
   })
 
   it('无 badge 且无 progress → 不渲染 badge 元素（归零不虚亮）', () => {
@@ -1605,6 +1692,137 @@ describe('TrayWidgetButton 外壳契约（hover/pin 状态由外壳持有）', (
     const button = wrapper.find('[data-testid="tray-widget-button"]')
     expect(button.attributes('aria-label')).toBe('待办清单')
     expect(button.attributes('data-widget-key')).toBe('todo')
+  })
+})
+
+// ── ④b 标题/图标链声明档（composer-tray-protocol D7：静态信息取声明，差距 G10）──
+
+describe('托盘 widget 标题/图标链声明档（D7：声明 title ?? meta.title ?? viewId）', () => {
+  const DECL_PLUGIN_ID = 'decl-plugin'
+
+  /** 灌一条 composer.tray 位声明（复刻插件 manifest contributes.views 的注册表投影） */
+  function declareTrayView(viewId: string, title: string, icon?: string, pluginId = DECL_PLUGIN_ID): void {
+    getContentSlotRegistry().loadExternal(pluginId, [
+      {
+        id: `${pluginId}.${viewId}`,
+        placement: 'composer.tray',
+        label: title,
+        ...(icon !== undefined ? { icon } : {}),
+        scope: 'session',
+        pluginId,
+        renderer: { kind: 'view', viewId },
+      },
+    ])
+  }
+
+  beforeEach(() => {
+    // core 单例跨用例留存：先清插件分区再灌本 describe 的声明（内置项由入口惰性重登）
+    __resetContentSlotsForTesting()
+  })
+
+  afterEach(() => {
+    __resetContentSlotsForTesting()
+  })
+
+  it('声明 title 优先于 meta.title：按钮 aria-label 与悬停 title 取声明（静态主权在声明，AX4）', () => {
+    declareTrayView('probe.panel', '探针面板')
+    const wrapper = mountButton({
+      viewId: 'probe.panel',
+      pluginId: DECL_PLUGIN_ID,
+      meta: makeMeta({ title: 'Meta标题' }),
+    })
+    const button = wrapper.find('[data-testid="tray-widget-button"]')
+    expect(button.attributes('aria-label')).toBe('探针面板')
+    expect(button.attributes('title')).toBe('探针面板')
+  })
+
+  it('声明 icon 命中 → 白名单 lucide 解析（⓪ 档，先于 meta.icon 与内置映射）', () => {
+    declareTrayView('probe.panel', '探针面板', 'target')
+    const wrapper = mountButton({ viewId: 'probe.panel', pluginId: DECL_PLUGIN_ID })
+    expect(wrapper.find('svg.lucide-target').exists()).toBe(true)
+    // 无 meta.icon 时不出 paths 形状（⓪ 档命中即短路）
+    expect(wrapper.find('[data-testid="tray-widget-icon-paths"]').exists()).toBe(false)
+  })
+
+  it('声明 title 在而 icon 缺省 + viewId 非内置键 → LayoutGrid 兜底（不出 viewId 裸标题，G10 无标识形态消除）', () => {
+    declareTrayView('probe.panel', '探针面板')
+    const wrapper = mountButton({ viewId: 'probe.panel', pluginId: DECL_PLUGIN_ID })
+    expect(wrapper.find('svg.lucide-layout-grid').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="tray-widget-button"]').attributes('aria-label')).toBe('探针面板')
+  })
+
+  it('非托盘位声明不命中（drawer.tab 声明不进标题链）——扩展源无声明条目落 meta.title 不回退', () => {
+    getContentSlotRegistry().loadExternal(DECL_PLUGIN_ID, [
+      {
+        id: `${DECL_PLUGIN_ID}.drawer-view`,
+        placement: 'drawer.tab',
+        label: '抽屉标题',
+        scope: 'session',
+        pluginId: DECL_PLUGIN_ID,
+        renderer: { kind: 'view', viewId: 'drawer-view' },
+      },
+    ])
+    const wrapper = mountButton({
+      viewId: 'drawer-view',
+      pluginId: DECL_PLUGIN_ID,
+      meta: makeMeta({ title: 'Meta标题' }),
+    })
+    expect(wrapper.find('[data-testid="tray-widget-button"]').attributes('aria-label')).toBe('Meta标题')
+  })
+
+  it('pluginId 不匹配的同名声明不命中（条目归属是匹配键之一）', () => {
+    declareTrayView('shared.view', '别家标题', undefined, 'other-plugin')
+    const wrapper = mountButton({
+      viewId: 'shared.view',
+      pluginId: DECL_PLUGIN_ID,
+      meta: makeMeta({ title: '自家Meta' }),
+    })
+    expect(wrapper.find('[data-testid="tray-widget-button"]').attributes('aria-label')).toBe('自家Meta')
+  })
+
+  it('面板标题同源（TrayWidgetPanel）：head 标题取声明（外壳透传 pluginId）', () => {
+    declareTrayView('probe.panel', '探针面板')
+    const wrapper = mountPanel({
+      viewId: 'probe.panel',
+      pluginId: DECL_PLUGIN_ID,
+      meta: makeMeta({ status: 'running' }),
+      guiTree: [ansiLine('body')],
+    })
+    expect(wrapper.find('[data-testid="tray-widget-panel-title"]').text()).toBe('探针面板')
+    expect(wrapper.find('[data-testid="tray-widget-panel"]').attributes('aria-label')).toBe('探针面板')
+  })
+
+  it('外壳整链联动（Strip 复刻宿主）：声明装载后按钮标题随声明刷新（快照响应式）', async () => {
+    const mock = makeWidgetSource(SID)
+    mock.push(makeEntry('probe.panel', [ansiLine('body')], undefined, { pluginId: DECL_PLUGIN_ID }))
+    const wrapper = mountStrip(mock)
+    expect(wrapper.find('[data-testid="tray-widget-button"]').attributes('aria-label')).toBe('probe.panel')
+
+    declareTrayView('probe.panel', '探针面板')
+    await nextTick()
+    expect(wrapper.find('[data-testid="tray-widget-button"]').attributes('aria-label')).toBe('探针面板')
+  })
+
+  it('聚合段头标题同源（TrayAggregatePanel）：声明 title 优先于 meta.title，段内面板标题同步', () => {
+    declareTrayView('probe.panel', '探针面板')
+    const wrapper = mount(TrayAggregatePanel, {
+      props: {
+        sessionId: SID,
+        sections: [],
+        widgets: [
+          {
+            viewId: 'probe.panel',
+            entry: { meta: makeMeta({ title: 'Meta标题' }), guiTree: [ansiLine('body')], pluginId: DECL_PLUGIN_ID },
+          },
+        ],
+        pinned: false,
+      },
+    })
+    const segment = wrapper.find('[data-testid="tray-aggregate-widget-probe.panel"]')
+    expect(segment.find('span').text()).toBe('探针面板')
+    // 段内 TrayWidgetPanel 标题同链（外壳透传 pluginId 的直挂等价形态）
+    expect(segment.find('[data-testid="tray-widget-panel-title"]').text()).toBe('探针面板')
+    wrapper.unmount()
   })
 })
 
