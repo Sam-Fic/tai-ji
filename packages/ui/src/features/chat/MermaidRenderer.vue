@@ -6,7 +6,7 @@
    2. 全屏 Dialog：SVG + zoom-in/out/fit/1:1 控制（useMermaidZoom），复用 DialogContent 全屏遮罩
 
   生命周期：
-   - 挂载/主题变化 → renderMermaid(source, theme) 产出 svg → 注入气泡容器
+   - 挂载/主题或字体变化 → renderMermaid(source, theme) 产出 svg → 注入气泡容器
    - 渲染失败 → 显示「渲染失败」提示 + 折叠源码（可复制）
    - 流式增量下 source 变化用 renderSeq 检查防旧渲染覆盖
 
@@ -88,7 +88,8 @@
 /**
  * Mermaid 图表渲染器。
  * - props.source 变化（流式增量 / mermaid 块更新）触发重新渲染；renderSeq 检查防旧覆盖。
- * - 主题变化（<html data-theme>）触发重新渲染（mermaid 颜色 bake 进 SVG，需重渲）。
+ * - 主题（<html data-theme>）或等宽字体（<html style> 的 --font-mono 计算值）变化触发重新渲染，
+ *   因为 mermaid 会把颜色与字体 bake 进 SVG。
  * - 全屏 Dialog 内 zoom 用 useMermaidZoom（Ctrl/Cmd+wheel 缩放，按钮 zoom-in/out/fit/1:1）。
  */
 import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
@@ -99,6 +100,7 @@ import { AlertTriangle, Check, ChevronRight, Copy, Maximize, Minimize, X, ZoomIn
 import { Button } from '../../primitives/button'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from '../../primitives/dialog'
 import { getCurrentTheme } from './composables/use-theme'
+import { resolveMermaidFontFamily } from './mermaid'
 import { useCopy } from './composables/useCopy'
 import { useMermaidZoom } from './composables/useMermaidZoom'
 import { useChatViewDeps } from './chat-view-deps'
@@ -117,9 +119,10 @@ const status = ref<'loading' | 'ok' | 'error'>('loading')
 const showSource = ref(false)
 let renderSeq = 0
 
-/** 当前主题（watch <html data-theme> 变化触发重渲） */
+/** 当前主题与字体（<html data-theme/style> 变化后比较，任一实际变化才重渲）。 */
 let currentTheme: 'dark' | 'light' = getCurrentTheme()
-let themeObserver: MutationObserver | null = null
+let currentFontFamily = resolveMermaidFontFamily()
+let renderObserver: MutationObserver | null = null
 
 /** 全屏 Dialog */
 const fullscreenOpen = ref(false)
@@ -190,19 +193,21 @@ watch(fullscreenOpen, (open) => {
 
 onMounted(() => {
   doRender()
-  // 监听 <html data-theme> 变化 → 主题切换重渲（HISTORICAL：应用内主题，非 prefers-color-scheme）
-  themeObserver = new MutationObserver(() => {
-    const next = getCurrentTheme()
-    if (next !== currentTheme) {
-      currentTheme = next
-      doRender()
-    }
+  // applySystemToDom 通过 <html style> 写字体槽位；同一 observer 兼听 data-theme 与 style，
+  // 再比较计算值，避免字号等无关 style 变化触发整图重渲。
+  renderObserver = new MutationObserver(() => {
+    const nextTheme = getCurrentTheme()
+    const nextFontFamily = resolveMermaidFontFamily()
+    if (nextTheme === currentTheme && nextFontFamily === currentFontFamily) return
+    currentTheme = nextTheme
+    currentFontFamily = nextFontFamily
+    doRender()
   })
-  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+  renderObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'style'] })
 })
 
 onUnmounted(() => {
-  themeObserver?.disconnect()
+  renderObserver?.disconnect()
 })
 
 // source 变化（流式增量）→ 重新渲染

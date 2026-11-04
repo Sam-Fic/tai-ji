@@ -125,16 +125,18 @@
           <p>{{ t('settings.fonts.installRestart') }}</p>
           <p>{{ t('settings.fonts.installCjk') }}</p>
           <div
-            v-for="cmd in INSTALL_COMMANDS"
-            :key="cmd.key"
+            v-for="item in FONT_INSTALL_GUIDE"
+            :key="item.id"
             class="flex items-center gap-2"
+            :data-testid="`settings-font-install-${item.id}`"
           >
-            <code class="min-w-0 flex-1 truncate rounded-sm bg-bg-sunken px-2 py-1 text-neutral-mid">{{ t(cmd.key) }}</code>
+            <span class="w-20 shrink-0 text-neutral-mid">{{ t(item.labelKey) }}</span>
+            <code class="min-w-0 flex-1 truncate rounded-sm bg-bg-sunken px-2 py-1 text-neutral-mid">{{ t(item.valueKey) }}</code>
             <Button
               variant="ghost"
               class="h-6 shrink-0 px-2"
-              :data-testid="`settings-font-copy-${cmd.key}`"
-              @click="copy(t(cmd.key))"
+              :data-testid="`settings-font-copy-${item.id}`"
+              @click="copy(t(item.valueKey))"
             >
               {{ t('settings.fonts.copy') }}
             </Button>
@@ -199,6 +201,7 @@ import { Upload } from '@lucide/vue'
 import { Button, Input, Popover, PopoverContent, PopoverTriggerButton } from '@taiji/ui'
 import type { FontLibraryEntry } from '@taiji/core'
 import GroupCard from './common/GroupCard.vue'
+import { FONT_INSTALL_GUIDE } from './font-install-guide'
 
 type FontSlot = 'ui' | 'mono' | 'terminal'
 interface FontOption {
@@ -237,12 +240,6 @@ const SLOTS = [
   { key: 'ui', labelKey: 'settings.fonts.ui', descKey: 'settings.fonts.uiDesc' },
   { key: 'mono', labelKey: 'settings.fonts.mono', descKey: 'settings.fonts.monoDesc' },
   { key: 'terminal', labelKey: 'settings.fonts.terminal', descKey: 'settings.fonts.terminalDesc' },
-] as const
-
-/** 安装指引只指向官方渠道（D12：v1 不代下载） */
-const INSTALL_COMMANDS = [
-  { key: 'settings.fonts.installBrew' },
-  { key: 'settings.fonts.installDownload' },
 ] as const
 
 const openSlot = ref<FontSlot | null>(null)
@@ -311,6 +308,9 @@ function confirmImport(): void {
 function statusFor(family: string): string {
   if (props.replayState !== 'done') return t('settings.fonts.restoring')
   const reason = props.replayFailures[family]
+  // main 的 ReadFontBytesResult 当前以人读 reason 为契约；两类重放失败在此转成双侧 locale。
+  if (reason === '源文件已不存在') return t('settings.fonts.sourceMissing')
+  if (reason === '无法读取字体文件，可能已损坏') return t('settings.fonts.sourceUnreadable')
   return reason ? t('settings.fonts.restoreFailed', { reason }) : ''
 }
 

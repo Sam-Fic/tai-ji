@@ -124,6 +124,21 @@ describe('ui locale 聚合形态', () => {
     expect(zhCN).toEqual(zhCNAggregate)
     expect(enUS).toEqual(enUSAggregate)
   })
+
+  it('字体安装文案不承诺点击刷新，明确重启应用与非 CN 版中文字形边界', () => {
+    const zhCopy = Object.values(zhCNAggregate.settings.fonts).join('\n')
+    const enCopy = Object.values(enUSAggregate.settings.fonts).join('\n')
+    for (const copy of [zhCopy, enCopy]) {
+      expect(copy).not.toContain('点击刷新')
+      expect(copy).not.toContain('刷新列表')
+    }
+    expect(zhCNAggregate.settings.fonts.installRestart).toContain('重启应用')
+    expect(enUSAggregate.settings.fonts.installRestart).toMatch(/restart the app/i)
+    expect(zhCNAggregate.settings.fonts.installCjk).toContain('不含中文字形')
+    expect(zhCNAggregate.settings.fonts.installScoop).toContain('scoop')
+    expect(Object.keys(zhCNAggregate.settings.fonts).sort())
+      .toEqual(Object.keys(enUSAggregate.settings.fonts).sort())
+  })
 })
 
 describe('域文件自包含（纯文案数据）', () => {

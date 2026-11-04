@@ -6,9 +6,9 @@
  */
 
 /**
- * 终端默认等宽栈（独立常量，刻意不与 style.css 强行统一——两栈实测渲染等价，
- * 改默认栈会改变既有终端渲染；font-system D7）。用户字体非空时仍把本栈拼在后面，
- * 因为 xterm canvas 不吃 CSS 回落链。
+ * 终端默认等宽栈（独立常量，刻意不与 style.css 强行统一——同一串 mmmmmmmmmm @100px
+ * 实测本栈与 style.css 构建期栈均为 602.05px，均命中 Menlo；改默认栈会改变既有终端渲染，
+ * font-system D7）。用户字体非空时仍把本栈拼在后面，因为 xterm canvas 不吃 CSS 回落链。
  */
 export const DEFAULT_FONT_FAMILY = 'Menlo, Monaco, "Courier New", monospace'
 export const DEFAULT_FONT_SIZE = 13

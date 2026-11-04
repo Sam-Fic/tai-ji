@@ -10,7 +10,7 @@
  *
  * 运行：cd packages/ui && npx vitest run src/features/chat/__tests__/mermaid.test.ts
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { __resetMermaidForTest, renderMermaid, resolveMermaidThemeVariables } from '../mermaid'
@@ -25,6 +25,10 @@ const mermaidMocks = vi.hoisted(() => ({
 vi.mock('mermaid', () => ({
   default: { initialize: mermaidMocks.initialize, render: mermaidMocks.render },
 }))
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 describe('mermaid-render-cleanup', () => {
 /**
@@ -203,4 +207,45 @@ describe('mermaid 主题表 ↔ style.css token 对拍（改 token 必同批同�
     })
   }
 })
+})
+
+describe('mermaid-font-sync', () => {
+  beforeEach(() => {
+    mermaidMocks.render.mockReset()
+    mermaidMocks.initialize.mockReset()
+    __resetMermaidForTest()
+  })
+
+  it('fontFamily 读取并 trim --font-mono 计算值；空计算值回落构建期栈', () => {
+    const getPropertyValue = vi.fn((name: string) => (
+      name === '--font-mono' ? "  'Maple Mono', Menlo, monospace  " : ''
+    ))
+    vi.stubGlobal('getComputedStyle', vi.fn(() => ({ getPropertyValue })))
+
+    expect(resolveMermaidThemeVariables('dark').fontFamily).toBe("'Maple Mono', Menlo, monospace")
+    expect(getPropertyValue).toHaveBeenCalledWith('--font-mono')
+
+    getPropertyValue.mockReturnValue('')
+    expect(resolveMermaidThemeVariables('light').fontFamily)
+      .toBe("'JetBrains Mono', 'IBM Plex Mono', ui-monospace, Menlo, monospace")
+  })
+
+  it('主题不变但字体变化时仍重新 initialize，同主题同字体不重复 initialize', async () => {
+    let fontFamily = "'Maple Mono', Menlo, monospace"
+    vi.stubGlobal('getComputedStyle', vi.fn(() => ({
+      getPropertyValue: () => fontFamily,
+    })))
+    mermaidMocks.render.mockReturnValue({ svg: '<svg viewBox="0 0 10 10"/>' })
+
+    await renderMermaid('graph TD; A-->B', 'dark')
+    await renderMermaid('graph TD; A-->B', 'dark')
+    expect(mermaidMocks.initialize).toHaveBeenCalledTimes(1)
+
+    fontFamily = "'IBM Plex Mono', Menlo, monospace"
+    await renderMermaid('graph TD; A-->B', 'dark')
+    expect(mermaidMocks.initialize).toHaveBeenCalledTimes(2)
+    expect(mermaidMocks.initialize).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      themeVariables: expect.objectContaining({ fontFamily }),
+    }))
+  })
 })

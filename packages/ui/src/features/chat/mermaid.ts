@@ -9,9 +9,9 @@
  * themeVariables（对齐项目 design-tokens v6 太极纯灰暗/亮两态，而非 design-visual-explainer 的 teal）。
  *
  * 主题机制关键差异（HISTORICAL）：taiji 是应用内 [data-theme] 切换，非系统 prefers-color-scheme。
- * mermaid 的 themeVariables 在 initialize 时固化（颜色 bake 进 SVG path），切主题必须重新 initialize + 重渲染。
- * 故本模块导出 resolveMermaidTheme（按主题取 themeVariables）+ renderMermaid（initialize + render），
- * 供 MermaidRenderer.vue 在主题变化时重新调用。
+ * mermaid 的 themeVariables 在 initialize 时固化（颜色与字体 bake 进 SVG），主题或字体变化都必须
+ * 重新 initialize + 重渲染。故本模块导出 resolveMermaidThemeVariables + renderMermaid，
+ * 供 MermaidRenderer.vue 在任一权威值变化时重新调用。
  *
  * 主题色映射：色值取自 style.css :root CSS 变量，
  * 详见 resolveMermaidThemeVariables() 内逐项注释（primary/secondary/tertiary/noteBkg/text 等全覆盖）。
@@ -23,8 +23,10 @@ type Mermaid = typeof MermaidInstance
 
 /** mermaid 单例（动态 import 后缓存，全应用共享） */
 let mermaidPromise: Promise<Mermaid> | null = null
-/** 已 initialize 的主题标记——主题变化时需重新 initialize */
-let initializedTheme: 'dark' | 'light' | null = null
+/** 构建期等宽栈：测试环境无法展开 CSS var() 时作为 mermaid 的回落值。 */
+const BUILD_TIME_FONT_FAMILY = "'JetBrains Mono', 'IBM Plex Mono', ui-monospace, Menlo, monospace"
+/** 已 initialize 的「主题 + 字体」联合标记——任一变化都需重新 initialize。 */
+let initializedKey: string | null = null
 
 /**
  * 动态 import mermaid 并缓存单例。
@@ -47,6 +49,12 @@ export function getCurrentTheme(): 'dark' | 'light' {
   return attr === 'light' ? 'light' : 'dark'
 }
 
+/** 读取 --font-mono 的计算值；happy-dom 不展开 var()，空值时回落构建期栈。 */
+export function resolveMermaidFontFamily(): string {
+  return getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim()
+    || BUILD_TIME_FONT_FAMILY
+}
+
 /**
  * 按主题构建 mermaid themeVariables（对齐项目 design-tokens v6 太极纯灰体系）。
  * 色值取自 style.css 的暗/亮 CSS 变量（硬编码等效值——mermaid themeVariables 不支持 CSS 变量引用，
@@ -60,9 +68,10 @@ export function getCurrentTheme(): 'dark' | 'light' {
  * preset 差异（主要是 accent 色相）图表侧不跟随。
  */
 export function resolveMermaidThemeVariables(theme: 'dark' | 'light'): Record<string, string> {
+  const fontFamily = resolveMermaidFontFamily()
   if (theme === 'light') {
     return {
-      fontFamily: "'JetBrains Mono', 'IBM Plex Mono', ui-monospace, Menlo, monospace",
+      fontFamily,
       fontSize: '14px', // --text-base 基准档
       // 亮色（皓）：纸白底节点 + 墨色文字 + 青玉深档 accent（style.css [data-theme="light"]）
       primaryColor: '#f7f6f3', // --surface（亮）
@@ -82,7 +91,7 @@ export function resolveMermaidThemeVariables(theme: 'dark' | 'light'): Record<st
     }
   }
   return {
-    fontFamily: "'JetBrains Mono', 'IBM Plex Mono', ui-monospace, Menlo, monospace",
+    fontFamily,
     fontSize: '14px', // --text-base 基准档
     // 暗色（玄青）：深底节点 + 亮文字 + 青玉 accent（style.css :root）
     primaryColor: '#18181b', // --surface
@@ -103,7 +112,7 @@ export function resolveMermaidThemeVariables(theme: 'dark' | 'light'): Record<st
 
 /**
  * 渲染 mermaid 源码为 SVG 字符串。
- * 主题变化时自动重新 initialize（themeVariables 在 initialize 时固化）。
+ * 主题或字体变化时自动重新 initialize（themeVariables 在 initialize 时固化）。
  *
  * @param source mermaid 源码
  * @param theme 当前主题（调用方传入，主题变化时传新值触发重新 initialize）
@@ -116,16 +125,18 @@ export async function renderMermaid(
 ): Promise<{ svg: string }> {
   const mermaid = await getMermaid()
 
-  // 主题变化（或首次）：重新 initialize
-  if (initializedTheme !== theme) {
+  // 主题或字体变化（或首次）：重新 initialize；两者都会被 bake 进 SVG。
+  const themeVariables = resolveMermaidThemeVariables(theme)
+  const initializeKey = `${theme}:${themeVariables.fontFamily}`
+  if (initializedKey !== initializeKey) {
     mermaid.initialize({
       startOnLoad: false,
       theme: 'base',
       look: 'classic',
-      themeVariables: resolveMermaidThemeVariables(theme),
+      themeVariables,
       // 不用 layout:'elk'（需额外 @mermaid-js/layout-elk 包）；flowchart 默认 dagre 布局足够
     })
-    initializedTheme = theme
+    initializedKey = initializeKey
   }
 
   // 唯一 id：mermaid 内部缓存按 id，重复 id 会冲突。
@@ -151,7 +162,7 @@ export async function renderMermaid(
   }
 }
 
-/** 重置 mermaid 状态（测试用：清 initializedTheme 强制下次重新 initialize） */
+/** 重置 mermaid 状态（测试用：清 initializedKey 强制下次重新 initialize） */
 export function __resetMermaidForTest(): void {
-  initializedTheme = null
+  initializedKey = null
 }

@@ -46,16 +46,28 @@ describe('SettingsFontsSection 调用契约', () => {
     }]])
   })
 
-  it('重放中只显示 restoring，不落失败态；done 后才显示内存失败原因', async () => {
+  it('重放中只显示 restoring；done 后区分源文件缺失与不可读', async () => {
     const view = mountSection({
       replayState: 'replaying',
       replayFailures: { 'Custom (导入)': '源文件已不存在' },
     })
     expect(view.text()).toContain('settings.fonts.restoring')
-    expect(view.text()).not.toContain('settings.fonts.restoreFailed')
+    expect(view.text()).not.toContain('settings.fonts.sourceMissing')
     await view.setProps({ replayState: 'done' })
-    expect(view.text()).toContain('settings.fonts.restoreFailed')
-    expect(view.text()).toContain('源文件已不存在')
+    expect(view.text()).toContain('settings.fonts.sourceMissing')
+    await view.setProps({
+      replayFailures: { 'Custom (导入)': '无法读取字体文件，可能已损坏' },
+    })
+    expect(view.text()).toContain('settings.fonts.sourceUnreadable')
+  })
+
+  it('安装指引含三平台入口、重启语义与非 CN 版中文字形说明', () => {
+    const view = mountSection()
+    for (const platform of ['macos', 'windows', 'linux']) {
+      expect(view.find(`[data-testid="settings-font-install-${platform}"]`).exists()).toBe(true)
+    }
+    expect(view.text()).toContain('settings.fonts.installRestart')
+    expect(view.text()).toContain('settings.fonts.installCjk')
   })
 
   it('三行下拉可搜索并 emit 独立 slot/family', async () => {
