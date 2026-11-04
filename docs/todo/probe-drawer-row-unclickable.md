@@ -4,7 +4,7 @@
 
 ## 现象
 
-probe-container-plugin 的右抽屉面板树（探针面板标签页）行不可点击：其推树的行动作声明在 payload 顶层 `hostAction` 字段，与 list-tree v7 的行动作契约（`TreeItem.actions` 行内槽，条目形状 ActionBarItem）脱节——渲染层没有顶层 hostAction 的兼容读取通道，行渲染为纯展示。
+probe-container-plugin 的右抽屉面板树（探针面板标签页）行不可点击：其推树的行动作声明在 payload 顶层 `hostAction` 字段，与 list-tree v7 的行动作契约两形态均脱节（①行级 `item.action.hostAction` 嵌套位 = 行点击导航，subagent/workflow 行现役；②`TreeItem.actions` 行内槽 = 行尾内联按钮）——渲染层没有顶层 hostAction 的兼容读取通道，行渲染为纯展示。
 
 ## 量级
 
@@ -12,7 +12,7 @@ probe 自该插件交付起「双向导航」（设计 §8.2 S3）即失效，�
 
 ## 恢复路径
 
-二选一：① probe payload 改嵌套形态（行动作迁 `TreeItem.actions`）；② 渲染层补顶层 hostAction 的兼容读取。
+二选一：① probe payload 改嵌套形态——行动作迁入行级 `item.action.hostAction` 嵌套位（ListTree 现行可点判据所读形态，与 subagent/workflow 行点击导航同款交互，与 a5 原文「改嵌套形态」所指一致）；② 渲染层补顶层 hostAction 的兼容读取。注意若误迁 `TreeItem.actions` 会交付行尾内联按钮而非本插件头注声明的行点击导航交互。
 
 ## 判定
 
