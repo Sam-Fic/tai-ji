@@ -52,10 +52,11 @@ function probeDebugLines(spy: ReturnType<typeof vi.spyOn>): string[] {
     .filter((a: unknown): a is string => typeof a === 'string' && a.startsWith('[ro-probe]'))
 }
 
-/** 安装后 new 一个 RO 实例并触发回调 n 次（模拟该观察点的窗口内活动）。 */
-function createAndTrigger(constructor: unknown, n: number): void {
+/** 安装后 new 一个 RO 实例并触发回调 n 次（模拟该观察点的窗口内活动），返回实例供跨窗续触发。 */
+function createAndTrigger(constructor: unknown, n: number): FakeResizeObserver {
   const inst = new (constructor as new (cb: ResizeObserverCallback) => FakeResizeObserver)(() => {})
   for (let i = 0; i < n; i++) (inst as FakeResizeObserver).trigger()
+  return inst as FakeResizeObserver
 }
 
 /** 单注册点构造 n 个实例（循环内同一 `new` 行 = 同一注册点），返回实例供触发。 */
@@ -160,6 +161,32 @@ describe('boot/resize-observer-probe（dev-only RO 归因探针）', () => {
       // 第二窗无新活动 → 无输出（空窗不打印）
       await vi.advanceTimersByTimeAsync(60_000)
       expect(probeDebugLines(debugSpy).filter((l) => l.includes(' window #'))).toHaveLength(2)
+    } finally {
+      debugSpy.mockRestore()
+    }
+  })
+
+  it('flush 后既有实例继续计数进下一窗（长生命周期实例跨窗连续性）', async () => {
+    // 回归锁（dev-merge round1 must-fix）：flush 若用 clear() 会把闭包持有的 stat 对象
+    // 甩出 Map——首窗后 virtua 等长生命周期 RO 的计数永久丢失。原地清零后，既有实例
+    // 的后续回调必须落进下一窗的输出。
+    vi.useFakeTimers()
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+    try {
+      const wrapped = (await installProbe()) as new (cb: ResizeObserverCallback) => FakeResizeObserver
+      // 首窗：3 次回调，flush 输出后计数清零
+      const inst = createAndTrigger(wrapped, 3) as unknown as FakeResizeObserver
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(probeDebugLines(debugSpy).filter((l) => l.includes(' window #'))).toHaveLength(1)
+
+      // 第二窗：同一实例（无新构造）再触发 2 次 → 必须出现在第二窗输出（非永久零上报）
+      ;(inst as FakeResizeObserver).trigger()
+      ;(inst as FakeResizeObserver).trigger()
+      await vi.advanceTimersByTimeAsync(60_000)
+      const second = probeDebugLines(debugSpy).filter((l) => l.includes(' window #'))
+      expect(second).toHaveLength(2)
+      expect(second[1]).toContain('2 callbacks')
+      expect(second[1]).toContain('resize-observer-probe.test.ts')
     } finally {
       debugSpy.mockRestore()
     }

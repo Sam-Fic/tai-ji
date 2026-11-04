@@ -24,7 +24,7 @@
  * u3 render-process-gone 落盘 · supervisor/process-control.ts（size 帽常量复用）。
  */
 import { createWriteStream, mkdirSync, renameSync, statSync, type WriteStream } from 'node:fs'
-import { execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { join } from 'node:path'
 import { buildOutboundChildEnv } from '@taiji/shared'
 import { getDataDir } from '@taiji/shared/paths'
@@ -181,21 +181,46 @@ const MEMORY_WATERMARK_INTERVAL_MS = MEMORY_WATERMARK_INTERVAL_MINUTES * MS_PER_
  * 主进程 VM region 总数采样（仅 darwin）：spawn `vmmap --summary` 解析 TOTAL 行 COUNT 列。
  * 用途：2026-11-03 闪退取证（PartitionAlloc OnNoMemory + Memory Tag 253 达 122600 regions
  * 伪装 OOM）——region 数是 node 堆观测（memoryUsage）覆盖不到的 Chromium 原生层信号。
- * 采样失败（非 darwin / vmmap 缺失 / 超时）静默省略字段，不拖垮水位打点。
+ * 采样失败（非 darwin / vmmap 缺失 / 超时）静默省略字段，不拖垮水位打点（降级契约：
+ * 「采样坏了」与「region 数正常」在产物中不可区分是有意取舍——首败 warn 去重留痕见
+ * sampleVmRegionCount 失败分支）。
+ *
+ * [dev-merge round1 must-fix] 异步执行（execFile promise）：vmmap 耗时随 region 数增长
+ * （大 region 进程可跑数秒），同步 execFileSync 会在 5 分钟水位定时器里冻结 main 事件
+ * 循环（窗口/菜单/IPC 全停）最长 8s——取证辅助能力不得拖垮 P0 主进程。采样完成回调内
+ * 补写独立 vm watermark 行（不与 process.memoryUsage() 水位行合并——异步到达时点不同，
+ * 合并会把记忆体水位行的即时性绑到 vmmap 完成上）。
  */
-function sampleVmRegionCount(): number | undefined {
-  if (process.platform !== 'darwin') return undefined
-  try {
-    const out = execFileSync('vmmap', ['--summary', String(process.pid)], {
-      timeout: 8000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-      env: buildOutboundChildEnv({ parentEnv: process.env }),
-    }).toString()
-    const m = out.match(/^TOTAL[^\n]*?(\d+)\s*$/m)
-    return m ? Number(m[1]) : undefined
-  } catch {
-    return undefined
+function sampleVmRegionCountAsync(onSampled: (vmRegions: number | undefined) => void): void {
+  if (process.platform !== 'darwin') {
+    onSampled(undefined)
+    return
   }
+  execFile(
+    'vmmap',
+    ['--summary', String(process.pid)],
+    { timeout: 8000, env: buildOutboundChildEnv({ parentEnv: process.env }) },
+    (err, stdout) => {
+      if (err) {
+        warnVmmapFailureOnce(err)
+        onSampled(undefined)
+        return
+      }
+      const m = stdout.match(/^TOTAL[^\n]*?(\d+)\s*$/m)
+      if (!m) warnVmmapFailureOnce(new Error('vmmap --summary TOTAL line not found'))
+      onSampled(m ? Number(m[1]) : undefined)
+    },
+  )
+}
+
+/** vmmap 采样失败首败 warn 留痕（去重：同类失败只打一次，防每 5 分钟刷屏）；失败归「省略字段」语义不重试。 */
+let vmmapFailureWarned = false
+function warnVmmapFailureOnce(err: unknown): void {
+  if (vmmapFailureWarned) return
+  vmmapFailureWarned = true
+  mainLogger.warn('[main] vmmap region sampling unavailable — vmRegions field omitted', {
+    reason: err instanceof Error ? err.message : String(err),
+  })
 }
 
 export function startMemoryWatermarkTimer(): () => void {
@@ -207,7 +232,11 @@ export function startMemoryWatermarkTimer(): () => void {
       heapUsed: mem.heapUsed,
       heapTotal: mem.heapTotal,
       external: mem.external,
-      ...({ vmRegions: sampleVmRegionCount() } as Record<string, unknown>),
+    })
+    // vm region 采样异步补行：主事件循环不被 vmmap 阻塞；失败省略字段（水位行照常）
+    sampleVmRegionCountAsync((vmRegions) => {
+      if (vmRegions === undefined) return
+      mainLogger.info('[main] vm region watermark', { vmRegions })
     })
   }, MEMORY_WATERMARK_INTERVAL_MS)
   watermarkTimer.unref?.()

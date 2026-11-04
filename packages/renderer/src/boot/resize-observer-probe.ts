@@ -131,17 +131,24 @@ function parseRegistrationSite(stack: string | undefined): string {
   return '(unresolved registration site)'
 }
 
-/** 窗尾输出 top N 注册点（按回调次数降序，一行一条）并清零窗内计数；空窗不输出。 */
+/** 窗尾输出 top N 注册点（按回调次数降序，一行一条）并原地清零窗内计数；空窗不输出。 */
 function flushProbeWindow(): void {
-  if (siteStats.size === 0) return
-  const top = [...siteStats.values()]
-    .sort((a, b) => b.calls - a.calls)
-    .slice(0, PROBE_TOP_N)
+  // 只输出窗内有回调的注册点（calls>0）；零调用条目留在表内但不出声（空窗不输出语义）。
+  const active = [...siteStats.values()].filter((s) => s.calls > 0)
+  if (active.length === 0) return
+  const top = active.sort((a, b) => b.calls - a.calls).slice(0, PROBE_TOP_N)
   for (const [index, stat] of top.entries()) {
     console.debug(
       `${PROBE_LOG_PREFIX} ${PROBE_WINDOW_S}s window #${index + 1}: ` +
         `${stat.calls} callbacks, ${stat.instances} instance(s), from ${stat.site}`,
     )
   }
-  siteStats.clear()
+  // 原地清零（保留对象身份，禁 clear()）：包装回调闭包持有 stat 对象引用——clear() 会把
+  // 长生命周期实例（virtua 等）的后续计数甩进脱离 Map 的孤立对象，第二窗起这些注册点
+  // 永久零上报且无告警（dev-merge round1 must-fix）。instances 同步归零 = 「窗口内新建
+  // 实例数」口径逐窗重算。
+  for (const stat of siteStats.values()) {
+    stat.calls = 0
+    stat.instances = 0
+  }
 }
