@@ -7,7 +7,7 @@
  *
  * 依赖方向：无下游（读全局 window.electronAPI，类型经 declare global 自动可用）
  */
-import type { LatestReleaseInfo, UpdateStage, UpdateSettings, UpdateErrorPayload, ProxyTestResult, LaunchResult, UpdateCheckResult, UpdateInstallResult, RendererLogPayload, DiagnosticExportBundlePayload, DiagnosticExportBundleResult, SessionJsonlExportPayload, SessionJsonlExportResult, RemoteAccessInfo, RemoteAccessToggleResult, ShieldsFacesPayload, OverlayContentKind, BrowserFrameState, LocalFileServableReason, LocalFileServableResult, LocalFileReadReason, LocalFileReadResult, RuntimeTargetSnapshot, QuotaRefreshCookiePayload, QuotaRefreshCookieResult } from '@taiji/shared'
+import type { LatestReleaseInfo, UpdateStage, UpdateSettings, UpdateErrorPayload, ProxyTestResult, LaunchResult, UpdateCheckResult, UpdateInstallResult, RendererLogPayload, DiagnosticExportBundlePayload, DiagnosticExportBundleResult, SessionJsonlExportPayload, SessionJsonlExportResult, RemoteAccessInfo, RemoteAccessToggleResult, ShieldsFacesPayload, OverlayContentKind, BrowserFrameState, LocalFileServableReason, LocalFileServableResult, LocalFileReadReason, LocalFileReadResult, RuntimeTargetSnapshot, QuotaRefreshCookiePayload, QuotaRefreshCookieResult, ReadFontBytesResult } from '@taiji/shared'
 import type { ImageCacheWritePort } from '@taiji/core'
 
 /** preload 注入的 electronAPI（web/mock / node 测试环境为 undefined——后者连
@@ -108,6 +108,12 @@ export async function pickFile(
 ): Promise<{ canceled: boolean; path: string | null }> {
   if (!api?.pickFile) return { canceled: true, path: null }
   return api.pickFile(options)
+}
+
+/** 读取经 main 校验的字体文件字节；无 preload 时返回明确失败，不构造空字体。 */
+export async function readFontBytes(path: string): Promise<ReadFontBytesResult> {
+  if (!api?.readFontBytes) return { ok: false, reason: '当前环境不支持字体文件读取' }
+  return api.readFontBytes(path)
 }
 
 /** win/linux 自绘 traffic light 点击：最小化窗口（mac 系统圆点不走此处） */

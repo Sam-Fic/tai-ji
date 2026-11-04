@@ -44,6 +44,7 @@ import { useQuotaConfigure } from '@/composables/features/settings/useQuotaConfi
 import { config } from '@/api'
 import i18n, { setLocale } from '@/i18n'
 import type { Locale } from '@/i18n'
+import { useFontRegistry } from '@/features/fonts/use-font-registry'
 
 /**
  * settings 域核心初始化（transport 注入 + 订阅注册）。
@@ -64,7 +65,13 @@ export function bootstrapSettingsCore(): void {
   // RD-3#10：不 void 吞 rejection——init 失败（如 storage 配额错致主题停留默认）显式落
   // console.error，且 settings-lifecycle.init 成功后才置 initialized（失败可重试，不再被检查吞
   // 为 no-op）。.catch 已处理 rejection，无需再包 try/catch。
-  useSettings().init().catch((e: unknown) => {
+  useSettings().init().then(() => {
+    // 字体来源重建必须在 settings 从存储恢复后开始；registry 单例保证每进程仅重放一次，
+    // 异步执行不阻塞首屏，完成态由 replayState 显式暴露（font-system D11）。
+    void useFontRegistry().replayFontLibrary().catch((e: unknown) => {
+      console.error('[fonts] startup replay failed unexpectedly', e)
+    })
+  }).catch((e: unknown) => {
     console.error('[settings] bootstrapSettingsCore init failed; settings degraded to defaults', e)
   })
 }

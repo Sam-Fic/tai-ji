@@ -8,7 +8,7 @@
  * 置位后显式选择（含 large）不再被改写。
  */
 import { describe, it, expect } from 'vitest'
-import { getSystem, SYSTEM_KEY } from '../system-storage'
+import { getSystem, SYSTEM_KEY, updateSystem } from '../system-storage'
 import { InMemoryStorage } from './helpers/in-memory-storage'
 
 function seed(fontScales: unknown, migrated?: boolean): InMemoryStorage {
@@ -63,6 +63,22 @@ describe('getSystem 分区字号默认档位一次性迁移', () => {
     // 幂等 = 重复读稳定回落同一档位（读侧无累进状态），且全程不写 storage（落盘归启动链）
     expect(second.fontScales?.sidebar).toBe('medium')
     expect(storage.peek(SYSTEM_KEY)).not.toContain('fontScalesDefaultMigrated')
+  })
+})
+
+describe('updateSystem 字体写入兄弟字段保持（font-system RL16a）', () => {
+  it('patch fonts 只合并该字段，theme/fontSize/fontScales 原值不变', async () => {
+    const storage = seedPayload({
+      theme: 'light',
+      fontSize: 'large',
+      fontScales: { sidebar: 'small', chat: 'large', drawer: 'xlarge' },
+    })
+    await updateSystem(storage, { fonts: { ui: 'Maple Mono', mono: 'Menlo' } })
+    const system = await getSystem(storage)
+    expect(system.fonts).toEqual({ ui: 'Maple Mono', mono: 'Menlo' })
+    expect(system.theme).toBe('light')
+    expect(system.fontSize).toBe('large')
+    expect(system.fontScales).toEqual({ sidebar: 'small', chat: 'large', drawer: 'xlarge' })
   })
 })
 

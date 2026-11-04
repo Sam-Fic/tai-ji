@@ -30,7 +30,7 @@ export interface FontEntry { // oe-exempt:20261104:wip:来源层契约的第二�
  * 字体来源适配器（D4）。
  *
  * 只声明「列出可用字体」这一个方法：取字节/注册字体是各实现自己的内部细节
- * （`FileFontSource` 在 `list()` 里按登记表重放注册，`SystemFontSource` 只需枚举）。
+ * （`FileFontSource` 暴露注册方法供 registry 启动时按账本项目重放，`SystemFontSource` 只需枚举）。
  * 取字节的实现可以依赖来源层私有通道，不进本接口——否则核心层就被迫知道「字体有字节」。
  */
 export interface FontSource { // oe-exempt:20261104:wip:设计 D4 已登记两个真实变体（system/file），第二个实现在 u-m2-sources 落地

@@ -69,6 +69,8 @@ export default taijiTestConfig({
             // window-state（真实文件 IO）已进 guarded 池，此处排除防跨池重复收集
             '!test/window-state.test.ts',
             'update/__tests__/**/*.test.ts',
+            // font:read-bytes 纯校验 + 注入 IO（无真实 fs），归 legacy 池
+            'gateway/__tests__/**/*.test.ts',
             '../scripts/__tests__/**/*.test.mjs',
           ],
         },
