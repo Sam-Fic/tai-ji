@@ -7,6 +7,8 @@
  * - size 轮转触发 .1 滚动 + 续写新文件（验收条款）
  * - date 轮转：跨天写行落新日期文件（fake Date，IO 保持真实）
  * - 内存水位定时器（5min interval advance 后落一行含 rss/heapUsed/heapTotal/external）
+ * - vm region 采样（异步不阻塞水位行）：成功补 vm region watermark 行 / 失败降级
+ *   （水位行照常 + 首败 warn 去重一次 + 零 vmRegions 字段）
  * - closeMainLogger 后写入 no-op（幂等）
  *
  * 全部夹具 mkdtempSync(tmpdir) 自建自删（fs-guard 生效中）；写流 flush 是异步的，
@@ -182,7 +184,8 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
 
   it('内存水位定时器：advance 5min 后落一行含 rss/heapUsed/heapTotal/external', async () => {
     // 只 fake setInterval（init 内部 startMemoryWatermarkTimer 挂 fake interval），
-    // Date/IO 保持真实——advance 后回调同步写行，再回真实时钟轮询断言
+    // Date/IO 保持真实——advance 后回调同步写行，再回真实时钟轮询断言。
+    // vm region 采样已改异步（不阻塞水位行落盘），本用例只断言 memory watermark 行本身。
     vi.useFakeTimers({ toFake: ['setInterval'] })
     const { initMainLogger } = await loadLogger()
     initMainLogger({ isPackaged: true })
@@ -191,6 +194,52 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
     const today = new Date().toISOString().slice(0, 10)
     const content = await waitForLogContent(logsDir, `main-${today}`, 'memory watermark')
     expect(content).toMatch(/\[INFO\] \[main\] memory watermark \{.*"rss":\d+.*"heapUsed":\d+.*"heapTotal":\d+.*"external":\d+/)
+  })
+
+  it('vmmap 采样失败降级契约：水位行照常落盘（无 vmRegions 字段），失败首败 warn 去重一次', async () => {
+    // 降级契约锁定（dev-merge round1）：采样失败 = vm region watermark 行省略 +
+    // memory watermark 行照常 + 首败 warn 一条（去重，防每 5 分钟刷屏）。
+    vi.doMock('node:child_process', () => ({
+      execFile: (_cmd: string, _args: string[], _opts: unknown, cb: (e: Error | null) => void) => {
+        cb(new Error('vmmap not found (test stub)'))
+      },
+    }))
+    vi.useFakeTimers({ toFake: ['setInterval'] })
+    const { initMainLogger } = await loadLogger()
+    initMainLogger({ isPackaged: true })
+    // 连续两个采样窗都失败：warn 只应有第一条（去重）
+    vi.advanceTimersByTime(10 * MS_PER_MINUTE)
+    vi.useRealTimers()
+    const today = new Date().toISOString().slice(0, 10)
+    const content = await waitForLogContent(logsDir, `main-${today}`, 'vmmap region sampling unavailable')
+    expect(content).toMatch(/\[INFO\] \[main\] memory watermark \{.*"rss":\d+/)
+    // memory watermark 行不含 vmRegions 字段（采样与水位行解耦）
+    const watermarkLine = content.split('\n').find((l) => l.includes('memory watermark'))
+    expect(watermarkLine).toBeDefined()
+    expect(watermarkLine).not.toContain('vmRegions')
+    // 两窗失败但 warn 恰一条（去重）；且无 vm region watermark 行
+    expect(content.split('\n').filter((l) => l.includes('vmmap region sampling unavailable'))).toHaveLength(1)
+    expect(content).not.toContain('vm region watermark')
+    vi.doUnmock('node:child_process')
+  })
+
+  it('vmmap 采样成功：异步补一行 vm region watermark（含 vmRegions 数值）', async () => {
+    vi.doMock('node:child_process', () => ({
+      execFile: (_cmd: string, _args: string[], _opts: unknown, cb: (e: Error | null, stdout: string) => void) => {
+        cb(null, 'Physical footprint ... \nTOTAL                              1234\n')
+      },
+    }))
+    vi.useFakeTimers({ toFake: ['setInterval'] })
+    const { initMainLogger } = await loadLogger()
+    initMainLogger({ isPackaged: true })
+    vi.advanceTimersByTime(5 * MS_PER_MINUTE)
+    vi.useRealTimers()
+    const today = new Date().toISOString().slice(0, 10)
+    const content = await waitForLogContent(logsDir, `main-${today}`, 'vm region watermark')
+    expect(content).toMatch(/\[INFO\] \[main\] vm region watermark \{.*"vmRegions":1234/)
+    // memory watermark 主行照常（两者独立成行，采样失败不拖垮、成功不合并时点）
+    expect(content).toMatch(/\[INFO\] \[main\] memory watermark \{.*"rss":\d+/)
+    vi.doUnmock('node:child_process')
   })
 
   it('closeMainLogger 后写入 no-op（幂等，不抛错）', async () => {

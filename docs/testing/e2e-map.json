@@ -939,6 +939,30 @@
       "note": "R2 态（2026-09-20 阶段6收尾裁决，impl-plan 残留风险 #5 闭环）：开发期按改动范围手工跑（验收计划表回归项），不在 CI 门禁（真实 pi 子进程链路，CI 只跑 单测层同口径）；自含 pnpm install、隔离 TAIJI_AGENT_DATA_DIR、空载串行；CT-D1b 段 SDK API 未就位时 SKIP 不计失败（u5b 已落地转硬 PASS）；标记行协议与 exit code 一致；scope 含插件装载链两脚本（bundle-extensions 引擎副本重建 + prepare-builtin-plugins 插件装载前置，u6a 验收串联项）——链变更随契约脚本一并回归"
     },
     {
+      "id": "E2E-PLUGINPROBE-01",
+      "summary": "容器扩展点探针 fixture（verify-taiji probe-containers 剧本的种子源，external sandbox 形态装载）：fixture 变更 → 真机容器验收按改动范围复跑",
+      "scope": [
+        "packages/runtime/test/fixtures/plugins/probe-container-plugin/**"
+      ],
+      "layer": "L3",
+      "assets": [
+        {
+          "kind": "harness",
+          "ref": "packages/runtime/test/fixtures/plugins/probe-container-plugin/index.js"
+        },
+        {
+          "kind": "harness",
+          "ref": "packages/runtime/test/fixtures/plugins/probe-container-plugin/package.json"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "node .agents/skills/verify-taiji/scripts/run.mjs scenarios/probe-containers.mjs --run-id <id>（真机验收；剧本在实例启动前把本 fixture 种子进 <dataDir>/plugins/，权限经 plugin.approvePermissions 批准后激活）",
+      "owner": "packages/runtime",
+      "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
+      "note": "R2 态：验收剧本承载在 verify-taiji 技能（workspace 共享 .agents，不入库故不登记为 asset——asset 强校验要求仓库相对路径磁盘存在）；本条登记 = fixture 落 watched root（packages/runtime/test/）的看护归属，fixture 声明（contributes/placement 反例集）变更时按改动范围复跑剧本"
+    },
+    {
       "id": "E2E-PLUGINCONTRACT-02",
       "summary": "verify-plugin-e2e：插件系统非 mock 端到端验收层（boot 自动激活/toggle/hook 真实执行/权限审批唤醒 + SEC-A1~A5 沙箱信任边界）",
       "scope": [

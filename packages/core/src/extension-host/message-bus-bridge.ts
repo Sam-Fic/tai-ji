@@ -7,17 +7,20 @@
  * unsubscribe（防 listener 翻倍，项目规则#2）。
  *
  * 映射表（IF3）：
- *   9 个 plugin 系：permissionRequest→plugin-permission-request；crashed→
+ *   10 个 plugin 系：permissionRequest→plugin-permission-request；crashed→
  *     plugin-crashed；notification→plugin-notification；config→plugin-config-changed；
  *     messageDecoration→plugin-message-decoration；statusChange→plugin-status-change；
  *     uiRequest→ui-request；viewUpdate→extension-widget；
  *     headerActionUpdate→plugin:headerActionUpdate（plugin-header-action-modal-points
- *     点位帧，消费端 = HeaderActionStore 经 InternalEventBus 订阅）
+ *     点位帧，消费端 = HeaderActionStore 经 InternalEventBus 订阅）；
+ *     commandRegistered→plugin-command-registered（命令注册广播，暂无 renderer
+ *     消费方，登记转发保证未来可订阅）
  *   1 个 permission 终局帧（remote-use-mobile S5-V3）：permissionRequestResolved→
  *     plugin-permission-request-resolved（消费端 = permission-request-controller 撤窗，
  *     payload 缺 requestId 置空串、消费端回退按 pluginId 匹配）
- *   4 个 extension 系：widget/widgetGui→extension-widget；
- *     notify→extension-notify；ui_request→ui-request（与 plugin:uiRequest 归一）
+ *   5 个 extension 系：widget/widgetGui→extension-widget；
+ *     notify→extension-notify；ui_request→ui-request（与 plugin:uiRequest 归一）；
+ *     requestsInvalidated→requests-invalidated
  *
  * payload 窄化契约（clarify Q1，runtime 实际生产形状逐一核实）：
  * - permissionRequest payload = { pluginId, permissions: string[], requestId }（activator
@@ -177,6 +180,39 @@ function parseStatusChange(msg: IncomingPluginMessage): InternalEvent | null {
   const newStatus = asOptionalString(payload.newStatus) ?? asOptionalString(payload.status)
   if (newStatus === undefined || !PLUGIN_STATUS_VALUES.has(newStatus)) return null
   return { kind: 'plugin-status-change', pluginId, status: newStatus as 'discovered' | 'loaded' | 'active' | 'inactive' | 'crashed' }
+}
+
+/**
+ * plugin:commandRegistered 解析检查（命令注册下行广播，命令注册表每条登记后广播）。
+ * payload = CommandRegistration（runtime commands-api 形状）：pluginId / commandId 必带
+ * （缺 → null → parse-failed error）；handlerId / workerId / registeredAt 是 runtime
+ * 内部簿记字段（通道归属校验、注册时点），窄化时不进 renderer 事件。当前无 renderer
+ * 消费方——登记转发保证未来消费方经 InternalEventBus 正常订阅（不登记会落未知类型
+ * 路径打 bus error）。
+ */
+function parseCommandRegistered(msg: IncomingPluginMessage): InternalEvent | null {
+  const payload = asRecord(msg.payload)
+  if (!payload) return null
+  const pluginId = asString(payload.pluginId)
+  const commandId = asString(payload.commandId)
+  if (pluginId === null || commandId === null) return null
+  const title = asOptionalString(payload.title)
+  const category = asOptionalString(payload.category)
+  const keybinding = asOptionalString(payload.keybinding)
+  const when = asOptionalString(payload.when)
+  const timeoutMs = typeof payload.timeoutMs === 'number' ? payload.timeoutMs : undefined
+  return {
+    kind: 'plugin-command-registered',
+    command: {
+      pluginId,
+      commandId,
+      ...(title !== undefined ? { title } : {}),
+      ...(category !== undefined ? { category } : {}),
+      ...(keybinding !== undefined ? { keybinding } : {}),
+      ...(when !== undefined ? { when } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    },
+  }
 }
 
 const DIALOG_KINDS = new Set(['select', 'confirm', 'input'])
@@ -357,6 +393,7 @@ const PLUGIN_HANDLERS: Record<string, (msg: IncomingPluginMessage) => InternalEv
   'plugin:uiRequest': parseUiRequest,
   'plugin:viewUpdate': parseViewUpdate,
   'plugin:headerActionUpdate': parseHeaderActionUpdate,
+  'plugin:commandRegistered': parseCommandRegistered,
   // 三型「已知不归一」（见 ignoreFrame）：登记脱离 unknown 路径，bridge 侧不转发
   'plugin:event': ignoreFrame,
   'plugin:uiRequestExpired': ignoreFrame,
@@ -378,6 +415,15 @@ const EXTENSION_HANDLERS: Record<string, (msg: IncomingPluginMessage) => Interna
  * 其余 extension:* 由 source filter 静默丢弃的职责边界不变（见壳 useExtensionHostBridge）。
  */
 export const EXTENSION_BRIDGE_TYPES: readonly string[] = Object.keys(EXTENSION_HANDLERS)
+
+/**
+ * plugin 系 bridge 消费类型清单（PLUGIN_HANDLERS keys 派生，导出形态对齐
+ * EXTENSION_BRIDGE_TYPES）。消费方 = plugin-downlink-contract 对账测试：断言
+ * @taiji/shared 的 PLUGIN_DOWNLINK_TYPES（wire SSOT 全集）每个类型被本表登记
+ * （或在测试内登记的专用消费方豁免清单内）——runtime 新增下行广播类型而 bridge
+ * 漏登记时测试红（曾漏形态：帧落未知类型 error 路径打 bus error）。
+ */
+export const PLUGIN_BRIDGE_TYPES: readonly string[] = Object.keys(PLUGIN_HANDLERS)
 
 export class MessageBusBridge {
   private readonly bus: InternalEventBus

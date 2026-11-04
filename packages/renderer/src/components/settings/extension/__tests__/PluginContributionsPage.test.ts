@@ -8,7 +8,8 @@
  *   - TC1（SettingsModal 导航）：进入扩展 → 插件贡献子页 → PluginSettingsPage 渲染
  *     （plugin-settings-page testid 存在；contribution-unavailable 置灰项存在；
  *     builtin scheduler-manager/tasks 可见——DOM 断言，AGENTS.md 测试规范 §8 渲染 gate）。
- *   - TC2（provide 接线）：toContributionInfos 纯函数映射（available + 未注册挂载点置灰 + 原因），
+ *   - TC2（provide 接线）：toContributionInfos 纯函数映射（已注册挂载点 available=true；
+ *     command/slashCommand 豁免挂载点校验=可用；view 未注册 placement → false + 原因），
  *     真实 ContributionRegistry + MountPointRegistry；组件测试 global.provide mock 数据源
  *     （贡献列表含 unavailable 项 → is-unavailable class + 原因文案渲染）。
  *
@@ -84,7 +85,8 @@ function stubTransport(): SettingsTransport {
   return makeSettingsTransportStub()
 }
 
-/** mock 数据源：builtin scheduler-manager/tasks 插件 + 贡献可用性（panel.header/sidebar.tab 注册=可用，slash/commands 未注册=置灰+原因）。 */
+/** mock 数据源：builtin scheduler-manager/tasks 插件 + 贡献可用性（panel.header/sidebar.tab 注册=可用；
+ *  command/slashCommand 豁免挂载点校验=可用；view 声明未注册 placement 才置灰+原因）。 */
 const PLUGINS: PluginInfo[] = [
   {
     pluginId: 'scheduler-manager',
@@ -120,7 +122,11 @@ function makeDataSource(): PluginSettingsDataSource {
         return [
           { id: 'todo', type: 'view', available: true },
           { id: 'goal', type: 'view', available: true },
-          { id: 'goal', type: 'slashCommand', available: false, reason: '挂载点 slash 未注册' },
+          // command/slashCommand 豁免挂载点校验（不消费渲染容器）→ 可用
+          { id: 'goal', type: 'slashCommand', available: true },
+          { id: 'todo', type: 'slashCommand', available: true },
+          // view 型未注册 placement → 仍置灰 + 原因（豁免只关 command/slashCommand）
+          { id: 'ghost.tab', type: 'view', available: false, reason: '挂载点 nonexistent.slot 未注册' },
         ]
       }
       return []
@@ -208,15 +214,15 @@ describe('TC1: Settings 导航到插件贡献子页 → PluginSettingsPage 渲�
     const bodyText = document.body.textContent ?? ''
     expect(bodyText).toContain('scheduler-manager')
     expect(bodyText).toContain('tasks')
-    // 未注册挂载点（slash）置灰项存在 + 原因文案
+    // 未注册挂载点（view 声明 placement）置灰项存在 + 原因文案
     const grayed = document.body.querySelector('[data-testid="contribution-unavailable"]')
     expect(grayed).not.toBeNull()
-    expect(grayed!.textContent).toContain('挂载点 slash 未注册')
+    expect(grayed!.textContent).toContain('挂载点 nonexistent.slot 未注册')
   })
 })
 
 describe('TC2: provide 接线（toContributionInfos 映射 + 组件 global.provide mock）', () => {
-  it('toContributionInfos：已注册挂载点 available=true，未注册 → false + 原因', () => {
+  it('toContributionInfos：已注册挂载点 available=true；command/slashCommand 豁免挂载点校验=可用；view 未注册 placement 才置灰', () => {
     const bus = new InternalEventBus()
     const contributions = new ContributionRegistry(bus)
     contributions.registerBuiltin()
@@ -228,27 +234,46 @@ describe('TC2: provide 接线（toContributionInfos 映射 + 组件 global.provi
       contributions.getContributions({ pluginId: 'scheduler-manager' }),
       mounts,
     )
-    // scheduler-manager: headerAction（panel.header 注册 → 可用）+ 3 commands（commands 未注册 → 置灰 + 原因）
+    // scheduler-manager: headerAction（panel.header 注册 → 可用）+ 3 commands（豁免挂载点校验 → 可用，
+    // 曾因壳不注册 'commands' 被误置灰，prod console 每次启动 3 条误告警的来源）
     const haInfos = managerInfos.filter((i) => i.type === 'headerAction')
     expect(haInfos).toEqual([
       { id: 'scheduler-manager.open', type: 'headerAction', available: true, reason: undefined },
     ])
     const cmdInfos = managerInfos.filter((i) => i.type === 'command')
     expect(cmdInfos.length).toBe(3)
-    expect(cmdInfos.every((i) => !i.available)).toBe(true)
+    expect(cmdInfos.every((i) => i.available)).toBe(true)
+    expect(cmdInfos.every((i) => i.reason === undefined)).toBe(true)
 
     const tasksInfos = toContributionInfos(
       contributions.getContributions({ pluginId: 'tasks' }),
       mounts,
     )
-    // tasks: todo/goal view（sidebar.tab 注册 → 可用）+ goal/todo slashCommand（slash 未注册 → 置灰 + 原因）
-    const viewInfos = tasksInfos.filter((i) => i.type === 'view')
-    expect(viewInfos.every((i) => i.available)).toBe(true)
+    // tasks: goal/todo slashCommand（豁免挂载点校验 → 可用，另 3 条误告警的来源之一）
     const slashInfos = tasksInfos.filter((i) => i.type === 'slashCommand')
     expect(slashInfos.length).toBeGreaterThan(0)
-    expect(slashInfos.every((i) => !i.available)).toBe(true)
-    expect(slashInfos[0].reason).toContain('挂载点')
-    expect(slashInfos[0].reason).toContain('未注册')
+    expect(slashInfos.every((i) => i.available)).toBe(true)
+    expect(slashInfos.every((i) => i.reason === undefined)).toBe(true)
+
+    // 反向对照：view 型声明未注册 placement → available=false + 原因（豁免只关 command/slashCommand）
+    contributions.loadExternal([
+      {
+        pluginId: 'reconciliation-probe',
+        contributes: { views: [{ id: 'probe.bad', title: '坏声明', placement: 'nonexistent.slot' }] },
+      },
+    ])
+    const badView = toContributionInfos(
+      contributions.getContributions({ pluginId: 'reconciliation-probe' }),
+      mounts,
+    )
+    expect(badView).toEqual([
+      {
+        id: 'probe.bad',
+        type: 'view',
+        available: false,
+        reason: '挂载点 nonexistent.slot 未注册',
+      },
+    ])
   })
 
   it('组件测试：global.provide mock 数据源 → 不可用贡献置灰（is-unavailable class + 原因文案）', async () => {
@@ -271,7 +296,7 @@ describe('TC2: provide 接线（toContributionInfos 映射 + 组件 global.provi
     const grayed = wrapper.find('[data-testid="contribution-unavailable"]')
     expect(grayed.exists()).toBe(true)
     expect(grayed.classes()).toContain('is-unavailable')
-    expect(grayed.text()).toContain('挂载点 slash 未注册')
+    expect(grayed.text()).toContain('挂载点 nonexistent.slot 未注册')
     // 可用项正常展示（无置灰 class）
     const available = wrapper.find('[data-testid="contribution-item"]')
     expect(available.exists()).toBe(true)

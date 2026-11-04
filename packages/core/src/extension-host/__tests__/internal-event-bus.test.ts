@@ -396,7 +396,9 @@ describe("contribution-registry", () => {
       expect(all.find((c) => c.type === 'menu')?.placement).toBe('composer.toolbar')
       expect(all.find((c) => c.type === 'command')?.placement).toBe('commands')
       expect(all.find((c) => c.type === 'slashCommand')?.placement).toBe('slash')
-      expect(all.find((c) => c.type === 'configuration')?.placement).toBe('settings')
+      // configuration 的 placement = 壳注册的设置页分区挂载点名（对齐 registerMountPoints；
+      // 旧值 'settings' 是失配名，壳从未注册该名字）
+      expect(all.find((c) => c.type === 'configuration')?.placement).toBe('settings.section')
     })
 
     it('TC-5h: 跨 type 输出顺序固定（view→menu→command→slashCommand→configuration）', () => {

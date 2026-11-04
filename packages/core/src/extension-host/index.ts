@@ -15,7 +15,12 @@ export { createSessionScopedMap, createSessionScopedMapFrom } from './utils/sess
 export type { SessionScopedMap } from './utils/session-scoped-map'
 export { MountPointRegistry } from './mount-point-registry'
 export type { MountPointHost } from './mount-point-registry'
-export { ContributionRegistry } from './contribution-registry'
+export {
+  ContributionRegistry,
+  PLACEMENT_BY_TYPE,
+  MOUNT_POINT_CHECK_EXEMPT_TYPES,
+  isMountPointCheckExempt,
+} from './contribution-registry'
 export { builtinContributions } from './builtin-contributions'
 export { MockMessageSource } from './plugin-message-source'
 export type { PluginMessageSource, IncomingPluginMessage } from './plugin-message-source'

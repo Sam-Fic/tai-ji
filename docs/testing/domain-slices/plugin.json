@@ -7,10 +7,11 @@
     "shared"
   ],
   "scope": {
-    "runtime": [
-      "packages/runtime/src/services/plugin-service/**",
-      "packages/runtime/src/transport/plugin-message-handler.ts"
-    ],
+  "runtime": [
+   "packages/runtime/src/services/plugin-service/**",
+   "packages/runtime/test/fixtures/plugins/probe-container-plugin/**",
+   "packages/runtime/src/transport/plugin-message-handler.ts"
+  ],
     "sdk": [
       "packages/plugin-sdk/**",
       "packages/create-taiji-plugin/**"

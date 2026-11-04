@@ -42,6 +42,7 @@ import {
   createSessionScopedMapFrom,
   HeaderActionStore,
   InternalEventBus,
+  isMountPointCheckExempt,
   MessageBusBridge,
   MountPointRegistry,
   setExtensionRegistries,
@@ -230,18 +231,25 @@ function ensurePluginUiSnapshot(bus: InternalEventBus): () => void {
  * 挂载点注册态 → ContributionInfo 映射（M16，PluginSettingsPage 数据源）。
  *
  * available = 挂载点已注册（MountPointRegistry SSOT）；未注册 → available=false + reason
- * （置灰 + 原因，场景 E AC3）。纯函数便于单测（TC2）。
+ * （置灰 + 原因，场景 E AC3）。command/slashCommand 型豁免挂载点校验
+ * （isMountPointCheckExempt，与 ContributionRegistry.routeAll 同源判定）——这两类不
+ * 消费渲染容器，历史上因壳不注册 'commands'/'slash' 被误置灰（prod console 每次启动
+ * 6 条误告警），豁免后展示为可用。纯函数便于单测（TC2）。
  */
 export function toContributionInfos(
   records: ContributionRecord[],
   mountPoints: MountPointRegistry,
 ): ContributionInfo[] {
-  return records.map((c) => ({
-    id: c.contributionId,
-    type: c.type,
-    available: mountPoints.has(c.placement),
-    reason: mountPoints.has(c.placement) ? undefined : `挂载点 ${c.placement} 未注册`,
-  }))
+  return records.map((c) => {
+    const exempt = isMountPointCheckExempt(c.type)
+    const registered = exempt || mountPoints.has(c.placement)
+    return {
+      id: c.contributionId,
+      type: c.type,
+      available: registered,
+      reason: registered ? undefined : `挂载点 ${c.placement} 未注册`,
+    }
+  })
 }
 
 /**

@@ -93,6 +93,8 @@ const MAX_RECONNECT_DELAY_MS = 30_000
  * close(1001,'Server shutting down') 后 onclose event.code===1001）。
  */
 const WS_CLOSE_GOING_AWAY = 1001
+/** 断连日志的 close reason 截断上限（字符）：reason 极端长时防日志行爆长，超长部分丢弃。 */
+const WS_CLOSE_REASON_LOG_MAX_CHARS = 120
 /** 重连总时长上限（ms）：超过即放弃，置 failed 待用户手动重试，避免长时间无意义重试占用资源。
  *  说明：曾配 attempts 计数上限（MAX_RECONNECT_ATTEMPTS=20），但指数退避（1+2+4+8+16+30…）
  *  累积约第 6-7 次即跨 60s → duration cap 先触发，attempts 永不可达，该常量为死代码已删除。
@@ -560,6 +562,12 @@ export function connect(url: string, credentials: ConnectCredentials): void {
 
   ws.onclose = (event?: WebSocketCloseInfo) => {
     if (gen !== wsGeneration) return // 旧 WS 残余回调，不干扰新连接
+    // 断连观测（只加日志不改行为）：1001 以外的 close code 此前一律静默进重连链，
+    // 断连原因在 renderer 侧不可见——补打 code/reason/wasClean/重连次数供排查归因。
+    const closeDesc = event
+      ? `code=${event.code} wasClean=${event.wasClean}${event.reason ? ` reason="${event.reason.slice(0, WS_CLOSE_REASON_LOG_MAX_CHARS)}"` : ''}`
+      : 'no close event (mock stub)'
+    console.warn('[ws] closed:', closeDesc, '(reconnectAttempts:', reconnectAttempts + ')')
     // D8 close code 分流（只读码不加协议）：1001 = runtime 计划内关停 → 先触发消费方
     // 文案信号再进重连链（顺序对齐 authRejected「先置位再 close」——信号先落，重连链
     // 行为不变）；无事件形态（mock 桩）或非 1001 不触发，走现状断线路径。

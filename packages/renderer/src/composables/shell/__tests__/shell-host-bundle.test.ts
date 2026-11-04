@@ -42,6 +42,7 @@ import {
   providePlatform,
   registerMountPoints,
   scanContributions,
+  REGISTERED_MOUNT_POINTS,
   type ContributionRegistry,
   ActivationManager,
   CommandRegistry,
@@ -416,19 +417,11 @@ function disposeLastInit(): void {
 }
 
 /**
- * 本文件挂载点全量快照（U3 起含容器位三族）：bootstrap registerMountPoints 注册序即
- * mountPoints.list() 序，断言数组随注册表同步更新（单一事实源 = bootstrap.ts 注册序列）。
+ * 本文件挂载点全量快照（U3 起含容器位三族）：单一权威 = bootstrap.ts 的
+ * REGISTERED_MOUNT_POINTS（registerMountPoints 循环消费它，注册序即数组序）——
+ * 直接引用常量而非手抄副本，壳改注册清单时本文件随动不漂移。
  */
-const ALL_MOUNT_POINTS = [
-  'sidebar.tab',
-  'panel.header',
-  'composer.toolbar',
-  'provider.authorize',
-  'provider.detail-extra',
-  'drawer.tab',
-  'overlay.content',
-  'settings.section',
-]
+const ALL_MOUNT_POINTS: readonly string[] = REGISTERED_MOUNT_POINTS
 
 describe('initExtensionHostBridge provide CompanionBand 契约（FR2/FR7，TC10）', () => {
   afterEach(disposeLastInit)

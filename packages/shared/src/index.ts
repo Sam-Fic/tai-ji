@@ -24,6 +24,8 @@ export type {
   // 插件 UI 快照（plugin.ui.snapshot 拉取 reply，ADR-0097 拉为主）——runtime store /
   // renderer bridge 跨包具名消费
   ViewSnapshotItem, PluginUiSnapshotPayload,
+  // plugin 系下行帧类型全集成员类型（清单常量 PLUGIN_DOWNLINK_TYPES 在下方值导出段）
+  PluginDownlinkType,
   WatchdogMemoryLevel, WatchdogMemoryPressurePayload,
   RollingRestartState, RollingRestartReason, RollingRestartInflightSummary,
   RollingRestartDeferredPayload, RollingRestartCountdownPayload, RollingRestartForcedPayload,
@@ -72,6 +74,9 @@ export type {
 // 消息撤回（U3）：__taiji_nav__ 信令命令名常量——U4 runtime 编排跨包消费；
 // 本文件对 protocol.ts 是显式 allowlist（非 export *），漏登记会使常量对下游不可达。
 export { TAIJI_NAV_COMMAND } from './protocol'
+// plugin 系下行帧类型全集（wire SSOT 运行时可迭代投影，成员类型 PluginDownlinkType
+// 在上方 type 块）——renderer 侧 bridge 对账测试取数源（plugin-downlink-contract）
+export { PLUGIN_DOWNLINK_TYPES } from './protocol'
 // subagent.setModel「记账已写」错误码分型词表（D3 缺陷七）：renderer badge 亮灯判定
 // 的跨包消费常量（机制权威 = subagent-core model-switch.ts 处置表，词表扩位同批）。
 export { SUBAGENT_SET_MODEL_ACCOUNTED_ERROR_CODES } from './protocol'
