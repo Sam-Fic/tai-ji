@@ -346,8 +346,8 @@ export class ConnectionManager {
    * 连接保持、无人发 close 帧 → close 回调永不触发 → shutdown 序列停在 conn.stop →
    * runtime 不退出（退出码 86 不可达）→ LivenessMonitor 3 连败判死强杀，计划内零退避
    * 路径退化成崩溃退避。SIGTERM 全 app 退出路径 renderer 进程先亡、连接随之断开，缺陷
-   * 因此从未暴露。从根源修复 = 服务端主动逐连接发 close 帧（滚动重启后 renderer 重连新 runtime
-   * 正是设计预期恢复路径，ws-client 对任意 close 码统一走 scheduleReconnect）。
+ * 因此从未暴露。从根源修复 = 服务端主动逐连接发 close 帧（滚动重启后 renderer 重连新 runtime
+ * 正是设计预期恢复路径——快照推送驱动的断旧连新）。
    */
   async stop(): Promise<void> {
     // 1001 Going Away（RFC 6455）：计划内服务端关停语义。ws 库 close 对已关闭连接均为

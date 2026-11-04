@@ -25,7 +25,6 @@ import { ref } from 'vue'
 import type { NormalizedQuotaRow, QuotaWindow } from '@taiji/shared'
 import i18n from '@/i18n'
 import PlanQuotaFloatPanel from '../PlanQuotaFloatPanel.vue'
-import { QUOTA_FLOAT_REFRESH_INTERVAL_MS } from '../plan-quota-float'
 import { useQuotaStore } from '@/stores/quota'
 
 // ── mock 面 ────────────────────────────────────────────────────────
@@ -267,39 +266,6 @@ describe('PlanQuotaFloatPanel', () => {
     expect(kimiMark.attributes('aria-label')).toContain('查询失败')
     // 整行失败提示属无缓存形态，此处不应出现
     expect(wrapper.text()).not.toContain(i18n.global.t('panel.quotaFloat.fetchFailed'))
-  })
-
-  it('定时统一刷新：挂载期间每 5 分钟全部套餐重查，收起态暂停、展开恢复', async () => {
-    vi.useFakeTimers()
-    try {
-      const wrapper = mountFloat()
-      await flushPromises()
-      expect(quotaApiMock.fetchQuota).toHaveBeenCalledTimes(2) // 仅挂载首查
-
-      // 未到 5min 间隔：不刷新
-      await vi.advanceTimersByTimeAsync(QUOTA_FLOAT_REFRESH_INTERVAL_MS - 1)
-      expect(quotaApiMock.fetchQuota).toHaveBeenCalledTimes(2)
-
-      // 到 5min：全部 provider 重查
-      await vi.advanceTimersByTimeAsync(1)
-      await flushPromises()
-      expect(quotaApiMock.fetchQuota).toHaveBeenCalledTimes(4)
-
-      // 收起：定时器暂停（不可见期间的查询无人消费）
-      await wrapper.setProps({ collapsed: true })
-      await vi.advanceTimersByTimeAsync(QUOTA_FLOAT_REFRESH_INTERVAL_MS * 2)
-      expect(quotaApiMock.fetchQuota).toHaveBeenCalledTimes(4)
-
-      // 展开：定时器恢复
-      await wrapper.setProps({ collapsed: false })
-      await vi.advanceTimersByTimeAsync(QUOTA_FLOAT_REFRESH_INTERVAL_MS)
-      await flushPromises()
-      expect(quotaApiMock.fetchQuota).toHaveBeenCalledTimes(6)
-
-      wrapper.unmount()
-    } finally {
-      vi.useRealTimers()
-    }
   })
 
   it('quota 缓存被清除（如设置页类型切换）：对应 provider 自动重查', async () => {

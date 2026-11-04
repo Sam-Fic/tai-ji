@@ -193,10 +193,9 @@ export interface ISessionService {
 
   // [HISTORICAL] sendSubagentMessage 已删除（composer 四符号设计 D2，marker 半成品通道废弃）：
   // 定向消息改走 subagentAction(message/start) 直达 subagent。
-  // [pi-stall-detection U4] source：session_manager abort 工具通路的机器分型传参（唯一非
-  // 缺省调用点 = session-manager-handler abort 分支——agent 发起的 abort 不是用户操作，
-  // 悬挂升级置判死强杀分型而非 abort_timeout 用户分型，RL16 分型不变量；缺省 undefined =
-  // 用户语义不变）。
+  // source：session_manager abort 工具通路的分型传参（唯一非缺省调用点 =
+  // session-manager-handler abort 分支——agent 发起的 abort 不是用户操作，终态写
+  // 区分性文案；缺省 undefined = 用户语义不变）。
   abort(sessionId: string, source?: 'agent'): Promise<void>
   /** 强制退出卡死 session（sidebar 右键入口，杀 pi 进程 + stopped 收敛）。 */
   forceQuit(sessionId: string): Promise<void>
@@ -240,7 +239,7 @@ export interface ISessionService {
    * 覆盖默认预算（缺省回落 HISTORY_BUDGET）。cursor 未命中返回空页 + truncated=false
    * （翻页到头，不报错）。
    */
-  getHistory(sessionId: string, query?: { cursor?: string; limitTurns?: number; maxBytes?: number }): Promise<{ messages: Message[]; truncated: boolean; loadedTurns: number; totalTurnsEstimate: number; interrupted?: boolean }>
+  getHistory(sessionId: string, query?: { cursor?: string; limitTurns?: number; maxBytes?: number }): Promise<{ messages: Message[]; truncated: boolean; loadedTurns: number; totalTurnsEstimate: number }>
   /**
    * 获取 session 派生的 subagent 列表（从主 session JSONL 的 subagent toolCall/toolResult 提取）。
    * 纯磁盘读取，不依赖 pi 进程活跃。文件不存在或无 subagent 调用时返回空数组。
@@ -317,9 +316,9 @@ export interface ISessionService {
   getTraceEntries(sessionId: string): Promise<SessionTraceSnapshot>
   /**
    * 现取当前 system prompt（session-trace design §3.1 失败路径 / D2）：经常驻扩展
-   * /__taiji_get_system_prompt__ 命令写 taiji:current-system-prompt custom entry，轮询
-   * get_entries(since) 拉到后提取返回。仅活跃 session 可用（非活跃无 pi 进程）。
-   * @throws code=session_not_active / session_busy / fetch_current_prompt_timeout
+   * /__taiji_get_system_prompt__ 命令写 taiji:current-system-prompt custom entry，单次
+   * get_entries(since) 拉取后提取返回。仅活跃 session 可用（非活跃无 pi 进程）。
+   * @throws code=session_not_active / session_busy / fetch_current_prompt_failed
    */
   fetchCurrentSystemPrompt(sessionId: string): Promise<ServerMessageMap['session.currentSystemPrompt']>
   /**
@@ -679,10 +678,6 @@ export interface IConfigService {
   getBareSetupScript(): string
   /** 写入 bare-workspace 初始化脚本路径到 config.json.bareSetupScript。config.json 损坏降级态返回 {ok:false}（不写盘）。 */
   setBareSetupScript(script: string): SaveAppConfigResult
-  /** 读取 worktree 创建超时时间（config.json.worktreeTimeout），默认 60 秒。 */
-  getTimeout(): number
-  /** 写入 worktree 创建超时时间到 config.json.worktreeTimeout。config.json 损坏降级态返回 {ok:false}（不写盘）。 */
-  setTimeout(timeout: number): SaveAppConfigResult
   /** 读取默认基分支（config.json.defaultBaseBranch），默认 'auto'（按仓库远端实况动态推导）。 */
   getDefaultBaseBranch(): string
   /** 写入默认基分支到 config.json.defaultBaseBranch。config.json 损坏降级态返回 {ok:false}（不写盘）。 */

@@ -94,21 +94,20 @@ export interface RunMemberView { // oe-exempt:20261022:framework:设计 §3.1.3 
    */
   failure?: string;
   /**
-   * [§3.3.6/§3.3.9 budget 分轴显式] 四轴预算结构（null = 该轴生效上界无界）。
-   * 事实源（runMemberViews 派生——本类型不单独产词）：maxTurns/timeoutMs = 同
+   * [§3.3.6/§3.3.9 budget 分轴显式] 预算结构（null = 该轴生效上界无界）。
+   * 事实源（runMemberViews 派生——本类型不单独产词）：maxTurns = 同
    * stepIndex call 的 AgentCallOpts 显式传参（callId = stepIndex 单源，
    * dispatchAgentCall 落 AgentCall.opts；calls miss 回落重建侧恢复的声明值
-   * meta.recoveredCallOpts）；budgetTokens/budgetTimeMs = run 级声明轴
-   * （run.state.budget.maxTokens/maxTimeMs——fresh run 从 spec 构造、重建 run 从
+   * meta.recoveredCallOpts）；budgetTokens = run 级声明轴
+   *（run.state.budget.maxTokens——fresh run 从 spec 构造、重建 run 从
    * run-created 帧恢复，两形态同源，resume-run-rebuild.ts 同款注释锚）。
+   *（原 timeoutMs / budgetTimeMs 两轴已随时间机制删除。）
    * 生产输出恒在场（runMemberViews 逐行附加）；类型保持 optional 仅为兼容既有
    * 测试/消费方的字面量构造形态。
    */
   budget?: {
     maxTurns: number | null;
-    timeoutMs: number | null;
     budgetTokens: number | null;
-    budgetTimeMs: number | null;
   };
   /**
    * [subagent-observability §3.3.6/§3.3.10 成员行对齐] 交付校验缺口事实（部分交付
@@ -193,11 +192,11 @@ function missingDeliverablesByStepIndex(run: WorkflowRun): Map<number, string[]>
 /**
  * 单成员行 budget 四轴派生（[§3.3.6/§3.3.9] 分轴显式——§3.3.9 执法点（引擎进程内
  * limiter）的声明值镜像）：
- * - maxTurns/timeoutMs：同 stepIndex call 的 AgentCallOpts 显式传参（callId =
+ * - maxTurns：同 stepIndex call 的 AgentCallOpts 显式传参（callId =
  *   stepIndex 单源）；calls miss 时回落重建侧恢复的 agent-started 声明值
  *   （meta.recoveredCallOpts——重派集成员 replay 重派前的窗口，resume-run-rebuild
  *   从 input 载荷恢复）；两源皆无 = 未声明 = null；
- * - budgetTokens/budgetTimeMs：run 级声明轴（run.state.budget.maxTokens/maxTimeMs，
+ * - budgetTokens：run 级声明轴（run.state.budget.maxTokens，
  *   fresh run 从 spec 构造 / 重建 run 从 run-created 帧恢复——两形态同源）。
  * 值语义与执法点一致：未传 / <=0 = 不限（AgentCallOpts 预算语义对齐注释），
  * 映射为 null（显式无界）。
@@ -211,9 +210,7 @@ function budgetViewOf(run: WorkflowRun, stepIndex: number): NonNullable<RunMembe
     typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
   return {
     maxTurns: positiveOr(opts?.maxTurns),
-    timeoutMs: positiveOr(opts?.timeoutMs),
     budgetTokens: positiveOr(run.state.budget.maxTokens),
-    budgetTimeMs: positiveOr(run.state.budget.maxTimeMs),
   };
 }
 
@@ -416,15 +413,13 @@ export function memberViewLine(view: RunMemberView): string {
   return parts.join(" ").trimEnd();
 }
 
-/** budget 四轴的行内段（仅声明了生效上界的轴；全无界 = undefined 不入行——
- *  「null = 显式无界」的完整四轴结构在 details 载荷，行内只呈现生效约束）。 */
+/** budget 轴的行内段（仅声明了生效上界的轴；全无界 = undefined 不入行——
+ *  「null = 显式无界」的完整结构在 details 载荷，行内只呈现生效约束）。 */
 function budgetLineSegment(budget: RunMemberView["budget"]): string | undefined {
   if (budget === undefined) return undefined;
   const axes: string[] = [];
   if (budget.maxTurns !== null) axes.push(`maxTurns=${budget.maxTurns}`);
-  if (budget.timeoutMs !== null) axes.push(`timeoutMs=${budget.timeoutMs}`);
   if (budget.budgetTokens !== null) axes.push(`budgetTokens=${budget.budgetTokens}`);
-  if (budget.budgetTimeMs !== null) axes.push(`budgetTimeMs=${budget.budgetTimeMs}`);
   return axes.length > 0 ? axes.join(" ") : undefined;
 }
 

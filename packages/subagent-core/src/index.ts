@@ -18,8 +18,8 @@
  * [2026-09-13 barrel 全面收窄] 用户裁决不等跨仓验证直接收窄：零仓内消费导出删除
  * （A 组全死连定义删 / B 组仅定义文件内部使用只摘 barrel 行 / C 组仅测试消费摘
  * barrel 行 + 测试改深路径），298 → 229 符号；外部消费者（zsw 仓）编译报错符号
- * 按 git 历史原样加回 barrel（恢复通道）。弱活保留项：maxTurnsToWatchdogMs /
- * loadWorkflowScriptByPath / normalizeWorkflowRef / cleanupStaleTmpFiles /
+ * 按 git 历史原样加回 barrel（恢复通道）。弱活保留项：loadWorkflowScriptByPath /
+ * normalizeWorkflowRef / cleanupStaleTmpFiles /
  * listStaleTmpFiles / parseAtomicTmpPath（scripts/probe-third-host-integration.mjs
  * 探针消费）、CORE_PACKAGE_VERSION / DEFAULT_DATA_ROOT / routeEngine（版本一致性
  * 检查 + dist 冒烟链消费）。
@@ -139,17 +139,14 @@ export {
   setJournalAppendListener,
   notifyJournalAppended,
 } from "./execution/persistence/journal-notify.ts";
-// W3 后内核宿主 = engine/host（在途推送迁移点 = Continuation arm/disarm 与 EngineClient
-// 反向通道镜像桥接），模块本体不经 engines/pi。
-// maxTurnsToWatchdogMs 为 maxTurns→watchdog 毫秒换算（U3/U4 / D7，floor 语义
-// 文档化——现役消费 = scripts/probe-third-host-integration.mjs 探针；引擎侧无消费
-//（预算各自实现）；[W3] 定义收敛在 pi-host-binding，原 inproc session-runner（已删）
-// 定义随删件消亡）；killRecordChildWithEscalation 为
+// W3 后内核宿主 = engine/host（在途推送迁移点 = Continuation 轮在途翻边与
+// EngineClient 反向通道镜像桥接），模块本体不经 engines/pi。
+// killRecordChildWithEscalation 为
 // 单 record 子进程终止的镜像记账入口（[W3] 实际终止在引擎进程内经协议承载）。
+//（maxTurnsToWatchdogMs 弱活保留项已随时间机制清理删除——引擎侧与探针均无消费。）
 export {
   killRecordChildWithEscalation,
 } from "./execution/engine/host/spawned-children.ts";
-export { maxTurnsToWatchdogMs } from "./execution/engine/host/pi-host-binding.ts";
 
 // zcode 引擎注册范围（[W8 D8 薄壳] createZcodeEngine 已上移 d8-compat——上方导出）。
 // [W11 收尾] ZcodeEngineDeps 与 D8CompatZcodeEngineDeps 合并为别名（zsw 全部调用点的
@@ -445,7 +442,7 @@ export { discoverAgents } from "./execution/assembly/agents-assembly.ts";
 // ── workflow 编排入口（orchestration）────────────────────────
 // runWorkflow / abortRun：run 生命周期 free functions（D-12）——orchestration 的
 // 最小宿主入口。更细粒度编排（terminateRunningRuns / evictDoneRunsBeyondCap /
-// scheduleTimeBudget / 上限常量）为组合根实际消费方，随 B-2 扩范围进 barrel
+// 上限常量）为组合根实际消费方，随 B-2 扩范围进 barrel
 // （D3 判定标准首次执行）。host-surface 扩大范围（zsw 回接 U0）同出 barrel：宿主壳
 // 组装 LifecycleDeps 需要亲手构造三个 port 实现与消费细粒度编排函数，深路径消费
 // 在 npm 形态不可达（发布范围无 `./*` 通配）——宿主触点证据即 zsw 回接设计 D2。
@@ -458,7 +455,6 @@ export { ArgsValidationError } from "./orchestration/args-validator.ts";
 export {
   terminateRunningRuns,
   evictDoneRunsBeyondCap,
-  scheduleTimeBudget,
   MAX_RETAINED_DONE_RUNS,
 } from "./orchestration/lifecycle.ts";
 
@@ -778,15 +774,14 @@ export {
   parseResourceMetaDetailed,
 } from "./shared/meta-parser.ts";
 export { THINKING_ORDER } from "./shared/model-ref.ts";
-// 定时器上限（壳 tool-workflow.ts OR-1 消费，D3 判定进 barrel）
+// setTimeout 安全域上限（壳 tool schema 文案消费，D3 判定进 barrel）
 export { MAX_TIMER_DELAY_MS } from "./shared/timer-delay.ts";
 // [§2.6] 进程级全局槽键单一声明处（壳侧托管槽 dialogQueue/workflowDomainState 同源消费）。
 export { GLOBAL_SLOT_KEYS, type GlobalSlotName } from "./shared/global-slots.ts";
-// 入口态 fail-fast 断言（time 上界/负值、tokens 负值、slug 长度）：两个 tool 入口
+// 入口态 fail-fast 断言（tokens 负值、slug 长度）：两个 tool 入口
 // 共用的同一份实现（findings g11a-F2；schema 第一道关卡之外，副作用链之前的运行时
-// 第二道）。
+// 第二道）。（assertEntryTimeBudget 已随 workflow run 级时间预算机制删除。）
 export {
-  assertEntryTimeBudget,
   assertEntryTokenBudget,
   assertSlugWithinLimit,
 } from "./shared/entry-guards.ts";

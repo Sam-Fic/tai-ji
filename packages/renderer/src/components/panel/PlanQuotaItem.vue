@@ -105,11 +105,11 @@
  * 格 tooltip 承载明细（used/limit/计量单位 + 重置倒计时，带「剩」前缀），行内只留
  * 百分比 + 环 + 紧凑剩余时间。
  *
- * 重查通道两条（都收敛到 onHoverEnter，pending 并发保护在 composable + runtime 双层）：
- * ① quota store 缓存被清（设置页 typeChanged / 关闭再开启额度）→ entry 有→无沿触发；
- * ② 浮层定时统一刷新 bump tick（provide/inject，plan-quota-float.ts SSOT）。
+ * 重查通道：quota store 缓存被清（设置页 typeChanged / 关闭再开启额度）→ entry 有→无
+ * 沿触发（收敛到 onHoverEnter，pending 并发保护在 composable + runtime 双层）。
+ * 挂载即查一次，无定时刷新（ADR-0188 丁类退役）。
  */
-import { computed, inject, onMounted, watch } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { TriangleAlert } from '@lucide/vue'
 import type { QuotaWindow } from '@taiji/shared'
@@ -117,7 +117,6 @@ import { formatQuotaPct } from '@taiji/shared'
 import { useQuotaQuery } from '@/composables/features/model/useQuotaQuery'
 import { formatResetSec, QUOTA_USAGE_DANGER_THRESHOLD, QUOTA_USAGE_HIGH_THRESHOLD } from '@/composables/features/model/useQuotaDisplay'
 import { useQuotaStore } from '@/stores/quota'
-import { QUOTA_FLOAT_REFRESH_TICK_KEY } from './plan-quota-float'
 
 const props = defineProps<{
   providerId: string
@@ -136,18 +135,12 @@ onMounted(() => {
   void onHoverEnter()
 })
 
-// 通道①：缓存清除（entry 有→无）自动重查。挂载首查期间 entry 本为 undefined，
+// 缓存清除（entry 有→无）自动重查。挂载首查期间 entry 本为 undefined，
 // 只认「有→无」沿，首查不重复触发；查询完成必写 entry（成功 setCache / 失败 setError），
 // 不会因「失败无数据」造成 undefined 循环重查。
 const entry = computed(() => quotaStore.getEntry(props.providerId))
 watch(entry, (now, prev) => {
   if (now === undefined && prev !== undefined) void onHoverEnter()
-})
-
-// 通道②：浮层定时统一刷新 tick。独立挂载（单测）无 provider 时回落常量 ref，watch 永不触发。
-const refreshTick = inject(QUOTA_FLOAT_REFRESH_TICK_KEY, null)
-watch(refreshTick ?? computed(() => 0), () => {
-  void onHoverEnter()
 })
 
 /** row 供模板失败态判据（null = 无任何缓存数据 → 整行失败提示；非 null = 窗口 + 头部失败标记）。 */

@@ -94,7 +94,6 @@ export default {
       formTitle: 'Awaiting your reply',
       submitSuspended: 'Server restart reconciling — submitting is temporarily unavailable',
       requestInvalidated: 'Request invalidated (withdrawn)',
-      requestExpired: 'Request expired',
       permissionTitle: 'Permission approval',
       permissionScopeHint: 'This plugin requests {count} permissions (process-level request, not tied to a session)',
       permissionDeny: 'Deny',

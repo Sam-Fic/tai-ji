@@ -7,8 +7,8 @@
 // 本文件只锁壳契约范围：
 //   1. 构造签名（deps.subagentService——session-lifecycle.ts 装配点同形）；
 //   2. run() 纯转调（opts/signal/onEvent/stream 原样透传 + parentRunId 用直调
-//      占位 SAR_UNATTACHED_PARENT_RUN_ID + 返回值原样返回，零映射零吞错）；
-//   3. mergeRunSignals re-export 可用（既有 import 路径契约）。
+//      占位 SAR_UNATTACHED_PARENT_RUN_ID + 返回值原样返回，零映射零吞错）。
+//  （原 mergeRunSignals re-export 契约用例随 run 域墙钟机制删除。）
 //
 // [H2 W4 删除范围] 旧编排内部用例（路由集成 / model 填底 /
 // timeoutMs 合并 / onEvent-journal 桥接 / 直传保真 / no-progress 守护落点 /
@@ -27,7 +27,6 @@ import {
   SubprocessAgentRunner,
   type SubprocessAgentRunnerDeps,
 } from "../assembly/subprocess-agent-runner.ts";
-import { mergeRunSignals } from "../engine/common/run-signals.ts";
 
 function makeOpts(): AgentCallOpts {
   return { prompt: "test task", agent: "worker" };
@@ -90,13 +89,5 @@ describe("SubprocessAgentRunner (H2 W4 纯转调壳)", () => {
     const sar = new SubprocessAgentRunner({ subagentService: createMockService(executeWorkflowAgent) });
 
     await expect(sar.run(makeOpts(), new AbortController().signal)).rejects.toThrow(boom);
-  });
-
-  it("re-export 契约：mergeRunSignals 经本模块路径可用（既有 import 面）", () => {
-    // no-progress-killall 测试经本模块 import mergeRunSignals——锁 re-export 行存活
-    //（行为本体由 engine/common/run-signals 权威实现及其测试锁定）。
-    const handle = mergeRunSignals(new AbortController().signal, 60_000);
-    expect(handle.signal.aborted).toBe(false);
-    handle.dispose();
   });
 });

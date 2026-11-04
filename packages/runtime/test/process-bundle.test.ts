@@ -624,7 +624,7 @@ describe('shell-runner', () => {
 describe('ShellRunner G3 累积字节帽（CappedStreamAccumulator）', () => {
   it('帽内小输出原样透传：无截断标记，stdout/stderr 保留原始字符', async () => {
     const { child, runner, spawn } = setup()
-    const p = runner.execute({ scriptPath: '/tmp/setup.sh', cwd: '/tmp', timeout: 60_000 })
+    const p = runner.execute({ scriptPath: '/tmp/setup.sh', cwd: '/tmp' })
     child.stdout.emit('data', Buffer.from('installing package done\n'))
     child.stderr.emit('data', Buffer.from('warn: something\n'))
     child.emit('close', 0)
@@ -639,7 +639,7 @@ describe('ShellRunner G3 累积字节帽（CappedStreamAccumulator）', () => {
 
   it('stdout 超 10MB：截断保留头尾 + 标记 dropped 字节 + 结果串有界', async () => {
     const { child, runner } = setup()
-    const p = runner.execute({ scriptPath: '/tmp/setup.sh', cwd: '/tmp', timeout: 60_000 })
+    const p = runner.execute({ scriptPath: '/tmp/setup.sh', cwd: '/tmp' })
     // 192 × 64KB = 12MB > 10MB 帽
     const chunkCount = 192
     emitChunkedLines(child, 'stdout', chunkCount)
@@ -664,7 +664,7 @@ describe('ShellRunner G3 累积字节帽（CappedStreamAccumulator）', () => {
 
   it('stderr 独立同帽：截断标记 stream 标识为 stderr', async () => {
     const { child, runner } = setup()
-    const p = runner.execute({ scriptPath: '/tmp/setup.sh', cwd: '/tmp', timeout: 60_000 })
+    const p = runner.execute({ scriptPath: '/tmp/setup.sh', cwd: '/tmp' })
     emitChunkedLines(child, 'stderr', 192)
     child.emit('close', 0)
 
@@ -681,7 +681,6 @@ describe('ShellRunner G3 累积字节帽（CappedStreamAccumulator）', () => {
     const p = runner.execute({
       scriptPath: '/tmp/setup.sh',
       cwd: '/tmp',
-      timeout: 60_000,
       onOutput: (line, stream) => lines.push({ line, stream }),
     })
     const chunkCount = 192

@@ -31,20 +31,6 @@ export const OBJECTIVE_DISPLAY_LIMIT = 80;
 export const OBJECTIVE_TRUNCATE_KEEP = 77; // DISPLAY_LIMIT - 3 for "..."
 export const TOKEN_K_THRESHOLD = 1000;     // token 数 ≥ 此值时缩写为 k 单位（12000 → 12k）
 
-// ── 停滞/清理阈值 ────────────────────────────────────
+// ── 上限 ─────────────────────────────────────────────
 
-export const AUTO_CLEAR_TURNS = 2;				// 终态后自动清理轮数
 export const MAX_HISTORY_ENTRIES = 20;			// goal-history entry GC 上限
-
-// ── 轮次活性熔断（chat-domain-v1x D4 / W5）─────────────
-//
-// 事故背景（2026-09-08，64 分钟 ~320 turn 空转烧 2.93M token）：pending 检查被
-// 「等待已注销的后台任务」击穿后，goal 每轮注入 continuation、主 agent 每轮回一句
-// 等待，无任何无进展熔断。双维度封顶：主判据总量上限（与是否调工具正交，不可被
-// 任何目标行为绕过）+ 辅判据无进展退避（间隔 ×2 递增）。全部可经 PI_GOAL_* env 覆盖。
-
-export const DEFAULT_CONTINUATION_CAP = 50;              // 主判据：单激活周期 continuation 连发总次数上限（封顶必停发）
-export const DEFAULT_NO_PROGRESS_TURNS = 5;              // 辅判据：连续无进展轮数阈值（第 N 轮起退避间隔翻倍）
-export const DEFAULT_NO_PROGRESS_TOKEN_THRESHOLD = 1000; // 辅判据：tokenDelta 低于此值视为低产出（一句「等待」量级）
-export const DEFAULT_BACKOFF_BASE_MS = 10_000;           // 辅判据：退避基础间隔（×2 递增的基数）
-export const DEFAULT_BACKOFF_MAX_MS = 600_000;           // 辅判据：退避间隔上限（指数天花板，防止级数失控）

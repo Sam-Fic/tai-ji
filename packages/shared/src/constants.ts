@@ -498,17 +498,6 @@ export const TTS_CACHE_MAX_FILES = 100 as const
 export const TTS_CACHE_MAX_BYTES: number = 512 * 1024 * 1024
 
 /**
- * runtime 滚动重启计划内退出的专用退出码（86）。supervisor（classifyRuntimeExit
- * 判别式 + planned 立即重启分支）与 runtime 执行链（rolling-restart 触发的
- * process.exit）双端共用——两进程依赖方向单向（main → runtime），runtime 无法
- * import main 侧符号，SSOT 落 shared 消除双 86 字面量。
- *
- * apps/electron/main/supervisor/runtime-supervisor.ts 的 `PLANNED_EXIT_CODE` 是
- * 本值的转发常量（导出清单不变，u1f 既有测试与消费方 import 点不受影响）。
- */
-export const RUNTIME_PLANNED_EXIT_CODE = 86
-
-/**
  * runtime 实例标识 env 名（connection-datasync-ssot §6.1，SSOT——main 写入方与 runtime
  * 读取方共用，禁字面量分叉）。
  *

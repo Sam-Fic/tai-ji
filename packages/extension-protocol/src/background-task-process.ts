@@ -29,8 +29,6 @@ import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
 /** killProcessTree 回退路径诊断回调（落盘/console 通道由调用方适配注入）。 */
 export type ProcessFallbackLogger = (step: string, err: unknown) => void
 
-/** ps 调用超时：卡死的 ps 不拖垮调用方（超时按取不到处理 → 保守跳过）。 */
-const PS_TIMEOUT_MS = 5_000
 /** 毫秒 → 秒（epoch 秒换算；勿与 startedAt 的毫秒混用）。 */
 const MS_PER_SECOND = 1_000
 
@@ -92,9 +90,10 @@ export function killProcessTree(pid: number, onFallback?: ProcessFallbackLogger)
 /** 读 pid 的真实 pgid（ps -o pgid=）；失败/不可解析 → null（调用方按不可达处理走回退）。 */
 function readPgid(pid: number): number | null {
   try {
+    // 无墙钟（时间机制删除裁决）：ps 为本地毫秒级命令，同步等待自然返回；
+    // 失败/不可解析经 result.error / 非零退出归 null（调用方按不可达处理走回退）。
     const result = spawnSync('ps', ['-o', 'pgid=', '-p', String(pid)], {
       encoding: 'utf8',
-      timeout: PS_TIMEOUT_MS,
     })
     if (result.error || result.status !== 0 || !result.stdout) return null
     const pgid = Number.parseInt(result.stdout.trim(), 10)
@@ -121,9 +120,9 @@ function killProcessTreeWindows(pid: number, onFallback?: ProcessFallbackLogger)
 function killDescendantsRecursive(pid: number, onFallback?: ProcessFallbackLogger): void {
   let stdout: string
   try {
-    // timeout 与 ps 同款（PS_TIMEOUT_MS）：本函数在 process.on("exit") 收殓路径同步执行，
-    // 卡死的 pgrep 不得无限阻塞收殓；超时落 result.error → 按空表处理，残留交下个收殓周期
-    const result = spawnSync('pgrep', ['-P', String(pid)], { encoding: 'utf8', timeout: PS_TIMEOUT_MS })
+    // 无墙钟（时间机制删除裁决）：pgrep 同步等待自然返回；失败落 result.error → 按空表处理，
+    // 残留交下个收殓周期
+    const result = spawnSync('pgrep', ['-P', String(pid)], { encoding: 'utf8' })
     if (result.error || result.status !== 0 || !result.stdout) return
     stdout = result.stdout
   } catch (err) {
@@ -154,9 +153,9 @@ function killDescendantsRecursive(pid: number, onFallback?: ProcessFallbackLogge
 export function getProcessStartTimeSec(pid: number): number | undefined {
   let result: SpawnSyncReturns<string>
   try {
+    // 无墙钟（时间机制删除裁决）：ps 同步等待自然返回，失败按 undefined 处理
     result = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
       encoding: 'utf8',
-      timeout: PS_TIMEOUT_MS,
     })
   } catch {
     return undefined

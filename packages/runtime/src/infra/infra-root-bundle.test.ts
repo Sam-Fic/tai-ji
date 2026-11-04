@@ -94,22 +94,7 @@ describe('GitExecutor.exec（异步化行为等价）', () => {
     })
   })
 
-  it('超时（killed + SIGTERM）：抛 GitExecutorError(timeout)，message 含超时毫秒', async () => {
-    execFileMock.mockImplementation((_file, _args, _opts, cb) => {
-      cb?.(execError({ code: undefined, killed: true, signal: 'SIGTERM' }), '', '')
-      return {} as ReturnType<typeof execFile>
-    })
-    const executor = new GitExecutor()
-
-    await expect(executor.exec('/repo', 'status')).rejects.toSatisfy((e: unknown) => {
-      expect(e).toBeInstanceOf(GitExecutorError)
-      expect((e as GitExecutorError).code).toBe('timeout')
-      expect((e as GitExecutorError).message).toContain('8000')
-      return true
-    })
-  })
-
-  it('默认超时 8000ms；opts.timeoutMs 覆盖（GitStateService snapshotStatus/numstat 用 5000ms）', async () => {
+  it('无墙钟：execFile options 不带 timeout（本地 git 操作跑到退出为止）', async () => {
     execFileMock.mockImplementation((_file, _args, _opts, cb) => {
       cb?.(null, '', '')
       return {} as ReturnType<typeof execFile>
@@ -117,20 +102,8 @@ describe('GitExecutor.exec（异步化行为等价）', () => {
     const executor = new GitExecutor()
 
     await executor.exec('/repo', 'status')
-    expect(execFileMock).toHaveBeenLastCalledWith(
-      'git',
-      ['status'],
-      expect.objectContaining({ timeout: 8000 }),
-      expect.any(Function),
-    )
-
-    await executor.exec('/repo', 'status', ['--porcelain'], { timeoutMs: 5000 })
-    expect(execFileMock).toHaveBeenLastCalledWith(
-      'git',
-      ['status', '--porcelain'],
-      expect.objectContaining({ timeout: 5000 }),
-      expect.any(Function),
-    )
+    const opts = execFileMock.mock.calls.at(-1)?.[2] as Record<string, unknown>
+    expect(opts['timeout']).toBeUndefined()
   })
 
   it('异步性：执行挂起期间事件循环不被阻塞（pending promise 可被并发推进）', async () => {
@@ -255,8 +228,7 @@ describe('ShellRunner env 出站接线（U4-B8）', () => {
 
     const { spawnFn, getOptions } = createFakeSpawn()
     const runner = new ShellRunner({ spawn: spawnFn })
-    // timeout 必传（port 契约）：120_000 = 改造前 infra 暗默认值，保持既有行为不变。
-    const result = await runner.execute({ scriptPath: '/tmp/setup.sh', cwd: '/tmp', timeout: 120_000 })
+    const result = await runner.execute({ scriptPath: '/tmp/setup.sh', cwd: '/tmp' })
 
     expect(result.exitCode).toBe(0)
     const env = getOptions()?.env as Record<string, string>
@@ -275,7 +247,7 @@ describe('ShellRunner env 出站接线（U4-B8）', () => {
 
     const { spawnFn, getOptions } = createFakeSpawn()
     const runner = new ShellRunner({ spawn: spawnFn })
-    await runner.execute({ scriptPath: '/tmp/setup.sh', cwd: '/tmp', timeout: 120_000 })
+    await runner.execute({ scriptPath: '/tmp/setup.sh', cwd: '/tmp' })
 
     const env = getOptions()?.env as Record<string, string>
     expect(env.SOME_RANDOM_SESSION_VAR).toBeUndefined()
@@ -285,7 +257,7 @@ describe('ShellRunner 信号退出码（RT-8#8：exitCode ?? 0 假成功）', ()
   it('被信号杀死（exitCode=null + signal=SIGTERM）→ 折算 128+15=143 非 0，stderr 带信号标记', async () => {
     const { spawnFn, children } = createManualSpawn()
     const runner = new ShellRunner({ spawn: spawnFn })
-    const pending = runner.execute({ scriptPath: '/tmp/killed.sh', cwd: '/tmp', timeout: 120_000 })
+    const pending = runner.execute({ scriptPath: '/tmp/killed.sh', cwd: '/tmp' })
     children[0]!.emitClose(null, 'SIGTERM')
 
     const result = await pending
@@ -296,7 +268,7 @@ describe('ShellRunner 信号退出码（RT-8#8：exitCode ?? 0 假成功）', ()
   it('未知信号（表外）→ 兜底 128 仍是非 0（保持「非 0 = 失败」语义）', async () => {
     const { spawnFn, children } = createManualSpawn()
     const runner = new ShellRunner({ spawn: spawnFn })
-    const pending = runner.execute({ scriptPath: '/tmp/killed.sh', cwd: '/tmp', timeout: 120_000 })
+    const pending = runner.execute({ scriptPath: '/tmp/killed.sh', cwd: '/tmp' })
     children[0]!.emitClose(null, 'SIGUSR1')
 
     const result = await pending
@@ -307,38 +279,12 @@ describe('ShellRunner 信号退出码（RT-8#8：exitCode ?? 0 假成功）', ()
   it('正常失败（exitCode=1 + signal=null）→ 原样透传 1，不追加信号标记', async () => {
     const { spawnFn, children } = createManualSpawn()
     const runner = new ShellRunner({ spawn: spawnFn })
-    const pending = runner.execute({ scriptPath: '/tmp/fail.sh', cwd: '/tmp', timeout: 120_000 })
+    const pending = runner.execute({ scriptPath: '/tmp/fail.sh', cwd: '/tmp' })
     children[0]!.emitClose(1, null)
 
     const result = await pending
     expect(result.exitCode).toBe(1)
     expect(result.stderr).not.toContain('killed by signal')
-  })
-})
-describe('ShellRunner 超时用户值生效（timeout-slow-flow-wallclock D4）', () => {
-  it('调用方传入的 timeout 驱动超时判定：到期 SIGTERM + ShellRunnerError(timeout)，消息含用户值', async () => {
-    // child 永不 close（模拟脚本挂死）；timeout=5ms 远小于旧暗默认 120s——
-    // 若实现忽略调用方值回退暗默认，本测试在 vitest 超时内不会收到 reject，直接失败。
-    const killSignals: (string | undefined)[] = []
-    const neverClosingSpawn = vi.fn((_cmd: string, _args: string[], _opts: Record<string, unknown>) => {
-      const c = new EventEmitter() as never as { stdout: EventEmitter; stderr: EventEmitter; kill: (signal?: string) => void }
-      c.stdout = new EventEmitter()
-      c.stderr = new EventEmitter()
-      c.kill = (signal?: string) => { killSignals.push(signal) }
-      return c
-    })
-
-    const runner = new ShellRunner({ spawn: neverClosingSpawn as unknown as SpawnFn })
-    const pending = runner.execute({ scriptPath: '/tmp/hang.sh', cwd: '/tmp', timeout: 5 })
-    await expect(pending).rejects.toMatchObject({ code: 'timeout' })
-    expect(killSignals).toContain('SIGTERM')
-    // 错误消息回显调用方传入的量级（5ms），证明判定来自用户值而非内部默认
-    await expect(pending).rejects.toThrow(/5ms/)
-  })
-
-  it('ShellRunnerError.timeout 分类可用（port 契约不变式）', () => {
-    const err = new ShellRunnerError('timeout', 'probe')
-    expect(err.code).toBe('timeout')
   })
 })
 });

@@ -2,7 +2,7 @@
  * 持久化层 — serialize/deserialize + history entry 构造
  *
  * FR-5：必填字段缺失直接 throw；旧格式容忍面（time_limited → budget_limited 迁移、
- * successCriteria 旧格式归一、W5 熔断计数缺省归零、slug/completedAtTurnIndex 可选解析、
+ * successCriteria 旧格式归一、defer 去重锚缺省归空、slug 可选解析、
  * tasks 及未知字段白名单忽略）见 deserializeState 各迁移点注释。零 Pi 依赖。
  */
 
@@ -102,21 +102,10 @@ export function deserializeState(data: Record<string, unknown>): GoalRuntimeStat
 		tokenWarning90Sent: req("tokenWarning90Sent"),
 		lastTurnTokensUsed: req("lastTurnTokensUsed"),
 		currentTurnIndex: req("currentTurnIndex"),
-		completedAtTurnIndex: data.completedAtTurnIndex as number | undefined,
-		// W5 熔断计数（chat-domain-v1x D4）：旧持久化数据无这些字段 → 归零/空集
-		// （新激活周期语义：升级前的旧 goal 不携带历史熔断账）。slug 同款可选解析，
-		// 不用 req()（否则旧数据 throw → state 全丢，GAP-4）。
-		continuationsSent: nonNegativeNumber(data.continuationsSent),
-		noProgressTurns: nonNegativeNumber(data.noProgressTurns),
-		continuationCapNotified: data.continuationCapNotified === true,
+		// defer 通知去重锚：旧持久化数据无此字段 → 空集。slug 同款可选解析惯例
+		//（不 throw 丢整个 state，GAP-4）。
 		lastDeferredPendingIds: normalizeStringArray(data.lastDeferredPendingIds),
-		toolCallsSeen: nonNegativeNumber(data.toolCallsSeen),
 	};
-}
-
-/** 数值字段归一化：非负有限数原样保留，其余（含 undefined）→ 0。 */
-function nonNegativeNumber(raw: unknown): number {
-	return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? raw : 0;
 }
 
 /** string[] 字段归一化：every-string 原样保留，其余（含 undefined）→ []。 */

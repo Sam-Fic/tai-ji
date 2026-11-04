@@ -18,7 +18,7 @@
 // 公共；makeTmpAgentDir 统一用本文件版；parent-guard 的 ServiceInternals 改名
 // ParentGuardInternals 消歧）：
 // - delivery-methods.test.ts（chat 投递车道与并发检查）
-// - subagent-service-notify-gate.test.ts（notify 门二元组 + idleTimeoutMs fail-fast）
+// - subagent-service-notify-gate.test.ts（notify 门二元组）
 // - subagent-service-parent-guard.test.ts（getRecordForAction 直接父校验）
 // - subagent-service-model-switch.test.ts（setModel 壳接线）
 
@@ -39,9 +39,7 @@ import type { ExecutionRecord } from "../domain/record-model.ts";
 import { makePi, type PiMock } from "./helpers/pi-mock.ts";
 import { clearEngines } from "../engine/registry.ts";
 import { registerFakePiEngine, type FakePiEnginePort } from "./helpers/fake-engine-port.ts";
-import * as lifecycle from "../lifecycle/lifecycle-manager.ts";
 import { notifyGateAllowsDelivery } from "../subagent-service.ts";
-import { MAX_TIMER_DELAY_MS } from "../../shared/timer-delay.ts";
 import { RecordStore } from "../persistence/record-store.ts";
 import type { ChildProcess } from "node:child_process";
 import type { ModelRegistryLike } from "../assembly/model-resolver.ts";
@@ -987,13 +985,11 @@ describe("deliverChatMessage（chatMode 统一投递 → Continuation 派发）"
     fs.writeFileSync(record.sessionFile, "{}\n", "utf-8");
     // [U2a/B5] markRoundIdle 按 id 查 store 内存——record 须 register（见上 describe 注）。
     (service as unknown as { store: { register: (r: ExecutionRecord) => void } }).store.register(record);
-    lifecycle._resetLifecycleState();
   });
 
   afterEach(() => {
     service.dispose();
     clearEngines();
-    lifecycle._resetLifecycleState();
   });
 
   afterAll(() => {
@@ -1047,13 +1043,11 @@ describe("deliverChatMessage 并发检查（review round2 MF1）", () => {
     fs.writeFileSync(record.sessionFile, "{}\n", "utf-8");
     // [U2a/B5] markRoundIdle 按 id 查 store 内存——record 须 register（见上 describe 注）。
     (service as unknown as { store: { register: (r: ExecutionRecord) => void } }).store.register(record);
-    lifecycle._resetLifecycleState();
   });
 
   afterEach(() => {
     service.dispose();
     clearEngines();
-    lifecycle._resetLifecycleState();
   });
 
   afterAll(() => {
@@ -1238,42 +1232,6 @@ describe("T4① notify gate（[U5 / §3.2.7] 放弃轮标记阻断 / 其余放�
     service.dispose();
     clearEngines();
     fs.rmSync(agentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-  });
-});
-
-describe("T4② idleTimeoutMs entry fail-fast", () => {
-  let agentDir: string;
-  let service: SubagentService;
-
-  beforeEach(() => {
-    ({ agentDir, service } = setup());
-  });
-
-  afterEach(() => {
-    fs.rmSync(agentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-  });
-
-  it("execute rejects idleTimeoutMs above the setTimeout limit with the valid range in the message", async () => {
-    await expect(service.execute({ task: "x", slug: "test", idleTimeoutMs: MAX_TIMER_DELAY_MS + 1 })).rejects.toThrow(
-      new RegExp(`${MAX_TIMER_DELAY_MS}`),
-    );
-    await expect(service.execute({ task: "x", slug: "test", idleTimeoutMs: 3_000_000_000 })).rejects.toThrow(/2\^31-1/);
-  });
-
-  it("execute rejects non-finite idleTimeoutMs", async () => {
-    await expect(service.execute({ task: "x", slug: "test", idleTimeoutMs: Number.NaN })).rejects.toThrow(/not a finite number/);
-  });
-
-  it("rejects before any record is created (no side effects)", async () => {
-    const internals = service as unknown as ServiceInternals;
-    await expect(service.executeAndAwait({ task: "x", slug: "test", idleTimeoutMs: 3_000_000_000 })).rejects.toThrow();
-    expect(internals.store.listRunning()).toHaveLength(0);
-  });
-
-  it("accepts valid values (0 = explicit disable, positive within limit)", async () => {
-    // 校验通过后执行链继续（runSpawn 被 mock，返回 undefined result 会在后续流程抛错/
-    // 返回——但绝不能是 idleTimeoutMs 校验错误）
-    await expect(service.execute({ task: "x", slug: "test", idleTimeoutMs: 0 })).rejects.not.toThrow(/idleTimeoutMs/);
   });
 });
 

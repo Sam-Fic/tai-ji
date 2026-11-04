@@ -7,7 +7,6 @@
  */
 
 import type { RpcResponse, RpcNotification, RpcRequest } from './plugin-types.js'
-import { PluginRpcErrorCodes } from './plugin-types.js'
 import { PendingTracker } from '../../utils/async/pending-tracker.js'
 import { errorWithCode } from '../../utils/errors.js'
 import { getOrCreate } from '../../utils/collections.js'
@@ -36,20 +35,15 @@ export class PluginRpcClient {
    * 消息格式为 WorkerToHostMessage 的 rpc 变体：
    * `{ type: 'rpc', jsonrpc: '2.0', id, method, params }`
    */
-  request(method: string, params: Record<string, unknown>, timeoutMs?: number): Promise<unknown> {
+  request(method: string, params: Record<string, unknown>): Promise<unknown> {
     if (!this.port) {
       return Promise.reject(new Error('RPC client not attached'))
     }
 
     const id = this.nextId++
-    const timeoutError = Object.assign(
-      new Error(`RPC timeout: ${method}`),
-      { code: PluginRpcErrorCodes.RPC_TIMEOUT },
-    )
 
-    // 先登记 pending（缺省无墙钟——ADR-0122；timeoutMs 显式传入 = 交互等待 C2 语义，
-    // 如 ui dialog 人填表粒度），再 postMessage。
-    const promise = this.pending.register(id, timeoutError, timeoutMs)
+    // 先登记 pending（无墙钟，挂到回复到达或 dispose rejectAll），再 postMessage。
+    const promise = this.pending.register(id)
 
     // WorkerToHostMessage: { type: 'rpc' } & RpcRequest
     const message: RpcRequest & { type: 'rpc' } = {

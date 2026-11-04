@@ -402,31 +402,15 @@ describe("handleBeforeAgentStart", () => {
 		expect(result!.message.content).not.toContain("__planStart");
 	});
 
-	// FR-8.1 G-007: AUTO_CLEAR_TURNS=2
-	it("终态 + turnsInTerminal >= 2 → clearGoalSession（state 清空）", async () => {
-		const { pi } = makeFakePi();
-		const { ctx } = makeFakeCtx();
-		const session = createGoalSession();
-		session.state = makeRunningState({
-			status: "complete",
-			currentTurnIndex: 10,
-			completedAtTurnIndex: 8, // turnsInTerminal = 2 >= AUTO_CLEAR_TURNS
-		});
-
-		const result = await handleBeforeAgentStart(pi, session, ctx);
-
-		expect(result).toBeUndefined();
-		expect(session.state).toBeNull();
-	});
-
-	it("终态 + turnsInTerminal < 2 → 不清理，折叠 status bar", async () => {
+	// [行为锁定 2026-11-04] AUTO_CLEAR_TURNS 轮数自动清理已删：终态 goal 不清理、
+	// 折叠 status bar，保留到用户显式 /goal clear
+	it("终态 → 不清理（无轮数自动清理），折叠 status bar", async () => {
 		const { pi, calls: piCalls } = makeFakePi();
 		const { ctx, calls: ctxCalls } = makeFakeCtx({ hasUI: true });
 		const session = createGoalSession();
 		session.state = makeRunningState({
 			status: "complete",
 			currentTurnIndex: 10,
-			completedAtTurnIndex: 9, // turnsInTerminal = 1 < 2
 		});
 
 		const result = await handleBeforeAgentStart(pi, session, ctx);

@@ -443,9 +443,8 @@ describe('initExtensionHostBridge provide CompanionBand 契约（FR2/FR7，TC10�
     const transportProvided = provided.find((p) => p.key === UI_RESPONSE_TRANSPORT_KEY)
 
     expect(sourceProvided).toBeDefined()
-    const source = sourceProvided?.value as { onUiRequest: unknown; onUiRequestExpired: unknown }
+    const source = sourceProvided?.value as { onUiRequest: unknown }
     expect(typeof source.onUiRequest).toBe('function')
-    expect(typeof source.onUiRequestExpired).toBe('function')
 
     expect(transportProvided).toBeDefined()
     const transport = transportProvided?.value as { sendPiResponse: unknown; sendPluginResponse: unknown }

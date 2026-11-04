@@ -7,12 +7,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  CANCEL_SETTLE_GRACE_MS,
   ENGINE_PROTOCOL_VERSION,
-  HANDSHAKE_TIMEOUT_MS,
-  REVERSE_REQUEST_TIMEOUT_MS,
-  SET_MODEL_REQUEST_TIMEOUT_MS,
-  SET_MODEL_STAGE_TIMEOUT_MS,
   STDERR_TAIL_CHARS,
   SUPPORTED_PROTOCOL_RANGE,
   isProtocolVersionCompatible,
@@ -97,17 +92,7 @@ describe("版本协商（A6① 协议层判据）", () => {
 });
 
 describe("量级常量（impl-plan §2.1 逐项写死）", () => {
-  it("数据范围反向请求 10s / 握手 10s / cancel 收敛 3s", () => {
-    expect(REVERSE_REQUEST_TIMEOUT_MS).toBe(10_000);
-    expect(HANDSHAKE_TIMEOUT_MS).toBe(10_000);
-    expect(CANCEL_SETTLE_GRACE_MS).toBe(3_000);
-  });
-
-  it("setModel 控制范围超时（[subagent-model-switch §7.3] 引擎单阶段窗 3s 锚 cancel 收敛窗量级；宿主单请求上界 10s ≥ 2×3s + 余量）", () => {
-    expect(SET_MODEL_STAGE_TIMEOUT_MS).toBe(3_000);
-    expect(SET_MODEL_REQUEST_TIMEOUT_MS).toBe(10_000);
-    expect(SET_MODEL_REQUEST_TIMEOUT_MS).toBeGreaterThanOrEqual(SET_MODEL_STAGE_TIMEOUT_MS * 2);
-  });
+  //（原五个时间窗常量断言已随时间机制删除——常量本体已从 engine-protocol.ts 移除。）
 
   it("stderr 崩溃现场尾部 400 字符", () => {
     expect(STDERR_TAIL_CHARS).toBe(400);

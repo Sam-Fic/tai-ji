@@ -54,7 +54,6 @@ function makeRealRun(runId: string, opts: { budgetTimeMs?: number } = {}): Workf
       scriptSource: "agent('hi')",
       args: {},
       scriptPath: "/tmp/test-wf.js",
-      budgetTimeMs: opts.budgetTimeMs,
     },
     {
       budget: new Budget(),

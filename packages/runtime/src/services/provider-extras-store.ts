@@ -100,10 +100,10 @@ const SCHEMA_SNIPPET_MAX = 120
  * （无 compromise 检测，行为变化声明见 file-lock.ts 模块头）。锁前 ensureFileExists
  * 建空结构（写路径专用；读路径不持锁不物化文件）。
  */
-async function withFileLock<T>(filePath: string, fn: () => Promise<T>, minRetryTimeoutMs?: number): Promise<T> {
+async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
   return withFileLockAsync(
     filePath,
-    { ensure: () => ensureFileExists(filePath), logTag: 'provider-extras-store', minRetryTimeoutMs },
+    { ensure: () => ensureFileExists(filePath), logTag: 'provider-extras-store' },
     fn,
   )
 }
@@ -209,15 +209,9 @@ function writeInternal(filePath: string, file: ProviderExtrasFile): void {
   atomicWrite(filePath, JSON.stringify({ ...file, version: 1 }, null, JSON_INDENT))
 }
 
-/** 锁参数注入（测试压缩退避等待用；缺省走 file-lock 默认，生产行为不变）。 */
-export interface TaijiProviderStoreOptions {
-  /** ELOCKED 指数退避的下限等待 ms（透传 withFileLockAsync；缺省 100）。 */
-  lockMinRetryTimeoutMs?: number
-}
-
 /** providers.json 的唯一读写者。所有写入必须经 modify/delete（RMW 锁内）。 */
 export class TaijiProviderStore {
-  constructor(private readonly filePath: string, private readonly opts?: TaijiProviderStoreOptions) {}
+  constructor(private readonly filePath: string) {}
 
   /**
    * 同步读全部扩展数据。同步契约的消费方（listProviders 聚合层，
@@ -248,7 +242,7 @@ export class TaijiProviderStore {
       result = fn(file.providers[providerId])
       file.providers[providerId] = result
       writeInternal(this.filePath, file)
-    }, this.opts?.lockMinRetryTimeoutMs)
+    })
     return result!
   }
 
@@ -263,7 +257,7 @@ export class TaijiProviderStore {
       if (!(providerId in file.providers)) return
       delete file.providers[providerId]
       writeInternal(this.filePath, file)
-    }, this.opts?.lockMinRetryTimeoutMs)
+    })
   }
 
   /**
@@ -290,7 +284,7 @@ export class TaijiProviderStore {
       result = fn(sanitizeScopedModels(file.scopedModels))
       file.scopedModels = result
       writeInternal(this.filePath, file)
-    }, this.opts?.lockMinRetryTimeoutMs)
+    })
     return result!
   }
 

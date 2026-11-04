@@ -8,9 +8,6 @@
  *   - output → maxBytes 可选展开（未传键不出现）+ lost 降级 reply 透传
  *   - kill → command('backgroundTask.kill', { sessionId, taskId })
  *
- * 三封装调用 command 均显式传第三参 timeoutMs = RPC_BACKSTOP_TIMEOUT_MS（G5 必传化
- * 后漏传 = 编译错误；断言对齐同目录 worktree.test.ts / domains.test.ts 三参范式）。
- *
  * mock 边界：command 经 vi.mock 隔离（对齐同目录 request.test.ts 范式），
  * reply 样例按 shared protocol backgroundTask.tasks / outputResult / killResult payload 形状。
  *
@@ -24,7 +21,6 @@ vi.mock('../request', () => ({
 }))
 
 import { list, output, kill } from '../domains/background-task'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 import type { BackgroundTaskRegistryEntry } from '@zhushanwen/extension-protocol'
 
 function makeEntry(taskId: string, overrides: Partial<BackgroundTaskRegistryEntry> = {}): BackgroundTaskRegistryEntry {
@@ -52,7 +48,7 @@ describe('backgroundTask.list 透传（corrupted 链路收尾）', () => {
 
     const result = await list('sess-1')
 
-    expect(commandMock).toHaveBeenCalledWith('backgroundTask.list', { sessionId: 'sess-1' }, RPC_BACKSTOP_TIMEOUT_MS)
+    expect(commandMock).toHaveBeenCalledWith('backgroundTask.list', { sessionId: 'sess-1' })
     expect(result).toBe(reply)
     expect(result.corrupted).toBe(true)
     expect(result.tasks).toHaveLength(0)
@@ -84,14 +80,14 @@ describe('backgroundTask.output 封装', () => {
   it('maxBytes 未传：params 不出现该键', async () => {
     commandMock.mockResolvedValue({ sessionId: 'sess-1', taskId: 'bt-1', text: '', truncated: false, lost: true })
     await output('sess-1', 'bt-1')
-    expect(commandMock).toHaveBeenCalledWith('backgroundTask.output', { sessionId: 'sess-1', taskId: 'bt-1' }, RPC_BACKSTOP_TIMEOUT_MS)
+    expect(commandMock).toHaveBeenCalledWith('backgroundTask.output', { sessionId: 'sess-1', taskId: 'bt-1' })
   })
 
   it('maxBytes 传入：params 展开 + lost reply 透传', async () => {
     const reply = { sessionId: 'sess-1', taskId: 'bt-1', text: 'tail', truncated: true, lost: false }
     commandMock.mockResolvedValue(reply)
     const result = await output('sess-1', 'bt-1', 4096)
-    expect(commandMock).toHaveBeenCalledWith('backgroundTask.output', { sessionId: 'sess-1', taskId: 'bt-1', maxBytes: 4096 }, RPC_BACKSTOP_TIMEOUT_MS)
+    expect(commandMock).toHaveBeenCalledWith('backgroundTask.output', { sessionId: 'sess-1', taskId: 'bt-1', maxBytes: 4096 })
     expect(result).toBe(reply)
     expect(result.lost).toBe(false)
   })
@@ -102,7 +98,7 @@ describe('backgroundTask.kill 封装', () => {
     const reply = { sessionId: 'sess-1', taskId: 'bt-1', killed: true, reason: 'killed' as const }
     commandMock.mockResolvedValue(reply)
     const result = await kill('sess-1', 'bt-1')
-    expect(commandMock).toHaveBeenCalledWith('backgroundTask.kill', { sessionId: 'sess-1', taskId: 'bt-1' }, RPC_BACKSTOP_TIMEOUT_MS)
+    expect(commandMock).toHaveBeenCalledWith('backgroundTask.kill', { sessionId: 'sess-1', taskId: 'bt-1' })
     expect(result).toBe(reply)
     expect(result.reason).toBe('killed')
   })

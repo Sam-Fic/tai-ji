@@ -181,15 +181,15 @@ export const HIDDEN_ALLOWLIST = new Map([
   ['packages/core/src/extension-host/header-action-store.ts:27', '插件 headerAction 运行时条目 hidden（HeaderActionEntry 声明，入口整体不渲染）'],
   ['packages/core/src/extension-host/header-action-store.ts:38', '插件 headerAction 声明侧静态形状 hidden（ContributionRegistry 侧）'],
   ['packages/core/src/extension-host/header-action-store.ts:78', '插件 headerAction 帧载荷 hidden 透传（set 写入）'],
-  ['packages/core/src/extension-host/message-bus-bridge.ts:295', '插件 headerActionUpdate 帧 hidden 解析透传（241→251 两次分支合并漂移、251→287 登记 plugin:commandRegistered normalizer 漂移、287→295 随并入 main ignoreFrame 三登记漂移，同号收口）'],
-  ['packages/renderer/src/composables/shell/useExtensionHostBridge.ts:349', '插件 headerAction 运行时显隐开关（HeaderActionEntry.hidden，isVisibleHeaderAction 判定；renderer 侧消费 headerAction 置灰豁免时新增，与会话 hidden 同形不同义）'],
-  ['packages/plugin-sdk/src/types.ts:905', 'plugin-sdk updateHeaderAction opts.hidden 声明（wire 契约 HeaderActionUpdatePayload.hidden，入口整体不渲染；884→892 随 refactor-plugin-implement opts 字段注释扩写漂移、892→905 随并入 dev-0.12.1 漂移；原 HeaderActionOptions.hidden 独立声明行随 refactor-plugin-implement 声明收敛删除）'],
-  ['packages/runtime/src/services/plugin-service/api/ui-api.ts:254', '插件 ui.updateHeaderAction 入参 hidden 校验'],
-  ['packages/runtime/src/services/plugin-service/api/ui-api.ts:256', '插件 ui.updateHeaderAction hidden 校验错误文案'],
-  ['packages/runtime/src/services/plugin-service/api/ui-api.ts:271', '插件 ui.updateHeaderAction hidden 透传'],
-  ['packages/runtime/src/services/plugin-service/api/ui-api.ts:331', '插件 ui.updateHeaderAction 方法签名 hidden 形参（跨行断言的声明行）'],
-  ['packages/runtime/src/services/plugin-service/api/ui-api.ts:352', '插件 ui.updateHeaderAction 实现签名 hidden 形参（346→352 两次分支合并行号漂移同号收口）'],
-  ['packages/shared/src/protocol.ts:716', '协议 plugin headerAction 条目 hidden 字段声明（HeaderActionUpdatePayload；611→624 随 fix-chat-flow-order、624→642 随插件化分支合并加字段漂移、642→703 随 connection-datasync-ssot 协议新增类型漂移、703→712 随启动线 u-m0 协议 readiness/sessionsRecovery 四消息类型登记漂移、712→716 随 feat-compaction-closure ClientMessageType 加 setSmartContextAutoCompactThresholdRatio 与 session.compactBackground（含注释）漂移）'],
+  ['packages/core/src/extension-host/message-bus-bridge.ts:293', '插件 headerActionUpdate 帧 hidden 解析透传（241→251 两次分支合并漂移、251→287 登记 plugin:commandRegistered normalizer 漂移、287→295 随并入 main ignoreFrame 三登记漂移、295→293 随 ADR-0188 删除行漂移，同号收口）'],
+  ['packages/renderer/src/composables/shell/useExtensionHostBridge.ts:357', '插件 headerAction 运行时显隐开关（HeaderActionEntry.hidden，isVisibleHeaderAction 判定；renderer 侧消费 headerAction 置灰豁免时新增，与会话 hidden 同形不同义）'],
+  ['packages/plugin-sdk/src/types.ts:879', 'plugin-sdk updateHeaderAction opts.hidden 声明（wire 契约 HeaderActionUpdatePayload.hidden，入口整体不渲染；884→892 随 refactor-plugin-implement opts 字段注释扩写漂移、892→905 随并入 dev-0.12.1 漂移；原 HeaderActionOptions.hidden 独立声明行随 refactor-plugin-implement 声明收敛删除）'],
+  ['packages/runtime/src/services/plugin-service/api/ui-api.ts:176', '插件 ui.updateHeaderAction 入参 hidden 校验'],
+  ['packages/runtime/src/services/plugin-service/api/ui-api.ts:178', '插件 ui.updateHeaderAction hidden 校验错误文案'],
+  ['packages/runtime/src/services/plugin-service/api/ui-api.ts:193', '插件 ui.updateHeaderAction hidden 透传'],
+  ['packages/runtime/src/services/plugin-service/api/ui-api.ts:229', '插件 ui.updateHeaderAction 方法签名 hidden 形参（跨行断言的声明行）'],
+  ['packages/runtime/src/services/plugin-service/api/ui-api.ts:250', '插件 ui.updateHeaderAction 实现签名 hidden 形参（346→352 两次分支合并行号漂移同号收口；352→250 随 ADR-0188 删除行漂移）'],
+  ['packages/shared/src/protocol.ts:713', '协议 plugin headerAction 条目 hidden 字段声明（HeaderActionUpdatePayload；611→624 随 fix-chat-flow-order、624→642 随插件化分支合并加字段漂移、642→703 随 connection-datasync-ssot 协议新增类型漂移、703→712 随启动线 u-m0 协议 readiness/sessionsRecovery 四消息类型登记漂移、712→716 随 feat-compaction-closure ClientMessageType 加 setSmartContextAutoCompactThresholdRatio 与 session.compactBackground（含注释）漂移、716→713 随 ADR-0188 滚动重启协议段删除漂移）'],
   // document.hidden（浏览器 API）
   ['packages/renderer/src/composables/features/settings/use-app-update-autocheck.ts:166', 'document.hidden（浏览器 API：页面可见性）'],
   ['packages/ui/src/features/chat/composables/useTurnElapsed.ts:123', 'document.hidden（浏览器 API：页面可见性，计时器暂停判据）'],
@@ -198,7 +198,7 @@ export const HIDDEN_ALLOWLIST = new Map([
   ['packages/renderer/src/components/canvas/canvas-display.ts:229', 'canvas 布局 opts.hidden 形参声明'],
   ['packages/renderer/src/components/canvas/canvas-display.ts:232', 'canvas 布局 opts.hidden 属性访问'],
   // renderer 扩展宿主桥的插件条目 hidden（帧面透传）
-  ['packages/renderer/src/composables/shell/useExtensionHostBridge.ts:349', '插件 headerAction 运行时 hidden 开关消费（isVisibleHeaderAction 谓词：显式推送 hidden 即隐藏，两类入口一视同仁，入口整体不渲染；与「会话隐藏」同形不同义；256→267 随插件化分支合并漂移、267→341 随 refactor-plugin-implement isVisibleHeaderAction 注释扩写漂移、341→349 随 feat-tray-panel-interact 文件头注宿主薄命令段（+5）与 import 块（+3）扩写漂移）'],
+  ['packages/renderer/src/composables/shell/useExtensionHostBridge.ts:357', '插件 headerAction 运行时 hidden 开关消费（isVisibleHeaderAction 谓词：显式推送 hidden 即隐藏，两类入口一视同仁，入口整体不渲染；与「会话隐藏」同形不同义；256→267 随插件化分支合并漂移、267→341 随 refactor-plugin-implement isVisibleHeaderAction 注释扩写漂移、341→349 随 feat-tray-panel-interact 文件头注宿主薄命令段（+5）与 import 块（+3）扩写漂移、349→357 随 ADR-0188 useMemoryPressure 链删除漂移）'],
   // locale 键（设置页「注册但不可达」开关的字面键名；1393/1392→1394/1393 随插件化分支合并漂移；
   // 1394/1393→1399/1398 随 feat-quota-cookie-refresh 在 quota 段加 5 行漂移；
   // 1399/1398→1398/1396 随 main 合并（stepfun i18n 键 + genstats locale 编辑）漂移；
@@ -241,7 +241,6 @@ export const SURFACE_SAME_NAME_EXCLUDE = new Map([
   ['packages/renderer/src/components/sidebar/SessionList.vue', '界面 surface id（session-delete-confirm）'],
   ['packages/renderer/src/components/sidebar/session-item/SessionItemContextMenu.vue', '界面 surface id（session-item-context-menu）'],
   ['packages/renderer/src/components/ui/AsyncErrorFallback.vue', '界面 surface id（async-error-fallback-overlay）'],
-  ['packages/renderer/src/components/ui/RollingRestartBanner.vue', '界面 surface id（rolling-restart）'],
   ['packages/renderer/src/components/ui/ToastContainer.vue', '界面 surface id（toast-container）'],
   ['packages/renderer/src/components/panel/workflow-viz/panel/AgentStreamDrawer.vue', '界面 surface id（modal-surface-registry 族 agent-stream-drawer；dev-0.11.16 合并引入该检查脚本时未登记）'],
   ['packages/renderer/src/composables/features/app/modal-surface-registry/registry.ts', 'modal-surface-registry 本体（界面 surface 注册表）'],

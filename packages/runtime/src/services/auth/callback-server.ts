@@ -4,7 +4,7 @@
  * 参考 pi-ai dist/auth/oauth/anthropic.js:83-133 startCallbackServer 语义，差异：
  * - path 可配置（anthropic 固定 /callback；openrouter 动态 /oauth/callback/<uuid>）
  * - state 校验可选（expectedState 不传则跳过校验）
- * - 超时 + abort 主动 close，waitForCallback reject { code: 'timeout' | 'aborted' }
+ * - abort 主动 close，waitForCallback reject { code: 'aborted' }（无超时——时间机制删除裁决）
  * - 单次消费：首个到达的请求（无论成败）消费掉本次回调，后续请求 409
  *
  * 设计取舍：query 中的授权码属于敏感信息，本模块不落日志、不打印请求 URL。
@@ -21,8 +21,6 @@ export interface CallbackServerOptions {
   path: string
   /** state 校验：不匹配返回 400 + reject state_mismatch */
   expectedState?: string
-  /** 等待回调超时，默认 5min，到期 close + reject { code: 'timeout' } */
-  timeoutMs?: number
   /** abort 时 close + reject { code: 'aborted' } */
   signal?: AbortSignal
 }
@@ -32,7 +30,7 @@ export interface CallbackServerResult {
   state?: string
 }
 
-/** 带错误码的 reject 载体：code 供调用方区分 timeout/aborted/provider_error 等分支 */
+/** 带错误码的 reject 载体：code 供调用方区分 aborted/provider_error 等分支 */
 export interface CallbackServerError extends Error {
   code: string
 }
@@ -80,13 +78,10 @@ const HTTP_INTERNAL_ERROR = 500
 
 export async function startCallbackServer(opts: CallbackServerOptions): Promise<CallbackServerHandle> {
   const host = opts.host ?? '127.0.0.1'
-  // eslint-disable-next-line no-magic-numbers -- 默认 5min 回调超时
-  const timeoutMs = opts.timeoutMs ?? 5 * 60 * 1_000
 
   let settled = false
   let claimed = false
   let serverClosed = false
-  let timer: NodeJS.Timeout | undefined
 
   let resolveWait!: (result: CallbackServerResult) => void
   let rejectWait!: (err: CallbackServerError) => void
@@ -102,15 +97,11 @@ export async function startCallbackServer(opts: CallbackServerOptions): Promise<
     fail(makeError('aborted', 'Login cancelled'), true)
   }
 
-  // 结束状态机的唯一出口：先清理资源（timer/signal/server），再 settle，
-  // 保证任何路径都不会留下悬挂的 timer 或监听器。
+  // 结束状态机的唯一出口：先清理资源（signal/server），再 settle，
+  // 保证任何路径都不会留下悬挂的监听器。
   // closeServer=false（回调已到达）：保持监听以响应后续 409 claimed；
-  // closeServer=true（超时/abort/主动 close）：调用方不再需要 server
+  // closeServer=true（abort/主动 close）：调用方不再需要 server
   const teardown = (closeServer: boolean): void => {
-    if (timer) {
-      clearTimeout(timer)
-      timer = undefined
-    }
     opts.signal?.removeEventListener('abort', onAbort)
     if (closeServer && !serverClosed) {
       serverClosed = true
@@ -194,19 +185,13 @@ export async function startCallbackServer(opts: CallbackServerOptions): Promise<
     }
   }
 
-  // 超时兜底：用户可能永远不完成浏览器授权，不能无限挂起
-  if (timeoutMs > 0 && !settled) {
-    timer = setTimeout(() => {
-      fail(makeError('timeout', 'Timed out waiting for OAuth callback'), true)
-    }, timeoutMs)
-  }
-
+  // 无超时（时间机制删除裁决）：server 挂到浏览器回调到达 / abort / 进程退出为止；
+  // 用户放弃授权时经 abort（取消登录）或调用方 close() 收尾。
   await new Promise<void>((resolveListen, rejectListen) => {
     server.on('error', (err) => {
       server.off('error', rejectListen)
-      // listen 失败（EADDRINUSE 等）：teardown 清 5min 超时 timer + abort 监听再 reject
-      // ——否则 timer 保持进程事件循环存活至到期，abort 监听残留。
-      // 注意：此时 server 未 listening，teardown 的 close() 分支安全跳过。
+      // listen 失败（EADDRINUSE 等）：teardown 清 abort 监听再 reject（监听残留会
+      // 泄漏；此时 server 未 listening，teardown 的 close() 分支安全跳过）。
       teardown(true)
       rejectListen(makeError('listen_failed', describeListenError(opts.port, err)))
     })

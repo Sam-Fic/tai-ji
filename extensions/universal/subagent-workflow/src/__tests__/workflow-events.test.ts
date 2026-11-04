@@ -566,7 +566,6 @@ const LIFECYCLE_OPTIONAL_KEYS = [
   "eventBus",
   "appendEntry",
   "log",
-  "scheduleTimeBudget",
   "workflowAgentDispatch",
   "onResumeModelOverrideCommitted",
   "getSessionRootId",
@@ -578,7 +577,7 @@ const LIFECYCLE_OPTIONAL_KEYS = [
 const LAZY_REQUIRED_KEYS = ["store", "workerHost", "runner", "runs", "registry"] as const;
 
 describe("lazyDeps 转发清单对账：LifecycleDeps 可选成员全集（防第四处漏转发）", () => {
-  it("正向：清单逐成员存在于 lazyDeps 可枚举键（含本修复的 onResumeModelOverrideCommitted）", () => {
+  it("正向：清单逐成员存在于 lazyDeps 可枚举键（含 onResumeModelOverrideCommitted）", () => {
     const { handle } = mount();
     const lazyKeys = Object.keys(handle.lazyDeps);
     for (const key of LIFECYCLE_OPTIONAL_KEYS) {

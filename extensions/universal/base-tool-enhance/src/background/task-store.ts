@@ -22,16 +22,14 @@
  *   ① spawn-background.ts spawnBackgroundTask：registerSpawnedTask（新条目首登记）
  *     先于 registry 写 running；bash-tool.ts registerConvertedTask（转后台登记，
  *     foreground-idle-to-background）同序——内存先行再写 registry running；
- *     退出口径差异：转后台无 child 句柄、不挂 exit 边沿（终态由 exit-watch 守望收尾），
- *     写序约束本身不变；
+ *     退出口径差异：转后台无 child 句柄、不挂 exit 边沿（终态由 bash_kill / 后台
+ *     超时 / 会话重启收殓路径落定），写序约束本身不变；
  *   ② bash-kill-tool.ts：markKillingIntent(taskId,"killed") 先于 registry 写 killing；
  *   ③ spawn-background.ts armBackgroundTimeout：markKillingIntent(taskId,"timeout")
  *     先于 registry 写 killing（pid 已死路径提前 return，不触达写点）；
  *   ④ exit-collector.ts finalizeExitedTask：finalizeTask（内存终态化）先于 registry 写 exited；
  *   ⑤ process-exit-guard.ts reapBackgroundTasksNow：finalizeTask 先于 registry 写
  *     exited(process-exit)（设计枚举 4 点时未列本点，实际同序成立，一并登记）；
- *   ⑥ exit-watch.ts finalizeConvertedExit：finalizeTask 先于 registry 写 exited
- *     （转后台任务退出守望收尾，foreground-idle-to-background §5 部件 5，同 ④ 序）。
  * 未来新增写路径（如 maintenance 类）必须保持该顺序，违反即 intent 可丢失。
  */
 

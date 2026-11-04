@@ -2,7 +2,7 @@ import { closeCrashJournal, initCrashJournal } from '../infra/crash-journal.js';
 import { logger } from '../infra/logger.js';
 import { getSpawnMarkersPath, readSpawnMarkerList } from '../infra/pi/spawn-markers.js';
 import { findOrphanPiRows, matchesOwnPiArgv, parsePsOutput, reapOrphanPiProcesses, tokenizeArgv, type PsRow, type ReapOrphanOptions } from './reap-orphan-pi.js';
-import { ensureAutoRenameDefault, getAutoRenameEnabled, getAutoRenameEnabledPath, getRenameConfigPath, getRenameMaxLength, getRenameMode, getRenameModel, getRenamePrompt, setAutoRenameEnabled, setRenameConfigLockTimingForTest, setRenameMaxLength, setRenameMode, setRenameModel, setRenamePrompt } from './rename-session-config.js';
+import { ensureAutoRenameDefault, getAutoRenameEnabled, getAutoRenameEnabledPath, getRenameConfigPath, getRenameMaxLength, getRenameMode, getRenameModel, getRenamePrompt, setAutoRenameEnabled, setRenameMaxLength, setRenameMode, setRenameModel, setRenamePrompt } from './rename-session-config.js';
 import { DEFAULT_UI_LOCALE, readUiPreferences, uiPreferencesPath, writeUiPreferences } from './ui-preferences-helper.js';
 import { RENAME_INSTRUCTION_MAX_LENGTH } from '@taiji/shared';
 import { buildPiMainAgentArgs, buildPiSubagentSpawnArgs, PI_SPAWN_NO_EXTENSIONS } from '@zhushanwen/pi-rpc';
@@ -1048,7 +1048,7 @@ describe('rename-session-ext-config 写锁（D1e 跨进程锁）', () => {
   // 参照 pi-settings-store.test.ts 的锁测试模式：同一把 lockfile（<config>.json.lock，
   // realpath:false）模拟 extension 侧写方，验证 runtime RMW 的互斥与降级语义。
   // extraTeardown：恢复锁参数默认值，避免压缩预算泄漏到后续用例
-  const tmpRoot = useTmpDataDir('rename-model-lock-test-', () => setRenameConfigLockTimingForTest({}))
+  const tmpRoot = useTmpDataDir('rename-model-lock-test-')
   const configPath = () => renameConfigPath(tmpRoot())
 
   it('写完释放锁：.lock 目录不残留（残留会困住后续写方）', () => {
@@ -1078,10 +1078,8 @@ describe('rename-session-ext-config 写锁（D1e 跨进程锁）', () => {
     expect(saved['maxTitleLength']).toBe(30)
   })
 
-  it('fail-fast：锁被外部持有超出重试预算 → 抛 ELOCKED，文件保持原样', () => {
+  it('fail-fast：锁被外部持有 → 立即抛 ELOCKED，文件保持原样', () => {
     setRenameModel('p1/m1')
-    // 压缩预算：10ms/次 × 预算 60ms，快速走完 fail-fast 路径
-    setRenameConfigLockTimingForTest({ retryDelayMs: 10, retryBudgetMs: 60 })
     const release = lockfile.lockSync(configPath(), { realpath: false })
     let err: unknown
     try {
@@ -1091,7 +1089,7 @@ describe('rename-session-ext-config 写锁（D1e 跨进程锁）', () => {
     } finally {
       release()
     }
-    // fail-fast：预算耗尽抛错（对齐 pi 放弃保存语义），而非静默丢弃或死等
+    // fail-fast：锁冲突立即抛错（对齐 pi 放弃保存语义），而非静默丢弃或死等
     expect((err as { code?: string } | undefined)?.code).toBe('ELOCKED')
     expect(getRenameModel()).toBe('p1/m1') // 本次写入被放弃
     // 锁释放后恢复正常

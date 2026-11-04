@@ -152,20 +152,6 @@
              dev 断言（COMPACTING/EXECUTING_BASH 高度常量漂移检测）随行迁入组件内部。 -->
         <ActivityStrip :session-id="sessionId" :executing-bash="executingBash" :subagent-thinking="subagentThinking" />
 
-        <!-- [U8 重启中断提示条] 轻量提示行（文档流 block，Virtualizer 之后 = 最后一个回合
-             下方）：显隐 = chat store 截断窗口状态 interrupted 位（runtime getHistory 离线读取
-             判定文件尾部为中断形态——design-session-lifecycle 缺陷 4 方向 A，推断性质由
-             「会话未附着」事实排除活会话误标）。随 hydrate 重建（重开再现属合理——历史事实
-             非瞬态），清理复用 historyWindows 分区生命周期。 -->
-        <div
-          v-if="tailInterrupted"
-          class="content-col flex items-start gap-2 py-1"
-          data-testid="stream-interrupted-notice"
-        >
-          <CircleAlert class="mt-[2px] size-[13px] shrink-0 text-warn" aria-hidden="true" />
-          <span class="text-[length:var(--text-xs)] leading-[1.5] text-warn">{{ t('panel.message.interruptedNotice') }}</span>
-        </div>
-
         <!-- ForkNotice 反馈行（transient，RV1）。文档流 block（Virtualizer 之后），多条通知垂直堆叠；
              宽度约束在 ForkNotice 根（content-col），与对话流内容列对齐。 -->
         <div
@@ -256,7 +242,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, provide, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ChevronDown, CircleAlert, Sparkles } from '@lucide/vue'
+import { ChevronDown, Sparkles } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { EdgeFade } from '@/components/ui/edge-fade'
 import { Virtualizer, type VirtualizerHandle } from 'virtua/vue'
@@ -326,10 +312,6 @@ const { onRespawnRetry } = useSessionRespawnRetry(() => props.sessionId)
 /** [u4d] 顶部条「已加载最近 N 轮」的 N：store 截断窗口状态 loadedTurns；无记录回落 0
  *  （showLoadMore 为 false 时条不渲染，值无关）。 */
 const loadedTurns = computed(() => chat.getHistoryWindow(props.sessionId)?.loadedTurns ?? 0)
-
-/** [U8 重启中断提示条] 尾部中断标记：store 截断窗口状态 interrupted 位（runtime 离线读取
- *  判定文件尾部为中断形态后随 hydrate/reconcile 写入）；undefined = 无判定不渲染。 */
-const tailInterrupted = computed(() => chat.getHistoryWindow(props.sessionId)?.interrupted === true)
 
 /** 当前 session 的消息（getMessages 兼容接口：内部 unwrap 内层 ShallowRef 容器，
  *  Map.get + 内层 .value 依赖均被 computed track，响应性不变）。 */

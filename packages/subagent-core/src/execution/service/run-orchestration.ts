@@ -10,7 +10,7 @@
 // 容量上限（2×700），本文件物理超限不可避免（偏差登记待主 agent 追认）。两文件零互调
 // 零 import（G2 / R1 打样模式 3）：workflow-dispatch 的跨文件协作（acquirePoolOrFinalize /
 // settleOneShotOutcome / outcomeToAgentResult / releaseRoundResources /
-// resolveChatEnginePort / assertIdleTimeoutMsSafe）经壳 deps 回调指回本聚合实例方法。
+// resolveChatEnginePort）经壳 deps 回调指回本聚合实例方法。
 //
 // [2026-09-13 design-code-sync 兑现] [G1] 段预留的备选预案（第三文件再拆 Continuation
 // 协作范围）落地：本文件折算 845 破 800 零余量锁定线，拆出 chat-rounds.ts（chat 域轮次
@@ -49,11 +49,9 @@
 //   计）原样随迁，H4 收尾。
 // 5. 模块常量 SSOT：PRIORITY_BACKGROUND / MS_PER_SECOND / SECONDS_PER_MINUTE 已
 //   [R6/D-R4-4] 归一常量叶子文件 service-constants.ts（原两聚合重复声明消除，
-//   改 import 消费）；STALE_CHILD_EXIT_WAIT_MS + delay（唯一消费
-//   killStaleChildBeforeDispatch）随消费主体迁 chat-rounds.ts（2026-09-13 接线）。
+//   改 import 消费）。
 
 import { SHARED_POOL_KEY } from "@zhushanwen/subagent-engine-sdk";
-import { MAX_TIMER_DELAY_MS } from "../../shared/timer-delay.ts";
 
 import type { AgentResult as WorkflowAgentResult, AgentCallOpts } from "../../shared/agent-call-types.ts";
 import { mapToWorkflowAgentResult } from "../assembly/agent-result-mapper.ts";
@@ -81,9 +79,6 @@ import {
   routeEngineForHost,
 } from "../engine/routing.ts";
 import type { AgentOutcome } from "../engine/types.ts";
-// [V2 决策 3] lifecycle-manager：[T4②] DEFAULT_IDLE_TIMEOUT_MS 是 assertIdleTimeoutMsSafe
-// 错误文案的缺省时长基准（[R4] 唯一消费主体随域迁入本聚合）。
-import { DEFAULT_IDLE_TIMEOUT_MS } from "../lifecycle/lifecycle-manager.ts";
 import type { ModelConfigService } from "../assembly/model-config-service.ts";
 // [D6 四层优先级] engineDefaults 派发时点直读（u5 readEngineDefaults——不经
 // ModelConfigService.globalConfig 进程缓存，settings 保存后活跃 session 派发即可读新值）。
@@ -276,8 +271,6 @@ export class RunOrchestration {
    */
   async execute(opts: ExecuteOptions): Promise<ExecutionHandle> {
     this.deps.assertReady();
-    // [T4② / PS-4] idleTimeoutMs 配置错误在首个副作用前同步 fail-fast（错误含合法范围）。
-    this.assertIdleTimeoutMsSafe(opts);
 
     // mode 固定 background（sync 模式已删除）
     const mode: ExecutionMode = "background";
@@ -350,8 +343,6 @@ export class RunOrchestration {
     stream?: AgentStreamSink,
   ): Promise<WorkflowAgentResult> {
     this.deps.assertReady();
-    // [T4② / PS-4] 与 execute() 同款入口校验（两入口共享 runAndFinalize → armIdleTimer 链）。
-    this.assertIdleTimeoutMsSafe(opts);
 
     // ── 步骤 1: IDENTITY 解析 ──
     const identity = await this.deps.resolveIdentity(opts);
@@ -916,33 +907,6 @@ export class RunOrchestration {
     stream?.dispose();
   }
 
-  /**
-   * [T4② / PS-4] idleTimeoutMs 合法域入口校验（>2^31-1 / 非有限值 fail-fast）。
-   *
-   * 旧链路：非法值穿透到 agent_settled 回调里的 armIdleTimer → assertSafeTimerDelay
-   * throw 被异步 catch 降级——配置错误被吞成静默语义变更（每轮完成通知被 isIdle 放行门
-   * 吞 + 进程无回收 timer）。对齐 shared/timer-delay「不静默 clamp」既有裁决：配置错误
-   * 显式暴露，错误消息含合法范围（0/负数 = 显式禁用是合法语义，不在本校验域；env 非法值
-   * 由 lifecycle-manager 的 warn 回落承接）。execute/executeAndAwait 两入口共用。
-   */
-  assertIdleTimeoutMsSafe(opts: ExecuteOptions): void {
-    const v = opts.idleTimeoutMs;
-    if (v === undefined) return;
-    if (!Number.isFinite(v)) {
-      throw new Error(
-        `subagent idleTimeoutMs = ${v} is not a finite number (NaN/±Infinity). ` +
-          `Valid range: a positive millisecond number up to ${MAX_TIMER_DELAY_MS} (2^31-1, Node setTimeout limit), or 0/negative to disable idle GC. ` +
-          "Recovery: fix the idleTimeoutMs value and retry.",
-      );
-    }
-    if (v > MAX_TIMER_DELAY_MS) {
-      throw new Error(
-        `subagent idleTimeoutMs = ${v} exceeds the Node setTimeout limit ` +
-          `(${MAX_TIMER_DELAY_MS} ms = 2^31-1); larger delays silently collapse to 1ms and would kill the subagent immediately. ` +
-          `Recovery: pass idleTimeoutMs <= ${MAX_TIMER_DELAY_MS}, or omit it for the default (${DEFAULT_IDLE_TIMEOUT_MS}ms), or use 0/negative to disable idle GC.`,
-      );
-    }
-  }
 }
 
 

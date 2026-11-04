@@ -131,10 +131,11 @@ export const MODEL_NOT_FOUND = 'MODEL_NOT_FOUND'
 export const PROVIDER_CREDENTIAL_MISSING = 'PROVIDER_CREDENTIAL_MISSING'
 
 /**
- * pi 报 `Model not found`、模型在注册表、凭据齐备——即运行中进程的模型快照尚未同步（新配置刚写入、
- * 等待 provider-live-sync 扩展刷新）**或**配置里含使 pi 拒载的坏内容（两因不机器可分）。
+ * pi 报 `Model not found`、模型在注册表、凭据齐备——即运行中进程的模型快照尚未同步（新会话
+ * 启动时 provider-live-sync 一次性同步未覆盖该配置）**或**配置里含使 pi 拒载的坏内容
+ * （两因不机器可分）。
  *
- * 用户侧 = **双因文案**：「若刚改过配置，请稍等两秒重试；若持续失败，请到设置页检查 provider 配置」
+ * 用户侧 = **双因文案**：「若刚改过配置，请重开会话重试；若持续失败，请到设置页检查 provider 配置」
  * （设计 D11：不做 taiji 侧模型配置合法性判定，pi 自身 `getError()` 全文落运行日志作为机器证据）。
  */
 export const ENGINE_MODEL_MISSING = 'ENGINE_MODEL_MISSING'

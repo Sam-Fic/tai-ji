@@ -9,8 +9,9 @@
 //   禁止 'inherit'/fd 形态——否则宿主死后代仍持写端、EOF 永不到达，自灭主判据失效
 //   （R9-4②）。
 //
-// armEngineSelfDestruct 是引擎 CLI 的宿主死亡自灭检查：主判据 stdio EOF，
-// 辅助判据 in-flight 反向请求计时超时（已 ack 的人机交互 / 两阶段长运行请求除外）。
+// armEngineSelfDestruct 是引擎 CLI 的宿主死亡自灭检查：唯一判据 stdio EOF
+//（进程事实信号——宿主死后无人再写协议帧；原「in-flight 反向请求计时超时」辅助
+// 判据已随时间机制删除）。
 
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
@@ -34,20 +35,11 @@ export interface SpawnEngineChildOptions {
   stdout?: "pipe" | "ignore" | "inherit";
   stderr?: "pipe" | "ignore" | "inherit";
   /**
-   * AbortSignal 触发即杀子（缺省无）。杀链 = SIGCONT 前置 + SIGTERM →
-   * ENGINE_ABORT_KILL_GRACE_MS grace → SIGKILL 完整阶梯（killChain 单源）——
-   * 裸 SIGTERM 单发对忽略/冻结/卡死的子进程永不收敛，run 悬挂至宿主回收层兜底。
+   * AbortSignal 触发即杀子（缺省无）。杀链 = SIGCONT 前置 + SIGTERM+SIGKILL
+   * 背靠背（killChain 单源，无等待升级窗——原 30s grace 已随时间机制删除）。
    */
   signal?: AbortSignal;
 }
-
-/**
- * abort 杀链的 SIGTERM 优雅窗口（ms）。量级对齐 pi 引擎 PI_KILL_GRACE_MS 现状
- * 校准值 30s（pi 子进程 trap SIGTERM 后 graceful shutdown 的实测量级，race-F4）；
- * zcode abort 路径由「裸 SIGTERM 单发、永不升级」升级为同窗有界兜底（任务级正常
- * 路径不加墙钟、回收层统一有界兜底口径）。
- */
-export const ENGINE_ABORT_KILL_GRACE_MS = 30_000;
 
 /** 这些键出现即拒绝：spawn 形态是本原语的契约范围，不允许调用方绕过硬编码值。 */
 const FORBIDDEN_OPTION_KEYS = ["detached", "stdio", "stdin", "windowsHide"] as const;
@@ -82,13 +74,11 @@ export function spawnEngineChild(opts: SpawnEngineChildOptions): ChildProcess {
     opts.signal.addEventListener(
       "abort",
       () => {
-        // [SIGCONT 前置] 唤醒潜在 SIGSTOP 冻结形态——冻结进程对 SIGTERM 只排队不
-        // 处理，不先 SIGCONT 则 grace 窗内永远等不到退出；对未冻结进程是 no-op，
+        // [SIGCONT 前置] 唤醒潜在 SIGSTOP 冻结形态——冻结进程对信号只排队不处理，
+        // 不先 SIGCONT 则 SIGTERM 永远无法送达处理；对未冻结进程是 no-op，
         // 对已退进程由 safeKill 幂等吞掉。
         safeKill(child, "SIGCONT");
-        void killChain(child, {
-          graceMs: ENGINE_ABORT_KILL_GRACE_MS,
-          unrefTimers: true,
+        killChain(child, {
           escalationNote: `engine child (pid ${child.pid ?? "unknown"}) abort`,
         });
       },
@@ -102,56 +92,11 @@ export function spawnEngineChild(opts: SpawnEngineChildOptions): ChildProcess {
 // 引擎侧自灭（宿主死亡检测）
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** in-flight 未 ack 反向请求的计时超时缺省值（辅助判据，30s）。 */
-export const DEFAULT_ENGINE_HOST_REQUEST_TIMEOUT_MS = 30_000;
-
-/** 计时超时覆盖 env 名（引擎 CLI 启动时读；非法值 warn + 回落缺省）。 */
-export const ENGINE_HOST_REQUEST_TIMEOUT_ENV = "TAIJI_ENGINE_HOST_REQUEST_TIMEOUT_MS";
-
-/** 计时巡检周期（ms）。仅为辅助判据的采样粒度，不构成行为契约。 */
-const SWEEP_INTERVAL_MS = 1_000;
-
-/** 反向请求计时侧操作接口（消费方 = 引擎 CLI 的反向通道分发层）。 */
-export interface ReverseRequestClock {
-  /** 反向请求已发出（未 ack）——进入计时侧。 */
-  started(id: string): void;
-  /**
-   * 收到 ack（两阶段第一阶段：已 ack 的 host/askUser、HostBridge.executeAndAwait
-   * 的 ack）——移出计时侧但不终结（R9-2：已 ack 的等待不计入 in-flight 超时，
-   * ADR-0047 静默 ≠ 卡死）。
-   */
-  acked(id: string): void;
-  /** 请求终结（应答完成/失败/取消）——彻底移出。 */
-  settled(id: string): void;
-  /** 卸载检查（引擎正常 shutdown 路径；自灭后幂等）。 */
-  dispose(): void;
-}
-
 export interface EngineSelfDestructOptions {
-  /** 主判据数据源：宿主→引擎的协议 stdin（EOF = 宿主死亡 → 立即自灭）。 */
+  /** 唯一判据数据源：宿主→引擎的协议 stdin（EOF = 宿主死亡 → 立即自灭）。 */
   stdin: NodeJS.ReadableStream;
-  /** 辅助判据超时（缺省 30s；显式传值优先于 env TAIJI_ENGINE_HOST_REQUEST_TIMEOUT_MS）。 */
-  hostRequestTimeoutMs?: number;
-  /** 计时超时的 env 覆盖源（缺省读 process.env；测试注入用）。 */
-  timeoutEnv?: Record<string, string | undefined>;
   /** 自灭执行器（缺省 = 杀自己进程组再杀自己；测试注入用）。 */
   killSelf?: () => void;
-}
-
-/** 解析计时超时：显式 opt > env > 缺省；env 非法（非正整数）warn + 回落缺省。 */
-function resolveHostRequestTimeoutMs(opts: EngineSelfDestructOptions): number {
-  if (opts.hostRequestTimeoutMs !== undefined) return opts.hostRequestTimeoutMs;
-  const raw = (opts.timeoutEnv ?? process.env)[ENGINE_HOST_REQUEST_TIMEOUT_ENV];
-  if (raw === undefined || raw === "") return DEFAULT_ENGINE_HOST_REQUEST_TIMEOUT_MS;
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    logger.warn(
-      `invalid ${ENGINE_HOST_REQUEST_TIMEOUT_ENV}=${JSON.stringify(raw)}, falling back to `
-        + `${DEFAULT_ENGINE_HOST_REQUEST_TIMEOUT_MS}ms`,
-    );
-    return DEFAULT_ENGINE_HOST_REQUEST_TIMEOUT_MS;
-  }
-  return parsed;
 }
 
 /** taskkill 子进程的最小面（self-destruct 是 fire-and-forget：只挂 error + unref）。 */
@@ -224,72 +169,30 @@ export function killOwnProcessGroup(deps: KillOwnProcessGroupDeps = {}): void {
 }
 
 /**
- * 武装引擎侧自灭检查。返回 ReverseRequestClock 给反向通道分发层登记请求生命周期。
- *
- * 判据：
- * - 主判据 stdio EOF：stdin 'end'（数据范围读尽）或 'close'（fd 关闭）→ 立即自灭
- *   （宿主死后无人再写协议帧，引擎继续跑只烧 token）；
- * - 辅助判据 in-flight 反向请求计时：未 ack 的反向请求超过 hostRequestTimeoutMs
- *   仍无 ack → 宿主大概率已死（EOF 未达或正在关闭）→ 自灭。**排除情形**：已 ack 的
- *   host/askUser 与两阶段 ack 的长运行 HostBridge.executeAndAwait（ack 后等待任意
- *   时长合法，漏此项即「>30s pi 任务被自灭」turnTimeoutMs 同型事故）。
+ * 武装引擎侧自灭检查。判据 = stdio EOF（唯一，进程事实信号）：stdin 'end'（数据
+ * 范围读尽）或 'close'（fd 关闭）→ 立即自灭（宿主死后无人再写协议帧，引擎继续跑
+ * 只烧 token）。原「in-flight 反向请求计时超时」辅助判据已随时间机制删除（它曾把
+ * 长 pi 任务误判宿主死亡——漏排除已 ack 长请求即「>30s pi 任务被自灭」事故）。
  *
  * 自灭执行 = 引擎自杀并杀自己进程组（spawnEngineChild 硬编码 detached:false，
  * 任务子进程同组连带收割）。
  */
-export function armEngineSelfDestruct(opts: EngineSelfDestructOptions): ReverseRequestClock {
-  const timeoutMs = resolveHostRequestTimeoutMs(opts);
+export function armEngineSelfDestruct(opts: EngineSelfDestructOptions): void {
   const killSelf = opts.killSelf ?? killOwnProcessGroup;
-
-  // pending = 已发出未 ack（计时侧）；settled/acked 请求不计入计时侧。
-  const pending = new Map<string, number>();
-  let disposed = false;
+  let destroyed = false;
 
   const destroy = (reason: string): void => {
-    if (disposed) return;
-    disposed = true;
-    clearInterval(timer);
+    if (destroyed) return;
+    destroyed = true;
     opts.stdin.removeAllListeners?.("end");
     opts.stdin.removeAllListeners?.("close");
     logger.warn(`engine self-destruct: ${reason}`);
     killSelf();
   };
 
-  // 主判据：stdio EOF（'end' 与 'close' 双挂——pipe 半关闭与 fd 销毁都算宿主死亡）
+  // stdio EOF（'end' 与 'close' 双挂——pipe 半关闭与 fd 销毁都算宿主死亡）
   opts.stdin.once("end", () => destroy("host stdin EOF (end)"));
   opts.stdin.once("close", () => destroy("host stdin closed"));
-
-  // 辅助判据：未 ack 反向请求计时巡检（timer 声明于 destroy 之后——destroy 仅经
-  // 事件/回调异步触发，调用时已初始化）
-  const timer = setInterval(() => {
-    const now = Date.now();
-    for (const [id, startedAt] of pending) {
-      if (now - startedAt > timeoutMs) {
-        destroy(`unacked reverse request ${id} exceeded ${timeoutMs}ms without host ack`);
-        return;
-      }
-    }
-  }, SWEEP_INTERVAL_MS);
-  timer.unref?.();
-
-  return {
-    started(id) {
-      if (!disposed) pending.set(id, Date.now());
-    },
-    acked(id) {
-      pending.delete(id);
-    },
-    settled(id) {
-      pending.delete(id);
-    },
-    dispose() {
-      if (disposed) return;
-      disposed = true;
-      clearInterval(timer);
-      opts.stdin.removeAllListeners?.("end");
-      opts.stdin.removeAllListeners?.("close");
-    },
-  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

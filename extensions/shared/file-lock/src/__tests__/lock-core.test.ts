@@ -2,14 +2,13 @@
 //
 // lock-core 零依赖锁原语单测（真实文件系统，不 mock fs）：
 //   - mkdir 上锁 / rmdir 释放（<目标>.lock 目录协议）
-//   - ELOCKED 错误码（async/sync 同构）
-//   - stale 判死夺取（先 rmdir 再 mkdir）+ stale 下限 clamp 2000ms
+//   - ELOCKED 错误码（async/sync 同构）；崩溃残留锁（预置锁目录）获取直接 ELOCKED
 //   - realpath:false 语义：不存在的目标可锁；symlink 目标锁在 symlink 路径（不解析）
 //   - graceful exit 兜底（门控用例）：子进程持锁正常退出后锁目录被
 //     process.on('exit') 清理——需真实子进程退出，经 TAIJI_TEST_INTEGRATION 门控
 //     （本地默认跳过；SSOT = test-guard/integration-gate.ts）
 //
-// 协议参照：proper-lockfile@4.1.2 实装（pi 内嵌同款），逐字段兼容是 S3 互斥探针的前提。
+// 协议参照：proper-lockfile@4.1.2 实装（pi 内嵌同款），互斥面兼容是 S3 互斥探针的前提。
 //
 // 轨道与预算：本文件整体登记在包 vitest.config.ts 的 integration 串行尾组（真实
 // fs IO）；进程内用例走 vitest 默认预算，门控用例单独挂预算（覆盖其 spawnSync
@@ -29,12 +28,10 @@ import { acquireLock, acquireLockSync } from "../lock-core.ts";
 
 const PKG_DIR = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
 
-/** 手工构造一把「死亡进程遗留」的锁：mkdir + mtime 回拨 ageMs。 */
-function seedDeadLock(target: string, ageMs: number): string {
+/** 手工构造一把残留锁目录（模拟持锁方崩溃遗留）。 */
+function seedResidualLock(target: string): string {
 	const lockPath = `${target}.lock`;
 	fs.mkdirSync(lockPath, { recursive: true });
-	const past = new Date(Date.now() - ageMs);
-	fs.utimesSync(lockPath, past, past);
 	return lockPath;
 }
 
@@ -75,31 +72,11 @@ describe("acquireLock / release（async）", () => {
 		}
 	});
 
-	it("stale 判死夺取：mtime 超龄 → 先 rmdir 再 mkdir，锁目录 mtime 刷新", async () => {
-		seedDeadLock(target, 31_000);
-		const logs: string[] = [];
-		const before = fs.statSync(`${target}.lock`).mtime.getTime();
-		const release = await acquireLock(target, { log: (m) => logs.push(m) });
-		try {
-			const lockPath = `${target}.lock`;
-			// 锁目录仍是目录（rmdir 后重新 mkdir），且 mtime 已刷新（夺取 = 新建）
-			expect(fs.statSync(lockPath).isDirectory()).toBe(true);
-			expect(fs.statSync(lockPath).mtime.getTime()).toBeGreaterThanOrEqual(before);
-			// 诊断日志注入可见（stale 夺取分支）
-			expect(logs.some((m) => m.includes("stale lock taken over"))).toBe(true);
-		} finally {
-			await release();
-		}
-	});
-
-	it("stale 下限 clamp 2000ms（照抄 proper-lockfile）：staleMs 50 实际按 2000 判死", async () => {
-		// mtime 老 1.5s（居中于 1s/2s 判定线之间，余量防 timing 抖动）：staleMs 50 →
-		// clamp 为 2000 → 1500 < 2000 不判死 → ELOCKED。若实现漏掉 clamp（直接用 50），
-		// 50 < 1500 将错误夺取 → 本用例红。超龄夺取路径由「stale 判死夺取」用例覆盖
-		seedDeadLock(target, 1_500);
-		await expect(acquireLock(target, { staleMs: 50 })).rejects.toMatchObject({ code: "ELOCKED" });
-		// 清理测试自造的锁目录（acquire 未持有，afterEach 的 rmSync 亦可清，显式表达意图）
-		fs.rmSync(`${target}.lock`, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+	it("崩溃残留锁：预置锁目录 → 获取直接 ELOCKED，不夺取残留锁", async () => {
+		seedResidualLock(target);
+		await expect(acquireLock(target)).rejects.toMatchObject({ code: "ELOCKED" });
+		// 残留锁未被实现擅自删除——恢复动作（手动删锁目录）归调用方
+		expect(fs.existsSync(`${target}.lock`)).toBe(true);
 	});
 
 	it("realpath:false：不存在的目标可锁；symlink 目标锁在 symlink 路径（不解析）", async () => {
@@ -166,15 +143,13 @@ describe("acquireLockSync", () => {
 		}
 	});
 
-	it("sync 版 stale 夺取", () => {
-		seedDeadLock(target, 31_000);
-		const logs: string[] = [];
-		const release = acquireLockSync(target, { log: (m) => logs.push(m) });
+	it("崩溃残留锁：预置锁目录 → 获取直接 ELOCKED", () => {
+		seedResidualLock(target);
 		try {
-			expect(fs.statSync(`${target}.lock`).isDirectory()).toBe(true);
-			expect(logs.some((m) => m.includes("stale lock taken over"))).toBe(true);
-		} finally {
-			release();
+			acquireLockSync(target);
+			expect.unreachable("must throw");
+		} catch (err) {
+			expect((err as { code?: string }).code).toBe("ELOCKED");
 		}
 	});
 });
@@ -187,7 +162,7 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
 	`graceful exit 兜底（process.on('exit') 配对 rmdir）${INTEGRATION_TESTS_SKIP_REASON ? `｜skip：${INTEGRATION_TESTS_SKIP_REASON}` : ""}`,
 	() => {
 		it(
-			"子进程持锁正常退出后，锁目录被 exit hook 清理（无需等 stale）",
+			"子进程持锁正常退出后，锁目录被 exit hook 清理",
 			() => {
 				const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "lock-core-exit-"));
 				const target = path.join(tmpDir, "target.json");

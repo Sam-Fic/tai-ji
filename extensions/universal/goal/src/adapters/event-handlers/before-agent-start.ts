@@ -1,10 +1,11 @@
 /**
  * 事件 5: before_agent_start（context wrap-up + injection）。
  *
- * FR-8.1 G-007 + FR-8.6。返回 message（注入到 LLM context）或 undefined（无注入）。
+ * FR-8.6。返回 message（注入到 LLM context）或 undefined（无注入）。
  *
  * 分支顺序：
- * 1. 终态：currentTurnIndex - completedAtTurnIndex >= AUTO_CLEAR_TURNS(2) → clearGoalSession
+ * 1. 终态：折叠 status bar（显示终态单行），清 widget——终态 goal 保留到用户
+ *    /goal clear（不按轮数自动清理）
  * 2. ADR-002：Context 使用率 > 85% → 保持 active + 注入 wrap-up 指令
  * 3. 正常：注入 contextInjectionPrompt
  *
@@ -17,12 +18,11 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { AUTO_CLEAR_TURNS, CONTEXT_USAGE_RATIO_LIMIT } from "../../constants";
+import { CONTEXT_USAGE_RATIO_LIMIT } from "../../constants";
 import { isActiveStatus, isTerminalStatus } from "../../engine/goal";
 import { contextInjectionPrompt } from "../../projection/prompts";
 import { renderTerminalStatusLine } from "../../projection/widget";
 import type { GoalSession } from "../../session";
-import { cancelContinuationTimer, clearGoalSession } from "../../session";
 import { buildPorts } from "../ports";
 
 interface BeforeAgentStartResult {
@@ -38,10 +38,6 @@ export async function handleBeforeAgentStart(
 	session: GoalSession,
 	ctx: ExtensionContext,
 ): Promise<BeforeAgentStartResult | undefined> {
-	// MF-6③：新用户活动（新 turn 开始）使旧的退避 continuation 作废——该轮
-	// agent_end 会按最新状态重新决策。放在 state 检查之前：即使 goal 已清，
-	// 旧 timer 也不该在新 turn 开始后仍存活
-	cancelContinuationTimer(session);
 	if (!session.state) return;
 
 	pi.appendEntry("goal:log", {
@@ -77,8 +73,8 @@ export async function handleBeforeAgentStart(
 }
 
 /**
- * FR-8.1 G-007：终态 goal 在 AUTO_CLEAR_TURNS(2) 轮后自动清理。
- * 未到清理阈值时：折叠 status bar（显示终态单行），清 widget。
+ * 终态 before_agent_start：折叠 status bar（显示终态单行），清 widget。
+ * goal 保留到用户显式 /goal clear——无自动清理。
  */
 function handleTerminalStateBeforeAgent(
 	pi: ExtensionAPI,
@@ -86,11 +82,6 @@ function handleTerminalStateBeforeAgent(
 	ctx: ExtensionContext,
 ): void {
 	const state = session.state!;
-	const turnsInTerminal = state.currentTurnIndex - (state.completedAtTurnIndex ?? 0);
-	if (turnsInTerminal >= AUTO_CLEAR_TURNS) {
-		clearGoalSession(session, buildPorts(pi, ctx).ui);
-		return;
-	}
 	// 折叠 status bar（终态显示）
 	const statusText = renderTerminalStatusLine(state, buildPorts(pi, ctx).ui.theme);
 	if (statusText && ctx.hasUI) ctx.ui.setStatus("goal", statusText);

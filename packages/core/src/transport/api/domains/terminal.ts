@@ -9,7 +9,6 @@
  *
  * 依赖方向：api/request（command）+ shared（协议类型 ClientMessageMap）。
  */
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 import { command } from '../request'
 import type { ClientMessageMap, ServerMessageMap, TerminalInstanceSummary } from '@taiji/shared'
 
@@ -29,19 +28,19 @@ export type TerminalSpawnParams = ClientMessageMap['terminal.spawn']
  */
 export const terminalApi = {
   spawn(params: TerminalSpawnParams) {
-    return command('terminal.spawn', params, RPC_BACKSTOP_TIMEOUT_MS)
+    return command('terminal.spawn', params)
   },
   write(sessionId: string, terminalId: string, data: string) {
-    return command('terminal.write', { sessionId, terminalId, data }, RPC_BACKSTOP_TIMEOUT_MS)
+    return command('terminal.write', { sessionId, terminalId, data })
   },
   resize(sessionId: string, terminalId: string, cols: number, rows: number) {
-    return command('terminal.resize', { sessionId, terminalId, cols, rows }, RPC_BACKSTOP_TIMEOUT_MS)
+    return command('terminal.resize', { sessionId, terminalId, cols, rows })
   },
   kill(sessionId: string, terminalId: string) {
-    return command('terminal.kill', { sessionId, terminalId }, RPC_BACKSTOP_TIMEOUT_MS)
+    return command('terminal.kill', { sessionId, terminalId })
   },
   attach(sessionId: string, terminalId: string) {
-    return command('terminal.attach', { sessionId, terminalId }, RPC_BACKSTOP_TIMEOUT_MS)
+    return command('terminal.attach', { sessionId, terminalId })
   },
   /**
    * 查询被查询会话的存活实例清单（`terminal.list` 对账）。
@@ -49,7 +48,7 @@ export const terminalApi = {
    * （世代变更重连路径静默、⌘R / 会话激活路径保留既有条目、下次触发自然重试）。
    */
   async list(sessionId: string): Promise<TerminalInstanceSummary[]> {
-    const ack: ServerMessageMap['terminal.ack'] = await command('terminal.list', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+    const ack: ServerMessageMap['terminal.ack'] = await command('terminal.list', { sessionId })
     return ack.instances ?? []
   },
 }

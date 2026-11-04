@@ -12,14 +12,11 @@
  *
  * showSelect/confirm/input 经 ctx.handleUiRequest 发 extension_ui_request 到前端并等待响应。
  *
- * UI 弹窗超时（timeout-plugin-service D2：Worker 侧单一计时权威）：
- *   - dialog 类三方法（showConfirm/showSelect/showInput）是「等人工操作」，语义计时权威
- *     在请求发起方（本 Worker 侧）：opts.timeout（全程含串行排队）经 resolveUiRequestTimeoutMs
- *     解析为 effective，直传 rpcClient.request 第三参——传输计时即语义计时，链路无「两层
- *     谁先到期」（对齐 pi 先例 showConfirm(title, message, opts?: { timeout?: number })）。
- *   - 到期（PendingTracker reject RPC_TIMEOUT）转译为 UI_TIMEOUT reject（取消 ≠ 替答），
- *     并经 rpcClient.notify('plugin.ui.uiRequestExpired') 通知主线程 queue 取消（撤窗 +
- *     放行串行队列）。notify 纯展示类无等待语义，维持 client 默认 30s。
+ * UI 弹窗等待（时间机制删除裁决）：dialog 类三方法（showConfirm/showSelect/showInput）
+ * 是「等人工操作」，无时限——请求挂到用户响应 / 插件卸载（Worker dispose 经
+ * rpcClient.rejectAll 收尾在途请求）。requestId 在 Worker 侧生成随 params 传递，
+ * queue 按它去重与响应匹配；无超时即无到期取消通知（expired 链已随超时删除）。
+ * notify 纯展示类无等待语义。
  *
  * S3-W3（D7 窄校验层）：全部方法入口 fail-fast 校验——缺字段/错类型/越界键抛
  * INVALID_* 结构化错误（message 含字段名与期望格式），畸形输入不产生 UI 副作用。
@@ -34,8 +31,6 @@
 import type { HeaderActionUpdatePayload } from '@taiji/shared'
 import type { PluginRpcServer } from '../plugin-rpc-server.js'
 import type { PluginRpcClient } from '../plugin-rpc-client.js'
-import type { UiDialogOptions } from '../plugin-types.js'
-import { PluginRpcErrorCodes } from '../plugin-types.js'
 import {
   asBoundedString,
   asOptionalString,
@@ -60,65 +55,16 @@ const UI_TEXT_MAX_BYTES = UI_TEXT_MAX_KB * BYTES_PER_KB
 const HEADER_TEXT_MAX_KB = 4
 const HEADER_TEXT_MAX_BYTES = HEADER_TEXT_MAX_KB * BYTES_PER_KB
 
-/** 时长换算基数（命名常量惯例对齐 subagent-core dialog-queue / session-runner） */
-const MS_PER_SECOND = 1_000
-const SECONDS_PER_MINUTE = 60
-
-/** UI dialog 默认超时的裁决分钟数：30min（「等人工」，dialog-queue 先例同值） */
-const DEFAULT_UI_REQUEST_TIMEOUT_MINUTES = 30
-
-/**
- * UI dialog 请求默认超时（ms）＝ 30min（「等人工」裁决值，dialog-queue 先例同值；
- * timeout-plugin-service D2）。opts.timeout 非法/未传时回落此默认。
- */
-export const DEFAULT_UI_REQUEST_TIMEOUT_MS =
-  DEFAULT_UI_REQUEST_TIMEOUT_MINUTES * SECONDS_PER_MINUTE * MS_PER_SECOND
-
-/**
- * Node setTimeout delay 安全上限（2^31-1）：超域 delay 被 Node 塌缩为 1ms 立即触发
- * （语义反转）。权威源 @zhushanwen/subagent-core/shared/timer-delay.ts——与
- * tool-timeout（D1）同取「本地同值定义」惯例（平台常量无漂移情形），避免首创跨包深路径耦合。
- */
-export const MAX_TIMER_DELAY_MS = 2_147_483_647
-
-/**
- * opts.timeout 是否为参与取值的合法正数（合法域判定）：finite 且 > 0 才生效。
- * D2 无 opt-out 概念（「等人工」不允许无界等待——串行队列 head-of-line 阻塞），
- * 0 / 负数 / NaN / ±Infinity 一律视为非法回落默认（对齐 dialog-queue isValidDialogTimeout）。
- */
-function isValidUiTimeout(timeout: number | undefined): timeout is number {
-  return typeof timeout === 'number' && Number.isFinite(timeout) && timeout > 0
-}
-
-/**
- * 解析 UI dialog 请求的有效超时（D2 取值链，对齐 dialog-queue resolveDialogTimeoutMs）：
- * 合法正数优先（clamp 到 MAX_TIMER_DELAY_MS 防 timer 域塌缩）；非法值（undefined /
- * 0 / 负数 / NaN / ±Infinity）回落 DEFAULT_UI_REQUEST_TIMEOUT_MS——不因脏参数拆掉语义计时。
- */
-export function resolveUiRequestTimeoutMs(timeout: number | undefined): number {
-  const resolved = isValidUiTimeout(timeout) ? timeout : DEFAULT_UI_REQUEST_TIMEOUT_MS
-  return Math.min(resolved, MAX_TIMER_DELAY_MS)
-}
-
-// re-export（NON-BREAKING）：UiDialogOptions 权威契约定义在 plugin-types.ts（单一定义，
-// 本文件不留历史副本）；既有消费者（plugin-ui-timeout-authority.test.ts）仍从本文件导入，
-// 导出清单不变。
-export type { UiDialogOptions }
-
-/** Worker→host dialog 请求携带的计时/取消控制字段（queue 尊重来方值）。 */
+/** Worker→host dialog 请求携带的控制字段（queue 尊重来方值）。 */
 export interface UiRequestMeta {
   requestId?: string
-  timeoutMs?: number
 }
 
-/** 从 handler params 提取控制字段（类型检查窄化，非法值不进 meta——queue 侧回落兜底）。 */
+/** 从 handler params 提取控制字段（类型检查窄化，非法值不进 meta）。 */
 function extractUiRequestMeta(params: Record<string, unknown>): UiRequestMeta {
   const meta: UiRequestMeta = {}
   if (typeof params.requestId === 'string' && params.requestId.length > 0) {
     meta.requestId = params.requestId
-  }
-  if (typeof params.timeoutMs === 'number' && Number.isFinite(params.timeoutMs)) {
-    meta.timeoutMs = params.timeoutMs
   }
   return meta
 }
@@ -154,8 +100,8 @@ export interface UiHandlers {
   /**
    * 发送 extension_ui_request 到前端。
    * 经 handleUiRequest 发送，返回前端选择结果。
-   * meta（D2）：Worker 侧生成的 requestId + effective 超时，透传 UiRequestQueue——
-   * queue 尊重来方 requestId（cancel 通知按它匹配）并按 timeoutMs 挂防泄漏兜底。
+   * meta：Worker 侧生成的 requestId，透传 UiRequestQueue——queue 尊重来方 requestId
+   * （去重与响应匹配按它进行）。
    */
   showSelect(title: string, options: string[], pluginId: string, meta?: UiRequestMeta): Promise<string | undefined>
   showConfirm(title: string, message: string, pluginId: string, meta?: UiRequestMeta): Promise<boolean>
@@ -166,12 +112,6 @@ export interface UiHandlers {
    * 共享时应由装配方（plugin-rpc-setup）传入同一实例。
    */
   limiter?: NotifyRateLimiter
-  /**
-   * UI 请求到期取消回调（D2）：Worker 侧语义 timer 到期后经
-   * plugin.ui.uiRequestExpired notification 到达，queue 据此删项 + 撤窗广播 + 放行。
-   * 缺省（装配方未接线）时通知被记 warn 后丢弃——queue 兜底 timer 收尾（观测可见，不静默）。
-   */
-  onUiRequestExpired?: (requestId: string, pluginId: string) => void
 }
 
 export function registerUiRpcHandlers(
@@ -202,25 +142,7 @@ export function registerUiRpcHandlers(
     return deps.showInput(title, defaultValue, pluginId, extractUiRequestMeta(params))
   })
 
-  // D2 到期取消通知（Worker→host 无 id notification，复用既有 dispatch 通路——
-  // JSON-RPC 语义不回包）。queue 据此删 pending/排队项 + 撤窗广播 + 放行串行队列。
-  rpcServer.registerMethod('plugin.ui.uiRequestExpired', async (params) => {
-    const pluginId = typeof params.pluginId === 'string' ? params.pluginId : 'unknown'
-    const requestId = extractUiRequestMeta(params).requestId
-    if (!requestId) {
-      console.warn(`[ui-api] uiRequestExpired notification missing requestId (plugin=${pluginId}) — dropped`)
-      return
-    }
-    if (!deps.onUiRequestExpired) {
-      // 装配缺位可见（失败要出声）：取消语义退化为 queue 兜底 timer 收尾（延迟生效）
-      console.warn(
-        `[ui-api] uiRequestExpired received (requestId=${requestId}, plugin=${pluginId}) but no onUiRequestExpired wired — queue cleanup deferred to its fallback timer`,
-      )
-      return
-    }
-    deps.onUiRequestExpired(requestId, pluginId)
-  })
-
+  // ── plugin.ui.notify（与 plugin.notify 同一道窄校验 + 令牌桶）─────────────
   rpcServer.registerMethod('plugin.ui.notify', async (params) => {
     // 与 plugin.notify 同一道窄校验 + 令牌桶（guardNotifyParams 共用）
     const guarded = guardNotifyParams(limiter, params)
@@ -275,53 +197,29 @@ export function registerUiRpcHandlers(
 }
 
 /**
- * dialog 类请求的统一发起（D2 Worker 侧单一计时权威）：
+ * dialog 类请求的统一发起（无时限等待）：
  * 1. requestId 在 Worker 侧生成（全局唯一：pluginId 前缀 + 时间戳 + 随机后缀——
- *    共享 Worker 内多插件并发不碰撞），随 params 传递（queue 尊重来方值，取消通知按它匹配）；
- * 2. opts.timeout 经 resolveUiRequestTimeoutMs 解析为 effective，直传 rpcClient.request
- *    第三参（无余量）——传输计时即语义计时，从调用起算、全程含串行排队；
- * 3. effective 到期（PendingTracker reject RPC_TIMEOUT）转译为 UI_TIMEOUT reject：
- *    warn（等了多久 + 恢复指引）+ notify cancel（主线程 queue 删项/撤窗/放行）。
- *    其它错误（dispose / not attached / host 回包错误）原样传播，不误判为超时。
+ *    共享 Worker 内多插件并发不碰撞），随 params 传递（queue 按它去重与响应匹配）；
+ * 2. 无超时参数——请求挂到用户响应 / 插件卸载（dispose 经 rpcClient.rejectAll 收尾）；
+ *    其它错误（dispose / not attached / host 回包错误）原样传播。
  */
 function dialogRequest<T>(
   rpcClient: PluginRpcClient,
   pluginId: string,
   method: string,
   params: Record<string, unknown>,
-  opts?: UiDialogOptions,
 ): Promise<T> {
   const requestId = `${pluginId}_${Date.now()}_${randomSuffix()}`
-  const effective = resolveUiRequestTimeoutMs(opts?.timeout)
-  return rpcClient
-    .request(method, { ...params, requestId, timeoutMs: effective }, effective)
-    .catch((err: unknown) => {
-      if ((err as { code?: unknown }).code === PluginRpcErrorCodes.RPC_TIMEOUT) {
-        console.warn(
-          `[ui-api] ui dialog timed out after ${effective}ms without response ` +
-            `(plugin=${pluginId}, method=${method}, requestId=${requestId}) — the request ` +
-            `(including queue wait) was cancelled, no default answer was made. ` +
-            `Recovery: pass opts.timeout (ms) to extend the full wait, or re-issue the request.`,
-        )
-        rpcClient.notify('plugin.ui.uiRequestExpired', { requestId, pluginId })
-        throw errorWithCode(
-          `ui request timed out after ${effective}ms (requestId=${requestId}) — ` +
-            `the dialog was cancelled and can be re-issued. ` +
-            `Recovery: pass opts.timeout (ms) to extend the wait (covers queueing).`,
-          'UI_TIMEOUT',
-        )
-      }
-      throw err
-    }) as Promise<T>
+  return rpcClient.request(method, { ...params, requestId }) as Promise<T>
 }
 
 export function createUiApi(
   rpcClient: PluginRpcClient,
   pluginId: string,
 ): {
-  showSelect(title: string, options: string[], opts?: UiDialogOptions): Promise<string | undefined>
-  showConfirm(title: string, message: string, opts?: UiDialogOptions): Promise<boolean>
-  showInput(title: string, defaultValue?: string, opts?: UiDialogOptions): Promise<string | undefined>
+  showSelect(title: string, options: string[]): Promise<string | undefined>
+  showConfirm(title: string, message: string): Promise<boolean>
+  showInput(title: string, defaultValue?: string): Promise<string | undefined>
   notify(level: 'info' | 'warn' | 'error', message: string): Promise<void>
   /**
    * AP-1：badge/tooltip/disabled/hidden 可变字段更新（sessionId 必填，徽标是 per-session 语义）。
@@ -337,14 +235,14 @@ export function createUiApi(
   openUrl(url: string): Promise<{ opened: boolean }>
 } {
   return {
-    showSelect: (title: string, options: string[], opts?: UiDialogOptions) =>
-      dialogRequest<string | undefined>(rpcClient, pluginId, 'plugin.ui.showSelect', { pluginId, title, options }, opts),
+    showSelect: (title: string, options: string[]) =>
+      dialogRequest<string | undefined>(rpcClient, pluginId, 'plugin.ui.showSelect', { pluginId, title, options }),
 
-    showConfirm: (title: string, message: string, opts?: UiDialogOptions) =>
-      dialogRequest<boolean>(rpcClient, pluginId, 'plugin.ui.showConfirm', { pluginId, title, message }, opts),
+    showConfirm: (title: string, message: string) =>
+      dialogRequest<boolean>(rpcClient, pluginId, 'plugin.ui.showConfirm', { pluginId, title, message }),
 
-    showInput: (title: string, defaultValue?: string, opts?: UiDialogOptions) =>
-      dialogRequest<string | undefined>(rpcClient, pluginId, 'plugin.ui.showInput', { pluginId, title, defaultValue }, opts),
+    showInput: (title: string, defaultValue?: string) =>
+      dialogRequest<string | undefined>(rpcClient, pluginId, 'plugin.ui.showInput', { pluginId, title, defaultValue }),
 
     notify: (level: 'info' | 'warn' | 'error', message: string) =>
       rpcClient.request('plugin.ui.notify', { pluginId, level, message }).then(() => {}),

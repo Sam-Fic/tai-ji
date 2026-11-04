@@ -21,11 +21,12 @@
  * exit code：
  *   0 = ok（零 error + 挂载点全存在）
  *   1 = 有 error（console/pageerror/编译 pattern 非空 或 挂载点缺失）
- *   2 = dev server 启动超时（readyTimeout 内 url 未 ready）
+ *   2 = dev server 提前退出（spawn 的进程死亡，非 ready 超时——ready 轮询无超时上限，
+ *       时间机制删除裁决）
  *   3 = chromium launch 失败（二进制缺失，提示 npx playwright install chromium）
  *
  * 用法：
- *   node scripts/dev-smoke.mjs [--port 1420] [--ready-timeout 60000] [--settle 3000]
+ *   node scripts/dev-smoke.mjs [--port 1420]
  *   pnpm dev:smoke   （根 package.json 暴露的便捷入口）
  *
  * 本脚本自管理完整生命周期（spawn → poll → launch → assert → cleanup），
@@ -41,8 +42,6 @@ import { setTimeout as sleep } from 'node:timers/promises'
 // ---------------------------------------------------------------------------
 const DEFAULT_DEV_CMD = 'pnpm --filter @taiji/frontend run dev'
 const DEFAULT_PORT = 1420
-const DEFAULT_READY_TIMEOUT = 60000
-const DEFAULT_CONSOLE_SETTLE_MS = 3000
 const DEFAULT_MOUNT_SELECTORS = ['#app', '.app-shell']
 
 // vite 输出命中即视为编译期错误（ERR4）。同时扫 stdout + stderr——vite logger
@@ -67,8 +66,6 @@ const DEFAULT_IGNORE_PATTERNS = [
 
 // 轮询间隔
 const POLL_INTERVAL_MS = 500
-// dev 子进程退出宽限（SIGTERM 后等多久再 SIGKILL 兜底）
-const KILL_GRACE_MS = 2000
 
 // ---------------------------------------------------------------------------
 // SmokeOptions / SmokeResult（JSDoc 形式，.mjs 无 TS；契约见 parent slice DM1/DM2）
@@ -78,8 +75,6 @@ const KILL_GRACE_MS = 2000
  * @typedef {Object} SmokeOptions
  * @property {string} [devCmd]        启动 dev server 的命令（shell 字符串）
  * @property {number} [port]          vite dev server 端口（默认 1420，strictPort）
- * @property {number} [readyTimeout]  轮询 ready 的总超时 ms（默认 60000）
- * @property {number} [consoleSettleMs] ready 后等待静默窗口 ms（默认 3000）
  * @property {string[]} [mountSelectors] 必须可见的关键 DOM 挂载点 selector
  * @property {RegExp[]} [ignorePatterns] 已知运行时噪声白名单（仅过滤 console error）
  */
@@ -90,8 +85,8 @@ const KILL_GRACE_MS = 2000
  * @property {string[]} stderrErrors   vite 输出命中编译 pattern 的行
  * @property {string[]} consoleErrors  console type=error（过滤白名单后）
  * @property {string[]} pageErrors     pageerror 未捕获异常（无白名单）
- * @property {string[]} missingMounts  未在超时内可见的 selector
- * @property {number} readyMs          dev server ready 耗时 ms（失败时为 readyTimeout）
+ * @property {string[]} missingMounts  未在限时内可见的 selector
+ * @property {number} readyMs          dev server ready 耗时 ms
  * @property {0|1|2|3} exitCode        退出码
  * @property {string} [detail]         失败时的诊断信息（如 ready 超时附 stderr 尾部）
  */
@@ -109,8 +104,6 @@ function resolveSmokeOptions(options) {
   return {
     devCmd: options.devCmd ?? DEFAULT_DEV_CMD,
     url: `http://localhost:${port}`,
-    readyTimeout: options.readyTimeout ?? DEFAULT_READY_TIMEOUT,
-    consoleSettleMs: options.consoleSettleMs ?? DEFAULT_CONSOLE_SETTLE_MS,
     mountSelectors: options.mountSelectors ?? DEFAULT_MOUNT_SELECTORS,
     ignorePatterns: options.ignorePatterns ?? DEFAULT_IGNORE_PATTERNS,
   }
@@ -154,21 +147,19 @@ function spawnDevServer(devCmd, sinks) {
 }
 
 /**
- * ready 失败（超时 / child 提前退出）→ exit 2 结果（detail 附 vite 输出尾部诊断）。
+ * child 提前退出 → exit 2 结果（detail 附 vite 输出尾部诊断）。
  */
-function makeReadyTimeoutResult({ url, readyTimeout, readyReason, child, sinks, consoleErrors, pageErrors, missingMounts }) {
+function makeChildExitedResult({ child, sinks, consoleErrors, pageErrors, missingMounts }) {
   const tail = sinks.outputLines.slice(-50).join('\n')
-  const reason = readyReason === 'child-exited'
-    ? `spawn 的 dev server 提前退出（exitCode=${child.exitCode} signalCode=${child.signalCode}）—— 常见原因：${DEFAULT_PORT} 端口被占（vite strictPort 退出）/ 命令错 / 依赖未装`
-    : `${url} 在 ${readyTimeout}ms 内未 ready`
+  const reason = `spawn 的 dev server 提前退出（exitCode=${child.exitCode} signalCode=${child.signalCode}）—— 常见原因：${DEFAULT_PORT} 端口被占（vite strictPort 退出）/ 命令错 / 依赖未装`
   return makeResult({
     exitCode: 2,
     stderrErrors: sinks.stderrErrors,
     consoleErrors,
     pageErrors,
     missingMounts,
-    readyMs: readyTimeout,
-    detail: `DEV_SERVER_READY_TIMEOUT: ${reason}。vite 输出尾部:\n${tail}`,
+    readyMs: 0,
+    detail: `DEV_SERVER_CHILD_EXITED: ${reason}。vite 输出尾部:\n${tail}`,
   })
 }
 
@@ -191,8 +182,8 @@ function attachPageErrorListeners(page, { consoleErrors, pageErrors, ignorePatte
 }
 
 /**
- * 逐个断言挂载点可见（waitForSelector 超时的 selector 记入 missingMounts，不中断后续）。
- * waitForSelector 给 consoleSettleMs + 缓冲，足够 vite 按需编译 + Vue mount。
+ * 逐个断言挂载点可见（waitForSelector 限时的 selector 记入 missingMounts，不中断后续）。
+ * waitForSelector 是 Playwright 断言超时（测试框架语义，非产品等待机制）。
  */
 async function assertMountsVisible(page, mountSelectors, mountTimeout, missingMounts) {
   for (const sel of mountSelectors) {
@@ -210,7 +201,7 @@ async function assertMountsVisible(page, mountSelectors, mountTimeout, missingMo
  * @returns {Promise<SmokeResult>}
  */
 export async function runSmoke(options = {}) {
-  const { devCmd, url, readyTimeout, consoleSettleMs, mountSelectors, ignorePatterns } =
+  const { devCmd, url, mountSelectors, ignorePatterns } =
     resolveSmokeOptions(options)
 
   /** @type {string[]} */
@@ -235,10 +226,11 @@ export async function runSmoke(options = {}) {
     child = spawnDevServer(devCmd, sinks)
 
     // ---- (2) 轮询 dev server ready（ECONNREFUSED 继续轮询；child 退出立即判失败，
-    //      避免连到 1420 上可能已存在的别的 dev 实例导致假结果；超时则 exit 2）----
-    const ready = await pollReady(url, readyTimeout, child)
+    //      避免连到 1420 上可能已存在的别的 dev 实例导致假结果；无超时上限——时间机制
+    //      删除裁决，vite 起不来时经输出/子进程退出路径显式失败）----
+    const ready = await pollReady(url, child)
     if (!ready.ok) {
-      return makeReadyTimeoutResult({ url, readyTimeout, readyReason: ready.reason, child, sinks, consoleErrors, pageErrors, missingMounts })
+      return makeChildExitedResult({ child, sinks, consoleErrors, pageErrors, missingMounts })
     }
     const readyMs = ready.ms
 
@@ -261,13 +253,10 @@ export async function runSmoke(options = {}) {
     const page = await browser.newPage()
     attachPageErrorListeners(page, { consoleErrors, pageErrors, ignorePatterns })
 
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: readyTimeout })
+    await page.goto(url, { waitUntil: 'domcontentloaded' })
 
-    // ---- (5) 断言挂载点可见 ----
-    await assertMountsVisible(page, mountSelectors, consoleSettleMs + 5000, missingMounts)
-
-    // ---- (6) settle 静默窗口（收集 mount 后异步产生的 error）----
-    await sleep(consoleSettleMs)
+    // ---- (5) 断言挂载点可见（挂载断言限时 = 测试框架语义）----
+    await assertMountsVisible(page, mountSelectors, 5000, missingMounts)
 
     // ---- 判定 ----
     const ok =
@@ -288,19 +277,19 @@ export async function runSmoke(options = {}) {
     if (browser) {
       await browser.close().catch(() => {})
     }
-    await killProcess(child, KILL_GRACE_MS)
+    await killProcess(child)
   }
 }
 
 /**
- * 轮询 url 直到返回响应（200/3xx/4xx 均算 ready，仅 ECONNREFUSED/超时算未 ready）。
+ * 轮询 url 直到返回响应（200/3xx/4xx 均算 ready，仅 ECONNREFUSED 算未 ready）。
  * 若传入的 child 在轮询期间退出，立即判定失败（spawn 的 server 没活着，
- * 避免连到端口上可能已存在的别的 server）。
- * @returns {Promise<{ok: true, ms: number} | {ok: false, reason: 'timeout'|'child-exited'}>}
+ * 避免连到端口上可能已存在的别的 server）。无超时上限（时间机制删除裁决）。
+ * @returns {Promise<{ok: true, ms: number} | {ok: false, reason: 'child-exited'}>}
  */
-async function pollReady(url, timeout, child) {
+async function pollReady(url, child) {
   const start = Date.now()
-  while (Date.now() - start < timeout) {
+  for (;;) {
     if (child && child.exitCode !== null) {
       return { ok: false, reason: 'child-exited' }
     }
@@ -314,13 +303,12 @@ async function pollReady(url, timeout, child) {
     }
     await sleep(POLL_INTERVAL_MS)
   }
-  return { ok: false, reason: 'timeout' }
 }
 
 /**
- * 发 SIGTERM，等 graceMs 未退则 SIGKILL 兜底。已退出则 no-op。
+ * 发 SIGTERM 后等子进程退出（无宽限上限——时间机制删除裁决）。已退出则 no-op。
  */
-async function killProcess(child, graceMs) {
+async function killProcess(child) {
   if (!child) return
   if (child.exitCode !== null || child.signalCode) return
   const exitPromise = new Promise((resolve) => {
@@ -331,17 +319,7 @@ async function killProcess(child, graceMs) {
   } catch {
     return
   }
-  const exited = await Promise.race([
-    exitPromise,
-    sleep(graceMs).then(() => false),
-  ])
-  if (!exited) {
-    try {
-      child.kill('SIGKILL')
-    } catch {
-      /* ignore */
-    }
-  }
+  await exitPromise
 }
 
 /**
@@ -374,12 +352,6 @@ function parseArgs(argv) {
     if (a === '--port' && next) {
       opts.port = Number(next)
       i++
-    } else if (a === '--ready-timeout' && next) {
-      opts.readyTimeout = Number(next)
-      i++
-    } else if (a === '--settle' && next) {
-      opts.consoleSettleMs = Number(next)
-      i++
     } else if (a === '-h' || a === '--help') {
       printHelp()
       process.exit(0)
@@ -397,14 +369,12 @@ function printHelp() {
 
 选项:
   --port <n>             vite dev server 端口（默认 1420）
-  --ready-timeout <ms>   dev server ready 轮询超时（默认 60000）
-  --settle <ms>          ready 后静默窗口（默认 3000）
   -h, --help             显示帮助
 
 退出码:
   0  ok
   1  有 error（编译/console/pageerror/挂载点缺失）
-  2  dev server 启动超时
+  2  dev server 提前退出
   3  chromium launch 失败`)
 }
 

@@ -55,7 +55,6 @@ export default {
   yesterday: '昨天',
   daysAgo: '{days} 天前',
   dateFormat: '{month} 月 {day} 日',
-  searchUnavailable: '搜索服务暂时不可用',
   // 思考等级显示（W2）
   thinkingLevel: {
     off: '关',

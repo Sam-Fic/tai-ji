@@ -143,36 +143,28 @@ describe("协议黑盒：9 正向方法 × fake 引擎回放", () => {
       await h.client.ensureConnected();
       expect(h.client.currentState).toBe("ready");
 
-      const probe = (await h.client.request("probe", {}, { timeoutMs: 5_000 })) as {
+      const probe = (await h.client.request("probe", {})) as {
         ok: boolean; checks: Array<{ name: string; ok: boolean }>;
       };
       expect(probe.ok).toBe(true);
       expect(probe.checks.every((c) => typeof c.name === "string" && typeof c.ok === "boolean")).toBe(true);
 
-      const models = (await h.client.request("listModels", {}, { timeoutMs: 5_000 })) as {
+      const models = (await h.client.request("listModels", {})) as {
         models: Array<{ id: string }>;
       };
       expect(models.models.map((m) => m.id)).toEqual(["fake-1"]);
 
-      const validated = (await h.client.request(
-        "validateModel",
-        { modelRef: "fake/fake-1" },
-        { timeoutMs: 5_000 },
-      )) as { canonicalRef: string };
+      const validated = (await h.client.request("validateModel", { modelRef: "fake/fake-1" })) as { canonicalRef: string };
       expect(validated.canonicalRef).toBe("fake/fake-1");
 
       // [H1 U5] interact 方法已随 chat-run 统一退役（D5）——往返断言随之删除，
       // fake 引擎对未知方法回 engine_method_unknown（unknown_method 模式覆盖）。
 
-      const view = (await h.client.request(
-        "read",
-        { handle: fixture.run.result.handle, dataDir },
-        { timeoutMs: 5_000 },
-      )) as { entries: unknown[] };
+      const view = (await h.client.request("read", { handle: fixture.run.result.handle, dataDir })) as { entries: unknown[] };
       expect(Array.isArray(view.entries)).toBe(true);
 
       // ping 协议方法往返（诊断范围：不 throw 即通——客户端便捷方法已删，走裸 request）
-      await h.client.request("ping", {}, { timeoutMs: 5_000 });
+      await h.client.request("ping", {});
     } finally {
       await h.client.dispose();
     }
@@ -197,11 +189,7 @@ describe("协议黑盒：9 正向方法 × fake 引擎回放", () => {
     const h = makeHarness();
     try {
       await h.client.ensureConnected();
-      const ack = (await h.client.request(
-        "cancel",
-        { runId: "run-smoke-1", reason: "test" },
-        { timeoutMs: 5_000 },
-      )) as { ok: boolean };
+      const ack = (await h.client.request("cancel", { runId: "run-smoke-1", reason: "test" })) as { ok: boolean };
       expect(ack.ok).toBe(true);
     } finally {
       await h.client.dispose();
@@ -211,7 +199,7 @@ describe("协议黑盒：9 正向方法 × fake 引擎回放", () => {
   it("dispose：幂等收尾（应答 ok + 进程退出）", async () => {
     const h = makeHarness();
     await h.client.ensureConnected();
-    const r = (await h.client.request("dispose", {}, { timeoutMs: 5_000 })) as { ok: boolean };
+    const r = (await h.client.request("dispose", {})) as { ok: boolean };
     expect(r.ok).toBe(true);
     await h.client.dispose();
     await expect(h.client.dispose()).resolves.toBeUndefined();
@@ -264,7 +252,7 @@ describe("协议黑盒：错误帧", () => {
     const h = makeHarness({ FAKE_PROTOCOL_ERROR: "unknown_method" });
     try {
       await h.client.ensureConnected();
-      await expect(h.client.request("bogus/method", {}, { timeoutMs: 5_000 })).rejects.toMatchObject({
+      await expect(h.client.request("bogus/method", {})).rejects.toMatchObject({
         code: "engine_method_unknown",
       });
     } finally {

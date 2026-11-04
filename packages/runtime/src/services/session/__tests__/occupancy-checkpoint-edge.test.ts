@@ -24,7 +24,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { CrashJournalEvent, CrashJournalWriter } from '@taiji/shared'
 import { RUN_CHECKPOINT_FILENAME as CHECKPOINT_FILENAME } from '@taiji/shared/paths'
-import type { MemPressureSample } from '../../../infra/mem-pressure.js'
 import { runStartupReattach, type StartupReattachDeps, type StartupReattachOptions } from '../../startup-reattach.js'
 import { applySessionOccupancyTransition, IDLE_SESSION_OCCUPANCY } from '../event-interpreter.js'
 import { refreshCheckpointOnOccupancyEdge } from '../crash-forensics-hooks.js'
@@ -39,9 +38,6 @@ const HOUR = 3_600_000
 const T0 = 1_700_000_000_000
 /** occupancy 翻转边沿时刻（Date.now() 经 fake timers 钉在此值）。 */
 const T1 = T0 + 10_000
-
-/** mem-pressure 注入样本：常态（不高压，端到端用例零延迟）。 */
-const calmSample: MemPressureSample = { swapUsedMB: null, swapTotalMB: null, freeMB: 8 * 1024, totalMB: 16 * 1024 }
 
 const createdDirs: string[] = []
 let runDir: string
@@ -180,7 +176,7 @@ describe('occupancy 转移边沿 → checkpoint 占用快照刷新（fix-chat-fl
     expect(errSpy).toHaveBeenCalledOnce()
   })
 
-  it('端到端：占用中「崩溃」的磁盘快照经 runStartupReattach 自动恢复命中（安静长 turn，idle 超 2h 窗口）', async () => {
+  it('端到端：占用中「崩溃」的磁盘快照经 runStartupReattach 自动恢复命中（安静长 turn）', async () => {
     const sessionId = 'busy-s1'
     const sessionFile = join(runDir, 'busy-s1.jsonl')
     seedAttachedSession(sessionId, sessionFile)
@@ -193,10 +189,7 @@ describe('occupancy 转移边沿 → checkpoint 占用快照刷新（fix-chat-fl
     const deps: StartupReattachDeps = { restore, waitForOrphanReap: async () => {} }
     const options: StartupReattachOptions = {
       checkpoint: store,
-      now: () => T1 + 3 * HOUR,
       journal: { append: () => {} },
-      delay: async () => {},
-      queryMemPressure: async () => calmSample,
       fileExists: () => true,
     }
     const report = await runStartupReattach(deps, options)

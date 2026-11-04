@@ -206,7 +206,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Check, SquareCheckBig, X } from '@lucide/vue'
 import { Button, Popover, PopoverContent, PopoverTrigger } from '@taiji/ui'
-import { command, RPC_BACKSTOP_TIMEOUT_MS } from '@taiji/core/transport/api'
+import { command } from '@taiji/core/transport/api'
 import { toErrorMessage } from '@taiji/core'
 import { usePlanState } from '@/composables/use-plan-sync'
 import { useExtensionUI, planReviewFilter } from '@/composables/useExtensionUI'
@@ -296,7 +296,7 @@ async function onExit(): Promise<void> {
   try {
     // reply 契约（protocol.ts session.abortPlan）：ack void，退出结果经派生视图链广播推回；
     // 失败 = error envelope → promise reject（AGENTS.md 规则 5 的 renderer 实态）
-    await command('session.abortPlan', { sessionId: sid }, RPC_BACKSTOP_TIMEOUT_MS)
+    await command('session.abortPlan', { sessionId: sid })
   } catch (e) {
     exitError.value = t('plan.modeBar.exitError', { message: toErrorMessage(e) })
   } finally {

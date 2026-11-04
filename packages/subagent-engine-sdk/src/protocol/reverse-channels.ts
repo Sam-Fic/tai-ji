@@ -14,8 +14,7 @@
 // 选键——recordId = record 镜像键（childSpawned/childStateChanged）、runId = 渲染与
 // 事件路由键（streamDelta/handleReady/askUser）、host/log 无关联键；通道注释点名消费方。
 //
-// 应答约定：数据范围类回 {ok:true}（REVERSE_REQUEST_TIMEOUT_MS=10s 未答 = 引擎故障 →
-// 杀进程 + 在途 run 失败）；人机交互类走 ack 两阶段——先回 {ack:true}，结果异步到达
+// 应答约定：数据范围类回 {ok:true}；人机交互类走 ack 两阶段——先回 {ack:true}，结果异步到达
 // （R9-2：已 ack 的等待不计入任何 in-flight 超时；ADR-0047 静默 ≠ 卡死）；
 // 未实现或宿主未知的通道回 {unsupported:true}——宽容语义③（条文权威 = ADR-0071）：
 // 宿主遇未知 host/* 通道（新引擎发旧宿主未实现的通道）一律回 {unsupported:true}，
@@ -48,8 +47,9 @@ export const REVERSE_CHANNELS = [
 ] as const satisfies readonly ReverseChannel[];
 
 /**
- * 超时二分归属（10s 数据范围 / 不设统一超时的人机交互通道）。实现归 W2 EngineClient；
- * 引擎侧自灭计时（W12）复用同表——已 ack 的 askUser 等待不计入 in-flight（R9-2）。
+ * 通道二分归属（数据范围 / 人机交互）。实现归 W2 EngineClient（路由准入表——
+ * 数据范围走分发器表，interaction 走 ack 两阶段；原「超时二分」的时间语义已删，
+ * 类型名保留 = 协议词表兼容）。
  */
 export const REVERSE_CHANNEL_TIMEOUT_CLASS: Record<ReverseChannel, ReverseRequestTimeoutClass> = {
   "host/log": "data-plane",

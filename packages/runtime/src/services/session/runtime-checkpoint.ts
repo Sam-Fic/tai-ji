@@ -102,7 +102,7 @@ const CRASH_DIGEST_MAX_CHARS = 2048
  * turn/compacting/bash，handingOff 不参与快照投影**——设计登记见
  * crash-forensics-and-watchdog.md「reattach 过滤门槛」节术语澄清「本文 occupancy 指
  * 三维判定」。生产方 = crash-forensics-hooks 的 attach 挂点（upsertSession 快照写入，
- * 归并式只读三维）；消费方 = startup-reattach `shouldReattachEntry` 真补集过滤公式
+ * 归并式只读三维）；消费方 = startup-reattach 编排（checkpoint 内 session 全量恢复候选）
  * （空闲回收 reaper 已随 ADR-0122 退役，本快照不再服务任何豁免层）。
  */
 export type CheckpointOccupancy = 'idle' | 'occupied'

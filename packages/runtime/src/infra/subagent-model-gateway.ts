@@ -6,7 +6,7 @@
  * 应答经请求作用域结果文件回收（`<subagent 数据根>/model-switch/<requestId>.json`，
  * extension 写入 / 本侧写后读一次并删除——无轮询无监视）。
  *
- * 职责边界：载荷组装 + 出站点 prompt（显式墙钟超时）+ 结果文件读删 + wire 应答映射；
+ * 职责边界：载荷组装 + 出站点 prompt + 结果文件读删 + wire 应答映射；
  * 覆盖状态查询不经过本网关（model-override-query 是唯一查询入口，详情载荷组装路径
  * 直接装配，M1-3 收敛——本端口只保留 setModel + resolveSessionId）。
  *
@@ -33,20 +33,11 @@ import type { SubagentModelSwitchGateway } from '../interfaces.js'
 import type { ScannedSessionMeta } from '../services/ports/session.js'
 import { toErrorMessage } from '../utils/errors.js'
 
-/**
- * 出站点显式墙钟超时（§7.1.1 要素 4：60s < 前端 backstop RPC_BACKSTOP_TIMEOUT_MS = 65s
- * （packages/core/src/transport/api/pending.ts:37）——保证前端 backstop 窗口内必有 WS
- * 应答。量级依据：逐成员转发为控制范围单请求（秒级收敛窗），聚合并发扇出常态远低于 60s；
- * 极端大 run 触发超时按通道行语义如实应答。超时到点先做一次结果文件 best-effort 检查
- * ——命中迟到真值按真实结果应答（略超时不吞真值）。
- */
-export const MODEL_SWITCH_PROMPT_TIMEOUT_MS = 60_000
-
 /** 结果文件读取的单次预算（uuid 命名 + 请求作用域，文件体 = 单条 JSON 应答，KB 级）。 */
 // eslint-disable-next-line no-magic-numbers -- 预算常数 256KB（256 × 1024，语义见上注）
 const RESULT_FILE_MAX_BYTES = 256 * 1024
 
-/** 通道级失败统一 code（§7.5 通道行：出站点超时 / 结果文件缺失 / 发送失败同分型）。 */
+/** 通道级失败统一 code（通道失败分型：prompt 发送失败 / 结果文件缺失 / 发送异常同归此 code）。 */
 const CHANNEL_ERROR_CODE = 'subagent_model_switch_channel_failed'
 
 /**
@@ -84,11 +75,10 @@ class SubagentModelSwitchError extends Error {
   }
 }
 
-/** 出站点竞速结局（prompt 正常回 / prompt 失败 / 超时三态）。 */
+/** 出站点结局（prompt 正常回 / prompt 失败两态）。 */
 type PromptOutcome =
   | { kind: 'prompt' }
   | { kind: 'prompt-error'; error: unknown }
-  | { kind: 'timeout' }
 
 /**
  * 结果文件读取（读一次，ENOENT/IO 失败 → undefined——缺失即通道级失败，不重试不轮询）。
@@ -253,30 +243,20 @@ function buildSwitchPayload(params: SubagentSetModelRequest, requestId: string):
 }
 
 /**
- * 出站点竞速（prompt 正常回 / prompt 失败 / 超时三态）。promptPromise 双分支归一为
- * 结局对象——竞速败者（迟到 resolve / 迟到 reject）零 unhandled 风险；race 落定后
- * finally 清 timer（超时分支迟到的 timeout resolve 无消费方，无害）。
+ * 出站点结局归一（prompt 正常回 / prompt 失败两态）。失败捕获为结局对象而非直接
+ * 上抛——与调用方的结果文件缺失归因共用同一分派口。
  */
-function racePromptOutcome(client: SubagentModelPromptClient, payload: string): Promise<PromptOutcome> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const promptPromise: Promise<PromptOutcome> = client.prompt(`/subagent-model ${payload}`).then(
-    () => ({ kind: 'prompt' }) as PromptOutcome,
-    (error: unknown) => ({ kind: 'prompt-error', error }) as PromptOutcome,
-  )
-  const timeoutPromise = new Promise<PromptOutcome>((resolve) => {
-    timer = setTimeout(() => resolve({ kind: 'timeout' }), MODEL_SWITCH_PROMPT_TIMEOUT_MS)
-  })
-  return Promise.race([promptPromise, timeoutPromise]).finally(() => {
-    if (timer !== undefined) clearTimeout(timer)
-  })
+async function awaitPromptOutcome(client: SubagentModelPromptClient, payload: string): Promise<PromptOutcome> {
+  try {
+    await client.prompt(`/subagent-model ${payload}`)
+    return { kind: 'prompt' }
+  } catch (error: unknown) {
+    return { kind: 'prompt-error', error }
+  }
 }
 
-/** 结果文件缺失时的通道级失败归因（outcome 三态分派——超时 best-effort 迟到真值
- * 已在调用方读侧先行回收，此处只剩失败归因）。 */
+/** 结果文件缺失时的通道级失败归因（outcome 两态分派）。 */
 function channelErrorForOutcome(outcome: PromptOutcome): SubagentModelSwitchError {
-  if (outcome.kind === 'timeout') {
-    return channelError(`模型切换命令超时（${MODEL_SWITCH_PROMPT_TIMEOUT_MS}ms 内宿主未回执）`)
-  }
   if (outcome.kind === 'prompt-error') {
     return channelError(`模型切换命令发送失败（${toErrorMessage(outcome.error)}）`)
   }
@@ -527,11 +507,10 @@ export function createSubagentModelSwitchGateway(deps: SubagentModelGatewayDeps)
         getSubagentModelSwitchResultsDir(meta.id, deps.dataDir),
         `${requestId}.json`,
       )
-      // 出站点竞速（prompt 正常回 / prompt 失败 / 超时三态，racePromptOutcome）；
+      // 出站点结局归一（prompt 正常回 / prompt 失败，awaitPromptOutcome）；
       // prompt 正常回后 handler 才返回（preflight「handled」于 handler 完成后发出），
-      // 写后读成立。写后读一次 + 读后即删（超时路径同样先读——best-effort 迟到真值
-      // 检查，命中按真实结果应答，§7.1.1 要素 4）。
-      const outcome = await racePromptOutcome(client, buildSwitchPayload(params, requestId))
+      // 写后读成立。写后读一次 + 读后即删。
+      const outcome = await awaitPromptOutcome(client, buildSwitchPayload(params, requestId))
       const raw = readResultFileOnce(resultsFile)
       deleteResultFile(resultsFile)
       if (raw === undefined) throw channelErrorForOutcome(outcome)

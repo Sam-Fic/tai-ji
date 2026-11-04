@@ -382,13 +382,6 @@ export interface ExecuteOptions {
   // 整体删除——批量编排走 `subagent_batch` tool（fan-out 模板），完成通知恒为逐条 async
   // 投递。pi 对未知字段静默放行，存量调用形态的 collect 值不进本选项。
   /**
-   * 空闲超时毫秒数（全 record 生效的 idle GC 节奏——原「仅 conversation 模式」
-   * 限定随 chatMode 消亡移除）。覆盖默认 5min idle timeout。
-   * 优先级：参数 > env TAIJI_SUBAGENT_IDLE_TIMEOUT_MS > 默认 300000ms。
-   * 显式传 0/负数 = 禁用 idle GC（不挂 timer；旧实现 0 会落成 setTimeout(0) 立即 kill）。
-   */
-  idleTimeoutMs?: number;
-  /**
    * 实际执行引擎 id（P4 路由留痕）：pi 引擎由 PiEngine.run 在还原 opts 时写入；
    * 缺省（历史调用方不设）= pi 派生视图。createRecordForMode 读入 record identity。
    */

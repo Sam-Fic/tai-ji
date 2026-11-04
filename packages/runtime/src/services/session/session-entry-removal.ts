@@ -38,7 +38,7 @@
  * 组装形态（T8 有限拆分，行为保持抽取）：deps 窄注入与 traceSync/records 同款——session
  * 定位/条目删除经 lifecycle（Map 所有者）、晚期注入状态（messageBus / onSessionDelete /
  * onSessionDestroyedHandlers）经闭包每次调用动态读（setter 注入语义与原 Facade 字段直读
- * 逐字等价）；crash journal / checkpoint / inflight mirror / userStopped gate / 后台任务
+ * 逐字等价）；crash journal / checkpoint / userStopped gate / 后台任务
  * reaper 为模块单例，直接 import（测试 vi.mock 按模块路径拦截，与消费方所在文件无关）。
  */
 import type { SessionSummary } from '@taiji/shared'
@@ -47,8 +47,6 @@ import { getCrashJournal } from '../../infra/crash-journal.js'
 import { toErrorMessage } from '../../utils/errors.js'
 // D3 checkpoint（crash-forensics §3.3 D3，u4）：detach 挂点 = 本链第 2 步。
 import { getRuntimeCheckpointStore } from './runtime-checkpoint.js'
-// D5 在途镜像（crash-forensics §3.3 D5）：detach 同点位摘除 = 本链第 3 步。
-import { inflightMirror } from './inflight-mirror.js'
 // 收殓下沉触发点 A（file-lock-unification-and-reaper-sink §3.3）：孤儿后台任务收殓（第 11 步）。
 import { reapSessionBackgroundTasks } from './background-task-reaper.js'
 import { getPiAgentDir } from '../../infra/pi/pi-paths.js'
@@ -143,12 +141,6 @@ export class SessionEntryRemovalOrchestrator {
     // 退出路径不删文件）。
     runDestroyStepIsolated('checkpoint.detach', sessionId, () => {
       getRuntimeCheckpointStore().removeSession(sessionId)
-    })
-    // D5 mirror（偏差 #20 接线）：detach 同点位摘除条目——「该 session 已不存在」的精确
-    // 时点与 checkpoint 同语义（主动删 / 进程退出 / forceQuit / restore 清场全覆盖）。
-    // pi 崩死路径先摘、respawn 成功经 onSessionRegistered 预置重建（新 reporting epoch）。
-    runDestroyStepIsolated('mirror.detach', sessionId, () => {
-      inflightMirror.dropSession(sessionId)
     })
     // userStopped 标记不在本汇聚点清理：forceQuit（K1/K2）尾步经过本链，标记必须存活到
     // 后续 restore（标记宿主独立于 ManagedSession 生命周期的原因，见 user-stopped-mark-store.ts

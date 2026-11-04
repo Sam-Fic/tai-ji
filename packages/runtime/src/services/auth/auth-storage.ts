@@ -54,18 +54,6 @@ export interface CredentialWriter {
 }
 
 /**
- * 退避下限覆盖（仅测试用）：并发 RMW 用例靠它把「等锁」总时长压到毫秒级。
- * 生产不设 → withFileLockAsync 取 RETRY_MIN_TIMEOUT_MS（100ms，对齐 pi 侧）。
- * 断言对象是「并发 set 全部保留」而非等待时长，退避值不是被测契约。
- */
-let lockMinRetryTimeoutMs: number | undefined
-
-/** 覆盖 auth.json 写锁退避下限（仅测试用）。传 undefined 恢复默认。 */
-export function setAuthLockMinRetryTimeoutForTest(ms: number | undefined): void {
-  lockMinRetryTimeoutMs = ms
-}
-
-/**
  * 跨进程写锁：锁协议（统一 mkdir 锁参数 + 指数退避重试）单点在
  * utils/file-lock.ts 的 withFileLockAsync，与 pi FileAuthStorageBackend.withLockAsync
  * 互斥同一把锁（<auth.json>.lock）；旧版锁的 onCompromised 保活检测已随锁统一移除
@@ -77,7 +65,7 @@ export function setAuthLockMinRetryTimeoutForTest(ms: number | undefined): void 
 async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
   return withFileLockAsync(
     filePath,
-    { ensure: () => ensureFileExists(filePath), logTag: 'auth-storage', minRetryTimeoutMs: lockMinRetryTimeoutMs },
+    { ensure: () => ensureFileExists(filePath), logTag: 'auth-storage' },
     fn,
   )
 }

@@ -67,7 +67,7 @@ export type ProcessEscapeKind = 'uncaught-exception' | 'unhandled-rejection'
  * 文件：logsDir 下 `runtime-uncaught-<date>.log`（runtime- 前缀复用 logger.ts
  * cleanExpiredLogs 的保留期清理；date 命名对齐主日志惯例）。logsDir 由调用方经
  * getDataDir() 动态推导传入，本模块不持路径状态。now 可注入，测试固定时刻控制
- * 文件名日期与时间戳（recordWatermarkDailySample 同款注入模式）。
+ * 文件名日期与时间戳（测试注入固定时刻的既有模式）。
  */
 export function appendProcessEscapeLog(
   logsDir: string,

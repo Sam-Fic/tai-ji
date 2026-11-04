@@ -45,8 +45,6 @@ export type ModalSurfaceFamily =
   | 'toast'
   /** 可编程横幅（memory pressure bar，显示到 dismiss 或 level 变化） */
   | 'program-banner'
-  /** 可编程横幅（RollingRestartBanner，滚动重启） */
-  | 'rolling-banner'
   /** SessionList 删除确认态本体（§6.7 局部表面后行档入聚合，确认态聚合谓词开合） */
   | 'session-delete-confirm'
   /** workflow 浮层 agent 钻取抽屉（浮层子交互层——只在浮层开时存在，非阻塞、Esc 归编排器） */
@@ -73,7 +71,6 @@ export const MODAL_SURFACE_FAMILY_FLAGS: Record<ModalSurfaceFamily, ModalSurface
   // 非阻塞横幅/通知：不消费 Esc（显示期 Esc 照常走层级序），仅几何相交时遮蔽 view
   'toast': { yieldsEsc: false, yieldsCmdW: false, shieldsView: 'intersecting' },
   'program-banner': { yieldsEsc: false, yieldsCmdW: false, shieldsView: 'intersecting' },
-  'rolling-banner': { yieldsEsc: false, yieldsCmdW: false, shieldsView: 'intersecting' },
   // 行内两段确认态（§6.7 局部表面后行档）：Esc 让位（escCount 消费方在编排器后注册，
   // preventDefault 不可达，只能靠让位达成「Esc 只清确认态不动容器」）；⌘W 不让位
   // （无未提交输入、行内瞬态，让位即死键）；行内小面积不覆盖 view 显示矩形（'none'）
@@ -200,24 +197,6 @@ export const MODAL_SURFACE_MANIFEST = [
       { file: 'packages/renderer/src/components/ui/ToastContainer.vue', form: 'class-token', literal: 'var(--z-toast)', count: 1 },
     ],
     basis: '§6.7 表：ToastContainer（非阻塞通知，不入让位族、只入 view 遮蔽族；M7b 令牌化 --z-toast=2000）',
-  },
-  {
-    id: 'memory-pressure-bar',
-    family: 'program-banner',
-    kind: 'member',
-    zAnchors: [
-      { file: 'packages/renderer/src/App.vue', form: 'class-token', literal: 'var(--z-banner)', count: 1 },
-    ],
-    basis: '§6.7 表：memory pressure bar（可编程横幅，显示到 dismiss 或 level 变化；已令牌化 --z-banner）',
-  },
-  {
-    id: 'rolling-restart-banner',
-    family: 'rolling-banner',
-    kind: 'member',
-    zAnchors: [
-      { file: 'packages/renderer/src/components/ui/RollingRestartBanner.vue', form: 'class-token', literal: 'var(--z-banner)', count: 1 },
-    ],
-    basis: '§6.7 表：RollingRestartBanner（可编程横幅，滚动重启；已令牌化 --z-banner）',
   },
   {
     id: 'overlay-shell',

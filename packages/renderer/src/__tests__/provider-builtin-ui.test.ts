@@ -82,7 +82,6 @@ vi.mock('@/stores/chat', () => ({
     sessionPhase: () => ({ turn: chatState.turn, compacting: chatState.compacting, bash: false }),
     isCompacting: () => chatState.compacting,
     getCompactingReason: () => chatState.reason,
-    getStallHint: () => undefined,
   }),
 }))
 

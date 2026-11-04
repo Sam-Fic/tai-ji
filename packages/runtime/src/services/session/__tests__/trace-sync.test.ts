@@ -33,7 +33,7 @@ describe('trace-sync', () => {
  * - 纯函数：buildTraceSnapshotFromFile 用例（原 session-trace.test.ts 随迁）+
  *   parseTraceHeaderLine fork 血缘透传用例（u-S4 补覆盖）。
  * - 编排层：getTraceEntries（RPC 混合路由）/ syncTraceEntries（增量路径串行链）/
- *   fetchCurrentSystemPrompt（现取轮询）/ onSessionDisposed（销毁清理）——原经 Facade 的
+ *   fetchCurrentSystemPrompt（现取单次拉取）/ onSessionDisposed（销毁清理）——原经 Facade 的
  *   session-trace.test.ts 用例改由本文件直测模块（同一实现代码路径），并补充此前
  *   零覆盖的分支（Entry not found 基线失效、retry 全量重建等）。
  * - EventInterpreter 触发接线（A33 增量路径入口，原 session-trace.test.ts 随迁）：四类
@@ -472,7 +472,7 @@ describe('syncTraceEntries 编排（触发 → get_entries(since) → traceEntry
   })
 })
 
-// ── fetchCurrentSystemPrompt 编排（现取轮询）──
+// ── fetchCurrentSystemPrompt 编排（现取单次拉取）──
 
 describe('fetchCurrentSystemPrompt 编排（常驻扩展现取通道）', () => {
   const SID = 'sid-fetch-prompt'
@@ -515,18 +515,15 @@ describe('fetchCurrentSystemPrompt 编排（常驻扩展现取通道）', () => 
     await expect(traceSync.fetchCurrentSystemPrompt(SID)).rejects.toMatchObject({ code: 'session_busy' })
   })
 
-  it('成功路径：发命令 → ensurePromptBaseline 全量建基线 → 轮询 since 命中 custom entry → 返回值 + journal 增量广播 + 基线滚动', async () => {
-    vi.useFakeTimers()
+  it('成功路径：发命令 → ensurePromptBaseline 全量建基线 → 单次 since 拉取命中 custom entry → 返回值 + journal 增量广播 + 基线滚动', async () => {
     const { traceSync, client, publishSpy } = makeEnv({ active: true })
     mockPromptFlow(client)
 
-    const pending = traceSync.fetchCurrentSystemPrompt(SID)
-    await vi.advanceTimersByTimeAsync(250) // 第一轮轮询 sleep
-    const result = await pending
+    const result = await traceSync.fetchCurrentSystemPrompt(SID)
 
     // 命令发出（双下划线内部命令，不经 LLM）
     expect(client.prompt).toHaveBeenCalledWith('/__taiji_get_system_prompt__')
-    // 增量轮询以全量建的基线为 since；基线滚动（后续 trace 增量从 leaf1 起）
+    // 增量拉取以全量建的基线为 since；基线滚动（后续 trace 增量从 leaf1 起）
     expect(client.getEntries).toHaveBeenCalledWith('leaf0')
     // 返回值 = entry data 提取
     expect(result).toEqual({
@@ -545,7 +542,6 @@ describe('fetchCurrentSystemPrompt 编排（常驻扩展现取通道）', () => 
   })
 
   it('ensurePromptBaseline 缓存命中：trace 视图已建基线时不再全量拉（现取是用户显式动作，免重复 RPC）', async () => {
-    vi.useFakeTimers()
     const { traceSync, client } = makeEnv({ active: true })
     // 打开 trace 视图建基线（leaf0）
     client.getEntries.mockResolvedValue({ data: { entries: [], leafId: 'leaf0' } })
@@ -553,9 +549,7 @@ describe('fetchCurrentSystemPrompt 编排（常驻扩展现取通道）', () => 
     client.getEntries.mockClear()
     mockPromptFlow(client)
 
-    const pending = traceSync.fetchCurrentSystemPrompt(SID)
-    await vi.advanceTimersByTimeAsync(250)
-    await pending
+    await traceSync.fetchCurrentSystemPrompt(SID)
 
     // 全部 getEntries 调用都带 since=leaf0（无全量拉）——calls 元组形状按运行时实参断言
     const calls = client.getEntries.mock.calls as unknown as [string | undefined][]
@@ -565,8 +559,7 @@ describe('fetchCurrentSystemPrompt 编排（常驻扩展现取通道）', () => 
     }
   })
 
-  it('基线跨 pi 进程失效（Entry not found）→ retry：清缓存基线后全量重建继续轮询命中', async () => {
-    vi.useFakeTimers()
+  it('基线跨 pi 进程失效（Entry not found）→ retry：清缓存基线后全量重建拉一次命中', async () => {
     const { traceSync, client, publishSpy } = makeEnv({ active: true })
     // 建立旧基线
     client.getEntries.mockResolvedValue({ data: { entries: [], leafId: 'leaf-stale' } })
@@ -581,10 +574,7 @@ describe('fetchCurrentSystemPrompt 编排（常驻扩展现取通道）', () => 
       return { data: { entries: [], leafId: 'leaf-fresh' } }
     })
 
-    const pending = traceSync.fetchCurrentSystemPrompt(SID)
-    await vi.advanceTimersByTimeAsync(250) // 第一轮：since 失效 → retry
-    await vi.advanceTimersByTimeAsync(250) // 第二轮：全量重建命中
-    const result = await pending
+    const result = await traceSync.fetchCurrentSystemPrompt(SID)
 
     expect(result.fullText).toBe('RETRY-BODY')
     expect(client.getEntries).toHaveBeenCalledWith('leaf-stale')
@@ -594,19 +584,17 @@ describe('fetchCurrentSystemPrompt 编排（常驻扩展现取通道）', () => 
     expect((push?.[1] as { payload: { leafId: string | null } }).payload.leafId).toBe('leaf-fresh')
   })
 
-  it('轮询超时（命令未产出 entry）→ throw code=fetch_current_prompt_timeout', async () => {
-    vi.useFakeTimers()
+  it('命令后单次拉取未命中（命令未产出 entry）→ warn + throw code=fetch_current_prompt_failed', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { traceSync, client } = makeEnv({ active: true })
     // 增量恒空（命令未产出）
     client.getEntries.mockImplementation(async (since?: string) =>
       since === undefined
         ? { data: { entries: [], leafId: 'leaf0' } }
         : { data: { entries: [], leafId: 'leaf0' } })
-    const pending = traceSync.fetchCurrentSystemPrompt(SID)
-    // 先 attach rejection 断言再推进 timer（否则 rejection 发生时无 handler，报 unhandled）
-    const expectation = expect(pending).rejects.toMatchObject({ code: 'fetch_current_prompt_timeout' })
-    await vi.advanceTimersByTimeAsync(8500)
-    await expectation
+    await expect(traceSync.fetchCurrentSystemPrompt(SID)).rejects.toMatchObject({ code: 'fetch_current_prompt_failed' })
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('entry not found after command'))
+    warnSpy.mockRestore()
   })
 })
 

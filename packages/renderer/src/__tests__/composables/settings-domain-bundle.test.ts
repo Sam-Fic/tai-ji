@@ -763,7 +763,7 @@ describe('shieldsView 分档报告（S9 view 遮蔽联动的数据源）', () =>
 
   it('全屏阻塞遮罩 = unconditional；弹出层/横幅 = intersecting；行内确认态 = none 不参报', async () => {
     const modal = mountSurface('search-modal', 'sm')
-    const banner = mountSurface('rolling-restart-banner', 'rb')
+    const banner = mountSurface('memory-pressure-bar', 'rb')
     const confirm = mountSurface('session-delete-confirm', 'sc')
     expect(openShieldingSurfaces()).toEqual([])
 
@@ -773,7 +773,7 @@ describe('shieldsView 分档报告（S9 view 遮蔽联动的数据源）', () =>
 
     const report = openShieldingSurfaces().sort((a, b) => (a.id < b.id ? -1 : 1))
     expect(report).toEqual([
-      { id: 'rolling-restart-banner', mode: 'intersecting' },
+      { id: 'memory-pressure-bar', mode: 'intersecting' },
       { id: 'search-modal', mode: 'unconditional' },
     ])
   })

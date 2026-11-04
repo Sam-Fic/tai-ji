@@ -58,9 +58,6 @@ import { replayJournalToSessionView } from "./read-fallback.ts";
 
 const logger = getLogger("pi-engine");
 
-/** probe 的版本探测超时（ms）。二进制无响应时按探针失败处理，不静默挂死。 */
-const PROBE_VERSION_TIMEOUT_MS = 10_000;
-
 /** PiEngine 构造依赖。 */
 export interface PiEngineDeps {
   /**
@@ -72,8 +69,6 @@ export interface PiEngineDeps {
    * cwd）。
    */
   dataDir?: string;
-  /** 版本探测执行器（测试注入 fake 避免真实子进程）。 */
-  probeVersion?: (invocation: PiInvocation) => Promise<string | undefined>;
   /** spawn 执行器（测试注入 fake；缺省 runSpawnOnce）。 */
   spawnRunner?: (params: Parameters<typeof runSpawnOnce>[0], callbacks: SpawnRunCallbacks) => Promise<SpawnRunResult>;
 }
@@ -130,11 +125,13 @@ export class PiEngine implements EnginePort {
     };
   }
 
-  /** 探针（D7）：invocation 可解析（二进制/脚本存在）+ 版本解析。 */
+  /** 探针（D7）：invocation 可解析（二进制/脚本存在）——纯文件事实检查。
+   *（原版本探测（spawn `--version` + 10s 超时）已随时间机制删除：二进制好坏由
+   * run 后的实际退出/握手链兜底报错。） */
   async probe(opts?: { force?: boolean }): Promise<ProbeReport> {
     if (!opts?.force && this.probeCache) return this.probeCache;
 
-    const invocation = getPiInvocation(["--version"]);
+    const invocation = getPiInvocation([]);
     const invocationOk = isInvocationResolvable(invocation);
     const checks: ProbeReport["checks"] = [
       {
@@ -146,18 +143,7 @@ export class PiEngine implements EnginePort {
       },
     ];
 
-    let engineVersion = "";
-    if (invocationOk) {
-      const runVersion = this.deps.probeVersion ?? defaultProbeVersion;
-      const version = await runVersion(invocation);
-      const versionOk = version !== undefined && version.length > 0;
-      checks.push({
-        name: "version",
-        ok: versionOk,
-        detail: versionOk ? version : "pi --version returned empty or failed",
-      });
-      engineVersion = version ?? "";
-    }
+    const engineVersion = "";
 
     const ok = checks.every((c) => c.ok);
     const report: ProbeReport = {
@@ -501,29 +487,6 @@ function toOutcomeUsage(result: SpawnRunResult): import("@zhushanwen/subagent-en
 function refString(ref: Record<string, string>, key: string): string | undefined {
   const v = ref[key];
   return typeof v === "string" ? v : undefined;
-}
-
-/** 默认版本探测：spawn `<command> --version`（probe 超时按探针失败处理）。 */
-async function defaultProbeVersion(invocation: PiInvocation): Promise<string | undefined> {
-  try {
-    return await new Promise<string | undefined>((resolve, reject) => {
-      execFile(
-        invocation.command,
-        invocation.args,
-        { encoding: "utf8", timeout: PROBE_VERSION_TIMEOUT_MS, env: buildOutboundChildEnv({ parentEnv: process.env }) },
-        (err: Error | null, stdout: string) => {
-          if (err) reject(err);
-          else resolve(stdout.trim().split("\n")[0]?.trim() || undefined);
-        },
-      );
-    });
-  } catch (err) {
-    // 版本探测是 best-effort（失败经 checks 反映进 ProbeReport），debug 级留线索
-    logger.debug(
-      `[pi-engine] probe version check failed (best-effort continue): ${toErrorMessage(err)}`,
-    );
-    return undefined;
-  }
 }
 
 /**

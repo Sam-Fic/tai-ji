@@ -61,15 +61,6 @@ export interface CommandDescriptor {
   category?: string
   keybinding?: string
   when?: string
-  /**
-   * 命令执行超时声明（毫秒，timeout-plugin-service D4，取值链同工具 D1）：
-   * - >0 — 该命令单次执行的时间上界；
-   * - <=0 或 Infinity — 显式 opt-out（不限时，以 timer 域上界近似）；
-   * - 非法值（非 number / NaN）— 注册入口 fail-fast（INVALID_TIMEOUT_MS），
-   *   运行时脏值由 resolveToolTimeoutMs 回落默认兜底；
-   * - 缺省 — 回落 DEFAULT_TOOL_EXECUTE_TIMEOUT_MS（30min，tool-timeout）。
-   */
-  timeoutMs?: number
 }
 
 /**
@@ -93,8 +84,6 @@ export interface CommandRegistration {
   category?: string
   keybinding?: string
   when?: string
-  /** 命令执行超时声明（原样存储 CommandDescriptor.timeoutMs，executeCommand 取值链消费，D4） */
-  timeoutMs?: number
   registeredAt: number
 }
 
@@ -152,22 +141,6 @@ export function registerCommandRpcHandlers(
     const category = asOptionalString(command.category, 'category')
     const keybinding = asOptionalString(command.keybinding, 'keybinding')
     const when = asOptionalString(command.when, 'when')
-    // D4 声明通道窄校验（对齐 tool-api 的 INVALID_TIMEOUT_MS 形态）：timeoutMs 可选，
-    // present 即必须 number 且非 NaN——脏值 fail-fast 拒注册；0 / 负数 / Infinity 是
-    // 合法声明（显式 opt-out，运行时语义归 tool-timeout 的 resolveToolTimeoutMs），
-    // 原样透传存储。
-    const declaredTimeoutMs = command.timeoutMs
-    if (
-      declaredTimeoutMs !== undefined &&
-      (typeof declaredTimeoutMs !== 'number' || Number.isNaN(declaredTimeoutMs))
-    ) {
-      throw errorWithCode(
-        `Invalid timeoutMs: expected a number (milliseconds; <=0 or Infinity = no limit) ` +
-          `but received ${typeof declaredTimeoutMs === 'number' ? 'NaN' : typeof declaredTimeoutMs}.`,
-        'INVALID_TIMEOUT_MS',
-      )
-    }
-    const timeoutMs = typeof declaredTimeoutMs === 'number' ? declaredTimeoutMs : undefined
 
     const registration: CommandRegistration = {
       commandId,
@@ -180,7 +153,6 @@ export function registerCommandRpcHandlers(
       ...(category !== undefined ? { category } : {}),
       ...(keybinding !== undefined ? { keybinding } : {}),
       ...(when !== undefined ? { when } : {}),
-      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       registeredAt: Date.now(),
     }
 

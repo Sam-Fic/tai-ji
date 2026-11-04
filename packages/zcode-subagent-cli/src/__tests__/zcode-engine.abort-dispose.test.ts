@@ -4,10 +4,11 @@
 // 拆分自 zcode-engine.test.ts（单文件 61 例是整包墙钟的临界路径）；用例体与
 // describe 名逐字保留，共享夹具见 zcode-engine-harness.ts。
 //
-// 覆盖：stop 优雅生效（不杀共享进程）/ stop 无效 grace 耗尽（killChain + 崩溃路径收尾 +
-// 重建）/ pre-aborted 短路 / 宿主超时 abort（engine_timeout）/ dispose 幂等与 close
-// 帧先于 SIGTERM / dispose 后 run 自动重建 / 进程已死残留 activeSessions 的窄竞态 /
-// 在途 turn 的 dispose 收割（不重试、窗口量级 + 同源常量静态断言）。
+// 覆盖：stop 优雅生效（不杀共享进程）/ stop 无效（killChain 直落收割 + 崩溃路径
+// 收尾 + 重建）/ pre-aborted 短路 / dispose 幂等与 close 帧先于 SIGTERM / dispose 后
+// run 自动重建 / 进程已死残留 activeSessions 的窄竞态 / 在途 turn 的 dispose 收割
+//（不重试）。（原宿主超时 abort（engine_timeout）与 grace 窗口量级断言随时间机制
+// 删除。）
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -22,8 +23,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { EngineRunResult, RunContext } from "../port-types.ts";
 import { AppServerConnection } from "../connection.ts";
 import {
-  ZCODE_APPSERVER_HARVEST_GRACE_MS,
-  ZCODE_KILL_GRACE_MS,
 } from "../constants.ts";
 import { ZCODE_APPSERVER_GOLDEN } from "../golden-sample.ts";
 import { SessionChannel } from "../session-channel.ts";
@@ -110,12 +109,8 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
   }, 30_000);
 
   it("stop 无效（stopBehavior none + 无终态）→ grace 耗尽 → killChain 收割共享进程 → 崩溃路径收尾 + 重建", async () => {
-    // abort grace 注入缝（两轮各经历一次 ABORT_GRACE）：真实默认 3s×2 不在单测等待
-    // 范围——200ms 级覆盖，fake 真子进程 IO 与杀链路径全保真。
-    vi.stubEnv("TAIJI_ZCODE_TEST_ABORT_GRACE_MS", "200");
-    // 杀链后的 finalize 确认窗（HARVEST_GRACE）同款注入：默认 1s×2 秒级等待不在
-    // 单测范围——150ms 级仍保「close 迟到 → 有界返回」判据（窗口数值非契约）。
-    vi.stubEnv("TAIJI_ZCODE_TEST_HARVEST_GRACE_MS", "150");
+    // [甲类裁决] abort 直落杀链（原 grace 注入缝已随时间窗删除）——stop 发出后
+    // 直接收割，fake 真子进程 IO 与杀链路径全保真。
     const { engine, stateFile, workspace } = makeEngine({
       replaceSendPushes: [...hangPushes],
       stopBehavior: "none",
@@ -131,7 +126,6 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
     const r2 = await second.run;
     expect(r2.outcome.exitCode).toBeNull();
     expect(bootCount(stateFile)).toBe(2);
-    // 40s 兜底保留：ABORT_GRACE 已经 env 注入缩短（实际 <2s），兜底只防 CI 抖动挂死
   }, 40_000);
 
   it("pre-aborted signal：短路返回中止终态——不建会话不发任何帧（防误杀共享进程）；error 事件可达（[池抽象降级] onPoolResolved 已退役）", async () => {
@@ -151,15 +145,6 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
     expect(handle.data.sessionRef["sessionId"]).toBeUndefined();
     expect(order).toEqual(["event:error"]);
     expect(readState(stateFile)).toHaveLength(0); // 连惰性启动都没触发
-  }, 10_000);
-
-  it("宿主超时 abort（reason 标记）→ engine_timeout 公共合成终态（对齐点④，appserver 同语义）", async () => {
-    const { engine, workspace } = makeEngine({ replaceSendPushes: [...hangPushes], stopBehavior: "none" });
-    const controller = new AbortController();
-    controller.abort("agent-call-timeout");
-    const { outcome } = await engine.run(makeTask({ cwd: workspace }), makeCtx({ signal: controller.signal }));
-    expect(outcome.exitCode).toBeNull();
-    expect(outcome.error).toContain("engine_timeout");
   }, 10_000);
 });
 
@@ -215,9 +200,8 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
   }, 15_000);
 
   it("窄竞态检查：进程已死（child=null）但 activeSessions 残留时，dispose 不经 post 惰性拉起新进程（D6 防泄漏）", async () => {
-    // 本形态的 close 永不到达（从未 spawn）→ dispose 恒走 HARVEST_GRACE 兜底窗：
-    // 走 env 注入缝缩短到 150ms（判据 = 「窗口到点仍有界返回」，窗口数值非契约）。
-    vi.stubEnv("TAIJI_ZCODE_TEST_HARVEST_GRACE_MS", "150");
+    // 本形态的 close 永不到达（从未 spawn）→ dispose 的 harvested 等待纯事件驱动
+    //（close 事件不会来，但 dispose 收割在「无惰性 spawn」检查短路后立即收口）。
     // 真实微拍窗口（进程死亡收割与 activeSessions 清理之间的 microtask）不可从公开
     // 面同步注入——白盒构造同形态快照：runtime 的 conn 无活进程、activeSessions 非空。
     // 检查缺失时 dispose 循环 post("session/close") 会 ensureStarted 惰性 spawn 一代新
@@ -342,32 +326,8 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
     expect(methods.filter((m) => m === "session/create").length).toBe(1);
     expect(bootCount(f.stateFile)).toBe(1);
 
-    // 窗口量级：dispose 全链不超 kill 链 + HARVEST_GRACE + 进程调度余量——
-    // 收割在 grace 量级窗口完成（确定性收尾时序，非等待型挂起）
-    expect(disposeMs).toBeLessThan(ZCODE_KILL_GRACE_MS + ZCODE_APPSERVER_HARVEST_GRACE_MS + 2000);
+    // 窗口量级：dispose 全链为确定性收尾（杀链信号即发即回 + 纯事件等待），仅受
+    // 进程调度余量约束（非等待型挂起）
+    expect(disposeMs).toBeLessThan(30_000);
   }, 30_000);
-
-  it("grace 窗口量级一致性：dispose 收割 race 窗口与 awaitConnFinalized 同源 ZCODE_APPSERVER_HARVEST_GRACE_MS（验收⑤静态断言）", async () => {
-    const engineSrc = fs.readFileSync(
-      fileURLToPath(new URL("../zcode-engine.ts", import.meta.url)),
-      "utf8",
-    );
-    // awaitConnFinalized：close 永不到达时同量级兜底（u-z2 先例）
-    expect(engineSrc).toContain("setTimeout(() => finish(), harvestGraceMs())");
-    // shutdownRuntimeAndDisposeChannel：dispose 收割 race 窗口（本单元挂接点）
-    expect(engineSrc).toContain("delayResolved(harvestGraceMs()");
-    // 两处同源的锚 = 同一解析函数，其缺省回落实参即 HARVEST_GRACE 常量
-    //（env 注入缝只覆盖数值，不改变「两处同源」这一不变量）
-    expect(engineSrc).toMatch(/function harvestGraceMs\(\)[\s\S]{0,240}ZCODE_APPSERVER_HARVEST_GRACE_MS/);
-    // channel dispose 收割本体是同步操作（无自有 timer）——窗口归引擎 race 单点
-    const channelSrc = fs.readFileSync(
-      fileURLToPath(new URL("../session-channel.ts", import.meta.url)),
-      "utf8",
-    );
-    const disposeBody = channelSrc.slice(
-      channelSrc.indexOf("  dispose(): void {"),
-      channelSrc.indexOf("  /** 连接死亡收割"),
-    );
-    expect(disposeBody).not.toContain("setTimeout");
-  });
 });

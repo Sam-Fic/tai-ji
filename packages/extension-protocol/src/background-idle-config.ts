@@ -9,9 +9,8 @@
  *    使配置层值空间与执行层可接受值空间出现差集，差集配置下全部前台命令 exit 64，
  *    故归一化收敛为整数且 floor 后 <1 抬到 1：--idle 0 语义是「首轮监控即转后台」，
  *    不是亚秒阈值的合理近似）。
- *  - 消费侧 2：taiji runtime 静默判定矩阵 T 公式（T = idleBackgroundSec + 300s，
- *    packages/runtime event-interpreter-silence）——runtime 侧直 import 本实现，
- *    禁止镜像副本（历史事故：两侧手抄归一化无机器绑定，超大值 clamp 语义漂移）。
+ *  - 单一消费方：包装脚本 --idle 参数。禁止在别处镜像副本实现同一归一化
+ *    （历史事故：两侧手抄归一化无机器绑定，超大值 clamp 语义漂移）。
  *
  * 显式 null 与 undefined 分流的理由：undefined = 未配置（默认开启 600）；显式 null =
  * 用户关闭（透传 null，下游据此回落 pi 官方原生无限等待）；坏值 = 回退默认而非关闭

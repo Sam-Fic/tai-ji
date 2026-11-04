@@ -9,9 +9,9 @@
 //        例外1 cancelled/orphaned → 静默（逐笔即时 unregister，不 record、不动死亡槽）；
 //        例外2 死亡新闻槽 (sessionId, deathSeq) 键去重 → 同键首条 record 死亡新闻 + fulfills N，
 //             同键后续仅 unregister；
-//   3. trailing debounce 50ms 两层攒批（D3 裁决4）：分拣键 (sessionId, reason) 定处理类别，
-//      批身份 settleSeq/deathSeq 定 record 边界——跨 session 不合批由分组键自然排除；
-//      cancelled/orphaned 不入窗（逐笔即时）；
+//   3. 逐笔即时 flush（攒批窗已删）：单次 flush 内多笔仍按分拣键 (sessionId, reason)
+//      归类、批身份 settleSeq/deathSeq 定 record 边界——跨 session 不合批由分组键自然
+//      排除；cancelled/orphaned 逐笔即时（不 record）；
 //   4. session_start 重启收尾路径（D7③）：活跃 type 'session' register 重开 watch
 //      （入参 = entry id 即 notifyId，P4 三键零改动），每 entry 独立 handler 禁串行 await。
 //
@@ -35,9 +35,6 @@ import { buildManagedNotifyContent, type ManagedNotifyDetails } from "./notify-c
 import { recordManagedNotify } from "./notify-delivery.ts";
 
 const logger = getLogger("session-manager");
-
-/** trailing debounce 窗口（D3 裁决4：每次应答到达重置计时；下一 seq 到达即封批） */
-const WATCH_FLUSH_DEBOUNCE_MS = 50;
 
 /** 已占的死亡新闻槽（例外2）：键 = (sessionId, deathSeq)。factory 闭包状态
  *  （extension 进程内 session 隔离约定——槽键含 sessionId，跨子会话不串）。 */
@@ -102,7 +99,6 @@ export function createWatchCoordinator(deps: WatchCoordinatorDeps): WatchCoordin
 	 *  随 coordinator 实例（pi 进程级）。 */
 	const deathSlots = new Set<string>();
 	let queue: QueuedRespond[] = [];
-	let flushTimer: ReturnType<typeof setTimeout> | undefined;
 
 	function noteLabel(sessionId: string, label: string): void {
 		labels.set(sessionId, label);
@@ -218,17 +214,10 @@ export function createWatchCoordinator(deps: WatchCoordinatorDeps): WatchCoordin
 			unregisterPending(notifyId, reason);
 			return;
 		}
-		// completed/failed/stopped（结果新闻）与 exited/deleted（死亡新闻）入窗攒批
+		// completed/failed/stopped（结果新闻）与 exited/deleted（死亡新闻）入队后即时 flush
+		//（攒批时间窗已删——时间阈值决策退役；同批合并仅在单次 flush 已收多笔时发生）
 		queue.push({ notifyId, label, reason, payload: parsed });
-		scheduleFlush();
-	}
-
-	function scheduleFlush(): void {
-		if (flushTimer !== undefined) clearTimeout(flushTimer);
-		flushTimer = setTimeout(() => {
-			flushTimer = undefined;
-			flush();
-		}, WATCH_FLUSH_DEBOUNCE_MS);
+		flush();
 	}
 
 	function flush(): void {

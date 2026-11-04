@@ -1,6 +1,6 @@
 // watch-orchestration.test.ts — notify-once U4 extension 编排单测（mock select 响应）。
 // 覆盖：send/create arm（register 三键 + 开表不传 timeout + willNotify 透传）/
-// reason 类别分支 / deathSeq·settleSeq 分组去重（两层攒批模型）/ 两例外（cancelled·orphaned
+// reason 类别分支 / deathSeq·settleSeq 分组去重（分拣模型）/ 两例外（cancelled·orphaned
 // 静默 + 死亡新闻槽）/ port.deliver 幂等键与通道（外部通道逐条）。
 //
 // watch select 全部走 deferred：开表时挂起，用例按调用序精确控制应答时机与内容
@@ -133,7 +133,7 @@ function deliverSpy(): Array<DeliverCall> {
 }
 
 /** 「兼容与防御」组共用前置：植入投递端口（deliver spy）→ arm 单笔 send → 应答首个 watch →
- * 排干微任务 → 推进 50ms 攒批窗（三用例的时序骨架逐字同款） */
+ * 排干微任务（flush 即时，无攒批窗；三用例的时序骨架逐字同款） */
 async function armSendAndRespondWatch(
 	respondValue: unknown,
 ): Promise<{ delivered: Array<DeliverCall>; h: Harness }> {
@@ -144,7 +144,6 @@ async function armSendAndRespondWatch(
 	await flushMicrotasks();
 	h.respondWatch(0, respondValue);
 	await flushMicrotasks();
-	await vi.advanceTimersByTimeAsync(50);
 	return { delivered, h };
 }
 
@@ -286,9 +285,9 @@ describe("arm（send/create → pending:register + watch 开表）", () => {
 	});
 });
 
-// ── 默认 record + trailing debounce 两层攒批（settle 路径） ──────────────────────
+// ── 默认 record + 即时 flush（settle 路径） ──────────────────────
 
-describe("watch 应答 → 两层攒批 record（settle 路径）", () => {
+describe("watch 应答 → 即时 record（settle 路径）", () => {
 	async function armTwoSends(h: Harness): Promise<{ id1: string; id2: string }> {
 		h.actionResults.send = () => SEND_OK;
 		await runToolCall(h, "send_to_session", { sessionId: "child-1", prompt: "a" });
@@ -300,7 +299,7 @@ describe("watch 应答 → 两层攒批 record（settle 路径）", () => {
 		return { id1: ids[0], id2: ids[1] };
 	}
 
-	it("同 settleSeq 两笔 → 恰一条 record（fulfills 2）+ 逐笔 unregister；trailing 50ms 前不 flush（A6 合批）", async () => {
+	it("逐笔即时 flush：每笔应答一条 record（fulfills 随载荷）+ 逐笔 unregister（攒批窗已删）", async () => {
 		const delivered = deliverSpy();
 		const h = createHarness();
 		const { id1, id2 } = await armTwoSends(h);
@@ -312,17 +311,11 @@ describe("watch 应答 → 两层攒批 record（settle 路径）", () => {
 			fulfillsN: 2,
 		};
 		h.respondWatch(0, JSON.stringify(respond));
-		h.respondWatch(1, JSON.stringify(respond));
 		await flushMicrotasks();
-
-		// trailing debounce：应答到达但 50ms 窗未到 → 零投递零 unregister
-		expect(delivered).toHaveLength(0);
-		expect(emittedIds(h, "pending:unregister")).toHaveLength(0);
-
-		await vi.advanceTimersByTimeAsync(50);
+		// 即时 flush：首笔应答立即投递（无攒批窗延迟）
 		expect(delivered).toHaveLength(1);
 		const call = delivered[0]!;
-		expect(call.id).toBe(id1); // 批幂等键 = 批内首个响应 notifyId（port.deliver 的 id）
+		expect(call.id).toBe(id1); // record 幂等键 = 本笔 notifyId（port.deliver 的 id）
 		expect(call.content).toBe(
 			'Managed session "child-1" (child-1) finished with status "completed". (fulfills 2 requests)',
 		);
@@ -334,9 +327,13 @@ describe("watch 应答 → 两层攒批 record（settle 路径）", () => {
 			label: "child-1",
 		});
 		expect(call.customType).toBe("managed-session-notify"); // 外部通道（port 批组隔离恒逐条）
-		// collectKey = 批内全部债权键（result-collect 设计 §3.4 managed 行：合批条目
-		// 载荷幂等键 = 批首债权键，collect 按键集逐键展开定位非首键）
-		expect(call.collectKey).toEqual([id1, id2]);
+		// 单笔 flush 的 collectKey = 本笔债权键
+		expect(call.collectKey).toEqual([id1]);
+
+		h.respondWatch(1, JSON.stringify(respond));
+		await flushMicrotasks();
+		expect(delivered).toHaveLength(2);
+		expect(delivered[1]!.id).toBe(id2);
 		expect(emittedIds(h, "pending:unregister").sort()).toEqual([id1, id2].sort());
 		expect(
 			h.emitted.filter((e) => e.event === "pending:unregister").map((e) => e.data.reason),
@@ -356,7 +353,6 @@ describe("watch 应答 → 两层攒批 record（settle 路径）", () => {
 			JSON.stringify({ reason: "completed", sessionId: "child-1", settleSeq: 8, fulfillsN: 1 }),
 		);
 		await flushMicrotasks();
-		await vi.advanceTimersByTimeAsync(50);
 		expect(delivered).toHaveLength(2);
 		expect(delivered.map((c) => c.id).sort()).toEqual([id1, id2].sort());
 		expect(emittedIds(h, "pending:unregister")).toHaveLength(2);
@@ -375,7 +371,6 @@ describe("watch 应答 → 两层攒批 record（settle 路径）", () => {
 			JSON.stringify({ reason: "stopped", sessionId: "child-1", settleSeq: 2, fulfillsN: 1 }),
 		);
 		await flushMicrotasks();
-		await vi.advanceTimersByTimeAsync(50);
 		expect(delivered).toHaveLength(2);
 		const byId = new Map(delivered.map((c) => [c.id, c.content] as const));
 		expect(byId.get(id1)).toContain('status "failed"');
@@ -399,7 +394,6 @@ describe("watch 应答 → 两层攒批 record（settle 路径）", () => {
 			JSON.stringify({ reason: "completed", sessionId: "child-b", settleSeq: 3, fulfillsN: 1 }),
 		);
 		await flushMicrotasks();
-		await vi.advanceTimersByTimeAsync(50);
 		expect(delivered).toHaveLength(2);
 		const sessions = delivered.map((c) => (c.details as { sessionId: string }).sessionId);
 		expect(sessions.sort()).toEqual(["child-a", "child-b"]);
@@ -423,7 +417,6 @@ describe("watch 应答 → 两层攒批 record（settle 路径）", () => {
 		h.respondWatch(0, JSON.stringify(respond));
 		h.respondWatch(1, JSON.stringify(respond));
 		await flushMicrotasks();
-		await vi.advanceTimersByTimeAsync(50);
 		expect(emittedIds(h, "pending:unregister")).toHaveLength(2);
 	});
 });
@@ -431,7 +424,7 @@ describe("watch 应答 → 两层攒批 record（settle 路径）", () => {
 // ── 两例外（D3）─────────────────────────────────────────────────────────────────
 
 describe("两例外（cancelled·orphaned 静默 / 死亡新闻槽）", () => {
-	it("例外1：cancelled / orphaned → 逐笔即时 unregister（50ms 窗前即到），零投递", async () => {
+	it("例外1：cancelled / orphaned → 逐笔即时 unregister，零投递", async () => {
 		const delivered = deliverSpy();
 		const h = createHarness();
 		const { id1, id2 } = await armTwo();
@@ -439,11 +432,8 @@ describe("两例外（cancelled·orphaned 静默 / 死亡新闻槽）", () => {
 		h.respondWatch(1, JSON.stringify({ reason: "orphaned", sessionId: "child-1" }));
 		await flushMicrotasks();
 
-		// 逐笔即时（不被攒批窗延迟）
+		// 逐笔即时（无攒批窗）
 		expect(emittedIds(h, "pending:unregister").sort()).toEqual([id1, id2].sort());
-		expect(delivered).toHaveLength(0);
-
-		await vi.advanceTimersByTimeAsync(50);
 		expect(delivered).toHaveLength(0);
 
 		async function armTwo() {
@@ -485,7 +475,6 @@ describe("两例外（cancelled·orphaned 静默 / 死亡新闻槽）", () => {
 		h.respondWatch(0, JSON.stringify(death));
 		h.respondWatch(1, JSON.stringify(death));
 		await flushMicrotasks();
-		await vi.advanceTimersByTimeAsync(50);
 
 		expect(delivered).toHaveLength(1);
 		const id = delivered[0]!.id;
@@ -512,7 +501,6 @@ describe("两例外（cancelled·orphaned 静默 / 死亡新闻槽）", () => {
 			JSON.stringify({ reason: "exited", sessionId: "child-d", deathSeq: 4, fulfillsN: 0, exitCode: 2 }),
 		);
 		await flushMicrotasks();
-		await vi.advanceTimersByTimeAsync(50);
 		expect(delivered).toHaveLength(2);
 		expect(delivered[1]!.id).toBe(emittedIds(h, "pending:register")[2]);
 		expect(delivered[1]!.content).toContain("(exit code: 2).");
@@ -542,7 +530,6 @@ describe("两例外（cancelled·orphaned 静默 / 死亡新闻槽）", () => {
 			JSON.stringify({ reason: "deleted", sessionId: "child-d", deathSeq: 9, fulfillsN: 0 }),
 		);
 		await flushMicrotasks();
-		await vi.advanceTimersByTimeAsync(50);
 
 		expect(delivered).toHaveLength(1);
 		expect(delivered[0]!.id).toBe(claimId); // 先到先占槽（claim 组先入队）

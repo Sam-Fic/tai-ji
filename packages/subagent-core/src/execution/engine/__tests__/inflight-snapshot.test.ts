@@ -3,11 +3,10 @@
 //
 // 三视角：
 //   ①使用者（壳层 reporter 视角）——setInFlightListener 注册后，core 状态迁移点
-//     （子进程注册/移除、idle timer arm）触发通知，监听者自行 getInFlightSnapshot
+//     （子进程注册/置死、chat 轮在途翻边）触发通知，监听者自行 getInFlightSnapshot
 //     现取快照（发送时刻求值）；getInFlightSnapshot 随时可拉（初始上报数据源）。
-//   ②构建者——计数 = 双谓词过滤（hasLiveProcessHandle && !hasIdleTimer，与
-//     notify-host hasRunningBackground 同源）：活句柄且无 armed idle timer 才算在途，
-//     Path A 保活（timer armed）不算——D5 防推迟恒真的核心裁决。
+//   ②构建者——计数 = 双判据过滤（killed 位与 inRound 位）：活句柄且轮在途才算在途，
+//     chat 轮终保活（inRound=false）不算——D5 防推迟恒真的核心裁决。
 //   ③观察者——出口监听者抛错不反噬 core；无参签名（2026-09-13 oe-audit：原
 //     snapshot 参数自交付起无任何监听者消费，删除）。
 
@@ -16,21 +15,16 @@ import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 
 import {
-  armIdleTimer,
-  disarmIdleTimer,
-  _resetLifecycleState,
-} from "../../lifecycle/lifecycle-manager.ts";
-import {
   getInFlightSnapshot,
   notifyInFlightChanged,
   setInFlightListener,
   type InFlightSnapshot,
 } from "../inflight-snapshot.ts";
-// W3 合并改写：inproc 引擎已删——句柄记账走 host/spawned-children 镜像（register +
-// reset 测试）。
+// 句柄记账走 host/spawned-children 镜像（register / markRecordRoundActive / reset）。
 import {
   killRecordChildWithEscalation,
   registerSpawnedChildForRecord,
+  markRecordRoundActive,
   _resetCoreSpawnedChildrenMirrorForTest,
 } from "../host/spawned-children.ts";
 
@@ -44,39 +38,35 @@ function makeFakeChild(): ChildProcess & EventEmitter {
 
 beforeEach(() => {
   // shared 池 isolate:false 同 worker 跨文件复用 globalThis——镜像不清则上游文件
-  // （如 lifecycle-predicates.test.ts）残留的活条目会让「空态 → 0」前提失效
-  // （coverage-gate 第 2 轮实 fault：残留 sa-test 条目致 inFlight 误为 1）。
+  // 残留的活条目会让「空态 → 0」前提失效。
   _resetCoreSpawnedChildrenMirrorForTest();
-  _resetLifecycleState();
   setInFlightListener(null);
 });
 
 afterEach(() => {
-  // 清理本测试注册的句柄镜像（W3 后记账在 host/spawned-children，reset 即清；close 事件
-  // 摘除路径已由「close 摘除自动触发通知」用例覆盖），防跨用例泄漏。
+  // 清理本测试注册的句柄镜像（reset 即清），防跨用例泄漏。
   _resetCoreSpawnedChildrenMirrorForTest();
-  _resetLifecycleState();
   setInFlightListener(null);
 });
 
-describe("getInFlightSnapshot：双谓词绝对计数（D5 求值位置 = 状态所在进程）", () => {
+describe("getInFlightSnapshot：双判据绝对计数（D5 求值位置 = 状态所在进程）", () => {
   it("空态 → 0（无任何 subagent 的 session 初始上报数据源）", () => {
     expect(getInFlightSnapshot()).toEqual({ inFlight: 0 });
   });
 
-  it("注册活句柄 → 1；arm idle timer（Path A 保活）→ 0；disarm → 1", () => {
+  it("注册活句柄 → 1；轮终（inRound=false，chat 保活）→ 0；轮始（inRound=true）→ 1", () => {
     const id = "sa-inflight-arm";
     registerSpawnedChildForRecord(id, makeFakeChild());
     expect(getInFlightSnapshot().inFlight).toBe(1);
 
-    armIdleTimer(id, () => undefined, 60_000);
+    markRecordRoundActive(id, false);
     expect(getInFlightSnapshot().inFlight).toBe(0);
 
-    disarmIdleTimer(id);
+    markRecordRoundActive(id, true);
     expect(getInFlightSnapshot().inFlight).toBe(1);
   });
 
-  it("killed 句柄不算活（hasLiveProcessHandle 的 !killed 子句）", () => {
+  it("killed 句柄不算活（镜像 killed 子句）", () => {
     const id = "sa-inflight-killed";
     const child = makeFakeChild();
     registerSpawnedChildForRecord(id, child);
@@ -86,7 +76,7 @@ describe("getInFlightSnapshot：双谓词绝对计数（D5 求值位置 = 状态
     expect(getInFlightSnapshot().inFlight).toBe(0);
   });
 
-  it("多 record 混合形态：在途/保活/垂死并存时按谓词逐一过滤", () => {
+  it("多 record 混合形态：在途/保活/垂死并存时按判据逐一过滤", () => {
     const running = makeFakeChild();
     const keepAlive = makeFakeChild();
     const dying = makeFakeChild();
@@ -94,7 +84,7 @@ describe("getInFlightSnapshot：双谓词绝对计数（D5 求值位置 = 状态
     registerSpawnedChildForRecord("sa-inflight-run", running);
     registerSpawnedChildForRecord("sa-inflight-keep", keepAlive);
     registerSpawnedChildForRecord("sa-inflight-dying", dying);
-    armIdleTimer("sa-inflight-keep", () => undefined, 60_000);
+    markRecordRoundActive("sa-inflight-keep", false);
     expect(getInFlightSnapshot().inFlight).toBe(1);
   });
 });

@@ -1868,7 +1868,7 @@ function msg_m2_d1(type: string, payload: Record<string, unknown> = {}, id = 'ms
 describe('connection-broker-bundle', () => {
 // wave3 包装：本段原文件顶层语句收进 describe 作用域（顶层 hook 不再外溢到同文件其他来源的用例）
 describe('connection-manager.stop', () => {
-describe('ConnectionManager.stop() — A4 rolling-restart hang regression', () => {
+describe('ConnectionManager.stop() — 连接在途时必须 resolve（挂死回归）', () => {
   let harness: Harness
   const openedClients: WsType[] = []
 

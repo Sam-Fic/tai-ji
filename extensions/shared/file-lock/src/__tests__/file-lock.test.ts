@@ -2,12 +2,10 @@
 //
 // withFileLockSync 单测（真实文件系统，不 mock fs）：
 //   - sync 版临界区互斥的进程内面：fn 结果透传（unlock 后可立即再锁）/ fn 抛错也
-//     释放（finally 语义）/ ELOCKED fail-fast（预算耗尽抛带 code 的错误，不用默认
-//     1s——测试覆盖短预算分支）
-//   - 锁目录被外部删除的容忍路径（原 compromise 场景的自实现语义）：D1-A 自实现
-//     无保活 touch（边界声明见 lock-core.ts 头注释），compromise 检测不存在——fn
-//     执行期间锁目录被外部删除无定时器发现，release 时 rmdir 命中 ENOENT 静默成功
-//     （照抄 proper-lockfile removeLock 容忍），不外抛、不影响 fn 结果
+//     释放（finally 语义）/ 锁冲突直接 ELOCKED fail-fast（错误文案含恢复指引）
+//   - 锁目录被外部删除的容忍路径：无保活定时器（边界声明见 lock-core.ts 头注释），
+//     fn 执行期间锁目录被外部删除无定时器发现，release 时 rmdir 命中 ENOENT 静默
+//     成功（照抄 proper-lockfile removeLock 容忍），不外抛、不影响 fn 结果
 //   - 真实跨进程互斥（门控用例）：两个 node 子进程并发 RMW 同一 JSON 文件，计数
 //     零丢失（「两写方并发不丢条目」的 D5a/D1e 核心验收形态）
 //
@@ -56,20 +54,17 @@ describe("withFileLockSync", () => {
 		expect(withFileLockSync(target, () => "ok")).toBe("ok");
 	});
 
-	it("ELOCKED fail-fast：预算耗尽抛带 code 的错误（不用默认 1s 预算）", () => {
-		// 先占锁（外层 sync 锁），再在 fn 内嵌套取锁 → 必 ELOCKED → 短预算快速失败
-		expect(() =>
-			withFileLockSync(
-				target,
-				() =>
-					withFileLockSync(target, () => "never", {
-						staleMs: 60_000, // stale 远大于预算，锁不会被夺取
-						retryDelayMs: 10,
-						retryBudgetMs: 30,
-					}),
-				{ staleMs: 60_000 },
-			),
-		).toThrowError(/ELOCKED 重试预算 30ms 耗尽/);
+	it("锁冲突直接 ELOCKED fail-fast：错误带 code 且文案含恢复指引（手动删除锁目录）", () => {
+		// 先占锁（外层 sync 锁），再在 fn 内嵌套取锁 → 必 ELOCKED → 直接抛错
+		try {
+			withFileLockSync(target, () => withFileLockSync(target, () => "never"));
+			expect.unreachable("must throw");
+		} catch (err) {
+			expect((err as { code?: string }).code).toBe("ELOCKED");
+			expect((err as Error).message).toContain("手动删除该锁目录");
+		}
+		// 外层锁未被嵌套失败破坏，仍可正常使用
+		expect(withFileLockSync(target, () => "after")).toBe("after");
 	});
 });
 
@@ -90,15 +85,14 @@ describe("withFileLockSync 锁目录被外部删除（原 compromise 场景的�
 		const result = withFileLockSync(
 			target,
 			() => {
-				// 模拟外部清理（对端 stale 夺取会先 rmdir 再 mkdir；此处直接删）：
-				// 自实现无保活定时器，删除本身不触发任何回调
+				// 模拟外部清理（手动删除锁目录的恢复动作）：无保活定时器，删除本身
+				// 不触发任何回调
 				fs.rmSync(`${target}.lock`, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 				return "fn-done";
 			},
-			{ staleMs: 2000 },
 		);
 
-		// fn 结果原样返回（无 compromised 拦截——该机制随保活一并移除）
+		// fn 结果原样返回（无 compromised 拦截——无保活故无 compromise 检测）
 		expect(result).toBe("fn-done");
 		// release 对已消失的锁目录静默成功（ENOENT 容忍）——由下一断言间接证明：
 		// 若 release 抛错，sync 版 finally 不吞错会直接外抛；直接再锁验证锁已释放
@@ -134,12 +128,11 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
 					// 源码，消除 --experimental-strip-types 的逐子进程编译窗），再以无
 					// flag 的 node 直接运行。RMW 各 5 次：跨进程互斥的本质 = 锁内读改写
 					// 零丢失，迭代数放大的是时长、不是互斥语义。
-					// 锁获取形态：withFileLockSync 传 retryBudgetMs:0（单次 fail-fast）+
-					// 外层 ELOCKED 固定 20ms 间隔重试自旋、30s 预算（对齐 runtime 侧
-					// pi-settings-store.test.ts 的 acquireLikePi 修复形态）——满载下临界
-					// 区持有窗口可能被 OS 抢占拉长，默认 fail-fast 预算会被偶发耗尽致
-					// 子进程非零退出；重试预算保证合理时间内必能拿到锁，互斥语义
-					// （lock-core 层）不受等待形态影响。
+					// 锁获取形态：withFileLockSync 本身无重试（ELOCKED 直接抛）+ worker
+					// 外层 ELOCKED 固定 20ms 间隔重试自旋、30s 预算——满载下临界区持有
+					// 窗口可能被 OS 抢占拉长，直抛语义下并发子进程会偶发拿锁失败；自旋
+					// 重试保证合理时间内必能拿到锁，互斥语义（lock-core 层）不受等待
+					// 形态影响。
 					const workerSource = `
 import * as fs from "node:fs";
 import { withFileLockSync } from ${JSON.stringify(path.join(PKG_DIR, "src", "file-lock.ts"))};
@@ -152,7 +145,7 @@ for (let i = 0; i < 5; i++) {
 				const cur = JSON.parse(fs.readFileSync(target, "utf-8"));
 				cur.n += 1;
 				fs.writeFileSync(target, JSON.stringify(cur), "utf-8");
-			}, { retryBudgetMs: 0 });
+			});
 			break;
 		} catch (err) {
 			if (!err || err.code !== "ELOCKED" || Date.now() >= deadline) throw err;

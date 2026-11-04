@@ -136,7 +136,6 @@ export function rebuildRunFromRecord(
   runId: string,
   created: Extract<WorkflowRunEvent, { type: "run-created" }>,
   events: readonly WorkflowRunEvent[],
-  budgetTimeMs?: number,
   budgetTokens?: number,
 ): WorkflowRun {
   const spec = {
@@ -148,14 +147,8 @@ export function rebuildRunFromRecord(
     // 缺失回落空串，由模板脚本内建 fail-fast 拒绝（壳侧 foldRecordStreamToRun
     // 同款恢复，两侧行为等价由测试锁定）
     scriptPath: created.scriptPath ?? "",
-    // 时间预算单源：调用方传入的「生效预算」（resume 显式覆盖，或继承 run-created
-    // 帧的创建预算——assertResumeEligibility 单一折算点）。spec 带预算后 pump 的
-    // 复活预算账本分支可达：错误重试重建按剩余活跃预算重排计时器（搁置不计），
-    // 引擎侧 run.state.budget.maxTimeMs 派生视图与 fresh run 同形。undefined/<=0 不落
-    // 字段 = 不限时（旧格式帧无该字段且未显式传 time 时与现状一致，不劣化）
-    ...(budgetTimeMs !== undefined && budgetTimeMs > 0 ? { budgetTimeMs } : {}),
-    // token 预算单源（与时间轴同构）：生效值随 spec 落定，引擎侧 maxTokens 派生视图
-    // （createRunningRun / worker-host budget 注入读 spec.budgetTokens）与 fresh
+    // token 预算单源：生效值随 spec 落定，引擎侧 maxTokens 派生视图
+    //（createRunningRun / worker-host budget 注入读 spec.budgetTokens）与 fresh
     // run 同形。undefined/<=0 不落字段 = 不限制
     ...(budgetTokens !== undefined && budgetTokens > 0 ? { budgetTokens } : {}),
     ...(created.model !== undefined ? { model: created.model } : {}),
@@ -177,13 +170,12 @@ export function rebuildRunFromRecord(
     runId,
     spec,
     {
-      // fresh run 的 Budget 同源（lifecycle.createRunningRun：maxTokens=spec.budgetTokens、
-      // maxTimeMs=spec.budgetTimeMs）——复活聚合形状与新建一致，避免展示/消费方按
-      // maxTimeMs/maxTokens 判定时双形态。
+      // fresh run 的 Budget 同源（lifecycle.createRunningRun：maxTokens=spec.budgetTokens）
+      // ——复活聚合形状与新建一致，避免展示/消费方按 maxTokens 判定时双形态。
       // [§2.1b] 计数不再归零：帧推导（agent-settled.result.usage 同一加权口径）重建
       // 已耗 tokens/cost/callCount——下界近似（中间失败尝试不在事件流，见
       // run-accounting.ts 头注）。
-      budget: rebuildBudget(undefined, events, budgetTimeMs, budgetTokens),
+      budget: rebuildBudget(undefined, events, budgetTokens),
       calls,
       trace,
       errorLogs: [],

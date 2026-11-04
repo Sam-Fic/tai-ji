@@ -10,8 +10,7 @@
  *
  * 契约来源：S4 slice plan IF1（DialogRequest 形状）/ IF2（队列 API）/ DM1（RequestState 分区）/
  * DM2（UiResponseTransport）/ ERR1（迟到 requestId 静默忽略）/ ERR2（重复入队 dedup）。
- * clarify Q1-Q4 修订：工厂签名加第三参数 source（注入事件源，不依赖 S2 物理存在）；
- * onUiRequestExpired 事件携带 sessionId（超时撤窗按分区路由）。
+ * clarify Q1-Q4 修订：工厂签名加第三参数 source（注入事件源，不依赖 S2 物理存在）。
  *
  * 范式：ADR-0049 Map 分区派（useSessionScopedState 工厂）——切 session 切分区、切回恢复、
  * session 销毁经 triggerSessionCleanups 清理分区。事件 handler 用 updateFor(事件 sid) 写入
@@ -52,21 +51,9 @@ export interface DialogRequest {
 
 // ── C1: DialogRequestSource（事件源注入接口，clarify Q1/Q2 新增） ──
 
-export interface UiTimeoutEvent {
-  sessionId: string
-  requestId: string
-}
-
 export interface DialogRequestSource {
   /** 订阅 ui-request 事件（S2 InternalEventBus ui-request 的适配入口）。返回退订函数 */
   onUiRequest(handler: (req: DialogRequest) => void): () => void
-  /**
-   * 订阅 plugin dialog 超时撤窗事件（timeout-plugin-service D2：runtime 广播
-   * plugin:uiRequestExpired，插件收到 UI_TIMEOUT reject，无替答）。返回退订函数。
-   * 与「按 requestId 出队、不发回传」语义一致；requestId 无匹配 pending
-   * 时静默忽略（ERR1 幂等——广播无条件发出，未展示/已关闭弹窗的撤窗 miss 走这里）。
-   */
-  onUiRequestExpired(handler: (e: UiTimeoutEvent) => void): () => void
 }
 
 // ── DM2: UiResponseTransport（响应回传注入接口，壳提供实现，单测传 mock） ──
@@ -136,7 +123,7 @@ export interface DialogRequestQueue {
  *
  * @param transport 响应回传实现（壳注入；单测传 mock）
  * @param sessionIdRef 当前活跃 session id（null = 无活跃 session）
- * @param source 事件源注入（壳把 InternalEventBus.on('ui-request') / WS plugin:uiRequestExpired 适配成它；
+ * @param source 事件源注入（壳把 InternalEventBus.on('ui-request') 适配成它；
  *   W1 不依赖 S2 物理存在，单测注入 MockSource）
  */
 export function createDialogRequestQueue(
@@ -207,16 +194,11 @@ export function createDialogRequestQueue(
 
   // ── 订阅（M1 竞态修复：handler 捕获事件 sid，updateFor 写入事件所属分区） ──
   const unsubUiRequest = source.onUiRequest(enqueue)
-  // D2 超时撤窗：plugin:uiRequestExpired 到达 → 按 (sessionId, requestId) 出队，
-  // 不发回传（插件侧已收 UI_TIMEOUT reject；回传会命中已删 pending 或伪装成用户应答）。
-  // 无匹配 pending 时 dequeueByRequestId 内建静默忽略（ERR1，miss noop 幂等）。
-  const unsubUiRequestExpired = source.onUiRequestExpired((e) => dequeueByRequestId(e.sessionId, e.requestId))
 
   // scope dispose 退订（防 listener 翻倍，项目规则 #2）；计数清理注册同点反注册
   // （无 scope 上下文时 onScopeDispose 落空、条目保留，与 useSessionScopedState 同语义）
   onScopeDispose(() => {
     unsubUiRequest()
-    unsubUiRequestExpired()
     unregisterCountCleanup()
   })
 
@@ -231,8 +213,8 @@ export function createDialogRequestQueue(
 
   /**
    * 用户回复指定请求：按 requestId 在当前 session 分区精确定位（不假设队首），
-   * 按 source 路由回传通道；找不到 → 静默忽略（ERR1：迟到响应是正常时序，
-   * uiRequestExpired 已出队但用户点击残留；旧 useExtensionUI 同语义）。
+   * 按 source 路由回传通道；找不到 → 静默忽略（ERR1：迟到响应是正常时序；
+   * 旧 useExtensionUI 同语义）。
    *
    * 回传未送达（transport 返 false）→ 保留请求不出队（M1/RD-3#1）：断连期用户应答
    * 丢失且弹窗消失 = pi 侧 Promise 永挂；保留后连接恢复可再次 respond 重投（同

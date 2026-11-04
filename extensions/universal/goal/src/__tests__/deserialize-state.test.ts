@@ -38,13 +38,8 @@ const goalStateArb = fc.record({
 	tokenWarning90Sent: fc.boolean(),
 	lastTurnTokensUsed: fc.nat(),
 	currentTurnIndex: fc.nat(),
-	completedAtTurnIndex: fc.option(fc.nat()),
-	// W5 熔断计数（chat-domain-v1x D4）：round-trip 双向一致性覆盖
-	continuationsSent: fc.nat(),
-	noProgressTurns: fc.nat(),
-	continuationCapNotified: fc.boolean(),
+	// defer 通知去重锚：round-trip 双向一致性覆盖
 	lastDeferredPendingIds: fc.array(fc.string()),
-	toolCallsSeen: fc.nat(),
 }) as unknown as fc.Arbitrary<GoalRuntimeState>;
 
 // 旧 entry 模拟（含已废弃 tasks 字段，验证向后兼容忽略）
@@ -66,7 +61,7 @@ const FULL_DATA: Record<string, unknown> = {
 };
 
 describe("deserializeState — round-trip", () => {
-	// ⭐ serialize→deserialize 深相等：覆盖全 21 字段双向一致性（含 optional 有/无两态）
+	// ⭐ serialize→deserialize 深相等：覆盖全字段双向一致性（含 optional 有/无两态）
 	it.prop([goalStateArb])("deserializeState(serializeState(s)) 深相等 s", (s) => {
 		const rt = deserializeState(serializeState(s) as unknown as Record<string, unknown>);
 		expect(rt).toEqual(s);
@@ -134,34 +129,33 @@ describe("deserializeState — legacy entry 含已删字段（P-m14-1，D2 白�
 });
 
 describe("deserializeState — optional 字段向后兼容（GAP-4 旧数据）", () => {
-	it("缺 completedAtTurnIndex → undefined", () => {
-		expect(deserializeState(FULL_DATA).completedAtTurnIndex).toBeUndefined();
-	});
 	it("缺 slug → undefined", () => {
 		expect(deserializeState(FULL_DATA).slug).toBeUndefined();
 	});
 	it("缺 successCriteria → undefined", () => {
 		expect(deserializeState(FULL_DATA).successCriteria).toBeUndefined();
 	});
-	// W5：旧持久化数据（熔断字段引入前）缺 5 个熔断字段 → 归零/空集/false（新周期语义）
-	it("缺 W5 熔断字段 → 计数归零 / 空集合 / flag false", () => {
-		const state = deserializeState(FULL_DATA);
-		expect(state.continuationsSent).toBe(0);
-		expect(state.noProgressTurns).toBe(0);
-		expect(state.continuationCapNotified).toBe(false);
-		expect(state.lastDeferredPendingIds).toEqual([]);
-		expect(state.toolCallsSeen).toBe(0);
+	// 旧持久化数据（defer 去重锚引入前）缺该字段 → 空集
+	it("缺 lastDeferredPendingIds → 空集合", () => {
+		expect(deserializeState(FULL_DATA).lastDeferredPendingIds).toEqual([]);
 	});
-	it("W5 熔断字段为脏值（负数/非数组）→ 同样归零/空集（防御性默认）", () => {
+	it("lastDeferredPendingIds 为脏值（非数组/脏元素）→ 空集（防御性默认）", () => {
 		const state = deserializeState({
 			...FULL_DATA,
-			continuationsSent: -3,
-			noProgressTurns: "many" as unknown as number,
 			lastDeferredPendingIds: [1, null] as unknown as string[],
 		});
-		expect(state.continuationsSent).toBe(0);
-		expect(state.noProgressTurns).toBe(0);
 		expect(state.lastDeferredPendingIds).toEqual([]);
+	});
+	// 已删除的熔断/自动清理字段（W5 / completedAtTurnIndex）：白名单模式天然忽略，
+	// 旧 entry 不 throw、state 完整重建
+	it("已删字段（continuationsSent / completedAtTurnIndex）被白名单忽略", () => {
+		const state = deserializeState({
+			...FULL_DATA,
+			continuationsSent: 42,
+			completedAtTurnIndex: 7,
+		});
+		expect(state).not.toHaveProperty("continuationsSent");
+		expect(state).not.toHaveProperty("completedAtTurnIndex");
 	});
 });
 

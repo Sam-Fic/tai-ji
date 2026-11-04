@@ -128,35 +128,6 @@ describe('Permission Push', () => {
     expect(activator.getState('reject-plugin')).toBe('UNLOADED')
   })
 
-  it('should auto-reject after timeout', async () => {
-    const checker: PermissionCheckerLike = {
-      getUnapproved: vi.fn(() => ['sessions.sendMessage'] as PluginPermission[]),
-    }
-
-    const activator = new PluginActivator({
-      permissionChecker: checker,
-      onPermissionRequest: () => {
-        // 不调用 resolvePermissionApproval → 模拟超时
-      },
-      permissionTimeoutMs: 100,
-    })
-
-    const desc = makeDescriptor({
-      pluginId: 'timeout-plugin',
-      permissions: ['sessions.sendMessage'],
-    })
-    activator.registerDescriptors([desc])
-
-    const host = createMockHost(activator, 'activated')
-    const promise = activator.activatePlugin('timeout-plugin', { type: 'onStartupFinished' }, host)
-
-    // 推进时间超过超时阈值
-    await vi.advanceTimersByTimeAsync(200)
-    await promise
-
-    expect(activator.getState('timeout-plugin')).toBe('UNLOADED')
-  })
-
   it('should skip permission check when no unapproved permissions', async () => {
     const checker: PermissionCheckerLike = {
       getUnapproved: vi.fn(() => []),

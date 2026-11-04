@@ -13,7 +13,7 @@ import { dirname, join } from 'node:path'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest'
-import { ENGINE_PROTOCOL_VERSION, EngineSdkError, SET_MODEL_STAGE_TIMEOUT_MS } from '@zhushanwen/subagent-engine-sdk'
+import { ENGINE_PROTOCOL_VERSION, EngineSdkError } from '@zhushanwen/subagent-engine-sdk'
 import { listPiModels, resolvePiAgentDir, validatePiModel } from '../engine-query.ts'
 import { EngineProtocolServer } from '../server.ts'
 import { type ChildProcess } from 'node:child_process'
@@ -394,36 +394,6 @@ describe("model-switch-control", () => {
         unregisterActiveChild(RUN_ID, child as unknown as ChildProcess);
       }
     });
-
-    it("存活但读应答超时 → readback-failed(set-model-response)（回读失败形态，非无活进程）", async () => {
-      vi.useFakeTimers();
-      const child = new FakeChild();
-      registerActiveChild(RUN_ID, child as unknown as ChildProcess);
-      try {
-        const pending = setModelOnActiveChild(RUN_ID, MODEL_B);
-        await vi.advanceTimersByTimeAsync(SET_MODEL_STAGE_TIMEOUT_MS);
-        const outcome = await pending;
-        expect(outcome).toMatchObject({ kind: "readback-failed", stage: "set-model-response" });
-      } finally {
-        unregisterActiveChild(RUN_ID, child as unknown as ChildProcess);
-      }
-    });
-
-    it("超时但窗口内已退出（exit 标志已置、close 未及处理）→ not-active（终检兜住竞态归并）", async () => {
-      vi.useFakeTimers();
-      const child = new FakeChild();
-      registerActiveChild(RUN_ID, child as unknown as ChildProcess);
-      try {
-        const pending = setModelOnActiveChild(RUN_ID, MODEL_B);
-        await vi.advanceTimersByTimeAsync(0); // fake timers 下推进微任务（替代 flushAsync）
-        child.exitCode = 1; // 模拟「超时窗满时进程已死但 close 事件尚未被消费」的竞态形态
-        await vi.advanceTimersByTimeAsync(SET_MODEL_STAGE_TIMEOUT_MS);
-        const outcome = await pending;
-        expect(outcome).toEqual({ kind: "not-active" });
-      } finally {
-        unregisterActiveChild(RUN_ID, child as unknown as ChildProcess);
-      }
-    });
   });
 
   describe("setModelOnActiveChild — pi 错误应答三型映射 + 成功路径", () => {
@@ -558,23 +528,6 @@ describe("model-switch-control", () => {
         unregisterActiveChild(RUN_ID, child as unknown as ChildProcess);
       }
     });
-
-    it("存活但 get_state 回读超时 → readback-failed(state-readback)（回读失败形态，非无活进程）", async () => {
-      vi.useFakeTimers();
-      const child = new FakeChild();
-      registerActiveChild(RUN_ID, child as unknown as ChildProcess);
-      try {
-        const pending = setModelOnActiveChild(RUN_ID, MODEL_B);
-        await vi.advanceTimersByTimeAsync(0); // fake timers 下推进微任务（替代 flushAsync）
-        const [setCmd] = readStdinLines(child);
-        dispatchControlResponse(setCmd["id"] as string, true, { provider: "prov-b", id: "model-b" }, undefined);
-        await vi.advanceTimersByTimeAsync(SET_MODEL_STAGE_TIMEOUT_MS);
-        const outcome = await pending;
-        expect(outcome).toMatchObject({ kind: "readback-failed", stage: "state-readback" });
-      } finally {
-        unregisterActiveChild(RUN_ID, child as unknown as ChildProcess);
-      }
-    });
   });
 
   // ── B. pi-engine setModel：原始结局 → 协议错误码映射 ──
@@ -646,21 +599,6 @@ describe("model-switch-control", () => {
         dispatchControlResponse(setCmd["id"] as string, false, undefined, "No API key for prov-b/model-b");
         const err = await pending.catch((e: unknown) => e);
         expect((err as EngineSdkError).code).toBe("engine_credential_missing");
-      } finally {
-        unregisterActiveChild(RUN_ID, child as unknown as ChildProcess);
-      }
-    });
-
-    it("readback-failed 结局 → error code engine_state_readback_failed（生效值未知如实报）", async () => {
-      vi.useFakeTimers();
-      const child = new FakeChild();
-      registerActiveChild(RUN_ID, child as unknown as ChildProcess);
-      try {
-        // catch 在超时触发前挂上（ rejection 发生在 advanceTimers 期间——后挂会被判 unhandled）
-        const pending = engine.setModel({ runId: RUN_ID, model: MODEL_B }).catch((e: unknown) => e);
-        await vi.advanceTimersByTimeAsync(SET_MODEL_STAGE_TIMEOUT_MS);
-        const err = await pending;
-        expect((err as EngineSdkError).code).toBe("engine_state_readback_failed");
       } finally {
         unregisterActiveChild(RUN_ID, child as unknown as ChildProcess);
       }

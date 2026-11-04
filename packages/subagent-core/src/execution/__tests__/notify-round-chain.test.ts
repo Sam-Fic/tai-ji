@@ -45,7 +45,6 @@ import {
   coreSpawnedChildrenMirror,
   _resetCoreSpawnedChildrenMirrorForTest,
 } from "../engine/host/spawned-children.ts";
-import { _resetLifecycleState } from "../lifecycle/lifecycle-manager.ts";
 import { createRecord } from "../persistence/execution-record.ts";
 import { ModelConfigService } from "../assembly/model-config-service.ts";
 import type { RecordStore } from "../persistence/record-store.ts";
@@ -142,7 +141,6 @@ describe("[N2] chatMode 轮次通知正文：真实执行链路（协议引擎�
   beforeEach(() => {
     vi.clearAllMocks();
     // lifecycle-manager 模块级单例（idleTimers Map 跨用例共享），每用例前清空防泄漏。
-    _resetLifecycleState();
     agentDir = makeTmpAgentDir();
     // journal/records 落盘隔离（测试红线：不触真实数据目录）。initSession 的通知
     // 对账会补投 records 树内的收尾 idle record——数据目录跨用例共享时前一用例的
@@ -168,7 +166,6 @@ describe("[N2] chatMode 轮次通知正文：真实执行链路（协议引擎�
 
   afterEach(() => {
     service.dispose();
-    _resetLifecycleState();
     // registry 是 globalThis 进程单例——清空防替身引擎泄漏进其他测试文件。
     clearEngines();
     fs.rmSync(agentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
@@ -239,7 +236,6 @@ describe("首轮闭环独有断言范围（迁自壳 first-round-closure-service
   let pi: PiMock;
 
   beforeEach(() => {
-    _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
     agentDir = makeTmpAgentDir();
     // journal/records 落盘隔离（同 [N2] describe 先例——initSession 对账读 records 树）。
@@ -263,7 +259,6 @@ describe("首轮闭环独有断言范围（迁自壳 first-round-closure-service
 
   afterEach(() => {
     service.dispose();
-    _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
     // registry 是 globalThis 进程单例——清空防替身引擎泄漏进其他测试文件。
     clearEngines();

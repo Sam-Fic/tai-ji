@@ -529,7 +529,7 @@ describe("tool-prompt-contract", () => {
  *  A13 task description "Throws if missing or whitespace-only"（原 REQUIRED for
  *      action:'start' 文本锚——拆分后必填性由 schema required 表达，运行时语义锚保留）
  *  A14 model CASE-SENSITIVE + Resolution order（三层优先级链是功能语义）
- *  A15 idleTimeoutMs 缺省 300000 + TAIJI_SUBAGENT_IDLE_TIMEOUT_MS env 覆盖链
+ *  A15（已随 idleTimeoutMs 参数面删除退役——idle 归档节奏的模型可见参数不再存在）
  *  A16 messageParam.interrupt "Deprecated, no effect" —— 退役参数兼容语义锚
  *      （存量调用防 schema 报错；manage/message schema 兼容语义锚用例承载）
  * 单源化负锚（D1：跨工具通用纪律只在注入段说一次）：
@@ -548,7 +548,7 @@ describe("tool-prompt-contract", () => {
   describe("subagent_start description — 锚词保留清单（D2/D3 契约）", () => {
     it("体量上界：description ≤ 2400 字符（D2 目标区间 subagent 组 ≤8500 的分维护栏）", () => {
       // description 只承载「是什么 + 边界 + 唯一正例」；使用纪律在
-      // promptGuidelines（见 A6/A8-A12），参数功能语义在 schema（A13-A15）。
+      // promptGuidelines（见 A6/A8-A12），参数功能语义在 schema（A13/A14）。
       // 逼近上界时先砍正文冗余，不得砍锚词（A1-A7）。
       expect(START_DESCRIPTION.length).toBeLessThanOrEqual(2400);
     });
@@ -600,15 +600,18 @@ describe("tool-prompt-contract", () => {
       expect(START_DESCRIPTION).not.toMatch(/orchestrator|code-reviewer|context-builder|worker/);
     });
 
-    it("schema 功能语义锚（A13-A15）", () => {
+    it("schema 功能语义锚（A13/A14）", () => {
       // 拒绝条件清单不进 schema 说明（core handler 运行时错误已带恢复动作，D1）；
-      // 必填性 / 优先级链 / 缺省值是 schema 侧唯一文本锚。A13 随拆分改形态：
+      // 必填性 / 优先级链是 schema 侧唯一文本锚。A13 随拆分改形态：
       // required 结构锚由 cross-package-contract 锁，此处锁运行时语义句。
+      // A15（idleTimeoutMs 参数面）已删除：idle 归档节奏的模型可见参数不再存在，
+      // env 覆盖链文案随字段一并移除（负锚锁：schema 源不得复活该参数）。
       const schemaSrc = readFileSync(join(__dirname, "../subagent-tool-schema.ts"), "utf-8");
       expect(schemaSrc).toContain("Throws if missing or whitespace-only");
       expect(schemaSrc).toContain("CASE-SENSITIVE");
       expect(schemaSrc).toContain("Resolution order");
-      expect(schemaSrc).toContain("TAIJI_SUBAGENT_IDLE_TIMEOUT_MS");
+      expect(schemaSrc).not.toContain("TAIJI_SUBAGENT_IDLE_TIMEOUT_MS");
+      expect(schemaSrc).not.toContain("idleTimeoutMs");
     });
 
     it("勿等待纪律单源化（A17）：description/guidelines 零 poll 措辞，规则只在注入段说一次（D1）", () => {

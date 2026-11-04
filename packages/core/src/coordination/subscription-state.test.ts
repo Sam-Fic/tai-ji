@@ -1616,22 +1616,6 @@ describe("respawn-notice", () => {
       expect(store.getMessages(sid).filter((m) => m.customType === PI_RESPAWN_NOTICE_CUSTOM_TYPE)).toHaveLength(1)
     })
 
-    it('过期提示条（超 5 分钟保留窗口）不再保留（liveOnly 一次性语义，不无限堆积）', () => {
-      vi.useFakeTimers()
-      try {
-        vi.setSystemTime(1_000)
-        const sid = 's4'
-        store.hydrate(sid, [userMsg('m1')], { truncated: true, loadedTurns: 1, totalTurnsEstimate: 1 })
-        store.appendRespawnNotice(sid, 'restored', '旧横幅')
-        expect(store.getMessages(sid)).toHaveLength(2)
-        vi.setSystemTime(1_000 + 5 * 60 * 1000 + 1)
-        store.reconcileHistory(sid, [userMsg('m1')], { truncated: true, loadedTurns: 1, totalTurnsEstimate: 1 })
-        expect(store.getMessages(sid).map((m) => m.id)).toEqual(['m1'])
-      } finally {
-        vi.useRealTimers()
-      }
-    })
-
     it('保留范围收窄：非 respawn 的 liveOnly system 消息（stream_warn 形态）切入 reconcile 后仍消失', () => {
       const sid = 's5'
       store.hydrate(sid, [userMsg('m1')], { truncated: true, loadedTurns: 1, totalTurnsEstimate: 1 })

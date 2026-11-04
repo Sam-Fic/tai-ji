@@ -71,7 +71,7 @@ export type CrashJournalReason = string
  * 的已知值全集（impl-plan 偏差 #18 残留风险回写，按写入域分组，来源文件见行注释）。
  * 两类动态形态刻意不登记（非封闭字面量，落 open 集语义覆盖）：Electron
  * render-process-gone reason 透传（window-factory reload 行，值域由 Electron 决定）
- * 与 trigger-review 的 `condition-<id>` 参数化模板（trigger-patrol.ts）。
+ * 与 trigger-review 的 `condition-<id>` 参数化模板（评估器按登记清单条件 id 生成）。
  */
 export const CRASH_JOURNAL_KNOWN_REASONS = [
   // 设计 D1 schema reason 行（6 值，逐字）

@@ -14,7 +14,7 @@ import { mkdtemp, mkdir, writeFile, rm, utimes, readFile } from 'node:fs/promise
 import { join, dirname } from 'node:path'
 import { parseArchiveLedgerText, scanArchiveLedgers, formatArchivedText, formatArchivedDisambiguation, resolveArchiveDir, type ArchiveLedgerEntry } from '../discovery/archive-ledger.js'
 import { resolveSessionRoots, resolveStoreSubagentSessionsDir, resolveStoreSubagentRecordsDir, resolveSessionStoreRoot } from '../discovery/roots.js'
-import { handleSessionRead, type SessionReadParams, METADATA_CACHE_TTL_MS, type SessionReadSignals } from '../tool-handler.js'
+import { handleSessionRead, type SessionReadParams, type SessionReadSignals } from '../tool-handler.js'
 import { FIX_E6 } from './fixtures.js'
 import { findSessions, type SessionMetadataProvider } from '../discovery/find.js'
 import { extractFinalAssistantText } from '../result-action.js'
@@ -4508,13 +4508,13 @@ describe("tool-handler", () => {
   })
 
   // ============================================================
-  // u11：metadataProvider 注入 + TTL 缓存（design 2026-09-10 §6.6）
+  // u11：metadataProvider 注入 + mtime 缓存（design 2026-09-10 §6.6）
   // handler 级集成：注入包装（metadata 缓存独立实例——根扫描无缓存，doctor 缓存机
   // 已删除，ext-simplify-04 U3，不存在串扰面）
   // + 标题渲染（§5.1 候选行标题优先）+ provider 抛错降级不外抛。
   // 策略①惰性/②窄化/合并语义在 find.test.ts u11 段覆盖。
   // ============================================================
-  describe('u11 metadataProvider 注入 + TTL 缓存（fixture，§6.6）', () => {
+  describe('u11 metadataProvider 注入 + mtime 缓存（fixture，§6.6）', () => {
     let tmp: string
     /** 平铺 main 根（taiji 形态），同时作 liveSessionDir（与 [default] 根同字面路径） */
     let flatMain: string
@@ -4583,7 +4583,7 @@ describe("tool-handler", () => {
       const d = r.details as { matches: Array<{ sessionId: string; name?: string }> }
       expect(d.matches[0].sessionId).toBe(id)
       expect(d.matches[0].name).toBe('太保寿险深度研究攻坚')
-      // 注入边界生效：provider 被 TTL 包装调用且实参非空串
+      // 注入边界生效：provider 被 mtime 缓存包装调用且实参非空串
       expect(provider).toHaveBeenCalledTimes(1)
       expect(provider.mock.calls[0][0]).toBe(flatMain)
     })
@@ -4603,7 +4603,7 @@ describe("tool-handler", () => {
       expect(r.content[0].text).not.toContain('boom')
     })
 
-    it('⑤ TTL 缓存（fake timers）：TTL 内不重调、过期重调、目录 mtime 变化失效', async () => {
+    it('⑤ mtime 缓存：mtime 未变不重调（跨查询去重），目录 mtime 变化失效重调', async () => {
       const id = 'ttl-00000001'
       const p = await writeSession(id, { firstUserText: '无关' })
       const provider = vi.fn(async (dir: string) =>
@@ -4611,27 +4611,17 @@ describe("tool-handler", () => {
           ? [{ path: p, id, cwd: '/demo', name: '标题', modified: new Date() }]
           : [],
       )
-      // 仅 fake Date（缓存 TTL 判定用），fs/performance 走真实实现
-      vi.useFakeTimers({ toFake: ['Date'] })
-      try {
-        // 首查：cache miss → 调 1 次
-        await findWithProvider('zzznohit9q', provider)
-        expect(provider).toHaveBeenCalledTimes(1)
-        // TTL 内二查：命中缓存不重调
-        await findWithProvider('zzznohit9q', provider)
-        expect(provider).toHaveBeenCalledTimes(1)
-        // TTL 过期 → 重调
-        vi.setSystemTime(Date.now() + METADATA_CACHE_TTL_MS + 1)
-        await findWithProvider('zzznohit9q', provider)
-        expect(provider).toHaveBeenCalledTimes(2)
-        // TTL 内但目录 mtime 变化 → 失效重调
-        const bumped = new Date(Date.now() + 60_000)
-        await utimes(flatMain, bumped, bumped)
-        await findWithProvider('zzznohit9q', provider)
-        expect(provider).toHaveBeenCalledTimes(3)
-      } finally {
-        vi.useRealTimers()
-      }
+      // 首查：cache miss → 调 1 次
+      await findWithProvider('zzznohit9q', provider)
+      expect(provider).toHaveBeenCalledTimes(1)
+      // mtime 未变二查：命中缓存不重调（时间不再参与失效判定——mtime 单通道）
+      await findWithProvider('zzznohit9q', provider)
+      expect(provider).toHaveBeenCalledTimes(1)
+      // 目录 mtime 变化 → 失效重调
+      const bumped = new Date(Date.now() + 60_000)
+      await utimes(flatMain, bumped, bumped)
+      await findWithProvider('zzznohit9q', provider)
+      expect(provider).toHaveBeenCalledTimes(2)
     })
   })
 

@@ -55,15 +55,14 @@ import type { WorkflowRun } from "@zhushanwen/subagent-core";
 import { assertModelInCatalog } from "@zhushanwen/subagent-core";
 import { getModelConfigService } from "@zhushanwen/subagent-core";
 // D9 closure：core args-meta 消费（reservedKeys 注入见下方 ARGS_META_OPTIONS）
-// MAX_TIMER_DELAY_MS：OR-1 消费（barrel 导出，深路径经 u-2c 删通配后 tsc 不可解析）
+
 import {
   argKeysFromMeta,
   findFlattenedArgKeys,
   MAX_RETAINED_DONE_RUNS,
-  MAX_TIMER_DELAY_MS,
   workflowNotFoundMessage,
 } from "@zhushanwen/subagent-core";
-import { assertEntryTimeBudget, assertEntryTokenBudget, assertSlugWithinLimit } from "@zhushanwen/subagent-core";
+import { assertEntryTokenBudget, assertSlugWithinLimit } from "@zhushanwen/subagent-core";
 import { runSummary } from "@zhushanwen/subagent-core";
 // run 成员视图（subagent-tool-interface-refactor §3.3.3/§3.4）：record 优先 + trace 兜底
 // 的 core 纯函数族——渲染与截断预算共用 core 同一度量单位（memberViewLine），防两处口径漂移。
@@ -129,9 +128,6 @@ const WorkflowRunParams = Type.Object({
     // SUBAGENT_DISPATCH_SHARED_RULES，原文见 git 历史）。
     description: "Max token budget.",
   })),
-  time: Type.Optional(Type.Number({
-    description: `Max time budget in ms (hard ceiling ${MAX_TIMER_DELAY_MS} ms — larger values fail fast).`,
-  })),
   model: Type.Optional(Type.String({
     // 缺省继承主 agent 的纪律句已删（D1 单源化→注入段）；
     // run 级 override 作用域 / user override 优先级是本参数功能语义，保留。
@@ -167,9 +163,6 @@ const WorkflowControlParams = Type.Object({
     // resume 分支是本参数的功能语义，保留。
     description: "Max token budget. For resume: applied to the resumed execution (tokens already spent count against it)",
   })),
-  time: Type.Optional(Type.Number({
-    description: `Max time budget in ms (hard ceiling ${MAX_TIMER_DELAY_MS} ms — larger values fail fast). For resume: applied to the resumed execution (active spent time counts; suspended does not)`,
-  })),
   error: Type.Optional(
     Type.String({ description: "Error/reason message (optional, with abort)" }),
   ),
@@ -203,7 +196,6 @@ export const TOOL_TOP_LEVEL = new Set([
   "runId",
   "args",
   "tokens",
-  "time",
   "error",
   // Run-level overrides (Option B): excluded from flattening detection so a
   // workflow that declares its own `model`/`thinkingLevel` parameter does not
@@ -230,7 +222,6 @@ const RESERVED_OVERRIDE_KEYS: ReadonlySet<string> = new Set([
   "model",
   "thinkingLevel",
   "tokens",
-  "time",
   "slug",
 ]);
 
@@ -509,7 +500,7 @@ export function registerWorkflowTool(
       "Call shapes (JSON): " +
       "- status: {\"action\":\"status\"} — or {\"action\":\"status\",\"runId\":\"<id>\"} for a single run's member table. " +
       "- abort: {\"action\":\"abort\",\"runId\":\"<id>\"}. " +
-      "- resume: {\"action\":\"resume\",\"runId\":\"<id>\"} (+ optional args/tokens/time/model).",
+      "- resume: {\"action\":\"resume\",\"runId\":\"<id>\"} (+ optional args/tokens/model).",
     ],
     parameters: WorkflowControlParams,
 
@@ -637,15 +628,8 @@ export async function actionRun(
   assertSlugWithinLimit(params.slug, ["fix-login", "extract-urls"]);
   const args = params.args ?? {};
   const tokens = params.tokens;
-  const time = params.time;
-  // OR-1 入口 fail-fast（crash-forensics-and-watchdog.md 附录 E（原 unbounded-wait-audit §7.2 T3①））：schema 的 time 是
-  // Type.Number 直通（无上界）——超 setTimeout 安全域的值会穿透到 lifecycle 内层
-  // 防线（assertSafeTimerDelay），而入口拦截让它永不进入副作用链（判定与文案单点在
-  // core shared/entry-guards；LLM 可据消息自纠：clamp 或省略走 unlimited 语义）。
-  // 负值同在入口拒绝：tokens 负值会被 Budget 的 maxTokens>0 检查、time 负值会被
-  // lifecycle 的 budgetTimeMs>0 判定静默升格 unlimited（显式预算被忽略），入口拦截
-  // 替代静默升格。
-  assertEntryTimeBudget(time);
+  // tokens 负值在入口拒绝：负值会被 core Budget 的 maxTokens>0 检查静默升格 unlimited
+  //（显式预算被忽略），入口拦截替代静默升格。时间预算参数已删除（时间阈值决策退役）。
   assertEntryTokenBudget(tokens);
 
   // [D8 创建期拒单] 工具参数 model 是创建期唯一静态声明源（agent 资产 frontmatter
@@ -679,7 +663,6 @@ export async function actionRun(
       buildRunSpecFromScript(script, {
         args,
         budgetTokens: tokens,
-        budgetTimeMs: time,
         slug: params.slug,
         model: params.model,
         thinkingLevel: params.thinkingLevel,
@@ -964,8 +947,6 @@ async function actionAbort(
  * - runId 必需；
  * - args 可选——传入时与 run-created 帧的历史 args 逐字段深度比对（排除 `_runId`），
  *   不一致明确拒绝并列出差异字段（换 args 重放 = 换意图，属新 run）；不传默认沿用历史；
- * - time 可选——resume 执行段的时间预算（活跃段算式在 core：已耗活跃时间计入、
- *   搁置不计）；入口护栏（负值/超安全域）与 run action 同源（assertEntryTimeBudget）。
  * - tokens 可选——resume 执行段的 token 预算（已耗加权 tokens 计入，帧推导下界
  *   口径）；入口护栏（负值）与 run action 同源（assertEntryTokenBudget）。
  *
@@ -989,7 +970,6 @@ export async function actionResume(
   if (!isWorkflowRunId(runId)) {
     throw runNotFoundError(runId, deps);
   }
-  assertEntryTimeBudget(params.time);
   assertEntryTokenBudget(params.tokens);
 
   // 显式 model 参数的目录预检（run action 同款 D8 拒单语义——查无同步 throw 零写，
@@ -1008,8 +988,7 @@ export async function actionResume(
   }
 
   const options: ResumeRunOptions = {
-    ...(params.time !== undefined ? { budgetTimeMs: params.time } : {}),
-    // token 预算显式覆盖（与 time 同款通道；三档回落与落盘归 core 单点）
+    // token 预算显式覆盖（三档回落与落盘归 core 单点）
     ...(params.tokens !== undefined ? { budgetTokens: params.tokens } : {}),
     // [F1-26 后续项] 显式 model 透传（core 落统一覆盖记账——「补切 + 无参 resume」
     // 的合一步；格式与目录已在本入口预检，记账落盘归 core 锁段单点）

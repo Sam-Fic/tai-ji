@@ -1,6 +1,6 @@
 /**
  * composables 根域合并产物（round 6 renderer 测试压缩）：六文件同产物，环境统一默认
- * （happy-dom；useBackgroundWork / useInboundFrameGuard / useMemoryPressure 三文件原为
+ * （happy-dom；useBackgroundWork / useInboundFrameGuard 两文件原为
  * node 环境注释，纯 pinia/watch/effectScope 逻辑无 DOM 依赖亦无 node 特有 API，迁移实证
  * 兼容；useSessionMarkers 需 localStorage + window 事件，决定统一环境取 happy-dom）。
  *
@@ -8,19 +8,14 @@
  *  - taiji-themes-swatch-sync（主题 swatch ↔ style.css 对拍，6 例）
  *  - useBackgroundWork（后台工作谓词 + derivedStatus 回归，18 例，原 node）
  *  - useInboundFrameGuard（入站丢帧检查 renderer 消费编排，8 例，原 node）
- *  - useMemoryPressure（内存压力通知消费，8 例，原 node）
- *  - useRollingRestartStatus（滚动重启四态 + #27 轻态，11 例）
  *  - useSessionMarkers（会话标记 localStorage 持久化，20 例）
  *
  * mock 注册与互斥核查：
  *  - useInboundFrameGuard partial mock '@taiji/core'（spread actual 仅覆写三个成员）
  *    + mock '@/lib/ipc'（砍成员：仅 reportRendererLog）——本产物全部节与间接 store 链
  *    （subagent/workflow/chat/panel store、useBackgroundWork、useSessionDerivations、
- *    useMemoryPressure、useSessionMarkers、useSessionScopedState）经 grep 核实零消费
+ *    useSessionMarkers、useSessionScopedState）经 grep 核实零消费
  *    '@/lib/ipc'，砍成员工厂无截断面。
- *  - useRollingRestartStatus mock '@taiji/core/transport/api'（spread 仅覆写 command）
- *    + ws-client（spread 仅覆写 getState）——useMemoryPressure 消费的真 dispatchGlobal、
- *    useBackgroundWork 链不触 command/getState，真成员保留不受截断。
  *  - useSessionMarkers 顶层 beforeEach（localStorage 清空 + cleanup 注册表重置）已下沉进
  *    describe——避免作用于本产物其余节。
  *
@@ -35,14 +30,8 @@ import { resolve } from 'node:path'
 import { SUBAGENT_RECORD_CUSTOM_TYPE } from '@taiji/shared'
 import type {
   InboundFrameDroppedInfo,
-  ReattachDeferredPayload,
-  RollingRestartCountdownPayload,
-  RollingRestartDeferredPayload,
-  RollingRestartForcedPayload,
-  RollingRestartStatusPayload,
   ServerMessage,
   SubagentRecord,
-  WatchdogMemoryPressurePayload,
   WorkflowRunRecord,
 } from '@taiji/shared'
 import { dispatchGlobal } from '@taiji/core/transport/api'
@@ -61,17 +50,6 @@ import {
   isInboundSessionTripped,
   _resetInboundFrameGuardForTest,
 } from '../useInboundFrameGuard'
-import {
-  useMemoryPressure,
-  LRU_RELIEF_MAX_SESSIONS,
-  _setMemoryReliefActionForTest,
-  _resetMemoryPressureForTest,
-} from '../useMemoryPressure'
-import {
-  RECOVERED_AUTO_CLEAR_MS,
-  useRollingRestartStatus,
-  _resetRollingRestartStatusForTest,
-} from '../useRollingRestartStatus'
 import {
   markUnread,
   clearUnread,
@@ -101,27 +79,6 @@ vi.mock('@taiji/core', async (importOriginal) => ({
 }))
 
 vi.mock('@/lib/ipc', () => ({ reportRendererLog: reportMock }))
-
-// ── useRollingRestartStatus 节的 mock（transport/api spread + ws-client spread）──
-
-// 连接态替身：真 Vue ref 经 mock 工厂内创建并挂到 hoisted holder（工厂惰性执行先于测试体；
-// 必须是真 ref——composable 的 watch getter 读 .value 需要响应式依赖才会在重连时触发）
-const conn = vi.hoisted(() => ({ stateRef: null as null | { value: string } }))
-
-vi.mock('@taiji/core/transport/api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@taiji/core/transport/api')>()
-  return { ...actual, command: vi.fn() }
-})
-
-vi.mock('@taiji/core/transport/ws-client', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@taiji/core/transport/ws-client')>()
-  const { ref } = await import('vue')
-  conn.stateRef = ref('connected')
-  return { ...actual, getState: () => conn.stateRef! }
-})
-
-// mock 工厂就位后取 command 替身（类型层是真实签名，运行时是 vi.fn）
-const commandMock = vi.mocked(await import('@taiji/core/transport/api').then((m) => m.command))
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 来源节：taiji-themes-swatch-sync（顶层读 style.css 保持原时序；产物与原文件同目录，
@@ -682,330 +639,6 @@ describe('useInboundFrameGuard 入站检查 renderer 消费编排（D8 / A6）',
     // 重新安装仍可用（幂等标志复位）
     installInboundFrameGuard()
     expect(coreMock.onInboundFrameDropped).toHaveBeenCalledTimes(2)
-  })
-})
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 来源节：useMemoryPressure（原 node 环境文件）
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** 构造 watchdog:memoryPressure 帧（payload 契约 = WatchdogMemoryPressurePayload）。 */
-function pressureMsg(
-  level: 'warn' | 'critical',
-  overrides: Partial<WatchdogMemoryPressurePayload> = {},
-): ServerMessage<'watchdog:memoryPressure'> {
-  return {
-    type: 'watchdog:memoryPressure',
-    payload: {
-      level,
-      heapUsed: 700_000_000,
-      heapSizeLimit: 1_000_000_000,
-      usedPercent: 70,
-      warnPercent: 70,
-      criticalPercent: 85,
-      ...overrides,
-    },
-  }
-}
-
-describe('useMemoryPressure（A5 通知消费断言）', () => {
-  beforeEach(() => {
-    _resetMemoryPressureForTest()
-    setActivePinia(createPinia())
-  })
-
-  afterEach(() => {
-    // 复位 spy 注入 + 状态 + 强制退订（refCount/订阅表清零，测试间隔离）
-    _resetMemoryPressureForTest()
-  })
-
-  it('warn 通知到达 → level 更新 + 收紧动作被调用（level/payload 透传）', () => {
-    const action = vi.fn()
-    _setMemoryReliefActionForTest(action)
-    const scope = effectScope()
-    const state = scope.run(() => useMemoryPressure())
-    expect(state?.level.value).toBe('normal')
-    dispatchGlobal(pressureMsg('warn'))
-    expect(state?.level.value).toBe('warn')
-    expect(state?.lastPayload.value?.heapUsed).toBe(700_000_000)
-    expect(action).toHaveBeenCalledTimes(1)
-    expect(action).toHaveBeenCalledWith('warn', expect.objectContaining({ level: 'warn', usedPercent: 70 }))
-    scope.stop()
-  })
-
-  it('critical 通知 → level=critical + 动作收到 critical 档', () => {
-    const action = vi.fn()
-    _setMemoryReliefActionForTest(action)
-    const scope = effectScope()
-    const state = scope.run(() => useMemoryPressure())
-    dispatchGlobal(pressureMsg('critical', { usedPercent: 92, heapUsed: 920_000_000 }))
-    expect(state?.level.value).toBe('critical')
-    expect(action).toHaveBeenCalledWith('critical', expect.objectContaining({ usedPercent: 92 }))
-    scope.stop()
-  })
-
-  it('防重复注册（refCount）：两个消费者实例只开一条物理订阅——单次 dispatch 动作只执行一次', () => {
-    const action = vi.fn()
-    _setMemoryReliefActionForTest(action)
-    const scopeA = effectScope()
-    scopeA.run(() => useMemoryPressure())
-    const scopeB = effectScope()
-    scopeB.run(() => useMemoryPressure())
-    dispatchGlobal(pressureMsg('warn'))
-    expect(action).toHaveBeenCalledTimes(1) // 非 2：多实例共享单条物理订阅
-    scopeA.stop()
-    scopeB.stop()
-  })
-
-  it('卸载退订：最后一个消费者 scope stop 后 dispatch 不再触发动作', () => {
-    const action = vi.fn()
-    _setMemoryReliefActionForTest(action)
-    const scope = effectScope()
-    scope.run(() => useMemoryPressure())
-    dispatchGlobal(pressureMsg('warn'))
-    expect(action).toHaveBeenCalledTimes(1)
-    scope.stop() // refCount 归零 → 物理退订
-    dispatchGlobal(pressureMsg('warn'))
-    expect(action).toHaveBeenCalledTimes(1) // 退订后不再消费
-  })
-
-  it('部分卸载：两消费者仅其一卸载时订阅保持（refCount 递减不归零）', () => {
-    const action = vi.fn()
-    _setMemoryReliefActionForTest(action)
-    const scopeA = effectScope()
-    scopeA.run(() => useMemoryPressure())
-    const scopeB = effectScope()
-    scopeB.run(() => useMemoryPressure())
-    scopeA.stop()
-    dispatchGlobal(pressureMsg('warn'))
-    expect(action).toHaveBeenCalledTimes(1) // scopeB 仍在，消费继续
-    scopeB.stop()
-    dispatchGlobal(pressureMsg('warn'))
-    expect(action).toHaveBeenCalledTimes(1)
-  })
-
-  it('默认收紧动作（#28②）：压窗到 LRU_RELIEF_MAX_SESSIONS(4) + evictIfNeeded 驱逐一轮', () => {
-    const store = useChatStore()
-    const evictSpy = vi.spyOn(store, 'evictIfNeeded')
-    const scope = effectScope()
-    scope.run(() => useMemoryPressure())
-    dispatchGlobal(pressureMsg('warn'))
-    expect(evictSpy).toHaveBeenCalledTimes(1)
-    // 压窗生效：core lru 生效上限从默认 8 收到 4（#28② 的「真收紧」语义）
-    expect(getLruMaxSessions()).toBe(LRU_RELIEF_MAX_SESSIONS)
-    scope.stop()
-  })
-
-  it('恢复语义（D4 未指明，登记裁决）：压窗不自动恢复默认（协议 normal 不广播，无消退信号）', () => {
-    const scope = effectScope()
-    scope.run(() => useMemoryPressure())
-    dispatchGlobal(pressureMsg('warn'))
-    expect(getLruMaxSessions()).toBe(LRU_RELIEF_MAX_SESSIONS)
-    // 不存在「消退」帧；后续任意帧（仍为压力态）不回弹默认
-    dispatchGlobal(pressureMsg('warn'))
-    expect(getLruMaxSessions()).toBe(LRU_RELIEF_MAX_SESSIONS)
-    scope.stop()
-  })
-
-  it('收紧动作抛错不逃逸：状态仍更新、订阅链不破坏（best-effort 降级）', () => {
-    _setMemoryReliefActionForTest(() => {
-      throw new Error('relief action boom')
-    })
-    const scope = effectScope()
-    const state = scope.run(() => useMemoryPressure())
-    expect(() => dispatchGlobal(pressureMsg('warn'))).not.toThrow()
-    expect(state?.level.value).toBe('warn') // 动作失败不影响状态更新
-    // 订阅链存活：下一帧仍消费
-    _setMemoryReliefActionForTest(vi.fn())
-    dispatchGlobal(pressureMsg('warn'))
-    expect(state?.level.value).toBe('warn')
-    scope.stop()
-  })
-})
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 来源节：useRollingRestartStatus
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** 构造 rollingRestart 域广播帧。 */
-function rollingMsg<T extends ServerMessage['type']>(type: T, payload: unknown): ServerMessage<T> {
-  return { type, payload } as ServerMessage<T>
-}
-
-const deferredPayload: RollingRestartDeferredPayload = {
-  reason: 'inflight',
-  inflight: { inFlight: 2 },
-  deferDeadlineAt: 1_700_000_100_000,
-}
-const countdownPayload: RollingRestartCountdownPayload = { executesAt: 1_700_000_060_000, inflight: { inFlight: 0 } }
-const forcedPayload: RollingRestartForcedPayload = { reason: 'hard-threshold', inflight: { inFlight: 1 } }
-const reattachPayload = (active: boolean): ReattachDeferredPayload => ({ active, reason: 'high-memory', pollMs: 30_000 })
-
-function statusPayload(state: RollingRestartStatusPayload['state']): RollingRestartStatusPayload {
-  return { state, inflight: { inFlight: state === 'idle' ? null : 0 } }
-}
-
-describe('useRollingRestartStatus（u7d 四态 + #27 轻态）', () => {
-  beforeEach(() => {
-    _resetRollingRestartStatusForTest()
-    conn.stateRef!.value = 'connected'
-    commandMock.mockReset()
-    commandMock.mockResolvedValue(statusPayload('idle'))
-  })
-
-  afterEach(() => {
-    _resetRollingRestartStatusForTest()
-    vi.useRealTimers()
-  })
-
-  it('挂载即拉取：初始订阅发一次 rollingRestart.status（刷新后恢复语义）', async () => {
-    commandMock.mockResolvedValue(statusPayload('deferred'))
-    const scope = effectScope()
-    scope.run(() => useRollingRestartStatus())
-    await flushPromises()
-    expect(commandMock).toHaveBeenCalledTimes(1)
-    expect(commandMock).toHaveBeenCalledWith('rollingRestart.status', {}, expect.any(Number))
-    scope.stop()
-  })
-
-  it('事件加速显示：deferred 广播 → deferred 相位（reason/inflight/deadline 透传）', async () => {
-    const scope = effectScope()
-    const state = scope.run(() => useRollingRestartStatus())
-    await flushPromises()
-    dispatchGlobal(rollingMsg('rollingRestart:deferred', deferredPayload))
-    expect(state?.phase.value).toEqual({
-      kind: 'deferred', reason: 'inflight', inflight: 2, deferDeadlineAt: 1_700_000_100_000,
-    })
-    scope.stop()
-  })
-
-  it('事件加速显示：countdown 广播 → countdown 相位（executesAt 透传）；forced → 红牌 rolling', async () => {
-    const scope = effectScope()
-    const state = scope.run(() => useRollingRestartStatus())
-    await flushPromises()
-    dispatchGlobal(rollingMsg('rollingRestart:countdown', countdownPayload))
-    expect(state?.phase.value).toEqual({ kind: 'countdown', executesAt: 1_700_000_060_000, inflight: 0 })
-    dispatchGlobal(rollingMsg('rollingRestart:forced', forcedPayload))
-    expect(state?.phase.value).toEqual({ kind: 'rolling', reason: 'hard-threshold', inflight: 1 })
-    scope.stop()
-  })
-
-  it('#27：reattach:deferred active=true → 轻态；active=false 清自身态；不触碰滚动重启态', async () => {
-    const scope = effectScope()
-    const state = scope.run(() => useRollingRestartStatus())
-    await flushPromises()
-    dispatchGlobal(rollingMsg('reattach:deferred', reattachPayload(true)))
-    expect(state?.phase.value).toEqual({ kind: 'reattach-deferred', pollMs: 30_000 })
-    dispatchGlobal(rollingMsg('reattach:deferred', reattachPayload(false)))
-    expect(state?.phase.value).toEqual({ kind: 'idle' })
-    // 滚动重启态不被缓解帧触碰
-    dispatchGlobal(rollingMsg('rollingRestart:deferred', deferredPayload))
-    dispatchGlobal(rollingMsg('reattach:deferred', reattachPayload(false)))
-    expect(state?.phase.value?.kind).toBe('deferred')
-    scope.stop()
-  })
-
-  it('#27：缓解帧到达时若处于滚动重启活跃/recovered 态则保持原态不落井下石', async () => {
-    const scope = effectScope()
-    const state = scope.run(() => useRollingRestartStatus())
-    await flushPromises()
-    dispatchGlobal(rollingMsg('rollingRestart:forced', forcedPayload))
-    dispatchGlobal(rollingMsg('reattach:deferred', reattachPayload(false)))
-    expect(state?.phase.value?.kind).toBe('rolling')
-    scope.stop()
-  })
-
-  it('A2 断连重连拉取：拉到 deferred → 横幅恢复（持续态经 RPC 重建）', async () => {
-    commandMock.mockResolvedValue(statusPayload('idle'))
-    const scope = effectScope()
-    const state = scope.run(() => useRollingRestartStatus())
-    await flushPromises()
-    expect(state?.phase.value.kind).toBe('idle')
-
-    conn.stateRef!.value = 'disconnected'
-    await flushPromises()
-    commandMock.mockResolvedValue(statusPayload('deferred'))
-    conn.stateRef!.value = 'connected' // 断连 → 重连转变触发拉取
-    await flushPromises()
-    expect(commandMock).toHaveBeenCalledTimes(2)
-    expect(state?.phase.value).toEqual({
-      kind: 'deferred', reason: 'inflight', inflight: 0, deferDeadlineAt: 0,
-    })
-    scope.stop()
-  })
-
-  it('A2 终态分叉·转绿：出现过活跃态 → 重连拉到 idle 转绿 30s 自动清除', async () => {
-    vi.useFakeTimers()
-    const scope = effectScope()
-    const state = scope.run(() => useRollingRestartStatus())
-    await flushPromises()
-    dispatchGlobal(rollingMsg('rollingRestart:deferred', deferredPayload))
-    expect(state?.phase.value.kind).toBe('deferred')
-
-    commandMock.mockResolvedValue(statusPayload('idle'))
-    conn.stateRef!.value = 'restarting'
-    await flushPromises()
-    conn.stateRef!.value = 'connected'
-    await flushPromises()
-    expect(state?.phase.value.kind).toBe('recovered')
-
-    await vi.advanceTimersByTimeAsync(RECOVERED_AUTO_CLEAR_MS)
-    expect(state?.phase.value.kind).toBe('idle')
-    scope.stop()
-  })
-
-  it('A2 终态分叉·不重现：全新窗口（无活跃态历史）重连拉到 idle → 恒 idle', async () => {
-    const scope = effectScope()
-    const state = scope.run(() => useRollingRestartStatus())
-    await flushPromises()
-    expect(state?.phase.value.kind).toBe('idle')
-    conn.stateRef!.value = 'disconnected'
-    await flushPromises()
-    conn.stateRef!.value = 'connected'
-    await flushPromises()
-    expect(commandMock).toHaveBeenCalledTimes(2)
-    expect(state?.phase.value.kind).toBe('idle') // 无历史不转绿、不重现
-    scope.stop()
-  })
-
-  it('refCount：两消费者共享单条物理订阅（初始拉取只发一次 RPC）', async () => {
-    const scopeA = effectScope()
-    scopeA.run(() => useRollingRestartStatus())
-    const scopeB = effectScope()
-    scopeB.run(() => useRollingRestartStatus())
-    await flushPromises()
-    expect(commandMock).toHaveBeenCalledTimes(1)
-    scopeA.stop()
-    scopeB.stop()
-    // 全部卸载后重挂 → 重新订阅 + 重新拉取
-    commandMock.mockResolvedValue(statusPayload('deferred'))
-    const scopeC = effectScope()
-    scopeC.run(() => useRollingRestartStatus())
-    await flushPromises()
-    expect(commandMock).toHaveBeenCalledTimes(2)
-    scopeC.stop()
-  })
-
-  it('拉取失败（transport 不可用 reject）→ 状态保持 idle、不向上抛', async () => {
-    commandMock.mockRejectedValue(new Error('transport unavailable'))
-    const scope = effectScope()
-    const state = scope.run(() => useRollingRestartStatus())
-    await expect(flushPromises()).resolves.not.toThrow()
-    expect(state?.phase.value.kind).toBe('idle')
-    scope.stop()
-  })
-
-  it('dismiss：手动关闭 → idle（recovered 定时器一并清理，不再复发）', async () => {
-    vi.useFakeTimers()
-    const scope = effectScope()
-    const state = scope.run(() => useRollingRestartStatus())
-    await flushPromises()
-    dispatchGlobal(rollingMsg('rollingRestart:deferred', deferredPayload))
-    state?.dismiss()
-    expect(state?.phase.value.kind).toBe('idle')
-    await vi.advanceTimersByTimeAsync(RECOVERED_AUTO_CLEAR_MS)
-    expect(state?.phase.value.kind).toBe('idle')
-    scope.stop()
   })
 })
 

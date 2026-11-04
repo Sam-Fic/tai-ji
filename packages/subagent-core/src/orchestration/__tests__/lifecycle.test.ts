@@ -1,5 +1,5 @@
 /**
- * lifecycle — runWorkflow/abortRun/terminateRunningRuns/scheduleTimeBudget/evict 测试。
+ * lifecycle — runWorkflow/abortRun/terminateRunningRuns/evict 测试。
  *
  * 用真实 WorkflowRun（含真实状态机 + I1/I2 不变式检查）+ mock RunRuntime（释放副作用
  * 可控）+ mock LifecycleDeps（store/workerHost/eventBus 可观察）。这样能真正测到
@@ -9,7 +9,7 @@
  * - runWorkflow：spec → 创建 run + workerHost.start + store.save + emit pending:register
  * - abortRun：done no-op / running→done + 直落 pending:unregister
  * - terminateRunningRuns：session 切换/关闭时仅 running 被终止（done,failed 落盘）
- * - scheduleTimeBudget：定时器到期 → abortRun(done,time_limited)（用 fake timers）
+ *（scheduleTimeBudget 时间预算套件已随 run 级墙钟预算机制删除。）
  * - evictDoneRunsBeyondCap：done run 内存淘汰白名单/排序/tie
  */
 import * as fs from "node:fs";
@@ -23,7 +23,6 @@ import {
   evictDoneRunsBeyondCap,
   MAX_RETAINED_DONE_RUNS,
   runWorkflow,
-  scheduleTimeBudget,
   terminateRunningRuns,
 } from "../lifecycle.ts";
 import { ArgsValidationError } from "../args-validator.ts";
@@ -58,7 +57,6 @@ import { WorkflowRun } from "../models/workflow-run.ts";
 
 /** 构造一个最小 RunSpec（满足 WorkflowRun 构造的字段需求）。 */
 function makeSpec(opts: {
-  budgetTimeMs?: number;
   budgetTokens?: number;
   parameters?: Record<string, unknown>;
   args?: Record<string, unknown>;
@@ -69,7 +67,6 @@ function makeSpec(opts: {
     parameters: opts.parameters,
     scriptName: "test-wf",
     scriptPath: "/fake/test.js",
-    budgetTimeMs: opts.budgetTimeMs,
     budgetTokens: opts.budgetTokens,
   };
 }
@@ -93,9 +90,8 @@ async function flushMicrotasks(times = 10): Promise<void> {
 
 function makeRunningRealRun(
   runId: string,
-  opts: { budgetTimeMs?: number } = {},
 ): { run: WorkflowRun; terminate: ReturnType<typeof vi.fn>; abort: ReturnType<typeof vi.fn> } {
-  const spec = makeSpec(opts);
+  const spec = makeSpec();
   const run = new WorkflowRun(
     runId,
     spec,
@@ -111,11 +107,7 @@ function makeRunningRealRun(
   const controller = new AbortController();
   const abort = vi.spyOn(controller, "abort");
   const worker = { terminate, postMessage: vi.fn() } as unknown as ConstructorParameters<typeof RunRuntime>[0];
-  const runtime = new RunRuntime(
-    worker as never,
-    controller,
-    undefined,
-  );
+  const runtime = new RunRuntime(worker as never, controller);
   run.assignRuntime(runtime);
   return { run, terminate, abort };
 }
@@ -158,67 +150,6 @@ afterEach(() => {
 async function seedRunCreated(run: WorkflowRun): Promise<void> {
   await dispatchRunCreated(run);
 }
-
-describe("scheduleTimeBudget", () => {
-  it("定时器到期 → abortRun(time_limited 终局)", async () => {
-    const { run } = makeRunningRealRun("wf-budget-1");
-    const deps = makeDeps();
-    await seedRunCreated(run);
-    deps.runs.set("wf-budget-1", run);
-
-    const timer = scheduleTimeBudget("wf-budget-1", deps, 1000);
-    expect(timer).toBeDefined();
-
-    // 推进定时器到到期 + flush 让 abortRun async 链跑完
-    await vi.advanceTimersByTimeAsync(1000);
-    await flushMicrotasks();
-
-    expect(isRunSettled(run)).toBe(true);
-    expect(settledRecordOf(run.runId)).toMatchObject({ outcome: "time_limited" });
-    expect(run.state.error).toContain("Time budget exceeded");
-    // 完成通知（[reload-closeout D4] 直落）
-    expect(deps.appendEntry).toHaveBeenCalledWith("pending:unregister", {
-      id: "wf-budget-1",
-      reason: "time_limited",
-      status: "time_limited",
-    });
-    expect(deps.onRunDone).toHaveBeenCalledTimes(1);
-  });
-
-  it("run 已终局时 abortRun no-op（到期不重复终局化）", async () => {
-    const { run } = makeRunningRealRun("wf-budget-2");
-    // 先把 run 终局化（手工注入注册表条目——[W2/V1] 终局判定源 = 终局记录注册表）
-    noteRebuiltSettlement("wf-budget-2", { outcome: "done", settledAt: Date.now() });
-    const deps = makeDeps();
-    deps.runs.set("wf-budget-2", run);
-
-    scheduleTimeBudget("wf-budget-2", deps, 500);
-    await vi.advanceTimersByTimeAsync(500);
-    await flushMicrotasks();
-
-    // 终局事实保持原 outcome=done（映射 reason completed），未被 time_limited 覆盖
-    expect(settledRecordOf("wf-budget-2")).toMatchObject({ outcome: "done" });
-    expect(deps.onRunDone).not.toHaveBeenCalled();
-  });
-
-  it("定时器 unref（不阻止 Node 退出）", () => {
-    const deps = makeDeps();
-    const timer = scheduleTimeBudget("wf-x", deps, 10000);
-    // unref 是 Node timer 的方法，fake timer 也支持——验证不抛错
-    expect(() => timer.unref()).not.toThrow();
-    timer.unref();
-  });
-
-  // [U1] setTimeout 2^31-1 溢出 fail-fast：溢出 budgetTimeMs 被 Node 置 1ms 立即触发
-  //（「不限时预算」变「立即超时」），arm 入口拦截且错误含上限值与恢复指引。
-  it("budgetTimeMs 溢出（>2^31-1）→ fail-fast throw（不挂 timer、不静默 clamp）", () => {
-    const deps = makeDeps();
-    expect(() => scheduleTimeBudget("wf-overflow", deps, 3_000_000_000)).toThrowError(/2147483647/);
-    expect(() => scheduleTimeBudget("wf-overflow", deps, Number.MAX_SAFE_INTEGER)).toThrowError(
-      /Recovery/,
-    );
-  });
-});
 
 // ── runWorkflow ──────────────────────────────────────────────
 
@@ -277,225 +208,12 @@ describe("runWorkflow", () => {
       throw new Error("worker boot failed");
     });
 
-    await expect(runWorkflow(makeSpec(), deps)).rejects.toThrow("worker boot failed");
-
-    // 无孤儿：启动失败时 run 未注册进 deps.runs（runs.set 在 start 之后）
-    expect(deps.runs.size).toBe(0);
-    expect(deps.store.save).not.toHaveBeenCalled();
-    expect(deps.eventBus.emit).not.toHaveBeenCalled();
-  });
-
-  // [撞名缺陷 / 第 4 道检查扩展到派发期] 手工脚本顶层重声明宿主预声明名时，
-  // 必须在 worker 启动前拒绝（真机形态 = Worker 异步语法错 → 被重试矩阵吃满三次）。
-  it("脚本顶层重声明宿主名 → runWorkflow 在 worker 启动前拒绝（零副作用）", async () => {
-    const deps = makeDeps();
-    const spec = { ...makeSpec(), scriptSource: "const args = { a: 1 };\nasync function execute() {}" };
-
-    await expect(runWorkflow(spec, deps)).rejects.toThrow(WorkflowScriptSyntaxError);
-
-    // 与参数校验同 chokepoint：worker 未启动、run 未注册、store/eventBus 零调用
-    expect(deps.workerHost.start).not.toHaveBeenCalled();
-    expect(deps.runs.size).toBe(0);
-    expect(deps.store.save).not.toHaveBeenCalled();
-    expect(deps.eventBus.emit).not.toHaveBeenCalled();
-  });
-
-  // OR-1 顺序修复（unbounded-wait-audit §4.1）：budgetTimeMs 溢出的 fail-fast
-  // 必须发生在首个副作用（workerHost.start）之前——旧顺序 worker 先启动、
-  // scheduleTimeBudget 后 throw，产生「worker 已跑、run 永不可达」的孤儿。
-  it("OR-1: budgetTimeMs 溢出（>2^31-1）→ worker 启动前 fail-fast（zero side effects）", async () => {
-    const deps = makeDeps();
-    const spec = makeSpec({ budgetTimeMs: 3_000_000_000 });
-
-    await expect(runWorkflow(spec, deps)).rejects.toThrow(/2147483647/);
-
-    // fail-fast 先于全部副作用：worker 未启动、run 未注册、未落盘、未通知
-    expect(deps.workerHost.start).not.toHaveBeenCalled();
-    expect(deps.runs.size).toBe(0);
-    expect(deps.store.save).not.toHaveBeenCalled();
-    expect(deps.eventBus.emit).not.toHaveBeenCalled();
-  });
-
-  // [Q2/D9-1] run-created 正点接线（dispatchRunCreated 唯一生产调用点）：创建期
-  // 校验通过 + run 装配完成后落 journal 首帧——runWorkflow 返回 ⟹ 注册表派生视图可查
-  //（active，fold 终帧 dispatched）。
-  it("run-created 正点发射：runWorkflow 返回后 journal 首帧写入 journal 记录，派生视图 = active/dispatched", async () => {
-    const journalDir = fs.mkdtempSync(path.join(os.tmpdir(), "lifecycle-run-created-"));
-    setRunEventJournalDirForTest(journalDir);
-    try {
-      const deps = makeDeps();
-      const spec = makeSpec({ args: { pr: 7 } });
-
-      const runId = await runWorkflow(spec, deps);
-
-      const events = await createRunEventJournal(journalDir).scan(runId);
-      expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({
-        type: "run-created",
-        runId,
-        workflowName: "test-wf",
-      });
-      // argsSummary 承载调用参数（injectRunId 的 _runId 引擎字段同序列化——P1b-1
-      // 首帧形态与正点一致的锚定）
-      expect((events[0] as { argsSummary: string }).argsSummary).toContain('"pr":7');
-      const projection = await projectRunRegistryState(createRunEventJournal(journalDir), runId, {
-        activeRunIds: new Set(deps.runs.keys()),
-      });
-      expect(projection.phase).toBe("active");
-      // [D2] dispatched 并入 running——run-created 首帧后 fold 即 running
-      expect(projection.state.lifecycle).toBe("running");
-      // [W1 / D1] v2 注册条目（两写点之一）：journal 首帧写入 journal 记录成功后经
-      // appendEntry 写主 session——recordPath 锚点指向真实 journal 文件
-      const registered = deps.appendEntry.mock.calls.find((c) => c[0] === "workflow-record");
-      expect(registered).toBeDefined();
-      expect(registered![1]).toMatchObject({
-        v: 2,
-        kind: "registered",
-        runId,
-        workflowName: "test-wf",
-        scriptName: "test-wf",
-        slug: "test-wf",
-      });
-      const regData = registered![1] as { recordPath: string; startedAt: number };
-      expect(regData.recordPath).toBe(path.join(journalDir, `${runId}.record.jsonl`));
-      expect(fs.existsSync(regData.recordPath)).toBe(true);
-      expect(typeof regData.startedAt).toBe("number");
-    } finally {
-      setRunEventJournalDirForTest(undefined);
-      fs.rmSync(journalDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-    }
-  });
-
-  // [dmg-r2-5] 宿主会话锚接线：deps.getSessionRootId 注入时 run-created 首帧
-  // 条件式落 rootSessionId（同 cwd 多会话下 runtime 网关 runId 路由的精确归属
-  // 判据）；未注入（旧测试 deps）帧不落字段（旧格式行形态，读侧放行）。
-  it("run-created 首帧条件式落 rootSessionId：deps 注入会话锚时落字段，未注入不落", async () => {
-    const journalDir = fs.mkdtempSync(path.join(os.tmpdir(), "lifecycle-root-sid-"));
-    setRunEventJournalDirForTest(journalDir);
-    try {
-      const deps = makeDeps() as LifecycleDeps & { getSessionRootId?: () => string | null };
-      deps.getSessionRootId = () => "root-session-1";
-
-      const anchoredRunId = await runWorkflow(makeSpec(), deps);
-      const anchoredEvents = await createRunEventJournal(journalDir).scan(anchoredRunId);
-      expect(anchoredEvents[0]).toMatchObject({
-        type: "run-created",
-        runId: anchoredRunId,
-        rootSessionId: "root-session-1",
-      });
-
-      const legacyDeps = makeDeps(); // 无 getSessionRootId（旧测试 deps 形态）
-      const legacyRunId = await runWorkflow(makeSpec(), legacyDeps);
-      const legacyEvents = await createRunEventJournal(journalDir).scan(legacyRunId);
-      expect(legacyEvents[0]).toMatchObject({ type: "run-created", runId: legacyRunId });
-      expect("rootSessionId" in legacyEvents[0]).toBe(false);
-    } finally {
-      setRunEventJournalDirForTest(undefined);
-      fs.rmSync(journalDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-    }
-  });
-
-  // 竞态锁（L4 A4 附带发现：8 跑 1 丢 6 帧）：run-created 入队必须先于
-  // workerHost.start——enqueueRunDispatch 同步入队 + 队列执行序 = 入队序，
-  // worker 首个 agent() 的 ask 帧必然排在 created 之后写入 journal 记录。
-  it("run-created 入队先于 worker.start：start 同步段内首 ask 到达 → journal 帧序 created 先行、零丢帧", async () => {
-    const journalDir = fs.mkdtempSync(path.join(os.tmpdir(), "lifecycle-race-"));
-    setRunEventJournalDirForTest(journalDir);
-    try {
-      const deps = makeDeps();
-      const spec = makeSpec();
-      // 模拟 worker 极快的竞态形态：workerHost.start 同步段内首个 agent() 的
-      // agent-started 已到达宿主（修复前此帧在 created 态表外让位被吞）
-      vi.spyOn(deps.workerHost, "start").mockImplementation((startSpec: RunSpec) => {
-        const raceRunId = (startSpec.args as Record<string, unknown>)["_runId"];
-        if (typeof raceRunId === "string") {
-          void dispatchRunTrigger(
-            { runId: raceRunId },
-            { type: "agent-started", taskIndex: 0, agentName: "fast-worker", attempt: 1, ts: Date.now() },
-          ).catch(() => {});
-        }
-        return { postMessage: vi.fn(), terminate: vi.fn(async () => {}) };
-      });
-
-      const runId = await runWorkflow(spec, deps);
-
-      // cancel-requested 作队列尾哨兵：await 它 = 该 run 投递队列排空（ask 帧已写入 journal 记录）。
-      // 带完整 source（spec 含注入后的 _runId）——runId 键投递不携带 terminal 事件。
-      await dispatchRunTrigger(
-        { runId, spec },
-        { type: "cancel-requested", reason: "race-probe" },
-      );
-
-      // 修复前形态：agent-started 先入队先执行 → created 态表外让位吞帧，
-      // journal 只剩 run-created；修复后帧序 created 先行、零丢帧
-      const events = await createRunEventJournal(journalDir).scan(runId);
-      expect(events.map((e) => e.type)).toEqual(["run-created", "agent-started", "run-settled"]);
-    } finally {
-      setRunEventJournalDirForTest(undefined);
-      fs.rmSync(journalDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-    }
-  });
-
-  // OR-1 前移的代价：start 抛错时已挂的 timeBudget timer 会残留（到期对从未注册的
-  // runId 触发 abortRun → not found）——start 抛错路径必须就地 clearTimeout。
-  it("OR-1: budgetTimeMs 有效但 worker.start 抛错 → timeBudget timer 被清理（无残留）", async () => {
-    const deps = makeDeps();
-    deps.workerHost.start = vi.fn(() => {
-      throw new Error("worker boot failed");
-    });
-
-    // fake timers：用例开始时无 pending 计时器（beforeEach 全新安装）
-    expect(vi.getTimerCount()).toBe(0);
-
     await expect(
-      runWorkflow(makeSpec({ budgetTimeMs: 60_000 }), deps),
+      runWorkflow(makeSpec(), deps),
     ).rejects.toThrow("worker boot failed");
 
-    // timer 挂载（scheduleTimeBudget）发生在 start 之前 → 抛错路径必须回收：
-    // 无 pending 计时器残留（若漏清理此处为 1，到期会误 abort 幽灵 runId）
-    expect(vi.getTimerCount()).toBe(0);
     // 既有行为不回归：runs Map 无该 runId 条目（abortRun not found 语义保持）
     expect(deps.runs.size).toBe(0);
-  });
-
-  it("带 budgetTimeMs 时调度时间预算计时器（真实消费：挂载 + 到期 time_limited）", async () => {
-    const deps = makeDeps();
-    const spec = makeSpec({ budgetTimeMs: 3000 });
-
-    const runId = await runWorkflow(spec, deps);
-    const run = deps.runs.get(runId)!;
-
-    // 生产行为范围①：budgetTimeMs>0 → RunRuntime.timeBudgetTimer 被真实挂载
-    //（scheduleTimeBudget 产出的 Node timer，非死代码 spy）
-    expect(run.runtime?.timeBudgetTimer).toBeDefined();
-
-    // 生产行为范围②：到期后 abortRun(time_limited) 真实触发——run 终局（[W2/V1]
-    // 断言换源：两态机字段停更，经终局记录判定），reason/error/通知全部落位
-    //（文件级 beforeEach 已 fake timers）
-    await vi.advanceTimersByTimeAsync(3000);
-    await flushMicrotasks();
-
-    expect(isRunSettled(run)).toBe(true);
-    expect(settledRecordOf(run.runId)).toMatchObject({ outcome: "time_limited" });
-    expect(run.state.error).toContain("Time budget exceeded");
-    expect(deps.appendEntry).toHaveBeenCalledWith("pending:unregister", {
-      id: runId,
-      reason: "time_limited",
-      status: "time_limited",
-    });
-  });
-
-  it("未传 budgetTimeMs → 不挂时间预算计时器（对照：runtime.timeBudgetTimer undefined）", async () => {
-    const deps = makeDeps();
-    const runId = await runWorkflow(makeSpec(), deps);
-    const run = deps.runs.get(runId)!;
-
-    expect(run.runtime?.timeBudgetTimer).toBeUndefined();
-
-    // 无预算 → 不存在到期 abort：推进 10min 后 run 仍未终局
-    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
-    await flushMicrotasks();
-    expect(isRunSettled(run)).toBe(false);
   });
 
   it("signal 已 abort → fail fast（抛错，不创建 run）", async () => {

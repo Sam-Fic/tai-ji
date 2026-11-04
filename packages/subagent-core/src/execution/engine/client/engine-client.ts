@@ -22,21 +22,18 @@
 //
 // [D9 逃生舱] TAIJI_SUBAGENT_TRANSPORT=local → 强制 local transport（优先于 control
 // env 激活判定）；运行期严重故障的快速回退通道，一个发布周期后删除（设计 D9）。
-// 超时域划分（R9-2 / R9-2b）的实现与注释在 reverse-router.ts（反向面）与本文件
-// 正向请求段；run 不设墙钟（任务级默认无超时，AGENTS.md 规则 19 / ADR-0047）。
+// 请求无时间上界（run 与控制范围单请求一致——原数据范围 10s 应答检查已随时间
+// 机制删除）；run 不设墙钟（任务级默认无超时，AGENTS.md 规则 19 / ADR-0047）。
 
 import {
-  CANCEL_SETTLE_GRACE_MS,
   ENGINE_PROTOCOL_VERSION,
   ENGINE_TRANSPORT_ERROR_CODES,
   EngineSdkError,
-  HANDSHAKE_TIMEOUT_MS,
   getLogger,
   isProtocolVersionCompatible,
   isResponseFrame,
   isNotificationFrame,
   isReverseRequestFrame,
-  SET_MODEL_REQUEST_TIMEOUT_MS,
   STDERR_TAIL_CHARS,
   engineProtocolMismatchError,
   type EngineHandleData,
@@ -105,10 +102,6 @@ function bridgeMirrorEventToCoreMirror(event: MirrorChangeEvent, mirror: Spawned
   notifyInFlightChanged();
 }
 
-/**
- * dispose 帧等待上界（设计 §3.6：dispose 上界 3s，超时即杀）。
- */
-const DISPOSE_GRACE_MS = 3_000;
 /** 协议帧违规日志的回显截断长度（非 NDJSON 行 / 未知帧的诊断留痕）。 */
 const FRAME_ECHO_MAX_CHARS = 200;
 
@@ -150,7 +143,7 @@ export type EngineClientState =
 
 /**
  * run 作用域反向通知路由（RemoteEngine.run 注册，终态后注销）。
- * 回调允许返回 Promise（数据范围 10s 应答检查的计时对象；同步回调不受检查影响）。
+ * 回调允许返回 Promise（反向应答检查由路由实现自持；同步回调不受检查影响）。
  * [H1 U6] 轮次相位消费口（旧第 9 反向通道）已随 chat 域相位机退役删除。
  */
 export interface RunRoute {
@@ -164,7 +157,6 @@ export interface RunRoute {
 interface PendingRequest {
   resolve: (result: unknown) => void;
   reject: (err: Error) => void;
-  timer: NodeJS.Timeout | undefined;
 }
 
 /** 引擎进程意外退出 / 被杀时在途请求的统一错误（附 stderr 尾）。 */
@@ -250,7 +242,6 @@ export class EngineClient {
         this.lastPartialHandle = partial;
       },
       sendResponse: (id, result) => this.sendResponse(id, result),
-      failEngine: (reason) => this.killAll(reason),
       isDisposed: () => this.disposed,
     };
     this.mirror.onChange((event) => {
@@ -570,7 +561,8 @@ export class EngineClient {
       ...(this.requestedRecordId !== undefined ? { recordId: this.requestedRecordId } : {}),
     });
 
-    // initialize 握手（HANDSHAKE_TIMEOUT_MS；版本越界 → mismatch + 不可用）。
+    // initialize 握手（无时间上界——收敛事实源 = initialize 应答 / 进程死亡退出链；
+    // 版本越界 → mismatch + 不可用）。
     const initParams = {
       protocolVersion: ENGINE_PROTOCOL_VERSION,
       hostInfo: {
@@ -580,22 +572,7 @@ export class EngineClient {
       },
       engineConfig: this.opts.engineConfig ?? {},
     };
-    let result: InitializeResult;
-    try {
-      result = (await this.request("initialize", initParams, {
-        timeoutMs: HANDSHAKE_TIMEOUT_MS,
-      })) as InitializeResult;
-    } catch (err) {
-      if (err instanceof EngineSdkError && err.code === "engine_handshake_timeout") {
-        throw new EngineSdkError(
-          "engine_handshake_timeout",
-          `engine "${this.engineId}" did not answer initialize within ${HANDSHAKE_TIMEOUT_MS}ms`,
-          "Check that the engine package is executable and speaks engine-protocol v1. "
-            + "The engine is marked unavailable until it answers a handshake.",
-        );
-      }
-      throw err;
-    }
+    const result = (await this.request("initialize", initParams)) as InitializeResult;
 
     if (!isProtocolVersionCompatible(result.protocolVersion)) {
       throw engineProtocolMismatchError(result.protocolVersion);
@@ -641,7 +618,6 @@ export class EngineClient {
     const pending = this.pending.get(frame.id);
     if (!pending) return; // 迟到应答（已超时被拒）——丢弃
     this.pending.delete(frame.id);
-    if (pending.timer !== undefined) clearTimeout(pending.timer);
     const error = frame.error as { code?: string; message?: string; recovery?: string } | undefined;
     if (error !== undefined && typeof error === "object") {
       pending.reject(
@@ -668,10 +644,10 @@ export class EngineClient {
   // ── 正向请求 ────────────────────────────────────────────────────────────
 
   /**
-   * 发帧①并等帧②。opts.timeoutMs = 数据范围超时域（initialize 等）；不传 = 任务级
-   * 默认无超时（run，AGENTS.md 规则 19 / ADR-0047）。
+   * 发帧①并等帧②（无时间上界——任务级默认无超时，AGENTS.md 规则 19 / ADR-0047；
+   * 进程死亡经退出链以 engine_crashed reject 收口全部在途请求）。
    */
-  request(method: string, params: unknown, opts?: { timeoutMs?: number }): Promise<unknown> {
+  request(method: string, params: unknown): Promise<unknown> {
     if (this.state === "disposed" || this.state === "unavailable") {
       return Promise.reject(
         this.unavailableReason
@@ -685,23 +661,10 @@ export class EngineClient {
     const id = this.nextRequestId++;
     const frame: RequestFrame = { id, method, params };
     return new Promise<unknown>((resolve, reject) => {
-      const pending: PendingRequest = { resolve, reject, timer: undefined };
-      if (opts?.timeoutMs !== undefined) {
-        pending.timer = setTimeout(() => {
-          this.pending.delete(id);
-          reject(
-            new EngineSdkError(
-              method === "initialize" ? "engine_handshake_timeout" : "engine_request_timeout",
-              `engine "${this.engineId}" did not answer ${method} (id=${id}) within ${opts.timeoutMs}ms`,
-              "Retry the operation; if it persists the engine process is faulted and will be rebuilt.",
-            ),
-          );
-        }, opts.timeoutMs);
-      }
+      const pending: PendingRequest = { resolve, reject };
       this.pending.set(id, pending);
       if (!this.writeFrame(frame)) {
         this.pending.delete(id);
-        if (pending.timer !== undefined) clearTimeout(pending.timer);
         reject(
           engineCrashedError(
             `stdin write failed while sending ${method}`,
@@ -722,22 +685,18 @@ export class EngineClient {
     };
   }
 
-  /** cancel 受理窗口 = CANCEL_SETTLE_GRACE_MS；终态收敛由调用方（RemoteEngine）等 run 应答。 */
+  /** cancel 受理帧；终态收敛由调用方（RemoteEngine）等 run 应答。 */
   async cancelRun(runId: string, reason: string): Promise<void> {
-    await this.request("cancel", { runId, reason }, { timeoutMs: CANCEL_SETTLE_GRACE_MS });
+    await this.request("cancel", { runId, reason });
   }
 
   /**
    * [subagent-model-switch §7.3] setModel 类型化调用点（cancelRun 同族）：控制范围单
-   * 请求，上界 SET_MODEL_REQUEST_TIMEOUT_MS（10s——≥ 引擎侧两阶段窗 2×3s + 协议
-   * 余量；控制范围单请求必须秒级有界，宿主不悬挂）。错误经 error 帧 reject 为
-   * EngineSdkError（code 原样保留——三型失败分型 + engine_run_not_active 无活进程
-   * 形态，宿主编排按 §7.2 处置表分派）。
+   * 请求（无时间上界）。错误经 error 帧 reject 为 EngineSdkError（code 原样保留——
+   * 三型失败分型 + engine_run_not_active 无活进程形态，宿主编排按 §7.2 处置表分派）。
    */
   async setModel(params: SetModelParams): Promise<SetModelResult> {
-    const result = await this.request("setModel", params, {
-      timeoutMs: SET_MODEL_REQUEST_TIMEOUT_MS,
-    });
+    const result = await this.request("setModel", params);
     return result as SetModelResult;
   }
 
@@ -757,7 +716,7 @@ export class EngineClient {
   }
 
   /**
-   * 协议 dispose：dispose 帧（3s 上界）→ 按进程组终止兜底 → 清理。幂等。
+   * 协议 dispose：dispose 帧（无时间上界）→ 按进程组终止兜底 → 清理。幂等。
    * dispose 后首个 run 的重建由新的连接状态机承担（EnginePort.dispose 契约）。
    */
   async dispose(): Promise<void> {
@@ -766,9 +725,9 @@ export class EngineClient {
     // 句柄，通道存活由 request/writeFrame 回执表达（缺省继续，失败经 catch 兜底）。
     if (this.state === "ready" && (this.localTransport?.isProcessAlive() ?? true)) {
       try {
-        await this.request("dispose", {}, { timeoutMs: DISPOSE_GRACE_MS });
+        await this.request("dispose", {});
       } catch (err) {
-        // dispose 帧失败（超时/进程已死）→ 直接走杀链兜底，debug 留痕。
+        // dispose 帧失败（进程已死）→ 直接走杀链兜底，debug 留痕。
         logger.debug(
           `[engine-client:${this.engineId}] dispose frame failed, falling back to kill chain: ${
             err instanceof Error ? err.message : String(err)
@@ -818,7 +777,6 @@ export class EngineClient {
     if (this.disposed) return;
     logger.warn(`[engine-client:${this.engineId}] transport error: ${err.message}`);
     for (const [, pending] of this.pending) {
-      if (pending.timer !== undefined) clearTimeout(pending.timer);
       pending.reject(err);
     }
     this.pending.clear();
@@ -858,7 +816,6 @@ export class EngineClient {
     local?.removePidfile();
     const err = engineCrashedError(detail, this.stderrTail);
     for (const [, pending] of this.pending) {
-      if (pending.timer !== undefined) clearTimeout(pending.timer);
       pending.reject(err);
     }
     this.pending.clear();

@@ -6,11 +6,10 @@
  *  - registry 读：`<dataDir>/ext-sessions/<sessionId>/background-tasks/registry.json`
  *    （getSessionRegistryPath 推导，与 extension 写侧同一新公式；损坏 → corrupt 语义：
  *    空表 + 错误标记，不 throw；垃圾 sid ENOENT 静默空表）
- *  - 变更检测（D2，三触发面共享同一 last-seen mtime 判定，单广播源）：
- *      ① 2s mtime 轮询（变化才重读+广播）；
- *      ② pi 事件钩子（event-adapter 旁路转发，u-runtime-rpc 组合根接线到
+ *  - 变更检测（D2，两触发面共享同一 last-seen mtime 判定，单广播源）：
+ *      ① pi 事件钩子（event-adapter 旁路转发，u-runtime-rpc 组合根接线到
  *         checkForChanges）触发对 watched 集合的一次完整变更检测；
- *      ③ service 自写自检（kill 的预写/终态写成功后自触发，killing 即时广播不占轮询节拍）。
+ *      ② service 自写自检（kill 的预写/终态写成功后自触发，killing 即时广播）。
  *    广播回调以注入形式提供（onTasksChanged(sessionId)），本单元不接 message-bus
  *    （u-runtime-rpc 负责把回调接到 session 级 publish + 数据组装）。
  *  - kill 五分支矩阵（D6 表格逐行）+ 身份验证两档 + 锁 `<registry.json>.lock`
@@ -58,9 +57,6 @@ const LOG_TAG = '[bg-task-service]'
 const processFallbackLog: ProcessFallbackLogger = (step, err) =>
   console.debug(`${LOG_TAG} ${step}:`, err instanceof Error ? err.message : err)
 
-/** 默认 mtime 轮询周期（D2：2s，与 extension poller tick 同节奏）。 */
-const DEFAULT_POLL_INTERVAL_MS = 2_000
-
 /** kill 结果（D3 killResult reason 枚举；killed=true 恒 reason=killed）。 */
 export interface BackgroundTaskKillResult {
   killed: boolean
@@ -101,8 +97,6 @@ export interface BackgroundTaskServiceDeps {
 export interface BackgroundTaskServiceOptions {
   /** 变更广播回调（注入形式；u-runtime-rpc 接 message-bus session 级 publish）。 */
   onTasksChanged: (sessionId: string) => void
-  /** mtime 轮询周期（默认 2s，D2）。 */
-  pollIntervalMs?: number
   /** pi agent 目录（缺省 getPiAgentDir() 动态推导；测试注入 tmp）。 */
   piAgentDir?: string
   /** pid 原语注入。 */
@@ -125,18 +119,15 @@ type InLockOutcome =
 
 export class BackgroundTaskService {
   private readonly onTasksChanged: (sessionId: string) => void
-  private readonly pollIntervalMs: number
   private readonly agentDir: string
   private readonly deps: ResolvedDeps
   /** watched sessionId 集合（D8③：list 加入 / removeSessionEntry 退订——接线在 u-runtime-rpc）。 */
   private readonly watched = new Set<string>()
-  /** 共享 last-seen mtime（轮询/事件钩子/自写自检三方共用的唯一变更判定状态，D2）。 */
+  /** 共享 last-seen mtime（事件钩子/自写自检两方共用的唯一变更判定状态，D2）。 */
   private readonly lastSeenMtime = new Map<string, number | undefined>()
-  private timer: ReturnType<typeof setInterval> | null = null
 
   constructor(options: BackgroundTaskServiceOptions) {
     this.onTasksChanged = options.onTasksChanged
-    this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
     this.agentDir = options.piAgentDir ?? getPiAgentDir()
     this.deps = {
       isPidAlive: options.deps?.isPidAlive ?? isPidAlive,
@@ -205,8 +196,8 @@ export class BackgroundTaskService {
   }
 
   /**
-   * 对 watched 集合跑一次完整变更检测：mtime 变化才重读+广播。轮询 tick、pi 事件
-   * 钩子（u-runtime-rpc 接线）、service 自写自检三方都收敛到本方法——共享 last-seen
+   * 对 watched 集合跑一次完整变更检测：mtime 变化才重读+广播。pi 事件
+   * 钩子（u-runtime-rpc 接线）、service 自写自检两方都收敛到本方法——共享 last-seen
    * 保证同一变化至多广播一次（D2：事件钩子不是第二广播源）。
    */
   checkForChanges(): void {
@@ -219,19 +210,8 @@ export class BackgroundTaskService {
     }
   }
 
-  /** 启动 2s mtime 轮询（幂等；unref 不持进程——fake timers 下无 unref 短路跳过）。 */
-  start(): void {
-    if (this.timer !== null) return
-    this.timer = setInterval(() => this.checkForChanges(), this.pollIntervalMs)
-    this.timer.unref?.()
-  }
-
-  /** 停止轮询并清空 watched 状态（service 生命周期终点）。 */
+  /** 清空 watched 状态（service 生命周期终点）。 */
   dispose(): void {
-    if (this.timer !== null) {
-      clearInterval(this.timer)
-      this.timer = null
-    }
     this.watched.clear()
     this.lastSeenMtime.clear()
   }
@@ -253,22 +233,23 @@ export class BackgroundTaskService {
 
   /**
    * 分支③收尾（pid 已死 / pid 复用视为死）：不发 kill 信号；锁内 RMW 写终态——属主活：
-   * exited 过渡值（poller ≤2s 覆盖为权威值）；属主死：orphaned（对齐 reaper 分支③）。
-   * 实现顺序：判活重查置于锁内重读之后（writeMerged 范式，防 stale 覆盖 poller 新鲜终态）。
+   * exited 过渡值（extension exit-collector 随后覆盖为权威值）；属主死：orphaned（对齐
+   * reaper 分支③）。实现顺序：判活重查置于锁内重读之后（writeMerged 范式，防 stale
+   * 覆盖 exit-collector 新鲜终态）。
    */
   private finalizeDeadEntry(registryPath: string, taskId: string): BackgroundTaskKillResult {
     let outcome: InLockOutcome
     try {
       outcome = withFileLockSync<InLockOutcome>(registryPath, () => {
         const fresh = readRegistryEntriesWithStatus(registryPath).entries.find((e) => e.taskId === taskId)
-        // 锁内重读：poller 已写权威终态 → 不覆盖
+        // 锁内重读：exit-collector 已写权威终态 → 不覆盖
         if (!fresh || isTerminalBackgroundTaskState(fresh.state)) return { kind: 'already-exited' }
         // 判活重查（锁内重读之后）：死而复生 = 判定基础失效（pid 秒级复用等极端竞态），
         // 宁不杀勿误杀 → 拒绝并提示可重试（重试将走 pid 活路径 + 完整身份验证两档）
         if (this.deps.isPidAlive(fresh.pid)) return { kind: 'identity-unverifiable' }
         try {
           if (this.deps.isPidAlive(fresh.ownerPiPid)) {
-            // ③ 属主活：过渡终态（poller 覆盖为权威值；runtime 写先于 poller 属设计允许的串行双写）
+            // ③ 属主活：过渡终态（exit-collector 覆盖为权威值；runtime 写先于 exit 收尾属设计允许的串行双写）
             writeExitedTransitionalLocked(registryPath, taskId)
           } else {
             // ③ 属主死：orphaned（对齐 reaper 分支③，锁内版防嵌套取锁）
@@ -276,7 +257,7 @@ export class BackgroundTaskService {
           }
           return { kind: 'already-exited' }
         } catch (err) {
-          // ⑤ 终态写失败：条目停留原状态（下次 app 启动 reaper 全量扫描兜底 / 属主活由 poller 收尾）
+          // ⑤ 终态写失败：条目停留原状态（下次 app 启动 reaper 全量扫描兜底 / 属主活由 exit-collector 收尾）
           console.warn(`${LOG_TAG} dead-entry terminal write failed: taskId=${taskId}`, err instanceof Error ? err.message : err)
           return { kind: 'write-failed' }
         }
@@ -306,12 +287,12 @@ export class BackgroundTaskService {
         // ⑤：未发信号则不杀；条目停留原状态
         return { killed: false, reason: 'registry-write-failed' }
       case 'signal-killing':
-        // ①：killing 已预写（锁内）→ 发信号 → poller ≤2s 边沿读回 intent 终态化（reason=killed）
+        // ①：killing 已预写（锁内）→ 发信号 → exit-collector 经 ChildProcess exit 事件边沿读回 intent 终态化（reason=killed）
         this.deps.killProcessTree(killPid ?? outcome.fresh.pid)
         this.checkForChanges()
         return { killed: true, reason: 'killed' }
       case 'signal-orphan': {
-        // ②：属主已死 → 发信号 → 锁内写 orphaned 终态（本分支即终态，无 poller 收尾）
+        // ②：属主已死 → 发信号 → 锁内写 orphaned 终态（本分支即终态，无 exit 收尾依赖）
         this.deps.killProcessTree(killPid ?? outcome.fresh.pid)
         const written = writeOrphanedTerminal(registryPath, outcome.fresh)
         if (!written) {
@@ -360,7 +341,7 @@ export class BackgroundTaskService {
     try {
       outcome = withFileLockSync<InLockOutcome>(registryPath, () => {
         const fresh = readRegistryEntriesWithStatus(registryPath).entries.find((e) => e.taskId === taskId)
-        // 锁内重读：poller 竞争已终态化 → 不覆盖
+        // 锁内重读：exit-collector 竞争已终态化 → 不覆盖
         if (!fresh || isTerminalBackgroundTaskState(fresh.state)) return { kind: 'already-exited' }
         // 任务 pid 判活重查（置于锁内重读之后）：外层判活可能已 stale
         if (!this.deps.isPidAlive(fresh.pid)) {

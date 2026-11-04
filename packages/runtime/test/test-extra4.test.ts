@@ -1,8 +1,8 @@
-import { DEFAULT_RETRY_BUDGET_MS as EXT_RETRY_BUDGET_MS, DEFAULT_RETRY_DELAY_MS as EXT_RETRY_DELAY_MS, DEFAULT_STALE_MS as EXT_STALE_MS, withFileLockSync as extWithFileLockSync } from '../../../extensions/shared/file-lock/src/file-lock.js';
+import { withFileLockSync as extWithFileLockSync } from '../../../extensions/shared/file-lock/src/file-lock.js';
 import { INTEGRATION_TESTS_ENABLED, INTEGRATION_TESTS_SKIP_REASON } from '../../../test-guard/integration-gate.ts';
 import { PiConfigStore } from '../src/infra/pi/pi-config-store.js';
 import { PiAgentEndEvent, PiAgentSettledEvent, PiAutoRetryEndEvent, PiAutoRetryStartEvent, PiCompactionEndEvent, PiCompactionStartEvent, PiEntryAppendedEvent, PiExtensionErrorEvent, PiQueueUpdateEvent, PiSessionInfoChangedEvent, PiThinkingLevelChangedEvent, PiToolExecutionEndEvent, PiToolExecutionResult, PiToolExecutionUpdateEvent, PiTurnEndEvent, PiUsage, type PiEvent } from '../src/infra/pi/pi-protocol.js';
-import { SettingsCorruptedError, getActiveSettingsPath, invalidateSettingsCache, readSettings, setSettingsLockTimingForTest, setSettingsPath, type PiSettings, updateSettingsFields, writeSettings } from '../src/infra/pi/pi-settings-store.js';
+import { SettingsCorruptedError, getActiveSettingsPath, invalidateSettingsCache, readSettings, setSettingsPath, type PiSettings, updateSettingsFields, writeSettings } from '../src/infra/pi/pi-settings-store.js';
 import { extractLatestModelFromJsonl } from '../src/infra/pi/session-file-utils.js';
 import { PiSessionStore } from '../src/infra/pi/session-store.js';
 import { IConfigService, IEventAdapter, IExtensionService, type IMessageBroker, type ISessionService } from '../src/interfaces.js';
@@ -21,7 +21,7 @@ import { SessionService } from '../src/services/session/session-service.js';
 import { ConnectionManager } from '../src/transport/connection-manager.js';
 import { SessionMessageHandler, type SessionHandlerContext } from '../src/transport/session-message-handler.js';
 import { SESSION_NOT_FOUND } from '../src/utils/errors.js';
-import { DEFAULT_RETRY_BUDGET_MS, DEFAULT_RETRY_DELAY_MS, DEFAULT_STALE_MS, withFileLockSync } from '../src/utils/file-lock.js';
+import { withFileLockSync } from '../src/utils/file-lock.js';
 import { ClientMessage, ProviderId, type ServerMessage, type ProviderInfo } from '@taiji/shared';
 import { ZCODE_HOST_DB_SUFFIX, ZCODE_ISOLATED_DB_SEGMENTS } from '@zhushanwen/subagent-engine-sdk';
 import { hostZcodeDbPath, zcodeIsolatedDbPath } from '@zhushanwen/zcode-session-source';
@@ -76,9 +76,9 @@ vi.mock('@zhushanwen/pi-file-lock/core', async (importOriginal) => {
   lockSim.actual = actual
   return {
     ...actual,
-    acquireLockSync: (filePath: string, opts?: { staleMs?: number; log?: (msg: string) => void }) => {
+    acquireLockSync: (filePath: string) => {
       const sim = lockSim.holderOnce
-      if (!sim) return actual.acquireLockSync(filePath, opts)
+      if (!sim) return actual.acquireLockSync(filePath)
       lockSim.holderOnce = null
       sim(filePath)
       // 获取请求撞在注入的持锁窗口内：message/fields 照抄 lock-core.ts 的 elocked()
@@ -106,8 +106,6 @@ beforeEach(async () => {
   setSettingsPath(settingsPath)
 })
 afterEach(async () => {
-  // 恢复锁参数默认值，避免压缩预算泄漏到后续用例
-  setSettingsLockTimingForTest({})
   // 持锁窗口注入只允许用例内单次生效，防断言失败后泄漏到后续用例
   lockSim.holderOnce = null
   await rmP(tmpDir, { recursive: true, force: true })
@@ -307,10 +305,8 @@ describe('pi-settings-store', () => {
       expect(result.packages).toEqual(['p2'])
     })
 
-    it('fails fast with ELOCKED when lock is held beyond retry budget', () => {
+    it('fails fast with ELOCKED when lock is held', () => {
       writeSettings({ defaultModel: 'v1' })
-      // 压缩预算：10ms/次 × 预算 60ms，快速走完 fail-fast 路径
-      setSettingsLockTimingForTest({ retryDelayMs: 10, retryBudgetMs: 60 })
       const release = lockfile.lockSync(settingsPath, { realpath: false })
       let err: unknown
       try {
@@ -320,43 +316,12 @@ describe('pi-settings-store', () => {
       } finally {
         release()
       }
-      // fail-fast：预算耗尽抛错（对齐 pi 放弃保存语义），而非静默丢弃或死等
+      // fail-fast：锁冲突立即抛错（对齐 pi 放弃保存语义），而非静默丢弃或死等
       expect((err as { code?: string } | undefined)?.code).toBe('ELOCKED')
       expect(readSettings().defaultModel).toBe('v1') // 本次写入被放弃
       // 锁释放后恢复正常
       updateSettingsFields('model', s => { s.defaultModel = 'after' })
       expect(readSettings().defaultModel).toBe('after')
-    })
-
-    // 真子进程版的确定性等价物（单测层默认跑）：真实子进程「持锁 150ms 后释放」的
-    // 挂钟窗口压缩为 0 窗口注入（见文件头 mock 说明）——锁等待语义不变：首个获取
-    // 请求撞持锁窗口 ELOCKED → busy-wait 重试 → 持锁者释放后真实获取 → 锁内重读
-    // 吃进并发写方的值 → 本域 merge 写回。真子进程形态（spawn 挂钟无完成信号可等，
-    // 判据第三档）在下方 TAIJI_TEST_INTEGRATION 门控块。
-    it('busy-waits and acquires after a concurrent holder releases（0 窗口注入 + 0 重试间隔，确定性锁时序）', () => {
-      writeSettings({ defaultModel: 'v1', packages: ['p1'] })
-      let holderWindows = 0
-      lockSim.holderOnce = (filePath) => {
-        holderWindows++
-        const release = lockSim.actual!.acquireLockSync(filePath)
-        try {
-          writeFileSync(filePath, JSON.stringify({ defaultModel: 'pi-holder', packages: ['p1'], defaultThinkingLevel: 'high' }), 'utf-8')
-        } finally {
-          release()
-        }
-      }
-      // 0 重试间隔：ELOCKED 后 sleepSync(0) 立即重试（Atomics.wait 0ms 不阻塞 event loop）
-      setSettingsLockTimingForTest({ retryDelayMs: 0 })
-
-      updateSettingsFields('extension', s => { s.packages = ['p2'] })
-
-      expect(holderWindows).toBe(1) // 恰经历一次真实持锁窗口（首次获取确实 ELOCKED 过）
-      const result = readSettings()
-      // busy-wait 到释放后获取，锁内重读吃进并发写方的 model 域字段（窗口 W1/W2 关闭）
-      expect(result.defaultModel).toBe('pi-holder')
-      expect(result.defaultThinkingLevel).toBe('high')
-      expect(result.packages).toEqual(['p2']) // 本域（extension）写在 merge 后落盘
-      expect(existsSync(`${settingsPath}.lock`)).toBe(false) // 锁正常释放清理
     })
 
     // [HISTORICAL] 2026-08-20 PR #185：真实子进程持锁用例显式超时——真实 spawn node
@@ -1437,18 +1402,6 @@ beforeEach(async () => {
 afterEach(async () => {
   await rm_z2(tmpDir_m2, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
 })
-describe('file-lock parity（runtime ↔ extension sync 孪生实现）', () => {
-  it('两侧默认参数相等（stale / retry 间隔 / 重试预算）', () => {
-    expect(EXT_STALE_MS).toBe(DEFAULT_STALE_MS)
-    expect(EXT_RETRY_DELAY_MS).toBe(DEFAULT_RETRY_DELAY_MS)
-    expect(EXT_RETRY_BUDGET_MS).toBe(DEFAULT_RETRY_BUDGET_MS)
-  })
-
-  it('默认值与登记表锁协议一致（stale 30s / 25ms / 1s，data-source-registry §6）', () => {
-    expect(DEFAULT_STALE_MS).toBe(30_000)
-    expect(DEFAULT_RETRY_DELAY_MS).toBe(25)
-    expect(DEFAULT_RETRY_BUDGET_MS).toBe(1_000)
-  })
 
   it('两侧共用同一 lockfile：一侧持锁时另一侧 fail-fast，释放后可获取', () => {
     const target = join(tmpDir_m2, 'parity-target.json')
@@ -1459,10 +1412,7 @@ describe('file-lock parity（runtime ↔ extension sync 孪生实现）', () => 
       // runtime 持锁期间，extension 侧取同一把锁：压缩预算快速验证 fail-fast
       //（抛 ELOCKED 而非静默拿到——证明两侧 lockfile 路径推导一致，互斥真实成立）
       expect(() =>
-        extWithFileLockSync(target, () => events.push('ext-in-runtime-critical'), {
-          retryDelayMs: 5,
-          retryBudgetMs: 50,
-        }),
+        extWithFileLockSync(target, () => events.push('ext-in-runtime-critical')),
       ).toThrow()
       expect(events).toEqual(['runtime-critical'])
     })
@@ -1533,7 +1483,6 @@ describe.skipIf(
     120_000,
   )
 })
-});
 
 // ======================================================================
 // ← test/runtime-wiring.test.ts

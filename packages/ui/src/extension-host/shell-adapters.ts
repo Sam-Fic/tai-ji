@@ -6,7 +6,7 @@
  * - createWsPluginMessageSource：WS 下行（events 通道 plugin:/extension: 消息）→
  *   PluginMessageSource（MessageBusBridge 的输入；core/extension-host/plugin-message-source.ts
  *   注释明确「壳把 transport 层适配成 source 注入」）
- * - createCompanionDialogAdapters：bus 'ui-request' + WS plugin:uiRequestExpired →
+ * - createCompanionDialogAdapters：bus 'ui-request' →
  *   DialogRequestSource / UiResponseTransport（companion-band-source.ts 契约的壳侧实现），
  *   壳层能力（pendingSend 收尾锚点 / 未送达提示）经可选回调注入（纯翻译件不依赖壳 i18n/store）
  *
@@ -18,9 +18,6 @@
  * → source.onUiRequest（无 sid 跳过 / C4 四键排除）→ convertToDialogRequest →
  * DialogRequestQueue → CompanionBand 渲染 → 用户操作 → queue.respond → transport 回传
  * （pi 源 → extension.ui_response / plugin 源 → plugin.uiResponse）。
- *
- * 超时撤窗：WS plugin:uiRequestExpired（plugin 源 dialog 到期取消，D2）经
- * onUiRequestExpired → requestId 反查 sessionId → queue 按 requestId 出队（不发回传）。
  */
 import type {
   IncomingPluginMessage,
@@ -203,7 +200,7 @@ export interface CompanionDialogAdaptersTesting {
 }
 
 export interface CompanionDialogAdapters {
-  /** CompanionBand 数据源（bus 'ui-request' + WS plugin:uiRequestExpired 适配） */
+  /** CompanionBand 数据源（bus 'ui-request' 适配） */
   source: DialogRequestSource
   /** 回传双通道（pi 源 extension.ui_response / plugin 源 plugin.uiResponse） */
   transport: UiResponseTransport
@@ -214,13 +211,13 @@ export interface CompanionDialogAdapters {
 /**
  * 创建 CompanionBand 的 source + transport 适配对（FR2/FR7，AC2/AC6/AC9）。
  *
- * source 与 transport 必须成对出自同一次调用：requestId → sessionId 反查表（撤窗广播无
- * sid，投递流记录归属）由本 factory 单点持有、两适配器共管——source.onUiRequest 写入 /
- * transport respond（sendPiResponse + sendPluginResponse 双通道）即删。
+ * source 与 transport 必须成对出自同一次调用：requestId → sessionId 反查表（应答路由
+ * 不携带 sid，投递流记录归属）由本 factory 单点持有、两适配器共管——source.onUiRequest
+ * 写入 / transport respond（sendPiResponse + sendPluginResponse 双通道）即删。
  *
  * [G1 / 2026-09-14 内存审计 §3.4，双壳共同持有] requestIdSessions 表条目的有效清理路径
- * 只有 respond（pi 源 dialog 无撤窗广播——extension UI 请求已无超时机制）。respond 即删；
- * plugin 源另有撤窗广播删除点。生产每壳单 factory 调用（单 source + 单 transport）；
+ * 只有 respond（pi 与 plugin 源 dialog 均无撤窗广播——插件 dialog 已无超时机制）。
+ * respond 即删。生产每壳单 factory 调用（单 source + 单 transport）；
  * 每次调用新表，测试跨用例天然隔离（共用实例场景经 __testing.resetRequestIdSessionsForTest）。
  *
  * source.onUiRequest：
@@ -228,11 +225,6 @@ export interface CompanionDialogAdapters {
  * - C4 四键排除：form ∨ askUser ∨ scheduleCreate ∨ planReview 跳过投递（统一表单 overlay /
  *   planReview 审批条由 useExtensionUI 消费——Panel inline 独占；漏排除 = 空壳 dialog 误触
  *   + 双 UI 并存，违反「零重叠」契约）
- * source.onUiRequestExpired：WS plugin:uiRequestExpired（timeout-plugin-service D2 超时撤窗，
- * 不经 bus——bridge 无此归一项）。按 requestId 反查（onUiRequest 流经时记录 requestId→sessionId
- * 映射，投递时归属 sid，MF-4 反查为主）；Map miss 时 payload 可选 sessionId 兜底（壳重启）。
- * 查不到（弹窗已 respond 关闭 / 从未投递 / 广播迟到于出队）→ noop 幂等（V4b miss 语义：
- * 广播无条件发出，miss 是正常时序）。
  *
  * transport（回传双通道，返回 boolean = WS 送达与否）：
  * - sendPiResponse：复用 sendExtensionUIResponse（extension.ui_response，method 透传，
@@ -241,8 +233,7 @@ export interface CompanionDialogAdapters {
  * - sendPluginResponse：发 plugin.uiResponse（runtime UiRequestQueue.handleResponse 消费，AC6）
  * - 未送达（false）：表项保留（DialogRequestQueue.respond 见 false 不出队，连接恢复后同
  *   requestId 重发幂等——M1/RD-3#1）+ notifyNotDelivered 壳层提示
- * - [G1] 双通道送达即删反查表项——删除后迟到的撤窗广播按 miss noop 语义跳过，
- *   不误触已达应答 dialog
+ * - [G1] 双通道送达即删反查表项
  */
 // ── [G1] requestId→sessionId 反查表（模块级共享；dialog 撤窗/应答路由）────────
 
@@ -309,26 +300,9 @@ export function createCompanionDialogAdapters(
         // respond 回传，常驻订阅宿主 = PlanModeBar）——不落 CompanionBand 原始 dialog 渲染
         // marker 控制符 title。
         if (e.request.planReview === true) return
-        // D2 撤窗反查表：同一 requestId 重复投递（实时帧 + 快照双源）幂等覆盖
+        // G1 反查表：同一 requestId 重复投递（实时帧 + 快照双源）幂等覆盖
         requestIdSessions.set(e.request.requestId, e.sessionId)
         handler(convertToDialogRequest(e))
-      })
-    },
-    onUiRequestExpired(handler) {
-      return onGlobal((msg) => {
-        if (msg.type !== 'plugin:uiRequestExpired') return
-        const payload = msg.payload as { requestId?: unknown; sessionId?: unknown }
-        if (typeof payload.requestId !== 'string') return
-        // MF-4：requestId 反查（onUiRequest 投递时记录的权威归属 sid）为主——payload.sessionId
-        // 是撤窗时点的活跃 sid（S1 修复引入），投递后切换 session 会路由错分区；payload sid
-        // 降为 Map miss 兜底（壳重启 / 旧版 runtime 未记录条目）
-        const sessionId = requestIdSessions.get(payload.requestId)
-          ?? (typeof payload.sessionId === 'string' ? payload.sessionId : undefined)
-        // miss noop 幂等（V4b）：已 respond 关闭 / 排队中从未展示 / 未知请求的撤窗广播
-        // 直接忽略；命中则先删表项（生命周期至撤窗/respond 为止，G1）再出队。
-        if (sessionId === undefined) return
-        requestIdSessions.delete(payload.requestId)
-        handler({ sessionId, requestId: payload.requestId })
       })
     },
   }

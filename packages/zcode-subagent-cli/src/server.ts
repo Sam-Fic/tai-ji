@@ -29,7 +29,6 @@ import {
   type InitializeResult,
   type ProbeReport,
   type ReadParams,
-  type ReverseRequestClock,
   type ReverseResponseResult,
   type RunParams,
   type SessionView,
@@ -48,7 +47,6 @@ import {
   unknownMethodError,
   writeRunEvent,
   type FrameLoopContext,
-  REVERSE_TIMEOUT_DEFAULT_MS,
   toProtocolError as toProtocolErrorShared,
   type ActiveRun,
   type FrameWriter,
@@ -64,14 +62,10 @@ export interface EngineProtocolServerOptions {
   write: FrameWriter;
   /** 引擎实例（缺省 createDefaultZcodeEngine——测试注入 fake/DI 实例）。 */
   engine?: EnginePort;
-  /** 反向请求计时侧（armEngineSelfDestruct 产物；缺省不计时——测试用）。 */
-  reverseClock?: ReverseRequestClock;
-  /** 应答等待缺省超时（反向请求两阶段等待上限兜底；默认 REVERSE_TIMEOUT_DEFAULT_MS）。 */
-  reverseTimeoutMs?: number;
 }
 
-// [§2.11] ReversePending / REVERSE_TIMEOUT_DEFAULT_MS / ActiveRun / FrameWriter 共用
-// SDK `./server` 子入口的声明单源。
+// [§2.11] ReversePending / ActiveRun / FrameWriter 共用 SDK `./server` 子入口的
+// 声明单源。
 
 /**
  * 引擎协议服务器。生命周期 = 进程生命周期（单引擎实例，无重建逻辑——崩溃重建归
@@ -81,8 +75,6 @@ export interface EngineProtocolServerOptions {
 export class EngineProtocolServer {
   private readonly write: FrameWriter;
   private readonly engine: EnginePort;
-  private readonly reverseClock: ReverseRequestClock | undefined;
-  private readonly reverseTimeoutMs: number;
   private readonly frameLoop: FrameLoopContext;
   private readonly activeRuns = new Map<string, ActiveRun>();
   private readonly reversePending = new Map<string, ReversePending>();
@@ -92,8 +84,6 @@ export class EngineProtocolServer {
   constructor(opts: EngineProtocolServerOptions) {
     this.write = opts.write;
     this.engine = opts.engine ?? createDefaultZcodeEngine();
-    this.reverseClock = opts.reverseClock;
-    this.reverseTimeoutMs = opts.reverseTimeoutMs ?? REVERSE_TIMEOUT_DEFAULT_MS;
     this.frameLoop = {
       write: this.write,
       settleReverse: (id, frame) => this.settleReverse(id, frame),
@@ -250,8 +240,6 @@ export class EngineProtocolServer {
       {
         write: this.write,
         pending: this.reversePending,
-        timeoutMs: this.reverseTimeoutMs,
-        ...(this.reverseClock !== undefined ? { clock: this.reverseClock } : {}),
         nextId: () => `rev-${++this.revSeq}`,
       },
       method,
@@ -259,14 +247,11 @@ export class EngineProtocolServer {
     );
   }
 
-  /** 反向请求应答落位（ack 两阶段：{ack:true}/{unsupported:true}/{ok:true} 均先 ack 计时侧）。 */
+  /** 反向请求应答落位（原 ack 计时侧登记已随自灭计时辅助判据删除）。 */
   private settleReverse(id: number | string, frame: { result?: unknown; error?: unknown }): void {
     const pending = this.reversePending.get(String(id));
     if (pending === undefined) return;
     this.reversePending.delete(String(id));
-    clearTimeout(pending.timer);
-    this.reverseClock?.acked(String(id));
-    this.reverseClock?.settled(String(id));
     if (frame.error !== undefined) pending.reject(new Error(`reverse request ${String(id)} rejected: ${toErrorMessage(frame.error)}`));
     else pending.resolve(frame.result as ReverseResponseResult);
   }

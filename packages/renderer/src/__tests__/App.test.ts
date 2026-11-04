@@ -21,15 +21,8 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { nextTick, ref } from 'vue'
+import { ref } from 'vue'
 import { flushPromises } from '@vue/test-utils'
-import { dispatchGlobal } from '@taiji/core/transport/api'
-import {
-  isModalSurfaceOpen,
-  openShieldingSurfaces,
-  resetModalSurfaceRegistry,
-} from '@/composables/features/app/modal-surface-registry'
-import { _resetMemoryPressureForTest } from '@/composables/useMemoryPressure'
 
 // 可控的 connectionState（App.vue 的 watch / 分支渲染数据源；外部修改触发 watch）
 const connectionState = ref<'disconnected' | 'connected' | 'failed' | 'waiting-runtime'>('failed')
@@ -308,70 +301,6 @@ describe('RD-3#2：连接屏显示 runtime 启动失败真因', () => {
 
     expect(wrapper.find('[data-testid="runtime-error-cause"]').exists()).toBe(false)
     expect(wrapper.text()).toContain(GENERIC_FAILED_TEXT)
-  })
-})
-
-describe('内存压力提示条 surface 注册（§6.7 view 遮蔽族，App.vue 内联块的注册读点）', () => {
-  let wrapper: VueWrapper | null = null
-
-  beforeEach(() => {
-    setActivePinia(createPinia())
-    vi.clearAllMocks()
-    ipcHolder.runtimeErrorCb = null
-    ipcHolder.pullResolve = null
-    connectionState.value = 'failed'
-    resetModalSurfaceRegistry()
-    _resetMemoryPressureForTest()
-  })
-
-  afterEach(() => {
-    wrapper?.unmount()
-    wrapper = null
-    _resetMemoryPressureForTest()
-  })
-
-  function mountApp(): VueWrapper {
-    connectionState.value = 'failed'
-    return mount(App)
-  }
-
-  const WARN_PAYLOAD = {
-    level: 'warn' as const,
-    heapUsed: 8,
-    heapSizeLimit: 10,
-    usedPercent: 80,
-    warnPercent: 70,
-    criticalPercent: 85,
-  }
-
-  it('挂载即注册（关态在册）：level normal → isOpen=false，不入 view 遮蔽报告', async () => {
-    wrapper = mountApp()
-    await flushPromises()
-    ipcHolder.pullResolve!(null)
-    await flushPromises()
-
-    expect(isModalSurfaceOpen('memory-pressure-bar'), '常驻挂载即注册，读点直读 level 状态本体').toBe(false)
-    expect(openShieldingSurfaces()).toEqual([])
-  })
-
-  it('warn 广播 → isOpen 翻转：条渲染前 rect 读点 null（不带 rect 上报），渲染后 rect 实测成键', async () => {
-    wrapper = mountApp()
-    await flushPromises()
-    ipcHolder.pullResolve!(null)
-    await flushPromises()
-
-    dispatchGlobal({ type: 'watchdog:memoryPressure', payload: WARN_PAYLOAD })
-    const before = openShieldingSurfaces()
-    expect(before, 'isOpen 状态本体直读（不依赖 DOM 渲染时机）').toEqual([
-      { id: 'memory-pressure-bar', mode: 'intersecting' },
-    ])
-
-    await nextTick()
-    expect(wrapper.find('[data-testid="memory-pressure-bar"]').exists()).toBe(true)
-    const after = openShieldingSurfaces()
-    expect(after).toHaveLength(1)
-    expect(after[0]!.id).toBe('memory-pressure-bar')
-    expect(after[0]!.rect, 'rect 读提示条根元素实测').toBeDefined()
   })
 })
 

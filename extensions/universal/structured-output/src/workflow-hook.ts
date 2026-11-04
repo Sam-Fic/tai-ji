@@ -1,27 +1,24 @@
 /**
- * Workflow hook 装配：D2 单状态机单 listener 的唯一装配入口。
+ * Workflow hook 装配：记账状态机单 listener 的唯一装配入口。
  *
  * 装配形态（workflow 模式，见 src/index.ts）：
- *   - tool_execution_end：唯一 listener——喂 loop-gate 的 WorkflowGate（合一状态机：
- *     steer 记账段 + 硬杀计数段，先记账后计数），newlyTerminal 时触发硬杀副作用链
- *     （runTerminalTeardown：日志 → abort+shutdown 优雅终止）。
+ *   - tool_execution_end：唯一 listener——喂 loop-gate 的 WorkflowGate 记账
+ *     （structured_output 调用计数 / 成功终态 / 最近错误文本）。
  *   - turn_end：唯一 listener——模型未成功产出 structured-output 时以 steer 方式注入
  *     重试提醒（软门禁），提示词不伪装用户气泡，对话流用户内容 100% 来自用户输入；
  *     最多重试 MAX_HOOK_RETRIES 次，防止无限循环。
  *
- * 软硬门禁合一语义：terminal 是 WorkflowGate 上的单一事实——硬杀计数段置位后，
- * turn_end 检查链第 0 条据此停 steer；两门禁间无任何回调接线（terminal 若双写于
- * 两个状态机，就必须跨对象回调同步，漏接线即 steer 与硬杀失步——单状态机单写使
- * 失步在结构上不可能）。
+ * 失败循环的终止边界（有意决策）：连续失败只记账、不熔断杀子进程——hook 侧以
+ * MAX_HOOK_RETRIES 封顶 steer，进程级兜底由 workflow 层 maxTurns 承担。
  *
  * steer 文案/预算逻辑（buildSteerReminder / shouldSkipSteer / writeSteerFailedLog）
- * 变化原因是提示词工程迭代，与硬杀计数（错误签名归一化）分文件维护。
+ * 变化原因是提示词工程迭代，与记账状态机分文件维护。
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
 
-import { WorkflowGate, runTerminalTeardown } from "./loop-gate.js";
+import { WorkflowGate } from "./loop-gate.js";
 // 截断原语与错误块预算来自 text-primitives（共享叶节点，导出复用勿复制）。
 import {
 	extractToolErrorText,
@@ -52,11 +49,8 @@ export const HOOK_ENTRY_TYPE = "structured-output:hook";
 export const RETRY_REMINDER_CUSTOM_TYPE = "structured-output:retry-reminder";
 
 /**
- * steer 检查链（原 turn_end handler 内联检查提取，判定顺序与旧实现逐条一致）。
- * 命中任一检查即跳过 steer，且调用方不调 onTurnEnd（toolUse/error/aborted 保留
- * soCallCount、超上限保留 lastSchemaError，与合一前逐点一致）：
- *   0. 门禁 terminal（D3/U2）：同签名失败已满 3 次、shutdown 已发——不再 steer，
- *      让进程终止（防御性保留：shutdown 正常生效时进程已死，到不了这里）
+ * steer 检查链（判定顺序逐条锁定）。命中任一检查即跳过 steer，且调用方不调
+ * onTurnEnd（toolUse/error/aborted 保留 soCallCount、超上限保留 lastSchemaError）：
  *   1. 已经成功调用过 structured-output，不再干预
  *   2. 不是合法 turn_end 事件
  *   3. stopReason="toolUse" → 模型还在调工具链，不需要干预
@@ -67,7 +61,6 @@ export const RETRY_REMINDER_CUSTOM_TYPE = "structured-output:retry-reminder";
  *   5. 超过重试上限：放弃，让子进程自然结束（调用方据 result.error 判定失败）
  */
 function shouldSkipSteer(state: WorkflowGate, event: unknown): boolean {
-	if (state.terminal) return true;
 	if (state.soSucceededEver) return true;
 	if (!isTurnEndEvent(event)) return true;
 	const stopReason = event.message?.stopReason;
@@ -77,7 +70,7 @@ function shouldSkipSteer(state: WorkflowGate, event: unknown): boolean {
 }
 
 /**
- * 构造 steer reminder（原 turn_end handler 内联三元提取）。两种失败形态：
+ * 构造 steer reminder。两种失败形态：
  *   - calledButFailed（调了但全是 isError）→ 注入具体校验错误 + 正确 schema
  *   - 否则（完全没调用）→ 注入"必须调用"提示 + schema 形状；文案按参数层实际契约
  *     （根类型）条件化：object 根 arguments 即 data；非 object 根参数层实际是 {value}
@@ -85,10 +78,9 @@ function shouldSkipSteer(state: WorkflowGate, event: unknown): boolean {
  *     required:["value"] 拒绝，系统性浪费重试预算。判定与包装判定同源
  *     （isObjectRootSchema），与工具 description / ASP 同语汇。
  *
- * 错误块经 truncateText 截断（审查项#1，上限 = STEER_ERROR_MAX_CHARS，与 loop-gate
- * 签名上限语义独立——见 F5 拆分）：pi-ai validation.js 的实参回显无截断，
- * 大 payload 失败时原始错误 ≈11K chars。如实口径：截断保留首部 = 错误类型 +
- * 靠前的字段名，列表靠后的字段名可能被截掉；完整 schema 形状由 reminder 内
+ * 错误块经 truncateText 截断（上限 = STEER_ERROR_MAX_CHARS）：pi-ai validation.js
+ * 的实参回显无截断，大 payload 失败时原始错误 ≈11K chars。如实口径：截断保留首部 =
+ * 错误类型 + 靠前的字段名，列表靠后的字段名可能被截掉；完整 schema 形状由 reminder 内
  * schemaJson 全文另行完整携带，模型修正不依赖错误块的截断尾部。
  */
 function buildSteerReminder(
@@ -131,9 +123,8 @@ function buildSteerReminder(
 }
 
 /**
- * steer 发送失败告警（审查项#8 失败路径）：双通道落盘（同 loop-gate writeTerminatedLog
- * 惯例）——stderr 直出 + appendEntry 持久化。预算未扣减由「不调 onTurnEnd」结构保证，
- * 下一个正常收尾的轮仍会重试 steer，不产生静默哑火。
+ * steer 发送失败告警：双通道落盘——stderr 直出 + appendEntry 持久化。预算未扣减由
+ * 「不调 onTurnEnd」结构保证，下一个正常收尾的轮仍会重试 steer，不产生静默哑火。
  */
 function writeSteerFailedLog(pi: PiAPI, hookRetryCount: number, err: unknown): void {
 	const message = toErrorMessage(err);
@@ -157,17 +148,16 @@ function writeSteerFailedLog(pi: PiAPI, hookRetryCount: number, err: unknown): v
 }
 
 /**
- * 装配 workflow 模式的双门禁（D2 唯一装配入口，仅 workflow 模式调用，见 src/index.ts）。
+ * 装配 workflow 模式的 hook（唯一装配入口，仅 workflow 模式调用，见 src/index.ts）。
  *
- * 每个事件至多一个 listener（单 listener 契约，D2）：
+ * 每个事件至多一个 listener（单 listener 契约）：
  *   - tool_execution_end：结构检查 → toolName 过滤 → WorkflowGate.onToolExecEnd
- *     （合一状态机：先 steer 记账后硬杀计数）→ newlyTerminal 时 runTerminalTeardown
- *     （terminal 时序与副作用明细见该函数注释）。
+ *     （记账：调用计数 / 成功终态 / 最近错误文本）。
  *   - turn_end：检查链 shouldSkipSteer → 两种失败形态都 steer：
  *     1. 完全没调用（soCallCount === 0）→ 注入"必须调用"提示 + 正确 schema
  *     2. 调了但全是 isError（soCallCount > 0 && !soSucceededEver）→ 注入具体校验错误
- *        + 正确 schema。旧实现在此处撒手交给 Pi 自然修正，但模型遇到 "Invalid JSON Schema"
- *        时无法自行修正（它不知道正确 schema 长什么样），实测会放弃 → 子进程正常退出 →
+ *        + 正确 schema。撒手交给 Pi 自然修正时，模型遇到 "Invalid JSON Schema"
+ *        无法自行修正（它不知道正确 schema 长什么样），实测会放弃 → 子进程正常退出 →
  *        workflow 把单点失败放大成整批崩溃。故此处主动 steer 并回灌错误细节。
  *
  * 检测时序：Pi 保证同 turn 内所有 tool_execution_end 都在 turn_end 之前触发，
@@ -181,7 +171,7 @@ export function setupWorkflowHook(pi: PiAPI, schemaJson: string): void {
 	// 此处解析失败不可能到达；真失败时判定为非 object 根 → 包装契约文案（保守方向）。
 	const isObjectRoot = isObjectRootSchema(tryParseJson(schemaJson));
 
-	pi.on("tool_execution_end", async (event: unknown, ctx: ExtensionContext) => {
+	pi.on("tool_execution_end", async (event: unknown) => {
 		if (!isToolExecutionEndEvent(event)) return;
 		if (event.toolName !== TOOL_NAME) return;
 		// 嵌套调用（codemode 沙箱 tools.xxx API 经 ctx.executeTool 执行）不算模型的
@@ -194,14 +184,9 @@ export function setupWorkflowHook(pi: PiAPI, schemaJson: string): void {
 		// 后果只是少一次 steer，不产生错误行为。
 		if (typeof event.toolCallId === "string" && event.toolCallId.includes("/")) return;
 
-		// errorText 不在此处 fallback——合一状态机记账段/计数段对 undefined 同用
-		// "structured-output call failed" 通用提示（与合一前两 listener 传入形态等价）。
-		const outcome = state.onToolExecEnd(
-			event.isError === true,
-			extractToolErrorText(event.result),
-		);
-		if (!outcome.newlyTerminal) return;
-		runTerminalTeardown(pi, state, ctx);
+		// errorText undefined 时状态机记账段 fallback "structured-output call failed"
+		// 通用提示（steer 回灌文案的兜底原料）。
+		state.onToolExecEnd(event.isError === true, extractToolErrorText(event.result));
 	});
 
 	pi.on("turn_end", async (event: unknown) => {
@@ -215,8 +200,8 @@ export function setupWorkflowHook(pi: PiAPI, schemaJson: string): void {
 		// 故 onTurnEnd()（清空 lastSchemaError）必须在发送成功之后调用。
 		const reminder = buildSteerReminder(calledButFailed, state.lastSchemaError, schemaJson, isObjectRoot);
 
-		// 审查项#8：await 发送结果——发送失败（如 compaction 中开轮抛错 / 扩展已
-		// 被 assertActive 拒绝）不扣减重试预算（不调 onTurnEnd），否则 fire-and-forget
+		// await 发送结果——发送失败（如 compaction 中开轮抛错 / 扩展已被
+		// assertActive 拒绝）不扣减重试预算（不调 onTurnEnd），否则 fire-and-forget
 		// 丢一份 steer + 白扣一次预算，两次即永久哑火。
 		// pi 实装（loader.js，1.0.0 复核同构）：extension 侧 sendMessage 同步转发且吞掉异步
 		// rejection（bindCore .catch(emitError) 转事件）返回 void——await 对 undefined

@@ -21,7 +21,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync, writeFileSync, statSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -149,7 +149,7 @@ describe('打包态 stderr 兜底通道可观测性（spawnRuntimeProcess 全链
     expect(onExit).not.toHaveBeenCalled()
   })
 
-  it('背压超限：首丢 warn 一条 + 后续静默，exit 汇总丢弃总数；落盘字节停在超限前', async () => {
+  it('背压超限：首丢 warn 一条 + 后续静默，exit 汇总丢弃总数', async () => {
     const { spawnRuntimeProcess, flushStderrSink } = await loadModule()
     const onExit = vi.fn()
     const child = makeFakeChild()
@@ -171,10 +171,10 @@ describe('打包态 stderr 兜底通道可观测性（spawnRuntimeProcess 全链
     expect(warnSpy).toHaveBeenCalledTimes(2)
     expect(String(warnSpy.mock.calls[1]?.[0])).toContain('dropped 2 stderr chunk(s)')
 
-    // flush 后核对文件只含第一块：丢弃块确实未落盘
+    // flush 为 best-effort 不等待 IO 排空（时间机制删除裁决：end+destroy 即返回），
+    // 缓冲数据不保证落盘——「丢弃块未落盘 / 首块落盘字节数」不再构成可断言的同步性质，
+    // 磁盘字节数断言随之退役。flush 仅卫生收尾（流关闭、无 fd 悬挂），不抛错即符合契约。
     await flushStderrSink()
-    const sinkFile = join(tmpDataDir, 'logs', 'electron-runtime-stderr.log')
-    expect(statSync(sinkFile).size).toBe(WRITE_BUFFER_LIMIT + 1)
   })
 
   it('未超限：无背压 warn，exit 无汇总行（零丢弃不留痕）', async () => {

@@ -85,12 +85,12 @@ export interface IUpdateOrchestrator {
 
   /**
    * 版本解析（批次 3 信任锚 RC1）：renderer 只传意图（version 字符串），release 数据
-   * 由 main 权威解析。四分支 + 60s 节流详见 {@link resolveByVersion}。
+   * 由 main 权威解析。三分支详见 {@link resolveByVersion}。
    *
    * @param version renderer 请求的目标版本号（不可信输入，严格校验）
    * @param opts.currentVersion 当前 app 版本（checker 比较用）
    * @param opts.releaseChecker Release 权威源（缓存 / force check）
-   * @throws UpdateError 格式非法 / STALE_RELEASE / check 网络失败 / 节流中
+   * @throws UpdateError 格式非法 / STALE_RELEASE / check 网络失败
    */
   resolveByVersion(
     version: string,
@@ -397,35 +397,21 @@ async function tryCrossSourceResumeDownload(
   }
 }
 
-/**
- * 版本解析拒绝后的节流窗口：拒绝后 60s 内同 channel 后续请求直接拒绝、不触发
- * force check——恶意 renderer 高频 invoke 不能定向打光各源的检查 API 限额
- * （GitHub 匿名配额 60 次/小时；多源后节流保护面 = 任一被检查的源）。
- * 批次 4 的退避在 renderer 侧，拦不住恶意 invoke，节流必须在 main 侧。
- */
-const RESOLVE_THROTTLE_MS = 60_000
-
 /** 请求版本严格格式（3-4 段数字，与 release-checker 的 STRICT_VERSION_RE 同规则） */
 const REQUESTED_VERSION_RE = /^\d+\.\d+\.\d+(?:\.\d+)?$/
-
-/**
- * 上次版本解析拒绝时刻（epoch ms，0 = 无拒绝）。
- * 只由 STALE_RELEASE 与格式非法拒绝触发；网络失败不节流（用户网络恢复后可立即重试）。
- */
-let lastResolveRejectedAt = 0
 
 /**
  * 版本解析器（批次 3 信任锚 RC1 核心）。
  *
  * update:download 契约版本号化后，renderer 只传意图（version 字符串），release 数据
- * 由 main 权威解析。四分支（设计 §3.5.1）：
- *   ① ReleaseChecker 缓存（非强制调用 = 1h 缓存语义）命中且版本一致 → 用缓存 release
+ * 由 main 权威解析。三分支（设计 §3.5.1）：
+ *   ① ReleaseChecker 缓存（非强制调用 = checker 缓存 TTL 窗口内命中，TTL 值域归
+ *      release-checker）命中且版本一致 → 用缓存 release
  *   ② 缓存无 / 版本不一致 → 一次权威 force check：check 失败（网络断/超时，既不能
  *      确认也不能证伪）→ 抛网络类 UpdateError，绝不回退使用任何缓存外或 renderer 侧
  *      数据；check 成功但 latest.version ≠ 请求版本 → 抛 UPDATE_STALE_RELEASE
  *      （renderer 收到后自动重查，拿到更新的 latest）
  *   ③ 请求版本格式非法（非 string / 非 3-4 段数字）→ 直接拒绝
- *   ④ 拒绝后 60s 节流：同 channel 后续请求直接拒绝，不触发 force check
  *
  * 效果断言：无论 renderer 传什么，能被下载执行的永远是任一源胜出的本仓库 latest
  * release 官方 asset——RC1 的整类攻击面消失。
@@ -438,23 +424,13 @@ export async function resolveByVersion(
   version: string,
   opts: { currentVersion: string; releaseChecker: IReleaseChecker },
 ): Promise<LatestReleaseInfo> {
-  // ④ main 侧廉价节流：拒绝后 60s 内直接拒绝（含合法重试——设计如此取舍，
-  //    renderer 侧批次 4 退避会避开窗口）
-  if (Date.now() - lastResolveRejectedAt < RESOLVE_THROTTLE_MS) {
-    throw new UpdateError(
-      'version resolve throttled: a previous resolve was rejected recently, retry later',
-      'downloading',
-    )
-  }
-
   // ③ 版本格式非法 → 直接拒绝。typeof 检查先行：IPC payload 不受 TS 类型约束，
   //    数字等非 string 值会被正则隐式串化绕过（123 → '123' 合法），必须显式拒绝
   if (typeof version !== 'string' || !REQUESTED_VERSION_RE.test(version)) {
-    lastResolveRejectedAt = Date.now()
     throw new UpdateError(`invalid requested version format: ${String(version)}`, 'downloading')
   }
 
-  // ① 缓存优先：非强制调用命中 1h 缓存且版本一致 → 直接用缓存 release（零网络）
+  // ① 缓存优先：非强制调用命中 checker 缓存且版本一致 → 直接用缓存 release（零网络）
   const cached = await opts.releaseChecker.checkForLatestRelease(opts.currentVersion)
   if (cached && cached.version === version) {
     return cached
@@ -470,7 +446,6 @@ export async function resolveByVersion(
   }
   if (latest.version !== version) {
     // check 成功但 latest ≠ 请求版本 → 请求版本已过期（renderer 应重新检查更新）
-    lastResolveRejectedAt = Date.now()
     throw new UpdateError(
       `requested version ${version} is stale (latest is ${latest.version})`,
       'downloading',

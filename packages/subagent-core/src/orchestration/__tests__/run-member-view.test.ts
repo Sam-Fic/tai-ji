@@ -373,18 +373,16 @@ describe("runMemberViews — record 行字段回落链与 now 耗时", () => {
 
 // ── budget 四轴分轴显式（§3.3.6/§3.3.9）──────────────────────
 
-describe("runMemberViews — budget 四轴分轴显式", () => {
-  it("per-call 轴取同 stepIndex call opts（maxTurns/timeoutMs）；run 级轴取 state.budget 声明值", () => {
+describe("runMemberViews — budget 分轴显式", () => {
+  it("per-call 轴取同 stepIndex call opts（maxTurns）；run 级轴取 state.budget 声明值", () => {
     const run = makeRunWithState(
-      new Map([[0, callWithOpts({ prompt: "t", maxTurns: 5, timeoutMs: 60_000 })]]),
-      { maxTokens: 1000, maxTimeMs: 120_000 },
+      new Map([[0, callWithOpts({ prompt: "t", maxTurns: 5 })]]),
+      { maxTokens: 1000 },
     );
     const views = runMemberViews(run, { records: [makeRecord({ stepIndex: 0, status: "running", startedAt: T0 })], now: NOW });
     expect(views[0]!.budget).toEqual({
       maxTurns: 5,
-      timeoutMs: 60_000,
       budgetTokens: 1000,
-      budgetTimeMs: 120_000,
     });
   });
 
@@ -393,9 +391,7 @@ describe("runMemberViews — budget 四轴分轴显式", () => {
     const views = runMemberViews(run, { records: [makeRecord({ stepIndex: 3, status: "running", startedAt: T0 })], now: NOW });
     expect(views[0]!.budget).toEqual({
       maxTurns: null,
-      timeoutMs: null,
       budgetTokens: 1000,
-      budgetTimeMs: null,
     });
   });
 
@@ -420,7 +416,7 @@ describe("runMemberViews — budget 四轴分轴显式", () => {
       { startedAt: new Date(T0).toISOString() },
     );
     const fallbackViews = runMemberViews(runWithNode, { now: NOW });
-    expect(fallbackViews[0]!.budget).toEqual({ maxTurns: null, timeoutMs: null, budgetTokens: null, budgetTimeMs: null });
+    expect(fallbackViews[0]!.budget).toEqual({ maxTurns: null, budgetTokens: null });
   });
 
   it("重派集窗口（calls miss）：budget 回落 meta.recoveredCallOpts 的声明值——已声明上界不显示为显式无界；record 行与 trace 兜底行同域", () => {
@@ -438,7 +434,7 @@ describe("runMemberViews — budget 四轴分轴显式", () => {
       },
       { startedAt: new Date(T0).toISOString(), recoveredCallOpts: recovered },
     );
-    const expected = { maxTurns: 7, timeoutMs: 30_000, budgetTokens: 800, budgetTimeMs: null };
+    const expected = { maxTurns: 7, budgetTokens: 800 };
 
     const traceRow = runMemberViews(run, { now: NOW }); // 无 records → trace 兜底行
     expect(traceRow[0]!.budget).toEqual(expected);
@@ -466,9 +462,9 @@ describe("runMemberViews — budget 四轴分轴显式", () => {
       ],
       now: NOW,
     });
-    expect(views[0]!.budget).toEqual({ maxTurns: 5, timeoutMs: null, budgetTokens: 100, budgetTimeMs: null });
+    expect(views[0]!.budget).toEqual({ maxTurns: 5, budgetTokens: 100 });
     // stepIndex 1：calls 与恢复表皆无 → 未声明 = null（显式无界）
-    expect(views[1]!.budget).toEqual({ maxTurns: null, timeoutMs: null, budgetTokens: 100, budgetTimeMs: null });
+    expect(views[1]!.budget).toEqual({ maxTurns: null, budgetTokens: 100 });
   });
 });
 
@@ -536,7 +532,7 @@ describe("memberViewLine — 失败分类 / budget 上界 / 交付缺口渲染�
       state: "running",
       agent: "writer",
       model: "m",
-      budget: { maxTurns: 5, timeoutMs: null, budgetTokens: 1000, budgetTimeMs: null },
+      budget: { maxTurns: 5, budgetTokens: 1000 },
     });
     expect(bounded).toContain("budget: maxTurns=5 budgetTokens=1000");
 
@@ -545,7 +541,7 @@ describe("memberViewLine — 失败分类 / budget 上界 / 交付缺口渲染�
       state: "running",
       agent: "writer",
       model: "m",
-      budget: { maxTurns: null, timeoutMs: null, budgetTokens: null, budgetTimeMs: null },
+      budget: { maxTurns: null, budgetTokens: null },
     });
     expect(unbounded).not.toContain("budget:");
 

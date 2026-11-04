@@ -9,13 +9,10 @@
  *   ✗ 不持有可变态（currentMessageId/writeContents/diffChain 帧序态全在 interpreter）
  *   ✓ 只产出结构化中间事件（PiTranslatedEvent[]），交由 service 层 EventInterpreter 编排。
  *
- * [D5 例外登记，u7b] subagent 在途上报（marker = SUBAGENT_INFLIGHT_MARKER）是本文件唯一的
- * 显式副作用例外：帧在 **EventAdapter 监听器旁路**就地消费（写 inflight-mirror + 经注入的
- * client 回 INFLIGHT_REPORT_ACK，见 consumeInflightReport），translate() 保持无副作用——
- * 仅保留一条检查分支（marker 帧恒不产出前端广播）。设计依据
- * docs/architecture/crash-forensics-and-watchdog.md §3.3 D5「extension 聚合上报」+「marker 路由不得广播前端」
- *（[HISTORICAL] 广播前端 → 前端无人应答 runtime 内部消费的 select → pending 泄漏，
- * session-manager 分支同类教训）。
+ * [D5 例外登记，u7b] subagent 在途上报（marker = SUBAGENT_INFLIGHT_MARKER）：runtime 侧
+ * 镜像消费（inflight-mirror）已删（滚动重启唯一读者退役），marker 帧现无 runtime 消费方——
+ * translate() 仅保留一条检查分支（marker 帧恒不产出前端广播，防 marker 帧落回普通
+ * select 分支 → 前端无人应答的弹窗 pending 泄漏；session-manager 分支同类教训）。
  *
  * pi RPC events have this structure:
  * - `message_update` = `{type, assistantMessageEvent, usage?}`（wire 恒无顶层 message——RPC
@@ -32,12 +29,10 @@
  */
 import type { ServerMessage, ServerMessageType, ExtensionInteractMethod, PiMessageEntry, PiToolCallEntryForm } from '@taiji/shared'
 import { EXTENSION_EVENTS, SUBAGENT_DIRECTIVE_CUSTOM_TYPE, parseSubagentDirective } from '@taiji/shared'
-import { GUI_WIDGET_MARKER, ASK_USER_MARKER, SESSION_MANAGER_MARKER, SESSION_MANAGER_ACTIONS, SUBAGENT_INFLIGHT_MARKER, INFLIGHT_REPORT_ACK, SCHEDULE_CREATE_MARKER, PLAN_REVIEW_MARKER, UI_FORM_MARKER, SUBAGENT_JOURNAL_MARKER, JOURNAL_REPORT_ACK, CANVAS_MARKER, PERMISSION_APPROVAL_TITLE, isCanvasMarkerRequest, isGuiComponent, isGuiRenderResult, isSubagentInFlightReport, isScheduleDraft, isFormQuestion, isSubagentJournalReport } from '@zhushanwen/extension-protocol'
+import { GUI_WIDGET_MARKER, ASK_USER_MARKER, SESSION_MANAGER_MARKER, SESSION_MANAGER_ACTIONS, SUBAGENT_INFLIGHT_MARKER, SCHEDULE_CREATE_MARKER, PLAN_REVIEW_MARKER, UI_FORM_MARKER, SUBAGENT_JOURNAL_MARKER, JOURNAL_REPORT_ACK, CANVAS_MARKER, PERMISSION_APPROVAL_TITLE, isCanvasMarkerRequest, isGuiComponent, isGuiRenderResult, isScheduleDraft, isFormQuestion, isSubagentJournalReport } from '@zhushanwen/extension-protocol'
 import type { SessionManagerAction } from '@zhushanwen/extension-protocol'
 import type { PiEventListener } from '../../services/ports/pi-engine.js'
 import type { PiTranslatedEvent } from '../../services/session/types.js'
-// [u7b D5 例外] 在途镜像单例：marker 旁路写、u7c 滚动重启判定读（见文件头例外登记）
-import { inflightMirror } from '../../services/session/inflight-mirror.js'
 // [event-push-channel] journal 事件报告路由单例：marker 旁路送达派生视图（同款 module 单例形态）
 import { routeJournalReport } from '../../services/session/journal-report-router.js'
 import { randomUUID } from 'node:crypto'
@@ -68,8 +63,6 @@ import type {
   PiEntryAppendedEvent,
   PiAssistantMessageSubEvent,
   PiToolcallEndSubEvent,
-  PiBashExecutionUpdateEvent,
-  PiSummarizationRetryScheduledEvent,
 } from './pi-protocol.js'
 
 // ── Sub-handler types ──────────────────────────────────────────────
@@ -549,8 +542,8 @@ function extensionDialogBroadcast(payload: Record<string, unknown>): PiTranslate
 
 /**
  * 对话框请求的统一出站对（marker 富交互与普通对话框五个翻译出口共用）：
- * ① extension-ui kind 事件——EventInterpreter 暂停 watchdog + 通知 server 跟踪请求 +
- *   缓存 pending（2026-07-16 后 extension UI 不超时，block 等待用户响应）；
+ * ① extension-ui kind 事件——EventInterpreter 通知 server 跟踪请求 +
+ *   缓存 pending（extension UI 无超时（时间机制删除裁决），block 等待用户响应）；
  * ② extension.dialog WS 广播帧——前端按消息类型路由，渲染对话框/审批条/表单
  * （title 若含 marker 约定串已在本层翻译消化，到前端仅纯展示——D6③）。
  */
@@ -569,8 +562,8 @@ function dialogRequestEvents(
 /**
  * subagent 在途上报帧形状判定（select + title = SUBAGENT_INFLIGHT_MARKER，u7b）。
  *
- * translate() 的检查分支与 EventAdapter 监听器旁路（consumeInflightReport）共用本判定，
- * 防「两处标记判定漂移」：translate 侧只保证不广播，旁路侧负责镜像 + ack。
+ * 唯一消费点 = translate() 的检查分支（marker 帧恒不产出前端广播）；runtime 镜像
+ * 旁路已随 inflight-mirror 删除，帧不再被消费（extension 写侧重试自弃）。
  */
 function isInflightReportFrame(event: PiEvent): boolean {
   const e = event as unknown as { type?: unknown; method?: unknown; title?: unknown }
@@ -1458,28 +1451,6 @@ function handleAutoRetryEnd(event: PiAutoRetryEndEvent, sid: string): PiTranslat
   }]
 }
 
-/**
- * [pi-stall-detection U4 / AS16①] bash_execution_update → bash-execution-update 中间事件
- * （静默判定矩阵在途信号：刷新计时；前端零消费——不产 WS 帧，UI 形态不变）。
- */
-function handleBashExecutionUpdate(_event: PiBashExecutionUpdateEvent, _sid: string): PiTranslatedEvent[] {
-  return [{ kind: 'bash-execution-update' }]
-}
-
-/**
- * [pi-stall-detection U4 / AS16②] summarization_retry_scheduled → summarization-retry-scheduled
- * 中间事件（静默判定矩阵带窗在途信号：按载荷 delayMs 给 backoff 宽限，RL11）。载荷缺失/
- * 畸形（非有限数）时 delayMs=null——矩阵按无宽限处理（fail-safe 收窄，不放大豁免）。
- */
-function handleSummarizationRetryScheduled(event: PiSummarizationRetryScheduledEvent, _sid: string): PiTranslatedEvent[] {
-  return [{
-    kind: 'summarization-retry-scheduled',
-    delayMs: typeof event.delayMs === 'number' && Number.isFinite(event.delayMs) && event.delayMs > 0
-      ? event.delayMs
-      : null,
-  }]
-}
-
 /** session_info_changed → session.renamed + 内存态 label 回写（interpreter 编排） */
 function handleSessionInfoChanged(event: PiSessionInfoChangedEvent, sid: string): PiTranslatedEvent[] {
   return [
@@ -1620,22 +1591,10 @@ function handleAgentSettled(_event: PiAgentSettledEvent, _sid: string): PiTransl
 // [session-trace A33] agent_settled / message_end / entry_appended 同时追加 trace-trigger 输出
 // （interpreter 调 onTraceSync 做追赶式 since 拉取）——与 W1/W18/W21 的 handler 经
 // withTraceTrigger 组合注册，互不取代（见 DISPATCHER）。
-// bash_execution_update：[pi-stall-detection U4 起] 翻译为 bash-execution-update kind
-// （静默判定矩阵在途信号：连续流式命令的 chunk 是回合推进信号，丢弃构成 C1 格假阳性）；
-// 前端呈现仍零消费（翻译产物不产 WS 帧）。pi 0.84.1 新增 live bash 流事件（dist/core/
-// agent-session.d.ts:103-106 {type:"bash_execution_update", id?, delta}，emit 点
-// agent-session.js:2210 executeBash 的 onChunk 回调），复用发起 bash RPC 的 id（docs/rpc.md:26）。
-// queue_update：[u5a 退役] message.queue_update 帧已随协议条目整链退役（core 消费方 /
-// renderer UI 消费 / shared payload 声明均已删，队列深度展示归 session.delivery 快照帧）。
-// pi 侧仍恒发该事件，登记为已知 no-op（不落 default warn）。静默判定矩阵同理不消费
-// （AS16③ 过滤帧——队列元操作不证明回合推进）。
-// summarization_retry_* 三事件（pi1-disposition-chat-flow U3⑤，D12 登记）：
-// - scheduled：[pi-stall-detection U4 起] 翻译为 summarization-retry-scheduled kind（矩阵按
-//   载荷 delayMs 给 backoff 宽限，RL11——backoff 窗内无帧流是合法有界静默）；
-// - attempt_start / finished：维持 no-op——compaction 形态由 compacting 豁免锚点整体覆盖
-//   （compaction_start→end 窗口内重试含退避全豁免），branchSummary 形态发生在树操作 RPC
-//   （非回合占用期，矩阵不武装），两形态均无矩阵消费需求；呈现层已有 compaction 主链路
-//   覆盖。显式登记后「未登记」与「裁决不处理」恢复可区分——不再刷 Unhandled pi event 告警。
+// bash_execution_update / queue_update / summarization_retry_*：pi 侧恒发但 taiji 零消费
+// 的事件，登记为已知 no-op（不落 default warn）——bash 流 chunk 无呈现消费；queue_update
+// 帧已随协议条目整链退役（队列深度展示归 session.delivery 快照帧）；摘要重试退避由
+// compaction 主链路覆盖。
 const NULL_EVENTS = new Set([
   'extension_config', 'extension_ui_response', 'response',
   'queue_update',
@@ -1719,10 +1678,6 @@ const DISPATCHER = new Map<string, Handler>()
   // 见 handleAgentSettled 注释）；[session-trace A33] 组合追加 trace-trigger；
   // [reload-closeout D2] 组合追加 record-reconcile-trigger（送达水位对账路径）
   DISPATCHER.set('agent_settled', withRecordReconcileTrigger(withTraceTrigger(handleAgentSettled as Handler)))
-  // [pi-stall-detection U4] bash 执行流 chunk → 矩阵在途信号（AS16①）；摘要重试退避调度
-  // → 矩阵带窗在途信号（AS16②，delayMs 宽限）。两事件此前 NULL_EVENTS 登记，见上方注释。
-  DISPATCHER.set('bash_execution_update', handleBashExecutionUpdate as Handler)
-  DISPATCHER.set('summarization_retry_scheduled', handleSummarizationRetryScheduled as Handler)
 })()
 
 /**
@@ -1732,7 +1687,7 @@ const DISPATCHER = new Map<string, Handler>()
  * 是 JSONL 只有 session + session_info 两行、零 message——pi 接收了 prompt 创建了
  * session 但 LLM 调用从未成功产出 assistant 回复。开启此开关可观察坏 session 产生时
  * pi 到底发了什么事件（或什么都没发），从而区分：
- *   - 情况 A：pi 子进程静默卡死（无任何事件）→ 需 runtime 加 watchdog
+ *   - 情况 A：pi 子进程静默卡死（无任何事件）→ pi 侧问题
  *   - 情况 B：pi 发了异常事件流（被 adapter 误吞/误译）→ adapter 逻辑修复
  *
  * 默认关闭，生产无噪声。复现步骤：dev 模式启动前 `export TAIJI_DEBUG_PI_EVENTS=1`，
@@ -1787,9 +1742,8 @@ export function translate(event: PiEvent, sessionId: string): PiTranslatedEvent[
   }
 
   // subagent 在途上报帧检查（u7b，设计 §3.3 D5）：marker 帧恒不产出任何前端广播。
-  // 生产路径上帧已被 EventAdapter 监听器旁路消费（consumeInflightReport，含镜像 + ack），
-  // 此检查覆盖直调 translate 的路径——结构性消灭「marker 帧落回普通 select 分支 →
-  // 前端出现无人应答的弹窗 pending 泄漏」形态（[HISTORICAL] session-manager 同类教训）。
+  // runtime 镜像旁路已删（inflight-mirror 退役），本检查结构性消灭「marker 帧落回
+  // 普通 select 分支 → 前端出现无人应答的弹窗 pending 泄漏」形态（session-manager 同类教训）。
   if (isInflightReportFrame(event)) return []
   // journal 事件报告帧检查（event-push-channel）：同款不广播例外——marker 帧恒被
   // 旁路消费，直调 translate 路径零产出。
@@ -1921,9 +1875,6 @@ export class EventAdapter {
     this.unsub = client.onEvent((event) => {
       // [u-runtime-svc] 后台任务事件旁路：先于翻译独立判定（不改翻译输出），失败不干扰事件流
       this.notifyBackgroundTaskActivity(event)
-      // [u7b D5 例外] subagent 在途上报旁路：marker 帧就地消费（镜像 + ack），识别即吞掉
-      //（不进翻译 → 结构性零前端广播；translate 的检查分支为第二道防线）。
-      if (this.consumeInflightReport(event, client)) return
       // [event-push-channel] journal 事件报告旁路：marker 帧就地消费（路由派生视图 +
       // ack），识别即吞掉（同款不进翻译；translate 的检查分支为第二道防线）。
       if (this.consumeJournalReport(event, client)) return
@@ -1977,7 +1928,7 @@ export class EventAdapter {
    * 后台任务旁路判定（D2 触发点②）：raw pi 事件形态直读（翻译层不动）——
    * ① customType background-bash 消息（exit 边沿，notify.ts → message_start custom）；
    * ② bash 工具调用结束（spawn 路径，tool_execution_end.toolName === 'bash'）。
-   * spawn/exit 均先写 registry 后发事件（spawn-background.ts/poller.ts 时序），钩子
+   * spawn/exit 均先写 registry 后发事件（spawn-background.ts/exit-collector.ts 时序），钩子
    * 触发的变更检测读到的已是终值，无双读竞态。未注入回调时零开销。
    */
   private notifyBackgroundTaskActivity(event: unknown): void {
@@ -1992,46 +1943,6 @@ export class EventAdapter {
       // prod info 级过滤下 debug 不落盘（logger 级别过滤），在途镜像读数异常必须留痕可排障。
       console.warn('[EventAdapter] background-task activity bypass check failed:', err instanceof Error ? err.message : err)
     }
-  }
-
-  /**
-   * subagent 在途上报旁路（u7b，设计 §3.3 D5「extension 聚合上报」）：识别
-   * select + SUBAGENT_INFLIGHT_MARKER → 解析 → inflight-mirror 绝对计数覆盖（非增量）→
-   * 经 client 回 INFLIGHT_REPORT_ACK。返回 true = 本帧已消费（调用方跳过翻译）。
-   *
-   * 坏帧 / 未知 schema / 缺 sessionId → 静默丢弃（仍返回 true，不抛不 ack）：不 ack 使
-   * reporter 按既有折叠重试（问题可感知），单帧丢弃由绝对计数语义自愈。永不向调用方抛错。
-   */
-  private consumeInflightReport(event: unknown, client: PiEventClient): boolean {
-    if (!isInflightReportFrame(event as PiEvent)) return false
-    try {
-      const report = parseSelectOptionsPayload(event as PiExtensionUiRequestEvent)
-      if (!isSubagentInFlightReport(report)) {
-        // warn 起步（prod info 级过滤下 debug 不落盘）：镜像不更新直接影响滚动重启判定读数，
-        // reporter 重试是唯一间接感知通道，prod 排障需直接留痕。
-        console.warn('[EventAdapter] subagent-inflight frame dropped: malformed payload')
-        return true
-      }
-      if (typeof report.sessionId !== 'string' || report.sessionId === '') {
-        // u7a 契约（extension-protocol subagent-inflight/types.ts）：sessionId 缺席 =
-        // 无法归属 → 丢弃整帧（不镜像不 ack；pi 延迟写入窗口过后 reporter 重试即可归属）。
-        // 不视为协议错误（同款防御先例：报文归属失败静默丢弃由重试自愈）。
-        return true
-      }
-      // 归属用 adapter 的 sessionId（帧来自本 pi 进程，与 session-manager 同口径）；
-      // report.sessionId 只作在场性判据，不比对——pi session id 与 runtime 会话键是两个 id 空间。
-      inflightMirror.applyReport(this.sessionId, report)
-      const requestId = String((event as PiExtensionUiRequestEvent).id ?? '')
-      // fire-and-forget 的送达判定（D5 缺席语义②）：reporter 侧 resolve(undefined) 与超时
-      // 不可区分，必须显式 ack 才能区分「已送达」与「无路由/通道故障」——reporter 据此
-      // 停止重试（有界，2026-09-13 oe-audit 修订）。
-      if (requestId !== '') client.sendExtensionUiResponse?.(requestId, INFLIGHT_REPORT_ACK, 'select')
-    } catch (err) {
-      // 旁路永不干扰翻译/事件流（畸形帧形态 / ack 通道异常仅留诊断）。warn 起步：prod
-      // info 级过滤下 debug 不落盘，在途镜像失准必须可直接排障（滚动重启判定读数来源）。
-      console.warn('[EventAdapter] subagent-inflight bypass failed:', err instanceof Error ? err.message : err)
-    }
-    return true
   }
 
   /**

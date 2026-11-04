@@ -5,10 +5,6 @@
 // session_start 时经 initSession 注入 pi；modelRegistry/entries 归 ModelConfigService.initModel。
 
 import type { AgentResult as WorkflowAgentResult, AgentCallOpts } from "../shared/agent-call-types.ts";
-// [V2 决策 3] lifecycle-manager idle timer：record 终态化/取消的 disarm 面
-// 路径防误杀）——[R3] 消费已随终态写侧迁 service/record-lifecycle.ts；[R4]
-// DEFAULT_IDLE_TIMEOUT_MS 消费（assertIdleTimeoutMsSafe 错误文案基准）已随 run 域
-// 迁 service/run-orchestration.ts——本文件 lifecycle-manager 零 import。
 import { type ConcurrencyPool, DefaultConcurrencyPool } from "./assembly/concurrency-pool.ts";
 // [R4] execution-record 消费（project/updateFromEvent）已随 run 域迁
 // service/run-orchestration.ts（+ workflow-dispatch.ts 的 updateFromEvent）——壳内零消费。
@@ -444,14 +440,13 @@ export class SubagentService {
       getNotifyHost: () => this.notifyHost,
       getPool: () => this.pool,
       getPi: () => this.pi,
-      // [§1.4 (a)] 轮终收尾「句柄就绪」有界等待（本体 SessionBaselines.waitForUsablePi）。
-      waitForPiReady: (timeoutMs, context) => this.baselines.waitForUsablePi(timeoutMs, context),
+      // [§1.4 (a)] 轮终收尾「句柄就绪」现读判定（本体 SessionBaselines.usablePiOrSkip）。
+      waitForPiReady: (context) => this.baselines.usablePiOrSkip(context),
       getSessionRootId: () => this.sessionRootId,
       getStreamSink: () => this.streamSink,
       getUiObservability: () => this.uiObservability,
       finalizeFailed: (record, err) => this.recordLifecycle.finalizeFailed(record, err),
       finalizeAborted: (record) => this.recordLifecycle.finalizeAborted(record),
-      idleTimeoutRecycle: (record) => this.recordLifecycle.idleTimeoutRecycle(record),
       archiveRecord: (record, source) => this.recordLifecycle.archiveRecord(record, source),
       taskSpecWithModel: (opts, model, thinkingLevel) =>
         this.runOrchestration.taskSpecWithModel(opts, model, thinkingLevel),
@@ -470,7 +465,6 @@ export class SubagentService {
     // runOrchestration 实例方法（G2「经壳编排」形态）。
     this.workflowDispatch = new WorkflowDispatch({
       assertReady: () => this.assertReady(),
-      assertIdleTimeoutMsSafe: (opts) => this.runOrchestration.assertIdleTimeoutMsSafe(opts),
       getExecNesting: () => this.execNesting,
       getModelService: () => this.modelService,
       // [U2 pi-workflow-run-resource-model] 窗口键透传——workflow 成员派发的 piEngine

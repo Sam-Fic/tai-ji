@@ -2,23 +2,21 @@
  * PendingTracker — 请求/回复登记表（D15/D25）。
  *
  * 收编 plugin-rpc-client / plugin-rpc-server / plugin-activator.pendingReplies
- * 三处同构的 `Map<K, { resolve, reject, timer }>` + setTimeout(reject) +
- * clearTimeout(on reply) + rejectAll(on dispose) 样板。
+ * 三处同构的 `Map<K, { resolve, reject }>` + resolve/reject(on reply) +
+ * rejectAll(on dispose) 样板。
  *
  * 抽象边界（刻意收窄，不污染）：
- *   - 超时语义统一为 reject(timeoutError)：调用方在 register 时传入要 reject 的 Error，
- *     tracker 不关心 error 的形态（#2 带 .code、#3/#4 纯 Error，都由调用方构造）。
+ *   - 无墙钟：登记的请求挂到回复到达或 dispose rejectAll，不做时间阈值判死。
  *   - resolve 通道把原始值交给调用方：reply 是否算"成功"是领域逻辑，不由 tracker 判断。
  *     调用方在收到回复后，自己决定调 resolve(k, value) 还是 reject(k, err)。
- *   - 不支持 timeout-default、不支持注册副作用钩子：这些是 pendingPermissions /
- *     pendingUiRequests 的异类语义，它们各自保留，不入本抽象。
+ *   - 不支持注册副作用钩子：pendingPermissions / pendingUiRequests 的异类语义各自保留，
+ *     不入本抽象。
  */
 
 export class PendingTracker<K extends string | number, T> {
   private pending = new Map<K, {
     resolve: (value: T) => void
     reject: (error: Error) => void
-    timer: ReturnType<typeof setTimeout> | undefined
   }>()
 
   /** 当前登记的请求数量。 */
@@ -32,35 +30,22 @@ export class PendingTracker<K extends string | number, T> {
   }
 
   /**
-   * 登记一个 pending 请求，返回在回复到达或超时后被解析的 Promise。
-   *
-   * @param timeoutError 超时时要 reject 的 Error——由调用方构造，
-   *   tracker 不关心其形态（纯 Error / Object.assign 带 code 均可）。
-   * @param timeoutMs 可选墙钟（ADR-0122 收窄后多数消费方不再传——undefined/≤0 =
-   *   不限时，回复永不到达时由 dispose rejectAll 收尾）；交互等待类消费方（permission /
-   *   ui-request 等人填表粒度）仍传显式值（C2 功能语义保留）。
+   * 登记一个 pending 请求，返回在回复到达后被解析的 Promise（无墙钟——回复永不到达时
+   * 由 dispose rejectAll 收尾）。
    */
-  register(key: K, timeoutError: Error, timeoutMs?: number): Promise<T> {
+  register(key: K): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      const timer = timeoutMs !== undefined && timeoutMs > 0
-        ? setTimeout(() => {
-          this.pending.delete(key)
-          reject(timeoutError)
-        }, timeoutMs)
-        : undefined
-
-      this.pending.set(key, { resolve, reject, timer })
+      this.pending.set(key, { resolve, reject })
     })
   }
 
   /**
-   * 成功回复到达时调用：解析对应 Promise 并清理 timer。
+   * 成功回复到达时调用：解析对应 Promise。
    * @returns 是否命中（false 表示该 key 不在登记表中，调用方可据此区分"回复"与"主动请求"）。
    */
   resolve(key: K, value: T): boolean {
     const entry = this.pending.get(key)
     if (!entry) return false
-    clearTimeout(entry.timer)
     this.pending.delete(key)
     entry.resolve(value)
     return true
@@ -73,7 +58,6 @@ export class PendingTracker<K extends string | number, T> {
   reject(key: K, error: Error): boolean {
     const entry = this.pending.get(key)
     if (!entry) return false
-    clearTimeout(entry.timer)
     this.pending.delete(key)
     entry.reject(error)
     return true
@@ -85,7 +69,6 @@ export class PendingTracker<K extends string | number, T> {
    */
   rejectAll(error: Error): void {
     for (const [, entry] of this.pending) {
-      clearTimeout(entry.timer)
       entry.reject(error)
     }
     this.pending.clear()

@@ -122,11 +122,4 @@ describe('rpc', () => {
       _resetWarnOnceForTest()
     }
   })
-
-  it('rejects on timeout', async () => {
-    // verify 5s timeout behavior
-    await expect(
-      rpc('config.getProviders', {}, { timeoutMs: 100 })
-    ).rejects.toThrow(/timeout/)
-  })
 })

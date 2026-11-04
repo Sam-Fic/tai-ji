@@ -13,7 +13,6 @@
  *（D4 三不变量 + `type` 例外条款）与重名拦截归 runtime，本域只做类型化转发。
  */
 import { command } from '../request'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 import type {
   McpAddRequest,
   McpListResult,
@@ -29,12 +28,12 @@ import type {
 
 /** 拉取 MCP 服务器清单（corruption 非空 = mcp.json 损坏错误态，servers 恒空数组，S6）。 */
 export async function listMcpServers(): Promise<McpListResult> {
-  return command('mcp.list', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('mcp.list', {})
 }
 
 /** 添加服务器（重名拦截报「已存在同名服务器，请编辑该条目」，不采用替换语义，D4；损坏拒入走 ok:false 信封不 reject）。 */
 export async function addMcpServer(req: McpAddRequest): Promise<McpMutationResult> {
-  return command('mcp.add', req, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('mcp.add', req)
 }
 
 /**
@@ -42,7 +41,7 @@ export async function addMcpServer(req: McpAddRequest): Promise<McpMutationResul
  * 编辑写回契约合并进既有条目，归 runtime store 执行）。
  */
 export async function updateMcpServer(req: McpUpdateRequest): Promise<McpMutationResult> {
-  return command('mcp.update', req, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('mcp.update', req)
 }
 
 /**
@@ -50,12 +49,12 @@ export async function updateMcpServer(req: McpUpdateRequest): Promise<McpMutatio
  * 不带清单派生视图回写（D2 丢失窗口保持锁内亚秒级）；reply entry = 写后落盘终态。
  */
 export async function setMcpServerEnabled(req: McpSetEnabledRequest): Promise<McpMutationResult> {
-  return command('mcp.setEnabled', req, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('mcp.setEnabled', req)
 }
 
 /** 删除服务器（界面侧删除确认归 renderer，D8 清单行操作）。 */
 export async function removeMcpServer(req: McpRemoveRequest): Promise<McpMutationResult> {
-  return command('mcp.remove', req, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('mcp.remove', req)
 }
 
 /**
@@ -64,7 +63,7 @@ export async function removeMcpServer(req: McpRemoveRequest): Promise<McpMutatio
  * 接缝为 McpSection 的 applyProbeResult（徽标渲染与通道解耦）。
  */
 export async function testMcpServer(req: McpTestRequest): Promise<McpTestHandle> {
-  return command('mcp.test', req, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('mcp.test', req)
 }
 
 /**
@@ -72,5 +71,5 @@ export async function testMcpServer(req: McpTestRequest): Promise<McpTestHandle>
  * probe 子进程）。cancelled false = 任务已结束，结果徽标经 mcp:testResult 广播照常回填。
  */
 export async function cancelMcpServerTest(req: McpTestCancelRequest): Promise<McpTestCancelResult> {
-  return command('mcp.testCancel', req, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('mcp.testCancel', req)
 }

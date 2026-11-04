@@ -1,6 +1,6 @@
 /**
- * Workspace 偏好组 config.* message handler（worktree 目录/脚本/超时 + 默认基分支
- * + UI 语言，11 条简单读写转发 case）。
+ * Workspace 偏好组 config.* message handler（worktree 目录/脚本 + 默认基分支
+ * + UI 语言，9 条简单读写转发 case）。
  *
  * Extracted from settings-message-handler.ts to reduce file size（该文件同类先例：
  * 「Extracted from RuntimeServer to reduce file size」；本组 case 全部仅消费
@@ -46,15 +46,6 @@ export class ConfigPreferencesMessageHandler {
       }
       case 'config.getBareSetupScript': {
         this.ctx.reply(ws, msg.id, 'config.bareSetupScript', { script: this.ctx.configService.getBareSetupScript() })
-        return true
-      }
-      case 'config.setTimeout': {
-        this.setAndReply(ws, msg.id, this.ctx.configService.setTimeout(msg.payload.timeout), () =>
-          this.ctx.reply(ws, msg.id, 'config.worktreeTimeout', { timeout: this.ctx.configService.getTimeout() }))
-        return true
-      }
-      case 'config.getTimeout': {
-        this.ctx.reply(ws, msg.id, 'config.worktreeTimeout', { timeout: this.ctx.configService.getTimeout() })
         return true
       }
       case 'config.setDefaultBaseBranch': {

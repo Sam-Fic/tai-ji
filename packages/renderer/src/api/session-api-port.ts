@@ -26,7 +26,7 @@
  */
 import { session as sessionApi } from '@/api'
 import * as events from '@taiji/core/transport/api'
-import { command, RPC_BACKSTOP_TIMEOUT_MS } from '@taiji/core/transport/api'
+import { command } from '@taiji/core/transport/api'
 import type { SessionApiPort } from '@taiji/core'
 
 /**
@@ -51,6 +51,6 @@ export function buildSessionApiPort(): SessionApiPort {
     // [W2] session.getState 直发（不经 session 域代理，理由见文件头）。reply 与 request
     // 同名、payload 消费型；会话不存在 = SESSION_NOT_FOUND reject（core 侧显式未知）。
     getState: (id: string) =>
-      command('session.getState', { sessionId: id }, RPC_BACKSTOP_TIMEOUT_MS),
+      command('session.getState', { sessionId: id }),
   }
 }

@@ -23,7 +23,7 @@
 
 import type { ChildProcess } from "node:child_process";
 
-import { SET_MODEL_STAGE_TIMEOUT_MS, type ModelRef } from "@zhushanwen/subagent-engine-sdk";
+import type { ModelRef } from "@zhushanwen/subagent-engine-sdk";
 
 import { getActiveChild } from "./active-children.ts";
 import { sendGetStateCommand, sendSetModelCommand } from "./stdin-writer.ts";
@@ -32,41 +32,36 @@ import { sendGetStateCommand, sendSetModelCommand } from "./stdin-writer.ts";
 // ① 控制命令应答等待表
 // ============================================================
 
-/** 控制命令等待的结局（response / 子进程退出 / 阶段超时三出口，调用方分派）。 */
+/** 控制命令等待的结局（response / 子进程退出两出口，调用方分派；原阶段超时出口已随时间机制删除——等待无时间上界）。 */
 type ControlResponseOutcome =
   | { kind: "response"; success: boolean; data: unknown; error: string | undefined }
-  | { kind: "child-exited" }
-  | { kind: "timeout" };
+  | { kind: "child-exited" };
 
 /** 进程级等待表：请求 id → settle（一次性消费）。 */
 const pending = new Map<string, (outcome: ControlResponseOutcome) => void>();
 
 /**
- * 登记等待并等该请求 id 的 response 帧（或子进程退出 / 超时，先到先收敛）。
+ * 登记等待并等该请求 id 的 response 帧（或子进程退出，先到先收敛）。
  *
  * 调用契约：同一 tick 内已向同一 child 的 stdin 写入携带 requestId 的命令（本表
  * 不负责发送——见 stdin-writer 的 sendSetModelCommand / sendGetStateCommand）。
  * 注册时序安全性：stdin.write 同步 + 本表登记同步（同一 tick），stdout data 事件
  * 最早也要下一个 tick 才投递——不存在「应答先于登记到达」的窗口。
- * 收敛唯一出口 settle 幂等：response / close / error / timeout 四条入口竞争，
- * 首到生效，其余清理后丢弃（timer 反注册 + 监听摘除 + 表项删除一次完成）。
+ * 收敛唯一出口 settle 幂等：response / close / error 三条入口竞争，
+ * 首到生效，其余清理后丢弃（监听摘除 + 表项删除一次完成）。
  * close 与 error 都按「子进程退出」收敛（error = spawn 失败，子进程从未运行——
  * 对控制范围同样是「无活进程」语义）。
  */
 function awaitControlResponse(
   child: ChildProcess,
   requestId: string,
-  timeoutMs: number,
 ): Promise<ControlResponseOutcome> {
   return new Promise<ControlResponseOutcome>((resolve) => {
     let settled = false;
-    const timer = setTimeout(() => settle({ kind: "timeout" }), timeoutMs);
-    if (typeof timer.unref === "function") timer.unref();
 
     function settle(outcome: ControlResponseOutcome): void {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
       child.removeListener("close", onClose);
       child.removeListener("error", onError);
       pending.delete(requestId);
@@ -160,27 +155,16 @@ type StageAckOutcome =
   | { kind: "response"; success: boolean; data: unknown; error: string | undefined };
 
 /**
- * 单阶段控制应答等待 + 退出/超时三分诊（③ 读应答窗与 ⑤ 回读窗共用）：子进程退出 →
- * 无活进程；超时且仍存活 → 回读失败（stage + commandLabel 定语区分两阶段文案）；
- * 超时窗内已退出 → 无活进程。「退出」与「超时」两种结局严格互斥，不混淆。
+ * 单阶段控制应答等待 + 退出二分（③ 读应答窗与 ⑤ 回读窗共用）：子进程退出 →
+ * 无活进程；否则应答在手（原「超时且仍存活 → 回读失败」的时间分支已随时间机制
+ * 删除——等待无时间上界）。
  */
 async function awaitStageAck(
   child: ChildProcess,
   requestId: string,
-  stage: "set-model-response" | "state-readback",
-  commandLabel: string,
 ): Promise<StageAckOutcome> {
-  const ack = await awaitControlResponse(child, requestId, SET_MODEL_STAGE_TIMEOUT_MS);
+  const ack = await awaitControlResponse(child, requestId);
   if (ack.kind === "child-exited") return { kind: "not-active" };
-  if (ack.kind === "timeout") {
-    return isChildAlive(child)
-      ? {
-        kind: "readback-failed",
-        stage,
-        detail: `${commandLabel} not received within ${SET_MODEL_STAGE_TIMEOUT_MS}ms (child alive)`,
-      }
-      : { kind: "not-active" };
-  }
   return { kind: "response", success: ack.success, data: ack.data, error: ack.error };
 }
 
@@ -216,10 +200,8 @@ function extractPiStateSnapshot(data: unknown): {
  *
  * 竞态窗口全覆盖（设计 §7.3）：命令与回读全程带存活检查——①定位时 ②命令写入
  * （投递判别式，stdin 死 = 进程死）③读应答等待 ④回读前复检 ⑤回读等待——任一
- * 时点发现退出即按「无活进程」形态收尾；单阶段等待超时（SET_MODEL_STAGE_TIMEOUT_MS，
- * 秒级控制范围单请求粒度，锚 CANCEL_SETTLE_GRACE_MS 量级）且进程仍存活才落回读
- * 失败形态——「退出」与「超时」两种结局严格互斥，不混淆。不悬挂（每阶段有界）、
- * 不部分生效（pi 侧 set_model 是原子命令，失败即未切换）。
+ * 时点发现退出即按「无活进程」形态收尾（读应答/回读等待无时间上界——收敛事实源
+ * = 应答帧与进程退出）。不悬挂、不部分生效（pi 侧 set_model 是原子命令，失败即未切换）。
  *
  * 档位语义：pi set_model 无档位参数，热切档位由 pi 按新模型档位表联动重设（设计
  * §6.4——热切档位以联动值为生效事实，生效值经 get_state 回读应答宿主；用户显式
@@ -275,9 +257,9 @@ async function readbackEffectiveState(child: ChildProcess): Promise<SetModelForw
     return { kind: "not-active" };
   }
 
-  // ⑤ get_state 回读（回读窗口；get_state 投递失败路径由 close 收敛或超时存活复检兜住）
+  // ⑤ get_state 回读（回读窗口；投递失败路径由 close 收敛兜住）
   const stateRequestId = sendGetStateCommand(child);
-  const stateAck = await awaitStageAck(child, stateRequestId, "state-readback", "get_state readback");
+  const stateAck = await awaitStageAck(child, stateRequestId);
   if (stateAck.kind !== "response") return stateAck;
   return stateReadbackOutcome(stateAck);
 }
@@ -294,8 +276,8 @@ export async function setModelOnActiveChild(
   const sent = sendSetModelCommand(child, { provider: model.provider, modelId: model.modelId });
   if (!sent.delivered) return { kind: "not-active" };
 
-  // ③ 读应答（读应答窗口：退出 → 无活进程；超时且仍存活 → 回读失败——两结局互斥）
-  const ack = await awaitStageAck(child, sent.requestId, "set-model-response", "set_model response");
+  // ③ 读应答（读应答窗口：退出 → 无活进程）
+  const ack = await awaitStageAck(child, sent.requestId);
   if (ack.kind !== "response") return ack;
   if (!ack.success) return classifySetModelFailure(ack.error);
 

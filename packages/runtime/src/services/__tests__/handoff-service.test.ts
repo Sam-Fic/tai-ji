@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { Message, ServerMessage } from '@taiji/shared'
 import type { IMessageBroker } from '../../interfaces.js'
 import { HANDOFF_PROMPT_TEMPLATE, REPLY_MAX_LENGTH, buildHandoffPrompt, sanitizeReply } from '../handoff-prompt.js'
-import { HandoffService, HANDOFF_TIMEOUT_MS } from '../handoff-service.js'
+import { HandoffService } from '../handoff-service.js'
 import { MessageBus } from '../message-bus/message-bus.js'
 import type { BusClient } from '../message-bus/types.js'
 import type { IPiEngine } from '../ports/pi-engine.js'
@@ -23,7 +23,7 @@ describe('handoff-service', () => {
  * HandoffService 单元测试（agent-driven）。
  *
  * 覆盖新流程：runHandoff 让源 session 跑 handoff turn → 从 turn-end 终态帧提取 doc →
- * 新建 session + 注入 doc + 广播（无 doc/reply 字段，DM3）。abort / timeout /
+ * 新建 session + 注入 doc + 广播（无 doc/reply 字段，DM3）。abort /
  * 空文档 / 并发检查 / 重试过滤两分支（willRetry 跳过 / stopReason:error 拒绝，U3②
  * D15.1 混合案 a+）/ buildHandoffPrompt 全覆盖。
  *
@@ -310,25 +310,6 @@ describe('HandoffService', () => {
     expect(broker.broadcast).not.toHaveBeenCalled()
   })
 
-  it('TC4: timeout — 不 emit agent_end，advance timer → rejects（timeout），create 未调', async () => {
-    vi.useFakeTimers()
-    try {
-      const runPromise = service.runHandoff('src-1')
-      // 预挂 catch，避免 timer 触发的 reject 在 await expect 之前成为 unhandled rejection
-      const expectPromise = expect(runPromise).rejects.toThrow('timeout')
-      // 让 ensureActive / onEvent / prompt（async resolve）跑完
-      await vi.advanceTimersByTimeAsync(0)
-
-      // 推进到超时
-      await vi.advanceTimersByTimeAsync(HANDOFF_TIMEOUT_MS)
-
-      await expectPromise
-      expect(sessionService.create).not.toHaveBeenCalled()
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
   it('TC5: 并发检查 — 同 session 再调 runHandoff 同步 reject（already in progress）', async () => {
     // 第一次不 emit agent_end，保持 pending
     const first = service.runHandoff('src-1').catch(() => {})
@@ -378,7 +359,7 @@ describe('HandoffService', () => {
     warnSpy.mockRestore()
   })
 
-  it('TC8b: W3 pi 中途退出 — onExit 触发后 runHandoff rejects（source pi exited），不挂到 timeout', async () => {
+  it('TC8b: W3 pi 中途退出 — onExit 触发后 runHandoff rejects（source pi exited）', async () => {
     const runPromise = service.runHandoff('src-1')
     // 预挂 catch，避免 reject 成为 unhandled rejection
     const expectPromise = expect(runPromise).rejects.toThrow('source pi exited')
@@ -389,7 +370,6 @@ describe('HandoffService', () => {
     srcClient.emitExit(1)
 
     await expectPromise
-    // 远未到 timeout（10 分钟），证明 exit 事件命中而非超时
     // wave:perf-w08：handoffStarted 广播已删，exit 路径零广播（原断言 1 次 handoffStarted）
     expect(broker.broadcast).not.toHaveBeenCalled()
   })

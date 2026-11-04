@@ -13,7 +13,6 @@
  * 依赖方向：events（订阅）+ command（类型化请求/动作原语）。
  */
 import type { PluginEventPayload, PluginInfo, PluginInvokeReply, PluginCatalogReply, PluginListAvailableReply, PluginPrepareInstallReply, PluginConfirmInstallReply, PluginUiSnapshotPayload } from '@taiji/shared'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 import { command } from '../request'
 import * as events from '../events'
 
@@ -35,23 +34,23 @@ export function onPlugins(handler: (plugins: PluginInfo[]) => void): () => void 
 export function getPluginUiSnapshot(
   filter: { sessionId?: string; mountId?: string; pluginId?: string; viewId?: string } = {},
 ): Promise<PluginUiSnapshotPayload> {
-  return command('plugin.ui.snapshot', filter, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('plugin.ui.snapshot', filter)
 }
 
 /** 批准插件申请的权限（可部分选择）。reply pong ack；列表刷新经 config.plugins 广播。 */
 export async function approvePermissions(pluginId: string, permissions: string[]): Promise<void> {
   // reply 为 pong ack（空 payload），await 只为等 RPC settle，无返回值可读
-  await command('plugin.approvePermissions', { pluginId, permissions }, RPC_BACKSTOP_TIMEOUT_MS)
+  await command('plugin.approvePermissions', { pluginId, permissions })
 }
 
 /** 撤销插件全部已授权限。reply pong ack；不改 PluginInfo 字段，无列表刷新广播。 */
 export async function revokePermissions(pluginId: string): Promise<void> {
-  await command('plugin.revokePermissions', { pluginId }, RPC_BACKSTOP_TIMEOUT_MS)
+  await command('plugin.revokePermissions', { pluginId })
 }
 
 /** 拒绝插件本次权限申请（不回收已授权限）。reply pong ack；无列表刷新广播。 */
 export async function denyPermissions(pluginId: string): Promise<void> {
-  await command('plugin.denyPermissions', { pluginId }, RPC_BACKSTOP_TIMEOUT_MS)
+  await command('plugin.denyPermissions', { pluginId })
 }
 
 // ── 插件运行态（S13 崩溃恢复）：list / toggle / crashed 订阅 ──
@@ -61,7 +60,7 @@ export async function denyPermissions(pluginId: string): Promise<void> {
  * 'crashed'（S13 家族卡「插件已停止」判定源）；崩溃态由 plugin:crashed 广播增量提示。
  */
 export async function listPlugins(): Promise<PluginInfo[]> {
-  const reply = await command('plugin.list', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('plugin.list', {})
   return reply.plugins
 }
 
@@ -70,7 +69,7 @@ export async function listPlugins(): Promise<PluginInfo[]> {
  * 本方法 off 再 on（设计失败路径表；ADR-0122：不自动重激活，重启由用户显式触发）。
  */
 export async function togglePlugin(pluginId: string, enabled: boolean): Promise<PluginInfo[]> {
-  const reply = await command('plugin.toggle', { pluginId, enabled }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('plugin.toggle', { pluginId, enabled })
   return reply.plugins
 }
 
@@ -104,7 +103,7 @@ export function onPluginCrashed(handler: (payload: PluginCrashedPayload) => void
  * 防旧家族树残留进快照恢复源（重进授权段由 getAuthorizeView 重推初始树，不依赖旧快照）。
  */
 export async function clearPluginMountUi(mountId: string): Promise<void> {
-  await command('plugin.ui.clearMount', { mountId }, RPC_BACKSTOP_TIMEOUT_MS)
+  await command('plugin.ui.clearMount', { mountId })
 }
 
 // ── provider-plugin-access D9 / D8 / U5：invoke、uiEvent、plugin:event 订阅、清单域 ──
@@ -116,7 +115,7 @@ export async function clearPluginMountUi(mountId: string): Promise<void> {
  * （插件不存在 / 方法未注册 / 超时）经统一 error envelope reject。
  */
 export async function invokePlugin(pluginId: string, method: string, params?: Record<string, unknown>): Promise<unknown> {
-  const reply = await command('plugin.invoke', { pluginId, method, ...(params !== undefined ? { params } : {}) }, RPC_BACKSTOP_TIMEOUT_MS) as PluginInvokeReply
+  const reply = await command('plugin.invoke', { pluginId, method, ...(params !== undefined ? { params } : {}) }) as PluginInvokeReply
   return reply.result
 }
 
@@ -126,7 +125,7 @@ export async function invokePlugin(pluginId: string, method: string, params?: Re
  * 未送达（WS 未 OPEN）时 command 立即 reject（notDelivered，不留 65s 悬挂窗口）。
  */
 export async function sendPluginUiEvent(payload: { pluginId: string; viewId: string; componentId: string; event: string; value: unknown }): Promise<void> {
-  await command('plugin.uiEvent', payload, RPC_BACKSTOP_TIMEOUT_MS)
+  await command('plugin.uiEvent', payload)
 }
 
 /**
@@ -137,7 +136,7 @@ export async function sendPluginUiEvent(payload: { pluginId: string; viewId: str
  * reply pong ack，await 只为等 RPC settle。
  */
 export async function executePluginCommand(payload: { pluginId: string; commandId: string; args?: Record<string, unknown> }): Promise<void> {
-  await command('plugin.executeCommand', payload, RPC_BACKSTOP_TIMEOUT_MS)
+  await command('plugin.executeCommand', payload)
 }
 
 /**
@@ -158,12 +157,12 @@ export function onPluginEvent(handler: (payload: PluginEventPayload) => void): (
  * 2026-10-24）——runtime 侧组装，本域原样透传。
  */
 export function listAvailablePlugins(): Promise<PluginListAvailableReply> {
-  return command('plugin.listAvailable', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('plugin.listAvailable', {})
 }
 
 /** 清单原始目录条目（provider-plugin-access U5：含家族元数据与安装知情面声明）；元数据透传同 listAvailablePlugins。 */
 export function getPluginCatalog(): Promise<PluginCatalogReply> {
-  return command('plugin.catalog', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('plugin.catalog', {})
 }
 
 // ── 两段式安装（provider-plugin-access U4/U6：确认停点对接 Provider 页安装确认卡，S27）──
@@ -174,7 +173,7 @@ export function getPluginCatalog(): Promise<PluginCatalogReply> {
  * 消费方（PluginProviderFlow）按 message/code 分流提示。
  */
 export function preparePluginInstall(packageSpec: string): Promise<PluginPrepareInstallReply> {
-  return command('plugin.prepareInstall', { packageSpec }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('plugin.prepareInstall', { packageSpec })
 }
 
 /**
@@ -182,10 +181,10 @@ export function preparePluginInstall(packageSpec: string): Promise<PluginPrepare
  * 自动回滚（S18）。域内失败经 error 字段返回（success=false），请求级失败 reject。
  */
 export function confirmPluginInstall(pluginId: string): Promise<PluginConfirmInstallReply> {
-  return command('plugin.confirmInstall', { pluginId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('plugin.confirmInstall', { pluginId })
 }
 
 /** 两段式安装取消：清暂存与 pending 登记（未确认不发生安装落盘）。reply pong ack。 */
 export async function cancelPluginInstall(pluginId: string): Promise<void> {
-  await command('plugin.cancelInstall', { pluginId }, RPC_BACKSTOP_TIMEOUT_MS)
+  await command('plugin.cancelInstall', { pluginId })
 }

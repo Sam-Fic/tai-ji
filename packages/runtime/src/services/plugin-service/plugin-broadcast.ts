@@ -8,8 +8,8 @@
  *  - broadcastOrBrokerWith：通用广播原语（plugin:crashed / permissionRequest / statusChange
  *    / uiRequest 回退路径等全部经此）；
  *  - publishViewUpdateTo：views.update 定向发布（bus 装配 → publish；未装配 → 回退全局广播）；
- *  - createUiRequestBroadcastFn：UiRequestQueue 的广播回调装配（撤窗直发 global 通道 +
- *    payload 注入活跃 sessionId + uiRequest 的 bus 定向/回退双路径）。
+ *  - createUiRequestBroadcastFn：UiRequestQueue 的广播回调装配（payload 注入活跃
+ *    sessionId + uiRequest 的 bus 定向/回退双路径）。
  *
  * 动态状态（deps.broadcastFn / messageBus 晚期注入、activeSessionResolver 求值时点）一律
  * 经 getter 闭包注入——调用时求值，与原实例方法动态读 this.* 逐字等价。
@@ -113,19 +113,12 @@ export interface UiRequestBroadcastDeps {
  * 永不弹出。wave:perf-w08（02 文档 D1-1）：sid 为 string 且 bus 已装配 → bus.publish(sid)
  * 定向发布（plugin:uiRequest 归 stream 类，分配 seq + 入 ring 可回放），不再 broadcast；
  * sid undefined（无活跃 session 的弹窗仍须必达全部连接）或 bus 未装配 → 保持全局广播。
- * 撤窗广播不走 session 级 bus（D2 收尾修正，与 D3 permissionRequestExpired 直发形态对称）：
- * bus.publish(sid) 落 session 级帧 onGlobal 永不可达 → 撤窗生产常态失效，直发 global 通道。
  */
 export function createUiRequestBroadcastFn(deps: UiRequestBroadcastDeps): (
   type: UiBroadcastType,
   payload: { requestId: string; pluginId: string } & Record<string, unknown>,
 ) => void {
   return (type, payload) => {
-    if (type === 'plugin:uiRequestExpired') {
-      const sid = deps.resolveActiveSessionId()
-      deps.broadcastOrBroker(type, `ui_${payload.requestId}`, { ...payload, sessionId: sid })
-      return
-    }
     const sid = deps.resolveActiveSessionId()
     const fullPayload = { ...payload, sessionId: sid }
     const messageBus = deps.getMessageBus()

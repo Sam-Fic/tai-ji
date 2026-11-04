@@ -10,7 +10,7 @@
  * （prompt / 监听 turn-end 终态帧 / 提取 text / 创建新 session / 注入 / 广播）。
  *
  * 完成判定：runHandoff 等待源 session 的 turn-end 终态帧（event-adapter 翻译形态，
- * 或 timeout / abort / pi 中途退出），提取最终文本作为 doc。
+ * 或 abort / pi 中途退出），提取最终文本作为 doc。
  *
  * [pi1-disposition-chat-flow U3② / D15.1] 事件消费形态：原直听 pi 原始 agent_end
  * （pi 词汇泄漏进 services，且首个 agent_end 即收尾——pi 出错自动重试场景 stdout 流
@@ -23,7 +23,7 @@
  *   不能把错误文本当交接文档注入新会话）。溢出续跑场景的残余误杀（干净 reject）登记
  *   接受（Q8 裁决）。
  *
- * 失败经 message.error 通道广播到源 session 对话流；timeout / abort / exit 经
+ * 失败经 message.error 通道广播到源 session 对话流；失败 / abort / exit 经
  * Promise reject 抛出。
  *
  * [HISTORICAL] BLOCKER 2 注释保留：runHandoff 创建新 session 后除广播
@@ -76,18 +76,10 @@ interface HandoffServiceOpts {
 }
 
 /**
- * handoff turn 等待 turn-end 终态帧的超时（ms）。
- *
- * agent 生成 handoff 文档可能涉及多次工具调用（读文件等），10 分钟
- * 是宽松上限：正常 handoff turn 远小于此，超时几乎必然意味着 pi 卡死。
- */
-export const HANDOFF_TIMEOUT_MS = 600_000
-
-/**
  * 源 pi 进程退出探测：pi 在 handoff turn 中途崩溃（prompt 已 ack 但未发 agent_end）时，
- * 既无 agent_end 事件也无 reject 信号能让 agentEndPromise settle，旧实现会挂到
- * HANDOFF_TIMEOUT_MS（10 分钟）。经 IPiEngine.onExit（多播订阅，rpc-client 进程退出
- * 时触发）事件化检测，命中即 reject（'handoff: source pi exited'），零轮询。
+ * 既无 agent_end 事件也无 reject 信号能让 agentEndPromise settle。经 IPiEngine.onExit
+ * （多播订阅，rpc-client 进程退出时触发）事件化检测，命中即 reject（'handoff: source pi
+ * exited'），零轮询。
  *
  * [HISTORICAL] 旧实现用 2s 轮询 srcClient.exited，因为 onExit 当时是单槽覆盖语义，
  * 再注册会顶掉 ProcessManager 的清理回调；onExit 改 Set 多播后轮询失去存在理由。
@@ -97,14 +89,12 @@ export const HANDOFF_TIMEOUT_MS = 600_000
  * 进行中的 handoff 句柄。存入 inflight Map，供 abortHandoff 取消用。
  *
  * detachListener：从 srcClient.onEvent 卸载事件监听。
- * timeoutTimer：HANDOFF_TIMEOUT_MS 后触发 reject 的定时器。
  * detachExitWatcher：退订源 pi 退出监听（W3，onExit 多播订阅的 unsubscribe）。
- * resolve/reject：agentEndPromise 的两个端，由 turn-end 终态帧或 timeout/abort/exit 触发。
+ * resolve/reject：agentEndPromise 的两个端，由 turn-end 终态帧或 abort/exit 触发。
  * srcClient：源 session 的 IPiEngine，abort 时调 .abort() 取消 pi turn。
  */
 interface InflightHandoff {
   detachListener: () => void
-  timeoutTimer: ReturnType<typeof setTimeout>
   detachExitWatcher: () => void
   resolve: (doc: string) => void
   reject: (err: Error) => void
@@ -140,18 +130,18 @@ export class HandoffService {
    * 2. getHistory 判空（无历史不可 handoff）。
    * 3. getSession 取 cwd + label。
    * 4. ensureActive 拿源 session 的 IPiEngine。
-    * 5. 注册事件监听（projectHandoffTurnEnd 派生视图消费，U3②）+ timeout + exit 探测，建 agentEndPromise（W3/W4）。
+    * 5. 注册事件监听（projectHandoffTurnEnd 派生视图消费，U3②）+ exit 探测，建 agentEndPromise（W3/W4）。
    *    settle（resolve/reject）前先 cleanupInflight 移除 entry，关闭 settle 后到 finally
-   *    之间 abort 仍生效的窗口；poll srcClient.exited 兜底检测 pi 中途退出（最长挂 10 分钟）。
+   *    之间 abort 仍生效的窗口。
    * 6. fire-and-forget 发送 handoff prompt（await 只确认 pi 收到 ack）。
-   * 7. Promise.race 等 agentEndPromise / timeoutPromise。
+   * 7. 等 agentEndPromise。
    * 8. 成功 → 新建 session + markHandedOff + 注入 doc + 广播。
    *
    * @param srcSessionId 源 session id
    * @param reply 可选的用户备注（sanitize 后追加到 prompt 末尾）
    * @param options Staging Mode（ADR-0056）：modelOverride/thinkingOverride 仅作用于新建的承接 session，
    *   源 session 的 handoff turn 仍用源 session 自身模型（override 不影响源 turn）。
-   * @throws 已有进行中 handoff / 历史为空 / session 不可用 / agent 产空文档 / timeout / abort
+   * @throws 已有进行中 handoff / 历史为空 / session 不可用 / agent 产空文档 / abort
    */
   async runHandoff(
     srcSessionId: string,
@@ -185,18 +175,19 @@ export class HandoffService {
     // 4. 拿源 session 的 IPiEngine（不存在则 restore）
     const srcClient = await this.opts.sessionService.ensureActive(srcSessionId)
 
-    // 5. 建 agentEndPromise + 注册 inflight（监听 + timeout + exit 探测）。
-    // agentEndPromise 是唯一的等待支路：turn-end 终态帧 resolve、timeout / abort / exit reject
-    // 都经它的 resolve/reject 完成（inflight.timeoutTimer 与 abortHandoff 共享 reject 句柄）。
+    // 5. 建 agentEndPromise + 注册 inflight（监听 + exit 探测；无超时——turn 等待挂到
+    // 终态帧 / abort / pi 退出，时间机制删除裁决）。
+    // agentEndPromise 是唯一的等待支路：turn-end 终态帧 resolve、abort / exit reject
+    // 都经它的 resolve/reject 完成（abortHandoff 共享 reject 句柄）。
     //
-    // W4：三条 settle 路径（turn-end 终态帧 / timeout / exit）在调用 resolve/reject 之前
+    // W4：settle 路径（turn-end 终态帧 / exit）在调用 resolve/reject 之前
     // 先 cleanupInflight 把 entry 从 Map 移除，否则 turn-end 终态帧 resolve 后到 runHandoff 的
     // finally 之间（仍在 await agentEndPromise 之后、cleanup 之前的微任务窗口）abortHandoff
     // 仍能拿到 entry 调 reject（已 resolved 的 promise，no-op）+ 广播 handoffAborted，
     // 随后 runHandoff 继续广播 handoffComplete → 前端先 aborted 再 complete，UX 抖动。
     // settle 先 cleanup 后，abort 在该窗口拿到 undefined（no-op，不广播）。
     const agentEndPromise = new Promise<string>((resolve, reject) => {
-      // settled 防止 resolve/reject 被多次调用（listener + timeout + exit 三路可能并发）。
+      // settled 防止 resolve/reject 被多次调用（listener + exit 两路可能并发）。
       let settled = false
       const finalize = (action: 'resolve' | 'reject', value: string | Error): void => {
         if (settled) return
@@ -228,9 +219,6 @@ export class HandoffService {
         }
         finalize('resolve', doc)
       })
-      const timeoutTimer = setTimeout(() => {
-        finalize('reject', new Error(`handoff timeout after ${HANDOFF_TIMEOUT_MS}ms`))
-      }, HANDOFF_TIMEOUT_MS)
       // W3：源 pi 退出探测（事件化）。pi 在 handoff turn 中途崩溃（prompt 已 ack 但无
       // agent_end）时无事件能让 promise settle，onExit 命中即 reject。
       const detachExitWatcher = srcClient.onExit(() => {
@@ -238,7 +226,6 @@ export class HandoffService {
       })
       this.inflight.set(srcSessionId, {
         detachListener,
-        timeoutTimer,
         detachExitWatcher,
         resolve: (doc: string) => finalize('resolve', doc),
         reject: (err: Error) => finalize('reject', err),
@@ -266,7 +253,7 @@ export class HandoffService {
       // B3：buildHandoffPrompt 不再接受 reply 参数，reply 改为新 session 开场消息
       await srcClient.prompt(buildHandoffPrompt())
 
-      // 7. 等结果（turn-end 终态帧 resolve / timeout 或 abort reject）
+      // 7. 等结果（turn-end 终态帧 resolve / abort 或 pi 退出 reject）
       doc = await agentEndPromise
     } finally {
       // 8. 清理 inflight（无论成功 / 失败 / abort）
@@ -375,7 +362,7 @@ export class HandoffService {
       console.warn('[handoff] abort failed:', e)
     }
     // reject 经 finalize 完成 cleanup（clearTimeout + clearInterval + detach + delete）。
-    // finalize 内 settled 标志保证 abort 与并发的 agent_end / timeout / exit 不会重复 settle。
+    // finalize 内 settled 标志保证 abort 与并发的 agent_end / exit 不会重复 settle。
     entry.reject(new Error('handoff aborted'))
     return true
   }
@@ -418,7 +405,6 @@ export class HandoffService {
   private cleanupInflight(srcSessionId: string): void {
     const entry = this.inflight.get(srcSessionId)
     if (!entry) return
-    clearTimeout(entry.timeoutTimer)
     entry.detachExitWatcher()
     entry.detachListener()
     this.inflight.delete(srcSessionId)

@@ -12,7 +12,6 @@ import extensionUI from '@taiji/ui/locale/en-US/extensionUI'
 import search from '@taiji/ui/locale/en-US/search'
 import composable from '@taiji/ui/locale/en-US/composable'
 import importSession from './en-US/importSession'
-import rollingRestart from './en-US/rollingRestart'
 import plan from './en-US/plan'
 import btw from './en-US/btw'
 import pluginProvider from './en-US/pluginProvider'
@@ -50,7 +49,6 @@ export default {
   search,
   composable,
   importSession,
-  rollingRestart,
   plan,
   btw,
   pluginProvider,

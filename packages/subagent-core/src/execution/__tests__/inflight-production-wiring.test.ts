@@ -44,10 +44,10 @@ import { createRecord } from "../persistence/execution-record.ts";
 import { ModelConfigService } from "../assembly/model-config-service.ts";
 import type { RecordStore } from "../persistence/record-store.ts";
 import { SubagentService } from "../subagent-service.ts";
-import { _resetLifecycleState, armIdleTimer, hasIdleTimer } from "../lifecycle/lifecycle-manager.ts";
 import {
   registerSpawnedChildForRecord,
   _resetCoreSpawnedChildrenMirrorForTest,
+  markRecordRoundActive,
 } from "../engine/host/spawned-children.ts";
 import {
   getInFlightSnapshot,
@@ -119,12 +119,11 @@ describe("u7a 生产迁移点 → 在途推送（wiring）", () => {
     setInFlightListener(null);
     service.dispose();
     clearEngines();
-    _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
     fs.rmSync(agentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });
 
-  it("轮终 arm（生产路径 = Continuation.settleRoundSuccess 轮终簿记）：活句柄翻入保活，推送 inFlight=0", async () => {
+  it("轮终翻边（生产路径 = Continuation.settleRoundSuccess 轮终簿记）：活句柄翻入保活，推送 inFlight=0", async () => {
     const handle = await service.execute({ task: "first round", slug: "t", ctxModel: CTX_MODEL });
     // detached 派发链异步（dispatchRoundAsync → kickOffChatRound → pool acquire）：
     // 等协议 run 被 fake 捕获（与 delivery-methods.test.ts 同款等待惯例）。
@@ -137,8 +136,7 @@ describe("u7a 生产迁移点 → 在途推送（wiring）", () => {
 
     seen.length = 0;
     run.settle({ content: "round 1 done" }); // run 应答 = agent_settled（轮终分流触发器）
-    await vi.waitFor(() => expect(hasIdleTimer(handle.subagentId)).toBe(true), { interval: 1 }); // 轮终 = timer armed
-    expect(seen.at(-1)).toEqual({ inFlight: 0 }); // 保活不算在途（D5 谓词）
+    await vi.waitFor(() => expect(seen.at(-1)).toEqual({ inFlight: 0 }), { interval: 1 }); // 轮终 = 轮在途翻边 false
   });
 
   it("续聊投递 disarm（生产路径 = deliverChatMessage → Continuation.dispatchRound）：翻回正在执行，推送 inFlight=1", async () => {
@@ -148,7 +146,7 @@ describe("u7a 生产迁移点 → 在途推送（wiring）", () => {
     fs.writeFileSync(record.sessionFile, "{}\n", "utf-8");
     store.register(record);
     registerSpawnedChildForRecord(record.id, makeFakeChild());
-    armIdleTimer(record.id, () => {}); // 预置保活态（上轮已 settle 的形态）——disarm 挂点的真实生效侧
+    markRecordRoundActive(record.id, false); // 预置保活态（上轮已 settle 的形态）——派发挂点翻边的真实生效侧
 
     seen.length = 0;
     await service.chatActions.deliverChatMessage(record, "next round msg");
@@ -156,8 +154,7 @@ describe("u7a 生产迁移点 → 在途推送（wiring）", () => {
     // 续聊投递 = 新协议 run 承载（H1 U6 后无 interact 面；task.prompt = 聚合消息正文）
     await vi.waitFor(() => expect(fake.runs.length).toBe(1), { interval: 1 });
     expect(fake.runs[0]!.task.prompt).toBe("next round msg");
-    expect(hasIdleTimer(record.id)).toBe(false);
-    expect(seen.at(-1)).toEqual({ inFlight: 1 }); // disarm 后该 record 计在途
+    expect(seen.at(-1)).toEqual({ inFlight: 1 }); // 派发翻边后该 record 计在途
   });
 
   it("dispose 批量回收：逐 record kill+disarm 后收敛推送终态 inFlight=0", async () => {
@@ -198,7 +195,6 @@ describe("u7a 数据范围桥接：EngineClient 反向通道镜像 → core 镜�
     setInFlightListener(null);
     client.dispose();
     _resetCoreSpawnedChildrenMirrorForTest();
-    _resetLifecycleState();
     fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });
 

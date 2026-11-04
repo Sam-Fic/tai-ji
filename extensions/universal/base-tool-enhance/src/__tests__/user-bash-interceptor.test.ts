@@ -37,7 +37,6 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { clearConfigCache } from "@zhushanwen/pi-llm-shared";
 
 import { getRegistryPath, readRegistry } from "../background/registry.ts";
-import { clearExitWatchesForTest } from "../background/exit-watch.ts";
 import { resetNotifyForTest } from "../background/notify.ts";
 import { clearTaskStoreForTest, getAllTasks } from "../background/task-store.ts";
 import { handleUserBash } from "../user-bash-interceptor.ts";
@@ -108,7 +107,6 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.unstubAllEnvs();
-	clearExitWatchesForTest();
 	clearTaskStoreForTest();
 	resetNotifyForTest();
 	clearConfigCache();

@@ -19,12 +19,7 @@ import type {
   ServerMessageUnion,
   BashDispatchReceipt,
 } from '@taiji/shared'
-import {
-  BASH_RPC_TIMEOUT_MS,
-  RENDERER_RPC_MARGIN_MS,
-} from '@taiji/shared'
 import { isNotDeliveredError } from '../../errors'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 import { command as sendCommand } from '../request'
 import * as events from '../events'
 
@@ -40,11 +35,6 @@ export interface HistoryResult {
   loadedTurns: number
   /** [u4b] session 的 turn 总数估计（读到头为精确值，窗口截断时为下界） */
   totalTurnsEstimate: number
-  /**
-   * [U8 重启中断标记] 可选，true = runtime 离线读取判定文件尾部为中断形态（design-
-   * session-lifecycle 缺陷 4 方向 A）。活跃路径与游标翻页不出场（undefined）。
-   */
-  interrupted?: boolean
 }
 
 /**
@@ -71,14 +61,12 @@ export async function getHistory(sessionId: string, query?: HistoryQuery): Promi
     query
       ? { sessionId, ...(query.cursor !== undefined && { cursor: query.cursor }), ...(query.limitTurns !== undefined && { limitTurns: query.limitTurns }), ...(query.maxBytes !== undefined && { maxBytes: query.maxBytes }) }
       : { sessionId },
-    RPC_BACKSTOP_TIMEOUT_MS,
   )
   return {
     messages: reply.messages,
     truncated: reply.truncated,
     loadedTurns: reply.loadedTurns,
     totalTurnsEstimate: reply.totalTurnsEstimate,
-    ...(reply.interrupted !== undefined && { interrupted: reply.interrupted }),
   }
 }
 
@@ -109,7 +97,6 @@ export function send(
     images
       ? { sessionId, content: text, images, ...(clientUuid !== undefined && { clientUuid }) }
       : { sessionId, content: text, ...(clientUuid !== undefined && { clientUuid }) },
-    RPC_BACKSTOP_TIMEOUT_MS,
   )
 }
 
@@ -142,7 +129,7 @@ export function submitDelivery(
     ...(images ? { images } : {}),
     ...(segments && segments.length > 0 ? { segments } : {}),
   }
-  return sendCommand('delivery.submit', payload, RPC_BACKSTOP_TIMEOUT_MS)
+  return sendCommand('delivery.submit', payload)
 }
 
 /**
@@ -152,13 +139,13 @@ export function submitDelivery(
  * segments 快照（D7/ADR-0043），供文本回输入框草稿。
  */
 export function cancelDelivery(sessionId: string, clientUuid: string): Promise<DeliveryCancelReply> {
-  return sendCommand('delivery.cancel', { sessionId, clientUuid }, RPC_BACKSTOP_TIMEOUT_MS)
+  return sendCommand('delivery.cancel', { sessionId, clientUuid })
 }
 
 /** 全量回收（delivery.drain，D10/V11）：forceQuit 专用（abort 不清队列）。返回全部被回收
  *  条目（发送序，全文 + segments 快照），文本回草稿。 */
 export function drainDelivery(sessionId: string): Promise<DeliveryDrainReply> {
-  return sendCommand('delivery.drain', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return sendCommand('delivery.drain', { sessionId })
 }
 
 /**
@@ -167,7 +154,7 @@ export function drainDelivery(sessionId: string): Promise<DeliveryDrainReply> {
  * 存留条目的权威状态经 session.delivery 快照帧恢复（last-value 单源）。
  */
 export function resyncDelivery(sessionId: string, clientUuids: string[]): Promise<DeliveryResyncReply> {
-  return sendCommand('delivery.resync', { sessionId, clientUuids }, RPC_BACKSTOP_TIMEOUT_MS)
+  return sendCommand('delivery.resync', { sessionId, clientUuids })
 }
 
 /**
@@ -177,7 +164,7 @@ export function resyncDelivery(sessionId: string, clientUuids: string[]): Promis
  * 本次编辑并解除锚定。
  */
 export function peekDelivery(sessionId: string, clientUuid: string): Promise<DeliveryPeekReply> {
-  return sendCommand('delivery.peek', { sessionId, clientUuid }, RPC_BACKSTOP_TIMEOUT_MS)
+  return sendCommand('delivery.peek', { sessionId, clientUuid })
 }
 
 /**
@@ -195,7 +182,6 @@ export function editDelivery(
   return sendCommand(
     'delivery.edit',
     { sessionId, clientUuid, content, ...(segments && segments.length > 0 ? { segments } : {}) },
-    RPC_BACKSTOP_TIMEOUT_MS,
   )
 }
 
@@ -210,16 +196,15 @@ export function editDelivery(
  * 与完成通知到达。压缩进行中的 session.compacting / compaction_end 生命周期推送仍由
  * interpreter 从 pi 事件编排（会话级订阅消费），本 RPC 不再同步等待压缩全程。
  *
- * 超时 = RPC_BACKSTOP_TIMEOUT_MS：受理型回执（reply 在 ensureActive + 命令投递前即返回，
- * 分钟级压缩全程不占请求窗口），旧 30min 压缩墙钟随同步链退役。
+ * 受理型回执（reply 在 ensureActive + 命令投递前即返回，分钟级压缩全程不占请求窗口）。
  */
 export function compactBackground(sessionId: string, customInstructions?: string): Promise<void> {
-  return sendCommand('session.compactBackground', { sessionId, customInstructions }, RPC_BACKSTOP_TIMEOUT_MS)
+  return sendCommand('session.compactBackground', { sessionId, customInstructions })
 }
 
 /** 中断当前回合（DEFERRED 流转，§9 G-025） */
 export function abort(sessionId: string): Promise<void> {
-  return sendCommand('message.abort', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return sendCommand('message.abort', { sessionId })
 }
 
 /**
@@ -231,16 +216,11 @@ export function abort(sessionId: string): Promise<void> {
  * 返回 BashDispatchReceipt（bash 投递可靠性契约）：reply 回执携带执行状态
  * （started/settled/rejected），消费方据它判定「命令是否已执行」——不依赖推送帧是否到达。
  * 「消息未送达 runtime」的传输失败在此翻译为 rejected 回执（可证明未执行，与 runtime
- * 拒绝同构）；其余 reject（断连 rejectAll / backstop 超时 / pending 驱逐）= 已送出但
- * 回执不可达，原样抛出，消费方按「可能已执行」保守处置（防草稿恢复致命令双执行）。
+ * 拒绝同构）；其余 reject（断连 rejectAll / pending 驱逐）= 已送出但回执不可达，
+ * 原样抛出，消费方按「可能已执行」保守处置（防草稿恢复致命令双执行）。
  *
- * 超时 = BASH_RPC_TIMEOUT_MS + RENDERER_RPC_MARGIN_MS（1h + 60s = 3660s，语义化取值，
- * timeout-slow-flow-wallclock D5）：校准链「renderer = runtime 第一刀（rpc-client
- * BASH_RPC_TIMEOUT_MS）+ 余量」，双端引用同一 shared 常量编译期对齐——结构保证默认
- * 配置下 renderer 恒不先于 runtime 判死，`!` 长命令（65s 存量误报 / 300s 前科）
- * 不再被 renderer backstop 误杀。不变量仅默认配置成立：env 逃生门
- * TAIJI_RUNTIME_BASH_RPC_TIMEOUT_MS 把 runtime 调成 >3660s 或 0（不限时）时，本 3660s
- * backstop 先到即回执不可达——消费方保守按已执行处理（已知接受，D5 不变量收窄）。
+ * 无超时（ADR-0188）：bash 是命令执行，合法耗时可达小时级，等待由断连收尾或
+ * reply 到达收终，不靠时间猜测中断。
  *
  * excludeFromContext 为 undefined 时只传 {sessionId, command}（与 send 的 images 空数组
  * 归一模式对称，避免 runtime 收到无意义的 excludeFromContext:false 键）。
@@ -254,7 +234,6 @@ export async function bash(
     return await sendCommand(
       'message.bash',
       excludeFromContext !== undefined ? { sessionId, command, excludeFromContext } : { sessionId, command },
-      BASH_RPC_TIMEOUT_MS + RENDERER_RPC_MARGIN_MS,
     )
   } catch (e) {
     if (isNotDeliveredError(e)) {
@@ -267,7 +246,7 @@ export async function bash(
 
 /** 取消进行中的 bash 执行（调 pi abort_bash） */
 export function abortBash(sessionId: string): Promise<void> {
-  return sendCommand('message.abortBash', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return sendCommand('message.abortBash', { sessionId })
 }
 
 /**

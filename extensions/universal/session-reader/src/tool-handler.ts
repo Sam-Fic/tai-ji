@@ -625,9 +625,9 @@ const FIND_DEFAULT_LIMIT = 20
  *   动作，不再折叠。
  *
  * u11（design 2026-09-10 §6.6）：metadataProvider / liveSessionDir 透传匹配层——标题
- * 检索的惰性/窄化/TTL 缓存策略都在发现层与注入包装侧，本函数只负责透传（缺省
- * undefined = 现状行为）。多次 findSessions 调用（分组探测）经注入侧 TTL 缓存去重，
- * 标题 listAll 每 TTL 窗口至多一次/目录。
+ * 检索的惰性/窄化/mtime 缓存策略都在发现层与注入包装侧，本函数只负责透传（缺省
+ * undefined = 现状行为）。多次 findSessions 调用（分组探测）经注入侧 mtime 缓存去重，
+ * 标题 listAll 在目录 mtime 未变期间至多一次/目录。
  *
  * E1 预解析根复用（ext-simplify-04 §3 D1，清 impl-plan D-15④ 债）：开头一次
  * resolveSessionRoots(signals)（无 options 恒实扫——根扫描无缓存，doctor 缓存机
@@ -1314,7 +1314,7 @@ async function doWorkflow(
 }
 
 // ---------------------------------------------------------------------------
-// u11 标题元数据 TTL 缓存（design 2026-09-10 §6.6 调用策略 ③）
+// u11 标题元数据缓存（design 2026-09-10 §6.6；mtime 失效单通道）
 // ---------------------------------------------------------------------------
 
 /**
@@ -1324,23 +1324,13 @@ async function doWorkflow(
  */
 interface MetadataCacheEntry {
   entries: SessionMetadataEntry[]
-  /** 写入时刻（Date.now()），TTL 判定用 */
-  cachedAt: number
   /** 目录 mtime(ms)；不存在为 null（存在性翻转即失效） */
   dirMtimeMs: number | null
 }
 
 const metadataCache = new Map<string, MetadataCacheEntry>()
-// §7.5 豁免（development-guide.md「纯性能缓存豁免」）：TTL 纯性能缓存，jiti 双路径加载
+// §7.5 豁免（development-guide.md「纯性能缓存豁免」）：纯性能缓存，jiti 双路径加载
 // 分裂成两份仅多一次 miss 重扫，无正确性影响，不升级 globalThis 单例。
-
-/**
- * 标题缓存 TTL（秒级，§6.6 策略 ③）。独立定义 5000（原「与 doctor 根扫描缓存同档
- * （DOCTOR_CACHE_TTL_MS）」的别名已随 doctor 缓存机删除而撤销，ext-simplify-04 U3）；
- * 量级待 §11.3a 实测校准；mtime 是主失效通道，TTL 兜「目录内文件追加不改目录 mtime」
- * 的陈旧面（标题恰好随首条消息落盘，同窗口内新增标题最多延迟一个 TTL 可见，可接受）。
- */
-export const METADATA_CACHE_TTL_MS = 5000
 
 /** stat 目录 mtime；不存在返回 null（与缓存条目的 null 比对 = 存在性未翻转）。 */
 async function statDirMtimeOrNull(path: string): Promise<number | null> {
@@ -1354,25 +1344,24 @@ async function statDirMtimeOrNull(path: string): Promise<number | null> {
 }
 
 /**
- * 把注入的 metadataProvider 包上 TTL 缓存（get 失效判定 + set 快照）。
+ * 把注入的 metadataProvider 包上 mtime 缓存（get 失效判定 + set 快照）。
  *
- * 只缓存成功结果——provider 抛错原样上抛，由发现层单目录 try/catch 记空继续（guard），
- * 且瞬态失败不污染缓存（下个查询即重试）。find 的多次 findSessions 调用（u10 分组探测
- * main/subagent 两路）与连续 keyword 查询都经此处去重，listAll 每 TTL 窗口至多一次/目录。
+ * 失效单通道 = 目录 mtime（存在性翻转亦失效：null 比对）。只缓存成功结果——provider
+ * 抛错原样上抛，由发现层单目录 try/catch 记空继续（guard），且瞬态失败不污染缓存
+ * （下个查询即重试）。find 的多次 findSessions 调用（u10 分组探测 main/subagent 两路）
+ * 与连续 keyword 查询都经此处去重，listAll 在目录 mtime 未变期间至多一次/目录。
  */
 function withMetadataCache(provider: SessionMetadataProvider): SessionMetadataProvider {
   return async (dir) => {
     const hit = metadataCache.get(dir)
     if (hit !== undefined) {
-      const expired = Date.now() - hit.cachedAt >= METADATA_CACHE_TTL_MS
       const mtime = await statDirMtimeOrNull(dir)
-      if (!expired && mtime === hit.dirMtimeMs) return hit.entries
+      if (mtime === hit.dirMtimeMs) return hit.entries
       metadataCache.delete(dir)
     }
     const entries = await provider(dir)
     metadataCache.set(dir, {
       entries,
-      cachedAt: Date.now(),
       dirMtimeMs: await statDirMtimeOrNull(dir),
     })
     return entries

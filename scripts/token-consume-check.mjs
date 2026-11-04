@@ -22,7 +22,7 @@
  *   3 = chromium launch 失败（提示 npx playwright install chromium）
  *
  * 用法：
- *   node scripts/token-consume-check.mjs [--port 1430] [--ready-timeout 60000]
+ *   node scripts/token-consume-check.mjs [--port 1430]
  */
 import { chromium } from '@playwright/test'
 import { spawn } from 'node:child_process'
@@ -33,9 +33,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 const REPO_ROOT = resolve(import.meta.dirname, '..')
 const RENDERER_DIR = resolve(REPO_ROOT, 'packages/renderer')
 const DEFAULT_PORT_START = 1430
-const DEFAULT_READY_TIMEOUT = 60000
 const POLL_INTERVAL_MS = 500
-const KILL_GRACE_MS = 2000
 
 // 5 核心组件消费层断言表（label/选择器/computed 属性/期望变量/首屏/必需）
 // required=true 计入 exit code 判定；required=false 为 best-effort（var() 消费由 vitest
@@ -64,9 +62,10 @@ async function findFreePort(start) {
   throw new Error(`未找到空闲端口（${start}-${start + 49}）`)
 }
 
-async function pollReady(url, timeout, child) {
+// ready 轮询无超时上限、kill 无宽限（时间机制删除裁决：本地等待删除）
+async function pollReady(url, child) {
   const start = Date.now()
-  while (Date.now() - start < timeout) {
+  for (;;) {
     if (child && child.exitCode !== null) return { ok: false, reason: 'child-exited' }
     try {
       const res = await fetch(url, { method: 'GET' })
@@ -76,10 +75,9 @@ async function pollReady(url, timeout, child) {
     }
     await sleep(POLL_INTERVAL_MS)
   }
-  return { ok: false, reason: 'timeout' }
 }
 
-async function killProcess(child, graceMs) {
+async function killProcess(child) {
   if (!child || child.exitCode !== null || child.signalCode) return
   const exitP = new Promise((r) => child.once('exit', () => r(true)))
   try {
@@ -87,21 +85,14 @@ async function killProcess(child, graceMs) {
   } catch {
     return
   }
-  const exited = await Promise.race([exitP, sleep(graceMs).then(() => false)])
-  if (!exited) {
-    try {
-      child.kill('SIGKILL')
-    } catch {
-      /* ignore */
-    }
-  }
+  await exitP
 }
 
 
 // ---------------------------------------------------------------------------
 // 主流程
 // ---------------------------------------------------------------------------
-async function run({ port, readyTimeout }) {
+async function run({ port }) {
   const chosenPort = port || (await findFreePort(DEFAULT_PORT_START))
   const url = `http://localhost:${chosenPort}`
   let child
@@ -129,7 +120,7 @@ async function run({ port, readyTimeout }) {
     child.stderr.on('data', (c) => stderr.push(c.toString()))
 
     // (2) 轮询 ready
-    const ready = await pollReady(url, readyTimeout, child)
+    const ready = await pollReady(url, child)
     if (!ready.ok) {
       const tail = stderr.slice(-20).join('')
       console.error(`[token-consume] dev server 未 ready（${ready.reason}）@ ${url}\n${tail}`)
@@ -145,9 +136,10 @@ async function run({ port, readyTimeout }) {
       return { exitCode: 3, results }
     }
     const page = await browser.newPage()
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: readyTimeout })
-    await page.waitForSelector('.app-shell', { state: 'visible', timeout: readyTimeout })
-    await sleep(2000) // 等 Vue mount + Tailwind JIT 编译稳定
+    await page.goto(url, { waitUntil: 'domcontentloaded' })
+    // waitForSelector 限时 = Playwright 断言超时（测试框架语义）；.app-shell visible
+    // 即 Vue mount 完成（无固定 sleep——时间机制删除裁决）
+    await page.waitForSelector('.app-shell', { state: 'visible', timeout: 30000 })
 
     // (4) Settings 需交互打开（首屏 non-firstScreen 的断言前置）
     const settingsAssertion = ASSERTIONS.find((a) => !a.firstScreen)
@@ -162,7 +154,6 @@ async function run({ port, readyTimeout }) {
         })
         if (clicked) {
           await page.waitForSelector('[role="dialog"]', { state: 'visible', timeout: 8000 }).catch(() => {})
-          await sleep(1000)
         } else {
           console.warn('[token-consume] 未找到 sidebar 齿轮按钮（title 含 setting），Settings 降级')
         }
@@ -207,7 +198,7 @@ async function run({ port, readyTimeout }) {
     return { exitCode: failedRequired.length === 0 ? 0 : 1, results }
   } finally {
     if (browser) await browser.close().catch(() => {})
-    await killProcess(child, KILL_GRACE_MS)
+    await killProcess(child)
   }
 }
 
@@ -219,11 +210,8 @@ function parseArgs(argv) {
     if (a === '--port' && next) {
       opts.port = Number(next)
       i++
-    } else if (a === '--ready-timeout' && next) {
-      opts.readyTimeout = Number(next)
-      i++
     } else if (a === '-h' || a === '--help') {
-      console.log('用法: node scripts/token-consume-check.mjs [--port 1430] [--ready-timeout 60000]')
+      console.log('用法: node scripts/token-consume-check.mjs [--port 1430]')
       process.exit(0)
     }
   }
@@ -231,7 +219,7 @@ function parseArgs(argv) {
 }
 
 const opts = parseArgs(process.argv.slice(2))
-run({ port: opts.port, readyTimeout: opts.readyTimeout || DEFAULT_READY_TIMEOUT })
+run({ port: opts.port })
   .then((r) => {
     console.log(`\n[token-consume] exit ${r.exitCode}（${r.results.filter((x) => x.matches).length}/${r.results.length} pass）`)
     process.exit(r.exitCode)

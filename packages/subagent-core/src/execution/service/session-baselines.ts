@@ -179,7 +179,7 @@ export class SessionBaselines {
 
   /** [§1.4 (a) 代际机制] pi 绑定代际：initSession 注入新句柄时 +1。作废（invalidatePiBinding）
    *  不递增——代际唯一标识「第几次注入的句柄」，作废只翻转可用性旗标；「等新代际注入」
-   *  的有界等待（waitForUsablePi）以代际变化为准绳。 */
+   *  的降级判定（usablePiOrSkip 现读）以代际变化为准绳。 */
   private _piGeneration = 0;
 
   /** [§1.4 (a)] 当前代际句柄的可用性。initSession 置 true；invalidatePiBinding 置 false。
@@ -192,9 +192,6 @@ export class SessionBaselines {
 
   /** [§1.4 (a)] 作废后已做过 debug 留痕的代际（防同一作废窗内每次读都刷 debug）。 */
   private staleReadLoggedGeneration = -1;
-
-  /** [§1.4 (a)] waitForUsablePi 的唤醒集（initSession 注入完成时逐一唤醒）。 */
-  private readonly piBindWaiters = new Set<() => void>();
 
 
   /** 当前 Pi session ID（本进程 pi session，事件路由等用；record 过滤不用它）。initSession 时注入。 */
@@ -297,7 +294,7 @@ export class SessionBaselines {
    *  deps 回调按原时序逐行执行——时序语义与抽取前逐行等价，见各回调注释。 */
   initSession(init: SubagentServiceSessionInit): void {
     // [§1.4 (a)] 新代际注入：代际 +1 + 可用性翻真（作废窗结束）。句柄写点全文唯一
-    //（与字段注释一致），等待中的轮终收尾（waitForUsablePi）由此恢复正常路径写。
+    //（与字段注释一致），轮终收尾的 pi 写由此恢复正常路径。
     this._piGeneration += 1;
     this._pi = init.pi;
     this._piUsable = true;
@@ -349,9 +346,6 @@ export class SessionBaselines {
     // idle 等 revive（[U5/D4 MF-1]：磁盘重建单规则恒 idle）；sweep 再对终态 record
     // 补发注销落盘——「注销经对账 sweep 保证落盘」的编排点）。
     this.deps.runPendingReconcileSweep();
-    // [§1.4 (a)] 注入编排收尾才唤醒等待者（store.setPi / 孤儿恢复 / sweep 全部就位），
-    // 被唤醒的轮终收尾读到的绑定是完整就绪态。
-    this.wakePiBindWaiters();
   }
 
   /**
@@ -428,49 +422,22 @@ export class SessionBaselines {
   }
 
   /**
-   * [§1.4 (a)] 轮终收尾的「句柄就绪」有界等待：绑定可用 → 立即返回句柄（正常路径，
-   * 零等待）；绑定已作废（reload/替换窗）→ 挂起等待下一次 initSession 注入新代际
-   * （事件驱动唤醒，无轮询）；超时 → 返回 null（调用方降级为跳过 pi 写——磁盘 journal
+   * [§1.4 (a)] 轮终收尾的「句柄就绪」现读判定（原 waitForUsablePi 的等待窗已随
+   * 时间机制删除——不作时间阈值等待）：绑定可用 → 返回句柄（正常路径）；绑定已作废
+   *（reload/替换窗）或从未注入 → 返回 null（调用方降级为跳过 pi 写——磁盘 journal
    * / manifest 面不依赖 pi，已在等待前落盘的语义不受影响）。
-   *
-   * 量级 = 控制范围单请求粒度（秒级以内，调用方传参定死）：等待命中 = 窗口内轮终条目
-   * 写不丢（落进 reload 后的新权威 session）；超时 = 极端情况降级，warn 留痕含恢复指引。
-   *
-   * 从未注入过句柄（_pi === null，headless / 纯内存测试形态）→ 不等待（没有「新代际
-   * 注入」可等），立即返回 null——与注入前 `pi?.` 可选链跳过的现状语义一致。
    */
-  waitForUsablePi(timeoutMs: number, context: string): Promise<PiLike | null> {
+  usablePiOrSkip(context: string): PiLike | null {
     const current = this.pi;
-    if (current !== null) return Promise.resolve(current);
-    if (this._pi === null) return Promise.resolve(null);
-    return new Promise((resolve) => {
-      let settled = false;
-      const finish = (pi: PiLike | null, timedOut: boolean): void => {
-        if (settled) return;
-        settled = true;
-        this.piBindWaiters.delete(wake);
-        clearTimeout(timer);
-        if (timedOut) {
-          logger.warn(
-            `[subagents] pi re-bind wait timed out after ${timeoutMs}ms (context=${context}) — ` +
-              "pi entry/event writes skipped for this step (disk journal/manifest writes are pi-independent and already done); " +
-              "recovery: none required — the next session_start re-binds pi and subsequent rounds write normally",
-          );
-        }
-        resolve(pi);
-      };
-      const wake = (): void => finish(this.pi, false);
-      const timer = setTimeout(() => finish(null, true), timeoutMs);
-      this.piBindWaiters.add(wake);
-    });
-  }
-
-  /** [§1.4 (a)] initSession 注入编排收尾的等待者唤醒（逐一唤醒后清集）。 */
-  private wakePiBindWaiters(): void {
-    if (this.piBindWaiters.size === 0) return;
-    const waiters = [...this.piBindWaiters];
-    this.piBindWaiters.clear();
-    for (const wake of waiters) wake();
+    if (current !== null) return current;
+    if (this._pi !== null) {
+      // 作废窗内降级：debug 留痕（恢复由下一次 initSession 自然承接，无需指引动作）。
+      logger.debug(
+        `[subagents] pi binding invalidated (session replacement window) — pi write skipped (context=${context}); ` +
+          "recovery: none required — the next session_start re-binds pi and subsequent rounds write normally",
+      );
+    }
+    return null;
   }
 
   /**

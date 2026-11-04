@@ -146,7 +146,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Check, Copy, FileText, SquareTerminal, X } from '@lucide/vue'
 import { Button } from '@taiji/ui'
@@ -160,8 +160,6 @@ import { formatClockDuration } from '@/lib/duration-format'
 import * as backgroundTaskApi from '@taiji/core/transport/api/domains/background-task'
 import { useToast } from '@/composables/useToast'
 import { useCopy } from '@/composables/panel/useCopy'
-
-const FOLLOW_INTERVAL_MS = 2000
 
 const { t } = useI18n()
 const toast = useToast()
@@ -198,7 +196,7 @@ const outputLost = ref(false)
 const outputLoaded = ref(false)
 /** D5：回执 truncated 字段（超出字节窗口，默认 32KB）——输出区顶部条件提示 */
 const outputTruncated = ref(false)
-/** running 计时基准（跟随 interval 节拍顺带刷新，零额外 timer；终态用 durationMs 固定值） */
+/** running 计时基准（打开/切任务拉取时刻定格，零 timer；终态用 durationMs 固定值） */
 const now = ref(Date.now())
 
 /** 迟到响应检查：切任务后旧任务的 output reply 不得写进新任务视图 */
@@ -223,8 +221,6 @@ async function fetchOutput(): Promise<void> {
   }
 }
 
-let followTimer: ReturnType<typeof setInterval> | null = null
-
 // ── 两段式终止状态（声明先于下方 immediate watch 回调的复位引用）──
 
 const killArmed = ref(false)
@@ -233,34 +229,8 @@ const killing = ref(false)
 /** 仅 running 可终止（killing 已发令不重复发；终态无按钮） */
 const canKill = computed(() => displayEntry.value?.state === 'running')
 
-function startFollow(): void {
-  if (followTimer !== null) return
-  followTimer = setInterval(() => {
-    now.value = Date.now()
-    void fetchOutput()
-  }, FOLLOW_INTERVAL_MS)
-}
-
-function stopFollow(): void {
-  if (followTimer === null) return
-  clearInterval(followTimer)
-  followTimer = null
-}
-
-/** 跟随条件 = 分区条目活跃（running/killing）；终态即停（D7 停止条件）；条目从分区消失
- * （registry LRU 淘汰 / 损坏自愈清表）同样停——快照冻结只兜元信息渲染，对已消失条目
- * 继续发 output RPC 属无效空转（D6 #13，BG-6） */
-const following = computed(() => {
-  const value = entry.value
-  return value !== null && isActiveBackgroundTaskState(value.state)
-})
-
-watch(following, (on) => {
-  if (on) startFollow()
-  else stopFollow()
-}, { immediate: true })
-
-onBeforeUnmount(stopFollow)
+// 无轮询（ADR-0188 丁类退役）：打开/切任务时拉取一次，运行中不自动刷新——
+// 重开 drawer 或切任务再拉；running 计时定格在拉取时刻。
 
 // 切任务：重置全部视图状态 + 首次拉取（immediate 覆盖挂载首次拉取，D7「打开/切任务时拉一次」）
 watch(selectedTaskId, () => {

@@ -131,7 +131,7 @@ export function readRegistryEntries(registryPath: string): BackgroundTaskRegistr
 /**
  * 写 orphaned 终态（锁内版，[u-runtime-svc 提炼导出]）：调用方已持 `<registry.json>.lock`
  * 时使用（D6 分支③「判活重查置于锁内重读之后」要求「重读 → 判活 → 写」全在同一锁临界
- * 区，防 stale 条目覆盖 poller 已写的新鲜终态——嵌套取锁必然 ELOCKED，故必须有无锁变体）。
+ * 区，防 stale 条目覆盖 extension exit-collector 已写的新鲜终态——嵌套取锁必然 ELOCKED，故必须有无锁变体）。
  * 锁内 RMW：读全量 → 同 id 覆盖 → 终态 LRU 裁剪（protocol trimTerminalEntries 纯函数）→
  * 原子写（protocol atomicWriteRegistry + serializeRegistryFile，字节契约单点）——与
  * extension 写侧 writeRegistryEntry 语义对齐。reason 不写：reason 枚举（natural/timeout/

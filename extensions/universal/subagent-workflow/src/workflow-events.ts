@@ -59,7 +59,6 @@ import {
   evictDoneRunsBeyondCap,
   MAX_RETAINED_DONE_RUNS,
   runSummary,
-  scheduleTimeBudget,
 } from "@zhushanwen/subagent-core";
 import type { WorkflowRun } from "@zhushanwen/subagent-core";
 import { WorkerHostImpl } from "@zhushanwen/subagent-core";
@@ -471,8 +470,6 @@ export function setupWorkflowDomain(
       appendEntry: (customType: string, data: unknown) => {
         resolveCurrentPi().appendEntry(customType, data);
       },
-      scheduleTimeBudget: (runId: string, budgetTimeMs: number) =>
-        scheduleTimeBudget(runId, deps, budgetTimeMs),
       // [H2 W3] workflow agent() 统一派发入口（设计 §3.5）：pump 侧 dispatchAgentCall
       // 经此转调 SubagentService.executeWorkflowAgent——真实 record（origin:"workflow"
       // + parentRunId）进 store、共享池/守护/journal 归 service 编排；parentRunId 由
@@ -914,12 +911,9 @@ export function setupWorkflowDomain(
     // 解析），pi 仍 notify「resuming with model B」成功文案。转发清单对账测试防第四处
     // 漏转发（workflow-events.test.ts lazyDeps 转发清单对账 describe）。
     get onResumeModelOverrideCommitted() { return createLazy(resolveDeps, "onResumeModelOverrideCommitted"); },
-    // scheduleTimeBudget / appendEntry 不可缺席（ports.ts D-12 regression fix 同族）：
-    // rebuildRuntime 重排 run 级墙钟预算计时器、finalizeRun 的 pending:unregister
-    // 直落都经这两个成员消费——lazyDeps 缺席会让消费点拿到 undefined（可选属性
-    // 静默放行）；appendEntry 缺席尤其危险：workflow tool 的 run action 以 lazyDeps
-    // 为 deps 启动 run，直落静默跳过 + emit 已删 = 注销 entry 永缺位。转发形态与其余成员一致。
-    get scheduleTimeBudget() { return createLazy(resolveDeps, "scheduleTimeBudget"); },
+    // appendEntry 不可缺席（ports.ts D-12 regression fix 同族）：finalizeRun 的
+    // pending:unregister 直落经它消费——lazyDeps 缺席会让消费点拿到 undefined（可选
+    // 属性静默放行），直落静默跳过 + emit 已删 = 注销 entry 永缺位。转发形态与其余成员一致。
     get appendEntry() { return createLazy(resolveDeps, "appendEntry"); },
     get log() { return createLazy(resolveDeps, "log"); },
   };

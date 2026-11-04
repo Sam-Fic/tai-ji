@@ -82,14 +82,6 @@ function nextPushId(): string {
   return `terminal_push_${Date.now()}_${pushCounter}`
 }
 
-/**
- * kill 的 SIGKILL 升级延迟（RT-8#10）。超时量级按被保护对象的粒度校准（AGENTS 架构约定
- * #19）：这里是单个 PTY 进程的回收兜底——控制范围/单对象粒级，秒级即可（对齐 shell-runner
- * 的 ESCALATION_DELAY_MS=5s 惯例），不是任务级墙钟。SIGTERM 可被 shell trap 捕获/忽略，
- * 无升级则 ignore trap 的 shell + 其子进程成为孤儿，fd 永久残留。
- */
-const KILL_ESCALATION_MS = 5000
-
 export class TerminalService implements ITerminalService {
   /** 实例注册表：键 = terminalId（`term:<sid>:<n>`），值 = PTY 句柄。键集即存活实例全集。 */
   private readonly ptyMap = new Map<string, pty.IPty>()
@@ -222,10 +214,7 @@ export class TerminalService implements ITerminalService {
     } catch (e) {
       // 重复 kill 或进程已退出时抛错，onExit 回调幂等清理注册表 + 广播 terminal.exit
       console.error(`[terminal] kill failed: terminalId=${terminalId}`, serializeError(e))
-      return
     }
-    // onExit 回调会清理注册表 + 广播 terminal.exit；SIGTERM 被忽略时升级兜底
-    this.scheduleKillEscalation(terminalId, proc, 'kill')
   }
 
   attach(sid: string, terminalId: string): void {
@@ -306,7 +295,7 @@ export class TerminalService implements ITerminalService {
   }
 
   /**
-   * 回收单个实例：kill + 清注册表 + 清写失败标记 + SIGKILL 升级兜底（untracked）。
+   * 回收单个实例：kill + 清注册表 + 清写失败标记。
    */
   private destroyInstance(terminalId: string, proc: pty.IPty): void {
     try {
@@ -319,42 +308,6 @@ export class TerminalService implements ITerminalService {
     this.writeFailedReported.delete(terminalId)
     // destroyInstance 不主动 publish exit；进程真正退出时 spawn 期注册的 onExit 回调仍会广播
     // terminal.exit（消费侧按缺条目 / 幂等静默收敛——renderer 已在 session.deleted / 关闭沿清理分区）。
-    // SIGTERM 被忽略时仍需升级（fd 残留与销毁原因无关）。此时注册表已删，升级 timer 不能靠
-    // map 判活——untracked 模式下进程已退出时 kill 会抛错被吞（无害）；误杀风险不存在：
-    // terminalId 永不复用，同 id 不会 re-spawn。
-    this.scheduleKillEscalation(terminalId, proc, 'destroyInstance', { untracked: true })
-  }
-
-  /**
-   * kill 的 SIGKILL 升级兜底（RT-8#10）：SIGTERM 后 KILL_ESCALATION_MS 仍未退出
-   * （shell trap 捕获/忽略 SIGTERM、子进程不在同进程组）时强杀，防孤儿进程 + fd 残留。
-   * tracked 模式（用户 kill）：onExit 清理注册表后本 timer 自然 no-op——同 terminalId 是
-   * 绝不复用的，检查 `ptyMap.get(terminalId) !== proc` 只作防御式兜背（防实现漂移）。
-   */
-  private scheduleKillEscalation(
-    terminalId: string,
-    proc: pty.IPty,
-    label: string,
-    opts?: { untracked?: boolean },
-  ): void {
-    const timer = setTimeout(() => {
-      if (!opts?.untracked && this.ptyMap.get(terminalId) !== proc) return
-      try {
-        proc.kill('SIGKILL')
-        console.warn(
-          `[terminal] ${label}: SIGTERM 后 ${KILL_ESCALATION_MS}ms 未退出，已升级 SIGKILL: terminalId=${terminalId}`,
-        )
-      } catch (e) {
-        // SIGKILL 也失败（极罕见：进程已死时 node-pty 抛错属预期 no-op；真失败则子进程/fd
-        // 残留）——上报带恢复动作，不留静默断链
-        console.error(
-          `[terminal] ${label}: SIGKILL 升级失败，子进程/fd 可能残留（恢复动作：重启应用回收）: terminalId=${terminalId}`,
-          serializeError(e),
-        )
-      }
-    }, KILL_ESCALATION_MS)
-    // 兜底 timer 不得拖延 runtime 进程退出
-    timer.unref()
   }
 
   /**
@@ -439,7 +392,6 @@ function readDarwinLoginShell(): string {
     const out = execFileSync('dscl', ['.', '-read', `/Users/${process.env.USER}`, 'UserShell'], {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 2000,
       // C-proc-09 出站契约：不传 env = 隐式全量继承父环境（含 TAIJI_RUNTIME_TOKEN），
       // 泄漏给 dscl 后代进程；只读查询仅需 PATH/HOME，白名单基座 + deny 兜底（RT-8#9）。
       env: buildOutboundChildEnv({ parentEnv: process.env }),

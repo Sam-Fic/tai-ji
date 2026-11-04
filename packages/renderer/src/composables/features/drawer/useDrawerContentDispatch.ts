@@ -37,8 +37,8 @@ import BtwPanel from '@/components/panel/BtwPanel.vue'
 import TraceInspector from '@/components/panel/trace/TraceInspector.vue'
 
 // DetailPane 懒加载（D-8 §3.3 边界判据：重依赖 DiffView 等专属依赖，首次激活才拉 chunk）。
-// 错误兜底（§3.5 · D6 改版）：装载失败由内部有界自动重试承接（createLazyChunkRetry），
-// 穷尽才呈现错误态；retryKey 重挂 = 自动重试的唯一驱动（lazy-chunk-retry.ts 头注）。
+// 错误兜底（§3.5）：装载失败直接进错误态（createLazyChunkRetry 薄层；自动重试已删：
+// 时间机制删除裁决）。
 const detailRetryState = createLazyChunkRetry(() => import('@/components/panel/DetailPane.vue'))
 const DetailPane = defineAsyncComponent({
   loader: detailRetryState.loader,

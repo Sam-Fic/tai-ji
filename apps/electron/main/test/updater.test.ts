@@ -169,16 +169,6 @@ describe("updater-script-integration", () => {
     return script.replace(/^"[^"]+" &\s*$/m, 'echo "[test] skip AppImage spawn"')
   }
 
-  /**
- * 把 60s 超时（120 轮）压成 6 轮（3s），让超时 abort 用例快速出结果。
- * [HISTORICAL] 曾压成 2 轮（1s）：CI runner 高负载下 bash spawn + 脚本前置步骤的
- * 调度抖动可吃掉大半窗口，v0.10.8 post-merge macOS job 实测 flaky（2/23，rerun 绿）。
- * 3s 对抖动容忍 ×3，代价仅超时用例时长 +2s。
- */
-  function shortenWaitLimit(script: string): string {
-    if (!script.includes('-gt 120')) throw new Error('未找到等待上限 -gt 120（模板变了？）')
-    return script.replace('-gt 120', '-gt 6')
-  }
 
   /** mac 用标准 vars（parentPid 默认死 PID：kill -0 立即失败 = 模拟 app 已退出）。 */
   function makeMacVars(tmpDir: string, opts: {
@@ -324,28 +314,6 @@ describe("updater-script-integration", () => {
       }
     })
 
-    // retry: 2 —— 等待窗已放宽到 3s（见 shortenWaitLimit），retry 再兜一层极端调度抖动
-    it<TestScope>('等待超时 abort：父进程不退 → failed(app still running)', { retry: 2 }, async ({ tmpDir }) => {
-      const vars = makeLinuxVars(tmpDir)
-      writeFileSync(vars.appImagePath, 'OLD AppImage content')
-      mkdirSync(path.dirname(vars.newFilePath), { recursive: true })
-      writeFileSync(vars.newFilePath, 'NEW AppImage content')
-
-      const parent = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
-      parent.once('exit', () => {})
-      const timedVars: LinuxUpdaterScriptVars = { ...vars, parentPid: String(parent.pid) }
-      try {
-        const script = shortenWaitLimit(buildLinuxBodyScript(timedVars))
-        const scriptPath = writeScriptToTmp(tmpDir, script, 'linux-updater.sh')
-        const r = await runBash(tmpDir, scriptPath)
-        expect(r.status, '超时应 exit 1').toBe(1)
-        const result = JSON.parse(readFileSync(vars.resultPath, 'utf8')) as { status: string; error: string }
-        expect(result.error).toBe('app still running')
-        expect(readFileSync(vars.appImagePath, 'utf8')).toBe('OLD AppImage content')
-      } finally {
-        try { if (parent.pid) process.kill(parent.pid, 'SIGKILL') } catch { /* 已退 */ }
-      }
-    })
   })
 
   // ════════════════════════════════════════════════════════════════
@@ -408,11 +376,9 @@ describe("updater-script", () => {
         // 备份 mv 失败 abort（RM7：不吞错）
         ['备份 mv 失败检查', 'if ! mv "$APP" "$APP_OLD"'],
         ['备份失败错误码', 'fail "backup failed"'],
-        // 60s 超时 abort（PID 制 kill -0，120 轮 × 0.5s）
+        // 等父退出（PID 制 kill -0，持续等待无上限）
         ['PID 制等待', 'while kill -0 "$PARENT_PID" 2>/dev/null'],
-        ['60s 上限（120 轮）', '-gt 120'],
         ['轮询步长 0.5s', 'sleep 0.5'],
-        ['等待超时错误码', 'fail "app still running"'],
         // /Volumes 只读拒装（RM7 循环场景）
         ['只读卷检测', '/Volumes/*)'],
         ['只读卷错误码', 'fail "read-only volume"'],
@@ -556,13 +522,12 @@ describe("updater-script", () => {
   })
 
   describe('u1a: linux 脚本模板（PID 等待 + 只读检测 + 原子 result，无 staging）', () => {
-    it('生成脚本含 §3.3.3 检查（PID 等待/超时/只读/原子 result）且占位符全替换', () => {
+    it('生成脚本含 §3.3.3 检查（PID 等待/只读/原子 result）且占位符全替换', () => {
       const script = buildLinuxUpdaterScript(LINUX_VARS)
 
       const guards: Array<[string, string]> = [
         ['PID 制等待', 'while kill -0 "$PARENT_PID" 2>/dev/null'],
-        ['60s 上限（120 轮）', '-gt 120'],
-        ['等待超时错误码', 'fail "app still running"'],
+        ['轮询步长 0.5s', 'sleep 0.5'],
         // 只读检测：APP_DIR 不可写（rename 权限看父目录写权限）
         ['只读检测', '[ ! -w "$APP_DIR" ]'],
         ['只读错误码', 'fail "read-only volume"'],

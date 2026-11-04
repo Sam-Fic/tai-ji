@@ -2,10 +2,11 @@
  * 窗口工厂。
  *
  * 对应 spec §4.2 M2/M3：WindowManager 不直接创建 BrowserWindow，
- * 创建职责由此模块承担。含 dev 模式 Vite 就绪轮询。
+ * 创建职责由此模块承担。含 dev 模式 Vite 就绪单次探测。
  *
  * [HISTORICAL] 不变量：
- * - dev 模式 waitForVite 轮询（解决 concurrently 下 Electron 比 Vite 先启动白屏）
+ * - dev 模式 waitForVite 单次探测（解决 concurrently 下 Electron 比 Vite 先启动白屏——
+ *   未就绪即显式报错，[HISTORICAL] 原 30s/300ms 轮询等待已删）
  * - preload 路径：dist/preload/preload.cjs（electron-builder files 白名单对应）
  * - contextIsolation: true / nodeIntegration: false（Electron 安全默认）
  * - windowId 注入到 URL query，renderer 读取后用于注册到 WindowManager
@@ -43,12 +44,6 @@ import {
  *  isAllowedAppNavigation 调用）——覆盖后导航白名单同步接受覆盖源（行为正确：应用实际
  *  从哪个端口加载就应放行哪个）；prod 下仅 loadFile，该覆盖无生效路径。 */
 export const VITE_DEV_URL = process.env.TAIJI_VITE_DEV_URL ?? 'http://localhost:1420'
-
-/** 等待 Vite dev server 就绪的总超时 */
-export const VITE_READY_TIMEOUT_MS = 30_000
-
-/** Vite 轮询间隔 */
-export const VITE_POLL_INTERVAL_MS = 300
 
 // ── renderer 崩溃显式失败（ADR-0122）────
 // [HISTORICAL] 原 D2-③/u3-renderer-recovery「60s 滑窗 ≤3 次自动 reload + 熔断」已删
@@ -131,33 +126,32 @@ export function buildStaticErrorPageHtml(logsDir: string, retryUrl: string): str
 }
 
 /**
- * 等待 Vite dev server 就绪（轮询直到连接成功）。
- * 解决 concurrently 下 Electron 比 Vite 先启动导致白屏。
+ * Vite dev server 就绪单次探测（dev 白屏防护失败显式化保留）。
+ * 解决 concurrently 下 Electron 比 Vite 先启动导致白屏——未就绪即显式报错，
+ * 不做轮询等待（时间机制删除裁决）；幽灵窗口清理由调用方 catch 承接。
  *
  * @param url Vite 地址
- * @param timeoutMs 总超时
- * @throws 超时抛 Error
+ * @throws Vite 不可达或非 2xx 响应时抛 Error
  */
-export async function waitForVite(url: string, timeoutMs = VITE_READY_TIMEOUT_MS): Promise<void> {
-  const start = Date.now()
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(url)
-      if (res.ok) return
-    // eslint-disable-next-line taste/no-silent-catch -- Vite dev server not yet ready, retry expected
-    } catch {
-      // Vite 还没启动，继续等待
-    }
-    await new Promise((r) => setTimeout(r, VITE_POLL_INTERVAL_MS))
+export async function waitForVite(url: string): Promise<void> {
+  let res: Response
+  try {
+    res = await fetch(url)
+  } catch (e) {
+    throw new Error(
+      `Vite dev server at ${url} is not reachable: ${e instanceof Error ? e.message : String(e)}; start vite first`,
+    )
   }
-  throw new Error(`Vite dev server at ${url} did not become ready within ${timeoutMs}ms`)
+  if (!res.ok) {
+    throw new Error(`Vite dev server at ${url} responded HTTP ${res.status}`)
+  }
 }
 
 /**
  * 按运行形态加载窗口内容（E2E / dev / prod 三分支），任一步失败时 destroy 已创建的窗口。
  *
  * E2E 是一类部署形态（已构建产物 + mock 注入），架构正确归位是独立分支而非 hack isDev：
- *   - 跳过 Vite dev server 轮询（E2E 不起 dev server，否则 waitForVite 30s 超时）
+ *   - 跳过 Vite dev server 探测（E2E 不起 dev server，否则 waitForVite 显式报错）
  *   - 加载构建产物 index.html（与 prod 同源，验证真实渲染链路）
  *   - mock 数据由 renderer 侧 import.meta.env.VITE_E2E 注入（main 不参与）
  */
@@ -171,7 +165,7 @@ async function loadWindowContent(
   try {
     if (!isE2E && deps.isDev) {
       // W7 幽灵窗口清理：BrowserWindow 已在 show:false 状态下创建，若 Vite dev server
-      // 在超时内未就绪（waitForVite 抛错），必须 destroy 已创建的窗口，否则泄漏一个隐藏窗口。
+      // 未就绪（waitForVite 抛错），必须 destroy 已创建的窗口，否则泄漏一个隐藏窗口。
       await waitForVite(VITE_DEV_URL)
       win.loadURL(`${VITE_DEV_URL}?${buildAppQuery(windowId, options?.sessionId).toString()}`)
       // DevTools 默认关闭：需要时显式 TAIJI_DEVTOOLS=1 npm run dev 打开
@@ -185,7 +179,7 @@ async function loadWindowContent(
       })
     }
   } catch (err) {
-    // W7 E3 幽灵窗口清理：waitForVite 超时或加载阶段抛错时，destroy 已创建的 BrowserWindow，
+    // W7 E3 幽灵窗口清理：waitForVite 失败或加载阶段抛错时，destroy 已创建的 BrowserWindow，
     // 避免泄漏隐藏窗口（show:false 的窗口用户感知不到，资源却已占用）。
     if (!win.isDestroyed()) {
       win.destroy()

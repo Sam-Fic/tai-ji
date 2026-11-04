@@ -26,11 +26,6 @@ export type {
   ViewSnapshotItem, PluginUiSnapshotPayload,
   // plugin 系下行帧类型全集成员类型（清单常量 PLUGIN_DOWNLINK_TYPES 在下方值导出段）
   PluginDownlinkType,
-  WatchdogMemoryLevel, WatchdogMemoryPressurePayload,
-  RollingRestartState, RollingRestartReason, RollingRestartInflightSummary,
-  RollingRestartDeferredPayload, RollingRestartCountdownPayload, RollingRestartForcedPayload,
-  RollingRestartStatusPayload,
-  ReattachDeferReason, ReattachDeferredPayload,
   // plan 模式派生视图域（plan-state entry 派生视图 + 产物元数据，形状与 extension-protocol 同形）
   PlanDocMeta, PlanStateView,
   ConnectionTestResultRow,
@@ -244,8 +239,6 @@ export type {
   McpProbeState,
   McpServerStatusBadge,
 } from './mcp'
-// RPC 超时校准链常量 SSOT（timeout-slow-flow-wallclock D2/D3，renderer/runtime 双端编译期对齐）
-export { BASH_RPC_TIMEOUT_MS, RENDERER_RPC_MARGIN_MS } from './timeouts'
 export * from './extension'
 export * from './git'
 export * from './plugin'
@@ -259,7 +252,7 @@ export type { ProviderApiType } from './constants'
 // renderer（浏览器）整包 import，import 本身安全（constants.ts 模块顶层无 process 访问），
 // 但 renderer 严禁调用（process 未定义 ReferenceError）；main / runtime 专用，
 // 完整警示见 constants.ts 内 JSDoc。
-export { OUTBOUND_FRAME_WARN_BYTES, OUTBOUND_FRAME_TRUNCATE_BYTES, PLUGIN_EVENT_PAYLOAD_MAX_BYTES, RING_BUDGET_BYTES, READ_PRECHECK_MAX_BYTES, BYTES_PER_MB, HISTORY_BUDGET, DEFAULT_LOG_KEEP_DAYS, readLogKeepDays, RUNTIME_PLANNED_EXIT_CODE } from './constants'
+export { OUTBOUND_FRAME_WARN_BYTES, OUTBOUND_FRAME_TRUNCATE_BYTES, PLUGIN_EVENT_PAYLOAD_MAX_BYTES, RING_BUDGET_BYTES, READ_PRECHECK_MAX_BYTES, BYTES_PER_MB, HISTORY_BUDGET, DEFAULT_LOG_KEEP_DAYS, readLogKeepDays } from './constants'
 // runtime 实例标识 env 名（connection-datasync-ssot §6.1：main spawn 注入方与
 // runtime auth 应答读取方跨包共用，禁字面量分叉）。
 export { RUNTIME_ID_ENV } from './constants'

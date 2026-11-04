@@ -3,32 +3,24 @@
 // core→壳在途事件出口（u7a，设计权威源：docs/architecture/crash-forensics-and-watchdog.md
 // §3.3 D5「在途判定谓词 + 求值位置」）。
 //
-// 在途状态（spawnedChildren Map / idleTimers Map）真实存在于本包（随 subagent-workflow
+// 在途状态（spawnedChildren Map）真实存在于本包（随 subagent-workflow
 // extension 加载进 pi 进程），runtime 无法直查——D5 裁决为 extension 聚合上报：壳层
 // （extensions/universal/subagent-workflow 的 host/inflight-reporter）经 select 通道
 // 把绝对计数推给 runtime。本模块是这条通道的 core 侧出口：
-//   - 求值位置 = 状态所在的 pi 进程（本模块 getInFlightSnapshot——双谓词过滤：
-//     hasLiveProcessHandle && !hasIdleTimer，只把「正在执行」计为在途，Path A 保活
-//     （idle timer armed）不计；原「与 notify-host.ts hasRunningBackground 同源」
-//     的表述随该谓词退役删除——subagent-observability §3.3.7③）；
-//   - 事件产生点 = 引擎域内的状态迁移点（session-runner 子进程注册/移除、idle timer
-//     arm/disarm），迁移后调 notifyInFlightChanged() 把最新快照推给壳层监听者；
+//   - 求值位置 = 状态所在的 pi 进程（本模块 getInFlightSnapshot——双判据过滤：
+//     hasLiveProcessHandle && inRound，只把「正在执行」计为在途；chat 轮终保活
+//     （inRound=false）不计。原「hasIdleTimer 反向判据」随 idle timer 机制删除，
+//     由镜像的轮在途记账位（markRecordRoundActive）承接同一语义）；
+//   - 事件产生点 = 引擎域内的状态迁移点（镜像注册/置死、chat 轮在途翻边），
+//     迁移后调 notifyInFlightChanged() 把最新快照推给壳层监听者；
 //   - core 闭包红线：本模块零 pi SDK import（只 import 本包 lifecycle 记账侧），
 //     壳层经包根 barrel 消费 setInFlightListener / getInFlightSnapshot（exports 面
 //     收窄后壳侧生产消费必须走 barrel，无深路径豁免）。
 //
 // 回调注入形态（RunContext 回调先例）：监听者由壳层注册，core 同步调用、绝不 await
 // 返回值——满足 D5 接线约束①「上报不阻塞生命周期主链、不 await 进 agent_settled
-// handler 链」（该链有时序保护约束 armIdleTimer 先于 notify）。
+// handler 链」。
 
-import { hasIdleTimer } from "../lifecycle/lifecycle-manager.ts";
-import { hasLiveProcessHandle } from "../lifecycle/lifecycle-predicates.ts";
-// 环声明：session-runner（迁移点）import 本模块的 notifyInFlightChanged，本模块经
-// lifecycle-predicates → session-runner.getChildByRecord 读句柄记账 + 直接取
-// spawnedChildren 键集——双向仅函数体内取值（ESM 活绑定，调用期解析），模块求值序
-// 无依赖，环安全；esbuild bundle（builtin 打包）同规则成立。
-// W3 合并改写：inproc 引擎已删，句柄记账唯一源 = engine/host/spawned-children 镜像
-//（coreSpawnedChildrenMirror().snapshot() 返回 [{recordId, ...}]，键集等价旧 Map.keys()）。
 import { coreSpawnedChildrenMirror } from "./host/spawned-children.ts";
 
 /** 在途快照（绝对计数，供壳层 reporter 发送时刻现取）。 */
@@ -57,11 +49,9 @@ export function setInFlightListener(next: InFlightListener | null): void {
 
 /**
  * 当前在途快照（纯读，无副作用）：遍历活句柄记账（spawnedChildren 的 recordId 键集），
- * 按双谓词过滤——活句柄（child 存在且未 killed）且无 armed idle timer。
+ * 按双判据过滤——活句柄（child 存在且未 killed）且该 record 轮在途（inRound）。
  *
- * SSOT 复用：谓词取 lifecycle-predicates/lifecycle-manager 既有导出，不复制判定逻辑
- * （原「与 notify-host hasRunningBackground 完全同源」的表述随该谓词退役删除——
- * subagent-observability §3.3.7③）。活句柄记账的写方分两路，均落同一
+ * SSOT 复用：判据取镜像既有记账位，不复制判定逻辑。活句柄记账的写方分两路，均落同一
  * 镜像：local 形态引擎进程由本进程 spawn（镜像事件 + 反向通道上报其任务 pi 子进程）；
  * 托管态（M3）引擎进程归 runtime 所有，extension 仅经反向通道记账引擎 spawn 的任务
  * pi 子进程。因此本模块统计的是「本会话仍存活的任务子进程」，不表达引擎进程所有权。
@@ -72,7 +62,7 @@ export function getInFlightSnapshot(): InFlightSnapshot {
 
 /**
  * 状态迁移点调用：把最新快照同步推给监听者。约束（D5 接线①）：
- *   - 同步 void 语义——调用方（含 agent_settled handler 链内的 armIdleTimer 迁移点）
+ *   - 同步 void 语义——调用方（含 agent_settled handler 链内的迁移点）
  *     不 await 本函数的任何下游（监听者内部自行 fire-and-forget）；
  *   - 监听者异常不反噬 core（壳层 bug 不得打断生命周期主链），catch 后照常返回。
  */
@@ -86,12 +76,11 @@ export function notifyInFlightChanged(): void {
   }
 }
 
-/** 双谓词过滤的绝对计数（getInFlightSnapshot 与 notifyInFlightChanged 共用）。 */
+/** 双判据过滤的绝对计数（getInFlightSnapshot 与 notifyInFlightChanged 共用）。 */
 function countInFlight(): number {
   let count = 0;
   for (const entry of coreSpawnedChildrenMirror().snapshot()) {
-    const recordId = entry.recordId;
-    if (hasLiveProcessHandle(recordId) && !hasIdleTimer(recordId)) count++;
+    if (!entry.killed && entry.inRound) count++;
   }
   return count;
 }

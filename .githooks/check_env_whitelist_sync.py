@@ -302,14 +302,6 @@ def check_env_literal_mirrors() -> list[str]:
     for f in [SDK_DIR / 'data-dir.ts', CORE_ENGINE_DIR / 'common' / 'data-dir.ts']:
         expect_value(f, 'TAIJI_DATA_DIR_ENV', 'TAIJI_AGENT_DATA_DIR', 'shared/src/paths.ts 读取名')
 
-    # B 类形态断言（无 SSOT 对应，防旧名回退）
-    zcode_consts = PROJECT_ROOT / 'packages/zcode-subagent-cli/src/constants.ts'
-    for const_name in [
-        'ZCODE_APPSERVER_STOP_TIMEOUT_ENV',
-        'ZCODE_APPSERVER_ABORT_GRACE_ENV',
-    ]:
-        expect_prefix(zcode_consts, const_name, 'TAIJI_ZCODE_')
-
     return errors
 
 

@@ -24,7 +24,6 @@ import { handleGoalCommand } from "./adapters/command-adapter";
 import { handleAgentEnd } from "./adapters/event-handlers/agent-end";
 import { handleBeforeAgentStart } from "./adapters/event-handlers/before-agent-start";
 import { handleMessageEnd } from "./adapters/event-handlers/message-end";
-import { handleSessionShutdown } from "./adapters/event-handlers/session-shutdown";
 import { handleSessionStart } from "./adapters/event-handlers/session-start";
 import { handleTurnEnd } from "./adapters/event-handlers/turn-end";
 import { registerGoalControlTool } from "./adapters/goal-control-adapter";
@@ -102,13 +101,6 @@ export default function goalExtension(pi: ExtensionAPI) {
 		const ports = buildPorts(pi, ctx);
 		reconstructGoalState(session, ctx.sessionManager);
 		updateWidget(session, ports.ui);
-	});
-
-	// MF-R2-1 从根源修复：session_shutdown 在 runner invalidate 之前触发（此刻 pi/ctx
-	// 仍可用），取消待发的退避 continuation timer——覆盖 reload / new / resume /
-	// fork / quit 全部失效路径，旧 timer 不再携 stale ctx 闭包存活到到期
-	pi.on("session_shutdown", async (_event, _ctx: ExtensionContext) => {
-		await handleSessionShutdown(session);
 	});
 
 	// ── Message Renderers ──────────────────────────────

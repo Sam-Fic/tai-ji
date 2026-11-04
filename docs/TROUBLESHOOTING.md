@@ -309,7 +309,6 @@ grep -E "\[sessionfile\]|agent_end get_state backfill|workflow no-progress watch
 
 - ① `[sessionfile] unobtainable ... (all acquisition paths missed)` — sessionFile 四路获取（spawn 握手 / 迟到 response / agent_end 惰性回补 / close 后缀反查）全 miss，transcript 锚点缺失但不会误配；按 warn 尾句人工归档或重派任务，高频出现说明握手链系统性故障。
 - ② `agent_end get_state backfill failed` — 惰性回补链抛错，`killChild` 在 finally 必达（run 不因回补失败挂死），全 miss 归 ①。
-- ③ `workflow no-progress watchdog ... fired` — workflow 域 30min 无协议事件/stream delta 的静默楔死熔断（cancel 帧 → 收敛窗 → killAll）；产出仍在刷新时不 fire。注意 env `TAIJI_SUBAGENT_SETTLED_WATCHDOG_MS<=0` 会连带关闭本熔断。
 
 H1 后续聊要点：每轮续聊 = 独立 run（`RunParams.resume` 续写原 session 文件），无长驻 chat 进程形态；跨重启续聊数据源 = `<sessionFile>.record-binding` 绑定 sidecar——「subagent not found or not owned」按序查 record 存在性 → sidecar 文件 → `cold-lookup.ts` 恢复。「失败后无通知」或「失败即 closed」属异常，查 Continuation onRunSettled 失败分支。workflow origin record 排查须带 `includeFinished:true` + `includeWorkflow:true` 成对；成败判读看 outcome 不看 closedReason（见观察项 #14）。
 
@@ -693,7 +692,6 @@ node scripts/network-proxy-drift-probe.mjs   # 分流前提探针：PASS/FAIL �
 | `ELECTRON_RUN_AS_NODE` | Node 模式 | `1`（runtime 子进程） | 未设置 |
 | `VITE_MOCK=true` | Mock 模式 | — | 可选 |
 | `TAIJI_RUNTIME_BASH_RPC_TIMEOUT_MS` | bash RPC 超时逃生门（0=不限时） | 未设置（默认 1h） | 可选 |
-| `TAIJI_SUBAGENT_SETTLED_WATCHDOG_MS` | settled-watchdog 收尾段/两段全关（≤0 会连带关闭 workflow no-progress 熔断，见 §12 ③） | 未设置 | 可选 |
 
 > 注意：`TAIJI_RUNTIME_BASH_RPC_TIMEOUT_MS` 在 runtime 进程生命周期内**读一次即缓存**（`rpc-client.ts` resolveBashRpcTimeoutMs——中途改 env 不生效且无提示，超时决策须进程内稳定）。改后必须重启应用/`pnpm dev` 才生效。
 

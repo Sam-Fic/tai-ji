@@ -39,7 +39,7 @@ import { isDevMode } from '../../../platform/dev-mode'
  * [R2-b04-2] 回执匹配用全局形态（由 shared SSOT 派生，不复制模式文本）：matchAll 取文本内
  * **全部**标记逐一消费（[dmg-r1-5] 整批口径，对齐 runtime confirmByMessageEnd 的全量提取
  * ——splitComposed 放弃拆分时一帧携带多条目标记，只取尾标记会让其余条目 morph 段等不到
- * 消费、TTL 过期丢弃，live 对话流缺已提交消息）。防误配由「命中未 delivered 派生视图条目才
+ * 消费，live 对话流缺已提交消息）。防误配由「命中未 delivered 派生视图条目才
  * 消费」判定承接：用户正文自带（粘贴）标记不命中派生视图即跳过，误配无消费方。
  */
 const MSG_ID_TAG_RE_GLOBAL = new RegExp(MSG_ID_TAG_RE.source, `${MSG_ID_TAG_RE.flags}g`)
@@ -52,33 +52,15 @@ const MSG_ID_TAG_RE_GLOBAL = new RegExp(MSG_ID_TAG_RE.source, `${MSG_ID_TAG_RE.f
 const deliveryEntriesBySession = ref<Map<string, DeliveryFrameEntry[]>>(new Map())
 
 /** steer/queued 条目 morph 时捕获的乐观气泡 segments（sid → clientUuid → 快照）。
- *  非响应式核心记账：送达回执时一次性消费（按原段入流），消费即删。
- *  [R2-b04-4] 值带 capturedAt——投递丢失/内核作废时回执永不到达，无 TTL 的模块级 Map
- *  会永久驻留（A 类慢泄漏）；TTL 语义见下方常量注释。 */
+ *  非响应式核心记账：送达回执时一次性消费（按原段入流），消费即删。无 TTL
+ *  （ADR-0188）：投递丢失/内核作废时回执永不到达的驻留，由事件清理点
+ *  （clearDeliveryProjection：disposeSession / delivery.drain）收尾，不按龄猜弃。 */
 interface MorphSegmentsSnapshot {
   segments: Segment[]
-  capturedAt: number
 }
 // taste:allow-no-data-owner W24-EX-C（进程内流程状态——morph 暂存的段待送达回执一次性
 // 消费，无 GUI 直接消费方；登记于登记表 §4 ⑧ W24-EX-C 条目，队列条目本体归主表 #6 派生视图/内核）
 const morphSegmentsBySession = new Map<string, Map<string, MorphSegmentsSnapshot>>()
-
-/**
- * [R2-b04-4] morph 段 TTL（对齐 store RESPAWN_NOTICE_RETENTION_MS 5min 先例）：过期段在
- * 写入侧（captureMorphSegments 惰性清扫）与消费侧（consumeDeliveryReceipt 到期判否）
- * 清理，无定时器、不抛错——过期即视为无 morph 段，回执落 ② 纯文本降级链（可见性不丢）。
- */
-const MORPH_SEGMENTS_TTL_MS = 300_000
-
-/** 清扫全表过期 morph 段（惰性触发：captureMorphSegments 写入前调用）。 */
-function purgeExpiredMorphSegments(now: number): void {
-  for (const [sid, partition] of morphSegmentsBySession) {
-    for (const [clientUuid, snapshot] of partition) {
-      if (now - snapshot.capturedAt > MORPH_SEGMENTS_TTL_MS) partition.delete(clientUuid)
-    }
-    if (partition.size === 0) morphSegmentsBySession.delete(sid)
-  }
-}
 
 /** 消费 session.delivery 帧：派生视图整体替换（空条目集删键，不积累空形态——对齐 retryStates 惯例）。 */
 export function replaceDeliveryProjection(sid: string, entries: DeliveryFrameEntry[]): void {
@@ -128,10 +110,8 @@ export function resetDeliveryProjectionForTest(): void {
  * 重放产出同文消息）。重复捕获以最后一次为准（同 clientUuid 只会提交一次，防御性语义）。
  */
 export function captureMorphSegments(sid: string, clientUuid: string, segments: Segment[]): void {
-  // [R2-b04-4] 写入前惰性清扫过期段（无定时器，TTL 见常量注释）
-  purgeExpiredMorphSegments(Date.now())
   const partition = morphSegmentsBySession.get(sid) ?? new Map<string, MorphSegmentsSnapshot>()
-  partition.set(clientUuid, { segments, capturedAt: Date.now() })
+  partition.set(clientUuid, { segments })
   morphSegmentsBySession.set(sid, partition)
 }
 
@@ -140,7 +120,6 @@ export function captureMorphSegments(sid: string, clientUuid: string, segments: 
  * （未 morph 过的条目返回 undefined——发送端本地气泡原位保持不重复入流；无气泡条目
  * 的显示经 ② 降级入流承接，D4）。
  * 幂等：已 delivered 条目返回 undefined（重复回执不二次入流）。
- * [R2-b04-4] TTL：过期段不消费（视为无 morph 段，回执落 ② 纯文本降级链），就地清理不抛错。
  */
 function consumeDeliveryReceipt(sid: string, clientUuid: string): Segment[] | undefined {
   const entries = deliveryEntriesBySession.value.get(sid)
@@ -156,10 +135,7 @@ function consumeDeliveryReceipt(sid: string, clientUuid: string): Segment[] | un
     partition.delete(clientUuid)
     if (partition.size === 0) morphSegmentsBySession.delete(sid)
   }
-  if (snapshot && Date.now() - snapshot.capturedAt <= MORPH_SEGMENTS_TTL_MS) {
-    return snapshot.segments
-  }
-  return undefined
+  return snapshot?.segments
 }
 
 // ── message_end(user) 送达回执（①a 泛化，C-data-08 修订方向）──────────────────
@@ -306,8 +282,8 @@ function logUnmatchedDeliveryDegraded(sid: string, unshown: string[]): void {
  *
  * 提取口径：文本内**全部**标记逐一消费（[dmg-r1-5] 对齐 runtime confirmByMessageEnd
  * session-delivery-registry.ts 的 extractMarkerIds 全量提取）——splitComposed 放弃拆分
- * 的整批投递一帧携带多条目标记，只取尾标记会让其余条目 morph 段等不到消费、TTL 过期
- * 丢弃（live 对话流缺已提交消息直到重开/切回由基线派生视图恢复）。防误配语义由「命中未
+ * 的整批投递一帧携带多条目标记，只取尾标记会让其余条目 morph 段等不到消费
+ * （live 对话流缺已提交消息直到重开/切回由基线派生视图恢复）。防误配语义由「命中未
  * delivered 派生视图条目才消费」判定承接（见 MSG_ID_TAG_RE_GLOBAL 注释）。
  *
  * 命中处理（三分支，单一 owner = 内核派生视图）：

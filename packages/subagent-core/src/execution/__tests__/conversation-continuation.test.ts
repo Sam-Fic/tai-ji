@@ -79,7 +79,6 @@ import { createRecord } from "../persistence/execution-record.ts";
 import { ModelConfigService } from "../assembly/model-config-service.ts";
 import type { RecordStore } from "../persistence/record-store.ts";
 import { SubagentService } from "../subagent-service.ts";
-import { _resetLifecycleState, armIdleTimer, hasIdleTimer } from "../lifecycle/lifecycle-manager.ts";
 import {
   _resetCoreSpawnedChildrenMirrorForTest,
   registerSpawnedChildForRecord,
@@ -221,9 +220,6 @@ function makeHost(record: ExecutionRecord, overrides: Partial<HostCalls> = {}): 
       // 在集成测试侧验证（下方「轮始 markRoundStarted 接线」用例）。
       calls.order.push(`roundStart:${rec.id}`);
       calls.roundStarts.push(rec.id);
-    },
-    closeNow: async (rec) => {
-      calls.closed.push(rec.id);
     },
     // [U5] 新增 host 成员（closeAfterRound 收尾归档消费 / worktree 重建 / 冲突提示）。
     archiveAfterClosingRound: async (rec) => {
@@ -927,7 +923,6 @@ describe("集成：chat 轮末分流（D7）——成功轮 / 失败轮 / 空正
   afterEach(() => {
     service.dispose();
     clearEngines();
-    _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
     fs.rmSync(agentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });
@@ -1057,7 +1052,6 @@ describe("集成：close 优雅收尾（[U5] §3.2.5 close = 收尾写入 journa
   afterEach(() => {
     service.dispose();
     clearEngines();
-    _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
     fs.rmSync(agentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });
@@ -1142,7 +1136,6 @@ describe("集成：[S1 P1] cancel 后续聊——被取消轮迟到 run 应答�
   afterEach(() => {
     service.dispose();
     clearEngines();
-    _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
     fs.rmSync(agentDir, {
       recursive: true,
@@ -1209,7 +1202,6 @@ describe("集成：one-shot（非 chatMode）settleOneShotOutcome 四分支零�
   afterEach(() => {
     service.dispose();
     clearEngines();
-    _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
     fs.rmSync(agentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });
@@ -1314,7 +1306,6 @@ describe("集成：引擎死亡 → Continuation 单发失败通知（D8 监督�
   afterEach(() => {
     service.dispose();
     clearEngines();
-    _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
     fs.rmSync(agentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });
@@ -1358,7 +1349,6 @@ describe("集成：stale-child 派发前兜底（红线②）", () => {
     service.dispose();
     clearEngines();
     vi.useRealTimers();
-    _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
     fs.rmSync(agentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });
@@ -1401,7 +1391,6 @@ describe("集成：[A5] message 资格引擎轴判定本体直测（engineSuppor
   afterEach(() => {
     service.dispose();
     clearEngines();
-    _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
     fs.rmSync(agentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });
@@ -1531,7 +1520,6 @@ describe("集成：live usage 喂入（H2 Gate B）——chat 轮 / pi one-shot 
   afterEach(() => {
     service.dispose();
     clearEngines();
-    _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
     if (prevDataDirEnv === undefined) delete process.env["TAIJI_AGENT_DATA_DIR"];
     else process.env["TAIJI_AGENT_DATA_DIR"] = prevDataDirEnv;
@@ -1864,7 +1852,6 @@ describe("集成：锚失效处置真链（pi reopen 链 + U1b 循环专防 + D1
   afterEach(() => {
     service.dispose();
     clearEngines();
-    _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
     fs.rmSync(agentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     fs.rmSync(zcodeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
@@ -2127,7 +2114,6 @@ describe("集成：cancel × closeAfterRound（[区1-U2] cancel / 编排性关�
   afterEach(() => {
     service.dispose();
     clearEngines();
-    _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
     fs.rmSync(agentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });
@@ -2267,7 +2253,6 @@ describe("T2④ service-side kill convergence", () => {
   afterEach(() => {
     service.dispose();
     clearEngines();
-    _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
     fs.rmSync(agentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });
@@ -2289,25 +2274,22 @@ describe("T2④ service-side kill convergence", () => {
     expect(record.hadWorktree).toBeUndefined(); // cancel ≠ 收尾
   });
 
-  it("archiveIdleRecord (via closeSubagent force:false on idle) routes through killRecordChildWithEscalation and disarms timers", async () => {
+  it("archiveIdleRecord (via closeSubagent force:false on idle) routes through killRecordChildWithEscalation", async () => {
     const record = makeRecoveryRecord({ id: "sa-close-idle", status: "idle" });
     store.register(record);
-    armIdleTimer(record.id, () => {}); // Path A：idle timer armed（进程保活）
     await service["closeSubagent"](record, false);
-    // [U5] close = 收尾写入 journal 记录（archiveIdleRecord——kill 链保留 + disarm；不终态化）。
+    // [U5] close = 收尾写入 journal 记录（archiveIdleRecord——kill 链保留；不终态化）。
     expect(killChildSpy).toHaveBeenCalledWith(record.id, "archiveIdleRecord");
-    expect(hasIdleTimer(record.id)).toBe(false);
     expect(record.status).toBe("idle");
     // [H1 U6] 旧引擎侧 close force 受理断言随 interact 面退役（无在跑轮无需进程回收，
-    // Path A 保活进程由镜像记账 + reaper 兜底回收）。
+    // 保活进程由镜像记账 + reaper 兜底回收）。
   });
 
-  it("disposeAllRecords applies all recovery surfaces: abort + escalation kill + disarm idle timer", () => {
+  it("disposeAllRecords applies all recovery surfaces: abort + escalation kill", () => {
     const running = makeRecoveryRecord({ id: "sa-dispose-run" });
     const idle = makeRecoveryRecord({ id: "sa-dispose-idle" });
     store.register(running);
     store.register(idle);
-    armIdleTimer(idle.id, () => {});
 
     const count = service.disposeAllRecords("parent-new");
 
@@ -2318,8 +2300,6 @@ describe("T2④ service-side kill convergence", () => {
     // 回收侧 ii：kill 收敛到 escalation 入口
     expect(killChildSpy).toHaveBeenCalledWith(running.id, "disposeAllRecords (parent-new)");
     expect(killChildSpy).toHaveBeenCalledWith(idle.id, "disposeAllRecords (parent-new)");
-    // 回收侧 iii：idle timer disarm
-    expect(hasIdleTimer(idle.id)).toBe(false);
     // [U5] 编排性关闭：settle idle + interrupted-by-parent + 收尾写入 journal 记录（不终态化
     // ——closedReason 恒 undefined，stopReason 承载展示位）；在途轮置放弃轮标记。
     expect(running.status).toBe("idle");
@@ -2344,7 +2324,6 @@ describe("record-access 越界检查（S11）", () => {
   afterEach(() => {
     service.dispose();
     clearEngines();
-    _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
     fs.rmSync(agentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });

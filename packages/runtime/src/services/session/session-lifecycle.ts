@@ -35,16 +35,11 @@ import type { IManagedSessionView, ScannedSession } from './types.js'
 import {
   buildPresetClientOptions,
   buildPresetFallbackEnv,
-  hasSubagentWorkflowExtension,
   resolveAppendSystemPrompt,
   resolveEffectiveSystemPrompt,
   warnLaunchEffectiveMismatch,
 } from './launch-params.js'
 import type { PresetClientOptions } from './launch-params.js'
-// D5 在途镜像（crash-forensics §3.3 D5 ①）：registerSession 汇聚点按本次 spawn 注入列表
-// 写 injected（presetZero 订阅在 session-service，本处只写注入态——两写方字段互不触碰，
-// 见 inflight-mirror.ts 文件头装配顺序说明）。
-import { inflightMirror } from './inflight-mirror.js'
 // [M4-a / btw-question D5+V7④] registerSession 订阅者豁免（checkpoint 不为 btw 建档）。
 import { getRuntimeCheckpointStore } from './runtime-checkpoint.js'
 import type { PresetResolution } from '../preset-service.js'
@@ -326,7 +321,7 @@ export interface BtwCascadeOps {
   getLine(sessionId: string): { mainSid: string } | undefined
 }
 
-/** 级联 ops 槽（模块级单例——对照 inflightMirror / userStoppedGate 先例；null = 未接线零变更）。 */
+/** 级联 ops 槽（模块级单例——对照 userStoppedGate 先例；null = 未接线零变更）。 */
 let btwCascadeOps: BtwCascadeOps | null = null
 
 /** 组合根注入 btw 级联 ops（测试可传 null 复位，防跨用例泄漏）。 */
@@ -521,19 +516,6 @@ export class SessionLifecycle implements ISessionRegistry {
     // session-dead-structural-fixes D2 已将其收编为下方 applySessionOccupancyTransition
     // 宣告原语（state-topic 通路双腿：实时广播 + 快照回放），两份并存
     // 会双发同一宣告帧（occupancy-runtime registerSession 用例的 publish 次数哨兵拦截）。
-    // D5 ① injected 接线（crash-forensics §3.3 D5）：injected = 该 session 装有会上报
-    // in-flight 的 extension（subagent-workflow），errsShape 的 absent-report 形态以此
-    // 为先决——未注入 ⇒ 无 pi 引擎 subagent 能力 ⇒ 判「无在途」（正确语义而非 errs）。
-    // 按本次 spawn 列表整值覆写（跨 epoch 不继承 stale-true）；与 presetZero 顺序无关
-    //（presetZero 不触碰 injected，见 inflight-mirror.ts 文件头）。独立 try 隔离：
-    // mirror 是 errs 判别的旁路设施，判定异常绝不外抛——外抛会打断 registerSession
-    // 主链，把旁路故障放大成创建/恢复失败（与 session-service 侧 presetZero 挂点同型）。
-    try {
-      inflightMirror.setInjected(id, hasSubagentWorkflowExtension(spawnExtensionPaths ?? []))
-    } catch (e: unknown) {
-      // best-effort 降级：injected 写失败仅退化为 errsShape 判「无在途」（errs-safe 方向），不打断注册主链。
-      console.error(`[session-lifecycle] mirror setInjected failed (sessionId=${id}):`, e)
-    }
     // [chat-flow-consistency D1] 宣告事件退出转移词表（宣告语义归广播层原语，不进机器）
     announceSessionOccupancy(session, this.registerDeps.getMessageBus())
     // 注册事件同步直发（sessions.set 之后——订阅者可经 Registry 读到条目）：S3 期订阅者
@@ -641,9 +623,9 @@ export class SessionLifecycle implements ISessionRegistry {
   /**
    * create 入口（发现 B 修复：clientUuid 幂等化）。
    *
-   * **客户端放弃 ≠ 服务端放弃**：create 请求已发出、runtime 正在 spawn pi（冷启动/hang 可超过
-   * renderer 的 RPC_BACKSTOP_TIMEOUT_MS≈65s）时，客户端 backstop 超时或 WS 断连会 reject 并
-   * 提示「创建失败」，但 runtime 不受影响照常建号——若不去重，用户重试会产生重复 session +
+   * **客户端放弃 ≠ 服务端放弃**：create 请求已发出、runtime 正在 spawn pi（冷启动可达分钟级）
+   * 时，客户端可能提前放弃（用户取消 / WS 断连 reject 并提示「创建失败」），但 runtime 不受
+   * 影响照常建号——若不去重，用户重试会产生重复 session +
    * config.sessions 幻影空壳。按 clientUuid 去重后：同 uuid 重试（含 in-flight 中到达）复用
    * 同一 Promise，返回已建 session，不重复 spawn/建号。
    *

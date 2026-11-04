@@ -106,7 +106,7 @@ export function isTerminalDoneReason(reason: DoneReason): boolean {
  *     opts 均以 prompt 字段落盘，改名会破坏旧快照重新加载。
  *
  * 引擎中立字段的并入方式（可选字段，原 AgentTaskSpec 独有字段去向）：
- *   - graceTurns / idleTimeoutMs：可选并入；
+ *   - graceTurns：可选并入；
  *   - persona.agentRef：裁撤（无生产写入方、无消费者——pi 走 agent 字段解析身份）；
  *   - requires：裁撤（P4 形状预留、无生产写入方；且并入需 import EngineCapabilities
  *     形成 orchestration↔engine 类型环）。将来能力依赖声明下钻时在本形状上加回。
@@ -216,13 +216,6 @@ export interface AgentCallOpts { // oe-exempt:20261023:framework:调用契约接
   /** When true, agent() resolves {value, sessionFile, worktreePath, error} instead of a bare value.
    * Worker-layer flag only — not consumed by any engine (dropped at the pi boundary). */
   returnMeta?: boolean;
- /**
-  * 空闲超时毫秒数（原 AgentTaskSpec.idleTimeoutMs 并入，全 record 生效的 idle GC
-  * 节奏——原「仅 conversation 模式」限定随 chatMode 消亡移除）。
-  * 优先级：参数 > env TAIJI_SUBAGENT_IDLE_TIMEOUT_MS > 默认 300000ms；显式 0/负 = 禁用
-  * idle GC。chat 域经 host-task-spec 填充。
-  */
- idleTimeoutMs?: number;
 }
 
 // [S4 簇 3 收编] 以下三个契约类型本地定义已删除，自 @zhushanwen/subagent-engine-sdk

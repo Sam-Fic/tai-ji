@@ -29,9 +29,6 @@ import { getLogger, resolveEngineDir } from "@zhushanwen/subagent-engine-sdk";
 
 const logger = getLogger("subagents");
 
-/** ps 探测超时（处置路径一次性调用，防 ps 挂死拖住清扫；session-runner 先例同值）。 */
-const CMDLINE_PROBE_TIMEOUT_MS = 3_000;
-
 /** pidfile JSON 缩进（人类可排查形态；文件内容程序化消费，缩进仅为诊断友好）。 */
 const PIDFILE_JSON_INDENT = 2;
 
@@ -187,13 +184,13 @@ export function probePidAliveness(pid: number): boolean | undefined {
 
 /**
  * `ps -p <pid> -o <column>=` 探测共用实现（command= / lstart= 同款语义）。
- * 返回 undefined：ps 失败 / 超时 / 空输出（进程刚死等）——调用方按「不确定」保守跳过。
+ * 返回 undefined：ps 失败 / 空输出（进程刚死等）——调用方按「不确定」保守跳过。
+ * 探测对象是进程事实（存活 / cmdline / 启动时间），无时间阈值判定成分。
  */
 function readPsColumn(pid: number, column: string): string | undefined {
   try {
     const r = spawnSync("ps", ["-p", String(pid), "-o", column], {
       encoding: "utf-8",
-      timeout: CMDLINE_PROBE_TIMEOUT_MS,
     });
     if (r.error || r.status !== 0) return undefined;
     const out = typeof r.stdout === "string" ? r.stdout.trim() : "";

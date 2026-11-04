@@ -10,7 +10,8 @@
  * - session.restored 到达 → 过渡态收尾 + dead 复位 + 对话流插 T4 恢复提示条；
  * - session.restoreFailed：willRetry=true 保持过渡态；willRetry=false（熔断）→ 收尾回
  *   终态 dead 页 + 失败提示条；
- * - 恢复超时（30s 无结果）→ 过渡态收尾回终态（dead 已置，派生回 dead 占位）；
+ * - 无超时兜底（时间机制删除裁决）：恢复无响应时过渡态持续（用户操作收尾——重试/发消息/
+ *   删除会话）；
  * - 用户强制退出 → 直接终态（过渡态不出现，A7 反向验收）。
  *
  * mock 策略：与 session-exited.test.ts 同款（vi.hoisted 捕获 routeInbound handler 注入
@@ -55,7 +56,6 @@ vi.mock('../../../core/src/transport/ws-client', () => ({
   isAuthRejectedSuppressed: vi.fn(() => false),
   resetAuthRejectionSuppression: vi.fn(),
   setWaitingRuntime: vi.fn(),
-  probeAlive: vi.fn(),
 }))
 
 vi.mock('@/lib/ipc', () => ({
@@ -131,10 +131,9 @@ beforeEach(() => {
   sessionStore.applySnapshot({ groups: [group] })
 })
 
-// useMessageEffects 模块级 respawnTimeoutTimers 的用例间清理：对仍开启的恢复窗口注入
-// restored 帧走真实收尾路径（clearRespawnTimeout 删表项）。表项残留会让下一用例的
-// injectExited 不再注册新 timer（超时用例 fake timers 下 advance 无效）；收尾写入落在
-// 本用例已废弃的 store 上，随下一用例新 pinia 丢弃。
+// 用例间过渡态清理：对仍开启的恢复窗口注入 restored 帧走真实收尾路径（清 respawnPending
+// 分区）。残留分区会让下一用例的断言被本用例遗留态污染；收尾写入落在本用例已废弃的
+// store 上，随下一用例新 pinia 丢弃。
 afterEach(() => {
   mockHolder.routeHandler?.({
     type: 'session.restored',
@@ -280,21 +279,19 @@ describe('respawn 过渡态（T4 回流修复）', () => {
     expect(forcedExitMarks.consumeForcedExit('s-respawn')).toBe(false)
   })
 
-  it('⑥ 恢复超时（30s 无 restored/restoreFailed）→ 过渡态收尾回终态派生', async () => {
+  it('⑥ 无超时兜底：恢复无响应时过渡态持续（时间机制删除裁决，收尾权归帧与用户操作）', async () => {
     vi.useFakeTimers()
     try {
       await initAndConnect()
       const chatStore = useChatStore()
-      const { derivePanelView } = await import('@taiji/core')
 
       injectExited()
       expect(chatStore.isRespawnPending('s-respawn')).toBe(true)
 
+      // 30s（原超时阈值）后仍 pending——不做超时判死回落；收尾出口 = restored/restoreFailed
+      // 帧、恢复窗口发消息（用例⑧）、重试/删除等用户操作
       await vi.advanceTimersByTimeAsync(30_000)
-      expect(chatStore.isRespawnPending('s-respawn')).toBe(false)
-      // dead 已置（exited 时），过渡态清除后派生回落 dead 占位（「重新打开」出口）
-      const view = derivePanelView(panelFacts())
-      expect(view.kind).toBe('dead')
+      expect(chatStore.isRespawnPending('s-respawn')).toBe(true)
     } finally {
       vi.useRealTimers()
     }

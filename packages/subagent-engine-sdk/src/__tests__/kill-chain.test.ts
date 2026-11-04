@@ -1,25 +1,24 @@
 // src/__tests__/kill-chain.test.ts
 //
-// killChain（SIGTERM → grace → SIGKILL）与 abortWithFallback（abort 两级中断编排）
-// 的行为范围。child 用结构 fake——KillableChild 接口注释明示「测试可注入 fake
-// （ChildProcess 全字段构造过重）」，退出态经 emitExit 手工推进，不 spawn 真实
-// 进程、不碰引擎进程。timer 窗口（grace / nativeGrace / SIGKILL 收尸）用 fake
-// timers 推进；日志经 LoggerSink 注入捕获（同时避免缺省 console 出口刷屏）。
+// killChain（SIGTERM+SIGKILL 背靠背）与 abortWithFallback（abort 编排：原生中断 →
+// 杀链兜底）的行为范围。child 用结构 fake——KillableChild 接口注释明示「测试可注入
+// fake（ChildProcess 全字段构造过重）」，退出态经 emitExit 手工推进，不 spawn 真实
+// 进程、不碰引擎进程。日志经 LoggerSink 注入捕获（同时避免缺省 console 出口刷屏）。
+//（原 grace/nativeGrace/SIGKILL 收尸等待窗用例已随杀链等待升级窗删除消亡。）
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
-  DEFAULT_KILL_GRACE_MS,
-  DEFAULT_NATIVE_INTERRUPT_GRACE_MS,
   abortWithFallback,
   killChain,
-  synthesizeTimeoutOutcome,
+  killPidChain,
+  probePidAlive,
   type KillableChild,
 } from "../kill-chain.ts";
 import { configureLoggerSink, resetLoggerSinkForTests, type LoggerSink } from "../logger.ts";
 
 interface FakeChild extends KillableChild {
-  /** 已收到的信号序列（断言杀链升级路径）。 */
+  /** 已收到的信号序列（断言杀链信号序列）。 */
   readonly signals: readonly NodeJS.Signals[];
   /** 手工推进退出态并触发 exit listeners（fake 进程的收尸入口，幂等）。 */
   emitExit(code: number | null, signal: NodeJS.Signals | null): void;
@@ -29,8 +28,6 @@ function fakeChild(
   opts: {
     exitCode?: number;
     signalCode?: string;
-    /** kill() 行为注入（缺省只记录信号、进程不理会——退出靠 emitExit 手工推进）。 */
-    kill?: (signal: NodeJS.Signals) => void;
   } = {},
 ): FakeChild {
   let exitCode: number | null = opts.exitCode ?? null;
@@ -49,7 +46,6 @@ function fakeChild(
     },
     kill(signal?: NodeJS.Signals | number): boolean {
       signals.push(signal as NodeJS.Signals);
-      opts.kill?.(signal as NodeJS.Signals);
       return true;
     },
     once(_event, listener) {
@@ -78,278 +74,128 @@ function captureSink(): Array<{ level: string; msg: string }> {
   return logs;
 }
 
-/** SIGKILL 发出后的收尸等待上限（ms）——与 src/kill-chain.ts 私有常量同值（未导出，测试侧镜像）。 */
-const SIGKILL_REAP_TIMEOUT_MS = 10_000;
-
-/** 杀链快速窗口（ms）：fake timers 下用短 grace 缩短用例推进量。 */
-const SHORT_GRACE_MS = 100;
-
-describe("killChain（SIGTERM → grace → SIGKILL 杀链）", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-    resetLoggerSinkForTests();
-  });
-
-  it("进程已退出（exitCode 非 null）→ 不发任何信号，按优雅终止口径返回", async () => {
-    const child = fakeChild({ exitCode: 0 });
-    await expect(killChain(child, { graceMs: 1_000 })).resolves.toBe("terminated");
-    expect(child.signals).toEqual([]);
-  });
-
-  it("SIGTERM 后 grace 窗口内退出 → 'terminated'，不升级 SIGKILL", async () => {
-    const child = fakeChild({
-      kill: (s) => {
-        if (s === "SIGTERM") child.emitExit(0, null);
-      },
-    });
-    await expect(killChain(child, { graceMs: 1_000 })).resolves.toBe("terminated");
-    expect(child.signals).toEqual(["SIGTERM"]);
-  });
-
-  it("grace 超时仍存活 → escalationNote warn 留痕并升级 SIGKILL，返回 'killed'；unrefTimers 透传", async () => {
-    const logs = captureSink();
-    const child = fakeChild(); // 忽略一切信号：SIGTERM/SIGKILL 后仍存活
-    const done = killChain(child, {
-      graceMs: DEFAULT_KILL_GRACE_MS,
-      unrefTimers: true,
-      escalationNote: "child sa-1 (source: test)",
-    });
-    await vi.advanceTimersByTimeAsync(DEFAULT_KILL_GRACE_MS - 1);
-    expect(child.signals).toEqual(["SIGTERM"]);
-    expect(logs.filter((l) => l.level === "warn")).toEqual([]);
-
-    await vi.advanceTimersByTimeAsync(1);
+describe("killChain（SIGTERM+SIGKILL 背靠背杀链）", () => {
+  it("活进程：SIGTERM 与 SIGKILL 背靠背发出（无等待窗），返回 'killed'", () => {
+    const child = fakeChild();
+    const result = killChain(child);
+    expect(result).toBe("killed");
     expect(child.signals).toEqual(["SIGTERM", "SIGKILL"]);
-    expect(logs.filter((l) => l.level === "warn")[0]?.msg).toBe(
-      "[kill-chain] child sa-1 (source: test) still alive 5s after SIGTERM, escalating to SIGKILL",
-    );
-
-    // SIGKILL 收尸窗口走满仍有界返回
-    await vi.advanceTimersByTimeAsync(SIGKILL_REAP_TIMEOUT_MS);
-    await expect(done).resolves.toBe("killed");
   });
 
-  it("grace 超时未传 escalationNote → 升级静默（无 warn），仍返回 'killed'", async () => {
-    const logs = captureSink();
-    const child = fakeChild();
-    const done = killChain(child, { graceMs: SHORT_GRACE_MS });
-    // 一次推进覆盖 grace 窗口 + SIGKILL 收尸窗口全程
-    await vi.advanceTimersByTimeAsync(SHORT_GRACE_MS + SIGKILL_REAP_TIMEOUT_MS);
-    await expect(done).resolves.toBe("killed");
-    expect(logs.filter((l) => l.level === "warn")).toEqual([]);
-  });
-
-  it("kill 抛错（进程恰在发信号前自退）→ 幂等吞掉 + debug 留痕，杀链语义不阻断", async () => {
-    const logs = captureSink();
-    const child = fakeChild({
-      kill: () => {
-        throw new Error("simulated kill race: process already reaped");
-      },
-    });
-    const done = killChain(child, { graceMs: 1_000 });
-    // 发信号瞬间进程自退：exit 事件仍会到达（waitForExit 已挂 listener）
-    child.emitExit(0, null);
-    await expect(done).resolves.toBe("terminated");
-    const debug = logs.filter((l) => l.level === "debug");
-    expect(debug).toHaveLength(1);
-    expect(debug[0]?.msg).toContain("SIGTERM on exited process");
-    expect(debug[0]?.msg).toContain("simulated kill race: process already reaped");
-  });
-
-  it("synthesizeTimeoutOutcome：description 缺省 → slug=unknown（错误信息自包含定位）", () => {
-    const outcome = synthesizeTimeoutOutcome({ prompt: "p" }, "tail", "pi");
-    expect(outcome.error).toContain("slug=unknown");
-    expect(outcome.error).toContain("tail");
-    expect(outcome.engineId).toBe("pi");
-  });
-});
-
-describe("abortWithFallback（abort 两级中断编排）", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-    resetLoggerSinkForTests();
-  });
-
-  it("进程已退出 → 立即以 'terminated' settle，无信号", async () => {
+  it("已退出进程：无信号发出，返回 'terminated'（幂等 no-op）", () => {
     const child = fakeChild({ exitCode: 0 });
-    await expect(abortWithFallback(child, new AbortController().signal)).resolves.toBe(
-      "terminated",
-    );
+    const result = killChain(child);
+    expect(result).toBe("terminated");
     expect(child.signals).toEqual([]);
   });
 
-  it("signal 已 aborted + 无原生中断（CLI-only 引擎）→ 直接落杀链", async () => {
-    const child = fakeChild({
-      kill: (s) => {
-        if (s === "SIGTERM") child.emitExit(0, null);
-      },
-    });
-    const controller = new AbortController();
-    controller.abort();
-    await expect(abortWithFallback(child, controller.signal)).resolves.toBe("terminated");
-    expect(child.signals).toEqual(["SIGTERM"]);
-  });
-
-  it("abort → 原生中断在宽限窗口内生效 → 不落杀链（零信号）", async () => {
-    const child = fakeChild();
-    const controller = new AbortController();
-    const done = abortWithFallback(child, controller.signal, async () => {
-      child.emitExit(0, null);
-    });
-    controller.abort();
-    await expect(done).resolves.toBe("terminated");
-    expect(child.signals).toEqual([]);
-  });
-
-  it("原生中断抛错 → debug 留痕并直接落杀链兜底（中断失败不阻断）", async () => {
+  it("escalationNote 在场时 warn 留痕（含 note 原文）", () => {
     const logs = captureSink();
-    const child = fakeChild({
-      kill: (s) => {
-        if (s === "SIGTERM") child.emitExit(0, null);
-      },
-    });
-    const controller = new AbortController();
-    const done = abortWithFallback(child, controller.signal, async () => {
-      throw new Error("protocol pipe broken");
-    });
-    controller.abort();
-    // 中断 reject 后仍先等原生宽限窗口（raceTimeout）走满才落杀链
-    await vi.advanceTimersByTimeAsync(DEFAULT_NATIVE_INTERRUPT_GRACE_MS);
-    await expect(done).resolves.toBe("terminated");
-    expect(logs.filter((l) => l.level === "debug")[0]?.msg).toContain("native interrupt failed");
-    expect(logs.filter((l) => l.level === "debug")[0]?.msg).toContain("protocol pipe broken");
-    expect(child.signals).toEqual(["SIGTERM"]);
-  });
-
-  it("原生中断未在宽限窗口内停 → 杀链兜底（缺省 nativeGraceMs）", async () => {
-    const child = fakeChild({
-      kill: (s) => {
-        if (s === "SIGTERM") child.emitExit(0, null);
-      },
-    });
-    const controller = new AbortController();
-    const done = abortWithFallback(child, controller.signal, async () => {
-      // 引擎收到中断但迟迟不停：宽限窗口走满 → 杀链
-    });
-    controller.abort();
-    await vi.advanceTimersByTimeAsync(DEFAULT_NATIVE_INTERRUPT_GRACE_MS);
-    await expect(done).resolves.toBe("terminated");
-    expect(child.signals).toEqual(["SIGTERM"]);
-  });
-
-  it("signal 永不 abort、进程自然退出 → 以 'terminated' settle（exit listener 路径，不悬挂）", async () => {
     const child = fakeChild();
-    const done = abortWithFallback(child, new AbortController().signal);
-    child.emitExit(0, null);
-    await expect(done).resolves.toBe("terminated");
-    expect(child.signals).toEqual([]);
-  });
-});
-
-// ============================================================
-// [D9-2 杀伤半径收窄] killPidChain / probePidAlive（run 级 pid 杀链，宿主侧消费）
-// ============================================================
-
-import { killPidChain, probePidAlive } from "../kill-chain.ts";
-
-describe("killPidChain（run 级单 pid 杀链——SIGTERM → grace → SIGKILL，绝不按进程组终止）", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
+    killChain(child, { escalationNote: "child sa-1 (source: test)" });
+    expect(logs.some((l) => l.level === "warn" && l.msg.includes("child sa-1 (source: test)"))).toBe(true);
     resetLoggerSinkForTests();
   });
+});
 
-  /** process.kill 打桩：模拟 pid 存活态（alive=false 后 kill(pid, 0) 报 ESRCH）。 */
-  function stubProcessKill(pid: number, state: { alive: boolean; signals: NodeJS.Signals[] }): void {
-    vi.spyOn(process, "kill").mockImplementation(((target: number, signal?: NodeJS.Signals | number) => {
-      if (target !== pid) throw Object.assign(new Error("no such process"), { code: "ESRCH" });
-      if (!state.alive) throw Object.assign(new Error("no such process"), { code: "ESRCH" });
-      if ((signal ?? 0) === 0) return true;
-      state.signals.push(signal as NodeJS.Signals);
-      if (signal === "SIGTERM") state.alive = false; // 假想进程对 SIGTERM 即刻退出
-      return true;
-    }) as typeof process.kill);
-  }
-
-  it("SIGTERM 即达；grace 窗内进程退出 → 不升级 SIGKILL", () => {
-    const state = { alive: true, signals: [] as NodeJS.Signals[] };
-    stubProcessKill(4242, state);
-    killPidChain(4242, { graceMs: SHORT_GRACE_MS, note: "run run-a topology child" });
-    expect(state.signals).toEqual(["SIGTERM"]);
-    vi.advanceTimersByTime(SHORT_GRACE_MS);
-    expect(state.signals).toEqual(["SIGTERM"]); // 已死（kill(0) ESRCH）→ 升级跳过
+describe("abortWithFallback（abort 编排：原生中断 → 杀链兜底）", () => {
+  it("无原生中断（CLI-only）：signal abort → 直接落杀链（SIGTERM+SIGKILL）", async () => {
+    const child = fakeChild();
+    const controller = new AbortController();
+    const p = abortWithFallback(child, controller.signal);
+    controller.abort();
+    expect(await p).toBe("killed");
+    expect(child.signals).toEqual(["SIGTERM", "SIGKILL"]);
   });
 
-  it("grace 窗后仍存活 → 升级 SIGKILL（warn 留痕带 note 与 pid）", () => {
-    const logs = captureSink();
-    const state = { alive: true, signals: [] as NodeJS.Signals[] };
-    // 打桩语义：SIGTERM 不杀（进程不理会信号），SIGKILL 后探针转死。
-    vi.spyOn(process, "kill").mockImplementation(((target: number, signal?: NodeJS.Signals | number) => {
-      if (target !== 5151) throw Object.assign(new Error("no such process"), { code: "ESRCH" });
-      if ((signal ?? 0) === 0) {
-        if (!state.alive) throw Object.assign(new Error("no such process"), { code: "ESRCH" });
-        return true;
-      }
-      state.signals.push(signal as NodeJS.Signals);
-      if (signal === "SIGKILL") state.alive = false;
-      return true;
-    }) as typeof process.kill);
-    killPidChain(5151, { graceMs: SHORT_GRACE_MS, note: "run run-b topology child" });
-    expect(state.signals).toEqual(["SIGTERM"]);
-    vi.advanceTimersByTime(SHORT_GRACE_MS);
-    expect(state.signals).toEqual(["SIGTERM", "SIGKILL"]);
-    const warn = logs.filter((l) => l.level === "warn")[0]?.msg ?? "";
-    expect(warn).toContain("run run-b topology child");
-    expect(warn).toContain("5151");
+  it("原生中断成功：中断发出后不等其生效，仍落杀链兜底（信号序列完整）", async () => {
+    const child = fakeChild();
+    const controller = new AbortController();
+    const nativeInterrupt = vi.fn(async () => {});
+    const p = abortWithFallback(child, controller.signal, nativeInterrupt);
+    controller.abort();
+    expect(await p).toBe("killed");
+    expect(nativeInterrupt).toHaveBeenCalledTimes(1);
+    expect(child.signals).toEqual(["SIGTERM", "SIGKILL"]);
   });
 
-  it("已死 pid（kill 即抛 ESRCH）→ 全程 no-op 不抛（信号幂等吞掉）", () => {
-    const logs = captureSink();
-    const state = { alive: false, signals: [] as NodeJS.Signals[] };
-    stubProcessKill(6262, state);
-    expect(() => killPidChain(6262, { graceMs: SHORT_GRACE_MS })).not.toThrow();
-    vi.advanceTimersByTime(SHORT_GRACE_MS);
-    expect(state.signals).toEqual([]);
-    expect(logs.some((l) => l.msg.includes("already dead = expected"))).toBe(true);
+  it("原生中断抛错：不阻断兜底（debug 留痕后照常杀链）", async () => {
+    const child = fakeChild();
+    const controller = new AbortController();
+    const nativeInterrupt = vi.fn(async () => {
+      throw new Error("pipe broken");
+    });
+    const p = abortWithFallback(child, controller.signal, nativeInterrupt);
+    controller.abort();
+    expect(await p).toBe("killed");
+    expect(child.signals).toEqual(["SIGTERM", "SIGKILL"]);
   });
 
-  it("escalation timer unref（回收兜底不阻塞宿主退出）", () => {
-    stubProcessKill(7373, { alive: true, signals: [] });
-    const realSetTimeout = globalThis.setTimeout;
-    const unrefSpy = vi.fn();
-    vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, ms?: number) => {
-      const t = realSetTimeout(fn, ms);
-      (t as unknown as { unref: () => void }).unref = unrefSpy;
-      return t;
-    }) as typeof setTimeout);
-    killPidChain(7373, { graceMs: SHORT_GRACE_MS });
-    expect(unrefSpy).toHaveBeenCalled();
+  it("进程自然退出先于 abort：'terminated' settle，signal listener 已移除", async () => {
+    const child = fakeChild();
+    const controller = new AbortController();
+    const p = abortWithFallback(child, controller.signal);
+    child.emitExit(0, null);
+    expect(await p).toBe("terminated");
+    expect(child.signals).toEqual([]);
+    // abort 在 settle 后不触发杀链（listener 已摘）
+    controller.abort();
+    expect(child.signals).toEqual([]);
+  });
+
+  it("abort 前 child 已退出：立即 'terminated'（挂 exit 前的已死检查）", async () => {
+    const child = fakeChild({ exitCode: 1 });
+    const controller = new AbortController();
+    expect(await abortWithFallback(child, controller.signal)).toBe("terminated");
   });
 });
 
-describe("probePidAlive（三态存活探针：true / false(ESRCH) / undefined(不可判定保守按存活)）", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("kill(pid, 0) 成功 → true；ESRCH → false；EPERM → undefined", () => {
-    vi.spyOn(process, "kill").mockImplementation(((target: number, signal?: NodeJS.Signals | number) => {
-      if (target === 1001) return true;
-      if (target === 1002) throw Object.assign(new Error("no such process"), { code: "ESRCH" });
-      if (target === 1003) throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+describe("killPidChain（run 级单 pid 杀链——SIGTERM+SIGKILL 背靠背，绝不按进程组终止）", () => {
+  it("活 pid：SIGTERM 与 SIGKILL 先后发出", () => {
+    const kills: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+      if (pid > 0 && (signal === "SIGTERM" || signal === "SIGKILL")) {
+        kills.push({ pid, signal: signal as NodeJS.Signals });
+      }
       return true;
     }) as typeof process.kill);
-    expect(probePidAlive(1001)).toBe(true);
-    expect(probePidAlive(1002)).toBe(false);
-    expect(probePidAlive(1003)).toBeUndefined();
+    try {
+      killPidChain(4242, { note: "run wf-1 topology kill" });
+    } finally {
+      vi.mocked(process.kill).mockRestore();
+    }
+    expect(kills).toEqual([
+      { pid: 4242, signal: "SIGTERM" },
+      { pid: 4242, signal: "SIGKILL" },
+    ]);
+  });
+
+  it("note 在场且 pid 存活时 warn 留痕", () => {
+    const logs = captureSink();
+    vi.spyOn(process, "kill").mockImplementation((() => true) as typeof process.kill);
+    try {
+      killPidChain(4243, { note: "run wf-2" });
+      expect(logs.some((l) => l.level === "warn" && l.msg.includes("run wf-2"))).toBe(true);
+    } finally {
+      vi.mocked(process.kill).mockRestore();
+      resetLoggerSinkForTests();
+    }
+  });
+});
+
+describe("probePidAlive（三态存活探针）", () => {
+  it("自进程 → true（kill(pid,0) 成功）", () => {
+    expect(probePidAlive(process.pid)).toBe(true);
+  });
+
+  it("探针异常 → undefined（保守按存活）", () => {
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("denied"), { code: "EPERM" });
+    });
+    try {
+      expect(probePidAlive(999_999)).toBeUndefined();
+    } finally {
+      vi.mocked(process.kill).mockRestore();
+    }
   });
 });

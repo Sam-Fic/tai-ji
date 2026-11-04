@@ -455,12 +455,11 @@ describe('WorktreeService.create() bare-workspace', () => {
     // repoRoot（缓存治理 1-6）：bare-workspace 模式 = workspace 根，供 transport 层失效键使用；
     // usedBaseRef（RT-8#8）：请求的 baseBranch 校验通过，原样返回
     expect(result).toEqual({ cwd: '/project/feat-new-feature', branch: 'feat/new-feature', repoRoot: '/project', usedBaseRef: 'origin/main' })
+    // 本地 git 操作无墙钟（时间机制删除裁决）：exec 不再传 timeoutMs opts
     expect(deps.gitExecutor.exec).toHaveBeenCalledWith(
       '/project/.bare',
       'worktree',
       ['add', '-b', 'feat/new-feature', '/project/feat-new-feature', 'origin/main'],
-      // RT-8 后续：add 是整树 checkout，显式传 60s（不用 git-executor 8s 轻查询默认值）
-      { timeoutMs: 60_000 },
     )
   })
 
@@ -758,8 +757,6 @@ describe('WorktreeService setup 脚本', () => {
         scriptPath: setupScriptPath,
         args: ['/project/feat-test'],
         cwd: '/project/feat-test',
-        // timeout 必传后（D4）：断言用户配置值（getTimeout()=60s → 60_000ms）显式透传
-        timeout: 60_000,
       }),
     )
   })
@@ -823,15 +820,12 @@ describe('WorktreeService setup 失败回滚（RT-8#6）', () => {
       '/project/.bare',
       'worktree',
       ['remove', '--force', '--force', '/project/feat-test'],
-      // RT-8 后续：remove 是整树删除，同 add 显式传 60s
-      { timeoutMs: 60_000 },
     )
     // 逆序 ②：删除本次 add -b 新建的分支（不删则重试报「分支已存在」）
     expect(deps.gitExecutor.exec).toHaveBeenCalledWith(
       '/project/.bare',
       'branch',
       ['-D', 'feat/test'],
-      { timeoutMs: 60_000 },
     )
   })
 
@@ -857,13 +851,11 @@ describe('WorktreeService setup 失败回滚（RT-8#6）', () => {
       '/home/user/my-repo',
       'worktree',
       ['remove', '--force', '--force', '/home/user/my-repo/feat-test'],
-      { timeoutMs: 60_000 },
     )
     expect(deps.gitExecutor.exec).toHaveBeenCalledWith(
       '/home/user/my-repo',
       'branch',
       ['-D', 'feat/test'],
-      { timeoutMs: 60_000 },
     )
   })
 
@@ -1094,14 +1086,14 @@ describe('WorktreeService setup 执行层失败包装', () => {
     ['branch -D', { stdout: '', stderr: '', exitCode: 0 }],
   ])
 
-  it('setup 超时 → SETUP_FAILED（detail.timeout=true + timeoutMs），并照常回滚', async () => {
+  it('setup 其他执行层失败（非 ShellRunnerError）→ SETUP_FAILED（detail.executionError），并照常回滚', async () => {
     const deps = createDeps({
       mode: 'bare-workspace',
       existingPaths: new Set(['/project/.bare', '/project/.bare/custom-hooks/setup-worktree.sh']),
       gitOverrides: { execResults: rollbackOk },
     })
     deps.shellRunner.execute = vi.fn(async () => {
-      throw new ShellRunnerError('timeout', '脚本执行超时（60000ms）')
+      throw new Error('spawn bash EACCES')
     })
     const service = new WorktreeService(deps)
 
@@ -1109,10 +1101,10 @@ describe('WorktreeService setup 执行层失败包装', () => {
       service.create({ branch: 'feat-x', workspaceHint: '/project' }),
     ).rejects.toMatchObject({
       code: 'SETUP_FAILED',
-      message: expect.stringContaining('超时'),
-      detail: { timeout: true, timeoutMs: 60_000 },
+      message: expect.stringContaining('setup 脚本执行失败'),
+      detail: { executionError: 'spawn bash EACCES' },
     })
-    // 超时同样走回滚（worktree remove + branch -D），世界复原
+    // 执行层失败同样走回滚（worktree remove + branch -D），世界复原
     expect(deps.gitExecutor.exec.mock.calls.some(
       (c) => c[1] === 'worktree' && (c[2] as string[])?.includes('remove'),
     )).toBe(true)
@@ -1260,7 +1252,7 @@ describe('WorktreeService 成败结构化日志', () => {
       error: expect.stringContaining('git worktree add 失败'),
       exitCode: 1,
       stderr: 'fatal: branch exists',
-      timeout: false,
+      scriptMissing: false,
       rollback: null,
       cleanupHint: null,
     })
@@ -1297,23 +1289,6 @@ describe('WorktreeService 成败结构化日志', () => {
       stderr: 'ERR_PNPM_OUTDATED_LOCKFILE',
       rollback: 'clean',
     })
-  })
-})
-// ── git 命令超时校准（RT-8 后续：add/remove 是整树操作，8s 轻查询默认值不够）──
-
-describe('WorktreeService git 命令超时校准', () => {
-  it('worktree add 与回滚 remove/branch -D 显式传 60s timeoutMs', async () => {
-    const deps = createDeps({
-      mode: 'bare-workspace',
-      existingPaths: new Set(['/project/.bare']),
-    })
-    const service = new WorktreeService(deps)
-
-    await service.create({ branch: 'feat-x', workspaceHint: '/project' })
-
-    const calls = deps.gitExecutor.exec.mock.calls
-    const addCall = calls.find((c) => c[1] === 'worktree' && (c[2] as string[])?.includes('add'))
-    expect(addCall?.[3]).toEqual({ timeoutMs: 60_000 })
   })
 })
 // ── base 解析 fallback（RT-8#8 留痕升级为结构化 warn）──

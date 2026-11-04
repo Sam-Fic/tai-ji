@@ -48,7 +48,7 @@ import type { PlanReviewUIRequest } from '@/composables/useExtensionUI'
 const commandMock = vi.hoisted(() => vi.fn())
 vi.mock('@taiji/core/transport/api', async (importActual) => {
   const actual = await importActual<typeof import('@taiji/core/transport/api')>()
-  return { ...actual, command: commandMock, RPC_BACKSTOP_TIMEOUT_MS: 30_000 }
+  return { ...actual, command: commandMock }
 })
 
 // ── mock 边界②：extension domain（D4③ 主动拉取双源之一 getPendingRequests）——受控返回/拒绝 ──
@@ -57,7 +57,6 @@ vi.mock('@taiji/core/transport/api/domains/extension', () => ({
   getPendingRequests: getPendingRequestsMock,
 }))
 
-import { RPC_BACKSTOP_TIMEOUT_MS } from '@taiji/core/transport/api'
 
 // ── 共享测试基建 ─────────────────────────────────────────────
 
@@ -421,7 +420,6 @@ describe('loadPlanState：首次拉取与错误通路', () => {
     expect(commandMock).toHaveBeenCalledWith(
       'session.getPlanState',
       { sessionId: 'A' },
-      RPC_BACKSTOP_TIMEOUT_MS,
     )
     resolveForSid('A', { sessionId: 'A', planState: { ...BASE_VIEW, docs: [DOC] } })
     await settle()

@@ -41,11 +41,9 @@
  * - extension.ui_request method 可超界（editor）→ kind 兜底 'input' + 原始 method 经
  *   DialogRequest 索引签名保留（request.method 不丢信息，s4 适配层可恢复）
  *
- * 3 个「已知不归一」型（handler = ignoreFrame，返回 undefined）：plugin:event、
- *   plugin:uiRequestExpired、plugin:permissionRequestExpired——消费方均在 bridge
- *   之外独立订阅 WS global 通道（settings/transport.ts onPluginEvent、
- *   shell-adapters.ts onGlobal、permission-request-controller.ts onGlobal），bridge
- *   再转发只会造出无订阅者的死事件或与既有消费方双重处理。登记仅为让它们脱离
+ * 1 个「已知不归一」型（handler = ignoreFrame，返回 undefined）：plugin:event——消费方在
+ *   bridge 之外独立订阅 WS global 通道（settings/transport.ts onPluginEvent），bridge
+ *   再转发只会造出无订阅者的死事件或与既有消费方双重处理。登记仅为让它脱离
  *   unknown 路径（source filter 对 plugin:* 前缀全放行，不登记则每次触发打一条
  *   error 噪音），行为 = 安全忽略（不 emit 任何事件）。
  *
@@ -394,10 +392,8 @@ const PLUGIN_HANDLERS: Record<string, (msg: IncomingPluginMessage) => InternalEv
   'plugin:viewUpdate': parseViewUpdate,
   'plugin:headerActionUpdate': parseHeaderActionUpdate,
   'plugin:commandRegistered': parseCommandRegistered,
-  // 三型「已知不归一」（见 ignoreFrame）：登记脱离 unknown 路径，bridge 侧不转发
+  // 「已知不归一」型（见 ignoreFrame）：登记脱离 unknown 路径，bridge 侧不转发
   'plugin:event': ignoreFrame,
-  'plugin:uiRequestExpired': ignoreFrame,
-  'plugin:permissionRequestExpired': ignoreFrame,
 }
 
 const EXTENSION_HANDLERS: Record<string, (msg: IncomingPluginMessage) => InternalEvent | null> = {

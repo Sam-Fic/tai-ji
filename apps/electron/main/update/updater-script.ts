@@ -238,18 +238,13 @@ case "$APP" in
     ;;
 esac
 
-# ── S0b: 等待主进程退出（RM9+RM6：PID 制 kill -0，上限 60s；超时宁可不升级，
-#    不拆运行中进程的底座）──
+# ── S0b: 等待主进程退出（RM9+RM6：PID 制 kill -0，持续等待——升级脚本上下文中
+#    等父退出无上限（时间机制删除裁决：删「超时放弃升级」分支））──
 if [ -z "$PARENT_PID" ]; then
   echo "[\$(date)] FATAL: PARENT_PID not injected (main-side contract violation)"
   fail "internal error"
 fi
-wait_loops=0
 while kill -0 "$PARENT_PID" 2>/dev/null; do
-  wait_loops=\$((wait_loops + 1))
-  if [ "\$wait_loops" -gt 120 ]; then
-    fail "app still running"
-  fi
   sleep 0.5
 done
 echo "[\$(date)] parent process (pid \$PARENT_PID) exited"

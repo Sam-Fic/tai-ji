@@ -56,7 +56,6 @@ const STOCK = {
   'packages/runtime/test/cli-error-envelope.integration.test.ts': null,
   'packages/runtime/test/network-proxy-stats.test.ts': null,
   'packages/runtime/src/services/plugin-service/__tests__/plugin-rpc-server.test.ts': null,
-  'packages/runtime/test/plugin-ui-timeout-authority.test.ts': null,
   'packages/runtime/test/server-extension.test.ts': null,
   'packages/runtime/test/process-bundle.test.ts': null,
   'packages/runtime/test/test-extra1.test.ts': null,

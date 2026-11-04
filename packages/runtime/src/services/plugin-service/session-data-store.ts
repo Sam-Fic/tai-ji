@@ -76,7 +76,7 @@ const activeStores = new Set<SessionDataStore>()
  * 为什么是模块级分发而不是 SessionService 直挂 pluginService：SessionService 与
  * PluginService 互为依赖（plugin-service 经 setSessionService 反向持有 sessionService，
  * 构造注入成环），组合根 wiring 又不在本单元领地——模块级单例分发与 crash-journal
- * （getCrashJournal）/ inflightMirror / userStoppedGate 同款既有模式。
+ * （getCrashJournal）/ userStoppedGate 同款既有模式。
  *
  * best-effort：单实例清理失败（trash 抛结构化错误等）只 warn 留痕，不阻断销毁收敛链，
  * 也不影响其余实例。

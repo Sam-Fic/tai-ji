@@ -26,7 +26,7 @@ vi.mock("../../core/logger.ts", () => ({
   getLogger: () => loggerMock,
 }));
 
-import { DEFAULT_DIALOG_TIMEOUT_MS, DialogGlobalQueue, type UiRequest } from "../ui/dialog-queue.ts";
+import { DialogGlobalQueue, type UiRequest } from "../ui/dialog-queue.ts";
 import { type ChannelHandler,createUiChannelRegistry } from "../ui/ui-channels.ts";
 import { createUiRequestHandlerForMode } from "../ui/ui-request-handler-factory.ts";
 
@@ -395,38 +395,6 @@ describe("createUiRequestHandlerForMode — dialog timeout 协同（LC-3/T2⑦�
     expect(ctx.ui.input).toHaveBeenCalledWith("In2", "p2");
   });
 
-  it("全链路：req.timeout 经 L2 队列按传值超时 settle（host ctx.ui promise 挂死形态）", async () => {
-    const ctx = makeCtxWithUi();
-    // host UI promise 挂死：SDK 自身永不返回，唯一回收通道是队列级上界
-    ctx.ui.select.mockReturnValue(new Promise(() => {}));
-    const handler = createUiRequestHandlerForMode(ctx, createUiChannelRegistry(), new DialogGlobalQueue())!;
-
-    const p = handler({ method: "select", id: "t1", title: "q", options: ["a"], timeout: 1234 });
-
-    await vi.advanceTimersByTimeAsync(1233);
-    let settled = false;
-    void p.then(() => {
-      settled = true;
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(settled).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(p).resolves.toEqual({ cancelled: true });
-  });
-
-  it("未传 timeout → 队列级默认上界（30min）兜底 settle，SDK opts 不出现", async () => {
-    const ctx = makeCtxWithUi();
-    ctx.ui.select.mockReturnValue(new Promise(() => {}));
-    const handler = createUiRequestHandlerForMode(ctx, createUiChannelRegistry(), new DialogGlobalQueue())!;
-
-    const p = handler({ method: "select", id: "t1", title: "q", options: ["a"] });
-    expect(ctx.ui.select).toHaveBeenCalledWith("q", ["a"]);
-
-    await vi.advanceTimersByTimeAsync(DEFAULT_DIALOG_TIMEOUT_MS);
-    await expect(p).resolves.toEqual({ cancelled: true });
-  });
-
   it("竞态恰一次：SDK 层超时先到（auto-dismiss）→ handler 先 settle，队列级 timer 兜底不二 settle", async () => {
     const ctx = makeCtxWithUi();
     // SDK timeout 生效形态：500ms 后 auto-dismiss（resolve undefined = 取消）
@@ -447,23 +415,19 @@ describe("createUiRequestHandlerForMode — dialog timeout 协同（LC-3/T2⑦�
     expect(loggerMock.warn).not.toHaveBeenCalled();
   });
 
-  // [A2-3] 非法 timeout 与队列层判定对齐：不透传 SDK 第三参（语义反转的 opts
-  // （<=0 可能立即 auto-dismiss）不进 SDK），由队列层默认上界兜底 settle。
+  // [A2-3] 非法 timeout 不透传 SDK 第三参（语义反转的 opts（<=0 可能立即
+  // auto-dismiss）不进 SDK）。（原「队列层默认上界兜底 settle」断言已随队列级
+  // 超时机制删除——非法值 = 无第三参，dialog 挂到用户响应/SR-4/rejectAll。）
   it.each([-1, 0, Number.NaN])(
-    "timeout 非法（%p）→ SDK 不收第三参（参数个数 2），队列层按默认上界 settle（A2-3）",
+    "timeout 非法（%p）→ SDK 不收第三参（参数个数 2）（A2-3）",
     async (badTimeout) => {
       const ctx = makeCtxWithUi();
-      ctx.ui.select.mockReturnValue(new Promise(() => {})); // host UI 挂死，暴露队列层兜底
       const handler = createUiRequestHandlerForMode(ctx, createUiChannelRegistry(), new DialogGlobalQueue())!;
 
-      const p = handler({ method: "select", id: "t1", title: "q", options: ["a"], timeout: badTimeout });
+      handler({ method: "select", id: "t1", title: "q", options: ["a"], timeout: badTimeout });
       // 第三参不出现：toHaveBeenCalledWith 逐参精确匹配，两参断言即锁死参数个数为 2
       expect(ctx.ui.select).toHaveBeenCalledWith("q", ["a"]);
       expect(ctx.ui.select).toHaveBeenCalledTimes(1);
-
-      // 队列层把非法值回落默认上界（30min）：到点 settle cancelled
-      await vi.advanceTimersByTimeAsync(DEFAULT_DIALOG_TIMEOUT_MS);
-      await expect(p).resolves.toEqual({ cancelled: true });
     },
   );
 });

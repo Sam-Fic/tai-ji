@@ -16,7 +16,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { defineComponent, h, nextTick, onBeforeUnmount, ref } from 'vue'
-import type { LatestReleaseInfo, ServerMessage } from '@taiji/shared'
+import type { ServerMessage } from '@taiji/shared'
 import { useUrlBar } from '@/composables/features/url-bar/useUrlBar'
 import { useToast, setToastLimiter } from '@/composables/useToast'
 import { useBrowserZoom } from '@/composables/features/browser/useBrowserZoom'
@@ -77,10 +77,7 @@ import { markdownStubModule } from '../helpers/app-update-markdown-stub'
 import {
   ipc,
   controller,
-  makeUpdateRelease,
-  setupAppUpdate,
   setupAppUpdateLifecycle,
-  type AppUpdateControllerInternal,
 } from '../helpers/app-update-mount'
 
 vi.mock('@taiji/ui/features/chat/markdown', () => markdownStubModule())
@@ -518,195 +515,6 @@ describe('submitSegments 统一通路：editAndResend', () => {
 // 引用 useChatStore 避免 ts unused
 void useChatStore
 
-// ═══ 来源：useAppUpdate.pending.test.ts ═══
-/** 恢复 pending 前置：mock getPendingUpdate 返回值 → 订阅 → 执行 restore（断言留在用例） */
-async function restorePendingRelease(release: LatestReleaseInfo | null): Promise<{
-  result: AppUpdateControllerInternal
-  stop: () => void
-}> {
-  ipc.getPendingUpdate.mockResolvedValue(release)
-  const handle = setupAppUpdate()
-  await controller.restorePendingUpdate()
-  return handle
-}
-
-describe('useAppUpdate 功能1：持久化升级提醒标志', () => {
-  it('PENDING-TC1：restorePendingUpdate 从 getPendingUpdate 恢复「可升级」提醒', async () => {
-    const { result, stop } = await restorePendingRelease(makeUpdateRelease('0.9.0'))
-
-    expect(result.state.state).toBe('available')
-    expect(result.state.latestRelease?.version).toBe('0.9.0')
-    // releaseNotes 异步渲染，waitFor 等 html 填充
-    await vi.waitFor(() => {
-      expect(result.state.releaseNotesHtml).toBe('<h2>新特性</h2>')
-    }, { interval: 1 })
-    expect(ipc.getPendingUpdate).toHaveBeenCalledOnce()
-    stop()
-  })
-
-  it('PENDING-TC2：getPendingUpdate 返回 null → 不恢复提醒，state 保持 idle', async () => {
-    const { result, stop } = await restorePendingRelease(null)
-
-    expect(result.state.state).toBe('idle')
-    expect(result.state.latestRelease).toBeNull()
-    stop()
-  })
-
-  it('PENDING-TC3：防覆盖检查——pending 恢复后 checkForUpdate 失败不回退 idle', async () => {
-    const { result, stop } = await restorePendingRelease(makeUpdateRelease('0.9.0'))
-    expect(result.state.state).toBe('available')
-
-    // 模拟 30s 后联网检测失败（网络断开）
-    ipc.checkForUpdate.mockRejectedValue(new Error('network error'))
-    await result.checkForUpdate()
-
-    // 防覆盖检查：pendingRestored=true 时检测失败不回退 idle，保持 available
-    expect(result.state.state).toBe('available')
-    expect(result.state.latestRelease?.version).toBe('0.9.0')
-    stop()
-  })
-
-  it('PENDING-TC4：防覆盖检查——pending 恢复后 checkForUpdate 返回 null 不回退 idle', async () => {
-    const { result, stop } = await restorePendingRelease(makeUpdateRelease('0.9.0'))
-    expect(result.state.state).toBe('available')
-
-    // 模拟 30s 后联网检测无新版（null）
-    ipc.checkForUpdate.mockResolvedValue({ info: null, rateLimited: false })
-    await result.checkForUpdate()
-
-    // 防覆盖检查：pendingRestored=true 时无新版不回退 idle（pending 标志证明曾检测到更新）
-    expect(result.state.state).toBe('available')
-    expect(result.state.latestRelease?.version).toBe('0.9.0')
-    stop()
-  })
-
-  it('PENDING-TC5：pending 恢复后 checkForUpdate 确认有新版 → 正常刷新 latestRelease', async () => {
-    // 恢复的 pending 是 v0.9.0
-    const { result, stop } = await restorePendingRelease(makeUpdateRelease('0.9.0'))
-    expect(result.state.latestRelease?.version).toBe('0.9.0')
-
-    // 联网检测到更新的 v0.9.5
-    ipc.checkForUpdate.mockResolvedValue({ info: makeUpdateRelease('0.9.5'), rateLimited: false })
-    await result.checkForUpdate()
-
-    // 确认有新版 → 正常刷新（latestRelease 更新为 v0.9.5）
-    expect(result.state.state).toBe('available')
-    expect(result.state.latestRelease?.version).toBe('0.9.5')
-    stop()
-  })
-
-  it('PENDING-TC6：无 pending 恢复时，checkForUpdate 失败正常回退 idle（检查不影响正常流程）', async () => {
-    // 无 pending → pendingRestored 保持 false
-    const { result, stop } = await restorePendingRelease(null)
-    expect(result.state.state).toBe('idle')
-
-    // 联网检测失败
-    ipc.checkForUpdate.mockRejectedValue(new Error('network error'))
-    await result.checkForUpdate()
-
-    // 正常流程（非 pending 恢复）：检测失败 → 回退 idle（检查只在 pendingRestored 时生效）
-    expect(result.state.state).toBe('idle')
-    stop()
-  })
-
-  it('PENDING-TC7（I#8）：getPendingUpdate reject（IPC 异常）→ restorePendingUpdate catch 分支：state 保持 idle、不抛错', async () => {
-    // 模拟 IPC 通道异常（如 preload 桥未就绪 / ipcRenderer.invoke reject）
-    ipc.getPendingUpdate.mockRejectedValue(new Error('ipc fail'))
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const { result, stop } = setupAppUpdate()
-
-    // restorePendingUpdate 是 best-effort：catch 后不 re-throw，state 不变
-    await expect(controller.restorePendingUpdate()).resolves.toBeUndefined()
-
-    // state 保持初始 idle，latestRelease 未被污染
-    expect(result.state.state).toBe('idle')
-    expect(result.state.latestRelease).toBeNull()
-    // 失败信息经 console.warn 诊断（不进 errorMessage，避免 idle 态残留）
-    expect(warnSpy).toHaveBeenCalledWith(
-      '[useAppUpdate] restorePendingUpdate failed:',
-      expect.any(Error),
-    )
-    warnSpy.mockRestore()
-    stop()
-  })
-
-  it('PENDING-TC8（I#9）：initAutoCheck 完整启动序列——先同步触发 restorePendingUpdate，30s 后触发 checkForUpdate', async () => {
-    // AUTO_CHECK_DELAY_MS = 30_000（use-app-update-autocheck.ts 未导出常量，用字面量并注明）
-    const AUTO_CHECK_DELAY_MS = 30_000
-    vi.useFakeTimers()
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    // pending 恢复成功（立即触发，不等 30s）
-    ipc.getPendingUpdate.mockResolvedValue(makeUpdateRelease('0.9.0'))
-    // 30s 后联网检测确认有更新版本
-    ipc.checkForUpdate.mockResolvedValue({ info: makeUpdateRelease('0.9.5'), rateLimited: false })
-    const { result, stop } = setupAppUpdate()
-
-    // initAutoCheck 必须在活跃 effect scope 内调（onScopeDispose 注册 timer 清理）
-    result.initAutoCheck()
-
-    // 1. 启动序列先触发 restorePreloadedUpdate（getPreloaded），无预下载产物后再
-    //    restorePendingUpdate（getPendingUpdate）。两者都是 async，需 flush 微任务
-    await vi.waitFor(() => {
-      expect(ipc.getPreloaded).toHaveBeenCalledOnce()
-    }, { interval: 1 })
-    await vi.waitFor(() => {
-      expect(ipc.getPendingUpdate).toHaveBeenCalledOnce()
-    }, { interval: 1 })
-    await vi.waitFor(() => {
-      expect(result.state.state).toBe('available')
-      expect(result.state.latestRelease?.version).toBe('0.9.0')
-    }, { interval: 1 })
-    // 此时 30s 定时器尚未到期，checkForUpdate 不应被调
-    expect(ipc.checkForUpdate).not.toHaveBeenCalled()
-
-    // 2. 推进 30s：联网检测被触发（刷新 release info）
-    vi.advanceTimersByTime(AUTO_CHECK_DELAY_MS)
-    await vi.waitFor(() => {
-      expect(ipc.checkForUpdate).toHaveBeenCalledOnce()
-    }, { interval: 1 })
-    // 联网检测确认 v0.9.5 → latestRelease 被刷新
-    await vi.waitFor(() => {
-      expect(result.state.latestRelease?.version).toBe('0.9.5')
-    }, { interval: 1 })
-    expect(result.state.state).toBe('available')
-
-    warnSpy.mockRestore()
-    vi.useRealTimers()
-    stop()
-  })
-
-  it('PENDING-TC9（I#9 补充）：initAutoCheck 在 30s 内不触发 checkForUpdate（定时器语义正确，不提前检测）', async () => {
-    const AUTO_CHECK_DELAY_MS = 30_000
-    vi.useFakeTimers()
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    ipc.getPendingUpdate.mockResolvedValue(null)
-    ipc.checkForUpdate.mockResolvedValue({ info: makeUpdateRelease('0.9.0'), rateLimited: false })
-    const { result, stop } = setupAppUpdate()
-
-    result.initAutoCheck()
-    await vi.waitFor(() => {
-      expect(ipc.getPendingUpdate).toHaveBeenCalledOnce()
-    }, { interval: 1 })
-
-    // 推进 29s（差 1s 到期）→ checkForUpdate 仍不应被调
-    vi.advanceTimersByTime(AUTO_CHECK_DELAY_MS - 1_000)
-    expect(ipc.checkForUpdate).not.toHaveBeenCalled()
-    // pending 为 null → state 保持 idle
-    expect(result.state.state).toBe('idle')
-
-    // 再推进 1s 达到 30s → checkForUpdate 触发
-    vi.advanceTimersByTime(1_000)
-    await vi.waitFor(() => {
-      expect(ipc.checkForUpdate).toHaveBeenCalledOnce()
-    }, { interval: 1 })
-
-    warnSpy.mockRestore()
-    vi.useRealTimers()
-    stop()
-  })
-})
 
 // ═══ 来源：modal-surface-registry/modal-surface-event-order.test.ts ═══
 /** 编排器模拟（§6.7 检查两重：defaultPrevented 先检 → 聚合让位 → 层级序剥层） */

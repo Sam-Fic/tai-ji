@@ -57,7 +57,6 @@ export default {
   yesterday: 'Yesterday',
   daysAgo: '{days} days ago',
   dateFormat: '{month}/{day}',
-  searchUnavailable: 'Search service is temporarily unavailable',
   // Thinking level labels (W2)
   thinkingLevel: {
     off: 'off',

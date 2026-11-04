@@ -168,92 +168,23 @@ describe("pi-engine", () => {
   });
 
   describe("PiEngine.probe", () => {
-    it("invocation 可解析 + 版本探测成功 → ok 报告（缓存复用，force 才重探）", async () => {
-      let probeCalls = 0;
-      const { engine } = makeEngine({
-        probeVersion: () => {
-          probeCalls += 1;
-          return Promise.resolve("pi 0.84.4");
-        },
-      });
+    //（原版本探测（spawn `--version` + 10s 超时）用例组已随时间机制删除——
+    // probe 只剩 invocation 文件事实检查，二进制好坏由 run 后实际退出/握手链兜底。）
+    it("invocation 可解析 → ok 报告（缓存复用，force 才重探）", async () => {
+      const { engine } = makeEngine();
 
       const first = await engine.probe();
       expect(first.ok).toBe(true);
-      expect(first.engineVersion).toBe("pi 0.84.4");
-      expect(first.checks.map((c) => c.name)).toEqual(["invocation", "version"]);
+      expect(first.checks.map((c) => c.name)).toEqual(["invocation"]);
       expect(first.error).toBeUndefined();
 
       // 缓存：不重探
       const cached = await engine.probe();
       expect(cached).toBe(first);
-      expect(probeCalls).toBe(1);
 
       // force：重探
       const forced = await engine.probe({ force: true });
       expect(forced).not.toBe(first);
-      expect(probeCalls).toBe(2);
-    });
-
-    it("版本探测返回空 → version check fail → ok:false + engine_probe_failed recovery", async () => {
-      const { engine } = makeEngine({ probeVersion: () => Promise.resolve("") });
-      const report = await engine.probe();
-      expect(report.ok).toBe(false);
-      expect(report.engineVersion).toBe("");
-      expect(report.checks.find((c) => c.name === "version")?.ok).toBe(false);
-      expect(report.error?.code).toBe("engine_probe_failed");
-      expect(report.error?.recovery).toContain("--version");
-    });
-
-    it("default 探测器：fake pi 可执行脚本 → execFile 成功解析首行", async () => {
-      const binDir = fs.mkdtempSync(join(tmpdir(), "pi-cli-test-probe-bin-"));
-      const piPath = join(binDir, "pi");
-      fs.writeFileSync(piPath, "#!/bin/sh\necho 'pi 9.9.9-fake'\n");
-      fs.chmodSync(piPath, 0o755);
-      const savedPath = process.env.PATH;
-      const savedArgv1 = process.argv[1];
-      try {
-        // argv[1] 摘除 → getPiInvocation 落 PATH 分支（command "pi"）；PATH 指向 fake bin
-        process.argv[1] = undefined as unknown as string;
-        process.env.PATH = binDir;
-        const { engine } = makeEngine();
-        const report = await engine.probe({ force: true });
-        expect(report.ok).toBe(true);
-        expect(report.engineVersion).toBe("pi 9.9.9-fake");
-      } finally {
-        process.env.PATH = savedPath;
-        process.argv[1] = savedArgv1;
-        fs.rmSync(binDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-      }
-    });
-
-    it("default 探测器失败（pi 不可执行）→ best-effort undefined → probe fail；PATH 无 pi → invocation fail", async () => {
-      const binDir = fs.mkdtempSync(join(tmpdir(), "pi-cli-test-probe-bad-"));
-      // 非可执行文件：isInvocationResolvable 的 existsSync 判真，但 execFile 失败
-      fs.writeFileSync(join(binDir, "pi"), "not executable");
-      const savedPath = process.env.PATH;
-      const savedArgv1 = process.argv[1];
-      try {
-        process.argv[1] = undefined as unknown as string;
-        process.env.PATH = binDir;
-        const { engine } = makeEngine();
-        const report = await engine.probe({ force: true });
-        expect(report.ok).toBe(false);
-        expect(report.checks.find((c) => c.name === "invocation")?.ok).toBe(true);
-        expect(report.checks.find((c) => c.name === "version")?.ok).toBe(false);
-
-        // PATH 摘空：invocation 不可解析（detail 含期望恢复动作）
-        process.env.PATH = "";
-        const unreachable = await engine.probe({ force: true });
-        expect(unreachable.ok).toBe(false);
-        const invocationCheck = unreachable.checks.find((c) => c.name === "invocation");
-        expect(invocationCheck?.ok).toBe(false);
-        expect(invocationCheck?.detail).toContain("cannot resolve pi executable");
-        expect(unreachable.checks).toHaveLength(1);
-      } finally {
-        process.env.PATH = savedPath;
-        process.argv[1] = savedArgv1;
-        fs.rmSync(binDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-      }
     });
   });
 
@@ -866,22 +797,14 @@ describe("server", () => {
  * piAgentDir 缺省注入一个不存在的 tmp 路径——查询范围（listModels/validateModel，
  * 路由 engine-query）读不到任何数据文件 → null/结构化错误，测试既不触碰真实
  * 系统 pi 目录，也无需 fixture 文件（本文件保持零 fs 写删）。 */
-  function makeServer(engine = makeEngine(), reverseTimeoutMs?: number, piAgentDir?: string) {
+  function makeServer(engine = makeEngine(), piAgentDir?: string) {
     const sink = makeSink();
-    const clockCalls: Array<{ op: string; id: string }> = [];
     const server = new EngineProtocolServer({
       write: sink.write,
       engine,
       piAgentDir: piAgentDir ?? path.join(os.tmpdir(), `pi-server-test-absent-${randomUUID()}`),
-      reverseClock: {
-        started: (id: string) => clockCalls.push({ op: "started", id }),
-        acked: (id: string) => clockCalls.push({ op: "acked", id }),
-        settled: (id: string) => clockCalls.push({ op: "settled", id }),
-        dispose: () => clockCalls.push({ op: "dispose", id: "-" }),
-      },
-      ...(reverseTimeoutMs !== undefined ? { reverseTimeoutMs } : {}),
     });
-    return { server, sink, engine, clockCalls };
+    return { server, sink, engine };
   }
 
   /** 发一帧请求并等对应 id 的应答帧（result/error 二选一）。 */
@@ -1418,20 +1341,14 @@ describe("server", () => {
   // ── 反向请求客户端 ──
 
   describe("reverseRequest 客户端", () => {
-    it("帧形状（rev-N 单调 id + method/params）+ result 应答落位 + clock started/acked/settled", async () => {
-      const { server, sink, clockCalls } = makeServer();
+    it("帧形状（rev-N 单调 id + method/params）+ result 应答落位", async () => {
+      const { server, sink } = makeServer();
       const p1 = server.reverseRequest("host/log", { message: "hello" });
       const f1 = await sink.waitFor((f) => f.id === "rev-1" && f.method === "host/log", "rev-1");
       expect(f1.params).toEqual({ message: "hello" });
-      expect(clockCalls).toEqual([{ op: "started", id: "rev-1" }]);
 
       server.handleFrame({ id: "rev-1", result: { ok: true } });
       await expect(p1).resolves.toEqual({ ok: true });
-      expect(clockCalls).toEqual([
-        { op: "started", id: "rev-1" },
-        { op: "acked", id: "rev-1" },
-        { op: "settled", id: "rev-1" },
-      ]);
 
       // id 单调递增
       const p2 = server.reverseRequest("host/log", {});
@@ -1440,18 +1357,13 @@ describe("server", () => {
       await expect(p2).resolves.toEqual({ ok: true });
     });
 
-    it("ack 两阶段（R9-2）：{ack:true} 只 ack 计时侧不终结等待，最终帧才 settle", async () => {
-      const { server, sink, clockCalls } = makeServer();
+    it("ack 两阶段（R9-2）：{ack:true} 不终结等待，最终帧才 settle", async () => {
+      const { server, sink } = makeServer();
       const p = server.reverseRequest("host/askUser", { runId: "r", request: { method: "select", id: "1" } });
       await sink.waitFor((f) => f.id === "rev-1", "rev-1");
-      expect(clockCalls).toEqual([{ op: "started", id: "rev-1" }]);
 
-      // 第一段：ack 帧 → 仅 acked（移出 in-flight 自灭计时），p 仍 pending
+      // 第一段：ack 帧 → 等待继续（原「移出 in-flight 自灭计时」的计时侧已删）
       server.handleFrame({ id: "rev-1", result: { ack: true } });
-      expect(clockCalls).toEqual([
-        { op: "started", id: "rev-1" },
-        { op: "acked", id: "rev-1" },
-      ]);
       let settledOrRejected = false;
       void p.then(
         () => { settledOrRejected = true; },
@@ -1460,17 +1372,9 @@ describe("server", () => {
       await new Promise((r) => setTimeout(r, 5));
       expect(settledOrRejected).toBe(false);
 
-      // 第二段：最终结果帧 → settle + clock.settled。现状断言：settleReverse 对任何
-      // 带在途登记的应答帧先调 acked（含终结帧本身）→ 终结帧产生第二次 acked
-      // （幂等无害，登记 settleReverse 双 acked 现状，见任务汇报）
+      // 第二段：最终结果帧 → settle
       server.handleFrame({ id: "rev-1", result: { value: "picked" } });
       await expect(p).resolves.toEqual({ value: "picked" });
-      expect(clockCalls).toEqual([
-        { op: "started", id: "rev-1" },
-        { op: "acked", id: "rev-1" },
-        { op: "acked", id: "rev-1" },
-        { op: "settled", id: "rev-1" },
-      ]);
     });
 
     it("error 应答 → reject（文案含 rejected 前缀与结构化 error 帧）", async () => {
@@ -1486,24 +1390,7 @@ describe("server", () => {
       );
     });
 
-    it("缺省 60s 超时兜底：reject + clock.settled + 迟到应答不再落位（fake timers）", async () => {
-      vi.useFakeTimers();
-      try {
-        const { server, sink, clockCalls } = makeServer();
-        const p = server.reverseRequest("host/log", {});
-        expect(sink.frames).toHaveLength(1);
-        const assertion = expect(p).rejects.toThrow(/host\/log \(rev-1\) timed out after 60000ms/);
-        await vi.advanceTimersByTimeAsync(60_000);
-        await assertion;
-        expect(clockCalls).toContainEqual({ op: "started", id: "rev-1" });
-        expect(clockCalls).toContainEqual({ op: "settled", id: "rev-1" });
-        // 迟到应答：pending 已清理 → 无副作用
-        const before = sink.frames.length;
-        server.handleFrame({ id: "rev-1", result: { ok: true } });
-        expect(sink.frames).toHaveLength(before);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
+    //（原「缺省 60s 超时兜底」用例已随反向请求应答计时删除——等待无时间上界，
+    // 迟到应答由 pending 表的 id 关联自弃。）
   });
 });

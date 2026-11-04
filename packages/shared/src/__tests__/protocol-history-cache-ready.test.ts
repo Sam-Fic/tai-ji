@@ -43,7 +43,7 @@ describe('session.history 协议形状契约（turn-boundary-index D4 查询形�
     expect(recent.maxBytes).toBeUndefined()
   })
 
-  it('响应形状：messages/truncated/loadedTurns/totalTurnsEstimate 必需 + session/interrupted 可选（ServerMessageMap 登记逐字段）', () => {
+  it('响应形状：messages/truncated/loadedTurns/totalTurnsEstimate 必需 + session 可选（ServerMessageMap 登记逐字段）', () => {
     expectTypeOf<ServerMessageMap['session.history']>().toEqualTypeOf<{
       sessionId: string
       session?: SessionSummary
@@ -51,7 +51,6 @@ describe('session.history 协议形状契约（turn-boundary-index D4 查询形�
       truncated: boolean
       loadedTurns: number
       totalTurnsEstimate: number
-      interrupted?: boolean
     }>()
     // 最小合法响应（最近窗口空页形态——零 turn 兼容分支的协议承载）
     const empty: ServerMessageMap['session.history'] = {
@@ -63,7 +62,6 @@ describe('session.history 协议形状契约（turn-boundary-index D4 查询形�
     }
     expect(empty.truncated).toBe(false)
     expect(empty.messages).toHaveLength(0)
-    expect(empty.interrupted).toBeUndefined()
     // wire 帧构造（ServerMessage 泛型接口）：reply 型 session.history 帧合法
     const msg: ServerMessage<'session.history'> = {
       type: 'session.history',

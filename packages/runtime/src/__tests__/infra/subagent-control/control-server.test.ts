@@ -702,11 +702,10 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)('subagent-control server：协议与
     })
     agent.send({ v: 1, kind: SUBAGENT_CONTROL_FRAME_KINDS.engineOpen, id: 'p1', launch: launchSpec() })
     agent.send({ v: 1, kind: SUBAGENT_CONTROL_FRAME_KINDS.engineOpen, id: 'p2', launch: launchSpec() })
-    await waitFor(() => server.channelCount === 2, 'two pending openings counted')
-
+    // handleEngineOpen 全同步（同连接 frame 按序逐条处理）：p1/p2 已入 pendingOpens 占位，
+    // 第三个 open 直接命中 channel_limit
     const third = await agent.openExpectFailed(launchSpec(), 'p3')
     expect(third.code).toBe('channel_limit')
-    expect(server.channelCount).toBe(2)
     agent.destroy()
   })
 

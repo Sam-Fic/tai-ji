@@ -20,7 +20,7 @@
  * 下一变更/下一次装配入口自动重试）。
  *
  * 生命周期：订阅随「内核运行时已存在」的 session 建立（不创建运行时——只读装配不得引入
- * watchdog/settled 订阅副作用）；运行时消失（session 销毁）→ 下一次同 sid 装配入口自动解绑，
+ * 额外订阅副作用）；运行时消失（session 销毁）→ 下一次同 sid 装配入口自动解绑，
  * 且 server 侧 onSessionDestroyed 主动 release（见 SessionMessageHandler.releaseDeliveryTopic）。
  */
 import type { DeliveryFrameEntry, ServerMessage } from '@taiji/shared'

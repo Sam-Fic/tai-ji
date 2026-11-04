@@ -15,8 +15,8 @@
  * 失败路径：
  *  - file 源 WS reject：error 从 fileCandidates 冒泡（AC-4.5 不经壳层 useFileSearch.load 吞错层）
  *    → allSettled rejected → 分组空态（MR-4.2 单源静默）
- *  - WS 断连 pending 永不 settle（#17 F-1）：WS 超时 race 10s → reject → allSettled settled
- *    → 分组空态+toast（AC-17.1，不永久挂死）
+ *  - WS 断连：in-flight pending 由 use-connection 断连收尾 rejectAll 统一 settle（事件驱动，
+ *    ADR-0188——无时间兜底 race）
  *  - 全源失败：四类空态 + toast（AC-17.3）
  *  - 乱序响应：loadSeq 检查 seq!==loadSeq 丢弃旧结果（BC-9，D-022 骨架约束）
  *
@@ -26,7 +26,6 @@ import { matchFilter } from './match-engine'
 import { toFileCandidates } from './file-candidates'
 import type { FileCandidate } from './file-candidates'
 import { filterAndSortFileCandidates } from './file-match'
-import { WS_SOURCE_TIMEOUT_MS } from './types'
 import type { SearchCtx, Section, SearchItem } from './types'
 import { useCommandRegistry } from './command-registry'
 import type { UnifiedCommand } from './command-registry'
@@ -117,9 +116,9 @@ export function useSearch(
     // 故 file 结果不再进 matchFilter 二次过滤；command/session/archive 仍走各自过滤（纯子串，与 composer slash 同款）。
     const [commandRes, fileRes, sessionRes, archiveRes] = await Promise.allSettled([
       queryCommandSource(), // 内存，无 WS
-      queryFileSource(ctx.activeSessionId, q), // WS 缓存优先 + #17 超时 race + 源内分级匹配
-      querySessionSource(q), // WS + #17 超时 race + 源内子串过滤
-      queryArchiveSource(q), // WS + #17 超时 race + 名称/摘要全文子串过滤
+      queryFileSource(ctx.activeSessionId, q), // WS 直查 + 源内分级匹配
+      querySessionSource(q), // WS + 源内子串过滤
+      queryArchiveSource(q), // WS + 名称/摘要全文子串过滤
     ])
 
     // BC-9 检查：旧响应丢弃（seq !== loadSeq 说明有更新查询）
@@ -144,35 +143,32 @@ export function useSearch(
   }
 
   /**
-   * file 源（WS 直查 + #17 超时 race + 源内分级匹配）。
+   * file 源（WS 直查 + 源内分级匹配）。
    * 复用 composer # 的同一套匹配管线：FileNode[] → toFileCandidates → filterAndSortFileCandidates
    * （basename 前缀 > path 子串 + 文件优先 + 路径浅优先 + 排序），保证两处文件搜索行为一致。
    * AC-4.5：直调 fileCandidates（不经壳层 useFileSearch.load 吞错层）；无缓存（缓存治理 U1 1-3
    * 退役）——每次现拉，外部建/删文件零陈旧窗。
-   * #17：WS 源包 Promise.race timeout（防 pending 永不 settle）。
    */
   async function queryFileSource(sid: string | null, q: string): Promise<SearchItem[]> {
     if (!sid) return [] // AC-4.8 无 session → file 源空
-    // #17：WS 超时 race（10s，防 WS 断连 pending 永不 settle 致浮层挂死）
-    const nodes = await withWsTimeout(ports.fileCandidates(sid))
+    const nodes = await ports.fileCandidates(sid)
     // 复用 composer # 管线：DTO 映射 + 分级匹配过滤+排序（同一套算法）
     const candidates = toFileCandidates(nodes)
     const filtered = filterAndSortFileCandidates(candidates, q)
     return mapFileCandidatesToItems(filtered)
   }
 
-  /** session 源（WS + #17 超时 race + 源内子串过滤）：sessionList 侧栏口径全量跨项目
+  /** session 源（WS + 源内子串过滤）：sessionList 侧栏口径全量跨项目
    *  （W4b 起端口背后 = session.list {surface:'sidebar'}，btw 线不进搜索口径，§3.3.1） */
   async function querySessionSource(q: string): Promise<SearchItem[]> {
-    // #17：WS 超时 race
-    const groups = await withWsTimeout(ports.sessionList())
+    const groups = await ports.sessionList()
     const items = mapSessionsToItems(groups)
     // session 源内子串过滤（与 matchFilter 同款，避免后续重复过滤）
     return matchFilter(items, q)
   }
 
   /**
-   * 归档源（WS + #17 超时 race + 名称/摘要全文子串过滤）：archiveList 按需拉取
+   * 归档源（WS + 名称/摘要全文子串过滤）：archiveList 按需拉取
    * （config.archives 簿记扫描派生，D9 不变量 3——拉为主，ADR-0097）。
    *
    * 匹配面 = 名称 + 摘要全文（archived 态全部 turn 的 user/agent 文本；staging 态
@@ -181,8 +177,7 @@ export function useSearch(
    * 深处时不展示命中段（v1 取舍：项仍出现，点击进摘要视图看全文）。
    */
   async function queryArchiveSource(q: string): Promise<SearchItem[]> {
-    // #17：WS 超时 race
-    const archives = await withWsTimeout(ports.archiveList())
+    const archives = await ports.archiveList()
     const needle = q.toLowerCase()
     return archives
       .filter((a) => archiveMatchText(a).toLowerCase().includes(needle))
@@ -221,26 +216,6 @@ export function useSearch(
       }
     }
     return { type: 'archive', title: a.name.length > 0 ? a.name : a.sessionId, sub, archive: a }
-  }
-
-  /**
-   * #17 WS 源超时 race（D-023 F-1 漏洞修复）。
-   * ws-client.ts onclose 不 reject in-flight pending（pending.ts 无 clear/flush），
-   * WS 断连时 pending 永不 settle → allSettled 永不 resolve → 浮层永久 loading 挂死。
-   * 本函数对 WS 源包 Promise.race timeout：超时→reject→allSettled settled→分组空态+toast。
-   */
-  function withWsTimeout<T>(wsCall: Promise<T>): Promise<T> {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(ports.t('composable.searchUnavailable'))), // AC-17.3
-        WS_SOURCE_TIMEOUT_MS,
-      )
-    })
-    return Promise.race([wsCall, timeout]).finally(() => {
-      // AC-17.2 资源清理：成功时 clearTimeout（防泄漏，与 AC-8.4 同模式）
-      if (timer) clearTimeout(timer)
-    })
   }
 
   // ── DTO 映射（D-025：real 源异构 DTO → SearchItem，参考 lib/file-candidates.ts 模式）──

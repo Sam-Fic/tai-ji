@@ -219,59 +219,6 @@ describe('W2: update-handlers IPC (W2TC7)', () => {
   })
 })
 
-// ════════════════════════════════════════════════════════════════
-// [A-X4] update:check force 节流：10s 窗口内重复 force 请求降级为非 force
-// 语义（走 checker 缓存），不拒绝、不烧 GitHub API 配额。节流是模块级状态，
-// 用 fake timers + 未来基点错开各用例（与其他用例互不污染）。
-// ════════════════════════════════════════════════════════════════
-describe('[A-X4] update:check force 节流', () => {
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  it('10s 窗口内第二次 force=true 降级为非 force（不绕缓存），窗口外恢复透传', async () => {
-    vi.useFakeTimers()
-    // fake 起点默认为真实当前时间；+30s 偏移避开前序用例（真实时钟）置位的节流时间戳
-    vi.setSystemTime(Date.now() + 30_000)
-    const checkForLatestRelease = vi.fn(async (): Promise<LatestReleaseInfo | null> => null)
-    registerUpdateHandlers({ releaseChecker: { checkForLatestRelease } } as never)
-
-    const handler = handlers.get('update:check')!
-
-    // 第 1 次 force：窗口外 → 透传 force: true（并置位节流时间戳）
-    const first = await handler({}, { force: true })
-    expect(first).toEqual({ info: null, rateLimited: false })
-    expect(checkForLatestRelease).toHaveBeenLastCalledWith('0.8.14', { force: true })
-
-    // 第 2 次（窗口内）：降级为非 force 语义——仍正常调用返回（体验无损），
-    // 但不再 force 绕缓存（配额不被放大）
-    const second = await handler({}, { force: true })
-    expect(second).toEqual({ info: null, rateLimited: false })
-    expect(checkForLatestRelease).toHaveBeenLastCalledWith('0.8.14', { force: false })
-    expect(checkForLatestRelease).toHaveBeenCalledTimes(2)
-
-    // 窗口外（+11s > 10s 窗口）：force 透传恢复
-    vi.setSystemTime(Date.now() + 11_000)
-    await handler({}, { force: true })
-    expect(checkForLatestRelease).toHaveBeenLastCalledWith('0.8.14', { force: true })
-  })
-
-  it('force=false/缺失不节流（本就命中缓存无害），透传行为不变', async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(Date.now() + 90_000)
-    const checkForLatestRelease = vi.fn(async (): Promise<LatestReleaseInfo | null> => FIXTURE)
-    registerUpdateHandlers({ releaseChecker: { checkForLatestRelease } } as never)
-
-    const handler = handlers.get('update:check')!
-    // 连续两次非 force 调用（间隔 0ms）：均透传，不被节流降级
-    await handler({}, {})
-    await handler({}, {})
-    expect(checkForLatestRelease).toHaveBeenCalledTimes(2)
-    expect(checkForLatestRelease).toHaveBeenNthCalledWith(1, '0.8.14', { force: undefined })
-    expect(checkForLatestRelease).toHaveBeenNthCalledWith(2, '0.8.14', { force: undefined })
-  })
-})
-
 // ── W3：update:perform（W3TC10）──────────────────────────────────
 describe('u3b: update:install validateRelease（m11 防御纵深）', () => {
   beforeEach(() => {
@@ -407,43 +354,15 @@ describe('u3a: resolveByVersion（版本解析四分支 + 60s 节流）', () => 
     await expect(
       resolveByVersion('abc', { currentVersion: '0.8.14', releaseChecker: checker }),
     ).rejects.toThrow(/invalid requested version format/)
-    // 拒绝即节流：后续断言前推进 61s 离开节流窗口
-    vi.setSystemTime(Date.now() + 61_000)
     await expect(
       resolveByVersion('1.2', { currentVersion: '0.8.14', releaseChecker: checker }),
     ).rejects.toThrow(/invalid requested version format/)
-    vi.setSystemTime(Date.now() + 61_000)
     // typeof 检查：IPC 数字被正则隐式串化绕过（123 → '123'）必须被拒
     await expect(
       resolveByVersion(123 as unknown as string, { currentVersion: '0.8.14', releaseChecker: checker }),
     ).rejects.toThrow(/invalid requested version format/)
     // 拒绝发生在任何 checker 调用之前（零 API 消耗）
     expect(checker.checkForLatestRelease).not.toHaveBeenCalled()
-  })
-
-  it('④ STALE/解析失败后 60s 内：合法请求也被直接拒绝（不触发 force check），窗口外恢复', async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(BASE + seq * STEP)
-    seq++
-    const checker = makeChecker(null, null)
-    // 前置：制造一次拒绝（格式非法，now = 本用例起点）
-    await expect(
-      resolveByVersion('bad', { currentVersion: '0.8.14', releaseChecker: checker }),
-    ).rejects.toThrow(/invalid requested version format/)
-
-    // 窗口内：合法版本 + 缓存命中的 checker 也被节流拒绝
-    await expect(
-      resolveByVersion('0.9.0', { currentVersion: '0.8.14', releaseChecker: checker }),
-    ).rejects.toThrow(/throttled/)
-    // 节流拒绝发生在 checker 之前（不触发 force check → 无 API 放大）
-    expect(checker.checkForLatestRelease).not.toHaveBeenCalled()
-
-    // 窗口外（61s 后）：恢复解析能力（缓存命中分支）
-    vi.setSystemTime(Date.now() + 61_000)
-    checker.checkForLatestRelease = vi.fn(async () => FIXTURE) as never
-    await expect(
-      resolveByVersion('0.9.0', { currentVersion: '0.8.14', releaseChecker: checker }),
-    ).resolves.toBe(FIXTURE)
   })
 
   it('① 缓存命中且版本一致 → 用缓存 release，不触发 force check', async () => {
@@ -459,7 +378,7 @@ describe('u3a: resolveByVersion（版本解析四分支 + 60s 节流）', () => 
     expect(checker.checkForLatestRelease).toHaveBeenCalledWith('0.8.14')
   })
 
-  it('② 缓存不一致 → force check；latest ≠ 请求版本 → UPDATE_STALE_RELEASE + 记节流', async () => {
+  it('② 缓存不一致 → force check；latest ≠ 请求版本 → UPDATE_STALE_RELEASE', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(BASE + seq * STEP)
     seq++
@@ -475,11 +394,6 @@ describe('u3a: resolveByVersion（版本解析四分支 + 60s 节流）', () => 
     // force check 真的发生了（权威确认，而非直接用缓存拒绝）
     expect(checker.checkForLatestRelease).toHaveBeenCalledTimes(2)
     expect(checker.checkForLatestRelease).toHaveBeenLastCalledWith('0.8.14', { force: true })
-
-    // STALE 拒绝后节流生效：窗口内的后续请求直接拒绝
-    await expect(
-      resolveByVersion('0.9.1', { currentVersion: '0.8.14', releaseChecker: checker }),
-    ).rejects.toThrow(/throttled/)
   })
 
   it('② check 失败（网络）→ 抛 UPDATE_NETWORK_FAILED，绝不回退缓存外/renderer 数据；且网络失败不节流', async () => {

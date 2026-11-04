@@ -36,12 +36,10 @@ describe('u2a: win wrapper cmd 模板（§3.4.1 五步全检查）', () => {
 
     // ── 验收条款①逐项检查（grep 级断言）────────────────────────────
     const guards: Array<[string, string]> = [
-      // 1. tasklist 轮询等待父退出 + 60s 超时 abort
+      // 1. tasklist 轮询等待父退出（持续等待，无放弃上限）
       ['tasklist 轮询', 'tasklist /FI "PID eq %PARENT_PID%"'],
       ['find 命中判断', 'find "%PARENT_PID%" >nul'],
-      ['60s 上限（60 次）', 'GTR 60'],
       ['ping sleep 原语（P1）', 'ping -n 2 127.0.0.1 >nul'],
-      ['等待超时错误码', 'call :write_result failed "app did not exit"'],
       // 2. certutil sha256 复验
       ['certutil 复验', 'certutil -hashfile "%INSTALLER%" SHA256'],
       ['sha 错误码', 'call :write_result failed "sha mismatch"'],

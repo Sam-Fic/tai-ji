@@ -16,11 +16,11 @@
  * applyTargetSnapshot 同一裁决入口）。
  *
  * auth 应答实例核对（§6.1/§6.3）：auth.result ok 且应答 runtimeId ≠ 期望快照
- * runtimeId = 连到非预期进程 → fail-fast 断开、重拉快照重连；连续 2 次不一致停止自动
- * 重连置 failed（失败呈现 + 手动重试入口，不无报错挂死）。
+ * runtimeId = 连到非预期进程 → fail-fast 断开、重拉快照重连；连续 2 次不一致置 failed
+ * （失败呈现 + 手动重试入口，不无报错挂死）。
  *
- * auth 拒绝重拉换凭据（§6.3）：本地形态 auth 被拒时重拉快照取新凭据（修现状退避重连
- * 只复用旧凭据的缺口）；仅本地形态（remote 形态走壳层 D8 凭据重摄，§6.10）。
+ * auth 拒绝重拉换凭据（§6.3）：本地形态 auth 被拒时重拉快照取新凭据（拒绝后旧凭据
+ * 重连必再拒）；仅本地形态（remote 形态走壳层 D8 凭据重摄，§6.10）。
  *
  * 连接目标从第一刻起就是权威快照值（§6.2）——不存在端口公式猜连「抢先连上又被
  * 自己人拆掉」的时序。
@@ -43,9 +43,6 @@ import {
   onAuthRejected,
   onMessage,
   onQueueDrop,
-  probeAlive,
-  resetAuthRejectionSuppression,
-  scheduleReconnect,
   setFailed,
   setRestarting,
   setWaitingRuntime,
@@ -232,55 +229,10 @@ const RUNTIME_ID_MISMATCH_STOP_LIMIT = 2
 
 /**
  * auth 应答 runtimeId 连续不一致计数（§6.3 fail-fast 防护）：每次不一致 +1、一致清零；
- * 达上限停止自动重连置 failed（「seq ≤ 期望且 runtimeId 变化」等前提失效形态的有界后果——
+ * 达上限置 failed（「seq ≤ 期望且 runtimeId 变化」等前提失效形态的有界后果——
  * 最多退化为需手动重试，不静默连错目标、不无报错挂死）。
  */
 let runtimeIdMismatchStreak = 0
-
-// ── 断连宽限兜底（review findings-confirmation #1.2：纯网络断连零复位缺口）──
-
-/**
- * 网络断连宽限期：断连后不立即收尾在途流，宽限期内重连成功则由 ring 回放 / live 事件
- * 驱动正常收尾；到期仍未恢复才调 onRuntimeUnavailable 收尾（streaming 态不再挂到
- * streaming timer 10min）。取 10s 的依据：重连退避序列 1s+2s+4s=7s < 10s（覆盖 2-3 次
- * 退避尝试，秒级网络抖动无收尾噪音）；gate v4 实测 30s 断连场景在 10s 即复位。
- */
-export const DISCONNECT_GRACE_MS = 10_000
-
-/** 宽限 timer（模块级单例，随 stateWatch 生命周期；teardown 清理）。null = 未 armed。 */
-let disconnectGraceTimer: ReturnType<typeof setTimeout> | null = null
-
-function clearDisconnectGrace(): void {
-  if (disconnectGraceTimer) {
-    clearTimeout(disconnectGraceTimer)
-    disconnectGraceTimer = null
-  }
-}
-
-/**
- * 网络断连宽限：到期仍非 connected → 收尾在途流。
- *
- * 收尾时机语义论证（「立即收尾」不采用的原因）：网络断连大概率短暂可恢复（退避重连
- * 1-30s），重连成功后 runtime MessageBus ring 回放补齐断连窗口内的 message.complete
- * （gate v4 已证实该回放链内容级工作）。若断连瞬间立即 finalizeAllStreaming，在途流被
- * 收尾为 error 态，回放的 message.complete 因 sealed 检查（D-010：complete handler 只
- * 收尾 status==='streaming' 的实体）无法覆盖已收尾的 error——可恢复的流被不可逆误伤。
- * 故选「等重连结果 + 超时兜底」：到期时已重连成功则不收尾（回放失败子场景仍由既有
- * streaming timer 10min 兜底——不以误伤重连后在途流为代价缩短它）；到期仍断连才收尾
- * （网络中断超宽限，error 语义成立）。IPC 崩溃路径（restarting/failed）不走宽限：进程
- * 没了流物理不可能恢复，立即收尾（见 stateWatch）。
- *
- * 已 armed 则不重置：从首次断连起算单窗口，断连/恢复 flapping 下累计宽容有界。
- */
-function armDisconnectGrace(): void {
-  if (disconnectGraceTimer !== null) return
-  disconnectGraceTimer = setTimeout(() => {
-    disconnectGraceTimer = null
-    if (getState().value !== 'connected') {
-      currentPorts().onRuntimeUnavailable('disconnect')
-    }
-  }, DISCONNECT_GRACE_MS)
-}
 
 /**
  * 安装入站分发器（幂等：仅安装一次）。onMessage 占用 ws-client 单槽。
@@ -323,13 +275,12 @@ function connectWs(url: string, credentials: ConnectCredentials): void {
  * - seq ≤ 期望 seq → 不动作（幂等重复广播不拆连；拉取响应晚于推送被消费的旧代快照
  *   丢弃，防目标回退）。期望未建立时不适用本行（任何快照都是首建立）。
  * - seq 更高或期望未建立 → 期望推进为新快照：已认证（connected）→ 断旧连新（携新
- *   凭据）；未认证（waiting-runtime/connecting/reconnecting/disconnected）→ 转向新
+ *   凭据）；未认证（waiting-runtime/connecting/disconnected/failed）→ 转向新
  *   目标重新发起。
  *
  * 「断旧连新」与「转向」统一为先 disconnect 再 connect：disconnect 摘除旧 socket 回调
- * 与退避定时器（connect 的单飞检查会拦截并存连接，「转向」语义必须先清场）；connected
- * 态 disconnect 触发 stateWatch 的断连汇合分支（pending rejectAll + 宽限 armed），与
- * 现状 onRuntimePort 断旧连新路径行为一致。
+ * （connect 的单飞检查会拦截并存连接，「转向」语义必须先清场）；connected 态 disconnect
+ * 触发 stateWatch 的断连汇合分支（pending rejectAll + 在途流收尾）。
  *
  * @returns true = 目标推进且已发起连接动作；false = 幂等/过期快照（不动作）
  */
@@ -405,36 +356,24 @@ async function recoverAfterMismatch(ipc: RuntimeIpcPorts): Promise<void> {
 }
 
 /**
- * auth 拒绝重拉换凭据（§6.3：修现状退避重连只复用旧凭据的缺口；仅本地形态）。
- * 抑制位语义：本地形态注册 onAuthRejected 即武装 ws-client 重连抑制（拒绝 → 退避链
- * 短路，重连责任移交本控制器）。处置三分支：
- * - 重拉推进 seq（runtime 已重启换凭据的主形态）→ 断旧连新（applyTargetSnapshot 内
- *   connect 先于退避链，抑制位在新连接 auth 成功（markConnected）时自然复位。
- * - 重拉同 seq（凭据未变——拒绝另有原因的异常态）→ 复位抑制位交还退避链 + 确定性重启
- *   调度（scheduleReconnect；重试必再拒则退避到 MAX_RECONNECT_DURATION_MS 上限置
- *   failed，行为有界）。
- * - 重拉失败（IPC 不可用）→ 同上复位 + 重启调度（终态与现状空凭据探测路径一致：必拒 →
- *   60s 时长上限 failed）。
- *
- * 「交还退避链」两分支必须显式重启调度（F1-11）：真实 WS 的 onclose 与本函数的 IPC 回包
- * 竞速——早到形态（onclose 先至，主形态）下退避链已在抑制期被短路且无定时器残留，复位
- * 抑制位本身不恢复调度，缺重启调用则连接静默挂 disconnected（无 failed 呈现、无自动恢复，
- * 直到切前台或重启 runtime）；晚到形态下 socket 未死透，scheduleReconnect 的 socket 死透
- * 检查 no-op，由 onclose 到达时的调度接力（单定时器覆盖前清旧，无双链）。
+ * auth 拒绝重拉换凭据（§6.3：拒绝后旧凭据重连必再拒，重拉取新凭据；仅本地形态）。
+ * 抑制位语义：本地形态注册 onAuthRejected 即武装 ws-client 重连抑制（拒绝 → visibility
+ * 自动重连短路，重连责任移交本控制器）。处置两分支：
+ * - 重拉推进 seq（runtime 已重启换凭据的主形态）→ 断旧连新（抑制位在新连接 auth 成功
+ *   markConnected 时自然复位）。
+ * - 重拉失败（IPC 不可用）或快照未推进（凭据未变——拒绝另有原因的异常态）→ 置 failed
+ *   等用户手动重试（retryRuntime 重启 runtime 换凭据）。抑制位不复位——重连责任留在
+ *   快照驱动路径（新连接 auth 成功时复位），防止 visibility 用旧凭据徒劳重试。
  */
 async function recoverAfterAuthRejection(ipc: RuntimeIpcPorts): Promise<void> {
   const snapshot = await pullSnapshotQuietly(ipc)
   if (!snapshot) {
     console.warn(
-      '[core/use-connection] snapshot re-pull failed after auth rejection; resuming suppressed reconnect chain',
+      '[core/use-connection] snapshot re-pull failed after auth rejection; failing for manual retry',
     )
-    resetAuthRejectionSuppression()
-    scheduleReconnect()
-    return
   }
-  if (!applyTargetSnapshot(ipc, snapshot)) {
-    resetAuthRejectionSuppression()
-    scheduleReconnect()
+  if (!snapshot || !applyTargetSnapshot(ipc, snapshot)) {
+    setFailed()
   }
 }
 
@@ -466,7 +405,7 @@ function installLocalAuthVerification(ipc: RuntimeIpcPorts): void {
 /**
  * 安装 auth 拒绝信号消费（remote-use D8，远程形态专用，幂等）：ws-client onAuthRejected
  * 单槽注册一次，转发至壳层注入的 ports.onAuthRejected（经 currentPorts 取最新装配——重注入
- * 后转发目标跟随）。注册即武装 ws-client 重连抑制位（拒绝 → 抑制 scheduleReconnect +
+ * 后转发目标跟随）。注册即武装 ws-client 重连抑制位（拒绝 → 抑制 visibility 自动重连 +
  * visibility 两个自动重连触发点）；本地形态不安装本转发（单槽被快照重拉消费占据）。
  */
 function installAuthRejectionSignal(): void {
@@ -540,27 +479,17 @@ export function useConnection() {
 
     // W4：安装 visibilitychange 监听（幂等——removeVisibilityListener 检查防重复注册）。
     // 用户从其它标签页 / 系统切回应用（visibilityState 变 visible）且当前未连接时，
-    // 用最近一次 url 主动重连，不干等 ws-client 指数退避（最长 30s）。
+    // 用最近一次 url 主动重连（用户在场信号驱动的恢复入口；自动重连机制已删，
+    // 断连恢复 = 本入口 / 用户手动重试 / 快照推送三选一）。
     if (!removeVisibilityListener) {
       removeVisibilityListener = ports.visibility.onVisibilityChange(() => {
         // 检查 1：只有切回可见（visible）才重连，切到后台（hidden）不触发
         if (!ports.visibility.isVisible()) return
         // 检查 2：已连接就不重连（避免无谓连接触发）。
-        // remote 形态例外——切前台先探活（移动形态死链检测）：移动壳无 IPC supervisor 事件
-        // 补位（桌面靠 runtime-restarting/runtime-failed 事件兜底），锁屏/基站切换形成的半开
-        // TCP 使 state 恒 connected——发消息 send 返回 true 但对端收不到，65s pending sweep
-        // 才报错。切前台探活：probeAlive 发 ping + 限时等任意入站帧，超时 close 走既有退避
-        // 重连链。mock/local 形态保持直接 return（桌面死链由 IPC 事件兜底，零回归）。
-        if (getState().value === 'connected') {
-          if (resolveConnectionMode(ports).kind !== 'remote') return
-          probeAlive()
-          return
-        }
-        // 检查 3：从未连过（无 url/凭据复用）则不触发——重连分支簿记前提；对上方探活分支
-        // 结构性不可达（connected 必有簿记），检查顺序与现状一致（探活分支沿用同一前提）。
+        if (getState().value === 'connected') return
+        // 检查 3：从未连过（无 url/凭据复用）则不触发——重连分支簿记前提。
         if (!lastConnectedUrl || !lastCredentials) return
-        // 检查 4：auth 拒绝抑制位生效（remote-use D8 全触发点覆盖——退避链在 ws-client
-        // scheduleReconnect 短路，本检查覆盖切前台主动重连）→ 不自动重连，等 token 重试路径
+        // 检查 4：auth 拒绝抑制位生效（remote-use D8）→ 不自动重连，等 token 重试路径
         // （本地形态的快照重拉在 recoverAfterAuthRejection 内自行驱动，不经本分支）。
         if (isAuthRejectedSuppressed()) return
         // 本地形态：凭据从当前期望快照取（§7 副作用归属表「visibility 切前台重连保留，
@@ -602,33 +531,30 @@ export function useConnection() {
     // （W09 删除 broadcast 兜底路径后 publish 定向推送是唯一通道）。首次连接时
     // subscriptionStates 为空 → no-op，无副作用。
     //
-    // [review findings-confirmation #1.2] 本 watch 是断连清理的**单一汇合点**：网络断连
-    // （onclose → disconnected/reconnecting）与 IPC 崩溃（setRestarting/setFailed 置态）
-    // 都经 state 迁移在此汇合调 pending.rejectAll + onRuntimeUnavailable（消两份触发逻辑）。
+    // [review findings-confirmation #1.2] 本 watch 是断连清理的**单一汇合点**：连接异常关闭
+    // （ws onclose → failed）与 IPC 崩溃（setRestarting/setFailed 置态）都经 state 迁移在
+    // 此汇合调 pending.rejectAll + onRuntimeUnavailable（消两份触发逻辑）。
     // IPC 监听器（onRuntimeRestarting/onRuntimeFailed）只负责置态，不再各自携带清理副本。
     const stopStateWatch = watch(getState(), (newState, oldState) => {
-      // IPC 崩溃路径：进入 restarting/failed 即收尾——任何旧态进入均适用（含未连上 /
-      // 重试中 runtime 崩溃，对齐原 IPC 监听器无条件清理语义）。runtime 崩溃 = pi 子进程
-      // 没了 = 流物理不可能恢复，不走断连宽限（等下去没有意义），且清掉已 armed 的宽限
-      // timer（避免到期二次触发）。
+      // 崩溃/断连路径：进入 restarting/failed 即收尾——任何旧态进入均适用（含未连上 /
+      // 重试中 runtime 崩溃，对齐原 IPC 监听器无条件清理语义）。runtime 崩溃或连接死亡 =
+      // pi 子进程没了 / 链路断了 = 流物理不可能恢复，立即收尾（事件驱动，无等待窗）。
       if (newState === 'restarting' || newState === 'failed') {
         pendingApi.rejectAll(
           transportUnavailableError(
             ports.t(newState === 'restarting' ? 'connection.runtimeRestarting' : 'connection.runtimeUnavailable'),
           ),
         )
-        clearDisconnectGrace()
         ports.onRuntimeUnavailable(newState === 'restarting' ? 'restart' : 'disconnect')
         return
       }
       if (oldState === 'connected' && newState !== 'connected') {
-        // 网络断连路径（ws onclose → disconnected/reconnecting）：code='disconnected' 供调用方
+        // 编排型拆连路径（applyTargetSnapshot 断旧连新 → disconnected）：快照推进 =
+        // runtime 已换代，旧连接的在途流不可能恢复，直接收尾。code='disconnected' 供调用方
         // （useFileTree catch 等）识别传输断开类失败——构造统一走 transport/errors 工厂单点
         // （与 request.ts send-fail reject 同源，D10①）。
         pendingApi.rejectAll(transportUnavailableError(ports.t('connection.disconnectedError')))
-        // 在途流不立即收尾：等重连结果（ring 回放补齐终态），DISCONNECT_GRACE_MS 超时兜底。
-        // 语义论证见 armDisconnectGrace 注释。
-        armDisconnectGrace()
+        ports.onRuntimeUnavailable('disconnect')
       }
       if (newState === 'connected' && oldState !== 'connected') {
         resubscribeAll()
@@ -695,8 +621,8 @@ export function useConnection() {
     })
 
     // RD-3#2：runtime 启动失败（boot 的 startAndNotify 失败——binary 缺失/端口占用等）。
-    // 失败后 main 不会自动重试，无目标可连：收到推送即置 failed（用户拿到重试入口），
-    // 不再干等 60s 重连时长上限。connected 检查防极端误伤：waitForHealth 超时但 runtime
+    // 失败后 main 不会自动重试，无目标可连：收到推送即置 failed（用户拿到重试入口）。
+    // connected 检查防极端误伤：waitForHealth 超时但 runtime
     // 实际存活时推送与活连接并存，不干扰已建立的连接。
     removeRuntimeErrorListener = ipc.onRuntimeError(() => {
       if (getState().value !== 'connected') {
@@ -796,8 +722,6 @@ export function useConnection() {
       removeQueueDropListener()
       removeQueueDropListener = null
     }
-    // 断连宽限 timer 随 stateWatch 一同拆卸（teardown 后不应再有收尾回调）
-    clearDisconnectGrace()
     // W4：卸载 visibilitychange 监听（与 init 的安装配对，防内存泄漏 + 重复触发）
     if (removeVisibilityListener) {
       removeVisibilityListener()

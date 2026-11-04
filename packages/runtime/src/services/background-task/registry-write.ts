@@ -3,8 +3,8 @@
  * `<registry.json>.lock`，与 extension 写侧 / reaper 写侧互斥同一把锁）。
  *
  * 为什么只有 Locked 版：D6 分支①③要求「锁内重读 → 判活重查 → 写」在同一锁临界区
- * 内完成（防 stale 条目覆盖 poller 已写的新鲜终态——writeMerged 范式），嵌套取锁
- * 必然 ELOCKED（file-lock 契约），故写原语必须无锁化，锁编排归 kill 流程
+ * 内完成（防 stale 条目覆盖 extension exit-collector 已写的新鲜终态——writeMerged 范式），
+ * 嵌套取锁必然 ELOCKED（file-lock 契约），故写原语必须无锁化，锁编排归 kill 流程
  * （background-task-service.ts killTask）。
  *
  * orphaned 终态写复用 reaper 提炼导出的 writeOrphanedTerminalLocked（②③属主死分支，
@@ -12,8 +12,8 @@
  *  - writeKillingStateLocked：分支① killing intent 预写（仅置 state，不写 reason——
  *    契约规定 reason 仅 exited 语义，与 bash_kill 落盘同构）
  *  - writeExitedTransitionalLocked：分支③属主活的过渡终态（exited/reason natural/
- *    exitCode null——poller 若健康会 ≤2s 用真实 exitCode/tailSummary 覆盖，两写均
- *    终态、RMW 串行，覆盖无害）
+ *    exitCode null——extension exit-collector（ChildProcess exit 事件）随后用真实
+ *    exitCode/tailSummary 覆盖，两写均终态、RMW 串行，覆盖无害）
  *
  * 文件原语（原子写/序列化/终态裁剪）自 ext-simplify-13 起取 protocol 子出口
  * `background-task`（跨端单一实现，与 reaper/extension 写侧字节同构），本文件保留
@@ -52,8 +52,9 @@ function writeTrimmedLocked(registryPath: string, entries: BackgroundTaskRegistr
 
 /**
  * 分支① killing intent 预写（锁内调用）：仅置 `state: 'killing'`，不写 reason 字段
- * （契约：reason 仅 exited 语义）。条目缺失 / 已终态（poller 竞争先赢）→ false（调用方
- * 映射 already-exited，不覆盖）；fs 错误向上抛（调用方捕获 → 分支⑤ registry-write-failed）。
+ * （契约：reason 仅 exited 语义）。条目缺失 / 已终态（exit-collector 竞争先赢）→ false
+ * （调用方映射 already-exited，不覆盖）；fs 错误向上抛（调用方捕获 → 分支⑤
+ * registry-write-failed）。
  */
 export function writeKillingStateLocked(registryPath: string, taskId: string): boolean {
   const entries = readRegistryEntries(registryPath)
@@ -66,7 +67,7 @@ export function writeKillingStateLocked(registryPath: string, taskId: string): b
 
 /**
  * 分支③属主活的过渡终态写（锁内调用）：exited / reason natural / exitCode null +
- * endedAt/durationMs。条目缺失 / 已终态 → false（poller 已写权威终态，不覆盖）；
+ * endedAt/durationMs。条目缺失 / 已终态 → false（exit-collector 已写权威终态，不覆盖）；
  * fs 错误向上抛（调用方捕获 → 分支⑤）。终态 +1 触发 LRU 裁剪。
  */
 export function writeExitedTransitionalLocked(registryPath: string, taskId: string): boolean {

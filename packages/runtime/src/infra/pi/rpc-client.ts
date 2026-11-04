@@ -20,9 +20,7 @@ import { captureMachinePiSnapshotSection, collectUnifiedLogCorrelation } from '.
 // 与任务级 bash 1h / compact 30min，推翻 timeout-slow-flow-wallclock D2/D3 量级校准）
 // 与 timedOutIds 迟到响应丢弃（S6）已整体删除——pi 对 RPC 永不响应时调用方 promise
 // 悬挂，失败信号归 pi exit/error 事件链（rejectAll + notifyExitOnce）。
-// 观测通道例外（pi-stall-detection D1，ADR-0122 白名单口径扩展）：探测请求
-// probeState 有界等待——探测请求的响应性本身是被测信号（悬挂计失败），不是业务
-// 失败兜底；业务 RPC（prompt/steer/bash/compact 等）永不携带墙钟超时（RL1 契约）。
+// 业务 RPC（prompt/steer/bash/compact 等）永不携带墙钟超时（RL1 契约）。
 import {
   attachLfOnlyLineReader,
   buildPiMainAgentArgs,
@@ -744,33 +742,12 @@ export class RpcClient implements IPiEngine {
   }
 
   /**
-   * get_state 探测变体（观测通道专用，pi-stall-detection D1 / ADR-0122 白名单口径扩展）：
-   * 带观测超时窗的 get_state——探测请求的响应性本身是被测信号（pi 事件循环活性，第 1 层），
-   * 窗满 = 信号判定失败，不是业务失败兜底。
+   * 出站 RPC 内部通道（sendCommand 的共用实现）。
    *
-   * 与业务通道的分界（RL1 契约）：本方法是全类唯一携带超时的出站通道；业务 RPC
-   * （prompt/steer/bash/compact 等）永不携带墙钟超时（sendCommand 签名两参，见上）。
-   *
-   * 窗满语义：pendingRegistry.cancel 摘表（防悬挂表项累积）+ reject——迟到的 get_state
-   * 响应经 resolveResponse 查无表项返回 false，无副作用无 throw（AS8/RL8）。
-   *
-   * 与 getState 的差异：不带 attachedSessionFile 取证副作用（D6-④）——探测即用即弃
-   * （PingProbe 只消费 resolve/reject 三态语义，不消费 state 内容）。
-   *
-   * timeoutMs 由调用方（组合根 pingPi 接线）传 PING_OBSERVE_TIMEOUT_MS（窗值常量 SSOT
-   * 在探测策略持有方 event-interpreter-ping.ts），本层不定义窗值。
+   * 无墙钟（时间机制删除裁决）：pi 对命令永不响应时 promise 悬挂，失败信号归
+   * pi exit/error 事件链 rejectAll。
    */
-  async probeState(timeoutMs: number): Promise<Record<string, unknown> | undefined> {
-    return (await this.sendCommandInternal('get_state', {}, timeoutMs)).data
-  }
-
-  /**
-   * 出站 RPC 内部通道（sendCommand 与 probeState 的共用实现）。
-   *
-   * timeoutMs 缺省 = 业务通道语义（无墙钟——ADR-0122 退役，悬挂失败信号归 pi
-   * exit/error 事件链 rejectAll）；传值 = 观测通道语义（仅 probeState 消费，见上）。
-   */
-  private sendCommandInternal(type: string, params: Record<string, unknown>, timeoutMs?: number): Promise<PiMessage> {
+  private sendCommandInternal(type: string, params: Record<string, unknown>): Promise<PiMessage> {
     return new Promise((resolve, reject) => {
       if (!this.proc || this.isProcTerminal()) {
         return reject(new Error('pi process is not running'))
@@ -787,17 +764,12 @@ export class RpcClient implements IPiEngine {
       // 进程已死时无活动可言。
       this._lastActivityAt = Date.now()
 
-      // 观测超时 timer（观测通道专用；业务通道 undefined 无 timer，语义不变）
-      let boundedWaitTimer: ReturnType<typeof setTimeout> | undefined
-
-      // pending 注册（pi-rpc registry 部件）。无墙钟超时（ADR-0122 退役，见文件头）：
-      // pi 对该命令永不响应时 promise 悬挂，失败信号归 pi exit/error 事件链 rejectAll
-      // （观测通道的窗满失败除外，见 timeoutMs 分支）。
+      // pending 注册（pi-rpc registry 部件）。无墙钟超时（时间机制删除裁决）：
+      // pi 对该命令永不响应时 promise 悬挂，失败信号归 pi exit/error 事件链 rejectAll。
       this.pendingRegistry.register(
         id,
         {
           resolve: (res) => {
-            if (boundedWaitTimer !== undefined) clearTimeout(boundedWaitTimer)
             // Check if the response indicates failure (PiMessage.success / .error 已声明类型)
             if (res.success === false) {
               reject(new Error(res.error ?? `RPC command "${type}" failed`))
@@ -815,26 +787,16 @@ export class RpcClient implements IPiEngine {
             }
           },
           reject: (err) => {
-            if (boundedWaitTimer !== undefined) clearTimeout(boundedWaitTimer)
             reject(err)
           },
         },
       )
 
-      if (timeoutMs !== undefined) {
-        // 观测超时（D1）：窗满 = 事件循环活性信号判定失败——cancel 摘表（迟到响应查无
-        // 表项返回 false，无副作用）+ reject（探测失败计失败）。
-        boundedWaitTimer = setTimeout(() => {
-          this.pendingRegistry.cancel(id)
-          reject(new Error(`get_state probe observation timeout (${timeoutMs}ms)`))
-        }, timeoutMs)
-      }
 
       try {
         console.log('[rpc] send: type=' + type)
         this.proc.stdin!.write(msg)
       } catch (e) {
-        if (boundedWaitTimer !== undefined) clearTimeout(boundedWaitTimer)
         this.pendingRegistry.cancel(id)
         reject(new Error(`Failed to write to pi stdin: ${e}`))
       }
@@ -926,7 +888,7 @@ export class RpcClient implements IPiEngine {
    * 崩溃关联取证补写（crash-forensics-and-watchdog §3.3 D10，crash-correlation.ts）。
    *
    * ①同步：机器检查侧 pi 快照 section（~10ms，ps 枚举 taiji 家族幸存者 + ppid 归属）；
-   * ②异步：统一日志关联采样（darwin-only，±5s 窗，log show 最多 10s）完成后追加写
+   * ②异步：统一日志关联采样（darwin-only，±5s 窗）完成后追加写
    * 同一 pi-crash log——写点在本方法返回后数秒，靠 writePiCrashLog 的 append 语义与
    * createPiStreamWriter 惰性打开落盘（closeLogger 退出 flush 覆盖晚到的补写）。
    * 全路径 best-effort：任何失败仅 console 出声（tee 进 runtime 主日志），不抛。
@@ -971,9 +933,7 @@ export class RpcClient implements IPiEngine {
 
   /**
    * pi 子进程 pid（spawn 后非 null；未 spawn / 已退出后 proc 置空的形态为 null）。
-   *
-   * 消费方 = 信号取证（signal-forensics）：意外退出时记录「死亡主语」pid，供
-   * 进程表 diff 排除自身与候选发送方定位。只读暴露，无写点。
+   * 只读暴露，无写点。
    */
   get pid(): number | null {
     return this.proc?.pid ?? null
@@ -1014,7 +974,6 @@ export class RpcClient implements IPiEngine {
     // 帧组装（pi-rpc commands）：images 是 shared 层图片附件形状（无 type 字段），
     // shared→pi ImageContent 的唯一组装点在公共包（pi 私有 type:'image' 不出本层）；
     // 空 images 归一化不传键（避免 pi 收到空数组），与改动前路径完全一致。
-    // RPC 墙钟超时档（timeoutMs/options 参数）已随 ADR-0122 退役（见文件头）。
     return this.sendCommand('prompt', buildPromptParams({ message: content, images, streamingBehavior }))
   }
 
@@ -1087,8 +1046,6 @@ export class RpcClient implements IPiEngine {
    * 直接执行 bash 命令（pi bash RPC）。
    *
    * excludeFromContext 透传规则：undefined 时不传该键（走 pi 默认），显式 true/false 时透传。
-   * bash RPC 任务级墙钟（BASH_RPC_TIMEOUT_MS 1h + env 逃生门，timeout-slow-flow-wallclock D2）
-   * 已随 ADR-0122 退役（见文件头，推翻该量级校准裁决）。
    * 返回值归一为 PiBashResult（sendCommand 已归一 data ?? payload，此处按结构断言）。
    */
   async bash(command: string, excludeFromContext?: boolean): Promise<PiBashResult> {

@@ -168,7 +168,6 @@ function makeDeps(): { deps: LifecycleDeps; runs: Map<string, unknown> } {
     eventBus: { emit: vi.fn() },
     onRunDone: vi.fn(),
     log: vi.fn(),
-    scheduleTimeBudget: vi.fn(),
   };
   return { deps, runs };
 }

@@ -31,6 +31,7 @@ import { getLogger } from "../../core/logger.ts";
 
 import { bestEffort } from "./best-effort.ts";
 import { notifyInFlightChanged } from "../engine/inflight-snapshot.ts";
+import { markRecordRoundActive } from "../engine/host/spawned-children.ts";
 import { tryEnterRunning } from "../persistence/execution-record.ts";
 // 轮终 outcome 入参（权威定义在 finalize-record.ts，本文件 re-export 供 host 契约引用；
 // finalize-record 不反向依赖本模块，无循环）。
@@ -39,10 +40,6 @@ export type { RoundSettlementOutcome };
 import { engineConversationMessageUnsupportedError } from "../engine/common/capability-gate.ts";
 import { resolveEngineRouteId } from "../engine/common/session-view-service.ts";
 import { type BgNotifyRecord, notifyGateAllowsDelivery } from "../notify/notifier.ts";
-// [u7a 生产补挂] idle timer 原语（lifecycle-manager 叶子模块）：轮终 arm（翻入保活）
-// + 新轮 disarm（翻回正在执行）是 D5 在途双谓词（hasLiveProcessHandle &&
-// !hasIdleTimer）的 idle 分支数据源。
-import { DEFAULT_IDLE_TIMEOUT_MS, armIdleTimer, disarmIdleTimer } from "../lifecycle/lifecycle-manager.ts";
 // [U4 / §3.2.3] 准入判据单点消费：锚可解析性判据（判据一）定义在 cold-lookup.ts。
 // [U6 / §3.2.6] transcriptAnchorOf = 锚派生单点（zcode 经 engineHandle.sessionRef），
 // resumeAnchor 构造与锚缺失/失效分流共用。
@@ -192,9 +189,6 @@ export interface ContinuationHost {
    *  迁移上报 entry 落盘——[U2b 修复轮/D2] 收敛原 dispatchRoundAsync 三行现场写；
    *  [U6/D4] stopReason 清点随轮始清点族扩字段）。 */
   markRoundStarted(record: ExecutionRecord): void;
-  /** [U5] idle keepalive 超时的进程回收（idleTimeoutRecycle——归档是用户意愿位，
-   *  超时回收不动 intent/占用位，record 保持 idle 可续聊）。 */
-  closeNow(record: ExecutionRecord): Promise<void>;
   /**
    * [U5 / §3.2.5 顺序约束] closeAfterRound 挂起标志的归档消费点（chat 域）：收尾轮
    * 通知送达（route/notify 已过 gate 并写账）之后调用——归档即 gate ①静默，提前
@@ -452,11 +446,10 @@ export class ConversationContinuation {
     }
     // 占位（正式 roundId 在派发段定稿）：单飞窗从本同步段开始。
     this.activeRunId = `${record.id}#dispatching`;
-    // [u7a 生产补挂] 新轮开跑 = 该 record 翻回「正在执行」：disarm idle timer
-    //（V2 决策 4——turn 期间进程由 busy 态保护，禁止 idle timer 误杀；首轮无
-    // armed timer 时幂等 no-op）+ 推送最新在途计数（D5——绝对计数语义，本类是
-    // 首轮/续聊/drain 三路派发的唯一同步入口，单挂点覆盖全部「翻回正在执行」）。
-    disarmIdleTimer(record.id);
+    // 新轮开跑 = 该 record 翻回「正在执行」：镜像轮在途记账置 true（D5 在途双判据
+    // hasLiveProcessHandle && inRound——新轮派发是「翻回正在执行」的同步入口，
+    // 首轮/续聊/drain 三路派发共用本挂点）+ 推送最新在途计数。
+    markRecordRoundActive(record.id, true);
     notifyInFlightChanged();
     // [§1.4 (c) 同族] 派发链同样断头保护：主干同步段 try/catch 之外的 await 段
     //（worktree 重建 / markRoundStarted 前）抛错时不得升格为未处理拒绝。
@@ -714,12 +707,12 @@ export class ConversationContinuation {
       // 分支）由此可达。
       ...settlementFactsOf(outcome),
     });
-    // [u7a 生产补挂] 轮终簿记完成 = 「正在执行 → 保活」翻转边界（与旧 idle 相位帧
-    //（H1 U6 已退役）同一时点语义：成功轮收敛进 idle 稳态，活句柄交 idle timer 保活）
-    // ——arm 后推最新在途计数（D5 双谓词：保活不计在途）。失败轮不 arm（旧 idle
-    // 相位帧只在成功收敛后到达，同构）；drain 派发排队消息时经 dispatchRoundGuarded
-    // disarm 接回「正在执行」。
-    this.armIdleKeepalive();
+    // 轮终簿记完成 = 「正在执行 → 等待续聊」翻转边界：镜像轮在途记账置 false
+    //（D5 在途双判据——保活进程不计在途）+ 推送最新在途计数。失败轮同样翻转
+    //（record 同落 idle 可续聊，进程归保活形态）；drain 派发排队消息时经
+    // dispatchRoundGuarded 置回 true（「正在执行」）。
+    markRecordRoundActive(record.id, false);
+    notifyInFlightChanged();
     // 成功通知：「门 → 直发」双闸（[U5] gate 三元组：①归档静默/②放弃轮标记阻断/
     // ③收尾轮豁免 = 构造性——closeAfterRound 归档挂在本通知之后，settle 时点
     // intent 尚未翻转；正文权威 = record.result = 本轮 content）。
@@ -863,36 +856,6 @@ export class ConversationContinuation {
         });
       }
     }
-  }
-
-  /**
-   * [u7a 生产补挂] 轮终翻入保活：arm idle timer + 推送最新在途计数（语义承接旧
-   * armChatIdleTimer 的挂载降级链——配置值 throw 时回落 DEFAULT，arm 失败不得打断
-   * 轮末分流链：本方法运行在 fire-and-forget 的 settle 后续链上，逃逸 throw 即
-   * unhandled rejection）。超时处置 = host.closeNow（接线 = idleTimeoutRecycle，
-   * [U5] 进程回收不收尾——disarm + kill 保活进程，record 保持 idle 随时可续聊；
-   * 收尾是用户动作，归档是用户意愿位，超时不是用户动作——表述对齐
-   * lifecycle-manager.ts 头注）。
-   */
-  private armIdleKeepalive(): void {
-    const record = this.record;
-    const onTimeout = (): void => {
-      void this.host.closeNow(record).catch((err: unknown) => {
-        bestEffort(err, "idle keepalive timeout close", "error");
-      });
-    };
-    try {
-      armIdleTimer(record.id, onTimeout, record.idleTimeoutMs);
-    } catch (err) {
-      bestEffort(err, "armIdleTimer (round settle)", "error");
-      try {
-        armIdleTimer(record.id, onTimeout, DEFAULT_IDLE_TIMEOUT_MS);
-      } catch (fallbackErr) {
-        bestEffort(fallbackErr, "armIdleTimer fallback (round settle)", "error");
-      }
-    }
-    // arm（或降级失败——状态未变）后统一推终态快照：绝对计数语义下重复推幂等无害。
-    notifyInFlightChanged();
   }
 
   private clearActiveRound(): void {

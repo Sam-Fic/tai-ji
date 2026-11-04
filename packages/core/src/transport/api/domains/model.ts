@@ -9,7 +9,6 @@
  */
 import type { ModelInfo, ProviderId } from '@taiji/shared'
 export type { ModelInfo }
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 import { command } from '../request'
 import * as events from '../events'
 
@@ -29,7 +28,7 @@ export function onModels(handler: (models: ModelInfo[]) => void): () => void {
  * 故调用方须在非 mock 模式下调（否则 pending 65s 超时）。
  */
 export async function listModels(): Promise<ModelInfo[]> {
-  const reply = await command('model.list', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('model.list', {})
   return reply.models
 }
 
@@ -45,6 +44,6 @@ export async function switchModel(
   provider: ProviderId,
   modelId: string,
 ): Promise<{ sessionId: string; provider: string; modelId: string }> {
-  return command('model.switch', { sessionId, provider, modelId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('model.switch', { sessionId, provider, modelId })
 }
 

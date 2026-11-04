@@ -347,12 +347,6 @@ export interface ExecutionRecord { // oe-exempt:20260930:framework:领域聚合�
    * 自然忽略，legacy 缺省归 chat 语义与 modeless 天然一致，零迁移。
    */
   /**
-   * 空闲超时毫秒数（idle GC 回收节奏，全 record 生效）。覆盖默认 5min idle timeout。
-   * 优先级：参数 > env TAIJI_SUBAGENT_IDLE_TIMEOUT_MS > 默认 300000ms。
-   * 向后兼容：旧 record 无此字段，按默认值处理。
-   */
-  readonly idleTimeoutMs?: number;
-  /**
    * 实际执行引擎 id（P4 路由留痕，D9①）。创建时确定不可变；缺省（存量 record）
    * = pi 派生视图（消费方零迁移）。持久化经 subagent-record entry。
    */

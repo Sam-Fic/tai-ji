@@ -66,8 +66,6 @@ export interface WorktreeConfigService {
   getWorktreeRootDir(): string
   /** plain-repo setup 脚本相对路径（不存在则跳过）。 */
   getSetupScript(): string
-  /** worktree 创建超时（秒，setup 脚本执行上限；Service 侧 ×1000 转 ms）。 */
-  getTimeout(): number
 }
 
 /** WorktreeService 依赖（全注入，可 mock）。 */
@@ -106,14 +104,6 @@ const WORKTREE_GIT_ENTRY = '.git'
 const HOME_PREFIX_SLICE_START = 2
 /** 目录名去重后缀的短 hash 长度（md5 前 N 位 hex，足以区分同 repo 冲突）。 */
 const DIR_HASH_SUFFIX_LENGTH = 6
-/** 秒 → 毫秒换算系数（setup 脚本 timeout 从秒读到毫秒）。 */
-const MS_PER_SECOND = 1000
-/**
- * git worktree add/remove 的执行超时（ms）。git-executor 默认 8000ms 是给 status/diff 这类
- * 轻查询校准的量级；worktree add/remove 是**整树 checkout/删除**（大仓库或带 node_modules
- * 的 remove 可达数十秒），8s 会被误杀成 GIT_FAILED——按被保护对象的粒度重新校准。
- */
-const WORKTREE_GIT_TIMEOUT_MS = 60_000
 /**
  * 失败日志里 stderr 的落盘长度帽（保留**尾部**——错误原因在输出末尾，如 pnpm 的
  * Failure reason 块）。对齐 crash-journal detailDigest 的 2KB 帽；完整 stderr 已随
@@ -259,7 +249,7 @@ export class WorktreeService implements IWorktreeService {
 
   /**
    * 创建失败的错误日志载荷组装（原 create catch 内联体迁移）：原始 code 保真 +
-   * detail 字段提取（exitCode / stderr 尾部 / timeout / 回滚结局 / cleanupHint）。
+   * detail 字段提取（exitCode / stderr 尾部 / 脚本缺失 / 回滚结局 / cleanupHint）。
    * 只组装日志，不改写也不吞掉原始错误（调用方 rethrow 原值）。
    */
   private logCreateFailure(
@@ -271,7 +261,7 @@ export class WorktreeService implements IWorktreeService {
     const detail = err?.detail && typeof err.detail === 'object' ? err.detail : {}
     logger.error('[worktree-service] worktree create failed', {
       ...logCtx,
-      // 原始 code 保真（GitExecutorError 的 timeout/git_unavailable 等逃逸码也落盘，
+      // 原始 code 保真（GitExecutorError 的 git_unavailable 等逃逸码也落盘，
       // 不进 union 但在日志里可判别真实失败层）
       code: err?.code ?? 'worktree_failed',
       error: e instanceof Error ? e.message : String(e),
@@ -280,8 +270,8 @@ export class WorktreeService implements IWorktreeService {
       stderr: typeof detail['stderr'] === 'string'
         ? (detail['stderr'] as string).slice(-STDERR_LOG_TAIL_LENGTH)
         : null,
-      // setup 执行层失败（超时/脚本缺失）经 runSetupScript 包装成 SETUP_FAILED 后由此显形
-      timeout: detail['timeout'] === true,
+      // setup 执行层失败（脚本缺失）经 runSetupScript 包装成 SETUP_FAILED 后由此显形
+      scriptMissing: detail['scriptMissing'] === true,
       // 仅 setup 失败路径发生过回滚：clean = 世界已复原；incomplete = 半成品残留（detail 带 cleanupHint）
       rollback: this.describeRollbackOutcome(err, detail),
       cleanupHint: typeof detail['cleanupHint'] === 'string' ? detail['cleanupHint'] : null,
@@ -330,7 +320,7 @@ export class WorktreeService implements IWorktreeService {
       ? localResult.stdout.split('\n').map(b => b.trim()).filter(Boolean)
       : []
     if (localResult.exitCode !== 0) {
-      // RT-8#8（核实后确认的窄可达面）：exec 抛 GitExecutorError（git 缺失/超时）走异常路径
+      // RT-8#8（核实后确认的窄可达面）：exec 抛 GitExecutorError（git 缺失）走异常路径
       // 传播，此分支只剩「git 命令本身失败」（健康仓库几乎不可达）——降级返 [] 保持，但留痕
       //（空列表被当「无分支」不可观测）。恢复动作：直接跑 git branch 复核。
       console.warn(
@@ -458,14 +448,13 @@ export class WorktreeService implements IWorktreeService {
   private async rollbackCreatedWorktree(repoDir: string, wtPath: string, branch: string): Promise<string | null> {
     const failures: string[] = []
     try {
-      // timeoutMs 显式传：remove 是整树删除（含 node_modules 时可达数十秒），8s 默认值不够
-      const rm = await this.deps.gitExecutor.exec(repoDir, 'worktree', ['remove', '--force', '--force', wtPath], { timeoutMs: WORKTREE_GIT_TIMEOUT_MS })
+      const rm = await this.deps.gitExecutor.exec(repoDir, 'worktree', ['remove', '--force', '--force', wtPath])
       if (rm.exitCode !== 0) failures.push(`worktree remove 失败: ${rm.stderr.trim()}`)
     } catch (e: unknown) {
       failures.push(`worktree remove 异常: ${e instanceof Error ? e.message : String(e)}`)
     }
     try {
-      const br = await this.deps.gitExecutor.exec(repoDir, 'branch', ['-D', branch], { timeoutMs: WORKTREE_GIT_TIMEOUT_MS })
+      const br = await this.deps.gitExecutor.exec(repoDir, 'branch', ['-D', branch])
       if (br.exitCode !== 0) failures.push(`branch -D 失败: ${br.stderr.trim()}`)
     } catch (e: unknown) {
       failures.push(`branch -D 异常: ${e instanceof Error ? e.message : String(e)}`)
@@ -525,13 +514,10 @@ export class WorktreeService implements IWorktreeService {
     // base 解析（usedBaseRef 供返回——请求 ref 校验失败静默 fallback 的显形，RT-8#8）
     const usedBaseRef = await this.resolveBaseRef(barePath, branch, baseBranch, workspaceHint)
 
-    // git worktree add。timeoutMs 显式传：add 是整树 checkout，超过 git-executor 8s
-    // 轻查询默认值会被误杀成 GIT_FAILED（量级按被保护对象校准）
     const addResult = await this.deps.gitExecutor.exec(
       barePath,
       'worktree',
       ['add', '-b', branch, newWtPath, usedBaseRef],
-      { timeoutMs: WORKTREE_GIT_TIMEOUT_MS },
     )
     if (addResult.exitCode !== 0) {
       throw worktreeError(
@@ -591,12 +577,11 @@ export class WorktreeService implements IWorktreeService {
     // base 解析（usedBaseRef 供返回——请求 ref 校验失败静默 fallback 的显形，RT-8#8）
     const usedBaseRef = await this.resolveBaseRef(repoRoot, branch, baseBranch, workspaceHint)
 
-    // git worktree add。timeoutMs 显式传：同 bare 模式（整树 checkout，8s 默认值不够）
+    // git worktree add。整树 checkout，耗时长是正常形态，无墙钟限制
     const addResult = await this.deps.gitExecutor.exec(
       repoRoot,
       'worktree',
       ['add', '-b', branch, newWtPath, usedBaseRef],
-      { timeoutMs: WORKTREE_GIT_TIMEOUT_MS },
     )
     if (addResult.exitCode !== 0) {
       throw worktreeError(
@@ -625,29 +610,21 @@ export class WorktreeService implements IWorktreeService {
     // 默认 'custom-hooks/setup-worktree.sh'（与原 bare-workspace 工作流一致）
     const setupScriptPath = join(cwd, setupScriptRel)
     if (this.deps.fs.existsSync(setupScriptPath)) {
-      // 超时从 configService.getTimeout() 读（默认 300s——monorepo pnpm install +
-      // 首次 Electron/pi 二进制下载是分钟级，60s 默认值会误杀冷安装；上限 3600s）
-      const timeoutMs = this.deps.configService.getTimeout() * MS_PER_SECOND
       let result: ShellRunnerResult
       try {
         result = await this.deps.shellRunner.execute({
           scriptPath: setupScriptPath,
           args: [worktreePath],
           cwd: worktreePath,
-          timeout: timeoutMs,
         })
       } catch (e) {
-        // ShellRunnerError（timeout / not_found）是「执行层失败」而非脚本业务失败。原样逃逸有两个
-        // 问题：① handler 的 GIT_ERROR_CODE_MAP 会把 code='timeout' 误映射成 GIT_FAILED——用户
-        // 看到「git 失败」实际是 setup 卡住，排查方向被指错；② 前端拿不到 SETUP 语义、无法分流。
-        // 统一包装成 SETUP_FAILED，detail 用 timeout/scriptMissing 区分形态；rollback 路径不变
-        // （调用方 catch 到的仍是同一种 SETUP_FAILED 错误形状）。
-        const isTimeout = e instanceof ShellRunnerError && e.code === 'timeout'
+        // ShellRunnerError（not_found）是「执行层失败」而非脚本业务失败。原样逃逸有两个
+        // 问题：① handler 的 GIT_ERROR_CODE_MAP 会误映射成 GIT_FAILED——用户看到「git 失败」
+        // 实际是 setup 脚本本身起不来，排查方向被指错；② 前端拿不到 SETUP 语义、无法分流。
+        // 统一包装成 SETUP_FAILED；rollback 路径不变（调用方 catch 到的仍是同一种
+        // SETUP_FAILED 错误形状）。
         const isMissing = e instanceof ShellRunnerError && e.code === 'not_found'
         const rawMessage = e instanceof Error ? e.message : String(e)
-        if (isTimeout) {
-          throw worktreeError('SETUP_FAILED', `setup 脚本执行超时（${timeoutMs}ms）`, { timeout: true, timeoutMs })
-        }
         throw worktreeError(
           'SETUP_FAILED',
           `setup 脚本执行失败: ${rawMessage}`,

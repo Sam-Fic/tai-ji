@@ -74,7 +74,6 @@ describe('reclaimOwnStaleRuntime（身份门禁：只杀本数据目录登记的
   let dataDir: string
   let deadPids: Set<number>
   let killCalls: Array<{ pid: number; signal?: string | number }>
-  let killSpy: ReturnType<typeof vi.spyOn>
 
   // ps 输出按命令区分：isSafeToKill 用 `-o comm=`，getProcessCmdline 用 `-ww -o command=`
   //（'comm=' 不是 'command=' 的子串——后者 comm 后跟 'a'，可安全按子串分流）。
@@ -94,7 +93,7 @@ describe('reclaimOwnStaleRuntime（身份门禁：只杀本数据目录登记的
     pathsMocks.getDataDir.mockReturnValue(dataDir)
     deadPids = new Set<number>()
     killCalls = []
-    killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) => {
+    vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) => {
       killCalls.push({ pid, signal })
       if ((signal ?? 0) === 0) {
         if (deadPids.has(pid)) {
@@ -119,7 +118,7 @@ describe('reclaimOwnStaleRuntime（身份门禁：只杀本数据目录登记的
 
   it('无登记文件（首次启动/旧版实例）→ 不杀任何进程', async () => {
     mockPs('node', 'node whatever')
-    await expect(reclaimOwnStaleRuntime(1)).resolves.toBe(false)
+    await expect(reclaimOwnStaleRuntime()).resolves.toBe(false)
     expect(killCalls.filter((c) => c.signal && c.signal !== 0)).toEqual([])
     expect(processControlMocks.killProcessTree).not.toHaveBeenCalled()
   })
@@ -127,42 +126,27 @@ describe('reclaimOwnStaleRuntime（身份门禁：只杀本数据目录登记的
   it('登记 pid 已死 → 不杀任何进程', async () => {
     writeInstanceFile(OWN_PID, 3310)
     deadPids.add(OWN_PID)
-    await expect(reclaimOwnStaleRuntime(1)).resolves.toBe(false)
+    await expect(reclaimOwnStaleRuntime()).resolves.toBe(false)
     expect(killCalls.filter((c) => c.signal && c.signal !== 0)).toEqual([])
   })
 
   it('存活但 cmdline 无 runtime 指纹（pid 复用/异主进程）→ 身份门禁拒绝，不杀', async () => {
     writeInstanceFile(OWN_PID, 3310)
     mockPs('node', 'node /some/other/server.mjs --port=3310')
-    await expect(reclaimOwnStaleRuntime(1)).resolves.toBe(false)
+    await expect(reclaimOwnStaleRuntime()).resolves.toBe(false)
     expect(killCalls.filter((c) => c.signal && c.signal !== 0)).toEqual([])
     expect(processControlMocks.killProcessTree).not.toHaveBeenCalled()
   })
 
-  it('登记 pid 命中残留 runtime → SIGTERM 前预录后代，root+后代全部 SIGTERM', async () => {
+  it('登记 pid 命中残留 runtime → 预录后代后整树 SIGKILL（无信号等待窗）', async () => {
     writeInstanceFile(OWN_PID, 3310)
     mockPs('node', `node tsx index.ts --port=3310 --builtin-plugins-dir=/x`)
     processControlMocks.getDescendantPids.mockReturnValue([11, 22])
-    await expect(reclaimOwnStaleRuntime(1)).resolves.toBe(true)
-    const signals = killCalls.filter((c) => c.signal && c.signal !== 0)
-    // 预录后代先于（或同批）SIGTERM root；后代与 root 都收到 SIGTERM
-    expect(signals.map((c) => c.pid).sort((a, b) => a - b)).toEqual([11, 22, OWN_PID])
+    await expect(reclaimOwnStaleRuntime()).resolves.toBe(true)
+    // 后代预记录先于杀链；终止整树走 killProcessTree（SIGKILL），不逐个发信号
     expect(processControlMocks.getDescendantPids).toHaveBeenCalledWith(OWN_PID)
-    expect(processControlMocks.killProcessTree).not.toHaveBeenCalled()
-  })
-
-  it('SIGTERM 宽限内不退出 → SIGKILL 进程树兜底', async () => {
-    writeInstanceFile(OWN_PID, 3310)
-    mockPs('node', `node tsx index.ts --port=3310 --builtin-plugins-dir=/x`)
-    processControlMocks.getDescendantPids.mockReturnValue([11])
-    // SIGTERM 不标记死亡（顽固进程）
-    killSpy.mockImplementation(((pid: number, signal?: string | number) => {
-      killCalls.push({ pid, signal })
-      if ((signal ?? 0) === 0) return true
-      return true
-    }) as never)
-    await expect(reclaimOwnStaleRuntime(1)).resolves.toBe(true)
-    expect(processControlMocks.killProcessTree).toHaveBeenCalledWith(OWN_PID, [11])
+    expect(processControlMocks.killProcessTree).toHaveBeenCalledWith(OWN_PID, [11, 22])
+    expect(killCalls.filter((c) => c.signal && c.signal !== 0)).toEqual([])
   })
 
   it('Windows：tasklist 白名单命中 → taskkill 树杀，不读 cmdline', async () => {
@@ -170,7 +154,7 @@ describe('reclaimOwnStaleRuntime（身份门禁：只杀本数据目录登记的
     childProcessMocks.execFileSync.mockReturnValue('"node.exe","4242","Console","1","20,000 K"')
     const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
     try {
-      await expect(reclaimOwnStaleRuntime(1)).resolves.toBe(true)
+      await expect(reclaimOwnStaleRuntime()).resolves.toBe(true)
       expect(windowsMocks.terminateWindowsProcessTree).toHaveBeenCalledWith(OWN_PID)
       expect(killCalls.filter((c) => c.signal === 'SIGTERM')).toEqual([])
     } finally {

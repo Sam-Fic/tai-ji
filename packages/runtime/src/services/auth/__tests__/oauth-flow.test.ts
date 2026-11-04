@@ -1,7 +1,7 @@
 /**
  * OAuth flow 编排单测（mock fetch，覆盖各 provider 协议分支）。
  *
- * 覆盖：xai 标准 device（缺 expires_in 默认 3600s + 5min skew）/ kimi 无 skew /
+ * 覆盖：xai 标准 device（缺 expires_in 默认 3600s）/ kimi expires 直算 /
  * github-copilot 两段式（epoch 秒 expires）/ openai-codex 非标 device（device_auth_id
  * → authorization_code 二次 exchange）/ anthropic callback（PKCE + state）/ openrouter
  * callback（无 clientId + 永久 key）/ 事件钩子 / abort 取消。
@@ -126,7 +126,7 @@ afterEach(() => {
 })
 
 describe('runOAuthLogin — 标准 device flow', () => {
-  it('xai：device 起始 → 轮询 pending → token complete；expires 含 5min skew + 缺 expires_in 默认 3600s', async () => {
+  it('xai：device 起始 → 轮询 pending → token complete；缺 expires_in 默认 3600s', async () => {
     let polled = 0
     mockFetch(async (url, init) => {
       const body = bodyOf({ url, init })
@@ -160,8 +160,8 @@ describe('runOAuthLogin — 标准 device flow', () => {
     expect(credential.type).toBe('oauth')
     expect(credential.access).toBe('at-xai')
     expect(credential.refresh).toBe('rt-xai')
-    // expires = 实际运行 now + 3600s - 5min skew ≈ now + 3300s（容差覆盖 waitBeforeFirstPoll）
-    expect(Math.abs(credential.expires - (now + 3_300 * 1_000))).toBeLessThan(5_000)
+    // expires = 实际运行 now + 3600s（无提前刷新窗口；容差覆盖 waitBeforeFirstPoll）
+    expect(Math.abs(credential.expires - (now + 3_600 * 1_000))).toBeLessThan(5_000)
     expect(hooks.onDeviceCode).toHaveBeenCalledWith(expect.objectContaining({
       userCode: 'ABCD-EFGH',
       verificationUri: 'https://auth.x.ai/activate',
@@ -169,7 +169,7 @@ describe('runOAuthLogin — 标准 device flow', () => {
     }))
   })
 
-  it('kimi：无 skew（expires = now + expires_in*1000）', async () => {
+  it('kimi：expires = now + expires_in*1000 直算', async () => {
     mockFetch(async (url, init) => {
       const body = bodyOf({ url, init })
       if (url === 'https://auth.kimi.com/api/oauth/device_authorization') {
@@ -190,7 +190,7 @@ describe('runOAuthLogin — 标准 device flow', () => {
     const credential = await runOAuthLogin('kimi-coding', KIMI_CONFIG, hooks, new AbortController().signal, POLL_TUNING)
 
     expect(credential.access).toBe('at-kimi')
-    // 无 skew：实际运行 now + 120s（容差覆盖 waitBeforeFirstPoll）
+    // expires 直算：实际运行 now + 120s（容差覆盖 waitBeforeFirstPoll）
     expect(Math.abs(credential.expires - (now + 120 * 1_000))).toBeLessThan(5_000)
     // verificationUriComplete 优先于 verificationUri
     expect(hooks.onDeviceCode).toHaveBeenCalledWith(expect.objectContaining({
@@ -265,8 +265,8 @@ describe('runOAuthLogin — github-copilot 两段式', () => {
     expect(credential.access).toBe('copilot-token')
     // refresh 存 GitHub token（pi 侧 refresh 用它换新 copilot token）
     expect(credential.refresh).toBe('github-token')
-    // expires = expires_at*1000 - 5min skew（容差覆盖轮询等待）
-    expect(Math.abs(credential.expires - (now + 25 * 60 * 1_000))).toBeLessThan(5_000)
+    // expires = expires_at*1000 直算（skew 提前刷新已退役，原值直存；容差覆盖轮询等待）
+    expect(Math.abs(credential.expires - (now + 30 * 60 * 1_000))).toBeLessThan(5_000)
     expect(hooks.onDeviceCode).toHaveBeenCalledWith(expect.objectContaining({ userCode: 'GH-CODE' }))
   })
 })
@@ -309,7 +309,7 @@ describe('runOAuthLogin — openai-codex 非标 device 协议', () => {
 
     expect(credential.access).toBe('at-codex')
     expect(credential.refresh).toBe('rt-codex')
-    // 无 skew：实际运行 now + 3600s（容差覆盖轮询等待）
+    // expires 直算：实际运行 now + 3600s（容差覆盖轮询等待）
     expect(Math.abs(credential.expires - (now + 3_600 * 1_000))).toBeLessThan(5_000)
     // verify 端点作为 verificationUri
     expect(hooks.onDeviceCode).toHaveBeenCalledWith(expect.objectContaining({
@@ -363,8 +363,8 @@ describe('runOAuthLogin — callback flow', () => {
 
     const credential = await flow
     expect(credential.access).toBe('at-an')
-    // 5min skew：实际运行 now + 7200s - 300s（容差覆盖 server 启动）
-    expect(Math.abs(credential.expires - (now + 7_200_000 - 5 * 60 * 1_000))).toBeLessThan(5_000)
+    // expires 直算：实际运行 now + 7200s（容差覆盖 server 启动）
+    expect(Math.abs(credential.expires - (now + 7_200 * 1_000))).toBeLessThan(5_000)
   })
 
   it('openrouter：无 clientId，动态端口回调，token 端点返回永久 key（MAX_SAFE_INTEGER）', async () => {

@@ -81,7 +81,7 @@ import type { BtwSessionHeader, BtwSourceState } from './btw-fork-exec.js'
 // ─ 导出面保持（sibling 拆分前由本模块导出的符号原样 re-export；消费方 import 路径零改动）──
 export { BTW_BEHAVIOR_CONTRACT, BtwError, composeContractAppendPrompt, forkViaCliPi, inspectSourceState, readSessionHeader }
 export type { BtwContractInjectionTrace, BtwSessionHeader }
-export { BTW_FORK_TIMEOUT_MS, hasDanglingToolCall } from './btw-fork-exec.js'
+export { hasDanglingToolCall } from './btw-fork-exec.js'
 export type { BtwSourceState, ForkViaCliRequest } from './btw-fork-exec.js'
 export type { BtwErrorCode } from './btw-error.js'
 

@@ -214,7 +214,8 @@ export interface CancelParams {
 
 /**
  * cancel 应答（受理确认）。终态本体由该 run 的 run 终态应答承载（abort 合成终态经
- * event/终态应答到达）；引擎须 CANCEL_SETTLE_GRACE_MS（3s）内收敛，超时 core 走杀链。
+ * event/终态应答到达）；收敛由引擎停轮自然返回或进程死亡退出链承载（原 3s 收敛窗
+ * 已随时间机制删除）。
  */
 export interface CancelResult {
   ok: true;

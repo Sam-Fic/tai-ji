@@ -15,14 +15,13 @@
  * | use-app-update-actions.ts  | 两阶段升级动作（download/install/fallback） |
  * | use-app-update-restore.ts  | 启动恢复链（preloaded / pending 提醒）      |
  * | use-app-update-launch.ts   | 启动结果一次性 toast（D5）                  |
- * | use-app-update-autocheck.ts| 30s 首查 + 60min 周期 + visibility 补查调度 |
+ * | use-app-update-autocheck.ts| 启动编排（恢复链 + 启动结果，无定时调度）        |
  *
  * 9 状态机：idle/checking/available/downloading/downloaded/replacing/restarting/error/unsupported。
  * checkForUpdate：经 ipc 检测新版，命中后异步渲染 releaseNotes 为 HTML。performUpdate 已删除
  * （批次 3 m17）；两阶段 performDownload/performInstall 替代，download 传意图（version 字符串），
- * release 数据由 main 权威解析（RC1）。initAutoCheck：先读 update:getSettings 的 autoUpdate
- * 开关——false 时只执行恢复链（零定时器/零 listener/零联网），true 时 30s 后首次检测
- * （应用启动后延迟避开冷启动高峰）。
+ * release 数据由 main 权威解析（RC1）。initAutoCheck：只执行启动恢复链 + 读取启动结果，
+ * 无定时检测（ADR-0188：更新自动检查轮询退役，联网检测只由设置页手动触发）。
  *
  * 单例范式：useAppUpdate() 返回全应用共享的同一控制器（UpdateButton 与 Sidebar 读同一份
  * state），对齐 usePlatformChrome.ts:34-52；测试用 createAppUpdateController({ ipc }) 建独立
@@ -104,11 +103,9 @@ export function createAppUpdateController(
   const { checkLaunchResult } = createLaunchAxis(ipc)
   const { initAutoCheck } = createAutoCheckAxis({
     state: st,
-    checkForUpdate,
     restorePreloadedUpdate,
     restorePendingUpdate,
     checkLaunchResult,
-    ipc,
   })
 
   /**
@@ -119,7 +116,7 @@ export function createAppUpdateController(
   let refCount = 0
 
   /**
-   * 订阅退订句柄（闭包级，对齐 useRollingRestartStatus 的 unsubscribe/subScope 形态）。
+   * 订阅退订句柄（闭包级，unsubscribe/subScope 形态）。
    * 仅首个消费者（refCount===1）创建；但触发最终退订（refCount 归 0）的可能是任意一个
    * 消费者的 onScopeDispose，故句柄必须闭包级共享——若做成 subscribeProgress 局部
    * const，第 2/3 消费者早退分支下的闭包永不赋值，末位 dispose 时取到的是 TDZ/undefined。

@@ -1,24 +1,18 @@
 // lifecycle-predicates 单测（v4 B-1；W6 随拆依赖改写：读点改 core 侧状态镜像）。
-// 验证 hasArmedIdleTimer/isResumable/hasLiveProcessHandle 在两态收敛后的判定逻辑。
-// 依赖 lifecycle-manager 模块级 idleTimers 与 core 侧 spawnedChildren 镜像
-// （engine/host/spawned-children.ts），beforeEach 重置隔离。
-// [W3 改写] inproc 过渡桥并读用例随 inproc pi 引擎目录 删除消亡——镜像成为唯一数据源
-// （host/childSpawned 上报 + 终止意图置死位），等价性用例的「并读」语义不再存在。
+// 验证 isResumable/hasLiveProcessHandle 在两态收敛后的判定逻辑。
+// 依赖 core 侧 spawnedChildren 镜像（engine/host/spawned-children.ts），
+// beforeEach 重置隔离。
+//（原 hasArmedIdleTimer 用例组随 idle timer 机制删除消亡。）
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
-import {
-  armIdleTimer,
-  disarmIdleTimer,
-  _resetLifecycleState,
-} from "../lifecycle/lifecycle-manager.ts";
 import {
   coreSpawnedChildrenMirror,
   _resetCoreSpawnedChildrenMirrorForTest,
 } from "../engine/host/spawned-children.ts";
 import type { ExecutionRecord } from "../domain/record-model.ts";
 
-import { hasLiveProcessHandle, hasArmedIdleTimer, isResumable } from "../lifecycle/lifecycle-predicates.ts";
+import { hasLiveProcessHandle, isResumable } from "../lifecycle/lifecycle-predicates.ts";
 
 /** 构造最小 ExecutionRecord（status 默认 running）。 */
 function makeRecord(overrides: Partial<ExecutionRecord> = {}): ExecutionRecord {
@@ -50,34 +44,13 @@ function makeRecord(overrides: Partial<ExecutionRecord> = {}): ExecutionRecord {
 
 describe("lifecycle-predicates (v4 B-1)", () => {
   beforeEach(() => {
-    _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
   });
 
   afterEach(() => {
-    // 用例注册的镜像条目/armed timer 只靠下一用例 beforeEach 清——文件收尾后残留
+    // 用例注册的镜像条目只靠下一用例 beforeEach 清——文件收尾后残留
     // 会泄漏进 shared 池同 worker 的后续文件（isolate:false，globalThis 跨文件复用）。
-    _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
-  });
-
-  describe("hasArmedIdleTimer (= hasIdleTimer)", () => {
-    it("armed idle timer → true", () => {
-      const rec = makeRecord();
-      armIdleTimer(rec.id, () => {});
-      expect(hasArmedIdleTimer(rec)).toBe(true);
-    });
-
-    it("no idle timer → false", () => {
-      expect(hasArmedIdleTimer(makeRecord())).toBe(false);
-    });
-
-    it("disarmed timer → false", () => {
-      const rec = makeRecord();
-      armIdleTimer(rec.id, () => {});
-      disarmIdleTimer(rec.id);
-      expect(hasArmedIdleTimer(rec)).toBe(false);
-    });
   });
 
   describe("hasLiveProcessHandle（W6 改读镜像）", () => {

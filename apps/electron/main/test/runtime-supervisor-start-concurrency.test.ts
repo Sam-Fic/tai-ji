@@ -2,16 +2,16 @@
  * RuntimeSupervisor start() 并发串行化回归测试（AM2：TOCTOU 双 spawn 从根源修复）。
  *
  * 背景：start() 原实现幂等检查后 `await this.stop()` 再 spawn——toggle 入口
- * （restartForConfigChange）与启动链/崩溃重启并发时双方都通过检查 →
+ * （restartForConfigChange）与手动启动链并发时双方都通过检查 →
  * 双 spawn 抢端口。修复 = promise 链串行队列（join 会让 toggle 拿到旧配置的
  * 启动结果，故串行而非共享）。
  *
  * 第二组 describe 覆盖 restartForConfigChange 本体（toggle 重启编排收敛进
  * supervisor）：广播时序（restarting 先于 stop）、队列并发不双 spawn、
- * 失败补 runtime-failed 终态广播后 reject 上抛，不进崩溃退避链。
+ * 失败补 runtime-failed 终态广播后 reject 上抛。
  *
- * Mock 策略对齐 runtime-supervisor-crash-restart.test.ts：stub 全链
- * （spawn/stop/health/port/liveness/main-logger），spawnRuntimeProcess 返回恒活 fake child。
+ * Mock 策略：stub 全链（spawn/stop/port/port-file/main-logger），spawnRuntimeProcess
+ * 返回恒活 fake child。
  *
  * 运行：cd apps/electron/main && npx vitest run test/runtime-supervisor-start-concurrency.test.ts
  */
@@ -42,20 +42,8 @@ vi.mock('../supervisor/process-control.js', () => ({
   stopRuntimeProcess: vi.fn(async () => undefined),
 }))
 
-vi.mock('../supervisor/health-checker.js', () => ({
-  waitForHealth: vi.fn(async () => undefined),
-}))
-
 vi.mock('../supervisor/port-file.js', () => ({
   writePortFile: vi.fn(),
-}))
-
-vi.mock('../supervisor/liveness-probe.js', () => ({
-  LIVENESS_ZOMBIE_THRESHOLD_MS: 5 * 60 * 1000,
-  LivenessMonitor: class {
-    start(): void {}
-    stop(): void {}
-  },
 }))
 
 // main-logger stub（真实现经 initMainLogger 落盘；本测试不触文件 IO）
@@ -64,7 +52,6 @@ vi.mock('../logs/main-logger.js', () => ({
   readMainLogMaxBytes: vi.fn(() => 50 * 1024 * 1024),
   initMainLogger: vi.fn(),
   closeMainLogger: vi.fn(async () => undefined),
-  startMemoryWatermarkTimer: vi.fn(() => () => {}),
 }))
 
 import { RuntimeSupervisor } from '../supervisor/runtime-supervisor.js'
@@ -92,33 +79,15 @@ describe('RuntimeSupervisor start() 并发串行化（AM2）', () => {
   })
 
   it('前序 start 失败不毒化队列：后序 start 独立执行并成功 spawn', async () => {
-    const { waitForHealth } = await import('../supervisor/health-checker.js')
-    vi.mocked(waitForHealth).mockRejectedValueOnce(new Error('health timeout'))
+    vi.mocked(spawnRuntimeProcess).mockImplementationOnce(() => {
+      throw new Error('spawn failed: runtime bundle missing')
+    })
     const sup = new RuntimeSupervisor()
     const first = sup.start()
     const second = sup.start()
-    await expect(first).rejects.toThrow('health timeout')
+    await expect(first).rejects.toThrow('runtime bundle missing')
     await expect(second).resolves.toBe(43110)
-    // 前序失败清理半活 child 后，后序 start 独立走完整时序（串行不跳过、失败不阻塞）
-    expect(spawnMock).toHaveBeenCalledTimes(2)
-  })
-
-  it('崩溃重启链（attemptRestart → start）经同一串行入口，不与手动 start 双 spawn', async () => {
-    // fake timers：钉住崩溃重启的 1s 退避定时器（对齐 crash-restart 测试形态，防真实时钟晚触发）
-    vi.useFakeTimers()
-    const sup = new RuntimeSupervisor()
-    await sup.start()
-    expect(spawnMock).toHaveBeenCalledTimes(1)
-    const onExit = spawnMock.mock.calls[0]?.[1]
-    expect(onExit).toBeDefined()
-    // 模拟 toggle 与崩溃同窗口：先排队手动 start，再触发 exit（清 child + 排程重启）
-    const manual = sup.start()
-    onExit!(137)
-    await manual
-    // 手动 start 串行执行：检查见 child 已清 → 独立 spawn（exit 排程的重启在队列后续）
-    expect(spawnMock).toHaveBeenCalledTimes(2)
-    // 后续重启尝试经同一串行入口运行：child 已活 → 幂等短路，不叠加 spawn
-    await vi.advanceTimersByTimeAsync(1_000)
+    // 前序失败后，后序 start 独立走完整时序（串行不跳过、失败不阻塞）
     expect(spawnMock).toHaveBeenCalledTimes(2)
   })
 })
@@ -167,31 +136,33 @@ describe('RuntimeSupervisor restartForConfigChange（toggle 重启编排收敛�
     expect(spawnMock).toHaveBeenCalledTimes(2)
   })
 
-  it('失败：reject 上抛且补 runtime-failed 终态广播（不进崩溃退避链），队列不被毒化', async () => {
-    const { waitForHealth } = await import('../supervisor/health-checker.js')
-    vi.mocked(waitForHealth).mockRejectedValueOnce(new Error('health timeout'))
+  it('失败：reject 上抛且补 runtime-failed 终态广播，队列不被毒化', async () => {
+    vi.mocked(spawnRuntimeProcess).mockImplementationOnce(() => {
+      throw new Error('spawn failed: runtime bundle missing')
+    })
     const channels: string[] = []
     getAllWindowsMock.mockReturnValue([{
       isDestroyed: () => false,
       webContents: { send: (channel: string) => { channels.push(channel) } },
     }])
     const sup = new RuntimeSupervisor()
-    await expect(sup.restartForConfigChange()).rejects.toThrow('health timeout')
+    await expect(sup.restartForConfigChange()).rejects.toThrow('runtime bundle missing')
     // 协议完成：restarting 必有终态广播——失败落 runtime-failed（renderer 经既有
-    // failed 态拿重试按钮），runtime-port 是成功专属；无第二次 restarting = 未进崩溃退避链
+    // failed 态拿重试按钮），runtime-port 是成功专属；无第二次 restarting
     expect(channels).toEqual(['runtime-restarting', 'runtime-failed'])
     // 前序失败不毒化队列：后续 start 独立执行成功
     await expect(sup.start()).resolves.toBe(43110)
   })
 
   it('失败后 startError 记录真因（get-runtime-start-error 拉取兜底通道不落空）', async () => {
-    const { waitForHealth } = await import('../supervisor/health-checker.js')
-    vi.mocked(waitForHealth).mockRejectedValueOnce(new Error('health timeout'))
+    vi.mocked(spawnRuntimeProcess).mockImplementationOnce(() => {
+      throw new Error('spawn failed: runtime bundle missing')
+    })
     const sup = new RuntimeSupervisor()
-    await expect(sup.restartForConfigChange()).rejects.toThrow('health timeout')
+    await expect(sup.restartForConfigChange()).rejects.toThrow('runtime bundle missing')
     // toggle 失败刷新真因：renderer 错过 runtime-failed 广播窗口（boot 竞态 / 无窗口在场）
     // 时，startError 读侧（IPC get-runtime-start-error 的数据源）仍能拉到失败原因
-    expect(sup.startError).toBe('health timeout')
+    expect(sup.startError).toBe('spawn failed: runtime bundle missing')
     // 后续 start 成功 → 清除（startError 语义 = 最近一次失败，成功即非当前事实）
     await expect(sup.start()).resolves.toBe(43110)
     expect(sup.startError).toBeNull()

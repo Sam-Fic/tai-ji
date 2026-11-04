@@ -509,32 +509,33 @@ describe('invoke.result 回传归属校验（D2 回传段：handlerId 必须属�
     expect(commandRegistry.get(commandCompositeKey('p1', 'cmd1'))?.workerId).toBe('wA')
   })
 
-  it('a) 通道 B 伪造通道 A 的 handlerId 回 result：pending 不被 resolve，挂起至超时 reject + warn 落日志', async () => {
-    vi.useFakeTimers()
-    try {
-      await registerOnA('h-A')
-      const pending = service.executeCommand('p1', 'cmd1', {}) // 故意不 await：保持挂起观察
-      // 发送段已到通道 A
-      expect(notificationsOf(portA).some(n => n.method === COMMAND_RPC_METHODS.invoke)).toBe(true)
+  it('a) 通道 B 伪造通道 A 的 handlerId 回 result：pending 不被 resolve，合法通道回传仍可达', async () => {
+    await registerOnA('h-A')
+    const pending = service.executeCommand('p1', 'cmd1', {}) // 故意不 await：保持挂起观察
+    // 发送段已到通道 A
+    expect(notificationsOf(portA).some(n => n.method === COMMAND_RPC_METHODS.invoke)).toBe(true)
 
-      // 通道 B（wB）伪造 h-A 的成功回传
-      await replyFrom('wB', 'h-A', { result: 'forged' })
+    // 通道 B（wB）伪造 h-A 的成功回传
+    await replyFrom('wB', 'h-A', { result: 'forged' })
 
-      // 拒绝投递落宿主日志：含 handlerId + 双方 workerId（可直接排查）
-      const warns = ownershipWarnMessages()
-      expect(warns).toHaveLength(1)
-      expect(warns[0]).toContain('h-A')
-      expect(warns[0]).toContain('wA')
-      expect(warns[0]).toContain('wB')
+    // 拒绝投递落宿主日志：含 handlerId + 双方 workerId（可直接排查）
+    const warns = ownershipWarnMessages()
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toContain('h-A')
+    expect(warns[0]).toContain('wA')
+    expect(warns[0]).toContain('wB')
 
-      // pending 保持挂起（未被 forged resolve）：推进超时窗口后以超时 reject。
-      // 若归属校验缺失，pending 已被 resolve('forged')，此 rejects 断言失败。
-      // （D4 后命令默认超时 = DEFAULT_TOOL_EXECUTE_TIMEOUT_MS 30min）
-      vi.advanceTimersByTime(1_800_000)
-      await expect(pending).rejects.toThrow("Command 'p1:cmd1' timed out after 30min")
-    } finally {
-      vi.useRealTimers()
-    }
+    // pending 保持挂起（未被 forged resolve；无墙钟——不超时 reject，挂到合法回传）。
+    // 若归属校验缺失，pending 已被 resolve('forged')，此断言失败。
+    let settled = false
+    void pending.then(() => { settled = true }, () => { settled = true })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(settled).toBe(false)
+
+    // 收尾：来源通道的合法回传仍可达（归属校验只拒伪造，不拒合法投递）
+    await replyFrom('wA', 'h-A', { result: 'legit-late' })
+    await expect(pending).resolves.toBe('legit-late')
   })
 
   it('b) 通道 A 自身回传（归属一致）：pending 正常 resolve，无归属拒绝日志', async () => {
@@ -547,29 +548,33 @@ describe('invoke.result 回传归属校验（D2 回传段：handlerId 必须属�
     expect(ownershipWarnMessages()).toHaveLength(0)
   })
 
-  it('c) handlerId 无对应 registration（执行中被注销）：即使归属通道正确也拒绝投递，pending 挂起至超时', async () => {
-    vi.useFakeTimers()
-    try {
-      await registerOnA('h-A')
-      const pending = service.executeCommand('p1', 'cmd1', {})
+  it('c) handlerId 无对应 registration（执行中被注销）：即使归属通道正确也拒绝投递，pending 保持挂起', async () => {
+    await registerOnA('h-A')
+    const pending = service.executeCommand('p1', 'cmd1', {})
 
-      // 执行期间命令被注销（registration 清除——插件禁用/crash 清理的对偶场景）
-      await rpcServer.dispatch('wA', {
-        jsonrpc: '2.0', id: 888001, method: COMMAND_RPC_METHODS.unregister,
-        params: { pluginId: 'p1', commandId: 'cmd1' },
-      })
-      // 来源通道正确（wA），但注册表已无该 handlerId 条目 → fail-closed 拒绝
-      await replyFrom('wA', 'h-A', { result: 'late' })
+    // 执行期间命令被注销（registration 清除——插件禁用/crash 清理的对偶场景）
+    await rpcServer.dispatch('wA', {
+      jsonrpc: '2.0', id: 888001, method: COMMAND_RPC_METHODS.unregister,
+      params: { pluginId: 'p1', commandId: 'cmd1' },
+    })
+    // 来源通道正确（wA），但注册表已无该 handlerId 条目 → fail-closed 拒绝
+    await replyFrom('wA', 'h-A', { result: 'late' })
 
-      const warns = ownershipWarnMessages()
-      expect(warns).toHaveLength(1)
-      expect(warns[0]).toContain('h-A')
+    const warns = ownershipWarnMessages()
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toContain('h-A')
 
-      vi.advanceTimersByTime(1_800_000)
-      await expect(pending).rejects.toThrow("Command 'p1:cmd1' timed out after 30min")
-    } finally {
-      vi.useRealTimers()
-    }
+    // pending 保持挂起（无墙钟——不超时 reject；等待挂到插件卸载 rejectAll）
+    let settled = false
+    void pending.then(() => { settled = true }, () => { settled = true })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(settled).toBe(false)
+
+    // 收尾：模拟插件卸载的 rejectAll（registration 已清，该 pending 无合法回传可达）
+    const invokes = (service as unknown as { commandInvokes: { rejectAll: (e: Error) => void } }).commandInvokes
+    invokes.rejectAll(new Error('plugin unloaded'))
+    await expect(pending).rejects.toThrow('plugin unloaded')
   })
 })
 
