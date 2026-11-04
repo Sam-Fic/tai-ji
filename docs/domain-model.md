@@ -159,3 +159,14 @@ subagent 体系的领域模型在「会话 + 轮 + 债权」框架下组织（pe
 3. **轮收条只存事实**（引擎停因原值 + FailureCause + 结果正文），推断词只派生不存储——「completed」这类「没报错=成功」的推断只允许作为展示层派生词（引擎停因 = stop 且无失败分类 → 派生「正常收尾」）；被接管轮（promptDisposition=handled）无停因、构造性不满足派生判据，不产生假成功
 4. **派生视图只读事实源**（manifest / 通知文案 / list 字段 / 展示词 / renderer 失败红点判据全部消费轮收条事实字段，禁止自建成败推断）
 5. **债权结清状态如实**（SettlementReason 封闭五值 completed/failed/cancelled/lost/no_result，fail-visible——词表外解析缺省 unknown，「遇未知按成功」的 fail-open 方向废除）；run 终局如实吸收成员交付（partially_succeeded 入 RunOutcome 值域，一半失败不再显示 done）
+
+## view 展示位域（composer-tray-protocol，2026-11-04）
+
+插件/扩展推送的界面树（view）在展示容器间的路由统一为 placement 声明制，统一语言：
+
+- **placement 族**（词表 SSOT = core `CONTENT_SLOT_PLACEMENTS`，开放字符串注册制）：`drawer.tab` / `overlay.content` / `sidebar.tab` / `settings.section` 四容器族 + `composer.tray`（托盘 widget 位）+ `host.embed`（宿主内嵌族——宿主组件按 viewId 定点消费的树，不进任何标签条容器）
+- **资格制两层**：①会话域存储资格——views.update 的 viewId 必须命中该插件清单 contributes.views 的声明集合（runtime 侧校验；未命中 = UNDECLARED_VIEW_ID 结构化拒绝附补声明指引，不入存储不广播；命中按声明 placement 盖印入存储）；②派生资格——placement 值的词表合法性在 renderer 注册表装载链（unknown-placement 告警 + 标 unavailable 不派生）。词表 SSOT 在 core 单源，runtime 不重复持有（跨进程不可反查）
+- **声明与内容分离**：声明是资格不是内容——托盘按钮存在性仍由 ViewHostStore 有树驱动（guiTree 非空）；声明 composer.tray 而未推树 = 无按钮（托盘是任务在途信号，空任务不占位）
+- **有效 viewId 映射** = 声明 `view` 字段 ?? `id`（`v.view ?? v.id`）——runtime 命中匹配与渲染端声明投影同源（id/view 分离形态是过命名空间校验与保留原始 viewId 的唯一正确声明形态）
+- **全局域 mountId 分支维持现状**：挂载点名由宿主注册上报、插件可 listMountPoints 查询，本身是显式契约，不受会话域资格制约束
+- 扩展通道（setWidget）无清单声明，写入点统一盖印 `composer.tray`（API 即声明）；静态信息（标题/图标）取声明、动态信息（角标/状态/进度）取 views.update 载荷可选 meta，托盘按钮渲染单一兜底链 = 声明 title ?? meta.title ?? viewId

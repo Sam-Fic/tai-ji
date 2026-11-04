@@ -1306,3 +1306,11 @@ WorkflowTab 步骤列表的数据源绑定从「workflow-record 全量快照（6
 ### ADR-0187 断连告知的壳层分工：面板级断连提示条降为组件级防御契约（2026-11-03 裁决，tray-panel-interact 发现 2/F1）
 
 桌面壳 App.vue 以 `connectionState !== 'connected'` 整屏摘除 AppShell（waiting-runtime / 连接族过渡屏 / restarting / failed 四态各有壳级呈现），WS 任意非 connected 态托盘面板随壳卸载——面板级断连提示条（TrayWidgetPanel「连接已断开，内容可能过期」banner，wsState !== 'connected' 即显示）在桌面壳**结构性无触发窗**（壳层门控自初始导入即存在，非本批回归）。裁决：断连告知由壳层四态过渡屏/错误页承担；面板级提示条保留为组件级防御契约（RL5 单测 6/6 承载），真机断言按壳层呈现判定。**不采用**：改壳层门控让面板在断连态保持可达（属启动/连接架构域的 UX 决策——面板脱离会话数据源后的信息时效与误导读风险未论证，超出本交付范围）。
+
+### ADR-0188 托盘展示位纳入 placement 声明制，「不声明就没有」落点 = 会话域存储资格（2026-11-04 用户裁决，composer-tray-protocol D1/D6）
+
+view 展示路由中 drawer/overlay/sidebar/settings 四族容器本为声明制（插件清单 contributes.views 声明 placement 才有展示位），唯独托盘 widget 区是「往会话推了树就出按钮」的隐式路由——内置验收插件 probe-container-plugin 的测试树因此冒出托盘按钮（四格方块兜底图标 + viewId 裸标题）。裁决：placement 新增 `composer.tray` 族（扩展 setWidget 写入点统一盖印，插件按清单声明盖印），托盘消费侧只渲染 placement === 'composer.tray' 的条目；「不声明就没有」的落点 = **会话域存储资格**——views.update 的 viewId 未命中该插件清单声明集合即 RPC 结构化拒绝（UNDECLARED_VIEW_ID + 补声明指引），不入存储不广播，命中则按声明 placement 盖印；placement 词表合法性校验仍在 renderer 注册表装载链（unknown-placement 告警 + 标 unavailable），两道校验各管一层、词表 SSOT 在 core 单源。配套升级：scheduler-manager 补 `host.embed` 宿主内嵌族声明（宿主组件按 viewId 定点消费的树，原为源码级隐式契约，显式化进 manifest 后其三处定点消费照常、托盘无其按钮）。托盘按钮存在性仍由 ViewHostStore 有树驱动——声明是资格不是内容，「有内容才出现」哲学维持。**不采用**：渲染资格制（存储自由推送 + 各消费侧过滤）——ViewHostStore 永远留存无主树，未来新容器/调试工具直接读存储时未声明内容照样冒出，机制复发面不关闭；黑名单排除测试插件——每新增一个测试插件都要登记一次的补偿机制，病因「无资格判定」未除。
+
+### ADR-0189 TreeItem 富行字段族与状态文字渲染序：statusLabel 覆盖 + 宿主封闭枚举 i18n 兜底（composer-tray-protocol D2/D3/D4/D5）
+
+TreeItem 协议增三个可选字段：`subLabel`（副文本，单行截断）、`statusLabel`（状态文字覆盖）、`actions`（行内操作槽，条目形状与既有 ActionBarItem 同构）——协议可选字段新增不 bump 版本（confirm 字段先例），未升级推送方退回单行渲染零回退。状态标签渲染序单一：`statusLabel ?? 宿主按 status 封闭枚举映射 i18n`（running→运行中 / done→已结束 / failed→失败，词条进 renderer 既有 tray 词典族；双无的行不渲染标签）；statusLabel 覆盖行的胶囊色取该行 status 枚举色，无 status 行取中性——文字与颜色同源，不引入第二判据。行内操作复用两段式确认状态机与 pin 门控（与既有命令行共享 TRAY_PIN_STATE_KEY），执行分派走 dispatchTreeInteraction 单点。list-tree 原语级排版升级全挂载位统一（去等宽改无衬线、主副文本分层、numbered 序号档保留 mono），不加托盘专属变体参数。**不采用**：从 label 字符串解析「 · 」分隔符——私有协议，消费方无法区分语义段，本地化与截断都做不了；为托盘另造 rich-row 新原语——与 list-tree 双轨，既有推送方无法渐进受益。
