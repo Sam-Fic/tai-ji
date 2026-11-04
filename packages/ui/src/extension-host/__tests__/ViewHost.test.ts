@@ -160,6 +160,26 @@ describe('ViewHost', () => {
     expect(wrapper.find('[data-testid="view-host-empty"]').exists()).toBe(false)
   })
 
+  it('RL2 条目 placement 字段（composer-tray-protocol D1）：带章条目照常渲染，章随 ViewCacheEntry 契约透传不破坏消费', async () => {
+    // ViewHostStore 落盘行为（盖印/透传）在 core 侧单测锁定；本用例锁定 ui 侧消费契约：
+    // entry.placement/meta 在场时 ViewHost 渲染不受影响（托盘过滤的判定输入原样可达）
+    const entry: ViewCacheEntry = {
+      viewId: VIEW_ID,
+      pluginId: 'p1',
+      guiTree: makeTree(),
+      meta: { badge: '2', title: 'Todos' },
+      placement: 'composer.tray',
+      updatedAt: 100,
+    }
+    expect(entry.placement).toBe('composer.tray')
+    const store = makeStore(entry)
+    const wrapper = mountHost(store)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-testid="ansi-text"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Hello')
+  })
+
   it('TC3 默认 empty（不传）无 view：placeholder 占位回归', async () => {
     const store = makeStore(undefined)
     const wrapper = mountHost(store, '我的视图')

@@ -24,6 +24,9 @@ export type {
   // 插件 UI 快照（plugin.ui.snapshot 拉取 reply，ADR-0097 拉为主）——runtime store /
   // renderer bridge 跨包具名消费
   ViewSnapshotItem, PluginUiSnapshotPayload,
+  // views.update 载荷可选 meta（composer-tray-protocol D7）：角标/状态/进度动态信息
+  // （runtime views-api / plugin-sdk 跨包具名消费）
+  PluginViewMeta,
   WatchdogMemoryLevel, WatchdogMemoryPressurePayload,
   RollingRestartState, RollingRestartReason, RollingRestartInflightSummary,
   RollingRestartDeferredPayload, RollingRestartCountdownPayload, RollingRestartForcedPayload,

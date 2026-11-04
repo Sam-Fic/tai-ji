@@ -61,7 +61,23 @@ export const CONTENT_SLOT_PLACEMENTS = [
   'overlay.content',
   'sidebar.tab',
   'settings.section',
+  // composer-tray-protocol D1/M1 同批登记两族（均无派生视图——宿主通道消费）：
+  // - composer.tray：托盘 widget 位（扩展 setWidget 通道统一盖印，消费方 = 托盘 widget
+  //   区按 placement 过滤）。不登记则插件声明托盘位被判 unknown-placement 不可用。
+  // - host.embed：宿主内嵌族（宿主组件按 viewId 定点消费的树，不进标签条容器）。
+  //   不登记则 scheduler-manager 补声明触发 unknown-placement 告警链 + 声明标不可用，
+  //   与真坏声明混流（G3）。
+  'composer.tray',
+  'host.embed',
 ] as const
+
+/**
+ * 托盘 widget 位置族常量（composer-tray-protocol D1）：扩展 setWidget 通道的统一盖印值
+ * （API 即声明——扩展无清单，setWidget 即托盘位声明）。词表成员 SSOT =
+ * CONTENT_SLOT_PLACEMENTS（本常量是其成员的具名引用，同处登记防漂移）；
+ * 消费方 = renderer MessageBusBridge 扩展帧盖印 + U2 托盘过滤。
+ */
+export const COMPOSER_TRAY_PLACEMENT = 'composer.tray'
 
 /** 宿主渲染项的保留归属值：pluginId 恒为该值，确保不被插件卸载清理误清（§6.1 硬约束 2）。 */
 export const HOST_PLUGIN_ID = 'taiji-host'

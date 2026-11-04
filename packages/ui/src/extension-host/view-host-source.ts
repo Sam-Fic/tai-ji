@@ -7,7 +7,7 @@
  * 只是参数形态不同——ui 侧契约先行，壳（P5）provide 真实实现，单测注入 mock 实现。
  *
  * ViewCacheEntry 形状对齐 core view-host-store：viewId/pluginId/guiTree/updatedAt
- * （+ meta / generation 可选）。guiTree 用 @zhushanwen/extension-protocol 的权威
+ * （+ meta / generation / placement 可选）。guiTree 用 @zhushanwen/extension-protocol 的权威
  * GuiComponent 类型（P2 GuiComponentRenderer 同源）。
  */
 import type { InjectionKey } from 'vue'
@@ -23,6 +23,10 @@ export interface ViewCacheEntry {
   meta?: WidgetMeta
   /** 全量替换代际（U2，plugin:viewUpdate 源携带；extension:widget 纯文本源无） */
   generation?: number
+  /** 容器位位置族章（composer-tray-protocol D1，契约原子批随 core 同步）：扩展源 =
+   *  bridge 盖印 'composer.tray'，插件源 = runtime 按清单声明盖印随帧携带；可选——
+   *  旧帧无章时条目无该键 */
+  placement?: string
   updatedAt: number
 }
 

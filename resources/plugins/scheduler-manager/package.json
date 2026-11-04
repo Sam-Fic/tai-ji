@@ -18,6 +18,17 @@
     "source": "built-in",
     "permissions": [
       "sessions.readState"
-    ]
+    ],
+    "contributes": {
+      "views": [
+        {
+          "id": "scheduler-manager.panel",
+          "view": "modal-scheduler-manager-scheduler-manager.panel",
+          "placement": "host.embed",
+          "title": "定时任务",
+          "icon": "clock"
+        }
+      ]
+    }
   }
 }

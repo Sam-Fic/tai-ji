@@ -3663,11 +3663,15 @@ function createMockPort_m2_m2_m2_m2_m2_m2_m2_m2_d1(): WorkerPort & { messages: u
  * 构造已接线的 PluginService（registerRpcMethods + rpcServer 注册 mock worker），
  * 返回 service + rpcServer + 依赖注入点（bus / broadcastFn / broker）。
  */
-function wiredPluginService(opts: { sessionService?: ISessionService } = {}) {
+function wiredPluginService(opts: { sessionService?: ISessionService; descriptors?: PluginDescriptor[] } = {}) {
   const broker = createMockBroker_m5()
   const broadcastFn = vi.fn()
   const deps: IPluginServiceDeps = { broadcastFn, ...opts }
-  const service = new PluginService(new PluginRegistry('/tmp/fake-project', '/tmp/fake-project'), broker, deps)
+  const registry = new PluginRegistry('/tmp/fake-project', '/tmp/fake-project')
+  // 会话域 views.update 存储资格校验（composer-tray-protocol D6）读本插件清单声明副本——
+  // 测试推树的插件须带 contributes.views descriptor（缺省无声明 → UNDECLARED_VIEW_ID 拒绝）。
+  if (opts.descriptors) registry.cacheDescriptors(opts.descriptors)
+  const service = new PluginService(registry, broker, deps)
   ;(service as unknown as { registerRpcMethods(): void }).registerRpcMethods()
   const rpcServer = (service as unknown as { rpcServer: { methods: Map<string, (params: Record<string, unknown>) => Promise<unknown>>; registerWorker(w: string, p: WorkerPort): void; dispatch(w: string, message: RpcRequest): Promise<void> } }).rpcServer
   const port = createMockPort_m2_m2_m2_m2_m2_m2_m2_m2_d1()
@@ -5354,9 +5358,15 @@ describe('plugin-extension-bus-publish', () => {
 // ══════════════════════════════════════════════════════════════
 
 describe('W08: plugin:viewUpdate 经 bus publish（transient）', () => {
+  /** p1 带 view 声明副本（D6 存储资格校验的判定输入；声明 placement 与盖印见 RL6 用例） */
+  const p1Declared = {
+    pluginId: 'p1',
+    contributes: { views: [{ id: 'v1', placement: 'sidebar.tab', title: 'V1' }] },
+  } as PluginDescriptor
+
   it('bus 装配 + 活跃 session → 订阅者收到、无 seq、不入 ring、seq 计数不变、不再 broadcast', async () => {
     const bus = new MessageBus()
-    const { service, broker, broadcastFn, dispatch } = wiredPluginService({ sessionService: createActiveSessionStub('s1') })
+    const { service, broker, broadcastFn, dispatch } = wiredPluginService({ sessionService: createActiveSessionStub('s1'), descriptors: [p1Declared] })
     service.setMessageBus(bus)
 
     const ws = createMockClient()
@@ -5387,7 +5397,7 @@ describe('W08: plugin:viewUpdate 经 bus publish（transient）', () => {
   })
 
   it('bus 未装配 → 回退全局广播（broadcastFn），消息不丢', async () => {
-    const { broadcastFn, dispatch } = wiredPluginService({ sessionService: createActiveSessionStub('s1') })
+    const { broadcastFn, dispatch } = wiredPluginService({ sessionService: createActiveSessionStub('s1'), descriptors: [p1Declared] })
 
     await dispatch('plugin.views.update', { pluginId: 'p1', viewId: 'v1', guiTree: [], sessionId: 's1' })
 

@@ -1776,11 +1776,22 @@ describe("view-host-store", () => {
         expect(view!.meta).toEqual(meta)
       })
 
+      it('meta 插件通道形态（composer-tray-protocol D7：badge-only 无 title）→ 窄化放行缓存透传', () => {
+        const { bus, store } = makeStore()
+        const meta = { badge: '2', status: 'running', progress: { current: 1, total: 3 } }
+        bus.emit({
+          kind: 'extension-widget',
+          sessionId: 's1',
+          widget: { viewId: 'plug-view', pluginId: 'plug-a', guiTree: [{ type: 'ansi-text', props: { lines: ['x'] } }], meta },
+        })
+        expect(store.getView(SESSION_SCOPE, 'plug-view')!.meta).toEqual(meta)
+      })
+
       it.each([
         ['undefined（v1 旧 wire 无 meta）', undefined],
         ['null', null],
         ['非对象（字符串）', 'Todo'],
-        ['缺 title 字符串', { status: 'running' }],
+        ['四字段族全非法（badge 非串 / status 超枚举 / progress 非对象）', { badge: 42, status: 'bogus', progress: 'x' }],
       ])('meta %s → 缓存条目无 meta 键', (_label, meta) => {
         const { bus, store } = makeStore()
         bus.emit({
@@ -1830,6 +1841,46 @@ describe("view-host-store", () => {
         bus.emit({ kind: 'extension-widget', widget: { viewId: 'ghost', pluginId: 'p', guiTree: [{ type: 'card', props: { body: [] } }] } })
         expect(store.getView(SESSION_SCOPE, 'ghost')).toBeUndefined()
         expect(store.getViewIds(SESSION_SCOPE)).toHaveLength(0)
+      })
+
+      // ── placement 章（composer-tray-protocol D1 / RL2 RL1 前置：条目字段随帧透传）──
+
+      it('placement 透传（插件帧形态）：widget.placement → 缓存条目 placement 字段保持', () => {
+        const { bus, store } = makeStore()
+        bus.emit({
+          kind: 'extension-widget',
+          sessionId: 's1',
+          widget: { viewId: 'plug-view', pluginId: 'plug-a', guiTree: [{ type: 'ansi-text', props: { lines: ['x'] } }], placement: 'composer.tray' },
+        })
+        expect(store.getView(SESSION_SCOPE, 'plug-view')!.placement).toBe('composer.tray')
+      })
+
+      it('placement 缺省（旧帧无章）：缓存条目无 placement 键（旧组合零变化）', () => {
+        const { bus, store } = makeStore()
+        bus.emit({ kind: 'extension-widget', sessionId: 's1', widget: { viewId: 'legacy', pluginId: 'p', guiTree: [{ type: 'ansi-text', props: { lines: ['x'] } }] } })
+        const view = store.getView(SESSION_SCOPE, 'legacy')
+        expect(view).toBeDefined()
+        expect('placement' in view!).toBe(false)
+      })
+
+      it('重推换章：placement 随最新帧整体替换（托盘族 → 声明族切换不残留旧章）', () => {
+        const { bus, store } = makeStore()
+        bus.emit({ kind: 'extension-widget', sessionId: 's1', widget: { viewId: 'v', pluginId: 'p', guiTree: [{ type: 'ansi-text', props: { lines: ['1'] } }], placement: 'composer.tray' } })
+        expect(store.getView(SESSION_SCOPE, 'v')!.placement).toBe('composer.tray')
+        bus.emit({ kind: 'extension-widget', sessionId: 's1', widget: { viewId: 'v', pluginId: 'p', guiTree: [{ type: 'ansi-text', props: { lines: ['2'] } }], placement: 'host.embed' } })
+        expect(store.getView(SESSION_SCOPE, 'v')!.placement).toBe('host.embed')
+      })
+
+      it('RL2 扩展通道端到端：extension:widget/widgetGui 帧经 bridge 盖印 composer.tray 落缓存条目（写入点单测——五个既有托盘 widget 按钮照常出现的前提）', () => {
+        // 真实链路：MockMessageSource → MessageBusBridge.parseExtensionWidget（盖印点）
+        // → bus extension-widget → ViewHostStore.consumeWidget → ViewCacheEntry.placement
+        const { bus, store } = makeStore()
+        const source = new MockMessageSource()
+        new MessageBusBridge({ source, bus })
+        source.emit({ type: 'extension:widget', payload: { sessionId: 's1', widgetKey: 'todo', lines: ['task-1'] } })
+        source.emit({ type: 'extension:widgetGui', payload: { sessionId: 's1', widgetKey: 'goal', gui: { type: 'ansi-text', props: { lines: ['42%'] } } } })
+        expect(store.getView(SESSION_SCOPE, 'todo')!.placement).toBe('composer.tray')
+        expect(store.getView(SESSION_SCOPE, 'goal')!.placement).toBe('composer.tray')
       })
     })
 

@@ -86,6 +86,10 @@ import type { ReadinessSnapshot, SessionsRecoveryProgressPayload } from './readi
 // 消除 shared 侧双声明漂移（engine-provider-unification D5）。
 import type { PlanLifecycleState, SubagentEngineModelInfo } from '@zhushanwen/extension-protocol'
 
+// PluginViewMeta（widget 宿主元数据形状 SSOT 直引）：Partial<WidgetMeta>，字面量形状
+// 单源于 extension-protocol core/types（插件 views.update 可选 meta，D7——镜像会造双源）。
+import type { WidgetMeta } from '@zhushanwen/extension-protocol'
+
 // canvas 域载荷形状 SSOT 直引（problem-solve-canvas U1 契约；canonical =
 // packages/extension-protocol/src/extensions/canvas，barrel 已 re-export）——
 // CanvasState / CanvasListEntry / CanvasMutateReply / CanvasMutateRequest 等形状
@@ -717,6 +721,14 @@ export interface HeaderActionUpdatePayload {
 }
 
 /**
+ * 插件 views.update 载荷可选 meta（composer-tray-protocol D7）：角标/状态/进度动态
+ * 信息，字段形状与扩展通道 WidgetMeta 同形但全字段可选（Partial）——插件托盘按钮
+ * 的标题/图标取清单声明（D7：静态信息权威位 = contributes.views，两处来源会漂移），
+ * title 仅作透传兼容（扩展通道语义），旧插件不传 meta = 按钮无角标无状态色。
+ */
+export type PluginViewMeta = Partial<WidgetMeta>
+
+/**
  * 插件视图载荷基座（'plugin:viewUpdate' 广播与 'plugin:uiSnapshot' 快照条目共用——
  * 同构由类型引用构造性保证，快照回放与实时帧两路同函数）。
  *
@@ -744,6 +756,16 @@ export interface PluginViewPayloadBase {
   /** 全局域归属（Provider 页等无会话挂载位）：分区键 global:<mountId>:<pluginId>。
    *  pluginId 取自 RPC 身份（fork 与 pluginId 一对一），不接受载荷自报 */
   mountId?: string
+  /**
+   * 容器位位置族章（composer-tray-protocol D1，开放字符串——已知族词表 SSOT =
+   * core CONTENT_SLOT_PLACEMENTS）：会话域按插件清单声明的 placement 盖印（D6 存储
+   * 资格制——未命中声明的会话域推树在 runtime 被拒，章必随声明而来）；全局域
+   * mountId 分支维持现状不盖印。消费端（托盘 widget 区）按 placement === 托盘族
+   * 过滤；快照链随批携带（广播与快照载荷同构，补收回写不丢章）。
+   */
+  placement?: string
+  /** 角标/状态/进度动态信息（D7），形状见 PluginViewMeta；缺省 = 无角标无状态色 */
+  meta?: PluginViewMeta
 }
 
 /**

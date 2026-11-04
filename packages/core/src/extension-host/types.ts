@@ -43,13 +43,17 @@ export interface DialogRequest {
  *  ViewHostStore 消费时窄化为 WidgetMeta）。
  *  generation 为全量替换代际（provider-plugin-access U2）：plugin:viewUpdate 帧携带
  *  （extension:widget 纯文本源无代际）——同 (scope, viewId) 单调递增，新值整体替换
- *  旧树（不做增量 merge），透传进缓存条目供消费方判别。 */
+ *  旧树（不做增量 merge），透传进缓存条目供消费方判别。
+ *  placement 为容器位位置族章（composer-tray-protocol D1）：扩展帧由 bridge 盖印
+ *  'composer.tray'（COMPOSER_TRAY_PLACEMENT），插件帧自 runtime 随声明携带，透传进
+ *  缓存条目供消费方（托盘过滤）分派。 */
 export interface WidgetPayload {
   viewId: string
   pluginId: string
   guiTree: unknown[]
   meta?: unknown
   generation?: number
+  placement?: string
 }
 
 /** 消息装饰（IF2/DM3）。 */

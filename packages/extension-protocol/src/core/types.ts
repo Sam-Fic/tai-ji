@@ -103,36 +103,7 @@ export interface GuiComponentProps {
    * 降级判定单点在 core resolveComponent）。
    */
   'action-bar': {
-    items: {
-      id: string
-      label: string
-      /** 视觉档位：只保留当前唯一实际消费的 danger（删除按钮）；更多档位有真实消费方时再加 */
-      kind?: 'danger'
-      disabled?: boolean
-      /** 缺省 = 纯展示项（不可点、弱化样式） */
-      commandId?: string
-      /** 只许标量：args 原样传给插件 handler，禁嵌套对象防无 schema 结构化旁路（设计 AP-3 校验） */
-      args?: Record<string, string | number | boolean>
-      /**
-       * 宿主容器导航（容器扩展点统一 §6.4 导航原语）：声明后点击请求宿主打开
-       * 对应容器（浮层/抽屉）的 tabId 标签页，不经命令链；与 commandId 互为两条
-       * 执行路径（commandId 优先走既有命令链，宿主执行器裁决）。
-       */
-      hostAction?: HostContainerAction
-      /**
-       * 两段式确认提示文案（tray-panel-interact 设计 §3.3 D5）：声明后宿主渲染两段式——
-       * 首击翻确认态（danger 色 + 本文案），再击才执行（在途态禁用防重复 RPC），
-       * 超时或指针离开复位确认态。确认闸是插件侧产品判断、宿主按声明渲染
-       * （2026-10-19「宿主不擅自加闸」裁决的声明式落地），不声明 = 点击即执行（旧行为）。
-       *
-       * **降级契约**：不认识本字段的旧宿主忽略字段、按钮照常渲染、点击即执行——
-       * 与 action-bar type 本身的降级先例同款（新增可选字段不 bump PROTOCOL_VERSION，
-       * types.ts 上方头注）。危险操作（abort 不可恢复）靠 confirm 声明与按钮同波交付
-       * 消除「有按钮无确认」的独立暴露窗口；扩展侧无宿主能力探测通道，残余降级暴露
-       * 窗口 = dev 混跑环境，登记为部署纪律约束。
-       */
-      confirm?: string
-    }[]
+    items: ActionBarItem[]
   }
 
   /**
@@ -216,6 +187,43 @@ export interface StatItem {
   icon?: string
 }
 
+/**
+ * 操作按钮条目（action-bar items 与 TreeItem.actions 行内操作槽共用的单一形状
+ * ——composer-tray-protocol D2：行内操作槽条目与既有 action-bar items 同构，
+ * 同构由类型引用构造性保证，禁双轨副本）。字段语义与降级契约见 'action-bar'
+ * props 内的历史定义（confirm 两段式确认 / hostAction 容器导航 / args 限标量）。
+ */
+export interface ActionBarItem {
+  id: string
+  label: string
+  /** 视觉档位：只保留当前唯一实际消费的 danger（删除按钮）；更多档位有真实消费方时再加 */
+  kind?: 'danger'
+  disabled?: boolean
+  /** 缺省 = 纯展示项（不可点、弱化样式） */
+  commandId?: string
+  /** 只许标量：args 原样传给插件 handler，禁嵌套对象防无 schema 结构化旁路（设计 AP-3 校验） */
+  args?: Record<string, string | number | boolean>
+  /**
+   * 宿主容器导航（容器扩展点统一 §6.4 导航原语）：声明后点击请求宿主打开
+   * 对应容器（浮层/抽屉）的 tabId 标签页，不经命令链；与 commandId 互为两条
+   * 执行路径（commandId 优先走既有命令链，宿主执行器裁决）。
+   */
+  hostAction?: HostContainerAction
+  /**
+   * 两段式确认提示文案（tray-panel-interact 设计 §3.3 D5）：声明后宿主渲染两段式——
+   * 首击翻确认态（danger 色 + 本文案），再击才执行（在途态禁用防重复 RPC），
+   * 超时或指针离开复位确认态。确认闸是插件侧产品判断、宿主按声明渲染
+   * （2026-10-19「宿主不擅自加闸」裁决的声明式落地），不声明 = 点击即执行（旧行为）。
+   *
+   * **降级契约**：不认识本字段的旧宿主忽略字段、按钮照常渲染、点击即执行——
+   * 与 action-bar type 本身的降级先例同款（新增可选字段不 bump PROTOCOL_VERSION，
+   * types.ts 上方头注）。危险操作（abort 不可恢复）靠 confirm 声明与按钮同波交付
+   * 消除「有按钮无确认」的独立暴露窗口；扩展侧无宿主能力探测通道，残余降级暴露
+   * 窗口 = dev 混跑环境，登记为部署纪律约束。
+   */
+  confirm?: string
+}
+
 export interface TreeItem {
   icon?: TreeItemIcon
   label: string
@@ -233,6 +241,33 @@ export interface TreeItem {
     /** 宿主容器导航（打开浮层/抽屉的某个标签页） */
     hostAction?: HostContainerAction
   }
+  /**
+   * 副文本（composer-tray-protocol D2 富行三字段之一）：主名下方的弱化小字
+   * （如 subagent 行的 slug / 失败分类），宿主单行截断渲染。缺省 = 无副文本
+   * （旧行为）。
+   *
+   * **降级契约**：不认识本字段的旧宿主按字段忽略，退回单行 label 渲染，非
+   * 错误状态——confirm 字段同款先例（可选字段新增不 bump PROTOCOL_VERSION）；
+   * ansi-text 序列化降级只适用于未知组件 type，不适用本字段族。
+   */
+  subLabel?: string
+  /**
+   * 状态文字覆盖（D2/D3 渲染序第一档）：推送方自带的状态标签文字（如
+   * 「已中断（可续跑）」），优先于宿主按 status 封闭枚举的 i18n 映射（第二档）；
+   * 两档皆无的行不渲染状态标签（维持纯文本行）。
+   *
+   * **降级契约**：同 subLabel——旧宿主按字段忽略，不渲染状态标签，非错误状态。
+   */
+  statusLabel?: string
+  /**
+   * 行内操作槽（D2/D4）：行尾内联按钮，条目形状与 action-bar items 同构
+   * （ActionBarItem 类型引用）——取消/重试等操作从兄弟 action-bar 块收进行尾，
+   * 复用既有两段式确认状态机与 pin 门控语义（D4）。缺省 = 无行内操作（旧行为）。
+   *
+   * **降级契约**：同 subLabel——旧宿主按字段忽略，行内操作不显示，行浏览与
+   * 行点击导航不受影响，非错误状态。
+   */
+  actions?: ActionBarItem[]
 }
 export type TreeItemIcon = 'arrow' | 'check' | 'cross' | 'circle' | 'dot' | 'pause' | 'branch'
 

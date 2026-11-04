@@ -100,6 +100,14 @@ export async function registerMountPoints(): Promise<void> {
   mountRegistryImpl.register('drawer.tab')
   mountRegistryImpl.register('overlay.content')
   mountRegistryImpl.register('settings.section')
+  // 托盘族两挂载点（composer-tray-protocol D1/M1 同波，与 CONTENT_SLOT_PLACEMENTS 两族
+  // 登记配套）：composer.tray（托盘 widget 位——扩展 setWidget 通道 bridge 盖印；插件
+  // 声明侧无宿主容器消费，托盘过滤由消费方按 placement 判定）/ host.embed（宿主内嵌族
+  // ——宿主组件按 viewId 定点消费，如 scheduler-manager 浮层面板段）。不注册则插件的
+  // 同名声明经 routeAll 判 unregistered-mount-point（告警 + available=false 置灰），
+  // 与真坏声明混流。两族均无派生视图（注册表词表成员、路由合法）。
+  mountRegistryImpl.register('composer.tray')
+  mountRegistryImpl.register('host.embed')
 }
 
 // 声明通路订阅句柄（容器扩展点统一 §6.2）：scanContributions 重复调用时先退订旧订阅

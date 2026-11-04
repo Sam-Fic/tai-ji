@@ -28,13 +28,17 @@ import type { SessionScopedMap } from './utils/session-scoped-map'
 import type { WidgetPayload } from './types'
 
 /** view 缓存条目（IF10 契约）。meta 为 widget 宿主元数据（托盘 widget 区 head/badge 渲染），可选。
- *  generation 为全量替换代际（U2，plugin:viewUpdate 源携带；extension:widget 纯文本源无）。 */
+ *  generation 为全量替换代际（U2，plugin:viewUpdate 源携带；extension:widget 纯文本源无）。
+ *  placement 为容器位位置族章（composer-tray-protocol D1）：扩展源 = bridge 盖印
+ *  'composer.tray'，插件源 = runtime 按清单声明盖印随帧携带；快照回放帧透传保持（补收
+ *  链不丢章）。可选——旧帧无章时条目无该键（U2a 托盘过滤按 placement === 托盘族判定）。 */
 export interface ViewCacheEntry {
   viewId: string
   pluginId: string
   guiTree: GuiComponent[]
   meta?: WidgetMeta
   generation?: number
+  placement?: string
   updatedAt: number
 }
 
@@ -141,17 +145,25 @@ export class ViewHostStore {
       guiTree,
       ...(meta !== undefined ? { meta } : {}),
       ...(widget.generation !== undefined ? { generation: widget.generation } : {}),
+      ...(widget.placement !== undefined ? { placement: widget.placement } : {}),
       updatedAt: Date.now(),
     })
     this.notifyListeners()
   }
 
-  /** 窄化 unknown → WidgetMeta：title 是 string 即认（最小形状校验，progress/status
-   *  深度字段由消费端（托盘 widget 区）按可选处理，脏数据不崩）。非法形状丢弃（undefined）。 */
+  /** 窄化 unknown → WidgetMeta：最小形状校验（progress/status 深度字段由消费端（托盘
+   *  widget 区）按可选处理，脏数据不崩）。锚四字段族任一合法即认——title（扩展通道
+   *  head 标题）/ badge（composer-tray-protocol D7：插件通道只推 badge/status/progress
+   *  动态信息，标题取清单声明，meta 可无 title）/ status（枚举值）/ progress（对象）。
+   *  非法形状丢弃（undefined）。 */
   private narrowMeta(raw: unknown): WidgetMeta | undefined {
     if (raw === null || typeof raw !== 'object') return undefined
     const obj = raw as Record<string, unknown>
-    return typeof obj.title === 'string' ? (raw as WidgetMeta) : undefined
+    const hasTitle = typeof obj.title === 'string'
+    const hasBadge = typeof obj.badge === 'string'
+    const hasStatus = obj.status === 'running' || obj.status === 'done' || obj.status === 'failed' || obj.status === 'idle'
+    const hasProgress = typeof obj.progress === 'object' && obj.progress !== null
+    return (hasTitle || hasBadge || hasStatus || hasProgress) ? (raw as WidgetMeta) : undefined
   }
 
   /**
