@@ -58,6 +58,13 @@ const TABLE_REPLY = [
 /** 'md-table' 哨兵词判定（大小写不敏感，容许 md_table / md table 分隔变体） */
 const TABLE_TRIGGER_RE = /md[-_ ]?table/i;
 
+/** mermaid 图表回复（关键词 'md-mermaid' 触发）—— 供 e2e/font-custom-mermaid.spec.ts
+ *  的字体跟随断言取数。哨兵词同样是 ASCII 形态，避免自然语言误触发。 */
+const MERMAID_REPLY = ["```mermaid", "graph TD", "  A[起点] --> B[终点]", "```"].join("\n");
+
+/** 'md-mermaid' 哨兵词判定（须先于 md-table 判定——两者都以 md- 开头） */
+const MERMAID_TRIGGER_RE = /md[-_ ]?mermaid/i;
+
 /** 按字符/词切分，证明逐块推送 —— 仅本文件流式阶段 helper 使用 */
 function splitChunks(text: string): string[] {
   return (
@@ -287,9 +294,11 @@ export async function runSendStream(
   const messageId = nextId("m");
   // 哨兵词 'md-table' → markdown 宽表回复（列宽地板 e2e 检查数据源，见 TABLE_REPLY）；
   // 其余走固定回复。表格前留空行：段落到表格显式分块，避免依赖 GFM 的段落中断行为。
-  const reply = TABLE_TRIGGER_RE.test(text)
-    ? `已处理："${text}"。\n\n${TABLE_REPLY}`
-    : `已处理："${text}"。\n${CANNED_REPLY}`;
+  const reply = MERMAID_TRIGGER_RE.test(text)
+    ? `已处理："${text}"。\n\n${MERMAID_REPLY}`
+    : TABLE_TRIGGER_RE.test(text)
+      ? `已处理："${text}"。\n\n${TABLE_REPLY}`
+      : `已处理："${text}"。\n${CANNED_REPLY}`;
 
   emit(sessionId, {
     type: "message.message_start",

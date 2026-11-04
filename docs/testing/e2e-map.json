@@ -5656,6 +5656,74 @@
       "owner": "scripts/",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
       "note": "R1 态：main 侧 gate-verdict-ssot 收敛（ADR-0170~0175）的工程件，随 feat-quota-cookie-refresh 合并 main 带入；日常 CI 由 ci.yml scripts-guards 步骤聚合判红。"
+    },
+    {
+      "id": "E2E-FONTS-01",
+      "summary": "字体渲染真机断言：构建产物 .font-mono 走 var(--font-mono) / 默认态 computed 保留完整构建期栈 / 槽位写入与清除 / 失效回落 / 宿主兄弟字段不变",
+      "scope": [
+        "packages/shared/src/tailwind-preset.ts",
+        "packages/renderer/src/style.css",
+        "packages/core/src/domain/settings/**",
+        "packages/ui/src/features/settings/apply-system-to-dom.ts",
+        "packages/renderer/src/composables/shell/useSettingsShell.ts"
+      ],
+      "layer": "L3",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "e2e/font-custom-render.spec.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "env -u ELECTRON_RUN_AS_NODE npx playwright test e2e/font-custom-render.spec.ts --project=electron",
+      "owner": "packages/renderer",
+      "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
+      "note": "R2：改字体槽位/构建期栈/设置持久化时在 dev-flow 验收阶段跑（空载串行）。断言全为浏览器渲染事实（computed font-family / var() 代入 / rect），happy-dom 无判别力故必须真机"
+    },
+    {
+      "id": "E2E-FONTS-02",
+      "summary": "mermaid 字体跟随：字体变化后在无人工干预下图表文字跟随，且 SVG 内不残留旧家族名（区分继承与重渲）",
+      "scope": [
+        "packages/ui/src/features/chat/mermaid.ts",
+        "packages/ui/src/features/chat/MermaidRenderer.vue"
+      ],
+      "layer": "L3",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "e2e/font-custom-mermaid.spec.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "env -u ELECTRON_RUN_AS_NODE npx playwright test e2e/font-custom-mermaid.spec.ts --project=electron",
+      "owner": "packages/ui",
+      "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
+      "note": "R2：改 mermaid 渲染或字体槽位写入链时跑。mermaid 在 mock DOM 里 render 静默返回空串，只有真机能断言"
+    },
+    {
+      "id": "E2E-FONTS-03",
+      "summary": "font:read-bytes 通道边界：非字体文件被拒 / 超 20MB 被拒且不读入内存 / 凭据目录禁区拦截",
+      "scope": [
+        "apps/electron/main/gateway/font-handlers.ts",
+        "apps/electron/preload/preload.ts",
+        "packages/shared/src/ipc-channels.ts",
+        "packages/shared/src/ipc-payloads.ts"
+      ],
+      "layer": "L3",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "e2e/font-custom-ipc.spec.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "env -u ELECTRON_RUN_AS_NODE npx playwright test e2e/font-custom-ipc.spec.ts --project=electron",
+      "owner": "apps/electron",
+      "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
+      "note": "R2：改 IPC 读取通道或其校验时跑。纯校验函数三关与禁区在 L1 单测已覆盖，本 spec 只验真机拒绝行为"
     }
   ]
 }
