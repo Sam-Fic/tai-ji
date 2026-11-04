@@ -359,3 +359,68 @@ test('RE3: 切到无 workflow 数据的 session → widget 条目摘除，切回
     await cleanupRealApp(cleanup, dataDir, run.projectDir, ...(emptyProjectDir ? [emptyProjectDir] : []))
   }
 })
+
+// ── RE4: composer-tray-protocol A2——富行结构（行四段 + 状态胶囊 + 行内操作槽）──
+// 设计 §4.1 V2（L3 脚本半边：行结构 testid + 状态标签文字断言）；载体选择登记（impl-plan
+// A2 verifyAsset 判 new 场景剧本，实际落位 = 本 spec 扩展——复用既有装配助手与 E2E-REAL-01
+// R2 登记，免新开 e2e-map 条目，dev-flow D3 编译 ledger 有登记）。
+
+test('RE4: workflow 面板富行结构——主名/subLabel 副文本/状态胶囊/行内中止（D2/D3/D4/D8）', async () => {
+  test.setTimeout(240_000)
+  const { page, port, run, cleanup, dataDir } = await launchWithProbeRun()
+  try {
+    await waitForWorkflowWidgetRunning(page)
+    await waitForWorkflowRecords(port, run.sessionId)
+
+    const panel = await openWidgetPanel(page, 'workflow')
+    const row = workflowRows(panel).first()
+
+    // 行四段之一主名：label 只放 scriptName（D8——slug/成员进度已迁 subLabel）
+    await expect(row).toContainText(PROBE_NAME)
+    // 行四段之二副文本：subLabel 段在场且非空（slug · 成员进度 N/M）
+    await expect(row.getByTestId('list-tree-sub-label')).toBeVisible()
+    await expect(row.getByTestId('list-tree-sub-label')).not.toHaveText('')
+    // 行四段之三状态胶囊：running → 宿主 i18n 枚举映射档（D3 渲染序 statusLabel ?? i18n）
+    await expect(row.getByTestId('list-tree-status')).toHaveText('运行中')
+    // 行四段之四行内操作槽：running 行的中止按钮内嵌行尾（pin 态可见——openWidgetPanel
+    // 点击即 pin；不再有兄弟 action-bar 独立块，D4/D8）
+    await expect(row.locator('[data-testid^="gui-action-bar-item-abort-"]')).toBeVisible()
+  } finally {
+    run.closeListen()
+    await cleanupRealApp(cleanup, dataDir, run.projectDir)
+  }
+})
+
+// ── RE5: composer-tray-protocol A4——中止经行内两段式确认 → 终态后无数字角标 ──
+// 设计 §4.1 V3（红色 0 角标根因消除的真机集成态：推送侧 running>0 才推 badge（D8）
+// × 宿主角标链第三档退役（badge ?? progress.label 两档）双缺 → running=0 时按钮无角标）。
+
+test('RE5: 行内中止两段式确认 → run 终态后 workflow 按钮无角标（D8/A4）', async () => {
+  test.setTimeout(240_000)
+  const { page, port, run, cleanup, dataDir } = await launchWithProbeRun()
+  try {
+    await waitForWorkflowWidgetRunning(page)
+    await waitForWorkflowRecords(port, run.sessionId)
+    // 起跑态基线：1 个运行中 run → badge 在场（D8 badge=String(running) 规则）
+    await expect(widgetButton(page, 'workflow').getByTestId('tray-widget-badge')).toHaveText('1')
+
+    const panel = await openWidgetPanel(page, 'workflow')
+    const abortButton = () => panel.locator('[data-testid^="gui-action-bar-item-abort-"]').first()
+    // 两段式确认（D4 状态机：首击翻确认态「确认中止？」，再击执行）
+    await abortButton().click()
+    await expect(abortButton()).toContainText('确认中止？')
+    await abortButton().click()
+
+    // 终态：running=0 → 推送侧不再推 badge（D8）+ 宿主无第三档兜底（U2a 退役）→
+    // 按钮无数字角标（红色 0 消失）、呼吸点熄灭
+    await expect(widgetButton(page, 'workflow').getByTestId('tray-widget-badge')).toHaveCount(0, {
+      timeout: 30_000,
+    })
+    await expect(widgetButton(page, 'workflow').getByTestId('tray-widget-pulse')).toHaveCount(0, {
+      timeout: 15_000,
+    })
+  } finally {
+    run.closeListen()
+    await cleanupRealApp(cleanup, dataDir, run.projectDir)
+  }
+})
