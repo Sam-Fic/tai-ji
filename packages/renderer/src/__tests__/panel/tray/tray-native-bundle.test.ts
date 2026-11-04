@@ -661,7 +661,7 @@ function makeChild(overrides: Partial<SessionSummary> & { id: string }): Session
   }
 }
 
-describe('useTrayCounts session kind（第 4 件子会话，u7 / 设计 mode-system-composer-density §6.7 D7）', () => {
+describe('useTrayCounts session kind（第 4 件子会话，u7；原设计档 mode-system-composer-density §6.7 D7 已退役不可达，git 可追溯）', () => {
   it('仅计 parentAgentSessionId === 当前 sessionId：父为 null 的根会话 / 别人（SID2）的子会话都不计入', () => {
     useSessionStore().applySnapshot({
       groups: [

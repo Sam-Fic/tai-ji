@@ -423,7 +423,7 @@ const builtinItems = computed<BuiltinItem[]>(() =>
 )
 
 /** 计数徽标值：session 件 = 子会话总数、canvas 件 = 画布总数（数量型类别徽标 = total，
- * 进行中信号由呼吸点承载，设计 `mode-system-composer-density` §6.7 D7 同款），
+ * 进行中信号由呼吸点承载——原设计档 mode-system-composer-density §6.7 D7 已退役不可达，设计依据 git 可追溯），
  * 其余件 = 进行中数 */
 function badgeCount(item: BuiltinItem): number {
   return item.kind === 'session' || item.kind === 'canvas' ? item.total : item.running

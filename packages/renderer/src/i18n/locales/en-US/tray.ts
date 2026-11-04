@@ -100,7 +100,7 @@ export default {
       allTools: 'All tools',
     },
     /**
-     * Fourth entry "child sessions" (u7, design mode-system-composer-density §6.7 D7).
+     * Fourth entry "child sessions" (u7; original design doc mode-system-composer-density §6.7 D7 retired and unreachable, design basis traceable via git).
      * Row status copy mirrors TraySessionPanel's process-level status map (see DISPLAY_STATUS in
      * composables/logic/sessionStatus.ts).
      */
