@@ -13,6 +13,8 @@
  * - fontScales → <html data-fs-sidebar/chat/drawer>（[data-fs-*] 规则映射 --font-scale-<region>，
  *   区域根节点 [data-fs-scope] 槽位重声明 --text-* 链实现分区缩放；chat scope 的语义挂点
  *   = MessageStream 根 + btw composer 带，drawer 内嵌对话流随之跟 chat 档）
+ * - fonts.ui / fonts.mono → <html> 内联 CSS 自定义属性槽位 --font-ui / --font-mono-ui
+ *   （font-system D8）；**绝不写终值变量** --font-sans / --font-mono
  * - locale → 经 deps.setLocale 注入（ui 不持有 i18n 全局实例，W4 壳传入真实 setLocale）
  *
  * SSR 检查：typeof document === 'undefined' 时早返（不抛错），保证同构安全。
@@ -34,6 +36,28 @@ export function resolveTheme(theme: SystemSettings['theme']): 'light' | 'dark' {
   // matchMedia 可能在老环境/SSR 缺失，兜底暗色（与应用暗默认一致）
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return 'dark'
   return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+}
+
+/**
+ * 字体槽位写入/清除（font-system D8）。
+ *
+ * 两条硬约束：
+ * 1. 值必须带引号（家族名可含空格，如 `Maple Mono`）；
+ * 2. 清除走 `removeProperty`——`setProperty(name, '')` 留下的是「已声明但值为空 token 流」，
+ *    会让 `var(--slot, 构建期栈)` 的缺省参数失效（默认态即击穿全站字体栈，实测）。
+ *    removeProperty 回到「未声明」，回落链才生效。
+ */
+function applyFontSlot(
+  style: CSSStyleDeclaration,
+  property: '--font-ui' | '--font-mono-ui',
+  family: string | undefined,
+): void {
+  const value = typeof family === 'string' ? family.trim() : ''
+  if (value) {
+    style.setProperty(property, `'${value}'`)
+  } else {
+    style.removeProperty(property)
+  }
 }
 
 /**
@@ -65,4 +89,9 @@ export function applySystemToDom(
   if (s.locale && deps?.setLocale) {
     deps.setLocale(s.locale)
   }
+
+  // 字体槽位（font-system D8）：只写槽位，绝不写终值 --font-sans / --font-mono——
+  // 写终值会以内联样式击穿样式表里的回落链声明。
+  applyFontSlot(root.style, '--font-ui', s.fonts?.ui)
+  applyFontSlot(root.style, '--font-mono-ui', s.fonts?.mono)
 }

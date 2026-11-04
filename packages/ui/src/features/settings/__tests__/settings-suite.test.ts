@@ -269,14 +269,23 @@ function makeSystem(over: Partial<SystemSettings> = {}): SystemSettings {
 describe('applySystemToDom', () => {
   let setAttribute: ReturnType<typeof vi.fn>
   let matchMediaMock: ReturnType<typeof vi.fn>
+  let styleSetProperty: ReturnType<typeof vi.fn>
+  let styleRemoveProperty: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     setAttribute = vi.fn()
     matchMediaMock = vi.fn()
+    styleSetProperty = vi.fn()
+    styleRemoveProperty = vi.fn()
     // happy-dom 提供 document.documentElement
     vi.stubGlobal('document', {
       ...((globalThis as any).document ?? {}),
-      documentElement: { setAttribute, dataset: {} as Record<string, string> },
+      documentElement: {
+        setAttribute,
+        dataset: {} as Record<string, string>,
+        // 字体槽位写入目标（内联 style）；真实 setProperty/removeProperty 语义见 useSettingsShell 测试
+        style: { setProperty: styleSetProperty, removeProperty: styleRemoveProperty },
+      },
     })
     vi.stubGlobal('window', { matchMedia: matchMediaMock })
   })
@@ -363,6 +372,39 @@ describe('applySystemToDom', () => {
     expect(resolveTheme('system')).toBe('dark')
     expect(resolveTheme('light')).toBe('light')
     expect(resolveTheme('dark')).toBe('dark')
+  })
+
+  // ── 字体槽位（font-system D8）：只写槽位、绝不写终值；清除用 removeProperty ──
+  it('fonts.ui 写入槽位 --font-ui，值带引号（家族名可含空格）', () => {
+    applySystemToDom(makeSystem({ fonts: { ui: 'Maple Mono' } }))
+    expect(styleSetProperty).toHaveBeenCalledWith('--font-ui', "'Maple Mono'")
+  })
+
+  it('fonts.mono 写入槽位 --font-mono-ui，两槽位独立', () => {
+    applySystemToDom(makeSystem({ fonts: { mono: 'Fira Code' } }))
+    expect(styleSetProperty).toHaveBeenCalledWith('--font-mono-ui', "'Fira Code'")
+    expect(styleSetProperty).not.toHaveBeenCalledWith('--font-ui', expect.anything())
+  })
+
+  it('槽位缺失/空串 → removeProperty（删除属性=回到未声明），不用 setProperty(name, \'\')', () => {
+    applySystemToDom(makeSystem({ fonts: { ui: '', mono: undefined } }))
+    expect(styleRemoveProperty).toHaveBeenCalledWith('--font-ui')
+    expect(styleRemoveProperty).toHaveBeenCalledWith('--font-mono-ui')
+    // 空值绝不能走 setProperty——那是「声明为空 token 流」，会让 var() 缺省参数失效
+    expect(styleSetProperty).not.toHaveBeenCalled()
+  })
+
+  it('无 fonts 字段 → 两槽位均 removeProperty（默认态回到构建期字体栈）', () => {
+    applySystemToDom(makeSystem())
+    expect(styleRemoveProperty).toHaveBeenCalledWith('--font-ui')
+    expect(styleRemoveProperty).toHaveBeenCalledWith('--font-mono-ui')
+  })
+
+  it('绝不写终值变量 --font-sans / --font-mono（写终值会击穿样表回落链）', () => {
+    applySystemToDom(makeSystem({ fonts: { ui: 'Maple Mono', mono: 'Fira Code' } }))
+    const written = styleSetProperty.mock.calls.map((c) => c[0])
+    expect(written).not.toContain('--font-sans')
+    expect(written).not.toContain('--font-mono')
   })
 })
 

@@ -31,9 +31,29 @@ function applyFontScalesDefaultMigration(s: SystemSettings): SystemSettings {
 }
 
 /**
+ * 字体选择逐字段形状检查（font-system §3.3 D2）。
+ *
+ * 现状只有 JSON.parse try/catch + 浅合并——`fonts` 若被写坏（不是对象 / 槽位不是字符串），
+ * 浅合并会把坏值原样交给渲染侧。本检查按「只丢坏字段」的粒度净化，不整体回退设置：
+ * - `fonts` 不是普通对象 → 整个字段丢弃（回落默认 = 未选择，走构建期字体栈）；
+ * - `ui` / `mono` 任一是非字符串（或非字符串的子类型）→ 只丢该槽位，保留同级另一槽位。
+ * 空串与非空字符串都保留：清除选择由调用方用省略字段表达，读侧不替它做归一化。
+ */
+function sanitizeFonts(fonts: unknown): SystemSettings['fonts'] {
+  if (typeof fonts !== 'object' || fonts === null || Array.isArray(fonts)) return undefined
+  const src = fonts as Record<string, unknown>
+  const next: NonNullable<SystemSettings['fonts']> = {}
+  if (typeof src.ui === 'string') next.ui = src.ui
+  if (typeof src.mono === 'string') next.mono = src.mono
+  // 两个槽位都不可用 → 等价于未选择，省略字段（避免留下空对象这个第三种状态）
+  return Object.keys(next).length > 0 ? next : undefined
+}
+
+/**
  * 读取系统偏好：SYSTEM_KEY 缺失或 JSON 损坏时显式回退默认值
  * （空对象 spread 兜底，与 renderer 原实现语义一致）；
- * 读出后执行分区字号默认档位一次性迁移（见 applyFontScalesDefaultMigration）。
+ * 读出后执行分区字号默认档位一次性迁移（见 applyFontScalesDefaultMigration）
+ * 与字体槽位逐字段形状检查（见 sanitizeFonts）。
  */
 export async function getSystem(storage: KVStorage): Promise<SystemSettings> {
   const raw = await storage.get(SYSTEM_KEY)
@@ -46,7 +66,13 @@ export async function getSystem(storage: KVStorage): Promise<SystemSettings> {
       parsed = {}
     }
   }
-  return applyFontScalesDefaultMigration({ ...DEFAULT_SYSTEM, ...parsed })
+  const merged = { ...DEFAULT_SYSTEM, ...parsed }
+  // 形状检查必须逐字段处理：坏 fonts 只丢该字段，其余已存设置（主题/字号/语言）照常生效。
+  const fonts = sanitizeFonts(merged.fonts)
+  const sanitized: SystemSettings = { ...merged }
+  if (fonts) sanitized.fonts = fonts
+  else delete sanitized.fonts
+  return applyFontScalesDefaultMigration(sanitized)
 }
 
 /**

@@ -103,3 +103,74 @@ describe('useSettingsShell · locale 接线（Fix-1）', () => {
     wrapper.unmount()
   })
 })
+
+describe('useSettingsShell · 字体槽位接线（font-system U3）', () => {
+  const SLOT_UI = '--font-ui'
+  const SLOT_MONO = '--font-mono-ui'
+
+  /** 清掉上一例留下的内联槽位（watch 写入目标 = documentElement.style） */
+  beforeEach(() => {
+    const style = document.documentElement.style
+    style.removeProperty(SLOT_UI)
+    style.removeProperty(SLOT_MONO)
+  })
+
+  it('setSystem({fonts:{ui}}) 触发槽位写入（带引号），不需重启即生效', async () => {
+    const wrapper = mountShell()
+    const store = getSettingsStore()
+    expect(document.documentElement.style.getPropertyValue(SLOT_UI)).toBe('')
+
+    // 设置页选界面字体的唯一真实路径：settingsStore.setSystem({ fonts })
+    await store.setSystem({ fonts: { ui: 'Maple Mono' } })
+    await nextTick()
+
+    // 断言 = 槽位变量被写（本用例即 watch 源含 fonts 的行为证据；漏加 fonts 则值为空）
+    expect(document.documentElement.style.getPropertyValue(SLOT_UI)).toBe("'Maple Mono'")
+    wrapper.unmount()
+  })
+
+  it('字体槽位 watch 覆盖 fonts 字段本身（就地改写 fonts 也触发写入）', async () => {
+    const wrapper = mountShell()
+    const store = getSettingsStore()
+    // 就地改写（不替换 system 对象/引用）：只有 watch 源显式读取了 fonts 才会被追踪到，
+    // 这也是「watch 源数组含 fonts」的行为判据——漏加 fonts 时本用例红（仅靠 setSystem
+    // 替换 system.value 的引用变化会掩盖漏加，见历史 locale 事故）。
+    store.system.value.fonts = { ui: 'Maple Mono' }
+    await nextTick()
+
+    expect(document.documentElement.style.getPropertyValue(SLOT_UI)).toBe("'Maple Mono'")
+    wrapper.unmount()
+  })
+
+  it('两槽位兄弟字段互不覆盖：先后设置后两个槽位同在', async () => {
+    const wrapper = mountShell()
+    const store = getSettingsStore()
+
+    await store.setSystem({ fonts: { ui: 'Maple Mono' } })
+    await nextTick()
+    // 写 mono 时必须 spread 既有值（兄弟字段语义）
+    await store.setSystem({ fonts: { ...store.system.value.fonts, mono: 'Fira Code' } })
+    await nextTick()
+
+    expect(document.documentElement.style.getPropertyValue(SLOT_UI)).toBe("'Maple Mono'")
+    expect(document.documentElement.style.getPropertyValue(SLOT_MONO)).toBe("'Fira Code'")
+    wrapper.unmount()
+  })
+
+  it('清除选择（槽位缺失）→ removeProperty 回到「未声明」，回落链恢复', async () => {
+    const wrapper = mountShell()
+    const store = getSettingsStore()
+
+    await store.setSystem({ fonts: { ui: 'Maple Mono', mono: 'Fira Code' } })
+    await nextTick()
+    expect(document.documentElement.style.getPropertyValue(SLOT_UI)).not.toBe('')
+
+    await store.setSystem({ fonts: { mono: 'Fira Code' } })
+    await nextTick()
+
+    // 空字符串 = 属性已被 removeProperty 删除（未声明）；不是「声明为空值」
+    expect(document.documentElement.style.getPropertyValue(SLOT_UI)).toBe('')
+    expect(document.documentElement.style.getPropertyValue(SLOT_MONO)).toBe("'Fira Code'")
+    wrapper.unmount()
+  })
+})
