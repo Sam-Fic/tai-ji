@@ -473,10 +473,18 @@ vi.mock('node:child_process', async (importOriginal) => {
 // wave3 包装：本段原文件顶层语句收进 describe 作用域（顶层 hook 不再外溢到同文件其他来源的用例）
 describe('npm-git-installer-env', () => {
 describe('NpmGitInstaller.installGit — 出站 env 契约（C-proc-09 收编）', () => {
+  // 本机 shell 常注入 NO_PROXY/no_proxy 等代理键——「父 env 未设代理键」类断言须
+  // 先显式 stub 成 undefined（删除并标记恢复），否则断言与本机环境耦合（main 上同样双红）。
+  const ALL_PROXY_KEYS = [
+    'HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy',
+    'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy',
+  ] as const
+
   beforeEach(() => {
     capturedEnv = undefined
     capturedArgs = undefined
     vi.unstubAllEnvs()
+    for (const key of ALL_PROXY_KEYS) vi.stubEnv(key, undefined)
   })
 
   afterEach(() => {
