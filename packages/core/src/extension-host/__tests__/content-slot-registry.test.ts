@@ -20,6 +20,8 @@ import { RIGHT_DRAWER_REGISTRY, OVERLAY_REGISTRY } from '../../domain/drawer/reg
 import {
   ContentSlotRegistry,
   CONTENT_SLOT_PLACEMENTS,
+  COMPOSER_TRAY_PLACEMENT,
+  HOST_EMBED_PLACEMENT,
   HOST_PLUGIN_ID,
   BUILTIN_NAMESPACE,
   HOST_COMPONENT_WHITELIST,
@@ -429,11 +431,31 @@ describe('findById 全局 id 空间与排序比较（U5 消费面）', () => {
     expect(compareContentSlotOrder(mk(view('acme'), 10, 1), mk(view('acme'), 10, 2))).toBeLessThan(0)
   })
 
-  it('位置族词表四族（CONTENT_SLOT_PLACEMENTS 与 bootstrap 挂载点三新族对齐）', () => {
+  it('位置族词表六族（composer-tray-protocol M1 同批登记 composer.tray / host.embed 两族；与 bootstrap 挂载点对齐）', () => {
     expect([...CONTENT_SLOT_PLACEMENTS]).toEqual([
-      'drawer.tab', 'overlay.content', 'sidebar.tab', 'settings.section',
+      'drawer.tab', 'overlay.content', 'sidebar.tab', 'settings.section', 'composer.tray', 'host.embed',
     ])
     expect(BUILTIN_NAMESPACE).toBe('ui')
+  })
+
+  it('composer.tray / host.embed 族常量 = 词表成员具名引用（D1/M1 盖印与挂载点注册值 SSOT 同处，词表成员引用常量）', () => {
+    expect(COMPOSER_TRAY_PLACEMENT).toBe('composer.tray')
+    expect(HOST_EMBED_PLACEMENT).toBe('host.embed')
+    expect(CONTENT_SLOT_PLACEMENTS).toContain(COMPOSER_TRAY_PLACEMENT)
+    expect(CONTENT_SLOT_PLACEMENTS).toContain(HOST_EMBED_PLACEMENT)
+  })
+
+  it('RL6 两族声明合法通过校验：composer.tray / host.embed 声明不再触发 unknown-placement（不标 unavailable）', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const registry = makeRegistry()
+    const before = warn.mock.calls.length
+    registry.loadExternal('acme-ext', [
+      pluginDeclaration({ id: 'acme-ext.tray', placement: 'composer.tray' }),
+      pluginDeclaration({ id: 'acme-ext.embed', placement: 'host.embed' }),
+    ])
+    expect(warn.mock.calls.length).toBe(before)
+    expect(registry.listEntries().find((e) => e.declaration.id === 'acme-ext.tray')?.unavailable).toBeUndefined()
+    expect(registry.listEntries().find((e) => e.declaration.id === 'acme-ext.embed')?.unavailable).toBeUndefined()
   })
 })
 

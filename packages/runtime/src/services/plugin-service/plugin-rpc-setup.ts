@@ -477,7 +477,10 @@ export function registerAllRpcMethods(ctx: RpcSetupContext): void {
   // ── Views RPC handlers ───────────────────────────────────
   // views.update → handleViewUpdate（U2 归属二选一：会话域 { sessionId } 定向投递 /
   // 全局域 { mountId, pluginId } 全局广播——校验在 views-api resolveViewScope，
-  // 都缺或都给 → INVALID_VIEW_SCOPE）。
+  // 都缺或都给 → INVALID_VIEW_SCOPE）。composer-tray-protocol D6/M1：会话域推树
+  // 经 views-api 按本插件清单声明资格校验（declaredViews 端口读 plugin-registry
+  // descriptor 缓存的 contributes 副本），命中按声明 placement 盖印入存储——章随
+  // 帧下发（plugin:viewUpdate 广播帧与快照条目同带 placement/meta）。
   // listMountPoints → 读挂载点集合副本（AC10：sync 注入→查询一致）。
   // wave:perf-w08（02 文档 D1-1，R-06）：广播出口为 ctx.publishViewUpdate——
   // bus 已装配时按 sessionId 定向 publish（transient），全局域走全局广播（分流见
@@ -485,11 +488,14 @@ export function registerAllRpcMethods(ctx: RpcSetupContext): void {
   // 广播帧与快照条目携带同一代际（U2 全量替换）。
   registerViewRpcHandlers(rpcServer, {
     mountPoints: ctx.mountPoints,
-    handleViewUpdate: (pluginId: string, viewId: string, guiTree: GuiComponent[], scope: PluginViewScope) => {
+    declaredViews: (pluginId) => ctx.getDescriptor(pluginId)?.contributes?.views ?? [],
+    handleViewUpdate: (pluginId: string, viewId: string, guiTree: GuiComponent[], scope: PluginViewScope, stamp) => {
       const updatedAt = Date.now()
       // 快照写入与广播同源（ADR-0097）：[null] 树 = 清除分区（渲染端 ViewHostStore
       // consumeWidget 清除语义的同构镜像，见 PluginUiSnapshotStore.setView）；返回
       // undefined（清除 / 归属畸形防御丢弃）时不广播——无内容可推。
+      // placement/meta 随批（composer-tray-protocol D1/D7）：章已在 views-api 按声明
+      // 盖印（会话域；全局域 stamp 无 placement），快照条目与广播帧同带——补收回写不丢章。
       const stored = ctx.uiSnapshotStore.setView({
         ...(scope.kind === 'session' ? { sessionId: scope.sessionId } : { mountId: scope.mountId }),
         viewId,
@@ -497,6 +503,8 @@ export function registerAllRpcMethods(ctx: RpcSetupContext): void {
         guiTree,
         updatedAt,
         generation: 0,
+        ...(stamp?.placement !== undefined ? { placement: stamp.placement } : {}),
+        ...(stamp?.meta !== undefined ? { meta: stamp.meta } : {}),
       })
       if (stored !== undefined) {
         ctx.publishViewUpdate(stored)

@@ -24,22 +24,29 @@
   可运行的复刻样例见 __tests__/panel/tray/tray-widget-bundle.test.ts 的「外壳契约复刻」宿主
   （TrayWidgetStrip；原 tray-widget.test.ts 已并入该 bundle）。
 
-  ── icon fallback 链（D4，四档）──
+  ── icon fallback 链（D4 四档 + D7 声明前置档）──
+  ⓪ 声明 icon（composer-tray-protocol D7）：插件托盘位清单声明的 lucide 名 → §6.13 单一解析
+     函数（与档② 同函数同 warn 语义）。静态主权在声明（AX4）；扩展源无清单声明，自然下探
   ① `meta.icon` 为 `{ paths }` 且过 `validateWidgetIconPaths` 白名单 → 渲染自定义形状
      `<path :d>`：统一 viewBox 24 / fill none / stroke currentColor / stroke-width 1.75 /
      round linecap·join（形状归 extension、线宽颜色尺寸归宿主锁死）
   ② `meta.icon` 为 string → §6.13 单一解析函数按白名单 lucide 名解析（大小写 / 连字符 /
      下划线不敏感），组件换算走共享表（ui/lib/contribution-icons）
-  ③ 上一档未命中或越限 → 宿主内置 widgetKey 映射（'todo'→ListChecks、'goal'→Target）
+  ③ 上一档未命中或越限 → 宿主内置 widgetKey 映射（'todo'→ListChecks、'goal'→Target；
+     D7：声明缺省 icon 的插件托盘位声明同样先走本档）
   ④ 仍无 → 通用 widget icon（LayoutGrid，统一兜底 FALLBACK_CONTRIBUTION_ICON 同源）
-  ① 越限（本地 warn 一次）/ ② 未命中（core 按去重键 warn 一次）后继续下探；无 icon 字段
-  （含 v1 旧 extension）不是坏数据，静默走 ③/④，不 warn。
+  ⓪ 未命中（声明坏 icon）按② 同语义 warn 一次后下探 / ① 越限（本地 warn 一次）/ ② 未命中
+  （core 按去重键 warn 一次）后继续下探；无 icon 字段（含 v1 旧 extension 与声明缺省 icon）
+  不是坏数据，静默走 ③/④，不 warn。
   [落地裁决] ② 的「按 lucide 名解析」收敛到 §6.13 单一函数 + 白名单而非 @lucide/vue 全量
   namespace 解析——namespace import 击穿 tree-shaking，会把整套 1500+ icon 打进 renderer
   bundle；新增可用名在 core CONTRIBUTION_ICON_KEYS 一行 + 共享组件表一行登记即可。
 
-  ── badge fallback 链（D4）──
-  `meta.badge` → `meta.progress.label ?? String(meta.progress.current)` → 无
+  ── badge fallback 链（D4 两档；composer-tray-protocol D8 第三档退役）──
+  `meta.badge` → `meta.progress.label` → 无（String(progress.current) 第三档退役——现有
+  推送方零消费者：scheduler 显式推 badge / todo 显式推 badge（恒在场走第一档，不依赖
+  第三档）/ goal 走 progress.label / subagent-workflow 两档同推；双缺不渲染角标 = 运行数
+  0 无信息量不占视觉）
   超长 truncate 至 BADGE_MAX_CHARS 字符，全文进按钮 aria-label（§3.5）与悬停 title（D8）。
 
   ── 悬停 title（D8：推翻 2026-10-19「原生 title 退役」裁决）──
@@ -50,7 +57,10 @@
   ② 集合外条目（todo/goal 等：progress.label 语义为完成计数「2/5」或百分比「42%」，无
      「运行中」概念）title = 「{title} · {badge ?? progress.label}」；
   ③ badge 与 progress 均缺 → 第二段整段略去；meta 整体缺（v1 旧 extension）→ title 仅
-     viewId 兜底（与 aria-label/面板标题同源）。任何缺字段分支不输出 undefined 字面。
+     标题兜底（与 aria-label/面板标题同源）。任何缺字段分支不输出 undefined 字面。
+  标题兜底链（D7 单一链）：声明 title ?? meta.title ?? viewId——插件托盘位清单声明的
+  title 优先（静态主权在声明），扩展源无清单声明自然落 meta.title；viewId 裸标题只在
+  声明与 meta 双缺时出现（v1 旧 extension 兜底）。
   与 aria-label 并存（通道不同不互斥）：视觉 hover 即时反馈走 title、屏幕阅读器全文走
   aria-label「badge 全文进括注」（§3.5 契约保留，本决策不改写它）。
 
@@ -143,6 +153,7 @@ import type { WidgetMeta } from '@zhushanwen/extension-protocol'
 import { Button } from '@/components/ui/button'
 import { TRAY_ITEM_COUNT_CLASS, TRAY_PULSE_CLASS, trayItemButtonClass } from '@/components/panel/tray/tray-item-button'
 import { widgetToneText } from '@/components/panel/tray/tray-tone'
+import { useTrayWidgetDisplayTitle } from '@/components/panel/tray/use-tray-widget-declaration'
 
 const props = withDefaults(
   defineProps<{
@@ -218,10 +229,21 @@ function warnIconOnce(viewId: string, reason: string): void {
   )
 }
 
-/** icon fallback 链（D4 四档顺序，见文件头）。越限/未知各 warn 一次后继续下探。
- *  ② 档的 string 解析走 §6.13 单一函数：pluginId 缺省（外壳未透传/测试直挂）回退 viewId
+/** icon fallback 链（D4 四档 + D7 声明前置档⓪，顺序见文件头）。越限/未知各 warn 一次后继续下探。
+ *  ⓪/② 档的 string 解析走 §6.13 单一函数：pluginId 缺省（外壳未透传/测试直挂）回退 viewId
  *  作去重键归属段——键粒度退化为 viewId 维度（与退役前的本地 warn 粒度一致）。 */
-function resolveWidgetIcon(viewId: string, pluginId: string | undefined, raw: WidgetMeta['icon'] | undefined): WidgetIcon {
+function resolveWidgetIcon(
+  viewId: string,
+  pluginId: string | undefined,
+  raw: WidgetMeta['icon'] | undefined,
+  declaredIcon: string | undefined,
+): WidgetIcon {
+  // ⓪ 声明 icon（D7：静态主权在声明，AX4）：§6.13 同一解析（与② 同 warn 语义——声明的
+  // 坏 icon 名同样该出声）；可选字段缺省（无 icon 声明）静默下探，非坏数据
+  if (declaredIcon !== undefined && declaredIcon.trim() !== '') {
+    const declared = resolveContributionIcon({ pluginId: pluginId ?? viewId, contributionId: viewId, icon: declaredIcon })
+    if (declared.status === 'declared') return { kind: 'glyph', component: contributionIconComponentByKey(declared.key) }
+  }
   if (raw !== undefined && typeof raw !== 'string') {
     // 显式 null 是协议可达形态（wire 上 stripUndefined 只删 undefined 不删 null，第三方独立
     // 安装扩展可推 icon: null）——null 无 paths 可取，归 'not-array' 走既有兜底链（与非法
@@ -239,18 +261,17 @@ function resolveWidgetIcon(viewId: string, pluginId: string | undefined, raw: Wi
   return { kind: 'glyph', component: builtin ?? FALLBACK_WIDGET_ICON }
 }
 
-const icon = computed<WidgetIcon>(() => resolveWidgetIcon(props.viewId, props.pluginId, props.meta?.icon))
+/** 托盘位声明切片（D7 静态信息源；扩展源/未声明 = undefined）+ 显示标题（D7 单一兜底链）——
+ *  链本体在 use-tray-widget-declaration 单点（TrayWidgetPanel 同源共用） */
+const { declaration, displayTitle } = useTrayWidgetDisplayTitle(() => props.viewId, () => props.pluginId, () => props.meta)
 
-/** 显示标题：meta.title（空串视为缺省）→ viewId（v1 旧 extension 与脏数据兜底） */
-const displayTitle = computed(() => {
-  const title = props.meta?.title
-  return title !== undefined && title.trim() !== '' ? title : props.viewId
-})
+const icon = computed<WidgetIcon>(() =>
+  resolveWidgetIcon(props.viewId, props.pluginId, props.meta?.icon, declaration.value?.icon))
 
-/** badge 全文：meta.badge → progress.label ?? String(progress.current) → 无（空串等同无） */
+/** badge 全文（D4 两档；D8 第三档 String(progress.current) 退役——零消费者）：
+ *  meta.badge → progress.label → 无（空串等同无） */
 const badgeFull = computed<string | undefined>(() => {
-  const progress = props.meta?.progress
-  const raw = props.meta?.badge ?? progress?.label ?? (progress ? String(progress.current) : undefined)
+  const raw = props.meta?.badge ?? props.meta?.progress?.label
   return raw !== undefined && raw !== '' ? raw : undefined
 })
 
@@ -282,13 +303,14 @@ const RUNNING_PROGRESS_VIEW_IDS: ReadonlySet<string> = new Set(['subagent', 'wor
  * 组装分支（任何缺字段分支不输出 undefined 字面）：
  * - 集合成员且 progress 在场 → 「{title} · {badge} 运行中 / {total}」；
  * - 其余（集合外条目 / 成员缺 progress）→ 「{title} · {badge}」，badge 缺省时整段略去；
- * - meta 整体缺（v1 旧 extension）→ 仅 viewId 兜底（与 aria-label、面板标题同源）。
- * badge 取 badgeFull（badge ?? progress.label ?? String(current) 回落链）——成员件
- * 无显式 badge 时进度段仍有可读计数，不出「undefined 运行中」。
+ * - meta 整体缺（v1 旧 extension / 声明源）→ 仅标题兜底（displayTitle：声明 ?? viewId，
+ *   与 aria-label、面板标题同源）。
+ * badge 取 badgeFull（badge ?? progress.label 两档——D8 第三档退役）——成员件无显式 badge
+ * 且无 progress.label 时进度段略去，不出「undefined 运行中」。
  */
 const buttonTitle = computed<string>(() => {
   const meta = props.meta
-  if (meta === undefined) return props.viewId
+  if (meta === undefined) return displayTitle.value
   const badge = badgeFull.value
   const progress = meta.progress
   if (badge !== undefined && progress !== undefined && RUNNING_PROGRESS_VIEW_IDS.has(props.viewId)) {

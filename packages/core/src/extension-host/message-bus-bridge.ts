@@ -55,6 +55,7 @@
 import type { InternalEvent } from './types'
 import type { InternalEventBus } from './internal-event-bus'
 import type { PluginMessageSource, IncomingPluginMessage } from './plugin-message-source'
+import { COMPOSER_TRAY_PLACEMENT } from './content-slot-registry'
 import { pluginViewScopeFromWire } from '@taiji/shared'
 
 // ── 窄化工具（模块私有，不 export）────────────────────────────────
@@ -241,11 +242,13 @@ function parseUiRequest(msg: IncomingPluginMessage): InternalEvent | null {
  * plugin:viewUpdate 窄化检查（s3 链路，MF-1 修复；U2 scope 形态检查）。
  *
  * runtime plugin-rpc-setup.ts handleViewUpdate 广播 payload 形状：
- * { sessionId | mountId, viewId, pluginId, guiTree, updatedAt, generation }
+ * { sessionId | mountId, viewId, pluginId, guiTree, updatedAt, generation, placement?, meta? }
  * （guiTree 为 GuiComponent[]；归属二选一，形态检查复用 shared pluginViewScopeFromWire——
  * 都缺或都给 / 字段非 string → null，parse-failed error 事件，ERR2 不静默吞）。
  * 与 extension:widget 同事件（extension-widget）：ViewHostStore 消费按 scope 分区更新，
  * guiTree 结构化数组直存（窄化规则同 widgetGui——isGuiComponent 校验 + string 行包装）。
+ * placement/meta 透传（composer-tray-protocol D1/D7）：章由 runtime views-api 按插件清单
+ * 声明盖印随帧携带（存储资格制的产物），本层无声明知识、只透传；meta 形状由渲染端窄化。
  */
 function parseViewUpdate(msg: IncomingPluginMessage): InternalEvent | null {
   const payload = asRecord(msg.payload)
@@ -256,6 +259,7 @@ function parseViewUpdate(msg: IncomingPluginMessage): InternalEvent | null {
   const scope = pluginViewScopeFromWire(payload)
   if (viewId === null || guiTree === null || scope === null) return null
   const generation = typeof payload.generation === 'number' ? payload.generation : undefined
+  const placement = asOptionalString(payload.placement)
   return {
     kind: 'extension-widget',
     ...(scope.kind === 'session' ? { sessionId: scope.sessionId } : { mountId: scope.mountId }),
@@ -264,6 +268,8 @@ function parseViewUpdate(msg: IncomingPluginMessage): InternalEvent | null {
       pluginId,
       guiTree,
       ...(generation !== undefined ? { generation } : {}),
+      ...(placement !== undefined ? { placement } : {}),
+      ...(payload.meta !== undefined ? { meta: payload.meta } : {}),
     },
   }
 }
@@ -299,6 +305,16 @@ export function parseHeaderActionUpdate(msg: IncomingPluginMessage): InternalEve
 
 // ── 5 个 extension:* 窄化检查（pluginId 一律 ''，wire 无该字段）──────
 
+/**
+ * extension:widget / extension:widgetGui 窄化检查。
+ *
+ * placement 盖印（composer-tray-protocol D1）：扩展 setWidget 写入点统一盖印
+ * 'composer.tray'（COMPOSER_TRAY_PLACEMENT）——API 即声明（扩展无清单，setWidget 即
+ * 托盘位声明）。本函数是标记通道（extension:widget/widgetGui）到 ViewHostStore 的
+ * 桥接层唯一入口，两分支（纯文本 widget / 结构化 widgetGui）同盖一枚章；插件通道
+ * （plugin:viewUpdate）的章由 runtime 按清单声明盖印（parseViewUpdate 透传），两通道
+ * 盖印各归其源，本层不区分 viewId 归属。
+ */
 function parseExtensionWidget(msg: IncomingPluginMessage): InternalEvent | null {
   const payload = asRecord(msg.payload)
   if (!payload) return null
@@ -310,7 +326,7 @@ function parseExtensionWidget(msg: IncomingPluginMessage): InternalEvent | null 
     return {
       kind: 'extension-widget',
       sessionId: resolveSessionId(msg, payload),
-      widget: { viewId: widgetKey, pluginId: '', guiTree: lines },
+      widget: { viewId: widgetKey, pluginId: '', guiTree: lines, placement: COMPOSER_TRAY_PLACEMENT },
     }
   }
   // extension:widgetGui —— gui 为 null 时保留清除语义（[null] 进 guiTree，消费端据此删条目）。
@@ -319,7 +335,7 @@ function parseExtensionWidget(msg: IncomingPluginMessage): InternalEvent | null 
   return {
     kind: 'extension-widget',
     sessionId: resolveSessionId(msg, payload),
-    widget: { viewId: widgetKey, pluginId: '', guiTree: [payload.gui], meta: payload.meta },
+    widget: { viewId: widgetKey, pluginId: '', guiTree: [payload.gui], meta: payload.meta, placement: COMPOSER_TRAY_PLACEMENT },
   }
 }
 

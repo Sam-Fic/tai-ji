@@ -668,7 +668,7 @@ describe('MF-1 挂载点上报时序（mountPoints.sync 连接就绪后发送）
 
     // 重复 init：dispose-and-rebuild 使新 watcher 绑定新 registry 实例（setExtensionRegistries
     // 已换新）。register:false 使新实例快照为空表——若退回模块级布尔检查（watcher 永久闭包
-    // 绑定第一次 init 的实例），此处上报的是实例 1 残留快照（8 个挂载点），空表断言即红。
+    // 绑定第一次 init 的实例），此处上报的是实例 1 残留快照（10 个挂载点），空表断言即红。
     initBridge({ register: false })
     // 已 connected → 新 watcher immediate 同步补发（无需推进 timer）
     expect(syncCallsOf('plugin.mountPoints.sync')).toHaveLength(2)
@@ -936,9 +936,9 @@ describe('插件 UI 快照拉取（ADR-0097 拉为主：connected 全量恢复 +
   it('applyUiSnapshot：快照条目按实时帧形状逐条 emit（headerAction 帧 + widget 帧带 sessionId）', () => {
     const bus = new InternalEventBus()
     const headerFrames: unknown[] = []
-    const widgetFrames: Array<{ sessionId?: string; mountId?: string; viewId: string; guiTree: unknown[]; generation?: number }> = []
+    const widgetFrames: Array<{ sessionId?: string; mountId?: string; viewId: string; guiTree: unknown[]; generation?: number; placement?: string; meta?: unknown }> = []
     bus.on('plugin:headerActionUpdate', (e) => headerFrames.push(e.headerAction))
-    bus.on('extension-widget', (e) => widgetFrames.push({ sessionId: e.sessionId, mountId: e.mountId, viewId: e.widget.viewId, guiTree: e.widget.guiTree, generation: e.widget.generation }))
+    bus.on('extension-widget', (e) => widgetFrames.push({ sessionId: e.sessionId, mountId: e.mountId, viewId: e.widget.viewId, guiTree: e.widget.guiTree, generation: e.widget.generation, placement: e.widget.placement, meta: e.widget.meta }))
 
     applyUiSnapshot(bus, {
       headerActions: [{ pluginId: 'scheduler-manager', headerActionId: 'scheduler-manager.open', sessionId: 's1', badge: '2' }],
@@ -946,7 +946,32 @@ describe('插件 UI 快照拉取（ADR-0097 拉为主：connected 全量恢复 +
     })
 
     expect(headerFrames).toEqual([{ pluginId: 'scheduler-manager', headerActionId: 'scheduler-manager.open', sessionId: 's1', badge: '2' }])
-    expect(widgetFrames).toEqual([{ sessionId: 's1', viewId: 'scheduler.modal', guiTree: [{ type: 'ansi-text', props: { lines: ['x'] } }], generation: undefined }])
+    expect(widgetFrames).toEqual([{ sessionId: 's1', viewId: 'scheduler.modal', guiTree: [{ type: 'ansi-text', props: { lines: ['x'] } }], generation: undefined, placement: undefined, meta: undefined }])
+  })
+
+  it('applyUiSnapshot placement/meta 透传（composer-tray-protocol D1/D7）：快照条目章与动态信息随帧回带（补收回写不丢章）', () => {
+    const bus = new InternalEventBus()
+    const widgetFrames: Array<{ placement?: string; meta?: unknown }> = []
+    bus.on('extension-widget', (e) => widgetFrames.push({ placement: e.widget.placement, meta: e.widget.meta }))
+
+    applyUiSnapshot(bus, {
+      headerActions: [],
+      views: [
+        {
+          sessionId: 's1', viewId: 'tray.view', pluginId: 'plug-a',
+          guiTree: [{ type: 'ansi-text', props: { lines: ['x'] } }], updatedAt: 1, generation: 2,
+          placement: 'composer.tray', meta: { badge: '3', status: 'running' },
+        },
+        // 无章旧条目：placement/meta 均缺省 → 帧无该键（零透传噪音）
+        {
+          sessionId: 's1', viewId: 'legacy.view', pluginId: 'plug-a',
+          guiTree: [{ type: 'ansi-text', props: { lines: ['y'] } }], updatedAt: 1, generation: 1,
+        },
+      ],
+    })
+
+    expect(widgetFrames[0]).toEqual({ placement: 'composer.tray', meta: { badge: '3', status: 'running' } })
+    expect(widgetFrames[1]).toEqual({ placement: undefined, meta: undefined })
   })
 
   it('applyUiSnapshot：全局域条目（U2）按 mountId 形态 emit + generation 透传', () => {
@@ -1036,7 +1061,8 @@ describe('插件 UI 快照拉取（ADR-0097 拉为主：connected 全量恢复 +
       | { refreshViewInScope?: (scope: unknown, viewId: string) => void; getViewInScope?: (scope: unknown, viewId: string) => unknown }
       | undefined
 
-    // 受控回包注入：捕获补拉 filter，返回 runtime reply 形状的快照（成功分支 → applyUiSnapshot）
+    // 受控回包注入：捕获补拉 filter，返回 runtime reply 形状的快照（成功分支 → applyUiSnapshot）。
+    // 条目带 placement/meta（composer-tray-protocol D1/D7：runtime 按声明盖印的章与动态信息）
     const capturedFilters: Array<Record<string, unknown>> = []
     pluginDomain.inject = (filter) => {
       capturedFilters.push(filter)
@@ -1049,16 +1075,18 @@ describe('插件 UI 快照拉取（ADR-0097 拉为主：connected 全量恢复 +
             pluginId: 'plug-a',
             guiTree: [{ type: 'ansi-text', props: { lines: ['auth'] } }],
             updatedAt: 1,
+            placement: 'composer.tray',
+            meta: { badge: '5' },
           },
         ],
       })
     }
 
-    const widgetFrames: Array<{ sessionId?: string; mountId?: string; viewId: string; pluginId: string }> = []
+    const widgetFrames: Array<{ sessionId?: string; mountId?: string; viewId: string; pluginId: string; placement?: string; meta?: unknown }> = []
     getExtensionBus().on('extension-widget', (e) => {
       // applyUiSnapshot 帧形状：归属（sessionId ∨ mountId）在事件顶层，载荷在 e.widget
-      const frame = e as { sessionId?: string; mountId?: string; widget?: { viewId: string; pluginId: string } }
-      if (frame.widget) widgetFrames.push({ sessionId: frame.sessionId, mountId: frame.mountId, viewId: frame.widget.viewId, pluginId: frame.widget.pluginId })
+      const frame = e as { sessionId?: string; mountId?: string; widget?: { viewId: string; pluginId: string; placement?: string; meta?: unknown } }
+      if (frame.widget) widgetFrames.push({ sessionId: frame.sessionId, mountId: frame.mountId, viewId: frame.widget.viewId, pluginId: frame.widget.pluginId, placement: frame.widget.placement, meta: frame.widget.meta })
     })
 
     viewSource!.refreshViewInScope!({ kind: 'global', mountId: 'provider.authorize', pluginId: 'plug-a' }, 'flow')
@@ -1068,8 +1096,15 @@ describe('插件 UI 快照拉取（ADR-0097 拉为主：connected 全量恢复 +
 
     // 补拉 filter 按全局域分区键组装（U2：mountId + pluginId + viewId 三元过滤）
     expect(capturedFilters).toEqual([{ mountId: 'provider.authorize', pluginId: 'plug-a', viewId: 'flow' }])
-    expect(widgetFrames[0]).toMatchObject({ mountId: 'provider.authorize', viewId: 'flow', pluginId: 'plug-a' })
+    expect(widgetFrames[0]).toMatchObject({ mountId: 'provider.authorize', viewId: 'flow', pluginId: 'plug-a', placement: 'composer.tray', meta: { badge: '5' } })
     pluginDomain.inject = null
+
+    // 快照补收链 placement 保持（R1 修复轮）：回包帧经 bus 落 ViewHostStore 后条目章不丢——
+    // 缺章 = M2 托盘过滤上线后重载补收的插件托盘条目消失的缺陷形态
+    const refetched = viewSource!.getViewInScope!({ kind: 'global', mountId: 'provider.authorize', pluginId: 'plug-a' }, 'flow') as { placement?: string; meta?: unknown } | undefined
+    expect(refetched).toBeDefined()
+    expect(refetched!.placement).toBe('composer.tray')
+    expect(refetched!.meta).toEqual({ badge: '5' })
 
     // 读路径真调（U2 scope 联合消费面）：会话域 scope 透传 store——先经正规通道推一条
     // widget 帧（TC7 同款）建分区，再以 getViewInScope 反查（getView 纯透传，行级接线验证）

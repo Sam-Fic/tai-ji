@@ -26,8 +26,9 @@
 
   ── 形态（与原对话流 widget 详情卡同视觉语言，该卡已随 pill 退役、形态迁入托盘）──
   head：状态点（7px，D4 色：running=accent / done=success / failed=danger / idle=dim）+ 标题
-  （meta.title ?? viewId）+ 进度计数文本（progress.label ?? current/total）+ mini bar（3px 宽 40px，
-  fill 按 severity/status 取色，宽度 clamp 0-100%）；缺 meta（v1 旧 extension）→ 标题回退 viewId、
+  （声明 title ?? meta.title ?? viewId，D7 单一兜底链与按钮同源）+ 进度计数文本
+  （progress.label ?? current/total）+ mini bar（3px 宽 40px，fill 按 severity/status 取色，
+  宽度 clamp 0-100%）；缺 meta（v1 旧 extension）→ 标题走声明 ?? viewId 兜底、
   无状态点色、无进度。
   断连提示条（D7）：ws 连接状态非 connected 时置顶一行「连接已断开，内容可能过期」，重连自动
   消失（wsState 响应式）。「面板打开」由挂载本身承载——零帧 = 图标不存在 = 面板不可开（AX3），
@@ -106,12 +107,15 @@ import type { GuiComponent, WidgetMeta } from '@zhushanwen/extension-protocol'
 import { GuiComponentRenderer } from '@taiji/ui/rendering-protocol'
 import { getState } from '@taiji/core/transport/ws-client'
 import { widgetToneDot } from '@/components/panel/tray/tray-tone'
+import { useTrayWidgetDisplayTitle } from '@/components/panel/tray/use-tray-widget-declaration'
 
 const props = defineProps<{
   /** widget key（= ViewHostStore viewId）：head 标题兜底 */
   viewId: string
   /** widget 宿主元数据（可选：v1 旧 extension 推送无 meta） */
   meta?: WidgetMeta
+  /** 条目归属插件 id（外壳从 ViewHostStore 条目透传；声明匹配键之一，缺省只按 viewId 匹配） */
+  pluginId?: string
   /** entry.guiTree（body 渲染源；空数组 → 整体零 DOM） */
   guiTree: GuiComponent[]
 }>()
@@ -130,11 +134,8 @@ const wsState = getState()
 /** 断连提示条（D7）：非 connected 即显示；「面板打开」由挂载承载（AX3：图标出现即有树） */
 const showDisconnectBanner = computed(() => wsState.value !== 'connected')
 
-/** head 标题：meta.title（空串视为缺省）→ viewId（v1 旧 extension 与脏数据兜底） */
-const displayTitle = computed(() => {
-  const title = props.meta?.title
-  return title !== undefined && title.trim() !== '' ? title : props.viewId
-})
+/** head 标题（D7 单一兜底链，与 TrayWidgetButton 同源单点 use-tray-widget-declaration） */
+const { displayTitle } = useTrayWidgetDisplayTitle(() => props.viewId, () => props.pluginId, () => props.meta)
 
 /** 状态点色（D4）：running=accent / done=success / failed=danger / idle 与无 meta=弱中性点 */
 const statusDotClass = computed(() => widgetToneDot(props.meta?.status))
@@ -150,8 +151,9 @@ const progressFillClass = computed(() => {
 
 /**
  * [RD-2#8] 进度数值有限性闸：第三方 widget 的 meta.progress.current/total 非有限
- * （NaN/Infinity）→ 无进度可画。ViewHostStore.narrowMeta 只校验 title 是 string，
- * progress 深度字段由本消费端按可选处理——这里是协议指定的数值把关层，非纯纵深防御。
+ * （NaN/Infinity）→ 无进度可画。ViewHostStore.narrowMeta 按锚四字段族（title/badge/
+ * status/progress）做最小形状校验、非法形状丢弃，progress 深度字段（current/total
+ * 数值有限性）由本消费端把关——这里是协议指定的数值把关层，非纯纵深防御。
  */
 const progressFinite = computed(() => {
   const p = props.meta?.progress

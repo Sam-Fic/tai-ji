@@ -1,11 +1,12 @@
-import { readUiLocale } from '@zhushanwen/pi-llm-shared/ui-locale'
+import { DEFAULT_UI_LOCALE, readUiLocale } from '@zhushanwen/pi-llm-shared/ui-locale'
+import { createUiDictionary } from '@zhushanwen/pi-llm-shared/ui-dictionary'
 
 import { formatRelativeTime, formatSchedule } from './format.js'
 import type { UiLocale } from './format.js'
 import type { ScheduleSpec, ScheduledTask, TaskKind, TaskStatus } from './types.js'
 
 export type { UiLocale } from './format.js'
-export { readUiLocale }
+export { DEFAULT_UI_LOCALE, readUiLocale }
 
 /**
  * L2 extension 侧词典 + locale 读取接线。
@@ -27,8 +28,6 @@ export { readUiLocale }
  *
  * L4（模型可见的 tool result）**不**经本模块——`service.ts` 的 `message` 字段保留英文回退。
  */
-
-export const DEFAULT_UI_LOCALE: UiLocale = 'en-US'
 
 // ── messageKey ↔ params 判别联合（按 messageKey 分型的 locale-neutral 原始值）──
 //
@@ -247,36 +246,13 @@ const EN_US: Dictionary = {
   'widget.line': '[{title}] {parts}',
 }
 
-const DICTIONARIES: Record<UiLocale, Dictionary> = {
-  'zh-CN': ZH_CN,
-  'en-US': EN_US,
-}
+// 词典机制（DICTIONARIES 映射 / dictionaryKeys / t / interpolate）下沉在
+// `@zhushanwen/pi-llm-shared` ui-dictionary 单一实现（与 plan / subagent-workflow 同源），
+// 本模块只持有词典数据；回落链当前 locale → en-US → 键名（**禁返回空串**——防「空标题在
+// nullish 渲染范围显示空白段头」从词典后门回潮，`meta.title` 依赖本保证）。
+const { t, dictionaryKeys } = createUiDictionary({ 'zh-CN': ZH_CN, 'en-US': EN_US })
 
-/** 指定语言的词典 key 集合（测试用于 zh/en 双侧对齐 + 超集断言）。 */
-export function dictionaryKeys(locale: UiLocale): string[] {
-  return Object.keys(DICTIONARIES[locale])
-}
-
-// ── 模板渲染 ──
-
-/**
- * 渲染词典模板。键缺失 → 回落 en 值 → 再回落键名本身（**禁返回空串**）：
- * 所有经 `t()` 赋值的字段因此天然非空——防「空标题在 nullish 渲染范围显示空白段头」
- * 从词典后门回潮（`meta.title` 依赖本保证）。占位符缺参时保留 `{name}` 原样（非空）。
- */
-export function t(key: string, params?: Record<string, string | number>, locale?: UiLocale): string {
-  const resolved = locale ?? readUiLocale()
-  const template = DICTIONARIES[resolved][key] ?? DICTIONARIES[DEFAULT_UI_LOCALE][key] ?? key
-  return interpolate(template, params)
-}
-
-function interpolate(template: string, params?: Record<string, string | number>): string {
-  if (params === undefined) return template
-  return template.replace(/\{(\w+)\}/g, (match, name: string) => {
-    const value = params[name]
-    return value === undefined ? match : String(value)
-  })
-}
+export { t, dictionaryKeys }
 
 // ── 形状映射 ──
 

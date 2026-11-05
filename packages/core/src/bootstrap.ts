@@ -27,6 +27,9 @@ import { useConnection } from './transport/use-connection'
 import type { MountPointRegistry } from './extension-host/mount-point-registry'
 import type { ContributionRegistry } from './extension-host/contribution-registry'
 import type { PluginDescriptorLike } from './extension-host/types'
+// 托盘族两挂载点名常量（值 SSOT 在 content-slot-registry，词表成员直接引用同款常量——
+// 注册值与词表/盖印值单点绑定，杜绝手抄字面量漂移）。
+import { COMPOSER_TRAY_PLACEMENT, HOST_EMBED_PLACEMENT } from './extension-host/content-slot-registry'
 
 // ── 步骤实现 ──────────────────────────────────────────────────────
 
@@ -101,6 +104,14 @@ export const REGISTERED_MOUNT_POINTS = [
   'drawer.tab',
   'overlay.content',
   'settings.section',
+  // 托盘族两挂载点（composer-tray-protocol D1/M1 同波，与 CONTENT_SLOT_PLACEMENTS 两族
+  // 登记配套）：composer.tray（托盘 widget 位——扩展 setWidget 通道 bridge 盖印；插件
+  // 声明侧无宿主容器消费，托盘过滤由消费方按 placement 判定）/ host.embed（宿主内嵌族
+  // ——宿主组件按 viewId 定点消费，如 scheduler-manager 浮层面板段）。不注册则插件的
+  // 同名声明经 routeAll 判 unregistered-mount-point（告警 + available=false 置灰），
+  // 与真坏声明混流。两族均无派生视图（注册表词表成员、路由合法）。
+  COMPOSER_TRAY_PLACEMENT,
+  HOST_EMBED_PLACEMENT,
 ] as const
 
 // 壳向 ExtensionHost 注册挂载点（清单 = REGISTERED_MOUNT_POINTS，含 Tier 1 三点 +
@@ -111,7 +122,8 @@ export async function registerMountPoints(): Promise<void> {
     console.warn('[bootstrap] registerMountPoints: registry not injected, skip (setExtensionRegistries)')
     return
   }
-  // 注册序 = REGISTERED_MOUNT_POINTS 数组序（最小改动：原逐条 register 收敛为清单循环）
+  // 注册序 = REGISTERED_MOUNT_POINTS 数组序（原逐条 register 收敛为清单循环；
+  // 托盘族两成员以命名常量入清单，与 placement 词表同源防漂移）
   for (const name of REGISTERED_MOUNT_POINTS) {
     mountRegistryImpl.register(name)
   }

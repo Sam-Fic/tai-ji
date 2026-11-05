@@ -26,6 +26,9 @@ export type {
   ViewSnapshotItem, PluginUiSnapshotPayload,
   // plugin 系下行帧类型全集成员类型（清单常量 PLUGIN_DOWNLINK_TYPES 在下方值导出段）
   PluginDownlinkType,
+  // views.update 载荷可选 meta（composer-tray-protocol D7）：角标/状态/进度动态信息
+  // （runtime views-api / plugin-sdk 跨包具名消费）
+  PluginViewMeta,
   WatchdogMemoryLevel, WatchdogMemoryPressurePayload,
   RollingRestartState, RollingRestartReason, RollingRestartInflightSummary,
   RollingRestartDeferredPayload, RollingRestartCountdownPayload, RollingRestartForcedPayload,

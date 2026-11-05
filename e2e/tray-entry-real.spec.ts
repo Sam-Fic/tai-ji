@@ -95,9 +95,19 @@ async function openWidgetPanel(page: Page, viewId: 'subagent' | 'workflow'): Pro
   return panel
 }
 
-/** 面板内的 list-tree 行集（行声明 action.hostAction 后渲染为原生 button，按根 testid + button 定位） */
+/** workflow 面板打开 + 起跑态 badge 基线断言（1 个运行中 run → badge '1'；RE1/RE5 共用）：
+ *  断言在前，面板打开在后——基线事实先于面板交互锚定。 */
+async function openWorkflowPanelWithBadgeBaseline(page: Page): Promise<Locator> {
+  await expect(widgetButton(page, 'workflow').getByTestId('tray-widget-badge')).toHaveText('1')
+  return openWidgetPanel(page, 'workflow')
+}
+
+/** 面板内的 list-tree 行集：行声明 action.hostAction 后渲染为原生 button（行按钮 testid
+ *  = gui-list-tree-action-<i>，ListTree 渲染契约）；composer-tray-protocol M3 富行迁移后
+ *  行内操作（中止/续跑）挂行 actions 槽内嵌渲染——不匹配行按钮 testid 前缀，不混计入行数
+ *  （旧口径 locator('button') 会把行内按钮计入行数）。 */
 function workflowRows(panel: Locator): Locator {
-  return panel.getByTestId('gui-list-tree').locator('button')
+  return panel.getByTestId('gui-list-tree').locator('[data-testid^="gui-list-tree-action-"]')
 }
 
 async function selectSessionInSidebar(page: Page, label: string): Promise<void> {
@@ -232,19 +242,42 @@ async function launchWithProbeRun(): Promise<{
   return { page, port, dataDir, run, cleanup }
 }
 
-// ── RE1: 托盘 widget 分桶挂载 + 行点击 → 浮层定位该 run ──────────────────
+/** 探针 run 装配产物（RE 组用例 body 的可见面；cleanup 在载体 finally 内消费，不外漏）。 */
+interface ProbeRunCtx {
+  page: Page
+  port: number
+  dataDir: string
+  run: Awaited<ReturnType<typeof startProbeRun>>
+}
 
-test('RE1: 托盘 workflow 行点击 → 浮层打开且定位该 run（T1 行集 + T3 入口归宿）', async () => {
+/**
+ * RE 组共用载体（launchWithProbeRun 装配的再收敛）：launch → workflow 双就绪等待
+ * （widget 呼吸点亮 + store 记录落库可读）→ body → 标准 finally 收尾（停 listen +
+ * 清真机资源）。五用例的装配与收尾序完全同构，body 只落数据断言差异；RE3 的对照
+ * session 临时目录经 extraProjectDirs 回传进同一清理序（mkdtemp 自建自删红线不破）。
+ */
+async function withProbeRunWorkflowReady(
+  body: (ctx: ProbeRunCtx) => Promise<void>,
+  extraProjectDirs: () => string[] = () => [],
+): Promise<void> {
   test.setTimeout(240_000)
-  const { page, port, run, cleanup, dataDir } = await launchWithProbeRun()
+  const { page, port, dataDir, run, cleanup } = await launchWithProbeRun()
   try {
     await waitForWorkflowWidgetRunning(page)
     await waitForWorkflowRecords(port, run.sessionId)
+    await body({ page, port, dataDir, run })
+  } finally {
+    run.closeListen()
+    await cleanupRealApp(cleanup, dataDir, run.projectDir, ...extraProjectDirs())
+  }
+}
 
+// ── RE1: 托盘 widget 分桶挂载 + 行点击 → 浮层定位该 run ──────────────────
+
+test('RE1: 托盘 workflow 行点击 → 浮层打开且定位该 run（T1 行集 + T3 入口归宿）', async () => {
+  await withProbeRunWorkflowReady(async ({ page }) => {
     // ── T1 行集：widget 区分桶挂载，徽标/呼吸点/面板 head 计数同源（同一份 meta 推送）──
-    await expect(widgetButton(page, 'workflow').getByTestId('tray-widget-badge')).toHaveText('1')
-
-    const panel = await openWidgetPanel(page, 'workflow')
+    const panel = await openWorkflowPanelWithBadgeBaseline(page)
     // head 标题随 UI 语言（tray-panel-interact §3.3 D9：扩展产文案 + readUiLocale）——
     // 真机默认 zh-CN（renderer 首启推送 ui-preferences.json），故期望中文文案
     await expect(panel.getByTestId('tray-widget-panel-title')).toHaveText('工作流')
@@ -274,21 +307,13 @@ test('RE1: 托盘 workflow 行点击 → 浮层打开且定位该 run（T1 行�
     // ESC 后 drawer-toggle 仍可正常打开 drawer——Panel 状态未被临时层改变
     await page.getByTestId('drawer-toggle').click()
     await expect(page.getByTestId('drawer-area')).toBeVisible({ timeout: 5_000 })
-  } finally {
-    run.closeListen()
-    await cleanupRealApp(cleanup, dataDir, run.projectDir)
-  }
+  })
 })
 
 // ── RE2: D11 导航后面板收起联动（RL8）──────────────────────────────────
 
 test('RE2: 导航后面板收起联动（D11/RL8）——容器从关到开的边沿 → 面板收起且 pin 清除', async () => {
-  test.setTimeout(240_000)
-  const { page, port, run, cleanup, dataDir } = await launchWithProbeRun()
-  try {
-    await waitForWorkflowWidgetRunning(page)
-    await waitForWorkflowRecords(port, run.sessionId)
-
+  await withProbeRunWorkflowReady(async ({ page }) => {
     // pin 托盘 workflow widget 面板（点击 = pin，不等 hover 延时）
     const panel = await openWidgetPanel(page, 'workflow')
     await expect(panel).toHaveAttribute('data-pinned', 'true')
@@ -312,47 +337,88 @@ test('RE2: 导航后面板收起联动（D11/RL8）——容器从关到开的�
       page.locator('[data-testid="tray-panel"][data-panel-key="widget:workflow"]'),
     ).toHaveCount(0)
     await expect(widgetButton(page, 'workflow')).toHaveAttribute('aria-pressed', 'false')
-  } finally {
-    run.closeListen()
-    await cleanupRealApp(cleanup, dataDir, run.projectDir)
-  }
+  })
 })
 
 // ── RE3: 无 workflow 数据会话的托盘挂载回归（T2 场景本体）────────────────
 
 test('RE3: 切到无 workflow 数据的 session → widget 条目摘除，切回恢复（T2 挂载回归）', async () => {
-  test.setTimeout(240_000)
-  const { page, port, run, cleanup, dataDir } = await launchWithProbeRun()
-  // 对照 session 的 cwd 临时目录（建 session 可能失败，声明在 try 外供 finally 兜底清理）
+  // 对照 session 的 cwd 临时目录（建 session 可能失败，声明在 body 外供 extraProjectDirs 兜底清理）
   let emptyProjectDir: string | null = null
-  try {
-    await waitForWorkflowWidgetRunning(page)
-    await waitForWorkflowRecords(port, run.sessionId)
-    await expect(widgetButton(page, 'workflow')).toBeVisible()
+  await withProbeRunWorkflowReady(
+    async ({ page, port }) => {
+      await expect(widgetButton(page, 'workflow')).toBeVisible()
 
-    // 建一个不起 workflow 的会话（判据同原 T2：无 workflow 记录 → 条目整体摘除）
-    emptyProjectDir = makeTempDir('taiji-tray-entry-empty-proj-')
-    const emptyReply = await wsRoundTrip(
-      port,
-      {
-        type: 'session.create',
-        id: 'tray-entry-empty-create',
-        payload: { cwd: emptyProjectDir, label: EMPTY_LABEL },
-      },
-      'tray-entry-empty-create',
-    )
-    expect(emptyReply.type).toBe('session.created')
-    await selectSessionInSidebar(page, EMPTY_LABEL)
-    await expect(
-      widgetButton(page, 'workflow'),
-      '无 workflow 数据的 session：条目整体摘除（归零不虚亮——DOM 层不存在，非空壳）',
-    ).toHaveCount(0, { timeout: 15_000 })
+      // 建一个不起 workflow 的会话（判据同原 T2：无 workflow 记录 → 条目整体摘除）
+      emptyProjectDir = makeTempDir('taiji-tray-entry-empty-proj-')
+      const emptyReply = await wsRoundTrip(
+        port,
+        {
+          type: 'session.create',
+          id: 'tray-entry-empty-create',
+          payload: { cwd: emptyProjectDir, label: EMPTY_LABEL },
+        },
+        'tray-entry-empty-create',
+      )
+      expect(emptyReply.type).toBe('session.created')
+      await selectSessionInSidebar(page, EMPTY_LABEL)
+      await expect(
+        widgetButton(page, 'workflow'),
+        '无 workflow 数据的 session：条目整体摘除（归零不虚亮——DOM 层不存在，非空壳）',
+      ).toHaveCount(0, { timeout: 15_000 })
 
-    // 切回 → 恢复（读分区，非残留）
-    await selectSessionInSidebar(page, SESSION_LABEL)
-    await expect(widgetButton(page, 'workflow')).toBeVisible({ timeout: 15_000 })
-  } finally {
-    run.closeListen()
-    await cleanupRealApp(cleanup, dataDir, run.projectDir, ...(emptyProjectDir ? [emptyProjectDir] : []))
-  }
+      // 切回 → 恢复（读分区，非残留）
+      await selectSessionInSidebar(page, SESSION_LABEL)
+      await expect(widgetButton(page, 'workflow')).toBeVisible({ timeout: 15_000 })
+    },
+    () => (emptyProjectDir !== null ? [emptyProjectDir] : []),
+  )
+})
+
+// ── RE4: composer-tray-protocol A2——富行结构（行四段 + 状态胶囊 + 行内操作槽）──
+// 设计 §4.1 V2（L3 脚本半边：行结构 testid + 状态标签文字断言）；载体选择登记（impl-plan
+// A2 verifyAsset 判 new 场景剧本，实际落位 = 本 spec 扩展——复用既有装配助手与 E2E-REAL-01
+// R2 登记，免新开 e2e-map 条目，dev-flow D3 编译 ledger 有登记）。
+
+test('RE4: workflow 面板富行结构——主名/subLabel 副文本/状态胶囊/行内中止（D2/D3/D4/D8）', async () => {
+  await withProbeRunWorkflowReady(async ({ page }) => {
+    const panel = await openWidgetPanel(page, 'workflow')
+    const row = workflowRows(panel).first()
+
+    // 行四段之一主名：label 只放 scriptName（D8——slug/成员进度已迁 subLabel）
+    await expect(row).toContainText(PROBE_NAME)
+    // 行四段之二副文本：subLabel 段在场且非空（slug · 成员进度 N/M）
+    await expect(row.getByTestId('list-tree-sub-label')).toBeVisible()
+    await expect(row.getByTestId('list-tree-sub-label')).not.toHaveText('')
+    // 行四段之三状态胶囊：running → 宿主 i18n 枚举映射档（D3 渲染序 statusLabel ?? i18n）
+    await expect(row.getByTestId('list-tree-status')).toHaveText('运行中')
+    // 行四段之四行内操作槽：running 行的中止按钮内嵌行尾（pin 态可见——openWidgetPanel
+    // 点击即 pin；不再有兄弟 action-bar 独立块，D4/D8）
+    await expect(row.locator('[data-testid^="gui-action-bar-item-abort-"]')).toBeVisible()
+  })
+})
+
+// ── RE5: composer-tray-protocol A4——中止经行内两段式确认 → 终态后无数字角标 ──
+// 设计 §4.1 V3（红色 0 角标根因消除的真机集成态：推送侧 running>0 才推 badge（D8）
+// × 宿主角标链第三档退役（badge ?? progress.label 两档）双缺 → running=0 时按钮无角标）。
+
+test('RE5: 行内中止两段式确认 → run 终态后 workflow 按钮无角标（D8/A4）', async () => {
+  await withProbeRunWorkflowReady(async ({ page }) => {
+    // 起跑态基线在 helper 内断言：1 个运行中 run → badge 在场（D8 badge=String(running) 规则）
+    const panel = await openWorkflowPanelWithBadgeBaseline(page)
+    const abortButton = () => panel.locator('[data-testid^="gui-action-bar-item-abort-"]').first()
+    // 两段式确认（D4 状态机：首击翻确认态「确认中止？」，再击执行）
+    await abortButton().click()
+    await expect(abortButton()).toContainText('确认中止？')
+    await abortButton().click()
+
+    // 终态：running=0 → 推送侧不再推 badge（D8）+ 宿主无第三档兜底（U2a 退役）→
+    // 按钮无数字角标（红色 0 消失）、呼吸点熄灭
+    await expect(widgetButton(page, 'workflow').getByTestId('tray-widget-badge')).toHaveCount(0, {
+      timeout: 30_000,
+    })
+    await expect(widgetButton(page, 'workflow').getByTestId('tray-widget-pulse')).toHaveCount(0, {
+      timeout: 15_000,
+    })
+  })
 })

@@ -19,8 +19,8 @@
  * 清空该 scope 全部 view（plugin 重载/崩溃时）；session-destroyed → 会话域分区 cleanup（ERR4）。
  * GuiComponent 类型从 @zhushanwen/extension-protocol import（P2 同源）。
  */
-import { isGuiComponent } from '@zhushanwen/extension-protocol'
-import type { GuiComponent, WidgetMeta } from '@zhushanwen/extension-protocol'
+import { isGuiComponent, WIDGET_META_STATUS_VALUES } from '@zhushanwen/extension-protocol'
+import type { GuiComponent, WidgetMeta, WidgetMetaStatus } from '@zhushanwen/extension-protocol'
 import type { PluginViewScope } from '@taiji/shared'
 import { pluginViewScopeKey } from '@taiji/shared'
 import type { InternalEventBus } from './internal-event-bus'
@@ -28,13 +28,17 @@ import type { SessionScopedMap } from './utils/session-scoped-map'
 import type { WidgetPayload } from './types'
 
 /** view 缓存条目（IF10 契约）。meta 为 widget 宿主元数据（托盘 widget 区 head/badge 渲染），可选。
- *  generation 为全量替换代际（U2，plugin:viewUpdate 源携带；extension:widget 纯文本源无）。 */
+ *  generation 为全量替换代际（U2，plugin:viewUpdate 源携带；extension:widget 纯文本源无）。
+ *  placement 为容器位位置族章（composer-tray-protocol D1）：扩展源 = bridge 盖印
+ *  'composer.tray'，插件源 = runtime 按清单声明盖印随帧携带；快照回放帧透传保持（补收
+ *  链不丢章）。可选——旧帧无章时条目无该键（U2a 托盘过滤按 placement === 托盘族判定）。 */
 export interface ViewCacheEntry {
   viewId: string
   pluginId: string
   guiTree: GuiComponent[]
   meta?: WidgetMeta
   generation?: number
+  placement?: string
   updatedAt: number
 }
 
@@ -141,17 +145,47 @@ export class ViewHostStore {
       guiTree,
       ...(meta !== undefined ? { meta } : {}),
       ...(widget.generation !== undefined ? { generation: widget.generation } : {}),
+      ...(widget.placement !== undefined ? { placement: widget.placement } : {}),
       updatedAt: Date.now(),
     })
     this.notifyListeners()
   }
 
-  /** 窄化 unknown → WidgetMeta：title 是 string 即认（最小形状校验，progress/status
-   *  深度字段由消费端（托盘 widget 区）按可选处理，脏数据不崩）。非法形状丢弃（undefined）。 */
+  /**
+   * 窄化 unknown → WidgetMeta：锚四字段族任一合法即认 + 锚字段级归一化（branch-review
+   * R1 dmg-r1-1）。锚 = title（扩展通道 head 标题）/ badge（composer-tray-protocol D7：
+   * 插件通道只推 badge/status/progress 动态信息，标题取清单声明，meta 可无 title）/
+   * status（枚举值）/ progress（非数组对象）。
+   *
+   * 归一化契约：任一锚命中即缓存整条 meta，但四个锚字段先逐字段合法化再入缓存——非串
+   * title/badge、枚举外 status（词表单点 WIDGET_META_STATUS_VALUES）、非对象或数组
+   * progress 一律剥除。入缓存 meta 的锚字段恒为合法形状，消费端（托盘标题链
+   * meta.title.trim() 等）不再遇脏形状抛 TypeError 中断渲染；其余字段（icon、未知键）
+   * 不校验原样保留（消费端按需读，脏数据不崩——与 runtime 校验同款哲学）。锚全非法
+   * → 整条丢弃（undefined）。progress 数值有限性由消费端兜底（TrayWidgetPanel RD-2#8），
+   * runtime 插件通道另有 assertValidViewMeta 深校验。
+   *
+   * 注意：WidgetMeta.title 类型声明必填，badge-only / progress-only 合法形态运行时无
+   * title 键（既有契约——托盘标题链按缺省回落声明 ?? viewId，composer-tray-shell 测试
+   * 显式建模该漂移）。
+   */
   private narrowMeta(raw: unknown): WidgetMeta | undefined {
     if (raw === null || typeof raw !== 'object') return undefined
     const obj = raw as Record<string, unknown>
-    return typeof obj.title === 'string' ? (raw as WidgetMeta) : undefined
+    const hasTitle = typeof obj.title === 'string'
+    const hasBadge = typeof obj.badge === 'string'
+    const hasStatus = typeof obj.status === 'string'
+      && WIDGET_META_STATUS_VALUES.includes(obj.status as WidgetMetaStatus)
+    const hasProgress = typeof obj.progress === 'object' && obj.progress !== null && !Array.isArray(obj.progress)
+    if (!(hasTitle || hasBadge || hasStatus || hasProgress)) return undefined
+    const normalized: Record<string, unknown> = { ...obj }
+    if (!hasTitle) delete normalized.title
+    if (!hasBadge) delete normalized.badge
+    if (!hasStatus) delete normalized.status
+    if (!hasProgress) delete normalized.progress
+    // Record → WidgetMeta 直断言被 TS2352 拒（title 类型必填、运行时可缺省，见上方
+    // 契约注）；经 unknown 中转与旧实现（unknown as WidgetMeta）同通道。
+    return normalized as unknown as WidgetMeta
   }
 
   /**

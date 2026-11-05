@@ -125,7 +125,7 @@ describe('步骤真实现（非 spyOn 路径）', () => {
     await expect(restoreSessions()).resolves.toBeUndefined()
   })
 
-  it('registerMountPoints 注入 registry 后注册 8 个挂载点（Tier 1 三点 + Provider 页两点 + 容器位三族）', async () => {
+  it('registerMountPoints 注入 registry 后注册 10 个挂载点（Tier 1 三点 + Provider 页两点 + 容器位三族 + 托盘/宿主内嵌两族）', async () => {
     const register = vi.fn()
     setExtensionRegistries({
       mountPoints: { register } as never,
@@ -144,6 +144,10 @@ describe('步骤真实现（非 spyOn 路径）', () => {
       'drawer.tab',
       'overlay.content',
       'settings.section',
+      // 托盘/宿主内嵌两族（composer-tray-protocol D1/M1：与 CONTENT_SLOT_PLACEMENTS 两族
+      // 登记配套——不注册则插件同名声明经 routeAll 判 unregistered-mount-point 误告警）
+      'composer.tray',
+      'host.embed',
     ])
   })
 

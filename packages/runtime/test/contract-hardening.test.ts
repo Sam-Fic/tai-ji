@@ -871,7 +871,7 @@ describe('CT-U1 api 入口窄校验层（畸形输入 → INVALID_* 结构化错
       showInput: vi.fn<(title: string, defaultValue: string | undefined, pluginId: string) => Promise<string | undefined>>(),
       notify: vi.fn<(pluginId: string, level: string, message: string) => Promise<void>>(),
     })
-    registerViewRpcHandlers(rpc, { handleViewUpdate: effects.viewUpdated as never, mountPoints: [] })
+    registerViewRpcHandlers(rpc, { handleViewUpdate: effects.viewUpdated as never, mountPoints: [], declaredViews: () => [] })
     registerWorkspaceRpcHandlers(rpc, {
       getRootPath: () => '/tmp',
       getName: () => 'test-ws',
@@ -975,6 +975,14 @@ describe('CT-U1 api 入口窄校验层（畸形输入 → INVALID_* 结构化错
     // 不再回落活跃会话猜测
     await expectInvalid('plugin.views.update', { pluginId: 'p', viewId: 'v', guiTree: [] }, 'INVALID_VIEW_SCOPE', 'sessionId')
     await expectInvalid('plugin.views.update', { pluginId: 'p', viewId: 'v', sessionId: 's1', mountId: 'provider.authorize', guiTree: [] }, 'INVALID_VIEW_SCOPE', 'mountId')
+    // [composer-tray-protocol D7] meta 形状非法 → INVALID_VIEW_META（非对象 / 已知键类型错）
+    await expectInvalid('plugin.views.update', { pluginId: 'p', viewId: 'v', sessionId: 's1', guiTree: [], meta: 'badge-text' }, 'INVALID_VIEW_META', 'meta')
+    await expectInvalid('plugin.views.update', { pluginId: 'p', viewId: 'v', sessionId: 's1', guiTree: [], meta: { badge: 42 } }, 'INVALID_VIEW_META', 'badge')
+    await expectInvalid('plugin.views.update', { pluginId: 'p', viewId: 'v', sessionId: 's1', guiTree: [], meta: { status: 'bogus' } }, 'INVALID_VIEW_META', 'status')
+    await expectInvalid('plugin.views.update', { pluginId: 'p', viewId: 'v', sessionId: 's1', guiTree: [], meta: { progress: { current: 'x', total: 2 } } }, 'INVALID_VIEW_META', 'progress')
+    // [composer-tray-protocol D6] 会话域存储资格：viewId 未命中本插件清单声明 → UNDECLARED_VIEW_ID
+    //（declaredViews 端口在本 harness 返回空——无声明副本即拒；文案附补声明指引）
+    await expectInvalid('plugin.views.update', { pluginId: 'p', viewId: 'v', sessionId: 's1', guiTree: [] }, 'UNDECLARED_VIEW_ID', 'contributes.views')
   })
 
   it('CT-U1 畸形输入零写副作用：全部写通道未被调用、注册表零条目（不落盘不毒化）', async () => {
@@ -986,6 +994,7 @@ describe('CT-U1 api 入口窄校验层（畸形输入 → INVALID_* 结构化错
       ['plugin.sessions.sendMessage', {}],
       ['plugin.notify', { pluginId: 'p', level: 'info', message: 42 }],
       ['plugin.views.update', { pluginId: 'p', viewId: 'v', sessionId: 's1', guiTree: {} }],
+      ['plugin.views.update', { pluginId: 'p', viewId: 'v', sessionId: 's1', guiTree: [], meta: { badge: 42 } }],
       ['plugin.agent.setModel', { model: 42 }],
       ['plugin.commands.register', { pluginId: 'p', command: { id: 'x' }, handlerId: 42 }],
       ['plugin.tools.register', { pluginId: 'p', name: {}}],

@@ -35,7 +35,8 @@ export type {
 // pin 门控注入契约（tray-panel-interact §3.3 D6）：托盘 widget 面板外壳（TrayWidgetPanel）
 // provide 当前面板 pinned 位（响应式源），Actionbar/ListTree inject 同键——交互项非 pin 态
 // 降级纯展示；注入缺省（非托盘挂载位）= 门控不生效。symbol 跨包同一实例，经 barrel 导出
-export { TRAY_PIN_STATE_KEY } from './primitives/Actionbar.vue'
+// （键与两原语的共享接线同居 interaction-executors，见该文件头注释）
+export { TRAY_PIN_STATE_KEY } from './interaction-executors'
 // text-input 值回传注入契约（provider-plugin-access D8）：mount 点容器 provide（它同时掌握
 // pluginId + viewId），TextInput.vue inject 同一 key——key symbol 必须跨包同一实例
 export { UI_EVENT_SENDER_KEY } from './primitives/ui-event-sender-key'

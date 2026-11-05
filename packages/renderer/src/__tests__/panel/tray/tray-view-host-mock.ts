@@ -26,8 +26,28 @@ export function ansiLine(text: string): GuiComponent {
   return { type: 'ansi-text', props: { lines: [text] } }
 }
 
-export function makeEntry(viewId: string, guiTree: GuiComponent[], meta?: WidgetMeta): ViewCacheEntry {
-  return { viewId, pluginId: 'ext-x', guiTree, updatedAt: UPDATED_AT, ...(meta ? { meta } : {}) }
+/**
+ * 托盘推送通道的条目 fixture（composer-tray-protocol U1 后 wire 真值）：托盘两推送通道
+ * 在写入点均盖托盘章——扩展 setWidget 由 bridge 统一盖印 'composer.tray'，插件 views.update
+ * 由 runtime 按清单声明盖印（托盘位声明 = composer.tray）。缺省带章 = 复刻「托盘可见条目」
+ * 形态（M2 过滤上线后无章条目不出按钮，存量用例语义是托盘通道推送，非无章旧帧）；
+ * 过滤矩阵用例（③④⑤态）经 overrides 显式传其他 placement / 无章形态。
+ */
+export function makeEntry(
+  viewId: string,
+  guiTree: GuiComponent[],
+  meta?: WidgetMeta,
+  overrides?: Partial<Pick<ViewCacheEntry, 'placement' | 'pluginId'>>,
+): ViewCacheEntry {
+  return {
+    viewId,
+    pluginId: 'ext-x',
+    placement: 'composer.tray',
+    guiTree,
+    updatedAt: UPDATED_AT,
+    ...(meta ? { meta } : {}),
+    ...overrides,
+  }
 }
 
 export function makeWidgetSource(sessionId: string): MockWidgetSource {
