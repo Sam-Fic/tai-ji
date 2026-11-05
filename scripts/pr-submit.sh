@@ -53,6 +53,11 @@ GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || { echo "Not a git repo"
 cd "$GIT_ROOT"
 
 BRANCH="$(git branch --show-current)"
+if [[ "$DRY_RUN" == "1" && -z "$BRANCH" ]]; then
+    # dry-run 语义 = 不推不开 PR：CI 检出的 PR head 是 detached HEAD，分支名仅日志用途
+    BRANCH="(detached)"
+    log "(dry-run) detached HEAD — branch name is log-only in this mode"
+fi
 [[ -z "$BRANCH" ]] && { echo "Cannot determine current branch" >&2; exit 2; }
 [[ "$BRANCH" == "$BASE" ]] && { echo "Current branch is $BASE; refusing to push" >&2; exit 2; }
 
