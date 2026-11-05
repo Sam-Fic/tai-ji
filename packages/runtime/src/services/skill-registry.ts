@@ -90,35 +90,13 @@ const GLOBAL_KEY = '__global__'
 const WATCH_IGNORED = /(^|[\/\\])(node_modules|dist|build|\.git|\.next|coverage|out)([\/\\]|$)/
 
 /**
- * chokidar 轮询间隔（ms）——仅在显式开启 polling 降级时生效（TAIJI_AGENT_SKILL_WATCH_POLLING=1）。
- *
- * [HISTORICAL] 2026-07-27 起默认 usePolling:true：chokidar v4 移除 fsevents 绑定后 macOS
- * fs.watch 对「已 watch 目录下新建子目录」事件不可靠（nodejs/node#52601 启动竞态 +
- * FSEvents coalescing 丢事件），当时实测（mkdir new-skill && 写 SKILL.md，连跑 5 次）
- * 事件触发率仅 ~40%，landing 浮层长期不刷新。
- * 2026-08-28 复测（Node v24.11.1 / macOS 25，已 watch 根目录下 10 轮「新建子目录+写文件」，
- * 21/21 事件全部到达）：该缺陷在当前运行时不再复现，故默认回到原生事件（事件驱动更快、
- * 零常驻 stat 开销），polling 降级为显式开关。1500ms 沿用当时的折中值（skill 目录条目
- * < 50，单轮 stat 开销可忽略）。若缺陷在未来 Node/macOS 版本复发需重开降级，且 skill
- * discovery 引入大量第三方目录时须重测负载。
- */
-const WATCH_POLL_INTERVAL_MS = 1500
-
-/**
- * chokidar watcher 配置（全局 + 项目级共用）。
- *
- * 默认原生事件（usePolling:false）；TAIJI_AGENT_SKILL_WATCH_POLLING=1 回退 stat 轮询
- * （平台缺陷复发时的逃生口，见上）。polling 用 stat 不占 fd，不会重蹈 2026-07-22
- * EMFILE 事故（那是 watch 整个 home 目录十万文件致 fd 耗尽）。
+ * chokidar watcher 配置（全局 + 项目级共用，原生事件驱动）。
  * 场景1（settings 改路径 → rebuildGlobal → 刷新）不依赖 watcher，不受影响继续工作。
  */
 const WATCH_OPTIONS = {
   ignored: WATCH_IGNORED,
   ignoreInitial: true,
   persistent: true,
-  usePolling: process.env.TAIJI_AGENT_SKILL_WATCH_POLLING === '1',
-  interval: WATCH_POLL_INTERVAL_MS,
-  binaryInterval: WATCH_POLL_INTERVAL_MS,
 } as const
 
 /**
@@ -139,37 +117,12 @@ const MAX_WATCHER_ERRORS = 5
 const MAX_PROJECT_WATCHERS = 8
 
 /**
- * [U2 / cache-governance 1-4] 兜底周期重扫间隔（ms）：5min。
- *
- * 背景：watcher 存在三种「缓存与磁盘发散且不自愈」的形态——① error 熔断只 close 不恢复
- * （熔断后该 scope 冻结到重启）；② macOS fs.watch 静默丢事件前科（2026-07-27 实测 ~40%
- * 触发率，见 WATCH_POLL_INTERVAL_MS 注释）；③ project watcher LRU 驱逐窗口失明。
- * 兜底语义：固定周期无条件重扫 globalCache + 全部活跃 projectCache cwd 使缓存重新收敛，
- * 一个机制覆盖全部三种发散（cache-governance 设计 §3.1 项 1-4，G5「失效机制故障可自愈」：
- * 不允许任何形态的永久发散到重启）。watcher 正常时成本 = 每 5min 一次 readdir 级扫描，
- * 量级与 chokidar 初始扫描相同，可忽略。
- */
-const FALLBACK_RESCAN_INTERVAL_MS = 300_000 // 5min（= 5 * 60 * 1000，单值字面量形式对齐 watchdog/npm-installer 惯例）
-
-/**
- * [U2] skill 列表逐项严格相等（兜底重扫的「值变化」收敛判定）。
- * SkillInfo 是扁平 DTO（含可选嵌套 sources），同实现扫描产物键序稳定，序列化比对足够精确；
- * 列表量级小（skill 条目 < 50），成本可忽略。
- */
-function sameSkillLists(a: SkillInfo[], b: SkillInfo[]): boolean {
-  if (a.length !== b.length) return false
-  return a.every((item, i) => JSON.stringify(item) === JSON.stringify(b[i]))
-}
-
-/**
  * SkillRegistry：全局 + 项目级 skill 缓存 + chokidar 文件监听。
  *
  * 生命周期：
- * - initGlobal()：组合根在 server.start 后调用，扫描全局目录 + 挂全局 watcher + 武装兜底重扫定时器。
+ * - initGlobal()：组合根在 server.start 后调用，扫描全局目录 + 挂全局 watcher。
  * - getProjectSkills(cwd)：按需懒扫描 + 挂项目 watcher，命中缓存直接返回。
- * - 兜底重扫（U2）：固定周期无条件重扫全部缓存 scope，值变化才广播（watcher 熔断/丢事件/
- *   LRU 驱逐发散的自愈通道，cache-governance G5）。
- * - dispose()：关闭所有 watcher + 清兜底定时器（测试 / shutdown 时调）。
+ * - dispose()：关闭所有 watcher + 清缓存与 in-flight 状态（测试 / shutdown 时调）。
  */
 export class SkillRegistry {
   private globalCache: SkillInfo[] = []
@@ -206,124 +159,18 @@ export class SkillRegistry {
   private rebuildInFlight: Promise<void> | null = null
   /** 是否已 dispose。置 true 后 getProjectSkills/rebuildGlobal 直接 return，防止 dispose 后 in-flight 写回。 */
   private disposed = false
-  /** [U2] 兜底周期重扫定时器（initGlobal 武装 / dispose 清理；unref 不持有事件循环）。 */
-  private fallbackTimer: NodeJS.Timeout | null = null
-  /** [U2] 兜底重扫防重入：上一轮未完成（scanFn 慢于周期）时跳过本轮 tick，防扫描堆叠。 */
-  private fallbackRescanRunning = false
 
   constructor(private readonly options: SkillRegistryOptions) {
     this.scanFn = options._scanFn ?? this.defaultScanFn.bind(this)
   }
 
   /**
-   * 启动期扫描全局 skill 目录并缓存 + 挂全局 watcher + 武装兜底周期重扫定时器（U2）。
+   * 启动期扫描全局 skill 目录并缓存 + 挂全局 watcher。
    * 必须在 server.start 后调用（组合根 index.ts 编排）。
    */
   async initGlobal(): Promise<void> {
-    try {
-      this.globalCache = await this.scanFn('')
-      this.setupGlobalWatcher()
-    } finally {
-      // finally 武装：启动扫描失败时（globalCache 空 + watcher 未挂，组合根对该失败只降级
-      // 不阻塞启动）兜底重扫是唯一自愈通道，下个周期自动补上缓存——G5 自愈语义覆盖
-      // 「启动即故障」形态。
-      this.armFallbackRescan()
-    }
-  }
-
-  // ── [U2] 周期兜底重扫（watcher 熔断 / 静默丢事件 / LRU 驱逐发散的自愈通道）──────
-
-  /**
-   * 武装兜底重扫定时器（幂等，防重复 init 堆叠定时器）。
-   * 触发无条件（不判断 watcher 健康状态——静默丢事件形态下 watcher 看起来健康，判断不可靠）；
-   * 广播有条件（值变化才经 onChange 通知链，见 fallbackRescanGlobal/Project）。
-   * 不重挂 watcher：watch 恢复是批 4 观测器的职责，本兜底只保证缓存收敛。
-   */
-  private armFallbackRescan(): void {
-    if (this.fallbackTimer) return
-    const timer = setInterval(() => {
-      void this.runFallbackRescan()
-    }, FALLBACK_RESCAN_INTERVAL_MS)
-    // 纯兜底周期任务：unref 不持有事件循环（不阻进程退出）；shutdown 由 dispose 显式清理
-    timer.unref()
-    this.fallbackTimer = timer
-  }
-
-  /**
-   * 兜底重扫一轮：globalCache + 全部活跃 projectCache cwd，逐 scope 独立容错
-   * （单 scope scanFn 失败保留该 scope 旧值，不拖垮其他 scope 的收敛）。
-   * 串行执行：readdir 级成本，量级可忽略，串行避免多 cwd 并发扫描的 IO 尖峰。
-   */
-  private async runFallbackRescan(): Promise<void> {
-    if (this.disposed || this.fallbackRescanRunning) return
-    this.fallbackRescanRunning = true
-    try {
-      await this.fallbackRescanGlobal()
-      for (const cwd of this.projectCache.keys()) {
-        await this.fallbackRescanProject(cwd)
-      }
-    } finally {
-      this.fallbackRescanRunning = false
-    }
-  }
-
-  /**
-   * 重扫全局缓存：值有变化才刷新广播。广播链下游 = reloadOrchestrator（global 通知 =
-   * 全部活跃 idle session 的 pi reload）+ renderer 失效重新拉取，无差别周期广播违背设计
-   * 「watcher 正常时兜底成本可忽略」的成本口径——值比对即收敛判定：相等 = 缓存与磁盘
-   * 已一致，无信息需要传播。scanFn 失败保留旧值（与 rebuildGlobal 同款容错），下周期重试。
-   */
-  private async fallbackRescanGlobal(): Promise<void> {
-    return this.rescanScope({
-      scan: () => this.scanFn(''),
-      tag: 'global',
-      read: () => this.globalCache,
-      write: (v) => { this.globalCache = v },
-      notify: () => this.notifyGlobalChange(),
-    })
-  }
-
-  /**
-   * 兜底重扫单 scope 的共用收敛骨架（global / project 两路径同款，收敛口径单点）：scanFn
-   * 失败保留该 scope 旧值；读取时分区已不存在（project 路径被 invalidateAllProjects 清掉
-   * → read() 返回 undefined）则不复活已清分区；值变化才落缓存 + 广播（相等 = 缓存与磁盘
-   * 已一致，无信息需传播）。
-   */
-  private async rescanScope(opts: {
-    scan: () => Promise<SkillInfo[]>
-    tag: string
-    read: () => SkillInfo[] | undefined
-    write: (v: SkillInfo[]) => void
-    notify: () => Promise<void>
-  }): Promise<void> {
-    let fresh: SkillInfo[]
-    try {
-      fresh = await opts.scan()
-    } catch (e) {
-      console.warn(`[skill-registry] fallback rescan: ${opts.tag} scan failed, keeping stale cache:`, e)
-      return
-    }
-    const current = opts.read()
-    if (current === undefined) return
-    const changed = !sameSkillLists(current, fresh)
-    opts.write(fresh)
-    if (!changed) return
-    console.warn(`[skill-registry] fallback rescan: ${opts.tag} cache diverged from disk, refreshed via onChange (frequent = watcher event path unhealthy, check circuit-break / lost events)`)
-    await opts.notify()
-  }
-
-  /**
-   * 重扫单个项目缓存：同 fallbackRescanGlobal 的值变化收敛语义（scope='project' + cwd 广播）。
-   * 扫描期间分区被 invalidateAllProjects 清掉时不复活已清分区（重建交由下次 getProjectSkills）。
-   */
-  private async fallbackRescanProject(cwd: string): Promise<void> {
-    return this.rescanScope({
-      scan: () => this.scanFn(cwd),
-      tag: `project:${cwd}`,
-      read: () => this.projectCache.get(cwd),
-      write: (v) => { this.projectCache.set(cwd, v) },
-      notify: () => this.notifyProjectChange(cwd),
-    })
+    this.globalCache = await this.scanFn('')
+    this.setupGlobalWatcher()
   }
 
   /**
@@ -631,7 +478,7 @@ export class SkillRegistry {
   }
 
   /**
-   * 关闭所有 watcher + 清兜底定时器 + 清缓存与 in-flight 状态（全局 + 项目级）。shutdown / 测试清理时调。
+   * 关闭所有 watcher + 清缓存与 in-flight 状态（全局 + 项目级）。shutdown / 测试清理时调。
    *
    * W-dispose：必须清 projectInFlight——竞态场景下 getProjectSkills 进入 in-flight await scanFn →
    * 期间调 dispose → scanFn resolve → 检查 projectInFlight.has(cwd) 仍 true → 走 projectCache.set +
@@ -642,10 +489,6 @@ export class SkillRegistry {
    */
   dispose(): void {
     this.disposed = true
-    if (this.fallbackTimer) {
-      clearInterval(this.fallbackTimer)
-      this.fallbackTimer = null
-    }
     for (const timer of this.debounceTimers.values()) {
       clearTimeout(timer)
     }
@@ -807,7 +650,7 @@ export class SkillRegistry {
 
   /**
    * [skill-reload D8-a] watcher 批归因日志：dir 用 debounceKey 的 label 形态（global /
-   * project:<cwd>，与熔断/兜底重扫日志的 tag 一致）；affectedSessions 与通知 payload
+   * project:<cwd>，与熔断日志的 tag 一致）；affectedSessions 与通知 payload
    * 共用 getAffectedSessionIds 单一口径。
    */
   private logWatcherBatch(key: string): void {

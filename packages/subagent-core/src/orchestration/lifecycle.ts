@@ -3,13 +3,13 @@
  *
  * Workflow run 生命周期 free functions（D-12）。
  *
- * 5 个导出函数：
+ * 4 个导出函数：
  * - runWorkflow(spec, deps, signal?) → Promise<runId>
  * - abortRun(runId, deps, reason?, doneReason?) → Promise<void>（done no-op）
  * - terminateRunningRuns(deps, reason) → Promise<void>（session 切换/关闭终止；
  *   [D11] 统一落 interrupted 暂停态——可再 resume，2026-09-29 用户裁决）
  * - evictDoneRunsBeyondCap(runs, keepDone) → number（done run 内存淘汰）
- * - scheduleTimeBudget(runId, deps, budgetTimeMs) → timer（C.7 时间预算）
+ *（scheduleTimeBudget（C.7 时间预算）已随 run 级墙钟预算机制删除。）
  *
  * 第 6 个导出：recoverCrashedRuns(store, runs, reason, hooks?) —— 崩溃恢复装配
  * （loadAll → 中断收编 → evict），宿主专属事件经 hooks 外置。[D15] 后收编动作改经
@@ -38,8 +38,8 @@
  */
 
 import { getLogger } from "../core/logger.ts";
+import { dirname } from "node:path";
 
-import { assertSafeTimerDelay } from "../shared/timer-delay.ts";
 import { validateRunArgs } from "./args-validator.ts";
 // [第 4 道检查扩展] 派发前语法闸原语（与生成期同源；见 assertWorkflowScriptSyntax 头注）。
 import { assertWorkflowScriptSyntax } from "./script-syntax.ts";
@@ -165,7 +165,7 @@ function broadcastAbortToWorker(run: WorkflowRun, reason: string): void {
 export function makeHandlers(run: WorkflowRun, deps: LifecycleDeps): WorkerHandlers {
   // [OR-7] per-run deps 视图：包装 onRunDone，把「run 终态」转译为「移除 signal abort
   // listener」。worker-message-pump 全部终态路径（handleReturn / handleWorkerError /
-  // handleScriptError / handleWorkerExit / 预算终止 / time_limited / [OR-2] rebuild
+  // handleScriptError / handleWorkerExit / 预算终止 / [OR-2] rebuild
   // 失败收敛——均经 finalizeRun）都经 handlers 调用链消费本视图——消息侧终态在此
   // 统一收尾；abortRun / terminateRunningRuns 两个 lifecycle 自有终态路径另行显式 dispose。
   //
@@ -217,40 +217,6 @@ export function makeHandlers(run: WorkflowRun, deps: LifecycleDeps): WorkerHandl
   return handlers;
 }
 
-// ── scheduleTimeBudget（C.7 Run 级时间预算调度） ──────────
-
-/**
- * 启动 run 级墙钟时间预算计时器：到期后 abortRun(doneReason="time_limited")。
- *
- * 恢复旧 orchestrator-budget.ts 的 scheduleTimeBudgetCheck 语义——runWorkflow 启动
- * 一个 setTimeout(maxTimeMs)，到期若 run 仍未终态则转 done,time_limited。
- * 计时器存入 RunRuntime.timeBudgetTimer，release（abort/replaceRuntime）时
- * 自动清理，避免孤儿触发。worker/script 错误重试经 rebuildRuntime 重排新计时器。
- *
- * @returns 计时器句柄（未设预算时 undefined）
- * @throws budgetTimeMs 超出 Node setTimeout 上限（2^31-1）——溢出值会被 Node 置 1ms
- *   立即触发（「不限时预算」变「立即超时」），fail-fast 不静默 clamp（U1）。
- */
-export function scheduleTimeBudget(
-  runId: string,
-  deps: LifecycleDeps,
-  budgetTimeMs: number,
-): ReturnType<typeof setTimeout> {
-  // [U1] arm 入口：值流入 setTimeout 前校验安全域（>2^31-1 会变 1ms 立即触发）。
-  assertSafeTimerDelay(budgetTimeMs, "budgetTimeMs");
-  const timer = setTimeout(() => {
-    void abortRun(runId, deps, "Time budget exceeded", "time_limited").catch(
-      (err: unknown) => {
-        const msg = toErrorMessage(err);
-        logger.error(`[workflow] time budget abort failed: ${msg}`);
-      },
-    );
-  }, budgetTimeMs);
-  // unref：不阻止 Node 退出（workflow 是后台任务，不应因计时器持有事件循环）。
-  timer.unref();
-  return timer;
-}
-
 // ── runWorkflow ──────────────────────────────────────────────
 
 /**
@@ -282,7 +248,6 @@ function createRunningRun(runId: string, spec: RunSpec): WorkflowRun {
     {
       budget: new Budget({
         maxTokens: spec.budgetTokens,
-        maxTimeMs: spec.budgetTimeMs,
       }),
       calls: new Map(),
       trace: new Trace(),
@@ -293,47 +258,22 @@ function createRunningRun(runId: string, spec: RunSpec): WorkflowRun {
 }
 
 /**
- * C.7：run 级时间预算计时器（spec.budgetTimeMs > 0 时启用，到期 abortRun
- * time_limited）。OR-1 顺序修复（unbounded-wait-audit §4.1）：调度先于
- * workerHost.start——budgetTimeMs 越界（>2^31-1）的 fail-fast throw
- * （assertSafeTimerDelay）发生在任何副作用（worker 启动、runs 注册）之前，
- * 杜绝「worker 已跑、run 永不可达」的孤儿窗口（此前 runs.set 在最末，
- * fail-fast 后连 abortRun 都抛 not found）。
- */
-function armTimeBudgetTimer(
-  runId: string,
-  deps: LifecycleDeps,
-  spec: RunSpec,
-): ReturnType<typeof setTimeout> | undefined {
-  return spec.budgetTimeMs && spec.budgetTimeMs > 0
-    ? scheduleTimeBudget(runId, deps, spec.budgetTimeMs)
-    : undefined;
-}
-
-/**
- * 启动 worker；失败时清理已挂的 timeBudget timer——前移的代价：start 抛错时
- * 已挂的 timer 会残留，到期对从未注册的 runId 触发 abortRun（必抛 not found）
- * ——该路径 runs.set 未到，须就地清理。
+ * 启动 worker（原 startWorkerGuarded 的 timeBudget timer 清理面已随时间预算
+ * 机制删除——worker.start 抛错时无残留 timer 需清理）。
  */
 function startWorkerGuarded(
   spec: RunSpec,
   deps: LifecycleDeps,
   handlers: WorkerHandlers,
-  timeBudgetTimer: ReturnType<typeof setTimeout> | undefined,
 ): WorkerHandle {
-  try {
-    return deps.workerHost.start(spec, spec.args, handlers);
-  } catch (err) {
-    if (timeBudgetTimer) clearTimeout(timeBudgetTimer);
-    throw err;
-  }
+  return deps.workerHost.start(spec, spec.args, handlers);
 }
 
 /**
  * signal abort → abortRun（[OR-7] 命名 listener + run 终态移除，注册表
  * signalAbortDisposers；触发时自移除 = 显式 once 语义）。
- * [B-2] 注册点后移到全部 fail-fast throw（assertSafeTimerDelay / workerHost.start）
- * 成功之后——旧实现先注册 listener，scheduleTimeBudget/start 两条 throw 路径 run
+ * [B-2] 注册点后移到全部 fail-fast throw（validateRunArgs / 语法闸 / workerHost.start）
+ * 成功之后——旧实现先注册 listener，start 等 throw 路径 run
  * 永不到终态，disposeSignalAbortListener 永不被调，同 signal 重试每次泄漏一个
  * listener（MaxListeners 告警面）。移后 throw 路径天然未注册，零泄漏；首个真正
  * 副作用前完成校验的语义保持（addEventListener 本身也是设计意义上的副作用）。
@@ -433,16 +373,15 @@ export async function runWorkflow(
   // 构造 handlers + runtime（worker + controller）
   const handlers = makeHandlers(run, deps);
   const controller = new AbortController();
-  const timeBudgetTimer = armTimeBudgetTimer(runId, deps, spec);
-  const worker = startWorkerGuarded(spec, deps, handlers, timeBudgetTimer);
-  const runtime = new RunRuntime(worker, controller, timeBudgetTimer);
+  const worker = startWorkerGuarded(spec, deps, handlers);
+  const runtime = new RunRuntime(worker, controller);
 
   // assignRuntime（注入 runtime，恢复 I1：running ⟺ runtime!==undefined）
   run.assignRuntime(runtime);
 
   // 注册到 deps.runs（assignRuntime 之后——构造到 assignRuntime 之间 run 处于
   // I1 跳过窗口（running 而 runtime undefined），后移保证窗口对外不可见；
-  // scheduleTimeBudget/worker.start 抛错时 run 未注册，无孤儿 run 残留）
+  // worker.start 抛错时 run 未注册，无孤儿 run 残留）
   deps.runs.set(runId, run);
 
   registerSignalAbortListener(run, runId, deps, signal);
@@ -484,7 +423,7 @@ export async function runWorkflow(
  * @param runId
  * @param deps
  * @param reason 可选中止原因（存 run.state.error）
- * @param doneReason 终态原因（默认 "aborted"；超时场景传 "time_limited"，C.7）
+ * @param doneReason 终态原因（默认 "aborted"）
  * @throws runId 不存在
  */
 export async function abortRun(
@@ -751,11 +690,17 @@ export async function recoverCrashedRuns(
       // 失败围栏：record IO error 留痕后继续（收编是旁路维护不放大失败——A-5
       // 语义降级，run 保持 running 形态待下次启动重试收编）。
       try {
+        // journalDir 显式注入：RunStore port 的 stateFilePath（record 流绝对路径）
+        // 取 dirname——interruptRun 缺省走 resolvePiWorkflowRunsDir（会话锚未绑定时
+        // fail-fast；启动恢复发生在 initSession 绑定前，缺省路径必然解析失败，
+        // 收编被围栏吞成 recovered=0。2026-11-05 三方宿主探针实证）。
+        const journalDir = dirname(store.stateFilePath(run.runId));
         const adopted = await interruptRun(run.runId, {
           // [D2] 中断来源标记：崩溃收编 = crashed（RunErrorCode 中断族新成员——
           // 设计 §3.1 事件表已登记）。
           errorCode: "crashed",
           reason,
+          journalDir,
           workflowName: run.spec?.scriptName,
           appendInterruptedEntry:
             hooks?.appendSettledEntry !== undefined

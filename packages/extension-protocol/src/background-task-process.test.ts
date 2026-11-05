@@ -133,13 +133,12 @@ describe('getProcessStartTimeSec', () => {
   })
 
   describe('错误注入（mock spawnSync；失败一律 undefined → 调用方保守跳过契约）', () => {
-    it('ps 正常：lstart 解析为 epoch 秒（floor），参数带 5s 超时', () => {
+    it('ps 正常：lstart 解析为 epoch 秒（floor），无墙钟（同步等待自然返回）', () => {
       childMock.spawnSync.mockReturnValue({ status: 0, error: undefined, stdout: 'Mon Aug 25 14:23:45 2026\n' })
       const sec = getProcessStartTimeSec(999)
       expect(sec).toBe(Math.floor(Date.parse('Mon Aug 25 14:23:45 2026') / 1000))
       expect(childMock.spawnSync).toHaveBeenCalledWith('ps', ['-o', 'lstart=', '-p', '999'], {
         encoding: 'utf8',
-        timeout: 5_000,
       })
     })
 
@@ -454,7 +453,7 @@ describe('killProcessTree 回退路径（组长已死 → 单 pid kill + pgrep �
       // （杀孙辈 5200 再杀子辈 5100 / 5101，防目标死后子进程被 reparent 逃逸枚举）
       // → 最后杀目标 4321 本身
       expect(killSpy.mock.calls.map((c) => c[0])).toEqual([-4321, 5200, 5100, 5101, 4321])
-      expect(childMock.spawnSync).toHaveBeenCalledWith('pgrep', ['-P', '4321'], { encoding: 'utf8', timeout: 5_000 })
+      expect(childMock.spawnSync).toHaveBeenCalledWith('pgrep', ['-P', '4321'], { encoding: 'utf8' })
       // 全程仅组 kill 一处失败诊断
       expect(steps).toEqual(['process-group-kill-missed'])
     })

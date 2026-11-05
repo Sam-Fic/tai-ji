@@ -58,6 +58,19 @@ export default {
       succeeded: 'Succeeded',
       failed: 'Failed',
     },
+    /**
+     * Closed-enum mapping for list-tree row status pills (composer-tray-protocol D3):
+     * host i18n fallback for the protocol's three-value TreeItem.status set, consumed by
+     * the ListTree primitive; the pusher's statusLabel field is the first-tier override
+     * (render order = override ?? mapping). Distinct family from `status` above (bash
+     * process-domain six states): this maps only the protocol status enum — judging
+     * lives with the pusher, not an extension of the bash status vocabulary.
+     */
+    statusLabel: {
+      running: 'Running',
+      done: 'Done',
+      failed: 'Failed',
+    },
     /** Panel top banners (bash) */
     corruptBanner: 'Task data corrupted; ignored (.corrupt snapshot kept)',
     disconnectBanner: 'Disconnected; refreshes automatically after reconnect',
@@ -87,7 +100,7 @@ export default {
       allTools: 'All tools',
     },
     /**
-     * Fourth entry "child sessions" (u7, design mode-system-composer-density §6.7 D7).
+     * Fourth entry "child sessions" (u7; original design doc mode-system-composer-density §6.7 D7 retired and unreachable, design basis traceable via git).
      * Row status copy mirrors TraySessionPanel's process-level status map (see DISPLAY_STATUS in
      * composables/logic/sessionStatus.ts).
      */

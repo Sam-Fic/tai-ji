@@ -70,15 +70,13 @@ describe('connection-view 转移优先级（三信号不变量）', () => {
     expect(controller.handleAuthSuccess).toHaveBeenCalledTimes(1)
   })
 
-  it('token-input 粘滞：中间态（connecting/reconnecting/failed）不覆盖，connected 才切出', async () => {
+  it('token-input 粘滞：中间态（connecting/failed）不覆盖，connected 才切出', async () => {
     notifyTokenInputRequired()
     expect(shellConnectionState.value).toBe('token-input')
 
     await toCoreState('connecting')
     expect(shellConnectionState.value).toBe('token-input')
-    await toCoreState('reconnecting')
-    expect(shellConnectionState.value).toBe('token-input')
-    // 粘滞优先级高于 failed：token 输入视图是恢复入口，预算用尽的指引不抢走它
+    // 粘滞优先级高于 failed：token 输入视图是恢复入口，失败终态的指引不抢走它
     await toCoreState('failed')
     expect(shellConnectionState.value).toBe('token-input')
 
@@ -134,19 +132,19 @@ describe('D8 重启感知：close 1001 → 重启文案分流（不升级 failed
     expect(runtimeRestarting.value).toBe(true)
     expect(connectionBannerI18nKey.value).toBe('mobile.restarting')
 
-    // 重启窗口内的重连中间态：视图停留 connecting（非 failed 全屏），重启文案保持
-    await toCoreState('reconnecting')
-    expect(shellConnectionState.value).toBe('connecting')
-    expect(shellConnectionState.value).not.toBe('failed')
+    // close 终态（failed）落在重启窗口内：视图分流 failed（断线恢复已无自动重连，
+    // failed 全屏即用户手动重试入口），重启文案保持
+    await toCoreState('failed')
+    expect(shellConnectionState.value).toBe('failed')
     expect(connectionBannerI18nKey.value).toBe('mobile.restarting')
   })
 
   it('非 1001 断线（onGoingAway 未触发）：文案维持现状 reconnecting 不变', async () => {
     await toCoreState('connected')
-    // 网络断（close code 非 1001，无 goingAway 信号）→ 掉回重连态
-    await toCoreState('reconnecting')
+    // 网络断（close code 非 1001，无 goingAway 信号）→ failed 终态
+    await toCoreState('failed')
     expect(runtimeRestarting.value).toBe(false)
-    expect(shellConnectionState.value).toBe('connecting')
+    expect(shellConnectionState.value).toBe('failed')
     expect(connectionBannerI18nKey.value).toBe('mobile.reconnecting')
   })
 

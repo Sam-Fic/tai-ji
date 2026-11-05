@@ -147,9 +147,7 @@ export function createRecord(
     parentRecordId?: string;
     /** subagent 递归深度。顶层=0。 */
     depth?: number;
-    /** [modeless 波1] chatMode 停写删除——「模式」不再是 record 状态（万物可续）。
-     *  空闲超时毫秒数（idle GC 回收节奏，覆盖默认 5min）。 */
-    idleTimeoutMs?: number;
+    /** [modeless 波1] chatMode 停写删除——「模式」不再是 record 状态（万物可续）。 */
     /** 实际执行引擎 id（P4 路由留痕，D9①）。缺省视为 pi（存量零迁移）。 */
     engine?: string;
     /** [A3/S3 修复] 来源身份冷复活透传——origin/parentRunId 与 engine 同属 identity
@@ -174,7 +172,6 @@ export function createRecord(
     rootSessionId: identity.rootSessionId,
     parentRecordId: identity.parentRecordId,
     depth: identity.depth ?? 0,
-    idleTimeoutMs: identity.idleTimeoutMs,
     engine: identity.engine,
     // [A3/S3 修复] 冷复活透传——origin 属 identity 域（见 identity 签名注释）
     origin: identity.origin,

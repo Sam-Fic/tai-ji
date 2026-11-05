@@ -19,7 +19,6 @@
  * 返回空数组保留签名，避免 CommandPopover 大改。mock 侧仍返回 fixture（mock 模式不受影响）。
  */
 import type { FileNode } from '@taiji/shared'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 import { command } from '../request'
 
 /**
@@ -28,7 +27,7 @@ import { command } from '../request'
  * @returns FileNode[]（扁平，path 相对 cwd 无前导斜杠）
  */
 export async function getFileCandidates(sessionId: string): Promise<FileNode[]> {
-  const reply = await command('file.search', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('file.search', { sessionId })
   return reply.files
 }
 
@@ -43,7 +42,7 @@ export async function getFileCandidates(sessionId: string): Promise<FileNode[]> 
  *   5000 截止（D7，adversarial-review-fixes §3.4——截断事实来自 runtime，浮层条件提示）
  */
 export async function getFileCandidatesByCwd(cwd: string): Promise<{ files: FileNode[]; truncated: boolean }> {
-  const reply = await command('file.search.cwd', { cwd }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('file.search.cwd', { cwd })
   return { files: reply.files, truncated: reply.truncated }
 }
 

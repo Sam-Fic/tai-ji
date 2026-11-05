@@ -137,30 +137,27 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
     child.stderr.emit('data', Buffer.from(`chunk-${n}-${'x'.repeat(110)}`))
   }
 
-  it('超帽触发轮转：旧数据落 .1，rename 后新 stderr 续写新主文件（fd 重建无孤儿 inode）', async () => {
+  it('超帽触发轮转：destroy 旧流后 rename 落 .1，新 stderr 续写新主文件（fd 重建无孤儿 inode）', async () => {
     const mod = await loadModule()
     const child = childOf(mod.spawnRuntimeProcess(3210))
 
-    // 帽 400B，每 chunk ~118B：chunk-4 写入前预测累计 472B 超帽 → 触发轮转（chunk-3/4 计入轮转窗口）
+    // 帽 400B，每 chunk ~118B：chunk-4 写入前预测累计 472B 超帽 → 触发轮转
     emitChunk(child, 1)
     emitChunk(child, 2)
     emitChunk(child, 3)
     emitChunk(child, 4)
     const rolled = join(logsDir, 'electron-runtime-stderr.log.1')
     await waitFor(() => existsSync(rolled), 'rotation .1 file created')
-    // rename 完成后轮转 promise 尚有微任务尾（finally 解除 suspend）——留一拍宏任务
-    await new Promise((r) => setImmediate(r))
 
-    const rolledContent = readFileSync(rolled, 'utf-8')
-    expect(rolledContent).toContain('chunk-1')
-    expect(rolledContent).toContain('chunk-2')
+    // 流关闭等待已删（destroy 直接调用，不等 close 回执）：.1 内容属「destroy 前已落盘
+    // 的部分」——在途缓冲允许丢失（stderr 仅排查证据），不断言旧 chunk 内容完整性
 
     // 轮转后写入：append fd 重建落新主文件（验收条款「轮转后 writer 继续写新文件」）
     child.stderr.emit('data', Buffer.from('final-marker-chunk'))
     const mainFile = join(logsDir, 'electron-runtime-stderr.log')
     await waitFor(() => existsSync(mainFile) && readFileSync(mainFile, 'utf-8').includes('final-marker-chunk'), 'post-rotation write lands in fresh main file')
     expect(readFileSync(mainFile, 'utf-8')).not.toContain('chunk-1')
-    expect(rolledContent).not.toContain('final-marker-chunk')
+    expect(readFileSync(rolled, 'utf-8')).not.toContain('final-marker-chunk')
   })
 
   it('未超帽不轮转：两 chunk 落主文件，无 .1 产物', async () => {

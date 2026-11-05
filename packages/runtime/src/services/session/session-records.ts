@@ -102,7 +102,7 @@ import { getSubagentMessageResultsDir, translateByTableReverse } from '@zhushanw
 import { isStrictlyUnder } from '../../utils/path-utils.js'
 import type { ISessionStore } from '../ports/session.js'
 import { toErrorMessage } from '../../utils/errors.js'
-import { withFileLockSync, type SyncFileLockOptions } from '../../utils/file-lock.js'
+import { withFileLockSync } from '../../utils/file-lock.js'
 import { atomicWrite } from '../../utils/fs-utils.js'
 import { isEntryNotFoundError } from './trace-sync.js'
 import { SCALAR_STATE_DEBOUNCE_MS } from './replicated-states.config.js'
@@ -126,11 +126,9 @@ const BYTES_PER_KB = 1024
  * 续读就地完成；超预算增量与截断整建转异步执行——查询立即返回当前内存快照（AX1
  * 分级契约第③级），异步读入完成后原子切换并发一次变更信号。
  *
- * 预算初值 8ms 量级（设计 §4.1 V1：活跃 run 查询 P95 < 10ms = 同步预算 + 余量；
- * AX2 同步段有界——判死窗口 ~12s = liveness-probe 2s 超时 × 3 次 × 5s 间隔）。
- * 字节阈值 = 预算 × 事实源吞吐换算（慢盘降一个数量级时阈值内字节 ≈ 80ms，仍低于
- * 判死窗口两个数量级）。真机 P95 分布校准归 A1 真机面（M1 事件循环遥测管道未合入
- * 本基线，U4 实施期已核实）。
+ * 预算初值 8ms 量级（设计 §4.1 V1：活跃 run 查询 P95 < 10ms = 同步预算 + 余量）。
+ * 字节阈值 = 预算 × 事实源吞吐换算（慢盘降一个数量级时阈值内字节 ≈ 80ms）。真机
+ * P95 分布校准归 A1 真机面（U4 实施期已核实）。
  *
  * 事件域核对（readdir + 逐文件 stat 探针，稳态零内容读）不受本预算约束——D3 预算
  * 对象 = 主文件增量读入与截断整建；事件域常态成本毫秒级（O(事件文件数) 探针，
@@ -415,20 +413,9 @@ const JSON_INDENT = 2
  * （stale 30s / 重试间隔 25ms / 预算 1s），与 pi-settings-store / rename-session-config
  * 同协议。
  *
- * 为什么需要注入缝：ELOCKED fail-fast 用例必须在「他方持锁」窗口内跑完，默认预算
- * 1s 使每条用例固定耗满 1s；断言语义是「预算耗尽 → ELOCKED 且零写入」，预算数值
- * 不是被测契约（默认值另有 test/file-lock-parity.test.ts 常量断言保护）。
- */
-let sessionConfigLockOptions: SyncFileLockOptions = {}
-
-/** 覆盖 config.json 写锁参数（仅测试用）。传 {} 恢复默认。 */
-export function setSessionConfigLockTimingForTest(opts: SyncFileLockOptions): void {
-  sessionConfigLockOptions = opts
-}
-
-/** config.json RMW 的统一取锁入口（引擎配置两个 setter 共用；锁参数可测试注入）。 */
+/** config.json RMW 的统一取锁入口（引擎配置两个 setter 共用）。 */
 function withConfigLock<T>(configPath: string, fn: () => T): T {
-  return withFileLockSync(configPath, fn, sessionConfigLockOptions)
+  return withFileLockSync(configPath, fn)
 }
 
 /**
@@ -545,7 +532,7 @@ export class SessionRecords {
   ) {
     // [event-push-channel] journal 事件推送消费方注册：event-adapter marker 旁路经
     // journal-report-router 送达本服务 → per-session 事件派生视图（applyJournalReport）。
-    // 进程级单 sink（runtime 单 SessionRecords 实例；后注册覆盖先注册对齐 inflight 出口先例）。
+    // 进程级单 sink（runtime 单 SessionRecords 实例；后注册覆盖先注册）。
     setJournalReportSink({
       applyJournalReport: (sessionId, report) => this.applyJournalReport(sessionId, report),
     })
@@ -1176,8 +1163,7 @@ export class SessionRecords {
     return cache.inflight
   }
 
-  // [ADR-0122 退役登记] 定时对账路径（reload-closeout D2 的 15s 服务级 setInterval 扫描）
-  // 已删——记录条目对账保留事件边沿单路径（agent_settled 触发 reconcileRecordEntries），
+  // 记录条目对账为事件边沿单路径（agent_settled 触发 reconcileRecordEntries，无定时扫描）；
   // settled 路径丢失时条目滞留至下一事件边沿。
 
   /**

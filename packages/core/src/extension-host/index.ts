@@ -15,7 +15,12 @@ export { createSessionScopedMap, createSessionScopedMapFrom } from './utils/sess
 export type { SessionScopedMap } from './utils/session-scoped-map'
 export { MountPointRegistry } from './mount-point-registry'
 export type { MountPointHost } from './mount-point-registry'
-export { ContributionRegistry } from './contribution-registry'
+export {
+  ContributionRegistry,
+  PLACEMENT_BY_TYPE,
+  MOUNT_POINT_CHECK_EXEMPT_TYPES,
+  isMountPointCheckExempt,
+} from './contribution-registry'
 export { builtinContributions } from './builtin-contributions'
 export { MockMessageSource } from './plugin-message-source'
 export type { PluginMessageSource, IncomingPluginMessage } from './plugin-message-source'
@@ -41,7 +46,7 @@ export type {
   ContainerNavigationFailure,
   ContainerNavigationResult,
 } from './container-navigation'
-export { ContentSlotRegistry, contentSlotRegistry, CONTENT_SLOT_PLACEMENTS, HOST_PLUGIN_ID, BUILTIN_NAMESPACE, stripBuiltinNamespace, HOST_COMPONENT_WHITELIST, compareContentSlotOrder, validateContentSlotId, builtinDrawerSlots, builtinOverlayTypeViews } from './content-slot-registry'
+export { ContentSlotRegistry, contentSlotRegistry, CONTENT_SLOT_PLACEMENTS, COMPOSER_TRAY_PLACEMENT, HOST_EMBED_PLACEMENT, HOST_PLUGIN_ID, BUILTIN_NAMESPACE, stripBuiltinNamespace, HOST_COMPONENT_WHITELIST, compareContentSlotOrder, validateContentSlotId, builtinDrawerSlots, builtinOverlayTypeViews } from './content-slot-registry'
 export { warnFailureOnce, resolveContributionIcon, normalizeIconKey, CONTRIBUTION_ICON_KEYS, FALLBACK_CONTRIBUTION_ICON, FAILURE_JUDGEMENT_TABLE } from './failure-degradation'
 export type {
   ContentSlotPlacement,

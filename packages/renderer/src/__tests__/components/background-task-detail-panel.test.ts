@@ -215,14 +215,14 @@ describe('BackgroundTaskDetailPanel 元信息渲染（G2）', () => {
   })
 })
 
-describe('BackgroundTaskDetailPanel 输出跟随（D7：2s interval + 停止条件）', () => {
+describe('BackgroundTaskDetailPanel 输出加载（D7 修订：打开/切任务拉一次，无自动跟随——ADR-0190 丁类退役）', () => {
   // 本节专用 fake timers（原文件顶层，下沉节内——不渗漏到 FileView 节的真实 setTimeout 链）
   beforeEach(() => {
     vi.useFakeTimers({ now: FIXED_NOW })
   })
 
 
-  it('running：挂载首次拉取一次，随后每 2s 重新拉取（fake timers 计次）', async () => {
+  it('running：挂载拉取一次；时间推进不再触发拉取（自动跟随已退役——重开 drawer 或切任务再拉）', async () => {
     partitionState.tasks = [makeEntry()]
     selectTask(TASK_ID)
     vi.mocked(backgroundTaskApi.output).mockResolvedValue(outputReply({ text: 'tail-1' }))
@@ -232,14 +232,12 @@ describe('BackgroundTaskDetailPanel 输出跟随（D7：2s interval + 停止条�
     expect(backgroundTaskApi.output).toHaveBeenCalledWith(SID, TASK_ID)
     expect(wrapper.find('[data-testid="bash-task-output"]').text()).toBe('tail-1')
 
-    await vi.advanceTimersByTimeAsync(2000)
-    expect(backgroundTaskApi.output).toHaveBeenCalledTimes(2)
-    await vi.advanceTimersByTimeAsync(2000)
-    expect(backgroundTaskApi.output).toHaveBeenCalledTimes(3)
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(backgroundTaskApi.output).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 
-  it('任务终态（分区条目 state 翻转）：跟随停止，advance 不再触发拉取', async () => {
+  it('任务终态（分区条目 state 翻转）：终态广播不触发额外拉取（无跟随机制，零 timer 刷新）', async () => {
     partitionState.tasks = [makeEntry()]
     selectTask(TASK_ID)
     vi.mocked(backgroundTaskApi.output).mockResolvedValue(outputReply())
@@ -247,18 +245,17 @@ describe('BackgroundTaskDetailPanel 输出跟随（D7：2s interval + 停止条�
     await flushPromises()
     expect(backgroundTaskApi.output).toHaveBeenCalledTimes(1)
 
-    // 广播送达 → 分区条目翻终态（store 终态感知驱动停止，D7）
+    // 广播送达 → 分区条目翻终态（无自动跟随——广播只翻状态不拉输出）
     partitionState.tasks = [
       makeEntry({ state: 'exited', exitCode: 1, reason: 'natural', endedAt: FIXED_NOW, durationMs: 1000 }),
     ]
     await flushPromises()
-    const calls = backgroundTaskApi.output.mock.calls.length
     await vi.advanceTimersByTimeAsync(6000)
-    expect(backgroundTaskApi.output.mock.calls.length).toBe(calls)
+    expect(backgroundTaskApi.output).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 
-  it('组件卸载（drawer 关闭同机制）：interval 清理，advance 不再触发拉取', async () => {
+  it('组件卸载（drawer 关闭同机制）：卸载后零拉取（无 interval 可清理——单次拉取模型）', async () => {
     partitionState.tasks = [makeEntry()]
     selectTask(TASK_ID)
     vi.mocked(backgroundTaskApi.output).mockResolvedValue(outputReply())
@@ -287,7 +284,7 @@ describe('BackgroundTaskDetailPanel 输出跟随（D7：2s interval + 停止条�
     wrapper.unmount()
   })
 
-  it('truncated=true（D5 协议字段消费）：输出区顶部渲染「仅显示尾部」提示；false 不渲染', async () => {
+  it('truncated=true（D5 协议字段消费）：输出区顶部渲染「仅显示尾部」提示；false 不渲染（重挂再拉验证）', async () => {
     partitionState.tasks = [makeEntry()]
     selectTask(TASK_ID)
     vi.mocked(backgroundTaskApi.output).mockResolvedValue(outputReply({ text: 'tail…', truncated: true }))
@@ -298,12 +295,14 @@ describe('BackgroundTaskDetailPanel 输出跟随（D7：2s interval + 停止条�
     expect(hint.exists()).toBe(true)
     expect(hint.text()).toBe('panel.sideDrawer.bashTaskOutputTruncated')
     expect(wrapper.find('[data-testid="bash-task-output"]').text()).toBe('tail…')
-
-    // 回执翻回未截断（跟随下一拍）→ 提示消失
-    vi.mocked(backgroundTaskApi.output).mockResolvedValue(outputReply({ text: 'tail', truncated: false }))
-    await vi.advanceTimersByTimeAsync(2000)
-    expect(wrapper.find('[data-testid="bash-task-output-truncated"]').exists()).toBe(false)
     wrapper.unmount()
+
+    // 回执翻回未截断（重开 drawer 重挂 = 重新拉取，无跟随下一拍）→ 提示消失
+    vi.mocked(backgroundTaskApi.output).mockResolvedValue(outputReply({ text: 'tail', truncated: false }))
+    const remounted = mountDetail()
+    await flushPromises()
+    expect(remounted.find('[data-testid="bash-task-output-truncated"]').exists()).toBe(false)
+    remounted.unmount()
   })
 
   it('元信息区 outputFile 路径展示 + 复制（D5：截断时的全量输出口）', async () => {
@@ -340,10 +339,9 @@ describe('BackgroundTaskDetailPanel 输出跟随（D7：2s interval + 停止条�
     expect(wrapper.find('[data-testid="bash-task-command"]').text()).toBe(makeEntry().command)
     expect(wrapper.find('[data-testid="bash-task-meta-taskid"]').text()).toBe(TASK_ID)
 
-    // 轮询停止：对已消失条目继续发 output RPC 属无效空转（BG-6）
-    const calls = backgroundTaskApi.output.mock.calls.length
+    // 无自动跟随：时间推进零新拉取（原 BG-6「轮询停止」随轮询机制一并退役）
     await vi.advanceTimersByTimeAsync(6000)
-    expect(backgroundTaskApi.output.mock.calls.length).toBe(calls)
+    expect(backgroundTaskApi.output).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 })

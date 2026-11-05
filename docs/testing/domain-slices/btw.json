@@ -23,6 +23,7 @@
   },
   "tests": [
     "packages/runtime/src/services/session/__tests__/btw-bundle.test.ts",
+    "packages/runtime/src/services/session/__tests__/btw-fork-exec-mock.test.ts",
     "packages/runtime/src/services/session/__tests__/btw-lifecycle.test.ts",
     "packages/renderer/src/__tests__/panel/btw-panel.test.ts",
     "packages/renderer/src/__tests__/panel/composer-btw-button.test.ts",

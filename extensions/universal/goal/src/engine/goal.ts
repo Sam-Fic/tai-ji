@@ -132,11 +132,6 @@ export function createGoalState(
 		tokenWarning90Sent: false,
 		lastTurnTokensUsed: 0,
 		currentTurnIndex: 0,
-		// W5 熔断计数从零开始（chat-domain-v1x D4）
-		continuationsSent: 0,
-		noProgressTurns: 0,
-		continuationCapNotified: false,
 		lastDeferredPendingIds: [],
-		toolCallsSeen: 0,
 	};
 }

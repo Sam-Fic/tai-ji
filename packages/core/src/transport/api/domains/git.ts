@@ -12,12 +12,11 @@
  * （routeInbound 对 type==='error' 走 pending.reject），domain Promise 抛出。
  */
 import type { GitStatusResult } from '@taiji/shared'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 import { command } from '../request'
 
 /** 查询 session cwd 的全量 git 状态（FR-12）。session 不存在 / 非 git 仓库 → isRepo=false 降级结果。 */
 export function status(sessionId: string): Promise<GitStatusResult> {
-  return command('git.status', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('git.status', { sessionId })
 }
 
 /** 单文件 diff patch（#5，UC-6 点文件预览）。越界/超时/非 repo → Promise reject（error envelope）。 */
@@ -25,18 +24,18 @@ export async function getDiff(
   sessionId: string,
   path: string,
 ): Promise<{ patch: string; binary: boolean }> {
-  const reply = await command('git.diff', { sessionId, path }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('git.diff', { sessionId, path })
   return { patch: reply.patch, binary: reply.binary }
 }
 
 /** 暂存文件。空 filePaths → git add -A（全量暂存）。 */
 export function stage(sessionId: string, filePaths?: string[]): Promise<void> {
-  return command('git.stage', { sessionId, filePaths }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('git.stage', { sessionId, filePaths })
 }
 
 /** 取消暂存。空 filePaths → git reset HEAD（全量取消暂存）。 */
 export function unstage(sessionId: string, filePaths?: string[]): Promise<void> {
-  return command('git.unstage', { sessionId, filePaths }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('git.unstage', { sessionId, filePaths })
 }
 
 /**
@@ -44,7 +43,7 @@ export function unstage(sessionId: string, filePaths?: string[]): Promise<void> 
  * 冲突态 → runtime 返回 'git_conflict' error（domain Promise reject）。
  */
 export function commit(sessionId: string, message?: string): Promise<void> {
-  return command('git.commit', { sessionId, message: message ?? '' }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('git.commit', { sessionId, message: message ?? '' })
 }
 
 /**
@@ -52,7 +51,7 @@ export function commit(sessionId: string, message?: string): Promise<void> {
  * 分支不存在 / dirty 冲突 / 非 git → runtime GitError → Promise reject（调用方留 popover 显错）。
  */
 export function checkout(sessionId: string, name: string): Promise<void> {
-  return command('git.checkout', { sessionId, name }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('git.checkout', { sessionId, name })
 }
 
 /**
@@ -60,7 +59,7 @@ export function checkout(sessionId: string, name: string): Promise<void> {
  * 与 checkout(sessionId,name) 同语义，但不经 session 解析，直接对 cwd 跑 git checkout。
  */
 export function checkoutByCwd(cwd: string, name: string): Promise<void> {
-  return command('git.checkoutCwd', { cwd, name }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('git.checkoutCwd', { cwd, name })
 }
 
 /**
@@ -68,5 +67,5 @@ export function checkoutByCwd(cwd: string, name: string): Promise<void> {
  * 分支名非法/已存在/超时→runtime GitError→Promise reject（调用方留 modal 显错，D-7）。
  */
 export function createBranch(sessionId: string, name: string): Promise<void> {
-  return command('git.createBranch', { sessionId, name }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('git.createBranch', { sessionId, name })
 }

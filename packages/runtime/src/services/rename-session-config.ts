@@ -24,7 +24,6 @@ import type { RenameMode, RenameStyle } from '@taiji/shared'
 import { RENAME_INSTRUCTION_MAX_LENGTH } from '@taiji/shared'
 import { getPiAgentDir } from '../infra/pi/pi-paths.js'
 import { logger } from '../infra/logger.js'
-import type { SyncFileLockOptions } from '../utils/file-lock.js'
 import { toErrorMessage } from '../utils/errors.js'
 import { extractRefString, rmwExtConfigField } from './ext-config-rmw.js'
 
@@ -127,12 +126,6 @@ export function getRenameConfigPath(): string {
  * 锁参数覆盖（仅测试用，如把重试预算压到几十 ms 快速验证 fail-fast）。
  * 生产保持 file-lock.ts 的默认值（stale 30s / 25ms / 1s），与 pi-settings-store 同协议。
  */
-let renameConfigLockOptions: SyncFileLockOptions = {}
-
-/** 覆盖 rename-session-ext-config.json 写锁参数（仅测试用）。传 {} 恢复默认。 */
-export function setRenameConfigLockTimingForTest(opts: SyncFileLockOptions): void {
-  renameConfigLockOptions = opts
-}
 
 /**
  * 读取 rename 标题生成模型（"provider/modelId"，未设置返回空串）。
@@ -151,7 +144,7 @@ export function getRenameModel(): string {
 
 /** RMW 只覆盖指定字段（锁协议走共享 rmwExtConfigField，与 smart-context-config.ts 的 writeSmartContextField 同形）。 */
 function writeRenameField(apply: (base: Record<string, unknown>) => void): void {
-  rmwExtConfigField(getRenameConfigPath(), renameConfigLockOptions, () => ({ ...RENAME_MODEL_DEFAULT_CONFIG }), apply)
+  rmwExtConfigField(getRenameConfigPath(), () => ({ ...RENAME_MODEL_DEFAULT_CONFIG }), apply)
 }
 
 /**

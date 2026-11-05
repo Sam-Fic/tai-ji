@@ -250,8 +250,7 @@ describe('logger.ts WriteStream 化（D10-1/D10-2）', () => {
     const oldTreeGz = join(sidLogs, 'pi-2026-07-01.jsonl.1.gz')
     const oldTreeCrash = join(sidLogs, 'pi-crash-2026-07-01.log')
     const recentTreePi = join(sidLogs, 'pi-2026-08-15.jsonl')
-    const recentTreeForensics = join(sidLogs, 'signal-forensics-2026-08-15.jsonl')
-    for (const f of [oldTreePi, oldTreeGz, oldTreeCrash, recentTreePi, recentTreeForensics]) writeFileSync(f, 'x')
+    for (const f of [oldTreePi, oldTreeGz, oldTreeCrash, recentTreePi]) writeFileSync(f, 'x')
     // 非 sessionId 形态目录（btw 虚拟 id 形态含冒号，isPiSessionId 必拒）：整棵跳过（D7 树内遍历规约）
     const notSidDir = join(dataDir, 'ext-sessions', 'btw:not-a-sid', 'logs')
     mkdirSync(notSidDir, { recursive: true })
@@ -271,7 +270,6 @@ describe('logger.ts WriteStream 化（D10-1/D10-2）', () => {
     expect(existsSync(oldTreeGz)).toBe(false)
     expect(existsSync(oldTreeCrash)).toBe(false)
     expect(existsSync(recentTreePi)).toBe(true)
-    expect(existsSync(recentTreeForensics)).toBe(true)
     // 非 sessionId 形态目录：即使内部文件过期也整棵跳过
     expect(existsSync(insideNotSid)).toBe(true)
     await logger.closeLogger()

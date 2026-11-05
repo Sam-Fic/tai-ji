@@ -18,12 +18,6 @@ import { getDataDir } from '@taiji/shared/paths'
 import { discoverPort } from './port-discovery.js'
 import { warnOnce } from '../utils/warn-once.js'
 
-export interface RpcOptions {
-  timeoutMs?: number
-}
-
-const DEFAULT_TIMEOUT_MS = 5000
-
 /** 畸形帧样本截断长度（RT-8#13）：warn 里只带前若干字符，避免把整帧刷进日志。 */
 const MALFORMED_FRAME_SAMPLE_CHARS = 120
 
@@ -89,21 +83,20 @@ function errorEnvelopeError(payload: RuntimeFrame['payload']): Error & { code: s
 }
 
 /**
- * 发一条 WS 消息给 runtime，等 reply（按 id 匹配）。
+ * 发一条 WS 消息给 runtime，等 reply（按 id 匹配）。无墙钟（时间机制删除裁决）：
+ * reply 永不到达时 Promise 挂起——runtime 死亡 / 连接异常经 error/close 事件 reject，
+ * 不做基于时间阈值的放弃决策。
  * @param type ClientMessage type（如 'config.getProviders'）
  * @param payload 消息负载
- * @param options 超时配置
  * @returns runtime 的 reply 消息
  */
 export async function rpc<T = Record<string, unknown>>(
   type: string,
   payload: Record<string, unknown>,
-  options?: RpcOptions
 ): Promise<T> {
   const port = discoverPort()
   const token = readToken()
   const id = randomUUID()
-  const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS
 
   return new Promise<T>((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`)
@@ -113,18 +106,13 @@ export async function rpc<T = Record<string, unknown>>(
     /** 无法解析为非 JSON 的帧累计数（RT-8#13：静默丢弃须显形） */
     let dropCount = 0
 
-    /** 首次失败结算收尾：置位 + 清 timer + 关连接 + reject（幂等，已结算时静默）。 */
+    /** 首次失败结算收尾：置位 + 关连接 + reject（幂等，已结算时静默）。 */
     const settleReject = (err: Error): void => {
       if (settled) return
       settled = true
-      clearTimeout(timer)
       ws.close()
       reject(err)
     }
-
-    const timer = setTimeout(() => {
-      settleReject(new Error(`WebSocket RPC timeout (${timeoutMs}ms): ${type}`))
-    }, timeoutMs)
 
     ws.on('open', () => {
       // 首条消息必须是 auth（S1-W1）
@@ -145,7 +133,6 @@ export async function rpc<T = Record<string, unknown>>(
     /** 命令应答帧处理（调用方已按 id 匹配）：结算本 Promise——error 信封 reject，其余解包 resolve。 */
     const onReplyFrame = (msg: RuntimeFrame): void => {
       settled = true
-      clearTimeout(timer)
       ws.close()
       if (msg.type === 'error') {
         reject(errorEnvelopeError(msg.payload))

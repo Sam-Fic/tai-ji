@@ -44,9 +44,10 @@ function makeStore(entry?: ViewCacheEntry) {
   return store
 }
 
-/** 命中 (SESSION, VIEW_ID) 的缓存条目（自举补拉「已有 view 不触发」用例） */
-function makeTreeEntry(): ViewCacheEntry {
-  return { viewId: VIEW_ID, pluginId: 'p1', guiTree: makeTree(), updatedAt: 1 }
+/** 命中 (SESSION, VIEW_ID) 的缓存条目（各用例经 overrides 差异化 updatedAt / meta /
+ *  placement 等字段，构造本体单点防多份字面量漂移） */
+function makeTreeEntry(overrides?: Partial<ViewCacheEntry>): ViewCacheEntry {
+  return { viewId: VIEW_ID, pluginId: 'p1', guiTree: makeTree(), updatedAt: 1, ...overrides }
 }
 
 function mountHost(store: ViewHostSource, title?: string, empty?: 'placeholder' | 'hidden') {
@@ -58,17 +59,18 @@ function mountHost(store: ViewHostSource, title?: string, empty?: 'placeholder' 
   })
 }
 
+/** 条目构造 + 挂载 + 等首帧（entry/store/mount/nextTick 四步序在多用例重复，收敛单点）；
+ *  entry 由调用方经 makeTreeEntry overrides 表达差异字段，store 句柄供查询调用断言。 */
+async function mountHostWithEntry(entry: ViewCacheEntry, title?: string, empty?: 'placeholder' | 'hidden') {
+  const store = makeStore(entry)
+  const wrapper = mountHost(store, title, empty)
+  await wrapper.vm.$nextTick()
+  return { wrapper, store }
+}
+
 describe('ViewHost', () => {
   it('TC-6 渲染 GuiComponent 树：mock 树交 GuiComponentRenderer 渲染 DOM（AC9）', async () => {
-    const entry: ViewCacheEntry = {
-      viewId: VIEW_ID,
-      pluginId: 'p1',
-      guiTree: makeTree(),
-      updatedAt: 123,
-    }
-    const store = makeStore(entry)
-    const wrapper = mountHost(store)
-    await wrapper.vm.$nextTick()
+    const { wrapper, store } = await mountHostWithEntry(makeTreeEntry({ updatedAt: 123 }))
 
     // ansi-text 原语渲染 'Hello'
     expect(wrapper.find('[data-testid="ansi-text"]').exists()).toBe(true)
@@ -119,7 +121,7 @@ describe('ViewHost', () => {
     await wrapper.vm.$nextTick()
     expect(wrapper.find('[data-testid="view-host-empty"]').exists()).toBe(true)
 
-    store.entry = { viewId: VIEW_ID, pluginId: 'p1', guiTree: makeTree(), updatedAt: 456 }
+    store.entry = makeTreeEntry({ updatedAt: 456 })
     await wrapper.vm.$nextTick()
     // 同实例重渲染（不 remount）：computed 依赖的 reactive 值变化 → 空态消失 + GuiComponent 渲染
     expect(wrapper.find('[data-testid="view-host-empty"]').exists()).toBe(false)
@@ -144,20 +146,27 @@ describe('ViewHost', () => {
   })
 
   it('TC2 empty=hidden 但有 view：正常渲染 GuiComponent 树', async () => {
-    const entry: ViewCacheEntry = {
-      viewId: VIEW_ID,
-      pluginId: 'p1',
-      guiTree: makeTree(),
-      updatedAt: 789,
-    }
-    const store = makeStore(entry)
-    const wrapper = mountHost(store, undefined, 'hidden')
-    await wrapper.vm.$nextTick()
+    const { wrapper } = await mountHostWithEntry(makeTreeEntry({ updatedAt: 789 }), undefined, 'hidden')
 
     expect(wrapper.find('[data-testid="view-host"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('Hello')
     expect(wrapper.text()).toContain('CPU')
     expect(wrapper.find('[data-testid="view-host-empty"]').exists()).toBe(false)
+  })
+
+  it('RL2 条目 placement 字段（composer-tray-protocol D1）：带章条目照常渲染，章随 ViewCacheEntry 契约透传不破坏消费', async () => {
+    // ViewHostStore 落盘行为（盖印/透传）在 core 侧单测锁定；本用例锁定 ui 侧消费契约：
+    // entry.placement/meta 在场时 ViewHost 渲染不受影响（托盘过滤的判定输入原样可达）
+    const entry = makeTreeEntry({
+      meta: { badge: '2', title: 'Todos' },
+      placement: 'composer.tray',
+      updatedAt: 100,
+    })
+    expect(entry.placement).toBe('composer.tray')
+    const { wrapper } = await mountHostWithEntry(entry)
+
+    expect(wrapper.find('[data-testid="ansi-text"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Hello')
   })
 
   it('TC3 默认 empty（不传）无 view：placeholder 占位回归', async () => {

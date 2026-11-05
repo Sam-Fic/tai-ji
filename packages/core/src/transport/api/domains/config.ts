@@ -38,7 +38,6 @@ import type {
   ConnectionTestResultRow,
   UiLocale,
 } from '@taiji/shared'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 import { command } from '../request'
 import * as events from '../events'
 
@@ -49,7 +48,7 @@ import * as events from '../events'
 // ServerMessageMap['config.providers']），scopedModels 透传给 refreshProviders 消费（[] 与 undefined 语义不同：
 // [] = 空白名单，undefined = reply 未携带，由消费方检查区分）。
 export async function listProviders(): Promise<{ providers: ProviderInfo[]; scopedModels?: string[] }> {
-  const reply = await command('config.getProviders', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('config.getProviders', {})
   return { providers: reply.providers, scopedModels: reply.scopedModels }
 }
 
@@ -66,13 +65,13 @@ export async function refreshProviderCatalogs(): Promise<{
   /** RT-7#8：刷新结果落盘失败（内存有效，下次进入页面重刷）。 */
   persistFailed?: boolean
 }> {
-  const reply = await command('config.refreshProviderCatalogs', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('config.refreshProviderCatalogs', {})
   return { refreshed: reply.refreshed, failed: reply.failed, corrupt: reply.corrupt, persistFailed: reply.persistFailed }
 }
 
 /** quota presets 合并视图（runtime 基线 ⊕ 远程；remote-config 域 2 下发通道）。 */
 export async function listQuotaPresets(): Promise<QuotaPreset[]> {
-  const reply = await command('config.listQuotaPresets', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('config.listQuotaPresets', {})
   return reply.presets
 }
 
@@ -82,11 +81,11 @@ export async function listQuotaPresets(): Promise<QuotaPreset[]> {
  * 消费方走既有 onProviders 订阅，本调用只等 reply 不做状态管理。
  */
 export async function setProviderCatalogWatch(enable: boolean): Promise<void> {
-  await command('config.setProviderCatalogWatch', { enable }, RPC_BACKSTOP_TIMEOUT_MS)
+  await command('config.setProviderCatalogWatch', { enable })
 }
 
 export async function scanSkills(sources: string[]): Promise<ScannedSkillInfo[]> {
-  const reply = await command('config.scanSkills', { sources }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('config.scanSkills', { sources })
   return reply.skills
 }
 
@@ -97,7 +96,7 @@ export async function scanSkills(sources: string[]): Promise<ScannedSkillInfo[]>
  * scanSessionSkills 扫某 cwd 的已生效项目 skill（按需拉取，不进全局 config.skills）。
  */
 export async function scanSessionSkills(cwd: string): Promise<SkillInfo[]> {
-  const reply = await command('config.scanSessionSkills', { cwd }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('config.scanSessionSkills', { cwd })
   return reply.skills
 }
 
@@ -107,7 +106,7 @@ export async function scanSessionSkills(cwd: string): Promise<SkillInfo[]> {
  * runtime 端 skillRegistry.getGlobalSkills() 同步读启动期扫描缓存（watcher 自动刷新），零 RPC 开销。
  */
 export async function getGlobalSkills(): Promise<SkillInfo[]> {
-  const reply = await command('config.getGlobalSkills', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('config.getGlobalSkills', {})
   return reply.skills
 }
 
@@ -117,12 +116,12 @@ export async function getGlobalSkills(): Promise<SkillInfo[]> {
  * scanSessionSkills 直接调 configService.loadSkills(cwd)（无缓存无 watcher）。前端 useProjectSkills 已切到本 RPC。
  */
 export async function getProjectSkills(cwd: string): Promise<SkillInfo[]> {
-  const reply = await command('config.getProjectSkills', { cwd }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('config.getProjectSkills', { cwd })
   return reply.skills
 }
 
 export async function scanAgents(sources: string[]): Promise<ScannedAgentInfo[]> {
-  const reply = await command('config.scanAgents', { sources }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('config.scanAgents', { sources })
   return reply.agents
 }
 
@@ -132,7 +131,7 @@ export async function scanAgents(sources: string[]): Promise<ScannedAgentInfo[]>
  * reply config.sourcesDetected 形状 `{ sources: SourceDetectResult[] }`。
  */
 export async function detectSources(): Promise<SourceDetectResult[]> {
-  const reply = await command('config.detectSources', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('config.detectSources', {})
   return reply.sources
 }
 
@@ -141,7 +140,7 @@ export async function detectSources(): Promise<SourceDetectResult[]> {
  * 数据源为 runtime import 的 generated JSON（37 个内置 provider，含 model 摘要与 auth 元信息）。
  */
 export async function listBuiltinProviders(): Promise<BuiltinProviderTemplate[]> {
-  const reply = await command('config.listBuiltinProviders', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('config.listBuiltinProviders', {})
   return reply.providers
 }
 
@@ -154,7 +153,7 @@ export async function listBuiltinProviders(): Promise<BuiltinProviderTemplate[]>
 export async function previewImportProviders(
   source: ProviderSource,
 ): Promise<{ importId: string; preview: ProviderImportPreview } | { error: { code: string; message: string } }> {
-  return command('config.previewImportProviders', { source }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.previewImportProviders', { source })
 }
 
 /**
@@ -165,7 +164,7 @@ export async function applyImportProviders(
   importId: string,
   selectedIds: string[],
 ): Promise<{ result: ProviderImportResult } | { error: { code: string; message: string } }> {
-  return command('config.applyImportProviders', { importId, selectedIds }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.applyImportProviders', { importId, selectedIds })
 }
 
 /** discoverModels 的响应载荷（config.discoveredModels reply，settings-message-handler） */
@@ -185,7 +184,7 @@ export function discoverModels(req: {
   /** 缺省 'discover'（runtime 侧缺省语义；'test' 只需 providerId，端点回落归 runtime） */
   mode?: 'test' | 'discover'
 }): Promise<DiscoveredModelsResult> {
-  return command('config.discoverModels', req, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.discoverModels', req)
 }
 
 // ── 订阅-推送（sendInitialState 主动推 + 运行时广播）──
@@ -265,17 +264,17 @@ export function onDefaultsWithSource(handler: (payload: { defaultModel: string; 
  * 状态变更经 onSkills + onSkillDirs 订阅推回（后端 setSkillDirs 后广播）。
  */
 export function setSkillDirs(dirs: SkillDirConfig[]): Promise<void> {
-  return command('config.setSkillDirs', { dirs }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setSkillDirs', { dirs })
 }
 
 export function setAgentDirs(dirs: SkillDirConfig[]): Promise<void> {
-  return command('config.setAgentDirs', { dirs }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setAgentDirs', { dirs })
 }
 
 /** 覆盖 extension 加载路径（Phase 4 目录级管道，v2 scope 穿越），语义同 setSkillDirs/setAgentDirs。
  *  reply 为 config.extensionDirs（广播），状态变更经 onExtensionDirs 订阅推回。 */
 export function setExtensionDirs(dirs: SkillDirConfig[]): Promise<void> {
-  return command('config.setExtensionDirs', { dirs }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setExtensionDirs', { dirs })
 }
 
 /**
@@ -283,12 +282,12 @@ export function setExtensionDirs(dirs: SkillDirConfig[]): Promise<void> {
  * quota-auto-enable.ts）——调用方据此 toast（与导入路径 quotaAutoEnabled 同语义）。
  */
 export function setProvider(providerId: ProviderId, data: SetProviderData): Promise<{ quotaAutoEnabled?: boolean }> {
-  return command('config.setProvider', { providerId, ...data }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setProvider', { providerId, ...data })
 }
 
 // W3 默认模型持久化：动作-ack，状态变更经 onDefaults 订阅推回（runtime 广播 config.defaults）。
 export function setDefaultModel(provider: ProviderId, modelId: string): Promise<void> {
-  return command('config.setDefaultModel', { provider, modelId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setDefaultModel', { provider, modelId })
 }
 
 /**
@@ -299,47 +298,47 @@ export function setDefaultModel(provider: ProviderId, modelId: string): Promise<
  * 调用方（useSettingsShell）warn 不阻塞本地语言切换。
  */
 export function setUiLocale(locale: UiLocale): Promise<void> {
-  return command('config.setUiLocale', { locale }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setUiLocale', { locale })
 }
 
 // Scoped models 白名单设置（config.setScopedModels）。reply 回写后规范化结果（去重保序）。
 export async function setScopedModels(models: string[]): Promise<string[]> {
-  const reply = await command('config.setScopedModels', { models }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('config.setScopedModels', { models })
   return reply.scopedModels
 }
 
 export function deleteProvider(providerId: ProviderId): Promise<void> {
-  return command('config.deleteProvider', { providerId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.deleteProvider', { providerId })
 }
 
 // wave4 C1：provider 启用切换（写 enabledModels 白名单）。替代旧 setProvider({enabled}) 路径——
 // wave3 停用 setProvider 的 provider 级 enabled 写入后，toggle 必须走此 RPC 才能持久化启用状态。
 // reply config.providerUpdated；newDefault 经 onDefaults 订阅推回（broadcast 由 handler 发起）。
 export function toggleProviderEnabled(providerId: ProviderId, enabled: boolean): Promise<void> {
-  return command('config.toggleProviderEnabled', { providerId, enabled }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.toggleProviderEnabled', { providerId, enabled })
 }
 
 // wave4 IF3：按体系移除 provider。kind 来自 ProviderInfo.kind（wave2 聚合层标注）——
 // catalog 清凭据（不删 pi 定义），custom 删条目。与 deleteProvider 区别：后者不分体系直接删条目
 // （向后兼容保留），renderer 按 kind 调对应 RPC。reply config.providerUpdated。
 export function removeProviderByKind(providerId: ProviderId, kind: 'catalog' | 'custom'): Promise<void> {
-  return command('config.removeProviderByKind', { providerId, kind }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.removeProviderByKind', { providerId, kind })
 }
 
 export function setSkill(skill: SkillInfo): Promise<void> {
-  return command('config.setSkill', { skill }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setSkill', { skill })
 }
 
 export function deleteSkill(skillId: string): Promise<void> {
-  return command('config.deleteSkill', { skillId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.deleteSkill', { skillId })
 }
 
 export function setAgent(agent: AgentInfo): Promise<void> {
-  return command('config.setAgent', { agent }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setAgent', { agent })
 }
 
 export function deleteAgent(agentId: string): Promise<void> {
-  return command('config.deleteAgent', { agentId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.deleteAgent', { agentId })
 }
 
 /** `{ config, corrupted? }` reply 归一（corrupted 缺省 = false），SystemPrompt/Terminal 两对 get/set 共用。 */
@@ -353,13 +352,13 @@ function toCorruptedConfig<T>(reply: { config: T, corrupted?: boolean }): { conf
 
 /** 读取系统提示词配置。corrupted=true 表示磁盘配置损坏已回退默认。 */
 export async function getSystemPrompt(): Promise<{ config: SystemPromptConfig; corrupted: boolean }> {
-  const reply = await command('config.getSystemPrompt', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('config.getSystemPrompt', {})
   return toCorruptedConfig(reply)
 }
 
 /** 保存系统提示词配置（replace + append）。失败时 runtime 返回 error envelope，command 会 reject。 */
 export async function setSystemPrompt(config: SystemPromptConfig): Promise<{ config: SystemPromptConfig; corrupted: boolean }> {
-  const reply = await command('config.setSystemPrompt', { config }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('config.setSystemPrompt', { config })
   return toCorruptedConfig(reply)
 }
 
@@ -376,13 +375,13 @@ export function onSystemPrompt(handler: (config: SystemPromptConfig, corrupted: 
 
 /** 读取终端配置。corrupted=true 表示磁盘配置损坏已回退默认。 */
 export async function getTerminalConfig(): Promise<{ config: TerminalConfig; corrupted: boolean }> {
-  const reply = await command('config.getTerminalConfig', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('config.getTerminalConfig', {})
   return toCorruptedConfig(reply)
 }
 
 /** 保存终端配置（shell/字体/scrollback/cursor/bell 等）。失败时 runtime 返回 error envelope，command 会 reject。 */
 export async function setTerminalConfig(config: TerminalConfig): Promise<{ config: TerminalConfig; corrupted: boolean }> {
-  const reply = await command('config.setTerminalConfig', { config }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('config.setTerminalConfig', { config })
   return toCorruptedConfig(reply)
 }
 
@@ -397,12 +396,12 @@ export function onTerminalConfig(handler: (config: TerminalConfig, corrupted: bo
 
 /** 读取 LLM 重试配置。configured=false 表示文件无显式 retry 配置（config 为后端合并 pi 默认后的值）。 */
 export async function getRetryConfig(): Promise<{ config: LlmRetryConfig; configured: boolean }> {
-  return command('config.getRetryConfig', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.getRetryConfig', {})
 }
 
 /** 保存 LLM 重试配置（整体保存为显式按钮触发）。越界时 runtime 返回 error envelope，command 会 reject。 */
 export async function setRetryConfig(config: LlmRetryConfig): Promise<{ config: LlmRetryConfig; configured: boolean }> {
-  return command('config.setRetryConfig', { config }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setRetryConfig', { config })
 }
 
 /** 订阅 LLM 重试配置广播（多窗口同步，同 terminal 范式）。 */
@@ -418,12 +417,12 @@ export function onRetryConfig(handler: (payload: { config: LlmRetryConfig; confi
 
 /** 读取重试规则合并视图（builtinRules = 基线⊕远程内置层；customRules = 用户盘上态）。 */
 export async function getRetryRules(): Promise<ServerMessageMap['config.retryRules']> {
-  return command('config.getRetryRules', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.getRetryRules', {})
 }
 
 /** 保存重试规则用户自定义层（整体保存为显式按钮触发；校验失败 runtime 返回 error envelope）。 */
 export async function setRetryRules(customRules: RetryableErrorRule[]): Promise<ServerMessageMap['config.retryRules']> {
-  return command('config.setRetryRules', { customRules }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setRetryRules', { customRules })
 }
 
 /** 订阅重试规则视图广播（保存成功后推回，多窗口同步）。 */
@@ -439,27 +438,27 @@ export function onRetryRules(handler: (payload: ServerMessageMap['config.retryRu
 
 /** 读取网络代理配置（reply 与 config.networkProxy 广播同形）。 */
 export async function getNetworkProxyConfig(): Promise<ServerMessageMap['config.networkProxy']> {
-  return command('config.getNetworkProxy', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.getNetworkProxy', {})
 }
 
 /** 全量保存网络代理配置（单页单保存；校验失败 runtime 返回 error envelope，command 会 reject）。 */
 export async function setNetworkProxyConfig(config: NetworkProxyConfig): Promise<ServerMessageMap['config.networkProxy']> {
-  return command('config.setNetworkProxy', { config }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setNetworkProxy', { config })
 }
 
 /** 测试连接（runtime 两段探测；归因文案 / 阶段 / 耗时形状 = shared NetworkProxyTestResult）。 */
 export function testNetworkProxy(config: NetworkProxyConfig): Promise<NetworkProxyTestResult> {
-  return command('config.testNetworkProxy', { config }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.testNetworkProxy', { config })
 }
 
 /** 请求统计读聚合（range 时间过滤；「累计」档 = 截断保尾窗口内累计，truncatedNote 携带标注）。 */
 export async function getNetworkProxyStats(range: NetworkProxyStatsRange): Promise<ServerMessageMap['config.networkProxyStats']> {
-  return command('config.getNetworkProxyStats', { range }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.getNetworkProxyStats', { range })
 }
 
 /** 重置请求统计（runtime 追加 reset 水位；reply = 清零后统计）。 */
 export async function resetNetworkProxyStats(): Promise<ServerMessageMap['config.networkProxyStats']> {
-  return command('config.resetNetworkProxyStats', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.resetNetworkProxyStats', {})
 }
 
 /** 订阅网络代理配置广播（保存成功后推回，多窗口同步）。 */
@@ -485,30 +484,30 @@ export type AuthErrorPayload = ServerMessage<'auth.error'>['payload']
 
 /** 启动 OAuth flow（device/callback，按 provider 的 oauthConfig）。started=false + error 表示启动失败。 */
 export function oauthLogin(providerId: string): Promise<{ started: boolean; error?: string }> {
-  return command('config.oauthLogin', { providerId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.oauthLogin', { providerId })
 }
 
 /** 中止进行中的 OAuth flow（幂等：无进行中 flow 返回 cancelled:false 不报错）。 */
 export function oauthCancel(providerId: string): Promise<{ cancelled: boolean }> {
-  return command('config.oauthCancel', { providerId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.oauthCancel', { providerId })
 }
 
 /** 退出 OAuth 登录（B-1 场景 C）：移除 auth.json 中该 provider 的凭证（幂等；有进行中 flow 先中止）。
  *  ok=false + error 表示移除失败（error 由 runtime 透传，前端不自造文案）。 */
 export function oauthLogout(providerId: string): Promise<{ ok: boolean; error?: string }> {
-  return command('config.oauthLogout', { providerId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.oauthLogout', { providerId })
 }
 
 /** 查询 auth.json 是否已有该 provider 的 OAuth 凭据（MF-1：QuickSetup 重开时默认 oauth radio，
  *  防 env 盲保存触发 I9 清理静默删凭据）。只返回布尔——token 永不出现在协议中。 */
 export async function hasOAuth(providerId: string): Promise<boolean> {
-  const reply = await command('config.hasOAuth', { providerId }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('config.hasOAuth', { providerId })
   return reply.hasOAuth
 }
 
 /** 批量检测环境变量是否已设置（I3，只返回布尔不返回值——env 值可能含凭证）。 */
 export async function checkEnvVars(names: string[]): Promise<Record<string, boolean>> {
-  const reply = await command('config.checkEnvVars', { names }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('config.checkEnvVars', { names })
   return reply.results
 }
 
@@ -517,7 +516,7 @@ export async function checkEnvVars(names: string[]): Promise<Record<string, bool
  * 只对 api_key 形态生效（OAuth token 永不出协议）；available=false = 无可回显凭据。
  */
 export async function revealProviderApiKey(providerId: string): Promise<ServerMessageMap['config.providerApiKeyRevealed']> {
-  return command('config.revealProviderApiKey', { providerId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.revealProviderApiKey', { providerId })
 }
 
 /** 订阅 device flow 中间态（user_code / verification_uri / 倒计时）。返回取消函数。 */

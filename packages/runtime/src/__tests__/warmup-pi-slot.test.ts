@@ -8,7 +8,7 @@
  *    命中层：rekey 到目标会话而非 createSession）；
  * ③ 冷启动槽恒空断言（构造零副作用、无启动期接线——无消费即无 spawn）；
  * ④ P4 命中率日志四态结构化断言（hit / signature-mismatch / empty / process-dead 各一行）。
- * 附：reattach 让位（busy 推迟 / 上界超时强制发火 / 挂起参数被最新消费覆盖）。
+ * 附：reattach 让位（busy 时补位单次同步跳过，槽保持空待后续消费重试）。
  *
  * 全部用 mock 进程句柄（pid/exited/kill 字面量）与注入时钟，无真实子进程 / 真实 RPC。
  */
@@ -20,7 +20,6 @@ import {
   WarmupPiSlot,
   WARMUP_SLOT_SESSION_ID,
   isPiProcessAlive,
-  type WarmupSlotSchedule,
   type WarmupSlotSpawned,
   type WarmupSlotTarget,
 } from '../services/session/warmup-pi-slot.js'
@@ -64,31 +63,6 @@ function makeSpawnPool() {
   return { calls, clients, failures, spawn }
 }
 
-/** 手动时钟 + 定时器队列（reattach 让位轮询的确定性驱动）。 */
-function makeManualClock() {
-  let nowMs = 0
-  const timers: Array<{ at: number; fn: () => void; cancelled: boolean }> = []
-  const schedule: WarmupSlotSchedule = (fn, ms) => {
-    const t = { at: nowMs + ms, fn, cancelled: false }
-    timers.push(t)
-    return () => { t.cancelled = true }
-  }
-  return {
-    now: (): number => nowMs,
-    schedule,
-    /** 推进时钟并按到期序内联驱动全部到期定时器（tick 链在同一次推进内迭代到不动点）。 */
-    advance: (ms: number): void => {
-      nowMs += ms
-      for (;;) {
-        const due = timers.find((t) => !t.cancelled && t.at <= nowMs)
-        if (!due) break
-        due.cancelled = true
-        due.fn()
-      }
-    },
-  }
-}
-
 interface HarnessOptions { // oe-exempt:20261029:test:测试 harness 参数包（单文件局部，非架构契约）
   spawnPool?: ReturnType<typeof makeSpawnPool>
   isReattachBusy?: () => boolean
@@ -99,20 +73,16 @@ function makeSlot(options: HarnessOptions = {}): {
   spawn: ReturnType<typeof makeSpawnPool>
   destroy: ReturnType<typeof vi.fn>
   busy: { value: boolean }
-  clock: ReturnType<typeof makeManualClock>
 } {
   const spawn = options.spawnPool ?? makeSpawnPool()
   const destroy = vi.fn(async () => {})
   const busy = { value: false }
-  const clock = makeManualClock()
   const slot = new WarmupPiSlot({
     spawnSlotProcess: spawn.spawn,
     destroySlotProcess: destroy,
     isReattachBusy: options.isReattachBusy ?? (() => busy.value),
-    schedule: clock.schedule,
-    now: clock.now,
   })
-  return { slot, spawn, destroy, busy, clock }
+  return { slot, spawn, destroy, busy }
 }
 
 const TARGET_A: WarmupSlotTarget = { presetId: 'preset-a', cwd: '/proj/a' }
@@ -506,159 +476,23 @@ describe('WarmupPiSlot reattach 让位', () => {
     warnSpy.mockRestore()
   })
 
-  it('reattach 活跃：补位推迟；busy 解除后至多一个轮询间隔内发火', async () => {
-    const { slot, spawn, busy, clock } = makeSlot()
+  it('reattach 活跃：补位单次同步跳过；busy 解除后下次消费重试补位', async () => {
+    const { slot, spawn, busy } = makeSlot()
 
-    // busy 期间消费：回退照常（不阻塞冷切），补位被推迟（无 spawn）。
+    // busy 期间消费：回退照常（不阻塞冷切），补位跳过（无 spawn）。
     busy.value = true
     expect(slot.take(TARGET_A).kind).toBe('empty')
     await flushAsync()
     expect(spawn.calls).toHaveLength(0)
 
-    // busy 解除：下一个轮询 tick 发火，补位参数 = 挂起的消费目标。
+    // busy 解除：下次消费经检查①（槽空）天然重试补位。
     busy.value = false
-    clock.advance(1_000)
+    expect(slot.take(TARGET_A).kind).toBe('empty')
     await flushAsync()
     expect(spawn.calls).toEqual([{ slotSessionId: WARMUP_SLOT_SESSION_ID, target: TARGET_A }])
   })
-
-  it('busy 持续超让位上界（60s）：强制发火', async () => {
-    const { slot, spawn, busy, clock } = makeSlot()
-    busy.value = true
-    expect(slot.take(TARGET_A).kind).toBe('empty')
-    await flushAsync()
-    expect(spawn.calls).toHaveLength(0)
-
-    clock.advance(60_000)
-    await flushAsync()
-    expect(spawn.calls).toHaveLength(1)
-  })
-
-  it('让位推迟期间的后续消费更新挂起参数（最新消费意图即最新候选）', async () => {
-    const { slot, spawn, busy, clock } = makeSlot()
-    busy.value = true
-    expect(slot.take(TARGET_A).kind).toBe('empty')
-    expect(slot.take(TARGET_B).kind).toBe('empty')
-
-    busy.value = false
-    clock.advance(1_000)
-    await flushAsync()
-    // 只发火一次，且参数 = 最后一次消费的目标。
-    expect(spawn.calls).toEqual([{ slotSessionId: WARMUP_SLOT_SESSION_ID, target: TARGET_B }])
-  })
 })
 
-// ── idle 超时自杀（§3.3-2 资源兜底）──────────────────────────
-
-describe('WarmupPiSlot idle 超时自杀（§3.3-2 资源兜底）', () => {
-  let logSpy: ReturnType<typeof vi.spyOn>
-  let warnSpy: ReturnType<typeof vi.spyOn>
-
-  beforeEach(() => {
-    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
-    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-  })
-  afterEach(() => {
-    logSpy.mockRestore()
-    warnSpy.mockRestore()
-  })
-
-  /** 手动时钟 + 注入短 idle 超时的槽（idle 超时 = 实现参数，测试注入可控值）。 */
-  function makeIdleSlot(idleTimeoutMs: number) {
-    const spawn = makeSpawnPool()
-    const destroy = vi.fn(async () => {})
-    const clock = makeManualClock()
-    const slot = new WarmupPiSlot({
-      spawnSlotProcess: spawn.spawn,
-      destroySlotProcess: destroy,
-      isReattachBusy: () => false,
-      schedule: clock.schedule,
-      now: clock.now,
-      idleTimeoutMs,
-    })
-    return { slot, spawn, destroy, clock }
-  }
-
-  it('槽就绪后空闲满超时：销毁槽进程清槽；下次消费经 empty 回退 + 补位（重预热）', async () => {
-    const { slot, spawn, destroy, clock } = makeIdleSlot(5_000)
-    await warmViaConsume(slot, TARGET_A)
-    expect(spawn.calls).toHaveLength(1)
-
-    clock.advance(4_999)
-    expect(destroy).not.toHaveBeenCalled()
-    clock.advance(1)
-    expect(destroy).toHaveBeenCalledTimes(1) // idle 自杀清槽
-
-    // 设计「超时自杀，被取用时重预热」：下次消费走检查①（empty → 回退 + 顺带补位）。
-    expect(slot.take(TARGET_A).kind).toBe('empty')
-    await flushAsync()
-    expect(spawn.calls).toHaveLength(2)
-    expect(spawn.calls[1]?.target).toEqual(TARGET_A)
-  })
-
-  it('消费命中取消 idle 定时器：被取用进程不因 idle 到期被销毁，新补位槽按新生命周期计时', async () => {
-    const { slot, spawn, destroy, clock } = makeIdleSlot(5_000)
-    await warmViaConsume(slot, TARGET_A)
-    const warmedClient = spawn.clients[0]!
-
-    expect(slot.take(TARGET_A).kind).toBe('hit') // 消费命中（timer 已取消）
-    await flushAsync() // 命中触发的补位落定（新槽 timer 计时起点）
-    expect(warmedClient.kill).not.toHaveBeenCalled()
-
-    clock.advance(4_999)
-    expect(destroy).not.toHaveBeenCalled() // 旧 timer（已取消）不误发；新槽未满超时
-    clock.advance(1)
-    expect(destroy).toHaveBeenCalledTimes(1) // 到期自杀的是新补位槽，非被取用进程
-  })
-
-  it('世代防护：条目被替换后旧 idle 定时器作废（不误杀新槽）', async () => {
-    const { slot, spawn, destroy, clock } = makeIdleSlot(5_000)
-    await warmViaConsume(slot, TARGET_A) // 槽 A 落定（timer A 计 5s）
-    // 签名不匹配弃槽 A（销毁 1 次）+ 补位 B（timer B 重新计 5s）；timer A 随取消作废。
-    expect(slot.take(TARGET_B).kind).toBe('signature-mismatch')
-    expect(destroy).toHaveBeenCalledTimes(1)
-    await flushAsync()
-
-    clock.advance(5_000)
-    // 唯一新增销毁 = timer B 的自杀（恰第 2 次）；timer A 若误发会多出第 3 次。
-    expect(destroy).toHaveBeenCalledTimes(2)
-    expect(slot.take(TARGET_B).kind).toBe('empty') // 槽已被 B 的自杀清空
-  })
-})
-
-// ── 探活原语（存在性检查，禁 RPC）────────────────────────────
-
-describe('isPiProcessAlive（pid 存活 + exited 标记）', () => {
-  it('exited 标记 = 死；pid null = 死；pid 存活 = 活', () => {
-    expect(isPiProcessAlive({ exited: true, pid: 4242 })).toBe(false)
-    expect(isPiProcessAlive({ exited: false, pid: null })).toBe(false)
-    expect(isPiProcessAlive({ exited: false, pid: process.pid })).toBe(true)
-  })
-
-  it('pid 存活检查走 process.kill(pid, 0)：ESRCH = 死，EPERM = 活', () => {
-    const esrch = new Error('esrch') as NodeJS.ErrnoException
-    esrch.code = 'ESRCH'
-    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => {
-      throw esrch
-    })
-    try {
-      expect(isPiProcessAlive({ exited: false, pid: 12345 })).toBe(false)
-    } finally {
-      killSpy.mockRestore()
-    }
-
-    const eperm = new Error('eperm') as NodeJS.ErrnoException
-    eperm.code = 'EPERM'
-    const killSpy2 = vi.spyOn(process, 'kill').mockImplementation(() => {
-      throw eperm
-    })
-    try {
-      expect(isPiProcessAlive({ exited: false, pid: 12345 })).toBe(true)
-    } finally {
-      killSpy2.mockRestore()
-    }
-  })
-})
 
 // ── 断言辅助 ─────────────────────────────────────────────────
 

@@ -68,28 +68,6 @@
        内的挂载点承接（保持 drawer 感知定位、恒不遮 drawer），故此处仅非连接态挂载——两态均渲染、
        不双实例。 -->
   <ToastContainer v-if="connectionState !== 'connected'" />
-  <!-- RD-3#11：内存压力提示条（最小可见形态）——useMemoryPressure 的 level 接入 UI 消费方。
-       warn/critical 时显示，用户据此行动；level 无 normal 回弹（协议 normal 不广播），dismiss 后
-       level 变化（升级）经 watch 重显。fixed 顶部居中，零布局侵入。 -->
-  <div
-    v-if="memoryLevel !== 'normal' && !memoryBarDismissed"
-    ref="memoryBarRef"
-    data-testid="memory-pressure-bar"
-    class="fixed left-1/2 top-3 z-[var(--z-banner)] flex max-w-[min(520px,calc(100vw-6rem))] -translate-x-1/2 items-center gap-2 rounded-[var(--radius)] border border-border bg-surface py-2 pl-3 pr-2 shadow-[var(--shadow-2)]"
-  >
-    <AlertTriangle class="size-3.5 shrink-0 text-warn" aria-hidden="true" />
-    <p data-testid="memory-pressure-text" class="select-text break-words text-[12.5px] leading-snug text-neutral-fg">
-      {{ memoryLevel === 'critical' ? t('app.memoryPressureCritical') : t('app.memoryPressureWarn') }}
-    </p>
-    <Button
-      variant="ghost"
-      class="ml-1 size-6 shrink-0 rounded-sm p-0 opacity-60 hover:opacity-100"
-      :aria-label="t('app.crashDismiss')"
-      @click="memoryBarDismissed = true"
-    >
-      <X class="size-3.5" aria-hidden="true" />
-    </Button>
-  </div>
   <!-- 权限请求弹窗（全局，session 无关）：bridge bus plugin-permission-request 驱动 pending；
        transport 经 PERMISSION_TRANSPORT_KEY inject 调 WS approve/deny（main.ts provide）。 -->
   <PermissionRequestDialog :plugin-id="perm.pluginId" :permissions="perm.permissions" :pending="perm.pending" :error="perm.error" />
@@ -97,7 +75,7 @@
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
-import { Loader2, AlertCircle, AlertTriangle, X } from '@lucide/vue'
+import { Loader2, AlertCircle } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import TaijiLogo from '@/components/icons/TaijiLogo.vue'
 import AppShell from '@/components/shell/AppShell.vue'
@@ -118,7 +96,6 @@ import { bindForkNoticeEffect } from '@/composables/effects/useForkNoticeEffect'
 import { bindHandoffEffect } from '@/composables/effects/useHandoffEffect'
 import { bindSessionStreamSync } from '@/composables/effects/useSessionStreamSync'
 import { installInboundFrameGuard, uninstallInboundFrameGuard } from '@/composables/useInboundFrameGuard'
-import { useMemoryPressure } from '@/composables/useMemoryPressure'
 import { useToast } from '@/composables/useToast'
 import { onRuntimeError, getRuntimeStartError } from '@/lib/ipc'
 import { reportRuntimeStartError } from '@/boot/error-reporter'
@@ -172,7 +149,7 @@ void getRuntimeStartError().then((message) => {
 const { onConnected } = useSidebar()
 // settings 订阅的 dispose（HMR/App 卸载销毁）+ models 兜底拉取（防订阅时序竞态）。
 // 订阅注册在 bootstrapSettingsCore（上见），此处只持有 dispose/refreshModels 句柄。
-const { dispose: disposeSettings, refreshModels } = useSettings()
+const { dispose: disposeSettings, refreshModels, refreshQuotaPresets } = useSettings()
 // RV1+RV2：fork 反馈行 + 后台分支通知全局订阅（session.forkNotice 广播 → transient feed；
 // useForkBranchNotify diff 分支状态 → 状态变化反馈行）。App setup 是全局 effect 作用域，
 // onScopeDispose 随 App 卸载退订（单实例，与 events.onGlobalType 范式一致）。
@@ -187,35 +164,6 @@ bindHandoffEffect()
 bindSessionStreamSync()
 // 队列状态帧派生视图的清理由 core 侧 per-session 键控承担（disposeSession / 测试 reset 双清理点，
 // ADR-0049）；App 层不挂任何队列单例。
-// 内存压力降级消费（crash-forensics-and-watchdog §3.3 D4，u7d / 偏差 #28② 的 renderer 半边）：
-// 窗口级单例挂载（refCount 订阅，onScopeDispose 随 App 卸载退订）——订阅 watchdog:memoryPressure，
-// warn 持续拍压窗 LRU 8→4 + 复合入口驱逐退订（evictLruWithUnsubscribe，remote-use D2——被驱逐会话连带退订）。Gate W 默认 off 时 runtime 不广播、零成本待命。
-// 【oe-audit C2】此前全链零装配（hook 零调用方 = 双重休眠，impl-plan u7d「经 useRollingRestartStatus
-// 引用链生产挂载」登记失实——该文件仅注释引用范式）；本挂载补齐生产消费方。
-// 【RD-3#11】捕获 level 供上方提示条消费（此前返回值丢弃、level 无 UI 消费方——内存压力 warn 阶段
-// 用户无从得知、无法据以行动）。
-const { level: memoryLevel } = useMemoryPressure()
-const memoryBarDismissed = ref(false)
-// level 变化（normal→warn→critical 升级）时重显提示条：dismiss 只对当前 level 生效，不跨级别持久。
-watch(memoryLevel, () => { memoryBarDismissed.value = false })
-
-// 模态表面聚合注册（§6.7 横幅族）：内存压力提示条（App.vue 内联块，z-[var(--z-banner)]）非阻塞
-// 不入让位族，只入 view 遮蔽族（shieldsView intersecting——与 view 矩形几何相交才隐藏）。
-// 开合态绑「level 非正常 ∧ 未 dismiss」状态本体（与模板 v-if 同一谓词）；rect 读提示条
-// 根元素实测（warn/critical 文案切换的几何在重渲染后由上报链重测）。旗标组由登记表按 id 读取。
-const memoryBarRef = ref<HTMLElement | null>(null)
-function memoryBarRect(): { x: number; y: number; width: number; height: number } | null {
-  if (!memoryBarRef.value) return null
-  const r = memoryBarRef.value.getBoundingClientRect()
-  return { x: r.x, y: r.y, width: r.width, height: r.height }
-}
-const disposeMemoryBarSurface = registerModalSurface({
-  surface: 'memory-pressure-bar',
-  key: 'memory-pressure-bar',
-  isOpen: () => memoryLevel.value !== 'normal' && !memoryBarDismissed.value,
-  rect: memoryBarRect,
-})
-onBeforeUnmount(disposeMemoryBarSurface)
 
 // 模态表面注册桥装配（§6.7）：@taiji/ui 包内表面宿主（SearchModal / CompanionBand /
 // primitives 弹层族）不能反向依赖 renderer 注册表——根组件 provide 注册函数，ui 侧
@@ -261,10 +209,11 @@ watch(connectionState, (s) => {
     runtimeStartError.value = null
     bootstrapError.value = null
     void onConnected()
-    // 兜底：连接后主动拉一次 models（对齐 refreshProviders 范式，防订阅时序竞态未来回归）。
-    // mock 平台 WS 桩仅 ping/pong 不回 model.list reply → pending 65s 超时，跳过避免 boot 卡顿。
+    // 兜底：连接后主动拉一次 models 与 quota presets（对齐 refreshProviders 范式，防订阅时序竞态未来回归）。
+    // mock 平台 WS 桩仅 ping/pong 不回 reply → pending 65s 超时，跳过避免 boot 卡顿。
     if (import.meta.env.VITE_MOCK !== 'true') {
       void refreshModels()
+      void refreshQuotaPresets()
     }
   }
 })

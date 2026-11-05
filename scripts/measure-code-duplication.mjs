@@ -45,7 +45,7 @@ const res = spawnSync(
   [jscpdBin, 'packages', 'apps', 'extensions', 'scripts', 'e2e',
     '--min-tokens', '50', '--mode', 'strict', '--format', 'typescript',
     '--reporters', 'json', '--output', outDir, '--ignore', IGNORE],
-  { cwd: PROJECT_ROOT, encoding: 'utf-8', timeout: 120_000 },
+  { cwd: PROJECT_ROOT, encoding: 'utf-8' },
 )
 if (res.error || res.status !== 0) {
   console.error(`[measure-code-duplication] jscpd 执行失败：${res.error ? res.error.message : `exit ${res.status}`}`)

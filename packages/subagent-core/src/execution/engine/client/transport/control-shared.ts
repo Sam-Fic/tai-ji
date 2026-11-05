@@ -18,13 +18,11 @@ import { ENGINE_TRANSPORT_ERROR_RECOVERY, EngineSdkError } from "@zhushanwen/sub
 import { GLOBAL_SLOT_KEYS } from "../../../../shared/global-slots.ts";
 import type { EngineTransportExitInfo } from "./types.ts";
 
-// ── 时间窗与上限（设计 §3.3 D8：三个独立窗口 + 双上限；客户端侧与 runtime 侧各自独立
-//    有界，同一 wire 语义。单字面量形态：eslint no-magic-numbers 只豁免 VariableDeclarator
+// ── 上限（设计 §3.3 D8 双上限；客户端侧与 runtime 侧各自独立有界，同一 wire 语义。
+//    原三个握手/关闭时间窗常量已随时间机制删除——connect/hello 的失败事实源 = socket
+//    error/close 事件，engine_open/engine_closed 的 = 应答帧 / 连接死亡 fan-out。
+//    单字面量形态：eslint no-magic-numbers 只豁免 VariableDeclarator
 //    直挂字面量，表达式换算「32 * 1024 * 1024」会触警）──────────────────────────
-export const CONTROL_CONNECT_TIMEOUT_MS = 5_000;
-export const CONTROL_HELLO_TIMEOUT_MS = 10_000;
-export const ENGINE_OPEN_TIMEOUT_MS = 10_000;
-export const CONTROL_CLOSE_GRACE_MS = 3_000;
 /** 32 MiB：control 信封单帧上限（engine_frame.line 是其中的字符串载荷）。 */
 export const CONTROL_MAX_FRAME_BYTES = 33_554_432;
 /** 32 MiB / 4096 帧：每 channel 单方向待写队列上限。 */
@@ -71,10 +69,6 @@ export type RuntimeControlClientOptions = {
    * 缺省（直接构造，不经 acquireRuntimeControlClient）= 不登记共享表。
    */
   rootSessionId?: string;
-  connectTimeoutMs?: number;
-  helloTimeoutMs?: number;
-  openTimeoutMs?: number;
-  closeGraceMs?: number;
   maxFrameBytes?: number;
   channelQueueMaxBytes?: number;
   channelQueueMaxFrames?: number;
@@ -176,23 +170,21 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-/** 在途 engine_open（id 关联；超时/连接死亡时以具体码 reject）。 */
+/** 在途 engine_open（id 关联；连接死亡 fan-out 时以具体码 reject）。 */
 export type ControlPendingOpen = {
   id: number;
   handlers: ControlChannelHandlers;
   resolve: (result: ControlChannelOpenResult) => void;
   reject: (err: Error) => void;
-  timer: NodeJS.Timeout;
 };
 
-/** 在册引擎通道（engine_opened 建，engine_closed/close 宽限终点删）。 */
+/** 在册引擎通道（engine_opened 建，engine_closed/连接死亡终点删）。 */
 export type ControlChannelRecord = {
   channelId: string;
   handlers: ControlChannelHandlers;
   closeRequested: boolean;
   closePromise: Promise<void> | undefined;
   closeResolve: (() => void) | undefined;
-  closeTimer: NodeJS.Timeout | undefined;
 };
 
 /** 客户端连接状态（idle → connecting → hello → ready；lost/disposed 终态）。 */

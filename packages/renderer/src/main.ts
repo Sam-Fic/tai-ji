@@ -10,6 +10,7 @@ import { resolvePlatform } from './platform/resolve-platform'
 import { initExtensionHostBridge, getExtensionBus } from './composables/shell/useExtensionHostBridge'
 import { initPermissionRequest } from './composables/shell/usePermissionRequest'
 import { installRendererErrorReporting } from './boot/error-reporter'
+import { installResizeObserverProbe } from './boot/resize-observer-probe'
 import { registerCanvasOverlayBridge } from './composables/use-canvas-sync'
 import { openCanvasTab } from './components/panel/workflow-viz/overlay/workflow-viz-overlay'
 import { getImageCacheWritePort } from './lib/ipc'
@@ -58,6 +59,11 @@ const app = createApp(App)
 // → electronAPI.reportRendererLog → main 落盘 renderer-error-<date>.log（E3 教训：崩溃前零日志）。
 // 必须在 mount 前安装（覆盖启动期错误）；自身零抛错，见 boot/error-reporter.ts。
 installRendererErrorReporting(app)
+// ResizeObserver 触发归因探针（dev-only，问题登记 docs/todo/resize-observer-loop-noise.md）：
+// RO loop 告警无堆栈、帧边界派发不可归因，dev 下包装全局 RO 构造器，按注册点统计回调
+// 频次，每 60s 窗 console.debug 输出 top 10；prod 经 import.meta.env.DEV 裁剪零执行。
+// 须在 mount 前安装（组件里的 new ResizeObserver 才走包装后的全局构造器）。
+installResizeObserverProbe()
 // ExtensionHost bridge 装配（audit §12.1）：WS plugin:* 消息 → bus → ViewHostStore →
 // app.provide 注入 ui 组件数据源。须在 mount 前（provide 全局生效）。
 initExtensionHostBridge(app)

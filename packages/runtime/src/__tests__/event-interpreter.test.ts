@@ -4,7 +4,7 @@
  * 来源（分节注释见内）：
  * - event-interpreter（原主文件：session-renamed / compaction / gen-stats D3 / TTFT / agent-settled V7）
  * - event-interpreter-file-changes（W18 帧序不变量）
- * - event-interpreter-settled-fallback（RT-4#2/#9 settling 终态兜底 + ping 生命期）
+ * - event-interpreter-settled-fallback（RT-4#2/#9 settling 终态兜底）
  * - event-interpreter-dispatch-anchor（W3 handle 分发锚定）
  * - event-interpreter-isolation（W1 interpret 事件级隔离）
  * - event-interpreter-subagent-push / event-interpreter-workflow-push（W18 直写退役）
@@ -13,7 +13,7 @@
  * 运行：cd packages/runtime && npx vitest run src/__tests__/event-interpreter.test.ts
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { EventInterpreter, PING_INTERVAL_MS } from '../services/session/event-interpreter.js'
+import { EventInterpreter } from '../services/session/event-interpreter.js'
 import type { GenStatsSample, PiTranslatedEvent, SessionOccupancyTransition } from '../services/session/types.js'
 import type { IFileChangeDiff } from '../services/ports/file-change-diff.js'
 import type { FileChange, ServerMessage } from '@taiji/shared'
@@ -1055,33 +1055,25 @@ describe('EventInterpreter file_changes 帧序（W18 D3-3）', () => {
 
 // ════════════════ 来源: event-interpreter-settled-fallback.test.ts ════════════════
 // ---- 原文件头注释 ----
-// [RT-4#2 / RT-4#9] EventInterpreter settling 终态兜底 + ping 生命期 + 未知 kind 检查。
-// 锁定三条不变量（code-harden RT-4#2 审计修复）：
-// - SC1 settled 副作用抛错（onAgentSettled 的 bash flush publish 炸）→ occupancy 终态
-// 'idle' 仍必达（此前 settling→idle 唯一边沿 = agent_settled 处理链，链内抛错 =
-// occupancy 永久 settling、消息恒入 defer 队列）。
-// - SC2 ping 生命期 = turn-start → agent_settled：turn-end（settling 期）ping 继续
-// 探测（pi 收尾挂死时 3 次失败触发 onSilentAbort），settled 处理后停（防 B1 永续）。
-// - SC3 未知 kind（类型外运行时构造）落 handleMetaEvent default warn，不静默丢弃。
-// （原 RT-4#2③ UserStoppedGate 收敛环代数上限组已随 ADR-0122 时间窗收敛环删除一并
-// 移除——「settled 永不到达」场景归 PingProbe → onSilentAbort → forceQuit 显式上报链，
-// 锁定用例见下方 settling 期 pi 真死组。）
+// [RT-4#2 / RT-4#9] EventInterpreter settling 终态兜底 + 未知 kind 检查。
+// 锁定两条不变量（code-harden RT-4#2 审计修复）：
+// - settled 副作用抛错（onAgentSettled 的 bash flush publish 炸）→ occupancy 终态
+//   'idle' 仍必达（此前 settling→idle 唯一边沿 = agent_settled 处理链，链内抛错 =
+//   occupancy 永久 settling、消息恒入 defer 队列）。
+// - 未知 kind（类型外运行时构造）落 handleMetaEvent default warn，不静默丢弃。
+// （原 RT-4#2③ UserStoppedGate 收敛环代数上限组已随 ADR-0122 时间窗收敛环删除一并移除。）
 // /
 
 const SID = 'sid-rt4-settled'
 
 function makeSettledInterpreter(opts: {
   onAgentSettled?: (sessionId: string) => void
-  pingPi?: () => Promise<Record<string, unknown> | undefined>
   onOccupancyTransition?: (t: SessionOccupancyTransition) => void
-  onSilentAbort?: (p: { sessionId: string }) => void
 }) {
   const sent: ServerMessage[] = []
   const interp = new EventInterpreter(SID, {
     send: (m: ServerMessage) => { sent.push(m) },
     onAgentSettled: opts.onAgentSettled,
-    pingPi: opts.pingPi,
-    onSilentAbort: opts.onSilentAbort,
     onOccupancyTransition: opts.onOccupancyTransition,
   })
   return { interp, sent }
@@ -1120,64 +1112,6 @@ describe('[RT-4#2①] settled 副作用抛错 → occupancy 终态 idle 必达',
   })
 })
 
-describe('[RT-4#2②] ping 生命期 = turn-start → agent_settled', () => {
-  beforeEach(() => { vi.useFakeTimers() })
-  afterEach(() => { vi.useRealTimers() })
-
-  it('turn-end 后 ping 继续探测（settling 期零探测已消除），agent-settled 后停止', async () => {
-    const pingPi = vi.fn(async () => ({ ok: true }) as Record<string, unknown>)
-    const { interp } = makeSettledInterpreter({ pingPi })
-
-    interp.interpret([{ kind: 'turn-start', messageId: 'm1' }])
-    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS)
-    expect(pingPi).toHaveBeenCalledTimes(1)
-
-    // turn-end：settling 期 ping 不停（修复点——原实现此处 stop）
-    interp.interpret([
-      { kind: 'turn-end', message: { type: 'message.complete', payload: { sessionId: SID, stopReason: 'end_turn' } }, stopReason: 'end_turn' },
-    ])
-    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS * 2)
-    expect(pingPi).toHaveBeenCalledTimes(3)
-
-    // agent-settled：ping 停止（turn 间不探测，AC-3 语义保留）
-    interp.interpret([{ kind: 'agent-settled' }])
-    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS * 10)
-    expect(pingPi).toHaveBeenCalledTimes(3)
-  })
-
-  it('settling 期 pi 真死：连续失败达阈值触发 onSilentAbort（settling 期有 no-progress 检测）', async () => {
-    const pingPi = vi.fn(async () => undefined) // resolve(undefined) = 计失败（AC-9）
-    const onSilentAbort = vi.fn()
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const { interp } = makeSettledInterpreter({ pingPi, onSilentAbort })
-
-    interp.interpret([{ kind: 'turn-start', messageId: 'm1' }])
-    interp.interpret([
-      { kind: 'turn-end', message: { type: 'message.complete', payload: { sessionId: SID, stopReason: 'end_turn' } }, stopReason: 'end_turn' },
-    ])
-    // settling 窗内 3 次失败（turn-end 后不再有事件，模拟 pi finally 前挂死）
-    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS * 3)
-    expect(onSilentAbort).toHaveBeenCalledWith({ sessionId: SID })
-    warnSpy.mockRestore()
-  })
-
-  it('settled 副作用抛错也停 ping（finally 收尾，防 B1 永续）', async () => {
-    const pingPi = vi.fn(async () => ({ ok: true }) as Record<string, unknown>)
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    const { interp } = makeSettledInterpreter({
-      pingPi,
-      onAgentSettled: () => { throw new Error('boom') },
-    })
-
-    interp.interpret([{ kind: 'turn-start', messageId: 'm1' }])
-    interp.interpret([{ kind: 'agent-settled' }])
-    const countAfterSettled = pingPi.mock.calls.length
-    await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS * 10)
-    expect(pingPi.mock.calls.length).toBe(countAfterSettled)
-    vi.restoreAllMocks()
-  })
-})
-
 describe('[RT-4#9] 未知 kind 运行时兜底（default warn，不静默丢弃）', () => {
   it('类型外 kind（未来新增事件漏接线）落 warn', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -1200,7 +1134,7 @@ describe('[RT-4#9] 未知 kind 运行时兜底（default warn，不静默丢弃�
 // （handle 主 switch 结构编排 case + handleConversationEvent 对话内容流 +
 // handleTurnLifecycleEvent turn 生命周期 + handleRoutingEvent server 路由 +
 // handleMetaEvent 元数据与观测 hook，行为保持重构）。现有测试聚焦 turn-usage / turn-end /
-// subagent / workflow / watchdog / isolation 通路，本文件补齐路由类与流类 case 的
+// subagent / workflow / isolation 通路，本文件补齐路由类与流类 case 的
 // 直连分发断言（重构前即缺位的分支，补特征锚定用例防提取引入分发漂移）。
 // 断言形态：单事件 → 恰好一次回调/帧、参数逐字段一致；跨分组批次 → 分发顺序保持。
 // 纯 mock，无 fs IO。
@@ -1349,7 +1283,7 @@ describe('EventInterpreter · handle 三段分发锚定（W3 复杂度债务偿�
       { kind: 'agent-settled' },
     ])
 
-    // turn-start 副作用齐发（messageId 记录 + ping 循环启动，watchdog 通路另有专测）
+    // turn-start 副作用齐发（messageId 记录）
     expect(onAgentSettled).toHaveBeenCalledTimes(1)
     // tool-call-index 锚点入缓存：随后 tool-call-start 可消费（分发落主 switch）
     interpreter.interpret([{

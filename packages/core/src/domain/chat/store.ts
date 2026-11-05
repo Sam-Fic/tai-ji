@@ -57,12 +57,6 @@ import { getViewedVids } from '@taiji/core/domain/drawer'
 export type SessionOccupancyState = Omit<ServerMessageMap['session.occupancy'], 'sessionId'>
 
 /**
- * [pi-stall-detection U4 / D3] 静默辅助提示派生视图载荷（session.stall_hint state topic 帧
- * 的 payload——T/T_hint 推导单源 runtime，本分区只承载呈现事实，renderer 不复制推导）。
- */
-export type StallHintState = ServerMessageMap['session.stall_hint']
-
-/**
  * [E-4] toolCall overlay 形态挂载到分区最后一条 assistant（subagent entry 帧消费，§6.1）。
  *
  * 模块级纯函数（输入输出均不可变构造）：与主对话流 message.tool_call_start effect 同语义，
@@ -127,9 +121,10 @@ function attachRunningToolCall(prev: Message[], form: PiToolCallEntryForm): Mess
  * liveOnly system 提示条（u8，T4 崩溃恢复横幅）无 piEntryId、也不满足尾部保护段条件
  * （system 非 streaming/user）——不拣回则任何切入 reconcile 都会清掉已插入的提示条，
  * 重显只能依赖 ring 回放重触发 session.restored（时序未声明）。合并结果产出后从旧分区
- * 拣回**未过期**（TTL 5 分钟）提示条重插（restoreRespawnNotices），范围严格收窄
+ * 拣回提示条重插（restoreRespawnNotices），范围严格收窄
  * customType=PI_RESPAWN_NOTICE_CUSTOM_TYPE（stream_warn 等其他 liveOnly 消息保持
- * 一次性语义不受影响）。
+ * 一次性语义不受影响）。无 TTL（ADR-0190）：提示条不再按龄消退，驻留至 session 删除
+ * / 分区清理。
  */
 /**
  * user 消息文本派生视图（mergeBaselineWithLive 文本多重集判据用）。比较是**派生视图级**而非
@@ -287,7 +282,7 @@ function mergeBaselineWithLive(baseline: Message[], partition: Message[]): Messa
   // 为什么（缺陷背景，A8 三次复现）：分区 live 消息 id（user = 投递标记 clientUuid、
   // assistant = a-<uuid>）与盘上 entry 派生 id（uuidv7 截短形态）是两个不相交空间
   // （turn-expansion.ts 头注释同款论证）。本函数原实现一律以基线副本替换已确认消息，
-  // 任何 hydrated reconcile（重连对账 refreshHistory / 终态恢复 recoverStalledSession /
+  // 任何 hydrated reconcile（重连对账 refreshHistory /
   // 撤回后刷新）都会把整个分区换成 entry id 空间——turnStableId（M5 stable-key = 首条
   // 消息 id）随之全变，turn-expansion 展开分区按旧 id 记录的展开态被静默挂空（C4 两段式
   // 契约的「驻留期 turn 稳定 id 不变，手动展开保持」对 live-id 消息失守）：已展开回合
@@ -313,22 +308,13 @@ function mergeBaselineWithLive(baseline: Message[], partition: Message[]): Messa
   )
 }
 
-/**
- * respawn 提示条的 reconcile 保留窗口（5 分钟，crash-resilience D7 修复）。
- *
- * 带 TTL 而非永不过期：liveOnly 语义是一次性通知（pi 无 entry、重开 session 不出现），
- * 无限期的内存保留会让恢复横幅在长寿运行期持续驻留成噪音；过期后随下一次 reconcile
- * 自然消退（用户层面 5 分钟足够读完横幅/点重试）。
- */
-const RESPAWN_NOTICE_RETENTION_MS = 300_000
-
 /** respawn 提示条判定（appendRespawnNotice u8 唯一写入点的消息形态）。 */
 function isRespawnNotice(m: Message): boolean {
   return m.role === 'system' && m.liveOnly === true && m.customType === PI_RESPAWN_NOTICE_CUSTOM_TYPE
 }
 
 /**
- * 从旧分区拣回未过期的 respawn 提示条重插进合并结果（mergeBaselineWithLive 尾段调用）。
+ * 从旧分区拣回 respawn 提示条重插进合并结果（mergeBaselineWithLive 尾段调用）。
  *
  * 位置锚定：提示条在分区中的前驱消息文件侧身份（piEntryId ?? id）——基线克隆保留
  * piEntryId，跨 reconcile 锚位稳定；前驱不存在（提示条是分区首条）或锚未命中合并结果
@@ -345,7 +331,6 @@ function restoreRespawnNotices(partition: Message[], merged: Message[]): Message
   for (let i = 0; i < partition.length; i++) {
     const notice = partition[i]!
     if (!isRespawnNotice(notice)) continue
-    if (Date.now() - notice.timestamp > RESPAWN_NOTICE_RETENTION_MS) continue
     if (mergedIds.has(notice.id)) continue
     const anchor = i > 0 ? partition[i - 1] : undefined
     const anchorId = anchor !== undefined ? (anchor.piEntryId ?? anchor.id) : undefined
@@ -414,20 +399,6 @@ export function createChatStore(options: ChatStoreOptions = {}) {
    *  session.compacted 清除 / 断连收尾随 occupancy 分区一并清（reason 只在 isCompacting 时被读，
    *  孤立残留无害）。 */
   const compactingReasons = ref<Map<string, string>>(new Map())
-  /**
-   * [pi-stall-detection U4 / D3] 静默辅助提示分区（session.stall_hint state topic 驱动，
-   * per-session last-value）。runtime 判定权（T_hint 边沿 + 帧流恢复/判死清除边沿），本
-   * Map 是呈现派生视图（ActivityStrip stall 行文案源）；无记录 = 无提示在显。
-   * 断连收尾（resetTransientStates）与 disposeSession 删分区——重连后 stateSnapshot 回放
-   * 恢复真实值（与 occupancies 分区同语义）。
-   *
-   * // @data-owner #90 —— 权威源 = runtime SilenceMatrix 判定（event-interpreter-silence.ts，
-   * T/T_hint 单源推导，renderer 不复制推导）。唯一写入口 = message-bus state topic 广播链
-   *（message-bus.ts TOPIC_TABLE/STATE_TYPE_KEY_MAP）+ renderer 侧 setStallHint 单点
-   *（useChat handler，live 广播与 stateSnapshot 回放同入口）。登记见
-   * docs/architecture/data-source-registry.md §1 #90。
-   */
-  const stallHints = ref<Map<string, StallHintState>>(new Map())
   /**
    * [crash-resilience T4 回流修复] pi 意外退出后的「引擎恢复中」过渡态分区（session id Set）。
    *
@@ -1078,9 +1049,6 @@ export function createChatStore(options: ChatStoreOptions = {}) {
     // occupancy 分区由 clearOccupancy 删，reason 由本点清——重连快照恢复 occupancy 后浮层
     // 文案从 session.compacting 事件重新取得，不残留旧 reason）
     setCompactingReason(sessionId, undefined)
-    // [pi-stall-detection U4] 静默辅助提示随断连收尾清理（occupancy 同款重建型状态——
-    // 重连 stateSnapshot 回放恢复真实值，不残留旧提示）
-    clearStallHint(sessionId)
   }
 
   // ── pendingSend 生命周期（useChat/effects 经 ctx/port 调）──
@@ -1190,29 +1158,6 @@ export function createChatStore(options: ChatStoreOptions = {}) {
    *  MessageStream 据此切文案：手动→compressing / 自动→autoCompressing。 */
   function getCompactingReason(sessionId: string): string | undefined {
     return compactingReasons.value.get(sessionId)
-  }
-
-  /** [pi-stall-detection U4 / D3] 写入静默辅助提示分区（session.stall_hint 帧驱动；
-   *  useChat handler 消费 live 广播与 stateSnapshot 回放同一入口）。整体替换该 sid 分区
-   *  （last-value 帧，非 patch；active=false = 清除边沿——删记录回落「无提示在显」）。 */
-  function setStallHint(sessionId: string, hint: StallHintState): void {
-    const next = new Map(stallHints.value)
-    if (hint.active) next.set(sessionId, hint)
-    else next.delete(sessionId)
-    stallHints.value = next
-  }
-
-  /** [pi-stall-detection U4 / D3] 读取静默辅助提示（无在显提示 = undefined）。 */
-  function getStallHint(sessionId: string): StallHintState | undefined {
-    return stallHints.value.get(sessionId)
-  }
-
-  /** [pi-stall-detection U4 / D3] 删除静默辅助提示分区（断连收尾 / disposeSession）。 */
-  function clearStallHint(sessionId: string): void {
-    if (!stallHints.value.has(sessionId)) return
-    const next = new Map(stallHints.value)
-    next.delete(sessionId)
-    stallHints.value = next
   }
 
   // isHandingOff 读 occupancy 派生（见 isCompacting 旁定义；setHandingOff 已随
@@ -1326,7 +1271,7 @@ export function createChatStore(options: ChatStoreOptions = {}) {
     // 避免 TS 将不同 Map 元素推断为具体联合类型导致 new Map(ref.value) 不兼容。
     // inflightCounts（[steer-bubble D4]）：disposeSession 同步清 inflight——确认基线随分区
     // 销毁作废（与 LRU 驱逐的刻意豁免不同，见 lruEvictDeps 处声明注释）。
-    const mapRefs: { value: Map<string, unknown> }[] = [messages, retryStates, inflightCounts, compactingReasons, occupancies, historyWindows, submitSeqs, baselinePrependTicks, stallHints]
+    const mapRefs: { value: Map<string, unknown> }[] = [messages, retryStates, inflightCounts, compactingReasons, occupancies, historyWindows, submitSeqs, baselinePrependTicks]
     const setRefs: { value: Set<string> }[] = [hydrated, pendingSend, failedHistory, respawnPending]
     for (const ref of mapRefs) {
       if (ref.value.has(sessionId)) {
@@ -1428,9 +1373,6 @@ export function createChatStore(options: ChatStoreOptions = {}) {
     sessionPhase,
     setCompactingReason,
     getCompactingReason,
-    setStallHint,
-    getStallHint,
-    clearStallHint,
     isHandingOff,
     appendSystemNotice,
     appendRespawnNotice,
@@ -1493,7 +1435,6 @@ export type ChatStoreReaders = Pick<
   | 'getMessages' | 'getRetryState' | 'getChangeSetStatus'
   | 'isHydrated' | 'isGenerating' | 'isActive'
   | 'isCompacting' | 'getCompactingReason' | 'isHandingOff'
-  | 'getStallHint'
   | 'sessionPhase' | 'isPendingSend'
   | 'isRespawnPending'
   | 'getBaselinePrependTick'
@@ -1522,7 +1463,6 @@ export type ChatStoreOps = Pick<
   | 'finalizeAllStreaming' | 'resetTransientStates' | 'addPendingSend'
   | 'clearPendingSend' | 'markSessionError'
   | 'setOccupancy' | 'clearOccupancy' | 'setCompactingReason'
-  | 'setStallHint' | 'clearStallHint'
   | 'appendSystemNotice' | 'appendRespawnNotice' | 'appendSubagentDirective' | 'truncateFrom'
   | 'markRespawnPending' | 'clearRespawnPending'
   | 'applyFileChanges' | 'disposeSession' | 'markStreamingBashError'

@@ -22,14 +22,6 @@ import type { EngineClient } from "./engine-client.ts";
 import type { RemoteEngineManifestSnapshot } from "./remote-engine.ts";
 
 /**
- * 控制范围单请求超时（量级对齐 SET_MODEL_REQUEST_TIMEOUT_MS = 10s 先例）：偏好层
- * 成员校验在**派发同步路径**上 await 本帧——无界等待（request 缺省任务级无墙钟）
- * 会把派发挂死在无应答引擎上；秒级有界 + 超时失败放行（消费方 model-ref-translation
- * 的 per-engine 一次性 warn 语义）。
- */
-const LIST_MODELS_REQUEST_TIMEOUT_MS = 10_000;
-
-/**
  * RemoteEngine.listModels 门面：快照可枚举 → 同步数组；无静态枚举 → 活清单 RPC
  * （ListModelsResult.models 单字段；结构互证经 SDK 契约类型）。
  */
@@ -45,9 +37,7 @@ export function remoteListModelsFace(
 /** 协议 listModels 帧载荷消费（ensureConnected 快路径见文件头）。 */
 async function requestLiveEngineModels(client: EngineClient): Promise<EngineModelList> {
   await client.ensureConnected();
-  const result = (await client.request("listModels", {}, {
-    timeoutMs: LIST_MODELS_REQUEST_TIMEOUT_MS,
-  })) as {
+  const result = (await client.request("listModels", {})) as {
     models: ModelCatalogEntry[] | null;
   };
   return result.models;

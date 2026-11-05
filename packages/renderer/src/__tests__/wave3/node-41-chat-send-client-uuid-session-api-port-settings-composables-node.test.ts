@@ -10,7 +10,6 @@ import { useScopedModels } from '@/composables/features/settings/useScopedModels
 import { createSettingsStore, getSettingsStore, provideSettingsStore, provideSettingsTransport, type SessionApiPort } from '@taiji/core';
 import * as events from '@taiji/core/transport/api';
 import { send } from '@taiji/core/transport/api/domains/chat';
-import { RPC_BACKSTOP_TIMEOUT_MS } from '@taiji/core/transport/api/pending';
 import type { ProviderInfo } from '@taiji/shared';
 import { createPinia, setActivePinia } from 'pinia';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -49,7 +48,7 @@ describe('chat.send clientUuid 透传（session-occupancy D2）', () => {
       sessionId: 's1',
       content: 'hi',
       clientUuid: 'u-abc-123',
-    }, RPC_BACKSTOP_TIMEOUT_MS)
+    })
   })
 
   it('不带 options → payload 不含 clientUuid 键（既有流量形态不变）', async () => {
@@ -72,7 +71,7 @@ describe('chat.send clientUuid 透传（session-occupancy D2）', () => {
       content: 'hi',
       images: [{ data: 'BASE64', mimeType: 'image/png' }],
       clientUuid: 'u-abc-123',
-    }, RPC_BACKSTOP_TIMEOUT_MS)
+    })
   })
 
   it('options 空对象（clientUuid undefined）→ payload 不含 clientUuid 键', async () => {

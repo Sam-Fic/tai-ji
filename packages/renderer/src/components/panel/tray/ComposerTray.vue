@@ -273,6 +273,7 @@
           <TrayWidgetPanel
             :view-id="item.viewId"
             :meta="item.entry.meta"
+            :plugin-id="item.entry.pluginId"
             :gui-tree="item.entry.guiTree"
           />
         </ScrollArea>
@@ -291,6 +292,7 @@ import { computed, inject, onBeforeUnmount, provide, ref, watch } from 'vue'
 import type { Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Layers, Network, SquareTerminal, Waypoints } from '@lucide/vue'
+import { COMPOSER_TRAY_PLACEMENT } from '@taiji/core'
 import { VIEW_HOST_SOURCE_KEY, ViewHost } from '@taiji/ui/extension-host'
 // D11 收起联动的容器开合态读口（core 单例公开读口；drawer 域控制态 + overlay 域开合态）
 import { getDrawerControlState } from '@taiji/core/domain/drawer'
@@ -421,7 +423,7 @@ const builtinItems = computed<BuiltinItem[]>(() =>
 )
 
 /** 计数徽标值：session 件 = 子会话总数、canvas 件 = 画布总数（数量型类别徽标 = total，
- * 进行中信号由呼吸点承载，设计 `mode-system-composer-density` §6.7 D7 同款），
+ * 进行中信号由呼吸点承载——原设计档 mode-system-composer-density §6.7 D7 已退役不可达，设计依据 git 可追溯），
  * 其余件 = 进行中数 */
 function badgeCount(item: BuiltinItem): number {
   return item.kind === 'session' || item.kind === 'canvas' ? item.total : item.running
@@ -433,6 +435,12 @@ const viewHostSource = inject(VIEW_HOST_SOURCE_KEY, null)
 /**
  * widget 区条目（依赖追踪契约见文件头：getViewIds + getView 同路径，拆开即断链）。
  * guiTree 空（异常 payload / 清屏竞态）视为无条目，不渲染空壳。
+ *
+ * placement 过滤（composer-tray-protocol D1 / AX1 展示位资格公理）：托盘是声明制容器，
+ * 只渲染条目带托盘章（placement === 'composer.tray'）的条目——扩展源由 bridge 写入点统一
+ * 盖印（API 即声明），插件源由 runtime 按清单声明盖印随帧携带；非托盘位（drawer.tab 等）、
+ * 未声明（旧帧无章）与坏 placement 值一律不出按钮（兜底防线语义：存储资格由 runtime
+ * 写入校验承担，此处过滤保证「存储里有什么」与「托盘出什么」解耦）。
  */
 const widgetItems = computed<WidgetItem[]>(() => {
   const source = viewHostSource
@@ -441,6 +449,7 @@ const widgetItems = computed<WidgetItem[]>(() => {
   return orderTrayWidgetIds(source.getViewIds(sessionId))
     .map((viewId) => ({ viewId, entry: source.getView(sessionId, viewId) }))
     .filter((item): item is WidgetItem => item.entry !== undefined && item.entry.guiTree.length > 0)
+    .filter((item) => item.entry.placement === COMPOSER_TRAY_PLACEMENT)
 })
 
 /**

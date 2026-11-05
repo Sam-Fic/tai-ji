@@ -97,11 +97,6 @@ export interface StartHandlerInput {
   worktree?: boolean;
   /** 覆盖子 agent 工作目录（默认 mainCwd）。 */
   cwd?: string;
-  /**
-   * 空闲超时毫秒数（全 record 生效的 idle GC 节奏，覆盖默认 5min）。
-   * 显式传 0/负数 = 禁用 idle GC（不挂 timer）；不传走 env/默认优先级。
-   */
-  idleTimeoutMs?: number;
   /** 执行引擎（三层路由第一层：本参数 > agent frontmatter engine > config defaultEngine）。 */
   engine?: string;
   // [collect 退役] 原 collect 字段（sync 批通知路由选项）已随 collect 批机制整体删除：
@@ -404,7 +399,6 @@ export async function startHandler(
     fork: input.fork,
     worktree: input.worktree,
     cwd: input.cwd,
-    idleTimeoutMs: input.idleTimeoutMs,
     engine: input.engine,
     ctxModel,
     signal,

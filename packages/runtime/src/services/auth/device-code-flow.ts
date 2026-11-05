@@ -4,6 +4,9 @@
  * 参考 pi-ai dist/auth/oauth/device-code.js:62-118 语义，差异：
  * - 返回结构化结果 { ok, reason } 而非 throw（调用方统一处理错误分支）
  * - poll 接收 attempt 序号（业务方可用于日志/退避决策）
+ * - 无客户端 deadline（时间机制删除裁决）：轮询挂到 complete / failed（含 provider 的
+ *   expired_token）/ abort 为止——device code 过期由 provider 侧信号裁决，本地不做
+ *   时间阈值判死
  *
  * slow_down 处理（RFC 8628 §3.5）：服务器返回 intervalSeconds 时直接采用
  * （服务器值优先，防 WSL/VM 时钟漂移下客户端自计数永远早轮询）；
@@ -21,8 +24,6 @@ export interface DeviceCodeFlowOptions {
   poll: (attempt: number) => Promise<DevicePollResult>
   /** 初始轮询间隔秒（RFC 8628 §3.2：服务器省略 interval 时客户端默认 5s） */
   intervalSeconds?: number
-  /** 绝对超时（秒），到期返回 reason timeout */
-  expiresInSeconds: number
   /** true 时先等一个 interval 再首次轮询（xai/kimi/copilot 需要） */
   waitBeforeFirstPoll?: boolean
   signal: AbortSignal
@@ -34,7 +35,7 @@ export interface DeviceCodeFlowOptions {
 
 export type DeviceCodeFlowResult =
   | { ok: true; value: unknown }
-  | { ok: false; reason: 'timeout' | 'aborted' | 'failed'; message?: string }
+  | { ok: false; reason: 'aborted' | 'failed'; message?: string }
 
 const CANCEL_MESSAGE = 'Login cancelled'
 
@@ -79,23 +80,19 @@ interface PollTimings {
   minIntervalMs: number
   /** slow_down 无服务器 interval 时的增量 ms（RFC 8628 §3.5 为 5s） */
   slowDownIncrementMs: number
-  /** 绝对超时时刻 ms */
-  deadline: number
   /** 初始轮询间隔 ms（RFC 8628 §3.2：服务器省略 interval 时客户端默认 5s） */
   intervalMs: number
 }
 
-/** opts → 轮询时序参数（与原内联初始化逐表达式等价，Date.now() 调用时机不变）。 */
+/** opts → 轮询时序参数（与原内联初始化逐表达式等价）。 */
 function resolvePollTimings(opts: DeviceCodeFlowOptions): PollTimings {
   // eslint-disable-next-line no-magic-numbers -- RFC 8628 §3.2 轮询间隔下限 1s
   const minIntervalMs = opts.minIntervalMs ?? 1_000
   // eslint-disable-next-line no-magic-numbers -- RFC 8628 §3.5 slow_down 增量 5s
   const slowDownIncrementMs = opts.slowDownIncrementMs ?? 5_000
-  // eslint-disable-next-line no-magic-numbers -- expiresInSeconds 秒转毫秒
-  const deadline = Date.now() + opts.expiresInSeconds * 1_000
   // eslint-disable-next-line no-magic-numbers -- RFC 8628 §3.2 默认间隔 5s（秒转毫秒）
   const intervalMs = Math.max(minIntervalMs, Math.floor((opts.intervalSeconds ?? 5) * 1_000))
-  return { minIntervalMs, slowDownIncrementMs, deadline, intervalMs }
+  return { minIntervalMs, slowDownIncrementMs, intervalMs }
 }
 
 /**
@@ -115,20 +112,19 @@ function nextIntervalAfterSlowDown(
 }
 
 export async function runDeviceCodeFlow(opts: DeviceCodeFlowOptions): Promise<DeviceCodeFlowResult> {
-  const { minIntervalMs, slowDownIncrementMs, deadline, intervalMs: initialIntervalMs } = resolvePollTimings(opts)
+  const { minIntervalMs, slowDownIncrementMs, intervalMs: initialIntervalMs } = resolvePollTimings(opts)
   let intervalMs = initialIntervalMs
   let attempt = 0
 
   // waitBeforeFirstPoll：授权页打开需要时间，先等一轮再开始轮询，
   // 避免在用户还没完成授权时就打第一发请求
   if (opts.waitBeforeFirstPoll) {
-    const remainingMs = deadline - Date.now()
-    if (remainingMs > 0 && !(await sleepOrAborted(Math.min(intervalMs, remainingMs), opts.signal))) {
+    if (!(await sleepOrAborted(intervalMs, opts.signal))) {
       return { ok: false, reason: 'aborted', message: CANCEL_MESSAGE }
     }
   }
 
-  while (Date.now() < deadline) {
+  for (;;) {
     if (opts.signal.aborted) {
       return { ok: false, reason: 'aborted', message: CANCEL_MESSAGE }
     }
@@ -142,17 +138,10 @@ export async function runDeviceCodeFlow(opts: DeviceCodeFlowOptions): Promise<De
     if (result.status === 'slow_down') {
       intervalMs = nextIntervalAfterSlowDown(result.intervalSeconds, intervalMs, minIntervalMs, slowDownIncrementMs)
     }
-    const remainingMs = deadline - Date.now()
-    if (remainingMs <= 0) {
-      break
-    }
-    // sleep 取 min(interval, remaining)：超时边界处不睡过头；abort 中断转 aborted 结果
-    if (!(await sleepOrAborted(Math.min(intervalMs, remainingMs), opts.signal))) {
+    // abort 中断转 aborted 结果；无 deadline——device code 过期由 provider 的
+    // expired_token 信号裁决（poll 侧转 failed），本地不做时间阈值判死
+    if (!(await sleepOrAborted(intervalMs, opts.signal))) {
       return { ok: false, reason: 'aborted', message: CANCEL_MESSAGE }
     }
   }
-
-  // 循环因 abort 提前退出已在上方返回；走到这里只有超时一种可能。
-  // 统一 timeout，不区分是否经历过 slow_down（时钟漂移提示简化为单一文案）
-  return { ok: false, reason: 'timeout' }
 }

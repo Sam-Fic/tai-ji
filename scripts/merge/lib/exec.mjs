@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process'
  * 运行子命令。不抛异常——退出码交调用方裁决（管线语义：失败 = 打印指引 + 非零退出）。
  *
  * opts.stdio: 'inherit'（默认，实时透传）| 'capture'（捕获 stdout/stderr）| 'ignore'（静默）
- * opts.timeoutMs: 可选墙钟超时（超时进程被杀，code 为 null）
+ * 无墙钟（时间机制删除裁决：调用方 timeoutMs 通道退役）——子命令跑到退出为止。
  */
 export function run(cmd, args, opts = {}) {
   const stdio = opts.stdio === 'capture' || opts.stdio === 'ignore' ? [`ignore`, opts.stdio === 'capture' ? 'pipe' : 'ignore', opts.stdio === 'capture' ? 'pipe' : 'ignore'] : 'inherit'
@@ -19,7 +19,6 @@ export function run(cmd, args, opts = {}) {
     env: opts.env ?? process.env,
     encoding: 'utf8',
     stdio,
-    timeout: opts.timeoutMs,
   })
   return {
     code: res.status,

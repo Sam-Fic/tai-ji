@@ -183,11 +183,10 @@ function coerceUiResponse(raw: unknown, reqId: string): UiResponse {
  *  （title 可能含 marker）。channel 注册后由 createRealHandler 优先走 channel handler，
  *  不进这里。editor 不可用/抛错时降级 cancelled + warn，不卡队列。 */
 /** select/confirm/input 的 SDK 第三参（opts）：请求方传了**合法** timeout（>0 且有限，
- *  判定源 = dialog-queue 的 isValidDialogTimeout，与队列层上界同一权威）才透传——
- *  未传或非法（0/负数/NaN/±Infinity）时不加第三参，参数个数与旧调用完全一致（严格
- *  additive）。非法值透传会让 SDK 收到语义反转的 opts（<=0 可能立即 auto-dismiss），
- *  且与队列层「非法回落默认上界」的判定不一致（A2-3）；不透传时数组为空，SDK 无界
- *  由队列层默认上界（30min）兜底。
+ *  判定源 = dialog-queue 的 isValidDialogTimeout）才透传——未传或非法
+ *（0/负数/NaN/±Infinity）时不加第三参，参数个数与旧调用完全一致（严格 additive）。
+ *  非法值透传会让 SDK 收到语义反转的 opts（<=0 可能立即 auto-dismiss）；不透传时
+ *  数组为空，SDK 无界（队列层已无默认上界，dialog 挂到用户响应/SR-4/rejectAll）。
  *  返回元组联合以支持 spread 到固定签名（TS2556）。 */
 function sdkTimeoutArg(req: UiRequest): [] | [{ timeout: number }] {
   return isValidDialogTimeout(req.timeout) ? [{ timeout: req.timeout }] : [];

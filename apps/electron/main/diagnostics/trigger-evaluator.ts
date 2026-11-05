@@ -15,10 +15,9 @@
  * 用户反馈型（#6/11/12/13/14/15/18/19/20）requires-user-report 恒 no-data 但显式列出
  * ——「列出」本身即消费（消灭触发词散在文档里无人汇总的暗债形态）。
  *
- * 【出口】恰两个（D2，不加第三个）：
- *   ① main 每日巡检（./trigger-patrol.ts）：任一 tripped → WARN 摘要行 + 登记清单
- *      trigger-review 事件（带条件 id）；
- *   ② 诊断导出（u3a export-diagnostic-bundle）：状态表进 summary.md。
+ * 【出口】唯一（诊断导出 u3a export-diagnostic-bundle）：状态表进 summary.md——
+ *   评估本身无副作用（纯函数），越线的处置 = 导出报告里可见（原 main 每日巡检出口已随
+ *   周期巡检机制删除）。
  *
  * 【窗口语义】周 = 滚动 7 天、月 = 滚动 30 天（自然滚动窗，非自然周/自然月）。锚定
  * 「现在」= 显式注入 now（epoch ms），缺省锚定两本登记清单末事件时刻（登记清单是「现在」的

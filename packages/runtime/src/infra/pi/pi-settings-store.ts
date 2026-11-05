@@ -64,7 +64,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { basename, dirname } from 'node:path'
 import { JsonStore } from '../../utils/json-store.js'
-import { withFileLockSync, type SyncFileLockOptions } from '../../utils/file-lock.js'
+import { withFileLockSync } from '../../utils/file-lock.js'
 import { isEnoent } from '../../utils/errors.js'
 import { getSettingsPath } from './pi-paths.js'
 
@@ -136,8 +136,6 @@ let settingsStore = createSettingsStore(getSettingsPath())
  * 锁参数覆盖（仅测试用，如把重试预算压到几十 ms 快速验证 fail-fast）。
  * 生产保持 file-lock.ts 的默认值（stale 30s / 25ms / 1s，探针验证过）。
  */
-let lockOptions: SyncFileLockOptions = {}
-
 function createSettingsStore(path: string): JsonStore<PiSettings> {
   return new JsonStore<PiSettings>(path, {}, {
     corruptReadPolicy: 'throw',
@@ -157,11 +155,6 @@ function createSettingsStore(path: string): JsonStore<PiSettings> {
  */
 export function setSettingsPath(path: string): void {
   settingsStore = createSettingsStore(path)
-}
-
-/** 覆盖锁参数（仅测试用）。传 {} 恢复默认。 */
-export function setSettingsLockTimingForTest(opts: SyncFileLockOptions): void {
-  lockOptions = opts
 }
 
 /** 当前 settings.json 路径（getSettingsPath() 或测试覆盖值）。 */
@@ -218,7 +211,7 @@ export function writeSettings(settings: PiSettings): void {
  * 见模块头注释与 utils/file-lock.ts。
  */
 function withSettingsLock<T>(fn: () => T): T {
-  return withFileLockSync(getActiveSettingsPath(), fn, lockOptions)
+  return withFileLockSync(getActiveSettingsPath(), fn)
 }
 
 /**

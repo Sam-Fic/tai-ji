@@ -11,7 +11,6 @@
  *
  * 关键红线呼应（AGENTS.md 关键规则）：
  *   #6 pi session 延迟写入：宿主只读源/线文件，fork 文件由 pi fork 链路写；
- *   #19 超时默认原则：fork bootstrap 属「控制范围单请求」量级 → 秒级有界（10s）；
  *   #12 打包约束：本模块只 spawn（经注入 piCommand），不拼 ESM 模块元数据 URL 类路径
  *      （该属性在 CJS bundle 下恒为 undefined——原文随段从 btw-service 迁入此处）；
  *      bootstrap 出站 env 经 buildOutboundChildEnv（C-proc-09）。
@@ -21,27 +20,13 @@
  *      该 argv 是否收编 pi-rpc spawn 常量单源（PI_SPAWN_*，startup 设计 §7.2）待本域裁决。
  */
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import type { FSWatcher } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, watch } from 'node:fs'
 import { join } from 'node:path'
 import { buildOutboundChildEnv } from '../../infra/spawn-env.js'
 import { getPiAgentDir } from '../../infra/pi/pi-paths.js'
 import { toErrorMessage } from '../../utils/errors.js'
 import { BtwError } from './btw-error.js'
-
-/**
- * fork bootstrap 就绪上限（控制范围单请求量级，规则 #19）：实测双旗标 fork 落盘 206ms
- *（V2 探针 A），10s 覆盖慢机/冷缓存；超时 → 回落无 fork 分支（不静默：pill 标 no-source）。
- */
-export const BTW_FORK_TIMEOUT_MS = 10_000
-
-/** fork bootstrap 目录轮询节拍（扫到新增 .jsonl 即收进程；控制范围内部采样间隔，规则 #19 秒级量级）。 */
-const FORK_POLL_INTERVAL_MS = 50
-
-/**
- * SIGTERM 宽限上限：bootstrap 收进程后等退出的兜底（node 默认 SIGTERM 即终止，
- * 目标注册 handler 吞信号属极端形态——超时升级 SIGKILL，不可捕获即保证返回）。
- */
-export const BTW_FORK_KILL_GRACE_MS = 5_000
 
 /** fork 失败诊断保留的 stderr 尾行数。 */
 const STDERR_TAIL_LINES = 3
@@ -196,28 +181,58 @@ export interface ForkViaCliRequest {
   sourceFile: string
   threadDir: string
   cwd: string
-  timeoutMs?: number
-  /** SIGTERM 宽限上限（超时升级 SIGKILL 的触发线；秒级量级，测试注入缩短用）。 */
-  killGraceMs?: number
 }
 
-const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+/**
+ * fork bootstrap 就绪检测（事件驱动，无墙钟无轮询）：fs.watch 监听线目录，
+ * 出现新增 .jsonl（existing 集合外的）即 close watcher 并 resolve 其路径。
+ * filename 缺省形态（部分平台 watch 回调不给文件名）时全量扫一次目录兜底——
+ * 事件触发的一次性扫描，非周期轮询。
+ */
+function watchForNewJsonl(dir: string, existing: ReadonlySet<string>): { promise: Promise<string>; close: () => void } {
+  let settled = false
+  let watcher: FSWatcher | undefined
+  const promise = new Promise<string>((resolve, reject) => {
+    watcher = watch(dir, (_event, filename) => {
+      const candidates = filename !== null
+        ? [filename]
+        : readdirSync(dir).filter(f => f.endsWith('.jsonl'))
+      const fresh = candidates.find(f => f.endsWith('.jsonl') && !existing.has(f))
+      if (fresh === undefined) return
+      settled = true
+      resolve(join(dir, fresh))
+    })
+    watcher.on('error', (e: Error) => {
+      settled = true
+      reject(new BtwError('fork_failed', `[btw] pi fork bootstrap watch failed (${dir}): ${e.message}`))
+    })
+  })
+  return {
+    promise,
+    close: () => {
+      if (!settled) watcher?.close()
+    },
+  }
+}
 
 /**
  * 一次性 fork bootstrap：`pi --mode rpc --fork <源> --session-dir <线目录>` 起进程，
  * pi 在启动期同步完成 forkFrom 落盘（写 header + 逐条复制全树，V2 探针 A 实测 206ms；
  * 写序断言登记 PS-51，锚点 dist/core/session-manager.js forkFrom（verifiedWith 见该登记）），
- * 宿主轮询到**新增** .jsonl 即 SIGTERM 收掉 bootstrap 并等其退出（文件可见先于内容
- * 写完，退出即写入侧封闭）再返回（该进程不承载线——线进程由
+ * 宿主经 fs.watch 事件感知**新增** .jsonl 后 SIGTERM 收掉 bootstrap 并等其退出（文件可见
+ * 先于内容写完，退出即写入侧封闭）再返回（该进程不承载线——线进程由
  * ensureProcess 另行惰性 spawn，避免污染进程表）。
  *
- * 失败语义（调用方按 D3 分支② 回落）：源缺失/空 → pi exit 1（不产空文件，V2 探针 D）；
- * 超时/异因退出 → throw（携带 stderr 尾，调用方 warn 后回落 no-source，pill 不静默）。
+ * 无墙钟：fork 是本地子进程，死亡由 exit/error 事件判定（源缺失/空 → pi exit 1，V2 探针 D；
+ * 异因退出 → throw 携带 stderr 尾，调用方 warn 后回落 no-source，pill 不静默）；
+ * pi 不写文件也不退出时本调用挂起等待（时间机制删除裁决，不做超时放弃回落）。
  * 出站 env 经 buildOutboundChildEnv（C-proc-09），PI_CODING_AGENT_DIR 与线进程同源隔离。
  */
 export async function forkViaCliPi(req: ForkViaCliRequest): Promise<string> {
-  const timeoutMs = req.timeoutMs ?? BTW_FORK_TIMEOUT_MS
-  const existing = new Set(existsSync(req.threadDir) ? readdirSync(req.threadDir).filter(f => f.endsWith('.jsonl')) : [])
+  // 线目录预创建：fs.watch 需要已存在的目录（pi forkFrom 写入前自建目录，幂等）
+  mkdirSync(req.threadDir, { recursive: true })
+  const existing = new Set(readdirSync(req.threadDir).filter(f => f.endsWith('.jsonl')))
+  const readiness = watchForNewJsonl(req.threadDir, existing)
   const env = buildOutboundChildEnv({ parentEnv: process.env, extras: { PI_CODING_AGENT_DIR: getPiAgentDir() } })
   const args = ['--mode', 'rpc', '--fork', req.sourceFile, '--session-dir', req.threadDir]
   let spawnError: Error | undefined
@@ -226,49 +241,47 @@ export async function forkViaCliPi(req: ForkViaCliRequest): Promise<string> {
     child = spawn(req.piCommand, args, { cwd: req.cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
   } catch (e) {
     // spawn 同步抛（参数侧异常）：包成 fork_failed，调用方回落分支②。
+    readiness.close()
     throw new BtwError('fork_failed', `[btw] pi fork bootstrap spawn failed: ${toErrorMessage(e)}`)
   }
   child.stdout.on('data', () => {}) // bootstrap 进程 stdout 不消费（fork 后即收）
   let stderr = ''
   child.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
   // 'error' 必须监听并入 exited 汇合口：spawn 失败（ENOENT：pi 缺失 / cwd 死路径）只发
-  // error 不发 exit——漏听会 uncaughtException 崩 runtime 且轮询空等到超时（M1-b 实测教训）。
+  // error 不发 exit——漏听会 uncaughtException 崩 runtime（M1-b 实测教训）。
   const exited = new Promise<number>(resolve => {
     child.on('exit', code => resolve(code ?? -1))
     child.on('error', (e: Error) => { spawnError = e; resolve(-1) })
   })
+  // 进程死亡分支：spawn 失败带原因；异因退出带 stderr 尾。调用方按 D3 分支② 回落。
+  const death = (async (): Promise<string> => {
+    const code = await exited
+    if (spawnError) throw new BtwError('fork_failed', `[btw] pi fork bootstrap spawn failed: ${spawnError.message} — source=${req.sourceFile}`)
+    const tail = stderr.trim().split('\n').slice(-STDERR_TAIL_LINES).join(' | ')
+    throw new BtwError('fork_failed', `[btw] pi fork bootstrap exited (code ${code}) — source=${req.sourceFile} stderr=${tail}`)
+  })()
 
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    const files = existsSync(req.threadDir) ? readdirSync(req.threadDir).filter(f => f.endsWith('.jsonl') && !existing.has(f)) : []
-    if (files.length > 0) {
-      const file = join(req.threadDir, files[0])
-      child.kill('SIGTERM')
-      // 等退出再返回：pi forkFrom 先 writeFileSync(header) 后逐条 appendFileSync，
-      // 文件可见先于内容写完；Node 信号不打断同步复制循环，进程退出即写入侧封闭，
-      // 下游 switchSession 读到的是完整静止文件（构造性保证，非时序依赖）。
-      // 写序断言登记 PS-51（锚点 dist/core/session-manager.js forkFrom：writeFileSync(header)
-      // 定义 / wx 首写 / append 循环，行号见该条目 piAnchor）——pi 改异步落盘即漂移，重验见该条目 guard。
-      // SIGTERM 极端形态（目标注册 handler 吞信号不退，node 默认即终止故罕见）→ 宽限
-      // 后升级 SIGKILL（不可捕获，写入侧随进程消亡封闭），保证 await 不无限 pending。
-      await Promise.race([
-        exited,
-        sleep(req.killGraceMs ?? BTW_FORK_KILL_GRACE_MS).then(() => {
-          child.kill('SIGKILL')
-          return exited
-        }),
-      ])
-      return file
-    }
-    if (await Promise.race([exited.then(() => true), sleep(FORK_POLL_INTERVAL_MS).then(() => false)])) {
-      const code = await exited
-      if (spawnError) throw new BtwError('fork_failed', `[btw] pi fork bootstrap spawn failed: ${spawnError.message} — source=${req.sourceFile}`)
-      const tail = stderr.trim().split('\n').slice(-STDERR_TAIL_LINES).join(' | ')
-      throw new BtwError('fork_failed', `[btw] pi fork bootstrap exited (code ${code}) — source=${req.sourceFile} stderr=${tail}`)
-    }
-    if (Date.now() > deadline) {
-      child.kill('SIGTERM')
-      throw new BtwError('fork_failed', `[btw] pi fork bootstrap timed out after ${timeoutMs}ms — source=${req.sourceFile}`)
-    }
+  let file: string
+  try {
+    file = await Promise.race([readiness.promise, death])
+  } catch (e) {
+    // watch error 等非死亡路径的失败：bootstrap 还活着，收掉再上抛（死亡路径进程已退，
+    // kill 为无害 no-op——统一调用保持单一出口形态）
+    child.kill('SIGTERM')
+    throw e
+  } finally {
+    readiness.close()
+    // race 输掉一方的 rejection 显式吞（death 恒 reject——类型上以 string 竞速），
+    // 防 unhandled rejection；ready 的 watch error 同理。
+    void death.catch(() => {})
+    void readiness.promise.catch(() => {})
   }
+  child.kill('SIGTERM')
+  // 等退出再返回：pi forkFrom 先 writeFileSync(header) 后逐条 appendFileSync，
+  // 文件可见先于内容写完；Node 信号不打断同步复制循环，进程退出即写入侧封闭，
+  // 下游 switchSession 读到的是完整静止文件（构造性保证，非时序依赖）。
+  // 写序断言登记 PS-51（锚点 dist/core/session-manager.js forkFrom：writeFileSync(header)
+  // 定义 / wx 首写 / append 循环，行号见该条目 piAnchor）——pi 改异步落盘即漂移，重验见该条目 guard。
+  await exited
+  return file
 }

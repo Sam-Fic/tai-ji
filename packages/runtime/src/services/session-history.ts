@@ -33,7 +33,7 @@ import type { ISessionStore } from './ports/session.js'
 import { isEnoent } from '../utils/errors.js'
 import { parseJsonl, type JsonlParseOptions } from '../utils/jsonl.js'
 import { warnOnce } from '../utils/warn-once.js'
-import { applyEntryEndTimes, mapSessionEntries, isInterruptedTail, computeActivePathEntries } from '../infra/pi/session-entry-mapper.js'
+import { applyEntryEndTimes, mapSessionEntries, computeActivePathEntries } from '../infra/pi/session-entry-mapper.js'
 import { backfillConvertedSegments } from '../infra/pi/entry-tree-builder.js'
 import { exceedsTurnByteBudget, isUserMessageBoundary } from '../infra/pi/turn-index-types.js'
 import type { PiSessionEntry } from '../infra/pi/pi-protocol.js'
@@ -223,12 +223,6 @@ export interface HistoryWindowResult {
   truncated: boolean
   loadedTurns: number
   totalTurnsEstimate: number
-  /**
-   * [U8 重启中断标记·方向 A] 尾部中断形态判定（仅最新窗口请求且经 tailReadHistory 离线
-   * 读出时可能置位；true = 文件尾部为中断三形态之一）。活跃路径与游标翻页恒 undefined——
-   * 判定只对「会话未附着 + 读的是文件尾」成立（RPC 失败降级路径不得透传，防活会话误标）。
-   */
-  interrupted?: boolean
 }
 
 /** [HISTORICAL] N1 修复期旧名，= HistoryWindowResult 别名（保留既有 import 兼容）。 */
@@ -489,13 +483,6 @@ export function convertWindowEntries(
   return converted
 }
 
-/**
- * 中断判定（isInterruptedTail）的喂数：活跃路径裁剪后的窗口 entries。推导与
- * convertWindowEntries 同款（剥 session header——header 有 id 无 parentId 会把单根检查
- * 顶成多根降级；leafId = 剥除后窗口末条 entry 的 string id），裁剪语义共享 mapper 的
- * computeActivePathEntries SSOT。中断判定专用（tailReadHistory 与 history-reader 的索引
- * 窗口共用本单点）——渲染链仍走 convertWindowEntries，两处判定输入经同一 SSOT 保持一致。
- */
 export function activePathEntriesOf(entries: PiSessionEntry[]): PiSessionEntry[] {
   const scoped = entries.filter((e) => (e as { type?: unknown }).type !== 'session')
   const last = scoped[scoped.length - 1]
@@ -555,20 +542,10 @@ export async function tailReadHistory(
   // AC-5 turn 外扩（D14）：若窗口首条是孤立 toolResult（窗口外有对应 assistant），
   // 本尾读链 warn 丢弃（不额外拉取）；索引窗口读取链（history-reader）已按 turn 边界
   // 索引实现跨窗口补读配对（convertWindowEntries 的 orphanToolResults out 参数）。
-  // [U8 重启中断标记] 仅最新窗口请求（无 cursor——cursor 翻页返回锚前区域，尾部不是文件
-  // 尾）做尾部形态判定；判定读活跃路径裁剪后的窗口 entries（喂数推导与 convertWindowEntries
-  // 同款：剥 session header + leafId = 文件最后 entry id → computeActivePathEntries）——
-  // 撤回后文件尾 = label entry + 被撤子树（文件序先于 label，见 :433-439 裁剪注释），裁剪前
-  // 判定从尾向前会跳过 label 落在被撤子树最后一条 message entry 上，把健康会话误标
-  // interrupted；裁剪后「未附着重开」前提对撤回后文件形态重新成立，无撤回时两输入相同
-  // （零行为差异）。convertWindowEntries 内部再做一次同款裁剪（共享 SSOT computeActivePathEntries，
-  // 幂等；窗口尺寸有限，重复回溯成本可忽略）。
-  const interrupted = query?.cursor === undefined ? isInterruptedTail(activePathEntriesOf(loaded.entries)) : undefined
   return {
     messages: convertWindowEntries(loaded.entries, sessionStore, sidecar?.segmentsMetadata ?? null),
     truncated: loaded.truncated,
     loadedTurns: loaded.loadedTurns,
     totalTurnsEstimate: loaded.totalTurnsEstimate,
-    ...(interrupted !== undefined && { interrupted }),
   }
 }

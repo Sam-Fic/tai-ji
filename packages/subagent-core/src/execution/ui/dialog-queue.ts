@@ -20,68 +20,16 @@
 //   直接调 handler（见 ui-request-handler-factory.ts），不经过本队列。enqueue 内仍防御性兼容
 //   fire-and-forget（万一调用方未判）：直接调 handler 返回，不入队串行。调用方不应依赖此防御。
 
-import { getLogger } from "../../core/logger.ts";
-import { MAX_TIMER_DELAY_MS } from "../../shared/timer-delay.ts";
-
 import { isDialogMethod } from "./ui-interaction-model.ts";
-
-const logger = getLogger("subagents");
-
-// ── dialog 超时上界（LC-3 / T2⑦，设计 docs/architecture/crash-forensics-and-watchdog.md 附录 E）──
-
-/** 分钟/秒/毫秒换算常数（与 lifecycle-manager.ts 同款命名）。 */
-const SECONDS_PER_MINUTE = 60;
-const MS_PER_SECOND = 1000;
-
-/** dialog 默认超时上界（30 分钟）：请求方未传 timeout 时的回收层兜底。
- *
- * 30 分钟是裁决值（产品语义：ask_user 挂起 30 分钟无响应视为放弃），不随 P-T2
- * （keep-alive 分布，等后代）标定——那是无关总体。请求方需要更长等待时在协议
- * request 上显式传 timeout（毫秒，pi ExtensionUIDialogOptions.timeout 同义）覆盖。
- *
- * 「等用户无限久」改为默认有界是有意的行为变更：LC-3 的两种形态（host UI promise
- * 挂死 / 用户永不回答）原都会把 L2 processing 永久占死 → 所有子进程 ask_user 全局
- * 死锁 + 该 child L1 队列 head-of-line 阻塞。 */
-const DEFAULT_DIALOG_TIMEOUT_MINUTES = 30;
-export const DEFAULT_DIALOG_TIMEOUT_MS =
-  DEFAULT_DIALOG_TIMEOUT_MINUTES * SECONDS_PER_MINUTE * MS_PER_SECOND;
-
-/**
- * 解析一个 dialog 项的队列级上界：请求方传了合法正数 timeout 用之，否则挂默认上界。
- * 非法值（<=0 / NaN / ±Infinity）回落默认——不因脏参数把上界拆掉（拆掉即回到 LC-3 无界）。
- *
- * 这里 clamp 到 MAX_TIMER_DELAY_MS 而非 fail-fast（timer-delay.ts 的 assertSafeTimerDelay
- * 惯例是配置入口 fail-fast）：timeout 是 per-request 运行时传值，fail-fast 会把整个
- * dialog 处理路径炸成 cancelled（伤害正常请求）；超大 timeout 的调用方意图是「近乎不限时」，
- * clamp 到 2^31-1（约 24.8 天）是该意图在 setTimeout 域内的安全语义近似——不 clamp 会被
- * Node 塌缩为 1ms 立即触发（语义反转：刚入队就超时）。
- */
-function resolveDialogTimeoutMs(timeout: number | undefined): number {
-  const resolved = isValidDialogTimeout(timeout) ? timeout : DEFAULT_DIALOG_TIMEOUT_MS;
-  return Math.min(resolved, MAX_TIMER_DELAY_MS);
-}
 
 /**
  * dialog req.timeout 合法域判定（单一权威源，A2-3）：合法正数（finite 且 > 0）才参与
- * 超时语义——队列层据此决定上界取值（非法回落 DEFAULT_DIALOG_TIMEOUT_MS），
- * factory 层据此决定是否透传 SDK 第三参（非法不透传，数组为空，由队列层默认上界兜底）。
- * 两处共用本函数，禁止各写一份判定（此前两处不一致：SDK 层把 0/负数/NaN 原样透传，
- * 队列层判非法回落默认）。
+ * 超时语义——factory 层据此决定是否透传 SDK 第三参（非法不透传，数组为空）。
+ * 队列层不再挂任何超时（队列级 30min 判取消已随时间机制删除——dialog 挂到用户响应
+ * 或会话结束：SR-4 child close / rejectAll 是仅有的强制 settle 通道）。
  */
 export function isValidDialogTimeout(timeout: number | undefined): timeout is number {
   return typeof timeout === "number" && Number.isFinite(timeout) && timeout > 0;
-}
-
-/** 超时 settle 的日志消息（恢复指引 + 已等待时长，父进程日志是完整错误消息的承载面——
- * pi 协议 RpcExtensionUIResponse 是封闭联合（value/confirmed/cancelled），错误文本
- * 无法进 stdin 响应体，子 agent 侧收到的是 cancelled 语义）。 */
-function dialogTimeoutLogMessage(req: UiRequest, waitedMs: number): string {
-  return (
-    `[subagents] dialog timed out after ${waitedMs}ms without response ` +
-    `(id=${req.id}, method=${req.method}) — settled as cancelled. ` +
-    "Recovery: the requesting agent can continue and re-issue the question (重新发起提问); " +
-    "to wait longer, pass an explicit timeout (ms) on the request."
-  );
 }
 
 // ── 类型再导出（W7 / R3 S-A + R4-S③：SSOT 迁 @zhushanwen/subagent-engine-sdk
@@ -113,11 +61,6 @@ interface QueueItem {
   childPid: number | undefined;
   /** 是否已 settle（防 handler 完成 / rejectChildDialogs 重复 resolve）。 */
   settled: boolean;
-  /** 队列级超时 timer 句柄（processNext 使 item 成为 current 时挂上）。
-   *  settleItem 统一 clearTimeout——handler 永挂时 processNext 的 await 永不 resume，
-   *  其内联 clearTimeout 不可达，reject/rejectAll 抢先 settle 的路径只能靠这里清理
-   *  （A2-2：否则 timer armed 到期触发虚假「dialog timed out」warn + 句柄滞留）。 */
-  timeoutTimer?: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -137,10 +80,8 @@ interface QueueItem {
  *   - FIFO 串行：前一个 handler settle 后才处理下一个
  *   - SR-4：rejectChildDialogs(child) 把该 child 的 pending 全部 resolve 为 {cancelled:true}
  *   - handler 抛错兜底：catch → {cancelled:true} → 继续下一个（队列不卡死）
- *   - 超时上界（LC-3/T2⑦）：每个 dialog 项必有上界——req.timeout 显式传值优先，
- *     未传挂 DEFAULT_DIALOG_TIMEOUT_MS（30min，裁决值）；到点 settle {cancelled:true}
- *     并 warn（恢复指引见 dialogTimeoutLogMessage），L2 processing 释放、队列继续推进。
- *     「等用户无限久」改为默认有界是有意的行为变更。
+ *   - 无时间上界（队列级 30min 判取消已随时间机制删除）：dialog 挂到用户响应、
+ *     child close（SR-4）或 session 结束（rejectAll）；「等用户无限久」是恢复后的语义。
  *   - 调用方约定只对 dialog 类调 enqueue；fire-and-forget 由调用方直接调 handler 不入队
  *（enqueue 内仍防御性兼容 fire-and-forget，但不保证行为）
  *
@@ -213,18 +154,10 @@ export class DialogGlobalQueue {
    * 为什么推进必须在 settleItem 而非 processNext 尾部：rejectChildDialogs 取消一个永不 settle
    * 的 current（handler 等用户输入卡死）时，processNext 的 `await item.handler` 永不 resume，
    * 尾部不会执行；只有 settleItem 里的 processNext 才能打破死锁，推进下一个。
-   *
-   * [A2-2] 超时 timer 清理也统一收尾在这里：任何路径抢先 settle（reject/rejectAll/超时
-   * 自身）都必须撤下 armed timer——handler 永挂时 processNext 内联的 clearTimeout 不可达，
-   * 不在这里清则 timer 到期触发虚假「dialog timed out」warn 且句柄滞留至超时点。
    */
   private settleItem(item: QueueItem, resp: UiResponse): void {
     if (item.settled) return;
     item.settled = true;
-    if (item.timeoutTimer) {
-      clearTimeout(item.timeoutTimer);
-      item.timeoutTimer = undefined;
-    }
     item.resolve(resp);
     // 若是正在处理的项，清空 current/processing 并推进队列（唯一推进点）。
     // 非当前项（队列中被 reject）只 settle Promise，不影响 current/推进。
@@ -283,13 +216,9 @@ export class DialogGlobalQueue {
    * handler 抛错兜底（TC-E4 case 3）：catch → settle {cancelled:true} → 继续。
    * 不能让一个失败卡死队列（processing 永远 true）。
    *
-   * LC-3/T2⑦ 超时上界：`await item.handler` 原本无上界——host UI promise 挂死或用户
-   * 永不回答时 processing 恒 true（全局 dialog 死锁）。现在每项挂队列级 timer：
-   * req.timeout（请求方显式传值）优先，未传/非法挂 DEFAULT_DIALOG_TIMEOUT_MS。
-   * 到点 settle {cancelled:true}（完整错误消息落父进程日志，含恢复指引与等待时长），
-   * settleItem 的 settled 标志保证与 handler 完成 / rejectChildDialogs 三方竞态下
-   * 恰 settle 一次。timer 回调闭包捕获 item（非读 this.current）：迟到触发时
-   * settled 标志已置位，直接 noop，不误伤后继项。
+   * `await item.handler` 无时间上界（队列级 30min 判取消已随时间机制删除）——handler
+   * 等用户输入挂住时由 SR-4（child close）/ rejectAll（session 结束）两个事件通道
+   * 强制 settle 解阻。
    */
   private async processNext(): Promise<void> {
     if (this.processing) return;
@@ -297,23 +226,12 @@ export class DialogGlobalQueue {
     this.processing = true;
     const item = this.queue.shift()!;
     this.current = item;
-    const timeoutMs = resolveDialogTimeoutMs(item.req.timeout);
-    const timer = setTimeout(() => {
-      // [A2-2] 已被抢先 settle（正常 settle 时 timer 已被 settleItem 清除，这里是防御性
-      // 兜底）：静默返回，不发虚假「dialog timed out」warn、不重复 settle。
-      if (item.settled) return;
-      logger.warn(dialogTimeoutLogMessage(item.req, timeoutMs));
-      this.settleItem(item, { cancelled: true });
-    }, timeoutMs);
-    item.timeoutTimer = timer;
     try {
       const resp = await item.handler(item.req);
-      clearTimeout(timer);
-      // handler 完成：settle（若已被超时 timer / rejectChildDialogs 抢先 settle 则 noop）。
+      // handler 完成：settle（若已被 rejectChildDialogs 抢先 settle 则 noop）。
       // settleItem 内会清 current/processing 并推进队列（#19 单一推进点）。
       this.settleItem(item, resp);
     } catch {
-      clearTimeout(timer);
       // handler 抛错兜底：回 cancelled，不向上抛（队列不能卡死）
       this.settleItem(item, { cancelled: true });
     }
@@ -394,8 +312,8 @@ export function registerActiveDialogQueue(queue: DialogGlobalQueue | undefined):
  * 调用点 = 引擎镜像层（SpawnedChildrenMirror 的 exited 分支与 killAll 整体置死）。
  * 语义 = SR-4 原设计「child close → 取消其 pending」在协议化架构下的落点：宿主不再
  * 持有 pi 子进程句柄，改由引擎经 host/childStateChanged 上报，本函数是消费端——
- * 未接线的后果是「子进程已死、宿主仍占着队列串行位等应答」，直到队列级 30min 超时
- * 才释放（延迟清理，非死锁）。
+ * 未接线的后果是「子进程已死、宿主仍占着队列串行位等应答」（挂到 session 结束
+ * rejectAll 才释放——延迟清理，非死锁）。
  *
  * 未登记队列（headless / 无 UI 通道宿主）或该 pid 无 pending 时 no-op。
  */

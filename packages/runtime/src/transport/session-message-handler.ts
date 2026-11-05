@@ -765,17 +765,14 @@ export class SessionMessageHandler {
     // cursor=turn 边界锚点 entryId 时返回锚点之前的最近窗口（活跃/离线共用语义）；
     // cursor 未命中 → 空页 + truncated=false（翻页到头，不报错）。
     // [u6] legacy historyTruncated 字段退役（偏差表 D7 关闭：与 truncated 同值并存的双轨收敛）。
-    // [U8 重启中断标记] interrupted 可选透传（离线最新窗口判定文件尾部中断形态；
-    // 活跃/翻页路径 service 不产出该字段）。
     const { sessionId, cursor, limitTurns, maxBytes } = msg.payload
-    const { messages, truncated, loadedTurns, totalTurnsEstimate, interrupted } = await this.ctx.sessionService.getHistory(sessionId, { cursor, limitTurns, maxBytes })
+    const { messages, truncated, loadedTurns, totalTurnsEstimate } = await this.ctx.sessionService.getHistory(sessionId, { cursor, limitTurns, maxBytes })
     return this.ctx.reply(ws, msg.id, 'session.history', {
       sessionId,
       messages,
       truncated,
       loadedTurns,
       totalTurnsEstimate,
-      ...(interrupted !== undefined && { interrupted }),
     })
   }
 

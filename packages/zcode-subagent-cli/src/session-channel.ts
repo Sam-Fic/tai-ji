@@ -42,11 +42,7 @@ import { createHash } from "node:crypto";
 import { getLogger } from "@zhushanwen/subagent-engine-sdk";
 
 import type { AppServerConnection } from "./connection.ts";
-import {
-  ZCODE_APPSERVER_TURN_CLOSE_TIMEOUT_MS,
-  ZCODE_APPSERVER_TURN_READ_TIMEOUT_MS,
-  isFailedTerminalStatus,
-} from "./constants.ts";
+import { isFailedTerminalStatus } from "./constants.ts";
 import { toErrorMessage } from "./error-message.ts";
 
 const logger = getLogger("subagents");
@@ -476,8 +472,8 @@ export class SessionChannel {
    * [P0-1 U5/D7] dispose 前收割 + 退订：「退订 = 不会再有事件」在结构上蕴含「在途
    * turn 不应再等」——close 缺失/被吞没形态（onClose 收割主路径未触发）下，在途
    * turn 于退订前经既有 failAllTurns 收敛为明确失败（设计 §3.4 退化路径完成；
-   * race 窗口在引擎 shutdownRuntimeAndDisposeChannel，量级与 awaitConnFinalized
-   * 同源 ZCODE_APPSERVER_HARVEST_GRACE_MS）。幂等：与 onClose 收割先到者赢
+   * 触发点在引擎 shutdownRuntimeAndDisposeChannel 的 dispose 兜底）。幂等：与
+   * onClose 收割先到者赢
    * （turn.fail 的 settled 检查——已落定 turn 不改写），activeTurns 已空则 no-op。
    * 不影响连接自身生命周期（R4）。
    */
@@ -565,7 +561,7 @@ export class SessionChannel {
    * 可能尚未启动，与 readBestEffort 的「已死跳过」判据不同场景，不做 alive 检查）。
    */
   async resumeSession(sessionId: string): Promise<unknown> {
-    return this.conn.request("session/resume", { sessionId }, { timeoutMs: ZCODE_APPSERVER_TURN_READ_TIMEOUT_MS });
+    return this.conn.request("session/resume", { sessionId });
   }
 
   /**
@@ -580,11 +576,7 @@ export class SessionChannel {
     if (this.disposed) return;
     if (!this.conn.alive) return;
     try {
-      await this.conn.request(
-        "session/close",
-        { sessionId },
-        { timeoutMs: ZCODE_APPSERVER_TURN_CLOSE_TIMEOUT_MS }
-      );
+      await this.conn.request("session/close", { sessionId });
     } catch (err) {
       logger.warn(
         `session/close 失败（会话 ${sessionId}，best-effort 忽略）: ${errMessage(
@@ -904,18 +896,12 @@ export class SessionChannel {
     }
   }
 
-  /** 终态后 read（A.2 ⑥）。失败/超时不抛——降级链由 runTurn 收尾（read 只兜底不致命）。
+  /** 终态后 read（A.2 ⑥）。失败不抛——降级链由 runTurn 收尾（read 只兜底不致命）。
    *  连接已死时跳过（与 closeSession 同判——对死连接发请求会凭空重建进程）。 */
   private async readBestEffort(sessionId: string): Promise<unknown> {
     if (!this.conn.alive) return undefined;
     try {
-      return await this.conn.request(
-        "session/read",
-        { sessionId },
-        {
-          timeoutMs: ZCODE_APPSERVER_TURN_READ_TIMEOUT_MS,
-        }
-      );
+      return await this.conn.request("session/read", { sessionId });
     } catch (err) {
       logger.warn(
         `session/read 兜底失败（会话 ${sessionId}，降级收尾帧/delta 聚合）: ${errMessage(

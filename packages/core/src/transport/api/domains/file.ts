@@ -10,7 +10,6 @@
  * 失败走 error envelope（routeInbound 对 type==='error' 走 pending.reject，code 透传到 Error.code）。
  */
 import type { FileNode } from '@taiji/shared'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 import { command } from '../request'
 
 /**
@@ -19,7 +18,7 @@ import { command } from '../request'
  * 过滤开关退役，跟踪态由文件名颜色区分）。
  */
 export async function tree(sessionId: string): Promise<FileNode[]> {
-  const reply = await command('file.tree', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('file.tree', { sessionId })
   return reply.tree
 }
 
@@ -28,7 +27,7 @@ export async function tree(sessionId: string): Promise<FileNode[]> {
  * @param path 相对 cwd 的目录路径（如 'src/utils'）
  */
 export async function expand(sessionId: string, path: string): Promise<FileNode[]> {
-  const reply = await command('file.tree.expand', { sessionId, path }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('file.tree.expand', { sessionId, path })
   return reply.children
 }
 
@@ -45,6 +44,6 @@ export async function read(
 ): Promise<{ content: string; truncated: boolean }> {
   const payload: { path: string; sessionId?: string } = { path }
   if (sessionId !== undefined) payload.sessionId = sessionId
-  const reply = await command('file.read', payload, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('file.read', payload)
   return { content: reply.content, truncated: reply.truncated }
 }

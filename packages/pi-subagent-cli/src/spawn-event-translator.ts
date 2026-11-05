@@ -15,9 +15,6 @@ import { mapAssistantMessageDelta, resolveToolEndArgs } from "./spawn-args.ts";
 import type { SdkEvent } from "./spawn-event-adapter.ts";
 import { createTurnLimiter, type TurnBudgetExhaustion } from "./turn-limiter.ts";
 
-/** [U-A6] 工具执行期活性信号的最小发射间隔（ms）；量级依据见 handleToolExecutionUpdate。 */
-const TOOL_ACTIVITY_MIN_INTERVAL_MS = 1_000;
-
 /**
  * [U-A6] 工具执行期活性信号载体（`tool_execution_update` → onEvent 通道，不产数据）。
  *
@@ -198,23 +195,16 @@ function handleAssistantMessageUpdate(raw: SdkEvent, agentEvent: AgentEventSink)
  *
  * 把「工具持续产出」计为活性信号：opts.onEvent → 宿主 RunContext.onEvent →
  * 两域刷新面（workflow = SAR 的 journal.onEvent 包装；chat = ctx.onEvent →
- * refreshFromProtocolEvent）。两条硬约束：
+ * refreshFromProtocolEvent）。逐条直接转发（原 1s 发射节流已随其原消费方
+ * 「宿主无进展守护」删除而退役——本信号现为纯转发）。两条硬约束：
  *   ① 不把 partialResult 文本推给 onDelta——正文槽（text_delta 专用，见 agentEvent），
  *      工具输出混进 assistant 正文不可接受；
  *   ② 只在工具真产出时才发（纯信号，无心跳）——静默楔死工具**启动后零 update**（启动
  *      瞬间那条固定刷新至多让检查多等一次窗口），照常被 30min 无进展守护回收，不因本信号
  *      永续命。
  *
- * 节流：pi 已按 100ms 节流，这里再按 1s 收敛（对 30min 窗仍是密刷新；把合成事件的
- * journal/wire 体量压到 1/10——30min 长构建从约 18k 条降到约 1.8k 条）。
  */
-function handleToolExecutionUpdate(
-  agentEvent: AgentEventSink,
-  clock: { lastEmittedAtMs: number },
-): void {
-  const nowMs = Date.now();
-  if (nowMs - clock.lastEmittedAtMs < TOOL_ACTIVITY_MIN_INTERVAL_MS) return;
-  clock.lastEmittedAtMs = nowMs;
+function handleToolExecutionUpdate(agentEvent: AgentEventSink): void {
   agentEvent(TOOL_ACTIVITY_EVENT);
 }
 
@@ -459,7 +449,6 @@ export function createSdkEventTranslator(
   const pendingTools: PendingToolRegistry = new Map();
 
   // a2. [U-A6] 工具执行期活性信号的节流时钟（per-translator，即 per-run）
-  const activityClock = { lastEmittedAtMs: 0 };
 
   // a3. [subagent-observability §3.3.1] 收尾边沿事实累积（per-run 闭包）
   const edge: ClosingEdgeState = {
@@ -504,7 +493,7 @@ export function createSdkEventTranslator(
         return;
       case "tool_execution_update":
         // [U-A6] 工具执行期活性信号（不产数据、不进正文槽；原先被 default 丢弃）
-        handleToolExecutionUpdate(agentEvent, activityClock);
+        handleToolExecutionUpdate(agentEvent);
         return;
       case "tool_execution_end":
         handleToolExecutionEnd(raw, pendingTools, agentEvent);

@@ -94,12 +94,10 @@ import type { BtwService } from './btw-service.js'
 // [T8 有限拆分 2026-09] removeSessionEntry 销毁收敛链编排（顺序约束 SSOT，含文件头收敛
 // 说明）——行为保持抽取，本 Facade 保留公开 wrapper（测试 spyOn 锁定侧）。
 import { SessionEntryRemovalOrchestrator, runDestroyStepIsolated } from './session-entry-removal.js'
-// 空闲回收占座原语与等待观测超时（idle-pi-reclamation D6-2，u2）。type-only import：
+// 空闲回收占座原语（idle-pi-reclamation D6-2，u2）。type-only import：
 // Seat 实例由 u3 组合根创建后 setter 注入，本模块不持有创建权（不引入运行时依赖环）。
 import { RespawnOrchestrator } from './pi-respawn.js'
-import { MessageDispatcher, type SystemCommandOutcome, type StallAutoDisposePort } from './message-dispatcher.js'
-// [pi-stall-detection U4] 判死载荷类型（静默判定矩阵单源，D3）。
-import type { StallJudgePayload } from './event-interpreter-silence.js'
+import { MessageDispatcher, type SystemCommandOutcome } from './message-dispatcher.js'
 // [A1 接线] skill 注入映射源（skill-reload-nondestructive D7）：records/dispatcher 的
 // SkillInjector 共享同一晚绑定占位，组合根在 SkillRegistry 构造后 bind 真源（构造顺序环
 // 见 LateBoundSkillSource 注释）。
@@ -150,8 +148,7 @@ const BG_COMPACT_COMMAND_NAME = '__taiji_compact__'
  * subagent 流状态数据源端口（B2 subagent-stream-chunk §4.1，session.getSubagentStreamState
  * RPC 的数据源路由半）：(sessionId, recordId) → SubagentTee 内存三元组只读派生视图，undefined =
  * 该 record 无在管 tee（未注册 / child exit 已清理 / session 不匹配）。实现由组合根注入
- * （control server 句柄归 index.ts——「services 层不 value import 有状态 IO infra」同款
- * 约束，见 rollingRestart engineChannelsInFlight 接线注释）。
+ * （control server 句柄归 index.ts——「services 层不 value import 有状态 IO infra」同款约束）。
  */
 export type SubagentStreamStateSource = (sessionId: string, recordId: string) => SubagentTeeStreamState | undefined
 
@@ -423,8 +420,9 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
    *   projection / records 实例必须先构造后 subscribe。
    * - onSessionRegistered 订阅顺序（组装根，S3 seam→S5/S6 换订阅者，设计 D2②）：
    *   projection（W7 播种）→ records（W18 缓存注册）→ reconciler（U6 对账，
-   *   fire-and-forget）→ checkpoint（D3）→ mirror（D5）两个旁路订阅——「播种 →
-   *   record 注册 → 对账」顺序与迁移前 Facade 订阅体内顺序逐一等价，不得重排。
+   *   fire-and-forget）→ checkpoint（D3）旁路订阅（原 D5 mirror 订阅已随
+   *   inflight-mirror 模块删除）——「播种 → record 注册 → 对账」顺序与迁移前
+   *   Facade 订阅体内顺序逐一等价，不得重排。
    */
   private assembleSubmodules(messageBus?: IMessageBus): void {
     // 子模块注入 this(Facade 半构造时仅存引用,其方法在 Facade 完全构造后才被调用)。
@@ -565,10 +563,11 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
         this.modelCapabilityReconciler(sessionId).catch((e: unknown) => console.error(`[session-service] capability reconcile failed (sessionId=${sessionId}):`, e))
       }
     })
-    // D3 checkpoint + D5 mirror 的 attach 挂点（crash-forensics §3.3）：订阅体迁
-    // crash-forensics-hooks.ts（行为保持抽取，语义注释见该模块）。注册位置/时序不变：
-    // 排在 reconciler 订阅之后，函数内先 checkpoint 后 mirror，与迁移前两订阅的
-    // 注册顺序逐一等价（上方「播种 → record 注册 → 对账」顺序契约不受影响）。
+    // D3 checkpoint 的 attach 挂点（crash-forensics §3.3）：订阅体迁
+    // crash-forensics-hooks.ts（行为保持抽取，语义注释见该模块；原 D5 mirror 订阅
+    // 已随 inflight-mirror 模块删除）。注册位置/时序不变：排在 reconciler 订阅
+    // 之后，与迁移前订阅的注册位置等价（上方「播种 → record 注册 → 对账」顺序契约
+    // 不受影响）。
     registerCrashLedgerAttachHooks(this.lifecycle, {
       getSession: (sessionId) => this.lifecycle.get(sessionId),
       activityAt: (sessionId) => this.pm.getClient(sessionId)?.lastActivityAt,
@@ -612,14 +611,13 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
 
     // 后台任务域组装（u-runtime-rpc①②）：广播回调经 this.messageBus 动态读（getter 语义，
     // 与 registerDeps/traceSync 的晚期注入同款——setMessageBus 后置注入前触发时 publish
-    // no-op；组合根在 setServices 前注入 bus，晚于首个 2s 轮询拍）。piAgentDir 用默认
-    // getPiAgentDir() 动态推导（生产正确；测试经 vi.mock pi-paths 指向 tmp）。
+    // no-op）。piAgentDir 用默认 getPiAgentDir() 动态推导（生产正确；测试经 vi.mock
+    // pi-paths 指向 tmp）。
     this.backgroundTasks = new BackgroundTaskService({
       // 广播组装迁 background-task/update-broadcast.ts（行为保持抽取，max-lines 门禁）；
       // 闭包内 backgroundTasks/messageBus 均调用时刻动态读（getter 语义不变）。
       onTasksChanged: (sessionId) => publishBackgroundTasksUpdate(this.backgroundTasks, this.messageBus, sessionId),
     })
-    this.backgroundTasks.start()
 
     // 销毁收敛链编排组装（T8 有限拆分）：deps 窄注入 = 销毁扇出合作方清单（逐项语义见
     // SessionEntryRemovalDeps docstring）。晚期注入状态（messageBus / onSessionDelete /
@@ -1022,32 +1020,10 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
   // base64 隐藏注释前缀在 extension 侧零消费方，且经主 agent 转发违背
   // 「直达 subagent」目标——定向消息改走 subagentAction(message/start)。
   // [pi-stall-detection U4] source：session_manager abort 工具通路的机器分型传参（'agent'）——
-  // agent 发起的 abort 不是用户操作，升级窗窗满强杀置判死强杀分型而非 abort_timeout 用户
-  // 分型（D2① 消费方 ④ / RL16 分型不变量；transport 层唯一非缺省调用点）。
+  // agent 发起的 abort 不是用户操作，终态写区分性文案（transport 层唯一非缺省调用点）。
   async abort(sessionId: string, source?: 'agent'): Promise<void> { return this.dispatcher.abort(sessionId, source) }
   /** 强制退出卡死 session（sidebar 右键入口，杀 pi 进程 + stopped 收敛）。 */
   async forceQuit(sessionId: string): Promise<void> { return this.dispatcher.forceQuit(sessionId) }
-  /**
-   * 停滞判定自动处置链入口（pi-stall-detection U2，D2②）：onSilentAbort（探测 3 次观测
-   * 超时判定）的组合根接线点——按第 0 层进程存活信号分型分流（进程死维持既有协作式 abort
-   * 显式收尾路由；存活 → sample 取证 → 判死强杀 → 窄化自动恢复触发链）。编排本体在
-   * MessageDispatcher.handleStallDetermination，本方法仅转发（组合根不经 dispatcher 直达）。
-   */
-  async handleStallDetermination(sessionId: string): Promise<void> { return this.dispatcher.handleStallDetermination(sessionId) }
-  /**
-   * 第 2 层静默判死入口（pi-stall-detection U4，D3）：静默判定矩阵判死的组合根接线点——
-   * 自动 abort 复用 U2 有界等待 + 悬挂升级判死强杀分型（RL16）+ steer 注入原因提示。
-   * 编排本体在 MessageDispatcher.handleSilenceJudgeDetermination，本方法仅转发。
-   */
-  async handleSilenceJudgeDetermination(sessionId: string, payload: StallJudgePayload): Promise<void> {
-    return this.dispatcher.handleSilenceJudgeDetermination(sessionId, payload)
-  }
-  /**
-   * 后置注入停滞自动处置链端口（pi-stall-detection U2；组合根装配序：恢复执行/注入/发声
-   * 依赖 respawn 编排器与死亡发声闭包，均晚于 dispatcher 构造——对齐 setMessageBus /
-   * setDeliveryRegistry 后置注入先例）。null = 拆除（测试隔离用）。
-   */
-  setStallAutoDisposePort(port: StallAutoDisposePort | null): void { this.dispatcher.setStallAutoDisposePort(port) }
   /** bash 投递回执（started/settled/rejected + 可选失败原因），1:1 透传 dispatcher（翻译层在 transport）。 */
   async sendBash(sessionId: string, command: string, excludeFromContext?: boolean): Promise<{ status: 'started' | 'settled' | 'rejected'; error?: string }> {
     return this.dispatcher.sendBash(sessionId, command, excludeFromContext)

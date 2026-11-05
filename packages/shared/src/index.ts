@@ -24,11 +24,11 @@ export type {
   // 插件 UI 快照（plugin.ui.snapshot 拉取 reply，ADR-0097 拉为主）——runtime store /
   // renderer bridge 跨包具名消费
   ViewSnapshotItem, PluginUiSnapshotPayload,
-  WatchdogMemoryLevel, WatchdogMemoryPressurePayload,
-  RollingRestartState, RollingRestartReason, RollingRestartInflightSummary,
-  RollingRestartDeferredPayload, RollingRestartCountdownPayload, RollingRestartForcedPayload,
-  RollingRestartStatusPayload,
-  ReattachDeferReason, ReattachDeferredPayload,
+  // plugin 系下行帧类型全集成员类型（清单常量 PLUGIN_DOWNLINK_TYPES 在下方值导出段）
+  PluginDownlinkType,
+  // views.update 载荷可选 meta（composer-tray-protocol D7）：角标/状态/进度动态信息
+  // （runtime views-api / plugin-sdk 跨包具名消费）
+  PluginViewMeta,
   // plan 模式派生视图域（plan-state entry 派生视图 + 产物元数据，形状与 extension-protocol 同形）
   PlanDocMeta, PlanStateView,
   ConnectionTestResultRow,
@@ -72,6 +72,9 @@ export type {
 // 消息撤回（U3）：__taiji_nav__ 信令命令名常量——U4 runtime 编排跨包消费；
 // 本文件对 protocol.ts 是显式 allowlist（非 export *），漏登记会使常量对下游不可达。
 export { TAIJI_NAV_COMMAND } from './protocol'
+// plugin 系下行帧类型全集（wire SSOT 运行时可迭代投影，成员类型 PluginDownlinkType
+// 在上方 type 块）——renderer 侧 bridge 对账测试取数源（plugin-downlink-contract）
+export { PLUGIN_DOWNLINK_TYPES } from './protocol'
 // subagent.setModel「记账已写」错误码分型词表（D3 缺陷七）：renderer badge 亮灯判定
 // 的跨包消费常量（机制权威 = subagent-core model-switch.ts 处置表，词表扩位同批）。
 export { SUBAGENT_SET_MODEL_ACCOUNTED_ERROR_CODES } from './protocol'
@@ -239,8 +242,6 @@ export type {
   McpProbeState,
   McpServerStatusBadge,
 } from './mcp'
-// RPC 超时校准链常量 SSOT（timeout-slow-flow-wallclock D2/D3，renderer/runtime 双端编译期对齐）
-export { BASH_RPC_TIMEOUT_MS, RENDERER_RPC_MARGIN_MS } from './timeouts'
 export * from './extension'
 export * from './git'
 export * from './plugin'
@@ -254,7 +255,7 @@ export type { ProviderApiType } from './constants'
 // renderer（浏览器）整包 import，import 本身安全（constants.ts 模块顶层无 process 访问），
 // 但 renderer 严禁调用（process 未定义 ReferenceError）；main / runtime 专用，
 // 完整警示见 constants.ts 内 JSDoc。
-export { OUTBOUND_FRAME_WARN_BYTES, OUTBOUND_FRAME_TRUNCATE_BYTES, PLUGIN_EVENT_PAYLOAD_MAX_BYTES, RING_BUDGET_BYTES, READ_PRECHECK_MAX_BYTES, BYTES_PER_MB, HISTORY_BUDGET, DEFAULT_LOG_KEEP_DAYS, readLogKeepDays, RUNTIME_PLANNED_EXIT_CODE } from './constants'
+export { OUTBOUND_FRAME_WARN_BYTES, OUTBOUND_FRAME_TRUNCATE_BYTES, PLUGIN_EVENT_PAYLOAD_MAX_BYTES, RING_BUDGET_BYTES, READ_PRECHECK_MAX_BYTES, BYTES_PER_MB, HISTORY_BUDGET, DEFAULT_LOG_KEEP_DAYS, readLogKeepDays } from './constants'
 // runtime 实例标识 env 名（connection-datasync-ssot §6.1：main spawn 注入方与
 // runtime auth 应答读取方跨包共用，禁字面量分叉）。
 export { RUNTIME_ID_ENV } from './constants'

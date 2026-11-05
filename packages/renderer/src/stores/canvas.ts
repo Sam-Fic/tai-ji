@@ -30,7 +30,7 @@ import { computed, reactive, ref } from 'vue'
 import type { ComputedRef, Ref } from 'vue'
 import type { CanvasListEntry, CanvasState } from '@zhushanwen/extension-protocol'
 import type { OverlayContentKind } from '@taiji/shared'
-import { command, RPC_BACKSTOP_TIMEOUT_MS } from '@taiji/core/transport/api'
+import { command } from '@taiji/core/transport/api'
 import { toErrorMessage } from '@taiji/core'
 import { registerSessionCleanup, useSessionScopedState } from '@/composables/useSessionScopedState'
 
@@ -149,7 +149,7 @@ async function fetchList(sid: string): Promise<void> {
   const rev = (listRevBySid.get(sid) ?? 0) + 1
   listRevBySid.set(sid, rev)
   try {
-    const reply = await command('canvas.list', { sessionId: sid }, RPC_BACKSTOP_TIMEOUT_MS)
+    const reply = await command('canvas.list', { sessionId: sid })
     if ((listRevBySid.get(sid) ?? 0) !== rev) return
     const p = writablePartition(sid)
     if (!p) return
@@ -170,7 +170,7 @@ async function fetchCanvas(sid: string, canvasId: string): Promise<void> {
   const rev = (revs.get(canvasId) ?? 0) + 1
   revs.set(canvasId, rev)
   try {
-    const state = await command('canvas.get', { canvasId, sessionId: sid }, RPC_BACKSTOP_TIMEOUT_MS)
+    const state = await command('canvas.get', { canvasId, sessionId: sid })
     if ((revs.get(canvasId) ?? 0) !== rev) return
     const p = writablePartition(sid)
     if (!p) return

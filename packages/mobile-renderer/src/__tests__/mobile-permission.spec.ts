@@ -28,7 +28,6 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import App from '../App.vue'
-import { dispatchGlobal } from '@taiji/core/transport/api'
 import { i18n } from '../i18n'
 import { __testing, useMobilePermissionRequest } from '../shell/companion-bridge'
 import { shellConnectionState } from '../shell/connection-view'
@@ -50,11 +49,6 @@ function mountApp() {
 
 function sheetQuery<T extends Element = Element>(selector: string): T | null {
   return document.querySelector<T>(selector)
-}
-
-/** i18n 读口取文案（测试环境 locale 跟随 navigator.language 不定，断言语言无关） */
-function tOf(key: string): string {
-  return (i18n.global.t as (key: string) => string)(key)
 }
 
 /** 发一条 bridge 归一后的合法 permission-request 事件（sessionId 可选，协议性缺省） */
@@ -198,38 +192,4 @@ describe('移动壳权限审批链装配（§6.5 PermissionSheet 形态）', () 
     expect(useMobilePermissionRequest().error).toBe(false)
   })
 
-  it('过期撤窗：expired 帧到 → pending 收尾 Sheet 关 ∧ 错误条「请求已过期」（呈现提示不依赖收层时序——A7 缺陷锁定）', async () => {
-    wrapper = mountApp()
-    emitPermissionRequest('p9', ['fs.read'])
-    await nextTick()
-    await nextTick()
-    expect(sheetQuery('[data-testid="permission-sheet-permissions"]')).not.toBeNull()
-
-    // runtime 撤窗广播（payload { pluginId, requestId }，无 sessionId → global 通道直发）
-    dispatchGlobal({
-      type: 'plugin:permissionRequestExpired',
-      payload: { pluginId: 'p9', requestId: 'perm_p9' },
-    })
-    await flushPromises()
-
-    // controller 同步链内已撤窗；App watch 微任务收 Sheet
-    expect(useMobilePermissionRequest().pending).toBe(false)
-    await nextTick()
-    expect(sheetQuery('[data-testid="permission-sheet-permissions"]')).toBeNull()
-    // 原因提示独立呈现（companion-bridge 过期订阅只管错误条，不再以 sheet 开合为前置——
-    // 修复前该订阅的 pending/activeSheet 前置在同步 emit 链内恒真命中，提示恒被吞）。
-    // 文案经 i18n 读口取值（模块级 t 跟随环境 locale，断言语言无关）
-    const bar = sheetQuery('[data-testid="mobile-error-bar-text"]')
-    expect(bar?.textContent).toContain(tOf('mobile.sheet.requestExpired'))
-  })
-
-  it('陈旧过期广播（壳未观测过该 requestId）不误报错误条', async () => {
-    wrapper = mountApp()
-    dispatchGlobal({
-      type: 'plugin:permissionRequestExpired',
-      payload: { pluginId: 'ghost', requestId: 'perm_ghost' },
-    })
-    await flushPromises()
-    expect(sheetQuery('[data-testid="mobile-error-bar"]')).toBeNull()
-  })
 })

@@ -82,7 +82,6 @@ function makeRunningRun(opts: {
       scriptName: "test-wf",
       scriptSource: "async function execute() {}",
       args: {},
-      budgetTimeMs: opts.budgetTimeMs,
     },
     runtime: {
       worker: { postMessage: opts.postMessage ?? vi.fn() },
@@ -111,9 +110,7 @@ type MockLifecycleDeps = Omit<
   log: LifecycleDeps["log"] & ReturnType<typeof vi.fn>;
 };
 
-function makeDeps(opts: {
-  scheduleTimeBudget?: LifecycleDeps["scheduleTimeBudget"];
-} = {}): MockLifecycleDeps {
+function makeDeps(opts: {} = {}): MockLifecycleDeps {
   return {
     store: { save: vi.fn(async () => {}) },
     workerHost: { start: vi.fn(() => ({ postMessage: vi.fn() })) },
@@ -123,7 +120,6 @@ function makeDeps(opts: {
     appendEntry: vi.fn(),
     onRunDone: vi.fn(),
     log: vi.fn(),
-    scheduleTimeBudget: opts.scheduleTimeBudget,
   } as unknown as ReturnType<typeof makeDeps>;
 }
 
@@ -387,7 +383,6 @@ function makeRealRun(runId: string, opts: { budgetTimeMs?: number } = {}): Workf
       scriptSource: "agent('hi')",
       args: {},
       scriptPath: "/tmp/test-wf.js",
-      budgetTimeMs: opts.budgetTimeMs,
     },
     {
       budget: new Budget(),

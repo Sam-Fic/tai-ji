@@ -1143,36 +1143,6 @@ async function catchCode_z3(work: () => Promise<unknown>): Promise<string> {
 // wave3 包装：本段原文件顶层语句收进 describe 作用域（顶层 hook 不再外溢到同文件其他来源的用例）
 describe('wiring-bundle', () => {
 // wave3 包装：本段原文件顶层语句收进 describe 作用域（顶层 hook 不再外溢到同文件其他来源的用例）
-describe('index-composition-root-wiring', () => {
-describe('组合根 watchdog / rolling-restart 接线（源码级检查）', () => {
-  it('看门狗：import startWatchdog 且 main() 内启动；broadcast 出口双投递（renderer + 滚动重启编排）', () => {
-    expect(source).toMatch(/import\s*\{[^}]*startWatchdog[^}]*\}\s*from\s*'\.\/infra\/watchdog\.js'/)
-    expect(source).toContain('watchdogHandle = startWatchdog({')
-    // renderer 通知出口（useMemoryPressure 通道）
-    expect(source).toContain("type: 'watchdog:memoryPressure'")
-    // 同拍喂滚动重启编排（critical 档 = D5 决策输入；warn 档编排侧忽略）
-    expect(source).toContain('rollingRestartHandleLocal.onMemoryPressure(payload)')
-  })
-
-  it('滚动重启：import startRollingRestart 且启动；status provider 注入 server（只读 RPC 拉取）', () => {
-    expect(source).toMatch(
-      /import\s*\{[^}]*startRollingRestart[^}]*\}\s*from\s*'\.\/services\/session\/rolling-restart\.js'/,
-    )
-    expect(source).toContain('startRollingRestart({')
-    expect(source).toContain('server.setRollingRestartStatusProvider(')
-  })
-
-  it('armed 门共用：滚动重启 armed 取自 resolveWatchdogConfig 结果（Gate W 单一开关）', () => {
-    expect(source).toContain('const watchdogConfig = resolveWatchdogConfig(process.env)')
-    expect(source).toContain('armed: watchdogConfig.armed,')
-  })
-
-  it('水位定时器：startMemoryWatermarkTimer 以 session 数 + pi 进程数为采样源启动', () => {
-    expect(source).toContain('startMemoryWatermarkTimer(')
-  })
-})
-});
-// wave3 包装：本段原文件顶层语句收进 describe 作用域（顶层 hook 不再外溢到同文件其他来源的用例）
 describe('crash-journal-composition-root-wiring', () => {
 afterEach(async () => {
   await closeCrashJournal() // 单例复位（??= 幂等语义；下个用例可指向新 tmpdir）
@@ -1217,7 +1187,7 @@ describe('runtime 组合根初始化 journal 单例（u-init）', () => {
     const dir = makeDataDir()
     initCrashJournal(dir)
 
-    // 组合根初始化后，runtime 侧事件经同一单例可见（pi-respawn / watchdog 防线 / 生命周期共用）
+    // 组合根初始化后，runtime 侧事件经同一单例可见（pi-respawn / 生命周期事件共用）
     getCrashJournal().append({
       layer: 'pi',
       event: 'auto-respawn',

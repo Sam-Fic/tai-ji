@@ -1,26 +1,24 @@
 /**
- * WebSocket 客户端 —— 连接状态机 + 心跳 + 指数退避重连（core 版）。
+ * WebSocket 客户端 —— 连接状态机（core 版）。
  *
- * 自 packages/renderer/src/lib/ws-client.ts（重建版）迁入，保留所有运行时不变量：
+ * 自 packages/renderer/src/lib/ws-client.ts（重建版）迁入。断连恢复策略（时间机制删除裁决）：
+ * 连接异常关闭（onclose）即置 failed 终态等用户手动重试，不做心跳保活、探活与自动退避
+ * 重连——恢复全部事件驱动（IPC supervisor 事件 / visibility 切前台 / 用户手动重试）。
  *
  * [HISTORICAL] 不变量：
- * 1. 4 态状态机：disconnected → connecting → connected（onclose → reconnecting → connecting...）
- * 2. 心跳：15s 发 ping 保活（仅 keepalive，不跟踪 pong）。死连接检测分形态：桌面靠 TCP 层 +
- *    IPC supervisor 事件 runtime-restarting/runtime-failed 驱动；remote 形态（移动壳无 IPC
- *    supervisor 事件）由 probeAlive 探活补位——use-connection visibility 切前台触发，发 ping +
- *    限时等任意入站帧，超时 close 走重连链。非 pong 超时语义不变。
- * 3. 指数退避重连：1s 起、×2、上限 30s
- * 4. generation 计数：新连接 ++generation，旧 WS 的残余回调（onopen/onclose/onmessage）
+ * 1. 状态机：disconnected → connecting → connected；异常关闭（onclose）→ failed 终态；
+ *    restarting / failed（IPC 驱动）与 waiting-runtime 为连接控制器编排态
+ * 2. generation 计数：新连接 ++generation，旧 WS 的残余回调（onopen/onclose/onmessage）
  *    检查 gen !== wsGeneration 时直接 return，不干扰新连接
  *
  * S1-W1 auth 握手（spec §3.3 D4）：connect(url, credentials) 凭据为 {auth:'token'} 时，
  * open 后首条消息发 {type:'auth'}，收到 auth.result {ok:true} 才置 connected（resubscribeAll
- * / 心跳随 connected 之后启动，重订阅消息不会被 runtime 当「auth 前消息」丢弃）。
+ * 随 connected 之后启动，重订阅消息不会被 runtime 当「auth 前消息」丢弃）。
  * {auth:'skip'}（mock 平台）跳过握手，onopen 即 connected。token 空串是合法值——强制握手
  * 探测语义（移动壳无凭据首连：握手必被拒 → onAuthRejected → D8 恢复链），与 skip 不可互代。
- * 内部重连（退避）复用 currentCredentials；runtime 重启换 token 由 use-connection 的
- * onRuntimePort 路径重新拉取后 connect(url, newCredentials) 覆盖。auth 5s 客户端超时（短于
- * runtime 侧 10s）：超时 close 走 onclose → 正常重连链。
+ * 内部重连复用 currentCredentials；runtime 重启换 token 由 use-connection 的
+ * onRuntimePort 路径重新拉取后 connect(url, newCredentials) 覆盖。auth 应答靠连接生命周期
+ * 事件驱动（runtime 侧握手超时关闭未认证连接 → onclose）。
  *
  * 与 renderer 版的差异（迁移改造）：
  * - new WebSocket(url) → getPlatform().webSocket.create(url)（平台注入，mock 由 platform
@@ -60,9 +58,8 @@ export type ConnectionState =
   | 'disconnected'
   | 'connecting'
   | 'connected'
-  | 'reconnecting'
   | 'restarting' // runtime 崩溃，主进程正在拉起新实例（来自 IPC runtime-restarting）
-  | 'failed'     // runtime 重启用尽，需用户手动重试（来自 IPC runtime-failed）
+  | 'failed'     // 连接关闭 / runtime 重启用尽，需用户手动重试
   | 'waiting-runtime' // 已请求目标快照但尚未获得，无连接可发起（connection-datasync-ssot §6.8；快照推送/拉取到达即转 connecting）
 
 /**
@@ -81,31 +78,16 @@ export type ConnectCredentials =
   | { auth: 'skip' }
 
 // ── 常量 ────────────────────────────────────────────────────
-const HEARTBEAT_INTERVAL_MS = 15_000
-const RECONNECT_BASE_DELAY_MS = 1_000
-const RECONNECT_BACKOFF_EXPONENT = 2
-const MAX_RECONNECT_DELAY_MS = 30_000
 /**
  * WS 1001 Going Away（RFC 6455）——runtime 计划内关停（connection-manager stop）发给
  * 全部存量连接的 close 码，客户端据此区分「服务重启中」与网络断（remote-use D8，文案
- * 信号 onGoingAway；重连机制不变）。与 runtime 侧 WS_CLOSE_GOING_AWAY 同码，协议值
+ * 信号 onGoingAway）。与 runtime 侧 WS_CLOSE_GOING_AWAY 同码，协议值
  * 同源 RFC，两侧常量各自就近维护。可读性 P6 探针已证（2026-10-03，Chromium 收
  * close(1001,'Server shutting down') 后 onclose event.code===1001）。
  */
 const WS_CLOSE_GOING_AWAY = 1001
-/** 重连总时长上限（ms）：超过即放弃，置 failed 待用户手动重试，避免长时间无意义重试占用资源。
- *  说明：曾配 attempts 计数上限（MAX_RECONNECT_ATTEMPTS=20），但指数退避（1+2+4+8+16+30…）
- *  累积约第 6-7 次即跨 60s → duration cap 先触发，attempts 永不可达，该常量为死代码已删除。
- *  放弃自动重连的判定唯由本时长上限决定。 */
-const MAX_RECONNECT_DURATION_MS = 60_000
-/** auth 握手客户端超时（S1-W1）：短于 runtime 侧 10s 握手超时，客户端先主动断开走重连。 */
-const AUTH_TIMEOUT_MS = 5_000
-/**
- * 探活超时（probeAlive，remote 形态切前台死链检测）：发 ping 后限时等任意入站帧，超时判定
- * 半开 TCP 死链（锁屏/基站切换形态），主动 close 走既有退避重连链。量级对齐单请求粒度
- * （AUTH_TIMEOUT_MS 同为 5s：正常链路 RTT 秒级以内，5s 留数个 RTT 余量）。
- */
-const PROBE_ALIVE_TIMEOUT_MS = 5_000
+/** 断连日志的 close reason 截断上限（字符）：reason 极端长时防日志行爆长，超长部分丢弃。 */
+const WS_CLOSE_REASON_LOG_MAX_CHARS = 120
 /**
  * pre-auth 发送队列容量上限（防泄漏）：入队消息与 request 层 pending 一一对应
  * （renderer pending 层 MAX_PENDING=256 同界），超限驱逐最老并经 onQueueDrop 通知。
@@ -121,25 +103,14 @@ export const INBOUND_FRAME_MAX_BINARY_BYTES = 80_000_000
 export const INBOUND_DROP_VALVE_TRIP_THRESHOLD = 3
 /** 超界帧归因扫描窗口（头部 code units）——sessionId/id 字段在 JSON envelope 前部，4KB 足够。 */
 const INBOUND_GUARD_ATTRIBUTION_WINDOW = 4096
-/** in-flight subscribe 簿记条目 TTL：超界 reply 无法 parse 删除不了簿记，按 RPC backstop
- *  65s（pending sweep）+ 余量惰性过期，防泄漏（查询时清理，无独立定时器）。 */
-const IN_FLIGHT_SUBSCRIBE_TTL_MS = 90_000
 
 // ── 状态 ────────────────────────────────────────────────────
 // taste:allow-no-data-owner W24-EX-B（模块级单例 UI 瞬态，12 类未覆盖存量，已登记）：WS 连接状态单例 ref（UI 连接指示的数据源，12 类未覆盖）
 const state = ref<ConnectionState>('disconnected')
 let ws: WebSocketLike | null = null
-let heartbeatTimer: ReturnType<typeof setInterval> | null = null
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-/** auth 握手超时计时器（auth.result 到达 / 连接关闭时清除） */
-let authTimer: ReturnType<typeof setTimeout> | null = null
-/** 探活超时计时器（probeAlive 专用；任意入站帧 / 连接关闭时清除——单定时器不变量对齐 authTimer） */
-let probeAliveTimer: ReturnType<typeof setTimeout> | null = null
-let reconnectAttempts = 0
 let wsGeneration = 0
-let currentUrl: string | null = null
-/** 本次连接凭据（S1-W1/S4）：connect(url, credentials) 更新（幂等 no-op 时也更新——与
- *  currentUrl 同序，保持旧 currentToken 语义）；内部重连（scheduleReconnect）复用。
+/** 本次连接凭据（S1-W1/S4）：connect(url, credentials) 更新；重连发起方（快照推送 /
+ *  visibility / 用户重试后的 connect 调用）经 getCurrentToken 读用。
  *  「保留上次凭据」是本模块内部行为，不在公开签名表达。 */
 let currentCredentials: ConnectCredentials | null = null
 /**
@@ -175,18 +146,17 @@ export function onQueueDrop(cb: (msgs: ClientMessage[], reason: SendQueueDropRea
  * 触发。消费方 = use-connection 的两个形态分支——本地形态 installLocalAuthVerification
  * （快照重拉换凭据，connection-datasync-ssot §6.3）+ 远程 profile 形态
  * installAuthRejectionSignal（D8 转发至壳层凭据重摄）；mock 形态无握手不注册——不注册 =
- * 拒绝不置抑制位 = close 走原重连链，行为不变。
+ * 拒绝不置抑制位。
  */
 let authRejectedHandler: (() => void) | null = null
 
 /**
  * auth 拒绝重连抑制位（D8「全触发点」）：存在注册消费方时拒绝即置位——本地与远程两个
- * 形态分支都注册消费方（仅 mock 不注册），故除 mock 外拒绝都短路自动重连、重连责任移交
- * 消费方。置位后两个自动重连触发点全部短路：ws-client scheduleReconnect（退避/onclose 链，
- * 下方检查）+ use-connection 的 visibility 切前台主动重连（经 isAuthRejectedSuppressed
- * 查询）。解除 = markConnected（auth 成功 = 凭据已有效）或 resetAuthRejectionSuppression
- * （消费方交还重连责任的显式入口——本地形态复位后随即调 scheduleReconnect 重启调度；
- * 远程形态复位后由壳层显式 connect）。
+ * 形态分支都注册消费方（仅 mock 不注册），故除 mock 外拒绝都短路 visibility 切前台
+ * 自动重连（use-connection 经 isAuthRejectedSuppressed 查询）、重连责任移交消费方
+ * （本地形态快照重拉 / 远程形态壳层凭据重摄）。解除 = markConnected（auth 成功 =
+ * 凭据已有效）；resetAuthRejectionSuppression 是消费方交还重连责任的显式入口
+ * （远程形态壳层 token 提交后调用，随即显式 connect）。
  */
 let authRejectedSuppressed = false
 
@@ -202,8 +172,8 @@ export function onAuthRejected(cb: () => void): () => void {
 
 /**
  * 计划内关停回调（单槽，对齐 onAuthRejected 体例）：onclose 读到 close 1001（runtime
- * 计划内停机）时、先于重连调度触发。消费方 = connection-view（移动壳断线条「服务重启中」
- * 文案分流）；桌面形态不注册 = 信号无人消费，重连链行为逐字节不变。P6 探针（设计 §5.4
+ * 计划内停机）时、先于置 failed 触发。消费方 = connection-view（移动壳断线条「服务重启中」
+ * 文案分流）；桌面形态不注册 = 信号无人消费。P6 探针（设计 §5.4
  * 检查点 1）证实浏览器 CloseEvent 可读 code 1001；读不到（无事件形态/异常环境）不触发，
  * 消费方维持现状文案——降级安全。
  */
@@ -246,10 +216,9 @@ export function onAuthAccepted(cb: (info: { runtimeId: string | null }) => boole
 
 /**
  * 显式解除 auth 拒绝重连抑制：消费方交还重连责任的显式入口。远程形态 = 壳层 token 输入
- * 视图提交新凭据后、重新发起连接前调用；本地形态 = recoverAfterAuthRejection 的「交还
- * 退避链」分支调用，复位后随即调 scheduleReconnect 重启调度（真实 WS 的 onclose 与 IPC
- * 回包竞速，早到形态下退避链已在抑制期短路、复位本身不恢复调度）。markConnected（auth
- * 成功）会自行复位，不经本入口。
+ * 视图提交新凭据后、重新发起连接前调用（复位后随即显式 connect）。本地形态的快照重拉
+ * 分支不复位（重连责任留在快照驱动路径，新连接 auth 成功 markConnected 时自行复位）。
+ * markConnected（auth 成功）会自行复位，不经本入口。
  */
 export function resetAuthRejectionSuppression(): void {
   authRejectedSuppressed = false
@@ -292,12 +261,12 @@ const inboundDropStreakBySession = new Map<string, number>()
 const inboundValveTrippedSessions = new Set<string>()
 /**
  * in-flight subscribe 簿记（requestId → 目标 session）：超界帧归因锚。
- * send() 出站 `session.subscribe` 时登记；正常 reply 到达（id 命中）或 TTL 过期时清理。
+ * send() 出站 `session.subscribe` 时登记；正常 reply 到达（id 命中）或连接关闭时清理。
  * subscribe reply 超界是 D8 死循环主形态（拉取响应同样超界）——reply 不可 parse 拿不到 id，
  * 反向经簿记把丢帧归因回目标 session。
  */
 // taste:allow-no-data-owner W24-EX-C（非 GUI 数据技术结构，已登记）：in-flight subscribe 归因簿记（超界 reply 的反查锚；登记见 docs/architecture/data-source-registry.md §4 ⑧）
-const inFlightSubscribes = new Map<string, { sessionId: string; at: number }>()
+const inFlightSubscribes = new Map<string, string>()
 
 /**
  * 解除指定 session 的终止阀（恢复触发器入口）：移除暂停 + 清零丢帧计数，此后该 session
@@ -351,8 +320,6 @@ function flushPreAuthQueue(): void {
     notifyQueueDrop(batch, 'closed')
   }
 }
-/** 本轮重连起始时间戳（首次 scheduleReconnect 设置，connect 成功后置 null 重置） */
-let reconnectStartedAt: number | null = null
 
 /** 消息回调（连接骨架阶段不注册；后续业务层注册处理 ServerMessage） */
 let messageHandler: ((msg: ServerMessage) => void) | null = null
@@ -372,24 +339,19 @@ export function getState() {
 
 /**
  * 设置为 restarting 态（收到 IPC runtime-restarting 时调，useConnection 编排）。
- * 断开当前 WS（死端口）并停止自动重连——等主进程拉起新实例后推新端口再 connect。
+ * 断开当前 WS（死端口）——等主进程拉起新实例后推新端口再 connect。
  */
 export function setRestarting(): void {
-  disconnect() // 停止在死端口上的自动重连，避免与 restarting 状态打架
+  disconnect() // 摘除死端口 socket 的回调，避免其 onclose 覆盖 restarting 状态
   state.value = 'restarting'
 }
 
 /**
  * 设置为 failed 态（收到 IPC runtime-failed 时调）。
- * 停止自动重连，等用户手动重试。
+ * 清空残留 pre-auth 队列，等用户手动重试。
  */
 export function setFailed(): void {
-  clearTimers()
   dropPreAuthQueue('disconnected') // 终止态：残留队列消息不再有机会发出
-  // 重置重连簿记：failed 为终止态，残留的 reconnectAttempts/reconnectStartedAt（约 60s 前的旧值）
-  // 会让后续用户重试 / visibility 重连在首次掉线时立即被判超时 → 一次失败即回 failed，指数退避失效。
-  reconnectAttempts = 0
-  reconnectStartedAt = null
   state.value = 'failed'
 }
 
@@ -398,8 +360,7 @@ export function setFailed(): void {
  * null 时调，use-connection 连接控制器编排）。语义 = 「已请求目标快照但尚未获得，无连接
  * 可发起」——与 connecting（已发起连接正在握手）显式区分，连接屏呈现「正在启动 runtime」。
  *
- * disconnect 先清残留连接与退避定时器（等待期不做任何自动重连——无目标可连，退避重试
- * 是备用猜连时代的残留形态）；快照到达（推送或拉取）后控制器 connect() 转入 connecting。
+ * disconnect 先清残留连接；快照到达（推送或拉取）后控制器 connect() 转入 connecting。
  */
 export function setWaitingRuntime(): void {
   disconnect()
@@ -414,27 +375,21 @@ export function setWaitingRuntime(): void {
  * @param credentials 凭据对象（S4 三态显式化）：{auth:'token', token} 走 auth 握手（open 后
  *                    首条 auth 帧，auth.result ok 才 connected；token 空串 = 强制握手探测，
  *                    必被拒 → onAuthRejected → D8 恢复链）；{auth:'skip'} 跳过握手，onopen
- *                    即 connected。无「保留上次」态——内部重连（scheduleReconnect）复用
- *                    currentCredentials，公开签名不表达。
+ *                    即 connected。无「保留上次」态——重连发起方复用 currentCredentials，
+ *                    公开签名不表达。
  */
 export function connect(url: string, credentials: ConnectCredentials): void {
-  currentUrl = url
   currentCredentials = credentials
 
   // 单飞检查（防并存连接）：存在非 CLOSED 的 socket 期间一律不放行建新连接。
-  // - OPEN/CONNECTING：已有活跃连接，no-op（原幂等行为不变）。
+  // - OPEN/CONNECTING：已有活跃连接，no-op（幂等行为不变）。
   // - CLOSING：close 握手未完成（移动弱网下可悬挂数秒~分钟）——此前会被模块变量直接覆盖
   //   并开新连接，旧 socket 悬挂期间与新连接并存（半死连接堆积的根因：移动端「同页多连接
-  //   并存」复验问题；退避定时器 / visibility 切前台 / token 重试三个入场口在 CLOSING 窗口
-  //   交错即复现）。现改为 no-op：该 socket 的 onclose 到达（WHATWG 保证 close 事件最终
-  //   触发）后由 onclose → scheduleReconnect 接力重连，收敛为单链。
-  // - null / CLOSED：放行（旧连接已死透）。放行即清挂起的重连定时器——本调用已是最新连接
-  //   意图，定时器接力作废，防「外部 connect 与退避定时器」两条链交错产生双定时器双建连。
+  //   并存」复验问题；visibility 切前台 / token 重试等入场口在 CLOSING 窗口交错即复现）。
+  //   现改为 no-op：该 socket 的 onclose 到达（WHATWG 保证 close 事件最终触发）后由重连
+  //   发起方（用户重试 / 快照推送）接力，收敛为单链。
+  // - null / CLOSED：放行（旧连接已死透）。
   if (ws && ws.readyState !== WS_READY_STATE.CLOSED) return
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer)
-    reconnectTimer = null
-  }
 
   state.value = 'connecting'
   const gen = ++wsGeneration
@@ -444,44 +399,23 @@ export function connect(url: string, credentials: ConnectCredentials): void {
   ws = getPlatform().webSocket.create(url)
   console.log('[ws] connecting to', url)
 
-  const clearAuthTimer = () => {
-    if (authTimer) {
-      clearTimeout(authTimer)
-      authTimer = null
-    }
-  }
-
-  /** connected 化（auth 成功或 skip 模式）：置位状态 + 重连簿记 + 启动心跳 + flush 队列。 */
+  /** connected 化（auth 成功或 skip 模式）：置位状态 + flush 队列。 */
   const markConnected = () => {
     state.value = 'connected'
-    reconnectAttempts = 0
-    // 连接成功 → 重置重连计时窗口（下次掉线重新开始计数）
-    reconnectStartedAt = null
-    // auth 成功 = 凭据已有效（D8）：复位重连抑制位，后续正常断线恢复自动重连
+    // auth 成功 = 凭据已有效（D8）：复位重连抑制位
     authRejectedSuppressed = false
-    // G2 活性治理（ADR-0069；原文档已删除 git 可追溯）：重连路径增挂 in-flight
-    // subscribe 簿记的 TTL sweep。断连使部分 subscribe reply 永不到达（重连后新 id 重订），
-    // 原实现唯一 sweep 触发点在超界帧归因死路径，过期条目无人扫 → 簿记随工作流强度无界
-    // 增长。新连接确立时扫一次（本函数同步执行，早于 use-connection 的 state watch 触发
-    // resubscribeAll——watcher 异步 flush），sweep 语义仍是 TTL 惰性过期，未过期条目不连坐。
-    sweepExpiredInFlightSubscribes()
-    startHeartbeat()
     flushPreAuthQueue()
   }
 
   ws.onopen = () => {
     if (gen !== wsGeneration) return // 旧 WS 残余回调，忽略
     if (!connectionAuthed) {
-      // S1-W1：首条消息必须是 auth；connected 推迟到 auth.result ok（心跳/重订阅随后）。
+      // S1-W1：首条消息必须是 auth；connected 推迟到 auth.result ok（重订阅随后）。
       // token 取自 currentCredentials（!connectionAuthed ⇔ 本代凭据为 {auth:'token'}；兜底
-      // 空串 = 探测语义，异常态凭据必被 runtime 拒走重连链，不会静默假 connected）
+      // 空串 = 探测语义，异常态凭据必被 runtime 拒走 D8 恢复链，不会静默假 connected）。
+      // 应答无客户端计时窗：握手超时由 runtime 侧关闭未认证连接驱动（onclose → failed）。
       const token = currentCredentials?.auth === 'token' ? currentCredentials.token : ''
       ws!.send(JSON.stringify({ type: 'auth', payload: { token } }))
-      authTimer = setTimeout(() => {
-        if (gen !== wsGeneration) return
-        console.warn('[ws] auth handshake timeout, closing for reconnect')
-        ws?.close()
-      }, AUTH_TIMEOUT_MS)
       return
     }
     markConnected()
@@ -489,9 +423,6 @@ export function connect(url: string, credentials: ConnectCredentials): void {
 
   ws.onmessage = (event) => {
     if (gen !== wsGeneration) return
-    // 探活（remote 切前台死链检测）：本代任何入站帧都是链路活性证据——在大小检查/parse
-    // 之前清探活计时器（超界帧、坏 JSON 帧同样证明链路活，不清会被误判死链）。
-    clearProbeAliveTimer()
     // 入站帧检查（D8）：JSON.parse 前置大小检查——超界整条丢弃（不 parse，防 OOM 形态），
     // 归因 + 计数 + 终止阀见 handleOversizedInboundFrame。检查在 auth 检查之前（任何阶段
     // 的超界帧都拦，含握手期异常帧）。
@@ -513,12 +444,11 @@ export function connect(url: string, credentials: ConnectCredentials): void {
     if (!connectionAuthed) {
       const r = parsed as { type?: unknown; payload?: { ok?: unknown; runtimeId?: unknown } | null }
       if (r.type === 'auth.result' && r.payload != null) {
-        clearAuthTimer()
         if (r.payload.ok === true) {
           connectionAuthed = true
           // 实例标识核对（connection-datasync-ssot §6.3）：应答 runtimeId 先交消费方
           // 裁决再 connected 化——false = 连到非预期实例，fail-fast 断开（不 markConnected：
-          // 不置 connected、不启心跳、不 flush 队列；重拉快照/失败呈现由消费方编排）。
+          // 不置 connected、不 flush 队列；重拉快照/失败呈现由消费方编排）。
           if (authAcceptedHandler) {
             const rawId = r.payload.runtimeId
             const accepted = authAcceptedHandler({ runtimeId: typeof rawId === 'string' ? rawId : null })
@@ -530,22 +460,21 @@ export function connect(url: string, credentials: ConnectCredentials): void {
           }
           markConnected()
         } else {
-          // runtime 拒绝（token 失效，如 runtime 已换 token 重启）→ 凭据已失效，自动
-          // 退避重连只复用旧凭据必再拒：有消费方形态在下方置重连抑制位短路退避链，
+          // runtime 拒绝（token 失效，如 runtime 已换 token 重启）→ 凭据已失效，自动重连
+          // 只复用旧凭据必再拒：有消费方形态在下方置重连抑制位短路 visibility 自动重连，
           // 重连改由消费方驱动——本地形态 = use-connection recoverAfterAuthRejection
           // 重拉目标快照、携新快照凭据重连（新连接 auth 成功 markConnected 时抑制位
           // 复位）；远程形态 = 壳层 D8 凭据重摄路径换凭据；
           // pre-auth 队列清空 + 通知（入队消息的 pending 由 onQueueDrop 消费方快速 reject）
           dropPreAuthQueue('auth-failed')
-          // D8 显式信号：先置抑制位 + 触发消费方，再 close——抑制位对 onclose →
-          // scheduleReconnect 可见（先置位再 close 的顺序保证）。消费方 = 本地形态（快照
-          // 重拉换凭据，§6.3）与远程形态（壳层 D8 凭据重摄）；无注册消费方（mock）不置位，
-          // close 走原重连链，行为不变。
+          // D8 显式信号：先置抑制位 + 触发消费方，再 close（信号先落，消费方处置先于
+          // onclose 置 failed）。消费方 = 本地形态（快照重拉换凭据，§6.3）与远程形态
+          // （壳层 D8 凭据重摄）；无注册消费方（mock）不置位，close 走断连路径，行为不变。
           if (authRejectedHandler) {
             authRejectedSuppressed = true
             authRejectedHandler()
           }
-          console.warn('[ws] auth rejected by runtime, closing for reconnect')
+          console.warn('[ws] auth rejected by runtime, closing')
           ws?.close()
         }
       }
@@ -560,16 +489,23 @@ export function connect(url: string, credentials: ConnectCredentials): void {
 
   ws.onclose = (event?: WebSocketCloseInfo) => {
     if (gen !== wsGeneration) return // 旧 WS 残余回调，不干扰新连接
+    // 断连观测（只加日志不改行为）：close 原因在 renderer 侧不可见——补打
+    // code/reason/wasClean 供排查归因。
+    const closeDesc = event
+      ? `code=${event.code} wasClean=${event.wasClean}${event.reason ? ` reason="${event.reason.slice(0, WS_CLOSE_REASON_LOG_MAX_CHARS)}"` : ''}`
+      : 'no close event (mock stub)'
+    console.warn('[ws] closed:', closeDesc)
     // D8 close code 分流（只读码不加协议）：1001 = runtime 计划内关停 → 先触发消费方
-    // 文案信号再进重连链（顺序对齐 authRejected「先置位再 close」——信号先落，重连链
-    // 行为不变）；无事件形态（mock 桩）或非 1001 不触发，走现状断线路径。
+    // 文案信号再置 failed（顺序对齐 authRejected「先置位再 close」——信号先落）；
+    // 无事件形态（mock 桩）或非 1001 不触发。
     if (event?.code === WS_CLOSE_GOING_AWAY) goingAwayHandler?.()
-    state.value = 'disconnected'
-    stopHeartbeat()
-    clearAuthTimer()
-    clearProbeAliveTimer() // 探活窗内连接关闭：计时器随断连清除，不残留到重连后的新连接
+    // 连接异常关闭 = failed 终态（时间机制删除裁决）：不做自动重连，等用户手动重试
+    // （renderer 连接屏重试按钮 / 移动壳重连编排 / visibility 切前台重连）。
+    state.value = 'failed'
     dropPreAuthQueue('closed')
-    scheduleReconnect()
+    // in-flight subscribe 簿记随连接关闭清理（事件驱动）：关闭连接的 subscribe reply
+    // 永不到达，归因锚退役，防簿记跨连接累积。
+    inFlightSubscribes.clear()
   }
 
   ws.onerror = (err) => {
@@ -596,14 +532,16 @@ export function getCurrentToken(): string | null {
   return currentCredentials?.auth === 'token' ? currentCredentials.token : null
 }
 
-/** 主动断开（不触发重连） */
+/** 主动断开（编排型拆连：断旧连新 / restarting / teardown；不触发 failed） */
 export function disconnect(): void {
   // 递增 generation 使旧 WS 的回调失效
   wsGeneration++
-  clearTimers()
   dropPreAuthQueue('disconnected') // 回调将被摘除，onclose 清队路径不可达，此处显式清
+  // in-flight subscribe 簿记随连接关闭清理（事件驱动，与 onclose 同语义——拆连后旧
+  // 请求的 reply 永不到达）
+  inFlightSubscribes.clear()
   if (ws) {
-    // 先摘回调再 close，避免触发 onclose → scheduleReconnect
+    // 先摘回调再 close，避免触发 onclose → 置 failed
     ws.onclose = null
     ws.onerror = null
     ws.onmessage = null
@@ -643,40 +581,6 @@ export function send(msg: ClientMessage): boolean {
     return true
   }
   return false
-}
-
-// ── 探活（probeAlive，remote 形态切前台死链检测）──────────────
-
-/**
- * 探活：发一条 ping 心跳，限时 PROBE_ALIVE_TIMEOUT_MS 内收到**任何入站帧**即视为链路活
- * （不依赖 pong 具体语义——任意入站帧都是活性证据，onmessage 首行清除）；超时无帧判定半开
- * TCP 死链（锁屏/基站切换形态：state 恒 connected、send 返回 true 但对端收不到），console.warn
- * 后主动 close——close 走既有 onclose → 退避重连链（此处不动 reconnectAttempts 等重连簿记，
- * 由既有路径处理；非 auth 拒绝，抑制位不涉及）。
- *
- * 仅 connected 态有效（其余状态调用 no-op）。调用方 = use-connection visibility 切前台分支
- * （仅 remote 形态；移动壳无 IPC supervisor 事件补位，切前台是死链检测的唯一低成本时机）。
- * 本地/mock 形态不调用——桌面死链检测由 TCP 层 + IPC supervisor 事件兜底，零回归。
- *
- * 计时器清理点与心跳/auth 计时器同款：任意入站帧（onmessage 首行）/ onclose / clearTimers
- * （disconnect、setFailed）——断开与重连各路径不残留；重复调用先清旧（单定时器不变量，
- * 对齐 scheduleReconnect :703-705 注释先例）。超时回调带 gen 检查（对齐 authTimer），换代后
- * 旧探活不误杀新连接。
- */
-export function probeAlive(): void {
-  if (state.value !== 'connected') return
-  if (ws === null || ws.readyState !== WS_READY_STATE.OPEN) return
-  clearProbeAliveTimer()
-  send({ type: 'ping', payload: {} })
-  const gen = wsGeneration
-  probeAliveTimer = setTimeout(() => {
-    probeAliveTimer = null
-    if (gen !== wsGeneration) return // 已换代：旧探活不误杀新连接
-    console.warn(
-      '[ws] alive probe timeout: connection unresponsive (no inbound frame since probe ping), closing for reconnect',
-    )
-    ws?.close()
-  }, PROBE_ALIVE_TIMEOUT_MS)
 }
 
 // ── 内部 ────────────────────────────────────────────────────
@@ -753,25 +657,15 @@ function handleOversizedInboundFrame(measured: InboundFrameMeasurement): void {
  * ③ 均无（含 binary 帧无 text）→ null。
  */
 function attributeOversizedFrame(text: string | null): string | null {
-  sweepExpiredInFlightSubscribes()
   if (text === null) return null
   const window = text.length > INBOUND_GUARD_ATTRIBUTION_WINDOW ? text.slice(0, INBOUND_GUARD_ATTRIBUTION_WINDOW) : text
   const idMatch = /"id":"([^"]{1,128})"/.exec(window)
   if (idMatch) {
-    const entry = inFlightSubscribes.get(idMatch[1])
-    if (entry) return entry.sessionId
+    const sid = inFlightSubscribes.get(idMatch[1])
+    if (sid) return sid
   }
   const sidMatch = /"sessionId":"([^"]{1,128})"/.exec(window)
   return sidMatch ? sidMatch[1] : null
-}
-
-/** 惰性过期清理：in-flight subscribe 簿记条目超 TTL 删除（超界 reply 删不了簿记的防泄漏口）。 */
-function sweepExpiredInFlightSubscribes(): void {
-  if (inFlightSubscribes.size === 0) return
-  const now = Date.now()
-  for (const [id, entry] of inFlightSubscribes) {
-    if (now - entry.at > IN_FLIGHT_SUBSCRIBE_TTL_MS) inFlightSubscribes.delete(id)
-  }
 }
 
 /**
@@ -784,7 +678,7 @@ function recordOutboundSubscribe(msg: ClientMessage): void {
   const id = (msg as { id?: unknown }).id
   const sid = (msg.payload as { sessionId?: unknown }).sessionId
   if (typeof id === 'string' && typeof sid === 'string') {
-    inFlightSubscribes.set(id, { sessionId: sid, at: Date.now() })
+    inFlightSubscribes.set(id, sid)
   }
 }
 
@@ -828,84 +722,4 @@ function isServerMessage(x: unknown): x is ServerMessage {
     typeof (x as { type?: unknown }).type === 'string' &&
     (x as { payload?: unknown }).payload != null
   )
-}
-
-/**
- * 重连调度（退避/onclose 链的唯一调度点）。导出消费方 = use-connection
- * recoverAfterAuthRejection：本地形态复位 auth 拒绝抑制位后确定性重启调度——真实 WS 的
- * onclose 与 IPC 重拉回包竞速，早到形态（onclose 先至，主形态）下退避链已在抑制期被短路
- * 且无定时器残留，复位本身不恢复调度，缺本调用则连接静默挂 disconnected。守卫链：
- * currentUrl（无目标 no-op）→ socket 死透（onclose 未发生的晚到形态由 onclose 到达时的
- * 本函数接力）→ 抑制位 → 退避时长上限（超限置 failed，失败呈现）。
- */
-export function scheduleReconnect(): void {
-  if (!currentUrl) return
-  // socket 死透检查：仅 readyState 已 CLOSED（onclose 已发生——早到形态）时放行调度；
-  // socket 尚在（CLOSING/OPEN——晚到形态下 IPC 回包先于 close 事件）时 no-op，由 onclose
-  // 到达时的本函数接力，不对未死透 socket 空设定时器（到点也会被 connect 单飞拦截）且
-  // 不重复推进退避簿记。
-  if (ws && ws.readyState !== WS_READY_STATE.CLOSED) return
-  // D8 抑制位触发点 ①：auth 拒绝后不自动重连（凭据失效重连 100% 失败，纯烧日志；等消费方
-  // 换凭据重连或显式复位——本地形态 recoverAfterAuthRejection 复位后调本函数重启调度，
-  // 远程形态壳层 token 重试路径显式 reset + connect）。
-  if (authRejectedSuppressed) {
-    console.log('[ws] reconnect suppressed after auth rejection (waiting for credential retry)')
-    return
-  }
-  // 重连时长上限兜底（设计文档 A4 §3.3）：总时长超 MAX_RECONNECT_DURATION_MS → 放弃自动重连，置 failed。
-  if (reconnectStartedAt === null) reconnectStartedAt = Date.now()
-  if (Date.now() - reconnectStartedAt > MAX_RECONNECT_DURATION_MS) {
-    console.warn('[ws] reconnect duration exceeded, giving up (state=failed)')
-    setFailed()
-    return
-  }
-  const delay = Math.min(
-    RECONNECT_BASE_DELAY_MS * Math.pow(RECONNECT_BACKOFF_EXPONENT, reconnectAttempts),
-    MAX_RECONNECT_DELAY_MS,
-  )
-  reconnectAttempts++
-  state.value = 'reconnecting'
-  console.log('[ws] reconnecting in', delay, 'ms (attempt', reconnectAttempts + ')')
-  // 「保留上次凭据」的内部实现（S4）：复用 currentCredentials 重新发起（currentCredentials
-  // 与 currentUrl 同在 connect 设置，非 null 由 currentUrl 检查蕴含）
-  // 单一定时器不变量：覆盖前清旧 handle——旧定时器若滞留到期再触发，会与本次调度的定时器
-  // 构成双链（单飞检查能挡住双建连，但重连簿记会被无谓搅动）。
-  if (reconnectTimer) clearTimeout(reconnectTimer)
-  reconnectTimer = setTimeout(() => connect(currentUrl!, currentCredentials!), delay)
-}
-
-function startHeartbeat(): void {
-  heartbeatTimer = setInterval(() => {
-    if (ws?.readyState === WS_READY_STATE.OPEN) {
-      send({ type: 'ping', payload: {} })
-    }
-  }, HEARTBEAT_INTERVAL_MS)
-}
-
-function stopHeartbeat(): void {
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer)
-    heartbeatTimer = null
-  }
-}
-
-/** 清除探活计时器（入站帧 / onclose / clearTimers 三类清理点共用；幂等） */
-function clearProbeAliveTimer(): void {
-  if (probeAliveTimer) {
-    clearTimeout(probeAliveTimer)
-    probeAliveTimer = null
-  }
-}
-
-function clearTimers(): void {
-  stopHeartbeat()
-  clearProbeAliveTimer()
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer)
-    reconnectTimer = null
-  }
-  if (authTimer) {
-    clearTimeout(authTimer)
-    authTimer = null
-  }
 }

@@ -2,8 +2,9 @@
  * RFC 8628 设备码轮询器单测（mock poll + vi fake timers）。
  *
  * 覆盖：pending 继续轮询 / slow_down 服务器 interval 优先、无 interval 时 +5s /
- * complete 返回 value / failed 返回 reason / 绝对超时（expiresInSeconds）/
- * abort 中断（运行中 + 调用前已 abort）/ waitBeforeFirstPoll 先等一轮 / attempt 递增。
+ * complete 返回 value / failed 返回 reason / abort 中断（运行中 + 调用前已 abort）/
+ * waitBeforeFirstPoll 先等一轮 / attempt 递增 / 无 deadline（时间机制删除裁决：
+ * 持续 pending 不做本地超时判死）。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { runDeviceCodeFlow, type DevicePollResult } from '../device-code-flow.js'
@@ -31,7 +32,7 @@ describe('runDeviceCodeFlow', () => {
     ]
     const poll = vi.fn(async () => results.shift() as DevicePollResult)
     const signal = controller().signal
-    const p = runDeviceCodeFlow({ poll, expiresInSeconds: 30, signal })
+    const p = runDeviceCodeFlow({ poll, signal })
 
     await vi.advanceTimersByTimeAsync(5000)
     await vi.advanceTimersByTimeAsync(5000)
@@ -40,16 +41,14 @@ describe('runDeviceCodeFlow', () => {
     expect(poll).toHaveBeenCalledTimes(3)
   })
 
-  it('poll 收到递增的 attempt 序号', async () => {
+  it('poll 收到递增的 attempt 序号（无 deadline：持续 pending 不终止）', async () => {
     const poll = vi.fn(async (_attempt: number) => ({ status: 'pending' } as DevicePollResult))
     const signal = controller().signal
-    const p = runDeviceCodeFlow({ poll, expiresInSeconds: 30, signal })
+    const p = runDeviceCodeFlow({ poll, signal })
 
-    // 30s 超时 / 5s 间隔 → 共 6 次 poll（0..5），最后一次 sleep 后到达 deadline
     await vi.advanceTimersByTimeAsync(30_000)
 
-    await expect(p).resolves.toEqual({ ok: false, reason: 'timeout' })
-    expect(poll.mock.calls.map((c) => c[0])).toEqual([0, 1, 2, 3, 4, 5])
+    expect(poll.mock.calls.map((c) => c[0])).toEqual([0, 1, 2, 3, 4, 5, 6])
   })
 
   it('slow_down 带 intervalSeconds 时直接采用服务器值', async () => {
@@ -59,7 +58,7 @@ describe('runDeviceCodeFlow', () => {
     ]
     const poll = vi.fn(async () => results.shift() as DevicePollResult)
     const signal = controller().signal
-    const p = runDeviceCodeFlow({ poll, expiresInSeconds: 30, signal })
+    const p = runDeviceCodeFlow({ poll, signal })
 
     // 默认 interval 5s：slow_down 后应变为 2s，advance 2s 即触发第二次 poll
     await vi.advanceTimersByTimeAsync(2000)
@@ -75,7 +74,7 @@ describe('runDeviceCodeFlow', () => {
     ]
     const poll = vi.fn(async () => results.shift() as DevicePollResult)
     const signal = controller().signal
-    const p = runDeviceCodeFlow({ poll, expiresInSeconds: 30, signal })
+    const p = runDeviceCodeFlow({ poll, signal })
 
     // 5s + 5s = 10s：advance 5s 后仍未到第二次 poll
     await vi.advanceTimersByTimeAsync(5000)
@@ -94,7 +93,7 @@ describe('runDeviceCodeFlow', () => {
     ]
     const poll = vi.fn(async () => results.shift() as DevicePollResult)
     const signal = controller().signal
-    const p = runDeviceCodeFlow({ poll, expiresInSeconds: 30, signal, slowDownIncrementMs: 1000 })
+    const p = runDeviceCodeFlow({ poll, signal, slowDownIncrementMs: 1000 })
 
     // 5s + 1s = 6s
     await vi.advanceTimersByTimeAsync(6000)
@@ -104,27 +103,16 @@ describe('runDeviceCodeFlow', () => {
   it('poll 返回 failed 时直接返回 reason failed', async () => {
     const poll = vi.fn(async () => ({ status: 'failed', message: 'device not approved' } as DevicePollResult))
     const signal = controller().signal
-    const result = await runDeviceCodeFlow({ poll, expiresInSeconds: 30, signal })
+    const result = await runDeviceCodeFlow({ poll, signal })
 
     expect(result).toEqual({ ok: false, reason: 'failed', message: 'device not approved' })
     expect(poll).toHaveBeenCalledTimes(1)
   })
 
-  it('超过 expiresInSeconds 绝对超时返回 reason timeout', async () => {
-    const poll = vi.fn(async () => ({ status: 'pending' } as DevicePollResult))
-    const signal = controller().signal
-    const p = runDeviceCodeFlow({ poll, expiresInSeconds: 1, signal })
-
-    // 第一次 poll 立即执行，之后 sleep min(5s, remaining)，advance 1s 到 deadline
-    await vi.advanceTimersByTimeAsync(1000)
-
-    await expect(p).resolves.toEqual({ ok: false, reason: 'timeout' })
-  })
-
   it('运行中 abort 返回 reason aborted', async () => {
     const poll = vi.fn(async () => ({ status: 'pending' } as DevicePollResult))
     const ac = controller()
-    const p = runDeviceCodeFlow({ poll, expiresInSeconds: 30, signal: ac.signal })
+    const p = runDeviceCodeFlow({ poll, signal: ac.signal })
 
     // flush 第一次 poll + 注册 sleep
     await vi.advanceTimersByTimeAsync(0)
@@ -138,7 +126,7 @@ describe('runDeviceCodeFlow', () => {
     const ac = controller()
     ac.abort()
     const poll = vi.fn(async () => ({ status: 'pending' } as DevicePollResult))
-    const result = await runDeviceCodeFlow({ poll, expiresInSeconds: 30, signal: ac.signal })
+    const result = await runDeviceCodeFlow({ poll, signal: ac.signal })
 
     expect(result).toEqual({ ok: false, reason: 'aborted', message: CANCEL_MESSAGE })
     expect(poll).not.toHaveBeenCalled()
@@ -147,7 +135,7 @@ describe('runDeviceCodeFlow', () => {
   it('waitBeforeFirstPoll 先等一个 interval 再首次 poll', async () => {
     const poll = vi.fn(async () => ({ status: 'complete', value: 1 } as DevicePollResult))
     const signal = controller().signal
-    const p = runDeviceCodeFlow({ poll, expiresInSeconds: 30, signal, waitBeforeFirstPoll: true })
+    const p = runDeviceCodeFlow({ poll, signal, waitBeforeFirstPoll: true })
 
     await vi.advanceTimersByTimeAsync(4999)
     expect(poll).not.toHaveBeenCalled()
@@ -164,7 +152,7 @@ describe('runDeviceCodeFlow', () => {
     ]
     const poll = vi.fn(async () => results.shift() as DevicePollResult)
     const signal = controller().signal
-    const p = runDeviceCodeFlow({ poll, expiresInSeconds: 30, signal })
+    const p = runDeviceCodeFlow({ poll, signal })
 
     // 服务器 interval 0.2s < minIntervalMs 1s → 抬升到 1s
     await vi.advanceTimersByTimeAsync(1000)

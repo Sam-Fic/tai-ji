@@ -5,7 +5,7 @@
  * - headerAction：本会话启用任务数徽标（空任务无数字）+ 入口可见性（hidden）——
  *   任务清单为空推 hidden=true（宿主渲染端整体不渲染该入口，与 disabled 灰置正交；
  *   声明侧静态形状由 core builtinContributions 承担），有任务推 false 恢复显示。
- *   刷新触发 = 写命令成功后的主动拉取 + 周期轮询 + onDidActivateSession 补充拉取
+ *   刷新触发 = 写命令成功后的主动重拉 + onDidActivateSession 补充拉取
  *   （「任务集合可能变化」的时点统一汇聚在 pushTreeAndBadge → pushHeaderAction
  *   出口，非写入驱动）；读失败态不重算 hidden（保持上次值，「读取中」语义）。
  *   入口点击由宿主渲染端直开 workflow-viz overlay 定时任务 tab（activation 声明驱动
@@ -20,19 +20,19 @@
  *   路径 → readSchedulerStore 一次 JSON.parse。读写两侧共用 extension-protocol
  *   store 模块（路径推导与文件形状构造性一致）。快照读取不依赖 pi 进程存活——
  *   dead/恢复中会话的任务列表照常可读。
- * - 刷新触发：任务库写入不产生会话 entry（无失效信号可订阅），改三通道——
- *   ① 写路径快照自检：操作前快照无该 id 时立即 scheduleRefresh 重拉（handleWrite E5）；
- *      写命令受理后不主动刷新，变更由 ② 收敛；
- *   ② 周期轮询（POLL_INTERVAL_MS，覆盖对话内 schedule tool 创建/删除与到点 dispatch
- *     的记账变化；非活跃会话无 pi 进程、快照不变，轮询读同一文件成本为一次小文件读）；
- *   ③ onDidActivateSession 补充拉取（切换会话即时刷新）。
+ * - 刷新触发：任务库写入不产生会话 entry（无失效信号可订阅），事件触发两通道——
+ *   ① 写路径快照自检 + 写后主动重拉：操作前快照无该 id 时立即 scheduleRefresh 重拉
+ *      （handleWrite E5）；写命令受理成功后主动重拉一次，面板收敛到新快照；
+ *   ② onDidActivateSession 补充拉取（切换会话即时刷新）。
+ *   对话内 schedule tool 创建/删除与到点 dispatch 的记账变化不由本面板感知
+ *   （周期轮询已退役）——切换会话或下次写操作后收敛。
  *
  * 写路径（设计 §3.3 D6）：三个动作（toggle/run/delete，overlay 树内 action-bar 按钮）
  * 只拼白名单子命令字面量 on|off|rm|run + 快照中存在的 8 位 hex id（快照无该 id →
  * TASK_NOT_FOUND 行内提示、不发命令，E5——防 /schedule 参数路由落空进创建分支，
  * §2.4 坑 3），经 sendMessage({requireCommand: 'schedule'}) 原子校验后发 /schedule 命令；
  * 回执 {accepted, reason?} 驱动行内 notice（E7/E14；运行态分支只看 accepted，reason 仅
- * 文案）。不乐观更新——快照由三通道刷新收敛（不撒谎）。
+ * 文案）。不乐观更新——快照由写后重拉与激活信号收敛（不撒谎）。
  *
  * 按钮灰置（E13，插件侧判定）：getCommands(sessionId) 查 'schedule' 命令名（纯查询）
  * → 未注册 = disabled + tooltip（宿主渲染端按 availability 三态合成 i18n tooltip，
@@ -47,7 +47,7 @@
  *
  * 生命周期：镜像挂点 = 会话首次需要徽标/列表时（ensureMirror 唯一入口；didCreate /
  * didActivate / 冷启动 list() 三来源汇聚于此）；会话销毁由 onDidDestroySession 拆订阅
- * 清镜像；轮询 timer 与 Worker 侧资源全部入 Disposable 由 runtime 清理族兜底。
+ * 清镜像；订阅句柄入 Disposable 由 runtime 清理族兜底。
  */
 import type { PluginContext } from '../../../packages/runtime/src/services/plugin-service/plugin-types.js'
 // 共享模块导入形态：**相对路径直指包源码**，不用裸包名（含 store 子出口）。
@@ -130,16 +130,6 @@ const HEADER_ACTION_ID = 'scheduler-manager.open'
 const MAX_TASKS = 50
 /** pi 侧 /schedule 扩展命令名（requireCommand 与 E13 判定同源） */
 const SCHEDULE_COMMAND_NAME = 'schedule'
-
-/** 快照刷新防抖合并窗口（ms）：写后连续触发合并成一次读取 */
-const READ_DEBOUNCE_MS = 200
-/**
- * 周期轮询间隔（ms）：任务库写入不产生会话 entry（无失效信号），轮询兜覆盖——
- * 对话内 schedule tool 创建/删除、到点 dispatch 记账、扩展侧任何快照落盘。
- * 读成本 = 一次会话元信息查询 + 一个小 JSON 文件读，10s 量级可忽略。
- * 导出供测试 import 复用（fake timers 推进量与生产节奏同源）。
- */
-export const POLL_INTERVAL_MS = 10_000
 
 const EMPTY_HINT =
   '本会话还没有定时任务 —— 在对话里说，或手敲 /schedule <排期> <内容> 创建。'
@@ -285,7 +275,6 @@ interface SessionMirror {
   sessionId: string
   /** 最近一次快照读取结果（数据唯一入口 = 任务库快照文件直读） */
   tasks: ScheduledTask[]
-  debounceTimer: ReturnType<typeof setTimeout> | null
   refreshInFlight: Promise<void> | null
   readFailure: ReadFailure | null
   /** E13 上次判定值：null = 未判定（首次缺省可点）；true/false = 上次 disabled 值（unknown 态保持） */
@@ -317,8 +306,6 @@ let focusSessionId: string | null = null
 function teardownMirror(sessionId: string): void {
   const mirror = mirrors.get(sessionId)
   if (!mirror) return
-  if (mirror.debounceTimer) clearTimeout(mirror.debounceTimer)
-  mirror.debounceTimer = null
   for (const d of mirror.disposables) {
     try {
       d.dispose()
@@ -340,7 +327,6 @@ function ensureMirror(api: Api, sessionId: string, sink: DisposableLike[]): Sess
   const mirror: SessionMirror = {
     sessionId,
     tasks: [],
-    debounceTimer: null,
     refreshInFlight: null,
     readFailure: null,
     commandDisabled: null,
@@ -353,15 +339,11 @@ function ensureMirror(api: Api, sessionId: string, sink: DisposableLike[]): Sess
   return mirror
 }
 
-/** 刷新触发 → 防抖合并 → 一次快照读取（写后主动 / 轮询 / 激活信号三通道共用出口）。 */
+/** 刷新触发（写路径 / 激活信号 / 镜像挂点共用出口）：立即读取，并发触发经 in-flight 复用。 */
 function scheduleRefresh(api: Api, sessionId: string): void {
   const mirror = mirrors.get(sessionId)
   if (!mirror) return
-  if (mirror.debounceTimer) clearTimeout(mirror.debounceTimer)
-  mirror.debounceTimer = setTimeout(() => {
-    mirror.debounceTimer = null
-    void refresh(api, sessionId)
-  }, READ_DEBOUNCE_MS)
+  void refresh(api, sessionId)
 }
 
 /** 并发触发共享一次读取（in-flight 复用） */
@@ -412,7 +394,7 @@ async function pushTreeAndBadge(api: Api, mirror: SessionMirror): Promise<void> 
   let tree: GuiComponent[]
   if (failure) {
     tree = [
-      { type: 'ansi-text', props: { lines: [`任务库读取失败：${failure.reason} —— 稍后自动重试；若持续失败请检查数据目录权限`] } },
+      { type: 'ansi-text', props: { lines: [`任务库读取失败：${failure.reason} —— 切换会话或下次操作后重试；若持续失败请检查数据目录权限`] } },
     ]
   } else {
     const tasks = mirror.tasks
@@ -540,8 +522,9 @@ async function handleWrite(
     if (receipt.accepted) {
       // 写成功：旧失败 notice 必须清掉再推——不清则下一次刷新会把陈旧
       // 「操作未生效」与已变更行一起重推（操作已生效却仍挂失败提示）。主动 push 让
-      // 清除立即可见（重复推送幂等）；数据不乐观更新，快照由轮询与激活信号刷新收敛。
+      // 清除立即可见（重复推送幂等）；数据不乐观更新，写后主动重拉一次收敛快照。
       await setNoticeAndPush(api, sessionId, null)
+      scheduleRefresh(api, sessionId)
       return
     }
     // 回执失败：reason 是诊断/文案，行为分支只看 accepted（E7 词表纪律）。
@@ -588,17 +571,6 @@ export async function activate(context: PluginContext): Promise<void> {
   )
   sink.push(api.sessions.onDidDestroySession((session) => teardownMirror(session.id)))
 
-  // 周期轮询（任务库写入无会话 entry 失效信号，轮询兜覆盖对话内创建/删除与到点记账）：
-  // 只轮询有镜像的会话；无镜像 = 从未需要徽标/列表，不主动建镜像（保持懒挂点语义）。
-  const pollTimer = setInterval(() => {
-    for (const mirror of mirrors.values()) {
-      refresh(api, mirror.sessionId)
-    }
-  }, POLL_INTERVAL_MS)
-  sink.push({
-    dispose: () => clearInterval(pollTimer),
-  })
-
   // 命令注册（id 与 builtinContributions 声明逐字一致；'.' 合法、':' 被
   // INVALID_COMMAND_ID 拒——复合键 = pluginId:commandId，声明/注册两端同串对上）。
   // toggle/run/delete 服务 overlay 定时任务 tab 树内 action-bar 写操作按钮；
@@ -630,5 +602,5 @@ export async function activate(context: PluginContext): Promise<void> {
     console.warn('[scheduler-manager] cold-start list() failed:', toMessage(e))
   }
 
-  console.log('[scheduler-manager] activated: headerAction + overlay tree consumer ready (task-store polling)')
+  console.log('[scheduler-manager] activated: headerAction + overlay tree consumer ready (event-driven refresh)')
 }

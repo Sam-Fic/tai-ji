@@ -116,22 +116,14 @@ function makeEngine(overrides: Partial<EnginePort> = {}): EnginePort {
   return { ...base, ...overrides };
 }
 
-/** 组合一个 server（缺省 clock 记录侧 + 内存 sink），返回全部观测点。 */
-function makeServer(engine = makeEngine(), reverseTimeoutMs?: number) {
+/** 组合一个 server（内存 sink），返回全部观测点。 */
+function makeServer(engine = makeEngine()) {
   const sink = makeSink();
-  const clockCalls: Array<{ op: string; id: string }> = [];
   const server = new EngineProtocolServer({
     write: sink.write,
     engine,
-    reverseClock: {
-      started: (id: string) => clockCalls.push({ op: "started", id }),
-      acked: (id: string) => clockCalls.push({ op: "acked", id }),
-      settled: (id: string) => clockCalls.push({ op: "settled", id }),
-      dispose: () => clockCalls.push({ op: "dispose", id: "-" }),
-    },
-    ...(reverseTimeoutMs !== undefined ? { reverseTimeoutMs } : {}),
   });
-  return { server, sink, engine, clockCalls };
+  return { server, sink, engine };
 }
 
 /** 发一帧请求并等对应 id 的应答帧（result/error 二选一）。 */
@@ -468,20 +460,14 @@ describe("run：协议载荷 → 本地 AgentCallOpts/RunContext", () => {
 // ── 反向请求客户端 ──
 
 describe("reverseRequest 客户端", () => {
-  it("帧形状（rev-N 单调 id + method/params）+ result 应答落位 + clock started/acked/settled", async () => {
-    const { server, sink, clockCalls } = makeServer();
+  it("帧形状（rev-N 单调 id + method/params）+ result 应答落位", async () => {
+    const { server, sink } = makeServer();
     const p1 = server.reverseRequest("host/log", { message: "hello" });
     const f1 = await sink.waitFor((f) => f.id === "rev-1" && f.method === "host/log", "rev-1");
     expect(f1.params).toEqual({ message: "hello" });
-    expect(clockCalls).toEqual([{ op: "started", id: "rev-1" }]);
 
     server.handleFrame({ id: "rev-1", result: { ok: true } });
     await expect(p1).resolves.toEqual({ ok: true });
-    expect(clockCalls).toEqual([
-      { op: "started", id: "rev-1" },
-      { op: "acked", id: "rev-1" },
-      { op: "settled", id: "rev-1" },
-    ]);
 
     // id 单调递增
     const p2 = server.reverseRequest("host/log", {});
@@ -503,25 +489,8 @@ describe("reverseRequest 客户端", () => {
     );
   });
 
-  it("缺省 60s 超时兜底：reject + clock.settled + 迟到应答不再落位（fake timers）", async () => {
-    vi.useFakeTimers();
-    try {
-      const { server, sink, clockCalls } = makeServer();
-      const p = server.reverseRequest("host/log", {});
-      expect(sink.frames).toHaveLength(1);
-      const assertion = expect(p).rejects.toThrow(/host\/log \(rev-1\) timed out after 60000ms/);
-      await vi.advanceTimersByTimeAsync(60_000);
-      await assertion;
-      expect(clockCalls).toContainEqual({ op: "started", id: "rev-1" });
-      expect(clockCalls).toContainEqual({ op: "settled", id: "rev-1" });
-      // 迟到应答：pending 已清理 → 无副作用
-      const before = sink.frames.length;
-      server.handleFrame({ id: "rev-1", result: { ok: true } });
-      expect(sink.frames).toHaveLength(before);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+  //（原「缺省 60s 超时兜底」用例已随反向请求应答计时删除——等待无时间上界，
+  // 迟到应答由 pending 表的 id 关联自弃。）
 
   it("run 期间反向请求 error 应答 → warnReverseFailure 留痕不断流：onDelta 失败只降级该次上报，run 终态照常", async () => {
     const logs: Array<{ level: string; component: string; message: string }> = [];
@@ -570,30 +539,18 @@ describe("reverseRequest 客户端", () => {
     }
   });
 
-  it("write 同步抛错（stdout 已关）：就地收尾 reject + clock.settled + pending 清理（异常不逃出 executor）", async () => {
-    const clockCalls: Array<{ op: string; id: string }> = [];
+  it("write 同步抛错（stdout 已关）：就地收尾 reject + pending 清理（异常不逃出 executor）", async () => {
     const throwingWrite = vi.fn(() => {
       throw new Error("EPIPE: stdout closed");
     });
     const server = new EngineProtocolServer({
       write: throwingWrite,
       engine: makeEngine(),
-      reverseClock: {
-        started: (id: string) => clockCalls.push({ op: "started", id }),
-        acked: (id: string) => clockCalls.push({ op: "acked", id }),
-        settled: (id: string) => clockCalls.push({ op: "settled", id }),
-        dispose: () => clockCalls.push({ op: "dispose", id: "-" }),
-      },
     });
 
     await expect(server.reverseRequest("host/log", { message: "bye" })).rejects.toThrow(
       /reverse request host\/log \(rev-1\) could not be written: EPIPE/,
     );
-    // started 已记、write 抛错后 settled 收尾（无 acked）；pending 条目已随 reject 清理
-    expect(clockCalls).toEqual([
-      { op: "started", id: "rev-1" },
-      { op: "settled", id: "rev-1" },
-    ]);
     expect(throwingWrite).toHaveBeenCalledTimes(1);
   });
 });

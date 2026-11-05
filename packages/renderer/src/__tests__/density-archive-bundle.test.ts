@@ -44,7 +44,6 @@ import * as events from '@taiji/core/transport/api'
 import { useSidebar } from '@/composables/features/sidebar/useSidebar'
 import { useSessionStore } from '@/stores/session'
 import type { ServerMessage } from '@taiji/shared'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../../../core/src/transport/api/pending'
 
 // ── useSidebar 节的 '@/api' 窄 mock（features 层调用 api 域；该节只验订阅链路，把 api 域
 //    mock 成 no-op，订阅走真实的 @taiji/core/transport/api）。makeSummary 须留在模块级：
@@ -710,8 +709,10 @@ describe('ArchiveListView（archive-list-view 合并节）', () => {
     })
 
     it('批量清理两段确认：首击进确认态（完整文案防误触）不 emit；再击 emit purgeBatch 携带可见条目', async () => {
-      const entries = makeFourBuckets().filter((a) => a.sessionId === 'arc-older')
-      const wrapper = mountList(makeFourBuckets())
+      // 快照数组只构造一次复用（hoursAgo 依赖 Date.now()，两次构造毫秒不同会破坏 toEqual 比对）
+      const buckets = makeFourBuckets()
+      const entries = buckets.filter((a) => a.sessionId === 'arc-older')
+      const wrapper = mountList(buckets)
       await wrapper.find('[data-testid="archive-filter-older"]').trigger('click')
       const btn = wrapper.find('[data-testid="archive-batch-purge-btn"]')
 
@@ -881,56 +882,32 @@ function envelopeMsg(type: string, id: string, payload: Record<string, unknown>)
 }
 
 /**
- * 注册并立即吞掉终态 rejection——本节多数用例只观察 map/timer 状态，
+ * 注册并立即吞掉终态 rejection——本节多数用例只观察 map 状态，
  * 不 await 各 promise 结果；驱逐/rejectAll 触发的 reject 若无 handler 会报 unhandled rejection。
  */
-function registerSwallowed(id: string, timeoutMs: number): void {
-  pending.register(id, timeoutMs).catch(() => {})
+function registerSwallowed(id: string): void {
+  pending.register(id).catch(() => {})
 }
 
-describe('pending 容量上限 + 共享 sweep timer（Q1-5）', () => {
+describe('pending 容量上限（Q1-5）', () => {
   beforeEach(() => {
-    vi.useFakeTimers()
     pending.rejectAll(new Error('setup cleanup'))
   })
 
   afterEach(() => {
     pending.rejectAll(new Error('teardown cleanup'))
-    vi.useRealTimers()
-  })
-
-  it('N 个 pending 只挂 1 个共享 sweep timer（无 per-request timer 泄漏）', () => {
-    expect(vi.getTimerCount()).toBe(0)
-
-    for (let i = 0; i < 100; i++) {
-      registerSwallowed(pending.createCommandId(), 60_000)
-    }
-    // 100 个 pending：全部共享 1 个指向最近 deadline 的 timer
-    expect(vi.getTimerCount()).toBe(1)
-
-    // 更早 deadline 的新请求加入 → 仍是 1 个（重挂到更近的 deadline）
-    registerSwallowed(pending.createCommandId(), 1_000)
-    expect(vi.getTimerCount()).toBe(1)
-
-    // sweep 到期批量 reject 过期条目（1s 的那个）后，剩余条目仍有 timer 在管
-    vi.advanceTimersByTime(1_000)
-    expect(vi.getTimerCount()).toBe(1)
-
-    // rejectAll 清空 map → timer 一并清除
-    pending.rejectAll(new Error('cleanup'))
-    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('被驱逐 id 的迟到 error envelope 经 resolveEnvelope 静默丢弃（对称路径：error type 不抛错不误伤其他请求）', async () => {
     const victim = pending.createCommandId()
-    const victimPromise = pending.register(victim, 60_000)
+    const victimPromise = pending.register(victim)
     // 填满至 256
     for (let i = 0; i < 255; i++) {
-      registerSwallowed(pending.createCommandId(), 60_000)
+      registerSwallowed(pending.createCommandId())
     }
     // 下一个注册驱逐 victim（最老）
     const newcomer = pending.createCommandId()
-    const pNew = pending.register<string>(newcomer, 60_000)
+    const pNew = pending.register<string>(newcomer)
 
     await expect(victimPromise).rejects.toMatchObject({ code: 'overflow' })
 
@@ -957,7 +934,7 @@ describe('pending.rejectAll', () => {
     pending.rejectAll(new Error('first batch'))
 
     const id = pending.createCommandId()
-    const p = pending.register<string>(id, RPC_BACKSTOP_TIMEOUT_MS)
+    const p = pending.register<string>(id)
     pending.resolve(id, 'new value')
 
     await expect(p).resolves.toBe('new value')
@@ -965,7 +942,7 @@ describe('pending.rejectAll', () => {
 
   it('rejectAll 透传 error 对象（含 code 等附加属性的场景）', async () => {
     const id = pending.createCommandId()
-    const p = pending.register<string>(id, RPC_BACKSTOP_TIMEOUT_MS)
+    const p = pending.register<string>(id)
 
     const customError = Object.assign(new Error('runtime crashed'), { code: 'E_RUNTIME' })
     pending.rejectAll(customError)

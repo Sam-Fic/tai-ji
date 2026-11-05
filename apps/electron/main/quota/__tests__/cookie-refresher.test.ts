@@ -1,14 +1,15 @@
 /**
  * cookie-refresher 单测（隐藏窗口 cookie 刷新器）。
  *
- * 覆盖（任务验收条款）：
+ * 覆盖（任务验收条款；周期轮询/超时等待已随时间机制清查删除，登录页判定改为 URL 事实
+ * 确证的确定性收尾）：
  * - 导航白名单 / 登录页判定 / cookie 域过滤三个纯函数的边界
  * - 种 cookie：secrets 文件存在 → cookies.set 逐对种入；文件缺失 → 零种入
- * - API 轮询成功路径：200 → 导出目标域 cookie 串随返回值回传 + secrets 文件零写入
- *   断言（main 不落盘——单写方 = runtime QuotaService，renderer 走 quota.configure
- *   保存链落盘）
- * - 登录页转可见路径：登录页停留 5s → win.show() + 超时放宽 120s；登录完成恢复成功
- * - 超时失败路径：15s 无 200 → ok:false；转可见后 120s 未登录 → 放宽超时生效
+ * - API 探测成功路径（事件驱动）：页面就绪事件 + 探测 200 → 导出目标域 cookie 串随
+ *   返回值回传 + secrets 文件零写入断言（main 不落盘——单写方 = runtime QuotaService，
+ *   renderer 走 quota.configure 保存链落盘）
+ * - 登录页确定性收尾：URL 命中登录页特征 → show() + ok:false("login required") +
+ *   destroy（Promise 落定不悬挂，收尾后同 provider 可重新发起）
  * - 同 provider 重入去重：返回同一 Promise、只开一个窗口
  * - IPC 注册（quota:refresh-cookie）：payload 校验 / 转发 / 注册幂等
  *
@@ -47,6 +48,9 @@ const fake = vi.hoisted(() => {
     private listeners = new Map<string, Array<(...args: unknown[]) => void>>()
     on(event: string, fn: (...args: unknown[]) => void): void {
       this.listeners.set(event, [...(this.listeners.get(event) ?? []), fn])
+    }
+    removeListener(event: string, fn: (...args: unknown[]) => void): void {
+      this.listeners.set(event, (this.listeners.get(event) ?? []).filter((f) => f !== fn))
     }
     emit(event: string, ...args: unknown[]): void {
       for (const fn of this.listeners.get(event) ?? []) fn(...args)
@@ -214,6 +218,9 @@ function seedSessionCookie(): void {
 function makeApiOk(win: FakeWindow): void {
   win.webContents.url = CONSOLE_URL
   fake.state.execImpl = async () => 200
+  // 事件驱动探测：状态就绪后发一次 load 事件触发重探（若首探已在就绪态发出则此发为冗余，
+  // settled 去重无害）
+  win.webContents.emit('did-finish-load')
 }
 
 /** 造就绪态 = makeApiOk + 服务端种会话 cookie。 */
@@ -328,7 +335,7 @@ describe('refreshQuotaCookie：种 cookie', () => {
   })
 })
 
-describe('refreshQuotaCookie：API 轮询成功路径', () => {
+describe('refreshQuotaCookie：API 探测成功路径', () => {
   it('200 → 导出串回传 + 窗口形态（隐藏 / 双隔离 / persist session）+ 弹窗 deny + destroy 收尾', async () => {
     const { result, win } = await refreshAndReady('p-ok')
     expect(await result).toEqual({ ok: true, cookie: 'sid=refreshed' })
@@ -399,7 +406,7 @@ describe('refreshQuotaCookie：API 轮询成功路径', () => {
 })
 
 describe('refreshQuotaCookie：loadURL 中断处理', () => {
-  it('ERR_ABORTED(-3)（SSO 链页面自导航打断初始加载）→ 放行进轮询，API 200 仍成功', async () => {
+  it('ERR_ABORTED(-3)（SSO 链页面自导航打断初始加载）→ 放行进事件驱动探测，API 200 仍成功', async () => {
     fake.state.loadUrlImpl = async (url, win) => {
       // 复现真机形态：平台页 JS 跳 genLoginUrl 打断 loadURL（Electron 以 ABORTED reject）
       win.webContents.url = `${url}/api/v1/genLoginUrl`
@@ -428,109 +435,46 @@ describe('refreshQuotaCookie：loadURL 中断处理', () => {
   })
 })
 
-describe('refreshQuotaCookie：登录页转可见路径', () => {
-  it('登录页停留 5s → win.show() + 超时放宽；登录完成（离开登录页 + 200）恢复成功', async () => {
-    vi.useFakeTimers()
-    try {
-      const result = refreshQuotaCookie(
-        { fetcherId: 'mimo', providerId: 'p-login' },
-        { dataDir: () => tmpDir },
-      )
-      const win = await windowOf(result)
-      // SSO 把页面重定向到小米登录页，API 恒 401（exec 缺省）
-      win.webContents.url = LOGIN_URL
+describe('refreshQuotaCookie：登录页确定性收尾', () => {
+  it('页面停在登录域（无后续导航事件）→ show() + ok:false("login required") + destroy，Promise 落定不悬挂', async () => {
+    const result = refreshQuotaCookie(
+      { fetcherId: 'mimo', providerId: 'p-login' },
+      { dataDir: () => tmpDir },
+    )
+    const win = await windowOf(result)
+    // SSO 把页面重定向到小米登录页并停住：API 恒 401（exec 缺省）、无后续导航事件——
+    // 删时间窗后唯一无收尾的形态，靠登录页 URL 事实确定性收尾
+    win.webContents.url = LOGIN_URL
+    win.webContents.emit('did-finish-load')
 
-      // 停留不满 5s（SSO 过境窗口）：不转可见（loginSince 从首个命中轮起算，
-      // 最晚 t=1000，4999ms 处最多停留 3999ms）
-      await vi.advanceTimersByTimeAsync(4_999)
-      expect(win.shown).toBe(false)
-
-      // 满 5s（推进到 6999ms，覆盖 show 判定的最早与最晚边界轮次）：转可见
-      await vi.advanceTimersByTimeAsync(2_000)
-      expect(win.shown).toBe(true)
-
-      // 推进到 ~22s（> 无交互总超时 15s）仍未终局 = 放宽生效的直接证据
-      await vi.advanceTimersByTimeAsync(15_000)
-
-      // 用户完成登录：跳回 console + API 放行 + 服务端种会话 cookie；再推进一轮让轮询取到新状态
-      makeReady(win)
-      await vi.advanceTimersByTimeAsync(2_000)
-      expect(await result).toEqual({ ok: true, cookie: 'sid=refreshed' })
-      expect(win.destroyed).toBe(true)
-    } finally {
-      vi.useRealTimers()
-    }
+    const settled = await result
+    expect(settled).toEqual({ ok: false, error: 'login required' })
+    // 转可见提示（登录态失效对用户可见）+ 成败都 destroy 收尾（无隐藏窗口泄漏）
+    expect(win.shown).toBe(true)
+    expect(win.destroyed).toBe(true)
   })
 
-  it('登录页离开后停留计时重置：过境 <5s 不误判转可见', async () => {
-    vi.useFakeTimers()
-    try {
-      const result = refreshQuotaCookie(
-        { fetcherId: 'mimo', providerId: 'p-transit' },
-        { dataDir: () => tmpDir },
-      )
-      const win = await windowOf(result)
-      // SSO 链路过境登录域 3s 后跳达 console
-      win.webContents.url = LOGIN_URL
-      await vi.advanceTimersByTimeAsync(3_000)
-      win.webContents.url = CONSOLE_URL
-      await vi.advanceTimersByTimeAsync(3_000)
-      expect(win.shown).toBe(false)
+  it('登录页失败收尾后同 provider 再刷新重新执行（inflight 槽释放，续期不再被静默拦截）', async () => {
+    const first = refreshQuotaCookie(
+      { fetcherId: 'mimo', providerId: 'p-retry' },
+      { dataDir: () => tmpDir },
+    )
+    const win1 = await windowOf(first)
+    win1.webContents.url = LOGIN_URL
+    win1.webContents.emit('did-finish-load')
+    expect(await first).toEqual({ ok: false, error: 'login required' })
 
-      makeReady(win)
-      await vi.advanceTimersByTimeAsync(2_000)
-      expect(await result).toEqual({ ok: true, cookie: 'sid=refreshed' })
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-})
-
-describe('refreshQuotaCookie：超时失败路径', () => {
-  it('无登录交互：15s 内 API 未 200 → ok:false + destroy', async () => {
-    vi.useFakeTimers()
-    try {
-      const result = refreshQuotaCookie(
-        { fetcherId: 'mimo', providerId: 'p-timeout' },
-        { dataDir: () => tmpDir },
-      )
-      const win = await windowOf(result)
-      win.webContents.url = CONSOLE_URL // 不命中登录页，exec 恒 401（缺省）
-
-      await vi.advanceTimersByTimeAsync(20_000)
-      const settled = await result
-      expect(settled.ok).toBe(false)
-      expect(settled.cookie).toBeUndefined()
-      expect(settled.error).toContain('timed out')
-      expect(win.destroyed).toBe(true)
-      expect(win.shown).toBe(false)
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('转可见后 120s 未完成登录 → 放宽超时生效（若未放宽会在 15s 失败且文案不同）', async () => {
-    vi.useFakeTimers()
-    try {
-      const result = refreshQuotaCookie(
-        { fetcherId: 'mimo', providerId: 'p-login-timeout' },
-        { dataDir: () => tmpDir },
-      )
-      const win = await windowOf(result)
-      win.webContents.url = LOGIN_URL
-      // 推进过 5s 停留阈值（覆盖 loginSince 首个命中轮的最早/最晚交错：t=5000 或 6000）
-      await vi.advanceTimersByTimeAsync(7_000)
-      expect(win.shown).toBe(true)
-
-      await vi.advanceTimersByTimeAsync(130_000)
-      const settled = await result
-      expect(settled.ok).toBe(false)
-      // 放宽超时的失败文案（120s 登录窗口），区别于 15s API 轮询超时
-      expect(settled.error).toContain('login not completed within 120s')
-      expect(win.destroyed).toBe(true)
-    } finally {
-      vi.useRealTimers()
-    }
+    // 第二轮不再是登录页（登录态修复形态）→ 正常成功；两轮各开一窗证明首轮已收尾、
+    // inflight 表已清（渲染端 cookieRefreshDedup 同语义：settle 即清可重试）
+    const second = refreshQuotaCookie(
+      { fetcherId: 'mimo', providerId: 'p-retry' },
+      { dataDir: () => tmpDir },
+    )
+    expect(second).not.toBe(first)
+    makeReady(await windowOf(second))
+    expect(await second).toEqual({ ok: true, cookie: 'sid=refreshed' })
+    expect(fake.FakeBrowserWindow.instances).toHaveLength(2)
+    expect(win1.destroyed).toBe(true)
   })
 })
 

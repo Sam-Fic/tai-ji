@@ -9,7 +9,7 @@
  * 失效键（SessionSummary 随扫描刷新），最简正确口径。读失败不缓存（下次悬停重试），
  * renderer 收 null 显示占位（计数段不渲染，不闪 0）。
  */
-import { command, RPC_BACKSTOP_TIMEOUT_MS } from '@taiji/core/transport/api'
+import { command } from '@taiji/core/transport/api'
 import { createInflightDedup } from '@taiji/core/foundation/create-inflight-dedup'
 
 /** 拉取目标的最小形状 = SessionItemSession 的 id + lastActiveAt 派生视图（函数签名内联对象类型——单实现无接口抽象） */
@@ -37,7 +37,7 @@ export function fetchSessionMessageCount(target: { id: string; lastActiveAt: num
   if (cached && cached.lastActiveAt === target.lastActiveAt) return Promise.resolve(cached.count)
   const { promise } = inflightFetches.run(target.id, async () => {
     try {
-      const reply = await command('session.getMessageCount', { sessionId: target.id }, RPC_BACKSTOP_TIMEOUT_MS)
+      const reply = await command('session.getMessageCount', { sessionId: target.id })
       messageCountCache.set(target.id, { count: reply.count, lastActiveAt: target.lastActiveAt })
       return reply.count
     } catch {

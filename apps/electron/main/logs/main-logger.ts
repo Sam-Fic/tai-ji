@@ -3,8 +3,8 @@
  *
  * [HISTORICAL] 背景（E3 事故取证缺口）：main 是四层进程中生命周期最长的进程，但打包版
  * stdout 无人收集、main 的 console 无落盘通道——renderer 崩溃（render-process-gone）、
- * main 侧决策、内存水位全部无痕。本模块显式新建 main 落盘通道，写
- * `logs/main-<date>.log`，承接：main 内存水位（5min 定时器）、render-process-gone 详情
+ * main 侧决策全部无痕。本模块显式新建 main 落盘通道，写
+ * `logs/main-<date>.log`，承接：render-process-gone 详情
  * （u3 消费）、renderer-log IPC 转发落盘（u2 消费）。
  *
  * 设计：**对齐 packages/runtime/src/infra/logger.ts 的 date+size 双策略轮转惯例**
@@ -20,7 +20,7 @@
  *
  * 未 initMainLogger 时全部写入 no-op（单元测试不依赖文件系统、无副作用）。
  *
- * 消费者：main.ts（init + 水位 + before-quit flush）· u2 renderer-log-handler ·
+ * 消费者：main.ts（init + before-quit flush）· u2 renderer-log-handler ·
  * u3 render-process-gone 落盘 · supervisor/process-control.ts（size 帽常量复用）。
  */
 import { createWriteStream, mkdirSync, renameSync, statSync, type WriteStream } from 'node:fs'
@@ -41,8 +41,6 @@ function parseLevel(env: string | undefined, fallback: MainLogLevel): MainLogLev
 // ── 轮转常量（对齐 runtime logger：TAIJI_LOG_MAX_BYTES / TAIJI_LOG_LEVEL 同名 env 旋钮）──
 const BYTES_PER_KB = 1024
 const DEFAULT_MAX_FILE_MB = 50
-const SECONDS_PER_MINUTE = 60
-const MS_PER_SECOND = 1000
 /** ISO 日期 YYYY-MM-DD 的字符长度。 */
 const ISO_DATE_LENGTH = 10
 
@@ -78,11 +76,6 @@ const pendingLines: Array<{ line: string; bytes: number }> = []
 const MAX_PENDING_LINES = 10_000
 /** 当前轮转窗口内因超限丢弃的行数（轮转结束后合并记一次 warn）。 */
 let pendingDroppedCount = 0
-/** endAndAwait 等待 'close' 的超时：fs 挂起时降级 resolve + 强制销毁流（对齐 runtime 5s）。 */
-const END_AWAIT_TIMEOUT_MS = 5_000
-
-/** 内存水位定时器句柄（stopMemoryWatermarkTimer 用）。 */
-let watermarkTimer: ReturnType<typeof setInterval> | undefined
 /** 保留期清理定时器的 stop 函数（closeMainLogger 用；startLogRetentionTimer 返回值）。 */
 let stopRetention: (() => void) | undefined
 
@@ -111,7 +104,6 @@ export function initMainLogger(options: MainLoggerInitOptions = {}): void {
   currentLevel = parseLevel(process.env.TAIJI_LOG_LEVEL, options.isPackaged ? 'info' : 'debug')
   runLogRetentionNow()
   stopRetention = startLogRetentionTimer()
-  startMemoryWatermarkTimer()
   writeLogEntry('info', '[main-logger] initialized', { level: currentLevel, dir: logsDir })
 }
 
@@ -123,7 +115,6 @@ export function initMainLogger(options: MainLoggerInitOptions = {}): void {
  * 正常 quit 路径不丢）。幂等：close 后写入/再次 close 均 no-op。
  */
 export async function closeMainLogger(): Promise<void> {
-  stopMemoryWatermarkTimer()
   stopRetention?.()
   stopRetention = undefined
   if (rotationInFlight) await rotationInFlight
@@ -159,42 +150,6 @@ export const mainLogger = {
   error(message: string, meta?: Record<string, unknown>): void {
     writeLogEntry('error', message, meta)
   },
-}
-
-// ── 内存水位定时器（D6-② main 侧）────────────────────────────────
-
-/** 水位打点间隔：5 分钟（设计 D6-② 定值）。 */
-const MEMORY_WATERMARK_INTERVAL_MINUTES = 5
-const MS_PER_MINUTE = SECONDS_PER_MINUTE * MS_PER_SECOND
-const MEMORY_WATERMARK_INTERVAL_MS = MEMORY_WATERMARK_INTERVAL_MINUTES * MS_PER_MINUTE
-
-/**
- * 挂 main 内存水位定时器：每 5 分钟一行 process.memoryUsage() 进 main log。
- *
- * 验收形态：`[ISO] [INFO] [main] memory watermark {"rss":...,"heapUsed":...,
- * "heapTotal":...,"external":...}`——崩溃取证（G5）回答「崩前内存水位」的数据源。
- * initMainLogger 时自动挂载（dev/prod 同频——水位是取证基线不是调试项）。
- */
-export function startMemoryWatermarkTimer(): () => void {
-  if (!currentLevel || watermarkTimer) return () => {} // 未 init / 已挂载：no-op
-  watermarkTimer = setInterval(() => {
-    const mem = process.memoryUsage()
-    mainLogger.info('[main] memory watermark', {
-      rss: mem.rss,
-      heapUsed: mem.heapUsed,
-      heapTotal: mem.heapTotal,
-      external: mem.external,
-    })
-  }, MEMORY_WATERMARK_INTERVAL_MS)
-  watermarkTimer.unref?.()
-  return stopMemoryWatermarkTimer
-}
-
-function stopMemoryWatermarkTimer(): void {
-  if (watermarkTimer) {
-    clearInterval(watermarkTimer)
-    watermarkTimer = undefined
-  }
 }
 
 // ── 写入核心（对齐 runtime logger writeLogEntry / rotateMain / openMainStream）──
@@ -269,7 +224,7 @@ function rotateMain(nextToday: string, renameOld: boolean): Promise<void> {
   mainStreamFile = undefined
   mainBytesWritten = 0
   rotationInFlight = (async () => {
-    if (oldStream) await endAndAwait(oldStream, `main-rotation:${oldFile ?? 'unnamed'}`)
+    await endAndAwait(oldStream, `main-rotation:${oldFile ?? 'unnamed'}`)
     if (renameOld && oldFile) {
       try {
         renameSync(oldFile, `${oldFile}.1`)
@@ -354,33 +309,28 @@ function existsSyncSafe(path: string): boolean {
 
 /**
  * end 写流并等真正关闭（'close'：fd 已释放、缓冲已 flush）。rename 前必须有「无在途
- * 写」保证。永不 reject；超时降级 resolve + 强制销毁流（防 fs 挂起时轮转/退出永久挂起）。
- * 对齐 runtime endAndAwait（含超时 destroy 与 timer.unref 语义）。
+ * 写」保证——end() 后立即 destroy() 会中止 open/flush 流程（文件可能尚未创建、缓冲
+ * 丢弃），紧随的 renameSync ENOENT 被吞后滚动永久丢失（2026-11-05 CI 实测）。永不
+ * reject；等待本身是事件驱动的顺序约束（close 回调），无超时降级——fs 挂起时轮转
+ * 挂起为 ADR-0188 裁决接受的代价（原 5s 超时降级随时间阈值机制删除退役）。
+ * 对齐 runtime stream-end-await.ts（含 once 链清理语义）。
  */
 function endAndAwait(stream: WriteStream | undefined, label: string): Promise<void> {
-  if (!stream) return Promise.resolve()
-  if (stream.closed) return Promise.resolve()
+  void label
+  if (!stream || stream.closed) return Promise.resolve()
   if (!stream.writableEnded) stream.end()
-  if (stream.closed) return Promise.resolve()
+  if (stream.closed) return Promise.resolve() // 同步关闭路径（如测试用 fake 流）
   return new Promise<void>((resolve) => {
     let settled = false
-    const finish = (timedOut: boolean): void => {
+    const finish = () => {
       if (settled) return
       settled = true
-      clearTimeout(timer)
       stream.removeListener('close', onClose)
       stream.removeListener('error', onError)
-      if (timedOut) {
-        // 强制销毁释放 fd：不销毁则 fd 悬挂、'close' 永不触发（对齐 runtime 审查 W30 Fix-1）
-        stream.destroy()
-        writeLogEntry('error', `[main-logger] endAndAwait timeout after ${END_AWAIT_TIMEOUT_MS}ms (${label}); stream force-destroyed, in-flight buffer tail lost`)
-      }
       resolve()
     }
-    const onClose = (): void => finish(false)
-    const onError = (): void => finish(false)
-    const timer = setTimeout(() => finish(true), END_AWAIT_TIMEOUT_MS)
-    timer.unref?.()
+    const onClose = () => finish()
+    const onError = () => finish()
     stream.once('close', onClose)
     stream.once('error', onError)
   })

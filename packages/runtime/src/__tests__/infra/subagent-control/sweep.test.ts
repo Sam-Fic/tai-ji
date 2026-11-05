@@ -233,7 +233,6 @@ describe('孤儿引擎 pid 收割（owner runtime 死 → 立即组杀）', () =
       killProcessTree: (pid) => {
         killedPids.push(pid)
       },
-      killConfirmTimeoutMs: 0,
     })
 
     expect(killedPids).toEqual([orphanEnginePid]) // 只组杀 owner 已死的活引擎
@@ -271,7 +270,6 @@ describe('owner 判活加固（条目 65：pid + start time 二元组防 pid 复
       killProcessTree: (pid) => {
         killedPids.push(pid)
       },
-      killConfirmTimeoutMs: 0,
     })
 
     expect(killedPids).toEqual([orphanEnginePid]) // 误判消除：owner 判死 → 收割孤儿引擎
@@ -401,9 +399,9 @@ describe('pid 判据与失败语义（m-rt-3 / m-rt-4）', () => {
     //   的降级判据（actual <= floor(spawnedAt/1000)）翻转成「pid 已复用」误删档；
     // ② 探活与断言之间的间隙被 CPU 抢占拉长。
     // 「kill 未杀灭」前提改由注入桩表达：owner 判死 / 引擎判活（恒真桩需按 pid 区分，
-    // 否则 ownerRuntimeAlive 提前跳过）、start time 固定同秒、kill 空操作、确认窗 0
-    // （waitForProcessDeath 立即判超时 = 未死）。决策逻辑「确认窗过后仍活 → 保留」
-    // 纯同步可断言；真进程 kill 失败路径的端到端验收由 CI-only 冒烟承接（todo 文档 1.2 节）。
+    // 否则 ownerRuntimeAlive 提前跳过）、start time 固定同秒、kill 空操作、存活恒真
+    // （kill 后单次判定仍活）。决策逻辑「kill 后仍活 → 保留」纯同步可断言；
+    // 真进程 kill 失败路径的端到端验收由 CI-only 冒烟承接（todo 文档 1.2 节）。
     const dataDir = await makeTmpDir('ctl-pid-killfail-')
     tmpDirs.push(dataDir)
     const enginesDir = getControlEnginesDir(dataDir)
@@ -421,7 +419,6 @@ describe('pid 判据与失败语义（m-rt-3 / m-rt-4）', () => {
       isPidAlive: (pid) => pid === enginePid, // owner 死 / 引擎活（kill 未杀灭前提）
       getProcessStartTimeSec: () => 1_000, // 固定同秒：通过身份判定，无跨秒翻转
       killProcessTree: () => {},
-      killConfirmTimeoutMs: 0, // 确认窗零等待：立即判「仍活」
     })
     expect(existsSync(pidFile)).toBe(true) // 未能杀灭 → 保留供下次 sweep
   })
@@ -489,7 +486,6 @@ describe('旧 relay-children pid 残片收割（S-13：判定链复用引擎收�
       killProcessTree: (pid) => {
         killedPids.push(pid)
       },
-      killConfirmTimeoutMs: 0,
     })
 
     expect(killedPids).toEqual([orphanPid]) // 只杀身份核实的孤儿
@@ -534,9 +530,13 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
       }))
 
       try {
-        // 全缺省依赖：真实探活 + 真实 start time（ps）+ 真实 kill 进程树 + 真实确认窗
+        // 全缺省依赖：真实探活 + 真实 start time（ps）+ 真实 kill 进程树。
+        // 终态（ADR-0188 无有界复核窗）：单次 kill 后立即探活不可靠（信号异步生效，
+        // 探活几乎必然 alive）→ pidFile 保留；下一轮 sweep 对已死 pid 重杀 no-op 后
+        // 探活翻死，确认 + 删档在第二轮完成。
         await sweepOrphanEnginePids(dataDir)
         await waitFor(() => !isPidAlive(enginePid), 'orphan engine reaped by real kill')
+        await sweepOrphanEnginePids(dataDir)
         expect(existsSync(pidFile)).toBe(false)
       } finally {
         engine.kill('SIGKILL')

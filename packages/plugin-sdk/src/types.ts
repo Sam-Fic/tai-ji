@@ -25,7 +25,7 @@
  * GuiComponent 的 GUI 协议段单源关系保留。
  */
 
-import type { GuiComponent } from '@zhushanwen/extension-protocol'
+import type { GuiComponent, WidgetMeta } from '@zhushanwen/extension-protocol'
 
 // sendMessage 回执 reason 词表单点 = @taiji/shared（msg-pipeline-debloat D4-6：原五处
 // 手写词表归一；shared 与本包同为 private workspace 包，无 npm 发布链）。
@@ -756,14 +756,6 @@ export interface ToolRegistration {
   name: string
   description: string
   parameters: Record<string, unknown>
-  /**
-   * 工具执行超时声明（毫秒，D1 声明通道）：
-   * - >0 — 该工具单次执行的时间上界；
-   * - <=0 或 Infinity — 显式 opt-out（不限时）；
-   * - 非法值（非 number / NaN）— 注册入口 fail-fast（INVALID_TIMEOUT_MS）；
-   * - 缺省 — 回落 DEFAULT_TOOL_EXECUTE_TIMEOUT_MS（tool-timeout 默认兜底）。
-   */
-  timeoutMs?: number
   /** Worker 侧本地执行 handler，在 createToolApi 注册时存储 */
   execute?: ToolExecuteHandler
 }
@@ -776,23 +768,6 @@ export interface ToolEntry {
 }
 
 // ── Phase 2: Hook 注册表条目 ──────────────────────────────────────────
-
-/**
- * @proposed — UI dialog 超时选项（ctx.ui.showConfirm/showSelect/showInput 末位 opts，
- * timeout-plugin-service D2）。
- *
- * `timeout` 语义 = 从调用到拿到结果的最长全程等待（毫秒），**含串行排队时间**——
- * 排队也是插件在等，从请求方视角计时。缺省/非法值回落默认 30min（等人工裁决值）；
- * 无 opt-out（「等人工」不允许无界等待——串行队列 head-of-line 阻塞）。
- *
- * 到期行为 = 取消非替答：弹窗在前端撤回（plugin:uiRequestExpired 广播），本调用
- * reject `Error`（`code: 'UI_TIMEOUT'`），插件可 catch 后自行决策（重发提问 / 放弃
- * 操作）；超时不是用户的否定回答。
- */
-export interface UiDialogOptions {
-  /** 全程等待上界（毫秒，含排队）。>0 合法；缺省/非法回落默认 30min。 */
-  timeout?: number
-}
 
 /** @internal — runtime 内部：Hook 注册表条目（主线程侧） */
 export interface HookEntry {
@@ -880,13 +855,12 @@ export interface Phase2AgentAPI extends Phase1AgentAPI {
   }
   readonly ui: {
     /**
-     * 弹窗类三方法（dialog）带末位 `opts`（UiDialogOptions.timeout，全程含排队，
-     * 缺省 30min）；到期取消非替答：reject `UI_TIMEOUT` + 前端撤窗，可重发。
-     * notify 纯展示类无等待语义，不设 opts。
+     * 弹窗类三方法（dialog）无时限：等待挂到用户响应 / 插件卸载（卸载时在途
+     * 请求被收尾 reject）。notify 纯展示类无等待语义。
      */
-    showSelect(title: string, options: string[], opts?: UiDialogOptions): Promise<string | undefined>
-    showConfirm(title: string, message: string, opts?: UiDialogOptions): Promise<boolean>
-    showInput(title: string, defaultValue?: string, opts?: UiDialogOptions): Promise<string | undefined>
+    showSelect(title: string, options: string[]): Promise<string | undefined>
+    showConfirm(title: string, message: string): Promise<boolean>
+    showInput(title: string, defaultValue?: string): Promise<string | undefined>
     notify(level: 'info' | 'warn' | 'error', message: string): Promise<void>
     /**
      * [AP-1/u5b] headerAction 可变字段更新：sessionId 必填（徽标是 per-session 语义）；
@@ -961,8 +935,18 @@ export interface Phase2AgentAPI extends Phase1AgentAPI {
      * `{ sessionId }` 会话域（内容绑打开时所在会话，runtime 定向投递该会话）；
      * `{ mountId }` 全局域（Provider 页等无会话挂载位，如 'provider.authorize'——
      * 分区键自动并入本插件 id，多插件同挂载位互不覆盖）。都给或缺 → INVALID_VIEW_SCOPE。
+     *
+     * 会话域存储资格（composer-tray-protocol D6）：viewId 必须命中本插件清单
+     * taijiPlugin.contributes.views 的声明集合（id 或 view 字段匹配），未命中 →
+     * UNDECLARED_VIEW_ID 结构化拒绝（错误文案附补声明指引）——不声明就没有。
+     * opts.meta 可选（D7）：角标/状态/进度动态信息（WidgetMeta 同形，全字段可选——
+     * 按钮标题/图标取清单声明，meta 只承载动态信息；形状非法 → INVALID_VIEW_META）。
      */
-    update(viewId: string, guiTree: GuiComponent[], opts: { sessionId: string } | { mountId: string }): Promise<void>
+    update(
+      viewId: string,
+      guiTree: GuiComponent[],
+      opts: ({ sessionId: string } | { mountId: string }) & { meta?: Partial<WidgetMeta> },
+    ): Promise<void>
     listMountPoints(): Promise<string[]>
     /**
      * [provider-plugin-access D8] 输入组件值回传订阅：uiEvent 经宿主单向通知到达

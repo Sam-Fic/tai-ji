@@ -92,11 +92,9 @@ import { redactArgvLine } from '../infra/pi/argv-redact.js'
  * argv 对应字段）。writer 以 spread 序列化，扩展字段原样落盘 JSONL。
  */
 
-// ADR-0122 退役登记（2026-10-05）：本模块原三时间机制已删——①PS_TIMEOUT_MS 10s
-// （ps 枚举墙钟）；②ORPHAN_KILL_GRACE_MS 2s（SIGTERM 优雅退出宽限，删后 SIGTERM 成死
-// 信号，杀链收敛为 SIGKILL 直杀，推翻 crash-forensics 附录 E kill 族 grace 背书）；
-// ③ORPHAN_REAP_DELAY_MS 5s（启动延迟窗——判据 argv/ppid=1 事实化，不误杀新 runtime
-// 的子进程，窗口属纯保险）。孤儿判据本体（argv 四条合取 + ppid=1）是事实判据，保留。
+// 无时间机制（时间阈值禁令，ADR-0190）：ps 枚举不设墙钟（同步等待自然返回）；杀链 =
+// SIGKILL 直杀（无优雅退出宽限）；孤儿收割在启动编排内同步判定，无独立延迟窗——误杀防护
+// 由判据本体承载（argv 四条合取 + ppid=1 是事实判据，不靠时间窗区分新旧进程）。
 
 /** ps 单行解析结果（`ps -axo pid=,ppid=,command=` 的一行）。 */
 export interface PsRow {

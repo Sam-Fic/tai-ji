@@ -15,7 +15,6 @@
 import * as configDomain from './config'
 import * as extensionDomain from './extension'
 import { command } from '../request'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 import type {
   CodemodeEnabledResult,
   CodemodeSetEnabledResult,
@@ -73,82 +72,82 @@ export type SmartContextAutoCompactThresholdRatioReply = ServerMessageMap['confi
 
 /** 设置 worktree 专用目录（持久化到 settings.json）。 */
 export async function setWorktreeRootDir(dir: string): Promise<WorktreeRootDirReply> {
-  return command('config.setWorktreeRootDir', { dir }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setWorktreeRootDir', { dir })
 }
 
 /** 读取 worktree 专用目录配置。 */
 export async function getWorktreeRootDir(): Promise<WorktreeRootDirReply> {
-  return command('config.getWorktreeRootDir', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.getWorktreeRootDir', {})
 }
 
 /** 设置 worktree 初始化脚本（持久化到 settings.json）。 */
 export async function setSetupScript(script: string): Promise<SetupScriptReply> {
-  return command('config.setSetupScript', { script }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setSetupScript', { script })
 }
 
 /** 读取 worktree 初始化脚本配置。 */
 export async function getSetupScript(): Promise<SetupScriptReply> {
-  return command('config.getSetupScript', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.getSetupScript', {})
 }
 
 /** 设置 bare-workspace 初始化脚本（持久化到 settings.json）。 */
 export async function setBareSetupScript(script: string): Promise<BareSetupScriptReply> {
-  return command('config.setBareSetupScript', { script }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setBareSetupScript', { script })
 }
 
 /** 读取 bare-workspace 初始化脚本配置。 */
 export async function getBareSetupScript(): Promise<BareSetupScriptReply> {
-  return command('config.getBareSetupScript', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.getBareSetupScript', {})
 }
 
 /** 设置 worktree 创建超时时间（秒，持久化到 settings.json）。 */
 export async function setWorktreeTimeout(timeout: number): Promise<WorktreeTimeoutReply> {
-  return command('config.setTimeout', { timeout }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setTimeout', { timeout })
 }
 
 /** 读取 worktree 创建超时时间配置。 */
 export async function getWorktreeTimeout(): Promise<WorktreeTimeoutReply> {
-  return command('config.getTimeout', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.getTimeout', {})
 }
 
 /** 设置默认基分支（持久化到 settings.json）。 */
 export async function setDefaultBaseBranch(baseBranch: string): Promise<DefaultBaseBranchReply> {
-  return command('config.setDefaultBaseBranch', { baseBranch }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setDefaultBaseBranch', { baseBranch })
 }
 
 /** 读取默认基分支配置。 */
 export async function getDefaultBaseBranch(): Promise<DefaultBaseBranchReply> {
-  return command('config.getDefaultBaseBranch', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.getDefaultBaseBranch', {})
 }
 
 /** 设置自动重命名 session 开关。 */
 export async function setAutoRenameEnabled(enabled: boolean): Promise<AutoRenameEnabledReply> {
-  return command('config.setAutoRenameEnabled', { enabled }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setAutoRenameEnabled', { enabled })
 }
 
 /** 读取自动重命名 session 配置。 */
 export async function getAutoRenameEnabled(): Promise<AutoRenameEnabledReply> {
-  return command('config.getAutoRenameEnabled', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.getAutoRenameEnabled', {})
 }
 
 /** 设置 rename 标题生成模型（"provider/modelId"，空串 = 清除回未设置）。 */
 export async function setRenameModel(model: string): Promise<RenameModelReply> {
-  return command('config.setRenameModel', { model }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setRenameModel', { model })
 }
 
 /** 读取 rename 标题生成模型（"provider/modelId"，空串 = 未设置）。 */
 export async function getRenameModel(): Promise<RenameModelReply> {
-  return command('config.getRenameModel', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.getRenameModel', {})
 }
 
 /** 设置 rename 触发模式（非法值由 runtime 侧归一为默认 first-stop）。 */
 export async function setRenameMode(mode: RenameMode): Promise<RenameModeReply> {
-  return command('config.setRenameMode', { mode }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setRenameMode', { mode })
 }
 
 /** 读取 rename 触发模式（归一后生效值，默认 first-stop）。 */
 export async function getRenameMode(): Promise<RenameModeReply> {
-  return command('config.getRenameMode', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.getRenameMode', {})
 }
 
 /** rename 标题提示词配置 reply 类型（style + 自定义指令 + corrupted 标记）。 */
@@ -161,52 +160,52 @@ export type RenameMaxLengthReply = ServerMessageMap['config.renameMaxLength']
  * 非法值由 runtime 侧归一，reply 返回归一后生效值）。
  */
 export async function setRenamePrompt(style: RenameStyle, instruction: string): Promise<RenamePromptReply> {
-  return command('config.setRenamePrompt', { style, instruction }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setRenamePrompt', { style, instruction })
 }
 
 /** 读取 rename 标题提示词配置（corrupted = 配置文件 JSON 损坏已回退默认）。 */
 export async function getRenamePrompt(): Promise<RenamePromptReply> {
-  return command('config.getRenamePrompt', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.getRenamePrompt', {})
 }
 
 /** 设置标题最大长度（正整数，非法值由 runtime 侧归一为默认 50）。 */
 export async function setRenameMaxLength(maxLength: number): Promise<RenameMaxLengthReply> {
-  return command('config.setRenameMaxLength', { maxLength }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setRenameMaxLength', { maxLength })
 }
 
 /** 读取标题最大长度（归一后生效值，默认 50）。 */
 export async function getRenameMaxLength(): Promise<RenameMaxLengthReply> {
-  return command('config.getRenameMaxLength', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.getRenameMaxLength', {})
 }
 
 /** 读取智能上下文压缩配置全量（compactModel 空串 = 未设置；thresholds 为 token 绝对数）。 */
 export async function getSmartContextConfig(): Promise<SmartContextConfigReply> {
-  return command('config.getSmartContextConfig', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.getSmartContextConfig', {})
 }
 
 /** 设置智能上下文压缩开关。 */
 export async function setSmartContextEnabled(enabled: boolean): Promise<SmartContextEnabledReply> {
-  return command('config.setSmartContextEnabled', { enabled }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setSmartContextEnabled', { enabled })
 }
 
 /** 设置压缩模型（"provider/modelId"，空串 = 跟随当前会话模型）。 */
 export async function setSmartContextCompactModel(model: string): Promise<SmartContextCompactModelReply> {
-  return command('config.setSmartContextCompactModel', { model }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setSmartContextCompactModel', { model })
 }
 
 /** 设置 3 档提醒阈值（token 绝对数，runtime 侧 clamp 升序 3 档）。 */
 export async function setSmartContextThresholds(thresholds: number[]): Promise<SmartContextThresholdsReply> {
-  return command('config.setSmartContextThresholds', { thresholds }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setSmartContextThresholds', { thresholds })
 }
 
 /** 设置排除模型列表（每条完整 provider/modelId，runtime 侧过滤无 "/" 条目去重）。 */
 export async function setSmartContextExcludedModels(models: string[]): Promise<SmartContextExcludedModelsReply> {
-  return command('config.setSmartContextExcludedModels', { models }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setSmartContextExcludedModels', { models })
 }
 
 /** 设置后台压缩触发线（0-1 窗口占比，runtime 侧钳制；reply 回钳制后生效值）。 */
 export async function setSmartContextAutoCompactThresholdRatio(ratio: number): Promise<SmartContextAutoCompactThresholdRatioReply> {
-  return command('config.setSmartContextAutoCompactThresholdRatio', { ratio }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setSmartContextAutoCompactThresholdRatio', { ratio })
 }
 
 // ── codemode 开关（config.getCodemodeEnabled / config.setCodemodeEnabled）──
@@ -219,12 +218,12 @@ export async function setSmartContextAutoCompactThresholdRatio(ratio: number): P
 
 /** 读取 codemode 开关（corruption 非空 = settings.json 损坏错误态，enabled 恒 false）。 */
 export async function getCodemodeEnabled(): Promise<CodemodeEnabledResult> {
-  return command('config.getCodemodeEnabled', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.getCodemodeEnabled', {})
 }
 
 /** 设置 codemode 开关（增量条目规范化等写入语义归 runtime；损坏拒入走 ok:false 信封不 reject）。 */
 export async function setCodemodeEnabled(enabled: boolean): Promise<CodemodeSetEnabledResult> {
-  return command('config.setCodemodeEnabled', { enabled }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('config.setCodemodeEnabled', { enabled })
 }
 
 // [W4] getSystem/updateSystem（纯前端 localStorage 持久化）已迁 @taiji/core

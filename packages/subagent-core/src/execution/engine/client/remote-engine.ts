@@ -16,10 +16,6 @@
 //
 // W3 消费契约：routing/registry 的 cli 形态 EnginePort 实例 = 本类（先写后读）。
 
-// 常量与超时解析本体在 ./armed-receipt-config.ts（测试 import 路径经此 re-export 保持不变）。
-export { CANCEL_SETTLE_GRACE_WINDOW_MS, ARMED_RECEIPT_TIMEOUT_MS, ARMED_RECEIPT_TIMEOUT_ENV } from "./armed-receipt-config.ts";
-
-
 import {
   EngineSdkError,
   type AgentCallOpts as SdkAgentCallOpts,
@@ -32,8 +28,6 @@ import {
 
 import type { AgentCallOpts } from "../../../shared/agent-call-types.ts";
 import { getHostServices } from "../../../core/host-services.ts";
-import { CANCEL_SETTLE_GRACE_WINDOW_MS, resolveArmedReceiptTimeoutMs } from "./armed-receipt-config.ts";
-import { getLogger } from "../../../core/logger.ts";
 import { getSubagentSessionDir } from "../../assembly/path-encoding.ts";
 import { assertGateCapabilitiesMatched } from "../common/capability-gate.ts";
 import type {
@@ -89,110 +83,6 @@ export interface RemoteEngineOptions {
   hostVersion?: string;
   /** L3 显式配置 engines.<id>.config（initialize.engineConfig 透传；EngineClient 消费）。 */
   engineConfig?: Record<string, string>;
-  /**
-   * cancel 收敛兜底窗（缺省 CANCEL_SETTLE_GRACE_WINDOW_MS）。测试注入
-   * 小窗用（量级断言由常量锚定用例持有）；生产链路不传。
-   */
-  cancelSettleGraceMs?: number;
-}
-
-const logger = getLogger("remote-engine");
-
-// ============================================================
-// [D3 协议版 P6] armed 回执等待门（宿主等待侧）
-// ============================================================
-
-/**
- * armed 回执等待门：native 引擎 + schema 任务的 run 派发后开窗计时，引擎 armed
- * 事件到达（经 run 事件路由）即收窗；窗满未到 → onTimeout 回调（调用方合成失败
- * outcome + best-effort cancel）。emulated 引擎 / 无 schema 任务豁免（不建门——
- * 「武装」概念仅对有孙进程 env/扩展依赖的 native 引擎成立，D3 分流判据 =
- * capabilities.schemaEnforcement；任务形态判据复用 H1 的 task.schema 声明形态，
- * 与引擎自查断言同源不同侧）。
- *
- * 为什么是「监控信号不与施控同源」：引擎侧武装断言（pi-subagent-cli）是引擎自查，
- * 断言代码自身失效/被绕过时自查恒绿——宿主侧独立等待窗是第二道防线（F-1 同源
- * 缴械教训的结构性应用）。
- */
-interface ArmedReceiptGate {
-  /** run 事件路由喂入点（armed 到达即收窗；其余事件无操作）。 */
-  observe(event: unknown): void;
-  /** 窗满回调（构造后登记——回调需要 run 上下文合成失败 outcome）。 */
-  onTimeout(onFire: () => void): void;
-  /** 收窗（run 终态 settle / 超时触发后调用；幂等）。 */
-  dispose(): void;
-}
-
-function armArmedReceiptGate(
-  capabilities: EngineCapabilities,
-  task: AgentCallOpts,
-): ArmedReceiptGate | undefined {
-  // emulated 豁免（zcode 及 schema-emulation 登记域：引擎侧消费 wire task.schema，
-  // 无武装面，宿主不期待回执、不 fail-fast——D3 防 emulated 误伤）。
-  if (capabilities.schemaEnforcement !== "native") return undefined;
-  // 无 schema 任务豁免（H1 判据：task.schema 声明形态；无声明 = 无武装面）。
-  if (task.schema === undefined) return undefined;
-  let armed = false;
-  let onFire: (() => void) | undefined;
-  const timer = setTimeout(() => {
-    if (!armed) onFire?.();
-  }, resolveArmedReceiptTimeoutMs());
-  return {
-    observe: (event) => {
-      if (armed) return;
-      if (!isArmedEventFrame(event)) return;
-      armed = true;
-      clearTimeout(timer);
-    },
-    onTimeout: (cb) => {
-      onFire = cb;
-    },
-    dispose: () => {
-      clearTimeout(timer);
-    },
-  };
-}
-
-/** 运行时 guard：事件帧是否 armed 回执（wire 载荷 unknown，按 type 窄化，无 any）。 */
-function isArmedEventFrame(event: unknown): boolean {
-  return (
-    typeof event === "object" &&
-    event !== null &&
-    (event as { type?: unknown }).type === "armed"
-  );
-}
-
-/**
- * run 请求与触发源的竞态合流（单源，两处消费：① armed 回执等待门——窗满合成失败
- * outcome fail-fast；② cancel 收敛窗——窗满本地合成 abort 终态）：run 应答先到 →
- * 正常返回；触发源先到 → 合流 resolve 为调用方合成的结果（EnginePort 契约「运行中
- * 失败不 reject——合成 outcome + 正常 handle」）。败者后续 settle 一律吞掉（settled
- * 检查 + run 请求的 then 链恒有 handler，无 unhandled rejection）。
- *
- * registerTrigger 两侧实现均为纯登记赋值（ArmedReceiptGate.onTimeout /
- * AbortWiring.onForceSettle），登记与 run 请求 then 链的先后顺序无可观察差异；
- * dispose 在 settle 时执行（撤 timer / 摘 listener）。
- */
-function awaitRunOrTrigger<T>(
-  runRequest: Promise<T>,
-  registerTrigger: (onFire: () => void) => void,
-  disposeTrigger: () => void,
-  synthesize: () => T,
-): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    let settled = false;
-    const settle = (settleFn: () => void): void => {
-      if (settled) return;
-      settled = true;
-      disposeTrigger();
-      settleFn();
-    };
-    registerTrigger(() => settle(() => resolve(synthesize())));
-    runRequest.then(
-      (value) => settle(() => resolve(value)),
-      (err) => settle(() => reject(err)),
-    );
-  });
 }
 
 /**
@@ -356,8 +246,8 @@ export class RemoteEngine implements EnginePort {
    * wire task.schema 单字段承载，PI_WORKFLOW_SCHEMA env 由引擎侧派生——H1 schema
    * 传输归位）；事件经 run 作用域
    * 路由分发（event 通知 / streamDelta / poolResolved / handleReady）；abort → cancel
-   * 帧 + 收敛兜底窗（CANCEL_SETTLE_GRACE_WINDOW_MS；窗满 = 本地合成 abort 终态，
-   * 进程回收归资源归属链——见 wireAbortSignal 注释的裁决表）。运行中失败
+   * 帧（收敛由 run 应答/引擎死亡退出链两路事件承载——见 wireAbortSignal 注释）。
+   * 运行中失败
    * 不 reject——合成 error outcome + 正常
    * handle 返回（EnginePort 契约：record 必须收尾）；run 帧发出前的失败（连接/握手）
    * reject。childSpawned/childStateChanged 镜像归 EngineClient（协议形态无
@@ -392,87 +282,23 @@ export class RemoteEngine implements EnginePort {
     const runId = ctx.taskId;
     const runParams = buildRunParams(task, ctx, runId);
 
-    // [D3 协议版 P6] armed 回执等待门（native + schema 任务专属；emulated / 无
-    // schema 豁免 = undefined）：事件路由包裹 observe——armed 到达即收窗，窗满未到
-    // 由合流等待器合成失败 outcome（下方 awaitRunOrArmedTimeout）。
-    const armedGate = armArmedReceiptGate(this.opts.manifest.capabilities, task);
     const route = buildRunRouteHandlers(ctx);
-    if (armedGate !== undefined) {
-      const forwardEvent = route.onEvent;
-      route.onEvent = (event) => {
-        armedGate.observe(event);
-        forwardEvent?.(event);
-      };
-    }
-
     const unregister = this.opts.client.registerRunRoute(runId, route);
 
-    // abort 分级：cancel 帧 → 等收敛（CANCEL_SETTLE_GRACE_WINDOW_MS）→ 窗满本地合成
-    // abort 终态（record 必须收尾）；进程回收归资源归属链——per-window 引擎随窗口
-    // 收尾 dispose（薄壳死 = 孙进程同进程组连带收割），shared-service 引擎 stall
-    // 出声不杀（分流依据见 wireAbortSignal 注释）。兜底窗量级两处同源（onAbort
-    // 收敛窗 / armed 超时兜底窗）。
-    const settleGraceMs = this.opts.cancelSettleGraceMs ?? CANCEL_SETTLE_GRACE_WINDOW_MS;
-    const sharedServiceEngine = this.opts.manifest.processModel === "shared-service";
-    const abort = wireAbortSignal(this.opts.client, runId, ctx, settleGraceMs, sharedServiceEngine);
+    // abort 分级：cancel 帧发出即返回受理结果；run 终态收敛由 run 应答本身承载
+    //（引擎正常停轮返回 / 引擎死亡经退出链以 engine_crashed reject——由下方 catch
+    // 合成 abort 终态）。进程回收归资源归属链——per-window 引擎随窗口收尾 dispose
+    //（薄壳死 = 孙进程同进程组连带收割），shared-service 引擎 stall 出声不杀
+    //（dispose 对其是宿主停机/引擎退役语义，ADR-0047 静默 ≠ 卡死）。
+    const abort = wireAbortSignal(this.opts.client, runId, ctx);
 
     try {
       // wire 载荷收窄（帧 result unknown → 协议 RunResult 形态）；SDK → core 结构
       // 兼容由 implements EnginePort 在 typecheck 期互证。
-      const runRequest = this.opts.client.request("run", runParams) as Promise<{
+      const wireResult = (await this.opts.client.request("run", runParams)) as {
         handle: SdkEngineHandleData;
         outcome: SdkAgentOutcome;
-      }>;
-      const armedSettled = armedGate !== undefined
-        ? awaitRunOrTrigger(
-          runRequest,
-          (onFire) => armedGate.onTimeout(onFire),
-          () => armedGate.dispose(),
-          () => {
-            // 窗满 fail-fast（EnginePort 契约：运行中失败不 reject——合成 outcome +
-            // 正常 handle）。best-effort cancel 先行：孙进程可能已在烧 token，宿主
-            // 侧失败不等于引擎侧自停（cancel 受理失败由下方武装的兜底窗承接）。
-            // [加固] 受理失败必须出声：空 catch 吞掉 cancel 失败信号后，兜底窗是否真正接管不可诊断。
-            void this.opts.client.cancelRun(runId, "armed receipt timeout").catch((err: unknown) => {
-              logger.error(
-                `[remote-engine] armed receipt timeout cancel failed for run ${runId}: ` +
-                  `${err instanceof Error ? err.message : String(err)} (window-dispose fallback armed, grace ${settleGraceMs}ms)`,
-              );
-            });
-            // [加固] 兜底窗真实武装：本合成路径不经过 wireAbortSignal 的 onAbort
-            //（无外部 abort signal），「cancel 受理失败由兜底窗承接」的第二道回收
-            // 此前结构性缺席——cancel 受理成功但引擎不收敛 / 受理失败两种形态都由
-            // 本 timer 到点兜底（per-window 引擎 = 本实例整体回收；shared-service
-            // 引擎 = stall 出声不回收，见 armWindowDisposeFallbackForArmedTimeout）。
-            armWindowDisposeFallbackForArmedTimeout(
-              this.opts.client,
-              runId,
-              settleGraceMs,
-              sharedServiceEngine,
-              runRequest,
-            );
-            logger.warn(
-              `[remote-engine] armed receipt not received within ${resolveArmedReceiptTimeoutMs()}ms ` +
-                `for run ${runId} (native engine, schema task) — failing the run fast`,
-            );
-            return {
-              handle: this.synthesizeHandle(),
-              outcome: armedReceiptTimeoutOutcome(this.id, runId),
-            };
-          },
-        )
-        : runRequest;
-      // [收敛窗合流] 引擎应答先到正常返回；窗满先到 = 本地合成 abort 终态
-      //（wireAbortSignal 窗满回调），晚到的引擎应答由 settled 检查吞掉。
-      const wireResult = await awaitRunOrTrigger(
-        armedSettled,
-        (onForceSettle) => abort.onForceSettle(onForceSettle),
-        () => abort.dispose(),
-        () => ({
-          handle: this.synthesizeHandle(),
-          outcome: abortedRunOutcome(this.id, runId, undefined),
-        }),
-      );
+      };
       return { handle: { data: wireResult.handle }, outcome: wireResult.outcome };
     } catch (err) {
       if (abort.isCancelSent()) {
@@ -679,118 +505,50 @@ function buildRunRouteHandlers(ctx: RunContext): RunRoute {
 }
 
 // ============================================================
-// cancel 收敛兜底与 armed 超时兜底（ADR-0079 窗口资源模型：合成终态 + 按载体回收）
+// abort 接线与回收形态（ADR-0079 窗口资源模型——时间收敛窗已删后的残形）
 // ============================================================
 
 /**
- * [裁决登记（ADR-0079 决策 6 D1/D3/D8）] abort / 超时路径的回收形态——「合成终态
- * （既有）+ 按载体回收」，定点杀链（镜像 recordId 过滤逐 pid 杀）随共享薄壳形态
- * 一并退役：
+ * [裁决登记（ADR-0079 决策 6 D1/D3/D8）] abort 路径的回收形态——「合成终态 + 按载体
+ * 回收」，定点杀链（镜像 recordId 过滤逐 pid 杀）随共享薄壳形态一并退役：
  *
  * | # | 触发范围 | 行为 |
  * |---|--------|------|
- * | ① | cancel 收敛窗满（wireAbortSignal） | 本地合成 abort 终态（record 必须收尾）；进程回收归资源归属链——per-window 引擎随窗口收尾 dispose（finalizeRun / 轮 idle 收尾 / cancel 打断面补释；薄壳死 = 孙进程同进程组连带收割，P2/P3），shared-service 引擎 stall 出声不回收 |
- * | ② | armed 超时兜底窗满（armWindowDisposeFallbackForArmedTimeout） | 同①的第二道回收：cancel 受理成功但引擎不收敛 / 受理失败两种形态都由本 timer 到点兜底——per-window 引擎对**本实例**执行 dispose（dispose 请求 → 按进程组终止兜底 = 薄壳整体回收），shared-service 引擎 stall 出声不回收（dispose 对其是宿主停机/引擎退役语义，误触发破坏单例常驻 G4） |
- * | — | dispose 通道（宿主停机 / 引擎退役语义） | engine-client.ts dispose（3s 上界 → 按进程组终止兜底）——窗口收尾与引擎退役的共用回收通道，按进程组终止语义保留（停机时引擎本就该全灭） |
- * | — | 引擎自报故障杀链（data-plane 反向请求 10s 未答判引擎故障） | engine-client.ts failEngine → killAll 按进程组终止保留（同 dispose 族）：故障定位在引擎级（引擎反向通道楔死），按进程组终止后同窗口后续派发经 ensureConnected respawn（D7 保留语义） |
+ * | ① | cancel 帧受理后 run 未收敛（wireAbortSignal） | 引擎停轮应答 / 引擎死亡退出链（engine_crashed reject）两路事件驱动收敛；捕获路径合成 abort 终态（record 必须收尾）；进程回收归资源归属链——per-window 引擎随窗口收尾 dispose（finalizeRun / 轮 idle 收尾 / cancel 打断面补释；薄壳死 = 孙进程同进程组连带收割），shared-service 引擎 stall 出声不回收 |
+ * | — | dispose 通道（宿主停机 / 引擎退役语义） | engine-client.ts dispose（dispose 帧 → 按进程组终止兜底）——窗口收尾与引擎退役的共用回收通道，按进程组终止语义保留（停机时引擎本就该全灭） |
  *
- * shared-service 降级出口（①②的 zcode 分支）：不杀任何进程、不触发任何 dispose
+ * shared-service 降级出口（①的 zcode 分支）：不杀任何进程、不触发任何 dispose
  * ——stall warn 出声（ADR-0047 静默 ≠ 卡死：活跃产出不得判死，无进展的判定由
  * 任务级无进展检测承载，core 不在回收路径上另开通知侧）。
  */
 
 /**
- * [armed 超时路径的兜底窗（第二道回收）] armed 窗满 fail-fast 合成路径不经过
- * wireAbortSignal 的 onAbort（无外部 abort signal），「cancel 帧 → 收敛窗 → 兜底」
- * 在该路径结构性缺席——本 helper 是同款形态的显式武装：graceMs 内引擎侧 run 未自终
- * （runRequest 无迟到终态应答）→ per-window 引擎对本实例执行 dispose（薄壳整体
- * 回收，量级同源 cancelSettleGraceMs）；shared-service 引擎只 stall 出声。timer
- * 撤除点 = runRequest 迟到终态（引擎侧已终态，回收失去标的）。不挂 AbortWiring：
- * armed 合成后 run() 经 finally dispose 微任务级返回，挂上会被立即清掉（兜底永不
- * 触发）；泄漏面 = runRequest 永不 settle 时 timer 到点自耗尽（dispose 幂等 + 楔死
- * 形态下回收是唯一正确动作），unref 不阻进程退出。
- */
-function armWindowDisposeFallbackForArmedTimeout(
-  client: EngineClient, runId: string,
-  graceMs: number, sharedServiceEngine: boolean, runRequest: Promise<unknown>,
-): void {
-  const timer = setTimeout(() => {
-    if (sharedServiceEngine) {
-      logger.warn(
-        `[remote-engine] armed receipt timeout fallback for run ${runId}: shared-service engine ` +
-          `did not settle after cancel — no process recovery (dispose on a shared-service engine is ` +
-          `host-shutdown/retirement semantics). The run is stalled, not stopped; the host-side ` +
-          `record has been force-settled.`,
-      );
-      return;
-    }
-    logger.warn(
-      `[remote-engine] armed receipt timeout fallback for run ${runId}: disposing the window-scoped ` +
-        `engine instance (dispose request → process-group kill fallback) — same-window subsequent ` +
-        `dispatches respawn via the window instance table`,
-    );
-    client.dispose().catch((err: unknown) => {
-      logger.error(
-        `[remote-engine] armed timeout window dispose failed for run ${runId}: ` +
-          `${err instanceof Error ? err.message : String(err)} (best-effort; window teardown will retry idempotently)`,
-      );
-    });
-  }, graceMs);
-  const clearTimer = (): void => clearTimeout(timer);
-  void runRequest.then(clearTimer, clearTimer);
-  timer.unref();
-}
-
-/**
- * abort 接线的运行态句柄（isCancelSent 供 run catch 分支分诊；dispose 归 finally；
- * onForceSettle 供 run 请求在收敛窗超时时本地合成终态——EnginePort「record 必须收尾」
- * 契约的兑现点，晚到的引擎应答由调用方 settled 检查吞掉）。
+ * abort 接线的运行态句柄（isCancelSent 供 run catch 分支分诊；dispose 归 finally）。
+ * 原「cancel 帧 → 收敛窗超时本地合成终态」的时间收敛面已删：收敛事实源 = run 应答
+ *（引擎停轮正常返回）或引擎死亡（退出链 reject with engine_crashed）。
  */
 interface AbortWiring {
   isCancelSent(): boolean;
-  /** 收敛窗超时回调登记（窗满 = run 请求尚未应答 → 本地合成 abort 终态）。 */
-  onForceSettle(cb: () => void): void;
   dispose(): void;
 }
 
 /**
- * abort 分级接线：cancel 帧 → 等收敛（graceMs，缺省 CANCEL_SETTLE_GRACE_WINDOW_MS）
- * → 收敛窗超时 = 本地合成终态回调（①裁决行）；shared-service 引擎追加 stall 出声
- * （per-window 引擎不出声——进程回收由窗口收尾 dispose 链确定性承接，无「stalled
- * not stopped」形态）。signal 已 aborted 则立即进入收敛窗口；dispose 在 run 终态
- *（finally）标记 settled 并清理 timer / listener。
+ * abort 接线：signal abort → cancel 帧（受理失败 debug 留痕——run 应答收敛由引擎
+ * 退出链兜底）。dispose 在 run 终态（finally）摘 listener。
  */
 function wireAbortSignal(
   client: EngineClient,
   runId: string,
   ctx: RunContext,
-  graceMs: number,
-  sharedServiceEngine: boolean,
 ): AbortWiring {
   let cancelSent = false;
-  let settled = false;
-  let settleTimer: NodeJS.Timeout | undefined;
-  let forceSettle: (() => void) | undefined;
   const onAbort = (): void => {
-    if (cancelSent || settled) return;
+    if (cancelSent) return;
     cancelSent = true;
     void client.cancelRun(runId, "abort").catch(() => {
-      // 受理失败由收敛窗口兜底（本地合成终态；per-window 引擎的进程回收归窗口
-      // 收尾 dispose 链，shared-service 引擎在窗满回调 stall 出声）。
+      // 受理失败：引擎死亡场景由退出链统一收口（run 请求 reject → catch 合成 abort
+      // 终态）；引擎存活但不受理的形态由协议 error 帧原样 reject，同路径收口。
     });
-    settleTimer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      if (sharedServiceEngine) {
-        logger.warn(
-          `[remote-engine] cancel did not settle within grace for run ${runId}: shared-service ` +
-            `engine host left untouched (dispose on a shared-service engine is host-shutdown/` +
-            `retirement semantics). The run is stalled, not stopped; the host-side record has ` +
-            `been force-settled as aborted.`,
-        );
-      }
-      forceSettle?.();
-    }, graceMs);
   };
   if (ctx.signal !== undefined) {
     if (ctx.signal.aborted) onAbort();
@@ -798,12 +556,7 @@ function wireAbortSignal(
   }
   return {
     isCancelSent: () => cancelSent,
-    onForceSettle: (cb) => {
-      forceSettle = cb;
-    },
     dispose: () => {
-      settled = true;
-      if (settleTimer !== undefined) clearTimeout(settleTimer);
       if (ctx.signal !== undefined) ctx.signal.removeEventListener("abort", onAbort);
     },
   };
@@ -831,32 +584,6 @@ function transientRunOutcome(engineId: string, err: unknown): SdkAgentOutcome {
   };
 }
 
-/**
- * [D3 协议版 P6] armed 回执窗满合成 outcome。文案语义对齐引擎侧武装断言（H3）双形态
- * 恢复指引；差异点 = 本侧是宿主独立信号（引擎自查之外的监控面），失败含义多一支：
- * 「引擎版本过旧不上报回执」。exitCode null = cancel/回收终态族（被信号杀死判据）。
- */
-function armedReceiptTimeoutOutcome(engineId: string, runId: string): SdkAgentOutcome {
-  return {
-    content: "",
-    error:
-      `[schema-arming] engine_run_failed: no armed receipt from native engine within the ` +
-      `wait window for a schema task (run ${runId}) — the run was failed fast because ` +
-      `continuing could complete with an unvalidated structured output. Either the arming ` +
-      `chain is broken (schema env / grandchild extension never reached the pi grandchild), ` +
-      `or the engine does not report armed receipts (engine package too old to speak the ` +
-      `armed event). Recovery — taiji host form: check the runtime extension-service ` +
-      `diagnostics for the grandchild extension whitelist staging of ` +
-      `@zhushanwen/pi-structured-output. Recovery — standalone pi form: install ` +
-      `@zhushanwen/pi-structured-output (peerDependency) or use a schema-less workflow ` +
-      `instead (drop the schema from the agent call). If engine-side arming assertions pass ` +
-      `but no receipt arrives, upgrade or reinstall the engine package ` +
-      `(@zhushanwen/pi-subagent-cli).`,
-    exitCode: null,
-    engineId,
-  };
-}
-
 /** core AgentCallOpts → SDK 引擎侧子集（宿主自持字段不透传，SDK 契约类型注释裁决）。 */
 function toSdkTaskSubset(task: AgentCallOpts): SdkAgentCallOpts {
   return {
@@ -877,6 +604,5 @@ function toSdkTaskSubset(task: AgentCallOpts): SdkAgentCallOpts {
     // 缺省 undefined 不落 wire（JSON 序列化丢弃，与相邻可选字段同语义）。
     forkSource: task.forkSource,
     worktree: task.worktree,
-    idleTimeoutMs: task.idleTimeoutMs,
   };
 }

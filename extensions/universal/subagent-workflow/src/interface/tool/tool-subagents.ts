@@ -49,7 +49,6 @@ import {
 import type { LauncherDeps } from "@zhushanwen/subagent-core";
 // formatAvailableWorkflowRefs：拒单可用清单单源（core launcher，副本已并入）。
 import {
-  assertEntryTimeBudget,
   assertModelInCatalog,
   assertSlugWithinLimit,
   formatAvailableWorkflowRefs,
@@ -222,7 +221,7 @@ function assertBatchModelsInCatalog(params: SubagentsToolParams): void {
  * 批量运行体（execute 主体；导出供契约测试直接调用）。
  *
  * 失败形态与恢复动作见设计 §3.1.5（本函数只做入口级 fail-fast：旧字段迁移检查、
- * tasks 缺失/空、成员 task 空白、slug 超长、time 超上界、显式模型目录校验；
+ * tasks 缺失/空、成员 task 空白、slug 超长、显式模型目录校验；
  * fan-out 模板入口另有成员形状/trim 检查——run 即失败，两条路径不重复实现同一约束）。
  */
 export async function runSubagentsBatch(
@@ -262,12 +261,6 @@ export async function runSubagentsBatch(
   // run 派生视图名）；对话流块面显示的是模型 input.slug（无 input 回写通路——D8 分面声明）。
   const slug = providedSlug ? providedSlug : generateBatchSlug();
 
-  // OR-1 入口 fail-fast：schema 的 time 是 Type.Number 直通（无上界），超 setTimeout
-  // 安全域的值会穿透到 lifecycle 内层防线（assertSafeTimerDelay）——入口拦截让它永不
-  // 进入副作用链（判定与文案单点在 core shared/entry-guards）。
-  const time = params.time;
-  assertEntryTimeBudget(time);
-
   // 显式模型入口校验（运行级一次 + 成员逐个带下标；catalog 不可用 fail-closed，§3.1.2）。
   assertBatchModelsInCatalog(params);
 
@@ -302,7 +295,6 @@ export async function runSubagentsBatch(
     buildRunSpecFromScript(script, {
       args,
       budgetTokens: params.tokens,
-      budgetTimeMs: time,
       slug,
       model: params.model,
       thinkingLevel: params.thinkingLevel,

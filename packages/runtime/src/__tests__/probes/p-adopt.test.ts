@@ -13,7 +13,7 @@
  *
  * 分工边界：单路径收养断言（投递 1 次 + 标记 1 个 + lane）由 registry 单测
  * session-delivery-registry.test.ts 的 adopt 用例承担；本文件变体 2 的独有面 =
- * 「空闲 + 槽位非空」occupancy 前置 + 重复对账（watchdog 触发点）幂等零新增。
+ * 「空闲 + 槽位非空」occupancy 前置 + 重复对账幂等零新增。
  * e2e 层暂无收养回归（completion-backflow-e2e 只覆盖完成回流链，不覆盖 adopt）——待补。
  *
  * 运行：cd packages/runtime && npx vitest run src/__tests__/probes/p-adopt.test.ts

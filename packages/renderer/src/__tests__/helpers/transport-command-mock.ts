@@ -7,8 +7,7 @@
  * 语义约束（不可丢，丢了帧链路断）：
  * - spread actual 保真实 events 通道：useSessionEvents / usePlanState 经主模块
  *   events.on 订阅，测试侧 dispatchSession 与实现侧订阅须经同一真实 events 模块实例
- *   （注册表共享），只换 command 单入口与超时常量；
- * - RPC_BACKSTOP_TIMEOUT_MS 固定 30_000：与真实导出同值，消费方按需断言不受 mock 干扰。
+ *   （注册表共享），只换 command 单入口；
  *
  * 本 helper 禁止顶层 import 被 mock 的路径（'@taiji/core/transport/api'）：vi.mock 工厂
  * 在测试文件的 helper import 绑定初始化前就会因该 import 被触发（TDZ），故 actual 的
@@ -22,10 +21,9 @@ import { vi, type Mock } from 'vitest'
 export const commandMock = vi.fn()
 
 /**
- * '@taiji/core/transport/api' 的 spread-actual mock 体（原语形态）：只换 command 门面与
- * RPC_BACKSTOP_TIMEOUT_MS，events/pending 等其余面保持真实（测试侧 dispatchSession /
+ * '@taiji/core/transport/api' 的 spread-actual mock 体（原语形态）：只换 command 门面，
+ * events/pending 等其余面保持真实（测试侧 dispatchSession /
  * bus 订阅与实现侧经同一真实 events 模块实例，帧链路不断）。
- * 返回类型不标注为模块类型——RPC_BACKSTOP 会被覆写成 30_000，与真实声明的字面量类型冲突。
  *
  * 自 plan-bar-mount.ts 下沉至此（plan 族与 gen-stats 族共用的 command mock 唯一实装）；
  * plan-bar-mount 的消费方改从本文件 import。
@@ -34,7 +32,7 @@ export function commandApiModule(
   actual: typeof import('@taiji/core/transport/api'),
   commandMock: Mock,
 ) {
-  return { ...actual, command: commandMock, RPC_BACKSTOP_TIMEOUT_MS: 30_000 }
+  return { ...actual, command: commandMock }
 }
 
 /** '@taiji/core/transport/api' mock 工厂（本文件 commandMock 单例 + commandApiModule 原语） */

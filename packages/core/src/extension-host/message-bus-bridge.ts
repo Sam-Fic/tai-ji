@@ -7,17 +7,20 @@
  * unsubscribe（防 listener 翻倍，项目规则#2）。
  *
  * 映射表（IF3）：
- *   9 个 plugin 系：permissionRequest→plugin-permission-request；crashed→
+ *   10 个 plugin 系：permissionRequest→plugin-permission-request；crashed→
  *     plugin-crashed；notification→plugin-notification；config→plugin-config-changed；
  *     messageDecoration→plugin-message-decoration；statusChange→plugin-status-change；
  *     uiRequest→ui-request；viewUpdate→extension-widget；
  *     headerActionUpdate→plugin:headerActionUpdate（plugin-header-action-modal-points
- *     点位帧，消费端 = HeaderActionStore 经 InternalEventBus 订阅）
+ *     点位帧，消费端 = HeaderActionStore 经 InternalEventBus 订阅）；
+ *     commandRegistered→plugin-command-registered（命令注册广播，暂无 renderer
+ *     消费方，登记转发保证未来可订阅）
  *   1 个 permission 终局帧（remote-use-mobile S5-V3）：permissionRequestResolved→
  *     plugin-permission-request-resolved（消费端 = permission-request-controller 撤窗，
  *     payload 缺 requestId 置空串、消费端回退按 pluginId 匹配）
- *   4 个 extension 系：widget/widgetGui→extension-widget；
- *     notify→extension-notify；ui_request→ui-request（与 plugin:uiRequest 归一）
+ *   5 个 extension 系：widget/widgetGui→extension-widget；
+ *     notify→extension-notify；ui_request→ui-request（与 plugin:uiRequest 归一）；
+ *     requestsInvalidated→requests-invalidated
  *
  * payload 窄化契约（clarify Q1，runtime 实际生产形状逐一核实）：
  * - permissionRequest payload = { pluginId, permissions: string[], requestId }（activator
@@ -38,11 +41,9 @@
  * - extension.ui_request method 可超界（editor）→ kind 兜底 'input' + 原始 method 经
  *   DialogRequest 索引签名保留（request.method 不丢信息，s4 适配层可恢复）
  *
- * 3 个「已知不归一」型（handler = ignoreFrame，返回 undefined）：plugin:event、
- *   plugin:uiRequestExpired、plugin:permissionRequestExpired——消费方均在 bridge
- *   之外独立订阅 WS global 通道（settings/transport.ts onPluginEvent、
- *   shell-adapters.ts onGlobal、permission-request-controller.ts onGlobal），bridge
- *   再转发只会造出无订阅者的死事件或与既有消费方双重处理。登记仅为让它们脱离
+ * 1 个「已知不归一」型（handler = ignoreFrame，返回 undefined）：plugin:event——消费方在
+ *   bridge 之外独立订阅 WS global 通道（settings/transport.ts onPluginEvent），bridge
+ *   再转发只会造出无订阅者的死事件或与既有消费方双重处理。登记仅为让它脱离
  *   unknown 路径（source filter 对 plugin:* 前缀全放行，不登记则每次触发打一条
  *   error 噪音），行为 = 安全忽略（不 emit 任何事件）。
  *
@@ -52,6 +53,7 @@
 import type { InternalEvent } from './types'
 import type { InternalEventBus } from './internal-event-bus'
 import type { PluginMessageSource, IncomingPluginMessage } from './plugin-message-source'
+import { COMPOSER_TRAY_PLACEMENT } from './content-slot-registry'
 import { pluginViewScopeFromWire } from '@taiji/shared'
 
 // ── 窄化工具（模块私有，不 export）────────────────────────────────
@@ -179,6 +181,39 @@ function parseStatusChange(msg: IncomingPluginMessage): InternalEvent | null {
   return { kind: 'plugin-status-change', pluginId, status: newStatus as 'discovered' | 'loaded' | 'active' | 'inactive' | 'crashed' }
 }
 
+/**
+ * plugin:commandRegistered 解析检查（命令注册下行广播，命令注册表每条登记后广播）。
+ * payload = CommandRegistration（runtime commands-api 形状）：pluginId / commandId 必带
+ * （缺 → null → parse-failed error）；handlerId / workerId / registeredAt 是 runtime
+ * 内部簿记字段（通道归属校验、注册时点），窄化时不进 renderer 事件。当前无 renderer
+ * 消费方——登记转发保证未来消费方经 InternalEventBus 正常订阅（不登记会落未知类型
+ * 路径打 bus error）。
+ */
+function parseCommandRegistered(msg: IncomingPluginMessage): InternalEvent | null {
+  const payload = asRecord(msg.payload)
+  if (!payload) return null
+  const pluginId = asString(payload.pluginId)
+  const commandId = asString(payload.commandId)
+  if (pluginId === null || commandId === null) return null
+  const title = asOptionalString(payload.title)
+  const category = asOptionalString(payload.category)
+  const keybinding = asOptionalString(payload.keybinding)
+  const when = asOptionalString(payload.when)
+  const timeoutMs = typeof payload.timeoutMs === 'number' ? payload.timeoutMs : undefined
+  return {
+    kind: 'plugin-command-registered',
+    command: {
+      pluginId,
+      commandId,
+      ...(title !== undefined ? { title } : {}),
+      ...(category !== undefined ? { category } : {}),
+      ...(keybinding !== undefined ? { keybinding } : {}),
+      ...(when !== undefined ? { when } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    },
+  }
+}
+
 const DIALOG_KINDS = new Set(['select', 'confirm', 'input'])
 
 function parseUiRequest(msg: IncomingPluginMessage): InternalEvent | null {
@@ -205,11 +240,13 @@ function parseUiRequest(msg: IncomingPluginMessage): InternalEvent | null {
  * plugin:viewUpdate 窄化检查（s3 链路，MF-1 修复；U2 scope 形态检查）。
  *
  * runtime plugin-rpc-setup.ts handleViewUpdate 广播 payload 形状：
- * { sessionId | mountId, viewId, pluginId, guiTree, updatedAt, generation }
+ * { sessionId | mountId, viewId, pluginId, guiTree, updatedAt, generation, placement?, meta? }
  * （guiTree 为 GuiComponent[]；归属二选一，形态检查复用 shared pluginViewScopeFromWire——
  * 都缺或都给 / 字段非 string → null，parse-failed error 事件，ERR2 不静默吞）。
  * 与 extension:widget 同事件（extension-widget）：ViewHostStore 消费按 scope 分区更新，
  * guiTree 结构化数组直存（窄化规则同 widgetGui——isGuiComponent 校验 + string 行包装）。
+ * placement/meta 透传（composer-tray-protocol D1/D7）：章由 runtime views-api 按插件清单
+ * 声明盖印随帧携带（存储资格制的产物），本层无声明知识、只透传；meta 形状由渲染端窄化。
  */
 function parseViewUpdate(msg: IncomingPluginMessage): InternalEvent | null {
   const payload = asRecord(msg.payload)
@@ -220,6 +257,7 @@ function parseViewUpdate(msg: IncomingPluginMessage): InternalEvent | null {
   const scope = pluginViewScopeFromWire(payload)
   if (viewId === null || guiTree === null || scope === null) return null
   const generation = typeof payload.generation === 'number' ? payload.generation : undefined
+  const placement = asOptionalString(payload.placement)
   return {
     kind: 'extension-widget',
     ...(scope.kind === 'session' ? { sessionId: scope.sessionId } : { mountId: scope.mountId }),
@@ -228,6 +266,8 @@ function parseViewUpdate(msg: IncomingPluginMessage): InternalEvent | null {
       pluginId,
       guiTree,
       ...(generation !== undefined ? { generation } : {}),
+      ...(placement !== undefined ? { placement } : {}),
+      ...(payload.meta !== undefined ? { meta: payload.meta } : {}),
     },
   }
 }
@@ -263,6 +303,16 @@ export function parseHeaderActionUpdate(msg: IncomingPluginMessage): InternalEve
 
 // ── 5 个 extension:* 窄化检查（pluginId 一律 ''，wire 无该字段）──────
 
+/**
+ * extension:widget / extension:widgetGui 窄化检查。
+ *
+ * placement 盖印（composer-tray-protocol D1）：扩展 setWidget 写入点统一盖印
+ * 'composer.tray'（COMPOSER_TRAY_PLACEMENT）——API 即声明（扩展无清单，setWidget 即
+ * 托盘位声明）。本函数是标记通道（extension:widget/widgetGui）到 ViewHostStore 的
+ * 桥接层唯一入口，两分支（纯文本 widget / 结构化 widgetGui）同盖一枚章；插件通道
+ * （plugin:viewUpdate）的章由 runtime 按清单声明盖印（parseViewUpdate 透传），两通道
+ * 盖印各归其源，本层不区分 viewId 归属。
+ */
 function parseExtensionWidget(msg: IncomingPluginMessage): InternalEvent | null {
   const payload = asRecord(msg.payload)
   if (!payload) return null
@@ -274,7 +324,7 @@ function parseExtensionWidget(msg: IncomingPluginMessage): InternalEvent | null 
     return {
       kind: 'extension-widget',
       sessionId: resolveSessionId(msg, payload),
-      widget: { viewId: widgetKey, pluginId: '', guiTree: lines },
+      widget: { viewId: widgetKey, pluginId: '', guiTree: lines, placement: COMPOSER_TRAY_PLACEMENT },
     }
   }
   // extension:widgetGui —— gui 为 null 时保留清除语义（[null] 进 guiTree，消费端据此删条目）。
@@ -283,7 +333,7 @@ function parseExtensionWidget(msg: IncomingPluginMessage): InternalEvent | null 
   return {
     kind: 'extension-widget',
     sessionId: resolveSessionId(msg, payload),
-    widget: { viewId: widgetKey, pluginId: '', guiTree: [payload.gui], meta: payload.meta },
+    widget: { viewId: widgetKey, pluginId: '', guiTree: [payload.gui], meta: payload.meta, placement: COMPOSER_TRAY_PLACEMENT },
   }
 }
 
@@ -357,10 +407,9 @@ const PLUGIN_HANDLERS: Record<string, (msg: IncomingPluginMessage) => InternalEv
   'plugin:uiRequest': parseUiRequest,
   'plugin:viewUpdate': parseViewUpdate,
   'plugin:headerActionUpdate': parseHeaderActionUpdate,
-  // 三型「已知不归一」（见 ignoreFrame）：登记脱离 unknown 路径，bridge 侧不转发
+  'plugin:commandRegistered': parseCommandRegistered,
+  // 「已知不归一」型（见 ignoreFrame）：登记脱离 unknown 路径，bridge 侧不转发
   'plugin:event': ignoreFrame,
-  'plugin:uiRequestExpired': ignoreFrame,
-  'plugin:permissionRequestExpired': ignoreFrame,
 }
 
 const EXTENSION_HANDLERS: Record<string, (msg: IncomingPluginMessage) => InternalEvent | null> = {
@@ -378,6 +427,15 @@ const EXTENSION_HANDLERS: Record<string, (msg: IncomingPluginMessage) => Interna
  * 其余 extension:* 由 source filter 静默丢弃的职责边界不变（见壳 useExtensionHostBridge）。
  */
 export const EXTENSION_BRIDGE_TYPES: readonly string[] = Object.keys(EXTENSION_HANDLERS)
+
+/**
+ * plugin 系 bridge 消费类型清单（PLUGIN_HANDLERS keys 派生，导出形态对齐
+ * EXTENSION_BRIDGE_TYPES）。消费方 = plugin-downlink-contract 对账测试：断言
+ * @taiji/shared 的 PLUGIN_DOWNLINK_TYPES（wire SSOT 全集）每个类型被本表登记
+ * （或在测试内登记的专用消费方豁免清单内）——runtime 新增下行广播类型而 bridge
+ * 漏登记时测试红（曾漏形态：帧落未知类型 error 路径打 bus error）。
+ */
+export const PLUGIN_BRIDGE_TYPES: readonly string[] = Object.keys(PLUGIN_HANDLERS)
 
 export class MessageBusBridge {
   private readonly bus: InternalEventBus

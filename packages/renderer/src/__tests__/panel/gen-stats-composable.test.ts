@@ -18,7 +18,6 @@ import { commandMock, transportApiCommandModule } from '../helpers/transport-com
 import { defineComponent, h, ref, nextTick } from 'vue'
 import { mount, type VueWrapper } from '@vue/test-utils'
 import * as events from '@taiji/core/transport/api'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '@taiji/core/transport/api'
 import {
   triggerSessionCleanups,
   __clearSessionCleanupRegistryForTest,
@@ -32,9 +31,8 @@ import type { GenStatsFrame } from '@taiji/shared'
 import { genStatsFrame } from '../helpers/gen-stats-mount'
 
 // ── mock 边界：getGenStats RPC mock 掉（u3 未接线，恢复路径用受控 deferred 驱动）──
-// spread-actual mock 体单源在 helpers/transport-command-mock.ts（events 真实通道保留，
-// RPC_BACKSTOP_TIMEOUT_MS 透传 30_000；commandMock 为该 helper 导出的文件内单例，
-// beforeEach 编排受控 deferred）。
+// spread-actual mock 体单源在 helpers/transport-command-mock.ts（events 真实通道保留；
+// commandMock 为该 helper 导出的文件内单例，beforeEach 编排受控 deferred）。
 vi.mock('@taiji/core/transport/api', () => transportApiCommandModule())
 
 // ── 共享测试基建 ─────────────────────────────────────────────
@@ -209,7 +207,6 @@ describe('恢复路径：getGenStats RPC', () => {
     expect(commandMock).toHaveBeenCalledWith(
       'session.getGenStats',
       { sessionId: 'A' },
-      RPC_BACKSTOP_TIMEOUT_MS,
     )
 
     // runtime 降级链④回的全 null + model 缺省帧：RPC 主动拉取语义，不经前端帧校验

@@ -20,8 +20,9 @@
  * - 旧 relay `relay-children/*.pid` 残片（S-13）：判定链复用引擎收割（relay 记录无
  *   runtimePid owner 字段 → owner 恒判死）；不可解析/字段畸形直接删（残片无恢复
  *   价值——族已退役无未来读者，与活协议的「保留待人工核实」是真差异）。
- * - kill 失败语义（m-rt-4）：kill 信号无同步成功回执——发出后做有界存活复核，
- *   确认已死才删 pid 文件；仍存活则保留记录 + warn，下次启动再扫。
+ * - kill 失败语义（m-rt-4）：kill 信号无同步成功回执——发出后做一次进程事实单次判定
+ *   （无轮询复核窗，时间机制删除裁决），确认已死才删 pid 文件；仍存活则保留记录 + warn，
+ *   下次启动再扫。
  * - 不引入周期性巡检：启动 sweep + 事件驱动（连接关闭/exit）足够（ADR-0122）。
  */
 import * as net from 'node:net'
@@ -36,9 +37,6 @@ import {
 import { logger } from '../logger.js'
 import { toErrorMessage } from '../../utils/errors.js'
 import { getControlEnginesDir, getControlRunDir, getLegacyRelayChildrenDir } from './paths.js'
-
-/** socket 探活窗口（控制面单请求秒级量级；超时按死文件处置）。 */
-const SOCKET_PROBE_TIMEOUT_MS = 1_000
 
 /**
  * 启动残留 socket 清理。skipPath = 本实例即将 listen 的路径（不探不删——listen 前的
@@ -111,11 +109,9 @@ function probeSocketAlive(socketPath: string): Promise<boolean> {
     const finish = (alive: boolean): void => {
       if (settled) return
       settled = true
-      clearTimeout(timer)
       probe.destroy()
       resolve(alive)
     }
-    const timer = setTimeout(() => finish(false), SOCKET_PROBE_TIMEOUT_MS)
     probe.once('connect', () => finish(true))
     probe.once('error', () => finish(false))
   })
@@ -147,21 +143,13 @@ export type OrphanSweepDeps = {
   isPidAlive?: (pid: number) => boolean
   killProcessTree?: (pid: number, onFallback?: (step: string, err: unknown) => void) => void
   getProcessStartTimeSec?: (pid: number) => number | undefined
-  /** kill 后存活复核的轮询上界（ms；回收层有界兜底，测试可注入小值）。 */
-  killConfirmTimeoutMs?: number
 }
-
-/** kill 后存活复核轮询间隔（确认动作的事实查询，不是时间推测对账）。 */
-const KILL_CONFIRM_POLL_MS = 10
-/** kill 后存活复核的缺省上界（回收层有界兜底；确认已死立即返回）。 */
-const KILL_CONFIRM_DEFAULT_TIMEOUT_MS = 500
 
 /** sweep 主循环解析一次、逐 pid 文件复用的运行期依赖（生产 = 缺省实现，测试注入）。 */
 type OrphanSweepRuntime = {
   alive: (pid: number) => boolean
   kill: (pid: number, onFallback?: (step: string, err: unknown) => void) => void
   readStartTime: (pid: number) => number | undefined
-  confirmTimeoutMs: number
 }
 
 /**
@@ -170,8 +158,9 @@ type OrphanSweepRuntime = {
  * 清（无 owner 判活语义；写者 = 本实例的在途原子写跳过——sweep 异步跑不误删自己的 tmp）。
  *
  * 失败语义（m-rt-4）：kill 是 fire-and-forget 信号，没有同步成功回执——这里在发出
- * kill 后做一次有界存活复核，确认已死才删 pid 文件；仍存活（taskkill 失败/权限不足）
- * 则保留记录 + warn，供下次启动再扫（删文件会把杀不掉的孤儿从兜底视野永久销账）。
+ * kill 后做一次进程事实单次判定（无轮询复核窗），确认已死才删 pid 文件；仍存活
+ * （taskkill 失败/权限不足，或信号投递后尚未退出）则保留记录 + warn，供下次启动再扫
+ * （删文件会把杀不掉的孤儿从兜底视野永久销账）。
  */
 export async function sweepOrphanEnginePids(dataDir: string, deps: OrphanSweepDeps = {}): Promise<void> {
   const rt = buildOrphanSweepRuntime(deps)
@@ -192,7 +181,7 @@ export async function sweepOrphanEnginePids(dataDir: string, deps: OrphanSweepDe
       continue
     }
     if (!file.endsWith('.pid')) continue
-    await sweepOneOrphanPidFile(join(enginesDir, file), rt)
+    sweepOneOrphanPidFile(join(enginesDir, file), rt)
   }
 }
 
@@ -202,7 +191,6 @@ function buildOrphanSweepRuntime(deps: OrphanSweepDeps): OrphanSweepRuntime {
     alive: deps.isPidAlive ?? isPidAlive,
     kill: deps.killProcessTree ?? killProcessTree,
     readStartTime: deps.getProcessStartTimeSec ?? getProcessStartTimeSec,
-    confirmTimeoutMs: deps.killConfirmTimeoutMs ?? KILL_CONFIRM_DEFAULT_TIMEOUT_MS,
   }
 }
 
@@ -225,12 +213,12 @@ export async function sweepLegacyRelayChildren(dataDir: string, deps: OrphanSwee
   }
   for (const file of files) {
     if (!file.endsWith('.pid')) continue
-    await sweepOneLegacyRelayPidFile(join(childrenDir, file), rt)
+    sweepOneLegacyRelayPidFile(join(childrenDir, file), rt)
   }
 }
 
 /** 单条旧 relay pid 残片的预检（形状合格转引擎收割链；畸形直接删）。 */
-async function sweepOneLegacyRelayPidFile(pidFile: string, rt: OrphanSweepRuntime): Promise<void> {
+function sweepOneLegacyRelayPidFile(pidFile: string, rt: OrphanSweepRuntime): void {
   let parsed: unknown
   try {
     parsed = JSON.parse(readFileSync(pidFile, 'utf-8'))
@@ -245,11 +233,11 @@ async function sweepOneLegacyRelayPidFile(pidFile: string, rt: OrphanSweepRuntim
     removeQuietly(pidFile)
     return
   }
-  await sweepOneOrphanPidFile(pidFile, rt)
+  sweepOneOrphanPidFile(pidFile, rt)
 }
 
 /** 单条 pid 文件的收割裁决（主循环逐文件调用；每条记录的处理在返回前完成）。 */
-async function sweepOneOrphanPidFile(pidFile: string, rt: OrphanSweepRuntime): Promise<void> {
+function sweepOneOrphanPidFile(pidFile: string, rt: OrphanSweepRuntime): void {
   const record = readEnginePidRecord(pidFile)
   if (record === null) return
   // owner runtime 活着 = 另一活实例在管（本机单实例守卫正常时不应发生，双保险跳过）。
@@ -260,7 +248,7 @@ async function sweepOneOrphanPidFile(pidFile: string, rt: OrphanSweepRuntime): P
     return
   }
   if (!identityVerified(pidFile, enginePid, record, rt)) return
-  await reapVerifiedOrphan(pidFile, enginePid, rt)
+  reapVerifiedOrphan(pidFile, enginePid, rt)
 }
 
 /** pid 文件读取。不可解析 = 无法得知引擎 pid（原子写上线前的旧残片/外部损坏）——不能
@@ -374,14 +362,14 @@ function identityVerified(
   return true
 }
 
-/** 按进程组终止已核实身份的孤儿引擎 + 有界存活复核：确认已死才删档；杀链失败（权限/系统错误）
- * 保留记录下次再扫。 */
-async function reapVerifiedOrphan(pidFile: string, enginePid: number, rt: OrphanSweepRuntime): Promise<void> {
+/** 按进程组终止已核实身份的孤儿引擎 + 进程事实单次判定：确认已死才删档；单次判定
+ * 仍存活（信号投递后未退出/杀链失败）保留记录下次再扫。 */
+function reapVerifiedOrphan(pidFile: string, enginePid: number, rt: OrphanSweepRuntime): void {
   logger.warn(`[subagent-control] reaping orphan engine group pid=${String(enginePid)} (${basename(pidFile)}; owner runtime dead)`)
   rt.kill(enginePid, (step, err) => {
     logger.debug(`[subagent-control] orphan kill fallback (${step}) pid=${String(enginePid)}: ${toErrorMessage(err)}`)
   })
-  if (await waitForProcessDeath(enginePid, rt.confirmTimeoutMs, rt.alive)) {
+  if (!rt.alive(enginePid)) {
     removeQuietly(pidFile)
   } else {
     logger.warn(
@@ -389,20 +377,6 @@ async function reapVerifiedOrphan(pidFile: string, enginePid: number, rt: Orphan
       + `keeping ${basename(pidFile)} for the next sweep`,
     )
   }
-}
-
-/** 轮询 pid 存活直到死亡或超时（事实查询；回收层有界兜底，成功杀灭后立即返回）。 */
-async function waitForProcessDeath(
-  pid: number,
-  timeoutMs: number,
-  alive: (pid: number) => boolean,
-): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (alive(pid)) {
-    if (Date.now() >= deadline) return false
-    await new Promise((resolve) => setTimeout(resolve, KILL_CONFIRM_POLL_MS))
-  }
-  return true
 }
 
 function removeQuietly(pidFile: string): void {

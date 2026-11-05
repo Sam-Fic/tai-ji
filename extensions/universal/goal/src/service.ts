@@ -156,12 +156,12 @@ export function createGoal(
  *
  * 收尾所有 active→terminal 转换的完整副作用序列——service（budget 终态）与
  * command-adapter（clear / resume 超预算）、goal-control-adapter（complete）共用
- * 同一 `transitionStatus + completedAtTurnIndex + writeHistory + appendState` 序列。
+ * 同一 `transitionStatus + writeHistory + appendState` 序列。
  *
  * 序列（严格顺序）：
  * 1. tickState(state)（FR-6.5：转 terminal 前累加当前运行段——此时 status 仍为 active）
  * 2. finalizeGoal(state, terminalStatus, ports)
- *    — transitionStatus(终态检查) + completedAtTurnIndex= + appendHistory（FR-8.7 矩阵）
+ *    — transitionStatus(终态检查) + appendHistory（FR-8.7 矩阵）
  * 3. ports.persistence.appendState(serializeState(state))（持久化终态 state）
  *
  * @param state runtime state（mutate）
@@ -190,7 +190,6 @@ export function finalizeGoal(
 	ports: ServicePorts,
 ): void {
 	state.status = transitionStatus(state.status, terminalStatus);
-	state.completedAtTurnIndex = state.currentTurnIndex;
 
 	// FR-8.7: 所有终态都写 history（blocked 是中间态，不走此入口）
 	const entry: GoalHistoryEntry = makeHistoryEntry(state);

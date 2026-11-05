@@ -27,7 +27,7 @@ import * as pending from '../pending'
 
 beforeEach(() => {
   mockSend.mockReset()
-  // pending 模块级单例：清残留条目，避免跨用例污染（rejectAll 同时 disarm sweep timer）
+  // pending 模块级单例：清残留条目，避免跨用例污染
   pending.rejectAll(new Error('test cleanup'))
 })
 
@@ -35,8 +35,8 @@ describe('command — send fast-fail（WS 非 OPEN 时立即失败，不悬挂�
   it('send false（消息未送出）→ 立即 reject Error(code=disconnected)，promise 不悬挂', async () => {
     mockSend.mockReturnValue(false)
 
-    // 无超时参与（timeoutMs=0 禁用 sweep 兜底）——断言 reject 来自 fast-fail 而非超时
-    const p = command('file.tree.expand', { sessionId: 's1', path: 'packages' }, 0)
+    // 断言 reject 来自 fast-fail（事件驱动，无时间兜底参与）
+    const p = command('file.tree.expand', { sessionId: 's1', path: 'packages' })
 
     await expect(p).rejects.toMatchObject({ code: 'disconnected' })
   })
@@ -45,13 +45,13 @@ describe('command — send fast-fail（WS 非 OPEN 时立即失败，不悬挂�
     mockSend.mockReturnValue(false)
 
     await expect(
-      command('file.tree.expand', { sessionId: 's1', path: 'packages' }, 0),
+      command('file.tree.expand', { sessionId: 's1', path: 'packages' }),
     ).rejects.toMatchObject({ code: 'disconnected' })
 
     // 残留检测：注册一个新 pending，再 rejectAll——若上条幽灵条目还在，
     // 其 reject 会在微任务产生未处理 rejection；此处只验证新注册的能正常被清理
     const id = pending.createCommandId()
-    const probe = pending.register(id, 0)
+    const probe = pending.register(id)
     pending.rejectAll(new Error('drain'))
     await expect(probe).rejects.toThrow('drain')
   })
@@ -60,7 +60,7 @@ describe('command — send fast-fail（WS 非 OPEN 时立即失败，不悬挂�
     mockSend.mockReturnValue(true)
 
     let settleCount = 0
-    const p = command('file.tree.expand', { sessionId: 's1', path: 'packages' }, 0)
+    const p = command('file.tree.expand', { sessionId: 's1', path: 'packages' })
     const tracked = p.then(
       (v) => {
         settleCount++
@@ -97,7 +97,7 @@ function lastSentId(): string {
 describe('command — vid 门（虚拟会话 id 在 command 入口统一拦截）', () => {
   it('真实 id：payload 原样送出（门零干预，含其余字段不变）', async () => {
     mockSend.mockReturnValue(true)
-    const p = command('file.tree.expand', { sessionId: 's1', path: 'packages' }, 0)
+    const p = command('file.tree.expand', { sessionId: 's1', path: 'packages' })
     const sent = mockSend.mock.calls.at(-1)?.[0] as { payload: { sessionId: string; path: string } }
     expect(sent.payload.sessionId).toBe('s1')
     expect(sent.payload.path).toBe('packages')
@@ -107,7 +107,7 @@ describe('command — vid 门（虚拟会话 id 在 command 入口统一拦截�
 
   it('vid + 可解析查询类：送出的 payload.sessionId 已改写为归属真实会话 id', async () => {
     mockSend.mockReturnValue(true)
-    const p = command('file.search', { sessionId: 'subagent:main-1:sa-04bf', showIgnored: true }, 0)
+    const p = command('file.search', { sessionId: 'subagent:main-1:sa-04bf', showIgnored: true })
     const sent = mockSend.mock.calls.at(-1)?.[0] as { payload: { sessionId: string; showIgnored?: boolean } }
     expect(sent.payload.sessionId).toBe('main-1')
     expect(sent.payload.showIgnored).toBe(true)
@@ -118,7 +118,7 @@ describe('command — vid 门（虚拟会话 id 在 command 入口统一拦截�
   it('vid + 未登记方法：拒绝且请求不离机（send 未被调），错误码 session_vid_rejected', async () => {
     mockSend.mockReturnValue(true)
     await expect(
-      command('session.revokeMessage', { sessionId: 'subagent:main-1:sa-04bf', targetId: 'u-1' } as never, 0),
+      command('session.revokeMessage', { sessionId: 'subagent:main-1:sa-04bf', targetId: 'u-1' } as never),
     ).rejects.toMatchObject({ code: 'session_vid_rejected' })
     expect(mockSend).not.toHaveBeenCalled()
   })

@@ -661,7 +661,7 @@ function makeChild(overrides: Partial<SessionSummary> & { id: string }): Session
   }
 }
 
-describe('useTrayCounts session kind（第 4 件子会话，u7 / 设计 mode-system-composer-density §6.7 D7）', () => {
+describe('useTrayCounts session kind（第 4 件子会话，u7；原设计档 mode-system-composer-density §6.7 D7 已退役不可达，git 可追溯）', () => {
   it('仅计 parentAgentSessionId === 当前 sessionId：父为 null 的根会话 / 别人（SID2）的子会话都不计入', () => {
     useSessionStore().applySnapshot({
       groups: [
@@ -882,7 +882,7 @@ describe('useTrayCounts canvas kind（第 5 件画布，u-tray-entry）', () => 
     const wrapper = mountHarness('')
     await vi.waitFor(() => expect(data().counts.value.session.total).toBe(0), { interval: 1 })
     // 空 sid → 归一 null → 不发 canvas.list RPC、计数恒零（与 session 件同款归零语义）
-    expect(commandMock).not.toHaveBeenCalledWith('canvas.list', expect.anything(), expect.anything())
+    expect(commandMock).not.toHaveBeenCalledWith('canvas.list', expect.anything())
     expect(data().counts.value.canvas).toEqual({ running: 0, ended: 0, total: 0 })
     wrapper.unmount()
   })
@@ -909,7 +909,7 @@ describe('useTrayCounts canvas kind（第 5 件画布，u-tray-entry）', () => 
       return null
     })
     broadcastCanvasUpdated('cvs-b', SID2)
-    await vi.waitFor(() => expect(commandMock).toHaveBeenCalledWith('canvas.list', { sessionId: SID2 }, expect.anything()), { interval: 1 })
+    await vi.waitFor(() => expect(commandMock).toHaveBeenCalledWith('canvas.list', { sessionId: SID2 }), { interval: 1 })
     // A 的清单未被动过（B 的广播只写 B 分区）
     expect(data().lists.canvas.entries.value.map((c) => c.canvasId)).toEqual(['cvs-a'])
     expect(data().counts.value.canvas.total).toBe(1)

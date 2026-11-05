@@ -34,117 +34,6 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
-// ============================================================
-// Per-message 固定窗口限流（P3 防线）
-//
-// 语义：同一个 (extName, level, msg) 三元组在 60s 窗口内，前 10 条 warn/error
-// 直写 pi.appendEntry（session JSONL），第 11 条起抑制并在内存计数。窗口
-// 过期后下一条到来时，先写 1 条聚合摘要（"...[+M suppressed in last 60s]"），
-// 再正常写本条并开新窗口。纯惰性实现——无 timer，全部状态在调用时检查
-// （Date.now() 判断窗口是否过期）。
-//
-// 已知限制：
-//   - key = msg 原文（不包含 data 参数）。若调用方把动态 id 拼进 msg
-//     （如 `session=${id}`），每条 msg 不同则限流不命中。根治靠调用方把
-//     动态值放 data 参数（D4 已声明）。
-//   - fileLog 通道全量不限流（TAIJI_AGENT_DEBUG=1 / TAIJI_AGENT_EXT_LOG=1 时日志写文件）。
-//   - Map cap 512 超限时全量清空（简化策略，对齐 cap-1024 先例），
-//     等价于所有 key 窗口重置，防无界增长。
-//
-// 设计依据：extension-log-cleanup-design §3.4 D4
-// ============================================================
-
-/** 同 key 每窗口允许直写 appendEntry 的最大条数。 */
-const RATE_LIMIT_MAX = 10;
-/** 固定窗口时长（ms）。 */
-const RATE_LIMIT_WINDOW_MS = 60_000;
-/** 限流状态 Map 的容量上限——超限全量清空（对齐 cap-1024 先例的简化策略）。 */
-const RATE_LIMIT_STATE_CAP = 512;
-
-interface RateLimiterEntry {
-	/** 当前窗口起始时间戳（ms）。 */
-	windowStart: number;
-	/** 当前窗口内已直写 appendEntry 的条数。 */
-	count: number;
-	/** 当前窗口内被抑制的条数（窗口过期后用于聚合摘要）。 */
-	suppressed: number;
-}
-
-/**
- * per-msg 限流状态。
- *
- * key = `${extName}:${level}:${msg}`（msg 为原 msg，非 prefixed）。
- * 同进程所有 logger 实例共享（模块级 singleton）。
- *
- * ⚠️ 生命周期与进程一致——taiji 每 session 一个独立 pi 进程
- * （见 runtime process-manager.ts 的类注释），故不存在跨 session 残留问题。
- */
-const rateLimiterState = new Map<string, RateLimiterEntry>();
-
-/**
- * 检查并更新 per-msg 限流状态。返回值：
- *   - "allow": 直写 appendEntry
- *   - "suppress": 抑制（不写 appendEntry，内存计数）
- *   - { emitSummary: M }: 窗口过期后首条——先写聚合摘要（M = 被抑制数），再写本条
- *
- * 纯惰性实现：无 timer，窗口过期判断在调用时通过 Date.now() 计算。
- */
-function checkRateLimiter(
-	key: string,
-): "allow" | "suppress" | { emitSummary: number } {
-	// 防无界增长：超限清空（等价所有 key 窗口重置）
-	if (rateLimiterState.size >= RATE_LIMIT_STATE_CAP) {
-		rateLimiterState.clear();
-	}
-
-	const now = Date.now();
-	const entry = rateLimiterState.get(key);
-
-	if (!entry) {
-		// 首次见到该 key：开新窗口，count=1（本条是第 1 条）
-		rateLimiterState.set(key, {
-			windowStart: now,
-			count: 1,
-			suppressed: 0,
-		});
-		return "allow";
-	}
-
-	const elapsed = now - entry.windowStart;
-
-	if (elapsed >= RATE_LIMIT_WINDOW_MS) {
-		// 窗口过期：本条触发新窗口。若有被抑制数，先返回聚合摘要。
-		const suppressed = entry.suppressed;
-		// 开新窗口（count=1 计入本条）
-		rateLimiterState.set(key, {
-			windowStart: now,
-			count: 1,
-			suppressed: 0,
-		});
-		if (suppressed > 0) {
-			return { emitSummary: suppressed };
-		}
-		return "allow";
-	}
-
-	// 窗口内
-	if (entry.count < RATE_LIMIT_MAX) {
-		entry.count++;
-		return "allow";
-	}
-
-	// 已满额：抑制，计数
-	entry.suppressed++;
-	return "suppress";
-}
-
-/**
- * 清空限流状态（测试用导出，生产代码不调用）。
- */
-export function clearRateLimiterState(): void {
-	rateLimiterState.clear();
-}
-
 /**
  * Pi ExtensionAPI 的最小子集——仅 appendEntry（持久化审计通道）。
  *
@@ -241,74 +130,37 @@ export function createLogger(extName: string, pi?: PiLike): ExtensionLogger {
 		warn(msg: string, data?: unknown): void {
 			const piResolved = resolvePi();
 			const prefixed = prefixMsg(extName, msg);
-			// appendEntry 通道：per-msg 固定窗口限流（debug 不限流——只走 fileLog）
-			const rateLimitKey = `${extName}:warn:${msg}`;
-			const rateLimitResult = checkRateLimiter(rateLimitKey);
 			try {
-				if (rateLimitResult === "allow") {
-					piResolved?.appendEntry?.(`${extName}:log`, {
-						timestamp: Date.now(),
-						level: "warn",
-						message: prefixed,
-						data,
-					});
-				} else if (typeof rateLimitResult === "object") {
-					// 窗口过期后首条：先写聚合摘要
-					piResolved?.appendEntry?.(`${extName}:log`, {
-						timestamp: Date.now(),
-						level: "warn",
-						message: `${prefixed} ... [+${rateLimitResult.emitSummary} suppressed in last 60s]`,
-					});
-					// 再写本条
-					piResolved?.appendEntry?.(`${extName}:log`, {
-						timestamp: Date.now(),
-						level: "warn",
-						message: prefixed,
-						data,
-					});
-				}
-				// else: "suppress" — 不写 appendEntry
+				// appendEntry 通道：无条件直写（时间窗限流已删——时间阈值决策退役）
+				piResolved?.appendEntry?.(`${extName}:log`, {
+					timestamp: Date.now(),
+					level: "warn",
+					message: prefixed,
+					data,
+				});
 			} catch (appendErr) {
 				// appendEntry 失败（session 已 disposed 等）→ 降级文件日志（下方 fileLog 兜底），不 throw
 				void appendErr;
 			}
-			// fileLog 全量不限流（TAIJI_AGENT_DEBUG=1 排障时可见全部）
+			// fileLog 全量照写（TAIJI_AGENT_DEBUG=1 排障时可见全部）
 			fileLog(extName, "warn", prefixed, data);
 		},
 		error(msg: string, data?: unknown): void {
 			const piResolved = resolvePi();
 			const prefixed = prefixMsg(extName, msg);
-			// appendEntry 通道：per-msg 固定窗口限流（与 warn 同参数，一套机制）
-			const rateLimitKey = `${extName}:error:${msg}`;
-			const rateLimitResult = checkRateLimiter(rateLimitKey);
 			try {
-				if (rateLimitResult === "allow") {
-					piResolved?.appendEntry?.(`${extName}:log`, {
-						timestamp: Date.now(),
-						level: "error",
-						message: prefixed,
-						data,
-					});
-				} else if (typeof rateLimitResult === "object") {
-					// 窗口过期后首条：先写聚合摘要
-					piResolved?.appendEntry?.(`${extName}:log`, {
-						timestamp: Date.now(),
-						level: "error",
-						message: `${prefixed} ... [+${rateLimitResult.emitSummary} suppressed in last 60s]`,
-					});
-					// 再写本条
-					piResolved?.appendEntry?.(`${extName}:log`, {
-						timestamp: Date.now(),
-						level: "error",
-						message: prefixed,
-						data,
-					});
-				}
+				// appendEntry 通道：无条件直写（时间窗限流已删——时间阈值决策退役）
+				piResolved?.appendEntry?.(`${extName}:log`, {
+					timestamp: Date.now(),
+					level: "error",
+					message: prefixed,
+					data,
+				});
 			} catch (appendErr) {
 				// 同 warn：appendEntry 失败降级文件日志，不 throw
 				void appendErr;
 			}
-			// fileLog 全量不限流
+			// fileLog 全量照写
 			fileLog(extName, "error", prefixed, data);
 		},
 	};
@@ -401,7 +253,7 @@ function cleanExpiredExtLogsOnce(logDir: string): void {
 
 /**
  * 重置保留期清理的 once 标记（测试用导出，生产代码不调用）。
- * 对齐 clearRateLimiterState 的测试出口先例——模块级状态跨用例需可重置。
+ * 模块级状态跨用例需可重置的测试出口。
  */
 export function resetExtLogCleanupForTest(): void {
 	extLogCleanupDone = false;

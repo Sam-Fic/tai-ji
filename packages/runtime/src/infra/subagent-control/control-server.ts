@@ -332,13 +332,6 @@ export class SubagentControlServer {
     )
   }
 
-  /** 在册通道数 + opening 占位（滚动重启在途面组合根消费；口径与 D8 上限一致）。 */
-  get channelCount(): number {
-    let openings = 0
-    for (const conn of this.conns.values()) openings += conn.pendingOpens.size
-    return this.registry.channelCount + openings
-  }
-
   get listeningSocketPath(): string {
     return this.socketPath
   }
@@ -1379,7 +1372,7 @@ export function getActiveControlSocketPath(): string | undefined {
   return state?.socketPath
 }
 
-/** 活跃 server 句柄（滚动重启在途面组合根消费 channelCount；未激活 undefined）。 */
+/** 活跃 server 句柄（组合根流状态数据源消费；未激活 undefined）。 */
 export function getActiveControlServer(): SubagentControlServer | undefined {
   return state?.server
 }

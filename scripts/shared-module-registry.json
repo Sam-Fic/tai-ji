@@ -234,10 +234,6 @@
       "purpose": "终端实例编号（terminalId）格式谓词 —— `term:<会话id>:<序号>` 的跨层协议级约定 SSOT。"
     },
     {
-      "file": "timeouts.ts",
-      "purpose": "RPC 超时校准链常量 SSOT（timeout-slow-flow-wallclock 设计 D2/D3）。"
-    },
-    {
       "file": "tts-types.ts",
       "purpose": "语音合成朗读（TTS）契约类型 —— shared 协议层 SSOT。"
     },

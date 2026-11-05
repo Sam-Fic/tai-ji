@@ -321,8 +321,7 @@ export class RecordAccess {
       parentRecordId,
       depth,
       // [modeless] chatMode 不落 record（「模式」不是 record 状态——万物可续，
-      // conversation 派发参数已随波 5 删除）。idleTimeoutMs 对全 record 生效。
-      idleTimeoutMs: opts.idleTimeoutMs,
+      // conversation 派发参数已随波 5 删除）。
       // P4 引擎留痕（D9①）：opts.engine 由引擎适配层写入（PiEngine.run
       // 从 RunContext 回填；缺省视为 pi，存量调用方零感知）
       engine: opts.engine,

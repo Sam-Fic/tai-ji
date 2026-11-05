@@ -115,8 +115,6 @@ describe("createGoalState", () => {
 			tokenWarning70Sent: false,
 			tokenWarning90Sent: false,
 		});
-		// completedAtTurnIndex 是 optional：createGoalState 省略该键（访问得 undefined）
-		expect(createGoalState("my obj").completedAtTurnIndex).toBeUndefined();
 	});
 
 	it("objective 透传", () => {

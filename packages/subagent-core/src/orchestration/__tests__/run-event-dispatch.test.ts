@@ -222,37 +222,6 @@ describe("agent-started phase 承载（W1 D6 分组供源）", () => {
   });
 });
 
-// ── 1.6 run-created 时间预算载荷（预算单源，已归档设计档案（决策记录见 docs/adr/decisions.md） §1.1） ──
-
-describe("run-created 时间预算载荷（resume 预算单源）", () => {
-  it("spec.budgetTimeMs > 0 → 帧携带该字段（resume 继承恢复的数据范围）", async () => {
-    const run = makeRun("wf-created-budget", { budgetTimeMs: 600_000 });
-    await dispatchRunCreated(run);
-
-    const events = await scanRunEvents(journalDir, run.runId);
-    const created = events.find(
-      (e): e is Extract<WorkflowRunEvent, { type: "run-created" }> => e.type === "run-created",
-    )!;
-    expect(created.budgetTimeMs).toBe(600_000);
-  });
-
-  it("未设/0/负值 → 不落字段（旧格式形态保持，读侧回落不限时）", async () => {
-    const cases: Array<[string, number | undefined]> = [
-      ["wf-created-nobudget", undefined],
-      ["wf-created-zero", 0],
-      ["wf-created-negative", -1],
-    ];
-    for (const [runId, budget] of cases) {
-      const run = makeRun(runId, budget !== undefined ? { budgetTimeMs: budget } : {});
-      await dispatchRunCreated(run);
-      const events = await scanRunEvents(journalDir, runId);
-      const created = events.find((e) => e.type === "run-created")!;
-      expect("budgetTimeMs" in created).toBe(false);
-    }
-  });
-});
-
-// ── 2. 终态三形态（journal 侧写读闭环） ──────────────────────
 
 describe("终态写读三形态（验收 b：journal 侧）", () => {
   it("成功 = completed", async () => {

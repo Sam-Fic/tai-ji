@@ -8,6 +8,10 @@
  * resolveEnvelope 例外：它是 core route-inbound 委托的 pending 分流出口（R2/ES1），
  * u4 后生产路径经 route-inbound defaultPorts 静态直连本模块（不经壳装配）；
  * TransportPorts.pending 仅作 core 内部测试注入 seam（见 route-inbound.ts）。
+ *
+ * 生命周期纯事件驱动（ADR-0190）：reply 到达经 resolve/reject/resolveEnvelope 结算，
+ * WS 断连经 rejectAll 批量收尾（use-connection 断连汇合分支）。无时间兜底——runtime
+ * 不回 = 调用方挂住，由断连收尾或人工干预收终，不靠猜测时间的超时中断等待。
  */
 import type { ServerMessage } from '@taiji/shared'
 import { randomUuid } from '../../utils/random-uuid'
@@ -16,26 +20,7 @@ import { randomUuid } from '../../utils/random-uuid'
 export interface PendingRequest<T = unknown> {
   resolve: (value: T) => void
   reject: (error: unknown) => void
-  /**
-   * [Q1-5] 惰性超时判定的绝对 deadline（ms epoch）。undefined = 无超时（timeoutMs=0）。
-   * 超时不再挂 per-request setTimeout，改由共享 sweep timer 到期批量清理（见 sweepExpired）。
-   */
-  deadline?: number
-  /** 超时错误消息保留原格式（`request timeout after ${timeoutMs}ms`） */
-  timeoutMs?: number
 }
-
-/**
- * 控制范围 RPC 兜底超时（backstop，65s，值与历史 DEFAULT_TIMEOUT_MS 一致）。
- *
- * 语义显性化（timeout-slow-flow-wallclock D5 具名化）：它是「≥ runtime rpc-client
- * CMD_TIMEOUT_MS（60s）+ 余量」的 renderer 侧控制范围兜底，不是任务超时。调用方必须
- * 按命令语义显式传参——长任务命令（bash/compact/handoff）传各自校准链常量，控制范围
- * 单请求传本值。timeout 参数必传化（register/command 双层，G5）后漏传 = 编译错误：
- * 新增长任务命令忘声明超时在编译期报错，而非静默继承 65s 埋雷（compact 65s 误杀
- * 大 session 前科的同根预防）。
- */
-export const RPC_BACKSTOP_TIMEOUT_MS = 65_000
 
 /**
  * [Q1-5] pendingMap 容量上限：超限时驱逐最老（Map 迭代序 = 插入序，首个 key 即最老）。
@@ -43,57 +28,8 @@ export const RPC_BACKSTOP_TIMEOUT_MS = 65_000
  */
 const MAX_PENDING = 256
 
-// taste:allow-no-data-owner W24-EX-C（非 GUI 数据技术结构，登记草稿）：RPC pending promise 去重/超时表（容量上限 256，非 GUI 数据）
+// taste:allow-no-data-owner W24-EX-C（非 GUI 数据技术结构，登记草稿）：RPC pending promise 去重表（容量上限 256，非 GUI 数据）
 const pendingMap = new Map<string, PendingRequest>()
-
-/**
- * [Q1-5] 共享超时 sweep timer：全 map 只挂 ≤1 个，指向最近的 deadline。
- * 取代旧实现的 per-request setTimeout（N 个 pending = N 个 timer）。
- * - armSweepTimer：只在「新 deadline 更早」或「timer 已不存在」时重挂（常规顺序注册零重挂）
- * - sweepExpired 到期批量 reject 过期条目后，为剩余条目重新 arm
- */
-let sweepTimer: ReturnType<typeof setTimeout> | undefined
-let sweepTimerDeadline: number | undefined
-
-function armSweepTimer(): void {
-  let nearest: number | undefined
-  for (const entry of pendingMap.values()) {
-    if (entry.deadline === undefined) continue
-    if (nearest === undefined || entry.deadline < nearest) nearest = entry.deadline
-  }
-  if (nearest === undefined) {
-    disarmSweepTimer()
-    return
-  }
-  // 已 armed 的触发点不晚于最近 deadline → 不重挂（触发时 sweepExpired 会重算）
-  if (sweepTimer !== undefined && sweepTimerDeadline !== undefined && sweepTimerDeadline <= nearest) {
-    return
-  }
-  if (sweepTimer) clearTimeout(sweepTimer)
-  sweepTimerDeadline = nearest
-  sweepTimer = setTimeout(sweepExpired, Math.max(0, nearest - Date.now()))
-}
-
-function disarmSweepTimer(): void {
-  if (sweepTimer) {
-    clearTimeout(sweepTimer)
-    sweepTimer = undefined
-  }
-  sweepTimerDeadline = undefined
-}
-
-function sweepExpired(): void {
-  sweepTimer = undefined
-  sweepTimerDeadline = undefined
-  const now = Date.now()
-  for (const [id, entry] of pendingMap) {
-    if (entry.deadline !== undefined && entry.deadline <= now) {
-      // 复用 reject（get → delete → req.reject），已删条目的迟到响应在 resolve/reject 处静默丢弃
-      reject(id, Object.assign(new Error(`request timeout after ${entry.timeoutMs}ms`), { code: 'timeout' }))
-    }
-  }
-  armSweepTimer()
-}
 
 /** 生成新命令 id（randomUuid：secure context 缺失时走 v4 fallback，见 utils/random-uuid）。
  *  命名避开泛化 create（Gate-1.5 duplicate_exports：
@@ -120,22 +56,16 @@ function evictOldestIfOverflow(): void {
 /**
  * 注册 pending 请求，返回与之关联的 Promise。
  *
- * @param id 命令 id（createCommandId() 生成）
- * @param timeoutMs 超时毫秒数（必传：调用方按命令语义显式决策——控制范围传
- *                 RPC_BACKSTOP_TIMEOUT_MS，长任务传各自校准链常量；暗默认已在
- *                 D5 必传化中删除）。超时后自动 reject（error.code='timeout'）+ 清理。
- *                 传 0 禁用超时（极少数自带应用层等待语义的场景）。
+ * 结算全部事件驱动：reply 到达（resolve / resolveEnvelope / reject）或 WS 断连
+ * （rejectAll）。无超时兜底（ADR-0190：时间等待机制退役，runtime 不回 = 挂住）。
  */
-export function register<T>(id: string, timeoutMs: number): Promise<T> {
+export function register<T>(id: string): Promise<T> {
   evictOldestIfOverflow()
   return new Promise<T>((resolve, reject) => {
-    const entry: PendingRequest = {
+    pendingMap.set(id, {
       resolve: resolve as (value: unknown) => void,
       reject,
-      ...(timeoutMs > 0 ? { deadline: Date.now() + timeoutMs, timeoutMs } : {}),
-    }
-    pendingMap.set(id, entry)
-    armSweepTimer()
+    })
   })
 }
 
@@ -145,9 +75,6 @@ export function resolve<T>(id: string, value: T): void {
   if (!req) return
   pendingMap.delete(id)
   req.resolve(value)
-  // [W04 review] 条目删除后重算 sweep timer：最后一个带 deadline 的 pending 正常
-  // 完成时立即 disarm，不再空转到原触发点（最长 65s）
-  armSweepTimer()
 }
 
 /**
@@ -168,10 +95,6 @@ export function reject(id: string, error: unknown): void {
   if (!req) return
   pendingMap.delete(id)
   req.reject(error)
-  // [W04 review] 与 resolve 对称：删除后重算 sweep timer（map 空时 disarm）。
-  // sweepExpired 循环内复用 reject 时同样受益——末次 reject 后 map 空 → disarm，
-  // 循环后的 armSweepTimer 是 no-op，不会多排空转 timer
-  armSweepTimer()
 }
 
 /**
@@ -190,7 +113,7 @@ export function resolveEnvelope(msg: ServerMessage): void {
   if (msg.type === 'error') {
     // type==='error' 已窄化 payload 为 error envelope（含 code + message + 可选 details）。
     // 透传 code 到 reject 的 Error（D-021：NodeState.reason 需要 error code 区分失败类型，
-    // 如 out_of_cwd / permission_denied / timeout）。此前只透传 message 丢了 code。
+    // 如 out_of_cwd / permission_denied）。此前只透传 message 丢了 code。
     // details.detail 展开：string（如 WORKTREE_EXISTS 的 cwd）→ Error.cwd；object（如
     // SETUP_FAILED 的 { exitCode, stderr }）→ Object.assign 展开到 Error 上。
     const payload = msg.payload as {
@@ -221,6 +144,4 @@ export function rejectAll(error: unknown): void {
     req.reject(error)
   }
   pendingMap.clear()
-  // [Q1-5] map 已空，sweep timer 无事可做，一并清掉（无 timer 泄漏）
-  disarmSweepTimer()
 }

@@ -5,8 +5,7 @@
  *
  * [HISTORICAL] 背景（2026-07-27 预存 bug）：chokidar v4 移除 native fsevents 绑定，macOS 上
  * 退化为纯 Node fs.watch，对「新建子目录 / 新文件」事件不可靠（nodejs/node#52601），实测触发率
- * ~40%（flaky）；当时修复为 WATCH_OPTIONS usePolling:true。2026-08-28 复测该缺陷在当前 Node
- * 不再复现，默认回到原生事件（polling 留 TAIJI_AGENT_SKILL_WATCH_POLLING=1 降级开关）——
+ * ~40%（flaky）。2026-08-28 复测该缺陷在当前 Node 不再复现，默认走原生事件（无 polling 降级）——
  * 本测试随之成为原生事件路径的回归检查，正是它要防的场景。
  *
  * 本文件不 mock chokidar（顶层的 vi.mock('chokidar') 仅作用于 skill-registry.test.ts 同文件作用域，
@@ -33,7 +32,6 @@ import { INTEGRATION_TESTS_ENABLED, INTEGRATION_TESTS_SKIP_REASON } from '../../
 /**
  * watcher 触发检测的挂钟轮询 deadline（reviewer-D WARNING-4 加固）。
  *
- * polling 时代为 interval(1500ms) + debounce(300ms) 的 ~8 次轮询预算；原生事件路径下
  * 检测是事件驱动（亚秒级），12000ms 仅为 CI 抖动留缓冲。
  * 配合 it() timeout（30000ms）确保测试本身不会先于 deadline 超时。
  */

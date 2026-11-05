@@ -30,9 +30,6 @@
  *    外层不设 notices 字段（快照外层固定五项）。
  */
 
-/** collect_results 缺省等待时长（与现役工具契约一致：3600000ms = 1 小时）。 */
-export const COLLECT_RESULTS_DEFAULT_TIMEOUT_MS = 3_600_000
-
 /** 返回三桶（按键并集，不按路分桶）。 */
 export const COLLECT_RESULT_BUCKETS = ['collected', 'stillOpen', 'errors'] as const
 
@@ -174,22 +171,6 @@ export function routeCollectKeys(input: CollectRoutingInput): CollectRouting {
 
   routing.waitKeys = [...routing.executionWait, ...routing.pendingWait]
   return routing
-}
-
-/** timeout_ms 解析结果（invalid 时调用方应返回 invalid_params，同时仍持有安全默认值）。 */
-export interface CollectTimeoutResolution { // oe-exempt:20261031:framework:执行域跨包协议契约（shared 单源 ports 层，实现随 u-m1/u-m2/u-m3 波次落地）
-  timeoutMs: number
-  valid: boolean
-}
-
-/**
- * 解析 timeout_ms：缺省 = 契约默认值；合法值 = 非负整数；非法值（负数/小数/NaN/
- * Infinity）回退默认值并标记 invalid（fail-visible：调用方据此显式报错，不静默改语义）。
- */
-export function resolveCollectTimeoutMs(value?: number): CollectTimeoutResolution {
-  if (value === undefined) return { timeoutMs: COLLECT_RESULTS_DEFAULT_TIMEOUT_MS, valid: true }
-  if (Number.isInteger(value) && value >= 0) return { timeoutMs: value, valid: true }
-  return { timeoutMs: COLLECT_RESULTS_DEFAULT_TIMEOUT_MS, valid: false }
 }
 
 /**

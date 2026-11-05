@@ -38,11 +38,11 @@ import type { ConnectionCredentialController } from '../platform/connection-prof
 
 /**
  * 移动壳连接装配 UI 态（模块级响应式；App.vue 多视图消费）：
- * - 'connecting'：未连接（编排已提交 / 握手 auth 中 / 断线重连中）初值
+ * - 'connecting'：未连接（编排已提交 / 握手 auth 中 / 断线恢复中）初值
  * - 'connected'：auth 通过（凭据有效）
  * - 'token-input'：凭据缺失或验身失败（D8 信号 / D4 皆无分支）——落 token 输入视图
- * - 'failed'：重连预算用尽（ws-client 60s → failed）——终态，UI 必须给可行动恢复指引
- *   而非无限期「连接中」（兜底长期接管 = 正常路径断裂）
+ * - 'failed'：连接异常关闭 / 验身失败终态（ws onclose → failed）——UI 必须给可行动恢复
+ *   指引而非无限期「连接中」（兜底长期接管 = 正常路径断裂）
  */
 export type MobileShellConnectionState = 'connecting' | 'connected' | 'token-input' | 'failed'
 
@@ -70,7 +70,7 @@ export const tokenSubmit = ref<{ submitting: boolean; error: 'invalid' | 'failed
 /**
  * 信号入口④（D8 重启感知）：服务端计划内关停窗口（ws-client onclose 读 close 1001 →
  * onGoingAway，P6 探针证实可读）置位；复位点 = 重连成功（watch connected 分支统一收尾——
- * 服务回来了）。置位期间重连退避照常（ws-client 侧不改重连机制），本态只影响断线条文案
+ * 服务回来了）。本态只影响断线条文案
  * 分流（connectionBannerI18nKey），不改变 shellConnectionState 转移（不升级 failed 全屏）。
  */
 // taste:allow-no-data-owner W24-EX-B（模块级单例 UI 瞬态）：重启窗口提示态（断线条文案分流依据）
@@ -98,7 +98,7 @@ export function setupConnectionView(controller: ConnectionCredentialController):
   profileController = controller
 
   // 信号入口④接线（D8）：服务端计划内关停（close 1001）→ 置「重启中」提示态；
-  // ws-client 侧重连退避照常，此处只落文案分流状态（不碰 shellConnectionState）。
+  // 此处只落文案分流状态（不碰 shellConnectionState）。
   onGoingAway(() => {
     runtimeRestarting.value = true
   })

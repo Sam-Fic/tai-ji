@@ -91,7 +91,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { CanvasExportTarget, CanvasMutateRequest } from '@zhushanwen/extension-protocol'
-import { command, RPC_BACKSTOP_TIMEOUT_MS } from '@taiji/core/transport/api'
+import { command } from '@taiji/core/transport/api'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/composables/useToast'
 import { useCanvasSync } from '@/composables/use-canvas-sync'
@@ -180,7 +180,7 @@ async function runMutate(request: CanvasMutateRequest): Promise<boolean> {
   mutating.value = true
   try {
     // sessionId 必填（D4 破坏性协议）：归属写面——runtime 按 payload.sessionId 校验归属。
-    const reply = await command('canvas.mutate', { actor: 'user', sessionId: props.sessionId, ...request }, RPC_BACKSTOP_TIMEOUT_MS)
+    const reply = await command('canvas.mutate', { actor: 'user', sessionId: props.sessionId, ...request })
     if (reply.ok) {
       toast.info(reply.summary)
       return true

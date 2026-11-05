@@ -28,7 +28,7 @@
  * - pi stdout JSONL 独立落盘：`<root>/<sessionId>/logs/pi-<date>.jsonl`（session 存储树
  *   logs/ 域，session-store-layout-inversion 布局反转——sid 已在路径，文件名不再内嵌；
  *   卡死诊断的决定性证据），同款 size 轮转（达阈值 gzip 归档为 <原路径>.1.gz）
- * - 带 sessionId 的日志（tee / pi-crash / 树内 signal-forensics）入树；无归属日志
+ * - 带 sessionId 的日志（tee / pi-crash）入树；无归属日志
  *   （runtime-/main-/relay/plugin-crash/无 sid crash）留全局 <dataDir>/logs/（D7 豁免②）
  * - 退出 flush（D10-1 分档承诺的配套）：shutdown 链必须 `await closeLogger()`（主日志 +
  *   全部 pi session 写流 end 并等 flush 完成）后再 process.exit(0)；硬崩溃（SIGKILL/断电）
@@ -56,10 +56,6 @@ import { createGzip } from 'node:zlib'
 import { isPackaged } from '../utils/runtime-env.js'
 // endAndAwait 单一实现（偏差 #32①：原模块私有复刻与 crash-journal 同构，收敛共享原语；
 import { endAndAwaitStream } from './stream-end-await.js'
-import { getCrashJournal } from './crash-journal.js'
-// [startup-readiness §7.1/RL4] 常驻事件循环滞后遥测（monitorEventLoopDelay 直方图进
-// 结构化日志；telemetry 零 import 本模块——落盘口经参数注入，无循环引用）
-import { startEventLoopDelayTelemetry } from './event-loop-telemetry.js'
 
 // ── 级别 ────────────────────────────────────────────────────────────
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
@@ -187,9 +183,6 @@ export function initLogger(dataDir: string): void {
   cleanExpiredLogs()
   patchConsole()
   writeLogEntry('info', '[logger] initialized', { level: currentLevel, dir: logsDir })
-  // [startup-readiness §7.1/RL4] 常驻滞后遥测接线：与日志管线同生命周期（initLogger
-  // 启动即常驻；unref 定时器不钉住进程退出）。落盘口注入 logger.info。
-  startEventLoopDelayTelemetry((message, meta) => logger.info(message, meta))
 }
 
 /**
@@ -398,11 +391,10 @@ function createStreamSafe(file: string, flags: 'a' | 'w' = 'a'): WriteStream | u
  *
  * 布局反转（session-store-layout-inversion 域 11）后双根扫描：
  * - 全局 `<dataDir>/logs/`：无归属日志（runtime-* / pi-relay-* / 无 sid 的 pi-crash-* /
- *   plugin-crash-* / 旧布局遗留的 signal-forensics-*）照旧按保留期清；
+ *   plugin-crash-*）照旧按保留期清；
  * - 树内 `<root>/<sid>/logs/`：扫 `<root>/` 一级目录，**非合法 sessionId 形态的目录
  *   一律跳过**（isPiSessionId，D7 树内遍历规约——防手放的非会话目录被误清），只清
- *   各树 logs/ 子目录内的白名单文件（pi-*.jsonl(.N.gz) / pi-crash-*.log /
- *   signal-forensics-*.jsonl，文件名均已去 sid）。
+ *   各树 logs/ 子目录内的白名单文件（pi-*.jsonl(.N.gz) / pi-crash-*.log，文件名均已去 sid）。
  */
 function cleanExpiredLogs(): void {
   if (!logsDir || dataDirRoot === undefined) return
@@ -424,11 +416,10 @@ function cleanExpiredLogs(): void {
 /**
  * 单目录保留期清理（cleanExpiredLogs 的全局/树内共用实现）。
  *
- * 只清理本模块产出的日志文件（前缀白名单：runtime-* / pi-* / plugin-crash-* /
- * signal-forensics-*）。pi-crash-* 靠 pi- 前缀覆盖；pi-*.jsonl.N.gz 轮转压缩代同被
- * pi- 前缀覆盖；plugin-crash-*（u5b D6-⑤，plugin worker 崩溃取证）与
- * signal-forensics-*（2026-10-13 信号归因取证，infra/pi/signal-forensics.ts 自写不入
- * logger 流）写入与清理通道同步落地（D6-⑦：有写入无清理 = 新债）。
+ * 只清理本模块产出的日志文件（前缀白名单：runtime-* / pi-* / plugin-crash-*）。
+ * pi-crash-* 靠 pi- 前缀覆盖；pi-*.jsonl.N.gz 轮转压缩代同被
+ * pi- 前缀覆盖；plugin-crash-*（u5b D6-⑤，plugin worker 崩溃取证）写入与清理
+ * 通道同步落地（D6-⑦：有写入无清理 = 新债）。
  * runtime-uncaught-<date>.log（uncaught-policy 的 appendProcessEscapeLog 逃逸取证，非
  * 本模块产出）也由 runtime- 前缀覆盖——appendFileSync 逐事件直写、无常驻 fd，unlink
  * 语义安全。
@@ -444,7 +435,7 @@ function cleanExpiredInDir(dir: string, cutoff: number): void {
     return
   }
   for (const name of entries) {
-    if (!name.startsWith('runtime-') && !name.startsWith('pi-') && !name.startsWith('plugin-crash-') && !name.startsWith('signal-forensics-')) continue
+    if (!name.startsWith('runtime-') && !name.startsWith('pi-') && !name.startsWith('plugin-crash-')) continue
     const full = join(dir, name)
     try {
       if (statSync(full).mtimeMs < cutoff) {
@@ -837,129 +828,6 @@ export function formatPiCrashContextHeader(ctx: PiCrashContext): string {
     `[runtime-context] uptimeMs=${ctx.uptimeMs ?? 'null'}`,
     `[runtime-context] memory=${ctx.memory ? JSON.stringify(ctx.memory) : 'null'}`,
   ].join('\n')
-}
-
-/**
- * 内存水位行格式化（D6-②，runtime 水位定时器每 5 分钟一行，A8 断言「5 分钟间隔水位行」）。
- * 单行、数值单位 MB（1 位小数）+ session/pi 计数——grep '[watermark]' 可提取全序列画曲线。
- *
- * u1e（crash-forensics D1）：本函数同时是 watermark-daily 自然日聚合的采样入口——组合根
- * 水位定时器每拍经此处消费样本（唯一生产调用点，依赖事实见上方聚合段注释）。聚合任何
- * 异常已在 recordWatermarkDailySample 内消化，不影响本函数返回格式化行。
- */
-export function formatMemoryWatermarkLine(sample: MemoryWatermarkSample): string {
-  recordWatermarkDailySample(sample)
-  const mb = (n: number): string => (n / (BYTES_PER_KB * BYTES_PER_KB)).toFixed(1)
-  return `[watermark] rss=${mb(sample.rss)}MB heapUsed=${mb(sample.heapUsed)}MB heapTotal=${mb(sample.heapTotal)}MB external=${mb(sample.external)}MB sessions=${sample.activeSessions} pi=${sample.piProcesses}`
-}
-
-/** 内存水位行载荷（四指标 + 两个进程计数）。 */
-export interface MemoryWatermarkSample extends MemorySnapshot {
-  /** 活跃 session 数（sessionService.getActiveSessionIds().length）。 */
-  activeSessions: number
-  /** 托管 pi 进程数（ProcessManager.size）。 */
-  piProcesses: number
-}
-
-/** 水位打点周期（分钟，D6-②：每 5 分钟一行）。 */
-const WATERMARK_INTERVAL_MINUTES = 5
-/** runtime 内存水位定时器周期（D6-②）。 */
-export const MEMORY_WATERMARK_INTERVAL_MS = WATERMARK_INTERVAL_MINUTES * SECONDS_PER_MINUTE * MS_PER_SECOND
-
-// ── watermark-daily 自然日聚合（crash-forensics-and-watchdog §3.3 D1，u1e）────────
-//
-// 设计 D1：既有水位 5min 定时器处聚合，自然日窗口一条（rss/heapUsed min/max/avg +
-// coverage 起止戳，评估器条件 #4/#5 数据源，coverage<50% 由评估器降权）；明细 5min 行
-// 仍只进 runtime-*.log 不进 journal。**钩子位置的事实依据**：水位定时器本体在组合根
-// index.ts startMemoryWatermarkTimer，其每拍回调恰调用本模块 formatMemoryWatermarkLine
-// 一次（唯一生产消费点）——聚合钩子挂该函数即「既有 5min 水位定时器处」，采样链迁移
-// 时钩子必须随迁。**日内重启处置（D1 原文）**：聚合态在本模块内存、重启即清零——重启
-// 后从进程内首个样本起算当日剩余窗口，coverage 戳随条目落盘；当日未完结不写（只写
-// 完整窗口）。**依赖方向（循环依赖破除后单向）**：本模块 import crash-journal
-// （getCrashJournal），crash-journal 不反向 import logger——其留痕出口经组合根
-// initCrashJournal(dataDir, logger) 注入；journal 单例未初始化时 getCrashJournal 返回
-// no-op（crash-journal 契约）。
-
-/** 单个自然日窗口的水位聚合态（模块内存态，重启清零——D1 日内重启处置）。 */
-interface WatermarkDailyAccumulator {
-  /** 窗口所属自然日（UTC，YYYY-MM-DD）。 */
-  day: string
-  rssMin: number
-  rssMax: number
-  rssSum: number
-  heapUsedMin: number
-  heapUsedMax: number
-  heapUsedSum: number
-  /** 样本数（avg 分母，digest 携带供评估器判窗口密度）；coverageStart/End = 窗口首末样本时刻（ISO）。 */
-  samples: number
-  coverageStart: string
-  coverageEnd: string
-}
-
-let watermarkDailyAcc: WatermarkDailyAccumulator | undefined
-
-/**
- * 记录一个水位样本进自然日聚合窗口；检测到日翻转时先把**已完结的前一日窗口**写进
- * 崩溃 journal（event=watermark-daily）再开新窗口。now 缺省当前时刻，测试注入固定时刻
- * 控制日翻转（真实 IO 不与 fake timers 交互——writer 是真实异步流）。
- */
-export function recordWatermarkDailySample(sample: MemoryWatermarkSample, now: Date = new Date()): void {
-  try {
-    const day = now.toISOString().slice(0, ISO_DATE_LENGTH)
-    if (watermarkDailyAcc && watermarkDailyAcc.day !== day) {
-      flushWatermarkDaily(watermarkDailyAcc) // 日翻转：前一日窗口已完结（末样本即 coverage 终点）
-      watermarkDailyAcc = undefined
-    }
-    const iso = now.toISOString()
-    const acc = watermarkDailyAcc ?? {
-      day, rssMin: sample.rss, rssMax: sample.rss, rssSum: 0,
-      heapUsedMin: sample.heapUsed, heapUsedMax: sample.heapUsed, heapUsedSum: 0,
-      samples: 0, coverageStart: iso, coverageEnd: iso,
-    }
-    acc.rssMin = Math.min(acc.rssMin, sample.rss)
-    acc.rssMax = Math.max(acc.rssMax, sample.rss)
-    acc.rssSum += sample.rss
-    acc.heapUsedMin = Math.min(acc.heapUsedMin, sample.heapUsed)
-    acc.heapUsedMax = Math.max(acc.heapUsedMax, sample.heapUsed)
-    acc.heapUsedSum += sample.heapUsed
-    acc.samples += 1
-    acc.coverageEnd = iso
-    watermarkDailyAcc = acc
-  // eslint-disable-next-line taste/no-silent-catch -- 聚合是水位定时器回调的旁路观测范围，不得打断水位行落盘（writeLogEntry 同款容错哲学）
-  } catch {
-    // no-op
-  }
-}
-
-/**
- * 把一个已完结的自然日窗口写成一条 watermark-daily journal 事件。字段映射（schema 无统计
- * 专字段）：顶层 rss/heapUsed = 当日**平均值**（评估器趋势判定主形态）；min/max 与
- * coverage 起止戳内嵌 detailDigest（JSON，百字节级 ≪ 2KB 上限）。journal 未初始化（no-op
- * 单例）时窗口数据丢弃——no-sink 窗口不伪装成已落盘（与「重启清零」同语义）。
- *
- * **digest 键名契约（d2 评估器消费方）**：heap 族 max 键名 = `heapMax`（非 `heapUsedMax`）——
- * 评估器 extractWatermarkSample（apps/electron/main/diagnostics/trigger-evaluator.ts）
- * 对 #4「回收态存量致水位不回落」取 `digest.heapMax` 为当日 heap 峰值，缺失则回退顶层
- * `heapUsed`（当日**平均**）。键名不齐时趋势判定会静默退化为均值口径（无错误、无告警），
- * 故此处以评估器已声明的键名对齐；rss 族键名同理被评估器用作次选（`rssMax`）。改键名
- * 前先核对评估器取值链。
- */
-function flushWatermarkDaily(acc: WatermarkDailyAccumulator): void {
-  if (acc.samples === 0) return
-  const rssAvg = acc.rssSum / acc.samples
-  const heapAvg = acc.heapUsedSum / acc.samples
-  getCrashJournal().append({
-    layer: 'runtime',
-    event: 'watermark-daily',
-    rss: rssAvg,
-    heapUsed: heapAvg,
-    detailDigest: JSON.stringify({
-      coverageStart: acc.coverageStart, coverageEnd: acc.coverageEnd,
-      rssMin: acc.rssMin, rssMax: acc.rssMax, rssAvg,
-      heapMin: acc.heapUsedMin, heapMax: acc.heapUsedMax, heapAvg,
-      samples: acc.samples,
-    }),
-  })
 }
 
 /**

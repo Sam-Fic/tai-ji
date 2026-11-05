@@ -36,7 +36,7 @@ import * as chatApi from '@taiji/core/transport/api/domains/chat'
 import * as sessionApi from '@taiji/core/transport/api/domains/session'
 import * as modelApi from '@taiji/core/transport/api/domains/model'
 import * as projectApi from '@taiji/core/transport/api/domains/project'
-import { command, onGlobalType, RPC_BACKSTOP_TIMEOUT_MS } from '@taiji/core/transport/api'
+import { command, onGlobalType } from '@taiji/core/transport/api'
 import { registerSessionCleanup } from '@taiji/core/foundation/use-session-scoped-state'
 import { createComposerInjectionStore } from '@taiji/core/domain/composer/context'
 // 队列编辑锚定判定（chat-flow-consistency D6：单锚定不变式 core 下沉，桌面 composer-shell 同源）
@@ -104,7 +104,7 @@ const sessionApiPort: SessionApiPort = {
   // reply 与 request 同名、payload 消费型；会话不存在 = SESSION_NOT_FOUND reject
   // （core 侧显式未知保持，不回退其他会话的值）。
   getState: (id: string) =>
-    command('session.getState', { sessionId: id }, RPC_BACKSTOP_TIMEOUT_MS),
+    command('session.getState', { sessionId: id }),
 }
 
 // ── store / composable 单例（模块级；移动壳单实例应用）──────────────────

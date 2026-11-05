@@ -1,7 +1,7 @@
 /**
  * 崩溃登记清单 JSONL 读取的家族统一口径（【oe-audit C5】收敛；设计 §3.1 失败路径）。
  *
- * 此前 trigger-patrol / export-diagnostic-bundle 各自手写 readJournalLines 且语义分叉
+ * 此前 export-diagnostic-bundle 与其他消费方各自手写 readJournalLines 且语义分叉
  * （patrol 区分 ENOENT/其余错误，bundle 全静默吞）——违反设计 §3.1「评估器读不到登记清单
  * 文件 → 摘要标注数据缺失而非静默空白」的显式要求。本模块是读取层 SSOT：
  * - ENOENT = 常态空登记清单（登记清单文件首事件前不存在，评估器以 no-data 显式呈现）；

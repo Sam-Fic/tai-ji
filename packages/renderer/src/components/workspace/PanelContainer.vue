@@ -184,8 +184,7 @@
     </div>
     <!-- 底抽屉（display-containers §6.2/§7.3）：插在 split 行之下，横跨全宽
          （右抽屉开着时同样全宽、右抽屉变矮）；唯一内容 = terminal（TerminalView 挂载点，保留
-         defineAsyncComponent + 内部自动重试接线（D6：原 LAZY_RETRY_KEY 占位重试链已删——
-         chunk 装载失败由 createLazyChunkRetry 自动重试，见下方懒加载块）。
+         defineAsyncComponent + 失败态接线（自动重试已删：装载失败直接进错误态，见下方懒加载块）。
          高度 = pool 百分比（heightPct 默认 35%，开合 0% ↔ displayPct% 纵轴动画）；上沿手柄
          拖拽/键盘调高度（clamp 15%–70% 写侧归 core；显示期 clamp 不写回，S2）。纵轴不派发
          taiji:splitter-layout（§7.3：无消费方，不造无人读的事件）。收合动画期内容保挂载
@@ -285,15 +284,9 @@ import { createLazyChunkRetry } from '@/components/ui/lazy-chunk-retry'
 // 激活才挂载 → 首次激活才拉 chunk（xterm 移出首屏初始请求集合）。抽屉内容面板的分派与
 // DetailPane 懒加载自容器扩展点统一 U6 起归 useDrawerContentDispatch（内容分派是独立变化
 // 原因：注册表词表/白名单扩员、组件绑定调整，与壳层布局无关）。
-// 错误兜底（§3.5 · D6 2026-10-03 用户裁决改版）：界面无重试按钮——装载失败由内部有界自动
-// 重试承接（createLazyChunkRetry：3 次 × 300ms 递增退避，失败 URL 提取 + ?t=N cache-busting
-// 绕过浏览器 module map 对失败模块的记忆化——同 URL 重试零网络请求、busting 才有真自愈，
-// 探针证据见 runlog d6-fix-internal-retry）；穷尽才呈现错误态（文案给「重开恢复」指引），
-// 重开抽屉/浮层即重置计数获得新一轮自动重试。
-// [HISTORICAL W31 major-2] 旧「重试作用域 = scopedRetryFallback provide LAZY_RETRY_KEY 按挂载点
-// 隔离」随按钮删除一并退役：重试不再由用户点击路由，各挂载点状态机天然独立，串线形态
-// 结构性消失；retryKey 重挂保留为自动重试的唯一驱动（Vue 实装语义见 lazy-chunk-retry.ts
-// 头注「重试驱动形态」）。
+// 错误兜底（§3.5）：界面无重试按钮——装载失败直接进错误态（createLazyChunkRetry 薄层，
+// 自动重试已删：时间机制删除裁决；文案给「关闭重开恢复」指引），重开抽屉/浮层即 fresh
+// load 重新加载。
 const terminalRetryState = createLazyChunkRetry(() => import('@/components/panel/TerminalView.vue'))
 const { retryKey: terminalRetryKey } = terminalRetryState
 const TerminalView = defineAsyncComponent({

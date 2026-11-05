@@ -18,7 +18,7 @@
  *
  * abort：调 api.chat.abort（方法存在，中断流转 DEFERRED G-025）。
  */
-import type { Segment, ServerMessage, ServerMessageUnion, MessageBlockedCode, Message } from '@taiji/shared'
+import type { Segment, ServerMessage, ServerMessageUnion, MessageBlockedCode } from '@taiji/shared'
 import { segmentsToPrompt, restoreRevokedDraft, markerLiteral, MESSAGE_BLOCKED_CODE, VID_RPC_REJECTED_CODE } from '@taiji/shared'
 import {
   subscribeSession,
@@ -32,7 +32,6 @@ import { isVirtualKey } from './lru'
 import { disposeImageCacheForSession } from './image-cache'
 import { toErrorMessage } from '../../utils/error-message'
 import { randomUuid } from '../../utils/random-uuid'
-import { isDevMode } from '../../platform/dev-mode'
 import type { EnsureStreamSubDeps, SessionLiveStateLike, SessionStoreLike, UseChatDeps } from './use-chat-types'
 import type { DeliveryFrameEntry, DeliveryCancelReply, DeliverySubmitReply } from './api-port'
 import type { RevokeMessageErrorCode } from '@taiji/shared'
@@ -224,7 +223,7 @@ const extensionCommandErrorLastShownAt = new Map<string, number>()
  * （runtime 新增而前端漏接）不可区分——去重后一次/类型，dev 下留痕、生产零开销。
  * 「dev 门 + Set 去重 + warn」三段式收敛到 registry.createDevOnceFrameWarn 工厂（与
  * registry 未注册 message.* 帧观测同一实现）；session.* 前缀过滤是本调用点的语义差异，
- * 留在本地：app.info / config.* / plugin:* / rollingRestart:* 等全局帧经同一
+ * 留在本地：app.info / config.* / plugin:* 等全局帧经同一
  * streamSubscribe 到达，本就由其他域消费，warn 会是误报。
  * 清理：resetChatModuleStateForTest（测试隔离，与同文件其余模块级 Map 同模式）。
  */
@@ -639,66 +638,16 @@ function isFullyIdleOccupancy(payload: ServerMessage<'session.occupancy'>['paylo
   return payload.turn === 'idle' && !payload.compacting && !payload.bash
 }
 
-/** 本地 streaming 残留判定（D4 触发条件第二支）：∃ streaming assistant ∨ ∃ running
- * toolCall——一次遍历同查两形态（message 已终态而 toolCall 仍 running 的半执行残留
- * 同属「实际已结束却永远工作中」）。 */
-function hasStreamingResidue(messages: Message[]): boolean {
-  return messages.some(
-    (m) =>
-      (m.role === 'assistant' && m.status === 'streaming')
-      || (m.toolCalls?.some((tc) => tc.status === 'running') ?? false),
-  )
-}
-
-/**
- * [chat-flow-consistency §3.3 D4 / 缺陷 5] 终态处理失败恢复（设计定稿两步形态）。
- *
- * 触发 = 三维全 idle 派生视图到达 且 本地存在 streaming assistant / running toolCall：
- * 权威帧宣告回合已结束，本地却挂着「工作中」实体——终态消息处理半途失败的确定性矛盾
- * （message.complete 帧的副作用链在 ensureStreamSubscription 的 dispatch 错误隔离点被
- * 吞掉只 warn；事实驱动：锚定 idle 帧与本地残留两个确定性事实，不建时间推测兜底）。
- * 两步按序：
- * ① finalizeSession('stalled') 收尾残留（半成品定格、状态复位）——先收尾是合并保护的
- *   要求：直接拉历史会被 mergeBaselineWithLive 尾部保护段把 streaming 实体保下来与权威
- *   版本双显；先收尾使本地转终态，reconcile 后被权威版本自然替换（单显、内容正确）。
- * ② 拉一次 getHistory 走 reconcileHistory 以真实落盘内容接管——本场景正是「恢复场景读盘」
- *   的合法用途（ADR-0097 原则 4），回合往往实际成功完成，拉回真实内容优于停留在中断提示。
- * fire-and-forget：拉取失败仅 warn 留痕（best-effort 对齐 handleRevokeMessage 同款降级——
- * 本地已收尾无「永远工作中」残留，对话流由下次切入/刷新的既有主动拉收敛）。失败降级形态：
- * stalled 定格文案（REASON_FALLBACK_ERROR_TEXT.stalled）保持可见，故该文案为完成时态 +
- * 恢复动作指引（「重新打开会话可恢复完整内容」），与「恢复已终止」的定格事实一致。
- * 频率契约：正常路径残留在 message.complete 已收尾，本编排零触发；恢复后残留实体已终态，
- * 同帧重放（WS 重连 stateSnapshot 回放）不满足触发条件——每回合至多一次拉取。
- */
-function recoverStalledSession(sid: string, chat: ChatStoreInstance, deps: EnsureStreamSubDeps): void {
-  // 触发可观测（设计 D4 三档裁决「简单设计档」：dev 日志留痕，生产日志可感知频率出现
-  // 时升级处置 = 修消息处理链而非加兜底）
-  if (isDevMode()) {
-    console.warn(`[useChat] occupancy idle but local streaming residue remains for session ${sid} — finalizing as stalled, pulling authoritative history`)
-  }
-  chat.finalizeSession(sid, 'stalled')
-  void deps.chatApi
-    .getHistory(sid)
-    .then((history) => {
-      chat.reconcileHistory(sid, history.messages, historyWindowFromReply(history))
-    })
-    .catch((e) => {
-      console.warn(`[useChat] stalled recovery history pull failed for session ${sid}:`, e)
-    })
-}
-
 /** [u5b / D1+D3 → u3b/D7 简化] occupancy 派生视图消费（state topic：live 广播 + subscribeSession 的
  * stateSnapshot 回放同路径到达——WS 重连 resubscribeAll / 切回 session 时快照恢复，G4）。
  * 写入 chat store 派生视图分区（sessionPhase 单一数据源；发送位形态 / 角标 / Alt+⏎ 分流的统一读口——chat-flow-consistency D5 后判定源 = shared isActiveTurnPhase）。
  * [HISTORICAL → u3b 退役] defer 队列 flush 触发（「全 idle 且队列非空」→ 投递）已随 defer
  * 队列整体退役：投递时机由 runtime 内核驱动（occupancy 边沿是内核 lane 再判定的触发源，
- * renderer 只渲染派生视图）。本 handler 保留派生视图写入 + idle 兜底清 pendingSend +
- * [chat-flow-consistency D4] 终态处理失败恢复（recoverStalledSession，见其注释）。 */
+ * renderer 只渲染派生视图）。本 handler 保留派生视图写入 + idle 兜底清 pendingSend。 */
 function handleSessionOccupancy(
   sid: string,
   chat: ChatStoreInstance,
   msg: ServerMessage<'session.occupancy'>,
-  deps: EnsureStreamSubDeps,
 ): void {
   chat.setOccupancy(sid, {
     turn: msg.payload.turn,
@@ -721,24 +670,6 @@ function handleSessionOccupancy(
   if (fullyIdle && chat.isPendingSend(sid)) {
     chat.clearPendingSend(sid)
   }
-  // [chat-flow-consistency §3.3 D4] 权威 idle 与本地 streaming 残留矛盾 = 终态处理失败的
-  // 确定性信号 → 两步恢复（收尾 + 拉权威），见 recoverStalledSession 注释。
-  if (fullyIdle && hasStreamingResidue(chat.getMessages(sid))) {
-    recoverStalledSession(sid, chat, deps)
-  }
-}
-
-/** [pi-stall-detection U4 / D3] 静默辅助提示消费（session.stall_hint state topic：live 广播 +
- * stateSnapshot 回放同路径到达）。判定权在 runtime——T/T_hint 推导单源 runtime（review-main#1
- * 双阈值裁决），本 handler 只把 last-value 帧写进 chat store 派生视图分区（ActivityStrip
- * stall 行文案源），不复制推导、不做任何判定动作。active=false = 清除边沿（帧流恢复 /
- * 判死触发 / 回合收尾），setStallHint 内部删记录回落「无提示在显」。 */
-function handleSessionStallHint(
-  sid: string,
-  chat: ChatStoreInstance,
-  msg: ServerMessage<'session.stall_hint'>,
-): void {
-  chat.setStallHint(sid, msg.payload)
 }
 
 /** pi 改写 session 名（session_info_changed → session.renamed，见 event-adapter.ts）。
@@ -808,8 +739,8 @@ function handleSessionThinkingLevelSet(
  * 收尾信号 = 恢复窗口内该 session 的 message.message_start 到达：新 pi 已在处理用户
  * 消息，「恢复完成」事实成立（恢复窗口订阅自 exited 时建立，恢复后的帧必经本 handler）。
  * 执行与 useMessageEffects.handleSessionRestored 同构的收尾：清过渡态 + T4 恢复提示条
- * （复用 respawnRestored 文案）+ dead 复位。30s 超时 timer 到期时分区已清 → no-op
- * 自清，无需跨模块取消。
+ * （复用 respawnRestored 文案）+ dead 复位。无超时兜底（时间机制删除裁决），本 gate
+ * 即用户操作侧的收尾出口之一。
  */
 function consumeRespawnWindowOnTurnStart(
   sid: string,
@@ -847,13 +778,7 @@ function handleSessionFrame(
       break
     }
     case 'session.occupancy': {
-      handleSessionOccupancy(sid, chat, msg, deps)
-      break
-    }
-    // [pi-stall-detection U4 / D3] 静默辅助提示 last-value 帧（呈现派生视图写入，
-    // 判定权在 runtime——renderer 只呈现）
-    case 'session.stall_hint': {
-      handleSessionStallHint(sid, chat, msg)
+      handleSessionOccupancy(sid, chat, msg)
       break
     }
     // [投递所有权内核 u3b / D7] 内核条目状态快照：队列区/气泡 morph 的单一数据源

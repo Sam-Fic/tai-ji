@@ -1,4 +1,3 @@
-import type { ShutdownStepName } from '../../session/rolling-restart.js';
 import { disposeTerminalPtysStep } from '../dispose-terminal-ptys-step.js';
 import type { ServerMessage } from '@taiji/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -12,20 +11,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 // wave3 包装：本段原文件顶层语句收进 describe 作用域（顶层 hook 不再外溢到同文件其他来源的用例）
 describe('dispose-terminal-ptys-step', () => {
 describe('disposeTerminalPtysStep（shutdown 链 dispose-terminal-ptys 步骤本体）', () => {
-  it('先打点再 destroyAllPties（顺序契约：可观测打点在资源收尾之前）', () => {
-    const order: string[] = []
-    const destroyAllPties = vi.fn(() => { order.push('destroyAllPties') })
-    const shutdownStep = vi.fn((name: ShutdownStepName) => { order.push(name) })
-    disposeTerminalPtysStep({ destroyAllPties }, shutdownStep)
-    expect(shutdownStep).toHaveBeenCalledExactlyOnceWith('dispose-terminal-ptys')
-    expect(order).toEqual(['dispose-terminal-ptys', 'destroyAllPties'])
+  it('destroyAllPties 被调用（步骤本体 = 全量杀终端 PTY）', () => {
+    const destroyAllPties = vi.fn()
+    disposeTerminalPtysStep({ destroyAllPties })
+    expect(destroyAllPties).toHaveBeenCalledExactlyOnceWith()
   })
 
   it('destroyAllPties 抛错不在此层吞（shutdown 外层 catch 统一记日志，错误路径语义不变）', () => {
     const destroyAllPties = vi.fn(() => { throw new Error('boom') })
-    expect(() => disposeTerminalPtysStep({ destroyAllPties }, () => {})).toThrow('boom')
+    expect(() => disposeTerminalPtysStep({ destroyAllPties })).toThrow('boom')
   })
-})
+});
 });
 
 // ======================================================================

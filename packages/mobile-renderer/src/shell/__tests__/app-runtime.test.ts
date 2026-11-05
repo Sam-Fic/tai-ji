@@ -35,7 +35,6 @@ import {
   _resetLruForTest,
   resetChatModuleStateForTest,
 } from '@taiji/core'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '@taiji/core/transport/api'
 // app-runtime 组装在 vi.mock 注册（hoist 先于全部 import 生效）后解析——transport 出口
 // 已是替身，组装链其余保持真实
 import { __testing, chatStore, liveStateStore, selectSession } from '../app-runtime'
@@ -212,7 +211,6 @@ describe('[W2] 状态层拉取装配（sessionApiPort.getState + liveState deps�
     expect(mockCommand).toHaveBeenCalledWith(
       'session.getState',
       { sessionId: 'w2-port-sid' },
-      RPC_BACKSTOP_TIMEOUT_MS,
     )
   })
 
@@ -230,7 +228,6 @@ describe('[W2] 状态层拉取装配（sessionApiPort.getState + liveState deps�
     expect(mockCommand).toHaveBeenCalledWith(
       'session.getState',
       { sessionId: 'w2-pull-sid' },
-      RPC_BACKSTOP_TIMEOUT_MS,
     )
     expect(liveStateStore.liveStateOf('w2-pull-sid')).toEqual({
       modelId: 'prov-w2/model-w2',

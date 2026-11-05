@@ -118,51 +118,19 @@ describe("SessionBaselines pi 绑定代际（[§1.4 (a)]）", () => {
     expect(store.setPi).toHaveBeenLastCalledWith(pi2);
   });
 
-  it("waitForUsablePi：可用 → 立即返回句柄（零等待）；从未注入 → 立即 null（无等待）", async () => {
+  it("usablePiOrSkip：可用 → 返回句柄；从未注入 / 作废窗 → null（现读判定，无等待）", () => {
     const { baselines } = makeBaselines();
-    // 从未注入：没有「新代际注入」可等——立即降级（headless/纯内存测试形态零开销）。
-    await expect(baselines.waitForUsablePi(50, "never-injected")).resolves.toBeNull();
+    // 从未注入：headless/纯内存测试形态零开销。
+    expect(baselines.usablePiOrSkip("never-injected")).toBeNull();
 
     const pi = makePi();
     baselines.initSession(initOf(pi));
-    await expect(baselines.waitForUsablePi(50, "usable")).resolves.toBe(pi);
-  });
+    expect(baselines.usablePiOrSkip("usable")).toBe(pi);
 
-  it("waitForUsablePi：作废窗内等待 → initSession 注入新代际即唤醒并返回新句柄（有界等待完成写）", async () => {
-    const { baselines } = makeBaselines();
-    const pi1 = makePi();
-    baselines.initSession(initOf(pi1));
+    // 作废窗：降级 null（原等待唤醒与超时降级已随时间机制删除——绑定恢复由下一次
+    // initSession 自然承接，轮终 pi 写跳过由调用方可选链兜住）。
     baselines.invalidatePiBinding("reload window");
-
-    const pending = baselines.waitForUsablePi(2_000, "round final (record=sa-1)");
-    // 注入前未 settle（等待者已登记，仅 initSession 注入唤醒）。
-    let settled: unknown = "pending";
-    void pending.then((v) => {
-      settled = v;
-    });
-    await Promise.resolve();
-    expect(settled).toBe("pending");
-
-    const pi2 = makePi();
-    baselines.initSession(initOf(pi2));
-    await expect(pending).resolves.toBe(pi2);
-  });
-
-  it("waitForUsablePi：超时降级 null + warn 留痕含恢复指引（fake timers）", async () => {
-    vi.useFakeTimers();
-    const { baselines } = makeBaselines();
-    const pi1 = makePi();
-    baselines.initSession(initOf(pi1));
-    baselines.invalidatePiBinding("reload window");
-
-    const pending = baselines.waitForUsablePi(100, "round final (record=sa-2)");
-    vi.advanceTimersByTime(101);
-    await expect(pending).resolves.toBeNull();
-    expect(loggerMock.warn).toHaveBeenCalledTimes(1);
-    const warnArg = String(loggerMock.warn.mock.calls[0]?.[0]);
-    expect(warnArg).toContain("pi re-bind wait timed out after 100ms");
-    expect(warnArg).toContain("round final (record=sa-2)");
-    expect(warnArg).toContain("recovery: none required");
+    expect(baselines.usablePiOrSkip("round final (record=sa-1)")).toBeNull();
   });
 
   it("assertReady：作废态给出可操作错误（区分「从未注入」）", () => {

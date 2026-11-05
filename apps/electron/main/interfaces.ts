@@ -23,18 +23,18 @@ import type { IUpdateOrchestrator } from './update/orchestrator.js'
 /**
  * Runtime 子进程监管者 Facade。
  *
- * 对应 spec §4.2 M2「Process Supervisor」的 4 个子职责：
- * 端口探测 / spawn·kill / 健康检查 / 端口持久化。
+ * 对应 spec §4.2 M2「Process Supervisor」的子职责：
+ * 端口探测 / spawn·kill / 端口持久化。
  *
  * [HISTORICAL] 不变量：
  * - `start()` 幂等：已有活进程则复用，不重复 spawn
  * - spawn 用 `process.execPath + ELECTRON_RUN_AS_NODE=1`
- * - stop 先 SIGTERM 等 200ms 再 SIGKILL，杀整棵进程树
- * - SIGTERM 前必须预记录后代 PID（pi PPID 会在 runtime 退出后变 1）
+ * - stop 发 SIGTERM 后立即 SIGKILL 整棵进程树（无等待窗），以 exit 事件为完成信号
+ * - 发信号前必须预记录后代 PID（pi PPID 会在 runtime 退出后变 1）
  */
 export interface IRuntimeSupervisor {
   /**
-   * 启动 runtime（幂等）：找端口 → spawn → 健康检查 → 写端口文件。
+   * 启动 runtime（幂等）：找端口 → spawn → 写端口文件。
    * 已有活进程则复用，返回其端口。
    * @returns 实际监听的端口号
    */
@@ -51,8 +51,8 @@ export interface IRuntimeSupervisor {
 
   /**
    * 手动重启 runtime（用户从「runtime 不可用」状态条点击重试时调）。
-   * 重置策略计数后走 start()，成功广播 runtime-port（载荷为目标快照），失败广播
-   * runtime-failed。runtime 已存活时幂等（直接广播目标快照）。
+   * 走 start()，成功广播 runtime-port（载荷为目标快照），失败广播 runtime-failed。
+   * runtime 已存活时幂等（直接广播目标快照）。
    */
   restartRuntime(): Promise<void>
 
@@ -60,16 +60,15 @@ export interface IRuntimeSupervisor {
    * 配置变更触发的 runtime 重启（remote-access 开关切换）：先广播
    * runtime-restarting → stop → 重新 spawn → 成功广播 runtime-port（载荷为目标快照）。
    * 无条件真重启（restartRuntime 对存活进程幂等短路，不适用「必须以新配置
-   * 重启」的场景）。失败 reject 上抛，不走崩溃退避链。
+   * 重启」的场景）。失败 reject 上抛并广播 runtime-failed 终态。
    * @returns 重启后实际监听的端口号
    */
   restartForConfigChange(): Promise<number>
 
   /**
-   * 停止 runtime 子进程及其整棵进程树（包括 pi），等待退出或超时。
-   * @param timeoutMs SIGTERM 后等待 exit 的超时，超时则 SIGKILL 进程树
+   * 停止 runtime 子进程及其整棵进程树（包括 pi），以 exit 事件为完成信号。
    */
-  stop(timeoutMs?: number): Promise<void>
+  stop(): Promise<void>
 
   /** 当前监听端口（未启动为 null） */
   readonly port: number | null

@@ -14,7 +14,7 @@
  * 下半（编排半截，原 SessionService trace 域方法族逐字随迁，S4 前零直接测试——
  * 本模块化为 G2「stub 面 = 消费方」形态创造了直接测试入口，见 __tests__/trace-sync.test.ts）：
  * getTraceEntries（全量拉取 + RPC→文件→empty 混合路由）/ syncTraceEntries（增量路径
- * 串行链 + traceEntryAppended 广播）/ fetchCurrentSystemPrompt（常驻扩展现取通道轮询）
+ * 串行链 + traceEntryAppended 广播）/ fetchCurrentSystemPrompt（常驻扩展现取通道单次拉取）
  * + 私有状态 traceLeafCache / traceSyncChains（per-session 基线与串行链，销毁经
  * onSessionDisposed 由 Facade removeSessionEntry 第 12 步直调清理）。
  *
@@ -47,7 +47,7 @@ export function nextTracePushId(): string {
 /**
  * 现取 system prompt 的 custom entry customType。写入方 = builtin host-internals 包
  *（infrastructure 不可禁）的 /__taiji_get_system_prompt__ 命令 handler（字面量锤定，不 import
- * 本模块）；读取方 = fetchCurrentSystemPrompt 轮询匹配。与留痕包的 taiji:system-prompt（core
+ * 本模块）；读取方 = fetchCurrentSystemPrompt 现取匹配。与留痕包的 taiji:system-prompt（core
  * SYSTEM_PROMPT_CUSTOM_TYPE）语义不同：这是「当前值现取」，非留痕历史。
  */
 export const CURRENT_SYSTEM_PROMPT_CUSTOM_TYPE = 'taiji:current-system-prompt'
@@ -160,11 +160,6 @@ export function buildTraceSnapshotFromFile(
 
 // ══════════ 下半：编排半截（原 SessionService trace 域，S4 迁出）══════════
 
-/** 现取 system prompt 轮询参数：命令 handler 毫秒级完成，250ms 间隔 1-2 轮命中；
- * 8s 超时上限覆盖慢盘/慢命令（超时地 fetch_current_prompt_timeout，前端可重试）。 */
-const FETCH_CURRENT_PROMPT_POLL_MS = 250
-const FETCH_CURRENT_PROMPT_TIMEOUT_MS = 8000
-
 /**
  * 判定 getEntries(since) 的 "Entry not found" 错误（wave:perf-w20 D6-4 fallback 触发条件）。
  *
@@ -181,7 +176,7 @@ export function isEntryNotFoundError(e: unknown): boolean {
   return /^entry not found/i.test(msg)
 }
 
-/** fetchCurrentSystemPrompt 单轮轮询产物；'retry' = 基线跨 pi 进程失效，需全量重建后再轮。 */
+/** fetchCurrentSystemPrompt 现取拉取产物；'retry' = 基线跨 pi 进程失效，需全量重建再拉。 */
 type PromptPollStep =
   | 'retry'
   | { hit: unknown; delta: unknown[]; newLeafId: string | null }
@@ -374,7 +369,7 @@ export class TraceSync {
    *   client.prompt('/__taiji_get_system_prompt__')（builtin host-internals 包注册，不可禁，
    *   /__ 内部命令不经 LLM；RPC prompt 在 preflight 后即返回，不等 handler 完成）
    *   → handler 写 taiji:current-system-prompt custom entry
-   *   → 本方法轮询 get_entries(since=基线) 拉到该 entry 后提取返回。
+   *   → 本方法单次 get_entries(since=基线) 拉取并提取该 entry。
    *
    * 副作用：命中后滚动 traceLeafCache 基线 + 广播 session.traceEntryAppended（现取 entry
    * 作为 DATA 行同步出现在 trace 条目清单，留下取值痕迹；custom 不进 LLM context，零模型影响——
@@ -382,7 +377,8 @@ export class TraceSync {
    *
    * @throws code=session_not_active（无活跃 pi 进程——非活跃 session 无现取源）/
    *   session_busy（生成/压缩中，命令会排队导致超时，预检拒绝更诚实）/
-   *   fetch_current_prompt_timeout（轮询超时，命令未产出 entry）
+   *   fetch_current_prompt_failed（命令后单次拉取未命中——prompt 回执先于 handler 落盘，
+   *   时间机制删除裁决后过渡轮询退役，pi 无完成事件就不再等待；前端可重试）
    */
   async fetchCurrentSystemPrompt(sessionId: string): Promise<ServerMessageMap['session.currentSystemPrompt']> {
     const client = this.deps.pm.getClient(sessionId)
@@ -396,31 +392,36 @@ export class TraceSync {
     if (isGeneratingTurn(active?.occupancy?.turn) || active?.occupancy?.compacting === true) {
       throw Object.assign(new Error(`Session ${sessionId} is busy`), { code: 'session_busy' })
     }
-    let baseline = await this.ensurePromptBaseline(sessionId, client)
+    const baseline = await this.ensurePromptBaseline(sessionId, client)
     await client.prompt('/__taiji_get_system_prompt__')
-    // 轮询：命令 handler 毫秒级完成，RPC 往返 1-2 轮命中；超时上限覆盖慢盘/慢命令
-    const deadline = Date.now() + FETCH_CURRENT_PROMPT_TIMEOUT_MS
-    while (Date.now() < deadline) {
-      const step = await this.pollOnceForPromptEntry(sessionId, client, baseline)
-      if (step === 'retry') {
-        baseline = undefined
-        continue
-      }
-      if (!step.hit) continue
-      // 增量同步给 trace 条目清单（DATA 行留取值痕迹；消费端按 entry.id 去重）
-      if (step.delta.length > 0) {
-        const bus = this.deps.getMessageBus()
-        if (bus) {
-          bus.publish(sessionId, {
-            type: 'session.traceEntryAppended',
-            id: nextTracePushId(),
-            payload: { sessionId, entries: step.delta, leafId: step.newLeafId },
-          })
-        }
-      }
-      return extractCurrentPromptHit(sessionId, step.hit)
+    // 单次拉取（时间机制删除裁决：过渡轮询退役——pi 无「命令完成」事件，不做轮询等待）。
+    // prompt 回执先于 handler 落盘（preflight 即返回），未命中即显式失败：warn 留痕 +
+    // code 透传（前端可重试，重试即重新走全链）。
+    let step = await this.fetchPromptEntryOnce(sessionId, client, baseline)
+    if (step === 'retry') {
+      // 基线跨 pi 进程失效（Entry not found）：清缓存基线后全量重建拉一次
+      //（与 ensurePromptBaseline 的全量建立同型，一次性代价）
+      step = await this.fetchPromptEntryOnce(sessionId, client, undefined)
     }
-    throw Object.assign(new Error(`Timed out fetching current system prompt for session ${sessionId}`), { code: 'fetch_current_prompt_timeout' })
+    if (step === 'retry' || !step.hit) {
+      console.warn(`[trace-sync] current system prompt entry not found after command (session=${sessionId})`)
+      throw Object.assign(
+        new Error(`Current system prompt entry not found for session ${sessionId}`),
+        { code: 'fetch_current_prompt_failed' },
+      )
+    }
+    // 增量同步给 trace 条目清单（DATA 行留取值痕迹；消费端按 entry.id 去重）
+    if (step.delta.length > 0) {
+      const bus = this.deps.getMessageBus()
+      if (bus) {
+        bus.publish(sessionId, {
+          type: 'session.traceEntryAppended',
+          id: nextTracePushId(),
+          payload: { sessionId, entries: step.delta, leafId: step.newLeafId },
+        })
+      }
+    }
+    return extractCurrentPromptHit(sessionId, step.hit)
   }
 
   /**
@@ -437,17 +438,16 @@ export class TraceSync {
   }
 
   /**
-   * 现取轮询单步：sleep → getEntries(since=baseline) → 倒序找 taiji:current-system-prompt
-   * custom entry。未命中也滚动 traceLeafCache 基线（增量无遗漏）。
-   * 基线跨 pi 进程失效（Entry not found）时清缓存基线并返回 'retry'——调用方置
-   * baseline=undefined 全量重建后继续轮询（命令可能已产出 entry）。
+   * 现取拉取单步：getEntries(since=baseline) → 倒序找 taiji:current-system-prompt
+   * custom entry。命中与否都滚动 traceLeafCache 基线（增量无遗漏）。
+   * 基线跨 pi 进程失效（Entry not found）时清缓存基线并返回 'retry'——调用方
+   * 全量重建后拉一次（命令可能已产出 entry）。
    */
-  private async pollOnceForPromptEntry(
+  private async fetchPromptEntryOnce(
     sessionId: string,
     client: IPiEngine,
     baseline: string | undefined,
   ): Promise<PromptPollStep> {
-    await new Promise((resolve) => setTimeout(resolve, FETCH_CURRENT_PROMPT_POLL_MS))
     let delta: unknown[] = []
     let newLeafId: string | null = null
     try {

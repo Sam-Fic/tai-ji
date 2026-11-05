@@ -15,7 +15,6 @@
 import { describe, expect, it } from 'vitest'
 import { evaluateTriggerConditions, TRIGGER_CONDITION_COUNT, TRIGGER_USER_REPORT_IDS } from '../diagnostics/trigger-evaluator.js'
 import type { TriggerConditionRow } from '../diagnostics/trigger-evaluator.js'
-import { runTriggerPatrol } from '../diagnostics/trigger-patrol.js'
 
 // ── fixture 基建 ─────────────────────────────────────────────────────────────
 
@@ -527,53 +526,5 @@ describe('坏行与空登记清单非静默', () => {
     expect(row1.note).toContain('runtime 登记清单无事件')
     // main 有数据的条件照常判定
     expect(rowById(result.rows, 9).status).toBe('ok')
-  })
-})
-
-// ── trigger-review 出口（巡检 WARN + writer 事件）───────────────────────────
-
-describe('trigger-review 出口', () => {
-  const trippingRuntimeLines = [
-    ...repeatEv(11, T0 - DAY, { layer: 'runtime', event: 'frame-truncated', reason: 'warn-tier' }),
-    ev(T0 - DAY, { layer: 'runtime', event: 'registry-miss' }),
-  ]
-
-  it('越线 → WARN 摘要行 + writer 收到带条件 id 的 trigger-review 事件', () => {
-    const warnings: string[] = []
-    const written: unknown[] = []
-    const result = runTriggerPatrol({
-      readMainLines: () => [],
-      readRuntimeLines: () => trippingRuntimeLines,
-      warn: (line) => warnings.push(line),
-      append: (event) => written.push(event),
-    })
-    expect(result.trippedIds).toEqual([1, 2])
-    expect(warnings).toHaveLength(1)
-    expect(warnings[0]).toContain('#1')
-    expect(warnings[0]).toContain('#2')
-    expect(warnings[0]).toContain('trigger-review')
-    expect(written).toHaveLength(2)
-    for (const [i, expectedId] of [1, 2].entries()) {
-      const event = written[i] as { event?: string; reason?: string; layer?: string; detailDigest?: string }
-      expect(event.event).toBe('trigger-review')
-      expect(event.reason).toBe(`condition-${expectedId}`)
-      expect(event.layer).toBe('main')
-      const digest = JSON.parse(event.detailDigest ?? '{}') as { id?: number }
-      expect(digest.id).toBe(expectedId)
-    }
-  })
-
-  it('无越线 → 不出声（无 WARN、无写入）', () => {
-    const warnings: string[] = []
-    const written: unknown[] = []
-    const result = runTriggerPatrol({
-      readMainLines: () => [],
-      readRuntimeLines: () => [ev(T0 - DAY, { layer: 'runtime', event: 'frame-truncated', reason: 'warn-tier' })],
-      warn: (line) => warnings.push(line),
-      append: (event) => written.push(event),
-    })
-    expect(result.trippedIds).toEqual([])
-    expect(warnings).toHaveLength(0)
-    expect(written).toHaveLength(0)
   })
 })

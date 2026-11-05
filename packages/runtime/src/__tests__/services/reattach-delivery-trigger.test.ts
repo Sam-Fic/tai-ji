@@ -186,7 +186,6 @@ describe('无提交活动下的 reattach 收养重建（A5/V5）', () => {
             reconcile: (sid) => h.registry.reconcile(sid, 'pi-restored'),
           }),
           waitForOrphanReap: async () => {},
-          onDeferredBroadcast: () => {},
         },
         {
           checkpoint: { read: () => ({
@@ -201,8 +200,6 @@ describe('无提交活动下的 reattach 收养重建（A5/V5）', () => {
               relayChildren: false,
             }],
           }), checkpointPath: join(runDir, 'runtime-checkpoint.json') } as unknown as RuntimeCheckpointStore,
-          queryMemPressure: async () => ({ freeRatio: 0.9 } as never),
-          now: () => Date.now(),
         },
       )
       await h.flush()

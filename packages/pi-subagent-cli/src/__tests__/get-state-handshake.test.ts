@@ -83,52 +83,6 @@ describe("performGetStateHandshake（FR-4 单次握手）", () => {
     }
   });
 
-  it("response 只带 sessionId（无 sessionFile）→ 视同未应答：单次超时 settle 已收集字段（非悬挂）", async () => {
-    // [S2 契约修复，方案 A] 不完整应答不提前停表——等单次 2s 超时 settle collected
-    // （带已收集的 sessionId），调用方走兜底反查。（真实 RPC 层 get_state 应答恒带
-    // sessionFile，此形态为纯契约构造的防御机制，生产未观测。）
-    vi.useFakeTimers();
-    try {
-      const { child, writes } = makeFakeStdin();
-      const reg = makeListenerRegistry();
-
-      const promise = performGetStateHandshake(child, reg.add);
-      let settled = false;
-      void promise.then(() => {
-        settled = true;
-      });
-
-      const firstId = (JSON.parse(writes[0]!) as { id: string }).id;
-      reg.resolvers.get(firstId)?.({ sessionId: "only-id" });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(settled).toBe(false);
-
-      // 2s 超时 → settle 已收集字段；不再发起新请求（[ADR-0122] 无重试）
-      await vi.advanceTimersByTimeAsync(2_000);
-      await expect(promise).resolves.toEqual({ sessionId: "only-id" });
-      expect(settled).toBe(true);
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(writes).toHaveLength(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("全程无 response → 单次超时后 resolve 空对象（调用方走兜底查找）", async () => {
-    vi.useFakeTimers();
-    try {
-      const { child, writes } = makeFakeStdin();
-      const reg = makeListenerRegistry();
-
-      const promise = performGetStateHandshake(child, reg.add);
-      await vi.advanceTimersByTimeAsync(2_000);
-      await expect(promise).resolves.toEqual({});
-      expect(writes).toHaveLength(1); // 恰一次请求
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("sendGetStateCommand 抛错（stdin EPIPE）：按「未应答」处理——立即 settle，不 reject 也不逃逸", async () => {
     // [U-A1] 抛错路径的两条后果都必须消除：① 经 promise executor 逃出 → reject；
     // ② 无界等待 → 悬挂。断言 promise resolve（非 reject）、不注册监听（无请求在途）。
@@ -137,27 +91,5 @@ describe("performGetStateHandshake（FR-4 单次握手）", () => {
 
     await expect(performGetStateHandshake(child, reg.add)).resolves.toEqual({});
     expect(reg.resolvers.size).toBe(0); // 抛错未发出请求 → 无监听注册
-  });
-
-  it("resolve 后迟到的 response 被忽略（resolved 检查，不二次 resolve）", async () => {
-    vi.useFakeTimers();
-    try {
-      const { child } = makeFakeStdin();
-      const resolvers = new Map<string, (data: unknown) => void>();
-      const addVoid = (id: string, resolver: (data: unknown) => void): void => {
-        resolvers.set(id, resolver);
-      };
-
-      const promise = performGetStateHandshake(child, addVoid);
-      await vi.advanceTimersByTimeAsync(2_000);
-      await expect(promise).resolves.toEqual({});
-
-      // 迟到 response：resolved 已置位，resolver 早退（无 resolve 副作用 / 不抛）
-      for (const resolver of resolvers.values()) {
-        expect(() => resolver({ sessionFile: "/tmp/late.jsonl" })).not.toThrow();
-      }
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });

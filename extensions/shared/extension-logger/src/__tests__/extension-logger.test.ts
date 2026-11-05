@@ -7,7 +7,6 @@ import {
 	createLogger,
 	getLogger,
 	setPiHandle,
-	clearRateLimiterState,
 	resetExtLogCleanupForTest,
 	type PiLike,
 } from "../index.js";
@@ -25,7 +24,6 @@ describe("extension-logger", () => {
 
 	afterEach(() => {
 		setPiHandle(undefined);
-		clearRateLimiterState();
 		vi.restoreAllMocks();
 		// 还原环境变量，避免文件日志测试的 TAIJI_AGENT_DEBUG/PI_CODING_AGENT_DIR 泄漏到其它用例
 		process.env = { ...prevEnv };
@@ -416,159 +414,48 @@ describe("extension-logger", () => {
 	});
 
 	// ============================================================
-	// Per-message 固定窗口限流（P3 防线）
+	// appendEntry 无条件直写（时间窗限流已删——时间阈值决策退役）
 	// ============================================================
-	describe("per-message 固定窗口限流", () => {
-		beforeEach(() => {
-			vi.useFakeTimers();
-		});
-
-		afterEach(() => {
-			vi.useRealTimers();
-		});
-
-		it("前 10 条同 msg warn 直写 appendEntry", () => {
-			const logger = createLogger("ratelimit", pi);
-			for (let i = 0; i < 10; i++) {
-				logger.warn("hot path warning");
-			}
-			expect(appendSpy).toHaveBeenCalledTimes(10);
-		});
-
-		it("第 11-100 条同 msg warn 被抑制（计数仍 10）", () => {
-			const logger = createLogger("ratelimit", pi);
+	describe("warn/error appendEntry 无条件直写", () => {
+		it("同 msg warn 连发 100 条全部直写（无窗口抑制）", () => {
+			const logger = createLogger("unlimited", pi);
 			for (let i = 0; i < 100; i++) {
 				logger.warn("hot path warning");
 			}
-			expect(appendSpy).toHaveBeenCalledTimes(10);
+			expect(appendSpy).toHaveBeenCalledTimes(100);
+			expect(appendSpy.mock.calls.every((c) => (c[1] as { message: string }).message === "[unlimited] hot path warning")).toBe(true);
 		});
 
-		it("fake timers 推进 61s 后下一条触发聚合摘要 + 本条直写", () => {
-			const logger = createLogger("ratelimit", pi);
-			// 先发 100 条（10 条直写 + 90 条抑制）
-			for (let i = 0; i < 100; i++) {
-				logger.warn("hot path warning");
-			}
-			expect(appendSpy).toHaveBeenCalledTimes(10);
-
-			// 推进 61s——窗口过期
-			vi.advanceTimersByTime(61_000);
-
-			// 下一条：先写聚合摘要（+90 suppressed），再写本条
-			logger.warn("hot path warning");
-			expect(appendSpy).toHaveBeenCalledTimes(12);
-
-			// 验证聚合摘要 entry 内容
-			const summaryCall = appendSpy.mock.calls[10]!;
-			const summaryData = summaryCall[1] as { message: string };
-			expect(summaryData.message).toContain("[+90 suppressed in last 60s]");
-
-			// 验证本条 entry 是正常 warn
-			const currentCall = appendSpy.mock.calls[11]!;
-			const currentData = currentCall[1] as { message: string; level: string };
-			expect(currentData.message).toBe("[ratelimit] hot path warning");
-			expect(currentData.level).toBe("warn");
-		});
-
-		it("不同 msg 独立计数互不影响", () => {
-			const logger = createLogger("ratelimit", pi);
+		it("不同 msg 独立直写互不影响", () => {
+			const logger = createLogger("unlimited", pi);
 			for (let i = 0; i < 15; i++) {
 				logger.warn("msg-a");
 			}
 			for (let i = 0; i < 15; i++) {
 				logger.warn("msg-b");
 			}
-			// 各自前 10 条直写 = 20
-			expect(appendSpy).toHaveBeenCalledTimes(20);
-
-			// 推进 61s 后，各触发 1 条聚合摘要 + 1 条本条 = 再加 4 条
-			vi.advanceTimersByTime(61_000);
-			logger.warn("msg-a");
-			logger.warn("msg-b");
-			expect(appendSpy).toHaveBeenCalledTimes(24);
+			expect(appendSpy).toHaveBeenCalledTimes(30);
 		});
 
-		it("Map cap 512 超限清空——所有 key 窗口重置", () => {
-			const logger = createLogger("ratelimit", pi);
-			// 填充 512 个不同 key（各发 1 条触发窗口创建）
-			for (let i = 0; i < 512; i++) {
-				logger.warn(`msg-${i}`);
+		it("error 与 warn 同为无条件直写", () => {
+			const logger = createLogger("unlimited", pi);
+			for (let i = 0; i < 15; i++) {
+				logger.error("error path");
 			}
-			expect(appendSpy).toHaveBeenCalledTimes(512);
-
-			// 再发 1 条触发 cap 清空——此条也打开新窗口（count=1）
-			logger.warn("msg-after-cap");
-			expect(appendSpy).toHaveBeenCalledTimes(513);
-
-			appendSpy.mockClear();
-			// 推进时间让上面窗口过期，新窗口可直写 10 条
-			vi.advanceTimersByTime(61_000);
-			for (let i = 0; i < 10; i++) {
-				logger.warn("msg-after-cap");
-			}
-			// 第一条过期后 suppressed=0 → "allow" + count=1，后 9 条 count→10 全 allow
-			expect(appendSpy).toHaveBeenCalledTimes(10);
+			expect(appendSpy).toHaveBeenCalledTimes(15);
 		});
 
-		it("fileLog 通道不受限（TAIJI_AGENT_DEBUG=1 时 100 条全写文件）", () => {
-			process.env.TAIJI_AGENT_DEBUG = "1";
-			const tmpAgentDir = mkdtempSync(join(tmpdir(), "pi-ext-ratelimit-"));
-			process.env.PI_CODING_AGENT_DIR = tmpAgentDir;
-			vi.setSystemTime(new Date("2026-08-01T12:34:56.789Z"));
-
-			const logger = createLogger("rl-file", pi);
-			for (let i = 0; i < 100; i++) {
-				logger.warn("hot path warning");
-			}
-
-			// appendEntry 只被调用 10 次（限流生效）
-			expect(appendSpy).toHaveBeenCalledTimes(10);
-
-			// 但文件日志包含全部 100 条（fileLog 不受限流）
-			const logFile = join(tmpAgentDir, "logs", "rl-file-2026-08-01.log");
-			expect(existsSync(logFile)).toBe(true);
-			const content = readFileSync(logFile, "utf8");
-			const lines = content.split("\n").filter(Boolean);
-			expect(lines).toHaveLength(100);
-
-			rmSync(tmpAgentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-		});
-
-		it("appendEntry 抛错时降级不 throw（限流计数正常）", () => {
+		it("appendEntry 抛错时降级不 throw（逐条都尝试直写）", () => {
 			const throwingPi: PiLike = {
 				appendEntry: () => {
 					throw new Error("session disposed");
 				},
 			};
-			const logger = createLogger("rl-throw", throwingPi);
+			const logger = createLogger("throwing", throwingPi);
 
-			// 10 条同 msg——appendEntry 每次抛但不 throw
 			for (let i = 0; i < 10; i++) {
 				expect(() => logger.warn("disposable")).not.toThrow();
 			}
-			// appendEntry 被调了 10 次（每条都 try 了）
-			// 推进窗口过期，聚合摘要 + 本条 = 再调 2 次
-			vi.advanceTimersByTime(61_000);
-			expect(() => logger.warn("disposable")).not.toThrow();
-			// appendEntry 异常时限流计数仍正常（不 throw、后续状态机不被破坏）
-		});
-
-		it("error 与 warn 同参数限流（一套机制）", () => {
-			const logger = createLogger("ratelimit", pi);
-			for (let i = 0; i < 15; i++) {
-				logger.error("error path");
-			}
-			// error 前 10 条直写，第 11-15 条抑制
-			expect(appendSpy).toHaveBeenCalledTimes(10);
-
-			// 推进 61s 后聚合摘要 + 本条
-			vi.advanceTimersByTime(61_000);
-			logger.error("error path");
-			expect(appendSpy).toHaveBeenCalledTimes(12);
-
-			const summaryCall = appendSpy.mock.calls[10]!;
-			const summaryData = summaryCall[1] as { message: string };
-			expect(summaryData.message).toContain("[+5 suppressed in last 60s]");
 		});
 	});
 });

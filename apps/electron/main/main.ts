@@ -89,7 +89,6 @@ import { fixPathEnv } from './supervisor/shell-env.js'
 import { flushStderrSink } from './supervisor/process-control.js'
 import { initMainLogger, closeMainLogger, mainLogger } from './logs/main-logger.js'
 import { initCrashJournal, crashJournal } from './logs/crash-journal.js'
-import { startTriggerPatrol } from './diagnostics/trigger-patrol.js'
 import { buildLocalFileFetchUrl, probeLocalFileUrlPathname } from './utils/local-file-prefixes.js'
 import { resolveDevDataDir } from './utils/dev-data-dir.js'
 import { resolvePackagedDataDir } from './utils/packaged-data-dir.js'
@@ -131,8 +130,8 @@ process.stderr?.on?.('error', (err: NodeJS.ErrnoException) => {
 // 选择「log + 不 exit」而非 process.exit：
 //   - exit 会让 supervisor 启动的 runtime 子进程成孤儿（PPID 变 1），
 //     runtime 失去监管继续运行但无人能 stop，资源泄漏更危险
-//   - 仅记录日志，状态可能不一致，但靠后续 supervisor/liveness 兜底；
-//     日志已落盘供事后诊断。
+//   - 仅记录日志，状态可能不一致，但靠 exit 事件上报兜底（runtime 意外退出广播
+//     runtime-failed）；日志已落盘供事后诊断。
 // 注意：uncaughtException 后 Node 默认行为已改为不退出（Node 15+），
 //       此处显式注册仅为统一日志格式、避免 stderr 被默认 handler 抢占。
 process.on('unhandledRejection', (reason) => {
@@ -140,8 +139,8 @@ process.on('unhandledRejection', (reason) => {
 })
 process.on('uncaughtException', (err) => {
   console.error('[main] Uncaught exception:', err)
-  // dev 模式（!app.isPackaged）直接 exit(1) 暴露问题——dev 下没有 supervisor/liveness 兜底，
-  // 静默吞会让开发者在不知不觉中带病继续开发。prod 保持「不 exit，靠 supervisor/liveness 兜底」
+  // dev 模式（!app.isPackaged）直接 exit(1) 暴露问题——dev 下没有 exit 事件上报兜底，
+  // 静默吞会让开发者在不知不觉中带病继续开发。prod 保持「不 exit，靠 exit 事件上报兜底」
   // （exit 会让 runtime 子进程成孤儿，资源泄漏更危险）。
   if (!app.isPackaged) process.exit(1)
 })
@@ -193,8 +192,8 @@ if (isDev) {
 }
 
 // ── main 日志落盘（D6-①）────────────────────────
-// initMainLogger：建 <dataDir>/logs/ + 启动保留期清理（一次 + 每日复扫定时器）+
-// 内存水位定时器（5min）。必须晚于上面 isDev 块的 TAIJI_AGENT_DATA_DIR 隔离
+// initMainLogger：建 <dataDir>/logs/ + 启动保留期清理（一次 + 每日复扫定时器）。
+// 必须晚于上面 isDev 块的 TAIJI_AGENT_DATA_DIR 隔离
 // （getDataDir() 动态推导，dev 实例日志须落 ~/.taiji-dev 而非 prod 目录）；
 // 早于一切业务初始化（render-process-gone / 启动期异常的落盘通道先于消费者就绪）。
 // writer 未 init 时 no-op，这里失败（磁盘满/权限）不阻断 app 启动。
@@ -418,10 +417,6 @@ app.whenReady().then(async () => {
   launchResultCache = await cleanupCompletedUpdate()
 
   await bootstrapMainWindow()
-
-  // u2（crash-forensics D2 出口①）：触发条件每日巡检（启动评估一次 + 24h 间隔，
-  // log-retention 同款形态）——任一条件越线 → main 日志 WARN + 登记清单 trigger-review 事件
-  startTriggerPatrol()
 })
 
 /**
@@ -454,7 +449,7 @@ app.on('activate', async () => {
 let isQuitting = false
 // 应用退出前清理：确保 runtime 子进程完全退出再 quit。
 // async handler：Electron 支持 event.preventDefault() + 异步操作 + 延迟 app.quit()。
-// 必须等 flushStderrSink 的 'finish' 事件（WriteStream 落盘完成）再 quit，否则丢尾部 stderr。
+// flushStderrSink 现为 end+destroy 即返回（流关闭等待删除），不再等 'finish' 落盘。
 app.on('before-quit', (event) => {
   if (isQuitting) return // 第二次进入（app.quit() 触发），放行
   isQuitting = true
@@ -469,8 +464,9 @@ app.on('before-quit', (event) => {
     crashJournal.append({ layer: 'runtime', event: 'shutdown', reason: 'planned' })
   }
   // checkpoint 删除属主（D3 契约 1「删除属主双轨」的 main 侧）：**必须挂在本 handler 的
-  // 专属 await 链成功段**，不得挂 stop() 内部——stop() 被 liveness 假死强杀共用（那里删
-  // 会把该保留的恢复依据删掉）。成功段判据 = 本 handler 是 runtime 终止的唯一发起者
+  // 专属 await 链成功段**，不得挂 stop() 内部——stop() 是共享清理入口（window-all-closed
+  // / 配置变更重启都走它，那里删会把该保留的恢复依据删掉）。成功段判据 = 本 handler 是
+  // runtime 终止的唯一发起者
   // （runtimeStopInitiatedOutsideAppExit 为假，排除 window-all-closed 的 killed 短路）
   // 且 child 在场（isRunning，mock 模式 / 已崩死 / 第二实例形态无「关闭」可确认）。
   const ownsRuntimeShutdown = runtime.isRunning && !runtimeStopInitiatedOutsideAppExit
@@ -478,8 +474,8 @@ app.on('before-quit', (event) => {
   // （无活跃下载时 no-op；半下载产物由 .downloading 后缀 + sha256 校验兜底）
   killActiveCurlDownloads()
   event.preventDefault()
-  // W-Proc2 + W2：runtime stop 已 end() stderrSink；此处 flush 等 'finish' 落盘后再 quit。
-  // stop() 路径未触发（runtime 自然退出）时此 flush 是落盘的唯一保障。
+  // W-Proc2 + W2：runtime stop 已 end() stderrSink；此处 flush 关闭残留写流（destroy
+  // 即返回）。stop() 路径未触发（runtime 自然退出）时此 flush 是流关闭的唯一保障。
   void ctx.runtime.stop()
     .then(() => {
       // 成功段第一步：stop() resolve（runtime child 已确认退出）后删 checkpoint——app 级
@@ -629,7 +625,7 @@ export function isolateStaleCheckpoint(
  *
  * **只在 before-quit 专属 await 链成功段调用**（stop() resolve 且 runtime child 已确认退出）。
  * runtime 自身任何退出路径都不删（SIGINT/SIGTERM/uncaughtException 三源共用 shutdown 序、
- * app 级退出与 liveness 强杀共用 supervisor 同一停止链 → 「app 级识别信号」不存在）。
+ * app 级退出与配置变更重启共用 supervisor 同一停止链 → 「app 级识别信号」不存在）。
  *
  * @returns true = 确实删除；false = 文件不存在或删除失败（残留交下次启动隔离兜底）
  */

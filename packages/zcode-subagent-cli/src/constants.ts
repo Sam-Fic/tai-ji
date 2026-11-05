@@ -47,17 +47,8 @@ export const ZCODE_V2_CONFIG_PATH_SUFFIX = [".zcode", "v2", "config.json"] as co
  */
 export const ZCODE_PERSONAL_PROVIDER_CONFIG_PATH_SUFFIX = [".zcode", "v2", "provider_config.json"] as const;
 
-/** 杀链 grace 窗口：SIGTERM 后等这么久再 SIGKILL（zsub 同构 5s；实测 SIGTERM→exit 仅 103ms）。 */
-export const ZCODE_KILL_GRACE_MS = 5_000;
-
 /** 错误信息里保留的 stdout 尾部长度（engine_run_failed 规格：够诊断、不刷屏）。 */
 export const ZCODE_ERROR_TAIL_CHARS = 2000;
-
-/**
- * [R2] app-server 控制范围请求默认超时（ms）。依据：旧 zsw 实现 REQUEST_TIMEOUT_MS=15s
- * （60+ fake-server 用例 + 真机 e2e 验证值）。
- */
-export const ZCODE_APPSERVER_REQUEST_TIMEOUT_MS = 15_000;
 
 /**
  * [R2] 连接崩溃错误信息附带的 stderr 尾部长度（字符）。设计 zcode-engine-appserver-
@@ -71,61 +62,6 @@ export const ZCODE_APPSERVER_STDERR_TAIL_CHARS = 400;
 export const ZCODE_APPSERVER_STDERR_TAIL_BUFFER_CHARS = 2048;
 
 /**
- * [R3] 终态判定后 session/read 兜底拉取的超时（ms）。read 是全文权威来源（不变量 1
- * 的双来源之二），失败不抛——降级收尾帧/delta 聚合。旧 zsw 实现 READ_TIMEOUT_MS=5000。
- */
-export const ZCODE_APPSERVER_TURN_READ_TIMEOUT_MS = 5_000;
-
-/**
- * [R3] 任务收尾 session/close 的控制范围超时（ms，best-effort——失败只 warn 不抛）。
- * 旧 zsw 实现 RELEASE_CLOSE_TIMEOUT_MS=1500（wave2 D2，同值同语义）。
- */
-export const ZCODE_APPSERVER_TURN_CLOSE_TIMEOUT_MS = 1_500;
-
-/**
- * env 原始值的三态解析结果（可判别联合——valid 分支 ms 必有）。
- * `parseZcodePositiveMsEnv` 的返回类型。
- */
-export type ZcodeTurnTimeoutEnvParse =
-  | { state: "unset" }
-  | { state: "valid"; ms: number }
-  | { state: "invalid" };
-
-/**
- * [R4 D3] abort 链第一级：session/stop 的控制范围超时（ms）。stop 失败/超时即落
- * killChain（协议此时已不可信）。
- */
-export const ZCODE_APPSERVER_STOP_TIMEOUT_MS = 3_000;
-
-/**
- * [R4 D3] abort 链第二级：stop 送达后的终态确认 grace 窗口（ms）。窗口内终态
- * 到达 → 不杀共享进程；超时 → killChain 连坐。
- */
-export const ZCODE_APPSERVER_ABORT_GRACE_MS = 3_000;
-
-/**
- * [测试注入缝] STOP_TIMEOUT / ABORT_GRACE 的 env 覆盖通道（D2 turn timer 通道
- * 同款形态，仅测试注入用——真实默认 3s+3s 不在单测等待范围；生产不设即走默认，
- * 行为零变化）。env 名 TEST 段标示注入缝身份，区别于 turn timer 的用户自救通道。
- */
-export const ZCODE_APPSERVER_STOP_TIMEOUT_ENV = "TAIJI_ZCODE_TEST_STOP_TIMEOUT_MS";
-export const ZCODE_APPSERVER_ABORT_GRACE_ENV = "TAIJI_ZCODE_TEST_ABORT_GRACE_MS";
-
-/**
- * 解析 grace/stop 常量族 env 原始值（纯函数，warn 由消费侧 logger 负责——本模块
- * 零 import 约束）。grace/stop 是回收层有界兜底窗口，无「关闭」语义（关掉即
- * abort 链挂死），≤0 只能是误设——与非法值同路径 warn+回落。
- */
-export function parseZcodePositiveMsEnv(
-  raw: string | undefined
-): ZcodeTurnTimeoutEnvParse {
-  if (raw === undefined || raw === "") return { state: "unset" };
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) return { state: "invalid" };
-  return { state: "valid", ms: parsed };
-}
-
-/**
  * [R4] app-server 内部错误码中「模型配置缺失」的归类判据（A.3：-32603 内部错误族，
  * 消息含 "Model config is missing"——错误规格表第 2 行：报 engine_credential_missing）。
  */
@@ -136,20 +72,6 @@ export const ZCODE_APPSERVER_ERR_MODEL_CONFIG_MISSING = -32603;
  * 单会话一任务是结构保证，运行中命中即 bug（错误文案引导上报 sessionId 与 state 流水）。
  */
 export const ZCODE_APPSERVER_ERR_BUSY_SESSION = -32010;
-
-/**
- * [R5] 崩溃收割确认的兜底窗口（ms）：killChain 在 `exit` 事件 resolve，而连接
- * finalize（onClose → 在途 turn 崩溃收割）挂 `close` 事件——channel 退订前等 onClose
- * 触发，本窗口兜底防 `close` 永不到达时 dispose 挂死。
- */
-export const ZCODE_APPSERVER_HARVEST_GRACE_MS = 1_000;
-
-/**
- * [测试注入缝] HARVEST_GRACE 的 env 覆盖通道（STOP_TIMEOUT / ABORT_GRACE 同款
- * 形态与纪律：仅测试注入用，生产不设即走默认 1000ms、行为零变化）。窗口数值不是
- * 被测契约——断言的是「close 永不到达时有界返回」，默认值另有静态断言保护。
- */
-export const ZCODE_APPSERVER_HARVEST_GRACE_ENV = "TAIJI_ZCODE_TEST_HARVEST_GRACE_MS";
 
 /**
  * 失败终态判据（⛔P-Z2 门修正）：真实 status 枚举 = ["success","interrupted",

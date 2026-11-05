@@ -12,7 +12,7 @@
  *    - fulfilled 但带 reason（A2-4 失败态契约：runtime 查询失败返回 data=null + reason，不抛错）
  * 7. unauthorized 且 cookie 刷新目标在册时自动续期：调 main 隐藏窗口刷新器导出新
  *    cookie 串（main 不落盘），经 quota.configure 保存链由 runtime 单点落盘后 force
- *    重查一次（10 分钟冷却 + 在途去重，失败静默）
+ *    重查一次（在途去重，失败静默；无冷却——ADR-0190，失败后下次 hover 立即重试）
  *
  * 设计文档：docs/architecture/v3-specs/coding-plan-quota/design.md §2.2.4
  * HANDOFF：.taiji-harness/coding-plan-quota/HANDOFF.md §5 Wave 4
@@ -60,18 +60,8 @@ export function quotaFailReasonText(reason: QuotaFetchFailureReason): string {
 // ── unauthorized 自动续期（hover 路径）───────────────────────────────────────
 
 /**
- * 自动续期冷却（providerId → 上次触发时刻，模块级）。
- * 模块级而非 composable 级：同一 provider 会被多个 useQuotaQuery 实例查询
- * （容量卡 useQuotaDisplay + 浮层每 provider 项 PlanQuotaItem），实例级 Map 会让
- * 多实例各自触发一次刷新。触发即记账（失败也记）——刷新失败（如登录页超时）后
- * hover 仍会持续命中 unauthorized，不记账会每 15s 开一个隐藏窗口形成失败风暴。
- */
-const COOKIE_REFRESH_COOLDOWN_MS = 600_000 // 10 分钟（10 × 60s）
-// taste:allow-no-data-owner W24-EX-C（非 GUI 数据技术结构，登记草稿）：续期冷却时刻表（防重触发登记，非展示数据）
-const cookieRefreshLastTriggerAt = new Map<string, number>()
-
-/**
- * 在途去重：续期期间（可达 15s~120s）同一 provider 不重复发起。createInflightDedup
+ * 在途去重：续期在途期间同一 provider 不重复发起（Promise 落定即释放，失败可立即重试）。
+ * createInflightDedup
  * 单点工具（C-data-18：禁手写 Map/Set + settle 清理的同构实现）——fn 仅首轮执行、
  * 在途触发复用同一 promise 后 void 丢弃，与「在途时新触发直接 return」的
  * fire-and-forget 语义等价，另获内建引用比对防误删与 unhandled rejection 防护。
@@ -202,7 +192,8 @@ export function useQuotaQuery(providerIdRef: Ref<string | null>): UseQuotaQueryR
       if (fetchResult.status === 'fulfilled') {
         applyFetchResult(store, pid, fetchResult.value)
         // unauthorized 自动续期：cookie 类且刷新目标在册时 fire-and-forget 触发（不占
-        // pending 态——续期可达 15s~120s，占住会让容量 chip 长挂「查询中」）
+        // pending 态——续期期间隐藏窗口探测/SSO 链耗时不定，占住会让容量 chip 长挂
+        // 「查询中」）
         if (fetchResult.value.reason === 'unauthorized') {
           void attemptCookieRefresh(pid)
         }
@@ -221,8 +212,9 @@ export function useQuotaQuery(providerIdRef: Ref<string | null>): UseQuotaQueryR
   /**
    * unauthorized 后的自动续期：调 main 隐藏窗口刷新器导出新 cookie 串（main 不落盘），
    * 成功（ok 且带串）才经 quota.configure 保存链由 runtime 单点落盘，随后 force 重查
-   * 一次；失败静默（store 已写 unauthorized 文案，无需叠加噪音）。SSO 登录窗弹出场景
-   * 由 main 侧处理（登录页停留转可见），renderer 不做任何窗口操作。
+   * 一次；失败静默（store 已写 unauthorized 文案，无需叠加噪音）。登录页场景由 main
+   * 侧处理（URL 命中登录页特征即转可见 + login required 失败收尾，dedup 槽随 Promise
+   * 落定释放、下次 hover 可重试），renderer 不做任何窗口操作。
    */
   async function attemptCookieRefresh(pid: string): Promise<void> {
     const provider = getSettingsStore().providers.value.find((p) => p.id === pid)
@@ -230,10 +222,6 @@ export function useQuotaQuery(providerIdRef: Ref<string | null>): UseQuotaQueryR
     const fetcherId = resolveCookieRefreshFetcherId(provider)
     if (!fetcherId) return
     if (cookieRefreshDedup.has(pid)) return
-    const last = cookieRefreshLastTriggerAt.get(pid)
-    if (last !== undefined && Date.now() - last < COOKIE_REFRESH_COOLDOWN_MS) return
-
-    cookieRefreshLastTriggerAt.set(pid, Date.now())
     void cookieRefreshDedup
       .run(pid, () => runCookieRefresh(pid, provider.quota?.enabled ?? false, fetcherId))
       .promise
@@ -241,7 +229,7 @@ export function useQuotaQuery(providerIdRef: Ref<string | null>): UseQuotaQueryR
 
   /**
    * 续期执行体（dedup 首轮发起时执行，永不 reject——异常归一进 catch 面的 debug 留痕，
-   * 在途/冷却去重由 dedup 与冷却表承担）。
+   * 在途去重由 dedup 承担）。
    */
   async function runCookieRefresh(pid: string, enabled: boolean, fetcherId: string): Promise<void> {
     try {
@@ -277,8 +265,8 @@ export function useQuotaQuery(providerIdRef: Ref<string | null>): UseQuotaQueryR
         store.unmarkPending(pid)
       }
     } catch (e) {
-      // IPC 通道层异常（通道缺席 / preload 旧版）：保留 unauthorized 展示（冷却已记账，
-      // 触发即记，不会形成失败风暴），debug 级留痕便于排查通道装配问题
+      // IPC 通道层异常（通道缺席 / preload 旧版）：保留 unauthorized 展示，debug 级留痕
+      // 便于排查通道装配问题
       console.debug('[quota] cookie refresh failed:', e instanceof Error ? e.message : e)
     }
   }

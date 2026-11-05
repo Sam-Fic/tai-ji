@@ -39,7 +39,7 @@ import {
   sweepEnginePidfiles,
   type PidfileSweepResult,
 } from "../pid-file.ts";
-import { killProcessTree, waitForChildExit } from "../reaper.ts";
+import { killProcessTree } from "../reaper.ts";
 import type {
   EngineLaunchSpec,
   EngineTransport,
@@ -48,9 +48,6 @@ import type {
 } from "./types.ts";
 
 const logger = getLogger("subagents");
-
-/** SIGKILL 后收尸等待上限（kill-chain 同型有界兜底，reaper.waitForChildExit 消费）。 */
-const SIGKILL_REAP_TIMEOUT_MS = 10_000;
 
 /**
  * stdout 半行残片上限（1 MiB 量级；按 UTF-16 code unit 计——NDJSON 载荷以 ASCII
@@ -99,7 +96,7 @@ export interface LocalEngineTransportOptions { // oe-exempt:20261018:framework:s
    * 子进程 spawn 注入点（缺省 node:child_process spawn；单测注入进程端点桩——
    * stdio 行切分 / 半行残片上限 / 终局投影等帧面逻辑可在无真进程下确定性验证，
    * 见 docs/TEST-STRATEGY.md「新写测试判据」节「确定性同步化」）。注入桩必须实现
-   * wireChild / close / waitForChildExit 消费的 ChildProcess 面（on/removeAllListeners /
+   * wireChild / close 消费的 ChildProcess 面（on/removeAllListeners /
    * pid / exitCode / signalCode / stdin/stdout/stderr 流）；pid 应取不可达高位
    * （killProcessTree 对其 ESRCH no-op，不触碰真实进程表）。
    */
@@ -236,18 +233,17 @@ export class LocalEngineTransport implements EngineTransport {
   }
 
   /**
-   * 优雅关闭本通道（契约 close；local = 既有 teardown/kill 链的进程段）：置
+   * 关闭本通道（契约 close；local = 既有 teardown/kill 链的进程段）：置
    * intentionalKill（孤儿收割跳过 + 泄漏组杀去重）→ 引擎仍活则 killProcessTree
-   * 组杀 + 有界收尸等待。pidfile 删与 onExit 派发由收尸窗口内的 exit 投影承担；
-   * 进程已死 / 从未 open 的调用形态幂等直接返回。reason 可选（EngineClient.killAll
-   * 透传排障 reason；契约上无参调用缺省）。
+   * 组杀（SIGTERM+SIGKILL 背靠背，无收尸等待——exit 投影由 exit 事件驱动承担
+   * pidfile 删与 onExit 派发）。进程已死 / 从未 open 的调用形态幂等直接返回。
+   * reason 可选（EngineClient.killAll 透传排障 reason；契约上无参调用缺省）。
    */
   async close(reason = "engine channel close"): Promise<void> {
     this.intentionalKill = true;
     const child = this.child;
     if (child !== undefined && child.pid !== undefined && child.exitCode === null) {
       killProcessTree(child.pid, reason, { engineId: this.opts.engineId });
-      await waitForChildExit(child, SIGKILL_REAP_TIMEOUT_MS);
     }
   }
 
@@ -278,12 +274,10 @@ export class LocalEngineTransport implements EngineTransport {
       // found → 空操作（不可复用）——镜像通道收割（置死前快照，见下）。
       this.reapOrphansViaMirrorSnapshot(detail);
     } else {
-      // POSIX：复用 killProcessTree 负 pid 组杀（SIGTERM → 5s grace → SIGKILL
-      // 升级链内建，fire-and-forget 不阻塞同步 teardown）。组长死后进程组存活到
+      // POSIX：复用 killProcessTree 负 pid 组杀（SIGTERM+SIGKILL 背靠背，
+      // fire-and-forget 不阻塞同步 teardown）。组长死后进程组存活到
       // 最后一员退出，组杀可达任务子进程（引擎 detached:true spawn = 组长，任务
       // 子进程 detached:false 同组，组杀目标 -child.pid 不依赖镜像）。
-      // 无外层逐 pid 兜底（SIGTERM 同步返回后 5s 窗内孤儿必然仍活，同步校验恒
-      // 命中、立即兜底 = 优雅窗归零截断 trap-flush——升级链已覆盖残余职责）。
       killProcessTree(
         child.pid,
         `reap orphaned children after unexpected engine death (${detail})`,

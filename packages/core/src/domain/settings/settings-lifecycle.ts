@@ -110,9 +110,9 @@ export function createSettingsLifecycle() {
     unsubs.push(...localUnsubs)
     initialized = true
 
-    // quota presets 合并视图拉取（remote-config 域 2）：连接建立即拉（fire-and-forget，
-    // 失败静默——消费方回落编译期基线），不阻塞 init 契约。
-    void refreshQuotaPresets()
+    // quota presets 合并视图拉取（remote-config 域 2）不在此触发——AppShell 挂载早于
+    // WS open，此处直拉必失败（ws not open 噪音）。首拉由 App.vue connected 边沿触发
+    //（与 refreshModels 同点位），进设置页二次拉取见 ProviderPage。
 
     // [W4 交接] 原 renderer 实现的 theme=system 时 watch(store.system.theme) + matchMedia
     // 监听（updateSystemThemeListener）不迁 core——壳侧 watch system.theme 挂/卸监听。

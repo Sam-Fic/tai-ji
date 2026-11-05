@@ -468,9 +468,8 @@ export type FailureCause =
        * 极端竞窗下收尾边沿只有 aborted 停因而 limiter 快照缺席（防御性同判形态，
        * 事实不足不产结构——轮失败事实不受影响）。与 §3.3.6 查询侧 budget 分轴
        * 结构（{maxTurns, ...}）同构的 {used, limit} 形态。仅 turn_budget_exhausted
-       * 承载；timeout（§3.3.6 超时轮失败分类，宿主结算点产出——timeoutMs 墙钟预算
-       * 耗尽是宿主独有事实，引擎收尾边沿只有「宿主取消 vs 引擎异常」两源判别）
-       * 不落本字段。
+       * 承载；timeout（§3.3.6 超时轮失败分类——宿主 timeoutMs 墙钟预算已随时间
+       * 机制删除，此失败类别不再产出）不落本字段。
        */
       budget?: { used: number; limit: number };
     })
@@ -712,16 +711,16 @@ export interface ModelCatalogEntry { // oe-exempt:20260929:framework:workflow/re
  *
  * 存量字段结论表（判据 1-3 回判与现状一致）：
  *   - 判据② task（任务语义）：prompt / schema / thinkingLevel / scene /
- *     maxTurns / graceTurns / idleTimeoutMs / skill / skillPath / agent /
- *     appendSystemPrompt；
+ *     maxTurns / graceTurns / skill / skillPath / agent /
+ *     appendSystemPrompt；（idleTimeoutMs 已随宿主 idle timer 机制删除）
  *   - 判据② task（隔离与权限随任务声明）：worktree / fork / forkSource /
  *     denyTools / permissionMode；
  *   - 判据② task（诊断元数据）：description；
  *   - 判据③ ctx（环境值，引擎自推导与宿主不恒等）：model / cwd
  *     （对照 core orchestration/models/types.ts AgentCallOpts，协议层单列）；
  *   - 判据① 宿主自持不上协议：engine（路由决策已完成，收到的引擎即选中值）、
- *     timeoutMs（宿主超时链 mergeTimeoutSignal → cancel 帧，非引擎参数）、
  *     returnMeta（core 注释明确「dropped at the pi boundary」，非引擎消费）。
+ *    （timeoutMs 宿主墙钟参数已随时间机制删除。）
  *
  * W2 实装 EngineClient run 帧时以本类型为 params.task；core 侧全量 → 子集的方向性
  * 收窄（多余字段宿主自持不透传）不构成类型漂移（断言方向见 contract-closure 测试样板）。
@@ -762,8 +761,6 @@ export interface AgentCallOpts {
   forkSource?: string;
   /** Filesystem isolation: 新建 worktree | 复用外部已创建 worktree | 不隔离。 */
   worktree?: boolean | WorktreeHandle;
-  /** 空闲超时毫秒数（[modeless] 全体 record 的 idle 回收节奏；显式 0/负 = 禁用 idle GC）。 */
-  idleTimeoutMs?: number;
   /** 工具 denylist（各引擎做语法映射）。 */
   denyTools?: string[];
   /** 中立权限模式（映射按各引擎 capabilities.permissionMode）。 */

@@ -19,7 +19,6 @@ import { apiProjectMock } from '../helpers/api-facade-mock'
 import { wsStateModuleWithControlledRef } from '../helpers/ws-state-ref-mock'
 import { makeSettingsTransportStub } from '../helpers/settings-transport-stub'
 import * as events from '@taiji/core/transport/api'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '@taiji/core/transport/api'
 import {
   triggerSessionCleanups,
   __clearSessionCleanupRegistryForTest,
@@ -207,7 +206,6 @@ describe('use-plan-sync', () => {
       expect(commandMock).toHaveBeenCalledWith(
         'session.getPlanState',
         { sessionId: 'A' },
-        RPC_BACKSTOP_TIMEOUT_MS,
       )
     })
 
@@ -884,7 +882,7 @@ describe('features/browser/shields-view-sync', () => {
   }
 
   /** 开合可翻的表面宿主（挂载即注册，isOpen 读注入 ref——SessionList 同款参考模式） */
-  function mountSurface(surface: 'search-modal' | 'rolling-restart-banner', key: string, options: { rect?: () => Rect | null } = {}) {
+  function mountSurface(surface: 'search-modal' | 'toast-container', key: string, options: { rect?: () => Rect | null } = {}) {
     const open = ref(false)
     const wrapper = mount(defineComponent({
       setup() {
@@ -921,7 +919,7 @@ describe('features/browser/shields-view-sync', () => {
     it('全屏阻塞遮罩 = {id, fullscreen:true} 不带 rect；非全屏遮罩带实测 rect；未提供几何读点省略 rect 键', async () => {
       mountSyncHost()
       const unconditional = mountSurface('search-modal', 'sm')
-      const intersecting = mountSurface('rolling-restart-banner', 'rr', {
+      const intersecting = mountSurface('agent-stream-drawer', 'rr', {
         rect: () => ({ x: 10, y: 20, width: 300, height: 40 }),
       })
       mountAlwaysOpenSurface('toast-container', 'tc') // 非全屏族但无 rect 读点
@@ -934,7 +932,7 @@ describe('features/browser/shields-view-sync', () => {
       const last = sentCalls().at(-1)!
       const faces = [...last.faces].sort((a, b) => (a.id < b.id ? -1 : 1))
       expect(faces).toEqual([
-        { id: 'rolling-restart-banner', fullscreen: false, rect: { x: 10, y: 20, width: 300, height: 40 } },
+        { id: 'agent-stream-drawer', fullscreen: false, rect: { x: 10, y: 20, width: 300, height: 40 } },
         { id: 'search-modal', fullscreen: true },
         { id: 'toast-container', fullscreen: false },
       ])
@@ -1006,19 +1004,19 @@ describe('features/browser/shields-view-sync', () => {
     it('开态内几何变化 + window resize 事件 → 立即重报新 rect（不依赖响应式依赖）', async () => {
       mountSyncHost()
       const currentRect = { x: 10, y: 10, width: 200, height: 30 }
-      const surface = mountSurface('rolling-restart-banner', 'rr', { rect: () => ({ ...currentRect }) })
+      const surface = mountSurface('toast-container', 'rr', { rect: () => ({ ...currentRect }) })
       surface.open.value = true
       await nextTick()
       await nextTick()
       expect(sentCalls().at(-1)).toEqual({
-        faces: [{ id: 'rolling-restart-banner', fullscreen: false, rect: { x: 10, y: 10, width: 200, height: 30 } }],
+        faces: [{ id: 'toast-container', fullscreen: false, rect: { x: 10, y: 10, width: 200, height: 30 } }],
       })
 
       // 横幅改宽（真实场景：memory bar 文案随 level 切换）——DOM 几何非响应式，resize 事件直推
       currentRect.width = 320
       window.dispatchEvent(new Event('resize'))
       expect(sentCalls().at(-1)).toEqual({
-        faces: [{ id: 'rolling-restart-banner', fullscreen: false, rect: { x: 10, y: 10, width: 320, height: 30 } }],
+        faces: [{ id: 'toast-container', fullscreen: false, rect: { x: 10, y: 10, width: 320, height: 30 } }],
       })
     })
   })

@@ -431,13 +431,6 @@ describe('D4 restore-abort 失败链：fallback 也失败吞错（R3 S-3）', ()
     marks: new Map<string, { source: ForceQuitSource }>(),
     markUserStopped: vi.fn((id: string, source: ForceQuitSource) => { markStore.marks.set(id, { source }) }),
     hasUserStoppedMark: vi.fn((id: string) => markStore.marks.has(id)),
-    getUserStoppedSource: vi.fn((id: string) => markStore.marks.get(id)?.source),
-    consumeUserStoppedMarkOfSource: vi.fn((id: string, allowed: readonly ForceQuitSource[]) => {
-      const mark = markStore.marks.get(id)
-      if (!mark || !allowed.includes(mark.source)) return false
-      markStore.marks.delete(id)
-      return true
-    }),
     clearUserStoppedMark: vi.fn((id: string) => { markStore.marks.delete(id) }),
     clearAllUserStoppedMarks: vi.fn(() => markStore.marks.clear()),
   }

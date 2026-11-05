@@ -5,7 +5,7 @@ import { useLoadMoreHistory } from '@/composables/panel/useLoadMoreHistory';
 import { isAbsolutePath, resolvePreviewPath } from '@/lib/path-utils';
 import { useChatStore } from '@/stores/chat';
 import { COMPAT_PRESETS, getPresetsForApi } from '@taiji/core';
-import { command, RPC_BACKSTOP_TIMEOUT_MS } from '@taiji/core/transport/api';
+import { command } from '@taiji/core/transport/api';
 import type { ClientMessageMap, ReplyPayloadMap, ServerMessageMap, Message } from '@taiji/shared';
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -44,8 +44,7 @@ function silentCommand<K extends keyof ReplyPayloadMap>(
   type: K,
   payload: ClientMessageMap[K],
 ): Promise<ReplyPayloadMap[K]> {
-  // timeoutMs 必传化（D5/G5）后本文件只验证编译期类型契约，超时值不参与断言——统一传 backstop
-  const p = command(type, payload, RPC_BACKSTOP_TIMEOUT_MS)
+  const p = command(type, payload)
   void p.catch(() => {})
   return p
 }

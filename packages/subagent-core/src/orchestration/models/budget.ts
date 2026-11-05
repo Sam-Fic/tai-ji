@@ -41,7 +41,6 @@ export const OUTPUT_WEIGHT = 2;
 export class Budget {
   readonly maxTokens?: number;
   readonly maxCost?: number;
-  readonly maxTimeMs?: number;
   usedTokens = 0;
   usedCost = 0;
   /** 总调用计数（持久化/诊断用；execute-agent-call 每次 dispatch 后 increment）。 */
@@ -50,14 +49,12 @@ export class Budget {
   constructor(opts: {
     maxTokens?: number;
     maxCost?: number;
-    maxTimeMs?: number;
     usedTokens?: number;
     usedCost?: number;
     totalCallCount?: number;
   } = {}) {
     this.maxTokens = opts.maxTokens;
     this.maxCost = opts.maxCost;
-    this.maxTimeMs = opts.maxTimeMs;
     this.usedTokens = opts.usedTokens ?? 0;
     this.usedCost = opts.usedCost ?? 0;
     this.totalCallCount = opts.totalCallCount ?? 0;
@@ -92,9 +89,7 @@ export class Budget {
  *
  * maxTokens===0 或 undefined 视为不限制（检查）；
  * maxCost===0 或 undefined 视为不限制。
- * 时间预算（maxTimeMs）不由本方法判断——它是 wall-clock 约束，需参照 startedAt，
- * 由 lifecycle 层的 scheduleTimeBudget（runWorkflow 内 setTimeout）
- * 独立调度，到期 abortRun(doneReason="time_limited")。
+ *（原时间预算（maxTimeMs）已随 run 级墙钟预算机制删除。）
  */
   isExceeded(): boolean {
     if (this.maxTokens !== undefined && this.maxTokens > 0 && this.usedTokens >= this.maxTokens) {

@@ -12,6 +12,10 @@
     "./ui-locale": {
       "types": "./src/ui-locale.ts",
       "import": "./src/ui-locale.ts"
+    },
+    "./ui-dictionary": {
+      "types": "./src/ui-dictionary.ts",
+      "import": "./src/ui-dictionary.ts"
     }
   },
   "keywords": [

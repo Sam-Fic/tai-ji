@@ -113,12 +113,11 @@ describe('skillRegistry (W1)', () => {
       expect(watchedPaths).toContain(join(cwd, '.taiji', 'skills'))
       expect(watchedPaths).not.toContain(cwd)
       // options 断言：ignored 正则 + ignoreInitial:true（防几余重扫 + node_modules 排除被删）+
-      // usePolling:false（2026-08-28 起默认原生事件：nodejs/node#52601 在当前 Node 实测不再复现，
-      // polling 降级为 TAIJI_AGENT_SKILL_WATCH_POLLING=1 显式开关；测试环境未设该变量）
+      // persistent:true（原生事件驱动，无常驻 stat 轮询）
       expect(watchArgs[1]).toMatchObject({
         ignored: expect.any(RegExp),
         ignoreInitial: true,
-        usePolling: false,
+        persistent: true,
       })
     } finally {
       reg.dispose()

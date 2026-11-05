@@ -42,6 +42,7 @@ import {
   createSessionScopedMapFrom,
   HeaderActionStore,
   InternalEventBus,
+  isMountPointCheckExempt,
   MessageBusBridge,
   MountPointRegistry,
   setExtensionRegistries,
@@ -187,7 +188,10 @@ function ensureCommandDeclarationsSync(
  * 喂同一 store 订阅路径——条目按实时帧形状逐条 emit，窄化 / (scope, id) 分区写入 /
  * `[null]` 清除语义全部由既有订阅端承担，零新写入口、零语义复制）。
  * 视图条目归属二选一透传（U2）：sessionId（会话域）或 mountId（全局域）——ViewHostStore
- * 按 scope 形态落分区，generation 全量替换代际随帧透传。
+ * 按 scope 形态落分区，generation 全量替换代际随帧透传。placement/meta 随批透传
+ * （composer-tray-protocol D1/D7：runtime 按声明盖印的章与动态信息随快照条目回带，
+ * 补收回写不丢章——M2 托盘过滤上线后重载补收的插件托盘条目缺章即按钮消失的缺陷，
+ * 由本透传点阻断）。
  */
 export function applyUiSnapshot(bus: InternalEventBus, snap: PluginUiSnapshotPayload): void {
   for (const payload of snap.headerActions) {
@@ -202,6 +206,8 @@ export function applyUiSnapshot(bus: InternalEventBus, snap: PluginUiSnapshotPay
         pluginId: item.pluginId,
         guiTree: item.guiTree,
         ...(item.generation !== undefined ? { generation: item.generation } : {}),
+        ...(item.placement !== undefined ? { placement: item.placement } : {}),
+        ...(item.meta !== undefined ? { meta: item.meta } : {}),
       },
     })
   }
@@ -230,18 +236,25 @@ function ensurePluginUiSnapshot(bus: InternalEventBus): () => void {
  * 挂载点注册态 → ContributionInfo 映射（M16，PluginSettingsPage 数据源）。
  *
  * available = 挂载点已注册（MountPointRegistry SSOT）；未注册 → available=false + reason
- * （置灰 + 原因，场景 E AC3）。纯函数便于单测（TC2）。
+ * （置灰 + 原因，场景 E AC3）。command/slashCommand 型豁免挂载点校验
+ * （isMountPointCheckExempt，与 ContributionRegistry.routeAll 同源判定）——这两类不
+ * 消费渲染容器，历史上因壳不注册 'commands'/'slash' 被误置灰（prod console 每次启动
+ * 6 条误告警），豁免后展示为可用。纯函数便于单测（TC2）。
  */
 export function toContributionInfos(
   records: ContributionRecord[],
   mountPoints: MountPointRegistry,
 ): ContributionInfo[] {
-  return records.map((c) => ({
-    id: c.contributionId,
-    type: c.type,
-    available: mountPoints.has(c.placement),
-    reason: mountPoints.has(c.placement) ? undefined : `挂载点 ${c.placement} 未注册`,
-  }))
+  return records.map((c) => {
+    const exempt = isMountPointCheckExempt(c.type)
+    const registered = exempt || mountPoints.has(c.placement)
+    return {
+      id: c.contributionId,
+      type: c.type,
+      available: registered,
+      reason: registered ? undefined : `挂载点 ${c.placement} 未注册`,
+    }
+  })
 }
 
 /**

@@ -20,7 +20,7 @@ import type { IConfigStore } from '../../ports/config.js'
 import type { IPiEngine, IProcessManager } from '../../ports/pi-engine.js'
 import type { ISessionStore } from '../../ports/session.js'
 import type { WorkspaceService } from '../../workspace/workspace-service.js'
-import { CREATE_IDEMPOTENCY_MAX_ENTRIES, CREATE_IDEMPOTENCY_TTL_MS, CreateIdempotencyRegistry } from '../create-idempotency.js'
+import { CREATE_IDEMPOTENCY_MAX_ENTRIES, CreateIdempotencyRegistry } from '../create-idempotency.js'
 import type { ILifecycleSessionOps, ISessionRegisterDeps } from '../session-internal.js'
 import { SessionLifecycle, setMigrationGate } from '../session-lifecycle.js'
 import type { IManagedSessionView, ScannedSession } from '../types.js'
@@ -164,23 +164,21 @@ describe('create clientUuid 幂等（发现 B，SessionLifecycle 集成）', () 
     expect([...lifecycle.keys()]).toHaveLength(4)
   })
 
-  it('③ TTL 过期后同 uuid 再来 → 新建（回收策略生效）', async () => {
+  it('③ 同 uuid 重试恒复用已落定结果（进程生命周期内有效）', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const { lifecycle, pm } = makeIdempotencyCreateEnv()
     const cwd = mkdtempSync(join(tmpdir(), 'cidem-ttl-'))
 
     const s1 = await lifecycle.create(cwd, 'L', { clientUuid: 'u-ttl-1' })
-    // TTL 内重试仍复用（保留期生效的另一半）
     const reused = await lifecycle.create(cwd, 'L', { clientUuid: 'u-ttl-1' })
     expect(reused.id).toBe(s1.id)
     expect(pm.createSession).toHaveBeenCalledTimes(1)
 
-    // 越过 TTL（惰性 sweep 在下一次 run 触发）
-    vi.setSystemTime(Date.now() + CREATE_IDEMPOTENCY_TTL_MS + 1_000)
-    const s2 = await lifecycle.create(cwd, 'L', { clientUuid: 'u-ttl-1' })
-
-    expect(pm.createSession).toHaveBeenCalledTimes(2)
-    expect(s2.id).not.toBe(s1.id)
+    // 时间推进不失效（无 TTL——保留表只受容量上限约束）
+    vi.setSystemTime(Date.now() + 10 * 60 * 1000)
+    const again = await lifecycle.create(cwd, 'L', { clientUuid: 'u-ttl-1' })
+    expect(again.id).toBe(s1.id)
+    expect(pm.createSession).toHaveBeenCalledTimes(1)
   })
 
   it('补：create 失败即清登记——同 uuid 重试重新创建（失败不缓存）', async () => {
@@ -205,7 +203,7 @@ describe('CreateIdempotencyRegistry 回收策略（登记清单有界）', () =>
     vi.useRealTimers()
   })
 
-  it('in-flight 共用同一 Promise（exec 恰一次），落定后 TTL 内复用', async () => {
+  it('in-flight 共用同一 Promise（exec 恰一次），落定后重试复用', async () => {
     const registry = new CreateIdempotencyRegistry()
     let resolveExec!: (s: SessionSummary) => void
     const exec = vi.fn(
@@ -234,7 +232,7 @@ describe('CreateIdempotencyRegistry 回收策略（登记清单有界）', () =>
     expect(ok).toHaveBeenCalledTimes(1)
   })
 
-  it('TTL 过期清扫：成功记录超 TTL 后下次 run 重新执行（惰性回收）', async () => {
+  it('成功记录无时间过期：时间推进后同 key 重试仍命中缓存', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const registry = new CreateIdempotencyRegistry()
     const exec = vi.fn(() => Promise.resolve(summaryOf('s3')))
@@ -242,9 +240,9 @@ describe('CreateIdempotencyRegistry 回收策略（登记清单有界）', () =>
     await registry.run('k3', exec)
     expect(registry.size).toBe(1)
 
-    vi.setSystemTime(Date.now() + CREATE_IDEMPOTENCY_TTL_MS + 1)
+    vi.setSystemTime(Date.now() + 10 * 60 * 1000)
     await registry.run('k3', exec)
-    expect(exec).toHaveBeenCalledTimes(2)
+    expect(exec).toHaveBeenCalledTimes(1)
     expect(registry.size).toBe(1)
   })
 

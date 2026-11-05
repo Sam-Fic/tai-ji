@@ -72,7 +72,7 @@ export interface CanvasHandlerContext extends MessageHandlerContext { // oe-exem
    * 返回 true = 已写入 pi stdin；void/undefined（client 缺失、测试替身）按失败计。
    */
   sendExtensionUiResponse: (sessionId: string, requestId: string, response: unknown, method?: string) => boolean | void
-  /** canvas.updated 全局广播通道（broker.broadcast——无 sid 全局帧，rollingRestart 先例）。 */
+  /** canvas.updated 全局广播通道（broker.broadcast——无 sid 全局帧）。 */
   broadcast: (msg: ServerMessage) => void
   /** push 消息 id 生成器（广播帧 id）。 */
   nextPushId: () => string

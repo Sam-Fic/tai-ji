@@ -221,8 +221,6 @@ const { TerminalService } = await import('../../terminal/terminal-service.js')
 
 const { SessionEntryRemovalOrchestrator } = await import('../session-entry-removal.js')
 
-const { SHUTDOWN_STEP_SEQUENCE, shutdownStep } = await import('../rolling-restart.js')
-
 
 function createService(): InstanceType<typeof TerminalService> {
   return new TerminalService({
@@ -256,46 +254,6 @@ function createRemovalOrchestrator(svc: InstanceType<typeof TerminalService>): I
 
 
 const source = readFileSync(new URL('../../../index.ts', import.meta.url), 'utf8')
-
-
-/**
- * shutdown 链中「打点 + 动作本体」已提取为可 import 模块的步骤符号 → 模块源文件。
- * 先例：index.ts import 即执行 main() 不可直测，`dispose-terminal-ptys` 步本体提取到
- * services/terminal/dispose-terminal-ptys-step.ts 后，打点字面量随之离开 index.ts 文本。
- * 源级机械对照若只扫 index.ts，会把「本体搬走了」误判成「这步没了」——按调用点位置把这些
- * 步骤展开即可保序。本表是提取登记（加登记才扫得到），不是跳过断言的豁免清单：调用点
- * 不在 index.ts 出现、或模块内打点字面量不是恰好一个，都会红。
- */
-const EXTRACTED_STEP_MODULES: Record<string, URL> = {
-  disposeTerminalPtysStep: new URL('../../terminal/dispose-terminal-ptys-step.ts', import.meta.url),
-}
-
-
-/** 读已提取步骤模块内的打点字面量（每模块恰一步：多处 / 缺漏皆为登记失效）。 */
-function readExtractedStepName(moduleUrl: URL): string {
-  const names = [...readFileSync(moduleUrl, 'utf8').matchAll(/shutdownStep\('([^']+)'\)/g)].map((m) => m[1]!)
-  expect(names).toHaveLength(1)
-  return names[0]!
-}
-
-
-/**
- * 按 index.ts 文本顺序收集 shutdown 实际打点序列：`shutdownStep('name')` 字面量直接取，
- * 登记过的已提取步骤取其在模块内的打点名（序列位置 = 调用点位置）。
- */
-function collectActualShutdownSteps(): string[] {
-  const symbols = Object.keys(EXTRACTED_STEP_MODULES)
-  const pattern = new RegExp(`shutdownStep\\('([^']+)'\\)|\\b(${symbols.join('|')})\\s*\\(`, 'g')
-  const steps: string[] = []
-  for (const m of source.matchAll(pattern)) {
-    if (m[1] !== undefined) {
-      steps.push(m[1])
-      continue
-    }
-    steps.push(readExtractedStepName(EXTRACTED_STEP_MODULES[m[2]!]!))
-  }
-  return steps
-}
 
 // wave3 包装：本段原文件顶层语句收进 describe 作用域（顶层 hook 不再外溢到同文件其他来源的用例）
 describe('terminal-lifecycle-cascade', () => {
@@ -332,15 +290,6 @@ describe('u4 ①会话删除级联（收敛链扇出 → 会话维度全实例�
   })
 })
 describe('u4 ②shutdown 终端清理步 + 幂等', () => {
-  it('shutdown 序列含 dispose-terminal-pties 且紧随 server-stop', () => {
-    const seq = SHUTDOWN_STEP_SEQUENCE as readonly string[]
-    const terminalIdx = seq.indexOf('dispose-terminal-pties')
-    expect(terminalIdx).toBe(seq.indexOf('server-stop') + 1)
-    expect(seq).toContain('dispose-terminal-pties')
-    expect(seq.indexOf('engine-pool-dispose')).toBeGreaterThan(terminalIdx)
-    expect(seq.indexOf('close-logger')).toBeGreaterThan(terminalIdx)
-  })
-
   it('destroyAllPties 幂等：二次调用不抛、同一实例不重复杀、无实例时 no-op', async () => {
     const svc = createService()
     // 无实例时先调一次（shutdown 早于任何终端使用 / 已清理过的重入形态）
@@ -362,31 +311,11 @@ describe('u4 ②shutdown 终端清理步 + 幂等', () => {
     expect(svc.listInstances('sess-b')).toEqual([])
   })
 
-  it('shutdownStep 打点输出步骤名（index.ts 的打点通道与常量表同源）', () => {
-    const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
-    shutdownStep('dispose-terminal-pties')
-    expect(spy.mock.calls.flat().join('\n')).toContain('dispose-terminal-pties')
+  it('destroyAllPties 调用点在 index.ts shutdown 链在场', () => {
+    expect(source).toContain('terminalService.destroyAllPties()')
   })
 })
-describe('u4 ③序列常量与 index.ts 打点序列一致（源码级机械对照）', () => {
-  it('index.ts shutdown 内 shutdownStep 调用序列逐项等于 SHUTDOWN_STEP_SEQUENCE', () => {
-    expect(collectActualShutdownSteps()).toEqual([...SHUTDOWN_STEP_SEQUENCE])
-  })
-
-  it('登记的已提取步骤其调用点在 index.ts 在场（登记 ≠ 豁免：调用点消失即红）', () => {
-    for (const symbol of Object.keys(EXTRACTED_STEP_MODULES)) {
-      expect(source).toContain(`${symbol}(`)
-    }
-  })
-
-  it('dispose-terminal-pties 打点与 destroyAllPties 调用相邻（防留打点删动作）', () => {
-    const stepIdx = source.indexOf("shutdownStep('dispose-terminal-pties')")
-    const callIdx = source.indexOf('terminalService.destroyAllPties()')
-    expect(stepIdx).toBeGreaterThan(-1)
-    expect(callIdx).toBeGreaterThan(stepIdx)
-    expect(callIdx - stepIdx).toBeLessThan(400)
-  })
-
+describe('u4 ③组合根会话删除接线（源码级机械对照）', () => {
   it('会话删除回调调 destroySessionPties（唯一会话维度回收入口，不残留 destroyPty 旧名）', () => {
     expect(source).toContain('terminalService.destroySessionPties(sid)')
     // destroyPty 旧名已从 port/实现整体删除；本断言防其以过渡态名义回流

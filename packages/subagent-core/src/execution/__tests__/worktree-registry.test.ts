@@ -231,9 +231,9 @@ describe("WorktreeRegistry", () => {
         { kind: "release", file: `${registryFile}.lock` },
       ]);
       // 协议参数（与 runtime 侧 / extension 侧同一磁盘协议对齐）：目标文件不存在也可锁 +
-      // stale 30s。改任一值即与其他两方失去互斥。
+      // stale 禁用（时间夺锁已删——锁冲突 = ELOCKED 直接报错）。改任一值即失去互斥。
       expect(lockStub.options).toHaveLength(2);
-      expect(lockStub.options[0]).toMatchObject({ realpath: false, stale: 30_000 });
+      expect(lockStub.options[0]).toMatchObject({ realpath: false, stale: 0, retries: 0 });
       expect(typeof lockStub.options[0]?.onCompromised).toBe("function");
     });
 

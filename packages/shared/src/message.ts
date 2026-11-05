@@ -522,8 +522,8 @@ export type BackgroundBashEndReason = 'natural' | 'timeout'
 /**
  * background-bash 完成通知的结构化 details（D1 schema）。
  *
- * 生产端：extensions/universal/base-tool-enhance/src/background/notify.ts（后台任务 poller
- * 检测终态 → pi.sendMessage(customType:"background-bash") 时附 details）。content 模板字符串
+ * 生产端：extensions/universal/base-tool-enhance/src/background/notify.ts（后台任务退出
+ * 事件检测终态 → pi.sendMessage(customType:"background-bash") 时附 details）。content 模板字符串
  * 保持原文（triggerTurn:true 的载荷给 LLM 接力），结构化字段只服务渲染。
  */
 export interface BackgroundBashDetails {

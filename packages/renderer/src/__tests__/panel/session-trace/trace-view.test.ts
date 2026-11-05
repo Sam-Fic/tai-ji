@@ -477,14 +477,14 @@ describe('trace-view', () => {
       view.unmount()
     })
 
-    it('现取超时（code=fetch_current_prompt_timeout）→ 超时文案；未知 code → 通用文案', async () => {
+    it('现取失败（code=fetch_current_prompt_failed）→ 失败文案；未知 code → 通用文案', async () => {
       apiMock.getTraceEntries.mockResolvedValue(buildNoSystemSnapshot())
       apiMock.fetchCurrentSystemPrompt.mockRejectedValueOnce(
-        Object.assign(new Error('Timed out'), { code: 'fetch_current_prompt_timeout' }),
+        Object.assign(new Error('entry not found'), { code: 'fetch_current_prompt_failed' }),
       )
       const view = await mountTraceView()
       await view.find('[data-testid="trace-fetch-current"]').trigger('click')
-      await vi.waitFor(() => expect(view.find('[data-testid="trace-fetch-current-error"]').text()).toContain('超时'), { interval: 1 })
+      await vi.waitFor(() => expect(view.find('[data-testid="trace-fetch-current-error"]').text()).toContain('现取失败'), { interval: 1 })
 
       // 未知 code（如传输层 disconnected 之外的意外错误）→ 通用文案兜底
       apiMock.fetchCurrentSystemPrompt.mockRejectedValueOnce(new Error('surprise'))

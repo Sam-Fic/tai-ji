@@ -68,8 +68,8 @@ export function registerBridgeHandlers(deps: IpcHandlerDeps): void {
     return dir.startsWith(home + sep) ? '~' + dir.slice(home.length) : dir
   })
 
-  // ── runtime 手动重启（崩溃重启用尽后，用户从状态条点重试触发）─────────
-  // 委托 supervisor.restartRuntime：重置策略 + start + 广播端口/失败
+  // ── runtime 手动重启（runtime 意外退出进 failed 态后，用户从状态条点重试触发）──
+  // 委托 supervisor.restartRuntime：start + 广播端口/失败
   ipcMain.handle(RUNTIME_RESTART, async () => {
     await deps.runtime.restartRuntime()
   })

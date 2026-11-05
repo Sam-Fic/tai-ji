@@ -49,18 +49,15 @@ export function runAccountingFromEvents(
  * @param settled v2 终态条目（`usedTokens > 0` 时视为真值；0 = 条目来自旧版本写点或
  *                无消耗 run，此时帧推导同样给出 0，不会劣化）
  * @param events record 事件流
- * @param maxTimeMs 生效墙钟预算（resume 重建侧传；fresh 折叠侧不传）
- * @param maxTokens 生效 token 预算（resume 重建侧传，与 maxTimeMs 同款条件式；
- *                fresh 折叠侧不传——壳侧折叠的预算上限挂 spec 不挂 budget）
+ * @param maxTokens 生效 token 预算（resume 重建侧传；fresh 折叠侧不传——壳侧折叠的
+ *                预算上限挂 spec 不挂 budget）
  */
 export function rebuildBudget(
   settled: { usedTokens: number; callCount: number } | undefined,
   events: readonly WorkflowRunEvent[],
-  maxTimeMs?: number,
   maxTokens?: number,
 ): Budget {
   const base = {
-    ...(maxTimeMs !== undefined && maxTimeMs > 0 ? { maxTimeMs } : {}),
     ...(maxTokens !== undefined && maxTokens > 0 ? { maxTokens } : {}),
   };
   if (settled !== undefined && settled.usedTokens > 0) {

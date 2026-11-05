@@ -163,7 +163,7 @@ export async function bootstrap(): Promise<void> {
     // D8：auth 被拒 → 连接视图信号（仅提交中的拒绝置可见错误，判定在 connection-view）+
     // 凭据来源分支处置（storage 失效清空 / query 不动好 storage，处置尾部经
     // onTokenInputRequired 落 token 输入视图）。重连抑制位由 ws-client 在信号触发时置位
-    // （scheduleReconnect + visibility 两个自动重连触发点均短路）。
+    // （visibility 自动重连触发点短路）。
     onAuthRejected: () => {
       notifyAuthRejected()
       void profile.handleAuthFailure()

@@ -86,6 +86,10 @@ import type { ReadinessSnapshot, SessionsRecoveryProgressPayload } from './readi
 // 消除 shared 侧双声明漂移（engine-provider-unification D5）。
 import type { PlanLifecycleState, SubagentEngineModelInfo } from '@zhushanwen/extension-protocol'
 
+// PluginViewMeta（widget 宿主元数据形状 SSOT 直引）：Partial<WidgetMeta>，字面量形状
+// 单源于 extension-protocol core/types（插件 views.update 可选 meta，D7——镜像会造双源）。
+import type { WidgetMeta } from '@zhushanwen/extension-protocol'
+
 // canvas 域载荷形状 SSOT 直引（problem-solve-canvas U1 契约；canonical =
 // packages/extension-protocol/src/extensions/canvas，barrel 已 re-export）——
 // CanvasState / CanvasListEntry / CanvasMutateReply / CanvasMutateRequest 等形状
@@ -386,9 +390,6 @@ export type ClientMessageType =
   // 侧边栏的拉取/操作 RPC——list 拉全量并隐式把 session 加入 runtime watched 集合（D8③）；
   // output 按字节窗口 tail 输出尾部；kill 走 D6 分支矩阵。回执/广播登记见 ServerMessageType。
   | 'backgroundTask.list' | 'backgroundTask.output' | 'backgroundTask.kill'
-  // rollingRestart.status（crash-forensics-and-watchdog §3.3 D5，u7b）：滚动重启状态只读查询
-  // （无参数；reply 与 request 同名——session.subscribe 模式）。状态机实现在 u7c。
-  | 'rollingRestart.status'
   // btw.*（btw-question 设计 D6，M2-a 协议根节点；W4b 线枚举帧退役）：btw 旁路线 2 个
   // 控制帧——create（建线 + fork 主会话当前进度）/ remove（关线销毁，单线级联）。
   // ack 必回（ReplyPayloadMap 两帧全登记）。发送复用 message.send（sessionId = btw 线
@@ -412,7 +413,7 @@ export type ClientMessageType =
   | 'mcp.list' | 'mcp.add' | 'mcp.update' | 'mcp.setEnabled' | 'mcp.remove' | 'mcp.test' | 'mcp.testCancel'
   // canvas.*（problem-solve-canvas 设计 §3.1，U1 契约）：画布三 RPC——list（托盘/入口
   // 清单拉取）/ get（单画布全量）/ mutate（GUI 直改唯一写入口，actor=user；agent 走
-  // marker 通道不经 WS）。reply 与 request 同名（session.subscribe / rollingRestart.status
+  // marker 通道不经 WS）。reply 与 request 同名（session.subscribe
   // 同款 payload 消费型同名模式）；canvas.updated 广播登记在 ServerMessageType 段。
   // mutation 门禁归类：canvas 域无「renderer 持显示副本 + reply 回显生效值」形态——
   // 全量状态经 canvas.get 拉取 + canvas.updated 广播失效收敛（拉为主，ADR-0097），
@@ -420,7 +421,7 @@ export type ClientMessageType =
   | 'canvas.list' | 'canvas.get' | 'canvas.mutate'
   // runtime.readiness（startup-readiness-and-current-state 设计 §7.1/D1，u-m0 M0 契约期）：
   // readiness 快照拉取 RPC（出口三件套之一——按需与重连拉取，持续态唯一真相）。无参数；
-  // reply 与 request 同名（rollingRestart.status 同款 payload 消费型同名模式）。payload/reply
+  // reply 与 request 同名（payload 消费型同名模式）。payload/reply
   // 形状 SSOT 在 ./readiness（ReadinessSnapshot），消息映射登记见 ServerMessageMap /
   // ReplyPayloadMap 对应条目。实装随 M2（U6 其余实装）；M0 契约期先行定形。
   | 'runtime.readiness'
@@ -717,6 +718,14 @@ export interface HeaderActionUpdatePayload {
 }
 
 /**
+ * 插件 views.update 载荷可选 meta（composer-tray-protocol D7）：角标/状态/进度动态
+ * 信息，字段形状与扩展通道 WidgetMeta 同形但全字段可选（Partial）——插件托盘按钮
+ * 的标题/图标取清单声明（D7：静态信息权威位 = contributes.views，两处来源会漂移），
+ * title 仅作透传兼容（扩展通道语义），旧插件不传 meta = 按钮无角标无状态色。
+ */
+export type PluginViewMeta = Partial<WidgetMeta>
+
+/**
  * 插件视图载荷基座（'plugin:viewUpdate' 广播与 'plugin:uiSnapshot' 快照条目共用——
  * 同构由类型引用构造性保证，快照回放与实时帧两路同函数）。
  *
@@ -744,6 +753,16 @@ export interface PluginViewPayloadBase {
   /** 全局域归属（Provider 页等无会话挂载位）：分区键 global:<mountId>:<pluginId>。
    *  pluginId 取自 RPC 身份（fork 与 pluginId 一对一），不接受载荷自报 */
   mountId?: string
+  /**
+   * 容器位位置族章（composer-tray-protocol D1，开放字符串——已知族词表 SSOT =
+   * core CONTENT_SLOT_PLACEMENTS）：会话域按插件清单声明的 placement 盖印（D6 存储
+   * 资格制——未命中声明的会话域推树在 runtime 被拒，章必随声明而来）；全局域
+   * mountId 分支维持现状不盖印。消费端（托盘 widget 区）按 placement === 托盘族
+   * 过滤；快照链随批携带（广播与快照载荷同构，补收回写不丢章）。
+   */
+  placement?: string
+  /** 角标/状态/进度动态信息（D7），形状见 PluginViewMeta；缺省 = 无角标无状态色 */
+  meta?: PluginViewMeta
 }
 
 /**
@@ -1497,9 +1516,6 @@ export interface ClientMessageMap {
   'backgroundTask.output': { sessionId: string; taskId: string; maxBytes?: number }
   // kill：终止任务（D6 分支矩阵；reason 回执语义见 BackgroundTaskKillReason）。
   'backgroundTask.kill': { sessionId: string; taskId: string }
-  // rollingRestart.status（crash-forensics-and-watchdog §3.3 D5，u7b）：只读查询，无参数
-  //（全局状态，非 session 级）。reply 见 ServerMessageMap['rollingRestart.status']。
-  'rollingRestart.status': Record<string, never>
   // ── btw.*（btw-question D6 控制帧，M2-a；W4b 线枚举帧退役后剩 create/remove 两帧）──
   // ack 必回：两帧在 ReplyPayloadMap 全登记（create payload 消费型、remove ack 型）；
   // 失败走统一 error envelope（错误契约 D10）。线枚举（原 btw.list { mainSid }）已随
@@ -1549,7 +1565,7 @@ export interface ClientMessageMap {
   'canvas.list': { sessionId: string }
   'canvas.get': { canvasId: string; sessionId: string }
   'canvas.mutate': { actor: CanvasActor; sessionId: string } & CanvasMutateRequest
-  // runtime.readiness：无参只读查询（rollingRestart.status 同款 Record<string, never>；
+  // runtime.readiness：无参只读查询（Record<string, never>；
   // startup-readiness-and-current-state 设计 §7.1，u-m0 M0 契约期）。reply 同名，
   // 载荷形状 SSOT 在 ./readiness（ReadinessSnapshot）。
   'runtime.readiness': Record<string, never>
@@ -1758,9 +1774,6 @@ export type ServerMessageType =
   // session 归档域 reply（与 request 同名，payload 消费型——session.getSubagentStreamState 同模式）
   | 'session.archive' | 'session.unarchive' | 'session.purgeArchive' | 'config.archives'
   | 'session.exited'
-  // session.stall_hint（pi-stall-detection U4 / D3）：静默辅助提示 last-value 状态帧
-  //（state topic，payload 见 ServerMessageMapBase 对应条目；T/T_hint 推导单源 runtime）。
-  | 'session.stall_hint'
   // D7（u8-pi-respawn）：pi 崩溃自动恢复结果推送（payload 见
   // ServerMessageMapBase 两行注释）。
   | 'session.restored' | 'session.restoreFailed'
@@ -1769,15 +1782,6 @@ export type ServerMessageType =
   | 'plugin:statusChange' | 'plugin:permissionRequest'
   | 'plugin:messageDecoration' | 'plugin:config'
   | 'plugin:uiRequest'
-  // plugin:uiRequestExpired：plugin dialog 到期取消下行（timeout-plugin-service D2，
-  // runtime UiRequestQueue cancelRequest / 防泄漏兜底生产）。广播无条件发出（含排队中
-  // 从未展示的请求）；前端对未展示/已关闭弹窗的撤窗 miss 须 noop 幂等。
-  | 'plugin:uiRequestExpired'
-  // plugin:permissionRequestExpired：权限审批到期取消下行（timeout-plugin-service D3，
-  // runtime PluginActivator 审批等待超时生产——取消非判拒：插件置 UNLOADED 且可经
-  // 重触发 activation event 重新激活 + 重新弹审批）。前端收到后撤回该插件的审批弹窗；
-  // 迟到批准对已删 pending noop 幂等（旧版前端未消费此帧时无异常回退，P-11）。
-  | 'plugin:permissionRequestExpired'
   // plugin:permissionRequestResolved：权限审批终局下行（runtime PluginActivator
   // resolvePermissionApproval 命中挂起审批时生产——用户在任一连接端批准/拒绝后广播，
   // 其余端据此撤回同一审批的弹窗）。approved=false 含显式拒绝与挂起期清理唤醒（终局
@@ -1806,6 +1810,11 @@ export type ServerMessageType =
   // ViewHost 分区缺失补拉时拉取插件 UI 快照，ADR-0097「拉为主、推补充」——transient
   // 推送帧的丢失收敛通道）。
   | 'plugin:uiSnapshot'
+  // plugin:commandRegistered：插件命令注册下行广播（runtime registerCommandRpcHandlers
+  // 每条登记后 broadcastRegistered 生产，全局通道无 sessionId）。载荷 = CommandRegistration
+  // 全形（含 handlerId/workerId/registeredAt 簿记字段）；renderer 侧 MessageBusBridge
+  // 归一为 plugin-command-registered 事件时剥除簿记字段（登记转发，暂无消费方）。
+  | 'plugin:commandRegistered'
   | 'extension:widget' | 'extension:widgetGui' | 'extension:notify'
   | 'extension:setEditorText'
   | 'extension:requestsInvalidated'
@@ -1892,27 +1901,14 @@ export type ServerMessageType =
   // 经 IMessageBus.publish(sessionId, msg) session 级定向推。
   | 'backgroundTask.tasks' | 'backgroundTask.outputResult' | 'backgroundTask.killResult'
   | 'backgroundTask:updated'
-  // rollingRestart 域（crash-forensics-and-watchdog §3.3 D5，u7b 协议范围）：status = 只读查询
-  // reply（与 request 同名）；deferred / forced = 全局推送事件（Server→Client 冒号
-  // camelCase，对齐 backgroundTask:updated 规则；与条目清单 event 值同源）；countdown =
-  // 执行前 T-30s 二次预告（D5 ③，u7c 补缺——推迟期内新开终端的知情窗口）。
-  | 'rollingRestart.status' | 'rollingRestart:deferred' | 'rollingRestart:countdown' | 'rollingRestart:forced'
-  // watchdog 域（crash-forensics-and-watchdog §3.3 D4，u6）：memoryPressure = 内存压力
-  // 全局推送（Server→Client 冒号 camelCase，对齐 rollingRestart:deferred 规则；越线期每
-  // 采样拍重发，payload 见 WatchdogMemoryPressurePayload）。
-  | 'watchdog:memoryPressure'
-  // reattach 域（crash-forensics-and-watchdog §3.3 D3 高水位延迟，偏差 #27）：deferred =
-  // 启动 reattach 高水位延迟推送（Server→Client 冒号 camelCase；进入单发 + 缓解退出单发，
-  // payload 见 ReattachDeferredPayload）。
-  | 'reattach:deferred'
   // readiness 域（startup-readiness-and-current-state 设计 §7.1/D1，u-m0 M0 契约期定形，
   // 实装随 M2）：readiness = 拉取 RPC reply（与 ClientMessageType 的 'runtime.readiness'
-  // request 同名——rollingRestart.status 同款），同时是初始推送 readiness 段的帧型
+  // request 同名——payload 消费型同名模式），同时是初始推送 readiness 段的帧型
   //（sendInitialState 批内 additive 下发、首连一次到达，旧客户端不消费无影响）；
   // readinessChanged = 能力翻转边沿广播（仅翻转发，不承载连续进度——D11），载荷为翻转后
   // 全量快照（消费端整体覆盖，与「拉取为持续态唯一真相」的三段式对齐）；sessionsRecoveryProgress =
   // sessions 恢复进度节流通知（500ms 级时间节流，仅 sessions 恢复期发送，D11）。三帧均
-  // 无 sessionId 走 broker 纯全局通道（mcp:testResult / rollingRestart:* 先例）。载荷形状
+  // 无 sessionId 走 broker 纯全局通道（mcp:testResult 先例）。载荷形状
   // SSOT 在 ./readiness；登记清单共四消息（含 Client 侧拉取 RPC），见 §3.4 M0。
   | 'runtime.readiness' | 'runtime.readinessChanged' | 'runtime.sessionsRecoveryProgress'
   // btw.*（btw-question D6；W4b 线枚举帧退役后剩 2 帧）：2 个控制帧的 RPC reply（同名
@@ -1931,7 +1927,7 @@ export type ServerMessageType =
   | 'mcp.list:result' | 'mcp.add:result' | 'mcp.update:result' | 'mcp.setEnabled:result' | 'mcp.remove:result' | 'mcp.test:result' | 'mcp.testCancel:result'
   // mcp:testResult（pi-mcp-management 设计，u5b 打回接线）：probe 终态回填的 server→client
   // 广播帧（`mcp.test` 异步任务句柄的完成侧，D8① pi 实测类徽标数据源；冒号形态对齐
-  // rollingRestart:* 全局帧先例，payload 无 sessionId 走 broker 纯全局通道）。
+  // backgroundTask:updated 全局帧先例，payload 无 sessionId 走 broker 纯全局通道）。
   | 'mcp:testResult'
   // canvas.updated（problem-solve-canvas 设计 §3.1(1) D4，U1 契约）：画布变更失效提示
   // 广播。payload 带 sessionId = 画布归属会话（session-store-layout-inversion D4 隔离：
@@ -2047,7 +2043,7 @@ export interface BackgroundTaskRegistryEntry {
  * 操作回执的结果）。
  */
 export type BackgroundTaskKillReason =
-  | 'killed'                 // 分支①：发令成功（killing 预写 + killProcessTree；终态由 extension poller 边沿写）
+  | 'killed'                 // 分支①：发令成功（killing 预写 + killProcessTree；终态由 extension 侧退出事件边沿写）
   | 'already-exited'         // 分支③：任务已退出，无副作用
   | 'identity-unverifiable'  // 分支④：进程身份无法验证，拒绝终止（宁不杀勿误杀，可重试）
   | 'registry-write-failed'  // 分支⑤：锁内 registry 写失败，操作未生效（可重试）
@@ -2070,144 +2066,6 @@ export type SkillNoticeReason =
   | 'skill_read_failed'
   | 'marker_malformed'
   | 'mapping_unavailable'
-
-// ── 滚动重启协议范围（crash-forensics-and-watchdog §3.3 D5，u7b 契约）────────────
-//
-// 三块：① rollingRestart.status 只读查询 RPC（状态机实现在 u7c，本处只钉类型契约；
-// renderer 重连/刷新后主动拉取恢复横幅——「broadcast 时序竞争」教训：需立即消费的持续
-// 状态必须可拉取，T-30s 广播只作加速显示）；② rollingRestart:deferred / rollingRestart:forced
-// 两个 WS 推送事件（Server→Client 冒号 camelCase，对齐 backgroundTask:updated 命名规则；
-// 与条目清单 event=rolling-restart-deferred / rolling-restart-forced 同源）。
-
-/** 滚动重启状态机相位（D5 ③ 执行链）。 */
-export type RollingRestartState =
-  | 'idle'       // 无滚动重启（常态；重启完成后清除，故重连拉取到 idle 即「横幅不重现」）
-  | 'deferred'   // 检测到在途（或计数未知）→ 推迟等待中
-  | 'countdown'  // 推迟结束，执行前 30s 二次预告中
-  | 'rolling'    // 正在执行滚动重启（完整 shutdown 序）
-
-/**
- * 滚动重启成因 / 事件 reason 值域（D5 ②/④）：
- * - 'inflight'：有在途任务 → 推迟（正常形态）
- * - 'absent-report'：已注入但从未收到上报（旧版 extension 组合）→ errs 推迟；
- *   在途计数字段取 null 独立标记（0 = 在场且无在途的已证事实，null = 计数未知）
- * - 'hard-threshold'：双维硬升级（runtime heap ≥92% 或 memPressure 越限）→ 立即执行
- * - 'defer-limit'：30min 推迟上限到点 → 强制执行（不含 absent-report 形态——errs 推迟必然
- *   走到上限，其 defer-limit 在评估器 #8 占比子句分子中被排除）
- */
-export type RollingRestartReason = 'inflight' | 'absent-report' | 'hard-threshold' | 'defer-limit'
-
-/**
- * 滚动重启的在途摘要（D5 ④ 字段语义固定）：镜像在途计数合计。
- * null = 计数未知（errs 形态，配 reason='absent-report'）；0 = 在场且无在途的已证事实。
- */
-export interface RollingRestartInflightSummary {
-  inFlight: number | null
-}
-
-/** rollingRestart:deferred —— 推迟开始推送（D5 ②；条目清单 event=rolling-restart-deferred 同源）。 */
-export interface RollingRestartDeferredPayload {
-  reason: 'inflight' | 'absent-report'
-  inflight: RollingRestartInflightSummary
-  /** 30min 推迟上限到点时刻（ms epoch）——横幅「等待有界」的数据源。 */
-  deferDeadlineAt: number
-}
-
-/** rollingRestart:forced —— 强制升级执行推送（D5 ②；条目清单 event=rolling-restart-forced 同源）。 */
-export interface RollingRestartForcedPayload {
-  reason: 'hard-threshold' | 'defer-limit'
-  inflight: RollingRestartInflightSummary
-}
-
-/**
- * rollingRestart:countdown —— 执行前 T-30s 二次预告推送（D5 ③，u7c 生产）：
- * 覆盖「推迟期内新开终端」的知情窗口（T0 横幅只覆盖预告时刻的终端集合）；
- * forced（硬升级/到点）路径立即执行，不发本预告（红牌即执行）。
- */
-export interface RollingRestartCountdownPayload {
-  /** 预计执行时刻（ms epoch）——横幅倒计时数据源。 */
-  executesAt: number
-  inflight: RollingRestartInflightSummary
-}
-
-/** rollingRestart.status 的 reply：状态机相位 + 成因 + 在途摘要（state='idle' 时 reason 缺省）。 */
-export interface RollingRestartStatusPayload {
-  state: RollingRestartState
-  reason?: RollingRestartReason
-  inflight: RollingRestartInflightSummary
-  /** deferred/countdown 态的推迟上限到点时刻（ms epoch）；其余态缺省。 */
-  deferDeadlineAt?: number
-}
-
-// ── reattach 域（crash-forensics-and-watchdog §3.3 D3 高水位延迟，偏差 #27）────
-//
-// reattach:deferred = 启动 reattach 高水位延迟的全局推送（Server→Client 冒号 camelCase，
-// 对齐 rollingRestart:deferred 命名规则；无 sessionId——窗口级全局态，非 session 级消息，
-// 不受「session 级消息必带 sessionId」约束）。生产方 = startup-reattach 高水位轮询循环
-// （u5 交付，#27 补广播半条路径：进入单发 + 缓解退出单发——广播形态选择见
-// ReattachDeferredPayload 注释）；消费方 = renderer useRollingRestartStatus（reattach
-// 延迟横幅路径，与滚动重启横幅共用窗口级容器——两种延迟态时域不相交：reattach 延迟只在
-// runtime 启动后短窗口，滚动重启推迟只在运行期，互斥不冲突）。无只读拉取 RPC（D3 高
-// 水位延迟是启动期瞬态，非持续态；滚动重启的「持续态必须可拉取」教训按状态生命周期
-// 区分适用）。
-
-/**
- * reattach 高水位延迟原因（D3：崩溃本身由内存高压诱发时，集中 spawn 会诱发二次崩溃——
- * 「恢复→再崩→退避」循环的缓解；当前唯一成因 = 系统级 memPressure 越限，开放枚举预留）。
- */
-export type ReattachDeferReason = 'high-memory'
-
-/**
- * reattach:deferred 的 payload。active=true 进入延迟 / active=false 压力缓解恢复执行。
- *
- * **广播形态裁决（单次进入 + 单次退出，非延迟中每拍重发）**：每拍重发对「窗口内重连」
- * 自愈更快，但缓解退出帧两种形态都是单发——重连错过退出帧的陈旧态残留窗口等价，重发
- * 只增冗余帧；且 reattach 延迟只存在于启动后短窗口（收割等待 + 高水位轮询），无只读
- * 拉取面（协议范围仅本事件）。残余窗口 = 「进入帧后断连、退出帧也错过后重连」的低概率
- * 组合，接受并登记。
- *
- * **预计恢复语义**：高压复查周期 pollMs 随帧携带——恢复无总上限（D3：高压持续则逐拍
- * 复查至缓解；总时长不可预估），横幅文案据此不承诺恢复时刻；手动 lazy 恢复恒可用。
- */
-export interface ReattachDeferredPayload {
-  /** true = 进入延迟（高压，reattach spawn 暂停）；false = 压力缓解，恢复执行。 */
-  active: boolean
-  /** 延迟成因（当前唯一 'high-memory'）。 */
-  reason: ReattachDeferReason
-  /** 高压复查周期 ms（生产方 DEFAULT_HIGH_WATER_POLL_MS，缺省 30s——逐拍复查至缓解）。 */
-  pollMs: number
-}
-
-// ── 看门狗协议范围（crash-forensics-and-watchdog §3.3 D4，u6）────────────────
-//
-// watchdog:memoryPressure = 内存压力全局推送（Server→Client 冒号 camelCase，对齐
-// rollingRestart:deferred 命名规则；无 sessionId——窗口级全局态，非 session 级消息，
-// 不受「session 级消息必带 sessionId」约束）。生产方 = runtime 看门狗采样环（u6），
-// 消费方 = renderer useMemoryPressure composable（memory-relief 降级的 renderer 半边：
-// 收到 warn 及以上 → 收紧 renderer 侧 LRU 缓存）。
-
-/**
- * 看门狗内存压力级别（D4 两级阈值）。'normal' 不广播（renderer 缺省态即 normal，
- * 压力解除的回落不产生帧——消费方回落感知走下一帧缺失 + 本地常态假设）。
- */
-export type WatchdogMemoryLevel = 'warn' | 'critical'
-
-/** watchdog:memoryPressure 的 payload：当前用量 + 阈值 + 动作级别（越线期每采样拍重发——
- *  广播重发作低配拉取，renderer 重连/刷新后最多丢一个采样周期即补上）。 */
-export interface WatchdogMemoryPressurePayload {
-  /** 动作级别：warn = memory-relief 档；critical = 滚动重启决策档（D5，u7c 消费）。 */
-  level: WatchdogMemoryLevel
-  /** 当前 heap used（bytes，process.memoryUsage().heapUsed）。 */
-  heapUsed: number
-  /** heap 上限（bytes，v8.getHeapStatistics().heap_size_limit）。 */
-  heapSizeLimit: number
-  /** 当前用量占上限百分比（0-100，两位精度由生产方预舍入）。 */
-  usedPercent: number
-  /** 告警档阈值（%，默认 70，env 可覆盖——阈值面随帧携带使 renderer 无需同步配置）。 */
-  warnPercent: number
-  /** 临界档阈值（%，默认 85，env 可覆盖）。 */
-  criticalPercent: number
-}
 
 // ── btw.*（btw-question D6）payload 辅助类型 ──────────────────────────────
 
@@ -2735,30 +2593,15 @@ export interface ServerMessageMapBase {
   //（消费端 parseUiRequest 对 method 超界兜底 'input'，未知字段原样保留），与 runtime
   // UiBroadcastFn 的 Record<string, unknown> 同形。
   'plugin:uiRequest': { requestId: string; sessionId?: string } & Record<string, unknown>
-  // plugin:uiRequestExpired：plugin dialog 到期取消下行（timeout-plugin-service D2，
-  // runtime UiRequestQueue cancelRequest / 防泄漏兜底两路径共用此帧）。与 plugin:uiRequest
-  // 契约形态一致（requestId 必带 + 索引签名透传 dialog 字段）；pluginId 必带（前端按插件
-  // 定位撤窗）。广播无条件发出（含排队中从未展示的请求——前端对未展示/已关闭弹窗的撤窗
-  // miss 须 noop 幂等，P-11：旧版前端未消费此帧时无异常回退）。
-  'plugin:uiRequestExpired': { requestId: string; pluginId: string; sessionId?: string } & Record<string, unknown>
   // plugin:permissionRequest：插件激活权限审批请求下行（runtime PluginActivator
   // gateOnPermissionApproval 生产，broadcastOrBroker 全连接广播）。pluginId /
-  // permissions / requestId 必带，requestId 与 expired/resolved 广播同源（前端按它
+  // permissions / requestId 必带，requestId 与 resolved 广播同源（前端按它
   // 精确撤窗）。sessionId 可选（remote-use-mobile-v2 §6.18）：归属语义 =「触发上下文
   // 可归属时的来源会话；缺失 = 进程级请求，不归属」。V-6 gate 结论：runtime 激活
   // 触发链不携带会话上下文（全部激活触发点恒 onStartupFinished 形态），现行恒缺省，
   // 消费方按无归属一等分支（全局呈现）处理；未来激活链携带会话上下文时组装点填值，
   // 类型零改动。
   'plugin:permissionRequest': { pluginId: string; permissions: string[]; requestId: string; sessionId?: string } & Record<string, unknown>
-  // plugin:permissionRequestExpired：权限审批到期取消下行（timeout-plugin-service D3，
-  // runtime PluginActivator 审批等待超时生产）。pluginId 必带；requestId 必带且与
-  // 本次审批 plugin:permissionRequest 广播同源（每次审批新生成）——前端按 requestId
-  // 精确撤回审批弹窗，同 pluginId 陈旧 expired 广播不误撤后到的新弹窗；payload 缺
-  // requestId（旧版 runtime 广播）时前端回退按 pluginId 匹配。
-  // 与 D2 的 plugin:uiRequestExpired 同为「取消非替答」语义——插件置 UNLOADED（未装载
-  // 态）而非「被拒」，重触发 activation event 即可重新激活 + 重新弹审批；前端撤窗
-  // miss noop 幂等（P-11：旧版前端未消费此帧时无异常回退）。
-  'plugin:permissionRequestExpired': { pluginId: string; requestId: string } & Record<string, unknown>
   // plugin:permissionRequestResolved：权限审批终局下行（runtime PluginActivator
   // resolvePermissionApproval 生产）。pluginId 必带；requestId 与本次审批
   // plugin:permissionRequest 广播同源（每次审批新生成）——前端按 requestId 精确撤回
@@ -2766,6 +2609,24 @@ export interface ServerMessageMapBase {
   // （旧版广播）时前端回退按 pluginId 匹配。approved=true 批准 / false 拒绝（含挂起期
   // 清理唤醒）——撤窗语义两值一致，approved 供消费端审计/展示，不参与匹配。
   'plugin:permissionRequestResolved': { pluginId: string; requestId: string; approved: boolean } & Record<string, unknown>
+  // plugin:commandRegistered：插件命令注册下行广播（plugin-rpc-setup.ts
+  // registerCommandRpcHandlers 的 broadcastRegistered 生产）。载荷 = CommandRegistration
+  // 全形（commands-api.ts 同形状）：pluginId/commandId/handlerId/workerId/registeredAt
+  // 必带，title/category/keybinding/when/timeoutMs 随注册声明可选；renderer 侧 bridge
+  // 窄化剥除 handlerId/workerId/registeredAt 簿记字段（见 message-bus-bridge
+  // parseCommandRegistered）。
+  'plugin:commandRegistered': {
+    pluginId: string
+    commandId: string
+    handlerId: string
+    workerId: string
+    title?: string
+    category?: string
+    keybinding?: string
+    when?: string
+    timeoutMs?: number
+    registeredAt: number
+  }
   'model.list': { models: ModelInfo[] }
   // config.sessions：reply + broadcast 双用帧。archiveCount（session-archive 设计 D5 协议
   // 变更点）= 归档目录条目数（侧栏归档入口角标数据源），reply 与广播帧均携带；可选字段
@@ -2811,13 +2672,6 @@ export interface ServerMessageMapBase {
   // reason: 人类可读的错误原因（含 stderr 尾部截断），供诊断面板展开显示。
   // code: pi 进程退出码（null 表示进程被信号杀死无退出码）。
   'session.exited': { sessionId: string; code: number | null; reason: string }
-  // session.stall_hint（pi-stall-detection U4 / D3 双阈值裁决）：静默辅助提示的 last-value
-  // 状态帧（state topic，重连/切回经 stateSnapshot 回放恢复）。判定权在 runtime——T/T_hint
-  // 推导单源 runtime（review-main#1），本帧只携带呈现所需事实，renderer 不复制推导：
-  // active=true = 静默已过 T_hint（判死阈值前 60s 行动窗）；active=false = 帧流恢复 /
-  // 判死触发 / 回合收尾的清除边沿。silentMs = 提示发出时刻的累计静默时长（毫秒）；phase =
-  // 静默前最后在途阶段（'tool' | 'model-first-byte' | 'stream'），仅呈现用。
-  'session.stall_hint': { sessionId: string; active: boolean; silentMs: number; phase: 'tool' | 'model-first-byte' | 'stream' }
   // session.restored / session.restoreFailed（D7，u8-pi-respawn）：
   // pi 非主动退出后的自动恢复结果推送（恢复编排点 = ProcessManager onSessionExit 链 →
   // pi-respawn.ts 编排；5s 延迟 + 连续 2 次失败熔断）。两者只在「非主动退出触发的自动
@@ -2891,8 +2745,8 @@ export interface ServerMessageMapBase {
   'session.compacting': { sessionId: string; status: 'compacting'; reason: 'manual' | 'threshold' | 'overflow' }
   'session.compacted': { sessionId: string; status: 'compacted'; error?: string }
   // session.compactBackground：手动压缩触发受理 ack（触发即回执——压缩本体后台执行，
-  // 完成事实经 smart-context 落盘信号链 + 完成通知到达，不经本帧）。同名 reply（与
-  // rollingRestart.status 同模式）；启动失败走 error envelope code 'compact_start_failed'。
+  // 完成事实经 smart-context 落盘信号链 + 完成通知到达，不经本帧）。同名 reply（payload
+  // 消费型同名模式）；启动失败走 error envelope code 'compact_start_failed'。
   'session.compactBackground': { sessionId: string }
   // session.occupancy（session-occupancy-send-closure D3/P3；chat-flow-consistency D1 扩
   // handingOff 第四维）：占用结构快照，state topic（message-bus 分配 seq + 写 last-value 快照、
@@ -3458,9 +3312,6 @@ export interface ServerMessageMapBase {
   // truncated=true 表示窗口外仍有历史；loadedTurns=本次返回的完整 turn 数；
   // totalTurnsEstimate=session 的 turn 总数估计（读到头为精确值，窗口截断时为下界）。
   // [u6] legacy historyTruncated 字段已退役（偏差表 D7 登记项完成：与 truncated 同值并存的双轨收尾）。
-  // [U8 重启中断标记] interrupted：可选，true = 离线读取判定文件尾部为中断形态
-  // （design-session-lifecycle 缺陷 4 方向 A：pi 落盘尾部形态 + 会话未附着联合判定，
-  // 推断性质）。活跃路径与游标翻页不出场（undefined）；旧前端忽略，向后兼容。
   'session.history': {
     sessionId: string
     session?: SessionSummary
@@ -3468,7 +3319,6 @@ export interface ServerMessageMapBase {
     truncated: boolean
     loadedTurns: number
     totalTurnsEstimate: number
-    interrupted?: boolean
   }
   // session.switched：session.switch 的成功 reply（wave:perf-w20 R-11 瘦身——switch reply 不再
   // 无条件全量 getHistory 塞 messages，被驱逐 session 切回走显式 session.history RPC（全量），
@@ -3679,28 +3529,6 @@ export interface ServerMessageMapBase {
   // corrupted 语义与 backgroundTask.tasks 同源（损坏空表标记，S7）；缺省/false = 正常拍。
   'backgroundTask:updated': { sessionId: string; tasks: BackgroundTaskRegistryEntry[]; corrupted?: boolean }
 
-  // ── rollingRestart 域（crash-forensics-and-watchdog §3.3 D5，u7b 协议范围）──
-  // status：只读查询 reply（u7c 状态机生产；renderer 重连/刷新后主动拉取恢复横幅——持续态
-  // 不可依赖广播时序，T-30s 广播只作加速显示）。
-  'rollingRestart.status': RollingRestartStatusPayload
-  // deferred / forced：推迟开始 / 强制升级执行的全局推送（u7c 生产；与条目清单
-  // rolling-restart-deferred / rolling-restart-forced 同源，在途摘要字段语义见 payload 类型）。
-  'rollingRestart:deferred': RollingRestartDeferredPayload
-  // countdown：执行前 T-30s 二次预告（D5 ③，u7c 补缺；status 拉取是持续态唯一真相，
-  // 本广播只作加速显示——「broadcast 时序竞争」教训同源）。
-  'rollingRestart:countdown': RollingRestartCountdownPayload
-  'rollingRestart:forced': RollingRestartForcedPayload
-
-  // ── watchdog 域（crash-forensics-and-watchdog §3.3 D4，u6）──
-  // memoryPressure：内存压力全局推送（u6 看门狗生产；renderer useMemoryPressure 消费——
-  // warn 及以上收紧 renderer 侧 LRU；字段语义见 payload 类型）。
-  'watchdog:memoryPressure': WatchdogMemoryPressurePayload
-
-  // ── reattach 域（crash-forensics-and-watchdog §3.3 D3 高水位延迟，偏差 #27）──
-  // deferred：启动 reattach 高水位延迟推送（u5 生产；renderer useRollingRestartStatus
-  // 消费——高压延迟横幅路径；active 进入/缓解退出两态，字段语义见 payload 类型）。
-  'reattach:deferred': ReattachDeferredPayload
-
   // ── readiness 域（startup-readiness-and-current-state 设计 §7.1/D1，u-m0 M0 契约期）──
   // readiness：拉取 RPC reply + 初始推送 readiness 段共用帧型（sendInitialState 批内
   // additive 下发；三通道同源——广播加速显示、拉取为持续态唯一真相）。字段语义见
@@ -3765,6 +3593,41 @@ export interface ServerMessageMapBase {
   // 模块级单订阅按归属过滤）；收到后重新拉取。
   'canvas.updated': { canvasId: string; sessionId: string; evType: CanvasEventType; eventId: string; summary: string }
 }
+
+/**
+ * plugin 系下行帧类型全集（`plugin:` 冒号前缀成员的运行时可迭代投影）。
+ *
+ * 收敛动机：runtime 广播字面量散落各生产点（broadcastFn / broadcastOrBroker 的
+ * `(type: string, ...)` 形态，编译期不拦），renderer 侧 MessageBusBridge 的
+ * PLUGIN_HANDLERS 漏登记 = 帧落「未知类型」error 路径（plugin:commandRegistered
+ * 曾漏，2026-10 裁决补登记 + 机器对账）。对账防线 =
+ * packages/core/src/extension-host/__tests__/plugin-downlink-contract.test.ts：
+ * 断言本清单每个类型被 PLUGIN_HANDLERS 登记（或在测试内登记的专用消费方豁免清单内）。
+ *
+ * 新增 plugin: 下行帧的三步义务：
+ *   ① ServerMessageType 加 union 成员 + ② ServerMessageMapBase 加 payload 契约
+ *   （均本文件，satisfies 锚定 ① 漏 = 编译报错）；③ 本清单加同名字符串
+ *   （③ 漏由对账测试的编译期差集断言 + 运行时对账拦截）。
+ * 已知残余缺口：只在生产点写新字面量、①②③ 全漏的形态无机器拦截（生产点签名
+ * 是 string；全量收敛生产点为具名常量改动面大，2026-10 裁决不做）。
+ */
+export const PLUGIN_DOWNLINK_TYPES = [
+  'plugin:crashed',
+  'plugin:notification',
+  'plugin:statusChange',
+  'plugin:permissionRequest',
+  'plugin:messageDecoration',
+  'plugin:config',
+  'plugin:uiRequest',
+  'plugin:permissionRequestResolved',
+  'plugin:viewUpdate',
+  'plugin:event',
+  'plugin:headerActionUpdate',
+  'plugin:uiSnapshot',
+  'plugin:commandRegistered',
+] as const satisfies readonly ServerMessageType[]
+
+export type PluginDownlinkType = (typeof PLUGIN_DOWNLINK_TYPES)[number]
 
 /**
  * Runtime → Client payload 类型映射（与 ClientMessageMap 对称）。
@@ -4199,11 +4062,8 @@ export interface ReplyPayloadMap {
   // delivery.peek / delivery.edit（chat-flow-consistency D6）：reply 同名（payload 消费型）。
   'delivery.peek': ServerMessageMap['delivery.peek']
   'delivery.edit': ServerMessageMap['delivery.edit']
-  // rollingRestart.status（crash-forensics-and-watchdog §3.3 D5，u7b）：只读查询 reply
-  //（payload 消费型；与 request 同名——session.subscribe / backgroundTask.list 同款模式）。
-  'rollingRestart.status': ServerMessageMap['rollingRestart.status']
   // runtime.readiness（startup-readiness-and-current-state 设计 §7.1，u-m0 M0 契约期）：
-  // 只读查询 reply（payload 消费型；与 request 同名——rollingRestart.status 同款模式）。
+  // 只读查询 reply（payload 消费型；与 request 同名——backgroundTask.list 同款模式）。
   'runtime.readiness': ServerMessageMap['runtime.readiness']
 
   // terminal.* 都是 ack 型，统一 reply 'terminal.ack'（前端 command() 按 id 匹配 resolve；
@@ -4226,7 +4086,7 @@ export interface ReplyPayloadMap {
   'tts.getCapabilities': ServerMessageMap['tts.getCapabilities:result']
 
   // ── canvas.*（problem-solve-canvas U1 契约）：三 RPC reply 与 request 同名
-  //（payload 消费型——session.subscribe / rollingRestart.status 同款模式）。
+  //（payload 消费型——session.subscribe 同款模式）。
   'canvas.list': ServerMessageMap['canvas.list']
   'canvas.get': ServerMessageMap['canvas.get']
   'canvas.mutate': ServerMessageMap['canvas.mutate']

@@ -14,8 +14,8 @@
 // attach 投影不依赖装配链恢复段的成果（subagent 件 collectRecords 四源合并中「磁盘重建」
 // 的同款语义——与 subagent 件同款重启恢复收敛）。
 // 行级信息 = core runSummary 派生视图（三态 done>interrupted>running + DoneReason 终局
-// 因）+ state.calls 成员计数（N/M 进度的原语承载位——list-tree 无进度条原语，拼进行
-// label，信息不静默丢弃）。
+// 因）+ state.calls 成员计数（N/M 进度的原语承载位——list-tree 无进度条原语，随 slug
+// 落行 subLabel 副文本位，信息不静默丢弃）。
 //
 // 变更驱动 = run 域 journal 落盘出口（core notifyJournalAppended 的壳层组合分发——
 // run 生命周期每条转移帧都落 run 域 journal，出口回调即权威变更信号；进程级单监听
@@ -29,7 +29,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   guiComponent,
-  guiResult,
   setWidgetDual,
   type DualWidgetContent,
   type GuiComponent,
@@ -42,6 +41,7 @@ import type { WorkflowRun } from "@zhushanwen/subagent-core";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { t, readUiLocale, type UiLocale } from "../../i18n.ts";
+import { buildDualSegmentTrayWidget } from "./tray-widget-dual-segment.ts";
 
 /** 托盘 widget 的 viewId（宿主 widget 区分区键；todo/goal/subagent 同形短名）。 */
 export const WORKFLOW_TRAY_VIEW_ID = "workflow";
@@ -76,8 +76,9 @@ const TRAY_RUN_LIMIT = 50;
 
 /**
  * 单个 run 的成员进度计数（N/M）：N = 已落定 call 数（result 已设置——markDone
- * 前置保证落定即有 result，error 有无区分成败）；M = 总 call 数。行 label 的承载位
- * （原宿主托盘 workflow 行的进度条 + N/M 文本迁 widget 后由 label 承载，不静默丢弃）。
+ * 前置保证落定即有 result，error 有无区分成败）；M = 总 call 数。行 subLabel 的承载位
+ * （原宿主托盘 workflow 行的进度条 + N/M 文本迁 widget 后先由 label 承载、D8 富行
+ * 迁移后随 slug 一起落 subLabel 副文本位，不静默丢弃）。
  */
 function memberProgressOf(run: WorkflowRun): { settled: number; total: number } {
   let settled = 0;
@@ -110,11 +111,21 @@ function rowPresentation(
   }
 }
 
-/** 行 label：`name · slug · N/M`（slug 缺省跳段——filter(Boolean) 防双空格）。 */
+/** 行主名（composer-tray-protocol D8 富行迁移，demo v3 .cname 规格）：label 只放
+ *  run 名——slug 与成员进度迁 subLabel 副文本位，不再「 · 」拼接单行文本。 */
 function rowLabelOf(run: WorkflowRun): string {
+  return runSummary(run).name;
+}
+
+/**
+ * 行副文本（demo v3 .csub 规格）：`slug · N/M`（成员进度 N/M = 已落定 call 数/总 call
+ * 数——list-tree 无进度条原语，subLabel 是该信息的原语承载位，不静默丢弃；slug 缺省
+ * 跳段——filter(Boolean) 防双空格）。返回空串 = 无副文本（推送侧转字段缺省）。
+ */
+function rowSubLabelOf(run: WorkflowRun): string {
   const summary = runSummary(run);
   const progress = memberProgressOf(run);
-  return [summary.name, summary.slug, `${progress.settled}/${progress.total}`]
+  return [summary.slug, `${progress.settled}/${progress.total}`]
     .filter(Boolean)
     .join(" · ");
 }
@@ -158,11 +169,13 @@ function rowActionsOf(run: WorkflowRun, locale: UiLocale): ActionBarItem[] {
 }
 
 /**
- * 段清单（tab-bar sections 的段 = 子树数组）：逐行「list-tree 行 + action-bar 操作」对
- * （scheduler-manager 浮层面板同款形态——仓内 action-bar 唯一消费先例，设计 AS3）。
- * 行集从「一段一棵 list-tree」改为逐行一棵：按钮 args 逐行承载该行 runId，段级共享
- * action-bar 表达不了行级参数；无操作按钮的行只推 list-tree（段内零按钮时不出现空
- * action-bar）。
+ * 段清单（tab-bar sections 的段 = 子树数组）：富行形态（composer-tray-protocol D8）——
+ * 每行一棵单行 list-tree，行信息按协议字段承载（label 主名 / subLabel 副文本 /
+ * statusLabel 状态覆盖 / actions 行内操作槽），行内中止/续跑不再推兄弟 action-bar 块
+ * （AX3：视觉层级由协议字段显式承载，禁止独立兄弟组件模拟）。
+ *
+ * interrupted（三值枚举装不下的特殊语义，D3/D8）经 statusLabel 覆盖字表达
+ * （「已中断（可续跑）」，文案在扩展 i18n 词典——渲染序 = statusLabel ?? 宿主枚举映射）。
  *
  * 行 action（M2 入口复活）：声明 hostAction 后行渲染为可点原生 button，点击经宿主容器
  * 导航执行器打开全屏浮层并用 params.runId 定位该 run（overlay.content 族登记键；core
@@ -174,7 +187,10 @@ function rowActionsOf(run: WorkflowRun, locale: UiLocale): ActionBarItem[] {
 function traySegment(runs: readonly WorkflowRun[], locale: UiLocale): GuiComponent[] {
   const children: GuiComponent[] = [];
   for (const run of runs) {
-    const presentation = rowPresentation(runSummary(run));
+    const summary = runSummary(run);
+    const presentation = rowPresentation(summary);
+    const subLabel = rowSubLabelOf(run);
+    const actions = rowActionsOf(run, locale);
     children.push(
       guiComponent("list-tree", {
         items: [
@@ -183,6 +199,15 @@ function traySegment(runs: readonly WorkflowRun[], locale: UiLocale): GuiCompone
             status: presentation.status,
             icon: presentation.icon,
             depth: 0,
+            // interrupted 无活体暂停态（不作成败断言——status 缺省）：覆盖字是唯一
+            // 状态语义承载，空串 = 未声明口径同 confirm（本词条词典恒非空串）
+            ...(summary.status === "interrupted"
+              ? { statusLabel: t("tray.workflow.interruptedLabel", undefined, locale) }
+              : {}),
+            // 空串 = 无副文本/无行内操作 → 字段缺省（与 confirm「空串 = 未声明」同口径，
+            // 不给宿主渲染层留空值分支）
+            ...(subLabel !== "" ? { subLabel } : {}),
+            ...(actions.length > 0 ? { actions } : {}),
             action: {
               hostAction: {
                 kind: "overlay",
@@ -194,12 +219,19 @@ function traySegment(runs: readonly WorkflowRun[], locale: UiLocale): GuiCompone
         ],
       }),
     );
-    const actions = rowActionsOf(run, locale);
-    if (actions.length > 0) {
-      children.push(guiComponent("action-bar", { items: actions }));
-    }
   }
   return children;
+}
+
+/** TUI text 臂行组装（D8 TUI 文本臂语义，R1 修复轮）：GUI 行拆字段后 text 臂自行
+ *  组装完整拼接文本 `name · slug · N/M`——slug 与成员进度不随 GUI 字段拆分静默丢弃，
+ *  TUI 与 GUI 信息量等价（独立 pi CLI 用户经 setWidgetDual 的 text 分支呈现）。 */
+function rowTextOf(run: WorkflowRun): string {
+  const summary = runSummary(run);
+  const progress = memberProgressOf(run);
+  return [summary.name, summary.slug, `${progress.settled}/${progress.total}`]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 /** TUI 文本臂（pi 原生 widget 行——非 rpc/TUI 模式经 setWidgetDual 的 text 分支呈现）。 */
@@ -207,27 +239,19 @@ function trayTextLines(runs: readonly WorkflowRun[]): string[] {
   return runs.map((run) => {
     const summary = runSummary(run);
     const state = summary.status;
-    return `[${state}] ${rowLabelOf(run)}`;
+    return `[${state}] ${rowTextOf(run)}`;
   });
 }
 
-/** meta 状态词表（head 状态点语义）。 */
-type MetaStatus = NonNullable<import("@zhushanwen/extension-protocol").WidgetMeta["status"]>;
-
 /**
  * workflow 托盘 widget 双模内容（meta head + tab-bar 双段，形态对齐 subagent 件的
- * 「进行中 / 已结束」两桶语义——原宿主分桶面板的两视图裁决同构）：
- * - gui 臂 meta：status = running>0 亮运行态、有失败终局落 failed、否则 done；
- *   badge/progress = 进行中 run 数（原宿主按钮角标的计数语义同源）；icon 点名
- *   'workflow'（宿主 widget icon registry 在册——U10 随件迁移登记）。
- * - gui 臂内容 = tab-bar 双段互斥覆盖全量：进行中段 = status==="running" 行；
- *   已结束段 = 其余（done / interrupted——interrupted 计已结束与原宿主 [D2] 显式
- *   裁决同口径：interrupted 是无活体暂停态不算进行中）。段内逐行「list-tree 行 +
- *   action-bar 操作」对：running 行带中止按钮、interrupted 行带续跑按钮，commandId
- *   指向宿主薄命令（M3，见 rowActionsOf）。
- * - text 臂 = TUI 原生文本行。
- * - 空 runs → undefined（调用方按清屏语义推 setWidgetDual(…, undefined)——与 todo /
- *   subagent 空列表清屏同款，宿主 widget 区「有 entry 即渲染、清屏即消失」）。
+ * 「进行中 / 已结束」两桶语义——原宿主分桶面板的两视图裁决同构）：骨架组装（状态派生 /
+ * 角标规则 / 双段 / meta head）见 tray-widget-dual-segment（subagent 件同构共用）；本件
+ * 只落数据源域差异——进行中段 = status==="running" 行，已结束段 = 其余（done /
+ * interrupted——interrupted 计已结束与原宿主 [D2] 显式裁决同口径：interrupted 是无活体
+ * 暂停态不算进行中）；空 runs → undefined（调用方按清屏语义推 setWidgetDual(…,
+ * undefined)——与 todo / subagent 空列表清屏同款，宿主 widget 区「有 entry 即渲染、
+ * 清屏即消失」）。
  *
  * locale 形参（D9）：head 标题与 tab-bar 分段标签随 UI 语言；由推送方在每次推送时读
  * （readUiLocale）后显式传入——本函数保持纯函数（入参出参），显示决定因素不含隐藏的
@@ -244,32 +268,21 @@ export function buildWorkflowTrayWidget(
     const p = rowPresentation(runSummary(r));
     return p.status === "failed";
   });
-  const status: MetaStatus =
-    running.length > 0 ? "running" : hasFailure ? "failed" : "done";
-  return {
-    gui: guiResult(
-      guiComponent("tab-bar", {
-        tabs: [
-          // 首段带 active：容器化宿主据此建立初始 tab（此后本地切换不被推送重置）
-          { label: t("tray.segment.running", { n: running.length }, locale), active: true },
-          { label: t("tray.segment.ended", { n: ended.length }, locale) },
-        ],
-        sections: [traySegment(running, locale), traySegment(ended, locale)],
-      }),
-      {
-        title: t("tray.workflow.title", undefined, locale),
-        status,
-        progress: {
-          current: running.length,
-          total: runs.length,
-          label: String(running.length),
-        },
-        icon: "workflow",
-        badge: String(running.length),
-      },
-    ),
-    text: trayTextLines(runs),
-  };
+  // 骨架（head 状态派生 / 角标规则 / tab-bar 双段 / meta head）在 tray-widget-dual-segment
+  // 单点（subagent 件同构共用）；本件只注入数据源域差异（行构造 / text 臂 / title / icon）。
+  return buildDualSegmentTrayWidget(
+    {
+      records: runs,
+      running,
+      ended,
+      hasFailure,
+      titleKey: "tray.workflow.title",
+      icon: "workflow",
+      segment: traySegment,
+      textLines: trayTextLines,
+    },
+    locale,
+  );
 }
 
 // ── 推送器（组合根注入 readRuns 的 per-factory 实例）────────────────────────

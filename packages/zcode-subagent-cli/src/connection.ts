@@ -47,10 +47,8 @@ import {
   spawnEngineChild,
 } from "@zhushanwen/subagent-engine-sdk";
 import {
-  ZCODE_APPSERVER_REQUEST_TIMEOUT_MS,
   ZCODE_APPSERVER_STDERR_TAIL_BUFFER_CHARS,
   ZCODE_APPSERVER_STDERR_TAIL_CHARS,
-  ZCODE_KILL_GRACE_MS,
 } from "./constants.ts";
 import { toErrorMessage } from "./error-message.ts";
 import {
@@ -184,8 +182,6 @@ export interface AppServerConnectionOptions {
   stderrLogPathResolver?: (pid: number | undefined) => string;
   /** node 二进制（缺省 'node' 走 PATH）。 */
   nodeBin?: string;
-  /** 控制范围请求默认超时（缺省 ZCODE_APPSERVER_REQUEST_TIMEOUT_MS）。 */
-  requestTimeoutMs?: number;
   /** 反向请求 handler 表（缺省 D9 常量表；测试注入故障 handler 用）。 */
   reverseHandlers?: Readonly<Record<string, (params: unknown) => unknown>>;
   /**
@@ -197,17 +193,10 @@ export interface AppServerConnectionOptions {
   onSpawned?: (child: ChildProcess) => void;
 }
 
-/** request() 的单次可选项。 */
-export interface AppServerRequestOptions {
-  /** 本请求超时预算（缺省用连接级默认值）。 */
-  timeoutMs?: number;
-}
-
 /** 在途请求登记项。 */
 interface PendingEntry {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
-  timer: NodeJS.Timeout;
   method: string;
 }
 
@@ -228,7 +217,6 @@ export class AppServerConnection {
   /** 当前代 tee 流实际写入的路径（append/轮转/cleanup 共用）。 */
   private activeStderrLogPath: string | null = null;
   private readonly nodeBin: string;
-  private readonly requestTimeoutMs: number;
   private readonly reverseHandlers: Readonly<Record<string, (params: unknown) => unknown>>;
   private readonly onSpawned: ((child: ChildProcess) => void) | undefined;
   private readonly launcherScript: string | undefined;
@@ -248,10 +236,9 @@ export class AppServerConnection {
   private stderrStream: fs.WriteStream | null = null;
   private stderrStreamFailed = false;
   /**
-   * 本代我方杀链 promise（close/shutdown 共用）。入口顺序不破「shutdown resolve 于
-   * 进程退出」契约：close 先行发起时 shutdown await 同一 promise 而非直接 return。
-   * killChain 永不 reject（内部 raceTimeout 吞 reject）——close 的 fire-and-forget
-   * 无 unhandled rejection 面。
+   * 本代我方杀链 promise（close/shutdown 共用；信号已同步发出后的立即 settle 形态）。
+   * 入口顺序不破互斥：close 先行发起时 shutdown await 同一 promise 而非直接 return。
+   * killChain 同步返回永不 reject——close 的 fire-and-forget 无 unhandled rejection 面。
    */
   private killChainPromise: Promise<"terminated" | "killed"> | undefined;
   private generation = 0;
@@ -269,7 +256,6 @@ export class AppServerConnection {
     this.stderrLogPath = opts.stderrLogPath;
     this.stderrLogPathResolver = opts.stderrLogPathResolver ?? (() => this.stderrLogPath);
     this.nodeBin = opts.nodeBin ?? "node";
-    this.requestTimeoutMs = opts.requestTimeoutMs ?? ZCODE_APPSERVER_REQUEST_TIMEOUT_MS;
     this.reverseHandlers = opts.reverseHandlers ?? DEFAULT_REVERSE_HANDLERS;
     this.onSpawned = opts.onSpawned;
   }
@@ -334,61 +320,56 @@ export class AppServerConnection {
 
   /**
    * 发一个客户端请求并等应答。惰性启动（首次调用 spawn）；error 应答帧转 reject
-   * （code/data 挂到 Error 上，-32602 的 zod 诊断随 data 带出便于逆向 schema）。
+   * (code/data 挂到 Error 上，-32602 的 zod 诊断随 data 带出便于逆向 schema)。
    * 出站帧精确键集 {id, method, params}——无 jsonrpc 字段（A.1）。
+   * 无时间上界（原 15s 请求超时已随时间机制删除——应答帧与进程死亡是仅有的
+   * 收口事实源）。
    */
-  request<T = unknown>(method: string, params?: unknown, opts?: AppServerRequestOptions): Promise<T> {
+  request<T = unknown>(method: string, params?: unknown): Promise<T> {
     this.ensureStarted();
     if (this.child === null) {
       return Promise.reject(new Error("app-server 连接不可用（进程未启动或已退出）"));
     }
-    const timeoutMs = opts?.timeoutMs ?? this.requestTimeoutMs;
     const id = ++this.reqSeq;
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`请求 ${method} 超时（${timeoutMs}ms）`));
-      }, timeoutMs);
       this.pending.set(id, {
         // 泛型 T 是调用方对线上 unknown 结果的视图声明，连接层不做运行时校验
         // （协议层保持透明，结构校验归会话层/消费方）。
         resolve: resolve as (value: unknown) => void,
         reject,
-        timer,
         method,
       });
       if (!this.writeFrame({ id, method, params })) {
-        // 同步写失败（进程将死）：立即失败该请求，不等超时兜底
+        // 同步写失败（进程将死）：立即失败该请求
         this.pending.delete(id);
-        clearTimeout(timer);
         reject(new Error(`请求 ${method} 写入失败（app-server 进程不可写）`));
       }
     });
   }
 
   /**
-   * 同步关闭面（R4 dispose 编排的原语）：立即发 SIGTERM（同步系统调用，返回前信号
-   * 已发出），grace→SIGKILL 升级由杀链 promise 跟进（fire-and-forget）。幂等；对未启动
+   * 同步关闭面（R4 dispose 编排的原语）：立即发 SIGTERM+SIGKILL（同步系统调用，
+   * 返回前信号已发出；无等待升级窗——原 5s grace 已随时间机制删除）。幂等；对未启动
    * 连接是零成本 no-op。close 之后调 shutdown 会 await 同一杀链再 resolve（见
    * killChainPromise 字段注释）。
    */
   close(): void {
     const child = this.child;
     if (child === null || this.killChainPromise !== undefined) return;
-    this.killChainPromise = killChain(child, { graceMs: ZCODE_KILL_GRACE_MS });
+    this.killChainPromise = Promise.resolve(killChain(child));
   }
 
   /**
-   * 异步完整关闭面：SIGTERM → grace → SIGKILL 杀链走完（含收尸），resolve 于进程
-   * 退出。幂等：与 close 共享同一杀链 promise——close 先行时 await 它再 resolve，
-   * 不另起杀链（graceMs 取首次发起值）。之后首个 request() 自动重建（与崩溃重建
-   * 同路径，§3.4 不变量 4）。
+   * 异步完整关闭面：SIGTERM+SIGKILL 杀链已同步发出，resolve 于调用时点（杀链不再
+   * 等待进程退出——exit 事件驱动的 finalize 承担收尾）。幂等：与 close 共享同一杀链
+   * promise——close 先行时 await 它再 resolve，不另起杀链。之后首个 request() 自动
+   * 重建（与崩溃重建同路径，§3.4 不变量 4）。
    */
-  async shutdown(opts?: { graceMs?: number }): Promise<void> {
+  async shutdown(): Promise<void> {
     if (this.killChainPromise === undefined) {
       const child = this.child;
       if (child === null) return;
-      this.killChainPromise = killChain(child, { graceMs: opts?.graceMs ?? ZCODE_KILL_GRACE_MS });
+      this.killChainPromise = Promise.resolve(killChain(child));
     }
     await this.killChainPromise;
   }
@@ -449,7 +430,6 @@ export class AppServerConnection {
       this.child = null;
       const err = new Error(`app-server ${reason}`);
       for (const entry of this.pending.values()) {
-        clearTimeout(entry.timer);
         entry.reject(err);
       }
       this.pending.clear();
@@ -539,7 +519,6 @@ export class AppServerConnection {
       return;
     }
     this.pending.delete(id);
-    clearTimeout(entry.timer);
     if (frame.error !== undefined) {
       const e = isRecord(frame.error) ? frame.error : {};
       const code = typeof e.code === "number" ? e.code : undefined;

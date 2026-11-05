@@ -3,8 +3,7 @@
  *
  * [perf W16 / 03-git-state-service D3-1]：execFileSync → execFile 异步化。同步子进程会阻塞 runtime
  * 事件循环（streaming 期间后续 token / 其他 session 消息全部排队）；execFile 保持行为契约不变——
- * 防注入数组参数与错误形状均与同步版等价；超时语义有一处已知偏差（下方 timeout 分支注释），
- * 后果等价（调用方 execSafe / GitStateService 对 timeout 与 git_unavailable 两种 code 的处置一致）。
+ * 防注入数组参数与错误形状均与同步版等价。
  *
  * 安全：
  * - 数组参数形式 `[command, ...args]` 直接交给 execFile，不经 shell，路径/message 中的特殊字符
@@ -13,7 +12,9 @@
  *
  * 不抛策略：git 退出码非 0 时（如非 git 仓库、冲突态 commit、路径不存在）**原样返回 exitCode+stderr**，
  * 不抛异常。GitService 按 stderr/exitCode 语义判定失败类型（isRepo / git_conflict / path_not_allowed）。
- * 仅在 git 二进制不可用（ENOENT）或超时时抛 GitExecutorError，由 handler 转 'git_unavailable'。
+ * 仅在 git 二进制不可用（ENOENT）时抛 GitExecutorError，由 handler 转 'git_unavailable'。
+ * 无默认墙钟：本地 git 操作（status/diff/worktree add 等）跑到退出为止，不做时间阈值判死；
+ * 仅网络命令（fetch）由调用方显式传 opts.timeoutMs（远程网络超时保留项）。
  */
 import { execFile } from 'node:child_process'
 import type { ExecFileException } from 'node:child_process'
@@ -22,8 +23,6 @@ import { pickProxyExtras } from './installers/npm-git-installer.js'
 import { GitExecutorError } from '../services/ports/git-executor.js'
 import type { GitCommand, GitExecOptions, GitExecutorResult, IGitExecutor } from '../services/ports/git-executor.js'
 
-/** execFile 默认超时（ms）。大仓库 status/diff 也应在此内有界返回。调用方可经 opts.timeoutMs 收紧。 */
-const GIT_TIMEOUT_MS = 8000
 /** stdout 最大缓冲（bytes）。超大 status/diff 输出兼底。 */
 // eslint-disable-next-line no-magic-numbers -- 10MB = 10 * 1024 * 1024 bytes
 const GIT_MAX_BUFFER_BYTES = 10 * 1024 * 1024
@@ -37,7 +36,7 @@ const GIT_MAX_BUFFER_BYTES = 10 * 1024 * 1024
 export class GitExecutor implements IGitExecutor {
   async exec(cwd: string, command: GitCommand, args: string[] = [], opts?: GitExecOptions): Promise<GitExecutorResult> {
     const fullArgs = [command, ...args]
-    const timeoutMs = opts?.timeoutMs ?? GIT_TIMEOUT_MS
+    const timeoutMs = opts?.timeoutMs
     return new Promise<GitExecutorResult>((resolve, reject) => {
       execFile(
         'git',
@@ -63,12 +62,12 @@ export class GitExecutor implements IGitExecutor {
             reject(new GitExecutorError('git_unavailable', 'git CLI 未安装或不在 PATH 中'))
             return
           }
-          // 超时（execFile timeout 触发 kill → killed + SIGTERM）。已知偏差：外部 SIGTERM kill（如
-          // 系统关机/父进程被 kill）与 timeout kill 错误对象同形（killed+SIGTERM），此处无法区分，
-          // 会被归类为 timeout——后果等价：消费方（git-service execSafe / GitStateService catch）
-          // 对两种 code 统一降级（git_unavailable / null），不依赖二者的区分。
+          // 子进程被 SIGTERM 杀死（调用方传了 timeoutMs 的网络命令超时 kill / 外部 SIGTERM）。
+          // 已知偏差：外部 SIGTERM kill（如系统关机/父进程被 kill）与 timeout kill 错误对象同形
+          // （killed+SIGTERM），此处无法区分——消费方（git-service execSafe / GitStateService catch）
+          // 对该降级路径统一处理，不依赖二者的区分。
           if (err.killed && err.signal === 'SIGTERM') {
-            reject(new GitExecutorError('timeout', `git ${command} 执行超时（${timeoutMs}ms）`))
+            reject(new GitExecutorError('timeout', `git ${command} 被终止（SIGTERM）`))
             return
           }
           // 非零退出（非 git 仓库 / 冲突态 commit / 路径非法 等）→ 原样返回，不抛。

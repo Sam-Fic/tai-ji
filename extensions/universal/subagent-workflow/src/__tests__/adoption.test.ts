@@ -38,7 +38,6 @@ import { WorkflowRun } from "@zhushanwen/subagent-core";
 import type { WorkflowRun as WorkflowRunType } from "@zhushanwen/subagent-core";
 import type { RunSpec } from "@zhushanwen/subagent-core/orchestration/models/run-spec.ts";
 import { mkCtx, mkPi } from "@zhushanwen/subagent-core/orchestration/__tests__/test-mocks.ts";
-import type { InFlightReporter } from "../host/inflight-reporter.ts";
 import type { SessionLifecycleDeps, SessionLifecycleResult } from "../session-lifecycle.ts";
 import { GLOBAL_SLOT_KEYS } from "@zhushanwen/subagent-core";
 
@@ -333,15 +332,10 @@ describe("D4 接管：同引用接管 + ctx 换新", () => {
       });
       return { pi, entries, handlers };
     };
-    const reporter = {
-      attachSession: vi.fn(),
-      detachSession: vi.fn(),
-      onInFlightChanged: vi.fn(),
-    } as unknown as InFlightReporter;
 
     // 第一次装配（startup，旧 pi）
     const m1 = makeMount();
-    const handle1 = setupWorkflowDomain(m1.pi, { inflightReporter: reporter });
+    const handle1 = setupWorkflowDomain(m1.pi);
     await m1.handlers.get("session_start")!({ type: "session_start", reason: "startup" }, makeFakeCtx("sess-handler"));
     const first = handle1.state.sessionState.get("sess-handler");
     expect(first).toBeDefined();
@@ -350,7 +344,7 @@ describe("D4 接管：同引用接管 + ctx 换新", () => {
 
     // 模拟 reload：factory 重跑（同一 domain state 槽）+ 新 pi/ctx + session_start(reload)
     const m2 = makeMount();
-    const handle2 = setupWorkflowDomain(m2.pi, { inflightReporter: reporter });
+    const handle2 = setupWorkflowDomain(m2.pi);
     await m2.handlers.get("session_start")!({ type: "session_start", reason: "reload" }, makeFakeCtx("sess-handler"));
 
     // 探针红线：同引用接管（store/runs 不换实例）
@@ -418,15 +412,10 @@ describe("D4 失败处置：rebind-first → terminate 中断转移 → 移除�
       });
       return { pi, entries, handlers };
     };
-    const reporter = {
-      attachSession: vi.fn(),
-      detachSession: vi.fn(),
-      onInFlightChanged: vi.fn(),
-    } as unknown as InFlightReporter;
 
     // 第一次装配（startup）+ 注入在途 run（真实首写落旧 pi）
     const m1 = makeMount();
-    const handle1 = setupWorkflowDomain(m1.pi, { inflightReporter: reporter });
+    const handle1 = setupWorkflowDomain(m1.pi);
     await m1.handlers.get("session_start")!({ type: "session_start", reason: "startup" }, makeFakeCtx(sid));
     const first = handle1.state.sessionState.get(sid)!;
     const run = makeRun("wf-fail-1", "running");
@@ -451,7 +440,7 @@ describe("D4 失败处置：rebind-first → terminate 中断转移 → 移除�
 
     // reload：adoption 失败处置全链（真 terminateRunningRuns + 真 store flush）
     const m2 = makeMount();
-    const handle2 = setupWorkflowDomain(m2.pi, { inflightReporter: reporter });
+    const handle2 = setupWorkflowDomain(m2.pi);
     await m2.handlers.get("session_start")!({ type: "session_start", reason: "reload" }, makeFakeCtx(sid));
 
     // run 中断非终局（terminate；[D11] 统一中断——打断不记失败，可再 resume）

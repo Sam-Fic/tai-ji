@@ -135,20 +135,6 @@ export interface LifecycleDeps {
  */
   log?: (level: "debug" | "info" | "warn" | "error", component: string, message: string, data?: unknown) => void;
  /**
- * D-12 regression fix (round-2 #2)：rebuildRuntime 重新调度 run 级墙钟预算计时器。
- *
- * [HISTORICAL] worker/script 错误重试（replaceRuntime）已删（ADR-0122）；release 会 clearTimeout
- * 旧计时器（run-runtime.release）。新 runtime 必须重排 scheduleTimeBudget，否则带
- * budgetTimeMs 的 run 命中一次错误重试后时间预算静默失效（直到下次 pause/resume 才重排）。
- * 由 Interface 层 factory 注入——闭包捕获 deps，内部调 lifecycle.scheduleTimeBudget。
- *
- * 可选——旧测试 deps 不注入时 rebuildRuntime 不重排计时器（兼容，不影响无时间预算的 run）。
- */
-  scheduleTimeBudget?: (
-    runId: string,
-    budgetTimeMs: number,
-  ) => ReturnType<typeof setTimeout> | undefined;
- /**
   * [H2 W3] workflow 域 agent() 统一派发入口（SubagentService.executeWorkflowAgent 的
   * deps 注入形态，设计 §3.5 终态数据流）。窄函数类型——不引 execution 层具体类，
   * 保持本 ports 文件零 infra/execution 依赖。由组合根（extension index.ts makeDeps）

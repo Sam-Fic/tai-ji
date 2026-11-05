@@ -593,7 +593,7 @@ function mockCtx() {
   const configService = {
     // ④b 用例：非偏好组消息经主 switch 命中未迁移的既有 case（getAutoRenameEnabled）所需 stub
     getAutoRenameEnabled: vi.fn(() => false),
-    // 偏好组 10 case 转发所需 stub（worktree 目录 / setup 脚本 / 裸仓脚本 / 超时 / 默认基分支）
+    // 偏好组转发所需 stub（worktree 目录 / setup 脚本 / 裸仓脚本 / 默认基分支）
     // 写 stub 返回 {ok:true}（M4/RT-7#1：setter 返回 {ok, code, error}，失败走 sendError）
     getWorktreeRootDir: vi.fn(() => '/wt'),
     setWorktreeRootDir: vi.fn().mockReturnValue({ ok: true }),
@@ -601,8 +601,6 @@ function mockCtx() {
     setSetupScript: vi.fn().mockReturnValue({ ok: true }),
     getBareSetupScript: vi.fn(() => 'custom-hooks/bare-setup.sh'),
     setBareSetupScript: vi.fn().mockReturnValue({ ok: true }),
-    getTimeout: vi.fn(() => 90),
-    setTimeout: vi.fn().mockReturnValue({ ok: true }),
     getDefaultBaseBranch: vi.fn(() => 'main'),
     setDefaultBaseBranch: vi.fn().mockReturnValue({ ok: true }),
     // u-locale-channel：config.setUiLocale 写盘经 configService.getConfigDir() 推导（用例内覆盖为 tmp 目录）
@@ -693,20 +691,6 @@ describe('ConfigPreferencesMessageHandler · 偏好组转发参数化（S15：12
       msg: { type: 'config.getBareSetupScript', payload: {} },
       replyType: 'config.bareSetupScript',
       payload: { script: 'custom-hooks/bare-setup.sh' },
-      setter: undefined,
-    },
-    {
-      name: '⑬ config.setTimeout 写转发（原值透传 + 生效值 reply）',
-      msg: { type: 'config.setTimeout', payload: { timeout: 120 } },
-      replyType: 'config.worktreeTimeout',
-      payload: { timeout: 90 },
-      setter: { fn: 'setTimeout', arg: 120 },
-    },
-    {
-      name: '⑭ config.getTimeout 读取转发',
-      msg: { type: 'config.getTimeout', payload: {} },
-      replyType: 'config.worktreeTimeout',
-      payload: { timeout: 90 },
       setter: undefined,
     },
   ])('$name', async ({ msg, replyType, payload, setter }) => {
@@ -814,28 +798,6 @@ describe('ConfigPreferencesMessageHandler · 兜底与不串扰', () => {
     )
     expect(handled).toBe(false)
     expect(replies).toHaveLength(0)
-  })
-})
-describe('ConfigPreferencesMessageHandler · setter 校验拒绝路径（config.setTimeout）', () => {
-  it('config.setTimeout 非法值：校验异常上抛（不吞、零 reply、零 sendError）——sendError 由 server.handleMessage catch 层统一负责', async () => {
-    const { ctx, replies, configService } = mockCtx()
-    // 校验本体在 ConfigService.setTimeout（worktree-config-helper：正数且 ≤3600，非法 throw）。
-    // handler 单测以 mock 抛错模拟该拒绝，锚定 handler 层契约：异常原样上抛、不 reply、
-    // 不越层 sendError（错误回包形态由 server.handleMessage 的 catch 统一塑形）。
-    configService.setTimeout.mockImplementation(() => {
-      throw new Error('timeout must be a positive number in (0, 3600], got -1')
-    })
-    const handler = new ConfigPreferencesMessageHandler(ctx)
-    await expect(
-      handler.handle(
-        { type: 'config.setTimeout', payload: { timeout: -1 }, id: 'm8' } as unknown as ClientMessage,
-        WS,
-      ),
-    ).rejects.toThrow(/timeout must be a positive number/)
-    expect(replies).toHaveLength(0)
-    expect(ctx.sendError).not.toHaveBeenCalled()
-    // 抛错即止：生效值回读（getTimeout）不达，无「半写」reply
-    expect(configService.getTimeout).not.toHaveBeenCalled()
   })
 })
 });
@@ -1393,11 +1355,10 @@ describe('ProjectMessageHandler 命令通道并发到达（真 store + 串行队
 // ← src/transport/provider-message-handler.test.ts
 // ======================================================================
 
-// ── mock 域依赖（quota presets 注册表 / models-store mtime watch）──
+// ── mock 域依赖（quota presets 注册表）──
 
-const { listQuotaPresetsMock, startWatchMock } = vi.hoisted(() => ({
+const { listQuotaPresetsMock } = vi.hoisted(() => ({
   listQuotaPresetsMock: vi.fn(),
-  startWatchMock: vi.fn(),
 }))
 
 
@@ -1405,12 +1366,6 @@ vi.mock('../services/quota-providers/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../services/quota-providers/index.js')>()
   return { ...actual, listQuotaPresets: listQuotaPresetsMock, }
 })
-
-vi.mock('../services/provider-catalog-refresh.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../services/provider-catalog-refresh.js')>()
-  return { ...actual, startModelsStoreMtimeWatch: startWatchMock, }
-})
-
 
 const PRESETS = [
   { fetcher: 'zhipu', label: 'Zhipu Coding Plan', auth: ['api-key'], match: { baseUrlPattern: 'bigmodel.cn', namePattern: 'zhipu' } },
@@ -1447,7 +1402,6 @@ function msg_m3(type: string, payload: Record<string, unknown> = {}, id = 'msg-1
 describe('provider-message-handler', () => {
 beforeEach(() => {
   listQuotaPresetsMock.mockReset().mockReturnValue(PRESETS)
-  startWatchMock.mockReset().mockReturnValue(vi.fn())
 })
 describe('config.listQuotaPresets（W3c quota presets 下发）', () => {
   it('reply config.quotaPresets 携带注册表合并视图，返回 true', async () => {
@@ -1458,6 +1412,16 @@ describe('config.listQuotaPresets（W3c quota presets 下发）', () => {
     expect(handled).toBe(true)
     expect(listQuotaPresetsMock).toHaveBeenCalledTimes(1)
     expect(ctx.reply).toHaveBeenCalledTimes(1)
+    expect(ctx.reply).toHaveBeenCalledWith(WS_m3, 'msg-1', 'config.quotaPresets', { presets: PRESETS })
+  })
+
+  // 回归：RPC 曾只登记进 ProviderMessageHandler 子表、漏登记 SettingsCaseRoutes
+  // 外层转发表，经 server 分发即 unknown_type（子表直测测不到该层，必须走外层入口）。
+  it('外层 SettingsCaseRoutes 转发可达（config.listQuotaPresets）', async () => {
+    const ctx = mockContext_m2()
+    const handler = new SettingsMessageHandler(ctx)
+    const handled = await handler.handleSettingsMessage(msg_m3('config.listQuotaPresets'), WS_m3)
+    expect(handled).toBe(true)
     expect(ctx.reply).toHaveBeenCalledWith(WS_m3, 'msg-1', 'config.quotaPresets', { presets: PRESETS })
   })
 })
@@ -1506,58 +1470,8 @@ describe('config.refreshProviderCatalogs（远程目录刷新 + 顺带 remote-co
     warnSpy.mockRestore()
   })
 })
-describe('config.setProviderCatalogWatch（W1 缝隙 A：models-store mtime watch 启停）', () => {
-  it('enable=true → 启动 watch，reply watch-enabled', async () => {
-    const ctx = mockContext_m2()
-    const handler = new ProviderMessageHandler(ctx)
-    const handled = await handler.handle(msg_m3('config.setProviderCatalogWatch', { enable: true }), WS_m3)
-
-    expect(handled).toBe(true)
-    expect(startWatchMock).toHaveBeenCalledTimes(1)
-    expect(ctx.reply).toHaveBeenCalledWith(WS_m3, 'msg-1', 'message.status', { status: 'watch-enabled' })
-  })
-
-  it('已启用时再次 enable=true → 不重复启动（单布尔最后写者赢，watch 不叠加）', async () => {
-    const ctx = mockContext_m2()
-    const handler = new ProviderMessageHandler(ctx)
-    await handler.handle(msg_m3('config.setProviderCatalogWatch', { enable: true }), WS_m3)
-    await handler.handle(msg_m3('config.setProviderCatalogWatch', { enable: true }), WS_m3)
-
-    expect(startWatchMock).toHaveBeenCalledTimes(1)
-  })
-
-  it('enable=false → 停止 watch（stop 恰好一次），reply watch-disabled', async () => {
-    const ctx = mockContext_m2()
-    const handler = new ProviderMessageHandler(ctx)
-    await handler.handle(msg_m3('config.setProviderCatalogWatch', { enable: true }), WS_m3)
-    const stop = startWatchMock.mock.results[0]!.value as ReturnType<typeof vi.fn>
-    await handler.handle(msg_m3('config.setProviderCatalogWatch', { enable: false }), WS_m3)
-
-    expect(stop).toHaveBeenCalledTimes(1)
-    expect(ctx.reply).toHaveBeenLastCalledWith(WS_m3, 'msg-1', 'message.status', { status: 'watch-disabled' })
-  })
-
-  it('未启用时 enable=false → 不调 stop（幂等关闭），reply watch-disabled', async () => {
-    const ctx = mockContext_m2()
-    const handler = new ProviderMessageHandler(ctx)
-    const handled = await handler.handle(msg_m3('config.setProviderCatalogWatch', { enable: false }), WS_m3)
-
-    expect(handled).toBe(true)
-    expect(startWatchMock).not.toHaveBeenCalled()
-    expect(ctx.reply).toHaveBeenCalledWith(WS_m3, 'msg-1', 'message.status', { status: 'watch-disabled' })
-  })
-
-  it('watch 回调（mtime 变化）→ broadcastProviderList（读侧重读后广播的唯一触发点）', async () => {
-    const ctx = mockContext_m2()
-    const handler = new ProviderMessageHandler(ctx)
-    await handler.handle(msg_m3('config.setProviderCatalogWatch', { enable: true }), WS_m3)
-
-    const onChange = startWatchMock.mock.calls[0]![0] as () => void
-    onChange()
-    expect(ctx.broadcastProviderList).toHaveBeenCalledTimes(1)
-  })
-})
 });
+
 
 // ======================================================================
 // ← src/transport/provider-message-handler-mirror.test.ts

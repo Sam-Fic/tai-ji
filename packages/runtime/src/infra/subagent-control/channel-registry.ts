@@ -45,11 +45,6 @@ export class ControlChannelRegistry {
     return this.channels.size
   }
 
-  /** 全量通道数（滚动重启在途面组合根消费：getActiveControlServer().channelCount）。 */
-  get channelCount(): number {
-    return this.channels.size
-  }
-
   register(init: ControlChannelInit): EngineChannelRecord {
     const record: EngineChannelRecord = { ...init, state: 'opening', pid: null, child: null }
     this.channels.set(init.channelId, record)

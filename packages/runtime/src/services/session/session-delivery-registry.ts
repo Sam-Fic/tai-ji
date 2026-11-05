@@ -68,7 +68,6 @@ import { publishSkillNotices } from './skill-notice-publisher.js'
 import type { IMessageBus } from '../message-bus/message-bus.js'
 import {
   applySessionOccupancyTransition,
-  startPingProbeFromDeliveryEdge,
   userStoppedGate,
 } from './event-interpreter.js'
 import { extractExtensionCommandNames, extractSkillTemplateCommandNames, matchCommandName } from '../../infra/pi/pi-protocol.js'
@@ -199,7 +198,7 @@ export interface DeliveryEditInput {
   segments?: Segment[]
 }
 
-/** 对账触发点（设计 D3；watchdog 定时触发点已随 ADR-0122 防御机制清查退役，全事件驱动） */
+/** 对账触发点（设计 D3；全事件驱动——对账只由事件边沿触发，无定时触发点） */
 export type ReconcileTrigger =
   | 'agent-settled'
   | 'compaction-end'
@@ -827,7 +826,7 @@ export function createSessionDeliveryRegistry(
    *   形态幂等无害；对账触发点①同点驱动）。
    * [u5a 退役登记] v2 的 settling / bash 维度随本地队列退役（唤醒路径保留，无对应等待者
    * 时幂等）。
-   * （watchdog 30s 周期兜底唤醒已随 ADR-0122 防御机制清查退役——等待者唤醒归事件边沿。）
+   * （等待者唤醒全部归事件边沿，无定时兜底唤醒。）
    */
   function waitForHoldEdge(state: RuntimeState): Promise<void> {
     return new Promise<void>((resolve) => {
@@ -951,7 +950,6 @@ export function createSessionDeliveryRegistry(
     const view = viewOf(sessionId)
     if (view && (view.occupancy?.turn ?? 'idle') === 'idle') {
       applySessionOccupancyTransition(view, deps.getMessageBus(), 'dispatching')
-      startPingProbeFromDeliveryEdge(sessionId)
     }
   }
 

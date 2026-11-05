@@ -24,17 +24,13 @@ function makeSendCtx(overrides: Partial<ReverseRequestSendContext> = {}) {
   const written: unknown[] = [];
   const pending = new Map<string, Parameters<ReverseRequestSendContext["pending"]["set"]>[1]>();
   let seq = 0;
-  const started: string[] = [];
-  const settled: string[] = [];
   const ctx: ReverseRequestSendContext = {
     write: (frame) => { written.push(frame); },
     pending,
-    timeoutMs: 60_000,
-    clock: { started: (id) => { started.push(id); }, acked: () => {}, settled: (id) => { settled.push(id); }, dispose: () => {} },
     nextId: () => `rev-${++seq}`,
     ...overrides,
   };
-  return { ctx, written, pending, started, settled };
+  return { ctx, written, pending };
 }
 
 afterEach(() => {
@@ -42,12 +38,11 @@ afterEach(() => {
 });
 
 describe("sendReverseRequest（发送侧语义）", () => {
-  it("发出帧 + 登记 pending + 记 clock.started", () => {
-    const { ctx, written, pending, started } = makeSendCtx();
+  it("发出帧 + 登记 pending", () => {
+    const { ctx, written, pending } = makeSendCtx();
     void sendReverseRequest(ctx, "host/askUser", { runId: "r1" });
     expect(written).toEqual([{ id: "rev-1", method: "host/askUser", params: { runId: "r1" } }]);
     expect([...pending.keys()]).toEqual(["rev-1"]);
-    expect(started).toEqual(["rev-1"]);
   });
 
   it("id 由 nextId 分配（逐次递增，互不覆盖）", () => {
@@ -55,43 +50,6 @@ describe("sendReverseRequest（发送侧语义）", () => {
     void sendReverseRequest(ctx, "host/a", {});
     void sendReverseRequest(ctx, "host/b", {});
     expect(written.map((f) => (f as { id: string }).id)).toEqual(["rev-1", "rev-2"]);
-  });
-
-  it("超时 → reject（含方法/id/超时值）+ 清 pending + 记 clock.settled", async () => {
-    vi.useFakeTimers();
-    const { ctx, pending, settled } = makeSendCtx({ timeoutMs: 1234 });
-    const promise = sendReverseRequest(ctx, "host/slow", {});
-    const rejection = expect(promise).rejects.toThrow("reverse request host/slow (rev-1) timed out after 1234ms");
-    await vi.advanceTimersByTimeAsync(1234);
-    await rejection;
-    expect(pending.size).toBe(0);
-    expect(settled).toEqual(["rev-1"]);
-  });
-
-  it("write 同步抛错 → 就地收尾（reject + 清 pending + clock.settled），且 timer 不再触发", async () => {
-    vi.useFakeTimers();
-    const { ctx, pending, settled } = makeSendCtx({
-      write: () => { throw new Error("stdout closed"); },
-    });
-    const promise = sendReverseRequest(ctx, "host/x", {});
-    await expect(promise).rejects.toThrow("reverse request host/x (rev-1) could not be written: stdout closed");
-    expect(pending.size).toBe(0);
-    expect(settled).toEqual(["rev-1"]);
-    // timer 已被 clearTimeout：推进到超时点不应产生第二次 settle 或异常
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(settled).toEqual(["rev-1"]);
-  });
-
-  it("pendingExtras 合并进 pending 条目（pi 记 method 供应答侧检查用）", () => {
-    const { ctx, pending } = makeSendCtx({ pendingExtras: (method) => ({ method }) });
-    void sendReverseRequest(ctx, "host/askUser", {});
-    expect(pending.get("rev-1")?.method).toBe("host/askUser");
-  });
-
-  it("无 clock 时不报错（测试注入点可缺席）", () => {
-    const { ctx, written } = makeSendCtx({ clock: undefined });
-    expect(() => void sendReverseRequest(ctx, "host/y", {})).not.toThrow();
-    expect(written).toHaveLength(1);
   });
 });
 

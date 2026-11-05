@@ -38,7 +38,6 @@ import { createRecord } from "../persistence/execution-record.ts";
 import { ModelConfigService } from "../assembly/model-config-service.ts";
 import type { RecordStore } from "../persistence/record-store.ts";
 import { SubagentService } from "../subagent-service.ts";
-import { _resetLifecycleState } from "../lifecycle/lifecycle-manager.ts";
 import { _resetCoreSpawnedChildrenMirrorForTest } from "../engine/host/spawned-children.ts";
 import type { AgentResult, ExecutionRecord } from "../domain/record-model.ts";
 
@@ -93,7 +92,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  _resetLifecycleState();
   _resetCoreSpawnedChildrenMirrorForTest();
   if (prevDataDirEnv === undefined) delete process.env["TAIJI_AGENT_DATA_DIR"];
   else process.env["TAIJI_AGENT_DATA_DIR"] = prevDataDirEnv;

@@ -71,7 +71,7 @@ vi.mock('@taiji/core/transport/api/domains/chat', async (importOriginal) => {
 const commandMock = vi.hoisted(() => vi.fn())
 vi.mock('@taiji/core/transport/api', async (importActual) => {
   const actual = await importActual<typeof import('@taiji/core/transport/api')>()
-  return { ...actual, command: commandMock, RPC_BACKSTOP_TIMEOUT_MS: 30_000 }
+  return { ...actual, command: commandMock }
 })
 
 // ── mock ②：extension domain（useExtensionUI 的 WS/RPC 面 + D4③ 主动拉取 getPendingRequests）

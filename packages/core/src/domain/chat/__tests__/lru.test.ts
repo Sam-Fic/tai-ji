@@ -441,8 +441,7 @@ describe("lru", () => {
   })
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 运行时可变上限（crash-forensics-and-watchdog §3.3 D4 memory-relief / 偏差 #28②，
-  // u7d 消费方 = renderer useMemoryPressure defaultReliefAction）
+  // 运行时可变上限（压窗 API，消费方 = renderer 切入链驱逐）
   // ─────────────────────────────────────────────────────────────────────────────
 
   describe('setLruMaxSessions 可变上限（#28② 压窗 API）', () => {

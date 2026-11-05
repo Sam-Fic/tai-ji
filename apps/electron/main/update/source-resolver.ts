@@ -21,10 +21,8 @@
  *     = 不可达
  *   - 探测必须传 disableFlagPersistence: true（对齐 testProxy D5 先例）——探测失败
  *     不得翻转进程级下载引擎偏好，污染后续真实下载编排
- *
- * 探测结果进程内 TTL 缓存 1h（与检查缓存同量级），缓存命中不重复探测；显式偏好与
- * 代理短路路径不消费缓存（零网络成本直接映射，偏好/代理状态变化即时生效——偏好
- * 切换的完整生效时延由 checker 层检查缓存决定，§6.3，不在本模块）。
+ *   - 无结果缓存（时间机制删除裁决：1h TTL 缓存退役）——每次 auto+无代理排序都做
+ *     一次新鲜探测；显式偏好与代理短路路径零网络直接映射
  *
  * S2 验收观测范围：getLastProbeOutcome() 暴露最近一次排序决策的探测详情（三态：null /
  * proxy-short-circuit / probe），供 checker 透传登记 source-selection 日志（R1-U1a）。
@@ -50,16 +48,8 @@ export type SourceOrder = UpdateSource[]
 const GITHUB_PROBE_URL = `https://${RELEASE_SOURCE_HOSTS.githubDownload}`
 const GITCODE_PROBE_URL = `https://${RELEASE_SOURCE_HOSTS.gitcodeDownload}`
 
-/** 单位换算常量（消 no-magic-numbers，对齐 update-self-healer.ts 命名先例）。 */
-const MS_PER_SECOND = 1_000
-const SECONDS_PER_MINUTE = 60
-const MINUTES_PER_HOUR = 60
-
-/** 单域探测超时（毫秒）。设计定值 3s：探测时长入账为 auto+无代理用户每次缓存过期后的固定代价。 */
+/** 单域探测超时（毫秒）。设计定值 3s：远程网络超时保留项。 */
 const PROBE_TIMEOUT_MS = 3_000
-
-/** 探测结果缓存 TTL（毫秒，1h——与检查缓存同量级，D4）。 */
-const PROBE_CACHE_TTL_MS = MINUTES_PER_HOUR * SECONDS_PER_MINUTE * MS_PER_SECOND
 
 /** 探测请求头：1 字节 Range 请求（GET 而非 HEAD 的原因见模块头注释）。 */
 const PROBE_RANGE_HEADER = 'bytes=0-0'
@@ -70,7 +60,7 @@ export interface ProbeSourceOutcome {
 }
 
 /**
- * 最近一次源排序决策的探测详情（S2 验收观测范围，checker 透传登记 source-selection 用）。
+ * 最近一次排序决策的探测详情（S2 验收观测范围，checker 透传登记 source-selection 用）。
  *
  * results 域键缺失 = 该域可达性在本次决策通道下无推断依据（代理短路仅能推断 github，
  * gitcode 不捏造值）；via='probe' 时两域键恒齐。
@@ -78,27 +68,16 @@ export interface ProbeSourceOutcome {
 export interface ProbeOutcome {
   results: Partial<Record<UpdateSource, ProbeSourceOutcome>>
   via: 'probe' | 'proxy-short-circuit'
-  /** 决策时刻（epoch ms）。TTL 缓存命中沿用原探测决策时刻，不刷新（不捏造新探测）。 */
+  /** 决策时刻（epoch ms）。 */
   decidedAt: number
 }
-
-/**
- * 探测缓存（模块级进程内，与检查缓存同量级；仅 auto+无代理路径读写）。
- * 携带决策详情：缓存窗口内的后续 auto 轮次排序仍源自该次探测，观测范围恢复用。
- */
-interface ProbeCacheEntry {
-  order: SourceOrder
-  outcome: ProbeOutcome
-}
-let cachedProbe: ProbeCacheEntry | null = null
-let cachedProbeAt = 0
 
 /**
  * 最近一次排序决策的探测详情（R1-U1a，进程内单值）。
  * 维护口径：每次 resolveSourceOrder 后读取 getLastProbeOutcome() 均对应当次调用的
  * 排序依据——显式偏好路径重置为 null（显式偏好不是探测决策，checker 对显式偏好
  * 自有 reason 口径，残留旧详情会被误登记为本次依据）；代理短路写短路记录；
- * 真实探测写探测记录；TTL 缓存命中恢复缓存中的原决策详情（decidedAt 不刷新）。
+ * 真实探测写探测记录。
  */
 let lastProbeOutcome: ProbeOutcome | null = null
 
@@ -123,8 +102,6 @@ export function getLastProbeOutcome(): ProbeOutcome | null {
 
 /** 测试隔离入口（对齐 upgrade-fetch resetEnginePreferenceForTest 先例）。 */
 export function resetSourceOrderCacheForTest(): void {
-  cachedProbe = null
-  cachedProbeAt = 0
   lastProbeOutcome = null
 }
 
@@ -181,17 +158,10 @@ export async function resolveSourceOrder(pref: UpdateSourcePref = 'auto'): Promi
     return ['github', 'gitcode']
   }
 
-  // auto + 无代理：探测结果 TTL 缓存命中 → 不重复探测，决策详情恢复自缓存
-  // （排序仍源自该次探测，decidedAt 保持原决策时刻，S2 观测范围不因缓存轮次失真）
-  const now = Date.now()
-  if (cachedProbe && now - cachedProbeAt < PROBE_CACHE_TTL_MS) {
-    lastProbeOutcome = snapshotOutcome(cachedProbe.outcome)
-    return [...cachedProbe.order]
-  }
-
-  // 并行探测两主域（无先后依赖，最坏代价 = 单域 3s 超时而非串行 6s）。
+  // auto + 无代理：并行探测两主域（无先后依赖，最坏代价 = 单域 3s 超时而非串行 6s）。
   // allSettled 对齐项目「独立数据源」规范；probeReachable 内部已吞异常实际恒 fulfilled，
   // rejected 分支按不可达保守归类（防御 probeReachable 未来演化出上抛路径）。
+  const decidedAt = Date.now()
   const [githubProbe, gitcodeProbe] = await Promise.allSettled([
     probeReachable(GITHUB_PROBE_URL),
     probeReachable(GITCODE_PROBE_URL),
@@ -210,11 +180,8 @@ export async function resolveSourceOrder(pref: UpdateSourcePref = 'auto'): Promi
       github: { reachable: githubReachable },
       gitcode: { reachable: gitcodeReachable },
     },
-    decidedAt: now,
+    decidedAt,
   }
   lastProbeOutcome = snapshotOutcome(outcome)
-
-  cachedProbe = { order: [...order], outcome: snapshotOutcome(outcome) }
-  cachedProbeAt = now
   return order
 }

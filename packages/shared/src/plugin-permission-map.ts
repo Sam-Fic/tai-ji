@@ -84,18 +84,14 @@ export const PLUGIN_RPC_METHODS = [
   // tools 域（tool-api.ts，2 个）
   'plugin.tools.register',
   'plugin.tools.unregister',
-  // ui 域（api/ui-api.ts + plugin-rpc-setup.ts，8 个——uiRequestExpired 是 Worker→host
-  // 到期取消 notification（D2），复用无 id dispatch 通路故也在注册表内；未被任何能力
-  // 映射覆盖 → sandbox 不可授权（fail-closed），到期取消由 queue 防泄漏兜底收尾，
-  // trusted 不受影响。updateHeaderAction 为 headerAction 点位的命令式 API（handler 随
-  // U5 落地）。openUrl 为 provider-plugin-access D9 的宿主服务调用（风险由 http(s)
-  // scheme 白名单收敛，D9——不经 capabilities 词表声明；sandbox 授权走 manifest 完整
-  // 方法名直申通道，无能力词）：
+  // ui 域（api/ui-api.ts，6 个。updateHeaderAction 为 headerAction 点位的命令式 API
+  //（handler 随 U5 落地）。openUrl 为 provider-plugin-access D9 的宿主服务调用（风险由
+  // http(s) scheme 白名单收敛，D9——不经 capabilities 词表声明；sandbox 授权走 manifest
+  // 完整方法名直申通道，无能力词）：
   'plugin.ui.showSelect',
   'plugin.ui.showConfirm',
   'plugin.ui.showInput',
   'plugin.ui.notify',
-  'plugin.ui.uiRequestExpired',
   'plugin.ui.updateHeaderAction',
   'plugin.ui.openUrl',
   // views 域（api/views-api.ts，2 个）

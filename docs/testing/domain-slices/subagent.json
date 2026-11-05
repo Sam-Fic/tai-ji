@@ -22,7 +22,6 @@
     ],
     "protocol": [
       "packages/extension-protocol/src/extensions/subagent-engine/**",
-      "packages/extension-protocol/src/extensions/subagent-inflight/**",
       "packages/extension-protocol/src/extensions/subagent-journal/**",
       "packages/extension-protocol/src/extensions/subagent-notify/**",
       "packages/extension-protocol/src/extensions/subagent-projection/**"
@@ -58,7 +57,6 @@
   "tests": [
     "extensions/universal/structured-output/src/__tests__/object-root-schema-parity.test.ts",
     "extensions/universal/subagent-workflow/src/**",
-    "packages/extension-protocol/src/extensions/subagent-inflight/**",
     "packages/extension-protocol/src/extensions/subagent-journal/**",
     "packages/extension-protocol/src/extensions/subagent-projection/predicates.test.ts",
     "packages/pi-subagent-cli/src/**",
@@ -116,7 +114,6 @@
     "E2E-BATCH-06",
     "E2E-BATCH-07",
     "E2E-BATCH-08",
-    "E2E-BATCH-09",
     "E2E-BATCH-10",
     "E2E-BATCH-11",
     "E2E-BATCH-12",

@@ -26,7 +26,7 @@ import { createGoalSession } from "../session";
 
 // ── Fake pi / ctx ────────────────────────────────────
 
-interface RecordedCall {
+interface RecordedCall { // oe-exempt:20261105:test:测试夹具单实现接口（fake harness 形态，Rule of Three 不适用）
 	kind: "appendState" | "appendHistory" | "notify" | "sendContext";
 	text?: string;
 	level?: string;
@@ -38,7 +38,7 @@ interface RecordedCall {
 	payload?: unknown;
 }
 
-interface FakeHarness {
+interface FakeHarness { // oe-exempt:20261105:test:测试夹具单实现接口（fake harness 形态，Rule of Three 不适用）
 	pi: ExtensionAPI;
 	ctx: ExtensionContext;
 	states: unknown[];

@@ -1029,35 +1029,8 @@ describe("tool-workflow", () => {
       );
     });
 
-    it("OR-1 入口校验：time 超 setTimeout 上限 → throw 含上限 2147483647 与实际值，run 未启动", async () => {
-      const deps = makeDeps(
-        scriptRegistry({
-          type: "object",
-          properties: { task: { type: "string" } },
-          required: ["task"],
-        }),
-      );
-      const tool = captureWorkflowTool(deps, { isProcessing: false }, "workflow_run");
-      // LLM 对「跑久一点」完全可能生成 1e12——超 2^31-1 的典型形态（schema Type.Number
-      // 直通无上界，用户入口 fail-fast 不依赖 lifecycle 内层 assertSafeTimerDelay）
-      await expect(
-        tool.execute(
-          "id",
-          { name: "/abs/demo-wf.js", args: { task: "do work" }, time: 1_000_000_000_000 },
-          undefined,
-          undefined,
-          {},
-        ),
-      ).rejects.toThrow(
-        "time budget 1000000000000 ms exceeds the maximum of 2147483647 ms (~24.8 days). Retry with a smaller \"time\", or omit it for unlimited.",
-      );
-      // fail-fast 于 runWorkflow 之前：runs 无条目（abortRun not found 语义保持）
-      expect((deps.runs as Map<string, unknown>).size).toBe(0);
-    });
-
     it.each([
       { field: "tokens", params: { tokens: -5 }, message: 'tokens budget -5 is negative. Retry with a positive "tokens", or omit it for unlimited.' },
-      { field: "time", params: { time: -1 }, message: 'time budget -1 ms is negative. Retry with a positive "time", or omit it for unlimited.' },
     ] as const)(
       "负值 fail-fast：$field 为负 → throw 拒绝（不再静默升格 unlimited），run 未启动",
       async ({ params, message }) => {

@@ -3,7 +3,7 @@
 // 协议化 spawn 执行器（W7，impl-plan §2.7）——runSpawn 的引擎侧本体迁移。
 //
 // core engines/pi/session-runner.ts 的 runSpawn 在壳进程内直接操纵 ExecutionRecord /
-// session-pending / settled-watchdog 等宿主编排件；协议化后引擎进程内只保留
+// session-pending 等宿主编排件；协议化后引擎进程内只保留
 // 「spawn pi 子进程 + stdout pump + 事件翻译 + UI 请求发射 + 结果收集」，宿主侧
 // 记账由 core 经 `event` 通知与 host/* 反向通道完成（W8 宿主接线 / W10 conformance
 // 收尾）。本文件是引擎侧的协议化形态：
@@ -52,7 +52,7 @@ import {
   type CollectedOutcome,
   type CollectResultArgs,
 } from "./output-collector.ts";
-import { createPromptAckTracker, resolvePromptAckTimeoutMs, type PromptAckResult, type PromptAckTracker } from "./prompt-ack.ts";
+import { createPromptAckTracker, type PromptAckResult, type PromptAckTracker } from "./prompt-ack.ts";
 import { createFd3RawMirrorWriter, type RawMirrorWriter } from "./raw-mirror.ts";
 import { toErrorMessage } from "./error-message.ts";
 import {
@@ -827,7 +827,7 @@ export async function runSpawnOnce(
       void killPiProcess(child).catch((err) => settleExitAsKillFailed({ child, recordId: params.recordId, runEnd }, err));
     };
     // agent_settled 收割（[modeless 波2] 唯一终结语义）：轮终（真空闲）resolve 后的
-    // 主动 kill，close 带信号但语义是成功（旧 core waitForChildExit 的 code ?? 0
+    // 主动 kill，close 带信号但语义是成功（退出码口径与旧 core 收尸等待一致：code ?? 0
     // 同义——signal 退出码 143 只属异常路径）。
     // agent_settled 的 run resolve 句柄（inproc state.resolveRun 同款：
     // 声明先于 handler 装配，exitPromise executor 内落位——事件只会在 pump 启动后
@@ -837,18 +837,15 @@ export async function runSpawnOnce(
     const identity = createSessionIdentityTracker(params.sessionDir, callbacks);
     // [M2 D3] prompt 送达回执 tracker + 诊断计数器：prompt response 是唯一成功
     // 回执；onFailure = 记录 runEnd.promptAckFailure + 杀链（SIGKILL 直杀，run 以
-    // 失败 outcome 收尾，终态文案带诊断五元组）；零输出窗口经
-    // TAIJI_SUBAGENT_PROMPT_ACK_TIMEOUT_MS 覆盖（默认 30s；0 = 逃生舱关闭看门狗）。
+    // 失败 outcome 收尾，终态文案带诊断快照）。（原零输出看门狗已随时间机制删除。）
     const runCounters = createPromptRunCounters();
     ackTracker = createPromptAckTracker({
       recordId: params.recordId,
-      timeoutMs: resolvePromptAckTimeoutMs(process.env),
       diagnostics: () => ({
         pid: child.pid,
         bytesWritten: runCounters.bytesWritten,
         stdoutBytes: runCounters.stdoutBytes,
         stdoutBytesAfterPrompt: runCounters.stdoutBytesAfterPrompt,
-        stdoutSeen: ackTracker?.stdoutSeen === true,
         getStateAnswered: runCounters.getStateAnswered,
         ...(runCounters.lastEventType !== undefined
           ? { lastEventType: runCounters.lastEventType }
@@ -926,8 +923,8 @@ export async function runSpawnOnce(
     return collectRunResult(record, runEnd, exitCode, identity, stderrTee, params, startTime, callbacks);
   } finally {
     // [M2 D3] tracker 幂等清理：已 settle 的结果不受影响（runEnd.promptAckFailure
-    // 已落位），未决的零输出计时器/登记表随 run 终止必达清理（迟到 response 由
-    // settled/disposed 门自行忽略）。
+    // 已落位），登记表随 run 终止必达清理（迟到 response 由 settled/disposed 门
+    // 自行忽略）。
     ackTracker?.dispose();
     // [M3 D6] 镜像写入器释放（不关 fd3；残留未成行字节按 NDJSON 语义丢弃）。
     rawMirror?.dispose();

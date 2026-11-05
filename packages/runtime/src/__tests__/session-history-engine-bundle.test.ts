@@ -15,7 +15,7 @@ import { EventInterpreter } from '../services/session/event-interpreter.js';
 import { createForkedSessionFile } from '../services/session/session-fork.js';
 import { ISessionRegisterDeps, type ILifecycleSessionOps, type IScannerSessionOps } from '../services/session/session-internal.js';
 import type { SessionLifecycle } from '../services/session/session-lifecycle.js';
-import { SessionRecords, setSessionConfigLockTimingForTest } from '../services/session/session-records.js';
+import { SessionRecords } from '../services/session/session-records.js';
 import { createSessionRenamedHandler } from '../services/session/session-rename-fanout.js';
 import { SessionScanner } from '../services/session/session-scanner.js';
 import { SessionService } from '../services/session/session-service.js';
@@ -491,7 +491,7 @@ describe('session-history', () => {
       expect(tail.messages.some((m) => m.piEntryId === 'm' || m.piEntryId === 'am')).toBe(false)
     })
 
-    it('撤回尾巴 + 未附着尾读：中断判定读活跃路径——被撤子树 user 尾不误标 interrupted', async () => {
+    it('撤回尾巴 + 未附着尾读：活跃路径裁剪——被撤子树 user 不出现在结果里', async () => {
       // 撤回最后一条 user 消息后未发新消息：文件尾 = label 锚，被撤子树（m）按文件序先于
       // label。判定喂数为活跃路径裁剪后 entries——从尾向前落在 a1（assistant 终稿）上，
       // 健康会话不被误标（若读裁剪前窗口，label 被跳过后落在被撤 user entry 上 → 误标 true）。
@@ -511,7 +511,6 @@ describe('session-history', () => {
       ]
       const tail = await tailReadHistory(writeJsonl(entries), realStore, 20)
       expect(tail.messages.map((m) => m.piEntryId)).toEqual(['q', 'a1'])
-      expect(tail.interrupted).toBe(false)
     })
   })
 });
@@ -2215,8 +2214,6 @@ beforeEach(() => {
   process.env['TAIJI_AGENT_DATA_DIR'] = tmpDataRoot
 })
 afterEach(() => {
-  // 锁预算注入只服务 ELOCKED 用例：逐例复位，避免压缩预算泄漏到后续用例
-  setSessionConfigLockTimingForTest({})
   if (PREV_DATA_DIR === undefined) delete process.env['TAIJI_AGENT_DATA_DIR']
   else process.env['TAIJI_AGENT_DATA_DIR'] = PREV_DATA_DIR
   fs.rmSync(tmpDataRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
@@ -2353,16 +2350,14 @@ describe('setSubagentDefaultEngine', () => {
   it('RMW 持跨进程锁：他方持同锁期间写入 fail-fast（ELOCKED），锁释放后重试成功且其他字段不被覆盖回滚', async () => {
     // review round1 MUST_FIX：config.json 是多写方共享文件（runtime RMW / agent bash /
     // 用户手编），RMW 必须持 withFileLockSync（lockfile = <config.json>.lock）。
-    // 压缩重试预算（10ms/次 × 60ms）：断言语义 = 预算耗尽 → ELOCKED 且零写入，
-    // 预算数值不是被测契约（默认 1s 由 test/file-lock-parity.test.ts 常量断言保护）。
-    setSessionConfigLockTimingForTest({ retryDelayMs: 10, retryBudgetMs: 60 })
+    // 锁冲突 fail-fast：断言语义 = 他方持锁 → 立即 ELOCKED 且零写入（无重试无等待）。
     writeJson('engines.json', { v: 1, engines: ['pi', 'zcode'], updatedAt: 1 })
     writeJson('config.json', { version: 1, maxConcurrent: 5, futureKey: { keep: true } })
     const p = configPath()
     // 他方（遵守锁协议的另一写方）持同一把锁
     const release = lockfile.lockSync(p, { realpath: false })
     const pending = makeRecords().setSubagentDefaultEngine('zcode')
-    await expect(pending).rejects.toThrow(/ELOCKED/)
+    await expect(pending).rejects.toThrow(/写锁获取失败：锁被占用.*\.lock 锁目录重试/)
     // 锁竞争失败零写入（不是降级无锁写）：defaultEngine 未落盘，其他字段原样
     const confDuring = JSON.parse(fs.readFileSync(p, 'utf8')) as Record<string, unknown>
     expect(confDuring['defaultEngine']).toBeUndefined()
@@ -2445,15 +2440,14 @@ describe('[D5] setSubagentEngineDefaultModel', () => {
   })
 
   it('RMW 持跨进程锁（与 setSubagentDefaultEngine 同锁）：他方持锁期间 fail-fast（ELOCKED）零写入，释放后重试成功', async () => {
-    // 同上一锁用例：压缩重试预算（10ms/次 × 60ms），断言对象仍是「预算耗尽 → ELOCKED 零写入」
-    setSessionConfigLockTimingForTest({ retryDelayMs: 10, retryBudgetMs: 60 })
+    // 同上一锁用例：锁冲突 fail-fast，断言对象是「他方持锁 → 立即 ELOCKED 零写入」
     writeJson('engines.json', { v: 1, engines: ['pi', 'zcode'], updatedAt: 1 })
     writeJson('config.json', { version: 1, maxConcurrent: 5 })
     writeProviderConfig(zcodeRealPath, [{ providerId: 'stepfun', models: ['step-1v'] }])
     const p = configPath()
     const release = lockfile.lockSync(p, { realpath: false })
     const pending = makeRecords().setSubagentEngineDefaultModel('zcode', 'stepfun/step-1v')
-    await expect(pending).rejects.toThrow(/ELOCKED/)
+    await expect(pending).rejects.toThrow(/写锁获取失败：锁被占用.*\.lock 锁目录重试/)
     // 锁竞争失败零写入：engineDefaults 未落盘，其他字段原样
     const confDuring = JSON.parse(fs.readFileSync(p, 'utf8')) as Record<string, unknown>
     expect(confDuring['engineDefaults']).toBeUndefined()

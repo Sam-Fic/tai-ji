@@ -371,9 +371,6 @@ function isDirectory(dir) {
 // - 无主回收三通道：pid 已死 / 启动时间不匹配 / 内容空或损坏（旧实现崩溃
 //   残留）。旧格式锁（纯 pid 数字）降级为纯 pid 存活语义——过渡期不误偷仍
 //   活着的旧版持锁方；启动时间读不到（平台不支持 / ps 失败）同样降级不偷。
-const GATE_LOCK_TIMEOUT_MS = 2 * 60 * 60 * 1000
-const GATE_LOCK_POLL_MS = 2000
-
 /** 锁路径：root 经 realpath 规范化后取哈希前缀分桶，落 tmpdir（每用户独立）。 */
 export function gateLockPath(root) {
   let canonical = root
@@ -394,10 +391,6 @@ function pidAlive(pid) {
   } catch (e) {
     return e.code === 'EPERM'
   }
-}
-
-function sleepSync(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 
 /**
@@ -486,16 +479,18 @@ function parseLockIdentity(parsed) {
 /**
  * 获取 worktree 级互斥锁，返回 release 函数（幂等，重复调用安全）。
  * 无主回收走确定性事实判定（ADR-0122 ⑤）：持锁 pid 已死 / pid 复用（启动时间
- * 不匹配）/ 锁内容残留（空、损坏）→ 偷锁，不用时间启发判陈旧；等待超时抛错
- * （调用方转 exit 2 环境错误并附恢复动作）。
+ * 不匹配）/ 锁内容残留（空、损坏）→ 偷锁，不用时间启发判陈旧。
+ * 无锁等待（时间机制删除裁决：2h 等待窗退役）——锁被活持锁方占用时单次无主判定
+ * 后直接抛冲突错误（调用方转 exit 2 环境错误并附恢复动作）。
  */
-export function acquireGateLock(lockPath, { timeoutMs = GATE_LOCK_TIMEOUT_MS, pollMs = GATE_LOCK_POLL_MS } = {}) {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    const release = tryCreateLock(lockPath)
-    if (release) return release
-    awaitLockRelease(lockPath, deadline, timeoutMs, pollMs)
+export function acquireGateLock(lockPath) {
+  const release = tryCreateLock(lockPath)
+  if (release) return release
+  if (stealStaleLock(lockPath)) {
+    const releaseAfterSteal = tryCreateLock(lockPath)
+    if (releaseAfterSteal) return releaseAfterSteal
   }
+  throw new Error(lockConflictMessage(lockPath))
 }
 
 /**
@@ -537,15 +532,6 @@ function makeRelease(lockPath) {
   }
 }
 
-/** 锁被占用时的单轮处置：无主（死/复用/残留）→ 偷锁；超时 → 抛错（指引按持锁状态分流）；否则睡一轮再试。 */
-function awaitLockRelease(lockPath, deadline, timeoutMs, pollMs) {
-  if (stealStaleLock(lockPath)) return
-  if (Date.now() >= deadline) {
-    throw new Error(lockTimeoutMessage(lockPath, timeoutMs))
-  }
-  sleepSync(pollMs)
-}
-
 /** 无主判定：锁内容缺失 / 持锁 pid 已死 / pid 复用（启动时间不符）任一命中 = 可偷。 */
 function isLockOrphaned(lockPath) {
   const info = readLockInfo(lockPath)
@@ -574,15 +560,15 @@ function lockHolderReplaced(info) {
 }
 
 /**
- * 超时报错文案：走到超时意味着偷锁三通道都未命中（持锁 pid 存活且身份成立或
- * 不可核实），指引统一为 ps 核对——真在跑（冷缓存大 diff 首跑可达小时级）等它，
+ * 锁冲突报错文案：锁被活持锁方占用（偷锁三通道都未命中——pid 存活且身份成立或
+ * 不可核实），指引统一为 ps 核对——真在跑（quality-gates 互斥串行化）等它结束后重跑，
  * 无 quality-gates 在跑（pid 复用残留 / 身份不可核实）删锁重跑。不给 kill 指引：
  * pid 复用场景下被复用的 pid 属无关进程，盲目 kill 会误伤。
  */
-function lockTimeoutMessage(lockPath, timeoutMs) {
+function lockConflictMessage(lockPath) {
   const info = readLockInfo(lockPath)
   return (
-    `等待 quality-gates 互斥锁超时（${Math.round(timeoutMs / 60000)} 分钟）：${lockPath} ` +
+    `quality-gates 互斥锁冲突：${lockPath} ` +
     `被进程 ${info?.pid ?? '未知'} 持有且未释放。` +
     `恢复：ps aux | grep quality-gates.mjs 核对——确在跑则等其结束后重跑；` +
     `无 quality-gates 在跑（pid 复用 / 异常残留）则手动删除 ${lockPath} 后重跑`

@@ -64,9 +64,4 @@ describe("rebuildBudget（条目真值优先，帧推导兜底）", () => {
     expect(rebuildBudget({ usedTokens: 0, callCount: 0 }, events).usedTokens).toBe(3);
   });
 
-  it("maxTimeMs 只在 > 0 时落字段（与 fresh/resume 同款条件式）", () => {
-    expect(rebuildBudget(undefined, events, 5000).maxTimeMs).toBe(5000);
-    expect(rebuildBudget(undefined, events, 0).maxTimeMs).toBeUndefined();
-    expect(rebuildBudget(undefined, events).maxTimeMs).toBeUndefined();
-  });
 });

@@ -41,7 +41,6 @@ import { readFile } from 'node:fs/promises'
 import { createPluginEventIdGenerator, deliverUiEventToPlugin, openUrlInSystemBrowser } from './plugin-host-actions.js'
 import { toErrorMessage } from '../../utils/errors.js'
 import { pluginToggleFailedError, pluginUninstallPartialError, removePluginDiskFiles } from './api/lifecycle-errors.js'
-import { readEnvPermissionTimeoutMs } from './plugin-env-timeout.js'
 import { PendingTracker } from '../../utils/async/pending-tracker.js'
 // type-only：IMessageBus 不反向依赖 plugin-service，无运行时环（与 message-dispatcher 同款约束）
 // wave:perf-w09（接口收敛）：依赖 publish 抽象而非 MessageBus 具体类
@@ -258,17 +257,10 @@ export class PluginService implements IPluginService {
       permissionChecker: this.permissionChecker,
       onPermissionRequest: (payload) =>
         this.broadcastOrBroker('plugin:permissionRequest', `perm_${payload.pluginId}`, payload),
-      // 审批等待到期取消（timeout-plugin-service D3）：广播供前端撤回无人应答的
-      // 审批弹窗（迟到批准对已删 pending noop 幂等；旧版前端未消费此帧无异常，P-11）。
-      onPermissionRequestExpired: (payload) =>
-        this.broadcastOrBroker('plugin:permissionRequestExpired', `permExpired_${payload.pluginId}`, payload),
       // 审批终局（remote-use-mobile S5-V3）：任一端批准/拒绝后广播，其余连接端按
       // requestId 撤回同一审批的弹窗（activator 保证同一 requestId 至多广播一次）。
       onPermissionRequestResolved: (payload) =>
         this.broadcastOrBroker('plugin:permissionRequestResolved', `permResolved_${payload.pluginId}`, payload),
-      // permissionTimeoutMs 转正（D3）：env 逃生门接线，undefined（缺失/非法已 warn）
-      // 由 Activator 构造函数回落 PERMISSION_TIMEOUT_MS。
-      permissionTimeoutMs: readEnvPermissionTimeoutMs(),
     })
   }
 
@@ -889,13 +881,12 @@ export class PluginService implements IPluginService {
    * 实现在 api/commands-executor.ts（max-lines 拆分迁出，行为不变）：复合键查
    * registry → rpcServer.notify 向 Worker 发 plugin.commands.invoke → Worker 执行
    * handler 后经 plugin.commands.invoke.result 回传结果/错误 → deliverInvokeResult
-   * resolve/reject 对应 pending（超时取值链见 api/commands-executor.ts，D4：命令
-   * 定义 timeoutMs 声明优先，默认 DEFAULT_TOOL_EXECUTE_TIMEOUT_MS 30min）。命令表按插件
+   * resolve/reject 对应 pending（执行无时限——挂到完成或插件卸载）。命令表按插件
    * 隔离（B 无法覆盖/注销 A 的同名命令）。
    */
   async executeCommand(pluginId: string, commandId: string, args?: Record<string, unknown>): Promise<unknown> {
     return executePluginCommand(
-      // RT-6#7：命令下发后广播 started（在途反馈，填上长命令 30min 兜底窗口的零反馈缺口）
+      // RT-6#7：命令下发后广播 started（在途反馈）
       { ...this.commandExecutorDeps(), broadcast: this.broadcastOrBroker.bind(this) },
       pluginId,
       commandId,
@@ -993,7 +984,6 @@ export class PluginService implements IPluginService {
       hookRegistry: this.hookPipeline.registry,
       deps: this.deps,
       handleUiRequest: (method, params, pluginId) => this.uiRequestQueue.handleRequest(method, params, pluginId),
-      cancelUiRequest: (requestId) => this.uiRequestQueue.cancelRequest(requestId),
       getDescriptor: (pluginId) => this.registry.getDescriptor(pluginId),
       sessionDataStore: this.sessionDataStore,
       activeSessionResolver: this.activeSessionResolver,

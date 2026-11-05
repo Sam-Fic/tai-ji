@@ -396,7 +396,9 @@ describe("contribution-registry", () => {
       expect(all.find((c) => c.type === 'menu')?.placement).toBe('composer.toolbar')
       expect(all.find((c) => c.type === 'command')?.placement).toBe('commands')
       expect(all.find((c) => c.type === 'slashCommand')?.placement).toBe('slash')
-      expect(all.find((c) => c.type === 'configuration')?.placement).toBe('settings')
+      // configuration 的 placement = 壳注册的设置页分区挂载点名（对齐 registerMountPoints；
+      // 旧值 'settings' 是失配名，壳从未注册该名字）
+      expect(all.find((c) => c.type === 'configuration')?.placement).toBe('settings.section')
     })
 
     it('TC-5h: 跨 type 输出顺序固定（view→menu→command→slashCommand→configuration）', () => {
@@ -1330,14 +1332,11 @@ describe("message-bus-bridge", () => {
       })
     })
 
-    describe('「已知不归一」型：plugin:event / uiRequestExpired / permissionRequestExpired', () => {
-      // 三型消费方在 bridge 之外独立订阅 WS global 通道（settings/transport onPluginEvent、
-      // shell-adapters onGlobal、permission-request-controller onGlobal），bridge 登记只为
-      // 脱离 unknown 路径 → 安全忽略：不 emit error、不 emit 任何事件（不双重处理）
+    describe('「已知不归一」型：plugin:event', () => {
+      // 消费方在 bridge 之外独立订阅 WS global 通道（settings/transport onPluginEvent），
+      // bridge 登记只为脱离 unknown 路径 → 安全忽略：不 emit error、不 emit 任何事件（不双重处理）
       it.each([
         ['plugin:event', { pluginId: 'wool', channel: 'credential.status', payload: { valid: true } }],
-        ['plugin:uiRequestExpired', { requestId: 'r1', pluginId: 'tasks' }],
-        ['plugin:permissionRequestExpired', { pluginId: 'tasks', requestId: 'req-1' }],
       ])('%s → 不走 unknown 路径、零事件 emit（安全忽略）', (type, payload) => {
         const { source, bus } = makeBridge()
         const { emitted } = spyEmit(bus)
@@ -1776,11 +1775,22 @@ describe("view-host-store", () => {
         expect(view!.meta).toEqual(meta)
       })
 
+      it('meta 插件通道形态（composer-tray-protocol D7：badge-only 无 title）→ 窄化放行缓存透传', () => {
+        const { bus, store } = makeStore()
+        const meta = { badge: '2', status: 'running', progress: { current: 1, total: 3 } }
+        bus.emit({
+          kind: 'extension-widget',
+          sessionId: 's1',
+          widget: { viewId: 'plug-view', pluginId: 'plug-a', guiTree: [{ type: 'ansi-text', props: { lines: ['x'] } }], meta },
+        })
+        expect(store.getView(SESSION_SCOPE, 'plug-view')!.meta).toEqual(meta)
+      })
+
       it.each([
         ['undefined（v1 旧 wire 无 meta）', undefined],
         ['null', null],
         ['非对象（字符串）', 'Todo'],
-        ['缺 title 字符串', { status: 'running' }],
+        ['四字段族全非法（badge 非串 / status 超枚举 / progress 非对象）', { badge: 42, status: 'bogus', progress: 'x' }],
       ])('meta %s → 缓存条目无 meta 键', (_label, meta) => {
         const { bus, store } = makeStore()
         bus.emit({
@@ -1790,6 +1800,71 @@ describe("view-host-store", () => {
         })
         const view = store.getView(SESSION_SCOPE, 'w')
         expect(view!.meta).toBeUndefined()
+      })
+
+      // ── 锚字段级归一化（branch-review R1 dmg-r1-1）：任一锚命中即缓存整条 meta，
+      // 但脏锚字段剥除——入缓存 meta 的 title/badge 恒为 string、status 恒在枚举内、
+      // progress 恒为非数组对象，托盘标题链 meta.title.trim() 消费点不再遇非串抛
+      // TypeError 中断渲染。──
+
+      it('badge 合法 × title 非串（脏形态）→ meta 入缓存但 title 键剥除', () => {
+        const { bus, store } = makeStore()
+        bus.emit({
+          kind: 'extension-widget',
+          sessionId: 's1',
+          widget: { viewId: 'w', pluginId: '', guiTree: [{ type: 'ansi-text', props: { lines: [] } }], meta: { title: 42, badge: '2' } },
+        })
+        const meta = store.getView(SESSION_SCOPE, 'w')!.meta
+        expect(meta).toBeDefined()
+        expect(meta!.badge).toBe('2')
+        expect('title' in meta!).toBe(false)
+      })
+
+      it('title 合法 × status 超枚举 / progress 数组 → 脏键剥除（枚举词表单点消费 WIDGET_META_STATUS_VALUES）', () => {
+        const { bus, store } = makeStore()
+        bus.emit({
+          kind: 'extension-widget',
+          sessionId: 's1',
+          widget: { viewId: 'w', pluginId: '', guiTree: [{ type: 'ansi-text', props: { lines: [] } }], meta: { title: 'T', status: 'bogus', progress: ['x'] } },
+        })
+        const meta = store.getView(SESSION_SCOPE, 'w')!.meta
+        expect(meta).toBeDefined()
+        expect(meta!.title).toBe('T')
+        expect('status' in meta!).toBe(false)
+        expect('progress' in meta!).toBe(false)
+      })
+
+      it('progress 数组为唯一疑似锚 → 无合法锚整条丢弃（缓存条目无 meta 键）', () => {
+        const { bus, store } = makeStore()
+        bus.emit({
+          kind: 'extension-widget',
+          sessionId: 's1',
+          widget: { viewId: 'w', pluginId: '', guiTree: [{ type: 'ansi-text', props: { lines: [] } }], meta: { progress: ['x'] } },
+        })
+        expect(store.getView(SESSION_SCOPE, 'w')!.meta).toBeUndefined()
+      })
+
+      it('四枚举 status 全部放行（词表接线回归：枚举内值不被归一化误剥）', () => {
+        const { bus, store } = makeStore()
+        const statuses = ['running', 'done', 'failed', 'idle'] as const
+        for (const status of statuses) {
+          bus.emit({
+            kind: 'extension-widget',
+            sessionId: 's1',
+            widget: { viewId: 'w', pluginId: '', guiTree: [{ type: 'ansi-text', props: { lines: [] } }], meta: { title: 'T', status } },
+          })
+          expect(store.getView(SESSION_SCOPE, 'w')!.meta).toEqual({ title: 'T', status })
+        }
+      })
+
+      it('归一化只剥锚字段族：icon 与未知键在锚合法时原样保留（消费端按需读契约不收窄）', () => {
+        const { bus, store } = makeStore()
+        bus.emit({
+          kind: 'extension-widget',
+          sessionId: 's1',
+          widget: { viewId: 'w', pluginId: '', guiTree: [{ type: 'ansi-text', props: { lines: [] } }], meta: { title: 'T', icon: { paths: ['M0'] }, unknownKey: 'keep' } },
+        })
+        expect(store.getView(SESSION_SCOPE, 'w')!.meta).toEqual({ title: 'T', icon: { paths: ['M0'] }, unknownKey: 'keep' })
       })
 
       it('widget（string 行）→ 窄化为 ansi-text GuiComponent', () => {
@@ -1830,6 +1905,46 @@ describe("view-host-store", () => {
         bus.emit({ kind: 'extension-widget', widget: { viewId: 'ghost', pluginId: 'p', guiTree: [{ type: 'card', props: { body: [] } }] } })
         expect(store.getView(SESSION_SCOPE, 'ghost')).toBeUndefined()
         expect(store.getViewIds(SESSION_SCOPE)).toHaveLength(0)
+      })
+
+      // ── placement 章（composer-tray-protocol D1 / RL2 RL1 前置：条目字段随帧透传）──
+
+      it('placement 透传（插件帧形态）：widget.placement → 缓存条目 placement 字段保持', () => {
+        const { bus, store } = makeStore()
+        bus.emit({
+          kind: 'extension-widget',
+          sessionId: 's1',
+          widget: { viewId: 'plug-view', pluginId: 'plug-a', guiTree: [{ type: 'ansi-text', props: { lines: ['x'] } }], placement: 'composer.tray' },
+        })
+        expect(store.getView(SESSION_SCOPE, 'plug-view')!.placement).toBe('composer.tray')
+      })
+
+      it('placement 缺省（旧帧无章）：缓存条目无 placement 键（旧组合零变化）', () => {
+        const { bus, store } = makeStore()
+        bus.emit({ kind: 'extension-widget', sessionId: 's1', widget: { viewId: 'legacy', pluginId: 'p', guiTree: [{ type: 'ansi-text', props: { lines: ['x'] } }] } })
+        const view = store.getView(SESSION_SCOPE, 'legacy')
+        expect(view).toBeDefined()
+        expect('placement' in view!).toBe(false)
+      })
+
+      it('重推换章：placement 随最新帧整体替换（托盘族 → 声明族切换不残留旧章）', () => {
+        const { bus, store } = makeStore()
+        bus.emit({ kind: 'extension-widget', sessionId: 's1', widget: { viewId: 'v', pluginId: 'p', guiTree: [{ type: 'ansi-text', props: { lines: ['1'] } }], placement: 'composer.tray' } })
+        expect(store.getView(SESSION_SCOPE, 'v')!.placement).toBe('composer.tray')
+        bus.emit({ kind: 'extension-widget', sessionId: 's1', widget: { viewId: 'v', pluginId: 'p', guiTree: [{ type: 'ansi-text', props: { lines: ['2'] } }], placement: 'host.embed' } })
+        expect(store.getView(SESSION_SCOPE, 'v')!.placement).toBe('host.embed')
+      })
+
+      it('RL2 扩展通道端到端：extension:widget/widgetGui 帧经 bridge 盖印 composer.tray 落缓存条目（写入点单测——五个既有托盘 widget 按钮照常出现的前提）', () => {
+        // 真实链路：MockMessageSource → MessageBusBridge.parseExtensionWidget（盖印点）
+        // → bus extension-widget → ViewHostStore.consumeWidget → ViewCacheEntry.placement
+        const { bus, store } = makeStore()
+        const source = new MockMessageSource()
+        new MessageBusBridge({ source, bus })
+        source.emit({ type: 'extension:widget', payload: { sessionId: 's1', widgetKey: 'todo', lines: ['task-1'] } })
+        source.emit({ type: 'extension:widgetGui', payload: { sessionId: 's1', widgetKey: 'goal', gui: { type: 'ansi-text', props: { lines: ['42%'] } } } })
+        expect(store.getView(SESSION_SCOPE, 'todo')!.placement).toBe('composer.tray')
+        expect(store.getView(SESSION_SCOPE, 'goal')!.placement).toBe('composer.tray')
       })
     })
 

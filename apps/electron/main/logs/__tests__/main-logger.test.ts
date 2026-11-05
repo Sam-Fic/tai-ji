@@ -7,6 +7,7 @@
  * - size 轮转触发 .1 滚动 + 续写新文件（验收条款）
  * - date 轮转：跨天写行落新日期文件（fake Date，IO 保持真实）
  * - 内存水位定时器（5min interval advance 后落一行含 rss/heapUsed/heapTotal/external）
+ *   （水位行照常 + 首败 warn 去重一次 + 零 vmRegions 字段）
  * - closeMainLogger 后写入 no-op（幂等）
  *
  * 全部夹具 mkdtempSync(tmpdir) 自建自删（fs-guard 生效中）；写流 flush 是异步的，
@@ -22,7 +23,6 @@ import { join } from 'node:path'
 /** main-logger 模块 import 时读取的全部 env 快照（beforeEach 存 / afterEach 恢复）。 */
 const ENV_KEYS = ['TAIJI_LOG_LEVEL', 'TAIJI_LOG_MAX_BYTES', 'TAIJI_AGENT_DATA_DIR', 'TAIJI_AGENT_PACKAGED'] as const
 
-const MS_PER_MINUTE = 60 * 1000
 
 describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
   `main-logger${INTEGRATION_TESTS_SKIP_REASON ? `｜skip：${INTEGRATION_TESTS_SKIP_REASON}` : ''}`,
@@ -178,19 +178,6 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
     expect(dayTwo).toContain('day-two-line')
     // 旧日期文件保持原状（date 轮转不 rename）
     expect(readFileSync(join(logsDir, `main-${today}.log`), 'utf-8')).toContain('day-one-line')
-  })
-
-  it('内存水位定时器：advance 5min 后落一行含 rss/heapUsed/heapTotal/external', async () => {
-    // 只 fake setInterval（init 内部 startMemoryWatermarkTimer 挂 fake interval），
-    // Date/IO 保持真实——advance 后回调同步写行，再回真实时钟轮询断言
-    vi.useFakeTimers({ toFake: ['setInterval'] })
-    const { initMainLogger } = await loadLogger()
-    initMainLogger({ isPackaged: true })
-    vi.advanceTimersByTime(5 * MS_PER_MINUTE)
-    vi.useRealTimers()
-    const today = new Date().toISOString().slice(0, 10)
-    const content = await waitForLogContent(logsDir, `main-${today}`, 'memory watermark')
-    expect(content).toMatch(/\[INFO\] \[main\] memory watermark \{.*"rss":\d+.*"heapUsed":\d+.*"heapTotal":\d+.*"external":\d+/)
   })
 
   it('closeMainLogger 后写入 no-op（幂等，不抛错）', async () => {

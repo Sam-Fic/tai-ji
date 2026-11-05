@@ -18,15 +18,12 @@
  * - **运行中窗口（D5）**：注册时携带 `refreshModels` 钩子——钩子重读两份缓存
  *   （带 mtime 短路：文件未变直接返回上次结果不重算），fresh 返回新并集、
  *   expired/never-seen 返回纯内置基线（R6 撤销）、运行期读失败返回 undefined
- *   （R7 保留当前注入）。触发方 = provider-live-sync 既有 tick 挂载的第三个
- *   监视条目（`createOverlayCacheWatcher`，绝对路径 + mtime 比较），其基线在
- *   **工厂期播种**（`injectCatalogOverlay` 在 runPass 之前捕获 mtime 传入）——
- *   「工厂期注入 → tick 1」约 2s 窗内的缓存变更必须可检出，否则运行中窗口在该
- *   窗口断裂且此后 mtime 稳定即永不重检。钩子只覆盖**已注册**的 provider（pi-ai
- *   `ModelsStore.refresh` 只刷新带 `refreshModels` 的 provider），故 tick 检出变化后
- *   先经 `reconcile` 做一次**注册对账**：对本拍 fresh 且尚未注册的 provider 补
- *   `registerProvider`（挂同一钩子）——覆盖「工厂期 expired / never-seen / 损坏 →
- *   运行中变 fresh」的跃迁；工厂返回后的注册直连注册表立即生效、无需 /reload（PS-88）。
+ *   （R7 保留当前注入）。钩子只覆盖**已注册**的 provider（pi-ai
+ *   `ModelsStore.refresh` 只刷新带 `refreshModels` 的 provider），故 session_start
+ *   同步刷新前先经 `reconcile` 做一次**注册对账**：对当前 fresh 且尚未注册的
+ *   provider 补 `registerProvider`（挂同一钩子）——覆盖「工厂期 expired / never-seen /
+ *   损坏 → 运行中变 fresh」的跃迁；工厂返回后的注册直连注册表立即生效、无需
+ *   /reload（PS-88）。
  *
  * 失败路径映射（设计 §3.1 R1-R7，全部 fail-safe 降级不抛错）：
  * - R1 无 `TAIJI_AGENT_DATA_DIR`（原生 pi 用户）→ 入口返回 null，零文件访问、零注册；
@@ -49,8 +46,8 @@
  *
  * 文件读取用同步 API（`readFileSync`/`statSync`）：工厂期注册必须发生在**同步的工厂
  * 函数体内**——pi 的 pending 队列在全部工厂返回后统一 flush，异步化会把注册推到
- * flush 之后，D1 的时机前提即失效（运行中对账已过 flush 期，走 post-bind 直连路径，
- * 同步读在此只是沿用）；且两份缓存都是 KB 级小文件、读取频率 ≤ 每 2s 一拍，与写入方
+ * flush 之后，D1 的时机前提即失效（session_start 对账已过 flush 期，走 post-bind
+ * 直连路径，同步读在此只是沿用）；且两份缓存都是 KB 级小文件，与写入方
  * runtime `provider-catalog-refresh.ts` 的同款同步读一致。
  *
  * 日志通道 = `@zhushanwen/pi-extension-logger` 的 `provider-live-sync` 具名
@@ -60,7 +57,6 @@
  */
 
 import { readFileSync, statSync } from "node:fs";
-import { basename } from "node:path";
 
 import type { ExtensionAPI, ProviderConfig, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
@@ -223,8 +219,8 @@ function sameStamp(previous: CacheStamp, current: CacheStamp): boolean {
  *
  * mtime 短路（设计 D5）：两份文件 mtime 与上次成功计算相同 → 直接返回上次结果，
  * 不重读不重算。钩子被 pi 在**每次**注册表刷新时调用，其中绝大多数与目录缓存无关
- * （凭据变化、其它 provider 注册、tick 的 models.json/auth.json 变更），短路省掉
- * 每拍的 JSON 解析与并集计算。
+ * （凭据变化、其它 provider 注册、session-start 同步的刷新），短路省掉
+ * 重复的 JSON 解析与并集计算。
  */
 function runPass(state: BridgeState): PassOutcome {
   const stamp = readStamp(state);
@@ -272,8 +268,8 @@ function toProviderModels(models: OverlayModel[]): ProviderModelConfig[] {
 /**
  * 注册时携带的 `refreshModels` 钩子（设计 D5 运行中窗口）。
  *
- * pi 在每次注册表刷新时调用它——含 provider-live-sync 既有 tick 检出缓存文件
- * mtime 变化后的 `refresh({ allowNetwork: false })`。返回值语义：
+ * pi 在每次注册表刷新时调用它——含 provider-live-sync session_start 同步的
+ * `refresh({ allowNetwork: false })`。返回值语义：
  * - fresh → 新并集（新模型立即可见，无需重开会话）；
  * - expired / never-seen → 纯内置基线（R6 撤销注入）；
  * - 任一份缓存损坏或不可读 → undefined（R7：pi 保留当前注入——宁可保留最后一份
@@ -285,7 +281,7 @@ function makeRefreshModels(state: BridgeState, providerId: string): RefreshModel
     if (outcome.status === "read-failed") {
       logger.warn(
         `catalog cache unreadable during refresh for ${providerId}, keeping the current injection — `
-        + "recovers on the next poll once the file is readable again",
+        + "recovers once the file is readable again (next session-start sync)",
       );
       return undefined;
     }
@@ -300,54 +296,6 @@ function makeRefreshModels(state: BridgeState, providerId: string): RefreshModel
     }
     return toProviderModels(result.models);
   };
-}
-
-// ──────────────────────── 第三个监视条目 ────────────────────────
-
-/** 第三个监视条目的观测器（provider-live-sync 既有 tick 每拍调用一次）。 */
-export type OverlayCacheWatcher = {
-  /** 监视目标标签（tick 日志用；= taiji 自刷缓存文件名）。 */
-  readonly label: string;
-  /** 本拍观测：mtime 变化 → true（内部推进基线）。unreadable → 本拍不比较、不推进基线。 */
-  observe(): boolean;
-};
-
-/**
- * 建第三个监视条目的观测器：taiji 目录缓存（绝对路径 + mtime 比较）。
- *
- * 为什么用 mtime 而非既有 models.json/auth.json 的内容字节比较：写入方是 taiji
- * runtime 的 tmp+rename 原子替换写（`provider-catalog-refresh.ts` 的 `writeFile`
- * + `rename`），mtime 可靠；且该文件含**全部** provider 的模型目录，逐拍字节比较
- * 是纯浪费。辖域仅限本条目——既有两条目的内容字节比较与「曾存在 → 缺失」抑制语义
- * 一字不变（设计 D5）。
- *
- * `initial` = 工厂期捕获的 mtime 观测（`injectCatalogOverlay` 在 runPass 之前观测后
- * 传入）。第三个条目的基线**必须工厂期播种**：pi 不读目录缓存，扩展工厂期注入才是
- * 初始态——若基线留到 tick 1 才建立，「工厂期注入 → tick 1」约 2s 窗内的缓存变更会
- * 被首拍基线吞掉（与「无变更」无法区分），且此后 mtime 稳定即永不重检，运行中窗口
- * （设计 D5）在该窗口断裂。缺省 undefined = 首拍建基线（恒判「变化」，由调用方的
- * firstBaseline 抑制刷新）——仅无工厂期观测的形态（测试）使用。
- */
-export function createOverlayCacheWatcher(path: string, initial?: MtimeObservation): OverlayCacheWatcher {
-  let baseline: MtimeObservation | undefined = initial;
-  return {
-    label: basename(path),
-    observe(): boolean {
-      const observation = observeMtime(path);
-      // unreadable：本拍不比较、不推进基线（与既有 per-file 框架的 unreadable 语义一致）
-      if (observation.state === "unreadable") return false;
-      const changed = !sameObservation(baseline, observation);
-      baseline = observation;
-      return changed;
-    },
-  };
-}
-
-/** 两次观测是否同一态（undefined 基线 = 首拍，恒判「变化」，由调用方的 firstBaseline 抑制刷新）。 */
-function sameObservation(previous: MtimeObservation | undefined, current: MtimeObservation): boolean {
-  if (previous === undefined) return false;
-  if (previous.state === "present" && current.state === "present") return previous.mtimeMs === current.mtimeMs;
-  return previous.state === current.state;
 }
 
 // ──────────────────────── 注册执行 ────────────────────────
@@ -388,8 +336,8 @@ function registerFreshProvider(
     const message = err instanceof Error ? err.message : String(err);
     logger.error(
       `registerProvider failed for ${providerId}: ${message} — the provider keeps pi's current `
-      + `behavior; fix the catalog data source (${state.taijiPath}) — the next catalog refresh `
-      + "retries the registration automatically, or restart the session to retry",
+      + `behavior; fix the catalog data source (${state.taijiPath}) — the next session-start `
+      + "reconcile retries the registration automatically, or restart the session to retry",
     );
     return false;
   }
@@ -423,12 +371,10 @@ function injectUnregistered(
 
 // ──────────────────────── 入口 ────────────────────────
 
-/** 工厂期入口的返回值：第三个监视条目的观测器 + 运行中窗口的注册对账入口（tick 挂载用）。 */
+/** 工厂期入口的返回值：运行中窗口的注册对账入口（session_start 同步挂载用）。 */
 export type CatalogOverlayBridge = {
-  /** 第三个监视条目的观测器（provider-live-sync 既有 tick 每拍调用一次）。 */
-  readonly watcher: OverlayCacheWatcher;
   /**
-   * 注册对账（tick 检出目录缓存变化后、触发刷新之前调用一次）：重算单拍，对
+   * 注册对账（session_start 同步刷新前调用一次）：重算单拍，对
    * state=fresh 且尚未注册的 provider 补 `registerProvider`（挂同一 `refreshModels` 钩子）。
    *
    * 覆盖「工厂期 expired / never-seen / 损坏 → 运行中变 fresh」的跃迁——pi-ai
@@ -447,10 +393,10 @@ export type CatalogOverlayBridge = {
  * 在扩展工厂函数体内**同步**完成注册：pi 的 `registerProvider` 在加载期只进
  * pending 队列，装配链在 `--model` 解析之前统一 flush + 本地 refresh（PS-82）。
  *
- * 返回值 = 第三个监视条目的观测器 + 运行中窗口的注册对账入口（供 provider-live-sync
- * 既有 tick 挂载：每拍 `watcher.observe()`，检出变化先 `reconcile()` 再刷新）；
- * R1（`TAIJI_AGENT_DATA_DIR` 缺失 = 非 taiji 托管环境）返回 null——调用方整条
- * 跳过，零文件访问、零注册，该 provider 自然落 never-seen、上层零投喂。
+ * 返回值 = 运行中窗口的注册对账入口（供 provider-live-sync 的 session_start 同步
+ * 挂载：先 `reconcile()` 再刷新）；R1（`TAIJI_AGENT_DATA_DIR` 缺失 = 非 taiji 托管
+ * 环境）返回 null——调用方整条跳过，零文件访问、零注册，该 provider 自然落
+ * never-seen、上层零投喂。
  */
 export function injectCatalogOverlay(pi: ExtensionAPI): CatalogOverlayBridge | null {
   const taijiPath = getTaijiOverlayCachePath();
@@ -458,21 +404,13 @@ export function injectCatalogOverlay(pi: ExtensionAPI): CatalogOverlayBridge | n
   const storePath = getPiStorePath();
   const state: BridgeState = { taijiPath, storePath, registered: new Set(), cache: null };
 
-  // 工厂期播种第三个监视条目的基线（读取前捕获 = 保守方向：最坏一次无害重复刷新，
-  // 不会漏检）。首拍抑制的前提（「进程启动时 pi 已按磁盘配置建过快照」）只对既有
-  // models.json/auth.json 两条目成立；第三个条目不成立——pi 不读目录缓存，扩展工厂期
-  // 注入才是初始态，基线必须工厂期播种，否则「工厂期注入 → tick 1」约 2s 窗内的缓存
-  // 变更会被 tick 首拍基线吞掉且此后 mtime 稳定即永不重检（运行中窗口 D5 断裂）。
-  const initialObservation = observeMtime(taijiPath);
-
   const outcome = runPass(state);
-  // R2 的损坏/不可读分支（read-failed）：本次不注入——没有已注入的集合可保。监视条目与
-  // 对账入口照样返回：文件修复后 mtime 变化，下一拍 tick 的 reconcile 重建注入，不依赖
-  // 重开会话（设计 §3.1 R2）
+  // R2 的损坏/不可读分支（read-failed）：本次不注入——没有已注入的集合可保。对账入口
+  // 照样返回：文件修复后，下一次 session_start 的 reconcile 重建注入，不依赖重装扩展
+  //（设计 §3.1 R2）
   if (outcome.status === "ok") injectUnregistered(pi, state, outcome.results);
 
   return {
-    watcher: createOverlayCacheWatcher(taijiPath, initialObservation),
     reconcile: (): boolean => {
       const pass = runPass(state);
       if (pass.status === "read-failed") return false;

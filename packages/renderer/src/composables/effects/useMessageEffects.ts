@@ -13,8 +13,9 @@
  * 流式终结 / 订阅簿记失效 / 恢复窗口订阅 / revive / 重订阅 / 恢复提示条两形态）归 core
  * createLifecycleEffects factory 单一归属（packages/core/src/domain/chat/lifecycle-effects.ts，
  * 移动壳直接接线复用）；本文件在 factory 之上叠加壳专属扩展，四项：① extensionUIStore
- * 清挂起弹窗分区（M8 防御）② toast ③ 强杀分流 ④ respawn 过渡态及其回收（30s timer /
- * clearRespawnPending）。壳不直接调 subscribeSession——恢复窗口订阅执行归 factory。
+ * 清挂起弹窗分区（M8 防御）② toast ③ 强杀分流 ④ respawn 过渡态标记（无超时兜底——
+ * restored/restoreFailed 帧与用户操作收尾，时间机制删除裁决）。壳不直接调
+ * subscribeSession——恢复窗口订阅执行归 factory。
  *
  * 依赖方向：useMessageEffects → lifecycle factory + stores + useCompletionNotify + i18n + useToast。
  */
@@ -44,7 +45,7 @@ configureChatNoticeText((key) => t('panel.message.chatNotice.' + key))
 //
 // core 语义（恢复窗口订阅 / revive / 重订阅 / 恢复提示条）归 lifecycle factory；本文件
 // 保留 respawnPending 过渡态（panel 派生 isSessionRespawning 抑制 dead 终态页的输入，
-// chat store 分区）与 30s 超时回收。
+// chat store 分区）。
 //
 // 恢复窗口背景（Gate B 实测缺陷 0/3 提示条）：pi 死亡 → runtime removeSessionEntry →
 // bus.clearSession 清掉 renderer 订阅；自动恢复成功 publish session.restored 时 bus entry
@@ -52,26 +53,8 @@ configureChatNoticeText((key) => t('panel.message.chatNotice.' + key))
 // subscribe 建立恢复窗口订阅——恢复路径（自动/手动）restored publish 前无清场，renderer
 // 是恢复后新 bus entry 的订阅者 → restored live 送达，本回调链自收尾。runtime 重启后
 // 编排器状态全内存即清、无 restored 帧——该场景由 revive-on-RPC-reply（useSidebar
-// .restoreSession / useSessionRespawnRetry，D3 保留件）收尾，30s TTL 兜底过渡态回收。
-
-/** 恢复超时（无 restored/restoreFailed 到达即放弃等待，切回终态 dead 页）。30s：respawn
- *  实测 6s 级（5s 延迟 + spawn/attach），熔断最迟 ~10s 出结果，30s 覆盖两次重试仍有裕量。 */
-const RESPAWN_PENDING_TIMEOUT_MS = 30_000
-
-/** 恢复超时 timer（sessionId → handle，模块级非响应式——对齐 streamSubscriptions 范式）。
- *  到期回调先查 respawnPending 分区（restored/熔断已清则 no-op），session 删除场景下
- *  disposeSession 清了分区 → 到期 no-op，timer 单发自清（30s 有界，无泄漏面）。 */
-// taste:allow-no-data-owner W24-EX-C（非 GUI 数据技术结构，已登记 §4 ⑧ 2026-09-12）：恢复超时 timer Map（30s 单发自清，无持久化）
-const respawnTimeoutTimers = new Map<string, ReturnType<typeof setTimeout>>()
-
-/** 清除恢复超时 timer（幂等）。 */
-function clearRespawnTimeout(sessionId: string): void {
-  const timer = respawnTimeoutTimers.get(sessionId)
-  if (timer !== undefined) {
-    clearTimeout(timer)
-    respawnTimeoutTimers.delete(sessionId)
-  }
-}
+// .restoreSession / useSessionRespawnRetry，D3 保留件）与用户操作（恢复窗口发消息经
+// core useChat 的 message_start gate）收尾，无超时兜底。
 
 /**
  * 构建 lifecycle factory 实例（事件回调时 lazy 构建——本文件随 useConnection 模块加载，
@@ -131,24 +114,12 @@ function handleSessionExited(sessionId: string, payload: { code: number | null; 
   // 壳扩展③：强杀分流——用户强制退出无自动恢复（runtime 不 respawn），终态 dead 页原样
   //（清掉可能残留的过渡态——防御路径，正常时序强制退出前不会有 pending）；不进恢复窗口
   if (consumeForcedExit(sessionId)) {
-    clearRespawnTimeout(sessionId)
     chatStore.clearRespawnPending(sessionId)
     return
   }
-  // 壳扩展④：过渡态 + 恢复窗口。mark 幂等（连续 exited 不重置计时窗口）。
+  // 壳扩展④：过渡态 + 恢复窗口。mark 幂等（连续 exited 不重复入列）。无超时兜底——
+  // restored/restoreFailed 帧与用户操作（发消息 / 重试 / 删除会话）收尾过渡态。
   chatStore.markRespawnPending(sessionId)
-  if (!respawnTimeoutTimers.has(sessionId)) {
-    respawnTimeoutTimers.set(
-      sessionId,
-      setTimeout(() => {
-        respawnTimeoutTimers.delete(sessionId)
-        // restored/熔断已收尾则分区已清 → no-op；仍 pending = 恢复无响应（如 runtime 重启
-        // 丢恢复承诺），超时切回终态 dead 页（保留「重新打开」出口）
-        if (!chatStore.isRespawnPending(sessionId)) return
-        chatStore.clearRespawnPending(sessionId)
-      }, RESPAWN_PENDING_TIMEOUT_MS),
-    )
-  }
   // core：恢复窗口订阅（fire-and-forget）——立即成为恢复后新 bus entry 的订阅者，restored /
   // restoreFailed / 恢复后首帧 live 可达。subscribeSession 失败内部 console.warn 且登记
   // subscribed=false 意图条目，WS 重连 resubscribeAll 兜底重发（链路自愈）。
@@ -158,7 +129,7 @@ function handleSessionExited(sessionId: string, payload: { code: number | null; 
 /**
  * [u8] 处理 session.restored（pi 崩溃自动恢复成功，D7 / T4）。
  *
- * 壳扩展④回收：清 30s 超时 timer + 收尾过渡态（respawnPending 清除 → panel 派生回
+ * 壳扩展④回收：收尾过渡态（respawnPending 清除 → panel 派生回
  * conversation，T4 提示条在对话流内呈现）。core 序列（revive + 恢复提示条 restored 形态
  * + 重订阅）归 factory.onSessionRestored：帧经恢复窗口订阅 live 到达（WS 重连场景由
  * resubscribeAll 的 ring 回放兜底，同一本回调）；重订阅幂等（subscribed=true 短路），
@@ -167,7 +138,6 @@ function handleSessionExited(sessionId: string, payload: { code: number | null; 
  */
 function handleSessionRestored(sessionId: string, payload: { attempts: number }): void {
   console.debug(`[useMessageEffects] session ${sessionId} auto-restored after ${payload.attempts} attempt(s)`)
-  clearRespawnTimeout(sessionId)
   useChatStore().clearRespawnPending(sessionId)
   buildLifecycleEffects().onSessionRestored(sessionId, payload)
 }
@@ -190,7 +160,6 @@ function handleSessionRestoreFailed(
     return
   }
   lifecycle.onSessionRestoreFailed(sessionId, payload)
-  clearRespawnTimeout(sessionId)
   useChatStore().clearRespawnPending(sessionId)
 }
 

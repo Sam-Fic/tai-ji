@@ -2,8 +2,8 @@
  * use-connection 可见性切换回归测试（W4，自 renderer __tests__/useConnection-visibility.test.ts 迁入）。
  *
  * 锁定 W4 改动：当用户从其它标签页 / 系统切回应用（visibilityState 变为 'visible'）
- * 且当前 WS 未连接时，useConnection 应主动调用 connect() 尝试重连，而不是干等
- * ws-client 的指数退避（最长 30s）—— 用户回来后还想看对话进展。
+ * 且当前 WS 未连接时，useConnection 应主动调用 connect() 尝试重连（用户在场信号驱动的
+ * 恢复入口；自动重连机制已删）—— 用户回来后还想看对话进展。
  *
  * 迁移改造（§10.2 D-1）：DOM 操作（document.visibilityState / addEventListener）已迁入
  * renderer 装配点的 visibility 端口实现；core 测试直接注入可控的 visibility 端口

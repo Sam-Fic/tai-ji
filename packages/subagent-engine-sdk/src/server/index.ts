@@ -17,18 +17,9 @@ import type { AgentCallOpts, AgentEvent } from "../protocol/contract-types.ts";
 import { EngineSdkError } from "../protocol/error-codes.ts";
 import { isResponseFrame, isReverseRequestFrame } from "../protocol/frames.ts";
 import type { InitializeParams, InitializeResult, RunContextParams } from "../protocol/methods.ts";
-import type { ReverseRequestClock } from "../spawn.ts";
 
 /** 出站帧写侧（各引擎 main.ts 注入 process.stdout；测试注入内存缓冲）。 */
 export type FrameWriter = (frame: unknown) => void;
-
-/**
- * 反向请求应答等待缺省上限（ms）——数据范围分类 core 侧 10s，两阶段等待放宽一档兜底。
- *
- * 两个引擎此值必须相同：它是「宿主应答迟到多久算超时」的协议范围常数，分叉会让同一宿主
- * 在不同引擎下得到不同的超时语义。
- */
-export const REVERSE_TIMEOUT_DEFAULT_MS = 60_000;
 
 /** 单个 run 的在途登记（cancel 帧路由 + 事件 seq 计数）。 */
 export interface ActiveRun { // oe-exempt:20260930:framework:SDK 协议范围契约类型——两引擎服务器共用的在途登记形态（引擎包不得依赖 core，契约落 SDK）
@@ -45,7 +36,6 @@ export interface ActiveRun { // oe-exempt:20260930:framework:SDK 协议范围契
 export interface ReversePending { // oe-exempt:20260930:framework:SDK 协议范围契约类型——两引擎服务器共用的应答等待项（pi 用 method 扩展位）
   resolve: (result: unknown) => void;
   reject: (err: Error) => void;
-  timer: NodeJS.Timeout;
   method?: string;
 }
 
@@ -173,17 +163,14 @@ export function handleInboundFrame(frame: unknown, ctx: FrameLoopContext): Inbou
 /**
  * 反向请求发送（引擎 → 宿主请求的发出与等待登记）。
  *
- * 语义（两条都是踩过坑的）：
- *   - 计时兜底在**发出侧**武装——应答侧不重复武装，两阶段 ack 只延长等待而不重置计时。
- *   - `write` 同步抛错（stdout 关闭等）就地收尾：清 pending + 停 timer + 记 clock 后转
- *     reject；不让异常同步逃出 Promise executor（逃出 = pending 条目与 timer 残留，
- *     且 reject 无人消费时仍是 unhandled rejection 面）。
+ * 语义（原「发出侧计时兜底」已随时间机制删除——等待无时间上界，应答到达
+ *（settleReverse）或进程退出是仅有的收口事实源）：`write` 同步抛错（stdout 关闭等）
+ * 就地收尾：清 pending 后转 reject；不让异常同步逃出 Promise executor（逃出 =
+ * pending 条目残留，且 reject 无人消费时仍是 unhandled rejection 面）。
  */
 export interface ReverseRequestSendContext { // oe-exempt:20260930:framework:SDK 协议范围契约类型——两引擎反向请求发送侧共用注入点（引擎包不得依赖 core，契约落 SDK）
   write: FrameWriter;
   pending: Map<string, ReversePending>;
-  timeoutMs: number;
-  clock?: ReverseRequestClock;
   /** 请求 id 分配（各引擎可带自己的前缀与计数器）。 */
   nextId(): string;
   /** 实现特有的 pending 附加字段（pi 记 `method` 供应答侧检查用；zcode 不记）。 */
@@ -197,20 +184,11 @@ export function sendReverseRequest(
 ): Promise<unknown> {
   const id = ctx.nextId();
   return new Promise<unknown>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      ctx.pending.delete(id);
-      ctx.clock?.settled(id);
-      reject(new Error(`reverse request ${method} (${id}) timed out after ${ctx.timeoutMs}ms`));
-    }, ctx.timeoutMs);
-    if (typeof timer.unref === "function") timer.unref();
-    ctx.pending.set(id, { resolve, reject, timer, ...(ctx.pendingExtras?.(method) ?? {}) });
-    ctx.clock?.started(id);
+    ctx.pending.set(id, { resolve, reject, ...(ctx.pendingExtras?.(method) ?? {}) });
     try {
       ctx.write({ id, method, params });
     } catch (err) {
       ctx.pending.delete(id);
-      clearTimeout(timer);
-      ctx.clock?.settled(id);
       reject(new Error(`reverse request ${method} (${id}) could not be written: ${toErrorMessage(err)}`));
     }
   });

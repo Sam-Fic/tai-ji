@@ -165,8 +165,10 @@ describe("jsonl-run-store-session-file", () => {
 
       // 端到端：成员表 budget 分轴从恢复的声明值派生（已声明上界不显示为「显式无界」）。
       const members = runMemberViews(restored[0]!, { now: 2000 });
-      expect(members[0]!.budget).toEqual({ maxTurns: 3, timeoutMs: 45_000, budgetTokens: null, budgetTimeMs: null });
-      expect(members[1]!.budget).toEqual({ maxTurns: null, timeoutMs: null, budgetTokens: null, budgetTimeMs: null });
+      // 墙钟预算面（timeoutMs/budgetTimeMs）已从 core budgetViewOf 移除——预算视图只剩
+      // maxTurns / budgetTokens
+      expect(members[0]!.budget).toEqual({ maxTurns: 3, budgetTokens: null });
+      expect(members[1]!.budget).toEqual({ maxTurns: null, budgetTokens: null });
     });
 
     it("[§2.1 / ADR-0094] loadAll round-trip: worker-log 诊断帧 → run.state.errorLogs 重建（此前重启即空）", async () => {

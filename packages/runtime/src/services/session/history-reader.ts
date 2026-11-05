@@ -46,7 +46,6 @@ import type { ITurnIndexScanner } from '../ports/turn-index-scanner.js'
 import { exceedsTurnByteBudget, type TurnIndexSnapshot, type TurnIndexTurnRecord } from '../../infra/pi/turn-index-types.js'
 import { TurnIndexStore } from './turn-index-store.js'
 import {
-  activePathEntriesOf,
   convertWindowEntries,
   filterObjectEntries,
   makeMalformedLineWatcher,
@@ -55,7 +54,6 @@ import {
   type HistoryWindowResult,
   type TailReadSidecarOpts,
 } from '../session-history.js'
-import { isInterruptedTail } from '../../infra/pi/session-entry-mapper.js'
 import { parseJsonl } from '../../utils/jsonl.js'
 import { isEnoent } from '../../utils/errors.js'
 import { warnOnce } from '../../utils/warn-once.js'
@@ -321,9 +319,7 @@ export class SessionHistoryReader {
     // 全 custom entry——走现有尾读兼容分支（计数口径保持现状）；下次请求 ensureFresh 仍先
     // stat 判定，出现首个 user turn 即回到索引路径。
     if (snapshot.turns.length === 0) {
-      return await this.tailReadCompat(sessionId, filePath, query, {
-        detectInterrupted: this.isInterruptedDetectionEnabled(sessionId, query),
-      })
+      return await this.tailReadCompat(sessionId, filePath, query)
     }
     // cursor 定位（只在快照 turns 上查——S 是本次读取的一致快照，S 之后的追加不参与）。
     const cursorIdx = query?.cursor !== undefined
@@ -331,14 +327,13 @@ export class SessionHistoryReader {
       : undefined
     if (cursorIdx !== undefined && cursorIdx === -1) {
       // cursor 未命中 turns：不直接判定未知——交现有尾读 cursor 兼容链区分合法非边界
-      // entryId 与真正未知（真正未知由该链返回空页 truncated=false；cursor 请求不判中断）。
-      return await this.tailReadCompat(sessionId, filePath, query, { detectInterrupted: false })
+      // entryId 与真正未知（真正未知由该链返回空页 truncated=false）。
+      return await this.tailReadCompat(sessionId, filePath, query)
     }
     const sidecar: TailReadSidecarOpts = { segmentsMetadata: await readSegmentsMetadataFile(sessionId) }
     // 中断判定只在未附着且最新窗口启用（游标页与附着会话不判——设计「消息转换」段）；
     // 失配重读沿用同一判定（重建不改变「是否未附着」与「是否最新窗口」两个前提）。
-    const detectInterrupted = this.isInterruptedDetectionEnabled(sessionId, query)
-    return await this.readIndexWindow(sessionId, filePath, snapshot, cursorIdx, query, sidecar, detectInterrupted)
+    return await this.readIndexWindow(sessionId, filePath, snapshot, cursorIdx, query, sidecar)
   }
 
   /** 主会话文件定位（getHistoryTailFromFile 同款 force 扫描语义，单一消费点）。 */
@@ -347,10 +342,6 @@ export class SessionHistoryReader {
   }
 
   /** 中断判定启用前提（设计「消息转换」段：未附着 ∧ 最新窗口）。 */
-  private isInterruptedDetectionEnabled(sessionId: string, query?: HistoryWindowQuery): boolean {
-    return query?.cursor === undefined && this.deps.pm.getClient(sessionId) === undefined
-  }
-
   /**
    * 索引窗口读取（选窗 → 读 → 校验 → 转换；失配重建重读一次）。
    *
@@ -366,9 +357,8 @@ export class SessionHistoryReader {
     cursorIdx: number | undefined,
     query: HistoryWindowQuery | undefined,
     sidecar: TailReadSidecarOpts,
-    detectInterrupted: boolean,
   ): Promise<HistoryWindowResult> {
-    const first = await this.readSelectedWindow(sessionId, filePath, snapshot, selectIndexWindow(snapshot, cursorIdx, query), sidecar, detectInterrupted)
+    const first = await this.readSelectedWindow(sessionId, filePath, snapshot, selectIndexWindow(snapshot, cursorIdx, query), sidecar)
     if (first.ok) return first.result
     // 失配：丢弃索引、全量重建、按新快照重读一次（设计 D3）
     const fresh = await this.indexStore.rebuildAfterMismatch(
@@ -382,7 +372,7 @@ export class SessionHistoryReader {
       : undefined
     if (freshCursorIdx !== undefined && freshCursorIdx === -1) {
       // 重建后 cursor 仍不在索引：与首次未命中同语义，交尾读 cursor 兼容链
-      return await this.tailReadCompat(sessionId, filePath, query, { detectInterrupted: false })
+      return await this.tailReadCompat(sessionId, filePath, query)
     }
     const second = await this.readSelectedWindow(
       sessionId,
@@ -390,7 +380,6 @@ export class SessionHistoryReader {
       fresh,
       selectIndexWindow(fresh, freshCursorIdx === -1 ? undefined : freshCursorIdx, query),
       sidecar,
-      detectInterrupted,
     )
     if (!second.ok) {
       throw new Error(
@@ -426,7 +415,6 @@ export class SessionHistoryReader {
     snapshot: TurnIndexSnapshot,
     selected: SelectedIndexWindow,
     sidecar: TailReadSidecarOpts,
-    detectInterrupted: boolean,
   ): Promise<WindowRead> {
     if (selected.loadedTurns === 0) return { ok: true, result: emptyPage() }
     const records = selected.cursorTurn !== undefined ? [...selected.windowTurns, selected.cursorTurn] : selected.windowTurns
@@ -468,10 +456,6 @@ export class SessionHistoryReader {
           '恢复动作 = 检查会话 JSONL 中这些 toolCallId 是否存在对应 toolCall entry（写入中断/异常落盘形态）；正常 pi 会话不应出现',
       )
     }
-    // 中断判定（U8 语义保留在索引路径）：喂数 = 活跃路径裁剪后的窗口 entries（与
-    // tailReadHistory 同一 activePathEntriesOf 单点）。索引窗口右端 = scannedOffset（最后
-    // 完整行），残尾半截行不进窗口，判定输入是文件尾完整行的等价物。
-    const interrupted = detectInterrupted ? isInterruptedTail(activePathEntriesOf(entries)) : undefined
     return {
       ok: true,
       result: {
@@ -481,14 +465,13 @@ export class SessionHistoryReader {
         // 索引就绪后的精确总数：完整索引原始 user turn 总数（含被撤分支），不再随窗口提前
         // 停止退化为下界（设计「cursor 未命中」段明确改写的字段口径）。
         totalTurnsEstimate: snapshot.turns.length,
-        ...(interrupted !== undefined && { interrupted }),
       },
     }
   }
 
   /**
    * 尾读兼容分支（设计保留的两处入口：索引零 turn / cursor 未命中 turns）：与既有离线尾读
-   * 同链（tailReadHistory：分块扩窗 / cursorId 定位 / segments sidecar / 中断判定剥除门禁）。
+   * 同链（tailReadHistory：分块扩窗 / cursorId 定位 / segments sidecar）。
    * 文件路径已在本编排定位（btw 线 = 注册表直给，主会话 = scanSessions），直接文件读，
    * 不重复扫描。
    */
@@ -496,20 +479,16 @@ export class SessionHistoryReader {
     sessionId: string,
     filePath: string,
     query?: HistoryWindowQuery,
-    opts?: { detectInterrupted?: boolean },
   ): Promise<HistoryWindowResult> {
     const segmentsMetadata = await readSegmentsMetadataFile(sessionId)
     const sidecar: TailReadSidecarOpts = { segmentsMetadata }
-    const result = await tailReadHistory(
+    return tailReadHistory(
       filePath,
       this.deps.sessionStore,
       query?.limitTurns ?? HISTORY_BUDGET.RECENT_TURNS,
       { cursor: query?.cursor, maxBytes: query?.maxBytes ?? HISTORY_BUDGET.MAX_BYTES },
       sidecar,
     )
-    // 剥除门禁（U8 语义保留）：中断判定只对「未附着 + 最新窗口」成立；关闭时剥除 = 不出场
-    // 而非 false——消费方按 !== undefined 判「无判定」。
-    return opts?.detectInterrupted === true ? result : { ...result, interrupted: undefined }
   }
 
   /**

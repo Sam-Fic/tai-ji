@@ -535,8 +535,8 @@ function reportDispatchFailure(runId: string, err: unknown): void {
  * lifecycle.runWorkflow 宿主派发点；入队先于 worker 启动（enqueueRunDispatch 同步
  * 入队 + 队列执行序 = 入队序——worker 首个 agent() 的 agent-started 帧必然排在
  * created 之后，竞态丢帧结构性消除），写入 journal 记录完成的 await 由调用方持有（「runWorkflow
- * 返回 ⟹ 派生视图可查」）。载荷 runId/scriptName/args/scriptPath/budgetTimeMs/
- * budgetTokens/model 全部同源自 run.spec（scriptPath/budgetTimeMs/budgetTokens/
+ * 返回 ⟹ 派生视图可查」）。载荷 runId/scriptName/args/scriptPath/budgetTokens/
+ * model 全部同源自 run.spec（scriptPath/budgetTokens/
  * model 为条件式可选项）；rootSessionId 同源自宿主会话锚（deps 现读注入，dmg-r2-5
  * ——同 cwd 多会话的宿主精确路由锚，条件式：缺席不落字段，读侧旧格式行放行）。
  * 重复调用 = running × run-created 表外转移 fail-fast（IllegalTransitionError），
@@ -573,14 +573,10 @@ export function dispatchRunCreated(run: WorkflowRun, rootSessionId?: string): Pr
     // scriptPath 锚定（worker 沙箱相对 require 的目录来源）：空值不落字段——
     // 读侧对缺失回落空串（旧格式行），与 model 同款条件式
     ...(run.spec.scriptPath ? { scriptPath: run.spec.scriptPath } : {}),
-    // 时间预算（RunSpec.budgetTimeMs）：仅 > 0 落字段——未设/0/负值不落（旧格式
-    // 形态保持，读侧回落不限时）；resume 继承恢复 + 重试重建按剩余活跃预算重排的
-    // 唯一数据范围（与 scriptPath/model 同款条件式）
-    ...(run.spec.budgetTimeMs !== undefined && run.spec.budgetTimeMs > 0
-      ? { budgetTimeMs: run.spec.budgetTimeMs }
-      : {}),
-    // token 预算（RunSpec.budgetTokens）：与 budgetTimeMs 同款条件式（仅 > 0 落字段）
-    // ——resume 继承恢复的唯一数据范围（Budget.isExceeded 加权口径的上限）
+    // token 预算（RunSpec.budgetTokens）：仅 > 0 落字段——未设/0/负值不落
+    //（resume 继承恢复的唯一数据范围，Budget.isExceeded 加权口径的上限；
+    // 原 budgetTimeMs 时间预算字段已随 run 级墙钟预算机制删除——run-created 帧
+    // 不再产出该字段，读侧对旧格式帧的字段解析保留）
     ...(run.spec.budgetTokens !== undefined && run.spec.budgetTokens > 0
       ? { budgetTokens: run.spec.budgetTokens }
       : {}),

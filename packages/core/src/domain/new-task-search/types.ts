@@ -134,8 +134,6 @@ export type JumpResult =
 /** localStorage key（MR-3.2 骨架约束，对齐 taiji: 冒号约定） */
 export const RECENTS_STORAGE_KEY = 'taiji:search-recents'
 
-/** WS 源超时阈值（#17，对齐 runtime 量级） */
-export const WS_SOURCE_TIMEOUT_MS = 10_000
 
 /** recents 每类上限（D-007） */
 export const RECENTS_PER_TYPE = 5

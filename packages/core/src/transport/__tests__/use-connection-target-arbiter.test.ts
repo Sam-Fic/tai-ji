@@ -272,27 +272,24 @@ describe('waiting-runtime 态手动重试（retrySnapshot，F1-13）', () => {
 
 describe('ws-client 等待态与 auth 接受信号（§6.8/§6.1）', () => {
   beforeEach(() => {
-    vi.useFakeTimers()
     installTestPlatform()
     disconnect()
   })
   afterEach(() => {
     useConnection().teardown()
     disconnect()
-    vi.useRealTimers()
   })
 
-  it('setWaitingRuntime：断残留连接与退避定时器，状态置 waiting-runtime', async () => {
-    // 先造一条连接 + 断开进退避（reconnecting 定时器在途）
+  it('setWaitingRuntime：断残留连接，状态置 waiting-runtime', () => {
+    // 先造一条连接 + 异常关闭（failed 终态在途）
     connect('ws://localhost:4000', { auth: 'token', token: 'tok' })
     const f = fakes[0]
     f.triggerOpen()
     f.triggerClose()
-    expect(getState().value).toBe('reconnecting')
+    expect(getState().value).toBe('failed')
     setWaitingRuntime()
     expect(getState().value).toBe('waiting-runtime')
-    // 等待期无自动重连（退避定时器已清）
-    vi.advanceTimersByTime(60_000)
+    // 等待期无自动重连（自动重连机制已删）
     expect(fakes.length).toBe(1)
   })
 
@@ -322,21 +319,16 @@ describe('ws-client 等待态与 auth 接受信号（§6.8/§6.1）', () => {
     off()
   })
 
-  it('getCurrentToken 回归（终端域世代判据）：connect 传入即更新、内部退避重连保留、断开后保留至下次 connect', async () => {
+  it('getCurrentToken 回归（终端域世代判据）：connect 传入即更新、断开后保留至下次 connect', () => {
     connect('ws://localhost:4000', { auth: 'token', token: 'gen-1' })
     expect(getCurrentToken()).toBe('gen-1')
     const f = fakes[0]
     f.triggerOpen()
     f.triggerMessage(authResult(true, 'rt-1'))
     expect(getState().value).toBe('connected')
-    // 断连 → 内部退避重连（scheduleReconnect 复用 currentCredentials）：世代不变
+    // 断连 → failed 终态（无自动重连，currentCredentials 不被清除）：世代不变
     f.triggerClose()
-    expect(getState().value).toBe('reconnecting')
-    expect(getCurrentToken()).toBe('gen-1')
-    vi.advanceTimersByTime(1_000)
-    expect(fakes.length).toBe(2)
-    fakes[1].triggerOpen()
-    fakes[1].triggerMessage(authResult(true, 'rt-1'))
+    expect(getState().value).toBe('failed')
     expect(getCurrentToken()).toBe('gen-1')
     // 新实例凭据（连接控制器断旧连新路径）→ 世代变更
     connect('ws://localhost:4500', { auth: 'token', token: 'gen-2' })

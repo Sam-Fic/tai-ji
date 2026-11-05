@@ -138,8 +138,7 @@ export default function subagentsWorkflowExtension(pi: ExtensionAPI): void {
   //  状态创建（lsRef / notifiedRunIds / workerHost / registry / sessionState）、log、
   //  makeLifecycleDeps / makeDeps、7 个 pi.on handler、getWorkflowDeps 检查 +
   //  lazyDeps 已收编 workflow-events.ts（事件族 seam，与 session-lifecycle.ts 同构；
-  //  7 个 handler 的注册相对顺序原样保留）。此处仅接线——在途上报（createInFlightReporter
-  //  + setInFlightListener 登记与 attach/detach 驱动）同为该 seam 家内装配。
+  //  7 个 handler 的注册相对顺序原样保留）。此处仅接线。
   // ════════════════════════════════════════════════════════════
   const workflow = setupWorkflowDomain(pi);
 

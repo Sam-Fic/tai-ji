@@ -7,7 +7,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync, realpathSync, writeFileSync } from 'node:fs'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import {
@@ -412,7 +412,7 @@ describe('gateLockPath：worktree 级互斥锁路径', () => {
   })
 })
 
-describe('acquireGateLock：互斥获取 / 幂等释放 / 无主偷锁三通道 / 超时', () => {
+describe('acquireGateLock：互斥获取 / 幂等释放 / 无主偷锁三通道 / 冲突即报错', () => {
   /** 每个用例一个独立临时目录（锁文件落盘，跑完即清） */
   function withLockDir(fn) {
     const dir = mkdtempSync(join(tmpdir(), 'quality-gates-lock-'))
@@ -423,10 +423,10 @@ describe('acquireGateLock：互斥获取 / 幂等释放 / 无主偷锁三通道 
     }
   }
 
-  /** 无主锁用例共用：写锁内容 → 短超时 acquire（无主偷锁接管）→ 断言本进程持锁 → release。 */
+  /** 无主锁用例共用：写锁内容 → acquire（无主偷锁接管）→ 断言本进程持锁 → release。 */
   function stealAssertRelease(lockPath, content) {
     writeFileSync(lockPath, content)
-    const release = acquireGateLock(lockPath, { timeoutMs: 1000, pollMs: 10 })
+    const release = acquireGateLock(lockPath)
     expect(JSON.parse(readFileSync(lockPath, 'utf-8')).pid).toBe(process.pid)
     release()
   }
@@ -471,33 +471,23 @@ describe('acquireGateLock：互斥获取 / 幂等释放 / 无主偷锁三通道 
     })
   })
 
-  it('持锁方存活且身份成立（本进程 pid + 真实启动时间）→ 不偷，超时抛错，信息含锁路径与持锁 pid（可操作）', () => {
+  it('持锁方存活且身份成立（本进程 pid + 真实启动时间）→ 不偷，锁冲突即刻抛错，信息含锁路径与持锁 pid（可操作）', () => {
     withLockDir((lockPath) => {
       writeFileSync(lockPath, JSON.stringify({ pid: process.pid, started: captureProcessStartTime(process.pid) }))
       let err = null
       try {
-        acquireGateLock(lockPath, { timeoutMs: 60, pollMs: 10 })
+        acquireGateLock(lockPath)
       } catch (e) {
         err = e
       }
       expect(err).toBeInstanceOf(Error)
-      expect(err.message).toContain('互斥锁超时')
+      expect(err.message).toContain('互斥锁冲突')
       expect(err.message).toContain(lockPath)
       expect(err.message).toContain(String(process.pid))
     })
   })
 
-  it('持锁方在等待期间释放 → 等待方获取成功（串行化语义，非偷锁路径）', () => {
-    withLockDir((lockPath) => {
-      writeFileSync(lockPath, String(process.pid)) // 活锁（本进程，旧格式内容）
-      // 子进程 80ms 后删锁：父进程阻塞在锁等待循环里，由子进程触发释放
-      const child = spawn(process.execPath, ['-e', `setTimeout(() => require('node:fs').unlinkSync(${JSON.stringify(lockPath)}), 80)`], { stdio: 'ignore' })
-      const release = acquireGateLock(lockPath, { timeoutMs: 5000, pollMs: 10 })
-      child.unref()
-      release()
-      expect(existsSync(lockPath)).toBe(false)
-    })
-  })
+
 })
 
 describe('gate 5 test-suite：快速守卫测试族（SUITES 单一登记的执行面）', () => {

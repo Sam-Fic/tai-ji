@@ -1306,3 +1306,35 @@ WorkflowTab 步骤列表的数据源绑定从「workflow-record 全量快照（6
 ### ADR-0187 断连告知的壳层分工：面板级断连提示条降为组件级防御契约（2026-11-03 裁决，tray-panel-interact 发现 2/F1）
 
 桌面壳 App.vue 以 `connectionState !== 'connected'` 整屏摘除 AppShell（waiting-runtime / 连接族过渡屏 / restarting / failed 四态各有壳级呈现），WS 任意非 connected 态托盘面板随壳卸载——面板级断连提示条（TrayWidgetPanel「连接已断开，内容可能过期」banner，wsState !== 'connected' 即显示）在桌面壳**结构性无触发窗**（壳层门控自初始导入即存在，非本批回归）。裁决：断连告知由壳层四态过渡屏/错误页承担；面板级提示条保留为组件级防御契约（RL5 单测 6/6 承载），真机断言按壳层呈现判定。**不采用**：改壳层门控让面板在断连态保持可达（属启动/连接架构域的 UX 决策——面板脱离会话数据源后的信息时效与误导读风险未论证，超出本交付范围）。
+
+### ADR-0188 托盘展示位纳入 placement 声明制，「不声明就没有」落点 = 会话域存储资格（2026-11-04 用户裁决，composer-tray-protocol D1/D6）
+
+view 展示路由中 drawer/overlay/sidebar/settings 四族容器本为声明制（插件清单 contributes.views 声明 placement 才有展示位），唯独托盘 widget 区是「往会话推了树就出按钮」的隐式路由——内置验收插件 probe-container-plugin 的测试树因此冒出托盘按钮（四格方块兜底图标 + viewId 裸标题）。裁决：placement 新增 `composer.tray` 族（扩展 setWidget 写入点统一盖印，插件按清单声明盖印），托盘消费侧只渲染 placement === 'composer.tray' 的条目；「不声明就没有」的落点 = **会话域存储资格**——views.update 的 viewId 未命中该插件清单声明集合即 RPC 结构化拒绝（UNDECLARED_VIEW_ID + 补声明指引），不入存储不广播，命中则按声明 placement 盖印；placement 词表合法性校验仍在 renderer 注册表装载链（unknown-placement 告警 + 标 unavailable），两道校验各管一层、词表 SSOT 在 core 单源。配套升级：scheduler-manager 补 `host.embed` 宿主内嵌族声明（宿主组件按 viewId 定点消费的树，原为源码级隐式契约，显式化进 manifest 后其三处定点消费照常、托盘无其按钮）。托盘按钮存在性仍由 ViewHostStore 有树驱动——声明是资格不是内容，「有内容才出现」哲学维持。**不采用**：渲染资格制（存储自由推送 + 各消费侧过滤）——ViewHostStore 永远留存无主树，未来新容器/调试工具直接读存储时未声明内容照样冒出，机制复发面不关闭；黑名单排除测试插件——每新增一个测试插件都要登记一次的补偿机制，病因「无资格判定」未除。另两条细粒度否决变体（防复讼）：「无配套补声明的 views.update 层一刀切拒绝」不采用——会破坏宿主定点消费方（scheduler-manager 当时无声明但树合法），顾虑由配套升级（补 host.embed 声明）解消；「为兼容无声明消费方而放宽校验」不采用——插件与宿主同仓同版本原子发布（mandatory-extensions 随应用分发）零混装窗口，放宽破坏的只是错误用法而非合法用法。
+
+### ADR-0189 TreeItem 富行字段族与状态文字渲染序：statusLabel 覆盖 + 宿主封闭枚举 i18n 兜底（composer-tray-protocol D2/D3/D4/D5）
+
+TreeItem 协议增三个可选字段：`subLabel`（副文本，单行截断）、`statusLabel`（状态文字覆盖）、`actions`（行内操作槽，条目形状与既有 ActionBarItem 同构）——协议可选字段新增不 bump 版本（confirm 字段先例），未升级推送方退回单行渲染零回退。状态标签渲染序单一：`statusLabel ?? 宿主按 status 封闭枚举映射 i18n`（running→运行中 / done→已结束 / failed→失败，词条进 renderer 既有 tray 词典族；双无的行不渲染标签）；statusLabel 覆盖行的胶囊色取该行 status 枚举色，无 status 行取中性——文字与颜色同源，不引入第二判据。行内操作复用两段式确认状态机与 pin 门控（与既有命令行共享 TRAY_PIN_STATE_KEY），执行分派走 dispatchTreeInteraction 单点。list-tree 原语级排版升级全挂载位统一（去等宽改无衬线、主副文本分层、numbered 序号档保留 mono），不加托盘专属变体参数。**不采用**：从 label 字符串解析「 · 」分隔符——私有协议，消费方无法区分语义段，本地化与截断都做不了；为托盘另造 rich-row 新原语——与 list-tree 双轨，既有推送方无法渐进受益。
+
+### ADR-0190 时间阈值判死/等待机制全仓退役：无信号时间猜测不中断任何工作（2026-11-04 用户裁决，refactor-remove-time-mechanisms）
+
+**背景**：feat-font-custom 托管会话被「静默 15 分钟自动判死」（SilenceMatrix，T = idleBackgroundSec 600s + 模型自愈窗 300s）连续误杀 7 次——workflow 的 `collect_results`/planner 长时间阻塞不产生主会话帧流信号，宿主把「正常长等待」判成「回合已死」，abort 连带取消 workflow（verify 节点全跑完后被 inspect 汇总前取消）。全仓穷举审计（6 片并行，约 260 条时间决策机制清单）后用户裁决退役。
+
+**决策**：
+1. **甲类（判死/终止族，50 条）全删，不留残枝，死代码连锁删除**：SilenceMatrix 静默判死全家（矩阵/stall_hint 提示/abort stall_auto 分型/死因注入）、PingProbe 进程探测判死（60s×3=180s）、Electron liveness 假死判死（5min 无 /health 应答杀 runtime）、abort 悬挂升级窗（10s）与升级强杀、判死自动恢复链、插件 dialog/权限/工具 30min 超时、子代理 ask_user 30min 判取消、handoff 10min、子代理 idle 5min 保活回收、引擎反向请求守护/引擎自灭/prompt 零输出看门狗、文件锁 stale 30s 夺取（runtime 与 extensions 双实现）、warmup 槽 10min 空闲自杀、启动健康检查超时放弃、崩溃退避自动重启、进程杀链 grace 等待窗（SIGTERM 后直接 SIGKILL）、structured-output 3 连败熔断杀子进程、goal 无进展 continuation 退避、npm 安装 60s 无进展判死、curl 下载 30s 停滞判死等。**关联呈现半边同步删**：stall_hint「已静默 N 分钟」提示条、「上次会话在此处被中断」提示条全链（isInterruptedTail 判定 + renderer 渲染）、stalled 收尾呈现。
+2. **丙类（等待/放弃族）只保留三类**：① 前台命令 idle 转后台（idleBackgroundSec 600s，静默只切换等待方式、不杀命令）；② 前台 timeout 注入（用户/LLM 显式指定，默认关闭）；③ 远程网络相关调用（http/https/ws 及其他网络通道）的超时设置。其余本地等待类（OAuth callback 窗、本地 git 墙钟、崩溃取证窗、btw fork 窗、trace-sync 轮询上限、worktree 创建墙钟、懒加载重试、shell env/Vite ready/升级脚本等父窗、日志流关闭窗、更新链节流、CI 脚本本地等待）全删。
+3. **丁类（周期轮询）只留 scheduler 扩展待裁**，其余全删：内存看门狗与滚动重启编排（exit 86 全链）、内存水位日志、事件循环遥测、进程表采样环、后台任务/models-store mtime 轮询、skill 兜底重扫、cookie 刷新轮询与 deadline、触发条件巡检、exit-watch pid 守望、provider-live-sync 轮询（改 session_start 一次性同步）、面板轮询、attach 高水位轮询。**scheduler 扩展（30s tick/7 天过期/派发速率门）功能必要性已论证（pi 上游无定时能力、会话注入必须进程内），是否退役/改造待用户单独裁决。**
+4. **戊类只保留残留文件/日志的按龄清理**（journal 30 天、孤儿 run 7 天、日志 7 天、图片缓存孤儿 30 天、tmp 残留、备份清理），其余删：reattach 活跃窗过滤（改全量恢复）、create 幂等 TTL（改进程生命周期）、pi 版本失败负缓存、cookie 冷却、respawn 提示窗、morph TTL。
+5. **己类（节流/防抖/TTL，无终止动作）按审计建议保留**——时间只影响合并时机，不杀不中断。
+
+**行为变化要点**（删除后的正面语义）：
+- 回合不再被任何时间机制自动终止——workflow/collect_results 任意长跑不再被打断；pi 真挂死时由用户右键「强制退出」收终（人工路径保留）。
+- runtime 进程崩溃后不再自动重启（liveness/退避重启删），广播 runtime-failed 由用户手动重试；崩溃恢复 reattach 改全量恢复（无活跃窗过滤）。
+- 停止按钮 abort 为协作式直呼，pi 不响应时挂住，由强制退出收终。
+- 锁冲突（file-lock）立即抛 ELOCKED 附恢复指引（删除锁目录重试），不等待不夺取；崩溃遗留死锁需人工清理。
+- 插件 dialog/权限审批/子代理 ask_user 无超时，挂到用户响应或会话关闭。
+- 引擎通道无握手/请求超时，对端挂死表现为调用方挂住（人工停止收终）。
+
+**与既有裁决的关系**：本条是 ADR-0122「事实驱动原则体系」的彻底化执行——ADR-0122 保留白名单中「PingProbe 无进展检测」「外部网络端点墙钟之外的进程级探测」「停滞判定与处置条款修订（『调用永不返回』自动处置链）」整段**被本次裁决推翻**：第 1 层探测判死、第 2 层静默判死、停止升级链、判死自动恢复、sample 取证链全部退役；「静默 ≠ 卡死」的边界表述（ADR-0047）随之失效——现行语义是「静默不判定，判定归人」。白名单收窄后仅存：网络调用超时、idle 转后台（丙-1/丙-3）、残留文件/日志按龄清理、scheduler（待裁）、产品功能定时（用户显式创建的定时任务）、CI/发布脚本的**网络**等待、e2e 测试断言语义超时（测试框架非运行时机制）。
+
+**登记**：审计全量清单（约 260 条逐条 文件:行）= 会话工作产物 `.tmp/time-mechanism-audit/full-inventory.md`（不入库，git 历史可追溯删除实施）；AGENTS.md「关键规则」节新增时间机制红线（本条的规则面派生视图）；原规则 19（超时默认原则）与规则 21（看门狗/滚动重启默认不武装）被本裁决吸收重写。
+>>>>>>> refactor-remove-time-mechanisms

@@ -1,9 +1,9 @@
 /**
  * 插件热重载监视器
  *
- * 从 plugin-activator.ts 抽取的 fs.watch 子系统：debounce + 超时强杀 +
- * reload fan-out。自包含 watchers / debounce timers 状态，通过构造时注入的
- * hooks 回调（deactivate / activate / 强杀 / 状态查询）与 activator 交互，
+ * 从 plugin-activator.ts 抽取的 fs.watch 子系统：debounce + reload fan-out。
+ * 自包含 watchers / debounce timers 状态，通过构造时注入的 hooks 回调
+ * （deactivate / activate / 状态查询）与 activator 交互，
  * 从而把「文件监视」职责从「激活状态机」中分离出来。
  */
 
@@ -18,16 +18,6 @@ export interface HotReloadHooks {
   deactivate(pluginId: string): Promise<void>
   /** 重新激活插件 */
   activate(pluginId: string): Promise<void>
-  /**
-   * 强杀 Worker：deactivate 超时时的兜底。若插件无活跃 worker 则为 no-op。
-   * 注意：调用方在之后仍会调用 disposeContext / setState 清理本地状态，
-   * 与原始实现保持一致（无论是否有 worker，超时后都清理 context + 置 UNLOADED）。
-   */
-  forceTerminate(pluginId: string): Promise<void>
-  /** dispose 插件 subscriptions 并清理 context（强杀后调用） */
-  disposeContext(pluginId: string): void
-  /** 标记插件状态（强杀后置为 UNLOADED） */
-  setState(pluginId: string, state: 'UNLOADED'): void
   /** 查询插件当前状态（用于 reload 时判断是否 ACTIVE） */
   getState(pluginId: string): string | undefined
 }

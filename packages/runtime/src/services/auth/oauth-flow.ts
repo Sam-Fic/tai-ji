@@ -35,17 +35,14 @@ export interface OAuthFlowHooks {
 }
 
 // ── provider 差异表 ────────────────────────────────────────────
-// expires 公式：expires = Date.now() + expiresIn*1000 - skewMs（毫秒 epoch，pi resolveStoredOAuth
-// 比较 Date.now() >= expires）。skew 提前 5min 刷新，避免 token 在请求中途死亡。
+// expires 公式：expires = Date.now() + expiresIn*1000（毫秒 epoch，pi resolveStoredOAuth
+// 比较 Date.now() >= expires）。无提前刷新窗口（时间机制删除裁决：skew 提前刷新退役，
+// token 到期后按需刷新走 refresh 流程）。
 
 /** 秒 → 毫秒换算（token 响应的 expires_in / expires_at 均为 epoch 秒） */
 const MS_PER_SECOND = 1_000
-/** token 到期前 5min（5 * 60s）提前视为过期的刷新窗口：见上方 skew 语义说明 */
-const TOKEN_REFRESH_SKEW_MS = 300_000
 
 interface ExpiresRule {
-  /** token 到期前提前多少 ms 视为过期（刷新窗口） */
-  skewMs: number
   /** 响应缺 expires_in 时的兜底秒数（xai 实测不返回） */
   defaultExpiresIn?: number
   /** true 时 expires 来自响应字段 expires_at（epoch 秒），如 github-copilot */
@@ -53,17 +50,11 @@ interface ExpiresRule {
 }
 
 const PROVIDER_RULES: Record<string, ExpiresRule> = {
-  anthropic: { skewMs: TOKEN_REFRESH_SKEW_MS },
-  xai: { skewMs: TOKEN_REFRESH_SKEW_MS, defaultExpiresIn: 3_600 },
-  'kimi-coding': { skewMs: 0 },
-  'openai-codex': { skewMs: 0 },
-  'github-copilot': { skewMs: TOKEN_REFRESH_SKEW_MS, epochSeconds: true },
+  xai: { defaultExpiresIn: 3_600 },
+  'github-copilot': { epochSeconds: true },
 }
 
-const DEFAULT_RULE: ExpiresRule = { skewMs: 0 }
-
-/** 授权窗口兜底秒数：device 响应缺 expires_in 时（RFC 8628 允许） */
-const DEFAULT_DEVICE_TIMEOUT_SECONDS = 900
+const DEFAULT_RULE: ExpiresRule = {}
 
 // ── HTTP 工具 ──────────────────────────────────────────────────
 
@@ -239,13 +230,13 @@ function credentialFromTokenFields(
   const refresh = refreshToken ?? requireString(body, 'refresh_token', 'token')
   let expires: number
   if (rule.epochSeconds) {
-    expires = requirePositiveNumber(body, 'expires_at', 'token') * MS_PER_SECOND - rule.skewMs
+    expires = requirePositiveNumber(body, 'expires_at', 'token') * MS_PER_SECOND
   } else {
     const expiresIn = body.expires_in === undefined ? rule.defaultExpiresIn : (body.expires_in as number)
     if (typeof expiresIn !== 'number' || !Number.isFinite(expiresIn) || expiresIn <= 0) {
       throw new Error('token response missing field: expires_in')
     }
-    expires = Date.now() + expiresIn * MS_PER_SECOND - rule.skewMs
+    expires = Date.now() + expiresIn * MS_PER_SECOND
   }
   return { type: 'oauth', access, refresh, expires }
 }
@@ -273,7 +264,6 @@ async function runStandardDeviceFlow(providerId: string, config: BuiltinOAuthCon
   })
   const result = await runDeviceCodeFlow({
     intervalSeconds: device.intervalSeconds,
-    expiresInSeconds: device.expiresInSeconds ?? DEFAULT_DEVICE_TIMEOUT_SECONDS,
     waitBeforeFirstPoll: true,
     signal,
     minIntervalMs: tuning?.minIntervalMs,
@@ -281,7 +271,7 @@ async function runStandardDeviceFlow(providerId: string, config: BuiltinOAuthCon
     poll: standardDevicePoll(config.endpoints.token!, config.clientId, device.deviceCode, signal),
   })
   if (!result.ok) {
-    throw new Error(result.reason === 'timeout' ? 'OAuth device code expired' : (result.message ?? 'OAuth login cancelled'))
+    throw new Error(result.message ?? 'OAuth login cancelled')
   }
   return credentialFromTokenResponse(providerId, result.value as Record<string, unknown>)
 }
@@ -336,7 +326,6 @@ async function runCopilotDeviceFlow(config: BuiltinOAuthConfig, hooks: OAuthFlow
   // 第一段轮询：GitHub access_token
   const githubResult = await runDeviceCodeFlow({
     intervalSeconds: device.intervalSeconds,
-    expiresInSeconds: device.expiresInSeconds ?? DEFAULT_DEVICE_TIMEOUT_SECONDS,
     waitBeforeFirstPoll: true,
     signal,
     minIntervalMs: tuning?.minIntervalMs,
@@ -378,7 +367,7 @@ async function runCopilotDeviceFlow(config: BuiltinOAuthConfig, hooks: OAuthFlow
     },
   })
   if (!githubResult.ok) {
-    throw new Error(githubResult.reason === 'timeout' ? 'OAuth device code expired' : (githubResult.message ?? 'OAuth login cancelled'))
+    throw new Error(githubResult.message ?? 'OAuth login cancelled')
   }
 
   // 第二段：GitHub token → Copilot token
@@ -401,7 +390,7 @@ async function runCopilotDeviceFlow(config: BuiltinOAuthConfig, hooks: OAuthFlow
     access: token,
     // refresh 存 GitHub token：pi 侧 refresh 用它在 copilot_internal/v2/token 换新 copilot token
     refresh: String(githubResult.value),
-    expires: expiresAt * MS_PER_SECOND - (PROVIDER_RULES['github-copilot']?.skewMs ?? 0),
+    expires: expiresAt * MS_PER_SECOND,
   }
 }
 
@@ -410,7 +399,7 @@ async function runCopilotDeviceFlow(config: BuiltinOAuthConfig, hooks: OAuthFlow
 // { authorization_code, code_verifier }（非直接 token），需二次 exchange。
 // 403/404 视为 pending（用户尚未完成授权时服务端返回 403）。
 
-// eslint-disable-next-line no-magic-numbers -- openai-codex 授权窗口 15min（pi-ai DEVICE_CODE_TIMEOUT_SECONDS 同款）
+// eslint-disable-next-line no-magic-numbers -- openai-codex 授权窗口 15min（pi-ai DEVICE_CODE_TIMEOUT_SECONDS 同款；仅作 UI 展示信息——轮询无本地 deadline，过期由 provider 裁决）
 const OPENAI_CODEX_TIMEOUT_SECONDS = 15 * 60
 /** 单次 OAuth HTTP 请求超时（pi-ai TOKEN_EXCHANGE_TIMEOUT_MS 同款）：device flow 各出网点 + callback exchange，远端挂起时兜底防无限等待 */
 const TOKEN_EXCHANGE_TIMEOUT_MS = 30_000
@@ -446,7 +435,6 @@ async function runOpenAICodexDeviceFlow(config: BuiltinOAuthConfig, hooks: OAuth
   deviceTokenUrl.pathname = deviceTokenUrl.pathname.replace(/\/[^/]+$/, '/token')
   const pollResult = await runDeviceCodeFlow({
     intervalSeconds,
-    expiresInSeconds: OPENAI_CODEX_TIMEOUT_SECONDS,
     signal,
     minIntervalMs: tuning?.minIntervalMs,
     slowDownIncrementMs: tuning?.slowDownIncrementMs,
@@ -480,7 +468,7 @@ async function runOpenAICodexDeviceFlow(config: BuiltinOAuthConfig, hooks: OAuth
     },
   })
   if (!pollResult.ok) {
-    throw new Error(pollResult.reason === 'timeout' ? 'OAuth device code expired' : (pollResult.message ?? 'OAuth login cancelled'))
+    throw new Error(pollResult.message ?? 'OAuth login cancelled')
   }
 
   // 3. 二次 exchange：authorization_code + code_verifier → 正式 token

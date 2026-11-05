@@ -1,8 +1,8 @@
-import { DEFAULT_RETRY_BUDGET_MS as EXT_RETRY_BUDGET_MS, DEFAULT_RETRY_DELAY_MS as EXT_RETRY_DELAY_MS, DEFAULT_STALE_MS as EXT_STALE_MS, withFileLockSync as extWithFileLockSync } from '../../../extensions/shared/file-lock/src/file-lock.js';
+import { withFileLockSync as extWithFileLockSync } from '../../../extensions/shared/file-lock/src/file-lock.js';
 import { INTEGRATION_TESTS_ENABLED, INTEGRATION_TESTS_SKIP_REASON } from '../../../test-guard/integration-gate.ts';
 import { PiConfigStore } from '../src/infra/pi/pi-config-store.js';
 import { PiAgentEndEvent, PiAgentSettledEvent, PiAutoRetryEndEvent, PiAutoRetryStartEvent, PiCompactionEndEvent, PiCompactionStartEvent, PiEntryAppendedEvent, PiExtensionErrorEvent, PiQueueUpdateEvent, PiSessionInfoChangedEvent, PiThinkingLevelChangedEvent, PiToolExecutionEndEvent, PiToolExecutionResult, PiToolExecutionUpdateEvent, PiTurnEndEvent, PiUsage, type PiEvent } from '../src/infra/pi/pi-protocol.js';
-import { SettingsCorruptedError, getActiveSettingsPath, invalidateSettingsCache, readSettings, setSettingsLockTimingForTest, setSettingsPath, type PiSettings, updateSettingsFields, writeSettings } from '../src/infra/pi/pi-settings-store.js';
+import { SettingsCorruptedError, getActiveSettingsPath, invalidateSettingsCache, readSettings, setSettingsPath, type PiSettings, updateSettingsFields, writeSettings } from '../src/infra/pi/pi-settings-store.js';
 import { extractLatestModelFromJsonl } from '../src/infra/pi/session-file-utils.js';
 import { PiSessionStore } from '../src/infra/pi/session-store.js';
 import { IConfigService, IEventAdapter, IExtensionService, type IMessageBroker, type ISessionService } from '../src/interfaces.js';
@@ -21,7 +21,7 @@ import { SessionService } from '../src/services/session/session-service.js';
 import { ConnectionManager } from '../src/transport/connection-manager.js';
 import { SessionMessageHandler, type SessionHandlerContext } from '../src/transport/session-message-handler.js';
 import { SESSION_NOT_FOUND } from '../src/utils/errors.js';
-import { DEFAULT_RETRY_BUDGET_MS, DEFAULT_RETRY_DELAY_MS, DEFAULT_STALE_MS, withFileLockSync } from '../src/utils/file-lock.js';
+import { withFileLockSync } from '../src/utils/file-lock.js';
 import { ClientMessage, ProviderId, type ServerMessage, type ProviderInfo } from '@taiji/shared';
 import { ZCODE_HOST_DB_SUFFIX, ZCODE_ISOLATED_DB_SEGMENTS } from '@zhushanwen/subagent-engine-sdk';
 import { hostZcodeDbPath, zcodeIsolatedDbPath } from '@zhushanwen/zcode-session-source';
@@ -76,9 +76,9 @@ vi.mock('@zhushanwen/pi-file-lock/core', async (importOriginal) => {
   lockSim.actual = actual
   return {
     ...actual,
-    acquireLockSync: (filePath: string, opts?: { staleMs?: number; log?: (msg: string) => void }) => {
+    acquireLockSync: (filePath: string) => {
       const sim = lockSim.holderOnce
-      if (!sim) return actual.acquireLockSync(filePath, opts)
+      if (!sim) return actual.acquireLockSync(filePath)
       lockSim.holderOnce = null
       sim(filePath)
       // 获取请求撞在注入的持锁窗口内：message/fields 照抄 lock-core.ts 的 elocked()
@@ -106,8 +106,6 @@ beforeEach(async () => {
   setSettingsPath(settingsPath)
 })
 afterEach(async () => {
-  // 恢复锁参数默认值，避免压缩预算泄漏到后续用例
-  setSettingsLockTimingForTest({})
   // 持锁窗口注入只允许用例内单次生效，防断言失败后泄漏到后续用例
   lockSim.holderOnce = null
   await rmP(tmpDir, { recursive: true, force: true })
@@ -307,10 +305,8 @@ describe('pi-settings-store', () => {
       expect(result.packages).toEqual(['p2'])
     })
 
-    it('fails fast with ELOCKED when lock is held beyond retry budget', () => {
+    it('fails fast with ELOCKED when lock is held', () => {
       writeSettings({ defaultModel: 'v1' })
-      // 压缩预算：10ms/次 × 预算 60ms，快速走完 fail-fast 路径
-      setSettingsLockTimingForTest({ retryDelayMs: 10, retryBudgetMs: 60 })
       const release = lockfile.lockSync(settingsPath, { realpath: false })
       let err: unknown
       try {
@@ -320,43 +316,12 @@ describe('pi-settings-store', () => {
       } finally {
         release()
       }
-      // fail-fast：预算耗尽抛错（对齐 pi 放弃保存语义），而非静默丢弃或死等
+      // fail-fast：锁冲突立即抛错（对齐 pi 放弃保存语义），而非静默丢弃或死等
       expect((err as { code?: string } | undefined)?.code).toBe('ELOCKED')
       expect(readSettings().defaultModel).toBe('v1') // 本次写入被放弃
       // 锁释放后恢复正常
       updateSettingsFields('model', s => { s.defaultModel = 'after' })
       expect(readSettings().defaultModel).toBe('after')
-    })
-
-    // 真子进程版的确定性等价物（单测层默认跑）：真实子进程「持锁 150ms 后释放」的
-    // 挂钟窗口压缩为 0 窗口注入（见文件头 mock 说明）——锁等待语义不变：首个获取
-    // 请求撞持锁窗口 ELOCKED → busy-wait 重试 → 持锁者释放后真实获取 → 锁内重读
-    // 吃进并发写方的值 → 本域 merge 写回。真子进程形态（spawn 挂钟无完成信号可等，
-    // 判据第三档）在下方 TAIJI_TEST_INTEGRATION 门控块。
-    it('busy-waits and acquires after a concurrent holder releases（0 窗口注入 + 0 重试间隔，确定性锁时序）', () => {
-      writeSettings({ defaultModel: 'v1', packages: ['p1'] })
-      let holderWindows = 0
-      lockSim.holderOnce = (filePath) => {
-        holderWindows++
-        const release = lockSim.actual!.acquireLockSync(filePath)
-        try {
-          writeFileSync(filePath, JSON.stringify({ defaultModel: 'pi-holder', packages: ['p1'], defaultThinkingLevel: 'high' }), 'utf-8')
-        } finally {
-          release()
-        }
-      }
-      // 0 重试间隔：ELOCKED 后 sleepSync(0) 立即重试（Atomics.wait 0ms 不阻塞 event loop）
-      setSettingsLockTimingForTest({ retryDelayMs: 0 })
-
-      updateSettingsFields('extension', s => { s.packages = ['p2'] })
-
-      expect(holderWindows).toBe(1) // 恰经历一次真实持锁窗口（首次获取确实 ELOCKED 过）
-      const result = readSettings()
-      // busy-wait 到释放后获取，锁内重读吃进并发写方的 model 域字段（窗口 W1/W2 关闭）
-      expect(result.defaultModel).toBe('pi-holder')
-      expect(result.defaultThinkingLevel).toBe('high')
-      expect(result.packages).toEqual(['p2']) // 本域（extension）写在 merge 后落盘
-      expect(existsSync(`${settingsPath}.lock`)).toBe(false) // 锁正常释放清理
     })
 
     // [HISTORICAL] 2026-08-20 PR #185：真实子进程持锁用例显式超时——真实 spawn node
@@ -368,31 +333,16 @@ describe('pi-settings-store', () => {
     describe.skipIf(
       !INTEGRATION_TESTS_ENABLED,
     )(`busy-wait 跨进程真子进程（集成组：真 spawn + 150ms 真实持锁窗）${INTEGRATION_TESTS_SKIP_REASON ? `｜skip：${INTEGRATION_TESTS_SKIP_REASON}` : ''}`, () => {
-      it('busy-waits and acquires after a cross-process holder releases (real subprocess)', { timeout: 30_000 }, async () => {
+      it('fails fast with ELOCKED against a cross-process holder, acquires after release (real subprocess)', { timeout: 30_000 }, async () => {
         writeSettings({ defaultModel: 'v1', packages: ['p1'] })
-        // 子进程 = 模拟 pi：锁请求对齐 pi 真实语义（pi-settings-store 模块头注释引
-        // pi settings-manager acquireLockSyncWithRetry）——ELOCKED 时 CPU 自旋 20ms ×
-        // 最多 10 次（总等待 ≤200ms）重试取锁，耗尽才抛。单次 fail-fast 是模拟保真度
-        // 缺陷：与任何持锁窗口的一次碰撞（满载下窗口被 CPU 抢占拉长，实测 p99.9 从
-        // 0.4ms 涨到 35ms）即未捕获 ELOCKED 崩溃 exit 1；pi 形态只把碰撞降级为多等一轮。
-        // 持锁后锁内写 model 域字段、打印 LOCKED 握手标记（waitChildHoldsLock 依赖，
-        // 见下）、150ms 后释放退出。
+        // 子进程 = 模拟 pi：proper-lockfile lockSync 直接取锁（pi 真实语义已无重试——
+        // 两侧同为单次 fail-fast），持锁后锁内写 model 域字段、打印 LOCKED 握手标记
+        // （waitChildHoldsLock 依赖，见下）、150ms 后释放退出。
         const lockEntry = createRequire(import.meta.url).resolve('proper-lockfile')
         const child = spawn(process.execPath, ['-e', `
           const lockfile = require(${JSON.stringify(lockEntry)})
           const fs = require('node:fs')
-          const acquireLikePi = () => {
-            for (let attempt = 0; ; attempt++) {
-              try {
-                return lockfile.lockSync(${JSON.stringify(settingsPath)}, { realpath: false })
-              } catch (e) {
-                if (e.code !== 'ELOCKED' || attempt >= 10) throw e
-                const spinUntil = Date.now() + 20
-                while (Date.now() < spinUntil) {}
-              }
-            }
-          }
-          const release = acquireLikePi()
+          const release = lockfile.lockSync(${JSON.stringify(settingsPath)}, { realpath: false })
           fs.writeFileSync(${JSON.stringify(settingsPath)}, JSON.stringify({ defaultModel: 'pi-child', packages: ['p1'] }), 'utf-8')
           console.log('LOCKED')
           setTimeout(() => { release(); process.exit(0) }, 150)
@@ -418,15 +368,7 @@ describe('pi-settings-store', () => {
           `${streamTail('stdout', childStdoutLines)}${streamTail('stderr', childStderrLines)}\n👉 单跑复现：cd packages/runtime && npx vitest run test/pi-settings-store.test.ts`
         // stdout handshake 确定性等子进程持锁：子进程持锁成功打印 LOCKED 行，主进程等
         // 该行出现（独立行缓冲检测叠加在上方 ring buffer 监听旁，防单行跨 data 事件被拆）。
-        // [HISTORICAL] 等待机制三代教训：
-        //   - v1 盲等 40ms sleep（PR #185 前）：满载下子进程 spawn 慢于 40ms，主进程
-        //     抢先拿锁、锁内读到旧值 'v1'（waitedMs 断言照过，仅 defaultModel 断言红）；
-        //   - v2 主进程 lockSync 试探探测（PR #185）：每次探测都重新制造「锁被主进程
-        //     持有」的窗口，满载下被 CPU 抢占拉长 20-250 倍（实测 p99.9 从 0.4ms 涨到
-        //     35ms），子进程单次 fail-fast 请求命中即 ELOCKED 崩溃 exit 1——2026-09-05
-        //     满载 flake 根因，确定性复现：主进程持锁 800ms + 同款子进程脚本 → exit 1；
-        //   - v3（现行）主进程不再触碰锁文件，竞争源从机制上消除，观测与被观测解耦。
-        // 子进程写入在 release 之前、主进程 acquire 后才锁内重读，故拿到的必是 pi-child。
+        // 子进程写入在 release 之前。
         let childStdoutRemainder = ''
         let childSignaledLock = false
         child.stdout?.on('data', (chunk: Buffer) => {
@@ -447,17 +389,25 @@ describe('pi-settings-store', () => {
           throw new Error(`child did not signal LOCKED within 10s${failureContext()}`)
         }
         await waitChildHoldsLock()
-        const t0 = Date.now()
+        // 终态（ADR-0188 file-lock 无等待改写）：持锁窗内的写入请求 fail-fast 抛 ELOCKED
+        // （不 busy-wait 等待），本次写入被放弃、锁内子进程写入不受干扰
+        let lockedErr: unknown
+        try {
+          updateSettingsFields('extension', s => { s.packages = ['p2'] })
+        } catch (e) {
+          lockedErr = e
+        }
+        expect((lockedErr as { code?: string } | undefined)?.code).toBe('ELOCKED')
+        expect(readSettings().defaultModel).toBe('pi-child')
+        expect(readSettings().packages).toEqual(['p1']) // 主进程的放弃写入未落盘
+        // 子进程释放锁后（exit），主进程恢复正常写入
+        const childExit = new Promise<number>((resolve) => child.on('exit', (code) => resolve(code ?? -1)))
+        const exitCode = await childExit
+        expect(exitCode).toBe(0) // 子进程自然释放退出（无锁争用残留）
         updateSettingsFields('extension', s => { s.packages = ['p2'] })
-        const waitedMs = Date.now() - t0
-        // 默认预算 1s 内成功：busy-wait 吃掉子进程持锁的剩余时间，锁内重读到子进程写的值
-        expect(waitedMs).toBeLessThan(1_000)
         const result = readSettings()
         expect(result.defaultModel).toBe('pi-child')
         expect(result.packages).toEqual(['p2'])
-        const childExit = new Promise<number>((resolve) => child.on('exit', (code) => resolve(code ?? -1)))
-        child.kill('SIGKILL') // 子进程可能已退出；确保不悬挂（150ms 后自然退出，此处兜底）
-        await childExit
       })
     })
   })
@@ -1354,81 +1304,6 @@ describe('C5: pi 1.0.0 codemode tool_execution_end shape (real-device sample)', 
 let tmpDir_m2: string
 
 
-// ──────────────────── S3 锁互操作集成探针（真子进程并发） ────────────────────
-
-/** 本测试文件目录（packages/runtime/test）→ 仓库根（向上 3 级）。 */
-const REPO_ROOT_m2 = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
-
-const WORKER_SELF = join(REPO_ROOT_m2, 'scripts', 'probe', 'file-lock-interop-worker-self.ts')
-
-const WORKER_PL = join(REPO_ROOT_m2, 'scripts', 'probe', 'file-lock-interop-worker-pl.mjs')
-
-/** tsx CLI（runtime devDep，pnpm hoisted 布局下经 createRequire 从本文件位置可达）。 */
-const TSX_CLI = createRequire(import.meta.url).resolve('tsx/cli')
-
-
-/** S3 每侧迭代数（设计 §4 S3：各循环 100 次 lock→write→unlock）。 */
-const S3_ITERATIONS = 100
-
-
-interface WorkerResult {  // oe-exempt:20261027:test:
-  code: number
-  stdout: string
-  stderr: string
-}
-
-
-function runWorker(command: string, args: string[], target: string, tag: string): Promise<WorkerResult> {
-  return new Promise((resolveP, rejectP) => {
-    const child = spawn(command, [...args, target, String(S3_ITERATIONS), tag, tmpDir_m2], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString()
-    })
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString()
-    })
-    child.on('error', (err) => rejectP(err))
-    child.on('exit', (code) => resolveP({ code: code ?? -1, stdout, stderr }))
-  })
-}
-
-
-/** 启动屏障放行：等双侧 ready-<tag> 挂牌后写 go（tmpDir_m2 即协调目录，随 afterEach 清理）。 */
-async function releaseGate(): Promise<void> {
-  const deadline = Date.now() + 15_000
-  while (!(existsSync(join(tmpDir_m2, 'ready-a')) && existsSync(join(tmpDir_m2, 'ready-b')))) {
-    if (Date.now() > deadline) throw new Error('启动屏障超时：worker ready 挂牌未收齐')
-    await new Promise((resolve) => setTimeout(resolve, 5))
-  }
-  writeFileSync(join(tmpDir_m2, 'go'), '')
-}
-
-
-interface WorkerReport {  // oe-exempt:20261027:test:
-  worker: string
-  impl: string
-  iterations: number
-  ok: boolean
-  startedAtMs: number
-  endedAtMs: number
-}
-
-
-/** 取 worker stdout 的末行 JSON（结果行）。 */
-function parseWorkerReport(res: WorkerResult, tag: string): WorkerReport {
-  const lines = res.stdout.trim().split('\n')
-  const last = lines[lines.length - 1] ?? ''
-  const report = JSON.parse(last) as WorkerReport
-  expect(report.worker, `worker ${tag} 自报身份`).toBe(tag)
-  expect(report.ok, `worker ${tag} 自报 ok`).toBe(true)
-  expect(report.iterations, `worker ${tag} 完成迭代数`).toBe(S3_ITERATIONS)
-  return report
-}
-
 // wave3 包装：本段原文件顶层语句收进 describe 作用域（顶层 hook 不再外溢到同文件其他来源的用例）
 describe('file-lock-parity', () => {
 beforeEach(async () => {
@@ -1437,18 +1312,6 @@ beforeEach(async () => {
 afterEach(async () => {
   await rm_z2(tmpDir_m2, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
 })
-describe('file-lock parity（runtime ↔ extension sync 孪生实现）', () => {
-  it('两侧默认参数相等（stale / retry 间隔 / 重试预算）', () => {
-    expect(EXT_STALE_MS).toBe(DEFAULT_STALE_MS)
-    expect(EXT_RETRY_DELAY_MS).toBe(DEFAULT_RETRY_DELAY_MS)
-    expect(EXT_RETRY_BUDGET_MS).toBe(DEFAULT_RETRY_BUDGET_MS)
-  })
-
-  it('默认值与登记表锁协议一致（stale 30s / 25ms / 1s，data-source-registry §6）', () => {
-    expect(DEFAULT_STALE_MS).toBe(30_000)
-    expect(DEFAULT_RETRY_DELAY_MS).toBe(25)
-    expect(DEFAULT_RETRY_BUDGET_MS).toBe(1_000)
-  })
 
   it('两侧共用同一 lockfile：一侧持锁时另一侧 fail-fast，释放后可获取', () => {
     const target = join(tmpDir_m2, 'parity-target.json')
@@ -1459,10 +1322,7 @@ describe('file-lock parity（runtime ↔ extension sync 孪生实现）', () => 
       // runtime 持锁期间，extension 侧取同一把锁：压缩预算快速验证 fail-fast
       //（抛 ELOCKED 而非静默拿到——证明两侧 lockfile 路径推导一致，互斥真实成立）
       expect(() =>
-        extWithFileLockSync(target, () => events.push('ext-in-runtime-critical'), {
-          retryDelayMs: 5,
-          retryBudgetMs: 50,
-        }),
+        extWithFileLockSync(target, () => events.push('ext-in-runtime-critical')),
       ).toThrow()
       expect(events).toEqual(['runtime-critical'])
     })
@@ -1472,68 +1332,7 @@ describe('file-lock parity（runtime ↔ extension sync 孪生实现）', () => 
     expect(events).toEqual(['runtime-critical', 'ext-after-release'])
   })
 })
-describe.skipIf(
-  !INTEGRATION_TESTS_ENABLED,
-)(`S3 锁互操作集成探针（runtime 自实现 × proper-lockfile@4.1.2 实库，真子进程并发）${INTEGRATION_TESTS_SKIP_REASON ? `｜skip：${INTEGRATION_TESTS_SKIP_REASON}` : ''}`, () => {
-  // 真实并发：两子进程各 100 轮「ELOCKED 等待 → 临界区 RMW → 释放」。本机实测 ~1s，
-  // CI 慢机余量取 120s（vitest 默认 5s 远不够；无 fake timers——真实定时器是探针语义本体）
-  it(
-    '双方各 100 次 lock→write→unlock 并发竞争：全部成功获取（等待互斥）、最终内容无交错损坏',
-    async () => {
-      const target = join(tmpDir_m2, 's3-target.jsonl')
 
-      // 两个真子进程同时 spawn，启动屏障收齐双侧 ready 后同刻放行（并发非交替，
-      // 且不受 tsx 与纯 node 启动开销不对称影响）
-      const [selfRes, plRes] = await Promise.all([
-        runWorker(process.execPath, [TSX_CLI, WORKER_SELF], target, 'a'),
-        runWorker(process.execPath, [WORKER_PL], target, 'b'),
-        releaseGate(),
-      ])
-
-      // ① 双方全部成功：退出码 0（任何一轮获取失败/校验失败 worker 都会非零退出）
-      expect(selfRes.stderr, '自实现侧 worker stderr（失败现场）').toBe('')
-      expect(selfRes.code, `自实现侧 worker 退出码（stderr: ${selfRes.stderr}）`).toBe(0)
-      expect(plRes.stderr, 'proper-lockfile 侧 worker stderr（失败现场）').toBe('')
-      expect(plRes.code, `proper-lockfile 侧 worker 退出码（stderr: ${plRes.stderr}）`).toBe(0)
-
-      const selfReport = parseWorkerReport(selfRes, 'a')
-      const plReport = parseWorkerReport(plRes, 'b')
-
-      // ② 并发形态检查：两 worker 运行区间真实重叠（防探针退化为先后交替执行仍「绿」）
-      const overlapMs =
-        Math.min(selfReport.endedAtMs, plReport.endedAtMs) - Math.max(selfReport.startedAtMs, plReport.startedAtMs)
-      expect(overlapMs, '两 worker 运行区间重叠毫秒数（并发形态检查）').toBeGreaterThan(0)
-
-      // ③ 最终内容无交错损坏：恰好 200 行、行行成形、每方序号恰为 1..100 顺序完整
-      //（并发 RMW 互斥失效 → 后写者覆盖先写者 → 丢行；撕裂写 → 畸形行——双双在此红）
-      const content = await readFile(target, 'utf-8')
-      const lines = content.split('\n').filter((l) => l !== '')
-      expect(lines.length, '最终总行数（100×2，丢行 = 互斥被破坏）').toBe(S3_ITERATIONS * 2)
-
-      const seqByWorker: Record<string, number[]> = { a: [], b: [] }
-      let alternations = 0
-      let prevWorker = ''
-      for (const line of lines) {
-        const m = /^(a|b):(\d+)$/.exec(line)
-        expect(m, `畸形行（交错损坏痕迹）: ${JSON.stringify(line)}`).not.toBeNull()
-        const worker = m![1]!
-        seqByWorker[worker]!.push(Number(m![2]))
-        if (worker !== prevWorker) alternations++
-        prevWorker = worker
-      }
-      expect(seqByWorker.a, '自实现侧序号序列（须恰为 1..100 顺序完整）').toEqual(
-        Array.from({ length: S3_ITERATIONS }, (_, i) => i + 1),
-      )
-      expect(seqByWorker.b, 'proper-lockfile 侧序号序列（须恰为 1..100 顺序完整）').toEqual(
-        Array.from({ length: S3_ITERATIONS }, (_, i) => i + 1),
-      )
-      // 写序交替 ≥2 = 至少发生过一次持锁权易手（真竞争的直接物证；严格先后跑 = 恒 1）
-      expect(alternations, 'a/b 写序交替次数（真竞争物证）').toBeGreaterThanOrEqual(2)
-    },
-    120_000,
-  )
-})
-});
 
 // ======================================================================
 // ← test/runtime-wiring.test.ts

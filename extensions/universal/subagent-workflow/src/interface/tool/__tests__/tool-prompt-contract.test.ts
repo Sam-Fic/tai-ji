@@ -529,7 +529,7 @@ describe("tool-prompt-contract", () => {
  *  A13 task description "Throws if missing or whitespace-only"（原 REQUIRED for
  *      action:'start' 文本锚——拆分后必填性由 schema required 表达，运行时语义锚保留）
  *  A14 model CASE-SENSITIVE + Resolution order（三层优先级链是功能语义）
- *  A15 idleTimeoutMs 缺省 300000 + TAIJI_SUBAGENT_IDLE_TIMEOUT_MS env 覆盖链
+ *  A15（已随 idleTimeoutMs 参数面删除退役——idle 归档节奏的模型可见参数不再存在）
  *  A16 messageParam.interrupt "Deprecated, no effect" —— 退役参数兼容语义锚
  *      （存量调用防 schema 报错；manage/message schema 兼容语义锚用例承载）
  * 单源化负锚（D1：跨工具通用纪律只在注入段说一次）：
@@ -548,7 +548,7 @@ describe("tool-prompt-contract", () => {
   describe("subagent_start description — 锚词保留清单（D2/D3 契约）", () => {
     it("体量上界：description ≤ 2400 字符（D2 目标区间 subagent 组 ≤8500 的分维护栏）", () => {
       // description 只承载「是什么 + 边界 + 唯一正例」；使用纪律在
-      // promptGuidelines（见 A6/A8-A12），参数功能语义在 schema（A13-A15）。
+      // promptGuidelines（见 A6/A8-A12），参数功能语义在 schema（A13/A14）。
       // 逼近上界时先砍正文冗余，不得砍锚词（A1-A7）。
       expect(START_DESCRIPTION.length).toBeLessThanOrEqual(2400);
     });
@@ -600,15 +600,18 @@ describe("tool-prompt-contract", () => {
       expect(START_DESCRIPTION).not.toMatch(/orchestrator|code-reviewer|context-builder|worker/);
     });
 
-    it("schema 功能语义锚（A13-A15）", () => {
+    it("schema 功能语义锚（A13/A14）", () => {
       // 拒绝条件清单不进 schema 说明（core handler 运行时错误已带恢复动作，D1）；
-      // 必填性 / 优先级链 / 缺省值是 schema 侧唯一文本锚。A13 随拆分改形态：
+      // 必填性 / 优先级链是 schema 侧唯一文本锚。A13 随拆分改形态：
       // required 结构锚由 cross-package-contract 锁，此处锁运行时语义句。
+      // A15（idleTimeoutMs 参数面）已删除：idle 归档节奏的模型可见参数不再存在，
+      // env 覆盖链文案随字段一并移除（负锚锁：schema 源不得复活该参数）。
       const schemaSrc = readFileSync(join(__dirname, "../subagent-tool-schema.ts"), "utf-8");
       expect(schemaSrc).toContain("Throws if missing or whitespace-only");
       expect(schemaSrc).toContain("CASE-SENSITIVE");
       expect(schemaSrc).toContain("Resolution order");
-      expect(schemaSrc).toContain("TAIJI_SUBAGENT_IDLE_TIMEOUT_MS");
+      expect(schemaSrc).not.toContain("TAIJI_SUBAGENT_IDLE_TIMEOUT_MS");
+      expect(schemaSrc).not.toContain("idleTimeoutMs");
     });
 
     it("勿等待纪律单源化（A17）：description/guidelines 零 poll 措辞，规则只在注入段说一次（D1）", () => {
@@ -871,11 +874,11 @@ describe("tool-prompt-contract", () => {
     });
 
     it("跨工具预算/模型/勿等待纪律单源化：工具文案零残留，规则只在注入段说一次（D1）", () => {
-      // tool-declaration-slimming D1 信息单源化：tokens/time「仅用户明确要求才设」、
+      // tool-declaration-slimming D1 信息单源化：tokens「仅用户明确要求才设」、
       // model/thinkingLevel「缺省继承主 agent」与「勿 poll/bash sleep 等待」原在本工具
       // promptGuidelines 与 schema 说明重复陈述，现收敛到 <available_subagents> 注入段
       // （subagent-list-injector.ts SUBAGENT_DISPATCH_SHARED_RULES）说一次——工具声明
-      // 文案零残留 + 注入段含规则。call shape 示例里的 tokens/time 字段展示保留（参数
+      // 文案零残留 + 注入段含规则。call shape 示例里的 tokens 字段展示保留（参数
       // 存在性由 schema 承载，何时设由注入段纪律约束）。
       const runGuidelines = promptGuidelinesText(RUN_SECTION);
       const controlGuidelines = promptGuidelinesText(CONTROL_SECTION);
@@ -887,6 +890,18 @@ describe("tool-prompt-contract", () => {
       expect(SUBAGENT_LIST_INJECTOR_SRC).toContain("busy-wait, or poll");
       expect(SUBAGENT_LIST_INJECTOR_SRC).toContain("explicitly requests a limit");
       expect(SUBAGENT_LIST_INJECTOR_SRC).toContain("inherit the main agent's model");
+    });
+
+    it("time 参数负锚（run 级时间预算机制删除）：schema 与 promptGuidelines 不复活 time 参数", () => {
+      // time 参数已随 workflow run 级时间预算机制删除（WorkflowRunParams 无 time 字段、
+      // 与 assertEntryTokenBudget 同源的 assertEntryTimeBudget 已删）。模型可见文案不得
+      // 再教 time 参数——schema additionalProperties:false 下模型按描述传 time 会被参数
+      // 校验拒绝。锚形态精确化（idleTimeoutMs 负锚同款思路）：tokens/time 锁 Call shape
+      // 行；time: Type. 锁 schema 字段声明形态（不误伤 time_limited done-reason、
+      // creation-time 等无关词）。
+      expect(promptGuidelinesText(RUN_SECTION)).not.toContain("tokens/time");
+      expect(promptGuidelinesText(CONTROL_SECTION)).not.toContain("tokens/time");
+      expect(TOOL_WORKFLOW_SRC).not.toMatch(/\btime:\s*Type\./);
     });
 
     it("model/thinkingLevel 字段说明承载脚本同名参数双通道指引（§3.3.7 残留风险处置说明腿）", () => {

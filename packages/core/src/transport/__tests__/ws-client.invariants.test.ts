@@ -9,31 +9,31 @@
 // 不变量定义修正：旧「本地模式逐字节不变」不可执行（测试无法锁定字节级）→
 //   新「特征测试覆盖的关键行为不变」（下列行为特征 = 特征测试必须锁定的不变量）。
 //
-// ── 5 类不变量定义（按现行实现修正后的口径，[漂移] 标注与原稿的差异）──
+// ── 不变量定义（按现行实现修正后的口径，[漂移] 标注与原稿的差异）──
 // ① 连接状态机：模块级状态机仅允许合法迁移。现行 6 态 disconnected/connecting/connected/
-//   reconnecting/restarting/failed。[漂移] 原稿 4 态 connecting/open/closing/closed 是
+//   restarting/failed/waiting-runtime。[漂移] 原稿 4 态 connecting/open/closing/closed 是
 //   remote-use 期术语；closing 中间态不存在——主动 disconnect 先摘回调再 close，直接置
-//   disconnected。断言点：connecting → connected（onopen，token 模式经 auth.result ok 的
-//   markConnected）可达；主动 disconnect → disconnected 可达且残余回调不干扰行为（行为范围
-//   锁定，不锁摘回调的实现手段——摘回调与 gen 拦截等价）；非法迁移拒绝
-//   （已连接/连接中重复 connect 幂等 no-op，不重置状态不建新 WS）；onclose → disconnected →
-//   scheduleReconnect（closed 是重连起点，原稿语义保留）。
+//   disconnected；reconnecting 态随自动重连机制删除退役。断言点：connecting → connected
+//   （onopen，token 模式经 auth.result ok 的 markConnected）可达；主动 disconnect →
+//   disconnected 可达且残余回调不干扰行为（行为范围锁定，不锁摘回调的实现手段——摘回调与
+//   gen 拦截等价）；非法迁移拒绝（已连接/连接中重复 connect 幂等 no-op，不重置状态不建新
+//   WS）；onclose → failed 终态（自动重连已删，closed 是手动重试的起点）。
 // ② auth 握手：token 模式下 open 后首帧必为 {type:'auth', payload:{token}}，等 auth.result
-//   才进消息处理（握手期业务消息丢弃）。[漂移] 原稿的 buildAuthMessage 共享函数与 auth.ok /
+//   才进消息处理（握手期业务消息丢弃）。应答无客户端计时窗——握手超时由 runtime 侧关闭
+//   未认证连接驱动（onclose → failed）。[漂移] 原稿的 buildAuthMessage 共享函数与 auth.ok /
 //   auth.reject 双类型不存在——现行 wire 协议是单一 auth.result { ok, reason? }
 //   （shared/protocol.ts，runtime 对握手失败 close 1008），auth 帧在 ws-client onopen 内联
-//   构造；原稿「probe 与 ws-client 共用 buildAuthMessage 防漂移」的前提已消失（无独立 probe
-//   模块）。[漂移] 原稿「auth.ok 后订阅 + flush pending」——resubscribeAll / pending rejectAll
+//   构造。[漂移] 原稿「auth.ok 后订阅 + flush pending」——resubscribeAll / pending rejectAll
 //   归 use-connection 编排层（connected false→true watch 驱动），ws-client 层等价行为是
 //   markConnected 置位 + pre-auth 队列 flush（见 ⑥）。[漂移] 原稿「auth.reject 降级：标记
-//   连接不可用 + 壳降级 UI」——现行语义 = close 走重连链（新 token 由 use-connection 的
-//   onRuntimePort 路径刷新），非降级 UI。
-// ③ close code 分流：按 WebSocket close code 分流重连策略。1001 段已激活（remote-use D8）：
+//   连接不可用 + 壳降级 UI」——现行语义 = close 落 failed（新 token 由 use-connection 的
+//   onRuntimePort 路径刷新后显式重连），非降级 UI。
+// ③ close code 分流：按 WebSocket close code 分流。1001 段已激活（remote-use D8）：
 //   现行 ws-client onclose 读 close code，1001（runtime 计划内关停）触发 onGoingAway 文案
-//   信号、重连机制不变；1006 等异常关闭不触发信号，照常退避重连。4001/4xxx「不重连」分流
-//   仍 todo（后续 wave）；分流判定集中在 ws-client 单点（不散落 routeInbound/domain）。
-//   [漂移] 原稿「4001 不重连」与现行 auth 拒绝行为
-//   （close → 重连链，等 token 刷新）语义相反——激活时按现行语义裁决分流表，不照搬原稿。
+//   信号；1006 等异常关闭不触发信号。两类 close 均落 failed 终态（自动重连已删）。
+//   4001/4xxx「不重连」分流仍 todo（后续 wave）；分流判定集中在 ws-client 单点（不散落
+//   routeInbound/domain）。[漂移] 原稿「4001 不重连」与现行 auth 拒绝行为（close → failed，
+//   等 token 刷新后显式重连）语义已趋同——激活时按现行语义裁决分流表，不照搬原稿。
 // ④ seq 回放（可靠投递语义）：session 通道消息带 seq，gap 检测后 reconcile 保证消息不丢。
 //   seq 机制全部在 transport + coordination（seqGate / subscription-state / route-inbound），
 //   不进 domain（domain store 只面对已排序、已去重的消息流）。断言点：gap 检测 → subscribe
@@ -45,43 +45,25 @@
 //   coordination/presence.ts 头注释，防未来误「修复」成入桶）；send.rejected 是 runtime 预检
 //   拒绝的独立反馈类型（shared/protocol.ts D-006，带 clientUuid 回带），消费在
 //   domain/chat/useChat（不进对话流）——原稿断言点已被实现消化，不在本文件 todo。
-// ⑤ 重连退避：异常断开后指数退避重连。断言点：base 1s / ×2 / cap 30s 序列；连续失败达
-//   [漂移] 时长上限 60s（MAX_RECONNECT_DURATION_MS）后停止自动重连置 failed 待用户手动重试
-//   （原稿「次数上限如 10 次」不成立——attempts 上限曾存在但恒被时长上限先触发，死代码已删）；
-//   [漂移] 原稿「jitter 随机抖动防惊群」不存在——现行确定性 delay（单用户自托管单连接，
-//   无惊群形态）；[漂移] 原稿「visibilitychange 触发立即重连 + 重置退避计数」已实现在
-//   transport/use-connection.ts（headless 化经 visibility 端口：切回 visible 且未连接时用
-//   最近 url 主动重连，不干等退避最长 30s），由 use-connection-visibility.test.ts 锁定，
-//   退避簿记归零发生在连接成功（markConnected）而非触发瞬间；退避与连接状态解耦——重连成功
-//   后退避簿记归零（reconnectAttempts=0 + reconnectStartedAt=null），不污染新连接。
-//
-// ⑦ 探活死链检测（probeAlive，remote 形态切前台补位）：connected 态下 probeAlive() 发 ping
-//   + 限时 5s 等任意入站帧——任何入站帧（含超界/坏 JSON 帧，onmessage 首行在检查/parse 之前
-//   清除）都是链路活性证据；超时无帧 → console.warn + close 走既有退避重连链（不动重连簿记，
-//   非 auth 拒绝、抑制位不涉及）。调用方 = use-connection visibility 切前台分支（仅 remote
-//   形态——移动壳无 IPC supervisor 事件补位；mock/local 直接 return，桌面死链检测仍由 TCP 层
-//   + IPC 事件兜底，零回归）。计时器清理点 = 入站帧 / onclose / clearTimers（disconnect、
-//   setFailed），单定时器不变量，超时回调带 gen 检查不误杀换代后的新连接。断言点：超时 close
-//   + 重连可达 / 任意入站帧清除不 close / 非 connected no-op / 重复调用单定时器 / 清理不跨代。
-//   特征测试：ws-client.probe-alive.test.ts + use-connection-probe-alive.test.ts。
+// ⑤ 断连恢复策略（时间机制删除裁决）：连接异常关闭（onclose）→ failed 终态等用户手动重试，
+//   不做心跳保活、探活与自动退避重连。[漂移] 原稿「指数退避 1s/×2/30s 帽 + 60s 时长上限」
+//   已整体删除；[漂移] 原稿「visibilitychange 触发立即重连 + 重置退避计数」保留在
+//   transport/use-connection.ts（切回 visible 且未连接时用最近 url 主动重连，用户在场信号
+//   驱动；无退避计数可言），由 use-connection-visibility.test.ts 锁定；in-flight subscribe
+//   簿记随连接关闭清理（事件驱动，无 TTL）。
 //
 // ── 协议演进纪律 ──
-// - ws-client 从 remote-use 整体迁入 core/transport 后不预拆（auth/seq/RTT 经模块级状态紧
+// - ws-client 从 remote-use 整体迁入 core/transport 后不预拆（auth/seq 经模块级状态紧
 //   耦合，拆分边界按实际耦合测量再定——架构文档 §5.1）。
-// - 新增行为不变量（如未来引入心跳 RTT 测量）时，先扩本注释块规格 + 新增 it.todo，再实现
-//   ——规格先行，本注释块随实现漂移时同步修正。
+// - 新增行为不变量时，先扩本注释块规格 + 新增 it.todo，再实现——规格先行，本注释块随实现
+//   漂移时同步修正。
 //
-// ── 激活范围（F4 → S-33 扩）──
-// 已激活：① 3 条 + ② 3 条 + ③ close code 分流 1001/1006 两条（remote-use D8——onclose 读
-//   close code，1001 触发 onGoingAway 文案信号，重连机制不变）+ ④ gap reconcile 1 条 +
-//   ⑤ 退避/时长上限 2 条（fake 注入 + vi.useFakeTimers）。② 原为 C4 deferred（「auth 能力
-//   迁入 core 时激活」），S-33 复审确认 auth 握手已落地 core ws-client（connect(url,
-//   credentials) 凭据对象签名），defer 理由失效。
+// ── 激活范围 ──
+// 已激活：① 3 条 + ② 3 条 + ③ close code 分流 1001/1006 两条（remote-use D8）+ ④ gap
+//   reconcile 1 条 + ⑤ 断连终态与手动重试 2 条 + ⑥ pre-auth 发送队列 5 条（review
+//   findings-confirmation #3）+ 辅助状态（restarting/failed IPC 驱动）。
 // 保持 todo 范围（C4 deferred）：③ 余 4001/4xxx 两条、④ reconcile 回放断言 + presence
-//   2 条——4001/4xxx「不重连」分流与 presence 能力未落地，激活待后续 wave。⑤ visibility
-//   重连的 todo 已移除（行为已落地 use-connection 并有专门测试，见 ⑤ [漂移] 说明）。
-// 超出原稿范围（规格按实现现状增补）：⑥ pre-auth 发送队列（review findings-confirmation #3）
-//   + 辅助状态（restarting/failed IPC 驱动）+ ⑦ 探活死链检测（remote 切前台补位，见 ⑦）。
+//   2 条——4001/4xxx 分流与 presence 能力未落地，激活待后续 wave。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { providePlatform } from '../../platform/port'
 import type { ClientMessage } from '@taiji/shared'
@@ -130,13 +112,11 @@ function latestFake(): FakeWebSocket {
 
 describe('ws-client 不变量 ① 连接状态机', () => {
   beforeEach(() => {
-    vi.useFakeTimers()
     installTestPlatform()
-    disconnect() // 重置模块级单例状态（上轮残留连接/定时器）
+    disconnect() // 重置模块级单例状态（上轮残留连接）
   })
   afterEach(() => {
     disconnect()
-    vi.useRealTimers()
   })
 
   it('合法迁移 connecting → open 可达（onopen 触发）', () => {
@@ -154,13 +134,12 @@ describe('ws-client 不变量 ① 连接状态机', () => {
     disconnect()
     expect(getState().value).toBe('disconnected')
     // 行为范围锁定（不锁「摘回调」实现手段——「保留回调 + gen 拦截」等价实现行为相同）：
-    // 残余 open/close 触发不改变状态；主动断开不复活重连链（不调度退避、无新 WS）。
+    // 残余 open/close 触发不改变状态；主动断开不触发 failed（编排型拆连语义）
     const f = latestFake()
     f.triggerOpen()
     expect(getState().value).toBe('disconnected')
     f.triggerClose()
     expect(getState().value).toBe('disconnected')
-    vi.advanceTimersByTime(60_000)
     expect(fakes.length).toBe(1)
   })
 
@@ -185,21 +164,16 @@ describe('ws-client 不变量 ① 连接状态机', () => {
 })
 
 describe('ws-client 不变量 ② auth 握手', () => {
-  // S-33 复审激活：auth 握手已落地 core ws-client（onopen 首条 auth / auth.result ok 才
-  // markConnected / reject 走 close 重连链），C4 defer 理由失效。原 todo 前提修正：
+  // auth 握手已落地 core ws-client（onopen 首条 auth / auth.result ok 才 markConnected）。
   // core ws-client 层无「订阅触发 + pending flush」——resubscribeAll / pending.rejectAll
   // 归 use-connection 编排层（connected 状态监听驱动），故按 ws-client 实际行为断言等价语义
   // （connected 置位 + 握手期业务消息丢弃）。
   beforeEach(() => {
-    vi.useFakeTimers()
     installTestPlatform()
-    disconnect() // 重置模块级单例状态（上轮残留连接/定时器）
+    disconnect() // 重置模块级单例状态（上轮残留连接）
   })
   afterEach(() => {
     disconnect()
-    // 凭据经 connect 第二参显式传入（S4 凭据对象），无「undefined=保留上次」残留语义——
-    // 旧 currentToken 复位仪式（connect('mock://reset-token')）随之退役
-    vi.useRealTimers()
   })
 
   it('auth.result ok=true 后进入 connected；握手期业务消息被丢弃（不进消息处理）', () => {
@@ -229,7 +203,7 @@ describe('ws-client 不变量 ② auth 握手', () => {
     off()
   })
 
-  it('auth.result ok=false（reject）后不进入 connected，close 走重连链', () => {
+  it('auth.result ok=false（reject）后不进入 connected，close 落 failed 终态', () => {
     const handler = vi.fn()
     const off = onMessage(handler)
 
@@ -239,7 +213,7 @@ describe('ws-client 不变量 ② auth 握手', () => {
     expect(getState().value).toBe('connecting')
 
     f.triggerMessage(JSON.stringify({ type: 'auth.result', payload: { ok: false } }))
-    // 拒绝：不 markConnected（降级 = 主动断开走重连链，新 token 由上层 connect(url, 新凭据对象) 刷新）
+    // 拒绝：不 markConnected（主动断开，新 token 由上层 connect(url, 新凭据对象) 刷新）
     expect(getState().value).toBe('connecting')
     expect(f.closeCalls).toBe(1)
 
@@ -247,9 +221,9 @@ describe('ws-client 不变量 ② auth 握手', () => {
     f.triggerMessage(JSON.stringify({ type: 'message.chunk', seq: 1, payload: { sessionId: 's1' } }))
     expect(handler).not.toHaveBeenCalled()
 
-    // close 完成（onclose 到达）→ 进入正常重连退避链
+    // close 完成（onclose 到达）→ failed 终态（无自动重连，等显式重连）
     f.triggerClose()
-    expect(getState().value).toBe('reconnecting')
+    expect(getState().value).toBe('failed')
     off()
   })
 
@@ -266,20 +240,19 @@ describe('ws-client 不变量 ② auth 握手', () => {
 })
 
 describe('ws-client 不变量 ③ close code 分流', () => {
-  // [C4 deferred → 1001 段已激活（remote-use D8）] onclose 读 close code：1001（ Going
-  // Away = runtime 计划内关停，connection-manager stop 发给全部存量连接）触发 onGoingAway
-  // 文案信号（消费方 = 移动壳 connection-view「服务重启中」分流），重连退避机制不变；
-  // 其余 close code（1006 异常关闭等）不触发信号，照常退避重连。P6 探针（2026-10-03，
+  // onclose 读 close code：1001（Going Away = runtime 计划内关停，connection-manager stop
+  // 发给全部存量连接）触发 onGoingAway 文案信号（消费方 = 移动壳 connection-view「服务重启中」
+  // 分流）；其余 close code（1006 异常关闭等）不触发信号。两类 close 均落 failed 终态
+  // （自动重连已删，重连由用户手动重试 / 快照推送驱动）。P6 探针（2026-10-03，
   // Playwright Chromium + 与 connection-manager 同调用形态的 ws server）证实浏览器
   // CloseEvent 可读 code/reason。原稿 4001/4xxx「不重连」分流仍属后续迁移 wave：
-  // [漂移] 原稿「4001 不重连」与现行 auth 拒绝行为（close → 重连链，等 use-connection
-  // 刷新 token）语义相反——激活时按现行语义裁决分流表，不照搬原稿。分流判定必须集中在
+  // [漂移] 原稿「4001 不重连」与现行断连行为（close → failed，等 token 刷新后显式重连）
+  // 语义已趋同——激活时按现行语义裁决分流表，不照搬原稿。分流判定必须集中在
   // ws-client 单点（不散落 routeInbound/domain），便于整体锁定行为。
   let goingAwayCount: number
   let removeGoingAway: () => void
 
   beforeEach(() => {
-    vi.useFakeTimers()
     installTestPlatform()
     disconnect()
     goingAwayCount = 0
@@ -291,10 +264,9 @@ describe('ws-client 不变量 ③ close code 分流', () => {
   afterEach(() => {
     removeGoingAway()
     disconnect()
-    vi.useRealTimers()
   })
 
-  it('1001（服务端计划内关停）触发 onGoingAway 信号，重连退避照常（不升级 failed）', () => {
+  it('1001（服务端计划内关停）触发 onGoingAway 信号，close 落 failed 终态', () => {
     connect('ws://test', { auth: 'skip' })
     latestFake().triggerOpen()
     expect(goingAwayCount).toBe(0)
@@ -302,24 +274,19 @@ describe('ws-client 不变量 ③ close code 分流', () => {
     // 合成事件与真实 CloseEvent 对齐（P6 探针实测 {code:1001, reason, wasClean:true}）
     latestFake().triggerClose({ code: 1001, reason: 'Server shutting down', wasClean: true })
     expect(goingAwayCount).toBe(1)
-    // 文案信号不改重连机制：disconnected → 退避（1s）重连照走
-    expect(getState().value).toBe('reconnecting')
-    vi.advanceTimersByTime(1_000)
-    expect(fakes.length).toBe(2)
-    // 重连成功 → 恢复 connected（重启窗口内不升级 failed 全屏）
-    latestFake().triggerOpen()
-    expect(getState().value).toBe('connected')
+    // 文案信号不改终态判定：close → failed（重启窗口内由消费方文案分流，不升级判死语义）
+    expect(getState().value).toBe('failed')
+    expect(fakes.length).toBe(1) // 无自动重连
   })
 
-  it('非 1001（1006 异常关闭）不触发 onGoingAway，照常退避重连', () => {
+  it('非 1001（1006 异常关闭）不触发 onGoingAway，同落 failed 终态', () => {
     connect('ws://test', { auth: 'skip' })
     latestFake().triggerOpen()
 
     latestFake().triggerClose({ code: 1006, reason: '', wasClean: false })
     expect(goingAwayCount).toBe(0)
-    expect(getState().value).toBe('reconnecting')
-    vi.advanceTimersByTime(1_000)
-    expect(fakes.length).toBe(2)
+    expect(getState().value).toBe('failed')
+    expect(fakes.length).toBe(1) // 无自动重连
   })
 
   it.todo('4001（认证失效）不重连，标记需重新认证（壳降级 UI）')
@@ -328,7 +295,6 @@ describe('ws-client 不变量 ③ close code 分流', () => {
 
 describe('ws-client 不变量 ④ seq 回放', () => {
   beforeEach(() => {
-    vi.useFakeTimers()
     installTestPlatform()
     disconnect()
     // 清订阅状态 Map（上轮用例残留 subscribed 标记会干扰 gap 判定，RK3）
@@ -336,7 +302,6 @@ describe('ws-client 不变量 ④ seq 回放', () => {
   })
   afterEach(() => {
     disconnect()
-    vi.useRealTimers()
   })
 
   it('seq gap 检测后发起 reconcile 请求（拉取缺失区间）', async () => {
@@ -386,80 +351,50 @@ describe('ws-client 不变量 ④ seq 回放', () => {
   it.todo('presence 弱可靠通道不入 seq 桶（靠 auth.ok/presence.list 兜底）')
 })
 
-describe('ws-client 不变量 ⑤ 重连退避', () => {
+describe('ws-client 不变量 ⑤ 断连恢复策略（onclose → failed 终态，手动重试接力）', () => {
+  // 时间机制删除裁决：探活 / 心跳 / 指数退避重连已整体删除。断连恢复 = 用户手动重试
+  // （连接屏重试按钮）/ visibility 切前台重连（use-connection，用户在场信号驱动）/
+  // 快照推送（applyTargetSnapshot 断旧连新）三选一，全部事件驱动。
   beforeEach(() => {
-    vi.useFakeTimers()
     installTestPlatform()
     disconnect()
   })
   afterEach(() => {
     disconnect()
-    vi.useRealTimers()
   })
 
-  it('指数退避序列符合 base/cap 参数（1s/2s/4s… capped 30s）', () => {
+  it('连接异常关闭落 failed 终态：时间推进不产生新连接（无自动重连）', () => {
     connect('ws://test', { auth: 'skip' })
     latestFake().triggerOpen()
 
-    // attempt 1：base 1s
     latestFake().triggerClose()
-    expect(getState().value).toBe('reconnecting')
-    vi.advanceTimersByTime(999)
-    expect(fakes.length).toBe(1) // 未到 1s 不重连
-    vi.advanceTimersByTime(1)
-    expect(fakes.length).toBe(2) // 1s 到 → 重连（create 新 fake）
-
-    // attempt 2：×2 = 2s
-    latestFake().triggerClose()
-    vi.advanceTimersByTime(1999)
-    expect(fakes.length).toBe(2)
-    vi.advanceTimersByTime(1)
-    expect(fakes.length).toBe(3)
-
-    // attempt 3：×2 = 4s
-    latestFake().triggerClose()
-    vi.advanceTimersByTime(4000)
-    expect(fakes.length).toBe(4)
-
-    // attempt 5：理论 16s；attempt 6：理论 32s → capped 30s
-    latestFake().triggerClose() // attempt 4 → 8s
-    vi.advanceTimersByTime(8000)
-    expect(fakes.length).toBe(5)
-    latestFake().triggerClose() // attempt 5 → 16s
-    vi.advanceTimersByTime(16_000)
-    expect(fakes.length).toBe(6)
-    latestFake().triggerClose() // attempt 6 → min(32s, 30s) = 30s
-    vi.advanceTimersByTime(29_999)
-    expect(fakes.length).toBe(6) // 未到 30s 不重连（未 cap 则需 32s）
-    vi.advanceTimersByTime(1)
-    expect(fakes.length).toBe(7) // 30s 到 → cap 生效
-  })
-
-  it('连续重连失败达时长上限后停止重连（防无限重试）', () => {
-    connect('ws://test', { auth: 'skip' })
-    latestFake().triggerOpen()
-
-    let guard = 0
-    while (getState().value !== 'failed' && guard < 30) {
-      latestFake().triggerClose()
-      vi.advanceTimersByTime(30_000)
-      guard++
-    }
     expect(getState().value).toBe('failed')
     const lenAtFail = fakes.length
 
-    // 已 failed：后续不再调度重连（无新 WS 创建）
-    vi.advanceTimersByTime(30_000)
+    // failed 终态稳定：无定时器驱动的重连（原 ⑤ 退避序列断言随机制删除退役）
     expect(fakes.length).toBe(lenAtFail)
     expect(getState().value).toBe('failed')
   })
 
-  // [已落地] 原稿 ⑤ todo「visibilitychange（页面可见）触发立即重连，并重置退避计数」已实现
-  // 于 transport/use-connection.ts（headless 化经 visibility 端口，非本文件职责）：切回
-  // visible 且未连接时用最近 url（lastConnectedUrl）主动重连，不干等 ws-client 退避（最长
-  // 30s）；hidden 不触发、已 connected 不触发。由 use-connection-visibility.test.ts 锁定。
-  // [漂移] 原稿「重置退避计数」发生在触发瞬间不成立——退避簿记归零在连接成功（markConnected
-  // 置 reconnectAttempts=0 + reconnectStartedAt=null）。
+  it('failed 后显式 connect（用户手动重试形态）放行重建，连接可达 connected', () => {
+    connect('ws://test', { auth: 'skip' })
+    latestFake().triggerOpen()
+    latestFake().triggerClose()
+    expect(getState().value).toBe('failed')
+    const lenAtFail = fakes.length
+
+    // 重试入口：显式 connect（旧 socket 已 CLOSED → 放行）
+    connect('ws://test', { auth: 'skip' })
+    expect(fakes.length).toBe(lenAtFail + 1)
+    expect(getState().value).toBe('connecting')
+    latestFake().triggerOpen()
+    expect(getState().value).toBe('connected')
+  })
+
+  // [已保留] visibilitychange 切回 visible 触发重连已实现于 transport/use-connection.ts
+  //（headless 化经 visibility 端口，非本文件职责）：切回 visible 且未连接时用最近 url
+  //（lastConnectedUrl）主动重连；hidden 不触发、已 connected 不触发。
+  // 由 use-connection-visibility.test.ts 锁定（无退避计数——自动重连已删）。
 })
 
 describe('ws-client 不变量 ⑥ pre-auth 发送队列', () => {
@@ -468,13 +403,11 @@ describe('ws-client 不变量 ⑥ pre-auth 发送队列', () => {
   // 修复：OPEN 但本代未 auth → 入队；auth ok 后按序 flush；auth 失败 / 连接关闭 → 清队 +
   // onQueueDrop 通知（use-connection 消费方对带 id 消息 reject 对应 pending）。
   beforeEach(() => {
-    vi.useFakeTimers()
     installTestPlatform()
     disconnect()
   })
   afterEach(() => {
     disconnect()
-    vi.useRealTimers()
   })
 
   /** 构造带 id 的 RPC 型 ClientMessage（生产 request.ts command() 同款形状，as 断言体例一致） */
@@ -519,8 +452,8 @@ describe('ws-client 不变量 ⑥ pre-auth 发送队列', () => {
     expect(send(rpcMsg('q-rej'))).toBe(true)
 
     f.triggerMessage(JSON.stringify({ type: 'auth.result', payload: { ok: false } }))
-    f.triggerClose() // auth reject 的 close 到达（走重连链）
-    expect(getState().value).toBe('reconnecting')
+    f.triggerClose() // auth reject 的 close 到达（落 failed 终态）
+    expect(getState().value).toBe('failed')
 
     expect(f.sent).toHaveLength(1) // 只有 auth 帧，队列消息未上 wire
     expect(dropReason).toBe('auth-failed')
@@ -528,7 +461,7 @@ describe('ws-client 不变量 ⑥ pre-auth 发送队列', () => {
     off()
   })
 
-  it('auth 握手超时（close）→ 清队并通知 drop（reason=closed）', () => {
+  it('握手期连接关闭（server close）→ 清队并通知 drop（reason=closed）', () => {
     const droppedIds: string[] = []
     let dropReason: SendQueueDropReason | undefined
     const off = onQueueDrop((msgs, reason) => {
@@ -541,8 +474,8 @@ describe('ws-client 不变量 ⑥ pre-auth 发送队列', () => {
     f.triggerOpen()
     expect(send(rpcMsg('q-timeout'))).toBe(true)
 
-    vi.advanceTimersByTime(5_000) // AUTH_TIMEOUT_MS：客户端先断（短于 runtime 侧 10s）
-    f.triggerClose() // close 事件到达
+    f.triggerClose() // 握手期 server close（如 runtime 侧握手超时关闭未认证连接）→ onclose
+    expect(getState().value).toBe('failed')
     expect(f.sent).toHaveLength(1)
     expect(dropReason).toBe('closed')
     expect(droppedIds).toEqual(['q-timeout'])
@@ -584,26 +517,19 @@ describe('ws-client 不变量 ⑥ pre-auth 发送队列', () => {
 
 describe('ws-client 辅助状态（restarting/failed IPC 驱动）', () => {
   beforeEach(() => {
-    vi.useFakeTimers()
     installTestPlatform()
     disconnect()
   })
   afterEach(() => {
     disconnect()
-    vi.useRealTimers()
   })
 
-  it('setFailed 停止自动重连并置 failed', () => {
+  it('setFailed 置 failed 终态并清空 pre-auth 队列', () => {
     connect('ws://test', { auth: 'skip' })
     latestFake().triggerOpen()
-    latestFake().triggerClose() // 触发重连调度
-    expect(getState().value).toBe('reconnecting')
-
     setFailed()
     expect(getState().value).toBe('failed')
-    const lenAtFail = fakes.length
-    vi.advanceTimersByTime(30_000)
-    expect(fakes.length).toBe(lenAtFail) // 定时器已清，不再重连
+    expect(latestFake().closeCalls).toBe(0) // setFailed 只置态，不 close socket
   })
 
   it('setRestarting 断开当前连接并置 restarting', () => {
@@ -612,7 +538,7 @@ describe('ws-client 辅助状态（restarting/failed IPC 驱动）', () => {
     setRestarting()
     expect(getState().value).toBe('restarting')
     expect(latestFake().closeCalls).toBe(1) // 当前 WS 被主动 close
-    expect(getState().value).not.toBe('disconnected') // 不被重连逻辑覆盖
+    expect(getState().value).not.toBe('disconnected') // 不被断连逻辑覆盖
   })
 
   it('send 在 OPEN 时发送并返回 true，非 OPEN 返回 false', () => {

@@ -81,12 +81,6 @@ export interface RpcSetupContext {
   hookRegistry: Map<string, import('./plugin-types.js').HookEntry[]>
   deps: IPluginServiceDeps
   handleUiRequest: (method: string, params: Record<string, unknown>, pluginId: string) => Promise<unknown>
-  /**
-   * UI 请求到期取消（timeout-plugin-service D2）：Worker 侧语义 timer 到期后经
-   * plugin.ui.uiRequestExpired notification 到达，委托 UiRequestQueue.cancelRequest
-   * （删 pending/排队项 + 撤窗广播 + 放行串行队列）。
-   */
-  cancelUiRequest: (requestId: string) => void
   getDescriptor: (pluginId: string) => import('./plugin-types.js').PluginDescriptor | undefined
   sessionDataStore: SessionDataStore
   /** 活跃 session 解析器（P6：替代模块级全局 _activeSessionCache） */
@@ -373,16 +367,14 @@ export function registerAllRpcMethods(ctx: RpcSetupContext): void {
   registerUiRpcHandlers(rpcServer, {
     // S3-W4：与 plugin.notify 共享同一令牌桶（limiter 上注入，见 registerAllRpcMethods 顶部）
     limiter: notifyLimiter,
-    // meta（D2）：Worker 侧生成的 requestId + effective 超时随 params 透传 UiRequestQueue
-    //（queue 尊重来方 requestId，cancel 通知按它匹配；timeoutMs 供防泄漏兜底取值）
+    // meta：Worker 侧生成的 requestId 随 params 透传 UiRequestQueue
+    //（queue 尊重来方 requestId，去重与响应匹配按它进行）
     showSelect: (title: string, options: string[], pluginId: string, meta?: UiRequestMeta) =>
       ctx.handleUiRequest('select', { title, options, ...(meta ?? {}) }, pluginId) as Promise<string | undefined>,
     showConfirm: (title: string, message: string, pluginId: string, meta?: UiRequestMeta) =>
       ctx.handleUiRequest('confirm', { title, message, ...(meta ?? {}) }, pluginId) as Promise<boolean>,
     showInput: (title: string, _defaultValue: string | undefined, pluginId: string, meta?: UiRequestMeta) =>
       ctx.handleUiRequest('input', { title, ...(meta ?? {}) }, pluginId) as Promise<string | undefined>,
-    // D2 到期取消：Worker 侧 UI_TIMEOUT reject 同刻的 cancel notification → queue 删项/撤窗/放行
-    onUiRequestExpired: (requestId: string) => ctx.cancelUiRequest(requestId),
     notify: async (pluginId: string, level: string, message: string) => {
       // Notify via broadcastFn —— 委托 notify-api 的单一广播真相源（P1 去重）
       // 文案与重构前逐字一致（commit 8dd3034f 父版本）
@@ -477,7 +469,10 @@ export function registerAllRpcMethods(ctx: RpcSetupContext): void {
   // ── Views RPC handlers ───────────────────────────────────
   // views.update → handleViewUpdate（U2 归属二选一：会话域 { sessionId } 定向投递 /
   // 全局域 { mountId, pluginId } 全局广播——校验在 views-api resolveViewScope，
-  // 都缺或都给 → INVALID_VIEW_SCOPE）。
+  // 都缺或都给 → INVALID_VIEW_SCOPE）。composer-tray-protocol D6/M1：会话域推树
+  // 经 views-api 按本插件清单声明资格校验（declaredViews 端口读 plugin-registry
+  // descriptor 缓存的 contributes 副本），命中按声明 placement 盖印入存储——章随
+  // 帧下发（plugin:viewUpdate 广播帧与快照条目同带 placement/meta）。
   // listMountPoints → 读挂载点集合副本（AC10：sync 注入→查询一致）。
   // wave:perf-w08（02 文档 D1-1，R-06）：广播出口为 ctx.publishViewUpdate——
   // bus 已装配时按 sessionId 定向 publish（transient），全局域走全局广播（分流见
@@ -485,11 +480,14 @@ export function registerAllRpcMethods(ctx: RpcSetupContext): void {
   // 广播帧与快照条目携带同一代际（U2 全量替换）。
   registerViewRpcHandlers(rpcServer, {
     mountPoints: ctx.mountPoints,
-    handleViewUpdate: (pluginId: string, viewId: string, guiTree: GuiComponent[], scope: PluginViewScope) => {
+    declaredViews: (pluginId) => ctx.getDescriptor(pluginId)?.contributes?.views ?? [],
+    handleViewUpdate: (pluginId: string, viewId: string, guiTree: GuiComponent[], scope: PluginViewScope, stamp) => {
       const updatedAt = Date.now()
       // 快照写入与广播同源（ADR-0097）：[null] 树 = 清除分区（渲染端 ViewHostStore
       // consumeWidget 清除语义的同构镜像，见 PluginUiSnapshotStore.setView）；返回
       // undefined（清除 / 归属畸形防御丢弃）时不广播——无内容可推。
+      // placement/meta 随批（composer-tray-protocol D1/D7）：章已在 views-api 按声明
+      // 盖印（会话域；全局域 stamp 无 placement），快照条目与广播帧同带——补收回写不丢章。
       const stored = ctx.uiSnapshotStore.setView({
         ...(scope.kind === 'session' ? { sessionId: scope.sessionId } : { mountId: scope.mountId }),
         viewId,
@@ -497,6 +495,8 @@ export function registerAllRpcMethods(ctx: RpcSetupContext): void {
         guiTree,
         updatedAt,
         generation: 0,
+        ...(stamp?.placement !== undefined ? { placement: stamp.placement } : {}),
+        ...(stamp?.meta !== undefined ? { meta: stamp.meta } : {}),
       })
       if (stored !== undefined) {
         ctx.publishViewUpdate(stored)

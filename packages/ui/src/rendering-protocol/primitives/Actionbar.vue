@@ -1,26 +1,3 @@
-<script lang="ts">
-/**
- * pin 门控注入键（tray-panel-interact §3.3 D6）——托盘 widget 面板的「交互态」注入契约：
- * 外壳（TrayPanelSurface → TrayWidgetPanel）provide 当前面板的 pinned 位，交互原语
- * （Actionbar 与 ListTree）读它决定交互项是否降级纯展示（hover 防误触，GL4）。
- *
- * 值语义（缺省方向由 RL4 单测锁定，禁反向——它是既有 scheduler-manager 行为零变化的保证）：
- * - undefined（未注入）= 非托盘挂载位（浮层 ViewHost 的 scheduler-manager 面板等）=
- *   门控不生效，按钮照常渲染可点；
- * - false = 面板 hover 未固定 = 交互项降级纯展示；
- * - true = 已 pin = 正常交互。
- *
- * 响应式契约：pinned 是外壳交互态（点图标即变），宿主必须 provide 响应式源
- * （computed(() => props.pinned) 或 toRef(props, 'pinned')）——provide 只在 setup 执行一次，
- * 静态布尔无法随 pin 翻转更新；inject 不做 ref 自动解包，故原语侧 unref 归一（静态布尔亦兼容）。
- * 键定义在本组件（首个消费方）并经 barrel 导出给壳层 provide——symbol 必须跨包同一实例；
- * ListTree import 同键（同 territory 闭环，不另立 key 文件）。
- */
-import type { InjectionKey, Ref } from 'vue'
-
-export const TRAY_PIN_STATE_KEY: InjectionKey<boolean | Ref<boolean> | undefined> = Symbol('tray-pin-state')
-</script>
-
 <script setup lang="ts">
 /**
  * 操作按钮栏（AP-3）——GuiComponent 协议首个交互原语。
@@ -40,8 +17,8 @@ export const TRAY_PIN_STATE_KEY: InjectionKey<boolean | Ref<boolean> | undefined
  *
  * pin 门控（tray-panel-interact §3.3 D6）：面板未 pin（注入值 false）时交互项整体降级为上述
  * 纯展示 span——hover 浏览零误触（GL4）；已 pin（true）或注入缺省（undefined，非托盘挂载位）
- * 时照常渲染可点按钮。注入键 TRAY_PIN_STATE_KEY 在本文件定义并经 barrel 导出（壳层
- * TrayWidgetPanel provide；ListTree import 同键，同 territory 闭环）。
+ * 时照常渲染可点按钮。注入键 TRAY_PIN_STATE_KEY 与四项接线在 interaction-executors 单点
+ * （ListTree 同构共用），键经 barrel 导出给壳层（TrayWidgetPanel）provide。
  *
  * confirm 两段式（tray-panel-interact §3.3 D5）——插件在 item.confirm 声明确认文案，宿主
  * 按声明渲染状态机（pin 门控生效时交互项已无可点形态，两段式不进入——门控是形态降级的上游）：
@@ -72,16 +49,12 @@ export const TRAY_PIN_STATE_KEY: InjectionKey<boolean | Ref<boolean> | undefined
  * 字段 = 按钮照常渲染、点击即执行**（新增可选字段不 bump PROTOCOL_VERSION，与 action-bar
  * type 本身的降级先例同款；协议侧降级矩阵由 extension-protocol navigation-types.test.ts 锁定）。
  */
-import { computed, inject, onBeforeUnmount, ref, unref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Loader2 } from '@lucide/vue'
 import type { GuiComponentProps } from '@zhushanwen/extension-protocol'
 import Button from '../../primitives/button/Button.vue'
-import { ACTION_EXECUTOR_KEY } from '../action-executor-key'
-import {
-  CONTAINER_NAVIGATION_KEY,
-  VIEW_SCOPE_SESSION_KEY,
-  dispatchTreeInteraction,
-} from '../container-navigation-key'
+import { dispatchTreeInteraction } from '../container-navigation-key'
+import { useInteractionExecutors } from '../interaction-executors'
 
 type ActionBarItem = GuiComponentProps['action-bar']['items'][number]
 
@@ -95,16 +68,8 @@ const props = defineProps<{
   items: GuiComponentProps['action-bar']['items']
 }>()
 
-/** 宿主执行器（壳层 provide）；显式 undefined 默认值 = 抑制「injection not found」
- *  dev 警告（纯展示场景零噪音），缺位退化由下方 warn 承担（TabBar 同款范式）。 */
-const commandExecutor = inject(ACTION_EXECUTOR_KEY, undefined)
-const navigationExecutor = inject(CONTAINER_NAVIGATION_KEY, undefined)
-/** 组件树所属视图的会话（ViewHost provide；无宿主 = undefined → 执行器回退焦点会话）。 */
-const viewSessionId = inject(VIEW_SCOPE_SESSION_KEY, undefined)
-/** pin 门控状态（托盘面板外壳 provide；缺省 undefined = 非托盘挂载位 = 门控不生效，RL4）。 */
-const trayPinState = inject(TRAY_PIN_STATE_KEY, undefined)
-/** 门控生效 = 注入值显式为 false（未 pin）；undefined（缺省）/ true 均不门控。 */
-const pinGated = computed(() => unref(trayPinState) === false)
+/** 四项注入 + pin 门控派生（与 ListTree 同构段单点 = interaction-executors）。 */
+const { commandExecutor, navigationExecutor, viewSessionId, pinGated } = useInteractionExecutors()
 
 const hasCommand = (item: ActionBarItem): boolean =>
   typeof item.commandId === 'string' && item.commandId !== ''

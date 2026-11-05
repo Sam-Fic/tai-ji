@@ -151,7 +151,7 @@ export function getSmartContextConfig(): SmartContextConfigSnapshot {
 
 /** RMW 只覆盖指定字段（锁协议走共享 rmwExtConfigField，与 setRenameModel 结构性对齐）。 */
 function writeSmartContextField(apply: (base: Record<string, unknown>) => void): void {
-  rmwExtConfigField(getSmartContextConfigPath(), {}, smartContextDefaultBase, apply)
+  rmwExtConfigField(getSmartContextConfigPath(), smartContextDefaultBase, apply)
 }
 
 /** 设置智能上下文压缩开关（只覆盖 enabled 字段，保留其他字段）。 */

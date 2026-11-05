@@ -17,9 +17,6 @@
 import { spawnSync } from 'node:child_process'
 import { AMBIENT_ENV_NAMES } from '@taiji/shared'
 
-/** spawnSync 超时（ms）——用户 shell 配置异常时防卡死 */
-const SHELL_ENV_TIMEOUT = 5000
-
 /** 合法环境变量名：字母/下划线开头，后跟字母/数字/下划线 */
 const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
 
@@ -30,7 +27,7 @@ const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
  * - PATH：只在 shell PATH 比当前 PATH 更长时覆盖（既有安全策略不变）
  * - ambient 变量（AMBIENT_ENV_NAMES）：shell 有值且当前未设置/空 → 补齐；当前已有值 → 保留（不覆盖用户显式配置）
  *
- * 任何失败（无 $SHELL、spawnSync 失败、超时）均不修改 process.env（fail-safe）。
+ * 任何失败（无 $SHELL、spawnSync 失败）均不修改 process.env（fail-safe）。
  */
 export function fixShellEnv(): void {
   // Windows GUI 应用从注册表读取 PATH，通常完整，跳过
@@ -40,11 +37,10 @@ export function fixShellEnv(): void {
   if (!shell) return
 
   const result = spawnSync(shell, ['-ilc', 'env'], {
-    timeout: SHELL_ENV_TIMEOUT,
     encoding: 'utf8',
   })
 
-  // 非零退出、超时、无输出 → 不修改
+  // 非零退出、无输出 → 不修改
   if (result.status !== 0 || !result.stdout) return
 
   const shellEnv = parseEnvOutput(result.stdout)
