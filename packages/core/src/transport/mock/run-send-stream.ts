@@ -62,7 +62,7 @@ const TABLE_TRIGGER_RE = /md[-_ ]?table/i;
  *  的字体跟随断言取数。哨兵词同样是 ASCII 形态，避免自然语言误触发。 */
 const MERMAID_REPLY = ["```mermaid", "graph TD", "  A[起点] --> B[终点]", "```"].join("\n");
 
-/** 'md-mermaid' 哨兵词判定（须先于 md-table 判定——两者都以 md- 开头） */
+/** 'md-mermaid' 哨兵词判定（与 md-table 判定互不重叠——两正则尾部字面量不同，防御性先判） */
 const MERMAID_TRIGGER_RE = /md[-_ ]?mermaid/i;
 
 /** 按字符/词切分，证明逐块推送 —— 仅本文件流式阶段 helper 使用 */

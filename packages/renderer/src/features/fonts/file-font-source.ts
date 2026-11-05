@@ -51,7 +51,12 @@ export function suggestFontFamily(path: string): string {
 }
 
 /**
- * 保证导入家族名唯一（AX1）。
+ * 保证导入家族名唯一（AX1，同名判定按 CSS 匹配语义 lowercase 归一）。
+ *
+ * CSS font-family 匹配按规范大小写不敏感：字符串级不同（'Maple Mono' vs 'maple mono'）
+ * 在渲染层会解析到同一匹配族，故占名判定一律 lowercase 归一比对，否则 AX1 的
+ * 「列表里的每个字符串 → 唯一字体」在大小写变体边缘被击穿；后缀仍拼接在用户原名上
+ * （列表字符串保持用户确认的形态）。
  *
  * 系统清单为空可能意味着权限被拒，不能据此认定“没有同名系统字体”，故一律加后缀；
  * 非空时仅在实际撞名时加后缀。随后再避开已有导入项，保证文件来源内部也不重名。
@@ -62,15 +67,17 @@ export function resolveImportedFamily(
   importedFamilies: readonly string[] = [],
 ): string {
   const base = requestedFamily.trim() || 'Imported Font'
-  const occupied = new Set([...systemFamilies, ...importedFamilies])
-  const mustSuffix = systemFamilies.length === 0 || occupied.has(base)
+  const occupied = new Set(
+    [...systemFamilies, ...importedFamilies].map((family) => family.toLowerCase()),
+  )
+  const mustSuffix = systemFamilies.length === 0 || occupied.has(base.toLowerCase())
   if (!mustSuffix) return base
 
   const first = `${base} ${IMPORTED_SUFFIX}`
-  if (!occupied.has(first)) return first
+  if (!occupied.has(first.toLowerCase())) return first
   for (let index = 2; ; index += 1) {
     const candidate = `${base} ${IMPORTED_SUFFIX} ${index}`
-    if (!occupied.has(candidate)) return candidate
+    if (!occupied.has(candidate.toLowerCase())) return candidate
   }
 }
 

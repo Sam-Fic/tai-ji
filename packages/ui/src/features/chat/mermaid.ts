@@ -10,8 +10,9 @@
  *
  * 主题机制关键差异（HISTORICAL）：taiji 是应用内 [data-theme] 切换，非系统 prefers-color-scheme。
  * mermaid 的 themeVariables 在 initialize 时固化（颜色与字体 bake 进 SVG），主题或字体变化都必须
- * 重新 initialize + 重渲染。故本模块导出 resolveMermaidThemeVariables + renderMermaid，
- * 供 MermaidRenderer.vue 在任一权威值变化时重新调用。
+ * 重新 initialize + 重渲染。故本模块导出 resolveMermaidThemeVariables + renderMermaid
+ * + resolveMermaidFontFamily（G12 联合初始化判据的字体侧取值器，MermaidRenderer.vue
+ * 计算值比较去抖消费），供 MermaidRenderer.vue 在任一权威值变化时重新调用。
  *
  * 主题色映射：色值取自 style.css :root CSS 变量，
  * 详见 resolveMermaidThemeVariables() 内逐项注释（primary/secondary/tertiary/noteBkg/text 等全覆盖）。

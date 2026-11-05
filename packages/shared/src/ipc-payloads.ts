@@ -407,12 +407,32 @@ export interface ReadFontBytesPayload {
 }
 
 /**
+ * 重放失效的两类已知 reason 字面量（main REASON_* 的单点定义）。
+ *
+ * main（gateway/font-handlers）与 UI（SettingsFontsSection statusFor）双侧 import 本常量——
+ * 字面量改写只发生在这里，不存在「UI 侧自备同文文案」的静默漂移通道。
+ */
+export const FONT_READ_REASON_NOT_FOUND = '源文件已不存在'
+export const FONT_READ_REASON_UNREADABLE = '无法读取字体文件，可能已损坏'
+
+/**
  * `font:read-bytes` 返回（renderer → main → renderer）。
  *
  * - `ok: true`  → `bytes` 携带字体文件字节，renderer 直接 `new FontFace(family, bytes)`
  * - `ok: false` → `reason` 是一句**人可读的失败原因**（如「不是受支持的字体文件」/
- *   「文件过大」/「无法读取，可能已损坏」），**不是错误码枚举**——它直接用于导入失败
- *   提示与重放失效标注文案，消费方无需维护码 → 文案映射表。
+ *   「文件过大」/「无法读取，可能已损坏」），**不是错误码枚举**——出现本地化需求时才
+ *   引入错误码枚举 + locale 映射，v1 不做（正是本契约明示规避的复杂度）。
+ *
+ * `reason` 的消费形态（双通道，font-system 终态同步登记）：
+ * - **导入失败提示**：直接显示 reason 原文——`importFont` 把 reason 包进 Error 抛出，
+ *   调用方 toast 展示，不经映射。
+ * - **重放失效标注**：`SettingsFontsSection.statusFor` 对两类已知 reason（上方导出的
+ *   `FONT_READ_REASON_*` 常量，双侧 import）做 locale 映射；未命中的 reason 经
+ *   `restoreFailed('{reason}')` 透传原文。**main 新增 reason 时须同步扩展该映射**，
+ *   否则 en-US locale 用户会看到中文原文（zh 用户无感知、检查全绿的静默退化）。
+ *
+ * v1 的 reason 为**非本地化中文**（与设计 §3.1 失败路径表文案形态一致，IPC 两侧同源 zh
+ * 字面量；renderer 侧 preload 缺失时的降级文案同理），不维护码 → 文案映射表。
  */
 export type ReadFontBytesResult =
   | { ok: true; bytes: Uint8Array }

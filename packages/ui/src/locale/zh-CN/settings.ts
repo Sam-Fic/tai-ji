@@ -67,6 +67,7 @@ export default {
     sourceMissing: '（源文件已不存在）',
     sourceUnreadable: '（无法读取，可能已损坏）',
     restoreFailed: '（{reason}）',
+    slotValueMissing: '（未找到，已回落到系统默认）',
     importedHint: '已导入字体',
     importTitle: '导入字体文件',
     importFamilyLabel: '字体名称',

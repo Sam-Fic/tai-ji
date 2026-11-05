@@ -138,7 +138,7 @@
               :data-testid="`settings-font-copy-${item.id}`"
               @click="copy(t(item.valueKey))"
             >
-              {{ t('settings.fonts.copy') }}
+              {{ copied === t(item.valueKey) ? t('settings.fonts.copied') : t('settings.fonts.copy') }}
             </Button>
           </div>
         </div>
@@ -198,10 +198,12 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Upload } from '@lucide/vue'
+import { FONT_READ_REASON_NOT_FOUND, FONT_READ_REASON_UNREADABLE } from '@taiji/shared'
 import { Button, Input, Popover, PopoverContent, PopoverTriggerButton } from '@taiji/ui'
 import type { FontLibraryEntry } from '@taiji/core'
 import GroupCard from './common/GroupCard.vue'
 import { FONT_INSTALL_GUIDE } from './font-install-guide'
+import { useCopy } from '../chat/composables/useCopy'
 
 type FontSlot = 'ui' | 'mono' | 'terminal'
 interface FontOption {
@@ -235,6 +237,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const { copied, copy: writeClipboard } = useCopy()
 
 const SLOTS = [
   { key: 'ui', labelKey: 'settings.fonts.ui', descKey: 'settings.fonts.uiDesc' },
@@ -272,12 +275,30 @@ function selectedFamily(slot: FontSlot): string {
   return props.terminalFamily ?? ''
 }
 
+/**
+ * 已选值不在来源层列表（D9/V4 失效标注的成员资格判据）。
+ *
+ * - 重放未完成时一律 false（抑制失败标注）：导入字体尚未注册进 entries，此时判成员
+ *   资格会假阴性——与 statusFor 的 restoring 优先语义一致，防启动闪一次错误告警。
+ * - 比对大小写不敏感（AX1 归一口径）：CSS font-family 匹配按规范不区分大小写，
+ *   列表里有大小写变体即渲染仍能命中，不该标「未找到」。
+ */
+function isSlotValueMissing(slot: FontSlot): boolean {
+  if (props.replayState !== 'done') return false
+  const family = selectedFamily(slot)
+  if (!family) return false
+  return !props.entries.some((entry) => entry.family.toLowerCase() === family.toLowerCase())
+}
+
 function defaultLabel(slot: FontSlot): string {
   return t(slot === 'terminal' ? 'settings.fonts.defaultTerminal' : 'settings.fonts.default')
 }
 
 function selectedLabel(slot: FontSlot): string {
-  return selectedFamily(slot) || defaultLabel(slot)
+  const family = selectedFamily(slot)
+  if (!family) return defaultLabel(slot)
+  // D9/V4：失效值旁加「未找到」标注，不修改用户存储的值（重装字体后自动恢复）。
+  return isSlotValueMissing(slot) ? `${family}${t('settings.fonts.slotValueMissing')}` : family
 }
 
 function onPopoverOpen(slot: FontSlot, open: boolean): void {
@@ -308,18 +329,16 @@ function confirmImport(): void {
 function statusFor(family: string): string {
   if (props.replayState !== 'done') return t('settings.fonts.restoring')
   const reason = props.replayFailures[family]
-  // main 的 ReadFontBytesResult 当前以人读 reason 为契约；两类重放失败在此转成双侧 locale。
-  if (reason === '源文件已不存在') return t('settings.fonts.sourceMissing')
-  if (reason === '无法读取字体文件，可能已损坏') return t('settings.fonts.sourceUnreadable')
+  // 重放失效的两类已知 reason 走双侧共享常量（@taiji/shared FONT_READ_REASON_*，
+  // 与 main 侧同源）转 locale；未命中映射的 reason 经 restoreFailed 透传原文——
+  // main 新增 reason 时须同步扩展此处映射，否则 en-US 用户看到中文原文。
+  if (reason === FONT_READ_REASON_NOT_FOUND) return t('settings.fonts.sourceMissing')
+  if (reason === FONT_READ_REASON_UNREADABLE) return t('settings.fonts.sourceUnreadable')
   return reason ? t('settings.fonts.restoreFailed', { reason }) : ''
 }
 
-async function copy(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text)
-  } catch (error) {
-    // 复制失败不阻断（用户可手动选中），但保留可见日志，不静默吞错。
-    console.warn('[fonts] clipboard copy failed', error)
-  }
+/** 安装指引复制：反馈态走全仓 useCopy 范式（copied 1200ms 回落，文案 settings.fonts.copied）。 */
+function copy(text: string): void {
+  writeClipboard(text, text)
 }
 </script>

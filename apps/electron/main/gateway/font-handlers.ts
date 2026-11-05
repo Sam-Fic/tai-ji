@@ -11,6 +11,8 @@ import { homedir } from 'node:os'
 import { extname, isAbsolute, join, relative, resolve } from 'node:path'
 import {
   READ_FONT_BYTES,
+  FONT_READ_REASON_NOT_FOUND,
+  FONT_READ_REASON_UNREADABLE,
   type ReadFontBytesPayload,
   type ReadFontBytesResult,
 } from '@taiji/shared'
@@ -34,8 +36,9 @@ const REASON_UNSUPPORTED = '不是受支持的字体文件（仅支持 ttf/otf/w
 const REASON_TOO_LARGE = '字体文件超过 20MB 上限'
 const REASON_MAGIC = '文件内容不是有效的字体格式'
 const REASON_FORBIDDEN = '字体文件位于凭据保护目录，已拒绝读取'
-const REASON_UNREADABLE = '无法读取字体文件，可能已损坏'
-const REASON_NOT_FOUND = '源文件已不存在'
+// REASON_UNREADABLE / REASON_NOT_FOUND 上移 @taiji/shared（FONT_READ_REASON_*，ipc-payloads.ts）：
+// 这两类会出现在启动重放失败里，UI 的 statusFor 需按同文字面量做 locale 映射——常量双侧 import，
+// 消除「UI 自备同文文案」的漂移通道；其余 reason 单消费方，留本模块私有。
 const REASON_INVALID_PATH = '字体文件路径无效'
 
 export type FontValidationResult = { ok: true } | { ok: false; reason: string }
@@ -108,7 +111,7 @@ function hasErrorCode(error: unknown, code: string): boolean {
 }
 
 function readFailure(error: unknown): ReadFontBytesResult {
-  return { ok: false, reason: hasErrorCode(error, 'ENOENT') ? REASON_NOT_FOUND : REASON_UNREADABLE }
+  return { ok: false, reason: hasErrorCode(error, 'ENOENT') ? FONT_READ_REASON_NOT_FOUND : FONT_READ_REASON_UNREADABLE }
 }
 
 /** 可注入 IO 的读取实现；纯校验与读取顺序均可脱离 Electron 真机测试。 */
@@ -138,7 +141,7 @@ export async function readFontFileBytes(
     return readFailure(error)
   }
   mainLogger.info('[main] font read-bytes stat', { path: actualPath, byteSize: metadata.size })
-  if (!metadata.isFile()) return { ok: false, reason: REASON_UNREADABLE }
+  if (!metadata.isFile()) return { ok: false, reason: FONT_READ_REASON_UNREADABLE }
   if (metadata.size > MAX_FONT_FILE_BYTES) return { ok: false, reason: REASON_TOO_LARGE }
 
   let bytes: Uint8Array

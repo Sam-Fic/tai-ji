@@ -19,9 +19,26 @@ import { WS_READY_STATE } from '../../platform/port'
 
 // ── createMockPlatform（platform 注入层 mock）──────────────────────────
 
-/** 最小 in-memory KVStorage 实现（get 不存在返回 null） */
+/**
+ * 最小 in-memory KVStorage 实现（get 不存在返回 null）。
+ *
+ * 创建时从 localStorage 播种一次（**读路径保真**）：桌面 platform 的 storage 是
+ * LocalStorageAdapter（boot 读直连 localStorage），纯内存 Map 会让「重启重放」类断言
+ * （font-system RL7：seed localStorage → reload → 生产 boot 链读回）在 mock 层无法表达
+ * 给定条件。播种只发生在 create 时刻、只读不写——写仍是内存态（reload 即失，与桌面
+ * 持久化写不同；本 mock 只承诺 boot 读路径与桌面同形）。
+ */
 function createInMemoryStorage(): KVStorage {
   const map = new Map<string, string>()
+  // core 包 lint 禁 localStorage 裸标识符（no-restricted-globals）；经 globalThis 属性访问，
+  // 非 DOM 环境（部分单测）为 undefined，静默跳过播种回落纯内存语义
+  const seedSource = (globalThis as { localStorage?: Storage }).localStorage
+  if (seedSource) {
+    for (let index = 0; index < seedSource.length; index += 1) {
+      const key = seedSource.key(index)
+      if (key !== null) map.set(key, seedSource.getItem(key) ?? '')
+    }
+  }
   return {
     async get(key) {
       return map.has(key) ? (map.get(key) as string) : null

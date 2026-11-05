@@ -2,11 +2,13 @@
  * mermaid.ts 合并测试产物（round5-g ui idx6）。
  *
  * 来源节（每来源文件包以基名命名的 describe）：
- *   mermaid-render-cleanup / mermaid-theme-sync
+ *   mermaid-render-cleanup / mermaid-theme-sync / mermaid-font-sync
  *
  * mock 策略：仅 render-cleanup 节 mock 'mermaid' 库模块（renderMermaid 动态 import('mermaid')
  * 取 default 单例；vi.hoisted 共享 initialize/render 间谍）。theme-sync 节只测
  * resolveMermaidThemeVariables 纯函数、不触 mermaid 库——文件级 mock 对其惰性。
+ * font-sync 节（RL11 随码 L1 载体，u-m3 新增）复用同一文件级 mermaid mock：
+ * 断言「主题 + 字体」联合 initialize 判据与 --font-mono 计算值读取/回落。
  *
  * 运行：cd packages/ui && npx vitest run src/features/chat/__tests__/mermaid.test.ts
  */

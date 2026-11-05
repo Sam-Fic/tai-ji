@@ -13,7 +13,16 @@
  *        默认态就丢到只剩 PingFang SC）
  * - RL1b 槽位写入后 computed 首家族 = 所选值；`removeProperty` 后回完整栈
  * - RL6b 失效态：注入不存在的字体名 → 文字仍渲染且 computed 含 fallback 家族
- * - V8   宿主表面不变：字体操作不动兄弟字段与 terminal.json
+ * - RL13 渲染侧（AX1 L4）：真 IPC 读真实字体文件 + FontFace 注册（importFont 去对话框的
+ *        同款原语链）后，导入 face 不占用系统名字符串——选回系统名渲染宽度回基准、
+ *        选导入名宽度不同（face 真生效）；小写系统名渲染同一族（CSS 匹配大小写
+ *        不敏感，F1-19 归一口径的真机复演）
+ * - RL7  重启重放：seed fontLibrary → reload → 等 replayState==='done' 代理信号
+ *        （document.fonts 含重放 family）——有效项重新注册；失败项降级标注
+ *        （库行「源文件已不存在」）+ 槽位失效值标注（「未找到，已回落到系统默认」，V4）
+ * - V8   宿主表面不变：经生产链驱动字体提交（设置页下拉 → emit → store.setSystem）
+ *        + reload，对照四表面（localStorage 兄弟字段 / terminal.json 文件 /
+ *        document.fonts.size / 会话状态）——不再自证式写读 localStorage
  *
  * 运行：env -u ELECTRON_RUN_AS_NODE npx playwright test e2e/font-custom-render.spec.ts --project=electron
  * （`ELECTRON_RUN_AS_NODE` 透传会让 electron 退化成裸 node，见 docs/TROUBLESHOOTING.md）
@@ -24,11 +33,76 @@
  */
 import { test, expect } from './fixtures/launch-app'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const RENDERER_DIST = path.join(REPO_ROOT, 'apps', 'electron', 'renderer', 'dist')
+
+/** 建临时 fixture 目录（测试自建自删，禁碰真实数据目录）。 */
+function makeTmpDir(label: string): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), `taiji-font-e2e-${label}-`))
+}
+
+/** 真实字体文件（@fontsource-variable/noto-sans-sc，devDependency 在场即存在）；woff2 过 main 三关。
+ *  注意：fontsource 分片子集不含基础拉丁字形——只用于「注册重放」类断言（RL7），不能用于宽度对比。 */
+function realFontFile(dir: string): string {
+  const source = path.join(
+    REPO_ROOT, 'node_modules', '@fontsource-variable', 'noto-sans-sc', 'files', 'noto-sans-sc-100-wght-normal.woff2',
+  )
+  const target = path.join(dir, 'probe-font.woff2')
+  fs.copyFileSync(source, target)
+  return target
+}
+
+/** latin 全覆盖的真实系统字体文件（macOS 全系预装；与 Menlo 度量可区分，用于宽度对比）。 */
+function systemFontFile(dir: string): string {
+  const source = '/System/Library/Fonts/Supplemental/Arial.ttf'
+  if (!fs.existsSync(source)) {
+    throw new Error(`找不到系统字体 ${source}——本 spec 的宽度对比依赖一份 latin 全覆盖的真实字体文件`)
+  }
+  const target = path.join(dir, 'probe-font.ttf')
+  fs.copyFileSync(source, target)
+  return target
+}
+
+/**
+ * 激活 fixture session + 打开设置 → 外观（sidebar-settings 直达 appearance 分区），
+ * 等字体卡片可交互。会话先行激活：V8 的「会话状态」表面断言需要同一会话在场。
+ */
+async function openAppearanceFonts(page: import('@playwright/test').Page): Promise<void> {
+  await expect(page.getByText('API 性能优化')).toBeVisible({ timeout: 15_000 })
+  await page.getByText('API 性能优化').click()
+  await expect(page.getByTestId('composer-box')).toBeVisible({ timeout: 10_000 })
+  await page.getByTestId('sidebar-settings').click()
+  await expect(page.getByTestId('settings-font-import')).toBeVisible({ timeout: 15_000 })
+}
+
+/**
+ * 经生产链选一个字体：点开槽位下拉 → 点首个选项。
+ * 走 SettingsFontsSection emit → SettingsModal onSystemUpdate → store.setSystem 真实提交链
+ * （terminal 行走 AppearancePage → config.setTerminal 同生产链）。返回所选家族名；
+ * 等待触发器文案更新（= 写入落盘 + store 回流完成的代理信号，非固定 sleep）。
+ */
+async function selectFirstFontOption(
+  page: import('@playwright/test').Page,
+  slot: 'ui' | 'mono' | 'terminal',
+): Promise<string> {
+  await page.getByTestId(`settings-font-${slot}-trigger`).click()
+  const options = page.locator(`[data-testid^="settings-font-${slot}-option-"]`)
+  const first = options.first()
+  try {
+    await first.waitFor({ state: 'visible', timeout: 15_000 })
+  } catch {
+    throw new Error(`字体下拉无可选选项（slot=${slot}）——queryLocalFonts 返回空？本 spec 依赖真机系统字体清单`)
+  }
+  const testid = (await first.getAttribute('data-testid'))!
+  const family = testid.slice(`settings-font-${slot}-option-`.length)
+  await first.click()
+  await expect(page.getByTestId(`settings-font-${slot}-trigger`)).toContainText(family, { timeout: 15_000 })
+  return family
+}
 
 test.describe('字体渲染（font-system）', () => {
   test('RL3 构建产物里 font-mono 工具类解析到 var(--font-mono)', async () => {
@@ -128,50 +202,206 @@ test.describe('字体渲染（font-system）', () => {
     })
   })
 
-  test('V8 字体操作不清空兄弟字段（宿主表面不变）', async ({ page }) => {
-    const readSettings = () =>
-      page.evaluate(() => {
-        const raw = localStorage.getItem('taiji:system-settings')
-        return raw ? (JSON.parse(raw) as Record<string, unknown>) : null
+  test('RL13 渲染侧：导入 face 不占系统名字符串，系统字体仍可选回（AX1 L4）', async ({ page }) => {
+    const dir = makeTmpDir('rl13')
+    try {
+      // 真机导入的等价驱动登记：FileFontSource.importFont = pickFile（原生对话框，无法自动化）
+      // → font:read-bytes（真 IPC + main 三关校验）→ new FontFace → document.fonts.add。
+      // 除对话框外同一条生产原语链，此处直驱同款原语——不是 mock 注入。
+      const fontPath = systemFontFile(dir)
+      const IMPORTED = 'RL13 Imported Face'
+      const registered = await page.evaluate(async ({ p, fam }) => {
+        const api = (window as unknown as {
+          electronAPI?: { readFontBytes?: (path: string) => Promise<{ ok: boolean; reason?: string; bytes?: Uint8Array }> }
+        }).electronAPI
+        if (!api?.readFontBytes) return { ok: false as const, reason: 'preload 未暴露 readFontBytes' }
+        const res = await api.readFontBytes(p)
+        if (!res.ok) return { ok: false as const, reason: res.reason ?? 'unknown' }
+        const face = new FontFace(fam, res.bytes!)
+        document.fonts.add(face)
+        await face.load()
+        return { ok: true as const }
+      }, { p: fontPath, fam: IMPORTED })
+      expect(registered, `真 IPC 读真实字体文件失败：${'reason' in registered ? registered.reason : ''}`).toEqual({ ok: true })
+
+      const setSlot = (value: string | null) =>
+        page.evaluate((v) => {
+          if (v === null) document.documentElement.style.removeProperty('--font-mono-ui')
+          else document.documentElement.style.setProperty('--font-mono-ui', v)
+        }, value)
+      const probe = () =>
+        page.evaluate(() => {
+          let el = document.getElementById('__rl13_probe__') as HTMLElement | null
+          if (!el) {
+            el = document.createElement('div')
+            el.id = '__rl13_probe__'
+            el.style.fontFamily = 'var(--font-mono)'
+            el.style.position = 'absolute'
+            el.textContent = 'mmmmmmmmmmiiiiiiiiiiWWWWWWWWWW'
+            document.body.appendChild(el)
+          }
+          return { width: el.getBoundingClientRect().width, font: getComputedStyle(el).fontFamily }
+        })
+
+      const SYSTEM = 'Menlo'
+      await setSlot(`'${SYSTEM}'`)
+      const systemProbe = await probe()
+      expect(systemProbe.font.toLowerCase()).toContain('menlo')
+
+      // 选导入名：导入 face 真生效（computed 含导入名，宽度偏离系统基准）
+      await setSlot(`'${IMPORTED}'`)
+      await expect
+        .poll(async () => (await probe()).font.toLowerCase().includes(IMPORTED.toLowerCase()), { timeout: 10_000 })
+        .toBe(true)
+      const importedWidth = (await probe()).width
+      expect(importedWidth).not.toBe(systemProbe.width)
+
+      // AX1 渲染层：切回系统原名 → 宽度回到系统基准（导入 face 不占用系统名字符串）
+      await setSlot(`'${SYSTEM}'`)
+      await expect.poll(async () => (await probe()).width, { timeout: 10_000 }).toBe(systemProbe.width)
+
+      // F1-19 归一口径真机复演：小写系统名 → CSS 匹配大小写不敏感 → 同族同宽度
+      // （这正是 resolveImportedFamily 占名判定必须 lowercase 归一的依据）
+      await setSlot(`'${SYSTEM.toLowerCase()}'`)
+      await expect.poll(async () => (await probe()).width, { timeout: 10_000 }).toBe(systemProbe.width)
+
+      await setSlot(null)
+      await page.evaluate((fam) => {
+        for (const face of [...document.fonts]) {
+          if (face.family === fam) document.fonts.delete(face)
+        }
+        document.getElementById('__rl13_probe__')?.remove()
+      }, IMPORTED)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
+  })
+
+  test('RL7 重启重放：fontLibrary 重启后重新注册，失败项降级 + 槽位失效值标注（V4/V5）', async ({ page }) => {
+    const dir = makeTmpDir('rl7')
+    try {
+      const validFont = realFontFile(dir)
+      const ghostPath = path.join(dir, 'ghost.ttf') // 永不创建 → ENOENT → reason=源文件已不存在
+
+      const VALID = 'RL7 Replay Font'
+      const MISSING = 'RL7 Missing Font'
+      const V4_GHOST = 'V4NoSuchSystemFontProbe'
+
+      // seed = 重启重放的给定条件：fontLibrary 是既有持久化值，经生产 boot 链读取；
+      // fonts.mono 指向系统清单中不存在的家族构成 V4 失效值场景（存储值不被清空）。
+      await page.evaluate(({ key, payload }) => {
+        localStorage.setItem(key, JSON.stringify(payload))
+      }, {
+        key: 'taiji:system-settings',
+        payload: {
+          theme: 'dark',
+          themePreset: 'taiji',
+          fontSize: 'medium',
+          fontScales: { sidebar: 'medium', chat: 'medium', drawer: 'medium' },
+          locale: 'zh-CN',
+          fonts: { mono: V4_GHOST },
+          fontLibrary: [
+            { family: MISSING, path: ghostPath, addedAt: 200 },
+            { family: VALID, path: validFont, addedAt: 100 },
+          ],
+        },
       })
 
-    let before = await readSettings()
+      await page.reload()
 
-    // mock 构建下设置链可能尚未落盘（getSystem 走 core domain storage，mock 层不预写）。
-    // 这不算「断言前提不成立」——先经由真实写入链落一次盘，再验兄弟字段不被清空，
-    // 这样断言的仍然是「字体写入不会毁掉别的字段」这个真实事实，不依赖环境初始状态。
-    if (!before) {
-      await page.evaluate(() => {
-        localStorage.setItem(
-          'taiji:system-settings',
-          JSON.stringify({
-            theme: 'dark',
-            themePreset: 'taiji',
-            fontSize: 'medium',
-            fontScales: { sidebar: 'medium', chat: 'medium', drawer: 'medium' },
-            locale: 'zh-CN',
-          }),
+      // 设计 RL7/U8 的等待条件 = replayState==='done' 的代理信号：重放成功项注册进 document.fonts
+      const registeredOk = await page
+        .waitForFunction(
+          (fam) => [...document.fonts].some((face) => face.family === fam),
+          VALID,
+          { timeout: 20_000 },
         )
+        .then(() => true)
+        .catch(() => false)
+      expect(registeredOk, '重放未把 fontLibrary 有效项注册进 document.fonts——RL7 红灯（replayState 未 done 或 font:read-bytes 链断裂）').toBe(true)
+      const families = await page.evaluate(() => [...document.fonts].map((face) => face.family))
+      expect(families, '重放失败项不得注册进 document.fonts').not.toContain(MISSING)
+
+      // 存储值不被清空（V4 通过标准：重装字体后自动恢复的前提）
+      const stored = await page.evaluate(() => {
+        const raw = localStorage.getItem('taiji:system-settings')
+        return raw ? (JSON.parse(raw) as { fonts?: { mono?: string } }) : null
       })
-      before = await readSettings()
-    }
-    expect(before, 'system settings 无法写入，宿主表面断言无法进行').not.toBeNull()
+      expect(stored?.fonts?.mono).toBe(V4_GHOST)
 
-    // 直接改 fonts（模拟设置页写入），断言兄弟字段原值不动
-    await page.evaluate(() => {
-      const raw = localStorage.getItem('taiji:system-settings')
-      if (!raw) return
-      const parsed = JSON.parse(raw) as Record<string, unknown>
-      const fonts = (parsed.fonts as Record<string, unknown> | undefined) ?? {}
-      parsed.fonts = { ...fonts, mono: "'PingFang SC'" }
-      localStorage.setItem('taiji:system-settings', JSON.stringify(parsed))
-    })
-
-    const after = await readSettings()
-    expect(after).not.toBeNull()
-    expect(after!.fonts, '字体写入未生效').toBeTruthy()
-    for (const key of ['theme', 'themePreset', 'fontSize', 'fontScales', 'locale']) {
-      expect(after![key], `兄弟字段 ${key} 被清空`).toEqual(before![key])
+      // 失败项降级标注（库行）+ 槽位失效值标注（V4：未找到，已回落到系统默认）真机目验
+      await page.getByTestId('sidebar-settings').click()
+      await expect(page.getByTestId('settings-font-import')).toBeVisible({ timeout: 15_000 })
+      const missingRow = page.getByTestId('settings-font-library-0') // addedAt 倒序 → 失败项在首行
+      await expect(missingRow).toContainText(MISSING)
+      await expect(missingRow).toContainText('（源文件已不存在）')
+      const validRow = page.getByTestId('settings-font-library-1')
+      await expect(validRow).toContainText(VALID)
+      await expect(validRow).not.toContainText('（源文件已不存在）')
+      await expect(validRow).not.toContainText('（无法读取，可能已损坏）')
+      await expect(page.getByTestId('settings-font-mono-trigger'))
+        .toContainText(`${V4_GHOST}（未找到，已回落到系统默认）`)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
     }
+  })
+
+  test('V8 宿主表面不变：生产链驱动字体提交 + reload，四表面逐一对照', async ({ page }) => {
+    // 表面 2 基线：terminal.json 文件（mock 链下 config.setTerminal 不落盘，真文件缺席 = 期望态）
+    const dataDir = process.env.TAIJI_AGENT_DATA_DIR
+    expect(dataDir, 'launch-app 未注入隔离数据目录').toBeTruthy()
+    const terminalJsonPath = path.join(dataDir!, 'terminal.json')
+    const readTerminalJson = (): string | null =>
+      fs.existsSync(terminalJsonPath) ? fs.readFileSync(terminalJsonPath, 'utf-8') : null
+    const terminalBefore = readTerminalJson()
+
+    // 表面 4 基线：会话状态（mock fixture session 在场 + composer 可用）
+    await openAppearanceFonts(page)
+
+    // 表面 1 观测口（mock 层边界登记）：VITE_MOCK 构建的 platform.storage 是内存 KV
+    //（createInMemoryStorage，仅 boot 时从 localStorage 播种一次），生产写入不落 localStorage——
+    // 存储表面的真值观测口 = store 回流（外观页兄弟控件签名）；localStorage 恒空本身也是断言面
+    //（字体写入不得绕过 PlatformPort 直写 localStorage）。磁盘级 KV 兄弟字段不变式由
+    // RL16(a) L1（updateSystem 对真 KVStorage）与 RL7（seed localStorage 经生产 boot 读回）承接。
+    const siblingSignature = () =>
+      page.evaluate(() => ({
+        themePressed: document.querySelector('[data-testid="appearance-mode-dark"]')?.getAttribute('aria-pressed'),
+        fontSizePressed: document.querySelector('[data-testid="appearance-fs-global-medium"]')?.getAttribute('aria-pressed'),
+        sidebarScale: document.querySelector('[data-testid="appearance-fs-sidebar-trigger"]')?.textContent?.trim(),
+        terminalFontSize: (document.querySelector('[data-testid="appearance-terminal-font-size-input"]') as HTMLInputElement | null)?.value,
+        localSettingsRaw: localStorage.getItem('taiji:system-settings'),
+        fontsSize: document.fonts.size,
+      }))
+    const SIBLING_KEYS = ['themePressed', 'fontSizePressed', 'sidebarScale', 'terminalFontSize'] as const
+    const baseline = { terminal: terminalBefore, ...(await siblingSignature()) }
+
+    // 生产链三连写（不再自证式 localStorage setItem）：
+    // ui/mono 行 → SettingsFontsSection emit → SettingsModal onSystemUpdate → store.setSystem（内存 KV）；
+    // terminal 行 → AppearancePage → config.setTerminal。每步以触发器文案回流为完成信号。
+    await selectFirstFontOption(page, 'ui')
+    await selectFirstFontOption(page, 'mono')
+    await selectFirstFontOption(page, 'terminal')
+
+    const afterWrite = { terminal: readTerminalJson(), ...(await siblingSignature()) }
+    for (const key of SIBLING_KEYS) {
+      expect(afterWrite[key], `兄弟字段签名 ${key} 被字体提交清空/改写`).toBe(baseline[key])
+    }
+    expect(afterWrite.localSettingsRaw, '字体写入不得绕过 PlatformPort 直写 localStorage').toBe(baseline.localSettingsRaw)
+    expect(afterWrite.fontsSize).toBe(baseline.fontsSize)
+    expect(afterWrite.terminal).toBe(baseline.terminal)
+
+    // reload 后对照四表面（内存 KV 复位到默认态 = 基线同源默认，签名应不变）
+    await page.reload()
+    await expect(page.getByTestId('composer-box')).toBeVisible({ timeout: 20_000 })
+    await expect(page.getByText('API 性能优化')).toBeVisible({ timeout: 15_000 })
+    await page.getByTestId('sidebar-settings').click()
+    await expect(page.getByTestId('settings-font-import')).toBeVisible({ timeout: 15_000 })
+    const afterReload = { terminal: readTerminalJson(), ...(await siblingSignature()) }
+    for (const key of SIBLING_KEYS) {
+      expect(afterReload[key], `兄弟字段签名 ${key} 被 reload 前后的字体操作链清空/改写`).toBe(baseline[key])
+    }
+    expect(afterReload.localSettingsRaw).toBe(baseline.localSettingsRaw)
+    expect(afterReload.fontsSize).toBe(baseline.fontsSize)
+    expect(afterReload.terminal).toBe(baseline.terminal)
   })
 })

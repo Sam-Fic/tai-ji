@@ -22,7 +22,10 @@
  * 运行：env -u ELECTRON_RUN_AS_NODE npx playwright test e2e/font-custom-mermaid.spec.ts --project=electron
  *
  * 触发条件（R2 登记，e2e-map = E2E-FONTS-02）：改 packages/ui/src/features/chat/{mermaid.ts,
- * MermaidRenderer.vue} 或字体槽位写入链时跑本 spec。
+ * MermaidRenderer.vue}、字体槽位写入链（packages/renderer/src/style.css 槽位名 /
+ * packages/ui/src/features/settings/apply-system-to-dom.ts）或 mock 哨兵词数据源
+ * （packages/core/src/transport/mock/run-send-stream.ts 的 md-mermaid 判定 / MERMAID_REPLY）时
+ * 跑本 spec——scope 数组已与头注释对齐（终态同步 F1-34）。
  */
 import { test, expect } from './fixtures/launch-app'
 import type { Page } from '@playwright/test'
@@ -110,13 +113,21 @@ test.describe('mermaid 字体跟随（font-system RL11）', () => {
         'G12 失效：initialize 门槛未含字体、或 MermaidRenderer 未监听到槽位变化',
     ).toBe(true)
 
-    // (b) 复检：SVG 内联 style 不得残留旧家族名（否则只是「继承」而非「重渲」）
+    // (b) 复检：SVG 内联 style 不得残留旧等宽家族（否则只是「继承」而非「重渲」，G12 未生效）。
+    // 旧家族集合从构建期等宽栈（--font-mono 计算值，即重渲前 bake 进 SVG 的来源）动态派生，
+    // 不硬编码字面量——栈演进后残留检查仍成立（F1-38 数据驱动替代）。
     const after = (await page.evaluate(SAMPLE_NODE_JS)) as { font: string; inline: string } | null
     expect(after).not.toBeNull()
+    const oldMonoFamilies = await page.evaluate(() => {
+      const stackValue = getComputedStyle(document.documentElement).getPropertyValue('--font-mono')
+      return [...new Set([...stackValue.matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1]))]
+    })
+    expect(oldMonoFamilies.length, '未从构建期等宽栈采到家族名（--font-mono 值形态变化？）').toBeGreaterThan(0)
+    const stale = oldMonoFamilies.filter((family) => after!.inline.includes(family))
     expect(
-      after!.inline.includes('JetBrains Mono'),
-      'SVG 内联 style 仍含旧家族名 JetBrains Mono——文字跟随来自 CSS 继承而非重渲，G12 未真正生效',
-    ).toBe(false)
+      stale,
+      `SVG 内联 style 仍残留旧等宽家族 ${stale.join('、')}——文字跟随来自 CSS 继承而非重渲，G12 未真正生效`,
+    ).toEqual([])
 
     // 清理
     await page.evaluate(() => {

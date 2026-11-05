@@ -34,6 +34,17 @@ describe('FileFontSource 导入命名与 FontFace 调用契约', () => {
     await expect(source.list()).resolves.toEqual([{ family: 'Maple Mono (导入)', source: 'file' }])
   })
 
+  it('系统字体大小写变体撞名 → 同样改名（CSS 匹配大小写不敏感，AX1 归一口径）', async () => {
+    const source = new FileFontSource(makeDeps(['Maple Mono']))
+    // 文件名预填形态：'maple mono.ttf' → 用户确认名 'maple mono'，与已装 'Maple Mono'
+    // 字符串级不同但渲染层解析到同一匹配族——必须加后缀保证渲染级唯一。
+    const entry = await source.importFont('/fonts/maple mono.ttf', 'maple mono')
+    expect(entry.family).toBe('maple mono (导入)')
+    // 已导入名的小写变体同样占名（文件来源内部不重名，suffix 链跳过被占用项）
+    const second = await source.importFont('/fonts/b.ttf', 'MAPLE MONO')
+    expect(second.family).toBe('MAPLE MONO (导入) 2')
+  })
+
   it('系统清单非空且无撞名 → 保留用户确认的家族名', async () => {
     const source = new FileFontSource(makeDeps(['Menlo']))
     const entry = await source.importFont('/fonts/Maple Mono.ttf', '  Maple Mono  ')

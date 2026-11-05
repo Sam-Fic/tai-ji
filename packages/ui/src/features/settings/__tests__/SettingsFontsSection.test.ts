@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { FONT_READ_REASON_NOT_FOUND, FONT_READ_REASON_UNREADABLE } from '@taiji/shared'
 import SettingsFontsSection from '../SettingsFontsSection.vue'
 
 let wrapper: VueWrapper | null = null
@@ -59,6 +60,41 @@ describe('SettingsFontsSection 调用契约', () => {
       replayFailures: { 'Custom (导入)': '无法读取字体文件，可能已损坏' },
     })
     expect(view.text()).toContain('settings.fonts.sourceUnreadable')
+  })
+
+  it('重放失败文案按共享 reason 常量映射 locale（F1-18：与 main 侧同源，防字面量漂移）', async () => {
+    // main REASON_* 已上移 @taiji/shared（FONT_READ_REASON_*）；statusFor 的比对必须
+    // 消费同一常量——若有人改回字面量或改常量值，此用例随 shared 单源立即红。
+    expect(FONT_READ_REASON_NOT_FOUND).toBe('源文件已不存在')
+    expect(FONT_READ_REASON_UNREADABLE).toBe('无法读取字体文件，可能已损坏')
+    const view = mountSection({
+      replayFailures: { 'Custom (导入)': FONT_READ_REASON_NOT_FOUND },
+    })
+    expect(view.text()).toContain('settings.fonts.sourceMissing')
+    await view.setProps({ replayFailures: { 'Custom (导入)': FONT_READ_REASON_UNREADABLE } })
+    expect(view.text()).toContain('settings.fonts.sourceUnreadable')
+  })
+
+  it('当前值不在来源层列表 → 触发器加「未找到」标注；重放中与命中值不加（D9/V4）', async () => {
+    // 失效值：标注挂在值旁，存储值不改（不 emit 任何选择事件）
+    const view = mountSection({ monoFamily: 'Ghost Font' })
+    const trigger = view.find('[data-testid="settings-font-mono-trigger"]')
+    expect(trigger.text()).toContain('Ghost Font')
+    expect(trigger.text()).toContain('settings.fonts.slotValueMissing')
+    expect(view.emitted('select')).toBeUndefined()
+
+    // 重放中抑制标注：导入字体尚未注册进 entries，成员资格会假阴性（防启动闪告警）
+    const replaying = mountSection({ monoFamily: 'Ghost Font', replayState: 'replaying' })
+    expect(replaying.find('[data-testid="settings-font-mono-trigger"]').text())
+      .not.toContain('settings.fonts.slotValueMissing')
+
+    // 命中值（精确 + 大小写变体，CSS 匹配大小写不敏感）不加标注
+    const normal = mountSection({ monoFamily: 'Maple Mono' })
+    expect(normal.find('[data-testid="settings-font-mono-trigger"]').text())
+      .not.toContain('settings.fonts.slotValueMissing')
+    const variant = mountSection({ monoFamily: 'maple mono' })
+    expect(variant.find('[data-testid="settings-font-mono-trigger"]').text())
+      .not.toContain('settings.fonts.slotValueMissing')
   })
 
   it('安装指引含三平台入口、重启语义与非 CN 版中文字形说明', () => {

@@ -8,10 +8,13 @@
  *
  * 覆盖：
  * - RL20(c) 请求读一个 .txt → 收到明确拒绝（不崩溃、不返回垃圾字节）
- * - RL20(d) 请求读一个 25MB 伪造字体 → 拒绝，且**不把文件读进内存**
- *           （判据首选「stat 之后没有 readFile」的调用形态；退而求其次看 external 内存增量，
- *            不能用 heapUsed——实测 25MB Buffer 只让 heapUsed +0.56MB，会假绿）
- * - 禁区 <dataDir>/agent/**：请求读会话正文/凭据 → 拒绝
+ * - RL20(d) 请求读一个 25MB 伪造字体 → 拒绝。本 spec 只断言 ① 拒绝路径（ok=false + reason）；
+ *           设计判据 ③（stat 之后没有 readFile 调用形态）= L1 权威判据，已在
+ *           apps/electron/main/gateway/__tests__/font-handlers.test.ts 落位（spy 注入假 IO）；
+ *           判据 ②（external 内存增量）登记豁免——playwright 侧无法直接采样主进程
+ *           external 内存（heapUsed 不可用的实测依据见设计 §4.2 RL20 行）
+ * - 禁区 <dataDir>/agent/**：请求读凭据（auth.json）经真实 IPC → 拒绝
+ *           （设计 RL20 表仅列 (b) 为 L1；此处是增补的真机拦截断言，设计行已同批回写）
  *
  * 运行：env -u ELECTRON_RUN_AS_NODE npx playwright test e2e/font-custom-ipc.spec.ts --project=electron
  *
