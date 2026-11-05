@@ -511,6 +511,9 @@ describe('session-item-agent-badge', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     localStorage.removeItem('taiji:session-markers')
+    // 本 describe 树聚焦 SessionItem 徽标/菜单链而非面板开合：预置默认区展开（默认收起语义）
+    localStorage.setItem('taiji:sidebar-group-state', JSON.stringify({ flat: [], groups: [], defaultZone: true }))
+    localStorage.removeItem('taiji:sidebar-project-order')
   })
 
   afterEach(() => {

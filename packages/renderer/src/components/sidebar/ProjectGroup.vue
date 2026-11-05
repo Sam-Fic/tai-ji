@@ -1,12 +1,15 @@
 <template>
   <!--
     展示组件 · 项目分组（R6.2 锚定分组，demo .pg 权威形态）：组头 + 高度动画展开体。
-    组头 = 项目名贴左 + 「当前」chip（仅锚定组）+ 会话计数；hover / focus-within 时
-    操作钮浮现、计数让位（同位替换惯例，min-height 预留防行高跳动）。
+    组头 = chevron 展开指示 + 项目名贴左 + 「当前」chip（仅锚定组）+ 会话计数；hover /
+    focus-within 时操作钮浮现、计数让位（同位替换惯例，min-height 预留防行高跳动）。
     操作钮：在此项目新建任务（+，恒渲染）/ 重命名 / 删除（默认项目不渲染——nameless
     身份是未归类/孤儿 session 兜底聚合的判据，删/改会瓦解聚合，store 层同源拦截）。
-    组头整体是 session 拖拽落点（useSessionDropTarget：拖到组头 = 移动归属到本项目，
-    dropActive 高亮；折叠组同样可落，父级 drop 后强制展开）。
+    组头整体是双重拖拽交互面，按 dataTransfer.types 分流互不误触：session 拖入 =
+    移动归属到本项目（useSessionDropTarget：dropActive 高亮，折叠组同样可落，父级
+    drop 后强制展开）；project 组头拖入 = 换位（PROJECT_DRAG_MIME 命中，projectDragOver
+    高亮，drop 转 reorder 事件——自拖自落组件内静默）。组头自身 draggable（发起换位
+    拖拽，重命名态禁拖防与文本选中/输入冲突）。
     展开体常驻 DOM（不用 v-if/v-show）：grid-template-rows 0fr↔1fr 真实高度动画 +
     内层 opacity 跟进淡入 + visibility 收起延迟翻转（防隐藏行进 Tab 焦点序、细线随
     展开体显隐）；reduced-motion 由全局 reduce 块归零过渡（= 即时切换）。
@@ -20,12 +23,15 @@
   <div class="pg" data-testid="project-group" :data-project-id="projectId" :data-current="current ? 'true' : undefined">
     <div
       class="pgh flex min-h-[31px] items-center gap-[4px] px-[6px] pt-[7px] pb-[4px] group/pgh transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]"
-      :class="dropActive ? 'bg-surface-hover rounded-sm' : ''"
+      :class="(dropActive || projectDragOver) ? 'bg-surface-hover rounded-sm' : ''"
       data-testid="project-group-head"
       :data-dragover="dropActive ? 'true' : undefined"
-      @dragover="onDragOver"
-      @dragleave="onDragLeave"
-      @drop="onDrop"
+      :data-project-dragover="projectDragOver ? 'true' : undefined"
+      :draggable="!renaming"
+      @dragstart="onHeadDragStart"
+      @dragover="onHeadDragOver"
+      @dragleave="onHeadDragLeave"
+      @drop="onHeadDrop"
     >
       <Input
         v-if="renaming"
@@ -50,6 +56,14 @@
           @keydown.enter.prevent="emit('headClick')"
           @keydown.space.prevent="emit('headClick')"
         >
+          <!-- chevron 展开指示（默认收起语义下可展开性的视觉锚点）：展开向下 / 收起向右，
+               transform 旋转过渡与组体高度动画同语系；reduced-motion 由全局 reduce 块归零 -->
+          <ChevronDown
+            class="flex-none text-neutral-dim transition-transform duration-[var(--duration)] ease-[var(--ease-out)] [&_svg]:size-[12px] size-[12px]"
+            :class="expanded ? '' : '-rotate-90'"
+            :stroke-width="1.8"
+            data-testid="project-group-chevron"
+          />
           <span class="min-w-0 truncate text-[12.5px] [font-weight:var(--fw-mid)] text-neutral-fg-2 group-hover/pgh:text-neutral-fg">
             {{ name }}
           </span>
@@ -130,10 +144,11 @@
 <script setup lang="ts">
 import { nextTick, ref, type ComponentPublicInstance } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Plus, Pencil, Trash2 } from '@lucide/vue'
+import { ChevronDown, Plus, Pencil, Trash2 } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useSessionDropTarget } from '@/composables/features/sidebar/use-session-drop-target'
+import { PROJECT_DRAG_MIME } from './session-drag'
 
 const { t } = useI18n()
 
@@ -163,12 +178,66 @@ const emit = defineEmits<{
   deleteRequest: []
   /** session 拖入组头（useSessionDropTarget）：移动归属到本项目（父级转 setProject） */
   dropSession: [sessionId: string]
+  /** project 组头拖入本组头（PROJECT_DRAG_MIME）：换位（父级转 projectStore.reorderProject） */
+  reorder: [payload: { draggedId: string; targetId: string }]
 }>()
 
 /** 组头 = session 拖拽落点（拖到项目 = 移动归属；折叠组同样可落，父级 drop 后强制展开） */
 const { dropActive, onDragOver, onDragLeave, onDrop } = useSessionDropTarget((sessionId) =>
   emit('dropSession', sessionId),
 )
+
+// ── 组头拖拽换位（PROJECT_DRAG_MIME 命中分支；session 拖拽走上方 useSessionDropTarget，
+//    两类拖拽在同一组头按 dataTransfer.types 分流，dragover 阶段各判各的 MIME）──
+
+/** project 拖拽悬停高亮态（drop / 拖离即清；与 session dropActive 同视觉、独立锚点） */
+const projectDragOver = ref(false)
+
+function isProjectDrag(e: DragEvent): boolean {
+  return e.dataTransfer?.types.includes(PROJECT_DRAG_MIME) ?? false
+}
+
+/** 组头发起换位拖拽：写入本组 projectId（重命名态不发起——draggable 已禁，此处兜底） */
+function onHeadDragStart(e: DragEvent): void {
+  if (renaming.value) {
+    e.preventDefault()
+    return
+  }
+  e.dataTransfer?.setData(PROJECT_DRAG_MIME, props.projectId)
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+}
+
+/** dragover 按 MIME 分流：project 换位高亮；其余委托 session 落点（含不响应无关拖拽） */
+function onHeadDragOver(e: DragEvent): void {
+  if (isProjectDrag(e)) {
+    e.preventDefault()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+    projectDragOver.value = true
+    return
+  }
+  onDragOver(e)
+}
+
+/** dragleave 两类高亮同清（relatedTarget 仍在组头内的子元素抖动不算离开，两处同判） */
+function onHeadDragLeave(e: DragEvent): void {
+  const within = e.relatedTarget !== null && (e.currentTarget as Node).contains(e.relatedTarget as Node)
+  if (!within) projectDragOver.value = false
+  onDragLeave(e)
+}
+
+/** drop 按 MIME 分流：project 换位（自拖自落静默）；session 移组（既有链） */
+function onHeadDrop(e: DragEvent): void {
+  if (isProjectDrag(e)) {
+    e.preventDefault()
+    projectDragOver.value = false
+    const draggedId = e.dataTransfer?.getData(PROJECT_DRAG_MIME)
+    if (draggedId && draggedId !== props.projectId) {
+      emit('reorder', { draggedId, targetId: props.projectId })
+    }
+    return
+  }
+  onDrop(e)
+}
 
 // ── 行内重命名（Enter 提交 / Esc 取消 / 失焦提交；单容器单输入框，失焦即提交无歧义）──
 const renaming = ref(false)

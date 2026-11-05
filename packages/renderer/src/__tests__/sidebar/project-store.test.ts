@@ -128,6 +128,7 @@ beforeEach(() => {
   mockRename.mockResolvedValue(makeCommandReply([makeProject(DEFAULT_PROJECT_ID, '')], DEFAULT_PROJECT_ID, 1))
   mockRemove.mockResolvedValue(makeCommandReply([makeProject(DEFAULT_PROJECT_ID, '')], DEFAULT_PROJECT_ID, 1))
   mockSetActive.mockResolvedValue(makeCommandReply([makeProject(DEFAULT_PROJECT_ID, '')], DEFAULT_PROJECT_ID, 1))
+  localStorage.removeItem('taiji:sidebar-project-order')
 })
 
 describe('Project store: 状态机转移全表（§6.5）', () => {
@@ -300,6 +301,26 @@ describe('Project store: 编辑动作命令化（§6.6）', () => {
     await second
     expect(mockSetActive).toHaveBeenCalledTimes(1) // 第一条 settle 后才发
     expect(mockSetActive).toHaveBeenCalledWith(DEFAULT_PROJECT_ID, 2) // 携带第一条回执推进的水位
+  })
+
+  it('addProject 返回值 = 回执 activeProjectId 直传：连续快速新建各自拿对 id（不差分推断）', async () => {
+    const projects = [makeProject(DEFAULT_PROJECT_ID, '')]
+    const store = await loadTo(projects, DEFAULT_PROJECT_ID, 1)
+
+    // 第二条 addProject 在第一条回执落地前入队（同窗口快速连续新建）：若按入队前快照
+    // 差分推断新 id，第二条会错拿第一条的新增项（数组序中第一个新增）——回执直传无
+    // 时序假设，各命令回执自带 activeProjectId
+    let resolveFirst!: (v: ReturnType<typeof makeCommandReply>) => void
+    mockCreate.mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve }))
+    const first = store.addProject('First')
+    mockCreate.mockResolvedValueOnce(
+      makeCommandReply([...projects, makeProject('proj-first', 'First'), makeProject('proj-second', 'Second')], 'proj-second', 3),
+    )
+    const second = store.addProject('Second')
+
+    resolveFirst(makeCommandReply([...projects, makeProject('proj-first', 'First')], 'proj-first', 2))
+    await expect(first).resolves.toBe('proj-first')
+    await expect(second).resolves.toBe('proj-second')
   })
 
   it('无有效数据形态命令拒绝（§6.9 store 层保底）：未 loaded 不发命令、reject 出声', async () => {
@@ -700,6 +721,90 @@ describe('锚定切换零重排（「顺序稳定不置顶」裁决锚点）', (
 
     expect(store.orderedProjects.map((p) => p.id)).toEqual(['a', 'b', DEFAULT_PROJECT_ID])
     expect(store.projects.find((p) => p.id === 'b')!.name).toBe('B2')
+  })
+})
+
+describe('orderedProjects 用户自定义序 + reorderProject（组头拖拽换位）', () => {
+  function seed(projects: Project[]): void {
+    const store = useProjectStore()
+    store.projects = projects
+    store.revision = 1
+    store.loadState = 'loaded'
+  }
+
+  it('自定义序优先于 lastUsedAt：在序项目按用户序排前段，未排过的按 lastUsedAt 追加在后，默认项目仍固定最后', () => {
+    seed([
+      makeProject('a', 'A', 300),
+      makeProject('b', 'B', 200),
+      makeProject('c', 'C', 100),
+      makeProject(DEFAULT_PROJECT_ID, ''),
+    ])
+    const store = useProjectStore()
+    store.reorderProject('b', 'c') // 以 lastUsedAt 序 [a,b,c] 为基准：b 移到 c 后 → [a,c,b]
+
+    expect(store.orderedProjects.map((p) => p.id)).toEqual(['a', 'c', 'b', DEFAULT_PROJECT_ID])
+    expect(JSON.parse(localStorage.getItem('taiji:sidebar-project-order') ?? '[]')).toEqual(['a', 'c', 'b'])
+  })
+
+  it('无自定义序时退化为 lastUsedAt 稳定序（持久化键缺省回退空数组）', () => {
+    seed([
+      makeProject('a', 'A', 100),
+      makeProject('b', 'B', 200),
+      makeProject(DEFAULT_PROJECT_ID, ''),
+    ])
+    expect(useProjectStore().orderedProjects.map((p) => p.id)).toEqual(['b', 'a', DEFAULT_PROJECT_ID])
+    expect(localStorage.getItem('taiji:sidebar-project-order')).toBeNull()
+  })
+
+  it('持久化序跨 store 实例恢复（localStorage 直存 → 新 pinia 实例读回）', () => {
+    seed([
+      makeProject('a', 'A', 300),
+      makeProject('b', 'B', 200),
+      makeProject(DEFAULT_PROJECT_ID, ''),
+    ])
+    useProjectStore().reorderProject('a', 'b')
+
+    setActivePinia(createPinia())
+    const fresh = useProjectStore()
+    fresh.projects = [
+      makeProject('a', 'A', 300),
+      makeProject('b', 'B', 200),
+      makeProject(DEFAULT_PROJECT_ID, ''),
+    ]
+    expect(fresh.orderedProjects.map((p) => p.id)).toEqual(['b', 'a', DEFAULT_PROJECT_ID])
+  })
+
+  it('reorderProject 守卫：同 id / 未知 id / 默认项目参与时 no-op（不写 localStorage）', () => {
+    seed([
+      makeProject('a', 'A', 300),
+      makeProject('b', 'B', 200),
+      makeProject(DEFAULT_PROJECT_ID, ''),
+    ])
+    const store = useProjectStore()
+    store.reorderProject('a', 'a')
+    store.reorderProject('ghost', 'a')
+    store.reorderProject('a', 'ghost')
+    expect(localStorage.getItem('taiji:sidebar-project-order')).toBeNull()
+    expect(store.orderedProjects.map((p) => p.id)).toEqual(['a', 'b', DEFAULT_PROJECT_ID])
+  })
+
+  it('已删项目残留 id 在下次换位写入时被全量重写清理（写入以当前命名项目为基准）', () => {
+    seed([
+      makeProject('a', 'A', 300),
+      makeProject('b', 'B', 200),
+      makeProject(DEFAULT_PROJECT_ID, ''),
+    ])
+    const store = useProjectStore()
+    store.reorderProject('b', 'a') // [b, a]
+    expect(JSON.parse(localStorage.getItem('taiji:sidebar-project-order') ?? '[]')).toEqual(['b', 'a'])
+
+    // 删除 b（直写缓存视图模拟 remove 回执）后再换位：新写入以现存命名项目全量重写，残留 b 清理
+    store.projects = store.projects.filter((p) => p.id !== 'b')
+    store.reorderProject('a', 'a') // no-op 不写——换一条真实路径：补回 b 并跨它换位
+    expect(JSON.parse(localStorage.getItem('taiji:sidebar-project-order') ?? '[]')).toEqual(['b', 'a']) // 未变
+    store.projects = [makeProject('a', 'A', 300), makeProject('c', 'C', 100), makeProject(DEFAULT_PROJECT_ID, '')]
+    store.reorderProject('c', 'a') // lastUsedAt 序 [a,c]：c 在 a 后，上拖落 a → 插到 a 前
+    expect(JSON.parse(localStorage.getItem('taiji:sidebar-project-order') ?? '[]')).toEqual(['c', 'a'])
   })
 })
 
