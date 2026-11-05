@@ -1,5 +1,11 @@
 # @zhushanwen/pi-plan
 
+## 1.3.0
+
+### Minor Changes
+
+- ada38ebfc: i18n 层改用 `@zhushanwen/pi-llm-shared` 的 `./ui-dictionary` 词典模板渲染机制（经 `createUiDictionary` 消费），自身只持有词典数据；locale 回落链（当前 locale → en-US → 键名）与 env 缺失/文件损坏降级口径不变。
+
 ## 1.2.7
 
 ### Patch Changes

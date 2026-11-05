@@ -1,5 +1,11 @@
 # @zhushanwen/pi-retry-rules
 
+## 0.2.2
+
+### Patch Changes
+
+- ada38ebfc: chore: refresh dependency range (triggered by @zhushanwen/pi-extension-logger@0.6.2 → @zhushanwen/pi-extension-logger@0.7.0, @zhushanwen/pi-llm-shared@0.12.1 → @zhushanwen/pi-llm-shared@0.13.0)
+
 ## 0.2.1
 
 ### Patch Changes

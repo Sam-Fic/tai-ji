@@ -1,5 +1,11 @@
 # @zhushanwen/pi-system-prompt-trace
 
+## 0.2.6
+
+### Patch Changes
+
+- ada38ebfc: chore: refresh dependency range (triggered by @zhushanwen/pi-extension-logger@0.6.2 → @zhushanwen/pi-extension-logger@0.7.0)
+
 ## 0.2.5
 
 ### Patch Changes

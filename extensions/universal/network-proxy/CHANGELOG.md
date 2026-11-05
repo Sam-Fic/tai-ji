@@ -1,5 +1,11 @@
 # @zhushanwen/pi-network-proxy
 
+## 0.3.4
+
+### Patch Changes
+
+- ada38ebfc: stats 上报调用移除空 options 参数（随等待机制删除的连带清理），行为不变。
+
 ## 0.3.3
 
 ### Patch Changes
