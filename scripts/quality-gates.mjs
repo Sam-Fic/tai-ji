@@ -12,7 +12,7 @@
  *      恢复通道 = refs/skills-snapshot 备份 ref。
  *   3. 机器盲区判定（决策 4，本脚本新增的机器承接）：coverage.json 各 OK 包 files_without_lcov
  *      （= base...HEAD diff 新增但未被任何测试加载的文件）中「含可执行行」者 → FAIL。
- *      判定边界：① 豁免通道 coverage-file-gate-exempt（文件头标记，coverage-gate.py 的
+ *      判定边界：① 豁免通道 coverage-file-exempt.json manifest（2026-11-04 起，与 coverage-gate.py 同源；旧文件头标记退役）——原描述：coverage-gate.py 的
  *      file_gate 豁免同款）同步覆盖本判定；② 可执行行口径见 hasExecutableLines——
  *      interface/type/常量/纯导出聚合等无可执行分支的文件整文件排除。
  *   4. metrics-gate：子进程调用 metrics-gate.py（在 coverage-gate 之后——它消费同 base 的
@@ -56,11 +56,23 @@ const PY_REL_DIR = join('.agents', 'skills', 'pr-cr-fix', 'scripts')
 const COVERAGE_PY = 'coverage-gate.py'
 const METRICS_PY = 'metrics-gate.py'
 
-// 与 coverage-gate.py 文件级豁免读取窗口同款口径：py 的 read_text()[:2400] 是 str 字符切片
-// （非字节），此处同样按字符 slice——中文注释密集文件 1 字符 = 3 字节（UTF-8），字节窗口会
-// 提前截断导致同一标记在 py 判豁免、此处判违规
-const EXEMPT_HEAD_CHARS = 2400
-const EXEMPT_MARKER_RE = /coverage-file-gate-exempt:\s*(.+)/
+// 文件级门槛豁免清单（2026-11-04 manifest 化，与 coverage-gate.py 同源）：唯一判定源 =
+// scripts/coverage-file-exempt.json（file → reason 映射）；旧「文件头 2400 字符窗口 +
+// coverage-file-gate-exempt: 标记正则」退役（窗口截断漏识别与 fixture 引用误豁免同源
+// 消失）。清单缺失/畸形 = 无豁免（方向安全：不误豁免，按违规拦，补登记后重跑）
+function loadExemptFiles(repoRoot) {
+  const manifest = join(repoRoot, 'scripts', 'coverage-file-exempt.json')
+  try {
+    const data = JSON.parse(readFileSync(manifest, 'utf8'))
+    const out = new Map()
+    for (const e of Array.isArray(data.entries) ? data.entries : []) {
+      if (e && typeof e.file === 'string' && typeof e.reason === 'string') out.set(e.file, e.reason)
+    }
+    return out
+  } catch {
+    return new Map()
+  }
+}
 
 function usageError(msg) {
   const err = new Error(`用法错误：${msg}`)
@@ -259,30 +271,32 @@ function looksExecutable(body) {
  * 截断前 10 条（py no_lcov[:10]）——单轮呈报不全；FAIL 判定不受影响（列表内 ≥1 即 FAIL），
  * 已修文件重跑 gates 后新条目顶上，fixer 迭代收敛补全。「diff 新增」语义由 py 的 diff
  * 口径构造性保证，此处不再重算 diff。
- * readHead(fileRel) 返回文件头文本（豁免标记读取窗口）或 null（读不到按无豁免处理）。
+ * readHead(fileRel) 返回文件头文本或 null（读不到按无豁免处理）。exemptFiles = 豁免清单
+ * Map（调用方装载 scripts/coverage-file-exempt.json 传入，见 runBlindspotGate；测试可
+ * 注入临时清单）。
  */
-export function judgeNoLcov(report, readHead) {
+export function judgeNoLcov(report, readHead, exemptFiles = new Map()) {
   const violations = []
   const exempt = []
   const packages = (report && report.packages) || {}
   for (const [pkg, entry] of Object.entries(packages)) {
     if (entry.status !== 'OK') continue
     for (const file of entry.files_without_lcov || []) {
-      // 豁免判定 = 文件头窗口（与 coverage-gate.py file_gate 豁免同款前 2400 字符，非字节）；
-      // 可执行行判定 = 全文（readHead(chars=Infinity)），读不到全文时退回窗口（短文件即全文）
-      const head = readHead(file)
-      const m = head ? head.match(EXEMPT_MARKER_RE) : null
-      if (m) {
-        exempt.push({ file, package: pkg, reason: m[1].trim() })
+      // 豁免判定 = manifest 集合判定（scripts/coverage-file-exempt.json，与 coverage-gate.py
+      // 同源）；可执行行判定 = 全文（readHead(chars=Infinity)），读不到全文时退回窗口（短文件即全文）
+      const reason = exemptFiles.get(file)
+      if (reason !== undefined) {
+        exempt.push({ file, package: pkg, reason })
         continue
       }
+      const head = readHead(file)
       const full = (head !== null && readHead(file, Infinity)) || head
       if (full !== null && !hasExecutableLines(full, file)) continue // 纯类型/常量/聚合类，整文件排除
       violations.push({
         file,
         package: pkg,
         reason: 'diff 新增且含可执行行，但无 lcov 记录（未被任何测试加载）',
-        fix: '补测试加载该文件；确属单测结构性不可达面（组合根装配接线、跨环境分支等）时在文件头加豁免标记 `coverage-file-gate-exempt: <理由>`',
+        fix: '补测试加载该文件；确属单测结构性不可达面（组合根装配接线、跨环境分支等）时在 scripts/coverage-file-exempt.json 登记该文件与理由（manifest 是唯一豁免判定源，文件头旧标记注释已退役）',
       })
     }
   }
@@ -620,7 +634,7 @@ export function createDefaultDeps(cwd = process.cwd()) {
         return null
       }
     },
-    readHead: (rel, chars = EXEMPT_HEAD_CHARS) => {
+    readHead: (rel, chars = 2400) => { // 字符窗口仅用于可执行行判定的退回读（豁免判定已 manifest 化，不再依赖头窗口）
       const p = join(root, rel)
       if (!existsSync(p)) return null
       const fd = (() => { try { return readFileSync(p) } catch { return null } })()
@@ -851,7 +865,7 @@ function runBlindspotGate(deps, gates) {
       },
     }
   }
-  const blindspot = judgeNoLcov(report, deps.readHead)
+  const blindspot = judgeNoLcov(report, deps.readHead, loadExemptFiles(deps.root))
   gates.push({
     name: 'coverage-blindspot',
     status: blindspot.violations.length > 0 ? 'FAIL' : 'PASS',

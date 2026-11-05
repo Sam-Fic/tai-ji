@@ -248,10 +248,14 @@ snapshot_test_evidence() {
     log "  证据已快照: $ev_dir"
 }
 
-# 写入 stage gate marker（供 pr-status.sh 与 pr-lifecycle workflow 读取）。
-# 双写（迁移过渡期 design.md §7 风险 2）：新 pr-review 目录为主 + 旧 .review/ 同步——
-# pr-lifecycle（共享实体）仍读旧路径且只 match result= 行；headCommit 行供 pr-status.sh
-# 防「worktree 重建后陈旧 marker 判 ready」（design.md §7 风险 3）。
+# 写入 stage gate marker 与 premerge-result.json（原子写，本脚本下方写入）。
+# 消费方分工：pr-lifecycle workflow 读 premerge-result.json 结构化字段；pr-status.sh 读
+# 文本 marker（result= 行 + headCommit 行——防「worktree 重建后陈旧 marker 判 ready」）。
+# 双目录双写（新 pr-review 目录为主 + 旧 .review/ 同步）持续到 pr-status.sh 切 JSON 后收敛。
+# changeset 摘要透传（全局，changeset-check 段填充）：premerge-result.json 的
+# changeset 字段载体——pr-lifecycle 按 JSON 字段读取（不再从 stdout 子串触发）
+CHANGESET_JSON_SUMMARY='null'
+
 write_result_marker() {
     local result="$1"
     local review_new
@@ -273,6 +277,15 @@ MARKER
         printf '%s\n' "$marker" > "$review_new/premerge-result"
     else
         echo "WARN: 新产物目录解析失败，marker 只写旧目录 .review/（pr-status.sh 切新目录后将读不到本 run 结果）" >&2
+    fi
+    # 结构化结果（2026-11-04 断言结构化改造）：pr-lifecycle 按 JSON 字段消费（原子写）。
+    # 文本 marker 同步保留——pr-status.sh 仍按文本形态消费
+    local json_tmp
+    json_tmp=$(printf '{ "schemaVersion": 1, "result": "%s", "timestamp": "%s", "headCommit": "%s", "changeset": %s }\n' \
+        "$result" "$ts" "$head" "${CHANGESET_JSON_SUMMARY:-null}")
+    printf '%s\n' "$json_tmp" > .review/premerge-result.json.tmp && mv .review/premerge-result.json.tmp .review/premerge-result.json
+    if [[ -n "$review_new" ]]; then
+        printf '%s\n' "$json_tmp" > "$review_new/premerge-result.json.tmp" && mv "$review_new/premerge-result.json.tmp" "$review_new/premerge-result.json"
     fi
 }
 
@@ -354,8 +367,13 @@ check_changeset() {
         write_result_marker "FAIL"
         exit 2
     fi
-    # 一次 node 调用渲染：首行 = "status changed_n missing_n unversionable_n" 元数据，其余行 = 文案行
+    # 一次 node 调用渲染：首行 = "status changed_n missing_n unversionable_n" 元数据，其余行 = 文案行；
+    # 同时把结构化摘要（status + missing 包清单）写入全局透传变量（premerge-result.json 载体）
     local rendered first_line rest line status changed_n missing_n unversionable_n
+    CHANGESET_JSON_SUMMARY="$(node -e '
+const j = JSON.parse(require("fs").readFileSync(0, "utf8"));
+console.log(JSON.stringify({ status: j.status, missing: j.missing }));
+' <<< "$cs_json")"
     if ! rendered="$(node -e '
 const j = JSON.parse(require("fs").readFileSync(0, "utf8"));
 console.log(j.status + " " + j.changed.length + " " + j.missing.length + " " + (j.unversionable ? j.unversionable.length : 0));

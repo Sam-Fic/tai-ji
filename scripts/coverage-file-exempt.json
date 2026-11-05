@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "_readme": "文件级覆盖率门槛豁免清单（唯一判定源，2026-11-04 manifest 化——旧「文件头 2400 字符内 coverage-file-gate-exempt: 标记」随本清单退役：窗口截断漏识别与 fixture 引用标记串误豁免两个问题同源消失）。coverage-gate.py 与 scripts/quality-gates.mjs 按 file 路径（仓库根相对）集合判定，命中即退出文件级门槛（包级仍卡），豁免条目照常登记 exempt 可见不静默。新增豁免 = 在此登记一行并附理由；文件内旧标记注释自然过期，随该文件下次触碰清理。",
+  "entries": [
+    {
+      "file": "resources/plugins/scheduler-manager/vitest.config.ts",
+      "reason": "vitest 测试装配文件，由测试运行器加载、恒不被覆盖率测量（结构性不可达面）"
+    },
+    {
+      "file": "packages/core/src/domain/chat/README.md",
+      "reason": "纯文档（架构决策记录）——无可执行代码，测试无「加载 markdown」语义"
+    },
+    {
+      "file": "packages/subagent-core/workflows/src/review-fix-loop.pi.tpl.js",
+      "reason": "构建期壳模板（pi 侧，与 zcode.tpl.ts 同理由：文件含 @pi-meta 头与拼接标记，单测无独立加载面；行为验证由产物一致性门禁与双实现对账承担）"
+    },
+    {
+      "file": "packages/subagent-core/workflows/src/review-fix-loop.zcode.tpl.ts",
+      "reason": "构建期壳模板——文件含字面 @@STITCH@@ 占位行，语法上不可 import；可执行语义只在与 shared 段拼接后的单文件脚本体内存在（该脚本体由 zcode 工作流引擎承载）。行为验证由产物一致性门禁（review-fix-loop-build.test.ts）与双实现对账（scripts/check-rfl-parity.mjs）承担，单测无加载面"
+    },
+    {
+      "file": "packages/subagent-core/workflows/review-fix-loop.dwf.ts",
+      "reason": "构建产物——由壳模板与 shared 段构建器拼接生成（与 zcode.tpl.ts 同理由：单测无独立加载面，行为验证由产物一致性门禁与双实现对账承担）"
+    },
+    {
+      "file": "packages/runtime/src/index.ts",
+      "reason": "组合根装配接线点——决策逻辑在注入工厂（btw-line-spawn-options.ts 等，各有直测），本文件新增行是构造注入与回调接线，单测不可达（入口装配）；行为由 validate-runtime-bundle 与 runtime e2e 承载"
+    },
+    {
+      "file": "packages/zcode-session-source/src/sqlite-driver.ts",
+      "reason": "bun 驱动分支在 node 层结构性不可达（bun:sqlite 仅 bun 运行时存在）——bun 层由 pre-commit「bun 驱动双跑」检查（bunx vitest 全绿）覆盖，node 层由 driver.test.ts 覆盖；两层合计覆盖，单层文件级数字不适用"
+    },
+    {
+      "file": "packages/extension-protocol/src/extensions/plan/consumers.md",
+      "reason": "纯文档（契约消费方清单），非可执行源码，不在任何测试加载范围"
+    }
+  ]
+}

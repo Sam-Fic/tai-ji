@@ -90,23 +90,24 @@ export function resolveBase(git, explicitBase = null) {
   return null
 }
 
-/** .changeset/*.md 全文 → 声明的包名（单双引号 frontmatter 两种格式，sort -u 语义）。 */
+/** .changeset/*.md → frontmatter 声明的包名（parseChangesetFrontmatter 结构化解析，
+ *  与方向②同源——正文说明文字里的引号包名样例不再误计为已声明）。sort -u 语义。 */
 export function extractDeclaredPkgs(texts) {
   const out = new Set()
   for (const text of texts) {
-    for (const m of text.matchAll(/['"]@[^'"]+['"]/g)) {
-      out.add(m[0].slice(1, -1))
+    for (const d of parseChangesetFrontmatter(text)) {
+      out.add(d.name)
     }
   }
   return [...out].sort()
 }
 
 /**
- * missing = changed 中未被任何 declared 声明的包。
- * 对拍原实现 `grep -qF`：子串语义（declared 条目包含 pkg 即视为已声明）。
+ * missing = changed 中未被任何 declared 声明的包（包名精确等值——子串口径会让
+ * pi-foo 被 pi-foobar 的声明误覆盖成已声明，WARN 方向漏报）。
  */
 export function computeMissing(changed, declared) {
-  return changed.filter((pkg) => !declared.some((d) => d.includes(pkg)))
+  return changed.filter((pkg) => !declared.includes(pkg))
 }
 
 /** 文案行单源（与原 check_changeset 的 log 文案逐字一致，缺前缀——前缀由宿主 log() 加）。 */

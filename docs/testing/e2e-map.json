@@ -1222,6 +1222,7 @@
         "scripts/changeset-check.mjs",
         "scripts/cross-branch-overlap.mjs",
         "scripts/pr-pre-merge.sh",
+        "scripts/coverage-file-exempt.json",
         "scripts/skill-data-dir.mjs",
         "scripts/check-slow-tests.mjs",
         "scripts/__tests__/check-slow-tests.test.mjs",
@@ -1248,6 +1249,10 @@
         {
           "kind": "script",
           "ref": "scripts/pr-pre-merge.sh"
+        },
+        {
+          "kind": "harness",
+          "ref": "scripts/coverage-file-exempt.json"
         },
         {
           "kind": "script",
