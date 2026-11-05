@@ -274,6 +274,14 @@ function connectWs(url: string, credentials: ConnectCredentials): void {
  * 快照裁决入口（§6.3 五行裁决表）：
  * - seq ≤ 期望 seq → 不动作（幂等重复广播不拆连；拉取响应晚于推送被消费的旧代快照
  *   丢弃，防目标回退）。期望未建立时不适用本行（任何快照都是首建立）。
+ *   **failed 态豁免**（2026-11-05 hotfix）：幂等的目的是防重复广播拆掉已建立的连接
+ *   （connected 态），failed 态无连接可拆、重连正是所需——不豁免则「runtime 活着但
+ *   renderer 停在 failed」时（启动竞争首败 / 用户手动重试的幂等广播）同 seq 快照被拒，
+ *   恢复入口全部失效。**auth 拒绝抑制态除外**（isAuthRejectedSuppressed）：D8 拒绝
+ *   路径靠「快照推进才重连、未推进保持 failed 不盲试」收尾（recoverAfterAuthRejection
+ *   以 applyTargetSnapshot 的 false 返回作失败信号），豁免会破坏该契约。
+ *   restarting / waiting-runtime / connecting / disconnected 态不豁免（那些态本就有
+ *   各自的事件驱动恢复路径，豁免只会徒增重连）。
  * - seq 更高或期望未建立 → 期望推进为新快照：已认证（connected）→ 断旧连新（携新
  *   凭据）；未认证（waiting-runtime/connecting/disconnected/failed）→ 转向新
  *   目标重新发起。
@@ -282,11 +290,16 @@ function connectWs(url: string, credentials: ConnectCredentials): void {
  * （connect 的单飞检查会拦截并存连接，「转向」语义必须先清场）；connected 态 disconnect
  * 触发 stateWatch 的断连汇合分支（pending rejectAll + 在途流收尾）。
  *
- * @returns true = 目标推进且已发起连接动作；false = 幂等/过期快照（不动作）
+ * @returns true = 目标推进（或 failed 态重连）且已发起连接动作；false = 幂等/过期快照（不动作）
  */
 function applyTargetSnapshot(ipc: RuntimeIpcPorts, snapshot: RuntimeTargetSnapshot): boolean {
   void ipc // 当前实现未用 ipc（重连目标全部取自快照自身）；保留参数锚定「推送回调与拉取共用此入口」的调用形态
-  if (expectedSnapshot && snapshot.seq <= expectedSnapshot.seq) {
+  if (expectedSnapshot && snapshot.seq <= expectedSnapshot.seq && getState().value !== 'failed') {
+    return false
+  }
+  // auth 拒绝抑制态：D8 路径以本函数的 false 返回作「快照未推进 → 保持 failed」信号，
+  // 豁免必须让位（否则拒绝后未推进的重拉会发起旧凭据重连，必再拒——「盲试」）
+  if (expectedSnapshot && snapshot.seq <= expectedSnapshot.seq && isAuthRejectedSuppressed()) {
     return false
   }
   expectedSnapshot = snapshot

@@ -59,6 +59,13 @@ import { spawnRuntimeProcess, stopRuntimeProcess } from '../supervisor/process-c
 
 const spawnMock = vi.mocked(spawnRuntimeProcess)
 
+/** 取第 n 次 spawn 时传入的 onReady 回调（模拟 IPC runtime-ready 消息到达） */
+function onReadyOf(callIndex: number): () => void {
+  const call = spawnMock.mock.calls[callIndex]
+  if (!call?.[2]) throw new Error(`spawn call ${callIndex} has no onReady callback`)
+  return call[2]
+}
+
 describe('RuntimeSupervisor start() 并发串行化（AM2）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -110,17 +117,23 @@ describe('RuntimeSupervisor restartForConfigChange（toggle 重启编排收敛�
     }
   }
 
-  it('广播顺序：runtime-restarting 先于 stop，runtime-port 在成功后（renderer 即时进重连等待态）', async () => {
+  it('广播顺序：runtime-restarting 先于 stop，runtime-port 在 listen-ready 后（renderer 即时进等待态）', async () => {
     const events: string[] = []
     getAllWindowsMock.mockReturnValue([makeEventWindow(events)])
     vi.mocked(stopRuntimeProcess).mockImplementation(async () => { events.push('stop') })
     const sup = new RuntimeSupervisor()
     await sup.start()
+    onReadyOf(0)()
     events.length = 0
     await sup.restartForConfigChange()
     // restarting 必须先于任何 stop（原 bridge 编排广播晚于动作，本用例锁定修复后的时序）
     expect(events[0]).toBe('send:runtime-restarting')
     expect(events.indexOf('send:runtime-restarting')).toBeLessThan(events.indexOf('stop'))
+    // hotfix（2026-11-05 启动竞争）：成功广播从「restart 返回即发」改为 listen-ready
+    // 信令驱动——restart 返回时只 spawn 完成（快照未组装），renderer 拉取进
+    // waiting-runtime 等待态；ready 到达才广播 runtime-port，保证连接时端口已 listen
+    expect(events).not.toContain('send:runtime-port')
+    onReadyOf(1)()
     expect(events.at(-1)).toBe('send:runtime-port')
     // 真重启语义：stop 杀旧后必然重新 spawn（第二次），而非幂等短路复用旧实例
     expect(spawnMock).toHaveBeenCalledTimes(2)

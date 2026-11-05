@@ -306,12 +306,20 @@ export function buildRemoteAccessSpawnArgs(env: MobileDistEnv, enabled: boolean)
  *
  * @param port runtime 监听端口
  * @param onExit 子进程退出回调（传入 code），supervisor 用它清理状态
+ * @param onReady runtime listen 就绪回调（IPC `runtime-ready` 消息驱动）——supervisor
+ *        收到才向 renderer 广播连接目标快照，保证 renderer 连接时端口必然已 listen
+ *        （修复 spawn 即广播导致的启动竞争：renderer 早 ~1.3s 连未就绪端口，删除退避
+ *        重连后首败即 failed 终态）
  * @returns { child, token, runtimeId }——child 为已绑定 stdout/stderr/exit 事件的进程实例；
  *          token 为本次 spawn 生成的 WS auth token（supervisor 持有并经 get-runtime-target-snapshot 快照并置暴露给 renderer）；
  *          runtimeId 为本次 spawn 签发的实例标识（supervisor 并入目标快照经 IPC 暴露）
  * @throws runtime 入口文件不存在
  */
-export function spawnRuntimeProcess(port: number, onExit?: (code: number | null) => void): SpawnRuntimeResult {
+export function spawnRuntimeProcess(
+  port: number,
+  onExit?: (code: number | null) => void,
+  onReady?: () => void,
+): SpawnRuntimeResult {
   // S1-W1：每次 spawn 生成新 token（env 注入 + 文件双通道），renderer 重连时经 IPC 拿新值。
   // runtimeId（§6.1）：与 token 同点签发的实例标识（每次 spawn 必新——身份随进程生灭，
   // 复用旧值会让重启后的 runtime 被误判为同一实例）。
@@ -399,7 +407,9 @@ export function spawnRuntimeProcess(port: number, onExit?: (code: number | null)
   const cwd = app.isPackaged ? process.resourcesPath : projectRoot
   // eslint-disable-next-line no-magic-numbers -- TypeScript tuple index, not a business constant
   const spawnOptions: Parameters<typeof spawn>[2] = {
-    stdio: ['pipe', 'pipe', 'pipe'],
+    // 第 4 项 'ipc'：runtime listen 就绪后经 process.send({type:'runtime-ready'}) 通知
+    // supervisor（onReady 回调）。既有 stdout/stderr pipe 行为不变。
+    stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
     cwd,
     // 打包后用 ELECTRON_RUN_AS_NODE 让 Electron 二进制以纯 Node 运行 sidecar；
     // 开发模式也显式设置 env 确保行为一致
@@ -427,6 +437,15 @@ export function spawnRuntimeProcess(port: number, onExit?: (code: number | null)
   child.on('error', (err) => {
     console.error(`[runtime] Spawn error: ${err.message}`)
     onExit?.(SPAWN_ERROR_EXIT_CODE)
+  })
+
+  // listen 就绪信令（IPC 通道）：runtime 在 WS server listen 成功后发
+  // {type:'runtime-ready'}（packages/runtime/src/index.ts）。仅透传该类型，其余
+  // IPC 消息（当前无）忽略。supervisor 侧负责代际校验（迟到/错代丢弃）。
+  child.on('message', (msg: unknown) => {
+    if ((msg as { type?: unknown } | null)?.type === 'runtime-ready') {
+      onReady?.()
+    }
   })
 
   // 打包态 stderr 背压丢弃计数（dev 走 console 转发无此路径，恒 0）：闭包变量生命周期
