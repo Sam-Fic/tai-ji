@@ -10,8 +10,14 @@
  * 三条断言缺一不可（设计 §4.2 RL11）：
  * - (a) 取样点：mermaid 11.16 默认 `htmlLabels: true`（`getEffectiveHtmlLabels` = `?? true`，
  *       本仓未显式设置），flowchart 标签落在 `foreignObject > div > span` 而**不是** `<text>`。
- * - (b) 区分「继承」与「重渲」：旧字体会被 mermaid bake 进 SVG 内联 style，span 的 computed
- *       值可能来自继承而非重渲。断言必须**同时**检查 SVG 内是否还残留旧家族名。
+ * - (b) 区分「继承」与「重渲」：fontFamily 的 bake 落点 = SVG <style> 块的 `:root --mermaid-font-family`
+ *       CSS 规则（mermaid dist `createCssStyles`）——本仓 `mermaid.render(id, source)` 两参调用（无
+ *       container），mermaid core 走 else 分支、**不向任何元素注入内联 style 属性**，「检查 SVG 内联
+ *       style」不可采。(b) 读 SVG <style> 元素文本：旧家族集合从槽位写入前的基线 --font-mono
+ *       计算值派生（首渲 bake 的实际来源；不从 <style> 文本采——其内含 mermaid 主题静态
+ *       默认字体规则，重渲后依然在场，采到会假红），重渲后新 <style> 不得残留旧家族、
+ *       且必须含新家族。两条断言的红路径均经真机验证（终态同步 F2-6）：(a) 首渲后全阻断
+ *       重渲时变红（span computed font 不走页面继承）；(b) 对合成「未重渲」态变红并点名旧家族。
  * - (c) 禁止人工触发：切字体后不切主题、不发新消息，直接断言。若靠「切主题触发重渲」，
  *       G12（字体变化自动重渲）坏了也测不出来。
  *
@@ -30,7 +36,11 @@
 import { test, expect } from './fixtures/launch-app'
 import type { Page } from '@playwright/test'
 
-/** 在渲染树里取 mermaid 文本节点：优先 foreignObject（htmlLabels 默认 true 的形态）。 */
+/**
+ * 在渲染树里取 mermaid 文本节点、SVG <style> 块文本与当前等宽栈：优先 foreignObject（htmlLabels 默认 true 的形态）。
+ * styleText 是 (b) 重渲证据的采样面（fontFamily bake 唯一落点，两参 render 不产内联 style 属性）；
+ * stack 在槽位写入前采样 = 首渲 bake 的实际来源（resolveMermaidFontFamily 的读点）。
+ */
 const SAMPLE_NODE_JS = `(() => {
   const root = document.querySelector('.md-mermaid-wrap')
   if (!root) return null
@@ -41,9 +51,8 @@ const SAMPLE_NODE_JS = `(() => {
   if (!node) return null
   return {
     font: getComputedStyle(node).fontFamily,
-    inline: Array.from(root.querySelectorAll('[style]'))
-      .map((el) => el.getAttribute('style') || '')
-      .join(';'),
+    styleText: root.querySelector('svg style')?.textContent || '',
+    stack: getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim(),
   }
 })()`
 
@@ -79,7 +88,11 @@ test.describe('mermaid 字体跟随（font-system RL11）', () => {
       .catch(() => false)
     expect(svgReady, 'mermaid 未渲染出 SVG（哨兵词未触发或渲染失败）').toBe(true)
 
-    const baseline = (await page.evaluate(SAMPLE_NODE_JS)) as { font: string; inline: string } | null
+    const baseline = (await page.evaluate(SAMPLE_NODE_JS)) as {
+      font: string
+      styleText: string
+      stack: string
+    } | null
     expect(baseline, '未采到 mermaid 文本节点（渲染形态与预期不符）').not.toBeNull()
 
     // (c) 切字体：只写槽位，不切主题、不发新消息
@@ -113,21 +126,34 @@ test.describe('mermaid 字体跟随（font-system RL11）', () => {
         'G12 失效：initialize 门槛未含字体、或 MermaidRenderer 未监听到槽位变化',
     ).toBe(true)
 
-    // (b) 复检：SVG 内联 style 不得残留旧等宽家族（否则只是「继承」而非「重渲」，G12 未生效）。
-    // 旧家族集合从构建期等宽栈（--font-mono 计算值，即重渲前 bake 进 SVG 的来源）动态派生，
-    // 不硬编码字面量——栈演进后残留检查仍成立（F1-38 数据驱动替代）。
-    const after = (await page.evaluate(SAMPLE_NODE_JS)) as { font: string; inline: string } | null
+    // (b) 复检（重渲证据）：fontFamily bake 落点 = SVG <style> 块的 :root --mermaid-font-family 规则
+    // （两参 mermaid.render 无 container → mermaid core else 分支不产任何内联 style 属性）。
+    // 旧家族集合从基线（槽位写入前）的 --font-mono 计算值派生——即首渲 bake 的实际来源；
+    // 不从 <style> 文本采旧家族：其内含 mermaid 主题静态默认规则（trebuchet ms 等），
+    // 重渲后依然在场，采到会假红。重渲后新 <style> 不得残留旧家族、且必须含新家族。
+    // （红路径已真机验证：未重渲态下 stale 命中 JetBrains Mono、IBM Plex Mono——终态同步 F2-6）
+    const after = (await page.evaluate(SAMPLE_NODE_JS)) as {
+      font: string
+      styleText: string
+      stack: string
+    } | null
     expect(after).not.toBeNull()
-    const oldMonoFamilies = await page.evaluate(() => {
-      const stackValue = getComputedStyle(document.documentElement).getPropertyValue('--font-mono')
-      return [...new Set([...stackValue.matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1]))]
-    })
-    expect(oldMonoFamilies.length, '未从构建期等宽栈采到家族名（--font-mono 值形态变化？）').toBeGreaterThan(0)
-    const stale = oldMonoFamilies.filter((family) => after!.inline.includes(family))
+    const oldMonoFamilies = [
+      ...new Set([...baseline!.stack.matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1])),
+    ]
+    expect(
+      oldMonoFamilies.length,
+      '未从基线 --font-mono 计算值采到家族名（栈形态变化？）',
+    ).toBeGreaterThan(0)
+    const stale = oldMonoFamilies.filter((family) => after!.styleText.includes(family))
     expect(
       stale,
-      `SVG 内联 style 仍残留旧等宽家族 ${stale.join('、')}——文字跟随来自 CSS 继承而非重渲，G12 未真正生效`,
+      `SVG <style> 块仍残留旧等宽家族 ${stale.join('、')}——文字跟随来自 CSS 继承而非重渲，G12 未真正生效`,
     ).toEqual([])
+    expect(
+      after!.styleText.includes("'PingFang SC'"),
+      'SVG <style> 块未含新家族——重渲未发生（bake 落点或 initialize 门槛变化？）',
+    ).toBe(true)
 
     // 清理
     await page.evaluate(() => {
