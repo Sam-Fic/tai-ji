@@ -50,13 +50,7 @@ import { bestEffort } from "../assembly/best-effort.ts";
 // finalizeRecord，零编排语义）——消费点直连 persistence，不再反向 import 编排层。
 import { settleWorkflowRecord } from "../persistence/execution-record.ts";
 import { killRecordChildWithEscalation } from "../engine/host/spawned-children.ts";
-// [u7a 生产补挂] 批量 dispose 收敛点推最新在途计数（D5 出口——engine 域叶子模块，
-// 本模块不得被 inflight-snapshot 反向依赖，import 方向单向安全）。
-import { notifyInFlightChanged } from "../engine/inflight-snapshot.ts";
-// [V2 决策 3] lifecycle-manager idle timer：record 终态化/取消的 disarm 面
-// 路径防误杀）。
-import { disarmIdleTimer } from "../lifecycle/lifecycle-manager.ts";
-import { hasArmedIdleTimer, isResumable } from "../lifecycle/lifecycle-predicates.ts";
+import { isResumable } from "../lifecycle/lifecycle-predicates.ts";
 import { doFinalizeRecord } from "../persistence/finalize-record.ts";
 import type { ModelConfigService } from "../assembly/model-config-service.ts";
 import type { NotifyHost, PiLike } from "../notify/notify-host.ts";
@@ -167,10 +161,8 @@ export class RecordLifecycle {
       // 回收侧 i：abort 在途 controller（排队的 acquire / 在途 signal listener 立即
       // 感知打断）。幂等：已 aborted 的 controller.abort() 是 no-op。
       record.controller?.abort();
-      // 回收侧 ii：杀链记账（SIGTERM + 30s SIGKILL 升级，收敛 T2④同款）。
-      // 回收侧 iii：disarm idle timer（进程回收后 timer 只会误触发）。
+      // 回收侧 ii：杀链记账（SIGTERM + 立即 SIGKILL，收敛 T2④同款）。
       killRecordChildWithEscalation(record.id, `disposeAllRecords (${reason})`);
-      disarmIdleTimer(record.id);
       // 在途轮打断 + 队列清空（Continuation 打断编排的 dispose 侧触发——立即打断
       // 不挂起，排队消息随主 session 分叉作废）。
       this.deps.abortContinuationQueue(record.id);
@@ -208,10 +200,6 @@ export class RecordLifecycle {
       this.deps.getNotifyHost().emitPendingUnregister(record.id, "completed");
       count++;
     }
-    // [u7a 生产补挂] 批量 dispose 收敛点推一次终态快照（绝对计数语义下循环内逐条推
-    // 与收敛后单推等价，单推省 N-1 次同步派发）。此刻镜像已由上方 kill/disarm 全量
-    // 清零（壳 dispose 链的 markAllSpawnedChildrenDead 更先行——两清零路径正交幂等）。
-    notifyInFlightChanged();
     return count;
   }
 
@@ -261,7 +249,7 @@ export class RecordLifecycle {
    *                           Continuation settle 分支 / one-shot 主干尾部，
    *                           顺序约束 [写死]——intent 翻转必须在通知链之后，
    *                           否则 gate ①归档静默吞掉收尾轮通知）
-   *   running + force:false + 无活进程（hasArmedIdleTimer/isResumable）
+   *   running + force:false + 无活进程（isResumable）
    *                         → 立即归档收尾（archiveIdleRecord）
    *   idle                  → 立即归档收尾（幂等——已 archived 时 markSettledOut no-op）
    *
@@ -279,11 +267,11 @@ export class RecordLifecycle {
         return;
       }
       const inFlightRound = this.deps.hasActiveContinuationRound(record.id);
-      if (!inFlightRound && (hasArmedIdleTimer(record) || isResumable(record))) {
-        // 无在跑轮（[M5] hasArmedIdleTimer = timer armed 保活 / isResumable 轮终进程已回收——
-        // chat 轮间与 one-shot 完成态同判；在途轮判据以 Continuation activeRunId
-        // 为权威——进程镜像对协议轮有 spawn 窗误判面）：立即归档收尾
-        //（archiveIdleRecord 内回收保活进程 + disarm timer）。
+      if (!inFlightRound && isResumable(record)) {
+        // 无在跑轮（isResumable = 轮终进程已回收 / 保活态——chat 轮间与 one-shot
+        // 完成态同判；在途轮判据以 Continuation activeRunId 为权威——进程镜像对
+        // 协议轮有 spawn 窗误判面）：立即归档收尾
+        //（archiveIdleRecord 内回收保活进程）。
         await this.archiveIdleRecord(record);
         return;
       }
@@ -357,14 +345,11 @@ export class RecordLifecycle {
   /**
    * 无在跑轮 record 的手动收起（close action 的 idle / 无活进程分支）。
    *
-   * [M5] 保留保活进程回收语义：hasArmedIdleTimer（timer armed 保活）必须先显式回收进程 +
-   * disarm timer——否则归档后无人再杀它。随后走 {@link archiveRecord} 归档编排
+   * 显式回收保活进程（归档后无人再杀它）。随后走 {@link archiveRecord} 归档编排
    * （不终态化——record 留内存 idle + archived，message 寻回可续聊）。
    */
   async archiveIdleRecord(record: ExecutionRecord): Promise<void> {
-    // [T2④ / LC-2] SIGTERM 被无视时 30s 升级 SIGKILL。
     // [W3] 实际终止在引擎进程内（kill 链记账 + abort 驱动）。
-    disarmIdleTimer(record.id);
     killRecordChildWithEscalation(record.id, "archiveIdleRecord");
     await this.archiveRecord(record, "close(idle)");
   }
@@ -372,16 +357,8 @@ export class RecordLifecycle {
   // [collect 退役] 原 archiveBatchMembers（批完成自动 close——flush 投递后对成员
   // 静默归档）已随 sync 批机制整体删除。
 
-  /**
-   * [U5 / §3.2.1 资源组] idle 超时**进程回收**（现状 5min 保留）：idle timer 到期
-   * 只回收保活进程——归档（archived）是用户意愿位（close 专属），超时不是用户动作，
-   * 不动 intent / 占用位 / stopReason，record 保持 idle 随时可续聊（锚在）。
-   * （[H1 U6→U5] 旧 closeNow = idle 超时终态化——终态概念删除后改为纯资源回收。）
-   */
-  async idleTimeoutRecycle(record: ExecutionRecord): Promise<void> {
-    disarmIdleTimer(record.id);
-    killRecordChildWithEscalation(record.id, "idleTimeoutRecycle");
-  }
+  // [U5 资源组] idleTimeoutRecycle（idle timer 超时的进程回收）已随 idle timer
+  // 机制删除：保活进程无超时回收，归档（close）与 dispose 是仅存的进程回收入口。
 
   // [H1 U6] closeAfterRoundSettled（[M5] chat 域「轮完成时终态化」消费方）已随 chat 域
   // closeAfterRound 挂起标志退役删除：D4 close = abort 在途 + 清空队列 + 立即终态化
@@ -420,10 +397,9 @@ export class RecordLifecycle {
    */
   private cancelBackground(record: ExecutionRecord): boolean {
     record.controller?.abort();
-    // [M6/T2④/LC-2] 显式 kill + disarm：abort 轮级 signal 驱动引擎停轮（cancel 帧 →
-    // 收敛窗），killRecordChildWithEscalation 保证镜像/残留进程必死。
+    // [M6/T2④] 显式 kill：abort 轮级 signal 驱动引擎停轮（cancel 帧 → 收敛），
+    // killRecordChildWithEscalation 保证镜像/残留进程必死。
     killRecordChildWithEscalation(record.id, "cancelBackground");
-    disarmIdleTimer(record.id);
     // 在途轮打断 + 队列清空（cancel 语义 = 停下这一轮——排队消息随用户显式叫停丢弃；
     // Continuation 实例保留：record 未消亡，续聊经 continuationFor 复用）。
     this.deps.abortContinuationQueue(record.id);

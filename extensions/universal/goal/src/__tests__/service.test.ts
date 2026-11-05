@@ -102,7 +102,6 @@ describe("finalizeGoal — history 写入矩阵", () => {
 		finalizeGoal(state, "complete", ports);
 		expect(ports.history.length).toBe(1);
 		expect((ports.history[0] as { status: string }).status).toBe("complete");
-		expect(state.completedAtTurnIndex).toBe(state.currentTurnIndex);
 	});
 
 	it("cancelled → 写 history", () => {

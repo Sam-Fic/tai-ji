@@ -35,7 +35,6 @@ import {
   unknownMethodError,
   writeRunEvent,
   type FrameLoopContext,
-  REVERSE_TIMEOUT_DEFAULT_MS,
   toProtocolError as toProtocolErrorShared,
   type ActiveRun,
   type FrameWriter,
@@ -54,7 +53,6 @@ import {
   type InitializeResult,
   type ProbeReport,
   type ReadParams,
-  type ReverseRequestClock,
   type ReverseResponseResult,
   type RunParams,
   type SessionView,
@@ -80,10 +78,6 @@ export interface EngineProtocolServerOptions {
   engine?: EnginePort & {
     bindAskUser?(handler: ((req: UiRequest) => Promise<UiResponse>) | undefined): void;
   };
-  /** 反向请求计时侧（armEngineSelfDestruct 产物；缺省不计时——测试用）。 */
-  reverseClock?: ReverseRequestClock;
-  /** 应答等待缺省超时（反向请求两阶段等待上限兜底；默认 REVERSE_TIMEOUT_DEFAULT_MS）。 */
-  reverseTimeoutMs?: number;
   /**
    * pi agent 目录（引擎查询范围 listModels/validateModel 的数据目录；缺省 =
    * resolvePiAgentDir()——env PI_CODING_AGENT_DIR 优先、缺省系统 pi 目录）。
@@ -92,7 +86,7 @@ export interface EngineProtocolServerOptions {
   piAgentDir?: string;
 }
 
-// [§2.11] ReversePending / REVERSE_TIMEOUT_DEFAULT_MS / ActiveRun / FrameWriter 共用
+// [§2.11] ReversePending / ActiveRun / FrameWriter 共用
 // SDK `./server` 子入口的声明单源（pi 侧 method 字段为扩展位，SDK 类型已含）。
 
 /** 构造缺省 pi 引擎（main.ts 的 server 构造缺省值；测试注入 fake）。 */
@@ -107,8 +101,6 @@ export function createDefaultPiEngine(): PiEngine {
 export class EngineProtocolServer {
   private readonly write: FrameWriter;
   private readonly engine: NonNullable<EngineProtocolServerOptions["engine"]>;
-  private readonly reverseClock: ReverseRequestClock | undefined;
-  private readonly reverseTimeoutMs: number;
   /** 引擎查询范围数据目录（listModels/validateModel 应答源；见 opts.piAgentDir）。 */
   private readonly queryAgentDir: string;
   private readonly frameLoop: FrameLoopContext;
@@ -122,8 +114,6 @@ export class EngineProtocolServer {
   constructor(opts: EngineProtocolServerOptions) {
     this.write = opts.write;
     this.engine = opts.engine ?? createDefaultPiEngine();
-    this.reverseClock = opts.reverseClock;
-    this.reverseTimeoutMs = opts.reverseTimeoutMs ?? REVERSE_TIMEOUT_DEFAULT_MS;
     this.queryAgentDir = opts.piAgentDir ?? resolvePiAgentDir();
     this.dispatchTable = this.buildDispatchTable();
     this.frameLoop = {
@@ -361,8 +351,6 @@ export class EngineProtocolServer {
       {
         write: this.write,
         pending: this.reversePending,
-        timeoutMs: this.reverseTimeoutMs,
-        ...(this.reverseClock !== undefined ? { clock: this.reverseClock } : {}),
         nextId: () => `rev-${++this.revSeq}`,
         pendingExtras: (method) => ({ method }),
       },
@@ -374,27 +362,24 @@ export class EngineProtocolServer {
   /** 反向请求应答落位。
    *
    * ack 两阶段（R9-2）：人机交互通道（host/askUser）宿主先回
-   * `{ack:true}`——只 ack 计时侧（移出 in-flight 自灭计时），**不终结等待**；最终
-   * 结果帧才 settle。数据范围通道宿主直接回终态（{ok:true} 等），ack 即 settle。 */
+   * `{ack:true}`——不终结等待；最终结果帧才 settle。数据范围通道宿主直接回终态
+   *（{ok:true} 等），ack 即 settle。（原 ack 计时侧登记已随自灭计时辅助判据删除。） */
   private settleReverse(id: number | string, frame: { result?: unknown; error?: unknown }): void {
     const pending = this.reversePending.get(String(id));
     if (pending === undefined) {
-      // 迟到/未知应答帧（超时已判死清理、或重复应答）：debug 留痕后丢弃，不落位。
+      // 迟到/未知应答帧（重复应答）：debug 留痕后丢弃，不落位。
       logger.debug(`[protocol] response frame for unknown reverse request ${String(id)} dropped (already settled or unknown id)`);
       return;
     }
-    this.reverseClock?.acked(String(id));
     if (
       frame.error === undefined &&
       typeof frame.result === "object" && frame.result !== null &&
       "ack" in frame.result && (frame.result as { ack: unknown }).ack === true
     ) {
-      // 两阶段第一段：等待继续（timer 已在 reverseRequestInternal 兜底，不重复武装）
+      // 两阶段第一段：等待继续
       return;
     }
     this.reversePending.delete(String(id));
-    clearTimeout(pending.timer);
-    this.reverseClock?.settled(String(id));
     if (frame.error !== undefined) {
       pending.reject(new Error(`reverse request ${String(id)} rejected: ${toErrorMessage(frame.error)}`));
       return;

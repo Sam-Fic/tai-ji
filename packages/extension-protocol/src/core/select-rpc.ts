@@ -1,17 +1,17 @@
 /**
  * select+marker 通道 RPC 原语（D8）。
  *
- * 消费方（session-manager / subagent-workflow inflight-reporter）各自手写过
+ * 消费方（session-manager / subagent-workflow journal-reporter）各自手写过
  * 「ctx.ui.select(marker, [payload], opts) + 失败折叠 + JSON 检测」传输核，
  * 形态同构、留痕/超时策略各异。本原语只收敛传输核与失败折叠契约，真差异留在调用方：
  *
  * - 判别结果而非抛错（调用方统一按 reason 折叠 isError / 重试）；
  * - 回包只做 JSON 合法性检测（`non-json` 判别 + 留痕），parsed 结果的消费留调用方——
- *   value 恒 raw string（session-manager raw 透传 / inflight ack 全等匹配，回包消费
+ *   value 恒 raw string（session-manager raw 透传 / journal ack 全等匹配，回包消费
  *   是真差异，不进原语）；
  * - payload 调用方已序列化（原语不 stringify——各协议序列化形状各异：嵌套
  *   {action,params} / 快照帧，不引入内部 stringify 异常面）；
- * - mode 门控留调用方（inflight 在 attachSession 处 / session-manager 无门控——
+ * - mode 门控留调用方（journal 在 attachSession 处 / session-manager 无门控——
  *   四态 reason 无 non-rpc 语义）；
  * - `ui.select` 缺席（非 GUI ctx）由调用方前置判定（沿已退役的 ask-user askUserInteract
  *   先例——`isGuiCapable(ctx) && ctx.ui?.select`，git 历史可溯；isGuiCapable 现存于本包

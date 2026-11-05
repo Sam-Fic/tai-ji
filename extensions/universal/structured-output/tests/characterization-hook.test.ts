@@ -11,11 +11,10 @@
 //      直接 return，不重置计数（toolUse 后同一 turn 链的失败累计仍走 FAILED 分支）
 //   2. lastSchemaError 只在 steer 后清空——超上限时保留最近错误（turn 自然结束）
 //
-// [U2 重锁 2026-08-28] 设计 §7.4「RetryState 增 terminal 态」为允许的基线变更：
-//   - ②：同 turn 3 次同签名失败 → 门禁（loop-gate）在第 3 次 terminal + shutdown，
-//     turn_end 不再 steer（旧基线：single steer）——硬门禁接管软 steer
-//   - ③：第 3 轮失败同时是第 3 次同签名失败 → terminal 抢在 hookRetryCount 上限
-//     之前拦截（旧基线：超上限放弃）；steer 总数仍 2，新增 shutdown 副作用断言
+// [行为锁定 2026-11-04] 连续同签名失败熔断（terminal + abort/shutdown 杀子进程）
+// 已删除：失败只记账不杀进程，steer 重试上限（MAX_HOOK_RETRIES）是 hook 侧唯一
+// 停止点。②③ 原断言（terminal 拦截 steer / shutdown 副作用）改锁删除后语义：
+// 同签名失败不再杀进程、steer 照常推进到上限。
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -40,9 +39,6 @@ const originalSchemaEnv = process.env[SCHEMA_ENV_NAME];
 afterEach(() => {
   // fixture 的 restoreSchemaEnv 只处理 env；vi.restoreAllMocks 必须在消费方保留
   restoreSchemaEnv(originalSchemaEnv);
-  // terminal 链含 fire-and-forget handler 的测试用 fake timers 包裹，此处还原真实
-  // timers 并丢弃未触发的 fake timer（不残留跨测试的 timer）
-  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -78,86 +74,53 @@ describe("characterization: setupWorkflowHook timing (baseline before RetryState
     expect(opts).toEqual({ deliverAs: "steer", triggerTurn: true });
   });
 
-  it("② [U2 重锁] 3 same-signature failures in one turn → gate terminal + shutdown at 3rd, turn_end does NOT steer (was: single steer)", async () => {
-    vi.useFakeTimers(); // terminal 链 fire-and-forget handler——fake 掉避免真实 timer 泄漏
+  it("② 同 turn 3 次同签名失败 → 不杀子进程（无 abort/shutdown），turn_end 照常 steer 一次", async () => {
     const pi = createMockPi();
     await loadExtension(pi, SCHEMA);
 
     await pi.emit("tool_execution_end", FAILED_TOOL_END);
     await pi.emit("tool_execution_end", FAILED_TOOL_END);
-    expect(pi.ctx.shutdown).not.toHaveBeenCalled(); // 2 次 < 阈值 3
-    // 第 3 次同签名失败：合一状态机 terminal 置位（单字段，steer 检查链直接可读）+ shutdown
     await pi.emit("tool_execution_end", FAILED_TOOL_END);
-    expect(pi.ctx.shutdown).toHaveBeenCalledTimes(1);
-    expect(pi.appendEntry).toHaveBeenCalledWith(
-      "structured-output:gate",
-      expect.objectContaining({ event: "terminated", consecutiveFailures: 3 }),
-    );
+    // 删除后语义：连续失败只记账，无杀进程副作用
+    expect(pi.ctx.shutdown).not.toHaveBeenCalled();
+    expect(pi.ctx.abort).not.toHaveBeenCalled();
+    expect(pi.appendEntry).not.toHaveBeenCalled();
 
-    // turn_end：检查链第 0 条（terminal）拦截 → 不 steer（旧基线：1 次 steer）
+    // turn_end：soCallCount=3 且未成功 → steer（回灌最近错误）
     await pi.emit("turn_end", turnEndPayload());
-    expect(pi.sendMessage).not.toHaveBeenCalled();
+    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    const msg = (pi.sendMessage.mock.calls[0]![0] as { content: string }).content;
+    expect(msg).toContain("FAILED validation");
   });
 
-  it("③ [U2 重锁] 3 failed turns → exactly 2 steers; 3rd failure (same signature ×3) hits gate terminal BEFORE retry-cap give-up → shutdown", async () => {
-    vi.useFakeTimers(); // terminal 链 fire-and-forget handler——fake 掉避免真实 timer 泄漏
+  it("③ 3 failed turns → exactly 2 steers (retry cap), subprocess never killed", async () => {
     const pi = createMockPi();
     await loadExtension(pi, SCHEMA);
 
-    // 失败→steer 循环 3 轮：前 2 轮 steer（失败次数 1、2），第 3 轮失败是第 3 次
-    // 同签名失败 → 门禁 terminal + shutdown；turn_end 被检查链第 0 条拦截不 steer。
-    // steer 总数与旧基线一致（2），拦截者从 hookRetryCount 上限变为 terminal。
+    // 失败→steer 循环 3 轮：前 2 轮 steer，第 3 轮失败因 hookRetryCount 上限放弃。
+    // hook 侧唯一停止点是重试上限；全程无杀进程副作用。
     for (let i = 0; i < 3; i++) {
       await pi.emit("tool_execution_end", FAILED_TOOL_END);
       await pi.emit("turn_end", turnEndPayload());
     }
     expect(pi.sendMessage).toHaveBeenCalledTimes(2);
-    expect(pi.ctx.shutdown).toHaveBeenCalledTimes(1);
+    expect(pi.ctx.shutdown).not.toHaveBeenCalled();
+    expect(pi.ctx.abort).not.toHaveBeenCalled();
   });
 
-  it("④ after a successful call, later failed calls never steer again (soSucceededEver short-circuit; gate count cleared by success)", async () => {
+  it("④ after a successful call, later failed calls never steer again (soSucceededEver short-circuit)", async () => {
     const pi = createMockPi();
     await loadExtension(pi, SCHEMA);
 
     // 成功调用 → soSucceededEver=true（终态）。后续失败调用 + turn_end 均不干预。
-    // 门禁侧：成功清零后仅 1 次失败，未达阈值 → 无 shutdown（软硬门禁互不干扰）。
     await pi.emit("tool_execution_end", SUCCESS_TOOL_END);
     await pi.emit("tool_execution_end", FAILED_TOOL_END);
     await pi.emit("turn_end", turnEndPayload());
 
     expect(pi.sendMessage).not.toHaveBeenCalled();
-    expect(pi.ctx.shutdown).not.toHaveBeenCalled();
-  });
-
-  // [U2 新增基线] 设计 §7.4：terminal 是 shutdown 失效路径下的保险分支——
-  // 本测试锁「terminal 后 hook 彻底哑火」：即使 turn_end 带不同 stopReason/
-  // 后续失败继续到达，也不再有任何 steer。
-  it("⑤ [U2] after gate terminal, no steer under ANY subsequent turn_end shape (shutdown-failure insurance)", async () => {
-    vi.useFakeTimers(); // terminal 链 fire-and-forget handler——fake 掉避免真实 timer 泄漏
-    const pi = createMockPi();
-    await loadExtension(pi, SCHEMA);
-
-    // 3 次同签名失败 → terminal
-    for (let i = 0; i < 3; i++) {
-      await pi.emit("tool_execution_end", FAILED_TOOL_END);
-    }
-    expect(pi.ctx.shutdown).toHaveBeenCalledTimes(1);
-
-    // 保险分支：后续任意 turn 形态（toolUse / stop）与失败均不 steer
-    await pi.emit("turn_end", turnEndPayload("toolUse"));
-    await pi.emit("tool_execution_end", failedToolEndWith("a different error"));
-    await pi.emit("turn_end", turnEndPayload());
-    expect(pi.sendMessage).not.toHaveBeenCalled();
-    // terminal 幂等：第 4+ 次失败不重复 shutdown
-    expect(pi.ctx.shutdown).toHaveBeenCalledTimes(1);
   });
 
   // ── U3（审查项#8/#9/#1）新增基线 ─────────────────────────────
-
-  // 每轮不同字段的失败原料——字段集合不同 = 门禁签名不同，避免门禁 terminal
-  //（3 次同签名）先于 hook 上限拦截，干扰预算语义断言。
-  const failWith = (field: string) =>
-    failedToolEndWith(paramLayerErrorText(`  - ${field}: must be number`, "{}"));
 
   it("⑥ [U3 审查项#9 + F4] stopReason=error/aborted/deferred 轮不 steer（防 chatMode 复用子进程时陈旧 steer 泄漏到下一轮），预算不扣、状态保留", async () => {
     // deferred：pi-ai StopReason 枚举成员（types.d.ts:275，provider 延迟响应挂起）——
@@ -191,7 +154,7 @@ describe("characterization: setupWorkflowHook timing (baseline before RetryState
 
     // 第 1 轮：发送失败（await 路径 reject —— 模拟 compaction 中开轮抛错）
     pi.sendMessage.mockRejectedValueOnce(new Error("compaction in progress"));
-    await pi.emit("tool_execution_end", failWith("count"));
+    await pi.emit("tool_execution_end", failedToolEndWith(paramLayerErrorText("  - count: must be number", "{}")));
     await pi.emit("turn_end", turnEndPayload());
     expect(pi.sendMessage).toHaveBeenCalledTimes(1);
 
@@ -205,14 +168,14 @@ describe("characterization: setupWorkflowHook timing (baseline before RetryState
     });
 
     // 预算未扣减证明：之后两个正常轮各 steer 一次（若失败轮白扣，此处只剩 1 次）
-    await pi.emit("tool_execution_end", failWith("alpha"));
+    await pi.emit("tool_execution_end", failedToolEndWith(paramLayerErrorText("  - alpha: must be number", "{}")));
     await pi.emit("turn_end", turnEndPayload());
-    await pi.emit("tool_execution_end", failWith("beta"));
+    await pi.emit("tool_execution_end", failedToolEndWith(paramLayerErrorText("  - beta: must be number", "{}")));
     await pi.emit("turn_end", turnEndPayload());
     expect(pi.sendMessage).toHaveBeenCalledTimes(3);
 
     // 第 4 个正常轮：hookRetryCount=2 达上限 → 放弃（失败有界语义不变）
-    await pi.emit("tool_execution_end", failWith("gamma"));
+    await pi.emit("tool_execution_end", failedToolEndWith(paramLayerErrorText("  - gamma: must be number", "{}")));
     await pi.emit("turn_end", turnEndPayload());
     expect(pi.sendMessage).toHaveBeenCalledTimes(3);
   });
@@ -231,7 +194,6 @@ describe("characterization: setupWorkflowHook timing (baseline before RetryState
       "structured-output:hook",
       expect.objectContaining({ event: "steer_send_failed", error: "extension deactivated" }),
     );
-    expect(pi.ctx.shutdown).not.toHaveBeenCalled();
   });
 
   it("⑨ [U3 审查项#1] 大 payload 失败：回灌错误块经截断有界化，首部错误类型+字段名保留，全量实参回显不整体入回灌", async () => {

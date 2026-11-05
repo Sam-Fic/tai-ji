@@ -518,56 +518,6 @@ describe('btw 线历史读取（线 sessionId 独立索引；W4a 判别器 = 注
     expect(page.truncated).toBe(false)
   })
 })
-describe('interrupted 判定的未附着前提门禁（U8 语义在索引路径的保留形态）', () => {
-  /** 附着态 reader：pm.getClient(线 id) 返回在场 client（附着线不判中断——前提不成立） */
-  function makeAttachedReader(registry: (sessionId: string) => string | undefined) {
-    const resolve = vi.fn(registry)
-    const sessionStore = {
-      scanSessions: vi.fn(() => [] as Array<{ id: string; filePath: string }>),
-      convertHistory: vi.fn((raw: unknown[]) => fakeConvertHistory(raw)),
-    } as unknown as ISessionStore
-    const client = {
-      getEntries: vi.fn(() => Promise.reject(new Error('rpc down'))),
-    }
-    const reader = new SessionHistoryReader({
-      pm: { getClient: vi.fn(() => client) } as unknown as IProcessManager,
-      sessionStore,
-      resolveBtwThreadFile: resolve,
-      scanner: { scanTurnBoundariesForward, verifyTurnBoundaries },
-    })
-    return { reader, client }
-  }
-
-  it('附着 btw 线（client 在场）：interrupted 不出场（判定前提「会话未附着」不成立——线尾 user entry 不得误标活线），且不触任何 RPC', async () => {
-    // 线文件尾 = user entry（中断形态）：若判定未按在场性关闭，附着中的活线被误标
-    const { registry } = seedThreadFile('attached-line', [
-      messageEntry('e1', 'assistant', 'reply'),
-      messageEntry('e2', 'user', 'generating'),
-    ])
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      const { reader, client } = makeAttachedReader(registry)
-      const result = await reader.getHistory('attached-line')
-      // 终态读取分派与进程解耦（AX4）：历史查看零 RPC（client 在场只关中断判定）
-      expect(client.getEntries).not.toHaveBeenCalled()
-      expect(result.messages.map((m) => m.content)).toEqual(['reply', 'generating'])
-      // 剥除语义 = 值 undefined（消费方按 !== undefined 判「无判定」），非键删除
-      expect(result.interrupted).toBeUndefined()
-    } finally {
-      warnSpy.mockRestore()
-    }
-  })
-
-  it('对照：未附着（离线）同形态线文件中断判定照常出场（门禁只拦附着态，不废中断判定链）', async () => {
-    const { registry } = seedThreadFile('offline-line', [
-      messageEntry('e1', 'assistant', 'reply'),
-      messageEntry('e2', 'user', 'interrupted tail'),
-    ])
-    const { reader } = makeOfflineReader(registry)
-    const result = await reader.getHistory('offline-line')
-    expect(result.interrupted).toBe(true)
-  })
-})
 describe('非 btw 线回归路径（原行为不变）', () => {
   it('普通 sid：判别器未命中即走主会话定位链（scanSessions miss → 静默空）', async () => {
     // 生产注入语义：非线 id 查注册表 miss → undefined → 主会话定位链（索引编排单次判别）

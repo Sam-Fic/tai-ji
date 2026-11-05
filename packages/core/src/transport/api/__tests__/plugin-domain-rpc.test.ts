@@ -12,9 +12,9 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const mockCommand = vi.fn<(type: string, payload: unknown, timeoutMs: number) => Promise<unknown>>()
+const mockCommand = vi.fn<(type: string, payload: unknown) => Promise<unknown>>()
 vi.mock('../request', () => ({
-  command: (type: string, payload: unknown, timeoutMs: number) => mockCommand(type, payload, timeoutMs),
+  command: (type: string, payload: unknown) => mockCommand(type, payload),
 }))
 
 import {
@@ -31,7 +31,6 @@ import {
   confirmPluginInstall,
   cancelPluginInstall,
 } from '../domains/plugin'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -45,7 +44,6 @@ describe('plugin.invoke 域封装（D9）', () => {
     expect(mockCommand).toHaveBeenCalledWith(
       'plugin.invoke',
       { pluginId: 'wool-workbuddy', method: 'getStatus', params: { providerId: 'wool-workbuddy' } },
-      RPC_BACKSTOP_TIMEOUT_MS,
     )
     expect(r).toEqual({ loggedIn: true })
   })
@@ -62,7 +60,7 @@ describe('清单域封装（U5）', () => {
     const reply = { plugins: [{ packageName: '@acme/plugin-wool-workbuddy', pluginId: 'wool-workbuddy', displayName: 'WorkBuddy', pluginVersion: '1.0.0', installed: false }] }
     mockCommand.mockResolvedValue(reply)
     const r = await listAvailablePlugins()
-    expect(mockCommand).toHaveBeenCalledWith('plugin.listAvailable', {}, RPC_BACKSTOP_TIMEOUT_MS)
+    expect(mockCommand).toHaveBeenCalledWith('plugin.listAvailable', {})
     expect(r).toEqual(reply)
   })
 
@@ -70,7 +68,7 @@ describe('清单域封装（U5）', () => {
     const reply = { entries: [{ packageName: '@acme/plugin-wool-workbuddy', pluginId: 'wool-workbuddy', displayName: 'WorkBuddy', pluginVersion: '1.0.0' }] }
     mockCommand.mockResolvedValue(reply)
     const r = await getPluginCatalog()
-    expect(mockCommand).toHaveBeenCalledWith('plugin.catalog', {}, RPC_BACKSTOP_TIMEOUT_MS)
+    expect(mockCommand).toHaveBeenCalledWith('plugin.catalog', {})
     expect(r).toEqual(reply)
   })
 })
@@ -79,7 +77,7 @@ describe('plugin.uiEvent 域封装（D8，command 通道）', () => {
   it('经 command 发 plugin.uiEvent 帧（payload 原样）并等 pong ack settle', async () => {
     const payload = { pluginId: 'wool-workbuddy', viewId: 'authorize', componentId: 'pat', event: 'change', value: 'token' }
     await expect(sendPluginUiEvent(payload)).resolves.toBeUndefined()
-    expect(mockCommand).toHaveBeenCalledWith('plugin.uiEvent', payload, RPC_BACKSTOP_TIMEOUT_MS)
+    expect(mockCommand).toHaveBeenCalledWith('plugin.uiEvent', payload)
   })
 
   it('未送达（WS 未 OPEN）→ command 立即 reject 透传，不留 65s 悬挂窗口（语义实装在 request.ts command 本体，此处验证透传）', async () => {
@@ -97,14 +95,14 @@ describe('插件运行态封装（S13：list / toggle / ui.snapshot / ui.clearMo
     const plugins = [{ id: 'wool-workbuddy', status: 'crashed' }]
     mockCommand.mockResolvedValue({ plugins })
     await expect(listPlugins()).resolves.toBe(plugins)
-    expect(mockCommand).toHaveBeenCalledWith('plugin.list', {}, RPC_BACKSTOP_TIMEOUT_MS)
+    expect(mockCommand).toHaveBeenCalledWith('plugin.list', {})
   })
 
   it('togglePlugin → plugin.toggle 透传 pluginId/enabled，解包 reply.plugins', async () => {
     const plugins = [{ id: 'wool-workbuddy', status: 'active' }]
     mockCommand.mockResolvedValue({ plugins })
     await expect(togglePlugin('wool-workbuddy', false)).resolves.toBe(plugins)
-    expect(mockCommand).toHaveBeenCalledWith('plugin.toggle', { pluginId: 'wool-workbuddy', enabled: false }, RPC_BACKSTOP_TIMEOUT_MS)
+    expect(mockCommand).toHaveBeenCalledWith('plugin.toggle', { pluginId: 'wool-workbuddy', enabled: false })
   })
 
   it('getPluginUiSnapshot → plugin.ui.snapshot 透传 filter（scope 二选一形态原样）', async () => {
@@ -112,18 +110,18 @@ describe('插件运行态封装（S13：list / toggle / ui.snapshot / ui.clearMo
     mockCommand.mockResolvedValue(snapshot)
     const filter = { mountId: 'mount-1', pluginId: 'wool-workbuddy', viewId: 'authorize' }
     await expect(getPluginUiSnapshot(filter)).resolves.toBe(snapshot)
-    expect(mockCommand).toHaveBeenCalledWith('plugin.ui.snapshot', filter, RPC_BACKSTOP_TIMEOUT_MS)
+    expect(mockCommand).toHaveBeenCalledWith('plugin.ui.snapshot', filter)
   })
 
   it('getPluginUiSnapshot 缺省 filter = 全量拉取（空对象帧）', async () => {
     mockCommand.mockResolvedValue({ partitions: {} })
     await getPluginUiSnapshot()
-    expect(mockCommand).toHaveBeenCalledWith('plugin.ui.snapshot', {}, RPC_BACKSTOP_TIMEOUT_MS)
+    expect(mockCommand).toHaveBeenCalledWith('plugin.ui.snapshot', {})
   })
 
   it('clearPluginMountUi → plugin.ui.clearMount 透传 mountId 并等 pong ack settle', async () => {
     await expect(clearPluginMountUi('mount-1')).resolves.toBeUndefined()
-    expect(mockCommand).toHaveBeenCalledWith('plugin.ui.clearMount', { mountId: 'mount-1' }, RPC_BACKSTOP_TIMEOUT_MS)
+    expect(mockCommand).toHaveBeenCalledWith('plugin.ui.clearMount', { mountId: 'mount-1' })
   })
 })
 
@@ -131,25 +129,25 @@ describe('插件命令与两段式安装封装（D7/S7 + U4/U6）', () => {
   it('executePluginCommand → plugin.executeCommand payload 原样透传并等 pong ack settle', async () => {
     const payload = { pluginId: 'wool-workbuddy', commandId: 'probe-command', args: { k: 1 } }
     await expect(executePluginCommand(payload)).resolves.toBeUndefined()
-    expect(mockCommand).toHaveBeenCalledWith('plugin.executeCommand', payload, RPC_BACKSTOP_TIMEOUT_MS)
+    expect(mockCommand).toHaveBeenCalledWith('plugin.executeCommand', payload)
   })
 
   it('preparePluginInstall → plugin.prepareInstall 透传 packageSpec，知情面 reply 原样返回', async () => {
     const reply = { pluginId: 'wool-workbuddy', packageName: '@acme/plugin-wool-workbuddy', version: '1.0.0', capabilities: [], readPaths: [], permissions: [] }
     mockCommand.mockResolvedValue(reply)
     await expect(preparePluginInstall('@acme/plugin-wool-workbuddy')).resolves.toBe(reply)
-    expect(mockCommand).toHaveBeenCalledWith('plugin.prepareInstall', { packageSpec: '@acme/plugin-wool-workbuddy' }, RPC_BACKSTOP_TIMEOUT_MS)
+    expect(mockCommand).toHaveBeenCalledWith('plugin.prepareInstall', { packageSpec: '@acme/plugin-wool-workbuddy' })
   })
 
   it('confirmPluginInstall → plugin.confirmInstall 透传 pluginId，reply 原样返回', async () => {
     const reply = { success: true }
     mockCommand.mockResolvedValue(reply)
     await expect(confirmPluginInstall('wool-workbuddy')).resolves.toBe(reply)
-    expect(mockCommand).toHaveBeenCalledWith('plugin.confirmInstall', { pluginId: 'wool-workbuddy' }, RPC_BACKSTOP_TIMEOUT_MS)
+    expect(mockCommand).toHaveBeenCalledWith('plugin.confirmInstall', { pluginId: 'wool-workbuddy' })
   })
 
   it('cancelPluginInstall → plugin.cancelInstall 透传 pluginId 并等 pong ack settle', async () => {
     await expect(cancelPluginInstall('wool-workbuddy')).resolves.toBeUndefined()
-    expect(mockCommand).toHaveBeenCalledWith('plugin.cancelInstall', { pluginId: 'wool-workbuddy' }, RPC_BACKSTOP_TIMEOUT_MS)
+    expect(mockCommand).toHaveBeenCalledWith('plugin.cancelInstall', { pluginId: 'wool-workbuddy' })
   })
 })

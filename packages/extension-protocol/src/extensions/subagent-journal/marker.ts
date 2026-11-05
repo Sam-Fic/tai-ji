@@ -5,7 +5,7 @@
  * 帧（单一来源，两端口径必然一致）。
  *
  * NUL 前缀确保不会与 extension 正常的 select title 冲突。
- * 与 SUBAGENT_INFLIGHT_MARKER / ASK_USER_MARKER / SESSION_MANAGER_MARKER 同理。
+ * 与 ASK_USER_MARKER / SESSION_MANAGER_MARKER 同理。
  *
  * 设计权威源：.tmp/tech-design/event-push-channel.md §3.1/§3.4（journal 写入方
  * subagent-core 在落盘提交点经本 marker 通道把新事件批量推给 runtime，通道数量

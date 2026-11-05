@@ -22,7 +22,7 @@
 
 import { displayAgentName } from "../../shared/agent-ref.ts";
 import { isLegacyClosedSettled, snapshot } from "../persistence/execution-record.ts";
-import { hasArmedIdleTimer, isResumable } from "../lifecycle/lifecycle-predicates.ts";
+import { isResumable } from "../lifecycle/lifecycle-predicates.ts";
 // [§1.4 (b)] pi 通知通道 best-effort 执行（stale 分诊 + 留痕不冒泡）。
 import { bestEffortPiCall } from "../assembly/best-effort.ts";
 import {
@@ -196,7 +196,7 @@ export function createNotifyHost(deps: NotifyHostDeps): NotifyHost {
   };
 
   /** record → BgNotifyRecord（notifier.notify 入参映射，内部不外露）。
-   *  v4 B-1：检查放行 closed（终态，含 cancelled）、hasArmedIdleTimer（对话模式轮次完成，notify 主 agent G1）
+   *  v4 B-1：检查放行 closed（终态，含 cancelled）、idle（对话模式轮次完成，notify 主 agent G1）
    *  或 isResumable（running + 无活进程——SP-5 one-shot 成功完成 / MF-6 失败轮回退）。
    *  正在执行（running + 活进程 + 非 timer-armed）返回 undefined（调用方 notifyComplete 跳过）。
    *  SP-1: closed 统一终态，closedReason 由 BgNotifyRecord 携带。
@@ -227,8 +227,8 @@ export function createNotifyHost(deps: NotifyHostDeps): NotifyHost {
     // resumable）——本子句被前置的 `record.status !== "idle"` 短路吸收（status=idle
     // 时前三子句已放行），保留为谓词语义的显式对齐。载荷派生视图分支不受
     // 影响：轮终收尾 idle 统一走 running 载荷（[modeless 波1·SP-5]）。拦截集不变：
-    // running + 活进程 + 非 timer-armed 仍静默。
-    if (!legacyClosed && record.status !== "idle" && !hasArmedIdleTimer(record) && !isResumable(record)) {
+    // running + 活进程仍静默。
+    if (!legacyClosed && record.status !== "idle" && !isResumable(record)) {
       return undefined;
     }
     // legacyClosed → BgNotifyRecord.closed（旧终态遗留文案族）；轮终收尾

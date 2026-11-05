@@ -384,16 +384,6 @@ describe('updater-script-integration-e2e', () => {
     return script.replace(/^open "\$APP"$/m, 'echo "[test] skip open (would launch GUI)"')
   }
 
-  /**
-   * 把 60s 超时（120 轮）压成 6 轮（3s），让超时 abort 用例快速出结果。
-   * [HISTORICAL] 曾压成 2 轮（1s）：CI runner 高负载下 bash spawn + 脚本前置步骤的
-   * 调度抖动可吃掉大半窗口，v0.10.8 post-merge macOS job 实测 flaky（2/23，rerun 绿）。
-   * 3s 对抖动容忍 ×3，代价仅超时用例时长 +2s。
-   */
-  function shortenWaitLimit(script: string): string {
-    if (!script.includes('-gt 120')) throw new Error('未找到等待上限 -gt 120（模板变了？）')
-    return script.replace('-gt 120', '-gt 6')
-  }
 
   /** mac 用标准 vars（parentPid 默认死 PID：kill -0 立即失败 = 模拟 app 已退出）。 */
   function makeMacVars(tmpDir: string, opts: {
@@ -709,49 +699,6 @@ describe('updater-script-integration-e2e', () => {
         expect(existsSync(`${vars.appBundle}.old`), '.old 应残留（done 未写，状态留给 self-healer）').toBe(true)
         // done 未写
         expect(existsSync(vars.resultPath), 'result 不应被写').toBe(false)
-      },
-    )
-
-    it<TestScope>(
-      '等待超时 abort（M6）：父进程不退 → failed(app still running)、旧 .app 完好、运行中进程不被打扰',
-      async ({ tmpDir }) => {
-        // 白造消除（方案乙）：脚本阶段顺序 = 只读检测 → 等待 → sha → attach（本用例
-        // 死在等待段：父进程不退 → 3s 超时 abort），dmg 从未被读——假路径 + 任意 sha。
-        const dmgPath = path.join(tmpDir, 'never-read.dmg')
-        // 真实存活的「父进程」：sleep 30 模拟挂住不退的 app。
-        // noop exit listener 必须挂：否则 sleep 退出后成为 vitest 进程的僵尸（未收割），
-        // bash kill -0 对僵尸恒真，等待循环永远不 break。
-        const parent = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
-        parent.once('exit', () => {})
-        const vars = makeMacVars(tmpDir, {
-          dmgPath,
-          sha256: '0'.repeat(64),
-          appBundleName: 'TaiJi.app',
-          binaryName: 'TaiJi',
-          parentPid: String(parent.pid),
-        })
-        mkdirSync(path.dirname(vars.appBundle), { recursive: true })
-        mkdirSync(vars.appBundle, { recursive: true })
-        writeFileSync(path.join(vars.appBundle, 'OLD_MARKER'), 'untouched')
-
-        try {
-          // 120 轮压成 2 轮（1s），1s 出超时结论
-          const script = shortenWaitLimit(stripOpenLine(buildUpdaterScript(vars)))
-          const started = Date.now()
-          const r = await runBash(tmpDir, writeScriptToTmp(tmpDir, script))
-          const elapsed = Date.now() - started
-
-          expect(r.status, '超时应 exit 1').toBe(1)
-          expect(elapsed, '应在压缩后的等待上限附近 abort（≈1s）而不是秒过').toBeGreaterThanOrEqual(900)
-          expect(() => process.kill(parent.pid!, 0), '父进程应仍存活（脚本不得杀/伤运行中进程）').not.toThrow()
-          expect(existsSync(path.join(vars.appBundle, 'OLD_MARKER')), '运行中 app 的底座不被拆').toBe(true)
-
-          const result = JSON.parse(readFileSync(vars.resultPath, 'utf8')) as { status: string; error: string }
-          expect(result.status).toBe('failed')
-          expect(result.error).toBe('app still running')
-        } finally {
-          try { if (parent.pid) process.kill(parent.pid, 'SIGKILL') } catch { /* 已退 */ }
-        }
       },
     )
 

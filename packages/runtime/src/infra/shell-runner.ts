@@ -7,15 +7,10 @@
  * 注入：构造函数 `{ spawn }`，production 由 index.ts 传真实 spawn，测试传 mock spawn。
  * 此模式让 ShellRunner 单测无需真 spawn —— vi.doMock('node:child_process') 后把 mock 注入。
  *
- * 关键时序处理（SR-3 timeout + escalation）：
- * - timeout 到期 → child.kill('SIGTERM') + 设 `timedOut=true` 标记 + 启动 reject +
- *   启动 escalation timer（ESCALATION_DELAY_MS）。
- * - escalation：SIGTERM 后 5s 仍未 close 则 SIGKILL（防脚本 trap 忽略 SIGTERM / npm install
- *   子进程不在同一进程组导致孤儿进程）。
- * - 之后 child 必然 emit 'close'（被 kill 的进程会发 exit+close）—— 若不标记，close handler
- *   会 resolve 一个已 reject 的 promise（无效但易混淆）。故 close handler 先判 timedOut，
- *   已超时则不 resolve（保留 timeout reject）。
- * - 同理 error handler 也判 timedOut（极端：kill 后子进程 error 而非 close）。
+ * 关键时序处理：
+ * - child 'close' 后移除 data 监听、flush 半行残留、resolve 结果。
+ * - 被信号杀死时 exitCode=null → 按 POSIX 惯例折算 128+N 非 0 退出码（见 onClose）。
+ * - 无墙钟：setup 脚本（pnpm install / 二进制下载等分钟级操作）跑到 close 为止，不设时间阈值。
  *
  * 行切分策略：Buffer → utf8 → 按 \n split。**跨 chunk 缓冲**——每个 stream 维护独立
  * lineBuffer，chunk 进来后先 append，再 split('\n')，最后一段（不含 \n）回写 lineBuffer
@@ -29,14 +24,6 @@ import { buildOutboundChildEnv } from './spawn-env.js'
 import { pickProxyExtras } from './installers/npm-git-installer.js'
 import { ShellRunnerError } from '../services/ports/shell-runner.js'
 import type { IShellRunner, ShellRunnerExecuteOptions, ShellRunnerResult, SpawnFn } from '../services/ports/shell-runner.js'
-
-/**
- * SIGTERM 后等待 SIGKILL 的升级延迟。
- * SIGTERM 可被脚本捕获/忽略（trap），npm install 子进程可能不在同一进程组——
- * 若 SIGTERM 后子进程不退出会变孤儿。给 5s 缓冲让 graceful shutdown 跑完，
- * 仍未 close 则 SIGKILL 强制终止。
- */
-const ESCALATION_DELAY_MS = 5000
 
 /**
  * 常见 POSIX 信号名 → 编号（RT-8#8）：被信号杀死时 exitCode=null，shell 惯例折算
@@ -141,8 +128,6 @@ export class ShellRunner implements IShellRunner {
 
   execute(opts: ShellRunnerExecuteOptions): Promise<ShellRunnerResult> {
     const { scriptPath, args, cwd, onOutput } = opts
-    // timeout 为 port 层必传（无暗默认）：用户配置值唯一决定量级，超时决策显式留给调用方。
-    const timeout = opts.timeout
 
     // 用 bash 执行脚本而非直接 spawn(scriptPath)：git 跟踪的脚本默认 644（无 +x 位），
     // 直接 spawn 会 EACCES。bash 只需文件可读即可执行，跨平台一致且不依赖文件权限位。
@@ -159,7 +144,7 @@ export class ShellRunner implements IShellRunner {
       // 与 git 操作，corporate 代理 / ssh-agent 环境下缺这些键会直接回归（与
       // npm-git-installer 共用 pickProxyExtras，键集同源）。
       env: buildOutboundChildEnv({ parentEnv: process.env, extras: pickProxyExtras(process.env) }),
-      // stdin 显式 ignore：setup-worktree.sh 若 read stdin 会立即得 EOF，避免卡到 timeout。
+      // stdin 显式 ignore：setup-worktree.sh 若 read stdin 会立即得 EOF，不会挂住等待输入。
       // stdout/stderr 仍 pipe 出来给 onOutput 流式回调。
       stdio: ['ignore', 'pipe', 'pipe'],
     }) as unknown as EventEmitter & {
@@ -178,10 +163,6 @@ export class ShellRunner implements IShellRunner {
     // 行缓冲 lineBuffer 不在帽内（单行有界于行长，流式语义不受影响）。
     const stdoutAcc = new CappedStreamAccumulator('stdout')
     const stderrAcc = new CappedStreamAccumulator('stderr')
-    let timedOut = false
-    let closed = false
-    let timer: NodeJS.Timeout | undefined
-    let escalationTimer: NodeJS.Timeout | undefined
 
     return new Promise<ShellRunnerResult>((resolve, reject) => {
       /**
@@ -210,15 +191,7 @@ export class ShellRunner implements IShellRunner {
         stderrAcc.append(text)
         emitLines(text, 'stderr')
       }
-      const cleanupTimers = (): void => {
-        if (timer) clearTimeout(timer)
-        if (escalationTimer) clearTimeout(escalationTimer)
-      }
       const onClose = (exitCode: number | null, signal: NodeJS.Signals | null): void => {
-        closed = true
-        cleanupTimers()
-        // timeout 路径已 reject；后续 close 不再 resolve（保留 timeout 语义，避免 SR-3 失败）。
-        if (timedOut) return
         child.stdout.removeListener('data', onStdoutData)
         child.stderr.removeListener('data', onStderrData)
         // flush 两个 stream 残留的半行（子进程输出未以 \n 结尾时）。
@@ -242,8 +215,6 @@ export class ShellRunner implements IShellRunner {
         resolve({ exitCode: exitCode ?? 0, stdout, stderr })
       }
       const onError = (err: NodeJS.ErrnoException): void => {
-        cleanupTimers()
-        if (timedOut) return
         child.stdout.removeListener('data', onStdoutData)
         child.stderr.removeListener('data', onStderrData)
         // 脚本不存在（ENOENT）→ not_found；其余 errno 也归 not_found（语义上都是「找不到可执行文件」）
@@ -258,18 +229,6 @@ export class ShellRunner implements IShellRunner {
       child.stderr.on('data', onStderrData)
       child.on('close', onClose)
       child.on('error', onError)
-
-      if (timeout > 0) {
-        timer = setTimeout(() => {
-          timedOut = true
-          child.kill('SIGTERM')
-          // escalation：SIGTERM 后 5s 仍未 close 则 SIGKILL（防 SIGTERM 被捕获/忽略导致孤儿进程）
-          escalationTimer = setTimeout(() => {
-            if (!closed) child.kill('SIGKILL')
-          }, ESCALATION_DELAY_MS)
-          reject(new ShellRunnerError('timeout', `脚本执行超时（${timeout}ms）: ${scriptPath}`))
-        }, timeout)
-      }
     })
   }
 }

@@ -37,7 +37,7 @@ import { useSessionScopedState } from '@/composables/useSessionScopedState'
 import { useSessionEvents } from '@/composables/features/chat/useSessionEvents'
 import { createInflightDedup } from '@taiji/core/foundation/create-inflight-dedup'
 import { createFrameBookkeeping } from '@taiji/core/foundation/create-frame-bookkeeping'
-import { command, RPC_BACKSTOP_TIMEOUT_MS } from '@taiji/core/transport/api'
+import { command } from '@taiji/core/transport/api'
 import type { GenStatsFrame } from '@taiji/shared'
 
 /** 分区容器（useSessionScopedState 响应式契约要求 reactive 容器：mutate 才触发下游失效） */
@@ -127,7 +127,7 @@ export function useGenStats(
     // rejection）。
     const entry = inflightGenStatsFetch.run(
       sid,
-      () => command('session.getGenStats', { sessionId: sid }, RPC_BACKSTOP_TIMEOUT_MS),
+      () => command('session.getGenStats', { sessionId: sid }),
       { seqAtIssue: bookkeeping.seqAt(sid) },
     )
     void entry.promise.then(

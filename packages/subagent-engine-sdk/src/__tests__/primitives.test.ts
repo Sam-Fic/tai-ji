@@ -35,7 +35,6 @@ import {
   resetLoggerSinkForTests,
   type LoggerSink,
 } from "../logger.ts";
-import { synthesizeTimeoutOutcome, HOST_TIMEOUT_ABORT_REASON } from "../kill-chain.ts";
 import {
   SCHEMA_EMULATION_TAIL_CHARS,
   buildSchemaEmulationSegment,
@@ -232,26 +231,6 @@ describe("logger facade（时序契约：先缓存后配置透明切换）", () 
     expect(seen).toEqual([{ level: "warn", msg: "after-config" }]);
     // 同 component 同引用（core getLogger singleton 惯例）
     expect(getLogger("sdk-test")).toBe(logger);
-  });
-});
-
-describe("kill-chain（超时终态合成；杀链执行路径由引擎包集成测试覆盖）", () => {
-  it("synthesizeTimeoutOutcome：engineId 参数注入 + exitCode=null + slug 进错误信息", () => {
-    const outcome = synthesizeTimeoutOutcome(
-      { prompt: "p", description: "my-task-slug" },
-      "stdout tail content",
-      "zcode",
-    );
-    expect(outcome.engineId).toBe("zcode");
-    expect(outcome.exitCode).toBeNull();
-    expect(outcome.content).toBe("");
-    expect(outcome.error).toContain("engine_timeout:");
-    expect(outcome.error).toContain("slug=my-task-slug");
-    expect(outcome.error).toContain("stdout tail content");
-  });
-
-  it("HOST_TIMEOUT_ABORT_REASON 标记（超时 vs 用户 cancel 判别锚点）", () => {
-    expect(HOST_TIMEOUT_ABORT_REASON).toBe("agent-call-timeout");
   });
 });
 

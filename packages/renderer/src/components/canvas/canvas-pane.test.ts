@@ -764,7 +764,7 @@ describe('CanvasPane', () => {
 
       // 必填拦截：理由为空不提交
       await submitDialog()
-      expect(commandMock).not.toHaveBeenCalledWith('canvas.mutate', expect.anything(), expect.anything())
+      expect(commandMock).not.toHaveBeenCalledWith('canvas.mutate', expect.anything())
 
       // 填理由提交
       await setDialogField('canvas-op-field-reason', '成本与可控性更优')
@@ -778,7 +778,6 @@ describe('CanvasPane', () => {
           action: 'select',
           params: { canvasId: 'cvs-1', questionId: 'q2', optionId: 'o1', reason: '成本与可控性更优' },
         },
-        expect.any(Number),
       )
 
       // 无乐观回显：mutate 成功后、广播刷新前，卡片仍是未选定（store 未被本地改写）
@@ -816,7 +815,6 @@ describe('CanvasPane', () => {
           action: 'select',
           params: expect.objectContaining({ optionId: 'o1', replace: { fromOptionId: 'o2' } }),
         }),
-        expect.any(Number),
       )
     })
 

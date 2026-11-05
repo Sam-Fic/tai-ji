@@ -168,9 +168,6 @@ export default {
     itemRenderFailed: '本条渲染失败',
     itemRenderRetry: '重试',
     renderErrorToast: '界面渲染出现异常，已记录日志',
-    // [U8 重启中断提示条] 重启打断生成中回合后重开的尾部提示（runtime 尾部形态判定，
-    // 文案族对齐 D4 stalled「回复已中断」）
-    interruptedNotice: '上次会话在此处被中断，内容可能不完整',
     // [chat-flow-consistency 缺陷 3/7] liveOnly 提示行文案（core 键注入，消费点 =
     // effects/notice-text.ts configureChatNoticeText 注入）
     chatNotice: {
@@ -277,10 +274,6 @@ export default {
     // [notice-family-phrase-detail 2026-09-18 方案 A] bash 执行行 elapsed meta——命令移入悬停
     // 详情后，行内保留计时观察维持执行期可见性
     executingBashElapsed: '已 {elapsed}',
-    // [pi-stall-detection U4 / D3] 静默辅助提示（ActivityStrip stall 行；温和文案非红色警告，
-    // 判定权在 runtime，本层只呈现；帧流恢复即清除。静默时长由帧 payload（silentMs）携带，
-    // 文案不写死阈值数字——阈值用户可调，写死会漂移）
-    stallHint: '已静默 {minutes} 分钟，可点停止或继续等待',
 
     // ── 语音朗读（ai-voice-tts，key 消费方 = useTtsPlayer + TurnSummary 按钮态）──
     // toast 文案与设计 §5.4 失败表逐字对齐；title 四键 = 朗读按钮状态机（设计 §5.1）。

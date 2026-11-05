@@ -110,15 +110,9 @@ interface PendingToolDetails {
 
 // ── collect_results（批量收取，result-collect 设计 §3.1③）─────────────
 
-/** 缺省超时（设计 §3.3 量级决策：任务级对象 → 小时量级。非墙钟判死——超时是等待器的
- *  诚实返回：任务不受影响、stillOpen 列出、恢复 push、可续 collect。偏离「任务级缺省
- *  不限时」的原因与论证登记在设计 §3.3，工具描述引导 agent 按预期时长显式传参）。 */
-const COLLECT_DEFAULT_TIMEOUT_MS = 3_600_000;
-
 /** collect_results 工具参数 schema */
 const CollectResultsParams = Type.Object({
 	ids: Type.Optional(Type.Array(Type.String())),
-	timeout_ms: Type.Optional(Type.Number()),
 });
 
 /** stillOpen 条目：未收取的等待键（note 标记特殊态，如已入 push 管线）。 */
@@ -140,16 +134,15 @@ interface CollectToolDetails {
 	errors?: CollectErrorEntry[];
 }
 
-/** collect_results 工具描述（缺省口径 + lifetime 排除 + managed 全键返回形态 + timeout
- *  缺省值引导显式传参 + 反模式（勿当活性检查用、只关心特定操作勿省略 ids）+
+/** collect_results 工具描述（缺省口径 + lifetime 排除 + managed 全键返回形态 +
+ *  反模式（勿当活性检查用、只关心特定操作勿省略 ids）+
  *  与 pending_notifications 分工声明，result-collect 设计 §3.1③/§3.4 工具描述更新项）。 */
 const COLLECT_RESULTS_DESCRIPTION = [
 	"Block and batch-collect results of background async operations (workflow / subagent / bash background tasks / managed session claims), instead of receiving one notification per completion.",
 	"Returns collected (entries: {id, type, outcome, content, details}), stillOpen (not collected: {id, note?}) and errors (unknown ids, listed individually without blocking the known subset).",
-	"ids: target operation ids (as returned when dispatching background tasks). Omitted = every active pending operation of the current session, EXCLUDING managed-session lifetime claims (alive-markers that only settle when the session dies — waiting on them would hang until timeout) and registrations inherited from a forked parent session.",
-	"timeout_ms: max wait in milliseconds, default 3600000 (1 hour). Pass a value matched to the expected task duration (e.g. 120000 for short tasks). On timeout the already-arrived results are returned; the rest stay in stillOpen and notify normally (push) when they complete.",
-	"A managed-session batched notification matched by any of its keys returns one entry per key of that batch (same payload shared). Collecting an already-collected id again returns its snapshot (no duplicate injection). Interruption (timeout / user abort) returns normally with the arrived subset.",
-	"Do NOT use this tool as a liveness or status check — it blocks the current turn until results arrive or timeout_ms elapses. Immediate status queries go to pending_notifications (list).",
+	"ids: target operation ids (as returned when dispatching background tasks). Omitted = every active pending operation of the current session, EXCLUDING managed-session lifetime claims (alive-markers that only settle when the session dies — waiting on them would hang indefinitely) and registrations inherited from a forked parent session.",
+	"A managed-session batched notification matched by any of its keys returns one entry per key of that batch (same payload shared). Collecting an already-collected id again returns its snapshot (no duplicate injection). Interruption (user abort) returns normally with the arrived subset.",
+	"Do NOT use this tool as a liveness or status check — it blocks the current turn until all awaited results arrive. Immediate status queries go to pending_notifications (list).",
 	"DO NOT omit ids when you only care about specific operations — the default wait set blocks on every active non-lifetime pending operation of this session at once.",
 	"Division of labor: pending_notifications (list) is the immediate status query; collect_results is the blocking wait — use it only when the next step actually needs those results.",
 ].join("\n");
@@ -346,7 +339,7 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 		executionMode: "sequential",
 		execute: async (
 			_toolCallId: string,
-			params: { ids?: string[]; timeout_ms?: number },
+			params: { ids?: string[] },
 			signal: AbortSignal | undefined,
 			_onUpdate: unknown,
 			ctx: ExtensionContext,
@@ -358,17 +351,16 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 	 *
 	 * 执行序（设计 §3.1③）：等待键集计算 → collectArm（端口同步段登记 + 五态快照）→
 	 * 快照合并组装（ready ∪ unregistered-no-entry 进 collected；in-push-pipeline 进
-	 * stillOpen 附 note；waiting 留守）→ await 到达/超时/abort 三者先到 → consume +
+	 * stillOpen 附 note；waiting 留守）→ await 到达/abort 两者先到 → consume +
 	 * collectRelease → 返回。AbortSignal 捕获后正常 return（禁抛错路径——pi 契约下抛错
 	 * 会把已写 collected 终局的载荷随返回丢失，收取即丢失，设计 §3.1 [abort]）。
 	 */
 	async function collectResults(
-		params: { ids?: string[]; timeout_ms?: number },
+		params: { ids?: string[] },
 		signal: AbortSignal | undefined,
 		ctx: ExtensionContext,
 	): Promise<{ content: { type: "text"; text: string }[]; details: CollectToolDetails }> {
 		const entries = ctx.sessionManager.getEntries();
-		const timeoutMs = params.timeout_ms ?? COLLECT_DEFAULT_TIMEOUT_MS;
 
 		// 等待键集：显式 ids 全量交端口五态判决定态（unknown 态键由快照回流进
 		// errors，MF-1-5：未知判定单点在端口——工具侧不再重扫 entries 算「活跃集 ∪
@@ -422,11 +414,12 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 			reason: "unknown id — not an active pending operation and never registered in this session",
 		}));
 
-		// 到达等待：事件驱动（onCollectArrival）不轮询；到达/超时/abort 三者先到。
+		// 到达等待：事件驱动（onCollectArrival）不轮询；到达/abort 两者先到
+		//（缺省超时已删——等待器只等「全部到达或 abort」两个条件）。
 		// 完成判据 = 全部等待键出现在已收取集合（到达即 consume 取走载荷+终局）。
-		await awaitCollectArrivals(port, waitingIds, collected, timeoutMs, signal);
+		await awaitCollectArrivals(port, waitingIds, collected, signal);
 
-		// 终局序列（设计 §3.1③）：consume 取走剩余已到达挂起条目（超时/abort 路径的
+		// 终局序列（设计 §3.1③）：consume 取走剩余已到达挂起条目（abort 路径的
 		// 部分收取），collectRelease 解散等待集并把未收挂起条目直通内核 flush（边沿
 		// 即投——攒批窗已删 §3.3.7③，恢复 push）。空等待路径不会走到这里（提前返回）。
 		collected.push(...port.consume());
@@ -492,25 +485,22 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 	}
 
 	/** 到达等待段：等待键为空立即返回；否则 consume+到达判据（全部等待键已收取）/
-	 * 超时 / abort 三者先到解除（abort 捕获后正常 return，不抛错——抛错会把已写
-	 * collected 终局的载荷随返回丢失，§3.1 [abort]）。 */
+	 * abort 两者先到解除（abort 捕获后正常 return，不抛错——抛错会把已写 collected
+	 * 终局的载荷随返回丢失，§3.1 [abort]）。 */
 	async function awaitCollectArrivals(
 		port: DeliveryPortHandle,
 		waitingIds: readonly string[],
 		collected: CollectedEntry[],
-		timeoutMs: number,
 		signal: AbortSignal | undefined,
 	): Promise<void> {
 		if (waitingIds.length === 0) return;
 		await new Promise<void>((resolve) => {
 			let settled = false;
-			let timer: ReturnType<typeof setTimeout> | undefined = undefined;
 			let unsubscribeArrival: () => void = () => {};
 			const onAbort = () => finish();
 			const finish = () => {
 				if (settled) return;
 				settled = true;
-				if (timer !== undefined) clearTimeout(timer);
 				signal?.removeEventListener("abort", onAbort);
 				unsubscribeArrival();
 				resolve();
@@ -524,7 +514,6 @@ export default function pendingNotificationsExtension(pi: ExtensionAPI): void {
 				finish();
 				return;
 			}
-			timer = setTimeout(finish, timeoutMs);
 			signal?.addEventListener("abort", onAbort, { once: true });
 			unsubscribeArrival = port.onCollectArrival(pullArrived);
 		});

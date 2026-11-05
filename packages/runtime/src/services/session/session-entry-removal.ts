@@ -12,20 +12,19 @@
  *      先删进程表，exit handler 反查无条目静默返回，挂错点事件永不产生）
  *   2. checkpoint 摘条目（D3 detach；destroyAll/shutdown 刻意不经本链，checkpoint 原样
  *      保留 = 下次 unclean 启动的恢复依据）
- *   3. inflight mirror 摘条目（D5，与 2 同点位）
- *   4. userStopped 收敛环定时器清理（只停环不清标记——forceQuit 尾步经过本链，标记须
+ *   3. userStopped 收敛环定时器清理（只停环不清标记——forceQuit 尾步经过本链，标记须
  *      存活到后续 restore）
- *   5. 缓存 destroyedSummary（插件 didDestroy 需要；删后 Map 查不到）
- *   6. sessions Map 条目删除（销毁 9 步第 ② 步，所有者 lifecycle 执行）
- *   7. respawn.cancel（取消 pending 自动恢复 timer，只清 timer 不清熔断计数）
- *   8. lastViewedAt 条目清理（R4）
- *   9. onSessionDelete 扇出（R3：清 ReloadOrchestrator.pendingReload 残留）
- *   10. onSessionDestroyedHandlers 扇出（S3-W2/D6a 回调列表，含插件 didDestroy 投递——
+ *   4. 缓存 destroyedSummary（插件 didDestroy 需要；删后 Map 查不到）
+ *   5. sessions Map 条目删除（销毁 9 步第 ② 步，所有者 lifecycle 执行）
+ *   6. respawn.cancel（取消 pending 自动恢复 timer，只清 timer 不清熔断计数）
+ *   7. lastViewedAt 条目清理（R4）
+ *   8. onSessionDelete 扇出（R3：清 ReloadOrchestrator.pendingReload 残留）
+ *   9. onSessionDestroyedHandlers 扇出（S3-W2/D6a 回调列表，含插件 didDestroy 投递——
  *       fire-and-forget 语义由各 handler 自持）
- *   11. 后台任务收殓（fire-and-forget）+ watched 退订（D8③）
- *   12. 四域 onSessionDisposed（historyReader → traceSync → projection → records，停
+ *   10. 后台任务收殓（fire-and-forget）+ watched 退订（D8③）
+ *   11. 四域 onSessionDisposed（historyReader → traceSync → projection → records，停
  *       各域定时器/基线；顺序无相互依赖，维持迁移前书写序）
- *   13. MessageBus.clearSession（ring buffer + 订阅者集合清理；幂等）
+ *   12. MessageBus.clearSession（ring buffer + 订阅者集合清理；幂等）
  *
  * 与 lifecycle.delete 的 B5 段（plugin sessionData：tombstone → dropPartition → trash，
  * 见 session-data-store.ts clearRemovedSessionData）的跨文件顺序约束：**B5 段在
@@ -38,7 +37,7 @@
  * 组装形态（T8 有限拆分，行为保持抽取）：deps 窄注入与 traceSync/records 同款——session
  * 定位/条目删除经 lifecycle（Map 所有者）、晚期注入状态（messageBus / onSessionDelete /
  * onSessionDestroyedHandlers）经闭包每次调用动态读（setter 注入语义与原 Facade 字段直读
- * 逐字等价）；crash journal / checkpoint / inflight mirror / userStopped gate / 后台任务
+ * 逐字等价）；crash journal / checkpoint / userStopped gate / 后台任务
  * reaper 为模块单例，直接 import（测试 vi.mock 按模块路径拦截，与消费方所在文件无关）。
  */
 import type { SessionSummary } from '@taiji/shared'
@@ -47,9 +46,7 @@ import { getCrashJournal } from '../../infra/crash-journal.js'
 import { toErrorMessage } from '../../utils/errors.js'
 // D3 checkpoint（crash-forensics §3.3 D3，u4）：detach 挂点 = 本链第 2 步。
 import { getRuntimeCheckpointStore } from './runtime-checkpoint.js'
-// D5 在途镜像（crash-forensics §3.3 D5）：detach 同点位摘除 = 本链第 3 步。
-import { inflightMirror } from './inflight-mirror.js'
-// 收殓下沉触发点 A（file-lock-unification-and-reaper-sink §3.3）：孤儿后台任务收殓（第 11 步）。
+// 收殓下沉触发点 A（file-lock-unification-and-reaper-sink §3.3）：孤儿后台任务收殓（第 10 步）。
 import { reapSessionBackgroundTasks } from './background-task-reaper.js'
 import { getPiAgentDir } from '../../infra/pi/pi-paths.js'
 import type { IManagedSessionView } from './types.js'
@@ -125,7 +122,7 @@ export class SessionEntryRemovalOrchestrator {
    * 不再让 toSummary / dispose 扇出等任一步的异常打断收敛或上抛成 uncaughtException。
    */
   remove(sessionId: string): void {
-    // ── 第 1-4 步：「该 session 已不存在」的旁路设施摘除（journal 登记/checkpoint/mirror/收敛环）──
+    // ── 第 1-3 步：「该 session 已不存在」的旁路设施摘除（journal 登记/checkpoint/收敛环）──
     // D1 journal 登记（crash-forensics §3.3 D1 写入点矩阵 deleted 行）：deleted 事件唯一挂点 = 本
     // 汇聚链（lifecycle.delete 主动删与 onSessionExit 异常退收殓的公共收尾，注释自述即此
     // 语义）。不能挂 onSessionExit 链：用户主动删走 destroySession 先删进程表 → exit handler
@@ -144,21 +141,15 @@ export class SessionEntryRemovalOrchestrator {
     runDestroyStepIsolated('checkpoint.detach', sessionId, () => {
       getRuntimeCheckpointStore().removeSession(sessionId)
     })
-    // D5 mirror（偏差 #20 接线）：detach 同点位摘除条目——「该 session 已不存在」的精确
-    // 时点与 checkpoint 同语义（主动删 / 进程退出 / forceQuit / restore 清场全覆盖）。
-    // pi 崩死路径先摘、respawn 成功经 onSessionRegistered 预置重建（新 reporting epoch）。
-    runDestroyStepIsolated('mirror.detach', sessionId, () => {
-      inflightMirror.dropSession(sessionId)
-    })
     // userStopped 标记不在本汇聚点清理：forceQuit（K1/K2）尾步经过本链，标记必须存活到
     // 后续 restore（标记宿主独立于 ManagedSession 生命周期的原因，见 user-stopped-mark-store.ts
     // 模块级 Map 注释）；delete 路径的标记清理由 lifecycle.delete 显式调 gate.disposeForDelete。
     // （原 D4 收敛环定时器清理已随 ADR-0122 时间窗删除移除。）
 
-    // ── 第 5-9 步：Map 条目删除与删除回调扇出 ──
+    // ── 第 4-8 步：Map 条目删除与删除回调扇出 ──
     // S3-W2：删除前缓存 summary（插件 didDestroy 通知需要 SessionInfo；删除后 Map 查不到）。
     // Map 无条目（防御路径）时构造最小形状——id 之外的字段无从得知，宁发少知不发错。
-    // toSummary 失败同样降级最小形状（宁发少知不发错；步骤 6 的条目删除不得被打断）。
+    // toSummary 失败同样降级最小形状（宁发少知不发错；步骤 5 的条目删除不得被打断）。
     const session = this.deps.getSession(sessionId)
     // W3：minimalDestroyedSummary 不再带 modelId/tokenCount 占位（SessionSummary
     // 三状态字段已删，状态归状态层；销毁通知只消费 SessionInfo 描述字段）。
@@ -195,7 +186,7 @@ export class SessionEntryRemovalOrchestrator {
       this.deps.fireOnSessionDelete(sessionId)
     })
 
-    // ── 第 10-11 步：销毁通知扇出与后台任务收殓 ──
+    // ── 第 9-10 步：销毁通知扇出与后台任务收殓 ──
     // S3-W2 + D6a：同一汇聚点触发回调列表（插件 didDestroy 投递 + 挂起 UI 请求清理等）。
     // 逐个 try/catch 隔离：单 handler 异常不阻塞删除主流程，也不阻断列表内其余 handler。
     for (const handler of this.deps.getOnSessionDestroyedHandlers()) {
@@ -222,7 +213,7 @@ export class SessionEntryRemovalOrchestrator {
       this.deps.unwatchBackgroundTasks(sessionId)
     })
 
-    // ── 第 12-13 步：per-session 域状态销毁与 MessageBus 分区清理 ──
+    // ── 第 11-12 步：per-session 域状态销毁与 MessageBus 分区清理 ──
     // wave:perf-w20（D6-1）→ turn-boundary-index（现行）：session 删除 / pi 进程退出时
     // 清 TurnIndexStore 内存索引 LRU + 采样计数（TurnIndexStore.onSessionDisposed 经
     // historyReader.onSessionDisposed 转发）。覆盖口径以本块 [turn-boundary-index D5]

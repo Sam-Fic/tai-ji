@@ -14,7 +14,7 @@
 import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { atomicWrite } from '../utils/fs-utils.js'
-import { withFileLockSync, type SyncFileLockOptions } from '../utils/file-lock.js'
+import { withFileLockSync } from '../utils/file-lock.js'
 
 /** JSON 序列化缩进格数（与 extension 侧 llm-shared saveConfig 的 JSON_INDENT 一致）。 */
 const EXT_CONFIG_JSON_INDENT = 2
@@ -44,7 +44,6 @@ export function extractRefString(raw: Record<string, unknown>, field: string): s
  */
 export function rmwExtConfigField(
   configPath: string,
-  lockOptions: SyncFileLockOptions,
   defaultBase: () => Record<string, unknown>,
   apply: (base: Record<string, unknown>) => void,
   mode?: number,
@@ -64,5 +63,5 @@ export function rmwExtConfigField(
     // tmp 唯一化：对端（extension llm-shared saveConfig）写同一文件，其 tmp 已带 pid+随机段；
     // 本侧留固定 .tmp 会与旧版对端碰撞（锁互斥下无害但脏残留），对齐同形态。
     atomicWrite(configPath, `${JSON.stringify(base, null, EXT_CONFIG_JSON_INDENT)}\n`, extConfigTmpSuffix(), mode)
-  }, lockOptions)
+  })
 }

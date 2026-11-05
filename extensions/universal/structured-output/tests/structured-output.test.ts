@@ -239,9 +239,6 @@ describe("Workflow hook: structured-output failure retry", () => {
   afterEach(() => {
     // fixture 的 restoreSchemaEnv 只处理 env；vi.restoreAllMocks 必须在消费方保留
     restoreSchemaEnv(originalSchemaEnv);
-    // terminal 链含 fire-and-forget handler 的测试用 fake timers 包裹，此处还原真实
-    // timers 并丢弃未触发的 fake timer（不残留跨测试的 timer）
-    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -333,7 +330,6 @@ describe("Workflow hook: structured-output failure retry", () => {
   });
 
   it("stops steering after MAX_HOOK_RETRIES (=2) exhausted", async () => {
-    vi.useFakeTimers(); // 第 3 轮失败触发 gate terminal——fake 掉避免真实 timer 泄漏
     const pi = createMockPi();
     await loadExtension(pi, SCHEMA);
 
@@ -983,8 +979,9 @@ describe("index assembly fork (D1)", () => {
     const pi = createMockPi();
     await loadExtension(pi, SCHEMA);
 
-    // setupWorkflowHook 注册 tool_execution_end / turn_end 各一个 handler（D2 单 listener 契约）——
-    // 锁「恰好一个」：回退双 listener 重复记账（D2 要消灭的 terminal 失步结构条件）时此处红灯
+    // setupWorkflowHook 注册 tool_execution_end / turn_end 各一个 handler（单 listener 契约）——
+    // 锁「恰好一个」：回退双 listener 重复记账（重复记账会虚增 soCallCount 干扰
+    // calledButFailed 判定）时此处红灯
     const registeredEvents = pi.on.mock.calls.map((c) => c[0]);
     expect(registeredEvents.filter((e) => e === "tool_execution_end")).toHaveLength(1);
     expect(registeredEvents.filter((e) => e === "turn_end")).toHaveLength(1);

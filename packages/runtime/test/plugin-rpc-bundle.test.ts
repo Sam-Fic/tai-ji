@@ -249,9 +249,9 @@ describe('PluginRpcClient', () => {
     client.attach(port)
   })
 
-  // ── TC-3-02: request timeout → RPC_TIMEOUT error ──────────────
-  it('TC-3-02: request() rejects with RPC_TIMEOUT when server never responds', async () => {
-    const promise = client.request('test.slow', {}, 50)
+  // ── 无墙钟：request 挂到回复到达或 dispose rejectAll ──────────────
+  it('request() sends the rpc frame and stays pending until a reply arrives', async () => {
+    const promise = client.request('test.slow', {})
 
     // Verify request was sent
     expect(port.messages.length).toBe(1)
@@ -259,24 +259,14 @@ describe('PluginRpcClient', () => {
     expect(sent.type).toBe('rpc')
     expect(sent.method).toBe('test.slow')
 
-    // No response arrives → timeout after 50ms
-    const start = Date.now()
-    let caught = false
-    try {
-      await promise
-    } catch (e: unknown) {
-      caught = true
-      const elapsed = Date.now() - start
-      expect(elapsed >= 45).toBeTruthy()
-      expect((e as Error).message.includes('RPC timeout')).toBeTruthy()
-      expect((e as { code?: number }).code).toBe(PluginRpcErrorCodes.RPC_TIMEOUT)
-    }
-    expect(caught).toBeTruthy()
+    // dispose 收尾（无回复到达路径——时间机制删除裁决后无墙钟）
+    client.dispose()
+    await expect(promise).rejects.toThrow('disposed')
   })
 
   // ── request succeeds when response arrives before timeout ──────
   it('request() resolves when response arrives before timeout', async () => {
-    const promise = client.request('test.fast', { x: 1 }, 500)
+    const promise = client.request('test.fast', { x: 1 })
 
     // Simulate server response
     const sent = port.messages[0] as { id: number }
@@ -292,7 +282,7 @@ describe('PluginRpcClient', () => {
 
   // ── request rejects with error response ────────────────────────
   it('request() rejects with error when server returns error', async () => {
-    const promise = client.request('test.fail', {}, 500)
+    const promise = client.request('test.fail', {})
 
     const sent = port.messages[0] as { id: number }
     client.handleResponse({
@@ -314,7 +304,7 @@ describe('PluginRpcClient', () => {
 
   // ── dispose cancels pending requests ───────────────────────────
   it('dispose() cancels pending requests', async () => {
-    const promise = client.request('test.pending', {}, 5000)
+    const promise = client.request('test.pending', {})
 
     // Dispose before response
     client.dispose()
@@ -332,9 +322,9 @@ describe('PluginRpcClient', () => {
   // ── multiple concurrent requests get correct responses ─────────
   it('concurrent requests receive correct responses by id', async () => {
     const promises = [
-      client.request('test.a', { val: 1 }, 500),
-      client.request('test.b', { val: 2 }, 500),
-      client.request('test.c', { val: 3 }, 500),
+      client.request('test.a', { val: 1 }),
+      client.request('test.b', { val: 2 }),
+      client.request('test.c', { val: 3 }),
     ]
 
     // Respond out of order

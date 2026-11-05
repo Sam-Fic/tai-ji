@@ -58,21 +58,11 @@ class MockDialogRequestSource implements DialogRequestSource {
     const spy = vi.fn()
     return spy as unknown as () => void
   })
-  onUiRequestExpired = vi.fn((handler: (e: { sessionId: string; requestId: string }) => void): (() => void) => {
-    this.expiredHandler = handler
-    const spy = vi.fn()
-    return spy as unknown as () => void
-  })
 
   requestHandler: ((req: DialogRequest) => void) | null = null
-  expiredHandler: ((e: { sessionId: string; requestId: string }) => void) | null = null
 
   triggerUiRequest(req: Partial<DialogRequest> & { requestId: string; sessionId: string }): void {
     this.requestHandler?.(makeRequest(req))
-  }
-
-  triggerExpired(sessionId: string, requestId: string): void {
-    this.expiredHandler?.({ sessionId, requestId })
   }
 }
 
@@ -218,72 +208,15 @@ describe('DialogRequestQueue', () => {
     }
   })
 
-  it('TC-8 订阅清理：scope.stop() 后事件不入队，unsubscribe 被调用（listener 防翻倍）', () => {
+  it('TC-8 订阅清理：scope.stop() 后 unsubscribe 被调用（listener 防翻倍）', () => {
     const sid = ref<string | null>('A')
-    const { source, scope, getQueue } = createHarness(sid)
-    const q = getQueue()
+    const { source, scope } = createHarness(sid)
     scope.stop()
-    source.triggerUiRequest({ sessionId: 'A', requestId: 'r1' })
-    source.triggerExpired('A', 'r1')
-    // stop 后 emit 不入队
-    expect(q.pendingCount.value).toBe(0)
-    // onUiRequest/onUiRequestExpired 返回的 unsubscribe 均被调用
+    // onUiRequest 返回的 unsubscribe 被 scope dispose 调用（MockSource 的 triggerUiRequest
+    // 直呼 handler，不经退订面——「stop 后不入队」的端到端行为由真实 source 契约保证）
     expect(source.onUiRequest).toHaveBeenCalledTimes(1)
-    expect(source.onUiRequestExpired).toHaveBeenCalledTimes(1)
     const unsubUiRequest = source.onUiRequest.mock.results[0]?.value as () => void
-    const unsubUiRequestExpired = source.onUiRequestExpired.mock.results[0]?.value as () => void
     expect(unsubUiRequest).toHaveBeenCalledTimes(1)
-    expect(unsubUiRequestExpired).toHaveBeenCalledTimes(1)
-  })
-
-  // ── timeout-plugin-service D2 超时撤窗（plugin:uiRequestExpired 消费） ──
-
-  it('TC-9 expired 撤窗：onUiRequestExpired 按 requestId 出队（含排队中非队首），不发回传（UI_TIMEOUT 无替答）', () => {
-    const sid = ref<string | null>('A')
-    const { source, transport, scope, getQueue } = createHarness(sid)
-    try {
-      source.triggerUiRequest({ sessionId: 'A', requestId: 'r1', source: 'plugin' })
-      source.triggerUiRequest({ sessionId: 'A', requestId: 'r2', source: 'plugin' })
-      const q = getQueue()
-      // 排队中的非队首请求 r2 到期撤窗（D2：广播无条件发出，含从未展示的排队项）
-      source.triggerExpired('A', 'r2')
-      expect(q.pendingCount.value).toBe(1)
-      expect(q.currentRequest.value?.requestId).toBe('r1')
-      // 撤窗不发回传（插件侧已收 UI_TIMEOUT reject；回传会伪装成用户应答）
-      expect(transport.sendPiResponse).not.toHaveBeenCalled()
-      expect(transport.sendPluginResponse).not.toHaveBeenCalled()
-
-      // 队首 r1 撤窗后队列清空
-      source.triggerExpired('A', 'r1')
-      expect(q.pendingCount.value).toBe(0)
-      expect(q.currentRequest.value).toBeUndefined()
-      expect(transport.sendPluginResponse).not.toHaveBeenCalled()
-    } finally {
-      scope.stop()
-    }
-  })
-
-  it('TC-10 expired miss noop 幂等：未知/已出队 requestId 无副作用（V4b：广播无条件发出，miss 是正常时序）', () => {
-    const sid = ref<string | null>('A')
-    const { source, transport, scope, getQueue } = createHarness(sid)
-    try {
-      const q = getQueue()
-      // 空队列收到未知 requestId 的撤窗广播
-      source.triggerExpired('A', 'unknown')
-      expect(q.pendingCount.value).toBe(0)
-      expect(q.currentRequest.value).toBeUndefined()
-
-      // 已展示请求正常 respond 出队后，迟到 expired 广播不再有副作用
-      source.triggerUiRequest({ sessionId: 'A', requestId: 'r1', source: 'plugin' })
-      q.respond('r1', true)
-      expect(transport.sendPluginResponse).toHaveBeenCalledTimes(1)
-      source.triggerExpired('A', 'r1')
-      // 迟到撤窗不产生第二次回传、不改变状态
-      expect(transport.sendPluginResponse).toHaveBeenCalledTimes(1)
-      expect(q.pendingCount.value).toBe(0)
-    } finally {
-      scope.stop()
-    }
   })
 
   // ── M1 环 3（RD-3#1）：回传未送达保留请求 ──
@@ -905,14 +838,6 @@ function emitPermissionRequest(
   } as InternalEvent)
 }
 
-/** 通过 global 通道模拟 runtime 撤窗广播（payload { pluginId }，无 sessionId） */
-function emitExpired(pluginId: string, requestId?: string): void {
-  dispatchGlobal({
-    type: 'plugin:permissionRequestExpired',
-    payload: { pluginId, ...(requestId !== undefined ? { requestId } : {}) },
-  })
-}
-
 /** 通过 bus.emit 模拟 bridge 归一后的 resolved 终局事件（S5-V3；requestId 空串 = 旧版广播窄化形态） */
 function emitResolved(
   bus: InternalEventBus,
@@ -1042,37 +967,8 @@ describe('createPermissionRequestController 状态机（双壳共享）', () => 
     expect(controller.state.pending).toBe(true)
   })
 
-  it('TC6: expired 命中当前弹窗（pluginId 匹配）→ pending=false + error=false（超时撤窗连错误行一起清）', async () => {
-    emitPermissionRequest(bus, 'p1')
-    // 先制造失败错误态，再撤窗——弹窗都撤了，错误无载体
-    denyPermissions.mockRejectedValue(new Error('rpc boom'))
-    controller.transport.deny('p1')
-    await vi.waitFor(() => expect(controller.state.error).toBe(true), { interval: 1 })
-
-    emitExpired('p1')
-    expect(controller.state.pending).toBe(false)
-    expect(controller.state.error).toBe(false)
-  })
-
-  it('TC7: expired pluginId 不匹配 → noop（陈旧广播不误撤新插件弹窗）；无挂起 → noop 幂等', () => {
-    emitPermissionRequest(bus, 'p2')
-
-    // 旧插件 p1 的迟到 expired 广播：当前弹窗属于 p2，不应被撤
-    emitExpired('p1')
-    expect(controller.state.pending).toBe(true)
-    expect(controller.state.pluginId).toBe('p2')
-
-    // p2 自己的 expired 才撤
-    emitExpired('p2')
-    expect(controller.state.pending).toBe(false)
-
-    // 无挂起弹窗时再收 → noop 幂等
-    emitExpired('p2')
-    expect(controller.state.pending).toBe(false)
-  })
-
-  it('TC8: dispose 退订：bus 事件与 expired 广播均不再驱动 state', () => {
-    // 先置 pending=true（弹窗在场）再 dispose——终局态（pending=false）下 expired 泄漏是恒 noop，测不出退订
+  it('TC8: dispose 退订：bus 事件不再驱动 state', () => {
+    // 先置 pending=true（弹窗在场）再 dispose——终局态（pending=false）下 resolved 泄漏是恒 noop，测不出退订
     emitPermissionRequest(bus, 'p1', ['shell'], 'req-a')
     expect(controller.state.pending).toBe(true)
 
@@ -1083,38 +979,6 @@ describe('createPermissionRequestController 状态机（双壳共享）', () => 
     expect(controller.state.pending).toBe(true)
     expect(controller.state.pluginId).toBe('p1')
     expect(controller.state.requestId).toBe('req-a')
-
-    // offExpired 退订锚：泄漏时命中形态（同 pluginId 同 requestId）的 expired 广播会误撤窗
-    emitExpired('p1', 'req-a')
-    expect(controller.state.pending).toBe(true)
-  })
-
-  it('TC9: 同 pluginId 先后两单，expired 按 requestId 精确撤回——前单陈旧广播不误撤后到弹窗', () => {
-    // 同插件 p1 的两次审批请求先后到达（弹窗全局单例，后者覆盖前者）
-    emitPermissionRequest(bus, 'p1', ['shell'], 'req-a')
-    expect(controller.state.pending).toBe(true)
-    expect(controller.state.requestId).toBe('req-a')
-    emitPermissionRequest(bus, 'p1', ['net.http'], 'req-b')
-    expect(controller.state.requestId).toBe('req-b')
-
-    // 前单 req-a 的陈旧 expired 广播迟到：requestId 不匹配当前弹窗 → noop 不误撤
-    emitExpired('p1', 'req-a')
-    expect(controller.state.pending).toBe(true)
-    expect(controller.state.requestId).toBe('req-b')
-
-    // 当前单 req-b 的 expired 才撤
-    emitExpired('p1', 'req-b')
-    expect(controller.state.pending).toBe(false)
-
-    // 撤回后同 pluginId 再收 expired → noop 幂等
-    emitExpired('p1', 'req-b')
-    expect(controller.state.pending).toBe(false)
-  })
-
-  it('TC10: expired payload 缺 requestId（旧版广播）→ 回退按 pluginId 匹配撤回', () => {
-    emitPermissionRequest(bus, 'p1', ['shell'], 'req-a')
-    emitExpired('p1')
-    expect(controller.state.pending).toBe(false)
   })
 
   it('TC11: resolved 按 requestId 精确撤回——同 pluginId 先后两单，前单陈旧 resolved 不误撤后到弹窗；命中时连错误行一起清', async () => {

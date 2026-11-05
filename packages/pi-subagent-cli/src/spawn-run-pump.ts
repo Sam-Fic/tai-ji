@@ -473,7 +473,6 @@ export function wireChildStdoutPump(deps: StdoutPumpDeps): Promise<number> {
         deps.runCounters.stdoutBytes += bytes;
         if (deps.runCounters.promptWritten) deps.runCounters.stdoutBytesAfterPrompt += bytes;
       }
-      deps.promptAck?.onChannelActivity();
     };
     if (deps.rawMirror !== undefined && child.stdout !== null) {
       // [M3 D6] 镜像通道开通：tap 必须挂 setEncoding 之前——Node 的 setEncoding 是

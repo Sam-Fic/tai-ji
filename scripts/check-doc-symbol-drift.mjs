@@ -484,9 +484,8 @@ export function extractDocRefsInComment(commentText) {
  */
 export function buildDocsMdNameIndex(skipped) {
   const names = new Set()
-  // timeout：控制范围单请求秒级上界（git index.lock 竞争等异常不给 pre-commit 无界挂起）；
-  // 超时 spawnSync 返回 status null → 走下方回退分支，与 git 不可用同路径降级
-  const res = spawnSync('git', ['ls-files', '-z', '--', '*.md'], { cwd: PROJECT_ROOT, env: repoIndexEnv(), encoding: 'utf-8', timeout: 30_000 })
+  // 无墙钟（时间机制删除裁决：本地等待删除）——git 不可用仍走下方回退分支降级
+  const res = spawnSync('git', ['ls-files', '-z', '--', '*.md'], { cwd: PROJECT_ROOT, env: repoIndexEnv(), encoding: 'utf-8' })
   if (res.status === 0 && typeof res.stdout === 'string') {
     for (const f of res.stdout.split('\0')) {
       if (f) names.add(path.basename(f))
@@ -598,10 +597,9 @@ export function checkCommentDocRefs(files, docsMdNames, exempt = COMMENT_DOC_REF
   return violations
 }
 
-/** staged 文件清单（指定 diff-filter）；git 不可用返回 null（无 git 上下文时跳过本项检查）。
- *  timeout：控制范围单请求秒级上界，超时（status null）按 git 不可用同路径降级显形。 */
+/** staged 文件清单（指定 diff-filter）；git 不可用返回 null（无 git 上下文时跳过本项检查）。 */
 function gitStagedFiles(diffFilter) {
-  const res = spawnSync('git', ['diff', '--cached', '--name-only', '-z', `--diff-filter=${diffFilter}`], { cwd: PROJECT_ROOT, encoding: 'utf-8', timeout: 30_000 })
+  const res = spawnSync('git', ['diff', '--cached', '--name-only', '-z', `--diff-filter=${diffFilter}`], { cwd: PROJECT_ROOT, encoding: 'utf-8' })
   if (res.status !== 0 || typeof res.stdout !== 'string') return null
   return res.stdout.split('\0').filter(Boolean)
 }
@@ -857,13 +855,12 @@ function repoIndexEnv() {
   return env
 }
 
-/** git grep 采集全仓注解（索引级毫秒级；无 git 上下文降级 available:false）。
- *  timeout：控制范围单请求秒级上界，超时（status null）按 git 不可用同路径降级显形。 */
+/** git grep 采集全仓注解（索引级毫秒级；无 git 上下文降级 available:false）。 */
 function collectDataOwnerAnnotations() {
   const res = spawnSync(
     'git',
     ['grep', '-h', '-o', '-E', '@data-owner[[:space:]]+#[0-9]+', '--', 'packages', 'apps', 'extensions'],
-    { cwd: PROJECT_ROOT, env: repoIndexEnv(), encoding: 'utf-8', maxBuffer: 32 * 1024 * 1024, timeout: 30_000 },
+    { cwd: PROJECT_ROOT, env: repoIndexEnv(), encoding: 'utf-8', maxBuffer: 32 * 1024 * 1024 },
   )
   if (res.status === 1) return { available: true, entries: new Set() } // 有 git、零命中
   if (res.status !== 0 || typeof res.stdout !== 'string') return { available: false, entries: new Set() }

@@ -180,7 +180,7 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Plus } from '@lucide/vue'
-import { command, RPC_BACKSTOP_TIMEOUT_MS } from '@taiji/core/transport/api'
+import { command } from '@taiji/core/transport/api'
 import { toErrorMessage } from '@taiji/core'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -325,7 +325,7 @@ async function onSubmitCreate(): Promise<void> {
         criterias: linesOf(formCriterias.value),
         scopeExclusions: linesOf(formScope.value),
       },
-    }, RPC_BACKSTOP_TIMEOUT_MS)
+    })
     if (!reply.ok) {
       toastError(t('panel.tray.canvas.createFailed', {
         msg: `${reply.error.message} ${reply.error.recover}`.trim(),

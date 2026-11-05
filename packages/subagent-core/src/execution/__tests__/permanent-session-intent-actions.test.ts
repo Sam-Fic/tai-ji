@@ -387,7 +387,6 @@ describe("[U5] close 顺序约束：Continuation settle 分支 route（通知送
       reviveClosedRecord: vi.fn(),
       reopenRecord: () => true,
       markRoundStarted: vi.fn(),
-      closeNow: async () => {},
       archiveAfterClosingRound: async (rec: ExecutionRecord) => {
         order.push("archive");
         rec.closeAfterRound = undefined;
@@ -421,7 +420,6 @@ describe("[U5] close 顺序约束：Continuation settle 分支 route（通知送
       reviveClosedRecord: vi.fn(),
       reopenRecord: () => true,
       markRoundStarted: vi.fn(),
-      closeNow: async () => {},
       archiveAfterClosingRound: async (rec: ExecutionRecord) => {
         archived.push(rec.id);
       },
@@ -471,7 +469,6 @@ describe("[U5 / §3.2.2 事件表] 已收尾会话 + message → revive 翻 runn
       reviveClosedRecord: vi.fn(),
       reopenRecord: () => true,
       markRoundStarted: vi.fn(),
-      closeNow: async () => {},
       archiveAfterClosingRound: async () => {},
       rebuildWorktree: async () => ({ kind: "rebuilt", handle }),
       notifyWorktreeConflict: vi.fn(),
@@ -542,7 +539,6 @@ describe("[U5] dispatchRoundAsync worktree 绑定丢失 → 自动重建三分�
       reviveClosedRecord: vi.fn(),
       reopenRecord: () => true,
       markRoundStarted: vi.fn(),
-      closeNow: async () => {},
       archiveAfterClosingRound: async () => {},
       rebuildWorktree: rebuildImpl,
       notifyWorktreeConflict: (recordId: string, patchFile: string) => {

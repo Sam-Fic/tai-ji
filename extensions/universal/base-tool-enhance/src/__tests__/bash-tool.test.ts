@@ -48,7 +48,6 @@ vi.mock("../background/subagent-guard.ts", () => ({
 import { clearConfigCache } from "@zhushanwen/pi-llm-shared";
 
 import { createBashOverrideToolDefinition } from "../bash-tool.ts";
-import { clearExitWatchesForTest } from "../background/exit-watch.ts";
 import { clearTaskStoreForTest, getAllTasks } from "../background/task-store.ts";
 import { resetNotifyForTest } from "../background/notify.ts";
 
@@ -83,7 +82,6 @@ afterEach(() => {
 	}
 	agentDirRef.dir = "/tmp/bte-fake-agent-dir";
 	// A5 改写/登记链路的模块级状态复位（走 A5 的用例可能登记任务/挂守望）
-	clearExitWatchesForTest();
 	clearTaskStoreForTest();
 	resetNotifyForTest();
 	expect(getAllTasks()).toHaveLength(0);
@@ -177,9 +175,9 @@ describe("createBashOverrideToolDefinition", () => {
 		expect(tool.description).toContain("600s (configurable)");
 		expect(tool.description).toContain("NOT completion");
 		expect(tool.description).toContain("no exit code yet");
-		// 先查输出再决策 + 勿空等轮询（DO NOT bash sleep 同款约束）
+		// 先查输出再决策 + 转后台任务无完成通知、禁被动空等
 		expect(tool.description).toContain("Read the captured output");
-		expect(tool.description).toContain("DO NOT bash sleep or busy-wait");
+		expect(tool.description).toContain("do NOT passively wait for one");
 		// G8 零成本缓解：持续输出/无限循环类命令引导自带 timeout 或显式 background
 		expect(tool.description).toContain("while loops");
 		expect(tool.description).toContain("pass an explicit timeout");

@@ -7,7 +7,6 @@
  *      mock 模式下不走本域（api/index 切到 mock 门面）。
  */
 import type { RecentWorkspaceRecord, ServerMessageMap } from '@taiji/shared'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 import { command } from '../request'
 
 /** workspace.detect reply 类型（三态模式检测）。 */
@@ -20,7 +19,7 @@ export type WorkspaceDetectReply = ServerMessageMap['workspace.detected']
  * 解包 `.records` 返 RecentWorkspaceRecord[]。
  */
 export async function listRecent(): Promise<RecentWorkspaceRecord[]> {
-  const reply = await command('workspace.listRecent', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('workspace.listRecent', {})
   return reply.records
 }
 
@@ -31,7 +30,7 @@ export async function listRecent(): Promise<RecentWorkspaceRecord[]> {
  * 回传刷新后的 records，前端据此直接更新 store（一次往返完成写入+刷新，无需二次 listRecent）。
  */
 export async function record(cwd: string): Promise<RecentWorkspaceRecord[]> {
-  const reply = await command('workspace.record', { cwd }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('workspace.record', { cwd })
   return reply.records
 }
 
@@ -41,7 +40,7 @@ export async function record(cwd: string): Promise<RecentWorkspaceRecord[]> {
  * 返回三态 { mode, wsRoot, barePath, repoRoot, defaultBranch }。
  */
 export async function detect(cwd: string): Promise<WorkspaceDetectReply> {
-  return command('workspace.detect', { cwd }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('workspace.detect', { cwd })
 }
 
 /**
@@ -54,7 +53,7 @@ export async function setPinned(
   cwd: string,
   pinned: boolean,
 ): Promise<{ records: RecentWorkspaceRecord[]; degraded?: boolean }> {
-  return command('workspace.setPinned', { cwd, pinned }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('workspace.setPinned', { cwd, pinned })
 }
 
 /**
@@ -65,7 +64,6 @@ export async function defaultSessionDir(): Promise<string> {
   const reply = await command(
     'workspace.defaultSessionDir',
     {},
-    RPC_BACKSTOP_TIMEOUT_MS,
   )
   return reply.dir
 }

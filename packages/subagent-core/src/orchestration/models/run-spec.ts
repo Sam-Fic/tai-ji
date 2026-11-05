@@ -6,7 +6,7 @@
  * 设计：
  * - 全部字段 readonly——run 一旦创建，规格不可改（状态变化走 RunLifecycleState）
  * - scriptSource 是已 strip `export const meta` 的可执行源（WorkflowScript.toExecutable）
- * - budgetTokens/budgetTimeMs 是上限（可选，未设 = 不限制）
+ * - budgetTokens 是上限（可选，未设 = 不限制）
  *
  * 层归属：Engine。
  */
@@ -47,8 +47,6 @@ export interface RunSpec {
   readonly thinkingLevel?: string;
   /** Token 预算上限（未设或 0 = 不限制，见 Budget 检查）。 */
   readonly budgetTokens?: number;
- /** 时间预算上限（ms，wall-clock，由 lifecycle.scheduleTimeBudget 调度）。 */
-  readonly budgetTimeMs?: number;
  /** 脚本名（meta.name 或文件名 stem）。 */
   readonly scriptName: string;
  /**

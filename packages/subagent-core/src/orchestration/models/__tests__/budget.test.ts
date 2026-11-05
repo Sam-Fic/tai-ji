@@ -285,21 +285,18 @@ describe("Budget 构造", () => {
     expect(b.totalCallCount).toBe(0);
     expect(b.maxTokens).toBeUndefined();
     expect(b.maxCost).toBeUndefined();
-    expect(b.maxTimeMs).toBeUndefined();
   });
 
   it("从持久化数据重建（保留全部字段）", () => {
     const b = new Budget({
       maxTokens: 5000,
       maxCost: 2,
-      maxTimeMs: 60000,
       usedTokens: 100,
       usedCost: 0.3,
       totalCallCount: 7,
     });
     expect(b.maxTokens).toBe(5000);
     expect(b.maxCost).toBe(2);
-    expect(b.maxTimeMs).toBe(60000);
     expect(b.usedTokens).toBe(100);
     expect(b.usedCost).toBe(0.3);
     expect(b.totalCallCount).toBe(7);

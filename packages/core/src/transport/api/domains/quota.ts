@@ -9,7 +9,6 @@
  * HANDOFF：.taiji-harness/coding-plan-quota/HANDOFF.md
  */
 import type { NormalizedQuotaRow, QuotaConfigurePayload, QuotaFetchFailureReason } from '@taiji/shared'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 import { command } from '../request'
 
 /** getCached / fetch 的统一返回结构。 */
@@ -33,7 +32,7 @@ function toQuotaResult(reply: { data: NormalizedQuotaRow | null, lastFetchAt: nu
  * 无缓存返回 `{ data: null, lastFetchAt: null }`。
  */
 export async function getCached(providerId: string): Promise<QuotaResult> {
-  const reply = await command('quota.getCached', { providerId }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('quota.getCached', { providerId })
   return toQuotaResult(reply)
 }
 
@@ -44,7 +43,7 @@ export async function getCached(providerId: string): Promise<QuotaResult> {
  * 注意：带 10s throttle，10s 内重复 fetch 直接返回缓存。测试查询请用 refreshQuota。
  */
 export async function fetchQuota(providerId: string): Promise<QuotaResult> {
-  const reply = await command('quota.fetch', { providerId }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('quota.fetch', { providerId })
   return toQuotaResult(reply)
 }
 
@@ -54,7 +53,7 @@ export async function fetchQuota(providerId: string): Promise<QuotaResult> {
  * 失败时 runtime 返回失败态（ok=true + data=null + reason），不抛错。
  */
 export async function refreshQuota(providerId: string): Promise<QuotaResult> {
-  const reply = await command('quota.refresh', { providerId }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('quota.refresh', { providerId })
   return toQuotaResult(reply)
 }
 
@@ -66,6 +65,6 @@ export async function refreshQuota(providerId: string): Promise<QuotaResult> {
  * 空字符串同样 = 清除（UI 侧已不再产出空串，见 D13）。enabled=false 不删缓存。
  */
 export async function configure(payload: QuotaConfigurePayload): Promise<{ ok: boolean; error?: string }> {
-  const reply = await command('quota.configure', payload, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('quota.configure', payload)
   return { ok: reply.ok, error: reply.error }
 }

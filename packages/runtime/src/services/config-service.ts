@@ -54,8 +54,6 @@ import {
   setSetupScript as setSetupScriptImpl,
   getBareSetupScript as getBareSetupScriptImpl,
   setBareSetupScript as setBareSetupScriptImpl,
-  getTimeout as getTimeoutImpl,
-  setTimeout as setTimeoutImpl,
   getDefaultBaseBranch as getDefaultBaseBranchImpl,
   setDefaultBaseBranch as setDefaultBaseBranchImpl,
   type AppConfigAccessors,
@@ -393,14 +391,6 @@ export class ConfigService implements IConfigService {
 
   setBareSetupScript(script: string): SaveAppConfigResult {
     return setBareSetupScriptImpl(this.appConfig(), script)
-  }
-
-  getTimeout(): number {
-    return getTimeoutImpl(this.appConfig())
-  }
-
-  setTimeout(timeout: number): SaveAppConfigResult {
-    return setTimeoutImpl(this.appConfig(), timeout)
   }
 
   getDefaultBaseBranch(): string {

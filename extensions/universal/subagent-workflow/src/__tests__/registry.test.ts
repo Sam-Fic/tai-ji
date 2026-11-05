@@ -66,77 +66,7 @@ describe("conversation-wiring", () => {
     store: RecordStore;
   }
 
-  // ============================================================
-  // 1. 接线层：execute({idleTimeoutMs}) → record 字段 + 派发链
-  // ============================================================
 
-  describe("[modeless] idleTimeoutMs 接线：execute → createRecordForMode", () => {
-    let agentDir: string;
-    let service: SubagentService;
-    let store: RecordStore;
-    let fake: FakePiEnginePort;
-
-    beforeEach(() => {
-      agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "conv-wiring-"));
-      const modelService = new ModelConfigService({ agentDir, cwd: agentDir });
-      modelService.initModel({
-        modelRegistry: makeEmptyRegistry(),
-        sessionId: "root-session",
-        ctxModel: STUB_MODEL,
-      });
-      service = new SubagentService({ cwd: agentDir, modelService });
-      service.initSession({ pi: makePi(), sessionId: "root-session" });
-      store = (service as unknown as ServiceInternals).store;
-      // 协议替身引擎：run 永不 settle（FakeRun promise 挂起），record 停在 running。
-      fake = registerFakePiEngine();
-    });
-
-    afterEach(() => {
-      service.dispose();
-      // registry 是 globalThis 进程单例——清空防替身引擎泄漏进其他测试文件。
-      clearEngines();
-      fs.rmSync(agentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-    });
-
-    it("idleTimeoutMs:12345 → 落 record、无 chatMode 键、仍可续聊", async () => {
-      const handle = await service.execute({
-        task: "keep chatting with me",
-        slug: "conv-test",
-        idleTimeoutMs: 12345,
-      });
-
-      const record = store.getMutable(handle.subagentId);
-      expect(record).toBeDefined();
-      // idleTimeoutMs 归属 record（全 record 生效的 idle GC 节奏；优先级 参数 > env > 默认）
-      expect(record!.idleTimeoutMs).toBe(12345);
-      // [modeless] 模式标志消亡：record 级 chatMode 落值不得复活
-      expect(Object.keys(record!)).not.toContain("chatMode");
-      expect(record!.status).toBe("running");
-      // idle 续聊资格 = 引擎能力轴（messageHandler 唯一门槛），与参数/record 形态无关
-      expect(service.engineSupportsConversation(record!)).toBe(true);
-      // execute 走到首轮派发（engine.run 已派发）——完整接线而非 early return
-      await vi.waitFor(() => expect(fake.runs).toHaveLength(1));
-      // 会话形态由 resume 锚点承载（协议 run 的 ctx.resume.recordId——[modeless 波2]
-      // task.conversation 协议键已删，本轮起「每轮 = 新 run + resume 锚点」唯一形态）
-      expect(fake.runs[0].ctx.resume?.recordId).toBe(handle.subagentId);
-    });
-
-    it("idleTimeoutMs 缺省 → undefined（不误置）+ 无 chatMode 键 + 仍可续聊（万物可续不依赖参数）", async () => {
-      const handle = await service.execute({
-        task: "one shot task",
-        slug: "oneshot-test",
-      });
-
-      const record = store.getMutable(handle.subagentId);
-      expect(record).toBeDefined();
-      expect(record!.idleTimeoutMs).toBeUndefined();
-      expect(Object.keys(record!)).not.toContain("chatMode");
-      // 缺省派发同权可续——「一次性 record 不可续」的记录级形态已消亡（原
-      // chatMode === false 断言的等价承接）
-      expect(service.engineSupportsConversation(record!)).toBe(true);
-    });
-  });
-});
 
 // ======== 来源：engines-declaration.test.ts ========
 describe("engines-declaration", () => {
@@ -1413,3 +1343,4 @@ describe("model-list-injector scoped filter", () => {
     expect(prompt).toContain("MiniMax-M3")
   })
 })
+});

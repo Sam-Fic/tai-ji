@@ -40,10 +40,7 @@ const HARNESS_VISUAL_DIR = resolve(REPO_ROOT, '.taiji-harness/visual')
 
 const DEMO_DEFAULT_PORT = 1421
 const MOCK_DEFAULT_PORT_START = 1430
-const DEFAULT_READY_TIMEOUT = 60000
 const POLL_INTERVAL_MS = 500
-const KILL_GRACE_MS = 2000
-const SETTLE_MS = 2000
 
 // demo（.tmp/v6）首屏根容器；mock（renderer）首屏根容器
 const DEMO_ROOT_SELECTOR = '.stage, .window-frame'
@@ -65,9 +62,10 @@ async function findFreePort(start) {
   throw new Error(`未找到空闲端口（${start}-${start + 49}）`)
 }
 
-async function pollReady(url, timeout, child) {
+// ready 轮询无超时上限（时间机制删除裁决：本地等待删除）
+async function pollReady(url, child) {
   const start = Date.now()
-  while (Date.now() - start < timeout) {
+  for (;;) {
     if (child && child.exitCode !== null) return { ok: false, reason: 'child-exited' }
     try {
       const res = await fetch(url, { method: 'GET' })
@@ -77,10 +75,9 @@ async function pollReady(url, timeout, child) {
     }
     await sleep(POLL_INTERVAL_MS)
   }
-  return { ok: false, reason: 'timeout' }
 }
 
-async function killProcess(child, graceMs) {
+async function killProcess(child) {
   if (!child || child.exitCode !== null || child.signalCode) return
   const exitP = new Promise((r) => child.once('exit', () => r(true)))
   try {
@@ -88,14 +85,7 @@ async function killProcess(child, graceMs) {
   } catch {
     return
   }
-  const exited = await Promise.race([exitP, sleep(graceMs).then(() => false)])
-  if (!exited) {
-    try {
-      child.kill('SIGKILL')
-    } catch {
-      /* ignore */
-    }
-  }
+  await exitP
 }
 
 function todayStr() {
@@ -129,13 +119,12 @@ function spawnVite({ cwd, port, extraEnv, stderrBuf }) {
   return child
 }
 
-async function capturePage({ browser, url, rootSelector, selector, readyTimeout, settleMs }) {
+async function capturePage({ browser, url, rootSelector, selector }) {
   const page = await browser.newPage()
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: readyTimeout })
+  await page.goto(url, { waitUntil: 'domcontentloaded' })
   if (rootSelector) {
-    await page.waitForSelector(rootSelector, { state: 'visible', timeout: readyTimeout }).catch(() => {})
+    await page.waitForSelector(rootSelector, { state: 'visible', timeout: 30000 }).catch(() => {})
   }
-  await sleep(settleMs ?? SETTLE_MS)
   const screenshotOpts = { fullPage: true }
   if (selector) {
     const el = await page.$(selector)
@@ -150,7 +139,7 @@ async function capturePage({ browser, url, rootSelector, selector, readyTimeout,
 // ---------------------------------------------------------------------------
 // demo target：spawn .tmp/v6 vite → chromium.launch → 截图
 // ---------------------------------------------------------------------------
-async function captureDemo({ port, url, selector, readyTimeout }) {
+async function captureDemo({ port, url, selector }) {
   const chosenPort = port || DEMO_DEFAULT_PORT
   const targetUrl = url || `http://localhost:${chosenPort}`
   let child
@@ -158,7 +147,7 @@ async function captureDemo({ port, url, selector, readyTimeout }) {
   const stderrBuf = []
   try {
     child = spawnVite({ cwd: DEMO_DIR, port: chosenPort, extraEnv: {}, stderrBuf })
-    const ready = await pollReady(targetUrl, readyTimeout, child)
+    const ready = await pollReady(targetUrl, child)
     if (!ready.ok) {
       const tail = stderrBuf.slice(-20).join('')
       console.error(`[visual-capture] demo dev server 未 ready（${ready.reason}）@ ${targetUrl}\n${tail}`)
@@ -172,12 +161,12 @@ async function captureDemo({ port, url, selector, readyTimeout }) {
       return { exitCode: 3 }
     }
     const { png, scoped } = await capturePage({
-      browser, url: targetUrl, rootSelector: DEMO_ROOT_SELECTOR, selector, readyTimeout,
+      browser, url: targetUrl, rootSelector: DEMO_ROOT_SELECTOR, selector,
     })
     return { exitCode: 0, png, scoped, targetUrl }
   } finally {
     if (browser) await browser.close().catch(() => {})
-    await killProcess(child, KILL_GRACE_MS)
+    await killProcess(child)
   }
 }
 
@@ -200,7 +189,6 @@ async function captureDevapp({ cdpUrl, selector }) {
       console.warn('[visual-capture] devapp 无现有 page，newPage 等待渲染')
       page = await ctx.newPage()
     }
-    await sleep(SETTLE_MS)
     let png
     let scoped = false
     if (selector) {
@@ -223,7 +211,7 @@ async function captureDevapp({ cdpUrl, selector }) {
 // ---------------------------------------------------------------------------
 // mock target：spawn renderer vite + VITE_MOCK=true（复用 W1 token-consume-check 范式）
 // ---------------------------------------------------------------------------
-async function captureMock({ port, url, selector, readyTimeout }) {
+async function captureMock({ port, url, selector }) {
   const chosenPort = port || (await findFreePort(MOCK_DEFAULT_PORT_START))
   const targetUrl = url || `http://localhost:${chosenPort}`
   let child
@@ -231,7 +219,7 @@ async function captureMock({ port, url, selector, readyTimeout }) {
   const stderrBuf = []
   try {
     child = spawnVite({ cwd: RENDERER_DIR, port: chosenPort, extraEnv: { VITE_MOCK: 'true' }, stderrBuf })
-    const ready = await pollReady(targetUrl, readyTimeout, child)
+    const ready = await pollReady(targetUrl, child)
     if (!ready.ok) {
       const tail = stderrBuf.slice(-20).join('')
       console.error(`[visual-capture] mock dev server 未 ready（${ready.reason}）@ ${targetUrl}\n${tail}`)
@@ -245,12 +233,12 @@ async function captureMock({ port, url, selector, readyTimeout }) {
       return { exitCode: 3 }
     }
     const { png, scoped } = await capturePage({
-      browser, url: targetUrl, rootSelector: MOCK_ROOT_SELECTOR, selector, readyTimeout,
+      browser, url: targetUrl, rootSelector: MOCK_ROOT_SELECTOR, selector,
     })
     return { exitCode: 0, png, scoped, targetUrl }
   } finally {
     if (browser) await browser.close().catch(() => {})
-    await killProcess(child, KILL_GRACE_MS)
+    await killProcess(child)
   }
 }
 
@@ -295,7 +283,6 @@ const ARG_SPECS = [
   { flag: '--url', key: 'url' },
   { flag: '--cdp-url', key: 'cdpUrl' },
   { flag: '--selector', key: 'selector' },
-  { flag: '--ready-timeout', key: 'readyTimeout', numeric: true },
 ]
 
 function printVisualCaptureHelp() {
@@ -331,7 +318,7 @@ if (!opts.target) {
   console.error('[visual-capture] 缺少 --target（demo|devapp|mock）。--help 查看用法。')
   process.exit(1)
 }
-run({ ...opts, readyTimeout: opts.readyTimeout || DEFAULT_READY_TIMEOUT })
+run(opts)
   .then((code) => {
     console.log(`\n[visual-capture] exit ${code}`)
     process.exit(code)

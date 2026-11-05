@@ -220,21 +220,6 @@ export const SPAWN_ENV_FORWARD_REFERENCE: readonly SpawnEnvForwardEntry[] = [
     ],
   },
   {
-    // U0-① 增补项：核实结论为「依赖 B3 白名单继承，无自注入通路」。
-    //
-    // 命中分类（rg subagent-workflow/src）：生产读取唯一 lifecycle-manager.ts:57
-    // （主 pi 进程内 extension 直接读自身 process.env 取全局缺省 idle timeout）；
-    // 其余命中均为注释/工具描述文本（lifecycle-manager.ts:46/:102/:109、types.ts:392/:589、
-    // subagent-tool.ts:280）与测试（resource-policy.test.ts）。
-    // 「设置进嵌套 frame.env」通路不存在：嵌套注入只写身份 env（session-runner
-    // 的 identity-env 通道），故通道唯一 = B3 入站白名单继承。
-    name: 'TAIJI_SUBAGENT_IDLE_TIMEOUT_MS',
-    injectionPath: 'B3 白名单放行（裸 TAIJI_ 前缀）；extension 无 frame.env 自注入通路（U0① 核实）',
-    piConsumerAnchors: [
-      'extensions/universal/subagent-workflow/src/execution/lifecycle-manager.ts:57（armIdleTimer 三层优先级中的全局缺省来源）',
-    ],
-  },
-  {
     // git ssh remote（git@github.com:…）的 ssh-agent 认证通道：OpenSSH 经
     // SSH_AUTH_SOCK 连接 agent。不在白名单前缀内，故由 npm-git-installer /
     // shell-runner / git-executor 的 extras 显式 forward（值检查：父 env 未设置

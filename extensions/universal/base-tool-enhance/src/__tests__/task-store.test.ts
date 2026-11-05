@@ -15,7 +15,6 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 }));
 
 import { registerConvertedTask } from "../bash-tool.ts";
-import { clearExitWatchesForTest } from "../background/exit-watch.ts";
 import { generateTaskId } from "../background/spawn-background.ts";
 import {
 	clearTaskStoreForTest,
@@ -48,7 +47,6 @@ function makeTask(overrides: Partial<BackgroundTask> = {}): BackgroundTask {
 }
 
 afterEach(() => {
-	clearExitWatchesForTest();
 	clearTaskStoreForTest();
 });
 
@@ -194,7 +192,7 @@ describe("converted registration co-resides with spawn registration", () => {
 		expect(getTask(converted.taskId)?.state).toBe("running");
 		expect(getActiveTasks().map((t) => t.taskId).sort()).toEqual([converted.taskId, spawned.taskId].sort());
 		expect(countActiveTasks()).toBe(2);
-		// 转后台条目无 child 句柄（exit 感知归 exit-watch，不挂 exit-collector）
+		// 转后台条目无 child 句柄（不挂 exit-collector——转后台命令非本进程 child）
 		expect(getTask(converted.taskId)?.child).toBeUndefined();
 	});
 

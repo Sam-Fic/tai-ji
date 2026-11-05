@@ -9,7 +9,6 @@
  */
 import type { SessionSummary, SessionGroup, SessionSurface, SubagentRecord, WorkflowRunRecord, Message, BatchDeleteResult, ServerMessage, ServerMessageMap, ThinkingLevel, ImportCandidatesRequest, ImportCandidatesReply, ImportRequest, ImportReply, SessionRevokeMessageReply, WorkflowRunEventsReply, WorkflowDagReply, SubagentEngineDefaultModelMutationReply, ArchiveSummary, SessionArchiveReply } from '@taiji/shared'
 import { PI_THINKING_LEVELS } from '@taiji/shared'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 import { command } from '../request'
 
 /** PI_THINKING_LEVELS 成员判定（shared 权威词表，string → ThinkingLevel 类型收窄） */
@@ -35,14 +34,6 @@ function narrowThinkingOverride(value: string | undefined): ThinkingLevel | unde
 }
 
 /**
- * handoff RPC 超时：对齐 runtime HandoffService.HANDOFF_TIMEOUT_MS（600s）+ 60s 余量（agent_end 后的 create/broadcast）。
- * 不直接 import runtime 包（跨包依赖不可行），本地定义并手动对齐——runtime 改值时这里同步更新。
- * 不走 pending.ts DEFAULT_TIMEOUT_MS（65s）：65s 后前端 RPC 超时 reject → useHandoffActions 复位 handingOff（按钮可重点），
- * 但 runtime runHandoff 仍最长跑 600s，用户重试会撞 runtime already in progress。
- */
-const HANDOFF_RPC_TIMEOUT_MS = 660_000
-
-/**
  * 列出所有 session，按 cwd 分组（对齐后端 SessionGroup[]，D7）。
  * reply payload 是 { groups: SessionGroup[] }，解包 .groups。
  * type=config.sessions（原 session.list，W2 重命名）。
@@ -51,7 +42,7 @@ const HANDOFF_RPC_TIMEOUT_MS = 660_000
  * listSessions（session.list 纯查询消息）——本函数保留给侧栏导航的广播/查询同源消费。
  */
 export async function list(): Promise<SessionGroup[]> {
-  const reply = await command('config.sessions', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('config.sessions', {})
   return reply.groups
 }
 
@@ -66,7 +57,7 @@ export async function list(): Promise<SessionGroup[]> {
  * 无参 = 全量（侧栏条目 + 全部 btw 线），供抽屉/调试用。
  */
 export async function listSessions(query: { surface?: SessionSurface; mainSessionId?: string }): Promise<SessionGroup[]> {
-  const reply = await command('session.list', query, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('session.list', query)
   return reply.groups
 }
 
@@ -100,7 +91,7 @@ export async function create(
   if (thinkingOverride !== undefined) payload.thinkingOverride = thinkingOverride
   // 发现 B（create 幂等化）：clientUuid 幂等键透传 runtime（缺省省略，向后兼容）。
   if (clientUuid !== undefined) payload.clientUuid = clientUuid
-  const reply = await command('session.create', payload, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('session.create', payload)
   return reply.session
 }
 
@@ -108,7 +99,7 @@ export async function create(
 export async function switchSession(sessionId: string): Promise<void> {
   // wave:perf-w20（R-11）：switch reply 拆分为 session.switched（无 messages），调用方
   // 本就丢弃 reply——await 显式丢弃（Promise<session.switched> 不能直接 return 给 Promise<void>）。
-  await command('session.switch', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  await command('session.switch', { sessionId })
 }
 
 /**
@@ -121,7 +112,7 @@ export async function switchSession(sessionId: string): Promise<void> {
  * 错误码：MODEL_NOT_CONFIGURED / SESSION_NOT_FOUND / RESTORE_FAILED（runtime 侧 sendError）。
  */
 export async function restoreSession(sessionId: string): Promise<SessionSummary> {
-  const reply = await command('session.restore', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('session.restore', { sessionId })
   return reply.session
 }
 
@@ -131,7 +122,7 @@ export async function restoreSession(sessionId: string): Promise<SessionSummary>
  * restore 重开。区别于 chat.abort 的协作式中止：不依赖 pi 响应，适用于 pi 卡死场景。
  */
 export function forceQuit(sessionId: string): Promise<void> {
-  return command('session.forceQuit', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.forceQuit', { sessionId })
 }
 
 /**
@@ -162,7 +153,7 @@ export async function fork(
     label: opts.label,
     modelOverride: opts.modelOverride,
     thinkingOverride: narrowThinkingOverride(opts.thinkingOverride),
-  }, RPC_BACKSTOP_TIMEOUT_MS)
+  })
   return reply.session
 }
 
@@ -174,7 +165,7 @@ export async function fork(
 export function getCommands(
   sessionId: string,
 ): Promise<{ sessionId: string; commands: Array<{ name: string; description?: string; source: string }> }> {
-  return command('session.getCommands', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.getCommands', { sessionId })
 }
 
 /**
@@ -185,12 +176,12 @@ export function getCommands(
 export function getContext(
   sessionId: string,
 ): Promise<{ sessionId: string; inputTokens?: number; contextLimit?: number; usagePercent?: number }> {
-  return command('session.getContext', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.getContext', { sessionId })
 }
 
 /** 重命名 session（label 更新） */
 export function rename(sessionId: string, label: string): Promise<void> {
-  return command('session.rename', { sessionId, name: label }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.rename', { sessionId, name: label })
 }
 
 /**
@@ -198,17 +189,17 @@ export function rename(sessionId: string, label: string): Promise<void> {
  * projectId 空串 = 归回默认项目（runtime 删除绑定）。
  */
 export function setProject(sessionId: string, projectId: string): Promise<void> {
-  return command('session.setProject', { sessionId, projectId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.setProject', { sessionId, projectId })
 }
 
 /** 删除 session（从列表移除） */
 export function remove(sessionId: string): Promise<void> {
-  return command('session.delete', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.delete', { sessionId })
 }
 
 /** 删除指定 cwd（folder）下所有 session（folder 维度批量删除，reply 含 deleted/failed 列表） */
 export function removeByCwd(cwd: string): Promise<BatchDeleteResult> {
-  return command('session.deleteByCwd', { cwd }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.deleteByCwd', { cwd })
 }
 
 // ── session 归档域（session-archive 设计 D5 三 RPC + config.archives 列表拉取；
@@ -216,7 +207,7 @@ export function removeByCwd(cwd: string): Promise<BatchDeleteResult> {
 
 /** 归档 session：同步段完成搬移 + 簿记骨架（reply ack 型 { sessionId }；压缩在后台异步进行，文案不宣称已压缩） */
 export function archive(sessionId: string): Promise<SessionArchiveReply> {
-  return command('session.archive', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.archive', { sessionId })
 }
 
 /**
@@ -224,7 +215,7 @@ export function archive(sessionId: string): Promise<SessionArchiveReply> {
  * （恢复后的 SessionSummary，前端原项目组顶部高亮置顶，D5 步骤 7）。
  */
 export async function unarchive(sessionId: string): Promise<SessionSummary> {
-  const reply = await command('session.unarchive', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('session.unarchive', { sessionId })
   return reply.session
 }
 
@@ -234,12 +225,12 @@ export async function unarchive(sessionId: string): Promise<SessionSummary> {
  * 说明 + 残留目录指引（D5 步骤 7 失败显式上报）。
  */
 export function purgeArchive(sessionId: string): Promise<{ sessionId: string; keptSubagentsDir?: string }> {
-  return command('session.purgeArchive', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.purgeArchive', { sessionId })
 }
 
 /** 拉取归档列表（config.archives；拉为主——打开归档视图时调用，列表 = 归档目录扫描派生） */
 export async function listArchives(): Promise<ArchiveSummary[]> {
-  const reply = await command('config.archives', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('config.archives', {})
   return reply.archives
 }
 
@@ -250,7 +241,7 @@ export async function listArchives(): Promise<ArchiveSummary[]> {
  * reply { sessionId, level }：level 是 runtime set→get_state 读回的生效档（pi 钳制时 ≠ 请求值）。
  */
 export function setThinkingLevel(sessionId: string, level: string): Promise<{ sessionId: string; level: string }> {
-  return command('session.setThinkingLevel', { sessionId, level }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.setThinkingLevel', { sessionId, level })
 }
 
 /**
@@ -264,7 +255,7 @@ export function setThinkingLevel(sessionId: string, level: string): Promise<{ se
 export async function getSubagents(
   sessionId: string,
 ): Promise<{ subagents: SubagentRecord[]; oversize?: boolean; found?: boolean }> {
-  return command('session.getSubagents', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.getSubagents', { sessionId })
 }
 
 /**
@@ -272,7 +263,7 @@ export async function getSubagents(
  * reply payload 是 { sessionId, subagentId, messages }，解包 .messages。
  */
 export async function getSubagentHistory(sessionId: string, subagentId: string): Promise<Message[]> {
-  const reply = await command('session.getSubagentHistory', { sessionId, subagentId }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('session.getSubagentHistory', { sessionId, subagentId })
   return reply.messages
 }
 
@@ -290,7 +281,7 @@ export function getSubagentStreamState(
   sessionId: string,
   recordId: string,
 ): Promise<ServerMessageMap['session.getSubagentStreamState']> {
-  return command('session.getSubagentStreamState', { sessionId, recordId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.getSubagentStreamState', { sessionId, recordId })
 }
 
 /**
@@ -300,14 +291,14 @@ export function getSubagentStreamState(
  * engineDefaults（per-engine 默认模型偏好）两 optional 键，缺省语义 = 空表/无偏好。
  */
 export async function getSubagentEngineConfig(): Promise<ServerMessageMap['session.subagentEngineConfig']> {
-  return command('session.getSubagentEngineConfig', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.getSubagentEngineConfig', {})
 }
 
 /**
  * [U7] 设置全局默认子代理引擎（runtime 读改写 config.json，新 session 生效）。
  */
 export function setSubagentDefaultEngine(engineId: string): Promise<{ engineId: string }> {
-  return command('session.setSubagentDefaultEngine', { engineId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.setSubagentDefaultEngine', { engineId })
 }
 
 /**
@@ -319,7 +310,7 @@ export function setSubagentEngineDefaultModel(
   engineId: string,
   modelRef: string,
 ): Promise<SubagentEngineDefaultModelMutationReply> {
-  return command('session.setSubagentEngineDefaultModel', { engineId, modelRef }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.setSubagentEngineDefaultModel', { engineId, modelRef })
 }
 
 /**
@@ -332,7 +323,7 @@ export function setSubagentEngineDefaultModel(
 export async function getWorkflows(
   sessionId: string,
 ): Promise<{ workflows: WorkflowRunRecord[]; oversize?: boolean; found?: boolean }> {
-  return command('session.getWorkflows', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.getWorkflows', { sessionId })
 }
 
 /**
@@ -345,7 +336,7 @@ export async function getWorkflows(
  * 另走 error envelope reject，两通道在 renderer 侧归一。
  */
 export async function getWorkflowRunEvents(sessionId: string, runId: string): Promise<WorkflowRunEventsReply> {
-  return command('session.getWorkflowRunEvents', { sessionId, runId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.getWorkflowRunEvents', { sessionId, runId })
 }
 
 /**
@@ -358,7 +349,7 @@ export async function getWorkflowRunEvents(sessionId: string, runId: string): Pr
  * 另走 error envelope reject，两通道在 renderer 侧归一。
  */
 export async function getWorkflowDag(sessionId: string, runId: string): Promise<WorkflowDagReply> {
-  return command('session.getWorkflowDag', { sessionId, runId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.getWorkflowDag', { sessionId, runId })
 }
 
 /**
@@ -366,7 +357,7 @@ export async function getWorkflowDag(sessionId: string, runId: string): Promise<
  * reply payload 是 { sessionId, agentCallSessionId, messages }，解包 .messages。
  */
 export async function getAgentCallHistory(sessionId: string, agentCallSessionId: string): Promise<Message[]> {
-  const reply = await command('session.getAgentCallHistory', { sessionId, agentCallSessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('session.getAgentCallHistory', { sessionId, agentCallSessionId })
   return reply.messages
 }
 
@@ -375,7 +366,7 @@ export async function getAgentCallHistory(sessionId: string, agentCallSessionId:
  * runtime 按 trace[].sessionId 在 subagents 目录查找，找不到返回空串（展示型功能不 throw）。
  */
 export async function getAgentCallFilePath(sessionId: string, agentCallSessionId: string): Promise<string> {
-  const reply = await command('session.getAgentCallFilePath', { sessionId, agentCallSessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  const reply = await command('session.getAgentCallFilePath', { sessionId, agentCallSessionId })
   return reply.filePath
 }
 
@@ -389,7 +380,7 @@ export function workflowAction(
   action: 'abort' | 'resume',
   runId: string,
 ): Promise<void> {
-  return command('session.workflowAction', { sessionId, action, runId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.workflowAction', { sessionId, action, runId })
 }
 
 /**
@@ -404,7 +395,7 @@ export function subagentAction(
   params: { subagentId?: string; text?: string; slug?: string; task?: string },
 ): Promise<void> {
   // undefined 键经 JSON 序列化自然丢弃（与 send 的 images 空数组归一模式对称）
-  return command('session.subagentAction', { sessionId, action, ...params }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.subagentAction', { sessionId, action, ...params })
 }
 
 /**
@@ -416,6 +407,10 @@ export function subagentAction(
  *
  * Staging Mode（ADR-0056）：modelOverride/thinkingOverride 来自 composer 暂存态的模型选择，
  * 用于新 session 创建（源 session turn 仍用源 session 自身模型，不受 override 影响）。
+ *
+ * RPC 无超时（ADR-0190）：handoff turn 等待挂到
+ * 终态帧 / abort / pi 退出（runtime 侧事件驱动收尾）；断连时 pending 由 use-connection
+ * rejectAll 收尾。
  */
 export function handoff(
   sessionId: string,
@@ -427,15 +422,15 @@ export function handoff(
     reply,
     modelOverride: options?.modelOverride,
     thinkingOverride: narrowThinkingOverride(options?.thinkingOverride),
-  }, HANDOFF_RPC_TIMEOUT_MS)
+  })
 }
 
 /**
- * 取消进行中的 handoff（委托 HandoffService.abortHandoff 中断 handoff inflight：client.abort + 清 listener/timer）。
+ * 取消进行中的 handoff（委托 HandoffService.abortHandoff 中断 handoff inflight：client.abort + 清 listener）。
  * 无进行中 handoff 时 no-op。reply message.status ack。
  */
 export function abortHandoff(sessionId: string): Promise<void> {
-  return command('session.abortHandoff', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.abortHandoff', { sessionId })
 }
 
 /**
@@ -445,7 +440,7 @@ export function abortHandoff(sessionId: string): Promise<void> {
  * 投递裸标记，剥标记与整批切条在消费侧 revoke-restore.ts）；错误臂 error 六码闭集按 D8 呈现。
  */
 export function revokeMessage(sessionId: string, targetId: string): Promise<SessionRevokeMessageReply> {
-  return command('session.revokeMessage', { sessionId, targetId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.revokeMessage', { sessionId, targetId })
 }
 
 /**
@@ -469,7 +464,7 @@ export async function subscribe(
   sessionId: string,
   fromSeq?: number,
 ): Promise<{ snapshot: ServerMessage[]; stateSnapshot: ServerMessage[]; lastSeq: number; gap?: boolean }> {
-  return command('session.subscribe', { sessionId, fromSeq }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.subscribe', { sessionId, fromSeq })
 }
 
 /**
@@ -479,7 +474,7 @@ export async function subscribe(
  * 取消订阅的副作用由后续 live 事件停发体现——renderer 不读 reply payload。
  */
 export function unsubscribe(sessionId: string): Promise<void> {
-  return command('session.unsubscribe', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.unsubscribe', { sessionId })
 }
 
 // ── wave:runtime-patch ipc-converge-a3 W2：业务持久化写（从 main IPC 迁 WS）──
@@ -490,7 +485,7 @@ export function writeImage(payload: {
   mimeType: string
   name: string
 }): Promise<{ path: string; fileName: string; displayName: string; id: string; persisted: boolean }> {
-  return command('session.writeImage', payload, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.writeImage', payload)
 }
 /** 迁移 landing tmpdir 图片到 attachments。安全校验在 runtime sessionService.migrateImage */
 export function migrateImage(payload: {
@@ -498,14 +493,14 @@ export function migrateImage(payload: {
   sessionId: string
   fileName: string
 }): Promise<{ path: string }> {
-  return command('session.migrateImage', payload, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.migrateImage', payload)
 }
 /** 追加/覆盖 segments.json sidecar（atomic 写） */
 export async function writeSegments(payload: {
   sessionId: string
   entry: import('@taiji/shared').SegmentsMetadataEntry
 }): Promise<void> {
-  await command('session.writeSegments', payload, RPC_BACKSTOP_TIMEOUT_MS)
+  await command('session.writeSegments', payload)
 }
 
 // ── session-trace（design D4，trace-ui 单元）──
@@ -519,7 +514,7 @@ export async function writeSegments(payload: {
 export function getTraceEntries(
   sessionId: string,
 ): Promise<import('@taiji/shared').ServerMessageMap['session.traceEntries']> {
-  return command('session.getTraceEntries', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.getTraceEntries', { sessionId })
 }
 
 /**
@@ -530,7 +525,7 @@ export function getTraceEntries(
 export function fetchCurrentSystemPrompt(
   sessionId: string,
 ): Promise<import('@taiji/shared').ServerMessageMap['session.currentSystemPrompt']> {
-  return command('session.fetchCurrentSystemPrompt', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.fetchCurrentSystemPrompt', { sessionId })
 }
 
 // ── 导入 pi 会话（import-session u4，来源设计 docs/design/import-session.md（已删除，git 可追溯）§3.3 D5）──
@@ -546,7 +541,7 @@ export function fetchCurrentSystemPrompt(
  * stale）；renderer 只展示标记并禁用导入按钮，不做本地二次判断。
  */
 export function importCandidates(request: ImportCandidatesRequest): Promise<ImportCandidatesReply> {
-  return command('session.importCandidates', request, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.importCandidates', request)
 }
 
 /**
@@ -558,5 +553,5 @@ export function importCandidates(request: ImportCandidatesRequest): Promise<Impo
  * renderer 降级 toast 引导手动归类（不回滚）。
  */
 export function importSession(request: ImportRequest): Promise<ImportReply> {
-  return command('session.import', request, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('session.import', request)
 }

@@ -8,7 +8,7 @@ export default {
   close: 'Close',
   loading: 'Loading…',
   loadFailed: 'Load failed',
-  loadFailedHint: 'Auto-retried {n} times without success. Close and reopen to recover (Esc / ⌘W to dismiss)',
+  loadFailedHint: 'Load failed. Close and reopen to recover (Esc / ⌘W to dismiss)',
   empty: 'No data',
   noData: 'No content',
   search: 'Search',

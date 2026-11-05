@@ -8,17 +8,17 @@
  * 与 IGitExecutor 的区别：
  * - IGitExecutor：execFileSync 跑 git 子命令（白名单 + 数组参数防注入），**同步语义**，非 0 原样返回。
  * - IShellRunner：spawn 跑任意 shell 脚本（用户的 setup-worktree.sh），**异步流式**，逐行回调 onOutput；
- *   ENOENT/timeout 抛 ShellRunnerError（执行失败而非业务失败），exitCode 非 0 由调用方判定。
+ *   ENOENT 抛 ShellRunnerError（执行失败而非业务失败），exitCode 非 0 由调用方判定。
  *
  * spawn 注入策略：构造函数接受 `{ spawn }`，production 由 index.ts 传 `child_process.spawn`，
  * 测试用 `vi.doMock('node:child_process')` 后传入 mock。此设计让 ShellRunner 单元测试无需真的 spawn。
  */
 import type { spawn as spawnType } from 'node:child_process'
 
-/** ShellRunner 失败分类错误。ENOENT → not_found，超时 → timeout。 */
+/** ShellRunner 失败分类错误。ENOENT → not_found。 */
 export class ShellRunnerError extends Error {
-  readonly code: 'not_found' | 'timeout'
-  constructor(code: 'not_found' | 'timeout', message: string) {
+  readonly code: 'not_found'
+  constructor(code: 'not_found', message: string) {
     super(message)
     this.name = 'ShellRunnerError'
     this.code = code
@@ -33,8 +33,6 @@ export interface ShellRunnerExecuteOptions {
   args?: string[]
   /** 子进程 cwd（通常是新 worktree 目录）。 */
   cwd: string
-  /** 超时 ms，必传：调用方按脚本内容校准量级。到期发 SIGTERM + reject ShellRunnerError(code='timeout')。 */
-  timeout: number
   /** 逐行输出回调（每行 + 流标识）。setup 脚本的 stdout/stderr 实时反馈给前端用。 */
   onOutput?: (line: string, stream: 'stdout' | 'stderr') => void
 }
@@ -54,7 +52,7 @@ export interface ShellRunnerResult {
  * - stdout/stderr 的 'data' 事件按 Buffer 解码 + split 行，每行调 onOutput；同时累积到 stdout/stderr
  * - child 'close' 事件收到 exitCode 后 resolve
  * - child 'error' 事件：ENOENT → reject ShellRunnerError('not_found')
- * - timeout 到期：child.kill('SIGTERM') + 标记超时，后续即使收到 'close' 也 reject ShellRunnerError('timeout')
+ * - 无墙钟：setup 脚本（pnpm install / 二进制下载等分钟级操作）跑到 close 为止，不做时间阈值判死
  */
 export interface IShellRunner {
   execute(opts: ShellRunnerExecuteOptions): Promise<ShellRunnerResult>

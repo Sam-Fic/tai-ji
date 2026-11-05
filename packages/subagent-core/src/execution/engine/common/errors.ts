@@ -147,7 +147,8 @@ export function promptTooLargeError(actualBytes: number, limitBytes: number): En
 export const STDOUT_TAIL_ECHO_CHARS = 2000;
 
 /**
- * engine_timeout 的 outcome.error 文案（kill-chain 的 synthesizeTimeoutOutcome 消费）：
+ * engine_timeout 的 outcome.error 文案（宿主超时合成面已随时间机制删除——本文案
+ * 仅作历史帧/旧 record 解析兜底）：
  * 含 stdout 尾部 2000 字 + 「可用 engine: pi 重跑」建议（§3.3.3 第 6 行）。
  */
 export function engineTimeoutDetail(stdoutTail: string): string {

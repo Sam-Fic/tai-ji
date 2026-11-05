@@ -55,7 +55,7 @@ const BYTES_PER_KB = 1024
 const DIAGNOSTIC_TAIL_KB = 256
 /** 各层日志尾部截取量（D6「各取末 256KB，非全量」）。 */
 export const DIAGNOSTIC_TAIL_BYTES = DIAGNOSTIC_TAIL_KB * BYTES_PER_KB
-// 时间量纲换算基数（与 trigger-patrol.ts / log-retention.ts 同款命名常量，非魔数）。
+// 时间量纲换算基数（与 log-retention.ts 同款命名常量，非魔数）。
 const MS_PER_SECOND = 1000
 const SECONDS_PER_MINUTE = 60
 const MINUTES_PER_HOUR = 60

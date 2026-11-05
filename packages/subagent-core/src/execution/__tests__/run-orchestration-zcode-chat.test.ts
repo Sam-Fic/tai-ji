@@ -42,7 +42,6 @@ import { ModelConfigService } from "../assembly/model-config-service.ts";
 import type { ModelRegistryLike } from "../assembly/model-resolver.ts";
 import type { RecordStore } from "../persistence/record-store.ts";
 import { SubagentService } from "../subagent-service.ts";
-import { _resetLifecycleState } from "../lifecycle/lifecycle-manager.ts";
 import { _resetCoreSpawnedChildrenMirrorForTest } from "../engine/host/spawned-children.ts";
 import type { ExecutionRecord } from "../domain/record-model.ts";
 
@@ -194,7 +193,6 @@ describe("U6b：zcode chatMode 的 Continuation 接线（B-firstround + B-routin
   afterEach(() => {
     service.dispose();
     clearEngines();
-    _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
     if (prevDataDirEnv === undefined) delete process.env["TAIJI_AGENT_DATA_DIR"];
     else process.env["TAIJI_AGENT_DATA_DIR"] = prevDataDirEnv;

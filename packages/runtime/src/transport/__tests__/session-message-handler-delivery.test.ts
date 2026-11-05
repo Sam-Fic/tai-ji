@@ -494,7 +494,7 @@ describe('帧数据源 = 内核派生视图（D9②：cancelled 不映射 / tomb
     // 提交先于 sync（onChange 尚未接线）——首帧只能来自 sync 的全量快照发布
     registry.submit(SID, { content: 'msg-A', clientUuid: UUID_A })
     // 先冲掉提交链微任务（受理 → in-flight 迁移），内核进入稳态再推进时间：
-    // 否则 watchdog（30s tick 的 flush）会在「60s 零新帧」窗口内消费积压条目产生合法变更帧
+    // 否则积压条目会在后续时间推进窗口内被消费产生合法变更帧，污染断言基线
     await vi.advanceTimersByTimeAsync(1)
 
     const topic = new SessionDeliveryTopic({ getRegistry: () => registry, getBus: () => bus, nextPushId: () => 'push-t' })

@@ -17,7 +17,6 @@
  */
 import type { ServerMessageMap } from '@taiji/shared'
 import type { BackgroundTaskRegistryEntry } from '@zhushanwen/extension-protocol'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 import { command } from '../request'
 
 // ── D9 编译期检查：shared 镜像 ⇔ extension-protocol 契约逐字段全等 ──
@@ -50,7 +49,7 @@ export type BackgroundTaskMirrorEqualsContract = Expect<Equal<
  * broadcast 时序竞争」C6——广播只做增量刷新，拉取兜底是唯一真相入口）。
  */
 export function list(sessionId: string): Promise<ServerMessageMap['backgroundTask.tasks']> {
-  return command('backgroundTask.list', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('backgroundTask.list', { sessionId })
 }
 
 /**
@@ -65,7 +64,7 @@ export function output(
 ): Promise<ServerMessageMap['backgroundTask.outputResult']> {
   const payload: { sessionId: string; taskId: string; maxBytes?: number } = { sessionId, taskId }
   if (maxBytes !== undefined) payload.maxBytes = maxBytes
-  return command('backgroundTask.output', payload, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('backgroundTask.output', payload)
 }
 
 /**
@@ -79,5 +78,5 @@ export function kill(
   sessionId: string,
   taskId: string,
 ): Promise<ServerMessageMap['backgroundTask.killResult']> {
-  return command('backgroundTask.kill', { sessionId, taskId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('backgroundTask.kill', { sessionId, taskId })
 }

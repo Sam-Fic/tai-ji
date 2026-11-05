@@ -7,7 +7,7 @@
  * 解析后经本路由送达该 session 的事件派生视图（SessionEventProjection 推送喂入
  * 入口——recordTailer/runTailer watch 族退役后的实时路径唯一喂入源）。
  *
- * 形态先例 = inflight-mirror（module 级单例，event-adapter 写、services 域消费）：
+ * 形态先例 = module 级单例（event-adapter 写、services 域消费）：
  * 路由不依赖载荷自报 sessionId（连接归属——adapter 以帧所在 pi 连接的 sessionId
  * 路由），消费方 = SessionRecords（构造期注册 sink，applyJournalReport 委托到
  * per-session 派生视图）。

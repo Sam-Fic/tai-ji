@@ -7,8 +7,6 @@
  * - 用例 3 空值覆盖语义（sessionName undefined 覆盖旧名，D1b 反例回归）
  *   → describe「D1b 合并规则」it 1（含设计约束断言：快照含显式空值覆盖非空旧值）
  * - 用例 4 wire 归一（key 缺失按登记语义处理）→ describe「D1b 合并规则」it 2 / it 3
- * - 用例 5 pollIntervalMs 周期兜底（配置启动、未配置不启动定时器）
- *   → describe「周期兜底」it 1 / it 2
  * - 用例 7 refetch 全量重新拉取语义 → describe「refetch / dispose」it 1
  * - 补充：在途失效不丢（epoch 检查）、防抖聚合、dispose 生命周期
  *
@@ -45,13 +43,12 @@ function toWire(value: SessionState): SessionState {
 }
 
 function createState(
-  options: { fieldsNullSemantics?: FieldsNullSemantics; pollIntervalMs?: number; diagnosticLabel?: string } = {},
+  options: { fieldsNullSemantics?: FieldsNullSemantics; diagnosticLabel?: string } = {},
 ): { rs: ReplicatedState<SessionState>; fetch: FetchMock } {
   const fetch = vi.fn<() => Promise<SessionState>>()
   const rs = new ReplicatedState<SessionState>({
     fetchSnapshot: fetch,
     debounceMs: DEBOUNCE_MS,
-    pollIntervalMs: options.pollIntervalMs,
     diagnosticLabel: options.diagnosticLabel,
     merge: ownerSnapshotMerge,
     fieldsNullSemantics: options.fieldsNullSemantics ?? { sessionName: 'explicit-null' },
@@ -146,35 +143,6 @@ describe('ReplicatedState', () => {
     })
   })
 
-  describe('周期兜底', () => {
-    it('pollIntervalMs 配置后：周期定时器启动，到点无条件重新拉取（无失效也拉）', async () => {
-      const { rs, fetch } = createState({ pollIntervalMs: 30_000 })
-      expect(vi.getTimerCount()).toBe(1) // 周期定时器已启动
-
-      fetch.mockResolvedValue({ sessionName: 'P1' })
-      await vi.advanceTimersByTimeAsync(30_000)
-      expect(fetch).toHaveBeenCalledTimes(1) // 无任何 markDirty 也发生了拉取
-      expect(rs.get()).toEqual({ sessionName: 'P1' })
-
-      fetch.mockResolvedValue({ sessionName: 'P2' })
-      await vi.advanceTimersByTimeAsync(30_000)
-      expect(fetch).toHaveBeenCalledTimes(2) // 周期持续
-      expect(rs.get()).toEqual({ sessionName: 'P2' })
-      expect(rs.isDirty()).toBe(false)
-
-      rs.dispose()
-      expect(vi.getTimerCount()).toBe(0)
-    })
-
-    it('pollIntervalMs 未配置：不启动周期定时器，长时段无拉取', async () => {
-      const { rs, fetch } = createState()
-      expect(vi.getTimerCount()).toBe(0) // 构造后零定时器（默认关闭）
-
-      await vi.advanceTimersByTimeAsync(120_000)
-      expect(fetch).not.toHaveBeenCalled()
-    })
-  })
-
   describe('refetch / dispose', () => {
     it('refetch 全量重新拉取：绕过防抖立即发起，应用完整快照', async () => {
       const { rs, fetch } = createState()
@@ -189,14 +157,13 @@ describe('ReplicatedState', () => {
       expect(vi.getTimerCount()).toBe(0) // 未排任何防抖/退避定时器
     })
 
-    it('dispose：清理全部定时器，此后失效/重连/周期均不再拉取', async () => {
-      const { rs, fetch } = createState({ pollIntervalMs: 30_000 })
-      fetch.mockResolvedValue({ sessionName: 'A' })
-      await vi.advanceTimersByTimeAsync(30_000)
+    it('dispose：清理防抖定时器，此后失效/重连均不再拉取', async () => {
+      const { rs, fetch } = createState()
+      await seedSnapshot(rs, fetch, { sessionName: 'A' })
       expect(fetch).toHaveBeenCalledTimes(1)
 
       rs.dispose()
-      expect(vi.getTimerCount()).toBe(0) // 周期定时器已清理
+      expect(vi.getTimerCount()).toBe(0) // 定时器已清理
 
       rs.markDirty()
       expect(vi.getTimerCount()).toBe(0) // 失效不再挂防抖定时器

@@ -756,14 +756,6 @@ export interface ToolRegistration {
   name: string
   description: string
   parameters: Record<string, unknown>
-  /**
-   * 工具执行超时声明（毫秒，D1 声明通道）：
-   * - >0 — 该工具单次执行的时间上界；
-   * - <=0 或 Infinity — 显式 opt-out（不限时）；
-   * - 非法值（非 number / NaN）— 注册入口 fail-fast（INVALID_TIMEOUT_MS）；
-   * - 缺省 — 回落 DEFAULT_TOOL_EXECUTE_TIMEOUT_MS（tool-timeout 默认兜底）。
-   */
-  timeoutMs?: number
   /** Worker 侧本地执行 handler，在 createToolApi 注册时存储 */
   execute?: ToolExecuteHandler
 }
@@ -776,23 +768,6 @@ export interface ToolEntry {
 }
 
 // ── Phase 2: Hook 注册表条目 ──────────────────────────────────────────
-
-/**
- * @proposed — UI dialog 超时选项（ctx.ui.showConfirm/showSelect/showInput 末位 opts，
- * timeout-plugin-service D2）。
- *
- * `timeout` 语义 = 从调用到拿到结果的最长全程等待（毫秒），**含串行排队时间**——
- * 排队也是插件在等，从请求方视角计时。缺省/非法值回落默认 30min（等人工裁决值）；
- * 无 opt-out（「等人工」不允许无界等待——串行队列 head-of-line 阻塞）。
- *
- * 到期行为 = 取消非替答：弹窗在前端撤回（plugin:uiRequestExpired 广播），本调用
- * reject `Error`（`code: 'UI_TIMEOUT'`），插件可 catch 后自行决策（重发提问 / 放弃
- * 操作）；超时不是用户的否定回答。
- */
-export interface UiDialogOptions {
-  /** 全程等待上界（毫秒，含排队）。>0 合法；缺省/非法回落默认 30min。 */
-  timeout?: number
-}
 
 /** @internal — runtime 内部：Hook 注册表条目（主线程侧） */
 export interface HookEntry {
@@ -880,13 +855,12 @@ export interface Phase2AgentAPI extends Phase1AgentAPI {
   }
   readonly ui: {
     /**
-     * 弹窗类三方法（dialog）带末位 `opts`（UiDialogOptions.timeout，全程含排队，
-     * 缺省 30min）；到期取消非替答：reject `UI_TIMEOUT` + 前端撤窗，可重发。
-     * notify 纯展示类无等待语义，不设 opts。
+     * 弹窗类三方法（dialog）无时限：等待挂到用户响应 / 插件卸载（卸载时在途
+     * 请求被收尾 reject）。notify 纯展示类无等待语义。
      */
-    showSelect(title: string, options: string[], opts?: UiDialogOptions): Promise<string | undefined>
-    showConfirm(title: string, message: string, opts?: UiDialogOptions): Promise<boolean>
-    showInput(title: string, defaultValue?: string, opts?: UiDialogOptions): Promise<string | undefined>
+    showSelect(title: string, options: string[]): Promise<string | undefined>
+    showConfirm(title: string, message: string): Promise<boolean>
+    showInput(title: string, defaultValue?: string): Promise<string | undefined>
     notify(level: 'info' | 'warn' | 'error', message: string): Promise<void>
     /**
      * [AP-1/u5b] headerAction 可变字段更新：sessionId 必填（徽标是 per-session 语义）；

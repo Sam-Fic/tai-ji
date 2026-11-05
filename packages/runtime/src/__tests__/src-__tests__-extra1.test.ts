@@ -21,10 +21,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ── Mocks（与 rpc-client-bash.test.ts 同构）──────────────────────
 
-/** ps 采样心跳计数（vi.hoisted 供 mock 工厂引用；MF-3 测试的行为观测量）。 */
-const psProbeCalls = vi.hoisted(() => ({ count: 0 }))
-
-
 const procExitHandlers: Array<(code: number | null) => void> = []
 
 
@@ -64,14 +60,7 @@ vi.mock('node:child_process', async (importOriginal) => {
   // findPiExecutable 的 PATH 探测（execSync('which pi')）：抛错走 fallback，不执行真实命令
   execSync: () => {
     throw new Error('execSync mocked: not found')
-  },
-  // MF-3 采样心跳探针：ProcessTableRing.listAllProcesses 的 ps 执行体。每次 ps 调用
-  //（= 一次采样动作）计数 +1，测试以计数增长断言「环在转、有采样」这个行为范围，
-  // 不窥 ring 内部定时器实现。
-  execFile: (_file: unknown, _args: unknown, _opts: unknown, cb: (err: null, stdout: string) => void) => {
-    psProbeCalls.count += 1
-    queueMicrotask(() => cb(null, '    1     1 /sbin/launchd\n'))
-  }, }
+  } }
 })
 
 
@@ -126,8 +115,6 @@ vi.mock('../infra/logger.js', async (importOriginal) => {
   migratePiSessionLogTree: () => {},
   // u5b D6-④：rpc-client 新增 import 的内存快照采集（mock 面随源码 import 面同步）
   captureMemorySnapshot: () => ({ rss: 1, heapUsed: 2, heapTotal: 3, external: 4 }),
-  // signal-forensics（process-manager 退出链 import）的落点门：测试态恒 false——
-  // 无落点不采样，exit 主链的 Map 清理/回调通知不受取证影响
   isPiCrashLogEnabled: () => false,
   // 族③根因修复（W3.5）：withEphemeralPi finally 的 ephemeral 树回收——mock 面随
   // process-manager import 面同步（本测试不走该路径，no-op 即可）
@@ -223,73 +210,7 @@ describe('ProcessManager onExit 死亡通知', () => {
     }
   })
 })
-// ── 信号取证环 restart 路径（MF-3）──────────────────────────────
-
-/**
- * MF-3 回归：createSession 的取证环 start 原在 restart 分支（destroySession）之前，
- * 而 destroySession 尾部在受管 pi 清零时停环——单 session 重启路径下环被停掉后无人
- * 再 start，新进程生命周期零采样。修复后 start 移到 destroy 之后（入册后再幂等重申）：
- * 重启结束环必须恢复运行并有采样。
- *
- * 断言用 ps 采样心跳计数（行为范围：环在转的外显后果就是周期性 ps 采样），不窥 ring
- * 内部定时器。start() 的首帧采样在 createSession 解析前已同步计数，此后计数继续增长
- * 只能来自间隔定时器——「重启结束后计数仍在增长」即证明环恢复运行。
- */
-describe('ProcessManager 信号取证环 restart 路径（MF-3）', () => {
-  let pm: ProcessManager
-
-  beforeEach(() => {
-    // 采样间隔压到 20ms：心跳在测试时窗内可观测（缺省 1.5s 太慢）。环在构造时读 env，
-    // 必须先 stub 再构造 ProcessManager。
-    vi.stubEnv('TAIJI_SIGNAL_WATCH_INTERVAL_MS', '20')
-    psProbeCalls.count = 0
-    pm = new ProcessManager('/mock/project-root')
-  })
-
-  afterEach(async () => {
-    // 收尾停环：20ms 采样定时器不跨测试残留（unref 不保活事件循环，但心跳计数会串）
-    await pm.destroyAll()
-    vi.unstubAllEnvs()
-  })
-
-  it('单 session 重启（同 id 再 createSession）结束后环恢复采样：ps 心跳持续增长', async () => {
-    // 首启：环 start 即采一帧，此后按间隔续采
-    await pm.createSession('s1', '/project')
-    expect(psProbeCalls.count).toBeGreaterThan(0)
-
-    const before = psProbeCalls.count
-    await vi.waitFor(() => expect(psProbeCalls.count).toBeGreaterThan(before), { interval: 1 })
-
-    // 重启路径：同 id 再 createSession → destroySession（受管清零 → 环停）→ 再 spawn。
-    // 修复前：start 已在 destroy 前消费，环停在 destroy 尾部无人再 start，此后计数冻结，
-    // 本断言以超时红灯暴露「重启后零采样」的静默停摆。
-    await pm.createSession('s1', '/project')
-
-    const atRestartEnd = psProbeCalls.count
-    await vi.waitFor(() => expect(psProbeCalls.count).toBeGreaterThan(atRestartEnd), { interval: 1 })
-  })
-
-  it('受管清零停环后心跳冻结；新 session 到来环再度启动（stop 后可再 start 的一般正确性）', async () => {
-    await pm.createSession('a', '/project')
-    await pm.destroySession('a') // 受管清零 → 环停（空闲 runtime 零开销）
-
-    const frozen = psProbeCalls.count
-    // 负向断言（环已停：无心跳）无完成信号可等——分片采样替换单点盲等，
-    // 总观察窗量级不变（8×10ms），每片让出事件循环后断言一次
-    for (let i = 0; i < 8; i++) {
-      await new Promise((r) => setTimeout(r, 10))
-      expect(psProbeCalls.count).toBe(frozen) // 环已停：无心跳
-    }
-
-    // 新 session 到来 → start 再武装
-    await pm.createSession('b', '/project')
-    const atStart = psProbeCalls.count
-    await vi.waitFor(() => expect(psProbeCalls.count).toBeGreaterThan(atStart), { interval: 1 })
-  })
-})
 });
-
-// ======================================================================
 // ← src/__tests__/session-history-incremental.test.ts
 //   （turn-boundary-index 重写：缓存容量帽/增量合并/后台全量任务/reclaim 驱逐随 D4
 //   一次退役；本段改载 SessionHistoryReader 索引路径集成——真实 JSONL fixture +

@@ -10,9 +10,7 @@
  *   - panel/btw-panel-contract-invisible.test.ts（3 例）
  *
  * 改造登记（保留式 mock，模板参照 command-popover-landing 先例）：
- *   - '@taiji/core/transport/api' 原窄替换（仅 command 转发 + RPC_BACKSTOP_TIMEOUT_MS
- *     两键）改为 spread actual 全成员 + 覆写 command（转发 commandMock）与
- *     RPC_BACKSTOP_TIMEOUT_MS（保持原测试值 5000，断言字面量与其对齐，不随真实常量漂移）。
+ *   - '@taiji/core/transport/api' 改为 spread actual 全成员 + 覆写 command（转发 commandMock）。
  *
  * 剔出：App-runtime-start-error.test.ts（8 例，清单既定剔出——ToastContainer.vue 组件
  * 整体 stub 与 production-wiring 的真实注册互斥，组件 stub 不适用保留式）。
@@ -68,14 +66,12 @@ import BtwPanel from '@/components/panel/BtwPanel.vue'
 
 const { commandMock } = vi.hoisted(() => ({ commandMock: vi.fn() }))
 
-// [U3 保留式改造] 原窄替换 { command, RPC_BACKSTOP_TIMEOUT_MS } → spread actual
-// 全成员 + 覆写两目标成员（RPC_BACKSTOP_TIMEOUT_MS 保持原测试值，断言字面量对齐）
+// [U3 保留式改造] spread actual 全成员 + 覆写 command（转发 commandMock）
 vi.mock('@taiji/core/transport/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@taiji/core/transport/api')>()
   return {
     ...actual,
     command: (...args: unknown[]) => commandMock(...args),
-    RPC_BACKSTOP_TIMEOUT_MS: 5000,
   }
 })
 
@@ -392,7 +388,7 @@ describe('session-item-message-count', () => {
       // 两段式 = 「时间 · 消息数」（demo `cardSess.upd · cardSess.msgs` 分隔形态）
       expect(card!.textContent).toContain(' · ')
       // command 入参 = session.getMessageCount + sessionId（payload 单对象）
-      expect(commandMock).toHaveBeenCalledWith('session.getMessageCount', { sessionId: SID }, 5000)
+      expect(commandMock).toHaveBeenCalledWith('session.getMessageCount', { sessionId: SID })
     })
 
     it('计数未返回前该段不渲染（不闪 0——meta 行只有相对时间，无分隔符）', async () => {

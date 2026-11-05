@@ -4,13 +4,11 @@
  * 覆盖（三路主轴 + 映射 + 检查 + handler 集成）：
  * - 成功：mock client.prompt 回调写 tmp 结果文件 → 应答映射（chat 两型 / run 级聚合）
  *   + 文件读后即删；
- * - 超时：fake timers 推进 + 迟到真值命中按真实结果应答；未命中 reject 通道失败
- *   （错误消息含恢复动作「重试切换」，§7.5 通道行）；
  * - 文件缺失：prompt 正常解析但无文件 → 通道失败；
  * - resolveSessionId 定位锚（run journal / record events 存在性）；
  * - handler 集成：生产网关注入 SubagentMessageHandler → 不再回 unwired 兜底。
  *
- * 测试框架：vitest（从子包目录运行）；timer 用 fake timers；落盘全在 mkdtemp tmp。
+ * 测试框架：vitest（从子包目录运行）；落盘全在 mkdtemp tmp。
  * 运行：cd packages/runtime && npx vitest run src/infra/subagent-model-gateway.test.ts
  */
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -25,7 +23,7 @@ import { ACCOUNTED_SET_MODEL_ERROR_CODES, getSubagentModelSwitchResultsDir, getS
 import type { RunSwitchAggregateResult, RunSwitchMemberFailure, RunSwitchMemberState } from '@zhushanwen/subagent-core'
 import { SET_MODEL_ERROR_CODES } from '@zhushanwen/subagent-engine-sdk'
 
-import { createSubagentModelSwitchGateway, MODEL_SWITCH_PROMPT_TIMEOUT_MS } from './subagent-model-gateway.js'
+import { createSubagentModelSwitchGateway } from './subagent-model-gateway.js'
 import type { SubagentModelGatewayDeps, SubagentModelPromptClient } from './subagent-model-gateway.js'
 import type { ScannedSessionMeta } from '../services/ports/session.js'
 import { SubagentMessageHandler } from '../transport/subagent-message-handler.js'
@@ -97,11 +95,6 @@ function writeResultFileFromPayload(promptContent: string, reply: unknown): void
   const payload = JSON.parse(promptContent.slice('/subagent-model '.length)) as { requestId: string }
   mkdirSync(resultsDir(), { recursive: true })
   writeFileSync(join(resultsDir(), `${payload.requestId}.json`), JSON.stringify(reply))
-}
-
-function writeResultFileNamed(requestId: string, reply: unknown): void {
-  mkdirSync(resultsDir(), { recursive: true })
-  writeFileSync(join(resultsDir(), `${requestId}.json`), JSON.stringify(reply))
 }
 
 function deps(overrides?: Partial<SubagentModelGatewayDeps>): SubagentModelGatewayDeps {
@@ -215,44 +208,6 @@ describe('createSubagentModelSwitchGateway — 成功路（写后读 + 映射 + 
     expect(reply.failures).toEqual([{ runId: 'sa-c', reason: 'engine_model_not_in_snapshot' }])
     expect(reply.summary).toContain('未派发步骤生效')
     expect(client.calls[0]).toContain('"runId":"wf-1"')
-  })
-})
-
-// ── 超时路：fake timers + 迟到真值 / 未命中 ─────────────────────────────
-
-describe('createSubagentModelSwitchGateway — 超时（fake timers）', () => {
-  it('超时前结果文件已落（迟到真值）：按真实结果应答，不吞真值', async () => {
-    vi.useFakeTimers()
-    const client = promptStub('hang')
-    let payloadRequestId = ''
-    const origPrompt = client.prompt.bind(client)
-    client.prompt = (content: string) => {
-      const payload = JSON.parse(content.slice('/subagent-model '.length)) as { requestId: string }
-      payloadRequestId = payload.requestId
-      writeResultFileNamed(payload.requestId, {
-        scope: 'chat',
-        reply: { kind: 'recorded', notice: '已记录，下次执行生效。' },
-      })
-      return origPrompt(content)
-    }
-    const gw = createSubagentModelSwitchGateway(deps({ getClient: () => client }))
-
-    const pending = gw.setModel(setModelParams('sa-1'))
-    const expectation = expect(pending).resolves.toEqual({ kind: 'recorded', note: '已记录，下次执行生效。' })
-    await vi.advanceTimersByTimeAsync(MODEL_SWITCH_PROMPT_TIMEOUT_MS)
-    await expectation
-    expect(payloadRequestId).not.toBe('')
-    expect(existsSync(join(resultsDir(), `${payloadRequestId}.json`))).toBe(false)
-  })
-
-  it('超时未命中：reject 通道失败，错误消息含恢复动作「重试切换」', async () => {
-    vi.useFakeTimers()
-    const gw = createSubagentModelSwitchGateway(deps({ getClient: () => promptStub('hang') }))
-
-    const pending = gw.setModel(setModelParams('sa-1'))
-    const expectation = expect(pending).rejects.toThrow('重试切换')
-    await vi.advanceTimersByTimeAsync(MODEL_SWITCH_PROMPT_TIMEOUT_MS)
-    await expectation
   })
 })
 

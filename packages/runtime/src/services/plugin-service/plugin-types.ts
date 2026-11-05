@@ -40,7 +40,6 @@ export type {
   ToolExecuteHandler,
   ToolRegistration,
   ToolEntry,
-  UiDialogOptions,
   HookEntry,
   Phase2AgentAPI,
   ProviderWriteParams,

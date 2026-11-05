@@ -215,7 +215,6 @@ describe("场景 8：终局化移除 + 对账清理（真装配维护轮 + 壳�
     vi.unstubAllEnvs();
     mockAgentDir.current = "/home/user/.pi/agent";
     delete process.env[ORPHAN_RUN_GRACE_WINDOW_MS_ENV];
-    delete process.env.TAIJI_WORKFLOW_STATE_TTL_MS;
     fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });
 

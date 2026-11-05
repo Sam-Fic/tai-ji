@@ -14,15 +14,14 @@
  * mock 策略：vi.mock quota RPC 域（getCached / fetchQuota / refreshQuota）与 '@/lib/ipc'
  * （refreshQuotaCookie）；configureQuota 经 provideSettingsTransport(makeSettingsTransportStub)
  * 注入桩（保存链走真实 transport seam）；settings store 为 core 惰性单例，直接
- * setProviders / setQuotaPresets 灌数（不依赖 transport）。冷却窗用 vi.useFakeTimers +
- * setSystemTime 推进墙钟（续期链自身无 setTimeout，微任务 flush 不受影响）。
+ * setProviders / setQuotaPresets 灌数（不依赖 transport）。
  *
  * 冷却注册表是 useQuotaQuery 模块级状态，跨用例持久——各用例使用互不相同的
  * providerId，避免上一用例的冷却窗挡住下一用例（去重行为本身在用例内断言）。
  *
  * 运行：cd packages/renderer && npx vitest run src/__tests__/composables/quota-cookie-auto-refresh.test.ts
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { ref } from 'vue'
@@ -107,7 +106,6 @@ function setup(provider: ProviderInfo) {
 describe('useQuotaQuery unauthorized 自动续期', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
-    vi.useFakeTimers({ now: Date.now() })
     vi.clearAllMocks()
     quotaApi.getCached.mockResolvedValue(EMPTY_CACHED)
     quotaApi.refreshQuota.mockResolvedValue(UNAUTHORIZED)
@@ -116,10 +114,6 @@ describe('useQuotaQuery unauthorized 自动续期', () => {
     provideSettingsTransport(makeSettingsTransportStub({
       configureQuota: transportConfigureQuota,
     }))
-  })
-
-  afterEach(() => {
-    vi.useRealTimers()
   })
 
   it('unauthorized + 在册 fetcher → 自动续期：导出串经 configure 落盘后 force 重查并以新数据写 store', async () => {
@@ -202,27 +196,6 @@ describe('useQuotaQuery unauthorized 自动续期', () => {
     expect(transportConfigureQuota).toHaveBeenCalledTimes(1)
     expect(quotaApi.refreshQuota).not.toHaveBeenCalled()
     expect(q.error.value).toBe('panel.context.quotaFailUnauthorized')
-  })
-
-  it('冷却 10 分钟：窗口内重复 unauthorized 不再触发，越窗恢复', async () => {
-    quotaApi.fetchQuota.mockResolvedValue(UNAUTHORIZED)
-    const { q, makeQuery } = setup(providerInfo({ id: 'mimo-cool', quota: { enabled: true, fetcher: 'mimo', cookieSet: true } }))
-
-    await q.onHoverEnter()
-    await flushPromises()
-    expect(ipcRefresh.refreshQuotaCookie).toHaveBeenCalledTimes(1)
-
-    // 冷却窗内第二次 hover（同模块第二实例，模拟容量卡与浮层并存）→ 不触发
-    const second = makeQuery()
-    await second.onHoverEnter()
-    await flushPromises()
-    expect(ipcRefresh.refreshQuotaCookie).toHaveBeenCalledTimes(1)
-
-    // 推进 10 分钟 → 冷却越窗，再次 hover 触发
-    vi.setSystemTime(Date.now() + 10 * 60 * 1000)
-    await second.onHoverEnter()
-    await flushPromises()
-    expect(ipcRefresh.refreshQuotaCookie).toHaveBeenCalledTimes(2)
   })
 
   it('在途去重：续期 promise 未决期间重复 unauthorized 不重复发起', async () => {

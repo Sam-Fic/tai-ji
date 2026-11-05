@@ -119,8 +119,8 @@ export function buildWinUpdaterCmd(vars: WinUpdaterCmdVars): string {
 //   字段为信息性，消费者仅透传展示。
 const WIN_UPDATER_CMD_TEMPLATE = `@echo off
 rem taiji win upgrade wrapper（设计 .tmp/update-reliability.tech-design.md §3.4.1）
-rem 流程：tasklist 轮询等父退出（60s 上限）→ certutil sha256 复验 → start /wait 静默安装
-rem → errorlevel 检查 → tmp+move 原子写 result → start 重启
+rem 流程：tasklist 轮询等父退出（持续等待，无放弃上限）→ certutil sha256 复验
+rem → start /wait 静默安装 → errorlevel 检查 → tmp+move 原子写 result → start 重启
 setlocal
 set "INSTALLER={{INSTALLER_PATH}}"
 set "INSTALL_DIR={{INSTALL_DIR}}"
@@ -137,19 +137,12 @@ exit /b %ERRORLEVEL%
 :main
 echo [%DATE% %TIME%] start update to %VERSION%
 
-rem -- 1. 等待父进程退出（tasklist 轮询，60 次 x ping -n 2 约 60s 上限；超时不启动安装器）--
-set /a WAITED=0
+rem -- 1. 等待父进程退出（tasklist 轮询，持续等待——删「超时不启动安装器」放弃分支）--
 :wait_loop
 tasklist /FI "PID eq %PARENT_PID%" 2>nul | find "%PARENT_PID%" >nul
 if errorlevel 1 goto wait_done
-set /a WAITED+=1
-if %WAITED% GTR 60 goto wait_timeout
 ping -n 2 127.0.0.1 >nul
 goto wait_loop
-:wait_timeout
-echo [%DATE% %TIME%] FAILED: app did not exit
-call :write_result failed "app did not exit"
-exit /b 1
 :wait_done
 echo [%DATE% %TIME%] parent process (pid %PARENT_PID%) exited
 

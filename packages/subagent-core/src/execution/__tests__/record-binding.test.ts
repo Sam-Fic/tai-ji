@@ -40,7 +40,6 @@ vi.mock("../../core/logger.ts", () => ({ getLogger: () => loggerMock }));
 import { clearEngines } from "../engine/registry.ts";
 import { _resetCoreSpawnedChildrenMirrorForTest } from "../engine/host/spawned-children.ts";
 import { createRecord } from "../persistence/execution-record.ts";
-import { _resetLifecycleState } from "../lifecycle/lifecycle-manager.ts";
 import { getSubagentSessionDir, getSubagentRecordsDir } from "../assembly/path-encoding.ts";
 import { RecordStore } from "../persistence/record-store.ts";
 import { seedTerminalRecord } from "./helpers/seed-terminal-record.ts";
@@ -571,7 +570,6 @@ describe("[W0 / D1] binding 载荷 stepIndex（生产构造点）与折叠重建
   afterEach(() => {
     service.dispose();
     clearEngines();
-    _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
     fs.rmSync(agentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     vi.unstubAllEnvs();
@@ -731,7 +729,6 @@ describe("[UF-1] SubagentService 集成：回填点绑定落盘 + 跨重启 mess
   afterEach(() => {
     service.dispose();
     clearEngines();
-    _resetLifecycleState();
     _resetCoreSpawnedChildrenMirrorForTest();
     // 只读目录先恢复权限再删（⑤用例的绑定写失败情形）
     if (readOnlyDir !== undefined) {

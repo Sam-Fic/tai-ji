@@ -176,7 +176,7 @@ export function getNetworkProxyConfig(): NetworkProxyConfig {
 export function setNetworkProxyConfig(next: NetworkProxyConfig): NetworkProxyValidationResult {
   const result = validateNetworkProxyConfig(next)
   if (!result.ok) return result
-  rmwExtConfigField(getNetworkProxyConfigPath(), {}, networkProxyDefaultBase, (base) => {
+  rmwExtConfigField(getNetworkProxyConfigPath(), networkProxyDefaultBase, (base: Record<string, unknown>) => {
     base['enabled'] = next.enabled
     base['proxy'] = next.proxy
     base['noProxy'] = dedupeHostList(next.noProxy)
@@ -293,7 +293,7 @@ function truncateStatsIfOversized(statsPath: string): boolean {
     } finally {
       closeSync(fd)
     }
-  }, {})
+  })
   return truncated
 }
 
@@ -349,7 +349,7 @@ export function resetNetworkProxyStats(): void {
   withFileLockSync(statsPath, () => {
     mkdirSync(dirname(statsPath), { recursive: true })
     appendFileSync(statsPath, `${JSON.stringify({ type: 'reset', ts: Date.now() })}\n`)
-  }, {})
+  })
 }
 
 // ──────────────────────── 测试连接（两段探测） ────────────────────────

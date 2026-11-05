@@ -65,7 +65,7 @@ const phaseMock = vi.hoisted(() => vi.fn(() => ({ compacting: false, bash: false
 
 vi.mock('@/api/domains/delivery', () => ({ delivery: deliveryMock }))
 vi.mock('@/composables/useToast', () => ({ useToast: () => toastMock }))
-vi.mock('@/stores/chat', () => ({ useChatStore: () => ({ sessionPhase: phaseMock, getStallHint: () => undefined }) }))
+vi.mock('@/stores/chat', () => ({ useChatStore: () => ({ sessionPhase: phaseMock }) }))
 
 // ── useBrowserFocusSync 节的 mock ──
 // mock lib/ipc：捕获 browserFocus

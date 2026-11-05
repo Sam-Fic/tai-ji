@@ -23,7 +23,7 @@ describe('configureRouteInbound — 缺省真实模块直连（D3）', () => {
     // 生产路径：configureRouteInbound() 缺省 defaultPorts（直连 core transport/api 模块级
     // 单例）——真实 pending 注册表收到 reply id 后经 resolveEnvelope 结算 Promise
     const dispatcher = configureRouteInbound()
-    const replyPromise = realPending.register('default-ports-reply-1', 60_000)
+    const replyPromise = realPending.register('default-ports-reply-1')
     dispatcher({
       type: 'session.getCommands',
       id: 'default-ports-reply-1',

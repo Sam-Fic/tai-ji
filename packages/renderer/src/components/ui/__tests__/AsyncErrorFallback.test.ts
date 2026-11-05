@@ -1,37 +1,27 @@
 /**
  * components/ui 家族 colocated 合并产物（round5-f C3）。
  *
- * 来源（本目录同源四件，环境均为 vitest 默认）：
+ * 来源（本目录同源三件，环境均为 vitest 默认）：
  *   - AsyncErrorFallback.test.ts（主文件：错误占位两态 + 重试状态机 + 全链路，零 mock）
  *   - InboundFrameDroppedNotice.test.ts（入站丢帧终止阀静态提示）
- *   - RollingRestartBanner.test.ts（滚动重启四态横幅）
  *   - ToastContainer.test.ts（session 定位行 + 排版 + hover 暂停 + 溢出摘要）
  *
- * mock 说明：三条 vi.mock 互异且经 grep 复筛各自只进本节组件链——
+ * mock 说明：两条 vi.mock 互异且经 grep 复筛各自只进本节组件链——
  *   - useInboundFrameGuard 仅 InboundFrameDroppedNotice.vue 消费
- *   - useRollingRestartStatus 仅 RollingRestartBanner.vue 消费
  *   - features/sidebar/useSidebar 仅 ToastContainer.vue 消费（只出 selectSession spy）
  * 均为纯派生视图的状态源替换形态，无需保留式改造。
  *
  * 合并纪律：describe/it 名零改动；AsyncErrorFallback / ToastContainer 两节的
  * 原文件级 beforeEach/afterEach 下沉包裹层 describe（作用域与原单文件等价）；
- * 两处 vi.hoisted 的 stateMock 分别改名 inboundStateMock / rollingStateMock 消冲突。
+ * vi.hoisted 的 stateMock 改名 inboundStateMock 消冲突。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
-import { defineAsyncComponent, defineComponent, effectScope, h, nextTick } from 'vue'
-import type { Ref } from 'vue'
+import { defineAsyncComponent, defineComponent, h, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import AsyncErrorFallback from '@/components/ui/AsyncErrorFallback.vue'
-import {
-  createLazyChunkRetry,
-  extractFailedModuleUrl,
-  withCacheBust,
-  LAZY_RETRY_LIMIT,
-  LAZY_RETRY_BACKOFF_BASE_MS,
-} from '@/components/ui/lazy-chunk-retry'
+import { createLazyChunkRetry } from '@/components/ui/lazy-chunk-retry'
 import InboundFrameDroppedNotice from '../InboundFrameDroppedNotice.vue'
-import type { RollingRestartBannerPhase } from '@/composables/useRollingRestartStatus'
 import ToastContainer from '@/components/ui/ToastContainer.vue'
 import { useToast, setToastLimiter } from '@/composables/useToast'
 
@@ -44,26 +34,6 @@ const inboundStateMock = vi.hoisted(() => ({
 vi.mock('@/composables/useInboundFrameGuard', () => ({
   useInboundFrameGuardState: () => ({ trippedSessionIds: inboundStateMock.trippedSessionIds }),
 }))
-
-/* ════════ 来源：RollingRestartBanner.test.ts 的状态源 mock ════════ */
-
-const rollingStateMock = vi.hoisted(() => ({
-  phase: null as unknown as Ref<RollingRestartBannerPhase>,
-}))
-
-vi.mock('@/composables/useRollingRestartStatus', async () => {
-  const { shallowRef } = await import('vue')
-  rollingStateMock.phase = shallowRef({ kind: 'idle' } as RollingRestartBannerPhase)
-  return {
-    RECOVERED_AUTO_CLEAR_MS: 30_000,
-    useRollingRestartStatus: () => ({
-      phase: rollingStateMock.phase,
-      dismiss: () => { rollingStateMock.phase.value = { kind: 'idle' } },
-    }),
-  }
-})
-
-const RollingRestartBanner = (await import('../RollingRestartBanner.vue')).default
 
 /* ════════ 来源：ToastContainer.test.ts 的状态源 mock ════════ */
 
@@ -91,16 +61,15 @@ describe('AsyncErrorFallback', () => {
       expect(wrapper.find('[data-testid="async-error-fallback"]').exists()).toBe(false)
     })
 
-    it('error prop → error 态：加载失败文案 + 自动重试穷尽指引 + 无重试按钮', () => {
+    it('error prop → error 态：加载失败文案 + 恢复指引 + 无重试按钮', () => {
       const wrapper = mount(AsyncErrorFallback, {
         props: { error: new Error('chunk 404') },
       })
       expect(wrapper.find('[data-testid="async-error-fallback"]').exists()).toBe(true)
-      // [D6 用户裁决] 界面不出现重试按钮——重试由系统内部自动执行
+      // 界面不出现重试按钮——自动重试已删（时间机制删除裁决），失败直接进错误态
       expect(wrapper.find('[data-testid="async-retry-btn"]').exists()).toBe(false)
-      // 文案给恢复指引：穷尽次数 + 关闭重开 + Esc/⌘W 退出
+      // 文案给恢复指引：关闭重开 + Esc/⌘W 退出
       expect(wrapper.text()).toContain('加载失败')
-      expect(wrapper.text()).toContain(`已自动重试 ${LAZY_RETRY_LIMIT} 次`)
       expect(wrapper.text()).toContain('关闭后重新打开可恢复')
       expect(wrapper.text()).toContain('Esc / ⌘W')
     })
@@ -133,203 +102,15 @@ describe('AsyncErrorFallback', () => {
     })
   })
 
-  describe('helper 纯函数', () => {
-    it('extractFailedModuleUrl：Chromium 装载失败错误格式提取 URL；非 URL 形错误返回 null', () => {
-      // 探针实测的 Chromium 错误格式（file:// 与 asar 同形）
-      expect(
-        extractFailedModuleUrl(new Error('Failed to fetch dynamically imported module: file:///app/renderer/assets/DetailPane-abc123.js')),
-      ).toBe('file:///app/renderer/assets/DetailPane-abc123.js')
-      expect(
-        extractFailedModuleUrl(new Error('Failed to fetch dynamically imported module: http://localhost:1420/src/components/panel/DetailPane.vue')),
-      ).toBe('http://localhost:1420/src/components/panel/DetailPane.vue')
-      // vi.mock 工厂抛错 / 非装载类错误：无 URL 可提取 → null（重试回落同 URL 机械路径）
-      expect(extractFailedModuleUrl(new Error('Failed to fetch dynamically imported module'))).toBeNull()
-      expect(extractFailedModuleUrl(new Error('boom'))).toBeNull()
-      expect(extractFailedModuleUrl(undefined)).toBeNull()
-      // 回归防护（D6 实测）：vitest 包装错误消息内嵌文档 URL，前缀不匹配必须不误提取，
-      // 否则 busting 分支会 import 无关 URL 永远失败
-      expect(
-        extractFailedModuleUrl(
-          new Error('[vitest] There was an error when mocking a module. If you are using "vi.mock" factory … https://vitest.dev/api/vi.html#vi-mock'),
-        ),
-      ).toBeNull()
-    })
-
-    it('withCacheBust：无 query 追加 ?t=N；已有 t= 替换；已有其他 query 用 & 连接', () => {
-      expect(withCacheBust('file:///assets/DetailPane-abc123.js', 1)).toBe('file:///assets/DetailPane-abc123.js?t=1')
-      expect(withCacheBust('http://localhost:5173/src/X.vue?t=1759', 3)).toBe('http://localhost:5173/src/X.vue?t=3')
-      expect(withCacheBust('http://localhost:5173/src/X.vue?a=1', 2)).toBe('http://localhost:5173/src/X.vue?a=1&t=2')
-    })
-  })
-
-  /** 带 URL 的装载失败错误（busting 路径的注入形态） */
-  function fetchFail(url: string): Error {
-    return new Error(`Failed to fetch dynamically imported module: ${url}`)
-  }
-
-  describe('createLazyChunkRetry 状态机（bustedImport spy 注入）', () => {
-    /** 状态机单测驱动形态：镜像 Vue 实装——userRetry 回调 = retry() = 同步调 loader（清链重跑）；
-     *  首载由测试显式调 retry.loader() 模拟 wrapper mount 的 load。 */
-    function setup(load: () => Promise<unknown>, busted?: (url: string) => Promise<unknown>) {
-      const bustedImport = busted ?? vi.fn()
-      const retry = createLazyChunkRetry(load, { bustedImport })
-      const onError = (err: unknown) => {
-        const failSpy = vi.fn()
-        // promise 卫生：重跑链的 rejection 由下一次 onError 断言消费（或故意不消费），
-        // 这里必须显式接住——`void` 不阻止 unhandledRejection（Node 语义：无 handler 即报），
-        // 否则机械重试/重跑仍败的用例会以「全绿 + exit 1」泄漏（2026-10-03 实测 6 例）。
-        retry.onError(err, () => { retry.loader().catch(() => {}) }, failSpy)
-        return Promise.resolve(failSpy)
-      }
-      return { retry, bustedImport, onError }
-    }
-
-    it('首载失败（URL 形错误）→ 300ms 退避后 retryKey++ → 重挂 load 走 busted import ?t=1', async () => {
-      const chunkUrl = 'file:///app/renderer/assets/DetailPane-abc123.js'
-      const moduleShape = { default: {}, [Symbol.toStringTag]: 'Module' }
-      const bustedImport = vi.fn(() => Promise.resolve(moduleShape))
-      const { retry, onError } = setup(() => Promise.reject(fetchFail(chunkUrl)), bustedImport)
-      // 首载（mount 的 load）失败 → loader 内提取失败 URL（busting 目标）
-      await expect(retry.loader()).rejects.toThrow()
-      // Vue catch → onError → 第 1 轮调度（300ms × 1 退避）
-      expect(await onError(fetchFail(chunkUrl))).not.toHaveBeenCalled()
-      await vi.advanceTimersByTimeAsync(LAZY_RETRY_BACKOFF_BASE_MS - 1)
-      expect(bustedImport).not.toHaveBeenCalled()
-      expect(retry.retryKey.value).toBe(0)
-      await vi.advanceTimersByTimeAsync(1)
-      expect(retry.retryKey.value).toBe(1)
-      // 到点 userRetry 已同步重跑 loader → busted 分支（?t=1 绕过 module map 记忆化）
-      expect(bustedImport).toHaveBeenCalledTimes(1)
-      expect(bustedImport).toHaveBeenCalledWith(`${chunkUrl}?t=1`)
-    })
-
-    it('持续失败 → ?t=1/2/3 三次 busting（300/600/900 递增）→ 穷尽 userFail 且不再调度', async () => {
-      const chunkUrl = 'file:///app/renderer/assets/DetailPane-abc123.js'
-      const bustedImport = vi.fn(() => Promise.reject(fetchFail(chunkUrl)))
-      const { retry, onError } = setup(() => Promise.reject(fetchFail(chunkUrl)), bustedImport)
-
-      // 首载失败 → 第 1 轮（300ms）：到点 userRetry 同步重跑 loader 走 busted ?t=1
-      await expect(retry.loader()).rejects.toThrow()
-      expect(await onError(fetchFail(chunkUrl))).not.toHaveBeenCalled()
-      await vi.advanceTimersByTimeAsync(LAZY_RETRY_BACKOFF_BASE_MS)
-      expect(bustedImport).toHaveBeenCalledWith(`${chunkUrl}?t=1`)
-      // 第 1 轮失败 → 第 2 轮（600ms）
-      await onError(fetchFail(`${chunkUrl}?t=1`))
-      await vi.advanceTimersByTimeAsync(LAZY_RETRY_BACKOFF_BASE_MS * 2)
-      expect(bustedImport).toHaveBeenCalledWith(`${chunkUrl}?t=2`)
-      // 第 2 轮失败 → 第 3 轮（900ms）
-      await onError(fetchFail(`${chunkUrl}?t=2`))
-      await vi.advanceTimersByTimeAsync(LAZY_RETRY_BACKOFF_BASE_MS * 3)
-      expect(bustedImport).toHaveBeenCalledWith(`${chunkUrl}?t=3`)
-      expect(retry.retryKey.value).toBe(3)
-      // 第 3 轮失败 → 穷尽：userFail 被调、不再调度
-      const failSpy = vi.fn()
-      retry.onError(fetchFail(`${chunkUrl}?t=3`), () => {}, failSpy)
-      expect(failSpy).toHaveBeenCalledTimes(1)
-      await vi.advanceTimersByTimeAsync(10_000)
-      expect(bustedImport).toHaveBeenCalledTimes(3)
-    })
-
-    it('提取不到 URL（非装载类错误）→ 回落同 URL 机械重试（bustedImport 不被调用，loader 重跑）', async () => {
-      const load = vi.fn(() => Promise.reject(new Error('boom')))
-      const bustedImport = vi.fn()
-      const { retry, onError } = setup(load, bustedImport)
-      // 首载失败（无 URL 可提取）
-      await expect(retry.loader()).rejects.toThrow('boom')
-      await onError(new Error('boom'))
-      await vi.advanceTimersByTimeAsync(LAZY_RETRY_BACKOFF_BASE_MS)
-      expect(retry.retryKey.value).toBe(1)
-      // 到点 userRetry 已同步重跑原静态 loader（同 URL 机械路径），bustedImport 不参与
-      expect(bustedImport).not.toHaveBeenCalled()
-      expect(load).toHaveBeenCalledTimes(2)
-    })
-
-    it('fresh mount（无重挂标记）重置计数与 bust 目标：重开挂载点 = 全新一轮（300ms 基准、?t 从 1 递增）', async () => {
-      const chunkUrl = 'file:///app/renderer/assets/DetailPane-abc123.js'
-      const moduleShape = { default: {}, [Symbol.toStringTag]: 'Module' }
-      let bustedShouldSucceed = false
-      const bustedImport = vi.fn(() =>
-        bustedShouldSucceed ? Promise.resolve(moduleShape) : Promise.reject(fetchFail(chunkUrl)),
-      )
-      const { retry, onError } = setup(() => Promise.reject(fetchFail(chunkUrl)), bustedImport)
-
-      // 造出「第 2 轮调度中」：首载失败 → 第 1 轮（?t=1 失败）→ 第 2 轮调度（attempt=2, 600ms）
-      await expect(retry.loader()).rejects.toThrow()
-      await onError(fetchFail(chunkUrl))
-      await vi.advanceTimersByTimeAsync(LAZY_RETRY_BACKOFF_BASE_MS)
-      await onError(fetchFail(`${chunkUrl}?t=1`))
-      await vi.advanceTimersByTimeAsync(LAZY_RETRY_BACKOFF_BASE_MS * 2)
-      expect(retry.retryKey.value).toBe(2)
-
-      // fresh mount（重开挂载点，无 expectRemount 标记）→ 计数/bust 清零 → 静态分支重跑失败重新提取
-      await expect(retry.loader()).rejects.toThrow()
-      bustedShouldSucceed = true
-      expect(await onError(fetchFail(chunkUrl))).not.toHaveBeenCalled()
-      // 若计数未重置（应为 2、600ms），此处 300ms 推进不会触发重试——触发即证重置生效；
-      // 新一轮 busting 从 ?t=1 重新递增（真实浏览器里 ?t=1 若上一轮已成功缓存则直接命中零请求）
-      await vi.advanceTimersByTimeAsync(LAZY_RETRY_BACKOFF_BASE_MS)
-      expect(retry.retryKey.value).toBe(3)
-      expect(bustedImport).toHaveBeenLastCalledWith(`${chunkUrl}?t=1`)
-    })
-
-    it('busting 成功后计数归零；同轮后续失败从基准重算（bustUrl 同轮复用，?t=1 命中成功缓存）', async () => {
-      const chunkUrl = 'file:///app/renderer/assets/DetailPane-abc123.js'
-      const moduleShape = { default: {}, [Symbol.toStringTag]: 'Module' }
-      let bustedShouldSucceed = true
-      const bustedImport = vi.fn(() =>
-        bustedShouldSucceed ? Promise.resolve(moduleShape) : Promise.reject(fetchFail(chunkUrl)),
-      )
-      const { retry, onError } = setup(() => Promise.reject(fetchFail(chunkUrl)), bustedImport)
-
-      // 首载失败 → 第 1 轮 busted ?t=1 成功 → attempt 归零（bust 分支与静态分支同一归零语义）
-      await expect(retry.loader()).rejects.toThrow()
-      await onError(fetchFail(chunkUrl))
-      await vi.advanceTimersByTimeAsync(LAZY_RETRY_BACKOFF_BASE_MS)
-      expect(bustedImport).toHaveBeenCalledTimes(1)
-
-      // 同轮再来一次失败（未 fresh）：从基准重算（300ms、?t=1）而非累计（600ms、?t=2）
-      await onError(fetchFail(chunkUrl))
-      await vi.advanceTimersByTimeAsync(LAZY_RETRY_BACKOFF_BASE_MS)
-      expect(retry.retryKey.value).toBe(2)
-      expect(bustedImport).toHaveBeenLastCalledWith(`${chunkUrl}?t=1`)
-    })
-
-    it('scope 卸载 → 清挂起的重试 timer（卸载后不再驱动重挂）', async () => {
-      const chunkUrl = 'file:///app/renderer/assets/DetailPane-abc123.js'
-      const bustedImport = vi.fn(() => Promise.resolve({}))
-      const scope = effectScope()
-      let captured: ReturnType<typeof createLazyChunkRetry> | null = null
-      scope.run(() => {
-        captured = createLazyChunkRetry(() => Promise.reject(fetchFail(chunkUrl)), { bustedImport })
-      })
-      const retry = captured!
-      const failSpy = vi.fn()
-      retry.onError(fetchFail(chunkUrl), () => {}, failSpy)
-      expect(failSpy).not.toHaveBeenCalled()
-      scope.stop()
-      await vi.advanceTimersByTimeAsync(10_000)
-      expect(bustedImport).not.toHaveBeenCalled()
-      expect(retry.retryKey.value).toBe(0)
-    })
-  })
-
-  describe('defineAsyncComponent × createLazyChunkRetry 全链路（vi.mock 无 URL 错误 → 同 URL 机械重试路径）', () => {
+  describe('defineAsyncComponent × createLazyChunkRetry 全链路（失败即错误态）', () => {
     // [HISTORICAL] 用例间 wrapper 必须自动 unmount（原因见 panel-container-drawer-mode.test.ts 同注释）
     enableAutoUnmount(afterEach)
 
-    it('loader 失败一次 → 自动重试（无按钮）→ 内容渲染', async () => {
-      let calls = 0
-      const retryState = createLazyChunkRetry(() => {
-        calls++
-        if (calls === 1) return Promise.reject(new Error('Failed to fetch dynamically imported module'))
-        return Promise.resolve({
-          default: defineComponent({
-            name: 'FlakyContent',
-            template: '<div data-testid="flaky-content">loaded</div>',
-          }),
-          [Symbol.toStringTag]: 'Module',
-        })
-      })
+    it('loader 失败 → 直接错误态呈现（无自动重试轮、无重试按钮）', async () => {
+      const calls = vi.fn(() =>
+        Promise.reject(new Error('Failed to fetch dynamically imported module')),
+      )
+      const retryState = createLazyChunkRetry(calls)
       const LazyComp = defineAsyncComponent({
         loader: retryState.loader,
         loadingComponent: AsyncErrorFallback,
@@ -337,26 +118,19 @@ describe('AsyncErrorFallback', () => {
         delay: 0,
         onError: retryState.onError,
       })
-      // 镜像真实消费方（AppShell/PanelContainer）：:key 绑 retryKey——重试由重挂单通道驱动
       const Host = defineComponent({
         setup: () => () => h(LazyComp, { key: retryState.retryKey.value }),
       })
 
       const wrapper = mount(Host)
       await flushPromises()
-      // 首载失败：未穷尽 → onError 只调度不 fail → load promise 恒 pending → wrapper 停在
-      // loading 占位（**非错误态**——瞬时失败不闪错误，穷尽才呈现错误态，见 helper 头注）
-      expect(calls).toBe(1)
-      expect(wrapper.find('[data-testid="async-loading"]').exists()).toBe(true)
-      expect(wrapper.find('[data-testid="async-error-fallback"]').exists()).toBe(false)
+      // 失败 → onError 直接 fail → errorComponent 渲染（无重试调度：时间推进 loader 不重跑）
+      expect(calls).toHaveBeenCalledTimes(1)
+      expect(wrapper.find('[data-testid="async-error-fallback"]').exists()).toBe(true)
       expect(wrapper.find('[data-testid="async-retry-btn"]').exists()).toBe(false)
-
-      // 内部自动重试（300ms 退避 → retryKey 重挂 → loader 重跑）→ 内容渲染
-      await vi.advanceTimersByTimeAsync(LAZY_RETRY_BACKOFF_BASE_MS)
+      await vi.advanceTimersByTimeAsync(10_000)
       await flushPromises()
-      expect(calls).toBe(2)
-      expect(wrapper.find('[data-testid="flaky-content"]').exists()).toBe(true)
-      expect(wrapper.find('[data-testid="async-error-fallback"]').exists()).toBe(false)
+      expect(calls).toHaveBeenCalledTimes(1)
     })
   })
 })
@@ -390,97 +164,6 @@ describe('InboundFrameDroppedNotice 入站丢帧终止阀静态提示（D8 / A6�
   it('终止阀未生效（集合为空）→ 不渲染', () => {
     const wrapper = mount(InboundFrameDroppedNotice, { props: { sessionId: 's1' } })
     expect(wrapper.find('[data-testid="inbound-frame-dropped-notice"]').exists()).toBe(false)
-  })
-})
-
-/* ════════ 来源：RollingRestartBanner.test.ts ════════ */
-
-function setPhase(phase: RollingRestartBannerPhase): void {
-  rollingStateMock.phase.value = phase
-}
-
-describe('RollingRestartBanner 滚动重启四态横幅（D5 / A1）', () => {
-  beforeEach(() => {
-    setPhase({ kind: 'idle' })
-  })
-
-  it('idle：不渲染', () => {
-    const wrapper = mount(RollingRestartBanner)
-    expect(wrapper.find('[data-testid="rolling-restart-banner"]').exists()).toBe(false)
-  })
-
-  it('预告（countdown）：即将自动重启 + 终端会话终止预告 + 关闭按钮可见', () => {
-    setPhase({ kind: 'countdown', executesAt: Date.now() + 30_000, inflight: 0 })
-    const wrapper = mount(RollingRestartBanner)
-    const banner = wrapper.find('[data-testid="rolling-restart-banner"]')
-    expect(banner.exists()).toBe(true)
-    expect(banner.attributes('data-phase')).toBe('countdown')
-    expect(banner.attributes('role')).toBe('alert')
-    const text = wrapper.find('[data-testid="rolling-restart-text"]').text()
-    expect(text).toContain('即将自动重启')
-    expect(text).toContain('终端会话将随重启终止')
-    expect(wrapper.find('[data-testid="rolling-restart-dismiss"]').exists()).toBe(true)
-  })
-
-  it('预告退化形态（status 拉取恢复，executesAt 未知）：不含秒数的「即将自动重启」', () => {
-    setPhase({ kind: 'countdown', executesAt: 0, inflight: null })
-    const wrapper = mount(RollingRestartBanner)
-    const text = wrapper.find('[data-testid="rolling-restart-text"]').text()
-    expect(text).toContain('即将自动重启')
-    expect(text).not.toContain('秒内')
-  })
-
-  it('推迟中（deferred）：30 分钟有界等待语义 + 终端会话预告', () => {
-    setPhase({ kind: 'deferred', reason: 'inflight', inflight: 2, deferDeadlineAt: Date.now() + 30 * 60_000 })
-    const wrapper = mount(RollingRestartBanner)
-    const text = wrapper.find('[data-testid="rolling-restart-text"]').text()
-    expect(text).toContain('内存接近上限')
-    expect(text).toContain('最长等待 30 分钟')
-    expect(text).toContain('终端会话将随重启终止')
-  })
-
-  it('推迟中 errs 形态（absent-report）：计数未知文案，不展示误导性任务数', () => {
-    setPhase({ kind: 'deferred', reason: 'absent-report', inflight: null, deferDeadlineAt: Date.now() + 30 * 60_000 })
-    const wrapper = mount(RollingRestartBanner)
-    const text = wrapper.find('[data-testid="rolling-restart-text"]').text()
-    expect(text).toContain('正在确认后台任务状态')
-  })
-
-  it('红牌（rolling / forced）：danger 色调 + 正在重启 runtime 文案', () => {
-    setPhase({ kind: 'rolling', reason: 'hard-threshold', inflight: 1 })
-    const wrapper = mount(RollingRestartBanner)
-    const banner = wrapper.find('[data-testid="rolling-restart-banner"]')
-    expect(banner.attributes('data-phase')).toBe('rolling')
-    expect(wrapper.find('[data-testid="rolling-restart-icon"]').classes().join(' ')).toContain('text-danger')
-    expect(wrapper.find('[data-testid="rolling-restart-text"]').text()).toContain('正在重启 runtime')
-  })
-
-  it('已恢复转绿（recovered）：info 色调 + 重启完成文案', () => {
-    setPhase({ kind: 'recovered' })
-    const wrapper = mount(RollingRestartBanner)
-    const banner = wrapper.find('[data-testid="rolling-restart-banner"]')
-    expect(banner.attributes('data-phase')).toBe('recovered')
-    expect(wrapper.find('[data-testid="rolling-restart-icon"]').classes().join(' ')).toContain('text-info')
-    expect(wrapper.find('[data-testid="rolling-restart-text"]').text()).toContain('重启完成')
-  })
-
-  it('#27 轻态（reattach-deferred）：高压延迟文案 + 复查周期 + 手动恢复指引', () => {
-    setPhase({ kind: 'reattach-deferred', pollMs: 30_000 })
-    const wrapper = mount(RollingRestartBanner)
-    const banner = wrapper.find('[data-testid="rolling-restart-banner"]')
-    expect(banner.attributes('data-phase')).toBe('reattach-deferred')
-    const text = wrapper.find('[data-testid="rolling-restart-text"]').text()
-    expect(text).toContain('自动恢复已推迟')
-    expect(text).toContain('每 30 秒复查')
-    expect(text).toContain('手动打开会话')
-  })
-
-  it('关闭按钮 → 条消失（用户主动出口）', async () => {
-    setPhase({ kind: 'deferred', reason: 'inflight', inflight: 0, deferDeadlineAt: 0 })
-    const wrapper = mount(RollingRestartBanner)
-    expect(wrapper.find('[data-testid="rolling-restart-banner"]').exists()).toBe(true)
-    await wrapper.find('[data-testid="rolling-restart-dismiss"]').trigger('click')
-    expect(wrapper.find('[data-testid="rolling-restart-banner"]').exists()).toBe(false)
   })
 })
 

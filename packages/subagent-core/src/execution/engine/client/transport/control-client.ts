@@ -10,9 +10,12 @@
 // control-shared.ts，R→C 帧解析在 control-inbound.ts。无心跳（ADR-0122 进程生死二态）。
 //
 // 错误面（D5/D8/D10）：connect/hello 失败 → engine_transport_unavailable（不静默回落
-// local）；hello_reject version → engine_protocol_mismatch；ready 后连接丢失 →
-// engine_transport_lost（不是 engine_crashed，不原地重试）；engine_open 超时 →
-// engine_open_timeout；帧超限/队列溢出 → engine_frame_too_large / engine_backpressure_overflow（先具体码后 engine_closed）。
+// local；失败事实源 = socket error/close 事件）；hello_reject version →
+// engine_protocol_mismatch；ready 后连接丢失 →
+// engine_transport_lost（不是 engine_crashed，不原地重试）；帧超限/队列溢出 →
+// engine_frame_too_large / engine_backpressure_overflow（先具体码后 engine_closed）。
+// 握手/开启/关闭无时间窗（原三窗已随时间机制删除——应答帧与连接死亡是仅有的
+// 终局事实源）。
 
 import * as net from "node:net";
 import { StringDecoder } from "node:string_decoder";
@@ -28,11 +31,7 @@ import {
   CHANNEL_QUEUE_MAX_BYTES,
   CHANNEL_QUEUE_MAX_FRAMES,
   CONNECTION_QUEUE_MAX_BYTES,
-  CONTROL_CLOSE_GRACE_MS,
-  CONTROL_CONNECT_TIMEOUT_MS,
-  CONTROL_HELLO_TIMEOUT_MS,
   CONTROL_MAX_FRAME_BYTES,
-  ENGINE_OPEN_TIMEOUT_MS,
   controlClientKey,
   makeTransportError,
   mapControlError, sharedControlClientsSlot,
@@ -85,10 +84,6 @@ export class RuntimeControlClient {
   /** 本连接绑定的根（共享键成分；与 open 的 identity.rootSessionId 一致）。 */
   readonly rootSessionId: string | undefined;
   private readonly hostKind: string;
-  private readonly connectTimeoutMs: number;
-  private readonly helloTimeoutMs: number;
-  private readonly openTimeoutMs: number;
-  private readonly closeGraceMs: number;
   private readonly maxFrameBytes: number;
 
   private state: ControlClientState = "idle";
@@ -97,8 +92,6 @@ export class RuntimeControlClient {
   private connectPromise: Promise<void> | undefined;
   private connectResolve: (() => void) | undefined;
   private connectReject: ((err: Error) => void) | undefined;
-  private connectTimer: NodeJS.Timeout | undefined;
-  private helloTimer: NodeJS.Timeout | undefined;
   private helloId: number | undefined;
   private nextId = 1;
   private buffer = "";
@@ -116,10 +109,6 @@ export class RuntimeControlClient {
     this.socketPath = opts.socketPath;
     this.rootSessionId = opts.rootSessionId;
     this.hostKind = opts.hostKind;
-    this.connectTimeoutMs = opts.connectTimeoutMs ?? CONTROL_CONNECT_TIMEOUT_MS;
-    this.helloTimeoutMs = opts.helloTimeoutMs ?? CONTROL_HELLO_TIMEOUT_MS;
-    this.openTimeoutMs = opts.openTimeoutMs ?? ENGINE_OPEN_TIMEOUT_MS;
-    this.closeGraceMs = opts.closeGraceMs ?? CONTROL_CLOSE_GRACE_MS;
     this.maxFrameBytes = opts.maxFrameBytes ?? CONTROL_MAX_FRAME_BYTES;
     this.writeQueue = new ControlWriteQueue({
       channelQueueMaxBytes: opts.channelQueueMaxBytes ?? CHANNEL_QUEUE_MAX_BYTES,
@@ -181,12 +170,7 @@ export class RuntimeControlClient {
     return new Promise<ControlChannelOpenResult>((resolve, reject) => {
       const id = this.nextId++;
       const key = String(id);
-      const timer = setTimeout(() => {
-        this.pendingOpens.delete(key);
-        reject(makeTransportError("engine_open_timeout",
-          `runtime did not answer engine_open (id=${id}) within ${this.openTimeoutMs}ms`));
-      }, this.openTimeoutMs);
-      this.pendingOpens.set(key, { id, handlers, resolve, reject, timer });
+      this.pendingOpens.set(key, { id, handlers, resolve, reject });
       const frame: Record<string, unknown> = {
         v: SUBAGENT_CONTROL_PROTOCOL_VERSION,
         kind: SUBAGENT_CONTROL_FRAME_KINDS.engineOpen,
@@ -208,7 +192,6 @@ export class RuntimeControlClient {
         },
       };
       if (!this.sendRaw(frame)) {
-        clearTimeout(timer);
         this.pendingOpens.delete(key);
         reject(makeTransportError("engine_transport_lost", "control connection is not writable"));
       }
@@ -251,21 +234,10 @@ export class RuntimeControlClient {
       this.connectReject = reject;
       const socket = net.connect({ path: this.socketPath });
       this.socket = socket;
-      this.connectTimer = setTimeout(() => {
-        this.connectTimer = undefined;
-        this.failFatal(makeTransportError("engine_transport_unavailable",
-          `control socket connect timed out after ${this.connectTimeoutMs}ms (${this.socketPath})`));
-      }, this.connectTimeoutMs);
       socket.once("connect", () => {
         if (this.state !== "connecting") return;
-        this.clearConnectTimers();
         this.state = "hello";
         this.helloId = this.nextId++;
-        this.helloTimer = setTimeout(() => {
-          this.helloTimer = undefined;
-          this.failFatal(makeTransportError("engine_transport_unavailable",
-            `hello handshake timed out after ${this.helloTimeoutMs}ms (${this.socketPath})`));
-        }, this.helloTimeoutMs);
         this.sendRaw({
           v: SUBAGENT_CONTROL_PROTOCOL_VERSION,
           kind: SUBAGENT_CONTROL_FRAME_KINDS.hello,
@@ -292,7 +264,6 @@ export class RuntimeControlClient {
   private failFatal(err: EngineSdkError): void {
     if (this.state === "lost" || this.state === "disposed") return;
     this.state = "lost";
-    this.clearConnectTimers();
     const rejectConnect = this.connectReject;
     this.connectResolve = undefined;
     this.connectReject = undefined;
@@ -300,7 +271,6 @@ export class RuntimeControlClient {
     const opens = [...this.pendingOpens.values()];
     this.pendingOpens.clear();
     for (const pending of opens) {
-      clearTimeout(pending.timer);
       pending.reject(err);
     }
     const channels = [...this.channels.values()];
@@ -319,17 +289,6 @@ export class RuntimeControlClient {
     const key = controlClientKey(this.socketPath, this.rootSessionId);
     const sharedClients = sharedControlClientsSlot<RuntimeControlClient>();
     if (sharedClients.get(key) === this) sharedClients.delete(key);
-  }
-
-  private clearConnectTimers(): void {
-    if (this.connectTimer !== undefined) {
-      clearTimeout(this.connectTimer);
-      this.connectTimer = undefined;
-    }
-    if (this.helloTimer !== undefined) {
-      clearTimeout(this.helloTimer);
-      this.helloTimer = undefined;
-    }
   }
 
   // 接收面
@@ -396,7 +355,6 @@ export class RuntimeControlClient {
       logger.warn("[control-client] dropped hello_ok that does not match the pending hello id");
       return;
     }
-    this.clearConnectTimers();
     this.state = "ready";
     const resolve = this.connectResolve;
     this.connectResolve = undefined;
@@ -435,7 +393,6 @@ export class RuntimeControlClient {
       logger.warn(`[control-client] dropped late engine_opened (id=${key})`);
       return;
     }
-    clearTimeout(pending.timer);
     this.pendingOpens.delete(key);
     if (frame.channelId.length === 0) {
       pending.reject(makeTransportError("engine_transport_unavailable",
@@ -448,7 +405,6 @@ export class RuntimeControlClient {
       closeRequested: false,
       closePromise: undefined,
       closeResolve: undefined,
-      closeTimer: undefined,
     });
     logger.debug(`[control-client] engine channel opened ${frame.channelId} (pid=${String(frame.pid)})`);
     pending.resolve(frame.pid !== undefined ? { channelId: frame.channelId, pid: frame.pid } : { channelId: frame.channelId });
@@ -458,7 +414,6 @@ export class RuntimeControlClient {
     const key = String(frame.id ?? "");
     const pending = this.pendingOpens.get(key);
     if (pending === undefined) return;
-    clearTimeout(pending.timer);
     this.pendingOpens.delete(key);
     pending.reject(mapControlError(frame.code, frame.message, frame.recovery));
   }
@@ -568,27 +523,21 @@ export class RuntimeControlClient {
     channel.handlers.onError(err);
   }
 
-  /** 关闭宽限（engine_close → engine_closed 或有界放弃；只影响本通道）。 */
+  /**
+   * 关闭等待（engine_close → engine_closed / error(unknown_channel) / 连接死亡
+   * fan-out——纯事件驱动，无时间宽限）：engine_closed 或 unknown_channel 到达/
+   * 连接死亡时 completeChannelClose 收口。引擎存活但不回 engine_closed 且连接保持
+   * 的形态 = 本 promise 不收口（无时间兜底——调用方自行决定是否放弃通道）。
+   */
   private beginCloseWait(channel: ControlChannelRecord): Promise<void> {
     if (channel.closePromise !== undefined) return channel.closePromise;
     channel.closePromise = new Promise<void>((resolve) => {
       channel.closeResolve = resolve;
-      channel.closeTimer = setTimeout(() => {
-        channel.closeTimer = undefined;
-        logger.warn(`[control-client] engine_close grace elapsed, abandoning channel ${channel.channelId}`);
-        this.channels.delete(channel.channelId);
-        this.writeQueue.purge(channel.channelId);
-        resolve();
-      }, this.closeGraceMs);
     });
     return channel.closePromise;
   }
 
   private completeChannelClose(channel: ControlChannelRecord): void {
-    if (channel.closeTimer !== undefined) {
-      clearTimeout(channel.closeTimer);
-      channel.closeTimer = undefined;
-    }
     const resolve = channel.closeResolve;
     channel.closeResolve = undefined;
     resolve?.();

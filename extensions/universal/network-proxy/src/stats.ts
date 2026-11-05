@@ -118,7 +118,7 @@ export function flushStats(): void {
 					return;
 				}
 			}
-		}, {});
+		});
 	} catch (error) {
 		logger.warn("stats flush lock failed, keeping counters for retry", {
 			detail: { err: toErrorMessage(error), path: filePath },

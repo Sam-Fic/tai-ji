@@ -360,39 +360,42 @@ describe('TaijiProviderStore', () => {
     expect((store.getExtrasSync('b'))?.authMethod).toBe('oauth')
   })
 
-  it('并发 modify 同 provider：最终状态一致无交错（proper-lockfile 串行化 RMW）', async () => {
-    // 并发用例注入小退避下限：锁竞争重试等待从 100ms 级压到 5ms 级（生产默认 100 不变）；
-    // 并发语义断言（串行化、无交错）不受退避时长影响
-    const store = new TaijiProviderStore(file, { lockMinRetryTimeoutMs: 5 })
-    // 两个 Promise 同时写同 provider 的不同字段，各自基于 current 增量更新——
-    // 锁保证后者在锁内重读到前者的结果，两字段都保留（无交错半写）
-    await Promise.all([
+  it('并发 modify 同一文件：锁互斥，后到者 fail-fast（ELOCKED），文件无交错', async () => {
+    const store = new TaijiProviderStore(file)
+    // 锁契约 = 互斥 + fail-fast（不重试不等待，ADR-0190）：两个并发 RMW 恰一个进入
+    // 临界区，另一个立即抛 ELOCKED；文件最终状态 = 成功方的完整写入（两写入不同字段，
+    // 两者字段同时存在即交错，构造上不可能）
+    const results = await Promise.allSettled([
       store.modify('shared', current => ({ ...current, authMethod: 'api_key' })),
       store.modify('shared', current => ({ ...current, quota: { enabled: true } })),
     ])
-    expect(store.getExtrasSync('shared')).toEqual({
-      authMethod: 'api_key',
-      quota: { enabled: true },
-    })
-    // 加大并发压力：10 个并发 modify 各写一个 modelState 条目，全部保留
-    await Promise.all(
-      Array.from({ length: 10 }, (_, i) =>
-        store.modify('chaos', current => ({
-          ...current,
-          modelStates: { ...current?.modelStates, [`m${i}`]: { enabled: i % 2 === 0 } },
-        })),
-      ),
-    )
+    const fulfilled = results.filter(r => r.status === 'fulfilled')
+    const rejected = results.filter(r => r.status === 'rejected')
+    expect(fulfilled).toHaveLength(1)
+    expect(rejected).toHaveLength(1)
+    expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({ code: 'ELOCKED' })
+    const kept = store.getExtrasSync('shared')
+    if (kept && 'authMethod' in kept) {
+      expect(kept).toEqual({ authMethod: 'api_key' })
+    } else {
+      expect(kept).toEqual({ quota: { enabled: true } })
+    }
+    // 串行调用不受锁竞争影响：10 个 modify 各写一个 modelState 条目，全部保留
+    for (let i = 0; i < 10; i++) {
+      await store.modify('chaos', current => ({
+        ...current,
+        modelStates: { ...current?.modelStates, [`m${i}`]: { enabled: i % 2 === 0 } },
+      }))
+    }
     expect(Object.keys((store.getExtrasSync('chaos'))?.modelStates ?? {})).toHaveLength(10)
   })
 
-  it('并发 modify 不同 provider：全部保留', async () => {
-    const store = new TaijiProviderStore(file, { lockMinRetryTimeoutMs: 5 })
-    await Promise.all(
-      Array.from({ length: 10 }, (_, i) =>
-        store.modify(`p${i}`, () => ({ quota: { enabled: true, fetcher: `f${i}` } })),
-      ),
-    )
+  it('不同 provider 逐个 modify：全部保留（同一文件锁串行调用）', async () => {
+    const store = new TaijiProviderStore(file)
+    // 锁是文件级（providers.json.lock）：同文件所有 modify 互斥，并发调用需串行发起
+    for (let i = 0; i < 10; i++) {
+      await store.modify(`p${i}`, () => ({ quota: { enabled: true, fetcher: `f${i}` } }))
+    }
     const all = store.readAllSync()
     expect(Object.keys(all)).toHaveLength(10)
     expect(all.p3?.quota?.fetcher).toBe('f3')
@@ -604,17 +607,16 @@ describe('TaijiProviderStore', () => {
   })
 
   describe('A4 与 per-provider modify 串行安全', () => {
-    it('交错调用 modifyScopedModels 与 modify 同一文件，无丢更新', async () => {
-      const store = new TaijiProviderStore(file, { lockMinRetryTimeoutMs: 5 })
+    it('modifyScopedModels 与 modify 同一文件先后调用，无丢更新', async () => {
+      const store = new TaijiProviderStore(file)
       // 先写入初始数据
       await store.modifyScopedModels(() => ['openai/gpt-4o'])
       await store.modify('openai', () => ({ authMethod: 'api_key' }))
 
-      // 并发交错调用：scopedModels 写入 + per-provider 写入
-      await Promise.all([
-        store.modifyScopedModels((cur) => [...cur, 'anthropic/claude-sonnet-4']),
-        store.modify('anthropic', () => ({ authMethod: 'oauth' })),
-      ])
+      // 同一文件锁串行调用：scopedModels 写入 + per-provider 写入，后者在锁内重读
+      // 到前者结果，互不覆盖
+      await store.modifyScopedModels((cur) => [...cur, 'anthropic/claude-sonnet-4'])
+      await store.modify('anthropic', () => ({ authMethod: 'oauth' }))
 
       // 两者都成功保留
       expect(store.getScopedModelsSync()).toEqual(['openai/gpt-4o', 'anthropic/claude-sonnet-4'])
@@ -622,19 +624,15 @@ describe('TaijiProviderStore', () => {
       expect(store.getExtrasSync('anthropic')).toEqual({ authMethod: 'oauth' })
     })
 
-    it('高并发交错：多次 modifyScopedModels + 多次 modify，最终状态一致', async () => {
-      const store = new TaijiProviderStore(file, { lockMinRetryTimeoutMs: 5 })
-      // 20 个并发操作：10 个 modifyScopedModels 追加 + 10 个 modify 写入不同 provider
-      await Promise.all([
-        ...Array.from({ length: 10 }, (_, i) =>
-          store.modifyScopedModels((cur) => [...cur, `provider-${i}/model-${i}`]),
-        ),
-        ...Array.from({ length: 10 }, (_, i) =>
-          store.modify(`provider-${i}`, () => ({ authMethod: 'api_key' as const })),
-        ),
-      ])
+    it('多次 modifyScopedModels + 多次 modify 混合调用，最终状态一致', async () => {
+      const store = new TaijiProviderStore(file)
+      // 20 次混合操作：10 个 modifyScopedModels 追加 + 10 个 modify 写入不同 provider
+      for (let i = 0; i < 10; i++) {
+        await store.modifyScopedModels((cur) => [...cur, `provider-${i}/model-${i}`])
+        await store.modify(`provider-${i}`, () => ({ authMethod: 'api_key' as const }))
+      }
 
-      // scopedModels 有 10 个条目（顺序可能因并发而变，但数量正确）
+      // scopedModels 有 10 个条目（追加序）
       const scoped = store.getScopedModelsSync()
       expect(scoped).toHaveLength(10)
       expect(scoped.every(m => /^provider-\d+\/model-\d+$/.test(m))).toBe(true)
@@ -657,22 +655,20 @@ describe('TaijiProviderStore', () => {
   })
 
   describe('crash 残留自愈（round 1 review SUGGESTION）', () => {
-    // 残留形态依据 proper-lockfile 4.1.2 实装（node_modules/proper-lockfile/lib/lockfile.js）：
-    // - 锁「文件」实为 mkdir 创建的目录，持有进程 crash 未 release 时残留 `.lock` 目录；
-    //   stale 判定 = 锁目录 mtime 早于 now - stale(30s) → 后来者接管（rmdir 后重新 mkdir），
-    //   不触发 onCompromised（该回调仅在「自己持锁期间」update 定时器（stale/2=15s）发现
-    //   mtime 失效时触发——单测的锁持有窗口是同步代码，无法插入 15s 定时器推进，
-    //   模拟需 15s 真实等待或重构注入 lockfile 依赖，性价比不成立，故不覆盖该分支）。
+    // 残留形态依据 mkdir 锁协议（与 proper-lockfile 4.1.2 磁盘协议同构）：
+    // - 锁「文件」实为 mkdir 创建的目录，持有进程 crash 未 release 时残留 `.lock` 目录。
+    //   无 stale 时间阈值判死夺取（ADR-0190）：即便锁目录 mtime 早已过期，后来者也不自动
+    //   接管——fail-fast 附恢复指引，恢复 = 人工删除锁目录后重试。
     // - atomicWrite 崩溃在 rename 前残留 tmp（RT-3#9 起默认 tmp 名含 pid+序号，名字唯一）
     //   → 后续写入不再「覆写消费」旧 tmp（固定名时代的伪自愈）；孤儿 tmp 是惰性垃圾，
     //   绝不污染正式文件读写，回收归启动期清扫家族（本用例锁定数据完好这一安全属性）。
-    it('残留 tmp + 过期 .lock 目录 → readAll 数据完好、modify 自愈正常、lock 残留清理', async () => {
+    it('残留 tmp + 崩溃遗留 .lock → readAll 数据完好；写路径 fail-fast 指引人工删锁，删锁后写入恢复', async () => {
       writeFileSync(file, JSON.stringify({ version: 1, providers: { legacy: { authMethod: 'api_key' } } }, null, 2), 'utf-8')
       // atomicWrite 崩溃在 rename 前：半写 tmp 残留（内容必须是外部半写垃圾，不得污染正式文件）。
       // 用真实孤儿形态（pid+序号名）模拟；另留一个旧版固定 `.tmp` 形态（历史残留）。
       writeFileSync(`${file}.tmp_${process.pid}-7`, '{"version":1,"providers":{"half-written":{}}}', 'utf-8')
       writeFileSync(`${file}.tmp`, '{"version":1,"providers":{"legacy-fixed-name":{}}}', 'utf-8')
-      // proper-lockfile 持有进程 crash：.lock 目录残留，mtime 回拨 60s（> stale 30s 阈值）
+      // 持有进程 crash：.lock 目录残留，mtime 回拨 60s——即便锁早已陈旧也不被自动接管
       mkdirSync(`${file}.lock`)
       const staleTime = new Date(Date.now() - 60_000)
       utimesSync(`${file}.lock`, staleTime, staleTime)
@@ -680,13 +676,20 @@ describe('TaijiProviderStore', () => {
       // 读路径不持锁：既有数据完好（tmp 半写内容未泄漏进正式文件）
       expect(store.readAllSync()).toEqual({ legacy: { authMethod: 'api_key' } })
 
-      // 写路径：过期锁被接管删除后正常 RMW
+      // 写路径：锁冲突 fail-fast，错误附恢复指引（不静默、不接管、不等待）
+      await expect(store.modify('new-entry', () => ({ quota: { enabled: true } }))).rejects.toThrow(
+        /写锁获取失败：锁被占用.*删除 .*\.lock 锁目录重试/,
+      )
+      // fail-fast 零写入：new-entry 未落盘，既有数据原样
+      expect(store.getExtrasSync('new-entry')).toBeUndefined()
+
+      // 人工按恢复指引删除锁目录后写入恢复；孤儿 tmp 不入正式文件（数据断言覆盖），
+      // 亦不被写入消费（名字唯一）——仍留盘等待启动期回收家族
+      rmSync(`${file}.lock`, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
       await store.modify('new-entry', () => ({ quota: { enabled: true } }))
 
       expect(store.getExtrasSync('legacy')).toEqual({ authMethod: 'api_key' })
       expect(store.getExtrasSync('new-entry')).toEqual({ quota: { enabled: true } })
-      // 残留物清理：.lock 目录被 unlock rmdir；孤儿 tmp 不入正式文件（数据断言已覆盖），
-      // 亦不被本次写消费（名字唯一）——仍留盘等待启动期回收家族
       expect(existsSync(`${file}.lock`)).toBe(false)
       expect(JSON.parse(readFileSync(file, 'utf-8')).providers['half-written']).toBeUndefined()
     })
@@ -2103,7 +2106,7 @@ describe('config-service-removebykind', () => {
     })
 
     it('回归：catalog 删除 await 凭据清理完成，返回后 listProviders 即不含该 provider（修复广播 stale）', async () => {
-      // 模拟真实 AuthStorage.remove 的异步性：withFileLock（proper-lockfile）获锁有延迟，
+      // 模拟真实 AuthStorage.remove 的异步性：withFileLock 获锁有延迟，
       // fire-and-forget 时凭据未即时落盘。本测试构造带延迟的 remove，验证 removeProviderByKind
       // await 其完成才返回 → 返回后 listProviders 立即反映凭据已清（广播拿到的就是干净列表）。
       const credentialIds = new Set<string>(['openai'])

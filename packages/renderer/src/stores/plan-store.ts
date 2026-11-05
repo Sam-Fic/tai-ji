@@ -44,7 +44,7 @@ import {
   type PlanLifecycleState,
   type PlanReviewComment,
 } from '@zhushanwen/extension-protocol'
-import { command, RPC_BACKSTOP_TIMEOUT_MS } from '@taiji/core/transport/api'
+import { command } from '@taiji/core/transport/api'
 import {
   getPendingRequests,
   type ExtensionUIRequest,
@@ -466,7 +466,7 @@ export const usePlanStore = defineStore('plan', () => {
     if (!sessionId) return
     const baseRev = frameRevOf(sessionId)
     try {
-      const reply = await command('session.getPlanState', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+      const reply = await command('session.getPlanState', { sessionId })
       if (frameRevOf(sessionId) !== baseRev) return
       const planState = reply?.planState ?? null
       scoped.updateFor(sessionId, (p) => {
@@ -574,7 +574,7 @@ export const usePlanStore = defineStore('plan', () => {
   async function coldReconcilePlanReview(sessionId: string): Promise<void> {
     const baseRev = frameRevOf(sessionId)
     const [planRes, pendingRes] = await Promise.allSettled([
-      command('session.getPlanState', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS),
+      command('session.getPlanState', { sessionId }),
       getPendingRequests(sessionId),
     ])
     if (planRes.status === 'rejected' || pendingRes.status === 'rejected') {

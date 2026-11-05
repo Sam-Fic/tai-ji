@@ -4,8 +4,12 @@
  * cookie 类 provider（mimo / opencode-go）的服务端登录态换发必须走真实浏览器环境
  * （页面 JS + SSO 跳转），本模块按需创建隐藏 BrowserWindow 让续期循环跑起来：
  *
- *   种 cookie（secrets 文件 → partition）→ 加载 pageUrl → 轮询 apiUrl 直到 HTTP 200
- *   → 导出 partition 的目标域 cookie 串 → 销毁窗口（串经 IPC 回 renderer）
+ *   种 cookie（secrets 文件 → partition）→ 加载 pageUrl → 页面导航/load 事件触发页面内
+ *   API 探测（200 即就绪）→ 导出 partition 的目标域 cookie 串 → 销毁窗口（串经 IPC 回
+ *   renderer）。无时间窗决策（周期轮询/登录页停留判定/超时等待已随时间机制清查删除）：
+ *   探测时当前 URL 命中登录页特征 = 登录态失效的确定性事实（URL 判定，非时间阈值），
+ *   show() 转可见并即刻以 login required 失败收尾（成败都 destroy，渲染端 dedup 槽随
+ *   Promise 落定即时释放）；其余不 200 形态继续等下一个页面事件，由用户侧重试承载。
  *
  * 日常零内存占用：窗口按需创建、成败都 destroy；partition 用 persist 前缀（历史登录态
  * 跨刷新保留，SSO 跳转链的中间 cookie 不丢）。
@@ -34,18 +38,8 @@ import { getQuotaRefreshTarget, normalizeCookieHeader } from '@taiji/shared'
 import type { QuotaRefreshCookieResult, QuotaRefreshTarget } from '@taiji/shared'
 import { mainLogger } from '../logs/main-logger.js'
 
-/** 轮询间隔（规格：interval 1s）。 */
-const POLL_INTERVAL_MS = 1_000
-/** 无登录交互的总超时（规格：15s——登录态健康时页面续期循环应在数秒内放行 API）。 */
-const API_TIMEOUT_MS = 15_000
-/** 登录页停留判定阈值（规格：持续 5s 未离开才转可见——SSO 跳转链路过境登录域不误判）。 */
-const LOGIN_LINGER_MS = 5_000
-/** 转可见后的放宽总超时（规格：120s——等用户完成人工登录）。 */
-const LOGIN_TIMEOUT_MS = 120_000
 /** 完成信号：API 探测的 HTTP 状态码（只看 200，不校验业务字段）。 */
 const HTTP_OK = 200
-/** 毫秒 → 秒（超时失败文案用）。 */
-const MS_PER_SECOND = 1_000
 
 /** 刷新请求（与 IPC payload 同构；providerId 决定 partition 与 secrets 文件名）。 */
 export type QuotaRefreshInput = {
@@ -106,13 +100,12 @@ async function runRefresh(input: QuotaRefreshInput, deps: QuotaRefreshDeps): Pro
     } catch (err) {
       // ERR_ABORTED(-3) 不是失败：平台页 JS 发现未登录会主动导航到登录链
       // （如 xiaomimimo 的 genLoginUrl → account.xiaomi.com），打断初始加载。
-      // SSO 跳转/登录页检测/超时全部由轮询承载，这里只拦真正的加载故障
+      // 跳转后的 API 探测由页面导航/load 事件驱动（见 probeUntilApiOk），这里只拦真正的加载故障
       if (!isAbortedNavigation(err)) {
         return { ok: false, error: `page load failed: ${errorMessage(err)}` }
       }
     }
-    const polled = await pollUntilApiOk(win, target)
-    if (!polled.ok) return { ok: false, error: polled.error }
+    await probeUntilApiOk(win, target)
     const cookie = await exportCookies(ses, target)
     return { ok: true, cookie }
   } catch (err) {
@@ -158,49 +151,71 @@ async function seedCookies(ses: Session, target: QuotaRefreshTarget, dataDir: st
   }
 }
 
-// ── 轮询（登录页检测 + API 探测）──────────────────────────────────────────────
+// ── 事件驱动 API 探测（页面导航/load 事件触发）───────────────────────────────
 
-/** 轮询结果：ok=true 表示 API 已 200；ok=false 带 error 文案。 */
-type PollResult = { ok: true } | { ok: false; error: string }
-
-async function pollUntilApiOk(win: BrowserWindow, target: QuotaRefreshTarget): Promise<PollResult> {
-  const start = Date.now()
-  let deadline = start + API_TIMEOUT_MS
-  let loginSince: number | null = null
-  let loginShown = false
-
-  for (;;) {
-    if (win.isDestroyed()) return { ok: false, error: 'refresh window destroyed before api ready' }
-
-    // 登录页检测先于 fetch：转可见判定不被网络往返延迟（用户越早看到窗口越早登录）
-    const url = safeGetUrl(win)
-    if (isQuotaRefreshLoginUrl(url, target)) {
-      loginSince ??= Date.now()
-      if (!loginShown && Date.now() - loginSince >= LOGIN_LINGER_MS) {
-        loginShown = true
-        // 登录态失效确证：转可见让用户登录，超时放宽到 120s（等用户完成登录）
-        deadline = Date.now() + LOGIN_TIMEOUT_MS
+/**
+ * 挂页面导航/load 事件监听，每次事件触发一次页面内 API 探测；命中 HTTP_OK 即完成。
+ *
+ * 触发面：'did-finish-load'（主文档加载完成）与 'did-navigate'（每次导航提交，覆盖 SSO
+ * 跳转链的每一跳与登录后跳回）。附上监听后**立即先探一次**——生产路径 loadURL await
+ * 期间 did-finish-load 已发射，迟挂的监听收不到那一次。
+ *
+ * 无 deadline：探测不 200 就继续等下一个页面事件（时间等待窗已随时间机制清查删除）。
+ * 确定性收尾（URL 事实，非时间阈值停留判定）：探测时当前 URL 命中登录页特征
+ * （isQuotaRefreshLoginUrl）= 登录态失效确证 → win.show() 转可见提示 + reject
+ * （"login required"）——经 runRefresh 既有 catch 归一 ok:false，窗口随 finally
+ * destroy、渲染端 cookieRefreshDedup 槽随 Promise 落定即时释放，恢复由用户侧重试
+ * 承载（重新登录后下次 hover 重查，探测即 200）。窗口销毁 → reject（同经 catch 归一）。
+ */
+function probeUntilApiOk(win: BrowserWindow, target: QuotaRefreshTarget): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const wc = win.webContents
+    const cleanup = (): void => {
+      wc.removeListener('did-finish-load', onReady)
+      wc.removeListener('did-navigate', onReady)
+      wc.removeListener('destroyed', onDestroyed)
+    }
+    const succeed = (): void => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve()
+    }
+    const fail = (message: string): void => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(new Error(message))
+    }
+    const onReady = (): void => {
+      if (win.isDestroyed()) {
+        fail('refresh window destroyed before api ready')
+        return
+      }
+      // 登录页命中 = 登录态失效的确定性确证（URL 事实，非时间阈值停留判定）：转可见
+      // 提示 + 即刻以 login required 失败收尾。无时间窗裁决下没有「等用户登录」的
+      // 等待窗；且页面停在登录域（API 永不 200、无后续导航事件）时 Promise 必须落定，
+      // 否则隐藏窗口泄漏（成败都 destroy 契约失守）+ 渲染端 dedup 槽永不释放（该
+      // provider 续期被静默拦截）。检测先于探测：登录态已失效的页面无需再发 API 探测
+      const url = win.webContents.getURL()
+      if (isQuotaRefreshLoginUrl(url, target)) {
         win.show()
-        mainLogger.info('[quota-cookie-refresher] login required, window shown', { url })
+        mainLogger.info('[quota-cookie-refresher] login required', { url })
+        fail('login required')
+        return
       }
-    } else {
-      // 离开登录页（SSO 过境或已登录跳回）：停留计时重置
-      loginSince = null
+      void probeApi(win, target).then((status) => {
+        if (status === HTTP_OK) succeed()
+      })
     }
+    const onDestroyed = (): void => fail('refresh window destroyed before api ready')
 
-    const status = await probeApi(win, target)
-    if (status === HTTP_OK) return { ok: true }
-
-    if (Date.now() >= deadline) {
-      return {
-        ok: false,
-        error: loginShown
-          ? `login not completed within ${LOGIN_TIMEOUT_MS / MS_PER_SECOND}s`
-          : `api poll timed out after ${API_TIMEOUT_MS / MS_PER_SECOND}s (last status ${status})`,
-      }
-    }
-    await sleep(POLL_INTERVAL_MS)
-  }
+    wc.on('did-finish-load', onReady)
+    wc.on('did-navigate', onReady)
+    wc.on('destroyed', onDestroyed)
+    onReady() // 首探：覆盖「loadURL 已就绪、初始 did-finish-load 已错过」的窗口
+  })
 }
 
 /** 页面上下文内 fetch 目标 API，返回 HTTP status（异常/非数值归一为 0）。
@@ -216,23 +231,10 @@ async function probeApi(win: BrowserWindow, target: QuotaRefreshTarget): Promise
     const status = await win.webContents.executeJavaScript(expr)
     return typeof status === 'number' ? status : 0
   } catch {
-    // 页面跳转中 / 导航被拦截时 executeJavaScript 会拒绝：本轮按无响应处理，
-    // 轮询自然重试（下一轮页面稳定后恢复）
+    // 页面跳转中 / 导航被拦截时 executeJavaScript 会拒绝：本次按无响应处理，
+    // 下一个页面事件（导航完成/加载完成）触发重探
     return 0
   }
-}
-
-function safeGetUrl(win: BrowserWindow): string {
-  try {
-    return win.webContents.getURL()
-  } catch {
-    // webContents 已销毁的瞬间 getURL 会抛：按空串处理（不命中任何登录页特征）
-    return ''
-  }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 /** Electron net 错误码 ERR_ABORTED：页面 JS 发起新导航打断初始加载（SSO 链标准形态）。 */
@@ -301,7 +303,8 @@ function siteHostsOf(target: QuotaRefreshTarget): Set<string> {
 /**
  * 登录页判定：loginUrlPatterns 任一命中当前 URL（大小写不敏感）。
  * 与导航白名单（isAllowedQuotaRefreshNavigation）语义不同：这里对完整 URL 跑
- * pattern（路径形态 '/login' 在此生效），只用于「是否转可见」判定，不放行任何导航。
+ * pattern（路径形态 '/login' 在此生效），只用于登录态失效确证（确定性失败收尾判定），
+ * 不放行任何导航。
  */
 export function isQuotaRefreshLoginUrl(url: string, target: QuotaRefreshTarget): boolean {
   return target.loginUrlPatterns.some((p) => new RegExp(p, 'i').test(url))

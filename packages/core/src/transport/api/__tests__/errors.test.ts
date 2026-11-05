@@ -27,16 +27,15 @@ import * as terminal from '../domains/terminal'
 import * as tts from '../domains/tts'
 import * as usage from '../domains/usage'
 import * as workspace from '../domains/workspace'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 
-const mockCommand = vi.fn<(type: string, payload: unknown, timeoutMs?: number) => Promise<Record<string, unknown>>>()
+const mockCommand = vi.fn<(type: string, payload: unknown) => Promise<Record<string, unknown>>>()
 /** events mock：捕获 handler 供测试手动派发消息（模拟 server-push） */
 const mockOn = vi.fn<(sessionId: string, handler: (msg: unknown) => void) => () => void>()
 const mockOnGlobalType = vi.fn<(type: string, handler: (msg: { payload: unknown }) => void) => () => void>()
 const mockWsSend = vi.fn<(msg: unknown) => boolean>()
 
 vi.mock('../request', () => ({
-  command: (type: string, payload: unknown, timeoutMs?: number) => mockCommand(type, payload, timeoutMs),
+  command: (type: string, payload: unknown) => mockCommand(type, payload),
 }))
 vi.mock('../events', () => ({
   on: (sessionId: string, handler: (msg: unknown) => void) => mockOn(sessionId, handler),
@@ -68,18 +67,18 @@ describe("domains", () => {
         totalTurnsEstimate: 42,
       })
       const r = await chat.getHistory('s1')
-      expect(mockCommand).toHaveBeenCalledWith('session.history', { sessionId: 's1' }, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenCalledWith('session.history', { sessionId: 's1' })
       expect(r).toEqual({ messages: [{ id: 'm1' }], truncated: true, loadedTurns: 20, totalTurnsEstimate: 42 })
     })
 
     it('[u6] getHistory 游标翻页：query 透传（cursor/limitTurns/maxBytes，缺省键不带）', async () => {
       mockCommand.mockResolvedValue({ messages: [], truncated: false, loadedTurns: 0, totalTurnsEstimate: 0 })
       await chat.getHistory('s1', { cursor: 'entry-9' })
-      expect(mockCommand).toHaveBeenLastCalledWith('session.history', { sessionId: 's1', cursor: 'entry-9' }, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenLastCalledWith('session.history', { sessionId: 's1', cursor: 'entry-9' })
       await chat.getHistory('s1', { cursor: 'entry-9', limitTurns: 5, maxBytes: 1024 })
-      expect(mockCommand).toHaveBeenLastCalledWith('session.history', { sessionId: 's1', cursor: 'entry-9', limitTurns: 5, maxBytes: 1024 }, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenLastCalledWith('session.history', { sessionId: 's1', cursor: 'entry-9', limitTurns: 5, maxBytes: 1024 })
       await chat.getHistory('s1')
-      expect(mockCommand).toHaveBeenLastCalledWith('session.history', { sessionId: 's1' }, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenLastCalledWith('session.history', { sessionId: 's1' })
     })
 
     it('send 无 images 时 payload 不带 images 键', async () => {
@@ -99,25 +98,21 @@ describe("domains", () => {
     // u5a 退役（u3b 统一 submit 化后零活调用方；协议条目存续原因见 shared/protocol.ts u5a 裁决）。
     it('abort 走对应 type', async () => {
       await chat.abort('s1')
-      expect(mockCommand.mock.calls[0]).toEqual(['message.abort', { sessionId: 's1' }, RPC_BACKSTOP_TIMEOUT_MS])
+      expect(mockCommand.mock.calls[0]).toEqual(['message.abort', { sessionId: 's1' }])
     })
 
-    it('compactBackground 受理档超时 = RPC_BACKSTOP_TIMEOUT_MS（触发即回执，压缩全程不占请求窗口）', async () => {
+    it('compactBackground 触发即回执（压缩全程不占请求窗口）', async () => {
       await chat.compactBackground('s1', 'instr')
-      const [type, payload, timeout] = mockCommand.mock.calls[0]
+      const [type, payload] = mockCommand.mock.calls[0]
       expect(type).toBe('session.compactBackground')
       expect(payload).toEqual({ sessionId: 's1', customInstructions: 'instr' })
-      // 受理型回执走普通 RPC backstop 档（65s）——旧 30min 压缩墙钟随同步链退役
-      expect(timeout).toBe(65_000)
     })
 
-    it('bash：excludeFromContext 未传时不带该键，传了透传；超时用 BASH 档', async () => {
+    it('bash：excludeFromContext 未传时不带该键，传了透传', async () => {
       await chat.bash('s1', 'ls')
       expect(mockCommand.mock.calls[0][1]).toEqual({ sessionId: 's1', command: 'ls' })
       await chat.bash('s1', 'ls', true)
       expect(mockCommand.mock.calls[1][1]).toEqual({ sessionId: 's1', command: 'ls', excludeFromContext: true })
-      // 钉字面毫秒值（BASH_RPC_TIMEOUT_MS 3_600_000 + RENDERER_RPC_MARGIN_MS 60_000），同上防镜像互证
-      expect(mockCommand.mock.calls[1][2]).toBe(3_660_000)
     })
 
     it('bash 回执契约（dmg-r1-2）：回执透传；未送达错误翻译为 rejected 回执；其余 reject 原样抛出', async () => {
@@ -143,7 +138,6 @@ describe("domains", () => {
       const r = await chat.submitDelivery('s1', 'hi', 'u-x')
       expect(mockCommand.mock.calls[0][0]).toBe('delivery.submit')
       expect(mockCommand.mock.calls[0][1]).toEqual({ sessionId: 's1', content: 'hi', clientUuid: 'u-x' })
-      expect(mockCommand.mock.calls[0][2]).toBe(RPC_BACKSTOP_TIMEOUT_MS)
       expect(r).toEqual({ clientUuid: 'u-x', state: 'in-flight', lane: 'direct' })
       const images = [{ data: 'abc', mimeType: 'image/png' }]
       await chat.submitDelivery('s1', 'hi', 'u-x', images)
@@ -153,12 +147,12 @@ describe("domains", () => {
     it('delivery.cancel / drain / resync 走对应 type + payload 形状', async () => {
       mockCommand.mockImplementation(async () => ({ sessionId: 's1', entries: [] }))
       await chat.cancelDelivery('s1', 'u-x')
-      expect(mockCommand.mock.calls[0]).toEqual(['delivery.cancel', { sessionId: 's1', clientUuid: 'u-x' }, RPC_BACKSTOP_TIMEOUT_MS])
+      expect(mockCommand.mock.calls[0]).toEqual(['delivery.cancel', { sessionId: 's1', clientUuid: 'u-x' }])
       await chat.drainDelivery('s1')
       expect(mockCommand.mock.calls[1][0]).toBe('delivery.drain')
       expect(mockCommand.mock.calls[1][1]).toEqual({ sessionId: 's1' })
       await chat.resyncDelivery('s1', ['u-a', 'u-b'])
-      expect(mockCommand.mock.calls[2]).toEqual(['delivery.resync', { sessionId: 's1', clientUuids: ['u-a', 'u-b'] }, RPC_BACKSTOP_TIMEOUT_MS])
+      expect(mockCommand.mock.calls[2]).toEqual(['delivery.resync', { sessionId: 's1', clientUuids: ['u-a', 'u-b'] }])
     })
 
     it('streamSubscribe 经 events.on 注册并返回其取消函数', () => {
@@ -183,7 +177,7 @@ describe("domains", () => {
     it('getFileCandidates 走 file.search 并解包 files', async () => {
       mockCommand.mockResolvedValue({ files: [{ path: 'a.ts' }] })
       const r = await composer.getFileCandidates('s1')
-      expect(mockCommand).toHaveBeenCalledWith('file.search', { sessionId: 's1' }, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenCalledWith('file.search', { sessionId: 's1' })
       expect(r).toEqual([{ path: 'a.ts' }])
     })
 
@@ -365,14 +359,14 @@ describe("domains", () => {
     it('listModels 请求-响应兜底解包 models', async () => {
       mockCommand.mockResolvedValueOnce({ models: [{ id: 'm1' }] })
       await expect(model.listModels()).resolves.toEqual([{ id: 'm1' }])
-      expect(mockCommand).toHaveBeenCalledWith('model.list', {}, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenCalledWith('model.list', {})
     })
 
     it('switchModel 透传 sessionId/provider/modelId 并原样返回回执', async () => {
       const reply = { sessionId: 's1', provider: 'p', modelId: 'm' }
       mockCommand.mockResolvedValueOnce(reply)
       await expect(model.switchModel('s1', 'p' as never, 'm')).resolves.toEqual(reply)
-      expect(mockCommand).toHaveBeenCalledWith('model.switch', { sessionId: 's1', provider: 'p', modelId: 'm' }, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenCalledWith('model.switch', { sessionId: 's1', provider: 'p', modelId: 'm' })
     })
   })
 
@@ -438,7 +432,7 @@ describe("domains", () => {
       const state = { projects: [{ id: 'pj' }] } as never
       mockCommand.mockResolvedValueOnce(state)
       await expect(project.load()).resolves.toEqual(state)
-      expect(mockCommand).toHaveBeenCalledWith('project.load', {}, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenCalledWith('project.load', {})
 
       mockCommand.mockResolvedValueOnce({ state, revision: 1 })
       await expect(project.createProject('n', 0)).resolves.toEqual({ state, revision: 1 })
@@ -496,7 +490,7 @@ describe("domains", () => {
     it('list 解包 groups；create 可选键省略 + 透传', async () => {
       mockCommand.mockResolvedValueOnce({ groups: [{ cwd: '/a' }] })
       await expect(session.list()).resolves.toEqual([{ cwd: '/a' }])
-      expect(mockCommand).toHaveBeenCalledWith('config.sessions', {}, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenCalledWith('config.sessions', {})
       // 仅 cwd：其余可选键全部省略
       mockCommand.mockResolvedValueOnce({ session: { id: 's1' } })
       await expect(session.create('/a')).resolves.toEqual({ id: 's1' })
@@ -517,7 +511,7 @@ describe("domains", () => {
       // 无参 = 全量（与 config.sessions 查询侧同形）
       mockCommand.mockResolvedValueOnce({ groups: [{ cwd: '/a' }] })
       await expect(session.listSessions({})).resolves.toEqual([{ cwd: '/a' }])
-      expect(mockCommand).toHaveBeenCalledWith('session.list', {}, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenCalledWith('session.list', {})
 
       // 显式过滤参数（调用侧显式传参，不依赖无参默认语义——搜索传 surface:'sidebar'、
       // 抽屉传 surface:'btw' + mainSessionId）
@@ -525,7 +519,7 @@ describe("domains", () => {
       await expect(session.listSessions({ surface: 'btw', mainSessionId: 's-main' })).resolves.toEqual([
         { cwd: '/a', sessions: [{ id: 'l1', surface: 'btw' }] },
       ])
-      expect(mockCommand).toHaveBeenLastCalledWith('session.list', { surface: 'btw', mainSessionId: 's-main' }, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenLastCalledWith('session.list', { surface: 'btw', mainSessionId: 's-main' })
     })
 
     it('switchSession / restoreSession / forceQuit / fork', async () => {
@@ -656,15 +650,14 @@ describe("domains", () => {
       expect(mockCommand.mock.calls[1].slice(0, 2)).toEqual(['session.getWorkflowDag', { sessionId: 's1', runId: 'r1' }])
     })
 
-    it('handoff 用 660s 超时；abortHandoff 用 backstop', async () => {
+    it('handoff / abortHandoff 走对应 type + payload 形状', async () => {
       await session.handoff('s1', 'reply-1', { modelOverride: 'p/m' })
       expect(mockCommand.mock.calls[0]).toEqual(['session.handoff', {
         sessionId: 's1', reply: 'reply-1', modelOverride: 'p/m', thinkingOverride: undefined,
-      }, 660_000])
+      }])
 
       await session.abortHandoff('s1')
       expect(mockCommand.mock.calls[1].slice(0, 2)).toEqual(['session.abortHandoff', { sessionId: 's1' }])
-      expect(mockCommand.mock.calls[1][2]).toBe(RPC_BACKSTOP_TIMEOUT_MS)
     })
 
     it('subscribe / unsubscribe', async () => {
@@ -848,7 +841,7 @@ describe("domains", () => {
       const reply = { rows: [], scannedAt: 1, sessionCount: 0, skippedLines: 0 }
       mockCommand.mockResolvedValueOnce(reply)
       await expect(usage.getUsageStats()).resolves.toEqual(reply)
-      expect(mockCommand).toHaveBeenCalledWith('usage.getStats', {}, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenCalledWith('usage.getStats', {})
     })
   })
 
@@ -904,10 +897,10 @@ describe("domains", () => {
     it('quota presets 下发 + models-store watch 开关（W3c/W1 新增 config.* RPC 封装）', async () => {
       mockCommand.mockResolvedValueOnce({ presets: [{ fetcher: 'zhipu', label: 'L', auth: ['api-key'], match: {} }] })
       await expect(config.listQuotaPresets()).resolves.toEqual([{ fetcher: 'zhipu', label: 'L', auth: ['api-key'], match: {} }])
-      expect(mockCommand).toHaveBeenLastCalledWith('config.listQuotaPresets', {}, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenLastCalledWith('config.listQuotaPresets', {})
 
       await expect(config.setProviderCatalogWatch(true)).resolves.toBeUndefined()
-      expect(mockCommand).toHaveBeenLastCalledWith('config.setProviderCatalogWatch', { enable: true }, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenLastCalledWith('config.setProviderCatalogWatch', { enable: true })
     })
 
     it('skill/agent 扫描与检测：解包数组', async () => {
@@ -967,12 +960,12 @@ describe("domains", () => {
       const view = { builtinRules: [{ id: 'b' }], customRules: [{ id: 'c' }] }
       mockCommand.mockResolvedValueOnce(view)
       await expect(config.getRetryRules()).resolves.toEqual(view)
-      expect(mockCommand).toHaveBeenLastCalledWith('config.getRetryRules', {}, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenLastCalledWith('config.getRetryRules', {})
 
       const rules = [{ id: 'probe', name: 'p', verdict: 'retryable', class: 'provider', source: 'custom', match: [{ kind: 'pattern', pattern: 'x' }] }]
       mockCommand.mockResolvedValueOnce(view)
       await expect(config.setRetryRules(rules as never)).resolves.toEqual(view)
-      expect(mockCommand).toHaveBeenLastCalledWith('config.setRetryRules', { customRules: rules }, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenLastCalledWith('config.setRetryRules', { customRules: rules })
     })
 
     it('OAuth：login/cancel/logout/hasOAuth/checkEnvVars', async () => {
@@ -1063,7 +1056,6 @@ describe("domains", () => {
       expect(mockCommand).toHaveBeenCalledWith(
         'config.revealProviderApiKey',
         { providerId: 'p1' },
-        RPC_BACKSTOP_TIMEOUT_MS,
       )
     })
   })
@@ -1190,12 +1182,12 @@ describe("domains", () => {
     it('create：type/payload { mainSid } + reply 全字段透传（sessionId + mainSid + forkState）', async () => {
       mockCommand.mockResolvedValueOnce({ sessionId: 'pi-1', mainSid: 's-main', forkState: 'none' })
       await expect(btw.create('s-main')).resolves.toEqual({ sessionId: 'pi-1', mainSid: 's-main', forkState: 'none' })
-      expect(mockCommand).toHaveBeenCalledWith('btw.create', { mainSid: 's-main' }, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenCalledWith('btw.create', { mainSid: 's-main' })
     })
 
     it('remove：type/payload { sessionId }，ack 型（command 返回 void，完成即 resolve）', async () => {
       await btw.remove('pi-1')
-      expect(mockCommand).toHaveBeenCalledWith('btw.remove', { sessionId: 'pi-1' }, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenCalledWith('btw.remove', { sessionId: 'pi-1' })
     })
   })
 
@@ -1205,12 +1197,12 @@ describe("domains", () => {
       const cfg = { config: { activeProvider: 'minimax', providers: {} } }
       mockCommand.mockResolvedValueOnce(cfg)
       await expect(tts.getConfig()).resolves.toEqual(cfg)
-      expect(mockCommand).toHaveBeenCalledWith('tts.getConfig', {}, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenCalledWith('tts.getConfig', {})
 
       const forms = { forms: { stepfun: { capabilities: {} }, minimax: { capabilities: {} }, mimo: { capabilities: {} } } }
       mockCommand.mockResolvedValueOnce(forms)
       await expect(tts.getCapabilities()).resolves.toEqual(forms)
-      expect(mockCommand).toHaveBeenCalledWith('tts.getCapabilities', {}, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenCalledWith('tts.getCapabilities', {})
     })
 
     it('configure：payload 整对象透传 + 解包 ok/error', async () => {
@@ -1221,20 +1213,20 @@ describe("domains", () => {
       }
       mockCommand.mockResolvedValueOnce({ ok: true, config: { activeProvider: 'minimax', providers: {} } })
       await expect(tts.configure(payload)).resolves.toMatchObject({ ok: true })
-      expect(mockCommand).toHaveBeenCalledWith('tts.configure', payload, RPC_BACKSTOP_TIMEOUT_MS)
+      expect(mockCommand).toHaveBeenCalledWith('tts.configure', payload)
 
       mockCommand.mockResolvedValueOnce({ ok: false, error: 'invalid_payload' })
       await expect(tts.configure({ ...payload, apiKeys: undefined })).resolves.toEqual({ ok: false, error: 'invalid_payload' })
     })
 
-    it('speak：payload 含可选 sessionId 透传；超时传 0（任务级不限时，§7.5 要点 2）', async () => {
+    it('speak：payload 含可选 sessionId 透传', async () => {
       mockCommand.mockResolvedValueOnce({ filePath: '/data/tts-cache/abc.wav' })
       await expect(tts.speak({ sessionId: 's1', text: '你好' })).resolves.toEqual({ filePath: '/data/tts-cache/abc.wav' })
-      expect(mockCommand.mock.calls[0]).toEqual(['tts.speak', { sessionId: 's1', text: '你好' }, 0])
+      expect(mockCommand.mock.calls[0]).toEqual(['tts.speak', { sessionId: 's1', text: '你好' }])
 
       mockCommand.mockResolvedValueOnce({ filePath: '/x.wav' })
       await tts.speak({ text: '设置页测试样句' })
-      expect(mockCommand.mock.calls[1]).toEqual(['tts.speak', { text: '设置页测试样句' }, 0])
+      expect(mockCommand.mock.calls[1]).toEqual(['tts.speak', { text: '设置页测试样句' }])
     })
   })
 
@@ -1251,7 +1243,6 @@ describe("domains", () => {
       expect(mockCommand).toHaveBeenCalledWith(
         'subagent.setModel',
         { recordId: 'rec-1', provider: 'p', modelId: 'm' },
-        RPC_BACKSTOP_TIMEOUT_MS,
       )
     })
 
@@ -1264,7 +1255,6 @@ describe("domains", () => {
       expect(mockCommand).toHaveBeenCalledWith(
         'subagent.setModel',
         { runId: 'run-1', provider: 'p', modelId: 'm', thinkingLevel: 'high' },
-        RPC_BACKSTOP_TIMEOUT_MS,
       )
     })
   })

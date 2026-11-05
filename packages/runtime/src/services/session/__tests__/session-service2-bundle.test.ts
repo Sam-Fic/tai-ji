@@ -8,7 +8,6 @@ import type { IConfigStore } from '../../ports/config.js';
 import type {IPiEngine, IProcessManager as IProcessManager_z2} from '../../ports/pi-engine.js';
 import type { ISessionStore } from '../../ports/session.js';
 import type { WorkspaceService } from '../../workspace/workspace-service.js';
-import { inflightMirror } from '../inflight-mirror.js';
 import { MessageDispatcher } from '../message-dispatcher.js';
 import { normalizeInactiveSessionFileIfNeeded, streamNormalizeSessionFile, stripSessionEndEntries, applyHeaderCwdFallback, type StreamingNormalizer } from '../restore-seeding.js';
 import { RuntimeCheckpointStore, WRITE_FAILURE_LEDGER_THRESHOLD, WRITE_FAILURE_WARN_INTERVAL_MS, getRuntimeCheckpointStore, initRuntimeCheckpointStore } from '../runtime-checkpoint.js';
@@ -19,7 +18,6 @@ import type { ScannedSession } from '../types.js';
 import {createSetup as createSetup_z2} from './helpers/session-service-setup.js';
 import { CrashJournalWriter, READ_PRECHECK_MAX_BYTES, type CrashJournalEvent, type SessionSummary } from '@taiji/shared';
 import { RUN_CHECKPOINT_FAILED_PREFIX as CHECKPOINT_FAILED_PREFIX, RUN_CHECKPOINT_FAILED_RETENTION as DEFAULT_FAILED_SNAPSHOT_RETENTION, RUN_CHECKPOINT_FILENAME as CHECKPOINT_FILENAME, getDataDir, getSessionPluginDataPath } from '@taiji/shared/paths';
-import type { SubagentInFlightReport } from '@zhushanwen/extension-protocol';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -218,147 +216,6 @@ describe('SessionService × runtime checkpoint（D3 attach/detach/reclaim 挂点
     service.markSessionViewed(SID_m2_m2_m2_m2_z2)
 
     expect(readFileSync(join(runDir, 'runtime-checkpoint.json'), 'utf8')).toBe(before)
-  })
-})
-});
-
-// ======================================================================
-// ← src/services/session/__tests__/session-service-mirror-preset.test.ts
-// ======================================================================
-
-const SID_m2_m2_m2_m2_z3 = 'sid-mirror'
-
-const FORK_SID = 'sid-mirror-fork'
-
-/** 模块级单例逐 sid 隔离清单（对齐 checkpoint store reset 形态）。 */
-const MIRROR_SIDS = [SID_m2_m2_m2_m2_z3, FORK_SID]
-
-
-let runDir_m2_m2_m2_z2: string
-
-
-/** 预置 0 条目的完整形态（新 reporting epoch：inFlight=0 + 未上报 + 未注入）。 */
-const PRESET_ZERO = { injected: false, hasEverReported: false, inFlight: 0 }
-
-
-/** 合法在途帧（SubagentInFlightReport 最小构造，emittedAt 固定值便于断言）。 */
-function report(inFlight: number): SubagentInFlightReport {
-  return { inFlight, emittedAt: 1_700_000_000_000 }
-}
-
-// wave3 包装：本段原文件顶层语句收进 describe 作用域（顶层 hook 不再外溢到同文件其他来源的用例）
-describe('session-service-mirror-preset', () => {
-beforeAll(() => {
-  runDir_m2_m2_m2_z2 = mkdtempSync(join(tmpdir(), 'session-service-mirror-preset-'))
-  initRuntimeCheckpointStore({ dir: runDir_m2_m2_m2_z2 })
-})
-beforeEach(() => {
-  for (const sid of MIRROR_SIDS) inflightMirror.dropSession(sid)
-  getRuntimeCheckpointStore().reset()
-  rmSync(join(runDir_m2_m2_m2_z2, 'runtime-checkpoint.json'), { force: true })
-})
-afterAll(() => {
-  for (const sid of MIRROR_SIDS) inflightMirror.dropSession(sid)
-  rmSync(runDir_m2_m2_m2_z2, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
-})
-describe('SessionService × in-flight mirror（D5 预置 0 / detach / reclaim 生命周期接线）', () => {
-  it('attach：onSessionRegistered 汇聚点预置 0（新 epoch 形态 + errsShape=null 口径）', async () => {
-    const { service } = createSetup()
-
-    await service.initializeManagedSession(SID_m2_m2_m2_m2_z3, {} as unknown as IPiEngine, '/project', 'label', '/project/s.jsonl')
-
-    // 预置形态：inFlight=0 / 未上报 / 未注入（presetZero 不触碰 injected，新条目恒 false）
-    expect(inflightMirror.query(SID_m2_m2_m2_m2_z3)).toEqual(PRESET_ZERO)
-    // errsShape 口径（u7b 语义核实）：未注入 → 判「无在途」（null），不是 'absent-report'
-    expect(inflightMirror.errsShape(SID_m2_m2_m2_m2_z3)).toBeNull()
-  })
-
-  it('absent-report 语义：注入后未收首报 → absent-report；首报到达 → 按 inFlight 判', async () => {
-    const { service } = createSetup()
-    await service.initializeManagedSession(SID_m2_m2_m2_m2_z3, {} as unknown as IPiEngine, '/project', 'label', '/project/s.jsonl')
-
-    // spawn 执行者（u4/u5）按实际注入列表声明注入态（与预置顺序无关，injected 不被抹掉）
-    inflightMirror.setInjected(SID_m2_m2_m2_m2_z3, true)
-    expect(inflightMirror.query(SID_m2_m2_m2_m2_z3)).toEqual({ ...PRESET_ZERO, injected: true })
-    // 已注入且本 epoch 从未上报 → errs 推迟形态（直到首报到达）
-    expect(inflightMirror.errsShape(SID_m2_m2_m2_m2_z3)).toBe('absent-report')
-
-    // 首报（含初始帧）到达 → hasEverReported 置位 → errs 推迟解除，按绝对计数判
-    inflightMirror.applyReport(SID_m2_m2_m2_m2_z3, report(2))
-    expect(inflightMirror.errsShape(SID_m2_m2_m2_m2_z3)).toBeNull()
-    expect(inflightMirror.query(SID_m2_m2_m2_m2_z3)).toMatchObject({ inFlight: 2, hasEverReported: true })
-  })
-
-  it('detach（removeSessionEntry 汇聚点）：条目摘除（query 回 undefined）', async () => {
-    const { service } = createSetup()
-    await service.initializeManagedSession(SID_m2_m2_m2_m2_z3, {} as unknown as IPiEngine, '/project', 'label', '/project/s.jsonl')
-    expect(inflightMirror.query(SID_m2_m2_m2_m2_z3)).toEqual(PRESET_ZERO)
-
-    service.removeSessionEntry(SID_m2_m2_m2_m2_z3)
-
-    expect(inflightMirror.query(SID_m2_m2_m2_m2_z3)).toBeUndefined()
-    expect(inflightMirror.errsShape(SID_m2_m2_m2_m2_z3)).toBeNull()
-  })
-
-  it('respawn 重注册：条目重建为新 reporting epoch（曾上报态不继承）', async () => {
-    const { service } = createSetup()
-    await service.initializeManagedSession(SID_m2_m2_m2_m2_z3, {} as unknown as IPiEngine, '/project', 'label', '/project/s.jsonl')
-    inflightMirror.applyReport(SID_m2_m2_m2_m2_z3, report(3))
-    expect(inflightMirror.query(SID_m2_m2_m2_m2_z3)).toMatchObject({ inFlight: 3, hasEverReported: true })
-
-    // pi 崩死 → detach 摘除 → respawn 成功重注册（同一 registerSession 汇聚点）
-    service.removeSessionEntry(SID_m2_m2_m2_m2_z3)
-    expect(inflightMirror.query(SID_m2_m2_m2_m2_z3)).toBeUndefined()
-    await service.initializeManagedSession(SID_m2_m2_m2_m2_z3, {} as unknown as IPiEngine, '/project', 'label', '/project/s.jsonl')
-
-    // 新 epoch：旧「曾上报」不可继承（inFlight 归零 + hasEverReported 清空）
-    expect(inflightMirror.query(SID_m2_m2_m2_m2_z3)).toEqual(PRESET_ZERO)
-  })
-
-  it('fork：新 sessionId 带血缘参数经同一汇聚点预置，源 session 条目不受影响', async () => {
-    const { service } = createSetup()
-    await service.initializeManagedSession(SID_m2_m2_m2_m2_z3, {} as unknown as IPiEngine, '/project', 'label', '/project/s.jsonl')
-
-    // fork 产物 = 新 sessionId 走 registerSession（parentSession/forkEntryId 血缘形态，
-    // session-lifecycle-register.test.ts 同款基建——fork 全形态经该汇聚点收敛）
-    await service.initializeManagedSession(
-      FORK_SID, {} as unknown as IPiEngine, '/project', 'forked', '/project/f.jsonl',
-      undefined, SID_m2_m2_m2_m2_z3, 'entry-1',
-    )
-
-    expect(inflightMirror.query(FORK_SID)).toEqual(PRESET_ZERO)
-    expect(inflightMirror.query(SID_m2_m2_m2_m2_z3)).toEqual(PRESET_ZERO)
-  })
-})
-describe('injected 接线（D5 ①：registerSession 汇聚点按 spawn 注入列表判定）', () => {
-  it('注入列表含 subagent-workflow：注册即 injected=true → errsShape=absent-report（presetZero 后、首报前）', async () => {
-    const { service } = createSetup()
-
-    // staged 布局（npm 名 pi-subagent-workflow）+ dev 源码目录两种真实路径形态
-    await service.initializeManagedSession(
-      SID_m2_m2_m2_m2_z3, {} as unknown as IPiEngine, '/project', 'label', '/project/s.jsonl',
-      undefined, undefined, undefined, undefined,
-      ['/apps/electron/resources/extensions/@zhushanwen/pi-subagent-workflow', '/repo/extensions/universal/subagent-workflow'],
-    )
-
-    // 同一注册汇聚点双写：presetZero（订阅体）置新 epoch + injected（registerSession
-    // 体内）置 true——顺序无关，presetZero 不触碰 injected
-    expect(inflightMirror.query(SID_m2_m2_m2_m2_z3)).toEqual({ ...PRESET_ZERO, injected: true })
-    // 已注入且本 epoch 从未上报 → errs 推迟形态（rolling-restart 的 absent-report 判别）
-    expect(inflightMirror.errsShape(SID_m2_m2_m2_m2_z3)).toBe('absent-report')
-  })
-
-  it('注入列表不含 subagent-workflow：injected=false → errsShape 保持 null（判「无在途」，非 errs）', async () => {
-    const { service } = createSetup()
-
-    await service.initializeManagedSession(
-      SID_m2_m2_m2_m2_z3, {} as unknown as IPiEngine, '/project', 'label', '/project/s.jsonl',
-      undefined, undefined, undefined, undefined,
-      ['/apps/electron/resources/extensions/@zhushanwen/pi-session-manager', '/repo/extensions/universal/plan'],
-    )
-
-    expect(inflightMirror.query(SID_m2_m2_m2_m2_z3)).toEqual(PRESET_ZERO)
-    expect(inflightMirror.errsShape(SID_m2_m2_m2_m2_z3)).toBeNull()
   })
 })
 });

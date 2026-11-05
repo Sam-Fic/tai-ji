@@ -8,7 +8,7 @@
  * core/src/domain/chat/__tests__/lifecycle-effects.test.ts 全覆盖）；本文件锁定：
  * - 桌面壳扩展四项接线：① extensionUIStore.clearSession（D6b/M8 清挂起弹窗分区）
  *   ② toast（首行 reason）③ 强杀分流（consumeForcedExit 命中 → 不进恢复窗口不建订阅）
- *   ④ respawn 过渡态及其回收（markRespawnPending / 30s timer / restored·熔断收尾）
+ *   ④ respawn 过渡态及其回收（markRespawnPending / restored·熔断收尾）
  * - factory 原语透传：exited → markSessionDead 序列入参；restored/restoreFailed 回调转发
  * - 恢复窗口订阅经 factory（subscribe RPC 经 setSubscriptionPorts 捕获，壳不直调 subscribeSession）
  * - 非 lifecycle 回调：onMessageComplete → focusedSid + handleCompletion；onSubagents →
@@ -157,40 +157,6 @@ describe('createInboundEffects（§11.4 InboundEffects 接线）', () => {
     expect(storeMocks.markSessionError).toHaveBeenCalledWith('s1', 'force quit')
     expect(storeMocks.clearSession).toHaveBeenCalledWith('s1')
     expect(storeMocks.toastError).toHaveBeenCalledTimes(1)
-  })
-
-  it('[D5 接线] 意外退出 → 进 respawnPending 过渡态（壳扩展④），30s 无收尾事件则超时回收', () => {
-    vi.useFakeTimers()
-    try {
-      storeMocks.isRespawnPending.mockReturnValue(true)
-      effects.onSessionExited!('s1', { code: 1, reason: 'crashed' })
-
-      expect(storeMocks.markRespawnPending).toHaveBeenCalledWith('s1')
-      expect(storeMocks.clearRespawnPending).not.toHaveBeenCalled()
-
-      vi.advanceTimersByTime(30_000)
-
-      // 仍 pending → 超时切回终态 dead 页（保留「重新打开」出口）
-      expect(storeMocks.clearRespawnPending).toHaveBeenCalledWith('s1')
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('[D5 接线] 连续 exited 不重置计时窗口（幂等：仅挂一个 30s timer，首个到期回收）', () => {
-    vi.useFakeTimers()
-    try {
-      storeMocks.isRespawnPending.mockReturnValue(true)
-      effects.onSessionExited!('s1', { code: 1, reason: 'crashed' })
-      effects.onSessionExited!('s1', { code: 1, reason: 'crashed again' })
-
-      vi.advanceTimersByTime(30_000)
-
-      // 第二次 exited 未另挂 timer → 只有首窗口到期的一次回收
-      expect(storeMocks.clearRespawnPending).toHaveBeenCalledTimes(1)
-    } finally {
-      vi.useRealTimers()
-    }
   })
 
   it('onSessionRestored → 收尾过渡态（clearRespawnPending）+ core 序列经 factory（revive + restored 提示条 + 重订阅）', async () => {

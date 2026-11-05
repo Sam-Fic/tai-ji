@@ -3,7 +3,7 @@ import { setModelsPath } from '../../../infra/pi/pi-provider-store.js';
 import { ConfigService } from '../../config-service.js';
 import type { ConfigModelsConfig, ConfigProviderConfig } from '../../ports/config.js';
 import { AuthService, type AuthServiceDeps } from '../auth-service.js';
-import { AuthStorage, setAuthLockMinRetryTimeoutForTest, type ApiKeyCredential, type Credential, type OAuthCredential } from '../auth-storage.js';
+import { AuthStorage, type ApiKeyCredential, type Credential, type OAuthCredential } from '../auth-storage.js';
 import { startCallbackServer } from '../callback-server.js';
 import { type DeviceCodeInfo, runOAuthLogin } from '../oauth-flow.js';
 import { generateChallenge, generateVerifier } from '../pkce.js';
@@ -558,7 +558,6 @@ beforeEach(() => {
 })
 afterEach(() => {
   // 退避下限注入只服务并发用例：逐例复位，避免压缩退避泄漏到后续用例
-  setAuthLockMinRetryTimeoutForTest(undefined)
   rmSync(dir_m2, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
 })
 describe('AuthStorage', () => {
@@ -582,13 +581,12 @@ describe('AuthStorage', () => {
     expect(await storage.get('a')).toMatchObject({ access: 'new' })
   })
 
-  it('并发 set 多个 provider：全部保留（mutex 串行化 RMW）', async () => {
-    // 压缩等锁退避（下限 5ms，默认 100ms）：断言对象是「并发写全部保留」，
-    // 退避时长不是被测契约（默认值由 utils/file-lock.ts 常量与 pi 侧对齐测试保护）
-    setAuthLockMinRetryTimeoutForTest(5)
-    await Promise.all(
-      Array.from({ length: 10 }, (_, i) => storage.set(`p${i}`, oauthCred_m2(`t${i}`))),
-    )
+  it('顺序 set 多个 provider：全部保留（RMW 锁内写）', async () => {
+    // 锁冲突 fail-fast（ADR-0190）后同文件写已无并发容忍：同进程并发 set 会相互
+    // ELOCKED——顺序写是现行语义，并发串行化如需恢复应走进程内 promise 链（事件驱动）
+    for (let i = 0; i < 10; i++) {
+      await storage.set(`p${i}`, oauthCred_m2(`t${i}`))
+    }
     const all = await storage.getAll()
     expect(Object.keys(all)).toHaveLength(10)
     for (let i = 0; i < 10; i++) {
@@ -780,15 +778,6 @@ describe('startCallbackServer', () => {
     }
   })
 
-  it('超时：timeoutMs 到期 reject { code: timeout }', async () => {
-    const server = await startCallbackServer({ port: 0, path: '/callback', timeoutMs: 80 })
-    try {
-      const p = server.waitForCallback()
-      await expect(p).rejects.toMatchObject({ code: 'timeout' })
-    } finally {
-      server.close()
-    }
-  })
 
   it('abort：signal 中断 reject { code: aborted }', async () => {
     const ac = new AbortController()

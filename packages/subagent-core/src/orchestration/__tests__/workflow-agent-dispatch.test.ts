@@ -39,11 +39,7 @@ const { loggerMock } = vi.hoisted(() => ({
 }));
 vi.mock("../../core/logger.ts", () => ({ getLogger: () => loggerMock }));
 
-import { EngineSdkError, HOST_TIMEOUT_ABORT_REASON } from "@zhushanwen/subagent-engine-sdk";
-import {
-  hostTimeoutFailureCause,
-  yieldsToTimeoutFact,
-} from "../../execution/service/workflow-dispatch.ts";
+import { EngineSdkError } from "@zhushanwen/subagent-engine-sdk";
 import { trySettleLegacyClosed } from "../../execution/persistence/execution-record.ts";
 import { createRecord } from "../../execution/persistence/execution-record.ts";
 import { createNotifyHost } from "../../execution/notify/notify-host.ts";
@@ -550,81 +546,6 @@ describe("one-shot 轮收条事实透传（settle 调用点 → markRoundIdle）
 // （harness.timeout——F1-37：timeoutMs 到期的事实只有宿主持有，结算点改判）
 // ============================================================
 
-describe("宿主超时轮失败分类（harness.timeout）", () => {
-  it("纯函数：仅 reason 命中超时标记才产分类；provider/agent 事实不被覆盖（user/engine/未分类被覆盖）", () => {
-    const noError = { content: "", engineId: "pi" };
-    // 未超时收敛（外部 cancel / 正常应答）→ undefined（分类事实交还引擎收条）。
-    expect(hostTimeoutFailureCause(undefined, noError)).toBeUndefined();
-    expect(hostTimeoutFailureCause("user-cancel", noError)).toBeUndefined();
-    // 命中：raw 取引擎错误原文（分类不丢原文）；无原文时落超时事实 + 恢复动作。
-    expect(hostTimeoutFailureCause(HOST_TIMEOUT_ABORT_REASON, { content: "", engineId: "pi", error: "engine run aborted" })).toEqual({
-      class: "harness",
-      kind: "timeout",
-      retryable: false,
-      raw: "engine run aborted",
-    });
-    expect(hostTimeoutFailureCause(HOST_TIMEOUT_ABORT_REASON, noError)?.raw).toContain("timeoutMs");
-
-    expect(yieldsToTimeoutFact(undefined)).toBe(true);
-    expect(yieldsToTimeoutFact({ class: "user", kind: "cancelled", retryable: false, raw: "r" })).toBe(true);
-    expect(yieldsToTimeoutFact({ class: "engine", kind: "engine_aborted", retryable: false, raw: "r" })).toBe(true);
-    // §3.3.2 cause 优先级：provider/agent 是更高优先级事实，不被宿主超时分类覆盖。
-    expect(yieldsToTimeoutFact({ class: "provider", kind: "rate_limited", retryable: "conditional", raw: "r" })).toBe(false);
-    expect(yieldsToTimeoutFact({ class: "agent", kind: "no_deliverable", retryable: false, raw: "r" })).toBe(false);
-  });
-
-  it("接线：timeoutMs 到期（fake timers 确定性触发）→ 超时轮结清失败分类 harness.timeout（引擎中性误判被宿主改判）", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      const { service, store, fake } = makeHarness();
-      const pending = service.executeWorkflowAgent(baseOpts({ timeoutMs: 50 }), "run-timeout");
-      await flush();
-      const run = soleRun(fake);
-      const record = runningRecord(store);
-
-      vi.advanceTimersByTime(50); // 超时 abort 定时器到期（reason = 超时标记）
-      expect(run.ctx.signal?.aborted).toBe(true);
-      expect(run.ctx.signal?.reason).toBe(HOST_TIMEOUT_ABORT_REASON);
-
-      // 引擎收条事实保持原样：引擎按 aborted 记 user.cancelled（缺超时事实的中性误判）。
-      run.settle({
-        content: "",
-        error: "engine run aborted",
-        failure: { class: "user", kind: "cancelled", retryable: false, raw: "aborted" },
-      });
-      const result = await pending;
-
-      // 宿主改判：回脚本结果与 record 结算同判 harness.timeout（§3.3.6 超时轮失败结清）。
-      expect(result.failure).toEqual({
-        class: "harness",
-        kind: "timeout",
-        retryable: false,
-        raw: "engine run aborted",
-      });
-      expect(record.agentResult?.failure).toEqual(result.failure);
-      expect(record.outcome).toBe("failed");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("负向：未超时收敛（无 timeoutMs）→ 分类事实交还引擎收条（不产生 harness.timeout）", async () => {
-    const { service, fake } = makeHarness();
-    const pending = service.executeWorkflowAgent(baseOpts(), "run-no-timeout");
-    await flush();
-    soleRun(fake).settle({
-      content: "",
-      error: "engine run aborted",
-      failure: { class: "user", kind: "cancelled", retryable: false, raw: "aborted" },
-    });
-    const result = await pending;
-    expect(result.failure).toEqual({ class: "user", kind: "cancelled", retryable: false, raw: "aborted" });
-  });
-});
-
-// ============================================================
-// 4.5 [H2 A3] live usage 喂入（fake engine 事件 → record.totalTokens/turns 保真）
-// ============================================================
 
 describe("executeWorkflowAgent live usage 喂入（H2 A3）", () => {
   it("fake engine message_end(usage) 事件 → live record 实时累积，终态 entry 落盘保真", async () => {

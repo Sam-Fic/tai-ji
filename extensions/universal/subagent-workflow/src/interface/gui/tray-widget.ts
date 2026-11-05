@@ -244,8 +244,7 @@ export function buildSubagentTrayWidget(
 /**
  * subagent 托盘 widget 推送器。attach = 订阅 record 变更 + 初始推送（collectRecords
  * 磁盘重建覆盖冷读）；detach = 取消订阅。推送失败首败 warn 留痕（不重试——下一次
- * onChange 事件驱动重推，绝对投影语义下任何一帧成功即整镜恢复，inflight reporter
- * 的 dirty 重推同款方向）。
+ * onChange 事件驱动重推，绝对投影语义下任何一帧成功即整镜恢复）。
  *
  * ctx 为 null 期间（attach 前 / detach 后）push 为 no-op；getSubagentService() 为
  * null（session_start 装配链之前）不订阅——attach 调用点在 setupSessionLifecycle

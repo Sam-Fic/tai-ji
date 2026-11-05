@@ -12,7 +12,7 @@
 //   ExtensionContext，共享 entries 数组 = session JSONL 的单测层镜像（appendEntry
 //   mock 同步入账）
 // - 覆盖（任务书目标 6）：lifetime 排除生效 / 跨 session 残留反向断言 / 未知 id
-//   errors / 第四态返回形态；另覆盖 sequential 声明、abort 正常返回、timeout、
+//   errors / 第四态返回形态；另覆盖 sequential 声明、abort 正常返回、
 //   in-push-pipeline note、快照重收、port 缺席降级、kind 落盘透传、等待中同步到达
 //   的 outcome 回填（一致性修复 U1：managed 合批「deliver 先于注销」同步段时序）
 
@@ -480,42 +480,6 @@ describe("collect_results tool", () => {
 			{ id: "mf-1", type: "workflow", outcome: "cancelled", content: "payload-mf-1" },
 			{ id: "nil-1", type: "workflow", outcome: undefined, content: "payload-nil-1" },
 		]);
-	});
-
-	it("超时路径：已收部分进 collected、未完成进 stillOpen（诚实返回，不抛错）", async () => {
-		setup.entries.push(makeRegisterEntry("fast"), makeRegisterEntry("slow"));
-		setup.port.collectArm.mockReturnValue([
-			{ id: "fast", state: "waiting" },
-			{ id: "slow", state: "waiting" },
-		]);
-
-		const promise = runCollect(setup, { timeout_ms: 5_000 });
-		const arrivalCb = setup.port.onCollectArrival.mock.calls[0][0] as () => void;
-		setup.port.consume
-			.mockReturnValueOnce([{ id: "fast", content: "fast done" }])
-			.mockReturnValue([]);
-
-		arrivalCb(); // fast 到达，slow 仍等
-		await vi.advanceTimersByTimeAsync(5_000);
-		const res = await promise;
-
-		expect(res.details.collected).toEqual([{ id: "fast", type: "workflow", content: "fast done" }]);
-		expect(res.details.stillOpen).toEqual([{ id: "slow" }]);
-		expect(setup.port.collectRelease).toHaveBeenCalledTimes(1);
-	});
-
-	it("timeout_ms 缺省 = 3_600_000（量级决策 §3.3：缺省 1h 前不判超时）", async () => {
-		setup.entries.push(makeRegisterEntry("w-1"));
-		setup.port.collectArm.mockReturnValue([{ id: "w-1", state: "waiting" }]);
-
-		const promise = runCollect(setup, {});
-		await vi.advanceTimersByTimeAsync(3_599_999);
-		// 最后一毫秒之前：缺省超时 timer 仍在（未判超时）
-		expect(vi.getTimerCount()).toBe(1);
-
-		await vi.advanceTimersByTimeAsync(1);
-		const res = await promise;
-		expect(res.details.stillOpen).toEqual([{ id: "w-1" }]);
 	});
 
 	it("abort 捕获后正常 return（禁抛错路径）：已收部分返回、未收进 stillOpen", async () => {

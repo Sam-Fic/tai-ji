@@ -42,10 +42,9 @@ function makeRunningRun(
       args: {},
       scriptName: "w",
       scriptPath: "",
-      ...(opts.budgetTimeMs !== undefined ? { budgetTimeMs: opts.budgetTimeMs } : {}),
     },
     {
-      budget: new Budget(opts.budgetTimeMs !== undefined ? { maxTimeMs: opts.budgetTimeMs } : {}),
+      budget: new Budget({}),
       calls: new Map(),
       trace: new Trace(),
       errorLogs: [],

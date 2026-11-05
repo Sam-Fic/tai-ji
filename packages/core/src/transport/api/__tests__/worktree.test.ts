@@ -1,16 +1,15 @@
 /**
- * worktree 域薄封装单测 —— 验证 RPC type / payload 形状 + RPC_BACKSTOP_TIMEOUT_MS 超时取值。
+ * worktree 域薄封装单测 —— 验证 RPC type / payload 形状。
  * mock 链路同 domains.test.ts（vi.mock '../request'，模块 ID 与 domains/worktree.ts 内部 import 一致）。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const mockCommand = vi.fn<(type: string, payload: unknown, timeoutMs?: number) => Promise<Record<string, unknown>>>()
+const mockCommand = vi.fn<(type: string, payload: unknown) => Promise<Record<string, unknown>>>()
 vi.mock('../request', () => ({
-  command: (type: string, payload: unknown, timeoutMs?: number) => mockCommand(type, payload, timeoutMs),
+  command: (type: string, payload: unknown) => mockCommand(type, payload),
 }))
 
 import { worktreeApi } from '../domains/worktree'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -23,9 +22,8 @@ describe('worktree 域 RPC 封装', () => {
     mockCommand.mockResolvedValue(reply)
     const params = { branch: 'feat-x', baseBranch: 'main', workspaceHint: 'dev' }
     const r = await worktreeApi.create(params)
-    // create 是长任务（git add + setup 脚本 + 失败回滚），显式传长任务校准超时 600s
-    // 而非控制范围 65s 兜底——详见 domains/worktree.ts 的 WORKTREE_CREATE_RPC_TIMEOUT_MS 注释
-    expect(mockCommand).toHaveBeenCalledWith('worktree.create', params, 600_000)
+    // create 是长任务（git add + setup 脚本 + 失败回滚），等待挂到 runtime 回执或断连收尾，无超时
+    expect(mockCommand).toHaveBeenCalledWith('worktree.create', params)
     expect(r).toEqual(reply)
   })
 
@@ -33,7 +31,7 @@ describe('worktree 域 RPC 封装', () => {
     const reply = { branches: [], defaultBranch: 'main' }
     mockCommand.mockResolvedValue(reply)
     const r = await worktreeApi.listBranches('/ws/root')
-    expect(mockCommand).toHaveBeenCalledWith('worktree.listBranches', { cwd: '/ws/root' }, RPC_BACKSTOP_TIMEOUT_MS)
+    expect(mockCommand).toHaveBeenCalledWith('worktree.listBranches', { cwd: '/ws/root' })
     expect(r).toEqual(reply)
   })
 
@@ -41,7 +39,7 @@ describe('worktree 域 RPC 封装', () => {
     const reply = { worktrees: [] }
     mockCommand.mockResolvedValue(reply)
     const r = await worktreeApi.list('/ws/root')
-    expect(mockCommand).toHaveBeenCalledWith('worktree.list', { cwd: '/ws/root' }, RPC_BACKSTOP_TIMEOUT_MS)
+    expect(mockCommand).toHaveBeenCalledWith('worktree.list', { cwd: '/ws/root' })
     expect(r).toEqual(reply)
   })
 })

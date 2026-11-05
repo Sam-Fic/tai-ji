@@ -120,7 +120,7 @@ const enginesChannels: SessionChannel[] = [];
 afterEach(async () => {
   const conns = CONNECTIONS.splice(0);
   for (const conn of conns) conn.close(); // 同步 SIGTERM 面快速收割；shutdown 幂等收尸
-  await Promise.allSettled(conns.map((c) => c.shutdown({ graceMs: 1_000 })));
+  await Promise.allSettled(conns.map((c) => c.shutdown()));
   for (const ch of enginesChannels.splice(0)) ch.dispose();
 });
 
@@ -345,13 +345,6 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
     expect(new Set(ids).size).toBe(3);
     expect([...ids].sort((x, y) => x - y)).toEqual([1, 2, 3]);
   });
-
-  it("超时预算参数化：小预算 reject 超时，pending 清理后后续请求正常", async () => {
-    const { conn } = makeConnection();
-    await expect(conn.request("test/delay-echo", { delayMs: 5_000 }, { timeoutMs: 120 })).rejects.toThrow(/超时/);
-    const r = await conn.request("test/echo", { after: "timeout" });
-    expect(r).toEqual({ after: "timeout" });
-  }, 10_000);
 });
 
 // ------------------------------------------- 反向请求应答（D9）
@@ -516,7 +509,7 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
   it("shutdown()：杀链走完进程退出；幂等；之后首个请求自动重建（不变量 4：与崩溃重建同路径）", async () => {
     const { conn, stateFile } = makeConnection();
     await conn.request("test/echo", {});
-    await conn.shutdown({ graceMs: 1_500 });
+    await conn.shutdown();
     await conn.shutdown();
     expect(await waitFor(() => !conn.alive)).toBe(true);
     const r = await conn.request("test/echo", { reborn: true });
@@ -548,10 +541,10 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
     const { conn } = makeConnection();
     expect(typeof conn.post).toBe("function");
     expect(conn.post("session/close", { sessionId: "sess_x" })).toBe(true);
-    await conn.shutdown({ graceMs: 1_000 });
+    await conn.shutdown();
     // 死连接：ensureStarted 重建一代（D1 重建语义）→ post 复又可用；不抛即可
     expect(typeof conn.post("session/close", { sessionId: "sess_x" })).toBe("boolean");
-    await conn.shutdown({ graceMs: 1_000 });
+    await conn.shutdown();
   }, 10_000);
 });
 

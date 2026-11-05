@@ -29,7 +29,6 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 import { clearConfigCache } from "@zhushanwen/pi-llm-shared";
 
 import { createBashOverrideToolDefinition } from "../bash-tool.ts";
-import { clearExitWatchesForTest } from "../background/exit-watch.ts";
 import { resetNotifyForTest } from "../background/notify.ts";
 import { clearTaskStoreForTest, getAllTasks } from "../background/task-store.ts";
 import { isSubagentProcess } from "../background/subagent-guard.ts";
@@ -91,7 +90,6 @@ describe("A6: subagent in-process mechanisms all off (断言 #7)", () => {
 	});
 
 	afterEach(() => {
-		clearExitWatchesForTest();
 		clearTaskStoreForTest();
 		resetNotifyForTest();
 		agentDirRef.dir = "/tmp/bte-fake-agent-dir";

@@ -55,7 +55,7 @@ function budgetFields(opts: ExecuteOptions): Partial<AgentCallOpts> {
   };
 }
 
-/** 运行载体字段（fork 族 / worktree / cwd / idleTimeoutMs 同名透传）。 */
+/** 运行载体字段（fork 族 / worktree / cwd 同名透传）。 */
 function deliveryFields(opts: ExecuteOptions): Partial<AgentCallOpts> {
   return {
     ...(opts.fork !== undefined ? { fork: opts.fork } : {}),
@@ -65,6 +65,5 @@ function deliveryFields(opts: ExecuteOptions): Partial<AgentCallOpts> {
     ...(opts.forkFromSessionFile !== undefined ? { forkSource: opts.forkFromSessionFile } : {}),
     ...(opts.worktree !== undefined ? { worktree: opts.worktree } : {}),
     ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
-    ...(opts.idleTimeoutMs !== undefined ? { idleTimeoutMs: opts.idleTimeoutMs } : {}),
   };
 }

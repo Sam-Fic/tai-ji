@@ -15,30 +15,17 @@
  *    - ELECTRON_RUN_AS_NODE=1 仅打包模式
  *    - TAIJI_AGENT_PACKAGED / TAIJI_AGENT_DATA_DIR / TAIJI_AGENT_PORT_OFFSET 必须透传（实例隔离）
  *
- * 3. **stop() 时序（最危险路径，跨 SIGTERM/SIGKILL + 进程树）**：
+ * 3. **stop() 时序（跨进程树）**：
  *    ```
- *    T0: 记录 descendantPids ← [HISTORICAL] 必须在 SIGTERM 前！
- *        原因：runtime 退出后 pi 的 PPID 变为 1，pgrep -P 查不到
+ *    T0: 记录 descendantPids（必须在发信号前——runtime 退出后 pi 的 PPID 变为 1，pgrep -P 查不到）
  *    T1: child.kill('SIGTERM')
- *    T2: 等 child 'exit' 事件 或 timeout(STOP_TIMEOUT_MS=2000)
- *         ├─ exit 先到 → done():
- *         │    ├─ SIGTERM 残留后代（pi 等）
- *         │    ├─ sleep(KILL_WAIT_MS=200ms) 同步等待
- *         │    └─ SIGKILL 仍残留的后代
- *         └─ timeout 先到 → killProcessTree(倒序: 孙→子→根) → done()
- *    T3: done(): 清 child/port=null，resolve
+ *    T2: 立即 SIGKILL 整棵进程树（倒序：孙→子→根，无等待窗）
+ *    T3: 等 child 'exit' 事件（进程死亡的权威信号）→ flush stderr sink → resolve
  *    ```
  *
- * 4. **PID 复用防护**：done() 在 SIGTERM 后才补 SIGKILL 残留后代，
- *    避免异步 setTimeout 在 resolve 后误杀 PID 复用的新进程。
+ * 4. 进程树 kill 顺序：先杀后代（倒序：孙→子），再杀根。
  *
- * 5. 进程树 kill 顺序：先杀后代（倒序：孙→子），再杀根。
- *
- * 6. Windows 用 taskkill /PID /T /F 原子终止整棵进程树；Unix 保留上述信号时序。
- *    判死处置（liveness 强杀）走 scope='process-only'：只终止 runtime 自身，不枚举
- *    不杀后代（pi 子进程独立存活，由 runtime 的 startup-reattach 编排接管——projection
- *    一致性设计 D4）；taskkill 单进程变体（不带 /T）由本文件承载，树变体在
- *    windows-process.ts。'process-tree'（缺省）保留给 app 退出与启动失败清理路径。
+ * 5. Windows 用 taskkill /PID /T /F 原子终止整棵进程树；Unix 保留上述信号时序。
  *
  * 依赖方向：process-control → node:child_process + safe-env + windows-process + electron(app)
  */
@@ -47,19 +34,13 @@ import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, writeFi
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { app } from 'electron'
-import { RUNTIME_ID_ENV, buildOutboundChildEnv } from '@taiji/shared'
+import { RUNTIME_ID_ENV } from '@taiji/shared'
 import { getDataDir } from '@taiji/shared/paths'
-import { readMainLogMaxBytes, mainLogger } from '../logs/main-logger.js'
+import { readMainLogMaxBytes } from '../logs/main-logger.js'
 import { buildSafeEnv } from './safe-env.js'
 import { terminateWindowsProcessTree } from './windows-process.js'
 import { readRemoteAccessConfig } from '../remote-access/store.js'
 import { resolveMobileDistEnv, resolveMobileDistPath, type MobileDistEnv } from '../remote-access/mobile-dist.js'
-
-/** stop() 默认超时：SIGTERM 后等待 exit，超时则 SIGKILL 进程树 */
-export const STOP_TIMEOUT_MS = 2000
-
-/** kill 后代时 SIGTERM → 等 → SIGKILL 的等待时间 */
-export const KILL_WAIT_MS = 200
 
 /**
  * 打包模式 runtime stderr 兜底写流（module 级单例，lazy 创建）。
@@ -82,15 +63,9 @@ let stderrSink: WriteStream | null = null
 let stderrSinkFile: string | null = null
 /** 自本次打开以来写入 stderr 主文件的字节（size 轮转判定，对齐 runtime 字节计数法）。 */
 let stderrSinkBytes = 0
-/** 轮转进行中（end 旧流 → rename 窗口）：窗口内禁止重建 fd（rename 前新建 fd 会指向旧 inode）。 */
-let stderrRotation: Promise<void> | null = null
-/** 轮转窗口内丢弃的 chunk 计数（轮转完成后合并记一次 warn，不在热路径递归记日志）。 */
-let stderrRotationDropped = 0
 
 function getStderrSink(): WriteStream | null {
   if (!app.isPackaged) return null
-  // 轮转窗口：getStderrSink 被 writeStderrSink 之外的场景调用也不得绕过窗口禁令
-  if (stderrRotation) return null
   if (stderrSink) return stderrSink
   const logsDir = path.join(getDataDir(), 'logs')
   const file = path.join(logsDir, 'electron-runtime-stderr.log')
@@ -102,6 +77,19 @@ function getStderrSink(): WriteStream | null {
       renameSync(file, `${file}.1`)
     }
     stderrSink = createWriteStream(file, { flags: 'a' })
+    // 异步 open/write 失败必须有监听（无监听的 'error' 事件会升级为 uncaughtException）：
+    // 流关闭等待删除裁决后 destroy 可落在 open 在途窗口，IO 失败经 'error' 事件消费
+    // （首错留痕，后续静默防刷屏——对齐 main-logger attachStreamErrorHandler 模式）。
+    // console.error 走进程 stderr，不经本 sink 自身（无递归风险）。
+    let sinkErrorReported = false
+    stderrSink.on('error', (err) => {
+      if (sinkErrorReported) return
+      sinkErrorReported = true
+      console.error(
+        `[runtime] stderr sink error for ${file}: ${err instanceof Error ? err.message : String(err)}`
+        + ' — 后续同类错误静默，stderr 文件取证可能缺失',
+      )
+    })
     stderrSinkFile = file
   } catch (e) {
     stderrSink = null
@@ -116,89 +104,46 @@ function getStderrSink(): WriteStream | null {
   return stderrSink
 }
 
-/** 轮转窗口等待旧流 'close' 的超时：超时强制销毁流（fd 未释放时 rename 会留孤儿 fd 写入；Windows 下 rename 直接失败）。 */
-const STDERR_ROTATE_FLUSH_TIMEOUT_MS = 1000
-
 /**
- * end stderr sink 并等待 'close'（fd 释放、缓冲 flush 完成），超时强制销毁。
- *
- * 轮转顺序硬约束（对齐 runtime logger rotateMain）：必须先等 'close' 再 rename——
- * rename 早于 flush 完成时，旧流在途写落进已改名 inode 形成孤儿写入。超时销毁丢
- * 在途缓冲尾部（stderr 仅排查证据，可接受）；不销毁则 fd 悬挂。
+ * end stderr sink 并立即 destroy（时间机制删除裁决：流关闭等待删除——不等 'close'
+ * 事件回执；stderr 仅排查证据，在途缓冲尾部丢失可接受）。destroy 同步释放 fd 与
+ * 写入侧——rename 落在 fd 已释放之后，无「旧流在途写落进已改名 inode」的孤儿写入窗。
  */
-function endAndAwaitClose(stream: WriteStream): Promise<void> {
-  if (stream.closed) return Promise.resolve()
+function endAndDestroy(stream: WriteStream): void {
+  if (stream.closed) return
   if (!stream.writableEnded) stream.end()
-  if (stream.closed) return Promise.resolve()
-  return new Promise<void>((resolve) => {
-    let settled = false
-    const finish = (timedOut: boolean): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      stream.removeListener('close', onClose)
-      stream.removeListener('error', onError)
-      if (timedOut) stream.destroy()
-      resolve()
-    }
-    const onClose = (): void => finish(false)
-    const onError = (): void => finish(false)
-    const timer = setTimeout(() => finish(true), STDERR_ROTATE_FLUSH_TIMEOUT_MS)
-    stream.once('close', onClose)
-    stream.once('error', onError)
-  })
+  stream.destroy()
 }
 
 /**
- * stderr sink size 轮转：suspend 写入 → end 旧流等落盘 → rename `.1` → 解除 suspend
- * （下次写入经 getStderrSink 重建新流写**新文件**——append fd 重建发生在 rename 之后，
- * 不会写进已改名 inode）。幂等：轮转窗口内重复触发复用同一 promise。窗口内到达的
- * chunk 丢弃并计数（窗口 ms 级；stderr 兜底定位本就是部分丢失可接受），完成后合并 warn。
+ * stderr sink size 轮转：destroy 旧流（写入侧同步封闭）→ rename `.1` → 下次写入经
+ * getStderrSink 重建新流写**新文件**（append fd 重建发生在 rename 之后，
+ * 不会写进已改名 inode）。
  */
 function rotateStderrSink(): void {
-  if (stderrRotation) return
   const old = stderrSink
   const file = stderrSinkFile
   if (!old || !file) return
   stderrSink = null
   stderrSinkBytes = 0
-  stderrRotation = (async () => {
-    try {
-      await endAndAwaitClose(old)
-      try {
-        renameSync(file, `${file}.1`)
-      // eslint-disable-next-line taste/no-silent-catch -- rename 失败（IO 错/权限）：旧文件保持原名，新流 append 续写同名文件，数据不丢仅丢滚动（对齐 runtime rotateMain）
-      } catch {
-        // no-op
-      }
-    } finally {
-      stderrRotation = null
-      if (stderrRotationDropped > 0) {
-        const dropped = stderrRotationDropped
-        stderrRotationDropped = 0
-        // best-effort 可观测性：mainLogger 未 init（测试/早于 initMainLogger）时 no-op，不构成递归
-        mainLogger.warn(`[runtime] electron-runtime-stderr.log rotated; dropped ${dropped} stderr chunk(s) in rotation window`)
-      }
-    }
-  })()
+  endAndDestroy(old)
+  try {
+    renameSync(file, `${file}.1`)
+  // eslint-disable-next-line taste/no-silent-catch -- rename 失败（IO 错/权限）：旧文件保持原名，新流 append 续写同名文件，数据不丢仅丢滚动（对齐 runtime rotateMain）
+  } catch {
+    // no-op
+  }
 }
 
 /**
  * stderr 兜底写入唯一出口（spawnRuntimeProcess 的 stderr data handler 调用）。
  *
  * 写入前按字节计数预测超帽（对齐 runtime writeLogEntry 语义）：超帽 → 触发轮转，
- * 当前 chunk 计入轮转窗口丢弃；轮转窗口内到达的 chunk 同样丢弃计数。非打包（sink 不
- * 存在）no-op——调用方无须自行分流 dev/prod。
+ * 当前 chunk 计入下一轮。非打包（sink 不存在）no-op——调用方无须自行分流 dev/prod。
  */
 function writeStderrSink(data: Buffer): void {
-  if (stderrRotation) {
-    stderrRotationDropped++
-    return
-  }
   if (stderrSinkFile && stderrSinkBytes + data.length > readMainLogMaxBytes()) {
     rotateStderrSink()
-    stderrRotationDropped++
-    return
   }
   const sink = getStderrSink()
   if (!sink) return
@@ -207,51 +152,34 @@ function writeStderrSink(data: Buffer): void {
 }
 
 /**
- * 显式 flush stderrSink（app quit 时调用，确保 WriteStream 内部 buffer 落盘）。
+ * 显式 flush stderrSink（app quit 时调用）。
  *
  * 正常 stop 路径走 stopRuntimeProcess→done() 已 end()；但若 app 在 runtime 自然退出后
  * 通过 before-quit 直接 quit（未触发 stop 链，或 stop 链已 resolve 但 end 后又有新 spawn 写入），
- * sink 的 buffer 可能未 flush 到磁盘，丢失原生崩溃期排查证据。
+ * sink 可能未 close。
  *
- * [HISTORICAL] W2：end() 是异步的（只是发 EOF 到流），返回的 Promise 等 'finish' 事件
- * （OS 层 buffer 刷盘完成）才 resolve。否则 before-quit 紧接 app.quit() 会丢尾部 stderr。
- * 调用方（main.ts before-quit handler）必须 await 此 Promise 后再 app.quit()。
+ * 时间机制删除裁决：流关闭等待删除——end + destroy 即返回，不等 'finish' 事件回执
+ * （[HISTORICAL] 原实现 1s 内未 finish 也强制 resolve 的兜底窗随之退役）。底层 fs 卡住时
+ * 不再阻断退出；stderr 仅排查证据，在途缓冲尾部丢失可接受。
  *
  * 幂等：done() 已 end() 后 stderrSink=null，再次调用为 no-op（直接 resolve）。
  *
- * @returns Promise，在 WriteStream 'finish'（或 'error'）后 resolve。
- *          超时兜底：若底层 fs 卡住 1s 内未 finish 也 resolve（不阻断退出）。
+ * @returns 立即 resolve 的 Promise（调用方 before-quit handler await 形态保持不变）。
  */
 export function flushStderrSink(): Promise<void> {
   if (!stderrSink) return Promise.resolve()
   const sink = stderrSink
   stderrSink = null
-  // 兜底超时：极端情况底层 fs 不发 finish（如磁盘满/挂载丢失），1s 后强制 resolve
-  // 避免退出被无限阻塞（stderr 仅排查证据，可接受部分丢失）。
-  const FLUSH_TIMEOUT_MS = 1000
-  return new Promise<void>((resolve) => {
-    let settled = false
-    const finish = (): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      resolve()
-    }
-    const timer = setTimeout(finish, FLUSH_TIMEOUT_MS)
-    sink.once('finish', finish)
-    sink.once('error', finish)
-    try {
-      sink.end()
-    } catch {
-      // end 失败不阻断退出（stderr 仅排查证据）
-      finish()
-    }
-  })
+  try {
+    if (!sink.writableEnded) sink.end()
+    sink.destroy()
+  } catch (e) {
+    // end/destroy 失败不阻断退出（stderr 仅排查证据），但必须留痕（禁止静默吞错）：
+    // console.warn 走进程 stderr，不经本 sink 自身（无递归风险）
+    console.warn(`[runtime] stderr sink flush failed: ${e instanceof Error ? e.message : String(e)}`)
+  }
+  return Promise.resolve()
 }
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
 /** tsup(CJS) runtime 入口文件名，须与 runtime/tsup.config.ts format 一致 */
 export const RUNTIME_ENTRY_FILE = 'index.cjs'
 
@@ -604,62 +532,20 @@ export function killProcessTree(rootPid: number, precomputedDescendants?: number
 }
 
 /**
- * stopRuntimeProcess 处置范围（projection 一致性设计 D4 判死处置降粒度）：
- * - 'process-tree'（缺省）：SIGTERM → 等退出 → 处置整棵进程树（预记录后代后逐个
- *   SIGTERM/SIGKILL）。app 退出（supervisor.stop()）与启动失败清理路径用——「关闭应用
- *   = 全部任务停止」行为面载体。
- * - 'process-only'：只终止 runtime 自身，不枚举不杀任何后代——liveness 判死处置用。
- *   runtime 死后 pi 的 PPID 变 1 独立存活，由 runtime 启动期 orphan sweep
- *   （reapOrphanPiProcesses，argv 判据 + ppid=1）与 startup-reattach 编排接管。
- */
-export type RuntimeStopScope = 'process-tree' | 'process-only'
-
-/** taskkill 单进程强杀的「进程不存在」退出码（与 windows-process.ts 树变体同值，模块未导出故本地对齐登记）。 */
-const WINDOWS_NO_PROCESS_EXIT_CODE = 128
-
-/**
- * Windows 单进程强杀（taskkill 不带 /T）：只终止目标进程本身，不触碰其后代——
- * 判死处置 scope='process-only' 的 Windows 分支（树变体 terminateWindowsProcessTree
- * 会 /T 连坐全部 pi，与 D4 处置降粒度相反，判死路径禁用）。
- */
-function terminateWindowsProcessOnly(pid: number): void {
-  try {
-    execFileSync('taskkill.exe', ['/PID', String(pid), '/F'], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-      // C-proc-09 出站契约：kill 不回传数据，但仍须防自身凭证类变量随 spawn 泄漏
-      env: buildOutboundChildEnv({ parentEnv: process.env }),
-    })
-  } catch (error) {
-    const status = error && typeof error === 'object' && 'status' in error ? error.status : undefined
-    if (status !== WINDOWS_NO_PROCESS_EXIT_CODE) {
-      console.warn(
-        `[runtime] taskkill failed for PID ${pid}:`,
-        error instanceof Error ? error.message : String(error),
-      )
-    }
-  }
-}
-
-/**
- * 优雅停止 runtime（SIGTERM → 等 → 超时 SIGKILL），处置范围由 scope 决定。
+ * 优雅停止 runtime（SIGTERM → 立即 SIGKILL 整棵进程树 → 等 exit）。
  *
- * 'process-tree'（缺省）时序见文件顶部 [HISTORICAL] 注释。关键：先预记录后代 PID 再
- * SIGTERM。'process-only' 只对 runtime 本体走同一信号时序（SIGTERM → 等 → 超时 SIGKILL
- * 根进程），不枚举后代、不向任何后代发信号。
+ * 时序见文件顶部注释。关键：先预记录后代 PID 再发信号（runtime 退出后 pi 的
+ * PPID 变 1，pgrep -P 查不到）；SIGTERM 与 SIGKILL 之间无等待窗，进程树的
+ * 终止不依赖任何时间阈值，完成以 child 的 'exit' 事件为权威信号。
  *
- * @param child runtime 子进程（null 直接 resolve）
- * @param timeoutMs SIGTERM 后等 exit 的超时，超时则按 scope SIGKILL
- * @param scope 处置范围（缺省 'process-tree'；判死处置传 'process-only'，D4）
+ * @param child runtime 子进程（null 或已退出直接 resolve）
  * @returns 处置完成后 resolve
  */
-export function stopRuntimeProcess(
-  child: ChildProcess | null,
-  timeoutMs = STOP_TIMEOUT_MS,
-  scope: RuntimeStopScope = 'process-tree',
-): Promise<void> {
+export function stopRuntimeProcess(child: ChildProcess | null): Promise<void> {
   return new Promise((resolve) => {
-    if (!child || child.killed) {
+    // 已退出（exitCode=退出码 / signalCode=信号杀死，exit 事件均已派发过）或已执行过
+    // kill 链（killed）：不再重复处置，否则 'exit' 不会再次触发，本 Promise 永不 resolve
+    if (!child || child.killed || child.exitCode !== null || child.signalCode !== null) {
       resolve()
       return
     }
@@ -669,56 +555,23 @@ export function stopRuntimeProcess(
       return
     }
     if (process.platform === 'win32') {
-      if (scope === 'process-only') {
-        // taskkill 不带 /T：只终止 runtime 自身（判死处置降粒度，D4——pi 后代不连坐）
-        terminateWindowsProcessOnly(childPid)
-      } else {
-        // taskkill /T /F handles descendants atomically and is safe to repeat when the tree already exited.
-        terminateWindowsProcessTree(childPid)
-      }
+      // taskkill /T /F handles descendants atomically and is safe to repeat when the tree already exited.
+      terminateWindowsProcessTree(childPid)
       void flushStderrSink().finally(resolve)
       return
     }
 
     let resolved = false
 
-    // [HISTORICAL] 在发 SIGTERM 之前记录所有后代 PID
-    // （runtime 退出后 pi 的 PPID 变为 1，pgrep -P 查不到）。
-    // scope='process-only'（判死处置，D4）：后代清单恒空——不枚举、不向后代发信号。
-    const descendantPids = scope === 'process-tree' ? getDescendantPids(childPid) : []
-
-    // [HISTORICAL] timer 在 done 闭包外具名持有，done() 顶部 clearTimeout。
-    // 否则 exit 先到 → done() resolve → 2s 后 timer 仍执行 killProcessTree，
-    // 此时 PID 可能已被 OS 复用 → 误杀无关进程。
-    let timer: ReturnType<typeof setTimeout> | null = null
+    // 在发信号之前记录所有后代 PID（runtime 退出后 pi 的 PPID 变为 1，pgrep -P 查不到）
+    const descendantPids = getDescendantPids(childPid)
 
     const done = async () => {
       if (resolved) return
       resolved = true
-      // 双重保险：clearTimeout 防止 exit/timeout 竞态后 timer 仍触发 killProcessTree。
-      // （timer 回调进入 done 时 resolved=true 会短路，但 clearTimeout 后连短路判断都不必走）
-      if (timer) {
-        clearTimeout(timer)
-        timer = null
-      }
-      // 杀掉残留的后代进程（pi 等），同步完成后再 resolve
-      // 避免异步 setTimeout 在 resolve 后误杀 PID 复用的新进程
-      for (const pid of descendantPids) {
-        // eslint-disable-next-line taste/no-silent-catch -- process may have already exited
-        try { process.kill(pid, 'SIGTERM') } catch { /* 可能已随 runtime 退出 */ }
-      }
-      // M6（perf-quick-batch）：非阻塞等待后补 SIGKILL。
-      // 旧实现 execSync('sleep 0.2') 同步阻塞主进程 200ms（KILL_WAIT_MS），
-      // stop/restart 路径冻结主进程事件循环。改 await delay 后时长不变（INVAR-M6-1），
-      // 时序不变（INVAR-M6-2：SIGTERM→等→SIGKILL），事件循环畅通（INVAR-M6-6）。
-      await delay(KILL_WAIT_MS)
-      for (const pid of descendantPids) {
-        // eslint-disable-next-line taste/no-silent-catch -- process may have already exited
-        try { process.kill(pid, 'SIGKILL') } catch { /* 可能已退出 */ }
-      }
       // 子进程树已全部 kill，stderr 不再有新数据 → flush 并关闭 sink，
       // 防止 app.quit() 前 WriteStream 内部 buffer 未落盘丢失崩溃期证据。
-      // done() 可能在 exit/timeout 两条路径触发，flushStderrSink 内置幂等（stderrSink=null 后 no-op）。
+      // flushStderrSink 内置幂等（stderrSink=null 后 no-op）。
       // [HISTORICAL] W2：必须 await 等 'finish' 落盘，否则 stop() resolve 后 before-quit
       // 紧接 app.quit() 可能丢尾部 stderr。
       await flushStderrSink()
@@ -726,20 +579,7 @@ export function stopRuntimeProcess(
     }
     child.once('exit', done)
     child.kill('SIGTERM')
-    // 超时后强制 SIGKILL（先杀整棵进程树）。done() 顶部 clearTimeout 保证 exit 先到时
-    // 此 timer 不会在 2s 后误杀 PID 复用的新进程。
-    timer = setTimeout(() => {
-      child.removeListener('exit', done)
-      if (scope === 'process-only') {
-        // 只强杀 runtime 本体（显式单点信号，不经杀树工具——杀树工具保留给
-        // 'process-tree' 路径，判死处置对后代的全部处置 = 不处置，D4）
-        // eslint-disable-next-line taste/no-silent-catch -- process may have already exited
-        try { process.kill(childPid, 'SIGKILL') } catch { /* 可能已退出 */ }
-      } else {
-        // 强制杀进程树：runtime + 所有子进程
-        killProcessTree(childPid, descendantPids)
-      }
-      done()
-    }, timeoutMs)
+    // 立即 SIGKILL 整棵进程树：无 SIGTERM→SIGKILL 升级等待窗（先孙后代后根）
+    killProcessTree(childPid, descendantPids)
   })
 }

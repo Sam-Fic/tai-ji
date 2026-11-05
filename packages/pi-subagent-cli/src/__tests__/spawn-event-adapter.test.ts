@@ -489,23 +489,6 @@ describe("spawn-event-translator", () => {
       expect(JSON.stringify(h.record)).not.toContain("partial build output");
     });
 
-    it("节流：1s 内的连续 update 只发一条活性信号，跨 1s 后再发（journal/wire 体量控制）", () => {
-      vi.useFakeTimers();
-      try {
-        const h = makeHarness();
-        h.feed(toolUpdateLine());
-        h.feed(toolUpdateLine("第二条输出"));
-        h.feed(toolUpdateLine("第三条输出"));
-        expect(h.events).toEqual([ACTIVITY_EVENT]); // 同一 1s 窗内只发一次
-
-        vi.advanceTimersByTime(1_500);
-        h.feed(toolUpdateLine("跨窗输出"));
-        expect(h.events).toEqual([ACTIVITY_EVENT, ACTIVITY_EVENT]);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
     it("硬约束②：静默工具（tool_start + 启动瞬间一条空 content update，此后零 update）不持续产活性信号——楔死工具不被续命", () => {
       vi.useFakeTimers();
       try {

@@ -41,15 +41,8 @@ export type { StatusChangeCallback } from './plugin-hot-reload.js'
 // 5 个测试文件 import `PluginHost as ActivatorHost`）不破坏（NON-BREAKING）。
 export type { PluginHostContract as PluginHost } from './plugin-host.js'
 
-// 权限审批等待默认值（timeout-plugin-service D3）：审批对象是「等一个不在场的人」，
-// 量级按本仓「等人工」裁决值 30min（dialog-queue DEFAULT_DIALOG_TIMEOUT_MS 同源），
-// 不再是 30s 判拒。全局逃生门 = env TAIJI_PLUGIN_PERMISSION_TIMEOUT_MS（生产装配点
-// plugin-service.ts 接线解析，缺失/非法回落本常量——回落权威单一在此）。
-export const PERMISSION_TIMEOUT_MS = 1_800_000
-
 interface PendingReply {
   resolve: (success: boolean) => void
-  timer: ReturnType<typeof setTimeout> | undefined
 }
 
 interface PluginContextState {
@@ -66,28 +59,14 @@ export interface ActivatorOptions {
   permissionChecker?: PermissionCheckerLike
   onPermissionRequest?: (payload: { pluginId: string; permissions: PluginPermission[]; requestId: string }) => void
   /**
-   * 权限审批等待到期取消回调（timeout-plugin-service D3）。生产装配点注入
-   * `plugin:permissionRequestExpired` 广播（前端撤回无人应答的审批弹窗）；
-   * requestId 与本次审批 `plugin:permissionRequest` 广播携带的同源（每次审批
-   * 请求新生成）——前端按 requestId 精确撤回，同 pluginId 陈旧 expired 广播
-   * 不误撤后到的新审批弹窗。未注入时到期取消只落日志与状态，无广播（单测/内嵌场景）。
-   */
-  onPermissionRequestExpired?: (payload: { pluginId: string; requestId: string }) => void
-  /**
    * 权限审批终局回调（remote-use-mobile S5-V3 弹窗自动撤回）。生产装配点注入
    * `plugin:permissionRequestResolved` 广播：用户在任一连接端批准/拒绝后，其余端
    * 据此撤回同一审批的弹窗（弹窗全局单例已随 onPermissionRequest 广播到全部连接）。
    * requestId 与本次审批 `plugin:permissionRequest` 广播携带的同源——前端按它精确
    * 匹配撤回。仅命中挂起审批时回调（迟到审批对已删 pending miss noop 不回调——
-   * 该请求终局已由 expired 广播覆盖，不重复发终局）。未注入时无广播（单测/内嵌场景）。
+   * 该请求终局已由 resolved 广播覆盖，不重复发终局）。未注入时无广播（单测/内嵌场景）。
    */
   onPermissionRequestResolved?: (payload: { pluginId: string; requestId: string; approved: boolean }) => void
-  /**
-   * 覆盖权限审批超时（ms）。timeout-plugin-service D3 转正：生产装配点经
-   * TAIJI_PLUGIN_PERMISSION_TIMEOUT_MS env 接线（合法正数生效，缺失/非法 warn 回落
-   * PERMISSION_TIMEOUT_MS）；测试可直接传小值加速。
-   */
-  permissionTimeoutMs?: number
   /**
    * 覆盖 activate 生命周期握手超时（ms）。timeout-plugin-service D4：activate 是
    * 控制范围单请求（默认 30s 保持不动），本参数是逃生门——重初始化插件的 onActivate
@@ -99,9 +78,7 @@ export interface ActivatorOptions {
 }
 
 interface PendingPermission {
-  /** 结局三态：true=批准 / false=显式拒绝或挂起期清理唤醒 / 'timeout'=等待到期（D3 取消语义） */
-  resolve: (outcome: boolean | 'timeout') => void
-  timer: ReturnType<typeof setTimeout>
+  resolve: (approved: boolean) => void
   /** 审批请求唯一标识（与 permissionRequest 广播同源）：resolved 广播按它回传给前端精确撤窗 */
   requestId: string
 }
@@ -115,9 +92,8 @@ export class PluginActivator {
    * 进行中的生命周期回复等待。key 为复合键 `${pluginId}:${op}`（op ∈
    * 'activate' | 'deactivate'，D6 并发模型）：同一插件 activate/deactivate 并发
    * 在途时两个 entry 互不覆盖，activated/deactivated 回复按 (pluginId, replyType)
-   * 精确匹配到各自 op 的 entry。旧 pluginId 单键实现 Map.set 互相覆盖 + 旧 entry
-   * 的超时 timer 到点无条件 delete 新 entry，是回复错配（activated 回复被
-   * deactivate 的 entry 消费）、假超时、宿主/Worker 幽灵态的根源。
+   * 精确匹配到各自 op 的 entry（无墙钟——插件不回回复时悬挂 entry 经插件卸载
+   * 清理点 / error 回复广播 resolve(false) 收敛）。
    */
   private pendingReplies = new Map<string, PendingReply>()
   /**
@@ -141,9 +117,7 @@ export class PluginActivator {
   /** 权限检查（可选） */
   private permissionChecker?: PermissionCheckerLike
   private onPermissionRequest?: (payload: { pluginId: string; permissions: PluginPermission[]; requestId: string }) => void
-  private onPermissionRequestExpired?: (payload: { pluginId: string; requestId: string }) => void
   private onPermissionRequestResolved?: (payload: { pluginId: string; requestId: string; approved: boolean }) => void
-  private permissionTimeoutMs: number
   /** 待审批的权限请求 */
   private pendingPermissions = new Map<string, PendingPermission>()
 
@@ -153,9 +127,7 @@ export class PluginActivator {
   constructor(options?: ActivatorOptions) {
     this.permissionChecker = options?.permissionChecker
     this.onPermissionRequest = options?.onPermissionRequest
-    this.onPermissionRequestExpired = options?.onPermissionRequestExpired
     this.onPermissionRequestResolved = options?.onPermissionRequestResolved
-    this.permissionTimeoutMs = options?.permissionTimeoutMs ?? PERMISSION_TIMEOUT_MS
     // 对齐 U7 形态（plugin-host.ts 构造器 loadTimeoutMs ?? LOAD_PLUGIN_TIMEOUT_MS）：
     // 生产装配不传 → 默认 30s 不动；仅测试/重初始化插件场景传覆盖值。
   }
@@ -317,8 +289,8 @@ export class PluginActivator {
 
   /**
    * 激活流程阶段 0：权限门（在分配 Worker 之前）。
-   * 返回 false = 本次激活作废（审批被拒 / 等待到期取消 / 等待期状态被外部改写），
-   * 调用方直接 return（状态终一化与 expired 广播在此完成）；true = 通过（含无需
+   * 返回 false = 本次激活作废（审批被拒 / 等待期状态被外部改写），
+   * 调用方直接 return（状态终一化在此完成）；true = 通过（含无需
    * 审批场景），继续 assignWorker。
    */
   private async gateOnPermissionApproval(
@@ -329,8 +301,8 @@ export class PluginActivator {
     const unapproved = this.permissionChecker.getUnapproved(pluginId, descriptor.permissions)
     if (unapproved.length === 0) return true
 
-    // 审批请求唯一标识（每次审批新生成）：request 广播与 expired 广播同源携带，
-    // 前端按 requestId 精确撤窗——同 pluginId 前序审批的陈旧 expired 广播不误撤
+    // 审批请求唯一标识（每次审批新生成）：request 广播与 resolved 广播同源携带，
+    // 前端按 requestId 精确撤窗——同 pluginId 前序审批的陈旧 resolved 广播不误撤
     // 后到弹窗（pluginId 只能定位插件，无法区分同插件先后两次审批）。
     const requestId = randomUuid()
     // 先注册 pending promise，再通知外部（避免回调中立即 resolve 时竞态）；
@@ -338,31 +310,15 @@ export class PluginActivator {
     // onPermissionRequestResolved 广播回同一标识（前端按它精确撤窗）。
     const approvalPromise = this.waitForPermissionApproval(pluginId, requestId)
     this.onPermissionRequest?.({ pluginId, permissions: unapproved, requestId })
-    // 等待审批结果（true=批准 / false=拒绝或挂起期清理唤醒 / 'timeout'=等待到期）
+    // 等待审批结果（true=批准 / false=拒绝或挂起期清理唤醒；审批无时限——挂到
+    // 用户响应，等待期间 deactivate/卸载经 resolvePermissionApproval(false) 唤醒）
     const approval = await approvalPromise
     // 等待期间状态被外部改写（deactivate/disable → DEACTIVATING/UNLOADED、
     // uninstall removeDescriptor → 已删除、crash → CRASHED）→ 本次激活作废：
     // 继续走 assignWorker 会把已停用/已卸载的插件拉回 ACTIVE（approve → 快速
     // disable 竞态）。removeDescriptor 场景下此处同时防住「卸载后幽灵 setState
     // 复活」（状态已从 Map 删除，!== ACTIVATING 提前 return，不再回写）。
-    // 注意此检查必须先于 'timeout' 分流：作废的激活连 expired 广播也不发
-    //（广播语义 = 「审批弹窗确实在等人且已到期撤回」，作废路径的 pending 已被
-    // 消费/清理，弹窗命运归接管方）。
     if (this.pluginStates.get(pluginId) !== 'ACTIVATING') return false
-    if (approval === 'timeout') {
-      // 审批等待到期（timeout-plugin-service D3）：取消而非判拒——「没人答」
-      // 不记录成「用户拒绝了插件」（权限存储不受影响，重触发激活时同一批权限
-      // 重新弹审批）。置 UNLOADED（未装载态，状态机允许后续 activation event
-      // 重触发激活）；expired 广播供前端撤回无人应答的弹窗（迟到批准对已删
-      // pending noop 幂等，resolvePermissionApproval miss 不炸）。
-      console.warn(
-        `[plugin-activator] permission approval for ${pluginId} timed out after ${this.permissionTimeoutMs}ms — activation cancelled (plugin left UNLOADED, not rejected). ` +
-          `Recovery: re-trigger the activation event to approve again; tune the wait via env TAIJI_PLUGIN_PERMISSION_TIMEOUT_MS (ms).`,
-      )
-      this.onPermissionRequestExpired?.({ pluginId, requestId })
-      this.setState(pluginId, 'UNLOADED')
-      return false
-    }
     if (!approval) {
       this.setState(pluginId, 'UNLOADED')
       return false
@@ -400,8 +356,8 @@ export class PluginActivator {
     const currentState = this.pluginStates.get(pluginId)
     if (!currentState || currentState === 'UNLOADED' || currentState === 'DEACTIVATING') return
 
-    // 该插件正挂在权限审批等待（ACTIVATING 中）→ 唤醒为「拒绝」：不 resolve 的话
-    // 挂起中的激活要干等 30s 超时；且若等待期间用户批准（resolvePermissionApproval
+    // 该插件正挂在权限审批等待（ACTIVATING 中）→ 唤醒为「拒绝」：审批无时限，不
+    // resolve 的话挂起中的激活会无限等待；且若等待期间用户批准（resolvePermissionApproval
     // (pluginId, true)），醒来的激活会绕过本次停用把插件拉回 ACTIVE。此处
     // resolve(false) + doActivatePlugin 醒来后的 ACTIVATING 状态检查双保险收敛到停用
     // 语义。（对非 ACTIVATING 态是 no-op：pending approval 只在 ACTIVATING 期间存在，
@@ -481,7 +437,6 @@ export class PluginActivator {
     }
     const pendingPermission = this.pendingPermissions.get(pluginId)
     if (pendingPermission) {
-      clearTimeout(pendingPermission.timer)
       pendingPermission.resolve(false)
       this.pendingPermissions.delete(pluginId)
     }
@@ -490,7 +445,6 @@ export class PluginActivator {
     for (const op of ['activate', 'deactivate'] as const) {
       const pendingReply = this.pendingReplies.get(`${pluginId}:${op}`)
       if (pendingReply) {
-        clearTimeout(pendingReply.timer)
         pendingReply.resolve(false)
         this.pendingReplies.delete(`${pluginId}:${op}`)
       }
@@ -507,19 +461,11 @@ export class PluginActivator {
   }
 
   /**
-   * 等待权限审批结果。
-   * 结局三态（timeout-plugin-service D3）：true=批准 / false=显式拒绝或挂起期清理
-   * 唤醒 / 'timeout'=等待到期——超时与拒绝可区分，上游据此走取消分支（撤窗广播 +
-   * UNLOADED 可重触发）而非判拒。
+   * 等待权限审批结果（无时限：审批挂到用户响应 / deactivate·卸载清理唤醒）。
    */
-  private waitForPermissionApproval(pluginId: string, requestId: string): Promise<boolean | 'timeout'> {
+  private waitForPermissionApproval(pluginId: string, requestId: string): Promise<boolean> {
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        this.pendingPermissions.delete(pluginId)
-        resolve('timeout')
-      }, this.permissionTimeoutMs)
-
-      this.pendingPermissions.set(pluginId, { resolve, timer, requestId })
+      this.pendingPermissions.set(pluginId, { resolve, requestId })
     })
   }
 
@@ -531,19 +477,17 @@ export class PluginActivator {
   resolvePermissionApproval(pluginId: string, approved: boolean): void {
     const pending = this.pendingPermissions.get(pluginId)
     if (!pending) {
-      // miss noop 维持（幂等安全）：到期取消 / 挂起期清理后迟到的审批响应在此吞掉，
-      // 不炸。debug 留痕供「用户点了批准但插件没装上」类问题归因（前端撤窗缺位时
-      // 旧版前端仍可能派发迟到批准，D3 已知限制）。
+      // miss noop 维持（幂等安全）：挂起期清理后迟到的审批响应在此吞掉，不炸。
+      // debug 留痕供「用户点了批准但插件没装上」类问题归因。
       console.debug(
         `[plugin-activator] resolvePermissionApproval(${pluginId}, ${approved}) miss — no pending approval (already settled or cleaned up); late response ignored`,
       )
       return
     }
 
-    clearTimeout(pending.timer)
     this.pendingPermissions.delete(pluginId)
     // 审批终局广播（remote-use-mobile S5-V3 弹窗自动撤回）：同一 requestId 至多一次
-    // （pending 命中即删）；miss 路径不广播——该请求终局已由 expired 广播覆盖，其余端
+    // （pending 命中即删）；miss 路径不广播——该请求终局已由 resolved 广播覆盖，其余端
     // 的弹窗已被撤，迟到审批无需再发终局。回调在 resolve 前发出（序上先撤窗后推进激活）。
     this.onPermissionRequestResolved?.({ pluginId, requestId: pending.requestId, approved })
     pending.resolve(approved)
@@ -565,7 +509,6 @@ export class PluginActivator {
       const key = `${msg.pluginId}:${msg.type === 'activated' ? 'activate' : 'deactivate'}`
       const pending = this.pendingReplies.get(key)
       if (!pending) return
-      clearTimeout(pending.timer)
       this.pendingReplies.delete(key)
       pending.resolve(true)
       return
@@ -583,7 +526,6 @@ export class PluginActivator {
         const key = `${msg.pluginId}:${op}`
         const pending = this.pendingReplies.get(key)
         if (!pending) continue
-        clearTimeout(pending.timer)
         this.pendingReplies.delete(key)
         pending.resolve(false)
       }
@@ -664,18 +606,12 @@ export class PluginActivator {
 
   /**
    * 构造热重载 hooks：把 PluginHotReloader 需要的能力桥接到本 activator
-   * 的实例方法（deactivate / activate / 强杀 / 状态查询与设置）。
+   * 的实例方法（deactivate / activate / 状态查询）。
    */
   private buildHotReloadHooks(host: PluginHost): HotReloadHooks {
     return {
       deactivate: (pluginId) => this.deactivatePlugin(pluginId, host),
       activate: (pluginId) => this.activatePlugin(pluginId, { type: 'onStartupFinished' }, host),
-      forceTerminate: async (pluginId) => {
-        const handle = host.getWorkerHandle(pluginId)
-        if (handle) await host.terminateWorker(handle.workerId)
-      },
-      disposeContext: (pluginId) => this.disposeContext(pluginId),
-      setState: (pluginId, state) => this.pluginStates.set(pluginId, state),
       getState: (pluginId) => this.pluginStates.get(pluginId),
     }
   }
@@ -797,7 +733,7 @@ export class PluginActivator {
   ): Promise<boolean> {
     return new Promise((resolve) => {
       const key = `${pluginId}:${op}`
-      this.pendingReplies.set(key, { resolve, timer: undefined })
+      this.pendingReplies.set(key, { resolve })
       handle.postMessage(message)
     })
   }

@@ -5,9 +5,9 @@
  * - 转发契约：args 与 journalDir 原样下传 core（判定与拒绝文案的权威测试在 core
  *   `orchestration/__tests__/resume-args-guard.test.ts`；真链路拒绝见
  *   scenario-24-args-mismatch-rejection.test.ts）。
- * - resumeRun 接线：budgetTimeMs（time 形参透传）/ budgetTokens（tokens 形参透传）/
+ * - resumeRun 接线：budgetTokens（tokens 形参透传）/
  *   host / runId；成功文案与 details。
- * - runId 缺失与 time/tokens 负值的入口护栏（assertEntryTimeBudget / assertEntryTokenBudget 同源）。
+ * - runId 缺失与 tokens 负值的入口护栏（assertEntryTokenBudget）。
  *
  * mock 策略：resume-run 深路径 stub（resumeRun 为 vi.fn——不起锁/IO，只测入口
  * 面与校验层）；record 流用 mkdtemp 真文件（D14 读侧读真实路径）。范式对齐
@@ -122,17 +122,7 @@ describe("actionResume", () => {
     expect("args" in options).toBe(false);
   });
 
-  it("time 形参透传 budgetTimeMs（u2 偏差②：预算经 D14 同款通道传入）", async () => {
-    const recordPath = writeRecordStream([runCreatedFrame('{"a":1}')]);
-    await actionResume(
-      { action: "resume", runId: "wf-test", args: { a: 1 }, time: 120_000 } as never,
-      makeDeps(recordPath) as never,
-    );
-    const options = vi.mocked(resumeRun).mock.calls[0]![2] as { budgetTimeMs?: number };
-    expect(options.budgetTimeMs).toBe(120_000);
-  });
-
-  it("tokens 形参透传 budgetTokens（与 time 同款通道，三档回落与落盘归 core）", async () => {
+  it("tokens 形参透传 budgetTokens（三档回落与落盘归 core）", async () => {
     const recordPath = writeRecordStream([runCreatedFrame('{"a":1}')]);
     await actionResume(
       { action: "resume", runId: "wf-test", args: { a: 1 }, tokens: 50_000 } as never,
@@ -181,13 +171,4 @@ describe("actionResume", () => {
     expect(vi.mocked(resumeRun)).not.toHaveBeenCalled();
   });
 
-  it("time 负值 → 入口护栏拒绝（与 run action 同源 assertEntryTimeBudget）", async () => {
-    await expect(
-      actionResume(
-        { action: "resume", runId: "wf-test", time: -1 } as never,
-        makeDeps("/nonexistent") as never,
-      ),
-    ).rejects.toThrow(/time/);
-    expect(vi.mocked(resumeRun)).not.toHaveBeenCalled();
-  });
 });

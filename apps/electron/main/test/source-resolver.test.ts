@@ -9,13 +9,11 @@
  *   ④ 双引擎等价判定：undici resolve 与 curl 非 2xx CurlFetchError（携带
  *      httpStatusCode）均判可达；无 httpStatusCode 的连接错误判不可达
  *   ⑤ disableFlagPersistence 传参断言（D5：探测不参与引擎偏好置位）
- *   ⑥ TTL 命中不重复探测（fake timers + 调用计数）
  *
  * Mock 策略（对齐既有测试风格）：
  *   - upgrade-fetch：vi.mock + importOriginal（保留真实 CurlFetchError /
  *     isCurlHttpStatusError，仅替换 upgradeFetch）——禁止真实网络请求
  *   - proxy-config：vi.spyOn（对齐 release-checker-proxy.test.ts 先例）
- *   - timer：vi.useFakeTimers（TTL 缓存过期推进）
  *
  * 运行：cd apps/electron/main && npx vitest run test/source-resolver.test.ts
  */
@@ -221,60 +219,6 @@ describe('source-resolver: auto 模式源顺序决策表（D4）', () => {
     })
   })
 
-  describe('探测结果 TTL 缓存（1h）', () => {
-    it('TTL 内命中缓存不重复探测；过期后重新探测', async () => {
-      const start = new Date('2026-09-07T10:00:00Z')
-      vi.setSystemTime(start)
-      setProbeBehavior({ github: new Error('timeout (aborted)'), gitcode: okProbe() })
-
-      // 首次：探测 2 次，gitcode 可达胜出
-      const first = await resolveSourceOrder('auto')
-      expect(first).toEqual(['gitcode', 'github'])
-      expect(upgradeFetchMock).toHaveBeenCalledTimes(2)
-
-      // +30min：缓存命中，零新增探测，顺序不变
-      vi.setSystemTime(new Date(start.getTime() + 30 * 60 * 1000))
-      const second = await resolveSourceOrder('auto')
-      expect(second).toEqual(['gitcode', 'github'])
-      expect(upgradeFetchMock).toHaveBeenCalledTimes(2)
-
-      // +61min：TTL 过期，重新探测（再 +2 次）
-      vi.setSystemTime(new Date(start.getTime() + 61 * 60 * 1000))
-      const third = await resolveSourceOrder('auto')
-      expect(third).toEqual(['gitcode', 'github'])
-      expect(upgradeFetchMock).toHaveBeenCalledTimes(4)
-    })
-
-    it('显式偏好不消费探测缓存（直接映射，缓存窗口内切偏好即时生效）', async () => {
-      vi.setSystemTime(new Date('2026-09-07T10:00:00Z'))
-      setProbeBehavior({})
-
-      await resolveSourceOrder('auto')
-      expect(upgradeFetchMock).toHaveBeenCalledTimes(2)
-
-      // 缓存命中窗口内切显式偏好 gitcode：不经缓存/探测，直接映射
-      const order = await resolveSourceOrder('gitcode')
-      expect(order).toEqual(['gitcode', 'github'])
-      expect(upgradeFetchMock).toHaveBeenCalledTimes(2)
-    })
-
-    it('代理短路不消费也不污染探测缓存', async () => {
-      const start = new Date('2026-09-07T10:00:00Z')
-      vi.setSystemTime(start)
-      setProbeBehavior({})
-
-      // 代理短路：零探测，不写缓存
-      vi.spyOn(proxyConfig, 'resolveProxyUrl').mockReturnValue('http://192.168.1.202:7890')
-      await resolveSourceOrder('auto')
-      expect(upgradeFetchMock).not.toHaveBeenCalled()
-
-      // 撤掉代理：缓存为空 → 走探测（若短路误写缓存则此处为 0 次调用）
-      vi.spyOn(proxyConfig, 'resolveProxyUrl').mockReturnValue(undefined)
-      await resolveSourceOrder('auto')
-      expect(upgradeFetchMock).toHaveBeenCalledTimes(2)
-    })
-  })
-
   describe('缺省与返回值形态', () => {
     it('无参调用按 auto 语义解析（老 settings 无 updateSource 字段 = auto）', async () => {
       setProbeBehavior({ github: new Error('timeout (aborted)'), gitcode: okProbe() })
@@ -348,29 +292,6 @@ describe('source-resolver: auto 模式源顺序决策表（D4）', () => {
       expect(again?.results.github?.reachable).toBe(true)
     })
 
-    it('TTL 缓存命中轮次沿用原探测决策详情（decidedAt 不刷新，显式偏好插入后仍可恢复）', async () => {
-      const start = new Date('2026-09-07T10:00:00Z')
-      vi.setSystemTime(start)
-      setProbeBehavior({})
-
-      await resolveSourceOrder('auto')
-      const first = getLastProbeOutcome()
-      expect(first?.via).toBe('probe')
-
-      // 显式偏好重置记录（对应当次调用语义）
-      await resolveSourceOrder('github')
-      expect(getLastProbeOutcome()).toBeNull()
-
-      // +30min 缓存命中：排序仍源自原探测决策 → 详情恢复，decidedAt 为原决策时刻
-      vi.setSystemTime(new Date(start.getTime() + 30 * 60 * 1000))
-      await resolveSourceOrder('auto')
-      const restored = getLastProbeOutcome()
-      expect(restored?.via).toBe('probe')
-      expect(restored?.decidedAt).toBe(first?.decidedAt)
-      expect(restored?.results).toEqual(first?.results)
-      // 未重新探测（记录恢复自缓存，非捏造新探测）
-      expect(upgradeFetchMock).toHaveBeenCalledTimes(2)
-    })
   })
 
   describe('探测 URL 与 release-sources 域常量同源（R1-U3）', () => {

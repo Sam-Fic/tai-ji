@@ -71,12 +71,11 @@ export function renderTextResult(result: RenderableToolResult): Text {
  * buildRunSpecFromScript 的调用方差异项（两个 tool 的取值域不同，用参数保留）：
  * - args：subagent_batch 由 handler 从顶层 tasks + 运行级 agent 组装；workflow 用 params.args
  * - slug：subagent_batch 可能是 handler 生成的 `<script>-<时间短码>`；workflow 用 params.slug
- * - budgetTokens / budgetTimeMs：分别来自各 tool 的 tokens / time 字段
+ * - budgetTokens：来自各 tool 的 tokens 字段
  */
 export interface RunSpecFromScriptOptions {
   args: Record<string, unknown>;
   budgetTokens?: number | undefined;
-  budgetTimeMs?: number | undefined;
   slug?: string | undefined;
   model?: string | undefined;
   thinkingLevel?: string | undefined;
@@ -96,7 +95,6 @@ export function buildRunSpecFromScript(
     scriptSource: script.toExecutable(),
     args: opts.args,
     budgetTokens: opts.budgetTokens,
-    budgetTimeMs: opts.budgetTimeMs,
     scriptName: script.name,
     slug: opts.slug,
     scriptPath: script.path,

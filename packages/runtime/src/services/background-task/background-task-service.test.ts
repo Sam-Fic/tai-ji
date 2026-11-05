@@ -12,7 +12,7 @@
  *     ① 活跃+pid 活+身份过+属主活 → 锁内预写 killing（仅 state 无 reason）→ 信号 → killed
  *     ② 活跃+pid 活+身份过+属主死 → 信号 → 锁内写 orphaned → killed
  *     ③ 活跃+pid 死（任属主）→ 不发信号；属主活写 exited/natural/null 过渡终态、
- *        属主死写 orphaned；poller 竞争已终态时不覆盖；锁内判活重查拒绝死而复生
+ *        属主死写 orphaned；exit-collector 竞争已终态时不覆盖；锁内判活重查拒绝死而复生
  *     ④ 身份探测不可得 → identity-unverifiable，无信号无写
  *     ⑤ 锁内写失败（①预写/②终态）→ registry-write-failed 中止语义（未发信号不杀）
  * - D6⑤ 补遗族（锁获取失败 catch ×2 + ③收尾写失败 catch ×2，全部 catch 点均覆盖）：
@@ -202,72 +202,65 @@ describe('P1: registry 并发写×读 1000 次 parse 成功率 100%', () => {
 // ── D2 变更检测：单广播源 + D8 watched ───────────────────────────
 
 describe('D2/D8: 变更检测共享 last-seen 单广播源 + watched 生命周期', () => {
-  it('事件钩子先消费变化后，轮询 tick 不再广播（同一变化至多广播一次）', async () => {
-    vi.useFakeTimers()
+  it('同一变化至多广播一次（共享 last-seen：mtime 未变不重播）', () => {
     const onTasksChanged = vi.fn()
     const service = makeService(makeDeps(), onTasksChanged)
     writeRegistry([makeEntry()])
     service.markWatched(SID)
-    service.start()
 
     // 任务状态迁移：写新 registry 并显式推进 mtime（同 ms 写入 mtime 不变的精度规避）
     writeRegistry([makeEntry({ state: 'exited', exitCode: 0, reason: 'natural', endedAt: STARTED_AT + 9, durationMs: 9 })])
     utimesSync(registryPath(), 1000, 1000)
 
-    // 事件钩子路径先到：消费掉该 mtime 变化
+    // 事件钩子路径消费该 mtime 变化
     service.checkForChanges()
     expect(onTasksChanged).toHaveBeenCalledTimes(1)
 
-    // 轮询 tick 到：mtime 未再变 → 不重播（共享 last-seen，非第二广播源）
-    await vi.advanceTimersByTimeAsync(2_000)
+    // mtime 未再变 → 不重播（共享 last-seen，非第二广播源）
+    service.checkForChanges()
     expect(onTasksChanged).toHaveBeenCalledTimes(1)
 
-    // 新变化 → 下个轮询 tick 广播第 2 次
+    // 新变化 → 再次检测广播第 2 次
     writeRegistry([makeEntry({ state: 'killing' })])
     utimesSync(registryPath(), 2000, 2000)
-    await vi.advanceTimersByTimeAsync(2_000)
+    service.checkForChanges()
     expect(onTasksChanged).toHaveBeenCalledTimes(2)
     service.dispose()
   })
 
-  it('markWatched 建立基线不广播；mtime 未变时轮询静默', async () => {
-    vi.useFakeTimers()
+  it('markWatched 建立基线不广播；mtime 未变时检测静默', () => {
     const onTasksChanged = vi.fn()
     const service = makeService(makeDeps(), onTasksChanged)
     writeRegistry([makeEntry()])
     service.markWatched(SID)
-    service.start()
-    await vi.advanceTimersByTimeAsync(6_000)
+    service.checkForChanges()
+    service.checkForChanges()
     expect(onTasksChanged).not.toHaveBeenCalled()
     service.dispose()
   })
 
-  it('垃圾 sid：listTasks 静默空表，轮询不告警不广播', async () => {
-    vi.useFakeTimers()
+  it('垃圾 sid：listTasks 静默空表，检测不告警不广播', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const onTasksChanged = vi.fn()
     const service = makeService(makeDeps(), onTasksChanged)
     const result = service.listTasks('garbage-sid-never-existed')
     expect(result).toEqual({ entries: [], corrupted: false })
     service.markWatched('garbage-sid-never-existed')
-    service.start()
-    await vi.advanceTimersByTimeAsync(6_000)
+    service.checkForChanges()
     expect(onTasksChanged).not.toHaveBeenCalled()
     expect(warnSpy).not.toHaveBeenCalled()
     service.dispose()
   })
 
-  it('dispose 后轮询停止', async () => {
-    vi.useFakeTimers()
+  it('dispose 后 watched 清空：checkForChanges 零动作', () => {
     const onTasksChanged = vi.fn()
     const service = makeService(makeDeps(), onTasksChanged)
     writeRegistry([makeEntry()])
     service.markWatched(SID)
-    service.start()
     service.dispose()
     writeRegistry([makeEntry({ state: 'exited', exitCode: 0 })])
     utimesSync(registryPath(), 3000, 3000)
-    await vi.advanceTimersByTimeAsync(6_000)
+    service.checkForChanges()
     expect(onTasksChanged).not.toHaveBeenCalled()
   })
 })
@@ -365,9 +358,9 @@ describe('D6: kill 分支矩阵', () => {
     expect(Object.hasOwn(entry, 'reason')).toBe(false)
   })
 
-  it('③ 锁内重读 poller 竞争已终态：不覆盖新鲜 exitCode（判活重查置于锁内重读之后）', async () => {
+  it('③ 锁内重读 exit-collector 竞争已终态：不覆盖新鲜 exitCode（判活重查置于锁内重读之后）', async () => {
     writeRegistry([makeEntry()])
-    // 锁外判活调用时同步模拟 poller 抢先写权威终态，再返回 pid 已死
+    // 锁外判活调用时同步模拟 exit-collector 抢先写权威终态，再返回 pid 已死
     const deps = makeDeps({
       isPidAlive: vi.fn((pid: number) => {
         if (pid === TASK_PID) {
@@ -384,7 +377,7 @@ describe('D6: kill 分支矩阵', () => {
     expect(result).toEqual({ killed: false, reason: 'already-exited' })
     const entry = readRawEntries()[0]
     expect(entry.state).toBe('exited')
-    expect(entry.exitCode).toBe(5) // runtime 过渡写未发生，poller 权威值保留
+    expect(entry.exitCode).toBe(5) // runtime 过渡写未发生，exit-collector 权威值保留
     expect(entry.tailSummary).toBe('fresh')
   })
 

@@ -22,7 +22,7 @@ import type { GitFileStatus } from '@taiji/shared'
  *   symref、`config --get` 读 checkout.defaultRemote）——worktree 默认 base 动态推导用。
  *   本仓内新增用途限只读（config 不做写）。
  * - fetch：后台刷新远端跟踪 ref（打开仓库时 prefetch 默认远端）。网络命令，调用方必须自带
- *   长超时档（对齐 WORKTREE_GIT_TIMEOUT_MS 量级）并吞错降级。
+ *   长超时档（worktree-prefetch 的 60s）并吞错降级。
  *
  * 路径/message/分支名 作为 args 数组元素传入（如 ['--', 'src/a.ts']、['-m', 'msg']、['main']），
  * 由 GitService 保证语义正确，executor 只负责以数组形式交给 execFile。
@@ -49,7 +49,7 @@ export interface GitExecutorResult {
   exitCode: number
 }
 
-/** exec 的可选执行参数。timeoutMs 覆盖实现默认超时（git-executor 默认 8000ms）。 */
+/** exec 的可选执行参数。timeoutMs 仅供网络命令（fetch）显式传墙钟；本地 git 操作不传（无墙钟）。 */
 export interface GitExecOptions {
   timeoutMs?: number
 }
@@ -61,8 +61,7 @@ export interface GitExecOptions {
  * - 必须用 `child_process.execFile('git', [command, ...(args ?? [])], { cwd, encoding:'utf8' })`
  *   （异步——execFile 不阻塞事件循环；数组参数不经 shell）
  * - 禁止 exec/spawn 拼接 shell 字符串（§6.4 grep 防注入）
- * - 设 timeout 防大仓库卡死（spec-w11 G-R2-05）；调用方可经 opts.timeoutMs 收紧
- *   （GitStateService 的 snapshotStatus/numstat 按 03-git-state-service D3-1 定案用 5000ms）
+ * - 本地 git 操作不设墙钟（跑到退出为止）；仅网络命令（fetch）经 opts.timeoutMs 显式传超时
  * - exitCode 非 0 时**不抛**，原样返回 {exitCode, stderr}，由 GitService 按语义判定（如非 git 仓库 vs 冲突）
  */
 export interface IGitExecutor {

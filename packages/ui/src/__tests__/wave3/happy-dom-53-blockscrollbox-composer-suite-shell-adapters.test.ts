@@ -339,52 +339,6 @@ describe('createCompanionDialogAdapters（C2/C3/C4 分流）', () => {
     unsub()
   })
 
-  it('TC10: onUiRequestExpired 订阅 global 通道 plugin:uiRequestExpired（D2 撤窗，requestId 反查 sessionId）', () => {
-    // 反查表为模块级共享（同文件先行用例可能残留表项）——用例内显式 reset，尾部表项数断言才只反映本用例写入
-    __testingProbe().resetRequestIdSessionsForTest()
-    const adapters = createCompanionDialogAdapters(bus)
-    const expiredHandler = vi.fn()
-    const unsubExpired = adapters.source.onUiRequestExpired(expiredHandler)
-
-    // 反查表来自 onUiRequest 投递流：先投递（记录 requestId→sessionId），再撤窗
-    const requestHandler = vi.fn()
-    const unsubRequest = adapters.source.onUiRequest(requestHandler)
-    bus.emit({ kind: 'ui-request', sessionId: 's1', request: { requestId: 'r1', pluginId: 'p1', kind: 'confirm' } })
-    expect(requestHandler).toHaveBeenCalledTimes(1)
-
-    // D2：撤窗广播 payload 无 sessionId（runtime 不注入活跃 sid）→ global 通道广播形状
-    dispatchGlobal({ type: 'plugin:uiRequestExpired', payload: { requestId: 'r1', pluginId: 'p1' } })
-    expect(expiredHandler).toHaveBeenCalledTimes(1)
-    expect(expiredHandler).toHaveBeenCalledWith({ sessionId: 's1', requestId: 'r1' })
-
-    // 同一 requestId 二次撤窗：表项已删 → miss noop（幂等）
-    dispatchGlobal({ type: 'plugin:uiRequestExpired', payload: { requestId: 'r1', pluginId: 'p1' } })
-    expect(expiredHandler).toHaveBeenCalledTimes(1)
-
-    // 未投递过的 requestId（已 respond 关闭 / 未知请求）→ miss noop 幂等（V4b）
-    dispatchGlobal({ type: 'plugin:uiRequestExpired', payload: { requestId: 'unknown', pluginId: 'p1' } })
-    expect(expiredHandler).toHaveBeenCalledTimes(1)
-
-    // 非 expired 类型零触发
-    dispatchGlobal({ type: 'plugin:crashed', payload: { pluginId: 'p1', error: 'x' } })
-    expect(expiredHandler).toHaveBeenCalledTimes(1)
-
-    // MF-4：payload.sessionId（撤窗时点活跃 sid）与反查表冲突时，反查优先（投递时归属 sid）
-    bus.emit({ kind: 'ui-request', sessionId: 's2', request: { requestId: 'r2', pluginId: 'p1', kind: 'confirm' } })
-    dispatchGlobal({ type: 'plugin:uiRequestExpired', payload: { requestId: 'r2', pluginId: 'p1', sessionId: 's-other' } })
-    expect(expiredHandler).toHaveBeenLastCalledWith({ sessionId: 's2', requestId: 'r2' })
-
-    // MF-4 兜底：Map miss（壳重启无条目）时 payload sid 兜底路由
-    dispatchGlobal({ type: 'plugin:uiRequestExpired', payload: { requestId: 'r3', pluginId: 'p1', sessionId: 's-payload' } })
-    expect(expiredHandler).toHaveBeenLastCalledWith({ sessionId: 's-payload', requestId: 'r3' })
-
-    // expired 命中出队即删表（G1 生命周期，不残留）：本用例 r1/r2 命中撤窗后表项数为 0
-    expect(__testingProbe().probeRequestIdSessionsSize()).toBe(0)
-
-    unsubExpired()
-    unsubRequest()
-  })
-
   it('TC-BUS: onUiRequest 退订后 bus 事件不再投递（订阅/退订时序契约，双壳共用）', () => {
     const adapters = createCompanionDialogAdapters(bus)
     const handler = vi.fn()
@@ -498,37 +452,24 @@ describe('requestIdSessions respond 路径删除（G1 / memory-leak-remediation 
     unsub()
   }
 
-  it('TC-G1a: pi respond（sendPiResponse）后表项删除——迟到撤窗广播 miss noop', () => {
-    // [G1] pi 源 dialog 的有效清理路径只有 respond（extension UI 请求无超时撤窗广播）。
+  it('TC-G1a: pi respond（sendPiResponse）后表项删除', () => {
+    // [G1] dialog 的有效清理路径只有 respond（dialog 等待无时限，无撤窗广播）。
     const adapters = createCompanionDialogAdapters(bus)
-    const expiredHandler = vi.fn()
-    const unsubExpired = adapters.source.onUiRequestExpired(expiredHandler)
     deliverRequest(adapters, 'r1')
     expect(adapters.__testing.probeRequestIdSessionsSize()).toBe(1)
 
     // respond：用户作答 → 回传 extension.ui_response → 表项删除
     adapters.transport.sendPiResponse('s1', 'r1', 'confirm', true)
     expect(adapters.__testing.probeRequestIdSessionsSize()).toBe(0)
-
-    // 已 respond 的请求收到迟到撤窗广播 → 反查 miss → noop（不误触已达应答 dialog）
-    dispatchGlobal({ type: 'plugin:uiRequestExpired', payload: { requestId: 'r1', pluginId: 'p1' } })
-    expect(expiredHandler).not.toHaveBeenCalled()
-    unsubExpired()
   })
 
-  it('TC-G1b: plugin respond（sendPluginResponse）后表项删除——迟到撤窗广播 miss noop', () => {
+  it('TC-G1b: plugin respond（sendPluginResponse）后表项删除', () => {
     const adapters = createCompanionDialogAdapters(bus)
-    const expiredHandler = vi.fn()
-    const unsubExpired = adapters.source.onUiRequestExpired(expiredHandler)
     deliverRequest(adapters, 'r2')
     expect(adapters.__testing.probeRequestIdSessionsSize()).toBe(1)
 
     adapters.transport.sendPluginResponse('r2', { value: 'x' })
     expect(adapters.__testing.probeRequestIdSessionsSize()).toBe(0)
-
-    dispatchGlobal({ type: 'plugin:uiRequestExpired', payload: { requestId: 'r2', pluginId: 'p1' } })
-    expect(expiredHandler).not.toHaveBeenCalled()
-    unsubExpired()
   })
 
   it('TC-G1d: 反查表为模块级共享（双消费方共管不变量）——跨 factory/独立 transport 同表；reset 清空', () => {
@@ -566,22 +507,10 @@ class MockDialogRequestSource implements DialogRequestSource {
     this.unsubs.push(unsub)
     return unsub as unknown as () => void
   })
-  onUiRequestExpired = vi.fn((handler: (e: { sessionId: string; requestId: string }) => void): (() => void) => {
-    this.expiredHandler = handler
-    const unsub = vi.fn()
-    this.unsubs.push(unsub)
-    return unsub as unknown as () => void
-  })
-
   requestHandler: ((req: DialogRequest) => void) | null = null
-  expiredHandler: ((e: { sessionId: string; requestId: string }) => void) | null = null
 
   triggerUiRequest(req: Partial<DialogRequest> & { requestId: string; sessionId: string }): void {
     this.requestHandler?.(makeRequest(req))
-  }
-
-  triggerExpired(sessionId: string, requestId: string): void {
-    this.expiredHandler?.({ sessionId, requestId })
   }
 }
 
@@ -719,25 +648,11 @@ describe('CompanionBand', () => {
     expect(wrapper.find('[data-testid="companion-band"]').exists()).toBe(false)
   })
 
-  it('TC-5b expired 撤窗：plugin:uiRequestExpired 出队后 band 自隐藏（D2 取消非替答，无回传）', async () => {
-    const { wrapper, source, transport } = mountBand()
-    source.triggerUiRequest({ sessionId: 'A', requestId: 'r1', method: 'confirm', title: '确认操作' })
-    await nextTick()
-    expect(wrapper.find('[data-testid="companion-band"]').exists()).toBe(true)
-
-    // dialog 到期撤窗：band 消失 + 不产生任何回传（插件侧已收 UI_TIMEOUT reject）
-    source.triggerExpired('A', 'r1')
-    await nextTick()
-    expect(wrapper.find('[data-testid="companion-band"]').exists()).toBe(false)
-    expect(transport.sendPiResponse).not.toHaveBeenCalled()
-    expect(transport.sendPluginResponse).not.toHaveBeenCalled()
-  })
-
   it('MF-5: unmount 后订阅退订生效（queue 在 setup 顶层创建，onScopeDispose 正常注册）', async () => {
     const { wrapper, source } = mountBand()
     await nextTick()
-    // 队列创建时注册两个订阅（onUiRequest + onUiRequestExpired）
-    expect(source.unsubs).toHaveLength(2)
+    // 队列创建时注册订阅（onUiRequest）
+    expect(source.unsubs).toHaveLength(1)
 
     // 首次请求正常入队渲染
     source.triggerUiRequest({ sessionId: 'A', requestId: 'r1', method: 'confirm' })
@@ -745,10 +660,9 @@ describe('CompanionBand', () => {
     expect(wrapper.find('[data-testid="companion-band"]').exists()).toBe(true)
 
     wrapper.unmount()
-    // scope dispose → 两个订阅均退订。MF-5 修复前 queue 在 computed getter 内创建，
+    // scope dispose → 订阅退订。MF-5 修复前 queue 在 computed getter 内创建，
     // onScopeDispose 注册静默失败（无 active effect scope），unmount 后 unsub 不会被调。
     expect(source.unsubs[0]).toHaveBeenCalledTimes(1)
-    expect(source.unsubs[1]).toHaveBeenCalledTimes(1)
   })
 
   it('TC-6 未知 method 只读降级：title/message 展示 + 无按钮 + console.warn（ERR3）', async () => {

@@ -27,7 +27,6 @@ import { flushPromises } from '@vue/test-utils'
 import { ref, type Ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { getExecutingBash, replayEntries } from '@taiji/core'
-import { historyWindowFromReply } from '@taiji/core/domain/chat/truncated-window'
 import {
   bindDrawerSessionId,
   drawerControl,
@@ -1157,47 +1156,5 @@ describe('chat store disposeSession（W1：清理 per-session 全部状态）', 
     expect(store.getMessages('s1')).toEqual([])
     expect(store.getMessages('s2')).toHaveLength(2)
     expect(store.isHydrated('s2')).toBe(true)
-  })
-})
-
-// ═══════ 来源节：chat-interrupted-window ═══════
-
-function userMsg(id: string): Message {
-  return { id, role: 'user', content: '被打断前的提问', status: 'complete', timestamp: 0 }
-}
-
-describe('chat store window.interrupted 链路（U8）', () => {
-  beforeEach(() => {
-    setActivePinia(createPinia())
-  })
-
-  it('historyWindowFromReply：interrupted 出场透传、缺省不出场（归一单点）', () => {
-    expect(historyWindowFromReply({ truncated: false, loadedTurns: 1, totalTurnsEstimate: 1, interrupted: true }))
-      .toEqual({ truncated: false, loadedTurns: 1, totalTurnsEstimate: 1, interrupted: true })
-    // 活跃路径 / 游标翻页 / 旧 runtime：无 interrupted 字段 → window 无该键（「无判定」语义）
-    const noMark = historyWindowFromReply({ truncated: false, loadedTurns: 1, totalTurnsEstimate: 1 })
-    expect('interrupted' in noMark).toBe(false)
-  })
-
-  it('hydrate 带 interrupted window：getHistoryWindow 读回置位（重开 hydrate 链渲染条件源）', () => {
-    const chat = useChatStore()
-    chat.hydrate('int-sid', [userMsg('u1')], historyWindowFromReply({ truncated: false, loadedTurns: 1, totalTurnsEstimate: 1, interrupted: true }))
-    expect(chat.getHistoryWindow('int-sid')?.interrupted).toBe(true)
-  })
-
-  it('无判定 window：interrupted 不出场，消费方按 undefined（不渲染提示条）处理', () => {
-    const chat = useChatStore()
-    chat.hydrate('plain-sid', [userMsg('u1')], historyWindowFromReply({ truncated: false, loadedTurns: 1, totalTurnsEstimate: 1 }))
-    // MessageStream 派生同款判定：interrupted === true 才渲染
-    expect(chat.getHistoryWindow('plain-sid')?.interrupted === true).toBe(false)
-  })
-
-  it('reconcileHistory 覆盖语义：中断标记随最新响应整体覆盖（重新切入后以最新判定为准）', () => {
-    const chat = useChatStore()
-    chat.hydrate('rc-sid', [userMsg('u1')], historyWindowFromReply({ truncated: false, loadedTurns: 1, totalTurnsEstimate: 1, interrupted: true }))
-    expect(chat.getHistoryWindow('rc-sid')?.interrupted).toBe(true)
-    // 后续响应无中断（如会话被重新落盘收尾）→ 覆盖为无判定
-    chat.reconcileHistory('rc-sid', [userMsg('u1')], historyWindowFromReply({ truncated: false, loadedTurns: 1, totalTurnsEstimate: 1 }))
-    expect(chat.getHistoryWindow('rc-sid')?.interrupted).toBeUndefined()
   })
 })

@@ -23,14 +23,10 @@ import { getDescendantPids, killProcessTree } from './process-control.js'
 import { terminateWindowsProcessTree } from './windows-process.js'
 
 export const PORT_RANGE_SIZE = 10
-export const KILL_WAIT_MS = 200
 export const SAFE_KILL_NAMES = /(?:^|[\/\\])(?:node|node\.exe|pi|pi\.exe|pi-windows-x64\.exe|tsx|tsx\.exe|electron|electron\.exe|taiji|taiji\.exe|bash|bash\.exe|sh|sh\.exe|zsh|zsh\.exe)$/i
 
 /** runtime 进程 cmdline 指纹：dev（tsx 跑源码）与打包（dist bundle）两种形态都显式注入该参数。 */
 const RUNTIME_CMDLINE_MARKER = '--builtin-plugins-dir='
-/** 残留 runtime SIGTERM → SIGKILL 的宽限上界（控制侧秒级，对齐 STOP_TIMEOUT_MS 量级）。 */
-export const RECLAIM_TERM_GRACE_MS = 2000
-const RECLAIM_POLL_MS = 50
 /** kill decision 日志里 cmdline 摘要截断长度。 */
 const LOG_CMDLINE_MAX = 200
 /** 端口占用者描述里单进程详情截断长度。 */
@@ -167,12 +163,12 @@ function isOwnStaleRuntimePid(record: { pid: number; port: number }, platform: N
 }
 
 /**
- * 收割本实例残留 runtime（前一次 main 崩溃遗留的孤儿）：SIGTERM → 宽限 → SIGKILL 进程树。
- * 后代 pid 必须在 SIGTERM 前预记录——runtime 退出后 pi 的 PPID 变 1，事后查不到
+ * 收割本实例残留 runtime（前一次 main 崩溃遗留的孤儿）：预记录后代后直接 SIGKILL 进程树。
+ * 后代 pid 必须在发信号前预记录——runtime 退出后 pi 的 PPID 变 1，事后查不到
  * （对齐 stopRuntimeProcess 时序）。
  * @returns 是否实际收割了进程
  */
-export async function reclaimOwnStaleRuntime(termGraceMs: number = RECLAIM_TERM_GRACE_MS): Promise<boolean> {
+export async function reclaimOwnStaleRuntime(): Promise<boolean> {
   const record = readOwnInstanceRecord(getDataDir())
   if (!record || !isPidAlive(record.pid)) return false
   const platform = process.platform
@@ -195,21 +191,7 @@ export async function reclaimOwnStaleRuntime(termGraceMs: number = RECLAIM_TERM_
     terminateWindowsProcessTree(record.pid)
     return true
   }
-  try { process.kill(record.pid, 'SIGTERM') } catch { return true }
-  const deadline = Date.now() + termGraceMs
-  while (Date.now() < deadline && isPidAlive(record.pid)) {
-    await sleep(Math.min(RECLAIM_POLL_MS, termGraceMs))
-  }
-  if (isPidAlive(record.pid)) {
-    killProcessTree(record.pid, descendants)
-    return true
-  }
-  // root 已退出：SIGTERM 预记录后代（runtime 死后其 pi 子树失去管理者；多数情况
-  // runtime 优雅退出已自行收割，此处 best-effort 补刀，残活由启动期 orphan sweep 兜底）
-  for (const pid of descendants) {
-    // eslint-disable-next-line taste/no-silent-catch -- descendant may have exited with runtime
-    try { process.kill(pid, 'SIGTERM') } catch { /* 已随 runtime 退出 */ }
-  }
+  killProcessTree(record.pid, descendants)
   return true
 }
 
@@ -248,8 +230,4 @@ export async function findAvailablePort(): Promise<number> {
     ...occupants.map(line => `  - ${line}`),
     `  Fix: stop the occupying instance/process, or set TAIJI_AGENT_PORT_OFFSET to move this instance's port segment.`,
   ].join('\n'))
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
 }

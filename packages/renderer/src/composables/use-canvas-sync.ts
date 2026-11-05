@@ -180,7 +180,7 @@ export function useCanvasSync(sidRef: Ref<string | null | undefined>): CanvasSto
   return store
 }
 
-/** 测试钩子：复位订阅 + 桥（模块级跨用例残留防护，对齐 _resetRollingRestartStatusForTest）。 */
+/** 测试钩子：复位订阅 + 桥（模块级跨用例残留防护，对齐 _resetXxxForTest 模式）。 */
 export function _resetCanvasSyncForTest(): void {
   refCount = 0
   releaseSubscription()

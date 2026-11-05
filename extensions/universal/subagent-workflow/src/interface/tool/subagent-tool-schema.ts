@@ -29,7 +29,7 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 
-import { MAX_TIMER_DELAY_MS, THINKING_ORDER } from "@zhushanwen/subagent-core";
+import { THINKING_ORDER } from "@zhushanwen/subagent-core";
 
 import { SLUG_MAX_LENGTH } from "@zhushanwen/subagent-core";
 
@@ -85,10 +85,6 @@ export const SubagentStartParams = Type.Object({
   })),
   // [modeless 波5] conversation 参数已删除：chatMode 字段消亡后「模式」不存在——
   // 一切 record 永续可续聊（idle 后 message 即续、fork-from 可继承），无模式开关可表达。
-  idleTimeoutMs: Type.Optional(Type.Number({
-    description:
-      "Idle-recycle cadence for ALL subagents (modeless, not a mode switch): idle subagent auto-archives after this long. Default 300000 (5min); 0/negative disables. Priority: this param > env TAIJI_SUBAGENT_IDLE_TIMEOUT_MS > default.",
-  })),
   engine: Type.Optional(StringEnum(["pi", "zcode"], {
     description:
       "Execution engine. Omit to inherit config. Priority: this param > agent .md frontmatter > config.json defaultEngine. Non-pi engines reject fork/worktree.",
@@ -174,9 +170,6 @@ export const SubagentsParams = Type.Object({
   tokens: Type.Optional(Type.Number({
     // 预算纪律句已删（tool-declaration-slimming D1 单源化→注入段）：跨工具预算纪律说一次，原文见 git 历史。
     description: "Max token budget for the whole batch.",
-  })),
-  time: Type.Optional(Type.Number({
-    description: `Max time budget in ms for the whole batch (hard ceiling ${MAX_TIMER_DELAY_MS} ms — larger values fail fast at entry).`,
   })),
 });
 

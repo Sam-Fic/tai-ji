@@ -9,8 +9,8 @@
 // 上限（2×700），run-orchestration.ts 物理超限不可避免（偏差登记待主 agent 追认；
 // 备选方案 = 第三文件再拆 Continuation 协作范围）。两文件零互调零 import（G2 / R1 打样
 // 模式 3）：跨文件协作经壳 deps 回调编排（acquirePoolOrFinalize / settleOneShotOutcome
-// / outcomeToAgentResult / releaseRoundResources / resolveChatEnginePort /
-// assertIdleTimeoutMsSafe——壳装配闭包指 run-orchestration 实例方法）。
+// / outcomeToAgentResult / releaseRoundResources / resolveChatEnginePort——
+// 壳装配闭包指 run-orchestration 实例方法）。
 //
 // 单一职责：workflow 脚本 agent() 派发链（H2 W2 八步迁移的 service 侧承接）——
 // AgentCallOpts 进站映射、引擎路由 + 预检、origin:"workflow" record 注册、journal /
@@ -65,12 +65,6 @@ import { updateFromEvent } from "../persistence/execution-record.ts";
 import { assertTaskShapeSupported } from "../engine/common/capability-gate.ts";
 import { wireEventJournal } from "../engine/common/event-journal-wiring.ts";
 import type { ExecutionNestingContext } from "../engine/common/nesting-guard.ts";
-// [H2 W2 迁移步⑥] mergeRunSignals 提公共 helper（原 SAR 模块内直调）——workflow
-// 派发的 timeout+外部 signal 两源合流。
-import { mergeRunSignals, type MergedRunSignalHandle } from "../engine/common/run-signals.ts";
-// [subagent-observability §3.3.9] 宿主超时 abort 的 reason 标记（结算点判别「本次
-// abort 由 timeoutMs 到期触发」的事实输入）。
-import { HOST_TIMEOUT_ABORT_REASON } from "../engine/common/kill-chain.ts";
 import { identityEnvelopeOf } from "../engine/port.ts";
 import type { EnginePort, RunContext } from "../engine/port.ts";
 import { DEFAULT_ENGINE_ID } from "../engine/registry.ts";
@@ -127,8 +121,7 @@ export type MemberReviveOutcome =
  * [R1 打样模式 1] 聚合协作 deps——**全部晚绑定闭包，构造期零求值**。
  *
  * 窄结构类型只声明聚合真实消费的通道（不整实例注入）。四类成员：
- * - 断言/校验侧（assertReady / assertIdleTimeoutMsSafe）：入口就绪门与 idleTimeoutMs
- *   合法域校验（本体在 SessionBaselines / RunOrchestration）。
+ * - 断言侧（assertReady）：入口就绪门（本体在 SessionBaselines）。
  * - 会话基线 getter（getExecNesting / getStreamSink / getUiObservability /
  *   getSessionRootId / getPi 通道外的 NotifyHost 派生视图）：initSession 注入的运行时可变
  *   态现读。
@@ -141,9 +134,6 @@ export type MemberReviveOutcome =
 export interface WorkflowDispatchDeps {
   /** [D4 下沉] assertReady 断言（本体在 SessionBaselines，壳转发）。 */
   readonly assertReady: () => void;
-  /** [T4② / PS-4] idleTimeoutMs 入口校验（本体在 RunOrchestration，与 execute/
-   *  executeAndAwait 两入口同款；经壳编排回调）。 */
-  readonly assertIdleTimeoutMsSafe: (opts: ExecuteOptions) => void;
   /** 嵌套身份基线（BC-12 嵌套护栏深度检查；SessionBaselines 现读）。 */
   readonly getExecNesting: () => ExecutionNestingContext;
   /** ModelConfigService（agentConfig 宽松读取侧读取 + 引擎路由全局缺省）。 */
@@ -277,9 +267,7 @@ export class WorkflowDispatch {
     stepIndex?: number,
   ): Promise<WorkflowAgentResult> {
     this.deps.assertReady();
-    // 入口校验（与 execute/executeAndAwait 同款 T4②）。
     const execOpts = workflowCallToExecuteOptions(opts);
-    this.deps.assertIdleTimeoutMsSafe(execOpts);
 
     // ── 八步迁移 ①②③：路由 → 预检 → identity（含非 pi 引擎 model 校验）──
     // 全部先于 record 创建与池 acquire（D3 失败零池占用）。agentConfig 取宽松读取侧
@@ -649,7 +637,7 @@ export class WorkflowDispatch {
    */
   private buildRunContext(
     record: ExecutionRecord,
-    runSignal: MergedRunSignalHandle,
+    signal: AbortSignal,
     effectiveResolved: ResolvedIdentity["resolved"],
     observedEvent: (event: AgentEvent) => void,
     effectiveStream: AgentStreamSink | undefined,
@@ -659,7 +647,7 @@ export class WorkflowDispatch {
       taskId: record.id,
       // [D4] record 身份信封（引擎写进任务子进程身份 env；构造单点 = identityEnvelopeOf）
       identity: identityEnvelopeOf(record),
-      signal: runSignal.signal,
+      signal,
       ctxModel: effectiveResolved.model,
       onEvent: observedEvent,
       ...(effectiveStream !== undefined ? { stream: effectiveStream } : {}),
@@ -703,7 +691,7 @@ export class WorkflowDispatch {
    * 的落点：
    *   ④ journal 接线（wireEventJournal 单点；taskId = record.id——真实 record 在
    *      store，不再用 SAR 的占位 id）；
-   *   ⑤ mergeRunSignals（timeoutMs + 外部 signal 合流）；
+   *   ⑤ run 级 signal 直通（原 mergeRunSignals 的 timeoutMs 墙钟合流已删）；
    *   ⑥ spawned-children 注册（dispose killAll 收割兜底，键 = record.id——dispose
    *      通道按进程组终止整组的语义保留，宿主停机/引擎退役场景触发）。
    * 池 = DefaultConcurrencyPool 共享（acquirePoolOrFinalize 同链，D3）；成功收尾 =
@@ -747,13 +735,10 @@ export class WorkflowDispatch {
     }
 
     const journal = wireEventJournal({ engineId: engine.id, taskId: record.id, forwardEvents: onEvent });
-    let runSignal: MergedRunSignalHandle | undefined;
+    // run 级 signal 直通（原 mergeRunSignals 的 timeoutMs 墙钟合流已随 run 域墙钟
+    // 机制删除——外部 signal 是唯一 abort 源；缺省恒新 controller 零信号）。
+    const runSignalSignal = signal ?? new AbortController().signal;
     try {
-      // timeoutMs + 外部 signal 并入同一合流。
-      runSignal = mergeRunSignals(
-        signal ?? new AbortController().signal,
-        opts.timeoutMs,
-      );
       const journalOnEvent = journal.onEvent;
       const observedEvent = (event: AgentEvent): void => {
         // [D5] armed 回执的登记消费点已随占位事件删除（占位形态协议版落地前无
@@ -780,7 +765,7 @@ export class WorkflowDispatch {
       const effectiveResolved = this.consultOverrideAtTaskSpec(record, identity, opts, engine);
       const runCtx = this.buildRunContext(
         record,
-        runSignal,
+        runSignalSignal,
         effectiveResolved,
         observedEvent,
         effectiveStream,
@@ -797,27 +782,9 @@ export class WorkflowDispatch {
         eventsPath: journal.path,
       };
       const result = this.deps.outcomeToAgentResult(record, outcome);
-      // [subagent-observability §3.3.9/§3.3.6 宿主超时轮分类] 结算点是宿主知晓「本次
-      // abort 由 timeoutMs 到期触发」的唯一层（runSignal.signal.reason = 超时标记）；
-      // 引擎收尾边沿只有「宿主取消 vs 引擎异常」两源判别，超时轮被引擎记 user.cancelled
-      // （中性）。宿主在此改判 harness.timeout（结清 failed + 展示失败档），引擎收条
-      // 事实保持原样。timeoutMs 显式传入才生效（本点只改分类不改超时语义）。
-      const timeoutFailure = hostTimeoutFailureCause(runSignal.signal.reason, outcome);
-      // result.failure 与 wfResult.failure 同源 outcome.failure（同一引用，其间 outcome 不变），
-      // 判定算一次两处复用。
-      const timeoutApplies = timeoutFailure !== undefined && yieldsToTimeoutFact(result.failure);
-      if (timeoutApplies) {
-        result.failure = timeoutFailure;
-      }
-      // D7 收尾（origin 分支在 settleOneShotOutcome 函数顶部；aborted 判外部 signal
-      // ——timeout 的 abort 走失败 result 语义，不映射 cancelled）。
+      // D7 收尾（origin 分支在 settleOneShotOutcome 函数顶部；aborted 判外部 signal）。
       await this.deps.settleOneShotOutcome(record, result, signal?.aborted === true);
       const wfResult = outcomeToWorkflowResult(outcome);
-      // [§3.3.9/§3.3.6] 宿主超时分类同步覆盖回脚本结果（call.result.failure → run 终局
-      // 成员交付结算 failedMembers[].cause 的点拼数据源，与 record 结算同判同词）。
-      if (timeoutApplies) {
-        wfResult.failure = timeoutFailure;
-      }
       return wfResult;
     } catch (err) {
       // swallow（不 re-throw）：脚本观察到合成 failed result 而非异常（引擎死亡
@@ -829,9 +796,8 @@ export class WorkflowDispatch {
       const failed = await this.deps.finalizeFailed(record, err);
       return mapToWorkflowAgentResult(failed);
     } finally {
-      // 先摘信号桥接，再归还池槽与 journal 收尾（SAR 同序）。内构 stream 的 widget
+      // 归还池槽与 journal 收尾（SAR 同序）。内构 stream 的 widget
       // 清除（dispose）同经 releaseRoundResources 回收。
-      runSignal?.dispose();
       this.deps.releaseRoundResources(record, pooled && acquired, effectiveStream);
       await journal.close();
     }
@@ -839,33 +805,6 @@ export class WorkflowDispatch {
 }
 
 // ── [H2 W2] workflow 域派发 helper（executeWorkflowAgent 专用，M3 语义逐项复刻）──
-
-/**
- * [subagent-observability §3.3.9/§3.3.6] 宿主超时轮失败分类（纯函数——结算点接线见
- * runWorkflowEngineTask）。merged signal 的 reason 携带超时标记（mergeRunSignals 的
- * abort 定时器独有写入；外部 cancel 的 abort 不带标记）→ 命中即产出 harness.timeout，
- * 未命中 = 非超时收敛（undefined，分类事实交还引擎收条）。raw 取引擎错误原文（分类
- * 不丢原文），缺席时落超时事实描述 + 恢复动作指引。
- */
-export function hostTimeoutFailureCause(signalReason: unknown, outcome: AgentOutcome): FailureCause | undefined {
-  if (signalReason !== HOST_TIMEOUT_ABORT_REASON) return undefined;
-  return {
-    class: "harness",
-    kind: "timeout",
-    retryable: false,
-    raw: outcome.error ?? "host call timeout (agent-call-timeout) — raise timeoutMs or reduce the task scope",
-  };
-}
-
-/**
- * 宿主超时分类的覆盖判据（§3.3.2 cause 优先级：provider 事实 > harness 预算/契约 >
- * agent 行为 > engine 崩溃）：provider/agent 是更高优先级的既有事实，不被宿主超时
- * 分类覆盖；user.cancelled / engine.* 是引擎在缺超时事实下的误判与兜底（引擎不知道
- * abort 由 timeoutMs 触发），由宿主改判。
- */
-export function yieldsToTimeoutFact(failure: FailureCause | undefined): boolean {
-  return failure === undefined || failure.class === "user" || failure.class === "engine";
-}
 
 /** ExecutionRecord 去只读视图（盖章写侧的局部合法形态；本文件两处盖章点共用）。 */
 type MutableStampRecord = { -readonly [K in keyof ExecutionRecord]: ExecutionRecord[K] };
@@ -961,6 +900,5 @@ function workflowCallToExecuteOptions(opts: AgentCallOpts): ExecuteOptions {
     ...present(opts.forkSource, (forkSource) => ({ forkFromSessionFile: forkSource })),
     ...present(opts.worktree, (worktree) => ({ worktree })),
     ...present(opts.cwd, (cwd) => ({ cwd })),
-    ...present(opts.idleTimeoutMs, (idleTimeoutMs) => ({ idleTimeoutMs })),
   };
 }

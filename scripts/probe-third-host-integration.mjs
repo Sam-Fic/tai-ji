@@ -21,7 +21,6 @@
 //                             多行 `- item` tools）经 parseAgentProfile/discoverAgents
 //                             断言；`/x/../etc/passwd.md` 经 normalizeRef /
 //                             normalizeWorkflowRef 拒绝（⛔2 声明收紧）
-//   S2  预算 floor        —— maxTurnsToWatchdogMs(2) >= 1_800_000（函数级真实调用）
 //   S6a 原子写确定性场景  —— 半截目标文件 + 残留 tmp 各 3 组
 //                             （manifest / sessions-index / workflow-state 布局形态），
 //                             listStaleTmpFiles / cleanupStaleTmpFiles /
@@ -541,32 +540,6 @@ async function partC() {
 }
 
 // ══════════════════════════════════════════════════════════════
-// Part D — S2 预算 floor（maxTurnsToWatchdogMs）
-// ══════════════════════════════════════════════════════════════
-
-function partD() {
-  section("Part D · S2 maxTurnsToWatchdogMs floor（30min）");
-  const two = core.maxTurnsToWatchdogMs(2);
-  check(
-    "S2 maxTurnsToWatchdogMs(2) >= 1_800_000（floor 生效）",
-    typeof two === "number" && two >= 1_800_000,
-    String(two),
-  );
-  const one = core.maxTurnsToWatchdogMs(1);
-  check(
-    "S2 maxTurnsToWatchdogMs(1) >= 1_800_000（floor 对小值同样生效）",
-    typeof one === "number" && one >= 1_800_000,
-    String(one),
-  );
-  const ten = core.maxTurnsToWatchdogMs(10);
-  check(
-    "S2 maxTurnsToWatchdogMs(10) = 10 × 5min（floor 之上线性）",
-    ten === 10 * 5 * 60 * 1000,
-    String(ten),
-  );
-}
-
-// ══════════════════════════════════════════════════════════════
 // Part E — S6a 原子写确定性场景（半截目标 + 残留 tmp × 3 组布局形态）
 // ══════════════════════════════════════════════════════════════
 
@@ -798,7 +771,6 @@ try {
   await partA();
   await partB();
   await partC();
-  partD();
   await partE();
   await partF();
 } finally {

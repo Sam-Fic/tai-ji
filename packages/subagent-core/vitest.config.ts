@@ -41,8 +41,8 @@ export default taijiTestConfig({
           name: "shared",
           include: shared,
           isolate: false,
-          // 对齐壳侧 F-R5：每个测试文件加载前净化四键 opt-in env（见 vitest.setup.ts），
-          // 防宿主 shell export 假红。projects 内 setupFiles 不继承 root 级，逐 project 挂。
+          // 每个测试文件加载前净化引擎宿主链路泄漏 env（ZCODE_ENG_* 前缀，
+          // 见 vitest.setup.ts）。projects 内 setupFiles 不继承 root 级，逐 project 挂。
           setupFiles: ["./vitest.setup.ts"],
         }),
       },

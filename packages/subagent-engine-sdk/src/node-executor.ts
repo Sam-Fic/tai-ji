@@ -4,8 +4,8 @@
 //
 // 为什么在 SDK：core/引擎包都不可 import runtime（runtime 包只存在于 taiji 宿主
 // 链），而矩阵的三宿主（pi 扩展 / runtime sidecar / standalone）两侧都要消费同一套
-// 解析规则——探针行为约束（同超时、同 --eval process.exit(0) 探针体、同 PATH/HOME
-// 最小 env、同 Electron RUN_AS_NODE 条件）。
+// 解析规则。（原「执行器探针」——spawn --eval process.exit(0) 验证 + 5s 超时——已随
+// 时间机制删除：执行器好坏由引擎 spawn 后的实际退出/握手链兜底报错。）
 //
 // 矩阵（规格逐行对应）：
 //   ① pi 扩展宿主（打包）：process.execPath 是 Bun standalone binary，再拉就是又起
@@ -21,81 +21,10 @@
 // env 名常量与 packages/shared/src/constants.ts 的 W9 挂载块同源（SDK 不 import
 // shared——F9，见 env.ts 头注释同款理由）。
 
-import { spawn } from "node:child_process";
-
 import { EngineSdkError } from "./protocol/error-codes.ts";
 
 /** L0 注入的引擎执行器路径 env。 */
 export const ENGINE_NODE_ENV = "TAIJI_AGENT_ENGINE_NODE";
-
-/** 探针超时（spawn 执行器跑 --eval "process.exit(0)" 的上限）。 */
-const PROBE_TIMEOUT_MS = 5_000;
-
-/**
- * 探针：验证执行器能以纯 node 语义执行 JS。
- *
- * 为什么需要：打包态 pi 宿主的候选执行器可能是 Electron 二进制——直接当 node 用会
- * 拉起 GUI，必须同 env 注入 ELECTRON_RUN_AS_NODE=1 才是纯 node 模式；探针被证伪则
- * 按矩阵① 报 engine_not_found（带可操作指引），不静默回落 PATH 探测。
- */
-export function probeNodeExecutor(
-  execPath: string,
-  isElectron: boolean,
-): Promise<boolean> {
-  return new Promise((resolve) => {
-    let settled = false;
-    let child: ReturnType<typeof spawn> | null = null;
-    const finish = (ok: boolean): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try {
-        child?.kill("SIGKILL");
-      } catch {
-        // 已退出，正常路径
-        void 0;
-      }
-      resolve(ok);
-    };
-    const env: Record<string, string> = {};
-    if (process.env.PATH !== undefined) env.PATH = process.env.PATH;
-    if (process.env.HOME !== undefined) env.HOME = process.env.HOME;
-    if (isElectron) env.ELECTRON_RUN_AS_NODE = "1";
-
-    try {
-      child = spawn(execPath, ["--eval", "process.exit(0)"], {
-        env,
-        stdio: "ignore",
-        windowsHide: true,
-      });
-    } catch {
-      resolve(false);
-      return;
-    }
-    const timer = setTimeout(() => finish(false), PROBE_TIMEOUT_MS);
-    timer.unref();
-    child.on("error", () => finish(false));
-    child.on("exit", (code) => finish(code === 0));
-  });
-}
-
-/** 探针结果缓存（key = execPath:isElectron）。失败也缓存——重试窗口留给宿主重启。 */
-const probeCache = new Map<string, Promise<boolean>>();
-
-function probeCached(execPath: string, isElectron: boolean): Promise<boolean> {
-  const key = `${execPath}:${isElectron}`;
-  let p = probeCache.get(key);
-  if (!p) {
-    p = probeNodeExecutor(execPath, isElectron);
-    probeCache.set(key, p);
-  }
-  return p;
-}
-
-/** 测试钩子：清探针缓存（生产无调用方）。 */
-export function resetEngineNodeProbeCache(): void {
-  probeCache.clear();
-}
 
 /** 宿主形态（矩阵行；EngineClient 的 hostKind 自由字符串经 hostKindOf 归一）。 */
 export type EngineNodeHostKind = "pi-extension" | "runtime-sidecar" | "standalone";
@@ -139,11 +68,11 @@ function launchEnvOf(opts: EngineNodeLaunchOptions): Record<string, string | und
  * 矩阵①：pi 扩展宿主（打包）——必须用注入执行器 TAIJI_AGENT_ENGINE_NODE
  * （env 缺失 = engine_not_found；执行器探针失败 = engine_not_found + 指引）。
  */
-async function resolvePiExtensionLaunch(
+function resolvePiExtensionLaunch(
   entryPath: string,
   entryArgs: string[],
   env: Record<string, string | undefined>,
-): Promise<EngineNodeLaunch> {
+): EngineNodeLaunch {
   const engineNode = env[ENGINE_NODE_ENV]?.trim();
   if (engineNode === undefined || engineNode === "") {
     throw engineNotFound(
@@ -156,49 +85,27 @@ async function resolvePiExtensionLaunch(
   }
   // 执行器为 Electron 二进制时宿主会同时注入 ELECTRON_RUN_AS_NODE=1（矩阵① 同点注入）
   const isElectron = env.ELECTRON_RUN_AS_NODE === "1";
-  if (!(await probeCached(engineNode, isElectron))) {
-    throw engineNotFound(
-      `injected node executor failed the probe: ${engineNode} (isElectron=${isElectron})`,
-      `Verify the executor exists and can run plain node semantics `
-        + `(Electron binaries need ELECTRON_RUN_AS_NODE=1). The host re-probes after restart.`,
-    );
-  }
   return { command: engineNode, args: [entryPath, ...entryArgs], electronRunAsNode: isElectron };
 }
 
 /**
- * 矩阵②：runtime sidecar——process.execPath + ELECTRON_RUN_AS_NODE=1（Electron 宿主时，
- * 探针先行）。
+ * 矩阵②：runtime sidecar——process.execPath + ELECTRON_RUN_AS_NODE=1（Electron 宿主时）。
  */
-async function resolveRuntimeSidecarLaunch(
+function resolveRuntimeSidecarLaunch(
   entryPath: string,
   entryArgs: string[],
   opts: EngineNodeLaunchOptions,
-): Promise<EngineNodeLaunch> {
+): EngineNodeLaunch {
   const execPath = opts.execPath ?? process.execPath;
   const isElectron = opts.isElectronHost ?? process.versions.electron !== undefined;
-  if (!(await probeCached(execPath, isElectron))) {
-    throw engineNotFound(
-      `runtime sidecar executor failed the probe: ${execPath} (isElectron=${isElectron})`,
-      `The sidecar process.execPath must run plain node semantics (ELECTRON_RUN_AS_NODE=1 `
-        + `for Electron binaries). Check how the runtime sidecar was spawned.`,
-    );
-  }
   return { command: execPath, args: [entryPath, ...entryArgs], electronRunAsNode: isElectron };
 }
 
-/** 矩阵③：standalone——PATH node（探针被证伪 = engine_not_found + 安装指引）。 */
-async function resolveStandaloneLaunch(
+/** 矩阵③：standalone——PATH node。 */
+function resolveStandaloneLaunch(
   entryPath: string,
   entryArgs: string[],
-): Promise<EngineNodeLaunch> {
-  if (!(await probeCached("node", false))) {
-    throw engineNotFound(
-      `no usable 'node' on PATH for standalone engine launch (entry: ${entryPath})`,
-      `Install Node.js >= 22 and ensure 'node' is on PATH `
-        + `(https://nodejs.org/), or configure the engine explicitly via subagents/config.json.`,
-    );
-  }
+): EngineNodeLaunch {
   return { command: "node", args: [entryPath, ...entryArgs], electronRunAsNode: false };
 }
 
@@ -208,10 +115,10 @@ async function resolveStandaloneLaunch(
  *
  * 判定序（与规格逐行对应）：
  *   Windows + entry .cmd → cmd.exe /c 显式形态（禁 shell:true 的注入通道）；
- *   pi-extension → 注入执行器（env TAIJI_AGENT_ENGINE_NODE），缺失/探针失败 =
+ *   pi-extension → 注入执行器（env TAIJI_AGENT_ENGINE_NODE），缺失 =
  *     engine_not_found + 指引；
- *   runtime-sidecar → process.execPath（Electron 时 electronRunAsNode，探针先行）；
- *   standalone → PATH node（探针失败 = engine_not_found + 安装指引）；
+ *   runtime-sidecar → process.execPath（Electron 时 electronRunAsNode）；
+ *   standalone → PATH node；
  *   其余（dev 形态、非 Windows 非 .cmd、无矩阵命中的兜底）→ 直接 spawn 入口本体
  *   （shebang `#!/usr/bin/env node` 走 PATH node——引擎 bin 均带 shebang，dev/独立
  *   安装形态与现状一致）。

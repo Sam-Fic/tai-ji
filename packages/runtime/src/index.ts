@@ -9,8 +9,7 @@ import { readRemoteAccessToken } from './infra/remote-access.js'
 // 探测 → handler 构造）收敛在组合根（见 main() Transport layer 装配段），实现与穿越
 // 防护（E4）在 infra/mobile-static.ts。
 import { createMobileStaticHandler, resolveMobileStaticRoot } from './infra/mobile-static.js'
-import { SessionService, userStoppedMarkStore } from './services/session/session-service.js'
-import { PROBE_STALL_AUTO_QUIT } from './services/session/types.js'
+import { SessionService } from './services/session/session-service.js'
 import { REVOKED_SIGNAL_CUSTOM_TYPE } from './services/session/revoke-orchestrator.js'
 // BtwService 组合根接线（btw-question M2-b，B2 授权）：依赖六项按其 docstring 归位本文件。
 import { BtwService } from './services/session/btw-service.js'
@@ -70,7 +69,7 @@ import { getDataDir, getDefaultSessionDir } from '@taiji/shared/paths'
 // startupSweep：启动收编扫描 core 装配单点（挂点见 main() 内 registerRuntimeInstance
 // 之后的时序硬声明注释段）。
 import { startupSweep } from '@zhushanwen/subagent-core'
-import { initLogger, closeLogger, logger, captureMemorySnapshot, formatMemoryWatermarkLine, MEMORY_WATERMARK_INTERVAL_MS } from './infra/logger.js'
+import { initLogger, closeLogger, logger } from './infra/logger.js'
 import { probeSingleInstance, registerRuntimeInstance } from './infra/single-instance-guard.js'
 // u1b（crash-forensics-and-watchdog D1）runtime journal 单例。初始化是组合根职责（与
 // initLogger 同形态：模块级单例 + 未初始化 no-op）——不初始化则 getCrashJournal()
@@ -104,11 +103,6 @@ import { PiRetrySettings } from './infra/pi/pi-retry-settings.js'
 import { EventAdapter } from './infra/pi/event-adapter.js'
 import { FileChangeDiffAdapter } from './infra/pi/file-change-diff-adapter.js'
 import { EventInterpreter, applySessionOccupancyTransition } from './services/session/event-interpreter.js'
-// ping 探测观测超时窗常量从策略持有方直取（event-interpreter.ts 只 re-export ADR-0047
-// 既有三常量，该文件不在本单元范围；D1 窗值单一调整点 = event-interpreter-ping.ts）
-import { PING_OBSERVE_TIMEOUT_MS } from './services/session/event-interpreter-ping.js'
-// [pi-stall-detection U4] 静默判定矩阵：配置读侧（AS11 联动通道）+ 判死载荷类型（D3）。
-import { readStallMatrixConfigSnapshot, type StallJudgePayload } from './services/session/event-interpreter-silence.js'
 import { isGeneratingTurn } from './services/session/types.js'
 import { join, resolve, isAbsolute } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -171,16 +165,6 @@ import { WorkspaceService } from './services/workspace/workspace-service.js'
 import { runStartupBackgroundInit } from './services/startup-background-init.js'
 // u5（crash-forensics-and-watchdog D3）：reattach 编排 + 孤儿收殓完成 promise 交付回调。
 import { runStartupReattach } from './services/startup-reattach.js'
-// u6（crash-forensics-and-watchdog D4）：内存看门狗——60s heap 采样环 + 两级阈值 +
-// memory-relief 动作点。resolveWatchdogConfig：Gate W 武装门与三旋钮 env 解析。
-import { startWatchdog, resolveWatchdogConfig } from './infra/watchdog.js'
-import type { WatchdogHandle } from './infra/watchdog.js'
-// u7c（crash-forensics-and-watchdog D5）：滚动重启编排（推迟判定/上限/硬升级/T-30s 预告/
-// 状态机）+ shutdown 步骤打点面（SHUTDOWN_STEP_SEQUENCE 是打点序列 SSOT）。
-import { startRollingRestart, resolveRollingRestartConfig, shutdownStep } from './services/session/rolling-restart.js'
-import type { RollingRestartHandle } from './services/session/rolling-restart.js'
-// u7c：滚动重启计划内退出码（D5 ④；SSOT 在 shared，main 侧 PLANNED_EXIT_CODE 是同值转发）。
-import { RUNTIME_PLANNED_EXIT_CODE } from '@taiji/shared'
 // connection-datasync-ssot §6.1：实例标识 env 名（TAIJI_RUNTIME_ID，supervisor spawn 时
 // 与 token 同点注入；env 名 SSOT 在 shared，禁字面量）。
 import { RUNTIME_ID_ENV } from '@taiji/shared'
@@ -255,68 +239,6 @@ function resolveRuntimeToken(): string | null {
 function resolveRuntimeId(): string | null {
   const raw = process.env[RUNTIME_ID_ENV]
   return raw && raw.trim().length > 0 ? raw.trim() : null
-}
-
-// ── u5b-runtime-forensics D6-②：runtime 内存水位定时器 ──────────────────
-// 每 5 分钟一行（rss/heapUsed/heapTotal/external + 活跃 session 数 + pi 进程数），
-// 走既有 logger（runtime-<date>.log）。E2 事故（7 session 连坐 SIGTERM）无法归因的
-// 直接缺口就是无水位序列——A8 验收断言「runtime 日志有 5 分钟间隔水位行」。
-//
-// timer 句柄刻意做成模块级可取消形态：shutdown 序列经 stopMemoryWatermarkTimer() 收尾
-//（「停水位定时器」步骤），不需要重构本段。
-let memoryWatermarkTimer: NodeJS.Timeout | undefined
-
-/** 停止内存水位定时器（shutdown 收尾链步骤）。幂等。 */
-function stopMemoryWatermarkTimer(): void {
-  if (memoryWatermarkTimer !== undefined) {
-    clearInterval(memoryWatermarkTimer)
-    memoryWatermarkTimer = undefined
-  }
-}
-
-// ── u6（crash-forensics-and-watchdog D4）：内存看门狗句柄 ─────────────────
-// 句柄做成模块级可取消形态（对齐上方水位定时器先例）：shutdown 序列经 stopWatchdog()
-// 接入清理链（「停内存看门狗」步骤）。
-let watchdogHandle: WatchdogHandle | undefined
-
-/** 停止内存看门狗（shutdown 收尾链步骤）。幂等。 */
-function stopWatchdog(): void {
-  watchdogHandle?.stop()
-  watchdogHandle = undefined
-}
-
-// ── u7c（crash-forensics-and-watchdog D5）：滚动重启编排句柄 ─────────────────
-// 句柄做成模块级可取消形态（对齐上方水位定时器/看门狗先例）：shutdown 首步
-// cancelRollingRestart（「取消推迟定时器是 shutdown 首步」——推迟等待中的
-// runtime 收到 app 级 SIGTERM 时不得继续执行滚动重启）。
-let rollingRestartHandle: RollingRestartHandle | undefined
-
-/** 取消滚动重启推迟/预告定时器并复位状态机（shutdown 首步收尾）。幂等。 */
-function cancelRollingRestart(): void {
-  rollingRestartHandle?.cancel()
-  rollingRestartHandle = undefined
-}
-
-/**
- * 启动内存水位定时器（组合根 listen 成功后调用一次）。
- * unref：水位打点是纯观测范围，不得阻止进程自然退出（shutdown 显式 clearInterval 是
- * 第一道，unref 是不阻塞退出路径的兜底）。
- */
-function startMemoryWatermarkTimer(
-  getActiveSessions: () => number,
-  getPiProcesses: () => number,
-): void {
-  stopMemoryWatermarkTimer() // 幂等防御（重复调用不产生双定时器）
-  memoryWatermarkTimer = setInterval(() => {
-    const sample = {
-      ...captureMemorySnapshot(),
-      activeSessions: getActiveSessions(),
-      piProcesses: getPiProcesses(),
-    }
-    // 单行水位行（human grep）+ meta（机器消费同源数值），writeLogEntry 保证单行落盘
-    logger.info(formatMemoryWatermarkLine(sample), sample)
-  }, MEMORY_WATERMARK_INTERVAL_MS)
-  memoryWatermarkTimer.unref?.()
 }
 
 /**
@@ -1015,19 +937,6 @@ async function main(): Promise<void> {
         data: { ...context, sessionId },
         timestamp: Date.now(),
       }),
-      // [ADR-0047] ping 探测连续 3 次失败（180s）判定 pi 停滞（未响应健康探测：进程死
-      // 或事件循环挂死），触发自动处置链。[pi-stall-detection U2 / D2②] 接线从协作式
-      // sessionService.abort 改为按第 0 层进程存活信号分型的自动处置链入口
-      // handleStallDetermination（编排体在 dispatcher）：进程死 → 维持既有协作式 abort
-      // 显式收尾路由（AS9 链路逐点不变）；进程存活（事件循环挂死）→ sample 取证 → 判死
-      // 强杀 → 窄化自动恢复触发链 → 注入原因提示。.catch 防极端异常逃逸成
-      // unhandledRejection（abort/收尾内部已 try/catch 广播终态）——逃逸异常必须留痕：
-      // pi 死而处置链也坏时，零诊断线索无法排障（b24-M4）。
-      onSilentAbort: ({ sessionId: sid }) => {
-        sessionService.handleStallDetermination(sid).catch((e) => {
-          console.warn(`[runtime] silent-abort chain escaped (session ${sid}):`, e)
-        })
-      },
       // M4 compaction 事件驱动：interpreter 从 compaction_start/end 唯一编排广播（session.compacting /
       // message.compactionSummary / session.compacted）。[session-dead-structural-fixes D2 挂点迁移，
       // u3b] 原此处对三布尔的直写（布尔赋值）改调原语对应行（'compacting-start' /
@@ -1052,20 +961,8 @@ async function main(): Promise<void> {
       onTraceSync: (sid, trigger) => {
         sessionService.syncTraceEntries(sid, trigger)
       },
-      // [ADR-0047] ping get_state 进程健康探测（替代事件静默检测）。
-      // 延迟解析 client：interpreter 在 session 创建时构造，那时 client 可能尚未 spawn。
-      // pm（ProcessManager）在本闭包外已创建，getClient 返回 undefined 时计为一次失败
-      // （AC-9），但不抛错——client 偶发未就绪不应让 interpret 批次崩溃。
-      // [pi-stall-detection D1] 探测走 probeState 观测变体（请求级有界等待 + 窗满 cancel
-      // pending）——悬挂的探测请求经观测超时窗转成显式失败（事件循环挂死形态可判定）；
-      // 窗值常量 SSOT 在 event-interpreter-ping.ts（探测策略持有方）。
-      pingPi: async () => {
-        const client = pm.getClient(sessionId)
-        if (!client) return undefined
-        return client.probeState(PING_OBSERVE_TIMEOUT_MS)
-      },
       // C1（feat-compaction-closure 分界行实时化）：smart-context 落盘信号 → get_entries 拉取
-      // compaction entry 合成对话流分界行帧。延迟解析 client（pingPi 同款）：interpreter 在
+      // compaction entry 合成对话流分界行帧。延迟解析 client：interpreter 在
       // session 创建时构造，client 可能尚未 spawn——返回 undefined 由 interpreter 降级
       // （不发帧、warn 留痕），不抛错。
       getPiEntries: async () => {
@@ -1099,21 +996,6 @@ async function main(): Promise<void> {
       // sd-u5 起多播化：bash flush 是第一条路径（原单播语义不变），其后分发 agentSettledListeners
       // （delivery 内核 settled 边沿唤醒 + notify-once settle 兑现）；逐订阅者隔离 try/catch 收敛在
       // fanOutSettled（agent-settled-fanout.ts，可单测——本文件 import 即执行 main() 不可直测）。
-      // [pi-stall-detection U4 / D3] 静默判定矩阵装配：配置快照在 adapter 构造时读定
-      //（AS11 联动通道——base-tool-enhance 扩展配置 + pi settings + mcp.json 直读，与 pi
-      // 进程解析同锚 getPiAgentDir；分支装配 RL14 在矩阵构造时按快照求值——禁用/超界
-      // 配置只装配提示分支）；判死触发经 handleSilenceJudgeDetermination 接自动 abort
-      //（复用 U2 有界等待 + 悬挂升级判死强杀分型 + steer 注入）。.catch 防判死链异常
-      // 逃逸成 unhandledRejection（abort/收尾内部已 try/catch 广播终态，与 onSilentAbort
-      // 同款逃逸留痕理由）。
-      stallMatrix: {
-        configSnapshot: readStallMatrixConfigSnapshot(cwd),
-        onJudge: (payload: StallJudgePayload) => {
-          sessionService.handleSilenceJudgeDetermination(payload.sessionId, payload).catch((e) => {
-            console.warn(`[runtime] silence judge chain escaped (session ${payload.sessionId}):`, e)
-          })
-        },
-      },
       onAgentSettled: (sid) => {
         sessionService.flushPendingBashResults(sid)
         // [session-dead 2026-09-10] run 级联结束（pi _runAgentPrompt 的 finally 确定性 emit）→
@@ -1125,9 +1007,9 @@ async function main(): Promise<void> {
       },
     })
     // EventAdapter：纯翻译器，把翻译结果喂给 interpreter 编排。
-    // 第三参（background-task-sidebar D2 触发点②，u-runtime-rpc）：后台任务事件旁路——
+    // 第三参（background-task-sidebar D2 触发点①，u-runtime-rpc）：后台任务事件旁路——
     // customType background-bash（exit 边沿）与 bash 工具结束（spawn 路径）到达时对
-    // watched 集合跑一次变更检测（与 2s 轮询/自写自检共享同一 last-seen，单广播源非第二源）。
+    // watched 集合跑一次变更检测（与自写自检共享同一 last-seen，单广播源非第二源）。
     // sessionService 为闭包引用（createAdapter 先于其构造声明，工厂体仅在 session 建立时执行，
     // 引用恒就绪——同下方 onRecordEntriesInvalidated 延迟解析模式）；backgroundTasks 端口由
     // SessionService 构造器恒创建，`?.` 为端口缺省（防御）形态的静默 no-op。
@@ -1214,32 +1096,6 @@ async function main(): Promise<void> {
   // （server 启动前完成注入，RPC 到达时注册表必已就绪）。
   sessionService.setDeliveryRegistry(sessionDelivery)
 
-  // [pi-stall-detection U2 / D2②] 停滞自动处置链端口后置注入（组合根装配序：恢复执行 /
-  // 死亡发声依赖 respawn 编排器与 speakSessionDeath 闭包，均晚于 dispatcher 构造——对齐
-  // setDeliveryRegistry 后置注入先例）：
-  // - restoreSession = facade（join 单源收敛于 respawn.ensureRestored——AS17 恢复执行本体
-  //   复用既有簿记组件，新建的只是触发链）；
-  // - injectReasonHint = 恢复成功后经 steer 通道注入死因提示（UD7：投递语义随 U4 前置
-  //   检查点核实，投递失败由触发链降级 warn 留痕，不阻断恢复完成态）；
-  // - reportDeath = 恢复重试耗尽降级死亡发声（对齐 crashExit 'terminal' 既有路径经
-  //   speakSessionDeath 收敛——债权收尾 + 用户手动重开）；
-  // - consumeAutoRecoveryMark = 判死分型标记的同权分型消费（宿主 store 直连——dispatcher
-  //   不反向 import session-service，模块单向性经本闭包保持）。
-  sessionService.setStallAutoDisposePort({
-    restoreSession: (sessionId) => sessionService.restoreSession(sessionId),
-    injectReasonHint: async (sessionId, reasonText) => {
-      const client = pm.getClient(sessionId)
-      if (!client) {
-        throw new Error(`no live client for reason hint injection (sessionId=${sessionId})`)
-      }
-      await client.prompt(reasonText, undefined, 'steer')
-    },
-    reportDeath: (sessionId) => {
-      speakSessionDeath(sessionId, 'exit', {})
-    },
-    consumeAutoRecoveryMark: (sessionId) =>
-      userStoppedMarkStore.consumeUserStoppedMarkOfSource(sessionId, [PROBE_STALL_AUTO_QUIT]),
-  })
   // [合并裁决] feature 线 u4（delivery-ownership-kernel D4②）的 resumeDecision 续跑判定装配
   // 与 sessionService.compact 实例装饰不并入：dev 线 [C2 /compact 后台化]（155e7cde9）已删除
   // resume-decision 模块与同步 compact 编排（dispatcher.compact / rejectCompactIfBusy），
@@ -1745,29 +1601,12 @@ async function main(): Promise<void> {
   })
 
   // Graceful shutdown on signals
-  // u7c（crash-forensics-and-watchdog D5 退出链）：本序被 SIGINT/SIGTERM/uncaughtException
-  // 与滚动重启执行（rollingRestart → exit 86）四源共用，逐行继承既有链只加步骤打点
-  // （A4 机械验证继承完整性：每步经 shutdownStep(ShutdownStepName 字面量) 打点，序列
-  // SSOT = SHUTDOWN_STEP_SEQUENCE，写错名字 tsc 红）。
   let shuttingDown = false
   const shutdown = async (signal: string, exitCode = 0) => {
     if (shuttingDown) return
     shuttingDown = true
-    // u7c（D5 退出链首步）：取消推迟/预告定时器、使滚动重启状态机失效——推迟等待中的
-    // runtime 收到 app 级 SIGTERM 时不得继续执行滚动重启；86 执行序内的再入由
-    // shuttingDown guard 与编排 executed 标志双重防护。
-    shutdownStep('cancel-rolling-restart')
-    cancelRollingRestart()
-    // D6-②：停水位定时器（shutdown 后不再有水位行）。
-    shutdownStep('stop-memory-watermark-timer')
-    stopMemoryWatermarkTimer()
-    // u6（crash-forensics D4）：停内存看门狗采样环（定时器已 unref，此 stop 是显式
-    // 收尾双保险——shutdown 后不再有 relief/通知判定拍）。
-    shutdownStep('stop-watchdog')
-    stopWatchdog()
     // u8（crash-resilience D7-②）收尾沿用：核销崩溃登记（原 pending 自动恢复 timer
     // 已随 ADR-0122 退役）。
-    shutdownStep('cancel-pending-respawns')
     sessionService.cancelAllPendingRespawns()
     // [M4-a / M2-b 备忘清偿] btw 闲置扫描定时器收尾（timer 已 unref 不阻塞退出，此处显式
     // dispose 是收尾双保险；shutdown 后不再有回收拍）。线会话文件
@@ -1775,20 +1614,16 @@ async function main(): Promise<void> {
     btwService.dispose()
     console.log(`\n[runtime] received ${signal}, shutting down...`)
     try {
-      shutdownStep('flush-stores')
       recentWorkspacesStore.flushAll()
       projectStore.flushAll()
       // R1：关闭 SkillRegistry 的 chokidar watcher（global + project），防句柄泄漏阻塞退出。
-      shutdownStep('dispose-skill-registry')
       skillRegistry.dispose()
       // 缓存治理批 4 U11：关 git HEAD watcher（fs.watch 句柄 + debounce/L1 重试/L2 兜底定时器），
       // 同为「watch 资源收尾防阻塞退出」语义；触发器的窗口收尾 timer 随之撤销。
-      shutdownStep('dispose-git-head-watcher')
       gitHeadWatcher.dispose()
       gitChangeTrigger?.dispose()
       // sd-u5：ClaimLedger 收尾——先读 count（D7b 非零 warn：内存账本随重启物理消失，
       // 持久化二期根治）再 dispose（顺序约束：warn 在 dispose 前读 count）。
-      shutdownStep('dispose-claim-ledger')
       const unsettledClaims = claimLedger.count()
       if (unsettledClaims > 0) {
         console.warn(
@@ -1801,7 +1636,7 @@ async function main(): Promise<void> {
       // 留痕）且不依赖内核行为。挂点在 server.stop（传输层关停）之前：先收自己受托的
       // 资源再关门。空表 no-op，双信号重入安全。步骤本体提取在
       // dispose-terminal-ptys-step（本文件 import 即执行 main() 不可直测，单步语义经其单测锁定）。
-      disposeTerminalPtysStep(terminalService, shutdownStep)
+      disposeTerminalPtysStep(terminalService)
       // E-2 + W8：引擎受托资源优雅关停与引擎协议客户端 dispose **并行**——
       // 串行会把引擎进程消失时间拖后；并行发起后 dispose 单侧上界 3s（EngineClient
       // dispose 帧超时即杀）+ 聚合上界 3s。先收割自己受托的子进程与引擎再关传输层
@@ -1809,18 +1644,15 @@ async function main(): Promise<void> {
       // 落点约束（设计 §3.6）：钩子在 shutdown() 内、与 deinitControlServer() **并行发起**
       // （dispose 不等通道收敛，上两条注释的时序契约）；不用 process.on('exit')
       // （回调不能 await，异步 dispose 会被 process.exit 截断）。
-      shutdownStep('deinit-control-server')
       const engineClientsDisposed = disposeRuntimeEngineClients()
       await deinitControlServer()
       await engineClientsDisposed
-      shutdownStep('server-stop')
       await server.stop()
       // terminal-multi-instance u4（设计 §0.5 P5 正常退出清理）：全量杀终端 PTY——与上方
       // server.stop→destroyAll 同语义（先关入口再杀子进程），挂点紧随 server-stop：此刻
       // 不再有 terminal.spawn 请求进入，注册表冻结，清理后不会被新建实例回填。
       // destroyAllPties 幂等（无实例时直接返回，重复调用不报错）；kill 的 SIGKILL 升级
       // timer 不参与退出等待（与 server.stop 内 destroyAll 同款）。
-      shutdownStep('dispose-terminal-pties')
       terminalService.destroyAllPties()
       // u7c（D5 退出链新增步骤）：引擎池 dispose——zcode appserver 杀链，挂点固定为在
       // server.stop 之后、closeLogger 之前（杀链期间的日志与 stderr tee 要经 logger
@@ -1829,9 +1661,9 @@ async function main(): Promise<void> {
       // pi 优雅关闭（session_shutdown 派发给 extension 做真实清理：terminateRunningRuns
       // + SubagentService.dispose），zcode appserver 常驻进程的回收 = 引擎侧 stdin-EOF
       // 自灭链（宿主死 → 引擎 stdin 断源自灭）+ 本文件上方 disposeRuntimeEngineClients
-      // 的协议客户端 dispose。runtime 进程注册表当前恒空（无引擎注册），本步骤在场 =
-      // 设计固定为的序列位置与打点完整性；未来引擎宿主迁移 runtime 侧时此处是杀链接线点。
-      shutdownStep('engine-pool-dispose')
+      // 的协议客户端 dispose。runtime 进程注册表当前恒空（无引擎注册），本步骤保留
+      // 序列位置（server.stop 之后、closeLogger 之前）；未来引擎宿主迁移 runtime 侧时
+      // 此处是杀链接线点。
     // eslint-disable-next-line taste/no-silent-catch -- shutdown: best-effort stop, process exits regardless
     } catch (e) {
       console.error('[runtime] error during shutdown:', e)
@@ -1841,12 +1673,10 @@ async function main(): Promise<void> {
     // deleted 行（#16 计划内排除归因依赖的行）经异步缓冲写入，process.exit 不等待即丢
     // 尾部。挂点在 closeLogger 之前：journal close 自身的降级日志（轮转失败 warn 等）仍能
     // 经 logger 落盘。幂等（重复 close no-op），未初始化时直接 resolve。
-    shutdownStep('close-crash-journal')
     await closeCrashJournal()
     // D10-1（perf W30）：退出 flush——closeLogger 现在需要 await（end 主日志 + 全部 pi
     // session 写流并等待落盘）。process.exit 立即终止进程不等待异步 IO，必须在 flush
     // 完成后才退出，否则缓冲窗口内尾部日志丢失（pi 卡死诊断证据，见 logger.ts 头部）。
-    shutdownStep('close-logger')
     await closeLogger()
     process.exit(exitCode)
   }
@@ -1921,54 +1751,6 @@ async function main(): Promise<void> {
   //  归一 found:false 缺省形态。
   sessionService.setSubagentStreamStateSource((sessionId, recordId) =>
     getActiveControlServer()?.getStreamStateByRecord(sessionId, recordId))
-  // ── u5b-runtime-forensics D6-②：内存水位定时器启动 ──────────────────
-  // listen 成功后启动（依赖 sessionService/pm 均已装配）。activeSession 数含公共
-  // session（getActiveSessionIds 全量 lifecycle 键），pi 进程数是 ProcessManager 托管
-  // 的 RpcClient 数（引擎子进程由 control server 托管，其取证走 control server 决策日志）。
-  startMemoryWatermarkTimer(
-    () => sessionService.getActiveSessionIds().length,
-    () => pm.size,
-  )
-
-  // ── u7c（crash-forensics-and-watchdog D5）：滚动重启编排启动 ─────────────
-  // 挂点 = listen 后、与 watchdog/reattach 同区（编排先例：startup-reattach）。Gate W
-  // armed 门与 watchdog 共用同一 resolveWatchdogConfig 结果（TAIJI_RUNTIME_WATCHDOG_ARMED
-  // 默认 off）——off 时编排零动作（onMemoryPressure 对 critical 直接忽略，B2：u6 语义
-  // 延伸到重启编排）。执行 = onExecute → 既有完整 shutdown 序 + 专用退出码 86（D5 ④：
-  // supervisor 按码识别 planned 立即重启零退避零计数）；退出序首步取消本编排推迟定时器。
-  // status provider 注入 server：rollingRestart.status 只读 RPC（renderer 重连/刷新后
-  // 拉取恢复横幅——「broadcast 时序竞争」教训：持续态必须可拉取，deferred/forced/
-  // countdown 广播只作加速显示）。
-  const watchdogConfig = resolveWatchdogConfig(process.env)
-  const rollingRestartHandleLocal = startRollingRestart({
-    armed: watchdogConfig.armed,
-    ...resolveRollingRestartConfig(process.env),
-    listSessionIds: () => sessionService.getActiveSessionIds(),
-    // 引擎在途面（D5 判定源 ②）组合根接线：control server 在册通道数（spawn 权已收归
-    // runtime，通道数即在途引擎数）。services 层不 value import 有状态 IO infra，
-    // 由本注入槽承接。
-    engineChannelsInFlight: () => getActiveControlServer()?.channelCount ?? 0,
-    onExecute: () => { void shutdown('rollingRestart', RUNTIME_PLANNED_EXIT_CODE) },
-    broadcast: (type, payload) => server.broadcast({ type, payload } as import('@taiji/shared').ServerMessage),
-  })
-  rollingRestartHandle = rollingRestartHandleLocal
-  server.setRollingRestartStatusProvider(() => rollingRestartHandleLocal.getStatus())
-
-  // ── u6（crash-forensics-and-watchdog D4）：内存看门狗启动 ─────────────
-  // 挂点 = listen 后、与水位定时器同区（同为内存观测范围；设计 D4 未指明 listen 前后，
-  // 取「listen 后与 background-init 并行」的端口先就绪序）。武装门 Gate W 默认 off
-  // （TAIJI_RUNTIME_WATCHDOG_ARMED）——off 时纯观测：采样环照跑补全水位数据，relief 与
-  // renderer 通知不执行（设计 §3.2 方案 B）。
-  // u7c 接线：broadcast 出口同拍喂滚动重启编排（critical 档 = D5 决策输入，warn
-  // 档编排侧忽略；renderer 侧走 broadcast → renderer useMemoryPressure 通道，动作本体
-  // 随 u7d 落地）。stop 挂 shutdown 序（上方）。
-  watchdogHandle = startWatchdog({
-    ...watchdogConfig,
-    broadcast: (payload) => {
-      server.broadcast({ type: 'watchdog:memoryPressure', payload })
-      rollingRestartHandleLocal.onMemoryPressure(payload)
-    },
-  })
 
   // 启动耗时分解探针（06 §5 m-7）：listen-ready 各段耗时（baseline 对比见汇报——
   // 改造前 getPiVersion 占 listen 延迟 1.1-1.3s，重排后该段归零）。
@@ -2027,15 +1809,13 @@ async function main(): Promise<void> {
 
   // ── u5（crash-forensics-and-watchdog D3）：reattach 编排 ─────────────────────
   // WS listen 后独立并行任务（D3 编排挂点：与 startup-background-init 串行链解耦，不违背
-  // 「端口先就绪」原则，也不阻塞链尾 reaper 启动——收割等待经 Promise.race 有界消费）。
+  // 「端口先就绪」原则，也不阻塞链尾 reaper 启动——收割等待经 promise 消费）。
   // 冷启动无 checkpoint（clean exit 已删 / 首次启动）→ read() 返回 undefined → 编排零动作
   // （A3b 冷启动维持 lazy）。restore 走 lifecycle registerSession 汇聚点（onSessionRegistered
   // 挂点随附触发）。内部全容错不抛；外层 .catch 是防御兜底（对齐上方 fire-and-forget 形态）。
-  // 偏差 #27：onDeferredBroadcast = 高水位延迟进入/缓解的 reattach:deferred WS 推送出口
-  // （u7c 滚动重启 broadcast 注入同形态；renderer 横幅路径 = useRollingRestartStatus）。
   void runStartupReattach({
     // u4 追加项（A5/V5 缺口）：restore 包装 = 恢复成功后**先建投递内核运行时再触发对账**
-    //（reconcile 无运行时即 no-op → 滚动重启后无提交活动时槽位滞留永不收养）。实现与
+    //（reconcile 无运行时即 no-op → runtime 重启后无提交活动时槽位滞留永不收养）。实现与
     // 顺序论证见 services/session/reattach-delivery-trigger.ts。
     restore: createReattachRestore({
       restore: (sessionId) => sessionService.restoreSession(sessionId),
@@ -2044,7 +1824,6 @@ async function main(): Promise<void> {
       log: (message) => console.warn('[reattach]', message),
     }),
     waitForOrphanReap: () => orphanReapChain,
-    onDeferredBroadcast: (payload) => server.broadcast({ type: 'reattach:deferred', payload }),
   }).catch((e) => {
     console.error('[runtime] reattach orchestration failed unexpectedly:', e)
   })

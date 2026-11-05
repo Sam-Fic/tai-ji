@@ -20,7 +20,6 @@
  *   SSOT 的类型化出口。
  */
 import type { ServerMessageMap } from '@taiji/shared'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 import { command } from '../request'
 
 /**
@@ -29,7 +28,7 @@ import { command } from '../request'
  * + mainSid 回显 + forkState（D3 源状态三分支 → 创建期 pill 数据源，仅创建时一次性携带）。
  */
 export function create(mainSid: string): Promise<ServerMessageMap['btw.create']> {
-  return command('btw.create', { mainSid }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('btw.create', { mainSid })
 }
 
 // 线枚举（btw.list）已随 W4b 退役（btw 进通用列表，设计 §3.3.1/§5-W4b）：线列表改走
@@ -42,5 +41,5 @@ export function create(mainSid: string): Promise<ServerMessageMap['btw.create']>
  * W4a 键统一：入参 vid → sessionId（线 pi 真实会话 id；存在性校验 = runtime 注册表成员查询）。
  */
 export function remove(sessionId: string): Promise<void> {
-  return command('btw.remove', { sessionId }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('btw.remove', { sessionId })
 }

@@ -19,15 +19,10 @@
     <SidebarResizeHandle v-if="!sidebar.collapsed" />
     <AppNavControls />
     <MainPanel />
-    <!-- 滚动重启四态横幅 + reattach 高压延迟轻态（crash-forensics D5/D3，u7d + #27）：
-         fixed 定位挂主界面层，状态源 useRollingRestartStatus（广播加速 + status RPC 拉取，
-         重连/刷新不丢）。顶部同位唯一横幅，机理见组件头注释。restarting 全屏过渡态下
-         AppShell 整体不渲染，横幅随行（无残留）。 -->
-    <RollingRestartBanner />
     <!-- D-8 懒加载：v-if="settingsOpen" 门控是生效前提——defineAsyncComponent 在 AsyncComponentWrapper
          实例化时立即触发 loader（Vue runtime-core setup 内 load()），SettingsModal 内部 v-if="open"
          挡不住启动期加载；首开设置才拉取设置页树 chunk（首次触发才出现在 Network）。
-         内部自动重试（D6）经 retryKey 重挂承载（见 script 注释）。 -->
+         装载失败直接进错误态（自动重试已删，见 script 注释）。 -->
     <SettingsModal v-if="settingsOpen" :key="settingsRetryKey" v-model:open="settingsOpen" :initial-section="settingsSection" />
     <!-- workflow-viz overlay 全局单例容器（workflow-visualization U6/D8）：关闭态壳 v-if
          不渲染（DOM 零痕迹，像素轨基线安全）；盖全屏跨双 pane，绑定发起 pane 的 session。 -->
@@ -49,7 +44,6 @@ import AsideRegion from './AsideRegion.vue'
 import SidebarResizeHandle from './SidebarResizeHandle.vue'
 import MainPanel from './MainPanel.vue'
 import WorkflowVizOverlayHost from '@/components/panel/workflow-viz/overlay/WorkflowVizOverlayHost.vue'
-import RollingRestartBanner from '@/components/ui/RollingRestartBanner.vue'
 import AsyncErrorFallback from '@/components/ui/AsyncErrorFallback.vue'
 import { createLazyChunkRetry } from '@/components/ui/lazy-chunk-retry'
 import { useSidebarStore } from '@/stores/sidebar'
@@ -62,13 +56,9 @@ useKeyOrchestrator()
 // 设置弹窗懒加载（D-8 §3.3 边界判据：首屏不渲染 + 重依赖——设置页树子树）。
 // 代价：activeMenu/extensionView 等弹窗内状态随关闭卸载而重置回默认页（此前常驻挂载保留上次页面，
 // 设置是低频操作，重置属可接受行为差异）。
-// 错误兜底（§3.5 · D6 2026-10-03 用户裁决改版）：界面无重试按钮——装载失败由内部有界自动重试
-// 承接（createLazyChunkRetry：3 次 × 300ms 递增退避 + 失败 URL 提取 ?t=N cache-busting 绕过
-// module map 记忆化，机制与探针证据见 lazy-chunk-retry.ts 头注）；穷尽才呈现错误态（overlay
-// 形态文案给「重开恢复」指引），重开设置即重置计数获得新一轮自动重试。
-// 重试驱动形态（单一描述以 lazy-chunk-retry.ts 头注「重试驱动形态」为准，本处不复述机制）：
-// 退避到点时 userRetry() + retryKey++ **双要素同调**，缺一即卡死（链恒 pending / loaded 不置位）；
-// 幽灵 loader 已由新 wrapper 短路共享排除。
+// 错误兜底（§3.5）：界面无重试按钮——装载失败直接进错误态（createLazyChunkRetry 薄层，
+// 自动重试已删：时间机制删除裁决；overlay 形态文案给「关闭重开恢复」指引），重开设置即
+// fresh load 重新加载。
 // [W31 review minor-4] loading/error 占位必须 overlay 形态（fixed 全屏遮罩）：本组件挂载点是根
 // div `flex gap-3` 的 flex 子项，默认形态占位（h-full w-full、无定位）会参与布局流——error 态
 // 永久挤压 MainPanel、loading 超 200ms 短暂挤压。defineAsyncComponent 的 loading/error 组件

@@ -40,9 +40,6 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const DEFAULT_CI_YML = join(ROOT, '.github/workflows/ci.yml')
 const WORKSPACE_YAML = join(ROOT, 'pnpm-workspace.yaml')
 
-/** 单个干跑的超时上限（防挂死；正常 list 收集秒级，全包 glob 形态数十秒） */
-const DRY_RUN_TIMEOUT_MS = 300_000
-
 // ── 纯函数（单测：scripts/__tests__/check-ci-vitest-targets.test.mjs） ──────
 
 /** 剥 GitHub Actions 模板字面量（${{ … }} 不嵌套，非贪婪到首个 }}） */
@@ -250,7 +247,6 @@ function runDryRun(dryCmd, cwd) {
   const binPrepend = `${join(cwd, 'node_modules', '.bin')}:${join(ROOT, 'node_modules', '.bin')}:`
   const result = spawnSync('bash', ['-c', dryCmd], {
     cwd,
-    timeout: DRY_RUN_TIMEOUT_MS,
     encoding: 'utf-8',
     env: { ...process.env, PATH: `${binPrepend}${process.env.PATH ?? ''}` },
   })

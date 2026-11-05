@@ -85,7 +85,7 @@ export interface TraceSessionPartition {
   /** 最近一次现取结果（null = 未现取过）。 */
   currentPrompt: TraceCurrentPromptSummary | null
   currentPromptFetching: boolean
-  /** 现取失败 code（session_not_active / session_busy / fetch_current_prompt_timeout /
+  /** 现取失败 code（session_not_active / session_busy / fetch_current_prompt_failed /
    *  兜底 fetch_failed）；文案映射在组件层。null = 无错误。 */
   currentPromptErrorCode: string | null
   // ── 视图状态（per-session 分区；D5c）──

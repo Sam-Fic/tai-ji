@@ -5,8 +5,7 @@
 //
 // journal（事件账本 JSONL）写入方 = 本包（run 域单写者 terminal-actions、record 域
 // record-store 族）；推送点 = 落盘提交点之后（推送语义与事实源同点——推的内容就是
-// 刚落盘的行，seq 已分配）。本模块是这条通道的 core 侧出口，注入模式与
-// execution/engine/inflight-snapshot.ts 的 setInFlightListener 同款：
+// 刚落盘的行，seq 已分配）。本模块是这条通道的 core 侧出口：
 //   - 监听者由壳层（extensions/universal/subagent-workflow host/journal-reporter）注册，
 //     core 同步调用、绝不 await 返回值——落盘主链不被推送拖住；
 //   - core 闭包红线：本模块零 pi SDK import（零领域依赖，persistence 层叶子），
@@ -17,7 +16,7 @@
 // （append 逐条），批量合并归壳层 reporter（串行化合并缓冲）。监听者异常不反噬
 // core（壳层 bug 不得打断落盘主链），catch 后照常返回。
 //
-// 进程级单监听者（与 inflight 出口同理——journal 写入本身是进程级单写者状态），
+// 进程级单监听者（journal 写入本身是进程级单写者状态），
 // 后注册覆盖先注册（jiti 模块重载 / 多 factory 实例场景幂等），null 注销。
 
 /** journal 两域（与 extension-protocol SubagentJournalDomain 同词表——通道载荷判别字段）。 */
@@ -55,7 +54,7 @@ export function notifyJournalAppended(
   if (listener === null || events.length === 0) return;
   try {
     listener(domain, fileKey, events);
-  // eslint-disable-next-line taste/no-silent-catch -- 推送出口故障刻意静默（与 notifyInFlightChanged 同款）：壳层 bug 不得打断落盘主链；丢一帧由消费方 seq 缺口补读收敛，记日志徒增 core logger 噪音面
+  // eslint-disable-next-line taste/no-silent-catch -- 推送出口故障刻意静默：壳层 bug 不得打断落盘主链；丢一帧由消费方 seq 缺口补读收敛，记日志徒增 core logger 噪音面
   } catch {
     // 同上：静默是接受的。
   }

@@ -1370,27 +1370,6 @@ describe("search", () => {
     })
   })
 
-  describe('TC-6: WS 超时 race 不挂死', () => {
-    it('fileCandidates 返永不 settle promise → fake timers 推进 10s → file 分组空（不永久 pending）', async () => {
-      vi.useFakeTimers()
-      try {
-        const deps = makeDeps()
-        ;(deps.ports.fileCandidates as ReturnType<typeof vi.fn>).mockReturnValue(new Promise<FileNode[]>(() => {}))
-        deps.commandStore.registerApp([{ id: 'n', name: '新建', action: vi.fn() }])
-
-        const { query } = useSearch(ref<string | null>('s1'), deps)
-        const queryP = query('x', { activeSessionId: 's1' })
-        await vi.advanceTimersByTimeAsync(10_000 + 100) // 超时 race 触发
-
-        const sections = await queryP
-        expect(sections).toBeDefined()
-        expect(findSection(sections, 'file')).toBeUndefined() // 超时 reject → file 分组空
-      } finally {
-        vi.useRealTimers()
-      }
-    })
-  })
-
   describe('DTO 映射', () => {
     it('AppCommand 映射无 icon + commandKind:app', async () => {
       const deps = makeDeps()

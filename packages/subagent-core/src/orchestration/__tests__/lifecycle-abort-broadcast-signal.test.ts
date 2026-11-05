@@ -341,19 +341,6 @@ describe("[B-2] runWorkflow fail-fast throw 路径不泄漏 signal abort listene
     return getEventListeners(signal, "abort").length;
   }
 
-  it("budgetTimeMs 越界 fail-fast 重试 12 次 → 每次拒绝后 listener 计数归零（无 MaxListeners 累积）", async () => {
-    const deps = makeDeps();
-    const controller = new AbortController();
-    // 越界值（>2^31-1）→ assertSafeTimerDelay 在 scheduleTimeBudget 内 fail-fast throw
-    const spec: RunSpec = { ...makeSpec(), budgetTimeMs: 3_000_000_000 };
-
-    for (let i = 0; i < 12; i++) {
-      await expect(runWorkflow(spec, deps, controller.signal)).rejects.toThrow(/2147483647/);
-      // 旧实现 listener 先注册、throw 路径不 dispose——12 次重试后泄漏 12 个
-      expect(liveListenerCount(controller.signal)).toBe(0);
-    }
-    expect(deps.runs.size).toBe(0); // fail-fast：无孤儿 run
-  });
 
   it("workerHost.start 抛错重试 12 次 → 每次拒绝后 listener 计数归零", async () => {
     const deps = makeDeps();

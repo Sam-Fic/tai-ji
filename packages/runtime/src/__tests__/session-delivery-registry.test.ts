@@ -894,9 +894,6 @@ describe('in-flight 撤销二段式归宿（dmg-r1-2）：意图集持有至兑�
 
     // pi 断连：进程死亡 = pi 队列（进程内存）随亡、transcript 无迹 = 文本已离场
     // → 撤销意图就地兑现 cancelled（不报失败、不重投复活消息）。
-    // [已不可达用例删除登记] 原「watchdog 轮 sweep 只留守不兑现（slotCleared 门禁）」
-    // 与「ensureActive 失败轮 sweep 同样留守」两用例随 sweepInFlight 退役而不可达
-    //（撤销兑现挂点迁至断连事件，2026-10-05 投递域清理批次删除）。
     h.registry.onPiDisconnected('s1')
     expect(h.promptCalls).toHaveLength(1) // 未重投
     expect(h.registry.entries('s1')?.active).toHaveLength(0)

@@ -901,16 +901,11 @@ describe('fetchCurrentSystemPrompt（常驻扩展现取通道）', () => {
     expect(client.getEntries).toHaveBeenCalledWith('leaf0')
   })
 
-  it('轮询超时（命令未产出 entry）→ throw code=fetch_current_prompt_timeout', async () => {
-    vi.useFakeTimers()
+  it('命令未产出 entry：单次拉取（含基线重建重试）后显式失败 code=fetch_current_prompt_failed', async () => {
     const { svc, client } = makeSessionServiceEnv({ active: true, sid: SID })
-    // 增量恒空（命令未产出）
+    // 增量恒空（命令未产出）——无轮询（时间机制删除裁决），单次拉取 + retry 重试后显式失败
     mockGetEntriesAlwaysEmpty(client)
-    const pending = svc.fetchCurrentSystemPrompt(SID)
-    // 先 attach rejection 断言再推进 timer（否则 rejection 发生时无 handler，报 unhandled）
-    const expectation = expect(pending).rejects.toMatchObject({ code: 'fetch_current_prompt_timeout' })
-    await vi.advanceTimersByTimeAsync(8500)
-    await expectation
+    await expect(svc.fetchCurrentSystemPrompt(SID)).rejects.toMatchObject({ code: 'fetch_current_prompt_failed' })
   })
 })
 

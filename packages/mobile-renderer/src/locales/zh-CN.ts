@@ -96,7 +96,6 @@ export default {
       formTitle: '待回答',
       submitSuspended: '服务重启对账中，提交暂时不可用',
       requestInvalidated: '请求已失效（已被撤销）',
-      requestExpired: '请求已过期',
       permissionTitle: '权限审批',
       permissionScopeHint: '该插件申请 {count} 项权限（进程级请求，不归属特定会话）',
       permissionDeny: '拒绝',

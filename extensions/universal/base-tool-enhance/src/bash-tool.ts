@@ -43,7 +43,6 @@ import { isRecord, toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 
 import { truncateCommand } from "./background/command-display.ts";
-import { attachExitWatch } from "./background/exit-watch.ts";
 import { emitPendingRegister } from "./background/notify.ts";
 import {
 	getRegistryPath,
@@ -108,7 +107,7 @@ const ENHANCED_BASH_DESCRIPTION = [
 	"",
 	"Commands matching the force-background whitelist (test suites, dev servers, watch jobs and similar long-running commands) are automatically routed to background even when background was not requested; the result carries a task_id and completion auto-notifies — the same DO NOT bash sleep rule applies.",
 	"",
-	"Idle-to-background: when you give NO timeout (explicit or configured default) and the command is not whitelisted, the command runs under an idle monitor — if it produces no output for 600s (configurable), the tool call returns early with a [TAIJI-FG-BG] marker while the command keeps running (its output keeps going to a log file). That marker is NOT completion: there is no exit code yet. Read the captured output in the marker result first, then decide: keep waiting (the completion notification will arrive automatically — DO NOT bash sleep or busy-wait), check progress with bash_output, or terminate with bash_kill. A command that streams output continuously (monitors, tail -f style logs, while loops) never trips the idle threshold — pass an explicit timeout (it then runs natively and is killed at the deadline) or set background: true for such commands.",
+	"Idle-to-background: when you give NO timeout (explicit or configured default) and the command is not whitelisted, the command runs under an idle monitor — if it produces no output for 600s (configurable), the tool call returns early with a [TAIJI-FG-BG] marker while the command keeps running (its output keeps going to a log file). That marker is NOT completion: there is no exit code yet. Read the captured output in the marker result first, then decide: check progress with bash_output or terminate with bash_kill — converted tasks deliver NO completion notification, so do NOT passively wait for one (bash sleep / busy-wait is still forbidden). A command that streams output continuously (monitors, tail -f style logs, while loops) never trips the idle threshold — pass an explicit timeout (it then runs natively and is killed at the deadline) or set background: true for such commands.",
 ].join("\n");
 
 /**
@@ -396,8 +395,9 @@ export function parsePidFile(pidfilePath: string): { pid?: number } {
  *   ① registerSpawnedTask（内存单例表，运行时权威）
  *   ② writeRegistryEntry（registry 落盘 running 条目）
  *   ③ emitPendingRegister（pending:register emit——session_start 差集对账前提）
- * 不挂 attachExitCollector（转后台命令非本进程 child，无 exit 事件边沿）——退出感知
- * 由 exit-watch.ts 的 pid 守望承载（attachExitWatch，部件 5）。
+ * 不挂 attachExitCollector（转后台命令非本进程 child，无 exit 事件边沿）。转后台任务
+ * 无完成感知通道（跨进程退出无跨平台事件原语）——终态由 bash_kill / 后台超时 /
+ * 会话重启收殓路径落定，完成通知不投递。
  * 超时启用接线（矩阵 C2）：backgroundTimeoutSeconds 经 armBackgroundTimeout（自
  * spawn-background.ts 导出）挂 task.timeoutTimer——漏接则转后台任务不受后台超时约束。
  * 并发池关系（设计 §5 部件 2）：**不过并发门**（池满不拒——命令已存活，拒绝登记 =
@@ -434,7 +434,7 @@ export function registerConvertedTask(opts: {
 		ownerPiPid: process.pid,
 		sessionId: opts.sessionId,
 		...(pidStartTime !== undefined ? { pidStartTime } : {}),
-		// child 缺省：转后台命令非本进程 spawn，无 ChildProcess 句柄（exit 感知归守望）
+		// child 缺省：转后台命令非本进程 spawn，无 ChildProcess 句柄
 	};
 	if (opts.timeoutSec !== undefined) {
 		armBackgroundTimeout(task, opts.timeoutSec);
@@ -442,8 +442,6 @@ export function registerConvertedTask(opts: {
 	registerSpawnedTask(task);
 	writeRegistryEntry(registryPath, taskToRegistryEntry(task));
 	emitPendingRegister(task);
-	// 退出感知守望（部件 5）：2s 轮询 pid，ESRCH / pid 复用 → finalize 链收尾
-	attachExitWatch(task);
 	return task;
 }
 
@@ -469,10 +467,10 @@ export function cleanupWrapFiles(files: Pick<WrapFiles, "cmdShPath" | "pidfilePa
  *  - pidfile 可读且 pid 活 → 登记为后台任务（返回条目，调用方按需补标记行）
  *  - 判死且无标记行 → 不登记零感知 + 删除本次三文件（B2 正常完成：输出已经官方
  *    管道完整透传，无登记条目则文件无消费方）
- *  - 判死但有标记行（收尾窗口死亡形态）→ 照常登记：标记行在 = 承诺在（"It will notify on
- *    completion"）= 必登记——无登记无守望则通知永不到来，且三文件清理会让标记行引用
- *    的日志路径落空。登记后 attachExitWatch 首轮（≤2s）ESRCH 收尾、通知兑现，退出码
- *    如实报 unknown（转后台任务退出码结构性不可得，notify.ts 已登记形态）。
+ *  - 判死但有标记行（收尾窗口死亡形态）→ 照常登记：标记行在 = task_id 查询/终止
+ *    指引在（bash_output / bash_kill 的 taskId 锚）= 必登记——不登记则标记行引用的
+ *    日径与 task_id 无载体，且三文件清理会让日志路径落空。退出码如实报 unknown
+ *    （转后台任务退出码结构性不可得）。
  *  - pidfile 不可读（pid undefined）→ 不登记 + 尽力清理（spawn 毫秒窗口被杀的设计已
  *    接受代价；「标记行在 + pidfile 缺失」真实序列不可达——标记打印在监控循环内，
  *    前提是 pidfile 早已写毕，防御侧仍走清理：无 pid 可管，登记无载体）。
@@ -507,7 +505,7 @@ function buildConvertedMarkerNote(task: BackgroundTask): string {
 		`${FG_BG_MARKER_TAG} Command moved to background (the wrapper exited without printing its marker) — still running, NOT finished (no exit code yet).`,
 		`Full log: ${task.outputFile}`,
 		`Check: bash_output {task_id:"${task.taskId}"}; terminate: bash_kill {task_id:"${task.taskId}"}.`,
-		"It will notify on completion — DO NOT bash sleep while waiting.",
+		"No completion notification is delivered for converted tasks — poll progress with bash_output instead of waiting.",
 	].join("\n");
 }
 

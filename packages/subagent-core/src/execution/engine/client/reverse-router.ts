@@ -1,16 +1,14 @@
 // src/execution/engine/client/reverse-router.ts
 //
 // 反向请求（帧④）路由器（EngineClient 的内部模块，从 engine-client.ts 拆出——
-// max-lines 纪律 + 职责域独立：超时域二分（R9-2/R9-2b）的全部 core 侧语义都
-// 落在本文件）。
+// max-lines 纪律 + 职责域独立）。
 //
-// 超时域划分（impl-plan §2.2 / 设计 §3.3 帧④注释）：
+// 通道二分（impl-plan §2.2 / 设计 §3.3 帧④注释；原「10s 应答检查 → 引擎故障杀链」
+// 的时间窗已删——分发异常经 sendResponse 链与进程退出链自然收口）：
 //   - 快答数据范围（host/log / host/streamDelta / host/handleReady /
-//     host/childSpawned / host/childStateChanged）：分发 + 回 {ok:true}，10s 应答检查
-//     ——10s 未答 = 引擎故障 → 杀进程 + 在途 run 失败（REVERSE_REQUEST_TIMEOUT_MS）；
+//     host/childSpawned / host/childStateChanged）：分发 + 回 {ok:true}；
 //   - 人机交互通道（host/askUser）：ack 两阶段——收即回 {ack:true}，
-//     handler 结果异步补帧②，**不计时**（R9-2：已 ack 的等待不参与任何 in-flight
-//     超时，ADR-0047 静默 ≠ 卡死）；未注入 handler → {unsupported:true}；
+//     handler 结果异步补帧②；未注入 handler → {unsupported:true}；
 //   - 未知 host/* 通道 → {unsupported:true}（引擎自行降级，不重试）。
 //     [permission 通道退役 2026-09-13] 原 host/permission 分支已删（两引擎
 //     permissionMode=native 零 emit、core 零注入）。
@@ -18,7 +16,6 @@
 import {
   getLogger,
   REVERSE_CHANNEL_TIMEOUT_CLASS,
-  REVERSE_REQUEST_TIMEOUT_MS,
   type HostAskUserParams,
   type HostChildSpawnedParams,
   type HostChildStateChangedParams,
@@ -45,8 +42,6 @@ export interface ReverseRouterDeps {
   setPartialHandle: (partial: { sessionRef: Record<string, string> }) => void;
   /** 帧②应答出口。 */
   sendResponse: (id: string, result: unknown) => boolean;
-  /** 引擎故障拉起杀链（killAll）。 */
-  failEngine: (reason: string) => Promise<void>;
   /** 客户端是否已停机（停机后不再写帧）。 */
   isDisposed: () => boolean;
 }
@@ -109,35 +104,17 @@ function handleInteractionRequest<P>(
 }
 
 /**
- * 快答数据范围（R9-2 二分）：分发 + 回 {ok:true}，全程受 10s 应答检查——10s 未答 =
- * 引擎故障 → 杀进程 + 在途 run 失败。当前各通道分发都是快操作；检查覆盖的是
- * 「handler 返回的 promise 挂住」的演化面（挂起 = 宿主消费方死锁，须 fail-fast
- * 拉起杀链，防止 core 被单通道拖死）。分发抛错不判引擎故障（宿主回调 bug 不该
- * 杀引擎），仍回 {ok:true} + warn 留痕。
+ * 快答数据范围（R9-2 二分）：分发 + 回 {ok:true}（无应答时间窗）。分发抛错不判
+ * 引擎故障（宿主回调 bug 不该杀引擎），仍回 {ok:true} + warn 留痕。
  */
 function handleDataPlaneRequest(deps: ReverseRouterDeps, frame: { id: string; method: string; params: unknown }): void {
-  let settled = false;
-  const guardTimer = setTimeout(() => {
-    if (settled) return;
-    logger.error(
-      `[engine-client:${deps.engineId}] data-plane reverse request ${frame.method} `
-        + `unanswered for ${REVERSE_REQUEST_TIMEOUT_MS}ms — treating as engine fault`,
-    );
-    void deps.failEngine(
-      `data-plane reverse request ${frame.method} unanswered for ${REVERSE_REQUEST_TIMEOUT_MS}ms (engine fault)`,
-    );
-  }, REVERSE_REQUEST_TIMEOUT_MS);
   void Promise.resolve()
     .then(() => dispatchDataPlane(deps, frame.method, frame.params))
     .then(
       () => {
-        settled = true;
-        clearTimeout(guardTimer);
         deps.sendResponse(frame.id, { ok: true });
       },
       (err: unknown) => {
-        settled = true;
-        clearTimeout(guardTimer);
         logger.warn(
           `[engine-client:${deps.engineId}] ${frame.method} dispatch failed (answering ok, host-side bug): ${
             err instanceof Error ? err.message : String(err)

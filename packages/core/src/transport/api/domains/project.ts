@@ -10,30 +10,29 @@
  * 保持命令前状态 + toast）。legacy 整表写封装已随命令化拆除（§6.6③）。
  */
 import type { ProjectCommandReply, ProjectLoadReply } from '@taiji/shared'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 import { command } from '../request'
 
 /** 全量加载 project 列表（runtime project.load → project.loaded reply，含 revision 水位）。 */
 export async function load(): Promise<ProjectLoadReply> {
-  return command('project.load', {}, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('project.load', {})
 }
 
 /** 新建 project（runtime 生成 id、追加、设为活跃）。 */
 export async function createProject(name: string, revision: number): Promise<ProjectCommandReply> {
-  return command('project.createProject', { name, revision }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('project.createProject', { name, revision })
 }
 
 /** 重命名 project（默认项目不可改名，runtime 侧拒绝）。 */
 export async function renameProject(projectId: string, name: string, revision: number): Promise<ProjectCommandReply> {
-  return command('project.renameProject', { projectId, name, revision }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('project.renameProject', { projectId, name, revision })
 }
 
 /** 删除 project（默认项目不可删；删活跃项则锚定回落默认项目）。 */
 export async function removeProject(projectId: string, revision: number): Promise<ProjectCommandReply> {
-  return command('project.removeProject', { projectId, revision }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('project.removeProject', { projectId, revision })
 }
 
 /** 锚定切换（不更新 lastUsedAt——排序键仅创建时写入）。 */
 export async function setActiveProject(projectId: string, revision: number): Promise<ProjectCommandReply> {
-  return command('project.setActiveProject', { projectId, revision }, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('project.setActiveProject', { projectId, revision })
 }

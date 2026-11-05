@@ -16,7 +16,7 @@
 // 幂等）。串行化合并：一次推送尝试在途时，后续事件并入待推缓冲；尝试成功后缓冲
 // 剩余组继续逐组推送（事件驱动，无 timer）。
 //
-// 失败语义（设计 D5，与 inflight reporter 的 dirty 重推刻意分叉）：select 失败
+// 失败语义（设计 D5）：select 失败
 // （超时/通道异常/非确认回包）→ 首败 warn 留证 + 待推缓冲整体丢弃——**不重试**
 // （本通道消费方有 seq 水位可判缺口，丢失由缺口补读收敛，缓冲重推是重复保险）。
 // 无后续事件的丢失场景由终局条目补读触发兜底（设计 §3.3 终局一致性）。
@@ -25,7 +25,7 @@
 //
 // 环境门控：上报的消费方是 taiji runtime 的 event-adapter marker 路由，runtime
 // spawn pi 恒为 --mode rpc——ctx.mode !== 'rpc' 即无拦截方（裸 pi TUI 下 marker
-// select 会弹真框），此时不启动推送（inflight-reporter 环境门控同款）。
+// select 会弹真框），此时不启动推送。
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
@@ -37,8 +37,8 @@ import {
 } from "@zhushanwen/extension-protocol";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 
-/** select 通道级超时（控制通道单请求，秒级校准——超时默认原则规则 19；与 inflight
- *  reporter 同量级。失败不重试，缺口归消费方补读收敛）。 */
+/** select 通道级超时（控制通道单请求，秒级校准——超时默认原则规则 19。
+ * 失败不重试，缺口归消费方补读收敛）。 */
 const SELECT_TIMEOUT_MS = 2_000;
 
 /** 单帧报告字节数的观测阈值（设计 W-P4 ④：只观测不拦截——超限 warn 留痕，供
@@ -55,10 +55,9 @@ type PendingFileGroup = {
 /** journal 事件推送器（workflow-events 装配点持有；per-factory 实例，session_start/shutdown 驱动）。 */
 export interface JournalReporter { // oe-exempt:20261003:framework:host 层对装配点的 reporter 端口契约（attach/detach/onJournalAppended 消费缝先立）
   /**
-   * session_start 注入当前 ctx（非 rpc 模式下为 no-op：无 runtime 拦截方，推送
+   * session_start 注入 ctx（非 rpc 模式下为 no-op：无 runtime 拦截方，推送
    * 通道不该启动）。journal 推送是纯事件驱动（落盘提交点触发），无初始帧——
-   * 与 inflight 的「加载完成初始上报」刻意不同：报告语义是增量事件，空 session
-   * 无事件可报，缺席语义归消费方冷读。
+   * 报告语义是增量事件，空 session 无事件可报，缺席语义归消费方冷读。
    */
   attachSession(ctx: ExtensionContext): void;
   /** session_shutdown 摘除 ctx 并丢弃待推缓冲（session 已死，推送通道随之终结；
@@ -187,7 +186,7 @@ export function createJournalReporter(opts: JournalReporterOpts = {}): JournalRe
   return {
     attachSession(target: ExtensionContext): void {
       // 环境门控：非 rpc 模式（裸 pi TUI / json / print）无 runtime 拦截方，marker
-      // select 会弹真框——不设 ctx，本 session 全程 no-op（inflight 同款先例）。
+      // select 会弹真框——不设 ctx，本 session 全程 no-op。
       if (target.mode !== "rpc") return;
       // attach = 新 reporting epoch：首败留痕标记随旧 session 终结重置。
       firstFailureLogged = false;

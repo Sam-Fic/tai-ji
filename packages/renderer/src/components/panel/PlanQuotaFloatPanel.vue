@@ -72,19 +72,15 @@
  * 受控组件：收起状态由宿主 Panel 单点持有（collapsed prop 收敛 trace / drawer /
  * panel 宽度 / 用户手动四个来源），本组件仅上报手动切换（update:userCollapsed）。
  *
- * 刷新：挂载期间定时统一刷新（QUOTA_FLOAT_REFRESH_INTERVAL_MS，收起态跳过）——
- * 定时器 bump provide tick，各 PlanQuotaItem watch tick 重新查询
- * （通道契约见 plan-quota-float.ts QUOTA_FLOAT_REFRESH_TICK_KEY）。
+ * 刷新：挂载时各 PlanQuotaItem 查询一次，无定时刷新（ADR-0190 丁类退役）。
  */
-import { computed, onScopeDispose, provide, ref, watch } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChevronsLeft, ChevronsRight, Zap } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import PlanQuotaItem from './PlanQuotaItem.vue'
 import {
   QUOTA_FLOAT_INSET_LEFT,
-  QUOTA_FLOAT_REFRESH_INTERVAL_MS,
-  QUOTA_FLOAT_REFRESH_TICK_KEY,
   QUOTA_FLOAT_WIDTH_COLLAPSED,
   QUOTA_FLOAT_WIDTH_EXPANDED,
 } from './plan-quota-float'
@@ -121,26 +117,6 @@ const currentProviderId = computed<string | null>(() => {
   const slash = modelId.indexOf('/')
   return slash > 0 ? modelId.slice(0, slash) : null
 })
-
-/** 刷新 tick（子项 watch 此值重查；不清缓存，旧数据保留到新数据到达） */
-const refreshTick = ref(0)
-provide(QUOTA_FLOAT_REFRESH_TICK_KEY, refreshTick)
-
-// 定时统一刷新：挂载期间每 5 分钟 bump 一次；收起态跳过（不可见期间的查询无人消费）。
-// 查询并发/节流保护在 useQuotaQuery（pending 标记）与 runtime QuotaService（10s 节流）。
-// refreshTimer 声明先于 watch（immediate 回调同步执行，声明在后会踩 TDZ）。
-let refreshTimer: ReturnType<typeof setInterval> | undefined
-watch(() => props.collapsed, (collapsed) => {
-  if (collapsed) {
-    clearInterval(refreshTimer)
-    refreshTimer = undefined
-  } else if (refreshTimer === undefined) {
-    refreshTimer = setInterval(() => {
-      refreshTick.value += 1
-    }, QUOTA_FLOAT_REFRESH_INTERVAL_MS)
-  }
-}, { immediate: true })
-onScopeDispose(() => clearInterval(refreshTimer))
 
 /** 浮层定位/宽度（plan-quota-float.ts 尺寸契约 SSOT）：左缘偏移 + 随收起态切换的宽度
  *  （transition-[width] 承接切换动画）。纯 overlay 不挤占消息列/composer 边距——宿主不设

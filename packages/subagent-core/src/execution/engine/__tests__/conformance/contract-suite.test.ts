@@ -303,7 +303,7 @@ describe("conformance C5：read 降级链（协议黑盒 + reducer 等价性）"
     try {
       await client.ensureConnected();
       // read 是已知方法——unknown_method 模式下用未知名触发错误帧透传断言
-      await expect(client.request("bogus/read", { handle: {} }, { timeoutMs: 5_000 })).rejects.toBeInstanceOf(
+      await expect(client.request("bogus/read", { handle: {} })).rejects.toBeInstanceOf(
         EngineSdkError,
       );
     } finally {

@@ -1,5 +1,5 @@
 /**
- * Worktree 偏好配置 helper（git-cwt-anywhere：root dir / setup 脚本 / 超时 / 默认
+ * Worktree 偏好配置 helper（git-cwt-anywhere：root dir / setup 脚本 / 默认
  * base branch），从 config-service.ts 抽出，控 max-lines 500。
  *
  * 经注入的 AppConfigAccessors 读写，落在 app config.json 顶层字段。本模块只负责
@@ -30,14 +30,6 @@ export type AppConfigAccessors = {
 const DEFAULT_WORKTREE_ROOT_DIR = '~/worktrees'
 /** 默认 setup 脚本相对路径（裸仓 / 普通仓共用同一默认）。 */
 const DEFAULT_SETUP_SCRIPT = 'custom-hooks/setup-worktree.sh'
-/**
- * 默认 worktree 操作超时（秒）。300s：setup 脚本的最坏形态是 monorepo pnpm install +
- * 首次 Electron（~242MB）/ pi（~69MB）二进制下载——分钟级；旧默认 60s 会把冷安装误杀成
- * SETUP_FAILED（缓存热时 6-12s，冷热两种形态都要覆盖）。上限 3600s 供慢网络调。
- */
-const DEFAULT_TIMEOUT = 300
-/** 超时上限（秒）：与 setSystemPromptConfig 的窗口约束风格一致，防异常大值卡死 PTY。 */
-const TIMEOUT_MAX = 3600
 /**
  * 默认 base branch：'auto' 哨兵——create 时按仓库远端实况动态推导（checkout.defaultRemote →
  * origin → 单一远端 → 清单首个；无远端退本地 main/master，恒经 rev-parse 验证，见
@@ -90,21 +82,6 @@ export function setBareSetupScript(app: AppConfigAccessors, script: string): Sav
   config['bareSetupScript'] = script
   return app.save(config)
 }
-
-export function getTimeout(app: AppConfigAccessors): number {
-  const val = app.load()['worktreeTimeout']
-  return typeof val === 'number' ? val : DEFAULT_TIMEOUT
-}
-
-export function setTimeout(app: AppConfigAccessors, timeout: number): SaveAppConfigResult {
-  if (!Number.isFinite(timeout) || timeout <= 0 || timeout > TIMEOUT_MAX) {
-    throw new Error(`timeout must be a positive number in (0, ${TIMEOUT_MAX}], got ${timeout}`)
-  }
-  const config = app.load()
-  config['worktreeTimeout'] = timeout
-  return app.save(config)
-}
-
 
 export function getDefaultBaseBranch(app: AppConfigAccessors): string {
   const val = app.load()['defaultBaseBranch']

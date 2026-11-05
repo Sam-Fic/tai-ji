@@ -10,8 +10,8 @@
  * 核心不变量：
  * 1. **事件永不直接写数据**：失效事件只调 markDirty()（置 dirty + 防抖触发重新拉取），
  *    数据只能经 fetchSnapshot → merge 写入。从结构上防退化为「事件直写」影子状态。
- * 2. **快照失败不清除 dirty**：失败保留上次快照（UI 继续显示旧值），按退避序列重试；
- *    序列耗尽后停止，等下一次 markDirty / refetch / 周期兜底再启动。
+ * 2. **快照失败不清除 dirty**：失败保留上次快照（UI 继续显示旧值），不自动重试；
+ *    恢复 = 下一次 markDirty / refetch 失效边沿。
  * 3. **在途失效不丢**（epoch 检查）：fetch 在途期间到达的 markDirty 不会被本次成功
  *    快照吞掉——仅当成功快照与发起时同 epoch 才清 dirty / 撤销后续拉取。
  *
@@ -30,9 +30,8 @@
  * 不接线任何实例（W7/W8 做，接线时实例配置即登记表条目）。
  *
  * 失败可见性（code-harden RT-4#3）：快照失败不再零日志——每次失败 warn 一条（实例
- * 诊断标签 + 第几次尝试 + RPC 异常 / wire 归一异常分型）；退避预算耗尽落一条终末
- * warn（每轮耗尽只一条）后停止重试（核心不变量 2），恢复路径 = 既有失效边沿
- * （markDirty / refetch / 周期兜底）：各实例的失效源与真值变化语义一一对应
+ * 诊断标签 + 第几次尝试 + RPC 异常 / wire 归一异常分型）；失败后停止重试（核心不变量 2），
+ * 恢复路径 = 既有失效边沿（markDirty / refetch）：各实例的失效源与真值变化语义一一对应
  * （usage=turn_end/agent_end/compaction、modelId=switchModel RPC、thinkingLevel=
  * thinking_level_changed 事件 + setThinkingLevel RPC、commands=查询即失效），
  * 不另配低频 poll（对真值只在 runtime RPC 时变化的实例是纯浪费 RPC，且会推翻
@@ -79,9 +78,6 @@ export interface ReplicatedStateConfig<T> {
   fetchSnapshot: () => Promise<T>
   /** 失效防抖窗口（ms）：markDirty 后静默 debounceMs 再触发重新拉取，聚合失效风暴。 */
   debounceMs: number
-  /** 周期兜底重新拉取间隔（ms，可选，默认关闭 = 不启动周期定时器）。W7 thinkingLevel 依赖：
-   *  pi 同档位切换不发射事件，纯事件失效覆盖不住，需要周期兜底。 */
-  pollIntervalMs?: number
   /** 合并策略：D1b 规则 1 语义可直接用内建 {@link ownerSnapshotMerge}。 */
   merge: (snapshot: T, current: T) => T
   /** 字段空值语义登记（D1b 规则 2 wire 归一依据）。 */
@@ -150,8 +146,8 @@ export function normalizeWireSnapshot<T>(raw: T, semantics: FieldsNullSemantics)
 /**
  * 通用快照复制原语。
  *
- * 生命周期：构造（可含周期兜底定时器）→ markDirty/refetch/poll 驱动拉取 → dispose()
- * 清理全部定时器（per-session 实例随 session 销毁调用，防定时器泄漏）。
+ * 生命周期：构造 → markDirty/refetch 驱动拉取 → dispose() 清理定时器（per-session
+ * 实例随 session 销毁调用，防定时器泄漏）。
  * dispose 后 markDirty/refetch 为 no-op，在途 fetch 的迟到结果静默丢弃（失败不落
  * warn、不排退避），get() 仍可读最后快照（纯读无害）。
  */
@@ -164,20 +160,13 @@ export class ReplicatedState<T> {
   /** 失效代数：每次 markDirty 自增。检查「fetch 在途期间的失效不被成功快照吞掉」。 */
   private invalidationEpoch = 0
   private debounceTimer: ReturnType<typeof setTimeout> | null = null
-  private pollTimer: ReturnType<typeof setInterval> | null = null
   private inFlight = false
-  /** 在途 fetch 期间又有拉取触发（防抖到点/周期/重连）→ 挂起，fetch 结束后补充拉取一次。 */
+  /** 在途 fetch 期间又有拉取触发（防抖到点/重连）→ 挂起，fetch 结束后补充拉取一次。 */
   private chainedRefetch = false
   private disposed = false
-  /** 退避预算耗尽的终末 warn 已落标志（每轮耗尽只落一条；成功/refetch 重置开启新一轮）。 */
 
   constructor(config: ReplicatedStateConfig<T>) {
     this.config = config
-    if (config.pollIntervalMs !== undefined) {
-      this.pollTimer = setInterval(() => {
-        void this.doFetch()
-      }, config.pollIntervalMs)
-    }
   }
 
   /**
@@ -218,14 +207,10 @@ export class ReplicatedState<T> {
     void this.doFetch()
   }
 
-  /** 停止全部定时器（防抖 / 周期拉取），实例不再拉取。per-session 实例销毁时调用。 */
+  /** 停止防抖定时器，实例不再拉取。per-session 实例销毁时调用。 */
   dispose(): void {
     this.disposed = true
     this.clearDebounceTimer()
-    if (this.pollTimer !== null) {
-      clearInterval(this.pollTimer)
-      this.pollTimer = null
-    }
   }
 
   /** 拉取一次：wire 归一 → merge 应用；失败退避重试。在途时挂起补充拉取（chainedRefetch）。 */
@@ -245,9 +230,8 @@ export class ReplicatedState<T> {
       // 语义「实例不再拉取」覆盖在途残余，迟到 warn 在测试环境下会落进 vitest worker
       // 关闭窗口引发 EnvironmentTeardownError（unhandled rejection → 覆盖率门禁 flake）。
       if (this.disposed) return
-      // 快照失败（含 wire 协议异常）：保留 dirty + 保留上次快照，不再自动重试
-      //（ADR-0122：1s/5s/15s 退避序列已删）。失败显式上报（warn），恢复 = 下一失效边沿
-      //（markDirty）/ refetch / 周期拉取。
+      // 快照失败（含 wire 协议异常）：保留 dirty + 保留上次快照，不自动重试。
+      // 失败显式上报（warn），恢复 = 下一失效边沿（markDirty）/ refetch。
       const kind = e instanceof WireSnapshotSchemaError ? 'wire-schema' : 'rpc'
       console.warn(
         `[replicated-state] ${this.diagnosticLabel} snapshot fetch failed (kind=${kind}): ${toErrorMessage(e)}`,

@@ -2,7 +2,7 @@ import { setJournalReportSink } from '../../../services/session/journal-report-r
 import { EventAdapter, translate, type PiEventClient } from '../event-adapter.js';
 import { stripAnsi } from '../normalize-tool-result.js';
 import { PiAgentEndEvent, PiAgentSettledEvent, PiEntryAppendedEvent, PiHistoryMessage, PiMessageEndEvent, PiMessageUpdateEvent, PiSessionBranchSummaryEntry, PiSessionCompactionEntry, PiSessionCustomEntry, PiSessionCustomMessageEntry, PiSessionLabelEntry, PiSessionMessageEntry, PiTurnStartEvent, type PiEvent, type PiExtensionUiRequestEvent, type PiSessionEntry } from '../pi-protocol.js';
-import { applyEntryEndTimes, computeActivePathEntries, isInterruptedTail, mapSessionEntries } from '../session-entry-mapper.js';
+import { applyEntryEndTimes, computeActivePathEntries, mapSessionEntries } from '../session-entry-mapper.js';
 import { expectCompleteMessage } from './event-adapter-test-helpers';
 import type { Message } from '@taiji/shared';
 import { JOURNAL_REPORT_ACK, SUBAGENT_JOURNAL_MARKER, type SubagentJournalReport } from '@zhushanwen/extension-protocol';
@@ -44,7 +44,7 @@ function soleMessage(events: ReturnType<typeof translate>) {
 // ════════════════ 来源: event-adapter-journal-marker.test.ts ════════════════
 // ---- 原文件头注释 ----
 // EventAdapter SUBAGENT_JOURNAL_MARKER 旁路测试（event-push-channel）。
-// 覆盖（照 plan-review marker / inflight 测试形态，全部 mock 零真实 pi）：
+// 覆盖（照 plan-review marker 测试形态，全部 mock 零真实 pi）：
 // - translate 检查分支：marker 帧恒零产出（不进任何前端广播——第二道防线）；
 // - attach 旁路：合法报告 → journal-report-router 送达 sink（连接归属 sessionId）
 // → 应用成功回 JOURNAL_REPORT_ACK（生效回执 D7）；
@@ -1414,63 +1414,6 @@ describe('mapSessionEntries leafId 参数（活跃路径裁剪接入，message-r
     expect(withLeaf.messages).toEqual(withoutLeaf.messages)
     expect(withLeaf.entryIds).toEqual(withoutLeaf.entryIds)
     expect(withLeaf.customDataEntries).toEqual(withoutLeaf.customDataEntries)
-  })
-})
-});
-// wave3 包装：本段原文件顶层语句收进 describe 作用域（顶层 hook 不再外溢到同文件其他来源的用例）
-describe('session-entry-interrupted-tail', () => {
-describe('isInterruptedTail 中断三形态（true）', () => {
-  it('形态 1：尾部 = user entry（assistant 未产出，内容损失最大）', () => {
-    expect(isInterruptedTail([msgEntry_m2('user', [{ type: 'text', text: 'hi' }])])).toBe(true)
-  })
-
-  it('形态 2：尾部 = 带 toolCall 的 assistant entry（工具结果丢失）', () => {
-    expect(isInterruptedTail([assistantToolCall()])).toBe(true)
-  })
-
-  it('形态 3：尾部 = toolResult entry（下一轮 assistant 丢失）', () => {
-    expect(isInterruptedTail([assistantToolCall(), toolResult()])).toBe(true)
-  })
-})
-describe('isInterruptedTail 正常/零损失形态（false）', () => {
-  it('正常完成：尾部 = 无 toolCall 的 assistant entry', () => {
-    expect(isInterruptedTail([
-      msgEntry_m2('user', [{ type: 'text', text: 'hi' }]),
-      assistantText(),
-    ])).toBe(false)
-  })
-
-  it('主动 abort：落盘 stopReason=aborted 的完整 assistant entry，同形态不触发', () => {
-    const aborted = msgEntry_m2('assistant', [{ type: 'text', text: '半截回复' }])
-    ;(aborted as { message: { stopReason?: string } }).message.stopReason = 'aborted'
-    expect(isInterruptedTail([msgEntry_m2('user'), aborted])).toBe(false)
-  })
-
-  it('空数组 / 仅 header 无 message entry：无回合不标', () => {
-    expect(isInterruptedTail([])).toBe(false)
-    expect(isInterruptedTail([customEntry_m2()])).toBe(false)
-  })
-
-  it('system 尾部（pi 1.0.0 系统消息）：非回合产出尾部，不标', () => {
-    expect(isInterruptedTail([msgEntry_m2('system', [{ type: 'text', text: 'system prompt' }])])).toBe(false)
-  })
-})
-describe('isInterruptedTail 非回合尾部 entry 跳过（从尾向前找最后 message entry）', () => {
-  it('client-msg-id custom entry 盖在 user 尾上（每次发消息的常态序列）：仍判中断', () => {
-    // 高频路径：pi 发消息落 user entry 后，msg-id-mapper extension 紧跟写 custom entry
-    expect(isInterruptedTail([
-      assistantText(),
-      msgEntry_m2('user', [{ type: 'text', text: '新消息' }]),
-      customEntry_m2(),
-    ])).toBe(true)
-  })
-
-  it('custom entry 盖在完整 assistant 尾上：不误标', () => {
-    expect(isInterruptedTail([
-      msgEntry_m2('user'),
-      assistantText(),
-      customEntry_m2(),
-    ])).toBe(false)
   })
 })
 });

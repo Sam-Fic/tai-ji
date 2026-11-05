@@ -167,7 +167,7 @@ const searchModel = computed({
 const FETCH_ERROR_KEY: Record<string, string> = {
   session_not_active: 'panel.trace.fetchNotActive',
   session_busy: 'panel.trace.fetchBusy',
-  fetch_current_prompt_timeout: 'panel.trace.fetchTimeout',
+  fetch_current_prompt_failed: 'panel.trace.fetchFailed',
   timeout: 'panel.trace.fetchTimeout',
   disconnected: 'panel.trace.fetchFailed',
 }

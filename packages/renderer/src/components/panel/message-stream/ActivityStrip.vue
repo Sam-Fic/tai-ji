@@ -65,7 +65,7 @@
            v-html 注入，需行内豁免注释；本组件按红线改取静态模板内联、零豁免；弧动画类
            .ld-track/.ld-arc 由 style.css 全局层持有，改动两处须同步）。 -->
       <span
-        v-if="row.kind === 'waiting' || row.kind === 'stall'"
+        v-if="row.kind === 'waiting'"
         class="wait-dots inline-flex h-[22px] shrink-0 items-center gap-[5px]"
         aria-hidden="true"
         :data-testid="`activity-strip-dots-${row.kind}`"
@@ -154,10 +154,6 @@ import { COMPACTING_NOTICE_HEIGHT, EXECUTING_BASH_NOTICE_HEIGHT } from '@/compos
 import { Button } from '@/components/ui/button'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 
-/** 停滞提示分钟换算：silentMs → 分钟（no-magic-numbers）。 */
-const MS_PER_MINUTE = 60_000
-
-
 const props = defineProps<{
   /** session id（occupancy 派生视图 / compacting reason 的查询键） */
   sessionId: string
@@ -174,7 +170,7 @@ const { t } = useI18n()
 /** 活动条行（单一变化原因：行类型 + 文案）。优先级 = 数组序（compacting > bash > waiting / thinking /
  *  settling，waiting 与 thinking 同档互斥——dispatching 优先三点等待行，subagentThinking 才落呼吸弧行）。 */
 interface ActivityRow {
-  kind: 'compacting' | 'bash' | 'stall' | 'waiting' | 'thinking' | 'settling'
+  kind: 'compacting' | 'bash' | 'waiting' | 'thinking' | 'settling'
   text: string
   /** mono meta 钉右（text-2xs/500/tabular-nums）：bash 行 elapsed 计时（方案 A——命令移入
    *  悬停详情后，行内保留执行期观察） */
@@ -219,17 +215,6 @@ const rows = computed<ActivityRow[]>(() => {
         elapsed: formatDurationHms(nowTs.value - props.executingBash.startedAt),
       }),
       detail: { label: t('panel.message.bashCommandLabel'), body: props.executingBash.command },
-    })
-  }
-  // [pi-stall-detection U4 / D3] stall 行：runtime 静默辅助提示（session.stall_hint state
-  // topic 帧的派生视图分区）。判定权在 runtime（T/T_hint 推导单源 runtime——review-main#1
-  // 双阈值裁决），本组件只呈现：温和状态行文案（非红色警告、非弹窗，设计 D3 呈现形态），
-  // 帧流恢复 / 判死触发的清除边沿（active=false）到达即消失（分区删除 → 行随 rows 重算消失）。
-  const stallHint = chat.getStallHint(props.sessionId)
-  if (stallHint) {
-    list.push({
-      kind: 'stall',
-      text: t('panel.message.stallHint', { minutes: Math.max(1, Math.round(stallHint.silentMs / MS_PER_MINUTE)) }),
     })
   }
   // 等待行（demo chat spec 裁决 3A）：turn=dispatching（prompt 已发、message_start 未到 =

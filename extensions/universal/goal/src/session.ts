@@ -23,21 +23,12 @@ export interface GoalSession {
 	state: GoalRuntimeState | null;
 	/** 防重入标志：agent_end / before_agent_start 等事件处理器入口检查 */
 	isProcessing: boolean;
-	/**
-	 * W5 退避延迟发送的 continuation 定时器（无进展退避时 continuation 不立即发出，
-	 * 按间隔 ×2 递增延迟）。非 null 表示有一个待发的退避 continuation——调度前必须
-	 * 先清（防双发）。清理侧（cancelContinuationTimer 统一入口）：clearGoalSession、
-	 * session_start（新 session 生命周期旧 timer 作废）、before_agent_start（新用户
-	 * 活动使旧退避作废）、下一轮 agent_end 调度前。
-	 */
-	continuationTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export function createGoalSession(): GoalSession {
 	return {
 		state: null,
 		isProcessing: false,
-		continuationTimer: null,
 	};
 }
 
@@ -126,23 +117,7 @@ function isGoalStateEntry(entry: SessionEntryLike): boolean {
 
 // ── clearGoalSession ──────────────────────────────────
 
-/**
- * 取消待发的退避 continuation timer（全部清理点走本函数，防止清理侧遗漏）：
- * - clearGoalSession：goal 已终态/清除，发出即僵尸 turn
- * - session_start：session 句柄跨 session 复用，新 session 生命周期旧 timer 作废
- * - before_agent_start：新用户活动使旧退避作废，该轮 agent_end 按最新状态重新决策
- * - agent_end 调度前：防双发（任意时刻至多一个待发）
- */
-export function cancelContinuationTimer(session: GoalSession): void {
-	if (session.continuationTimer !== null) {
-		clearTimeout(session.continuationTimer);
-		session.continuationTimer = null;
-	}
-}
-
 export function clearGoalSession(session: GoalSession, uiPort: UiPort): void {
-	// W5：清 goal 时取消待发的退避 continuation（goal 已终态/清除，发出即僵尸 turn）
-	cancelContinuationTimer(session);
 	session.state = null;
 	session.isProcessing = false;
 	// FR-6.6: hasUI 检查

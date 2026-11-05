@@ -1,18 +1,14 @@
 /**
  * reattach 编排单测（crash-forensics-and-watchdog §3.3 D3，实施单元 u5）。
  *
- * 验收条款逐条对照（impl-plan u5）：
- * - **A1 过滤公式真值表**：shouldReattachEntry 五条件各自独立命中 / 全不命中 / 边界值
- *   （idle 恰等 2h、viewed 恰等 30min——边界走恢复方向）。
- * - **A2 快照布尔反向形态**：backgroundTasks=true 陈旧快照（任务已结束、checkpoint 未刷新）
- *   → 仍恢复；本文件断言恢复判定读快照布尔。
+ * 验收条款逐条对照（impl-plan u5；时间过滤/高水位延迟/收割上界已随时间机制清查删除，
+ * 对应验收组 A1/A2/A4/#27 一并退役）：
  * - **A3 live 孤儿未收割完不 spawn**：收割 promise 未 resolve 时编排不启动 restore（假收割
- *   promise 控制时序）；收割超上界 → 全部候选 reattach-skipped + 删 checkpoint。
- * - **A4 高水位延迟不依赖采样环**：冷启动逐拍即时查询——首拍高压推迟、缓解后恢复；
- *   mem-pressure 纯函数侧单样本判定的证据见 infra/__tests__/mem-pressure.test.ts。
- * - **A5 reattach-skipped 逐 session**：staleness 命中 / restore 失败 / 收割超时各自产生
- *   一条 journal 记录（sessionId/reason 断言）；过滤排除不记（设计内「不恢复」语义，非异常）。
- * - **A6 checkpoint 删除属主**：全部尝试完后文件被删（含全跳过/零候选形态）。
+ *   promise 控制时序）；收割 promise 意外 reject → 全部候选跳过退 lazy + 删 checkpoint
+ *   （宁 lazy 不双持的防御侧）。
+ * - **A5 reattach-skipped 逐 session**：staleness 命中 / restore 失败各自产生一条 journal
+ *   记录（sessionId/reason 断言）。
+ * - **A6 checkpoint 删除属主**：全部尝试完后文件被删（含全跳过/零候选/无 checkpoint 形态）。
  * - **组合根挂点**：index.ts 源码顺序断言——runStartupReattach 在 await server.start() 之后
  *   （D3「listen 后」硬约束）。
  * - **收割 promise 交付**：startup-background-init 的 onOrphanReapChainScheduled 在调度后
@@ -29,14 +25,10 @@ import type { CrashJournalEvent, CrashJournalWriter } from '@taiji/shared'
 import { RUN_CHECKPOINT_FILENAME as CHECKPOINT_FILENAME } from '@taiji/shared/paths'
 import { RuntimeCheckpointStore } from '../session/runtime-checkpoint.js'
 import type { RuntimeCheckpointEntry } from '../session/runtime-checkpoint.js'
-import type { MemPressureSample } from '../../infra/mem-pressure.js'
 import {
-  DEFAULT_HIGH_WATER_POLL_MS,
-  REATTACH_SKIP_REAP_TIMEOUT,
   REATTACH_SKIP_RESTORE_FAILED,
   REATTACH_SKIP_STALENESS,
   runStartupReattach,
-  shouldReattachEntry,
   type StartupReattachDeps,
   type StartupReattachOptions,
 } from '../startup-reattach.js'
@@ -48,15 +40,8 @@ import type { PluginService } from '../plugin-service/plugin-service.js'
 import type { PiConfigStore } from '../../infra/pi/pi-config-store.js'
 import type { AuthStorage } from '../auth/auth-storage.js'
 
-const HOUR = 3_600_000
-const MIN = 60_000
-/** 恒定可控时钟（A1 边界值精确到毫秒）。 */
+/** 恒定可控时钟（checkpoint store 落盘时间戳）。 */
 const T0 = 1_700_000_000_000
-
-/** mem-pressure 注入样本：常态（swap 未知 + 空闲 50% → 不高压）。 */
-const calmSample: MemPressureSample = { swapUsedMB: null, swapTotalMB: null, freeMB: 8 * 1024, totalMB: 16 * 1024 }
-/** mem-pressure 注入样本：swap 近耗尽（占比 0.99 ≥ 0.95 → 高压）。 */
-const highSample: MemPressureSample = { swapUsedMB: 990, swapTotalMB: 1000, freeMB: 8 * 1024, totalMB: 16 * 1024 }
 
 const createdDirs: string[] = []
 let runDir: string
@@ -75,7 +60,7 @@ afterAll(() => {
   }
 })
 
-/** 构造 checkpoint 条目（缺省 = 全条件不命中：无占用、无布尔、无时间戳）。 */
+/** 构造 checkpoint 条目（缺省形态：无时间戳、无占用标记）。 */
 function entry(overrides: Partial<RuntimeCheckpointEntry>): RuntimeCheckpointEntry {
   return {
     piSessionId: 's1',
@@ -88,9 +73,6 @@ function entry(overrides: Partial<RuntimeCheckpointEntry>): RuntimeCheckpointEnt
     ...overrides,
   }
 }
-
-/** A1 基准窗口：与 reaper 既有 shared SSOT 同值（2h / 30min）。 */
-const filterInput = { nowMs: T0, idleWindowMs: 2 * HOUR, viewedWindowMs: 30 * MIN }
 
 interface Harness {
   store: RuntimeCheckpointStore
@@ -131,14 +113,11 @@ function makeDeps(h: Harness, overrides: Partial<StartupReattachDeps> = {}): Sta
   }
 }
 
-/** 编排选项基线：时钟恒定 / delay 即过 / mem 常态 / 文件存在性恒真（非 staleness 用例的探针免建真实文件）。 */
+/** 编排选项基线：journal/checkpoint 注入 + 文件存在性恒真（非 staleness 用例的探针免建真实文件）。 */
 function makeOptions(h: Harness, overrides: Partial<StartupReattachOptions> = {}): StartupReattachOptions {
   return {
-    now: () => T0,
     journal: h.journal,
     checkpoint: h.store,
-    delay: async () => {},
-    queryMemPressure: async () => calmSample,
     fileExists: () => true,
     ...overrides,
   }
@@ -164,128 +143,15 @@ function skipEvents(events: CrashJournalEvent[]): CrashJournalEvent[] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// A1 过滤公式真值表（shouldReattachEntry 纯函数）
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('A1 shouldReattachEntry 真补集过滤公式（D3）', () => {
-  it('条件①：occupancy 非 idle（三维占用任一命中）→ 恢复，与其他条件无关', () => {
-    expect(shouldReattachEntry(entry({ occupancy: 'occupied' }), filterInput)).toBe(true)
-    // 安静长 turn 反例④：idle 超 2h、从未查看，但占用中 → 必须恢复
-    expect(shouldReattachEntry(entry({
-      occupancy: 'occupied',
-      lastActivityAt: T0 - 3 * HOUR,
-    }), filterInput)).toBe(true)
-  })
-
-  it('条件②：backgroundTasks 快照 true → 恢复（反例③：后台任务结束后切走）', () => {
-    expect(shouldReattachEntry(entry({
-      backgroundTasks: true,
-      lastActivityAt: T0 - 3 * HOUR,
-    }), filterInput)).toBe(true)
-  })
-
-  it('条件③：relayChildren 快照 true → 恢复', () => {
-    expect(shouldReattachEntry(entry({
-      relayChildren: true,
-      lastActivityAt: T0 - 3 * HOUR,
-    }), filterInput)).toBe(true)
-  })
-
-  it('条件④：idle 3min → 恢复（反例②：崩溃前的活跃 session）', () => {
-    expect(shouldReattachEntry(entry({ lastActivityAt: T0 - 3 * MIN }), filterInput)).toBe(true)
-  })
-
-  it('条件④边界：idle 恰等 2h → 恢复（边界走恢复方向：reaper idleMs > 阈值才回收的对偶）', () => {
-    expect(shouldReattachEntry(entry({ lastActivityAt: T0 - 2 * HOUR }), filterInput)).toBe(true)
-  })
-
-  it('条件④越界：idle 2h+1ms（viewed 缺失、无豁免）→ 不恢复（reaper 将回收的形态）', () => {
-    expect(shouldReattachEntry(entry({ lastActivityAt: T0 - 2 * HOUR - 1 }), filterInput)).toBe(false)
-  })
-
-  it('条件⑤：viewed 10min 前 → 恢复（反例①：45min 未活动但刚查看过）', () => {
-    expect(shouldReattachEntry(entry({
-      lastActivityAt: T0 - 45 * MIN,
-      lastViewedAt: T0 - 10 * MIN,
-    }), filterInput)).toBe(true)
-  })
-
-  it('条件⑤边界：viewed 恰等 30min → 恢复（reaper 豁免 #6「≤ 30 分钟」字面）', () => {
-    expect(shouldReattachEntry(entry({ lastViewedAt: T0 - 30 * MIN }), filterInput)).toBe(true)
-  })
-
-  it('条件⑤越界：viewed 30min+1ms 且 idle > 2h → 不恢复', () => {
-    expect(shouldReattachEntry(entry({
-      lastActivityAt: T0 - 3 * HOUR,
-      lastViewedAt: T0 - 30 * MIN - 1,
-    }), filterInput)).toBe(false)
-  })
-
-  it('全不命中（闲置 3h、40min 未查看、无占用无豁免）→ 不恢复（验收 A3 反例②）', () => {
-    expect(shouldReattachEntry(entry({
-      lastActivityAt: T0 - 3 * HOUR,
-      lastViewedAt: T0 - 40 * MIN,
-    }), filterInput)).toBe(false)
-  })
-
-  it('时间戳 null = 未知 → 该条不命中、其余条照判（errs 方向 = 偏漏恢复，不冒进 spawn）', () => {
-    expect(shouldReattachEntry(entry({ lastActivityAt: null, lastViewedAt: null }), filterInput)).toBe(false)
-    // lastActivityAt 未知但刚查看过 → viewed 条独立命中
-    expect(shouldReattachEntry(entry({ lastViewedAt: T0 - MIN }), filterInput)).toBe(true)
-  })
-
-  it('时钟偏斜（lastActivityAt 在未来）→ idle 为负 ≤ 窗口 → 恢复（偏恢复方向，errs-safe）', () => {
-    expect(shouldReattachEntry(entry({ lastActivityAt: T0 + 5 * MIN }), filterInput)).toBe(true)
-  })
-
-  it('[fix-chat-flow-stuck A-6] 场景：占用中 runtime 崩溃（occupancy 边沿刷新后的磁盘快照）→ 自动恢复命中', () => {
-    // 快照生产链 = crash-forensics-hooks refreshCheckpointOnOccupancyEdge（occupancy 转移边沿
-    // 翻转时刷 occupied 落盘，端到端链路证据见 occupancy-checkpoint-edge.test.ts）：
-    // attach 时 idle（注册时刻占用恒 idle）→ 进入占用边沿翻 occupied → 占用中 runtime 崩溃，
-    // 磁盘快照停留本形态——安静长 turn（idle 窗口超 2h 也不靠它）必须恢复。
-    expect(shouldReattachEntry(entry({
-      occupancy: 'occupied',
-      lastActivityAt: T0 - 5 * HOUR,
-      lastViewedAt: null,
-    }), filterInput)).toBe(true)
-  })
-})
-
-// ─────────────────────────────────────────────────────────────────────────────
-// A2 快照布尔反向形态（多恢复 → reaper 自收敛）
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('A2 快照布尔反向形态（陈旧 backgroundTasks=true 多恢复，自收敛）', () => {
-  it('任务 T 结束、T+≤5min 内崩溃时快照仍 true：idle 超 2h 也恢复（多恢复形态成立）', async () => {
-    const h = makeHarness()
-    // 陈旧快照：后台任务早已结束但 reaper tick 未刷新布尔；时间戳同样陈旧
-    const staleTrue = entry({
-      piSessionId: 'stale-bg',
-      lastActivityAt: T0 - 5 * HOUR,
-      backgroundTasks: true,
-    })
-    seed(h, [staleTrue])
-    h.settleHarvest()
-    const report = await runStartupReattach(makeDeps(h), makeOptions(h))
-    expect(report.candidates).toEqual(['stale-bg'])
-    expect(h.restore).toHaveBeenCalledWith('stale-bg')
-    // 排查口径：持续多恢复且不自收敛 = 公式错误；偶发单次后自收敛 = 快照滞后（D3 原文）。
-  })
-})
-
-// ─────────────────────────────────────────────────────────────────────────────
-// A3 live 孤儿未收割完不 spawn / 收割超上界跳过
+// A3 收割等待（P9 消灭双持；事实判定无时间上界）
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('A3 收割等待（P9 消灭双持）', () => {
   it('收割 promise 未 resolve 时编排不启动 restore；resolve 后恢复执行', async () => {
     const h = makeHarness()
-    seed(h, [entry({ piSessionId: 'live', lastActivityAt: T0 - MIN })])
-    // delay 永不 resolve → race 只能由收割 arm 赢，时序完全由收割 promise 控制
-    const pending = runStartupReattach(makeDeps(h), makeOptions(h, {
-      delay: () => new Promise<void>(() => {}),
-    }))
-    // 让编排跑到 race await：收割未完成 → 零 spawn
+    seed(h, [entry({ piSessionId: 'live' })])
+    const pending = runStartupReattach(makeDeps(h), makeOptions(h))
+    // 让编排跑到收割 await：收割未完成 → 零 spawn
     await new Promise((r) => setTimeout(r, 0))
     expect(h.restore).not.toHaveBeenCalled()
 
@@ -297,82 +163,17 @@ describe('A3 收割等待（P9 消灭双持）', () => {
     expect(report.checkpointDeleted).toBe(true)
   })
 
-  it('收割超上界（delay arm 先赢）→ 全部候选记 reap-wait-timeout + 零 spawn + 删 checkpoint', async () => {
+  it('收割 promise 意外 reject（契约违背的防御机制侧）→ 全部候选跳过 + 删 checkpoint（宁 lazy 不双持）', async () => {
     const h = makeHarness()
-    const neverHarvest = new Promise<void>(() => {})
-    seed(h, [
-      entry({ piSessionId: 'a', lastActivityAt: T0 - MIN }),
-      entry({ piSessionId: 'b', lastViewedAt: T0 - MIN }),
-    ])
-    const report = await runStartupReattach(
-      makeDeps(h, { waitForOrphanReap: () => neverHarvest }),
-      makeOptions(h), // delay 即过 → race 上界 arm 立即赢（超上界形态）
-    )
-    expect(h.restore).not.toHaveBeenCalled()
-    expect(report.restored).toEqual([])
-    expect(report.skipped.map((s) => s.reason)).toEqual([REATTACH_SKIP_REAP_TIMEOUT, REATTACH_SKIP_REAP_TIMEOUT])
-    const skips = skipEvents(h.events)
-    expect(skips).toHaveLength(2)
-    expect(skips.map((e) => e.sessionId).sort()).toEqual(['a', 'b'])
-    for (const e of skips) expect(e.reason).toBe(REATTACH_SKIP_REAP_TIMEOUT)
-    // 超界跳过 = 本实例内全部尝试已终态：checkpoint 删除（A6 语义）
-    expect(report.checkpointDeleted).toBe(true)
-    expect(existsSync(h.checkpointPath)).toBe(false)
-  })
-
-  it('收割 promise 意外 reject（契约违背的防御机制侧）→ 按未收割处理（宁 lazy 不双持）', async () => {
-    const h = makeHarness()
-    seed(h, [entry({ piSessionId: 'a', lastActivityAt: T0 - MIN })])
+    seed(h, [entry({ piSessionId: 'a' })])
     const report = await runStartupReattach(
       makeDeps(h, { waitForOrphanReap: () => Promise.reject(new Error('harvest boom')) }),
       makeOptions(h),
     )
     expect(h.restore).not.toHaveBeenCalled()
-    expect(report.skipped.map((s) => s.reason)).toEqual([REATTACH_SKIP_REAP_TIMEOUT])
+    expect(report.skipped.map((s) => s.reason)).toEqual([REATTACH_SKIP_RESTORE_FAILED])
     expect(report.checkpointDeleted).toBe(true)
-  })
-})
-
-// ─────────────────────────────────────────────────────────────────────────────
-// A4 高水位延迟（即时查询，无采样环历史）
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('A4 高水位延迟（mem-pressure 即时查询）', () => {
-  it('冷启动首拍即高压 → 推迟 spawn 并轮询，缓解后立即恢复（逐拍即时判定，无历史依赖）', async () => {
-    const h = makeHarness()
-    seed(h, [entry({ piSessionId: 'a', lastActivityAt: T0 - MIN })])
-    h.settleHarvest()
-    // 查询序列：高压 → 高压 → 常态——每拍都来自当次即时查询（冷启动零历史可用）
-    const samples = [highSample, highSample, calmSample]
-    const queryMemPressure = vi.fn(async () => samples.shift() ?? calmSample)
-    const report = await runStartupReattach(makeDeps(h), makeOptions(h, { queryMemPressure }))
-    expect(queryMemPressure).toHaveBeenCalledTimes(3)
-    expect(report.highWaterWaits).toBe(2)
-    expect(h.restore).toHaveBeenCalledTimes(1)
-    expect(report.restored).toEqual(['a'])
-    expect(report.checkpointDeleted).toBe(true)
-  })
-
-  it('判定时刻无高压 → 零延迟直接恢复（常态路径不被兜底拖累）', async () => {
-    const h = makeHarness()
-    seed(h, [entry({ piSessionId: 'a', lastActivityAt: T0 - MIN })])
-    h.settleHarvest()
-    const queryMemPressure = vi.fn(async () => calmSample)
-    const report = await runStartupReattach(makeDeps(h), makeOptions(h, { queryMemPressure }))
-    expect(queryMemPressure).toHaveBeenCalledTimes(1)
-    expect(report.highWaterWaits).toBe(0)
-    expect(report.restored).toEqual(['a'])
-  })
-
-  it('mem 查询意外抛错（契约违背的防御机制侧）→ 不阻塞恢复', async () => {
-    const h = makeHarness()
-    seed(h, [entry({ piSessionId: 'a', lastActivityAt: T0 - MIN })])
-    h.settleHarvest()
-    const report = await runStartupReattach(makeDeps(h), makeOptions(h, {
-      queryMemPressure: async () => { throw new Error('query boom') },
-    }))
-    expect(report.highWaterWaits).toBe(0)
-    expect(report.restored).toEqual(['a'])
+    expect(existsSync(h.checkpointPath)).toBe(false)
   })
 })
 
@@ -410,26 +211,11 @@ describe('A5 reattach-skipped 事件（逐 session 一条）', () => {
     expect(String(skips[1]?.detailDigest)).toContain(missingPath)
   })
 
-  it('过滤排除不记 journal 记录（设计内「不恢复」语义，非异常）', async () => {
-    const h = makeHarness()
-    seed(h, [
-      entry({ piSessionId: 'resting', lastActivityAt: T0 - 3 * HOUR, lastViewedAt: T0 - 40 * MIN }),
-      entry({ piSessionId: 'active', lastActivityAt: T0 - MIN }),
-    ])
-    h.settleHarvest()
-    const report = await runStartupReattach(makeDeps(h), makeOptions(h))
-    expect(report.excluded).toEqual(['resting'])
-    expect(report.candidates).toEqual(['active'])
-    // 唯一 journal 记录行只属于候选失败/跳过两类——resting 无任何事件
-    expect(skipEvents(h.events)).toHaveLength(0)
-    expect(h.restore).not.toHaveBeenCalledWith('resting')
-  })
-
   it('restore 失败：逐 session 记 restore-failed（detailDigest 含错误），批次内其余继续（并发 2 容错）', async () => {
     const h = makeHarness()
     seed(h, [
-      entry({ piSessionId: 'boom', lastActivityAt: T0 - MIN }),
-      entry({ piSessionId: 'fine', lastActivityAt: T0 - MIN }),
+      entry({ piSessionId: 'boom' }),
+      entry({ piSessionId: 'fine' }),
     ])
     h.settleHarvest()
     const restore = vi.fn(async (sid: string) => {
@@ -449,9 +235,9 @@ describe('A5 reattach-skipped 事件（逐 session 一条）', () => {
   it('分批并发 2：三候选按 2+1 两批逐批执行，单 session 失败不阻断下一批', async () => {
     const h = makeHarness()
     seed(h, [
-      entry({ piSessionId: 'a', lastActivityAt: T0 - MIN }),
-      entry({ piSessionId: 'b', lastActivityAt: T0 - MIN }),
-      entry({ piSessionId: 'c', lastActivityAt: T0 - MIN }),
+      entry({ piSessionId: 'a' }),
+      entry({ piSessionId: 'b' }),
+      entry({ piSessionId: 'c' }),
     ])
     h.settleHarvest()
     const restore = vi.fn(async (sid: string) => {
@@ -473,7 +259,7 @@ describe('A5 reattach-skipped 事件（逐 session 一条）', () => {
 describe('A6 checkpoint 删除（全部尝试完后无条件删）', () => {
   it('全部 restore 成功 → 文件被删', async () => {
     const h = makeHarness()
-    seed(h, [entry({ piSessionId: 'a', lastActivityAt: T0 - MIN })])
+    seed(h, [entry({ piSessionId: 'a' })])
     h.settleHarvest()
     await runStartupReattach(makeDeps(h), makeOptions(h))
     expect(existsSync(h.checkpointPath)).toBe(false)
@@ -490,9 +276,11 @@ describe('A6 checkpoint 删除（全部尝试完后无条件删）', () => {
     expect(report.checkpointDeleted).toBe(true)
   })
 
-  it('零候选（全被补集排除）→ 零尝试仍删', async () => {
+  it('checkpoint sessions 空（零候选）→ 零尝试仍删', async () => {
     const h = makeHarness()
-    seed(h, [entry({ piSessionId: 'resting', lastActivityAt: T0 - 3 * HOUR, lastViewedAt: T0 - 40 * MIN })])
+    h.store.upsertSession({ sessionId: 'tmp-seed', filePath: join(runDir, 'tmp.jsonl') })
+    // 直接构造空 sessions 快照：绕过 seed 写入（store 无清空 API，经 checkpointPath 覆写）
+    writeFileSync(h.checkpointPath, JSON.stringify({ sessions: [] }), 'utf8')
     h.settleHarvest()
     const report = await runStartupReattach(makeDeps(h), makeOptions(h))
     expect(report.candidates).toEqual([])
@@ -518,7 +306,7 @@ describe('A6 checkpoint 删除（全部尝试完后无条件删）', () => {
 
   it('默认删除路径（无注入）：真实 tmp 文件被 unlink（D3 删除属主第二路走 store.checkpointPath）', async () => {
     const h = makeHarness()
-    seed(h, [entry({ piSessionId: 'a', lastActivityAt: T0 - MIN })])
+    seed(h, [entry({ piSessionId: 'a' })])
     h.settleHarvest()
     const report = await runStartupReattach(makeDeps(h), makeOptions(h))
     expect(report.checkpointDeleted).toBe(true)
@@ -640,71 +428,3 @@ function makeBgDeps(onOrphanReapChainScheduled?: (completion: Promise<void>) => 
     ...(onOrphanReapChainScheduled ? { onOrphanReapChainScheduled } : {}),
   }
 }
-// ─────────────────────────────────────────────────────────────────────────────
-// #27 reattach:deferred 广播挂点（高水位延迟进入/缓解退出，u7d 承接的横幅半路径）
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('#27 reattach:deferred 广播（进入单发 + 缓解退出单发）', () => {
-  it('高压两拍后缓解：进入帧（active=true）与退出帧（active=false）各一次，含 pollMs 与 reason（fake timers 走默认 30s 节拍）', async () => {
-    const h = makeHarness()
-    seed(h, [entry({ piSessionId: 'a', lastActivityAt: T0 - MIN })])
-    h.settleHarvest()
-    const samples = [highSample, highSample, calmSample]
-    const queryMemPressure = vi.fn(async () => samples.shift() ?? calmSample)
-    const onDeferredBroadcast = vi.fn()
-    // 不注入 delay → 走默认真实 setTimeout（30s 节拍），用 fake timers 推进轮询循环
-    const overrides: Partial<StartupReattachOptions> = { queryMemPressure }
-    vi.useFakeTimers()
-    try {
-      const pendingReport = runStartupReattach(makeDeps(h, { onDeferredBroadcast }), makeOptions(h, { queryMemPressure }))
-      await vi.advanceTimersByTimeAsync(DEFAULT_HIGH_WATER_POLL_MS)
-      await vi.advanceTimersByTimeAsync(DEFAULT_HIGH_WATER_POLL_MS)
-      const report = await pendingReport
-      expect(report.highWaterWaits).toBe(2)
-      expect(h.restore).toHaveBeenCalledTimes(1) // 缓解后恢复执行（广播不阻塞编排链）
-      expect(onDeferredBroadcast).toHaveBeenCalledTimes(2)
-      expect(onDeferredBroadcast).toHaveBeenNthCalledWith(1, {
-        active: true, reason: 'high-memory', pollMs: DEFAULT_HIGH_WATER_POLL_MS,
-      })
-      expect(onDeferredBroadcast).toHaveBeenNthCalledWith(2, {
-        active: false, reason: 'high-memory', pollMs: DEFAULT_HIGH_WATER_POLL_MS,
-      })
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('判定时刻无高压 → 零广播（常态路径不产生任何帧）', async () => {
-    const h = makeHarness()
-    seed(h, [entry({ piSessionId: 'a', lastActivityAt: T0 - MIN })])
-    h.settleHarvest()
-    const onDeferredBroadcast = vi.fn()
-    await runStartupReattach(makeDeps(h, { onDeferredBroadcast }), makeOptions(h))
-    expect(onDeferredBroadcast).not.toHaveBeenCalled()
-  })
-
-  it('广播出口抛错（契约违背的防御机制侧）→ 异常被吞、进入/退出两帧都尝试、编排照常完成', async () => {
-    const h = makeHarness()
-    seed(h, [entry({ piSessionId: 'a', lastActivityAt: T0 - MIN })])
-    h.settleHarvest()
-    const samples = [highSample, calmSample]
-    const onDeferredBroadcast = vi.fn(() => { throw new Error('broadcast boom') })
-    const report = await runStartupReattach(makeDeps(h, { onDeferredBroadcast }), makeOptions(h, {
-      queryMemPressure: async () => samples.shift() ?? calmSample,
-    }))
-    expect(onDeferredBroadcast).toHaveBeenCalledTimes(2) // 进入帧与退出帧都未被异常中断
-    expect(report.restored).toEqual(['a'])
-    expect(report.checkpointDeleted).toBe(true)
-  })
-
-  it('组合根接线（#27）：index.ts 的 runStartupReattach 调用带 onDeferredBroadcast → server.broadcast reattach:deferred', () => {
-    const candidates = [
-      join(process.cwd(), 'src/index.ts'),
-      join(process.cwd(), 'packages/runtime/src/index.ts'),
-    ]
-    const srcFile = candidates.find((p) => existsSync(p))
-    if (!srcFile) throw new Error(`index.ts not found from cwd=${process.cwd()}`)
-    const src = readFileSync(srcFile, 'utf-8')
-    expect(src).toContain("onDeferredBroadcast: (payload) => server.broadcast({ type: 'reattach:deferred', payload })")
-  })
-})

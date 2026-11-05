@@ -198,16 +198,15 @@ describe('GitRepoResolver.resolve walk-up', () => {
   })
 })
 describe('GitRepoResolver.resolve branch 解析', () => {
-  it('execSync 形状：git rev-parse --abbrev-ref HEAD，2000ms 超时，从 cwd 起算', () => {
+  it('execSync 形状：git rev-parse --abbrev-ref HEAD，无墙钟（本地命令同步等待），从 cwd 起算', () => {
     const root = makeTmp()
     mkdirSync(join(root, '.git'))
     new GitRepoResolver().resolve(root)
 
     expect(execSyncMock).toHaveBeenCalledTimes(1)
-    const [command, opts] = execSyncMock.mock.calls[0] as unknown as [string, { cwd: string; timeout: number; env: Record<string, string> }]
+    const [command, opts] = execSyncMock.mock.calls[0] as unknown as [string, { cwd: string; env: Record<string, string> }]
     expect(command).toBe('git rev-parse --abbrev-ref HEAD')
     expect(opts.cwd).toBe(root)
-    expect(opts.timeout).toBe(2000)
     expect(opts.env).toBeDefined()
   })
 

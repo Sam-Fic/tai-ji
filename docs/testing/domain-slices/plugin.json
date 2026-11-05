@@ -7,11 +7,11 @@
     "shared"
   ],
   "scope": {
-  "runtime": [
-   "packages/runtime/src/services/plugin-service/**",
-   "packages/runtime/test/fixtures/plugins/probe-container-plugin/**",
-   "packages/runtime/src/transport/plugin-message-handler.ts"
-  ],
+    "runtime": [
+      "packages/runtime/src/services/plugin-service/**",
+      "packages/runtime/test/fixtures/plugins/probe-container-plugin/**",
+      "packages/runtime/src/transport/plugin-message-handler.ts"
+    ],
     "sdk": [
       "packages/plugin-sdk/**",
       "packages/create-taiji-plugin/**"
@@ -42,17 +42,14 @@
     "packages/renderer/src/__tests__/composables/useExtensionHostBridge-plugin-replay.test.ts",
     "packages/runtime/src/services/plugin-service/**",
     "packages/runtime/test/plugin-catalog.test.ts",
-    "packages/runtime/test/plugin-commands-executor-timeout.test.ts",
     "packages/runtime/test/plugin-host-actions.test.ts",
     "packages/runtime/test/plugin-host-process.test.ts",
     "packages/runtime/test/plugin-hot-reload.test.ts",
     "packages/runtime/test/plugin-permission-approval-wake.test.ts",
     "packages/runtime/test/plugin-permission-push.test.ts",
-    "packages/runtime/test/plugin-permission-timeout.test.ts",
     "packages/runtime/test/plugin-registry-bundle.test.ts",
     "packages/runtime/test/plugin-rpc-bundle.test.ts",
     "packages/runtime/test/plugin-service-bundle.test.ts",
-    "packages/runtime/test/plugin-ui-timeout-authority.test.ts",
     "packages/shared/src/__tests__/plugin-capability-map.test.ts",
     "packages/shared/src/__tests__/plugin-namespace.test.ts",
     "packages/shared/src/__tests__/plugin-view-scope.test.ts",

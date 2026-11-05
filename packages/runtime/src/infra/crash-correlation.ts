@@ -45,9 +45,6 @@ export interface MachinePiRow {
   command: string
 }
 
-/** ps 枚举超时：全量进程表是毫秒级本地操作，10s 只是无 ps/假死兜底（reap-orphan-pi 同值）。 */
-const PS_TIMEOUT_MS = 10_000
-
 /** 快照 section 内单行 command 截断长度（超长 argv 以 … 收尾，保 grep 可读性）。 */
 const SNAPSHOT_CMD_MAX_CHARS = 240
 
@@ -138,8 +135,10 @@ export function formatMachinePiDigest(rows: readonly MachinePiRow[]): string {
 
 type RunPs = (args: readonly string[]) => string
 
+// 无墙钟（时间机制删除裁决）：ps 为本地毫秒级命令，同步等待其自然返回；
+// ps 缺失/失败经 execFileSync 抛错走调用方 unavailable 分支，不设时间阈值兜底。
 const defaultRunPs: RunPs = (args) =>
-  execFileSync('ps', [...args], { encoding: 'utf-8', timeout: PS_TIMEOUT_MS })
+  execFileSync('ps', [...args], { encoding: 'utf-8' })
 
 /** 采集活着的 taiji 家族 pi 行（内部步：不抛，失败返回空数组并附原因由上层渲染）。 */
 function listMachinePiRows(runPs: RunPs): MachinePiRow[] {
@@ -182,9 +181,6 @@ export function captureMachinePiDigest(runPs: RunPs = defaultRunPs): string {
 
 /** 采样窗口：崩溃时刻前后各 5s（同秒连坐形态的证据窗，覆盖调度抖动）。 */
 export const UNIFIED_LOG_WINDOW_MS = 5_000
-
-/** `log show` 超时：10s 窗口扫描通常 1-3s，超时视为本轮采样失败（fire-and-forget 不重试）。 */
-export const UNIFIED_LOG_TIMEOUT_MS = 10_000
 
 /** 落盘上限：最多保留 60 行匹配行（超出截断并标注——防御异常嘈杂窗口撑爆 crash log）。 */
 export const UNIFIED_LOG_MAX_LINES = 60
@@ -267,7 +263,7 @@ type RunLogShow = (args: readonly string[]) => Promise<string>
 
 const defaultRunLogShow: RunLogShow = (args) =>
   new Promise((resolve, reject) => {
-    execFile('log', [...args], { timeout: UNIFIED_LOG_TIMEOUT_MS, maxBuffer: UNIFIED_LOG_MAX_BUFFER_MB * BYTES_PER_KB * BYTES_PER_KB, encoding: 'utf-8' }, (err, stdout) => {
+    execFile('log', [...args], { maxBuffer: UNIFIED_LOG_MAX_BUFFER_MB * BYTES_PER_KB * BYTES_PER_KB, encoding: 'utf-8' }, (err, stdout) => {
       if (err) reject(err)
       else resolve(stdout)
     })

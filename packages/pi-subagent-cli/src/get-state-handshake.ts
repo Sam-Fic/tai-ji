@@ -24,9 +24,6 @@ import { sendGetStateCommand } from "./stdin-writer.ts";
 
 const logger = getLogger("subagents");
 
-/** FR-4: get_state RPC 握手单次超时（ms）。 */
-const GET_STATE_TIMEOUT_MS = 2000;
-
 /** get_state 握手结果。 */
 export interface GetStateResult {
   sessionFile?: string;
@@ -53,8 +50,9 @@ export function extractGetStateFields(data: unknown, into: GetStateResult): void
 }
 
 /**
- * FR-4: 通过 get_state RPC 查询子进程获取 sessionFile/sessionId（单次尝试，
- * 超时 GET_STATE_TIMEOUT_MS 后 settle 已收集字段——[ADR-0122] 无重试）。
+ * FR-4: 通过 get_state RPC 查询子进程获取 sessionFile/sessionId（单次尝试；
+ * 原单次超时已随时间机制删除——等待无时间上界，应答完整（sessionFile 到手）或
+ * stdin 同步抛错是仅有的 settle 入口）。
  */
 export function performGetStateHandshake(
   child: ChildProcess,
@@ -64,11 +62,8 @@ export function performGetStateHandshake(
     const collected: GetStateResult = {};
     let resolved = false;
 
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    /** settle 已收集字段（唯一出口——超时与同步抛错两条入口共用，幂等）。 */
+    /** settle 已收集字段（唯一出口——应答完整与同步抛错两条入口共用，幂等）。 */
     function settle(): void {
-      if (timer !== undefined) clearTimeout(timer);
       if (resolved) return;
       resolved = true;
       resolve(collected);
@@ -77,17 +72,11 @@ export function performGetStateHandshake(
     try {
       const reqId = sendGetStateCommand(child);
 
-      timer = setTimeout(() => {
-        settle();
-      }, GET_STATE_TIMEOUT_MS);
-      timer.unref();
-
       addResponseListener(reqId, (data: unknown) => {
         if (resolved) return;
         extractGetStateFields(data, collected);
         if (collected.sessionFile) {
-          // 应答完整才提前停表（S2 契约修复）：缺 sessionFile 视同未应答，等
-          // 单次超时 settle（调用方走兜底反查）。
+          // 应答完整才 settle（S2 契约修复）：缺 sessionFile 视同未应答，继续等。
           settle();
         }
       });

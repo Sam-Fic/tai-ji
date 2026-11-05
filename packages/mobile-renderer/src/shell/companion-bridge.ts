@@ -32,16 +32,13 @@
 //   对账触发不依赖 activeSessionId 置位（reconcileNow 全分区对账）、RPC 失败重试一轮
 //   + 耗尽经 onReconcileFailed 置错误条可见反馈、dialog 节禁答与 form 通道恢复事件
 //   解耦（FormSheet）——任一条件不满足不再永久锁死待办；
-// - 请求失效呈现联动（§6.4/§7.1）：requests-invalidated / plugin:uiRequestExpired 命中
-//   当前呈现请求 → 关闭活动 Sheet + 原因提示（不把已失效请求提交成成功）；
-//   plugin:permissionRequestExpired 命中当前审批请求 → 仅原因提示（Sheet 收层由 App
-//   pending watch 权威处理，收层与提示解耦——A7 缺陷修复，见下方过期订阅段）。
+// - 请求失效呈现联动（§6.4/§7.1）：requests-invalidated 命中当前呈现请求 → 关闭
+//   活动 Sheet + 原因提示（不把已失效请求提交成成功）。
 //
 // 回传走 core 既有通路（不新造协议）：pi 源 extension.ui_response（sendExtensionUIResponse）、
 // plugin 源 plugin.uiResponse（ws send）、审批源 plugin.approvePermissions/denyPermissions。
 import { computed, effectScope, reactive, ref, watch, type ComputedRef, type Ref } from 'vue'
 import { InternalEventBus, MessageBusBridge } from '@taiji/core/extension-host'
-import { onGlobal } from '@taiji/core/transport/api'
 import type { ExtensionInteractMethod } from '@taiji/shared'
 import {
   bindSessionFormActions,
@@ -183,53 +180,6 @@ export function useMobilePermissionRequest(): PermissionRequestState {
   return permissionController.state
 }
 
-// ── 请求失效呈现联动（§6.4/§7.1）：plugin 域两过期事件的 Sheet 关闭挂点 ────────────
-// 状态机权威在 controller / dialog queue（各自出队/撤窗）；本订阅只做呈现联动——过期
-// 命中「正在呈现」的请求时关闭活动 Sheet + 原因提示（不把过期请求提交成成功）。
-// requestIds/requestId 匹配判定与 controller 同构（requestId 精确 → 缺失回退 pluginId）。
-
-/** 当前呈现中的 dialog 请求（form 槽打开时 FormSheet 的 dialog 分支渲染面） */
-function presentedDialogRequestId(): string | undefined {
-  if (activeSheet.value !== 'form') return undefined
-  return mobileDialogQueue.currentRequest.value?.requestId
-}
-
-// plugin:uiRequestExpired（plugin 源 dialog 30min 撤窗）：呈现中请求命中 → 关 Sheet + 提示。
-// queue 出队由 source.onUiRequestExpired 独立消费（反查表路由），此处只管呈现。
-void onGlobal((msg) => {
-  if (msg.type !== 'plugin:uiRequestExpired') return
-  const payload = msg.payload as { requestId?: unknown }
-  const expiredId = typeof payload.requestId === 'string' ? payload.requestId : undefined
-  if (expiredId === undefined) return
-  if (presentedDialogRequestId() === expiredId) {
-    closeSheet()
-    showErrorBar(t('mobile.sheet.requestExpired'))
-  }
-})
-
-// plugin:permissionRequestExpired（plugin 权限审批撤窗）：命中当前审批请求 → 原因提示。
-// 呈现时序契约（A7 缺陷修复）：controller 的 expired 订阅注册在先，同一同步 emit 链内
-// pending 已翻 false（requestId/pluginId 保留不清），故匹配判定**不得**以 pending 或
-// activeSheet 为前置——两者都依赖「事件到达时弹窗还开着」的时序，而收层（App pending
-// watch）与提示（本订阅）分属同步链与微任务两个时机，前置守卫会把提示恒吞掉。分式：
-// - Sheet 收层 = App.vue watch(permission.pending) 权威处理（自带 activeSheet==='permission'
-//   guard，用户正在其他 Sheet 操作时不误关）；
-// - 本订阅只做原因提示（错误条单槽，route 态无关常驻）。
-// 回退分支（payload 缺 requestId 的旧版广播）以 requestId 非空为「壳确曾观测到审批请求」
-// 判据——state 零值（壳重启后陈旧广播）不误报。
-void onGlobal((msg) => {
-  if (msg.type !== 'plugin:permissionRequestExpired') return
-  const payload = msg.payload as { pluginId?: unknown; requestId?: unknown }
-  const s = permissionController.state
-  const expiredRequestId = typeof payload.requestId === 'string' ? payload.requestId : ''
-  const matches = expiredRequestId !== ''
-    ? s.requestId === expiredRequestId
-    : s.requestId !== '' && typeof payload.pluginId === 'string' && s.pluginId === payload.pluginId
-  if (matches) {
-    showErrorBar(t('mobile.sheet.requestExpired'))
-  }
-})
-
 // ── form/planReview 类请求通道（remote-use-mobile D7（移动壳 v1 功能集裁定）form 行恢复：统一表单 + plan 审批的移动壳消费方）──
 //
 // 通道算法（C4 富交互门 / 快照对账差集剔除 / 失效摘除 / respond 未送达保留-送达摘除 /
@@ -241,10 +191,8 @@ void onGlobal((msg) => {
 //   视图按 activeSessionId 派生渲染；快照对账由 useMobileFormRequests 在 sid 变化与连接
 //   恢复边沿两处触发（factory reconcile）；
 // - 无 sid 的 ui-request 跳过（C2；同帧 dialog 通道已 warn，此处不重复告警）；
-// - 撤窗语义：pi 源无超时撤窗广播，失效链 requests-invalidated（turn abort / session 销毁
-//   等非 respond 终结）按 requestId 摘除（factory invalidate）；plugin 源 form 类帧不消费
-//   expired 广播（shell-adapters 反查表只在 dialog 投递流写入，C4 排除帧不落表 → miss
-//   noop）。
+// - 失效链 requests-invalidated（turn abort / session 销毁等非 respond 终结）按
+//   requestId 摘除（factory invalidate）。
 
 /**
  * per-session form/planReview 请求分区（requestId 全局唯一，跨分区无重叠）。
@@ -377,8 +325,8 @@ void bus.on('requests-invalidated', (e) => {
 //   suspendFormSubmissions() 置提交挂起——重连成功后 reconcile 完成前 FormSheet 提交/取消
 //   禁用，封住假成功窗口（旧 runtime 对已终结 requestId 静默忽略、UI 记为已提交、请求方
 //   空等）；恢复恒经 formChannel onSnapshotReconciled（对账完成 = 事实源对齐）。
-// dialog 通道 queue 两 reason 均不清（与 form 分区同语义；plugin 源 dialog 另有
-// uiRequestExpired 撤窗，pi 源 dialog 无超时机制——shell-adapters [G1] 段）。
+// dialog 通道 queue 两 reason 均不清（与 form 分区同语义；dialog 等待无时限——
+// shell-adapters [G1] 段）。
 
 // taste:allow-no-data-owner W24-EX-B（模块级单例 UI 瞬态）：§6.23 restart 提交挂起标志
 const formSubmitSuspended = ref(false)

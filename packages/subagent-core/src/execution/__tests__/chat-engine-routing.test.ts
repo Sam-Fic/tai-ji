@@ -21,9 +21,8 @@
 //   explicit-agent-ref-guard.test.ts（agent ref 守卫）/
 //   run-orchestration-engine-defaults.test.ts（D6 四层优先级）/
 //   workflow-agent-dispatch-model-catalog.test.ts（D8 派发期目录校验）。
-// 文件级 mock 三件（child_process / logger / lifecycle-manager）提升说明：
-//   logger 运行时面仅 getLogger；lifecycle 为 spread actual 仅覆 arm/disarm
-//   IdleTimer（本文件各节不依赖定时器真身）；child_process 仅 spawn/execFile，
+// 文件级 mock 两件（child_process / logger）提升说明：
+//   logger 运行时面仅 getLogger；child_process 仅 spawn/execFile，
 //   spawnSync 消费方（pid-file/reaper）仅经 cli transport 可达，各节全走假 port。
 //
 // mock 策略：只 mock node:child_process.spawn（pi 原路径的 FakeChild，见
@@ -47,13 +46,6 @@ const { loggerMock } = vi.hoisted(() => ({
   loggerMock: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 vi.mock("../../core/logger.ts", () => ({ getLogger: () => loggerMock }));
-
-// lifecycle-manager：chat-rounds-window-dispose 的 spread actual 工厂逐字提升
-// （仅覆 arm/disarmIdleTimer，其余成员保真实）。
-vi.mock("../lifecycle/lifecycle-manager.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../lifecycle/lifecycle-manager.ts")>();
-  return { ...actual, armIdleTimer: vi.fn(), disarmIdleTimer: vi.fn() };
-});
 
 // pi 原路径 spawn mock（FakeChild 挂起不推进——本文件只断言路由归属与 record 形态，
 // 不驱动 pi session 事件流）。chat-engine-routing 段逐字提升：spawnSync 消费方
@@ -1068,7 +1060,6 @@ function makeChatRounds(record: ExecutionRecord, overrides: Partial<ChatRoundsDe
     getUiObservability: vi.fn(() => ({ getMode: () => undefined })),
     finalizeFailed: vi.fn(),
     finalizeAborted: vi.fn(),
-    idleTimeoutRecycle: vi.fn(),
     archiveRecord: vi.fn(),
     taskSpecWithModel: vi.fn(
       (opts: ExecuteOptions, model: string | undefined): AgentCallOpts =>
@@ -1202,10 +1193,10 @@ describe("chat 轮窗口实例接线（U3）", () => {
   });
 });
 
-// ── [§1.4 (a)] 轮终收尾的「句柄就绪」有界等待：等待期间簿记不执行，新代际注入后
-// 完成写（FinalizeDeps.pi 读取发生在等待 resolve 之后——写携带新句柄）。
+// ── [§1.4 (a)] 轮终收尾的「句柄就绪」现读判定（原等待窗已随时间机制删除）：
+// 绑定可用 → FinalizeDeps.pi 携当前句柄；作废 → null（pi 写跳过）。
 
-describe("[§1.4 (a)] 轮终收尾句柄就绪等待（finalizeRoundToIdle × waitForPiReady）", () => {
+describe("[§1.4 (a)] 轮终收尾句柄就绪判定（finalizeRoundToIdle × waitForPiReady）", () => {
 
   beforeEach(() => {
     resetWorkflowWindowEngineStatesForTest();
@@ -1217,31 +1208,17 @@ describe("[§1.4 (a)] 轮终收尾句柄就绪等待（finalizeRoundToIdle × wa
     clearEngines();
     fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });
-  it("waitForPiReady 挂起期间不读 pi（簿记未开始）；resolve 新句柄后完成写", async () => {
+  it("waitForPiReady 现读返回当前句柄——轮终条目写携带该句柄", async () => {
     const record = makeRunningRecord("sa-wait-pi");
     const newPi = makePi();
-    let resolveWait: ((pi: unknown) => void) | undefined;
-    const waitForPiReady = vi.fn(
-      () =>
-        new Promise<unknown>((resolve) => {
-          resolveWait = resolve;
-        }) as never as Promise<null>,
-    );
+    const waitForPiReady = vi.fn(() => newPi as never as PiLike | null);
     const getPi = vi.fn(() => newPi as never);
     const chatRounds = makeChatRounds(record, { waitForPiReady, getPi });
 
-    const done = chatRounds.finalizeRoundToIdle(record, { kind: "success", content: "ok" });
-    await Promise.resolve();
-    await Promise.resolve();
+    await chatRounds.finalizeRoundToIdle(record, { kind: "success", content: "ok" });
     expect(waitForPiReady).toHaveBeenCalledTimes(1);
-    // 等待期间：FinalizeDeps 组装未开始（pi 读取 = 簿记写侧入口，未触达）。
+    // FinalizeDeps.pi = waitForPiReady 返回值（簿记写侧入口）。
     expect(getPi).not.toHaveBeenCalled();
-
-    resolveWait!(newPi);
-    await done;
-    // 等待结束后才读 pi——轮终条目写携带新代际句柄（reload 后落新权威 session）。
-    expect(getPi).toHaveBeenCalledTimes(1);
-    expect(getPi.mock.results[0]?.value).toBe(newPi);
   });
 });
 

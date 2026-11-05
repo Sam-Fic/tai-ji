@@ -41,7 +41,7 @@ vi.mock("@zhushanwen/subagent-core/execution/assembly/model-config-service.ts", 
 
 import { runWorkflow } from "@zhushanwen/subagent-core/orchestration/lifecycle.ts";
 import { getModelConfigService } from "@zhushanwen/subagent-core/execution/assembly/model-config-service.ts";
-import { MAX_TIMER_DELAY_MS, SLUG_MAX_LENGTH } from "@zhushanwen/subagent-core";
+import { SLUG_MAX_LENGTH } from "@zhushanwen/subagent-core";
 import {
   FAN_OUT_SCRIPT_NAME,
   generateBatchSlug,
@@ -233,7 +233,7 @@ describe("schema 契约：一跳扁平 + 成员对象 tasks 必填 + 常驻", ()
     const tool = captureSubagentsTool({ isProcessing: false }, makeRegistry());
     const keys = Object.keys(tool.parameters.properties);
     expect(keys.sort()).toEqual(
-      ["agent", "model", "slug", "tasks", "thinkingLevel", "time", "tokens"].sort(),
+      ["agent", "model", "slug", "tasks", "thinkingLevel", "tokens"].sort(),
     );
     expect(keys).not.toContain("action");
     expect(keys).not.toContain("args");
@@ -371,7 +371,6 @@ describe("handler 组装：runWorkflow('fan-out') 确定性映射（成员对象
         model: "zai-coding-cn/glm-5.3-flash",
         thinkingLevel: "high",
         tokens: 100000,
-        time: 600000,
       },
       makeDeps(registry) as never,
       undefined,
@@ -392,7 +391,6 @@ describe("handler 组装：runWorkflow('fan-out') 确定性映射（成员对象
       ],
     });
     expect(spec.budgetTokens).toBe(100000);
-    expect(spec.budgetTimeMs).toBe(600000);
     expect(spec.slug).toBe("foo-tri-review");
     // 运行级 model/thinkingLevel 走 spec 顶层（workerData 通路），不进成员对象
     expect(spec.model).toBe("zai-coding-cn/glm-5.3-flash");
@@ -621,16 +619,6 @@ describe("错误规格（成员 task 空白带下标 + 既有入口 fail-fast）
     ).catch((e: unknown) => e as Error);
     expect(err.message).toContain("member[1] 'task' must be a non-empty prompt");
     expect(err.message).toContain('Correct: {"tasks":[{"task":"<complete self-contained prompt>"}]}');
-    expect(vi.mocked(runWorkflow)).not.toHaveBeenCalled();
-  });
-
-  it("time 超上界 → 入口 fail-fast（含上限与实际值，可自纠）", async () => {
-    const err = await runSubagentsBatch(
-      { tasks: TWO_TASKS, time: MAX_TIMER_DELAY_MS + 1 },
-      makeDeps(makeRegistry()) as never,
-      undefined,
-    ).catch((e: unknown) => e as Error);
-    expect(err.message).toContain(`time budget ${MAX_TIMER_DELAY_MS + 1} ms exceeds the maximum of ${MAX_TIMER_DELAY_MS} ms`);
     expect(vi.mocked(runWorkflow)).not.toHaveBeenCalled();
   });
 

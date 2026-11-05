@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createFd3RawMirrorWriter, createRawMirrorSeqRegistry, createRawMirrorWriter, createSharedFd3Sink, isRawMirrorActive, RAW_MIRROR_ENV_VAR, RAW_MIRROR_MAX_QUEUE_BYTES, type RawMirrorFrame, type RawMirrorSink, type RawMirrorWriter } from '../raw-mirror.ts'
 import { createSessionIdentityTracker, wireChildStdoutPump, type RunEndState, type StdoutPumpDeps, createPromptRunCounters, type PromptRunCounters, type SessionIdentityTracker } from '../spawn-run-pump.ts'
 import { type SpawnRunCallbacks, killAllActiveChildren, getActiveChild, runSpawnOnce, type SpawnRunParams, type SpawnRunResult } from '../spawn-runner.ts'
-import { createPromptAckTracker, type PromptAckResult, PROMPT_ACK_TIMEOUT_ENV } from '../prompt-ack.ts'
+import { createPromptAckTracker, type PromptAckResult } from '../prompt-ack.ts'
 import { configureLoggerSink, resetLoggerSinkForTests, type LogLevel, PI_SUBAGENT_TASK_MAX_CHARS, type AgentEvent } from '@zhushanwen/subagent-engine-sdk'
 import { applyIdentityEnvToChildEnv, truncateTaskForEnv } from '../child-env.ts'
 
@@ -467,144 +467,6 @@ describe("raw-mirror", () => {
 });
 
 // ======== 来源：spawn-run-pump-prompt-activity.test.ts ========
-describe("spawn-run-pump-prompt-activity", () => {
-  /** 零输出窗口（fake timers，取值不影响语义）。 */
-  const ACK_WINDOW_MS = 1_000;
-
-  let dir: string;
-
-  beforeEach(() => {
-    dir = fs.mkdtempSync(join(tmpdir(), "pump-prompt-activity-"));
-    // 只接管计时器：PassThrough 的 data 交付（nextTick）与 setImmediate flush 保持真实。
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-  });
-
-  /** 等待 stdout 的 data 事件链（nextTick）跑完。 */
-  async function flushStdout(): Promise<void> {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-
-  function makeFakeChild(): {
-    child: ChildProcess;
-    stdout: PassThrough;
-  } {
-    const emitter = new EventEmitter();
-    const stdout = new PassThrough();
-    const stdin = new PassThrough();
-    const child = {
-      stdout,
-      stdin,
-      stderr: null,
-      killed: false,
-      pid: 6161,
-      on: emitter.on.bind(emitter),
-      once: emitter.once.bind(emitter),
-      removeListener: emitter.removeListener.bind(emitter),
-    } as unknown as ChildProcess;
-    return { child, stdout };
-  }
-
-  type Harness = {
-    tracker: ReturnType<typeof createPromptAckTracker>;
-    failures: PromptAckResult[];
-    counters: PromptRunCounters;
-    stdout: PassThrough;
-  };
-
-  function makeHarness(): Harness {
-    const { child, stdout } = makeFakeChild();
-    const counters = createPromptRunCounters();
-    // prompt 已写入（onChannelActivity 的「写入后」语义门）。
-    counters.promptWritten = true;
-    const failures: PromptAckResult[] = [];
-    const tracker = createPromptAckTracker({
-      recordId: "rec-prompt-activity",
-      timeoutMs: ACK_WINDOW_MS,
-      diagnostics: () => ({
-        pid: 6161,
-        bytesWritten: 1,
-        stdoutBytes: counters.stdoutBytes,
-        stdoutBytesAfterPrompt: counters.stdoutBytesAfterPrompt,
-        stdoutSeen: tracker.stdoutSeen,
-        getStateAnswered: counters.getStateAnswered,
-      }),
-      onFailure: (result) => failures.push(result),
-    });
-    tracker.register("prompt-1");
-    const callbacks: SpawnRunCallbacks = { onEvent: () => {} };
-    const runEnd: RunEndState = { endedCleanly: false };
-    wireChildStdoutPump({
-      child,
-      recordId: "rec-prompt-activity",
-      callbacks,
-      identity: createSessionIdentityTracker(dir, callbacks),
-      handleSdkEvent: () => {},
-      enqueueUi: () => {},
-      stderrTee: undefined,
-      runEnd,
-      promptAck: tracker,
-      runCounters: counters,
-    });
-    return { tracker, failures, counters, stdout };
-  }
-
-  describe("[C-U1] post-prompt invalid 行的活性语义", () => {
-    it("仅 invalid 行（非法 JSON + JSON 缺 type）→ 计时器取消、run 不 settle", async () => {
-      const h = makeHarness();
-      // 两种 invalid 来源（parseSpawnLine）：JSON 解析失败；JSON 缺 string type。
-      h.stdout.write(Buffer.from('{oops: not json\n', "utf8"));
-      h.stdout.write(Buffer.from('{"foo":"bar"}\n', "utf8"));
-      await flushStdout();
-
-      // 字节计数口径（含 invalid）与活性快照同时成立
-      expect(h.counters.stdoutBytesAfterPrompt).toBeGreaterThan(0);
-      expect(h.tracker.stdoutSeen).toBe(true);
-
-      vi.advanceTimersByTime(ACK_WINDOW_MS);
-      expect(h.failures).toEqual([]); // 未 settle：无 timeout 失败
-
-      // 不 settle 的直接证据：迟到的 prompt response 仍按 acked 正常结算（不产生失败面）
-      h.tracker.dispatch("prompt-1", "prompt", true, { disposition: "started" });
-      expect(h.failures).toEqual([]);
-      h.tracker.dispose();
-    });
-
-    it("对照：post-prompt 完全零输出 → 窗口到期 settle timeout（证明上例依赖活性取消）", () => {
-      const h = makeHarness();
-      vi.advanceTimersByTime(ACK_WINDOW_MS);
-      expect(h.failures).toHaveLength(1);
-      expect(h.failures[0]?.kind).toBe("timeout");
-      h.tracker.dispose();
-    });
-
-    it("未成行的半个大行（无 \\n）→ chunk 活性取消计时器、不 settle、字节计数 > 0", async () => {
-      const h = makeHarness();
-      // 极端大行慢写形态：一个 8KB chunk 但没有行界 \\n——解析链只在内部缓冲，
-      // 不产出任何行。活跃性必须由 chunk 层取消计时器（行级口径会在此漏判）。
-      h.stdout.write(Buffer.from("x".repeat(8 * 1024), "utf8"));
-      await flushStdout();
-
-      expect(h.counters.stdoutBytesAfterPrompt).toBeGreaterThan(0);
-      expect(h.counters.stdoutBytes).toBeGreaterThan(0);
-      expect(h.tracker.stdoutSeen).toBe(true);
-
-      vi.advanceTimersByTime(ACK_WINDOW_MS);
-      expect(h.failures).toEqual([]); // 计时器已取消：partial chunk 不 settle
-
-      // 后续 prompt response 到达仍按 acked 结算（活性不是第二回执）
-      h.tracker.dispatch("prompt-1", "prompt", true, { disposition: "started" });
-      expect(h.failures).toEqual([]);
-      h.tracker.dispose();
-    });
-  });
-});
-
-// ======== 来源：spawn-run-pump-session-file-fallback.test.ts ========
 describe("spawn-run-pump-session-file-fallback", () => {
   /** LC-4 后缀反查目标 sessionId（fixture 文件名 `<ts>_<sessionId>.jsonl` 后缀段）。 */
   const SESSION_ID = "pump-sess";
@@ -986,14 +848,9 @@ if (mode === "silent") { setInterval(() => {}, 1000); } // 零输出形态：不
     ...overrides,
   });
 
-  /** 注入短 ack 窗（用后恢复；返回 restore 函数）。 */
-  function injectAckWindow(windowMs: number = ACK_WINDOW_MS): () => void {
-    const saved = process.env[PROMPT_ACK_TIMEOUT_ENV];
-    process.env[PROMPT_ACK_TIMEOUT_ENV] = String(windowMs);
-    return () => {
-      if (saved === undefined) delete process.env[PROMPT_ACK_TIMEOUT_ENV];
-      else process.env[PROMPT_ACK_TIMEOUT_ENV] = saved;
-    };
+  /** [已退役] 原「注入短 ack 窗」随零输出看门狗删除变 no-op（调用点保留 = 用例结构稳定）。 */
+  function injectAckWindow(_windowMs: number = ACK_WINDOW_MS): () => void {
+    return () => {};
   }
 
   /** 让出一轮 libuv 事件循环（真实 setImmediate——不受 vi 测试时钟接管）。 */
@@ -1015,60 +872,12 @@ if (mode === "silent") { setInterval(() => {}, 1000); } // 零输出形态：不
     vi.useRealTimers();
     killAllActiveChildren();
   });
-
-  describe("S7 假 pi 完全不产出 → 注入窗内 engine_prompt_not_delivered + killChild", () => {
-    it("零 stdout 300ms → 失败终态：错误码前缀 + 诊断五元组 detail + SIGKILL 收割 + error 事件", async () => {
-      const h = makeHarness("silent");
-      const restoreWindow = injectAckWindow();
-      try {
-        const startedAt = Date.now();
-        const result: SpawnRunResult = await runSpawnOnce(baseParams(h), callbacksOf(h));
-        const elapsed = Date.now() - startedAt;
-
-        // 注入窗内显式失败（30s 默认窗不可等——env 覆盖生效的构造性证明）
-        expect(elapsed).toBeLessThan(ACK_WINDOW_MS * 10);
-        expect(result.success).toBe(false);
-        expect(result.error).toMatch(/^engine_prompt_not_delivered:/);
-        expect(result.error).toContain(`within ${ACK_WINDOW_MS}ms`);
-        // 诊断五元组逐字段进失败 detail（验收 4）
-        expect(result.error).toContain("pid=");
-        expect(result.error).toContain("bytesWritten=");
-        expect(result.error).toContain("stdoutBytes=0");
-        expect(result.error).toContain("stdoutBytesAfterPrompt=0");
-        expect(result.error).toContain("getStateAnswered=false");
-        expect(result.error).toContain("lastEventType=-");
-        expect(result.error).toContain("Recovery:");
-        // 失败分诊：送达码确定性分支 → unknown（可重试），不被误诊 stale
-        expect(result.failureKind).toBe("unknown");
-
-        // 子进程被杀（SIGKILL 直杀收割）+ error 事件上协议（journal 留痕）
-        await waitFor(() => h.stateChanges.some((s) => s.state === "exited"));
-        expect(h.stateChanges[0]).toMatchObject({ state: "running", killed: false });
-        const exited = h.stateChanges.find((s) => s.state === "exited");
-        expect(exited).toMatchObject({ killed: true, signal: "SIGKILL" });
-        const errorEvents = h.events.filter((e) => e.type === "error");
-        expect(errorEvents).toHaveLength(1);
-        expect((errorEvents[0] as { message: string }).message).toMatch(/^engine_prompt_not_delivered:/);
-      } finally {
-        restoreWindow();
-        restoreHarness(h);
-      }
-    });
-  });
-
   describe("S7b pi 拒绝 prompt → 立即 engine_prompt_rejected（不等窗口、不误报 not_delivered）", () => {
     it("success:false response → 立即失败，错误含 pi error 文本，分型独立", async () => {
       const h = makeHarness("reject-prompt");
-      const restoreWindow = injectAckWindow();
-      // 零输出窗口走测试时钟：子进程启动耗时移出窗口（见文件头 [确定性]）。
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
         const run = runSpawnOnce(baseParams(h), callbacksOf(h));
-        await h.ready; // pi 已就绪（get_state 应答落位）——窗口自此起算
-        await nextImmediate(); // 该应答行的 onChannelActivity（取消计时器）已同步完成
-        // 窗口逻辑时间耗尽：活性已取消零输出计时器 → 不误判 not_delivered。
-        // 若取消接线缺失，此处推进即触发 timeout → 下方 rejected 断言失败（负向对照）。
-        vi.advanceTimersByTime(ACK_WINDOW_MS * 2);
+        await h.ready; // pi 已就绪（get_state 应答落位）
         const result: SpawnRunResult = await run;
 
         expect(result.success).toBe(false);
@@ -1079,47 +888,14 @@ if (mode === "silent") { setInterval(() => {}, 1000); } // 零输出形态：不
         const errorEvents = h.events.filter((e) => e.type === "error");
         expect(errorEvents).toHaveLength(1);
       } finally {
-        vi.useRealTimers();
-        restoreWindow();
         restoreHarness(h);
       }
     });
   });
 
-  describe("S8b get_state 有应答但 prompt response 延迟 → 不杀不判失败", () => {
-    it("活性取消零输出计时器：run 继续，延迟 response 到达后正常完成（零误杀）", async () => {
-      const h = makeHarness("get-state-only");
-      const restoreWindow = injectAckWindow();
-      const logs: Array<{ level: LogLevel; message: string }> = [];
-      configureLoggerSink({ log: (level, _component, message) => logs.push({ level, message }) });
-      // 零输出窗口走测试时钟：子进程启动耗时移出窗口（见文件头 [确定性]）。
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      try {
-        const run = runSpawnOnce(baseParams(h), callbacksOf(h));
-        await h.ready; // pi 已就绪（get_state 应答落位）——窗口自此起算
-        await nextImmediate(); // 该应答行的 onChannelActivity（取消计时器）已同步完成
-        // 窗口逻辑时间耗尽：若活性未取消计时器，此处即误杀（负向对照）。
-        vi.advanceTimersByTime(ACK_WINDOW_MS * 2);
-        const result: SpawnRunResult = await run;
-
-        // run 正常完成（response 延迟 100ms > 窗 50ms——若误杀此处即失败）
-        expect(result.success).toBe(true);
-        expect(result.error).toBeUndefined();
-        expect(result.sessionId).toBe("fake-ack-sess");
-        // 零输出计时器被 get_state response 活性取消：prompt ack delayed warn（含诊断摘要）
-        const delayed = logs.filter((l) => l.level === "warn" && l.message.includes("prompt ack delayed"));
-        expect(delayed).toHaveLength(1);
-        expect(delayed[0]!.message).toContain("getStateAnswered=true");
-        // 无误报：无 not_delivered 失败日志
-        expect(logs.some((l) => l.message.includes("prompt not delivered"))).toBe(false);
-      } finally {
-        vi.useRealTimers();
-        resetLoggerSinkForTests();
-        restoreWindow();
-        restoreHarness(h);
-      }
-    });
-  });
+  //（原 S8b 有应答但 prompt response 延迟 → 活性取消计时器零误杀」
+  // describe 已随零输出看门狗删除——延迟 response 到达按 acked 正常结算，无计时器
+  // 可取消，语义恒成立不再需要用例。）
 
   // ============================================================
   // [m-pi-2 / S9] stdin 不可用 / EPIPE → 立即失败（run 级装配接线）

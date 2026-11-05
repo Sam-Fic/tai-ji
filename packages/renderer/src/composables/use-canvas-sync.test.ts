@@ -105,7 +105,7 @@ describe('useCanvasSync（自动唤起边界 + per-session 分流）', () => {
     scope.run(() => useCanvasSync(ref(SID)))
     await flushPromises()
     expect(commandMock).toHaveBeenCalledTimes(1)
-    expect(commandMock).toHaveBeenCalledWith('canvas.list', { sessionId: SID }, expect.any(Number))
+    expect(commandMock).toHaveBeenCalledWith('canvas.list', { sessionId: SID })
     scope.stop()
   })
 
@@ -117,7 +117,7 @@ describe('useCanvasSync（自动唤起边界 + per-session 分流）', () => {
     commandMock.mockClear()
     sidRef.value = SID_B
     await flushPromises()
-    expect(commandMock).toHaveBeenCalledWith('canvas.list', { sessionId: SID_B }, expect.any(Number))
+    expect(commandMock).toHaveBeenCalledWith('canvas.list', { sessionId: SID_B })
     scope.stop()
   })
 
@@ -142,8 +142,8 @@ describe('useCanvasSync（自动唤起边界 + per-session 分流）', () => {
     await flushPromises()
     expect(openCanvasMock).toHaveBeenCalledTimes(1)
     expect(openCanvasMock).toHaveBeenCalledWith('cvs-1', SID)
-    expect(commandMock).toHaveBeenCalledWith('canvas.get', { canvasId: 'cvs-1', sessionId: SID }, expect.any(Number))
-    expect(commandMock).toHaveBeenCalledWith('canvas.list', { sessionId: SID }, expect.any(Number))
+    expect(commandMock).toHaveBeenCalledWith('canvas.get', { canvasId: 'cvs-1', sessionId: SID })
+    expect(commandMock).toHaveBeenCalledWith('canvas.list', { sessionId: SID })
     scope.stop()
   })
 
@@ -156,8 +156,8 @@ describe('useCanvasSync（自动唤起边界 + per-session 分流）', () => {
     await flushPromises()
     expect(openCanvasMock).not.toHaveBeenCalled()
     // 失效重拉写「消息所属会话」（A）分区——B 实例不发 canvas.get
-    expect(commandMock).toHaveBeenCalledWith('canvas.get', { canvasId: 'cvs-1', sessionId: SID }, expect.any(Number))
-    expect(commandMock).not.toHaveBeenCalledWith('canvas.get', { canvasId: 'cvs-1', sessionId: SID_B }, expect.any(Number))
+    expect(commandMock).toHaveBeenCalledWith('canvas.get', { canvasId: 'cvs-1', sessionId: SID })
+    expect(commandMock).not.toHaveBeenCalledWith('canvas.get', { canvasId: 'cvs-1', sessionId: SID_B })
     scopeB.stop()
   })
 
@@ -169,8 +169,8 @@ describe('useCanvasSync（自动唤起边界 + per-session 分流）', () => {
     broadcast('cvs-1', 'NodeModified')
     await flushPromises()
     expect(openCanvasMock).not.toHaveBeenCalled()
-    expect(commandMock).toHaveBeenCalledWith('canvas.get', { canvasId: 'cvs-1', sessionId: SID }, expect.any(Number))
-    expect(commandMock).toHaveBeenCalledWith('canvas.list', { sessionId: SID }, expect.any(Number))
+    expect(commandMock).toHaveBeenCalledWith('canvas.get', { canvasId: 'cvs-1', sessionId: SID })
+    expect(commandMock).toHaveBeenCalledWith('canvas.list', { sessionId: SID })
     scope.stop()
   })
 
@@ -187,7 +187,7 @@ describe('useCanvasSync（自动唤起边界 + per-session 分流）', () => {
     broadcast('cvs-1', 'CanvasCreated')
     await flushPromises()
     expect(openCanvasMock).not.toHaveBeenCalled()
-    expect(commandMock).toHaveBeenCalledWith('canvas.get', { canvasId: 'cvs-1', sessionId: SID }, expect.any(Number))
+    expect(commandMock).toHaveBeenCalledWith('canvas.get', { canvasId: 'cvs-1', sessionId: SID })
     scope.stop()
   })
 
@@ -200,7 +200,7 @@ describe('useCanvasSync（自动唤起边界 + per-session 分流）', () => {
     broadcast('cvs-1', 'CanvasCreated')
     await flushPromises()
     expect(openCanvasMock).not.toHaveBeenCalled()
-    expect(commandMock).toHaveBeenCalledWith('canvas.get', { canvasId: 'cvs-1', sessionId: SID }, expect.any(Number))
+    expect(commandMock).toHaveBeenCalledWith('canvas.get', { canvasId: 'cvs-1', sessionId: SID })
     scope.stop()
   })
 
@@ -225,7 +225,7 @@ describe('useCanvasSync（自动唤起边界 + per-session 分流）', () => {
     broadcast('cvs-1', 'CanvasCreated')
     await flushPromises()
     expect(openCanvasMock).not.toHaveBeenCalled()
-    expect(commandMock).toHaveBeenCalledWith('canvas.get', { canvasId: 'cvs-1', sessionId: SID }, expect.any(Number))
+    expect(commandMock).toHaveBeenCalledWith('canvas.get', { canvasId: 'cvs-1', sessionId: SID })
     scope.stop()
   })
 })

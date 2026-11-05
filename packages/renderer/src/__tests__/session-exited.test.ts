@@ -57,7 +57,6 @@ vi.mock('../../../core/src/transport/ws-client', () => ({
   isAuthRejectedSuppressed: vi.fn(() => false),
   resetAuthRejectionSuppression: vi.fn(),
   setWaitingRuntime: vi.fn(),
-  probeAlive: vi.fn(),
 }))
 
 vi.mock('@/lib/ipc', () => ({

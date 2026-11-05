@@ -10,7 +10,8 @@
     ]
   },
   "tests": [
-    "extensions/universal/goal/**"
+    "extensions/universal/goal/**",
+    "extensions/universal/goal/src/__tests__/continuation.test.ts"
   ],
   "sharedBy": {},
   "contracts": [],

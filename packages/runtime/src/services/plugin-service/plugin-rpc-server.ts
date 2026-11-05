@@ -166,7 +166,7 @@ export class PluginRpcServer {
     }
 
     const id = this.nextRequestId++
-    const promise = this.pendingInvokes.register(id, new Error('RPC timeout'))
+    const promise = this.pendingInvokes.register(id)
 
     const request: RpcRequest = { jsonrpc: '2.0', id, method, params }
     worker.postMessage({ type: 'rpc', request })

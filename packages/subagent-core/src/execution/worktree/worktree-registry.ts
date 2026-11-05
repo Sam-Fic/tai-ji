@@ -39,15 +39,12 @@ export const SPAWN_GRACE_MS = 60_000;
 const JSON_INDENT = 2;
 
 /**
- * 锁参数：对齐三方同一磁盘协议的既有默认值——runtime 侧
- * packages/runtime/src/utils/file-lock.ts 的 withFileLockAsync、pi auth-storage
- * 范本、本文件 proper-lockfile 调用（retry 库参数：stale 30s / retries 10 /
- * factor 2 / 100ms~10s randomize）。互斥由 lockfile 路径（<worktrees.json>.lock）
- * + mkdir 原子协议保证；默认值对齐锚定的是各写方夺取时机（stale）与失败速度
- * （重试参数）行为一致（协议登记 data-source-registry.md §6）。
+ * 锁参数（[甲类裁决] 时间机制删除后的形态）：stale 夺锁已删（stale:false——持锁
+ * 进程崩溃后的残留锁不再被按时间夺取，锁冲突直接 ELOCKED 报错给调用方）；获取
+ * 重试已删（retries:0——锁被占 = 另一写方在途，立即显式失败，不退避等待）。
+ * 互斥由 lockfile 路径（<worktrees.json>.lock）+ mkdir 原子协议保证
+ *（协议登记 data-source-registry.md §6）。
  */
-const LOCK_STALE_MS = 30_000;
-const LOCK_RETRIES = 10;
 
 /** 注册表 JSON 顶层结构的运行时类型检查。 */
 function isRegistryData(value: unknown): value is { entries: WorktreeEntry[] } {
@@ -167,12 +164,11 @@ export class WorktreeRegistry {
    *   - lockfile 路径 = <目标文件>.lock（proper-lockfile 默认，与 runtime 侧/
    *     extension 侧同一路径才互斥）
    *   - realpath:false —— 目标文件不存在也可锁（realpath 默认 true 时 ENOENT）
-   *   - stale 30s：持锁进程崩溃后锁可被夺取
-   *   - async retries 指数退避：10 次 / factor 2 / 100ms~10s / randomize，耗尽抛
-   *     ELOCKED（调用方 mutate 的 catch 决定降级路径）
-   *   - onCompromised：锁被 stale 夺取时标记，fn 执行前抛错——防止在失去互斥
-   *     保证的锁下写盘（对齐 pi throwIfCompromised 语义）
-   * 锁参数值由 LOCK_STALE_MS / LOCK_RETRIES 常量承载（防漂移说明见常量注释）。
+   *   - stale:0 —— 禁用按时间夺锁（proper-lockfile 对 stale<=0 跳过陈旧检查；
+   *     持锁进程崩溃的残留锁不被自动夺取，锁冲突 = ELOCKED 立即报错给调用方）
+   *   - retries:0 —— 获取重试已删（锁被占 = 另一写方在途，立即显式失败）
+   *   - onCompromised：锁被外部改写（mtime 漂移等）时标记，fn 执行前抛错——
+   *     防止在失去互斥保证的锁下写盘（对齐 pi throwIfCompromised 语义）
    */
   private async withLock(fn: () => void): Promise<void> {
     // 锁前确保父目录存在：proper-lockfile 创建 lockfile（<目标>.lock）需要目录在
@@ -182,14 +178,8 @@ export class WorktreeRegistry {
     let compromised: Error | undefined;
     const release = await lockfile.lock(this.filePath, {
       realpath: false,
-      stale: LOCK_STALE_MS,
-      retries: {
-        retries: LOCK_RETRIES,
-        factor: 2,
-        minTimeout: 100,
-        maxTimeout: 10_000,
-        randomize: true,
-      },
+      stale: 0,
+      retries: 0,
       onCompromised: (err: Error) => {
         compromised = err;
       },
@@ -201,7 +191,7 @@ export class WorktreeRegistry {
       try {
         await release();
       } catch (unlockErr) {
-        // 锁已 compromised（被 stale 夺取）时 unlock 必然失败且可忽略——记录留痕
+        // 锁已 compromised（被外部改写）时 unlock 必然失败且可忽略——记录留痕
         // 不外抛（对齐被替换的 file-lock 包装 finally catch 语义）。
         logger.debug("unlock failed after compromise (ignorable)", {
           detail: { err: unlockErr instanceof Error ? unlockErr.message : String(unlockErr) },

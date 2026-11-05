@@ -322,7 +322,7 @@ describe('D4：restore-abort（标记检测）', () => {
 
   it('restore-abort 失败（RPC 断链）：fallback forceQuit 强杀收敛，标记不视为已消费', async () => {
     const id = 'abort-fail-id'
-    userStoppedMarkStore.markUserStopped(id, 'abort_timeout')
+    userStoppedMarkStore.markUserStopped(id, 'user_force_quit')
 
     getClientMock.mockReturnValue(undefined)
     const failingClient = {
@@ -371,7 +371,7 @@ describe('D4：delete 清理 userStopped 标记', () => {
 
   it('destroyAll → 全量清理（shutdown 路径）', async () => {
     userStoppedMarkStore.markUserStopped('a', 'user_force_quit')
-    userStoppedMarkStore.markUserStopped('b', 'abort_timeout')
+    userStoppedMarkStore.markUserStopped('b', 'user_force_quit')
     await service.destroyAll()
     expect(userStoppedMarkStore.hasUserStoppedMark('a')).toBe(false)
     expect(userStoppedMarkStore.hasUserStoppedMark('b')).toBe(false)

@@ -184,27 +184,15 @@ export interface IManagedSessionView {
 }
 
 /**
- * forceQuit 的调用源分型（session-dead-structural-fixes D4 置位点分型；pi-stall-detection
- * U2 增机器判死分型）。
+ * forceQuit 的调用源分型（session-dead-structural-fixes D4 置位点分型）。
  *
- * 「用户要停」的来源置 userStopped 标记且语义不变：K1（用户强制退出 = user_force_quit）与
- * K2（用户 abort 无响应经升级窗强杀收尾 = abort_timeout）——恢复归用户显式重开，标记不被
- * 自动恢复接线消费（RL15）。
- *
- * [pi-stall-detection U2] 机器判死分型 probe_stall_auto_quit（K9）：第 1 层探测判死自动强杀
- * 与机器 abort 路径（noteAgentStart 再中止 / session_manager abort 工具）悬挂升级共用——
- * 机器判定无用户意图参与，置用户分型 = 终态谎报用户操作（types 标记置位不变量同款约束）。
- * 该分型置位标记的语义 = 自动恢复接线的可消费凭据（置位者即消费者，D2 显式裁决），经
- * UserStoppedMarkStore.consumeUserStoppedMarkOfSource 分型消费后清除，恢复后的回放 turn
- * 不被 restore-abort 收敛环与 noteAgentStart 拦截掐掉。
+ * 「用户要停」的来源置 userStopped 标记：K1（用户强制退出 = user_force_quit）——恢复归
+ * 用户显式重开。
  *
  * K5/K6/K7/K8（restore 清场 / delete / destroyAll / 孤儿收殓）不置——pi 崩溃等非用户意图
  * 场景不继承「停止」，restore 后 notify replay 属设计内行为照常补投（设计 §3.3 D4）。
  */
-export type ForceQuitSource = 'user_force_quit' | 'abort_timeout' | 'probe_stall_auto_quit'
-
-/** 机器判死分型（自动恢复接线可消费的唯一 source 值；RL15 分型消费断言落点）。 */
-export const PROBE_STALL_AUTO_QUIT: ForceQuitSource = 'probe_stall_auto_quit'
+export type ForceQuitSource = 'user_force_quit'
 
 /**
  * userStopped 标记存取窄接口（session-dead-structural-fixes D4）。
@@ -224,21 +212,6 @@ export interface UserStoppedMarkStore {
   markUserStopped(sessionId: string, source: ForceQuitSource): void
   /** 标记是否存活（restoreSession 返回前检测 + 收敛环 agent_start 拦截检查）。 */
   hasUserStoppedMark(sessionId: string): boolean
-  /**
-   * 读标记分型（undefined = 无标记）。自动恢复接线消费前的分型判定读口
-   *（pi-stall-detection U2 补建；宿主本就按 { source, markedAt } 存储）。
-   */
-  getUserStoppedSource(sessionId: string): ForceQuitSource | undefined
-  /**
-   * 按 source 分型原子消费（读-判-清一体，同步无 await 间隙）：标记存在且 source ∈
-   * allowed 时清除并返回 true；否则原样保留返回 false。
-   *
-   * [pi-stall-detection U2] 判死自动恢复接线的「置位者即消费者」同权消费落点（D2 显式
-   * 裁决，标记门面「清除只由显式意图事件驱动」契约的唯一新增显式例外）——接线只允许传
-   * 判死分型（probe_stall_auto_quit）；用户分型（user_force_quit / abort_timeout）语义
-   * 不变、不被消费（RL15）。consumeForExplicitDelivery / disposeForDelete 既有语义不变。
-   */
-  consumeUserStoppedMarkOfSource(sessionId: string, allowed: readonly ForceQuitSource[]): boolean
   /** 清单条标记（收敛消费 / delete / 显式投递放行经 gate 门面调用）。 */
   clearUserStoppedMark(sessionId: string): void
   /** 清空全部标记（destroyAll shutdown 路径）。 */
@@ -518,23 +491,6 @@ export type PiTranslatedEvent =
    * trace-trigger 先例），只由 agent_settled 产出。
    */
   | { kind: 'record-reconcile-trigger' }
-  /**
-   * [pi-stall-detection U4 / AS16①] bash 执行流 chunk（pi bash_execution_update，executeBash
-   * onChunk 逐 chunk 发射，agent-session.ts:2210）——静默判定矩阵的在途信号（刷新计时）。
-   * 此前登记 NULL_EVENTS（taiji 无 live bash 流式 UI 消费），U4 起翻译为本 kind 供矩阵
-   * 消费：连续流式命令（tail -f / verbose build）的 chunk 是回合推进信号，被丢弃会构成
-   * C1 格假阳性（SI2 前端呈现零消费 ≠ 健康域零消费）。前端呈现仍零消费（翻译产物不产
-   * WS 帧），UI 形态不变。
-   */
-  | { kind: 'bash-execution-update' }
-  /**
-   * [pi-stall-detection U4 / AS16②] 摘要/压缩重试退避调度（pi summarization_retry_scheduled，
-   * agent-session.ts:3678 _summarizationRetryCallbacks）——带窗在途信号：backoff delayMs
-   * 期间无任何帧流是合法有界静默，静默判定矩阵按载荷宽限（RL11；T 覆盖公式不含 backoff
-   * 窗，retry.ts 退避上界是用户可配置项非设计内常量）。此前登记 NULL_EVENTS，U4 起翻译为
-   * 本 kind；无 delayMs 载荷（畸形形态）时矩阵按无宽限处理（fail-safe 收窄，不放大豁免）。
-   */
-  | { kind: 'summarization-retry-scheduled'; delayMs: number | null }
 
 
 /**
@@ -566,6 +522,3 @@ export interface GenStatsSample {
 }
 
 
-/** 静默判定矩阵消费的翻译后事件源（services 层领域别名——检查器增量拦截 Pi 前缀标识符，
- * 新文件经本别名引用，语义 = PiTranslatedEvent 同一类型；event-interpreter-silence.ts）。 */
-export type StallMatrixEvent = PiTranslatedEvent

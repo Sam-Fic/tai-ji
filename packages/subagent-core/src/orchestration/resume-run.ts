@@ -67,7 +67,6 @@ import { runAccountingFromEvents } from "./run-accounting.ts";
 const logger = getLogger("subagents");
 
 /** 毫秒→秒换算（预算预检文案的展示单位）。 */
-const MS_PER_SECOND = 1000;
 
 // ══════════════════════════════════════════════════════════════
 // §1 资格拒绝 + record 流严格读取（D12 检查①② 的读侧）
@@ -197,70 +196,8 @@ function summarizeResumePlan(plan: ResumePlan): string | undefined {
 }
 
 // ══════════════════════════════════════════════════════════════
-// §3 D10 时间预算活跃段算式
-// ══════════════════════════════════════════════════════════════
-
-/**
- * D10 活跃段算式（纯函数，场景 16/21）：跨天/跨 pause 的时间预算按活跃段累计，
- * 搁置天数不计入。
- *
- * 切段规则（设计 D10 采用段原文）：
- * - 边界 = run-settled（终局）/ run-interrupted（中断）/ run-resumed（复活）帧；
- * - 段首 = 首段 run-created.ts / 后续段对应 run-resumed.ts；
- * - 段内活跃 = 段内末条执行事件 ts − 段首 ts（执行事件 = agent/phase 业务事件，
- *   边界帧与 run-created 自身不算——收编帧是崩溃检测时刻的记账，不是执行）；
- *   段内无执行事件计 0（复活后立即再崩的段，搁置零成本）。
- *
- * 返回累计活跃毫秒（含未收尾的尾段）——resume 入口写入预算账本；剩余预算 =
- * budget −（累计已耗 +（now − 复活时刻）），消费于入口预检与计时器重排。
- */
-export function computeActiveElapsedMs(events: readonly WorkflowRunEvent[]): number {
-  let activeMs = 0;
-  let segmentStartMs: number | undefined;
-  let lastExecutionTs: number | undefined;
-  const closeSegment = (): void => {
-    if (segmentStartMs !== undefined && lastExecutionTs !== undefined) {
-      activeMs += Math.max(0, lastExecutionTs - segmentStartMs);
-    }
-    segmentStartMs = undefined;
-    lastExecutionTs = undefined;
-  };
-  for (const event of events) {
-    switch (event.type) {
-      case "run-created":
-      case "run-resumed":
-        closeSegment();
-        segmentStartMs = event.ts;
-        continue;
-      case "run-interrupted":
-      case "run-settled":
-        closeSegment();
-        continue;
-      case "model-override":
-        // 宿主覆盖记账帧（subagent-model-switch §6.6①）：非执行事件——不切段、
-        // 不推进 lastExecutionTs（记账 ts 不计入活跃段算式，与边界帧同族的正交面）
-        continue;
-      default:
-        lastExecutionTs = Math.max(lastExecutionTs ?? 0, event.ts);
-    }
-  }
-  closeSegment(); // 尾段收尾（流停在无边界帧的形态——防御，interrupted 流通常已收尾）
-  return activeMs;
-}
-
-// ══════════════════════════════════════════════════════════════
 // §5 resumeRun 编排原语
 // ══════════════════════════════════════════════════════════════
-
-/**
- * D7 resume 锁参数（对齐 worktree-registry.ts 直用先例的参数族）：stale 30s——
- * 持锁段（资格校验→条目→落 record→活体注册，秒级 IO）远小于窗口，且
- * proper-lockfile 持锁期间每 stale/2 自动 touch mtime（长持有不被夺）；进程崩溃
- * 后锁残留 30s 可被 stale 夺取（待验证检查点 2 已核实实装语义）。
- * [ADR-0122] 获取重试已删（原 retries 2 次/100-400ms）：锁被占 = 另一 resume 在途，
- * 立即显式拒绝（ELOCKED → ResumeRejectionError）而非退避等待。
- */
-const RESUME_LOCK_STALE_MS = 30_000;
 
 /** resumeRun 的可调项。 */
 export interface ResumeRunOptions { // oe-exempt:20260929:framework:resumeRun public options contract (API surface)
@@ -274,17 +211,8 @@ export interface ResumeRunOptions { // oe-exempt:20260929:framework:resumeRun pu
    */
   args?: Record<string, unknown>;
   /**
-   * 时间预算上界（ms）。生效预算三档回落（单点在 assertResumeEligibility）：
-   * 显式提供 = 覆盖；缺省 = 继承最近一条 run-resumed 帧记录的生效值（跨崩溃存续
-   * ——上次显式覆盖不会在下次无参 resume 时退回创建预算）；再缺省 = 继承 run-created
-   * 帧的创建预算；三处都没有 = 不限时（Budget 缺省语义）。生效值写入重建 spec
-   * （错误重试重建时按剩余活跃预算重排计时器）、用于 D10 预算预检、并随本次
-   * run-resumed 帧落盘——全链单值，不在别处二次折算。
-   */
-  budgetTimeMs?: number;
-  /**
-   * token 预算上界（Budget.isExceeded 的加权口径）。生效预算三档回落与 budgetTimeMs
-   * 完全同构（单点在 assertResumeEligibility）：显式提供 = 覆盖；缺省 = 继承最近一条
+   * token 预算上界（Budget.isExceeded 的加权口径）。生效预算三档回落
+   *（单点在 assertResumeEligibility）：显式提供 = 覆盖；缺省 = 继承最近一条
    * run-resumed 帧记录的生效值（跨崩溃存续）；再缺省 = 继承 run-created 帧的创建
    * 预算；三处都没有 = 不限制（Budget 缺省语义）。生效值写入重建 spec（引擎侧
    * maxTokens 派生视图与 fresh run 同形）、用于 D10 token 预检（已耗加权 tokens ≥ 上限
@@ -346,17 +274,20 @@ export async function resumeRun(
   const lockTarget = `${recordPath.slice(0, -RUN_EVENTS_SUFFIX.length)}.resume`;
   let release: (() => Promise<void>) | undefined;
   try {
+    // [甲类裁决] stale 夺锁已删（stale:0——proper-lockfile 对 stale<=0 跳过陈旧
+    // 检查，持锁进程崩溃的残留锁不被按时间夺取）；retries:0 = 锁被占立即显式拒绝
+    //（ResumeRejectionError），不退避等待。
     release = await lockfile.lock(lockTarget, {
       realpath: false,
-      stale: RESUME_LOCK_STALE_MS,
+      stale: 0,
       retries: 0,
     });
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ELOCKED") {
       throw new ResumeRejectionError(
         `Resume rejected: run ${runId} is being resumed by another process ` +
-          "(a resume lock is held elsewhere). Recovery: check the other host, or retry after it exits " +
-          "(the lock self-clears within 30s if its holder crashed).",
+          "(a resume lock is held elsewhere). Recovery: check the other host and retry after its resume completes " +
+          "(a crashed holder leaves the lock in place — manual removal of the `.resume` lock file clears it).",
       );
     }
     throw err;
@@ -367,7 +298,7 @@ export async function resumeRun(
     try {
       await release();
     } catch (unlockErr) {
-      // 锁被 stale 夺取后 unlock 必然失败且可忽略（worktree-registry 同款语义）
+      // 锁被外部改写后 unlock 必然失败且可忽略（worktree-registry 同款语义）
       logger.debug(`resume lock release failed (ignorable): ${toErrorMessage(unlockErr)}`);
     }
   }
@@ -430,20 +361,18 @@ function readResumableStream(
 }
 
 /**
- * 生效预算三档回落（assertResumeEligibility 拆出，单点勿散）：显式 options 覆盖 >
- * 最近一条 run-resumed 帧的生效值（跨崩溃存续——上次显式覆盖不因下次无参 resume
- * 退回创建预算）> run-created 记录的创建预算；三处都没有 = 不限时。本值同时供
- * D10 预检、首次挂表（adoptResumedRun）、rebuildRunFromRecord 的 spec 与本次
- * run-resumed 帧消费——不出现第二处折算。旧格式帧（无字段）自然回落 run-created，
- * 行为不劣化。token 轴与时间轴同构。
+ * 生效 token 预算三档回落（assertResumeEligibility 拆出，单点勿散）：显式 options
+ * 覆盖 > 最近一条 run-resumed 帧的生效值（跨崩溃存续）> run-created 记录的创建
+ * 预算；三处都没有 = 不限制。本值供 D10 预检、首次挂表（adoptResumedRun）与本次
+ * run-resumed 帧消费——不出现第二处折算。（原 budgetTimeMs 时间轴已随 run 级
+ * 墙钟预算机制删除。）
  */
 function effectiveResumeBudget(
   options: ResumeRunOptions | undefined,
   lastResumed: Extract<WorkflowRunEvent, { type: "run-resumed" }> | undefined,
   created: Extract<WorkflowRunEvent, { type: "run-created" }>,
-): { budgetTimeMs: number | undefined; budgetTokens: number | undefined } {
+): { budgetTokens: number | undefined } {
   return {
-    budgetTimeMs: options?.budgetTimeMs ?? lastResumed?.budgetTimeMs ?? created.budgetTimeMs,
     budgetTokens: options?.budgetTokens ?? lastResumed?.budgetTokens ?? created.budgetTokens,
   };
 }
@@ -470,27 +399,17 @@ function effectiveResumeModel(
 }
 
 /**
- * D10 预算预检（assertResumeEligibility 拆出；场景 16：搁置不计，活跃已耗不退）。
- * 时间轴：已耗活跃时长 ≥ 上限即拒绝。token 轴（与时间轴对齐）：已耗口径 =
- * runAccountingFromEvents 单源（agent-settled.result.usage 同一加权折算，下界近似
- * ——中间失败尝试不在事件流）。用下界做拒绝判据方向安全：下界 ≥ 上限 ⟹ 真实消耗
- * （活体逐尝试累计）必 ≥ 上限，不产生误拒；下界未越界时放行，复活后由重建
- * Budget.isExceeded 正常路径检查。返回已耗活跃时长（返回值装配消费）。
+ * D10 预算预检（assertResumeEligibility 拆出；场景 16：搁置不计）。token 轴：
+ * 已耗口径 = runAccountingFromEvents 单源（agent-settled.result.usage 同一加权折算，
+ * 下界近似——中间失败尝试不在事件流）。用下界做拒绝判据方向安全：下界 ≥ 上限 ⟹
+ * 真实消耗必 ≥ 上限，不产生误拒；下界未越界时放行，复活后由重建 Budget.isExceeded
+ * 正常路径检查。（原 budgetTimeMs 时间轴预检已随 run 级墙钟预算机制删除。）
  */
 function assertBudgetNotExhausted(
   runId: string,
   events: readonly WorkflowRunEvent[],
-  budgetTimeMs: number | undefined,
   budgetTokens: number | undefined,
-): number {
-  const activeElapsedMs = computeActiveElapsedMs(events);
-  if (budgetTimeMs !== undefined && budgetTimeMs > 0 && activeElapsedMs >= budgetTimeMs) {
-    throw new ResumeRejectionError(
-      `Resume rejected: run ${runId} has exhausted its time budget (${Math.round(activeElapsedMs / MS_PER_SECOND)}s ` +
-        `active of ${Math.round(budgetTimeMs / MS_PER_SECOND)}s — suspended time is not counted, spent active ` +
-        "time is). Recovery: start a new run, or rerun with a larger budgetTimeMs.",
-    );
-  }
+): void {
   if (budgetTokens !== undefined && budgetTokens > 0) {
     const usedTokens = runAccountingFromEvents(events).usedTokens;
     if (usedTokens >= budgetTokens) {
@@ -502,21 +421,20 @@ function assertBudgetNotExhausted(
       );
     }
   }
-  return activeElapsedMs;
 }
 
 /**
  * [resumeRunLocked 拆分] 资格校验（段 2）：run-created 帧 / interrupted 生命周期 /
  * D10 预算预检（场景 16：搁置不计，活跃已耗不退）。任一不过即拒绝（异常即返回值）。
  *
- * 预算预检与返回的 budgetTimeMs 均为「生效预算」（三档回落单点，见 effectiveResumeBudget
+ * 预算预检与返回的 budgetTokens 均为「生效预算」（三档回落单点，见 effectiveResumeBudget
  * 解析）——继承形态下原预算已耗尽同样拒绝，不把复活窗变成绕过预算的通道。
  */
 function assertResumeEligibility(
   runId: string,
   recordPath: string,
   options: ResumeRunOptions | undefined,
-): { events: WorkflowRunEvent[]; created: Extract<WorkflowRunEvent, { type: "run-created" }>; activeElapsedMs: number; budgetTimeMs: number | undefined; budgetTokens: number | undefined; model: string | undefined } {
+): { events: WorkflowRunEvent[]; created: Extract<WorkflowRunEvent, { type: "run-created" }>; budgetTokens: number | undefined; model: string | undefined } {
   const reject = (message: string): ResumeRejectionError => new ResumeRejectionError(message);
   const { events, created } = readResumableStream(runId, recordPath);
   // [§2.5 D14] args 一致性判定（fail-fast 于任何副作用之前）：数据源 = 上面已读到的
@@ -543,11 +461,11 @@ function assertResumeEligibility(
     );
   }
   const lastResumed = findLatestRunResumed(events);
-  const { budgetTimeMs, budgetTokens } = effectiveResumeBudget(options, lastResumed, created);
-  const activeElapsedMs = assertBudgetNotExhausted(runId, events, budgetTimeMs, budgetTokens);
-  // 生效模型（三档回落单点，与预算双轴同构——决策七「资格校验与生效值解析单点」）
+  const { budgetTokens } = effectiveResumeBudget(options, lastResumed, created);
+  assertBudgetNotExhausted(runId, events, budgetTokens);
+  // 生效模型（三档回落单点，与预算轴同构——决策七「资格校验与生效值解析单点」）
   const model = effectiveResumeModel(options, events, created);
-  return { events, created, activeElapsedMs, budgetTimeMs, budgetTokens, model };
+  return { events, created, budgetTokens, model };
 }
 
 /**
@@ -602,34 +520,24 @@ function adoptResumedRun(
   recordPath: string,
   summary: {
     events: readonly WorkflowRunEvent[];
-    activeElapsedMs: number;
-    budgetTimeMs: number | undefined;
     budgetTokens: number | undefined;
     resumedAt: number;
     plan: ResumePlan;
   },
   now: () => number,
 ): void {
-  // 生效预算（summary.budgetTimeMs/budgetTokens 与首次挂表同源）随 spec 落定。
+  // 生效 token 预算（summary.budgetTokens 与首次挂表同源）随 spec 落定。
   // [ADR-0122] 原进程内 D10 预算账本（noteRunResumedBudget）随重试矩阵删除——
-  // 账本唯一读方是已删的 rebuild 重试路径；resume 挂表用本函数下方局部折算。
+  // 账本唯一读方是已删的 rebuild 重试路径。
   const run = rebuildRunFromRecord(
     runId,
     created,
     readRecordStreamStrict(recordPath, runId),
-    summary.budgetTimeMs,
     summary.budgetTokens,
   );
   const handlers = makeHandlers(run, deps);
-  // 剩余预算（D10）：budget −（累计活跃已耗 + 本段已跑）——搁置不计
-  const remainingBudgetMs = summary.budgetTimeMs && summary.budgetTimeMs > 0
-    ? Math.max(0, summary.budgetTimeMs - summary.activeElapsedMs - (now() - summary.resumedAt))
-    : undefined;
-  const timeBudgetTimer = remainingBudgetMs && remainingBudgetMs > 0 && deps.scheduleTimeBudget
-    ? deps.scheduleTimeBudget(runId, remainingBudgetMs)
-    : undefined;
   const worker = deps.workerHost.start(run.spec, run.spec.args, handlers);
-  run.assignRuntime(new RunRuntime(worker, new AbortController(), timeBudgetTimer));
+  run.assignRuntime(new RunRuntime(worker, new AbortController()));
   deps.runs.set(runId, run);
   // RunStore port 契约保形（D1 后壳侧 save 为 no-op——core 调用点不改）
   deps.store.save(run).catch((err: unknown) => {
@@ -646,7 +554,6 @@ function adoptResumedRun(
       runId,
       replayCalls: summary.plan.replay,
       redispatchedCalls: summary.plan.redispatch,
-      rescheduledBudgetMs: remainingBudgetMs,
     });
   } catch (err) {
     logger.error(
@@ -673,11 +580,6 @@ function hostSpread(options: ResumeRunOptions | undefined): { host: string } | R
   return options?.host !== undefined ? { host: options.host } : {};
 }
 
-/** run-resumed budgetTimeMs 条件 spread 段（未设/0/负值不落——与 run-created 同款条件式）。 */
-function budgetTimeMsSpread(budgetTimeMs: number | undefined): { budgetTimeMs: number } | Record<string, never> {
-  return budgetTimeMs !== undefined && budgetTimeMs > 0 ? { budgetTimeMs } : {};
-}
-
 /** run-resumed budgetTokens 条件 spread 段（未设/0/负值不落——与 run-created 同款条件式）。 */
 function budgetTokensSpread(budgetTokens: number | undefined): { budgetTokens: number } | Record<string, never> {
   return budgetTokens !== undefined && budgetTokens > 0 ? { budgetTokens } : {};
@@ -698,7 +600,6 @@ function resumedModelSpread(model: string | undefined): { model: string } | Reco
 function buildRunResumedPayload(
   options: ResumeRunOptions | undefined,
   planSummary: string | undefined,
-  budgetTimeMs: number | undefined,
   budgetTokens: number | undefined,
   model: string | undefined,
   resumedAt: number,
@@ -707,7 +608,6 @@ function buildRunResumedPayload(
     type: "run-resumed",
     ...reasonSpread(planSummary),
     ...hostSpread(options),
-    ...budgetTimeMsSpread(budgetTimeMs),
     ...budgetTokensSpread(budgetTokens),
     ...resumedModelSpread(model),
     ts: resumedAt,
@@ -754,7 +654,7 @@ async function resumeRunLocked(
   now: () => number,
 ): Promise<string> {
   // ── 2. 资格校验 ──
-  const { events, created, activeElapsedMs, budgetTimeMs, budgetTokens, model } = assertResumeEligibility(runId, recordPath, options);
+  const { events, created, budgetTokens, model } = assertResumeEligibility(runId, recordPath, options);
 
   // ── 2b. 派发前语法闸（第 4 道检查的 resume 侧）──
   assertResumeScriptCompilable(runId, created);
@@ -772,7 +672,7 @@ async function resumeRunLocked(
   const dispatchSource = { runId, ...journalDirSpread(options) };
   const resumedAt = now();
   try {
-    await dispatchRunTrigger(dispatchSource, buildRunResumedPayload(options, planSummary, budgetTimeMs, budgetTokens, model, resumedAt));
+    await dispatchRunTrigger(dispatchSource, buildRunResumedPayload(options, planSummary, budgetTokens, model, resumedAt));
   } catch (err) {
     // 让位（表外转移）仅在流被并发篡改时可达（锁段内无并发写者）——资格异常上抛，
     // 状态无损（run-resumed 未落，run 仍 interrupted 可重试）
@@ -805,7 +705,7 @@ async function resumeRunLocked(
       await appendResumeModelOverride(runId, deps, options.model, now(), options?.journalDir);
     }
     adoptResumedRun(runId, deps, created, recordPath, {
-      events, activeElapsedMs, budgetTimeMs, budgetTokens, resumedAt, plan,
+      events, budgetTokens, resumedAt, plan,
     }, now);
   } catch (err) {
     await rollbackFailedAdoption(runId, options, created, err);

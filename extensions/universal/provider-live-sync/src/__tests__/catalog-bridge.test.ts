@@ -7,9 +7,9 @@
  * → R2/R3/R4/R5/R6/R7 的 fail-safe 降级。判据本体（解析/合并/三态/并集）的单测在
  * llm-shared 包，本文件只测「IO + 日志 + 注册」这一层的接线与降级。
  *
- * 与 model-sync.test.ts 的分工：那份测既有 models.json/auth.json 同步的 per-file 比较
- * 语义（本文件一行不改它）；本文件测新增的目录投喂，直接调 `injectCatalogOverlay`，
- * 不经 tick（文末「tick 接线」组除外——它证的是 index.ts 的接线）。
+ * 与 model-sync.test.ts 的分工：那份测 session_start 加载时同步的刷新/护栏语义；
+ * 本文件测目录投喂，直接调 `injectCatalogOverlay`（文末「session_start 接线」组除外
+ * ——它证的是 index.ts 的接线）。
  *
  * 隔离方式：
  * - env：`TAIJI_AGENT_DATA_DIR` / `PI_CODING_AGENT_DIR` 各指一个 mkdtemp 真实目录
@@ -29,14 +29,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { getBuiltinModelDataGeneratedAt, getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import type { ExtensionAPI, ProviderConfig, ProviderModelConfig } from '@earendil-works/pi-coding-agent'
+import providerLiveSync from '../index.ts'
 
 import {
-  createOverlayCacheWatcher,
   injectCatalogOverlay,
   type CatalogOverlayBridge,
-  type OverlayCacheWatcher,
 } from '../catalog-bridge.ts'
-import { startWithRegistryCtx, tickOnce } from './tick-harness.ts'
+import { startWithRegistryCtx } from './session-sync-harness.ts'
 
 const loggerMocks = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -54,7 +53,6 @@ vi.mock('@zhushanwen/pi-extension-logger', () => ({
   getLogger: () => loggerMocks,
   setPiHandle: () => {},
   createLogger: () => loggerMocks,
-  clearRateLimiterState: () => {},
 }))
 
 vi.mock('@earendil-works/pi-coding-agent', () => ({
@@ -229,14 +227,6 @@ function injectBridge(): { pi: FakePi; bridge: CatalogOverlayBridge } {
   return { pi, bridge }
 }
 
-/** 播种 + 注入并返回监视条目（watcher 用例的共同开场）。 */
-function injectWatcherPinned(at: Date): OverlayCacheWatcher | undefined {
-  seedCatalogPinned(at)
-  const bridge = injectCatalogOverlay(asApi(makePi()))
-  expect(bridge).not.toBeNull()
-  return bridge?.watcher
-}
-
 // ─────────────────────────────────────────────────────────
 describe('注入全链路（D1 注册时机 + D2 注入集并集）', () => {
   it('env 在位 + fresh → registerProvider 被调，models = 内置基线 ⊕ 缓存条目（同 id 整对象覆盖）', () => {
@@ -263,9 +253,8 @@ describe('注入全链路（D1 注册时机 + D2 注入集并集）', () => {
     expect(loggerMocks.debug).toHaveBeenCalledWith(
       expect.stringContaining(`catalog overlay injected for ${REAL_PROVIDER}`),
     )
-    // 监视条目 + 注册对账入口照挂（tick 挂载用），标签 = taiji 自刷缓存文件名
+    // 注册对账入口照挂（session_start 同步挂载用）
     expect(bridge).not.toBeNull()
-    expect(bridge?.watcher.label).toBe('provider-catalog-overlay.json')
     expect(bridge?.reconcile).toBeTypeOf('function')
   })
 
@@ -600,7 +589,7 @@ describe('注册对账 reconcile（工厂期非 fresh → 运行中变 fresh 的
     expect(loggerMocks.error).toHaveBeenCalledWith(
       expect.stringContaining(`registerProvider failed for ${SYNTHETIC_PROVIDER}`),
     )
-    expect(loggerMocks.error).toHaveBeenCalledWith(expect.stringContaining('the next catalog refresh retries'))
+    expect(loggerMocks.error).toHaveBeenCalledWith(expect.stringContaining('the next session-start reconcile retries'))
 
     // 失败的 provider 不入已注册集：下一次缓存重写后的对账重试（这次 spy 不再抛）
     rewriteCatalogPinned(MTIME_T2)
@@ -648,244 +637,86 @@ describe('mtime 短路（D5：文件未变直接返回上次结果，不重算�
 })
 
 // ─────────────────────────────────────────────────────────
-describe('第三个监视条目（tick 挂载用的 mtime 观测器）', () => {
-  it('首拍建基线报「变化」（由 tick 的 firstBaseline 抑制刷新）；同 mtime 再观测 → false', () => {
-    const path = TAiji_CACHE_PATH()
-    writeFileSync(path, '{}')
-    utimesSync(path, MTIME_T0, MTIME_T0)
-    const watcher = createOverlayCacheWatcher(path)
-
-    expect(watcher.observe()).toBe(true)
-    expect(watcher.observe()).toBe(false)
-  })
-
-  it('工厂期播种基线 + 窗口内 mtime 变更 → observe() 返回 true（运行中窗口 D5 的检出）', () => {
-    // 经 injectCatalogOverlay 取观测器——工厂期在 runPass 之前捕获的 mtime 即初始基线
-    // （生产接线；直接调 createOverlayCacheWatcher(path, initial) 测不到这层传递）。
-    const watcher = injectWatcherPinned(MTIME_T0)
-
-    // 工厂期注入与 tick 1 之间（~2s 窗）缓存被更新（taiji runtime 的 tmp+rename 原子替换写）
-    rewriteCatalogPinned(MTIME_T1)
-    expect(watcher?.observe()).toBe(true)
-  })
-
-  it('工厂期播种基线 + 无变更 → observe() 返回 false（首拍不产生幻觉变化）', () => {
-    const watcher = injectWatcherPinned(MTIME_T0)
-    expect(watcher?.observe()).toBe(false)
-  })
-
-  it('mtime 变化 → true（taiji runtime 原子替换写后的检出）', () => {
-    const path = TAiji_CACHE_PATH()
-    writeFileSync(path, '{}')
-    utimesSync(path, MTIME_T0, MTIME_T0)
-    const watcher = createOverlayCacheWatcher(path)
-    watcher.observe()
-
-    writeFileSync(path, '{"version":1,"entries":{}}')
-    utimesSync(path, MTIME_T1, MTIME_T1)
-    expect(watcher.observe()).toBe(true)
-    expect(watcher.observe()).toBe(false)
-  })
-
-  it('不存在 → 存在 → true（首次物化）；持续不存在 → false（非变化信号）', () => {
-    const path = TAiji_CACHE_PATH()
-    const watcher = createOverlayCacheWatcher(path)
-
-    expect(watcher.observe()).toBe(true) // 首拍 absent 建基线
-    expect(watcher.observe()).toBe(false) // 持续 absent = 非变化信号
-    writeFileSync(path, '{}')
-    utimesSync(path, MTIME_T0, MTIME_T0)
-    expect(watcher.observe()).toBe(true) // absent → present
-  })
-
-  it('存在 → 缺失 → true（撤销注入也要有触发点）', () => {
-    const path = TAiji_CACHE_PATH()
-    writeFileSync(path, '{}')
-    utimesSync(path, MTIME_T0, MTIME_T0)
-    const watcher = createOverlayCacheWatcher(path)
-    watcher.observe()
-
-    rmSync(path)
-    expect(watcher.observe()).toBe(true)
-    expect(watcher.observe()).toBe(false)
-  })
-
-  it('unreadable（父路径是文件 = ENOTDIR）→ 本拍不比较、不推进基线', () => {
-    // statSync 对目录是成功的（只有 readFileSync 才 EISDIR），故 unreadable 分支要用
-    // 「父路径不是目录」触发 ENOTDIR——确定性、不依赖权限位（root 无视 chmod）。
-    const blocker = join(dataDir, 'not-a-dir')
-    writeFileSync(blocker, 'x')
-    const path = join(blocker, 'cache.json')
-    const watcher = createOverlayCacheWatcher(path)
-
-    expect(watcher.observe()).toBe(false)
-    // 基线未被推进：父路径变成真目录、文件可读后首拍仍报「变化」
-    rmSync(blocker)
-    mkdirSync(blocker)
-    writeFileSync(path, '{}')
-    utimesSync(path, MTIME_T0, MTIME_T0)
-    expect(watcher.observe()).toBe(true)
-  })
-})
-
 // ─────────────────────────────────────────────────────────
 /**
- * tick 接线层：第三个监视条目挂进既有 tick 后，「缓存 mtime 变化 → 一次零网络本地
- * 刷新」这条链真的通（设计 D5 运行中窗口 / 验收场景 V6 的单测形态）。
+ * session_start 接线层：加载时同步「对账 → 刷新」这条链真的通。
  *
- * 上面那些用例分别证明了钩子与观测器各自正确，但**两者的接线**（index.ts 的 tick 把
- * 观测结果并进刷新决策）只有这一层能覆盖——真机 V6 依赖的正是它。
+ * 上面那些用例分别证明了注册 / 钩子 / 对账各自正确，但**与 session_start 的接线**
+ * （index.ts 的 handler 先 reconcile 再 refresh）只有这一层能覆盖。
  *
- * 驱动件与 model-sync.test.ts 的 tick 层共用 `./tick-harness.ts`（fake timers 只替换
- * setTimeout/clearTimeout，tick 链上的 readFile 与 setImmediate 保持真实；拍屏障
- * 说明见该文件头注释）。models.json/auth.json 全程缺席（catalog-only 安装常态），
- * 于是唯一的刷新信号来自目录缓存——隔离得干净。
+ * 驱动件与 model-sync.test.ts 共用 `./session-sync-harness.ts`（session_start handler
+ * await 落地后断言）。models.json **必须在场**——加载时同步有「配置源缺失跳过刷新」
+ * 护栏（见 index.ts），在场才走刷新路径。
  */
-describe('tick 接线 —— 目录缓存 mtime 变化触发一次零网络本地刷新', () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-  })
-
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  /** 「恰一次零网络本地刷新」断言（tick 接线用例共用）。 */
-  function expectRefreshedOnce(refresh: ReturnType<typeof vi.fn>): void {
-    expect(refresh).toHaveBeenCalledTimes(1)
-    expect(refresh).toHaveBeenCalledWith({ allowNetwork: false })
-  }
-
-  type RegisterProviderSpy = ReturnType<typeof vi.fn<(provider: string, config: ProviderConfig) => void>>
-
+describe('session_start 接线 —— 加载时对账 + 一次零网络本地刷新', () => {
   /** 经 harness 启动扩展（pi 宿主面 = appendEntry + registerProvider spy）。 */
-  function startWithFakeCtx(): { refresh: ReturnType<typeof vi.fn>; registerProvider: RegisterProviderSpy } {
+  async function startWithFakeCtx(): Promise<{
+    refresh: ReturnType<typeof vi.fn>
+    registerProvider: ReturnType<typeof vi.fn<(provider: string, config: ProviderConfig) => void>>
+  }> {
     const registerProvider = vi.fn<(provider: string, config: ProviderConfig) => void>()
-    const { refresh } = startWithRegistryCtx({ appendEntry: vi.fn(), registerProvider })
+    const { refresh } = await startWithRegistryCtx({ appendEntry: vi.fn(), registerProvider })
     return { refresh, registerProvider }
   }
 
-  it('首拍只建基线不刷新；缓存 mtime 变化 → refresh({ allowNetwork: false }) 恰一次', async () => {
+  it('models.json 在场 → session_start 触发 refresh({ allowNetwork: false }) 恰一次（工厂期注册不重复）', async () => {
     seedCatalogPinned(MTIME_T0)
-    const { refresh, registerProvider } = startWithFakeCtx()
-    // 工厂期已注入（D1）——tick 只是触发方，不是注册方
+    writeFileSync(join(agentDir, 'models.json'), '{"providers":{}}')
+    const { refresh, registerProvider } = await startWithFakeCtx()
+    // 工厂期已注入（D1）——session_start 只是触发方，不是注册方
     expect(registerProvider).toHaveBeenCalledTimes(1)
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(refresh).toHaveBeenCalledWith({ allowNetwork: false })
+  })
 
-    await tickOnce() // 首拍：models.json/auth.json 双 absent + 缓存首观测 → 只建基线
+  it('models.json 缺失（catalog-only 常态）→ 不刷新；对账照常（fresh 条目仍被注册）', async () => {
+    // 缓存缺失（never-seen）工厂期不注册；session_start 时缓存已在且 fresh → 对账注册，
+    // 但 models.json 缺失 → 刷新被护栏跳过（护栏不拦对账：注册直连注册表，不经刷新）
+    seedCatalogPinned(MTIME_T1)
+    const registerProvider = vi.fn<(provider: string, config: ProviderConfig) => void>()
+    const { refresh } = await startWithRegistryCtx({ appendEntry: vi.fn(), registerProvider })
     expect(refresh).not.toHaveBeenCalled()
+    expect(registerProvider).toHaveBeenCalledTimes(1)
+    expect(modelIds(registerProvider.mock.calls[0]![1])).toEqual(['Model-A'])
+  })
 
-    // 上游目录更新（taiji runtime 的 tmp+rename 原子替换写）→ mtime 变
+  it('跃迁：工厂期 expired → 缓存变 fresh → session_start 对账补注册（携钩子）且先于刷新', async () => {
+    // 工厂期 expired（R5 不注入）→ 缓存变 fresh（上游目录更新）→ session_start。
+    // 对账必须发生在「缓存变 fresh 之后」的加载点，故不经 harness 的一体化启动：
+    // 手动捕获 session_start handler，在两态之间改写缓存。
+    seedExpiredPinned(MTIME_T0)
+    writeFileSync(join(agentDir, 'models.json'), '{"providers":{}}')
+    const registerProvider = vi.fn<(provider: string, config: ProviderConfig) => void>()
+    const refresh = vi.fn(async () => ({ aborted: false, errors: new Map() }))
+    const on = vi.fn()
+    providerLiveSync({ on, appendEntry: vi.fn(), registerProvider } as unknown as ExtensionAPI)
+    expect(registerProvider).not.toHaveBeenCalled() // 工厂期 R5：expired 不注入
     rewriteCatalogPinned(MTIME_T1)
-    await tickOnce()
-    expectRefreshedOnce(refresh)
-  })
 
-  it('运行中窗口不断裂：工厂期注入后、首个 tick 触发前改缓存 → 首个 tick 必须 refresh（firstBaseline 不放行 overlay 变化）', async () => {
-    seedCatalogPinned(MTIME_T0)
-    const { refresh, registerProvider } = startWithFakeCtx()
-    // 工厂期已注入（D1）——tick 只是触发方，不是注册方
+    const handler = on.mock.calls.find((call) => call[0] === 'session_start')?.[1] as
+      | ((event: unknown, sessionCtx: unknown) => Promise<void> | void)
+      | undefined
+    await handler?.({ type: 'session_start' }, { modelRegistry: { refresh, getError: () => null } })
+
+    // 对账注册的接线断言：session_start 内 registerProvider 携带钩子落表、且先于刷新
     expect(registerProvider).toHaveBeenCalledTimes(1)
-
-    // 「工厂期注入 → tick 1」约 2s 窗内的缓存变更（真机实证：spawn 后 ~200ms 变更时
-    // 30s 内新模型不出现）——首拍抑制的前提（pi spawn 时已按磁盘建快照）只对既有
-    // models.json/auth.json 成立，overlay 条目的变化必须放行，否则运行中窗口断裂。
-    rewriteCatalogPinned(MTIME_T1)
-
-    await tickOnce() // 首个 tick：既有两条目双 absent 无变化，唯一信号 = overlay 变化
-    expectRefreshedOnce(refresh)
-  })
-
-  it('对照不变量：缓存内容变了但 mtime 不变 → 零刷新（mtime 是这一条目的比较基准）', async () => {
-    seedCatalogPinned(MTIME_T0)
-    const { refresh } = startWithFakeCtx()
-    await tickOnce()
-    expect(refresh).not.toHaveBeenCalled()
-
-    // 改写内容但把 mtime 钉回原值——该条目判「未变」
-    rewriteCatalogPinned(MTIME_T0)
-    await tickOnce()
-    expect(refresh).not.toHaveBeenCalled()
-  })
-
-  /** 对账注册的接线断言：tick 内 registerProvider 携带钩子落表、且先于本拍 refresh。 */
-  function expectReconciledThenRefreshed(
-    registerProvider: RegisterProviderSpy,
-    refresh: ReturnType<typeof vi.fn>,
-    expectedIds: string[],
-  ): void {
-    expect(registerProvider).toHaveBeenCalledTimes(1)
-    const [providerId, config] = registerProvider.mock.calls[0]
+    const [providerId, config] = registerProvider.mock.calls[0]!
     expect(providerId).toBe(SYNTHETIC_PROVIDER)
-    expect(modelIds(config)).toEqual(expectedIds)
+    expect(modelIds(config)).toEqual(['Model-A', 'Model-B'])
     expect(config.refreshModels).toBeTypeOf('function')
-    expectRefreshedOnce(refresh)
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(refresh).toHaveBeenCalledWith({ allowNetwork: false })
     // 顺序契约：先补注册（挂上钩子）再刷新——反过来刷新碰不到这个 provider
-    expect(registerProvider.mock.invocationCallOrder[0]).toBeLessThan(refresh.mock.invocationCallOrder[0])
-  }
-
-  it('跃迁①：工厂期 expired → 缓存变 fresh → tick 内 registerProvider 携带钩子被调（先于 refresh）', async () => {
-    seedExpiredPinned(MTIME_T0)
-    const { refresh, registerProvider } = startWithFakeCtx()
-    // 工厂期 R5：expired 不注入——此时该 provider 没有钩子，pi 的刷新碰不到它
-    expect(registerProvider).not.toHaveBeenCalled()
-
-    await tickOnce() // 首拍：mtime 未变，无动作
-    expect(registerProvider).not.toHaveBeenCalled()
-    expect(refresh).not.toHaveBeenCalled()
-
-    // 上游目录刷新把条目写成 fresh（mtime 变）→ 本拍对账补注册，再刷新
-    rewriteCatalogPinned(MTIME_T1)
-    await tickOnce()
-    expectReconciledThenRefreshed(registerProvider, refresh, ['Model-A', 'Model-B'])
+    expect(registerProvider.mock.invocationCallOrder[0]).toBeLessThan(refresh.mock.invocationCallOrder[0]!)
   })
 
-  it('跃迁②：工厂期 never-seen（缓存缺失）→ 缓存出现且 fresh → tick 内注册', async () => {
-    const { refresh, registerProvider } = startWithFakeCtx()
-    expect(registerProvider).not.toHaveBeenCalled()
-
-    await tickOnce() // 首拍：缓存持续缺失 = 非变化信号
-    expect(refresh).not.toHaveBeenCalled()
-
-    seedCatalogPinned(MTIME_T1) // absent → present
-    await tickOnce()
-    expectReconciledThenRefreshed(registerProvider, refresh, ['Model-A'])
-  })
-
-  it('跃迁③：工厂期损坏（R2 跳过注入）→ 文件修复 → tick 内重建注入，无需重开会话', async () => {
-    writeFileSync(TAiji_CACHE_PATH(), '{ not json')
-    utimesSync(TAiji_CACHE_PATH(), MTIME_T0, MTIME_T0)
-    const { refresh, registerProvider } = startWithFakeCtx()
-    expect(registerProvider).not.toHaveBeenCalled()
-    expect(loggerMocks.warn).toHaveBeenCalledWith(expect.stringContaining('catalog cache corrupt'))
-
-    await tickOnce() // 首拍：损坏文件 mtime 未变，无动作
-    expect(refresh).not.toHaveBeenCalled()
-
-    seedCatalogPinned(MTIME_T1) // 修复（设置页目录刷新重写 / 手工修复）
-    await tickOnce()
-    expectReconciledThenRefreshed(registerProvider, refresh, ['Model-A'])
-  })
-
-  it('对照：既有 models.json/auth.json 变化但目录缓存未变 → 刷新但不触发对账（无新注册）', async () => {
-    seedExpiredPinned(MTIME_T0)
-    const { refresh, registerProvider } = startWithFakeCtx()
-    await tickOnce() // 首拍建基线
-
-    // 仅 auth.json 出现（absent → present）→ 既有两条目的刷新路径
-    writeFileSync(join(agentDir, 'auth.json'), '{}')
-    await tickOnce()
-    expectRefreshedOnce(refresh)
-    // 目录缓存 mtime 未变 → 三态不可能变化 → 不对账；expired 的 provider 仍不注册
-    expect(registerProvider).not.toHaveBeenCalled()
-  })
-
-  it('R1：env 无数据目录 → 工厂期零注册，tick 也不因目录缓存刷新', async () => {
+  it('R1：env 无数据目录 → 工厂期零注册（models.json 同步不受影响，照常刷新）', async () => {
     delete process.env.TAIJI_AGENT_DATA_DIR
-    const { refresh, registerProvider } = startWithFakeCtx()
+    writeFileSync(join(agentDir, 'models.json'), '{"providers":{}}')
+    const { refresh, registerProvider } = await startWithFakeCtx()
+    // R1 只关断目录投喂：无 provider 可注册；models.json 加载时同步照常执行
     expect(registerProvider).not.toHaveBeenCalled()
-
-    await tickOnce()
-    await tickOnce()
-    expect(refresh).not.toHaveBeenCalled()
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(refresh).toHaveBeenCalledWith({ allowNetwork: false })
   })
 })

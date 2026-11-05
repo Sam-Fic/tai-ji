@@ -8,7 +8,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  SIGNATURE_MAX_CHARS,
   STEER_ERROR_MAX_CHARS,
   extractToolErrorText,
   truncateText,
@@ -59,10 +58,8 @@ describe("truncateText", () => {
     expect(truncateText("abcdefg", 4)).toBe("abcd...");
   });
 
-  it("两上限常量语义独立（F5 拆分：数值演化不共享）", () => {
-    expect(typeof SIGNATURE_MAX_CHARS).toBe("number");
+  it("steer 错误块上限常量存在且为正数", () => {
     expect(typeof STEER_ERROR_MAX_CHARS).toBe("number");
-    expect(SIGNATURE_MAX_CHARS).toBeGreaterThan(0);
     expect(STEER_ERROR_MAX_CHARS).toBeGreaterThan(0);
   });
 });

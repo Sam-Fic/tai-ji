@@ -23,7 +23,6 @@ import { execSync } from 'node:child_process'
 import type { IGitRepoResolver, RepoObservation } from '../../services/ports/git-info.js'
 import { buildOutboundChildEnv } from '../spawn-env.js'
 
-const GIT_TIMEOUT_MS = 2000
 const GITDIR_PREFIX = 'gitdir:'
 
 /** walk-up 锚点：普通 repo 或 worktree 解析出的 gitDir 与 HEAD 落点 */
@@ -133,13 +132,12 @@ export class GitRepoResolver implements IGitRepoResolver {
 
   /**
    * branch 解析（与旧 readGitInfoUncached 逐字段等价）：execSync 'git rev-parse --abbrev-ref HEAD'
-   * 从 cwd 起算；空输出 / 非 0 退出 / 超时 / git 不可用 → undefined。detached HEAD → 'HEAD'。
+   * 从 cwd 起算；空输出 / 非 0 退出 / git 不可用 → undefined。detached HEAD → 'HEAD'。
    */
   private resolveBranch(cwd: string): string | undefined {
     try {
       const branch = execSync('git rev-parse --abbrev-ref HEAD', {
         cwd,
-        timeout: GIT_TIMEOUT_MS,
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
         // C-proc-09：出站契约构建器组装 env（git 仅需 PATH/HOME，白名单基座保留）

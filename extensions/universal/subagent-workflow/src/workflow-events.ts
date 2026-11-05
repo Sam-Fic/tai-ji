@@ -51,7 +51,6 @@ import { bestEffort } from "@zhushanwen/subagent-core";
 import { getSubagentService } from "@zhushanwen/subagent-core";
 import type { LauncherDeps } from "@zhushanwen/subagent-core";
 import { terminateRunningRuns } from "@zhushanwen/subagent-core";
-import { setInFlightListener } from "@zhushanwen/subagent-core";
 // [event-push-channel W-P1] journal 落盘事件出口接线：core 两域落盘提交点 → 出口
 // 回调 → 壳层 journal reporter（select marker 通道带回执推送 runtime 派生视图）。
 import { setJournalAppendListener } from "@zhushanwen/subagent-core";
@@ -59,17 +58,13 @@ import {
   evictDoneRunsBeyondCap,
   MAX_RETAINED_DONE_RUNS,
   runSummary,
-  scheduleTimeBudget,
 } from "@zhushanwen/subagent-core";
 import type { WorkflowRun } from "@zhushanwen/subagent-core";
 import { WorkerHostImpl } from "@zhushanwen/subagent-core";
 import { WorkflowScriptRegistryImpl } from "@zhushanwen/subagent-core";
-// [u7a D5] 在途上报出口：实例由本 seam 创建并接线 setInFlightListener（组合根零
-// 管道），session_start / session_shutdown 驱动 attach/detach；测试可注入 fake。
-import { createInFlightReporter, type InFlightReporter } from "./host/inflight-reporter.ts";
 // [event-push-channel W-P1] journal 推送出口：实例由本 seam 创建并接线
-// setJournalAppendListener（与 inflight reporter 同 seam 同款），session_start /
-// session_shutdown 驱动 attach/detach；测试可注入 fake。
+// setJournalAppendListener，session_start / session_shutdown 驱动 attach/detach；
+// 测试可注入 fake。
 import { createJournalReporter, type JournalReporter } from "./host/journal-reporter.ts";
 // [容器扩展点统一 §6.6 U9] subagent 托盘件 widget 推送器：实例由本 seam 创建，
 // session_start / session_shutdown 驱动 attach/detach；测试可注入 fake。
@@ -329,21 +324,11 @@ export interface WorkflowDomainHandle {
 export function setupWorkflowDomain(
   pi: ExtensionAPI,
   wiring: {
-    inflightReporter?: InFlightReporter;
     journalReporter?: JournalReporter;
     trayWidgetPusher?: SubagentTrayWidgetPusher;
     workflowTrayWidgetPusher?: WorkflowTrayWidgetPusher;
   } = {},
 ): WorkflowDomainHandle {
-  // [u7a D5] 在途聚合上报接线（自组合根 index.ts 收编）：core 状态迁移
-  // （spawn/close/arm/disarm）→ 出口回调 → reporter 经 select 通道推绝对计数帧。
-  // 出口为进程级单监听（在途记账本身是 pi 进程级模块状态），后注册覆盖先注册
-  // （jiti 重载幂等）；回调同步 void，不进任何生命周期 await 链（D5 接线约束①）。
-  // ctx 由 session_start 注入（factory 阶段无 ui）。wiring.inflightReporter 是测试
-  // 注入点（fake reporter 观察 attach/detach 驱动时点）；生产路径缺省真实创建——
-  // 组合根对实例零知识（纯管道参数已删）。
-  const inflightReporter = wiring.inflightReporter ?? createInFlightReporter();
-  setInFlightListener(inflightReporter.onInFlightChanged);
   // [event-push-channel W-P1] journal 推送出口接线：core 两域落盘提交点 → 出口回调 →
   // reporter 按 (domain,fileKey) 分组合并 → select marker 通道带回执推送 runtime。出口为
   // 进程级单监听，后注册覆盖先注册（jiti 重载幂等）；回调同步 void，不进任何落盘 await 链。
@@ -471,8 +456,6 @@ export function setupWorkflowDomain(
       appendEntry: (customType: string, data: unknown) => {
         resolveCurrentPi().appendEntry(customType, data);
       },
-      scheduleTimeBudget: (runId: string, budgetTimeMs: number) =>
-        scheduleTimeBudget(runId, deps, budgetTimeMs),
       // [H2 W3] workflow agent() 统一派发入口（设计 §3.5）：pump 侧 dispatchAgentCall
       // 经此转调 SubagentService.executeWorkflowAgent——真实 record（origin:"workflow"
       // + parentRunId）进 store、共享池/守护/journal 归 service 编排；parentRunId 由
@@ -598,10 +581,6 @@ export function setupWorkflowDomain(
     // 的 id（留痕仍可检索）。
     try {
       lsRef.lastSessionId = ctx.sessionManager.getSessionId();
-      // [u7a D5] 初始上报（count=当下绝对计数）：触发时点 = extension 加载完成 / session
-      // 就绪（factory 无 ctx/ui，session_start 是最早带 ctx 的钩子）。fire-and-forget
-      // 在 await 装配链之前发起，不阻塞也不被阻塞。
-      inflightReporter.attachSession(ctx);
       // [event-push-channel W-P1] journal 推送出口 attach（事件驱动，无初始帧——
       // 报告语义是增量事件，缺席语义归消费方冷读）。
       journalReporter.attachSession(ctx);
@@ -725,9 +704,9 @@ export function setupWorkflowDomain(
   //  （quit|reload|new|resume|fork，SDK types.d.ts）里 reload 是唯一「同会话原地
   //  重建」成员——进程不死、session 不离开，仅 extension 模块图重求值。reload 分支
   //  跳过全部破坏性动作（a dispose / c terminate / d store.dispose / e sessionState
-  //  清除 / f dialogQueue.rejectAll），只执行 b（inflightReporter.detachSession，
-  //  detach 不是破坏——旧 reporter 是 per-factory 实例，不 detach 会在重试循环里持
-  //  stale ctx 反复 attempt；新 factory 建新 reporter 并覆盖进程级单监听）。存活的
+//  清除 / f dialogQueue.rejectAll），只执行各推送通道的 detach（journalReporter
+//  与两个托盘推送器——detach 不是破坏，旧推送器是 per-factory 实例，不 detach 会
+//  持 stale ctx 继续推送；新 factory 建新实例并重新接线）。存活的
   //  在途 run / store 经 D2 槽由 post-reload session_start(reason=reload) 的
   //  adoption 接管（D4，session-lifecycle.ts）。quit/new/resume/fork = 会话真离开，
   //  六动作现状全保持；session_tree 与 /new 父级联（subagents-events.ts）的
@@ -751,8 +730,6 @@ export function setupWorkflowDomain(
       // 作废后读侧降级 null（轮终收尾经有界等待挂到新 initSession 注入），新 session_start
       // 注入新代际句柄后自然恢复。方法本身不抛（字段写 + 唤醒等待者）。
       getSubagentService()?.invalidatePiBinding("session replacement (reload)");
-      // b 动作保留（理由见上方 D1 分支说明）。
-      inflightReporter.detachSession();
       // [event-push-channel W-P1] journal 推送通道随 reload 同步摘 ctx（旧 ctx 的
       // session 已被 pi 替换，推送帧无法归属；新 session_start 重新 attach）。
       journalReporter.detachSession();
@@ -794,9 +771,6 @@ export function setupWorkflowDomain(
       );
     }
 
-    // [u7a D5] 在途上报通道随 session 终结：摘 ctx + 停重试（session 已死，重试直至
-    // 成功的语义只对活 session 成立；进程级出口监听保留——后续 /new 重新 attach）。
-    inflightReporter.detachSession();
     // [event-push-channel W-P1] journal 推送通道随 session 终结：摘 ctx + 丢弃待推
     // 缓冲（未推事件由消费方冷读/缺口补读收敛，不重推——设计 D5）。
     journalReporter.detachSession();
@@ -914,12 +888,9 @@ export function setupWorkflowDomain(
     // 解析），pi 仍 notify「resuming with model B」成功文案。转发清单对账测试防第四处
     // 漏转发（workflow-events.test.ts lazyDeps 转发清单对账 describe）。
     get onResumeModelOverrideCommitted() { return createLazy(resolveDeps, "onResumeModelOverrideCommitted"); },
-    // scheduleTimeBudget / appendEntry 不可缺席（ports.ts D-12 regression fix 同族）：
-    // rebuildRuntime 重排 run 级墙钟预算计时器、finalizeRun 的 pending:unregister
-    // 直落都经这两个成员消费——lazyDeps 缺席会让消费点拿到 undefined（可选属性
-    // 静默放行）；appendEntry 缺席尤其危险：workflow tool 的 run action 以 lazyDeps
-    // 为 deps 启动 run，直落静默跳过 + emit 已删 = 注销 entry 永缺位。转发形态与其余成员一致。
-    get scheduleTimeBudget() { return createLazy(resolveDeps, "scheduleTimeBudget"); },
+    // appendEntry 不可缺席（ports.ts D-12 regression fix 同族）：finalizeRun 的
+    // pending:unregister 直落经它消费——lazyDeps 缺席会让消费点拿到 undefined（可选
+    // 属性静默放行），直落静默跳过 + emit 已删 = 注销 entry 永缺位。转发形态与其余成员一致。
     get appendEntry() { return createLazy(resolveDeps, "appendEntry"); },
     get log() { return createLazy(resolveDeps, "log"); },
   };

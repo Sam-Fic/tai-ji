@@ -22,23 +22,17 @@
  *   重置 + error 清零（BM3 错误行只描述当前弹窗的提交结果）
  * - BM3 假成功红线：RPC reject 时 pending 保持 true（弹窗不关供重试）+ error=true
  *   显形错误行——catch 后静默关窗会被误读为「已送达」；提交入口乐观清错
- * - D3 超时撤窗：WS plugin:permissionRequestExpired（timeout-plugin-service 取消
- *   非判拒，payload 无 sessionId → global 通道直发，不经 bridge/bus）按 requestId
- *   精确匹配撤回（requestId 与本次审批 permissionRequest 广播同源）；payload 缺
- *   requestId（旧版广播）回退按 pluginId 匹配；陈旧广播（不匹配当前弹窗）noop，
- *   无挂起弹窗时 noop 幂等
  * - S5-V3 终局撤窗：bus 'plugin-permission-request-resolved'（runtime 在任一端
  *   批准/拒绝后广播 plugin:permissionRequestResolved，bridge 归一）按 requestId
  *   精确匹配撤回——同一审批的多连接端中非操作端据此撤回弹窗（操作端 RPC 收尾先行
  *   置 pending=false，resolved 到达 noop 幂等）；requestId 空串（bridge 对旧版广播
- *   的宽容窄化产物）回退按 pluginId 匹配，兼容链与 expired 一致
+ *   的宽容窄化产物）回退按 pluginId 匹配
  * - deny 语义 = 拒绝本次申请不清已授权限（plugin.denyPermissions，M7 语义）
  *
- * dispose：退订全部 bus/WS 订阅（桌面壳重复 init 幂等 / 测试隔离用）。
+ * dispose：退订全部 bus 订阅（桌面壳重复 init 幂等 / 测试隔离用）。
  */
 import { reactive } from 'vue'
 import type { InternalEventBus } from '@taiji/core'
-import { onGlobal } from '@taiji/core/transport/api'
 import * as pluginApi from '@taiji/core/transport/api/domains/plugin'
 import type { PermissionTransport } from './permission-transport'
 
@@ -48,7 +42,7 @@ export interface PermissionRequestState {
   pluginId: string
   /** 插件申请的权限列表（拷贝入 state，防外部数组后续变更串扰） */
   permissions: string[]
-  /** 审批请求唯一标识（runtime 每次审批新生成；expired 广播按它精确撤回，弹窗 UI 不消费） */
+  /** 审批请求唯一标识（runtime 每次审批新生成；resolved 广播按它精确撤回，弹窗 UI 不消费） */
   requestId: string
   /** 请求是否挂起（true=弹窗打开；RPC 回传成功后置 false；失败保持 true 供重试） */
   pending: boolean
@@ -67,8 +61,8 @@ export interface PermissionRequestController {
 }
 
 /**
- * 创建权限审批编排 controller：bus 订阅 + expired 撤窗订阅 + reactive state +
- * PermissionTransport 回传，全部状态机逻辑单点持有。
+ * 创建权限审批编排 controller：bus 订阅 + resolved 撤窗订阅 + reactive state +
+ * PermissionTransport 回传，全部状态机逻辑单点持有。审批等待无时限（挂到用户响应）。
  *
  * sessionId 语义：runtime permissionRequest 广播 payload 协议性无 sessionId
  * （plugin-service onPermissionRequest 直发 activator payload），审批弹窗全局
@@ -104,28 +98,9 @@ export function createPermissionRequestController(bus: InternalEventBus): Permis
     state.error = false
   })
 
-  // 超时撤窗（timeout-plugin-service D3，取消非判拒）：payload 无 sessionId →
-  // global 通道直发（不经 bridge/bus）。按 requestId 精确匹配撤回（与本次审批
-  // permissionRequest 广播同源的唯一标识）：同 pluginId 前序审批的陈旧 expired
-  // 广播不误撤后到弹窗；payload 缺 requestId（旧版 runtime 广播）回退按 pluginId
-  // 匹配。均不匹配（无挂起弹窗 / 已换新请求）→ noop 幂等。
-  const offExpired = onGlobal((msg) => {
-    if (msg.type !== 'plugin:permissionRequestExpired') return
-    const payload = msg.payload as { pluginId?: unknown; requestId?: unknown }
-    if (typeof payload.pluginId !== 'string') return
-    const expiredRequestId = typeof payload.requestId === 'string' ? payload.requestId : ''
-    const matches = expiredRequestId !== ''
-      ? state.pending && state.requestId === expiredRequestId
-      : state.pending && state.pluginId === payload.pluginId
-    if (matches) {
-      state.pending = false
-      state.error = false
-    }
-  })
-
   // 终局撤窗（remote-use-mobile S5-V3）：任一端批准/拒绝后 runtime 广播
-  // plugin:permissionRequestResolved，bridge 归一为本 bus 事件。匹配兼容链与 expired
-  // 同构（requestId 精确 → 缺失回退 pluginId）：本端已由 RPC 收尾置 pending=false
+  // plugin:permissionRequestResolved，bridge 归一为本 bus 事件。匹配链（requestId
+  // 精确 → 缺失回退 pluginId）：本端已由 RPC 收尾置 pending=false
   // （操作端），resolved 到达 noop 幂等；非操作端命中即撤（弹窗对应请求已终局，
   // 继续作答只会得到 runtime 迟到审批 miss——UI 先行撤回与后端终局一致）。
   const offResolved = bus.on('plugin-permission-request-resolved', (e) => {
@@ -174,7 +149,6 @@ export function createPermissionRequestController(bus: InternalEventBus): Permis
     transport,
     dispose(): void {
       offRequest()
-      offExpired()
       offResolved()
     },
   }

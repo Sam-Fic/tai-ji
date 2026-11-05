@@ -16,15 +16,10 @@ import type { RunEndState, SessionIdentityTracker } from "./spawn-run-pump.ts";
 import type { SpawnRunParams } from "./spawn-runner.ts";
 
 /**
- * get_state 单次查询的有界窗（复用 handshake 同款量级）。其超时是通道死亡兜底、
- * 不参与判别（无应答 = 不判定，零时间量）。
- */
-const P6_GET_STATE_TIMEOUT_MS = 2_000;
-
-/**
- * get_state 单次查询 → isStreaming（主判据）。复用 handshake 有界形态：超时是通道
- * 死亡兜底、不参与判别——resolve undefined = 无应答（事实不足不产推断，调用方继续
- * 等既有通路）。
+ * get_state 单次查询 → isStreaming（主判据）。无时间上界（原 2s 有界窗已随时间
+ * 机制删除——无应答时本 promise 不 settle，其 then 链不动作，外部语义与原
+ * 「无应答 = 不判定」一致：继续等既有通路）；stdin 同步抛错 = 通道死亡兜底
+ *（resolve undefined = 无应答，事实不足不产推断）。
  */
 function queryChildIsStreaming(
   child: ChildProcess,
@@ -32,17 +27,13 @@ function queryChildIsStreaming(
 ): Promise<boolean | undefined> {
   return new Promise<boolean | undefined>((resolve) => {
     let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (value: boolean | undefined): void => {
       if (settled) return;
       settled = true;
-      if (timer !== undefined) clearTimeout(timer);
       resolve(value);
     };
     try {
       const id = sendGetStateCommand(child);
-      timer = setTimeout(() => finish(undefined), P6_GET_STATE_TIMEOUT_MS);
-      timer.unref();
       // identity.addStateListener 的包装会顺路回填身份字段（无害副作用）；
       // resolver 收到原始应答 data（失败帧以 undefined resolve = 无应答口径）。
       identity.addStateListener(id, (data: unknown) => {

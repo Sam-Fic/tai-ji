@@ -49,10 +49,6 @@ describe('SPAWN_ENV_FORWARD_REFERENCE 参考清单（文档性质，不参与过
     expect(names).toContain('TAIJI_ZCODE_CLI')
   })
 
-  it('含 U0① 增补项 TAIJI_SUBAGENT_IDLE_TIMEOUT_MS（通道核实结论：B3 白名单继承）', () => {
-    expect(names).toContain('TAIJI_SUBAGENT_IDLE_TIMEOUT_MS')
-  })
-
   it('每条目均带 injectionPath 与非空消费锚点', () => {
     for (const entry of SPAWN_ENV_FORWARD_REFERENCE) {
       expect(entry.injectionPath.trim()).not.toBe('')

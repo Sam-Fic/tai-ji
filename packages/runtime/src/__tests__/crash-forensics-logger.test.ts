@@ -2,7 +2,6 @@
  * 崩溃取证与内存水位打点测试（crash-resilience §3.3 D6-②④⑤⑦，u5b-runtime-forensics）。
  *
  * 覆盖：
- * - D6-② 水位行格式：formatMemoryWatermarkLine 单行、MB 换算、session/pi 计数在位
  * - D6-④ pi-crash 上下文头：formatPiCrashContextHeader 全字段/空字段 null 显式；
  *   writePiCrashLog 第三参 context 落盘形态（[runtime-context] 块在 stderr 原文之前）
  * - D6-⑤ plugin-crash log：writePluginCrashLog 文件名/内容/append/未初始化 no-op
@@ -56,28 +55,7 @@ afterEach(async () => {
   await logger?.closeLogger().catch(() => {})
 })
 
-describe('D6-② 内存水位行格式（A8「5 分钟间隔水位行」的行内容断言）', () => {
-  it('formatMemoryWatermarkLine：单行 [watermark] 前缀 + 四指标 MB 换算 + sessions/pi 计数', async () => {
-    logger = await loadLogger()
-    const line = logger.formatMemoryWatermarkLine({
-      rss: 150 * 1024 * 1024,
-      heapUsed: 45.5 * 1024 * 1024,
-      heapTotal: 64 * 1024 * 1024,
-      external: 2.25 * 1024 * 1024,
-      activeSessions: 7,
-      piProcesses: 3,
-    })
-    // 单行（无换行——grep 与行级解析友好）
-    expect(line).not.toContain('\n')
-    expect(line.startsWith('[watermark]')).toBe(true)
-    expect(line).toContain('rss=150.0MB')
-    expect(line).toContain('heapUsed=45.5MB')
-    expect(line).toContain('heapTotal=64.0MB')
-    expect(line).toContain('external=2.3MB') // 2.25 → toFixed(1) 四舍五入 2.3
-    expect(line).toContain('sessions=7')
-    expect(line).toContain('pi=3')
-  })
-
+describe('captureMemorySnapshot', () => {
   it('captureMemorySnapshot：返回非负四指标（process.memoryUsage 直采）', async () => {
     logger = await loadLogger()
     const snap = logger.captureMemorySnapshot()
@@ -85,11 +63,6 @@ describe('D6-② 内存水位行格式（A8「5 分钟间隔水位行」的行�
       expect(typeof snap[key]).toBe('number')
       expect(snap[key]).toBeGreaterThanOrEqual(0)
     }
-  })
-
-  it('MEMORY_WATERMARK_INTERVAL_MS = 5 分钟（D6-② 周期常量）', async () => {
-    logger = await loadLogger()
-    expect(logger.MEMORY_WATERMARK_INTERVAL_MS).toBe(5 * 60 * 1000)
   })
 })
 

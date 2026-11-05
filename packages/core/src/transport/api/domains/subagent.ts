@@ -16,7 +16,6 @@ import type {
   ProviderId,
   SubagentSetModelReply,
 } from '@taiji/shared'
-import { RPC_BACKSTOP_TIMEOUT_MS } from '../pending'
 import { command } from '../request'
 
 /**
@@ -36,5 +35,5 @@ export async function setModel(params: {
   /** 可选 thinking 档位（用户显式选择时携带；缺省 = 引擎按新模型缺省裁决）。 */
   thinkingLevel?: string
 }): Promise<SubagentSetModelReply> {
-  return command('subagent.setModel', params, RPC_BACKSTOP_TIMEOUT_MS)
+  return command('subagent.setModel', params)
 }

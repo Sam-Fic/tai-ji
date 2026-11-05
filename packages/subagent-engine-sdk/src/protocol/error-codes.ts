@@ -13,7 +13,7 @@
 //                               + 清理前置副作用；非 gate 位不一致 → 仅 warn）
 //   engine_model_unknown        validateModel 未命中且 dynamic=false → 同步拒（record 不创建）
 //   engine_model_mismatch       dynamic=true 运行期引擎拒绝 → run 失败 + record 标 failed
-//   engine_handshake_timeout    initialize 超时（HANDSHAKE_TIMEOUT_MS=10s）→ 引擎不可用
+//   engine_handshake_timeout    （历史码：握手时间窗已删，码表保留供旧版本帧解析）
 //   engine_crashed              进程意外退出 → 在途 run 失败（附 stderr 尾
 //                               STDERR_TAIL_CHARS=400 字符）；重建最多 3 次退避 1s/2s/4s
 //   engine_probe_failed         probe 失败 → 既有 fallback 三项检查不变
@@ -328,28 +328,11 @@ export function engineSetModelUnsupportedError(
 /** 错误回显长度上限（截断长输出，避免错误消息爆炸）。 */
 const DETAIL_ECHO_MAX_CHARS = 200;
 
-/** stdout 尾部回显上限（engine_timeout / engine_run_failed 的错误规格载体系数）。 */
+/** stdout 尾部回显上限（engine_run_failed 的错误规格载体系数）。 */
 export const STDOUT_TAIL_ECHO_CHARS = 2000;
 
 function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}...`;
-}
-
-/** engine_timeout 的恢复指引（kill-chain 超时杀链收尾文案）。 */
-export const ENGINE_TIMEOUT_RECOVERY =
-  "The engine was killed by the host timeout chain. Inspect the captured stdout tail, then re-run with a larger " +
-  "timeout, a narrower task, or `engine: pi`.";
-
-/**
- * engine_timeout 的 outcome.error 文案：含 stdout 尾部 2000 字 + 恢复指引
- * （kill-chain synthesizeTimeoutOutcome 消费；与 core errors.ts engineTimeoutDetail 逐字等价）。
- */
-export function engineTimeoutDetail(stdoutTail: string): string {
-  return (
-    `host timeout chain exhausted (SIGTERM -> grace -> SIGKILL). ` +
-    `Stdout tail (last ${STDOUT_TAIL_ECHO_CHARS} chars): ${truncate(stdoutTail, STDOUT_TAIL_ECHO_CHARS)}. ` +
-    `Recovery: ${ENGINE_TIMEOUT_RECOVERY}`
-  );
 }
 
 /** schema_emulation_failed 的终报文案（宿主编排层「重试一次仍失败」后消费）。 */

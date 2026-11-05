@@ -31,12 +31,12 @@
 //   （store/modelService/notifyHost/pool/worktreeManager）
 //   getter 现读同一实例；会话基线运行时可变态
 //   （sessionRootId/streamSink/uiObservability/pi/cwd）经壳 getter 现读；R3 聚合显式
-//    接口（finalizeFailed/finalizeAborted/idleTimeoutRecycle/archiveRecord）壳装配指
+//    接口（finalizeFailed/finalizeAborted/archiveRecord）壳装配指
 //    RecordLifecycle 实例方法。
 // 2. 只搬不改：方法体除依赖通道替换（this.X → this.deps.Y()）外逐字节保留——
 //    通道替换清单 = 上方「本聚合 → RunOrchestration」六项协作回调；Continuation
 //    协作范围内部互调（continuationFor/kickOffChatRound 等）随族同迁，保持 this 直调。
-// 3. 模块常量：STALE_CHILD_EXIT_WAIT_MS + delay 随唯一消费主体
+// 3. 模块常量：随唯一消费主体
 //   （killStaleChildBeforeDispatch）自 run-orchestration 迁入；PRIORITY_BACKGROUND /
 //    MS_PER_SECOND / SECONDS_PER_MINUTE 消费常量叶子文件 service-constants.ts。
 
@@ -92,29 +92,11 @@ import type { AgentStreamSink } from "../../shared/agent-stream.ts";
 
 /**
  * [H1 U2 / 红线②] stale-child 兜底的退出等待窗（ms）：镜像在途子进程活项时，协议
- * cancel（引擎侧 SIGTERM → pi trap flush → 退出）的有界收敛窗。pi 对裸 SIGTERM 做
- * graceful shutdown（窗口几十~几百 ms，见 disposedUiRequestStub 注释实测口径），
- * 300ms 覆盖常见退出路径；残余双写窗与宿主重启窗口同属红线③经验性登记（量级 =
+ * cancel（引擎侧 SIGTERM → pi trap flush → 退出）后的派发前兜底。pi 对裸 SIGTERM 做
+ * graceful shutdown（窗口几十~几百 ms，见 disposedUiRequestStub 注释实测口径）；
+ * 残余双写窗与宿主重启窗口同属红线③经验性登记（量级 =
  * 引擎存活期状态错配频次 × 窗内未退出概率，罕见）。
  * [D-R4-1 兑现] 随唯一消费主体（killStaleChildBeforeDispatch）自 run-orchestration 迁入。 */
-const STALE_CHILD_EXIT_WAIT_MS = 300;
-
-/**
- * [§1.4 (a)] 轮终收尾「句柄就绪」等待的上界（ms）：pi 会话替换（reload / new / fork /
- * switch）作废旧句柄后，下一次 initSession 注入新代际的窗口量级 = extension 模块图
- * 重求值 + session_start 装配链（实测亚秒~秒级）。等到 = 轮终 pi 条目写落进新权威
- * session（正常路径完成写）；超时 = 降级跳过（磁盘 journal/manifest 面不受影响）+
- * warn 留痕含恢复指引。控制范围单请求粒度，禁止放大为任务级墙钟预算。
- */
-const ROUND_FINAL_PI_READY_WAIT_MS = 2_000;
-
-/** 有界 delay（stale-child 退出窗消费；fire-and-forget 场景不引入 timer 依赖）。
- *  [D-R4-1 兑现] 随唯一消费主体（killStaleChildBeforeDispatch）自 run-orchestration 迁入。 */
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
 
 /**
  * [R1 打样模式 1] 聚合协作 deps——**全部晚绑定闭包，构造期零求值**。
@@ -127,8 +109,8 @@ function delay(ms: number): Promise<void> {
  *   getter 现读同一实例。
  * - 会话基线 getter（getSessionRootId/getStreamSink/getUiObservability）：initSession
  *   注入的运行时可变态现读（SessionBaselines 经壳 getter 透传）。
- * - R3 聚合显式接口（finalizeFailed/finalizeAborted/idleTimeoutRecycle/
- *   archiveRecord）：意愿动作收尾的跨聚合协作（壳装配指 RecordLifecycle 实例方法）。
+ * - R3 聚合显式接口（finalizeFailed/finalizeAborted/archiveRecord）：意愿动作收尾
+ *   的跨聚合协作（壳装配指 RecordLifecycle 实例方法）。
  * - RunOrchestration 协作回调（taskSpecWithModel/outcomeToAgentResult/
  *   settleOneShotOutcome/writeBindingForRecord/effectiveMaxConcurrentFor/
  *   resolveChatEnginePort）：与 run 域编排共享的编排原语，经壳编排指
@@ -159,18 +141,15 @@ export interface ChatRoundsDeps {
   readonly getStreamSink: () => StreamSink | null;
   /** UI observability（stream 通道形态判据 getMode）。 */
   readonly getUiObservability: () => UiRequestObservability;
-  /** [§1.4 (a)] 轮终收尾的「句柄就绪」有界等待（本体 SessionBaselines.waitForUsablePi）：
-   *  pi 绑定被会话替换作废时，短暂等待下一次 initSession 注入新代际；超时返回 null
-   *  （调用方降级跳过 pi 写，磁盘侧不受影响）。 */
-  readonly waitForPiReady: (timeoutMs: number, context: string) => Promise<PiLike | null>;
+  /** [§1.4 (a)] 轮终收尾的「句柄就绪」现读判定（本体 SessionBaselines.usablePiOrSkip）：
+   *  pi 绑定可用返回句柄；作废（会话替换窗）/未注入返回 null（调用方降级跳过 pi 写，
+   *  磁盘侧不受影响）。 */
+  readonly waitForPiReady: (context: string) => PiLike | null;
   /** [R3 RecordLifecycle 显式接口] 轮次 run 失败的收尾（kickOffChatRound catch 面）。 */
   readonly finalizeFailed: (record: ExecutionRecord, err: unknown) => Promise<AgentResult>;
   /** [R3 RecordLifecycle 显式接口] one-shot 轮排队中被 abort 的收尾（[U5] cancel 语义
    *  settle）。 */
   readonly finalizeAborted: (record: ExecutionRecord) => Promise<AgentResult>;
-  /** [R3 RecordLifecycle 显式接口 / U5] idle 超时进程回收（Continuation closeNow
-   *  回调面——收尾是用户动作，超时回收不动占用位）。 */
-  readonly idleTimeoutRecycle: (record: ExecutionRecord) => Promise<void>;
   /** [R3 RecordLifecycle 显式接口 / U5] close 收尾资源编排（consumePendingArchive 挂起消费
    *  点——source 供留痕，调用方保证在收尾轮通知送达之后）。 */
   readonly archiveRecord: (record: ExecutionRecord, source: string) => Promise<void>;
@@ -512,7 +491,7 @@ export class ChatRounds {
   //     2026-09-26 用户裁决）——引擎活着但事件不达的场景不再自动回收。
   //   - armChatIdleTimer（idle 相位帧 → idle timer 挂载）→ 相位帧消费方退役；
   //     [u7a 重接] arm 语义由 Continuation.settleRoundSuccess 轮终簿记后的
-  //     armIdleKeepalive 承载（活句柄保活 + D5 在途推送，见 conversation-continuation.ts）
+  //     轮终在途翻边承载（活句柄保活 + D5 在途推送，见 conversation-continuation.ts）
   //     ——idle record 留内存可续聊、不终态化（原 30 天内存回收机制已退役，见 ADR）。
   //   - backfillChatAnchor（idle 帧锚点回填）→ sessionFile 回填改由 run 应答
   //     outcome.sessionFile 承载（+ writeBindingForRecord 落盘，UF-1）。
@@ -637,9 +616,6 @@ export class ChatRounds {
       markRoundStarted: (rec) => {
         this.deps.getStore().markRoundStarted(rec.id);
       },
-      // [U5] idle keepalive 超时 = 进程回收（收尾是用户动作 close 专属，
-      // 超时不是用户动作；record 保持 idle 可续聊，锚在）。
-      closeNow: (rec) => this.deps.idleTimeoutRecycle(rec),
       // [U5 / §3.2.5 顺序约束] closeAfterRound 挂起的 chat 域收尾落定消费点（Continuation
       // settle 分支在轮次通知送达后调用）——清标志 + 收尾落定（one-shot 主干与 chat 域
       // 共用 consumePendingArchive 单点，防标志清写漂移）。
@@ -753,15 +729,13 @@ export class ChatRounds {
 
   /**
    * [红线②派发前兜底] stale-child：镜像在途子进程活着（引擎存活期的状态错配——
-   * Continuation 无在途 run 但镜像有活项）→ 镜像置死记账 + 协议 cancel（引擎侧杀链）
-   * + 有界退出窗（STALE_CHILD_EXIT_WAIT_MS，pi trap flush 量级）。引擎已死场景的
-   * 孤儿由引擎退出链收割兜底（红线①——engine-client teardownProcess，镜像此刻已
-   * 整体置死，本兜底查不到，两通道正交）。
+   * Continuation 无在途 run 但镜像有活项）→ 镜像置死记账 + 协议 cancel（引擎侧杀链，
+   * 无退出等待窗）。引擎已死场景的孤儿由引擎退出链收割兜底（红线①——engine-client
+   * teardownProcess，镜像此刻已整体置死，本兜底查不到，两通道正交）。
    */
   async killStaleChildBeforeDispatch(recordId: string): Promise<void> {
     if (!hasLiveProcessHandle(recordId)) return;
     killRecordChildWithEscalation(recordId, "stale-child guard (dispatch)");
-    await delay(STALE_CHILD_EXIT_WAIT_MS);
   }
 
   /**
@@ -840,13 +814,11 @@ export class ChatRounds {
     record: ExecutionRecord,
     outcome: RoundSettlementOutcome,
   ): Promise<void> {
-    // [§1.4 (a)] 轮终收尾的「句柄就绪」有界等待：pi 会话替换窗（reload/替换作废旧句柄、
-    // 新 initSession 未到）内，短暂等待新代际注入再执行簿记——等到 = 轮终 pi 条目写
-    // 落进 reload 后的新权威 session（正常路径完成写）；超时 = 降级 null（下方
-    // FinalizeDeps.pi 走可选链跳过 pi 写，磁盘 journal/manifest 面不受影响）。
-    // 从未注入过 pi 的宿主形态（headless / 纯内存测试）恒立即返回，零等待。
-    await this.deps.waitForPiReady(
-      ROUND_FINAL_PI_READY_WAIT_MS,
+    // [§1.4 (a)] 轮终收尾的「句柄就绪」现读判定：pi 绑定可用 → 条目写落进当前权威
+    // session（正常路径完成写）；作废（会话替换窗）/ 未注入 → null（下方 FinalizeDeps.pi
+    // 走可选链跳过 pi 写，磁盘 journal/manifest 面不受影响）。headless / 纯内存测试
+    // 形态恒返回 null，零等待。
+    const roundFinalPi = this.deps.waitForPiReady(
       `round final to idle (record=${record.id}, outcome=${outcome.kind})`,
     );
     await doFinalizeRoundToIdle(
@@ -854,7 +826,7 @@ export class ChatRounds {
         worktreeManager: this.deps.getWorktreeManager(),
         store: this.deps.getStore(),
         modelService: this.deps.getModelService(),
-        pi: this.deps.getPi(),
+        pi: roundFinalPi,
         emitUnregister: (id, st) => this.deps.getNotifyHost().emitPendingUnregister(id, st),
       },
       record,

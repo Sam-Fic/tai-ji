@@ -50,7 +50,6 @@ const transportMock = vi.hoisted(() => {
 vi.mock('@taiji/core/transport/ws-client', () => ({ send: transportMock.send }))
 // mock 目标 = core 源文件相对路径（须与 core 内相对 import 解析为同一模块 ID 才能拦截）
 vi.mock('../../../core/src/transport/api/pending', () => ({
-  RPC_BACKSTOP_TIMEOUT_MS: 65_000,
   createCommandId: vi.fn(() => 'pid-1'),
   register: vi.fn(() =>
     Promise.resolve({ session: { id: 's1', cwd: '/x', status: 'idle' } as SessionSummary }),

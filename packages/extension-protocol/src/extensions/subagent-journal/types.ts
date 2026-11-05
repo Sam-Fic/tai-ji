@@ -50,7 +50,7 @@ export interface SubagentJournalReport { // oe-exempt:20261003:framework:跨进�
   /**
    * 上报所属 session（ctx.sessionManager.getSessionId()）。pi 延迟写入窗口内可能取
    * 不到——缺席时消费方按无法归属丢弃整帧（不 fold 不 ack），不视为协议错误
-   * （归属权威 = 连接的 sessionId，本字段只作在场性判据——inflight 同款先例）。
+   * （归属权威 = 连接的 sessionId，本字段只作在场性判据）。
    */
   sessionId?: string
   /** 产生时点（ms epoch，pi 进程内取值）。诊断/乱序排查用，消费方不依赖其单调性。 */

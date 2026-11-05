@@ -28,8 +28,8 @@
 //      reject，不产生 handle；
 //   ② 运行中失败不 reject——合成 engine_run_failed outcome + 正常 handle 返回
 //      （record 必须收尾）；
-//   ③ abort：D3 链（session/stop → grace → killChain 连坐共享进程）——终态
-//      exitCode=null + 杀链标记。
+//   ③ abort：D3 链（尽力发 session/stop → 直接落 killChain 连坐共享进程——无等待
+//      升级窗）——终态 exitCode=null + 杀链标记。
 //   [D3-④] capability 拒绝（fork/maxTurns/worktree）不再在本引擎：
 //      上提到宿主调用前预检（common/capability-gate，两调用点 = chat 域
 //      executeViaEngine 同步段 + SAR run 前）；conversation 位按 resume 形态键在
@@ -49,12 +49,8 @@ import {
   buildEngineChildEnv,
   buildSchemaEmulationSegment,
   extractAndValidateStructuredOutput,
-  HOST_TIMEOUT_ABORT_REASON,
-  synthesizeTimeoutOutcome,
-  engineTimeoutDetail,
   resolvePoolDir,
   SHARED_POOL_KEY,
-  spawnEngineChild,
 } from "@zhushanwen/subagent-engine-sdk";
 import { replayJournalToSessionView } from "./journal-io.ts";
 import type {
@@ -67,23 +63,15 @@ import type {
 import type { AgentCallOpts, EngineHandle, EnginePort, EngineRunResult, RunContext } from "./port-types.ts";
 import {
   ZCODE_ADAPTER_VERSION,
-  ZCODE_APPSERVER_ABORT_GRACE_ENV,
-  ZCODE_APPSERVER_ABORT_GRACE_MS,
   ZCODE_APPSERVER_ERR_BUSY_SESSION,
   ZCODE_APPSERVER_ERR_MODEL_CONFIG_MISSING,
-  ZCODE_APPSERVER_HARVEST_GRACE_ENV,
-  ZCODE_APPSERVER_HARVEST_GRACE_MS,
-  ZCODE_APPSERVER_STOP_TIMEOUT_ENV,
-  ZCODE_APPSERVER_STOP_TIMEOUT_MS,
   ZCODE_CLI_DEFAULT_PATH,
   ZCODE_ENGINE_ID,
   ZCODE_ERROR_TAIL_CHARS,
-  ZCODE_KILL_GRACE_MS,
   ZCODE_RESUME_CHARS_PER_TOKEN,
   ZCODE_RESUME_HISTORY_TOKEN_BUDGET,
   ZCODE_SESSION_SWEEP_DEFER_MS,
   isFailedTerminalStatus,
-  parseZcodePositiveMsEnv,
 } from "./constants.ts";
 import { zcodeDbPathAllowlist, zcodeSessionDbPath } from "./db-path.ts";
 
@@ -121,9 +109,6 @@ import { stderrLogPathFor } from "./logs/stderr-rotation.ts";
 
 const logger = getLogger("subagents");
 
-/** probe 的版本探测超时（ms）——二进制无响应按探针失败处理，不静默挂死。 */
-const PROBE_VERSION_TIMEOUT_MS = 15_000;
-
 /**
  * [RX2-F1] 常见 thoughtLevel 档位（仅作提示基准，非权威值域）：pi 全 7 档
  * （off/minimal/low/medium/high/xhigh/max）恒等透传不拦截——core 引擎层不掌握各模型
@@ -151,8 +136,6 @@ export interface ZcodeEngineDeps {
   cliPath?: string;
   /** 源 config 路径覆盖（测试注入临时源；缺省读 ~/.zcode）。 */
   sources?: ZcodeSourcePaths;
-  /** 版本探测执行器（probe check "version"；测试注入 fake 防真实子进程）。 */
-  probeVersion?: (cliPath: string) => Promise<string | undefined>;
   /** env 基底（测试注入；缺省 process.env——app-server env 组装经它）。 */
   processEnv?: NodeJS.ProcessEnv;
 }
@@ -209,8 +192,9 @@ export class ZcodeEngine implements EnginePort {
       sessionRead: "full",
       // --resume 冷启动可用（实测）
       resume: "cold",
-      // abort 走 D3 链（stop→grace→killChain）但声明维持 kill-only 不升级（改链路
-      // 先于改声明；stop 链路经 conformance 真机验证后再评估升 native）
+      // abort 走 D3 链（尽力发 stop → 直接落 killChain，无 grace 窗）但声明维持
+      // kill-only 不升级（改链路先于改声明；stop 链路经 conformance 真机验证后再
+      // 评估升 native）
       interrupt: "kill-only",
       // --mode build/edit/plan/yolo 原生权限档位
       permissionMode: "native",
@@ -222,7 +206,8 @@ export class ZcodeEngine implements EnginePort {
     };
   }
 
-  /** 探针（D7）：二进制存在 + 版本解析（zcode 无公开契约，版本漂移的入口信号）。 */
+  /** 探针（D7）：二进制存在（isFile 文件事实检查；原版本探测——spawn `--version`
+   * + 15s 超时——已随时间机制删除：二进制好坏由 run 后实际退出/握手链兜底报错）。 */
   async probe(opts?: { force?: boolean }): Promise<ProbeReport> {
     if (!opts?.force && this.probeCache) return this.probeCache;
 
@@ -230,14 +215,7 @@ export class ZcodeEngine implements EnginePort {
     // check 1：二进制存在（不在 PATH，固定绝对路径形态——存在性即可用性的第一道判据）
     const binary = this.probeBinaryCheck(cliPath);
     const checks: ProbeReport["checks"] = [binary];
-
-    // check 2：版本解析（存在才尝试——必败进程不再 spawn）
-    let engineVersion = "";
-    if (binary.ok) {
-      const version = await this.probeVersionCheck(cliPath);
-      checks.push(version.check);
-      engineVersion = version.engineVersion;
-    }
+    const engineVersion = "";
 
     const ok = checks.every((c) => c.ok);
     const report: ProbeReport = {
@@ -257,24 +235,6 @@ export class ZcodeEngine implements EnginePort {
       name: "binary",
       ok: binaryOk,
       detail: binaryOk ? cliPath : `zcode CLI 不存在：${cliPath}`,
-    };
-  }
-
-  /** check 2：`--version` 解析（probeVersion 可注入——测试 fake 防真实子进程）。 */
-  private async probeVersionCheck(
-    cliPath: string,
-  ): Promise<{ check: ProbeReport["checks"][number]; engineVersion: string }> {
-    const runVersion =
-      this.deps.probeVersion ?? ((cliPath: string) => defaultProbeVersion(cliPath, this.deps.engineDataDir()));
-    const version = await runVersion(cliPath);
-    const versionOk = version !== undefined && version.length > 0;
-    return {
-      check: {
-        name: "version",
-        ok: versionOk,
-        detail: versionOk ? version : "zcode --version 返回空或失败",
-      },
-      engineVersion: version ?? "",
     };
   }
 
@@ -495,9 +455,10 @@ export class ZcodeEngine implements EnginePort {
       },
     });
 
-    // D3 abort 链：signal abort → ① session/stop {sessionId} ② grace 窗口确认终态
-    // ③ stop 失败/超时 → killChain 杀共享进程（接受连坐——协议已不可信）→ 在途
-    // 其他任务走崩溃路径。capabilities.interrupt 维持 kill-only 不升级（C4）。
+    // D3 abort 链：signal abort → ① 尽力发 session/stop {sessionId}（失败仅记日志
+    // 继续）→ ② 直接落 killChain 杀共享进程（背靠背 SIGTERM+SIGKILL，无等待升级窗；
+    // 接受连坐——协议已不可信）→ 在途其他任务走崩溃路径。capabilities.interrupt
+    // 维持 kill-only 不升级（C4）。
     const onAbort = (): void => {
       void this.appServerAbortChain(rt, turn, () => currentSessionId, sessionCreated);
     };
@@ -508,8 +469,8 @@ export class ZcodeEngine implements EnginePort {
 
     try {
       const r = await turn;
-      // stop 优雅生效（终态在 grace 内到达）：宿主已取消——按中止终态收尾（record
-      // 终态迁移由编排层 CAS 决定）
+      // stop 生效（turn 在 abort 后仍正常返回终态）：宿主已取消——按中止终态收尾
+      // （record 终态迁移由编排层 CAS 决定）
       if (ctx.signal?.aborted === true) return abortedAppServerAttempt(ctx);
       return parsedAppServerAttempt(task, r);
     } catch (err) {
@@ -556,83 +517,62 @@ export class ZcodeEngine implements EnginePort {
   }
 
   /**
-   * killChain 后等待连接 finalize 实际完成（child 置空 + onClose 广播）再宣告链终局：
-   * shutdown resolve 于 `exit` 事件，而 finalize 挂 `close`（stdio 排空）——两者之间的
-   * 事件窗口内 conn.child 仍非 null，紧接的下一任务 request 会复用垂死进程（写入成功
-   * 但必败，走崩溃路径）而非触发重建。与 shutdownRuntimeAndDisposeChannel 的
-   * HARVEST_GRACE 同款 race 形态（close 永不到达不挂死）。abort 链的 await 终局
-   * 语义因此是「进程收割确认完成」而非「SIGTERM 已发出」。
+   * 杀链后等待连接 finalize 实际完成（child 置空 + onClose 广播）再宣告链终局：
+   * finalize 挂 `close`（stdio 排空）——纯事件等待（原 HARVEST_GRACE 时间兜底已随
+   * 时间机制删除）。close 到达前 conn.child 仍非 null，紧接的下一任务 request 会
+   * 复用垂死进程（写入成功但必败，走崩溃路径）而非触发重建。abort 链的 await 终局
+   * 语义因此是「进程收割确认完成」而非「信号已发出」。
    */
   private async awaitConnFinalized(rt: AppServerRuntime): Promise<void> {
     if (!rt.conn.alive) return;
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => finish(), harvestGraceMs());
-      if (typeof timer.unref === "function") timer.unref();
-      const off = rt.conn.onClose(() => finish());
-      function finish(): void {
-        clearTimeout(timer);
+      const off = rt.conn.onClose(() => {
         off(); // Set.delete 幂等——并发触发无副作用
         resolve();
-      }
+      });
     });
   }
 
   /**
-   * D3 abort 链执行体（用户取消入口，fire-and-forget——与 turn promise 并行推进）：
-   * stop 帧（超时 ZCODE_APPSERVER_STOP_TIMEOUT_MS）→ grace 窗口内 turn 落定即止
-   * （不杀共享进程）→ 超窗 killChain（conn.shutdown 全序：SIGTERM→grace→SIGKILL）。
-   * turn 的最终落定由 attempt 主路径 await 收尾，本链不直接产出终态。abort 与 create
-   * 竞态（signal 先到、session 未建立）：等会话建立（带上限）再发 stop——否则 stop
-   * 永远发不出，直接连坐杀共享进程。
+   * D3 abort 链执行体（用户取消入口，fire-and-forget——与 turn promise 并行推进）。
+   * [甲类裁决] 时间等待窗（stop 超时 / abort grace race）已删：abort = 尽力发
+   * session/stop 帧（有会话时）→ 直接落杀链收割共享进程（接受连坐，在途任务走
+   * 崩溃路径）。turn 的最终落定由 attempt 主路径 await 收尾，本链不直接产出终态。
    */
   private async appServerAbortChain(
     rt: AppServerRuntime,
-    turn: Promise<SessionTurnResult>,
+    _turn: Promise<SessionTurnResult>,
     getSessionId: () => string | undefined,
-    sessionCreated: Promise<void>,
+    _sessionCreated: Promise<void>,
   ): Promise<void> {
-    const graceRaceThenKill = async (): Promise<void> => {
-      const settled = await Promise.race([
-        turn.then(
-          () => true,
-          () => true,
-        ),
-        delayResolved(abortGraceMs(), false),
-      ]);
-      if (settled) return; // stop 生效：终态在 grace 窗口内到达，共享进程不杀
+    const killSharedProcess = async (): Promise<void> => {
       logger.warn(
-        `[zcode-engine] abort grace 窗口内未见终态——killChain 收割共享进程（接受连坐，在途任务走崩溃路径）`,
+        `[zcode-engine] abort 直落杀链——killChain 收割共享进程（接受连坐，在途任务走崩溃路径）`,
       );
-      await rt.conn.shutdown({ graceMs: ZCODE_KILL_GRACE_MS });
+      await rt.conn.shutdown();
       await this.awaitConnFinalized(rt);
     };
 
-    let sessionId = getSessionId();
+    const sessionId = getSessionId();
     if (sessionId === undefined) {
-      await Promise.race([sessionCreated, delayResolved(stopTimeoutMs(), undefined)]);
-      sessionId = getSessionId();
-      if (sessionId === undefined) {
-        // 会话始终未建立：无会话即无在途任务可止损，跳过 stop，grace race 兜底
-        //（create 竞态挂死形态）
-        return graceRaceThenKill();
-      }
+      // 会话未建立：无会话即无在途任务可止损，跳过 stop，直接杀链（create 竞态形态）。
+      return killSharedProcess();
     }
-    // [u-z2 修复轮] alive 检查（与 closeSession 的 `!conn.alive` return 同款防御，
-    // 对称补齐）：进程在 abort 与本链发 stop 之间 finalize 完成的微窗口内，request
-    // 首行 ensureStarted 会惰性 spawn 新一代进程再写 stop 帧——凭空拉起无人使用的
-    // 进程。不 alive = 连接级失败形态（进程已死即已收割）：跳过 stop 落回 grace race
-    //（turn 已被 failAllTurns 收割则立即 settled，语义零变化）。
+    // [u-z2 修复轮] alive 检查：进程在 abort 与本链发 stop 之间 finalize 完成的微
+    // 窗口内，request 首行 ensureStarted 会惰性 spawn 新一代进程再写 stop 帧——凭空
+    // 拉起无人使用的进程。不 alive = 连接级失败形态（进程已死即已收割）：跳过 stop
+    // 直接收尾。
     if (!rt.conn.alive) {
-      return graceRaceThenKill();
+      return;
     }
     try {
-      await rt.conn.request("session/stop", { sessionId }, { timeoutMs: stopTimeoutMs() });
+      await rt.conn.request("session/stop", { sessionId });
     } catch (err) {
       logger.debug(
-        `[zcode-engine] session/stop 失败（${errMessage(err)}）——grace 后走 killChain 兜底`,
+        `[zcode-engine] session/stop 失败（${errMessage(err)}）——继续走 killChain`,
       );
     }
-    return graceRaceThenKill();
+    return killSharedProcess();
   }
 
   // ── 常驻运行时管理（D1/D6）──────────────────────
@@ -706,18 +646,11 @@ export class ZcodeEngine implements EnginePort {
   }
 
   /**
-   * [R5 修复 R4 既有竞态] shutdown → 等崩溃收割实际发生 → channel 退订。killChain 在
-   * `exit` 事件 resolve，而连接 finalize（onClose → channel 的 failAllTurns）挂
-   * `close` 事件——两者之间有一个事件循环窗口：shutdown resolve 后立即退订，在途
-   * turn 会错过收割而失去终局来源。退订前等 onClose 触发（本方法先于
-   * shutdown 订阅；channel 的订阅在构造期更早——其 failAllTurns 先于本 promise
-   * resolve 执行）；ZCODE_APPSERVER_HARVEST_GRACE_MS 兜底防 `close` 永不到达时挂死。
-   * [P0-1 U5/D7] grace race 输掉（close 迟到/永不到达——stdio 被孙进程持有排空不
-   * 尽等病态形态）时，channel.dispose() 内置的 dispose 收割（failAllTurns 先于退订，
-   * SessionChannel.dispose）兜底在途 turn——在途 turn 收敛为「grace 窗口内明确失败」
-   * （设计 §3.4 退化路径完成）；race 窗口与 awaitConnFinalized 同源同量级
-   * （ZCODE_APPSERVER_HARVEST_GRACE_MS）。正常 close 先到时 onClose 收割先行，
-   * dispose 收割幂等 no-op（零回归）。
+   * [R5 修复 R4 既有竞态] shutdown → 等崩溃收割实际发生 → channel 退订。连接
+   * finalize（onClose → channel 的 failAllTurns）挂 `close` 事件——退订前等 onClose
+   * 触发（本方法先于 shutdown 订阅；channel 的订阅在构造期更早——其 failAllTurns
+   * 先于本 promise resolve 执行）。纯事件等待（原 HARVEST_GRACE 时间兜底 race 已随
+   * 时间机制删除）。
    */
   private async shutdownRuntimeAndDisposeChannel(rt: AppServerRuntime): Promise<void> {
     const harvested = new Promise<void>((resolve) => {
@@ -726,17 +659,17 @@ export class ZcodeEngine implements EnginePort {
         resolve();
       });
     });
-    await rt.conn.shutdown({ graceMs: ZCODE_KILL_GRACE_MS });
-    // close 未在 grace 内到达 → 输掉 race → channel.dispose() 的内置收割兜底
-    await Promise.race([harvested, delayResolved(harvestGraceMs(), undefined)]);
+    await rt.conn.shutdown();
+    await harvested;
     rt.channel.dispose();
   }
 
   /**
    * [R1 D6 主体] 引擎停机路径：①fire 全部在途会话的 session/close 帧（不等待
    * 应答——D6① 顺序规定：close 帧必须先于 SIGTERM，否则对面来不及处理即被杀）→
-   * ②同步 SIGTERM（conn.shutdown 调用内 killChain 前缀同步执行——同步部分在返回
-   * Promise 前完成）→ ③grace → SIGKILL（异步侧，Promise resolve 于进程退出）。
+   * ②杀链：背靠背同步发 SIGTERM+SIGKILL（conn.shutdown 调用内同步执行——信号在
+   * 返回前已发出，无等待升级窗；shutdown resolve 于调用时点、不等待进程退出——
+   * 收割确认由下方 shutdownRuntimeAndDisposeChannel 的 onClose 事件等待承担）。
    * 幂等：运行时字段取走即置空，二次调用零副作用；dispose 后首个 run 经
    * ensureAppServerRuntime 自动重建（与崩溃重建同一代码路径，不变量 4）。
    */
@@ -758,10 +691,10 @@ export class ZcodeEngine implements EnginePort {
         rt.conn.post("session/close", { sessionId });
       }
     }
-    // ②③ 同步 SIGTERM（killChain 前缀在 shutdown 调用内同步执行）→ grace → SIGKILL
-    //（异步侧，resolve 于进程退出）。channel 退订放在崩溃收割之后（exit→close 窗口
-    //竞态的修复体，见 shutdownRuntimeAndDisposeChannel——先退订会让在途 turn 失去
-    //崩溃收割终局）
+    // ② 杀链：背靠背同步发 SIGTERM+SIGKILL（在 shutdown 调用内同步执行——信号在
+    // 返回前已发出，无等待升级窗；resolve 于调用时点、不等待进程退出）。channel 退订
+    // 放在崩溃收割之后（exit→close 窗口竞态的修复体，见
+    // shutdownRuntimeAndDisposeChannel——先退订会让在途 turn 失去崩溃收割终局）
     await this.shutdownRuntimeAndDisposeChannel(rt);
   }
 
@@ -784,7 +717,7 @@ export class ZcodeEngine implements EnginePort {
     };
 
     if (final.kind === "aborted") {
-      this.applyAbortedOutcome(outcome, task, ctx, final, emit);
+      this.applyAbortedOutcome(outcome, final, emit);
     } else if (final.kind === "run-failed") {
       this.applyRunFailedOutcome(outcome, final, emit);
     } else {
@@ -796,22 +729,17 @@ export class ZcodeEngine implements EnginePort {
   /** abort 合成终态：exitCode=null（record 正常收尾，不留僵尸）。 */
   private applyAbortedOutcome(
     outcome: AgentOutcome,
-    task: AgentCallOpts,
-    ctx: RunContext,
     final: Extract<AttemptResult, { kind: "aborted" }>,
     emit: (event: AgentEvent) => void,
   ): void {
     outcome.exitCode = null;
-    // 对齐点④：宿主超时（mergeTimeoutSignal 的 timeout abort）统一走公共合成终态
-    // （common/kill-chain.synthesizeTimeoutOutcome——engine_timeout 文案 SSOT + 「可用
-    // engine: pi 重跑」建议）；用户主动 cancel 维持 engine_run_failed 中止标记（非超时
-    // 语义，不冒充超时）。?? 兜底是类型收窄（合成器恒写 error）。
-    outcome.error = isHostTimeoutAbort(ctx)
-      ? synthesizeTimeoutOutcome(task, final.output.stdoutText, ZCODE_ENGINE_ID).error ??
-        engineTimeoutDetail(final.output.stdoutText)
-      : final.abortMessage ??
-        `engine_run_failed: zcode 任务被中止（app-server abort 链收尾，宿主合成终态）。` +
-          `输出尾部: ${final.output.stdoutText.slice(-ZCODE_ERROR_TAIL_CHARS)}`;
+    // 用户 cancel 维持 engine_run_failed 中止标记。（原宿主超时合成终态分支
+    // synthesizeTimeoutOutcome 已随宿主 timeoutMs 墙钟机制删除——宿主超时 abort
+    // 不再存在。）
+    outcome.error =
+      final.abortMessage ??
+      `engine_run_failed: zcode 任务被中止（app-server abort 链收尾，宿主合成终态）。` +
+        `输出尾部: ${final.output.stdoutText.slice(-ZCODE_ERROR_TAIL_CHARS)}`;
     emit({ type: "error", message: outcome.error });
   }
 
@@ -1237,58 +1165,6 @@ function errMessage(err: unknown): string {
   return toErrorMessage(err);
 }
 
-/**
- * grace/stop 常量族 env 覆盖读取（测试注入缝）：未设/空 → 默认；正毫秒数 → 覆盖；
- * 非法（非数字/≤0）→ warn 留痕 + 回落默认（生效行为可见）。读 process.env 直连
- *（vi.stubEnv 可测）。
- */
-function resolveAppserverTimingMs(envName: string, fallbackMs: number, label: string): number {
-  const raw = process.env[envName];
-  const parsed = parseZcodePositiveMsEnv(raw);
-  if (parsed.state === "valid") return parsed.ms;
-  if (parsed.state === "invalid") {
-    logger.warn(
-      `[zcode-engine] ${envName}="${raw}" 非法（应为正毫秒数字）——回落默认 ${fallbackMs}ms（${label}）`,
-    );
-  }
-  return fallbackMs;
-}
-
-/** [测试注入缝] stop 控制范围超时实际值（env 覆盖 > 默认 3s；解析见 resolveAppserverTimingMs）。 */
-function stopTimeoutMs(): number {
-  return resolveAppserverTimingMs(
-    ZCODE_APPSERVER_STOP_TIMEOUT_ENV,
-    ZCODE_APPSERVER_STOP_TIMEOUT_MS,
-    "stop 控制范围超时",
-  );
-}
-
-/** [测试注入缝] abort grace 窗口实际值（env 覆盖 > 默认 3s；同上）。 */
-function abortGraceMs(): number {
-  return resolveAppserverTimingMs(
-    ZCODE_APPSERVER_ABORT_GRACE_ENV,
-    ZCODE_APPSERVER_ABORT_GRACE_MS,
-    "abort grace 窗口",
-  );
-}
-
-/** [测试注入缝] 崩溃收割确认兜底窗口实际值（env 覆盖 > 默认 1s；同上）。 */
-function harvestGraceMs(): number {
-  return resolveAppserverTimingMs(
-    ZCODE_APPSERVER_HARVEST_GRACE_ENV,
-    ZCODE_APPSERVER_HARVEST_GRACE_MS,
-    "崩溃收割确认窗口",
-  );
-}
-
-/** ms 后 resolve 指定值（abort 链 grace 窗口的 race 材料；unref 不阻塞进程退出）。 */
-function delayResolved<T>(ms: number, value: T): Promise<T> {
-  return new Promise<T>((resolve) => {
-    const t = setTimeout(() => resolve(value), ms);
-    if (typeof t.unref === "function") t.unref();
-  });
-}
-
 /** appserver 路径的合成 output（无 stdout 可收集——exitCode 语义：0=正常轮；null=中止/连接级失败）。 */
 function syntheticAppServerOutput(exitCode: number | null): AttemptOutput {
   return { exitCode, stdoutText: "", stderrTail: "" };
@@ -1301,8 +1177,8 @@ function abortedAppServerAttempt(ctx: RunContext): AttemptResult {
     kind: "aborted",
     output: syntheticAppServerOutput(null),
     abortMessage:
-      `engine_run_failed: zcode 任务被中止（app-server abort 链：session/stop → ${abortGraceMs()}ms grace 确认 → ` +
-      `超时 killChain SIGTERM→${ZCODE_KILL_GRACE_MS}ms→SIGKILL 收割共享进程，在途任务走崩溃路径）。`,
+      `engine_run_failed: zcode 任务被中止（app-server abort 链：session/stop → killChain ` +
+      `SIGTERM+SIGKILL 收割共享进程，在途任务走崩溃路径）。`,
   };
 }
 
@@ -1524,48 +1400,3 @@ function failedAppServerAttempt(
   };
 }
 
-/** 宿主超时 abort 判别（对齐点④）：signal.reason 带超时标记 = 超时杀链合成终态路径。 */
-function isHostTimeoutAbort(ctx: RunContext): boolean {
-  return ctx.signal?.aborted === true && ctx.signal.reason === HOST_TIMEOUT_ABORT_REASON;
-}
-
-/**
- * 默认版本探测：`node <cli> --version`（首行 trim；超时按探针失败处理）。
- * [W5 迁移] execFile 改经 SDK spawnEngineChild（引擎包内全部子进程 spawn 单一入口；
- * 超时用 AbortSignal → SIGTERM，与原 execFile timeout 语义等价——探测是短命进程，
- * SIGTERM 即收敛）。stdout 有界收集（版本行 + 余量），防刷屏 OOM。
- */
-/** probe 版本探测的 stdout 收集上限（防刷屏 OOM）。 */
-const PROBE_STDOUT_CAP_CHARS = 4096;
-
-async function defaultProbeVersion(cliPath: string, dataDir: string): Promise<string | undefined> {
-  try {
-    return await new Promise<string | undefined>((resolve, reject) => {
-      const child = spawnEngineChild({
-        command: "node",
-        args: [cliPath, "--version"],
-        env: buildEngineChildEnv(process.env, { dataDir }),
-        stdout: "pipe",
-        stderr: "ignore",
-        signal: AbortSignal.timeout(PROBE_VERSION_TIMEOUT_MS),
-      });
-      let out = "";
-      child.stdout?.setEncoding("utf8");
-      child.stdout?.on("data", (chunk: string) => {
-        if (out.length < PROBE_STDOUT_CAP_CHARS) out += chunk;
-      });
-      child.once("error", reject);
-      child.once("close", (code) => {
-        if (code !== 0) reject(new Error(`zcode --version exited with code ${code}`));
-        else resolve(out.trim().split("\n")[0]?.trim() || undefined);
-      });
-    });
-  } catch (err) {
-    logger.debug(
-      `[zcode-engine] probe version check failed (best-effort continue): ${
-        toErrorMessage(err)
-      }`,
-    );
-    return undefined;
-  }
-}

@@ -65,26 +65,7 @@ export interface GoalRuntimeState {
 	tokenWarning90Sent: boolean;
 	lastTurnTokensUsed: number;
 	currentTurnIndex: number;
-	completedAtTurnIndex?: number;
-	// ── 轮次活性熔断计数（chat-domain-v1x D4 / W5，随 state 持久化）──
-	/**
-	 * 主判据：本激活周期累计发出的 continuation 次数。封顶（LivenessConfig.continuationCap）
-	 * 必停发。与「是否调工具」正交——任何路径不得因工具调用清零；唯一重置点 = 用户
-	 * 显式 /goal resume（新激活周期）。旧持久化数据无此字段，deserialize 默认 0。
-	 */
-	continuationsSent: number;
-	/**
-	 * 辅判据：连续无进展轮数（无工具调用且 tokenDelta 低于阈值）。达到阈值起退避
-	 * 间隔 ×2 递增；出现真实进展即清零（只清退避计数，不动 continuationsSent）。
-	 */
-	noProgressTurns: number;
-	/** 封顶停发通知只发一次的锚点（resume 时复位）。 */
-	continuationCapNotified: boolean;
+	// ── defer 记账（随 state 持久化）──
 	/** defer 通知去重锚：最近一次 defer 时的活跃 pending id 集合（排序后快照）。 */
 	lastDeferredPendingIds: string[];
-	/**
-	 * session entries 内 assistant toolCall 块的累计数。相邻两次 agent_end 的差分 =
-	 * 本 turn 的真实工具活动（辅判据输入）。随 state 持久化以在重启后保持差分口径。
-	 */
-	toolCallsSeen: number;
 }

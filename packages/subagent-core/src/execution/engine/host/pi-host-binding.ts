@@ -1,7 +1,7 @@
 // src/execution/engine/host/pi-host-binding.ts
 //
 // pi 引擎的宿主侧绑定点（W6 建立；[W3 chat 域收尾] 重写为纯协议形态）。
-// 职责 = pi 引擎的 EnginePort 解析与公共常量的宿主侧单一出口——chat 域 inproc 引擎
+// 职责 = pi 引擎的 EnginePort 解析的宿主侧单一出口——chat 域 inproc 引擎
 // （inproc pi 引擎目录）已随 chat-domain-v1x-liveness-governance W3 删除，chat 轮次与 run
 // 域同样经协议客户端（RemoteEngine，registry 'pi' 由三级发现装载 cli descriptor）
 // 发往 pi-subagent-cli 引擎进程（G1：pi 引擎单一 CLI 形态，core 壳侧零内建引擎）。
@@ -15,34 +15,12 @@
 //     未装/发现失败）→ 不可用 stub：路由层对 pi 恒同步短路（本地 pi 恒可用口径），
 //     真正的拒绝发生在首次 engine.run——stub 抛 EngineNotFoundError（含安装指引），
 //     由 SAR「不 reject」契约收尾进 result.error。
-//
-// maxTurnsToWatchdogMs：maxTurns→watchdog 毫秒换算的 barrel 公共出口（U3/U4 / D7，
-// 两宿主预算一致性 S2 的函数级锚点）。原 inproc session-runner（已删） 定义随删件
-// 收敛到本文件——算法（floor 30min + 每轮 5min，均 floor 语义）与运行时真实消费方
-// （pi-subagent-cli spawn-runner 的 spawn watchdog）保持同源常量，漂移由 conformance
-// chat golden（spawn-args 断言）在引擎包侧守护。
 
 import type { EnginePort } from "../port.ts";
 import { EngineNotFoundError, getEngine, hasEngine, listEngines } from "../registry.ts";
 // [U3 pi-workflow-run-resource-model] 窗口实例解析单点（U2 在 routing.ts「窗口实例
 // 状态」段建立）：chat 域轮窗口与 workflow run 窗口共用同一解析单点与收尾释放原语。
 import { resolveWorkflowWindowEnginePort } from "../routing.ts";
-
-/** watchdog 换算下限（分钟）：与引擎包 spawn-runner 的 floor 同源（30min）。 */
-const WATCHDOG_FLOOR_MINUTES = 30;
-/** watchdog 每轮预算（分钟/turn）：同源常量（5min/turn）。 */
-const WATCHDOG_MINUTES_PER_TURN = 5;
-
-const MS_PER_SECOND = 1000;
-const SECONDS_PER_MINUTE = 60;
-
-/** maxTurns → spawn watchdog 毫秒估算（floor 语义：maxTurns 小时取下限）。 */
-export function maxTurnsToWatchdogMs(maxTurns: number): number {
-  return Math.max(
-    WATCHDOG_FLOOR_MINUTES * SECONDS_PER_MINUTE * MS_PER_SECOND,
-    maxTurns * WATCHDOG_MINUTES_PER_TURN * SECONDS_PER_MINUTE * MS_PER_SECOND,
-  );
-}
 
 /**
  * 宿主侧 pi EnginePort 解析（SAR / 会话形态轮路由）：pi 已注册时经窗口实例解析单点

@@ -5,13 +5,13 @@
 //     options=[JSON 报告]（domain/fileKey/events/sessionId/emittedAt）、控制通道级
 //     timeout 在场；
 //   ②构建者——单帧单文件（fileKey 单数）；一次推送尝试在途时新事件并入待推缓冲，
-//     成功后逐组继续；失败（无 ack）→ 待推缓冲整体丢弃不重推（设计 D5，与 inflight
-//     的 dirty 重推刻意分叉——消费方有 seq 水位可判缺口）；
+//     成功后逐组继续；失败（无 ack）→ 待推缓冲整体丢弃不重推（设计 D5——消费方
+//     有 seq 水位可判缺口）；
 //   ③观察者——onJournalAppended 同步返回（不 await select，不进落盘主链）；
 //     非 rpc 模式 no-op（不设 ctx，全程零帧）；detach 后通道静默。
 //
-// 与 inflight-reporter 的差异锚：无初始帧（报告语义是增量事件，空 session 无事件
-// 可报，缺席语义归消费方冷读——设计 §3.3）。
+// 无初始帧（报告语义是增量事件，空 session 无事件可报，缺席语义归消费方冷读
+// ——设计 §3.3）。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
