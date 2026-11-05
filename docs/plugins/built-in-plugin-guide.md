@@ -100,9 +100,10 @@ resources/plugins/
 | `taijiPlugin.trustLevel` | 推荐 | 内置插件填 `"trusted"` |
 | `taijiPlugin.source` | 推荐 | 内置插件填 `"built-in"` |
 | `taijiPlugin.permissions` | 视情况 | 需要的权限列表。内置 trusted 插件可省略（默认全授权） |
-| `taijiPlugin.capabilities` | 视情况 | 业务能力声明（`network.http` / `fs.read-user-data` / `crypto` / `process.spawn`），安装即授予；见 §3.11 |
-| `taijiPlugin.readPaths` | 视情况 | `fs.read-user-data` 的读取路径白名单（家目录相对路径），见 §3.11 |
-| `taijiPlugin.namespace` | 视情况 | Provider 来源插件的命名空间（必须等于包名推导值），见 §3.11 |
+| `taijiPlugin.contributes` | 视情况 | 贡献点声明（views / menus / commands / headerActions 等）；推树视图必须在此声明，见 §3.4 |
+| `taijiPlugin.capabilities` | 视情况 | 业务能力声明（`network.http` / `fs.read-user-data` / `crypto` / `process.spawn`），安装即授予；见 §3.12 |
+| `taijiPlugin.readPaths` | 视情况 | `fs.read-user-data` 的读取路径白名单（家目录相对路径），见 §3.12 |
+| `taijiPlugin.namespace` | 视情况 | Provider 来源插件的命名空间（必须等于包名推导值），见 §3.12 |
 
 **激活事件类型：**
 
@@ -232,7 +233,112 @@ api.ui.showConfirm(title: string, message: string): Promise<boolean>
 api.ui.showInput(title: string, defaultValue?: string): Promise<string | undefined>
 ```
 
-### 3.4 api.hooks — Hooks API
+### 3.4 api.views — 视图推送 API
+
+把 `GuiComponent` 树推送到宿主的容器位/托盘/挂载位渲染，`update` 为**全量替换语义**（每次推送整棵树，不做增量）。完整可运行案例见 §4 的 scheduler-manager（`host.embed` 声明 + 会话域推树）。
+
+#### update — 推送视图树
+
+```typescript
+api.views.update(
+  viewId: string,                // 视图标识；会话域必须先在清单 contributes.views 声明（见下）
+  guiTree: GuiComponent[],       // 视图树，全量替换
+  opts: ({ sessionId: string } | { mountId: string }) & { meta?: Partial<WidgetMeta> }  // meta 全字段可选，见下
+): Promise<void>
+```
+
+**归属二选一（opts）**：
+
+| opts | 归属域 | 语义 |
+|------|--------|------|
+| `{ sessionId }` | 会话域 | 内容绑定会话，runtime 定向投递该会话 |
+| `{ mountId }` | 全局域 | Provider 页等无会话挂载位（如 `provider.authorize`）；分区键自动并入本插件 id，多插件同挂载位互不覆盖 |
+
+两个字段都给或缺任一 → `INVALID_VIEW_SCOPE` 拒绝。
+
+#### 会话域资格门（UNDECLARED_VIEW_ID，本版本破坏性变更）
+
+会话域推树的 `viewId` 必须命中本插件清单 `taijiPlugin.contributes.views` 的声明集合（声明条目的 `id` 或 `view` 字段等于该 `viewId`）。未命中 → `UNDECLARED_VIEW_ID` 结构化拒绝：**不入存储、不广播**。此前未声明的 viewId 推树也能显示，本版本起改为拒绝——已装插件升级后推树报此错误时，按以下恢复动作补声明：
+
+1. 在 `package.json` 的 `taijiPlugin.contributes.views` 数组补一条声明：`id`（或 `view`）等于推树用的 `viewId`，`placement`、`title` 必填
+2. 重载插件后重试
+
+全局域（`mountId`）分支**不收资格门**：挂载点名由宿主注册上报，本身是显式契约。
+
+#### contributes.views 声明与 placement 词表
+
+声明示例（取自内置插件 scheduler-manager）：
+
+```json
+"contributes": {
+  "views": [
+    {
+      "id": "scheduler-manager.panel",
+      "view": "modal-scheduler-manager-scheduler-manager.panel",
+      "placement": "host.embed",
+      "title": "定时任务",
+      "icon": "clock"
+    }
+  ]
+}
+```
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `id` | 必填 | 声明标识；推树 `viewId` 可匹配 `id` 或 `view` |
+| `title` | 必填 | 显示标题（托盘/标签位静态标题的唯一声明来源） |
+| `view` | 可选 | 推树 `viewId` 关联键；缺省按 `id` 匹配 |
+| `placement` | 必填 | 容器位，见下方词表 |
+| `icon` | 可选 | 图标名（lucide 名，宿主统一解析）；缺省 = 容器兜底图标 |
+| `order` | 可选 | 排序权重；未声明排在内置项之后 |
+| `emptyState` | 可选 | `{ text?, hint? }` 空态文案 |
+| `scope` | 可选 | `'session'`（缺省）或 `'global'` |
+
+**placement 词表**（词表外值 → 声明被判不可用 `unknown-placement`，不派生任何渲染位）：
+
+| placement | 容器位 |
+|-----------|--------|
+| `drawer.tab` | 右抽屉标签页 |
+| `sidebar.tab` | 侧栏标签页 |
+| `overlay.content` | 浮层内容类型 |
+| `settings.section` | 设置页分区 |
+| `composer.tray` | 会话托盘 widget 位（本版本新增） |
+| `host.embed` | 宿主内嵌位：宿主组件按 `viewId` 定点消费的树，不进标签条容器（本版本新增） |
+
+**静态信息与动态信息分工**：插件的静态信息（标题、图标）取清单声明，运行时不经 meta 更新；`opts.meta` 只承载动态信息（状态点/进度/角标）。托盘位的标题兜底链为：声明 `title` ?? `meta.title` ?? `viewId`——声明与 meta 双缺才显示裸 viewId。
+
+#### opts.meta — 动态信息（WidgetMeta 同形）
+
+`meta` 全字段可选，字段集与宿主 widget 渲染契约 `WidgetMeta` 同形：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `title` | `string` | 标题（托盘标题兜底链第二位，见上） |
+| `badge` | `string` | 短角标（建议 ≤6 字符，超长截断） |
+| `status` | `'running' \| 'done' \| 'failed' \| 'idle'` | 状态点 |
+| `progress` | `{ current: number; total: number; label?: string; severity?: 'ok' \| 'warn' \| 'danger' }` | 进度（current/total 必为数值；label 为计数显示文本，缺省 `${current}/${total}`） |
+| `icon` | `string \| { paths: string[] }` | 图标（lucide 名或自定义 path 形状） |
+
+校验口径：`meta` 提供时必须是对象；已知键按上表类型校验，未知键不校验（消费端按需读）。形状非法 → `INVALID_VIEW_META` 结构化拒绝，畸形载荷不触发广播。
+
+#### listMountPoints / onUiEvent
+
+```typescript
+api.views.listMountPoints(): Promise<string[]>   // 查询当前可用挂载点集合（全局域 mountId 取值参考）
+api.views.onUiEvent(handler: (event) => void): Disposable  // 输入组件值回传订阅（值变更即发，单条丢失由下一条变更覆盖）
+```
+
+**错误码汇总**（失败均 reject，`error.code` 为字符串语义码）：
+
+| 错误码 | 触发 | 恢复动作 |
+|--------|------|---------|
+| `INVALID_VIEW_SCOPE` | `sessionId` / `mountId` 都给或缺 | 恰好传一个 |
+| `UNDECLARED_VIEW_ID` | 会话域 `viewId` 未在清单声明 | 补 `contributes.views` 声明后重试 |
+| `INVALID_VIEW_META` | `meta` 形状非法（字段类型/枚举值错） | 按上表形状修正 |
+| `INVALID_GUI_TREE` | `guiTree` 非数组 | 传 `GuiComponent[]` |
+| `INVALID_SESSION_ID` / `INVALID_MOUNT_ID` | 归属值类型错或含非法字符 | 传合法值重试 |
+
+### 3.5 api.hooks — Hooks API
 
 用于监听和拦截系统事件。
 
@@ -284,7 +390,7 @@ interface InterceptorResult {
 }
 ```
 
-### 3.5 api.tools — Tool 注册 API
+### 3.6 api.tools — Tool 注册 API
 
 ```typescript
 // 注册自定义 AI Tool
@@ -309,7 +415,7 @@ interface ToolRegistration {
 }
 ```
 
-### 3.6 api.sessionData — Session 数据 API
+### 3.7 api.sessionData — Session 数据 API
 
 ```typescript
 api.sessionData.get(sessionId: string, key: string): Promise<unknown>
@@ -320,7 +426,7 @@ api.sessionData.keys(sessionId: string): Promise<string[]>
 
 用于按 session 存储插件数据（如 todo 列表、工作流状态等）。
 
-### 3.7 api.sessions — Session 管理 API
+### 3.8 api.sessions — Session 管理 API
 
 ```typescript
 api.sessions.list(): Promise<SessionInfo[]>
@@ -335,7 +441,7 @@ api.sessions.onDidCreateSession(handler: (session: SessionInfo) => void): Dispos
 api.sessions.onDidDestroySession(handler: (session: SessionInfo) => void): Disposable
 ```
 
-### 3.8 api.agent — Agent 桥接 API（trusted 专属）
+### 3.9 api.agent — Agent 桥接 API（trusted 专属）
 
 ```typescript
 // setModel 返回**引擎实际生效**的模型串（pi 的 set→get_state 回读；pattern 引擎静默换模时 ≠ 请求值）
@@ -353,7 +459,7 @@ api.agent.getActiveTools(): Promise<string[]>
 拼在 message 里（插件侧 grep message 即可分型）。停止态会话调用会先 `ensureActive` 拉起引擎
 （1–2s，有 15s 上界），超时错误码为 `SESSION_ACTIVATE_TIMEOUT`（后台恢复继续，可重试）。
 
-### 3.9 api.events — 跨插件通信
+### 3.10 api.events — 跨插件通信
 
 ```typescript
 api.events.on(event: string, handler: (data: unknown) => void): Disposable
@@ -362,7 +468,7 @@ api.events.emit(event: string, data: unknown): void
 
 同一 Worker 内的插件间通信，无需 RPC 中转。
 
-### 3.10 api.config — 配置 API
+### 3.11 api.config — 配置 API
 
 ```typescript
 api.config.get(key: string): Promise<unknown>
@@ -370,7 +476,7 @@ api.config.getAll(): Promise<Record<string, unknown>>
 api.config.set(key: string, value: unknown): Promise<void>
 ```
 
-### 3.11 Provider 来源接入（providers.* 三 RPC）
+### 3.12 Provider 来源接入（providers.* 三 RPC）
 
 插件可以作为 taiji 的模型来源（Provider）接入：家族元数据、授权流程、模型目录由插件提供，宿主提供 Provider 页的壳、`models.json` 落盘与「重新授权」入口。以下契约与 ADR-0166 同源。
 
@@ -575,6 +681,9 @@ interface PluginStateStorage {
 | `api.ui` | `showConfirm(title, message)` | `Promise<boolean>` |
 | `api.ui` | `showInput(title, defaultValue?)` | `Promise<string \| undefined>` |
 | `api.ui` | `notify(level, message)` | `Promise<void>` |
+| `api.views` | `update(viewId, guiTree, opts)` | `Promise<void>`（会话域须先声明 contributes.views，见 §3.4） |
+| `api.views` | `listMountPoints()` | `Promise<string[]>` |
+| `api.views` | `onUiEvent(handler)` | `Disposable` |
 | `api.hooks` | `onPiEvent(eventName, handler)` | `Promise<Disposable>` |
 | `api.hooks` | `onBeforeSendMessage(handler)` | `Promise<Disposable>` |
 | `api.hooks` | `onBeforeToolCall(handler)` | `Promise<Disposable>` |
