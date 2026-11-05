@@ -97,14 +97,18 @@ function makeRun(
 }
 
 /** mock RunStore：loadAll 返回预置 runs，save 可观察。 */
-function makeStore(loaded: WorkflowRun[]) {
+function makeStore(loaded: WorkflowRun[], journalDir?: string) {
   const saves: WorkflowRun[] = [];
   const store: RunStore = {
     loadAll: vi.fn(async () => loaded),
     save: vi.fn(async (run: WorkflowRun) => {
       saves.push(run);
     }),
-    stateFilePath: vi.fn((runId: string) => `/fake/workflow-state/${runId}.jsonl`),
+    // stateFilePath 忠实于端口契约 = record 流绝对路径（recoverCrashedRuns 的
+    // interruptRun journalDir 注入由此推导；失真假路径会让收编写帧落到错目录）
+    stateFilePath: vi.fn((runId: string) =>
+      journalDir !== undefined ? path.join(journalDir, `${runId}.jsonl`) : `/fake/workflow-state/${runId}.jsonl`,
+    ),
   };
   return { store, saves, saveSpy: store.save as ReturnType<typeof vi.fn> };
 }
@@ -144,7 +148,7 @@ describe("recoverCrashedRuns — 三步序列（loadAll→中断收编→evict�
       await seedCrashedRecord(journalDir, "wf-1");
       const running = makeRun("wf-1", { status: "running" });
       const done = makeRun("wf-2", { status: "done", reason: "completed", completedAt: "2026-08-30T01:00:00.000Z" });
-      const { store, saves } = makeStore([running, done]);
+      const { store, saves } = makeStore([running, done], journalDir);
       const runs = new Map<string, WorkflowRun>();
 
       const result = await recoverCrashedRuns(store, runs, "Process killed (kill-9 or crash recovery)");
@@ -190,7 +194,7 @@ describe("recoverCrashedRuns — 三步序列（loadAll→中断收编→evict�
       await seedCrashedRecord(journalDir, "wf-b");
       const r1 = makeRun("wf-a", { status: "running" });
       const r2 = makeRun("wf-b", { status: "running" });
-      const { store } = makeStore([r1, r2]);
+      const { store } = makeStore([r1, r2], journalDir);
       const hookPayloads: Array<{ id: string; reason: string }> = [];
 
       await recoverCrashedRuns(store, new Map(), "test crash", {
@@ -217,7 +221,7 @@ describe("recoverCrashedRuns — 三步序列（loadAll→中断收编→evict�
     try {
       await seedCrashedRecord(journalDir, "wf-nohooks");
       const run = makeRun("wf-nohooks", { status: "running" });
-      const { store } = makeStore([run]);
+      const { store } = makeStore([run], journalDir);
 
       const result = await recoverCrashedRuns(store, new Map(), "crashed");
       expect(result.recovered).toBe(1);
@@ -235,7 +239,7 @@ describe("recoverCrashedRuns — 三步序列（loadAll→中断收编→evict�
       // run-interrupted）→ 让位 false 不计数；wf-ok 照常收编
       const r1 = makeRun("wf-fail", { status: "running" });
       const r2 = makeRun("wf-ok", { status: "running" });
-      const { store } = makeStore([r1, r2]);
+      const { store } = makeStore([r1, r2], journalDir);
 
       const result = await recoverCrashedRuns(store, new Map(), "crashed");
       expect(result.recovered).toBe(1); // 仅 wf-ok
@@ -257,7 +261,7 @@ describe("recoverCrashedRuns — 三步序列（loadAll→中断收编→evict�
       await seedCrashedRecord(journalDir, "wf-after-throw");
       const r1 = makeRun("wf-hook-throw", { status: "running" });
       const r2 = makeRun("wf-after-throw", { status: "running" });
-      const { store } = makeStore([r1, r2]);
+      const { store } = makeStore([r1, r2], journalDir);
       const seen: string[] = [];
 
       await expect(
@@ -380,7 +384,7 @@ describe("recoverCrashedRuns — 中断收编接驳（[D15]）", () => {
       await seedCrashedRecord(journalDir, "wf-adopt-1");
 
       const run = makeRun("wf-adopt-1", { status: "running" });
-      const { store } = makeStore([run]);
+      const { store } = makeStore([run], journalDir);
       const appended: Array<{ customType: string; data: unknown }> = [];
       const result = await recoverCrashedRuns(store, new Map(), "Process killed", {
         appendSettledEntry: (customType, data) => appended.push({ customType, data }),
@@ -416,7 +420,7 @@ describe("recoverCrashedRuns — 中断收编接驳（[D15]）", () => {
       // 第一次 kill-9：预置静止 record 后收编（run-interrupted 写入 journal 记录恰一帧）
       await seedCrashedRecord(journalDir, "wf-adopt-2");
       const run = makeRun("wf-adopt-2", { status: "running" });
-      const firstStore = makeStore([run]);
+      const firstStore = makeStore([run], journalDir);
       await recoverCrashedRuns(firstStore.store, new Map(), "Process killed");
       expect(
         (await createRunEventJournal(journalDir).scan("wf-adopt-2")).filter(
@@ -449,8 +453,8 @@ describe("recoverCrashedRuns — 中断收编接驳（[D15]）", () => {
       const run = makeRun("wf-adopt-3", { status: "running" });
       // 两次恢复循环都拿到 running 聚合（模拟外部再收编竞窗——loadAll 侧条目
       // 抑制在壳层，core 侧幂等由入口两道承接）
-      const first = await recoverCrashedRuns(makeStore([run]).store, new Map(), "killed #1");
-      const second = await recoverCrashedRuns(makeStore([run]).store, new Map(), "killed #2");
+      const first = await recoverCrashedRuns(makeStore([run], journalDir).store, new Map(), "killed #1");
+      const second = await recoverCrashedRuns(makeStore([run], journalDir).store, new Map(), "killed #2");
       expect(first.recovered).toBe(1);
       expect(second.recovered).toBe(0); // fold interrupted → skippedTerminal 让位
       const events = await createRunEventJournal(journalDir).scan("wf-adopt-3");

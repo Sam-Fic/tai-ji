@@ -38,6 +38,7 @@
  */
 
 import { getLogger } from "../core/logger.ts";
+import { dirname } from "node:path";
 
 import { validateRunArgs } from "./args-validator.ts";
 // [第 4 道检查扩展] 派发前语法闸原语（与生成期同源；见 assertWorkflowScriptSyntax 头注）。
@@ -689,11 +690,17 @@ export async function recoverCrashedRuns(
       // 失败围栏：record IO error 留痕后继续（收编是旁路维护不放大失败——A-5
       // 语义降级，run 保持 running 形态待下次启动重试收编）。
       try {
+        // journalDir 显式注入：RunStore port 的 stateFilePath（record 流绝对路径）
+        // 取 dirname——interruptRun 缺省走 resolvePiWorkflowRunsDir（会话锚未绑定时
+        // fail-fast；启动恢复发生在 initSession 绑定前，缺省路径必然解析失败，
+        // 收编被围栏吞成 recovered=0。2026-11-05 三方宿主探针实证）。
+        const journalDir = dirname(store.stateFilePath(run.runId));
         const adopted = await interruptRun(run.runId, {
           // [D2] 中断来源标记：崩溃收编 = crashed（RunErrorCode 中断族新成员——
           // 设计 §3.1 事件表已登记）。
           errorCode: "crashed",
           reason,
+          journalDir,
           workflowName: run.spec?.scriptName,
           appendInterruptedEntry:
             hooks?.appendSettledEntry !== undefined
