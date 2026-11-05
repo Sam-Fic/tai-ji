@@ -29,7 +29,6 @@
 import { getLogger } from "../../core/logger.ts";
 
 import { SHARED_POOL_KEY } from "@zhushanwen/subagent-engine-sdk";
-import type { FailureCause } from "@zhushanwen/subagent-engine-sdk";
 
 import type { AgentResult as WorkflowAgentResult, AgentCallOpts } from "../../shared/agent-call-types.ts";
 import { SLUG_MAX_LENGTH } from "../../shared/run-vocabulary.ts";

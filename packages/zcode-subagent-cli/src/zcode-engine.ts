@@ -46,7 +46,6 @@ import * as path from "node:path";
 import { getLogger } from "@zhushanwen/subagent-engine-sdk";
 
 import {
-  buildEngineChildEnv,
   buildSchemaEmulationSegment,
   extractAndValidateStructuredOutput,
   resolvePoolDir,

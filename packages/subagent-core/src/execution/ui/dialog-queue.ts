@@ -20,11 +20,7 @@
 //   直接调 handler（见 ui-request-handler-factory.ts），不经过本队列。enqueue 内仍防御性兼容
 //   fire-and-forget（万一调用方未判）：直接调 handler 返回，不入队串行。调用方不应依赖此防御。
 
-import { getLogger } from "../../core/logger.ts";
-
 import { isDialogMethod } from "./ui-interaction-model.ts";
-
-const logger = getLogger("subagents");
 
 /**
  * dialog req.timeout 合法域判定（单一权威源，A2-3）：合法正数（finite 且 > 0）才参与

@@ -46,7 +46,6 @@ import type { ITurnIndexScanner } from '../ports/turn-index-scanner.js'
 import { exceedsTurnByteBudget, type TurnIndexSnapshot, type TurnIndexTurnRecord } from '../../infra/pi/turn-index-types.js'
 import { TurnIndexStore } from './turn-index-store.js'
 import {
-  activePathEntriesOf,
   convertWindowEntries,
   filterObjectEntries,
   makeMalformedLineWatcher,

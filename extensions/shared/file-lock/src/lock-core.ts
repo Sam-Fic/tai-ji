@@ -69,8 +69,8 @@ let exitHookInstalled = false;
 
 /**
  * 进程退出点配对清理（模块级注册一次）：exit handler 内只能同步操作，用 rmdirSync。
- * 单把锁清理失败不阻断其余锁清理——进程已终止，无恢复动作；零依赖约束下无日志
- * 通道，失败静默（锁残留由人工删除恢复，见头注释覆盖范围边界）。
+ * 单把锁清理失败不阻断其余锁清理——进程已终止，无恢复动作；零依赖约束下无 logger，
+ * 失败经内置 stderr 留痕（锁残留由人工删除恢复，见头注释覆盖范围边界）。
  */
 function installExitHook(): void {
 	if (exitHookInstalled) return;
@@ -79,8 +79,11 @@ function installExitHook(): void {
 		for (const lockfilePath of activeLocks) {
 			try {
 				rmdirSync(lockfilePath);
-			} catch {
-				// 进程已终止，无恢复动作；吞错保证其余锁清理不被阻断
+			} catch (err) {
+				// 进程已终止，无恢复动作；留痕不阻断其余锁清理（锁残留恢复 = 手动删除锁目录）
+				process.stderr.write(
+					`[file-lock] exit-hook cleanup failed for ${lockfilePath}: ${errCode(err) ?? err}\n`,
+				);
 			}
 		}
 		activeLocks.clear();

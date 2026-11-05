@@ -524,7 +524,6 @@ function adoptResumedRun(
     resumedAt: number;
     plan: ResumePlan;
   },
-  now: () => number,
 ): void {
   // 生效 token 预算（summary.budgetTokens 与首次挂表同源）随 spec 落定。
   // [ADR-0122] 原进程内 D10 预算账本（noteRunResumedBudget）随重试矩阵删除——
@@ -706,7 +705,7 @@ async function resumeRunLocked(
     }
     adoptResumedRun(runId, deps, created, recordPath, {
       events, budgetTokens, resumedAt, plan,
-    }, now);
+    });
   } catch (err) {
     await rollbackFailedAdoption(runId, options, created, err);
     throw err;

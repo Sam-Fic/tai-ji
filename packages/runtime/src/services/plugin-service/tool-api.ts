@@ -14,7 +14,6 @@ import type { PluginRpcClient } from './plugin-rpc-client.js'
 import type { ToolRegistration, ToolEntry } from './plugin-types.js'
 import { PluginRpcErrorCodes } from './plugin-types.js'
 import { asOptionalString, asRecord, asSafeKey, asString } from './validation.js'
-import { errorWithCode } from '../../utils/errors.js'
 /** Tool 注册服务依赖（主线程侧） */
 export interface ToolService {
   /** 工具注册表，key 为 toolKey */

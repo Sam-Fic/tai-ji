@@ -28,7 +28,6 @@ import {
 
 import type { AgentCallOpts } from "../../../shared/agent-call-types.ts";
 import { getHostServices } from "../../../core/host-services.ts";
-import { getLogger } from "../../../core/logger.ts";
 import { getSubagentSessionDir } from "../../assembly/path-encoding.ts";
 import { assertGateCapabilitiesMatched } from "../common/capability-gate.ts";
 import type {
@@ -85,8 +84,6 @@ export interface RemoteEngineOptions {
   /** L3 显式配置 engines.<id>.config（initialize.engineConfig 透传；EngineClient 消费）。 */
   engineConfig?: Record<string, string>;
 }
-
-const logger = getLogger("remote-engine");
 
 /**
  * cli 形态 EnginePort。构造同步、不 throw（缺包/坏包不在构造期报——descriptor
