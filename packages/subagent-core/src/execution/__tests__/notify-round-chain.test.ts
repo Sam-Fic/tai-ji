@@ -140,7 +140,6 @@ describe("[N2] chatMode 轮次通知正文：真实执行链路（协议引擎�
 
   beforeEach(() => {
     vi.clearAllMocks();
-    // lifecycle-manager 模块级单例（idleTimers Map 跨用例共享），每用例前清空防泄漏。
     agentDir = makeTmpAgentDir();
     // journal/records 落盘隔离（测试红线：不触真实数据目录）。initSession 的通知
     // 对账会补投 records 树内的收尾 idle record——数据目录跨用例共享时前一用例的

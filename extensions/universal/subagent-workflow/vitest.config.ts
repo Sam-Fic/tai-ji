@@ -18,8 +18,8 @@ export default taijiTestConfig({
     // 不掩盖真挂死：挂死用例仍会红，只是延后暴露。同族取舍先例：
     // packages/zcode-session-source/vitest.config.ts slow-sqlite 组（30s）。
     testTimeout: 15_000,
-    // [F-R5] 每个测试文件加载前统一删三个 watchdog env（watchdog 预算语义默认关），
-    // 根治宿主 shell export 导致的假红；用例内 vi.stubEnv 仍照常叠加生效。
+    // [F-R6] 每个测试文件加载前装配测试宿主（configureCore no-op log host），
+    // 详见 vitest.setup.ts。
     setupFiles: ["./vitest.setup.ts"],
   },
   resolve: {

@@ -21,9 +21,8 @@
 //   explicit-agent-ref-guard.test.ts（agent ref 守卫）/
 //   run-orchestration-engine-defaults.test.ts（D6 四层优先级）/
 //   workflow-agent-dispatch-model-catalog.test.ts（D8 派发期目录校验）。
-// 文件级 mock 三件（child_process / logger / lifecycle-manager）提升说明：
-//   logger 运行时面仅 getLogger；lifecycle 为 spread actual 仅覆 arm/disarm
-//   IdleTimer（本文件各节不依赖定时器真身）；child_process 仅 spawn/execFile，
+// 文件级 mock 两件（child_process / logger）提升说明：
+//   logger 运行时面仅 getLogger；child_process 仅 spawn/execFile，
 //   spawnSync 消费方（pid-file/reaper）仅经 cli transport 可达，各节全走假 port。
 //
 // mock 策略：只 mock node:child_process.spawn（pi 原路径的 FakeChild，见
@@ -1061,7 +1060,6 @@ function makeChatRounds(record: ExecutionRecord, overrides: Partial<ChatRoundsDe
     getUiObservability: vi.fn(() => ({ getMode: () => undefined })),
     finalizeFailed: vi.fn(),
     finalizeAborted: vi.fn(),
-    idleTimeoutRecycle: vi.fn(),
     archiveRecord: vi.fn(),
     taskSpecWithModel: vi.fn(
       (opts: ExecuteOptions, model: string | undefined): AgentCallOpts =>

@@ -248,7 +248,7 @@ rg -n 'spawn\(|execFile\(|fork\(|pty\.spawn' packages/runtime/src apps/electron/
   `{...process.env}` 全量拷贝对 trusted/sandbox 插件的兼容性属有意设计，无实证受害前不改拓扑，仅叠加 deny 清单删除。诚实标注：plugin 域消费点未逐一审计（无 blocker，超 MVP 范围）。
 
 - **待验证集（实施期核实，如实标注）：**
-  ① `TAIJI_SUBAGENT_IDLE_TIMEOUT_MS` 进入主 pi 的真实通道（extension 设置进嵌套 frame.env，还是依赖 B3 白名单继承；15 处命中多为测试）；② `TAIJI_LOG_LEVEL` 族是否同时被 `extensions/shared/extension-logger` 读取（若是则须并入 forward，否则 extension 日志静默变级）。两项动作各为一次 rg，嵌入 U0/U2。
+  `TAIJI_LOG_LEVEL` 族是否同时被 `extensions/shared/extension-logger` 读取（若是则须并入 forward，否则 extension 日志静默变级）。动作一次 rg，嵌入 U0/U2。
 
 ### 3.6 红线陷阱（实现必读）
 
