@@ -530,9 +530,13 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
       }))
 
       try {
-        // 全缺省依赖：真实探活 + 真实 start time（ps）+ 真实 kill 进程树 + 真实确认窗
+        // 全缺省依赖：真实探活 + 真实 start time（ps）+ 真实 kill 进程树。
+        // 终态（ADR-0188 无有界复核窗）：单次 kill 后立即探活不可靠（信号异步生效，
+        // 探活几乎必然 alive）→ pidFile 保留；下一轮 sweep 对已死 pid 重杀 no-op 后
+        // 探活翻死，确认 + 删档在第二轮完成。
         await sweepOrphanEnginePids(dataDir)
         await waitFor(() => !isPidAlive(enginePid), 'orphan engine reaped by real kill')
+        await sweepOrphanEnginePids(dataDir)
         expect(existsSync(pidFile)).toBe(false)
       } finally {
         engine.kill('SIGKILL')

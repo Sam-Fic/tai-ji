@@ -63,6 +63,10 @@ let stderrSink: WriteStream | null = null
 let stderrSinkFile: string | null = null
 /** 自本次打开以来写入 stderr 主文件的字节（size 轮转判定，对齐 runtime 字节计数法）。 */
 let stderrSinkBytes = 0
+/** 轮转窗口内到达的 chunk（rename 后由轮转续体回放到重建流；对齐 runtime pendingLines）。 */
+const pendingStderrChunks: Buffer[] = []
+/** 轮转在途标记（fire-and-forget 触发防重入；rotationInFlight 对齐 runtime rotateMain）。 */
+let stderrRotationInFlight = false
 
 function getStderrSink(): WriteStream | null {
   if (!app.isPackaged) return null
@@ -105,33 +109,59 @@ function getStderrSink(): WriteStream | null {
 }
 
 /**
- * end stderr sink 并立即 destroy（时间机制删除裁决：流关闭等待删除——不等 'close'
- * 事件回执；stderr 仅排查证据，在途缓冲尾部丢失可接受）。destroy 同步释放 fd 与
- * 写入侧——rename 落在 fd 已释放之后，无「旧流在途写落进已改名 inode」的孤儿写入窗。
+ * end stderr sink 并等真正关闭（'close'：fd 已释放、缓冲已 flush）。rename 前必须有
+ * 「无在途写」保证——end 后立即 destroy 会中止未完成的 open/flush，紧随的 renameSync
+ * ENOENT 被吞后滚动永久丢失（2026-11-05 本地实测，与 main-logger 同款）。等待本身是
+ * 事件驱动的顺序约束（close 回调），无超时降级——ADR-0188 退役的是原 5s 超时兜底。
  */
-function endAndDestroy(stream: WriteStream): void {
-  if (stream.closed) return
+function endAndAwait(stream: WriteStream): Promise<void> {
+  if (stream.closed) return Promise.resolve()
   if (!stream.writableEnded) stream.end()
-  stream.destroy()
+  if (stream.closed) return Promise.resolve()
+  return new Promise<void>((resolve) => {
+    const finish = (): void => {
+      stream.removeListener('close', onClose)
+      stream.removeListener('error', onError)
+      resolve()
+    }
+    const onClose = (): void => finish()
+    const onError = (): void => finish()
+    stream.once('close', onClose)
+    stream.once('error', onError)
+  })
 }
 
 /**
- * stderr sink size 轮转：destroy 旧流（写入侧同步封闭）→ rename `.1` → 下次写入经
+ * stderr sink size 轮转：end 旧流并等关闭 → rename `.1` → 下次写入经
  * getStderrSink 重建新流写**新文件**（append fd 重建发生在 rename 之后，
  * 不会写进已改名 inode）。
  */
-function rotateStderrSink(): void {
+async function rotateStderrSink(): Promise<void> {
   const old = stderrSink
   const file = stderrSinkFile
   if (!old || !file) return
   stderrSink = null
+  stderrSinkFile = null
   stderrSinkBytes = 0
-  endAndDestroy(old)
+  stderrRotationInFlight = true
   try {
-    renameSync(file, `${file}.1`)
-  // eslint-disable-next-line taste/no-silent-catch -- rename 失败（IO 错/权限）：旧文件保持原名，新流 append 续写同名文件，数据不丢仅丢滚动（对齐 runtime rotateMain）
-  } catch {
-    // no-op
+    await endAndAwait(old)
+    try {
+      renameSync(file, `${file}.1`)
+    // eslint-disable-next-line taste/no-silent-catch -- rename 失败（IO 错/权限）：旧文件保持原名，新流 append 续写同名文件，数据不丢仅丢滚动（对齐 runtime rotateMain）
+    } catch {
+      // no-op
+    }
+    // 流重建必须在 rename 之后（fd 指向新建主文件；先建流则 open 竞争 rename，
+    // fd 落进已改名 inode 变孤儿写入——2026-11-05 本地实测 final-marker 永不落主文件）
+    const fresh = getStderrSink()
+    const pending = pendingStderrChunks.splice(0)
+    for (const chunk of pending) {
+      fresh?.write(chunk)
+      stderrSinkBytes += chunk.length
+    }
+  } finally {
+    stderrRotationInFlight = false
   }
 }
 
@@ -142,8 +172,15 @@ function rotateStderrSink(): void {
  * 当前 chunk 计入下一轮。非打包（sink 不存在）no-op——调用方无须自行分流 dev/prod。
  */
 function writeStderrSink(data: Buffer): void {
+  if (stderrRotationInFlight) {
+    // 轮转窗口内到达的 chunk 入队，rename 后由轮转续体回放到重建流（零丢失）
+    pendingStderrChunks.push(data)
+    return
+  }
   if (stderrSinkFile && stderrSinkBytes + data.length > readMainLogMaxBytes()) {
-    rotateStderrSink()
+    pendingStderrChunks.push(data)
+    void rotateStderrSink()
+    return
   }
   const sink = getStderrSink()
   if (!sink) return
