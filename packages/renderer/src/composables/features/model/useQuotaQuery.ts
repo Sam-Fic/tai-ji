@@ -60,7 +60,8 @@ export function quotaFailReasonText(reason: QuotaFetchFailureReason): string {
 // ── unauthorized 自动续期（hover 路径）───────────────────────────────────────
 
 /**
- * 在途去重：续期期间（可达 15s~120s）同一 provider 不重复发起。createInflightDedup
+ * 在途去重：续期在途期间同一 provider 不重复发起（Promise 落定即释放，失败可立即重试）。
+ * createInflightDedup
  * 单点工具（C-data-18：禁手写 Map/Set + settle 清理的同构实现）——fn 仅首轮执行、
  * 在途触发复用同一 promise 后 void 丢弃，与「在途时新触发直接 return」的
  * fire-and-forget 语义等价，另获内建引用比对防误删与 unhandled rejection 防护。
@@ -191,7 +192,8 @@ export function useQuotaQuery(providerIdRef: Ref<string | null>): UseQuotaQueryR
       if (fetchResult.status === 'fulfilled') {
         applyFetchResult(store, pid, fetchResult.value)
         // unauthorized 自动续期：cookie 类且刷新目标在册时 fire-and-forget 触发（不占
-        // pending 态——续期可达 15s~120s，占住会让容量 chip 长挂「查询中」）
+        // pending 态——续期期间隐藏窗口探测/SSO 链耗时不定，占住会让容量 chip 长挂
+        // 「查询中」）
         if (fetchResult.value.reason === 'unauthorized') {
           void attemptCookieRefresh(pid)
         }
@@ -210,8 +212,9 @@ export function useQuotaQuery(providerIdRef: Ref<string | null>): UseQuotaQueryR
   /**
    * unauthorized 后的自动续期：调 main 隐藏窗口刷新器导出新 cookie 串（main 不落盘），
    * 成功（ok 且带串）才经 quota.configure 保存链由 runtime 单点落盘，随后 force 重查
-   * 一次；失败静默（store 已写 unauthorized 文案，无需叠加噪音）。SSO 登录窗弹出场景
-   * 由 main 侧处理（登录页停留转可见），renderer 不做任何窗口操作。
+   * 一次；失败静默（store 已写 unauthorized 文案，无需叠加噪音）。登录页场景由 main
+   * 侧处理（URL 命中登录页特征即转可见 + login required 失败收尾，dedup 槽随 Promise
+   * 落定释放、下次 hover 可重试），renderer 不做任何窗口操作。
    */
   async function attemptCookieRefresh(pid: string): Promise<void> {
     const provider = getSettingsStore().providers.value.find((p) => p.id === pid)

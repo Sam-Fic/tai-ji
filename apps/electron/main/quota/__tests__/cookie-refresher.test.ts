@@ -1,12 +1,15 @@
 /**
  * cookie-refresher 单测（隐藏窗口 cookie 刷新器）。
  *
- * 覆盖（任务验收条款；周期轮询/登录页停留/超时等待已随时间机制清查删除，对应验收组退役）：
- * - 导航白名单 / cookie 域过滤两个纯函数的边界
+ * 覆盖（任务验收条款；周期轮询/超时等待已随时间机制清查删除，登录页判定改为 URL 事实
+ * 确证的确定性收尾）：
+ * - 导航白名单 / 登录页判定 / cookie 域过滤三个纯函数的边界
  * - 种 cookie：secrets 文件存在 → cookies.set 逐对种入；文件缺失 → 零种入
  * - API 探测成功路径（事件驱动）：页面就绪事件 + 探测 200 → 导出目标域 cookie 串随
  *   返回值回传 + secrets 文件零写入断言（main 不落盘——单写方 = runtime QuotaService，
  *   renderer 走 quota.configure 保存链落盘）
+ * - 登录页确定性收尾：URL 命中登录页特征 → show() + ok:false("login required") +
+ *   destroy（Promise 落定不悬挂，收尾后同 provider 可重新发起）
  * - 同 provider 重入去重：返回同一 Promise、只开一个窗口
  * - IPC 注册（quota:refresh-cookie）：payload 校验 / 转发 / 注册幂等
  *
@@ -155,6 +158,7 @@ vi.mock('../../logs/main-logger.js', () => ({
 import { refreshQuotaCookie } from '../cookie-refresher.js'
 import {
   isAllowedQuotaRefreshNavigation,
+  isQuotaRefreshLoginUrl,
   isTargetCookieDomain,
 } from '../cookie-refresher.js'
 import { registerQuotaCookieRefreshHandler, isValidQuotaRefreshCookiePayload } from '../quota-cookie-ipc.js'
@@ -267,6 +271,19 @@ describe('isAllowedQuotaRefreshNavigation（导航白名单）', () => {
   it('路径形态 pattern（/login）不参与放行：opencode 目标域外同名路径 deny', () => {
     expect(isAllowedQuotaRefreshNavigation('https://opencode.ai/login', OPENCODE)).toBe(true)
     expect(isAllowedQuotaRefreshNavigation('https://evil.com/login', OPENCODE)).toBe(false)
+  })
+})
+
+describe('isQuotaRefreshLoginUrl（登录页判定）', () => {
+  it('SSO 账号域与平台自身登录路径命中', () => {
+    expect(isQuotaRefreshLoginUrl(LOGIN_URL, MIMO)).toBe(true)
+    expect(isQuotaRefreshLoginUrl('https://platform.xiaomimimo.com/login', MIMO)).toBe(true)
+    expect(isQuotaRefreshLoginUrl('https://opencode.ai/login', OPENCODE)).toBe(true)
+  })
+
+  it('console 页 / 无关域不命中', () => {
+    expect(isQuotaRefreshLoginUrl(CONSOLE_URL, MIMO)).toBe(false)
+    expect(isQuotaRefreshLoginUrl('https://example.com/', MIMO)).toBe(false)
   })
 })
 
@@ -415,6 +432,49 @@ describe('refreshQuotaCookie：loadURL 中断处理', () => {
     expect(result.cookie).toBeUndefined()
     expect(result.error).toContain('page load failed')
     expect(result.error).toContain('ERR_NAME_NOT_RESOLVED')
+  })
+})
+
+describe('refreshQuotaCookie：登录页确定性收尾', () => {
+  it('页面停在登录域（无后续导航事件）→ show() + ok:false("login required") + destroy，Promise 落定不悬挂', async () => {
+    const result = refreshQuotaCookie(
+      { fetcherId: 'mimo', providerId: 'p-login' },
+      { dataDir: () => tmpDir },
+    )
+    const win = await windowOf(result)
+    // SSO 把页面重定向到小米登录页并停住：API 恒 401（exec 缺省）、无后续导航事件——
+    // 删时间窗后唯一无收尾的形态，靠登录页 URL 事实确定性收尾
+    win.webContents.url = LOGIN_URL
+    win.webContents.emit('did-finish-load')
+
+    const settled = await result
+    expect(settled).toEqual({ ok: false, error: 'login required' })
+    // 转可见提示（登录态失效对用户可见）+ 成败都 destroy 收尾（无隐藏窗口泄漏）
+    expect(win.shown).toBe(true)
+    expect(win.destroyed).toBe(true)
+  })
+
+  it('登录页失败收尾后同 provider 再刷新重新执行（inflight 槽释放，续期不再被静默拦截）', async () => {
+    const first = refreshQuotaCookie(
+      { fetcherId: 'mimo', providerId: 'p-retry' },
+      { dataDir: () => tmpDir },
+    )
+    const win1 = await windowOf(first)
+    win1.webContents.url = LOGIN_URL
+    win1.webContents.emit('did-finish-load')
+    expect(await first).toEqual({ ok: false, error: 'login required' })
+
+    // 第二轮不再是登录页（登录态修复形态）→ 正常成功；两轮各开一窗证明首轮已收尾、
+    // inflight 表已清（渲染端 cookieRefreshDedup 同语义：settle 即清可重试）
+    const second = refreshQuotaCookie(
+      { fetcherId: 'mimo', providerId: 'p-retry' },
+      { dataDir: () => tmpDir },
+    )
+    expect(second).not.toBe(first)
+    makeReady(await windowOf(second))
+    expect(await second).toEqual({ ok: true, cookie: 'sid=refreshed' })
+    expect(fake.FakeBrowserWindow.instances).toHaveLength(2)
+    expect(win1.destroyed).toBe(true)
   })
 })
 

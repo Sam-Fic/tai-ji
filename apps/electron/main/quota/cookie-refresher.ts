@@ -7,7 +7,9 @@
  *   种 cookie（secrets 文件 → partition）→ 加载 pageUrl → 页面导航/load 事件触发页面内
  *   API 探测（200 即就绪）→ 导出 partition 的目标域 cookie 串 → 销毁窗口（串经 IPC 回
  *   renderer）。无时间窗决策（周期轮询/登录页停留判定/超时等待已随时间机制清查删除）：
- *   API 长时间不 200 的形态不自动 show() 窗口也不自动放弃，由用户侧重试承载。
+ *   探测时当前 URL 命中登录页特征 = 登录态失效的确定性事实（URL 判定，非时间阈值），
+ *   show() 转可见并即刻以 login required 失败收尾（成败都 destroy，渲染端 dedup 槽随
+ *   Promise 落定即时释放）；其余不 200 形态继续等下一个页面事件，由用户侧重试承载。
  *
  * 日常零内存占用：窗口按需创建、成败都 destroy；partition 用 persist 前缀（历史登录态
  * 跨刷新保留，SSO 跳转链的中间 cookie 不丢）。
@@ -158,9 +160,12 @@ async function seedCookies(ses: Session, target: QuotaRefreshTarget, dataDir: st
  * 跳转链的每一跳与登录后跳回）。附上监听后**立即先探一次**——生产路径 loadURL await
  * 期间 did-finish-load 已发射，迟挂的监听收不到那一次。
  *
- * 无 deadline：探测不 200 就继续等下一个页面事件（时间等待窗已随时间机制清查删除）；
- * 长时间不 200 的形态（登录态失效等）由用户侧重试承载。窗口销毁 → reject
- * （经 runRefresh 既有 catch 归一 ok:false）。
+ * 无 deadline：探测不 200 就继续等下一个页面事件（时间等待窗已随时间机制清查删除）。
+ * 确定性收尾（URL 事实，非时间阈值停留判定）：探测时当前 URL 命中登录页特征
+ * （isQuotaRefreshLoginUrl）= 登录态失效确证 → win.show() 转可见提示 + reject
+ * （"login required"）——经 runRefresh 既有 catch 归一 ok:false，窗口随 finally
+ * destroy、渲染端 cookieRefreshDedup 槽随 Promise 落定即时释放，恢复由用户侧重试
+ * 承载（重新登录后下次 hover 重查，探测即 200）。窗口销毁 → reject（同经 catch 归一）。
  */
 function probeUntilApiOk(win: BrowserWindow, target: QuotaRefreshTarget): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -186,6 +191,18 @@ function probeUntilApiOk(win: BrowserWindow, target: QuotaRefreshTarget): Promis
     const onReady = (): void => {
       if (win.isDestroyed()) {
         fail('refresh window destroyed before api ready')
+        return
+      }
+      // 登录页命中 = 登录态失效的确定性确证（URL 事实，非时间阈值停留判定）：转可见
+      // 提示 + 即刻以 login required 失败收尾。无时间窗裁决下没有「等用户登录」的
+      // 等待窗；且页面停在登录域（API 永不 200、无后续导航事件）时 Promise 必须落定，
+      // 否则隐藏窗口泄漏（成败都 destroy 契约失守）+ 渲染端 dedup 槽永不释放（该
+      // provider 续期被静默拦截）。检测先于探测：登录态已失效的页面无需再发 API 探测
+      const url = win.webContents.getURL()
+      if (isQuotaRefreshLoginUrl(url, target)) {
+        win.show()
+        mainLogger.info('[quota-cookie-refresher] login required', { url })
+        fail('login required')
         return
       }
       void probeApi(win, target).then((status) => {
@@ -281,6 +298,16 @@ function siteHostsOf(target: QuotaRefreshTarget): Set<string> {
     }
   }
   return hosts
+}
+
+/**
+ * 登录页判定：loginUrlPatterns 任一命中当前 URL（大小写不敏感）。
+ * 与导航白名单（isAllowedQuotaRefreshNavigation）语义不同：这里对完整 URL 跑
+ * pattern（路径形态 '/login' 在此生效），只用于登录态失效确证（确定性失败收尾判定），
+ * 不放行任何导航。
+ */
+export function isQuotaRefreshLoginUrl(url: string, target: QuotaRefreshTarget): boolean {
+  return target.loginUrlPatterns.some((p) => new RegExp(p, 'i').test(url))
 }
 
 /**
