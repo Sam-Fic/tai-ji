@@ -2722,7 +2722,7 @@
       ],
       "trigger": "on-diff",
       "serial": false,
-      "run": "pnpm --filter @zhushanwen/subagent-core exec vitest run src/execution/__tests__/subagent-model-source-parity.test.ts",
+      "run": "pnpm --filter @zhushanwen/subagent-core exec vitest run src/__tests__/record-model-override.test.ts",
       "owner": "packages/subagent-core",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15"
     },
