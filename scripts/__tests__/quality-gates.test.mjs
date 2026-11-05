@@ -305,16 +305,21 @@ describe('judgeNoLcov：机器盲区判定（决策 4 判定边界）', () => {
     const { violations, exempt } = judgeNoLcov(report(Object.keys(files)), (f) => files[f])
     expect(violations).toHaveLength(1)
     expect(violations[0].file).toBe('packages/foo/src/new-logic.ts')
-    expect(violations[0].fix).toContain('coverage-file-gate-exempt')
+    expect(violations[0].fix).toContain('coverage-file-exempt.json')
     expect(exempt).toHaveLength(0)
   })
-  it('豁免通道（文件头 coverage-file-gate-exempt）→ 出 FAIL 面、登记 exempt（可见不静默）', () => {
+  it('豁免通道（manifest 登记集）→ 出 FAIL 面、登记 exempt（可见不静默）；清单外文件不受文件头旧标记影响', () => {
     const files = {
       'packages/foo/src/composition-root.ts':
         '// coverage-file-gate-exempt: 组合根装配接线，单测结构性不可达\nexport const wiring = build();\n',
+      'packages/foo/src/plain.ts': 'export const wiring2 = build2();\n',
     }
-    const { violations, exempt } = judgeNoLcov(report(Object.keys(files)), (f) => files[f])
-    expect(violations).toHaveLength(0)
+    // manifest 注入（2026-11-04 manifest 化）：豁免判定 = 登记集命中，文件头旧标记注释
+    // 不再参与判定——composition-root 在清单内豁免，plain 不在清单内即使有旧标记也违规
+    const manifest = new Map([['packages/foo/src/composition-root.ts', '组合根装配接线，单测结构性不可达']])
+    const { violations, exempt } = judgeNoLcov(report(Object.keys(files)), (f) => files[f], manifest)
+    expect(violations).toHaveLength(1)
+    expect(violations[0].file).toBe('packages/foo/src/plain.ts')
     expect(exempt).toHaveLength(1)
     expect(exempt[0].reason).toContain('组合根')
   })
