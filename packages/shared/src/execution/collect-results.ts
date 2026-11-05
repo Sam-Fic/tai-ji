@@ -173,24 +173,6 @@ export function routeCollectKeys(input: CollectRoutingInput): CollectRouting {
   return routing
 }
 
-/** timeout_ms 解析结果（invalid 时调用方应返回 invalid_params，同时仍持有安全默认值）。 */
-export interface CollectTimeoutResolution { // oe-exempt:20261031:framework:执行域跨包协议契约（shared 单源 ports 层，实现随 u-m1/u-m2/u-m3 波次落地）
-  /** null = 不限时（未传 timeout_ms 即不限时，ADR-0188：无默认墙钟）。 */
-  timeoutMs: number | null
-  valid: boolean
-}
-
-/**
- * 解析 timeout_ms：未传 = 不限时（null，无默认墙钟——ADR-0188 规则「未传就是不限时」）；
- * 合法值 = 非负整数；非法值（负数/小数/NaN/Infinity）= invalid + null（fail-visible：
- * 调用方据此显式报错，不静默改语义、不回退任何默认值）。
- */
-export function resolveCollectTimeoutMs(value?: number): CollectTimeoutResolution {
-  if (value === undefined) return { timeoutMs: null, valid: true }
-  if (Number.isInteger(value) && value >= 0) return { timeoutMs: value, valid: true }
-  return { timeoutMs: null, valid: false }
-}
-
 /**
  * notice.collect 两层幂等的判定顺序（先命令层、后领域层）。
  *

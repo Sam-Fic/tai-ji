@@ -16,7 +16,6 @@ import {
   COLLECT_RESULT_BUCKETS,
   COLLECT_WAIT_RELEASE_CONDITIONS,
   NOTICE_COLLECT_IDEMPOTENCY_ORDER,
-  resolveCollectTimeoutMs,
   resolveNoticeCollectRevision,
   routeCollectKeys,
 } from '../collect-results'
@@ -122,16 +121,6 @@ describe('拍板 ②：混合键集两路聚合口径与单一 timeout 共享', 
     })
     expect(routing.collected).toEqual(['fresh', 'done'])
     expect(routing.waitKeys).toEqual([])
-  })
-
-  it('timeout_ms：缺省 = 契约默认 3600000；0 合法；非法值回退默认并标记 invalid', () => {
-    expect(resolveCollectTimeoutMs(undefined)).toEqual({ timeoutMs: null, valid: true })
-    expect(resolveCollectTimeoutMs(0)).toEqual({ timeoutMs: 0, valid: true })
-    expect(resolveCollectTimeoutMs(120_000)).toEqual({ timeoutMs: 120_000, valid: true })
-    expect(resolveCollectTimeoutMs(-1)).toEqual({ timeoutMs: null, valid: false })
-    expect(resolveCollectTimeoutMs(1.5)).toEqual({ timeoutMs: null, valid: false })
-    expect(resolveCollectTimeoutMs(Number.NaN)).toEqual({ timeoutMs: null, valid: false })
-    expect(resolveCollectTimeoutMs(Number.POSITIVE_INFINITY)).toEqual({ timeoutMs: null, valid: false })
   })
 })
 
