@@ -1,7 +1,8 @@
 <template>
   <!--
     展示组件 · 会话列表（R6.2 锚定分组形态，demo Sidebar.vue sessions 视图权威）。
-    区头「项目与会话」+ 总会话计数 + 双段模式开关，下方为：
+    区头（SessionListHeader 子组件：「项目与会话」+ 总会话计数 + 新建项目/归档入口 +
+    双段模式开关），下方为：
     - 默认项目区（用户裁决 2026-10-13 方案 A）：默认项目 = 未归类收件箱，不展示项目框——
       平铺模式 = 置顶平铺会话区（无组头/无左线/无缩进）；目录模式 = 置顶目录标签序列
       （无组包裹）。空区不渲染头行；锚定/新建/拖放/开合入口 = DefaultProjectHead
@@ -28,84 +29,18 @@
     空命名组显示「暂无会话，点组头「+」在此新建任务」（缩进对齐左线内侧）。
   -->
   <div class="session-list flex h-full min-h-0 flex-col">
-    <!-- 区头（demo .sess-head：gap 6px / padding 8px 10px 5px；lbl 12px mid、count mono 11px fg-2、
-         右侧模式开关 = .mode-seg 凹陷槽）。固定于 ScrollArea 外（不随列表滚动）。 -->
-    <div class="flex shrink-0 items-center gap-[6px] px-[10px] pt-[8px] pb-[5px]" data-testid="session-list-header">
-      <span class="truncate text-[length:var(--text-xs)] text-neutral-mid">
-        {{ t('sidebar.sessionList.header') }}
-      </span>
-      <span class="font-mono text-[length:var(--text-2xs)] text-neutral-fg-2">{{ totalCount }}</span>
-      <!-- 右侧工具组（用户裁决 2026-10-11）：新建项目「+」紧贴模式开关（组内 gap 2px，
-           组整体 ml-auto 承接右贴）。新建项目入口 = 区头「+」→ 列表顶部草稿行（见列表容器首行），
-           不再使用区头内联输入。
-           [session-archive D10] 归档入口插在「+」与模式开关之间：Archive 图标（归档域
-           统一用 Archive 归档箱——入口 / 悬停归档钮 / 两处空态同族；「标记完成」用对勾系
-           CircleCheck 区分「做完了 vs 收起来」）+ archiveCount 角标（count 0 隐藏，按钮仍可点
-           ——空归档列表有引导空态）。 -->
-      <div class="ml-auto flex items-center gap-[2px]">
-        <Button
-          variant="ghost"
-          size="icon"
-          data-testid="project-add-btn"
-          class="grid size-[24px] place-items-center rounded-[var(--radius-xs)] p-0 text-neutral-dim transition-colors hover:bg-surface-hover hover:text-neutral-fg disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-neutral-dim [&_svg]:size-[13px]"
-          :title="editingEnabled ? t('sidebar.projectGroup.newProject') : t('sidebar.sessionList.projectEditDisabledHint')"
-          :aria-label="t('sidebar.projectGroup.newProject')" :disabled="!editingEnabled"
-          @click="startCreate"
-        >
-          <Plus :stroke-width="1.8" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          data-testid="sidebar-archive-entry-btn"
-          class="relative grid size-[24px] place-items-center rounded-[var(--radius-xs)] p-0 text-neutral-dim transition-colors hover:bg-surface-hover hover:text-neutral-fg [&_svg]:size-[13px]"
-          :title="t('sidebar.archiveEntry.title', { count: archiveCount })"
-          :aria-label="t('sidebar.archiveEntry.title', { count: archiveCount })"
-          @click="emit('openArchives')"
-        >
-          <Archive :stroke-width="1.8" />
-          <!-- 计数角标（D10：count 0 隐藏；>0 右上角 accent 圆形 mono 小字，99 封顶） -->
-          <span
-            v-if="archiveCount > 0"
-            data-testid="sidebar-archive-count-badge"
-            class="absolute -right-[3px] -top-[3px] grid min-w-[14px] place-items-center rounded-full bg-accent px-[3px] font-mono text-[9px] leading-[14px] text-accent-fg"
-          >{{ archiveCount > 99 ? '99+' : archiveCount }}</span>
-        </Button>
-        <!-- A/C 双段图标开关（demo .mode-seg：surface 槽 + hairline 边 + 26×24 钮 + 13px 图标）：
-             选中态 = demo Tier A 状态件范式（--sel-bg accent tint 底 + fg 字 + 1px --sel-edge 内描边）。
-             title 承载模式名（无 label 文字，demo 悬停提示范式）。 -->
-        <div class="flex items-center rounded-sm border border-hairline bg-surface p-[2px]">
-          <Button
-            variant="ghost"
-            size="icon"
-            data-testid="session-mode-flat"
-            class="h-[24px] w-[26px] rounded-[var(--radius-xs)] p-0"
-            :class="mode === 'flat'
-              ? 'bg-[var(--sel-bg)] text-neutral-fg [font-weight:var(--fw-mid)] shadow-[inset_0_0_0_1px_var(--sel-edge)] hover:bg-[var(--sel-bg)] hover:text-neutral-fg'
-              : 'bg-transparent text-neutral-dim hover:bg-transparent hover:text-neutral-fg'"
-            :title="t('sidebar.sessionList.modeFlat')"
-            :aria-pressed="mode === 'flat'"
-            @click="setMode('flat')"
-          >
-            <List class="size-[13px]" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            data-testid="session-mode-groups"
-            class="h-[24px] w-[26px] rounded-[var(--radius-xs)] p-0"
-            :class="mode === 'groups'
-              ? 'bg-[var(--sel-bg)] text-neutral-fg [font-weight:var(--fw-mid)] shadow-[inset_0_0_0_1px_var(--sel-edge)] hover:bg-[var(--sel-bg)] hover:text-neutral-fg'
-              : 'bg-transparent text-neutral-dim hover:bg-transparent hover:text-neutral-fg'"
-            :title="t('sidebar.sessionList.modeGroup')"
-            :aria-pressed="mode === 'groups'"
-            @click="setMode('groups')"
-          >
-            <Folder class="size-[13px]" :stroke-width="1.8" />
-          </Button>
-        </div>
-      </div>
-    </div>
+    <!-- 区头抽 SessionListHeader（demo .sess-head 规格与工具组注释随组件走）：
+         标题/计数 + 新建项目「+」 + 归档入口 + A/C 双段模式开关。固定于 ScrollArea 外
+         （不随列表滚动）。 -->
+    <SessionListHeader
+      :total-count="totalCount"
+      :archive-count="archiveCount"
+      :mode="mode"
+      :editing-enabled="editingEnabled"
+      @start-create="startCreate"
+      @set-mode="setMode"
+      @open-archives="emit('openArchives')"
+    />
 
     <ScrollArea class="min-h-0 flex-1">
     <div class="flex flex-col pt-0.5 pb-2 pl-1.5">
@@ -356,11 +291,9 @@
 <script setup lang="ts">
 import type { SessionGroup, SessionSummary } from '@taiji/shared'
 import type { DerivedStatus } from '@/types'
-import { computed, onBeforeUnmount, provide, ref, watch, type Ref } from 'vue'
+import { computed, onBeforeUnmount, provide, ref, type Ref } from 'vue'
 import { useEventListener } from '@vueuse/core'
-import { Plus, Folder, List, Archive } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ConfirmDialog } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -368,10 +301,12 @@ import { isSessionCompleted } from '@/composables/logic/sessionStatus'
 import { registerModalSurface } from '@/composables/features/app/modal-surface-registry'
 import { useProjectStore } from '@/stores/project'
 import { useProjectGroups, type ProjectGroupVM } from '@/composables/features/sidebar/useProjectGroups'
+import { useFolderDeleteConfirm } from '@/composables/features/sidebar/useFolderDeleteConfirm'
 import { useSidebarSessionMode } from '@/composables/features/sidebar/use-sidebar-session-mode'
 import ProjectGroup from './ProjectGroup.vue'
 import DefaultProjectHead from './DefaultProjectHead.vue'
 import ProjectLoadStatus from './ProjectLoadStatus.vue'
+import SessionListHeader from './SessionListHeader.vue'
 import SessionDirLabel from './SessionDirLabel.vue'
 import SessionItem from './SessionItem.vue'
 
@@ -485,18 +420,6 @@ function handoffTargetLabelOf(s: SessionSummary): string {
   return target?.label ?? ''
 }
 
-/**
- * folder 删除可用性（review MF-2，项目分组版）：该 cwd 在**此项目分组内**的可见 session 数
- * < 该 cwd 全量 session 数时隐藏删除按钮。removeByCwd 是 cwd 全量删除（项目无关）——
- * 同一 cwd 的 session 可散布在多个项目分组（按 session.projectId 逐条切分），任一分组内
- * 只显示子集；仅当某分组恰好包含该 cwd 全量会话时点删除才不会连带删掉不可见 session。
- */
-function isFolderDeleteAvailable(zone: Pick<ProjectGroupVM, 'dirs'>, cwd: string): boolean {
-  const total = props.groups.find((g) => g.cwd === cwd)?.sessions.length ?? 0
-  const visible = zone.dirs.find((g) => g.cwd === cwd)?.sessions.length ?? 0
-  return total > 0 && total === visible
-}
-
 /** 单一 Esc 监听器——避免每个 SessionItem 各自注册 window keydown listener（N 项 N 个监听器）。
  *  SessionItem inject 后 watch escCount 变化清自身确认态。 */
 const escCount = ref(0)
@@ -512,23 +435,16 @@ const itemConfirmingSet = new Set<Ref<boolean>>()
 provide('sessionItemConfirmingSet', itemConfirmingSet)
 
 /**
- * folder 维度删除的两段式确认态（与 SessionItem.confirming 同范式）。
- * 存当前确认的 cwd（同时只允许一个 folder 处于确认态）；二次点击同 cwd 才 emit deleteFolder。
- * Esc / mouseleave / 点击外部复位。
+ * folder 删除两段式确认编排（useFolderDeleteConfirm，从本组件提取）：确认态本体 +
+ * Esc/mouseleave/点击外部三复位入口 + MF-2 删除可用性检查。删除动作经回调回到本组件
+ * emit deleteFolder；「escCount watch 复位」与后代 SessionItem 清确认态共享一次 Esc。
  */
-const folderConfirmingCwd = ref<string | null>(null)
-function onFolderRemoveClick(cwd: string): void {
-  if (folderConfirmingCwd.value !== cwd) {
-    folderConfirmingCwd.value = cwd
-    return
-  }
-  folderConfirmingCwd.value = null
-  emit('deleteFolder', cwd)
-}
-/** 鼠标离开 folder 按钮区域时复位确认态（与 Esc 同源，防止误确认） */
-function onFolderMouseLeave(cwd: string): void {
-  if (folderConfirmingCwd.value === cwd) folderConfirmingCwd.value = null
-}
+const { folderConfirmingCwd, onFolderRemoveClick, onFolderMouseLeave, isFolderDeleteAvailable } =
+  useFolderDeleteConfirm({
+    groups: () => props.groups,
+    escCount,
+    onDeleteFolder: (cwd) => emit('deleteFolder', cwd),
+  })
 
 // ── A/C 双模式（N8 延续：flat = 锚定聚焦 / groups = 目录浏览态；类型来自 useProjectGroups）──
 
@@ -619,26 +535,6 @@ const namedGroups = computed(() => projectGroups.value.filter((pg) => !pg.isDefa
  * 两个来源都提供 dirs（目录模式渲染源）/ items（平铺模式渲染源），模板按 mode 取用。
  */
 const sessionBodyZone = computed(() => degradedZone.value ?? defaultZone.value)
-
-watch(escCount, () => {
-  if (folderConfirmingCwd.value) folderConfirmingCwd.value = null
-})
-
-/**
- * 点击 folder 确认按钮外部时复位确认态（与 SessionItem.onClickOutside 同范式）。
- * folder 标题行处于 v-for 循环（多个 folder），不便逐项挂 onClickOutside ref，故用
- * 单一 window pointerdown 监听（pointerdown 先于 click，比 click 更早收尾确认态）。
- *
- * 同级 folder 按钮冲突规避：点击另一 folder 的删除按钮时，该按钮的 @click.stop 会切
- * folderConfirmingCwd 到新 cwd。若此处无条件复位会覆盖新值。故只在「点击目标不在任何
- * folder 删除按钮内」时复位——新 cwd 的切换由 onFolderRemoveClick 自行处理，互不干扰。
- */
-useEventListener(window, 'pointerdown', (e: PointerEvent) => {
-  if (!folderConfirmingCwd.value) return
-  const target = e.target as Element | null
-  if (target?.closest('[data-testid="folder-delete-btn"]')) return
-  folderConfirmingCwd.value = null
-})
 
 /** 删除确认态聚合谓词（modal-surface-registry spec §6.7 后行档开合态绑定源 = 确认态本体）：
  *  N 个 SessionItem 后代确认态 与 folderConfirmingCwd。任一确认态开着 ⇒ 入聚合让位族
