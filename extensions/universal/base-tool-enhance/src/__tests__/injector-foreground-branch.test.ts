@@ -38,6 +38,7 @@ import {
 	registerConvertedTask,
 	resolveFgWrapScriptPath,
 } from "../bash-tool.ts";
+import { clearExitWatchesForTest } from "../background/exit-watch.ts";
 import { refreshPiReference, resetNotifyForTest } from "../background/notify.ts";
 import { getRegistryPath, readRegistry } from "../background/registry.ts";
 import { clearTaskStoreForTest, countActiveTasks, getTask, getAllTasks, registerSpawnedTask } from "../background/task-store.ts";
@@ -154,7 +155,7 @@ function wrapperMarkerLine(taskId: string): string {
 	return (
 		`[TAIJI-FG-BG] Command moved to background after 600s without output — still running, NOT finished (no exit code yet). ` +
 		`Full log: ${join(TASKS_DIR, `${taskId}.log`)} Check: bash_output {task_id:"${taskId}"}; ` +
-		`terminate: bash_kill {task_id:"${taskId}"}. No completion notification is delivered for converted tasks — poll progress with bash_output instead of waiting.`
+		`terminate: bash_kill {task_id:"${taskId}"}. It will notify on completion — DO NOT bash sleep while waiting.`
 	);
 }
 
@@ -254,6 +255,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	clearExitWatchesForTest();
 	killLeftoverTasks();
 	clearTaskStoreForTest();
 	resetNotifyForTest();
@@ -532,7 +534,7 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)("settle by pidfile (断言 #4)", () 
 		refreshPiReference(pi as unknown as ExtensionAPI);
 		// wrapper 已打印标记行（结果含 [TAIJI-FG-BG]）+ 命令恰在收尾窗口死亡
 		// （fixture dead：pidfile 指向已收殓的 pid）——修复前判死即清理三文件：
-		// 标记行的查询/终止指引（task_id 锚）照常成立、
+		// 标记行的 "It will notify on completion" 承诺落空（无登记无守望无通知）、
 		// 标记行引用的日志路径也被删
 		officialRunsFixture(
 			"dead",

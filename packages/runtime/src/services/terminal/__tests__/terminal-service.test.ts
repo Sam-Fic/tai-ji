@@ -281,7 +281,7 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)('TerminalService', () => {
     vi.restoreAllMocks()
   })
 
-  it('RT8-10-K1: kill 后 SIGTERM 未退出（5s），升级 SIGKILL', async () => {
+  it('RT8-10-K1: kill 只发 SIGTERM，无升级兜底（ADR-0188 等待机制删除）', async () => {
     vi.useFakeTimers()
     try {
       const { publish } = createPublishCollector()
@@ -290,14 +290,10 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)('TerminalService', () => {
       const pty = mockPtys[0]!
 
       svc.kill('s-k1', terminalId)
-      expect(pty.kill).toHaveBeenCalledWith() // 先 SIGTERM（默认信号）
+      expect(pty.kill).toHaveBeenCalledWith() // SIGTERM（默认信号）
 
-      vi.advanceTimersByTime(4999)
-      expect(pty.kill).toHaveBeenCalledTimes(1) // 升级窗口内未触发
-
-      vi.advanceTimersByTime(1)
-      expect(pty.kill).toHaveBeenCalledTimes(2)
-      expect(pty.kill).toHaveBeenLastCalledWith('SIGKILL')
+      vi.advanceTimersByTime(6000)
+      expect(pty.kill).toHaveBeenCalledTimes(1) // 无升级 timer：SIGTERM 后无 SIGKILL 兜底
     } finally {
       vi.useRealTimers()
     }
@@ -342,10 +338,10 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)('TerminalService', () => {
   })
 
   /**
-   * 升级链共形装置（RT8-10-K4 / TS-DA3 共享）：fake timers + 单 PTY 服务，执行 destroy
-   * 动作后推进升级 timer（5000ms），断言两段 kill 终态 SIGKILL。
+   * 销毁动作共形装置（RT8-10-K4 / TS-DA3 共享）：fake timers + 单 PTY 服务，执行 destroy
+   * 动作后推进时间，断言只有初始 SIGTERM、无升级链（ADR-0188 等待机制删除后的终态）。
    */
-  async function expectUpgradeToSigkillAfterDestroy(sid: string, destroy: (svc: InstanceType<typeof TerminalService>) => void) {
+  async function expectSingleSigtermAfterDestroy(sid: string, destroy: (svc: InstanceType<typeof TerminalService>) => void) {
     vi.useFakeTimers()
     try {
       const { publish } = createPublishCollector()
@@ -353,17 +349,17 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)('TerminalService', () => {
       await svc.spawn(sid, undefined, 80, 24)
       const pty = mockPtys[0]!
       destroy(svc)
-      vi.advanceTimersByTime(5000)
-      expect(pty.kill).toHaveBeenCalledTimes(2)
-      expect(pty.kill).toHaveBeenLastCalledWith('SIGKILL')
+      vi.advanceTimersByTime(6000)
+      expect(pty.kill).toHaveBeenCalledTimes(1)
+      expect(pty.kill).toHaveBeenCalledWith() // 只有初始 SIGTERM，无 SIGKILL 升级
     } finally {
       vi.useRealTimers()
     }
   }
 
-  it('RT8-10-K4: destroySessionPties 后 SIGTERM 未退出，升级 timer 无条件 SIGKILL（untracked）', async () => {
-    // destroySessionPties 立即清 ptyMap（升级 timer 不靠 map 判活——session 销毁路径同 sid 不重 spawn）
-    await expectUpgradeToSigkillAfterDestroy('s-k4', (svc) => svc.destroySessionPties('s-k4'))
+  it('RT8-10-K4: destroySessionPties 只发初始 SIGTERM（untracked 路径无升级兜底）', async () => {
+    // destroySessionPties 立即清 ptyMap（session 销毁路径同 sid 不重 spawn）
+    await expectSingleSigtermAfterDestroy('s-k4', (svc) => svc.destroySessionPties('s-k4'))
   })
 
   it('TS-DA1: destroyAllPties 全量 kill + 清 ptyMap（runtime shutdown 链显式收尾）', async () => {
@@ -390,19 +386,19 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)('TerminalService', () => {
 
       svc.destroyAllPties()
       svc.destroyAllPties() // 重入：空表 no-op，不重复 kill
-      vi.advanceTimersByTime(6000) // 升级链照常跑完（第一条路径的 timer）
-      expect(pty.kill).toHaveBeenCalledTimes(2) // SIGTERM + SIGKILL，无第三次
+      vi.advanceTimersByTime(6000)
+      expect(pty.kill).toHaveBeenCalledTimes(1) // 只有 SIGTERM；重入零额外 kill（无升级链）
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('TS-DA3: destroyAllPties 后 PTY 未退出，升级 timer 无条件 SIGKILL（同 destroySessionPties 语义）', async () => {
-    await expectUpgradeToSigkillAfterDestroy('s-da3', (svc) => svc.destroyAllPties())
+  it('TS-DA3: destroyAllPties 只发初始 SIGTERM（同 destroySessionPties 终态语义）', async () => {
+    await expectSingleSigtermAfterDestroy('s-da3', (svc) => svc.destroyAllPties())
   })
 
-  it('TS-11: destroySessionPties 时 kill 已抛错（进程已死竞态）：console.error 留痕 + ptyMap 清理 + 升级链照跑', async () => {
-    // destroyInstance 合并主体后的 catch 分支：kill 抛错不阻断调用方（unmap + untracked 升级照常）。
+  it('TS-11: destroySessionPties 时 kill 已抛错（进程已死竞态）：console.error 留痕 + ptyMap 清理', async () => {
+    // destroyInstance 合并主体后的 catch 分支：kill 抛错不阻断调用方（unmap 照常）。
     vi.useFakeTimers()
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
@@ -419,12 +415,8 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)('TerminalService', () => {
       // ptyMap 已清：write 按多实例路由语义 fail-fast（unknown_terminal_id），不触 pty.write
       expect(() => svc.write('s-kf', 'term:s-kf:1', 'ls\n')).toThrowError(expect.objectContaining({ code: 'unknown_terminal_id' }))
       expect(pty.write).not.toHaveBeenCalled()
-      // untracked 升级 timer 照常（SIGTERM 后未退的升级兜底不因首杀失败而缺席）：
-      // SIGKILL 再抛错落升级 catch（console.error 第二条），不留静默断链
-      vi.advanceTimersByTime(5000)
-      expect(pty.kill).toHaveBeenLastCalledWith('SIGKILL')
-      expect(errorSpy).toHaveBeenCalledTimes(2)
-      expect(String(errorSpy.mock.calls[1]![0])).toContain('SIGKILL 升级失败')
+      vi.advanceTimersByTime(6000)
+      expect(errorSpy).toHaveBeenCalledTimes(1) // 无升级链：kill 抛错留痕恒一条
     } finally {
       vi.useRealTimers()
     }

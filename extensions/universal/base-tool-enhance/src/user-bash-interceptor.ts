@@ -17,8 +17,8 @@
  *
  * 复用先例交付设施、零重建（U2 职责边界）：wrapper 脚本（bin/taiji-fg-wrap，经
  * resolveFgWrapScriptPath）、登记链（registerConvertedTask——单例表 + registry +
- * pending:register + 超时接线，bash-tool.ts 导出面）。转后台任务无完成感知通道，
- * 不投递完成通知。
+ * pending:register + attachExitWatch 守望 + 超时接线，bash-tool.ts 导出面）、退出
+ * 感知守望与完成通知链（exit-watch.ts / notify.ts 先例交付，登记后自动接管）。
  * cmd.sh / 包装参数构造在本文件自含（bash-tool.ts 的 prepareForegroundWrap 为私有
  * 函数且不在本单元 territory；构造形态与先例逐段对齐——taskId 三文件同目录同命名、
  * 命令原文写 cmd.sh 零转义，差异只有 spawn 形态：本模块直接 spawn wrapper 参数数组
@@ -90,7 +90,7 @@ const MARKER_DETECT_WINDOW = 8192;
  */
 const USER_MARKER_NOTE =
 	`${FG_BG_MARKER_TAG} 已转后台：命令仍在运行、尚未完成（暂无退出码）。` +
-	`可在侧边栏「后台任务」中查看输出或停止；转后台任务不自动推送完成通知，需手动查看输出。`;
+	`可在侧边栏「后台任务」中查看输出或停止；完成后会在对话流通知。`;
 
 /** 包装命令执行的三文件与登记参数（与 bash-tool.ts ForegroundWrapPlan 同构；taskId 预生成——登记发生在收尾，id 必须事前已定）。 */
 interface UserBashWrapPlan { // oe-exempt:20261101:framework:pi user_bash 管线的本扩展侧包装契约（对端消费 = pi 官方组装层，跨包不可达），载体关系登记文件头

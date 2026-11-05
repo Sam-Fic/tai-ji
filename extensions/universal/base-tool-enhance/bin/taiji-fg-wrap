@@ -27,8 +27,7 @@
 # 标记协议（§5 部件 3，三方契约逐字实现，主要消费者 = 模型）：
 #   [TAIJI-FG-BG] Command moved to background after Ns without output — still running,
 #   NOT finished (no exit code yet). Full log: <path> Check: bash_output {task_id:"<id>"};
-#   terminate: bash_kill {task_id:"<id>"}. No completion notification is delivered
-#   for converted tasks — poll progress with bash_output instead of waiting.
+#   terminate: bash_kill {task_id:"<id>"}. It will notify on completion — DO NOT bash
 #   sleep while waiting.
 #
 # 已接受代价（设计登记，不加防）：spawn 与写 pidfile 之间的毫秒级窗口内本脚本被杀时
@@ -192,7 +191,7 @@ while true; do
 	# B3：空闲累积超阈值（真实时钟静默时长，非轮次计数）→ 不杀命令，打印标记行，exit 0
 	if [ $((now - last_byte_ms)) -ge "$idle_threshold_ms" ]; then
 		elapsed_s=$(( (now - last_byte_ms) / 1000 ))
-		printf '[TAIJI-FG-BG] Command moved to background after %ds without output — still running, NOT finished (no exit code yet). Full log: %s Check: bash_output {task_id:"%s"}; terminate: bash_kill {task_id:"%s"}. No completion notification is delivered for converted tasks — poll progress with bash_output instead of waiting.\n' "$elapsed_s" "$LOG_PATH" "$TASK_ID" "$TASK_ID"
+		printf '[TAIJI-FG-BG] Command moved to background after %ds without output — still running, NOT finished (no exit code yet). Full log: %s Check: bash_output {task_id:"%s"}; terminate: bash_kill {task_id:"%s"}. It will notify on completion — DO NOT bash sleep while waiting.\n' "$elapsed_s" "$LOG_PATH" "$TASK_ID" "$TASK_ID"
 		exit 0
 	fi
 done

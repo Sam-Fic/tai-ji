@@ -108,17 +108,18 @@ export function initMainLogger(options: MainLoggerInitOptions = {}): void {
 }
 
 /**
- * 关闭 main 日志 writer（main.ts before-quit 调用）。
+ * 关闭 main 日志 writer（main.ts before-quit 调用，**必须 await**）。
  *
- * 先停定时器（防 close 窗口内再触发写入），再等待进行中的轮转完成，最后 end+destroy
- * 主流（流关闭等待删除——不等 flush 回执；缓冲尾部丢失 = 硬崩溃同档，已声明可接受）。
- * 幂等：close 后写入/再次 close 均 no-op。
+ * 先停定时器（防 close 窗口内再触发写入），再等待进行中的轮转完成，最后 end 主流并等
+ * flush——之后调用方才可 app.quit()（丢缓冲尾部几行 = 硬崩溃同档，已声明可接受；
+ * 正常 quit 路径不丢）。幂等：close 后写入/再次 close 均 no-op。
  */
 export async function closeMainLogger(): Promise<void> {
   stopRetention?.()
   stopRetention = undefined
   if (rotationInFlight) await rotationInFlight
   const stream = mainStream
+  const file = mainStreamFile
   mainStream = undefined
   mainStreamFile = undefined
   mainBytesWritten = 0
@@ -126,7 +127,7 @@ export async function closeMainLogger(): Promise<void> {
   currentLevel = undefined
   logsDir = undefined
   currentDate = ''
-  endAndDestroy(stream)
+  await endAndAwait(stream, `main-shutdown:${file ?? 'unnamed'}`)
 }
 
 // ── 显式 logger 出口（u2/u3 落盘消费的 API 面）─────────────────────
@@ -223,7 +224,7 @@ function rotateMain(nextToday: string, renameOld: boolean): Promise<void> {
   mainStreamFile = undefined
   mainBytesWritten = 0
   rotationInFlight = (async () => {
-    endAndDestroy(oldStream)
+    await endAndAwait(oldStream, `main-rotation:${oldFile ?? 'unnamed'}`)
     if (renameOld && oldFile) {
       try {
         renameSync(oldFile, `${oldFile}.1`)
@@ -307,13 +308,30 @@ function existsSyncSafe(path: string): boolean {
 }
 
 /**
- * end 写流并立即 destroy（时间机制删除裁决：流关闭等待删除——不等 'close' 回执，
- * [HISTORICAL] 原 5s 超时兜底随之退役）。destroy 同步封闭写入侧与 fd——rename 落在
- * fd 已释放之后，无「在途写落进已改名 inode」的孤儿写入窗；在途缓冲尾部丢失
- * （主日志为排查证据，可接受）。永不抛。
+ * end 写流并等真正关闭（'close'：fd 已释放、缓冲已 flush）。rename 前必须有「无在途
+ * 写」保证——end() 后立即 destroy() 会中止 open/flush 流程（文件可能尚未创建、缓冲
+ * 丢弃），紧随的 renameSync ENOENT 被吞后滚动永久丢失（2026-11-05 CI 实测）。永不
+ * reject；等待本身是事件驱动的顺序约束（close 回调），无超时降级——fs 挂起时轮转
+ * 挂起为 ADR-0188 裁决接受的代价（原 5s 超时降级随时间阈值机制删除退役）。
+ * 对齐 runtime stream-end-await.ts（含 once 链清理语义）。
  */
-function endAndDestroy(stream: WriteStream | undefined): void {
-  if (!stream || stream.closed) return
+function endAndAwait(stream: WriteStream | undefined, label: string): Promise<void> {
+  void label
+  if (!stream || stream.closed) return Promise.resolve()
   if (!stream.writableEnded) stream.end()
-  stream.destroy()
+  if (stream.closed) return Promise.resolve() // 同步关闭路径（如测试用 fake 流）
+  return new Promise<void>((resolve) => {
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
+      stream.removeListener('close', onClose)
+      stream.removeListener('error', onError)
+      resolve()
+    }
+    const onClose = () => finish()
+    const onError = () => finish()
+    stream.once('close', onClose)
+    stream.once('error', onError)
+  })
 }
