@@ -44,8 +44,9 @@
 
   ── badge fallback 链（D4 两档；composer-tray-protocol D8 第三档退役）──
   `meta.badge` → `meta.progress.label` → 无（String(progress.current) 第三档退役——现有
-  推送方零消费者：scheduler 显式推 badge / todo 无 meta / goal 走 progress.label /
-  subagent-workflow 两档同推；双缺不渲染角标 = 运行数 0 无信息量不占视觉）
+  推送方零消费者：scheduler 显式推 badge / todo 显式推 badge（恒在场走第一档，不依赖
+  第三档）/ goal 走 progress.label / subagent-workflow 两档同推；双缺不渲染角标 = 运行数
+  0 无信息量不占视觉）
   超长 truncate 至 BADGE_MAX_CHARS 字符，全文进按钮 aria-label（§3.5）与悬停 title（D8）。
 
   ── 悬停 title（D8：推翻 2026-10-19「原生 title 退役」裁决）──
