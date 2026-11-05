@@ -303,6 +303,26 @@ describe('Project store: 编辑动作命令化（§6.6）', () => {
     expect(mockSetActive).toHaveBeenCalledWith(DEFAULT_PROJECT_ID, 2) // 携带第一条回执推进的水位
   })
 
+  it('addProject 返回值 = 回执 activeProjectId 直传：连续快速新建各自拿对 id（不差分推断）', async () => {
+    const projects = [makeProject(DEFAULT_PROJECT_ID, '')]
+    const store = await loadTo(projects, DEFAULT_PROJECT_ID, 1)
+
+    // 第二条 addProject 在第一条回执落地前入队（同窗口快速连续新建）：若按入队前快照
+    // 差分推断新 id，第二条会错拿第一条的新增项（数组序中第一个新增）——回执直传无
+    // 时序假设，各命令回执自带 activeProjectId
+    let resolveFirst!: (v: ReturnType<typeof makeCommandReply>) => void
+    mockCreate.mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve }))
+    const first = store.addProject('First')
+    mockCreate.mockResolvedValueOnce(
+      makeCommandReply([...projects, makeProject('proj-first', 'First'), makeProject('proj-second', 'Second')], 'proj-second', 3),
+    )
+    const second = store.addProject('Second')
+
+    resolveFirst(makeCommandReply([...projects, makeProject('proj-first', 'First')], 'proj-first', 2))
+    await expect(first).resolves.toBe('proj-first')
+    await expect(second).resolves.toBe('proj-second')
+  })
+
   it('无有效数据形态命令拒绝（§6.9 store 层保底）：未 loaded 不发命令、reject 出声', async () => {
     const store = useProjectStore()
     await expect(store.addProject('X')).rejects.toThrow('not loaded')

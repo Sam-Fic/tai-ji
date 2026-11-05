@@ -331,15 +331,15 @@ export const useProjectStore = defineStore('project', () => {
   /**
    * 新建 project（runtime 生成 id 并设为活跃；空名不动作——与旧本地版守卫同语义，
    * 把空名挡在命令之前）。resolve = 回执已提交（activeProjectId 已指向新项目），值 =
-   * 新项目 id（回执视图 diff 新增项；解析不出时 null——调用方按无新组处理）。组展开
-   * 态默认收起（sidebar-group-state 语义），新组展开由调用方按返回 id 显式驱动（空态
-   * 引导可见性依赖它）。
+   * 新项目 id（回执 activeProjectId 直传——runtime createProject 恒设新 id 为活跃，
+   * 事实在产生处即得，无集合差分推断的时序假设；空名不动作时 null——调用方按无新组
+   * 处理）。组展开态默认收起（sidebar-group-state 语义），新组展开由调用方按返回 id
+   * 显式驱动（空态引导可见性依赖它）。
    */
   async function addProject(name: string): Promise<string | null> {
     if (!name.trim()) return null
-    const before = new Set(projects.value.map((p) => p.id))
-    await runCommand((revision) => projectApi.createProject(name.trim(), revision))
-    return projects.value.find((p) => !before.has(p.id))?.id ?? null
+    const reply = await runCommand((revision) => projectApi.createProject(name.trim(), revision))
+    return reply.state.activeProjectId
   }
 
   /**
