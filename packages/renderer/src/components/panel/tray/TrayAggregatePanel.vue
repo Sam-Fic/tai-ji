@@ -99,7 +99,7 @@ import TrayCanvasPanel from '@/components/panel/tray/TrayCanvasPanel.vue'
 import TrayNativePanel from '@/components/panel/tray/TrayNativePanel.vue'
 import TraySessionPanel from '@/components/panel/tray/TraySessionPanel.vue'
 import TrayWidgetPanel from '@/components/panel/tray/TrayWidgetPanel.vue'
-import { findTrayWidgetDeclaration } from '@/components/panel/tray/use-tray-widget-declaration'
+import { findTrayWidgetDeclaration, resolveTrayWidgetTitle } from '@/components/panel/tray/use-tray-widget-declaration'
 import type { TrayBuiltinKind } from '@/components/panel/tray/useTrayCounts'
 
 /** 单个 built-in 类别段（kind / 图标 / 进行中与全量计数） */
@@ -134,14 +134,17 @@ const { t } = useI18n()
 const SEGMENT_HEIGHT_CLASS = 'h-[190px]'
 
 /**
- * widget 段头标题（D7 单一兜底链与按钮/面板同源）：声明 title ?? meta.title ?? viewId。
- * 逐条取数（条目数个位级，O(n×m) 快照扫描无热路径压力）经共用谓词 findTrayWidgetDeclaration，
- * 不在本组件复制第二份 placement/viewId 过滤（谓词单点 = use-tray-widget-declaration）。
+ * widget 段头标题（D7 单一兜底链与按钮/面板同源）：链本体 = resolveTrayWidgetTitle
+ * （use-tray-widget-declaration 唯一实现，branch-review R1 dmg-r1-3 收编——本组件此前
+ * 逐行复写第二份副本）。逐条取数（条目数个位级，O(n×m) 快照扫描无热路径压力）经共用
+ * 谓词 findTrayWidgetDeclaration，不在本组件复制第二份 placement/viewId 过滤（谓词
+ * 单点 = use-tray-widget-declaration）。
  */
 function widgetTitleOf(widget: TrayAggregateWidget): string {
-  const declared = findTrayWidgetDeclaration(widget.viewId, widget.entry.pluginId)?.title
-  if (declared !== undefined && declared.trim() !== '') return declared
-  const title = widget.entry.meta?.title
-  return title !== undefined && title.trim() !== '' ? title : widget.viewId
+  return resolveTrayWidgetTitle(
+    findTrayWidgetDeclaration(widget.viewId, widget.entry.pluginId),
+    widget.entry.meta?.title,
+    widget.viewId,
+  )
 }
 </script>

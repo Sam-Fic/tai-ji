@@ -1803,6 +1803,71 @@ describe("view-host-store", () => {
         expect(view!.meta).toBeUndefined()
       })
 
+      // ── 锚字段级归一化（branch-review R1 dmg-r1-1）：任一锚命中即缓存整条 meta，
+      // 但脏锚字段剥除——入缓存 meta 的 title/badge 恒为 string、status 恒在枚举内、
+      // progress 恒为非数组对象，托盘标题链 meta.title.trim() 消费点不再遇非串抛
+      // TypeError 中断渲染。──
+
+      it('badge 合法 × title 非串（脏形态）→ meta 入缓存但 title 键剥除', () => {
+        const { bus, store } = makeStore()
+        bus.emit({
+          kind: 'extension-widget',
+          sessionId: 's1',
+          widget: { viewId: 'w', pluginId: '', guiTree: [{ type: 'ansi-text', props: { lines: [] } }], meta: { title: 42, badge: '2' } },
+        })
+        const meta = store.getView(SESSION_SCOPE, 'w')!.meta
+        expect(meta).toBeDefined()
+        expect(meta!.badge).toBe('2')
+        expect('title' in meta!).toBe(false)
+      })
+
+      it('title 合法 × status 超枚举 / progress 数组 → 脏键剥除（枚举词表单点消费 WIDGET_META_STATUS_VALUES）', () => {
+        const { bus, store } = makeStore()
+        bus.emit({
+          kind: 'extension-widget',
+          sessionId: 's1',
+          widget: { viewId: 'w', pluginId: '', guiTree: [{ type: 'ansi-text', props: { lines: [] } }], meta: { title: 'T', status: 'bogus', progress: ['x'] } },
+        })
+        const meta = store.getView(SESSION_SCOPE, 'w')!.meta
+        expect(meta).toBeDefined()
+        expect(meta!.title).toBe('T')
+        expect('status' in meta!).toBe(false)
+        expect('progress' in meta!).toBe(false)
+      })
+
+      it('progress 数组为唯一疑似锚 → 无合法锚整条丢弃（缓存条目无 meta 键）', () => {
+        const { bus, store } = makeStore()
+        bus.emit({
+          kind: 'extension-widget',
+          sessionId: 's1',
+          widget: { viewId: 'w', pluginId: '', guiTree: [{ type: 'ansi-text', props: { lines: [] } }], meta: { progress: ['x'] } },
+        })
+        expect(store.getView(SESSION_SCOPE, 'w')!.meta).toBeUndefined()
+      })
+
+      it('四枚举 status 全部放行（词表接线回归：枚举内值不被归一化误剥）', () => {
+        const { bus, store } = makeStore()
+        const statuses = ['running', 'done', 'failed', 'idle'] as const
+        for (const status of statuses) {
+          bus.emit({
+            kind: 'extension-widget',
+            sessionId: 's1',
+            widget: { viewId: 'w', pluginId: '', guiTree: [{ type: 'ansi-text', props: { lines: [] } }], meta: { title: 'T', status } },
+          })
+          expect(store.getView(SESSION_SCOPE, 'w')!.meta).toEqual({ title: 'T', status })
+        }
+      })
+
+      it('归一化只剥锚字段族：icon 与未知键在锚合法时原样保留（消费端按需读契约不收窄）', () => {
+        const { bus, store } = makeStore()
+        bus.emit({
+          kind: 'extension-widget',
+          sessionId: 's1',
+          widget: { viewId: 'w', pluginId: '', guiTree: [{ type: 'ansi-text', props: { lines: [] } }], meta: { title: 'T', icon: { paths: ['M0'] }, unknownKey: 'keep' } },
+        })
+        expect(store.getView(SESSION_SCOPE, 'w')!.meta).toEqual({ title: 'T', icon: { paths: ['M0'] }, unknownKey: 'keep' })
+      })
+
       it('widget（string 行）→ 窄化为 ansi-text GuiComponent', () => {
         const { bus, store } = makeStore()
         bus.emit({ kind: 'extension-widget', sessionId: 's1', widget: { viewId: 'terminal', pluginId: '', guiTree: ['line1', 'line2'] } })

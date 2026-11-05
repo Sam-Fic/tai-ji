@@ -146,12 +146,54 @@ export interface GuiRenderResult {
   meta?: WidgetMeta
 }
 
+// ── WidgetMeta 枚举运行时词表（单点常量 + 编译期穷尽锚定）──
+
+/**
+ * head 状态点语义枚举（running=accent / done=success / failed=danger / idle=neutral 弱点）。
+ */
+export type WidgetMetaStatus = 'running' | 'done' | 'failed' | 'idle'
+
+/**
+ * 进度填充语义色枚举（预算阈值映射；progress-bar 原语的 severity 同值族）。
+ */
+export type WidgetMetaSeverity = 'ok' | 'warn' | 'danger'
+
+/**
+ * status 运行时词表（唯一权威单点）：键集被 `satisfies Record<WidgetMetaStatus, true>`
+ * 锚定为枚举全体成员——协议新增枚举值而漏登记本对象即编译红（反向：对象里的键漂离
+ * 枚举同样编译红）。此前 status/severity 运行时词表三处手抄（本文件内联字面量 /
+ * core view-host-store narrowMeta 内联比较 / runtime views-api 私有 Set），协议新增
+ * 枚举值漏改任一处即静默不一致（漏 runtime = 插件推新值被 INVALID_VIEW_META 误拒，
+ * 漏 core = 扩展推新值整条 meta 被窄化丢弃）；core 与 runtime 现经 barrel 消费本常量。
+ */
+const WIDGET_META_STATUS_VOCAB = {
+  running: true,
+  done: true,
+  failed: true,
+  idle: true,
+} satisfies Record<WidgetMetaStatus, true>
+
+/** severity 运行时词表（唯一权威单点，锚定机制同 WIDGET_META_STATUS_VOCAB）。 */
+const WIDGET_META_SEVERITY_VOCAB = {
+  ok: true,
+  warn: true,
+  danger: true,
+} satisfies Record<WidgetMetaSeverity, true>
+
+/** status 运行时词表视图（core narrowMeta / runtime assertValidViewMeta 的枚举校验消费）。 */
+export const WIDGET_META_STATUS_VALUES: readonly WidgetMetaStatus[] =
+  Object.keys(WIDGET_META_STATUS_VOCAB) as WidgetMetaStatus[]
+
+/** severity 运行时词表视图（消费方同上）。 */
+export const WIDGET_META_SEVERITY_VALUES: readonly WidgetMetaSeverity[] =
+  Object.keys(WIDGET_META_SEVERITY_VOCAB) as WidgetMetaSeverity[]
+
 /** widget 宿主元数据——head 渲染契约（title + 状态点 + 进度 + 折叠 chevron）。 */
 export interface WidgetMeta {
   /** head 标题（todo → "Todo"；goal → slug） */
   title: string
   /** head 状态点语义：running=accent / done=success / failed=danger / idle=neutral 弱点 */
-  status?: 'running' | 'done' | 'failed' | 'idle'
+  status?: WidgetMetaStatus
   /** head 进度（mini bar + 计数文本）；progress-bar 原语从 body 移入 head 的承载 */
   progress?: {
     /** fill 比例 = current/total */
@@ -161,7 +203,7 @@ export interface WidgetMeta {
      *  缺省 `${current}/${total}` */
     label?: string
     /** fill 语义色（预算阈值映射）；缺省按 meta.status（done→success，否则 accent） */
-    severity?: 'ok' | 'warn' | 'danger'
+    severity?: WidgetMetaSeverity
   }
   /**
    * 托盘 icon：icon key 字符串（宿主按 lucide 名解析）或自定义形状 `{ paths }`。

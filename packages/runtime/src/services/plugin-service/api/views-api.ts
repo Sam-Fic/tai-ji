@@ -13,6 +13,7 @@
  */
 
 import type { GuiComponent } from '@zhushanwen/extension-protocol'
+import { WIDGET_META_SEVERITY_VALUES, WIDGET_META_STATUS_VALUES } from '@zhushanwen/extension-protocol'
 import type { PluginRpcServer } from '../plugin-rpc-server.js'
 import type { PluginRpcClient } from '../plugin-rpc-client.js'
 import type { PluginViewMeta, PluginViewScope, PluginContributesView } from '@taiji/shared'
@@ -105,8 +106,17 @@ function resolveDeclaredPlacement(views: PluginContributesView[], viewId: string
   return undefined
 }
 
-const VIEW_META_STATUS_VALUES = new Set(['running', 'done', 'failed', 'idle'])
-const VIEW_META_SEVERITY_VALUES = new Set(['ok', 'warn', 'danger'])
+// meta 枚举词表（branch-review R1 dmg-r1-4 收敛）：单点 = extension-protocol
+// WIDGET_META_*_VALUES（协议类型与 core 渲染端窄化同源），本模块此前私有 Set 手抄
+// 已退役——协议新增枚举值漏改本模块的静默不一致从结构上消除。错误文案的枚举列举
+// 亦从同一常量派生（文案与判定不漂移）。
+const VIEW_META_STATUS_VALUES = new Set<string>(WIDGET_META_STATUS_VALUES)
+const VIEW_META_SEVERITY_VALUES = new Set<string>(WIDGET_META_SEVERITY_VALUES)
+
+/** 枚举词表 → 错误文案列举串（'a' | 'b' | 'c' 形态）。 */
+function enumVocabText(values: readonly string[]): string {
+  return values.map((v) => `'${v}'`).join(' | ')
+}
 
 /** meta 可选 string 字段校验（title / badge / progress.label 共用）：提供时必须是 string。 */
 function assertMetaStringField(obj: Record<string, unknown>, key: string, message: string): void {
@@ -146,7 +156,7 @@ function assertValidViewMetaProgress(progress: unknown): void {
     p,
     'severity',
     VIEW_META_SEVERITY_VALUES,
-    (received) => `Invalid meta.progress.severity: expected one of 'ok' | 'warn' | 'danger' but received (${received}).`,
+    (received) => `Invalid meta.progress.severity: expected one of ${enumVocabText(WIDGET_META_SEVERITY_VALUES)} but received (${received}).`,
   )
 }
 
@@ -172,7 +182,7 @@ function assertValidViewMeta(meta: unknown): void {
     obj,
     'status',
     VIEW_META_STATUS_VALUES,
-    (received) => `Invalid meta.status: expected one of 'running' | 'done' | 'failed' | 'idle' but received (${received}).`,
+    (received) => `Invalid meta.status: expected one of ${enumVocabText(WIDGET_META_STATUS_VALUES)} but received (${received}).`,
   )
   if (obj.progress !== undefined) assertValidViewMetaProgress(obj.progress)
 }

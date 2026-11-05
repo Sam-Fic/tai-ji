@@ -32,10 +32,13 @@ export type {
   TreeItem,
   TreeItemIcon,
   WidgetMeta,
+  WidgetMetaSeverity,
+  WidgetMetaStatus,
 } from './core/types'
 
 // ── core：通用常量 ──
 export { PROTOCOL_VERSION } from './core/types'
+export { WIDGET_META_STATUS_VALUES, WIDGET_META_SEVERITY_VALUES } from './core/types'
 export { GUI_WIDGET_MARKER, PLAN_REVIEW_MARKER, PERMISSION_APPROVAL_TITLE } from './core/markers'
 
 // ── core：通用 helper ──

@@ -11,9 +11,9 @@
  * 缺省（测试直挂等）只按 viewId 匹配）。扩展源条目（setWidget 通道）无清单声明，查不到
  * 声明 = undefined——消费端标题链自然落 meta.title ?? viewId（既有行为，零回退）。
  *
- * **本文件是托盘位声明匹配谓词的单份持有处**：按钮、面板、聚合段头三消费端共用，
- * 禁止在组件内各写一份 placement/viewId 过滤（谓词漂移 = 标题与面板标题不同源，
- * 违反 D7 同源契约）。
+ * **本文件是托盘位声明匹配谓词与标题兜底链的单份持有处**：按钮、面板、聚合段头三
+ * 消费端共用，禁止在组件内各写一份 placement/viewId 过滤或标题兜底链（谓词/链漂移
+ * = 标题与面板标题不同源，违反 D7 同源契约）。
  */
 import { computed, toValue } from 'vue'
 import type { ComputedRef, MaybeRefOrGetter } from 'vue'
@@ -66,10 +66,34 @@ function useTrayWidgetDeclaration(
 }
 
 /**
- * 托盘条目显示标题（D7 单一兜底链的组件侧单点，TrayWidgetButton / TrayWidgetPanel 共用）：
+ * 托盘条目显示标题兜底链本体（D7 单一兜底链的唯一实现，branch-review R1 dmg-r1-3
+ * 收编——此前 TrayWidgetButton / TrayWidgetPanel 侧 composable 与 TrayAggregatePanel
+ * widgetTitleOf 各持一份逐行等价副本，链升级时段头标题会静默漂移）：
  * 声明 title ?? meta.title（空串视为缺省）→ viewId（v1 旧 extension 与脏数据兜底——
- * 声明与 meta 双缺才出现 viewId 裸标题）。两消费端禁止各写一份兜底链（链漂移 = 按钮标题
+ * 声明与 meta 双缺才出现 viewId 裸标题）。三消费端（按钮 / 面板经 useTrayWidgetDisplayTitle，
+ * 聚合段头经 TrayAggregatePanel.widgetTitleOf）禁止各写一份兜底链（链漂移 = 按钮标题
  * 与面板标题不同源，违反 D7 同源契约）。
+ *
+ * 纯函数（无响应式依赖）：逐条取数场景直接调用；响应式包装见 useTrayWidgetDisplayTitle。
+ *
+ * @param declaration 声明切片（findTrayWidgetDeclaration 产物；未命中传 undefined）
+ * @param metaTitle 缓存 meta 的 title（WidgetMeta.title 契约必填，脏形状窄化后运行时
+ *   可缺省——窄化契约见 view-host-store narrowMeta）
+ * @param viewId widget key（链尾兜底）
+ */
+export function resolveTrayWidgetTitle(
+  declaration: TrayWidgetDeclaration | undefined,
+  metaTitle: string | undefined,
+  viewId: string,
+): string {
+  const declared = declaration?.title
+  if (declared !== undefined && declared.trim() !== '') return declared
+  return metaTitle !== undefined && metaTitle.trim() !== '' ? metaTitle : viewId
+}
+
+/**
+ * 托盘条目显示标题（组件侧响应式单点，TrayWidgetButton / TrayWidgetPanel 共用）：
+ * 链本体 = resolveTrayWidgetTitle（上方唯一实现），本函数只做声明查询 + 响应式包装。
  *
  * @returns declaration 声明切片（icon 等其他静态信息消费；Panel 不需要时忽略即可——
  *   computed 惰性，不读取不评估）；displayTitle 兜底链产物
@@ -80,11 +104,7 @@ export function useTrayWidgetDisplayTitle(
   meta: MaybeRefOrGetter<WidgetMeta | undefined>,
 ): { declaration: ComputedRef<TrayWidgetDeclaration | undefined>; displayTitle: ComputedRef<string> } {
   const declaration = useTrayWidgetDeclaration(viewId, pluginId)
-  const displayTitle = computed(() => {
-    const declared = declaration.value?.title
-    if (declared !== undefined && declared.trim() !== '') return declared
-    const title = toValue(meta)?.title
-    return title !== undefined && title.trim() !== '' ? title : toValue(viewId)
-  })
+  const displayTitle = computed(() =>
+    resolveTrayWidgetTitle(declaration.value, toValue(meta)?.title, toValue(viewId)))
   return { declaration, displayTitle }
 }
