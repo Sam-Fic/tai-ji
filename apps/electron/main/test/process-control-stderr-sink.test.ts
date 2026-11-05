@@ -191,3 +191,78 @@ describe('打包态 stderr 兜底通道可观测性（spawnRuntimeProcess 全链
     await flushStderrSink()
   })
 })
+
+// ── listen-ready 信令透传（2026-11-05 hotfix：启动竞争修复）──────────
+// runtime 在 WS listen 成功后经 IPC 发 {type:'runtime-ready'}；spawnRuntimeProcess
+// 挂 child 'message' 监听，仅透传该类型给 onReady 回调（supervisor 收齐才组装快照 +
+// 广播）。本组锁定：透传行为、非 ready 消息忽略、stdio 第 4 项 ipc 通道开设。
+describe('spawnRuntimeProcess listen-ready 信令透传', () => {
+  let tmpDataDir: string
+  let originalResourcesPath: PropertyDescriptor | undefined
+  let logSpy: ReturnType<typeof vi.spyOn>
+  let warnSpy: ReturnType<typeof vi.spyOn>
+  let errorSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    tmpDataDir = mkdtempSync(join(tmpdir(), 'ready-signal-'))
+    process.env.TAIJI_AGENT_DATA_DIR = tmpDataDir
+    originalResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath')
+    Object.defineProperty(process, 'resourcesPath', { value: '/res', configurable: true })
+    electronMock.app.isPackaged = true
+    existsSyncMock.mockImplementation(
+      (path: string) => !String(path).endsWith('electron-runtime-stderr.log'),
+    )
+    spawnMock.mockReset()
+    spawnMock.mockImplementation(() => makeFakeChild())
+    vi.resetModules()
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  afterEach(async () => {
+    if (originalResourcesPath) {
+      Object.defineProperty(process, 'resourcesPath', originalResourcesPath)
+    } else {
+      delete (process as unknown as Record<string, unknown>).resourcesPath
+    }
+    delete process.env.TAIJI_AGENT_DATA_DIR
+    logSpy.mockRestore()
+    warnSpy.mockRestore()
+    errorSpy.mockRestore()
+    rmSync(tmpDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    await Promise.resolve()
+  })
+
+  it('IPC runtime-ready 消息 → onReady 回调触发；非 ready 消息忽略', async () => {
+    const { spawnRuntimeProcess, flushStderrSink } = await loadModule()
+    const onReady = vi.fn()
+    const child = makeFakeChild()
+    spawnMock.mockReturnValue(child)
+
+    spawnRuntimeProcess(3310, vi.fn(), onReady)
+
+    child.emit('message', { type: 'runtime-ready' })
+    expect(onReady).toHaveBeenCalledTimes(1)
+    // 非 ready 类型（含畸形消息）不触发
+    child.emit('message', { type: 'other' })
+    child.emit('message', null)
+    child.emit('message', 'plain string')
+    expect(onReady).toHaveBeenCalledTimes(1)
+
+    await flushStderrSink()
+  })
+
+  it('stdio 开设 ipc 通道（第 4 项）——ready 信令的传输前提', async () => {
+    const { spawnRuntimeProcess, flushStderrSink } = await loadModule()
+    const child = makeFakeChild()
+    spawnMock.mockReturnValue(child)
+
+    spawnRuntimeProcess(3310)
+
+    const stdio = spawnMock.mock.calls[0]?.[2]?.stdio
+    expect(stdio).toEqual(['pipe', 'pipe', 'pipe', 'ipc'])
+
+    await flushStderrSink()
+  })
+})

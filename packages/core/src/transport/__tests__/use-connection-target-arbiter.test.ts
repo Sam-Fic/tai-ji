@@ -152,6 +152,33 @@ describe('连接控制器目标裁决表（§6.3）', () => {
     expect(getCurrentToken()).toBe('tok-2')
   })
 
+  it('failed 态 + 同 seq 快照 → 豁免幂等重连（hotfix：启动竞争首败后手动重试的恢复路径）', async () => {
+    // 2026-11-05 hotfix：连接异常关闭（启动竞争首败 / 网络断）→ failed 终态
+    // （0.12.4 起无自动重连）。runtime 实际活着时 supervisor 幂等广播同 seq 快照
+    // （restartRuntime 短路分支）——幂等的目的是防重复广播拆已建连接（connected 态），
+    // failed 态无连接可拆、重连正是所需，故豁免。不豁免则重试入口全部失效。
+    const f1 = await connectAuthenticated(snap(1, 4000, 'tok-1', 'rt-1'))
+    f1.triggerClose({ code: 1006, wasClean: false, reason: '' })
+    expect(getState().value).toBe('failed')
+    snapshotCb!(snap(1, 4000, 'tok-1', 'rt-1'))
+    // 豁免生效：发起重连（connected 态同样输入会被幂等拒绝，见上一用例）
+    expect(fakes.length).toBe(2)
+    const f2 = fakes[1]
+    f2.triggerOpen()
+    f2.triggerMessage(authResult(true, 'rt-1'))
+    expect(getState().value).toBe('connected')
+  })
+
+  it('connecting 态 + 同 seq 快照 → 仍幂等不动作（豁免仅 failed 态）', async () => {
+    stubSnapshot = snap(1, 4000, 'tok-1', 'rt-1')
+    setConnectionPorts(makePorts())
+    await useConnection().init()
+    expect(getState().value).toBe('connecting')
+    snapshotCb!(snap(1, 4000, 'tok-1', 'rt-1'))
+    // connecting 有自己的恢复路径（快照推进转向），同 seq 重复广播不额外动作
+    expect(fakes.length).toBe(1)
+  })
+
   it('未认证（connecting 中）+ seq 更高 → 转向新目标（弃未完成的旧连接）', async () => {
     stubSnapshot = snap(1, 4000, 'tok-1', 'rt-1')
     setConnectionPorts(makePorts())

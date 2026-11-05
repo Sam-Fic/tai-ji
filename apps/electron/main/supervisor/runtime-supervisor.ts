@@ -13,10 +13,19 @@
  * - start() 幂等：已有活进程则复用，不重复 spawn
  *   （实现时若 child 非空且未退出 exitCode===null，直接返回 this._port）
  * - start 完整时序：findAvailablePort → spawn → writePortFile（无健康等待轮询——
- *   启动成败只由 runtime 进程的 exit 事件上报，事件驱动不做轮询判死）
- * - startAndNotify 消除 main.ts whenReady/activate 重复：spawn 成功发 'runtime-port'，失败发 'runtime-error'
+ *   启动成败只由 runtime 进程的 exit / ready 事件上报，事件驱动不做轮询判死）
+ * - **快照广播改 listen-ready 驱动**（2026-11-05 hotfix：修复启动竞争）——旧时序
+ *   「spawn 成功即组装快照并广播」下，renderer 比 listen 就绪早 ~1.3s 连接被拒
+ *   （runtime spawn→listen 含同步迁移约 1.2-2.5s）；0.12.4 删除 ws 退避重连后首败即
+ *   failed 终态，无事件驱动恢复通道。新时序：spawn 成功只落 pendingSpawn（端口/token/
+ *   runtimeId 暂存），runtime listen 成功后经 IPC 发 ready 信令，onRuntimeReady 才组装
+ *   快照（seq+1）并广播 runtime-port。renderer 首连拉取快照为 null → waiting-runtime
+ *   等待态，ready 广播到达即连，此时端口必然已 listen。终局信号保持二元：ready 广播
+ *   （成功）/ exit 广播 runtime-failed（失败），无时间阈值。
+ * - startAndNotify 消除 main.ts whenReady/activate 重复：spawn 成功（ready 广播由
+ *   onRuntimeReady 统一发），spawn 失败发 'runtime-error'
  * - [§6.1] 'runtime-port' 载荷 = 目标快照 RuntimeTargetSnapshot {seq, runtimeId, port, token}
- *   （channel 名不变；supervisor 持有快照单一权威，4 广播点统一经 currentSnapshot() 取载荷）
+ *   （channel 名不变；supervisor 持有快照单一权威，广播点统一经 currentSnapshot() 取载荷）
  * - **意外退出不自动重启**：onRuntimeExit 清状态后广播 'runtime-failed'，等待用户
  *   手动重试（restartRuntime IPC）；主动 stop() 置 stopping 标志，exit 不广播
  *
@@ -26,9 +35,10 @@
  *     1. 若 child 活着 → return this._port（幂等）
  *     2. await stop()（先清旧的）
  *     3. port = await findAvailablePort()
- *     4. child = spawnRuntimeProcess(port, onExit)
+ *     4. child = spawnRuntimeProcess(port, onExit, onReady)
  *     5. writePortFile(port)
- *     6. this._port = port; 组装目标快照（seq+1, runtimeId, port, token）; return port
+ *     6. this._port = port; pendingSpawn = {child, runtimeId, token, port}; return port
+ *     7. （异步）IPC runtime-ready 到达 → onRuntimeReady：组装快照（seq+1）+ 广播 runtime-port
  * ```
  *
  * 依赖方向：runtime-supervisor → interfaces + 子模块 + electron(BrowserWindow)
@@ -93,6 +103,14 @@ export class RuntimeSupervisor implements IRuntimeSupervisor {
    * stop()/onRuntimeExit 清 null；未启动（mock/等待态）读口返回 null，消费方进等待态。
    */
   private _snapshot: RuntimeTargetSnapshot | null = null
+  /**
+   * spawn 完成但 listen-ready 信令未到达期间的暂存（2026-11-05 hotfix：快照组装从
+   * spawn 时推迟到 ready 时）。字段 = 组装快照所需的全部材料；exit / stop 时随
+   * clearRuntimeState 清空（ready 迟到到达即丢弃）。语义 = 「进程已拉起、端口尚未
+   * 就绪」的中间态——此期间 targetSnapshot 读口返回 null，renderer 拉取进
+   * waiting-runtime 等待态，不发任何连接。
+   */
+  private pendingSpawn: { child: ChildProcess; runtimeId: string; token: string; port: number } | null = null
   /** spawn 计数（seq 来源）：supervisor 进程内单调递增，跨 stop/restart 不清零（过期快照防护依赖代数单调） */
   private spawnSeq = 0
   /**
@@ -205,11 +223,13 @@ export class RuntimeSupervisor implements IRuntimeSupervisor {
    *    restarting 即收尾 pending 并停自动重连；广播晚于 stop 会让多秒 stop+spawn
    *    窗口内 renderer 无任何重连提示）；
    * 3. stop()（置 stopping 防 exit 误判意外死亡）→ doStart()（禁止调公开 start()——
-   *    会再次排队 startChain 自死锁）→ 成功广播 runtime-port（新端口）。
+   *    会再次排队 startChain 自死锁）→ 成功广播由 listen-ready 信令驱动
+   *    （onRuntimeReady 统一发 runtime-port）。
    *
    * 失败语义：失败即补 runtime-failed 终态广播（renderer 经既有 failed 态拿重试按钮，
    * 协议不变量 closing：每次 runtime-restarting 广播必有终态广播——runtime-port
-   * 或 runtime-failed）后 reject 上抛（invoke rejection，面板 toast 显形）；此时
+   * （ready 到达）或 runtime-failed；exit 意外死亡路径同样广播 runtime-failed，
+   * 不变量保持）后 reject 上抛（invoke rejection，面板 toast 显形）；此时
    * runtime 已停，用户经既有 runtime-restart IPC 手动重试。
    *
    * @returns 重启后实际监听的端口号
@@ -229,9 +249,9 @@ export class RuntimeSupervisor implements IRuntimeSupervisor {
     this.broadcastToAllWindows(RUNTIME_RESTARTING, { attempt: 0 })
     await this.stop()
     try {
-      // doStart 前置 stop 已清 child，幂等检查不命中 → 必然真 spawn（新配置生效的保证）
+      // doStart 前置 stop 已清 child，幂等检查不命中 → 必然真 spawn（新配置生效的保证）。
+      // 快照广播不在此处发——listen-ready 信令到达时 onRuntimeReady 统一广播。
       const port = await this.doStart()
-      this.broadcastToAllWindows(RUNTIME_PORT, this.currentSnapshot())
       return port
     } catch (e) {
       // 失败补 failed 终态广播：renderer 经既有 failed 态拿重试按钮，协议不变量
@@ -269,39 +289,78 @@ export class RuntimeSupervisor implements IRuntimeSupervisor {
 
     const port = await findAvailablePort()
     console.log(`[runtime] Starting on port ${port}`)
-    const spawned = spawnRuntimeProcess(port, (code) => this.onRuntimeExit(code))
+    const spawned = spawnRuntimeProcess(
+      port,
+      (code) => this.onRuntimeExit(code),
+      () => this.onRuntimeReady(),
+    )
     this.child = spawned.child
     // §6.1：持有本生命周期实例标识（spawnRuntimeProcess 已与 token 同点签发并注入 env）
     this._runtimeId = spawned.runtimeId
     // spawn 成功即复位 stopping：此后本实例的 exit 是真实意外死亡信号（广播 runtime-failed）。
-    // 不做启动健康等待轮询——启动成败只由 exit 事件上报；exit 早于本函数返回时，
-    // onRuntimeExit 已广播 runtime-failed，调用方照常拿到端口（renderer 进 failed 态）。
+    // 快照不在此组装——listen-ready 信令到达才组装并广播（见 onRuntimeReady），
+    // 消除「spawn 即广播 → renderer 连未就绪端口」的启动竞争。
     this.stopping = false
 
     writePortFile(port)
     this._port = port
-    // §6.1：目标快照随启动落定（seq 递增在 spawn 落定后——快照只在 spawn 成功的目标上
-    // 成立；失败半途清理不消耗代数，下次 spawn 仍是新代）。字段直取局部 spawned
-    // （this._runtimeId 经 await 后类型窄化失效且语义等价——同一次 spawn 的产物）。
+    // 启动尝试已发起：清除启动失败记录（RD-3#2——真因只反映「当前无已知失败」之前的
+    // 最近一次；与旧时序一致，spawn 成功即清，不等 ready）
+    this.lastStartError = null
+    // 暂存快照材料（ready 到达即组装）：child 引用用于代际校验之外的持有（exit 清空即
+    // 迟到 ready 被丢弃）；seq 递增也推迟到 ready 时——「未就绪的 spawn 不消耗代数」，
+    // 与旧注释「快照只在 spawn 成功的目标上成立」收紧为「只在 listen 就绪的目标上成立」。
+    this.pendingSpawn = {
+      child: spawned.child,
+      runtimeId: spawned.runtimeId,
+      token: spawned.token,
+      port,
+    }
+
+    console.log(`[runtime] Spawned on port ${port} (awaiting listen-ready)`)
+    return port
+  }
+
+  /**
+   * listen-ready 信令处理（IPC `runtime-ready`，2026-11-05 hotfix：启动竞争修复）。
+   *
+   * runtime 在 WS server listen 成功后发信令（packages/runtime/src/index.ts 的
+   * `[runtime] ready` 同点）。本方法 = 快照组装的唯一时点 + runtime-port 广播的
+   * 统一入口：
+   * 1. 代际校验：pendingSpawn 为空（exit / stop 已清）→ 迟到信令，丢弃（进程已死，
+   *    广播死端口会把 renderer 连向黑洞）；
+   * 2. 组装目标快照（seq+1, runtimeId, port, token 全部取自 pendingSpawn）；
+   * 3. 广播 runtime-port 到全部存活窗口（renderer onRuntimePort → applyTargetSnapshot
+   *    → 连接；此刻端口必然已 listen）。
+   *
+   * 无超时等待（时间机制删除裁决的延续）：等不到 ready 的进程要么 exit（→ runtime-failed
+   *   广播，已有路径），要么卡在启动中途（renderer 停在 waiting-runtime 等待屏，有重试
+   *    入口）——两者都是诚实终态，不用轮询定时器假装健康。
+   */
+  private onRuntimeReady(): void {
+    const pending = this.pendingSpawn
+    if (!pending) {
+      console.warn('[runtime] runtime-ready received without pending spawn (stale/late) — dropped')
+      return
+    }
+    this.pendingSpawn = null
     this.spawnSeq += 1
     this._snapshot = {
       seq: this.spawnSeq,
-      runtimeId: spawned.runtimeId,
-      port,
-      token: spawned.token,
+      runtimeId: pending.runtimeId,
+      port: pending.port,
+      token: pending.token,
     }
-
-    // 启动成功：清除启动失败记录（RD-3#2——真因只反映「当前无已知失败」之前的最近一次）
-    this.lastStartError = null
-
-    console.log(`[runtime] Spawned on port ${port}`)
-    return port
+    console.log(`[runtime] listen-ready on port ${pending.port} — broadcasting target snapshot (seq ${this.spawnSeq})`)
+    this.broadcastToAllWindows(RUNTIME_PORT, this.currentSnapshot())
   }
 
   /**
    * 启动 runtime 并把连接目标快照通知给渲染进程。
    *
-   * 成功：win.webContents.send(RUNTIME_PORT, RuntimeTargetSnapshot)
+   * spawn 成功：runtime-port 广播由 listen-ready 信令驱动（onRuntimeReady 统一发，
+   * 经 broadcastToAllWindows 覆盖全部窗口——与其余广播点同形态）；本方法只负责
+   * spawn 与失败路径。
    * 失败：win.webContents.send(RUNTIME_ERROR, { message })（不抛出）
    *
    * 消除 main.ts whenReady/activate 两处重复的 spawn + 通知逻辑。
@@ -310,7 +369,6 @@ export class RuntimeSupervisor implements IRuntimeSupervisor {
   async startAndNotify(win: BrowserWindow): Promise<number> {
     try {
       const port = await this.start()
-      win.webContents.send(RUNTIME_PORT, this.currentSnapshot())
       return port
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
@@ -327,21 +385,29 @@ export class RuntimeSupervisor implements IRuntimeSupervisor {
    *
    * 场景：runtime 意外退出后前端展示 runtime-failed 状态条 + 重试按钮。
    * 用户点击 → 前端调 restartRuntime IPC → 此方法。
-   * - runtime 已存活：幂等，直接广播目标快照（用户误点）
-   * - runtime 已死：走 start()，成功广播快照，失败刷新真因 + 补 runtime-failed 终态广播
-   *   （renderer 停留 failed 态，重试入口仍在；不 reject——bridge handler 不消费 rejection）
+   * - runtime 已存活且 listen-ready（快照在场）：幂等，广播当前目标快照。renderer 侧
+   *   applyTargetSnapshot 对 failed 态豁免幂等（同 seq 也转向重连）——「进程活着只是
+   *   没连上」形态（如启动竞争首败）靠这条恢复，不会因幂等拒绝而点了没反应。
+   * - runtime 已存活但 ready 未到（spawn 后 listen 前）：不广播（快照未组装），
+   *   ready 到达时 onRuntimeReady 自会广播；此处 no-op。
+   * - runtime 已死：走 start()，ready 信令到达后广播快照，失败刷新真因 + 补
+   *   runtime-failed 终态广播（renderer 停留 failed 态，重试入口仍在；
+   *   不 reject——bridge handler 不消费 rejection）
    */
   async restartRuntime(): Promise<void> {
-    // runtime 存活 → 幂等，直接广播当前目标快照
+    // runtime 存活 → 已就绪则幂等广播当前目标快照；未就绪等 ready 信令
     if (this.child && this.child.exitCode === null && this._port !== null) {
-      console.log(`[runtime] restartRuntime: already running on ${this._port}, broadcast target snapshot`)
-      this.broadcastToAllWindows(RUNTIME_PORT, this.currentSnapshot())
+      if (this._snapshot) {
+        console.log(`[runtime] restartRuntime: already ready on ${this._port}, broadcast target snapshot`)
+        this.broadcastToAllWindows(RUNTIME_PORT, this.currentSnapshot())
+      } else {
+        console.log(`[runtime] restartRuntime: spawn in progress on ${this._port}, awaiting listen-ready broadcast`)
+      }
       return
     }
     try {
       const newPort = await this.start()
-      console.log(`[runtime] Manual restart succeeded on port ${newPort}`)
-      this.broadcastToAllWindows(RUNTIME_PORT, this.currentSnapshot())
+      console.log(`[runtime] Manual restart spawned on port ${newPort} (awaiting listen-ready)`)
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
       this.lastStartError = message
@@ -366,14 +432,16 @@ export class RuntimeSupervisor implements IRuntimeSupervisor {
   }
 
   /**
-   * 清 runtime 进程状态（child/port/实例标识/目标快照同生命周期——stop 与 exit 两条
-   * 终止路径的唯一清理出口；seq 不清零——代数单调，下次 start 重新签发）。
+   * 清 runtime 进程状态（child/port/实例标识/目标快照/待就绪暂存同生命周期——stop 与
+   * exit 两条终止路径的唯一清理出口；seq 不清零——代数单调，下次 spawn 重新签发）。
+   * pendingSpawn 同清：进程已死，迟到的 ready 信令在 onRuntimeReady 被丢弃。
    */
   private clearRuntimeState(): void {
     this.child = null
     this._port = null
     this._runtimeId = null
     this._snapshot = null
+    this.pendingSpawn = null
   }
 
   /**
@@ -392,11 +460,13 @@ export class RuntimeSupervisor implements IRuntimeSupervisor {
    * @param code 子进程退出码（null=被信号杀死）
    */
   private onRuntimeExit(code: number | null): void {
-    // 清状态（幂等检查据此判定无活进程）；实例标识 / 目标快照随进程死亡失效
+    // 清状态（幂等检查据此判定无活进程）；实例标识 / 目标快照 / 待就绪暂存随进程死亡
+    // 失效（pendingSpawn 同清 = 迟到的 ready 信令将被 onRuntimeReady 丢弃）
     this.child = null
     this._port = null
     this._runtimeId = null
     this._snapshot = null
+    this.pendingSpawn = null
 
     const verdict = classifyRuntimeExit({
       stopping: this.stopping,

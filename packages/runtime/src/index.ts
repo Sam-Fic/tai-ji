@@ -1744,6 +1744,14 @@ async function main(): Promise<void> {
     exitOnListenFailure(err, port)
   }
   console.log('[runtime] ready')
+  // listen 就绪信令（启动竞争修复）：经 spawn 时开设的 IPC 通道通知主进程
+  // supervisor——supervisor 收到才向 renderer 广播连接目标快照，保证 renderer
+  // 发起连接时端口必然已 listen。修复的形态：旧时序「spawn 成功即广播快照」下
+  // renderer 比 listen 就绪早 ~1.3s 连接被拒，而 0.12.4 删除退避重连后首败即
+  // 进 failed 终态无恢复。事件驱动、零时间阈值，正常路径首连必中。
+  // 独立运行（无 IPC 通道，如 CLI/测试直跑组合根）时 process.send 为 undefined，
+  // 判空跳过。
+  process.send?.({ type: 'runtime-ready' })
   // B2 subagent-stream-chunk §4.1：session.getSubagentStreamState 数据源组合根接线。
   // [M3 relay-spawn-transport] 数据源 = control 镜像 tee（runtime transport 的实际
   //  供数面，degraded 标注随 tee 状态）。句柄归 index.ts（services 层不 value import

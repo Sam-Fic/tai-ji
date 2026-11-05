@@ -75,6 +75,13 @@ describe('runtime-supervisor exit 分类与失败广播', () => {
     return call[1]
   }
 
+  /** 取第 n 次 spawn 时传入的 onReady 回调（模拟 IPC runtime-ready 消息到达） */
+  function onReadyOf(callIndex: number): () => void {
+    const call = spawnMock.mock.calls[callIndex]
+    if (!call?.[2]) throw new Error(`spawn call ${callIndex} has no onReady callback`)
+    return call[2]
+  }
+
   /** 登记清单 append 的全部事件行（断言辅助） */
   function journalEvents(): Array<Record<string, unknown>> {
     return crashJournalAppend.mock.calls.map((c) => c[0] as Record<string, unknown>)
@@ -182,6 +189,13 @@ describe('runtime-supervisor 手动重启（无自动重启语义）', () => {
     return call[1]
   }
 
+  /** 取第 n 次 spawn 时传入的 onReady 回调（模拟 IPC runtime-ready 消息到达） */
+  function onReadyOf(callIndex: number): () => void {
+    const call = spawnMock.mock.calls[callIndex]
+    if (!call?.[2]) throw new Error(`spawn call ${callIndex} has no onReady callback`)
+    return call[2]
+  }
+
   beforeEach(() => {
     vi.clearAllMocks()
     installCaptureWindow()
@@ -233,7 +247,7 @@ describe('runtime-supervisor 手动重启（无自动重启语义）', () => {
     // 不向上抛（bridge handler 不消费 rejection）
   })
 
-  it('手动重试成功 → runtime-port 广播 + startError 清除', async () => {
+  it('手动重试成功 → listen-ready 后 runtime-port 广播 + startError 清除', async () => {
     const sup = new RuntimeSupervisor()
     await sup.start()
     onExitOf(0)(137)
@@ -242,7 +256,19 @@ describe('runtime-supervisor 手动重启（无自动重启语义）', () => {
 
     expect(spawnMock).toHaveBeenCalledTimes(2)
     expect(sup.startError).toBeNull()
+    // hotfix（2026-11-05）：快照广播从「start 返回即发」改为 listen-ready 信令驱动——
+    // 重试 spawn 完成时快照未组装（targetSnapshot 为 null），renderer 拉取进等待态；
+    // ready 到达才广播，保证 renderer 连接时端口必然已 listen
+    expect(sup.targetSnapshot).toBeNull()
+    expect(sentChannels()).toEqual(['runtime-failed'])
+    onReadyOf(1)()
     expect(sentChannels()).toEqual(['runtime-failed', 'runtime-port'])
+    expect(sup.targetSnapshot).toEqual({
+      seq: 1,
+      runtimeId: 'test-runtime-id',
+      port: 43110,
+      token: 'test-token',
+    })
   })
 });
 
@@ -303,3 +329,86 @@ describe('runtime-supervisor-start-error', () => {
     expect(sup.startError).toBeNull()
   })
 });
+
+// ======== listen-ready 信令驱动快照广播（2026-11-05 hotfix：启动竞争修复）========
+// 修复形态：旧时序「spawn 成功即组装快照并广播」下 renderer 比 listen 就绪早 ~1.3s
+// 连接被拒（runtime spawn→listen 含同步迁移约 1.2-2.5s），0.12.4 删除 ws 退避重连后
+// 首败即 failed 终态。新时序：spawn 只暂存材料，IPC runtime-ready 到达才组装快照 +
+// 广播；renderer 首连拉取为 null 进 waiting-runtime，ready 广播到达即连（端口必已
+// listen）。本组锁定：ready 前零快照零广播、ready 后组装+广播、迟到 ready 丢弃、
+// restartRuntime 幂等分支的 ready 门。
+describe('runtime-supervisor listen-ready 快照广播时序', () => {
+  const spawnMock = vi.mocked(spawnRuntimeProcess)
+
+  function onReadyOf(callIndex: number): () => void {
+    const call = spawnMock.mock.calls[callIndex]
+    if (!call?.[2]) throw new Error(`spawn call ${callIndex} has no onReady callback`)
+    return call[2]
+  }
+
+  function onExitOf(callIndex: number): (code: number | null) => void {
+    const call = spawnMock.mock.calls[callIndex]
+    if (!call?.[1]) throw new Error(`spawn call ${callIndex} has no onExit callback`)
+    return call[1]
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    installCaptureWindow()
+  })
+
+  it('spawn 后 ready 前：快照未组装（targetSnapshot null）、零广播（renderer 拉取进 waiting-runtime）', async () => {
+    const sup = new RuntimeSupervisor()
+    await sup.startAndNotify({ webContents: { send: vi.fn() } } as unknown as BrowserWindow)
+    expect(sup.targetSnapshot).toBeNull()
+    expect(sentChannels()).toEqual([])
+    // 端口已分配（spawn 成功）：isRunning 为真、幂等检查可判活
+    expect(sup.isRunning).toBe(true)
+    expect(sup.port).toBe(43110)
+  })
+
+  it('ready 到达：组装快照（seq=1 全字段）+ 广播 runtime-port', async () => {
+    const sup = new RuntimeSupervisor()
+    await sup.start()
+    onReadyOf(0)()
+    expect(sup.targetSnapshot).toEqual({
+      seq: 1,
+      runtimeId: 'test-runtime-id',
+      port: 43110,
+      token: 'test-token',
+    })
+    expect(sentChannels()).toEqual(['runtime-port'])
+  })
+
+  it('seq 代数：ready 前的 spawn 不消耗代数（exit 清场后重起从 seq 1 重新计）', async () => {
+    const sup = new RuntimeSupervisor()
+    await sup.start()
+    onExitOf(0)(137) // ready 前崩溃：不组装快照、不消耗代数
+    await sup.restartRuntime()
+    onReadyOf(1)()
+    expect(sup.targetSnapshot?.seq).toBe(1)
+  })
+
+  it('exit 早于 ready：迟到 ready 信令被丢弃（零快照、零 port 广播，failed 已由 exit 发）', async () => {
+    const sup = new RuntimeSupervisor()
+    await sup.start()
+    onExitOf(0)(137)
+    onReadyOf(0)() // 迟到：pendingSpawn 已随 exit 清空
+    expect(sup.targetSnapshot).toBeNull()
+    expect(sentChannels()).toEqual(['runtime-failed'])
+  })
+
+  it('restartRuntime 幂等分支：ready 前 no-op 不广播（等 ready 信令）；ready 后广播同快照', async () => {
+    const sup = new RuntimeSupervisor()
+    await sup.start()
+    // ready 前点重试：进程活着但未就绪——不广播（快照未组装，currentSnapshot 会 throw），
+    // ready 到达时 onRuntimeReady 自会广播
+    await sup.restartRuntime()
+    expect(sentChannels()).toEqual([])
+    onReadyOf(0)()
+    expect(sentChannels()).toEqual(['runtime-port'])
+    // ready 后点重试：幂等广播当前快照（renderer failed 态豁免幂等 → 同 seq 也重连）
+    await sup.restartRuntime()
+    expect(sentChannels()).toEqual(['runtime-port', 'runtime-port'])
+  })
+})
