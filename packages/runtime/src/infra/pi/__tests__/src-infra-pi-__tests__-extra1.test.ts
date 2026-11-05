@@ -4,7 +4,7 @@ import { rebuildHistoryFromEntries } from '../entry-tree-builder.js';
 import { EventAdapter, translate } from '../event-adapter.js';
 import { PiExtensionUiRequestEvent, PiMessageEndEvent, PiMessageStartEvent, PiSessionCustomMessageEntry, PiSessionEntry, PiToolExecutionUpdateEvent, type PiEvent } from '../pi-protocol.js';
 import { CrashJournalWriter, SUBAGENT_DIRECTIVE_CUSTOM_TYPE, parseSubagentDirective, type CrashJournalEvent, type ServerMessage } from '@taiji/shared';
-import { ASK_USER_MARKER, GUI_WIDGET_MARKER, PERMISSION_APPROVAL_TITLE, PLAN_REVIEW_MARKER, PLAN_SELF_REVIEW_MAX_BYTES, SCHEDULE_CREATE_MARKER, SUBAGENT_INFLIGHT_MARKER, UI_FORM_MARKER, type ScheduleDraft } from '@zhushanwen/extension-protocol';
+import { ASK_USER_MARKER, GUI_WIDGET_MARKER, PERMISSION_APPROVAL_TITLE, PLAN_REVIEW_MARKER, PLAN_SELF_REVIEW_MAX_BYTES, SCHEDULE_CREATE_MARKER, UI_FORM_MARKER, type ScheduleDraft } from '@zhushanwen/extension-protocol';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -59,8 +59,7 @@ function broadcastPayload(events: PiTranslatedEvent[]): Record<string, unknown> 
 // - selfReview 透传（D9③）：marker select 帧携带 selfReview（仅这一个有界字段加员，docs
 // 不透传纪律保留）；边界形态：缺席/非 string 不落键、空串原样过、超限不截不拒（截断在
 // 扩展写侧——canonical = packages/extension-protocol/src/extensions/plan/review-contract.ts 的 truncateSelfReview）
-// - 既有 marker 路由无回归：ASK_USER_MARKER 富交互分流照常（form:true 统一表单帧）；
-// SUBAGENT_INFLIGHT_MARKER 唯一不广播例外照常（translate 检查分支零产出）
+// - 既有 marker 路由无回归：ASK_USER_MARKER 富交互分流照常（form:true 统一表单帧）
 // /
 
 const SID_PLAN = 'sess-plan-review-1'
@@ -493,14 +492,6 @@ describe('EventAdapter 既有 marker 路由无回归（plan-review 加员后）'
       { type: 'choice', question: '选择方案?', options: ['A', 'B'] },
     ])
     expect(payload?.['planReview']).toBeUndefined()
-  })
-
-  it('SUBAGENT_INFLIGHT_MARKER 唯一不广播例外照常（translate 检查分支零产出）', () => {
-    const events = translate(
-      selectEvent({ title: SUBAGENT_INFLIGHT_MARKER, options: [JSON.stringify({ report: {} })] }),
-      SID_PLAN,
-    )
-    expect(events).toHaveLength(0)
   })
 })
 describe('EventAdapter RT-2 加固：translate 隔离显形（#3a）', () => {

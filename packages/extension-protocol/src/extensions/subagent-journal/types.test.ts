@@ -7,7 +7,6 @@ import {
   type SubagentJournalEvent,
   type SubagentJournalReport,
 } from './types'
-import { SUBAGENT_INFLIGHT_MARKER } from '../subagent-inflight/marker'
 import { SESSION_MANAGER_MARKER } from '../session-manager/marker'
 import { ASK_USER_MARKER } from '../ask-user/marker'
 
@@ -26,7 +25,6 @@ describe('subagent-journal marker 精确值', () => {
   })
 
   it('SUBAGENT_JOURNAL_MARKER 不与其他 select 通道 marker 冲突', () => {
-    expect(SUBAGENT_JOURNAL_MARKER).not.toBe(SUBAGENT_INFLIGHT_MARKER)
     expect(SUBAGENT_JOURNAL_MARKER).not.toBe(SESSION_MANAGER_MARKER)
     expect(SUBAGENT_JOURNAL_MARKER).not.toBe(ASK_USER_MARKER)
   })

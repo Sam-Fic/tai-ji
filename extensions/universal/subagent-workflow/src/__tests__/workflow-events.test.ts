@@ -87,7 +87,6 @@ import { DELIVERY_PORT_SLOT_KEY, RESUME_RECONCILE_SLOT_KEY, dispatchResumeReconc
 import { MAX_RETAINED_DONE_RUNS, noteRebuiltSettlement } from "@zhushanwen/subagent-core";
 import type { LauncherDeps, WorkflowRun } from "@zhushanwen/subagent-core";
 import { setSubagentService } from "@zhushanwen/subagent-core";
-import type { InFlightReporter } from "../host/inflight-reporter.ts";
 import type { SubagentTrayWidgetPusher } from "../interface/gui/tray-widget.ts";
 import type { WorkflowTrayWidgetPusher } from "../interface/gui/workflow-tray-widget.ts";
 import type { WorkflowDomainHandle } from "../workflow-events.ts";
@@ -100,7 +99,7 @@ const WORKFLOW_DOMAIN_SLOT_KEY = Symbol.for(GLOBAL_SLOT_KEYS.workflowDomainState
 const DIALOG_QUEUE_KEY = Symbol.for(GLOBAL_SLOT_KEYS.dialogQueue);
 const SERVICE_SLOT_KEY = Symbol.for(GLOBAL_SLOT_KEYS.service);
 
-// ── fake 组件（合并去重：makePi/makeCtx/makeReporter/resetSlots/mount 各一处定义） ──
+// ── fake 组件（合并去重：makePi/makeCtx/resetSlots/mount 各一处定义） ──
 
 const serviceDisposeSpy = vi.fn();
 // [§1.4 (a)] reload 分支的句柄作废调用 spy（fake service 必须携带该成员
@@ -108,10 +107,8 @@ const serviceDisposeSpy = vi.fn();
 const serviceInvalidatePiBindingSpy = vi.fn();
 const storeDisposeSpy = vi.fn(async () => {});
 const queueRejectAllSpy = vi.fn();
-const reporterAttachSpy = vi.fn();
-const reporterDetachSpy = vi.fn();
 // [§6.6 U9/U10] 托盘双推送器接线 spy（fake pusher 经 wiring 注入——attach/detach
-// 驱动时点锚定；vi.clearAllMocks 于 beforeEach 统一重置，与 reporter spy 同款）。
+// 驱动时点锚定；vi.clearAllMocks 于 beforeEach 统一重置）。
 const trayAttachSpy = vi.fn();
 const trayDetachSpy = vi.fn();
 const wfTrayAttachSpy = vi.fn();
@@ -223,14 +220,6 @@ function makeLifecycleResult(
   return { result, ctx, runs };
 }
 
-function makeReporter(): InFlightReporter {
-  return {
-    attachSession: reporterAttachSpy,
-    detachSession: reporterDetachSpy,
-    onInFlightChanged: vi.fn(),
-  } as unknown as InFlightReporter;
-}
-
 /** [§6.6 U9] subagent 件托盘推送器 fake（wiring 注入点——漏 attach/detach 接线
  *  在此可见，无需真实 widget 推送）。 */
 function makeTrayPusher(): SubagentTrayWidgetPusher {
@@ -272,12 +261,12 @@ type DomainWiring = NonNullable<Parameters<typeof setupWorkflowDomain>[1]>;
 /** 挂载（只装配事件族，不触发 session_start）——围栏 / 提权槽 / 注册顺序用。 */
 function mount(): { handle: WorkflowDomainHandle; handlers: HandlerMap } {
   const { pi, handlers } = makePi();
-  const handle = setupWorkflowDomain(pi, { inflightReporter: makeReporter() });
+  const handle = setupWorkflowDomain(pi);
   return { handle, handlers };
 }
 
 /** 挂载 + session_start 装配受控条目（deps 检查要求条目 + storeHealthy）。
- *  wiring 透传 fake 注入面（缺省只注入 inflightReporter，与既有用例形态一致）。 */
+ *  wiring 透传 fake 注入面。 */
 async function mountWithSession(
   sessionId: string,
   opts: {
@@ -299,7 +288,7 @@ async function mountWithSession(
     runs: opts.runs,
   });
   mockSetupSessionLifecycle.mockResolvedValue(result);
-  const handle = setupWorkflowDomain(pi, { inflightReporter: makeReporter(), ...opts.wiring });
+  const handle = setupWorkflowDomain(pi, opts.wiring);
   await handlers.get("session_start")!({ type: "session_start" }, ctx);
   // deps = lazyDeps 本体（getter 形态）：属性访问触发检查 + makeDeps 现读——
   // D3 volatile 现读语义（pi 切换后旧 deps 解析新 pi）依赖 getter 不被展开求值。
@@ -348,7 +337,7 @@ describe("D3 makeDeps volatile 现读：pi 切换（模拟 reload factory 重跑
     expect(deps.eventBus).toBe(pi1.events); // 切换前正常解析（非 getter 破坏）
 
     const { pi: pi2 } = makePi();
-    setupWorkflowDomain(pi2, { inflightReporter: makeReporter() }); // 模拟 reload 后 factory 重跑
+    setupWorkflowDomain(pi2); // 模拟 reload 后 factory 重跑
 
     expect(deps.eventBus).toBe(pi2.events); // 旧 deps 现读到新 pi
     expect(deps.eventBus).not.toBe(pi1.events);
@@ -360,7 +349,7 @@ describe("D3 makeDeps volatile 现读：pi 切换（模拟 reload factory 重跑
     expect(pi1.appendEntry).toHaveBeenCalledTimes(1); // 切换前正常写入旧 pi
 
     const { pi: pi2 } = makePi();
-    setupWorkflowDomain(pi2, { inflightReporter: makeReporter() });
+    setupWorkflowDomain(pi2);
 
     deps.log?.("debug", "test:component", "after reload", { phase: 2 });
     expect(pi2.appendEntry).toHaveBeenCalledWith(
@@ -379,7 +368,7 @@ describe("D3 makeDeps volatile 现读：pi 切换（模拟 reload factory 重跑
   it("onRunDone：完成通知经新 pi.sendMessage 送出（workflow-result 通道），旧 pi 不再被调", async () => {
     const { pi: pi1, deps } = await mountWithSession("sess-done");
     const { pi: pi2 } = makePi();
-    setupWorkflowDomain(pi2, { inflightReporter: makeReporter() });
+    setupWorkflowDomain(pi2);
 
     deps.onRunDone?.(makeRun({ runId: "run-after-reload", status: "done", scriptResult: { ok: true } }));
 
@@ -400,7 +389,7 @@ describe("D3 currentPi 登记点：factory 重跑覆盖槽上 volatile 绑定", 
     expect(handle.state.currentPi).toBe(pi1);
 
     const { pi: pi2 } = makePi();
-    const handle2 = setupWorkflowDomain(pi2, { inflightReporter: makeReporter() });
+    const handle2 = setupWorkflowDomain(pi2);
 
     expect(handle2.state).toBe(handle.state); // B1 D2 前提：同槽同对象
     expect(handle.state.currentPi).toBe(pi2);
@@ -415,7 +404,7 @@ describe("lazyDeps 语义不回归：属性访问经 deps 检查 → makeDeps �
     expect(handle.lazyDeps.eventBus).toBe(pi1.events); // 检查 + 转发语义不变（切换前）
 
     const { pi: pi2 } = makePi();
-    setupWorkflowDomain(pi2, { inflightReporter: makeReporter() });
+    setupWorkflowDomain(pi2);
 
     expect(handle.lazyDeps.eventBus).toBe(pi2.events); // lazy 链路同样现读新 pi
     handle.lazyDeps.log?.("debug", "lazy", "after reload");
@@ -439,7 +428,7 @@ describe("lazyDeps.workflowAgentDispatch 转发成员（[A1 R3] 缺失 = pump �
 
   it("检查同源：session 未初始化时属性访问 throw 'Session not initialized'（与 store 等成员同消息）", async () => {
     const { pi } = makePi();
-    const handle = setupWorkflowDomain(pi, { inflightReporter: makeReporter() }); // 无 session_start
+    const handle = setupWorkflowDomain(pi); // 无 session_start
     expect(() => handle.lazyDeps.workflowAgentDispatch).toThrowError("Session not initialized");
   });
 
@@ -479,7 +468,7 @@ describe("lazyDeps.getSessionRootId 转发成员（[dmg-r2-5] 缺失 = run-creat
 
   it("检查同源：session 未初始化时属性访问 throw 'Session not initialized'（与 store 等成员同消息）", async () => {
     const { pi } = makePi();
-    const handle = setupWorkflowDomain(pi, { inflightReporter: makeReporter() }); // 无 session_start
+    const handle = setupWorkflowDomain(pi); // 无 session_start
     expect(() => handle.lazyDeps.getSessionRootId).toThrowError("Session not initialized");
   });
 
@@ -515,7 +504,7 @@ describe("lazyDeps.onResumeModelOverrideCommitted 转发成员（[dmg-r1-1] 缺�
 
   it("检查同源：session 未初始化时属性访问 throw 'Session not initialized'（与 store 等成员同消息）", async () => {
     const { pi } = makePi();
-    const handle = setupWorkflowDomain(pi, { inflightReporter: makeReporter() }); // 无 session_start
+    const handle = setupWorkflowDomain(pi); // 无 session_start
     expect(() => handle.lazyDeps.onResumeModelOverrideCommitted).toThrowError("Session not initialized");
   });
 
@@ -597,7 +586,7 @@ describe("lazyDeps 转发清单对账：LifecycleDeps 可选成员全集（防�
 // ── ② D1：reload 分支 ─────────────────────────────────────────────────────────
 
 describe("D1 session_shutdown reason=reload：破坏性动作全跳过，adoption 前提保全", () => {
-  it("reload：a/c/d/e/f 五动作未被调用、b（detachSession）仍执行、preserved 归因日志发出且计数真实", async () => {
+  it("reload：a/c/d/e/f 五动作未被调用、preserved 归因日志发出且计数真实", async () => {
     const run = makeRun({ runId: "run-sess-reload", callCount: 2 });
     const { handle, handlers, ctx } = await mountWithSession("sess-reload", { runs: [run] });
     expect(handle.state.sessionState.size).toBe(1); // 前置：条目已装配
@@ -615,8 +604,6 @@ describe("D1 session_shutdown reason=reload：破坏性动作全跳过，adoptio
     expect(handle.state.sessionState.get("sess-reload")?.runs.get("run-sess-reload")).toBe(run);
     // f：pending dialog 不被全量拒绝（在途 ask-user 属于在途工作）
     expect(queueRejectAllSpy).not.toHaveBeenCalled();
-    // b：reporter detach 仍执行（detach 不是破坏，防旧 reporter 持 stale ctx 重试）
-    expect(reporterDetachSpy).toHaveBeenCalledTimes(1);
     // D8：preserved 归因日志——数字来自 sessionState 真实统计（1 run / 2 call / 1 store）
     expect(loggerFns.debug).toHaveBeenCalledWith(
       "[workflow-events] session_shutdown reason=reload preserved={runs:1, records:2, stores:1}",
@@ -629,7 +616,6 @@ describe("D1 session_shutdown reason=reload：破坏性动作全跳过，adoptio
     expect(loggerFns.debug).toHaveBeenCalledWith(
       "[workflow-events] session_shutdown reason=reload preserved={runs:0, records:0, stores:0}",
     );
-    expect(reporterDetachSpy).toHaveBeenCalledTimes(1);
   });
 
   // [§1.4 (a)] reload 分支显式作废句柄：只作废 core 读侧的句柄可用性判定（PS-30 窗口
@@ -666,7 +652,7 @@ describe("[§1.4 (a)] session_tree：分支导航不作废句柄（tree 导航�
 // ── ② D1：quit 族现状保持（S5 防过度保全） ────────────────────────────────────
 
 describe("D1 session_shutdown quit 族：六动作现状全执行", () => {
-  it("quit：dispose + terminate + store.dispose + sessionState 清空 + detachSession + rejectAll 全部执行", async () => {
+  it("quit：dispose + terminate + store.dispose + sessionState 清空 + rejectAll 全部执行", async () => {
     const { handle, handlers, ctx } = await mountWithSession("sess-quit", {
       runs: [makeRun({ runId: "run-sess-quit", callCount: 2 })],
     });
@@ -678,7 +664,6 @@ describe("D1 session_shutdown quit 族：六动作现状全执行", () => {
     expect(mockTerminateRunningRuns).toHaveBeenCalledTimes(1);
     expect(storeDisposeSpy).toHaveBeenCalledTimes(1);
     expect(handle.state.sessionState.size).toBe(0);
-    expect(reporterDetachSpy).toHaveBeenCalledTimes(1);
     expect(queueRejectAllSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -702,7 +687,7 @@ describe("D1 session_shutdown quit 族：六动作现状全执行", () => {
 
 // ── ② [容器扩展点统一 §6.6 U9/U10] 托盘双推送器接线（dmg-r2-7）─────────────────
 //
-// 两个托盘推送器（subagent 件 / workflow 件）与 inflight/journal reporter 同 seam 同款：
+// 两个托盘推送器（subagent 件 / workflow 件）与 journal reporter 同 seam 同款：
 // session_start 注入 ctx 驱动 attach，session_shutdown 的 reload 与终结两分支摘 ctx 驱动
 // detach。漏 detach = 旧 pusher 持 stale ctx 反复推送死 session（reload 后新 factory 覆盖
 // 前的窗口）——本块经 wiring 注入 fake pusher 锁定三个接线点的调用次数与相对时序。
@@ -770,8 +755,8 @@ describe("[§6.6 U9/U10] 托盘双推送器接线：session_start attach / reloa
 
 describe("D2 WorkflowDomainState 提权：factory 重跑拿到同一 domain state 引用", () => {
   it("同模块两次 setupWorkflowDomain：state 对象与五个成员（lsRef/notifiedRunIds/sessionState/workerHost/registry）均同引用", () => {
-    const first = setupWorkflowDomain(makePi().pi, { inflightReporter: makeReporter() });
-    const second = setupWorkflowDomain(makePi().pi, { inflightReporter: makeReporter() });
+    const first = setupWorkflowDomain(makePi().pi);
+    const second = setupWorkflowDomain(makePi().pi);
 
     expect(second.state).toBe(first.state);
     expect(second.state.lsRef).toBe(first.state.lsRef);
@@ -782,11 +767,11 @@ describe("D2 WorkflowDomainState 提权：factory 重跑拿到同一 domain stat
   });
 
   it("模拟 pi reload 模块重求值（vi.resetModules + 重新 import）后 setupWorkflowDomain 仍拿到同一引用", async () => {
-    const first = setupWorkflowDomain(makePi().pi, { inflightReporter: makeReporter() });
+    const first = setupWorkflowDomain(makePi().pi);
 
     vi.resetModules();
     const { setupWorkflowDomain: freshSetup } = await import("../workflow-events.ts");
-    const second = freshSetup(makePi().pi, { inflightReporter: makeReporter() });
+    const second = freshSetup(makePi().pi);
 
     expect(second.state).toBe(first.state);
     // 模块重求值后新代码拿到的 state 已在 globalThis 槽上（非新建）
@@ -800,7 +785,7 @@ describe("D2 WorkflowDomainState 提权：factory 重跑拿到同一 domain stat
 
     vi.resetModules();
     const { setupWorkflowDomain: freshSetup } = await import("../workflow-events.ts");
-    const freshHandle = freshSetup(makePi().pi, { inflightReporter: makeReporter() });
+    const freshHandle = freshSetup(makePi().pi);
 
     expect(
       freshHandle.state.sessionState.get("sess-slot-survive")?.runs.get("run-sess-slot-survive"),
@@ -832,7 +817,6 @@ describe("session_shutdown 围栏：SubagentService.dispose 抛错不阻断后�
     expect(storeDisposeSpy).toHaveBeenCalledTimes(1);
     expect(handle.state.sessionState.size).toBe(0);
     expect(queueRejectAllSpy).toHaveBeenCalledTimes(1);
-    expect(reporterDetachSpy).toHaveBeenCalledTimes(1);
     // error 级留痕（含 sessionId，可检索）
     expect(loggerFns.error).toHaveBeenCalledWith(
       "[subagent-workflow] session_shutdown SubagentService.dispose failed (sessionId=sess-dispose-boom)",
@@ -1122,7 +1106,7 @@ const EXPECTED_REGISTRATION_ORDER = [
 describe("setupWorkflowDomain pi.on 注册顺序", () => {
   it("7 个事件按锁定序列逐位注册（跨域 setup* 调用原位、不改变序列；agent_settled = D8② 对账步入口②）", () => {
     const { pi, handlers } = makePi();
-    setupWorkflowDomain(pi, { inflightReporter: makeReporter() });
+    setupWorkflowDomain(pi);
 
     expect([...handlers.keys()]).toEqual([...EXPECTED_REGISTRATION_ORDER]);
   });

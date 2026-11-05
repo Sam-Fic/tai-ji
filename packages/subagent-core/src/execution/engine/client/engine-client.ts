@@ -61,12 +61,11 @@ import type {
   EngineTransport,
   EngineTransportExitInfo,
 } from "./transport/types.ts";
-// [u7a 生产补挂] 反向通道镜像 → core 侧镜像桥接：in-flight 计数与生命周期谓词读 core
-// 全局镜像（recordId 键），而引擎侧子进程上报只落 EngineClient 镜像——本桥接实现
-// spawned-children.ts 头注「数据源①：反向通道上报落本镜像」的既登记契约（W3 协议化
-// 后 ctx.onChildSpawned 不被调用，该数据范围悬空致计数恒 0），见 crash-forensics §7 v7。
+// [W3] 反向通道镜像 → core 侧镜像桥接：生命周期谓词（hasLiveProcessHandle /
+// isResumable）读 core 全局镜像（recordId 键），而引擎侧子进程上报只落 EngineClient
+// 镜像——本桥接实现 spawned-children.ts 头注「数据源①：反向通道上报落本镜像」的
+// 既登记契约（W3 协议化后 ctx.onChildSpawned 不被调用，该数据范围悬空致谓词失真）。
 import { coreSpawnedChildrenMirror } from "../host/spawned-children.ts";
-import { notifyInFlightChanged } from "../inflight-snapshot.ts";
 
 const logger = getLogger("subagents");
 
@@ -77,16 +76,13 @@ const logger = getLogger("subagents");
 export { SUBAGENT_TRANSPORT_ENV };
 
 /**
- * 单条镜像事件 → core 镜像映射 + 在途推送（u7a 数据范围桥接）：置死**或已退出** →
+ * 单条镜像事件 → core 镜像映射（生命周期谓词数据源桥接）：置死**或已退出** →
  * markKilled，running → register（同 recordId 重 spawn 覆盖，与引擎侧 Map 同语义）。
  * 判据必须是 `state === "exited" || entry.killed` 而非只看 killed：pi 子进程自行
  * 退出/崩溃时引擎侧上报 `state:"exited", killed:false`（child.killed 只在我方 kill
  * 过才为 true），且引擎侧镜像对已退出子进程只改 state 不删项——只看 killed 会把
- * 已死子进程重新 register 为活句柄（countInFlight 虚高 → 幻影在途拖住滚动重启
- * 判据；hasLiveProcessHandle 恒真 → isResumable 失真）。exited 即死，killed 只是
- * 其子集。映射后必推送——镜像事件本身就是在途迁移点（子进程注册/移除），首轮无
- * 任何 arm/disarm 推送，不在此推则首轮在途窗口对 D5 不可见；notify 同步
- * fire-and-forget，异常不外溢。killedAll 空表单发（无 pid）与迟到事件（条目已清）
+ * 已死子进程重新 register 为活句柄（hasLiveProcessHandle 恒真 → isResumable 失真）。
+ * exited 即死，killed 只是其子集。killedAll 空表单发（无 pid）与迟到事件（条目已清）
  * 为 no-op。
  */
 function bridgeMirrorEventToCoreMirror(event: MirrorChangeEvent, mirror: SpawnedChildrenMirror): void {
@@ -99,7 +95,6 @@ function bridgeMirrorEventToCoreMirror(event: MirrorChangeEvent, mirror: Spawned
   } else {
     core.register(event.recordId, { pid: entry.pid, killed: false });
   }
-  notifyInFlightChanged();
 }
 
 /** 协议帧违规日志的回显截断长度（非 NDJSON 行 / 未知帧的诊断留痕）。 */

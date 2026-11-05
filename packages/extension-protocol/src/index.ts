@@ -205,17 +205,6 @@ export {
 } from './extensions/session-manager/types'
 export { SESSION_MANAGER_MARKER, SESSION_MANAGER_ACTIONS } from './extensions/session-manager/marker'
 
-// ── ./extensions/subagent-inflight：在途聚合上报协议（绝对计数帧经 select 通道 + marker；写侧实现在 extensions/universal/subagent-workflow host/inflight-reporter + subagent-core 出口，读侧在 runtime event-adapter u7b）──
-export type { SubagentInFlightReport } from './extensions/subagent-inflight/types'
-export {
-  SUBAGENT_INFLIGHT_MARKER,
-} from './extensions/subagent-inflight/marker'
-export {
-  INFLIGHT_REPORT_ACK,
-  isSubagentInFlightReport,
-  isInFlightReportAck,
-} from './extensions/subagent-inflight/types'
-
 // ── ./extensions/subagent-journal：journal 事件推送协议（事件报告帧经 select 通道 + marker；
 // 写侧实现在 extensions/universal/subagent-workflow host/journal-reporter + subagent-core 落盘出口
 // notifyJournalAppended，读侧在 runtime event-adapter marker 路由 → session-records 派生视图）──

@@ -12,9 +12,8 @@
 // [round5-g 合并产物] 本文件吸收同 mock 形态（logger + spawned-children kill spy）的服务终止语义姊妹件：
 // - cancel-close-after-round.test.ts（cancel / disposeAllRecords 打断作废 closeAfterRound 挂起）
 // - subagent-service-recovery-bounds.test.ts（回收上界 kill 收敛 + record-access 越界）
-// 同簇另五件（inflight-production-wiring / notify-round-chain / record-binding /
-// run-orchestration-write-lease / run-orchestration-zcode-chat）经复筛否决并入：
-// inflight 依赖真实 killRecordChildWithEscalation 置死镜像（spy 泄漏必红），其余五件
+// 同簇另四件（notify-round-chain / record-binding /
+// run-orchestration-write-lease / run-orchestration-zcode-chat）经复筛否决并入：其
 // 共同绑定是服务栈底座而非同一业务模块，详见执行报告。
 
 

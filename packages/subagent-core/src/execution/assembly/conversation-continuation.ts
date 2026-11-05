@@ -30,8 +30,6 @@ import { toErrorMessage } from "../../core/error-message.ts";
 import { getLogger } from "../../core/logger.ts";
 
 import { bestEffort } from "./best-effort.ts";
-import { notifyInFlightChanged } from "../engine/inflight-snapshot.ts";
-import { markRecordRoundActive } from "../engine/host/spawned-children.ts";
 import { tryEnterRunning } from "../persistence/execution-record.ts";
 // 轮终 outcome 入参（权威定义在 finalize-record.ts，本文件 re-export 供 host 契约引用；
 // finalize-record 不反向依赖本模块，无循环）。
@@ -446,11 +444,6 @@ export class ConversationContinuation {
     }
     // 占位（正式 roundId 在派发段定稿）：单飞窗从本同步段开始。
     this.activeRunId = `${record.id}#dispatching`;
-    // 新轮开跑 = 该 record 翻回「正在执行」：镜像轮在途记账置 true（D5 在途双判据
-    // hasLiveProcessHandle && inRound——新轮派发是「翻回正在执行」的同步入口，
-    // 首轮/续聊/drain 三路派发共用本挂点）+ 推送最新在途计数。
-    markRecordRoundActive(record.id, true);
-    notifyInFlightChanged();
     // [§1.4 (c) 同族] 派发链同样断头保护：主干同步段 try/catch 之外的 await 段
     //（worktree 重建 / markRoundStarted 前）抛错时不得升格为未处理拒绝。
     voidRoundFinalChain(
@@ -707,12 +700,6 @@ export class ConversationContinuation {
       // 分支）由此可达。
       ...settlementFactsOf(outcome),
     });
-    // 轮终簿记完成 = 「正在执行 → 等待续聊」翻转边界：镜像轮在途记账置 false
-    //（D5 在途双判据——保活进程不计在途）+ 推送最新在途计数。失败轮同样翻转
-    //（record 同落 idle 可续聊，进程归保活形态）；drain 派发排队消息时经
-    // dispatchRoundGuarded 置回 true（「正在执行」）。
-    markRecordRoundActive(record.id, false);
-    notifyInFlightChanged();
     // 成功通知：「门 → 直发」双闸（[U5] gate 三元组：①归档静默/②放弃轮标记阻断/
     // ③收尾轮豁免 = 构造性——closeAfterRound 归档挂在本通知之后，settle 时点
     // intent 尚未翻转；正文权威 = record.result = 本轮 content）。

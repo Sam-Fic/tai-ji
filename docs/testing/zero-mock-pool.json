@@ -63,7 +63,6 @@
       "src/execution/engine/__tests__/engine-discovery-scan.test.ts",
       "src/execution/engine/__tests__/host-task-spec.test.ts",
       "src/execution/engine/__tests__/identity-envelope.test.ts",
-      "src/execution/engine/__tests__/inflight-snapshot.test.ts",
       "src/execution/engine/__tests__/model-prompt.test.ts",
       "src/execution/engine/__tests__/model-ref-split.test.ts",
       "src/execution/engine/__tests__/model-ref-translation.test.ts",

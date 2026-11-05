@@ -26,8 +26,6 @@ export interface SpawnedChildMirrorEntry {
   pid?: number;
   /** 必含判据（`child !== undefined && !child.killed` 同构）：true = 已被杀/已终止。 */
   killed: boolean;
-  /** 该 record 是否有轮在途（D5 在途谓词的第二判据——见 markRoundEnter/markRoundSettle）。 */
-  inRound: boolean;
   /** 最近一次状态变更的墙钟时间戳（诊断范围）。 */
   updatedAt: number;
 }
@@ -40,14 +38,11 @@ export interface SpawnedChildMirrorEntry {
 class CoreSpawnedChildrenMirror {
   private readonly entries = new Map<string, SpawnedChildMirrorEntry>();
 
-  /** 落项 / 覆盖（同 recordId 重 spawn = 覆盖旧句柄，与引擎侧 Map 同语义）。
-   *  新进程 = 新任务在途（inRound 复位 true——chat 保活轮的 inRound=false 只对
-   *  当前进程代有效，续聊 respawn 后回到「正在执行」）。 */
+  /** 落项 / 覆盖（同 recordId 重 spawn = 覆盖旧句柄，与引擎侧 Map 同语义）。 */
   register(recordId: string, child: { pid?: number; killed: boolean }): void {
     this.entries.set(recordId, {
       pid: child.pid,
       killed: child.killed,
-      inRound: true,
       updatedAt: Date.now(),
     });
   }
@@ -57,16 +52,6 @@ class CoreSpawnedChildrenMirror {
     const entry = this.entries.get(recordId);
     if (entry !== undefined) {
       entry.killed = true;
-      entry.updatedAt = Date.now();
-    }
-  }
-
-  /** 轮在途翻边（D5 在途谓词）：chat 域轮始置 true、轮终置 false。run 域成员
-   *  不翻边（one-shot：进程活 = 任务在途，register 缺省 true 已覆盖）。 */
-  markRoundActive(recordId: string, inRound: boolean): void {
-    const entry = this.entries.get(recordId);
-    if (entry !== undefined) {
-      entry.inRound = inRound;
       entry.updatedAt = Date.now();
     }
   }
@@ -142,15 +127,6 @@ export function markAllSpawnedChildrenDead(): number {
   const before = coreMirrorSlot().snapshot().length;
   coreMirrorSlot().killAll();
   return before;
-}
-
-/**
- * 轮在途记账（chat 域 Continuation 的两处翻边点消费）：轮始（新轮派发）置 true、
- * 轮终（保活 settle）置 false。镜像无条目时 no-op（run 域成员进程未注册 / 已死，
- * 谓词由 killed 位承担）。
- */
-export function markRecordRoundActive(recordId: string, inRound: boolean): void {
-  coreMirrorSlot().markRoundActive(recordId, inRound);
 }
 
 /**

@@ -70,7 +70,7 @@ import { createMockSessionServiceClass } from './helpers/service-mocks.js';
 import { createTsxPathsTsconfig, type TsxPathsTsconfig } from './helpers/tsx-fork-tsconfig.js';
 import { DEFAULT_DISCOVERY_CONFIG, DEFAULT_NETWORK_PROXY_CONFIG, PRESET_EXTENSION_DIRS, READ_PRECHECK_MAX_BYTES, type ServerMessage, ServerMessageUnion, type SkillDirConfig, WORKFLOW_RUN_EVENT_TRUNCATE_BYTES, WorkflowRunOutcome, WorkflowRunStatus, type ClientMessage, type NetworkProxyConfig, type PluginEventPayload, type WorkflowRunEventsReply, validateNetworkProxyConfig } from '@taiji/shared';
 import { getDataDir } from '@taiji/shared/paths';
-import { ASK_USER_MARKER, SESSION_MANAGER_MARKER, SUBAGENT_INFLIGHT_MARKER, UI_FORM_MARKER } from '@zhushanwen/extension-protocol';
+import { ASK_USER_MARKER, SESSION_MANAGER_MARKER, UI_FORM_MARKER } from '@zhushanwen/extension-protocol';
 import { ALL_RUN_OUTCOMES, doneReasonToRunOutcome, noteRebuiltSettlement, runSummary, type DoneReason, type WorkflowRun } from '@zhushanwen/subagent-core';
 import { fork } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtemp, mkdtempSync, readFileSync, realpathSync, rm, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -10554,12 +10554,6 @@ describe('D6 mapping table: runtime-internal marker channels (no frontend broadc
     expect(events).toHaveLength(1)
     expect(events[0]?.kind).toBe('session-manager-ui')
     expect(events.filter((e) => e.kind === 'message')).toHaveLength(0)
-  })
-
-  it('select + SUBAGENT_INFLIGHT_MARKER → 翻译层检查零输出（marker 帧不广播前端）', () => {
-    const payload = JSON.stringify({ sessionId: 'p1', records: [] })
-    const events = translate({ type: 'extension_ui_request', method: 'select', id: 'req-inf', title: SUBAGENT_INFLIGHT_MARKER, options: [payload] } as PiTestEvent_m5 as never, SID_m2)
-    expect(events).toEqual([])
   })
 })
 describe('stdout single-path exactly-once (six migrated event families)', () => {

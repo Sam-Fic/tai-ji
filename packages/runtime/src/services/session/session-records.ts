@@ -532,7 +532,7 @@ export class SessionRecords {
   ) {
     // [event-push-channel] journal 事件推送消费方注册：event-adapter marker 旁路经
     // journal-report-router 送达本服务 → per-session 事件派生视图（applyJournalReport）。
-    // 进程级单 sink（runtime 单 SessionRecords 实例；后注册覆盖先注册对齐 inflight 出口先例）。
+    // 进程级单 sink（runtime 单 SessionRecords 实例；后注册覆盖先注册）。
     setJournalReportSink({
       applyJournalReport: (sessionId, report) => this.applyJournalReport(sessionId, report),
     })

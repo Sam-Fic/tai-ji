@@ -44,7 +44,7 @@ function soleMessage(events: ReturnType<typeof translate>) {
 // ════════════════ 来源: event-adapter-journal-marker.test.ts ════════════════
 // ---- 原文件头注释 ----
 // EventAdapter SUBAGENT_JOURNAL_MARKER 旁路测试（event-push-channel）。
-// 覆盖（照 plan-review marker / inflight 测试形态，全部 mock 零真实 pi）：
+// 覆盖（照 plan-review marker 测试形态，全部 mock 零真实 pi）：
 // - translate 检查分支：marker 帧恒零产出（不进任何前端广播——第二道防线）；
 // - attach 旁路：合法报告 → journal-report-router 送达 sink（连接归属 sessionId）
 // → 应用成功回 JOURNAL_REPORT_ACK（生效回执 D7）；

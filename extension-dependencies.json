@@ -23,7 +23,7 @@
         {
           "package": "@zhushanwen/pi-ext-guards",
           "type": "package",
-          "reason": "代码层静态 import guardStaleCtx/oncePerProcess/isEnoentError/toErrorMessage（src 根 index.ts/jsonl-run-store.ts/session-lifecycle.ts 与 interface/ 下 helpers/commands/subagents/subagent-tool/tool-workflow/tool-workflow-script、host/ 下 pi-host/inflight-reporter、injectors/ 下 model-list/resource-list-injector——共 13 文件 top-level import），缺失时模块加载即抛 Cannot find module，是强依赖"
+          "reason": "代码层静态 import guardStaleCtx/oncePerProcess/isEnoentError/toErrorMessage（src 根 index.ts/jsonl-run-store.ts/session-lifecycle.ts 与 interface/ 下 helpers/commands/subagents/subagent-tool/tool-workflow/tool-workflow-script、host/ 下 pi-host、injectors/ 下 model-list/resource-list-injector——共 12 文件 top-level import），缺失时模块加载即抛 Cannot find module，是强依赖"
         },
         {
           "package": "@zhushanwen/pi-pending-notifications",

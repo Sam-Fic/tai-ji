@@ -125,13 +125,6 @@ export {
   registerZcodeEngine,
 } from "./execution/engine/d8-compat.ts";
 
-// 在途事件出口（u7a，D5）：壳层（subagent-workflow host/inflight-reporter）注册
-// 监听 + 求值绝对计数快照——core→壳回调出口的 barrel 消费方（exports 范围收窄后
-// 壳侧生产消费必须经 barrel，无深路径豁免）。
-export {
-  setInFlightListener,
-  getInFlightSnapshot,
-} from "./execution/engine/inflight-snapshot.ts";
 // journal 落盘事件出口（event-push-channel W-P1）：run/record 两域落盘提交点经
 // notifyJournalAppended 推给壳层 reporter（setJournalAppendListener 注册）——
 // 壳层经 select marker 通道带回执推送 runtime，派生视图改推送喂入（watch 族退役）。
@@ -774,8 +767,6 @@ export {
   parseResourceMetaDetailed,
 } from "./shared/meta-parser.ts";
 export { THINKING_ORDER } from "./shared/model-ref.ts";
-// setTimeout 安全域上限（壳 tool schema 文案消费，D3 判定进 barrel）
-export { MAX_TIMER_DELAY_MS } from "./shared/timer-delay.ts";
 // [§2.6] 进程级全局槽键单一声明处（壳侧托管槽 dialogQueue/workflowDomainState 同源消费）。
 export { GLOBAL_SLOT_KEYS, type GlobalSlotName } from "./shared/global-slots.ts";
 // 入口态 fail-fast 断言（tokens 负值、slug 长度）：两个 tool 入口

@@ -50,9 +50,6 @@ import { bestEffort } from "../assembly/best-effort.ts";
 // finalizeRecord，零编排语义）——消费点直连 persistence，不再反向 import 编排层。
 import { settleWorkflowRecord } from "../persistence/execution-record.ts";
 import { killRecordChildWithEscalation } from "../engine/host/spawned-children.ts";
-// [u7a 生产补挂] 批量 dispose 收敛点推最新在途计数（D5 出口——engine 域叶子模块，
-// 本模块不得被 inflight-snapshot 反向依赖，import 方向单向安全）。
-import { notifyInFlightChanged } from "../engine/inflight-snapshot.ts";
 import { isResumable } from "../lifecycle/lifecycle-predicates.ts";
 import { doFinalizeRecord } from "../persistence/finalize-record.ts";
 import type { ModelConfigService } from "../assembly/model-config-service.ts";
@@ -203,10 +200,6 @@ export class RecordLifecycle {
       this.deps.getNotifyHost().emitPendingUnregister(record.id, "completed");
       count++;
     }
-    // [u7a 生产补挂] 批量 dispose 收敛点推一次终态快照（绝对计数语义下循环内逐条推
-    // 与收敛后单推等价，单推省 N-1 次同步派发）。此刻镜像已由上方 kill/disarm 全量
-    // 清零（壳 dispose 链的 markAllSpawnedChildrenDead 更先行——两清零路径正交幂等）。
-    notifyInFlightChanged();
     return count;
   }
 

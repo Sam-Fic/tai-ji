@@ -9,11 +9,6 @@
  *   ✗ 不持有可变态（currentMessageId/writeContents/diffChain 帧序态全在 interpreter）
  *   ✓ 只产出结构化中间事件（PiTranslatedEvent[]），交由 service 层 EventInterpreter 编排。
  *
- * [D5 例外登记，u7b] subagent 在途上报（marker = SUBAGENT_INFLIGHT_MARKER）：runtime 侧
- * 镜像消费（inflight-mirror）已删（滚动重启唯一读者退役），marker 帧现无 runtime 消费方——
- * translate() 仅保留一条检查分支（marker 帧恒不产出前端广播，防 marker 帧落回普通
- * select 分支 → 前端无人应答的弹窗 pending 泄漏；session-manager 分支同类教训）。
- *
  * pi RPC events have this structure:
  * - `message_update` = `{type, assistantMessageEvent, usage?}`（wire 恒无顶层 message——RPC
  *   toJsonEvent 剥离，见 pi-protocol.ts PiMessageUpdateEvent 注释）with nested
@@ -29,7 +24,7 @@
  */
 import type { ServerMessage, ServerMessageType, ExtensionInteractMethod, PiMessageEntry, PiToolCallEntryForm } from '@taiji/shared'
 import { EXTENSION_EVENTS, SUBAGENT_DIRECTIVE_CUSTOM_TYPE, parseSubagentDirective } from '@taiji/shared'
-import { GUI_WIDGET_MARKER, ASK_USER_MARKER, SESSION_MANAGER_MARKER, SESSION_MANAGER_ACTIONS, SUBAGENT_INFLIGHT_MARKER, SCHEDULE_CREATE_MARKER, PLAN_REVIEW_MARKER, UI_FORM_MARKER, SUBAGENT_JOURNAL_MARKER, JOURNAL_REPORT_ACK, CANVAS_MARKER, PERMISSION_APPROVAL_TITLE, isCanvasMarkerRequest, isGuiComponent, isGuiRenderResult, isScheduleDraft, isFormQuestion, isSubagentJournalReport } from '@zhushanwen/extension-protocol'
+import { GUI_WIDGET_MARKER, ASK_USER_MARKER, SESSION_MANAGER_MARKER, SESSION_MANAGER_ACTIONS, SCHEDULE_CREATE_MARKER, PLAN_REVIEW_MARKER, UI_FORM_MARKER, SUBAGENT_JOURNAL_MARKER, JOURNAL_REPORT_ACK, CANVAS_MARKER, PERMISSION_APPROVAL_TITLE, isCanvasMarkerRequest, isGuiComponent, isGuiRenderResult, isScheduleDraft, isFormQuestion, isSubagentJournalReport } from '@zhushanwen/extension-protocol'
 import type { SessionManagerAction } from '@zhushanwen/extension-protocol'
 import type { PiEventListener } from '../../services/ports/pi-engine.js'
 import type { PiTranslatedEvent } from '../../services/session/types.js'
@@ -560,21 +555,10 @@ function dialogRequestEvents(
 }
 
 /**
- * subagent 在途上报帧形状判定（select + title = SUBAGENT_INFLIGHT_MARKER，u7b）。
- *
- * 唯一消费点 = translate() 的检查分支（marker 帧恒不产出前端广播）；runtime 镜像
- * 旁路已随 inflight-mirror 删除，帧不再被消费（extension 写侧重试自弃）。
- */
-function isInflightReportFrame(event: PiEvent): boolean {
-  const e = event as unknown as { type?: unknown; method?: unknown; title?: unknown }
-  return e.type === 'extension_ui_request' && e.method === 'select' && e.title === SUBAGENT_INFLIGHT_MARKER
-}
-
-/**
  * journal 事件报告帧形状判定（select + title = SUBAGENT_JOURNAL_MARKER，event-push-channel）。
  *
  * translate() 的检查分支与 EventAdapter 监听器旁路（consumeJournalReport）共用本判定，
- * 防「两处标记判定漂移」（inflight 同款注释）：translate 侧只保证不广播，旁路侧负责
+ * 防「两处标记判定漂移」：translate 侧只保证不广播，旁路侧负责
  * 路由派生视图 + ack。
  */
 function isJournalReportFrame(event: PiEvent): boolean {
@@ -865,7 +849,8 @@ function tryTranslateScheduleCreateSelect(
  * { docs: PlanDocMeta[]; selfReview?: string }）。
  * 检测成功广播 extension.ui_request 带 planReview: true 标记（与 form: true 同构分流——
  * 前端 C4 过滤器识别后路由审批条三键 + 行内评论，不得落入 CompanionBand 渲染 marker
- * 控制符 title）；挂起请求由前端 respond 回传（select 挂起不超时语义同 ask-user 分支注释）。SUBAGENT_INFLIGHT 是唯一不广播例外（文件头 D5 例外登记），plan-review 走
+ * 控制符 title）；挂起请求由前端 respond 回传（select 挂起不超时语义同 ask-user 分支注释）。
+ * subagent-journal marker 帧经上方检查分支不广播（旁路消费），plan-review 走
  * ask-user 广播家族。检测失败（非合法 JSON / docs 缺失）返回 undefined 降级普通 select，
  * 与 ask-user 降级边界同构；docs 检查只判数组不判非空（extension 侧 E6 检查保证非空才发
  * select，空数组仍可路由审批条——比降级乱码 title 好）。
@@ -1741,11 +1726,7 @@ export function translate(event: PiEvent, sessionId: string): PiTranslatedEvent[
     console.log(`[PiEvent:raw] type=${eventType} sid=${sessionId} ${serialized}`, serialized === '(JSON.stringify failed)' ? event : '')
   }
 
-  // subagent 在途上报帧检查（u7b，设计 §3.3 D5）：marker 帧恒不产出任何前端广播。
-  // runtime 镜像旁路已删（inflight-mirror 退役），本检查结构性消灭「marker 帧落回
-  // 普通 select 分支 → 前端出现无人应答的弹窗 pending 泄漏」形态（session-manager 同类教训）。
-  if (isInflightReportFrame(event)) return []
-  // journal 事件报告帧检查（event-push-channel）：同款不广播例外——marker 帧恒被
+  // journal 事件报告帧检查（event-push-channel）：marker 帧恒被
   // 旁路消费，直调 translate 路径零产出。
   if (isJournalReportFrame(event)) return []
 
@@ -1966,10 +1947,10 @@ export class EventAdapter {
       if (typeof report.sessionId !== 'string' || report.sessionId === '') {
         // 契约（extension-protocol subagent-journal/types.ts）：sessionId 缺席 =
         // 无法归属 → 丢弃整帧（不 fold 不 ack；pi 延迟写入窗口过后 reporter 后续
-        // 帧自然归属）。不视为协议错误（inflight 同款防御先例）。
+        // 帧自然归属）。不视为协议错误。
         return true
       }
-      // 归属用 adapter 的 sessionId（帧来自本 pi 进程，与 inflight/session-manager
+      // 归属用 adapter 的 sessionId（帧来自本 pi 进程，与 session-manager
       // 同口径）；report.sessionId 只作在场性判据，不比对——pi session id 与 runtime
       // 会话键是两个 id 空间。
       const applied = routeJournalReport(this.sessionId, report)
