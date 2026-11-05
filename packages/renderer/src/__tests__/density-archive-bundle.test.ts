@@ -709,8 +709,10 @@ describe('ArchiveListView（archive-list-view 合并节）', () => {
     })
 
     it('批量清理两段确认：首击进确认态（完整文案防误触）不 emit；再击 emit purgeBatch 携带可见条目', async () => {
-      const entries = makeFourBuckets().filter((a) => a.sessionId === 'arc-older')
-      const wrapper = mountList(makeFourBuckets())
+      // 快照数组只构造一次复用（hoursAgo 依赖 Date.now()，两次构造毫秒不同会破坏 toEqual 比对）
+      const buckets = makeFourBuckets()
+      const entries = buckets.filter((a) => a.sessionId === 'arc-older')
+      const wrapper = mountList(buckets)
       await wrapper.find('[data-testid="archive-filter-older"]').trigger('click')
       const btn = wrapper.find('[data-testid="archive-batch-purge-btn"]')
 
