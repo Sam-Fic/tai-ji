@@ -27,6 +27,9 @@ import { useConnection } from './transport/use-connection'
 import type { MountPointRegistry } from './extension-host/mount-point-registry'
 import type { ContributionRegistry } from './extension-host/contribution-registry'
 import type { PluginDescriptorLike } from './extension-host/types'
+// 托盘族两挂载点名常量（值 SSOT 在 content-slot-registry，词表成员直接引用同款常量——
+// 注册值与词表/盖印值单点绑定，杜绝手抄字面量漂移）。
+import { COMPOSER_TRAY_PLACEMENT, HOST_EMBED_PLACEMENT } from './extension-host/content-slot-registry'
 
 // ── 步骤实现 ──────────────────────────────────────────────────────
 
@@ -106,8 +109,8 @@ export async function registerMountPoints(): Promise<void> {
   // ——宿主组件按 viewId 定点消费，如 scheduler-manager 浮层面板段）。不注册则插件的
   // 同名声明经 routeAll 判 unregistered-mount-point（告警 + available=false 置灰），
   // 与真坏声明混流。两族均无派生视图（注册表词表成员、路由合法）。
-  mountRegistryImpl.register('composer.tray')
-  mountRegistryImpl.register('host.embed')
+  mountRegistryImpl.register(COMPOSER_TRAY_PLACEMENT)
+  mountRegistryImpl.register(HOST_EMBED_PLACEMENT)
 }
 
 // 声明通路订阅句柄（容器扩展点统一 §6.2）：scanContributions 重复调用时先退订旧订阅

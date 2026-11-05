@@ -54,6 +54,22 @@ import { FAILURE_JUDGEMENT_TABLE, warnFailureOnce } from './failure-degradation'
  * 其中 'panel.header' / 'composer.toolbar' 由既有 headerAction/view 宿主通道消费（无派生视图）。 */
 export type ContentSlotPlacement = string
 
+/**
+ * 托盘 widget 位置族常量（composer-tray-protocol D1）：扩展 setWidget 通道的统一盖印值
+ * （API 即声明——扩展无清单，setWidget 即托盘位声明）。本常量是值 'composer.tray' 的
+ * 唯一手写处：CONTENT_SLOT_PLACEMENTS 词表成员直接引用它（结构绑定——词表与盖印值
+ * 不存在两处独立字面量，改名编译期同改，无静默漂移）；
+ * 消费方 = renderer MessageBusBridge 扩展帧盖印 + U2 托盘过滤。
+ */
+export const COMPOSER_TRAY_PLACEMENT = 'composer.tray'
+
+/**
+ * 宿主内嵌位置族常量（composer-tray-protocol M1）：宿主组件按 viewId 定点消费的树的
+ * 位置族。与 COMPOSER_TRAY_PLACEMENT 同款结构绑定——CONTENT_SLOT_PLACEMENTS 词表成员
+ * 直接引用本常量；消费方 = bootstrap registerMountPoints 挂载点注册（路由合法性）。
+ */
+export const HOST_EMBED_PLACEMENT = 'host.embed'
+
 /** 派生视图覆盖的四个容器位置族（§6.1 四容器表；§6.8：浮层族是 overlay.content 而非
  * overlay.tab——注册项表达「这是一种可显示的浮层内容」，不是「第几个标签页」）。 */
 export const CONTENT_SLOT_PLACEMENTS = [
@@ -67,17 +83,11 @@ export const CONTENT_SLOT_PLACEMENTS = [
   // - host.embed：宿主内嵌族（宿主组件按 viewId 定点消费的树，不进标签条容器）。
   //   不登记则 scheduler-manager 补声明触发 unknown-placement 告警链 + 声明标不可用，
   //   与真坏声明混流（G3）。
-  'composer.tray',
-  'host.embed',
+  // 尾两成员引用上方具名常量（COMPOSER_TRAY_PLACEMENT / HOST_EMBED_PLACEMENT）——
+  // 词表与常量结构绑定，无第二处独立字面量。
+  COMPOSER_TRAY_PLACEMENT,
+  HOST_EMBED_PLACEMENT,
 ] as const
-
-/**
- * 托盘 widget 位置族常量（composer-tray-protocol D1）：扩展 setWidget 通道的统一盖印值
- * （API 即声明——扩展无清单，setWidget 即托盘位声明）。词表成员 SSOT =
- * CONTENT_SLOT_PLACEMENTS（本常量是其成员的具名引用，同处登记防漂移）；
- * 消费方 = renderer MessageBusBridge 扩展帧盖印 + U2 托盘过滤。
- */
-export const COMPOSER_TRAY_PLACEMENT = 'composer.tray'
 
 /** 宿主渲染项的保留归属值：pluginId 恒为该值，确保不被插件卸载清理误清（§6.1 硬约束 2）。 */
 export const HOST_PLUGIN_ID = 'taiji-host'

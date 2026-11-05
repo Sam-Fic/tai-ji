@@ -21,6 +21,7 @@ import {
   ContentSlotRegistry,
   CONTENT_SLOT_PLACEMENTS,
   COMPOSER_TRAY_PLACEMENT,
+  HOST_EMBED_PLACEMENT,
   HOST_PLUGIN_ID,
   BUILTIN_NAMESPACE,
   HOST_COMPONENT_WHITELIST,
@@ -437,9 +438,11 @@ describe('findById 全局 id 空间与排序比较（U5 消费面）', () => {
     expect(BUILTIN_NAMESPACE).toBe('ui')
   })
 
-  it('composer.tray 族常量（COMPOSER_TRAY_PLACEMENT）= 词表成员具名引用（D1 盖印值 SSOT 同处）', () => {
+  it('composer.tray / host.embed 族常量 = 词表成员具名引用（D1/M1 盖印与挂载点注册值 SSOT 同处，词表成员引用常量）', () => {
     expect(COMPOSER_TRAY_PLACEMENT).toBe('composer.tray')
+    expect(HOST_EMBED_PLACEMENT).toBe('host.embed')
     expect(CONTENT_SLOT_PLACEMENTS).toContain(COMPOSER_TRAY_PLACEMENT)
+    expect(CONTENT_SLOT_PLACEMENTS).toContain(HOST_EMBED_PLACEMENT)
   })
 
   it('RL6 两族声明合法通过校验：composer.tray / host.embed 声明不再触发 unknown-placement（不标 unavailable）', () => {
