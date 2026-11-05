@@ -22,8 +22,7 @@
  *   直调（main 进程内部契约，结构由 Electron 事件保证），不可信输入才需要校验
  *
  * 停用旋钮（设计 D3④）：`TAIJI_RENDERER_CONSOLE_OFF` 值感知解析——仅 '1'/'true'
- * 视为停用（对齐 TAIJI_RUNTIME_WATCHDOG_ARMED 先例形态；presence-only 会让残留
- * '=0' 仍静默停用，恢复通道自身在排障现场失效）。生效粒度 = 启动时（模块加载）
+ * 视为停用（presence-only 会让残留 '=0' 仍静默停用，恢复通道自身在排障现场失效）。生效粒度 = 启动时（模块加载）
  * 读取一次，app 启动后设置不生效；U2 挂载前消费 isRendererConsoleDisabled()
  * 决定是否挂监听。`_OFF` 后缀是 main 侧第一个反向极性旋钮（全仓 TAIJI_ env 无
  * 同族），显式登记防后来者误当惯例复制。

@@ -19,9 +19,6 @@
 //
 // capabilities 与 core PiEngine.capabilities() 逐位一致（manifest 快照同源）。
 
-import { execFile } from "node:child_process";
-
-import { buildOutboundChildEnv } from "@zhushanwen/subagent-engine-sdk";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -116,7 +113,7 @@ export class PiEngine implements EnginePort {
       // pi rpc 模式非交互（approval 不经 argv；--approve 是 project-local files
       // 信任语义，非工具批准），子代理工具执行无需批准回路
       permissionMode: "native",
-      // turn limiter + spawn watchdog 估算兑现轮数上限
+      // turn limiter 兑现轮数上限（maxTurns 缺省/0/负 = 不限）
       maxTurns: true,
       // [subagent-model-switch] pi 子进程 set_model 通道现成 + 引擎 setModel 正向方法
       // 实装（setModelOnActiveChild：stdin 写入 → 读应答 → get_state 回读，§7.3 全
