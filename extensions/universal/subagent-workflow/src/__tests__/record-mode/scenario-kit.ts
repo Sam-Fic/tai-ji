@@ -238,8 +238,6 @@ export interface ScenarioDeps { // oe-exempt:20260929:test:scenario deps bundle 
   deps: LifecycleDeps;
   runs: Map<string, WorkflowRun>;
   faux: FauxRunnerHandle;
-  /** deps.scheduleTimeBudget 捕获（D10 预算折算断言范围）。 */
-  budgetSchedules: Array<{ runId: string; ms: number }>;
   /** deps.appendEntry 捕获（裁决点 7 v2 注册条目断言范围）。 */
   appendedEntries: Array<{ type: string; data: unknown }>;
   /** deps.eventBus.emit 捕获（pending:register 断言范围）。 */
@@ -248,7 +246,6 @@ export interface ScenarioDeps { // oe-exempt:20260929:test:scenario deps bundle 
 
 export function makeScenarioDeps(env: RecordFixtureEnv, faux: FauxRunnerHandle): ScenarioDeps {
   const runs = new Map<string, WorkflowRun>();
-  const budgetSchedules: Array<{ runId: string; ms: number }> = [];
   const appendedEntries: Array<{ type: string; data: unknown }> = [];
   const emitted: Array<{ event: string; payload: unknown }> = [];
   const deps: LifecycleDeps = {
@@ -264,15 +261,9 @@ export function makeScenarioDeps(env: RecordFixtureEnv, faux: FauxRunnerHandle):
         emitted.push({ event, payload });
       },
     },
-    scheduleTimeBudget: (runId: string, ms: number) => {
-      budgetSchedules.push({ runId, ms });
-      const timer = setTimeout(() => {}, Math.max(ms, 1));
-      timer.unref();
-      return timer;
-    },
     log: () => {},
   };
-  return { deps, runs, faux, budgetSchedules, appendedEntries, emitted };
+  return { deps, runs, faux, appendedEntries, emitted };
 }
 
 // ── resume / 收编 / 观察原语 ────────────────────────────────────────────────
