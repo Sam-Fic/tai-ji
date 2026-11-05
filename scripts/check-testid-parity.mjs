@@ -26,8 +26,11 @@
  * 不是 DOM 实现。测试文件（__tests__ / *.test.ts / *.spec.ts）排除——测试桩里的
  * testid 不是 DOM 实现。
  *
- * 已知悬空登记（KNOWN_DANGLING）：引用已删 DOM 的历史 spec 引用，按设计 D13
- * 「悬空 e2e 随推树退役重建断言，不做修复」显式登记豁免（不静默吞）——登记项
+ * 已知悬空登记（KNOWN_DANGLING）：静态对账无法判定通过的 spec 引用豁免登记，两类——
+ * 引用已删 DOM 的历史 spec 引用（按设计 D13
+ * 「悬空 e2e 随推树退役重建断言，不做修复」显式登记豁免（不静默吞））；以及实现存在但
+ * 静态不可判定的动态 id 族引用（实现为动态模板且静态前缀宽于 spec 引用前缀、细分由
+ * 运行时数据驱动——登记须注明判定依据与退役条件）。登记项
  * 输出豁免标注但 exit 0；登记项恢复实现且 spec 引用仍在时报 stale 要求删行
  * （防豁免永久残留，同 oe-exempt 过期恢复拦截的先例语义）；spec 引用整个消失
  * （spec 被删）= 死登记，不强制清理——真实退役以重建断言为主形态。
@@ -61,6 +64,12 @@ const KNOWN_DANGLING = {
   "workspace-item": "引用已删工作区切换 DOM（workspace / workspace-real spec）；随推树退役重建或删除引用 spec",
   "action-default-session": "引用已删工作区动作菜单 DOM（workspace spec）；随推树退役重建或删除引用 spec",
   "action-open-dir": "引用已删工作区动作菜单 DOM（workspace spec）；随推树退役重建或删除引用 spec",
+  // RE4/RE5（tray-entry-real.spec.ts）行内中止按钮引用：实现 = Actionbar 动态模板
+  // gui-action-bar-item-${item.id}（渲染链静态前缀宽于 spec 引用前缀，prefixCovered 判不覆盖），
+  // id 由协议侧推送 abort-<runId> 数据驱动（extensions/universal/subagent-workflow tray-widget，
+  // 不在渲染链四源扫描面内）——活契约、静态对账不可判定，非已删 DOM。退役条件 = spec 改
+  // 精确引用（exact 语义可被动态前缀覆盖）或实现产出静态可提取的 abort 形态。
+  "gui-action-bar-item-abort-": "活契约（RE4/RE5 行内中止按钮）：Actionbar 动态模板 id 由协议侧 abort-<runId> 数据驱动，静态对账不可判定；spec 改精确引用或实现产出静态形态时删除本行",
 };
 
 // ---------- 纯函数（scripts/__tests__/check-testid-parity.test.mjs 消费） ----------
@@ -83,7 +92,9 @@ function stripComments(src) {
  * 三形态：
  *   1. 静态属性 data-testid="X" → exact X（负向 lookbehind 排除 :data-testid 绑定）
  *   2. 动态模板 data-testid="`P${...}`"（含 : 绑定）→ 前缀 P（`${` 前静态段）
- *   3. 动态绑定 :data-testid="expr" 属性值内的单引号字面量 → exact（三元 / || 形态）
+ *   3. 动态绑定 :data-testid="expr" 属性值内的字面量：单引号 → exact（三元 / || 形态）；
+ *      反引号模板串 → 前缀（三元内模板串形态，如 ListTree 行按钮
+ *      :data-testid="cond ? `P${i}` : undefined"——规则 2 只覆盖反引号紧跟属性引号的形态）
  * @returns {{exact: Map<string, string[]>, prefix: Map<string, string[]>}} testid → 实现文件清单
  */
 export function extractImpls(path, src) {
@@ -100,8 +111,10 @@ export function extractImpls(path, src) {
   for (const m of code.matchAll(new RegExp(`:?data-testid="?` + "`" + `(${TESTID_CHARS}+)\\$\\{`, "g"))) {
     record(prefix, m[1]);
   }
-  for (const m of code.matchAll(new RegExp(`:data-testid="([^"\`]*)"`, "g"))) {
+  for (const m of code.matchAll(new RegExp(`:data-testid="([^"]*)"`, "g"))) {
     for (const lit of m[1].matchAll(new RegExp(`'(${TESTID_CHARS}+)'`, "g"))) record(exact, lit[1]);
+    // 与规则 2 形态重叠时重复记录同一文件（record 无去重）——只影响 files 清单展示，不影响判定
+    for (const tpl of m[1].matchAll(new RegExp("`(" + TESTID_CHARS + "+)\\$\\{", "g"))) record(prefix, tpl[1]);
   }
   return { exact, prefix };
 }

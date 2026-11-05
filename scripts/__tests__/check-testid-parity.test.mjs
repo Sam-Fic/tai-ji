@@ -63,6 +63,13 @@ describe('extractImpls：实现三形态提取', () => {
     expect(exact.has('fallback-lit')).toBe(true)
   })
 
+  it('动态绑定三元内的反引号模板串 → prefix（ListTree.vue 行按钮形态）', () => {
+    const src = `<div :data-testid="isClickable(item) ? \`gui-list-tree-action-\${i}\` : undefined" />`
+    const { prefix, exact } = extractImpls('d.vue', src)
+    expect(prefix.has('gui-list-tree-action-')).toBe(true)
+    expect(exact.has('gui-list-tree-action-')).toBe(false)
+  })
+
   it('注释文本不算实现（JSDoc / 行注释 / 模板注释；PresetChip.vue:31 形态）', () => {
     const src = [
       '/**',
