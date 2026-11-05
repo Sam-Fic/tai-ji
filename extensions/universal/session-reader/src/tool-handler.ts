@@ -14,7 +14,8 @@
  *   tool-format.ts（各 action 输出文本渲染 + 错误范围 message + F2 消歧与
  *   find 零匹配包装）/ no-match.ts（F1 自检行）/ zcode-anchor-classify.ts（entry
  *   兜底归因的 entry 级纯判定）/ handler-utils.ts（pad/err/
- *   stripHash/requireStr/SESSION_ID_PREFIX_LEN/turn 索引解析低层小工具）。
+ *   stripHash/requireStr/SESSION_ID_PREFIX_LEN/turn 索引解析低层小工具）/
+ *   metadata-cache.ts（u11 标题元数据目录指纹缓存，branch-review r1 G3 拆分）。
  * 本模块保留公共类型、定位解析（resolveSessionId）、zcode 读链与各 action 编排；
  * 域模块符号不经此 re-export——从所属域模块直接 import（唯一例外 SessionReadSignals：
  * 本模块 re-export 供 index.ts 生产消费）。
@@ -27,7 +28,7 @@
  * 例外：F2 多匹配与 F1 find 零匹配「不视为错误」，返回消歧/提示结果而非抛错。
  */
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, dirname, isAbsolute } from 'node:path'
 import { homedir } from 'node:os'
 import { toErrorMessage } from '@zhushanwen/pi-ext-guards'
@@ -37,9 +38,9 @@ import {
   buildSessionFileIndex,
   findSessions,
   type MatchedSession,
-  type SessionMetadataEntry,
   type SessionMetadataProvider,
 } from './discovery/find.js'
+import { withMetadataCache } from './metadata-cache.js'
 import {
   resolveArchiveFragment,
   type ArchiveResolve,
@@ -625,9 +626,9 @@ const FIND_DEFAULT_LIMIT = 20
  *   动作，不再折叠。
  *
  * u11（design 2026-09-10 §6.6）：metadataProvider / liveSessionDir 透传匹配层——标题
- * 检索的惰性/窄化/mtime 缓存策略都在发现层与注入包装侧，本函数只负责透传（缺省
- * undefined = 现状行为）。多次 findSessions 调用（分组探测）经注入侧 mtime 缓存去重，
- * 标题 listAll 在目录 mtime 未变期间至多一次/目录。
+ * 检索的惰性/窄化/指纹缓存策略都在发现层与注入包装侧，本函数只负责透传（缺省
+ * undefined = 现状行为）。多次 findSessions 调用（分组探测）经注入侧指纹缓存去重，
+ * 标题 listAll 在目录指纹未变期间至多一次/目录。
  *
  * E1 预解析根复用（ext-simplify-04 §3 D1，清 impl-plan D-15④ 债）：开头一次
  * resolveSessionRoots(signals)（无 options 恒实扫——根扫描无缓存，doctor 缓存机
@@ -1313,61 +1314,6 @@ async function doWorkflow(
   return { content: [{ type: 'text', text }], details }
 }
 
-// ---------------------------------------------------------------------------
-// u11 标题元数据缓存（design 2026-09-10 §6.6；mtime 失效单通道）
-// ---------------------------------------------------------------------------
-
-/**
- * 标题缓存条目（SessionMetadataEntry[] keyed by 目录字面路径）。进程内唯一实例，
- * 仅缓存标题元数据（session_info name / firstMessage，低频变更）——根扫描统计
- * 不再有缓存（doctor 缓存机已删除，ext-simplify-04 U3），与根扫描无共享状态。
- */
-interface MetadataCacheEntry {
-  entries: SessionMetadataEntry[]
-  /** 目录 mtime(ms)；不存在为 null（存在性翻转即失效） */
-  dirMtimeMs: number | null
-}
-
-const metadataCache = new Map<string, MetadataCacheEntry>()
-// §7.5 豁免（development-guide.md「纯性能缓存豁免」）：纯性能缓存，jiti 双路径加载
-// 分裂成两份仅多一次 miss 重扫，无正确性影响，不升级 globalThis 单例。
-
-/** stat 目录 mtime；不存在返回 null（与缓存条目的 null 比对 = 存在性未翻转）。 */
-async function statDirMtimeOrNull(path: string): Promise<number | null> {
-  try {
-    return (await stat(path)).mtimeMs
-  } catch (err) {
-    // 目录不存在是常态输入（候选根降级形态），非异常——void 同 roots.ts 容错
-    void err
-    return null
-  }
-}
-
-/**
- * 把注入的 metadataProvider 包上 mtime 缓存（get 失效判定 + set 快照）。
- *
- * 失效单通道 = 目录 mtime（存在性翻转亦失效：null 比对）。只缓存成功结果——provider
- * 抛错原样上抛，由发现层单目录 try/catch 记空继续（guard），且瞬态失败不污染缓存
- * （下个查询即重试）。find 的多次 findSessions 调用（u10 分组探测 main/subagent 两路）
- * 与连续 keyword 查询都经此处去重，listAll 在目录 mtime 未变期间至多一次/目录。
- */
-function withMetadataCache(provider: SessionMetadataProvider): SessionMetadataProvider {
-  return async (dir) => {
-    const hit = metadataCache.get(dir)
-    if (hit !== undefined) {
-      const mtime = await statDirMtimeOrNull(dir)
-      if (mtime === hit.dirMtimeMs) return hit.entries
-      metadataCache.delete(dir)
-    }
-    const entries = await provider(dir)
-    metadataCache.set(dir, {
-      entries,
-      dirMtimeMs: await statDirMtimeOrNull(dir),
-    })
-    return entries
-  }
-}
-
 // ===========================================================================
 // 入口：按 action 分发
 // ===========================================================================
@@ -1383,7 +1329,7 @@ function withMetadataCache(provider: SessionMetadataProvider): SessionMetadataPr
  *   实扫，无任何根扫描缓存，§7B 要点 8）。
  * @param signal 可选 AbortSignal（MF-5）：仅 search 消费（长扫描可中断）；其余 action 有界，不接。
  * @param metadataProvider 可选标题元数据注入（u11，design 2026-09-10 §6.6）：index.ts 构造
- *   `(dir) => SessionManager.listAll(dir)`，此处包 TTL 缓存后透传 find。缺省 = undefined =
+ *   `(dir) => SessionManager.listAll(dir)`，此处包指纹缓存后透传 find。缺省 = undefined =
  *   现状行为（标题检索不可用，首条 user 匹配不受影响）；provider 抛错由发现层单目录
  *   try/catch 降级，不外抛。
  */
@@ -1394,7 +1340,7 @@ export async function handleSessionRead(
   metadataProvider?: SessionMetadataProvider,
 ): Promise<ToolResult> {
   const agentDir = signals.agentDir
-  // u11：TTL 缓存包装在注入边界（策略 ③，metadata 缓存独立实例）；仅 find/search 消费。
+  // u11：指纹缓存包装在注入边界（策略 ③，metadata 缓存独立实例）；仅 find/search 消费。
   const cachedProvider =
     metadataProvider === undefined ? undefined : withMetadataCache(metadataProvider)
   switch (params.action) {
