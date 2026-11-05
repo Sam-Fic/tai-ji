@@ -248,10 +248,10 @@ snapshot_test_evidence() {
     log "  证据已快照: $ev_dir"
 }
 
-# 写入 stage gate marker（供 pr-status.sh 与 pr-lifecycle workflow 读取）。
-# 双写（迁移过渡期 design.md §7 风险 2）：新 pr-review 目录为主 + 旧 .review/ 同步——
-# pr-lifecycle（共享实体）仍读旧路径且只 match result= 行；headCommit 行供 pr-status.sh
-# 防「worktree 重建后陈旧 marker 判 ready」（design.md §7 风险 3）。
+# 写入 stage gate marker 与 premerge-result.json（原子写，本脚本下方写入）。
+# 消费方分工：pr-lifecycle workflow 读 premerge-result.json 结构化字段；pr-status.sh 读
+# 文本 marker（result= 行 + headCommit 行——防「worktree 重建后陈旧 marker 判 ready」）。
+# 双目录双写（新 pr-review 目录为主 + 旧 .review/ 同步）持续到 pr-status.sh 切 JSON 后收敛。
 # changeset 摘要透传（全局，changeset-check 段填充）：premerge-result.json 的
 # changeset 字段载体——pr-lifecycle 按 JSON 字段读取（不再从 stdout 子串触发）
 CHANGESET_JSON_SUMMARY='null'

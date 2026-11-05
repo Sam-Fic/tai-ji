@@ -89,10 +89,10 @@ describe('changeset 声明解析与 missing 判定', () => {
     ]
     expect(extractDeclaredPkgs(texts)).toEqual(['@zhushanwen/pi-system-prompt', '@zhushanwen/pi-todo'])
   })
-  it('missing 判定 = 子串语义（grep -qF 对拍：declared 条目包含 pkg 即视为已声明）', () => {
-    // 已知口径（对拍保留）：pi-foo 是 pi-foobar 的前缀 → 误判「已声明」（误放方向）
-    expect(computeMissing(['@zhushanwen/pi-foo'], ['@zhushanwen/pi-foobar'])).toEqual([])
+  it('missing 判定 = 包名精确等值（子串口径已退役：pi-foo 曾被 pi-foobar 声明误覆盖成已声明，WARN 方向漏报）', () => {
+    expect(computeMissing(['@zhushanwen/pi-foo'], ['@zhushanwen/pi-foobar'])).toEqual(['@zhushanwen/pi-foo'])
     expect(computeMissing(['@zhushanwen/pi-todo'], ['@zhushanwen/pi-other'])).toEqual(['@zhushanwen/pi-todo'])
+    expect(computeMissing(['@zhushanwen/pi-foobar'], ['@zhushanwen/pi-foobar'])).toEqual([])
   })
 })
 

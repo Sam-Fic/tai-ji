@@ -76,17 +76,10 @@ fi
 # ── 若 --review-report 提供，把它的内容 append 到 body 末尾
 if [[ -n "$REVIEW_REPORT" && -r "$REVIEW_REPORT" ]]; then
     REVIEW_SECTION="$(mktemp -t pr-review.XXXXXX)"
-    # 维度列表从 report 的 "Dimensions reviewed:" 行动态解析（维度数随 batch 配置变化，
-    # pr-cr-fix 7 维 / code-review 5 维等，不能写死）。解析失败降级为通用文案。
-    DIMENSIONS_LINE="$(grep -m1 -i 'Dimensions reviewed:' "$REVIEW_REPORT" 2>/dev/null || true)"
-    if [[ -n "$DIMENSIONS_LINE" ]]; then
-        DIM_LIST="${DIMENSIONS_LINE#*Dimensions reviewed:}"
-        DIM_LIST="$(echo "$DIM_LIST" | sed 's/^ *//;s/ *$//;s/, */ \/ /g')"
-        DIM_COUNT="$(echo "$DIM_LIST" | awk -F' / ' '{print NF}')"
-        DIM_DESC="$DIM_COUNT dimensions ($DIM_LIST)"
-    else
-        DIM_DESC="multi-dimension review"
-    fi
+    # 维度清单不在聚合报告载体中（aggregated.md 格式 = ## Summary + Must-fix 计数 +
+    # 问题表 + 修复分组表，无维度行——曾按 "Dimensions reviewed:" 行解析属死锚恒降级，
+    # 已退役），PR body 用通用文案；各维度明细见报告本体与 pr-lifecycle 聚合段
+    DIM_DESC="multi-dimension review"
     {
         echo ""
         echo "## Review Summary"
