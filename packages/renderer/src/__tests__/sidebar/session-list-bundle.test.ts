@@ -1558,6 +1558,27 @@ describe('默认区收起下的落点可见性保证（+ 新建 / session 拖入
   })
 })
 
+describe('默认区收起下的删除归回可见性（confirmDelete 强制展开）', () => {
+  it('删除命名项目（会话归回默认区）→ 默认区强制展开（验收 P2-1 对称保证）', async () => {
+    const store = setupProjects_m2('proj-a', [['proj-a', 'Alpha']])
+    const wrapper = mountList_m2()
+    expect(wrapper.find('[data-testid="default-project-flat-zone"]').exists()).toBe(false) // 默认收起
+
+    await groupOf_m2(wrapper, 'proj-a').find('[data-testid="project-group-delete"]').trigger('click')
+    await nextTick()
+    mockRemove.mockImplementation(async () => commandReply(store, { state: { projects: store.projects.filter((p) => p.id !== 'proj-a'), activeProjectId: DEFAULT_PROJECT_ID } }))
+    const confirmBtn = [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === '删除')
+    confirmBtn!.click()
+    await flushPromises()
+
+    expect(store.projects.some((p) => p.id === 'proj-a')).toBe(false)
+    // 归回的会话（sa）落默认区且立即可见，不消失在收起区里
+    expect(wrapper.find('[data-testid="default-project-head"]').attributes('data-expanded')).toBe('true')
+    expect(wrapper.find('[data-testid="default-project-flat-zone"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+})
+
 describe('project 组头拖拽换位（PROJECT_DRAG_MIME 与 session 拖拽分流）', () => {
   it('dragover 高亮（data-project-dragover）+ drop → 组序换位 + localStorage 持久化', async () => {
     setupProjects(DEFAULT_PROJECT_ID, [['proj-a', 'Alpha'], ['proj-b', 'Beta'], ['proj-c', 'Gamma']])

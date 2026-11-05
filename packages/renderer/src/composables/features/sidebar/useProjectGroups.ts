@@ -294,12 +294,17 @@ export function useProjectGroups(options: {
   }
 
   /** 删除确认（命令化：异步命令失败 toast 已由 store 出声，此处吞 rejection；归回的
-   *  会话落默认项目区（恒展开可见，spec sidebar §3.7）——回执到达后分组视图自动更新，
-   *  命名组开合记忆保留不动） */
-  function confirmDelete(): void {
-    if (pendingDelete.value) void projectStore.removeProject(pendingDelete.value.id).catch(() => {})
+   *  会话落默认项目区——删除回执落定后强制展开默认区（落进收起区的内容必须立即可见，
+   *  spec sidebar §3.7 恒展开可见的默认收起语义版），命名组开合记忆保留不动） */
+  async function confirmDelete(): Promise<void> {
+    const target = pendingDelete.value
     pendingDelete.value = null
     deleteOpen.value = false
+    if (!target) return
+    await projectStore.removeProject(target.id).then(
+      () => expandDefaultZone(),
+      () => {},
+    )
   }
 
   /** 组头行内重命名提交（ProjectGroup 已做空名检查，store 层再检查默认项目/未知 id；
