@@ -388,7 +388,7 @@ describe('session-item-message-count', () => {
       // 两段式 = 「时间 · 消息数」（demo `cardSess.upd · cardSess.msgs` 分隔形态）
       expect(card!.textContent).toContain(' · ')
       // command 入参 = session.getMessageCount + sessionId（payload 单对象）
-      expect(commandMock).toHaveBeenCalledWith('session.getMessageCount', { sessionId: SID }, 5000)
+      expect(commandMock).toHaveBeenCalledWith('session.getMessageCount', { sessionId: SID })
     })
 
     it('计数未返回前该段不渲染（不闪 0——meta 行只有相对时间，无分隔符）', async () => {

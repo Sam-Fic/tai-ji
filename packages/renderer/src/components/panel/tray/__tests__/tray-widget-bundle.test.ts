@@ -2070,7 +2070,7 @@ describe('TrayCanvasPanel 三要素 modal（缺一拒绝 = 不变量 1 前置校
         criterias: ['两条 provider 并存可切', '切换零消息丢失'],
         scopeExclusions: ['不改 provider 抽象层', '不动 pi 上游'],
       },
-    }, expect.any(Number))
+    })
     // 成功 → modal 关（画布唤起由 use-canvas-sync 的 CanvasCreated 广播链承接，本面板零接线）
     expect(bodyQuery('tray-canvas-submit')).toBeNull()
     expect(toastErrorMock).not.toHaveBeenCalled()
