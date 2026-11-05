@@ -1519,6 +1519,21 @@ describe('ListTree 富行状态标签渲染序（RL4-2 / D3：statusLabel ?? i18
     const wrapper = mount(ListTree, { props: { items: [{ label: 'a', statusLabel: '' }] } })
     expect(wrapper.find('[data-testid="list-tree-status"]').exists()).toBe(false)
   })
+
+  it('status 枚举外脏值（第三方 JS 扩展无 TS 三值联合防线）：该行胶囊不渲染、渲染不抛错，同树其余行正常', () => {
+    // 枚举外脏值查 i18n 映射表得 undefined，t(undefined) 曾使 vue-i18n 抛 SyntaxError
+    // 中断整棵树渲染（v6 同脏值仅圆点失色不崩）——脏行必须按双无口径整胶囊不渲染
+    const items: TreeItem[] = [
+      { label: 'dirty-row', status: 'paused' as unknown as TreeItem['status'] },
+      { label: 'healthy-row', status: 'running' },
+    ]
+    const wrapper = mount(ListTree, { props: { items } })
+    const pills = wrapper.findAll('[data-testid="list-tree-status"]')
+    expect(pills).toHaveLength(1)
+    expect(pills[0].text()).toBe('运行中')
+    expect(wrapper.text()).toContain('dirty-row')
+    expect(wrapper.text()).toContain('healthy-row')
+  })
 })
 
 describe('ListTree 富行 actions 行内槽（RL4-3 / D4：pin 门控 + 两段式确认复用）', () => {

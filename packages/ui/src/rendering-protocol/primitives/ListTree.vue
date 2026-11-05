@@ -116,7 +116,12 @@ const STATUS_ENUM_KEYS: Record<TreeItemStatus, string> = {
 const statusTextOf = (item: TreeItem): string | null => {
   if (typeof item.statusLabel === 'string' && item.statusLabel !== '') return item.statusLabel
   if (item.status === undefined) return null
-  return t(STATUS_ENUM_KEYS[item.status])
+  // TreeItem.status 三值联合仅是 TS 契约，第三方 JS 扩展运行时无类型防线：枚举外脏值
+  // 查表得 undefined（TS 静态类型认为不可达），t(undefined) 会使 vue-i18n 抛 SyntaxError
+  // 中断整棵树渲染。脏行返回 null = 胶囊整体不渲染（与双无行同口径）。
+  const key: string | undefined = STATUS_ENUM_KEYS[item.status]
+  if (key === undefined) return null
+  return t(key)
 }
 
 /** D3 胶囊色与文字同源：有 status 取枚举色（text-* 配 bg-*-soft 半透明底——既有
