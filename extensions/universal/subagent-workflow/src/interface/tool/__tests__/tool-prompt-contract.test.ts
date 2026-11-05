@@ -874,11 +874,11 @@ describe("tool-prompt-contract", () => {
     });
 
     it("跨工具预算/模型/勿等待纪律单源化：工具文案零残留，规则只在注入段说一次（D1）", () => {
-      // tool-declaration-slimming D1 信息单源化：tokens/time「仅用户明确要求才设」、
+      // tool-declaration-slimming D1 信息单源化：tokens「仅用户明确要求才设」、
       // model/thinkingLevel「缺省继承主 agent」与「勿 poll/bash sleep 等待」原在本工具
       // promptGuidelines 与 schema 说明重复陈述，现收敛到 <available_subagents> 注入段
       // （subagent-list-injector.ts SUBAGENT_DISPATCH_SHARED_RULES）说一次——工具声明
-      // 文案零残留 + 注入段含规则。call shape 示例里的 tokens/time 字段展示保留（参数
+      // 文案零残留 + 注入段含规则。call shape 示例里的 tokens 字段展示保留（参数
       // 存在性由 schema 承载，何时设由注入段纪律约束）。
       const runGuidelines = promptGuidelinesText(RUN_SECTION);
       const controlGuidelines = promptGuidelinesText(CONTROL_SECTION);
@@ -890,6 +890,18 @@ describe("tool-prompt-contract", () => {
       expect(SUBAGENT_LIST_INJECTOR_SRC).toContain("busy-wait, or poll");
       expect(SUBAGENT_LIST_INJECTOR_SRC).toContain("explicitly requests a limit");
       expect(SUBAGENT_LIST_INJECTOR_SRC).toContain("inherit the main agent's model");
+    });
+
+    it("time 参数负锚（run 级时间预算机制删除）：schema 与 promptGuidelines 不复活 time 参数", () => {
+      // time 参数已随 workflow run 级时间预算机制删除（WorkflowRunParams 无 time 字段、
+      // 与 assertEntryTokenBudget 同源的 assertEntryTimeBudget 已删）。模型可见文案不得
+      // 再教 time 参数——schema additionalProperties:false 下模型按描述传 time 会被参数
+      // 校验拒绝。锚形态精确化（idleTimeoutMs 负锚同款思路）：tokens/time 锁 Call shape
+      // 行；time: Type. 锁 schema 字段声明形态（不误伤 time_limited done-reason、
+      // creation-time 等无关词）。
+      expect(promptGuidelinesText(RUN_SECTION)).not.toContain("tokens/time");
+      expect(promptGuidelinesText(CONTROL_SECTION)).not.toContain("tokens/time");
+      expect(TOOL_WORKFLOW_SRC).not.toMatch(/\btime:\s*Type\./);
     });
 
     it("model/thinkingLevel 字段说明承载脚本同名参数双通道指引（§3.3.7 残留风险处置说明腿）", () => {

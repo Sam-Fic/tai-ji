@@ -7,7 +7,7 @@
  *   scenario-24-args-mismatch-rejection.test.ts）。
  * - resumeRun 接线：budgetTokens（tokens 形参透传）/
  *   host / runId；成功文案与 details。
- * - runId 缺失与 time/tokens 负值的入口护栏（assertEntryTimeBudget / assertEntryTokenBudget 同源）。
+ * - runId 缺失与 tokens 负值的入口护栏（assertEntryTokenBudget）。
  *
  * mock 策略：resume-run 深路径 stub（resumeRun 为 vi.fn——不起锁/IO，只测入口
  * 面与校验层）；record 流用 mkdtemp 真文件（D14 读侧读真实路径）。范式对齐

@@ -423,7 +423,7 @@ export function registerWorkflowTool(
       // 锚词保留清单见 __tests__/tool-prompt-contract.test.ts 头注。
       "PRIORITY: 'workflow' / 'run workflow' → call workflow_run FIRST.",
       "Refs come from <available_workflows>; for parameter details read the <location> script file (@pi-meta header: parameters + usage + phases).",
-      "Call shape (JSON): {\"name\":\"<script>\",\"args\":{...}} (+ optional tokens/time/model/thinkingLevel).",
+      "Call shape (JSON): {\"name\":\"<script>\",\"args\":{...}} (+ optional tokens/model/thinkingLevel).",
       "Anti-patterns: flattening args sub-fields (task/items/...) to the top level — they belong inside args.",
       "CRITICAL: for orchestration patterns ALWAYS use workflow_run with the listed workflow's <location> path — NEVER use workflow_script action:generate to recreate covered patterns; generate is ONLY for novel patterns.",
     ],
