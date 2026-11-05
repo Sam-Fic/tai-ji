@@ -406,6 +406,31 @@ describe('applySystemToDom', () => {
     expect(written).not.toContain('--font-sans')
     expect(written).not.toContain('--font-mono')
   })
+
+  // ── RL9（font-system §4.2，AX5 精确版）：渲染路径零 IO ──
+  // 设计声明：mock storage.set 与 ws send，只调 applySystemToDom(system) 后断言两者调用
+  // 次数均为 0。双 sink spy 挂在真实底层落点——storage.set 的最终落点 = localStorage.setItem
+  // （SystemStorage 经 KVStorage / renderer LocalStorageAdapter），ws send 落点 = WebSocket
+  // 实例 send。用户显式选择引发的 1 次 storage.set 是合法保存（走 store.setSystem 路径，
+  // 壳侧强形态见 renderer useSettingsShell.test.ts RL9 describe），不在本断言范围——本用例
+  // 只调 applySystemToDom。未来在渲染路径误加持久化或 WS 副作用时本用例红。
+  it('RL9：渲染路径零 IO——只调 applySystemToDom 后 storage.set 与 ws send 调用次数均为 0', () => {
+    const storageSet = vi.fn()
+    const wsSend = vi.fn()
+    const storageStub = { getItem: vi.fn(() => null), setItem: storageSet, removeItem: vi.fn() }
+    // 裸标识符与 window.* 两条访问通道都接到同一组 spy（回归代码两种写法都逃不掉）
+    vi.stubGlobal('localStorage', storageStub)
+    vi.stubGlobal('window', {
+      matchMedia: matchMediaMock,
+      localStorage: storageStub,
+      WebSocket: vi.fn().mockImplementation(() => ({ send: wsSend, close: vi.fn() })),
+    })
+
+    applySystemToDom(makeSystem({ fonts: { ui: 'Maple Mono', mono: 'Fira Code' } }))
+
+    expect(storageSet).toHaveBeenCalledTimes(0)
+    expect(wsSend).toHaveBeenCalledTimes(0)
+  })
 })
 
 // ======================================================================

@@ -16,6 +16,9 @@ import { defineComponent, h, nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
 
 // ── mock 与被测行为无关的壳接线依赖（避免拖入 WS/IPC/quota 真实链路）──
+// setUiLocale spy 用 vi.hoisted 提升：RL9 用例断言「locale 未变不重复推送」需要拿到同一个
+// spy 实例（vi.mock 工厂提升到文件顶部，普通 const 不可引用）。
+const setUiLocaleSpy = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 vi.mock('@/composables/useToast', () => ({
   useToast: () => ({ error: vi.fn(), info: vi.fn(), warning: vi.fn(), success: vi.fn() }),
 }))
@@ -29,7 +32,7 @@ vi.mock('@/api', async (importOriginal) => {
     config: {
       ...actual.config,
       // 壳接线测试只关心语言推送 + detectSources，真实 config 域其余方法保留但不会被调用
-      setUiLocale: vi.fn().mockResolvedValue(undefined),
+      setUiLocale: setUiLocaleSpy,
       detectSources: vi.fn().mockResolvedValue([]),
     },
   }
@@ -56,6 +59,9 @@ vi.mock('@/i18n', async (importOriginal) => {
 import { useSettingsShell } from '../useSettingsShell'
 import { getSettingsStore, provideSettingsStore, createSettingsStore } from '@taiji/core'
 import { getLocale } from '@/i18n'
+// 深路径导入（对齐 vitest-i18n-setup 范式）：RL9 用例要覆写全局 mock 平台的 storage/WS
+// 双 sink（providePlatform 覆盖默认注入是 setup 注释明示的 sanctioned 形态）
+import { providePlatform } from '@taiji/core/platform/port'
 
 /** 挂载一个 setup 内调用 useSettingsShell 的探针组件（provide/watch 需组件实例上下文） */
 function mountShell() {
@@ -71,6 +77,7 @@ function mountShell() {
 beforeEach(() => {
   localStorage.clear()
   setLocaleSpy.mockClear()
+  setUiLocaleSpy.mockClear()
   provideSettingsStore(createSettingsStore())
 })
 
@@ -173,4 +180,57 @@ describe('useSettingsShell · 字体槽位接线（font-system U3）', () => {
     expect(document.documentElement.style.getPropertyValue(SLOT_MONO)).toBe("'Fira Code'")
     wrapper.unmount()
   })
+})
+
+describe('useSettingsShell · RL9 渲染路径零 IO（font-system AX5 精确版 / V6 强形态）', () => {
+  it(
+    'fonts 变更触发 applyCurrent：恰好 1 次合法保存 + 渲染路径零额外 storage.set/零 WS send + locale 未变不重复推送',
+    async () => {
+      // 设计 §4.2 RL9 强形态（V6 步骤 3/4 的 L1 版，settings-suite.test.ts 原形之上的壳侧延伸）：
+      // - V6 第 3 步：用户显式选择（setSystem）→ 恰好 1 次 storage.set（合法保存，不多不少）；
+      // - V6 第 4 步：渲染路径（applyCurrent→applySystemToDom）零额外 storage.set、零 WS send；
+      // - locale 未变 → pushUiLocale 幂等守卫不重复推送（mount 初始 apply 已推过一次，V3(b)）。
+      // 双 sink spy 接在真实通道上：storage.set = KVStorage 缝（setSystem 的持久化落点），
+      // WS send = 平台 webSocket 通道帧 + config.setUiLocale seam（locale 跨进程推送唯一出口）。
+      const storageSet = vi.fn()
+      const wsSend = vi.fn()
+      providePlatform({
+        kind: 'mock',
+        storage: { get: async () => null, set: storageSet, remove: async () => {} },
+        webSocket: {
+          create: () => ({
+            readyState: 0,
+            send: wsSend,
+            close: () => {},
+            onopen: null,
+            onclose: null,
+            onmessage: null,
+            onerror: null,
+          }),
+        },
+        ipc: null,
+      })
+
+      const wrapper = mountShell()
+      const store = getSettingsStore()
+
+      // 前置：mount 初始 applyCurrent 只推一次 locale（lastPushedLocale undefined → 首推，V3(b)）
+      expect(setUiLocaleSpy).toHaveBeenCalledTimes(1)
+
+      storageSet.mockClear()
+      await store.setSystem({ fonts: { ui: 'Maple Mono' } })
+      await nextTick()
+
+      // 渲染路径真实跑过（槽位已写，前置有效性）
+      expect(document.documentElement.style.getPropertyValue('--font-ui')).toBe("'Maple Mono'")
+      // V6 第 3 步：用户显式选择恰好 1 次 storage.set（不多不少）
+      expect(storageSet).toHaveBeenCalledTimes(1)
+      // V6 第 4 步：渲染路径零 WS 帧（平台 WS 通道）
+      expect(wsSend).toHaveBeenCalledTimes(0)
+      // locale 未变 → 不重复推送（删 pushUiLocale 幂等守卫或渲染路径误发消息时红）
+      expect(setUiLocaleSpy).toHaveBeenCalledTimes(1)
+
+      wrapper.unmount()
+    },
+  )
 })
