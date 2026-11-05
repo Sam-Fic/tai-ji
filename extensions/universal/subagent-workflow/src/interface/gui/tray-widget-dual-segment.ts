@@ -17,6 +17,15 @@ import { t, type UiLocale } from "../../i18n.ts";
 /** meta 状态词表（head 状态点语义）。 */
 type MetaStatus = NonNullable<WidgetMeta["status"]>;
 
+/**
+ * head 状态派生（次序与接口 hasFailure 注释一致）：running>0 亮运行态（宿主呼吸点）
+ * → 有失败行落 failed → done。
+ */
+function deriveHeadStatus(runningCount: number, hasFailure: boolean): MetaStatus {
+	if (runningCount > 0) return "running";
+	return hasFailure ? "failed" : "done";
+}
+
 /** 双段托盘 widget 组装入参（行类型 T 由各件的数据源域决定）。 */
 export interface DualSegmentTrayInput<T> { // oe-exempt:20261105:framework:骨架组装入参契约（泛型参数对象，无可实现主体——调用方字面量构造）
 	/** 全量行（progress.total 与 text 臂的数据源）。 */
@@ -51,8 +60,7 @@ export function buildDualSegmentTrayWidget<T>(
   locale: UiLocale,
 ): DualWidgetContent {
   const { records, running, ended, hasFailure, titleKey, icon, segment, textLines } = input;
-  const status: MetaStatus =
-    running.length > 0 ? "running" : hasFailure ? "failed" : "done";
+  const status = deriveHeadStatus(running.length, hasFailure);
   const runningCountText = running.length > 0 ? String(running.length) : undefined;
   return {
     gui: guiResult(

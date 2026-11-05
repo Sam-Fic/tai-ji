@@ -55,16 +55,7 @@ export function withFileLockSync<T>(filePath: string, fn: () => T): T {
   try {
     release = acquireLockSync(filePath)
   } catch (err) {
-    if (isElocked(err)) {
-      throw Object.assign(
-        new Error(
-          `[file-lock] ${filePath} 写锁获取失败：锁被占用（持锁方临界区异常或已崩溃）。` +
-          `恢复指引：确认无并发写入方后删除 ${filePath}.lock 锁目录重试。`,
-          { cause: err },
-        ),
-        { code: 'ELOCKED' },
-      )
-    }
+    if (isElocked(err)) throwLockConflict(filePath, err)
     throw err
   }
   try {
@@ -76,6 +67,21 @@ export function withFileLockSync<T>(filePath: string, fn: () => T): T {
 
 function isElocked(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'ELOCKED'
+}
+
+/**
+ * 锁冲突（ELOCKED）统一错误出口：文案带恢复指引、cause 挂原始锁原语错误、code 归一
+ * 'ELOCKED'（消费方按 code 判定）。sync/async 两版共用一份文案，改指引只动这里。
+ */
+function throwLockConflict(filePath: string, cause: unknown): never {
+  throw Object.assign(
+    new Error(
+      `[file-lock] ${filePath} 写锁获取失败：锁被占用（持锁方临界区异常或已崩溃）。` +
+      `恢复指引：确认无并发写入方后删除 ${filePath}.lock 锁目录重试。`,
+      { cause },
+    ),
+    { code: 'ELOCKED' },
+  )
 }
 
 // ──────────────────────── async 版（auth.json / providers.json 写锁共用） ────────────────────────
@@ -103,16 +109,7 @@ export async function withFileLockAsync<T>(
   try {
     release = await acquireLock(filePath)
   } catch (err) {
-    if (isElocked(err)) {
-      throw Object.assign(
-        new Error(
-          `[file-lock] ${filePath} 写锁获取失败：锁被占用（持锁方临界区异常或已崩溃）。` +
-          `恢复指引：确认无并发写入方后删除 ${filePath}.lock 锁目录重试。`,
-          { cause: err },
-        ),
-        { code: 'ELOCKED' },
-      )
-    }
+    if (isElocked(err)) throwLockConflict(filePath, err)
     throw err
   }
   try {
