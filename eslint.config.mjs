@@ -120,6 +120,15 @@ export default [
       'max-lines': 'off',
     },
   },
+  // sidebar 会话列表（项目分组双模式模板 + 拖拽/开合事件接线 + folder 确认态编排）：
+  // 职责内聚但非注释行 516 超 500（feat-sidebar-panel-state 加默认区开合 gate 时超限），
+  // 拆分属独立重构任务（随 Sidebar.vue / chat 三件先例）。短期 max-lines override 避免阻塞。
+  {
+    files: ['packages/renderer/src/components/sidebar/SessionList.vue'],
+    rules: {
+      'max-lines': 'off',
+    },
+  },
   // [HISTORICAL] runtime 的 .cjs 文件（plugin-esm-loader.cjs 等）是 Node CJS 模块，
   // require() 是唯一导入方式——no-require-imports 规则对 .cjs 是误报（2026-08-05 添加，
   // sandbox ESM loader 落地时确认：tsup entry 直接打包 .cjs 源文件，无 TS 转换层）。

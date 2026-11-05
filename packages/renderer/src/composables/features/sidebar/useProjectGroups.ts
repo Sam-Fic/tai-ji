@@ -4,13 +4,16 @@
  * 职责：项目分组视图模型（归属切分 + 组序 + 组内平铺序）、锚定交互（组头点击按模式
  * 裁决；平铺模式展开态按组独立记忆支持多项目同开——锚定只决定新会话归属与「当前」
  * chip，不再互斥收起其他组 / 组头「+」落点新建）、项目新建草稿流、行内重命名与删除
- * 确认的壳侧状态。
+ * 确认的壳侧状态、组头拖拽换位（projectStore.reorderProject 接线）。
  * 归属切分规则 SSOT = sessionBelongsToProject（默认项目聚未归类 + 孤儿）；组序 SSOT =
- * projectStore.orderedProjects（lastUsedAt 稳定序 + 默认项目固定最后，锚定切换不重排）；
- * 组内平铺序 = sessionsInRuntimeGroupOrder（runtime 组序展平，客户端零重排）。
+ * projectStore.orderedProjects（用户自定义序优先 + lastUsedAt 稳定序 + 默认项目固定
+ * 最后，锚定切换不重排）；组内平铺序 = sessionsInRuntimeGroupOrder（runtime 组序展平，
+ * 客户端零重排）。
+ * 展开态默认收起 + 持久化（sidebar-group-state：平铺/目录两套独立展开集合 + 默认区
+ * 开合，localStorage 直存——与模式开关同通道；「展开集合」语义使空集 = 全收起 = 默认）。
  *
  * 依赖注入说明：groups 由调用方以 getter 注入（SessionList 的 props 非响应式直传边界）；
- * mode 由调用方注入（模式持久化留在 SessionList，目录模式开合集 dirClosed 与其联动）。
+ * mode 由调用方注入（模式持久化留在 SessionList，目录模式开合集与其联动）。
  * useProjectStore 为 pinia store 可在 composable 内直调。
  */
 import { computed, nextTick, ref, type ComponentPublicInstance, type Ref } from 'vue'
@@ -22,7 +25,7 @@ import {
   collectNamedProjectIds,
   sessionBelongsToProject,
 } from '@/composables/logic/project-session'
-import { useProjectStore } from '@/stores/project'
+import { DEFAULT_PROJECT_ID, useProjectStore } from '@/stores/project'
 
 /** 项目分组视图模型：项目元信息 + 组内 cwd 目录切分（目录模式渲染源）+ 组内平铺序（平铺模式渲染源）。
  *  数据形状用 type（assign-targets.AssignTarget 同例）——非行为接口，无多实现演进面。 */
@@ -37,6 +40,41 @@ export type ProjectGroupVM = {
 /** 侧栏会话列表展示模式（与 SessionList 的持久化模式同型） */
 export type SidebarSessionMode = 'flat' | 'groups'
 
+/** 组展开态持久化形状（taiji:sidebar-group-state 的 JSON 值） */
+type SidebarGroupPersist = {
+  /** 平铺模式展开的组 id 集合 */
+  flat: string[]
+  /** 目录模式展开的组 id 集合 */
+  groups: string[]
+  /** 默认项目区（session 区）展开态 */
+  defaultZone: boolean
+}
+
+/** 展开态持久化键（与 `taiji:sidebar-session-mode` 等 UI 偏好同通道、同 localStorage 直存形态） */
+const GROUP_STATE_KEY = 'taiji:sidebar-group-state'
+
+const DEFAULT_GROUP_PERSIST: SidebarGroupPersist = { flat: [], groups: [], defaultZone: false }
+
+const isStringArray = (x: unknown): x is string[] => Array.isArray(x) && x.every((v) => typeof v === 'string')
+
+/** 恢复持久化展开态（缺失/非法字段回退各字段默认值；全字段缺省 = 全收起 = 默认收起语义） */
+function loadGroupPersist(): SidebarGroupPersist {
+  try {
+    const raw = localStorage.getItem(GROUP_STATE_KEY)
+    if (raw === null) return { ...DEFAULT_GROUP_PERSIST }
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null) return { ...DEFAULT_GROUP_PERSIST }
+    const p = parsed as Partial<Record<keyof SidebarGroupPersist, unknown>>
+    return {
+      flat: isStringArray(p.flat) ? p.flat : [],
+      groups: isStringArray(p.groups) ? p.groups : [],
+      defaultZone: typeof p.defaultZone === 'boolean' ? p.defaultZone : false,
+    }
+  } catch {
+    return { ...DEFAULT_GROUP_PERSIST }
+  }
+}
+
 export function useProjectGroups(options: {
   /** 全量 cwd 分组（未预过滤——分组归属在本 composable 按项目切分） */
   groups: () => SessionGroup[]
@@ -48,6 +86,7 @@ export function useProjectGroups(options: {
   const { groups, mode, onNewSession } = options
   const { t } = useI18n()
   const projectStore = useProjectStore()
+  const persist = loadGroupPersist()
 
   /**
    * 项目分组区呈现形态（connection-datasync-ssot §6.7 三形态，按「是否持有最后已知
@@ -131,20 +170,60 @@ export function useProjectGroups(options: {
     return { dirs, items: sessionsInRuntimeGroupOrder(dirs) }
   })
 
-  // ── 锚定分组交互（显式锚定 + 多开：展开态按组独立记忆，不与锚定互斥）──
+  // ── 锚定分组交互（显式锚定 + 多开：展开态按组独立记忆并持久化，不与锚定互斥）──
 
-  /** 平铺模式「被手动收起的组 id」集合（空集 = 全开，新增项目天然展开）。
+  /** 平铺模式「展开的组 id」集合（持久化；空集 = 全收起，默认收起；新组不在集合 = 收起）。
    *  点锚定组头 = 翻转本组；点非锚定组头 = 切锚定并展开目标组，其余组保持自身开合态
    *  （多项目同时展开；锚定只决定新会话归属与「当前」chip，不再收起其他组）。 */
-  const flatClosed = ref(new Set<string>())
+  const flatExpanded = ref(new Set<string>(persist.flat))
 
-  /** 目录模式「被手动收起的组 id」集合（空集 = 全开，新增项目天然展开）；组头只开合、不切换锚定 */
-  const dirClosed = ref(new Set<string>())
+  /** 目录模式「展开的组 id」集合（持久化；空集 = 全收起，默认收起）；组头只开合、不切换锚定 */
+  const dirExpanded = ref(new Set<string>(persist.groups))
 
-  /** 从开合集移除单组（不可变替换触发响应，与 dirClosed 同范式） */
-  function reopen(closed: Ref<Set<string>>, pgId: string): void {
-    if (!closed.value.has(pgId)) return
-    closed.value = new Set([...closed.value].filter((id) => id !== pgId))
+  /** 默认项目区（session 区）展开态（持久化；默认收起） */
+  const defaultZoneExpanded = ref(persist.defaultZone)
+
+  /** 全量落盘（任一开合态变更后的统一写入口；字段级浅拷贝快照当前值） */
+  function persistGroupState(): void {
+    const snapshot: SidebarGroupPersist = {
+      flat: [...flatExpanded.value],
+      groups: [...dirExpanded.value],
+      defaultZone: defaultZoneExpanded.value,
+    }
+    localStorage.setItem(GROUP_STATE_KEY, JSON.stringify(snapshot))
+  }
+
+  /** 开合集合单组翻转（不可变替换触发响应），翻转后落盘 */
+  function toggleIn(expanded: Ref<Set<string>>, pgId: string): void {
+    const next = new Set(expanded.value)
+    if (next.has(pgId)) next.delete(pgId)
+    else next.add(pgId)
+    expanded.value = next
+    persistGroupState()
+  }
+
+  /** 确保某组在展开集合中（不可变替换触发响应），变更后落盘——展开集合语义下
+   *  「展开」= 加入集合（区别于旧收起集合语义的「移除」） */
+  function ensureIn(expanded: Ref<Set<string>>, pgId: string): void {
+    if (expanded.value.has(pgId)) return
+    const next = new Set(expanded.value)
+    next.add(pgId)
+    expanded.value = next
+    persistGroupState()
+  }
+
+  /** 默认项目区收起/展开翻转 + 落盘（onDefaultZoneHeadClick 的翻转分支） */
+  function toggleDefaultZone(): void {
+    defaultZoneExpanded.value = !defaultZoneExpanded.value
+    persistGroupState()
+  }
+
+  /** 强制展开默认项目区（默认区「+」落点新建 / session 拖入收起默认区后的可见性保证，
+   *  与命名组 expandGroup 同语义——落进收起区的内容必须立即可见） */
+  function expandDefaultZone(): void {
+    if (defaultZoneExpanded.value) return
+    defaultZoneExpanded.value = true
+    persistGroupState()
   }
 
   /** 组头点击（父级按模式裁决，demo onGroupHead/onGroupHeadDir 同构）。
@@ -153,40 +232,55 @@ export function useProjectGroups(options: {
   function onGroupHeadClick(pg: ProjectGroupVM): void {
     if (mode.value === 'flat') {
       if (pg.id === projectStore.activeProjectId) {
-        const next = new Set(flatClosed.value)
-        if (next.has(pg.id)) next.delete(pg.id)
-        else next.add(pg.id)
-        flatClosed.value = next
+        toggleIn(flatExpanded, pg.id)
         return
       }
       void projectStore.setActiveProject(pg.id).catch(() => {})
-      reopen(flatClosed, pg.id)
+      ensureIn(flatExpanded, pg.id)
       return
     }
-    const next = new Set(dirClosed.value)
-    if (next.has(pg.id)) next.delete(pg.id)
-    else next.add(pg.id)
-    dirClosed.value = next
+    toggleIn(dirExpanded, pg.id)
   }
 
   /** 组头「+」：先落点该项目（新会话归属读 activeProjectId）再进空态新建。
    *  「先锚定后建」时序在命令化下由回执承载（emit newSession 时刻 activeProjectId 必须
    *  已切换——归属预填读它）：await 锚定回执落定后才触发新建；锚定命令失败（revision
-   *  失配被拒等，toast 已出声）不进新建流——落点语义无法保证，用户可直接重试。 */
+   *  失配被拒等，toast 已出声）不进新建流——落点语义无法保证，用户可直接重试。
+   *  落点区展开保证：命名组进组展开集合；默认项目区开 defaultZone（新会话归属地必须
+   *  可见——收起态下新建 = 会话消失在收起区里）。 */
   async function onCreateTaskIn(pg: ProjectGroupVM): Promise<void> {
     try {
       await projectStore.setActiveProject(pg.id)
     } catch {
       return
     }
-    reopen(flatClosed, pg.id)
+    if (pg.isDefault) expandDefaultZone()
+    else ensureIn(flatExpanded, pg.id)
     onNewSession()
   }
 
-  /** 强制展开某组（平铺/目录两套开合集都移除——拖拽落组后的展开保证，模式无关） */
+  /** 强制展开某组（平铺/目录两套展开集合都确保加入——拖拽落组后的展开保证，模式无关） */
   function expandGroup(pgId: string): void {
-    reopen(flatClosed, pgId)
-    reopen(dirClosed, pgId)
+    ensureIn(flatExpanded, pgId)
+    ensureIn(dirExpanded, pgId)
+  }
+
+  /** 组头拖拽换位 drop（ProjectGroup 按 PROJECT_DRAG_MIME 命中后转交）：draggedId 移到
+   *  目标组相邻位，序写入 projectStore（localStorage 持久化，见 reorderProject） */
+  function onGroupReorder(draggedId: string, targetId: string): void {
+    projectStore.reorderProject(draggedId, targetId)
+  }
+
+  /** 默认区头行点击（与命名组头 onGroupHeadClick 同构的按模式裁决）：平铺 = 非锚定
+   *  锚定+展开 / 已锚定翻转开合；目录 = 仅翻转开合（浏览态不切锚定）。锚定命令化：
+   *  发命令、chip 跟随回执，失败 toast 由 store 出声。 */
+  function onDefaultZoneHeadClick(): void {
+    if (mode.value === 'flat' && projectStore.activeProjectId !== DEFAULT_PROJECT_ID) {
+      void projectStore.setActiveProject(DEFAULT_PROJECT_ID).catch(() => {})
+      expandDefaultZone()
+      return
+    }
+    toggleDefaultZone()
   }
 
   // ── 项目重命名（ProjectGroup 行内输入）/ 删除（二次确认）──
@@ -236,14 +330,18 @@ export function useProjectGroups(options: {
     })
   }
 
-  /** 提交草稿：非空名发创建命令并关闭草稿行（回执到达后新项目锚定展开——命名组默认
-   *  展开，新 id 不在收起集合；命令失败 toast 已由 store 出声，草稿行收起不重开）；
-   *  空名 = 丢弃草稿不创建 */
-  function commitCreate(): void {
+  /** 提交草稿：非空名发创建命令并关闭草稿行；回执落定后按返回的新 id 显式展开新组
+   *   （默认收起语义下空态引导「暂无会话，点组头+在此新建」的可见性依赖此展开）并
+   *   展开锚定（回执已锚定新项目）。命令失败 toast 已由 store 出声，此处吞 rejection；
+   *   空名 = 丢弃草稿不创建 */
+  async function commitCreate(): Promise<void> {
     const name = draft.value.trim()
-    if (name) void projectStore.addProject(name).catch(() => {})
     creating.value = false
     draft.value = ''
+    if (!name) return
+    // 命令失败吞 rejection（toast 已由 store 出声；新组未创建，无展开动作）
+    const newId = await projectStore.addProject(name).catch(() => null)
+    if (newId) expandGroup(newId)
   }
 
   /** 失焦提交（草稿行无浮层后「点外」无统一关闭路径，失焦即落编辑结果；Esc 先清 creating，
@@ -264,10 +362,14 @@ export function useProjectGroups(options: {
     degradedZone,
     editingEnabled,
     retryProjectLoad,
-    flatClosed,
-    dirClosed,
+    flatExpanded,
+    dirExpanded,
+    defaultZoneExpanded,
     expandGroup,
+    expandDefaultZone,
     onGroupHeadClick,
+    onGroupReorder,
+    onDefaultZoneHeadClick,
     onCreateTaskIn,
     deleteOpen,
     pendingDelete,

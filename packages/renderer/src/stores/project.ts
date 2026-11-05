@@ -35,6 +35,20 @@ import { useToast } from '@/composables/useToast'
 // 维持 renderer 消费方经 @/stores/project 的既有导入路径（SessionList 等，消费点免改）。
 export { DEFAULT_PROJECT_ID }
 
+/** 用户自定义组序持久化键（与 `taiji:sidebar-session-mode` 等 UI 偏好同通道、同 localStorage 直存形态） */
+const PROJECT_ORDER_KEY = 'taiji:sidebar-project-order'
+
+/** 恢复持久化的自定义组序（命名 project id 数组；缺失/非法值回退空数组 = 无自定义序） */
+function loadProjectOrder(): string[] {
+  try {
+    const raw = localStorage.getItem(PROJECT_ORDER_KEY)
+    const parsed: unknown = raw === null ? [] : JSON.parse(raw)
+    return Array.isArray(parsed) && parsed.every((x) => typeof x === 'string') ? parsed : []
+  } catch {
+    return []
+  }
+}
+
 /** project 加载状态机 4 值词表（§6.5：idle 初始未加载 / loading 在途 / loaded 成功 / failed 失败）。 */
 export type ProjectLoadState = 'idle' | 'loading' | 'loaded' | 'failed'
 
@@ -67,6 +81,11 @@ export const useProjectStore = defineStore('project', () => {
   // 等 project 域首次落定后才进落地页（§6.4②），正常路径下首个回执很快替换本初值。
   const projects = ref<Project[]>([makeDefaultProject()])
   const activeProjectId = ref<string>(DEFAULT_PROJECT_ID)
+
+  /** 用户自定义组序（命名 project id 的有序数组；空 = 从未手动排过，orderedProjects
+   *  回退 lastUsedAt 稳定序）。localStorage 直存的响应式投影——reorderProject 是唯一
+   *  写入口（内存 + localStorage 同步写）；已删项目的残留 id 由写入时全量重写天然清理。 */
+  const projectOrder = ref<string[]>(loadProjectOrder())
 
   /** 加载状态机当前态（4 值，§6.5）。 */
   const loadState = ref<ProjectLoadState>('idle')
@@ -231,18 +250,27 @@ export const useProjectStore = defineStore('project', () => {
    * 项目分组渲染序（R6.2 锚定分组，侧栏会话列表组序 SSOT；消费方 = SessionList 组列表
    * + ImportSessionDialog 目标下拉——两处同序，下拉顺序与列表组序一致）。
    *
-   * 排序规则（用户裁决 2026-10-11「顺序稳定不置顶」）：
+   * 排序规则：
    *  1. 默认项目（nameless）固定最后——未归类/孤儿 session 的兜底聚合恒在列表尾部；
-   *  2. 其余按 lastUsedAt 倒序（该字段仅创建时写入，见 shared/project.ts——因此组位置
-   *     对切换/使用动作完全稳定，锚定切换只改变展开态不重排）；
-   *  3. 同值用持久化序（原数组 index）稳定 tiebreaker（ES2019+ sort 稳定，此处显式化）。
+   *  2. 命名项目中，在用户自定义序（侧栏组头拖拽换位写入，projectOrder）内的按自定义
+   *     序排前段——手动排过的位置对切换/使用动作稳定；
+   *  3. 不在自定义序中的（新建后从未拖过）按 lastUsedAt 倒序排在自定义序之后（该字段
+   *     仅创建时写入，见 shared/project.ts——因此组位置对切换/使用动作完全稳定，锚定
+   *     切换只改变展开态不重排）；
+   *  4. 同值用持久化序（原数组 index）稳定 tiebreaker（ES2019+ sort 稳定，此处显式化）。
    */
   const orderedProjects = computed<Project[]>(() => {
+    const orderRank = new Map(projectOrder.value.map((id, idx) => [id, idx]))
     const indexed = projects.value.map((p, i) => ({ p, i }))
     indexed.sort((a, b) => {
       const ad = isDefaultProjectOf(a.p)
       const bd = isDefaultProjectOf(b.p)
       if (ad !== bd) return ad ? 1 : -1
+      const ar = orderRank.get(a.p.id)
+      const br = orderRank.get(b.p.id)
+      if (ar !== undefined && br !== undefined) return ar - br
+      if (ar !== undefined) return -1
+      if (br !== undefined) return 1
       if (a.p.lastUsedAt !== b.p.lastUsedAt) return b.p.lastUsedAt - a.p.lastUsedAt
       return a.i - b.i
     })
@@ -258,7 +286,7 @@ export const useProjectStore = defineStore('project', () => {
    */
   let commandChain: Promise<unknown> = Promise.resolve()
 
-  function enqueueCommand(op: () => Promise<void>): Promise<void> {
+  function enqueueCommand<T>(op: () => Promise<T>): Promise<T> {
     const run = commandChain.then(op, op)
     commandChain = run.catch(() => {})
     return run
@@ -277,7 +305,7 @@ export const useProjectStore = defineStore('project', () => {
    * 失败不改加载状态机，§6.5）+ rethrow（调用方按需感知成败，如「先锚定后建」
    * 时序依赖锚定回执落定）。
    */
-  function runCommand(op: (expectedRevision: number) => Promise<ProjectCommandReply>): Promise<void> {
+  function runCommand(op: (expectedRevision: number) => Promise<ProjectCommandReply>): Promise<ProjectCommandReply> {
     if (!editingEnabled.value) {
       return Promise.reject(new Error(`project data not loaded (state=${loadState.value}) — editing disabled until first successful load`))
     }
@@ -291,6 +319,7 @@ export const useProjectStore = defineStore('project', () => {
       try {
         const reply = await op(expectedRevision)
         transition({ type: 'commandApplied', reply })
+        return reply
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         useToast().error(i18n.global.t('sidebar.projectCommandFailed', { msg }))
@@ -301,11 +330,16 @@ export const useProjectStore = defineStore('project', () => {
 
   /**
    * 新建 project（runtime 生成 id 并设为活跃；空名不动作——与旧本地版守卫同语义，
-   * 把空名挡在命令之前）。resolve = 回执已提交（activeProjectId 已指向新项目）。
+   * 把空名挡在命令之前）。resolve = 回执已提交（activeProjectId 已指向新项目），值 =
+   * 新项目 id（回执视图 diff 新增项；解析不出时 null——调用方按无新组处理）。组展开
+   * 态默认收起（sidebar-group-state 语义），新组展开由调用方按返回 id 显式驱动（空态
+   * 引导可见性依赖它）。
    */
-  async function addProject(name: string): Promise<void> {
-    if (!name.trim()) return
+  async function addProject(name: string): Promise<string | null> {
+    if (!name.trim()) return null
+    const before = new Set(projects.value.map((p) => p.id))
     await runCommand((revision) => projectApi.createProject(name.trim(), revision))
+    return projects.value.find((p) => !before.has(p.id))?.id ?? null
   }
 
   /**
@@ -340,6 +374,24 @@ export const useProjectStore = defineStore('project', () => {
     await runCommand((revision) => projectApi.setActiveProject(id, revision))
   }
 
+  /**
+   * 组头拖拽换位（UI 偏好，localStorage 持久化——不进 runtime 命令通道：组序是本窗口
+   * 侧栏的排列偏好而非 project 数据，与 flat/groups 模式开关同通道）。以当前渲染序为
+   * 基准把 draggedId 移到 targetId 的相邻位：dragged 原在 target 前 → 落到 target 后，
+   * 否则落到 target 前（下拖 = 移到其后、上拖 = 移到其前的方向直觉语义）。写入时以当前
+   * 全量命名项目序重写，已删项目的残留 id 天然清理。
+   */
+  function reorderProject(draggedId: string, targetId: string): void {
+    if (draggedId === targetId) return
+    const named = orderedProjects.value.filter((p) => !isDefaultProjectOf(p)).map((p) => p.id)
+    const from = named.indexOf(draggedId)
+    const to = named.indexOf(targetId)
+    if (from < 0 || to < 0) return
+    named.splice(to, 0, ...named.splice(from, 1))
+    projectOrder.value = named
+    localStorage.setItem(PROJECT_ORDER_KEY, JSON.stringify(named))
+  }
+
   return {
     projects,
     activeProjectId,
@@ -358,5 +410,7 @@ export const useProjectStore = defineStore('project', () => {
     setActiveProject,
     renameProject,
     removeProject,
+    reorderProject,
+    projectOrder,
   }
 })

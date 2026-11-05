@@ -1,7 +1,7 @@
 import { flipProjectGroupToggle } from '../helpers/sidebar-mount';
 import SessionItem from '@/components/sidebar/SessionItem.vue';
 import SessionList from '@/components/sidebar/SessionList.vue';
-import { SESSION_DRAG_MIME } from '@/components/sidebar/session-drag';
+import { SESSION_DRAG_MIME, PROJECT_DRAG_MIME } from '@/components/sidebar/session-drag';
 import { project as projectApi } from '@/api';
 import { DEFAULT_PROJECT_ID, useProjectStore } from '@/stores/project';
 import type { SessionGroup, SessionSummary } from '@taiji/shared';
@@ -57,6 +57,13 @@ function seedDefaultLoaded(): void {
 }
 
 const SESSION_MODE_KEY = 'taiji:sidebar-session-mode'
+const GROUP_STATE_KEY = 'taiji:sidebar-group-state'
+
+/** 预置默认区展开（组展开态默认收起——本节用例聚焦渲染结构而非开合语义，预置恢复
+ *  默认区内容可见基线；组体常驻 DOM 无需预置组展开） */
+function presetDefaultZoneOpen(): void {
+  localStorage.setItem(GROUP_STATE_KEY, JSON.stringify({ flat: [], groups: [], defaultZone: true }))
+}
 
 // ── 共享 helper（各源文件同构 helper 合并单源；异构 helper 按节重命名，见各节）──
 
@@ -120,6 +127,8 @@ beforeEach(() => {
   setActivePinia(createPinia())
   localStorage.removeItem('taiji:projects')
   localStorage.removeItem(SESSION_MODE_KEY)
+  localStorage.removeItem(GROUP_STATE_KEY)
+  localStorage.removeItem('taiji:sidebar-project-order')
   document.body.innerHTML = ''
 })
 
@@ -159,6 +168,11 @@ function mountProjectFilterList(groups: SessionGroup[] = makeProjectFilterGroups
 }
 
 describe('SessionList: 项目锚定分组（全部项目并列，按 projectId 切分）', () => {
+  beforeEach(() => {
+    // 本节聚焦归属切分/渲染结构：默认区内容可见需预置展开（组展开默认收起）
+    presetDefaultZoneOpen()
+  })
+
   it('默认项目区（平铺置顶）= 未归类 + 孤儿聚合；归属现存命名 project 的 session 落各自组（不重不漏）', () => {
     // proj-b 不存在（sc 的归属是孤儿）；proj-a 存在（sa/sd 正常归属）
     setupProjects(DEFAULT_PROJECT_ID, [['proj-a', 'Alpha']])
@@ -228,23 +242,23 @@ describe('SessionList: 项目锚定分组（全部项目并列，按 projectId �
 })
 
 describe('SessionList: 锚定切换（平铺模式 = 多开）', () => {
-  it('点其他组头 → 锚定切换并展开目标组；原锚定组保持展开（多开，开合按组独立记忆）；组位置不重排', async () => {
+  it('点其他组头 → 锚定切换并展开目标组；原组开合不动（多开，开合按组独立记忆）；组位置不重排', async () => {
     const store = setupProjects('proj-a', [['proj-a', 'Alpha'], ['proj-b', 'Beta']])
     mockSetActive.mockImplementation(async () => commandReply(store, { state: { projects: store.projects.map((p) => ({ ...p })), activeProjectId: 'proj-b' } }))
     const wrapper = mountProjectFilterList()
 
     const idsBefore = wrapper.findAll('[data-testid="project-group"]').map((g) => g.attributes('data-project-id'))
-    // 初始全展开（flatClosed 空集 = 全开）
-    expect(groupOf(wrapper, 'proj-a').find('[data-testid="project-group-toggle"]').attributes('aria-expanded')).toBe('true')
-    expect(groupOf(wrapper, 'proj-b').find('[data-testid="project-group-toggle"]').attributes('aria-expanded')).toBe('true')
+    // 初始全收起（flatExpanded 空集 = 全收起 = 默认收起语义）
+    expect(groupOf(wrapper, 'proj-a').find('[data-testid="project-group-toggle"]').attributes('aria-expanded')).toBe('false')
+    expect(groupOf(wrapper, 'proj-b').find('[data-testid="project-group-toggle"]').attributes('aria-expanded')).toBe('false')
 
     await groupOf(wrapper, 'proj-b').find('[data-testid="project-group-toggle"]').trigger('click')
     await flushPromises() // 锚定命令化（§6.6）：chip 跟随回执更新
 
     expect(useProjectStore().activeProjectId).toBe('proj-b')
     expect(groupOf(wrapper, 'proj-b').find('[data-testid="project-group-toggle"]').attributes('aria-expanded')).toBe('true')
-    // 多开：原锚定组不再因锚定切换被收起（展开态与锚定解耦）
-    expect(groupOf(wrapper, 'proj-a').find('[data-testid="project-group-toggle"]').attributes('aria-expanded')).toBe('true')
+    // 多开：proj-a 开合不受锚定切换影响（从未展开保持收起——展开态与锚定解耦）
+    expect(groupOf(wrapper, 'proj-a').find('[data-testid="project-group-toggle"]').attributes('aria-expanded')).toBe('false')
     // 顺序稳定不置顶（用户裁决 2026-10-11）：锚定切换不重排组位置
     expect(wrapper.findAll('[data-testid="project-group"]').map((g) => g.attributes('data-project-id'))).toEqual(idsBefore)
   })
@@ -255,15 +269,17 @@ describe('SessionList: 锚定切换（平铺模式 = 多开）', () => {
     const toggle = await flipProjectGroupToggle((id) => groupOf(wrapper, id), 'proj-a')
     expect(useProjectStore().activeProjectId).toBe('proj-a')
 
+    // 再点翻转回收起（默认收起 → 点击展开 → 再点收起）
     await toggle().trigger('click')
-    expect(toggle().attributes('aria-expanded')).toBe('true')
+    expect(toggle().attributes('aria-expanded')).toBe('false')
   })
 })
 
 describe('SessionList: folder 删除检查随项目分组收紧（review MF-2 防护）', () => {
-  // folder 操作是目录模式组头元素，本 describe 断言其渲染检查，预置分组模式
+  // folder 操作是目录模式组头元素，本 describe 断言其渲染检查，预置分组模式 + 默认区展开
   beforeEach(() => {
     localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    presetDefaultZoneOpen()
   })
 
   it('cwd 的会话散布在多个项目分组（各 1/3）→ 任何分组都不渲染 folder-delete-btn（防误删不可见 session）', () => {
@@ -345,6 +361,11 @@ describe('SessionList 归档入口（D10 工具组）', () => {
 })
 
 describe('SessionList 归档事件透传（D6 悬停归档钮链路）', () => {
+  beforeEach(() => {
+    // SessionItem 在默认区平铺内容内（默认收起语义下需预置展开才可交互）
+    presetDefaultZoneOpen()
+  })
+
   it('SessionItem 两段确认后 emit archive → SessionList 透传 emit archive(sessionId)', async () => {
     const wrapper = mountArchiveEntryList()
     const btn = wrapper.find('[data-testid="session-archive-btn"]')
@@ -358,6 +379,11 @@ describe('SessionList 归档事件透传（D6 悬停归档钮链路）', () => {
 })
 
 describe('SessionList 恢复高亮（session-archive §5.1「原项目组顶部、accent-soft 高亮渐隐」）', () => {
+  beforeEach(() => {
+    // 本节聚焦行渲染/事件透传而非开合语义：默认区内容可见需预置展开（默认收起语义）
+    presetDefaultZoneOpen()
+  })
+
   it('restoredSessionId 匹配行：accent-soft 底色 + highlight testid；其余行与缺省态无高亮', () => {
     const wrapper = mountArchiveEntryList(undefined, 'a1')
     const row = wrapper.find('[data-testid="session-item-restored-highlight"]')
@@ -432,8 +458,7 @@ describe('组头 drop（拖到项目 = 移动归属）', () => {
     const wrapper = mountAttachedList()
     const toggleA = () => groupOf(wrapper, 'proj-a').find('[data-testid="project-group-toggle"]')
 
-    // 折叠锚定组 proj-a
-    await toggleA().trigger('click')
+    // 初始即收起（默认收起语义，无持久化记录 = 空展开集）
     expect(toggleA().attributes('aria-expanded')).toBe('false')
 
     const dt = new FakeDataTransfer()
@@ -558,6 +583,7 @@ describe('DefaultProjectHead：锚定/新建入口（修复锚定切走后新会
 
   it('目录模式：头行同样渲染（目录标签序列之前）', () => {
     localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    presetDefaultZoneOpen()
     setupProjects('proj-a')
     const wrapper = mountAttachedList()
 
@@ -575,43 +601,46 @@ describe('DefaultProjectHead：锚定/新建入口（修复锚定切走后新会
 })
 
 describe('平铺模式多开细节（开合按组独立记忆）', () => {
-  it('点锚定组头折叠只收本组，其余组保持展开；再点恢复', async () => {
+  it('点锚定组头展开只开本组，其余组保持收起；再点收起', async () => {
     setupProjects('proj-a', [['proj-a', 'Alpha'], ['proj-b', 'Beta']])
     const wrapper = mountAttachedList()
     const toggleA = () => groupOf(wrapper, 'proj-a').find('[data-testid="project-group-toggle"]')
     const toggleB = () => groupOf(wrapper, 'proj-b').find('[data-testid="project-group-toggle"]')
 
     await toggleA().trigger('click')
-    expect(toggleA().attributes('aria-expanded')).toBe('false')
-    // 多开：proj-b 开合不受 proj-a 折叠影响
-    expect(toggleB().attributes('aria-expanded')).toBe('true')
+    expect(toggleA().attributes('aria-expanded')).toBe('true')
+    // 多开：proj-b 开合不受 proj-a 展开影响（按组独立记忆，默认收起）
+    expect(toggleB().attributes('aria-expanded')).toBe('false')
 
     await toggleA().trigger('click')
-    expect(toggleA().attributes('aria-expanded')).toBe('true')
-    expect(toggleB().attributes('aria-expanded')).toBe('true')
+    expect(toggleA().attributes('aria-expanded')).toBe('false')
+    expect(toggleB().attributes('aria-expanded')).toBe('false')
     wrapper.unmount()
   })
 
-  it('折叠非锚定组后，点它切锚定仍强制展开', async () => {
+  it('收起非锚定组后，点它切锚定仍强制展开', async () => {
     const store = setupProjects('proj-a', [['proj-a', 'Alpha'], ['proj-b', 'Beta']])
     mockSetActive.mockImplementation(async (pid: string) => commandReply(store, { state: { projects: store.projects.map((p) => ({ ...p })), activeProjectId: pid } }))
     const wrapper = mountAttachedList()
     const toggleA = () => groupOf(wrapper, 'proj-a').find('[data-testid="project-group-toggle"]')
     const toggleB = () => groupOf(wrapper, 'proj-b').find('[data-testid="project-group-toggle"]')
 
-    // 折叠 proj-b：先切锚定到它（首次点击非锚定组 = 切锚定，保持展开）再点一次翻转折叠
+    // 点收起中的非锚定组 proj-b → 切锚定 + 强制展开（初始收起 = 默认收起语义）
+    expect(toggleB().attributes('aria-expanded')).toBe('false')
     await toggleB().trigger('click')
     await flushPromises() // 锚定命令化（§6.6）：chip 跟随回执更新
     expect(store.activeProjectId).toBe('proj-b')
     expect(toggleB().attributes('aria-expanded')).toBe('true')
+
+    // 已锚定再点 = 翻转收起；随后锚定切 proj-a（proj-b 收起记忆保留）
     await toggleB().trigger('click')
     expect(toggleB().attributes('aria-expanded')).toBe('false')
-
-    // 锚定切回 proj-a（proj-b 折叠记忆保留），再点折叠的 proj-b（非锚定）→ 切锚定 + 强制展开
     await toggleA().trigger('click')
     await flushPromises()
     expect(store.activeProjectId).toBe('proj-a')
     expect(toggleB().attributes('aria-expanded')).toBe('false')
+
+    // 点收起中的非锚定组 proj-b → 切锚定 + 强制展开
     await toggleB().trigger('click')
     await flushPromises()
     expect(store.activeProjectId).toBe('proj-b')
@@ -655,6 +684,7 @@ describe('SessionList 目录行 + 按钮首屏渲染', () => {
   beforeEach(() => {
     // N8 A/C 双模式改造后目录操作归 C 分组模式组头承载（A 平铺无组头）
     localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    presetDefaultZoneOpen()
   })
 
   it('+ 按钮存在于 DOM，title 为 newSessionInFolder 文案', () => {
@@ -676,6 +706,7 @@ describe('SessionList 目录行 + 按钮首屏渲染', () => {
 describe('SessionList 目录行 + 按钮点击交互', () => {
   beforeEach(() => {
     localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    presetDefaultZoneOpen()
   })
 
   it('click + → emit newSessionInFolder(cwd)，不 emit deleteFolder', async () => {
@@ -710,6 +741,7 @@ describe('SessionList 目录行 + 按钮点击交互', () => {
 describe('SessionList 目录行 + 按钮 vs 删除按钮检查差异', () => {
   beforeEach(() => {
     localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    presetDefaultZoneOpen()
   })
 
   it('项目过滤隐藏部分 session 时：删除按钮不渲染，+ 按钮仍渲染', async () => {
@@ -772,6 +804,11 @@ function setupDefaultZoneProjects(activeId: string): ReturnType<typeof useProjec
 }
 
 describe('SessionList: 平铺默认区事件透传', () => {
+  beforeEach(() => {
+    // 本节聚焦行渲染/事件透传而非开合语义：默认区内容可见需预置展开（默认收起语义）
+    presetDefaultZoneOpen()
+  })
+
   it('点默认区会话行 → emit select(会话 id)（真实 click 链路）；行渲染在无组框平铺区', async () => {
     setupDefaultZoneProjects(DEFAULT_PROJECT_ID)
     // sa 归属 proj-a（命名组），sb 未归类（默认区）
@@ -810,6 +847,7 @@ describe('SessionList: 目录模式默认区（置顶目录标签 + folder 行�
   beforeEach(() => {
     // 目录模式（与组件 localStorage 持久化键一致，同 session-list-folder-delete 范式）
     localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    presetDefaultZoneOpen()
   })
 
   it('默认项目目录标签置顶渲染（DOM 序先于任何命名组，无 ProjectGroup 包裹）；会话行随标签可见', () => {
@@ -925,6 +963,11 @@ function mountDualModeList(groups: SessionGroup[] = makeDualModeGroups(), active
 }
 
 describe('N8 默认平铺（A 模式）', () => {
+  beforeEach(() => {
+    // 本节聚焦行渲染/事件透传而非开合语义：默认区内容可见需预置展开（默认收起语义）
+    presetDefaultZoneOpen()
+  })
+
   it('无持久化值挂载 → 平铺开关选中 + 无组头目录操作按钮', () => {
     const wrapper = mountDualModeList()
     expect(wrapper.find('[data-testid="session-mode-flat"]').attributes('aria-pressed')).toBe('true')
@@ -959,6 +1002,11 @@ describe('N8 默认平铺（A 模式）', () => {
 })
 
 describe('N8 模式切换与持久化', () => {
+  beforeEach(() => {
+    // 本节聚焦行渲染/事件透传而非开合语义：默认区内容可见需预置展开（默认收起语义）
+    presetDefaultZoneOpen()
+  })
+
   it('点击分组开关 → 进入 C 模式（组头 + 目录操作按钮出现）+ localStorage 写入', async () => {
     const wrapper = mountDualModeList()
     await wrapper.find('[data-testid="session-mode-groups"]').trigger('click')
@@ -986,6 +1034,11 @@ describe('N8 模式切换与持久化', () => {
 })
 
 describe('N8 选中态同步（两模式一致，demo .si.on Tier B：仅文字提亮无选中底）', () => {
+  beforeEach(() => {
+    // 本节聚焦行渲染/事件透传而非开合语义：默认区内容可见需预置展开（默认收起语义）
+    presetDefaultZoneOpen()
+  })
+
   it('A 平铺模式：activeId 对应行无选中底，行文字提亮 text-neutral-fg', () => {
     const wrapper = mountDualModeList(makeDualModeGroups(), 'a2')
     const items = wrapper.findAll('.session-item')
@@ -1087,6 +1140,7 @@ describe('SessionList folder 删除按钮首屏渲染', () => {
   // N8：目录操作归 C 分组模式组头承载——describe 内 hook 晚于顶层 hook 执行，模式预置不被抹
   beforeEach(() => {
     localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    presetDefaultZoneOpen()
   })
 
   it('folder 标题行 + 删除按钮存在于 DOM', () => {
@@ -1104,6 +1158,7 @@ describe('SessionList folder 删除两段式确认（W2TC5）', () => {
   // N8：目录操作归 C 分组模式组头承载——describe 内 hook 晚于顶层 hook 执行，模式预置不被抹
   beforeEach(() => {
     localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    presetDefaultZoneOpen()
   })
 
   it('首次 click → 确认态（title 变 deleteFolderConfirm）；不 emit deleteFolder', async () => {
@@ -1231,6 +1286,8 @@ beforeEach(async () => {
   setActivePinia(createPinia())
   localStorage.removeItem('taiji:projects')
   localStorage.removeItem('taiji:sidebar-session-mode')
+  localStorage.removeItem(GROUP_STATE_KEY)
+  localStorage.removeItem('taiji:sidebar-project-order')
   document.body.innerHTML = ''
 })
 
@@ -1290,6 +1347,7 @@ describe('组头操作（hover 动作钮，demo .pgh-acts）', () => {
   })
 
   it('默认项目不渲染组框（用户裁决 2026-10-13 方案 A：无组头即无重命名/删除/新建钮，会话在置顶平铺区）', () => {
+    presetDefaultZoneOpen() // 会话平铺区内容可见需预置展开（默认收起语义）
     setupProjects_m2(DEFAULT_PROJECT_ID)
     const wrapper = mountList_m2()
 
@@ -1377,11 +1435,11 @@ describe('目录模式 = 浏览态（方案 A 目录裁决：组头只开合、�
     localStorage.setItem('taiji:sidebar-session-mode', 'groups')
   })
 
-  it('全部项目组默认展开（含非当前组）', () => {
+  it('全部项目组默认收起（默认收起裁决：无持久化记录 = 空展开集）', () => {
     setupProjects_m2(DEFAULT_PROJECT_ID)
     const wrapper = mountList_m2()
     for (const g of wrapper.findAll('[data-testid="project-group-toggle"]')) {
-      expect(g.attributes('aria-expanded')).toBe('true')
+      expect(g.attributes('aria-expanded')).toBe('false')
     }
   })
 
@@ -1392,6 +1450,206 @@ describe('目录模式 = 浏览态（方案 A 目录裁决：组头只开合、�
     expect(store.activeProjectId).toBe(DEFAULT_PROJECT_ID) // 未切换锚定
 
     await toggle().trigger('click')
-    expect(toggle().attributes('aria-expanded')).toBe('true')
+    expect(toggle().attributes('aria-expanded')).toBe('false')
+  })
+})
+
+// ═══ 来源：feat-sidebar-panel-state（面板开合默认收起 + 持久化 + project 拖拽换位）═══
+
+describe('侧栏面板开合：默认收起 + 持久化', () => {
+  it('默认区默认收起：头行渲染（chevron 收起向右）、会话行不渲染；组头 chevron 同为收起态', () => {
+    setupProjects(DEFAULT_PROJECT_ID, [['proj-a', 'Alpha']])
+    const wrapper = mountAttachedList()
+
+    const head = wrapper.find('[data-testid="default-project-head"]')
+    expect(head.exists()).toBe(true)
+    expect(head.attributes('data-expanded')).toBe('false')
+    expect(head.find('[data-testid="default-project-chevron"]').classes()).toContain('-rotate-90')
+    // 收起 = 内容不渲染（区别于组体常驻 DOM 的视觉收起——默认区无展开体动画，直接 v-if）
+    expect(wrapper.find('[data-testid="default-project-flat-zone"]').exists()).toBe(false)
+    // 组头 chevron 同为收起态（展开集合空）
+    const chevron = groupOf(wrapper, 'proj-a').find('[data-testid="project-group-chevron"]')
+    expect(chevron.exists()).toBe(true)
+    expect(chevron.classes()).toContain('-rotate-90')
+    wrapper.unmount()
+  })
+
+  it('点默认区头行（非锚定）→ 锚定默认项目 + 展开；再点（已锚定）→ 翻转收起', async () => {
+    const store = setupProjects('proj-a')
+    mockSetActive.mockImplementation(async () => commandReply(store, { state: { projects: store.projects.map((p) => ({ ...p })), activeProjectId: DEFAULT_PROJECT_ID } }))
+    const wrapper = mountAttachedList()
+    const head = () => wrapper.find('[data-testid="default-project-head"]')
+
+    await head().find('[data-testid="default-project-anchor"]').trigger('click')
+    await flushPromises() // 锚定命令化（§6.6）
+    expect(store.activeProjectId).toBe(DEFAULT_PROJECT_ID)
+    expect(head().attributes('data-expanded')).toBe('true')
+    expect(wrapper.find('[data-testid="default-project-flat-zone"]').exists()).toBe(true)
+
+    await head().find('[data-testid="default-project-anchor"]').trigger('click')
+    expect(head().attributes('data-expanded')).toBe('false')
+    expect(wrapper.find('[data-testid="default-project-flat-zone"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('目录模式：点默认区头行仅翻转开合，不切锚定（浏览态语义）', async () => {
+    const store = setupProjects('proj-a')
+    localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    const wrapper = mountAttachedList()
+    const head = () => wrapper.find('[data-testid="default-project-head"]')
+
+    await head().find('[data-testid="default-project-anchor"]').trigger('click')
+    expect(store.activeProjectId).toBe('proj-a') // 未发锚定命令
+    expect(head().attributes('data-expanded')).toBe('true')
+    wrapper.unmount()
+  })
+
+  it('展开态持久化：默认区/组展开在 unmount 重挂载后恢复（localStorage 直存）', async () => {
+    const store = setupProjects(DEFAULT_PROJECT_ID, [['proj-a', 'Alpha'], ['proj-b', 'Beta']])
+    // 点非锚定组头触发锚定命令链——mock 回执以本用例 store 为基底（防前序用例
+    // mockImplementation 残留把 projects 覆盖成旧清单）
+    mockSetActive.mockImplementation(async (pid: string) => commandReply(store, { state: { projects: store.projects.map((p) => ({ ...p })), activeProjectId: pid } }))
+    const first = mountAttachedList()
+
+    await first.find('[data-testid="default-project-head"]').find('[data-testid="default-project-anchor"]').trigger('click')
+    await groupOf(first, 'proj-a').find('[data-testid="project-group-toggle"]').trigger('click')
+    expect(first.find('[data-testid="default-project-flat-zone"]').exists()).toBe(true)
+    first.unmount()
+
+    const second = mountAttachedList()
+    expect(second.find('[data-testid="default-project-head"]').attributes('data-expanded')).toBe('true')
+    expect(second.find('[data-testid="default-project-flat-zone"]').exists()).toBe(true)
+    expect(groupOf(second, 'proj-a').find('[data-testid="project-group-toggle"]').attributes('aria-expanded')).toBe('true')
+    expect(groupOf(second, 'proj-b').find('[data-testid="project-group-toggle"]').attributes('aria-expanded')).toBe('false')
+    second.unmount()
+  })
+})
+
+describe('默认区收起下的落点可见性保证（+ 新建 / session 拖入强制展开）', () => {
+  it('点默认区「+」→ 默认区强制展开（新会话归属地可见，不消失在收起区）', async () => {
+    const store = setupProjects('proj-a')
+    mockSetActive.mockImplementation(async (pid: string) => commandReply(store, { state: { projects: store.projects.map((p) => ({ ...p })), activeProjectId: pid } }))
+    const wrapper = mountAttachedList()
+
+    expect(wrapper.find('[data-testid="default-project-flat-zone"]').exists()).toBe(false)
+    await wrapper.find('[data-testid="default-project-new-task"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="default-project-head"]').attributes('data-expanded')).toBe('true')
+    expect(wrapper.find('[data-testid="default-project-flat-zone"]').exists()).toBe(true)
+    expect(wrapper.emitted('newSession')).toBeTruthy()
+    wrapper.unmount()
+  })
+
+  it('session 拖入收起的默认头行 → 归回 + 默认区强制展开', async () => {
+    setupProjects(DEFAULT_PROJECT_ID)
+    const wrapper = mountAttachedList()
+    expect(wrapper.find('[data-testid="default-project-flat-zone"]').exists()).toBe(false)
+
+    const dt = new FakeDataTransfer()
+    dt.setData(SESSION_DRAG_MIME, 'sa') // sa 归属 proj-a，拖回归默认
+    await wrapper.find('[data-testid="default-project-head"]').trigger('drop', { dataTransfer: dt })
+    await nextTick()
+
+    expect(wrapper.emitted('setProject')).toEqual([[{ sessionId: 'sa', projectId: '' }]])
+    expect(wrapper.find('[data-testid="default-project-head"]').attributes('data-expanded')).toBe('true')
+    expect(wrapper.find('[data-testid="default-project-flat-zone"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+})
+
+describe('project 组头拖拽换位（PROJECT_DRAG_MIME 与 session 拖拽分流）', () => {
+  it('dragover 高亮（data-project-dragover）+ drop → 组序换位 + localStorage 持久化', async () => {
+    setupProjects(DEFAULT_PROJECT_ID, [['proj-a', 'Alpha'], ['proj-b', 'Beta'], ['proj-c', 'Gamma']])
+    const wrapper = mountAttachedList()
+    const orderBefore = wrapper.findAll('[data-testid="project-group"]').map((g) => g.attributes('data-project-id'))
+    expect(orderBefore).toEqual(['proj-a', 'proj-b', 'proj-c'])
+
+    const dt = new FakeDataTransfer()
+    dt.setData(PROJECT_DRAG_MIME, 'proj-a')
+    const headC = groupOf(wrapper, 'proj-c').find('[data-testid="project-group-head"]')
+    await headC.trigger('dragover', { dataTransfer: dt })
+    expect(headC.attributes('data-project-dragover')).toBe('true')
+
+    await headC.trigger('drop', { dataTransfer: dt })
+    await nextTick()
+    // proj-a 原在 proj-c 前 → 落到 proj-c 后（下拖 = 移到其后）
+    expect(wrapper.findAll('[data-testid="project-group"]').map((g) => g.attributes('data-project-id')))
+      .toEqual(['proj-b', 'proj-c', 'proj-a'])
+    // drop 后高亮清除
+    expect(headC.attributes('data-project-dragover')).toBeUndefined()
+    // 自定义序持久化（localStorage 直存）
+    expect(JSON.parse(localStorage.getItem('taiji:sidebar-project-order') ?? '[]')).toEqual(['proj-b', 'proj-c', 'proj-a'])
+    wrapper.unmount()
+  })
+
+  it('上拖方向语义：proj-c 拖到 proj-a → 落在 proj-a 前', async () => {
+    setupProjects(DEFAULT_PROJECT_ID, [['proj-a', 'Alpha'], ['proj-b', 'Beta'], ['proj-c', 'Gamma']])
+    const wrapper = mountAttachedList()
+
+    const dt = new FakeDataTransfer()
+    dt.setData(PROJECT_DRAG_MIME, 'proj-c')
+    await groupOf(wrapper, 'proj-a').find('[data-testid="project-group-head"]').trigger('drop', { dataTransfer: dt })
+    await nextTick()
+    expect(wrapper.findAll('[data-testid="project-group"]').map((g) => g.attributes('data-project-id')))
+      .toEqual(['proj-c', 'proj-a', 'proj-b'])
+    wrapper.unmount()
+  })
+
+  it('自拖自落 no-op（组序与 localStorage 不变）', async () => {
+    setupProjects(DEFAULT_PROJECT_ID, [['proj-a', 'Alpha'], ['proj-b', 'Beta']])
+    const wrapper = mountAttachedList()
+
+    const dt = new FakeDataTransfer()
+    dt.setData(PROJECT_DRAG_MIME, 'proj-a')
+    await groupOf(wrapper, 'proj-a').find('[data-testid="project-group-head"]').trigger('drop', { dataTransfer: dt })
+    await nextTick()
+    expect(wrapper.findAll('[data-testid="project-group"]').map((g) => g.attributes('data-project-id')))
+      .toEqual(['proj-a', 'proj-b'])
+    expect(localStorage.getItem('taiji:sidebar-project-order')).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('换位序跨挂载恢复（重挂载按持久化序渲染）', async () => {
+    setupProjects(DEFAULT_PROJECT_ID, [['proj-a', 'Alpha'], ['proj-b', 'Beta']])
+    const first = mountAttachedList()
+    const dt = new FakeDataTransfer()
+    dt.setData(PROJECT_DRAG_MIME, 'proj-b')
+    await groupOf(first, 'proj-a').find('[data-testid="project-group-head"]').trigger('drop', { dataTransfer: dt })
+    first.unmount()
+
+    const second = mountAttachedList()
+    expect(second.findAll('[data-testid="project-group"]').map((g) => g.attributes('data-project-id')))
+      .toEqual(['proj-b', 'proj-a'])
+    second.unmount()
+  })
+
+  it('session MIME 的 dragover/drop 不触发换位（两类拖拽分流）：drop 仍走 setProject', async () => {
+    setupProjects('proj-a', [['proj-a', 'Alpha'], ['proj-b', 'Beta']])
+    const wrapper = mountAttachedList()
+
+    const dt = new FakeDataTransfer()
+    dt.setData(SESSION_DRAG_MIME, 'sb')
+    const headB = groupOf(wrapper, 'proj-b').find('[data-testid="project-group-head"]')
+    await headB.trigger('dragover', { dataTransfer: dt })
+    expect(headB.attributes('data-project-dragover')).toBeUndefined() // 不点亮换位高亮
+    expect(headB.attributes('data-dragover')).toBe('true') // session 落点高亮照常
+
+    await headB.trigger('drop', { dataTransfer: dt })
+    await nextTick()
+    expect(wrapper.emitted('setProject')).toEqual([[{ sessionId: 'sb', projectId: 'proj-b' }]])
+    expect(wrapper.findAll('[data-testid="project-group"]').map((g) => g.attributes('data-project-id')))
+      .toEqual(['proj-a', 'proj-b']) // 组序不动
+    wrapper.unmount()
+  })
+
+  it('组头 dragstart 写入 PROJECT_DRAG_MIME = projectId（发起换位拖拽）', async () => {
+    setupProjects(DEFAULT_PROJECT_ID, [['proj-a', 'Alpha']])
+    const wrapper = mountAttachedList()
+
+    const dt = new FakeDataTransfer()
+    await groupOf(wrapper, 'proj-a').find('[data-testid="project-group-head"]').trigger('dragstart', { dataTransfer: dt })
+    expect(dt.getData(PROJECT_DRAG_MIME)).toBe('proj-a')
+    wrapper.unmount()
   })
 })

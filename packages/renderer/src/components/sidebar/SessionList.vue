@@ -4,20 +4,25 @@
     区头「项目与会话」+ 总会话计数 + 双段模式开关，下方为：
     - 默认项目区（用户裁决 2026-10-13 方案 A）：默认项目 = 未归类收件箱，不展示项目框——
       平铺模式 = 置顶平铺会话区（无组头/无左线/无缩进）；目录模式 = 置顶目录标签序列
-      （无组头包裹）。空区不渲染；锚定/新建/拖放入口 = DefaultProjectHead 轻量头行
-      （点行锚定默认项目 +「+」在此新建 + session drop 落点）。
+      （无组包裹）。空区不渲染头行；锚定/新建/拖放/开合入口 = DefaultProjectHead
+      轻量头行（chevron 开合 + 点行按模式锚定 +「+」在此新建 + session drop 落点）；
+      开合默认收起、持久化（useProjectGroups defaultZoneExpanded）。降级形态无头行，
+      会话本体不受开合控制恒显（无头行 = 无收起入口，gate 它 = 会话消失死角）。
     - 命名项目组：保持 ProjectGroup 框（组头 + 左线 + 缩进）。两种模式的展开态都按组
-      独立记忆（多项目同开）：平铺模式点组头 = 切换锚定并展开目标组（其余组开合不动，
-      点当前组头 = 折叠/展开翻转），锚定只决定新会话归属与「当前」chip；目录模式 =
-      浏览态：全部组默认展开，组头只开合自己、不切换锚定，「当前」chip 只读；组内按
+      独立记忆并持久化（默认收起，多项目同开）：平铺模式点组头 = 切换锚定并展开目标组
+      （其余组开合不动，点当前组头 = 折叠/展开翻转），锚定只决定新会话归属与「当前」
+      chip；目录模式 = 浏览态：组头只开合自己、不切换锚定，「当前」chip 只读；组内按
       cwd 目录静态标签分组（SessionDirLabel，与默认项目目录区共用同一实现）。目录行
       悬停操作（目录内新建 / 批量删除）为 real 独有功能性入口。
     - session 拖拽移动归属（落点 = 各组头 + 默认头行）：useSessionDropTarget 统一交互
       （types 命中判别 + dropActive 高亮），drop 走既有 setProject 事件链（同归属 no-op），
       落折叠组后强制展开。
+    - project 组头拖拽换位：PROJECT_DRAG_MIME 分流（与 session 拖拽同组头共存），
+      drop → projectStore.reorderProject（自定义序持久化，orderedProjects 消费）。
     分组规则 SSOT = sessionBelongsToProject（默认项目聚合未归类 + 孤儿）；组序 SSOT =
-    projectStore.orderedProjects（lastUsedAt 稳定序 + 默认项目固定最后，锚定切换不重排；
-    默认区置顶是纯视图层拆分，不改组序）。组内平铺序 = runtime 组序展平。
+    projectStore.orderedProjects（用户自定义序优先 + lastUsedAt 稳定序 + 默认项目固定
+    最后，锚定切换不重排；默认区置顶是纯视图层拆分，不改组序）。组内平铺序 = runtime
+    组序展平。
     新建项目入口 = 区头行内「+」钮（紧贴模式开关左侧，用户裁决 2026-10-11）：点击后列表
     顶部出现草稿输入行，Enter 确认 → 锚定新项目并展开空态（空名 / Esc 丢弃草稿）。
     空命名组显示「暂无会话，点组头「+」在此新建任务」（缩进对齐左线内侧）。
@@ -122,21 +127,23 @@
       <ProjectLoadStatus v-if="projectAreaMode !== 'groups'" :mode="projectAreaMode" :load-error="projectStore.loadError" @retry="retryProjectLoad" />
       <template v-if="mode === 'flat'">
         <!-- 默认项目平铺区（用户裁决 2026-10-13 方案 A）：默认项目 = 未归类收件箱，不展示项目框，
-             session 平铺在列表顶部，空区不渲染；降级形态（§6.7）同一渲染位承载会话本体（无默认项目头行） -->
+             session 平铺在列表顶部，空区不渲染头行；降级形态（§6.7）同一渲染位承载会话本体（无默认项目头行，
+             内容不受开合控制恒显——无头行即无收起入口，gate 降级内容 = 会话消失死角） -->
+        <DefaultProjectHead
+          v-if="defaultZone && defaultZone.items.length"
+          :current="projectStore.isDefaultProject"
+          :name="defaultZone.name"
+          :expanded="defaultZoneExpanded"
+          :count="defaultZone.items.length"
+          @head-click="onDefaultZoneHeadClick"
+          @create-task="onCreateTaskIn(defaultZone)"
+          @drop-session="onDropToDefault"
+        />
         <div
-          v-if="sessionBodyZone && sessionBodyZone.items.length"
+          v-if="sessionBodyZone && sessionBodyZone.items.length && (!defaultZone || defaultZoneExpanded)"
           class="flex flex-col"
           :data-testid="degradedZone ? 'session-body-flat' : 'default-project-flat-zone'"
         >
-          <!-- 默认项目轻量头行（锚定/新建/drop 落点入口；有会话才渲染，与空区不渲染一致） -->
-          <DefaultProjectHead
-            v-if="defaultZone"
-            :current="projectStore.isDefaultProject"
-            :name="defaultZone.name"
-            @anchor="onAnchorDefault"
-            @create-task="onCreateTaskIn(defaultZone)"
-            @drop-session="onDropToDefault"
-          />
           <SessionItem
             v-for="s in sessionBodyZone.items"
             :key="s.id"
@@ -157,10 +164,10 @@
             @export-jsonl="emit('exportJsonl', $event)"
           />
         </div>
-        <!-- 命名项目组（多开：每組开合独立记忆，点组头切锚定并展开目标组、其余组不动；
-             「当前」chip 标识锚定组。会话行缩进（demo .pgi .si）：行内左距 9px 与目录标签
-             对齐；作用到 ProjectGroup 槽内直接子 .session-item（任意变体替代 scoped 后代
-             选择器） -->
+        <!-- 命名项目组（多开：每組开合独立记忆并持久化，默认收起；点组头切锚定并展开目标组、
+             其余组不动；「当前」chip 标识锚定组。会话行缩进（demo .pgi .si）：行内左距 9px
+             与目录标签对齐；作用到 ProjectGroup 槽内直接子 .session-item（任意变体替代 scoped
+             后代选择器） -->
         <ProjectGroup
           v-for="pg in namedGroups"
           :key="pg.id"
@@ -168,7 +175,7 @@
           :name="pg.name"
           :count="pg.items.length"
           :current="pg.id === projectStore.activeProjectId"
-          :expanded="!flatClosed.has(pg.id)"
+          :expanded="flatExpanded.has(pg.id)"
           :is-default="pg.isDefault"
           class="[&>.session-item]:pl-[9px]"
           @head-click="onGroupHeadClick(pg)"
@@ -176,6 +183,7 @@
           @rename-commit="onRenameCommit(pg, $event)"
           @delete-request="requestDelete(pg)"
           @drop-session="onDropToGroup(pg, $event)"
+          @reorder="onGroupReorder($event.draggedId, $event.targetId)"
         >
           <SessionItem
             v-for="s in pg.items"
@@ -207,51 +215,56 @@
       </template>
       <!-- 目录模式：默认项目目录区（置顶无组框）+ 命名项目组；降级形态（§6.7）同一渲染位承载会话本体 -->
       <template v-else>
-        <!-- 默认项目：无组头，轻量头行（锚定/新建/drop 入口，同平铺模式）+ 目录标签直接平铺在
-             列表顶部（用户裁决 2026-10-13：默认项目不展示项目 item，目录模式下同样不给框） -->
+        <!-- 默认项目：无组头，轻量头行（锚定/新建/拖放/开合入口，同平铺模式）+ 目录标签直接平铺在
+             列表顶部（用户裁决 2026-10-13：默认项目不展示项目 item，目录模式下同样不给框）。
+             开合 gate 与平铺模式同判据：降级形态（无头行）内容恒显 -->
         <template v-if="sessionBodyZone">
           <DefaultProjectHead
             v-if="defaultZone && defaultZone.items.length"
             :current="projectStore.isDefaultProject"
             :name="defaultZone.name"
-            @anchor="onAnchorDefault"
+            :expanded="defaultZoneExpanded"
+            :count="defaultZone.items.length"
+            @head-click="onDefaultZoneHeadClick"
             @create-task="onCreateTaskIn(defaultZone)"
             @drop-session="onDropToDefault"
           />
-          <template v-for="g in sessionBodyZone.dirs" :key="g.cwd">
-            <SessionDirLabel
-              :cwd="g.cwd"
-              :count="g.sessions.length"
-              :confirming="folderConfirmingCwd === g.cwd"
-              :delete-available="isFolderDeleteAvailable(sessionBodyZone, g.cwd)"
-              @new-in-folder="emit('newSessionInFolder', $event)"
-              @remove-click="onFolderRemoveClick"
-              @leave="onFolderMouseLeave"
-            />
-            <div class="gi">
-              <SessionItem
-                v-for="s in g.sessions"
-                :key="s.id"
-                :session="s"
-                :active="s.id === activeId"
-                :status="statusOf(s.id)"
-                :child-count="childCountOf(s)"
-                :parent-label="parentLabelOf(s)"
-                :handoff-target-label="handoffTargetLabelOf(s)"
-                :restored-highlight="s.id === restoredSessionId"
-                @select="emit('select', $event)"
-                @rename="emit('rename', $event)"
-                @archive="emit('archive', $event)"
-                @set-project="emit('setProject', $event)"
-                @navigate-parent="emit('navigateParent', $event)"
-                @abort="emit('abort', $event)"
-                @force-quit="emit('forceQuit', $event)"
-                @export-jsonl="emit('exportJsonl', $event)"
+          <template v-if="!defaultZone || defaultZoneExpanded">
+            <template v-for="g in sessionBodyZone.dirs" :key="g.cwd">
+              <SessionDirLabel
+                :cwd="g.cwd"
+                :count="g.sessions.length"
+                :confirming="folderConfirmingCwd === g.cwd"
+                :delete-available="isFolderDeleteAvailable(sessionBodyZone, g.cwd)"
+                @new-in-folder="emit('newSessionInFolder', $event)"
+                @remove-click="onFolderRemoveClick"
+                @leave="onFolderMouseLeave"
               />
-            </div>
+              <div class="gi">
+                <SessionItem
+                  v-for="s in g.sessions"
+                  :key="s.id"
+                  :session="s"
+                  :active="s.id === activeId"
+                  :status="statusOf(s.id)"
+                  :child-count="childCountOf(s)"
+                  :parent-label="parentLabelOf(s)"
+                  :handoff-target-label="handoffTargetLabelOf(s)"
+                  :restored-highlight="s.id === restoredSessionId"
+                  @select="emit('select', $event)"
+                  @rename="emit('rename', $event)"
+                  @archive="emit('archive', $event)"
+                  @set-project="emit('setProject', $event)"
+                  @navigate-parent="emit('navigateParent', $event)"
+                  @abort="emit('abort', $event)"
+                  @force-quit="emit('forceQuit', $event)"
+                  @export-jsonl="emit('exportJsonl', $event)"
+                />
+              </div>
+            </template>
           </template>
         </template>
-        <!-- 命名项目组：全部默认展开，组头只开合不切换锚定 + 目录静态标签分组。
+        <!-- 命名项目组：开合独立记忆并持久化（默认收起），组头只开合不切换锚定 + 目录静态标签分组。
              目录内会话行再深一级（demo .pgi .gi .si = 21px），任意变体替代 scoped 后代选择器 -->
         <ProjectGroup
           v-for="pg in namedGroups"
@@ -260,7 +273,7 @@
           :name="pg.name"
           :count="pg.items.length"
           :current="pg.id === projectStore.activeProjectId"
-          :expanded="!dirClosed.has(pg.id)"
+          :expanded="dirExpanded.has(pg.id)"
           :is-default="pg.isDefault"
           class="[&_.gi>.session-item]:pl-[21px]"
           @head-click="onGroupHeadClick(pg)"
@@ -268,6 +281,7 @@
           @rename-commit="onRenameCommit(pg, $event)"
           @delete-request="requestDelete(pg)"
           @drop-session="onDropToGroup(pg, $event)"
+          @reorder="onGroupReorder($event.draggedId, $event.targetId)"
         >
           <div
             v-if="!pg.items.length"
@@ -352,7 +366,7 @@ import { ConfirmDialog } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { isSessionCompleted } from '@/composables/logic/sessionStatus'
 import { registerModalSurface } from '@/composables/features/app/modal-surface-registry'
-import { useProjectStore, DEFAULT_PROJECT_ID } from '@/stores/project'
+import { useProjectStore } from '@/stores/project'
 import { useProjectGroups, type ProjectGroupVM } from '@/composables/features/sidebar/useProjectGroups'
 import { useSidebarSessionMode } from '@/composables/features/sidebar/use-sidebar-session-mode'
 import ProjectGroup from './ProjectGroup.vue'
@@ -523,16 +537,20 @@ const { mode, setMode } = useSidebarSessionMode(() => {
   folderConfirmingCwd.value = null
 })
 
-// ── 项目分组派生与动作（useProjectGroups：归属切分 / 组序 / 锚定交互 / 新建草稿流 /
-//    重命名与删除确认态；切模式复位 folderConfirmingCwd 的联动保留在本组件 setMode）──
+// ── 项目分组派生与动作（useProjectGroups：归属切分/组序/锚定交互/新建草稿流/重命名与删除
+//    确认态/展开态持久化（默认收起）/组头拖拽换位；切模式复位 folderConfirmingCwd 留本组件）──
 const {
   projectGroups,
   totalCount,
   projectAreaMode, degradedZone, editingEnabled, retryProjectLoad,
-  flatClosed,
-  dirClosed,
+  flatExpanded,
+  dirExpanded,
+  defaultZoneExpanded,
   expandGroup,
+  expandDefaultZone,
   onGroupHeadClick,
+  onGroupReorder,
+  onDefaultZoneHeadClick,
   onCreateTaskIn,
   deleteOpen,
   pendingDelete,
@@ -552,12 +570,7 @@ const {
   onNewSession: () => emit('newSession'),
 })
 
-// ── 默认项目头行交互 + session 拖拽落点（拖到组头/默认行 = 移动归属，走既有 setProject 链）──
-
-/** 点默认头行主体：锚定切回默认项目（修复「锚定切走后新会话进不了默认区」死角）；命令化后 chip 跟随回执，失败 toast 由 store 出声 */
-function onAnchorDefault(): void {
-  void projectStore.setActiveProject(DEFAULT_PROJECT_ID).catch(() => {})
-}
+// ── session 拖拽落点（拖到组头/默认行 = 移动归属，走既有 setProject 链）──
 
 /** drop 落点统一写入口：同归属 no-op（防自拖自落 + 省一次 RPC），否则透传既有 setProject
  *  事件链（Sidebar → assignSessionToProject → RPC + 乐观更新），拖拽与右键菜单同一写通道 */
@@ -573,9 +586,9 @@ function onDropToGroup(pg: ProjectGroupVM, sessionId: string): void {
   expandGroup(pg.id)
 }
 
-/** 拖入默认头行：归回未归类聚合（projectId 空串语义，assign-targets 同口径） */
 function onDropToDefault(sessionId: string): void {
   assignDropped('', sessionId)
+  expandDefaultZone()
 }
 
 /**
