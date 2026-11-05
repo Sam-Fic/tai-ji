@@ -564,9 +564,10 @@ export function useConnection() {
 
     // pre-auth 队列丢弃 → 立即 reject 对应 pending（任何模式都安装，对齐 stateWatch 体例）。
     // 队列消息与 request 层 pending 一一对应：TCP open → auth.result 窗口内 send() 入队的
-    // 消息在 auth 失败 / 断连清队时永无 reply，若不在此 reject，pending 要等 request 层
-    // 65s sweep 才收尾。错误构造走 transport/errors 工厂单点（code='disconnected' 供调用方
-    // 识别传输断开类失败）；无 id 消息（非 RPC 型，如 flush 前 close 的 notify）无 pending 可收，跳过。
+    // 消息在 auth 失败 / 断连清队时永无 reply，若不在此 reject，pending 将永久悬挂（request
+    // 层无超时、由事件收终——本丢弃监听即收尾事件）。错误构造走 transport/errors 工厂单点
+    // （code='disconnected' 供调用方识别传输断开类失败）；无 id 消息（非 RPC 型，如 flush
+    // 前 close 的 notify）无 pending 可收，跳过。
     // 未送达标记（notDelivered）：清队消息没抵达 runtime 消息处理链，可证明未执行——与
     // 断连 rejectAll（可能已送达）区分，消费方据它走「可证明未执行」路径。
     if (!removeQueueDropListener) {

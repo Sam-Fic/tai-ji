@@ -523,7 +523,7 @@ export class SessionLifecycle implements ISessionRegistry {
     // ensureRecordEntriesCache → reconciler 对账（fire-and-forget）。
     this.emitSessionRegistered(id)
     // [M4-a / btw-question D5 + V7④] registerSession 订阅者豁免清单（crash-forensics 侧，
-    // 「不为 btw 建档 → 重启不误 reattach」）。emit 内五个订阅者的逐项判定：
+    // 「不为 btw 建档 → 重启不误 reattach」）。emit 内四个订阅者的逐项判定：
     //   ① checkpoint 建档（session-service 的 upsert 挂点）→ **豁免**：本点采用「写-撤销」
     //      等价形态——upsert 在上方 emit 内同步发生，随后 removeSession 即达「从未建档」的
     //      post-condition（单线程同步序；崩溃恰落两调用之间的最坏后果 = 维持豁免前行为：
@@ -536,9 +536,8 @@ export class SessionLifecycle implements ISessionRegistry {
     //      SESSION_NOT_FOUND → 台账噪音 + 无效恢复尝试。
     //      判别器 = registry 成员查询（W4a：btwCascadeOps.getLine，键 = 线 session id；
     //      旧 isBtwVirtualId 前缀判别随键切换同批替换，设计 §3.3.6 迁移表）。
-    //   ② projection / records / capability-reconciler / inflight-mirror.presetZero → **保留**
-    //      （D6：btw 线是一等会话，消息通路与状态投影白得；mirror 的 injected 写点在 emit
-    //      之前已内联执行）。
+    //   ② projection / records / capability-reconciler → **保留**
+    //      （D6：btw 线是一等会话，消息通路与状态投影白得）。
     //   ③ spawn marker（pi-spawn-markers.json）→ **不豁免**（非本点订阅者，结论一并登记）：
     //      reap 判据③按「任一 --extension/--skill 与清单精确相等」匹配，btw spawn 与主
     //      spawn 共享 mandatory staged 段、判别力不变；且崩溃遗留的 btw 线孤儿 pi 与主 pi

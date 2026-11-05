@@ -5,7 +5,8 @@
  * journal 登记设施族，不依赖 SessionService 其余状态，参数化后模块级化。
  *
  * Facade 保留一行调用（订阅注册时序契约不变：组装根内先 projection → records →
- * reconciler → 本域两订阅，见 session-service.ts assembleSubmodules 注释）。
+ * reconciler → 本域 checkpoint 订阅（原 D5 mirror 订阅已随 inflight-mirror 模块
+ * 删除），见 session-service.ts assembleSubmodules 注释）。
  */
 import type { IManagedSessionView, SessionOccupancy } from './types.js'
 import { getRuntimeCheckpointStore, type CheckpointOccupancy } from './runtime-checkpoint.js'

@@ -420,8 +420,9 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
    *   projection / records 实例必须先构造后 subscribe。
    * - onSessionRegistered 订阅顺序（组装根，S3 seam→S5/S6 换订阅者，设计 D2②）：
    *   projection（W7 播种）→ records（W18 缓存注册）→ reconciler（U6 对账，
-   *   fire-and-forget）→ checkpoint（D3）→ mirror（D5）两个旁路订阅——「播种 →
-   *   record 注册 → 对账」顺序与迁移前 Facade 订阅体内顺序逐一等价，不得重排。
+   *   fire-and-forget）→ checkpoint（D3）旁路订阅（原 D5 mirror 订阅已随
+   *   inflight-mirror 模块删除）——「播种 → record 注册 → 对账」顺序与迁移前
+   *   Facade 订阅体内顺序逐一等价，不得重排。
    */
   private assembleSubmodules(messageBus?: IMessageBus): void {
     // 子模块注入 this(Facade 半构造时仅存引用,其方法在 Facade 完全构造后才被调用)。
@@ -562,10 +563,11 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
         this.modelCapabilityReconciler(sessionId).catch((e: unknown) => console.error(`[session-service] capability reconcile failed (sessionId=${sessionId}):`, e))
       }
     })
-    // D3 checkpoint + D5 mirror 的 attach 挂点（crash-forensics §3.3）：订阅体迁
-    // crash-forensics-hooks.ts（行为保持抽取，语义注释见该模块）。注册位置/时序不变：
-    // 排在 reconciler 订阅之后，函数内先 checkpoint 后 mirror，与迁移前两订阅的
-    // 注册顺序逐一等价（上方「播种 → record 注册 → 对账」顺序契约不受影响）。
+    // D3 checkpoint 的 attach 挂点（crash-forensics §3.3）：订阅体迁
+    // crash-forensics-hooks.ts（行为保持抽取，语义注释见该模块；原 D5 mirror 订阅
+    // 已随 inflight-mirror 模块删除）。注册位置/时序不变：排在 reconciler 订阅
+    // 之后，与迁移前订阅的注册位置等价（上方「播种 → record 注册 → 对账」顺序契约
+    // 不受影响）。
     registerCrashLedgerAttachHooks(this.lifecycle, {
       getSession: (sessionId) => this.lifecycle.get(sessionId),
       activityAt: (sessionId) => this.pm.getClient(sessionId)?.lastActivityAt,

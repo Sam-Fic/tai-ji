@@ -28,8 +28,8 @@
 //      reject，不产生 handle；
 //   ② 运行中失败不 reject——合成 engine_run_failed outcome + 正常 handle 返回
 //      （record 必须收尾）；
-//   ③ abort：D3 链（session/stop → grace → killChain 连坐共享进程）——终态
-//      exitCode=null + 杀链标记。
+//   ③ abort：D3 链（尽力发 session/stop → 直接落 killChain 连坐共享进程——无等待
+//      升级窗）——终态 exitCode=null + 杀链标记。
 //   [D3-④] capability 拒绝（fork/maxTurns/worktree）不再在本引擎：
 //      上提到宿主调用前预检（common/capability-gate，两调用点 = chat 域
 //      executeViaEngine 同步段 + SAR run 前）；conversation 位按 resume 形态键在
@@ -192,8 +192,9 @@ export class ZcodeEngine implements EnginePort {
       sessionRead: "full",
       // --resume 冷启动可用（实测）
       resume: "cold",
-      // abort 走 D3 链（stop→grace→killChain）但声明维持 kill-only 不升级（改链路
-      // 先于改声明；stop 链路经 conformance 真机验证后再评估升 native）
+      // abort 走 D3 链（尽力发 stop → 直接落 killChain，无 grace 窗）但声明维持
+      // kill-only 不升级（改链路先于改声明；stop 链路经 conformance 真机验证后再
+      // 评估升 native）
       interrupt: "kill-only",
       // --mode build/edit/plan/yolo 原生权限档位
       permissionMode: "native",
@@ -454,9 +455,10 @@ export class ZcodeEngine implements EnginePort {
       },
     });
 
-    // D3 abort 链：signal abort → ① session/stop {sessionId} ② grace 窗口确认终态
-    // ③ stop 失败/超时 → killChain 杀共享进程（接受连坐——协议已不可信）→ 在途
-    // 其他任务走崩溃路径。capabilities.interrupt 维持 kill-only 不升级（C4）。
+    // D3 abort 链：signal abort → ① 尽力发 session/stop {sessionId}（失败仅记日志
+    // 继续）→ ② 直接落 killChain 杀共享进程（背靠背 SIGTERM+SIGKILL，无等待升级窗；
+    // 接受连坐——协议已不可信）→ 在途其他任务走崩溃路径。capabilities.interrupt
+    // 维持 kill-only 不升级（C4）。
     const onAbort = (): void => {
       void this.appServerAbortChain(rt, turn, () => currentSessionId, sessionCreated);
     };
@@ -467,8 +469,8 @@ export class ZcodeEngine implements EnginePort {
 
     try {
       const r = await turn;
-      // stop 优雅生效（终态在 grace 内到达）：宿主已取消——按中止终态收尾（record
-      // 终态迁移由编排层 CAS 决定）
+      // stop 生效（turn 在 abort 后仍正常返回终态）：宿主已取消——按中止终态收尾
+      // （record 终态迁移由编排层 CAS 决定）
       if (ctx.signal?.aborted === true) return abortedAppServerAttempt(ctx);
       return parsedAppServerAttempt(task, r);
     } catch (err) {
@@ -665,8 +667,9 @@ export class ZcodeEngine implements EnginePort {
   /**
    * [R1 D6 主体] 引擎停机路径：①fire 全部在途会话的 session/close 帧（不等待
    * 应答——D6① 顺序规定：close 帧必须先于 SIGTERM，否则对面来不及处理即被杀）→
-   * ②同步 SIGTERM（conn.shutdown 调用内 killChain 前缀同步执行——同步部分在返回
-   * Promise 前完成）→ ③grace → SIGKILL（异步侧，Promise resolve 于进程退出）。
+   * ②杀链：背靠背同步发 SIGTERM+SIGKILL（conn.shutdown 调用内同步执行——信号在
+   * 返回前已发出，无等待升级窗；shutdown resolve 于调用时点、不等待进程退出——
+   * 收割确认由下方 shutdownRuntimeAndDisposeChannel 的 onClose 事件等待承担）。
    * 幂等：运行时字段取走即置空，二次调用零副作用；dispose 后首个 run 经
    * ensureAppServerRuntime 自动重建（与崩溃重建同一代码路径，不变量 4）。
    */
@@ -688,10 +691,10 @@ export class ZcodeEngine implements EnginePort {
         rt.conn.post("session/close", { sessionId });
       }
     }
-    // ②③ 同步 SIGTERM（killChain 前缀在 shutdown 调用内同步执行）→ grace → SIGKILL
-    //（异步侧，resolve 于进程退出）。channel 退订放在崩溃收割之后（exit→close 窗口
-    //竞态的修复体，见 shutdownRuntimeAndDisposeChannel——先退订会让在途 turn 失去
-    //崩溃收割终局）
+    // ② 杀链：背靠背同步发 SIGTERM+SIGKILL（在 shutdown 调用内同步执行——信号在
+    // 返回前已发出，无等待升级窗；resolve 于调用时点、不等待进程退出）。channel 退订
+    // 放在崩溃收割之后（exit→close 窗口竞态的修复体，见
+    // shutdownRuntimeAndDisposeChannel——先退订会让在途 turn 失去崩溃收割终局）
     await this.shutdownRuntimeAndDisposeChannel(rt);
   }
 
