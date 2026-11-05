@@ -100,13 +100,13 @@ describe('RL1 契约封闭（startup-readiness-and-current-state §4.2）', () =
     )
   })
 
-  it('READINESS_REASON_CODES 五码封闭词表（dmg-r1-3）：reason 值域单源 + 测试形态对账', () => {
+  it('READINESS_REASON_CODES 四码封闭词表（dmg-r1-3）：reason 值域单源 + 测试形态对账', () => {
     // 词表 = reason 字段「机器可读枚举」声明的值域单源；新增原因码须同批改常量与设计。
     expect([...READINESS_REASON_CODES].sort()).toEqual(
-      ['mem-pressure', 'plugin_failed', 'plugins_loading', 'reattaching', 'recovering'].sort(),
+      ['plugin_failed', 'plugins_loading', 'reattaching', 'recovering'].sort(),
     )
     // 本文件已出现的 reason 测试形态全部可由词表导出（plugin_failed 带前缀约定后缀）：
-    // 'plugin_failed:demo-plugin' / 'recovering' / 'mem-pressure' / 'reattaching'。
+    // 'plugin_failed:demo-plugin' / 'recovering' / 'reattaching'。
     const reasonOf = (code: (typeof READINESS_REASON_CODES)[number], suffix?: string) =>
       suffix === undefined ? code : `${code}:${suffix}`
     expect(reasonOf('plugin_failed', 'demo-plugin')).toBe('plugin_failed:demo-plugin')
@@ -157,7 +157,7 @@ describe('§7.1 形状逐字段对账（M0-1）', () => {
 
   it('SessionsRecoveryProgressPayload：reason 必填 + progress 缺省形态（跳过/退化懒恢复无计数）', () => {
     const payloads: SessionsRecoveryProgressPayload[] = [
-      { reason: 'mem-pressure' },
+      { reason: 'recovering' },
       { reason: 'reattaching', progress: { done: 5, total: 9 } },
     ]
     expect(payloads[0].progress).toBeUndefined()
@@ -194,7 +194,7 @@ describe('protocol.ts 四消息登记（M0-1，设计 §3.4 M0 登记清单）',
   it('ServerMessageMap 三条目 payload 形状：两快照同型 + 进度通知载荷', () => {
     const reply: ServerMessageMap['runtime.readiness'] = { capabilities: [] }
     const changed: ServerMessageMap['runtime.readinessChanged'] = { capabilities: [] }
-    const progress: ServerMessageMap['runtime.sessionsRecoveryProgress'] = { reason: 'mem-pressure' }
+    const progress: ServerMessageMap['runtime.sessionsRecoveryProgress'] = { reason: 'recovering' }
     expect(reply).toEqual(changed)
     expect(Object.keys(progress).sort()).toEqual(['reason'])
   })

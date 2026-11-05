@@ -47,7 +47,7 @@ export interface ReadinessCapabilityEntry { // oe-exempt:20261031:framework:启�
   name: RemoteCapability
   /** 当前是否就绪。 */
   ready: boolean
-  /** 未就绪原因：机器可读枚举（值域 = READINESS_REASON_CODES 五码封闭词表；plugin_failed
+  /** 未就绪原因：机器可读枚举（值域 = READINESS_REASON_CODES 四码封闭词表；plugin_failed
    * 登记 `plugin_failed:<pluginId>` 前缀约定，D2）+ 人可读文案。就绪时缺省。 */
   reason?: string
   /** 进入当前 ready 态的时刻（epoch 毫秒）——边沿时序断言（A1 边沿间隔 > 0）的数据源。 */
@@ -70,14 +70,14 @@ export interface ReadinessSnapshot { // oe-exempt:20261031:framework:启动就�
 
 /**
  * sessions 恢复进度节流通知载荷（设计 §7.1 形状块；广播消息
- * runtime.sessionsRecoveryProgress，D11）：reason 迁移（如 mem-pressure → 恢复中 n/m）
+ * runtime.sessionsRecoveryProgress，D11）：reason 迁移（如 reattaching → 恢复中 n/m）
  * 不构成能力翻转、无 readinessChanged 边沿可借，状态行刷新走本通知——500ms 级时间
  * 节流，仅 sessions 恢复期发送；退役条件 = 随重写 M5 恢复链移交执行域时一并退役
  * （D11 时间平抑登记）。
  */
 export interface SessionsRecoveryProgressPayload { // oe-exempt:20261031:framework:启动就绪跨包协议契约（shared 单源 ports 层，会话恢复节流通知载荷，实现随后续波次落地）
   /** 机器可读枚举（值域 = READINESS_REASON_CODES，插件失败同前缀约定）——覆盖 reason 迁移
-   *（如 mem-pressure → 恢复中）的文案刷新。 */
+   *（如 reattaching → 恢复中）的文案刷新。 */
   reason: string
   /** n/m 进度；跳过/退化懒恢复等无计数形态缺省。 */
   progress?: ReadinessProgress
@@ -103,7 +103,7 @@ export const READINESS_SNAPSHOT_FIELDS = ['capabilities'] as const satisfies rea
 
 /**
  * readiness reason 封闭词表（dmg-r1-3 收敛——reason 字段声明「机器可读枚举」的值域单源）：
- * 五码覆盖设计已登记的未就绪原因；插件失败登记 `plugin_failed:<pluginId>` 前缀约定
+ * 四码覆盖设计已登记的未就绪原因；插件失败登记 `plugin_failed:<pluginId>` 前缀约定
  * （词表成员为前缀码，实际值带插件 id 后缀）。新增原因码 = 同批改本常量与设计文档，
  * diff 显式可见的契约 review 点；reason 字段协议类型保持开放 string（协议 additive，
  * 不因词表收窄破坏线上载荷形状）。
@@ -111,7 +111,6 @@ export const READINESS_SNAPSHOT_FIELDS = ['capabilities'] as const satisfies rea
 export const READINESS_REASON_CODES = [
   'plugins_loading',
   'recovering',
-  'mem-pressure',
   'reattaching',
   'plugin_failed',
 ] as const
