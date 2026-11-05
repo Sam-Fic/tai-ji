@@ -1,19 +1,20 @@
 // src/i18n.ts
 //
-// subagent-workflow 扩展的 L2 呈现层词典 + locale 读取接线（tray-panel-interact 设计
-// §3.3 D9：面板文案随 UI 语言——标题 / 分段标签 / 行内操作按钮与确认文案）。
+// subagent-workflow 扩展的 L2 呈现层词典（tray-panel-interact 设计 §3.3 D9：面板文案
+// 随 UI 语言——标题 / 分段标签 / 行内操作按钮与确认文案）。
 //
 // 语言归属原则（与 scheduler / plan 同源）：跨边界只走数据——renderer 是语言权威，进程只读
-// 派生态。读取器（readUiLocale + mtime+size 双键读缓存 + 降级）下沉在
-// `@zhushanwen/pi-llm-shared` 单一实现，本模块经 import 消费，不各自就地实现。
-// locale 读取时机 = 每次推送时读（推送器 push 内调 readUiLocale 后作实参传给纯构造函数），
-// 与 scheduler widget 臂同款——不带缓存失效问题，界面语言切换后下一次推送即生效。
+// 派生态。locale 读取（readUiLocale）与词典模板渲染机制（t / dictionaryKeys，回落链
+// 当前 locale → en-US → 键名）下沉在 `@zhushanwen/pi-llm-shared` 单一实现（ui-locale /
+// ui-dictionary），本模块只持有词典数据并经 createUiDictionary 消费机制。
+// locale 读取时机 = 每次渲染时读（t 内部 readUiLocale 后回落），与 scheduler widget 臂
+// 同款——界面语言切换后下一次推送即生效。
 //
-// 为什么构造函数收显式 locale 实参而非内部读：widget 树构造是纯函数（入参出参），locale
-// 作为显示决定因素显式入形参，单测可按 locale 精确断言、不依赖进程环境（scheduler 的
-// buildSchedulerWidgetGui(tasks, locale) 同款）。
+// 为什么 widget 构造函数收显式 locale 实参而非内部读：widget 树构造是纯函数（入参出参），
+// locale 作为显示决定因素显式入形参，单测可按 locale 精确断言、不依赖进程环境。
 
 import { DEFAULT_UI_LOCALE, readUiLocale } from '@zhushanwen/pi-llm-shared/ui-locale'
+import { createUiDictionary } from '@zhushanwen/pi-llm-shared/ui-dictionary'
 import type { UiLocale } from '@zhushanwen/pi-llm-shared/ui-locale'
 
 export type { UiLocale }
@@ -62,36 +63,6 @@ const EN_US: Dictionary = {
   'tray.workflow.interruptedLabel': 'Interrupted (resumable)',
 }
 
-const DICTIONARIES: Record<UiLocale, Dictionary> = {
-  'zh-CN': ZH_CN,
-  'en-US': EN_US,
-}
+const { t, dictionaryKeys } = createUiDictionary({ 'zh-CN': ZH_CN, 'en-US': EN_US })
 
-/** 指定语言的词典 key 集合（测试用于 zh/en 双侧对齐 + 超集断言）。 */
-export function dictionaryKeys(locale: UiLocale): string[] {
-  return Object.keys(DICTIONARIES[locale])
-}
-
-// ── 模板渲染 ──
-
-/**
- * 渲染词典模板。键缺失 → 回落 en 值 → 再回落键名本身（**禁返回空串**）：所有经 `t()`
- * 赋值的字段因此天然非空（`meta.title` 依赖本保证）。占位符缺参时保留 `{name}` 原样（非空）。
- */
-export function t(
-  key: string,
-  params?: Record<string, string | number>,
-  locale?: UiLocale,
-): string {
-  const resolved = locale ?? readUiLocale()
-  const template = DICTIONARIES[resolved][key] ?? DICTIONARIES[DEFAULT_UI_LOCALE][key] ?? key
-  return interpolate(template, params)
-}
-
-function interpolate(template: string, params?: Record<string, string | number>): string {
-  if (params === undefined) return template
-  return template.replace(/\{(\w+)\}/g, (match, name: string) => {
-    const value = params[name]
-    return value === undefined ? match : String(value)
-  })
-}
+export { t, dictionaryKeys }

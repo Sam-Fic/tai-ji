@@ -29,7 +29,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   guiComponent,
-  guiResult,
   setWidgetDual,
   type DualWidgetContent,
   type GuiComponent,
@@ -42,6 +41,7 @@ import type { WorkflowRun } from "@zhushanwen/subagent-core";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { t, readUiLocale, type UiLocale } from "../../i18n.ts";
+import { buildDualSegmentTrayWidget } from "./tray-widget-dual-segment.ts";
 
 /** 托盘 widget 的 viewId（宿主 widget 区分区键；todo/goal/subagent 同形短名）。 */
 export const WORKFLOW_TRAY_VIEW_ID = "workflow";
@@ -243,25 +243,15 @@ function trayTextLines(runs: readonly WorkflowRun[]): string[] {
   });
 }
 
-/** meta 状态词表（head 状态点语义）。 */
-type MetaStatus = NonNullable<import("@zhushanwen/extension-protocol").WidgetMeta["status"]>;
-
 /**
  * workflow 托盘 widget 双模内容（meta head + tab-bar 双段，形态对齐 subagent 件的
- * 「进行中 / 已结束」两桶语义——原宿主分桶面板的两视图裁决同构）：
- * - gui 臂 meta：status = running>0 亮运行态、有失败终局落 failed、否则 done；
- *   badge/progress.label = 进行中 run 数且 running>0 才推（demo v3 角标规则，见构造
- *   函数内注释）；icon 点名 'workflow'（宿主 widget icon registry 在册——U10 随件
- *   迁移登记）。
- * - gui 臂内容 = tab-bar 双段互斥覆盖全量：进行中段 = status==="running" 行；
- *   已结束段 = 其余（done / interrupted——interrupted 计已结束与原宿主 [D2] 显式
- *   裁决同口径：interrupted 是无活体暂停态不算进行中）。段内富行形态：running 行带
- *   行内中止 actions、interrupted 行带行内续跑 actions + statusLabel 覆盖字
- *   （「已中断（可续跑）」——三值枚举装不下的语义，D3/D8），commandId 指向宿主薄
- *   命令（M3，见 rowActionsOf）。
- * - text 臂 = TUI 原生文本行。
- * - 空 runs → undefined（调用方按清屏语义推 setWidgetDual(…, undefined)——与 todo /
- *   subagent 空列表清屏同款，宿主 widget 区「有 entry 即渲染、清屏即消失」）。
+ * 「进行中 / 已结束」两桶语义——原宿主分桶面板的两视图裁决同构）：骨架组装（状态派生 /
+ * 角标规则 / 双段 / meta head）见 tray-widget-dual-segment（subagent 件同构共用）；本件
+ * 只落数据源域差异——进行中段 = status==="running" 行，已结束段 = 其余（done /
+ * interrupted——interrupted 计已结束与原宿主 [D2] 显式裁决同口径：interrupted 是无活体
+ * 暂停态不算进行中）；空 runs → undefined（调用方按清屏语义推 setWidgetDual(…,
+ * undefined)——与 todo / subagent 空列表清屏同款，宿主 widget 区「有 entry 即渲染、
+ * 清屏即消失」）。
  *
  * locale 形参（D9）：head 标题与 tab-bar 分段标签随 UI 语言；由推送方在每次推送时读
  * （readUiLocale）后显式传入——本函数保持纯函数（入参出参），显示决定因素不含隐藏的
@@ -278,38 +268,21 @@ export function buildWorkflowTrayWidget(
     const p = rowPresentation(runSummary(r));
     return p.status === "failed";
   });
-  const status: MetaStatus =
-    running.length > 0 ? "running" : hasFailure ? "failed" : "done";
-  // demo v3 角标规则（D8，PR5 红色 0 根因 = 推送侧 0 照推 + 宿主无过滤）：running>0
-  // 才推 badge 与 progress.label 计数文本；0 时双不推（判定信号在语义所有方——宿主
-  // 无法区分「0 有语义」与「0 无语义」，不采用宿主渲染层过滤）。0 时面板 head 计数
-  // 回落 current/total 拼接（「0/2」）、迷你进度条 0% 照常（progress.current/total
-  // 恒保留，宿主 progressLabel 缺省链）。
-  const runningCountText = running.length > 0 ? String(running.length) : undefined;
-  return {
-    gui: guiResult(
-      guiComponent("tab-bar", {
-        tabs: [
-          // 首段带 active：容器化宿主据此建立初始 tab（此后本地切换不被推送重置）
-          { label: t("tray.segment.running", { n: running.length }, locale), active: true },
-          { label: t("tray.segment.ended", { n: ended.length }, locale) },
-        ],
-        sections: [traySegment(running, locale), traySegment(ended, locale)],
-      }),
-      {
-        title: t("tray.workflow.title", undefined, locale),
-        status,
-        progress: {
-          current: running.length,
-          total: runs.length,
-          ...(runningCountText !== undefined ? { label: runningCountText } : {}),
-        },
-        icon: "workflow",
-        ...(runningCountText !== undefined ? { badge: runningCountText } : {}),
-      },
-    ),
-    text: trayTextLines(runs),
-  };
+  // 骨架（head 状态派生 / 角标规则 / tab-bar 双段 / meta head）在 tray-widget-dual-segment
+  // 单点（subagent 件同构共用）；本件只注入数据源域差异（行构造 / text 臂 / title / icon）。
+  return buildDualSegmentTrayWidget(
+    {
+      records: runs,
+      running,
+      ended,
+      hasFailure,
+      titleKey: "tray.workflow.title",
+      icon: "workflow",
+      segment: traySegment,
+      textLines: trayTextLines,
+    },
+    locale,
+  );
 }
 
 // ── 推送器（组合根注入 readRuns 的 per-factory 实例）────────────────────────

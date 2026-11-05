@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { DEFAULT_UI_LOCALE, dictionaryKeys, readUiLocale, t, type UiLocale } from "../i18n.js";
+import { DEFAULT_UI_LOCALE, dictionaryKeys, readUiLocale, t } from "../i18n.js";
 
 describe("plan i18n（u-locale-channel 消费端）", () => {
   const tmpRoots: string[] = [];

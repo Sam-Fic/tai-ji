@@ -22,18 +22,11 @@
 // 两侧 import 同一实现（[dmg-r1-4] 下沉，镜像手抄退役），词表扩值评估两侧同批
 // （shared/core record 词表纪律不变）。
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// ── hoisted mocks（依赖收窄：logger 防文件落盘；protocol 只 mock setWidgetDual 推送点，
-//    guiComponent/guiResult 走真实现——树形状断言消费真实产物；core barrel 只留 service 可控点）──
-
-const extensionLoggerMock = vi.hoisted(() => {
-  // 稳定单例（模块内 getLogger(...) 的每次调用返回同一 mock 实例——断言才能取到写入）
-  const instance = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  return { getLogger: vi.fn(() => instance), instance };
-});
-
-const setWidgetDualMock = vi.hoisted(() => vi.fn());
+// ── hoisted mocks（依赖收窄：core barrel 只留 service 可控点——本文件私有面，不共用）；
+//    logger / ext-guards / protocol 推送点的 mock 注册在共用 fixture 模块
+//    tray-widget-test-fixtures（test 文件经 import 语义先于 SUT 装载注册）──
 
 const mockService = vi.hoisted(() => ({
   current: null as null | {
@@ -44,89 +37,33 @@ const mockService = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("@zhushanwen/pi-extension-logger", () => extensionLoggerMock);
-vi.mock("@zhushanwen/pi-ext-guards", () => ({
-  toErrorMessage: (err: unknown) => (err instanceof Error ? err.message : String(err)),
-}));
-vi.mock("@zhushanwen/extension-protocol", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@zhushanwen/extension-protocol")>();
-  return { ...actual, setWidgetDual: setWidgetDualMock };
-});
 vi.mock("@zhushanwen/subagent-core", () => ({
   getSubagentService: () => mockService.current,
 }));
 
+import {
+  TRAY_TEST_LOCALE,
+  makeRecord,
+  rowHostAction,
+  segmentComponents,
+  segmentItems,
+  trayWidgetMocks,
+} from "../../../__tests__/tray-widget-test-fixtures.ts";
 import type { SubagentRecord } from "@zhushanwen/subagent-core";
-import type { UiLocale } from "../../../i18n.ts";
 import {
   SUBAGENT_TRAY_VIEW_ID,
   buildSubagentTrayWidget,
   createSubagentTrayWidgetPusher,
 } from "../tray-widget.ts";
 
-/**
- * 面板文案 locale（D9：标题 / 分段标签随 UI 语言）。构造函数是纯函数、显式收 locale
- * 实参（scheduler widget 臂同款）；本文件断言中文文案，故固定传 zh-CN——不依赖进程环境
- * （readUiLocale 的 env 与 ui-preferences.json 读取）。推送器路径的 locale 由推送时读取
- * 决定（en-US 缺省），其标题断言按该口径单独断言。
- */
-const LOCALE: UiLocale = "zh-CN";
-
-/** subagent 托盘 widget 构造（中文文案 locale 固定）。 */
+/** subagent 托盘 widget 构造（中文文案 locale 固定）。推送器路径的 locale 由推送时读取
+ *  决定（en-US 缺省），其标题断言按该口径单独断言。 */
 function buildWidget(records: readonly SubagentRecord[]): ReturnType<typeof buildSubagentTrayWidget> {
-  return buildSubagentTrayWidget(records, LOCALE);
-}
-import type { GuiComponent, HostContainerAction, TreeItem } from "@zhushanwen/extension-protocol";
-
-/** record fixture（字段见 core assembly/types.ts SubagentRecord）。 */
-function makeRecord(over: Partial<SubagentRecord> = {}): SubagentRecord {
-  return {
-    id: "rec-1",
-    agent: "worker",
-    task: "do the thing",
-    slug: "thing",
-    status: "idle",
-    mode: "sync",
-    startedAt: 1000,
-    endedAt: 2000,
-    rootSessionId: undefined,
-    parentRecordId: undefined,
-    depth: 0,
-    turns: 1,
-    totalTokens: 10,
-    model: "test/model",
-    thinkingLevel: undefined,
-    eventLog: [],
-    displayItems: [],
-    result: "ok",
-    error: undefined,
-    sessionFile: undefined,
-    ...over,
-  } as SubagentRecord;
-}
-
-/** tab-bar 树的段组件清单（sections[i]——段 = 子树数组）。 */
-function segmentComponents(component: GuiComponent, index: number): GuiComponent[] {
-  expect(component.type).toBe("tab-bar");
-  const sections = (component.props as { sections?: GuiComponent[][] }).sections ?? [];
-  return sections[index] ?? [];
-}
-
-/** 段内行集（D8 富行形态：段 = 每行一棵单行 list-tree——展平段内全部 list-tree 的
- *  items，与 workflow-tray-widget.test / tray-widget-buttons.test 同口径）。 */
-function segmentItems(component: GuiComponent, index: number): TreeItem[] {
-  return segmentComponents(component, index)
-    .filter((c) => c.type === "list-tree")
-    .flatMap((c) => (c.props as { items: TreeItem[] }).items);
-}
-
-/** 行 action 的 hostAction 提取（行不可点 = action 缺省，断言处显式判 undefined）。 */
-function rowHostAction(item: TreeItem): HostContainerAction | undefined {
-  return item.action?.hostAction;
+  return buildSubagentTrayWidget(records, TRAY_TEST_LOCALE);
 }
 
 beforeEach(() => {
-  setWidgetDualMock.mockReset();
+  trayWidgetMocks.setWidgetDual.mockReset();
   mockService.current = null;
 });
 
@@ -384,33 +321,29 @@ describe("createSubagentTrayWidgetPusher 推送器", () => {
     return { listeners, collect, onChange };
   }
 
-  afterEach(() => {
-    // 微任务排空：scheduleFlush 的 queueMicrotask 不跨用例泄漏
-  });
-
   it("attach → 初始推送（collectRecords 磁盘重建覆盖冷读）+ onChange 订阅；有记录推树、空记录推清屏", async () => {
     const { collect, onChange } = wireService([makeRecord({ id: "r1", status: "running", stopReason: undefined })]);
     const pusher = createSubagentTrayWidgetPusher();
     pusher.attach(makeCtx() as Parameters<typeof pusher.attach>[0]);
-    await vi.waitFor(() => expect(setWidgetDualMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(trayWidgetMocks.setWidgetDual).toHaveBeenCalledTimes(1));
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(collect).toHaveBeenCalled();
     // 推送键 = SUBAGENT_TRAY_VIEW_ID；内容 = 树（meta 在场）
-    expect(setWidgetDualMock.mock.calls[0][1]).toBe(SUBAGENT_TRAY_VIEW_ID);
-    expect(setWidgetDualMock.mock.calls[0][2]?.gui.meta?.title).toBe("Subagents");
+    expect(trayWidgetMocks.setWidgetDual.mock.calls[0][1]).toBe(SUBAGENT_TRAY_VIEW_ID);
+    expect(trayWidgetMocks.setWidgetDual.mock.calls[0][2]?.gui.meta?.title).toBe("Subagents");
 
     // 记录清空后的重推 = 清屏（第二参数 undefined）
     collect.mockReturnValue([]);
     for (const listener of Array.from(onChange.mock.calls, (call) => call[0])) listener();
-    await vi.waitFor(() => expect(setWidgetDualMock).toHaveBeenCalledTimes(2));
-    expect(setWidgetDualMock.mock.calls[1][2]).toBeUndefined();
+    await vi.waitFor(() => expect(trayWidgetMocks.setWidgetDual).toHaveBeenCalledTimes(2));
+    expect(trayWidgetMocks.setWidgetDual.mock.calls[1][2]).toBeUndefined();
   });
 
   it("同 tick 多次 onChange 合并为一次推送（微任务边界合并，无 timer）", async () => {
     const { listeners, onChange } = wireService([makeRecord()]);
     const pusher = createSubagentTrayWidgetPusher();
     pusher.attach(makeCtx() as Parameters<typeof pusher.attach>[0]);
-    await vi.waitFor(() => expect(setWidgetDualMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(trayWidgetMocks.setWidgetDual).toHaveBeenCalledTimes(1));
 
     // 连续触发三次（core 写链单 tick 多迁移的形态）：合并为一次重推
     for (const listener of Array.from(onChange.mock.calls, (call) => call[0])) listener();
@@ -418,7 +351,7 @@ describe("createSubagentTrayWidgetPusher 推送器", () => {
     for (const listener of Array.from(onChange.mock.calls, (call) => call[0])) listener();
     await Promise.resolve();
     await Promise.resolve();
-    expect(setWidgetDualMock).toHaveBeenCalledTimes(2);
+    expect(trayWidgetMocks.setWidgetDual).toHaveBeenCalledTimes(2);
     expect(listeners.size).toBe(1);
   });
 
@@ -426,13 +359,13 @@ describe("createSubagentTrayWidgetPusher 推送器", () => {
     const { listeners } = wireService([makeRecord()]);
     const pusher = createSubagentTrayWidgetPusher();
     pusher.attach(makeCtx() as Parameters<typeof pusher.attach>[0]);
-    await vi.waitFor(() => expect(setWidgetDualMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(trayWidgetMocks.setWidgetDual).toHaveBeenCalledTimes(1));
 
     pusher.detach();
     expect(listeners.size).toBe(0);
-    setWidgetDualMock.mockClear();
+    trayWidgetMocks.setWidgetDual.mockClear();
     // 退订后无事件路径可达推送；本用例断言 detach 后通道静默（重新 attach 才恢复）
-    expect(setWidgetDualMock).not.toHaveBeenCalled();
+    expect(trayWidgetMocks.setWidgetDual).not.toHaveBeenCalled();
   });
 
   it("service 缺席（session 装配链前的异常时序）→ no-op 不抛错", async () => {
@@ -441,19 +374,19 @@ describe("createSubagentTrayWidgetPusher 推送器", () => {
     expect(() => pusher.attach(makeCtx() as Parameters<typeof pusher.attach>[0])).not.toThrow();
     await Promise.resolve();
     // collectRecords 不可达 → 投影按空记录处理 → 推清屏（不虚亮）
-    await vi.waitFor(() => expect(setWidgetDualMock).toHaveBeenCalledTimes(1));
-    expect(setWidgetDualMock.mock.calls[0][2]).toBeUndefined();
+    await vi.waitFor(() => expect(trayWidgetMocks.setWidgetDual).toHaveBeenCalledTimes(1));
+    expect(trayWidgetMocks.setWidgetDual.mock.calls[0][2]).toBeUndefined();
   });
 
   it("推送异常不反噬（warn 首败留痕后继续，下一事件重推）", async () => {
     wireService([makeRecord()]);
-    setWidgetDualMock.mockImplementationOnce(() => {
+    trayWidgetMocks.setWidgetDual.mockImplementationOnce(() => {
       throw new Error("ctx dead");
     });
     const pusher = createSubagentTrayWidgetPusher();
     expect(() => pusher.attach(makeCtx() as Parameters<typeof pusher.attach>[0])).not.toThrow();
     await vi.waitFor(() => {
-      expect(extensionLoggerMock.instance.warn).toHaveBeenCalled();
+      expect(trayWidgetMocks.instance.warn).toHaveBeenCalled();
     });
   });
 });

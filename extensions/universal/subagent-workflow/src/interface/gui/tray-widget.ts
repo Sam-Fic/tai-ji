@@ -21,7 +21,6 @@ import {
   failedRoundOf,
   failureCauseLabel,
   guiComponent,
-  guiResult,
   isRunningProjection,
   setWidgetDual,
   type DualWidgetContent,
@@ -34,6 +33,7 @@ import { getSubagentService, type SubagentRecord } from "@zhushanwen/subagent-co
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
 import { t, readUiLocale, type UiLocale } from "../../i18n.ts";
+import { buildDualSegmentTrayWidget } from "./tray-widget-dual-segment.ts";
 
 /** 托盘 widget 的 viewId（宿主 widget 区分区键；todo/goal 同形短名）。 */
 export const SUBAGENT_TRAY_VIEW_ID = "subagent";
@@ -201,23 +201,14 @@ function trayTextLines(records: readonly SubagentRecord[]): string[] {
   });
 }
 
-/** meta 状态词表（head 状态点语义）。 */
-type MetaStatus = NonNullable<import("@zhushanwen/extension-protocol").WidgetMeta["status"]>;
-
 /**
  * 托盘 widget 双模内容（meta head + tab-bar 双段，形态对齐 todo 的双段架构与原宿主
- * 托盘两桶语义「进行中 / 已结束」）：
- * - gui 臂 meta：宿主壳层唯一渲染 head（标题/状态点/进度/icon/badge）；status = running>0
- *   亮运行态（宿主呼吸点），有失败轮落 failed，否则 done；badge/progress.label = 进行中
- *   条数且 running>0 才推（demo v3 角标规则，见构造函数内注释）；icon 点名 'bot'（宿主
- *   WIDGET_ICON_ENTRIES 在册）。
- * - gui 臂内容 = tab-bar 双段互斥覆盖全量：运行中段 = 占用谓词命中行；已结束段 = 其余
- *   （含失败轮——失败分类在行 subLabel 副文本承载，状态点 failed 红，不静默丢弃）。
- *   段内富行形态：running 行带行内取消 actions、failed 行（任务原文在场）带行内重试
- *   actions，commandId 指向宿主薄命令（M3，见 rowActionsOf）。
- * - text 臂 = TUI 原生文本行（setWidgetDual 模式分派到非 rpc 臂的呈现）。
- * - 空记录 → undefined（调用方按清屏语义推 setWidgetDual(…, undefined)——与 todo
- *   空列表清屏同款，宿主 widget 区「有 entry 即渲染、清屏即消失」）。
+ * 托盘两桶语义「进行中 / 已结束」）：骨架组装（状态派生 / 角标规则 / 双段 / meta head）
+ * 见 tray-widget-dual-segment（workflow 件同构共用）；本件只落数据源域差异——运行中段
+ * = 占用谓词命中行，已结束段 = 其余（含失败轮——失败分类在行 subLabel 副文本承载，
+ * 状态点 failed 红，不静默丢弃）；空记录 → undefined（调用方按清屏语义推
+ * setWidgetDual(…, undefined)——与 todo 空列表清屏同款，宿主 widget 区「有 entry 即
+ * 渲染、清屏即消失」）。
  *
  * locale 形参（D9）：head 标题与 tab-bar 分段标签随 UI 语言；由推送方在每次推送时读
  * （readUiLocale）后显式传入——本函数保持纯函数（入参出参），显示决定因素不含隐藏的
@@ -231,38 +222,21 @@ export function buildSubagentTrayWidget(
   const running = records.filter((r) => isRunningProjection(r));
   const ended = records.filter((r) => !isRunningProjection(r));
   const hasFailure = ended.some((r) => failedRoundOf(r) !== undefined);
-  const status: MetaStatus =
-    running.length > 0 ? "running" : hasFailure ? "failed" : "done";
-  // demo v3 角标规则（D8，PR5 红色 0 根因 = 推送侧 0 照推 + 宿主无过滤）：running>0
-  // 才推 badge 与 progress.label 计数文本；0 时双不推（判定信号在语义所有方——宿主
-  // 无法区分「0 有语义」与「0 无语义」，不采用宿主渲染层过滤）。0 时面板 head 计数
-  // 回落 current/total 拼接（「0/2」）、迷你进度条 0% 照常（progress.current/total
-  // 恒保留，宿主 progressLabel 缺省链）。
-  const runningCountText = running.length > 0 ? String(running.length) : undefined;
-  return {
-    gui: guiResult(
-      guiComponent("tab-bar", {
-        tabs: [
-          // 首段带 active：容器化宿主据此建立初始 tab（此后本地切换不被推送重置）
-          { label: t("tray.segment.running", { n: running.length }, locale), active: true },
-          { label: t("tray.segment.ended", { n: ended.length }, locale) },
-        ],
-        sections: [traySegment(running, locale), traySegment(ended, locale)],
-      }),
-      {
-        title: t("tray.subagent.title", undefined, locale),
-        status,
-        progress: {
-          current: running.length,
-          total: records.length,
-          ...(runningCountText !== undefined ? { label: runningCountText } : {}),
-        },
-        icon: "bot",
-        ...(runningCountText !== undefined ? { badge: runningCountText } : {}),
-      },
-    ),
-    text: trayTextLines(records),
-  };
+  // 骨架（head 状态派生 / 角标规则 / tab-bar 双段 / meta head）在 tray-widget-dual-segment
+  // 单点（workflow 件同构共用）；本件只注入数据源域差异（行构造 / text 臂 / title / icon）。
+  return buildDualSegmentTrayWidget(
+    {
+      records,
+      running,
+      ended,
+      hasFailure,
+      titleKey: "tray.subagent.title",
+      icon: "bot",
+      segment: traySegment,
+      textLines: trayTextLines,
+    },
+    locale,
+  );
 }
 
 // ── 推送器（session_start/shutdown 驱动的 per-factory 实例）──────────────────

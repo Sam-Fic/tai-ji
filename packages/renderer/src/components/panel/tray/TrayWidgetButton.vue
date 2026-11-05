@@ -152,7 +152,7 @@ import type { WidgetMeta } from '@zhushanwen/extension-protocol'
 import { Button } from '@/components/ui/button'
 import { TRAY_ITEM_COUNT_CLASS, TRAY_PULSE_CLASS, trayItemButtonClass } from '@/components/panel/tray/tray-item-button'
 import { widgetToneText } from '@/components/panel/tray/tray-tone'
-import { useTrayWidgetDeclaration } from '@/components/panel/tray/use-tray-widget-declaration'
+import { useTrayWidgetDisplayTitle } from '@/components/panel/tray/use-tray-widget-declaration'
 
 const props = withDefaults(
   defineProps<{
@@ -260,20 +260,12 @@ function resolveWidgetIcon(
   return { kind: 'glyph', component: builtin ?? FALLBACK_WIDGET_ICON }
 }
 
-/** 托盘位声明切片（D7 静态信息源；扩展源/未声明 = undefined） */
-const declaration = useTrayWidgetDeclaration(() => props.viewId, () => props.pluginId)
+/** 托盘位声明切片（D7 静态信息源；扩展源/未声明 = undefined）+ 显示标题（D7 单一兜底链）——
+ *  链本体在 use-tray-widget-declaration 单点（TrayWidgetPanel 同源共用） */
+const { declaration, displayTitle } = useTrayWidgetDisplayTitle(() => props.viewId, () => props.pluginId, () => props.meta)
 
 const icon = computed<WidgetIcon>(() =>
   resolveWidgetIcon(props.viewId, props.pluginId, props.meta?.icon, declaration.value?.icon))
-
-/** 显示标题（D7 单一兜底链）：声明 title ?? meta.title（空串视为缺省）→ viewId（v1 旧
- *  extension 与脏数据兜底——声明与 meta 双缺才出现 viewId 裸标题） */
-const displayTitle = computed(() => {
-  const declared = declaration.value?.title
-  if (declared !== undefined && declared.trim() !== '') return declared
-  const title = props.meta?.title
-  return title !== undefined && title.trim() !== '' ? title : props.viewId
-})
 
 /** badge 全文（D4 两档；D8 第三档 String(progress.current) 退役——零消费者）：
  *  meta.badge → progress.label → 无（空串等同无） */

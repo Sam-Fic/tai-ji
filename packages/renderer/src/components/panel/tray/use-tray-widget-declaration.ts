@@ -18,6 +18,7 @@
 import { computed, toValue } from 'vue'
 import type { ComputedRef, MaybeRefOrGetter } from 'vue'
 import { COMPOSER_TRAY_PLACEMENT } from '@taiji/core'
+import type { WidgetMeta } from '@zhushanwen/extension-protocol'
 import { getContentSlotRegistry } from '@/lib/content-slots'
 
 /** 托盘位声明投影（静态信息切片；title = 声明 label，声明结构必填；纯数据形状无实现语义，type alias 是准确形态） */
@@ -50,12 +51,11 @@ export function findTrayWidgetDeclaration(
     : { title: found.label, ...(found.icon !== undefined ? { icon: found.icon } : {}) }
 }
 
-/**
- * @param viewId widget key（响应式取值，条目增删即重查）
- * @param pluginId 条目归属插件 id（响应式取值）
- * @returns 命中的托盘位声明切片；未命中 = undefined
+/** @param viewId widget key（响应式取值，条目增删即重查）
+ *  @param pluginId 条目归属插件 id（响应式取值）
+ *  @returns 命中的托盘位声明切片；未命中 = undefined
  */
-export function useTrayWidgetDeclaration(
+function useTrayWidgetDeclaration(
   viewId: MaybeRefOrGetter<string>,
   pluginId: MaybeRefOrGetter<string | undefined>,
 ): ComputedRef<TrayWidgetDeclaration | undefined> {
@@ -63,4 +63,28 @@ export function useTrayWidgetDeclaration(
     void getContentSlotRegistry().snapshot.value // 先建依赖再查询（§7.2：声明变更驱动标题刷新）
     return findTrayWidgetDeclaration(toValue(viewId), toValue(pluginId))
   })
+}
+
+/**
+ * 托盘条目显示标题（D7 单一兜底链的组件侧单点，TrayWidgetButton / TrayWidgetPanel 共用）：
+ * 声明 title ?? meta.title（空串视为缺省）→ viewId（v1 旧 extension 与脏数据兜底——
+ * 声明与 meta 双缺才出现 viewId 裸标题）。两消费端禁止各写一份兜底链（链漂移 = 按钮标题
+ * 与面板标题不同源，违反 D7 同源契约）。
+ *
+ * @returns declaration 声明切片（icon 等其他静态信息消费；Panel 不需要时忽略即可——
+ *   computed 惰性，不读取不评估）；displayTitle 兜底链产物
+ */
+export function useTrayWidgetDisplayTitle(
+  viewId: MaybeRefOrGetter<string>,
+  pluginId: MaybeRefOrGetter<string | undefined>,
+  meta: MaybeRefOrGetter<WidgetMeta | undefined>,
+): { declaration: ComputedRef<TrayWidgetDeclaration | undefined>; displayTitle: ComputedRef<string> } {
+  const declaration = useTrayWidgetDeclaration(viewId, pluginId)
+  const displayTitle = computed(() => {
+    const declared = declaration.value?.title
+    if (declared !== undefined && declared.trim() !== '') return declared
+    const title = toValue(meta)?.title
+    return title !== undefined && title.trim() !== '' ? title : toValue(viewId)
+  })
+  return { declaration, displayTitle }
 }

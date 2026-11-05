@@ -16,190 +16,41 @@
 // （isRunningProjection / failedRoundOf，本测试经构造 fixture 消费真实产物）；workflow
 // 三态 = core runSummary 派生视图（真聚合根 fixture）。
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
-// ── hoisted mocks（依赖收窄：logger 防文件落盘；protocol 只 mock setWidgetDual 推送点，
-//    guiComponent/guiResult 走真实现——树形状断言消费真实产物；subagent-core 走真实现
-//    （WorkflowRun.reconstruct 真聚合根 + runSummary 真派生视图），与 workflow-tray-widget.test
-//    同口径——本文件只测 build* 纯函数，不装推送器，无需可控 service）──
-
-const extensionLoggerMock = vi.hoisted(() => {
-  const instance = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  return { getLogger: vi.fn(() => instance), instance };
-});
-
-const setWidgetDualMock = vi.hoisted(() => vi.fn());
-
-vi.mock("@zhushanwen/pi-extension-logger", () => extensionLoggerMock);
-vi.mock("@zhushanwen/pi-ext-guards", () => ({
-  toErrorMessage: (err: unknown) => (err instanceof Error ? err.message : String(err)),
-}));
-vi.mock("@zhushanwen/extension-protocol", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@zhushanwen/extension-protocol")>();
-  return { ...actual, setWidgetDual: setWidgetDualMock };
-});
+// ── 共用 fixture 单点（tray-widget-test-fixtures：mock 注册 / record fixture / 树解包辅助；
+//    workflow-run-fixture：WorkflowRun 真聚合根 fixture）──
+// subagent-core 走真实现（runSummary 真派生视图），与 workflow-tray-widget.test 同口径——
+// 本文件只测 build* 纯函数，不装推送器，无需可控 service（分工见 fixtures 头注释）。
 
 import {
-  AgentCall,
-  Budget,
-  Trace,
-  WorkflowRun,
-  noteRebuiltSettlement,
-} from "@zhushanwen/subagent-core";
-import type { DoneReason, SubagentRecord } from "@zhushanwen/subagent-core";
-import type {
-  GuiComponent,
-  GuiComponentProps,
-  HostContainerAction,
-  TreeItem,
-} from "@zhushanwen/extension-protocol";
-import { buildSubagentTrayWidget } from "../interface/gui/tray-widget.ts";
-import type { UiLocale } from "../i18n.ts";
-import { buildWorkflowTrayWidget } from "../interface/gui/workflow-tray-widget.ts";
+  TRAY_TEST_LOCALE,
+  expectSegmentsAllListTree,
+  makeFailedRecord,
+  makeRecord,
+  rowHostAction,
+  segmentActionItems,
+  segmentItems,
+  trayWidgetMocks,
+} from "./tray-widget-test-fixtures.ts";
+import { makeRun } from "./workflow-run-fixture.ts";
 
-/**
- * 面板文案 locale（D9：标题 / 分段标签 / 按钮与确认文案随 UI 语言）。构造函数是纯函数、
- * 显式收 locale 实参（scheduler widget 臂同款）；本文件断言中文文案，故固定传 zh-CN——
- * 不依赖进程环境（readUiLocale 的 env 与 ui-preferences.json 读取）。
- */
-const LOCALE: UiLocale = "zh-CN";
+import type { SubagentRecord, WorkflowRun } from "@zhushanwen/subagent-core";
+import { buildSubagentTrayWidget } from "../interface/gui/tray-widget.ts";
+import { buildWorkflowTrayWidget } from "../interface/gui/workflow-tray-widget.ts";
 
 /** subagent 托盘 widget 构造（中文文案 locale 固定）。 */
 function subagentWidget(records: readonly SubagentRecord[]): ReturnType<typeof buildSubagentTrayWidget> {
-  return buildSubagentTrayWidget(records, LOCALE);
+  return buildSubagentTrayWidget(records, TRAY_TEST_LOCALE);
 }
 
 /** workflow 托盘 widget 构造（中文文案 locale 固定）。 */
 function workflowWidget(runs: readonly WorkflowRun[]): ReturnType<typeof buildWorkflowTrayWidget> {
-  return buildWorkflowTrayWidget(runs, LOCALE);
-}
-
-/** action-bar item 声明形状（协议 action-bar items 元素；协议包不导出该别名，消费方本地定义——Actionbar.vue 同款）。 */
-type ActionBarItem = GuiComponentProps["action-bar"]["items"][number];
-
-/** record fixture（字段见 core assembly/types.ts SubagentRecord；与 gui/__tests__/tray-widget.test 同源）。 */
-function makeRecord(over: Partial<SubagentRecord> = {}): SubagentRecord {
-  return {
-    id: "rec-1",
-    agent: "worker",
-    task: "do the thing",
-    slug: "thing",
-    status: "idle",
-    mode: "sync",
-    startedAt: 1000,
-    endedAt: 2000,
-    rootSessionId: undefined,
-    parentRecordId: undefined,
-    depth: 0,
-    turns: 1,
-    totalTokens: 10,
-    model: "test/model",
-    thinkingLevel: undefined,
-    eventLog: [],
-    displayItems: [],
-    result: "ok",
-    error: undefined,
-    sessionFile: undefined,
-    ...over,
-  } as SubagentRecord;
-}
-
-/** failed record fixture：失败轮（failedRoundOf 命中——failure 存在且非 user.cancelled）。 */
-function makeFailedRecord(over: Partial<SubagentRecord> = {}): SubagentRecord {
-  return makeRecord({
-    id: "rec-fail",
-    agent: "reviewer",
-    slug: "rev",
-    task: "审一遍 PR #123",
-    status: "idle",
-    stopReason: "error",
-    lastRound: {
-      engineStopReason: "error",
-      failure: { class: "provider", kind: "rate_limited", retryable: "conditional", raw: "rpm 101/100" },
-    },
-    ...over,
-  });
-}
-
-/** run fixture（真聚合根 WorkflowRun.reconstruct——与 workflow-tray-widget.test 同源）。 */
-function makeRun(opts: {
-  runId: string;
-  scriptName: string;
-  status: "running" | "done";
-  reason?: DoneReason;
-  slug?: string;
-  interrupted?: boolean;
-  calls?: Array<{ settled: boolean; failed?: boolean }>;
-}): WorkflowRun {
-  const run = WorkflowRun.reconstruct(
-    opts.runId,
-    {
-      scriptSource: "// stub source",
-      args: {},
-      scriptName: opts.scriptName,
-      scriptPath: `/abs/${opts.scriptName}.js`,
-      ...(opts.slug !== undefined ? { slug: opts.slug } : {}),
-    },
-    {
-      status: opts.status,
-      reason: opts.reason,
-      budget: new Budget(),
-      calls: new Map(
-        (opts.calls ?? []).map((c, i) => {
-          const call = new AgentCall(i, { prompt: `task ${i}` } as never, new Trace());
-          call.markRunning();
-          if (c.settled) {
-            call.markDone({ ...(c.failed ? { error: "boom" } : {}) } as never);
-          }
-          return [i, call];
-        }),
-      ),
-      trace: new Trace(),
-      errorLogs: [],
-      error: undefined,
-    },
-    {
-      startedAt: "2026-10-25T00:00:00Z",
-      ...(opts.status === "done" ? { completedAt: "2026-10-25T00:01:00Z" } : {}),
-      ...(opts.interrupted ? { interruptedAt: "2026-10-25T00:00:30Z" } : {}),
-    },
-  );
-  if (opts.status === "done") {
-    noteRebuiltSettlement(opts.runId, {
-      outcome: opts.reason === "failed" ? "failed" : "done",
-      settledAt: Date.parse("2026-10-25T00:01:00Z"),
-    });
-  }
-  return run;
-}
-
-/** tab-bar 树的段组件清单（sections[i]——段 = 子树数组）。 */
-function segmentComponents(component: GuiComponent, index: number): GuiComponent[] {
-  expect(component.type).toBe("tab-bar");
-  const sections = (component.props as { sections?: GuiComponent[][] }).sections ?? [];
-  return sections[index] ?? [];
-}
-
-/** 段内行集（D8 富行形态：段 = 每行一棵单行 list-tree）。 */
-function segmentItems(component: GuiComponent, index: number): TreeItem[] {
-  return segmentComponents(component, index)
-    .filter((c) => c.type === "list-tree")
-    .flatMap((c) => (c.props as { items: TreeItem[] }).items);
-}
-
-/** 行内操作槽 items 展平（D8：按钮挂行 TreeItem.actions——段内全部行的 actions 集合；
- *  段内零按钮 = 空数组，无独立 action-bar 兄弟块）。 */
-function segmentActionItems(component: GuiComponent, index: number): ActionBarItem[] {
-  return segmentItems(component, index).flatMap((item) => item.actions ?? []);
-}
-
-/** 行 action 的 hostAction 提取（「查看」入口——导航声明不随按钮增删而变化）。 */
-function rowHostAction(item: TreeItem): HostContainerAction | undefined {
-  return item.action?.hostAction;
+  return buildWorkflowTrayWidget(runs, TRAY_TEST_LOCALE);
 }
 
 beforeEach(() => {
-  setWidgetDualMock.mockReset();
+  trayWidgetMocks.setWidgetDual.mockReset();
 });
 
 describe("buildSubagentTrayWidget 行内操作按钮（M3，使用者视角）", () => {
@@ -314,11 +165,7 @@ describe("buildSubagentTrayWidget 行内操作按钮（M3，使用者视角）",
       makeRecord({ id: "rec-done", agent: "worker", slug: "wrk", status: "idle" }),
     ]);
     // 两段都无独立 action-bar 兄弟块（AX3：行内操作由协议字段承载，禁止兄弟组件模拟）
-    for (const index of [0, 1]) {
-      expect(segmentComponents(widget!.gui.component, index).map((c) => c.type)).toEqual(
-        Array(segmentComponents(widget!.gui.component, index).length).fill("list-tree"),
-      );
-    }
+    expectSegmentsAllListTree(widget!.gui.component);
     const runningRow = segmentItems(widget!.gui.component, 0)[0];
     const failedRow = segmentItems(widget!.gui.component, 1)[0];
     const doneRow = segmentItems(widget!.gui.component, 1)[1];
@@ -410,9 +257,8 @@ describe("buildWorkflowTrayWidget 行内操作按钮（M3，使用者视角）",
       makeRun({ runId: "wf-run-live", scriptName: "build", status: "running", calls: [{ settled: false }] }),
       makeRun({ runId: "wf-run-halt", scriptName: "halt", status: "running", interrupted: true }),
     ]);
-    for (const index of [0, 1]) {
-      expect(segmentComponents(widget!.gui.component, index).map((c) => c.type)).toEqual(["list-tree"]);
-    }
+    // 段结构（观察者）：D8 富行——段为纯 list-tree 序列；abort/resume 挂行 actions（无独立 action-bar 兄弟块）
+    expectSegmentsAllListTree(widget!.gui.component);
     expect(segmentItems(widget!.gui.component, 0)[0].actions?.map((i) => i.id)).toEqual(["abort-wf-run-live"]);
     expect(segmentItems(widget!.gui.component, 1)[0].actions?.map((i) => i.id)).toEqual(["resume-wf-run-halt"]);
   });

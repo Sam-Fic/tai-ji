@@ -107,7 +107,7 @@ import type { GuiComponent, WidgetMeta } from '@zhushanwen/extension-protocol'
 import { GuiComponentRenderer } from '@taiji/ui/rendering-protocol'
 import { getState } from '@taiji/core/transport/ws-client'
 import { widgetToneDot } from '@/components/panel/tray/tray-tone'
-import { useTrayWidgetDeclaration } from '@/components/panel/tray/use-tray-widget-declaration'
+import { useTrayWidgetDisplayTitle } from '@/components/panel/tray/use-tray-widget-declaration'
 
 const props = defineProps<{
   /** widget key（= ViewHostStore viewId）：head 标题兜底 */
@@ -134,15 +134,8 @@ const wsState = getState()
 /** 断连提示条（D7）：非 connected 即显示；「面板打开」由挂载承载（AX3：图标出现即有树） */
 const showDisconnectBanner = computed(() => wsState.value !== 'connected')
 
-/** head 标题（D7 单一兜底链，与 TrayWidgetButton 同源）：声明 title ?? meta.title（空串
- *  视为缺省）→ viewId（v1 旧 extension 与脏数据兜底） */
-const declaration = useTrayWidgetDeclaration(() => props.viewId, () => props.pluginId)
-const displayTitle = computed(() => {
-  const declared = declaration.value?.title
-  if (declared !== undefined && declared.trim() !== '') return declared
-  const title = props.meta?.title
-  return title !== undefined && title.trim() !== '' ? title : props.viewId
-})
+/** head 标题（D7 单一兜底链，与 TrayWidgetButton 同源单点 use-tray-widget-declaration） */
+const { displayTitle } = useTrayWidgetDisplayTitle(() => props.viewId, () => props.pluginId, () => props.meta)
 
 /** 状态点色（D4）：running=accent / done=success / failed=danger / idle 与无 meta=弱中性点 */
 const statusDotClass = computed(() => widgetToneDot(props.meta?.status))

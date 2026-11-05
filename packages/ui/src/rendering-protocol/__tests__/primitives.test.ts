@@ -1,7 +1,8 @@
 import type { TreeItem } from '@zhushanwen/extension-protocol';
 import GuiComponentRenderer from '../GuiComponentRenderer.vue';
 import { ACTION_EXECUTOR_KEY, type ActionArgs, type ActionExecutor } from '../action-executor-key';
-import Actionbar, { TRAY_PIN_STATE_KEY } from '../primitives/Actionbar.vue';
+import Actionbar from '../primitives/Actionbar.vue';
+import { TRAY_PIN_STATE_KEY } from '../interaction-executors';
 import AnsiText from '../primitives/AnsiText.vue';
 import Card from '../primitives/Card.vue';
 import Columns from '../primitives/Columns.vue';

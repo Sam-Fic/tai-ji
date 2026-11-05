@@ -4,14 +4,16 @@
  * 提示。tool result 里的英文是给 LLM 的执行指令，不进词典（agent 会以会话语言转述，
  * 指令语言 ≠ UI 语言）。
  *
- * locale 读取（readUiLocale + mtime/size 缓存 + 降级）下沉在
+ * locale 读取（readUiLocale）与词典模板渲染机制（t / dictionaryKeys，回落链当前
+ * locale → en-US → 键名，scheduler r4 S1 同款禁返回空串）下沉在
  * `@zhushanwen/pi-llm-shared` 单一实现（@data-owner #39 注解随实现持有），本包
- * re-export；env `TAIJI_AGENT_DATA_DIR` 缺失 / 文件缺失 / JSON 损坏 → 回落 `en-US`
- * （与 runtime readUiPreferences 的降级口径一致）。
+ * 经 createUiDictionary 消费机制、只持有词典数据；env `TAIJI_AGENT_DATA_DIR` 缺失 /
+ * 文件缺失 / JSON 损坏 → 回落 `en-US`（与 runtime readUiPreferences 的降级口径一致）。
  */
-import { DEFAULT_UI_LOCALE, readUiLocale, type UiLocale } from "@zhushanwen/pi-llm-shared/ui-locale";
+import { DEFAULT_UI_LOCALE, readUiLocale } from "@zhushanwen/pi-llm-shared/ui-locale";
+import { createUiDictionary } from "@zhushanwen/pi-llm-shared/ui-dictionary";
 
-export { DEFAULT_UI_LOCALE, readUiLocale, type UiLocale };
+export { DEFAULT_UI_LOCALE, readUiLocale };
 
 /** 词典 key 集合（exec-choice 交互侧 + notify；键缺失回落链见 t()）。 */
 type Dictionary = Record<string, string>;
@@ -41,30 +43,6 @@ const ZH_CN: Dictionary = {
   "exec.goalFailedNotify": "Goal 跟踪未能启动（{reason}）。",
 };
 
-const DICTIONARIES: Record<UiLocale, Dictionary> = {
-  "zh-CN": ZH_CN,
-  "en-US": EN_US,
-};
+const { t, dictionaryKeys } = createUiDictionary({ "zh-CN": ZH_CN, "en-US": EN_US });
 
-/** 指定语言的词典 key 集合（测试用于 zh/en 双侧对齐断言）。 */
-export function dictionaryKeys(locale: UiLocale): string[] {
-  return Object.keys(DICTIONARIES[locale]);
-}
-
-/**
- * 渲染词典模板。回落链：当前 locale → en-US → 键名本身（禁返回空串，scheduler r4 S1
- * 同款）。占位符缺参时保留 `{name}` 原样。
- */
-export function t(key: string, params?: Record<string, string | number>, locale?: UiLocale): string {
-  const resolved = locale ?? readUiLocale();
-  const template = DICTIONARIES[resolved][key] ?? DICTIONARIES[DEFAULT_UI_LOCALE][key] ?? key;
-  return interpolate(template, params);
-}
-
-function interpolate(template: string, params?: Record<string, string | number>): string {
-  if (params === undefined) return template;
-  return template.replace(/\{(\w+)\}/g, (match: string, name: string): string => {
-    const value = params[name];
-    return value === undefined ? match : String(value);
-  });
-}
+export { t, dictionaryKeys };

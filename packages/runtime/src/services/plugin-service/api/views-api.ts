@@ -95,7 +95,7 @@ export function resolveViewScope(params: Record<string, unknown>, globalPluginId
  * （content-slot-registry validateDeclaration），两道校验各管一层（存储资格归 runtime /
  * 派生资格归注册表）；runtime 不重复持有词表（跨进程，注册表实例在 renderer 不可反查）。
  */
-export function resolveDeclaredPlacement(views: PluginContributesView[], viewId: string): string | undefined {
+function resolveDeclaredPlacement(views: PluginContributesView[], viewId: string): string | undefined {
   for (const v of views) {
     const effectiveViewId = v.view ?? v.id
     if (effectiveViewId === viewId && typeof v.placement === 'string' && v.placement.length > 0) {
@@ -108,6 +108,48 @@ export function resolveDeclaredPlacement(views: PluginContributesView[], viewId:
 const VIEW_META_STATUS_VALUES = new Set(['running', 'done', 'failed', 'idle'])
 const VIEW_META_SEVERITY_VALUES = new Set(['ok', 'warn', 'danger'])
 
+/** meta 可选 string 字段校验（title / badge / progress.label 共用）：提供时必须是 string。 */
+function assertMetaStringField(obj: Record<string, unknown>, key: string, message: string): void {
+  const value = obj[key]
+  if (value !== undefined && typeof value !== 'string') {
+    throw errorWithCode(message, 'INVALID_VIEW_META')
+  }
+}
+
+/** meta 可选枚举字段校验（status / severity 共用）：提供时必须命中枚举值集合。 */
+function assertMetaEnumField(
+  obj: Record<string, unknown>,
+  key: string,
+  allowed: Set<string>,
+  message: (received: string) => string,
+): void {
+  const value = obj[key]
+  if (value !== undefined && !allowed.has(value as string)) {
+    throw errorWithCode(message(String(value)), 'INVALID_VIEW_META')
+  }
+}
+
+/** meta.progress 子对象校验：必须是对象且 current/total 为数值；label/severity 可选字段。 */
+function assertValidViewMetaProgress(progress: unknown): void {
+  if (progress === null || typeof progress !== 'object' || Array.isArray(progress)) {
+    throw errorWithCode(
+      `Invalid meta.progress: expected an object with numeric current/total but received (${Array.isArray(progress) ? 'array' : typeof progress}).`,
+      'INVALID_VIEW_META',
+    )
+  }
+  const p = progress as Record<string, unknown>
+  if (typeof p.current !== 'number' || typeof p.total !== 'number') {
+    throw errorWithCode('Invalid meta.progress: current/total must be numbers.', 'INVALID_VIEW_META')
+  }
+  assertMetaStringField(p, 'label', 'Invalid meta.progress.label: expected a string.')
+  assertMetaEnumField(
+    p,
+    'severity',
+    VIEW_META_SEVERITY_VALUES,
+    (received) => `Invalid meta.progress.severity: expected one of 'ok' | 'warn' | 'danger' but received (${received}).`,
+  )
+}
+
 /**
  * views.update 载荷可选 meta 校验（composer-tray-protocol D7：角标/状态/进度动态信息，
  * WidgetMeta 同形）。校验口径：meta 提供时必须是对象；已知键按字段类型校验（title/badge
@@ -115,7 +157,7 @@ const VIEW_META_SEVERITY_VALUES = new Set(['ok', 'warn', 'danger'])
  * （消费端按需读，脏数据不崩——渲染端窄化同款哲学）。形状非法 → INVALID_VIEW_META
  * 结构化拒绝（畸形不触发广播，与本模块既有 INVALID_* 校验序一致）。
  */
-export function assertValidViewMeta(meta: unknown): void {
+function assertValidViewMeta(meta: unknown): void {
   if (meta === undefined) return
   if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) {
     throw errorWithCode(
@@ -124,39 +166,15 @@ export function assertValidViewMeta(meta: unknown): void {
     )
   }
   const obj = meta as Record<string, unknown>
-  if (obj.title !== undefined && typeof obj.title !== 'string') {
-    throw errorWithCode('Invalid meta.title: expected a string.', 'INVALID_VIEW_META')
-  }
-  if (obj.badge !== undefined && typeof obj.badge !== 'string') {
-    throw errorWithCode('Invalid meta.badge: expected a short display string.', 'INVALID_VIEW_META')
-  }
-  if (obj.status !== undefined && !VIEW_META_STATUS_VALUES.has(obj.status as string)) {
-    throw errorWithCode(
-      `Invalid meta.status: expected one of 'running' | 'done' | 'failed' | 'idle' but received (${String(obj.status)}).`,
-      'INVALID_VIEW_META',
-    )
-  }
-  if (obj.progress !== undefined) {
-    if (obj.progress === null || typeof obj.progress !== 'object' || Array.isArray(obj.progress)) {
-      throw errorWithCode(
-        `Invalid meta.progress: expected an object with numeric current/total but received (${Array.isArray(obj.progress) ? 'array' : typeof obj.progress}).`,
-        'INVALID_VIEW_META',
-      )
-    }
-    const progress = obj.progress as Record<string, unknown>
-    if (typeof progress.current !== 'number' || typeof progress.total !== 'number') {
-      throw errorWithCode('Invalid meta.progress: current/total must be numbers.', 'INVALID_VIEW_META')
-    }
-    if (progress.label !== undefined && typeof progress.label !== 'string') {
-      throw errorWithCode('Invalid meta.progress.label: expected a string.', 'INVALID_VIEW_META')
-    }
-    if (progress.severity !== undefined && !VIEW_META_SEVERITY_VALUES.has(progress.severity as string)) {
-      throw errorWithCode(
-        `Invalid meta.progress.severity: expected one of 'ok' | 'warn' | 'danger' but received (${String(progress.severity)}).`,
-        'INVALID_VIEW_META',
-      )
-    }
-  }
+  assertMetaStringField(obj, 'title', 'Invalid meta.title: expected a string.')
+  assertMetaStringField(obj, 'badge', 'Invalid meta.badge: expected a short display string.')
+  assertMetaEnumField(
+    obj,
+    'status',
+    VIEW_META_STATUS_VALUES,
+    (received) => `Invalid meta.status: expected one of 'running' | 'done' | 'failed' | 'idle' but received (${received}).`,
+  )
+  if (obj.progress !== undefined) assertValidViewMetaProgress(obj.progress)
 }
 
 /**

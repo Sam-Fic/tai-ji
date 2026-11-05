@@ -27,118 +27,30 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// ── hoisted mocks（依赖收窄：logger 防文件落盘；protocol 只 mock setWidgetDual 推送点，
-//    guiComponent/guiResult/runSummary 走真实现——树形状断言消费真实产物）──
-
-const extensionLoggerMock = vi.hoisted(() => {
-  const instance = { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  return { getLogger: vi.fn(() => instance), instance };
-});
-
-const setWidgetDualMock = vi.hoisted(() => vi.fn());
-
-vi.mock("@zhushanwen/pi-extension-logger", () => extensionLoggerMock);
-vi.mock("@zhushanwen/pi-ext-guards", () => ({
-  toErrorMessage: (err: unknown) => (err instanceof Error ? err.message : String(err)),
-}));
-vi.mock("@zhushanwen/extension-protocol", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@zhushanwen/extension-protocol")>();
-  return { ...actual, setWidgetDual: setWidgetDualMock };
-});
+// ── 共用 fixture 单点（tray-widget-test-fixtures：mock 注册 / 树解包辅助；
+//    workflow-run-fixture：WorkflowRun 真聚合根 fixture）——mock 收窄：logger 防文件落盘；
+//    protocol 只 mock setWidgetDual 推送点，guiComponent/guiResult/runSummary 走真实现——
+//    树形状断言消费真实产物 ──
 
 import {
-  AgentCall,
-  Budget,
-  Trace,
-  WorkflowRun,
-  noteRebuiltSettlement,
-  runSummary,
-} from "@zhushanwen/subagent-core";
-import type { DoneReason } from "@zhushanwen/subagent-core";
-import type { GuiComponent, HostContainerAction, TreeItem } from "@zhushanwen/extension-protocol";
-import type { UiLocale } from "../i18n.ts";
+  TRAY_TEST_LOCALE,
+  rowHostAction,
+  segmentItems,
+  trayWidgetMocks,
+} from "./tray-widget-test-fixtures.ts";
+import { makeRun } from "./workflow-run-fixture.ts";
+
+import { WorkflowRun } from "@zhushanwen/subagent-core";
+import { runSummary } from "@zhushanwen/subagent-core";
 import {
   WORKFLOW_TRAY_VIEW_ID,
   buildWorkflowTrayWidget,
   createWorkflowTrayWidgetPusher,
 } from "../interface/gui/workflow-tray-widget.ts";
 
-/**
- * 面板文案 locale（D9：标题 / 分段标签随 UI 语言）。构造函数是纯函数、显式收 locale
- * 实参（scheduler widget 臂同款）；本文件断言中文文案，故固定传 zh-CN——不依赖进程环境
- * （readUiLocale 的 env 与 ui-preferences.json 读取）。
- */
-const LOCALE: UiLocale = "zh-CN";
-
 /** workflow 托盘 widget 构造（中文文案 locale 固定）。 */
 function workflowWidget(runs: readonly WorkflowRun[]): ReturnType<typeof buildWorkflowTrayWidget> {
-  return buildWorkflowTrayWidget(runs, LOCALE);
-}
-
-/** run fixture（字段集与 tool-workflow.test 的 makeRun 同源：reconstruct 真聚合根）。
- *  calls 经 AgentCall.markDone 注入成员进度事实（result 有无 = 落定判据；error 有无
- *  = 失败判据）。终局事实经 noteRebuiltSettlement 注入注册表。 */
-function makeRun(opts: {
-  runId: string;
-  scriptName: string;
-  status: "running" | "done";
-  reason?: DoneReason;
-  slug?: string;
-  interrupted?: boolean;
-  calls?: Array<{ settled: boolean; failed?: boolean }>;
-}): WorkflowRun {
-  const run = WorkflowRun.reconstruct(
-    opts.runId,
-    {
-      scriptSource: "// stub source",
-      args: {},
-      scriptName: opts.scriptName,
-      scriptPath: `/abs/${opts.scriptName}.js`,
-      ...(opts.slug !== undefined ? { slug: opts.slug } : {}),
-    },
-    {
-      status: opts.status,
-      reason: opts.reason,
-      budget: new Budget(),
-      calls: new Map(
-        (opts.calls ?? []).map((c, i) => {
-          const call = new AgentCall(i, { prompt: `task ${i}` } as never, new Trace());
-          // markRunning 前置（pending 不能直接 markDone——AgentCall 状态机约束）
-          call.markRunning();
-          if (c.settled) {
-            call.markDone({ ...(c.failed ? { error: "boom" } : {}) } as never);
-          }
-          return [i, call];
-        }),
-      ),
-      trace: new Trace(),
-      errorLogs: [],
-      error: undefined,
-    },
-    {
-      startedAt: "2026-10-25T00:00:00Z",
-      ...(opts.status === "done" ? { completedAt: "2026-10-25T00:01:00Z" } : {}),
-      ...(opts.interrupted ? { interruptedAt: "2026-10-25T00:00:30Z" } : {}),
-    },
-  );
-  if (opts.status === "done") {
-    noteRebuiltSettlement(opts.runId, {
-      outcome: opts.reason === "failed" ? "failed" : "done",
-      settledAt: Date.parse("2026-10-25T00:01:00Z"),
-    });
-  }
-  return run;
-}
-
-/** tab-bar 树的段 items 提取（D8 富行形态：段 = 每行一棵单行 list-tree，行集展平段内
- *  全部 list-tree——scheduler-manager 同款富行形态）。 */
-function segmentItems(component: GuiComponent, index: number): TreeItem[] {
-  expect(component.type).toBe("tab-bar");
-  const sections = (component.props as { sections?: GuiComponent[][] }).sections ?? [];
-  const seg = sections[index] ?? [];
-  return seg
-    .filter((c) => c.type === "list-tree")
-    .flatMap((c) => (c.props as { items: TreeItem[] }).items);
+  return buildWorkflowTrayWidget(runs, TRAY_TEST_LOCALE);
 }
 
 /** 微任务清空（push 异步化的折叠 await 链：微任务边界数轮冲刷后断言）。 */
@@ -148,13 +60,8 @@ async function flushMicrotasks(): Promise<void> {
   }
 }
 
-/** 行 action 的 hostAction 提取（行不可点 = action 缺省，断言处显式判 undefined）。 */
-function rowHostAction(item: TreeItem): HostContainerAction | undefined {
-  return item.action?.hostAction;
-}
-
 beforeEach(() => {
-  setWidgetDualMock.mockReset();
+  trayWidgetMocks.setWidgetDual.mockReset();
 });
 
 afterEach(() => {
@@ -302,17 +209,17 @@ describe("createWorkflowTrayWidgetPusher —— 推送器（构建者视角）",
     pusher.attach(ctx as never);
     await Promise.resolve();
     await Promise.resolve();
-    expect(setWidgetDualMock).toHaveBeenCalledTimes(1);
-    expect(setWidgetDualMock.mock.calls[0][1]).toBe(WORKFLOW_TRAY_VIEW_ID);
-    expect(setWidgetDualMock.mock.calls[0][2]).toBeUndefined(); // 空集清屏
+    expect(trayWidgetMocks.setWidgetDual).toHaveBeenCalledTimes(1);
+    expect(trayWidgetMocks.setWidgetDual.mock.calls[0][1]).toBe(WORKFLOW_TRAY_VIEW_ID);
+    expect(trayWidgetMocks.setWidgetDual.mock.calls[0][2]).toBeUndefined(); // 空集清屏
 
     // 变更信号：同一 tick 两次 notify 合并为一次推送（微任务边界）
     runs = [makeRun({ runId: "wf-run-8", scriptName: "build", status: "running" })];
     pusher.notifyRunsChanged();
     pusher.notifyRunsChanged();
     await new Promise<void>((resolve) => queueMicrotask(resolve));
-    expect(setWidgetDualMock).toHaveBeenCalledTimes(2);
-    const pushed = setWidgetDualMock.mock.calls[1][2];
+    expect(trayWidgetMocks.setWidgetDual).toHaveBeenCalledTimes(2);
+    const pushed = trayWidgetMocks.setWidgetDual.mock.calls[1][2];
     expect(pushed).toBeDefined();
     expect(pushed.gui.component.type).toBe("tab-bar");
 
@@ -320,7 +227,7 @@ describe("createWorkflowTrayWidgetPusher —— 推送器（构建者视角）",
     pusher.detach();
     pusher.notifyRunsChanged();
     await new Promise<void>((resolve) => queueMicrotask(resolve));
-    expect(setWidgetDualMock).toHaveBeenCalledTimes(2);
+    expect(trayWidgetMocks.setWidgetDual).toHaveBeenCalledTimes(2);
   });
 
   it("readRuns 抛错 → 按清屏投影 + warn 留痕，不反噬调用方", async () => {
@@ -329,18 +236,18 @@ describe("createWorkflowTrayWidgetPusher —— 推送器（构建者视角）",
     });
     pusher.attach(makeCtx() as never);
     await new Promise<void>((resolve) => queueMicrotask(resolve));
-    expect(setWidgetDualMock).toHaveBeenCalledWith(
+    expect(trayWidgetMocks.setWidgetDual).toHaveBeenCalledWith(
       expect.anything(),
       WORKFLOW_TRAY_VIEW_ID,
       undefined,
     );
-    expect(extensionLoggerMock.instance.warn).toHaveBeenCalledWith(
+    expect(trayWidgetMocks.instance.warn).toHaveBeenCalledWith(
       expect.stringContaining("runs read failed"),
     );
   });
 
   it("推送失败（setWidgetDual throw）→ warn 留痕不反噬 notifyRunsChanged 调用方", async () => {
-    setWidgetDualMock.mockImplementation(() => {
+    trayWidgetMocks.setWidgetDual.mockImplementation(() => {
       throw new Error("channel down");
     });
     const pusher = createWorkflowTrayWidgetPusher(() => [
@@ -348,14 +255,14 @@ describe("createWorkflowTrayWidgetPusher —— 推送器（构建者视角）",
     ]);
     pusher.attach(makeCtx() as never);
     await new Promise<void>((resolve) => queueMicrotask(resolve));
-    expect(extensionLoggerMock.instance.warn).toHaveBeenCalledWith(
+    expect(trayWidgetMocks.instance.warn).toHaveBeenCalledWith(
       expect.stringContaining("widget push failed"),
     );
     // 第二次变更信号继续尝试（首败 warn 只记一次，重推不中断）
-    setWidgetDualMock.mockImplementation(() => {});
+    trayWidgetMocks.setWidgetDual.mockImplementation(() => {});
     pusher.notifyRunsChanged();
     await new Promise<void>((resolve) => queueMicrotask(resolve));
-    expect(setWidgetDualMock).toHaveBeenCalledTimes(2);
+    expect(trayWidgetMocks.setWidgetDual).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -381,8 +288,8 @@ describe("createWorkflowTrayWidgetPusher —— 磁盘折叠冷读收敛（[fix-
     await flushMicrotasks();
 
     expect(reloadFromDisk).toHaveBeenCalledTimes(1);
-    expect(setWidgetDualMock).toHaveBeenCalledTimes(1);
-    const pushed = setWidgetDualMock.mock.calls[0]![2];
+    expect(trayWidgetMocks.setWidgetDual).toHaveBeenCalledTimes(1);
+    const pushed = trayWidgetMocks.setWidgetDual.mock.calls[0]![2];
     expect(pushed).toBeDefined();
     // interrupted 重建行落已结束段：富行字段（label 主名 / subLabel 副文本）+ statusLabel
     // 覆盖字 + 行内续跑 actions（任务书目标 1 的投影形态；推送器路径 locale = readUiLocale
@@ -404,13 +311,13 @@ describe("createWorkflowTrayWidgetPusher —— 磁盘折叠冷读收敛（[fix-
 
     pusher.attach(makeCtx() as never);
     await flushMicrotasks();
-    expect(setWidgetDualMock).toHaveBeenCalledWith(expect.anything(), WORKFLOW_TRAY_VIEW_ID, undefined);
+    expect(trayWidgetMocks.setWidgetDual).toHaveBeenCalledWith(expect.anything(), WORKFLOW_TRAY_VIEW_ID, undefined);
 
     // 变更信号驱动的空投影重推不再触发第二次折叠（真无 run 的 session 不重复付磁盘读成本）
     pusher.notifyRunsChanged();
     await flushMicrotasks();
     expect(reloadFromDisk).toHaveBeenCalledTimes(1);
-    expect(setWidgetDualMock).toHaveBeenCalledTimes(2);
+    expect(trayWidgetMocks.setWidgetDual).toHaveBeenCalledTimes(2);
   });
 
   it("内存投影非空 → 不触发磁盘折叠（正常路径零磁盘 IO）", async () => {
@@ -424,7 +331,7 @@ describe("createWorkflowTrayWidgetPusher —— 磁盘折叠冷读收敛（[fix-
     await flushMicrotasks();
 
     expect(reloadFromDisk).not.toHaveBeenCalled();
-    expect(setWidgetDualMock.mock.calls[0]![2]).toBeDefined();
+    expect(trayWidgetMocks.setWidgetDual.mock.calls[0]![2]).toBeDefined();
   });
 
   it("detach 后重新 attach（切回 session）→ 折叠预算复位，重新触发一次 reload（RE3 切回即现）", async () => {
@@ -451,10 +358,10 @@ describe("createWorkflowTrayWidgetPusher —— 磁盘折叠冷读收敛（[fix-
     pusher.attach(makeCtx() as never);
     await flushMicrotasks();
 
-    expect(extensionLoggerMock.instance.warn).toHaveBeenCalledWith(
+    expect(trayWidgetMocks.instance.warn).toHaveBeenCalledWith(
       expect.stringContaining("disk reload failed"),
     );
-    expect(setWidgetDualMock).toHaveBeenCalledWith(expect.anything(), WORKFLOW_TRAY_VIEW_ID, undefined);
+    expect(trayWidgetMocks.setWidgetDual).toHaveBeenCalledWith(expect.anything(), WORKFLOW_TRAY_VIEW_ID, undefined);
   });
 
   it("折叠 await 间隙的并发 push 不推瞬态清屏帧（托盘条目不闪）", async () => {
@@ -481,12 +388,12 @@ describe("createWorkflowTrayWidgetPusher —— 磁盘折叠冷读收敛（[fix-
     // 折叠进行中的并发变更信号：不产生任何推送帧
     pusher.notifyRunsChanged();
     await flushMicrotasks();
-    expect(setWidgetDualMock).not.toHaveBeenCalled();
+    expect(trayWidgetMocks.setWidgetDual).not.toHaveBeenCalled();
 
     // 折叠完成后：恰好一帧，且带最新投影（非清屏帧）
     releaseFold();
     await flushMicrotasks();
-    expect(setWidgetDualMock).toHaveBeenCalledTimes(1);
-    expect(setWidgetDualMock.mock.calls[0]![2]).toBeDefined();
+    expect(trayWidgetMocks.setWidgetDual).toHaveBeenCalledTimes(1);
+    expect(trayWidgetMocks.setWidgetDual.mock.calls[0]![2]).toBeDefined();
   });
 });

@@ -2,7 +2,7 @@ import type { IMessageBroker } from '../src/interfaces.js';
 import { createCommandsApi, registerCommandRpcHandlers } from '../src/services/plugin-service/api/commands-api.js';
 import { SessionEventDispatch, registerSessionRpcHandlers } from '../src/services/plugin-service/api/session-api.js';
 import { registerUiRpcHandlers, resetRuntimeUiExitsForTest, wireRuntimeUiExits } from '../src/services/plugin-service/api/ui-api.js';
-import { createViewsApi, registerViewRpcHandlers } from '../src/services/plugin-service/api/views-api.js';
+import { createViewsApi, registerViewRpcHandlers, type ViewService } from '../src/services/plugin-service/api/views-api.js';
 import { PluginActivator } from '../src/services/plugin-service/plugin-activator.js';
 import { resolveAndValidateFile } from '../src/services/plugin-service/plugin-host.js';
 import { PluginRegistry } from '../src/services/plugin-service/plugin-registry.js';
@@ -654,12 +654,19 @@ describe('plugin-modal-headeraction-contract', () => {
       return []
     }
 
-    it('payload.sessionId 直达 handleViewUpdate（不经活跃会话解析——D1 不采用④路径已删除）', async () => {
+    /** 归属投递用例的共用装配：RpcServer + mock port + views.update handlers
+     *  （声明端口 = declaredViewsFor，投递触达监听 = handleViewUpdate）。 */
+    function buildViewUpdateRpc(handleViewUpdate: ViewService['handleViewUpdate']) {
       const rpc = new PluginRpcServer()
       const port = createMockPort()
       rpc.registerWorker('w1', port)
-      const handleViewUpdate = vi.fn()
       registerViewRpcHandlers(rpc, { mountPoints: [], declaredViews: declaredViewsFor, handleViewUpdate })
+      return { rpc, port }
+    }
+
+    it('payload.sessionId 直达 handleViewUpdate（不经活跃会话解析——D1 不采用④路径已删除）', async () => {
+      const handleViewUpdate = vi.fn()
+      const { rpc, port } = buildViewUpdateRpc(handleViewUpdate)
 
       // 声明一个与任何「活跃会话」无关的 id：投递归属必须等于 payload.sessionId
       await dispatch(rpc, port, 1, 'plugin.views.update', {
@@ -674,11 +681,8 @@ describe('plugin-modal-headeraction-contract', () => {
     })
 
     it('payload.mountId 直达 handleViewUpdate（U2 全局域：scope 联合形态分流，无资格校验无章）', async () => {
-      const rpc = new PluginRpcServer()
-      const port = createMockPort()
-      rpc.registerWorker('w1', port)
       const handleViewUpdate = vi.fn()
-      registerViewRpcHandlers(rpc, { mountPoints: [], declaredViews: declaredViewsFor, handleViewUpdate })
+      const { rpc, port } = buildViewUpdateRpc(handleViewUpdate)
 
       // 全局域归属：mountId 声明挂载位（无会话归属），handleViewUpdate 收 scope 联合；
       // mountId 分支维持现状不收资格制（挂载点名是显式契约）——stamp 只带 meta 位
@@ -3192,6 +3196,22 @@ describe('全链写入联动（plugin.ui.updateHeaderAction / plugin.views.updat
     contributes: { views: [{ id: 'scheduler-manager.panel', view: 'modal-scheduler-manager-scheduler-manager.panel', placement: 'host.embed', title: '定时任务' }] },
   }
 
+  /** D6/D7 组共用推树（RL2 主路径树）：viewId = schedulerDescriptor 声明的有效 viewId
+   *  （v.view ?? v.id）；meta 可选（D7 透传 / 缺省两态共用同一树形状，形状差异不进各用例）。 */
+  function dispatchSchedulerTree(
+    dispatch: ReturnType<typeof buildWiredService>['dispatch'],
+    id: number,
+    meta?: Record<string, unknown>,
+  ) {
+    return dispatch(id, 'plugin.views.update', {
+      pluginId: 'scheduler-manager',
+      viewId: 'modal-scheduler-manager-scheduler-manager.panel',
+      guiTree: [{ type: 'ansi-text', props: { lines: ['tasks'] } }],
+      sessionId: 's1',
+      ...(meta !== undefined ? { meta } : {}),
+    })
+  }
+
   it('RL1 未声明 viewId 会话域推树 → UNDECLARED_VIEW_ID 结构化拒绝（错误码 + 补声明指引），不入存储不广播', async () => {
     const { service, broadcasts, dispatch } = buildWiredService()
 
@@ -3210,12 +3230,7 @@ describe('全链写入联动（plugin.ui.updateHeaderAction / plugin.views.updat
   it('RL1 已声明 viewId 会话域推树 → 放行；RL2 插件通道盖印：按声明 placement 入存储 + 广播帧携带章', async () => {
     const { service, broadcasts, dispatch } = buildWiredService({ descriptor: schedulerDescriptor })
 
-    const resp = await dispatch(1, 'plugin.views.update', {
-      pluginId: 'scheduler-manager',
-      viewId: 'modal-scheduler-manager-scheduler-manager.panel',
-      guiTree: [{ type: 'ansi-text', props: { lines: ['tasks'] } }],
-      sessionId: 's1',
-    })
+    const resp = await dispatchSchedulerTree(dispatch, 1)
     expect(resp.error).toBeUndefined()
 
     // 存储：按声明 placement 盖印（host.embed），条目带章
@@ -3266,13 +3281,7 @@ describe('全链写入联动（plugin.ui.updateHeaderAction / plugin.views.updat
   it('views.update meta 透传（D7）：存储条目与广播帧携带；meta 缺省 → 条目无 meta 键（零影响）', async () => {
     const { service, broadcasts, dispatch } = buildWiredService({ descriptor: schedulerDescriptor })
 
-    const resp = await dispatch(1, 'plugin.views.update', {
-      pluginId: 'scheduler-manager',
-      viewId: 'modal-scheduler-manager-scheduler-manager.panel',
-      guiTree: [{ type: 'ansi-text', props: { lines: ['tasks'] } }],
-      sessionId: 's1',
-      meta: { badge: '2', status: 'running', progress: { current: 1, total: 3 } },
-    })
+    const resp = await dispatchSchedulerTree(dispatch, 1, { badge: '2', status: 'running', progress: { current: 1, total: 3 } })
     expect(resp.error).toBeUndefined()
 
     const stored = service.uiSnapshotStore.snapshot({ sessionId: 's1' }).views
@@ -3280,12 +3289,7 @@ describe('全链写入联动（plugin.ui.updateHeaderAction / plugin.views.updat
     expect((broadcasts[0] as { payload: { meta?: unknown } }).payload.meta).toEqual({ badge: '2', status: 'running', progress: { current: 1, total: 3 } })
 
     // meta 缺省：条目无 meta 键（旧插件零影响）
-    await dispatch(2, 'plugin.views.update', {
-      pluginId: 'scheduler-manager',
-      viewId: 'modal-scheduler-manager-scheduler-manager.panel',
-      guiTree: [{ type: 'ansi-text', props: { lines: ['tasks'] } }],
-      sessionId: 's1',
-    })
+    await dispatchSchedulerTree(dispatch, 2)
     const plain = service.uiSnapshotStore.snapshot({ sessionId: 's1' }).views
     expect(plain).toHaveLength(1)
     expect('meta' in plain[0]).toBe(false)

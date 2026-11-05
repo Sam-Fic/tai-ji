@@ -44,15 +44,10 @@ import {
   ChevronRight, Check, X, Circle, Dot, Pause, GitBranch,
 } from '@lucide/vue'
 import type { Component } from 'vue'
-import { computed, inject, unref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ACTION_EXECUTOR_KEY } from '../action-executor-key'
-import Actionbar, { TRAY_PIN_STATE_KEY } from './Actionbar.vue'
-import {
-  CONTAINER_NAVIGATION_KEY,
-  VIEW_SCOPE_SESSION_KEY,
-  dispatchTreeInteraction,
-} from '../container-navigation-key'
+import Actionbar from './Actionbar.vue'
+import { dispatchTreeInteraction } from '../container-navigation-key'
+import { useInteractionExecutors } from '../interaction-executors'
 
 const props = defineProps<{
   items: TreeItem[]
@@ -74,15 +69,9 @@ const ICON_MAP: Record<TreeItemIcon, Component> = {
 
 const { t } = useI18n()
 
-/** 命令执行器与容器导航执行器（壳层 provide，ViewHost 递归子实例沿父链取同一实例）；
+/** 四项注入 + pin 门控派生（与 Actionbar 同构段单点 = interaction-executors）；
  *  显式 undefined 默认值 = 抑制「injection not found」dev 警告（纯展示树零噪音）。 */
-const commandExecutor = inject(ACTION_EXECUTOR_KEY, undefined)
-const navigationExecutor = inject(CONTAINER_NAVIGATION_KEY, undefined)
-const viewSessionId = inject(VIEW_SCOPE_SESSION_KEY, undefined)
-/** pin 门控状态（托盘面板外壳 provide；缺省 undefined = 非托盘挂载位 = 门控不生效，RL4）。 */
-const trayPinState = inject(TRAY_PIN_STATE_KEY, undefined)
-/** 门控生效 = 注入值显式为 false（未 pin）；undefined（缺省）/ true 均不门控。 */
-const pinGated = computed(() => unref(trayPinState) === false)
+const { commandExecutor, navigationExecutor, viewSessionId, pinGated } = useInteractionExecutors()
 
 /** 行是否可点：action 下 commandId / hostAction 至少一个在场（缺省 = 纯展示行，旧行为）。 */
 const hasAction = (item: TreeItem): boolean =>
