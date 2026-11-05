@@ -92,7 +92,7 @@
             @select="emit('select', $event)"
             @rename="emit('rename', $event)"
             @archive="emit('archive', $event)"
-            @set-project="emit('setProject', $event)"
+            @set-project="onSetProject"
             @navigate-parent="emit('navigateParent', $event)"
             @abort="emit('abort', $event)"
             @force-quit="emit('forceQuit', $event)"
@@ -133,7 +133,7 @@
             @select="emit('select', $event)"
             @rename="emit('rename', $event)"
             @archive="emit('archive', $event)"
-            @set-project="emit('setProject', $event)"
+            @set-project="onSetProject"
             @navigate-parent="emit('navigateParent', $event)"
             @abort="emit('abort', $event)"
             @force-quit="emit('forceQuit', $event)"
@@ -189,7 +189,7 @@
                   @select="emit('select', $event)"
                   @rename="emit('rename', $event)"
                   @archive="emit('archive', $event)"
-                  @set-project="emit('setProject', $event)"
+                  @set-project="onSetProject"
                   @navigate-parent="emit('navigateParent', $event)"
                   @abort="emit('abort', $event)"
                   @force-quit="emit('forceQuit', $event)"
@@ -256,7 +256,7 @@
                   @select="emit('select', $event)"
                   @rename="emit('rename', $event)"
                   @archive="emit('archive', $event)"
-                  @set-project="emit('setProject', $event)"
+                  @set-project="onSetProject"
                   @navigate-parent="emit('navigateParent', $event)"
                   @abort="emit('abort', $event)"
                   @force-quit="emit('forceQuit', $event)"
@@ -291,7 +291,7 @@
 <script setup lang="ts">
 import type { SessionGroup, SessionSummary } from '@taiji/shared'
 import type { DerivedStatus } from '@/types'
-import { computed, onBeforeUnmount, provide, ref, type Ref } from 'vue'
+import { computed, onBeforeUnmount, provide, ref, watch, type Ref } from 'vue'
 import { useEventListener } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { Input } from '@/components/ui/input'
@@ -506,6 +506,32 @@ function onDropToDefault(sessionId: string): void {
   assignDropped('', sessionId)
   expandDefaultZone()
 }
+
+/** 「归入项目」菜单落点（SessionItem 菜单/悬停浮层 emit setProject）：展开落点区后再透传
+ *  ——与拖入路径（onDropToGroup/onDropToDefault）同构，右键菜单与拖拽两条写通道同保证
+ *  「落进收起区的内容必须立即可见」；RPC + toast 编排留在 Sidebar（onAssignProject）。 */
+function onSetProject(payload: { sessionId: string; projectId: string }): void {
+  if (payload.projectId) expandGroup(payload.projectId)
+  else expandDefaultZone()
+  emit('setProject', payload)
+}
+
+/** 恢复高亮落点展开（session-archive §5.1 恢复高亮的可见性前提，与拖拽/菜单/删除归回
+ *  同族的「落进收起区的内容必须立即可见」保证）：restoredSessionId 置位后按分组切分
+ *  结果定位恢复会话的归属组——命名组 → expandGroup，默认区或查不到 → expandDefaultZone。
+ *  列表数据与置位同为依赖：恢复的会话行经 broadcastSessionList 广播异步回流，置位早于
+ *  回流时由数据到达后的再次触发补上展开（展开原语幂等，重复触发无副作用）。 */
+watch(
+  [() => props.restoredSessionId, () => props.groups],
+  () => {
+    const id = props.restoredSessionId
+    if (!id) return
+    const owner = projectGroups.value.find((pg) => pg.items.some((s) => s.id === id))
+    if (owner && !owner.isDefault) expandGroup(owner.id)
+    else expandDefaultZone()
+  },
+  { immediate: true },
+)
 
 /**
  * 默认项目区 vs 命名项目组（用户裁决 2026-10-13 方案 A：默认项目不展示项目框）。

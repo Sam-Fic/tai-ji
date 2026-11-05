@@ -246,8 +246,9 @@ export function useProjectGroups(options: {
    *  「先锚定后建」时序在命令化下由回执承载（emit newSession 时刻 activeProjectId 必须
    *  已切换——归属预填读它）：await 锚定回执落定后才触发新建；锚定命令失败（revision
    *  失配被拒等，toast 已出声）不进新建流——落点语义无法保证，用户可直接重试。
-   *  落点区展开保证：命名组进组展开集合；默认项目区开 defaultZone（新会话归属地必须
-   *  可见——收起态下新建 = 会话消失在收起区里）。 */
+   *  落点区展开保证：命名组经 expandGroup 双集合展开（平铺/目录两模式的组头「+」都走
+   *  此路径，模式无关）；默认项目区开 defaultZone（新会话归属地必须可见——收起态下
+   *  新建 = 会话消失在收起区里）。 */
   async function onCreateTaskIn(pg: ProjectGroupVM): Promise<void> {
     try {
       await projectStore.setActiveProject(pg.id)
@@ -255,7 +256,7 @@ export function useProjectGroups(options: {
       return
     }
     if (pg.isDefault) expandDefaultZone()
-    else ensureIn(flatExpanded, pg.id)
+    else expandGroup(pg.id)
     onNewSession()
   }
 

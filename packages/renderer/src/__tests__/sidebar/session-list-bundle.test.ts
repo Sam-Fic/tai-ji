@@ -1556,6 +1556,95 @@ describe('默认区收起下的落点可见性保证（+ 新建 / session 拖入
     expect(wrapper.find('[data-testid="default-project-flat-zone"]').exists()).toBe(true)
     wrapper.unmount()
   })
+
+  it('目录模式：点收起命名组的组头「+」→ 该组强制展开（dirExpanded 命中，新会话归属地可见）', async () => {
+    localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    const store = setupProjects('proj-a')
+    mockSetActive.mockImplementation(async (pid: string) => commandReply(store, { state: { projects: store.projects.map((p) => ({ ...p })), activeProjectId: pid } }))
+    const wrapper = mountAttachedList()
+    const toggle = () => groupOf(wrapper, 'proj-a').find('[data-testid="project-group-toggle"]')
+
+    expect(toggle().attributes('aria-expanded')).toBe('false') // 目录模式默认收起
+    await groupOf(wrapper, 'proj-a').find('[data-testid="project-group-new-task"]').trigger('click')
+    await flushPromises() // 「先锚定后建」时序由锚定回执承载（§6.6）
+
+    expect(wrapper.emitted('newSession')).toBeTruthy()
+    expect(toggle().attributes('aria-expanded')).toBe('true')
+    // 展开写入目录模式集合（expandGroup 双集合语义——只进平铺集合时目录模式 gate 不放行，即修复前的回归形态）
+    const persisted: { groups?: string[] } = JSON.parse(localStorage.getItem(GROUP_STATE_KEY) ?? '{}')
+    expect(persisted.groups).toContain('proj-a')
+    wrapper.unmount()
+  })
+})
+
+describe('收起组下的菜单归入与归档恢复落点可见性（setProject / restoredSessionId 接线）', () => {
+  it('「归入项目」菜单选收起命名组 → 目标组强制展开 + setProject 透传（右键菜单与拖拽同保证）', async () => {
+    setupProjects(DEFAULT_PROJECT_ID, [['proj-a', 'Alpha'], ['proj-b', 'Beta']])
+    const wrapper = mountAttachedList()
+    const toggleB = () => groupOf(wrapper, 'proj-b').find('[data-testid="project-group-toggle"]')
+    const toggleA = () => groupOf(wrapper, 'proj-a').find('[data-testid="project-group-toggle"]')
+    expect(toggleB().attributes('aria-expanded')).toBe('false')
+
+    // sa（proj-a 组内，组体常驻 DOM）右键菜单「归入项目 proj-b」→ SessionItem emit setProject
+    const item = wrapper.findAllComponents(SessionItem).find((w) => w.props('session').id === 'sa')!
+    item.vm.$emit('setProject', { sessionId: 'sa', projectId: 'proj-b' })
+    await nextTick()
+
+    expect(wrapper.emitted('setProject')).toEqual([[{ sessionId: 'sa', projectId: 'proj-b' }]])
+    expect(toggleB().attributes('aria-expanded')).toBe('true')
+    // 无关组开合不动（只展开落点组）
+    expect(toggleA().attributes('aria-expanded')).toBe('false')
+    wrapper.unmount()
+  })
+
+  it('「归入项目」菜单归回默认区（projectId 空串）→ 默认区强制展开', async () => {
+    setupProjects('proj-a')
+    const wrapper = mountAttachedList()
+    expect(wrapper.find('[data-testid="default-project-flat-zone"]').exists()).toBe(false)
+
+    const item = wrapper.findAllComponents(SessionItem).find((w) => w.props('session').id === 'sa')!
+    item.vm.$emit('setProject', { sessionId: 'sa', projectId: '' })
+    await nextTick()
+
+    expect(wrapper.emitted('setProject')).toEqual([[{ sessionId: 'sa', projectId: '' }]])
+    expect(wrapper.find('[data-testid="default-project-head"]').attributes('data-expanded')).toBe('true')
+    expect(wrapper.find('[data-testid="default-project-flat-zone"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('归档恢复高亮落回收起命名组 → 该组强制展开（恢复高亮可见性前提）', async () => {
+    setupProjects(DEFAULT_PROJECT_ID, [['proj-a', 'Alpha']])
+    const wrapper = mountAttachedList()
+    const toggle = () => groupOf(wrapper, 'proj-a').find('[data-testid="project-group-toggle"]')
+    expect(toggle().attributes('aria-expanded')).toBe('false')
+
+    // 恢复编排 markRestored 置位 → Sidebar 把 archiveStore.restoredSessionId 传入本组件
+    await wrapper.setProps({ restoredSessionId: 'sa' })
+    await nextTick()
+
+    expect(toggle().attributes('aria-expanded')).toBe('true')
+    wrapper.unmount()
+  })
+
+  it('恢复高亮置位早于列表回流：先保守展开默认区，广播回流后展开归属命名组', async () => {
+    setupProjects(DEFAULT_PROJECT_ID, [['proj-a', 'Alpha']])
+    const wrapper = mountAttachedList() // 默认 fixture：sa 归 proj-a + sb 未归类（默认区）
+    await wrapper.setProps({ restoredSessionId: 'restored-1' }) // 列表尚无 restored-1（广播未回流）
+    await nextTick()
+    // 查不到归属组 → 保守展开默认区（恢复高亮的可见性兜底）
+    expect(wrapper.find('[data-testid="default-project-head"]').attributes('data-expanded')).toBe('true')
+
+    // 广播回流：restored-1 归属 proj-a 出现在列表 → 正确定位并展开命名组
+    await wrapper.setProps({
+      groups: [
+        { cwd: '/repo', sessions: [makeSession('sa', '/repo', { projectId: 'proj-a' }), makeSession('restored-1', '/repo', { projectId: 'proj-a' })] },
+        { cwd: '/free', sessions: [makeSession('sb', '/free')] },
+      ],
+    })
+    await nextTick()
+    expect(groupOf(wrapper, 'proj-a').find('[data-testid="project-group-toggle"]').attributes('aria-expanded')).toBe('true')
+    wrapper.unmount()
+  })
 })
 
 describe('默认区收起下的删除归回可见性（confirmDelete 强制展开）', () => {
