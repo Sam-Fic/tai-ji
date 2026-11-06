@@ -68,7 +68,8 @@
     "packages/shared/src/__tests__/wool.test.ts",
     "packages/runtime/src/services/__tests__/aggregation-supported-levels.test.ts",
     "packages/runtime/src/services/__tests__/aggregation-catalog-consistency.test.ts",
-    "packages/runtime/src/services/__tests__/aggregation-new-route-binding.test.ts"
+    "packages/runtime/src/services/__tests__/aggregation-new-route-binding.test.ts",
+    "packages/runtime/src/transport/__tests__/aggregation-message-handler.test.ts"
   ],
   "sharedBy": {
     "packages/runtime/src/services/__tests__/aggregation-new-route-binding.test.ts": [
