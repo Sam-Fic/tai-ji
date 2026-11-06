@@ -1,6 +1,10 @@
 <!--
   聚合块 · 进行中双窗（chat-flow-process-aggregate U2，D7）：思考窗 92px（窄屏 78px）+
-  聚合窗 116px（窄屏 96px），间距 10px。无外框无标题行（进行中态容器形态，任务书硬约束）。
+  聚合窗 116px（窄屏 96px），间距 10px。双窗高度档判定源 = 视口 ≤420px 断点（D7/spec §9
+  表/demo taiji-chat-e.html 同款 @420px media query），纯 CSS 视口变体承载（抽屉
+  ≤620px 全宽的 max-[620px]:w-full 同款机制）——不接 ChatViewDeps 密度档（renderer 壳
+  不 provide，桌面窗口缩到 390px 时密度档恒 desktop，V6 三档走查不达标）。无外框无标题行
+  （进行中态容器形态，任务书硬约束）。
   窗口可见性纯派生（v-if 由段内已开始步骤类型决定，composable 派生）：
   - 思考窗：段内已有思考步骤才出现；显示「最新思考」实时文本、自动跟底，思考结束停住
     （内容不再变化），下一段思考开始切换内容（computed 内容源切换）；
@@ -17,8 +21,7 @@
     <!-- 思考窗 -->
     <div
       v-if="hasThinking"
-      class="agg-think-window relative overflow-hidden rounded-[var(--radius-sm)]"
-      :style="{ height: thinkHeight }"
+      class="agg-think-window relative h-[92px] max-[420px]:h-[78px] overflow-hidden rounded-[var(--radius-sm)]"
       data-testid="agg-think-window"
     >
       <div
@@ -43,9 +46,8 @@
     <!-- 聚合窗：聚合条条目序与展开区同源（units 投影），零二次拼接 -->
     <div
       v-if="hasToolCall"
-      class="relative overflow-hidden rounded-[var(--radius-sm)]"
+      class="relative h-[116px] max-[420px]:h-[96px] overflow-hidden rounded-[var(--radius-sm)]"
       :class="aggregateWindowEntered ? 'agg-window-in' : ''"
-      :style="{ height: aggregateHeight }"
       data-testid="agg-window"
     >
       <div
@@ -95,12 +97,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { RunGroupBase, ProcessToolGroup, ProcessSegment, ProcessSegmentUnit } from '@taiji/core/domain/chat'
 import type { ToolCall } from '@taiji/shared'
-import { useChatDensity } from '../chat-view-deps'
-import {
-  THINKING_WINDOW_HEIGHT_PX,
-  AGGREGATE_WINDOW_HEIGHT_PX,
-  useAggregateWindows,
-} from '../composables/useProcessAggregate'
+import { useAggregateWindows } from '../composables/useProcessAggregate'
 import { formatDuration } from '../format-utils'
 
 const props = defineProps<{
@@ -109,7 +106,6 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
-const density = useChatDensity()
 
 const {
   hasThinking,
@@ -125,10 +121,6 @@ const {
   onAggregateScroll,
   stripUnits,
 } = useAggregateWindows(computed(() => props.segment))
-
-/** 双窗高度：desktop / mobile（≤420px 窄屏同档）两档固定值，内联 style 承载（可测） */
-const thinkHeight = computed(() => `${THINKING_WINDOW_HEIGHT_PX[density]}px`)
-const aggregateHeight = computed(() => `${AGGREGATE_WINDOW_HEIGHT_PX[density]}px`)
 
 /** 组类型 → 组名 i18n 键（SegmentToolGroup 同键同值；条目行不落图标，名 + 统计即可） */
 const RUN_GROUP_LABEL_KEY: Record<RunGroupBase, string> = {

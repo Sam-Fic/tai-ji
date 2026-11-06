@@ -22,14 +22,6 @@ import type { ThinkingBlock } from '@taiji/shared'
 const BOTTOM_EPSILON = 1
 
 /**
- * 双窗固定高度（D7，px）：进行中占位与段内步骤数解耦的常量载体。mobile 档 = ≤420px 窄屏
- * 降档（对齐 demo 规格 78/96），复用 ChatViewDeps 密度档通道（BlockScrollBox 的
- * --m-scroll-expand 同款判定路径），不另设视口监听。
- */
-export const THINKING_WINDOW_HEIGHT_PX = { desktop: 92, mobile: 78 } as const
-export const AGGREGATE_WINDOW_HEIGHT_PX = { desktop: 116, mobile: 96 } as const
-
-/**
  * 聚合块三态状态（容器级）。
  *
  * 入参：segment = 段数据（core 切段纯函数输出）；turnWorking = 回合工作态

@@ -30,10 +30,6 @@ import type {
 } from '@taiji/core/domain/chat';
 import type { ThinkingBlock, ToolCall } from '@taiji/shared';
 import ProcessAggregateBlock from '../ProcessAggregateBlock.vue';
-import {
-  AGGREGATE_WINDOW_HEIGHT_PX,
-  THINKING_WINDOW_HEIGHT_PX,
-} from '../composables/useProcessAggregate';
 import { mockChatProvide } from './helpers';
 import type { VueWrapper } from '@vue/test-utils';
 
@@ -232,9 +228,11 @@ describe('process-aggregate-block RL1: live height stays constant as steps grow'
     // ① 进行中不渲染展开平铺行，窗口数量不随步数增长（无 thinking → 仅聚合窗 1 个）
     expect(wrapper.find('[data-testid="agg-expanded"]').exists()).toBe(false);
     expect(wrapper.findAll('[data-testid="agg-think-window"], [data-testid="agg-window"]').length).toBe(1);
-    // ② 聚合窗高度常量 = 设计规格值（D7：116px；窗口元素 v-if 存在性已由 V8 用例覆盖，
-    //    happy-dom 不反射运行时 style，常量绑定源断言替代 DOM style 读取）
-    expect(AGGREGATE_WINDOW_HEIGHT_PX.desktop).toBe(116);
+    // ② 聚合窗高度档 = 设计规格值（D7：116px，窄屏 ≤420px 降档 96px——视口断点为纯 CSS
+    //    max-[420px] 变体，happy-dom 不做布局，class 断言承载规格值；断点行为归真机 V6）
+    expect(wrapper.find('[data-testid="agg-window"]').classes()).toEqual(
+      expect.arrayContaining(['h-[116px]', 'max-[420px]:h-[96px]']),
+    );
     // ③ 聚合条条目数与步数解耦（按组不按步：1 组恒 1 条目）
     expect(wrapper.findAll('[data-testid="agg-strip-group"], [data-testid="agg-strip-current"]').length).toBe(1);
   });
@@ -245,9 +243,12 @@ describe('process-aggregate-block RL1: live height stays constant as steps grow'
     const h1 = root.scrollHeight;
     const thinkers = Array.from({ length: 26 }, () => makeThinkingFlat('更多推理'));
     await wrapper.setProps({ segment: makeSegment(thinkers, { followedByText: false, id: 'seg:0' }) });
-    // 同上：scrollHeight 恒等（真实浏览器生效）+ 思考窗高度常量 = 设计规格值（D7：92px）
+    // 同上：scrollHeight 恒等（真实浏览器生效）+ 思考窗高度档 = 设计规格值（D7：92px，
+    // 窄屏 ≤420px 降档 78px）
     expect(root.scrollHeight).toBe(h1);
-    expect(THINKING_WINDOW_HEIGHT_PX.desktop).toBe(92);
+    expect(wrapper.find('[data-testid="agg-think-window"]').classes()).toEqual(
+      expect.arrayContaining(['h-[92px]', 'max-[420px]:h-[78px]']),
+    );
     expect(wrapper.find('[data-testid="agg-window"]').exists()).toBe(false);
   });
 });
