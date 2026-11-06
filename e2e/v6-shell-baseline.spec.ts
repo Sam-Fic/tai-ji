@@ -24,10 +24,22 @@ async function activateSession(page: import('@playwright/test').Page, label: str
   const sessionItem = page.getByText(label)
   // 默认 activeTab=sessions → session list 已渲染，直接等目标 session 可见
   try {
+    if (!(await sessionItem.first().isVisible().catch(() => false))) {
+      // 5b13f3f59（基线内）起默认项目组缺省收起——先展开组再等会话行
+      await page.getByTestId('default-project-head').click().catch(() => {});
+      await expect(sessionItem.first()).toBeVisible({ timeout: 6_000 });
+    }
+
     await expect(sessionItem).toBeVisible({ timeout: 6_000 })
   } catch {
     // 兜底：activeTab 被持久化为非 sessions 时，点「会话」tab 切回
     await page.getByRole('button', { name: /^会话/ }).click()
+    if (!(await sessionItem.first().isVisible().catch(() => false))) {
+      // 5b13f3f59（基线内）起默认项目组缺省收起——先展开组再等会话行
+      await page.getByTestId('default-project-head').click().catch(() => {});
+      await expect(sessionItem.first()).toBeVisible({ timeout: 10_000 });
+    }
+
     await expect(sessionItem).toBeVisible({ timeout: 10_000 })
   }
   await sessionItem.click()
@@ -89,6 +101,12 @@ test.describe('sidebar 折叠/展开 + session 切换', () => {
   test('TC-SESSION-SWITCH: 点 session 后 main panel 载入对话区 @p0-smoke', async ({ page }) => {
     // sidebar.activeTab 默认 sessions，session list 已渲染。点 session 激活 → main 从 Landing 切到 chat → composer-box 渲染
     const sessionItem = page.getByText('E2E 文件树测试')
+    if (!(await sessionItem.first().isVisible().catch(() => false))) {
+      // 5b13f3f59（基线内）起默认项目组缺省收起——先展开组再等会话行
+      await page.getByTestId('default-project-head').click().catch(() => {});
+      await expect(sessionItem.first()).toBeVisible({ timeout: 10_000 });
+    }
+
     await expect(sessionItem).toBeVisible({ timeout: 10_000 })
     await sessionItem.click()
     await expect(page.getByTestId('composer-box')).toBeVisible({ timeout: 10_000 })

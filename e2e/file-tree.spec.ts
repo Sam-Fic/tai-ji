@@ -35,6 +35,12 @@ async function gotoFileTree(page: import('@playwright/test').Page): Promise<void
   // 属性选择器不受文本篡改影响）
   await page.locator('button[title="会话"]').click()
   // 等 session list 渲染（mock session.list 40ms 延迟）
+  // 5b13f3f59（基线内）起默认项目组缺省收起（localStorage 记忆）——会话行不进 DOM 时先展开组
+  if (!(await page.getByText('E2E 文件树测试').first().isVisible().catch(() => false))) {
+    await page.getByTestId('default-project-head').click().catch(() => {});
+    await expect(page.getByText('E2E 文件树测试').first()).toBeVisible({ timeout: 10_000 });
+  }
+
   await expect(page.getByText('E2E 文件树测试')).toBeVisible({ timeout: 10_000 })
   // 点 e2e-files session 激活（SessionItem 文本匹配，激活后退出 Landing 态）
   await page.getByText('E2E 文件树测试').click()
