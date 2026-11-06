@@ -16,14 +16,16 @@
   >
     <Layers class="size-[15px] shrink-0 self-center text-neutral-ico [stroke-width:1.6]" aria-hidden="true" />
     <span class="shrink-0">{{ t('panel.message.aggProcessLabel') }}</span>
-    <!-- 分类计数：categoryCounts 三类按序（explore/edit/exec），0 省略 -->
-    <span
-      v-for="(count, base) in segment.counts.categoryCounts"
-      v-show="count > 0"
-      :key="base"
-      class="shrink-0 text-neutral-dim"
-      :data-testid="`agg-summary-cat-${base}`"
-    >· {{ t(RUN_GROUP_LABEL_KEY[base]) }} {{ count }}</span>
+    <!-- 分类计数：categoryCounts 三类按序（explore/edit/exec），0 省略——v-if 省略（DOM
+         不渲染）：fx spec「摘要行只列存在的类型」，v-show 留隐藏节点会被辅助技术读出且
+         testid 查询仍命中（真机剧本 agg-tf-1 实证），纯思考段三类全零时摘要只列思考计数 -->
+    <template v-for="(count, base) in segment.counts.categoryCounts" :key="base">
+      <span
+        v-if="count > 0"
+        class="shrink-0 text-neutral-dim"
+        :data-testid="`agg-summary-cat-${base}`"
+      >· {{ t(RUN_GROUP_LABEL_KEY[base]) }} {{ count }}</span>
+    </template>
     <span v-if="segment.counts.thinkingCount > 0" class="shrink-0 text-neutral-dim" data-testid="agg-summary-thinking">· {{ t('panel.message.thinkingBlock') }} {{ segment.counts.thinkingCount }}</span>
     <span v-if="durationText" class="shrink-0 font-mono text-[length:var(--text-2xs)] tabular-nums text-neutral-dim" data-testid="agg-summary-duration">· {{ durationText }}</span>
     <!-- 失败标记（含 M 次失败）：AX6 响亮契约——计数即存在信号，无失败不渲染 -->

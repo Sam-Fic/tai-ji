@@ -193,6 +193,25 @@ describe('process-aggregate-block tri-state (event-driven)', () => {
     expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(false);
   });
 
+  it('纯思考段摘要：零分类不渲染（v-if 省略，真机剧本 agg-tf-1 抓的 v-show 残留缺陷），只列思考计数', () => {
+    const wrapper = mountAgg(
+      makeSegment([makeThinkingFlat('纯推理')], {
+        followedByText: true,
+        counts: {
+          categoryCounts: { explore: 0, edit: 0, exec: 0 },
+          thinkingCount: 1,
+          totalDurationMs: 3000,
+          failedCount: 0,
+        },
+      }),
+      true,
+    );
+    const row = wrapper.find('[data-testid="agg-summary-row"]');
+    expect(row.exists()).toBe(true);
+    expect(row.findAll('[data-testid^="agg-summary-cat-"]').length).toBe(0);
+    expect(wrapper.find('[data-testid="agg-summary-thinking"]').exists()).toBe(true);
+  });
+
   it('段后出现 text（followedByText=true）→ 段已封闭，回合仍在进行也显摘要行', async () => {
     const wrapper = mountAgg(makeSegment([makeThinkingFlat('推理')], { followedByText: true }), true);
     expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(true);
