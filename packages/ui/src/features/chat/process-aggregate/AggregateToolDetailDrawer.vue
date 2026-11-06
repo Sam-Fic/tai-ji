@@ -15,6 +15,7 @@
   <ToolDetailDrawer
     :open="open"
     :title="detailTitle"
+    :fallback-focus-target="fallbackContainer"
     @update:open="emit('update:open', $event)"
   >
     <template v-if="tool">
@@ -79,7 +80,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, type Component } from 'vue'
+import { computed, ref, watch, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ToolCall } from '@taiji/shared'
 import ToolDetailDrawer from '../../../primitives/dialog/ToolDetailDrawer.vue'
@@ -104,6 +105,20 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const chatViewDeps = useChatViewDeps()
+
+/**
+ * 焦点归还降级目标（U4 检查点后半：壳侧 fallbackFocusTarget 通道的生产接线）——
+ * 打开时刻解析对话流容器（ChatView 根，桌面/mobile 共享壳的稳定锚）；触发行被虚拟
+ * 滚动卸载时壳按 isConnected 裁决归还到这里。关闭态不清空：容器元素生命周期长于
+ * 抽屉，重复 open 覆盖解析即可。
+ */
+const fallbackContainer = ref<HTMLElement | null>(null)
+watch(
+  () => props.open,
+  (open) => {
+    if (open) fallbackContainer.value = document.querySelector<HTMLElement>('[data-testid="chat-view"]')
+  },
+)
 
 const isRunning = computed(() => props.tool?.status === 'running')
 const isFailed = computed(() => props.tool?.status === 'error')

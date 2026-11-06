@@ -67,7 +67,6 @@ watch(
  * 调用方传入的对话流容器。
  */
 function onCloseAutoFocus(event: Event): void {
-  console.log('PROBE onCloseAutoFocus ran, isConnected trigger:', triggerElement.value?.isConnected)
   event.preventDefault()
   const trigger = triggerElement.value
   if (trigger && trigger.isConnected) {
