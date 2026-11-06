@@ -24,7 +24,8 @@ export async function querySystemFontFamilies(): Promise<string[]> {
     const faces = await query.call(window)
     return [...new Set(faces.map((face) => face.family).filter((family) => family.trim().length > 0))]
       .sort((a, b) => a.localeCompare(b))
-  } catch {
+  } catch (error) {
+    console.warn('[fonts] queryLocalFonts failed', error)
     return []
   }
 }
