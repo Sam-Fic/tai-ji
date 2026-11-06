@@ -30,6 +30,10 @@ export default {
     focusMissing: '目标插件不在清单中（可能已被移除），请重新打开页面',
     channelUnavailable: '安装通道未就绪：请更新到支持插件安装的版本后重试',
     confirmFailed: '安装失败',
+    preparingInstall: '正在准备安装信息…',
+    preparingUpdate: '正在准备更新信息…',
+    installing: '安装中…',
+    updating: '更新中…',
     // S13 崩溃恢复（失败路径表：crashed 家族卡「插件已停止」+ 重启 = toggle off/on）
     stoppedBadge: '插件已停止',
     restart: '重启',
