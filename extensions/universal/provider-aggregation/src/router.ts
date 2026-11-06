@@ -6,7 +6,7 @@
  * 读取、零目录访问——时间（now）/ 额度快照（quotaByProviderId）/ 重试信号（retryExclude）
  * 全部由调用方注入（AX3 求值输入最小化：同输入必同输出），pi 侧组装在 src/index.ts。
  *
- * 语义总则（route-matrix.md 总则 1-7，落点标注）：
+ * 语义总则（route-matrix.md 总则 1-6 + 总则 2 的求值模式维度段，落点标注）：
  * 1. 端点按配置顺序求值，命中第一个「条件全满足」的端点；无候选 → 路由失败（index.ts
  *    闭包层 throw，错误逐端点列明落选原因——AX5）。
  * 2. 时间窗：墙钟本地时区落格判断（boolean[7][48]，行 = 周一..周日 ISO 序、列 = 半小时
@@ -20,7 +20,7 @@
  *    仅作用于本次选择，不写持久黑名单（SI4 假阳性收窄）。
  * 6. 端点供给侧状态（凭据、provider 启停）不在求值输入（AX3/矩阵总则 6）——本模块
  *    不预判任何供给侧事实。
- * 7. mode（D12）：simple 跳过全部条件判断依次兜底（矩阵总则 7「下表仅适用于 advanced」）；
+ * 7. mode（D12）：simple 跳过全部条件判断依次兜底（route-matrix.md 总则 2 的求值模式维度段「下表仅适用于 advanced」）；
  *    重试排除不是端点条件而是选择层排除——D6「每个请求（user/continuation/retry 同型）
  *    都按路由规则完整重算」对 simple 同样成立，故 simple 模式下上一失败端点仍被排除、
  *    取下一个兜底端点。
@@ -174,7 +174,7 @@ function collectMemberBlockReasons(route: AggregationRoute, member: AggregationM
 	) {
 		reasons.push("retry-excluded")
 	}
-	// D12：simple 模式跳过全部条件判断依次兜底（矩阵总则 7）——重试排除不是条件，先行生效。
+	// D12：simple 模式跳过全部条件判断依次兜底（route-matrix.md 总则 2 的求值模式维度段）——重试排除不是条件，先行生效。
 	if (route.mode === "simple") return reasons
 	switch (member.type) {
 		case "none":

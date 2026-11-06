@@ -26,8 +26,8 @@ export { default as ProviderTemplatePicker } from './provider/ProviderTemplatePi
 export { default as ProviderQuickSetup } from './provider/ProviderQuickSetup.vue'
 export { default as SoundPreviewButton } from './common/SoundPreviewButton.vue'
 // ScopedModelSection 已退役（provider-aggregation D10：白名单编辑入口迁「模型路由」页）。
-// scoped-model-types 的 type export 保留：其唯一存留消费方 useScopedModels（renderer，
-// 退役归路由视图编排单元）经本桶 import 类型，退役时一并清理。
+// scoped-model-types 的 type export 为零消费方死导出（唯一消费方 useScopedModels 已随
+// 退役删除），随 scoped-model 遗留资产清理批次一并移除本导出与 common/scoped-model-types.ts。
 export type { ScopedRenderItem, SelectableModel } from './common/scoped-model-types'
 export { default as SourceImportSection } from './common/SourceImportSection.vue'
 
