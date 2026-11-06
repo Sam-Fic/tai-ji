@@ -74,6 +74,8 @@ const POLL_INTERVAL_MS = 500
 // 失败路径 = child 退出探测，与时间无关）
 const LAUNCH_TIMEOUT_MS = 90000
 const PAGE_TIMEOUT_MS = 60000
+const CLEANUP_TIMEOUT_MS = 15000
+const KILL_GRACE_MS = 15000
 
 /**
  * await 加界：promise 未在 ms 内落定 → 抛出（调用方按各自失败路径处置）。
@@ -267,10 +269,18 @@ export async function runSmoke(options = {}) {
     //      会在分钟级空窗内被环境杀死，后续 newPage 对死连接的 await 无界挂死（连续两轮
     //      ≈28 分钟形态）。launch/newPage/goto 全链有界化：挂死收敛为有界失败（exit 3/1
     //      带诊断），不再依赖 harness 外杀。测试门禁脚本的错误有界化，非产品时间机制。
+    //      2026-11-07 三修（attempt3 分诊）：launch 超时路径泄漏防护——原始 launch promise
+    //      未取消，超时后它 resolve 出的 Browser 无 close 调用点（孤儿 chromium 进程通道），
+    //      此处接住延迟 resolve 立即补 close。
+    let launchPromise
     try {
-      browser = await withTimeout(chromium.launch(), LAUNCH_TIMEOUT_MS, 'chromium launch')
+      launchPromise = chromium.launch()
+      browser = await withTimeout(launchPromise, LAUNCH_TIMEOUT_MS, 'chromium launch')
       process.stderr.write('[dev-smoke] chromium 已启动\n')
     } catch (e) {
+      if (launchPromise) {
+        launchPromise.then((b) => b.close().catch(() => {}), () => {})
+      }
       return makeResult({
         exitCode: 3,
         stderrErrors,
@@ -335,8 +345,12 @@ export async function runSmoke(options = {}) {
     })
   } finally {
     // ---- cleanup：任意退出路径都释放 browser + dev 子进程 ----
+    //      2026-11-07 三修（attempt3 分诊）：清理链原为无界 await（close/killProcess 均
+    //      可能挂死），是 Gate A 连续三轮挂点右移的终站（ready 轮询 → newPage → 清理链），
+    //      有界化为 15s，超时继续走完收尾（close 挂死放弃等待；SIGTERM 宽限内未退
+    //      SIGKILL 强杀）——测试门禁清理的资源释放有界化，非产品时间机制。
     if (browser) {
-      await browser.close().catch(() => {})
+      await withTimeout(browser.close(), CLEANUP_TIMEOUT_MS, 'browser.close').catch(() => {})
     }
     await killProcess(child)
   }
@@ -383,7 +397,10 @@ async function resolveReachableUrl(url, child) {
 }
 
 /**
- * 发 SIGTERM 后等子进程退出（无宽限上限——时间机制删除裁决）。已退出则 no-op。
+ * 发 SIGTERM 等子进程退出（宽限 15s 有界），未退 SIGKILL 强杀收尾。已退出则 no-op。
+ * 2026-11-07 三修（attempt3 分诊）：原「无宽限上限」使清理链成为 Gate A 挂点右移的
+ * 终站（exit 事件等待无界）——对象是自己 spawn 的子进程（PID 在手），强杀属测试门禁
+ * 资源释放收尾，非产品时间机制。
  */
 async function killProcess(child) {
   if (!child) return
@@ -396,7 +413,16 @@ async function killProcess(child) {
   } catch {
     return
   }
-  await exitPromise
+  try {
+    await withTimeout(exitPromise, KILL_GRACE_MS, 'child exit after SIGTERM')
+  } catch {
+    try {
+      child.kill('SIGKILL')
+    } catch {
+      // 进程已自行退出，忽略
+    }
+    await Promise.race([exitPromise, sleep(KILL_GRACE_MS)])
+  }
 }
 
 /**
