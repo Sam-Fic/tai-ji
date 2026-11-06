@@ -28,15 +28,15 @@
         class="min-w-0 truncate font-mono text-neutral-dim"
         data-testid="agg-group-stat"
       >{{ statText }}</span>
-      <!-- 失败段 chip（RunGroupBlock failtag 同形态；计数与段级摘要行同口径——core 单源） -->
+      <!-- 失败段 chip（软危险底圆角小标签；计数与段级摘要行同口径——core 单源） -->
       <span
         v-if="group.failedCount > 0"
         class="shrink-0 rounded-[var(--radius-xs)] bg-danger-soft px-1.5 py-px text-[length:var(--text-2xs)] [font-weight:var(--fw-mid)] text-danger"
         data-testid="agg-group-failed"
       >{{ t('panel.message.traceFailed', { count: group.failedCount }) }}</span>
     </div>
-    <!-- 成员全铺开：key = 成员 flatIndex（段尾延长 members 增长不 remount 既有成员行，
-         RunGroupBlock PR-6 同款） -->
+    <!-- 成员全铺开：key = 成员 flatIndex——段尾延长 members 追加成员时既有成员 key 不变，
+         不 remount 既有成员行 -->
     <SegmentToolRow
       v-for="m in group.members"
       :key="m.flatIndex"
@@ -68,24 +68,23 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-/** 组类型 → 块图标（RunGroupBlock 同款本地映射：三档复用既有 BlockIconKind，不新开图标；
- *  排掉 'running'——运行态走 loader 分支）。独立于 RunGroupBlock 的本地常量：组件退役
- *  边界（U3 退役 RunGroupBlock）不牵连本组件，跨组件共享映射的收敛归 block-icon SSOT
- *  后续批次。 */
+/** 组类型 → 块图标（组件本地映射：三档复用既有 BlockIconKind，不新开图标；
+ *  排掉 'running'——运行态走 loader 分支）。保持本地常量不上收共享：跨组件
+ *  共享映射的收敛归 block-icon SSOT 后续批次。 */
 const RUN_GROUP_ICON: Record<RunGroupBase, Exclude<BlockIconKind, 'running'>> = {
   explore: 'tool-read',
   edit: 'tool-edit',
   exec: 'tool-bash',
 }
 
-/** 组类型 → 组头名 i18n 键（探索 / 改动 / 执行命令，RunGroupBlock 同键） */
+/** 组类型 → 组头名 i18n 键（探索 / 改动 / 执行命令；复用既有 locale 键 runGroup* 族） */
 const RUN_GROUP_LABEL_KEY: Record<RunGroupBase, string> = {
   explore: 'panel.message.runGroupExplore',
   edit: 'panel.message.runGroupEdit',
   exec: 'panel.message.runGroupExec',
 }
 
-/** 组类型 → 运行中动效 kind（RunGroupBlock 同款：探索扫描 / 改动描线 / 命令光标闪烁） */
+/** 组类型 → 运行中动效 kind（探索扫描 / 改动描线 / 命令光标闪烁，经 RunningBlockIcon 渲染） */
 const RUN_GROUP_RUNNING_ICON: Record<RunGroupBase, RunningIconKind> = {
   explore: 'tool-read',
   edit: 'tool-edit',

@@ -7,9 +7,10 @@
  * MOCK 层 E2E」时不会被触发（MOCK 层依赖 build 产物，绕过 vite dev serve），
  * 也不被现有 vitest 单测覆盖（单测不挂载完整 AppShell）。
  *
- * 机制：VITE_MOCK=true spawn vite dev server（只起 vite，不起 electron）→ 轮询
- * localhost:1420 ready → Playwright chromium 连接 → 双通道抓错误 → 断言关键
- * 挂载点 → try/finally cleanup。
+ * 机制：chromium 先 launch（缺浏览器早失败 exit 3）→ VITE_MOCK=true spawn vite
+ * dev server（只起 vite，不起 electron）→ 双环回（127.0.0.1/[::1]）轮询 ready
+ * 并取可达地址 → chromium goto 同一地址 → 双通道抓错误 → 断言关键挂载点 →
+ * try/finally cleanup。
  *
  * 双通道错误捕获（任一非空即 fail）：
  *   (A) vite 子进程输出（stdout+stderr）逐行正则匹配编译期错误 pattern
@@ -29,7 +30,7 @@
  *   node scripts/dev-smoke.mjs [--port 1420]
  *   pnpm dev:smoke   （根 package.json 暴露的便捷入口）
  *
- * 本脚本自管理完整生命周期（spawn → poll → launch → assert → cleanup），
+ * 本脚本自管理完整生命周期（launch → spawn → poll → assert → cleanup），
  * 不依赖外部已启动的 dev server。VITE_MOCK 经 spawn 子进程 env 注入，不污染调用方 shell。
  */
 import { chromium } from '@playwright/test'
