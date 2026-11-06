@@ -1,16 +1,21 @@
-<!-- split-justified: Provider 设置页单一语义域（供应商列表 + 手风琴就地编辑 + QuickSetup + OAuth + scoped models + 额度 presets 拉取——围绕同一 provider 配置状态机的页面级编排，业务逻辑已拆至 features/settings composable） -->
+<!-- split-justified: Provider 设置页单一语义域（接入页：供应商列表 + 手风琴就地编辑 + QuickSetup + OAuth + 额度 presets 拉取 + 下一步引导卡——围绕同一 provider 配置状态机的页面级编排，业务逻辑已拆至 features/settings composable） -->
 <template>
   <!--
-    Settings · Provider 菜单页（v6 spec §6.4 R4：手风琴就地编辑，取代 ProviderEditModal 双层 modal）。
+    Settings · Provider 接入页（v6 spec §6.4 R4：手风琴就地编辑，取代 ProviderEditModal 双层 modal）。
+    页面职责收敛为「接得进来」（凭据、启停、渠道模型清单）：scoped-model 白名单卡已随两屏
+    信息架构退役（编辑入口迁「模型路由」页，provider-aggregation D10），本页底部保留下一步
+    引导卡承接「先接入、再编排」心智（外部 spec §6.5）。
     行布局：状态点 → 启用开关 → 名称(点击展开就地编辑) → 默认pill → 模型数 → dirty 徽章 → 删除。
     展开体：ProviderEditBody（凭据/模型/验证/额度 + sticky save-bar）。
     dirty 检查：展开行有未保存改动时，切换/收起/新建 → ConfirmDialog 二次确认。
+    kind=aggregation 排除（provider-aggregation D4 ①(a)）：渠道管理列表不渲染路由聚合条目
+    （无凭据无 baseURL 的聚合条目行交互全部错位——凭据编辑/测试连接/启停对它不适用）。
   -->
   <!-- 垂直节奏 = demo .gcard+.gcard 唯一 16px 档：根容器无 gap（对齐 AppearancePage 形态），
        页头→首卡 16px 由共享 .page-head margin-bottom 承担；GroupCard 相邻 16px 由
        GroupCard 自带 .group-card + .group-card 规则承担；非卡片兄弟块（inline error /
-       空状态 / 列表 section）各自 mt-[16px]（rem gap 类在 14px html 基准下收缩为 demo 值
-       的 87.5%，本页全部槽位走绝对 px）。 -->
+       空状态 / 列表 section / 引导卡）各自 mt-[16px]（rem gap 类在 14px html 基准下收缩为
+       demo 值的 87.5%，本页全部槽位走绝对 px）。 -->
   <div class="flex flex-col">
     <!-- 页头（.page-head 形态与入口细节见 ProviderPageHeader.vue）：标题 + 导入/模板(含插件 Provider)入口 + 目录过期提示 -->
     <ProviderPageHeader
@@ -23,24 +28,6 @@
       @plugin-provider="openPluginFlow()"
     />
 
-    <!-- Scoped Model 配置区（模型白名单 + 有序列表）。容器 = GroupCard（demo .gcard 卡底
-         --bg-card #2d2d30 / r-card / overflow: clip，与下方供应商列表卡同原语）。注意 clip 是
-         ProviderEditBody sticky save-bar 生效的前提（hidden 会建立滚动容器，使 sticky 参照
-         卡片自身而失效），改 GroupCard overflow 前先读 ProviderEditBody save-bar 注释。白名单
-         标题/描述/添加钮由 ScopedModelSection 自带头承载（i18n 文案与 demo gc-title/gc-sub 一致）；
-         其卡头形态差异（--card-head 底 / padding 10-16）= w1 交接项 1 归 ui 包波次，本层不动。
-         注：ScopedModelSection 根上的 bg-bg-card 与本层 GroupCard 卡底同变量（--bg-card）同色，
-         无叠底冲突。 -->
-    <GroupCard>
-      <ScopedModelSection
-        :scoped-list="scopedRenderItems"
-        :selectable-models="selectableModels"
-        @add="onScopedAdd"
-        @remove="onScopedRemove"
-        @move="onScopedMove"
-      />
-    </GroupCard>
-
     <!-- 常驻 inline error：toggle enabled / 设默认 / 删除 等动作失败时报错可见 -->
     <div
       v-if="actionError"
@@ -51,8 +38,9 @@
       <span class="truncate">{{ actionError }}</span>
     </div>
 
-    <!-- 空状态（demo .pg-set .empty 形态：64px 虚线圆 ring + 14px/600 标题 + 13px mid 描述） -->
-    <div v-if="!providers.length && expandedId !== NEW_ID" class="mt-[16px] flex flex-col items-center px-[16px] py-[40px] text-center">
+    <!-- 空状态（demo .pg-set .empty 形态：64px 虚线圆 ring + 14px/600 标题 + 13px mid 描述）。
+         判据 = 过滤后的渠道列表（外部 spec §6.6：无渠道时引导去接入，并预告路由编排入口） -->
+    <div v-if="!channelProviders.length && expandedId !== NEW_ID" class="mt-[16px] flex flex-col items-center px-[16px] py-[40px] text-center">
       <div class="mb-[12px] grid size-16 place-items-center rounded-full border-[1.5px] border-dashed border-border-strong">
         <Settings class="size-[26px] text-neutral-mid" />
       </div>
@@ -72,7 +60,7 @@
         </template>
         <template #actions>
           <!-- demo .bdg：h16 / bg-surface / mono / 10px / fw-bold / neutral-fg-2 -->
-          <span class="inline-flex h-[16px] min-w-[16px] items-center justify-center rounded-full bg-surface px-[5px] font-mono text-[length:var(--text-3xs)] font-bold text-[color:var(--neutral-fg-2)]">{{ providers.length }}</span>
+          <span class="inline-flex h-[16px] min-w-[16px] items-center justify-center rounded-full bg-surface px-[5px] font-mono text-[length:var(--text-3xs)] font-bold text-[color:var(--neutral-fg-2)]">{{ channelProviders.length }}</span>
         </template>
         <div class="flex flex-col gap-[8px] p-[12px_16px]">
         <!-- 行卡（demo .prow 形态与展开体细节见 ProviderRowCard.vue）：父侧下发每行受控态，
@@ -109,6 +97,27 @@
         </div>
       </GroupCard>
     </section>
+
+    <!-- 下一步引导卡（外部 spec §6.5：至少一个渠道拥有模型时显示；文案收敛 taiji 形态——
+         spec 的「M 个端点」是路由页数据，接入页只报已接入模型数。按钮跳「模型路由」设置分区，
+         经 open-route-page 上抛 SettingsModal（分区未注册时守卫 no-op，路由页交付后即生效）。 -->
+    <GroupCard v-if="routeGuideVisible" data-testid="provider-route-guide" class="mt-[16px]">
+      <template #head>
+        <div class="gc-head-text">
+          <h3 class="gc-title">{{ t('settings.provider.routeGuide.title') }}</h3>
+        </div>
+      </template>
+      <div class="flex items-center justify-between gap-3 p-[12px_16px]">
+        <p class="text-[length:var(--text-2xs)] text-neutral-mid">{{ t('settings.provider.routeGuide.desc', { count: connectedModelCount }) }}</p>
+        <Button
+          variant="secondary"
+          size="dense"
+          class="shrink-0"
+          data-testid="provider-open-route-btn"
+          @click="emit('open-route-page')"
+        >{{ t('settings.provider.routeGuide.open') }}</Button>
+      </div>
+    </GroupCard>
 
     <!-- 插件 Provider 接入流程（D1/D2/D3/D5）：家族卡 → 安装确认卡 → 授权挂载位容器。
          焦点入口 = 条目区「重新授权」/「更新插件」（绕过家族选择直达目标段） -->
@@ -191,6 +200,7 @@ import { useI18n } from 'vue-i18n'
 import { AlertCircle, Settings } from '@lucide/vue'
 import { useProviderCatalogsStale } from '@/composables/features/settings/useProviderCatalogsStale'
 import { ConfirmDialog } from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
 import type { BuiltinProviderTemplate, ProviderInfo, SetProviderData, ProviderId } from '@taiji/shared'
 import { getSettingsStore, getSettingsTransport, useSettings } from '@taiji/core'
 import { useQuotaStore } from '@/stores/quota'
@@ -201,13 +211,11 @@ import {
   ProviderImportPreviewDialog,
   ProviderQuickSetup,
   OAuthDialog,
-  ScopedModelSection,
 } from '@taiji/ui/features/settings'
 import { useProviderOAuth } from '@/composables/features/settings/useProviderOAuth'
 import { useApiKeyAutoEnable } from '@/composables/features/settings/useApiKeyAutoEnable'
 import { useQuotaAutoEnableNotice } from '@/composables/features/settings/useQuotaAutoEnableNotice'
 import { useAccordionGuard } from '@/composables/features/settings/useAccordionGuard'
-import { useScopedModels } from '@/composables/features/settings/useScopedModels'
 import ProviderPageHeader from './ProviderPageHeader.vue'
 import ProviderRowCard from './ProviderRowCard.vue'
 import PluginProviderFlow from './PluginProviderFlow.vue'
@@ -226,8 +234,11 @@ const transport = getSettingsTransport()
 // 失败 console.warn 沿用缓存，不静默吞），不内联重复「listQuotaPresets → setQuotaPresets」
 const { refreshQuotaPresets } = useSettings()
 
-// Scoped Models 白名单（乐观更新 + 失败回滚；RPC 失败 rethrow 由下方包装 handler 统一反馈）
-const { scopedRenderItems, selectableModels, addScopedModels, removeScopedModel, moveScopedModel } = useScopedModels()
+const emit = defineEmits<{
+  /** 「打开模型路由」引导卡按钮（外部 spec §6.5 下一步引导）→ SettingsModal 切「模型路由」
+   *  分区（分区未注册时守卫 no-op——路由页由并行单元交付后注册即生效） */
+  'open-route-page': []
+}>()
 
 const props = defineProps<{ providers: ProviderInfo[] }>()
 
@@ -466,33 +477,18 @@ const deleteDialogOpen = computed({
 /** 动作错误（删除/启用失败时显示，非静默吞） */
 const actionError = ref('')
 
-// ── scoped 模型操作接线（失败反馈：模型选择类操作，对齐 onSetDefaultModel 惯例 = 常驻 inline error + toast）──
-// useScopedModels 乐观更新 + 回滚后 rethrow，此处统一捕获展示，不让 RPC 失败静默吞掉。
+// ── 渠道管理列表（kind=aggregation 排除，provider-aggregation D4 ①(a)）──
+// 路由聚合条目（无凭据无 baseURL）的 provider 行交互（凭据编辑/测试连接/启停）全部错位，
+// 不进本页渠道列表；模型链消费方（选择器/默认模型）不受影响（聚合条目照常消费）。过滤只
+// 作用渲染面：oauth/插件等按模板 id 查找的消费点天然不命中聚合保留 id，保持 props 原样。
+const channelProviders = computed<ProviderInfo[]>(() => props.providers.filter((p) => p.kind !== 'aggregation'))
 
-async function runScopedAction(action: () => Promise<void>): Promise<void> {
-  actionError.value = ''
-  try {
-    await action()
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
-    actionError.value = msg
-    toast.error(msg)
-  }
-}
+/** 下一步引导卡（外部 spec §6.5）：至少一个渠道拥有模型时显示；无渠道（空状态）时隐藏 */
+const routeGuideVisible = computed(() => channelProviders.value.some((p) => p.models.length > 0))
+/** 已接入模型总数（引导卡文案的 {count}；spec 的「端点数」是路由页数据，接入页不可得） */
+const connectedModelCount = computed(() => channelProviders.value.reduce((sum, p) => sum + p.models.length, 0))
 
-function onScopedAdd(models: string[]): void {
-  void runScopedAction(() => addScopedModels(models))
-}
-
-function onScopedRemove(scoped: string): void {
-  void runScopedAction(() => removeScopedModel(scoped))
-}
-
-function onScopedMove({ scoped, dir }: { scoped: string; dir: 'up' | 'down' }): void {
-  void runScopedAction(() => moveScopedModel(scoped, dir))
-}
-
-// ── 渲染列表：真实 providers + 新建态合成行 ──
+// ── 渲染列表：渠道列表（kind 过滤后）+ 新建态合成行 ──
 
 const NEW_PROVIDER_SENTINEL: ProviderInfo = {
   id: NEW_ID,
@@ -504,8 +500,8 @@ const NEW_PROVIDER_SENTINEL: ProviderInfo = {
 
 const renderList = computed<ProviderInfo[]>(() => {
   return expandedId.value === NEW_ID
-    ? [...props.providers, NEW_PROVIDER_SENTINEL]
-    : props.providers
+    ? [...channelProviders.value, NEW_PROVIDER_SENTINEL]
+    : channelProviders.value
 })
 
 // ── 启用开关：乐观更新 store + config.toggleProviderEnabled 持久化（wave4 C1）──
@@ -536,7 +532,9 @@ async function confirmDelete() {
   try {
     // wave4：按 kind 调 removeProviderByKind（catalog 清凭据/custom 删条目）。
     // kind 缺失兼容 'custom'（wave2 聚合层保证 listProviders 返回的 ProviderInfo 已标 kind）。
-    await transport.removeProviderByKind(target.id, target.kind ?? 'custom')
+    // 收窄到 'catalog' | 'custom'：渠道列表已排除聚合条目（channelProviders），行侧
+    // deleteTarget.kind 实际不可能是 'aggregation'（路由条目删除走路由页编排域，不经本页）。
+    await transport.removeProviderByKind(target.id, target.kind === 'catalog' ? 'catalog' : 'custom')
     // MF-3：同步清理 oauth 内存态（runtime 已清 auth.json 凭据），防重开 QuickSetup 误默认 oauth。
     oauth.clearOAuthPresence(target.id)
     if (settingsStore.defaultModel.value.startsWith(`${target.id}/`)) {

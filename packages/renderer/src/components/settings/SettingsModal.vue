@@ -116,7 +116,7 @@
                切回扩展管理页表单态同样保留。 -->
           <template v-for="view in visitedViews" :key="view">
             <div v-show="activeView === view" class="sec-fade" :class="{ on: activeView === view }">
-              <ProviderPage v-if="view === 'provider'" :providers="providers" :is-active="activeView === 'provider'" />
+              <ProviderPage v-if="view === 'provider'" :providers="providers" :is-active="activeView === 'provider'" @open-route-page="openRoutePage" />
               <SettingsResourcePage
                 v-else-if="view === 'skill'"
                 kind="skill"
@@ -351,6 +351,19 @@ function select(id: MenuId): void {
   contentEl.value?.scrollTo({ top: 0 })
   // 离开 extension 域时还原子视图（重进默认扩展管理页）
   if (id !== 'extension') extensionView.value = 'main'
+}
+
+/** 「模型路由」设置分区键（provider-aggregation D10 两屏架构；分区条目随路由页交付在
+ *  lib/content-slots SETTINGS_SECTION_SPECS 登记——本键值须与该登记 id 一致，命名对齐
+ *  路由页组件族 ModelRoutePage / i18n settings.modelRoute 命名空间）。 */
+const MODEL_ROUTING_SECTION_KEY = 'model-route'
+
+/** ProviderPage 下一步引导卡「打开模型路由」（外部 spec §6.5）→ 切模型路由分区。
+ *  分区条目未注册（路由页交付前）时守卫 no-op：直接 select 未注册键会让内容分支落空
+ *  渲染空白页（activeView 无对应 v-if 分支），findSection 命中才切换。 */
+function openRoutePage(): void {
+  if (findSection(MODEL_ROUTING_SECTION_KEY) === undefined) return
+  select(MODEL_ROUTING_SECTION_KEY)
 }
 
 function getItemCount(id: string): number {
