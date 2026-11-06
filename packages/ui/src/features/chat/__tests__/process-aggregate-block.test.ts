@@ -162,9 +162,10 @@ function makeExploreSegment(stepCount: number, over: Partial<ProcessSegment> = {
   });
 }
 
-function mountAgg(segment: ProcessSegment, turnWorking = true): VueWrapper {
+/** mount 聚合块：turnStreaming 缺省 true（流式起步形态；等待态重挂形态显式传 false） */
+function mountAgg(segment: ProcessSegment, turnWorking = true, turnStreaming = true): VueWrapper {
   return mount(ProcessAggregateBlock, {
-    props: { segment, turnWorking, sessionId: 'sess-agg-test' },
+    props: { segment, turnWorking, turnStreaming, sessionId: 'sess-agg-test' },
     global: {
       provide: mockChatProvide(),
       stubs: { MarkdownRenderer: { props: ['content', 'variant'], template: '<div class="stub-md" />' } },
@@ -365,6 +366,11 @@ describe('process-aggregate-block RL6: entrance animation plays once across remo
     const second = mountAgg(segment, false);
     expect(second.find('[data-testid="process-aggregate"]').classes()).not.toContain('agg-enter');
     second.unmount();
+  });
+
+  it('等待态工作回合重挂（virtua 回收形态：turnWorking=true 而回合不流式——ask-user/compacting 不入钉挂集合，滚出卸载滚回重挂）→ 入场动画不在场', () => {
+    const wrapper = mountAgg(makeSegment([makeThinkingFlat('等待前思考')], { followedByText: false }), true, false);
+    expect(wrapper.find('[data-testid="process-aggregate"]').classes()).not.toContain('agg-enter');
   });
 
   it('同实例增量重渲染（memo 失效形态）→ class 恒定 + 元素引用恒定（animation 不重启）', async () => {

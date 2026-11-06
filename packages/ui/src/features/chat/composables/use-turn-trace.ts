@@ -27,6 +27,13 @@ export interface TextUnitProps {
   /** streaming 态（所属 assistant 文本仍在写）：驱动正文颜色（chat-flow-text-color D1
    *  逐消息派生，事实源 = core message_end 写入的 textFinalized）。 */
   streaming: boolean
+  /** 正文入场动效判据（chat-flow-process-aggregate D10 一次性语义）=「真实到达」信号：
+   *  回合流式 ∧ 文本未定稿。TextRow setup 期捕获一次、此后不随 prop 变化——钉挂集合只含
+   *  isStreaming 回合（useStreamingPin），流式回合不卸载、挂载即首次插入；等待态工作回合
+   *  （ask-user/compacting，不流式不入集合）滚出视口卸载、滚回重挂时判据已翻 false，
+   *  不重放。判据在本处单点求值（Turn 侧持回合级 streaming 信号），挂点形态见 TextRow
+   *  entrance prop 注释。 */
+  entrance: boolean
   /** 所属 assistant 消息终态（error 追加形态判定） */
   status?: Message['status']
   error?: string
@@ -71,8 +78,15 @@ function buildTraceUnits(blocks: FlatBlock[], segs: ProcessSegment[], folded: bo
  * @param turn 当前 MessageTurn getter（props.turn；computed 内经 getter 读，保持响应式追踪）
  * @param isWorkingTurn 工作 turn 判定 getter（Turn.vue isWorkingTurn：sessionActive ∧
  *   (isLastTurn ∨ turn.isStreaming)，[chat-flow-consistency D2] 放宽后双工作态并存）
+ * @param turnStreaming 回合级流式 getter（Turn.vue isStreaming）：正文入场判据的「真实到达」
+ *   信号（钉挂集合只含 isStreaming 回合，流式回合不卸载、挂载即首插；不流式挂载 = 重挂/
+ *   历史，无入场——D10 一次性语义，见 TextUnitProps.entrance 注释）
  */
-export function useTurnTrace(turn: () => MessageTurn, isWorkingTurn: () => boolean) {
+export function useTurnTrace(
+  turn: () => MessageTurn,
+  isWorkingTurn: () => boolean,
+  turnStreaming: () => boolean,
+) {
   /**
    * trace 拍平 + 切段（chat-flow-process-aggregate U1 契约）。
    * - flatBlocks：turn 内所有 assistant 块按真实时序拍平为一维（跨 assistant 连续 flatIndex）。
@@ -182,6 +196,8 @@ export function useTurnTrace(turn: () => MessageTurn, isWorkingTurn: () => boole
    * 气泡的 status 要到回合级 message.complete 才收尾，直接跟 status 会让长工具回合中已写完
    * 的正文一直处于 streaming 灰（chat-flow-text-color D1，事实源 = core message_end 写入的
    * textFinalized 确定性事件边沿）。
+   * entrance = 回合流式 ∧ 文本未定稿（D10 入场一次性判据的「真实到达」信号，TextRow setup
+   * 期捕获一次；判据细节见 TextUnitProps.entrance 注释）。
    */
   function textUnitProps(block: FlatBlock): TextUnitProps {
     const assistant = assistantById.value.get(block.assistantId)
@@ -189,6 +205,7 @@ export function useTurnTrace(turn: () => MessageTurn, isWorkingTurn: () => boole
     return {
       content: block.block.ref as string,
       streaming: textLive,
+      entrance: turnStreaming() && !assistant?.textFinalized,
       status: block.assistantStatus,
       error: assistant?.error,
       messageTimestamp: assistant?.timestamp,

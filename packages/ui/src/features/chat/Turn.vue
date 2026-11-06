@@ -141,9 +141,15 @@
              （D5：每段一行保留过程存在信号，正文收敛到末位一条）。
            [动效裁决 2A] trace--just-done = 轮次落完成瞬间的换块落位标记（200ms 淡入 + 4px
            落位），仅刚落完成的轮次携带（justDone ref，见 script），历史轮不误标。
-           正文块入场动效（D10，300ms 上移 5px 淡入）挂工作态正文单元 wrapper（.agg-text-enter，
-           aggregate-motion.css）——首次插入播放一次；同块内容增长经 :key 保活 + v-memo 元素
-           复用不重放；聚合块入场动效（340ms）由 ProcessAggregateBlock 自带。 -->
+           正文块入场动效（D10，300ms 上移 5px 淡入）挂 TextRow 根（.agg-text-enter，
+           aggregate-motion.css，CSS import 随挂点移入 TextRow.vue）：判据 =
+           textUnitProps.entrance（回合流式 ∧ 文本未定稿，见 use-turn-trace 注释），TextRow
+           setup 期捕获一次——钉挂集合只含 isStreaming 回合（useStreamingPin），流式回合不
+           卸载、挂载即首次插入；等待态工作回合（ask-user/compacting：sessionActive ∧
+           isLastTurn 而 isStreaming=false，不入钉挂集合）滚出视口卸载、滚回重挂时判据已翻
+           false，不重放（D10：虚拟化卸载重挂载不得重放）。同块内容增长经 :key 保活 +
+           v-memo 元素复用不重放；聚合块入场动效（340ms）由 ProcessAggregateBlock 自带
+           （entranceClass 判据含 turnStreaming，同思路）。 -->
       <!-- [remote-use-mobile-v2 §6.2] 行主体字号随 density 切档：desktop 维持 text-md（15px，
            与原静态类同位同类，渲染串逐字一致——快照用例锁）；mobile 降 --m-text-sub（13px，
            工具行密度档），正文块由 TextRow 自行升回 --m-text-body。 -->
@@ -192,10 +198,11 @@
              followedByText, turnWorking]（段对象与 counts 对象每次切段都重建，禁止引用入键；
              逐项语义见 use-turn-trace unitMemoDeps 注释）；
              正文 deps = [块 ref, assistant 状态, assistant error, timestamp, textFinalized,
-             isWorkingTurn, isActionsAnchor]。working/streaming 按 textFinalized 逐消息派生
-             （chat-flow-text-color D1，见 textUnitProps 注释）；isWorkingTurn 入 deps 使回合
-             落成瞬间正文单元同步重渲染（入场动效类随 isWorkingTurn 摘除，与 just-done 落位
-             动效同批切换）。[actions-anchor] 锚标记入 deps：流式追加使锚在正文块间移动时
+             isActionsAnchor]。working/streaming 按 textFinalized 逐消息派生
+             （chat-flow-text-color D1，见 textUnitProps 注释）；回合落成的正文重渲染由
+             assistantStatus / textFinalized 翻转承载（流式灰 → 定稿白同批切换）——正文入场
+             类已一次性化（TextRow setup 捕获，见上方动效注释），落成摘类不再需要。
+             [actions-anchor] 锚标记入 deps：流式追加使锚在正文块间移动时
              旧块摘插槽、新块挂插槽，漏了它被缓存的 vnode 不重渲染。sessionId 不入键：
              跨 session 时 renderKey 不同 → Turn 实例整体重建，不存在同实例跨 session 复用。 -->
         <div
@@ -203,7 +210,7 @@
           :key="unitKey(unit)"
           v-memo="unitMemoDeps(unit)"
           class="trace-blk"
-          :class="[unit.kind === 'text' ? 'trace-blk--text' : '', unit.kind === 'text' && isWorkingTurn ? 'agg-text-enter' : '']"
+          :class="unit.kind === 'text' ? 'trace-blk--text' : ''"
         >
           <!-- 正文行 → TextRow 直渲染（不经壳透传）：turn-actions 锚行插槽直传，锚行开关 =
                isActionsAnchor（旧壳 $slots 判空语义的等价单点） -->
@@ -222,11 +229,13 @@
             </template>
           </TextRow>
           <!-- 过程段 → 聚合块（三态容器：进行中双窗 / 完成摘要 / 展开平铺；展开态为组件
-               本地 ref——D6 不落 store 不持久化；单步详情经 open-detail 事件由抽屉接线层消费） -->
+               本地 ref——D6 不落 store 不持久化；单步详情经 open-detail 事件由抽屉接线层消费；
+               turn-streaming = 入场一次性判据的「真实到达」信号，D10） -->
           <ProcessAggregateBlock
             v-else
             :segment="unit.segment"
             :turn-working="isWorkingTurn"
+            :turn-streaming="isStreaming"
             :session-id="sessionId"
           />
         </div>
@@ -292,9 +301,6 @@ import TextRow from './TextRow.vue'
 import ProcessAggregateBlock from './ProcessAggregateBlock.vue'
 import BashOutputBlock from './BashOutputBlock.vue'
 import SystemNotice from './SystemNotice.vue'
-// 正文块入场动效形态（D10 300ms 上移 5px 淡入；keyframes 全局注入——scoped 编译器哈希改名
-// 后跨组件不可命中，U2 aggregate-motion.css 注释同因）
-import './process-aggregate/aggregate-motion.css'
 import { FOLDED_TYPE_ICON, FOLDED_TYPE_WORD_KEY, foldedStatusText } from './folded-notice'
 import { useTurnElapsed } from './composables/useTurnElapsed'
 import { formatDurationHms } from './format-utils'
@@ -491,7 +497,8 @@ const isWorkingTurn = computed(
  * trace 区渲染单元（正文块 + 聚合块两型）派生（useTurnTrace，从本组件 script 拆出——
  * script 超 vue_rules_checker 500 行绝对上限，按 split-justified 登记既定方向拆分）。
  * traceUnits / unitKey / unitMemoDeps / textUnitProps 供模板 v-for 消费；
- * lastUnitIsRunningTool 供 streaming-tail 光标显隐消费。
+ * lastUnitIsRunningTool 供 streaming-tail 光标显隐消费。turnStreaming getter 供正文入场
+ * 一次性判据（D10，见 textUnitProps / TextRow entrance 注释）。
  */
 const {
   traceUnits,
@@ -500,7 +507,7 @@ const {
   unitMemoDeps,
   textUnitProps,
   lastUnitIsRunningTool,
-} = useTurnTrace(() => props.turn, () => isWorkingTurn.value)
+} = useTurnTrace(() => props.turn, () => isWorkingTurn.value, () => isStreaming.value)
 
 const thinkCount = computed(() => countThinking(props.turn))
 const toolCount = computed(() => countToolCalls(props.turn))
@@ -554,7 +561,7 @@ watch(isWorkingTurn, (working, prev) => {
     if (justDoneTimer) clearTimeout(justDoneTimer)
     justDoneTimer = setTimeout(() => { justDone.value = false }, JUST_DONE_CLEAR_MS)
   } else if (working) {
-    // 复工作（streaming 重开）即撤销未播完的落位标记，避免与 trace--live 入场叠加
+    // 复工作（streaming 重开）即撤销未播完的落位标记
     justDone.value = false
     if (justDoneTimer) { clearTimeout(justDoneTimer); justDoneTimer = null }
   }
@@ -618,14 +625,17 @@ const showStreamingCursor = computed(() => {
 }
 
 /* ── 块动效（demo chat spec 动效裁决 2A + chat-flow-process-aggregate D10）──
-   正文块入场（D10，300ms 上移 5px 淡入）挂工作态正文单元 wrapper（.agg-text-enter 类，
-   形态在 process-aggregate/aggregate-motion.css——keyframes 全局注入，scoped 编译器哈希
-   改名后跨组件不可命中）；聚合块入场（340ms）/ 聚合窗挂载浮现（300ms）由
-   ProcessAggregateBlock 族自管。CSS animation 挂载即播天然满足「已存在块不重播」：v-memo
-   保 DOM（流式重渲染不重播）、keepMounted 保工作 turn（虚拟化不卸载）。
+   正文块入场（D10，300ms 上移 5px 淡入）挂 TextRow 根（.agg-text-enter 类，形态在
+   process-aggregate/aggregate-motion.css——keyframes 全局注入，scoped 编译器哈希改名后
+   跨组件不可命中；CSS import 随挂点移入 TextRow.vue）。判据 = textUnitProps.entrance
+   （回合流式 ∧ 文本未定稿，TextRow setup 期捕获一次）：钉挂集合只含 isStreaming 回合
+   （useStreamingPin streamingTurnIdxs）——流式回合不卸载、挂载即首插；等待态工作回合
+   （ask-user/compacting，isStreaming=false 不入集合）滚出视口卸载、滚回重挂时判据已翻
+   false，不重放。聚合块入场（340ms）/ 聚合窗挂载浮现（300ms）由 ProcessAggregateBlock
+   族自管（entranceClass 判据含 turnStreaming，同思路）。
    trace--just-done（2A）：落完成瞬间各块 200ms 淡入 + 4px 落位（出半 = 单元内图标交叉
-   切换），仅刚落完成轮次携带；该类以更高优先级覆盖正文 wrapper 的入场动画名（入场已播毕，
-   切落位 → 900ms 清除后归无动画，不构成入场重放）。
+   切换），仅刚落完成轮次携带；落位动画在本 wrapper、正文入场动画在 TextRow 根（不同元素，
+   入场已播毕停常态帧），900ms 清除后归无动画，不构成入场重放。
    --ease-out-soft 令牌待 tokens 域补登记（style.css 现缺），fallback --ease-out 就近生效。
    prefers-reduced-motion 由 style.css 全局兜底（duration 0.01ms + iteration 1
    → 瞬达终态静态）。escape hatch：animation + 状态类组合，Tailwind 无法表达。 */

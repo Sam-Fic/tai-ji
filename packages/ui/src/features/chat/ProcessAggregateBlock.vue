@@ -43,6 +43,10 @@ const props = defineProps<{
   segment: ProcessSegment
   /** 回合工作态（Turn isWorkingTurn 同源；与 followedByText 合成三态判定） */
   turnWorking: boolean
+  /** 回合级流式（Turn isStreaming 同源；入场一次性判据的「真实到达」信号——缺省 = 非流式
+   *  即不出入场动画，宁缺勿重放。仅挂载期消费，不入 v-memo deps。判定依据见
+   *  useProcessAggregateState.entranceClass 注释） */
+  turnStreaming?: boolean
   /** 所属 session（透传思考行 MarkdownRenderer） */
   sessionId?: string | null
 }>()
@@ -55,13 +59,15 @@ const emit = defineEmits<{
 const { isLive, expanded, toggleExpanded, entranceClass } = useProcessAggregateState({
   segment: computed(() => props.segment),
   turnWorking: computed(() => props.turnWorking),
+  turnStreaming: computed(() => props.turnStreaming === true),
 })
 </script>
 
 <style scoped>
 /* 聚合块入场（340ms 上移 9px 淡入，D10）：类由挂载时求值的一次性判据挂载
-   （composable entranceClass——virtua 卸载重挂载 / 键抖动全量重挂载均无该类），
-   keyframes from 帧 ≠ 元素常态，单次播放后停在常态，类恒挂不构成重放 */
+   （composable entranceClass——判据含 turnStreaming 真实到达信号，virtua 卸载重挂载
+   （含等待态工作回合）与键抖动全量重挂载均无该类，判定依据见 useProcessAggregateState
+   注释），keyframes from 帧 ≠ 元素常态，单次播放后停在常态，类恒挂不构成重放 */
 .agg-enter {
   animation: agg-enter 340ms var(--ease-out-soft, ease-out);
 }

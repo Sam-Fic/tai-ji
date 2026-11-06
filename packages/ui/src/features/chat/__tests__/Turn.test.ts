@@ -225,18 +225,32 @@ describe('chat-flow-process-aggregate D5: 折叠形态（摘要行 + 末位正�
     expect(blocks[0].find('[data-testid="agg-window"]').exists()).toBe(true)
   })
 
-  it('正文块入场动效挂点（D10）：工作态正文 wrapper 携带 agg-text-enter，历史/折叠形态不携带（重挂不重放）', () => {
-    // 工作态挂载：正文单元 wrapper 携带入场动画类（首次插入播放一次，300ms 形态在
-    // aggregate-motion.css；同块内容增长经 :key 保活元素复用，happy-dom 下不重启动画）
+  it('正文块入场动效一次性判据（D10）：工作流式正文携带 agg-text-enter（TextRow 根），等待态重挂/历史形态不携带（重挂不重放）', () => {
+    // 工作态流式挂载：TextRow 根携带入场动画类（textUnitProps.entrance = 回合流式 ∧ 文本
+    // 未定稿，TextRow setup 期捕获一次；300ms 形态在 aggregate-motion.css；同块内容增长经
+    // :key 保活元素复用，happy-dom 下不重启动画）。Turn 单元 wrapper 不再承载入场类。
     const working = mountTurn({
       turn: makeSeqTurn([{ kind: 'text', content: '流式正文' }], { assistantStatus: 'streaming' }),
       isSessionActive: true,
       isLastTurn: true,
     })
-    expect(working.find('.trace-blk--text').classes()).toContain('agg-text-enter')
+    expect(working.find('[data-testid="block-text"]').classes()).toContain('agg-text-enter')
+    expect(working.find('.trace-blk--text').classes()).not.toContain('agg-text-enter')
+    // 等待态工作回合（ask-user/compacting：sessionActive ∧ isLastTurn 而 isStreaming=false，
+    // 不入 useStreamingPin 钉挂集合）滚出视口卸载、滚回重挂形态：回合不流式 + 文本已定稿
+    // → 判据已翻 false，不重放（D10 虚拟化卸载重挂载不得重放）
+    const waiting = mountTurn({
+      turn: makeSeqTurn([{ kind: 'text', content: '等待前正文' }], {
+        assistantStatus: 'complete',
+        textFinalized: true,
+      }),
+      isSessionActive: true,
+      isLastTurn: true,
+    })
+    expect(waiting.find('[data-testid="block-text"]').classes()).not.toContain('agg-text-enter')
     // 历史回合挂载（virtua 卸载重挂载形态）：turnWorking=false 快照 → 无动画类，不重放
     const settled = mountTurn({ isSessionActive: false, isLastTurn: false })
-    expect(settled.find('.trace-blk--text').classes()).not.toContain('agg-text-enter')
+    expect(settled.find('[data-testid="block-text"]').classes()).not.toContain('agg-text-enter')
   })
 
   it('手动展开（isExpanded=true）与折叠态同形态（D5：展开的语义是显式意图，不改默认形态）', () => {

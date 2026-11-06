@@ -42,17 +42,24 @@ export const AGGREGATE_WINDOW_HEIGHT_PX = { desktop: 116, mobile: 96 } as const
  * 两者都是确定性事件信号，零时间推测。
  *
  * 入场动画一次性（D10/RL6）：entranceClass 在组件挂载时求值一次、此后恒定（非响应式），
- * CSS animation 单次播放后停在元素常态帧，类恒挂不构成重放。两条重放路径的压制：
- * - virtua 卸载重挂载：只发生在历史回合（流式回合恒挂载，设计前提 AS4）——完成态挂载时
- *   isLive=false，无动画类；
+ * CSS animation 单次播放后停在元素常态帧，类恒挂不构成重放。判据的「真实到达」信号 =
+ * turnStreaming（回合级 isStreaming）：钉挂集合只含 isStreaming 回合（useStreamingPin
+ * streamingTurnIdxs），流式回合不存在卸载重挂载，其内部挂载即新段真实到达；不流式的挂载
+ * 均为重挂/历史，无动画类——含等待态工作回合（ask-user/compacting：sessionActive ∧
+ * isLastTurn 而 isStreaming=false，不入钉挂集合）滚出视口卸载、滚回重挂的形态（D10：
+ * 虚拟化卸载重挂载不得重放——该形态正是「卸载重挂载只发生在历史回合」旧前提的漏网路径）。
+ * 重放路径的压制：
+ * - virtua 卸载重挂载：非流式挂载判据恒 false（见上）；
  * - 键抖动重挂载：流式中重挂载时段成员已增量（members>1），无动画类；单成员起步窗口内
- *   的抖动与「新段起步」在该判据下不可区分（无播放记录状态前提的语义边界），由键稳定性
- *   契约兜住（段 id 结构定位 + 50 次增量无重挂载用例，RL6/AX1）。
+ *   的抖动、与流式中断复流瞬间的重挂，在该判据下与「新段起步」不可区分（无播放记录状态
+ *   前提的语义边界），由键稳定性契约兜住（段 id 结构定位 + 50 次增量无重挂载用例，RL6/AX1）。
  * v-memo 失效重渲染（同实例）：类恒定 → DOM class 无变化 → animation 不重启。
  */
 export function useProcessAggregateState(params: {
   segment: Ref<ProcessSegment>
   turnWorking: Ref<boolean>
+  /** 回合级流式（Turn isStreaming 同源）：入场判据的「真实到达」信号，仅挂载期消费 */
+  turnStreaming: Ref<boolean>
 }) {
   const isLive = computed(
     () => params.turnWorking.value && !params.segment.value.followedByText,
@@ -74,7 +81,10 @@ export function useProcessAggregateState(params: {
     params.segment.value.members.some((m) => m.block.kind === 'tool' || m.block.kind === 'agentgraph'),
   )
   const entranceClass =
-    params.turnWorking.value && !params.segment.value.followedByText && params.segment.value.members.length === 1
+    params.turnWorking.value &&
+    params.turnStreaming.value &&
+    !params.segment.value.followedByText &&
+    params.segment.value.members.length === 1
       ? 'agg-enter'
       : ''
   return { isLive, expanded, toggleExpanded, hasThinkingWindow, hasAggregateWindow, entranceClass }

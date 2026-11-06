@@ -1,14 +1,15 @@
 /*
  * 聚合块动效共享形态（chat-flow-process-aggregate U2 提供，D10）：正文块入场动画。
  *
- * 挂载点在 u-wiring 单元（Turn.vue 正文单元 wrapper——trace 区正文行首次出现时播放一次，
- * 与 TextRow 流式追加渲染的边界：同块内容增长不是入场、不重放），本文件只提供动画形态
- * （keyframes + 类）。放独立全局 CSS 而非组件 scoped 的原因：消费点（Turn.vue）在本组件
- * 族之外，scoped keyframes 经编译器哈希改名后跨组件不可命中（RunningBlockIcon 先例——
- * keyframes 与消费同块才自洽）。
+ * 挂载点在 TextRow 根（消费判据经 Turn.vue textUnitProps.entrance 传入——「真实到达」=
+ * 回合流式 ∧ 文本未定稿，TextRow setup 期一次性捕获；trace 区正文行首次出现时播放一次，
+ * 与 TextRow 流式追加渲染的边界：同块内容增长不是入场、不重放，等待态工作回合 virtua
+ * 卸载重挂载时判据已翻 false 亦不重放），本文件只提供动画形态（keyframes + 类）。
+ * 放独立全局 CSS 而非组件 scoped 的原因：keyframes 经编译器哈希改名后跨组件不可命中
+ * （RunningBlockIcon 先例——keyframes 与消费同块才自洽）。
  *
- * 消费方式（u-wiring）：`import './process-aggregate/aggregate-motion.css'`（vite 全局
- * 注入）后给正文 wrapper 挂 .agg-text-enter 类。
+ * 消费方式：TextRow.vue `import './process-aggregate/aggregate-motion.css'`（vite 全局
+ * 注入）后 setup 期判据为真时给根元素挂 .agg-text-enter 类。
  *
  * reduced-motion：style.css 全局兜底（0.01ms 瞬切 + iteration 1）+ 本文件显式关停双层。
  */
