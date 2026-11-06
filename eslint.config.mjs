@@ -98,22 +98,23 @@ export default [
       'max-lines': 'off',
     },
   },
-  // chat 展示两件（Turn 轮次聚合 / MarkdownRenderer 分通道净化渲染）：
-  // 职责内聚（轮次聚合、markdown 渲染管线各自唯一实现），行数超 500，
-  // 拆分属独立重构任务（文件头注释已登记）。短期 max-lines override 避免阻塞，长期应拆分。
-  // （原第三件 Block.vue 块渲染壳已随聚合块改造退役，2026-11-06 chat-flow-process-aggregate u-wiring）
+  // chat 展示一件（MarkdownRenderer 分通道净化渲染）：职责内聚（markdown 渲染管线唯一实现），
+  // 有效行超 500（2026-11-06 探针 520），拆分属独立重构任务。短期 max-lines override 避免阻塞，
+  // 长期应拆分。
+  // [chat-flow-process-aggregate u-wiring 2026-11-06] 原三件中 Block.vue 块渲染壳已随聚合块改造
+  // 退役；Turn.vue 重构后有效行回落 500 内（探针实测 498，split-justified 文件头注释已裁决
+  // 不再规划拆分任务），override 条目随之移除（对齐 subagent-service.ts「warning 消解即移除而非
+  // 抬阈值」先例）。探针复算：npx eslint packages/ui/src/features/chat/Turn.vue --rule
+  // 'max-lines: ["warn", { "max": 500, "skipBlankLines": true, "skipComments": true }]' → 零告警。
   {
-    files: [
-      'packages/ui/src/features/chat/Turn.vue',
-      'packages/ui/src/features/chat/MarkdownRenderer.vue',
-    ],
+    files: ['packages/ui/src/features/chat/MarkdownRenderer.vue'],
     rules: {
       'max-lines': 'off',
     },
   },
   // sidebar 主组件（sessions tab 三支互斥链 / 项目分组 / 视图切换动效 / 恢复期状态行
   // 预留挂点的宿主壳，D11 R4 裁决的挂载层级看守对象）：职责内聚但非注释行 503 超 500，
-  // 拆分属独立重构任务（随 chat 三件先例）。短期 max-lines override 避免阻塞，长期应拆分；
+  // 拆分属独立重构任务（随 chat 展示 override 先例）。短期 max-lines override 避免阻塞，长期应拆分；
   // 首次纳入门禁视野 = design-code-sync R1 G4（2026-10-31）触及该文件时暴露存量超限。
   {
     files: ['packages/renderer/src/components/sidebar/Sidebar.vue'],
