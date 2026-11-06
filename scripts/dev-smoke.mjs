@@ -68,6 +68,29 @@ const DEFAULT_IGNORE_PATTERNS = [
 // 轮询间隔
 const POLL_INTERVAL_MS = 500
 
+// 页面阶段有界化（Gate A attempt2 分诊：无界 await 遇 chromium 间歇死亡 → 挂死到被
+// harness 外杀记 exit -1，连续两轮 ≈28 分钟）——挂死收敛为有界失败（exit 3/1 带诊断）。
+// 测试门禁脚本的错误有界化；ready 轮询保持无界（时间机制删除裁决：vite 起不来的显式
+// 失败路径 = child 退出探测，与时间无关）
+const LAUNCH_TIMEOUT_MS = 90000
+const PAGE_TIMEOUT_MS = 60000
+
+/**
+ * await 加界：promise 未在 ms 内落定 → 抛出（调用方按各自失败路径处置）。
+ * 原始 promise 不取消（playwright 资源经 finally 的 browser.close/killProcess 释放）。
+ */
+async function withTimeout(promise, ms, label) {
+  let timer
+  const bound = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} 未在 ${ms}ms 内完成（页面阶段有界化）`)), ms)
+  })
+  try {
+    return await Promise.race([promise, bound])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // SmokeOptions / SmokeResult（JSDoc 形式，.mjs 无 TS；契约见 parent slice DM1/DM2）
 // ---------------------------------------------------------------------------
@@ -223,12 +246,29 @@ export async function runSmoke(options = {}) {
   let browser = null
 
   try {
-    // ---- (0) chromium 先于 vite spawn 启动（失败 exit 3，缺浏览器早失败）——
-    //      2026-11-07 修：实测 vite 链在进程内跑起来后再 launch 会无限挂（chrome 进程
-    //      从不出现、独立探针 launch 100ms 正常），先 launch 后 spawn vite 规避；本环
-    //      境 vite 冷启动为分钟级，早启动也让 launch 排在长等待之外
+    // ---- (1) spawn dev server（VITE_MOCK 经子进程 env 注入）----
+    child = spawnDevServer(devCmd, sinks)
+
+    // ---- (2) 轮询 dev server ready（ECONNREFUSED 继续轮询；child 退出立即判失败，
+    //      避免连到 1420 上可能已存在的别的 dev 实例导致假结果）----
+    //      2026-11-07 修：vite listen('localhost') 在 node verbatim DNS 下可能只绑
+    //      IPv6 环回（::1），对 127.0.0.1/localhost 的连接被拒 → 轮询永不 ready 且
+    //      child 活着 → 无限挂（undici 对 localhost 的 DNS 结果按序缓存钉在 127.0.0.1）。
+    //      轮询改为双环回族各试一次，判定可达 family 后用同一显式地址供 chromium goto。
+    const ready = await resolveReachableUrl(url, child)
+    if (!ready.ok) {
+      return makeChildExitedResult({ child, sinks, consoleErrors, pageErrors, missingMounts })
+    }
+    const readyMs = ready.ms
+    const gotoUrl = ready.reachableUrl
+
+    // ---- (3) chromium 启动（ready 后——chrome 生存窗口最短化。失败 exit 3）----
+    //      2026-11-07 二修（Gate A attempt2 分诊）：chromium 对 vite 冷启动期间先行启动
+    //      会在分钟级空窗内被环境杀死，后续 newPage 对死连接的 await 无界挂死（连续两轮
+    //      ≈28 分钟形态）。launch/newPage/goto 全链有界化：挂死收敛为有界失败（exit 3/1
+    //      带诊断），不再依赖 harness 外杀。测试门禁脚本的错误有界化，非产品时间机制。
     try {
-      browser = await chromium.launch()
+      browser = await withTimeout(chromium.launch(), LAUNCH_TIMEOUT_MS, 'chromium launch')
       process.stderr.write('[dev-smoke] chromium 已启动\n')
     } catch (e) {
       return makeResult({
@@ -237,34 +277,44 @@ export async function runSmoke(options = {}) {
         consoleErrors,
         pageErrors,
         missingMounts,
+        readyMs,
         detail: `CHROMIUM_LAUNCH_FAILED: ${e.message}\n提示: npx playwright install chromium`,
       })
     }
 
-    // ---- (1) spawn dev server（VITE_MOCK 经子进程 env 注入）----
-    child = spawnDevServer(devCmd, sinks)
-
-    // ---- (2) 轮询 dev server ready（ECONNREFUSED 继续轮询；child 退出立即判失败，
-    //      避免连到 1420 上可能已存在的别的 dev 实例导致假结果；无超时上限——时间机制
-    //      删除裁决，vite 起不来时经输出/子进程退出路径显式失败）----
-    //      2026-11-07 修：vite listen('localhost') 在 node verbatim DNS 下可能只绑
-    //      IPv6 环回（::1），对 127.0.0.1/localhost 的连接被拒 → 轮询永不 ready 且
-    //      child 活着 → 无限挂（Gate A 实证 28 分钟挂死）。轮询改为双环回族各试一次，
-    //      判定可达 family 后用同一显式地址供 chromium goto（goto 同样受 DNS 序影响）。
-    const ready = await resolveReachableUrl(url, child)
-    if (!ready.ok) {
-      return makeChildExitedResult({ child, sinks, consoleErrors, pageErrors, missingMounts })
-    }
-    const readyMs = ready.ms
-    const gotoUrl = ready.reachableUrl
-
-    // ---- (3) chromium 已在 (0) 步启动（早失败语义保留：launch 失败 exit 3）----
-
     // ---- (4) 注册 page 监听 + goto ----
-    const page = await browser.newPage()
+    process.stderr.write('[dev-smoke] newPage …\n')
+    let page
+    try {
+      page = await withTimeout(browser.newPage(), PAGE_TIMEOUT_MS, 'browser.newPage')
+    } catch (e) {
+      return makeResult({
+        exitCode: 3,
+        stderrErrors,
+        consoleErrors,
+        pageErrors,
+        missingMounts,
+        readyMs,
+        detail: `NEW_PAGE_FAILED: ${e.message}`,
+      })
+    }
+    process.stderr.write('[dev-smoke] newPage 完成\n')
     attachPageErrorListeners(page, { consoleErrors, pageErrors, ignorePatterns })
 
-    await page.goto(gotoUrl, { waitUntil: 'domcontentloaded' })
+    try {
+      await page.goto(gotoUrl, { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT_MS })
+    } catch (e) {
+      return makeResult({
+        exitCode: 1,
+        stderrErrors,
+        consoleErrors,
+        pageErrors,
+        missingMounts,
+        readyMs,
+        detail: `PAGE_GOTO_FAILED: ${e.message}`,
+      })
+    }
+    process.stderr.write('[dev-smoke] goto 完成\n')
 
     // ---- (5) 断言挂载点可见（挂载断言限时 = 测试框架语义）----
     await assertMountsVisible(page, mountSelectors, 5000, missingMounts)
