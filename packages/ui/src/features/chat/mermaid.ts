@@ -24,7 +24,12 @@ type Mermaid = typeof MermaidInstance
 
 /** mermaid 单例（动态 import 后缓存，全应用共享） */
 let mermaidPromise: Promise<Mermaid> | null = null
-/** 构建期等宽栈：测试环境无法展开 CSS var() 时作为 mermaid 的回落值。 */
+/**
+ * 构建期等宽栈：测试环境无法展开 CSS var() 时作为 mermaid 的回落值。
+ * 与 style.css `:root` 的 `--font-mono` 缺省栈同源（即 `var(--font-mono-ui, …)` 槽位
+ * 回落后的等效展开）——改任一侧栈须同批同步两处，否则 font-mono 出现双权威，
+ * 构建期回落值偏离运行时取值。
+ */
 const BUILD_TIME_FONT_FAMILY = "'JetBrains Mono', 'IBM Plex Mono', ui-monospace, Menlo, monospace"
 /** 已 initialize 的「主题 + 字体」联合标记——任一变化都需重新 initialize。 */
 let initializedKey: string | null = null
