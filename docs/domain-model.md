@@ -1,6 +1,6 @@
 # taiji 领域模型登记
 
-> **本文件定位**：领域聚合、不变量与状态机的登记处（统一语言词条在 [CONTEXT.md](CONTEXT.md)）。当前登记域：**画布（problem-solve canvas，聚合与不变量，2026-10）**；**状态机基建与六域状态机（run / 画布节点 / plan / goal / permanent-session + 归档单元 + session occupancy turn，2026-10，见下「状态机基建」节）**；**会话健康分层（停滞判定三层信号源与判定权归属，2026-11，见下「会话健康分层」节）**；**session 存储归档域（归档单元聚合 + 不变量 + 转移表，2026-10，见下「session 存储归档域」节）**；**subagent 会话轮债权域（record 会话 / 轮 / 债权聚合不变量，2026-10，见下「subagent 会话轮债权域」节）**。
+> **本文件定位**：领域聚合、不变量与状态机的登记处（统一语言词条在 [CONTEXT.md](CONTEXT.md)）。当前登记域：**画布（problem-solve canvas，聚合与不变量，2026-10）**；**状态机基建与六域状态机（run / 画布节点 / plan / goal / permanent-session + 归档单元 + session occupancy turn，2026-10，见下「状态机基建」节）**；**会话健康分层（停滞判定三层信号源与判定权归属，2026-11，见下「会话健康分层」节）**；**session 存储归档域（归档单元聚合 + 不变量 + 转移表，2026-10，见下「session 存储归档域」节）**；**subagent 会话轮债权域（record 会话 / 轮 / 债权聚合不变量，2026-10，见下「subagent 会话轮债权域」节）**；**模型路由域（模型路由 / 端点 / 路由规则概念与不变量 AX1-AX5，2026-11，见下「模型路由域」节）**。
 >
 ## 状态机基建（@zhushanwen/state-machine）
 
@@ -170,3 +170,18 @@ subagent 体系的领域模型在「会话 + 轮 + 债权」框架下组织（pe
 - **有效 viewId 映射** = 声明 `view` 字段 ?? `id`（`v.view ?? v.id`）——runtime 命中匹配与渲染端声明投影同源（id/view 分离形态是过命名空间校验与保留原始 viewId 的唯一正确声明形态）
 - **全局域 mountId 分支维持现状**：挂载点名由宿主注册上报、插件可 listMountPoints 查询，本身是显式契约，不受会话域资格制约束
 - 扩展通道（setWidget）无清单声明，写入点统一盖印 `composer.tray`（API 即声明）；静态信息（标题/图标）取声明、动态信息（角标/状态/进度）取 views.update 载荷可选 meta，托盘按钮渲染单一兜底链 = 声明 title ?? meta.title ?? viewId
+
+## 模型路由域（provider-aggregation，2026-11）
+> 机制纪律：领域规则的实现单点分两侧——配置权威读写单点在 runtime（providers.json 顶层 routes 键，`packages/runtime/src/services/provider-extras-store.ts`，写侧唯一写点、复用既有文件锁与原子写）；条件求值纯函数单点在 pi 路由扩展（`extensions/universal/provider-aggregation/src/router.ts`，route 回调在 pi 会话进程）。runtime 目录注入器与 pi 侧注册器都是路由配置的派生视图，任一侧不得自行发明、修改或缓存路由条目语义。决策登记 [ADR-0192](adr/decisions.md)～[ADR-0195](adr/decisions.md)。
+
+概念：**模型路由**（aggregation model）= 把若干已配置 provider 的指定模型登记为一个路由条目，作为一个普通模型出现在模型选择器与会话绑定链中；**端点**（member）= 路由条目内引用的一个 provider+模型渠道（可带条件）；**路由规则** = 端点有序条件求值——simple 模式依次兜底（恒取第一个端点，不判条件）、advanced 模式逐端点求值取第一个条件全满足者；mode 由数据推导（存在非 none 条件端点即 advanced）、切换不丢条件（simple 下条件不参与求值但保留显示）。条件求值是纯函数：同输入（路由配置 + 额度快照 + 墙钟 + 重试信号）必同输出；时间窗区间起点对齐半小时边界、本地时区语义；specialDates 覆盖周表（exclude 全天除外 / include 仅指定区间判窗内）。
+
+不变量（AX1-AX5，全部可核对，违反即缺陷）：
+
+1. **权威分层**：模型可选性与顺序的权威 = providers.json 顶层 scopedModels 字段（现状字段与语义不动）；端点与条件的权威 = 同文件 routes 域；模型路由页 = runtime 对两者 join 计算的视图（非权威、非持久化），页面编辑分别落回各自权威；pi 进程目录注册与 runtime 目录注入都是路由配置的派生视图，任何一侧不得自行发明、修改或缓存路由条目语义
+2. **一次请求恰好发往一个物理模型**：路由选择每请求现算，路由条目本身永不出现在出站请求上（pi 虚拟模型语义：虚拟条目到不了 provider）
+3. **不新增持久化事实源**：求值输入只有路由配置（磁盘权威）与额度缓存（QuotaService 权威的落盘形态）；route 调用传入的 reason/failed 是调用参数，不构成持久 state 消费；路由决策不建存储
+4. **聚合层零凭据零协议复制**：端点出站走其 provider 的既有通道（models.json/auth.json 凭据 + 既有协议实现），路由条目自身零凭据零 baseUrl
+5. **错误呈现分层**：路由层（无候选端点）显式失败并逐端点列明求值输入可知的落选原因（时间窗外 / 额度低于阈值），不做静默猜测；端点供给侧失败（凭据失效、provider 已删、额度硬耗尽）不在求值输入内，由出站层 pi 错误透传并经 runtime 结构化呈现（映射恢复指引）
+
+配置域补充语义：routes 段 schema 字段只加不改（演进契约：M1 schema 预留额度条件字段、M2 只接线不迁移、M3 零迁移）；路由 id 是 set_model、会话还原、目录注入三处的对齐键（保存校验唯一性与字符集）；读取侧产出两类标记——端点悬空标记（引用的 provider 已删 / 模型已移除：允许保留配置 + 提示，不丢用户数据）与 scopedModels 路由引用失效标记（解析不到 routes 定义的聚合 provider 复合串：读取侧标记不自动清理，删除路由时由保存编排精确移除该复合串）；配置损坏沿用 extras store 既有隔离语义（隔离坏文件 + 按空聚合继续 + 显式呈报坏文件路径），不发明「保持上一有效配置」语义。
