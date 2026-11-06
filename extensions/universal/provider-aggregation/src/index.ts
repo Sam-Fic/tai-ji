@@ -26,8 +26,10 @@
  * - 配置损坏/不可读：保持上一有效注册继续路由（warn 呈报；磁盘隔离与「路由配置已隔离」
  *   呈报是 runtime extras store 的既有语义，扩展侧不重复实现）。
  *
- * 额度数据（D3/SC5）：M1 阶段额度快照恒未知（fail-open，矩阵行 6/12）；quota-cache.json
- * 的 mtime 读取与新鲜度判定接线归 M2 波次（evaluateAndRoute 内注入点标注）。
+ * 额度数据（D3/SC5，M2 接线）：route 求值时经 QuotaCacheReader 读 quota-cache.json
+ * （mtime 门 + 共享新鲜度纯函数过滤，quota-cache-reader.ts），新鲜条目投影为
+ * providerId → 快照 map 喂入求值纯函数；读失败/缺失/全过期 = 空快照（额度未知 →
+ * fail-open，矩阵行 6/12）。读取只挂 route 求值时点，无定时器（ADR-0190）。
  *
  * 零配置环境（V8/④）：无 routes 域 = 空集 = 零注册零路由闭包，无任何轮询与空闲成本。
  *
@@ -45,6 +47,7 @@ import type { ExtensionAPI, ExtensionContext, ExtensionVirtualModel, ModelRoute,
 import { getLogger, setPiHandle } from "@zhushanwen/pi-extension-logger";
 import { AGGREGATION_PROVIDER_ID, type AggregationRoute } from "@taiji/shared/aggregation";
 import { RoutesConfigReader, type ConsumedRoutesSectionRead } from "./config-store.ts";
+import { QuotaCacheReader } from "./quota-cache-reader.ts";
 import {
 	endpointThinkingLevels,
 	evaluateRoute,
@@ -54,7 +57,6 @@ import {
 	type EvaluateRouteInput,
 	type MemberBlockReason,
 	type RouteEvaluation,
-	type RouteQuotaSnapshot,
 } from "./router.ts";
 
 const logger = getLogger("provider-aggregation");
@@ -133,6 +135,7 @@ function registerRouteDefinition(
 	pi: ExtensionAPI,
 	state: AggregationState,
 	reader: RoutesConfigReader,
+	quotaReader: QuotaCacheReader,
 	route: AggregationRoute,
 	resolveContextWindow: ((route: AggregationRoute) => number | undefined) | undefined,
 ): void {
@@ -140,7 +143,7 @@ function registerRouteDefinition(
 		provider: AGGREGATION_PROVIDER_ID,
 		id: route.id,
 		name: route.name,
-		route: (request, ctx) => evaluateAndRoute(pi, state, reader, route.id, request, ctx),
+		route: (request, ctx) => evaluateAndRoute(pi, state, reader, quotaReader, route.id, request, ctx),
 	}
 	const levels = unionThinkingLevels(route.members)
 	if (levels.length > 0) definition.thinkingLevels = levels
@@ -188,6 +191,7 @@ function applyReadResult(
 	pi: ExtensionAPI,
 	state: AggregationState,
 	reader: RoutesConfigReader,
+	quotaReader: QuotaCacheReader,
 	read: ConsumedRoutesSectionRead,
 	resolveContextWindow: ((route: AggregationRoute) => number | undefined) | undefined,
 ): void {
@@ -200,7 +204,7 @@ function applyReadResult(
 		return
 	}
 	for (const route of read.file.routes) {
-		registerRouteDefinition(pi, state, reader, route, resolveContextWindow)
+		registerRouteDefinition(pi, state, reader, quotaReader, route, resolveContextWindow)
 	}
 	markVanishedIds(state, new Set(read.file.routes.map(r => r.id)))
 }
@@ -211,7 +215,7 @@ function applyReadResult(
  * 与 applyReadResult 的差异点：新增 id（文件有、本进程未注册）不注册——运行中会话的
  * 新建路由不热注册（D1 ③ 边界），留给下次会话加载（工厂期 / session_start 对账）。
  */
-function reconcileRegisteredOnly(pi: ExtensionAPI, state: AggregationState, reader: RoutesConfigReader, ctx: ExtensionContext): void {
+function reconcileRegisteredOnly(pi: ExtensionAPI, state: AggregationState, reader: RoutesConfigReader, quotaReader: QuotaCacheReader, ctx: ExtensionContext): void {
 	const { changed, read } = reader.readIfChanged()
 	if (!changed) return
 	if (read.status === "corrupt" || read.status === "unreadable") {
@@ -224,7 +228,7 @@ function reconcileRegisteredOnly(pi: ExtensionAPI, state: AggregationState, read
 	}
 	for (const route of read.file.routes) {
 		if (!state.registeredIds.has(route.id)) continue // 新增 id：不热注册（D1 ③）
-		registerRouteDefinition(pi, state, reader, route, candidate => resolveContextWindowFromRegistry(ctx, candidate))
+		registerRouteDefinition(pi, state, reader, quotaReader, route, candidate => resolveContextWindowFromRegistry(ctx, candidate))
 	}
 	markVanishedIds(state, new Set(read.file.routes.map(r => r.id)))
 }
@@ -242,11 +246,12 @@ function evaluateAndRoute(
 	pi: ExtensionAPI,
 	state: AggregationState,
 	reader: RoutesConfigReader,
+	quotaReader: QuotaCacheReader,
 	routeId: string,
 	request: ModelRouteRequest,
 	ctx: ExtensionContext,
 ): ModelRoute {
-	reconcileRegisteredOnly(pi, state, reader, ctx)
+	reconcileRegisteredOnly(pi, state, reader, quotaReader, ctx)
 
 	if (state.deletedIds.has(routeId)) {
 		throw new Error(`模型路由 "${routeId}" 已删除，请在设置页重新创建或更换模型。`)
@@ -260,18 +265,20 @@ function evaluateAndRoute(
 		throw new Error(`模型路由 "${routeId}" 没有有效的路由定义（扩展内部状态缺失），请重开会话恢复。`)
 	}
 
+	const now = new Date()
 	// D6 重试排除输入：failed 是「自动重试时上一失败请求」的物理模型（pi 契约 UD2）。
 	const retryExclude = request.reason === "retry" && request.failed !== undefined
 		? { providerId: request.failed.model.provider, modelId: request.failed.model.id }
 		: undefined
 
-	// M2 接线点（D3/SC5）：此处读取 quota-cache.json（mtime 门 + 新鲜度判定）构造
-	// providerId → 快照映射；M1 恒 undefined（额度数据未知 → 纯函数 fail-open）。
-	const quotaByProviderId: ReadonlyMap<string, RouteQuotaSnapshot> | undefined = undefined
+	// M2 接线（D3/SC5）：mtime 门读取 quota-cache.json，共享新鲜度纯函数过滤后的
+	// providerId → 快照 map；读失败/缺失/全过期 = 空快照（额度未知 → 纯函数 fail-open，
+	// 矩阵行 6/12）。与求值墙钟同一时点（AX3：同输入必同输出）。
+	const quotaByProviderId = quotaReader.readFreshSnapshots(now.getTime())
 
 	const input: EvaluateRouteInput = {
 		route,
-		now: new Date(),
+		now,
 		quotaByProviderId,
 		retryExclude,
 	}
@@ -300,20 +307,22 @@ function evaluateAndRoute(
 /**
  * 扩展工厂（pi 加载期同步执行）。
  *
- * options.configPath 仅供测试注入 tmp 配置路径（pi 加载器只传第一个参数）——生产路径
- * 由 RoutesConfigReader 缺省推导（getProviderExtrasPath）。
+ * options.configPath / options.quotaCachePath 仅供测试注入 tmp 路径（pi 加载器只传第一
+ * 个参数）——生产路径由 RoutesConfigReader / QuotaCacheReader 缺省推导（getProviderExtrasPath /
+ * getQuotaCachePath）。
  */
-export default function providerAggregation(pi: ExtensionAPI, options?: { configPath?: string }): void {
+export default function providerAggregation(pi: ExtensionAPI, options?: { configPath?: string, quotaCachePath?: string }): void {
 	setPiHandle(pi)
 
 	const state = createState()
 	const reader = new RoutesConfigReader(options?.configPath)
+	const quotaReader = new QuotaCacheReader(options?.quotaCachePath)
 
 	// ① 工厂期全量注册（同步工厂体内——pending flush 先于 --model 解析，AS12）。
 	//    此时无 modelRegistry 可解析（会话未装配），contextWindow 不声明（session_start
 	//    对账补齐）；thinkingLevels 并集来自配置声明，无需目录。
 	const factoryRead = reader.readIfChanged()
-	if (factoryRead.changed) applyReadResult(pi, state, reader, factoryRead.read, undefined)
+	if (factoryRead.changed) applyReadResult(pi, state, reader, quotaReader, factoryRead.read, undefined)
 
 	// ② session_start 对账（D1 ②）：readLatest 全量重读（无视 mtime 门——求值前重读会
 	//    消费文件内容但只处理已注册 id，新增 id 被有意忽略；门控对账会让被消费的新增 id
@@ -322,7 +331,7 @@ export default function providerAggregation(pi: ExtensionAPI, options?: { config
 	//    失败不阻断会话启动（下次 session_start 重试）。
 	pi.on("session_start", async (_event, sessionCtx) => {
 		try {
-			applyReadResult(pi, state, reader, reader.readLatest(), candidate => resolveContextWindowFromRegistry(sessionCtx, candidate))
+			applyReadResult(pi, state, reader, quotaReader, reader.readLatest(), candidate => resolveContextWindowFromRegistry(sessionCtx, candidate))
 		} catch (err) {
 			logger.error(`session-start aggregation reconcile failed: ${err instanceof Error ? err.message : String(err)}`)
 		}

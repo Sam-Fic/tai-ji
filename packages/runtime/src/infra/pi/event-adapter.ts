@@ -372,6 +372,11 @@ function emptyMessagesDegradedTurnEnd(sid: string, willRetry: boolean): PiTransl
 /**
  * 从 lastMsg 提取 stopReason / usage / responseModel / diagnostics / errorMessage。
  * errorMessage 仅在 error / tool_use 两种 stopReason 下透出（pi 契约，其余为 undefined）。
+ * errorMessage 出站前经 formatCredentialMissingPresentation 结构化映射（U3/AX5）：凭据
+ * 缺失文本（No API key 词表 + 虚拟模型路由 routed to 形态）替换为含端点名与恢复指引的
+ * 呈现，非命中原样透传。流前 throw（pi resolveModel 凭据拦截）不经 message_update 子
+ * 事件——该形态的用户呈现通路就是本出口的 message.complete errorMessage（下方
+ * stream_error 出口覆盖不到），映射必须挂在本出口才到达对话流错误呈现。
  */
 function extractAgentEndFields(
   lastMsg: PiAgentEndEvent['messages'][number],
@@ -385,12 +390,17 @@ function extractAgentEndFields(
 } {
   const rawReason = lastMsg.stopReason ?? 'stop'
   const usage = lastMsg.usage
+  const rawErrorMessage = (rawReason === 'error' || rawReason === 'tool_use') ? extras.errorMessage : undefined
+  const errorMessage =
+    rawErrorMessage === undefined
+      ? undefined
+      : formatCredentialMissingPresentation(rawErrorMessage) ?? rawErrorMessage
   return {
     rawReason,
     usage,
     responseModel: extras.responseModel,
     diagnostics: extras.diagnostics,
-    errorMessage: (rawReason === 'error' || rawReason === 'tool_use') ? extras.errorMessage : undefined,
+    errorMessage,
   }
 }
 

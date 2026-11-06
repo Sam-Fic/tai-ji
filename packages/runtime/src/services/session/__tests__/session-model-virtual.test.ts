@@ -202,4 +202,19 @@ describe('formatCredentialMissingPresentation（AX5 出站映射，凭据缺失�
     expect(formatCredentialMissingPresentation('fetch failed')).toBeUndefined()
     expect(formatCredentialMissingPresentation('')).toBeUndefined()
   })
+
+  it('第二形态（虚拟模型路由 resolveModel 凭据拦截）命中：端点复合串提取 + 同构指引', () => {
+    // pi model-runtime.js:749 真机逐字形态（agg-error-presentation 剧本捕获）
+    const raw = 'Virtual model aggregation/agg-err-route routed to mockllm/ep-cred-a, which has no credentials.'
+    const mapped = formatCredentialMissingPresentation(raw)
+    expect(mapped).toContain('mockllm/ep-cred-a')
+    expect(mapped).toContain('设置页')
+    expect(mapped).toContain('API Key')
+    // 与形态一同构：同一公共尾段（失败原因 + 恢复指引）
+    expect(mapped).toBe(formatCredentialMissingPresentation('No API key for mockllm/ep-cred-a'))
+  })
+
+  it('第二形态不命中透传：无 which has no credentials 尾锚的 routed to 文本不误映射', () => {
+    expect(formatCredentialMissingPresentation('request routed to upstream provider')).toBeUndefined()
+  })
 })

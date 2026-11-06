@@ -260,11 +260,16 @@ export interface ModelInfo {
 }
 
 /**
- * pi 凭据缺失错误文本前缀（U3/AX5 出站错误结构化映射的判定词表）。
- * pi 实装三变体（node_modules 实装版 1.0.0 亲读，共同前缀 `No API key`）：
- * - setModel checkAuth：`No API key for ${provider}/${id}`（agent-session.js:1912）
- * - pi-ai 出站请求构造：`No API key for provider: ${provider}` 与
- *   `No API key provided for provider "${provider}"`（pi-ai dist api/*.js）
+ * pi 凭据缺失错误文本词表（U3/AX5 出站错误结构化映射的判定依据）。pi 实装两形态
+ * （node_modules 实装版 1.0.0 亲读）：
+ * - 形态一「No API key」前缀三变体：setModel checkAuth `No API key for ${provider}/${id}`
+ *   （agent-session.js:1912）；pi-ai 出站请求构造 `No API key for provider: ${provider}` 与
+ *   `No API key provided for provider "${provider}"`（pi-ai dist api/*.js）——共同前缀
+ *   PI_CREDENTIAL_MISSING_PREFIX。
+ * - 形态二「虚拟模型路由 resolveModel 凭据拦截」（model-runtime.js:744-751，agg-error-presentation
+ *   剧本真机逐字捕获）：`Virtual model <聚合p>/<路由id> routed to <端点p>/<端点id>,
+ *   which has no credentials.`——前缀非 No API key，按 PI_VIRTUAL_ROUTE_NO_CREDENTIALS_PATTERN
+ *   整体形态判定，端点标识取 routed to 与 which has no credentials 之间的复合串。
  * pi 版本升级后文本变更即映射失守，与 PI_MODEL_NOT_FOUND_PREFIX 同受 C-proc-08 探针族管辖。
  *
  * 驻留 @taiji/shared（C-comm-01 分层修复）：纯常量 + 纯字符串处理，凭据文案与 provider
@@ -273,25 +278,37 @@ export interface ModelInfo {
  */
 export const PI_CREDENTIAL_MISSING_PREFIX = 'No API key'
 
+/** 形态二判定：routed to 与 which has no credentials 尾锚之间的复合串为端点标识（捕获组）。 */
+export const PI_VIRTUAL_ROUTE_NO_CREDENTIALS_PATTERN = /routed to (.+), which has no credentials\.?$/
+
 /**
  * 出站错误结构化映射（U3/AX5 runtime 半边）：pi 凭据缺失文本 → 含端点名与恢复指引的
  * 呈现文案。命中返回结构化文案；非命中返回 undefined（调用方原样透传）。
  *
  * 范围裁断（设计检查点范围澄清，2026-11-06 D9）：映射仅覆盖真实会发生的错误形态——
- * 凭据缺失（No API key 词表）结构化映射；厂商失败错误（HTTP 401/429/5xx 文本）无统一
- * 形态，不建映射词表（防永不触发的死分支），原文经既有 stream_error 通道透传呈现，
- * 恢复指引随 A23/V4 真机验收观察真实文本后补。resume-发消息路径不存在本类错误
- * （扩展禁用/删除后重开会话按 UD9 回落物理模型正常出话），不为它准备分支。
+ * 凭据缺失（No API key 词表 + 虚拟路由 routed to 形态）结构化映射；厂商失败错误
+ * （HTTP 401/429/5xx 文本）无统一形态，不建映射词表（防永不触发的死分支），原文经
+ * 既有 stream_error 通道透传呈现。resume-发消息路径不存在本类错误（扩展禁用/删除后
+ * 重开会话按 UD9 回落物理模型正常出话），不为它准备分支。
  */
 export function formatCredentialMissingPresentation(raw: string): string | undefined {
-  if (!raw.startsWith(PI_CREDENTIAL_MISSING_PREFIX)) return undefined
-  // 端点标识提取：变体形态依次尝试——`No API key for <p>/<m>`、`No API key for provider: <p>`、
+  // 形态二：虚拟模型路由 resolveModel 凭据拦截（不以 No API key 开头，先行判定）。
+  if (!raw.startsWith(PI_CREDENTIAL_MISSING_PREFIX)) {
+    const routed = PI_VIRTUAL_ROUTE_NO_CREDENTIALS_PATTERN.exec(raw)
+    return routed === null ? undefined : credentialMissingPresentation(routed[1] ?? raw)
+  }
+  // 形态一端点标识提取：变体形态依次尝试——`No API key for <p>/<m>`、`No API key for provider: <p>`、
   // `No API key provided for provider "<p>"`；全不匹配时退化为原文尾部（端点名不可解析也
   // 不丢呈现——指引仍完整）。
   const refMatch = /^No API key for ([^\s:]+\/[^\s:]+)$/.exec(raw)
   const providerColonMatch = /^No API key for provider: (.+)$/.exec(raw)
   const providerQuotedMatch = /^No API key provided for provider "(.+)"$/.exec(raw)
   const target = refMatch?.[1] ?? providerColonMatch?.[1] ?? providerQuotedMatch?.[1] ?? raw
+  return credentialMissingPresentation(target)
+}
+
+/** 凭据缺失结构化呈现的公共尾段（端点名 + 失败原因 + 恢复指引，两形态同构产出）。 */
+function credentialMissingPresentation(target: string): string {
   return `模型调用失败：${target} 的凭据缺失或已失效，请到设置页 Provider 分区更新该渠道的 API Key`
 }
 

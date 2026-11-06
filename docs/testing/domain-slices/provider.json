@@ -43,6 +43,7 @@
   "tests": [
     "extensions/universal/network-proxy/src/__tests__/network-proxy-shared-parity.test.ts",
     "extensions/universal/provider-aggregation/src/__tests__/aggregation-hot-reload.test.ts",
+    "extensions/universal/provider-aggregation/src/__tests__/quota-wiring.test.ts",
     "extensions/universal/provider-aggregation/src/__tests__/retry-classification.test.ts",
     "extensions/universal/provider-aggregation/src/__tests__/route-matrix.test.ts",
     "extensions/universal/provider-live-sync/src/**",

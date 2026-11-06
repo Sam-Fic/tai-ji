@@ -29,8 +29,8 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { AggregationMember, AggregationRoute } from "@taiji/shared/aggregation";
 
-/** 端点额度快照（route 求值的额度输入形态）。M1 由 index.ts 恒传 undefined（额度数据
- * 未知 → fail-open，D3 事件驱动刷新与额度求值接线归 M2 波次）；undefined = 未知。 */
+/** 端点额度快照（route 求值的额度输入形态）。由 index.ts 经 QuotaCacheReader 组装
+ * （quota-cache.json 新鲜条目投影）；map 缺 provider 键 / undefined = 未知。 */
 export interface RouteQuotaSnapshot { // oe-exempt:20261106:framework:评测输入契约，单实现为设计终态
 	/** 套餐剩余百分比（0-100）。 */
 	percent: number

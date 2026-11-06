@@ -155,7 +155,7 @@ export type {
 // session-model-control 上移：纯常量/纯函数无 node 依赖，barrel 安全；runtime
 // 切换链分型与 infra 出站映射共用同一判定）
 export {
-  PI_CREDENTIAL_MISSING_PREFIX,
+  PI_CREDENTIAL_MISSING_PREFIX, PI_VIRTUAL_ROUTE_NO_CREDENTIALS_PATTERN,
   formatCredentialMissingPresentation,
 } from './provider'
 // 模型路由域（provider-aggregation U1 契约根：类型全集 + 校验/标记纯函数 SSOT；
