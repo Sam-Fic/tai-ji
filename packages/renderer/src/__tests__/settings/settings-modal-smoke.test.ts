@@ -57,6 +57,9 @@ import type { SkillDirConfig } from '@taiji/shared'
 import { useToast } from '@/composables/useToast'
 import { getSettingsStore } from '@taiji/core'
 import { makeSettingsTransportStub } from '../helpers/settings-transport-stub'
+import { ModelRoutePage } from '@taiji/ui/features/settings'
+import { config as configApi } from '@/api'
+import type { ProviderInfo } from '@taiji/shared'
 
 /** 挂载 open=true 的 SettingsModal（spy toast provide：toast 三面用 spy，不桥接 useToast；
  *  quota 工厂键保留 InjectionKey 类型，契约门由 makeQuotaModuleStub 的 QuotaConfigureModule
@@ -262,5 +265,66 @@ describe('SettingsModal 路径保存失败回弹（RD-4#1：失败强制回弹 U
     expect(toasts.value.some((t) => t.type === 'error' && t.message.includes('disk full'))).toBe(true)
     expect(document.body.querySelector('[data-testid="load-paths-save-error"]')).not.toBeNull()
     expect(checkbox!.getAttribute('data-state')).toBe('unchecked')
+  })
+})
+
+
+describe('SettingsModal 模型路由分区接线（provider-aggregation D10 两屏 / U2 一致性修复）', () => {
+  /** 注入一个含模型的渠道 provider（引导卡 routeGuideVisible 判据 = 渠道有模型）。
+   *  调用时点须在 mount+flush 之后：open watch immediate 的 refreshProviders 会以
+   *  mock 空列表覆盖预置 providers。 */
+  function seedProvider(): ProviderInfo {
+    const provider: ProviderInfo = {
+      id: 'zhipu' as ProviderInfo['id'], // ProviderId branded string
+      name: 'zhipu',
+      kind: 'catalog',
+      apiKeySet: true,
+      status: 'connected',
+      models: [{ id: 'glm-5-3', name: 'GLM-5.3 Flash' }],
+    }
+    getSettingsStore().setProviders([provider])
+    return provider
+  }
+
+  it('分区已登记：settings-nav-model-route 渲染；首访点击切换后 getRouteView 拉取 + ModelRoutePage 挂载', async () => {
+    provideMockPlatform()
+    provideSettingsTransport(makeSettingsTransportStub())
+
+    const wrapper = mountOpenModalWithSpyToasts()
+    await flushPromises()
+    seedProvider()
+    await flushPromises()
+
+    // 分区登记（lib/content-slots SETTINGS_SECTION_SPECS）→ nav 项渲染
+    const navBtn = document.body.querySelector('[data-testid="settings-nav-model-route"]')
+    expect(navBtn).not.toBeNull()
+
+    // 首访点击 → activeView 切换 → getRouteView 拉取 → 视图到位后 ModelRoutePage 挂载
+    expect(configApi.getRouteView).not.toHaveBeenCalled()
+    navBtn!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+    expect(configApi.getRouteView).toHaveBeenCalledTimes(1)
+    const page = wrapper.findComponent(ModelRoutePage)
+    expect(page.exists()).toBe(true)
+  })
+
+  it('ProviderPage 引导卡「打开模型路由」→ 切模型路由分区渲染路由页（跳转生效，spec §6.5）', async () => {
+    provideMockPlatform()
+    provideSettingsTransport(makeSettingsTransportStub())
+
+    const wrapper = mountOpenModalWithSpyToasts()
+    await flushPromises()
+    seedProvider()
+    await flushPromises()
+
+    // 引导卡可见（渠道有模型）→ 点「打开模型路由」
+    const guideBtn = document.body.querySelector<HTMLElement>('[data-testid="provider-open-route-btn"]')
+    expect(guideBtn).not.toBeNull()
+    guideBtn!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+
+    // 跳转生效：nav 高亮 model-route + 路由页挂载（openRoutePage 守卫正常路径命中，跳转不被吞）
+    expect(document.body.querySelector('[data-testid="settings-nav-model-route"]')?.getAttribute('aria-current')).toBe('page')
+    expect(wrapper.findComponent(ModelRoutePage).exists()).toBe(true)
   })
 })

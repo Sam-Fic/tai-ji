@@ -100,7 +100,7 @@
 
     <!-- 下一步引导卡（外部 spec §6.5：至少一个渠道拥有模型时显示；文案收敛 taiji 形态——
          spec 的「M 个端点」是路由页数据，接入页只报已接入模型数。按钮跳「模型路由」设置分区，
-         经 open-route-page 上抛 SettingsModal（分区未注册时守卫 no-op，路由页交付后即生效）。 -->
+         经 open-route-page 上抛 SettingsModal 直切 model-route 分区（分区已登记）。 -->
     <GroupCard v-if="routeGuideVisible" data-testid="provider-route-guide" class="mt-[16px]">
       <template #head>
         <div class="gc-head-text">
@@ -236,7 +236,8 @@ const { refreshQuotaPresets } = useSettings()
 
 const emit = defineEmits<{
   /** 「打开模型路由」引导卡按钮（外部 spec §6.5 下一步引导）→ SettingsModal 切「模型路由」
-   *  分区（分区未注册时守卫 no-op——路由页由并行单元交付后注册即生效） */
+   *  分区（SettingsModal.openRoutePage 直切 model-route 分区；分区已登记，
+   *  findSection 守卫为注册表异常形态的防御） */
   'open-route-page': []
 }>()
 
