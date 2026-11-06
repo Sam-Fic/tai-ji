@@ -17,7 +17,8 @@ import {
   type FontReadIo,
 } from '../font-handlers'
 
-const POLICY = { homeDir: '/home/tester', dataDir: '/data/taiji' }
+// agentDir 显式注入：生产缺省走 paths.ts getPiAgentDir SSOT，测试按注入的 dataDir 同构推导
+const POLICY = { homeDir: '/home/tester', dataDir: '/data/taiji', agentDir: '/data/taiji/agent' }
 
 function bytes(values: number[]): Uint8Array {
   return new Uint8Array(values)
