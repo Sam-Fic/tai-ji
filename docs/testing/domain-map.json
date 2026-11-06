@@ -124,9 +124,9 @@
         "packages/renderer/src/components/settings/tts/__tests__/tts-page.test.ts",
         "packages/ui/src/features/settings/__tests__/ProviderQuickSetup.test.ts",
         "packages/ui/src/features/settings/__tests__/ProviderTemplatePicker.test.ts",
+        "packages/ui/src/features/settings/__tests__/model-route-page.test.ts",
         "packages/ui/src/features/settings/__tests__/provider-edit-body.test.ts",
-        "packages/ui/src/features/settings/__tests__/settings-suite.test.ts",
-        "packages/ui/src/features/settings/common/__tests__/ScopedModelSection.test.ts"
+        "packages/ui/src/features/settings/__tests__/settings-suite.test.ts"
       ]
     },
     "shell": {

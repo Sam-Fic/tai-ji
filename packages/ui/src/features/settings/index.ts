@@ -25,9 +25,46 @@ export { default as OAuthDialog } from './provider/OAuthDialog.vue'
 export { default as ProviderTemplatePicker } from './provider/ProviderTemplatePicker.vue'
 export { default as ProviderQuickSetup } from './provider/ProviderQuickSetup.vue'
 export { default as SoundPreviewButton } from './common/SoundPreviewButton.vue'
-export { default as ScopedModelSection } from './common/ScopedModelSection.vue'
+// ScopedModelSection 已退役（provider-aggregation D10：白名单编辑入口迁「模型路由」页）。
+// scoped-model-types 的 type export 保留：其唯一存留消费方 useScopedModels（renderer，
+// 退役归路由视图编排单元）经本桶 import 类型，退役时一并清理。
 export type { ScopedRenderItem, SelectableModel } from './common/scoped-model-types'
 export { default as SourceImportSection } from './common/SourceImportSection.vue'
+
+// ── 模型路由页组件族（provider-aggregation U5b · D10 两屏架构的路由半边）──
+export { default as ModelRoutePage } from './provider/ModelRoutePage.vue'
+export { default as RouteCard } from './provider/RouteCard.vue'
+export { default as RouteEndpointRow } from './provider/RouteEndpointRow.vue'
+export { default as RouteSpecialDates } from './provider/RouteSpecialDates.vue'
+export { default as RouteTimeGrid } from './provider/RouteTimeGrid.vue'
+export { default as RouteUnsavedBar } from './provider/RouteUnsavedBar.vue'
+export type { RouteCardData } from './provider/RouteCard.vue'
+export type { RoutePageSavePayload } from './provider/ModelRoutePage.vue'
+export type { RouteEditorOp, MemberOpInput } from './provider/route-editor-ops'
+export { DEFAULT_QUOTA_THRESHOLD_PERCENT } from './provider/route-editor-ops'
+export {
+  blankWindowTable,
+  candidateProviderIds,
+  coverOwnersAt,
+  deriveRouteMode,
+  endpointIssueKinds,
+  endpointIssueKey,
+  evaluateRouteAt,
+  fallbackMemberOf,
+  fmtSlot,
+  fmtSlotRange,
+  levelsUnion,
+  nightWindow,
+  nowFromClock,
+  slotFromTime,
+  specialOverrideFor,
+  truncationInfo,
+  weekdayBusinessWindow,
+  type EndpointIssueKind,
+  type RouteEvalResult,
+  type RouteEvalStep,
+  type RouteNow,
+} from './provider/route-preview'
 
 export {
   applySystemToDom,

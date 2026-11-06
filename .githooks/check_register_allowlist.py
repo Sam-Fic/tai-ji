@@ -11,6 +11,15 @@
     （models.json/auth.json 监视 + modelRegistry.refresh）同属该通道。
     语义 = 「taiji 侧数据 → pi 注册表常驻条目」的可见性投喂。
 
+  - extensions/universal/provider-aggregation/ —— 模型路由（aggregation）
+    路由执行入口，**非可见性投喂**。经 pi.registerVirtualModel 注册的是
+    AGGREGATION_PROVIDER_ID（'aggregation'，packages/shared/src/aggregation.ts
+    专有命名空间）的路由虚拟模型；route 回调在请求期经 ctx.modelRegistry.find
+    解析物理端点（src/index.ts），物理模型可见性仍由 provider-live-sync 单点
+    投喂，无第二写入方。数据源 = providers.json routes 域（用户路由配置，
+    AggregationRoutesFile 唯一权威），不参与 catalog-bridge 投喂链、
+    不写 taiji 目录缓存。
+
 为什么禁「白名单外新开注入点」：注入修的是 pi 进程注册表这一事实源，注册表
 的全部消费方（--model 解析 / rpc set_model / rename / smart-context /
 permission 分类器 / scheduler / subagent 模型校验 / provider 对账）零改动即
@@ -57,6 +66,7 @@ SCAN_ROOT = PROJECT_ROOT / "extensions"
 # 白名单（包/路径粒度，前缀按仓库根相对 posix 路径判定）
 WHITELIST_PREFIXES = (
     "extensions/universal/provider-live-sync/",
+    "extensions/universal/provider-aggregation/",
 )
 
 # 测试目录排除（路径片段判定，任意层级命中即排除）
