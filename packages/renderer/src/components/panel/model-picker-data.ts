@@ -18,6 +18,13 @@ import type { ModelInfo, ProviderId } from '@taiji/shared'
 export interface ModelGroup {
   providerId: ProviderId
   provider: string
+  /**
+   * 模型路由组标记（U6/D4 ①）：true = 聚合 provider 的路由条目组——面板按本标记把
+   * 分组标题接到 i18n 定稿键（数据侧 providerName 是 runtime 固定中文）并在行尾渲染
+   * 路由徽标。判别消费 ModelInfo.aggregation 标记字段（u-foundation 契约），禁止按
+   * providerId 字面值自行推断（判别单点 = shared isAggregationModelRef）。
+   */
+  aggregation?: boolean
   models: ModelInfo[]
 }
 
@@ -26,6 +33,8 @@ export interface ModelGroup {
 export interface PickerGroupRef {
   provider: string
   providerId: ProviderId
+  /** 模型路由组标记（透传 ModelGroup.aggregation——面板组标题 i18n 与行尾徽标的判别键） */
+  aggregation?: boolean
   models: { id: string; name?: string }[]
 }
 
@@ -57,7 +66,7 @@ function buildModelGroups(
     const key = m.providerId
     let g = map.get(key)
     if (!g) {
-      g = { providerId: key, provider: m.providerName, models: [] }
+      g = { providerId: key, provider: m.providerName, aggregation: m.aggregation === true, models: [] }
       map.set(key, g)
     }
     g.models.push(m)
@@ -71,6 +80,7 @@ function toPickerGroups(groups: readonly ModelGroup[]): PickerGroupRef[] {
   return groups.map((g) => ({
     provider: g.provider,
     providerId: g.providerId,
+    ...(g.aggregation ? { aggregation: true } : {}),
     models: g.models.map((m) => ({ id: m.id, name: m.name })),
   }))
 }

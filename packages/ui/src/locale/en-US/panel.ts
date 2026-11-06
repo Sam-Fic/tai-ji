@@ -579,6 +579,11 @@ export default {
     placeholder: '\u2026',
     // Model popover row-end "default" tag (demo .pt): shown on the row matching config.defaults.defaultModel
     defaultTag: 'Default',
+    // Model route group title (U6): aggregation provider group label in the model picker
+    // (i18n-finalized key — runtime data side carries a fixed zh name; display side localizes)
+    routeGroupTitle: 'Model Routes',
+    // Model route row-end badge (U6/GL2): distinguishes route entries from physical models
+    routeBadge: 'Route',
     // Model + thinking aggregate entry (W3a single-icon button; click opens model list + thinking levels) title
     modelThinkingAggregateTitle: 'Model · Thinking',
   },
@@ -736,6 +741,8 @@ export default {
       modelNotFound: 'This model no longer exists — please pick another',
       providerCredentialMissing: 'This provider has no credential — add the API key in Settings',
       engineModelMissing: 'The engine has not picked up this model yet: retry in a couple of seconds if you just changed the config; if it keeps failing, check the provider config in Settings',
+      aggregationRouteNotInSession: 'This model route is not available in the current session yet (routes register when a session loads) — start a new session to use it',
+      aggregationExtensionDisabled: 'The model route extension is disabled — enable it in Extension Manager first',
     },
   },
   ambiguous: {

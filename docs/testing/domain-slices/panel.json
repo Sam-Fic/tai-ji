@@ -47,6 +47,7 @@
     "packages/renderer/src/__tests__/panel/fast-fork-e2e-journeys.test.ts",
     "packages/renderer/src/__tests__/panel/force-quit-draft-recovery-dom.test.ts",
     "packages/renderer/src/__tests__/panel/landing-bash-integration.test.ts",
+    "packages/renderer/src/__tests__/panel/model-picker-aggregation.test.ts",
     "packages/renderer/src/__tests__/panel/panel-container-drawer-mode.test.ts",
     "packages/renderer/src/__tests__/panel/panel-container-lazy-retry-detail.test.ts",
     "packages/renderer/src/__tests__/panel/panel-container-lazy-retry.test.ts",
