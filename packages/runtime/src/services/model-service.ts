@@ -280,7 +280,13 @@ export class ModelService implements IModelService, ProviderConnectionTestServic
       .flatMap(p =>
         p.models
           .filter(m => m.enabled !== false)
-          .map(m => toModelInfo(p.id, p.name, p.api, m)),
+          .map(m => {
+            const info = toModelInfo(p.id, p.name, p.api, m)
+            // 模型路由标记透传（U3/D4 ①）：kind==='aggregation' 的注入条目标
+            // ModelInfo.aggregation=true——选择器分组与徽标（U6）统一消费本字段，
+            // 禁止按 providerId 字面值自行推断（判别单点在 shared isAggregationModelRef）。
+            return p.kind === 'aggregation' ? { ...info, aggregation: true } : info
+          }),
       )
 
     // scoped model 过滤/排序（design §3.3 D2）：scopedModels 非空时按白名单过滤 + 按序重排

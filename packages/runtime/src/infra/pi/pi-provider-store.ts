@@ -36,6 +36,7 @@ import { getEnabledModels } from './pi-enabled-models.js'
 // 剔除空壳 provider 用。isInvalidProvider 是纯函数，不碰 modelsStore。
 import { isInvalidProvider } from './pi-provider-repair.js'
 import type { ProviderId } from '@taiji/shared'
+import { AGGREGATION_PROVIDER_ID } from '@taiji/shared'
 
 // ── 类型定义（对齐 pi models.json / settings.json 的 schema）────
 
@@ -273,6 +274,23 @@ function credentialResolverOrWarn(context: string): IProviderCredentialResolver 
 export function initProviderCredentialResolver(resolver: IProviderCredentialResolver | undefined): void {
   credentialResolver = resolver
   warnedResolverMissing = false
+}
+
+/**
+ * 聚合路由默认可用性判定注入点（U3/D4 ④，模块级 setter——同 initProviderCredentialResolver
+ * 先例：消费点 findValidDefaultModel 是模块级函数，调用方到不了构造参数）。
+ *
+ * 判定语义由组合根装配（routes 条目存在且 enabled 且路由扩展装载）；未注入时的降级 =
+ * 视为可用（pass-through，不 auto-fix）——与 guards fail-open 同保守方向：auto-fix 改写
+ * 用户默认配置的代价高于保留原值（改写会把合法路由默认静默换成物理模型）。
+ */
+let aggregationRouteAvailability: ((routeId: string) => boolean) | undefined
+
+/** 注入聚合路由可用性判定（生产 = 组合根装配期调用；测试传 undefined 恢复 pass-through 缺省）。 */
+export function initAggregationRouteAvailabilityCheck(
+  check: ((routeId: string) => boolean) | undefined,
+): void {
+  aggregationRouteAvailability = check
 }
 
 /**
@@ -518,20 +536,35 @@ export function findValidDefaultModel(): {
   const { defaultProvider, defaultModel } = settings
 
   if (defaultProvider && defaultModel) {
-    const providerConfig = models.providers[defaultProvider]
-    // A8：被 enabledModels 禁用的 default provider 不走主路径，fall through 到 fallback 重选
-    // （主路径原只校验 provider/model 有效，未过滤 enabledModels，被禁用的 default 会直接返回）。
-    const isEnabled = deriveEnabled(defaultProvider, getEnabledModels())
-    const overrideOutcome = adjudicateOverrideDefault(defaultProvider, defaultModel, providerConfig, isEnabled)
-    if (overrideOutcome) return overrideOutcome
-    if (!providerConfig?.models?.length) {
-      // D3 修复：auth.json-only catalog provider（OAuth 形态）无 models.json 条目时，
-      // 校验 defaultModel ∈ 该 provider 的有效模型集，通过则不 fallback 不写回。
-      const catalogOnlyOutcome = adjudicateCatalogOnlyDefault(defaultProvider, defaultModel, isEnabled)
-      if (catalogOnlyOutcome) return catalogOnlyOutcome
-      console.warn(`[provider-store] defaultProvider "${defaultProvider}" not found in models.json`)
+    // U3/D4 ④ 聚合分支（主路径之前）：default 承载路由条目（聚合保留 id）时不在
+    // models.json/catalog 判定源内（物理源判定会把路由默认误判失效并 auto-fix 改写）——
+    // 经注入判定 pass-through（可用）或 fall-through（不可用 → fallback 重选首个可用
+    // 物理模型，D9 ③：路由删除/停用或路由扩展禁用时默认不悬空指向路由条目）。
+    // 两触发点同规则：初始广播（config.defaults 经 getDefaultModel）与 spawn --model。
+    if (defaultProvider === AGGREGATION_PROVIDER_ID) {
+      const routeAvailable = aggregationRouteAvailability
+        ? aggregationRouteAvailability(defaultModel)
+        : true // 未注入（早期装配/测试）→ pass-through，不误改写用户默认配置
+      if (routeAvailable) {
+        return { result: { provider: defaultProvider as ProviderId, modelId: defaultModel }, wasFixed: false }
+      }
+      console.warn(`[provider-store] aggregation default route "${defaultModel}" unavailable (deleted/disabled or route extension disabled), falling back to first available physical model`)
+    } else {
+      // A8：被 enabledModels 禁用的 default provider 不走主路径，fall through 到 fallback 重选
+      // （主路径原只校验 provider/model 有效，未过滤 enabledModels，被禁用的 default 会直接返回）。
+      const isEnabled = deriveEnabled(defaultProvider, getEnabledModels())
+      const providerConfig = models.providers[defaultProvider]
+      const overrideOutcome = adjudicateOverrideDefault(defaultProvider, defaultModel, providerConfig, isEnabled)
+      if (overrideOutcome) return overrideOutcome
+      if (!providerConfig?.models?.length) {
+        // D3 修复：auth.json-only catalog provider（OAuth 形态）无 models.json 条目时，
+        // 校验 defaultModel ∈ 该 provider 的有效模型集，通过则不 fallback 不写回。
+        const catalogOnlyOutcome = adjudicateCatalogOnlyDefault(defaultProvider, defaultModel, isEnabled)
+        if (catalogOnlyOutcome) return catalogOnlyOutcome
+        console.warn(`[provider-store] defaultProvider "${defaultProvider}" not found in models.json`)
+      }
+      // isEnabled===false：default provider 被禁用，静默 fall through 到 fallback（不 warn 误导）
     }
-    // isEnabled===false：default provider 被禁用，静默 fall through 到 fallback（不 warn 误导）
   }
 
   const fallback = pickFirstModelProvider(models.providers)

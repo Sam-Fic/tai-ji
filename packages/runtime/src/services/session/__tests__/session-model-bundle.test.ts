@@ -72,6 +72,8 @@ function makeFixture(optsOrGetState: FixtureOptions | (() => Promise<unknown>) =
     ensureActive,
     isModelRegistered: opts.isModelRegistered ?? (() => true),
     hasProviderCredential: opts.hasProviderCredential ?? (() => true),
+    // U3/D9 ②：路由条目分支的扩展装载态（本文件用例不触及聚合 provider，恒已装载）
+    isRouteExtensionLoadable: () => true,
   })
   return { control, session: session as { modelId: string; thinkingLevel: string }, markDirty, client, syncTraceEntries, ensureActive }
 }

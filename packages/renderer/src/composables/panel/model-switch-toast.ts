@@ -21,6 +21,10 @@ const CODE_TO_KEY: Record<string, string> = {
   MODEL_NOT_FOUND: 'panel.panel.modelSwitch.modelNotFound',
   PROVIDER_CREDENTIAL_MISSING: 'panel.panel.modelSwitch.providerCredentialMissing',
   ENGINE_MODEL_MISSING: 'panel.panel.modelSwitch.engineModelMissing',
+  // 模型路由两分型（provider-aggregation U3/D1 ③/D9 ②）：运行中新建窗口与扩展禁用态
+  // 各有专用恢复指引（扩展禁用态不落「新建会话」——新会话同样不装载扩展，指引会循环）。
+  AGGREGATION_ROUTE_NOT_IN_SESSION: 'panel.panel.modelSwitch.aggregationRouteNotInSession',
+  AGGREGATION_EXTENSION_DISABLED: 'panel.panel.modelSwitch.aggregationExtensionDisabled',
 }
 
 /**

@@ -471,6 +471,9 @@ export class SessionService implements ISessionService, ILifecycleSessionOps, ID
       // 未注入 / listProviders 抛错时 fail-open，宁可落双因文案也不误报更「确定」的码）。
       isModelRegistered: (provider, modelId) => isModelInRegistry(this.configService, provider, modelId),
       hasProviderCredential: (provider) => providerHasCredential(this.configService, provider),
+      // U3/D9 ②：路由条目分支的扩展装载态查询（extensionService 构造注入，闭包动态读
+      // disabled-packages.json；未注入 extensionService 的测试构造按 fail-open 返 true）。
+      isRouteExtensionLoadable: () => !(this.extensionService?.isRouteExtensionDisabled() ?? false),
     })
     // history 读编排域（S6 迁出、turn-boundary-index 落位 history-reader.ts）：deps 窄注入——pm（在场性
     // 查询 + 兼容链）与 sessionStore（定位/转换链）。[组合接线裁定] 构造点签名冻结：TurnIndexStore

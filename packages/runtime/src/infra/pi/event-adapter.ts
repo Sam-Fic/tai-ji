@@ -23,7 +23,7 @@
  * 产出一组中间事件），可变态由 EventInterpreter 持有。
  */
 import type { ServerMessage, ServerMessageType, ExtensionInteractMethod, PiMessageEntry, PiToolCallEntryForm } from '@taiji/shared'
-import { EXTENSION_EVENTS, SUBAGENT_DIRECTIVE_CUSTOM_TYPE, parseSubagentDirective } from '@taiji/shared'
+import { EXTENSION_EVENTS, SUBAGENT_DIRECTIVE_CUSTOM_TYPE, parseSubagentDirective, formatCredentialMissingPresentation } from '@taiji/shared'
 import { GUI_WIDGET_MARKER, ASK_USER_MARKER, SESSION_MANAGER_MARKER, SESSION_MANAGER_ACTIONS, SCHEDULE_CREATE_MARKER, PLAN_REVIEW_MARKER, UI_FORM_MARKER, SUBAGENT_JOURNAL_MARKER, JOURNAL_REPORT_ACK, CANVAS_MARKER, PERMISSION_APPROVAL_TITLE, isCanvasMarkerRequest, isGuiComponent, isGuiRenderResult, isScheduleDraft, isFormQuestion, isSubagentJournalReport } from '@zhushanwen/extension-protocol'
 import type { SessionManagerAction } from '@zhushanwen/extension-protocol'
 import type { PiEventListener } from '../../services/ports/pi-engine.js'
@@ -203,7 +203,13 @@ function handleMessageUpdate(event: PiMessageUpdateEvent, sid: string): PiTransl
       // [HISTORICAL] 本分支曾硬编码 kind='error'，使 provider 真错文本（401/限流/上下文溢出）
       // 永久不显形——RT-2#2 改读 wire 真实字段后修复。
       if (sub.reason === 'aborted') return [{ kind: 'noop' }]
-      return [{ kind: 'message', message: { type: 'message.stream_error', payload: { sessionId: sid, content: sub.error?.errorMessage ?? sub.reason, kind: sub.reason } } }]
+      // U3/AX5 出站错误结构化映射（凭据缺失形态）：pi 透传的 `No API key` 文本（checkAuth
+      // / pi-ai 出站构造，词表见 @taiji/shared PI_CREDENTIAL_MISSING_PREFIX）替换为
+      // 含端点名与恢复指引的呈现；非命中文本原样透传（映射仅覆盖真实会发生的错误形态，
+      // 厂商失败文本无统一形态不建词表——范围裁断见该函数 JSDoc）。
+      const rawStreamError = sub.error?.errorMessage ?? sub.reason
+      const content = formatCredentialMissingPresentation(rawStreamError) ?? rawStreamError
+      return [{ kind: 'message', message: { type: 'message.stream_error', payload: { sessionId: sid, content, kind: sub.reason } } }]
     default:
       console.warn('[EventAdapter] Unhandled message_update sub-type:', subType)
       return [{ kind: 'noop' }]
