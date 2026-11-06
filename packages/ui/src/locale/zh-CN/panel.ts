@@ -200,24 +200,33 @@ export default {
     // [u3 remove-turn-progress-bar] TurnMeta 已生成 token 数（TurnMeta.vue，设计 §2.1/§2.4；
     // 2026-09 口径改 token：整 turn 全部 LLM 调用的 usage.outputTokens 之和，不估算）
     generatedTokens: '已生成 {tokens} tokens',
-    traceExpandAll: '展开全部（{count} 步）',
-    traceCollapse: '恢复精简',
     traceFailed: '含 {count} 次失败',
-    // [run-group] run 类型分组组头（Block.vue 组分支消费）：类型名按设计字面（探索 / 改动 /
-    // 执行命令），统计段 = 「{count} 步」+ 耗时（≥1s 才拼，渲染层拼装）；失败分句复用 traceFailed
-    // （组行尾「· 含 M 次失败」），不另开键——语义域同属失败计数句式。
+    // [run-group] 组类型名与统计段键（聚合块 SegmentToolGroup / AggregateLiveWindows 组条目
+    // 消费）：类型名按设计字面（探索 / 改动 / 执行命令），统计段 = 「{count} 步」+ 耗时
+    // （≥1s 才拼，渲染层拼装）；失败分句复用 traceFailed（「· 含 M 次失败」），不另开键——
+    // 语义域同属失败计数句式。
     runGroupExplore: '探索',
     runGroupEdit: '改动',
     runGroupExec: '执行命令',
     runGroupSteps: '{count} 步',
+    // [process-aggregate] 聚合块（过程段三态容器）文案：摘要行主词 / 运行态词（组头与
+    // 聚合条共用）/ 单步行失败标记 / 悬停浮层完成态词。失败计数句式复用 traceFailed、
+    // 思考词复用 thinkingBlock（语义域同源，不另立第二套键）——重试标记键不登记：
+    // 终态③裁决默认不渲染重试标记（无结构判定源），键的需求方 = 0。
+    aggProcessLabel: '过程',
+    aggGroupRunning: '进行中',
+    aggRowFailed: '失败',
+    aggStatusDone: '已完成',
+    // [process-aggregate] 单步详情抽屉（u-detail-drawer 装配）：运行中注记 / 参数与输出小节标题。
+    // 状态词复用上面三键（aggGroupRunning/aggRowFailed/aggStatusDone），不另立第二套状态词。
+    aggDetailStillRunning: '仍在执行',
+    aggDetailParams: '参数',
+    aggDetailOutput: '输出',
     // [tool-detail-rich] 工具展开富渲染标签（renderer ToolDetailRenderer 消费）：
     // write 懒加载 git diff 后的二分标注——空 patch = untracked = 新文件；非空 = 相对 HEAD 的累计差异。
     toolDetailNewFile: '新文件',
     toolDetailGitDiff: '相对 git HEAD',
     toolDetailDiffLoading: '加载 diff…',
-    // [run-group] 里程碑徽标（spec §3.6）：当前唯一信号 = 首个改动（core 结构派生，
-    // 全 turn 第一个 completed 的 edit/write；语义里程碑需上游显式信号，不关键词派生）
-    runGroupMileFirstEdit: '首个改动',
     bashCancelled: '已取消',
     bashTimeout: '已超时',
     bashOutputTruncated: '输出已截断',
@@ -240,7 +249,7 @@ export default {
     turnTriggerBgNotifySummary: '{count} 个后台任务完成',
     turnTriggerBgNotifyContinued: '已继续处理',
     // [system-notice-rendering-upgrade U6] 边界行失败分句（D5「· M 失败」，Turn.vue 消费）：
-    // 专用键不复用 traceFailed（「含 {count} 次失败」属 TraceCompactorRow 收编行句式，两者语义域不同）
+    // 专用键不复用 traceFailed（「含 {count} 次失败」属聚合块失败计数句式，两者语义域不同）
     turnTriggerBgNotifyFailed: '{count} 失败',
     // [bg-notice-fold] settle 收纳后轮头行折叠标签：按类型
     // 分段（发生序去重，「·」连接，耗时沿用 elapsed 段单数字）。托管会话为第四成员，折叠词

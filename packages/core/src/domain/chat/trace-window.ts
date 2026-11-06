@@ -18,9 +18,13 @@
  *
  * 另含 groupToolRuns（run 类型分组）：连续同类型（探索 / 改动 / 执行命令）工具行折叠为组块的
  * 下游纯变换，接线点在 Turn.vue visibleBlocks 三分支汇合之后；不修改上方三函数的输入输出契约。
+ *
+ * 另含 splitProcessSegments（过程段切段，chat-flow-process-aggregate U1）：回合内拍平块序列按
+ * text 边界切成聚合块段（类型族与契约条文在 ./process-segment）；既有三符号语义不动（设计 D8）。
  */
-import type { Message, ToolCall } from '@taiji/shared'
+import type { Message, ThinkingBlock, ToolCall } from '@taiji/shared'
 import { expandAssistantBlocks, type OrderedBlock } from './message-turns'
+import type { ProcessSegment, ProcessSegmentUnit, ProcessToolGroup } from './process-segment'
 
 /**
  * 拍平后的渲染块单元。
@@ -471,4 +475,153 @@ export function computeTraceWindow(
   const failedCount = countFailedOutsideVisible(blocks, new Set(visible.map((fb) => fb.flatIndex)))
 
   return { visible, compactedCount, failedCount }
+}
+
+/* ══ 过程段切段（chat-flow-process-aggregate U1，设计 D8 / AX1 / AX4 / AX5 / AX7）══
+ * 回合内拍平块序列按「两条正文块之间」切段，每段过程块（thinking / tool / agentgraph）收成一个
+ * 聚合块（ProcessSegment）。与上方 computeTraceWindow / W / groupToolRuns 三符号零交集：旧窗口
+ * 切片的消费路径随聚合块形态退役，符号去留按死代码纪律单独处置。类型族与契约条文在
+ * ./process-segment（切段契约与切段实现双线并行的唯一对齐点），本文件只放实现。
+ */
+
+/** 思考步骤耗时：ThinkingBlock 的 startTime/endTime 均可选，任一缺失按 0、负值钳 0——
+ *  与 memberDurationMs（工具步骤）同一条时间口径（ProcessSegmentCounts.totalDurationMs 契约），
+ *  不另立第二套。 */
+function thinkingDurationMs(block: OrderedBlock): number {
+  const th = block.ref as ThinkingBlock
+  if (typeof th.startTime !== 'number' || typeof th.endTime !== 'number') return 0
+  return Math.max(0, th.endTime - th.startTime)
+}
+
+/**
+ * 按 text 边界把拍平块序列切成过程段（切段纯函数，聚合块组件的唯一数据源）。
+ *
+ * 输入：flattenTurnBlocks 的输出序列（拍平一维序，flatIndex 升序）。切段只看拍平一维序，
+ * assistant 边界不是段边界——跨 assistant 相邻的过程块同段。
+ *
+ * 边界条款（与 ProcessSegment 契约一致）：
+ * - text 块恒为段边界，永不入段（正文原生展示、不并入计数摘要，AX5）；段成员数 ≥ 1，空段不存在。
+ * - 序列首端第一个 text 之前的过程块自成一段（起始边界 = 序列开始）；序列末端最后一条 text
+ *   之后的过程块同属一段（结束边界 = 序列结束）——pi 回合先调工具后写正文、以工具收尾都是
+ *   常见形态，两种边界都不产生无主过程块。
+ * - 相邻 text 之间无过程块时不产生段；空输入或纯 text 序列 → []。
+ *
+ * 段内组分组：复用 groupToolRuns 的 RUN_GROUP_TOOLS 类型表口径（runBaseOf 同一判定源，不
+ * 重新发明）；连续同 base 工具成组，被思考行 / 独立行打断即重新开组，单成员组照出。类型表外
+ * 工具与 agentgraph 块不入组、原样成行（member 单元）——纯类型映射的漏登记，安全降级是
+ * 「多显示一行」而不是「归错组」（U1 checkpoint 3）。
+ *
+ * 计数口径（AX7）：分类步数 / 思考数 / 总耗时（含思考，设计 §6）/ failedCount（段内已完成
+ * 失败块数，RL4）段级一次算好（口径条文见 ProcessSegmentCounts），渲染层零解析。
+ *
+ * 三态判定输入（RL2）：本函数只吃块序列，输出 followedByText 结构信号——true = 段已被后继
+ * text 封闭（完成态）；false = 序列末端开放段，完成与否由调用方（ui）合成「回合落下」信号
+ * （回合工作态 isWorkingTurn 翻 false，回合内全部未完成段同时完成）后判定。回合工作态是块
+ * 序列之外的调用方状态，纯函数不感知回合生死。
+ *
+ * 段 id（AX1）：`seg:<段首块 flatIndex>`（十进制），派生源只有段首位置——流式段生长（成员
+ * 追加）不改段首位置、新段只出现在序列尾部，既有段 id 流式全程不变、新段出现才产生新 id；
+ * 禁止派生自消息 id / 成员集合 / 组内序号（条文见 ProcessSegment.id）。纯函数无副作用，
+ * O(n) 单 pass（同 groupToolRuns 量级）。
+ */
+export function splitProcessSegments(blocks: FlatBlock[]): ProcessSegment[] {
+  const segments: ProcessSegment[] = []
+  // 开放段累积态：text 边界或序列末尾统一收拢（flush），单 pass O(n) 不回扫。
+  let members: FlatBlock[] = []
+  let units: ProcessSegmentUnit[] = []
+  let groups: ProcessToolGroup[] = []
+  let groupBase: RunGroupBase | null = null
+  let groupMembers: FlatBlock[] = []
+  const categoryCounts: Record<RunGroupBase, number> = { explore: 0, edit: 0, exec: 0 }
+  let thinkingCount = 0
+  let totalDurationMs = 0
+  let failedCount = 0
+
+  // 收拢当前开放工具组：组级三条口径（durationMs / failedCount / hasRunning）与段级口径
+  // 同 pass 算好——组资格判定复用 runBaseOf（RUN_GROUP_TOOLS 类型表），不另设第二判定源。
+  const flushGroup = (): void => {
+    if (groupBase === null) return
+    let durationMs = 0
+    let groupFailed = 0
+    let hasRunning = false
+    for (const m of groupMembers) {
+      durationMs += memberDurationMs(m)
+      const status = (m.block.ref as ToolCall).status
+      if (status === 'error') groupFailed += 1
+      if (status === 'running') hasRunning = true
+    }
+    const group: ProcessToolGroup = {
+      base: groupBase,
+      members: groupMembers,
+      durationMs,
+      failedCount: groupFailed,
+      hasRunning,
+    }
+    groups.push(group)
+    units.push({ kind: 'group', group })
+    groupBase = null
+    groupMembers = []
+  }
+
+  // 收拢当前开放段并复位累积态：段 id 只在收拢时按段首位置派生（流式成员追加不触发射段，
+  // 这是 id 稳定性的构造性来源）。
+  const flushSegment = (followedByText: boolean): void => {
+    if (members.length === 0) return
+    segments.push({
+      id: `seg:${members[0].flatIndex}`,
+      members,
+      groups,
+      units,
+      counts: {
+        categoryCounts: { ...categoryCounts },
+        thinkingCount,
+        totalDurationMs,
+        failedCount,
+      },
+      followedByText,
+    })
+    members = []
+    units = []
+    groups = []
+    categoryCounts.explore = 0
+    categoryCounts.edit = 0
+    categoryCounts.exec = 0
+    thinkingCount = 0
+    totalDurationMs = 0
+    failedCount = 0
+  }
+
+  for (const fb of blocks) {
+    if (fb.block.kind === 'text') {
+      // text 恒为段边界：封闭当前开放段（无开放段则无段产生），text 自身不入段。
+      flushGroup()
+      flushSegment(true)
+      continue
+    }
+    members.push(fb)
+    if (fb.block.kind === 'thinking') {
+      thinkingCount += 1
+      totalDurationMs += thinkingDurationMs(fb.block)
+      flushGroup()
+      units.push({ kind: 'member', block: fb })
+      continue
+    }
+    // tool / agentgraph：段级口径计入（agentgraph 是段正式成员——计耗时与失败数，只是免取名）
+    totalDurationMs += memberDurationMs(fb)
+    if (isFailedProcessBlock(fb.block)) failedCount += 1
+    const base = runBaseOf(fb)
+    if (base === null) {
+      // 类型表外工具与 agentgraph：不入组、原样成行（安全降级）
+      flushGroup()
+      units.push({ kind: 'member', block: fb })
+      continue
+    }
+    if (groupBase !== null && groupBase !== base) flushGroup()
+    if (groupBase === null) groupBase = base
+    groupMembers.push(fb)
+    categoryCounts[base] += 1
+  }
+  flushGroup()
+  flushSegment(false)
+  return segments
 }
