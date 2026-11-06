@@ -116,12 +116,14 @@ export interface IPluginServiceDeps {
     delete(providerId: string): Promise<void>
   }
   /**
-   * pi 扩展安装 port（provider-plugin-access U7/D6 双产物安装编排的接线点）：清单条目
-   * 携带 piExtensionVersion（双产物条目标记）时，confirmPluginInstall 成功后调用——
-   * 实现方（wool-extension-installer 的 WoolExtensionInstaller，组合根注入）负责
-   * wool-manifest 资产解析、版本配对校验（VERSION_PAIR_MISMATCH）与
-   * extensionService.installExtension 钉版安装。缺省时双产物条目只装插件侧（warn
-   * 留痕——测试与独立仓联调环境常态；生产组合根必注入，缺省 = S23 扩展侧断链）。
+   * pi 扩展安装 port（provider-plugin-access U7/D6 双产物安装编排的接线点）：清单
+   * 条目携带 piExtensionVersion（钉版形态）时按钉版安装并做 wool-manifest 配对校验
+   * （VERSION_PAIR_MISMATCH）；免钉版条目（piExtensionVersion 缺省）经 handlesPackage
+   * 判定为双产物包时，扩展版本直接跟随 wool-manifest 资产清单（manifest 即配对源，
+   * 无比对步骤）。实现方（wool-extension-installer 的 WoolExtensionInstaller，组合根
+   * 注入）负责 wool-manifest 资产解析与 extensionService.installExtension 安装。缺省
+   * 时双产物条目只装插件侧（warn 留痕——测试与独立仓联调环境常态；生产组合根必注入，
+   * 缺省 = S23 扩展侧断链）。
    *
    * 卸载侧（U4 卸载编排，D6「完整移除 = 条目 + 插件 + pi 扩展」）：uninstallPlugin
    * 在插件目录删除前以包内 package.json 的包名调用 uninstallForCatalogEntry——家族
@@ -129,7 +131,12 @@ export interface IPluginServiceDeps {
    * 插件，实现方 no-op。
    */
   piExtensionInstaller?: {
-    installForCatalogEntry(entry: { packageName: string; piExtensionVersion: string }): Promise<{ installedVersion: string }>
+    /**
+     * 该包名是否为双产物家族包（免钉版条目的双产物判定）。钉版条目不问此方法
+     * （piExtensionVersion 在场即双产物）；缺省（实现未提供）视为 false。
+     */
+    handlesPackage?(packageName: string): boolean
+    installForCatalogEntry(entry: { packageName: string; piExtensionVersion?: string }): Promise<{ installedVersion: string }>
     uninstallForCatalogEntry(packageName: string): Promise<void>
   }
   /**

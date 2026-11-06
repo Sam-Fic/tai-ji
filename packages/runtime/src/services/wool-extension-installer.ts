@@ -252,10 +252,12 @@ export class WoolExtensionInstaller {
    * 安装指定家族的 pi 扩展成员（双产物安装编排的扩展侧步骤）。
    *
    * @param family 家族 id
-   * @param piExtensionVersion v2-plugins.json 清单条目的配对版本（配对唯一权威，D6）
+   * @param piExtensionVersion v2-plugins.json 清单条目的配对版本（钉版形态的配对
+   *   权威，与 wool-manifest 比对不一致即 VERSION_PAIR_MISMATCH）。缺省 = 免钉版
+   *   形态：扩展版本直接跟随 wool-manifest 资产清单（manifest 即配对源，无比对步骤）
    * @returns 实际安装并扫描确认的扩展版本
    */
-  async installPiExtension(family: WoolFamilyId, piExtensionVersion: string): Promise<{ installedVersion: string }> {
+  async installPiExtension(family: WoolFamilyId, piExtensionVersion?: string): Promise<{ installedVersion: string }> {
     const fetched = await this.fetchManifest()
     if (!fetched.ok) {
       throw new WoolExtensionInstallError(fetched.error.code, fetched.error.message)
@@ -263,6 +265,10 @@ export class WoolExtensionInstaller {
     const entry = fetched.manifest.families[family]
     if (!entry) {
       throw new WoolExtensionInstallError('family_absent', `资产清单中没有 ${family} 家族条目。请升级 taiji 或等待清单更新后重试`)
+    }
+    if (piExtensionVersion === undefined) {
+      // 免钉版：manifest 即配对源，按 manifest 条目安装
+      return this.installEntry(entry)
     }
     if (entry.version !== piExtensionVersion) {
       // 时点差自愈（D6）：内存缓存可能落后于热更新后的远端清单——绕过缓存强制重拉
@@ -287,11 +293,12 @@ export class WoolExtensionInstaller {
   /**
    * 从 v2-plugins.json 清单条目出发的安装编排（PluginService.confirmPluginInstall 成功
    * 后的接线入口，U7 双产物安装编排）：包名推导家族（`@scope/plugin-wool-<family>`）
-   * → 复用 installPiExtension 的配对校验与钉版安装。条目携带 piExtensionVersion 即
-   * 双产物条目（plugin-catalog guard 契约）；包名非 plugin-wool-* 形态 = 清单指向
-   * 未知家族，结构化拒绝——静默跳过 = 扩展缺失、对话链断链复发。
+   * → 复用 installPiExtension（钉版形态走配对校验；免钉版跟随 manifest）。
+   * 包名非 plugin-wool-* 形态时的处置按形态分流：钉版条目推导 miss = 清单损坏，
+   * 结构化拒绝（静默跳过 = 扩展缺失、对话链断链复发）；免钉版条目经 handlesPackage
+   * 放行才进本入口，推导 miss 结构上不可达。
    */
-  async installForCatalogEntry(entry: { packageName: string; piExtensionVersion: string }): Promise<{ installedVersion: string }> {
+  async installForCatalogEntry(entry: { packageName: string; piExtensionVersion?: string }): Promise<{ installedVersion: string }> {
     const family = woolFamilyFromCatalogPackageName(entry.packageName)
     if (!family) {
       throw new WoolExtensionInstallError(
@@ -301,6 +308,11 @@ export class WoolExtensionInstaller {
       )
     }
     return this.installPiExtension(family, entry.piExtensionVersion)
+  }
+
+  /** 免钉版条目的双产物判定（port 契约 handlesPackage）：包名可推导 wool 家族即双产物包。 */
+  handlesPackage(packageName: string): boolean {
+    return woolFamilyFromCatalogPackageName(packageName) !== undefined
   }
 
   /**

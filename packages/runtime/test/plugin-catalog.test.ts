@@ -107,11 +107,21 @@ describe('validatePluginCatalogConfig（清单 guard）', () => {
     expect(validatePluginCatalogConfig({ version: 1, plugins: [] }).ok).toBe(true)
   })
 
-  it('配对不一致：pluginVersion 缺失 → VERSION_PAIR_MISMATCH', () => {
-    const noVersion = { ...DUAL_ARTIFACT_ENTRY, pluginVersion: undefined }
-    const result = validatePluginCatalogConfig({ version: 1, plugins: [noVersion] })
-    expect(result).toMatchObject({ ok: false, code: VERSION_PAIR_MISMATCH })
-    expect(isPluginCatalogConfig({ version: 1, plugins: [noVersion] })).toBe(false)
+  it('免钉版形态：pluginVersion 缺失 → ok（安装时解析 npm latest）', () => {
+    const pinless = { ...DUAL_ARTIFACT_ENTRY, pluginVersion: undefined }
+    const result = validatePluginCatalogConfig({ version: 1, plugins: [pinless] })
+    expect(result.ok).toBe(true)
+    expect(isPluginCatalogConfig({ version: 1, plugins: [pinless] })).toBe(true)
+  })
+
+  it('免钉版形态：pluginVersion 与 piExtensionVersion 同时缺失 → ok（双字段均可缺省）', () => {
+    const pinless = { ...DUAL_ARTIFACT_ENTRY, pluginVersion: undefined, piExtensionVersion: undefined }
+    expect(validatePluginCatalogConfig({ version: 1, plugins: [pinless] }).ok).toBe(true)
+  })
+
+  it('钉版损坏：pluginVersion 空串 → VERSION_PAIR_MISMATCH（出现即必须合法）', () => {
+    const corrupted = { ...DUAL_ARTIFACT_ENTRY, pluginVersion: '' }
+    expect(validatePluginCatalogConfig({ version: 1, plugins: [corrupted] })).toMatchObject({ ok: false, code: VERSION_PAIR_MISMATCH })
   })
 
   it('配对不一致：piExtensionVersion 空串 → VERSION_PAIR_MISMATCH', () => {

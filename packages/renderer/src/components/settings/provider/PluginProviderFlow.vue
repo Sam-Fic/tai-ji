@@ -1,17 +1,19 @@
 <template>
 <!-- split-justified: 插件 Provider 接入流程单一语义域（family/confirm/authorize 三段状态机 + S13 崩溃态重启 + U2 挂载位清理 + 两段式安装停点——围绕同一流程状态机的编排，数据源已拆 PluginProviderSource；崩溃/重启/清理依赖流程局部状态，拆出即转发壳） -->
-<!--
-  插件 Provider 接入流程（provider-plugin-access 设计 U6 / D1/D2/D3/D5）。
-  三段视图（显式 phase 状态机：family → confirm → authorize）：
+  <!--
+    插件 Provider 接入流程（provider-plugin-access 设计 U6 / D1/D2/D3/D5）。
+    四段视图（显式 phase 状态机：family → version → confirm → authorize）：
       ① family 家族卡网格：清单 family 条目（名称/厂商/授权方式/模型数/安装状态），
          S1；已装家族插件崩溃时呈「插件已停止」+ 重启按钮（S13，plugin.toggle off/on）；
-      ② confirm 安装确认卡：preparePluginInstall 回包的知情面全量展示
-        （capabilities/readPaths 逐项），展示物 = 暂存解压物 manifest（同源），S27——
-        确认前不发生安装落盘（取消/关闭 = cancelPluginInstall 清暂存）；
+      ①-b version 版本选择：npm 全部已发布版本下拉（plugin.listVersions），默认最新
+         dist-tag，可改选历史版本（最新走裸包名 spec，显式版本 pkg@version）；
+      ② confirm 安装确认卡：preparePluginInstall 回包知情面全量展示（capabilities/
+         readPaths 逐项），展示物 = 暂存解压物 manifest（同源），S27——确认前不落盘
+        （取消/关闭 = cancelPluginInstall 清暂存）；
       ③ authorize 授权挂载位容器：ViewHost(global:provider.authorize) 渲染插件推的树，
-         重新授权复用同一挂载位（D5，focus intent=authorize 直达本段）。
-         进入本段即 invoke getAuthorizeView 驱动插件推初始树（enterAuthorize——快照
-         store 只存插件推送内容，无宿主驱动则初始树无生产者、容器恒占位空态）。
+         重新授权复用同一挂载位（D5，focus intent=authorize 直达本段）。进入本段即
+         invoke getAuthorizeView 驱动插件推初始树（快照 store 只存插件推送内容，无宿主
+         驱动则初始树无生产者、容器恒占位空态）。
   -->
   <Dialog :open="open" @update:open="onDialogToggle">
     <DialogContent data-testid="plugin-provider-flow" class="max-w-[720px]">
@@ -152,6 +154,18 @@
         </div>
       </div>
 
+      <!-- ①-b 版本选择段（数据拉取/选中态在 PluginVersionSelect；spec 构造与两段式安装在本组件） -->
+      <PluginVersionSelect
+        v-else-if="phase === 'version' && versionEntry"
+        :package-name="versionEntry.packageName"
+        :display-name="versionEntry.displayName"
+        :intent="installIntent"
+        :preparing="preparing"
+        :install-error="flowError"
+        @cancel="onVersionCancel"
+        @install="onVersionInstall"
+      />
+
       <!-- ② 安装确认卡（prepare 成功、停在确认停点；S27 知情面） -->
       <div v-else-if="phase === 'confirm' && installPreview" data-testid="plugin-install-confirm" class="flex flex-col gap-3">
         <p class="text-[length:var(--text-sm)] text-neutral-fg">
@@ -252,6 +266,7 @@ import {
   type PluginInstallPreview,
 } from './PluginProviderSource'
 import PluginConfirmField from './PluginConfirmField.vue'
+import PluginVersionSelect from './PluginVersionSelect.vue'
 
 /** 授权挂载位 id（core bootstrap 注册 + 本组件消费，同字面量即约定）。 */
 const AUTHORIZE_MOUNT_ID = 'provider.authorize'
@@ -271,20 +286,22 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const source = usePluginProviderSource()
 
-/** 流程段状态机（family 家族选择 / confirm 安装确认停点 / authorize 授权挂载位）。 */
-type FlowPhase = 'family' | 'confirm' | 'authorize'
+/** 流程段状态机（family 家族选择 / version 版本选择 / confirm 安装确认停点 / authorize 授权挂载位）。 */
+type FlowPhase = 'family' | 'version' | 'confirm' | 'authorize'
 const phase = ref<FlowPhase>('family')
 /** 确认卡知情面（preparePluginInstall 回包；非 null = 停在确认停点）。 */
 const installPreview = ref<PluginInstallPreview | null>(null)
 /** 确认卡意图（全新安装 / 已装家族更新——文案与确认按钮差异）。 */
 const installIntent = ref<'install' | 'update'>('install')
-/** 当前段错误（family 段 = 清单/通路错误；confirm 段 = prepare/confirm 失败）。 */
+/** 当前段错误（family 段 = 清单/通路错误；version 段 = 版本列表拉取失败；confirm 段 = prepare/confirm 失败）。 */
 const flowError = ref('')
 const confirming = ref(false)
 /** preparePluginInstall 进行中（点击安装后立即置真，回包前提供可见等待态并防重入）。 */
 const preparing = ref(false)
-/** 流程代次：关闭/重开会自增，迟到的 prepare 回包按旧代次丢弃，避免陈旧确认卡复活。 */
+/** 流程代次：关闭/重开会自增，迟到的 prepare/listVersions 回包按旧代次丢弃，避免陈旧确认卡复活。 */
 let flowGeneration = 0
+/** 版本选择段目标（family 卡 / update focus 进入时的包名与显示名；列表拉取与选中态在 PluginVersionSelect）。 */
+const versionEntry = ref<{ packageName: string; displayName: string } | null>(null)
 const catalogRefreshing = ref(false)
 /** 包名直装输入（S27 第二路径：清单是发现通道，用户可直接输入包名） */
 const directSpec = ref('')
@@ -318,7 +335,7 @@ async function onRestartPlugin(entry: PluginCatalogItem): Promise<void> {
 }
 
 const dialogTitle = computed(() => {
-  if (phase.value === 'confirm') {
+  if (phase.value === 'version' || phase.value === 'confirm') {
     return installIntent.value === 'update' ? t('pluginProvider.flow.updateTitle') : t('pluginProvider.flow.installTitle')
   }
   if (phase.value === 'authorize' && pendingAuthorizePluginId.value !== null) {
@@ -330,7 +347,7 @@ const dialogTitle = computed(() => {
 })
 
 const dialogSubtitle = computed(() => {
-  if (phase.value === 'confirm') return t('pluginProvider.flow.installSubtitle')
+  if (phase.value === 'version' || phase.value === 'confirm') return t('pluginProvider.flow.installSubtitle')
   if (phase.value === 'authorize') return t('pluginProvider.flow.authorizeSubtitle')
   return t('pluginProvider.flow.subtitle')
 })
@@ -415,8 +432,8 @@ async function enterFlow(): Promise<void> {
     enterAuthorize(entry.pluginId)
     return
   }
-  // update 意图：直达确认卡（安装链与首次安装同构，文案按 update 差异化）
-  await beginInstall(entry.packageName, 'update')
+  // update 意图：进版本选择段（安装链与首次安装同构，文案按 update 差异化）
+  enterVersionSelect({ packageName: entry.packageName, displayName: entry.family?.displayName ?? entry.displayName }, 'update')
 }
 
 /** 关闭/重开复位：确认停点残留的暂存交 cancelPluginInstall 清理（S27 未确认不落盘）。 */
@@ -435,6 +452,7 @@ function resetFlow(): void {
   pendingAuthorizePluginId.value = null
   directSpec.value = ''
   restartingPluginId.value = null
+  versionEntry.value = null
   flowError.value = ''
 }
 
@@ -451,14 +469,52 @@ function familyAvatarChar(entry: PluginCatalogItem): string {
   return (entry.family?.displayName ?? entry.pluginId).charAt(0).toUpperCase()
 }
 
-/** 家族卡点击：已装 → 授权容器；未装 → 安装段（确认卡）。 */
+/** 家族卡点击：已装 → 授权容器；未装 → 版本选择段（默认最新，可改选历史版本）。 */
 function onFamilySelect(entry: PluginCatalogItem): void {
   if (preparing.value || confirming.value) return
   if (entry.installed) {
     enterAuthorize(entry.pluginId)
     return
   }
-  void beginInstall(entry.packageName, 'install')
+  enterVersionSelect({ packageName: entry.packageName, displayName: entry.family?.displayName ?? entry.displayName }, 'install')
+}
+
+/**
+ * 进入版本选择段（版本列表拉取与选中态在 PluginVersionSelect，挂载即拉）。
+ * port 未挂载 listPluginVersions（旧 runtime/stub）时回退直装最新版（免版本
+ * 选择步骤，安装链不因此断）。
+ */
+function enterVersionSelect(entry: { packageName: string; displayName: string }, intent: 'install' | 'update'): void {
+  if (preparing.value || confirming.value) return
+  installIntent.value = intent
+  flowError.value = ''
+  const port = resolvePluginInstallPort()
+  if (port === null) {
+    flowError.value = t('pluginProvider.flow.channelUnavailable')
+    return
+  }
+  if (port.listPluginVersions === undefined) {
+    void beginInstall(entry.packageName, intent, 'family')
+    return
+  }
+  versionEntry.value = entry
+  phase.value = 'version'
+}
+
+/** 版本选择取消：退回家族卡（无暂存产生，无清理动作）。 */
+function onVersionCancel(): void {
+  if (preparing.value) return
+  versionEntry.value = null
+  flowError.value = ''
+  phase.value = 'family'
+}
+
+/** 版本选择确认：按选中版本构造 spec 发起 prepare（latest = 裸包名 → dist-tags latest）。 */
+function onVersionInstall(version: string): void {
+  const entry = versionEntry.value
+  if (entry === null || preparing.value || confirming.value) return
+  const spec = version === 'latest' || version === '' ? entry.packageName : `${entry.packageName}@${version}`
+  void beginInstall(spec, installIntent.value, 'version')
 }
 
 /** 包名直装（S27 第二路径）：与家族卡共用确认停点。 */
@@ -468,8 +524,12 @@ function onDirectInstall(): void {
   void beginInstall(spec, 'install')
 }
 
-/** prepare → 确认卡（成功）或 family 段错误提示（失败/通路未就绪）。 */
-async function beginInstall(packageSpec: string, intent: 'install' | 'update'): Promise<void> {
+/**
+ * prepare → 确认卡（成功）或发起段错误提示（失败/通路未就绪）。errorPhase =
+ * prepare 失败后退回的段（version 段发起 → 退回版本选择可改选重试；family 段
+ * 直装 → 退回家族卡）。
+ */
+async function beginInstall(packageSpec: string, intent: 'install' | 'update', errorPhase: FlowPhase = 'family'): Promise<void> {
   if (preparing.value || confirming.value) return
   installIntent.value = intent
   flowError.value = ''
@@ -491,13 +551,15 @@ async function beginInstall(packageSpec: string, intent: 'install' | 'update'): 
     }
     installPreview.value = preview
     phase.value = 'confirm'
+    // 版本选择段数据退役（确认卡展示实际解析版本；失败重试不再回版本段的旧数据）
+    if (errorPhase === 'version') versionEntry.value = null
   } catch (e) {
     if (generation !== flowGeneration) return
     // prepare 失败（下载/校验/NAMESPACE_MISMATCH）：错误可见 + 不进确认卡（暂存由
-    // runtime prepare 失败路径自清，S18）
+    // runtime prepare 失败路径自清，S18）；version 段发起时退回版本段可改选重试
     flowError.value = e instanceof Error ? e.message : String(e)
     installPreview.value = null
-    phase.value = 'family'
+    phase.value = errorPhase
   } finally {
     if (generation === flowGeneration) preparing.value = false
   }

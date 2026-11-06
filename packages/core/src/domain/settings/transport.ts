@@ -427,6 +427,13 @@ export interface SettingsTransport {
   confirmPluginInstall?(pluginId: string): Promise<PluginInstallResult>
   cancelPluginInstall?(pluginId: string): Promise<void>
   /**
+   * 列出 npm registry 上该插件包的全部已发布版本（安装前版本下拉数据源；
+   * versions 降序，latest = dist-tags latest）。optional 为 stub 兼容形态
+   * （real adapter 无条件挂载），与安装三成员同款契约；缺失时消费方回退
+   * 「直接安装最新版」（免版本选择步骤）。
+   */
+  listPluginVersions?(packageName: string): Promise<{ versions: string[]; latest: string }>
+  /**
    * 清挂载位全局域快照分区（plugin.ui.clearMount，provider-plugin-access U2 悬置二选一
    * 裁决 = ①调用防陈旧）：Provider 页家族切换时调用，防旧家族树残留进快照恢复源。
    * optional 为 stub 兼容形态（real adapter 无条件挂载），与安装三成员同款契约。

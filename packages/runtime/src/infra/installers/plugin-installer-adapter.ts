@@ -25,7 +25,7 @@
 import { mkdir, readFile, rename, readdir, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { downloadPackageTarball, installDependencies } from './npm-installer.js'
+import { downloadPackageTarball, installDependencies, fetchPackageVersions } from './npm-installer.js'
 import { validateNamespaceBinding, NAMESPACE_MISMATCH } from '@taiji/shared/plugin-namespace'
 import type {
   IPluginInstaller,
@@ -224,6 +224,10 @@ export class NpmPluginInstaller implements IPluginInstaller {
 
   async uninstall(_pluginId: string, pluginPath: string): Promise<void> {
     await rm(pluginPath, { recursive: true, force: true })
+  }
+
+  async listVersions(packageName: string): Promise<{ versions: string[]; latest: string }> {
+    return fetchPackageVersions(parseName(packageName))
   }
 }
 

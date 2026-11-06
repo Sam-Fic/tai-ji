@@ -32,6 +32,12 @@ export default {
     confirmFailed: '安装失败',
     preparingInstall: '正在准备安装信息…',
     preparingUpdate: '正在准备更新信息…',
+    // 版本选择段（npm 全部已发布版本下拉，默认最新 dist-tag）
+    versionSelectDesc: '选择要安装的 {name} 版本',
+    versionSelectDescUpdate: '选择要更新到的 {name} 版本',
+    versionLoading: '正在获取版本列表…',
+    versionSelectLabel: '版本',
+    versionLatestOption: '最新（{version}）',
     installing: '安装中…',
     updating: '更新中…',
     // S13 崩溃恢复（失败路径表：crashed 家族卡「插件已停止」+ 重启 = toggle off/on）

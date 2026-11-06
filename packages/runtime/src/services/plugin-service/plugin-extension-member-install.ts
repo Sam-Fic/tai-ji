@@ -1,5 +1,5 @@
 import type { InstallResult } from '../ports/plugin-installer.js'
-import type { PluginCatalogService } from './plugin-catalog.js'
+import { VERSION_PAIR_MISMATCH, type PluginCatalogService } from './plugin-catalog.js'
 import type { IPluginServiceDeps } from './plugin-types.js'
 
 type ExtensionMemberInstaller = NonNullable<IPluginServiceDeps['piExtensionInstaller']>
@@ -19,14 +19,16 @@ function extensionMemberInstallFailure(packageName: string, err: unknown): Insta
 
 /**
  * pi 扩展成员安装（provider-plugin-access U7/D6 双产物安装编排）：按清单条目判定双产物
- * ——条目携带 piExtensionVersion（guard 契约：仅双产物条目携带）→ 调端口安装，失败整体报
+ * ——钉版条目（携带 piExtensionVersion）按钉版安装；免钉版条目（缺省）经 installer 的
+ * handlesPackage 判定（wool 形态包名 = 双产物，扩展版本跟随 wool-manifest）。失败整体报
  * 失败（fail-fast：静默成功 = 对话链在很远的下游报「模型不存在」，排障成本远高于此刻失败）。
- * 三类跳过（不误伤单产物插件）：端口未配置（测试/联调，warn 留痕）、清单不可得（fail-safe
+ * 跳过形态（不误伤单产物插件）：端口未配置（测试/联调，warn 留痕）、清单不可得（fail-safe
  * 链尾 config undefined——无法判定双产物 ≠ 必为双产物，跳过 + warn；清单恢复后重试安装自愈）、
- * 条目无 piExtensionVersion（单产物）。
+ * 免钉版且非双产物包名（单产物）。
  *
- * VERSION_PAIR_MISMATCH 自愈：v2-plugins.json 有 4h 本地缓存窗，发布后的新 wool-manifest
- * 可能先于清单缓存到达。配对失败时先强制刷新一次清单再重试，避免用户等缓存自然过期。
+ * VERSION_PAIR_MISMATCH 自愈（仅钉版形态可触发）：v2-plugins.json 有 4h 本地缓存窗，
+ * 发布后的新 wool-manifest 可能先于清单缓存到达。配对失败时先强制刷新一次清单再重试，
+ * 避免用户等缓存自然过期。
  */
 export async function installPiExtensionMember(
   deps: { piExtensionInstaller?: ExtensionMemberInstaller },
@@ -44,19 +46,27 @@ export async function installPiExtensionMember(
     console.warn(`[plugin-service] catalog has no entry for ${preview.packageName}; pi extension member skipped`)
     return undefined
   }
-  if (entry.piExtensionVersion === undefined) {
+  // 钉版条目 = 携带 piExtensionVersion；免钉版条目 = 缺省，双产物判定交 installer
+  //（handlesPackage，域知识在实现方；实现未提供该方法时视为 false = 按单产物跳过）
+  const pinned = entry.piExtensionVersion !== undefined
+  if (!pinned && installer.handlesPackage?.(entry.packageName) !== true) {
     return undefined
   }
   try {
     await installer.installForCatalogEntry({ packageName: entry.packageName, piExtensionVersion: entry.piExtensionVersion })
     return undefined
   } catch (err) {
-    if (!isErrorWithCode(err) || err.code !== 'VERSION_PAIR_MISMATCH') {
+    if (!isErrorWithCode(err) || err.code !== VERSION_PAIR_MISMATCH) {
       return extensionMemberInstallFailure(entry.packageName, err)
     }
     const refreshed = await catalogService.load({ force: true })
     const refreshedEntry = refreshed.config?.plugins.find((p) => p.packageName === preview.packageName)
-    if (refreshedEntry?.piExtensionVersion === undefined || refreshedEntry.piExtensionVersion === entry.piExtensionVersion) {
+    // 免钉版条目无钉版可比对（mismatch 结构上不可达，防御性兜底走失败报告）
+    if (
+      refreshedEntry === undefined ||
+      refreshedEntry.piExtensionVersion === undefined ||
+      refreshedEntry.piExtensionVersion === entry.piExtensionVersion
+    ) {
       return extensionMemberInstallFailure(entry.packageName, err)
     }
     try {

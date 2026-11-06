@@ -1175,6 +1175,15 @@ export class PluginService implements IPluginService {
     })
   }
 
+  /** 列出 npm registry 上该插件包的全部已发布版本（安装前版本下拉数据源）。 */
+  async listPluginVersions(packageName: string): Promise<{ versions: string[]; latest: string }> {
+    const installer = this.deps.pluginInstaller
+    if (!installer) {
+      throw errorWithCode('Plugin installer not configured (pluginInstaller deps missing)', PLUGIN_PREPARE_FAILED)
+    }
+    return installer.listVersions(packageName)
+  }
+
   /**
    * 提交段编排（直通与 confirm 共用）：commit 换入 → 终结旧沙箱进程 → reload 注册表
    * → 激活 → installed.json 登记 → 广播。激活失败回滚：删刚换入目录（更新场景旧版本

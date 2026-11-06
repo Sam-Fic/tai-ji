@@ -34,6 +34,12 @@ export default {
     confirmFailed: 'Install failed',
     preparingInstall: 'Preparing install details…',
     preparingUpdate: 'Preparing update details…',
+    // Version selection step (all published npm versions, latest dist-tag default)
+    versionSelectDesc: 'Choose the version of {name} to install',
+    versionSelectDescUpdate: 'Choose the version of {name} to update to',
+    versionLoading: 'Fetching version list…',
+    versionSelectLabel: 'Version',
+    versionLatestOption: 'Latest ({version})',
     installing: 'Installing…',
     updating: 'Updating…',
     // S13 crash recovery (failure-path table: crashed family card "plugin stopped" + restart = toggle off/on)

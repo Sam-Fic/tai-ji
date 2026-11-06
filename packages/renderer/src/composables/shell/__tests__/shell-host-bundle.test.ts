@@ -1706,6 +1706,10 @@ describe('settings-transport-adapter · @/api 门面八元全量转发矩阵（u
     cancelPluginInstall: fwd('plugin', 'cancelPluginInstall', ['probe-plugin'], (t, pluginId) =>
       t.cancelPluginInstall?.(pluginId),
     ),
+    // 版本下拉数据源（与安装三成员同款 optional 契约形态）
+    listPluginVersions: fwd('plugin', 'listPluginVersions', ['probe-package'], (t, packageName) =>
+      t.listPluginVersions?.(packageName),
+    ),
     // 启用/停用插件（S13 重启动作 = off 再 on）+ 挂载位分区清理（U2 裁决①：防陈旧；
     // clearPluginMountUi 与安装三成员同款 optional 契约形态）
     togglePlugin: fwd('plugin', 'togglePlugin', ['probe-plugin', true], (t, pluginId, enabled) =>

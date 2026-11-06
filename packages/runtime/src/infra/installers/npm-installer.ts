@@ -584,6 +584,31 @@ export async function fetchLatestVersion(
   return latest
 }
 
+/**
+ * 从 npm registry 获取包的全部已发布版本（插件安装前版本下拉数据源）。
+ * versions 只保留合法 semver 并按降序排列（新在前）；latest = dist-tags latest
+ * （下拉默认值）。不过滤 prerelease——全部列出，选择权在用户。
+ */
+export async function fetchPackageVersions(
+  pkgName: string,
+  timeout?: number,
+): Promise<{ versions: string[]; latest: string }> {
+  const metadata = await fetchMetadata(pkgName, timeout)
+  const latest = metadata['dist-tags'].latest
+  if (!latest) {
+    throw new NpmInstallError('not_found', `No latest version found for ${pkgName}`)
+  }
+  const versions = Object.keys(metadata.versions)
+    .map((v) => ({ v, valid: semver.parse(v) }))
+    .filter((item): item is { v: string; valid: semver.SemVer } => item.valid !== null)
+    .sort((a, b) => b.valid.compare(a.valid))
+    .map((item) => item.v)
+  if (versions.length === 0) {
+    throw new NpmInstallError('not_found', `No published versions found for ${pkgName}`)
+  }
+  return { versions, latest }
+}
+
 // ── 公开 API ──────────────────────────────────────────────────
 
 /**

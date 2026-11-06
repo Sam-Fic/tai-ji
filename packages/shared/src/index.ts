@@ -61,6 +61,8 @@ export type {
   // 两段式安装 reply（provider-plugin-access U4/U6）：确认卡知情面 + 提交结果
   //（core plugin 域 preparePluginInstall/confirmPluginInstall 跨包具名消费）
   PluginPrepareInstallReply, PluginConfirmInstallReply,
+  // 版本下拉数据源 reply（core plugin 域 listPluginVersions 跨包具名消费）
+  PluginListVersionsReply,
   // 连接目标快照 + project 写命令统一回执（connection-datasync-ssot u-foundation）：
   // 快照形状 = supervisor 生产（main/preload IPC 链）与 core 连接控制器消费跨包共用；
   // 命令回执 = runtime 写通道（u6a）与 renderer project store（u5）跨包共用

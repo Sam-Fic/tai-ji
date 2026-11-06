@@ -63,6 +63,7 @@ type PluginHandledType =
   | 'plugin.mountPoints.sync' | 'plugin.ui.snapshot' | 'plugin.ui.clearMount'
   | 'plugin.invoke' | 'plugin.uiEvent' | 'plugin.listAvailable' | 'plugin.catalog'
   | 'plugin.prepareInstall' | 'plugin.confirmInstall' | 'plugin.cancelInstall'
+  | 'plugin.listVersions'
 
 /** 按 type 字面量收窄 ClientMessage（查表 key = 运行时 guard，与原 switch narrowing 同构）。 */
 type PluginMsgOf<K extends ClientMessageType> = Extract<ClientMessage, { type: K }>
@@ -292,6 +293,19 @@ async function handlePluginCancelInstall(ctx: PluginHandlerContext, msg: PluginM
 }
 
 /**
+ * plugin.listVersions：npm registry 上该插件包的全部已发布版本（安装前版本下拉
+ * 数据源）。失败（包不存在/网络）经 transport 全局 catch 转 error envelope。
+ */
+async function handlePluginListVersions(ctx: PluginHandlerContext, msg: PluginMsgOf<'plugin.listVersions'>, ws: WsType, pluginService: IPluginService): Promise<void> {
+  const packageName = msg.payload.packageName
+  if (typeof packageName !== 'string' || packageName === '') {
+    return ctx.sendError(ws, 'invalid_params', 'Missing packageName', msg.id)
+  }
+  const result = await pluginService.listPluginVersions(packageName)
+  return ctx.reply(ws, msg.id, 'plugin.listVersions', result)
+}
+
+/**
  * plugin.* 分发表（形态 2 表驱动分发）：key = ClientMessageType 字面量，值 = 该 case 的
  * 处理函数（msg 参数按该 key 收窄）。主函数只留查表 + 落空（未命中行为与原 switch 无
  * default 一致）。
@@ -323,4 +337,5 @@ const PLUGIN_CASE_HANDLERS: { readonly [K in PluginHandledType]: (
   'plugin.prepareInstall': handlePluginPrepareInstall,
   'plugin.confirmInstall': handlePluginConfirmInstall,
   'plugin.cancelInstall': handlePluginCancelInstall,
+  'plugin.listVersions': handlePluginListVersions,
 }

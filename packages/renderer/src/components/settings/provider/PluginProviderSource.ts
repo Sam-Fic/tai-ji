@@ -105,6 +105,14 @@ export interface PluginInstallPort { // oe-exempt:20261024:framework:ports/SDK �
   preparePluginInstall(packageSpec: string): Promise<PluginInstallPreview>
   confirmPluginInstall(pluginId: string): Promise<PluginInstallResult>
   cancelPluginInstall(pluginId: string): Promise<void>
+  /** 版本下拉数据源（optional：旧 runtime/宿主未挂载时缺省 → 消费方回退直装最新版）。 */
+  listPluginVersions?(packageName: string): Promise<PluginVersionList>
+}
+
+/** 插件包全部已发布版本（plugin.listVersions 回包；versions 降序，latest = dist-tags latest）。 */
+export interface PluginVersionList {
+  versions: string[]
+  latest: string
 }
 
 /**
@@ -122,6 +130,9 @@ export function resolvePluginInstallPort(): PluginInstallPort | null {
     preparePluginInstall: (spec) => transport.preparePluginInstall!(spec),
     confirmPluginInstall: (pluginId) => transport.confirmPluginInstall!(pluginId),
     cancelPluginInstall: (pluginId) => transport.cancelPluginInstall!(pluginId),
+    ...(typeof transport.listPluginVersions === 'function'
+      ? { listPluginVersions: (packageName: string) => transport.listPluginVersions!(packageName) }
+      : {}),
   }
 }
 

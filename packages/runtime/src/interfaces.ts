@@ -914,6 +914,8 @@ export interface IPluginService {
   confirmPluginInstall(pluginId: string): Promise<import('./services/ports/plugin-installer.js').InstallResult>
   /** 两段式安装：用户取消（清暂存与 pending 登记，未确认不发生安装落盘） */
   cancelPluginInstall(pluginId: string): Promise<void>
+  /** 列出 npm registry 上该插件包的全部已发布版本（安装前版本下拉数据源；versions 降序，latest = dist-tags latest） */
+  listPluginVersions(packageName: string): Promise<{ versions: string[]; latest: string }>
   getToolSchemas?(): import('./services/plugin-service/plugin-types.js').ToolRegistration[]
   /**
    * pi 侧事件向插件钩子的投递（pi1-disposition-chat-flow D7②）：泛型 'onPiEvent' 键派发，

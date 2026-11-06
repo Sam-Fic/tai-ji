@@ -59,6 +59,7 @@ import type {
   Segment,
   ArchiveSummary,
   SessionSurface,
+  PluginListVersionsReply,
 } from '@taiji/shared'
 import { recommendedExtensions, PRESET_SKILL_DIRS, PRESET_AGENT_DIRS, PRESET_EXTENSION_DIRS, DEFAULT_DISCOVERY_CONFIG, DEFAULT_PRESETS, DELIVERY_PREVIEW_MAX_CHARS, QUOTA_PRESETS, RETRY_RULES_BASELINE } from '@taiji/shared'
 import { createSession, fixtureMessages, fixtureSessions, e2eTestSession } from './data'
@@ -2065,6 +2066,11 @@ const pluginImpl = {
   },
   async cancelPluginInstall(_pluginId: string): Promise<void> {
     await sleep(TIMING.ack)
+  },
+  // 版本下拉数据源：mock 无 registry 通道，返回单版本演示形态（三段流在 mock 模式可走通）
+  async listPluginVersions(_packageName: string): Promise<PluginListVersionsReply> {
+    await sleep(TIMING.ack)
+    return { versions: ['0.1.0'], latest: '0.1.0' }
   },
 }
 

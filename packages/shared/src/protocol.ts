@@ -298,6 +298,9 @@ export type ClientMessageType =
   // 确认卡知情面（停在确认停点，S27）；confirm = 提交落盘并激活；cancel = 清暂存
   //（未确认不发生安装落盘）。reply：prepare/confirm 同名（payload 消费型），cancel pong ack。
   | 'plugin.prepareInstall' | 'plugin.confirmInstall' | 'plugin.cancelInstall'
+  // plugin.listVersions：npm registry 上该插件包的全部已发布版本（安装前版本下拉
+  // 数据源；免钉版清单形态下 UI 默认选 latest，用户可改选任意历史版本）。
+  | 'plugin.listVersions'
   | 'plugin.config.get' | 'plugin.config.set'
   | 'plugin.uiResponse'
   | 'plugin.mountPoints.sync'
@@ -833,9 +836,9 @@ export interface PluginCatalogEntry {
   pluginId: string
   displayName: string
   description?: string
-  /** taiji 插件包版本（双产物形态与 piExtensionVersion 成对钉定，D6） */
-  pluginVersion: string
-  /** pi 扩展包版本（双产物形态专用；单产物条目省略） */
+  /** taiji 插件包版本。缺省 = 免钉版形态：安装时解析 npm latest、扩展配对跟随 wool-manifest（清单零维护） */
+  pluginVersion?: string
+  /** pi 扩展包版本。钉版形态与 pluginVersion 成对；免钉版/单产物条目省略（免钉版扩展版本由 wool-manifest 决定） */
   piExtensionVersion?: string
   /** Provider 家族元数据（Provider 页家族卡数据源；非 provider 插件省略） */
   family?: PluginProviderFamilyMeta
@@ -919,6 +922,17 @@ export interface PluginPrepareInstallReply {
 export interface PluginConfirmInstallReply {
   success: boolean
   error?: string
+}
+
+/**
+ * plugin.listVersions reply：npm registry 上该插件包的全部已发布版本（安装前版本
+ * 下拉数据源）。versions 降序（新在前）；latest = dist-tags latest（下拉默认值）。
+ */
+export interface PluginListVersionsReply {
+  /** 全部已发布版本，semver 降序（新版本在前） */
+  versions: string[]
+  /** dist-tags latest（下拉框默认选项「最新」对应的版本） */
+  latest: string
 }
 
 
@@ -1289,6 +1303,8 @@ export interface ClientMessageMap {
   'plugin.prepareInstall': { packageSpec: string }
   'plugin.confirmInstall': { pluginId: string }
   'plugin.cancelInstall': { pluginId: string }
+  // plugin.listVersions：版本下拉数据源（packageName = npm 包名，scoped 形态原样）。
+  'plugin.listVersions': { packageName: string }
   'file.read': { path: string; sessionId?: string }
   'file.tree': { sessionId: string }
   'file.tree.expand': { sessionId: string; path: string }
@@ -1802,6 +1818,8 @@ export type ServerMessageType =
   // 两段式安装 reply（provider-plugin-access U4/U6）：prepare/confirm 与 request 同名
   //（payload 消费型——确认卡知情面 / 提交结果）；cancel ack 型走 pong，不占下行帧。
   | 'plugin.prepareInstall' | 'plugin.confirmInstall'
+  // plugin.listVersions reply（与 request 同名，payload 消费型——版本下拉数据源）。
+  | 'plugin.listVersions'
   // plugin:headerActionUpdate：headerAction 可变字段（badge/tooltip/disabled）下行帧
   //（AP-1）。必带 sessionId——渲染端按 (sessionId, headerActionId) 写对应会话分区；
   // 经 broker 全局广播直发（同上不入 ring）。
@@ -2580,6 +2598,8 @@ export interface ServerMessageMapBase {
   // 两段式安装 reply（provider-plugin-access U4/U6，与 request 同名——payload 消费型）。
   'plugin.prepareInstall': PluginPrepareInstallReply
   'plugin.confirmInstall': PluginConfirmInstallReply
+  // plugin.listVersions reply（与 request 同名——版本下拉数据源）。
+  'plugin.listVersions': PluginListVersionsReply
   // plugin:headerActionUpdate：headerAction 可变字段下行帧（AP-1；必带 sessionId，
   // 渲染端按 (sessionId, headerActionId) 写会话分区）。payload 契约见 HeaderActionUpdatePayload。
   'plugin:headerActionUpdate': HeaderActionUpdatePayload
@@ -3848,6 +3868,7 @@ export interface ReplyPayloadMap {
   'plugin.prepareInstall': ServerMessageMap['plugin.prepareInstall']
   'plugin.confirmInstall': ServerMessageMap['plugin.confirmInstall']
   'plugin.cancelInstall': ServerMessageMap['pong']
+  'plugin.listVersions': ServerMessageMap['plugin.listVersions']
   'plugin.config.get': ServerMessageMap['plugin:config']
   'plugin.config.set': ServerMessageMap['plugin:config']
   'plugin.mountPoints.sync': ServerMessageMap['pong']
