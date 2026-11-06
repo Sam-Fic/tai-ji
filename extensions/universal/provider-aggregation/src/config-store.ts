@@ -17,9 +17,10 @@
  * await 窗口，天然免并发竞态）；文件为 KB 级小文本，与 runtime 写侧的同步读一致。
  *
  * 消费语义（RL4）：读取成功/失败都记录消费签名（该版本内容已消费，下次内容再变才重读
- * ——失败版本不反复 warn 刷日志）；损坏/不可读由调用方保持上一有效注册继续路由
- * （扩展侧读失败不发明「隔离坏文件」动作——磁盘隔离与呈报是 runtime extras store
- * 的既有语义，扩展侧只保证自身不因坏配置丢注册）。
+ * ——失败版本不反复 warn 刷日志）；损坏/不可读（含 stat 故障——文件存在但状态未知，
+ * 见 probeFileMtime）由调用方保持上一有效注册继续路由（扩展侧读失败不发明「隔离坏
+ * 文件」动作——磁盘隔离与呈报是 runtime extras store 的既有语义，扩展侧只保证自身
+ * 不因坏配置丢注册）。
  */
 
 import { readFileSync, statSync } from "node:fs";
@@ -52,14 +53,23 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 	return typeof v === "object" && v !== null && !Array.isArray(v)
 }
 
-function statMtimeMsOrNull(path: string): number | null {
+/** stat 门单次探测结果：absent 仅限 ENOENT（确定不存在）；failed = 其余 stat 故障（存在但状态未知）。 */
+type StatProbe =
+	| { kind: "ok", mtimeMs: number }
+	| { kind: "absent" }
+	| { kind: "failed", reason: string }
+
+function probeFileMtime(path: string): StatProbe {
 	try {
-		return statSync(path).mtimeMs
+		return { kind: "ok", mtimeMs: statSync(path).mtimeMs }
 	} catch (err) {
-		// ENOENT = 文件不存在（合法态）；其余 stat 故障按「存在但状态未知」处理——
-		// 返回 null 走 absent 分支会让下次 stat 值与签名比较自然收敛，不抛出中断求值。
-		if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") return null
-		return null
+		const code = (err as NodeJS.ErrnoException | null)?.code
+		// ENOENT = 文件确定不存在（合法态 → absent）；其余 errno（EACCES/EIO/ELOOP 等）=
+		// 存在但状态未知 → 按 unreadable 呈报并保持旧注册（RL4 读失败族与 corrupt/unreadable
+		// 同契约），绝不并入 absent——一次瞬时 stat 故障把全部已注册路由标删除态、用户面对
+		// 误导性「已删除」错误，是该处并入 absent 的根因。
+		if (code === "ENOENT") return { kind: "absent" }
+		return { kind: "failed", reason: `providers.json stat failed (${code ?? "unknown"})` }
 	}
 }
 
@@ -89,7 +99,8 @@ function readRoutesSection(path: string): ConsumedRoutesSectionRead {
  */
 export class RoutesConfigReader {
 	private readonly path: string
-	/** 最后一次消费的内容签名（mtimeMs 字符串；"absent" = 消费时文件不存在；null = 从未消费）。 */
+	/** 最后一次消费的内容签名（mtimeMs 字符串；"absent" = 消费时文件不存在；"stat-failed" =
+	 * 上次 stat 故障未读到状态；null = 从未消费）。 */
 	private lastSignature: string | null = null
 
 	constructor(path: string = getProviderExtrasPath()) {
@@ -102,13 +113,21 @@ export class RoutesConfigReader {
 	 * 失败版本已呈报过，不再重读重报）。
 	 */
 	readIfChanged(): { changed: false, read: RoutesSectionRead } | { changed: true, read: ConsumedRoutesSectionRead } {
-		const mtimeMs = statMtimeMsOrNull(this.path)
-		if (mtimeMs === null) {
+		const probe = probeFileMtime(this.path)
+		if (probe.kind === "absent") {
 			if (this.lastSignature === "absent") return { changed: false, read: { status: "absent" } }
 			this.lastSignature = "absent"
 			return { changed: true, read: { status: "absent" } }
 		}
-		const signature = String(mtimeMs)
+		if (probe.kind === "failed") {
+			// stat 故障按 unreadable 消费（保持旧注册 + warn，与 corrupt/unreadable 同契约）；
+			// 签名记 sentinel——stat 恢复后 mtime 签名必然异于 sentinel 自然触发重读收敛，
+			// 故障持续期间不重复 warn。
+			if (this.lastSignature === "stat-failed") return { changed: false, read: { status: "skipped" } }
+			this.lastSignature = "stat-failed"
+			return { changed: true, read: { status: "unreadable", reason: probe.reason } }
+		}
+		const signature = String(probe.mtimeMs)
 		if (signature === this.lastSignature) return { changed: false, read: { status: "skipped" } }
 		const read = readRoutesSection(this.path)
 		this.lastSignature = signature
@@ -122,12 +141,16 @@ export class RoutesConfigReader {
 	 * 全量重读（statSync + readFileSync，KB 级）是对账正确性的必要成本，事件驱动非轮询。
 	 */
 	readLatest(): ConsumedRoutesSectionRead {
-		const mtimeMs = statMtimeMsOrNull(this.path)
-		if (mtimeMs === null) {
+		const probe = probeFileMtime(this.path)
+		if (probe.kind === "absent") {
 			this.lastSignature = "absent"
 			return { status: "absent" }
 		}
-		this.lastSignature = String(mtimeMs)
+		if (probe.kind === "failed") {
+			this.lastSignature = "stat-failed"
+			return { status: "unreadable", reason: probe.reason }
+		}
+		this.lastSignature = String(probe.mtimeMs)
 		return readRoutesSection(this.path)
 	}
 }

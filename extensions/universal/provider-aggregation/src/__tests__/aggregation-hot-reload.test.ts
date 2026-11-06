@@ -13,7 +13,7 @@
  * 窗口，高负载下耗时与单测常态一致。
  */
 
-import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -362,6 +362,49 @@ describe("配置损坏 = 保持旧注册继续路由", () => {
 		const ctx = createMockCtx()
 		expect(() => routeVia(registered, "route-a", ctx)).toThrow(/已删除/) // 修复版里无 route-a
 		expect(registered.has(`${AGGREGATION_PROVIDER_ID}/route-b`)).toBe(false) // 新增 id 不在求值前路径注册
+	})
+})
+
+// ── stat 故障 = 保持旧注册继续路由（RL4 读失败族：非 ENOENT stat 故障不入 absent 删除态） ──
+
+describe("stat 故障 = 保持旧注册继续路由", () => {
+	it("非 ENOENT stat 故障（自指 symlink → ELOOP）：warn 呈报，闭包按上一有效定义求值，不标删除态；故障持续不重复 warn", () => {
+		writeConfig([ROUTE_A], T1)
+		const { pi, registered } = createMockPi()
+		providerAggregationFactory(pi, { configPath })
+		const warnSpy = vi.spyOn(getLogger("provider-aggregation"), "warn")
+		// 「存在但 stat 失败」的最小确定性构造：configPath 替换为自指 symlink，statSync 抛 ELOOP（非 ENOENT）
+		rmSync(configPath)
+		symlinkSync(configPath, configPath)
+		const ctx = createMockCtx()
+		expect(routeVia(registered, "route-a", ctx).modelId).toBe("glm") // 保持旧注册继续路由
+		expect(routeVia(registered, "route-a", ctx).modelId).toBe("glm") // 第二次求值：签名 sentinel 去重不重复消费
+		expect(warnSpy).toHaveBeenCalledTimes(1)
+		expect(warnSpy.mock.calls[0]?.[0]).toContain("stat failed")
+	})
+
+	it("stat 恢复后下次求值重读收敛（sentinel 与 mtime 签名必然不同）：按恢复后的新定义路由", () => {
+		writeConfig([ROUTE_A], T1)
+		const { pi, registered } = createMockPi()
+		providerAggregationFactory(pi, { configPath })
+		rmSync(configPath)
+		symlinkSync(configPath, configPath)
+		const ctx = createMockCtx()
+		expect(routeVia(registered, "route-a", ctx).modelId).toBe("glm")
+		unlinkSync(configPath) // stat 故障解除（unlink 不追随 symlink）
+		writeConfig(
+			[
+				{
+					...ROUTE_A,
+					members: [
+						{ id: "e1", providerId: "zhipu", modelId: "glm", type: "window", window: EMPTY_WINDOW },
+						{ id: "e2", providerId: "opencode-go", modelId: "zai-glm", type: "none" },
+					],
+				},
+			],
+			T3,
+		)
+		expect(routeVia(registered, "route-a", ctx).modelId).toBe("zai-glm") // 新定义已消费（e1 窗外 → 兜底 e2）
 	})
 })
 
