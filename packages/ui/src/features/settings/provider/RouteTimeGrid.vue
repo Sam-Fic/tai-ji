@@ -289,9 +289,8 @@ function selectEraser(): void {
   eraser.value = true
 }
 
-/** 选中参与涂抹的窗端点（图例未选时回落第一个窗端点；仅额度路由无可涂端点）。 */
+/** 选中参与涂抹的窗端点（图例未选时回落第一个窗端点；仅额度路由无可涂端点）。调用点均已先拦截橡皮模式。 */
 function paintTarget(): AggregationMember | null {
-  if (eraser.value) return null
   const active = windowMembers.value.find((m) => m.id === selectedMemberId.value)
   return active ?? windowMembers.value[0] ?? null
 }
@@ -308,6 +307,12 @@ function applyCell(day: number, slot: number): void {
 }
 
 function startPaint(day: number, slot: number): void {
+  if (eraser.value) {
+    // 橡皮不解析端点目标（清除整格，作用于全部窗端点）：直接进涂抹态，由 applyCell 橡皮分流逐格清除
+    painting.value = true
+    applyCell(day, slot)
+    return
+  }
   const target = paintTarget()
   if (!target) {
     toast.warning(t('settings.modelRoute.paintSelectFirst'))
@@ -347,7 +352,7 @@ onBeforeUnmount(() => {
 
 function applyPreset(kind: 'work' | 'night' | 'clear'): void {
   if (eraser.value) {
-    toast.warning(t('settings.modelRoute.paintSelectFirst'))
+    toast.warning(t('settings.modelRoute.paintEraserNoPreset'))
     return
   }
   const target = paintTarget()

@@ -716,6 +716,7 @@ export default {
     paintNight: 'Nights',
     paintClear: 'Clear slots',
     paintSelectFirst: 'Pick an endpoint before using quick paint',
+    paintEraserNoPreset: 'Quick paint is unavailable in eraser mode — turn off the eraser first',
     fallbackBar: 'Unconditional fallback → {name}',
     fbTruncateNote: 'Any time; truncates endpoints after it',
     noFallback: 'No unconditional endpoint',
