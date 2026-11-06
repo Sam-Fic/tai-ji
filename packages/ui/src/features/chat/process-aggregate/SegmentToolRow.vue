@@ -29,12 +29,12 @@
     <component :is="headerIcon" v-else :class="[BLOCK_ICON_CLASS, isFailed ? 'text-danger' : '', 'self-center']" />
     <span class="shrink-0 text-neutral-mid">{{ tool.toolName }}</span>
     <!-- 参数摘要：超宽 min(420px,52%) 省略（任务书硬约束；完整参数走浮层/抽屉）；
-         窄屏（density mobile 档 = ≤420px 窄屏同档，D7 双窗降档同判定源）11px = --text-2xs
-         令牌（chat 语境 11px 基准，D4 采用栏 demo 规格） -->
+         窄屏 11px = --text-2xs 令牌（chat 语境 11px 基准，D4 采用栏 demo 规格），判定源 =
+         视口 ≤420px 断点（D7 双窗降档 max-[420px]: 同款机制——spec §9 表把单步行参数 11px
+         与思考窗/聚合窗降档绑同一断点，桌面窗口缩到 390px 时 V6 走查同样生效） -->
     <span
       v-if="paramText"
-      class="min-w-0 max-w-[min(420px,52%)] truncate font-mono text-neutral-dim"
-      :class="density === 'mobile' ? 'text-[length:var(--text-2xs)]' : ''"
+      class="min-w-0 max-w-[min(420px,52%)] truncate font-mono text-neutral-dim max-[420px]:text-[length:var(--text-2xs)]"
       data-testid="agg-tool-param"
     >{{ paramText }}</span>
     <!-- diff 摘要（edit 工具增删行数，core diffStat 口径；write/历史会话缺省不渲染） -->
@@ -68,7 +68,6 @@ import RunningBlockIcon from '../RunningBlockIcon.vue'
 import AggregateHoverCard from './AggregateHoverCard.vue'
 import { BLOCK_ICON_CLASS, BLOCK_ICON_LUCIDE, getBlockIcon } from '../block-icon'
 import { formatDuration } from '../format-utils'
-import { useChatDensity } from '../chat-view-deps'
 
 const props = defineProps<{
   /** 工具调用（段成员 FlatBlock.block.ref 的 ToolCall 形态；agentgraph 同构） */
@@ -81,9 +80,6 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-
-/** 密度档（D4 窄屏 11px 参数字号判定源，与 D7 双窗降档同档：mobile = ≤420px 窄屏同档） */
-const density = useChatDensity()
 
 const isRunning = computed(() => props.tool.status === 'running')
 const isFailed = computed(() => props.tool.status === 'error')
