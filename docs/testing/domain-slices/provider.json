@@ -1,6 +1,6 @@
 {
   "name": "provider",
-  "summary": "provider/模型（runtime provider-* 服务 + model-service/model-capability + auth 凭据 + migration provider-importer + remote-config 模板同步 + provider-live-sync 扩展 + shared provider/wool 契约；renderer provider 页面按 W2-B 冻结归 settings 域）；runtime auth 凭据生命周期（OAuth/API key，批 D 归并）；runtime auth 凭据生命周期（OAuth/API key，批 D 归并）；runtime auth 凭据生命周期（OAuth/API key，批 D 归并）；runtime auth 凭据生命周期（OAuth/API key，批 D 归并）",
+  "summary": "provider/模型（runtime provider-* 服务 + model-service/model-capability + auth 凭据 + migration provider-importer + remote-config 模板同步 + provider-live-sync/provider-aggregation 扩展 + shared provider/wool 契约；renderer provider 页面按 W2-B 冻结归 settings 域）；runtime auth 凭据生命周期（OAuth/API key，批 D 归并）；模型聚合路由（aggregation 契约 + 配额编排 + 消息处理）",
   "layers": [
     "runtime",
     "extension",
@@ -11,10 +11,7 @@
       "packages/runtime/src/infra/model-connection-tester.ts",
       "packages/runtime/src/infra/pi/pi-provider-store.ts",
       "packages/runtime/src/services/auth/**",
-      "packages/runtime/src/services/auth/**",
-      "packages/runtime/src/services/auth/**",
-      "packages/runtime/src/services/auth/**",
-      "packages/runtime/src/services/auth/**",
+      "packages/runtime/src/services/aggregation-quota-refresher.ts",
       "packages/runtime/src/services/migration/legacy-provider-migration.ts",
       "packages/runtime/src/services/migration/provider-extras-migration.ts",
       "packages/runtime/src/services/migration/provider-importer.ts",
@@ -29,12 +26,15 @@
       "packages/runtime/src/services/provider-header-redaction.ts",
       "packages/runtime/src/services/provider-model-item.ts",
       "packages/runtime/src/services/provider-write-proxy.ts",
-      "packages/runtime/src/services/remote-config/**"
+      "packages/runtime/src/services/remote-config/**",
+      "packages/runtime/src/transport/aggregation-message-handler.ts"
     ],
     "extension": [
+      "extensions/universal/provider-aggregation/src/**",
       "extensions/universal/provider-live-sync/src/**"
     ],
     "shared": [
+      "packages/shared/src/aggregation.ts",
       "packages/shared/src/network-proxy.ts",
       "packages/shared/src/provider.ts",
       "packages/shared/src/retry-rules.ts"
@@ -42,10 +42,14 @@
   },
   "tests": [
     "extensions/universal/network-proxy/src/__tests__/network-proxy-shared-parity.test.ts",
+    "extensions/universal/provider-aggregation/src/__tests__/aggregation-hot-reload.test.ts",
+    "extensions/universal/provider-aggregation/src/__tests__/retry-classification.test.ts",
+    "extensions/universal/provider-aggregation/src/__tests__/route-matrix.test.ts",
     "extensions/universal/provider-live-sync/src/**",
     "extensions/universal/retry-rules/src/__tests__/pi-ai-vocabulary-parity.test.ts",
     "packages/runtime/src/services/__tests__/merged-catalog-three-state.test.ts",
     "packages/runtime/src/services/__tests__/model-quota-bundle.test.ts",
+    "packages/runtime/src/services/__tests__/quota-freshness.test.ts",
     "packages/runtime/src/services/__tests__/provider-catalog-refresh.test.ts",
     "packages/runtime/src/services/__tests__/provider-config-helper-builtin-malformed.test.ts",
     "packages/runtime/src/services/__tests__/provider-config-helper-remote-dedupe.test.ts",
@@ -54,24 +58,23 @@
     "packages/runtime/src/services/__tests__/provider-write-fields.test.ts",
     "packages/runtime/src/services/__tests__/wool-provider-write-proxy.test.ts",
     "packages/runtime/src/services/auth/__tests__/auth-bundle.test.ts",
-    "packages/runtime/src/services/auth/__tests__/auth-bundle.test.ts",
-    "packages/runtime/src/services/auth/__tests__/auth-bundle.test.ts",
-    "packages/runtime/src/services/auth/__tests__/auth-bundle.test.ts",
     "packages/runtime/src/services/auth/__tests__/device-code-flow.test.ts",
-    "packages/runtime/src/services/auth/__tests__/device-code-flow.test.ts",
-    "packages/runtime/src/services/auth/__tests__/device-code-flow.test.ts",
-    "packages/runtime/src/services/auth/__tests__/device-code-flow.test.ts",
-    "packages/runtime/src/services/auth/__tests__/oauth-flow.test.ts",
-    "packages/runtime/src/services/auth/__tests__/oauth-flow.test.ts",
-    "packages/runtime/src/services/auth/__tests__/oauth-flow.test.ts",
     "packages/runtime/src/services/auth/__tests__/oauth-flow.test.ts",
     "packages/runtime/src/services/migration/__tests__/provider-importer.template-empty.test.ts",
     "packages/runtime/src/services/remote-config/__tests__/remote-provider-sync.test.ts",
     "packages/runtime/src/services/remote-config/__tests__/remote-provider-templates.test.ts",
+    "packages/shared/src/__tests__/aggregation.test.ts",
     "packages/shared/src/__tests__/provider-kind.test.ts",
-    "packages/shared/src/__tests__/wool.test.ts"
+    "packages/shared/src/__tests__/wool.test.ts",
+    "packages/runtime/src/services/__tests__/aggregation-supported-levels.test.ts",
+    "packages/runtime/src/services/__tests__/aggregation-catalog-consistency.test.ts",
+    "packages/runtime/src/services/__tests__/aggregation-new-route-binding.test.ts"
   ],
-  "sharedBy": {},
+  "sharedBy": {
+    "packages/runtime/src/services/__tests__/aggregation-new-route-binding.test.ts": [
+      "chat"
+    ]
+  },
   "contracts": [],
   "e2eRules": []
 }

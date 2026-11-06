@@ -10,6 +10,7 @@
  */
 import type { WebSocket as WsType } from 'ws'
 import type { ClientMessage } from '@taiji/shared'
+import { isAggregationModelRef } from '@taiji/shared'
 import type { SettingsHandlerContext } from './settings-message-handler.js'
 import { isModelRef, parseModelSelector } from '@zhushanwen/subagent-core'
 import { toErrorMessage } from '../utils/errors.js'
@@ -69,6 +70,12 @@ export class ModelMessageHandler {
     // 仍为按请求值回显（旧行为兜底），但正常路径 readEffectiveModelId 的返回恒为
     // 'provider/id' 复合串，该分支实际不可达。
     const effectiveModel = await this.ctx.modelService.switchModel(sessionId, provider, modelId)
+    // 触发点②（provider-aggregation D3/U4）：绑定模型路由成功——按生效值（非请求值）
+    // 判定路由引用，额度数据随绑定即刻按需刷新（可选钩子，组合根注入 U4 编排；内部
+    // 自捕获错误 fire-and-forget，不阻断切换回执；非路由引用由实现内部短路）。
+    if (isAggregationModelRef(effectiveModel)) {
+      this.ctx.routeModelBound?.(sessionId, effectiveModel)
+    }
     // 生效值应为 'provider/id' 复合串（切分规则单点 = core 的 parseModelSelector）；
     // 读回形态异常（无 '/'、任一侧为空）时保持既有防御：按请求值回显。
     const parsed = parseModelSelector(effectiveModel)

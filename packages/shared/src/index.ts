@@ -149,7 +149,67 @@ export type {
   ScanSourceType, ScannedSkillInfo, ScannedAgentInfo,
   DiscoveryConfig, DiscoveryConfigV1, SkillDirConfig,
   ProviderId, ModelId,
+  ProviderKind,
 } from './provider'
+// pi 凭据缺失判定词表 + 出站呈现映射（U3/AX5；C-comm-01 分层修复自 services
+// session-model-control 上移：纯常量/纯函数无 node 依赖，barrel 安全；runtime
+// 切换链分型与 infra 出站映射共用同一判定）
+export {
+  PI_CREDENTIAL_MISSING_PREFIX,
+  formatCredentialMissingPresentation,
+} from './provider'
+// 模型路由域（provider-aggregation U1 契约根：类型全集 + 校验/标记纯函数 SSOT；
+// runtime store 写侧、路由页编排 U9、设置页 U5、选择器 U6、pi 路由扩展 U2 共同 import，
+// 纯类型/常量/纯函数无 node 依赖，barrel 安全）
+export type {
+  AggregationRoutesVersion,
+  AggregationTimeWindowTable,
+  AggregationMemberConditionType,
+  AggregationQuotaCondition,
+  AggregationMember,
+  AggregationSpecialDateMode,
+  AggregationSpecialDate,
+  AggregationRouteMode,
+  AggregationRoute,
+  AggregationRoutesFile,
+  AggregationRoutesParseResult,
+  AggregationErrorCode,
+  AggregationRouteValidationResult,
+  AggregationDanglingReason,
+  AggregationMemberIssue,
+  AggregationValidModelIndex,
+  AggregationRouteCard,
+  AggregationRouteView,
+  AggregationRouteSaved,
+  AggregationRouteDeleted,
+  AggregationQuotaFreshnessProbe,
+} from './aggregation'
+export {
+  AGGREGATION_PROVIDER_ID,
+  AGGREGATION_ROUTES_VERSION,
+  AGGREGATION_MEMBER_CONDITION_TYPES,
+  AGGREGATION_SPECIAL_DATE_MODES,
+  AGGREGATION_ROUTE_MODES,
+  AGGREGATION_ERROR_CODES,
+  AGGREGATION_DANGLING_REASONS,
+  AGGREGATION_QUOTA_THRESHOLD_MAX,
+  AGGREGATION_QUOTA_FRESHNESS_MS,
+  ROUTE_ID_MAX_LENGTH,
+  ROUTE_ID_PATTERN,
+  TIME_WINDOW_DAYS,
+  TIME_WINDOW_SLOTS_PER_DAY,
+  emptyAggregationRoutesFile,
+  parseAggregationRoutesSection,
+  isValidRouteId,
+  generateRouteIdFromName,
+  validateAggregationRouteUpsert,
+  annotateDanglingMembers,
+  buildAggregationModelRef,
+  isAggregationModelRef,
+  aggregationRouteIdFromRef,
+  collectOrphanAggregationRefs,
+  isAggregationQuotaDataFresh,
+} from './aggregation'
 // v1→v2 discovery.json 迁移纯函数（discovery-migrate.ts）
 export { migrateDiscoveryV1ToV2 } from './discovery-migrate'
 export type { ToolPermission, ThemeMode, ThemePreset } from './settings'
