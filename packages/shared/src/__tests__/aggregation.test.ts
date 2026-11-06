@@ -2,6 +2,7 @@ import { describe, it, expect, expectTypeOf } from 'vitest'
 import type { ClientMessageType, ClientMessageMap, ReplyPayloadMap, ServerMessageMap } from '../protocol'
 import type {
   AggregationMemberIssue,
+  AggregationProviderRouteRef,
   AggregationRoute,
   AggregationRouteDeleted,
   AggregationRouteSaved,
@@ -18,6 +19,7 @@ import {
   aggregationRouteIdFromRef,
   buildAggregationModelRef,
   collectOrphanAggregationRefs,
+  collectProviderRouteRefs,
   emptyAggregationRoutesFile,
   generateRouteIdFromName,
   isAggregationModelRef,
@@ -321,6 +323,48 @@ describe('失效引用收集（collectOrphanAggregationRefs）', () => {
 
   it('provider 段为聚合 id 但 model 段为空 → 不收集（该形态被上游 sanitizeScopedModels 的 isModelRef 过滤，读取入口恒不可见——分层职责，非本函数判定对象）', () => {
     expect(collectOrphanAggregationRefs([`${AGGREGATION_PROVIDER_ID}/`], routes)).toEqual([])
+  })
+})
+
+// ── U5 补呈现：供应商路由引用投影（外部 spec §6.3 行摘要 / §6.4 引用区单源） ──────────
+
+describe('供应商路由引用投影（collectProviderRouteRefs）', () => {
+  const routes = [
+    makeRoute({
+      id: 'glm-flash',
+      name: 'GLM Flash',
+      members: [
+        { id: 'ep-z1', providerId: 'zhipu', modelId: 'glm-5.3-flash', type: 'none' },
+        { id: 'ep-o1', providerId: 'opencode-go', modelId: 'zai-glm-5.3-flash', type: 'quota', quota: { thresholdPercent: 20 } },
+        { id: 'ep-z2', providerId: 'zhipu', modelId: 'glm-5.3-flash', type: 'window', window: Array.from({ length: 7 }, () => Array<boolean>(48).fill(false)) },
+      ],
+    }),
+    makeRoute({ id: 'sonnet-route', name: 'Sonnet', members: [{ id: 'ep-z3', providerId: 'zhipu', modelId: 'glm-5.3-flash', type: 'none' }] }),
+    makeRoute({ id: 'unrelated', name: 'Unrelated', members: [{ id: 'ep-x', providerId: 'other', modelId: 'm', type: 'none' }] }),
+  ]
+
+  it('routeCount 按路由去重（spec §6.3：不是端点数）', () => {
+    const refs = collectProviderRouteRefs(routes, 'zhipu')
+    expect(refs.routeCount).toBe(2) // glm-flash 两端点 + sonnet-route 一端点，去重后 2 条路由
+  })
+
+  it('refs 每端点一条，按路由卡序 + 端点序稳定排序', () => {
+    const refs = collectProviderRouteRefs(routes, 'zhipu')
+    expect(refs.refs).toEqual([
+      { routeId: 'glm-flash', routeName: 'GLM Flash', memberId: 'ep-z1', memberIndex: 0 },
+      { routeId: 'glm-flash', routeName: 'GLM Flash', memberId: 'ep-z2', memberIndex: 2 },
+      { routeId: 'sonnet-route', routeName: 'Sonnet', memberId: 'ep-z3', memberIndex: 0 },
+    ])
+  })
+
+  it('无引用渠道 = 零值投影（行摘要「未参与路由」与引用区空文案统一判据）', () => {
+    expect(collectProviderRouteRefs(routes, 'no-ref-provider')).toEqual({ routeCount: 0, refs: [] })
+    expect(collectProviderRouteRefs([], 'zhipu')).toEqual({ routeCount: 0, refs: [] })
+  })
+
+  it('投影类型随路由 wire 域演进而编译期锁定（memberIndex 数字 / memberId 锚字符串）', () => {
+    expectTypeOf<AggregationProviderRouteRef['memberIndex']>().toEqualTypeOf<number>()
+    expectTypeOf<AggregationProviderRouteRef['memberId']>().toEqualTypeOf<string>()
   })
 })
 

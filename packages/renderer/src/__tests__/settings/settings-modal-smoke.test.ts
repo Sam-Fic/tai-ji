@@ -286,7 +286,7 @@ function seedProvider(): ProviderInfo {
 }
 
 describe('SettingsModal 模型路由分区接线（provider-aggregation D10 两屏 / U2 一致性修复）', () => {
-  it('分区已登记：settings-nav-model-route 渲染；首访点击切换后 getRouteView 拉取 + ModelRoutePage 挂载', async () => {
+  it('分区已登记：settings-nav-model-route 渲染；首访点击切换后 ModelRoutePage 挂载且不重拉（provider 分区已首拉缓存）', async () => {
     provideMockPlatform()
     provideSettingsTransport(makeSettingsTransportStub())
 
@@ -299,11 +299,16 @@ describe('SettingsModal 模型路由分区接线（provider-aggregation D10 两�
     const navBtn = document.body.querySelector('[data-testid="settings-nav-model-route"]')
     expect(navBtn).not.toBeNull()
 
-    // 首访点击 → activeView 切换 → getRouteView 拉取 → 视图到位后 ModelRoutePage 挂载
-    expect(configApi.getRouteView).not.toHaveBeenCalled()
+    // 缺省分区 = provider：路由引用呈现（U5 补呈现 · spec §6.3/§6.4）需要 routeView，
+    // provider 分区首访已触发拉取（拉取时机跟随需要该数据的分区首访，不再「开弹层不预拉」）
+    expect(configApi.getRouteView).toHaveBeenCalled()
+    const callsAtOpen = vi.mocked(configApi.getRouteView).mock.calls.length
+
+    // 首访点击 → activeView 切换 → 编排缓存单点命中（ensureRouteView fetchStarted 守卫），
+    // 不产生第二次拉取；视图到位后 ModelRoutePage 挂载
     navBtn!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flushPromises()
-    expect(configApi.getRouteView).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(configApi.getRouteView).mock.calls.length).toBe(callsAtOpen)
     const page = wrapper.findComponent(ModelRoutePage)
     expect(page.exists()).toBe(true)
   })

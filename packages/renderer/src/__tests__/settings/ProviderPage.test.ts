@@ -21,10 +21,16 @@ import { getSettingsStore, provideSettingsTransport, provideSettingsStore, creat
 // （vi.hoisted 同族 TDZ 坑，settings-modal-smoke.test.ts 先例）。
 import { makeSettingsTransportStub } from '../helpers/settings-transport-stub'
 import { apiProjectMock } from '../helpers/api-facade-mock'
-import { authEventCbs } from '../helpers/oauth-auth-events-mock'
 
-const configMock = vi.hoisted(() => ({
-  onProviders: vi.fn(() => () => {}),
+// ProviderPage 模块图经 model-picker-data（ModelSelectPopover 数据域，M3 命中端点展示接入）
+// 静态 import '@/api'——vi.mock 工厂在组件 import 求值期（测试体执行前）即运行，configWithAuth
+// 若留在测试体将 TDZ（文件头注释同族坑）。configMock 与 auth 订阅捕获集整体上提 vi.hoisted
+// （helper 经动态 import 引入——hoisted 工厂不能直接引用静态 import 绑定），测试体仅保留
+// 断言用 configMock 引用。
+const { configMock, configWithAuth } = await vi.hoisted(async () => {
+  const { authEventCbs } = await import('../helpers/oauth-auth-events-mock')
+  const configMock = {
+    onProviders: vi.fn(() => () => {}),
   // 门面签名 { providers, scopedModels }（settings-lifecycle 解构消费）；裸数组解构得 undefined
   listProviders: vi.fn(async () => ({ providers: [], scopedModels: undefined })),
   setProvider: vi.fn(async () => ({})),
@@ -46,13 +52,12 @@ const configMock = vi.hoisted(() => ({
   listBuiltinProviders: vi.fn(async () => []),
   // ProviderPage onMounted 按需刷新远程模型目录（缺则 unhandled rejection）
   refreshProviderCatalogs: vi.fn(async () => ({ refreshed: [], failed: [] })),
-}))
-
-// wave-oauth：useProviderOAuth onMounted 订阅 4 个 auth.* 事件（缺则 TypeError 崩 mount）。
-// vi.hoisted 工厂不能引用 import 绑定（TDZ），auth 订阅捕获集单源在 helper——顶层装配
-// 后并入门面 config 域（同 use-provider-oauth.test.ts 先例）。
-const authCbs = authEventCbs()
-const configWithAuth = { ...configMock, ...authCbs }
+    // model-picker-data 的 routeView 只读缓存（M3 命中端点展示）选择器装配期拉取/订阅（缺则 TypeError 崩 mount）
+    getRouteView: vi.fn(async () => ({ cards: [], orphanRefs: [] })),
+    onRouteView: vi.fn(() => () => {}),
+  }
+  return { configMock, configWithAuth: { ...configMock, ...authEventCbs() } }
+})
 
 vi.mock('@/api', () => ({ project: apiProjectMock(),
   config: configWithAuth,
@@ -473,5 +478,97 @@ describe('ProviderPage 接入页改造（provider-aggregation U5a）', () => {
     expect(wrapper.find('[data-testid="provider-route-guide"]').exists()).toBe(false)
     // 渠道行仍渲染（接入职责不受引导卡条件影响）
     expect(wrapper.findAll('[data-testid="provider-card"]').length).toBe(1)
+  })
+})
+
+// ── U5 补呈现（provider-aggregation · 外部 spec §6.3 行摘要 / §6.4 引用区与跳转）────────
+// routeView 经宿主（SettingsModal）prop 下发（编排归宿主，页面纯消费）——本文件直接以
+// prop 驱动，不经 @/api getRouteView mock。
+
+import type { AggregationRouteView } from '@taiji/shared'
+
+/** 引用视图 fixture：glm-flash 路由两端点（anthropic ×2 + openai ×1 = 路由去重口径用例），
+ *  sonnet-route 单端点引用 openai → anthropic 参与 1 条 / openai 参与 2 条。 */
+function routeViewFixture(): AggregationRouteView {
+  const window7x48 = Array.from({ length: 7 }, () => Array<boolean>(48).fill(false))
+  return {
+    cards: [
+      {
+        route: {
+          id: 'glm-flash', name: 'GLM Flash', modelId: 'glm-flash', enabled: true, mode: 'advanced',
+          members: [
+            { id: 'ep-a1', providerId: 'anthropic', modelId: 'claude-sonnet-4', type: 'none' },
+            { id: 'ep-o1', providerId: 'openai', modelId: 'gpt-4o', type: 'quota', quota: { thresholdPercent: 20 } },
+            { id: 'ep-a2', providerId: 'anthropic', modelId: 'claude-sonnet-4', type: 'window', window: window7x48 },
+          ],
+        },
+        scoped: true, scopedIndex: 0, memberIssues: [],
+      },
+      {
+        route: {
+          id: 'sonnet-route', name: 'Sonnet', modelId: 'sonnet-route', enabled: true, mode: 'simple',
+          members: [{ id: 'ep-o2', providerId: 'openai', modelId: 'gpt-4o', type: 'none' }],
+        },
+        scoped: true, scopedIndex: 1, memberIssues: [],
+      },
+    ],
+    orphanRefs: [],
+  }
+}
+
+describe('ProviderPage 路由引用呈现（U5 补呈现 · spec §6.3/§6.4）', () => {
+  it('行摘要:引用数据到位 → 参与数按路由去重展示（anthropic 同路由两端点 = 1 条 / openai 跨两路由 = 2 条）', async () => {
+    wrapper = mount(ProviderPage, { props: { providers: PROVIDERS, routeView: routeViewFixture() }, attachTo: document.body })
+    await flushPromises()
+
+    const summaries = wrapper.findAll('[data-testid="provider-route-ref-summary"]')
+    expect(summaries.length).toBe(2)
+    // anthropic：单路由两端点 → routeCount 去重 = 1（spec §6.3「不是端点数」）
+    expect(summaries[0]!.text()).toContain('参与 1 条路由')
+    // openai：glm-flash 与 sonnet-route 各一端点 → 两条路由
+    expect(summaries[1]!.text()).toContain('参与 2 条路由')
+  })
+
+  it('引用区:展开行渲染引用 chip（模型简称 · 第 N 顺位），点击经 open-route-ref 透传为带 focus 的 open-route-page', async () => {
+    wrapper = mount(ProviderPage, { props: { providers: PROVIDERS, routeView: routeViewFixture() }, attachTo: document.body })
+    await flushPromises()
+
+    // 展开 anthropic 行（行头名称点击 = 手风琴展开入口）
+    await wrapper.findAll('[data-testid="provider-card"]')[0]!.find('span[role="button"]').trigger('click')
+    const section = wrapper.find('[data-testid="provider-route-ref-section"]')
+    expect(section.exists()).toBe(true)
+    const chips = section.findAll('[data-testid="provider-route-ref-chip"]')
+    expect(chips.length).toBe(2) // 同路由两端点各一枚 chip
+    expect(chips[0]!.text()).toBe('GLM Flash · 第 1 顺位')
+    expect(chips[1]!.text()).toBe('GLM Flash · 第 3 顺位')
+
+    await chips[1]!.trigger('click')
+    // 行级 open-route-ref 经 ProviderPage onOpenRouteRef 透传为页级 open-route-page（带 focus）
+    expect(wrapper.emitted('open-route-page')).toEqual([[{ routeId: 'glm-flash', memberId: 'ep-a2' }]])
+  })
+
+  it('引用区:无引用渠道展开显示空文案，不渲染 chip', async () => {
+    wrapper = mount(ProviderPage, {
+      props: {
+        providers: [...PROVIDERS, { id: 'lonely', name: 'Lonely', apiKeySet: false, status: 'not_configured' as const, enabled: true, models: [] }],
+        routeView: routeViewFixture(),
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.findAll('[data-testid="provider-card"]')[2]!.find('span[role="button"]').trigger('click')
+    const empty = wrapper.find('[data-testid="provider-route-ref-empty"]')
+    expect(empty.exists()).toBe(true)
+    expect(empty.text()).toContain('还没有路由使用这个渠道')
+    expect(wrapper.findAll('[data-testid="provider-route-ref-chip"]').length).toBe(0)
+  })
+
+  it('数据未到位:宿主视图未下发（routeView prop 缺省）→ 行摘要与引用区整体零 DOM（不渲染「未参与路由」错态）', async () => {
+    wrapper = mount(ProviderPage, { props: { providers: PROVIDERS }, attachTo: document.body })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="provider-route-ref-summary"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="provider-route-ref-section"]').exists()).toBe(false)
   })
 })
