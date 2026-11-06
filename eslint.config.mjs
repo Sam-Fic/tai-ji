@@ -177,6 +177,16 @@ export default [
       'max-lines': ['warn', { max: 1080, skipBlankLines: true, skipComments: true }],
     },
   },
+  // shared 包 barrel 出口（全部 domain 的 re-export 聚合点——barrel 的职责即聚合，
+  // 拆分不消行只移行）。provider-aggregation 域契约根（aggregation.ts 类型 + 纯函数
+  // 出口，多端共用 SSOT）净增 ~40 行越过 500，527 > 500 微超即提额保留软上限告警
+  //（pi-provider-store / control-server 同型先例）。
+  {
+    files: ['packages/shared/src/index.ts'],
+    rules: {
+      'max-lines': ['warn', { max: 540, skipBlankLines: true, skipComments: true }],
+    },
+  },
   // [M3 relay-spawn-transport u-m2-prompt-ack] pi 引擎 spawn runner：spawn/握手/帧泵/
   // prompt 送达回执（prompt-ack）接线 / fd3 raw mirror 装配的单点聚合文件（职责内聚，
   // 再拆属独立重构任务）。prompt-ack 接线与 mirror 装配入列后折算 520 行 > 500 软上限，
