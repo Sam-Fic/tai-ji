@@ -57,6 +57,11 @@ PATH_REF_EXEMPT = {
     # history-rebuild-cache.ts 保持不存在（防回流），引用即检查语义本身
     ("packages/runtime/src/services/session/history-rebuild-cache.ts",
      "scripts/check-history-read-model.mjs"): "retirement-guard",
+    # Block.vue 已随聚合块改造退役（chat-flow-process-aggregate u-wiring）；命中行
+    # check-session-hidden-surface.mjs 引用的是仍存在的 BlockScrollBox.vue——去扩展名
+    # stem（…/chat/Block）是它文件名的前缀，属匹配口径副作用误伤，非旧路径残留引用
+    ("packages/ui/src/features/chat/Block.vue",
+     "scripts/check-session-hidden-surface.mjs"): "stem-prefix-collision：引用对象是仍存在的 BlockScrollBox.vue（hidden-surface 豁免清单条目），非已删除的 Block.vue",
 }
 
 SCAN_PATHSPEC = [

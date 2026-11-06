@@ -52,16 +52,12 @@ const deps: ChatViewDeps = {
   isHandingOff: (sid) => chatStore.isHandingOff(sid),
   getChangeSetStatus: (sid, messageId) => chatStore.getChangeSetStatus(sid, messageId),
   isExpanded: (turnKey) => expansion.isExpanded(turnKey),
-  // 惰性接管态（D10：移动壳 turn 展开分区无接管态，恒 false——与 ui 组件侧原兜底等价）
-  isTakeover: () => false,
   // pendingSend 派生视图（core chat store 派生视图，UserBubble submitEdit 双发锁消费）
   isPendingSend: (sid) => chatStore.isPendingSend(sid),
 
   // 操作回调
   toggleExpand: (turnKey) => expansion.toggle(turnKey),
   // [chat-flow-consistency C3] ChatViewDeps.collapse 已随 Turn.vue onComplete 接线退役删除
-  // 惰性接管写入（同 isTakeover：移动壳无接管态，no-op）
-  setTakeover: () => {},
   // [M-8] 运行中 bash 停止入口（ToolRow 停止按钮消费）——v1 :65-67 接线原样保留
   abortBash: (sid) => {
     void useChatInstance.abortBash(sid)

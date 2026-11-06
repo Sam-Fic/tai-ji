@@ -98,13 +98,13 @@ export default [
       'max-lines': 'off',
     },
   },
-  // chat 展示三件（Turn 轮次聚合 / Block 块渲染 / MarkdownRenderer 分通道净化渲染）：
-  // 职责内聚（轮次聚合、块类型分发、markdown 渲染管线各自唯一实现），行数超 500，
+  // chat 展示两件（Turn 轮次聚合 / MarkdownRenderer 分通道净化渲染）：
+  // 职责内聚（轮次聚合、markdown 渲染管线各自唯一实现），行数超 500，
   // 拆分属独立重构任务（文件头注释已登记）。短期 max-lines override 避免阻塞，长期应拆分。
+  // （原第三件 Block.vue 块渲染壳已随聚合块改造退役，2026-11-06 chat-flow-process-aggregate u-wiring）
   {
     files: [
       'packages/ui/src/features/chat/Turn.vue',
-      'packages/ui/src/features/chat/Block.vue',
       'packages/ui/src/features/chat/MarkdownRenderer.vue',
     ],
     rules: {

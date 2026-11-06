@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { useChat, resetChatModuleState } from '@/composables/features/chat/useChat';
-import { triggerSessionCleanups, __clearSessionCleanupRegistryForTest } from '@/composables/useSessionScopedState';
+import { __clearSessionCleanupRegistryForTest } from '@/composables/useSessionScopedState';
 import { useTurnExpansionStore } from '@/stores/turn-expansion';
 import { providePlatform, WS_READY_STATE, type PlatformPort, type WebSocketLike } from '@taiji/core';
 import { connect, disconnect, send } from '@taiji/core/transport/ws-client';
@@ -183,82 +183,10 @@ beforeEach(() => {
   __clearSessionCleanupRegistryForTest()
 })
 
-describe('turn-expansion store takeover API (window wave TC5/TC6/TC7, ADR-0049)', () => {
-  it('TC5: isTakeover 默认 false（key 不存在）；setTakeover(true) 后 isTakeover=true', () => {
-    const store = useTurnExpansionStore()
-    expect(store.isTakeover('s1', 'turn-1')).toBe(false)
-    store.setTakeover('s1', 'turn-1', true)
-    expect(store.isTakeover('s1', 'turn-1')).toBe(true)
-  })
-
-  it('TC5: setTakeover(false) 显式归位（赋值不 delete，保响应式链，同 collapse 范式）', () => {
-    const store = useTurnExpansionStore()
-    store.setTakeover('s1', 'turn-1', true)
-    store.setTakeover('s1', 'turn-1', false)
-    expect(store.isTakeover('s1', 'turn-1')).toBe(false)
-  })
-
-  it('TC5: takeoverPartitions 暴露 + getTakeoverPartition 惰性创建（与 partitions 同构范式）', () => {
-    const store = useTurnExpansionStore()
-    expect(store.takeoverPartitions).toBeInstanceOf(Map)
-    // 惰性创建：isTakeover 读时建空分区
-    store.isTakeover('s1', 'turn-1')
-    expect(store.takeoverPartitions.has('s1')).toBe(true)
-    expect(store.getTakeoverPartition('s1')).toBeInstanceOf(Map)
-  })
-
-  it('TC5: takeover 与 isExpanded 独立（同 turn 可同时为 true，互不干扰——窗口级 vs turn 级语义分离）', () => {
-    const store = useTurnExpansionStore()
-    store.expand('s1', 'turn-1')
-    store.setTakeover('s1', 'turn-1', true)
-    expect(store.isExpanded('s1', 'turn-1')).toBe(true)
-    expect(store.isTakeover('s1', 'turn-1')).toBe(true)
-    // collapse isExpanded 不影响 takeover（两者独立分区）
-    store.collapse('s1', 'turn-1')
-    expect(store.isExpanded('s1', 'turn-1')).toBe(false)
-    expect(store.isTakeover('s1', 'turn-1')).toBe(true)
-  })
-
-  it('TC7: per-session 隔离（s1 setTakeover 不影响 s2）', () => {
-    const store = useTurnExpansionStore()
-    store.setTakeover('s1', 'turn-1', true)
-    expect(store.isTakeover('s1', 'turn-1')).toBe(true)
-    // s2 独立分区，默认 false
-    expect(store.isTakeover('s2', 'turn-1')).toBe(false)
-  })
-
-  it('TC6: clearSession 同时清 partitions + takeoverPartitions（ADR-0049 cleanup 对称）', () => {
-    const store = useTurnExpansionStore()
-    store.expand('s1', 'turn-1')
-    store.setTakeover('s1', 'turn-1', true)
-    store.setTakeover('s1', 'turn-2', true)
-    expect(store.isExpanded('s1', 'turn-1')).toBe(true)
-    expect(store.isTakeover('s1', 'turn-2')).toBe(true)
-
-    // 触发 s1 的 cleanup（store 注册了 clearSession 到 cleanup registry）
-    triggerSessionCleanups('s1')
-
-    // clearSession 删除了 s1 分区 key（delete 生效，在后续惰性重建前可观测）
-    expect(store.partitions.has('s1')).toBe(false)
-    expect(store.takeoverPartitions.has('s1')).toBe(false)
-    // 数据清空（后续惰性访问重建空分区，回默认 false）
-    expect(store.isExpanded('s1', 'turn-1')).toBe(false)
-    expect(store.isTakeover('s1', 'turn-1')).toBe(false)
-    expect(store.isTakeover('s1', 'turn-2')).toBe(false)
-  })
-
-  it('TC6: clearSession(s1) 不影响 s2（cleanup 按 sid 精确清理）', () => {
-    const store = useTurnExpansionStore()
-    store.setTakeover('s1', 'turn-1', true)
-    store.setTakeover('s2', 'turn-1', true)
-
-    triggerSessionCleanups('s1')
-
-    // s1 清空，s2 保留
-    expect(store.isTakeover('s1', 'turn-1')).toBe(false)
-    expect(store.isTakeover('s2', 'turn-1')).toBe(true)
-  })
-})
+// [chat-flow-process-aggregate D9] takeover（展开全部接管态）随聚合块退役：
+// 旧「turn-expansion store takeover API」describe 组（window wave TC5/TC6/TC7，isTakeover /
+// setTakeover / takeoverPartitions / getTakeoverPartition）随 store 分区退役整体删除，
+// 「看全部」入口收敛为每聚合块一个（组件本地展开态）。
 
 /**
  * [chat-flow-consistency C4 两段式契约] 手动展开态的清除边界（设计裁决：内存驻留期间保持、
@@ -278,14 +206,12 @@ describe('turn-expansion store 两段式契约（C4：驻留保持 / 重载重�
     expect(store.isExpanded('s1', 'turn-live-id')).toBe(true)
   })
 
-  it('重载重置：reconcileHistory 接管点调 clearSession 后展开态显式归零（同 takeover 一并清）', () => {
+  it('重载重置：reconcileHistory 接管点调 clearSession 后展开态显式归零', () => {
     const store = useTurnExpansionStore()
     store.expand('s1', 'turn-live-id')
-    store.setTakeover('s1', 'turn-live-id', true)
     // 磁盘重载基线接管点的契约动作（与 session 销毁共用同一清理入口）
     store.clearSession('s1')
     expect(store.isExpanded('s1', 'turn-live-id')).toBe(false)
-    expect(store.isTakeover('s1', 'turn-live-id')).toBe(false)
   })
 
   it('重载重置按 sid 精确：其他会话的驻留展开态不受影响', () => {

@@ -29,7 +29,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { usePanelStore, ROOT_PANEL_ID } from '@/stores/panel'
 import type { ServerMessageMap, ToolCall } from '@taiji/shared'
-import { Block } from '@taiji/ui'
+import ToolRow from '@taiji/ui/features/chat/ToolRow.vue'
 import { bindDrawerSessionId, _resetDrawerForTest } from '@taiji/core/domain/drawer'
 import { mockChatProvide } from '@/__tests__/helpers/chat-view-deps'
 import QueueBubble from '@/components/panel/QueueBubble.vue'
@@ -817,11 +817,12 @@ describe('safeJson 检查 + 损坏行行号未知降级（RD-2#5 / RD-2#6）', (
     }
   }
 
-  /** Tool 默认收起，需点击 header 展开。返回展开后的 wrapper。 */
+  /** Tool 默认收起，需点击 header 展开。返回展开后的 wrapper。
+   *  [chat-flow-process-aggregate U3] Block 转发壳退役 → ToolRow 直挂（ANSI/GUI 渲染链路本体不变）。 */
   async function mountExpanded(tool: ToolCall) {
-    const wrapper = mount(Block, {
-      props: { type: 'tool', tool },
-      // Block setup 顶部经 useChatViewDeps inject 壳依赖（ui-optimize-unified N1 起），直接 mount 必须注入 mock deps
+    const wrapper = mount(ToolRow, {
+      props: { tool },
+      // ToolRow 经 useChatViewDeps inject 壳依赖（ui-optimize-unified N1 起），直接 mount 必须注入 mock deps
       global: { provide: mockChatProvide() },
     })
     // tool 详情默认收起（toolCollapsed=true），点击 header 展开
@@ -831,7 +832,7 @@ describe('safeJson 检查 + 损坏行行号未知降级（RD-2#5 / RD-2#6）', (
     return wrapper
   }
 
-  describe('Block ANSI 兜底渲染', () => {
+  describe('ToolRow ANSI 兜底渲染', () => {
     it('E1: outputRaw 含 ANSI → 用 AnsiText 渲染（data-testid="ansi-text" 存在）', async () => {
       const tool = makeTool({
         output: 'hello',

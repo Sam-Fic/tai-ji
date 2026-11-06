@@ -1,290 +1,232 @@
 /**
- * useTurnTrace —— Turn 的 trace 窗口化编排 + 渲染单元（run 类型分组）派生。
+ * useTurnTrace —— Turn 的 trace 区渲染单元派生（聚合块形态，chat-flow-process-aggregate U3）。
  *
- * 从 Turn.vue script 拆出（split-justified 登记既定方向「trace 窗口化编排抽 useTurnTrace
- * composable」）：Turn.vue script 随 trace/run-group/里程碑等波次叠加超 vue_rules_checker
- * 500 行绝对上限，按域拆出本 composable——纯迁移无行为变化（Turn.test.ts + renderer 挂载
- * 族原覆盖不动）。
+ * 职责（turn 内一维块序列 → trace 区「正文块 + 聚合块」两型单元列表，core 纯函数在本
+ * composable 内接线，渲染层零解析 AX7）：
+ * - flatBlocks：拍平（flattenTurnBlocks，跨 assistant 连续 flatIndex）。
+ * - segments：切段（splitProcessSegments，core 单点算好段边界 / 组分组 / 计数口径）。
+ * - traceUnits：两分支汇合的单元列表（D2 正文原生展示 + D5 折叠形态，见 traceUnits 注释）。
+ *   旧四层折叠编排（窗口切片 / 并入计数摘要行 / run 组 / 接管态 takeover）的 UI 消费路径
+ *   随聚合块形态退役（D1/D9）；core 既有三符号语义不动，其去留按死代码纪律单独处置。
+ * - isActionsAnchor / unitKey / unitMemoDeps / textUnitProps：单层 v-for 的锚单元判定、
+ *   两型键（正文 flatIndex / 聚合段 id，键空间不相交）、v-memo deps 二型、TextRow props
+ *   收敛（v-memo 与 v-for 同元素挂载，正文/聚合两分支收敛在同一 wrapper 内）。
  *
- * 职责（turn 内一维块序列的窗口化 + 渲染单元派生，core 纯函数在本 composable 内接线）：
- * - flatBlocks / traceWindow / visibleBlocks：拍平 → 窗口切片（computeTraceWindow）→
- *   折叠态/工作展开/完成态三分支汇合（design §3.1 交互6「窗口只作用于工作 turn」）。
- * - renderUnits：visibleBlocks 汇合后接 groupToolRuns（run 类型分组，§3；接线点在汇合后
- *   而非 computeTraceWindow 之后——否则历史回合手动展开全量路径拿不到分组）。
- * - isActionsAnchor / unitKey / unitMemoDeps / unitBlockProps：单层 v-for 的锚块判定、
- *   run-head key、v-memo deps 二型、Block props 二型收敛（vue/valid-v-memo 禁 template
- *   v-for 子元素挂 v-memo，分支不能拆成双 Block）。
- *
- * showTrace 一并内聚于此（折叠作用域 = 工作 turn || 手动 expanded，与 visibleBlocks 同源）。
+ * showTrace 不再由本 composable 暴露：D5 裁决「回合级手动展开与折叠态同形态（末位正文 +
+ * 全部摘要行）」后，非工作 turn 的渲染形态只有一种，回合级展开开关不再改变 trace 区内容
+ * （isExpanded 仍被 TurnMeta chevron / TurnRail 指示消费，经 deps 直读）。
  */
 import { computed } from 'vue'
-import {
-  computeTraceWindow,
-  flattenTurnBlocks,
-  groupToolRuns,
-  isRunGroupBlock,
-  turnStableId,
-  W,
-} from '@taiji/core/domain/chat'
-import type { FlatBlock, MessageTurn, RunGroupBase, RunGroupMile, TraceRenderUnit } from '@taiji/core/domain/chat'
-import type { Message, ThinkingBlock, ToolCall } from '@taiji/shared'
-import { useChatViewDeps } from '../chat-view-deps'
+import { flattenTurnBlocks, splitProcessSegments } from '@taiji/core/domain/chat'
+import type { FlatBlock, MessageTurn, ProcessSegment } from '@taiji/core/domain/chat'
+import type { Message, ToolCall } from '@taiji/shared'
 
-/** Block props（按单元类型二选一，v-bind 展开的类型前提；定义随单元派生逻辑内聚于本文件）。 */
-export interface BlockUnitProps { // oe-exempt:20261013:framework:类型契约先行——Turn→Block 渲染单元 props 契约层（v-bind 展开的类型前提，单构造点 unitBlockProps 为常态），消费方为 Turn.vue 模板与 Block.test.ts
-  type: 'thinking' | 'tool' | 'text' | 'agentgraph' | 'run-group'
-  content?: string
-  tool?: ToolCall
-  thinkingId?: string
-  collapsed?: boolean
-  working?: boolean
-  streaming?: boolean
+/** TextRow props（正文单元直渲染；定义随单元派生逻辑内聚于本文件）。 */
+export interface TextUnitProps {
+  content: string
+  /** streaming 态（所属 assistant 文本仍在写）：驱动正文颜色（chat-flow-text-color D1
+   *  逐消息派生，事实源 = core message_end 写入的 textFinalized）。 */
+  streaming: boolean
+  /** 所属 assistant 消息终态（error 追加形态判定） */
   status?: Message['status']
   error?: string
   messageTimestamp?: number
-  /** thinking 起止毫秒时间戳（N6 思考行时长数据源，ThinkingBlock.startTime/endTime 透传） */
-  thinkingStart?: number
-  thinkingEnd?: number
-  group?: {
-    base: RunGroupBase
-    members: FlatBlock[]
-    header: { count: number; durationMs: number; failedCount: number }
-    hasRunning: boolean
-    miles?: RunGroupMile[]
-    headFlatIndex?: number
+}
+
+/** trace 区渲染单元（两型）：正文块（TextRow 直渲染）与聚合块（ProcessAggregateBlock）。 */
+export type TraceUnit =
+  | { kind: 'text'; block: FlatBlock }
+  | { kind: 'aggregate'; segment: ProcessSegment }
+
+/**
+ * 拍平块序列 + 段列表 → 单元列表（正文与聚合块按真实发生顺序交错）。
+ *
+ * 走查单 pass：text 块直接成正文单元；过程块遇到「段首成员」时 emit 其所属段（段成员
+ * 连续、段首即入列位置，后续成员跳过）。folded=true 时正文只保留末位一条并殿后（其余
+ * 正文位置被段摘要顶替），聚合块按原位顺序排列——与展开态的元素位置连续（工作→落成
+ * 折叠切换不跳位），折叠态阅读序 = 段摘要按真实发生序 → 末位正文。
+ */
+function buildTraceUnits(blocks: FlatBlock[], segs: ProcessSegment[], folded: boolean): TraceUnit[] {
+  const segmentHead = new Map<number, ProcessSegment>()
+  for (const seg of segs) segmentHead.set(seg.members[0].flatIndex, seg)
+  const units: TraceUnit[] = []
+  let lastText: FlatBlock | undefined
+  for (const fb of blocks) {
+    if (fb.block.kind === 'text') {
+      // 正文原生展示（D2）：展开态每条正文都直接渲染；折叠态收敛到末位一条（D5）
+      if (!folded) units.push({ kind: 'text', block: fb })
+      lastText = fb
+      continue
+    }
+    const seg = segmentHead.get(fb.flatIndex)
+    if (seg) units.push({ kind: 'aggregate', segment: seg })
   }
+  if (folded && lastText) units.push({ kind: 'text', block: lastText })
+  return units
 }
 
 /**
- * trace 窗口化编排 + 渲染单元派生。
+ * trace 区渲染单元派生。
  *
  * @param turn 当前 MessageTurn getter（props.turn；computed 内经 getter 读，保持响应式追踪）
  * @param isWorkingTurn 工作 turn 判定 getter（Turn.vue isWorkingTurn：sessionActive ∧
  *   (isLastTurn ∨ turn.isStreaming)，[chat-flow-consistency D2] 放宽后双工作态并存）
  */
 export function useTurnTrace(turn: () => MessageTurn, isWorkingTurn: () => boolean) {
-  const { isExpanded, isTakeover } = useChatViewDeps()
-
   /**
- * 折叠作用域（scope wave D1）：工作 turn 或手动 expanded 时展开 trace。
- * [M5 stable-key] 展开态按 turnStableId(turn)（首条消息 id）查询。
- */
-  const showTrace = computed(() => isWorkingTurn() || isExpanded(turnStableId(turn())))
-
-  /**
- * trace 拍平 + 窗口切片（window wave）。
- * - flatBlocks：turn 内所有 assistant 块按真实时序拍平为一维（跨 assistant 连续 flatIndex）。
- * - takeover：展开全部接管态（D6，落 useTurnExpansion store per-turn 分区，非本地 ref——
- *   ask-user/compacting 态 isStreaming=false 时 virtua 不钉住工作 turn，本地 ref 上滚出视口会丢；
- *   跨 pane 同 session 也需共享，store 化一并消除）。
- * - traceWindow：computeTraceWindow 切片（visible + compactedCount + failedCount）。
- *   takeover=true 时 visible=全量、计数归零；takeover=false 时按窗口策略取末位 text + 进行中块 + 最近 W 个已完成过程块。
- */
+   * trace 拍平 + 切段（chat-flow-process-aggregate U1 契约）。
+   * - flatBlocks：turn 内所有 assistant 块按真实时序拍平为一维（跨 assistant 连续 flatIndex）。
+   * - segments：按 text 边界切段（core splitProcessSegments 单点；段 id 结构定位 seg:<段首
+   *   flatIndex>，流式生长稳定——AX1）。切段每次增量重建段对象，v-memo 键禁止用段对象引用
+   *   （SI4 约束），必须用段 id + 段内可变信号。
+   */
   const flatBlocks = computed<FlatBlock[]>(() => flattenTurnBlocks(turn().assistants))
-  const takeover = computed(() => isTakeover(turnStableId(turn())))
-  const traceWindow = computed(() =>
-    computeTraceWindow(flatBlocks.value, { windowSize: W, takeover: takeover.value }),
-  )
+  const segments = computed<ProcessSegment[]>(() => splitProcessSegments(flatBlocks.value))
 
   /**
- * 实际渲染的块序列：
- * - 折叠态（!showTrace）：全 turn 唯一末位 text（flatIndex 最大者，不按 assistant 分组——
- *   内联注释 :100 同款口径）。语义 = 回合结论摘要：多 assistant 回合折叠态只显示最后一条
- *   assistant 的正文，是合理默认（折叠态追求高度最小）；若产品要「每个 assistant 的结论
- *   都可见」，那是 computeTraceWindow ①语义的展开，无诉求不立项。
- *   computeTraceWindow 不参与折叠态（无 trace 细节）。
- * - 工作展开态（showTrace && isWorkingTurn）：traceWindow.visible（窗口切片结果，含各 assistant
- *   末位 text + 过程块；takeover=true 时 visible=全量）。
- * - 完成态/历史手动展开（showTrace && !isWorkingTurn）：全量 flatBlocks（design §3.1 交互6
- *   「窗口只作用于工作 turn，回看就是全量」、G5「完成态与历史呈现不变」，不走窗口切片）。
- */
-  const visibleBlocks = computed<FlatBlock[]>(() => {
-    if (!showTrace.value) {
-    // 全 turn 末位 text（与 computeTraceWindow ①一致，不按 assistant 分组）
-      let lastText: FlatBlock | undefined
-      for (const fb of flatBlocks.value) {
-        if (fb.block.kind === 'text' && (!lastText || fb.flatIndex > lastText.flatIndex)) lastText = fb
-      }
-      return lastText ? [lastText] : []
-    }
-    // 窗口仅作用于工作 turn：完成态/历史手动展开回看全量，不截断（design §3.1 交互6 / G5）。
-    if (!isWorkingTurn()) {
-      return flatBlocks.value
-    }
-    return traceWindow.value.visible
+   * trace 区单元列表（两分支形态）：
+   * - 工作展开态（isWorkingTurn）：全部正文 + 全部聚合块（D2「工作态不再只保留末位正文」；
+   *   聚合块三态由组件按 turnWorking + followedByText 自判——段后无 text 的开放段双窗进行中，
+   *   已封闭段摘要行）。
+   * - 折叠态 / 完成态 / 历史手动展开（!isWorkingTurn）：D5 同形态——全部聚合块摘要行（非工作
+   *   态组件 isLive=false → 摘要行，每段一行保留过程存在信号：段数 / 类型 / 失败）+ 末位正文。
+   *   回合级手动展开（isExpanded 分区）不改变本形态（D5「展开的语义是用户显式意图，
+   *   不改变默认形态」——过程细节经每段摘要行的展开入口按段查看）。
+   */
+  const traceUnits = computed<TraceUnit[]>(() => {
+    const folded = !isWorkingTurn()
+    return buildTraceUnits(flatBlocks.value, segments.value, folded)
   })
 
   /**
- * run 类型分组：visibleBlocks 三分支汇合之后接 groupToolRuns（接线点在汇合后而非 computeTraceWindow
- * 之后——否则历史回合手动展开全量路径拿不到分组，收益最大路径静默落空）。flatBlocks 与 visibleBlocks
- * 同源同拍（都是 turn().assistants 的 computed 派生、同一渲染拍计算），满足 groupToolRuns 的
- * 入参一致性不变量（段首回查用 flatBlocks）。
- */
-  const renderUnits = computed<TraceRenderUnit[]>(() =>
-    groupToolRuns(visibleBlocks.value, flatBlocks.value),
-  )
-
-  /**
-   * [actions-anchor] hover actions 锚块 = trace 末单元（renderUnits 末位，分组后末单元可能是
-   * run 组块）且该单元是 text 块时才存在：正文后面跟了任何块（工具/思考/组块）就不得有占位行
-   * （流式「正文→工具行」场景占位行夹在正文与工具行之间会把块间距撑出空洞，2026-10-17 用户裁决）。
-   * 操作栏（TurnSummary）经 #turn-actions 插槽只挂在该块上：悬停区收窄到 text 块本身，
-   * 悬浮位随块定位。turn 以工具/组块结尾（无末尾正文）或无 text 块时操作栏无挂载点、不渲染
-   * ——复制/fork/handoff 服务于正文回复，无正文可悬停属预期形态。
+   * [actions-anchor] hover actions 锚单元 = trace 末单元且是 text 型：正文后面跟了任何块
+   * （聚合块）就不得有占位行（流式「正文→聚合块」场景占位行夹在正文与聚合块之间会把块间距
+   * 撑出空洞，2026-10-17 用户裁决）。操作栏（TurnSummary）经 #turn-actions 插槽只挂在该正文
+   * 单元上：悬停区收窄到 text 块本身，悬浮位随块定位。turn 以聚合块结尾（无末尾正文）或无
+   * text 块时操作栏无挂载点、不渲染——复制/fork/handoff 服务于正文回复，无正文可悬停属预期
+   * 形态。折叠态末单元恒为末位正文 → 锚恒在（与旧折叠形态一致）。
    */
   const actionsAnchorFlatIndex = computed<number | null>(() => {
-    const units = renderUnits.value
+    const units = traceUnits.value
     const last = units.length > 0 ? units[units.length - 1] : undefined
-    if (!last || isRunGroupBlock(last) || last.block.kind !== 'text') return null
-    return last.flatIndex
+    if (!last || last.kind !== 'text') return null
+    return last.block.flatIndex
   })
 
-  /** 锚块判定（模板插槽 v-if 与 v-memo deps 共用单点）；run 组块永不命中。 */
-  function isActionsAnchor(unit: TraceRenderUnit): boolean {
-    if (isRunGroupBlock(unit) || unit.block.kind !== 'text') return false
-    return unit.flatIndex === actionsAnchorFlatIndex.value
+  /** 锚单元判定（模板插槽 v-if 与 v-memo deps 共用单点）；聚合单元永不命中。 */
+  function isActionsAnchor(unit: TraceUnit): boolean {
+    return unit.kind === 'text' && unit.block.flatIndex === actionsAnchorFlatIndex.value
   }
 
-  /** 渲染单元 key（run head）：普通块 = flatIndex；run 组块 = 段首锚定 headFlatIndex。 */
-  function unitKey(unit: TraceRenderUnit): number {
-    return isRunGroupBlock(unit) ? unit.headFlatIndex : unit.flatIndex
+  /**
+   * 渲染单元 key：正文单元 = flatIndex（数字）；聚合单元 = 段 id（`seg:<n>` 字符串）。
+   * 非数字前缀使两型键空间不相交（ProcessSegment.id 契约条款），同层 v-for 键不撞。
+   * 段 id 结构定位（派生源只有段首位置）：流式成员追加 / 新段出现都不改变既有段 id——
+   * 键抖 = remount = 组件本地展开态丢 + 滚动锚点跳（AX1 / 旧 PR-6 同因）。
+   */
+  function unitKey(unit: TraceUnit): string | number {
+    return unit.kind === 'aggregate' ? unit.segment.id : unit.block.flatIndex
   }
 
   /**
    * v-memo deps（按单元类型二选一，见模板注释）。
-   * 组块键 = [base, members.length, 逐成员 block.ref（map 展开）, header.durationMs,
-   * header.failedCount, hasRunning, miles]：base 覆盖组类型切换；逐成员 ref 覆盖任意成员
-   * 内容重组（末成员 running→completed 与非末位成员 running→error 同走对象替换——D-1 不可变
-   * 语义下 ref 引用即「身份+内容」，逐成员展开入键即全组内容指纹；不能取 join 串：成员 ref 是
-   * ToolCall 对象，字符串化全部坍缩成 [object Object]，换引用指纹不变）；length 覆盖成员增减 +
-   * 组头计数刷新（header.count 恒等于 members.length——core buildRunGroup 字面赋值
-   * count: members.length 且组块对象不可变，不另设 dep）；durationMs 覆盖组头耗时刷新；
-   * failedCount 覆盖组头失败 chip（takeover 态全局 failedCount 归 0，组头 chip 是该态唯一失败
-   * 信号；非末位成员 error 无 endTime 时 durationMs 不变、组内仍有 running 成员时 hasRunning
-   * 亦不变，缺了它 chip 滞旧）；hasRunning 覆盖组头执行态翻转；
-   * miles（§3.6 里程碑徽标，序列化字符串）覆盖「首个 edit 完成 → 徽标入场」——该翻转可发生在
-   * durationMs 不变（0ms 耗时成员）且 hasRunning 不变（同组仍有 running 成员）时，漏了它徽标
-   * 会滞到下一个无关 dep 变化才渲染。miles 取 join 串而非数组引用：每次重组都是新数组，
-   * 引用入键 v-memo 将永远失效（同 members 的处理）。
-   * 不用整个 members 数组引用入 deps——每次重组都是新数组，v-memo 将永远失效（展开逐成员
-   * ref 正是避开数组引用的形态；展开使键数组长度随成员数变化，Vue v-memo 比对含长度检查，
-   * 成员增减本就经 length dep 失效重渲染，长度变化不引入新行为）。
-   * 普通块七项 = W21 D-4 既有键清单 + textFinalized（chat-flow-text-color D1：mid-turn 气泡
-   * 定稿标记落地时要触发重渲染翻白，不入键则 memo 命中旧 props、颜色滞留 streaming 灰到回合收尾）
-   * + [actions-anchor] 锚标记：block.ref 即「身份+内容」——text 是 normalizeContent 字符串、
-   * thinking/tool 是块对象引用（D-1 不可变语义下内容/status/id 变化 = 新对象替换，引用入键即
-   * 覆盖 08 §3.3.1 键清单的 thinking.id / tool.id / content / tool.status）；working/streaming
-   * 由 unitBlockProps 按 textFinalized 逐消息派生。锚标记覆盖操作栏插槽挂载点切换——流式追加/
-   * 窗口变化使锚在 text 块间移动时，旧块摘插槽、新块挂插槽，漏了它被缓存的 vnode 不重渲染，
-   * 插槽永远不跟着锚走。刻意不含 Block 本地折叠 ref（thinkingCollapsed/toolCollapsed）——
-   * v-memo deps 在父组件渲染作用域求值，无法引用子组件私有 ref；折叠由 Block 自身响应式驱动
-   * （实例经 :key 保活，v-memo 不 gate 子组件内部更新）。sessionId 不入键：跨 session 时
-   * renderKey 不同 → Turn 实例整体重建，不存在同实例跨 session 复用。
-   * deps 在父组件渲染作用域求值（assistantById 为 computed，此处取 .value）。
+   * 聚合单元键 = [members.length, 逐成员 block.ref（map 展开）, counts 三类步数 / 思考数 /
+   * 总耗时 / 失败数, followedByText, turnWorking]：段内成员 ref 即「身份+内容」（D-1 不可变
+   * 替换语义，引用同 ⇒ 内容同；成员中途改状态是常态，逐成员展开入键即全段内容指纹，不假设
+   * 「只有末成员会变」——0c81f904c 教训）；length 覆盖成员增减；counts 各字段覆盖摘要行 /
+   * 聚合条 / 组头的计数显示（ProcessSegmentCounts 契约：三处计数唯一口径，字段值是原始类型，
+   * 逐项入键——段对象与 counts 对象每次切段都重建，引用入键 memo 永远失效）；followedByText
+   * 覆盖段完成翻转（双窗 → 摘要行的三态切换）；turnWorking 覆盖回合落成瞬间全部开放段同时
+   * 转摘要的渲染批次（RL2 边沿）。组级信号（durationMs / failedCount / hasRunning）由成员
+   * ref 指纹覆盖（派生自成员，成员不变即不变）；units 平铺序由 members 覆盖（同源派生）。
+   * 正文单元键 = [块 ref, assistant 状态, assistant error, timestamp, textFinalized, 锚标记]：
+   * text 的 ref 是 normalizeContent 字符串（按值比较），error/timestamp/textFinalized 来自
+   * assistantById 查表（streaming 灰 → 定稿翻白 / error 追加行的驱动源）；锚标记覆盖操作栏
+   * 插槽挂载点切换——流式追加使锚在正文块间移动时旧块摘插槽、新块挂插槽，漏了它被缓存的
+   * vnode 不重渲染。刻意不含 TextRow 本地状态（无）与聚合块本地展开 ref（组件实例经 :key
+   * 保活，v-memo 不 gate 子组件内部更新）。sessionId 不入键：跨 session 时 renderKey 不同
+   * → Turn 实例整体重建，不存在同实例跨 session 复用。deps 在父组件渲染作用域求值
+   * （assistantById 为 computed，此处取 .value）。
    */
-  function unitMemoDeps(unit: TraceRenderUnit): unknown[] {
-    if (isRunGroupBlock(unit)) {
+  function unitMemoDeps(unit: TraceUnit): unknown[] {
+    if (unit.kind === 'aggregate') {
+      const seg = unit.segment
       return [
-        unit.base,
-        unit.members.length,
-        ...unit.members.map((m) => m.block.ref),
-        unit.header.durationMs,
-        unit.header.failedCount,
-        unit.hasRunning,
-        unit.miles.join('|'),
+        seg.members.length,
+        ...seg.members.map((m) => m.block.ref),
+        seg.counts.categoryCounts.explore,
+        seg.counts.categoryCounts.edit,
+        seg.counts.categoryCounts.exec,
+        seg.counts.thinkingCount,
+        seg.counts.totalDurationMs,
+        seg.counts.failedCount,
+        seg.followedByText,
+        isWorkingTurn(),
       ]
     }
+    const assistant = assistantById.value.get(unit.block.assistantId)
     return [
-      unit.block.ref,
-      unit.assistantStatus,
-      unit.block.kind === 'thinking' ? (unit.block.ref as ThinkingBlock).collapsed : undefined,
-      assistantById.value.get(unit.assistantId)?.error,
-      assistantById.value.get(unit.assistantId)?.timestamp,
-      assistantById.value.get(unit.assistantId)?.textFinalized,
+      unit.block.block.ref,
+      unit.block.assistantStatus,
+      assistant?.error,
+      assistant?.timestamp,
+      assistant?.textFinalized,
       isActionsAnchor(unit),
     ]
   }
 
   /**
- * 普通块按 kind 分派解出 Block 字段（每 kind 一次 ref 收窄，替代字段级嵌套三元的分支链）：
- * ref 形状由 OrderedBlock 生产端约定——text=string / thinking=ThinkingBlock /
- * tool|agentgraph=ToolCall。返回不含的键经 v-bind 展开与显式 undefined 同值（Vue props
- * 缺席即 undefined），渲染结果不变。
- */
-  function kindBlockProps(
-    kind: FlatBlock['block']['kind'],
-    ref: FlatBlock['block']['ref'],
-  ): Partial<BlockUnitProps> {
-    switch (kind) {
-      case 'text':
-        return { content: ref as string }
-      case 'thinking': {
-        const t = ref as ThinkingBlock
-        // N6 思考行时长：startTime/endTime 透传（实时链路 thinking_start/end 效果器填充；重载
-        // 链路两字段 undefined → Block 侧检查不渲染时长，维持现状展示）
-        return { content: t.content, thinkingId: t.id, collapsed: t.collapsed, thinkingStart: t.startTime, thinkingEnd: t.endTime }
-      }
-      case 'tool':
-      case 'agentgraph':
-        return { tool: ref as ToolCall }
-    }
-  }
-
-  /**
- * Block props（按单元类型二选一）：普通块从 FlatBlock 解出 kind/ref + 所属 assistant 的
- * status/error/timestamp（D8 形态原样迁移）；run 组块走 type='run-group' + group 数据
- * （base + header 三条口径 + miles 里程碑徽标由 core 一次算好）。经 v-bind 展开收敛到单 Block 元素——
- * vue/valid-v-memo 禁止 template v-for 子元素挂 v-memo，双分支无法各自带 memo。
- *
- * working/streaming（chat-flow-text-color D1）：按「该消息文本是否仍在写」逐消息派生，
- * 不再直接跟 assistantStatus——pi 回合 =「assistant 消息 → 工具 → assistant 消息 → …」
- * 循环，mid-turn 气泡的 status 要到回合级 message.complete 才收尾，直接跟 status 会让
- * 长工具回合中已写完的正文/思考块一直处于 streaming 视觉（正文灰、思考块尾窗模式）。
- * 事实源 = core message_end 写入的 textFinalized（确定性事件边沿，非时间推测）。
- */
-  function unitBlockProps(unit: TraceRenderUnit): BlockUnitProps {
-    if (isRunGroupBlock(unit)) {
-      return {
-        type: 'run-group',
-        group: {
-          base: unit.base,
-          members: unit.members,
-          header: unit.header,
-          hasRunning: unit.hasRunning,
-          miles: unit.miles,
-          headFlatIndex: unit.headFlatIndex,
-        },
-      }
-    }
-    const assistant = assistantById.value.get(unit.assistantId)
-    const textLive = unit.assistantStatus === 'streaming' && !assistant?.textFinalized
+   * TextRow props（正文单元直渲染）：从 FlatBlock 解出 content + 所属 assistant 的
+   * streaming/error/timestamp。streaming 按「该消息文本是否仍在写」逐消息派生，不直接跟
+   * assistantStatus——pi 回合 =「assistant 消息 → 工具 → assistant 消息 → …」循环，mid-turn
+   * 气泡的 status 要到回合级 message.complete 才收尾，直接跟 status 会让长工具回合中已写完
+   * 的正文一直处于 streaming 灰（chat-flow-text-color D1，事实源 = core message_end 写入的
+   * textFinalized 确定性事件边沿）。
+   */
+  function textUnitProps(block: FlatBlock): TextUnitProps {
+    const assistant = assistantById.value.get(block.assistantId)
+    const textLive = block.assistantStatus === 'streaming' && !assistant?.textFinalized
     return {
-      type: unit.block.kind,
-      ...kindBlockProps(unit.block.kind, unit.block.ref),
-      working: textLive,
+      content: block.block.ref as string,
       streaming: textLive,
-      status: unit.assistantStatus,
+      status: block.assistantStatus,
       error: assistant?.error,
       messageTimestamp: assistant?.timestamp,
     }
   }
 
-  /** assistantId → Message 映射（取 error 字段透传给 Block，D8 Block.vue 零改动）。 */
+  /** assistantId → Message 映射（取 error/timestamp/textFinalized 透传给 TextRow）。 */
   const assistantById = computed(() => {
     const m = new Map<string, Message>()
     for (const a of turn().assistants) m.set(a.id, a)
     return m
   })
 
+  /**
+   * streaming-tail 光标显隐的末单元判定：isStreaming && 末单元不是「进行中的工具活动」。
+   * 末单元是聚合块时看段内末成员——kind 为 tool/agentgraph 且 ref.status === 'running' →
+   * 隐藏（聚合窗自带进行中信号，避免光标与聚合条流光并存）；其余（含末单元是正文 / 无单元
+   * 的防御性兜底 ES1）→ 显示。
+   */
+  function lastUnitIsRunningTool(): boolean {
+    const units = traceUnits.value
+    const last = units.length > 0 ? units[units.length - 1] : undefined
+    if (!last || last.kind !== 'aggregate') return false
+    const members = last.segment.members
+    const lastMember = members.length > 0 ? members[members.length - 1] : undefined
+    if (!lastMember) return false
+    if (lastMember.block.kind === 'tool' || lastMember.block.kind === 'agentgraph') {
+      return (lastMember.block.ref as ToolCall).status === 'running'
+    }
+    return false
+  }
+
   return {
-    showTrace,
-    takeover,
-    traceWindow,
-    visibleBlocks,
-    renderUnits,
+    traceUnits,
     isActionsAnchor,
     unitKey,
     unitMemoDeps,
-    unitBlockProps,
+    textUnitProps,
+    lastUnitIsRunningTool,
   }
 }

@@ -29,8 +29,6 @@ export function useTurnExpansion(sessionId: Ref<string | null>): {
   isExpanded: (turnKey: TurnKey) => boolean
   toggle: (turnKey: TurnKey) => void
   expand: (turnKey: TurnKey) => void
-  isTakeover: (turnKey: TurnKey) => boolean
-  setTakeover: (turnKey: TurnKey, on: boolean) => void
 } {
   const store = useTurnExpansionStore()
 
@@ -57,15 +55,7 @@ export function useTurnExpansion(sessionId: Ref<string | null>): {
     },
     // [chat-flow-consistency C3] 包装层 collapse 已随 ChatViewDeps.collapse（Turn.vue onComplete
     // 接线）退役删除——唯一消费方消失即死导出，store 层 collapse 保留（store 测试与清理链用）。
-    /** 查询「展开全部」接管态。null sid 返回 false（D6/TC2，窗口级语义，驱动 computeTraceWindow） */
-    isTakeover: (turnKey: TurnKey): boolean => {
-      const s = sid()
-      return s !== null && store.isTakeover(s, turnKey)
-    },
-    /** 设/清「展开全部」接管态。null sid 时 no-op */
-    setTakeover: (turnKey: TurnKey, on: boolean): void => {
-      const s = sid()
-      if (s !== null) store.setTakeover(s, turnKey, on)
-    },
+    // [chat-flow-process-aggregate D9] 包装层 isTakeover/setTakeover 已随接管态（展开全部）
+    // 退役删除——「看全部」入口收敛为每聚合块一个（组件本地展开态），回合级接管分区无消费方。
   }
 }

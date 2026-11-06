@@ -3,7 +3,7 @@
  *
  * 验证：tool.status running→completed 后，DOM 上运行动效图标（data-running-icon）消失（统一交互模式：无终态 icon）。
  * 覆盖三层链路：
- * - 方案 a：mount Block，改 props.tool.status（叶子组件单元回归）
+ * - 方案 a：mount ToolRow（Block 壳退役后直挂行组件），改 props.tool.status（叶子组件单元回归）
  * - 方案 b：mount Turn，改 turn.assistants[0].toolCalls[0].status（单 turn 链路回归）
  * - 方案 c：mount MessageStream（真 store + 真虚拟滚动层），applyMessageEvent 走 tool_call_end 路径
  *
@@ -14,8 +14,11 @@ import { chatViewDepsModule } from '@/__tests__/helpers/chat-stream-mount'
 import { mount } from '@vue/test-utils'
 import { defineComponent, h, nextTick, reactive } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
-// [w6 chat-ui-and-shell T7] ui 包组件：Block 不 inject deps；Turn 经 ChatViewDeps inject（mount 时 provide）
-import { Block, Turn } from '@taiji/ui'
+// [w6 chat-ui-and-shell T7] ui 包组件：Turn 经 ChatViewDeps inject（mount 时 provide）。
+// [chat-flow-process-aggregate U3] Block 转发壳退役：方案 a 改直挂 ToolRow（deep import，
+// vitest alias 与 typecheck-test paths 双通道覆盖 @taiji/ui/*）。
+import { Turn } from '@taiji/ui'
+import ToolRow from '@taiji/ui/features/chat/ToolRow.vue'
 import { mockChatProvide } from '@/__tests__/helpers/chat-view-deps'
 import MessageStream from '@/components/panel/MessageStream.vue'
 import { useChatStore } from '@/stores/chat'
@@ -123,7 +126,7 @@ function makeTurn(assistant: Message, isStreaming = false): MessageTurn {
 }
 
 beforeEach(() => {
-  // Turn.vue 依赖多个 pinia store（chat/fileTree/subagent...）。Block.vue 只依赖 i18n。
+  // Turn.vue 依赖多个 pinia store（chat/fileTree/subagent...）。ToolRow 只依赖 i18n。
   setActivePinia(createPinia())
 })
 
@@ -332,12 +335,12 @@ describe('方案 c: mount MessageStream（真 store + 真虚拟滚动层）— t
   })
 })
 
-/* ─────────────────────── 方案 a：mount Block，改 props.tool.status ─────────────────────── */
-describe('方案 a: mount Block 组件 — 翻转 props.tool.status', () => {
+/* ─────────────────────── 方案 a：mount ToolRow，改 props.tool.status ─────────────────────── */
+describe('方案 a: mount ToolRow 组件 — 翻转 props.tool.status', () => {
   it('running→completed：运行动效图标消失，无终态 icon（统一交互模式）', async () => {
     const tool = makeTool({ status: 'running' })
-    const wrapper = mount(Block, {
-      props: { type: 'tool', tool, sessionId: 's1' },
+    const wrapper = mount(ToolRow, {
+      props: { tool, sessionId: 's1' },
       global: { provide: mockChatProvide() },
     })
 
@@ -354,13 +357,8 @@ describe('方案 a: mount Block 组件 — 翻转 props.tool.status', () => {
 })
 
 /* ─────────────────────── 方案 b：mount Turn，改 turn prop 内 tool ─────────────────────── */
-// 展开 trace 需状态化 toggleExpand/isExpanded（reactive Set，同 turn-working U19）
 describe('方案 b: mount Turn 组件 — 翻转 turn.assistants[0].toolCalls[0].status', () => {
-  const expandedTurns = reactive(new Set<string>())
-  beforeEach(() => {
-    expandedTurns.clear()
-  })
-  it('running→completed：Turn 内 Block 运行动效图标消失，无终态 icon', async () => {
+  it('running→completed：Turn 内成员行运行动效图标消失，无终态 icon', async () => {
     const tool = makeTool({ status: 'running' })
     const assistant = makeAssistantWithTool(tool)
     const turn = makeTurn(assistant, /* isStreaming */ false)
@@ -368,23 +366,17 @@ describe('方案 b: mount Turn 组件 — 翻转 turn.assistants[0].toolCalls[0]
     const wrapper = mount(Turn, {
       props: { turn, sessionId: 's1' },
       global: {
-        provide: mockChatProvide({
-          isExpanded: (key: string) => expandedTurns.has(key),
-          toggleExpand: (key: string) => {
-            if (expandedTurns.has(key)) expandedTurns.delete(key)
-            else expandedTurns.add(key)
-          },
-        }),
+        provide: mockChatProvide(),
         stubs: { ChangeSetCard: true, MarkdownRenderer: true },
       },
     })
 
-    // 需展开 trace 才能看到 Block（showTrace = isSessionActive || expanded；这里 isSessionActive=false）
-    // 点击 turn-meta 按钮展开
-    await wrapper.find('button.turn-meta').trigger('click')
+    // [chat-flow-process-aggregate] complete turn = 折叠形态（D5）：过程块收进聚合块摘要行，
+    // 成员行动效图标在展开态（点摘要行）可见
+    await wrapper.find('[data-testid="agg-summary-row"]').trigger('click')
     await nextTick()
 
-    // running 态断言：专属动效图标存在（RunningBlockIcon）
+    // running 态断言：专属动效图标存在（RunningBlockIcon，SegmentToolRow 成员行）
     expect(wrapper.findAll('[data-running-icon]').length).toBeGreaterThan(0)
 
     // 翻转 status：构造新的 turn prop（不可变更新，模拟 store commitMessages 路径）
@@ -399,11 +391,12 @@ describe('方案 b: mount Turn 组件 — 翻转 turn.assistants[0].toolCalls[0]
   })
 })
 
-/* ─────────────────────── 方案 c（叶子）：直接验证 traceBlocks 响应式 ───────────────────────
- * 不 mount MessageStream（虚拟滚动层窗口化由 virta <Virtualizer> 内部负责），而是聚焦验证
- * 「Turn 把 toolCall 引用的 status 变化（不可变替换）传给 Block」是否响应式。
+/* ─────────────────────── 方案 c（叶子）：mount Turn 不可变替换响应式 ───────────────────────
+ * 不 mount MessageStream（虚拟滚动层窗口化由 virtua <Virtualizer> 内部负责），聚焦验证
+ * 「Turn 把 toolCall 引用的 status 变化（不可变替换）传给聚合块成员行」是否响应式
+ * （[chat-flow-process-aggregate U3] Block 壳退役，观测点 = 聚合块展开态成员行动效图标）。
  * ------------------------------------------------------------------------- */
-describe('方案 c（叶子）: traceBlocks 响应式验证（不可变替换翻转）', () => {
+describe('方案 c（叶子）: Turn 不可变替换翻转（聚合块展开态观测）', () => {
   const expandedTurns = reactive(new Set<string>())
   beforeEach(() => {
     expandedTurns.clear()
@@ -426,7 +419,8 @@ describe('方案 c（叶子）: traceBlocks 响应式验证（不可变替换翻
         stubs: { ChangeSetCard: true, MarkdownRenderer: true },
       },
     })
-    await wrapper.find('button.turn-meta').trigger('click')
+    // complete turn 折叠形态（D5）：点聚合块摘要行展开，成员行动效图标可见
+    await wrapper.find('[data-testid="agg-summary-row"]').trigger('click')
     await nextTick()
     expect(wrapper.findAll('[data-running-icon]').length).toBeGreaterThan(0)
 

@@ -1,7 +1,7 @@
 import { formatClock, shortenForHeader, stripAnsi, tailLines } from '../format-utils';
 import { SHIKI_LANGS, getHighlighter, highlightCode, renderMarkdown } from '../markdown';
 import { mockChatProvide } from './helpers';
-import { Block } from '@taiji/ui';
+import TextRow from '../TextRow.vue';
 import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
 // 机械合并产物（同目录合并，vi.mock 相对路径不变）；源文件见各节横幅。
@@ -95,16 +95,16 @@ describe('shiki fine-grained 真实初始化（core + 12 静态 grammar）', () 
 /** u4a push 截断占位文案（契约保持式截断的 block 级替换产物） */
 const PLACEHOLDER = '内容过大（32.0 MB）已在传输层截断，完整内容见 session 文件：/tmp/sessions/abc.jsonl'
 
+// [chat-flow-process-aggregate U3] Block 转发壳退役 → TextRow 直挂（正文渲染链路本体不变）
 function mountPlaceholderBlock(content: string, role: 'assistant' | 'user' = 'assistant') {
-  return mount(Block, {
+  return mount(TextRow, {
     props: {
-      type: 'text',
       content,
-      // role 维度在本测试中仅用于区分断言标注（Block 对两种来源的 text 分支同一渲染链路）
+      // role 维度在本测试中仅用于区分断言标注（TextRow 对两种来源的正文同一渲染链路）
       'data-role': role,
     },
     global: {
-      // Block 经 useChatViewDeps inject 消费壳依赖（N1 起），直接 mount 必须注入 mock deps
+      // TextRow 经 useChatViewDeps inject 消费壳依赖（密度档），直接 mount 必须注入 mock deps
       provide: mockChatProvide(),
       // 渲染 content 的 stub：wrapper.text() 才能断言正文（stubs: true 会吞掉 content）
       stubs: {
