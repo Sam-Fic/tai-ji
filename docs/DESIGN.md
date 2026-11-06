@@ -365,7 +365,7 @@ demo 阶段功能做到「可见 + 可交互 + 数据 mock」即够。不接 run
    终值变量 = 槽位 + 构建期系统栈。槽位必须「不声明」——绝不写成 `--font-ui: ;`
    （已声明但值为空 token 流的自定义属性不触发 var() 缺省参数，会代入空 token，
    mono 侧前导逗号让整条声明非法，默认态就击穿全站字体栈）。 */
---font-sans: var(--font-ui, system-ui, 'PingFang SC', 'Helvetica Neue'), 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
+--font-sans: var(--font-ui, system-ui, 'PingFang SC', 'Helvetica Neue', 'Microsoft YaHei'), 'Noto Sans CJK SC', sans-serif;
 --font-mono: var(--font-mono-ui, 'JetBrains Mono', 'IBM Plex Mono'), ui-monospace, Menlo, monospace;
 
 /* 字重三档（2026-10-06 对话流视觉裁决 + 整体上移一档 500/600/700）：消费方用 Tailwind 任意值类 [font-weight:var(--fw-*)] */
