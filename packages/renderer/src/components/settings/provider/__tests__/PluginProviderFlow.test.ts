@@ -121,6 +121,16 @@ function queryAll(testId: string): HTMLElement[] {
   return Array.from(document.body.querySelectorAll(`[data-testid="${testId}"]`))
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 beforeEach(() => {
   _resetPluginProviderSourceForTest()
   // [C3] 插件来源通道（清单 + 运行态/重启 + 两段式安装）经 SettingsTransport seam 注入
@@ -292,6 +302,104 @@ describe('PluginProviderFlow S27：安装确认卡知情面（两路径）', () 
     expect(pluginMock.cancelPluginInstall).toHaveBeenCalledWith('wool-workbuddy')
     expect(pluginMock.confirmPluginInstall).not.toHaveBeenCalled()
     expect(queryAll('plugin-family-card')).toHaveLength(3)
+  })
+})
+
+describe('PluginProviderFlow 安装等待态与迟到回包防护', () => {
+  it('prepare pending → 立即显示准备中、禁用家族卡与直装输入，并忽略重复安装点击', async () => {
+    const pending = deferred<ReturnType<typeof previewOf>>()
+    pluginMock.preparePluginInstall.mockReturnValue(pending.promise)
+    wrapper = mountFlow()
+    await flushPromises()
+    await nextTick()
+
+    queryAll('plugin-family-card')[0].click()
+    await nextTick()
+
+    expect(query('plugin-install-preparing')?.textContent).toContain('正在准备安装信息')
+    expect(query('plugin-install-confirm')).toBeNull()
+    expect(queryAll('plugin-family-card').every((card) => card.getAttribute('aria-disabled') === 'true')).toBe(true)
+    expect((query('plugin-direct-spec') as HTMLInputElement).disabled).toBe(true)
+    expect((query('plugin-direct-install-btn') as HTMLButtonElement).disabled).toBe(true)
+
+    // 等待期间重复点击其他家族卡 / 直装按钮不发起第二次 prepare
+    queryAll('plugin-family-card')[2].click()
+    query('plugin-direct-install-btn')?.click()
+    expect(pluginMock.preparePluginInstall).toHaveBeenCalledTimes(1)
+
+    pending.resolve(previewOf(FAMILIES[0]))
+    await flushPromises()
+    await nextTick()
+    expect(query('plugin-install-preparing')).toBeNull()
+    expect(query('plugin-install-confirm')).not.toBeNull()
+  })
+
+  it('prepare reject → 隐藏准备中并在 family 段呈现错误', async () => {
+    const pending = deferred<ReturnType<typeof previewOf>>()
+    pluginMock.preparePluginInstall.mockReturnValue(pending.promise)
+    wrapper = mountFlow()
+    await flushPromises()
+    await nextTick()
+
+    queryAll('plugin-family-card')[0].click()
+    await nextTick()
+    expect(query('plugin-install-preparing')).not.toBeNull()
+
+    pending.reject(new Error('network timeout'))
+    await flushPromises()
+    await nextTick()
+    expect(query('plugin-install-preparing')).toBeNull()
+    expect(query('plugin-flow-error')?.textContent).toContain('network timeout')
+    expect(query('plugin-install-confirm')).toBeNull()
+  })
+
+  it('prepare 期间关闭弹窗 → 迟到回包不复活确认卡，并清理已生成的暂存', async () => {
+    const pending = deferred<ReturnType<typeof previewOf>>()
+    pluginMock.preparePluginInstall.mockReturnValue(pending.promise)
+    wrapper = mountFlow()
+    await flushPromises()
+    await nextTick()
+
+    queryAll('plugin-family-card')[0].click()
+    await nextTick()
+    await wrapper.setProps({ open: false })
+    await flushPromises()
+
+    pending.resolve(previewOf(FAMILIES[0]))
+    await flushPromises()
+    await nextTick()
+    expect(pluginMock.cancelPluginInstall).toHaveBeenCalledWith('wool-workbuddy')
+    expect(query('plugin-install-confirm')).toBeNull()
+
+    await wrapper.setProps({ open: true })
+    await flushPromises()
+    await nextTick()
+    expect(query('plugin-install-confirm')).toBeNull()
+    expect(queryAll('plugin-family-card')).toHaveLength(3)
+  })
+
+  it('confirm pending → 确认按钮呈现安装中并禁用，成功后才进入授权段', async () => {
+    const confirming = deferred<{ success: boolean }>()
+    pluginMock.confirmPluginInstall.mockReturnValue(confirming.promise)
+    wrapper = mountFlow()
+    await flushPromises()
+    await nextTick()
+
+    queryAll('plugin-family-card')[0].click()
+    await flushPromises()
+    await nextTick()
+    query('plugin-install-confirm-btn')?.click()
+    await nextTick()
+
+    const button = query('plugin-install-confirm-btn') as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    expect(button.textContent).toContain('安装中')
+    expect(query('plugin-authorize-container')).toBeNull()
+
+    confirming.resolve({ success: true })
+    await flushPromises()
+    await nextTick()
+    expect(query('plugin-authorize-container')).not.toBeNull()
   })
 })
 

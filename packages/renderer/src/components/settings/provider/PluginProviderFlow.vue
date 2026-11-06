@@ -28,12 +28,22 @@
           class="text-[length:var(--text-xs)] text-danger"
         >{{ flowError }}</p>
         <div
+          v-if="preparing"
+          data-testid="plugin-install-preparing"
+          class="flex items-center gap-2 rounded-md bg-surface p-3 text-[length:var(--text-xs)] text-neutral-mid"
+        >
+          <Loader2 class="size-3.5 animate-spin" />
+          <span>{{ installIntent === 'update' ? t('pluginProvider.flow.preparingUpdate') : t('pluginProvider.flow.preparingInstall') }}</span>
+        </div>
+        <div
           v-for="entry in familyEntries"
           :key="entry.pluginId"
           data-testid="plugin-family-card"
           class="flex cursor-pointer items-center gap-3 rounded-md border border-border bg-bg-card p-3 hover:border-accent hover:bg-surface-2"
+          :class="{ 'pointer-events-none opacity-60': preparing }"
           role="button"
           :aria-label="entry.family?.displayName"
+          :aria-disabled="preparing"
           @click="onFamilySelect(entry)"
         >
           <span
@@ -130,12 +140,13 @@
             data-testid="plugin-direct-spec"
             :placeholder="t('pluginProvider.flow.directInstallPlaceholder')"
             class="h-8"
+            :disabled="preparing"
             @keyup.enter="onDirectInstall"
           />
           <Button
             variant="secondary"
             data-testid="plugin-direct-install-btn"
-            :disabled="directSpec.trim() === '' || catalogRefreshing"
+            :disabled="directSpec.trim() === '' || catalogRefreshing || preparing"
             @click="onDirectInstall"
           >{{ t('pluginProvider.flow.directInstallBtn') }}</Button>
         </div>
@@ -186,7 +197,12 @@
             data-testid="plugin-install-confirm-btn"
             :disabled="confirming"
             @click="onInstallConfirm"
-          >{{ installIntent === 'update' ? t('pluginProvider.flow.confirmUpdate') : t('pluginProvider.flow.confirmInstall') }}</Button>
+          >
+            <Loader2 v-if="confirming" class="size-3.5 animate-spin" />
+            {{ confirming
+              ? (installIntent === 'update' ? t('pluginProvider.flow.updating') : t('pluginProvider.flow.installing'))
+              : (installIntent === 'update' ? t('pluginProvider.flow.confirmUpdate') : t('pluginProvider.flow.confirmInstall')) }}
+          </Button>
         </div>
       </div>
 
@@ -214,6 +230,7 @@
  */
 import { computed, provide, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { Loader2 } from '@lucide/vue'
 import {
   Dialog,
   DialogContent,
@@ -264,6 +281,10 @@ const installIntent = ref<'install' | 'update'>('install')
 /** 当前段错误（family 段 = 清单/通路错误；confirm 段 = prepare/confirm 失败）。 */
 const flowError = ref('')
 const confirming = ref(false)
+/** preparePluginInstall 进行中（点击安装后立即置真，回包前提供可见等待态并防重入）。 */
+const preparing = ref(false)
+/** 流程代次：关闭/重开会自增，迟到的 prepare 回包按旧代次丢弃，避免陈旧确认卡复活。 */
+let flowGeneration = 0
 const catalogRefreshing = ref(false)
 /** 包名直装输入（S27 第二路径：清单是发现通道，用户可直接输入包名） */
 const directSpec = ref('')
@@ -400,6 +421,8 @@ async function enterFlow(): Promise<void> {
 
 /** 关闭/重开复位：确认停点残留的暂存交 cancelPluginInstall 清理（S27 未确认不落盘）。 */
 function resetFlow(): void {
+  flowGeneration += 1
+  preparing.value = false
   if (installPreview.value !== null) {
     resolvePluginInstallPort()?.cancelPluginInstall(installPreview.value.pluginId).catch((e: unknown) => {
       console.warn('[plugin-provider-flow] cancelPluginInstall on close failed:', e)
@@ -430,6 +453,7 @@ function familyAvatarChar(entry: PluginCatalogItem): string {
 
 /** 家族卡点击：已装 → 授权容器；未装 → 安装段（确认卡）。 */
 function onFamilySelect(entry: PluginCatalogItem): void {
+  if (preparing.value || confirming.value) return
   if (entry.installed) {
     enterAuthorize(entry.pluginId)
     return
@@ -440,12 +464,13 @@ function onFamilySelect(entry: PluginCatalogItem): void {
 /** 包名直装（S27 第二路径）：与家族卡共用确认停点。 */
 function onDirectInstall(): void {
   const spec = directSpec.value.trim()
-  if (spec === '') return
+  if (spec === '' || preparing.value || confirming.value) return
   void beginInstall(spec, 'install')
 }
 
 /** prepare → 确认卡（成功）或 family 段错误提示（失败/通路未就绪）。 */
 async function beginInstall(packageSpec: string, intent: 'install' | 'update'): Promise<void> {
+  if (preparing.value || confirming.value) return
   installIntent.value = intent
   flowError.value = ''
   const port = resolvePluginInstallPort()
@@ -453,15 +478,28 @@ async function beginInstall(packageSpec: string, intent: 'install' | 'update'): 
     flowError.value = t('pluginProvider.flow.channelUnavailable')
     return
   }
+  const generation = flowGeneration
+  preparing.value = true
   try {
-    installPreview.value = await port.preparePluginInstall(packageSpec)
+    const preview = await port.preparePluginInstall(packageSpec)
+    if (generation !== flowGeneration) {
+      // 弹窗已在 prepare 期间关闭：不复活确认卡，清掉暂存避免残留等待下次启动清扫。
+      void port.cancelPluginInstall(preview.pluginId).catch((e: unknown) => {
+        console.warn('[plugin-provider-flow] cancelPluginInstall for stale prepare failed:', e)
+      })
+      return
+    }
+    installPreview.value = preview
     phase.value = 'confirm'
   } catch (e) {
+    if (generation !== flowGeneration) return
     // prepare 失败（下载/校验/NAMESPACE_MISMATCH）：错误可见 + 不进确认卡（暂存由
     // runtime prepare 失败路径自清，S18）
     flowError.value = e instanceof Error ? e.message : String(e)
     installPreview.value = null
     phase.value = 'family'
+  } finally {
+    if (generation === flowGeneration) preparing.value = false
   }
 }
 
