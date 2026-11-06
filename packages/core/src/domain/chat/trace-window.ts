@@ -57,7 +57,7 @@ export interface TraceWindowResult {
  * 本常量无 ADR 依据（未登记进 docs/adr/）。ui-signal-density 第一批（候选 E）把它从 6 收窄到 4：
  * 收窄理由 = 工作回合（路径 B）首屏过程行从 ≤7 压到 ≤5（运行中口径，含 running 独立行），
  * 省 2 行——本设计全部改动里收益 / 成本比最高的一项（一个常量，窗口语义不变）。
- * 已接受代价 = 更多的已完成过程块并入 TraceCompactorRow 计数摘要（被收编块默认只剩计数，
+ * 已接受代价 = 更多的已完成过程块并入计数摘要（compactedCount 收编口径；被收编块默认只剩计数，
  * 要看行内容须 takeover / 手动展开——恢复路径为既有机制）。
  * 重审触发条件 = 用户反馈「过程行不够看 / 要反复展开计数摘要才够用」，
  * 或 trace-window.test.ts 的收编断言需再次放宽。 */
@@ -298,7 +298,7 @@ export interface RunGroupBlock {
     count: number
     /** 耗时 = 已完成成员耗时合计（endTime − startTime 之和；endTime 缺失的成员按 0 计；running 成员不计入——其 endTime 必缺失，天然按 0） */
     durationMs: number
-    /** 含 M 次失败 = 成员中 status==='error' 的数量（组内口径，与 TraceCompactorRow 的全局 failedCount 分账） */
+    /** 含 M 次失败 = 成员中 status==='error' 的数量（组内口径，与窗口全局 failedCount 是两套独立计数——后者统计不在 visible 内的失败块） */
     failedCount: number
   }
   /** 组内是否含 status==='running' 的成员（放接口顶层——它是渲染信号不是计数口径，不入 header）。
@@ -405,7 +405,7 @@ export function isRunGroupBlock(unit: TraceRenderUnit): unit is RunGroupBlock {
  * - 组数 = 类型切换次数，与步数解耦；单成员组照出（demo 同口径：一个 read 也成「探索 1 步」，
  *   回看历史时组头就是该段的标题）。
  * - 组成员不在可见序列时（工作 turn 的 W 窗口把 error 成员剔出可见、前后两段按假邻接合并）：
- *   合并后的组只统计可见成员，被剔除的 error 由 TraceCompactorRow 的全局 failedCount 报告。
+ *   合并后的组只统计可见成员，被剔除的 error 由窗口切片结果的 failedCount 报告（TraceWindowResult.failedCount，不在 visible 内的失败块数）。
  * - 里程碑徽标（§3.6）：结构信号在 flatBlocks 全序列一次预计算后聚合上组头——锚点行不在可见
  *   组成员内（被窗口收编）则徽标不出现，窗口化不产生假呈现。
  * - 组块排序位置 = members[0] 在输入序列中的位置；输出保持输入序列原序。空输入 → 返回 []。

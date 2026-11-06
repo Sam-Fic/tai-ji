@@ -7,10 +7,10 @@
  * MOCK 层 E2E」时不会被触发（MOCK 层依赖 build 产物，绕过 vite dev serve），
  * 也不被现有 vitest 单测覆盖（单测不挂载完整 AppShell）。
  *
- * 机制：chromium 先 launch（缺浏览器早失败 exit 3）→ VITE_MOCK=true spawn vite
- * dev server（只起 vite，不起 electron）→ 双环回（127.0.0.1/[::1]）轮询 ready
- * 并取可达地址 → chromium goto 同一地址 → 双通道抓错误 → 断言关键挂载点 →
- * try/finally cleanup。
+ * 机制：VITE_MOCK=true spawn vite dev server（只起 vite，不起 electron）→ 双环回
+ * （127.0.0.1/[::1]）轮询 ready 并取可达地址 → chromium launch（ready 后启动——
+ * chrome 生存窗口最短化；缺浏览器早失败 exit 3）→ newPage + goto 同一地址 →
+ * 双通道抓错误 → 断言关键挂载点 → try/finally cleanup。
  *
  * 双通道错误捕获（任一非空即 fail）：
  *   (A) vite 子进程输出（stdout+stderr）逐行正则匹配编译期错误 pattern
@@ -21,16 +21,17 @@
  *
  * exit code：
  *   0 = ok（零 error + 挂载点全存在）
- *   1 = 有 error（console/pageerror/编译 pattern 非空 或 挂载点缺失）
+ *   1 = 有 error（console/pageerror/编译 pattern 非空 或 挂载点缺失 或 goto 失败）
  *   2 = dev server 提前退出（spawn 的进程死亡，非 ready 超时——ready 轮询无超时上限，
  *       时间机制删除裁决）
  *   3 = chromium launch 失败（二进制缺失，提示 npx playwright install chromium）
+ *       或 newPage 失败
  *
  * 用法：
  *   node scripts/dev-smoke.mjs [--port 1420]
  *   pnpm dev:smoke   （根 package.json 暴露的便捷入口）
  *
- * 本脚本自管理完整生命周期（launch → spawn → poll → assert → cleanup），
+ * 本脚本自管理完整生命周期（spawn → poll → launch → newPage/goto → assert → cleanup），
  * 不依赖外部已启动的 dev server。VITE_MOCK 经 spawn 子进程 env 注入，不污染调用方 shell。
  */
 import { chromium } from '@playwright/test'
@@ -476,9 +477,9 @@ function printHelp() {
 
 退出码:
   0  ok
-  1  有 error（编译/console/pageerror/挂载点缺失）
+  1  有 error（编译/console/pageerror/挂载点缺失 或 goto 失败）
   2  dev server 提前退出
-  3  chromium launch 失败`)
+  3  chromium launch 失败 或 newPage 失败`)
 }
 
 function printSummary(result) {

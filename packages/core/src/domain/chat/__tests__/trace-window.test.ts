@@ -662,7 +662,7 @@ describe('run 类型分组 groupToolRuns: 分组规则', () => {
 
   it('路径 B 假邻接：error 成员被 ③池剔除后两段合并、被剔除的 error 不入组内 M', () => {
     // [bash✓ bash✗ bash✓ bash✓]：W=4 窗口下 error 被 ③池剔除 → 可见序列 [✓ ✓ ✓]（3 个）
-    // 分组输入是可见派生序列 → 假邻接合并为一组 ×3，组内 M=0（全局 failedCount 口径归 TraceCompactorRow）
+    // 分组输入是可见派生序列 → 假邻接合并为一组 ×3，组内 M=0（被剔除的 error 归窗口全局 failedCount 计数）
     const tools = [
       makeTool({ id: 'b0' }),
       makeTool({ id: 'b1', status: 'error' }),

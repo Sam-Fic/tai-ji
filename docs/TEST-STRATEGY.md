@@ -28,7 +28,7 @@
 
 > **[HISTORICAL] E2E 从手动升级为 Playwright**：原「E2E 手动，无 playwright/cypress」（2026-06-28 sidebar-project-file-tree W0 引入 Playwright 覆盖）。mock 层验证渲染/交互，但**验证不了模块加载期副作用**——`node:path` 类错误在 vite build 期被 externalize 成惰性代理，mock 模式不触发 getter，E2E 全绿却 dev 崩溃（2026-06-30 事故）。**必须配套 dev 冒烟门禁**。详见 `.taiji-harness/2026-06-30-e2e-retrospect/`。`[from: 2026-06-28-sidebar-project-file-tree §2/W8]`
 >
-> **dev 冒烟门禁（已实现，S1-W1 交付）**：`scripts/dev-smoke.mjs` 自管理完整生命周期（chromium 先 launch（缺浏览器早失败 exit 3）→ VITE_MOCK=true spawn vite → 双环回（127.0.0.1/[::1]）轮询 ready 并取可达地址 → chromium goto 同一地址 → 双通道抓错误 → 断言挂载点 → cleanup），不依赖外部已启动的 dev server。双通道错误捕获：(A) vite 子进程输出正则匹配编译期错误（Module not found / Pre-transform error / Failed to resolve import 等）；(B) `page.on('console')` error + `page.on('pageerror')` 未捕获异常。**exit code 语义**：`0`=ok（零 error + 挂载点全存在）/ `1`=有 error（console/pageerror/编译 pattern 非空 或 挂载点缺失）/ `2`=dev server 提前退出（spawn 的进程死亡；ready 轮询无超时上限）/ `3`=chromium launch 失败。完整用法与错误注入指南见 `scripts/dev-smoke.mjs` 文件头注释。`[from: v6-ui-refactor-test-infra S1-W1 dev-smoke-gate]`
+> **dev 冒烟门禁（已实现，S1-W1 交付）**：`scripts/dev-smoke.mjs` 自管理完整生命周期（VITE_MOCK=true spawn vite → 双环回（127.0.0.1/[::1]）轮询 ready 并取可达地址 → chromium launch（ready 后启动、缺浏览器早失败 exit 3）→ newPage + goto 同一地址 → 双通道抓错误 → 断言挂载点 → cleanup（15s 有界）），不依赖外部已启动的 dev server。双通道错误捕获：(A) vite 子进程输出正则匹配编译期错误（Module not found / Pre-transform error / Failed to resolve import 等）；(B) `page.on('console')` error + `page.on('pageerror')` 未捕获异常。**exit code 语义**：`0`=ok（零 error + 挂载点全存在）/ `1`=有 error（console/pageerror/编译 pattern 非空 或 挂载点缺失 或 goto 失败）/ `2`=dev server 提前退出（spawn 的进程死亡；ready 轮询无超时上限）/ `3`=chromium launch 失败 或 newPage 失败。完整用法与错误注入指南见 `scripts/dev-smoke.mjs` 文件头注释。`[from: v6-ui-refactor-test-infra S1-W1 dev-smoke-gate]`
 
 ### 运行命令（cwd 敏感）
 
