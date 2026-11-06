@@ -87,8 +87,8 @@ export interface AggregationMember { // oe-exempt:20261106:framework:schema 数�
   /**
    * 端点 thinking 档位声明（复用 BuiltinModelSummary.thinkingLevelMap 字段形态，D7）：
    * key 存在且 value≠null = 该端点支持该档位。路由的档位并集与向上取档映射（D7）从各
-   * 端点本声明派生；缺省 = 端点档位未知（并集按空集处理，编辑器在保存时按端点模型
-   * 实际能力回填）。
+   * 端点本声明派生；缺省 = 端点档位未知（并集按空集处理）；M1 编辑器不产生不回填
+   * levels，档位声明编辑 / 按端点模型能力回填留后续增量。
    */
   levels?: Record<string, string | null> | null
 }
@@ -287,12 +287,12 @@ export function generateRouteIdFromName(name: string): string {
   return slug === '' ? 'route' : slug
 }
 
-// ── 保存校验（U1 检查点：id 唯一 + 字符集；悬空端点允许保留，只标记不拒绝） ────────────
+// ── 保存校验（U1 检查点：id 唯一 + 字符集；嵌套路由/重复渠道拒绝，悬空端点只标记不拒绝） ──
 
 /** 路由域错误码词表（wire error envelope 的 code 值域；D10 请求级失败统一 error envelope）。 */
-export type AggregationErrorCode = 'route_id_conflict' | 'route_id_invalid' | 'route_not_found'
+export type AggregationErrorCode = 'route_id_conflict' | 'route_id_invalid' | 'route_not_found' | 'route_member_nested'
 
-export const AGGREGATION_ERROR_CODES: readonly AggregationErrorCode[] = ['route_id_conflict', 'route_id_invalid', 'route_not_found']
+export const AGGREGATION_ERROR_CODES: readonly AggregationErrorCode[] = ['route_id_conflict', 'route_id_invalid', 'route_not_found', 'route_member_nested']
 
 /** 保存校验结果信封（network-proxy 域同款形态：ok 或面向用户的错误清单）。 */
 export type AggregationRouteValidationResult =
@@ -302,6 +302,10 @@ export type AggregationRouteValidationResult =
 /**
  * 单条路由 upsert 的保存校验（保存语义 = 结构与 id 合法性把关；端点存在性走标记不拒绝——
  * 「允许保留悬空端点 + 标记提示」，不丢用户配置）。
+ *
+ * 端点引用两道硬拒绝（route-matrix.md「同系统内未穷举的组合清单」组合 1/3 的行为契约）：
+ * 端点 providerId 为聚合保留 id（嵌套路由）→ route_member_nested 拒绝；同一
+ * (providerId, modelId) 渠道重复出现 → 拒绝（重复渠道求值行为完全相同，无语义）。
  *
  * @param next 待保存路由
  * @param existing 既有路由全集（保存前磁盘态）
@@ -333,9 +337,17 @@ export function validateAggregationRouteUpsert(
     errors.push('路由至少需要一个端点。')
   }
   const memberIds = new Set<string>()
+  const memberChannels = new Set<string>()
   for (const m of next.members) {
+    if (m.providerId === AGGREGATION_PROVIDER_ID) {
+      code = 'route_member_nested'
+      errors.push(`端点 "${m.providerId}/${m.modelId}" 引用了另一条模型路由：路由不能作为另一条路由的端点（嵌套路由不支持），请直接选择物理 provider 下的模型。`)
+    }
     if (memberIds.has(m.id)) errors.push(`端点条目 id "${m.id}" 在路由内重复。`)
     memberIds.add(m.id)
+    const channel = `${m.providerId}/${m.modelId}`
+    if (memberChannels.has(channel)) errors.push(`端点 "${channel}" 在路由内重复：同一 provider + 模型渠道出现多次没有语义，请删除多余的重复端点行。`)
+    memberChannels.add(channel)
   }
   if (errors.length === 0) return { ok: true }
   return { ok: false, code, errors }

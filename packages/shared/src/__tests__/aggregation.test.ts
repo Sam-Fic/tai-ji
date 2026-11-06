@@ -208,14 +208,42 @@ describe('保存校验（validateAggregationRouteUpsert）', () => {
     expect(validateAggregationRouteUpsert(dupMembers, existing).ok).toBe(false)
   })
 
+  it('嵌套路由端点（providerId = 聚合保留 id）→ route_member_nested 拒绝（矩阵组合 1）', () => {
+    const nested = makeRoute({ id: 'nested-route', members: [{ id: 'ep-1', providerId: AGGREGATION_PROVIDER_ID, modelId: 'other-route', type: 'none' }] })
+    const result = validateAggregationRouteUpsert(nested, existing)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.code).toBe('route_member_nested')
+      expect(result.errors[0]).toContain('嵌套')
+    }
+  })
+
+  it('同一 (providerId, modelId) 渠道以不同端点 id 重复 → 拒绝（矩阵组合 3）', () => {
+    const dupChannel = makeRoute({ id: 'dup-channel-route', members: [
+      { id: 'ep-1', providerId: 'zhipu', modelId: 'glm-5.3-flash', type: 'none' },
+      { id: 'ep-2', providerId: 'zhipu', modelId: 'glm-5.3-flash', type: 'window' },
+    ] })
+    const result = validateAggregationRouteUpsert(dupChannel, existing)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.errors.join('；')).toContain('没有语义')
+  })
+
+  it('不同 provider 的同名模型渠道不误伤（渠道键含 providerId）', () => {
+    const sameModelDiffProvider = makeRoute({ id: 'multi-channel-route', members: [
+      { id: 'ep-1', providerId: 'zhipu', modelId: 'glm-5.3-flash', type: 'none' },
+      { id: 'ep-2', providerId: 'opencode-go', modelId: 'glm-5.3-flash', type: 'none' },
+    ] })
+    expect(validateAggregationRouteUpsert(sameModelDiffProvider, existing).ok).toBe(true)
+  })
+
   it('悬空端点不拒绝（允许保留 + 标记提示的保存语义——存在性校验归标记函数）', () => {
     // provider 明显不在任何有效模型索引中，保存校验仍放行（id 取不撞既有的值，隔离冲突语义）
     const dangling = makeRoute({ id: 'ghost-route', name: 'Ghost', members: [{ id: 'ep', providerId: 'ghost-provider', modelId: 'ghost-model', type: 'none' }] })
     expect(validateAggregationRouteUpsert(dangling, existing).ok).toBe(true)
   })
 
-  it('错误码词表完备（wire error envelope code 值域三值）', () => {
-    expect(AGGREGATION_ERROR_CODES).toEqual(['route_id_conflict', 'route_id_invalid', 'route_not_found'])
+  it('错误码词表完备（wire error envelope code 值域四值）', () => {
+    expect(AGGREGATION_ERROR_CODES).toEqual(['route_id_conflict', 'route_id_invalid', 'route_not_found', 'route_member_nested'])
   })
 })
 
