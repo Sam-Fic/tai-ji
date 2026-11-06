@@ -15,7 +15,7 @@ import type {
   AggregationRoute,
   AggregationValidModelIndex,
 } from '@taiji/shared'
-import { AGGREGATION_PROVIDER_ID } from '@taiji/shared'
+import { AGGREGATION_PROVIDER_ID, AGGREGATION_PROVIDER_ID_RESERVED } from '@taiji/shared'
 import {
   annotateDanglingMembers,
   collectOrphanAggregationRefs,
@@ -36,6 +36,8 @@ import { pickModelCapabilityFields } from './model-mapper.js'
 import { redactSensitiveHeaders } from './provider-header-redaction.js'
 import type { IProviderCredentialResolver } from './ports/provider-credential-resolver.js'
 import { listRemoteProviderTemplates } from './remote-config/remote-provider-templates.js'
+// D4 ③ 保留 id 拒绝：带 code Error 经 server 全局 catch 透传 error envelope（errors.ts L4 通路）
+import { errorWithCode } from '../utils/errors.js'
 
 /** auth.json 存储能力（ConfigService 注入，与 ConfigService 构造函数 authStorage 同构）。
  * 不含 'set'——写入唯一经 credentialWriter（A1-4 收尾，AuthService.saveCredential）。
@@ -1563,6 +1565,18 @@ export async function setProvider(
 ): Promise<{ newDefault?: { provider: ProviderId; modelId: string }; quotaAutoEnabled?: boolean }> {
   // wave3：existingConfig===undefined 判定「新建 provider」（边界1 白名单检查用）
   const existingConfig = configStore.getProviderConfig(providerId)
+  // D4 ③（provider-aggregation）：聚合 provider 固定 id 是保留 id——新建撞保留 id 在任何
+  // 写盘前拒绝（provider-write-proxy 插件通道复用本写策略链，同被覆盖），否则 listProviders
+  // 会产出两条同 id ProviderInfo（用户条目 + 注入条目），模型选择器按 providerId 分组与
+  // find(p.id) 查找全部歧义。仅拦新建：编辑既有条目不触本分支（存量异常条目仍可编辑清理）。
+  // 错误经 server 全局 catch 以 shared 词表 code 透传 error envelope。
+  if (existingConfig === undefined && providerId === AGGREGATION_PROVIDER_ID) {
+    throw errorWithCode(
+      `provider id "${AGGREGATION_PROVIDER_ID}" 是模型路由的保留 id（路由条目固定用它聚合进模型列表），` +
+        `不能用于自定义 provider。请改用其他 id（如 "${AGGREGATION_PROVIDER_ID}-custom"）。`,
+      AGGREGATION_PROVIDER_ID_RESERVED,
+    )
+  }
   const existing = existingConfig ?? {}
   // A1：merged 提前声明——catalog 分支 delete merged.apiKey 需在声明之后（原顺序触发 TDZ TS2448/2454）
   // TODO: 当 pi models.json 支持 schema 后收窄类型（现有 Record<string, unknown> 是架构限制）

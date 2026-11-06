@@ -16,9 +16,19 @@
  */
 
 /** 聚合 provider 固定保留 id（D4 ③）：单一固定 id 聚合 provider 承载全部模型路由（models
- * 数组多条目）。用户 provider 保存校验须排除与本 id 撞名（实施期定形：取项目 kebab 小写
- * id 惯用形态；保留 id 冲突拒绝的接线点在 provider 写侧，归 U3/U9 波次）。 */
+ * 数组多条目）。用户 provider 保存校验排除与本 id 撞名（实施期定形：取项目 kebab 小写
+ * id 惯用形态）——接线点 = provider 写侧两处：setProvider 新建分支（编辑既有条目不受
+ * 影响）与 provider-importer 导入路径，错误码见 AGGREGATION_PROVIDER_ID_RESERVED。 */
 export const AGGREGATION_PROVIDER_ID = 'aggregation'
+
+/** provider 新建/导入撞保留 id 的 wire error envelope code 词表（D4 ③）：runtime 写侧
+ * 拒绝时以 errorWithCode 携带此 code 上抛，server 全局 catch 透传 error envelope；
+ * 值域单值，扩码只加不改（D2 同承诺）。 */
+export type AggregationProviderIdErrorCode = 'aggregation_provider_id_reserved'
+
+export const AGGREGATION_PROVIDER_ID_RESERVED: AggregationProviderIdErrorCode = 'aggregation_provider_id_reserved'
+
+export const AGGREGATION_PROVIDER_ID_ERROR_CODES: readonly AggregationProviderIdErrorCode[] = ['aggregation_provider_id_reserved']
 
 /** routes 域外层结构版本（独立于 providers.json 文件级 version——routes schema 演进走
  * 自己的版本号，字段只加不改承诺下当前恒 1）。 */

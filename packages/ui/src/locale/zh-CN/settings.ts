@@ -15,6 +15,7 @@ export default {
     groupOther: '其他',
     provider: '供应商',
     providerDesc: '配置模型供应商与 API Key',
+    modelRoute: '模型路由',
     skill: '技能',
     skillDesc: '管理技能加载路径与来源',
     agent: '子代理',
@@ -653,6 +654,27 @@ export default {
     remove: '删除',
     routeEnabledLabel: '路由启用',
     scopedToggle: '参与选择',
+    // 新建路由（U9 创建侧，GL5/V15）
+    createRoute: '新建路由',
+    newRouteName: '新路由',
+    // 删除路由（U9 删除侧，GL5/V14）：确认提示覆盖 scopedModels 清理与默认模型回退
+    deleteRoute: '删除路由',
+    deleteConfirmTitle: '删除该路由？',
+    deleteConfirmDesc: '路由定义将删除，模型白名单中的引用同步清理；默认模型指向它时自动回退到列表首位。已绑定会话在重开前保持注册，发消息会提示更换模型。',
+    deleteConfirmConfirm: '删除',
+    deleteConfirmCancel: '取消',
+    routeDeleted: '路由已删除',
+    // 新会话可用徽标（U7/D1③：运行期新建，当前 pi 会话未注册，重开会话方可绑定）
+    newSessionAvailable: '新会话可用',
+    // 视图加载态（U11）
+    loading: '路由配置加载中…',
+    loadFailed: '路由配置加载失败，请重试',
+    retry: '重试',
+    // 渠道直连卡（无 routes 定义的物理模型白名单条目，D10/U9 默认单端点形态）
+    directCardTag: '直连',
+    directMissing: '渠道或模型已不存在（配置保留）',
+    // 保存编排失败分型（U9：routes 已写、scopedModels 写失败且回滚也失败的残留态呈报）
+    saveScopedMismatch: '路由定义已保存但模型白名单未同步，请重试保存',
     noEndpoints: '还没有端点',
     noEndpointsHint: '还没有端点。从下方添加一个渠道，或回到供应商页补充模型。',
     endpointAdded: '已添加端点',

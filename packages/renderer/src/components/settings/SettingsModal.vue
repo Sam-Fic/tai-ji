@@ -117,6 +117,37 @@
           <template v-for="view in visitedViews" :key="view">
             <div v-show="activeView === view" class="sec-fade" :class="{ on: activeView === view }">
               <ProviderPage v-if="view === 'provider'" :providers="providers" :is-active="activeView === 'provider'" @open-route-page="openRoutePage" />
+              <!-- 模型路由页（D10 两屏第二屏）：视图经 aggregation.getRouteView 拉取 + routeView
+                   失效广播订阅刷新；scopedModels 全量走既有 settingsStore 通道（直连卡数据源）。
+                   视图未到位（首访拉取中）不挂载内容分支，由加载/失败占位承载（U11），到位后常挂 v-show。 -->
+              <ModelRoutePage
+                v-else-if="view === 'model-route' && routeView !== null"
+                :view="routeView"
+                :providers="providers"
+                :scoped-models="scopedModels"
+                :new-session-route-ids="newSessionRouteIds"
+                @save="onRoutePageSave"
+                @route-delete="onRoutePageDelete"
+                @open-providers="select('provider')"
+              />
+              <!-- 首拉中/失败占位（U11）：routeView === null 不再是纯空白；重试 = 重新 ensureRouteView -->
+              <div
+                v-else-if="view === 'model-route'"
+                class="flex flex-col items-center gap-3 rounded-lg border border-border bg-bg-card px-6 py-12"
+                data-testid="model-route-pending"
+              >
+                <p v-if="routeViewLoading" class="text-[length:var(--text-sm)] text-neutral-mid" data-testid="model-route-loading">
+                  {{ t('settings.modelRoute.loading') }}
+                </p>
+                <template v-else-if="routeViewFailed">
+                  <p class="text-[length:var(--text-sm)] text-neutral-mid" data-testid="model-route-load-failed">
+                    {{ t('settings.modelRoute.loadFailed') }}
+                  </p>
+                  <Button size="dense" data-testid="model-route-retry" @click="ensureRouteView">
+                    {{ t('settings.modelRoute.retry') }}
+                  </Button>
+                </template>
+              </div>
               <SettingsResourcePage
                 v-else-if="view === 'skill'"
                 kind="skill"
@@ -170,6 +201,8 @@ import { registerModalSurface, otherSurfaceYieldsEsc } from '@/composables/featu
 import { detectPlatform } from '@/composables/effects/usePlatformChrome'
 import { cycleTabFocus, getFocusableElements } from '@/composables/logic/focus-trap'
 import { getSettingsStore, useSettings, type SystemSettings, type ContentSlotView } from '@taiji/core'
+import { ModelRoutePage } from '@taiji/ui/features/settings'
+import { useRoutePageOrchestration } from '@/composables/features/settings/useRoutePageOrchestration'
 import {
   contentMaxWidthCss,
   settingsGroupHeadLabel,
@@ -206,7 +239,7 @@ import NetworkPage from './network/NetworkPage.vue'
 const isMac = detectPlatform() === 'mac'
 
 /**
- * nav 分组数据源（容器扩展点统一 §6.1/U8）：容器位注册表派生（内置 18 项为注册表初始项，
+ * nav 分组数据源（容器扩展点统一 §6.1/U8）：容器位注册表派生（内置 19 项为注册表初始项，
  * lib/content-slots.ts 登记；插件声明的 settings.section 项按 group 字段归组、无组归
  * 「其他」），此处只做展示塑形（分组头文案 / 分区键 / label / icon 组件解析）。
  * [HISTORICAL] 曾为 navGroups as const 静态三分组 17 项（demo NAV_GROUPS 形态），分区
@@ -289,7 +322,7 @@ watch(activeView, (view) => {
 const contentMaxWidth = computed(() => contentMaxWidthCss(findSection(activeMenu.value)?.contentMaxWidth))
 
 const settingsStore = getSettingsStore()
-const { providers, skills, agents, extensions, system, skillDirs, agentDirs } = settingsStore
+const { providers, skills, agents, extensions, system, skillDirs, agentDirs, scopedModels } = settingsStore
 const { refreshProviders } = useSettings()
 
 // 打开时刷新 providers + 焦点落点 = 顶栏关闭钮（demo settings spec §2/§3.1 锚定行为）；
@@ -353,18 +386,29 @@ function select(id: MenuId): void {
   if (id !== 'extension') extensionView.value = 'main'
 }
 
-/** 「模型路由」设置分区键（provider-aggregation D10 两屏架构；分区条目随路由页交付在
- *  lib/content-slots SETTINGS_SECTION_SPECS 登记——本键值须与该登记 id 一致，命名对齐
- *  路由页组件族 ModelRoutePage / i18n settings.modelRoute 命名空间）。 */
+/** 「模型路由」设置分区键（provider-aggregation D10 两屏架构；lib/content-slots
+ *  SETTINGS_SECTION_SPECS 已登记同 id 分区，两处键值一致——命名对齐路由页组件族
+ *  ModelRoutePage / i18n settings.modelRoute 命名空间）。 */
 const MODEL_ROUTING_SECTION_KEY = 'model-route'
 
 /** ProviderPage 下一步引导卡「打开模型路由」（外部 spec §6.5）→ 切模型路由分区。
- *  分区条目未注册（路由页交付前）时守卫 no-op：直接 select 未注册键会让内容分支落空
- *  渲染空白页（activeView 无对应 v-if 分支），findSection 命中才切换。 */
+ *  findSection 守卫为注册表异常形态的防御（分区已登记，正常路径恒命中；未注册键会让
+ *  内容分支落空渲染空白页）。 */
 function openRoutePage(): void {
   if (findSection(MODEL_ROUTING_SECTION_KEY) === undefined) return
   select(MODEL_ROUTING_SECTION_KEY)
 }
+
+// ── 模型路由页编排（数据与写通道收编 useRoutePageOrchestration，此处只接线）─────────────
+
+const { routeView, routeViewLoading, routeViewFailed, ensureRouteView, onRoutePageSave, onRoutePageDelete, newSessionRouteIds } = useRoutePageOrchestration()
+
+// 分区首访触发拉取（开弹层不预拉，与 visitedViews 首访挂载语义一致）；immediate 覆盖深链
+// 直开 model-route 的形态——activeMenu 初值即 model-route 时无变化沿，非 immediate watch
+// 回调不执行，首访拉取被跳过 = 页面纯空白（U10）
+watch(activeView, (view) => {
+  if (view === MODEL_ROUTING_SECTION_KEY) void ensureRouteView()
+}, { immediate: true })
 
 function getItemCount(id: string): number {
   switch (id) {

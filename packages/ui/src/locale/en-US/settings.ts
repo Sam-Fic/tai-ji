@@ -15,6 +15,7 @@ export default {
     groupOther: 'Other',
     provider: 'Provider',
     providerDesc: 'Configure model providers and API keys',
+    modelRoute: 'Model Routing',
     skill: 'Skill',
     skillDesc: 'Manage Skill load paths and sources',
     agent: 'Subagents',
@@ -654,6 +655,27 @@ export default {
     remove: 'Remove',
     routeEnabledLabel: 'Route enabled',
     scopedToggle: 'Include in picker',
+    // Create route (U9 create side, GL5/V15)
+    createRoute: 'New Route',
+    newRouteName: 'New route',
+    // Delete route (U9 delete side, GL5/V14): confirm copy covers allowlist cleanup and default-model fallback
+    deleteRoute: 'Delete Route',
+    deleteConfirmTitle: 'Delete this route?',
+    deleteConfirmDesc: 'The route definition will be deleted and its model allowlist references cleaned up; if the default model points here it falls back to the top of the list. Bound sessions stay registered until reopened and will be asked to switch models.',
+    deleteConfirmConfirm: 'Delete',
+    deleteConfirmCancel: 'Cancel',
+    routeDeleted: 'Route deleted',
+    // New-session-available badge (U7/D1③: created while running; the current pi session has not registered it; reopen to bind)
+    newSessionAvailable: 'Available in new sessions',
+    // View loading states (U11)
+    loading: 'Loading route configuration…',
+    loadFailed: 'Failed to load route configuration, please retry',
+    retry: 'Retry',
+    // Direct channel card (physical-model allowlist entry without a routes definition, D10/U9 default single-endpoint form)
+    directCardTag: 'Direct',
+    directMissing: 'Provider or model no longer exists (config kept)',
+    // Save-orchestration failure stage (U9: routes written, scoped write failed and rollback failed too)
+    saveScopedMismatch: 'Route definitions were saved but the model allowlist was not updated. Please retry saving',
     noEndpoints: 'No endpoints yet',
     noEndpointsHint: 'No endpoints yet. Add a channel below, or go back to the Providers page to add models.',
     endpointAdded: 'Endpoint added',

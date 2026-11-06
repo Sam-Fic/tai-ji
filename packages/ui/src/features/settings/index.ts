@@ -25,10 +25,6 @@ export { default as OAuthDialog } from './provider/OAuthDialog.vue'
 export { default as ProviderTemplatePicker } from './provider/ProviderTemplatePicker.vue'
 export { default as ProviderQuickSetup } from './provider/ProviderQuickSetup.vue'
 export { default as SoundPreviewButton } from './common/SoundPreviewButton.vue'
-// ScopedModelSection 已退役（provider-aggregation D10：白名单编辑入口迁「模型路由」页）。
-// scoped-model-types 的 type export 为零消费方死导出（唯一消费方 useScopedModels 已随
-// 退役删除），随 scoped-model 遗留资产清理批次一并移除本导出与 common/scoped-model-types.ts。
-export type { ScopedRenderItem, SelectableModel } from './common/scoped-model-types'
 export { default as SourceImportSection } from './common/SourceImportSection.vue'
 
 // ── 模型路由页组件族（provider-aggregation U5b · D10 两屏架构的路由半边）──

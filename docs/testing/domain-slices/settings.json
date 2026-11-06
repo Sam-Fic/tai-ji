@@ -11,7 +11,8 @@
   "scope": {
     "renderer": [
       "packages/renderer/src/components/settings/**",
-      "packages/renderer/src/features/fonts/**"
+      "packages/renderer/src/features/fonts/**",
+      "packages/renderer/src/composables/features/settings/**"
     ],
     "ui": [
       "packages/ui/src/features/settings/**"
@@ -38,7 +39,9 @@
     "packages/renderer/src/components/settings/**",
     "packages/renderer/src/features/fonts/**",
     "packages/renderer/src/composables/shell/__tests__/useSettingsShell.test.ts",
-    "packages/ui/src/features/settings/**"
+    "packages/renderer/src/composables/features/settings/__tests__/use-route-page-orchestration.test.ts",
+    "packages/ui/src/features/settings/**",
+    "packages/renderer/src/__tests__/settings/settings-modal-smoke.test.ts"
   ],
   "sharedBy": {},
   "contracts": [],

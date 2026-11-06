@@ -96,6 +96,10 @@ export class AggregationMessageHandler {
     const savedIssues = read.memberIssues.filter(i => i.routeId === route.id)
     this.ctx.reply(ws, msg.id, 'aggregation.routeSaved', { route, memberIssues: savedIssues })
     this.publishViewChanged()
+    // SC2 状态副本同步（provider-aggregation §2.5）：路由保存后即触发 provider 列表广播，
+    // 运行中会话的 model.list / config.providers 立即含新条目（启停/改名等经 saveRoute 的
+    // 目录变化不滞留到下一次无关广播）。与 deleteRoute 分支的广播收尾对称。
+    this.ctx.broadcastProviderList()
     // 触发点①（provider-aggregation D3/U4）：routes 权威写方时刻的额度按需刷新——端点
     // 条件/引用可能新增额度维度（含 simple→advanced 翻转），保存是明确数据需求时刻。
     // 可选钩子（组合根注入 U4 编排），内部自捕获错误 fire-and-forget，不阻断保存回执。

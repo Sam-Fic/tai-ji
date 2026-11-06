@@ -1,8 +1,8 @@
 <!--
   RouteCard —— 模型路由卡（provider-aggregation U5b · spec §7.3-§7.11）。
 
-  收起态：模型名 / 端点数 chip / 停用 chip / 「此刻」chip（权威求值展示，D14）/
-  模式文本 / 档位并集 / 排序·模式切换·启停·参与选择开关·展开 / 端点 pill 摘要。
+  收起态：模型名 / 新会话可用徽标（U7）/ 端点数 chip / 停用 chip / 「此刻」chip（权威求值展示，D14）/
+  模式文本 / 档位并集 / 排序·模式切换·启停·参与选择开关·删除（确认后 route-delete 上抛）·展开 / 端点 pill 摘要。
   展开体：渠道条 / 端点行列表 / 添加端点（高级模式插入第一个无条件端点之前，spec §7.9）/
   时间轴（穷举对照表，D14）/ 特殊日期（D13）。
 
@@ -31,6 +31,14 @@
       </Button>
       <span class="text-[length:var(--text-sm)] font-medium text-neutral-fg" data-testid="route-card-name">
         {{ card.route.name }}
+      </span>
+      <!-- 新会话可用徽标（U7/D1③）：本应用运行期内新建、当前 pi 会话未注册，重开会话方可绑定 -->
+      <span
+        v-if="newSessionAvailable"
+        class="rounded-sm bg-surface-2 px-1.5 py-0.5 text-[length:var(--text-3xs)] text-neutral-mid"
+        data-testid="route-card-new-session-badge"
+      >
+        {{ t('settings.modelRoute.newSessionAvailable') }}
       </span>
       <span class="rounded-sm bg-surface-2 px-1.5 py-0.5 text-[length:var(--text-3xs)] text-neutral-mid">
         {{ t('settings.modelRoute.endpointsCount', { n: card.route.members.length }) }}
@@ -119,8 +127,32 @@
           data-testid="route-scoped-toggle"
           @update:model-value="emit('toggleScoped')"
         />
+        <!-- 删除路由（U9 删除侧，GL5/V14）：确认后 route-delete 指令上抛，实际删除走编排层 -->
+        <Button
+          variant="ghost"
+          size="icon"
+          class="size-7 rounded-sm p-0 text-neutral-dim hover:text-danger"
+          :aria-label="t('settings.modelRoute.deleteRoute')"
+          :title="t('settings.modelRoute.deleteRoute')"
+          data-testid="route-delete-btn"
+          @click="deleteConfirmOpen = true"
+        >
+          <Trash2 class="size-3.5" />
+        </Button>
       </div>
     </div>
+
+    <!-- 删除确认（同步清理 scopedModels 引用与默认模型回退提示；SourceImportSection 同款原语） -->
+    <ConfirmDialog
+      :open="deleteConfirmOpen"
+      :title="t('settings.modelRoute.deleteConfirmTitle')"
+      :description="t('settings.modelRoute.deleteConfirmDesc')"
+      :confirm-text="t('settings.modelRoute.deleteConfirmConfirm')"
+      :cancel-text="t('settings.modelRoute.deleteConfirmCancel')"
+      variant="danger"
+      @update:open="deleteConfirmOpen = $event"
+      @confirm="confirmDelete"
+    />
 
     <!-- 收起态端点 pill 摘要（spec §7.3；点击 pill 展开该卡） -->
     <div v-if="!expanded" class="flex flex-wrap items-center gap-1.5 border-t border-border px-4 py-2">
@@ -219,8 +251,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ChevronDown, ChevronUp } from '@lucide/vue'
-import { Button, Select, SelectTrigger, SelectValue, SelectContent, SelectItem, Switch } from '@taiji/ui'
+import { ChevronDown, ChevronUp, Trash2 } from '@lucide/vue'
+import { Button, ConfirmDialog, Select, SelectTrigger, SelectValue, SelectContent, SelectItem, Switch } from '@taiji/ui'
 import type { AggregationMember, AggregationRoute, AggregationRouteMode, ProviderInfo } from '@taiji/shared'
 import { candidateProviderIds, evaluateRouteAt, levelsUnion } from './route-preview'
 import { dotColorClass } from './route-styles'
@@ -247,6 +279,8 @@ const props = defineProps<{
   index: number
   total: number
   now: { dow: number; slot: number }
+  /** 新会话可用徽标（U7：路由 id 不在本应用生命周期首次快照内时为 true，页面层判定传入）。 */
+  newSessionAvailable?: boolean
 }>()
 
 const emit = defineEmits<{ op: [op: RouteEditorOp]; move: [dir: 'up' | 'down']; toggleScoped: []; openProviders: [] }>()
@@ -258,6 +292,14 @@ const expanded = ref(false)
 /** 时间轴包裹层（端点行「涂时段」平滑滚动定位目标，spec §9.5）。 */
 const timeGridWrap = ref<HTMLElement | null>(null)
 const addProviderId = ref('')
+/** 删除确认弹层开关（U9 删除侧；确认即上抛 route-delete 指令，无草稿就地变更）。 */
+const deleteConfirmOpen = ref(false)
+
+/** 删除确认：关闭弹层 + route-delete 指令上抛（页面转发编排层走 deleteRoute 端口）。 */
+function confirmDelete(): void {
+  deleteConfirmOpen.value = false
+  emit('op', { kind: 'route-delete', routeId: props.card.route.id })
+}
 
 const candidates = computed(() => candidateProviderIds(props.card.route, props.providers))
 
