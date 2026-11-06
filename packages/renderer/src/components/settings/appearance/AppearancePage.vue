@@ -302,9 +302,17 @@ async function loadTerminalConfig(): Promise<void> {
  * 只改自己负责的字段。
  */
 async function saveTerminalFontSize(): Promise<void> {
-  const size = Math.min(TERMINAL_FONT_MAX, Math.max(TERMINAL_FONT_MIN, Math.round(Number(terminalFontSize.value) || TERMINAL_FONT_DEFAULT)))
-  if (!terminalConfig) return
+  // 与 saveTerminalFontFamily 共用同一 fontActionBusy 互斥门禁：两条路径都是终端配置的
+  // read-modify-write，并发交错时后完成者会以不含对方字段的旧快照覆盖（同 D7 三写者风险）。
+  // 拦截时 toast 告知（busy 丢弃须有反馈），用户稍后重试即可。
+  if (fontActionBusy.value) {
+    toastInfo(t('settings.fonts.busyRetry'))
+    return
+  }
+  fontActionBusy.value = true
   try {
+    const size = Math.min(TERMINAL_FONT_MAX, Math.max(TERMINAL_FONT_MIN, Math.round(Number(terminalFontSize.value) || TERMINAL_FONT_DEFAULT)))
+    if (!terminalConfig) return
     const current = (await getSettingsTransport().getTerminalConfig()).config
     terminalConfig = current
     terminalFontFamily.value = current.fontFamily
@@ -315,6 +323,8 @@ async function saveTerminalFontSize(): Promise<void> {
     toastInfo(t('settings.appearance.terminalFontSaved'))
   } catch (e) {
     toastError(e instanceof Error ? e.message : String(e))
+  } finally {
+    fontActionBusy.value = false
   }
 }
 
@@ -397,7 +407,11 @@ async function removeImportedFont(family: string): Promise<void> {
 
 /** 终端字体独立写 TerminalConfig.fontFamily；同字号路径一样先读当前完整配置。 */
 async function saveTerminalFontFamily(family: string): Promise<void> {
-  if (fontActionBusy.value) return
+  // busy 拦截须有反馈：下拉已打开时选项按钮虽已 disabled，仍可能经时序窗口到达此处
+  if (fontActionBusy.value) {
+    toastInfo(t('settings.fonts.busyRetry'))
+    return
+  }
   fontActionBusy.value = true
   try {
     const current = (await getSettingsTransport().getTerminalConfig()).config

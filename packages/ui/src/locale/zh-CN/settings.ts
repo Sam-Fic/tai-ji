@@ -77,6 +77,7 @@ export default {
     importedToast: '已导入 {family}',
     removedToast: '已移除 {family}',
     terminalSaved: '终端字体已更新',
+    busyRetry: '有字体操作进行中，请稍后再试',
     installTitle: '安装新字体',
     installHint: '找不到想要的字体？',
     installMacOS: 'macOS (Homebrew)',

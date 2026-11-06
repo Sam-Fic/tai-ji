@@ -53,6 +53,7 @@
               <Button
                 variant="ghost"
                 class="h-auto w-full justify-start rounded-sm px-2.5 py-1.5 text-left text-[length:var(--text-sm)]"
+                :disabled="busy"
                 :data-testid="`settings-font-${slot.key}-default`"
                 @click="selectFamily(slot.key, '')"
               >
@@ -63,6 +64,7 @@
                 :key="`${entry.source}:${entry.family}`"
                 variant="ghost"
                 class="h-auto w-full justify-start rounded-sm px-2.5 py-1.5 text-left text-[length:var(--text-sm)]"
+                :disabled="busy"
                 :data-testid="`settings-font-${slot.key}-option-${entry.family}`"
                 @click="selectFamily(slot.key, entry.family)"
               >

@@ -77,6 +77,7 @@ export default {
     importedToast: 'Imported {family}',
     removedToast: 'Removed {family}',
     terminalSaved: 'Terminal font updated',
+    busyRetry: 'A font action is in progress, please try again later',
     installTitle: 'Install a font',
     installHint: 'Cannot find the font you want?',
     installMacOS: 'macOS (Homebrew)',
