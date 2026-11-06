@@ -9,8 +9,9 @@
  * 后续加业务功能时，在此扩展 mock 数据响应（参考 git 历史的 mock/data.ts）。
  *
  * 依赖方向：renderer 的 resolve-platform 在 VITE_MOCK 时 providePlatform(
- * createMockPlatform())；core ws-client 经 platform.webSocket.create(url) 拿桩
- * （回调以 WebSocketLike 事件注入）。mock-ws 不 import ws-client（避免循环依赖）。
+ * createMockPlatform(globalThis.localStorage))；core ws-client 经
+ * platform.webSocket.create(url) 拿桩（回调以 WebSocketLike 事件注入）。
+ * mock-ws 不 import ws-client（避免循环依赖）。
  */
 import type { ClientMessage, ServerMessage } from '@taiji/shared'
 // 相对路径直达定义处（platform/port.ts）：经 '@taiji/core' barrel 回引会成环，ESM 序隐患
@@ -20,23 +21,33 @@ import { WS_READY_STATE } from '../../platform/port'
 // ── createMockPlatform（platform 注入层 mock）──────────────────────────
 
 /**
+ * 播种源最小结构（宿主同步 storage 的读子集，结构性声明、不引 DOM 类型）：
+ * core 包 lint 禁 localStorage 裸标识符（no-restricted-globals），宿主 localStorage
+ * 由壳侧（renderer resolve-platform VITE_MOCK 分支）读取后经参数注入。
+ */
+interface SyncStorageSeed {
+  readonly length: number
+  key(index: number): string | null
+  getItem(key: string): string | null
+}
+
+/**
  * 最小 in-memory KVStorage 实现（get 不存在返回 null）。
  *
- * 创建时从 localStorage 播种一次（**读路径保真**）：桌面 platform 的 storage 是
+ * 创建时从注入的播种源同步读一次（**读路径保真**）：桌面 platform 的 storage 是
  * LocalStorageAdapter（boot 读直连 localStorage），纯内存 Map 会让「重启重放」类断言
  * （font-system RL7：seed localStorage → reload → 生产 boot 链读回）在 mock 层无法表达
  * 给定条件。播种只发生在 create 时刻、只读不写——写仍是内存态（reload 即失，与桌面
  * 持久化写不同；本 mock 只承诺 boot 读路径与桌面同形）。
+ * 播种源为注入参数，core 不自行读宿主：未注入（undefined/null，含无 DOM 环境的单测）
+ * 时静默跳过播种，回落纯内存语义。
  */
-function createInMemoryStorage(): KVStorage {
+function createInMemoryStorage(seedStorage?: SyncStorageSeed | null): KVStorage {
   const map = new Map<string, string>()
-  // core 包 lint 禁 localStorage 裸标识符（no-restricted-globals）；经 globalThis 属性访问，
-  // 非 DOM 环境（部分单测）为 undefined，静默跳过播种回落纯内存语义
-  const seedSource = (globalThis as { localStorage?: Storage }).localStorage
-  if (seedSource) {
-    for (let index = 0; index < seedSource.length; index += 1) {
-      const key = seedSource.key(index)
-      if (key !== null) map.set(key, seedSource.getItem(key) ?? '')
+  if (seedStorage) {
+    for (let index = 0; index < seedStorage.length; index += 1) {
+      const key = seedStorage.key(index)
+      if (key !== null) map.set(key, seedStorage.getItem(key) ?? '')
     }
   }
   return {
@@ -97,16 +108,17 @@ function createMockWebSocket(_url: string): WebSocketLike {
 
 /**
  * 创建 mock PlatformPort —— 供后续 wave bootstrap 在 VITE_MOCK=true 时
- * providePlatform(createMockPlatform())，使 core ws-client 走 mock 连接路径。
+ * providePlatform(createMockPlatform(globalThis.localStorage))，使 core ws-client
+ * 走 mock 连接路径。
  *
  * - kind: 'mock'
- * - storage: 最小 in-memory KVStorage
+ * - storage: 最小 in-memory KVStorage（seedStorage 注入播种源，create 时读一次）
  * - webSocket: WebSocketFactory（create 返回复刻旧 mock 语义的桩）
  */
-export function createMockPlatform(): PlatformPort {
+export function createMockPlatform(seedStorage?: SyncStorageSeed | null): PlatformPort {
   return {
     kind: 'mock',
-    storage: createInMemoryStorage(),
+    storage: createInMemoryStorage(seedStorage),
     webSocket: { create: createMockWebSocket },
   }
 }

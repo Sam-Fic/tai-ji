@@ -23,7 +23,10 @@ let cached: PlatformPort | undefined
 export function resolvePlatform(): PlatformPort {
   if (!cached) {
     if (import.meta.env.VITE_MOCK === 'true') {
-      providePlatform(createMockPlatform())
+      // 播种源由壳侧注入：core 禁读 localStorage 裸标识符（no-restricted-globals），
+      // mock 层「boot 读路径保真」的播种语义见 mock-ws createInMemoryStorage；
+      // globalThis.localStorage 在无 DOM 环境为 undefined，播种静默跳过
+      providePlatform(createMockPlatform(globalThis.localStorage))
     } else {
       provideDesktopPlatform()
     }

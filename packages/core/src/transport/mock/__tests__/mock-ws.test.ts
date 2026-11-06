@@ -23,6 +23,28 @@ describe('createMockPlatform', () => {
     expect(await storage.get('k')).toBeNull()
   })
 
+  it('storage 播种：seedStorage 注入后 create 时读一次；未注入回落纯内存', async () => {
+    // DOM Storage 结构子集（key 遍历 + getItem）；getItem 返 null 播种为 ''（读路径保真语义）
+    const seedStorage = {
+      length: 2,
+      key(index: number) {
+        return ['seeded.key', 'empty.key'][index] ?? null
+      },
+      getItem(key: string) {
+        return key === 'seeded.key' ? '{"fonts":[]}' : null
+      },
+    }
+    const seeded = createMockPlatform(seedStorage)
+    expect(await seeded.storage.get('seeded.key')).toBe('{"fonts":[]}')
+    expect(await seeded.storage.get('empty.key')).toBe('')
+    // 播种只读不写：set 不回写播种源，仍是内存态
+    await seeded.storage.set('seeded.key', 'updated')
+    expect(await seeded.storage.get('seeded.key')).toBe('updated')
+
+    const plain = createMockPlatform()
+    expect(await plain.storage.get('seeded.key')).toBeNull()
+  })
+
   it('webSocket 桩：CONNECTING → 200ms OPEN → onopen；ping 回灌 pong；close → CLOSED', () => {
     const { webSocket } = createMockPlatform()
     const ws = webSocket.create('ws://mock')
