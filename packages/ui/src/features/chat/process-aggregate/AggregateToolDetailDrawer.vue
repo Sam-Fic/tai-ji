@@ -55,11 +55,11 @@
         <h3 class="text-[length:var(--text-2xs)] [font-weight:var(--fw-mid)] text-neutral-dim">{{ t('panel.message.aggDetailOutput') }}</h3>
         <div class="mt-1" data-testid="agg-detail-output">
           <!-- __gui__ 分支（gui-components 路径 B 形态适配）：结构化组件树经
-               GuiComponentRenderer 渲染 card（ToolRow 行内 guiComponent 同源提取），优先级最高 -->
+               GuiComponentRenderer 渲染 card（card 组件自带 gui-card testid 断言锚点，
+               包壳不再重复挂 testid——重复挂会被 playwright strict mode 判双元素），
+               优先级最高 -->
           <BlockScrollBox v-if="guiComponent" surface="recessed">
-            <div data-testid="gui-card">
-              <GuiComponentRenderer :component="guiComponent" />
-            </div>
+            <GuiComponentRenderer :component="guiComponent" />
           </BlockScrollBox>
           <BlockScrollBox v-else-if="richRenderer" surface="recessed">
             <component :is="richRenderer" :tool="tool" :session-id="sessionId" />
