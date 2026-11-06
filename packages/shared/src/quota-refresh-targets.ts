@@ -34,6 +34,20 @@ export type QuotaRefreshTarget = {
   apiMethod?: 'GET' | 'POST'
   /** apiMethod=POST 时的请求体（静态 JSON 字符串） */
   apiBody?: string
+  /**
+   * 探测请求静态头（与真实额度请求同构的必需要素）。2026-11-06 stepfun 真机实证：
+   * 端点在**有效会话**下也校验业务头——页面自身 XHR（带 oasis-appid/oasis-platform）
+   * 200 而无头探测 fetch 同刻 401，缺头探测永远等不到 200（与登录态无关）。
+   * 缺省无静态头（mimo/opencode-go 的端点 cookie 认证即可）。
+   */
+  apiHeaders?: Record<string, string>
+  /**
+   * 探测请求的 cookie 镜像头（与 runtime fetcher 的 headerFroms 同概念）：从 partition
+   * 读 cookieKey 的当前值注入 header 请求头。oasis-webid 这类头 = cookie 值的镜像且
+   * cookie 是 HttpOnly（页面上下文 document.cookie 读不到），只能 main 侧注入。
+   * partition 无该 cookie 时跳过此头（探测维持现状的 401，不劣化）。
+   */
+  apiHeaderFroms?: readonly { cookieKey: string; header: string }[]
   /** 登录页 URL 特征（正则字符串，大小写不敏感；命中即视为登录态失效需要用户登录） */
   loginUrlPatterns: string[]
 }
@@ -58,7 +72,11 @@ export const QUOTA_REFRESH_TARGETS: Record<string, QuotaRefreshTarget> = {
   },
   'opencode-go': {
     pageUrl: 'https://opencode.ai/console',
-    apiUrl: 'https://opencode.ai/console/api/go/status',
+    // 会话信号端点（页面自身加载 console 时调用；better-auth 形态）：200 = 登录态
+    // 健康，无/失效会话 401（2026-11-06 实测）。不用额度端点 /console/api/go/status——
+    // 它需要 x-org-id 头（runtime fetcher 从用户配置的 workspace 参数注入，刷新器
+    // 不可得），裸调在有效会话下也 400（认证先于 org 校验），探测永远等不到 200
+    apiUrl: 'https://opencode.ai/console/auth/session',
     // '/login' '/signin' 是路径形态（仅登录页检测用，不参与导航白名单）；
     // 'auth.' 是 host 形态尾点前缀（better-auth 登录子域，参与导航白名单）
     loginUrlPatterns: ['/login', '/signin', 'auth.'],
@@ -69,6 +87,10 @@ export const QUOTA_REFRESH_TARGETS: Record<string, QuotaRefreshTarget> = {
     // connect RPC 端点只收 POST（GET 回 405），探测与真实额度请求同方法同体
     apiMethod: 'POST',
     apiBody: '{}',
+    // 业务头族与 runtime 声明式 fetcher 的 extraHeaders/headerFroms 同源（wire 实测）：
+    // 端点在有效会话下也校验 oasis 头——无头探测同刻 401（2026-11-06 真机网络层对照）
+    apiHeaders: { 'oasis-appid': '10300', 'oasis-platform': 'web' },
+    apiHeaderFroms: [{ cookieKey: 'Oasis-Webid', header: 'oasis-webid' }],
     // 账号域（host 形态，参与导航白名单——登录态换发源）+ 平台自身登录路径（路径形态）
     loginUrlPatterns: [
       'account.stepfun.com',

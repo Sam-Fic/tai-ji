@@ -105,7 +105,7 @@ async function runRefresh(input: QuotaRefreshInput, deps: QuotaRefreshDeps): Pro
         return { ok: false, error: `page load failed: ${errorMessage(err)}` }
       }
     }
-    await probeUntilApiOk(win, target)
+    await probeUntilApiOk(win, ses, target)
     const cookie = await exportCookies(ses, target)
     return { ok: true, cookie }
   } catch (err) {
@@ -138,7 +138,17 @@ async function seedCookies(ses: Session, target: QuotaRefreshTarget, dataDir: st
     const eq = pair.indexOf('=')
     if (eq <= 0) continue
     try {
-      await ses.cookies.set({ url: origin, name: pair.slice(0, eq), value: pair.slice(eq + 1) })
+      // path:'/' + secure:true 显式给足：__Host- 前缀 cookie（如 opencode 的
+      // __Host-console_session）的 Chromium 强校验（host-only + Secure + Path=/），
+      // url-only 形态被 EXCLUDE_INVALID_PREFIX 拒绝、会话种不进 partition；对普通
+      // cookie 这也正是服务端种入的真实属性（在册 target 的 pageUrl 恒 https）
+      await ses.cookies.set({
+        url: origin,
+        name: pair.slice(0, eq),
+        value: pair.slice(eq + 1),
+        path: '/',
+        secure: true,
+      })
     } catch (err) {
       // 单条种入失败（cookie 域/属性与服务端写入形态不符）只降级不中断：其余 cookie
       // 足以让续期循环跑起来的场景不能被个别畸形条目阻塞
@@ -151,14 +161,20 @@ async function seedCookies(ses: Session, target: QuotaRefreshTarget, dataDir: st
   }
 }
 
-// ── 事件驱动 API 探测（页面导航/load 事件触发）───────────────────────────────
+// ── 事件驱动 API 探测（页面导航/load/cookie 变更事件触发）────────────────────
 
 /**
- * 挂页面导航/load 事件监听，每次事件触发一次页面内 API 探测；命中 HTTP_OK 即完成。
+ * 挂页面导航/load/cookie 变更事件监听，每次事件触发一次页面内 API 探测；命中 HTTP_OK
+ * 即完成。
  *
- * 触发面：'did-finish-load'（主文档加载完成）与 'did-navigate'（每次导航提交，覆盖 SSO
- * 跳转链的每一跳与登录后跳回）。附上监听后**立即先探一次**——生产路径 loadURL await
- * 期间 did-finish-load 已发射，迟挂的监听收不到那一次。
+ * 触发面三源：
+ * - 'did-finish-load'（主文档加载完成）与 'did-navigate'（每次导航提交，覆盖 SSO
+ *   跳转链的每一跳与登录后跳回）。附上监听后**立即先探一次**——生产路径 loadURL await
+ *   期间 did-finish-load 已发射，迟挂的监听收不到那一次。
+ * - session.cookies 'changed'（服务端 Set-Cookie 落地）。SPA 平台（如 stepfun）的
+ *   会话换发是页内 XHR 响应的 Set-Cookie，**不产生任何导航事件**——只挂导航事件时
+ *   首探（换发完成前）401 后探测永不重试，登录态已换发成功却等不到 200 确证，
+ *   Promise 挂起。cookie 落地是「换发完成」的确定性事实，事件驱动补源，非时间阈值。
  *
  * 无 deadline：探测不 200 就继续等下一个页面事件（时间等待窗已随时间机制清查删除）。
  * 确定性收尾（URL 事实，非时间阈值停留判定）：探测时当前 URL 命中登录页特征
@@ -167,14 +183,17 @@ async function seedCookies(ses: Session, target: QuotaRefreshTarget, dataDir: st
  * destroy、渲染端 cookieRefreshDedup 槽随 Promise 落定即时释放，恢复由用户侧重试
  * 承载（重新登录后下次 hover 重查，探测即 200）。窗口销毁 → reject（同经 catch 归一）。
  */
-function probeUntilApiOk(win: BrowserWindow, target: QuotaRefreshTarget): Promise<void> {
+function probeUntilApiOk(win: BrowserWindow, ses: Session, target: QuotaRefreshTarget): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false
     const wc = win.webContents
+    const siteHosts = siteHostsOf(target)
     const cleanup = (): void => {
       wc.removeListener('did-finish-load', onReady)
       wc.removeListener('did-navigate', onReady)
       wc.removeListener('destroyed', onDestroyed)
+      // partition session 跨刷新常驻（persist 落盘）：不移除会随进程累积监听器泄漏
+      ses.cookies.removeListener('changed', onCookieChanged)
     }
     const succeed = (): void => {
       if (settled) return
@@ -205,28 +224,68 @@ function probeUntilApiOk(win: BrowserWindow, target: QuotaRefreshTarget): Promis
         fail('login required')
         return
       }
-      void probeApi(win, target).then((status) => {
+      void probeApi(win, ses, target).then((status) => {
         if (status === HTTP_OK) succeed()
       })
+    }
+    // cookie 变更重探源：只认目标域的**写入**事件（真机词表，Electron 42 实测 2026-11-06：
+    // 写入 = cause 'inserted' / 'inserted-no-value-change-overwrite'，覆盖换发 = 'overwrite'
+    // removed=true 删旧 + 'inserted' 插新两连发；清理/过期/驱逐均 removed=true）。
+    // 域外变更（第三方分析 cookie 等）与会话无关，触发只会徒增页面上下文 fetch
+    const onCookieChanged = (
+      _event: unknown,
+      cookie: { domain?: string },
+      cause: string,
+      removed: boolean,
+    ): void => {
+      if (removed) return
+      if (!cause.startsWith('inserted')) return
+      if (!isTargetCookieDomain(cookie.domain, siteHosts)) return
+      onReady()
     }
     const onDestroyed = (): void => fail('refresh window destroyed before api ready')
 
     wc.on('did-finish-load', onReady)
     wc.on('did-navigate', onReady)
     wc.on('destroyed', onDestroyed)
+    ses.cookies.on('changed', onCookieChanged)
     onReady() // 首探：覆盖「loadURL 已就绪、初始 did-finish-load 已错过」的窗口
   })
 }
 
+/**
+ * 组装探测请求头：静态 apiHeaders + apiHeaderFroms 的 cookie 镜像（partition 读值注入，
+ * main 侧 API 可读 HttpOnly——页面上下文 document.cookie 读不到，这是必须 main 注入的原因）。
+ * partition 缺该 cookie 时跳过对应头（探测维持现状失败，不劣化）。
+ */
+async function resolveProbeHeaders(ses: Session, target: QuotaRefreshTarget): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { ...(target.apiHeaders ?? {}) }
+  for (const { cookieKey, header } of target.apiHeaderFroms ?? []) {
+    try {
+      const found = await ses.cookies.get({ name: cookieKey })
+      const value = found.at(-1)?.value
+      if (value !== undefined && value !== '') headers[header] = value
+    } catch (err) {
+      // cookies.get 异常（分区读写竞争等）：跳过该头，探测按现状失败，不阻塞重探链
+      mainLogger.warn('[quota-cookie-refresher] probe header cookie read failed', {
+        cookieKey,
+        error: errorMessage(err),
+      })
+    }
+  }
+  return headers
+}
+
 /** 页面上下文内 fetch 目标 API，返回 HTTP status（异常/非数值归一为 0）。
  *  POST 端点（connect RPC 形态）按 target.apiMethod/apiBody 发探测——与真实额度
- *  请求同方法，GET 探测会被 405 误判为登录态失效。 */
-async function probeApi(win: BrowserWindow, target: QuotaRefreshTarget): Promise<number> {
+ *  请求同方法同头（缺业务头时有效会话也 401，见 QuotaRefreshTarget.apiHeaders 注释）。 */
+async function probeApi(win: BrowserWindow, ses: Session, target: QuotaRefreshTarget): Promise<number> {
   try {
-    const init =
-      target.apiMethod === 'POST'
-        ? `{method:'POST',body:${JSON.stringify(target.apiBody ?? '{}')}}`
-        : ''
+    const headers = await resolveProbeHeaders(ses, target)
+    const initParts: string[] = []
+    if (target.apiMethod === 'POST') initParts.push(`method:'POST'`, `body:${JSON.stringify(target.apiBody ?? '{}')}`)
+    if (Object.keys(headers).length > 0) initParts.push(`headers:${JSON.stringify(headers)}`)
+    const init = initParts.length > 0 ? `{${initParts.join(',')}}` : ''
     const expr = `fetch(${JSON.stringify(target.apiUrl)},${init}).then(r => r.status).catch(() => 0)`
     const status = await win.webContents.executeJavaScript(expr)
     return typeof status === 'number' ? status : 0
