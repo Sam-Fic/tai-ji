@@ -179,8 +179,9 @@ export default [
   },
   // shared 包 barrel 出口（全部 domain 的 re-export 聚合点——barrel 的职责即聚合，
   // 拆分不消行只移行）。provider-aggregation 域契约根（aggregation.ts 类型 + 纯函数
-  // 出口，多端共用 SSOT）净增 54 行越过 500，537 > 500 微超即提额保留软上限告警
-  //（pi-provider-store / control-server 同型先例）。
+  // 出口，多端共用 SSOT）净增 57 行越过 500，540 > 500 微超即提额保留软上限告警
+  //（pi-provider-store / control-server 同型先例；计数 = eslint max-lines
+  // skipBlankLines+skipComments 口径实测）。
   {
     files: ['packages/shared/src/index.ts'],
     rules: {

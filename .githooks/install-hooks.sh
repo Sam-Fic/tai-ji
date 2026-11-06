@@ -998,7 +998,7 @@ fi
 #     .githooks/check_register_allowlist.py：全仓 extensions/ 下
 #     registerProvider|registerNativeProvider|registerVirtualModel 调用点只许
 #     出现在两个白名单包——provider-live-sync（投喂通道本体，写入单点）与
-#     scheduler（ack 合成轮临时覆写 + backend 转发，语义不同不在禁列）。
+#     provider-aggregation（路由执行入口，非可见性投喂，语义区分见脚本头注释）。
 #     防未来新开常驻注入点绕过投喂单点、制造第二写入方：pi 进程注册表是模型
 #     可见性的事实源，消费方（--model 解析 / rpc set_model / rename /
 #     smart-context / permission / scheduler / subagent 校验 / provider 对账）
