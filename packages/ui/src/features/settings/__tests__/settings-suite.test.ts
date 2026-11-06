@@ -269,14 +269,23 @@ function makeSystem(over: Partial<SystemSettings> = {}): SystemSettings {
 describe('applySystemToDom', () => {
   let setAttribute: ReturnType<typeof vi.fn>
   let matchMediaMock: ReturnType<typeof vi.fn>
+  let styleSetProperty: ReturnType<typeof vi.fn>
+  let styleRemoveProperty: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     setAttribute = vi.fn()
     matchMediaMock = vi.fn()
+    styleSetProperty = vi.fn()
+    styleRemoveProperty = vi.fn()
     // happy-dom 提供 document.documentElement
     vi.stubGlobal('document', {
       ...((globalThis as any).document ?? {}),
-      documentElement: { setAttribute, dataset: {} as Record<string, string> },
+      documentElement: {
+        setAttribute,
+        dataset: {} as Record<string, string>,
+        // 字体槽位写入目标（内联 style）；真实 setProperty/removeProperty 语义见 useSettingsShell 测试
+        style: { setProperty: styleSetProperty, removeProperty: styleRemoveProperty },
+      },
     })
     vi.stubGlobal('window', { matchMedia: matchMediaMock })
   })
@@ -363,6 +372,97 @@ describe('applySystemToDom', () => {
     expect(resolveTheme('system')).toBe('dark')
     expect(resolveTheme('light')).toBe('light')
     expect(resolveTheme('dark')).toBe('dark')
+  })
+
+  // ── 字体槽位（font-system D8）：只写槽位、绝不写终值；清除用 removeProperty ──
+  it('fonts.ui 写入槽位 --font-ui，值带引号（家族名可含空格）', () => {
+    applySystemToDom(makeSystem({ fonts: { ui: 'Maple Mono' } }))
+    expect(styleSetProperty).toHaveBeenCalledWith('--font-ui', "'Maple Mono'")
+  })
+
+  it('fonts.mono 写入槽位 --font-mono-ui，两槽位独立', () => {
+    applySystemToDom(makeSystem({ fonts: { mono: 'Fira Code' } }))
+    expect(styleSetProperty).toHaveBeenCalledWith('--font-mono-ui', "'Fira Code'")
+    expect(styleSetProperty).not.toHaveBeenCalledWith('--font-ui', expect.anything())
+  })
+
+  it('槽位缺失/空串 → removeProperty（删除属性=回到未声明），不用 setProperty(name, \'\')', () => {
+    applySystemToDom(makeSystem({ fonts: { ui: '', mono: undefined } }))
+    expect(styleRemoveProperty).toHaveBeenCalledWith('--font-ui')
+    expect(styleRemoveProperty).toHaveBeenCalledWith('--font-mono-ui')
+    // 空值绝不能走 setProperty——那是「声明为空 token 流」，会让 var() 缺省参数失效
+    expect(styleSetProperty).not.toHaveBeenCalled()
+  })
+
+  it('无 fonts 字段 → 两槽位均 removeProperty（默认态回到构建期字体栈）', () => {
+    applySystemToDom(makeSystem())
+    expect(styleRemoveProperty).toHaveBeenCalledWith('--font-ui')
+    expect(styleRemoveProperty).toHaveBeenCalledWith('--font-mono-ui')
+  })
+
+  it('绝不写终值变量 --font-sans / --font-mono（写终值会击穿样表回落链）', () => {
+    applySystemToDom(makeSystem({ fonts: { ui: 'Maple Mono', mono: 'Fira Code' } }))
+    const written = styleSetProperty.mock.calls.map((c) => c[0])
+    expect(written).not.toContain('--font-sans')
+    expect(written).not.toContain('--font-mono')
+  })
+
+  // ── 含引号/反斜杠家族名的转义写入：合法文件名 it's a font.ttf 经导入链（上游只 trim）
+  //    直通写入点，不转义 = 字符串 token 未闭合 → 槽位声明非法 → var() 静默回落 ──
+  it('含单引号家族名 → 转义为反斜杠+引号（声明保持合法，槽位名与 FontFace 注册名原文一致）', () => {
+    applySystemToDom(makeSystem({ fonts: { ui: "it's a font" } }))
+    expect(styleSetProperty).toHaveBeenCalledWith('--font-ui', "'it\\'s a font'")
+  })
+
+  it('含双引号家族名 → 转义为反斜杠+引号', () => {
+    applySystemToDom(makeSystem({ fonts: { mono: 'the "bold" cut' } }))
+    expect(styleSetProperty).toHaveBeenCalledWith('--font-mono-ui', "'the \\\"bold\\\" cut'")
+  })
+
+  it('含反斜杠家族名 → 每个反斜杠翻倍（不产生非法 escape 序列）', () => {
+    applySystemToDom(makeSystem({ fonts: { ui: 'C:\\Fonts\\X' } }))
+    expect(styleSetProperty).toHaveBeenCalledWith('--font-ui', "'C:\\\\Fonts\\\\X'")
+  })
+
+  it('引号与反斜杠混合 → 逐字符全部转义', () => {
+    applySystemToDom(makeSystem({ fonts: { ui: "back\\slash'quote" } }))
+    expect(styleSetProperty).toHaveBeenCalledWith('--font-ui', "'back\\\\slash\\'quote'")
+  })
+
+  it('家族名含换行 → 转义为 hex escape（裸换行直接判 bad-string）', () => {
+    applySystemToDom(makeSystem({ fonts: { ui: 'weird\nname' } }))
+    expect(styleSetProperty).toHaveBeenCalledWith('--font-ui', "'weird\\A name'")
+  })
+
+  it('同次调用中含引号与无特殊字符槽位互不干扰（逐值转义，Maple Mono 原样）', () => {
+    applySystemToDom(makeSystem({ fonts: { ui: "it's", mono: 'Maple Mono' } }))
+    expect(styleSetProperty).toHaveBeenCalledWith('--font-ui', "'it\\'s'")
+    expect(styleSetProperty).toHaveBeenCalledWith('--font-mono-ui', "'Maple Mono'")
+  })
+
+  // ── RL9（font-system §4.2，AX5 精确版）：渲染路径零 IO ──
+  // 设计声明：mock storage.set 与 ws send，只调 applySystemToDom(system) 后断言两者调用
+  // 次数均为 0。双 sink spy 挂在真实底层落点——storage.set 的最终落点 = localStorage.setItem
+  // （SystemStorage 经 KVStorage / renderer LocalStorageAdapter），ws send 落点 = WebSocket
+  // 实例 send。用户显式选择引发的 1 次 storage.set 是合法保存（走 store.setSystem 路径，
+  // 壳侧强形态见 renderer useSettingsShell.test.ts RL9 describe），不在本断言范围——本用例
+  // 只调 applySystemToDom。未来在渲染路径误加持久化或 WS 副作用时本用例红。
+  it('RL9：渲染路径零 IO——只调 applySystemToDom 后 storage.set 与 ws send 调用次数均为 0', () => {
+    const storageSet = vi.fn()
+    const wsSend = vi.fn()
+    const storageStub = { getItem: vi.fn(() => null), setItem: storageSet, removeItem: vi.fn() }
+    // 裸标识符与 window.* 两条访问通道都接到同一组 spy（回归代码两种写法都逃不掉）
+    vi.stubGlobal('localStorage', storageStub)
+    vi.stubGlobal('window', {
+      matchMedia: matchMediaMock,
+      localStorage: storageStub,
+      WebSocket: vi.fn().mockImplementation(() => ({ send: wsSend, close: vi.fn() })),
+    })
+
+    applySystemToDom(makeSystem({ fonts: { ui: 'Maple Mono', mono: 'Fira Code' } }))
+
+    expect(storageSet).toHaveBeenCalledTimes(0)
+    expect(wsSend).toHaveBeenCalledTimes(0)
   })
 })
 

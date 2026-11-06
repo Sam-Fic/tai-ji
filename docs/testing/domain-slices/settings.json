@@ -10,7 +10,8 @@
   ],
   "scope": {
     "renderer": [
-      "packages/renderer/src/components/settings/**"
+      "packages/renderer/src/components/settings/**",
+      "packages/renderer/src/features/fonts/**"
     ],
     "ui": [
       "packages/ui/src/features/settings/**"
@@ -35,6 +36,7 @@
     "packages/renderer/src/__tests__/provider-builtin-ui.test.ts",
     "packages/renderer/src/__tests__/settings/**",
     "packages/renderer/src/components/settings/**",
+    "packages/renderer/src/features/fonts/**",
     "packages/renderer/src/composables/shell/__tests__/useSettingsShell.test.ts",
     "packages/ui/src/features/settings/**"
   ],

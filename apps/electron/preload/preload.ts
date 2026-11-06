@@ -1,6 +1,6 @@
 // apps/electron/preload/preload.ts
 import { contextBridge, ipcRenderer } from 'electron'
-import type { LatestReleaseInfo, UpdateStage, UpdateSettings, UpdateErrorPayload, ProxyTestResult, LaunchResult, UpdateCheckResult, UpdateInstallResult, RendererLogPayload, ImageCacheWritePayload, ImageCacheWriteResult, DebugRunLogRetentionResult, DiagnosticExportBundlePayload, DiagnosticExportBundleResult, SessionJsonlExportPayload, SessionJsonlExportResult, RemoteAccessInfo, RemoteAccessToggleResult, ShieldsFacesPayload, OverlayContentKind, BrowserFrameState, LocalFileServableResult, LocalFileReadResult, RuntimeTargetSnapshot, QuotaRefreshCookiePayload, QuotaRefreshCookieResult } from '@taiji/shared'
+import type { LatestReleaseInfo, UpdateStage, UpdateSettings, UpdateErrorPayload, ProxyTestResult, LaunchResult, UpdateCheckResult, UpdateInstallResult, RendererLogPayload, ImageCacheWritePayload, ImageCacheWriteResult, DebugRunLogRetentionResult, DiagnosticExportBundlePayload, DiagnosticExportBundleResult, SessionJsonlExportPayload, SessionJsonlExportResult, RemoteAccessInfo, RemoteAccessToggleResult, ShieldsFacesPayload, OverlayContentKind, BrowserFrameState, LocalFileServableResult, LocalFileReadResult, RuntimeTargetSnapshot, QuotaRefreshCookiePayload, QuotaRefreshCookieResult, ReadFontBytesResult } from '@taiji/shared'
 import { RENDERER_LOG, IMAGE_CACHE_WRITE, DEBUG_RUN_LOG_RETENTION, DIAGNOSTICS_EXPORT_BUNDLE, SESSION_EXPORT_JSONL, LOCAL_FILE_SERVABLE, LOCAL_FILE_READ, QUOTA_REFRESH_COOKIE,
   RUNTIME_PORT, RUNTIME_ERROR, RUNTIME_RESTARTING, RUNTIME_FAILED, GET_RUNTIME_TARGET_SNAPSHOT, GET_RUNTIME_START_ERROR, RUNTIME_RESTART,
   CREATE_WINDOW, GET_WINDOWS, FOCUS_WINDOW, WINDOW_LIST_UPDATED, WINDOW_MINIMIZE, WINDOW_TOGGLE_MAXIMIZE, WINDOW_CLOSE, FULLSCREEN_CHANGED,
@@ -9,7 +9,7 @@ import { RENDERER_LOG, IMAGE_CACHE_WRITE, DEBUG_RUN_LOG_RETENTION, DIAGNOSTICS_E
   BROWSER_CREATE, BROWSER_NAVIGATE, BROWSER_HIDE, BROWSER_SHOW, BROWSER_FOCUS, BROWSER_SET_RECT, BROWSER_DESTROY, BROWSER_BACK, BROWSER_FORWARD, BROWSER_SET_ZOOM, BROWSER_GET_ZOOM, BROWSER_GET_SELECTION, BROWSER_OVERLAY_STATE, BROWSER_SHIELDS, BROWSER_FORWARD_KEYS, BROWSER_STATE,
   UPDATE_CHECK, UPDATE_DOWNLOAD, UPDATE_INSTALL, UPDATE_GET_PRELOADED, UPDATE_GET_LAUNCH_RESULT, UPDATE_GET_PROXY_CONFIG, UPDATE_SET_PROXY_CONFIG, UPDATE_TEST_PROXY, UPDATE_GET_PENDING, UPDATE_GET_SETTINGS, UPDATE_SET_SETTINGS, UPDATE_OPEN_MANUAL_DIR, UPDATE_PROGRESS, UPDATE_ERROR,
   GET_REMOTE_ACCESS_INFO, ROTATE_REMOTE_ACCESS_TOKEN, SET_REMOTE_ACCESS_ENABLED,
-  SOUND_LIST, SOUND_PLAY } from '@taiji/shared'
+  SOUND_LIST, SOUND_PLAY, READ_FONT_BYTES } from '@taiji/shared'
 
 // local-file 预检 / 源码读取的 payload 类型（LocalFileServableResult / LocalFileReadResult）
 // 定义 SSOT = `packages/shared/src/ipc-payloads.ts`（C-comm-22 唯一类型源），本文件只 import
@@ -67,6 +67,8 @@ export interface ElectronAPI { // oe-exempt:20261003:framework:类型契约先�
     canceled: boolean
     path: string | null
   }>
+  /** 经 main 三关内容校验与凭据目录禁区检查后读取字体字节（导入/启动重放共用） */
+  readFontBytes(path: string): Promise<ReadFontBytesResult>
   /** 在默认浏览器中打开外部链接 */
   openExternal(url: string): Promise<void>
   /** 在文件管理器中显示文件（trace MALFORMED 行「打开所在目录」；main 校验绝对路径后
@@ -352,6 +354,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     defaultPath?: string
     filters?: Array<{ name: string; extensions: string[] }>
   }) => ipcRenderer.invoke(PICK_FILE, options),
+  readFontBytes: (path: string) => ipcRenderer.invoke(READ_FONT_BYTES, { path }),
   openExternal: (url: string) => ipcRenderer.invoke(OPEN_EXTERNAL, url),
   revealInFolder: (filePath: string) => ipcRenderer.invoke(REVEAL_IN_FOLDER, filePath),
   // 通道名 SSOT = @taiji/shared 的 LOCAL_FILE_SERVABLE / LOCAL_FILE_READ

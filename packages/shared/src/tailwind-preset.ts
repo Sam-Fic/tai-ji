@@ -99,7 +99,10 @@ export default {
       },
       fontFamily: {
         sans: ['var(--font-sans)'],
-        mono: ['JetBrains Mono', 'IBM Plex Mono', 'ui-monospace', 'Menlo', 'monospace'],
+        // 等宽族走变量（font-system D1）：此前硬编码栈让 `class="font-mono"`（493 处）与
+        // `var(--font-mono)`（11 处）成为两个权威——用户选字体后只有后者跟随。变量化后
+        // 唯一权威 = style.css 的 --font-mono（槽位 --font-mono-ui + 构建期栈，见 D8）。
+        mono: ['var(--font-mono)'],
       },
       borderRadius: {
         xs: 'var(--radius-xs)', // 微件档 4px（seg 项/滚动条 thumb/badge 内件；demo --r-xs 同档，收敛组件 rounded-[4px] 任意值）

@@ -17,7 +17,7 @@
  *
  * 运行：cd packages/renderer && TAIJI_TEST_DOMAIN=settings npx vitest run src/__tests__/settings/appearance-page.test.ts（本文件登记在 domain-map.json settings 域，默认档被排除）
  */
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { mount, flushPromises, DOMWrapper } from '@vue/test-utils'
 import {
   $,
@@ -41,6 +41,7 @@ let wrapper: ReturnType<typeof mount> | null = null
 
 // beforeEach 重置（pinia/toast/mock 计数/transport 桩）+ afterEach 卸载清 body 单源在 harness
 setupTerminalConfigHarness()
+afterEach(() => vi.unstubAllGlobals())
 
 function mountPage(system = { ...DEFAULT_SYSTEM }) {
   return trackBodyMount(mount(AppearancePage, {
@@ -179,5 +180,88 @@ describe('AppearancePage 交互', () => {
     await flushPromises()
     expect(configMock.setTerminalConfig).toHaveBeenCalled()
     expect((configMock.setTerminalConfig.mock.calls[0][0] as TerminalConfig).fontSize).toBe(24)
+  })
+
+  it('字号保存前另一写者已更新终端字体 → 重读最新 config，旧快照不覆盖 fontFamily/兄弟字段', async () => {
+    configMock.getTerminalConfig.mockImplementation(() =>
+      Promise.resolve({ config: { ...defaultConfig(), shell: '/bin/old', fontSize: 14 }, corrupted: false }),
+    )
+    wrapper = mountPage()
+    await flushPromises()
+
+    configMock.getTerminalConfig.mockImplementation(() =>
+      Promise.resolve({
+        config: {
+          ...defaultConfig(),
+          shell: '/bin/latest',
+          fontSize: 14,
+          fontFamily: 'Maple Mono',
+          scrollback: 4321,
+          cursorStyle: 'underline',
+        },
+        corrupted: false,
+      }),
+    )
+    const input = $('[data-testid="appearance-terminal-font-size-input"]')
+    await input.setValue('16')
+    await input.trigger('blur')
+    await flushPromises()
+
+    const payload = configMock.setTerminalConfig.mock.calls[0][0] as TerminalConfig
+    expect(payload).toMatchObject({
+      shell: '/bin/latest',
+      fontSize: 16,
+      fontFamily: 'Maple Mono',
+      scrollback: 4321,
+      cursorStyle: 'underline',
+    })
+  })
+})
+
+describe('AppearancePage 字体卡片（RL16 两域写入）', () => {
+  beforeEach(() => {
+    // 每个用例在 mount 前现装枚举桩；registry 无应用层缓存，会读取本次清单。
+    vi.stubGlobal('queryLocalFonts', vi.fn(async () => [
+      { family: 'Maple Mono', style: 'Regular' },
+      { family: 'Menlo', style: 'Regular' },
+    ]))
+  })
+
+  async function chooseFont(slot: 'ui' | 'mono' | 'terminal', family: string): Promise<void> {
+    const trigger = $(`[data-testid="settings-font-${slot}-trigger"]`)
+    await trigger.trigger('click')
+    await flushPromises()
+    const option = document.body.querySelector(`[data-testid="settings-font-${slot}-option-${family}"]`)
+    expect(option, `${slot} 下拉应包含 ${family}`).toBeTruthy()
+    await new DOMWrapper(option!).trigger('click')
+    await flushPromises()
+  }
+
+  it('界面正文写 SystemSettings.fonts 时保留 mono 兄弟槽位', async () => {
+    wrapper = mountPage({ ...DEFAULT_SYSTEM, fonts: { mono: 'Menlo' } })
+    await flushPromises()
+    await chooseFont('ui', 'Maple Mono')
+    const emitted = (wrapper as any).emitted('update')
+    expect(emitted.at(-1)[0]).toEqual({ fonts: { mono: 'Menlo', ui: 'Maple Mono' } })
+  })
+
+  it('终端字体写 TerminalConfig.fontFamily，fontSize/scrollback/cursorStyle 原值不变', async () => {
+    configMock.getTerminalConfig.mockImplementation(() =>
+      Promise.resolve({
+        config: { ...defaultConfig(), fontSize: 17, scrollback: 3456, cursorStyle: 'underline' },
+        corrupted: false,
+      }),
+    )
+    wrapper = mountPage()
+    await flushPromises()
+    await chooseFont('terminal', 'Maple Mono')
+
+    expect(configMock.setTerminalConfig).toHaveBeenCalledTimes(1)
+    expect(configMock.setTerminalConfig.mock.calls[0][0]).toMatchObject({
+      fontFamily: 'Maple Mono',
+      fontSize: 17,
+      scrollback: 3456,
+      cursorStyle: 'underline',
+    })
   })
 })

@@ -259,6 +259,7 @@ it('首屏渲染：<页面> DOM 含关键交互元素', () => {
 
 - **机制**：`playwright.config.ts` 的 `visual-chromium` project（testMatch `visual/**`）+ `e2e/visual/` spec + `e2e/visual-baselines/` baseline 快照（**git tracked**，CI/他人 clone 后无 baseline 则 diff 无意义）
 - **字体固定（2026-10-12）**：visual 层渲染字体 = bundled webfont（`e2e/visual/fixtures/visual-server.ts` 注入 @fontsource-variable/noto-sans-sc 可变字重单源 + `--font-sans` 变量覆盖 + route 本地供给，截图前 `fontsReady` 统一等待）——本机与 runner 渲染同源，本地重录即权威；字体族/包版本变更须全量重录基线一次。实现锚点 = e2e/visual/fixtures/visual-server.ts
+- **槽位机制不改变像素输入（2026-11-04，font-system 实测）**：字体终值变量改为「用户槽位 + 构建期栈」两层形态后（`--font-sans: var(--font-ui, …), …`），visual fixture 以 `html:root`（选择器特异性 0,1,1）直写完整 `--font-sans` 栈，高于 `:root` 声明（0,1,0）故**构造性胜出**——像素输入与改动前完全一致，实测 `npx playwright test --project=visual-chromium` 零漂移、无需重录。后续若改动 fixture 覆盖方式（不再直写完整栈而依赖 `var()` 回落），则必须重录。
 - **双 project 隔离**：electron 行为 mock 层（testIgnore `visual/**`）/ visual-chromium 像素对比层（testMatch `visual/**`）互斥，`npx playwright test e2e/visual` 自动只跑像素对比层
 - **阈值**：`maxDiffPixelRatio: 0.01`（容忍字体抗锯齿/caret 闪烁 flaky，抓真回归）+ `caret:'hide'`
 - **方法论 [from S2-W3]**：(1) `snapshotDir`/`snapshotPathTemplate` 是 TestProject **直接属性**（与 name/testMatch 同级），不是 `use` 属性——放 project.use 里静默不生效；(2) `toHaveScreenshot(name)` 的 name 必须带 `.png` 扩展名；(3) baseline 必须 git tracked

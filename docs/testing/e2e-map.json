@@ -5903,6 +5903,77 @@
       "run": "pnpm -C packages/runtime exec vitest run test/rpc-client-timeout-contract.test.ts",
       "owner": "packages/runtime",
       "note": "ADR-0190 时间机制退役的契约锁定测试（原 event-interpreter-watchdog.test.ts 改名）：断言 rpc-client 公开方法签名与 sendCommand 契约无墙钟参数面。"
+    },
+    {
+      "id": "E2E-FONTS-01",
+      "summary": "字体渲染真机断言：构建产物 .font-mono 走 var(--font-mono) / 默认态 computed 保留完整构建期栈 / 槽位写入与清除 / 失效回落 / 宿主兄弟字段不变",
+      "scope": [
+        "packages/shared/src/tailwind-preset.ts",
+        "packages/renderer/src/style.css",
+        "packages/core/src/domain/settings/**",
+        "packages/ui/src/features/settings/apply-system-to-dom.ts",
+        "packages/renderer/src/composables/shell/useSettingsShell.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "e2e/font-custom-render.spec.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "env -u ELECTRON_RUN_AS_NODE npx playwright test e2e/font-custom-render.spec.ts --project=electron",
+      "owner": "packages/renderer",
+      "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
+      "note": "R2：改字体槽位/构建期栈/设置持久化时在 dev-flow 验收阶段跑（空载串行）。断言全为浏览器渲染事实（computed font-family / var() 代入 / rect），happy-dom 无判别力故必须真机。[2026-11-05 终态同步] layer L3→L2（运行形态 = launch-app 拉起 mock 构建 Electron + mock transport，零 token 无 LLM 参与，与 E2E-MOCK-01/E2E-TERMINAL-01 同形态）；spec 增补 RL7（seed fontLibrary → reload → 重放注册 + 失败降级标注 + V4 槽位失效值标注）与 RL13（真 IPC 读真实字体 + FontFace 注册 → 选回系统名宽度回基准 + 大小写归一真机复演）两条真机断言，V8 重写为生产链驱动（设置页下拉提交 + reload，对照 localStorage/terminal.json/document.fonts/会话状态四表面）"
+    },
+    {
+      "id": "E2E-FONTS-02",
+      "summary": "mermaid 字体跟随：字体变化后在无人工干预下图表文字跟随，且 SVG 内不残留旧家族名（区分继承与重渲）",
+      "scope": [
+        "packages/ui/src/features/chat/mermaid.ts",
+        "packages/ui/src/features/chat/MermaidRenderer.vue",
+        "packages/renderer/src/style.css",
+        "packages/ui/src/features/settings/apply-system-to-dom.ts",
+        "packages/core/src/transport/mock/run-send-stream.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "e2e/font-custom-mermaid.spec.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "env -u ELECTRON_RUN_AS_NODE npx playwright test e2e/font-custom-mermaid.spec.ts --project=electron",
+      "owner": "packages/ui",
+      "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
+      "note": "R2：改 mermaid 渲染、字体槽位写入链（style.css 槽位名 / apply-system-to-dom.ts）或 mock 哨兵词（run-send-stream.ts 的 md-mermaid 判定 / MERMAID_REPLY 数据源）时跑。mermaid 在 mock DOM 里 render 静默返回空串，只有真机能断言。[2026-11-05 终态同步补 scope] 头注释与原 note 都声明触发条件含字体槽位写入链，scope 数组未兑现；且本 spec 断言的数据源（mock 哨兵词/MERMAID_REPLY）此前仅被 E2E-MOCK-01 的 packages/core/src/** 覆盖、其 assets 不含本 spec——改哨兵词不会选中本 rule 的盲区由本次增补收敛"
+    },
+    {
+      "id": "E2E-FONTS-03",
+      "summary": "font:read-bytes 通道边界：非字体文件被拒 / 超 20MB 被拒且不读入内存 / 凭据目录禁区拦截",
+      "scope": [
+        "apps/electron/main/gateway/font-handlers.ts",
+        "apps/electron/preload/preload.ts",
+        "packages/shared/src/ipc-channels.ts",
+        "packages/shared/src/ipc-payloads.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "e2e/font-custom-ipc.spec.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "env -u ELECTRON_RUN_AS_NODE npx playwright test e2e/font-custom-ipc.spec.ts --project=electron",
+      "owner": "apps/electron",
+      "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
+      "note": "R2：改 IPC 读取通道或其校验时跑。纯校验函数三关与禁区在 L1 单测已覆盖，本 spec 只验真机拒绝行为。[2026-11-05 终态同步] layer L3→L2（launch-app mock 构建真实进程、零 token；同 FONTS-01 口径）"
     }
   ]
 }

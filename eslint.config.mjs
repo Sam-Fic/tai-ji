@@ -78,10 +78,11 @@ export default [
       // 的 CJS 惯用形态（对齐内置 review-fix-loop-utils.cjs）——与上方 workflow 脚本
       // 豁免同理由，非项目源码不参与 lint
       '.agents/workflows/**',
-      // [HISTORICAL] 项目 pi workflow 脚本（.pi/workflows/tech-review-loop.js，pi 宿主
-      // workflow 引擎加载）：$ARGS/$WORKSPACE 是引擎注入符号（仓库 eslint 环境下未定义），
-      // require() 是该环境的 CJS 惯用形态——与上方 .agents/workflows/** 豁免同理由，
-      // 非项目源码不参与 lint
+      // [HISTORICAL] 项目级 pi workflow 脚本（pi 宿主引擎加载）：$ARGS/$WORKSPACE 是引擎
+      // 注入符号（仓库 eslint 环境下未定义），require() 是该环境的 CJS 惯用形态——与上方
+      // .agents/workflows/** 豁免同理由，非项目源码不参与 lint。
+      // 现无项目级脚本（tech-review-loop 旧版副本已移除，改用 ~/.pi/agent/workflows/ 全局新版），
+      // 豁免保留：将来放项目级脚本时无需再改这条配置
       '.pi/workflows/**',
     ],
   },

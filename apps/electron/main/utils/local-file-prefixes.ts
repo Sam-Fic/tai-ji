@@ -438,7 +438,11 @@ export function probeLocalFileUrlPathname(
 // ——通道入参含模型消息文本路径载荷，文本读侧限定在实际消费域）。读出的内容只经
 // CodeBlock 文本插值渲染（禁 v-html），不构成脚本执行范围扩大。
 
-/** 源码态读取上限（与 runtime `file.read` 的 MAX_FILE_SIZE 同语义：1 MiB，超出截断） */
+/**
+ * 源码态读取上限（与 runtime `file.read` 的 MAX_FILE_SIZE 同语义：1 MiB，超出截断）。
+ * font:read-bytes 的 20MB 上限是另一通道的刻意放宽：字体文件天然大于源码/图片，
+ * 且其准入是三关内容校验 + 凭据目录禁区；本通道 1MiB 语义不随之改变（font-system D10）。
+ */
 export const MAX_LOCAL_FILE_READ_BYTES = 1_048_576
 
 /** 读取用 fs 切面（缺省 node:fs；单测注入桩） */

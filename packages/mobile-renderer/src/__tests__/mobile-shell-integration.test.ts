@@ -154,6 +154,13 @@ describe('TC-8: AC5 Tailwind 样式入口（U1.6 P0 防回归）', () => {
     expect(css).toMatch(/^@tailwind utilities;/m)
   })
 
+  it('tokens.css 仍声明 --font-mono（移动壳独立字体栈，font-system RL4）', () => {
+    // 两壳是独立声明：此处只断言声明仍在（移动壳不接字体选择，不要求与桌面壳同值——
+    // 强求一致是无机制保证的人工契约，见 font-system D8 / §5.2 文件改动地图）。
+    const css = readFileSync(resolve(pkgRoot, 'src/styles/tokens.css'), 'utf-8')
+    expect(css).toMatch(/^\s*--font-mono:\s*\S/m)
+  })
+
   it('main.ts import 样式入口（Tailwind 产物进构建图）', () => {
     const mainSrc = readFileSync(resolve(pkgRoot, 'src/main.ts'), 'utf-8')
     expect(mainSrc).toMatch(/import '\.\/styles\/tokens\.css'/)

@@ -274,6 +274,7 @@ export {
   GET_REMOTE_ACCESS_INFO, ROTATE_REMOTE_ACCESS_TOKEN, SET_REMOTE_ACCESS_ENABLED,
   SOUND_LIST, SOUND_PLAY,
   QUOTA_REFRESH_COOKIE,
+  READ_FONT_BYTES,
 } from './ipc-channels'
 // local-file 预检 / 源码读取通道 payload 类型（chat-html-support §6.9 D9：preload 两文件 /
 // renderer lib/ipc / main local-file-prefixes 四方共用同一形态声明——C-comm-22 唯一类型源）。
@@ -327,6 +328,12 @@ export type { BrowserFrameState } from './ipc-payloads'
 // quota:refresh-cookie 通道契约（请求 payload / 返回类型——main quota handler、
 // preload ElectronAPI 签名与 renderer 刷新入口三方共用同一形态声明，防漂移）。
 export type { QuotaRefreshCookiePayload, QuotaRefreshCookieResult } from './ipc-payloads'
+// font:read-bytes 通道契约（font-system §3.3 D10：请求 payload / 二态返回类型——main
+// font handler、preload ElectronAPI 签名与 renderer FileFontSource 三方共用同一形态
+// 声明，防漂移）。
+export type { ReadFontBytesPayload, ReadFontBytesResult } from './ipc-payloads'
+// font:read-bytes 重放失效 reason 字面量（font-system：main REASON_* 与 UI statusFor 映射的双侧同源常量）。
+export { FONT_READ_REASON_NOT_FOUND, FONT_READ_REASON_UNREADABLE } from './ipc-payloads'
 // 崩溃条目清单事件 Schema SSOT（docs/architecture/crash-forensics-and-watchdog.md §3.3 D1，
 // 实施计划 u1a：layer/event/reason 枚举 + 字段集 + writer 接口——u1b runtime 与
 // u1c main 两 writer 共用，禁止复制定义；纯类型/常量无 node 依赖，barrel 安全）。

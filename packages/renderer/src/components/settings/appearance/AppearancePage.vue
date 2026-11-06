@@ -104,6 +104,24 @@
       </div>
     </GroupCard>
 
+    <SettingsFontsSection
+      :entries="fontEntries"
+      :library="fontLibrary"
+      :ui-family="system.fonts?.ui"
+      :mono-family="system.fonts?.mono"
+      :terminal-family="terminalFontFamily"
+      :loading="fontListLoading"
+      :busy="fontActionBusy"
+      :replay-state="fontReplayState"
+      :replay-failures="fontReplayFailures"
+      :import-selection="fontImportSelection"
+      @select="onFontSelect"
+      @pick-import="pickFontImport"
+      @confirm-import="confirmFontImport"
+      @cancel-import="fontImportSelection = null"
+      @remove="removeImportedFont"
+    />
+
     <!-- 配色主题（太极 · 即时切换；demo：卡头 gc-sub + 全宽 ghost 行 + check/inset 环选中范式） -->
     <GroupCard>
       <template #head>
@@ -174,7 +192,9 @@ import { Check } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { GroupCard } from '@taiji/ui/features/settings'
+import { GroupCard, SettingsFontsSection } from '@taiji/ui/features/settings'
+import { useFontRegistry } from '@/features/fonts/use-font-registry'
+import type { FontFileSelection } from '@/features/fonts/file-font-source'
 import SettingRow from '../SettingRow.vue'
 import type { SystemSettings, FontScaleTier, ThemeMode } from '@taiji/core'
 import { DEFAULT_FONT_SCALES } from '@taiji/core'
@@ -264,6 +284,7 @@ async function loadTerminalConfig(): Promise<void> {
     const res = await getSettingsTransport().getTerminalConfig()
     terminalConfig = res.config
     terminalFontSize.value = res.config.fontSize
+    terminalFontFamily.value = res.config.fontFamily
   } catch (e) {
     toastError(e instanceof Error ? e.message : String(e))
   } finally {
@@ -271,22 +292,141 @@ async function loadTerminalConfig(): Promise<void> {
   }
 }
 
-/** 输入中仅更新本地值；blur 时整体写回 config（保留 shell/字体等其他终端偏好）。 */
+/**
+ * 输入中仅更新本地值；blur 时写回 fontSize。
+ *
+ * [HISTORICAL] 不在此处回写终端字体家族：`terminalConfig` 是**本地快照**，而终端配置有
+ * 三个写者（TerminalPage 整对象保存 / 本页字号 / 字体卡片第三行字体）。用旧快照
+ * `{ ...terminalConfig, fontSize }` 整对象写回，会把别处刚写好的 `fontFamily` 覆盖回旧值
+ * （字体系统 D7 登记的三写者 RMW 风险）。现在的做法：**先读当前完整 config 再 patch**，
+ * 只改自己负责的字段。
+ */
 async function saveTerminalFontSize(): Promise<void> {
-  const size = Math.min(TERMINAL_FONT_MAX, Math.max(TERMINAL_FONT_MIN, Math.round(Number(terminalFontSize.value) || TERMINAL_FONT_DEFAULT)))
-  if (!terminalConfig || size === terminalConfig.fontSize) return
+  // 与 saveTerminalFontFamily 共用同一 fontActionBusy 互斥门禁：两条路径都是终端配置的
+  // read-modify-write，并发交错时后完成者会以不含对方字段的旧快照覆盖（同 D7 三写者风险）。
+  // 拦截时 toast 告知（busy 丢弃须有反馈），用户稍后重试即可。
+  if (fontActionBusy.value) {
+    toastInfo(t('settings.fonts.busyRetry'))
+    return
+  }
+  fontActionBusy.value = true
   try {
-    await getSettingsTransport().setTerminalConfig({ ...terminalConfig, fontSize: size })
-    terminalConfig = { ...terminalConfig, fontSize: size }
+    const size = Math.min(TERMINAL_FONT_MAX, Math.max(TERMINAL_FONT_MIN, Math.round(Number(terminalFontSize.value) || TERMINAL_FONT_DEFAULT)))
+    if (!terminalConfig) return
+    const current = (await getSettingsTransport().getTerminalConfig()).config
+    terminalConfig = current
+    terminalFontFamily.value = current.fontFamily
+    if (size === current.fontSize) return
+    await getSettingsTransport().setTerminalConfig({ ...current, fontSize: size })
+    terminalConfig = { ...current, fontSize: size }
     terminalFontSize.value = size
     toastInfo(t('settings.appearance.terminalFontSaved'))
   } catch (e) {
     toastError(e instanceof Error ? e.message : String(e))
+  } finally {
+    fontActionBusy.value = false
   }
 }
 
 function onTerminalFontSize(v: string | number): void {
   terminalFontSize.value = Number(v)
+}
+
+// ── 字体来源与三槽位选择（ui/mono 写 SystemSettings，terminal 写 TerminalConfig）──
+const fontRegistry = useFontRegistry()
+const fontEntries = fontRegistry.entries
+const fontReplayState = fontRegistry.replayState
+const fontReplayFailures = fontRegistry.replayFailures
+const fontLibrary = computed(() => props.system.fontLibrary ?? [])
+const fontListLoading = ref(true)
+const fontActionBusy = ref(false)
+const fontImportSelection = ref<FontFileSelection | null>(null)
+const terminalFontFamily = ref('')
+
+async function loadFontList(): Promise<void> {
+  fontListLoading.value = true
+  try {
+    await fontRegistry.list()
+  } catch (e) {
+    toastError(e instanceof Error ? e.message : String(e))
+  } finally {
+    fontListLoading.value = false
+  }
+}
+
+function onFontSelect(payload: { slot: 'ui' | 'mono' | 'terminal'; family: string }): void {
+  const { slot, family } = payload
+  if (slot === 'terminal') {
+    void saveTerminalFontFamily(family)
+    return
+  }
+  const fonts = { ...props.system.fonts }
+  if (family) fonts[slot] = family
+  else delete fonts[slot]
+  emit('update', { fonts })
+}
+
+async function pickFontImport(): Promise<void> {
+  if (fontActionBusy.value) return
+  fontActionBusy.value = true
+  try {
+    fontImportSelection.value = await fontRegistry.pickFontFile()
+  } catch (e) {
+    toastError(e instanceof Error ? e.message : String(e))
+  } finally {
+    fontActionBusy.value = false
+  }
+}
+
+async function confirmFontImport(payload: { path: string; family: string }): Promise<void> {
+  if (fontActionBusy.value) return
+  fontActionBusy.value = true
+  try {
+    const entry = await fontRegistry.importFont(payload.path, payload.family)
+    fontImportSelection.value = null
+    toastInfo(t('settings.fonts.importedToast', { family: entry.family }))
+  } catch (e) {
+    toastError(e instanceof Error ? e.message : String(e))
+  } finally {
+    fontActionBusy.value = false
+  }
+}
+
+async function removeImportedFont(family: string): Promise<void> {
+  if (fontActionBusy.value) return
+  fontActionBusy.value = true
+  try {
+    await fontRegistry.removeImportedFont(family)
+    toastInfo(t('settings.fonts.removedToast', { family }))
+  } catch (e) {
+    toastError(e instanceof Error ? e.message : String(e))
+  } finally {
+    fontActionBusy.value = false
+  }
+}
+
+/** 终端字体独立写 TerminalConfig.fontFamily；同字号路径一样先读当前完整配置。 */
+async function saveTerminalFontFamily(family: string): Promise<void> {
+  // busy 拦截须有反馈：下拉已打开时选项按钮虽已 disabled，仍可能经时序窗口到达此处
+  if (fontActionBusy.value) {
+    toastInfo(t('settings.fonts.busyRetry'))
+    return
+  }
+  fontActionBusy.value = true
+  try {
+    const current = (await getSettingsTransport().getTerminalConfig()).config
+    terminalConfig = current
+    terminalFontFamily.value = current.fontFamily
+    if (current.fontFamily === family) return
+    await getSettingsTransport().setTerminalConfig({ ...current, fontFamily: family })
+    terminalConfig = { ...current, fontFamily: family }
+    terminalFontFamily.value = family
+    toastInfo(t('settings.fonts.terminalSaved'))
+  } catch (e) {
+    toastError(e instanceof Error ? e.message : String(e))
+  } finally {
+    fontActionBusy.value = false
+  }
 }
 
 // ── Token 读值（getComputedStyle 读 :root 实际渲染值；主题切换后由 watch 刷新） ──
@@ -323,6 +463,7 @@ watch(
 )
 onMounted(() => {
   void loadTerminalConfig()
+  void loadFontList()
   refreshTokens()
   window.addEventListener('resize', refreshTokens)
 })
@@ -334,6 +475,7 @@ watch(() => props.isActive, (now, prev) => {
   if (prev === undefined) return
   if (now) {
     void loadTerminalConfig()
+    void loadFontList()
     refreshTokens()
   } else {
     void saveTerminalFontSize()
