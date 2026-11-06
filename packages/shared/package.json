@@ -10,6 +10,10 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     },
+    "./aggregation": {
+      "types": "./src/aggregation.ts",
+      "import": "./src/aggregation.ts"
+    },
     "./paths": {
       "types": "./src/paths.ts",
       "import": "./src/paths.ts"

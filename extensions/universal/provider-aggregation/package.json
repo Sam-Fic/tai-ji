@@ -1,0 +1,43 @@
+{
+  "name": "@zhushanwen/pi-provider-aggregation",
+  "version": "0.1.0",
+  "description": "Model aggregation routing — one virtual model backed by multiple provider endpoints, routed per request by time-window / quota / retry rules (providers.json routes domain).",
+  "type": "module",
+  "main": "src/index.ts",
+  "taiji": {
+    "role": "universal"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "keywords": [
+    "pi-package",
+    "extension",
+    "model-routing",
+    "aggregation",
+    "provider"
+  ],
+  "license": "MIT",
+  "files": [
+    "src/",
+    "index.ts"
+  ],
+  "dependencies": {
+    "@taiji/shared": "workspace:*",
+    "@zhushanwen/pi-extension-logger": "workspace:*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "1.0.0",
+    "@vitest/coverage-v8": "^4.1.9",
+    "vitest": "^4.1.8"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "^1.0.0"
+  },
+  "scripts": {
+    "typecheck": "npx tsc --noEmit",
+    "test": "vitest run --pool=threads"
+  }
+}

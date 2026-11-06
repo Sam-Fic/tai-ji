@@ -103,5 +103,10 @@
     "name": "@zhushanwen/pi-network-proxy",
     "description": "LLM network proxy: rule-based per-hostname traffic splitting via an undici global dispatcher (proxied vs direct), with request counters",
     "tier": "feature"
+  },
+  {
+    "name": "@zhushanwen/pi-provider-aggregation",
+    "description": "Model aggregation routing: one virtual model backed by multiple provider endpoints, routed per request by time-window / quota / retry rules",
+    "tier": "feature"
   }
 ]
