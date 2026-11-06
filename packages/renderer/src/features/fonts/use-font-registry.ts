@@ -75,8 +75,13 @@ export function createFontRegistry(deps: FontRegistryDeps = {}) {
   // GL3 的可验证实例：新增来源只改此数组，不改核心层渲染计算。
   const sources: FontSource[] = [new SystemFontSource(), fileSource]
 
+  // @data-owner #88 —— #88 字体清单的进程内聚合视图（来源枚举与 fontLibrary 账本补行
+  // 经 list() 聚合去重排序后整体重建；权威仍是 SystemSettings.fontLibrary 与各来源
+  // 实况，非第二权威）。
   const entries = ref<FontEntry[]>([])
   const replayState = ref<FontReplayState>('idle')
+  // @data-owner #88 —— #88 重放失败的会话内存态标注（登记表空值语义已声明「失效标注
+  // 不写回账本」；removeImportedFont 删除时同步清除，非持久化、非第二权威）。
   const replayFailures = ref<Record<string, string>>({})
   let replayPromise: Promise<FontReplayResult> | null = null
   let replayResult: FontReplayResult = { ok: [], failed: [] }
@@ -211,6 +216,8 @@ export function createFontRegistry(deps: FontRegistryDeps = {}) {
 
 export type FontRegistry = ReturnType<typeof createFontRegistry>
 
+// @data-owner #88 —— #88 registry 模块级单例句柄（控制面：共享实例保证启动重放只发生
+// 一次；其持有的 entries / replayFailures 派生视图同属 #88 登记，非独立数据源）。
 let singleton: FontRegistry | null = null
 
 /** 应用级共享注册表；启动装配与设置页读取同一实例，保证重放只发生一次。 */

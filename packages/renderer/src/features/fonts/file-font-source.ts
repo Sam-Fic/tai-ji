@@ -83,6 +83,8 @@ export function resolveImportedFamily(
 
 export class FileFontSource implements FontSource {
   private readonly deps: FileFontSourceDeps
+  // @data-owner #88 —— 已注册 FontFace 的进程内删除索引（family → FontFace；真实注册表
+  // 是 document.fonts，本 Map 只服务 list/delete 精确操作，非第二权威）。
   private readonly faces = new Map<string, FontFace>()
 
   constructor(deps: Partial<FileFontSourceDeps> = {}) {
