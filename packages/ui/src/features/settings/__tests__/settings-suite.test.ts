@@ -407,6 +407,39 @@ describe('applySystemToDom', () => {
     expect(written).not.toContain('--font-mono')
   })
 
+  // ── 含引号/反斜杠家族名的转义写入：合法文件名 it's a font.ttf 经导入链（上游只 trim）
+  //    直通写入点，不转义 = 字符串 token 未闭合 → 槽位声明非法 → var() 静默回落 ──
+  it('含单引号家族名 → 转义为反斜杠+引号（声明保持合法，槽位名与 FontFace 注册名原文一致）', () => {
+    applySystemToDom(makeSystem({ fonts: { ui: "it's a font" } }))
+    expect(styleSetProperty).toHaveBeenCalledWith('--font-ui', "'it\\'s a font'")
+  })
+
+  it('含双引号家族名 → 转义为反斜杠+引号', () => {
+    applySystemToDom(makeSystem({ fonts: { mono: 'the "bold" cut' } }))
+    expect(styleSetProperty).toHaveBeenCalledWith('--font-mono-ui', "'the \\\"bold\\\" cut'")
+  })
+
+  it('含反斜杠家族名 → 每个反斜杠翻倍（不产生非法 escape 序列）', () => {
+    applySystemToDom(makeSystem({ fonts: { ui: 'C:\\Fonts\\X' } }))
+    expect(styleSetProperty).toHaveBeenCalledWith('--font-ui', "'C:\\\\Fonts\\\\X'")
+  })
+
+  it('引号与反斜杠混合 → 逐字符全部转义', () => {
+    applySystemToDom(makeSystem({ fonts: { ui: "back\\slash'quote" } }))
+    expect(styleSetProperty).toHaveBeenCalledWith('--font-ui', "'back\\\\slash\\'quote'")
+  })
+
+  it('家族名含换行 → 转义为 hex escape（裸换行直接判 bad-string）', () => {
+    applySystemToDom(makeSystem({ fonts: { ui: 'weird\nname' } }))
+    expect(styleSetProperty).toHaveBeenCalledWith('--font-ui', "'weird\\A name'")
+  })
+
+  it('同次调用中含引号与无特殊字符槽位互不干扰（逐值转义，Maple Mono 原样）', () => {
+    applySystemToDom(makeSystem({ fonts: { ui: "it's", mono: 'Maple Mono' } }))
+    expect(styleSetProperty).toHaveBeenCalledWith('--font-ui', "'it\\'s'")
+    expect(styleSetProperty).toHaveBeenCalledWith('--font-mono-ui', "'Maple Mono'")
+  })
+
   // ── RL9（font-system §4.2，AX5 精确版）：渲染路径零 IO ──
   // 设计声明：mock storage.set 与 ws send，只调 applySystemToDom(system) 后断言两者调用
   // 次数均为 0。双 sink spy 挂在真实底层落点——storage.set 的最终落点 = localStorage.setItem
