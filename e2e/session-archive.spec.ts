@@ -39,6 +39,11 @@ function sessionRow(page: Page, label: string) {
 /** 悬停行 + 点归档钮两段确认（第一次进确认态，第二次执行）。 */
 async function archiveFromSidebar(page: Page, label: string): Promise<void> {
   const row = sessionRow(page, label)
+  // 5b13f3f59（基线内）起默认项目组缺省收起——会话行不进 DOM 时先展开组
+  if (!(await row.first().isVisible().catch(() => false))) {
+    await page.getByTestId('default-project-head').click().catch(() => {})
+    await expect(row.first()).toBeVisible({ timeout: 15_000 })
+  }
   await row.hover()
   const btn = row.getByTestId('session-archive-btn')
   await expect(btn).toBeVisible({ timeout: 5_000 })
@@ -53,6 +58,11 @@ test.describe('session 归档行为 E2E（V1/V2/V4/V8/V5① mock 层）', () => 
     // 起 app 后等侧栏渲染 fixture 列表。
     await expect(page.getByTestId('session-list-header')).toBeVisible({ timeout: 10_000 })
     const row = sessionRow(page, 'API 性能优化')
+    // 5b13f3f59（基线内）起默认项目组缺省收起——会话行不进 DOM 时先展开组
+    if (!(await row.first().isVisible().catch(() => false))) {
+      await page.getByTestId('default-project-head').click().catch(() => {})
+      await expect(row.first()).toBeVisible({ timeout: 15_000 })
+    }
     await expect(row).toBeVisible()
     // 归档前角标隐藏（mock 初始 archiveCount = 0，D10：count 0 角标隐藏）。
     await expect(page.getByTestId('sidebar-archive-count-badge')).toHaveCount(0)
@@ -147,6 +157,11 @@ test.describe('session 归档行为 E2E（V1/V2/V4/V8/V5① mock 层）', () => 
     // 挂到目标行 session 才能驱动其行内 generating 派生）——激活范式对齐
     // v6-shell-baseline activateSession（直接点行文本等 composer 渲染）。
     const targetRow = sessionRow(page, 'E2E 文件树测试')
+    // 5b13f3f59（基线内）起默认项目组缺省收起——会话行不进 DOM 时先展开组
+    if (!(await targetRow.first().isVisible().catch(() => false))) {
+      await page.getByTestId('default-project-head').click().catch(() => {})
+      await expect(targetRow.first()).toBeVisible({ timeout: 15_000 })
+    }
     await targetRow.click()
     await expect(page.getByTestId('composer-box')).toBeVisible({ timeout: 10_000 })
     const input = page.getByRole('textbox')

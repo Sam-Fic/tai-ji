@@ -54,7 +54,14 @@
       <section v-if="hasOutputContent" class="mt-4">
         <h3 class="text-[length:var(--text-2xs)] [font-weight:var(--fw-mid)] text-neutral-dim">{{ t('panel.message.aggDetailOutput') }}</h3>
         <div class="mt-1" data-testid="agg-detail-output">
-          <BlockScrollBox v-if="richRenderer" surface="recessed">
+          <!-- __gui__ 分支（gui-components 路径 B 形态适配）：结构化组件树经
+               GuiComponentRenderer 渲染 card（ToolRow 行内 guiComponent 同源提取），优先级最高 -->
+          <BlockScrollBox v-if="guiComponent" surface="recessed">
+            <div data-testid="gui-card">
+              <GuiComponentRenderer :component="guiComponent" />
+            </div>
+          </BlockScrollBox>
+          <BlockScrollBox v-else-if="richRenderer" surface="recessed">
             <component :is="richRenderer" :tool="tool" :session-id="sessionId" />
           </BlockScrollBox>
           <!-- unified patch 增删着色（缺壳兜底通道）：行首 +/-/@@ 是 diff 固有语法
@@ -82,10 +89,12 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
+import type { GuiComponent } from '@zhushanwen/extension-protocol'
 import type { ToolCall } from '@taiji/shared'
+import { extractGui } from '@zhushanwen/extension-protocol'
 import ToolDetailDrawer from '../../../primitives/dialog/ToolDetailDrawer.vue'
 import BlockScrollBox from '../BlockScrollBox.vue'
-import { AnsiText } from '../../../rendering-protocol'
+import { AnsiText, GuiComponentRenderer } from '../../../rendering-protocol'
 import { useChatViewDeps } from '../chat-view-deps'
 import { formatDuration } from '../format-utils'
 
@@ -187,6 +196,7 @@ const patchLines = computed(() => (patchText.value ? patchText.value.split('\n')
 const richRenderer = computed<Component | null>(() => {
   const renderer = chatViewDeps.toolDetailRenderer
   if (!renderer || isFailed.value) return null
+  // __gui__ 分支走模板直渲染（guiComponent 分支优先于富渲染壳），不进本判据
   const name = props.tool?.toolName
   if (name === 'read') return displayContent.value ? renderer : null
   if (name === 'edit') return patchText.value ? renderer : null
@@ -196,6 +206,23 @@ const richRenderer = computed<Component | null>(() => {
   }
   return null
 })
+
+/**
+ * __gui__ 结构化组件提取（ToolRow guiComponent 同款判据：tool_call_end details 优先，
+ * streaming 态 fallback 仅 running 有效——最终态无 __gui__ 不回退过期 streaming detail）。
+ */
+const guiComponent = computed<GuiComponent | undefined>(() => {
+  const fromEnd = extractGui(props.tool?.details)?.component
+  if (fromEnd) return fromEnd
+  if (props.tool?.status === 'running') {
+    const streamingDetail = props.tool?.detail
+    if (typeof streamingDetail === 'object' && streamingDetail !== null) {
+      return extractGui(streamingDetail)?.component
+    }
+  }
+  return undefined
+})
+
 
 /** 输出区显隐：三条渲染通道全空则整节不渲染（无空态占位） */
 const hasOutputContent = computed(() => Boolean(richRenderer.value || patchLines.value || displayContent.value))
