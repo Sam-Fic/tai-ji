@@ -22,12 +22,17 @@ import type { Page } from '@playwright/test'
  */
 async function activateSession(page: Page, label: string): Promise<void> {
   const sessionItem = page.getByText(label)
+  // 5b13f3f59（基线内）起默认项目组缺省收起——会话行不进 DOM 时先展开组
+  if (!(await sessionItem.first().isVisible().catch(() => false))) {
+    await page.getByTestId('default-project-head').click().catch(() => {})
+    await expect(sessionItem.first()).toBeVisible({ timeout: 15_000 })
+  }
   try {
     await expect(sessionItem).toBeVisible({ timeout: 6_000 })
   } catch {
     // 兜底：activeTab 被持久化为非 sessions 时，点「会话」tab 切回
     await page.getByRole('button', { name: /^会话/ }).click()
-    await expect(sessionItem).toBeVisible({ timeout: 10_000 })
+    await expect(sessionItem.first()).toBeVisible({ timeout: 10_000 })
   }
   await sessionItem.click()
   // 激活后退出 Landing 态、main panel 载入 chat workspace → composer-box 渲染
