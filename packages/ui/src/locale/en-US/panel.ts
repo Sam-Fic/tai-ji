@@ -223,9 +223,11 @@ export default {
     aggGroupRunning: 'running',
     aggRowFailed: 'failed',
     aggStatusDone: 'done',
-    // [process-aggregate] tool detail drawer (u-detail-drawer assembly): running note /
-    // params & output section headings. Status words reuse the three keys above
+    // [process-aggregate] tool detail drawer (u-detail-drawer assembly): drawer title (shared
+    // by the shell fallback and the tool-name suffix) / running note / params & output section
+    // headings. Status words reuse the three keys above
     // (aggGroupRunning/aggRowFailed/aggStatusDone), no second status word set.
+    aggDetailTitle: 'Details',
     aggDetailStillRunning: 'Still running',
     aggDetailParams: 'Parameters',
     aggDetailOutput: 'Output',

@@ -217,8 +217,10 @@ export default {
     aggGroupRunning: '进行中',
     aggRowFailed: '失败',
     aggStatusDone: '已完成',
-    // [process-aggregate] 单步详情抽屉（u-detail-drawer 装配）：运行中注记 / 参数与输出小节标题。
-    // 状态词复用上面三键（aggGroupRunning/aggRowFailed/aggStatusDone），不另立第二套状态词。
+    // [process-aggregate] 单步详情抽屉（u-detail-drawer 装配）：抽屉标题（壳缺省与工具名
+    // 后缀共用一词）/ 运行中注记 / 参数与输出小节标题。状态词复用上面三键
+    // （aggGroupRunning/aggRowFailed/aggStatusDone），不另立第二套状态词。
+    aggDetailTitle: '详情',
     aggDetailStillRunning: '仍在执行',
     aggDetailParams: '参数',
     aggDetailOutput: '输出',

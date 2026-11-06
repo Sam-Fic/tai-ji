@@ -123,7 +123,7 @@ watch(
 const isRunning = computed(() => props.tool?.status === 'running')
 const isFailed = computed(() => props.tool?.status === 'error')
 
-const detailTitle = computed(() => (props.tool ? `${props.tool.toolName} · 详情` : ''))
+const detailTitle = computed(() => (props.tool ? `${props.tool.toolName} · ${t('panel.message.aggDetailTitle')}` : ''))
 
 /** 状态词（复用聚合块既有三键，不另立第二套状态词）；end_not_received 无行态词显示「—」 */
 const statusLabel = computed(() => {

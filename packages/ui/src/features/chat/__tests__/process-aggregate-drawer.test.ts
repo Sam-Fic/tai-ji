@@ -77,11 +77,12 @@ afterEach(() => {
 })
 
 // u-detail-drawer 起装配组件（AggregateExpandedBody → SegmentToolRow/AggregateToolDetailDrawer）
-// 消费 useI18n：字典模式（键命中出文案，process-aggregate-block.test.ts 同范式）。
-// 壳用例（ToolDetailDrawer）不消费 i18n，文件级 mock 对其零影响。
+// 与壳（ToolDetailDrawer 缺省标题）都消费 useI18n：字典模式（键命中出文案，
+// process-aggregate-block.test.ts 同范式）。
 vi.mock('vue-i18n', async () => {
   const { i18nMock } = await import('../../../__tests__/helpers/i18n-mock')
   return i18nMock({
+    'panel.message.aggDetailTitle': '详情',
     'panel.message.aggRowFailed': '失败',
     'panel.message.aggGroupRunning': '进行中',
     'panel.message.aggStatusDone': '已完成',

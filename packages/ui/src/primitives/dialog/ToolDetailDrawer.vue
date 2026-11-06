@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { X } from '@lucide/vue'
 import { DialogClose } from 'reka-ui'
 // Dialog 系列直接文件导入（不经本目录 barrel）：本组件经 dialog/index.ts 再导出，
@@ -25,7 +26,7 @@ import DialogTitle from './DialogTitle.vue'
 interface Props {
   /** 受控开关（配合 v-model:open） */
   open: boolean
-  /** 抽屉标题（DialogTitle，屏读必需；缺省 = 工具详情） */
+  /** 抽屉标题（DialogTitle，屏读必需；未传回落抽屉标题键 aggDetailTitle，消费方按工具名拼前缀） */
   title?: string
   /**
    * 焦点归还降级目标（对话流容器）：触发行在抽屉开启期间被虚拟滚动卸载时，
@@ -35,9 +36,18 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  title: '工具详情',
   fallbackFocusTarget: null,
 })
+
+const { t } = useI18n()
+
+/**
+ * 标题解析：调用方未传时回落抽屉标题键（DialogTitle 屏读必需，不空手而归）。
+ * 不用 withDefaults 缺省值承载回落——默认值表达式被提升到 setup 外，引用 setup
+ * 局部绑定（t）是 SFC 编译期硬错误（checkInvalidScopeReference），computed 消费
+ * props 是同语义的合法形态。
+ */
+const resolvedTitle = computed(() => props.title ?? t('panel.message.aggDetailTitle'))
 
 const emit = defineEmits<{
   'update:open': [value: boolean]
@@ -92,7 +102,7 @@ function onCloseAutoFocus(event: Event): void {
     >
       <header class="flex items-center justify-between gap-2 border-b border-hairline px-5 py-4">
         <DialogTitle class="min-w-0 truncate text-[length:var(--text-base)] font-semibold leading-none">
-          {{ title }}
+          {{ resolvedTitle }}
         </DialogTitle>
         <!-- 关闭钮形态对齐 DialogContent 默认 absolute 关闭钮（24px 热区 + dim 色 + hover 提亮），
              抽屉形态按钮收进 header 行内排布，不用 absolute 避免与标题行叠放 -->
