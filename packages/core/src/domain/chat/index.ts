@@ -64,6 +64,9 @@ export * from './message-turns'
 export * from './turn-aggregates'
 export * from './summarize-turn'
 export * from './trace-window'
+// [chat-flow-process-aggregate] 过程段类型族（聚合块段契约：切段边界 / 组分组 / 计数口径的
+// 类型与契约条文；切段纯函数在 trace-window.ts，消费本模块类型）
+export * from './process-segment'
 
 export { createUseChat, ensureStreamSubscription, invalidateStreamSubscription, resetChatModuleStateForTest } from './useChat'
 // [投递所有权内核 u3b] submitQueuedEntry / SubmitQueuedEntryDeps 已随 defer flush 退役摘除
