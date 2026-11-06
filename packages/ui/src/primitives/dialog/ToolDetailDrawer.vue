@@ -47,8 +47,9 @@ const emit = defineEmits<{
 const triggerElement = ref<HTMLElement | null>(null)
 
 // immediate：支持「以 open=true 初次挂载」形态——触发元素同样取挂载时刻的焦点元素。
-// 触发行是 focusable 元素（ToolRow 行 role=button tabindex=0），点击/键盘激活后持有焦点，
-// 此处读 activeElement 即触发行；无焦点（activeElement=body）时记 null，归还全走降级。
+// 触发行是 focusable 元素（聚合块成员行 SegmentToolRow：role=button + tabindex=0），
+// 点击/键盘激活后持有焦点，此处读 activeElement 即触发行；无焦点（activeElement=body）
+// 时记 null，归还全走降级。
 watch(
   () => props.open,
   (open) => {
