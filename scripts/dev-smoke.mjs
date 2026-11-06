@@ -222,21 +222,13 @@ export async function runSmoke(options = {}) {
   let browser = null
 
   try {
-    // ---- (1) spawn dev server（VITE_MOCK 经子进程 env 注入）----
-    child = spawnDevServer(devCmd, sinks)
-
-    // ---- (2) 轮询 dev server ready（ECONNREFUSED 继续轮询；child 退出立即判失败，
-    //      避免连到 1420 上可能已存在的别的 dev 实例导致假结果；无超时上限——时间机制
-    //      删除裁决，vite 起不来时经输出/子进程退出路径显式失败）----
-    const ready = await pollReady(url, child)
-    if (!ready.ok) {
-      return makeChildExitedResult({ child, sinks, consoleErrors, pageErrors, missingMounts })
-    }
-    const readyMs = ready.ms
-
-    // ---- (3) chromium launch（失败 exit 3）----
+    // ---- (0) chromium 先于 vite spawn 启动（失败 exit 3，缺浏览器早失败）——
+    //      2026-11-07 修：实测 vite 链在进程内跑起来后再 launch 会无限挂（chrome 进程
+    //      从不出现、独立探针 launch 100ms 正常），先 launch 后 spawn vite 规避；本环
+    //      境 vite 冷启动为分钟级，早启动也让 launch 排在长等待之外
     try {
       browser = await chromium.launch()
+      process.stderr.write('[dev-smoke] chromium 已启动\n')
     } catch (e) {
       return makeResult({
         exitCode: 3,
@@ -244,16 +236,34 @@ export async function runSmoke(options = {}) {
         consoleErrors,
         pageErrors,
         missingMounts,
-        readyMs,
         detail: `CHROMIUM_LAUNCH_FAILED: ${e.message}\n提示: npx playwright install chromium`,
       })
     }
+
+    // ---- (1) spawn dev server（VITE_MOCK 经子进程 env 注入）----
+    child = spawnDevServer(devCmd, sinks)
+
+    // ---- (2) 轮询 dev server ready（ECONNREFUSED 继续轮询；child 退出立即判失败，
+    //      避免连到 1420 上可能已存在的别的 dev 实例导致假结果；无超时上限——时间机制
+    //      删除裁决，vite 起不来时经输出/子进程退出路径显式失败）----
+    //      2026-11-07 修：vite listen('localhost') 在 node verbatim DNS 下可能只绑
+    //      IPv6 环回（::1），对 127.0.0.1/localhost 的连接被拒 → 轮询永不 ready 且
+    //      child 活着 → 无限挂（Gate A 实证 28 分钟挂死）。轮询改为双环回族各试一次，
+    //      判定可达 family 后用同一显式地址供 chromium goto（goto 同样受 DNS 序影响）。
+    const ready = await resolveReachableUrl(url, child)
+    if (!ready.ok) {
+      return makeChildExitedResult({ child, sinks, consoleErrors, pageErrors, missingMounts })
+    }
+    const readyMs = ready.ms
+    const gotoUrl = ready.reachableUrl
+
+    // ---- (3) chromium 已在 (0) 步启动（早失败语义保留：launch 失败 exit 3）----
 
     // ---- (4) 注册 page 监听 + goto ----
     const page = await browser.newPage()
     attachPageErrorListeners(page, { consoleErrors, pageErrors, ignorePatterns })
 
-    await page.goto(url, { waitUntil: 'domcontentloaded' })
+    await page.goto(gotoUrl, { waitUntil: 'domcontentloaded' })
 
     // ---- (5) 断言挂载点可见（挂载断言限时 = 测试框架语义）----
     await assertMountsVisible(page, mountSelectors, 5000, missingMounts)
@@ -282,24 +292,40 @@ export async function runSmoke(options = {}) {
 }
 
 /**
- * 轮询 url 直到返回响应（200/3xx/4xx 均算 ready，仅 ECONNREFUSED 算未 ready）。
+ * 轮询 url 直到双环回族之一返回响应（200/3xx/4xx 均算 ready，仅连接拒绝算未 ready）。
  * 若传入的 child 在轮询期间退出，立即判定失败（spawn 的 server 没活着，
  * 避免连到端口上可能已存在的别的 server）。无超时上限（时间机制删除裁决）。
- * @returns {Promise<{ok: true, ms: number} | {ok: false, reason: 'child-exited'}>}
+ * 返回 reachableUrl = 判定可达的显式环回地址（127.0.0.1 或 [::1]），后续 chromium
+ * goto 必须用同一地址——localhost 经 DNS 序解析，vite 可能只绑其中一个族。
+ * @returns {Promise<{ok: true, ms: number, reachableUrl: string} | {ok: false, reason: 'child-exited'}>}
  */
-async function pollReady(url, child) {
+async function resolveReachableUrl(url, child) {
+  const parsed = new URL(url)
+  const candidates = [
+    new URL('/', `http://127.0.0.1:${parsed.port}${parsed.pathname === '/' ? '' : parsed.pathname}`).href,
+    new URL('/', `http://[::1]:${parsed.port}${parsed.pathname === '/' ? '' : parsed.pathname}`).href,
+  ]
   const start = Date.now()
+  let round = 0
   for (;;) {
     if (child && child.exitCode !== null) {
       return { ok: false, reason: 'child-exited' }
     }
-    try {
-      const res = await fetch(url, { method: 'GET' })
-      // 任何 HTTP 响应都说明 server 在 listen（含 404/500 这种应用层错误也算 ready，
-      // 应用层错误会经双通道捕获，不在此判定）
-      if (res.status < 500) return { ok: true, ms: Date.now() - start }
-    } catch {
-      // ECONNREFUSED / socket hang up → 还没 ready，继续轮询
+    round += 1
+    // 每轮进度诊断（Gate A 教训：ready 前零输出，挂死期无从归因）
+    if (round % 10 === 1) {
+      process.stderr.write(`[dev-smoke] ready 轮询第 ${round} 轮（${Math.round((Date.now() - start) / 1000)}s）：试 ${candidates.join(' , ')}\n`)
+    }
+    for (const candidate of candidates) {
+      try {
+        const res = await fetch(candidate, { method: 'GET' })
+        if (res.status < 500) {
+          process.stderr.write(`[dev-smoke] ready 经 ${candidate}（${Math.round((Date.now() - start) / 1000)}s，${res.status}）\n`)
+          return { ok: true, ms: Date.now() - start, reachableUrl: candidate }
+        }
+      } catch {
+        // ECONNREFUSED / socket hang up → 还没 ready（或该族不可达），继续
+      }
     }
     await sleep(POLL_INTERVAL_MS)
   }
