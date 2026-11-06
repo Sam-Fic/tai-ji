@@ -1355,7 +1355,7 @@ TreeItem 协议增三个可选字段：`subLabel`（副文本，单行截断）�
 
 **依据**：pi 虚拟模型契约（registerVirtualModel / 每请求 route 回调 / route 失败留在虚拟模型消息上；会话恢复回落语义仅限 resume）；工厂期注册时序先例（provider-live-sync catalog-bridge 注释明文注册必须发生在同步工厂体内、session_start 晚于 `--model` 解析）；运行中会话删除/停用行为链（pi 会话加载链对未注册虚拟模型回落最后应答的物理模型或默认模型，均为物理模型）。设计档案 provider-aggregation（`~/.agents/skill-data/tech-design/` 项目 slug 目录下，不入库；含渲染视图与 route-matrix.md 裁决材料），本条即该裁决的现行登记处。
 
-**登记**：实装落位（单元 U2/U3 承接，逐项核对挂 M3 收尾 commit）——`extensions/universal/provider-aggregation/`（pi 路由扩展整包：src/index.ts 工厂期注册 + session_start 对账 + route 求值前 mtime 重读、src/router.ts 求值纯函数、tests/，U2）+ `packages/runtime/src/services/session/session-model-control.ts`（路由条目分支错误映射，U3——切换链适配归 u-runtime-inject 单元，impl-plan 单元表）。登记无新约束族（时间机制红线 = ADR-0190、事实驱动 = ADR-0122、凭据单通道 = C-proc-14、pi 词汇边界 = ADR-0126 均为既有约束的对齐消费）。本条与 ADR-0193～0195 为同一设计的四条核心裁决，编号 0192-0195 取登记时点当前序号下一位（前一位 = ADR-0191），登记文本与已交付实现的逐项核对在 M3 收尾 commit 时点定稿。
+**登记**：实装落位（单元 U2/U3 承接，逐项核对挂 M3 收尾 commit）——`extensions/universal/provider-aggregation/`（pi 路由扩展整包：src/index.ts 工厂期注册 + session_start 对账 + route 求值前 mtime 重读、src/router.ts 求值纯函数、src/__tests__/，U2）+ `packages/runtime/src/services/session/session-model-control.ts`（路由条目分支错误映射，U3——切换链适配归 u-runtime-inject 单元，impl-plan 单元表）。登记无新约束族（时间机制红线 = ADR-0190、事实驱动 = ADR-0122、凭据单通道 = C-proc-14、pi 词汇边界 = ADR-0126 均为既有约束的对齐消费）。本条与 ADR-0193～0195 为同一设计的四条核心裁决，编号 0192-0195 取登记时点当前序号下一位（前一位 = ADR-0191），登记文本与已交付实现的逐项核对在 M3 收尾 commit 时点定稿。
 
 ### ADR-0193 路由配置权威源：providers.json 顶层 routes 域，taiji 单写点（2026-11-06 设计裁决，provider-aggregation D2）
 

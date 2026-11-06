@@ -25,6 +25,12 @@ export interface ModelPickerModel {
   id: string
   /** 展示名；缺省时展示 id 原文（映射责任在消费方，设计 §6.4） */
   name?: string
+  /**
+   * 路由条目此刻命中端点展示名（M3 联动，仅聚合组行携带）：数据侧按路由定义对当前坐标
+   * 求值（evaluateRouteAt，事件驱动零定时器）。string = 命中端点名；null = 路由定义在但
+   * 条件全不满足（此刻无命中）；缺省 = 非路由条目或路由视图未到位（标注零 DOM）。
+   */
+  hitEndpoint?: string | null
 }
 
 export interface ModelPickerGroup {
@@ -186,13 +192,18 @@ function onRowEnter(model: ModelPickerModel, group: ModelPickerGroup): void {
         >
           <!-- 行名不截断（demo .pop-item white-space:nowrap，弹层宽随最长行增长；Button 基类自带 nowrap） -->
           <span class="flex-1 text-left">{{ model.name ?? model.id }}</span>
-          <!-- 行尾「路由」徽标（U6/GL2：路由条目与物理模型可区分；随路由组整组渲染，
-               形态同族「默认」标签——font-mono / fs-3xs / dim；默认标签随后 ml-auto 紧贴） -->
+          <!-- 行尾「路由」徽标（U6/GL2：路由条目与物理模型可区分；随路由组整组渲染）。
+               M3 联动：路由行尾附此刻命中端点名（routeHitNow）/ 无命中（routeNoHitNow）——
+               数据侧求值注入（model-picker-data），本组件只呈现。 -->
           <span
             v-if="group.aggregation"
             data-testid="model-picker-route-badge"
             class="shrink-0 font-mono text-[length:var(--text-3xs)] text-neutral-dim"
-          >{{ t('panel.modelSelect.routeBadge') }}</span>
+          >{{ model.hitEndpoint !== undefined && model.hitEndpoint !== null
+            ? t('panel.modelSelect.routeHitNow', { name: model.hitEndpoint })
+            : model.hitEndpoint === null
+              ? t('panel.modelSelect.routeNoHitNow')
+              : t('panel.modelSelect.routeBadge') }}</span>
           <!-- 行尾「默认」标签（demo .pt 四值口径：margin-left auto / font-mono / fs-xs /
                dim——fs-xs 在 real 字号链 = --text-3xs，demo tokens.css --text-3xs: var(--fs-xs)
                同名映射；行名 flex-1 吸收剩余空间后 ml-auto 无剩余可分，标签紧贴行尾）。

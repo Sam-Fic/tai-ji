@@ -13,7 +13,6 @@
 import type {
   AggregationMember,
   AggregationRoute,
-  AggregationRouteMode,
   AggregationSpecialDate,
   AggregationTimeWindowTable,
 } from '@taiji/shared'
@@ -349,12 +348,6 @@ export function levelsUnion(route: AggregationRoute): string[] {
     }
   }
   return THINKING_LEVEL_ORDER.filter((l) => supported.has(l))
-}
-
-// ── 模式推导（D12：存在非 none 条件端点即 advanced） ────────────────────────────────
-
-export function deriveRouteMode(route: AggregationRoute): AggregationRouteMode {
-  return route.members.some((m) => m.type !== 'none') ? 'advanced' : 'simple'
 }
 
 // ── 时间窗表构造（快捷涂抹与默认窗共用，坐标契约 7×48） ─────────────────────────────

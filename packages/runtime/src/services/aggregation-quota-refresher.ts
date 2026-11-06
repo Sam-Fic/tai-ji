@@ -24,8 +24,10 @@
  * 互相返回缓存——同一数据的两次近邻读取收敛为一次网络请求，正是「节流内去重」）。
  *
  * 新鲜度判定单源在 shared（isAggregationQuotaDataFresh + AGGREGATION_QUOTA_FRESHNESS_MS）：
- * 本模块（runtime「过期才刷」）、pi 扩展（组装快照时判未知 → fail-open）与浮层标注
- * 三方同源，禁止另写时间比较。
+ * 判定消费方两方同源——本模块（runtime「过期才刷」）与 pi 扩展（组装快照时判未知 →
+ * fail-open），禁止另写时间比较。浮层「额度数据 N 分钟前」标注不在该单源约束内：它是
+ * 展示层的相对时间格式化（useQuotaDisplay formatLastFetch，无布尔阈值判定语义——判断
+ * 交给用户），不消费本判定函数。
  */
 
 import type { AggregationRoute } from '@taiji/shared'

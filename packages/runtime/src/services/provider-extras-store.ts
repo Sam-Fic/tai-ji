@@ -39,7 +39,7 @@ export interface ProviderExtrasFile {
    * 形状 SSOT = shared aggregation.ts（schema 一次定形，字段只加不改）。可选：缺失 = 空
    * 域（向后兼容，不迁移不报错）。读写唯一层 = 本 store（写侧复用既有文件锁 + 原子写）；
    * 形态损坏走整文件隔离（readInternal 既有语义扩展 + 「路由配置已隔离」呈报，见
-   * AggregationRoutesDiagnostics）。
+   * ExtrasQuarantineDiagnostics）。
    */
   routes?: AggregationRoutesFile
 }
@@ -359,7 +359,7 @@ export class TaijiProviderStore {
   /**
    * 读顶层 routes 域（模型路由配置全集）。文件不存在 / 键缺失 / 段损坏被隔离 → 空数组
    * （读路径不物化文件；损坏走整文件隔离 + 按空继续，对齐 readInternal 既有语义）。
-   * 需要隔离呈报（「路由配置已隔离」+ 坏文件路径）的调用方走 getAggregationRoutesWithDiagnostics。
+   * 需要隔离呈报（「路由配置已隔离」+ 坏文件路径）的调用方走 getAggregationRoutesWithDiagnosticsSync。
    */
   getAggregationRoutesSync(): AggregationRoute[] {
     return readInternal(this.filePath).routes?.routes ?? []

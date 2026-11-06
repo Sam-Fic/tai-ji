@@ -584,6 +584,10 @@ export default {
     routeGroupTitle: 'Model Routes',
     // Model route row-end badge (U6/GL2): distinguishes route entries from physical models
     routeBadge: 'Route',
+    // Route row hit endpoint (M3): endpoint name the route currently evaluates to ("Route → endpoint")
+    routeHitNow: 'Route → {name}',
+    // Route row with no hit right now (M3): route defined but no endpoint satisfies its conditions
+    routeNoHitNow: 'Route · no hit now',
     // Model + thinking aggregate entry (W3a single-icon button; click opens model list + thinking levels) title
     modelThinkingAggregateTitle: 'Model · Thinking',
   },

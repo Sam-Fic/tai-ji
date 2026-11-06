@@ -6,7 +6,8 @@
   第一个无条件端点截断其后时间窗着色（coverOwnersAt），权威求值展示归卡头「此刻」chip。
 
   涂抹交互（spec §7.7）：图例选端点 → 按下第一格取反决定涂/擦 → 拖动保持一致 →
-  橡皮清除整格 → 快捷涂抹作用于选中端点 → 松开整体重渲染（paintEnd 通知父级）。
+  橡皮清除整格 → 快捷涂抹作用于选中端点 → 松开收笔（每格经 op 指令响应式即时更新，
+  无独立松开信号——demo 的「松开整体重渲染」渲染形态不适用于响应式草稿语义）。
   窗表就地修改 route.members[].window（编辑器草稿语义），change 通知标脏。
 
   红线对齐（ADR-0190）：「此刻」格高亮坐标由 now prop 注入（展开时点墙钟），零定时器。
@@ -170,7 +171,7 @@ const props = defineProps<{
   now: RouteNow
 }>()
 
-const emit = defineEmits<{ op: [op: RouteEditorOp]; paintEnd: [] }>()
+const emit = defineEmits<{ op: [op: RouteEditorOp] }>()
 
 /** 编辑指令构造便捷闭包（routeId/memberIndex 在本组件按端点定位）。 */
 function memberOp(memberIndex: number, partial: MemberOpInput): RouteEditorOp {
@@ -331,7 +332,6 @@ function paintCell(day: number, slot: number): void {
 function endPaint(): void {
   if (!painting.value) return
   painting.value = false
-  emit('paintEnd')
 }
 
 // 拖动可能移出容器后松手——全局收笔兜底（事件驱动，非轮询）

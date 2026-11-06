@@ -568,6 +568,10 @@ export default {
     routeGroupTitle: '模型路由',
     // 模型路由行尾徽标（U6/GL2）：路由条目与物理模型可区分
     routeBadge: '路由',
+    // 路由行命中端点展示（M3 联动）：路由条目此刻按条件求值命中的端点名（行尾「路由 → 端点」）
+    routeHitNow: '路由 → {name}',
+    // 路由行此刻无命中（M3 联动）：路由定义在但条件全不满足
+    routeNoHitNow: '路由 · 此刻无命中',
     // 模型聚合入口（W3a 单图标聚合按钮，click 出模型列表+思考档位）title
     modelThinkingAggregateTitle: '模型 · 思考等级',
   },

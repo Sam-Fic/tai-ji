@@ -7,12 +7,17 @@
  * 不发伪造 provider 的 select，见 resolveProviderId 的消费方注释）。
  *
  * 零 vue 组件依赖：纯函数 + settingsStore 订阅（分组形状为结构化类型，与 ModelPickerPanel
- * 的 ModelPickerGroup 结构兼容，不从 .vue import 类型）。
+ * 的 ModelPickerGroup 结构兼容，不从 .vue import 类型）。M3 命中端点展示（U6 完成）追加
+ * routeView 只读缓存订阅（拉取 + 失效广播重拉，模块级单例——与 settingsStore 常驻订阅同型，
+ * renderer 生命周期持有）+ evaluateRouteAt 此刻求值（@taiji/ui 纯函数，UI 预览半边与
+ * pi 扩展求值语义对齐由同源坐标契约守护）；拉取失败 = 投影缺席（行标注零 DOM，不阻塞选择器）。
  */
-import { computed, toValue } from 'vue'
+import { computed, ref, toValue } from 'vue'
 import type { ComputedRef, MaybeRefOrGetter } from 'vue'
 import { getSettingsStore } from '@taiji/core'
-import type { ModelInfo, ProviderId } from '@taiji/shared'
+import type { AggregationRouteCard, ModelInfo, ProviderId } from '@taiji/shared'
+import { evaluateRouteAt, nowFromClock } from '@taiji/ui/features/settings'
+import { config } from '@/api'
 
 /** provider 分组（providerId 用于选中反查，provider 名仅用于分组标题显示） */
 export interface ModelGroup {
@@ -35,7 +40,34 @@ export interface PickerGroupRef {
   providerId: ProviderId
   /** 模型路由组标记（透传 ModelGroup.aggregation——面板组标题 i18n 与行尾徽标的判别键） */
   aggregation?: boolean
-  models: { id: string; name?: string }[]
+  models: { id: string; name?: string; hitEndpoint?: string | null }[]
+}
+
+// ── 路由视图只读缓存（M3 命中端点展示的数据源；模块级单例，拉取 + 失效广播重拉） ──
+
+/** routeId → 路由卡（空 map = 未拉取/失败——行标注缺席，不阻塞选择器）。
+ *  声明处注解 = data-source-registry.md 主表 #94（routes join 视图只读镜像缓存）。 */
+// @data-owner #94
+const routeCardsById = ref(new Map<string, AggregationRouteCard>())
+/** 首拉 + 订阅只发生一次（多消费方共享同一缓存，不重复拉取）。 */
+let routeViewWired = false
+
+function ensureRouteCards(): void {
+  if (routeViewWired) return
+  routeViewWired = true
+  const refresh = (): void => {
+    config
+      .getRouteView()
+      .then((view) => {
+        routeCardsById.value = new Map(view.cards.map((c) => [c.route.id, c]))
+      })
+      .catch(() => {
+        // 拉取失败维持上次/空映射：命中端点标注整体缺席（零 DOM），选择器主功能不受影响
+      })
+  }
+  refresh()
+  // 保存/删除后的失效广播 → 重拉（last-value 全量下发同协议；订阅随 renderer 生命周期持有）
+  config.onRouteView(refresh)
 }
 
 /**
@@ -83,6 +115,36 @@ function toPickerGroups(groups: readonly ModelGroup[]): PickerGroupRef[] {
     ...(g.aggregation ? { aggregation: true } : {}),
     models: g.models.map((m) => ({ id: m.id, name: m.name })),
   }))
+}
+
+/**
+ * 路由行此刻命中端点投影（M3 命中端点展示，U6 完成）：对路由定义按当前坐标求值一次
+ *（groups 重算时点求值——广播/挂载驱动的事件式刷新，无周期重算，ADR-0190）。命中端点
+ * 展示名 = provider 名（GL2：端点真实 id 只在配置与消息记录可见，选择器显示名）；路由
+ * 定义在但条件全不满足 = null（行显「此刻无命中」）；非路由行 / 路由视图未到位 = 缺省
+ *（标注缺席）。
+ *
+ * 路由视图缓存懒拉（不预拉语义，对齐分区首访 U10）：仅当候选里出现路由条目（聚合组）
+ * 才触发首拉——零配置 / 未配路由环境零请求（V8 零行为形态）；拉取失败 = 标注整体缺席。
+ */
+function withHitEndpoints(groups: readonly PickerGroupRef[], providerNames: ReadonlyMap<string, string>): PickerGroupRef[] {
+  if (groups.some((g) => g.aggregation)) ensureRouteCards()
+  if (routeCardsById.value.size === 0) return [...groups]
+  const now = nowFromClock(new Date())
+  return groups.map((g) => {
+    if (!g.aggregation) return g
+    return {
+      ...g,
+      models: g.models.map((m) => {
+        const card = routeCardsById.value.get(m.id)
+        if (!card) return m
+        const result = evaluateRouteAt(card.route, now)
+        if (result.hit === null) return { ...m, hitEndpoint: null }
+        const hit = result.hit
+        return { ...m, hitEndpoint: providerNames.get(hit.providerId) ?? hit.providerId }
+      }),
+    }
+  })
 }
 
 /**
@@ -157,7 +219,12 @@ export function useModelPickerData(
   return {
     groups,
     hasAnyModel: computed(() => groups.value.length > 0),
-    pickerGroups: computed(() => toPickerGroups(groups.value)),
+    pickerGroups: computed(() =>
+      withHitEndpoints(
+        toPickerGroups(groups.value),
+        new Map(settingsStore.providers.value.map((p) => [p.id, p.name])),
+      ),
+    ),
     defaultModel: computed(() => settingsStore.defaultModel.value),
     resolveProviderId,
   }

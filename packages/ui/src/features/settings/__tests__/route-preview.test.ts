@@ -8,7 +8,6 @@
  * ③ coverOwnersAt 覆盖预览着色：首个无条件端点截断（D14）/ fb 兜底格 / 仅额度端点不入轴
  * ④ truncationInfo 截断警告数据
  * ⑤ levelsUnion 档位并集按序去重（D7）
- * ⑥ deriveRouteMode 模式由数据推导（D12）
  * ⑦ weekdayBusinessWindow / blankWindowTable 坐标契约（7×48）
  * ⑧ candidateProviderIds 添加端点候选（存在 / 启用 / 提供该模型 / 未被本路由占用）
  * ⑨ specialOverrideFor 同日期多条取第一条（spec 已知限制）
@@ -21,7 +20,6 @@ import {
   blankWindowTable,
   candidateProviderIds,
   coverOwnersAt,
-  deriveRouteMode,
   endpointIssueKinds,
   evaluateRouteAt,
   levelsUnion,
@@ -315,20 +313,6 @@ describe('levelsUnion 档位并集（D7）', () => {
       ],
     })
     expect(levelsUnion(r)).toEqual(['low'])
-  })
-})
-
-describe('deriveRouteMode 模式推导（D12）', () => {
-  it('存在非 none 条件端点 → advanced', () => {
-    const r = routeOf({
-      members: [member({ id: 'a', providerId: 'zhipu', type: 'window', window: blankWindowTable() })],
-    })
-    expect(deriveRouteMode(r)).toBe('advanced')
-  })
-
-  it('全部无条件 → simple', () => {
-    const r = routeOf({ members: [member({ id: 'a', providerId: 'zhipu' })] })
-    expect(deriveRouteMode(r)).toBe('simple')
   })
 })
 

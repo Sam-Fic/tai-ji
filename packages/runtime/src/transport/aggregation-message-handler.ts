@@ -70,8 +70,10 @@ export class AggregationMessageHandler {
    * 保存顺序与回滚编排见 core route-orchestration createRouteSaveOrchestrator）。
    * 保存语义 = upsert：id 已存在视为自身替换（编辑保存），不存在按新建校验（撞名冲突
    * 拒绝）；跨 id 改名 = 删除重建（id 是跨进程对齐键，编辑器不提供改名——shared
-   * validateAggregationRouteUpsert 注释契约）。校验失败经 server.ts 全局 catch 以
-   * AggregationErrorCode 词表 code 回 error envelope（shared 协议注释契约）。
+   * validateAggregationRouteUpsert 注释契约）。校验失败在本 handler 内拦截直接 sendError
+   * （AggregationErrorCode 词表 code，envelope 形态与 server.ts 全局 catch 同款；不经全局
+   * catch——校验类失败是设计内合法产出，不落 server 级 handler error 日志）；非校验错误
+   * 上抛经 server.ts 全局 catch。
    */
   private async handleSaveRoute(
     msg: Extract<ClientMessage, { type: 'aggregation.saveRoute' }>,
@@ -125,14 +127,19 @@ export class AggregationMessageHandler {
     await this.ctx.configService.modifyAggregationRoutes(current => current.filter(r => r.id !== routeId))
     // ② scopedModels 精确清理（辅助语义——失败不回滚删除，显式呈报 + 读取侧标记兜住）。
     let cleaned: string[]
+    let cleanupFailed = false
     try {
       cleaned = await this.ctx.configService.modifyScopedModels(current => scopedModelsWithRouteRemoved(current, routeId))
     } catch (err) {
       cleaned = before.scopedModels
-      console.warn(`[aggregation-handler] deleteRoute: scopedModels 精确清理失败（routes 删除已生效，残留引用由路由页「失效引用」提示兜住、下次保存清理）：`, err)
+      cleanupFailed = true
+      console.warn(`[aggregation-handler] deleteRoute: scopedModels 精确清理失败（routes 删除已生效，残留引用由路由页「失效引用」提示兜住、下次保存清理；default 同步随清理失败一并跳过——scopedModels 权威未跟上，「新第一位即默认」前提不成立，已删路由的 default 悬空由 findValidDefaultModel 既有 auto-fix 兜底）：`, err)
     }
-    // ③ 默认编排（清理后新首位同步为 default；失败降级 warn——删除主语义已生效，不阻断回执）。
-    this.syncDefaultAfterScopedWrite(cleaned)
+    // ③ 默认编排（清理后新首位同步为 default；失败降级 warn——删除主语义已生效，不阻断
+    // 回执）。清理失败时跳过：cleaned 此时是删除前原值（可能含被删路由引用），以它为基准
+    // 同步 default 会把已删路由写入 settings.json default 并广播假默认（U9 失败恢复语义：
+    // 残留由读取侧「失效引用」标记兜住，不在残留态上叠加 default 改写）。
+    if (!cleanupFailed) this.syncDefaultAfterScopedWrite(cleaned)
     this.ctx.broadcastProviderList()
     this.ctx.reply(ws, msg.id, 'aggregation.routeDeleted', { routeId, scopedModels: cleaned })
     this.publishViewChanged()
