@@ -1,11 +1,12 @@
 /**
  * providers.json routes 段读取（扩展侧只读，设计 D2/SC3/SC5）。
  *
- * 路径公式 = join(getAgentDir(), "config", "providers.json")——与 runtime
- * pi-paths.getProviderExtrasPath 同公式（pi 官方 getAgentDir 尊重 PI_CODING_AGENT_DIR，
- * taiji 托管形态下即 <dataDir>/agent；扩展不 import runtime，字面量一致性由本注释与
- * runtime 侧锚点互指维护）。providers.json 是 taiji 的配置（pi 引擎零消费，前提 AS20），
- * 本模块只读顶层 routes 键，其余键（providers/scopedModels 等）不触碰。
+ * 路径公式 SSOT = @taiji/shared/provider-store-paths 纯模块（getProviderExtrasPath
+ * 纯函数，agentDir 入参；写侧 runtime pi-paths 与另一读侧 subagent-core scoped-models
+ * 同源消费，公式漂移结构上不可能）。本模块只补扩展侧基址：pi 官方 getAgentDir
+ * （尊重 PI_CODING_AGENT_DIR，taiji 托管形态下即 <dataDir>/agent）。providers.json
+ * 是 taiji 的配置（pi 引擎零消费，前提 AS20），本模块只读顶层 routes 键，其余键
+ * （providers/scopedModels 等）不触碰。
  *
  * mtime 门（D1 修订形态 / SI2）：route 求值前与 session_start 对账前按文件 mtime 检查，
  * 变化才重读——无定时器、无 fs.watch（ADR-0190/ADR-0122 红线：监视存储模拟实时禁断）。
@@ -24,17 +25,15 @@
  */
 
 import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { getProviderExtrasPath as sharedGetProviderExtrasPath } from "@taiji/shared/provider-store-paths";
 import { parseAggregationRoutesSection, type AggregationRoutesFile } from "@taiji/shared/aggregation";
 
-/** providers.json 文件名（与 runtime pi-paths 同名锚点）。 */
-export const PROVIDERS_EXTRAS_FILENAME = "providers.json"
-
-/** providers.json 绝对路径（延迟调用 getAgentDir——模块加载期 pi 环境未必就绪）。 */
+/** providers.json 绝对路径（延迟调用 getAgentDir——模块加载期 pi 环境未必就绪）。
+ * 公式本体 = shared provider-store-paths 纯模块（与 runtime 写侧同源）。 */
 export function getProviderExtrasPath(): string {
-	return join(getAgentDir(), "config", PROVIDERS_EXTRAS_FILENAME)
+	return sharedGetProviderExtrasPath(getAgentDir())
 }
 
 /** routes 段单次读取结果。absent 是合法态（无 routes 域的既有环境/原生 pi 用户），不是失败；

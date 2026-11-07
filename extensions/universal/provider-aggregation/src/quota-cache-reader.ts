@@ -1,11 +1,13 @@
 /**
  * quota-cache.json 只读通道（provider-aggregation D3/SC5，M2 接线增量）。
  *
- * 写侧唯一 = runtime QuotaCache（packages/runtime/src/services/quota-cache.ts），路径
- * 公式 = join(<dataDir>, "quota-cache.json")。扩展侧经 pi 官方 getAgentDir() 推导
- * <dataDir>（设计 AS6：taiji 托管形态 agentDir = <dataDir>/agent，runtime spawn 注入的
- * PI_CODING_AGENT_DIR 值同源）——独立 pi 用户（agentDir = ~/.pi/agent）下推导指向
- * ~/.pi/quota-cache.json，该 taiji 概念文件不存在 → absent → 快照空（fail-open 语义保持）。
+ * 写侧唯一 = runtime QuotaCache（packages/runtime/src/services/quota-cache.ts）；路径
+ * 公式 SSOT = @taiji/shared/provider-store-paths 纯模块（getQuotaCachePath 纯函数，
+ * dataDir 入参，写侧同源消费，公式漂移结构上不可能）。扩展侧经 pi 官方 getAgentDir()
+ * 推导 <dataDir>（设计 AS6：taiji 托管形态 agentDir = <dataDir>/agent，runtime spawn
+ * 注入的 PI_CODING_AGENT_DIR 值同源）——独立 pi 用户（agentDir = ~/.pi/agent）下推导
+ * 指向 ~/.pi/quota-cache.json，该 taiji 概念文件不存在 → absent → 快照空（fail-open
+ * 语义保持）。
  *
  * mtime 门（SI3，与 config-store.ts 同形态）：route 求值前按文件 mtime 检查，变化才
  * 重读——无定时器、无 fs.watch（ADR-0190/ADR-0122 红线）。写侧原子写（tmp+rename），
@@ -23,9 +25,10 @@
  */
 
 import { readFileSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { getQuotaCachePath as sharedGetQuotaCachePath } from "@taiji/shared/provider-store-paths";
 import { isAggregationQuotaDataFresh, type AggregationQuotaFreshnessProbe } from "@taiji/shared/aggregation";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 
@@ -33,12 +36,10 @@ import type { RouteQuotaSnapshot } from "./router.ts";
 
 const logger = getLogger("provider-aggregation");
 
-/** quota-cache.json 文件名（与 runtime QuotaCache CACHE_FILENAME 同名锚点）。 */
-export const QUOTA_CACHE_FILENAME = "quota-cache.json"
-
-/** quota-cache.json 绝对路径（延迟调用 getAgentDir——模块加载期 pi 环境未必就绪）。 */
+/** quota-cache.json 绝对路径（延迟调用 getAgentDir——模块加载期 pi 环境未必就绪；
+ * 公式本体 = shared provider-store-paths 纯模块，与 runtime 写侧同源）。 */
 export function getQuotaCachePath(): string {
-	return join(dirname(getAgentDir()), QUOTA_CACHE_FILENAME)
+	return sharedGetQuotaCachePath(dirname(getAgentDir()))
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
