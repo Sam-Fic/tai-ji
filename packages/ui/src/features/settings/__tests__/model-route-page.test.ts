@@ -16,7 +16,9 @@
  *
  * 测试模式（对齐本目录既有惯例）：vitest.setup mock vue-i18n（t() 返回 key）→ 文案断言
  * 用 i18n key / data-testid / aria 属性；now prop 注入固定坐标（禁 fake timer）。
- * 组件均为轻量挂载（单卡/两三端点 fixture，远低于 domain-map heavy 判据），留默认档。
+ * 组件均为轻量挂载（单卡/两三端点 fixture，远低于 domain-map heavy 判据），但本文件登记于
+ * docs/testing/domain-map.json 的 settings 域排除清单，默认档不收集——用域触发档执行：
+ * node scripts/run-domain-tests.mjs settings（或 TAIJI_TEST_DOMAIN=settings + vitest run）。
  */
 import { describe, it, expect, afterEach, beforeAll } from 'vitest'
 import { mount, flushPromises, enableAutoUnmount, VueWrapper } from '@vue/test-utils'
@@ -25,6 +27,7 @@ import { AGGREGATION_PROVIDER_ID } from '@taiji/shared'
 import ModelRoutePage from '../provider/ModelRoutePage.vue'
 import RouteUnsavedBar from '../provider/RouteUnsavedBar.vue'
 import { blankWindowTable, weekdayBusinessWindow, type RouteNow } from '../provider/route-preview'
+import { SETTINGS_TOAST_KEY } from '../injection-keys'
 
 const NOW: RouteNow = { dow: 2, slot: 29 } // 周三 14:30（对齐 spec §5.2 演示坐标语义）
 
@@ -217,6 +220,38 @@ describe('时间轴与穷举对照表（A28：role=gridcell / aria-label 完整 
     expect(cell.attributes('aria-label')).toContain('opencode-go')
   })
 
+  it('仅额度端点路由拖拽网格：阻挡文案走 paintNoWindowEndpoint 独立键（与快捷涂抹 paintSelectFirst 分场景）', async () => {
+    const warnings: string[] = []
+    const members: AggregationRoute['members'] = [
+      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'quota', quota: { thresholdPercent: 20 } },
+    ]
+    const w = mount(ModelRoutePage, {
+      props: {
+        view: viewOf([cardOf(routeOf({ members }))]),
+        providers: [prov({ id: 'zhipu' })],
+        scopedModels: [`${AGGREGATION_PROVIDER_ID}/glm-5-3`],
+        now: NOW,
+      },
+      global: {
+        provide: {
+          [SETTINGS_TOAST_KEY as symbol]: {
+            error: () => {},
+            info: () => {},
+            warning: (m: string) => warnings.push(m),
+          },
+        },
+      },
+      attachTo: document.body,
+    })
+    await w.find('[data-testid="route-card-toggle"]').trigger('click')
+    // 路由无时间窗端点（仅额度端点，图例无端点可选）→ 拖拽网格被 startPaint 拦截；
+    // i18n mock t() 返回 key 本身：断言独立键而非快捷涂抹的 paintSelectFirst
+    await w.find('[data-testid="route-time-cell"][data-day="2"][data-slot="29"]').trigger('pointerdown')
+    expect(warnings).toContain('settings.modelRoute.paintNoWindowEndpoint')
+    expect(warnings).not.toContain('settings.modelRoute.paintSelectFirst')
+    w.unmount()
+  })
+
   it('截断警告渲染 + 被截断端点「不会命中」标记（D14 / V12 半边）', async () => {
     const win = blankWindowTable()
     win[2][29] = true
@@ -355,11 +390,16 @@ describe('端点行操作（spec §7.8）', () => {
 })
 
 describe('特殊日期编辑（D13，M3 增量）', () => {
-  it('默认隐藏（M1），advanced + 启用波次开关时显示', async () => {
+  it('advanced 模式显示特殊日期编辑器、simple 模式隐藏（显隐随模式，无波次门控）', async () => {
     const w = mountPage([cardOf(routeOf({}))])
     await w.find('[data-testid="route-card-toggle"]').trigger('click')
-    // advanced 模式下特殊日期区渲染（M3 编辑器随本单元交付；显隐随模式）
+    // advanced 模式下特殊日期区渲染（M3 编辑器随本单元交付；显隐判据 = route.mode === 'advanced'）
     expect(w.find('[data-testid="route-special-dates"]').exists()).toBe(true)
+
+    // simple 模式隐藏（切模式条件保留，D12；显隐无历史「波次开关」门控）
+    const simple = mountPage([cardOf(routeOf({ mode: 'simple' }))])
+    await simple.find('[data-testid="route-card-toggle"]').trigger('click')
+    expect(simple.find('[data-testid="route-special-dates"]').exists()).toBe(false)
   })
 
   it('添加全天除外：校验通过后 specials 增一条', async () => {

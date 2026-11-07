@@ -737,7 +737,9 @@ export default {
     taskFailed: 'Task creation failed: {error}',
     sendFailed: 'Failed to send message: {error}',
     // ── U4 model/thinking switch failures (model-switch-live-provider-sync §3.4) ──
-    // 5 new codes + general; the 4 pass-through codes fall back to `general`
+    // 5 new codes + 2 provider-aggregation codes (AGGREGATION_ROUTE_NOT_IN_SESSION /
+    // AGGREGATION_EXTENSION_DISABLED, per provider-aggregation design D1 ③/D9 ②) + general;
+    // the 4 pass-through codes fall back to `general`
     // (toast shows the backend message).
     modelSwitch: {
       general: 'Switch failed: {error}',

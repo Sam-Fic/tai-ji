@@ -10,7 +10,8 @@
   无独立松开信号——demo 的「松开整体重渲染」渲染形态不适用于响应式草稿语义）。
   窗表就地修改 route.members[].window（编辑器草稿语义），change 通知标脏。
 
-  红线对齐（ADR-0190）：「此刻」格高亮坐标由 now prop 注入（展开时点墙钟），零定时器。
+  红线对齐（ADR-0190）：「此刻」格高亮坐标由 now prop 注入（页面挂载时点墙钟一次，
+  props.now 注入优先；卡展开不重采样），零定时器。
 -->
 <template>
   <div data-testid="route-time-grid" class="mt-4 overflow-hidden rounded-md border border-border bg-bg-card p-3">
@@ -68,7 +69,7 @@
       </Button>
     </div>
 
-    <!-- 7×48 网格（拖选涂抹；pointerup 在容器上收笔整体刷新） -->
+    <!-- 7×48 网格（拖选涂抹；pointerup/pointercancel 仅收笔——painting 复位，外加 window 级兜底；格更新为每 op 即时生效，无收笔批量刷新） -->
     <div
       class="mt-2 select-none"
       @pointerup="endPaint"
@@ -152,12 +153,14 @@ import type { RouteNow } from './route-preview'
 import {
   blankWindowTable,
   coverOwnersAt,
+  DAY_COUNT,
   endpointIssueKinds,
   endpointIssueKey,
   fallbackMemberOf,
   fmtSlot,
   fmtSlotRange,
   nightWindow,
+  SLOT_COUNT,
   truncationInfo,
   weekdayBusinessWindow,
 } from './route-preview'
@@ -181,8 +184,8 @@ function memberOp(memberIndex: number, partial: MemberOpInput): RouteEditorOp {
 const { t } = useI18n()
 const toast = useSettingsToast()
 
-const DAY_COUNT = 7
-const SLOT_COUNT = 48
+// DAY_COUNT / SLOT_COUNT 经上方 import 自 route-preview（值源 = @taiji/shared TIME_WINDOW 常量，坐标契约单源）
+
 /** 标尺刻度间隔（每 3 小时 = 6 格）。 */
 const SLOTS_PER_TICK = 6
 
@@ -316,7 +319,8 @@ function startPaint(day: number, slot: number): void {
   }
   const target = paintTarget()
   if (!target) {
-    toast.warning(t('settings.modelRoute.paintSelectFirst'))
+    // 拖拽涂抹被阻挡的场景是「路由无时间窗端点」（如仅额度端点），与快捷涂抹的「先选端点」文案分键
+    toast.warning(t('settings.modelRoute.paintNoWindowEndpoint'))
     return
   }
   paintValue.value = !(target.window?.[day]?.[slot] ?? false)

@@ -3,7 +3,7 @@
 /**
  * 模型选择器路由条目呈现（provider-aggregation U6/M1 单元增量：路由组 / 徽标 / 顺序 DOM 断言）。
  *
- * 断言三件（impl-plan A27 增量段，设计 §5.1 U6）：
+ * 断言（impl-plan A27 增量段，设计 §5.1 U6）：
  * 1. 路由组——聚合 provider 条目（ModelInfo.aggregation=true，u-foundation 契约字段）
  *    成组且组标题走 i18n 定稿键 `panel.modelSelect.routeGroupTitle`（zh「模型路由」；
  *    数据侧 providerName 是 runtime 固定中文，显示侧按 locale 出文案）；

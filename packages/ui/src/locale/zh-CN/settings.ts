@@ -726,6 +726,7 @@ export default {
     paintNight: '夜间',
     paintClear: '清空时段',
     paintSelectFirst: '先选择一个端点，再使用快捷涂抹',
+    paintNoWindowEndpoint: '该路由没有时间窗端点，先把端点条件切换到时间窗或组合再涂抹',
     paintEraserNoPreset: '橡皮模式下快捷涂抹不可用，请先关闭橡皮',
     fallbackBar: '无条件兜底 → {name}',
     fbTruncateNote: '不限时间；会截断排在它后面的端点',

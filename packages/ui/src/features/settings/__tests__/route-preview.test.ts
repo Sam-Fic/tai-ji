@@ -21,6 +21,7 @@ import {
   candidateProviderIds,
   coverOwnersAt,
   endpointIssueKinds,
+  endpointProviderOptions,
   evaluateRouteAt,
   levelsUnion,
   nowFromClock,
@@ -28,6 +29,7 @@ import {
   truncationInfo,
   weekdayBusinessWindow,
 } from '../provider/route-preview'
+import { AGGREGATION_PROVIDER_ID, TIME_WINDOW_DAYS, TIME_WINDOW_SLOTS_PER_DAY } from '@taiji/shared'
 
 function prov(overrides: Omit<Partial<ProviderInfo>, 'id'> & { id: string }): ProviderInfo {
   const id = overrides.id as ProviderId
@@ -320,10 +322,12 @@ describe('levelsUnion 档位并集（D7）', () => {
 })
 
 describe('时间窗表坐标契约（aggregation.ts TIME_WINDOW 常量同源）', () => {
-  it('blankWindowTable = 7 行 × 48 列全 false', () => {
+  it('blankWindowTable 维度 = shared TIME_WINDOW 常量（7 行 × 48 列，单源断言）', () => {
     const t = blankWindowTable()
-    expect(t).toHaveLength(7)
-    expect(t.every((row) => row.length === 48 && row.every((c) => c === false))).toBe(true)
+    expect(TIME_WINDOW_DAYS).toBe(7)
+    expect(TIME_WINDOW_SLOTS_PER_DAY).toBe(48)
+    expect(t).toHaveLength(TIME_WINDOW_DAYS)
+    expect(t.every((row) => row.length === TIME_WINDOW_SLOTS_PER_DAY && row.every((c) => c === false))).toBe(true)
   })
 
   it('weekdayBusinessWindow = 周一~五 09:00-18:00（快捷涂抹「工作日白天」同源）', () => {
@@ -361,6 +365,33 @@ describe('candidateProviderIds 添加端点候选（spec §7.9）', () => {
       ],
     })
     expect(candidateProviderIds(r, providers)).toEqual([])
+  })
+
+  it('聚合条目一律不入选（kind=aggregation；路由 id 与聚合条目 models 撞名也不混入——嵌套路由拒绝，D4 ①/§1.3 ①）', () => {
+    const agg = prov({ id: AGGREGATION_PROVIDER_ID, kind: 'aggregation', models: [{ id: 'glm-5-3' }] })
+    const r = routeOf({
+      id: 'glm-5-3',
+      modelId: 'glm-5-3',
+      members: [member({ id: 'a', providerId: 'zhipu' })],
+    })
+    // 撞名前提自证：聚合条目 models 含路由 modelId（settingsStore 全量下发形态），若无 kind 排除四条过滤本可满足
+    expect(agg.models.some((m) => m.id === r.modelId)).toBe(true)
+    const ids = candidateProviderIds(r, [...providers, agg])
+    expect(ids).not.toContain(AGGREGATION_PROVIDER_ID)
+    expect(ids).toEqual(['opencode-go', 'stepfun'])
+  })
+
+  it('endpointProviderOptions 换渠道候选同样排除聚合条目（含当前渠道保留路径）', () => {
+    const agg = prov({ id: AGGREGATION_PROVIDER_ID, kind: 'aggregation', models: [{ id: 'glm-5-3' }] })
+    const r = routeOf({
+      id: 'glm-5-3',
+      modelId: 'glm-5-3',
+      members: [member({ id: 'a', providerId: 'zhipu' })],
+    })
+    const opts = endpointProviderOptions(r, member({ id: 'a', providerId: 'zhipu' }), [...providers, agg])
+    expect(opts.map((o) => o.provider.id)).not.toContain(AGGREGATION_PROVIDER_ID)
+    // 当前渠道 zhipu 保留（spec §7.8 异常标注语义），聚合条目排除
+    expect(opts.map((o) => o.provider.id)).toEqual(['zhipu', 'opencode-go', 'stepfun'])
   })
 })
 

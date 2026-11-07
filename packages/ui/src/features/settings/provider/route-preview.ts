@@ -4,8 +4,10 @@
  * 分工边界（D14 / spec §7.7 语义边界）：时间轴着色是「时间窗覆盖预览」而非完整求值结果
  *（不消费运行时状态）；卡头「此刻」chip 按真实时钟对当前坐标求值命中端点，是求值语义的
  * 可视权威。两者共用本模块，与 pi 扩展求值函数（U2 router.ts）语义对齐但各自实现——
- * UI 预览不 import 扩展侧代码（包边界），穷举语义一致性由同源坐标契约（shared
- * aggregation.ts TIME_WINDOW 常量）与单测对拍守护。
+ * UI 预览不 import 扩展侧代码（包边界）。穷举语义一致性守护两层：坐标维度 = shared
+ * aggregation.ts TIME_WINDOW 常量单源（本模块与 RouteTimeGrid 均从 shared 取值，
+ * 改维度 UI 侧编译期红灯）；求值语义 = 两侧各自单测对照 route-matrix.md 矩阵逐格实现
+ *（无自动对拍，改判定式须两侧同批核对）。
  *
  * 时间机制红线对齐（ADR-0190）：本模块零定时器。「实时」语义 = 打开/展开路由页时点取
  * 墙钟求值一次（事件驱动：组件 mount 传入），不做周期刷新。
@@ -17,11 +19,11 @@ import type {
   AggregationTimeWindowTable,
 } from '@taiji/shared'
 import type { ProviderInfo } from '@taiji/shared'
-import { annotateDanglingMembers } from '@taiji/shared'
+import { annotateDanglingMembers, TIME_WINDOW_DAYS, TIME_WINDOW_SLOTS_PER_DAY } from '@taiji/shared'
 
-/** 时间窗表维度（shared aggregation.ts 坐标契约同源，禁止另定坐标系）。 */
-export const DAY_COUNT = 7
-export const SLOT_COUNT = 48
+/** 时间窗表维度（= shared aggregation.ts TIME_WINDOW 常量别名，坐标契约单源，禁止另定坐标系）。 */
+export const DAY_COUNT = TIME_WINDOW_DAYS
+export const SLOT_COUNT = TIME_WINDOW_SLOTS_PER_DAY
 
 /** 百分比满刻度（quotaOf 供给的 pct 口径 0-100；剩余 = 满刻度 − 已用）。 */
 const QUOTA_PCT_FULL_SCALE = 100
@@ -389,9 +391,9 @@ export function nightWindow(): AggregationTimeWindowTable {
   return table
 }
 
-// ── 添加端点候选（spec §7.9：存在 / 启用 / 提供该模型 / 未被本路由占用） ────────────
+// ── 添加端点候选（spec §7.9：存在 / 启用 / 提供该模型 / 未被本路由占用；另按 D4 ① kind 排除聚合条目——路由条目 models=路由 id 集合，与路由 modelId 撞名时会满足前四条混入候选，选中即构造嵌套路由（设计 §1.3 ① 范围外 + shared route_member_nested 硬拒绝），须在候选源头排除） ────
 
-/** 换渠道候选（端点行下拉）：当前渠道即使不满足条件也保留（异常标注，spec §7.8）。 */
+/** 换渠道候选（端点行下拉）：聚合条目一律排除；当前渠道即使不满足条件也保留（异常标注，spec §7.8）。 */
 export function endpointProviderOptions(
   route: AggregationRoute,
   member: AggregationMember,
@@ -401,6 +403,7 @@ export function endpointProviderOptions(
   const issues = endpointIssueKinds(route, providers)
   const out: Array<{ provider: ProviderInfo; issues: EndpointIssueKind[] }> = []
   for (const p of providers) {
+    if (p.kind === 'aggregation') continue
     if (usedByOthers.has(p.id)) continue
     const memberIndex = route.members.findIndex((m) => m.id === member.id)
     const memberIssues = issues.get(memberIndex) ?? []
@@ -416,12 +419,13 @@ export function endpointProviderOptions(
   return out
 }
 
-/** 添加端点候选 provider id 序（存在 / 启用 / 提供该模型 / 未被本路由占用，spec §7.9）。 */
+/** 添加端点候选 provider id 序（存在 / 启用 / 提供该模型 / 未被本路由占用，spec §7.9；聚合条目一律排除——理由见上方区域注释）。 */
 export function candidateProviderIds(route: AggregationRoute, providers: readonly ProviderInfo[]): string[] {
   const used = new Set(route.members.map((m) => m.providerId))
   return providers
     .filter(
       (p) =>
+        p.kind !== 'aggregation' &&
         !used.has(p.id) &&
         p.enabled !== false &&
         p.models.some((m) => m.id === route.modelId),
