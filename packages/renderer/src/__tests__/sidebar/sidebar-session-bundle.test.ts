@@ -39,7 +39,8 @@ import {
 } from '@/composables/useSessionMarkers'
 import { clearSessionUnread, useSidebar } from '@/composables/features/sidebar/useSidebar'
 import { useSessionStore } from '@/stores/session'
-import { useProjectStore, DEFAULT_PROJECT_ID } from '@/stores/project'
+import { useProjectStore, DEFAULT_PROJECT_ID, PROJECT_ORDER_KEY } from '@/stores/project'
+import { GROUP_STATE_KEY } from '@/composables/features/sidebar/useProjectGroups'
 
 // ── assign-project 节 mock：@/api 部分门面（session.setProject 是受测 RPC，hoisted 控制）──
 const apiMocks = vi.hoisted(() => ({
@@ -121,10 +122,10 @@ function productionSources(): string[] {
 beforeEach(() => {
   setActivePinia(createPinia())
   localStorage.removeItem('taiji:session-markers')
-  localStorage.removeItem('taiji:sidebar-group-state')
-  localStorage.removeItem('taiji:sidebar-project-order')
+  localStorage.removeItem(GROUP_STATE_KEY)
+  localStorage.removeItem(PROJECT_ORDER_KEY)
   // 本文件聚焦 SessionItem 行为/事件链而非面板开合：预置默认区展开（开合默认收起语义）
-  localStorage.setItem('taiji:sidebar-group-state', JSON.stringify({ flat: [], groups: [], defaultZone: true }))
+  localStorage.setItem(GROUP_STATE_KEY, JSON.stringify({ flat: [], groups: [], defaultZone: true }))
   __resetCacheForTest()
   resetForkBranchState()
 })
@@ -378,10 +379,10 @@ function mountArchiveItem(status: string, id = 's1') {
 beforeEach(() => {
   setActivePinia(createPinia())
   localStorage.removeItem('taiji:session-markers')
-  localStorage.removeItem('taiji:sidebar-group-state')
-  localStorage.removeItem('taiji:sidebar-project-order')
+  localStorage.removeItem(GROUP_STATE_KEY)
+  localStorage.removeItem(PROJECT_ORDER_KEY)
   // 本文件聚焦 SessionItem 行为/事件链而非面板开合：预置默认区展开（开合默认收起语义）
-  localStorage.setItem('taiji:sidebar-group-state', JSON.stringify({ flat: [], groups: [], defaultZone: true }))
+  localStorage.setItem(GROUP_STATE_KEY, JSON.stringify({ flat: [], groups: [], defaultZone: true }))
 })
 
 afterEach(() => {
@@ -499,10 +500,10 @@ function findExportItem(): HTMLElement | null {
 beforeEach(() => {
   setActivePinia(createPinia())
   localStorage.removeItem('taiji:session-markers')
-  localStorage.removeItem('taiji:sidebar-group-state')
-  localStorage.removeItem('taiji:sidebar-project-order')
+  localStorage.removeItem(GROUP_STATE_KEY)
+  localStorage.removeItem(PROJECT_ORDER_KEY)
   // 本文件聚焦 SessionItem 行为/事件链而非面板开合：预置默认区展开（开合默认收起语义）
-  localStorage.setItem('taiji:sidebar-group-state', JSON.stringify({ flat: [], groups: [], defaultZone: true }))
+  localStorage.setItem(GROUP_STATE_KEY, JSON.stringify({ flat: [], groups: [], defaultZone: true }))
 })
 
 afterEach(() => {
@@ -649,10 +650,10 @@ function makeSummary(id: string, projectId?: string): SessionSummary {
 beforeEach(() => {
   setActivePinia(createPinia())
   localStorage.removeItem('taiji:session-markers')
-  localStorage.removeItem('taiji:sidebar-group-state')
-  localStorage.removeItem('taiji:sidebar-project-order')
+  localStorage.removeItem(GROUP_STATE_KEY)
+  localStorage.removeItem(PROJECT_ORDER_KEY)
   // 本文件聚焦 SessionItem 行为/事件链而非面板开合：预置默认区展开（开合默认收起语义）
-  localStorage.setItem('taiji:sidebar-group-state', JSON.stringify({ flat: [], groups: [], defaultZone: true }))
+  localStorage.setItem(GROUP_STATE_KEY, JSON.stringify({ flat: [], groups: [], defaultZone: true }))
   vi.clearAllMocks()
 })
 

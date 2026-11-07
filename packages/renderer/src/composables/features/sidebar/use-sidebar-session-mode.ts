@@ -1,8 +1,8 @@
 import { ref } from 'vue'
 import type { SidebarSessionMode } from './useProjectGroups'
 
-/** 模式持久化键（与 useDrawerSplitWidth 的 `taiji:` 前缀 UI 偏好同通道、同 localStorage 直存形态） */
-const SESSION_MODE_KEY = 'taiji:sidebar-session-mode'
+/** 模式持久化键（与 useDrawerSplitWidth 的 `taiji:` 前缀 UI 偏好同通道、同 localStorage 直存形态）；export 供 sidebar 测试消费，防手抄字面量漂移 */
+export const SESSION_MODE_KEY = 'taiji:sidebar-session-mode'
 
 /** 恢复持久化模式（缺失/非法值回退默认平铺——N8 默认 A） */
 function loadSidebarSessionMode(): SidebarSessionMode {

@@ -8,6 +8,7 @@ import { mount, shallowMount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { nextTick } from 'vue';
+import { SESSION_MODE_KEY } from '@/composables/features/sidebar/use-sidebar-session-mode'
 
 // 机械合并产物（同目录合并，vi.mock 相对路径不变）；源文件见各节横幅。重名顶层标识符已加 _mN 后缀。
 
@@ -303,7 +304,7 @@ beforeEach(() => {
   setActivePinia(createPinia())
   vi.clearAllMocks()
   localStorage.removeItem('taiji:projects')
-  localStorage.removeItem('taiji:sidebar-session-mode')
+  localStorage.removeItem(SESSION_MODE_KEY)
   // setSystem 持久化走 PlatformPort.storage（未注入 fail-fast）——注入内存实现
   providePlatform({
     kind: 'mock',

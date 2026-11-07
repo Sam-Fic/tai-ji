@@ -23,9 +23,10 @@ import type { SessionGroup, SessionSummary, Message } from '@taiji/shared'
 import SessionList from '@/components/sidebar/SessionList.vue'
 import SessionItem from '@/components/sidebar/SessionItem.vue'
 import SegmentedTab from '@/components/sidebar/SegmentedTab.vue'
-import { useProjectStore, DEFAULT_PROJECT_ID } from '@/stores/project'
+import { useProjectStore, DEFAULT_PROJECT_ID, PROJECT_ORDER_KEY } from '@/stores/project'
 import { flipProjectGroupToggle, expectTextOnlyTabs } from '../helpers/sidebar-mount'
 import { truncateToolOutput, TRUNCATE_TOOLS, TOOL_OUTPUT_MAX_BYTES } from '@taiji/core'
+import { GROUP_STATE_KEY } from '@/composables/features/sidebar/useProjectGroups'
 
 // ═══ 来源：session-item-force-quit.test.ts ═══
 /** 普通 user session fixture（无 agent 血缘） */
@@ -79,10 +80,10 @@ function findForceQuitItem(): HTMLElement | null {
 beforeEach(() => {
   setActivePinia(createPinia())
   localStorage.removeItem('taiji:session-markers')
-  localStorage.removeItem('taiji:sidebar-group-state')
-  localStorage.removeItem('taiji:sidebar-project-order')
+  localStorage.removeItem(GROUP_STATE_KEY)
+  localStorage.removeItem(PROJECT_ORDER_KEY)
   // 本文件聚焦 SessionItem 行为/事件链而非面板开合：预置默认区展开（开合默认收起语义）
-  localStorage.setItem('taiji:sidebar-group-state', JSON.stringify({ flat: [], groups: [], defaultZone: true }))
+  localStorage.setItem(GROUP_STATE_KEY, JSON.stringify({ flat: [], groups: [], defaultZone: true }))
 })
 
 afterEach(() => {

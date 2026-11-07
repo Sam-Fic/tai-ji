@@ -43,6 +43,7 @@ import ScheduleForm from '@/components/extension/form/ScheduleForm.vue'
 import PlanCommentPopover from '@/components/panel/plan/PlanCommentPopover.vue'
 import SessionList from '@/components/sidebar/SessionList.vue'
 import { findRepoRoot, scanEscConsumers } from './z-scan-helper'
+import { SESSION_MODE_KEY } from '@/composables/features/sidebar/use-sidebar-session-mode'
 import {
   INTEGRATION_TESTS_ENABLED,
   INTEGRATION_TESTS_SKIP_REASON,
@@ -339,7 +340,7 @@ describe('后行档契约：SessionList 确认态本体入聚合（yieldsEsc 让
     expect(wrapper.find('[data-testid="folder-delete-btn"]').attributes('title')).toBe('确认删除此文件夹下所有会话？')
     expect(anyModalSurfaceYieldsEsc(), '确认态本体开着 ⇒ 让位').toBe(true)
     wrapper.unmount()
-    window.localStorage.removeItem('taiji:sidebar-session-mode')
+    window.localStorage.removeItem(SESSION_MODE_KEY)
   })
 
   it('SessionItem 后代归档确认态开着 → 聚合让位（N 后代确认态聚合谓词）', async () => {
@@ -398,6 +399,6 @@ describe('后行档契约：SessionList 确认态本体入聚合（yieldsEsc 让
 
     window.removeEventListener('keydown', onOrchestratorKeydown)
     wrapper.unmount()
-    window.localStorage.removeItem('taiji:sidebar-session-mode')
+    window.localStorage.removeItem(SESSION_MODE_KEY)
   })
 })

@@ -35,8 +35,8 @@ import { useToast } from '@/composables/useToast'
 // 维持 renderer 消费方经 @/stores/project 的既有导入路径（SessionList 等，消费点免改）。
 export { DEFAULT_PROJECT_ID }
 
-/** 用户自定义组序持久化键（与 `taiji:sidebar-session-mode` 等 UI 偏好同通道、同 localStorage 直存形态） */
-const PROJECT_ORDER_KEY = 'taiji:sidebar-project-order'
+/** 用户自定义组序持久化键（与 `taiji:sidebar-session-mode` 等 UI 偏好同通道、同 localStorage 直存形态）；export 供 sidebar 测试消费，防手抄字面量漂移 */
+export const PROJECT_ORDER_KEY = 'taiji:sidebar-project-order'
 
 /** 恢复持久化的自定义组序（命名 project id 数组；缺失/非法值回退空数组 = 无自定义序） */
 function loadProjectOrder(): string[] {

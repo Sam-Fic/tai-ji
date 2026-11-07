@@ -35,7 +35,7 @@ import { resolve } from 'node:path'
 
 import SessionItem from '@/components/sidebar/SessionItem.vue'
 import SessionList from '@/components/sidebar/SessionList.vue'
-import { useProjectStore } from '@/stores/project'
+import { useProjectStore, PROJECT_ORDER_KEY } from '@/stores/project'
 import { __resetMessageCountCacheForTest } from '@/components/sidebar/session-item/use-message-count'
 import {
   registerModalSurface,
@@ -61,6 +61,7 @@ import {
 } from '@/composables/features/sidebar/useImportSession'
 import { bindDrawerSessionId, _resetDrawerForTest } from '@taiji/core/domain/drawer'
 import BtwPanel from '@/components/panel/BtwPanel.vue'
+import { GROUP_STATE_KEY } from '@/composables/features/sidebar/useProjectGroups'
 
 /* ══ 来源：session-item-message-count 的 mock（U3 改造点） ══ */
 
@@ -512,8 +513,8 @@ describe('session-item-agent-badge', () => {
     setActivePinia(createPinia())
     localStorage.removeItem('taiji:session-markers')
     // 本 describe 树聚焦 SessionItem 徽标/菜单链而非面板开合：预置默认区展开（默认收起语义）
-    localStorage.setItem('taiji:sidebar-group-state', JSON.stringify({ flat: [], groups: [], defaultZone: true }))
-    localStorage.removeItem('taiji:sidebar-project-order')
+    localStorage.setItem(GROUP_STATE_KEY, JSON.stringify({ flat: [], groups: [], defaultZone: true }))
+    localStorage.removeItem(PROJECT_ORDER_KEY)
   })
 
   afterEach(() => {

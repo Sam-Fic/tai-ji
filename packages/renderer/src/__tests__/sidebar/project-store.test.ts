@@ -28,7 +28,7 @@ import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import type { Project, SessionGroup, SessionSummary, UpdateErrorPayload, ProxyTestResult } from '@taiji/shared'
 import SessionList from '@/components/sidebar/SessionList.vue'
-import { useProjectStore, DEFAULT_PROJECT_ID } from '@/stores/project'
+import { useProjectStore, DEFAULT_PROJECT_ID, PROJECT_ORDER_KEY } from '@/stores/project'
 import { sessionBelongsToProject } from '@/composables/logic/project-session'
 import { composerInjectionStore } from '@/composables/panel/composer-injection-store'
 import {
@@ -66,6 +66,7 @@ vi.mock('@taiji/core', async (importOriginal) => ({
 
 import { project as projectApi } from '@/api'
 import { requestDomainSync } from '@taiji/core'
+import { SESSION_MODE_KEY } from '@/composables/features/sidebar/use-sidebar-session-mode'
 
 const mockLoad = projectApi.load as unknown as ReturnType<typeof vi.fn>
 const mockCreate = projectApi.createProject as unknown as ReturnType<typeof vi.fn>
@@ -128,7 +129,7 @@ beforeEach(() => {
   mockRename.mockResolvedValue(makeCommandReply([makeProject(DEFAULT_PROJECT_ID, '')], DEFAULT_PROJECT_ID, 1))
   mockRemove.mockResolvedValue(makeCommandReply([makeProject(DEFAULT_PROJECT_ID, '')], DEFAULT_PROJECT_ID, 1))
   mockSetActive.mockResolvedValue(makeCommandReply([makeProject(DEFAULT_PROJECT_ID, '')], DEFAULT_PROJECT_ID, 1))
-  localStorage.removeItem('taiji:sidebar-project-order')
+  localStorage.removeItem(PROJECT_ORDER_KEY)
 })
 
 describe('Project store: 状态机转移全表（§6.5）', () => {
@@ -561,7 +562,7 @@ describe('SessionList 项目分组区三形态呈现（§6.7）+ 编辑入口禁
   })
 
   it('目录模式 failed：失败状态条照常替换分组区；会话本体按 cwd 目录标签序列照常呈现、无默认项目头行（§5.2 会话列表本体（目录分组视图）+ §6.7）', () => {
-    localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    localStorage.setItem(SESSION_MODE_KEY, 'groups')
     const store = useProjectStore()
     store.loadState = 'failed'
     store.loadError = 'runtime not ready'
@@ -580,7 +581,7 @@ describe('SessionList 项目分组区三形态呈现（§6.7）+ 编辑入口禁
     expect(wrapper.find('[data-testid="default-project-head"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="project-group"]').exists()).toBe(false)
     wrapper.unmount()
-    localStorage.removeItem('taiji:sidebar-session-mode')
+    localStorage.removeItem(SESSION_MODE_KEY)
   })
 
   it('重拉子形态（loading + 已持有回执）：保留最后已知分组渲染、不闪占位；编辑入口不禁用（§6.9）', async () => {
@@ -743,7 +744,7 @@ describe('orderedProjects 用户自定义序 + reorderProject（组头拖拽换�
     store.reorderProject('b', 'c') // 以 lastUsedAt 序 [a,b,c] 为基准：b 移到 c 后 → [a,c,b]
 
     expect(store.orderedProjects.map((p) => p.id)).toEqual(['a', 'c', 'b', DEFAULT_PROJECT_ID])
-    expect(JSON.parse(localStorage.getItem('taiji:sidebar-project-order') ?? '[]')).toEqual(['a', 'c', 'b'])
+    expect(JSON.parse(localStorage.getItem(PROJECT_ORDER_KEY) ?? '[]')).toEqual(['a', 'c', 'b'])
   })
 
   it('无自定义序时退化为 lastUsedAt 稳定序（持久化键缺省回退空数组）', () => {
@@ -753,7 +754,7 @@ describe('orderedProjects 用户自定义序 + reorderProject（组头拖拽换�
       makeProject(DEFAULT_PROJECT_ID, ''),
     ])
     expect(useProjectStore().orderedProjects.map((p) => p.id)).toEqual(['b', 'a', DEFAULT_PROJECT_ID])
-    expect(localStorage.getItem('taiji:sidebar-project-order')).toBeNull()
+    expect(localStorage.getItem(PROJECT_ORDER_KEY)).toBeNull()
   })
 
   it('持久化序跨 store 实例恢复（localStorage 直存 → 新 pinia 实例读回）', () => {
@@ -784,7 +785,7 @@ describe('orderedProjects 用户自定义序 + reorderProject（组头拖拽换�
     store.reorderProject('a', 'a')
     store.reorderProject('ghost', 'a')
     store.reorderProject('a', 'ghost')
-    expect(localStorage.getItem('taiji:sidebar-project-order')).toBeNull()
+    expect(localStorage.getItem(PROJECT_ORDER_KEY)).toBeNull()
     expect(store.orderedProjects.map((p) => p.id)).toEqual(['a', 'b', DEFAULT_PROJECT_ID])
   })
 
@@ -796,15 +797,15 @@ describe('orderedProjects 用户自定义序 + reorderProject（组头拖拽换�
     ])
     const store = useProjectStore()
     store.reorderProject('b', 'a') // [b, a]
-    expect(JSON.parse(localStorage.getItem('taiji:sidebar-project-order') ?? '[]')).toEqual(['b', 'a'])
+    expect(JSON.parse(localStorage.getItem(PROJECT_ORDER_KEY) ?? '[]')).toEqual(['b', 'a'])
 
     // 删除 b（直写缓存视图模拟 remove 回执）后再换位：新写入以现存命名项目全量重写，残留 b 清理
     store.projects = store.projects.filter((p) => p.id !== 'b')
     store.reorderProject('a', 'a') // no-op 不写——换一条真实路径：补回 b 并跨它换位
-    expect(JSON.parse(localStorage.getItem('taiji:sidebar-project-order') ?? '[]')).toEqual(['b', 'a']) // 未变
+    expect(JSON.parse(localStorage.getItem(PROJECT_ORDER_KEY) ?? '[]')).toEqual(['b', 'a']) // 未变
     store.projects = [makeProject('a', 'A', 300), makeProject('c', 'C', 100), makeProject(DEFAULT_PROJECT_ID, '')]
     store.reorderProject('c', 'a') // lastUsedAt 序 [a,c]：c 在 a 后，上拖落 a → 插到 a 前
-    expect(JSON.parse(localStorage.getItem('taiji:sidebar-project-order') ?? '[]')).toEqual(['c', 'a'])
+    expect(JSON.parse(localStorage.getItem(PROJECT_ORDER_KEY) ?? '[]')).toEqual(['c', 'a'])
   })
 })
 

@@ -3,12 +3,14 @@ import SessionItem from '@/components/sidebar/SessionItem.vue';
 import SessionList from '@/components/sidebar/SessionList.vue';
 import { SESSION_DRAG_MIME, PROJECT_DRAG_MIME } from '@/components/sidebar/session-drag';
 import { project as projectApi } from '@/api';
-import { DEFAULT_PROJECT_ID, useProjectStore } from '@/stores/project';
+import { DEFAULT_PROJECT_ID, useProjectStore, PROJECT_ORDER_KEY } from '@/stores/project';
 import type { SessionGroup, SessionSummary } from '@taiji/shared';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { nextTick } from 'vue';
+import { SESSION_MODE_KEY } from '@/composables/features/sidebar/use-sidebar-session-mode';
+import { GROUP_STATE_KEY } from '@/composables/features/sidebar/useProjectGroups';
 
 // 机械合并产物（同目录合并，vi.mock 相对路径不变）；源文件见各节横幅。重名顶层标识符已加 _mN 后缀。
 
@@ -56,8 +58,6 @@ function seedDefaultLoaded(): void {
   markLoaded(store)
 }
 
-const SESSION_MODE_KEY = 'taiji:sidebar-session-mode'
-const GROUP_STATE_KEY = 'taiji:sidebar-group-state'
 
 /** 预置默认区展开（组展开态默认收起——本节用例聚焦渲染结构而非开合语义，预置恢复
  *  默认区内容可见基线；组体常驻 DOM 无需预置组展开） */
@@ -128,7 +128,7 @@ beforeEach(() => {
   localStorage.removeItem('taiji:projects')
   localStorage.removeItem(SESSION_MODE_KEY)
   localStorage.removeItem(GROUP_STATE_KEY)
-  localStorage.removeItem('taiji:sidebar-project-order')
+  localStorage.removeItem(PROJECT_ORDER_KEY)
   document.body.innerHTML = ''
 })
 
@@ -278,7 +278,7 @@ describe('SessionList: 锚定切换（平铺模式 = 多开）', () => {
 describe('SessionList: folder 删除检查随项目分组收紧（review MF-2 防护）', () => {
   // folder 操作是目录模式组头元素，本 describe 断言其渲染检查，预置分组模式 + 默认区展开
   beforeEach(() => {
-    localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    localStorage.setItem(SESSION_MODE_KEY, 'groups')
     presetDefaultZoneOpen()
   })
 
@@ -582,7 +582,7 @@ describe('DefaultProjectHead：锚定/新建入口（修复锚定切走后新会
   })
 
   it('目录模式：头行同样渲染（目录标签序列之前）', () => {
-    localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    localStorage.setItem(SESSION_MODE_KEY, 'groups')
     presetDefaultZoneOpen()
     setupProjects('proj-a')
     const wrapper = mountAttachedList()
@@ -683,7 +683,7 @@ function findNewSessionButton(wrapper: ReturnType<typeof mountFolderList>) {
 describe('SessionList 目录行 + 按钮首屏渲染', () => {
   beforeEach(() => {
     // N8 A/C 双模式改造后目录操作归 C 分组模式组头承载（A 平铺无组头）
-    localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    localStorage.setItem(SESSION_MODE_KEY, 'groups')
     presetDefaultZoneOpen()
   })
 
@@ -705,7 +705,7 @@ describe('SessionList 目录行 + 按钮首屏渲染', () => {
 
 describe('SessionList 目录行 + 按钮点击交互', () => {
   beforeEach(() => {
-    localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    localStorage.setItem(SESSION_MODE_KEY, 'groups')
     presetDefaultZoneOpen()
   })
 
@@ -740,7 +740,7 @@ describe('SessionList 目录行 + 按钮点击交互', () => {
 
 describe('SessionList 目录行 + 按钮 vs 删除按钮检查差异', () => {
   beforeEach(() => {
-    localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    localStorage.setItem(SESSION_MODE_KEY, 'groups')
     presetDefaultZoneOpen()
   })
 
@@ -846,7 +846,7 @@ describe('SessionList: 平铺默认区事件透传', () => {
 describe('SessionList: 目录模式默认区（置顶目录标签 + folder 行操作）', () => {
   beforeEach(() => {
     // 目录模式（与组件 localStorage 持久化键一致，同 session-list-folder-delete 范式）
-    localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    localStorage.setItem(SESSION_MODE_KEY, 'groups')
     presetDefaultZoneOpen()
   })
 
@@ -1139,7 +1139,7 @@ function findFolderDeleteButton(wrapper: ReturnType<typeof mountList>) {
 describe('SessionList folder 删除按钮首屏渲染', () => {
   // N8：目录操作归 C 分组模式组头承载——describe 内 hook 晚于顶层 hook 执行，模式预置不被抹
   beforeEach(() => {
-    localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    localStorage.setItem(SESSION_MODE_KEY, 'groups')
     presetDefaultZoneOpen()
   })
 
@@ -1157,7 +1157,7 @@ describe('SessionList folder 删除按钮首屏渲染', () => {
 describe('SessionList folder 删除两段式确认（W2TC5）', () => {
   // N8：目录操作归 C 分组模式组头承载——describe 内 hook 晚于顶层 hook 执行，模式预置不被抹
   beforeEach(() => {
-    localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    localStorage.setItem(SESSION_MODE_KEY, 'groups')
     presetDefaultZoneOpen()
   })
 
@@ -1285,9 +1285,9 @@ function groupOf_m2(wrapper: ReturnType<typeof mountList_m2>, projectId: string)
 beforeEach(async () => {
   setActivePinia(createPinia())
   localStorage.removeItem('taiji:projects')
-  localStorage.removeItem('taiji:sidebar-session-mode')
+  localStorage.removeItem(SESSION_MODE_KEY)
   localStorage.removeItem(GROUP_STATE_KEY)
-  localStorage.removeItem('taiji:sidebar-project-order')
+  localStorage.removeItem(PROJECT_ORDER_KEY)
   document.body.innerHTML = ''
 })
 
@@ -1454,7 +1454,7 @@ describe('新建项目入口（区头「+」→ 列表顶部草稿行）', () =>
 
 describe('目录模式 = 浏览态（方案 A 目录裁决：组头只开合、不切换锚定）', () => {
   beforeEach(() => {
-    localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    localStorage.setItem(SESSION_MODE_KEY, 'groups')
   })
 
   it('全部项目组默认收起（默认收起裁决：无持久化记录 = 空展开集）', () => {
@@ -1516,7 +1516,7 @@ describe('侧栏面板开合：默认收起 + 持久化', () => {
 
   it('目录模式：点默认区头行仅翻转开合，不切锚定（浏览态语义）', async () => {
     const store = setupProjects('proj-a')
-    localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    localStorage.setItem(SESSION_MODE_KEY, 'groups')
     const wrapper = mountAttachedList()
     const head = () => wrapper.find('[data-testid="default-project-head"]')
 
@@ -1580,7 +1580,7 @@ describe('默认区收起下的落点可见性保证（+ 新建 / session 拖入
   })
 
   it('目录模式：点收起命名组的组头「+」→ 该组强制展开（dirExpanded 命中，新会话归属地可见）', async () => {
-    localStorage.setItem('taiji:sidebar-session-mode', 'groups')
+    localStorage.setItem(SESSION_MODE_KEY, 'groups')
     const store = setupProjects('proj-a')
     mockSetActive.mockImplementation(async (pid: string) => commandReply(store, { state: { projects: store.projects.map((p) => ({ ...p })), activeProjectId: pid } }))
     const wrapper = mountAttachedList()
@@ -1711,7 +1711,7 @@ describe('project 组头拖拽换位（PROJECT_DRAG_MIME 与 session 拖拽分�
     // drop 后高亮清除
     expect(headC.attributes('data-project-dragover')).toBeUndefined()
     // 自定义序持久化（localStorage 直存）
-    expect(JSON.parse(localStorage.getItem('taiji:sidebar-project-order') ?? '[]')).toEqual(['proj-b', 'proj-c', 'proj-a'])
+    expect(JSON.parse(localStorage.getItem(PROJECT_ORDER_KEY) ?? '[]')).toEqual(['proj-b', 'proj-c', 'proj-a'])
     wrapper.unmount()
   })
 
@@ -1738,7 +1738,7 @@ describe('project 组头拖拽换位（PROJECT_DRAG_MIME 与 session 拖拽分�
     await nextTick()
     expect(wrapper.findAll('[data-testid="project-group"]').map((g) => g.attributes('data-project-id')))
       .toEqual(['proj-a', 'proj-b'])
-    expect(localStorage.getItem('taiji:sidebar-project-order')).toBeNull()
+    expect(localStorage.getItem(PROJECT_ORDER_KEY)).toBeNull()
     wrapper.unmount()
   })
 

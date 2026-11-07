@@ -50,8 +50,8 @@ type SidebarGroupPersist = {
   defaultZone: boolean
 }
 
-/** 展开态持久化键（与 `taiji:sidebar-session-mode` 等 UI 偏好同通道、同 localStorage 直存形态） */
-const GROUP_STATE_KEY = 'taiji:sidebar-group-state'
+/** 展开态持久化键（与 `taiji:sidebar-session-mode` 等 UI 偏好同通道、同 localStorage 直存形态）；export 供 sidebar 测试消费，防手抄字面量漂移 */
+export const GROUP_STATE_KEY = 'taiji:sidebar-group-state'
 
 const DEFAULT_GROUP_PERSIST: SidebarGroupPersist = { flat: [], groups: [], defaultZone: false }
 
