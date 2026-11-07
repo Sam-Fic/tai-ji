@@ -1,5 +1,11 @@
 # @zhushanwen/extension-protocol
 
+## 0.30.0
+
+### Minor Changes
+
+- f050b6853: Add public subpath exports `./aggregation` (model-routing domain contract: types + validation/pure functions) and `./provider-store-paths` (providers.json / quota-cache.json path formulas). Both modules moved from the private @taiji/shared so npm-published extensions can consume the same single source.
+
 ## 0.29.0
 
 ### Minor Changes

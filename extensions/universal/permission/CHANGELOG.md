@@ -1,5 +1,11 @@
 # @zhushanwen/pi-permission
 
+## 1.6.12
+
+### Patch Changes
+
+- f050b6853: chore: refresh dependency range (triggered by @zhushanwen/extension-protocol@0.29.0 → @zhushanwen/extension-protocol@0.30.0)
+
 ## 1.6.11
 
 ### Patch Changes

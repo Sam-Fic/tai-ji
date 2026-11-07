@@ -1,5 +1,11 @@
 # @zhushanwen/pi-session-reader
 
+## 0.15.1
+
+### Patch Changes
+
+- f050b6853: chore: refresh dependency range (triggered by @zhushanwen/extension-protocol@0.29.0 → @zhushanwen/extension-protocol@0.30.0)
+
 ## 0.15.0
 
 ### Minor Changes

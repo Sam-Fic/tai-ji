@@ -1,5 +1,11 @@
 # @zhushanwen/subagent-core
 
+## 2.3.2
+
+### Patch Changes
+
+- f050b6853: chore: refresh dependency range (triggered by @zhushanwen/extension-protocol@0.29.0 → @zhushanwen/extension-protocol@0.30.0)
+
 ## 2.3.1
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # @zhushanwen/pi-subagent-workflow
 
+## 10.6.2
+
+### Patch Changes
+
+- f050b6853: chore: refresh dependency range (triggered by @zhushanwen/extension-protocol@0.29.0 → @zhushanwen/extension-protocol@0.30.0, @zhushanwen/pi-delivery-port@0.4.2 → @zhushanwen/pi-delivery-port@0.4.3, @zhushanwen/pi-pending-notifications@0.12.0 → @zhushanwen/pi-pending-notifications@0.12.1, @zhushanwen/pi-structured-output@6.3.0 → @zhushanwen/pi-structured-output@6.3.1)
+
 ## 10.6.1
 
 ### Patch Changes
