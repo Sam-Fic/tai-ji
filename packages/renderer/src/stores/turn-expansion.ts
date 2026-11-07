@@ -41,12 +41,6 @@ export const useTurnExpansionStore = defineStore('turn-expansion', () => {
   // partition.set(idx, ...) 时精确通知该 idx 的订阅者（TC-w1-7/w1-9：一次 expand 一次重跑）。
   const partitions = new Map<string, TurnExpansionPartition>()
 
-  // takeover 分区：与 partitions 同构（外层 plain Map<sid, reactive Map<turnKey, boolean>>），
-  // 独立存放「展开全部接管态」（D6/TC2，窗口级语义）。与 isExpanded/collapse 的 turn 级展开态分离——
-  // takeover 驱动 computeTraceWindow 的入参（全量 vs 窗口切片），isExpanded 驱动 trace 区显隐；
-  // 两者独立可并存（一个 turn 可同时 isExpanded=true 与 takeover=true，语义不冲突）。
-  const takeoverPartitions = new Map<string, TurnExpansionPartition>()
-
   /**
    * 取或创建 session 分区。新分区用 reactive(new Map()) 包裹，使内层 idx 的 get/set
    * 被追踪（effect 读 partition.get(idx) 后，partition.set(idx, ...) 触发失效重跑）。
@@ -92,30 +86,6 @@ export const useTurnExpansionStore = defineStore('turn-expansion', () => {
     getPartition(sid).set(key, false)
   }
 
-  // ── takeover（展开全部接管态，D6/TC2，与 isExpanded 同分区范式独立存放）──
-  /**
-   * 取或创建 takeover session 分区（与 getPartition 同范式：惰性创建 reactive Map）。
-   * effect 读 isTakeover(sid, key) 时建立对 key 的依赖，setTakeover 触发精确失效重跑。
-   */
-  function getTakeoverPartition(sid: string): TurnExpansionPartition {
-    let p = takeoverPartitions.get(sid)
-    if (!p) {
-      p = reactive(new Map<string, boolean>())
-      takeoverPartitions.set(sid, p)
-    }
-    return p
-  }
-
-  /** 查询指定 turn 是否处于「展开全部」接管态。key 不存在默认 false。 */
-  function isTakeover(sid: string, key: string): boolean {
-    return getTakeoverPartition(sid).get(key) === true
-  }
-
-  /** 设/清「展开全部」接管态。用赋值 boolean 而非 delete（保响应式链，同 collapse 范式）。 */
-  function setTakeover(sid: string, key: string, on: boolean): void {
-    getTakeoverPartition(sid).set(key, on)
-  }
-
   /**
    * session 销毁时清分区（注册到模块级 cleanup registry，由 triggerSessionCleanups 编排）。
    *
@@ -140,10 +110,6 @@ export const useTurnExpansionStore = defineStore('turn-expansion', () => {
       p.clear()
     }
     partitions.delete(sid)
-    // 同步清 takeover 分区（D6：与 isExpanded 同生命周期，session 销毁时一并释放，防 Map 积累）
-    const tp = takeoverPartitions.get(sid)
-    if (tp) tp.clear()
-    takeoverPartitions.delete(sid)
   }
 
   // 注册到模块级 cleanup registry（session 销毁编排，与 useSessionScopedState 实例同列）。
@@ -155,14 +121,10 @@ export const useTurnExpansionStore = defineStore('turn-expansion', () => {
 
   return {
     partitions,
-    takeoverPartitions,
     isExpanded,
     toggle,
     expand,
     collapse,
-    getTakeoverPartition,
-    isTakeover,
-    setTakeover,
     clearSession,
     /** 反注册 cleanup（测试/HMR/卸载 Pinia 实例时调，避免模块级 registry 累积废弃闭包）。 */
     $unregisterCleanup: () => {

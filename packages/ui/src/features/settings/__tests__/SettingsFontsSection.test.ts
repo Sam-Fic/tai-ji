@@ -97,6 +97,26 @@ describe('SettingsFontsSection 调用契约', () => {
       .not.toContain('settings.fonts.slotValueMissing')
   })
 
+  it('孤儿条目渲染独立行与重试删除入口，点击 emit remove', async () => {
+    const view = mountSection({
+      entries: [
+        { family: 'Menlo', source: 'system' },
+        { family: 'Ghost (导入)', source: 'file', orphaned: true },
+      ],
+      library: [],
+    })
+    const row = view.find('[data-testid="settings-font-orphan-Ghost (导入)"]')
+    expect(row.exists()).toBe(true)
+    expect(row.text()).toContain('settings.fonts.orphanHint')
+    await view.find('[data-testid="settings-font-remove-Ghost (导入)"]').trigger('click')
+    expect(view.emitted('remove')).toEqual([['Ghost (导入)']])
+  })
+
+  it('非孤儿行不渲染孤儿区', () => {
+    const view = mountSection()
+    expect(view.find('[data-testid^="settings-font-orphan-"]').exists()).toBe(false)
+  })
+
   it('安装指引含三平台入口、重启语义与非 CN 版中文字形说明', () => {
     const view = mountSection()
     for (const platform of ['macos', 'windows', 'linux']) {

@@ -70,6 +70,7 @@ export default {
     sourceUnreadable: ' (unreadable; the file may be corrupted)',
     restoreFailed: ' ({reason})',
     slotValueMissing: ' (not found, fell back to system default)',
+    orphanHint: 'Delete incomplete: font is still in use; retry after closing usages',
     importedHint: 'Imported font',
     importTitle: 'Import a font file',
     importFamilyLabel: 'Font name',

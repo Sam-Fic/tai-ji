@@ -53,12 +53,9 @@ export interface ChatViewDeps {
   isHandingOff: (sessionId: string) => boolean
   /** 取 session 内某消息的 changeset 状态（Turn.vue ChangeSetCard 状态渲染，messageId 锁定具体消息） */
   getChangeSetStatus: (sessionId: string, messageId: string) => ChangeSetStatus | undefined
-  /** turn 是否展开（useTurnExpansion store 派生，Turn/TurnMeta 消费。key=turnStableId(turn)
-   *  首条消息 id，M5 stable-key——不随消息插删漂移） */
+  /** turn 是否展开（useTurnExpansion store 派生，TurnMeta chevron / TurnRail 指示消费。
+   *  key=turnStableId(turn) 首条消息 id，M5 stable-key——不随消息插删漂移） */
   isExpanded: (turnKey: string) => boolean
-  /** turn 是否处于「展开全部」接管态（useTurnExpansion store 派生，Turn 消费。
-   *  key=turnStableId(turn)，D6/TC2 窗口级语义：takeover=true 时 computeTraceWindow 全量展开） */
-  isTakeover: (turnKey: string) => boolean
   /** session 是否有「正在提交直发」的 pendingSend 瞬时态（chat store 派生视图，UserBubble
    *  submitEdit 双发锁消费——D3：防 send 与 editAndResend 并发覆盖 pendingDirectSends） */
   isPendingSend: (sessionId: string) => boolean
@@ -67,7 +64,7 @@ export interface ChatViewDeps {
    *  markdown-html-sanitize-render D4 双通道矩阵：props 覆盖优先（drawer 文件目录语义），
 
    *  props 缺省（对话流/命令文档零模板传 props 的消费方）经此拿 session cwd。
-   *  optional，同 isTakeover：未 provide（测试 mock 壳）时 MarkdownRenderer 可选链容错
+   *  optional，同 speakStateOf：未 provide（测试 mock 壳）时 MarkdownRenderer 可选链容错
    *  （fallback undefined → ④路 preventDefault 无动作），renderer useChatViewDeps 运行时
    *  总 provide 真实实现 */
   sessionCwdOf?: (sessionId: string) => string | undefined
@@ -103,8 +100,6 @@ export interface ChatViewDeps {
   // ── 操作回调（触发 RPC / store action）──
   /** 切换 turn 展开/折叠（useTurnExpansion store action。key=turnStableId(turn)） */
   toggleExpand: (turnKey: string) => void
-  /** 设/清「展开全部」接管态（useTurnExpansion setTakeover。key=turnStableId(turn)） */
-  setTakeover: (turnKey: string, on: boolean) => void
   /** 中止 bash 执行（useChat.abortBash 经壳桥接；按 session 全量取消——bash 取消无消息粒度） */
   abortBash: (sessionId: string) => void
   /** 编辑并重发 user message（useChat.editAndResend，segments 是重建后的 Segment[]） */
@@ -122,7 +117,7 @@ export interface ChatViewDeps {
   /** 朗读指定消息（ai-voice-tts 设计 §5.1：TurnSummary 朗读按钮操作回调，壳层装配绑
    *  renderer useTtsPlayer——文本清洗（cleanTextForSpeech）与错误 toast 由播放器内部承担；
    *  非 idle 态点击的取消/停止语义也在装配侧分流（stop 同源复用），ui 只管调用本回调）。
-   *  optional，同 isTakeover：与 speakStateOf 成对，未 provide（宿主未接语音能力/测试 mock
+   *  optional，同 sessionCwdOf 族：与 speakStateOf 成对，未 provide（宿主未接语音能力/测试 mock
    *  壳）时朗读按钮不渲染，renderer useChatViewDeps 运行时总 provide 真实实现 */
   onSpeak?: (sessionId: string, message: Message) => void
   /** 打开 drawer tab（useSideDrawer.open 经壳桥接，opts 携带 filePath/commandName） */
@@ -163,7 +158,7 @@ export interface ChatViewDeps {
    * [tool-detail-rich] 工具展开细节富渲染组件（renderer 提供，ui 只路由不实现）：
    * read → 行号 gutter 代码块（shiki）；write → 懒加载 git diff（新文件回退全增 diff）；
    * edit → details.diff unified patch 直嗂 DiffView。ui 侧仅对 read/write/edit 三类
-   * 非失败且有内容的工具路由（Block.vue hasRichDetail），字段缺席（测试 mock 壳 /
+   * 非失败且有内容的工具路由（ToolRow.vue:294 hasRichDetail），字段缺席（测试 mock 壳 /
    * 未接壳的宿主）→ 回退既有纯文本输出渲染。
    * optional，同 sessionCwdOf 族：缺席即回退，不阻断 ChatView 其余功能。
    */

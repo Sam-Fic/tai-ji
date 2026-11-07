@@ -1,8 +1,8 @@
-import { makeToolCall, mountToolBlock, mockChatProvide } from '../../features/chat/__tests__/helpers';
+import { makeToolCall, mountToolRow, mockChatProvide } from '../../features/chat/__tests__/helpers';
 import type { MessageTurn } from '@taiji/core/domain/chat';
 import { useComposerDragDrop } from '@taiji/dom-core/composer/input';
 import type { ToolCall, Message } from '@taiji/shared';
-import { Block, TurnSummary, type ChatViewDeps } from '@taiji/ui';
+import { TurnSummary, type ChatViewDeps } from '@taiji/ui';
 import { mount } from '@vue/test-utils';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ref, effectScope } from 'vue';
@@ -18,11 +18,11 @@ import { ref, effectScope } from 'vue';
  */
 
 // ======================================================================
-// ← features/chat/__tests__/BlockWorkflow.test.ts
+// ← features/chat/__tests__/BlockWorkflow.test.ts（[chat-flow-process-aggregate U3] mountToolRow 直挂 ToolRow）
 // ======================================================================
 
 /**
- * BlockWorkflow 渲染测试（容器扩展点统一 §7.4 workflow 层 2 后形态）。
+ * BlockWorkflow 渲染测试（容器扩展点统一 §7.4 workflow 层 2 后形态；Block 壳退役后经 helpers.mountToolRow 直挂 ToolRow）。
  *
  * workflow 工具组（WORKFLOW_TOOL_NAMES）已删专属行组件（WorkflowRow：collapsed-only
  * 单行 + phases chips + 点击开 overlay——随「宿主删专属行组件」裁决删除），落 ToolRow
@@ -60,7 +60,7 @@ beforeEach(() => {
 
 describe('BlockWorkflow: 通用 tool 形态（§7.4 workflow 层 2 删专属行组件）', () => {
   it('workflow 工具不再渲染专属 workflow-block 容器（落通用 tool 行）', () => {
-    const wrapper = mountToolBlock(makeWorkflow({ status: 'completed' }))
+    const wrapper = mountToolRow(makeWorkflow({ status: 'completed' }))
     // 专属行容器已删（WorkflowRow 的 testid 不再出现）
     expect(wrapper.find('[data-testid="workflow-block"]').exists()).toBe(false)
     // 通用 tool 行 header 在场
@@ -70,7 +70,7 @@ describe('BlockWorkflow: 通用 tool 形态（§7.4 workflow 层 2 删专属行�
   })
 
   it('脚本名/slug 不进 header（通用行无 basename 短名通道；信息在展开区插件树）', () => {
-    const wrapper = mountToolBlock(makeWorkflow({ status: 'completed' }))
+    const wrapper = mountToolRow(makeWorkflow({ status: 'completed' }))
     expect(wrapper.text()).not.toContain('email-validation-refactor')
     expect(wrapper.text()).not.toContain('email-refactor')
     // args.task 不进 header
@@ -78,7 +78,7 @@ describe('BlockWorkflow: 通用 tool 形态（§7.4 workflow 层 2 删专属行�
   })
 
   it('running 态 header 含呼吸弧 loader（通用 tool running 形态）', () => {
-    const wrapper = mountToolBlock(makeWorkflow({ status: 'running' }))
+    const wrapper = mountToolRow(makeWorkflow({ status: 'running' }))
     // 通用 tool 的 running 动效图标（workflow 专属 RunningBlockIcon kind 已随行删除）
     expect(wrapper.find('[data-running-icon="workflow"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('workflow_run')
@@ -101,7 +101,7 @@ describe('BlockWorkflow: details.__gui__ 走通用渲染路径（扩展恢复产
   }
 
   it('有 __gui__：点击 header 展开后 GuiComponentRenderer 渲染插件树（用户可见 DOM 断言）', async () => {
-    const wrapper = mountToolBlock(
+    const wrapper = mountToolRow(
       makeWorkflow({ status: 'completed', details: GUI_DETAILS, output: 'Started workflow' }),
     )
     // 默认收起（completed 非失败）：展开区未渲染
@@ -113,7 +113,7 @@ describe('BlockWorkflow: details.__gui__ 走通用渲染路径（扩展恢复产
   })
 
   it('无 __gui__（历史块）：展开后走文本兜底（output 文本可见），不渲染 GUI', async () => {
-    const wrapper = mountToolBlock(
+    const wrapper = mountToolRow(
       makeWorkflow({ status: 'completed', output: 'Started workflow (run-1).' }),
     )
     await wrapper.find('[data-testid="tool-block-header"]').trigger('click')
@@ -124,14 +124,14 @@ describe('BlockWorkflow: details.__gui__ 走通用渲染路径（扩展恢复产
 
   it('点击 header = 展开切换，不再调用 openWorkflow（专属入口随行组件退役）', async () => {
     const { openWorkflow } = await import('@taiji/core/domain/drawer')
-    const wrapper = mountToolBlock(makeWorkflow({ status: 'completed', details: GUI_DETAILS }))
+    const wrapper = mountToolRow(makeWorkflow({ status: 'completed', details: GUI_DETAILS }))
     await wrapper.find('[data-testid="tool-block-header"]').trigger('click')
     expect(openWorkflow).not.toHaveBeenCalled()
     expect(wrapper.find('[data-testid="gui-renderer-stub"]').exists()).toBe(true)
   })
 
   it('phases chips 已随专属行删除（反查通道不复存在）', () => {
-    const wrapper = mountToolBlock(makeWorkflow({ status: 'running' }), { sessionId: 's9' })
+    const wrapper = mountToolRow(makeWorkflow({ status: 'running' }), { sessionId: 's9' })
     expect(wrapper.find('[data-testid="workflow-block-chips"]').exists()).toBe(false)
   })
 })
@@ -218,7 +218,7 @@ describe('W4TC4: TurnSummary 基本渲染', () => {
 describe('W4TC4: TurnSummary hover actions', () => {
   it('有 lastAssistant 时 hover actions 行本体存在 + 4 并列按钮渲染', () => {
     const wrapper = mountSummary()
-    // [actions-anchor] 组件根 = 行本体（显隐门控与固定槽位在 Block.vue 的插槽包装层，
+    // [actions-anchor] 组件根 = 行本体（显隐门控与固定槽位在 Turn.vue 正文单元 wrapper 与 TextRow 锚行，
     // 本组件维度只验行与按钮形态）
     const actionsDiv = wrapper.find('.turn-summary')
     expect(actionsDiv.exists()).toBe(true)

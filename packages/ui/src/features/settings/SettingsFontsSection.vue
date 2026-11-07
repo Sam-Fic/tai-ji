@@ -118,6 +118,28 @@
         </div>
       </div>
 
+      <!-- 孤儿条目：上次删除时字体使用中、Chromium 拒删的残留（账本已清、字体仍注册）。
+           与账本行区分展示，保留重试删除入口，关闭使用后删除即可清掉。 -->
+      <div v-if="orphanEntries.length > 0" class="flex flex-col gap-1 px-2 pb-2">
+        <div
+          v-for="entry in orphanEntries"
+          :key="entry.family"
+          class="flex items-center gap-2 text-[length:var(--text-xs)]"
+          :data-testid="`settings-font-orphan-${entry.family}`"
+        >
+          <span class="min-w-0 flex-1 truncate text-neutral-mid">{{ entry.family }}</span>
+          <span class="shrink-0 text-neutral-dim">{{ t('settings.fonts.orphanHint') }}</span>
+          <Button
+            variant="ghost"
+            class="h-6 shrink-0 px-2"
+            :data-testid="`settings-font-remove-${entry.family}`"
+            @click="emit('remove', entry.family)"
+          >
+            {{ t('settings.fonts.remove') }}
+          </Button>
+        </div>
+      </div>
+
       <!-- 安装指引：静态文案，taiji 不代下载（D12） -->
       <details class="px-2 pb-2" data-testid="settings-font-install-guide">
         <summary class="cursor-pointer text-[length:var(--text-xs)] text-neutral-mid">
@@ -211,6 +233,8 @@ type FontSlot = 'ui' | 'mono' | 'terminal'
 interface FontOption {
   family: string
   source: 'system' | 'file'
+  /** 孤儿条目：上次删除被 Chromium 拒删的残留（账本已清），保留重试删除入口 */
+  orphaned?: true
 }
 interface ImportSelection {
   path: string
@@ -266,6 +290,9 @@ const filteredEntries = computed(() => {
 })
 
 const sortedLibrary = computed(() => [...props.library].sort((a, b) => b.addedAt - a.addedAt))
+
+/** 孤儿条目行：来源层标 orphaned 的残留字体，独立于账本行展示并保留删除入口。 */
+const orphanEntries = computed(() => props.entries.filter((entry) => entry.orphaned))
 
 const systemListEmpty = computed(
   () => !props.loading && !props.entries.some((entry) => entry.source === 'system'),

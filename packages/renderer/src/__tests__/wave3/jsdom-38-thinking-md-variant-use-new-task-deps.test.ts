@@ -5,7 +5,8 @@ import { useNewTaskDeps } from '@/composables/features/new-task/useNewTaskDeps';
 import { useProjectStore, DEFAULT_PROJECT_ID } from '@/stores/project';
 import { useWorkspaceStore } from '@/stores/workspace';
 import type { RecentWorkspaceRecord } from '@taiji/shared';
-import { Block, MarkdownRenderer, type IncrementalMarkdownCache, type IncrementalMarkdownResult } from '@taiji/ui';
+import { MarkdownRenderer, type IncrementalMarkdownCache, type IncrementalMarkdownResult } from '@taiji/ui';
+import ThinkingRow from '@taiji/ui/features/chat/ThinkingRow.vue';
 import { mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { describe, it, expect, beforeEach, vi, beforeAll, afterAll } from 'vitest';
@@ -201,13 +202,12 @@ describe('W1: MarkdownRenderer variant="thinking" 降级样式', () => {
   })
 })
 
-describe('W2: Block thinking 块走 MarkdownRenderer（不再纯文本插值）', () => {
+describe('W2: thinking 块走 MarkdownRenderer（不再纯文本插值；Block 壳退役后直挂 ThinkingRow）', () => {
   it('thinking 内容 **粗体** → 渲染为 <strong> 元素（非字面星号）', async () => {
     mockMarkdownSegments('<p>这是<strong>粗体</strong>内容</p>')
     // working=false + collapsed=false 才会渲染 .trace-think-body（MarkdownRenderer）
     // working=true 时内容在 header 行内联显示（plain text），不走 MarkdownRenderer
-    const wrapper = mountWithDeps(Block, {
-      type: 'thinking',
+    const wrapper = mountWithDeps(ThinkingRow, {
       content: '这是**粗体**内容',
       working: false,
       collapsed: false,
@@ -226,8 +226,7 @@ describe('W2: Block thinking 块走 MarkdownRenderer（不再纯文本插值）'
   it('thinking 内容无全局 italic（md 结构 + italic 可读性差）', async () => {
     mockMarkdownSegments('<p>test</p>')
     // working=false + collapsed=false 才渲染 .trace-think-body
-    const wrapper = mountWithDeps(Block, {
-      type: 'thinking',
+    const wrapper = mountWithDeps(ThinkingRow, {
       content: 'test',
       working: false,
       collapsed: false,

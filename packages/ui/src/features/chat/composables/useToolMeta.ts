@@ -1,5 +1,5 @@
 /**
- * 工具块补充细节条 meta 计算（从 Block.vue 拆出，控 script 行数）。
+ * 工具块补充细节条 meta 计算。
  *
  * 职责：计算展开后细节条的 meta 项（错误摘要 + 行数/字符数）。
  *  - 行数/字符数：pi 协议不返回文件元信息（exit code / fileSize 均无），前端从 output 自算。

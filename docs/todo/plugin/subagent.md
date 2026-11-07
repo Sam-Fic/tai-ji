@@ -1,6 +1,6 @@
 # subagent 域全链路现状分析
 
-状态：分析完成（2026-10-24；待裁决）
+状态：分析完成（2026-10-24；待裁决）。**漂移警示（2026-11）**：chat-flow-process-aggregate D1 落地后 `Block.vue` 已退役删除、对话流过程段改聚合块形态（`Turn.vue` 编排 → `ProcessAggregateBlock` 族 → `SegmentToolRow` 成员行 / `AggregateToolDetailDrawer` 抽屉），本文层 2 的 Block.vue 分派锚点（§3.1 分派链 / L2-5 / L2 行数表）随之失位，改造判定前需按现行形态重测
 
 分析对象 = 「用户可见的 subagent 能力」从入口到内容的四层链路：
 composer 入口 → 对话流行内呈现 → drawer 一级 tab → overlay 一级 tab。
@@ -234,6 +234,8 @@ packages/renderer/src/lib/subagent-bucket.ts:40
 **分派链**：`Block.vue:69-73`（`type === 'tool' || type === 'agentgraph'` → `ToolRow`）
 → `ToolRow.vue:16`（`isSubagent` → `SubagentRow`）/ `:19`（`isWorkflow` → `WorkflowRow`）/ `:23`（其余普通 tool）。
 
+**分派链漂移（2026-11 chat-flow-process-aggregate D1）**：上行分派链为 2026-10-24 快照——`Block.vue` 已退役删除，现行分派 = `Turn.vue` 编排（正文 `TextRow` 直渲染、过程段收进 `ProcessAggregateBlock` 聚合块三态容器）→ 展开平铺成员行 `process-aggregate/SegmentToolRow` / `SegmentToolGroup`（subagent 类工具暂无专属行委托，按普通工具行渲染）→ 点击开工具详情抽屉 `AggregateToolDetailDrawer`；`ToolRow` / `SubagentRow` 文件保留但已无活跃消费方（上链委托休眠）。本节以下行级锚点同属快照，改造判定前按现行形态重测。
+
 **工具名判定**：`ToolRow.vue:312 isSubagent = SUBAGENT_TOOL_NAMES.has(toolName)`，
 集合 SSOT = `packages/shared/src/constants.ts:29-34`（`subagent` / `subagent_start` / `subagent_manage` / `subagent_message`）。
 对照 `WORKFLOW_TOOL_NAMES`（`shared/src/constants.ts:41-46`）含 `subagents`（批量派发走 workflow run）。
@@ -290,7 +292,7 @@ block 分类：`core/domain/chat/assistant-blocks.ts:25-27`（`isAgentgraphToolN
 | L2-2 | `SubagentRow` 专属行组件 | `SubagentRow.vue` 全 162 行 | 布局（agent/slug/model/thinking/failtag）+ 视觉（`--name` 色）全专属 |
 | L2-3 | **`tool.input` 本地解析**（非协议） | `SubagentRow.vue:90-152` | 依赖 `input` schema 形状（`agent`/`slug`/`model`/`thinkingLevel` 在顶层）；`output` 靠 `JSON.parse` |
 | L2-4 | `__gui__` 通道存在但被 subagent 分支绕过 | `ToolRow.vue:16` vs `:152` | 结构性：分派先于 gui 渲染点，subagent 分支永不达 |
-| L2-5 | `agentgraph` block kind 硬编码 | `core/domain/chat/assistant-blocks.ts:16,25-27` | 新增 agent 类需改 core block 分类 + `Block.vue:69-73` 分派 |
+| L2-5 | `agentgraph` block kind 硬编码 | `core/domain/chat/assistant-blocks.ts:16,25-27` | 新增 agent 类需改 core block 分类 + 聚合块成员行分派（原 `Block.vue:69-73` 分派点已随 chat-flow-process-aggregate D1 退役，见 §3.1 漂移注记） |
 
 **补充事实（数据质量层面的隐藏缺陷）**：`SUBAGENT_TOOL_NAMES` 含 `subagent_manage` 与
 `subagent_message`，但 `SubagentRow` 全篇按 **start 参数形状** 解析（`input.agent`/`input.slug` 顶层）。
@@ -566,7 +568,7 @@ OverlayContent = {kind:'browser'} | {kind:'workflow'} | {kind:'scheduler'} | {ki
 | L1 | `lib/subagent-bucket.ts` | 90 |
 | L2 | `ui/features/chat/SubagentRow.vue` | 162 |
 | L2 | `ui/features/chat/ToolRow.vue` | 487 |
-| L2 | `ui/features/chat/Block.vue` | 150 |
+| L2 | ~~`ui/features/chat/Block.vue`~~（已随 chat-flow-process-aggregate D1 退役删除） | ~~150~~ |
 | L2 | `ui/features/chat/SystemNotice.vue` | 359 |
 | L2 | `ui/features/chat/block-icon.ts` | 152 |
 | L2 | `ui/features/chat/RunningBlockIcon.vue` | 336 |

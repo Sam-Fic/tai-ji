@@ -3,11 +3,11 @@
     TurnSummary：hover actions 操作栏（复制/朗读/fork/handoff）。从 Turn.vue 拆出。
     [block-rendering M0] 去内容化：不再渲染正文文字（text 全 inline 到 turn 内容区统一正文样式）
     与 streaming 光标（迁移到 Turn.vue trace 容器末尾 streaming-tail）。
-    [actions-anchor] 本组件由 Turn.vue 经末位 text 块（Block.vue）的 #turn-actions 插槽挂载：
-    流内固定槽位 = text 块下部一行（2026-10-15 用户裁决，对齐 UserBubble hover actions
-    同族形态——原悬浮 chip「text 上方右侧 + 不透明底」退役）。透明底因此可行：行体不再
-    覆盖任何文字；悬停区 = text 块行 + 本行（group/text 门控在 Block 的插槽包装层），
-    按钮是 text 块的 DOM 子孙，鼠标从正文移入按钮期间悬停态经 DOM 祖先传递不熄灭。
+    [actions-anchor] 本组件由 Turn.vue 经末位正文单元 TextRow 的 #turn-actions 插槽挂载
+    （Turn.vue:223-229）：流内固定槽位 = text 块下部一行（2026-10-15 用户裁决，对齐
+    UserBubble hover actions 同族形态——原悬浮 chip「text 上方右侧 + 不透明底」退役）。
+    透明底因此可行：行体不再覆盖任何文字；悬停区 = text 块行 + 本行（group/text 门控在
+    TextRow 根），按钮是 text 块的 DOM 子孙，鼠标从正文移入按钮期间悬停态经 DOM 祖先传递不熄灭。
     fork/handoff useTurnActions 在内部调用，不冒泡。
   -->
   <!--

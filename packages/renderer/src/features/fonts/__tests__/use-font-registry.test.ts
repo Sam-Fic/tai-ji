@@ -100,6 +100,39 @@ describe('use-font-registry 删除通道', () => {
     })
     expect(harness.transport.setTerminalConfig).toHaveBeenCalledTimes(1)
   })
+
+  it('FontFace 使用中被拒删 → 账本已清但 faces 残留标 orphaned，warn 留痕', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const harness = makeHarness()
+    const entry = await harness.registry.importFont('/fonts/Maple.ttf', 'Maple Mono')
+    // 模拟 Chromium 对使用中的 FontFace 拒删：delete 返回 false，face 留在 document.fonts
+    environment.fontSet.delete.mockReturnValueOnce(false)
+
+    await harness.registry.removeImportedFont(entry.family)
+
+    expect(harness.system.value.fontLibrary).toEqual([])
+    expect(environment.fontSet.size).toBe(1)
+    const orphan = harness.registry.entries.value.find((item) => item.family === entry.family)
+    expect(orphan?.orphaned).toBe(true)
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(warnSpy.mock.calls[0]?.[0]).toContain(entry.family)
+    expect(warnSpy.mock.calls[0]?.[0]).toContain('still in use')
+  })
+
+  it('孤儿条目（账本已清、faces 残留）可重试删除：清 faces、不写账本、列表摘除', async () => {
+    const harness = makeHarness()
+    const entry = await harness.registry.importFont('/fonts/Maple.ttf', 'Maple Mono')
+    // 模拟上次删除已清账本但 FontFace 被拒删残留的孤儿态：账本无行、faces 仍持有
+    harness.setSystem.mockClear()
+    harness.system.value = { ...harness.system.value, fontLibrary: [] }
+
+    await harness.registry.removeImportedFont(entry.family)
+
+    expect(environment.fontSet.delete).toHaveBeenCalledTimes(1)
+    expect(environment.fontSet.size).toBe(0)
+    expect(harness.setSystem).not.toHaveBeenCalled()
+    expect(harness.registry.entries.value.some((item) => item.family === entry.family)).toBe(false)
+  })
 })
 
 describe('use-font-registry 启动重放', () => {
@@ -133,6 +166,8 @@ describe('use-font-registry 启动重放', () => {
   })
 
   it('单项失败不阻断其他项；失败标注只在本会话内，条目仍可删除', async () => {
+    // faces 未持有（重放失败项）时的 delete false 是「无此 FontFace」，不得打 in-use 留痕
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const harness = makeHarness(library)
     harness.readFontBytes.mockImplementation(async (path) => path.includes('custom')
       ? { ok: false, reason: '源文件已不存在' }
@@ -148,6 +183,7 @@ describe('use-font-registry 启动重放', () => {
     await harness.registry.removeImportedFont('Custom (导入)')
     expect(harness.system.value.fontLibrary).toEqual([library[0]])
     expect(harness.registry.replayFailures.value).toEqual({})
+    expect(warnSpy).not.toHaveBeenCalled()
   })
 
   it('重放失败项仍占家族名；再次导入同名文件不会制造重复账本身份', async () => {

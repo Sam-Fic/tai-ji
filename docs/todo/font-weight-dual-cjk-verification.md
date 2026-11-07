@@ -6,7 +6,7 @@
 
 ## 现状（终态）
 
-`packages/renderer/src/style.css` 三档字重令牌为 `--fw-text: 500` / `--fw-mid: 600` / `--fw-bold: 700`（2026-10-08 commit 28f1c8555 将 400/500/600 整体上移一档，档差不变；docs/DESIGN.md §4.6 同批回写）。正文 500、行容器/块标签/工具名 600、markdown 标题与强调 700（消费点以代码为准：`packages/ui/src/features/chat/Block.vue` 系列行头 `[font-weight:var(--fw-mid)]`、`MarkdownRenderer.vue` 标题 `--fw-bold`）。demo 的「加重」整体切换模式（各档 +100，对标 xterm fontWeight/fontWeightBold）未实现。
+`packages/renderer/src/style.css` 三档字重令牌为 `--fw-text: 500` / `--fw-mid: 600` / `--fw-bold: 700`（2026-10-08 commit 28f1c8555 将 400/500/600 整体上移一档，档差不变；docs/DESIGN.md §4.6 同批回写）。正文 500、行容器/块标签/工具名 600、markdown 标题与强调 700（消费点以代码为准：行族组件行头 `[font-weight:var(--fw-mid)]`（`TurnMeta.vue` / 聚合块 `process-aggregate/SegmentToolRow.vue` / `SegmentToolGroup.vue` 等——原 `Block.vue` 系列行头已随 chat-flow-process-aggregate D1 退役拆分至上述组件）、`MarkdownRenderer.vue` 标题 `--fw-bold`）。demo 的「加重」整体切换模式（各档 +100，对标 xterm fontWeight/fontWeightBold）未实现。
 
 ## 核验结论（2026-10-12，原待做 1）
 

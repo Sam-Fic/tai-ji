@@ -101,6 +101,14 @@ export function createFontRegistry(deps: FontRegistryDeps = {}) {
       if (!knownFiles.has(item.family)) collected.push({ family: item.family, source: 'file' })
     }
 
+    // 孤儿条目标出（删除可重试）：上次删除时 FontFace 在使用中被 Chromium 拒删，
+    // 账本行已清但 fileSource 仍持有——仍在列表，置 orphaned 后 UI 保留重试删除入口。
+    // 账本补行（重放失败项）账本有行，不打标。
+    const libraryFamilies = new Set(library.map((item) => item.family))
+    for (const entry of collected) {
+      if (entry.source === 'file' && !libraryFamilies.has(entry.family)) entry.orphaned = true
+    }
+
     const addedAt = new Map(library.map((item) => [item.family, item.addedAt]))
     const seen = new Set<string>()
     const files: FontEntry[] = []
@@ -178,10 +186,15 @@ export function createFontRegistry(deps: FontRegistryDeps = {}) {
   /**
    * 删除账本 + FontFace，并清理两个配置域的当前引用。终端写前先读最新完整配置，
    * 避免与 TerminalPage / AppearancePage 的 read-modify-write 互相覆盖兄弟字段。
+   *
+   * 账本无行但 fileSource 仍持有（上次删除时 FontFace 在使用中被 Chromium 拒删的
+   * 孤儿条目）也放行——重试清理 FontFace 并清残留引用；两者皆无的未知家族才早退。
    */
   async function removeImportedFont(family: string): Promise<void> {
     const library = store.system.value.fontLibrary ?? []
-    if (!library.some((item) => item.family === family)) return
+    const inLibrary = library.some((item) => item.family === family)
+    const fileFamilies = new Set((await fileSource.list()).map((entry) => entry.family))
+    if (!inLibrary && !fileFamilies.has(family)) return
 
     const terminal = await transport.getTerminalConfig()
     if (terminal.config.fontFamily === family) {
@@ -189,11 +202,19 @@ export function createFontRegistry(deps: FontRegistryDeps = {}) {
     }
 
     const fonts = withoutDeletedFamily(store.system.value.fonts, family)
-    await store.setSystem({
-      fontLibrary: library.filter((item) => item.family !== family),
-      ...(fonts.changed ? { fonts: fonts.value } : {}),
-    })
-    fileSource.delete(family)
+    const patch: Partial<SystemSettings> = {}
+    if (inLibrary) patch.fontLibrary = library.filter((item) => item.family !== family)
+    if (fonts.changed) patch.fonts = fonts.value
+    if (Object.keys(patch).length > 0) await store.setSystem(patch)
+    // 消费 delete 返回值：FontFace 使用中时 Chromium 拒删（false），faces Map 残留为
+    // 孤儿条目；warn 留痕 family 与 in-use 形态，关闭使用后从列表孤儿行可再次删除。
+    // faces 未持有（重放失败项 / 未知家族）时的 false 是「无此 FontFace」，不打 in-use 留痕。
+    if (!fileSource.delete(family) && fileFamilies.has(family)) {
+      console.warn(
+        `[fonts] FontFace delete rejected for "${family}" (still in use); ` +
+          'font library row removed, an orphaned row remains in the list until deletion succeeds',
+      )
+    }
     if (replayFailures.value[family] !== undefined) {
       const next = { ...replayFailures.value }
       delete next[family]

@@ -8,7 +8,7 @@
  * SessionListPort 注入（deps.ports.sessionList——W4b 起壳侧接 session.list
  * {surface:'sidebar'}，§3.3.1）+ selectSession 经 SessionSelectPort 注入
  * （deps.ports.selectSession，C-W3-2）。JumpResult.drawerTab 意图返回（'detail'）保持——
- * 本域只返跳转意图，接收点（SearchModal）据 drawerTab 打开 SideDrawer。
+ * 本域只返跳转意图，接收点（SearchModal）据 drawerTab 打开 DrawerPanel。
  *
  * 数据流：SearchModal.confirmSel → confirm(item, ctx) → type switch →
  *   command: AppCommand → commandStore 取 action 执行；
@@ -105,7 +105,7 @@ export function useSearchJump(deps: SearchDeps) {
       // read 成功后：selectFile(path) 同步注入 detail tab（W3）→ DetailPane 拉起加载渲染（绕过吞错层直调）
       deps.fileTree.selectFile(item.sub)
       writeRecent(item)
-      // drawerTab:'detail' 提示调用方（SearchModal）打开 SideDrawer detail tab——
+      // drawerTab:'detail' 提示调用方（SearchModal）打开 DrawerPanel detail tab——
       // DetailPane 只在 activeTab==='detail' 时挂载，selectFile 单独注入 tab 无法立即渲染。
       // 对比 FileView.onSelectRow：selectFile(path) + drawer.open('detail') 双步，此处同构。
       return { ok: true, drawerTab: 'detail' }

@@ -16,7 +16,7 @@ import {
   type ReadFontBytesPayload,
   type ReadFontBytesResult,
 } from '@taiji/shared'
-import { getDataDir, getPiAgentDir } from '@taiji/shared/paths'
+import { getPiAgentDir } from '@taiji/shared/paths'
 import { mainLogger } from '../logs/main-logger.js'
 
 const BYTES_PER_KIB = 1024
@@ -51,8 +51,7 @@ export interface FontByteView { // oe-exempt:20261104:test:只读字节视图的
 
 export interface FontPathPolicy { // oe-exempt:20261104:test:校验策略参数形状（纯数据）
   homeDir: string
-  dataDir: string
-  /** pi agent 目录禁区根（paths.ts getPiAgentDir SSOT；禁止手拼 `<dataDir>/agent` 层级——布局迁移时手拼会漂移致禁区静默失守）。 */
+  /** pi agent 目录禁区根（paths.ts getPiAgentDir SSOT；禁止手拼 agent 目录层级——布局迁移时手拼会漂移致禁区静默失守）。 */
   agentDir: string
 }
 
@@ -82,7 +81,7 @@ function isInsideDirectory(candidate: string, directory: string): boolean {
 /** 对 realpath 后的路径执行四类凭据目录禁区；其余位置（含系统字体目录）不按路径封禁。 */
 export function validateFontPath(
   filePath: string,
-  policy: FontPathPolicy = { homeDir: homedir(), dataDir: getDataDir(), agentDir: getPiAgentDir() },
+  policy: FontPathPolicy = { homeDir: homedir(), agentDir: getPiAgentDir() },
 ): FontValidationResult {
   if (!isAbsolute(filePath)) return { ok: false, reason: REASON_INVALID_PATH }
   const forbidden = [
@@ -125,7 +124,7 @@ export async function readFontFileBytes(
   const extension = extname(rawPath)
   if (!isSupportedExtension(extension)) return { ok: false, reason: REASON_UNSUPPORTED }
   const io = options.io ?? { realpath, stat, readFile }
-  const policy = options.policy ?? { homeDir: homedir(), dataDir: getDataDir(), agentDir: getPiAgentDir() }
+  const policy = options.policy ?? { homeDir: homedir(), agentDir: getPiAgentDir() }
 
   let actualPath: string
   try {

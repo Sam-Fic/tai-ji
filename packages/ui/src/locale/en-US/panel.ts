@@ -205,24 +205,36 @@ export default {
     // [u3 remove-turn-progress-bar] TurnMeta generated tokens (TurnMeta.vue, design §2.1/§2.4;
     // 2026-09 token 口径: sum of reported output tokens over all LLM calls in the turn, no estimation)
     generatedTokens: 'Generated {tokens} tokens',
-    traceExpandAll: 'Expand all ({count} steps)',
-    traceCollapse: 'Collapse to latest',
     traceFailed: '{count} failed',
-    // [run-group] run type group header (Block.vue group branch): type names mirror the zh literals
-    // (探索 / 改动 / 执行命令); the stat segment is "{count} steps" plus duration (appended by the
-    // renderer only when ≥1s); the failure clause reuses traceFailed — same failure-count domain.
+    // [run-group] group type-name and stat keys (consumed by aggregate block SegmentToolGroup /
+    // AggregateLiveWindows strip entries): type names mirror the zh literals (探索 / 改动 /
+    // 执行命令); the stat segment is "{count} steps" plus duration (appended by the renderer
+    // only when ≥1s); the failure clause reuses traceFailed — same failure-count domain.
     runGroupExplore: 'Explore',
     runGroupEdit: 'Edits',
     runGroupExec: 'Commands',
     runGroupSteps: '{count} steps',
+    // [process-aggregate] aggregate-block (process segment tri-state container) copy: summary row
+    // label / running word (shared by group head and live strip) / row-level failure tag /
+    // hover-card done word. The failure-count clause reuses traceFailed and the thinking word
+    // reuses thinkingBlock (same semantic domains, no second key set) — no retry-tag key:
+    // terminal-state ③ ruled retry tags unrendered (no structural signal), zero key demand.
+    aggProcessLabel: 'Process',
+    aggGroupRunning: 'running',
+    aggRowFailed: 'failed',
+    aggStatusDone: 'done',
+    // [process-aggregate] tool detail drawer (u-detail-drawer assembly): drawer title (shared
+    // by the shell fallback and the tool-name suffix) / running note / params & output section
+    // headings. Status words reuse the three keys above
+    // (aggGroupRunning/aggRowFailed/aggStatusDone), no second status word set.
+    aggDetailTitle: 'Details',
+    aggDetailStillRunning: 'Still running',
+    aggDetailParams: 'Parameters',
+    aggDetailOutput: 'Output',
     // [tool-detail-rich] tool detail rich-render labels (renderer ToolDetailRenderer)
     toolDetailNewFile: 'New file',
     toolDetailGitDiff: 'vs git HEAD',
     toolDetailDiffLoading: 'Loading diff…',
-    // [run-group] milestone badge (spec §3.6): the only signal today = first edit (core structural
-    // derivation: the turn's first completed edit/write; semantic milestones need an explicit
-    // upstream tag and are deliberately not keyword-derived)
-    runGroupMileFirstEdit: 'First edit',
     bashCancelled: 'cancelled',
     bashTimeout: 'timeout',
     bashOutputTruncated: 'Output truncated',
@@ -248,7 +260,7 @@ export default {
     turnTriggerBgNotifyContinued: 'resumed',
     // [system-notice-rendering-upgrade U6] boundary-row failure clause (D5 "· M failed", consumed by
     // Turn.vue): dedicated key, not reusing traceFailed ("{count} failed" belongs to the
-    // TraceCompactorRow compacted-row phrasing — different semantic domain)
+    // aggregate-block failure-count phrasing — different semantic domain)
     turnTriggerBgNotifyFailed: '{count} failed',
     // [bg-notice-fold] settled-turn folded label: segmented by
     // type (occurrence order deduped, "·" joined; elapsed stays as the single trailing number).

@@ -5,7 +5,7 @@
     runtime 推 accumulating/ready（事实态），前端用户交互驱动 partially-reviewed/resolved/superseded（审查态）。
 
     渲染：折叠卡（header 计数 + 状态指示 + 展开文件列表，A/M/D badge + 行数）。
-    默认收起——用户点击 header 展开，展开后点击文件行在 SideDrawer detail tab 查看 diff。
+    默认收起——用户点击 header 展开，展开后点击文件行在 DrawerPanel detail tab 查看 diff。
   -->
   <div v-if="fileChanges.length > 0" class="change-set-card bg-surface rounded-card" data-testid="change-set-card">
     <!-- header：点击折叠/展开 -->
@@ -27,7 +27,7 @@
       </span>
     </div>
 
-    <!-- 展开详情：文件清单（点击行 → SideDrawer detail tab 查看 diff） -->
+    <!-- 展开详情：文件清单（点击行 → DrawerPanel detail tab 查看 diff） -->
     <div v-if="!collapsed" class="border-t border-border">
       <div
         v-for="c in fileChanges"
@@ -123,7 +123,7 @@ function changeBadgeClass(status: FileChange['status']): string {
   }[status]
 }
 
-/** 点击文件行 → 打开 SideDrawer detail tab，强制 diff 模式展示该文件 */
+/** 点击文件行 → 打开 DrawerPanel detail tab，强制 diff 模式展示该文件 */
 const { openDrawer } = useChatViewDeps()
 function onClickFile(filePath: string): void {
   openDrawer('detail', { filePath })

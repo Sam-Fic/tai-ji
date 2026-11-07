@@ -2,16 +2,16 @@
  * chat 组件测试 helper（w6 chat-ui-and-shell T7）。
  *
  * 提供 mock ChatViewDeps 的 provide 对象构造，供迁移的行为型测试 mount 组件时注入
- * （替代 renderer 旧 vi.mock(store/composable) 模式）；以及 Block 工具分支测试的
- * 共享 stub / ToolCall fixture / mount 编排（Block.test.ts 与 BlockWorkflow.test.ts
- * 公共样板提取）。
+ * （替代 renderer 旧 vi.mock(store/composable) 模式）；以及行组件测试的共享 stub /
+ * ToolCall fixture / mount 编排（ToolRow 形态测试公共样板）。
  */
 import { mount } from '@vue/test-utils'
 import { h } from 'vue'
 import { vi } from 'vitest'
-import { Block, ChatViewDepsKey } from '@taiji/ui'
+import { ChatViewDepsKey } from '@taiji/ui'
 import type { ChatViewDeps } from '@taiji/ui'
 import type { ToolCall } from '@taiji/shared'
+import ToolRow from '../ToolRow.vue'
 
 /** 构造 mock ChatViewDeps（所有字段 vi.fn 或合理默认，零真 store；ChatViewDeps 全字段必填） */
 export function createMockDeps(overrides: Partial<ChatViewDeps> = {}): ChatViewDeps {
@@ -20,7 +20,6 @@ export function createMockDeps(overrides: Partial<ChatViewDeps> = {}): ChatViewD
     isHandingOff: () => false,
     getChangeSetStatus: () => undefined,
     isExpanded: () => false,
-    isTakeover: () => false,
     // [D3] submitEdit 双发锁默认放行（不互斥）；互斥用例经 overrides 注入
     isPendingSend: () => false,
 
@@ -32,7 +31,6 @@ export function createMockDeps(overrides: Partial<ChatViewDeps> = {}): ChatViewD
 
     toggleExpand: vi.fn(),
     // [chat-flow-consistency C3] ChatViewDeps.collapse 已随 Turn.vue onComplete 接线退役删除
-    setTakeover: vi.fn(),
     abortBash: vi.fn(),
     editAndResend: vi.fn(),
     // [U5 消息撤回 D6] 撤回统一单入口（路由判定在 core，mock 默认 spy——用例直取断言）
@@ -63,7 +61,7 @@ export function mockChatProvide(overrides: Partial<ChatViewDeps> = {}) {
   }
 }
 
-// ── Block 工具分支测试共享 stub（挂载即暴露 data-testid，可检测组件是否尝试渲染）──
+// ── 行组件测试共享 stub（挂载即暴露 data-testid，可检测组件是否尝试渲染）──
 
 export const GuiStub = {
   name: 'GuiComponentRenderer',
@@ -102,18 +100,22 @@ export function makeToolCall(over: Partial<ToolCall> = {}): ToolCall {
   }
 }
 
-/** mount Block 工具分支（stub 掉 Gui/Ansi/Md 子渲染，隔离 header/交互断言）。
+/** mount 工具行（stub 掉 Gui/Ansi/Md 子渲染，隔离 header/交互断言）。
  *  extraProps：追加 props 覆写（如 sessionId——workflow chips 反查按块归属 session 分区）。
  *  provideOverrides：ChatViewDeps 字段覆写（如 toolDetailRenderer——tool-detail-rich 路由）。
- *  provide mockChatProvide：Block 经 useChatViewDeps inject 消费壳依赖（ui-optimize-unified
- *  N1 文件 chip 起），直接 mount 必须注入 mock deps——与 Turn 链测试的 provide 口径一致。 */
-export function mountToolBlock(
+ *  provide mockChatProvide：ToolRow 经 useChatViewDeps inject 消费壳依赖（ui-optimize-unified
+ *  N1 文件 chip 起），直接 mount 必须注入 mock deps——与 Turn 链测试的 provide 口径一致。
+ *  [chat-flow-process-aggregate U3] Block 转发壳退役后本编排直挂 ToolRow（行组件本体保留
+ *  但生产链零消费：休眠，仅组件级测试经本编排可达——聚合块内成员行形态由 SegmentToolRow
+ *  承载）：旧壳根的 .trace-blk 类名契约与 block-tool-<id> testid 挂点随壳退役
+ *  （类名归 Turn.vue 单元 wrapper）。 */
+export function mountToolRow(
   tool: ToolCall,
   extraProps: Record<string, unknown> = {},
   provideOverrides: Partial<ChatViewDeps> = {},
 ) {
-  return mount(Block, {
-    props: { type: 'tool', tool, ...extraProps },
+  return mount(ToolRow, {
+    props: { tool, ...extraProps },
     global: {
       provide: mockChatProvide(provideOverrides),
       stubs: {

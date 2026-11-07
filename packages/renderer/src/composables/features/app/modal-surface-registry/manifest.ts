@@ -144,9 +144,9 @@ export const MODAL_SURFACE_MANIFEST = [
     family: 'modal-dialog',
     kind: 'member',
     zAnchors: [
-      { file: 'packages/ui/src/primitives/dialog/DialogContent.vue', form: 'class-token', literal: 'var(--z-modal)', count: 2 },
+      { file: 'packages/ui/src/primitives/dialog/DialogContent.vue', form: 'class-token', literal: 'var(--z-modal)', count: 3 },
     ],
-    basis: '§6.7 表：DialogContent 确认框族（遮罩 + 面板各一 z 字面量；已收敛至 ui 包单一实现并令牌化 --z-modal）',
+    basis: '§6.7 表：DialogContent 确认框族（遮罩 + 居中确认面板 + 右贴边 420px drawer variant 面板各一 z 字面量；已收敛至 ui 包单一实现并令牌化 --z-modal）',
   },
   {
     id: 'companion-band',

@@ -724,7 +724,7 @@ test.describe('Composer E2E', () => {
 
 ## 2. 组件结构概述
 
-对话流主路径：`Panel.vue`（sessionId 存在且消息非空）渲染 `MessageStream.vue`（容器，无 testid），内部为空态欢迎语、auto-scroll 锚点、「回到底部」浮层，以及按回合划分的 `Turn.vue` 列表。每个 Turn 包含 turn-meta 折叠条（工作中脉冲点 / 已工作 chevron + 思考×N 工具×N badge）、user 气泡、trace 折叠区（内含 `Block.vue` 列表：thinking 块紫斜体默认收起、tool 块青色 mono 默认收起且 running/failed 强制展开）、收尾 summary、`ChangeSetCard.vue`（变更集卡，5 态 badge + A/M/D/U 文件行）、`ForkConfirmModal`。`SystemNotice`（system 提示行）独立穿插在流中。组件位于 `packages/ui/src/features/chat/`，MessageStream 容器在 `packages/renderer/src/components/panel/`。
+对话流主路径：`Panel.vue`（sessionId 存在且消息非空）渲染 `MessageStream.vue`（容器，无 testid），内部为空态欢迎语、auto-scroll 锚点、「回到底部」浮层，以及按回合划分的 `Turn.vue` 列表。每个 Turn 包含 turn-meta 折叠条（工作中脉冲点 / 已工作 chevron + 思考×N 工具×N badge）、user 气泡、trace 区（恒渲染，单元两型——chat-flow-process-aggregate D1/D2/D5：正文直渲染 `TextRow.vue`，过程段（思考/工具）收进 `ProcessAggregateBlock.vue` 聚合条三态容器（流式中进行中双窗 `agg-live-windows` / 落成摘要行 `agg-summary-row` / 点开展开平铺 `agg-expanded`，工具单步行 `agg-tool-row` 点击开工具详情抽屉 `tool-detail-drawer`）；旧 `Block.vue` 四层折叠块列表已随该形态退役删除）、收尾 summary、`ChangeSetCard.vue`（变更集卡，5 态 badge + A/M/D/U 文件行）、`ForkConfirmModal`。`SystemNotice`（system 提示行）独立穿插在流中。组件位于 `packages/ui/src/features/chat/`，MessageStream 容器在 `packages/renderer/src/components/panel/`。
 
 ## 3. data-testid 清单
 
@@ -735,7 +735,9 @@ testid 以组件 template 内 data-testid 属性为准。对话流相关已落�
 | `composer-box` | Composer.vue | composer 容器 |
 | `turn-{index}` | Turn.vue | 回合容器 |
 | `turn-meta-{index}` | TurnMeta.vue | 回合折叠条 |
-| `block-text` / `tool-block-header` | Block.vue | 文本块 / 工具块 header |
+| `block-text` | TextRow.vue | 正文块根（原 Block.vue text 分支根，chat-flow-process-aggregate D1 后 Block.vue 退役拆分为 TextRow/ToolRow 等） |
+| `agg-summary-row` / `agg-expanded` / `agg-tool-row` / `tool-detail-drawer` 等 agg-* 系 | ProcessAggregateBlock.vue 组件族（`features/chat/process-aggregate/`） | 过程段聚合条：摘要行 / 展开平铺 / 工具单步行 / 工具详情抽屉（对话流过程段主链锚点） |
+| `tool-block-header` | ToolRow.vue | 工具块 header（对话流主链过程段已收进聚合块；ToolRow 生产链零消费、组件休眠，本 testid 生产渲染链不可达，仅组件级测试可达） |
 | `change-set-card` / `change-set-header` / `change-set-file` | ChangeSetCard.vue | 变更集卡 |
 | `subagent-directive-bubble` | SystemNotice.vue | subagent 指令行 |
 | `pending-bubble-list` | MessageStream.vue | 待渲染气泡列表 |
@@ -957,15 +959,15 @@ pnpm dev
 
 ### 10.1 前置：data-testid 已落地
 
-对话流组件已大量补齐 testid（`turn-{index}` / `block-text` / `tool-block-header` / `change-set-card` 等，见 §3 清单），E2E 可直接以 testid 锚定；未覆盖的交互侧再随用例补。
+对话流组件已大量补齐 testid（`turn-{index}` / `block-text` / `agg-summary-row` / `agg-tool-row` / `tool-detail-drawer` / `change-set-card` 等，见 §3 清单；过程段主链锚点为 agg-* 系——chat-flow-process-aggregate D1 改向后 `tool-block-header` 旧锚点在对话流主链不可达），E2E 可直接以 testid 锚定；未覆盖的交互侧再随用例补。
 
 ### 10.2 测试场景
 
 | 场景 | 锚点 | 期望 |
 |------|------|------|
 | E2E-CF-1：发消息 → user 气泡 | user 气泡文本 / `turn-0` | user 消息可见 |
-| E2E-CF-2：流式 thinking | `block-text`（thinking 块 header） | thinking 块可见 |
-| E2E-CF-3：流式 tool call | `tool-block-header` | tool 块可见，含工具名 |
+| E2E-CF-2：流式 thinking | `agg-summary-thinking`（落成摘要行思考块计数） | 摘要行含思考块计数（流式中为聚合块进行中思考窗 `agg-think-window`，完成收摘要行，全文断言有时序竞争） |
+| E2E-CF-3：流式 tool call | `agg-summary-row` → 点开 `agg-expanded` → `agg-tool-row` | 工具单步行可见（mock toolName='read'；先点摘要行展开，链路同 `e2e/gui-components.spec.ts` 路径 B 用例） |
 | E2E-CF-4：流式完成 → 收尾 summary | 收尾文本「好的，我来处理」 | summary 可见 |
 | E2E-CF-5：fileChanges 变更集卡 | `change-set-card` | 卡片可见，含文件路径 |
 | E2E-CF-6：retry（输入 retry） | retry 指示器 | 输入含 'retry' 触发重试指示 |
@@ -975,6 +977,7 @@ pnpm dev
 ### 10.3 完整 E2E 示例代码（补 testid 前的文本锚点版）
 
 > 注意：以下代码用**文本锚点**（mock 固定文案），无需补 testid 但较脆弱。落地为 e2e/chat-flow.spec.ts 前建议先补 testid。
+> ⚠️ 本示例为 chat-flow-process-aggregate D1 改向**前**的历史形态：过程段（思考/工具）现已收进聚合块（摘要行 `agg-summary-row` → 展开 `agg-expanded` → 单步行 `agg-tool-row` → 详情抽屉 `tool-detail-drawer`），示例中 `.trace-tool` 与「思考 header + 收起态 preview」类对话流锚点随旧四层折叠形态失效，现行锚点以 §3 清单与 §10.2 场景表为准；示例仅存教学参考（git 可追溯）。
 
 ```typescript
 import { test, expect } from './fixtures/launch-app'
@@ -999,12 +1002,13 @@ test.describe('对话流 E2E', () => {
   })
 
   test('E2E-CF-2: 流式 thinking + tool 可见（文本锚点）', async ({ page }) => {
-    // ⚠️ thinking 可见性时序（Block.vue 的 thinkingExpanded computed）：
-    //   thinkingExpanded = computed(() => props.working || !thinkingCollapsed.value)
+    // ⚠️ 历史形态说明（旧四层折叠形态的 thinking 可见性时序，载体已退役）：
+    //   旧实现 thinkingExpanded = computed(() => props.working || !thinkingCollapsed.value)
     //   - 流式中（working=true）→ 强制展开，全文可见
     //   - 流式完成（complete 后 working=false）→ 收起，全文 v-if 不在 DOM，只剩 header + preview
-    //   mock 流式约 3-4 秒完成，故全文断言存在时序竞争（可能错过 working 窗口）。
-    //   稳定策略：断言 thinking header（「思考」恒显）+ 收起态 preview（截断预览，收起后仍在 DOM）。
+    //   现行聚合块形态：流式中过程段为进行中思考窗（全文可见），落成收摘要行（仅思考块计数）。
+    //   mock 流式约 3-4 秒完成，全文断言仍存在时序竞争；稳定策略 = 断言落成摘要行思考块计数
+    //   （`agg-summary-thinking`，见 §10.2 E2E-CF-2 现行锚点）。
     await page.getByRole('button', { name: /^会话/ }).click()
     await page.getByText('API 性能优化').click()
     await page.getByRole('textbox').click()
@@ -1152,7 +1156,7 @@ expect(m.tableScrollW).toBeLessThanOrEqual(m.hostW + 1)         // 不撑爆宿�
 
 | 约束 | 说明 |
 |------|------|
-| ✅ data-testid 已落地 | turn-*/block-text/tool-block-header/change-set-card/subagent-directive-bubble/pending-bubble-list/load-more-history 等已可用（见 §3 清单）；新增交互侧随组件补，未覆盖处才退回文本/class 锚点 |
+| ✅ data-testid 已落地 | turn-*/block-text/agg-summary-row/agg-tool-row/tool-detail-drawer/change-set-card/subagent-directive-bubble/pending-bubble-list/load-more-history 等已可用（见 §3 清单；过程段主链锚点为 agg-* 系——`tool-block-header` 旧锚点对话流主链不可达）；新增交互侧随组件补，未覆盖处才退回文本/class 锚点 |
 | ⚠️ mock 流式耗时 | 一轮约 3-4 秒。E2E timeout 给 15s，用 `toBeVisible({timeout})` 等终态，禁止固定 sleep |
 | ❌ mock 不模拟失败 | 错误路径（message.error/stream_error）无法 mock E2E 触发，只能单测验证（chat-store-reset.test.ts） |
 | ❌ mock 不模拟 WS 断连 | WS 生命周期（断连/重连）只能非 MOCK 测 |
