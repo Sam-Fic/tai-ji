@@ -76,6 +76,10 @@ import type { GenStatsService } from '../services/session/gen-stats-service.js'
 import type { ArchiveService } from '../services/archive/archive-service.js'
 import type { ITerminalService } from '../services/ports/terminal-service.js'
 import type { QuotaService } from '../services/quota-service.js'
+// AggregationQuotaRefresher（provider-aggregation D3/U4，M2）：额度供给编排实例。
+// type-only：实例由组合根构造（deps 注入 quotaService/configService/sessionService），
+// 经 setServices optional 注入两处 ctx 钩子触发点（①routes 保存/删除 ②绑定路由）。
+import type { AggregationQuotaRefresher } from '../services/aggregation-quota-refresher.js'
 import type { TtsService } from '../services/tts-service.js'
 import type { IProviderCredentialResolver } from '../services/ports/provider-credential-resolver.js'
 import type { IModelConnectionTester } from '../services/ports/model-connection-tester.js'
@@ -108,6 +112,14 @@ export interface RuntimeServerOptionalServices {
   worktree?: IWorktreeService
   terminal?: ITerminalService
   quota?: QuotaService
+  /**
+   * 额度供给编排（provider-aggregation D3/U4，M2）：事件驱动的按需刷新——触发点①
+   * routes 保存/删除（aggregationRoutesMutated ctx 钩子）与触发点② set_model 绑定路由
+   * （routeModelBound ctx 钩子）经 assembleCoreHandlers 透传给 SettingsMessageHandler ctx；
+   * 触发点③ 回合收尾由组合根 agentSettledListeners 多播直接订阅（不经 server）。
+   * 可选：缺省 undefined = 两钩子 no-op（存量测试装配形态，零行为）。
+   */
+  aggregationQuotaRefresher?: AggregationQuotaRefresher
   /** 语音合成朗读编排服务（ai-voice-tts 设计 §7.4）：tts.getConfig/configure/speak/getCapabilities 路由依赖。可选：未注入时该批 case 落 unknown_type。 */
   tts?: TtsService
   handoff?: HandoffService
@@ -423,6 +435,16 @@ export class RuntimeServer implements IMessageBroker {
       broadcastProviderList: () => this.broker.broadcastProviderList(),
       providersMutatedSync: this.zcodeProviderMirrorSync
         ? () => this.zcodeProviderMirrorSync!()
+        : undefined,
+      // 触发点①②（provider-aggregation D3/U4，M2）：routes 保存/删除与绑定路由的额度
+      // 按需刷新编排。可选注入（组合根构造 AggregationQuotaRefresher 经 setServices 传入；
+      // 缺省 undefined = no-op——存量测试装配零行为）。编排内部自捕获错误 fire-and-forget，
+      // 不阻断保存/切换回执；fetchMany 走 QuotaService 非 force 维度（节流内去重）。
+      aggregationRoutesMutated: optional.aggregationQuotaRefresher
+        ? () => { void optional.aggregationQuotaRefresher!.notifyRoutesChanged() }
+        : undefined,
+      routeModelBound: optional.aggregationQuotaRefresher
+        ? (sessionId: string, modelRef: string) => { void optional.aggregationQuotaRefresher!.notifyRouteBound(modelRef) }
         : undefined,
       broadcastSkillList: () => this.broker.broadcastSkillList(),
       broadcastSkillCacheInvalidated: (scope: SkillCacheScope, cwd?: string, partial?: boolean) => this.broker.broadcastSkillCacheInvalidated(scope, cwd, partial),

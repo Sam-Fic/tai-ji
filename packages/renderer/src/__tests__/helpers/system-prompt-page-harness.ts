@@ -46,6 +46,15 @@ export const systemPromptConfigMock = {
   refreshProviderCatalogs: vi.fn(() => Promise.resolve({ refreshed: [], failed: [] })),
   setSkillDirs: vi.fn(() => Promise.resolve()),
   setAgentDirs: vi.fn(() => Promise.resolve()),
+  // 模型路由页 aggregation 档（D10/U9 接线）：SettingsModal setup 即挂 useRoutePageOrchestration，
+  // onRouteView 订阅 setup 期即挂（缺则 TypeError 崩 mount）；getRouteView 分区首访拉取；
+  // 写侧三键供保存/删除编排消费（本域用例不走写路径，resolve 基线即可；形态同
+  // settings-modal-api-mock.ts 的同名段）
+  getRouteView: vi.fn(() => Promise.resolve({ cards: [], orphanRefs: [] })),
+  onRouteView: vi.fn(() => () => {}),
+  saveRoute: vi.fn(() => Promise.resolve({})),
+  deleteRoute: vi.fn(() => Promise.resolve({})),
+  setScopedModels: vi.fn((models: string[]) => Promise.resolve(models)),
   // wave-oauth：SettingsModal → ProviderPage → useProviderOAuth onMounted 订阅 4 个 auth.* 事件
   // （缺则 TypeError 崩 mount）；订阅捕获集单源在 oauth-auth-events-mock（ProviderPage 域测试同源）
   ...authEventCbs(),

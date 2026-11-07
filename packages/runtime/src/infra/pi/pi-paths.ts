@@ -32,6 +32,7 @@ import {
   getSessionBtwDir as sharedGetSessionBtwDir,
   encodeCwd,
 } from '@taiji/shared/paths'
+import { getProviderExtrasPath as sharedGetProviderExtrasPath } from '@taiji/shared/provider-store-paths'
 import { join } from 'node:path'
 
 /** taiji 数据根目录（委托 shared SSOT，读 TAIJI_AGENT_DATA_DIR，缺省 ~/.taiji）。 */
@@ -90,9 +91,13 @@ export function getMcpConfigPath(): string {
 }
 
 /**
- * taiji 扩展域 providers.json 路径：`<piAgentDir>/config/providers.json`。
+ * taiji 扩展域 providers.json 路径（runtime 写侧包装）：`<piAgentDir>/config/providers.json`。
  *
- * 承载自 pi models.json 迁出的 taiji 私有字段（provider 级 quota/authMethod、
+ * 公式本体 = @taiji/shared/provider-store-paths 纯模块（跨进程唯一权威源，读侧 =
+ * provider-aggregation 扩展 config-store 与 subagent-core scoped-models 同源消费，
+ * 公式漂移结构上不可能）；本函数只补 runtime 侧基址 getPiAgentDir()。
+ *
+ * 落点承载自 pi models.json 迁出的 taiji 私有字段（provider 级 quota/authMethod、
  * models[].enabled 转化的 modelStates），models.json 只留 pi schema 内字段
  *（provider-config-quota 架构 D4）。同目录已有先例 config/rename-session-ext-config.json
  *（写者 rename-session-config.ts，P1-7 名实拆分前在 worktree-config-helper），pi 不扫描 agent/config/ 子目录，无冲突。
@@ -112,7 +117,7 @@ export function getMcpConfigPath(): string {
  * 占用时该测试先行红，提示复核本锚点。
  */
 export function getProviderExtrasPath(): string {
-  return join(getPiAgentDir(), 'config', 'providers.json')
+  return sharedGetProviderExtrasPath(getPiAgentDir())
 }
 
 /**

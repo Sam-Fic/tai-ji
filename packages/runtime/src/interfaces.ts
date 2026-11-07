@@ -47,9 +47,11 @@ import type {
   NetworkProxyStatsRange,
   NetworkProxyTestResult,
   NetworkProxyValidationResult,
+  AggregationRoute,
 } from '@taiji/shared'
 import type { SubagentEngineConfigView } from '@zhushanwen/extension-protocol'
 import type { SaveAppConfigResult } from './services/app-config-store.js'
+import type { AggregationRoutesReadResult } from './services/provider-config-helper.js'
 import type { DirScopes } from './services/skill-dir-config.js'
 import type { SessionTraceSnapshot } from './services/session/trace-sync.js'
 import type { Credential } from './services/auth/auth-storage.js'
@@ -730,6 +732,15 @@ export interface IConfigService {
   getScopedModels(): string[]
   /** RMW scoped models 白名单（锁内重读 → fn(current) → 原子写回，config.setScopedModels RPC 写入口）。 */
   modifyScopedModels(fn: (current: string[]) => string[]): Promise<string[]>
+  // ── Aggregation routes（模型路由域，provider-aggregation U9——与 Scoped Models 同为
+  //    providers.json 顶层域，暴露形态对称；读带隔离呈报供路由页「配置已隔离」提示）──
+  /**
+   * 读取 routes 域 + scopedModels + 全部读取侧标记（U1 读取入口的转发：悬空端点 /
+   * 失效引用 / 隔离呈报一次带出，join 视图编排输入）。形状 SSOT = AggregationRoutesReadResult。
+   */
+  readAggregationRoutes(): AggregationRoutesReadResult
+  /** RMW routes 域（锁内重读 → fn(current) → 原子写回，aggregation.saveRoute/deleteRoute 写入口）。 */
+  modifyAggregationRoutes(fn: (current: AggregationRoute[]) => AggregationRoute[]): Promise<AggregationRoute[]>
 }
 
 // ── IExtensionService ──────────────────────────────────────────────
@@ -737,6 +748,8 @@ export interface IConfigService {
 /** Extension lifecycle: discovery, enable/disable, install/uninstall, path resolution. */
 export interface IExtensionService {
   scanExtensions(): Promise<import('@taiji/shared').ExtensionInfo[]>
+  /** 模型路由扩展是否被禁用（U3/D9 禁用态分型与默认模型裁定的同步查询；实装见 ExtensionService.isRouteExtensionDisabled）。 */
+  isRouteExtensionDisabled(): boolean
   /** 推荐扩展列表（含已安装状态，前端 Settings 快捷安装按钮数据源） */
   getRecommendedExtensions(): Promise<Array<{ name: string; description: string; installed: boolean }>>
   toggleExtension(name: string, enabled: boolean): Promise<void>

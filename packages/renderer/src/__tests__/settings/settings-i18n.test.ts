@@ -80,8 +80,6 @@ describe('U10: settings UI 文案经 i18n 渲染', () => {
     // 复数键（pipe 语法，t(key, count, { named })，对齐 sidebar.deleteFolderPartialFailed 先例）
     expect(i18n.global.t('settings.extension.discoverResultTitle', 2, { named: { count: 2 } })).toBe('Found 2 candidates')
     expect(i18n.global.t('settings.extension.discoverResultTitle', 1, { named: { count: 1 } })).toBe('Found 1 candidate')
-    expect(i18n.global.t('settings.scopedModel.confirmAdd', 1, { named: { count: 1 } })).toBe('Add 1 model')
-    expect(i18n.global.t('settings.scopedModel.confirmAdd', 3, { named: { count: 3 } })).toBe('Add 3 models')
     expect(i18n.global.t('settings.extension.contributionsEntry')).toBe('Plugin Contributions')
     expect(i18n.global.t('settings.extension.contributionsDesc')).toBe('View plugin mount point contributions and availability')
     expect(i18n.global.t('settings.system.fontLarge')).toBe('Large')

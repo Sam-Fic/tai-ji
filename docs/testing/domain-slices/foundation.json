@@ -155,7 +155,8 @@
     "packages/ui/src/primitives/__tests__/status-dot.test.ts",
     "packages/ui/src/primitives/__tests__/status-pill.test.ts",
     "packages/ui/src/primitives/__tests__/Tooltip.test.ts",
-    "packages/ui/src/primitives/popover/__tests__/PopoverContent.test.ts"
+    "packages/ui/src/primitives/popover/__tests__/PopoverContent.test.ts",
+    "packages/runtime/src/infra/pi/__tests__/default-model-aggregation.test.ts"
   ],
   "sharedBy": {
     "packages/runtime/src/__tests__/rpc-client-bundle.test.ts": [

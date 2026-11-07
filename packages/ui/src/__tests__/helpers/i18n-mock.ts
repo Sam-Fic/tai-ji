@@ -4,8 +4,8 @@
  * 口径 = 各测试文件此前各自手写的「字典 + `{name}` 命名参数 replace」：
  * - 键命中 → 字典文案；缺键 → 回落 key 本身（缺键回落语义与 vue-i18n dev 缺键行为同形）
  * - 命名参数逐个替换 `{k}`（首次出现），插值实现与各文件原手写版逐字一致
- * - 不实现复数 `|` 分段：需复数档的文件保留自有 mock（复数语义无法共用本口径，
- *   见 features/settings/common/__tests__/ScopedModelSection.test.ts）
+ * - 不实现复数 `|` 分段：需复数档的文件保留自有 mock（复数语义实现先例见
+ *   packages/renderer/src/__tests__/vitest-i18n-setup.ts——含 `|` 的 message 按 count 选段）
  *
  * 只 mock `useI18n`（各文件原样：组件测试环境无 `app.use(i18n)`，无需 createI18n）。
  *

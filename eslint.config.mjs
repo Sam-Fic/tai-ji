@@ -178,6 +178,17 @@ export default [
       'max-lines': ['warn', { max: 1080, skipBlankLines: true, skipComments: true }],
     },
   },
+  // shared 包 barrel 出口（全部 domain 的 re-export 聚合点——barrel 的职责即聚合，
+  // 拆分不消行只移行）。provider-aggregation 域契约根（aggregation.ts 类型 + 纯函数
+  // 出口，多端共用 SSOT）净增 57 行越过 500，540 > 500 微超即提额保留软上限告警
+  //（pi-provider-store / control-server 同型先例；计数 = eslint max-lines
+  // skipBlankLines+skipComments 口径实测）。
+  {
+    files: ['packages/shared/src/index.ts'],
+    rules: {
+      'max-lines': ['warn', { max: 540, skipBlankLines: true, skipComments: true }],
+    },
+  },
   // [M3 relay-spawn-transport u-m2-prompt-ack] pi 引擎 spawn runner：spawn/握手/帧泵/
   // prompt 送达回执（prompt-ack）接线 / fd3 raw mirror 装配的单点聚合文件（职责内聚，
   // 再拆属独立重构任务）。prompt-ack 接线与 mirror 装配入列后折算 520 行 > 500 软上限，
@@ -517,6 +528,16 @@ export default [
   // pi-provider-store「微超即提额，保留软上限告警」先例（508→520 同型），拆分归独立重构任务。
   {
     files: ['packages/renderer/src/components/panel/Composer.vue'],
+    rules: {
+      'max-lines': ['warn', { max: 520, skipBlankLines: true, skipComments: true }],
+    },
+  },
+  // SettingsModal.vue 是设置弹层壳 + 分区编排的聚合点：provider 行引用 chip 跳转（spec §6.4）
+  // 与「此刻」额度接线（F1-34/M2）后 ESLint 实测 511 代码行（skipBlankLines+skipComments 口径）
+  // 微超 500——新增均为接线声明（props 透传 / focus ref / quota 投影 lambda），无自然拆分线。
+  // 对齐上方 Composer.vue「微超即提额，保留软上限告警」同型先例（511→520），拆分归独立重构任务。
+  {
+    files: ['packages/renderer/src/components/settings/SettingsModal.vue'],
     rules: {
       'max-lines': ['warn', { max: 520, skipBlankLines: true, skipComments: true }],
     },

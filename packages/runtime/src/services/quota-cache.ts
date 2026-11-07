@@ -2,7 +2,8 @@
  * QuotaCache — 额度查询缓存持久化层。
  *
  * 职责：
- * - 读写 `<dataDir>/quota-cache.json`（原子写：.tmp → rename）
+ * - 读写 `<dataDir>/quota-cache.json`（原子写：.tmp → rename；路径公式 SSOT =
+ *   @taiji/shared/provider-store-paths，读侧 provider-aggregation 扩展同源消费）
  * - 失败不删除旧缓存（只 log）
  * - 除 fetcher 变更 / provider 删除的定点删除（removeEntry）外不主动删除——只有用户
  *   手动清除数据目录时才会丢失其余条目
@@ -11,11 +12,11 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname } from 'node:path'
 import type { NormalizedQuotaRow } from '@taiji/shared'
+import { getQuotaCachePath } from '@taiji/shared/provider-store-paths'
 import { logger } from '../infra/logger.js'
 
-const CACHE_FILENAME = 'quota-cache.json'
 const CACHE_INDENT = 2
 
 export interface QuotaCacheEntry {
@@ -43,7 +44,7 @@ export class QuotaCache {
   private memoryCache: QuotaCacheFile | null = null
 
   constructor(dataDir: string) {
-    this.filePath = join(dataDir, CACHE_FILENAME)
+    this.filePath = getQuotaCachePath(dataDir)
   }
 
   /** 读取缓存（文件不存在返回空对象）。 */

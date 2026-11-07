@@ -39,6 +39,8 @@ import type {
   BuiltinProviderTemplate,
 } from '@taiji/shared'
 import { getProviderNames, upsertProvider, ensureProviderInWhitelist, type PiProviderConfig } from '../../infra/pi/pi-provider-store.js'
+// D4 ③ 保留 id 拒绝：导入撞聚合保留 id 的 failed 条目拒绝（与 setProvider 新建分支同规则）
+import { AGGREGATION_PROVIDER_ID } from '@taiji/shared'
 import { createPreview, consumePreview, deletePreview } from './preview-cache.js'
 import { parseProviders } from './provider-parser.js'
 import type { ParseResult, ParsedProvider, ParsedOrphanCredential } from './provider-parser.js'
@@ -251,6 +253,17 @@ async function applyProviderEntry(
   // 只处理用户勾选的 provider
   if (!selectedIds.includes(provider._sourceName)) return null
 
+  // D4 ③ 保留 id 拒绝（与 setProvider 新建分支同规则）：导入撞聚合保留 id 会在模型列表
+  // 产生两条同 id 条目，failed 条目引导改 id（不静默跳过）。
+  if (provider._sourceName === AGGREGATION_PROVIDER_ID) {
+    return {
+      id: provider._sourceName,
+      name: provider._sourceName,
+      status: 'failed',
+      reason: `provider id "${AGGREGATION_PROVIDER_ID}" 是模型路由的保留 id（路由条目固定用它聚合进模型列表），请改用其他 id 后重试。`,
+    }
+  }
+
   // 冲突跳过（不覆写已存在的同名 provider）
   if (existingIds.has(provider._sourceName)) {
     return { id: provider._sourceName, name: provider._sourceName, status: 'skipped', reason: 'duplicate' }
@@ -354,6 +367,17 @@ async function applyOrphanCredential(
   credentialWriter: CredentialWriter | undefined,
 ): Promise<ProviderImportedItem | null> {
   if (!selectedIds.includes(oc.providerId)) return null
+
+  // D4 ③ 保留 id 拒绝（与 setProvider 新建分支同规则）：组 2 孤儿凭据路径同款拦截，
+  // failed 条目引导改 id（不静默跳过）。
+  if (oc.providerId === AGGREGATION_PROVIDER_ID) {
+    return {
+      id: oc.providerId,
+      name: oc.providerId,
+      status: 'failed',
+      reason: `provider id "${AGGREGATION_PROVIDER_ID}" 是模型路由的保留 id（路由条目固定用它聚合进模型列表），请改用其他 id 后重试。`,
+    }
+  }
 
   // 冲突跳过（preview 后 models.json 可能已有该 id）
   if (existingIds.has(oc.providerId)) {

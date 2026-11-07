@@ -574,6 +574,15 @@ export default {
     placeholder: '\u2026',
     // 模型弹层行尾「默认」标签（demo .pt）：命中 config.defaults.defaultModel 的行显示
     defaultTag: '默认',
+    // 模型路由组标题（U6）：聚合 provider 组在选择器的分组文案（i18n 定稿键——数据侧
+    // providerName 是 runtime 固定中文，显示侧按 locale 出文案）
+    routeGroupTitle: '模型路由',
+    // 模型路由行尾徽标（U6/GL2）：路由条目与物理模型可区分
+    routeBadge: '路由',
+    // 路由行命中端点展示（M3 联动）：路由条目此刻按条件求值命中的端点名（行尾「路由 → 端点」）
+    routeHitNow: '路由 → {name}',
+    // 路由行此刻无命中（M3 联动）：路由定义在但条件全不满足
+    routeNoHitNow: '路由 · 此刻无命中',
     // 模型聚合入口（W3a 单图标聚合按钮，click 出模型列表+思考档位）title
     modelThinkingAggregateTitle: '模型 · 思考等级',
   },
@@ -723,7 +732,9 @@ export default {
     taskFailed: '任务创建失败：{error}',
     sendFailed: '消息发送失败：{error}',
     // ── U4 模型/档位切换失败（model-switch-live-provider-sync §3.4 错误规格表）──
-    // 5 个新码 + general；4 个既有透传码（SESSION_NOT_FOUND / MODEL_NOT_CONFIGURED /
+    // 4 个新码 + provider-aggregation 2 码（AGGREGATION_ROUTE_NOT_IN_SESSION /
+    // AGGREGATION_EXTENSION_DISABLED，出处 provider-aggregation 设计 D1 ③/D9 ②）+ general；
+    // 4 个既有透传码（SESSION_NOT_FOUND / MODEL_NOT_CONFIGURED /
     // RESTORE_FAILED / BUILTIN_EXTENSIONS_MISSING）走 general（toast 文本含后端 message）。
     modelSwitch: {
       general: '切换失败：{error}',
@@ -731,6 +742,8 @@ export default {
       modelNotFound: '该模型已不存在，请重新选择',
       providerCredentialMissing: '该 provider 未配置凭据，请到设置填写 API Key',
       engineModelMissing: '引擎未识别该模型：若刚改过配置，请稍等两秒重试；若持续失败，请到设置页检查 provider 配置',
+      aggregationRouteNotInSession: '该模型路由在当前会话尚不可用（pi 在会话加载时注册路由），请新建会话后使用',
+      aggregationExtensionDisabled: '模型路由扩展已被禁用，请在扩展管理中启用后使用',
     },
   },
   ambiguous: {

@@ -83,7 +83,7 @@ import { appendProcessEscapeLog, isContainedStreamError } from './infra/system/u
 import { trash, trashDirectory } from './infra/system/trash.js'
 
 import { ProcessManager } from './infra/pi/process-manager.js'
-import { getProviderConfig, clearProviderApiKey, initProviderCredentialResolver, cleanLeakedPackages, sanitizeInvalidProviders, isModelsStoreCorrupted, readModels } from './infra/pi/pi-provider-store.js'
+import { getProviderConfig, clearProviderApiKey, initProviderCredentialResolver, initAggregationRouteAvailabilityCheck, cleanLeakedPackages, sanitizeInvalidProviders, isModelsStoreCorrupted, readModels } from './infra/pi/pi-provider-store.js'
 // engine-provider-unification u2：pi→zcode provider 启动同步接线（路径拼装 + D7 降级
 // 包装收敛在该模块——组合根 import 即执行 main()，降级分支抽独立模块才可单测，
 // run-extras-migration 同族先例）。
@@ -132,6 +132,10 @@ import { WorktreeService } from './services/worktree/worktree-service.js'
 import { TerminalService } from './services/terminal/terminal-service.js'
 import { disposeTerminalPtysStep } from './services/terminal/dispose-terminal-ptys-step.js'
 import { QuotaService } from './services/quota-service.js'
+// AggregationQuotaRefresher（provider-aggregation D3/U4，M2）：额度供给编排——事件驱动
+// 按需刷新（routes 保存 / set_model 绑定路由 / 绑定路由会话回合收尾），QuotaService 既有
+// 节流内去重，零定时器（ADR-0190）。
+import { AggregationQuotaRefresher } from './services/aggregation-quota-refresher.js'
 import { TtsService } from './services/tts-service.js'
 // providers.write/delete/credential 三 RPC 受控代理（provider-plugin-access D4）：命名空间
 // 前缀校验 + setProvider 写策略链 + credential resolver 唯一读通道，组合根装配。
@@ -567,6 +571,16 @@ async function main(): Promise<void> {
     configStore,
   })
   initProviderCredentialResolver(providerCredentialResolver)
+  // U3/D4 ④ 路由默认可用性判定注入（模块级 init，同上先例）：default 承载路由条目时
+  // findValidDefaultModel 的聚合分支经本判定 pass-through / fallback 重选。判定 =
+  // 路由条目存在且 enabled（routes 段，extras store 磁盘权威）且路由扩展未禁用（D9 ③——
+  // 扩展禁用时路由条目不可用，默认 auto-fix 落首个可用物理模型）。装配序同上：早于任何
+  // findValidDefaultModel 调用（extrasStore 与 extensionService 均已在上方构造）。
+  initAggregationRouteAvailabilityCheck((routeId) => {
+    const route = providerExtrasStore.getAggregationRoutesSync().find(r => r.id === routeId)
+    if (!route || !route.enabled) return false
+    return !extensionService.isRouteExtensionDisabled()
+  })
   // providerExtrasStore 注入：setProvider 的 authMethod 改写 providers.json（A1-5 写侧切换）。
   // providerCredentialResolver（D3 链 5 接线）：listProviders 的凭据判定经唯一通道批量 sync 版。
   // 第 7 参 undefined = quotaStateCleaner 占位（QuotaService 构造后经 setQuotaStateCleaner
@@ -1351,6 +1365,31 @@ async function main(): Promise<void> {
   // 只有 S14 场景能发现。删除链侧保证只在 extras 条目确认清除后调用（防幽灵标记）。
   configService.setQuotaStateCleaner((providerId) => quotaService.clearProviderState(providerId))
 
+  // 额度供给编排（provider-aggregation D3/U4，M2）：事件驱动按需刷新——触发点① routes
+  // 保存/删除（经 setServices aggregationQuotaRefresher → settingsHandler ctx 两钩子）、
+  // 触发点② set_model 绑定路由（同 ctx routeModelBound 钩子）、触发点③ 绑定路由会话
+  // 回合收尾（下方 agentSettledListeners 多播订阅）。QuotaService 既有节流内去重
+  // （fetchMany 全走非 force fetch），零定时器（ADR-0190：触发全部事件驱动，上游查询为
+  // 外部网络调用属保留白名单①）。deps 闭包运行期才解引用（sessionService 声明在后的
+  // 前向引用同 respondWatch/extractSettleOutcome 先例）。
+  const aggregationQuotaRefresher = new AggregationQuotaRefresher({
+    fetchMany: (providerIds) => quotaService.fetchMany(providerIds),
+    readRoutes: () => configService.readAggregationRoutes().routes,
+    getFreshnessProbe: (providerId) => {
+      const cached = quotaService.getCached(providerId)
+      return cached.data && cached.lastFetchAt !== null
+        ? { lastFetchAt: cached.lastFetchAt, resetSecs: cached.data.wins.map(w => w.resetSec) }
+        : null
+    },
+    getSessionModelRef: (sessionId) => sessionService.getSession(sessionId)?.modelId,
+  })
+  // 触发点③（D3/U4）：绑定路由会话的回合收尾——agent_settled 多播订阅（fanOutSettled
+  // 逐订阅者异常隔离；编排内部另有 catch 收口，双防线各自独立）。订阅在编排构造之后
+  // （多播 Set 无时序耦合，与既有订阅同语义）。
+  subscribeAgentSettledIn(agentSettledListeners)((sessionId) => {
+    void aggregationQuotaRefresher.notifyAgentSettled(sessionId)
+  })
+
   // TtsService：语音合成朗读编排（ai-voice-tts 设计 §7.4）。
   // 经 server.setServices 注入到 TtsMessageHandler（tts.getConfig/configure/speak/getCapabilities 路由）。
   // createDriver：infra/tts 工厂直传——speak 合成前按 tts.json 现读 baseUrl 现建 driver，
@@ -1556,6 +1595,10 @@ async function main(): Promise<void> {
     worktree: worktreeService,
     terminal: terminalService,
     quota: quotaService,
+    // 额度供给编排（provider-aggregation D3/U4，M2）：settingsHandler ctx 的两触发点钩子
+    // （aggregationRoutesMutated / routeModelBound）依赖——触发点③回合收尾由组合根
+    // agentSettledListeners 订阅（上方构造处），不经 server。
+    aggregationQuotaRefresher,
     // zcode 镜像同步 write-through（ADR-0142 镜像架构）：settings 域 provider 变更成功后
     // 与启动同步同源同实现地重跑镜像（同一判定链，副本天然对账；失败只 warn 不阻断配置写入）。
     // 实例与三依赖均为上方单点（zcodeProviderMirrorSync / zcodeProviderSyncDeps，S-12）；

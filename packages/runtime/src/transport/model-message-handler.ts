@@ -10,6 +10,7 @@
  */
 import type { WebSocket as WsType } from 'ws'
 import type { ClientMessage } from '@taiji/shared'
+import { aggregationRouteIdFromRef, isAggregationModelRef } from '@taiji/shared'
 import type { SettingsHandlerContext } from './settings-message-handler.js'
 import { isModelRef, parseModelSelector } from '@zhushanwen/subagent-core'
 import { toErrorMessage } from '../utils/errors.js'
@@ -69,6 +70,12 @@ export class ModelMessageHandler {
     // 仍为按请求值回显（旧行为兜底），但正常路径 readEffectiveModelId 的返回恒为
     // 'provider/id' 复合串，该分支实际不可达。
     const effectiveModel = await this.ctx.modelService.switchModel(sessionId, provider, modelId)
+    // 触发点②（provider-aggregation D3/U4）：绑定模型路由成功——按生效值（非请求值）
+    // 判定路由引用，额度数据随绑定即刻按需刷新（可选钩子，组合根注入 U4 编排；内部
+    // 自捕获错误 fire-and-forget，不阻断切换回执；非路由引用由实现内部短路）。
+    if (isAggregationModelRef(effectiveModel)) {
+      this.ctx.routeModelBound?.(sessionId, effectiveModel)
+    }
     // 生效值应为 'provider/id' 复合串（切分规则单点 = core 的 parseModelSelector）；
     // 读回形态异常（无 '/'、任一侧为空）时保持既有防御：按请求值回显。
     const parsed = parseModelSelector(effectiveModel)
@@ -161,6 +168,18 @@ export class ModelMessageHandler {
       if (!providerInfo || providerInfo.enabled === false) {
         console.warn(`[settings-handler] setScopedModels: scoped[0] "${firstModel}" 的 provider 不可用（${providerInfo ? '已禁用' : '不在 providers 列表'}），跳过 default 同步，保留现有 default`)
         return false
+      }
+      // 聚合保留 id（provider 段 = 聚合保留 id）在 provider 级之上补路由级判定：
+      // routeId 须在 routes 域存在且 enabled（判定维度对齐读取侧 findValidDefaultModel
+      // 聚合分支）——停用/悬空路由写成 default 会被 getDefaultModel 聚合分支判不可用
+      // 并 auto-fix 改写（静默破坏「第一位即默认」），跳过同步保留现有 default
+      const routeId = aggregationRouteIdFromRef(firstModel)
+      if (routeId !== undefined) {
+        const route = this.ctx.configService.readAggregationRoutes().routes.find(r => r.id === routeId)
+        if (!route || !route.enabled) {
+          console.warn(`[settings-handler] setScopedModels: scoped[0] "${firstModel}" 的路由不可用（${route ? '已停用' : '不存在'}），跳过 default 同步，保留现有 default`)
+          return false
+        }
       }
       const currentDefault = this.ctx.configService.getDefaultModel()
       if (!currentDefault || `${currentDefault.provider}/${currentDefault.modelId}` !== firstModel) {

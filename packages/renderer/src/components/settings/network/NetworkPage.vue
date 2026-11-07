@@ -96,7 +96,9 @@ onMounted(async () => {
   }
   try {
     const res = await transport.listProviders()
-    providers.value = res.providers
+    // kind=aggregation 排除渲染（U3/D4 ① 显式清单 (b)）：路由条目无 baseUrl，混入会成
+    // host=null 禁用行（服务商行交互对无端点条目全部错位）。服务商行与统计反查同源过滤。
+    providers.value = res.providers.filter(p => p.kind !== 'aggregation')
   } catch (e) {
     // 服务商行与统计反查降级：无 provider 数据 = 服务商行无项、统计行显裸主机名，页面仍可用
     console.warn('[NetworkPage] failed to load providers:', e)

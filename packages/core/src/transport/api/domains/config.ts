@@ -37,6 +37,10 @@ import type {
   ProviderId,
   ConnectionTestResultRow,
   UiLocale,
+  AggregationRoute,
+  AggregationRouteDeleted,
+  AggregationRouteSaved,
+  AggregationRouteView,
 } from '@taiji/shared'
 import { command } from '../request'
 import * as events from '../events'
@@ -465,6 +469,34 @@ export async function resetNetworkProxyStats(): Promise<ServerMessageMap['config
 export function onNetworkProxyConfig(handler: (config: NetworkProxyConfig) => void): () => void {
   return events.onGlobalType('config.networkProxy', (msg) => {
     handler(msg.payload.config)
+  })
+}
+
+// ── 模型路由页编排（provider-aggregation U9；协议登记 = shared protocol.ts
+//    aggregation.getRouteView/saveRoute/deleteRoute 三 RPC + aggregation.routeView 失效广播。
+//    payload 形状 SSOT = shared aggregation.ts；runtime handler =
+//    transport/aggregation-message-handler.ts。编排纯逻辑 = core domain/settings
+//    route-orchestration deep module（保存跨两权威顺序与失败恢复、join 视图/卡片派生））──
+
+/** 路由页 join 视图（卡片集合/顺序/孤儿引用/隔离呈报——形状 SSOT = shared AggregationRouteView）。 */
+export async function getRouteView(): Promise<AggregationRouteView> {
+  return command('aggregation.getRouteView', {})
+}
+
+/** routes 权威写入（保存编排的 routes 半边；id 冲突/字符集违规 runtime 走统一 error envelope → reject）。 */
+export async function saveRoute(route: AggregationRoute): Promise<AggregationRouteSaved> {
+  return command('aggregation.saveRoute', { route })
+}
+
+/** 路由删除（runtime 侧双写编排：routes 删除 + scopedModels 精确清理 + 默认编排）。 */
+export async function deleteRoute(routeId: string): Promise<AggregationRouteDeleted> {
+  return command('aggregation.deleteRoute', { routeId })
+}
+
+/** 订阅路由视图失效广播（保存/删除后 last-value 全量下发；丢失由 getRouteView 拉取收敛）。 */
+export function onRouteView(handler: (view: AggregationRouteView) => void): () => void {
+  return events.onGlobalType('aggregation.routeView', (msg) => {
+    handler(msg.payload)
   })
 }
 

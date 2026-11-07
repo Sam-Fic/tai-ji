@@ -7,7 +7,7 @@
  * 视图出现、另一个容器的实例缺失），声明灌入/清理走桥内单一写路径，无成对写。
  *
  * 内置项登记（§6.1「内置三项为注册表初始项」；core 无侧栏/设置页静态表，消费单元以
- * 声明形态登记进 core 单例）：侧栏 3 项（placement='sidebar.tab'）+ 设置页 18 项
+ * 声明形态登记进 core 单例）：侧栏 3 项（placement='sidebar.tab'）+ 设置页 19 项
  *（placement='settings.section'，group 决定归属）。内置文案走 labelKey（§6.16④），
  * 插件项文案走声明 label 原文。
  *
@@ -93,6 +93,9 @@ interface SettingsSectionSlotSpec { // oe-exempt:20261025:framework:内置分区
  * 中档（860px），其余缺省档（§7.5 判据从分区 id 硬编码迁移到声明字段）。 */
 const SETTINGS_SECTION_SPECS: SettingsSectionSlotSpec[] = [
   { id: 'provider', labelKey: 'settings.menu.provider', icon: 'settings', group: SETTINGS_GROUP_RESOURCES },
+  // 模型路由页（provider-aggregation D10 两屏：供应商页管接入、路由页管编排——紧跟供应商页；
+  // 内容分支 = SettingsModal ModelRoutePage 挂载，键与 SettingsModal MODEL_ROUTING_SECTION_KEY 一致）
+  { id: 'model-route', labelKey: 'settings.menu.modelRoute', icon: 'network', group: SETTINGS_GROUP_RESOURCES },
   { id: 'skill', labelKey: 'settings.menu.skill', icon: 'sparkles', group: SETTINGS_GROUP_RESOURCES },
   { id: 'agent', labelKey: 'settings.menu.agent', icon: 'bot', group: SETTINGS_GROUP_RESOURCES },
   { id: 'extension', labelKey: 'settings.menu.extension', icon: 'blocks', group: SETTINGS_GROUP_RESOURCES },
@@ -179,7 +182,7 @@ export function useSidebarTabs(): ComputedRef<ContentSlotView[]> {
   })
 }
 
-/** 设置页分组二级结构（内置 18 项 ∪ 插件声明项，group 归属、无组归 undefined 组）。 */
+/** 设置页分组二级结构（内置 19 项 ∪ 插件声明项，group 归属、无组归 undefined 组）。 */
 export function useSettingsNavGroups(): ComputedRef<SettingsSectionGroupView[]> {
   return computed(() => {
     const registry = getContentSlotRegistry()

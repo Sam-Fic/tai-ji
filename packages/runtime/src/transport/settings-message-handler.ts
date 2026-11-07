@@ -17,6 +17,7 @@
  *   - rename-config-message-handler.ts           会话自动重命名配置
  *   - smart-context-config-message-handler.ts    smart context 配置
  *   - network-proxy-config-message-handler.ts    LLM 网络代理配置（get/set/test/stats/reset）
+ *   - aggregation-message-handler.ts             模型路由域（getRouteView/saveRoute/deleteRoute，U9）
  *   - codemode-message-handler.ts                codemode 开关（settings.json defaultTools 域）
  *   - mcp-message-handler.ts                     MCP 服务器管理（pi 用户级 mcp.json 七命令，pi-mcp-management）
  */
@@ -36,6 +37,7 @@ import { RetryConfigMessageHandler } from './retry-config-message-handler.js'
 import { RenameConfigMessageHandler } from './rename-config-message-handler.js'
 import { SmartContextConfigMessageHandler } from './smart-context-config-message-handler.js'
 import { NetworkProxyConfigMessageHandler } from './network-proxy-config-message-handler.js'
+import { AggregationMessageHandler } from './aggregation-message-handler.js'
 import { RetryRulesConfigMessageHandler } from './retry-rules-config-message-handler.js'
 import { CodemodeMessageHandler } from './codemode-message-handler.js'
 import { McpMessageHandler } from './mcp-message-handler.js'
@@ -76,6 +78,19 @@ export interface SettingsHandlerContext extends MessageHandlerContext {
    * 同步是可用性增强，失败不阻断配置写入应答）。
    */
   providersMutatedSync?: () => Promise<void>
+  /**
+   * 模型路由 routes 权威保存/删除成功后的额度刷新触发（provider-aggregation D3 触发点①，
+   * U4/M2）：aggregation.saveRoute / aggregation.deleteRoute 成功分支调用。可选钩子
+   * （providersMutatedSync 同款形态——存量测试装配缺省 no-op）；实现内部自捕获错误
+   * fire-and-forget（QuotaService 既有节流内去重），不阻断保存回执。
+   */
+  aggregationRoutesMutated?: () => void
+  /**
+   * set_model 绑定模型路由成功后的额度刷新触发（provider-aggregation D3 触发点②，
+   * U4/M2）：model.switch 成功回执生效值后按 isAggregationModelRef 判定调用。可选钩子
+   * 同上；modelRef = 生效模型复合串（'provider/id'），非路由引用由实现内部短路。
+   */
+  routeModelBound?: (sessionId: string, modelRef: string) => void
   /**
    * 测试连接 HTTP 适配器（D-21 端口化：接口 SSOT 在 services/ports，infra 实现
    * ModelConnectionTester 由组合根构造注入——transport 不再 value import infra）。
@@ -128,6 +143,7 @@ export class SettingsMessageHandler {
   private renameConfigHandler: RenameConfigMessageHandler
   private smartContextConfigHandler: SmartContextConfigMessageHandler
   private networkProxyConfigHandler: NetworkProxyConfigMessageHandler
+  private aggregationHandler: AggregationMessageHandler
   private retryRulesConfigHandler: RetryRulesConfigMessageHandler
   private codemodeHandler: CodemodeMessageHandler
   /** mcp 域子 handler：mcpServersService 缺省（退化测试装配）时不构造，mcp.* 落 unknown_type。 */
@@ -145,6 +161,7 @@ export class SettingsMessageHandler {
     this.renameConfigHandler = new RenameConfigMessageHandler(ctx)
     this.smartContextConfigHandler = new SmartContextConfigMessageHandler(ctx)
     this.networkProxyConfigHandler = new NetworkProxyConfigMessageHandler(ctx)
+    this.aggregationHandler = new AggregationMessageHandler(ctx)
     this.retryRulesConfigHandler = new RetryRulesConfigMessageHandler(ctx)
     this.codemodeHandler = new CodemodeMessageHandler(ctx)
     const { mcpServersService } = ctx
@@ -237,6 +254,10 @@ export class SettingsMessageHandler {
     'config.testNetworkProxy': (msg, ws) => this.networkProxyConfigHandler.handle(msg, ws),
     'config.getNetworkProxyStats': (msg, ws) => this.networkProxyConfigHandler.handle(msg, ws),
     'config.resetNetworkProxyStats': (msg, ws) => this.networkProxyConfigHandler.handle(msg, ws),
+    // ── 模型路由域（aggregation-message-handler.ts，provider-aggregation U9）──
+    'aggregation.getRouteView': (msg, ws) => this.aggregationHandler.handle(msg, ws),
+    'aggregation.saveRoute': (msg, ws) => this.aggregationHandler.handle(msg, ws),
+    'aggregation.deleteRoute': (msg, ws) => this.aggregationHandler.handle(msg, ws),
     // ── codemode 开关域（codemode-message-handler.ts）──
     'config.getCodemodeEnabled': (msg, ws) => this.codemodeHandler.handle(msg, ws),
     'config.setCodemodeEnabled': (msg, ws) => this.codemodeHandler.handle(msg, ws),

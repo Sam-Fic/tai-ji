@@ -42,6 +42,13 @@ export function settingsModalApiModule(extensionOverrides: Record<string, unknow
       setExtensionDirs: vi.fn(async () => undefined),
       discoverModels: vi.fn(async () => ({ success: true, models: [] })),
       detectSources: vi.fn(async () => []),
+      // 模型路由页 aggregation 档（D10/U9 接线）：onRouteView 订阅 SettingsModal setup 即挂
+      // （缺则 TypeError 崩 mount）；getRouteView 分区首访拉取；写侧保存编排消费
+      getRouteView: vi.fn(async () => ({ cards: [], orphanRefs: [] })),
+      onRouteView: vi.fn(() => () => {}),
+      saveRoute: vi.fn(async () => ({})),
+      deleteRoute: vi.fn(async () => ({})),
+      setScopedModels: vi.fn(async (models: string[]) => models),
       // 订阅成员族：基座 9 键 + 上方注释列明的差异订阅键；任一订阅成员缺导出即 TypeError 崩 mount
       ...apiConfigDomainMock([
         'onModels', 'onExtensions', 'onDefaultsWithSource',

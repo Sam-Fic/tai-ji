@@ -13,6 +13,7 @@
  */
 import { toErrorMessage } from '../../utils/errors.js'
 import type { IConfigService } from '../../interfaces.js'
+import { AGGREGATION_PROVIDER_ID } from '@taiji/shared'
 
 /**
  * 模型是否在 taiji 注册表派生视图里（`listProviders()` = catalog 合并集 + models.json override，
@@ -38,10 +39,15 @@ export function isModelInRegistry(
  * provider 是否凭据齐备：apiKey 落盘（含 catalog 在 auth.json 的凭据）/ OAuth / ambient /
  * env_var 引用四种形态任一成立即算齐备。
  *
+ * 聚合 provider 豁免（U3/D4，AS9）：虚拟 provider 零凭据是设计内形态（pi 在注册时播种
+ * 合成凭据 {type:'api_key', source:'virtual'} 绕过鉴权检查，AS2/UD5），无豁免会对路由
+ * 条目误报 PROVIDER_CREDENTIAL_MISSING——切换链凭据分型对聚合 provider 恒判齐备。
+ *
  * 保守方向（避免误报 `PROVIDER_CREDENTIAL_MISSING`）：`apiKeySet` 为 false 但 authMethod 是
  * ambient/env_var 时仍算齐备——这类凭据由 pi 运行时解析（env 引用），taiji 侧看不到值。
  */
 export function providerHasCredential(configService: IConfigService | null, provider: string): boolean {
+  if (provider === AGGREGATION_PROVIDER_ID) return true
   if (!configService) return true
   try {
     const info = configService.listProviders().find((p) => p.id === provider)

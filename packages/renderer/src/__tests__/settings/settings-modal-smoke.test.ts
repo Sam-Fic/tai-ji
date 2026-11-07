@@ -57,13 +57,16 @@ import type { SkillDirConfig } from '@taiji/shared'
 import { useToast } from '@/composables/useToast'
 import { getSettingsStore } from '@taiji/core'
 import { makeSettingsTransportStub } from '../helpers/settings-transport-stub'
+import { ModelRoutePage } from '@taiji/ui/features/settings'
+import { config as configApi } from '@/api'
+import type { AggregationRouteCard, ProviderInfo } from '@taiji/shared'
 
 /** 挂载 open=true 的 SettingsModal（spy toast provide：toast 三面用 spy，不桥接 useToast；
  *  quota 工厂键保留 InjectionKey 类型，契约门由 makeQuotaModuleStub 的 QuotaConfigureModule
- *  返回标注承担，契约漏成员即编译错）。 */
-function mountOpenModalWithSpyToasts(): ReturnType<typeof mount> {
+ *  返回标注承担，契约漏成员即编译错）。initialSection 传深链直达分区（U10 深链直开形态）。 */
+function mountOpenModalWithSpyToasts(initialSection?: string): ReturnType<typeof mount> {
   return mount(SettingsModal, {
-    props: { open: true },
+    props: initialSection === undefined ? { open: true } : { open: true, initialSection },
     attachTo: document.body,
     global: {
       provide: {
@@ -262,5 +265,172 @@ describe('SettingsModal 路径保存失败回弹（RD-4#1：失败强制回弹 U
     expect(toasts.value.some((t) => t.type === 'error' && t.message.includes('disk full'))).toBe(true)
     expect(document.body.querySelector('[data-testid="load-paths-save-error"]')).not.toBeNull()
     expect(checkbox!.getAttribute('data-state')).toBe('unchecked')
+  })
+})
+
+
+/** 注入一个含模型的渠道 provider（引导卡 routeGuideVisible 判据 = 渠道有模型）。
+ *  调用时点须在 mount+flush 之后：open watch immediate 的 refreshProviders 会以
+ *  mock 空列表覆盖预置 providers。模型路由分区的两个 describe 共用。 */
+function seedProvider(): ProviderInfo {
+  const provider: ProviderInfo = {
+    id: 'zhipu' as ProviderInfo['id'], // ProviderId branded string
+    name: 'zhipu',
+    kind: 'catalog',
+    apiKeySet: true,
+    status: 'connected',
+    models: [{ id: 'glm-5-3', name: 'GLM-5.3 Flash' }],
+  }
+  getSettingsStore().setProviders([provider])
+  return provider
+}
+
+describe('SettingsModal 模型路由分区接线（provider-aggregation D10 两屏 / U2 一致性修复）', () => {
+  it('分区已登记：settings-nav-model-route 渲染；首访点击切换后 ModelRoutePage 挂载且不重拉（provider 分区已首拉缓存）', async () => {
+    provideMockPlatform()
+    provideSettingsTransport(makeSettingsTransportStub())
+
+    const wrapper = mountOpenModalWithSpyToasts()
+    await flushPromises()
+    seedProvider()
+    await flushPromises()
+
+    // 分区登记（lib/content-slots SETTINGS_SECTION_SPECS）→ nav 项渲染
+    const navBtn = document.body.querySelector('[data-testid="settings-nav-model-route"]')
+    expect(navBtn).not.toBeNull()
+
+    // 缺省分区 = provider：路由引用呈现（U5 补呈现 · spec §6.3/§6.4）需要 routeView，
+    // provider 分区首访已触发拉取（拉取时机跟随需要该数据的分区首访，不再「开弹层不预拉」）
+    expect(configApi.getRouteView).toHaveBeenCalled()
+    const callsAtOpen = vi.mocked(configApi.getRouteView).mock.calls.length
+
+    // 首访点击 → activeView 切换 → 编排缓存单点命中（ensureRouteView fetchStarted 守卫），
+    // 不产生第二次拉取；视图到位后 ModelRoutePage 挂载
+    navBtn!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+    expect(vi.mocked(configApi.getRouteView).mock.calls.length).toBe(callsAtOpen)
+    const page = wrapper.findComponent(ModelRoutePage)
+    expect(page.exists()).toBe(true)
+  })
+
+  it('ProviderPage 引导卡「打开模型路由」→ 切模型路由分区渲染路由页（跳转生效，spec §6.5）', async () => {
+    provideMockPlatform()
+    provideSettingsTransport(makeSettingsTransportStub())
+
+    const wrapper = mountOpenModalWithSpyToasts()
+    await flushPromises()
+    seedProvider()
+    await flushPromises()
+
+    // 引导卡可见（渠道有模型）→ 点「打开模型路由」
+    const guideBtn = document.body.querySelector<HTMLElement>('[data-testid="provider-open-route-btn"]')
+    expect(guideBtn).not.toBeNull()
+    guideBtn!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+
+    // 跳转生效：nav 高亮 model-route + 路由页挂载（openRoutePage 守卫正常路径命中，跳转不被吞）
+    expect(document.body.querySelector('[data-testid="settings-nav-model-route"]')?.getAttribute('aria-current')).toBe('page')
+    expect(wrapper.findComponent(ModelRoutePage).exists()).toBe(true)
+  })
+})
+
+describe('SettingsModal 模型路由分区首拉与删除链路（provider-aggregation U10/U11/U9 删除侧残留修复）', () => {
+  /** 本 describe 直开 model-route（深链/首拉语义），各用例独立统计 getRouteView 调用。 */
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  /** 单路由卡视图 fixture（成员渠道与 seedProvider 一致；scoped=false = 未参与选择，
+   *  测试环境 store 白名单为空——scoped 卡会被 buildRoutePageCards 派生丢弃落空态）。 */
+  function oneRouteView(): { cards: AggregationRouteCard[]; orphanRefs: string[] } {
+    return {
+      cards: [{
+        route: {
+          id: 'r1',
+          name: 'R1',
+          modelId: 'r1',
+          enabled: true,
+          mode: 'simple',
+          members: [{ id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' }],
+          specials: [],
+        },
+        scoped: false,
+        scopedIndex: -1,
+        memberIssues: [],
+      }],
+      orphanRefs: [],
+    }
+  }
+
+  it('深链直开 model-route：挂载即首访拉取（U10 watch immediate），无需 nav 点击', async () => {
+    provideMockPlatform()
+    provideSettingsTransport(makeSettingsTransportStub())
+
+    const wrapper = mountOpenModalWithSpyToasts('model-route')
+    await flushPromises()
+    seedProvider()
+    await flushPromises()
+
+    // immediate 缺失时 activeMenu 初值无变化沿 → 拉取被跳过 = 内容纯空白（U10 回归锚）
+    expect(configApi.getRouteView).toHaveBeenCalledTimes(1)
+    expect(wrapper.findComponent(ModelRoutePage).exists()).toBe(true)
+  })
+
+  it('首拉进行中：model-route 分区呈加载占位（U11），内容分支不挂载', async () => {
+    provideMockPlatform()
+    provideSettingsTransport(makeSettingsTransportStub())
+    vi.mocked(configApi.getRouteView).mockImplementationOnce(() => new Promise(() => {}))
+
+    const wrapper = mountOpenModalWithSpyToasts('model-route')
+    await flushPromises()
+
+    expect(document.body.querySelector('[data-testid="model-route-loading"]')).not.toBeNull()
+    expect(wrapper.findComponent(ModelRoutePage).exists()).toBe(false)
+  })
+
+  it('首拉失败：加载失败占位 + 重试入口（U11），重试成功后内容挂载', async () => {
+    provideMockPlatform()
+    provideSettingsTransport(makeSettingsTransportStub())
+    vi.mocked(configApi.getRouteView)
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce(oneRouteView())
+
+    const wrapper = mountOpenModalWithSpyToasts('model-route')
+    await flushPromises()
+
+    expect(document.body.querySelector('[data-testid="model-route-load-failed"]')).not.toBeNull()
+    expect(wrapper.findComponent(ModelRoutePage).exists()).toBe(false)
+    const retry = document.body.querySelector<HTMLElement>('[data-testid="model-route-retry"]')
+    expect(retry).not.toBeNull()
+    // 重试 = 重新 ensureRouteView（失败复位守卫后放行）
+    retry!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+    expect(wrapper.findComponent(ModelRoutePage).exists()).toBe(true)
+    expect(configApi.getRouteView).toHaveBeenCalledTimes(2)
+  })
+
+  it('卡头删除 → 确认弹层确认 → deleteRoute 端口被消费 + 主动拉取收敛（U9 删除侧链路）', async () => {
+    provideMockPlatform()
+    provideSettingsTransport(makeSettingsTransportStub())
+    vi.mocked(configApi.getRouteView).mockResolvedValue(oneRouteView())
+
+    const wrapper = mountOpenModalWithSpyToasts('model-route')
+    await flushPromises()
+    seedProvider()
+    await flushPromises()
+    expect(wrapper.findComponent(ModelRoutePage).exists()).toBe(true)
+
+    const deleteBtn = document.body.querySelector<HTMLElement>('[data-testid="route-delete-btn"]')
+    expect(deleteBtn).not.toBeNull()
+    deleteBtn!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+    // 确认弹层（zh locale 实文案「删除」）→ 确认
+    const confirmBtn = Array.from(document.body.querySelectorAll('button')).find((b) => b.textContent?.trim() === '删除')
+    expect(confirmBtn).toBeTruthy()
+    confirmBtn!.click()
+    await flushPromises()
+    expect(configApi.deleteRoute).toHaveBeenCalledWith('r1')
+    // 删除成功后的主动拉取收敛（不依赖广播时序；视图刷新承载卡移除）
+    expect(configApi.getRouteView).toHaveBeenCalledTimes(2)
   })
 })

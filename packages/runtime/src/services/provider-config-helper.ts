@@ -9,6 +9,14 @@
 // 避免运行时 fs/路径解析（打包后 asar 路径问题）。tsc 类型检查需 resolveJsonModule（tsconfig.json 已加）。
 import builtinData from '../generated/builtin-providers.json'
 import { type ProviderInfo, type BuiltinProviderTemplate, type ProviderId } from '@taiji/shared'
+import type {
+  AggregationMember,
+  AggregationMemberIssue,
+  AggregationRoute,
+  AggregationValidModelIndex,
+} from '@taiji/shared'
+import { AGGREGATION_PROVIDER_ID, AGGREGATION_PROVIDER_ID_RESERVED, PI_THINKING_LEVELS } from '@taiji/shared'
+import { annotateDanglingMembers, collectOrphanAggregationRefs } from '@taiji/shared'
 import { isCatalogProvider, deriveEnabled, getMergedCatalogModels } from './provider-catalog.js'
 // coding-plan 额度显示自动开启（新增即默认同意）：判定 + 落盘与导入路径（provider-importer）共用
 import { autoEnableQuotaDisplayOnCreate, isPlaintextCredential, resolveCreateMatchIdentity } from './quota-auto-enable.js'
@@ -24,6 +32,8 @@ import { pickModelCapabilityFields } from './model-mapper.js'
 import { redactSensitiveHeaders } from './provider-header-redaction.js'
 import type { IProviderCredentialResolver } from './ports/provider-credential-resolver.js'
 import { listRemoteProviderTemplates } from './remote-config/remote-provider-templates.js'
+// D4 ③ 保留 id 拒绝：带 code Error 经 server 全局 catch 透传 error envelope（errors.ts L4 通路）
+import { errorWithCode } from '../utils/errors.js'
 
 /** auth.json 存储能力（ConfigService 注入，与 ConfigService 构造函数 authStorage 同构）。
  * 不含 'set'——写入唯一经 credentialWriter（A1-4 收尾，AuthService.saveCredential）。
@@ -47,12 +57,14 @@ export type ProviderExtrasAccessors = Pick<TaijiProviderStore, 'modify' | 'getEx
 export type ProviderExtrasDeleter = Pick<TaijiProviderStore, 'delete' | 'cleanScopedModelsResidue'>
 
 /**
- * ConfigService 构造器注入的 providers.json 全量能力（四类能力组合，能力分域语义见
+ * ConfigService 构造器注入的 providers.json 全量能力（五类能力组合，能力分域语义见
  * 各自类型注释）：写（modify）/ 读（getExtrasSync+readAllSync 双读回退）/ 删除链清理
- * （delete + cleanScopedModelsResidue）/ scopedModels 顶层读写。
+ * （delete + cleanScopedModelsResidue）/ scopedModels 顶层读写 / routes 域读写
+ * （provider-aggregation U9——与 scopedModels 同为顶层域，能力对称扩展）。
  */
 export type ProviderExtrasServiceDeps = ProviderExtrasAccessors & ProviderExtrasDeleter & ProviderExtrasReader
   & Pick<TaijiProviderStore, 'getScopedModelsSync' | 'modifyScopedModels'>
+  & Pick<TaijiProviderStore, 'getAggregationRoutesWithDiagnosticsSync' | 'modifyAggregationRoutes'>
 
 /**
  * quota 副产物清理回调（D12/改动 5，生产形态 = QuotaService.clearProviderState 绑定）。
@@ -476,7 +488,7 @@ function buildCustomProviderInfo(
 }
 
 /**
- * catalog ∪ custom 双源聚合 provider 列表。
+ * catalog ∪ custom 双源聚合 provider 列表 + routes 段注入（U3/D4）。
  * 纯函数：configStore / authStorage / extrasStore 经参数注入（原 ConfigService.listProviders 搬迁）。
  *
  * A1-3 读源切换：taiji 私有字段（authMethod 显式标注 / quota / modelStates 模型启停）
@@ -488,11 +500,15 @@ function buildCustomProviderInfo(
  * sync 版单次取（`listCredentialBackedProviderIds`，auth.json ∪ models.json 各单次读）。
  * resolver 构造必需（M2fg 收尾：生产组合根恒注入，`new Set(authIds)` 内联回退已删除）——
  * 保持批量单次读盘的 B3 不变量，禁止退回 per-provider 循环。
+ *
+ * U3/D4 路由注入：extrasStore 同时携带 routes 读取能力（AggregationRoutesInjector，可选
+ * 方法——未实现时降级为无路由注入）时，聚合 provider 条目（kind='aggregation'）追加在
+ * 双源之后；scopedModels 白名单对路由条目同规则自动适用（过滤点在 aggregateModelsWithScoped）。
  */
 export function listProviders(
   configStore: IConfigStore,
   authStorage: AuthStorageAccessors | undefined,
-  extrasStore: ProviderExtrasReader | undefined,
+  extrasStore: (ProviderExtrasReader & Partial<AggregationRoutesInjector>) | undefined,
   credentialResolver: IProviderCredentialResolver,
 ): ProviderInfo[] {
   const models = configStore.readModels()
@@ -522,8 +538,221 @@ export function listProviders(
     result.push(buildCustomProviderInfo(id, config, extrasAll[id], credentialIdSet, enabledModels))
   }
 
+  // ── routes 段注入（U3/D4）：聚合 provider 条目追加在双源之后，纯磁盘派生（AX1）——
+  // 注入器不持有状态、不消费 pi 注册态（运行中新建路由即时可见，时点差见 D1 ③）。
+  // extrasStore 未注入 / 桩未实现 routes 读取方法 → 跳过注入（向后兼容降级，零路由）。
+  const aggregationRoutes = extrasStore?.getAggregationRoutesWithDiagnosticsSync?.().routes ?? []
+  const aggregationProvider = buildAggregationProviderInfo(aggregationRoutes, result)
+  if (aggregationProvider) result.push(aggregationProvider)
+
   return result
 }
+
+// ── 模型路由配置域（provider-aggregation U1：读取入口 + 存在性校验单点） ────────────────
+
+/**
+ * providers.json 的路由域读取能力（readAggregationRoutes 构造必需；U9 编排注入同一
+ * TaijiProviderStore 实例即可满足——能力按需收窄，不要求全量 store）。
+ */
+export type AggregationRoutesReader = Pick<TaijiProviderStore, 'getAggregationRoutesWithDiagnosticsSync' | 'getScopedModelsSync'>
+
+/**
+ * 路由域读取结果（U1 检查点的标记全集：悬空端点 + 失效引用 + 隔离呈报，一次读取全带出）。
+ * 全部标记均为读取侧派生，不自动写盘（清理归 U9 删除保存）。
+ */
+export interface AggregationRoutesReadResult {
+  /** 路由全集（键缺失 / 文件不存在 / 损坏被隔离 = 空数组——向后兼容与隔离语义）。 */
+  routes: AggregationRoute[]
+  /** 顶层 scopedModels 全量原样（sanitize 后；join 视图与失效引用判定的输入之一）。 */
+  scopedModels: string[]
+  /**
+   * 失效引用：scopedModels 中 provider 段为聚合保留 id、但解析不到 routes 定义的复合串
+   * （join 视图不为它们生成卡片；路由页提示条呈现，下一次保存清理）。
+   */
+  orphanRefs: string[]
+  /** 悬空端点标记（provider 已删 / 模型已移除两类——annotateDanglingMembers 全路由结果）。 */
+  memberIssues: AggregationMemberIssue[]
+  /** extras 文件（或 routes 段）损坏被隔离：true = 设置页呈报「路由配置已隔离」+ 修复指引。 */
+  corrupted: boolean
+  /** 被隔离的坏文件路径（.corrupt-<ts> 副本；corrupted=true 且 rename 成功时有值）。 */
+  corruptedFilePath?: string
+}
+
+/**
+ * 有效模型索引构建（U1 存在性校验单点，悬空端点标记的输入）。
+ *
+ * 集合基准与 listProviders 显示目录一致（「provider 已删」= 用户可见目录里没有该
+ * provider，而非编译期快照里没有——快照是 artifact 恒在，不能作判定基准）：
+ * - catalog 源候选 = (authIds ∪ models.json catalog keys) ∩ 快照（collectCatalogCandidateIds
+ *   同款集合）；模型集 = getMergedCatalogModels 合并视图单点（快照 ⊕ overlay，D4）∪
+ *   models.json override 条目——与 buildCatalogProviderModels 的混合合并同源。
+ * - custom 源 = models.json 非 catalog 条目；模型集 = 用户 models，空时 builtin 兜底
+ *   （对齐 buildCustomProviderInfo 的 T9/M5 合并兜底）。
+ *
+ * 保存侧与读取侧共用本索引 + annotateDanglingMembers（shared 纯函数）——同一输入同一
+ * 标记，杜绝两侧漂移。索引按调用现算（读盘量级与 listProviders 同源，非热路径）。
+ */
+export function buildValidModelIndex(
+  configStore: IConfigStore,
+  authStorage?: Pick<AuthStorageAccessors, 'listCredentialIds'>,
+): AggregationValidModelIndex {
+  const models = configStore.readModels()
+  const authIds = authStorage?.listCredentialIds() ?? []
+  const index = new Map<string, Set<string>>()
+
+  for (const id of collectCatalogCandidateIds(models.providers, authIds)) {
+    const modelIds = new Set<string>()
+    for (const m of getMergedCatalogModels(id)?.models ?? []) modelIds.add(m.id)
+    for (const m of models.providers[id]?.models ?? []) modelIds.add(m.id)
+    index.set(id, modelIds)
+  }
+  for (const [id, config] of Object.entries(models.providers)) {
+    if (index.has(id)) continue
+    const userModels = config.models ?? []
+    const modelIds = userModels.length > 0
+      ? new Set(userModels.map(m => m.id))
+      : new Set((builtinProvidersById.get(id)?.models ?? []).map(m => m.id))
+    index.set(id, modelIds)
+  }
+  return index
+}
+
+/**
+ * 路由配置读取入口（U1：routes 域读取 + 全部读取侧标记一次带出）。
+ *
+ * 消费方：U9 路由视图编排（join 视图的 routes/scopedModels/orphanRefs 输入）、设置页
+ * 隔离呈报（corrupted/corruptedFilePath → 「路由配置已隔离」+ 修复指引）。悬空端点标记
+ * 按 validModels 输入判定；调用方未传时本函数现算一份（传 listProviders 同源索引可免
+ * 重复聚合——性能敏感调用方自选）。
+ */
+export function readAggregationRoutes(
+  configStore: IConfigStore,
+  extrasStore: AggregationRoutesReader,
+  options?: {
+    authStorage?: Pick<AuthStorageAccessors, 'listCredentialIds'>
+    validModels?: AggregationValidModelIndex
+  },
+): AggregationRoutesReadResult {
+  const { routes, quarantine } = extrasStore.getAggregationRoutesWithDiagnosticsSync()
+  const scopedModels = extrasStore.getScopedModelsSync()
+  const validModels = options?.validModels ?? buildValidModelIndex(configStore, options?.authStorage)
+  return {
+    routes,
+    scopedModels,
+    orphanRefs: collectOrphanAggregationRefs(scopedModels, routes),
+    memberIssues: annotateDanglingMembers(routes, validModels),
+    corrupted: quarantine !== undefined,
+    ...(quarantine?.corruptedFilePath !== undefined ? { corruptedFilePath: quarantine.corruptedFilePath } : {}),
+  }
+}
+
+// ── 目录注入（provider-aggregation U3/D4：listProviders 注入路由条目，纯磁盘派生视图） ────
+
+/**
+ * 路由目录注入对 extras store 的能力要求（listProviders 注入路径读取 routes 段）。
+ * 生产注入完整 TaijiProviderStore 天然满足；消费形态为可选方法调用（Partial）——
+ * 未实现该方法的测试桩 / 早期装配降级为「无路由注入」（向后兼容，不抛错）。
+ */
+export type AggregationRoutesInjector = Pick<TaijiProviderStore, 'getAggregationRoutesWithDiagnosticsSync'>
+
+/** 聚合 provider 展示名（D4 ② 固定 id 承载全部路由；provider 行消费方已按 kind 排除渲染，
+ * 本名仅出现在模型选择器分组（U6 接 i18n 定稿时可调整）——runtime 下发数据侧给固定中文）。 */
+const AGGREGATION_PROVIDER_DISPLAY_NAME = '模型路由'
+
+// pi 思考档位七档全集（D4 ⑤ 构造规则的「普通档 / xhigh / max」分界基准）＝ shared 单源
+// PI_THINKING_LEVELS（pi-preset.ts，barrel 导出；pi-ai EXTENDED_THINKING_LEVELS 同源锚点
+// 见该处 JSDoc）——显示侧门控真源在 computeSupportedLevels→pi-ai，本表只用于构造 null 键集。
+// （曾为手写字面量副本，pi 增档时与 shared 分叉的漂移面已收敛回单点。）
+
+/**
+ * 路由条目 thinkingLevelMap 构造（D4 ⑤ 键集定形）：键集 = 端点档位并集 ∪ 并集外档位的
+ * null 键。构造规则（设计修订版，消除「并集外扩展档位」歧义）：
+ * - 并集内键值 = 同名档位（恒等映射——显示侧只看键存在与值非 null）；
+ * - 并集外的普通档（off/minimal/low/medium/high）**必须显式 null**——pi 门控对普通档缺键
+ *   默认保留（undefined 键不排除，models.js:690 return true 兜底），缺键会让显示侧
+ *   supportedLevels 与 pi 侧门控发散；
+ * - 并集外的 xhigh/max 同置 null（门控本就要求显式键，置 null 合法且形态确定）。
+ * 端点 levels 缺省 = 档位未知（shared aggregation.ts 语义）→ 并集空集 → 七档全 null。
+ */
+export function buildRouteThinkingLevelMap(members: readonly AggregationMember[]): Record<string, string | null> {
+  const union = new Set<string>()
+  for (const m of members) {
+    for (const [level, supported] of Object.entries(m.levels ?? {})) {
+      if (supported !== null) union.add(level)
+    }
+  }
+  const map: Record<string, string | null> = {}
+  for (const level of PI_THINKING_LEVELS) {
+    map[level] = union.has(level) ? level : null
+  }
+  // 防御扩展：并集中出现七档全集外的键（pi 未来新增档位）同样保留（键集 = 并集 ∪ 全集 null 键）
+  for (const level of union) {
+    if (!(level in map)) map[level] = level
+  }
+  return map
+}
+
+/**
+ * 路由条目 contextWindow = 各端点 contextWindow 最小值（D4 ⑤/D7）：压缩阈值与容量环以
+ * 最小端点为界 ≤ 命中端点实际上限，保守成立。端点元数据从同次 listProviders 已聚合的
+ * provider 列表现查（纯磁盘派生，无新增 IO）；全部端点缺省（undefined）→ undefined
+ * （注入条目不写该键，显示侧与 pi 缺省声明同形退化）。
+ */
+export function deriveRouteContextWindow(
+  members: readonly AggregationMember[],
+  aggregatedProviders: readonly ProviderInfo[],
+): number | undefined {
+  let min: number | undefined
+  for (const m of members) {
+    const endpoint = aggregatedProviders.find(p => p.id === m.providerId)?.models.find(m2 => m2.id === m.modelId)
+    const cw = endpoint?.contextWindow
+    if (typeof cw === 'number' && (min === undefined || cw < min)) min = cw
+  }
+  return min
+}
+
+/**
+ * 聚合 provider 条目构造（D4 注入形态五项定义的纯函数半边；listProviders 尾部调用）。
+ *
+ * 形态约束（隐式排除前提，破坏即 D4 ① (c)/quota 系隐式排除失效）：
+ * - apiKeySet 恒 false、无 quota 声明、无 baseUrl/api——路由无凭据无端点（AX4）；
+ * - 不标 enabled 字段（ProviderInfo.enabled 缺省即启用）——聚合条目不被 enabledModels
+ *   渠道白名单门控（启停权威 = 路由自身 enabled 字段 + scopedModels 可选性，D10）；
+ * - models 仅含 enabled 路由（停用路由选择器不出现，D9 停用侧）；全空 → 整条不注入
+ *   （零配置 / 全停用环境无聚合壳条目——V8「无路由分组残留」）。
+ */
+export function buildAggregationProviderInfo(
+  routes: readonly AggregationRoute[],
+  aggregatedProviders: readonly ProviderInfo[],
+): ProviderInfo | undefined {
+  const enabledRoutes = routes.filter(r => r.enabled)
+  if (enabledRoutes.length === 0) return undefined
+  const models: ProviderInfo['models'] = enabledRoutes.map(r => {
+    const contextWindow = deriveRouteContextWindow(r.members, aggregatedProviders)
+    return {
+      id: r.id,
+      name: r.name,
+      // D4 ⑤：reasoning 恒 true + thinkingLevelMap 端点并集（supportedLevels 由标注链自算，
+      // 注入器不手填——computeSupportedLevels 自动标注）；contextWindow = 端点最小值。
+      reasoning: true,
+      thinkingLevelMap: buildRouteThinkingLevelMap(r.members),
+      ...(contextWindow !== undefined ? { contextWindow } : {}),
+      enabled: true,
+    }
+  })
+  return {
+    // 保留 id 来自 shared 常量（反序列化边界形态与 catalog/custom 侧一致 → as ProviderId 提升）
+    id: AGGREGATION_PROVIDER_ID as ProviderId,
+    name: AGGREGATION_PROVIDER_DISPLAY_NAME,
+    apiKeySet: false,
+    // status 与 apiKeySet:false 一致（聚合条目不参与凭据状态语义；渠道管理/网络代理两处
+    // 已按 kind 排除渲染，该 status 仅在未排除的遗留消费方兜底时可见）
+    status: 'not_configured' as const,
+    models,
+    kind: 'aggregation' as const,
+  }
+}
+
 
 /**
  * 列出内置 provider 模板（wave 2，import generated JSON，无参只读，纯函数）。
@@ -1307,6 +1536,67 @@ async function provisionNewProvider(
 }
 
 /**
+ * 聚合保留 id 新建拒绝（D4 ③，拆分自 setProvider 的守卫段）：聚合 provider 固定 id 是
+ * 保留 id——新建撞保留 id 在任何写盘前拒绝（provider-write-proxy 插件通道复用本写策略链，
+ * 同被覆盖），否则 listProviders 会产出两条同 id ProviderInfo（用户条目 + 注入条目），
+ * 模型选择器按 providerId 分组与 find(p.id) 查找全部歧义。仅拦新建：编辑既有条目不触
+ * 本分支（存量异常条目仍可编辑清理）。错误经 server 全局 catch 以 shared 词表 code 透传
+ * error envelope。
+ */
+function assertNonReservedProviderId(providerId: string, existingConfig: ConfigProviderConfig | undefined): void {
+  if (existingConfig !== undefined || providerId !== AGGREGATION_PROVIDER_ID) return
+  throw errorWithCode(
+    `provider id "${AGGREGATION_PROVIDER_ID}" 是模型路由的保留 id（路由条目固定用它聚合进模型列表），` +
+      `不能用于自定义 provider。请改用其他 id（如 "${AGGREGATION_PROVIDER_ID}-custom"）。`,
+    AGGREGATION_PROVIDER_ID_RESERVED,
+  )
+}
+
+/**
+ * models 装配 + model 级 enabled 收集（拆分自 setProvider，同步函数）：mergeProviderModel
+ * 逐条合并（防线②：空/纯空白 id 被 mergeProviderModel 判 null，此处剔除——空 id 条目落盘
+ * 会毒化整个 models.json）。返回 modelStates 落盘 flush promise（G3 写侧切换：落
+ * providers.json modelStates，不写 models.json schema 外寄生字段）；undefined = 无落盘
+ * 路径，调用方条件 await（同步前缀时序契约不变）。
+ */
+function mergeProviderModelsAndCollectStates(
+  extrasStore: ProviderExtrasAccessors | undefined,
+  providerId: string,
+  data: SetProviderInput,
+  existingModels: ConfigModelDefinition[],
+  merged: Record<string, unknown>,
+): Promise<unknown> | undefined {
+  if (data.models === undefined) return undefined
+  const rawModels = data.models as Array<Record<string, unknown>>
+  // G3 写侧切换：model 级 enabled 收集到 providers.json modelStates（下方 modify 落盘），
+  // 不再写 models.json（pi schema 外寄生字段）。
+  const modelStatesUpdates: Record<string, { enabled: boolean }> = {}
+  merged.models = rawModels
+    .map(m => mergeProviderModel(m, existingModels, modelStatesUpdates, providerId))
+    .filter((m): m is ConfigModelDefinition => m !== null)
+  // modelStates 落 providers.json modelStates。await 对齐 authMethod 的 MF-1 语义：modify
+  // 失败 reject 上抛（handler try-catch 转 sendError），不静默吞。extrasStore 未注入时丢弃
+  // + warn（宁丢不写错位——生产恒注入）。
+  //
+  // S2（round 1 review suggestion）：旧实现只合并不清理（{...current, ...updates}）——
+  // 编辑体删除某自定义模型后其 modelStates 条目残留，同 id 重新添加时旧 disabled 复活。
+  // 改按保留集合（retainIds）重建（保留集合计算与写入检查见 persistModelStates）。
+  // 保留集合内：本次显式 enabled 优先，未显式传的保留既有状态（不丢未标注模型的状态）。
+  // （「条件 await」与丢弃分支归 persistModelStatesIfInjected。）
+  return persistModelStatesIfInjected(
+    extrasStore,
+    providerId,
+    merged.models as ConfigModelDefinition[],
+    modelStatesUpdates,
+  )
+}
+
+/** 写策略 kind 入口（catalog 分体系判定；write-policy 载体的 kind 参数单点）。 */
+function providerWriteKind(providerId: string): 'catalog' | 'custom' {
+  return isCatalogProvider(providerId) ? 'catalog' : 'custom'
+}
+
+/**
  * 新建 / 更新 provider（wave3 边界1 白名单检查 + I9 auth.json 清理 + catalog 分体系）。
  * 纯函数：configStore / authStorage / extrasStore / credentialWriter 经参数注入
  * （原 ConfigService.setProvider 逐字搬迁）。
@@ -1327,6 +1617,8 @@ export async function setProvider(
 ): Promise<{ newDefault?: { provider: ProviderId; modelId: string }; quotaAutoEnabled?: boolean }> {
   // wave3：existingConfig===undefined 判定「新建 provider」（边界1 白名单检查用）
   const existingConfig = configStore.getProviderConfig(providerId)
+  // D4 ③（provider-aggregation）：保留 id 守卫（条件与恢复指引见 assertNonReservedProviderId）。
+  assertNonReservedProviderId(providerId, existingConfig)
   const existing = existingConfig ?? {}
   // A1：merged 提前声明——catalog 分支 delete merged.apiKey 需在声明之后（原顺序触发 TDZ TS2448/2454）
   // TODO: 当 pi models.json 支持 schema 后收窄类型（现有 Record<string, unknown> 是架构限制）
@@ -1344,40 +1636,21 @@ export async function setProvider(
   // headers/authHeader 白名单写入。baseUrl/name/apiKey/api 的空串转译与 catalog 分体系
   // 语义委托防线载体（下方 models 装配后统一调用一次，见 applyProviderWritePolicy）。
   applyProviderHeaderFields(merged, providerId, data)
-  // wave3 C5/TC6：停用 provider 级 enabled 写入——provider 启用改由 enabledModels 白名单承载
+  // wave3 C5/TC6：停用 provider 级 enabled 写入已删除——provider 启用改由 enabledModels 白名单承载
   // （wave2 listProviders 已不读 models.json provider.enabled）。前端 onToggleEnabled 改走
   // toggleProviderEnabled（wave4），不再传 data.enabled 给 setProvider。data.enabled 参数声明保留
-  // （向后兼容），但不写入 models.json。model 级 enabled（下文 model 合并逻辑）保留。
+  // （向后兼容），但不写入 models.json。model 级 enabled（下方 models 装配）保留。
   // A1-5：quota 写入分支已删除（历史死分支：无前端调用方传 quota；quota 配置唯一写路径是
   // QuotaService.configure → config/providers.json）。禁止恢复经 setProvider 写 models.json quota。
-  if (data.models !== undefined) {
-    const rawModels = data.models as Array<Record<string, unknown>>
-    const existingModels = (existing.models ?? []) as ConfigModelDefinition[]
-    // G3 写侧切换：model 级 enabled 收集到 providers.json modelStates（下方 modify 落盘），
-    // 不再写 models.json（pi schema 外寄生字段）。
-    const modelStatesUpdates: Record<string, { enabled: boolean }> = {}
-    // 防线②（模型级空 id）：mergeProviderModel 对空/纯空白 id 返回 null，此处剔除——
-    // 空 id 条目落盘会毒化整个 models.json（pi id 是必需 minLength:1 字段）。
-    merged.models = rawModels
-      .map(m => mergeProviderModel(m, existingModels, modelStatesUpdates, providerId))
-      .filter((m): m is ConfigModelDefinition => m !== null)
-    // G3 写侧切换：model 级 enabled 落 providers.json modelStates。await 对齐 authMethod
-    // 的 MF-1 语义：modify 失败 reject 上抛（handler try-catch 转 sendError），不静默吞。
-    // extrasStore 未注入时丢弃 + warn（宁丢不写错位——生产恒注入）。
-    //
-    // S2（round 1 review suggestion）：旧实现只合并不清理（{...current, ...updates}）——
-    // 编辑体删除某自定义模型后其 modelStates 条目残留，同 id 重新添加时旧 disabled 复活。
-    // 改按保留集合（retainIds）重建（保留集合计算与写入检查见 persistModelStates）。
-    // 保留集合内：本次显式 enabled 优先，未显式传的保留既有状态（不丢未标注模型的状态）。
-    // （「条件 await」与丢弃分支归 persistModelStatesIfInjected。）
-    const modelStatesFlush = persistModelStatesIfInjected(
-      extrasStore,
-      providerId,
-      merged.models as ConfigModelDefinition[],
-      modelStatesUpdates,
-    )
-    if (modelStatesFlush) await modelStatesFlush
-  }
+  // models 装配 + modelStates 条件落盘（同步前缀时序契约不变——装配段同步执行，仅 flush 条件 await）。
+  const modelStatesFlush = mergeProviderModelsAndCollectStates(
+    extrasStore,
+    providerId,
+    data,
+    (existing.models ?? []) as ConfigModelDefinition[],
+    merged,
+  )
+  if (modelStatesFlush) await modelStatesFlush
   // ── 防线②③ 载体接线（设计 D1）──
   // 必须在 models 装配**之后**调用：载体产出 skipUpsert 时读的是装配完成的 merged.models，
   // 传原始 payload 会覆盖 mergeProviderModel 的 base spread 合并（见 ProviderWritePolicyInput.models
@@ -1386,7 +1659,7 @@ export async function setProvider(
   const { gatewayToSet, gatewayToClear, skipUpsert } = applyProviderWritePolicy(
     merged,
     { name: data.name, baseUrl: data.baseUrl, apiKey: data.apiKey, api },
-    isCatalogProvider(providerId) ? 'catalog' : 'custom',
+    providerWriteKind(providerId),
     'settings',
     providerId,
   )

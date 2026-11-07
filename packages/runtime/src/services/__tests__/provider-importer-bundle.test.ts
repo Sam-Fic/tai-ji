@@ -533,5 +533,34 @@ describe('RT-5#2: 导入路径模型字段白名单（非法 cost → 该条 fai
     }
   })
 })
+
+// ======================================================================
+// D4 ③（provider-aggregation）：导入撞聚合保留 id 拒绝（U4 一致性修复——组 1/组 2 两路径同规则）
+// ======================================================================
+describe('D4 ③：导入撞聚合保留 id → failed 条目（不落盘）', () => {
+  it('组 1 自定义 provider id="aggregation" → failed + reason 指引，upsertProvider 不调用', async () => {
+    mockedUpsertProvider_m2.mockClear()
+    const importId = createPreview('pi', [makeParsed('aggregation'), makeParsed('good-entry')])
+    const out = await applyImport(importId, ['aggregation', 'good-entry'])
+    if (!('result' in out)) throw new Error('apply should succeed')
+    const item = out.result.imported.find((i) => i.id === 'aggregation')
+    expect(item?.status).toBe('failed')
+    expect(item?.reason).toContain('保留 id')
+    expect(out.result.imported.find((i) => i.id === 'good-entry')?.status).toBe('imported')
+    expect(mockedUpsertProvider_m2).toHaveBeenCalledTimes(1)
+    expect(mockedUpsertProvider_m2.mock.calls[0]?.[0]).toBe('good-entry')
+  })
+
+  it('组 2 孤儿凭据 providerId="aggregation" → failed + reason 指引，不落盘', async () => {
+    mockedUpsertProvider_m2.mockClear()
+    const importId = createPreview('pi', [], [makeOrphan('aggregation', 'sk-reserved')])
+    const out = await applyImport(importId, ['aggregation'])
+    if (!('result' in out)) throw new Error('apply should succeed')
+    const item = out.result.imported.find((i) => i.id === 'aggregation')
+    expect(item?.status).toBe('failed')
+    expect(item?.reason).toContain('保留 id')
+    expect(mockedUpsertProvider_m2).not.toHaveBeenCalled()
+  })
+})
 });
 });

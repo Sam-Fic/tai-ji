@@ -51,7 +51,7 @@ export interface FontByteView { // oe-exempt:20261104:test:只读字节视图的
 
 export interface FontPathPolicy { // oe-exempt:20261104:test:校验策略参数形状（纯数据）
   homeDir: string
-  /** pi agent 目录禁区根（paths.ts getPiAgentDir SSOT；禁止手拼 agent 目录层级——布局迁移时手拼会漂移致禁区静默失守）。 */
+  /** pi agent 目录禁区根（paths.ts getPiAgentDir SSOT；禁止手拼数据目录下的 agent 层级——布局迁移时手拼会漂移致禁区静默失守）。 */
   agentDir: string
 }
 

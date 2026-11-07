@@ -23,7 +23,7 @@ import type { IProviderCredentialResolver } from '../ports/provider-credential-r
 import { deriveEnabled } from '../provider-catalog.js';
 import { deleteProvider } from '../provider-config-helper.js';
 import { TaijiProviderStore, type ProviderExtrasFile } from '../provider-extras-store.js';
-import { ProviderImportPreview, ProviderImportResult, SourceDetectResult, type ClientMessage, type LlmRetryConfig } from '@taiji/shared';
+import { ProviderImportPreview, ProviderImportResult, SourceDetectResult, type AggregationRoute, type ClientMessage, type LlmRetryConfig } from '@taiji/shared';
 import { existsSync, mkdirSync, mkdtemp, mkdtempSync, readFileSync, readdirSync, rm, rmSync, rmdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -712,6 +712,98 @@ describe('TaijiProviderStore', () => {
       } finally {
         warnSpy.mockRestore()
       }
+    })
+  })
+
+  describe('A5 routes 域（provider-aggregation U1：读侧损坏隔离呈报 + RMW 往返）', () => {
+    /** 合法路由条目（shared isValidRoute 全字段合法：id kebab-case / name 非空 / 端点 ≥1）。 */
+    const validRoute: AggregationRoute = {
+      id: 'work-route',
+      name: '工作路由',
+      modelId: 'work-route',
+      enabled: true,
+      mode: 'advanced',
+      members: [{ id: 'm1', providerId: 'p1', modelId: 'model-1', type: 'none' }],
+      specials: [],
+    }
+
+    function corruptFiles(): string[] {
+      return readdirSync(join(dir_m2, 'config')).filter(f => f.startsWith('providers.json.corrupt-'))
+    }
+
+    it('键缺失 = 空域：文件不存在与无 routes 键两形态下 getAggregationRoutesSync 返回 []', async () => {
+      // 文件不存在（读路径不物化文件）
+      expect(store.getAggregationRoutesSync()).toEqual([])
+      expect(existsSync(file)).toBe(false)
+      // 文件在但无 routes 键（向后兼容，不迁移不报错）
+      await store.modify('a', () => ({ authMethod: 'api_key' }))
+      expect(store.getAggregationRoutesSync()).toEqual([])
+      expect(store.getAggregationRoutesWithDiagnosticsSync().quarantine).toBeUndefined()
+    })
+
+    it('modifyAggregationRoutes RMW 往返：写入 → 读回一致；闭包参数为当前全集', async () => {
+      const result = await store.modifyAggregationRoutes(() => [validRoute])
+      expect(result).toEqual([validRoute])
+      expect(store.getAggregationRoutesSync()).toEqual([validRoute])
+      // RMW：闭包拿到的是当前全集（追加形态验证）
+      const appended = await store.modifyAggregationRoutes(cur => [
+        ...cur,
+        { ...validRoute, id: 'night-route', name: '夜间路由', modelId: 'night-route' },
+      ])
+      expect(appended).toHaveLength(2)
+      expect(store.getAggregationRoutesSync().map(r => r.id)).toEqual(['work-route', 'night-route'])
+    })
+
+    it('空数组也落全形态键 {version:1, routes:[]}（显式空域，写侧不回删键）', async () => {
+      await store.modifyAggregationRoutes(() => [])
+      const raw = JSON.parse(readFileSync(file, 'utf-8')) as { routes?: { version: number; routes: unknown[] } }
+      expect(raw.routes).toEqual({ version: 1, routes: [] })
+      expect(store.getAggregationRoutesSync()).toEqual([])
+    })
+
+    it('routes 段损坏 → 整文件隔离（.corrupt-<ts> 副本生成）+ 路由域读空 + 呈报 quarantine', async () => {
+      // 非法 routes 段：条目缺 name（isValidRoute 判损坏——schema 必填字段的隔离重演）
+      const invalidRoutes = {
+        version: 1,
+        routes: [{
+          id: 'broken-route', modelId: 'broken-route', enabled: true, mode: 'simple',
+          members: [{ id: 'm1', providerId: 'p1', modelId: 'model-1', type: 'none' }], specials: [],
+        }],
+      }
+      writeFileSync(file, JSON.stringify({ version: 1, providers: { a: { authMethod: 'api_key' } }, routes: invalidRoutes }), 'utf-8')
+      // 呈报读取必须先行（隔离是 rename 语义且读路径无缓存：首次读取消费坏文件并返回
+      // quarantine；文件移走后的后续读取 = 空域、quarantine undefined）
+      const { routes, quarantine } = store.getAggregationRoutesWithDiagnosticsSync()
+      expect(routes).toEqual([])
+      expect(quarantine?.corrupted).toBe(true)
+      // .corrupt-<ts> 副本生成（取证留盘）+ 副本路径进呈报
+      const corruptions = corruptFiles()
+      expect(corruptions).toHaveLength(1)
+      expect(quarantine?.corruptedFilePath).toBe(join(dir_m2, 'config', corruptions[0]!))
+      // 隔离后原文件已移走：后续路由域读取 = 空域且不再呈报
+      expect(store.getAggregationRoutesSync()).toEqual([])
+      expect(store.getAggregationRoutesWithDiagnosticsSync().quarantine).toBeUndefined()
+    })
+
+    it('文件级损坏（非法 JSON）同样使路由域呈报「已隔离」（routes 段没入坏文件）', () => {
+      writeFileSync(file, '{ not valid json', 'utf-8')
+      const { routes, quarantine } = store.getAggregationRoutesWithDiagnosticsSync()
+      expect(routes).toEqual([])
+      expect(quarantine?.corrupted).toBe(true)
+      expect(corruptFiles()).toHaveLength(1)
+    })
+
+    it('合法 routes 段与 providers 域混存往返：两域互不干扰', async () => {
+      await store.modify('a', () => ({ authMethod: 'api_key' }))
+      await store.modifyAggregationRoutes(() => [validRoute])
+      expect(store.getExtrasSync('a')).toEqual({ authMethod: 'api_key' })
+      expect(store.getAggregationRoutesSync()).toEqual([validRoute])
+      // routes 写不丢 providers 域；providers 写不丢 routes 域（RMW 锁内重读全文件）
+      await store.modify('b', () => ({ authMethod: 'oauth' }))
+      await store.modifyAggregationRoutes(cur => cur.filter(r => r.id !== 'work-route'))
+      expect(store.getExtrasSync('a')).toEqual({ authMethod: 'api_key' })
+      expect(store.getExtrasSync('b')).toEqual({ authMethod: 'oauth' })
+      expect(store.getAggregationRoutesSync()).toEqual([])
     })
   })
 })
