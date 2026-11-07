@@ -17,8 +17,9 @@ import {
   type FontReadIo,
 } from '../font-handlers'
 
-// agentDir 显式注入：生产缺省走 paths.ts getPiAgentDir SSOT，测试按注入的 dataDir 同构推导
-const POLICY = { homeDir: '/home/tester', dataDir: '/data/taiji', agentDir: '/data/taiji/agent' }
+// agentDir 显式注入：生产缺省走 paths.ts getPiAgentDir SSOT；DATA_ROOT 仅作测试路径推导，不参与 policy
+const DATA_ROOT = '/data/taiji'
+const POLICY = { homeDir: '/home/tester', agentDir: join(DATA_ROOT, 'agent') }
 
 function bytes(values: number[]): Uint8Array {
   return new Uint8Array(values)
@@ -52,15 +53,15 @@ describe('validateFontPath 四类凭据禁区与系统字体目录', () => {
     ['ssh', join(POLICY.homeDir, '.ssh', 'key.ttf'), join(POLICY.homeDir, '.ssh-other', 'ok.ttf')],
     ['aws', join(POLICY.homeDir, '.aws', 'credential.ttf'), join(POLICY.homeDir, '.aws-other', 'ok.ttf')],
     ['keychains', join(POLICY.homeDir, 'Library', 'Keychains', 'font.ttf'), join(POLICY.homeDir, 'Library', 'Fonts', 'font.ttf')],
-    ['agent', join(POLICY.dataDir, 'agent', 'models.json'), join(POLICY.dataDir, 'agent-other', 'font.ttf')],
+    ['agent', join(POLICY.agentDir, 'models.json'), join(DATA_ROOT, 'agent-other', 'font.ttf')],
   ])('%s 目录拒绝，名称相似的兄弟目录放行', (_name, forbidden, allowed) => {
     expect(validateFontPath(forbidden, POLICY).ok).toBe(false)
     expect(validateFontPath(allowed, POLICY)).toEqual({ ok: true })
   })
 
   it('agent/auth.json 与 agent/sessions/*.jsonl 都拒绝；系统字体目录放行', () => {
-    expect(validateFontPath(join(POLICY.dataDir, 'agent', 'auth.json'), POLICY).ok).toBe(false)
-    expect(validateFontPath(join(POLICY.dataDir, 'agent', 'sessions', 'x.jsonl'), POLICY).ok).toBe(false)
+    expect(validateFontPath(join(POLICY.agentDir, 'auth.json'), POLICY).ok).toBe(false)
+    expect(validateFontPath(join(POLICY.agentDir, 'sessions', 'x.jsonl'), POLICY).ok).toBe(false)
     expect(validateFontPath('/Library/Fonts/font.ttf', POLICY)).toEqual({ ok: true })
     expect(validateFontPath('/System/Library/Fonts/font.ttf', POLICY)).toEqual({ ok: true })
   })

@@ -24,6 +24,12 @@ export interface FontEntry { // oe-exempt:20261104:wip:来源层契约的第二�
   family: string
   /** 来源标识——只有两个取值，不预留 'remote' */
   source: 'system' | 'file'
+  /**
+   * 孤儿条目标志：上次删除时 FontFace 仍被使用、Chromium 拒删产生的残留——
+   * fontLibrary 账本行已清但来源层仍持有，重启才消失。置位后 UI 据此保留
+   * 重试删除入口；正常行与账本补行（重放失败项）无此字段。
+   */
+  orphaned?: true
 }
 
 /**
