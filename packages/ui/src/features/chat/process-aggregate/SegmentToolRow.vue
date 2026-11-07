@@ -68,6 +68,7 @@ import RunningBlockIcon from '../RunningBlockIcon.vue'
 import AggregateHoverCard from './AggregateHoverCard.vue'
 import { BLOCK_ICON_CLASS, BLOCK_ICON_LUCIDE, getBlockIcon } from '../block-icon'
 import { formatDuration } from '../format-utils'
+import { toolArgFieldText } from './tool-arg-summary'
 
 const props = defineProps<{
   /** 工具调用（段成员 FlatBlock.block.ref 的 ToolCall 形态；agentgraph 同构） */
@@ -98,23 +99,11 @@ const duration = computed(() => {
 })
 
 /**
- * 参数摘要字段序（AggregateHoverCard 同款同序——两处提取消费同一字段清单；展示级提取，
- * 非成员资格判定）。样式与提取分离：超宽省略宽度是模板层约束（min(420px,52%)），提取
- * 只产出文本。
+ * 参数摘要（字段序单源 tool-arg-summary；展示级提取，非成员资格判定）。样式与提取分离：
+ * 超宽省略宽度是模板层约束（min(420px,52%)），提取只产出文本；未覆盖形态回退空串
+ * （窄行不进长 JSON——回退两档义务见 tool-arg-summary.ts 头注释）。
  */
-const paramText = computed(() => {
-  const input = props.tool.input
-  if (typeof input === 'string') return input
-  if (input && typeof input === 'object') {
-    const obj = input as Record<string, unknown>
-    for (const key of ['command', 'path', 'pattern', 'query', 'code'] as const) {
-      const v = obj[key]
-      if (typeof v === 'string' && v.length > 0) return v
-    }
-    return ''
-  }
-  return ''
-})
+const paramText = computed(() => toolArgFieldText(props.tool.input) ?? '')
 
 /* ── 悬停浮层显隐：滚动 / 缩放 / Esc / 行点击时消失（任务书硬约束）。
       监听器随浮层在场挂载、离场移除（常驻空监听 = 无谓的全局开销）；

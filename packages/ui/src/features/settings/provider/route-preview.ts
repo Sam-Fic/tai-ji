@@ -422,12 +422,13 @@ export function endpointProviderOptions(
 ): Array<{ provider: ProviderInfo; issues: EndpointIssueKind[] }> {
   const usedByOthers = new Set(route.members.filter((m) => m.id !== member.id).map((m) => m.providerId))
   const issues = endpointIssueKinds(route, providers)
+  // 循环不变量（只依赖 route/member，与候选 provider 无关）：单次求值，循环内不再重算
+  const memberIndex = route.members.findIndex((m) => m.id === member.id)
+  const memberIssues = issues.get(memberIndex) ?? []
   const out: Array<{ provider: ProviderInfo; issues: EndpointIssueKind[] }> = []
   for (const p of providers) {
     if (p.kind === 'aggregation') continue
     if (usedByOthers.has(p.id)) continue
-    const memberIndex = route.members.findIndex((m) => m.id === member.id)
-    const memberIssues = issues.get(memberIndex) ?? []
     if (p.id === member.providerId) {
       out.push({ provider: p, issues: memberIssues })
       continue

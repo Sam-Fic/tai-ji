@@ -97,6 +97,7 @@ import BlockScrollBox from '../BlockScrollBox.vue'
 import { AnsiText, GuiComponentRenderer } from '../../../rendering-protocol'
 import { useChatViewDeps } from '../chat-view-deps'
 import { formatDuration } from '../format-utils'
+import { toolArgSummaryText } from './tool-arg-summary'
 
 const props = defineProps<{
   /** 详情锚定的工具调用（null = 关闭后无内容）；挂载方按 id 现查段数据——运行中步骤
@@ -155,26 +156,10 @@ const errorText = computed(() => (isFailed.value ? (props.tool?.error ?? '') : '
 const displayContent = computed(() => props.tool?.output || errorText.value)
 
 /**
- * 参数摘要字段序（AggregateHoverCard 同款同序；未覆盖形态回退单行 JSON——抽屉是
- * 「完整参数」通道，不可空手而归）。展示级提取，非成员资格判定。
+ * 参数摘要（字段序单源 tool-arg-summary——与 AggregateHoverCard 同源同回退；未覆盖形态
+ * 回退单行 JSON——抽屉是「完整参数」通道，不可空手而归）。展示级提取，非成员资格判定。
  */
-const paramText = computed(() => {
-  const input = props.tool?.input
-  if (typeof input === 'string') return input
-  if (input && typeof input === 'object') {
-    const obj = input as Record<string, unknown>
-    for (const key of ['command', 'path', 'pattern', 'query', 'code'] as const) {
-      const v = obj[key]
-      if (typeof v === 'string' && v.length > 0) return v
-    }
-    try {
-      return JSON.stringify(obj)
-    } catch {
-      return ''
-    }
-  }
-  return ''
-})
+const paramText = computed(() => toolArgSummaryText(props.tool?.input))
 
 /**
  * edit 的 unified patch（ToolRow 同款取数：details.patch；details.diff 是展示格式不可用）。

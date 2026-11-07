@@ -29,6 +29,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ToolCall } from '@taiji/shared'
 import { formatDuration } from '../format-utils'
+import { toolArgSummaryText } from './tool-arg-summary'
 
 const props = defineProps<{
   /** 悬停锚定的工具调用（完整参数与输出数据源） */
@@ -57,26 +58,10 @@ const duration = computed(() => {
 })
 
 /**
- * 参数摘要字段序（ToolRow argPath 同款：command/path/pattern/query/code——展示级提取，
+ * 参数摘要（字段序单源 tool-arg-summary：command/path/pattern/query/code——展示级提取，
  * 非成员资格判定）；未覆盖形态回退单行 JSON，与「完整参数」的浮层义务一致。
  */
-const paramText = computed(() => {
-  const input = props.tool.input
-  if (typeof input === 'string') return input
-  if (input && typeof input === 'object') {
-    const obj = input as Record<string, unknown>
-    for (const key of ['command', 'path', 'pattern', 'query', 'code'] as const) {
-      const v = obj[key]
-      if (typeof v === 'string' && v.length > 0) return v
-    }
-    try {
-      return JSON.stringify(obj)
-    } catch {
-      return ''
-    }
-  }
-  return ''
-})
+const paramText = computed(() => toolArgSummaryText(props.tool.input))
 
 /** 输出前 8 行（「最多 8 行输出」硬约束）；output 空时失败 error 文本兜底 */
 const outputPreview = computed(() => {
