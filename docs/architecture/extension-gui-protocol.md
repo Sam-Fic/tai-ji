@@ -719,6 +719,8 @@ export const EXTENSION_EVENTS = {
 
 ### 8.4 Message 类型补 details（审查 S3）
 
+> **[已废弃] 本方案的 bgNotify 路径未采用**：Message 的 bgNotify 字段未落地，BgNotifyCard 结构化渲染已退役（bgNotify 渲染分支已删，bg-notify 消息 display:false 不进渲染、details 仅原始透传）——现行 custom message 形态见 §15.1 渲染能力总览表；customType / details 透传部分已按本节落地（现状实装见 shared 包 Message 接口的 details 字段注释）。以下为原设计草案，仅供追溯。
+
 custom message 方案（§4.5）前端拿不到 `__gui__`，因为 Message 类型没有 details 字段，customStart handler 读了但没存。
 
 ```typescript
@@ -1070,7 +1072,7 @@ extension 用通用原语组合表达领域数据，不再有专属组件类型�
 
 ### 15.2 已有结构化范例的 CSS 约定（协议前端组件必须遵循）
 
-taiji 已有 3 个结构化渲染范例，协议新增组件必须对齐其 CSS 约定：
+taiji 已有多个结构化渲染范例，协议新增组件必须对齐下表的 CSS 约定：
 
 | 约定 | 范例来源 | 具体用法 |
 |------|---------|---------|

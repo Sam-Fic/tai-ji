@@ -105,9 +105,10 @@ export function makeToolCall(over: Partial<ToolCall> = {}): ToolCall {
  *  provideOverrides：ChatViewDeps 字段覆写（如 toolDetailRenderer——tool-detail-rich 路由）。
  *  provide mockChatProvide：ToolRow 经 useChatViewDeps inject 消费壳依赖（ui-optimize-unified
  *  N1 文件 chip 起），直接 mount 必须注入 mock deps——与 Turn 链测试的 provide 口径一致。
- *  [chat-flow-process-aggregate U3] Block 转发壳退役后本编排直挂 ToolRow（行组件本体保留、
- *  被聚合块复用）：旧壳根的 .trace-blk 类名契约与 block-tool-<id> testid 挂点随壳退役
- *  （类名归 Turn.vue 单元 wrapper；聚合块内成员行形态由 SegmentToolRow 承载）。 */
+ *  [chat-flow-process-aggregate U3] Block 转发壳退役后本编排直挂 ToolRow（行组件本体保留
+ *  但生产链零消费：休眠，仅组件级测试经本编排可达——聚合块内成员行形态由 SegmentToolRow
+ *  承载）：旧壳根的 .trace-blk 类名契约与 block-tool-<id> testid 挂点随壳退役
+ *  （类名归 Turn.vue 单元 wrapper）。 */
 export function mountToolRow(
   tool: ToolCall,
   extraProps: Record<string, unknown> = {},
