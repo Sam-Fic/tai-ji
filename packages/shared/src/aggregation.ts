@@ -328,9 +328,14 @@ export function generateRouteIdFromName(name: string): string {
 // ── 保存校验（U1 检查点：id 唯一 + 字符集；嵌套路由/重复渠道拒绝，悬空端点只标记不拒绝） ──
 
 /** 路由域错误码词表（wire error envelope 的 code 值域；D10 请求级失败统一 error envelope）。 */
-export type AggregationErrorCode = 'route_id_conflict' | 'route_id_invalid' | 'route_not_found' | 'route_member_nested'
+export type AggregationErrorCode =
+  | 'route_id_conflict'
+  | 'route_id_invalid'
+  | 'route_not_found'
+  | 'route_member_nested'
+  | 'route_shape_invalid'
 
-export const AGGREGATION_ERROR_CODES: readonly AggregationErrorCode[] = ['route_id_conflict', 'route_id_invalid', 'route_not_found', 'route_member_nested']
+export const AGGREGATION_ERROR_CODES: readonly AggregationErrorCode[] = ['route_id_conflict', 'route_id_invalid', 'route_not_found', 'route_member_nested', 'route_shape_invalid']
 
 /** 保存校验结果信封（network-proxy 域同款形态：ok 或面向用户的错误清单）。 */
 export type AggregationRouteValidationResult =
@@ -338,8 +343,69 @@ export type AggregationRouteValidationResult =
   | { ok: false; code: AggregationErrorCode; errors: string[] }
 
 /**
+ * 保存载荷形态校验（写侧形态门；与读取侧损坏判别 parseAggregationRoutesSection 同一套
+ * 谓词，复用其内部助手）。处置对象 = 设计登记残留风险 4：saveRoute payload wire 侧无
+ * schema 层把关，非 UI 写入口可产越界形态——读取侧对任一字段形态违规判整文件损坏
+ * （providers.json 隔离为 .corrupt 副本 + 路由配置按空继续），写侧放行即把损坏写进盘。
+ * 校验逻辑单点在本文件（schema 唯一定义点），经 validateAggregationRouteUpsert 既有
+ * 调用链消费，handler 零改动。
+ *
+ * 与读侧判别的映射边界：id 字符集/长度格式读侧同样判损坏，但写侧保留既有
+ * route_id_invalid 专用语义（错误消息带修复指引，比笼统形态拒绝更可操作），形态门只收
+ * 「非串/空串」类型级违规；id 冲突、端点 id 重复、嵌套路由、渠道重复同理由既有语义检查
+ * 承接（读侧判损坏的该几项写侧早已拒绝，非缺口）。
+ */
+function collectRouteShapeErrors(next: unknown): string[] {
+  if (!isPlainObject(next)) return ['路由保存载荷必须是对象形态。']
+  const r = next as Record<string, unknown>
+  const errors: string[] = []
+  if (typeof r.id !== 'string' || r.id === '') errors.push('路由 id 必须是非空字符串。')
+  if (typeof r.name !== 'string') errors.push('路由名称 name 必须是字符串。')
+  if (typeof r.modelId !== 'string' || r.modelId === '') errors.push('路由对外模型 id modelId 必须是非空字符串。')
+  if (typeof r.enabled !== 'boolean') errors.push('路由启停 enabled 必须是布尔值。')
+  if (typeof r.mode !== 'string' || !AGGREGATION_ROUTE_MODES.includes(r.mode as AggregationRouteMode)) {
+    errors.push(`路由模式 mode 必须是 ${AGGREGATION_ROUTE_MODES.join(' / ')} 之一。`)
+  }
+  if (!Array.isArray(r.members)) {
+    errors.push('端点集合 members 必须是数组。')
+  } else {
+    r.members.forEach((m, memberIndex) => errors.push(...collectMemberShapeErrors(memberIndex, m)))
+  }
+  if (!Array.isArray(r.specials)) {
+    errors.push('特殊日期集合 specials 必须是数组。')
+  } else {
+    r.specials.forEach((s, specialIndex) => {
+      if (!isValidSpecialDate(s)) {
+        errors.push(`特殊日期第 ${specialIndex + 1} 条形态非法：id 须为非空字符串、date 须为 YYYY-MM-DD 本地日期、mode 须为 ${AGGREGATION_SPECIAL_DATE_MODES.join(' / ')} 之一；include 型须带同日起止 from/to（HH:mm 24 小时制且起 < 止）。`)
+      }
+    })
+  }
+  return errors
+}
+
+/** 单条端点的形态违规收集（逐字段复用读取侧谓词，违规字段逐条指名——错误可直接定位）。 */
+function collectMemberShapeErrors(memberIndex: number, m: unknown): string[] {
+  const label = `端点第 ${memberIndex + 1} 条`
+  if (!isPlainObject(m)) return [`${label}必须是对象形态。`]
+  const errors: string[] = []
+  if (!hasNonEmptyRefFields(m)) errors.push(`${label}的 id / providerId / modelId 必须是非空字符串。`)
+  if (!hasValidConditionType(m)) errors.push(`${label}的条件类型 type 必须是 ${AGGREGATION_MEMBER_CONDITION_TYPES.join(' / ')} 之一。`)
+  if (m.window !== undefined && !isValidTimeWindowTable(m.window)) {
+    errors.push(`${label}的时间窗表 window 必须是 ${TIME_WINDOW_DAYS} 行 × ${TIME_WINDOW_SLOTS_PER_DAY} 列的布尔矩阵。`)
+  }
+  if (!hasValidQuotaCondition(m)) errors.push(`${label}的额度条件 quota.thresholdPercent 必须是 0-${AGGREGATION_QUOTA_THRESHOLD_MAX} 的整数。`)
+  if (!hasValidLevelsMap(m)) errors.push(`${label}的思考档位表 levels 必须是「key → string | null」的对象映射。`)
+  return errors
+}
+
+/**
  * 单条路由 upsert 的保存校验（保存语义 = 结构与 id 合法性把关；端点存在性走标记不拒绝——
  * 「允许保留悬空端点 + 标记提示」，不丢用户配置）。
+ *
+ * 形态门前置（残留风险 4 处置，collectRouteShapeErrors）：载荷按 unknown 形态校验，任一
+ * 字段形态违规 → route_shape_invalid 拒绝（与读取侧损坏判别同一套谓词——写侧放行的每
+ * 一种形态，读侧都不会判损坏隔离）。形态门先行兼防崩溃：越界形态（非串 name/id、非数组
+ * members）此前会在下方语义检查处 TypeError。
  *
  * 端点引用两道硬拒绝（route-matrix.md「同系统内未穷举的组合清单」组合 1/3 的行为契约）：
  * 端点 providerId 为聚合保留 id（嵌套路由）→ route_member_nested 拒绝；同一
@@ -357,6 +423,10 @@ export function validateAggregationRouteUpsert(
   existing: readonly AggregationRoute[],
   priorId?: string,
 ): AggregationRouteValidationResult {
+  const shapeErrors = collectRouteShapeErrors(next)
+  if (shapeErrors.length > 0) {
+    return { ok: false, code: 'route_shape_invalid', errors: shapeErrors }
+  }
   const errors: string[] = []
   let code: AggregationErrorCode = 'route_id_invalid'
   if (!isValidRouteId(next.id)) {

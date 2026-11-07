@@ -244,8 +244,103 @@ describe('保存校验（validateAggregationRouteUpsert）', () => {
     expect(validateAggregationRouteUpsert(dangling, existing).ok).toBe(true)
   })
 
-  it('错误码词表完备（wire error envelope code 值域四值）', () => {
-    expect(AGGREGATION_ERROR_CODES).toEqual(['route_id_conflict', 'route_id_invalid', 'route_not_found', 'route_member_nested'])
+  it('错误码词表完备（wire error envelope code 值域五值）', () => {
+    expect(AGGREGATION_ERROR_CODES).toEqual(['route_id_conflict', 'route_id_invalid', 'route_not_found', 'route_member_nested', 'route_shape_invalid'])
+  })
+})
+
+// ── 写侧形态门（残留风险 4 处置：写侧校验补齐读侧损坏判别的真子集缺口——读侧判损坏、
+//    写侧此前放行的全部形态，现在 saveRoute 单点拒绝，不再把越界形态写进 providers.json） ──
+
+describe('保存载荷形态门（route_shape_invalid，与读取侧损坏判别同谓词）', () => {
+  const existing = [makeRoute({ id: 'glm-flash' })]
+
+  /** 形态门用例构造助手（越界形态不满足 AggregationRoute 类型，逐例断言 cast）。 */
+  function routeWith(overrides: Record<string, unknown>): AggregationRoute {
+    return { ...makeRoute(), ...overrides } as unknown as AggregationRoute
+  }
+
+  it.each([
+    ['端点 id 非字符串', { members: [{ id: 123, providerId: 'p', modelId: 'm', type: 'none' }] }],
+    ['端点 id 空串', { members: [{ id: '', providerId: 'p', modelId: 'm', type: 'none' }] }],
+    ['端点 providerId 空串', { members: [{ id: 'ep', providerId: '', modelId: 'm', type: 'none' }] }],
+    ['端点 modelId 非字符串', { members: [{ id: 'ep', providerId: 'p', modelId: 42, type: 'none' }] }],
+    ['端点 type 缺失', { members: [{ id: 'ep', providerId: 'p', modelId: 'm' }] }],
+    ['端点 type 非法值', { members: [{ id: 'ep', providerId: 'p', modelId: 'm', type: 'score' }] }],
+    ['window 表非数组', { members: [{ id: 'ep', providerId: 'p', modelId: 'm', type: 'window', window: 'busy' }] }],
+    ['window 表行数非 7', { members: [{ id: 'ep', providerId: 'p', modelId: 'm', type: 'window', window: Array.from({ length: 6 }, () => Array<boolean>(48).fill(false)) }] }],
+    ['window 表列数非 48', { members: [{ id: 'ep', providerId: 'p', modelId: 'm', type: 'window', window: Array.from({ length: 7 }, () => Array<boolean>(47).fill(false)) }] }],
+    ['window 表元素非布尔', { members: [{ id: 'ep', providerId: 'p', modelId: 'm', type: 'window', window: Array.from({ length: 7 }, () => Array.from({ length: 48 }, () => 'yes' as unknown as boolean)) }] }],
+    ['quota 非对象', { members: [{ id: 'ep', providerId: 'p', modelId: 'm', type: 'quota', quota: 'ok' }] }],
+    ['quota 阈值越界（>100）', { members: [{ id: 'ep', providerId: 'p', modelId: 'm', type: 'quota', quota: { thresholdPercent: 101 } }] }],
+    ['quota 阈值非整数', { members: [{ id: 'ep', providerId: 'p', modelId: 'm', type: 'quota', quota: { thresholdPercent: 12.5 } }] }],
+    ['levels 值非 string|null', { members: [{ id: 'ep', providerId: 'p', modelId: 'm', type: 'none', levels: { high: 1 } }] }],
+    ['levels 数组形态', { members: [{ id: 'ep', providerId: 'p', modelId: 'm', type: 'none', levels: ['high'] }] }],
+  ])('member 越界：%s → route_shape_invalid 拒绝', (_label, overrides) => {
+    const result = validateAggregationRouteUpsert(routeWith(overrides), existing)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.code).toBe('route_shape_invalid')
+      expect(result.errors.length).toBeGreaterThan(0)
+    }
+  })
+
+  it.each([
+    ['route.modelId 空串', { modelId: '' }],
+    ['route.enabled 非布尔', { enabled: 'yes' }],
+    ['route.mode 非词表值', { mode: 'fastest' }],
+    ['members 非数组', { members: 'all-members' }],
+    ['specials 非数组', { specials: {} }],
+    ['special 条目 date 形态非法', { specials: [{ id: 'sp', date: '20261001', mode: 'exclude' }] }],
+    ['special 条目 id 空串', { specials: [{ id: '', date: '2026-10-01', mode: 'exclude' }] }],
+    ['special 条目 mode 非词表', { specials: [{ id: 'sp', date: '2026-10-01', mode: 'off' }] }],
+    ['special include 缺 from/to', { specials: [{ id: 'sp', date: '2026-10-01', mode: 'include' }] }],
+    ['special include from 非 HH:mm', { specials: [{ id: 'sp', date: '2026-10-01', mode: 'include', from: '9:00', to: '12:00' }] }],
+    ['special include 起止相等（零长度窗）', { specials: [{ id: 'sp', date: '2026-10-01', mode: 'include', from: '10:00', to: '10:00' }] }],
+  ])('路由级越界：%s → route_shape_invalid 拒绝', (_label, overrides) => {
+    const result = validateAggregationRouteUpsert(routeWith(overrides), existing)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('route_shape_invalid')
+  })
+
+  it('载荷整体非对象（null）→ route_shape_invalid 拒绝（此前该形态在语义检查处 TypeError）', () => {
+    const result = validateAggregationRouteUpsert(null as unknown as AggregationRoute, existing)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('route_shape_invalid')
+  })
+
+  it('错误消息逐字段指名（可定位到端点条目与字段）', () => {
+    const bad = routeWith({ members: [{ id: 'ep', providerId: 'p', modelId: 'm', type: 'score' }] })
+    const result = validateAggregationRouteUpsert(bad, existing)
+    if (!result.ok) expect(result.errors.join('；')).toContain('type')
+  })
+
+  it('UI 正常保存形态照常通过（新建路由草稿 + 条件切换产出的全字段端点 + 特殊日期双型）', () => {
+    const uiRoute = makeRoute({
+      id: 'new-route',
+      name: '新路由',
+      modelId: 'seed-model',
+      mode: 'advanced',
+      members: [
+        // buildNewRouteDraft 预填端点形态（route-editor-ops.ts：短码 id + type none）
+        { id: 'm-lz3k9x-7f2a', providerId: 'zhipu', modelId: 'glm-5.3-flash', type: 'none' },
+        // endpoint-condition-type 切换产出的形态：整表 window + 缺省阈值 quota（缺表补工作日窗）
+        { id: 'm-lz3k9y-91cd', providerId: 'opencode-go', modelId: 'zai-glm-5.3-flash', type: 'combo', window: Array.from({ length: 7 }, () => Array<boolean>(48).fill(false)), quota: { thresholdPercent: 20 } },
+        // schema 定形字段（M1 编辑器不产不回填，形态契约仍在写侧放行域内）
+        { id: 'm-lz3k9z-ab3e', providerId: 'zhipu', modelId: 'glm-5.2', type: 'quota', quota: { thresholdPercent: 100 }, levels: { high: 'high', medium: null } },
+      ],
+      specials: [
+        { id: 'sp-lz3ka0-01', date: '2026-12-24', mode: 'exclude' },
+        { id: 'sp-lz3ka1-02', date: '2026-12-25', mode: 'include', from: '10:00', to: '12:00' },
+      ],
+    })
+    expect(validateAggregationRouteUpsert(uiRoute, existing).ok).toBe(true)
+  })
+
+  it('id 字符集格式违规仍走既有 route_id_invalid 专用语义（形态门不接管格式类，修复指引保留）', () => {
+    const result = validateAggregationRouteUpsert(routeWith({ id: 'Bad_Id' }), existing)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('route_id_invalid')
   })
 })
 

@@ -75,6 +75,46 @@ function saveRouteMsg(route: AggregationRoute): Extract<ClientMessage, { type: '
   return { type: 'aggregation.saveRoute', id: 'msg-1', payload: { route } }
 }
 
+// ── saveRoute 拒绝路径（shared validateAggregationRouteUpsert 形态门，残留风险 4）：
+//    非 UI 写入口的越界形态在保存入口拒绝（route_shape_invalid），不再把读侧会判损坏
+//    （整文件隔离 .corrupt）的形态写进 providers.json。 ────────────────────────────────
+
+describe('AggregationMessageHandler saveRoute 形态拒绝（route_shape_invalid）', () => {
+  it('端点形态越界（type 非法值）→ sendError route_shape_invalid，不回执不广播不触发刷新钩子', async () => {
+    const ctx = makeCtx([])
+    const badRoute = {
+      ...sampleRoute,
+      id: 'route-bad',
+      members: [{ id: 'm1', providerId: 'p1', modelId: 'model-1', type: 'score' }],
+    } as unknown as AggregationRoute
+    await new AggregationMessageHandler(ctx).handle(saveRouteMsg(badRoute), ws)
+    expect(vi.mocked(ctx.sendError)).toHaveBeenCalledWith(ws, 'route_shape_invalid', expect.stringContaining('type'), 'msg-1')
+    expect(vi.mocked(ctx.reply)).not.toHaveBeenCalled()
+    expect(vi.mocked(ctx.broadcastProviderList)).not.toHaveBeenCalled()
+    expect(vi.mocked(ctx.aggregationRoutesMutated)).not.toHaveBeenCalled()
+    expect(vi.mocked(ctx.broadcast)).not.toHaveBeenCalled()
+  })
+
+  it('特殊日期形态越界（date 非 YYYY-MM-DD）→ 同样 route_shape_invalid 拒绝', async () => {
+    const ctx = makeCtx([])
+    const badRoute = {
+      ...sampleRoute,
+      id: 'route-bad-specials',
+      specials: [{ id: 'sp', date: '20261001', mode: 'exclude' }],
+    } as unknown as AggregationRoute
+    await new AggregationMessageHandler(ctx).handle(saveRouteMsg(badRoute), ws)
+    expect(vi.mocked(ctx.sendError)).toHaveBeenCalledWith(ws, 'route_shape_invalid', expect.stringContaining('特殊日期'), 'msg-1')
+    expect(vi.mocked(ctx.reply)).not.toHaveBeenCalled()
+  })
+
+  it('合法路由载荷照常保存（既有成功路径不受形态门影响）', async () => {
+    const ctx = makeCtx([])
+    await new AggregationMessageHandler(ctx).handle(saveRouteMsg(sampleRoute), ws)
+    expect(vi.mocked(ctx.sendError)).not.toHaveBeenCalled()
+    expect(vi.mocked(ctx.reply)).toHaveBeenCalledWith(ws, 'msg-1', 'aggregation.routeSaved', { route: sampleRoute, memberIssues: [] })
+  })
+})
+
 describe('AggregationMessageHandler 广播收尾（SC2 路由保存后即触发 provider 列表广播）', () => {
   it('saveRoute 成功 → broadcastProviderList 触发一次 + routeView 广播发出', async () => {
     const ctx = makeCtx([])
