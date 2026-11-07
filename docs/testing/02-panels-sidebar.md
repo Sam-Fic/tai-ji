@@ -564,7 +564,7 @@ test.describe('DrawerPanel E2E', () => {
 | git tab 暂存/提交交互 | stage/unstage/commit 操作（只读渲染亦无 E2E 覆盖——示意编号 E2E-SD-5 场景未落地实际用例） | E2E（需补操作按钮 testid） | 中 |
 | 大文件截断 | file.read >1MB → detail-truncated 显示 | 非 MOCK（mock file.read 恒小文本） | 低 |
 | 二进制文件 | 图片等 → detail-binary 显示 | 非 MOCK（mock 不返回二进制标记） | 低 |
-| diff/preview 切换 | 点 detail-view-toggle 在 diff/preview 间切换（每次切换重新拉数据；示意编号 E2E-SD-4 场景未落地实际用例，E2E 无现行覆盖） | E2E（需补） | — |
+| diff/preview 切换 | 点 detail-view-toggle 在 diff/preview 间切换（每次切换重新拉数据；示意编号 E2E-SD-4 场景未落地实际用例，E2E 无现行覆盖） | E2E（需补） | 中 |
 
 > ⚠️ **viewMode 不持久（已知限制，非 backlog）**：`useDetailPane.state` 是组件级 `ref`，`DetailPane` 在抽屉容器内是条件挂载——切走（切到 git/doc tab）即 unmount，state 销毁；切回重新 `useDetailPane()` → `initialState()` → viewMode 复位为 `'preview'`。**无 store/localStorage 持久化**。如需「切走再切回记忆 viewMode」是功能增强需求，需改造成 store 或 module 级缓存，当前不作为测试 backlog（测了也是验证缺陷）。
 

@@ -16,7 +16,6 @@
  * - T4.2: 无匹配 → 空态
  * - T4.5: 清空 → 恢复完整树
  * - T6.12: 已开 drawer 点新文件 → 新增 tab；已开文件再点仅激活（W3 注入语义）
- * - T6.7: 异步前 → 骨架态
  */
 import { test, expect } from './fixtures/launch-app'
 
