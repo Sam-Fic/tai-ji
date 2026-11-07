@@ -76,7 +76,7 @@
                把已完结 user-only turn（命令取消 / 纯 notify 命令）也算进来致永久占位，故加门收敛；
                门关的 user-only turn 走空格 fallback（D2，与 user 行同款 `|| ' '`），不谎报进行中。 -->
           <div class="flex min-w-0 items-center gap-[6px]">
-            <!-- active 态：呼吸弧（微缩，复用 Block.vue 的 RUNNING_LOADER_SVG）。
+            <!-- active 态：呼吸弧（微缩，复用 block-icon.ts 的 RUNNING_LOADER_SVG）。
                  图标色随选中节点提为 fg-2（demo .rail-node.on .rail-row svg 对弧同样生效）。
                  loader 判据 [chat-flow-consistency C5] = sessionActive ∧ turn.isStreaming（回合
                  数据派生，与 Turn 同源）——双工作态过渡期（插话回流开新回合、旧回合未收尾）

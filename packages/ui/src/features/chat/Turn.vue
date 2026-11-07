@@ -212,8 +212,8 @@
           class="trace-blk"
           :class="unit.kind === 'text' ? 'trace-blk--text' : ''"
         >
-          <!-- 正文行 → TextRow 直渲染（不经壳透传）：turn-actions 锚行插槽直传，锚行开关 =
-               isActionsAnchor（旧壳 $slots 判空语义的等价单点） -->
+          <!-- 正文行 → TextRow 直渲染：turn-actions 锚行插槽直传，锚行开关 =
+               isActionsAnchor（use-turn-trace.ts:131 锚单元判定——末位 text 单元才挂插槽） -->
           <TextRow
             v-if="unit.kind === 'text'"
             v-bind="textUnitProps(unit.block)"

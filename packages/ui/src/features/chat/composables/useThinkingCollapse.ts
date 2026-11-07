@@ -1,11 +1,11 @@
 /**
- * useThinkingCollapse —— thinking 块折叠状态机（从 Block.vue 拆出，控 script 行数）。
+ * useThinkingCollapse —— thinking 块折叠状态机。
  *
  * 职责：折叠/展开状态 + 手动操作置位 + working 回落 + 收起预览 + working 尾行视口。
  *  - 折叠默认值：working 态也默认折叠（60 字符预览），与过程块收编理念一致（收编减体积
  *    + thinking 折叠 = 视觉体积最小）；用户可手动展开，展开后保持。
  *    原 SSOT §3.3.3「working→false 展开」导致 streaming 中所有 thinking 全展开，与收编
- *    减体积冲突（裁决史见 Block.vue 同区域注释）。
+ *    减体积冲突。
  *  - 用户手动 toggle 过（收起/展开均置位）→ 完成态不回落（显式意图优先，CQ1）。
  *  - working true→false：未手动操作过的块回落收起。
  *  - 收起态预览：头 60 字符截断；working 态改单行尾行视口（机制见 useTailScroll 头注释），

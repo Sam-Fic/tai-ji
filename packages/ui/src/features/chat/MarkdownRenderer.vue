@@ -31,7 +31,7 @@
         data-testid="md-streaming-fence"
         class="my-2.5 flex items-center gap-1.5 rounded border border-border bg-surface-2 px-2.5 py-1.5"
       >
-        <!-- eslint-disable-next-line vue/no-v-html -- 硬编码常量 loader SVG（block-icon.ts，同 Block.vue running 态用法） -->
+        <!-- eslint-disable-next-line vue/no-v-html -- 硬编码常量 loader SVG（block-icon.ts RUNNING_LOADER_SVG） -->
         <span class="inline-flex size-[15px] shrink-0 items-center justify-center text-accent animate-loader-spin" v-html="RUNNING_LOADER_SVG" />
         <span data-testid="md-streaming-fence-lang" class="font-mono text-[length:var(--text-2xs)] font-semibold lowercase tracking-[0.08em] text-neutral-dim">{{ seg.lang }}</span>
       </div>

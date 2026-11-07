@@ -19,7 +19,7 @@ import { type ComputedRef, type Ref, computed, onUnmounted, ref, watch } from 'v
 export interface UseTailScrollOptions {
   /** 降级开关：恒 settled 瞬切（无滑入动画） */
   disableScroll?: boolean
-  /** 纵向滑入动画时长（ms），与 Block.vue CSS --duration-fast 对应。默认 120。 */
+  /** 纵向滑入动画时长（ms），对齐全局 CSS --duration-fast token。默认 120。 */
   slideDuration?: number
 }
 
@@ -35,7 +35,7 @@ export interface UseTailScrollReturn {
 const DEFAULT_SLIDE_DURATION = 120
 /**
  * 尾行窗口行数（机制按 2 行窗口设计：settled 单行、sliding 双行；调用方以
- * `tailLines(content, TAIL_WINDOW_LINES)` 取窗口）。消费方 = Block.vue（tool 尾行）与
+ * `tailLines(content, TAIL_WINDOW_LINES)` 取窗口）。消费方 = ToolRow.vue:277（tool 尾行）与
  * useThinkingCollapse（working 态尾行），统一此单源防两份手写常量漂移。
  */
 export const TAIL_WINDOW_LINES = 2

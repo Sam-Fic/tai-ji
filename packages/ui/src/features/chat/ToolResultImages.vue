@@ -12,7 +12,7 @@
     - live 单图写入由本组件触发（设计「live 期新到图片在剩余额度内即写」）；hydrate
       批量（新→旧有序、超帽即停）在 core persistImagesNewestFirst（useChat.hydrateHistory
       挂点），两路共用 in-flight 去重与内容 hash 记账。
-    独立子组件：Block.vue template 行数余量不足，不可内联（对齐 ImageThumb 先例）。
+    独立子组件（对齐 ImageThumb 先例）。
   -->
   <span class="tool-result-images mr-2 inline-flex flex-wrap items-center gap-1.5 align-middle">
     <template v-for="(item, i) in items" :key="i">

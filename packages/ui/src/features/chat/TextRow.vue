@@ -1,10 +1,10 @@
 <!--
-  展示组件 · 正文块（trace 块 text 类型行组件，W1 壳化拆分自 Block.vue）。
-.trace-blk / .trace-blk--text 类名契约归 Turn.vue 单元 wrapper（Block 转发壳退役），
+  展示组件 · 正文块（trace 块 text 类型行组件）。
+.trace-blk / .trace-blk--text 类名契约归 Turn.vue 单元 wrapper，
   本组件根 = 原 text 分支根 div（data-testid="block-text"），无新 DOM 层。
   职责：markdown 正文渲染 + error 独立追加行 + 行尾时刻 + turn-actions 锚行（Turn 级
-  hover actions 挂载位：壳层收到 #turn-actions 插槽时经 hasTurnActions 打开锚行，插槽
-  经壳透传挂入，显隐由 opacity 门控）+ 正文入场动效挂点（chat-flow-process-aggregate
+  hover actions 挂载位：Turn.vue 以 isActionsAnchor 判据经 hasTurnActions prop 打开
+  锚行并直传 #turn-actions 插槽，显隐由 opacity 门控）+ 正文入场动效挂点（chat-flow-process-aggregate
   D10：.agg-text-enter 挂本组件根，判据经 entrance prop 传入、setup 期一次性捕获——
   Turn.vue 单元 wrapper 不再承载入场类，见 entrance prop 注释）。
 -->
@@ -41,8 +41,8 @@
          透明底不再覆盖任何文字）。常驻 h-6 行占位（opacity 门控显隐，与 UserBubble
          mt-1+h-6 同参）；悬停区 = 外层 group/text（正文行 + 本行），按钮是本块 DOM
          子孙，移入按钮期间悬停态经 DOM 祖先传递不丢失。
-         锚行开关 = hasTurnActions（Block 壳以 $slots 判空传入——壳收到插槽时锚行恒渲染，
-         与拆分前 $slots 判空语义一致）。 -->
+         锚行开关 = hasTurnActions（Turn.vue 以 isActionsAnchor 判据传入——真值时锚行
+         恒渲染，可见度由 opacity 门控）。 -->
     <span
       v-if="hasTurnActions"
       class="mt-1 flex h-6 items-center gap-0.5 opacity-0 pointer-events-none transition-opacity duration-[var(--duration-fast)] group-hover/text:pointer-events-auto group-hover/text:opacity-100 group-focus-within/text:pointer-events-auto group-focus-within/text:opacity-100"
@@ -90,7 +90,7 @@ const props = defineProps<{
   messageTimestamp?: number
   /** 所属 session（透传给 MarkdownRenderer 供文件路径打开 DetailPane 用） */
   sessionId?: string | null
-  /** 壳层是否收到 #turn-actions 插槽（Block 壳 $slots 判空传入；真值时锚行恒渲染，
+  /** 是否挂载 #turn-actions 插槽（Turn.vue 以 isActionsAnchor 判据传入；真值时锚行恒渲染，
    *  可见度由 opacity 门控） */
   hasTurnActions?: boolean
 }>()

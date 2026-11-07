@@ -1,8 +1,8 @@
 /**
  * format-utils.ts —— trace 块耗时格式化 + header 摘要截短。
  *
- * W2: formatDuration（从 Block.vue / SubagentRow.vue 抽出，DRY）。
- * W3: shortenForHeader（bash 折叠头路径截短）+ tailLines（末行截取）。
+ * 工具函数：formatDuration / shortenForHeader（bash 折叠头路径截短）/ tailLines（末行
+ * 截取），trace 行组件族共用（DRY 单源）。
  *
  * 接受 unknown（meta 字段 / progress 快照字段类型宽松），非数字返回空串。
  */
@@ -121,7 +121,8 @@ export function shortenForHeader(text: string, opts?: { home?: string }): string
 /**
  * 取末 n 行（W3）。
  *
- * 2026-08 性能优化：尾部扫描替代全文 split——消费点（Block.vue thinking/tool 尾行视口）
+ * 2026-08 性能优化：尾部扫描替代全文 split——消费点（ToolRow.vue:275 tool 尾行视口 /
+ * useThinkingCollapse.ts:62 thinking 尾行视口）
  * 对几十 KB streaming 文本每 commit 调用，全文 split 逐次 O(len)；尾部扫描从尾倒找第 n 个
  * '\n' 后只对尾部分片 split。与 split('\n').slice(-n) 逐 case 等价（对拍测试
  * format-utils.test.ts）。
@@ -161,7 +162,7 @@ const JSON_INDENT = 2
  * 背景：subagent（cw 递归编排）大量用 bash 执行结构化命令，stdout 是单行压缩
  * JSON，原样 whitespace-pre-wrap 渲染不可读；格式化后可读性大幅提升。
  * 判定先行避免对普通文本白跑 JSON.parse。大对象开销可接受——调用方 computed 缓存
- * + 仅展开工具卡片时求值。（自 Block.vue 抽出，无行为差异。）
+ * + 仅展开工具卡片时求值。
  */
 export function formatJsonIfValid(raw: unknown): string | null {
   if (typeof raw !== 'string') return null

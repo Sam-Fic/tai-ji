@@ -1,7 +1,6 @@
 <!--
-  展示组件 · 子代理行（trace 块 subagent 类型行组件；分派链：ToolRow 按工具名两分 → 本组件，
-  Block 转发壳退役）。
-  .trace-blk 类名契约归 Turn.vue 单元 wrapper、block-tool-<id> testid 随 Block 转发壳退役，
+  展示组件 · 子代理行（trace 块 subagent 类型行组件；分派链：ToolRow 按工具名两分 → 本组件）。
+  .trace-blk 类名契约归 Turn.vue 单元 wrapper、block-tool-<id> testid 已退役，
   本组件根 = 原 subagent 分支根 div（.trace-subagent + data-testid="subagent-block"），
   无新 DOM 层。
 -->
@@ -63,7 +62,8 @@
       </template>
       <!-- [MF-1-30]（demo TurnList.vue:96 .failtag + workbench.css:399）：失败文案 chip——
            11px（--text-2xs）fw-mid danger 字 + danger-soft 底 + r-xs + 1px 6px 内边距，
-           与 bash-group 组头失败 chip（Block.vue traceFailed 段）同形态值。内容 = tool.error
+           与聚合块 bash-group 组头失败 chip（SegmentToolGroup.vue:36 / AggregateLiveWindows.vue:73，
+           panel.message.traceFailed）同形态值。内容 = tool.error
            摘要（max-w 截断 + title 全文，长错误不撑爆行；demo 失败文案即行内可见）。 -->
       <span
         v-if="isFailed && tool.error"

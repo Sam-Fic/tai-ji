@@ -158,7 +158,7 @@ export interface ChatViewDeps {
    * [tool-detail-rich] 工具展开细节富渲染组件（renderer 提供，ui 只路由不实现）：
    * read → 行号 gutter 代码块（shiki）；write → 懒加载 git diff（新文件回退全增 diff）；
    * edit → details.diff unified patch 直嗂 DiffView。ui 侧仅对 read/write/edit 三类
-   * 非失败且有内容的工具路由（Block.vue hasRichDetail），字段缺席（测试 mock 壳 /
+   * 非失败且有内容的工具路由（ToolRow.vue:294 hasRichDetail），字段缺席（测试 mock 壳 /
    * 未接壳的宿主）→ 回退既有纯文本输出渲染。
    * optional，同 sessionCwdOf 族：缺席即回退，不阻断 ChatView 其余功能。
    */
