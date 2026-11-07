@@ -737,7 +737,7 @@ testid 以组件 template 内 data-testid 属性为准。对话流相关已落�
 | `turn-meta-{index}` | TurnMeta.vue | 回合折叠条 |
 | `block-text` | TextRow.vue | 正文块根（原 Block.vue text 分支根，chat-flow-process-aggregate D1 后 Block.vue 退役拆分为 TextRow/ToolRow 等） |
 | `agg-summary-row` / `agg-expanded` / `agg-tool-row` / `tool-detail-drawer` 等 agg-* 系 | ProcessAggregateBlock.vue 组件族（`features/chat/process-aggregate/`） | 过程段聚合条：摘要行 / 展开平铺 / 工具单步行 / 工具详情抽屉（对话流过程段主链锚点） |
-| `tool-block-header` | ToolRow.vue | 工具块 header（对话流主链过程段已收进聚合块，仅 ChangeSetCard 等非聚合块路径可达） |
+| `tool-block-header` | ToolRow.vue | 工具块 header（对话流主链过程段已收进聚合块；ToolRow 生产链零消费、组件休眠，本 testid 生产渲染链不可达，仅组件级测试可达） |
 | `change-set-card` / `change-set-header` / `change-set-file` | ChangeSetCard.vue | 变更集卡 |
 | `subagent-directive-bubble` | SystemNotice.vue | subagent 指令行 |
 | `pending-bubble-list` | MessageStream.vue | 待渲染气泡列表 |

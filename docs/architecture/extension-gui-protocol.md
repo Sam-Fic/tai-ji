@@ -1065,7 +1065,7 @@ extension 用通用原语组合表达领域数据，不再有专属组件类型�
 | **tool result** | 对话流聚合块路径：工具详情抽屉富渲染（`__gui__` 经 `GuiComponentRenderer`）+ ANSI/文本兜底（已实现；原纯文本单层形态已随 chat-flow-process-aggregate D1 退役删除） | `process-aggregate/AggregateToolDetailDrawer.vue`（`extractGui` → `GuiComponentRenderer`） | 已完成（P0 ANSI 兜底通道 + D4 抽屉富渲染分支） |
 | **widget（M17）** | composer 任务托盘的协议 widget 区（已实现；原「对话流 WidgetArea」消费端已于 2026-09-16 退役，见 [D11](../design/composer-task-tray.md)） | 托盘 widget 区：icon 按钮行（`meta` 驱动 icon/badge/状态色）+ 面板内 `GuiComponentRenderer`（`guiTree` 逐项渲染） | `extension:widget`/`extension:widgetGui` 订阅 → ViewHostStore per-session 缓存 → 托盘消费；widget 不再进 SideDrawer/sidebar |
 | **status** | **已退役**（底栏 StatusBar 及其数据链删除，ADR-0141；pi 原生 setStatus 在 taiji 内翻译为 noop） | — | 无需对接（独立 pi CLI 不受影响） |
-| **custom message** | BgNotifyCard（结构化）/ SystemNotice（纯文本）| MessageStream.vue: `v-else-if="bgNotify"` | 加 `message.details.__gui__` 检测 + `GuiComponentRenderer` |
+| **custom message** | SystemNotice（纯文本）（原 BgNotifyCard 结构化渲染已退役：bgNotify 渲染分支已删，bg-notify 消息 display:false 不进渲染，details 仅原始透传）| MessageStream.vue: `v-else-if="item.kind === 'systemNotice'"` | 加 `message.details.__gui__` 检测 + `GuiComponentRenderer` |
 | **dialog** | **不存在** | — | 新建 `ExtensionUIDialog` + `extension.ui_request` handler |
 
 ### 15.2 已有结构化范例的 CSS 约定（协议前端组件必须遵循）
@@ -1075,11 +1075,11 @@ taiji 已有 3 个结构化渲染范例，协议新增组件必须对齐其 CSS 
 | 约定 | 范例来源 | 具体用法 |
 |------|---------|---------|
 | Tailwind 工具类内联 | 全部 | `flex flex-wrap items-center gap-x-3` |
-| CSS 变量语义色 | BgNotifyCard | `text-danger`、`text-success`、`text-info`、`text-reasoning` |
-| `color-mix` 状态淡底 | BgNotifyCard | `bg-[color-mix(in_oklch,var(--danger)_5%,transparent)]` |
-| @lucide/vue 图标 | BgNotifyCard / TurnMeta（`size-3.5` 变体；原 Block.vue 范例已随 chat-flow-process-aggregate D1 退役） | `size-3`（12px）尺寸约定 |
+| CSS 变量语义色 | StatsLine / Card / UserBubble / ChangeSetCard | `text-danger`、`text-success`、`text-info`、`text-reasoning` |
+| `color-mix` 状态淡底 | ChangeSetCard / TurnMeta | `bg-[color-mix(in_oklch,var(--danger)_20%,transparent)]` |
+| @lucide/vue 图标 | TurnMeta（`size-3.5` 变体；原 Block.vue 范例已随 chat-flow-process-aggregate D1 退役） | `size-3`（12px）尺寸约定 |
 | `font-mono` 等宽小字 | SegmentToolRow / AggregateToolDetailDrawer（原 Block.vue stats 行已随 D1 退役） | `text-[11px]` 或 `text-[12px]` |
-| 卡片形态 | BgNotifyCard / ChangeSetCard | `rounded-md border px-3 py-2` |
+| 卡片形态 | ChangeSetCard | `rounded-card bg-surface`（header `px-3 py-2`） |
 
 ### 15.3 前端组件清单与设计
 
