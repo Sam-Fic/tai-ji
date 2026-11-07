@@ -315,6 +315,17 @@ function credentialMissingPresentation(target: string): string {
   return `模型调用失败：${target} 的凭据缺失或已失效，请到设置页 Provider 分区更新该渠道的 API Key`
 }
 
+/**
+ * 回合失败错误的用户呈现（单点组合）：命中凭据缺失词表 → 结构化映射；未命中原样透传。
+ *
+ * 消费点（同一组合此前在 runtime event-adapter 两出口内联——live 链的 message.complete
+ * errorMessage 与 stream_error content；本函数收编后重放链 core apply-entry-convert 复用
+ * 同一实现，live 与重放对同一失败条目产出逐字相同的错误文本）。
+ */
+export function formatTurnErrorPresentation(raw: string): string {
+  return formatCredentialMissingPresentation(raw) ?? raw
+}
+
 export interface SkillInfo {
   id: string
   name: string

@@ -15,7 +15,7 @@
  */
 
 import { shallowRef, type ShallowRef } from 'vue'
-import type { Message } from '@taiji/shared'
+import { ASSISTANT_ERROR_FALLBACK_TEXT, type Message } from '@taiji/shared'
 import type { FinalizeReason } from './store-types'
 import { randomUuid } from '../../utils/random-uuid'
 
@@ -139,8 +139,10 @@ export function isErrorFinalizeReason(reason: FinalizeReason): reason is ErrorFi
  * 兜底收尾在出口而非各调用点——新增收尾调用漏传文案不破坏不变量。
  * 文案对齐 runtime 侧用户可见错误文本惯例（中文，随消息持久化）。
  */
+// 'error' 兜底文案单源 = shared ASSISTANT_ERROR_FALLBACK_TEXT（重放链 apply-entry-convert
+// 对同一保底消费同一常量；stream_error/disconnect/restart 是 live 独有终态，不落盘无重放形态）
 export const REASON_FALLBACK_ERROR_TEXT: Record<ErrorFinalizeReason, string> = {
-  error: '会话出错，回复已中断。',
+  error: ASSISTANT_ERROR_FALLBACK_TEXT,
   stream_error: '输出流中断，回复不完整。',
   disconnect: '与运行时的连接已断开，回复已中断。重新连接后可继续。',
   restart: '运行时已重启，回复已中断。重新连接后可继续。',

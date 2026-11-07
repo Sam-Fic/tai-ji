@@ -233,6 +233,16 @@ export const DELIVERY_PREVIEW_MAX_CHARS = 80
 export type MessageStatus = 'streaming' | 'complete' | 'error'
 export type ToolCallStatus = 'running' | 'completed' | 'error' | 'end_not_received'
 
+/**
+ * assistant 回合失败的兜底错误文案（errorMessage 缺失/空串时的呈现保底）。
+ *
+ * 不变量（M2 error-visibility 追加形态的渲染依据）：status:'error' 的 assistant 消息
+ * error 字段必非空——TextRow 以「error 字段有无」判 error 独立 danger 行，空串会让
+ * 错误气泡静默成空白。live（core mutations REASON_FALLBACK_ERROR_TEXT.error）与重放
+ * （core apply-entry-convert 重放派生）两链共用本单源，防同文案双处维护漂移。
+ */
+export const ASSISTANT_ERROR_FALLBACK_TEXT = '会话出错，回复已中断。'
+
 export interface ToolCall {
   id: string
   toolName: string

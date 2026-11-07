@@ -106,7 +106,7 @@ export type {
   PiRespawnNoticeVariant,
   SendPromptReason,
 } from './message'
-export { parseBgNotifyDetails, COMPLETE_NOTIFY_CUSTOM_TYPES, SUBAGENT_DIRECTIVE_CUSTOM_TYPE, parseSubagentDirective, PI_RESPAWN_NOTICE_CUSTOM_TYPE, parseRespawnNoticeVariant, parseBackgroundBashDetails, parseWorkflowResultNotify, MSG_ID_TAG_RE, MSG_ID_TAG_BARE_RE, BARE_UUID_RE, MSG_ID_UUID_SEGMENT, MSG_ID_ADOPTED_SEGMENT, markerLiteral, DELIVERY_PREVIEW_MAX_CHARS, decodeNewlineEscapes } from './message'
+export { parseBgNotifyDetails, COMPLETE_NOTIFY_CUSTOM_TYPES, SUBAGENT_DIRECTIVE_CUSTOM_TYPE, parseSubagentDirective, PI_RESPAWN_NOTICE_CUSTOM_TYPE, parseRespawnNoticeVariant, parseBackgroundBashDetails, parseWorkflowResultNotify, MSG_ID_TAG_RE, MSG_ID_TAG_BARE_RE, BARE_UUID_RE, MSG_ID_UUID_SEGMENT, MSG_ID_ADOPTED_SEGMENT, markerLiteral, DELIVERY_PREVIEW_MAX_CHARS, decodeNewlineEscapes, ASSISTANT_ERROR_FALLBACK_TEXT } from './message'
 // w21 pi-entry：pi session entry wire 类型（runtime 实时重构 ↔ core reducer ↔ protocol payload 三方共用）
 export type {
   PiEntry, PiEntryBase, PiMessageEntry, PiMessageBody,
@@ -158,7 +158,7 @@ export type {
 // 切换链分型与 infra 出站映射共用同一判定）
 export {
   PI_CREDENTIAL_MISSING_PREFIX, PI_VIRTUAL_ROUTE_NO_CREDENTIALS_PATTERN,
-  formatCredentialMissingPresentation,
+  formatCredentialMissingPresentation, formatTurnErrorPresentation,
 } from './provider'
 // 模型路由域（provider-aggregation U1 契约根：类型全集 + 校验/标记纯函数 SSOT；
 // runtime store 写侧、路由页编排 U9、设置页 U5、选择器 U6、pi 路由扩展 U2 共同 import，

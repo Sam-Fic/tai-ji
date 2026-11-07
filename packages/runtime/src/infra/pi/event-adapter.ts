@@ -23,7 +23,7 @@
  * 产出一组中间事件），可变态由 EventInterpreter 持有。
  */
 import type { ServerMessage, ServerMessageType, ExtensionInteractMethod, PiMessageEntry, PiToolCallEntryForm } from '@taiji/shared'
-import { EXTENSION_EVENTS, SUBAGENT_DIRECTIVE_CUSTOM_TYPE, parseSubagentDirective, formatCredentialMissingPresentation } from '@taiji/shared'
+import { EXTENSION_EVENTS, SUBAGENT_DIRECTIVE_CUSTOM_TYPE, parseSubagentDirective, formatTurnErrorPresentation } from '@taiji/shared'
 import { GUI_WIDGET_MARKER, ASK_USER_MARKER, SESSION_MANAGER_MARKER, SESSION_MANAGER_ACTIONS, SCHEDULE_CREATE_MARKER, PLAN_REVIEW_MARKER, UI_FORM_MARKER, SUBAGENT_JOURNAL_MARKER, JOURNAL_REPORT_ACK, CANVAS_MARKER, PERMISSION_APPROVAL_TITLE, isCanvasMarkerRequest, isGuiComponent, isGuiRenderResult, isScheduleDraft, isFormQuestion, isSubagentJournalReport } from '@zhushanwen/extension-protocol'
 import type { SessionManagerAction } from '@zhushanwen/extension-protocol'
 import type { PiEventListener } from '../../services/ports/pi-engine.js'
@@ -171,10 +171,10 @@ function handleStreamErrorSub(sub: PiErrorSubEvent, sid: string): PiTranslatedEv
   if (sub.reason === 'aborted') return [{ kind: 'noop' }]
   // U3/AX5 出站错误结构化映射（凭据缺失形态）：pi 透传的 `No API key` 文本（checkAuth
   // / pi-ai 出站构造，词表见 @taiji/shared PI_CREDENTIAL_MISSING_PREFIX）替换为
-  // 含端点名与恢复指引的呈现；非命中文本原样透传（映射仅覆盖真实会发生的错误形态，
-  // 厂商失败文本无统一形态不建词表——范围裁断见该函数 JSDoc）。
+  // 含端点名与恢复指引的呈现；非命中文本原样透传（组合单点 formatTurnErrorPresentation，
+  // 与 message.complete errorMessage 出口及重放链 reducer 同实现）。
   const rawStreamError = sub.error?.errorMessage ?? sub.reason
-  const content = formatCredentialMissingPresentation(rawStreamError) ?? rawStreamError
+  const content = formatTurnErrorPresentation(rawStreamError)
   return [{ kind: 'message', message: { type: 'message.stream_error', payload: { sessionId: sid, content, kind: sub.reason } } }]
 }
 
@@ -379,11 +379,12 @@ function emptyMessagesDegradedTurnEnd(sid: string, willRetry: boolean): PiTransl
 /**
  * 从 lastMsg 提取 stopReason / usage / responseModel / diagnostics / errorMessage。
  * errorMessage 仅在 error / tool_use 两种 stopReason 下透出（pi 契约，其余为 undefined）。
- * errorMessage 出站前经 formatCredentialMissingPresentation 结构化映射（U3/AX5）：凭据
+ * errorMessage 出站前经 formatTurnErrorPresentation 结构化映射（U3/AX5）：凭据
  * 缺失文本（No API key 词表 + 虚拟模型路由 routed to 形态）替换为含端点名与恢复指引的
  * 呈现，非命中原样透传。流前 throw（pi resolveModel 凭据拦截）不经 message_update 子
  * 事件——该形态的用户呈现通路就是本出口的 message.complete errorMessage（下方
- * stream_error 出口覆盖不到），映射必须挂在本出口才到达对话流错误呈现。
+ * stream_error 出口覆盖不到），映射必须挂在本出口才到达对话流错误呈现；重放链对同一
+ * 落盘原文经同一映射函数（core apply-entry-convert），live 与重放文本逐字一致。
  */
 function extractAgentEndFields(
   lastMsg: PiAgentEndEvent['messages'][number],
@@ -401,7 +402,7 @@ function extractAgentEndFields(
   const errorMessage =
     rawErrorMessage === undefined
       ? undefined
-      : formatCredentialMissingPresentation(rawErrorMessage) ?? rawErrorMessage
+      : formatTurnErrorPresentation(rawErrorMessage)
   return {
     rawReason,
     usage,

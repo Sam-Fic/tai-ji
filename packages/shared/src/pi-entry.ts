@@ -58,6 +58,20 @@ export interface PiMessageBody {
   display?: unknown
   /** branchSummary role 专属 */
   fromId?: unknown
+  /**
+   * assistant role 专属：pi StopReason（'stop' | 'length' | 'content_filter' | 'tool_use'
+   * | 'error' | 'aborted'）。重放派生消费 'error'（失败回合落盘条目——pi agent.js
+   * handleRunFailure 构造的 failureMessage 经 message_end appendMessage 常规落盘）；
+   * 其余值不产错误呈现（'aborted' 与 live 链 terminalMessagePatch 口径一致按正常完成派生）。
+   */
+  stopReason?: unknown
+  /**
+   * assistant role 专属：pi 失败错误原文（stopReason='error' 时 pi handleRunFailure 恒
+   * 写入 error.message；虚拟模型路由凭据拦截 = 「routed to ... which has no credentials.」
+   * 形态）。重放侧经 formatTurnErrorPresentation 组合单点映射，与 live 链
+   * event-adapter 出口同函数同文本。
+   */
+  errorMessage?: unknown
 }
 
 export interface PiMessageEntry extends PiEntryBase {
