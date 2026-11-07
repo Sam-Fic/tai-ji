@@ -8,7 +8,7 @@
  * 覆盖用例（execution-plan §测试验收清单）：
  * - E2E-1 (T1.8): 切「文件」tab → 顶层节点 DOM 可见
  * - E2E-2 (UC-1+2): 点目录展开 → 子节点 DOM 出现 → 角标渲染
- * - E2E-3 (UC-6, T6.2): 点文件 → SideDrawer detail → 内容显示
+ * - E2E-3 (UC-6, T6.2): 点文件 → DrawerPanel detail → 内容显示
  *   [R3 退役 2026-09-15] E2E-3b（改动文件 → diff 显示 + 禁 v-html）已删除：diff 视图
  *   已从 raw diff 文本（diff --git 头）改为结构化 hunk 渲染（@@ … @@），断言过期。git 可追溯。
  * - E2E-4 (AC-3.5): 切 session 再切回 → 展开态恢复
@@ -76,12 +76,12 @@ test.describe('文件树 E2E', () => {
     await expect(newFeatureRow).toContainText('A')
   })
 
-  test('E2E-3a (T6.2): 点文件 → SideDrawer detail 打开 + 显示内容', async ({ page }) => {
+  test('E2E-3a (T6.2): 点文件 → DrawerPanel detail 打开 + 显示内容', async ({ page }) => {
     await gotoFileTree(page)
     await page.getByTestId('file-tree-dir-src').click()
     // 点 src/index.ts（未改动文件 → file.read 内容预览）
     await page.getByTestId('file-tree-file-src/index.ts').click()
-    // SideDrawer detail tab 打开 + DetailPane 渲染
+    // DrawerPanel detail tab 打开 + DetailPane 渲染
     await expect(page.getByTestId('detail-pane')).toBeVisible({ timeout: 5_000 })
     // 内容显示（mock file.read ts 文件返回含 'export function'）
     await expect(page.getByTestId('detail-content')).toBeVisible({ timeout: 5_000 })
