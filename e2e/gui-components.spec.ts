@@ -4,8 +4,9 @@
  * 验证 GUI 渲染协议的**对话流内**链路（tool result 路径）：
  *
  * 路径 B（tool result __gui__）:
- *   mock tool_call_end 携带 details.__gui__ → Block.vue extractGui 提取
- *   → GuiComponentRenderer 路由 → card 嵌套 progress-bar + stats-line 渲染
+ *   mock tool_call_end 携带 details.__gui__ → 聚合块摘要行 → 工具单步行 → 工具详情抽屉
+ *   AggregateToolDetailDrawer extractGui 提取（原 Block.vue 挂点已随 chat-flow-process-aggregate
+ *   D1 退役，提取链由抽屉承接）→ GuiComponentRenderer 路由 → card 嵌套 progress-bar + stats-line 渲染
  *
  * [R3 退役 2026-09-15] 路径 A ×2（extension:widgetGui → SideDrawer terminal/browser
  * tab 渲染）已删除：SideDrawer 内 gui-stats-line / gui-list-tree testid 已不存在

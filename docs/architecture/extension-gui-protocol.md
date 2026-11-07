@@ -61,7 +61,7 @@ extension execute() / event handler
 | pi agent-core | `agent-session.js:451-460` | `result: event.result` 原样引用，零过滤 |
 | pi RPC stdout | `rpc-mode.js:264` + `jsonl.js:8` | `JSON.stringify(event)` 原样输出 |
 | taiji runtime | `event-adapter.ts:147-151` | `details as Record<string, unknown>` 原样透传 |
-| 前端 Block.vue | `tool.details.__gui__` | 按 `.type` 路由到 Vue 组件 |
+| 前端工具详情抽屉 `AggregateToolDetailDrawer.vue`（`extractGui` 提取，chat-flow-process-aggregate D4 后的现行消费入口） | `tool.details.__gui__` | 交 `GuiComponentRenderer` 按 `.type` 路由到 Vue 组件 |
 
 **边界约束**：`__gui__` 必须放在 `result.details` 下（整体透传），不能放在 `result.content` 内（会被 event-adapter 过滤成 text/image）。
 
@@ -807,7 +807,7 @@ const resolved = computed(() => resolveComponent(props.component, CUSTOM_MAP))
 
 **custom 类型约束**：外部（用户安装的）extension 的 custom 组件无法在前端注册——Vue 组件定义需要编译期打包，不能通过 WS 传输。仅 taiji 内置 extension 可在编译期注册到 `CUSTOM_MAP`。
 
-### 9.2 Block.vue 集成（审查 S6——不能直接落地）
+### 9.2 ~~Block.vue 集成~~（审查 S6——不能直接落地；已退役：Block.vue 已随 chat-flow-process-aggregate D1 退役删除〔2026-11〕，本节为该形态下的集成设计记录，现行载体 = 工具详情抽屉 `process-aggregate/AggregateToolDetailDrawer.vue` 经 `extractGui` → `GuiComponentRenderer`，见 §15.4 挂载点表）
 
 Block.vue 当前结构：折叠态 header（1 行）+ 展开态详情（`<template v-if="toolExpanded">`），且 subagent 有独立分支。GuiComponentRenderer 插入在**展开态详情内**，替换原来的纯文本 result：
 
@@ -1062,7 +1062,7 @@ extension 用通用原语组合表达领域数据，不再有专属组件类型�
 
 | 渲染入口 | 当前能力 | DOM 结构 | 协议对接改动 |
 |---------|---------|---------|-------------|
-| **tool result** | 纯文本 `{{ result }}` | Block.vue: `<span>{{ result }}</span>` + `font-mono whitespace-pre-wrap` | 加 `GuiComponentRenderer` 分支 + `AnsiRenderer` 兜底 |
+| **tool result** | 对话流聚合块路径：工具详情抽屉富渲染（`__gui__` 经 `GuiComponentRenderer`）+ ANSI/文本兜底（已实现；原纯文本单层形态已随 chat-flow-process-aggregate D1 退役删除） | `process-aggregate/AggregateToolDetailDrawer.vue`（`extractGui` → `GuiComponentRenderer`） | 已完成（P0 ANSI 兜底通道 + D4 抽屉富渲染分支） |
 | **widget（M17）** | composer 任务托盘的协议 widget 区（已实现；原「对话流 WidgetArea」消费端已于 2026-09-16 退役，见 [D11](../design/composer-task-tray.md)） | 托盘 widget 区：icon 按钮行（`meta` 驱动 icon/badge/状态色）+ 面板内 `GuiComponentRenderer`（`guiTree` 逐项渲染） | `extension:widget`/`extension:widgetGui` 订阅 → ViewHostStore per-session 缓存 → 托盘消费；widget 不再进 SideDrawer/sidebar |
 | **status** | **已退役**（底栏 StatusBar 及其数据链删除，ADR-0141；pi 原生 setStatus 在 taiji 内翻译为 noop） | — | 无需对接（独立 pi CLI 不受影响） |
 | **custom message** | BgNotifyCard（结构化）/ SystemNotice（纯文本）| MessageStream.vue: `v-else-if="bgNotify"` | 加 `message.details.__gui__` 检测 + `GuiComponentRenderer` |
@@ -1077,8 +1077,8 @@ taiji 已有 3 个结构化渲染范例，协议新增组件必须对齐其 CSS 
 | Tailwind 工具类内联 | 全部 | `flex flex-wrap items-center gap-x-3` |
 | CSS 变量语义色 | BgNotifyCard | `text-danger`、`text-success`、`text-info`、`text-reasoning` |
 | `color-mix` 状态淡底 | BgNotifyCard | `bg-[color-mix(in_oklch,var(--danger)_5%,transparent)]` |
-| @lucide/vue 图标 | BgNotifyCard / Block.vue | `size-3`（12px）尺寸约定 |
-| `font-mono` 等宽小字 | Block.vue stats 行 | `text-[11px]` 或 `text-[12px]` |
+| @lucide/vue 图标 | BgNotifyCard / TurnMeta（`size-3.5` 变体；原 Block.vue 范例已随 chat-flow-process-aggregate D1 退役） | `size-3`（12px）尺寸约定 |
+| `font-mono` 等宽小字 | SegmentToolRow / AggregateToolDetailDrawer（原 Block.vue stats 行已随 D1 退役） | `text-[11px]` 或 `text-[12px]` |
 | 卡片形态 | BgNotifyCard / ChangeSetCard | `rounded-md border px-3 py-2` |
 
 ### 15.3 前端组件清单与设计
@@ -1108,7 +1108,7 @@ taiji 已有 3 个结构化渲染范例，协议新增组件必须对齐其 CSS 
 
 | 渲染入口 | 挂载位置 | 文件 |
 |---------|---------|------|
-| tool result GuiComponent | Block.vue 展开态详情内（`extractGui` 调用 ×2） | `Block.vue:191,198` |
+| tool result GuiComponent | 聚合块工具详情抽屉（`extractGui`，tool_call_end details 优先 + running 态 streaming detail fallback；原 Block.vue 展开态详情挂点已随 chat-flow-process-aggregate D1 退役） | `process-aggregate/AggregateToolDetailDrawer.vue:94,215` |
 | widget GuiComponent（M17） | **composer 任务托盘的协议 widget 区**（composer 工具条左簇；`extension:widgetGui`/`extension:widget` WS 事件 → ViewHostStore per-session 缓存 → 托盘 widget 按钮/面板渲染） | `packages/renderer/src/components/panel/tray/TrayWidgetButton.vue` / `TrayWidgetPanel.vue`（已实现）；历史：对话流 pill（`WidgetArea.vue`，已随 2026-09-16 退役删除）、SideDrawer.vue:332-345（已废弃方向） |
 | custom message GuiComponent | MessageStream.vue system 消息分支（`extractGui` 调用 ×1） | `MessageStream.vue:130` |
 | 统一提问表单（ui-form）富交互 | **Panel.vue inline**（覆盖 composer 位置，与 Composer 互斥） | `Panel.vue:110,117`（FormOverlay 双挂载点） |
@@ -1120,7 +1120,7 @@ taiji 已有 3 个结构化渲染范例，协议新增组件必须对齐其 CSS 
 
 | Phase | 范围 | 状态 |
 |---|---|---|
-| **P0: ANSI 兜底 + 历史路径修复** | tool output ANSI 渲染（ansi_up + Block.vue + outputRaw）+ message-converter.ts details 透传（F1）+ handleToolExecutionUpdate details 提取（S5） | ✅ 已完成 |
+| **P0: ANSI 兜底 + 历史路径修复** | tool output ANSI 渲染（ansi_up + Block.vue〔原实装载体，已随 chat-flow-process-aggregate D1 退役删除〕+ outputRaw）+ message-converter.ts details 透传（F1）+ handleToolExecutionUpdate details 提取（S5） | ✅ 已完成 |
 | **P1: 协议包 + ExtensionUIDialog + ask-user 富交互** | extension-protocol 包 + event-adapter widget/ask-user marker 检测 + shared/protocol.ts 类型 + ExtensionUIDialog（confirm/select/input）+ askUserInteract + AskUserOverlay（Panel.vue inline）。askUserInteract/AskUserOverlay 已随 ui-presentation-protocol（2026-09-19）退役，现行形态见 [gui-protocol-guide.md](../extensions/gui-protocol-guide.md) §3.4 | ✅ 已完成 |
 | **P2: 通用原语渲染** | 渲染原语 Vue 组件（`packages/ui/src/rendering-protocol/primitives/`：ansi-text + card / stats-line / progress-bar / list-tree / columns / group / tab-bar）+ custom 注册机制 | ✅ 已完成 |
 | **P3: extension 迁移** | 各 extension 接入协议（用通用原语组合表达领域数据） | 待实现 |
@@ -1160,7 +1160,7 @@ v1-draft 经 4 路并行技术审查（shim 可行性 / 交互层 / 数据链路
 | **S3** | Message 类型无 details 字段，custom message 方案前端拿不到 `__gui__` | §8.4 Message 加 `details?` + customStart handler 改造 |
 | **S4** | shared/protocol.ts 三处类型缺失（ServerMessageType / ServerMessageMap / EXTENSION_EVENTS） | §8.3 补全三处 |
 | **S5** | handleToolExecutionUpdate 把整个 partialResult 塞进 detail（单数），没提取 details | §8.1 补提取逻辑 |
-| **S6** | Block.vue 集成代码不能直接落地（outputRaw 不存在 + 渲染结构假设错误）| §9.2 重写，明确插入位置和 ToolCall.outputRaw 新增 |
+| **S6** | Block.vue 集成代码不能直接落地（outputRaw 不存在 + 渲染结构假设错误）| §9.2 重写，明确插入位置和 ToolCall.outputRaw 新增（该集成载体 Block.vue 已随 chat-flow-process-aggregate D1 退役删除，§9.2 转历史记录） |
 
 ### 可简化项
 

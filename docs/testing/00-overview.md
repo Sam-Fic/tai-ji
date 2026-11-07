@@ -502,17 +502,17 @@ pnpm run dev
 
 ### RT-02: tool call 真实执行（read/bash）
 
-**验证目标**：pi 工具调用 → runtime 事件翻译 → 前端 Block.vue 渲染
+**验证目标**：pi 工具调用 → runtime 事件翻译 → 前端对话流渲染（chat-flow-process-aggregate 聚合块形态）
 
 | 步骤 | 操作 | 期望 |
 |---|---|---|
 | 1 | 在 session 中输入「读一下 package.json 的内容」+ Enter | 消息发出，转菊花 |
-| 2 | 等待 | 消息流出现 tool 块（read 工具，收起态） |
-| 3 | 点击 tool 块 header 展开 | 显示 toolName(read) + 参数 + 输出 |
+| 2 | 等待 | 回合落成收成聚合块摘要行（思考/工具收进过程段聚合条） |
+| 3 | 点击摘要行展开 → 点击 read 工具单步行 | 打开工具详情抽屉，显示 toolName(read) + 参数 + 输出 |
 | 4 | 输出内容 | 含 `package.json` 的真实文件内容（非 mock 的「…文件内容…」） |
 | 5 | assistant 回复 | 基于 package.json 内容的合理回复 |
 
-**验证点**：tool 块的输出是**真实文件内容**（mock 层是「…文件内容（mock）…」，真实进程层是实际文件内容）。
+**验证点**：工具详情抽屉的输出是**真实文件内容**（mock 层是「…文件内容（mock）…」，真实进程层是实际文件内容）。
 
 ### RT-03: extension GUI 组件渲染（需安装 extension）
 

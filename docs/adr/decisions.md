@@ -716,7 +716,7 @@ WorkflowTab 步骤列表的数据源绑定从「workflow-record 全量快照（6
 
 **依据**：N13 问题陈述 = 底板扫光扫的是静态标识而非正在发生的内容，信息价值错位；N11 问题陈述 = 回看历史后无快捷回底入口，unreadBelow 必要条件直接指向此变更。两处退役范围均实施期 grep 复核零残留消费。
 
-**登记**：实装 = `packages/ui/src/features/chat/Block.vue`（text-sweep 挂点与动画）/ `block-icon.ts` / `packages/renderer/src/style.css` / `packages/renderer/src/composables/panel/useVirtuaFollow.ts`；设计文档 ui-optimize-unified（设计档案已随 .tmp 清理，不入库），本条即两项裁决的现行登记处；运行态观感验收为用户真机自验项（D3 inspect verdict=degraded 无 blockers）。
+**登记**：实装 = `packages/ui/src/features/chat/Block.vue`（text-sweep 挂点与动画；该文件已随 chat-flow-process-aggregate D1 退役删除，text-sweep 挂点现落 `ToolRow.vue` / `ThinkingRow.vue`，keyframes `text-sweep` 仍在 `packages/renderer/src/style.css` 动画区）/ `block-icon.ts` / `packages/renderer/src/style.css` / `packages/renderer/src/composables/panel/useVirtuaFollow.ts`；设计文档 ui-optimize-unified（设计档案已随 .tmp 清理，不入库），本条即两项裁决的现行登记处；运行态观感验收为用户真机自验项（D3 inspect verdict=degraded 无 blockers）。
 
 ### ADR-0132 引擎 provider 来源统一：启动时单向同步 pi→zcode（数据目录内副本 + merge 实时视图装载）+ 外部配置零写入（2026-10-12 设计落地，engine-provider-unification）
 
