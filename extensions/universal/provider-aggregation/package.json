@@ -10,6 +10,9 @@
   "pi": {
     "extensions": [
       "./index.ts"
+    ],
+    "skills": [
+      "./skills"
     ]
   },
   "keywords": [
@@ -22,7 +25,8 @@
   "license": "MIT",
   "files": [
     "src/",
-    "index.ts"
+    "index.ts",
+    "skills/"
   ],
   "dependencies": {
     "@taiji/shared": "workspace:*",
