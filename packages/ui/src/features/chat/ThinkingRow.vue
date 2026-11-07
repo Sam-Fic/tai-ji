@@ -1,7 +1,7 @@
 <!--
   展示组件 · 思考行（trace 块 thinking 类型行组件，W1 壳化拆分自 Block.vue）。
-  壳根类名契约（.trace-blk / .trace-blk--text）与 data-testid 留在 Block 壳，本组件根 =
-  原 thinking 分支根 div（.trace-think），无新 DOM 层。
+.trace-blk / .trace-blk--text 类名契约归 Turn.vue 单元 wrapper（Block 转发壳退役），
+  本组件根 = 原 thinking 分支根 div（.trace-think），无新 DOM 层。
   职责：折叠状态机（useThinkingCollapse：折叠/手动置位/working 回落/收起预览/尾行视口一体）
   + 思考时长（N6）+ 文字扫光（决策 10，块级生命周期随思考完结熄灭）+ 展开区（copy 按钮 +
   BlockScrollBox 240px 限高滚动 + 行区间信息条，fade=false 不渲染渐隐条）。

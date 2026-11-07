@@ -1,7 +1,7 @@
 <!--
   展示组件 · 正文块（trace 块 text 类型行组件，W1 壳化拆分自 Block.vue）。
-  壳根类名契约（.trace-blk / .trace-blk--text）与 data-testid 留在 Block 壳，本组件根 =
-  原 text 分支根 div（data-testid="block-text"），无新 DOM 层。
+.trace-blk / .trace-blk--text 类名契约归 Turn.vue 单元 wrapper（Block 转发壳退役），
+  本组件根 = 原 text 分支根 div（data-testid="block-text"），无新 DOM 层。
   职责：markdown 正文渲染 + error 独立追加行 + 行尾时刻 + turn-actions 锚行（Turn 级
   hover actions 挂载位：壳层收到 #turn-actions 插槽时经 hasTurnActions 打开锚行，插槽
   经壳透传挂入，显隐由 opacity 门控）+ 正文入场动效挂点（chat-flow-process-aggregate

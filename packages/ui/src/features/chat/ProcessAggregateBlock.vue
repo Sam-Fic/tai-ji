@@ -8,9 +8,9 @@
   三态判定：进行中 ⇔ turnWorking ∧ !followedByText（core 段契约「调用方合成」条款）；
   展开/收起是组件本地 ref（D6：不落 store、不持久化）。
   数据契约：本组件只消费 core ProcessSegment（切段/分组/计数在 core 单点算好，渲染层
-  零解析，AX7）。fixture 驱动开发（不接线 Turn——编排切换在 U3/u-wiring）。
-  单步详情通道：悬停浮层在本组件族内；点击 emit open-detail，右侧抽屉由 U4 接线；
-  Turn 编排接线在 u-wiring 单元。
+  零解析，AX7）。Turn 编排已接线（Turn.vue trace 区单元挂载，传 turn-streaming）。
+  单步详情通道：悬停浮层在本组件族内；单步行点击的 open-detail 事件在 AggregateExpandedBody
+  本地终结消费（U4 接线：本地 ref 开合态挂抽屉），本组件与 Turn 层均无接线点。
 -->
 <template>
   <div :class="['agg-block', entranceClass]" data-testid="process-aggregate">
@@ -19,12 +19,9 @@
     <!-- ②③ 完成态：摘要行 +（展开时）平铺区 -->
     <template v-else>
       <AggregateSummaryRow :segment="segment" :expanded="expanded" @toggle="toggleExpanded" />
-      <AggregateExpandedBody
-        v-if="expanded"
-        :segment="segment"
-        :session-id="sessionId"
-        @open-detail="(tool) => emit('open-detail', tool)"
-      />
+      <!-- 单步详情抽屉在展开区本地接线（AggregateExpandedBody 自持开合态），事件链
+           终结于此不向容器冒泡——本组件无 open-detail 转发/声明 -->
+      <AggregateExpandedBody v-if="expanded" :segment="segment" :session-id="sessionId" />
     </template>
   </div>
 </template>
@@ -32,7 +29,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ProcessSegment } from '@taiji/core/domain/chat'
-import type { ToolCall } from '@taiji/shared'
 import AggregateLiveWindows from './process-aggregate/AggregateLiveWindows.vue'
 import AggregateSummaryRow from './process-aggregate/AggregateSummaryRow.vue'
 import AggregateExpandedBody from './process-aggregate/AggregateExpandedBody.vue'
@@ -49,11 +45,6 @@ const props = defineProps<{
   turnStreaming?: boolean
   /** 所属 session（透传思考行 MarkdownRenderer） */
   sessionId?: string | null
-}>()
-
-const emit = defineEmits<{
-  /** 单步行点击 → 抽屉触发（抽屉壳接线在 U4；Turn 层转发在 u-wiring） */
-  (e: 'open-detail', tool: ToolCall): void
 }>()
 
 const { isLive, expanded, toggleExpanded, entranceClass } = useProcessAggregateState({

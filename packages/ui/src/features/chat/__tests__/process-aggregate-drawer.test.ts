@@ -16,6 +16,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { defineComponent, h, ref } from 'vue'
+import { guiResult, guiComponent } from '@zhushanwen/extension-protocol'
 import { ToolDetailDrawer } from '../../../primitives/dialog'
 import {
   bindDrawerSessionId,
@@ -311,6 +312,31 @@ describe('工具详情抽屉接线（成员行点击 → 内容装配）', () =>
     expect(minusLine?.textContent).toBe('-const old = 1')
     // hunk 头与文件头 dim（不在增删分色内）
     expect(output!.querySelector('span.text-neutral-dim')?.textContent).toBe('--- a/foo.ts')
+  })
+
+  it('gui-only 工具（无文本 output，仅 details.__gui__）：输出区整节在场且 __gui__ card 渲染（显隐判据含 guiComponent）', async () => {
+    const wrapper = await mountExpandedBody([
+      nbToolFlat({
+        toolName: 'todo',
+        output: '',
+        details: {
+          __gui__: guiResult(
+            guiComponent('card', {
+              body: [guiComponent('stats-line', { items: [{ label: 'turns', value: '3' }] })],
+            }),
+          ),
+        },
+      }),
+    ])
+    await openDetailViaRow(wrapper)
+    const drawer = drawerEl()
+    // gui-only 形态（mock todo 类工具：tool_call_end 无 content，仅 __gui__ 结构化组件）——
+    // 显隐判据不含 guiComponent 时该形态整节不渲染、card 丢失（FF10 补模板分支时判据未同步）
+    const output = drawer.querySelector('[data-testid="agg-detail-output"]')
+    expect(output).not.toBeNull()
+    // __gui__ 分支优先级最高：card（GuiComponentRenderer 真实渲染，card 自带 gui-card 锚点）
+    expect(drawer.querySelector('[data-testid="gui-card"]')).not.toBeNull()
+    expect(drawer.querySelector('[data-testid="gui-stats-line"]')).not.toBeNull()
   })
 
   it('失败步骤打开时 error 文本显式在场（替换空 output 的内容位）', async () => {

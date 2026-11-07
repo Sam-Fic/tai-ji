@@ -260,7 +260,8 @@ describe('tailLines', () => {
 })
 
 /**
- * tailLines × stripAnsi 执行顺序对拍（Block.vue tool 尾行窗口取数）。
+ * tailLines × stripAnsi 执行顺序对拍（ToolRow.vue toolTailLines——Block 壳退役后
+ * tool 尾行窗口取数的现行权威位置）。
  *
  * 背景：toolTailLines 先对全文 stripAnsi 再 tailLines，O(全文) 正则替换产出全文新串，
  * 只为取尾 2 行——架空 tailLines 的尾部扫描优化。改为先 tailLines 再对窗口行逐行

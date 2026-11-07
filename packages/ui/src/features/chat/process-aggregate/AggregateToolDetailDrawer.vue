@@ -224,8 +224,11 @@ const guiComponent = computed<GuiComponent | undefined>(() => {
 })
 
 
-/** 输出区显隐：三条渲染通道全空则整节不渲染（无空态占位） */
-const hasOutputContent = computed(() => Boolean(richRenderer.value || patchLines.value || displayContent.value))
+/** 输出区显隐：四条渲染通道全空则整节不渲染（无空态占位）——gui-only 工具（仅带 __gui__
+ *  结构化组件而无文本 output，mock todo 类工具即此形态）经 guiComponent 在场保证整节渲染 */
+const hasOutputContent = computed(() =>
+  Boolean(guiComponent.value || richRenderer.value || patchLines.value || displayContent.value),
+)
 
 /** unified patch 行首着色（增 accent / 删 danger / 头与 hunk 元信息 dim） */
 function diffLineClass(line: string): string {

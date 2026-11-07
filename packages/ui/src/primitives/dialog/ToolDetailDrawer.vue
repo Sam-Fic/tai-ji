@@ -20,7 +20,8 @@ import DialogTitle from './DialogTitle.vue'
  * drawer/bottom-drawer 与 overlay 单例——与既有抽屉/浮层通道无共享开合态（D4 选型裁决，
  * 邻居不变量验收 V5）。
  *
- * 内容插槽承接命令/参数/输出/耗时/状态/阶段（修改类增删着色由内容装配方传 Markup），
+ * 内容插槽承接命令/参数/输出/耗时/状态（修改类增删着色由内容装配方传 Markup）——
+ * 「阶段」无独立结构源（ToolCall 无 phase 字段），执行阶段由状态词承担，插槽无阶段装配点；
  * 壳只管布局与交互。
  */
 interface Props {
@@ -113,7 +114,8 @@ function onCloseAutoFocus(event: Event): void {
           <span class="sr-only">Close</span>
         </DialogClose>
       </header>
-      <!-- 内容插槽承接命令/参数/输出/耗时/状态/阶段（u-detail-drawer 装配）；壳只管布局 -->
+      <!-- 内容插槽承接命令/参数/输出/耗时/状态（u-detail-drawer 装配，无阶段装配点——
+           ToolCall 无 phase 结构源，执行阶段由状态词承担）；壳只管布局 -->
       <div class="min-h-0 flex-1 select-text overflow-y-auto px-5 py-4">
         <slot />
       </div>

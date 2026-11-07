@@ -1,6 +1,7 @@
 <!--
   展示组件 · 工具行（trace 块 tool / agentgraph 类型行组件，W2 壳化拆分自 Block.vue）。
-  壳根类名契约（.trace-blk）与 data-testid（block-tool-<id>）留在 Block 壳，本组件根 =
+.trace-blk 类名契约归 Turn.vue 单元 wrapper、block-tool-<id> testid 随 Block 转发壳
+  退役（聚合块内成员行形态由 SegmentToolRow 承载），本组件根 =
   原 tool 分支根 div（.trace-tool），无新 DOM 层。
   agentgraph 数据结构同 tool（ToolCall），Turn 层 type 语义与渲染分派在本组件内统一：
   按工具名两分——subagent → SubagentRow / 其余（含 workflow 工具组）普通 tool 形态。

@@ -229,7 +229,8 @@
             </template>
           </TextRow>
           <!-- 过程段 → 聚合块（三态容器：进行中双窗 / 完成摘要 / 展开平铺；展开态为组件
-               本地 ref——D6 不落 store 不持久化；单步详情经 open-detail 事件由抽屉接线层消费；
+               本地 ref——D6 不落 store 不持久化；单步详情抽屉在展开区本地接线
+               （AggregateExpandedBody），本层无接线点；
                turn-streaming = 入场一次性判据的「真实到达」信号，D10） -->
           <ProcessAggregateBlock
             v-else

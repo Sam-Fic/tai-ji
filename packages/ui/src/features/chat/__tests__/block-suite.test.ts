@@ -436,8 +436,8 @@ describe('error-visibility M3: thinking 可收起 + 完成态回落（TC1-3）',
     // 场景 A：working=true 挂载默认折叠，working→false 仍折叠（默认折叠态不因 working 变化）
     const autoWrapper = mountThinking({ working: true })
     expect(autoWrapper.find(THINK_EXPANDED_SEL).exists()).toBe(false)
-    // VTU setProps 的 $props 类型解析为 attrs-only（Block.vue 自定义 props 不可见），
-    // cast 仅为满足 tsc（同 search-modal.test.ts:86 模式，见本文件 text 测试注释）
+    // VTU setProps 的 $props 类型解析为 attrs-only（行组件自定义 props 不可见——
+    // ThinkingRow 直挂；cast 仅为满足 tsc，同 search-modal.test.ts:86 模式）
     await autoWrapper.setProps({ working: false } as never)
     expect(autoWrapper.find(THINK_EXPANDED_SEL).exists()).toBe(false)
 
@@ -1087,7 +1087,7 @@ describe('block-icon.ts', () => {
     expect(BLOCK_ICON_LUCIDE['tool-other']).toBe(SquareFunction)
     expect(BLOCK_ICON_LUCIDE.workflow).toBe(Workflow)
     expect(BLOCK_ICON_LUCIDE.text).toBe(ArrowRight)
-    // run 组块不占独立档：组头图标 = 组类型的语义图标（Block.vue RUN_GROUP_ICON：
+    // run 组块不占独立档：组头图标 = 组类型的语义图标（SegmentToolGroup.vue RUN_GROUP_ICON：
     // 探索→tool-read / 改动→tool-edit / 执行命令→tool-bash），组内含 running 成员时
     // 图标位由渲染层 RunningBlockIcon 动效款顶替——档位数恒 10（不含 running；
     // tool-grep 探索档 + workflow 统一到 composer Workflow 字形 + tool-cmd bash

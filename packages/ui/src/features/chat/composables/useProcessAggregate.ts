@@ -1,11 +1,12 @@
 /**
  * useProcessAggregate —— 聚合块（过程段容器）状态与派生（chat-flow-process-aggregate U2）。
  *
- * 职责分工（设计 §5.1 U2）：三态本地状态（展开态组件本地 ref，D6：不落 store、不持久化——
- * 虚拟化卸载即重置回默认收起）+ 双窗可见性纯派生（D7：窗口出现由段内已开始步骤类型决定，
- * 无独立可见性状态、无空态占位）+ 双窗跟底与聚合条自动滚动（用户上滚停吸、回底恢复，
- * BlockScrollBox 同范式）+ 入场类动效一次性语义（D10/RL6：两条重放路径的压制形态见
- * useProcessAggregateState.entranceClass 注释）。
+ * 职责分工（设计 §5.1 U2；括注 = 承载导出）：三态本地状态与入场类动效一次性语义
+ * （useProcessAggregateState——展开态组件本地 ref，D6：不落 store、不持久化，虚拟化卸载
+ * 即重置回默认收起；D10/RL6 两条重放路径的压制形态见 entranceClass 注释）+ 双窗可见性
+ * 纯派生（D7：窗口出现由段内已开始步骤类型决定，无独立可见性状态、无空态占位）+ 双窗
+ * 跟底与聚合条自动滚动（useAggregateWindows——用户上滚停吸、回底恢复，BlockScrollBox
+ * 同范式）。
  *
  * 时间机制红线（ADR-0190 / 时间平抑类逻辑红线）：三态翻转与窗口挂载全部由事件派生
  * （followedByText / turnWorking / members 增量边沿），零 timer、零延迟判定——「聚合窗立即
@@ -61,17 +62,6 @@ export function useProcessAggregateState(params: {
   function toggleExpanded(): void {
     expanded.value = !expanded.value
   }
-  /**
-   * 双窗可见性纯派生（D7）：思考窗 = 段内已有 thinking 成员；聚合窗 = 段内已有 tool /
-   * agentgraph 成员（「首个工具步骤开始」——agentgraph 结构上同是工具调用，独立成行但
-   * 同样触发聚合窗，与 core members 契约注释同口径）。纯思考段聚合窗全程不出现。
-   */
-  const hasThinkingWindow = computed(() =>
-    params.segment.value.members.some((m) => m.block.kind === 'thinking'),
-  )
-  const hasAggregateWindow = computed(() =>
-    params.segment.value.members.some((m) => m.block.kind === 'tool' || m.block.kind === 'agentgraph'),
-  )
   const entranceClass =
     params.turnWorking.value &&
     params.turnStreaming.value &&
@@ -79,7 +69,7 @@ export function useProcessAggregateState(params: {
     params.segment.value.members.length === 1
       ? 'agg-enter'
       : ''
-  return { isLive, expanded, toggleExpanded, hasThinkingWindow, hasAggregateWindow, entranceClass }
+  return { isLive, expanded, toggleExpanded, entranceClass }
 }
 
 /**
@@ -91,6 +81,11 @@ export function useProcessAggregateState(params: {
  * 切换即内容源切换（computed 派生，无状态）。
  */
 export function useAggregateWindows(segment: Ref<ProcessSegment>) {
+  /**
+   * 双窗可见性纯派生（D7，唯一派生源）：思考窗 = 段内已有 thinking 成员；聚合窗 = 段内
+   * 已有 tool / agentgraph 成员（「首个工具步骤开始」——agentgraph 结构上同是工具调用，
+   * 独立成行但同样触发聚合窗，与 core members 契约注释同口径）。纯思考段聚合窗全程不出现。
+   */
   const hasThinking = computed(() =>
     segment.value.members.some((m) => m.block.kind === 'thinking'),
   )
