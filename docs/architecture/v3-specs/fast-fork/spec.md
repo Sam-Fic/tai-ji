@@ -334,7 +334,7 @@ async function forkSessionAsk(srcSessionId, fromMessageId, content) {
 - `boxClass`（Composer.vue:247-254）加 forkMode 分支
 - `placeholder`（Composer.vue:256-260）加 forkMode 文案切换
 - `onSend`（Composer.vue:275-326）开头加 forkMode 分支调 `forkSessionAsk`，发送后 `exitForkMode()`
-- Esc 监听：composer focus 时 forkMode 下 Esc 退出（注意与 SessionList/SideDrawer 的 Esc 冲突，composer focus 时应优先退出 forkMode）
+- Esc 监听：composer focus 时 forkMode 下 Esc 退出（注意与 SessionList/DrawerPanel 的 Esc 冲突，composer focus 时应优先退出 forkMode）
 - **切 session 时自动 exitForkMode**：避免 forkMode 残留到错误 session
 
 **快捷键注册**（`packages/renderer/src/composables/shell/useGlobalShortcuts.ts:101` keymap）：
