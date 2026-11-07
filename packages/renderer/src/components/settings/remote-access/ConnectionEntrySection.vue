@@ -108,7 +108,7 @@ import QRCode from 'qrcode'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import SettingRow from '../SettingRow.vue'
-import { useCopy } from '@/composables/panel/useCopy'
+import { useCopy } from '@/composables/useCopy'
 import type { RemoteAccessInfo } from '@taiji/shared'
 
 const props = defineProps<{

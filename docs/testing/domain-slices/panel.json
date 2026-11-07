@@ -10,6 +10,7 @@
     "renderer": [
       "packages/renderer/src/components/panel/**",
       "packages/renderer/src/composables/panel/**",
+      "packages/renderer/src/composables/useCopy.ts",
       "packages/renderer/src/composables/features/command/**"
     ],
     "runtime": [

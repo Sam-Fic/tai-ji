@@ -195,7 +195,7 @@ import {
 } from '@/composables/features/trace/trace-display-items'
 import { jumpToParentSession } from '@/composables/features/trace/useTraceJump'
 import { useToast } from '@/composables/useToast'
-import { useCopy } from '@/composables/panel/useCopy'
+import { useCopy } from '@/composables/useCopy'
 import { revealInFolder } from '@/lib/ipc'
 import {
   BLOCK_BADGE_CLASS,

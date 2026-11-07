@@ -21,7 +21,7 @@ vi.mock('@/composables/useToast', () => ({
   useToast: () => ({ error: toastErrorMock, info: vi.fn(), warning: vi.fn() }),
 }))
 
-import { useCopy } from '@/composables/panel/useCopy'
+import { useCopy } from '@/composables/useCopy'
 
 /** 冲干净微任务队列（writeText 的 then 回调在 microtask 里置 copied）。 */
 async function flushMicrotasks(): Promise<void> {

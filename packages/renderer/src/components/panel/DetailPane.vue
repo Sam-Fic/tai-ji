@@ -311,7 +311,7 @@ import { FileText, Loader2, AlertCircle, Image as ImageIcon, Copy, Check, Quote,
 import { Button } from '@/components/ui/button'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import { useDetailPane, type DetailViewMode } from '@/composables/features/file-tree/useDetailPane'
-import { useCopy } from '@/composables/panel/useCopy'
+import { useCopy } from '@/composables/useCopy'
 import { composerInjectionStore } from '@/composables/panel/composer-injection-store'
 import { extToLang } from '@/composables/logic/file-type'
 import { resolvePreviewPath } from '@/lib/path-utils'
