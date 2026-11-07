@@ -1,8 +1,12 @@
 /**
- * AggregationMessageHandler 广播收尾单测（provider-aggregation U4 一致性修复）：
- * saveRoute / deleteRoute 成功分支都必须触发 providerList 广播（SC2 §2.5「路由保存后即
- * 触发广播，运行中会话的 model.list 立即含新条目」）——saveRoute 曾漏广播（U6 条目），
- * 启停/改名后的旧条目在选择器滞留至下一次无关广播。
+ * AggregationMessageHandler 广播收尾 + 触发点①钩子接线单测（provider-aggregation U4）：
+ * - 广播收尾（U4 一致性修复）：saveRoute / deleteRoute 成功分支都必须触发 providerList
+ *   广播（SC2 §2.5「路由保存后即触发广播，运行中会话的 model.list 立即含新条目」）——
+ *   saveRoute 曾漏广播（U6 条目），启停/改名后的旧条目在选择器滞留至下一次无关广播；
+ * - 触发点①接线（provider-aggregation D3/U4）：saveRoute / deleteRoute 成功分支都必须
+ *   调用 ctx.aggregationRoutesMutated 钩子（routes 权威写方时刻的额度按需刷新）——
+ *   handler→ctx 钩子段无断言时，重构移除该调用不会被抓（额度数据不再随 routes 保存/
+ *   删除刷新，且 simple→advanced 等非 stale 语义翻转场景无补偿）。
  */
 import type { WebSocket as WsType } from 'ws'
 import { describe, expect, it, vi } from 'vitest'
@@ -59,6 +63,7 @@ function makeCtx(
     sendError: vi.fn(),
     broadcast: vi.fn(),
     broadcastProviderList: vi.fn(),
+    aggregationRoutesMutated: vi.fn(),
     nextPushId: vi.fn(() => 'push-1'),
   }
   return ctx as unknown as SettingsHandlerContext
@@ -75,6 +80,8 @@ describe('AggregationMessageHandler 广播收尾（SC2 路由保存后即触发 
     const ctx = makeCtx([])
     await new AggregationMessageHandler(ctx).handle(saveRouteMsg(sampleRoute), ws)
     expect(vi.mocked(ctx.broadcastProviderList)).toHaveBeenCalledTimes(1)
+    // 触发点①接线（D3/U4）：保存成功必须调用额度刷新钩子（可选钩子由 makeCtx 注入 spy）。
+    expect(vi.mocked(ctx.aggregationRoutesMutated)).toHaveBeenCalledTimes(1)
     const viewBroadcasts = vi.mocked(ctx.broadcast).mock.calls.filter(
       ([m]) => (m as { type: string }).type === 'aggregation.routeView',
     )
@@ -88,6 +95,8 @@ describe('AggregationMessageHandler 广播收尾（SC2 路由保存后即触发 
       ws,
     )
     expect(vi.mocked(ctx.broadcastProviderList)).toHaveBeenCalledTimes(1)
+    // 触发点①接线（D3/U4）：删除同样走 routes 写方时刻刷新钩子（与 saveRoute 分支对称）。
+    expect(vi.mocked(ctx.aggregationRoutesMutated)).toHaveBeenCalledTimes(1)
   })
 })
 
