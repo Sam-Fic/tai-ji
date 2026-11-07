@@ -161,10 +161,13 @@ export default [
   // event-interpreter / engine-client 的「微超即提额，保留软上限告警」同型）。该文件
   // 曾按 max-lines 拆出 pi-maintenance / pi-enabled-models / pi-skill-paths /
   // pi-provider-repair（模块头注释），再拆属独立重构任务。
+  // [provider-aggregation u-runtime-inject 2026-11] listProviders 注入 aggregation 条目
+  // （D4 kind/thinkingLevelMap 并集 + contextWindow min）与虚拟 provider 凭据豁免守卫入列，
+  // 折算 532 > 520 微超——按「微超即提额，保留软上限告警」同型先例提额 540，超限即再暴露。
   {
     files: ['packages/runtime/src/infra/pi/pi-provider-store.ts'],
     rules: {
-      'max-lines': ['warn', { max: 520, skipBlankLines: true, skipComments: true }],
+      'max-lines': ['warn', { max: 540, skipBlankLines: true, skipComments: true }],
     },
   },
   // [M3 relay-spawn-transport u-m3-control] subagent control server：control 帧路由 /
@@ -183,10 +186,13 @@ export default [
   // 出口，多端共用 SSOT）净增 57 行越过 500，540 > 500 微超即提额保留软上限告警
   //（pi-provider-store / control-server 同型先例；计数 = eslint max-lines
   // skipBlankLines+skipComments 口径实测）。
+  // [feat-provider-routing 集成线 2026-11] aggregation 契约根出口随 route 求值接线
+  // （quota freshness 谓词等纯函数出口）追加，折算 544 > 540 微超——同型提额 560，
+  // 超限即再暴露。
   {
     files: ['packages/shared/src/index.ts'],
     rules: {
-      'max-lines': ['warn', { max: 540, skipBlankLines: true, skipComments: true }],
+      'max-lines': ['warn', { max: 560, skipBlankLines: true, skipComments: true }],
     },
   },
   // [M3 relay-spawn-transport u-m2-prompt-ack] pi 引擎 spawn runner：spawn/握手/帧泵/
@@ -929,10 +935,14 @@ export default [
   // 长期仍应拆分（防线载体可拆独立模块）。
   // [gate static-gate 2026-10] provider 用量回写段入列后净代码行 938 > 920，微超即提额先例
   // （session-service 634→650 同型）抬到 950。提额而非 off：保留软上限告警，超限即再暴露，勿再增行。
+  // [2026-11-07 gate static-gate 复测] provider-aggregation u-foundation（路由读取入口 +
+  // getMergedCatalogModels 存在性校验单点，净增 ~240 物理行）与 dev-0.12.6 集成线 route
+  // 修复批次入列后折算 1089 > 950——sanitize* 校验组拆分仍是长期方向，按 worker-message-pump
+  // 1240→1400 同型提额 1100 保留软上限告警，超限即再暴露，勿再增行。
   {
     files: ['packages/runtime/src/services/provider-config-helper.ts'],
     rules: {
-      'max-lines': ['warn', { max: 950, skipBlankLines: true, skipComments: true }],
+      'max-lines': ['warn', { max: 1100, skipBlankLines: true, skipComments: true }],
     },
   },
   // declarative-engine：quota fetcher 声明式执行引擎（5 家平台 fetcher 的受限原语解释器），
