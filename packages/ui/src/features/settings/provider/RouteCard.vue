@@ -12,6 +12,7 @@
 -->
 <template>
   <div
+    ref="rootEl"
     data-testid="route-card"
     :data-route-id="card.route.id"
     class="rounded-lg border border-border bg-bg-card"
@@ -249,7 +250,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChevronDown, ChevronUp, Trash2 } from '@lucide/vue'
 import { Button, ConfirmDialog, Select, SelectTrigger, SelectValue, SelectContent, SelectItem, Switch } from '@taiji/ui'
@@ -257,6 +258,7 @@ import type { AggregationMember, AggregationRoute, AggregationRouteMode, Provide
 import { candidateProviderIds, evaluateRouteAt, levelsUnion } from './route-preview'
 import { dotColorClass } from './route-styles'
 import type { RouteEditorOp } from './route-editor-ops'
+import type { RoutePageFocus } from './ModelRoutePage.vue'
 import RouteEndpointRow from './RouteEndpointRow.vue'
 import RouteTimeGrid from './RouteTimeGrid.vue'
 import RouteSpecialDates from './RouteSpecialDates.vue'
@@ -281,6 +283,16 @@ const props = defineProps<{
   now: { dow: number; slot: number }
   /** 新会话可用徽标（U7：路由 id 不在本应用生命周期首次快照内时为 true，页面层判定传入）。 */
   newSessionAvailable?: boolean
+  /** 引用 chip 跳转定位（外部 spec §6.4）：本卡命中时自动展开 + 滚动到端点行 + 闪烁高亮；
+   *  memberId = 端点条目 id（RouteEndpointRow data-member-id 锚，顺位随编辑漂移不作锚）。 */
+  focus?: RoutePageFocus | null
+  /**
+   * 额度数据供给（providerId → 首窗口百分比投影，M2 接线）：传入后「此刻」chip 的额度
+   * 条件按真实数据求值；缺省不传 = 额度数据未知（fail-open 放行，chip 以中性着色 +
+   * 文案后缀区分「数据在且满足」）。语义与 pi 扩展同源投影（quota-cache-reader wins[0].pct），
+   * 「显示 ≡ 生效」由上层注入同一投影保证。
+   */
+  quotaOf?: (providerId: string) => number | undefined
 }>()
 
 const emit = defineEmits<{ op: [op: RouteEditorOp]; move: [dir: 'up' | 'down']; toggleScoped: []; openProviders: [] }>()
@@ -294,6 +306,29 @@ const timeGridWrap = ref<HTMLElement | null>(null)
 const addProviderId = ref('')
 /** 删除确认弹层开关（U9 删除侧；确认即上抛 route-delete 指令，无草稿就地变更）。 */
 const deleteConfirmOpen = ref(false)
+/** 卡根（引用 chip 跳转定位的端点行查找锚，spec §6.4）。 */
+const rootEl = ref<HTMLElement | null>(null)
+
+// ── 引用 chip 跳转定位（外部 spec §6.4：展开对应模型卡 + 滚动到对应端点 + 闪烁高亮）──
+// focus 由页面按 routeId 分发（仅命中卡收到非空值）；memberId 定位端点行。视图未到位时
+// 跳转链不发生（SettingsModal 在 routeView===null 分支不挂载内容，focus 随挂载补放行——
+// immediate watch 覆盖「先 focus 后挂载」时序）。闪烁用 CSS 动画有限次迭代，无 JS 定时器；
+// 同一元素重复聚焦先摘类再强制 reflow 重放（ADR-0190 红线：展示动效不引入域内定时形态）。
+watch(
+  () => props.focus,
+  async (focus) => {
+    if (!focus || focus.routeId !== props.card.route.id) return
+    expanded.value = true
+    await nextTick()
+    const row = rootEl.value?.querySelector<HTMLElement>(`[data-member-id="${CSS.escape(focus.memberId)}"]`)
+    if (!row) return
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    row.classList.remove('route-endpoint-flash')
+    void row.offsetWidth // 强制 reflow：同元素再次聚焦也能重放动画
+    row.classList.add('route-endpoint-flash')
+  },
+  { immediate: true },
+)
 
 /** 删除确认：关闭弹层 + route-delete 指令上抛（页面转发编排层走 deleteRoute 端口）。 */
 function confirmDelete(): void {
@@ -313,18 +348,32 @@ const modeText = computed(() =>
 
 // ── 「此刻」chip（evaluateRouteAt 真实时钟求值，D14 权威展示） ──
 
-const nowEval = computed(() => evaluateRouteAt(props.card.route, props.now))
+const nowEval = computed(() => evaluateRouteAt(props.card.route, props.now, { quotaOf: props.quotaOf }))
+
+/** 命中端点的求值原因（chip 区分呈现的判据：quota-unknown-open = 额度数据未知放行）。 */
+const hitReason = computed(() => {
+  const hitIndex = nowEval.value.hitIndex
+  if (hitIndex === null) return null
+  return nowEval.value.steps.find((s) => s.index === hitIndex)?.reason ?? null
+})
 
 const nowChipText = computed(() => {
   if (!props.card.route.enabled) {
     return `${t('settings.modelRoute.nowIfEnabled')} → ${hitName.value ?? t('settings.modelRoute.nowNoHitSuffix')}`
   }
   if (nowEval.value.hit === null) return t('settings.modelRoute.nowNoHit')
-  return `${t('settings.modelRoute.nowPrefix')} → ${hitName.value}`
+  const base = `${t('settings.modelRoute.nowPrefix')} → ${hitName.value}`
+  // 额度数据未知放行（fail-open）与「数据在且满足」同命中、不同语义——文案后缀区分
+  //（spec §7.8 当前额度/新鲜度呈现半边；着色区分见 nowChipClass）
+  return hitReason.value === 'quota-unknown-open'
+    ? `${base} · ${t('settings.modelRoute.nowQuotaUnknown')}`
+    : base
 })
 
 const nowChipClass = computed(() => {
   if (nowEval.value.hit === null) return 'bg-danger-soft text-danger'
+  // 额度数据未知放行 = 中性着色（区别于「数据在且满足」的成功色与渠道异常的警告色）
+  if (hitReason.value === 'quota-unknown-open') return 'bg-surface-2 text-neutral-mid'
   const hitIndex = nowEval.value.hitIndex ?? 0
   const member = props.card.route.members[hitIndex]
   const provider = props.providers.find((p) => p.id === member?.providerId)
@@ -390,3 +439,23 @@ function addMember(): void {
   toast.info(t('settings.modelRoute.endpointAdded'))
 }
 </script>
+
+<style scoped>
+/* 引用 chip 跳转落点闪烁（外部 spec §6.4「滚动到对应端点并闪烁高亮」）：border + 底色三闪
+   后停在静态高亮，零 JS 定时器；类由 RouteCard watch 加/摘（端点行是子组件根元素，父作用域
+   样式可达——Vue scoped 子根规则）。动画循环计数即闪烁节奏，重复聚焦由脚本摘类+reflow 重放。 */
+.route-endpoint-flash {
+  animation: route-endpoint-flash 0.6s ease-in-out 3;
+  border-color: var(--accent);
+  background-color: var(--accent-soft);
+}
+@keyframes route-endpoint-flash {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--accent) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 35%, transparent);
+  }
+}
+</style>

@@ -82,6 +82,7 @@
           :quota-presets="settingsStore.quotaPresets.value"
           :plugin-info="pluginEntryOf(p.id)"
           :credential-status="pluginSource.statusOf(p.id)"
+          :route-refs="routeRefsOf(p.id)"
           @toggle="toggleExpand"
           @toggle-enabled="onToggleEnabled(p, $event)"
           @set-default="onSetDefaultModel"
@@ -93,6 +94,7 @@
           @oauth-logout="onEditOauthLogout(p)"
           @reauthorize="onReauthorize"
           @update-plugin="onUpdatePlugin"
+          @open-route-ref="onOpenRouteRef"
         />
         </div>
       </GroupCard>
@@ -201,8 +203,17 @@ import { AlertCircle, Settings } from '@lucide/vue'
 import { useProviderCatalogsStale } from '@/composables/features/settings/useProviderCatalogsStale'
 import { ConfirmDialog } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import type { BuiltinProviderTemplate, ProviderInfo, SetProviderData, ProviderId } from '@taiji/shared'
-import { getSettingsStore, getSettingsTransport, useSettings } from '@taiji/core'
+import type {
+  AggregationProviderRouteRefs,
+  AggregationRouteView,
+  BuiltinProviderTemplate,
+  ProviderInfo,
+  SetProviderData,
+  ProviderId,
+} from '@taiji/shared'
+import { collectProviderRouteRefs } from '@taiji/shared'
+import { getSettingsTransport, getSettingsStore, useSettings } from '@taiji/core'
+import type { RoutePageFocus } from '@taiji/ui/features/settings'
 import { useQuotaStore } from '@/stores/quota'
 import { useProviderImport } from '@/composables/features/settings/useProviderImport'
 import { useToast } from '@/composables/useToast'
@@ -235,13 +246,19 @@ const transport = getSettingsTransport()
 const { refreshQuotaPresets } = useSettings()
 
 const emit = defineEmits<{
-  /** 「打开模型路由」引导卡按钮（外部 spec §6.5 下一步引导）→ SettingsModal 切「模型路由」
-   *  分区（SettingsModal.openRoutePage 直切 model-route 分区；分区已登记，
-   *  findSection 守卫为注册表异常形态的防御） */
-  'open-route-page': []
+  /** 「打开模型路由」引导卡按钮（外部 spec §6.5 下一步引导，无 focus）与行引用 chip 跳转
+   *  （外部 spec §6.4，带 RoutePageFocus 定位端点）→ SettingsModal 切「模型路由」分区
+   *  （openRoutePage 直切 model-route 分区；分区已登记，findSection 守卫为注册表异常形态
+   *  的防御）。 */
+  'open-route-page': [focus?: RoutePageFocus]
 }>()
 
-const props = defineProps<{ providers: ProviderInfo[] }>()
+const props = defineProps<{
+  providers: ProviderInfo[]
+  /** 路由 join 视图（宿主 SettingsModal 的 useRoutePageOrchestration 缓存下拨；缺省/null =
+   *  视图未到位 → 路由引用呈现整体零 DOM）。与 ModelRoutePage 的 view prop 同源同形态。 */
+  routeView?: AggregationRouteView | null
+}>()
 
 const { t } = useI18n()
 const {
@@ -483,6 +500,31 @@ const actionError = ref('')
 // 不进本页渠道列表；模型链消费方（选择器/默认模型）不受影响（聚合条目照常消费）。过滤只
 // 作用渲染面：oauth/插件等按模板 id 查找的消费点天然不命中聚合保留 id，保持 props 原样。
 const channelProviders = computed<ProviderInfo[]>(() => props.providers.filter((p) => p.kind !== 'aggregation'))
+
+// ── 路由引用投影（provider-aggregation U5 补呈现 · 外部 spec §6.3 行摘要 / §6.4 引用区）──
+// 数据由宿主（SettingsModal）下发 routeView prop（与 ModelRoutePage 同形态：编排归宿主、
+// 页面纯消费——拉取与失效广播订阅单点在 useRoutePageOrchestration，两页不复制通道）。
+// routeView 缺省/null = 投影整体缺席（零 DOM），不把「数据未到位」渲染成「未参与路由」错态。
+const routeRefsByProvider = computed<Map<string, AggregationProviderRouteRefs>>(() => {
+  const view = props.routeView
+  if (view === undefined || view === null) return new Map()
+  const routes = view.cards.map((c) => c.route)
+  const map = new Map<string, AggregationProviderRouteRefs>()
+  for (const p of channelProviders.value) {
+    map.set(p.id, collectProviderRouteRefs(routes, p.id))
+  }
+  return map
+})
+
+/** 行投影读取（宿主视图未下发 = undefined → 行侧路由引用呈现整体缺席，零 DOM）。 */
+function routeRefsOf(providerId: ProviderId): AggregationProviderRouteRefs | undefined {
+  return routeRefsByProvider.value.get(providerId)
+}
+
+/** 行引用 chip 点击（spec §6.4：跳路由页展开对应模型卡并定位端点）→ 带 focus 上抛 SettingsModal。 */
+function onOpenRouteRef(focus: RoutePageFocus): void {
+  emit('open-route-page', focus)
+}
 
 /** 下一步引导卡（外部 spec §6.5）：至少一个渠道拥有模型时显示；无渠道（空状态）时隐藏 */
 const routeGuideVisible = computed(() => channelProviders.value.some((p) => p.models.length > 0))

@@ -184,6 +184,8 @@ export type {
   AggregationRouteSaved,
   AggregationRouteDeleted,
   AggregationQuotaFreshnessProbe,
+  AggregationProviderRouteRef,
+  AggregationProviderRouteRefs,
 } from './aggregation'
 export {
   AGGREGATION_PROVIDER_ID,
@@ -211,6 +213,7 @@ export {
   isAggregationModelRef,
   aggregationRouteIdFromRef,
   collectOrphanAggregationRefs,
+  collectProviderRouteRefs,
   isAggregationQuotaDataFresh,
 } from './aggregation'
 // v1→v2 discovery.json 迁移纯函数（discovery-migrate.ts）

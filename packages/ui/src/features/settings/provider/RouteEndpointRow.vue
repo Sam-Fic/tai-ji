@@ -14,6 +14,7 @@
   <div
     data-testid="route-endpoint-row"
     :data-index="index"
+    :data-member-id="member.id"
     class="flex flex-wrap items-center gap-2 rounded-md border border-border bg-bg-card px-3 py-2"
   >
     <span class="w-5 text-center text-[length:var(--text-2xs)] font-medium text-neutral-dim">{{ index + 1 }}</span>

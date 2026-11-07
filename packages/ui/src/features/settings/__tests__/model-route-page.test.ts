@@ -18,7 +18,7 @@
  * 用 i18n key / data-testid / aria 属性；now prop 注入固定坐标（禁 fake timer）。
  * 组件均为轻量挂载（单卡/两三端点 fixture，远低于 domain-map heavy 判据），留默认档。
  */
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeAll } from 'vitest'
 import { mount, flushPromises, enableAutoUnmount, VueWrapper } from '@vue/test-utils'
 import type { AggregationRouteCard, AggregationRouteView, AggregationRoute, ProviderId, ProviderInfo } from '@taiji/shared'
 import { AGGREGATION_PROVIDER_ID } from '@taiji/shared'
@@ -570,5 +570,49 @@ describe('新会话可用徽标（U7，D1③：运行期新建、当前 pi 会�
   it('缺省（未传集）不显徽标', () => {
     const w = mountPage([cardOf(routeOf({}))])
     expect(w.find('[data-testid="route-card-new-session-badge"]').exists()).toBe(false)
+  })
+})
+
+// ── 引用 chip 跳转定位（U5 补呈现 · 外部 spec §6.4：展开对应模型卡 + 滚动定位 + 闪烁高亮）──
+
+describe('ModelRoutePage 引用跳转定位（focus prop）', () => {
+  // jsdom 无 scrollIntoView（RouteCard watch 定位调用），测试级补桩
+  beforeAll(() => {
+    Element.prototype.scrollIntoView = () => {}
+  })
+
+  it('focus 命中卡：自动展开 + 目标端点行带 data-member-id 锚与闪烁类；未命中卡保持收起', async () => {
+    const w = mount(ModelRoutePage, {
+      props: {
+        view: viewOf([
+          cardOf(routeOf({ id: 'r1', members: [{ id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' }] })),
+          cardOf(routeOf({ id: 'r2', members: [{ id: 'b', providerId: 'opencode-go', modelId: 'glm-5-3', type: 'none' }] })),
+        ]),
+        providers: [prov({ id: 'zhipu' }), prov({ id: 'opencode-go' })],
+        // scopedModels 全量必须随卡给足（mountPage 同款契约：缺半边 scoped 路由卡被派生丢弃）
+        scopedModels: [`${AGGREGATION_PROVIDER_ID}/r1`, `${AGGREGATION_PROVIDER_ID}/r2`],
+        now: NOW,
+        focus: { routeId: 'r2', memberId: 'b' },
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const cards = w.findAll('[data-testid="route-card"]')
+    expect(cards.length).toBe(2)
+    // 命中卡（r2）：自动展开 = 端点行直接可见 + data-member-id 锚 + 闪烁类已挂
+    const hitCard = cards[1]!
+    const hitRow = hitCard.find('[data-testid="route-endpoint-row"]')
+    expect(hitRow.exists()).toBe(true)
+    expect(hitRow.attributes('data-member-id')).toBe('b')
+    expect(hitRow.classes()).toContain('route-endpoint-flash')
+    // 未命中卡（r1）：保持收起（端点行不在 DOM）
+    expect(cards[0]!.find('[data-testid="route-endpoint-row"]').exists()).toBe(false)
+  })
+
+  it('focus 缺省：全部卡保持收起（零 DOM 副作用）', async () => {
+    const w = mountPage([cardOf(routeOf({}))])
+    await flushPromises()
+    expect(w.find('[data-testid="route-endpoint-row"]').exists()).toBe(false)
   })
 })

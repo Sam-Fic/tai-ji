@@ -78,6 +78,17 @@
 
       <span v-if="!isNew" class="shrink-0 text-[length:var(--text-xs)] text-neutral-fg-2">{{ t('settings.provider.modelsCount', { count: provider.models.length }) }}</span>
 
+      <!-- 路由引用摘要（provider-aggregation U5 补呈现 · 外部 spec §6.3：认证徽章/模型数之外的
+           第三段摘要；routeCount 按路由去重口径由 shared 投影单点保证。routeRefs 缺席 = 引用
+           数据未到位（首拉中/失败），零 DOM 不渲染「未参与路由」错态 -->
+      <span
+        v-if="!isNew && routeRefs"
+        data-testid="provider-route-ref-summary"
+        class="shrink-0 text-[length:var(--text-xs)] text-neutral-fg-2"
+      >{{ routeRefs.routeCount > 0
+        ? t('settings.provider.routeRefCount', { count: routeRefs.routeCount })
+        : t('settings.provider.routeRefNone') }}</span>
+
       <!-- dirty 徽章（展开编辑且有未保存改动时） -->
       <span
         v-if="expanded && dirty"
@@ -141,6 +152,35 @@
         @oauth-logout="emit('oauth-logout')"
       />
 
+      <!-- 路由引用区（provider-aggregation U5 补呈现 · 外部 spec §6.4）：每引用端点一枚 chip
+           「模型简称 · 第 N 顺位」，点击跳模型路由页定位端点（open-route-ref 上抛页面带
+           RoutePageFocus）；无引用显示空文案。位置在编辑体之后、插件扩展区之前——引用态属
+           接入页核心语义，插件扩展是来源附加层。routeRefs 缺席 = 数据未到位，整区零 DOM -->
+      <div
+        v-if="routeRefs"
+        class="mt-[12px] border-t border-hairline pt-[12px]"
+        data-testid="provider-route-ref-section"
+      >
+        <p class="mb-[8px] text-[length:var(--text-2xs)] font-semibold text-neutral-mid">{{ t('settings.provider.routeRefTitle') }}</p>
+        <div v-if="routeRefs.refs.length > 0" class="flex flex-wrap items-center gap-1.5">
+          <Button
+            v-for="r in routeRefs.refs"
+            :key="`${r.routeId}/${r.memberId}`"
+            variant="secondary"
+            size="dense"
+            class="gap-1 rounded-full"
+            data-testid="provider-route-ref-chip"
+            :title="t('settings.provider.routeRefTitle')"
+            @click.stop="emit('open-route-ref', { routeId: r.routeId, memberId: r.memberId })"
+          >{{ r.routeName }} · {{ t('settings.provider.routeRefPosition', { position: r.memberIndex + 1 }) }}</Button>
+        </div>
+        <p
+          v-else
+          class="text-[length:var(--text-2xs)] text-neutral-dim"
+          data-testid="provider-route-ref-empty"
+        >{{ t('settings.provider.routeRefEmpty') }}</p>
+      </div>
+
       <!-- 插件来源条目扩展（D2/D5/D10）：宿主区（上）与插件渲染区（下）两区边界清晰、
            无字段重叠（S6）——detail-extra 为挂载位容器（无树时零 DOM，不占布局）。 -->
       <template v-if="pluginInfo">
@@ -186,7 +226,7 @@ import ModelSelectPopover from '@/components/panel/ModelSelectPopover.vue'
 import { ProviderEditBody } from '@taiji/ui/features/settings'
 import { VIEW_HOST_SOURCE_KEY, ViewHost } from '@taiji/ui/extension-host'
 import { ACTION_EXECUTOR_KEY, UI_EVENT_SENDER_KEY } from '@taiji/ui/rendering-protocol'
-import type { PluginViewScope, ProviderId, ProviderInfo, ProviderStatus, QuotaPreset } from '@taiji/shared'
+import type { AggregationProviderRouteRefs, PluginViewScope, ProviderId, ProviderInfo, ProviderStatus, QuotaPreset } from '@taiji/shared'
 import { authBadgeClass, authBadgeTextKey } from './provider-badge'
 import { createPluginActionExecutor, createPluginUiEventSender, type CredentialStatusPayload, type PluginEntryInfo } from './PluginProviderSource'
 
@@ -220,6 +260,9 @@ const props = defineProps<{
   pluginInfo?: PluginEntryInfo
   /** 插件上报的凭据状态（undefined = 未上报/未拉取 → 无任何标记，D5/S5） */
   credentialStatus?: CredentialStatusPayload
+  /** 该渠道的路由引用投影（provider-aggregation U5 补呈现 · spec §6.3 行摘要 / §6.4 引用区；
+   *  undefined = 引用数据未到位（首拉中/失败）→ 两处呈现整体零 DOM，不渲染错态） */
+  routeRefs?: AggregationProviderRouteRefs
 }>()
 
 const emit = defineEmits<{
@@ -245,6 +288,8 @@ const emit = defineEmits<{
   reauthorize: [providerId: string]
   /** 「更新插件」点击（S26：两段式安装链重跑，payload = provider id） */
   'update-plugin': [providerId: string]
+  /** 路由引用 chip 点击（U5 补呈现 · spec §6.4 跳转）：父页带 RoutePageFocus 上抛 SettingsModal */
+  'open-route-ref': [focus: { routeId: string; memberId: string }]
 }>()
 
 const { t } = useI18n()

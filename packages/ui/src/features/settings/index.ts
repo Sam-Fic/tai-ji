@@ -35,14 +35,13 @@ export { default as RouteSpecialDates } from './provider/RouteSpecialDates.vue'
 export { default as RouteTimeGrid } from './provider/RouteTimeGrid.vue'
 export { default as RouteUnsavedBar } from './provider/RouteUnsavedBar.vue'
 export type { RouteCardData } from './provider/RouteCard.vue'
-export type { RoutePageSavePayload } from './provider/ModelRoutePage.vue'
+export type { RoutePageSavePayload, RoutePageFocus } from './provider/ModelRoutePage.vue'
 export type { RouteEditorOp, MemberOpInput } from './provider/route-editor-ops'
 export { DEFAULT_QUOTA_THRESHOLD_PERCENT } from './provider/route-editor-ops'
 export {
   blankWindowTable,
   candidateProviderIds,
   coverOwnersAt,
-  deriveRouteMode,
   endpointIssueKinds,
   endpointIssueKey,
   evaluateRouteAt,
