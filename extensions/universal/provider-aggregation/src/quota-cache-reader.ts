@@ -68,9 +68,14 @@ interface QuotaWindowProjection { // oe-exempt:20261106:framework:schema 数据�
 	resetSec?: number | null
 }
 
-/** 首窗口剩余百分比（D5「缓存百分比」投影）：wins[0]（5h 滚动窗，AS4 的 TOKENS_LIMIT
- * percentage 落点）直投——设计矩阵「缓存百分比 ≥ 阈值」的比较值；非有限数值（null =
- * 无限/未订阅、缺字段、NaN）返回 undefined = 未知（不猜数值，fail-open）。 */
+/** 首窗口已用百分比（缓存 pct 口径权威 = shared quota-types.ts QuotaWindow.pct
+ * 「已用百分比 0-100」）：wins[0]（5h 滚动窗，AS4 的 TOKENS_LIMIT percentage 落点）
+ * 直投——磁盘形态即已用口径（declarative-engine 各 via 全部转成已用落缓存；2026-11-07
+ * 真机核实 bigmodel percentage = 已用：TIME_LIMIT usage=1000 / currentValue=867 /
+ * remaining=133 / percentage=86 ≈ currentValue/usage）。判定侧（router.ts
+ * isQuotaConditionSatisfied）做剩余换算（100 − pct）≥ 阈值，本投影不做二次换算——
+ * 直投保持「UI 与扩展同源同语义」。非有限数值（null = 无限/未订阅、缺字段、NaN）返回
+ * undefined = 未知（不猜数值，fail-open）。 */
 function quotaPercentOf(entry: unknown): number | undefined {
 	if (!isPlainObject(entry)) return undefined
 	const wins = (entry.data as { wins?: unknown } | undefined)?.wins

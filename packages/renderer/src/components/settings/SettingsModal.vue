@@ -7,6 +7,7 @@
   flex-1（内容列 max-w 1064/860/720 三态左对齐，档位 = 分区声明字段）。
   header 面包屑「设置 · <page>」+ 右侧 X 关闭。
 -->
+<!-- split-justified: 设置弹层容器域（分区注册表 + nav 渲染 + 视图切换与首访拉取编排 + focus trap + 模型路由分区接线——各分区已拆 ProviderPage / ModelRoutePage / SystemPage 等子组件，路由拉取与编排已拆 useRoutePageOrchestration，本文件为容器装配与跨分区接线汇聚点，拆出即转发壳） -->
 <template>
   <Teleport to="body">
     <div
@@ -116,7 +117,13 @@
                切回扩展管理页表单态同样保留。 -->
           <template v-for="view in visitedViews" :key="view">
             <div v-show="activeView === view" class="sec-fade" :class="{ on: activeView === view }">
-              <ProviderPage v-if="view === 'provider'" :providers="providers" :is-active="activeView === 'provider'" @open-route-page="openRoutePage" />
+              <ProviderPage
+                v-if="view === 'provider'"
+                :providers="providers"
+                :is-active="activeView === 'provider'"
+                :route-view="routeView"
+                @open-route-page="openRoutePage"
+              />
               <!-- 模型路由页（D10 两屏第二屏）：视图经 aggregation.getRouteView 拉取 + routeView
                    失效广播订阅刷新；scopedModels 全量走既有 settingsStore 通道（直连卡数据源）。
                    视图未到位（首访拉取中）不挂载内容分支，由加载/失败占位承载（U11），到位后常挂 v-show。 -->
@@ -126,6 +133,8 @@
                 :providers="providers"
                 :scoped-models="scopedModels"
                 :new-session-route-ids="newSessionRouteIds"
+                :focus="routePageFocus"
+                :quota-of="routeQuotaOf"
                 @save="onRoutePageSave"
                 @route-delete="onRoutePageDelete"
                 @open-providers="select('provider')"
@@ -202,7 +211,9 @@ import { detectPlatform } from '@/composables/effects/usePlatformChrome'
 import { cycleTabFocus, getFocusableElements } from '@/composables/logic/focus-trap'
 import { getSettingsStore, useSettings, type SystemSettings, type ContentSlotView } from '@taiji/core'
 import { ModelRoutePage } from '@taiji/ui/features/settings'
+import type { RoutePageFocus } from '@taiji/ui/features/settings'
 import { useRoutePageOrchestration } from '@/composables/features/settings/useRoutePageOrchestration'
+import { useQuotaStore } from '@/stores/quota'
 import {
   contentMaxWidthCss,
   settingsGroupHeadLabel,
@@ -391,11 +402,15 @@ function select(id: MenuId): void {
  *  ModelRoutePage / i18n settings.modelRoute 命名空间）。 */
 const MODEL_ROUTING_SECTION_KEY = 'model-route'
 
-/** ProviderPage 下一步引导卡「打开模型路由」（外部 spec §6.5）→ 切模型路由分区。
- *  findSection 守卫为注册表异常形态的防御（分区已登记，正常路径恒命中；未注册键会让
- *  内容分支落空渲染空白页）。 */
-function openRoutePage(): void {
+/** ProviderPage 下一步引导卡「打开模型路由」（外部 spec §6.5，无 focus）与行引用 chip 跳转
+ *  （外部 spec §6.4，带 RoutePageFocus 定位端点）→ 切模型路由分区。findSection 守卫为
+ *  注册表异常形态的防御（分区已登记，正常路径恒命中；未注册键会让内容分支落空渲染空白页）。
+ *  focus 在切换前落 ref：分区首访拉取期间内容分支未挂载（routeView===null 占位），focus 经
+ *  props 在内容挂载后由 RouteCard 的 immediate watch 补放行（spec §6.4 时序覆盖）。 */
+const routePageFocus = ref<RoutePageFocus | null>(null)
+function openRoutePage(focus?: RoutePageFocus): void {
   if (findSection(MODEL_ROUTING_SECTION_KEY) === undefined) return
+  routePageFocus.value = focus ?? null
   select(MODEL_ROUTING_SECTION_KEY)
 }
 
@@ -405,10 +420,22 @@ const { routeView, routeViewLoading, routeViewFailed, ensureRouteView, onRoutePa
 
 // 分区首访触发拉取（开弹层不预拉，与 visitedViews 首访挂载语义一致）；immediate 覆盖深链
 // 直开 model-route 的形态——activeMenu 初值即 model-route 时无变化沿，非 immediate watch
-// 回调不执行，首访拉取被跳过 = 页面纯空白（U10）
+// 回调不执行，首访拉取被跳过 = 页面纯空白（U10）。
+// provider 分区同样拉取：路由引用呈现（U5 补呈现 · spec §6.3 行摘要 / §6.4 引用区）需要
+// routeView——provider 页成为该视图的第二消费方后，拉取时机跟随「需要该数据的分区首访」。
 watch(activeView, (view) => {
-  if (view === MODEL_ROUTING_SECTION_KEY) void ensureRouteView()
+  if (view === MODEL_ROUTING_SECTION_KEY || view === 'provider') void ensureRouteView()
 }, { immediate: true })
+
+// 「此刻」chip 额度供给（F1-34 接线，M2）：providerId → 首窗口已用百分比投影，与 pi 侧
+// quota-cache-reader quotaPercentOf 同源（wins[0].pct 磁盘形态直投，输入侧不做 100-pct
+// 换算）；剩余换算在两侧判定式内同型完成（扩展 router.ts / ui route-preview.ts——
+// 「显示 ≡ 生效」由判定式同型保证，非数据投影）；无缓存/非有限值 = undefined（未知 →
+// fail-open，chip 区分呈现承载）。
+const routeQuotaOf = (providerId: string): number | undefined => {
+  const pct = useQuotaStore().byProvider.get(providerId)?.data?.wins[0]?.pct
+  return typeof pct === 'number' && Number.isFinite(pct) ? pct : undefined
+}
 
 function getItemCount(id: string): number {
   switch (id) {

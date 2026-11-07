@@ -531,6 +531,16 @@ export default [
       'max-lines': ['warn', { max: 520, skipBlankLines: true, skipComments: true }],
     },
   },
+  // SettingsModal.vue 是设置弹层壳 + 分区编排的聚合点：provider 行引用 chip 跳转（spec §6.4）
+  // 与「此刻」额度接线（F1-34/M2）后 ESLint 实测 511 代码行（skipBlankLines+skipComments 口径）
+  // 微超 500——新增均为接线声明（props 透传 / focus ref / quota 投影 lambda），无自然拆分线。
+  // 对齐上方 Composer.vue「微超即提额，保留软上限告警」同型先例（511→520），拆分归独立重构任务。
+  {
+    files: ['packages/renderer/src/components/settings/SettingsModal.vue'],
+    rules: {
+      'max-lines': ['warn', { max: 520, skipBlankLines: true, skipComments: true }],
+    },
+  },
   // [HISTORICAL] ConfigService 是 config 域唯一聚合点（settings-message-handler 全部 config.* case 的
   // 注入端），随功能以纯委托行增长——真实逻辑已在 worktree-config-helper（worktree 偏好）/
   // rename-session-config（auto-rename flag/rename 模型）/ smart-context-config（smart-context 快照）/

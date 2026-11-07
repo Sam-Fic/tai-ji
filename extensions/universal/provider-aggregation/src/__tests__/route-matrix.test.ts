@@ -109,23 +109,24 @@ describe("端点可选性矩阵（route-matrix.md 行 1-12）", () => {
 		)
 	})
 
-	it("行 4：仅额度阈值，百分比 ≥ 阈值（新鲜）→ 可选", () => {
+	it("行 4：仅额度阈值，剩余 ≥ 阈值（新鲜）→ 可选", () => {
+		// quotaMap 值 = 缓存已用百分比（QuotaWindow.pct 口径）；已用 20 → 剩余 80 = 阈值（边界含等号）→ 可选。
 		expectSingleMember(
 			{
 				...base,
 				route: route({ members: [member({ type: "quota", quota: { thresholdPercent: 80 } })] }),
-				quotaByProviderId: quotaMap([["zhipu", 80]]),
+				quotaByProviderId: quotaMap([["zhipu", 20]]),
 			},
 			{ available: true },
 		)
 	})
 
-	it("行 5：仅额度阈值，百分比 < 阈值（新鲜）→ 不可选（额度低于阈值）", () => {
+	it("行 5：仅额度阈值，剩余 < 阈值（新鲜）→ 不可选（额度低于阈值）", () => {
 		expectSingleMember(
 			{
 				...base,
 				route: route({ members: [member({ type: "quota", quota: { thresholdPercent: 80 } })] }),
-				quotaByProviderId: quotaMap([["zhipu", 79]]),
+				quotaByProviderId: quotaMap([["zhipu", 21]]),
 			},
 			{ available: false, reasons: ["额度低于阈值"] },
 		)
@@ -147,45 +148,45 @@ describe("端点可选性矩阵（route-matrix.md 行 1-12）", () => {
 		)
 	})
 
-	it("行 7：时间窗+额度，窗内 + ≥ 阈值（新鲜）→ 可选", () => {
+	it("行 7：时间窗+额度，窗内 + 剩余 ≥ 阈值（新鲜）→ 可选", () => {
 		expectSingleMember(
 			{
 				...base,
 				route: route({ members: [member({ type: "combo", window: MONDAY_10_WINDOW, quota: { thresholdPercent: 80 } })] }),
-				quotaByProviderId: quotaMap([["zhipu", 90]]),
+				quotaByProviderId: quotaMap([["zhipu", 10]]),
 			},
 			{ available: true },
 		)
 	})
 
-	it("行 8：时间窗+额度，窗内 + < 阈值（新鲜）→ 不可选（额度低于阈值）", () => {
+	it("行 8：时间窗+额度，窗内 + 剩余 < 阈值（新鲜）→ 不可选（额度低于阈值）", () => {
 		expectSingleMember(
 			{
 				...base,
 				route: route({ members: [member({ type: "combo", window: MONDAY_10_WINDOW, quota: { thresholdPercent: 80 } })] }),
-				quotaByProviderId: quotaMap([["zhipu", 10]]),
+				quotaByProviderId: quotaMap([["zhipu", 90]]),
 			},
 			{ available: false, reasons: ["额度低于阈值"] },
 		)
 	})
 
-	it("行 9：时间窗+额度，窗外 + ≥ 阈值（新鲜）→ 不可选（时间窗外）", () => {
-		expectSingleMember(
-			{
-				...base,
-				route: route({ members: [member({ type: "combo", window: windowTable([]), quota: { thresholdPercent: 80 } })] }),
-				quotaByProviderId: quotaMap([["zhipu", 90]]),
-			},
-			{ available: false, reasons: ["时间窗外"] },
-		)
-	})
-
-	it("行 10：时间窗+额度，窗外 + < 阈值（新鲜）→ 不可选（时间窗外 + 额度低于阈值）", () => {
+	it("行 9：时间窗+额度，窗外 + 剩余 ≥ 阈值（新鲜）→ 不可选（时间窗外）", () => {
 		expectSingleMember(
 			{
 				...base,
 				route: route({ members: [member({ type: "combo", window: windowTable([]), quota: { thresholdPercent: 80 } })] }),
 				quotaByProviderId: quotaMap([["zhipu", 10]]),
+			},
+			{ available: false, reasons: ["时间窗外"] },
+		)
+	})
+
+	it("行 10：时间窗+额度，窗外 + 剩余 < 阈值（新鲜）→ 不可选（时间窗外 + 额度低于阈值）", () => {
+		expectSingleMember(
+			{
+				...base,
+				route: route({ members: [member({ type: "combo", window: windowTable([]), quota: { thresholdPercent: 80 } })] }),
+				quotaByProviderId: quotaMap([["zhipu", 90]]),
 			},
 			{ available: false, reasons: ["时间窗外", "额度低于阈值"] },
 		)
@@ -237,7 +238,8 @@ describe("全体候选状态 → 路由结果（route-matrix.md 多端点叠加�
 				],
 			}),
 			now: NOW_MONDAY_10,
-			quotaByProviderId: quotaMap([["opencode-go", 10]]),
+			// 已用 90 → 剩余 10 < 阈值 50 → 额度落选
+			quotaByProviderId: quotaMap([["opencode-go", 90]]),
 		})
 		expect(result.outcome).toBe("no-candidate")
 		if (result.outcome !== "no-candidate") return

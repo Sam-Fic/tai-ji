@@ -76,6 +76,8 @@
           :total="draft.length"
           :now="resolvedNow"
           :new-session-available="newSessionRouteIds?.has(card.card.route.id) ?? false"
+          :focus="focus && focus.routeId === card.card.route.id ? focus : undefined"
+          :quota-of="quotaOf"
           @op="applyEditorOp"
           @move="moveCard(idx, $event)"
           @toggle-scoped="toggleScoped(idx)"
@@ -205,6 +207,14 @@ export interface RoutePageSavePayload {
   scopedRefs: string[]
 }
 
+/** 供应商页引用 chip 跳转的定位锚（外部 spec §6.4：展开对应模型卡 + 滚动到对应端点 + 闪烁高亮）。
+ *  memberId = 端点条目 id（编辑期稳定键，RouteEndpointRow data-member-id 同源——顺位会随
+ *  编辑漂移，不作定位锚）。 */
+export interface RoutePageFocus {
+  routeId: string
+  memberId: string
+}
+
 const props = defineProps<{
   view: AggregationRouteView
   providers: ProviderInfo[]
@@ -216,6 +226,14 @@ const props = defineProps<{
   /** 新会话可用路由 id 集（U7：不在本应用生命周期首次快照内的卡显徽标；宿主 = 编排 composable）。
    * 缺省 = 空集（不显徽标）。 */
   newSessionRouteIds?: ReadonlySet<string>
+  /** 引用 chip 跳转定位（外部 spec §6.4：命中卡自动展开 + 滚动到端点行 + 闪烁高亮；
+   *  null/缺省 = 无定位）。宿主 = SettingsModal（ProviderPage open-route-page 透传）。 */
+  focus?: RoutePageFocus | null
+  /** 额度数据供给（M2 接线，透传 RouteCard「此刻」chip）：providerId → 首窗口已用百分比
+   *  投影，与 pi 扩展 quota-cache-reader wins[0].pct 同源（剩余换算在判定式内完成——
+   *  route-preview.ts evaluateCondition，与扩展 router.ts 同型）；缺省不传 = 额度
+   *  数据未知（chip 以 fail-open + 区分呈现承载）。宿主 = SettingsModal（useQuotaStore 投影）。 */
+  quotaOf?: (providerId: string) => number | undefined
 }>()
 
 const emit = defineEmits<{

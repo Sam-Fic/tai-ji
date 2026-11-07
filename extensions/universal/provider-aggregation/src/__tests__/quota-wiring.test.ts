@@ -1,11 +1,12 @@
 /**
  * 额度求值接线测试（D3/SC5 M2 增量；V3 单测半边）。
  *
- * 覆盖断言：quota-cache.json 种子 → route 求值消费（percent ≥ threshold 判满足，矩阵
- * 行 4）/ 阈值超快照 → 额度触发切换到兜底端点（矩阵行 5，V3「100 恒耗尽」单测半边）/
- * 数据不新鲜 → 快照不含该 provider → fail-open（矩阵行 6）/ resetSec 跨窗 → 同上 /
- * 文件缺失 / 损坏 → 快照空 fail-open / mtime 门（同签名不重读——内容变 mtime 未变时
- * 旧快照继续生效）/ pct 非有限数值（null=无限）→ 未知 fail-open。
+ * 覆盖断言：quota-cache.json 种子 → route 求值消费（种子 pct = 缓存已用百分比口径，
+ * 判定按剩余换算 100 − pct ≥ threshold，矩阵行 4）/ 剩余低于阈值 → 额度触发切换到兜底
+ * 端点（矩阵行 5，V3「100 恒耗尽」单测半边）/ 数据不新鲜 → 快照不含该 provider →
+ * fail-open（矩阵行 6）/ resetSec 跨窗 → 同上 / 文件缺失 / 损坏 → 快照空 fail-open /
+ * mtime 门（同签名不重读——内容变 mtime 未变时旧快照继续生效）/ pct 非有限数值
+ * （null=无限）→ 未知 fail-open。
  *
  * 形态（TEST-STRATEGY 三档判据）：真实 fs 限 os.tmpdir() 白名单内 mkdtemp 自建自删；
  * mtime 用 utimesSync 显式错开（不依赖真实时钟精度），求值墙钟用 fake timers 固定；
@@ -145,34 +146,34 @@ function setup(): Map<string, ExtensionVirtualModel> {
 // ── 接线断言 ─────────────────────────────────────────────────────────────────
 
 describe("额度快照接线（D3/SC5 M2）", () => {
-	it("新鲜种子（percent=90）+ 阈值 80 → percent ≥ threshold 判满足，命中额度端点（矩阵行 4）", () => {
+	it("新鲜种子（pct=20 即剩余 80）+ 阈值 80 → 剩余换算 ≥ threshold 判满足，命中额度端点（矩阵行 4）", () => {
 		const registered = setup()
-		writeQuotaCache(quotaSeed(90, NOW.getTime() - 1_000), T1)
+		writeQuotaCache(quotaSeed(20, NOW.getTime() - 1_000), T1)
 		expect(routeVia(registered, createMockCtx())).toBe("glm")
 	})
 
-	it("阈值 100 > percent 90 → 额度端点落选切换兜底端点（矩阵行 5，V3 恒耗尽技巧单测半边）", () => {
+	it("剩余 80 < 阈值 100 → 额度端点落选切换兜底端点（矩阵行 5，V3 恒耗尽技巧单测半边）", () => {
 		const registered = setup()
-		writeQuotaCache(quotaSeed(90, NOW.getTime() - 1_000), T1)
+		writeQuotaCache(quotaSeed(20, NOW.getTime() - 1_000), T1)
 		const ctx = createMockCtx()
 		expect(routeVia(registered, ctx)).toBe("glm")
-		// 编辑阈值 100（mtime 错开）：下一请求按新定义求值 → 90 < 100 落选 → 兜底 ep-b
+		// 编辑阈值 100（mtime 错开）：下一请求按新定义求值 → 剩余 80 < 100 落选 → 兜底 ep-b
 		writeConfig([{ ...ROUTE, members: [{ id: "ep-a", providerId: PROVIDER, modelId: "glm", type: "quota", quota: { thresholdPercent: 100 } }, { id: "ep-b", providerId: "opencode-go", modelId: "zai-glm", type: "none" }] }], T2)
 		expect(routeVia(registered, ctx)).toBe("zai-glm")
 	})
 
 	it("数据不新鲜（超 AGGREGATION_QUOTA_FRESHNESS_MS）→ 快照不含该 provider → fail-open 命中（矩阵行 6）", () => {
 		const registered = setup()
-		writeQuotaCache(quotaSeed(10, NOW.getTime() - AGGREGATION_QUOTA_FRESHNESS_MS - 1), T1)
-		// percent 10 < 阈值 80，但数据过期判未知 → 该端点不因额度落选
+		writeQuotaCache(quotaSeed(90, NOW.getTime() - AGGREGATION_QUOTA_FRESHNESS_MS - 1), T1)
+		// 已用 90 → 剩余 10 < 阈值 80（若数据新鲜会落选），但数据过期判未知 → 该端点不因额度落选
 		expect(routeVia(registered, createMockCtx())).toBe("glm")
 	})
 
 	it("resetSec 跨窗（重置点已过）→ 快照判未知 → fail-open 命中（RL3 联合判定）", () => {
 		const registered = setup()
 		// lastFetchAt 60s 前（仍在 600s 新鲜窗内），resetSec=30 → 重置点（取数后 30s）已过
-		// → 快照描述已结束周期的余量 → 判未知
-		writeQuotaCache(quotaSeed(10, NOW.getTime() - 60_000, [30, null, null]), T1)
+		// → 快照描述已结束周期的余量 → 判未知（pct=90 若新鲜会按剩余 10 < 80 落选）
+		writeQuotaCache(quotaSeed(90, NOW.getTime() - 60_000, [30, null, null]), T1)
 		expect(routeVia(registered, createMockCtx())).toBe("glm")
 	})
 
@@ -194,15 +195,15 @@ describe("额度快照接线（D3/SC5 M2）", () => {
 
 	it("mtime 门：内容变而 mtime 未变 → 不重读，上一快照继续生效（SI3 信号与目标同源）", () => {
 		const registered = setup()
-		writeQuotaCache(quotaSeed(90, NOW.getTime() - 1_000), T1)
+		writeQuotaCache(quotaSeed(20, NOW.getTime() - 1_000), T1)
 		const ctx = createMockCtx()
 		expect(routeVia(registered, ctx)).toBe("glm")
-		// 覆写内容（percent 10）但 mtime 拨回 T1——写侧原子写必然更新 mtime，此形态只在
-		// 测试里构造：门未触发 = 不重读 = 快照仍是 percent 90 → 继续命中 ep-a。
-		writeQuotaCache(quotaSeed(10, NOW.getTime() - 1_000), T1)
+		// 覆写内容（pct 90 即剩余 10，若重读会落选）但 mtime 拨回 T1——写侧原子写必然更新
+		// mtime，此形态只在测试里构造：门未触发 = 不重读 = 快照仍是 pct 20 → 继续命中 ep-a。
+		writeQuotaCache(quotaSeed(90, NOW.getTime() - 1_000), T1)
 		expect(routeVia(registered, ctx)).toBe("glm")
-		// mtime 真变化（T3）→ 重读 percent 10 < 80 → 落选切兜底
-		writeQuotaCache(quotaSeed(10, NOW.getTime() - 1_000), T3)
+		// mtime 真变化（T3）→ 重读 pct 90（剩余 10 < 80）→ 落选切兜底
+		writeQuotaCache(quotaSeed(90, NOW.getTime() - 1_000), T3)
 		expect(routeVia(registered, ctx)).toBe("zai-glm")
 	})
 

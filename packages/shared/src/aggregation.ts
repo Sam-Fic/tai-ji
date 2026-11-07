@@ -59,7 +59,10 @@ export type AggregationMemberConditionType = 'none' | 'window' | 'quota' | 'comb
 
 export const AGGREGATION_MEMBER_CONDITION_TYPES: readonly AggregationMemberConditionType[] = ['none', 'window', 'quota', 'combo']
 
-/** 端点额度条件：套餐剩余百分比 ≥ thresholdPercent 判可用（D5；100 = 恒耗尽，V3 技巧）。 */
+/** 端点额度条件：套餐剩余百分比 ≥ thresholdPercent 判可用（D5；100 = 恒耗尽，V3 技巧）。
+ *  剩余 = 100 − 缓存已用百分比（QuotaWindow.pct 口径权威见 shared quota-types.ts；换算
+ *  落在两侧判定点——扩展 router.ts isQuotaConditionSatisfied 与 ui route-preview.ts
+ *  evaluateCondition 同型，2026-11-07 真机核实缓存 pct = 已用口径）。 */
 export interface AggregationQuotaCondition { // oe-exempt:20261106:framework:schema 数据契约，单实现为设计终态
   /** 阈值百分比（0-100 整数；额度数据缺失/过期时该条件按满足处理——fail-open，D5）。 */
   thresholdPercent: number
@@ -448,6 +451,52 @@ export function collectOrphanAggregationRefs(
   })
 }
 
+// ── 供应商路由引用投影（provider-aggregation U5 补呈现 · 外部 spec §6.3 行摘要 / §6.4 引用区） ──
+
+/** 引用 chip（spec §6.4「模型简称 · 第 N 顺位」的数据投影；点击跳转目标锚三元组）。 */
+export interface AggregationProviderRouteRef { // oe-exempt:20261106:framework:schema 数据契约，单实现为设计终态
+  /** 引用该渠道的路由 id（跳转 = 路由页展开对应模型卡）。 */
+  routeId: string
+  /** 路由显示名（外部 spec 数据模型 route=model，「模型简称」即路由名）。 */
+  routeName: string
+  /** 端点条目 id（路由页端点行定位锚，RouteEndpointRow data-member-id 同源）。 */
+  memberId: string
+  /** 端点顺位（0 起；展示层 +1 =「第 N 顺位」）。 */
+  memberIndex: number
+}
+
+/** 供应商路由引用投影（行摘要 routeCount 与引用区 refs 共用单源——两处派生分写即口径漂移点）。 */
+export interface AggregationProviderRouteRefs { // oe-exempt:20261106:framework:schema 数据契约，单实现为设计终态
+  /** 引用该渠道的不同路由数量（spec §6.3：按路由去重统计，不是端点数）。 */
+  routeCount: number
+  /** 引用 chip 列表（每端点一条；按路由卡序 + 端点序稳定排序）。 */
+  refs: AggregationProviderRouteRef[]
+}
+
+/**
+ * 渠道被路由引用的投影（U5 供应商页补呈现单源）：入参 = 路由定义集合（routeView 卡片
+ * 携带的 route 即本域类型，视图层无需二次拆包）+ 渠道 provider id。无引用 = 零值投影
+ * （routeCount 0 / refs 空——行摘要「未参与路由」与引用区空文案的统一判据）。
+ */
+export function collectProviderRouteRefs(
+  routes: readonly AggregationRoute[],
+  providerId: string,
+): AggregationProviderRouteRefs {
+  const refs: AggregationProviderRouteRef[] = []
+  let routeCount = 0
+  for (const route of routes) {
+    let routeHit = false
+    for (let memberIndex = 0; memberIndex < route.members.length; memberIndex++) {
+      const member = route.members[memberIndex]
+      if (member?.providerId !== providerId) continue
+      routeHit = true
+      refs.push({ routeId: route.id, routeName: route.name, memberId: member.id, memberIndex })
+    }
+    if (routeHit) routeCount += 1
+  }
+  return { routeCount, refs }
+}
+
 // ── 额度数据新鲜度（provider-aggregation D3/RL3：「超阈值判未知」语义单源） ─────────────
 
 /** 秒 → 毫秒换算锚（resetSec 剩余秒数与毫秒 epoch 墙钟的统一换算点）。 */
@@ -455,8 +504,10 @@ const MS_PER_SECOND = 1000
 
 /**
  * 额度数据新鲜度阈值（毫秒）：距上次成功取数（quota-cache 条目的 lastFetchAt）超过该
- * 阈值判「未知」。消费方：pi 扩展组装额度快照（未知 → 端点额度条件 fail-open，D5）、
- * runtime 刷新编排的「过期才刷」过滤（U4）、浮层「额度数据 N 分钟前」标注（M2）。
+ * 阈值判「未知」。判定消费方两方：pi 扩展组装额度快照（未知 → 端点额度条件 fail-open，
+ * D5）、runtime 刷新编排的「过期才刷」过滤（U4）。浮层「额度数据 N 分钟前」标注（M2）
+ * 是展示层相对时间格式化（useQuotaDisplay formatLastFetch），无布尔阈值判定语义，
+ * 不在本单源约束内。
  *
  * 取值判据（D3）：正常对话节奏下 fail-open 分支只在异常触发（应用冷启动无缓存、长期
  * 未对话后首条消息）。当前取 10 分钟——高于回合内秒级触发密度（回合收尾刷新使数据年龄
@@ -479,8 +530,8 @@ export interface AggregationQuotaFreshnessProbe { // oe-exempt:20261106:framewor
 
 /**
  * 额度缓存数据新鲜度判定（RL3 单源）：超阈值或跨重置窗口 = 未知（false）——调用方把
- * 未知数据按 fail-open 语义处理（端点额度条件按满足），不猜测数值。三方（扩展 / runtime
- * 编排 / 浮层标注）共用本函数，禁止各自另写时间比较（多端漂移即语义分裂）。
+ * 未知数据按 fail-open 语义处理（端点额度条件按满足），不猜测数值。判定消费方两方
+ * （扩展 / runtime 编排）共用本函数，禁止各自另写时间比较（多端漂移即语义分裂）。
  */
 export function isAggregationQuotaDataFresh(
   probe: AggregationQuotaFreshnessProbe,

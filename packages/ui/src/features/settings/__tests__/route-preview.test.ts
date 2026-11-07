@@ -142,15 +142,17 @@ describe('evaluateRouteAt 此刻求值（D5 矩阵 UI 预览半边）', () => {
     expect(result.steps[0]?.reason).toBe('quota-unknown-open')
   })
 
-  it('额度数据就位时按阈值判定（quotaOf 供给）', () => {
+  it('额度数据就位时按阈值判定（quotaOf 供给已用百分比，剩余换算后比阈值）', () => {
     const r = routeOf({
       mode: 'advanced',
       members: [member({ id: 'a', providerId: 'zhipu', type: 'quota', quota: { thresholdPercent: 80 } })],
     })
+    // quotaOf 返回值 = 缓存已用百分比（QuotaWindow.pct 口径）：已用 30 → 剩余 70 < 80 → 落选
     const low = evaluateRouteAt(r, WED_1430, { quotaOf: () => 30 })
     expect(low.hit).toBeNull()
     expect(low.steps[0]?.reason).toBe('quota-low')
-    const ok = evaluateRouteAt(r, WED_1430, { quotaOf: () => 85 })
+    // 已用 15 → 剩余 85 ≥ 80 → 命中
+    const ok = evaluateRouteAt(r, WED_1430, { quotaOf: () => 15 })
     expect(ok.hit?.id).toBe('a')
     expect(ok.steps[0]?.reason).toBe('quota-ok')
   })
@@ -164,10 +166,11 @@ describe('evaluateRouteAt 此刻求值（D5 矩阵 UI 预览半边）', () => {
         member({ id: 'a', providerId: 'zhipu', type: 'combo', window: win, quota: { thresholdPercent: 50 } }),
       ],
     })
-    expect(evaluateRouteAt(r, WED_1430, { quotaOf: () => 10 }).hit).toBeNull()
-    expect(evaluateRouteAt(r, WED_1430, { quotaOf: () => 60 }).hit?.id).toBe('a')
+    // 已用 10 → 剩余 90 ≥ 50 → 额度满足命中；已用 60 → 剩余 40 < 50 → 落选
+    expect(evaluateRouteAt(r, WED_1430, { quotaOf: () => 10 }).hit?.id).toBe('a')
+    expect(evaluateRouteAt(r, WED_1430, { quotaOf: () => 60 }).hit).toBeNull()
     // 窗外即使额度充足也落选
-    expect(evaluateRouteAt(r, { dow: 2, slot: 0 }, { quotaOf: () => 60 }).hit).toBeNull()
+    expect(evaluateRouteAt(r, { dow: 2, slot: 0 }, { quotaOf: () => 10 }).hit).toBeNull()
   })
 
   it('特殊日期 exclude 该日全天判窗外，优先于周表（D13）', () => {

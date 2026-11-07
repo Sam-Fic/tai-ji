@@ -23,6 +23,9 @@ import { annotateDanglingMembers } from '@taiji/shared'
 export const DAY_COUNT = 7
 export const SLOT_COUNT = 48
 
+/** 百分比满刻度（quotaOf 供给的 pct 口径 0-100；剩余 = 满刻度 − 已用）。 */
+const QUOTA_PCT_FULL_SCALE = 100
+
 /** 一天 30 分钟格数下的一刻钟粒度换算常量（slot = floor(分钟 / 30)）。 */
 const MINUTES_PER_SLOT = 30
 
@@ -61,8 +64,9 @@ export interface RouteNow { // oe-exempt:20261106:framework:评测纯函数类�
 /** 求值可选输入（M2 额度接线前的缺省形态：额度数据未知 = fail-open）。 */
 export interface RouteEvalOptions { // oe-exempt:20261106:framework:评测纯函数类型契约，单实现为设计终态
   /**
-   * 额度数据供给：providerId → 套餐剩余百分比；返回 undefined = 数据未知（该条件按
-   * 满足处理，D5 fail-open）。M1 缺省不传（额度刷新 M2 接线），M2 接线后由上层注入。
+   * 额度数据供给：providerId → 缓存首窗口已用百分比（QuotaWindow.pct 口径，判定式内做
+   * 剩余换算）；返回 undefined = 数据未知（该条件按满足处理，D5 fail-open）。M1 缺省不传
+   * （额度刷新 M2 接线），M2 接线后由上层注入。
    */
   quotaOf?: (providerId: string) => number | undefined
   /**
@@ -230,7 +234,11 @@ function evaluateCondition(
       quotaOk = true
       quotaReason = 'quota-unknown-open'
     } else {
-      quotaOk = pct >= (member.quota?.thresholdPercent ?? 0)
+      // pct 是缓存已用百分比（口径权威 = shared quota-types.ts QuotaWindow.pct；扩展
+      // router.ts 判定同型换算——「显示 ≡ 生效」），阈值语义 = 剩余（100 − 已用）≥ 阈值
+      // 可选用（thresholdPercent 100 = 恒耗尽，V3 技巧；2026-11-07 真机核实 bigmodel
+      // percentage = 已用口径，详见扩展 router.ts isQuotaConditionSatisfied 注释）。
+      quotaOk = QUOTA_PCT_FULL_SCALE - pct >= (member.quota?.thresholdPercent ?? 0)
       quotaReason = quotaOk ? 'quota-ok' : 'quota-low'
     }
   }

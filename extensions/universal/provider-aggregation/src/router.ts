@@ -13,8 +13,9 @@
  *    格——坐标系契约见 @taiji/shared AggregationTimeWindowTable）；特殊日期优先于周表
  *    （D13 双型：exclude 全天窗外 / include 仅指定区间判窗内、其余回落周表；同一日期
  *    多条覆盖取第一条匹配）。
- * 3. 额度：缓存百分比 ≥ 阈值判满足；数据缺失/过期（快照 undefined）时按满足处理
- *    （fail-open，D5 矩阵行 6/12——未知不判死，真耗尽由 D6 重试感知纠正）。
+ * 3. 额度：缓存已用百分比的剩余换算（100 − pct）≥ 阈值判满足；数据缺失/过期（快照
+ *    undefined）时按满足处理（fail-open，D5 矩阵行 6/12——未知不判死，真耗尽由 D6
+ *    重试感知纠正）。
  * 4. 两条件并存（combo）需同时满足（矩阵行 7-12）。
  * 5. 重试排除（D6）：reason=retry 的上一失败端点本轮临时不可用，排除后照常按序求值；
  *    仅作用于本次选择，不写持久黑名单（SI4 假阳性收窄）。
@@ -32,9 +33,14 @@ import type { AggregationMember, AggregationRoute } from "@taiji/shared/aggregat
 /** 端点额度快照（route 求值的额度输入形态）。由 index.ts 经 QuotaCacheReader 组装
  * （quota-cache.json 新鲜条目投影）；map 缺 provider 键 / undefined = 未知。 */
 export interface RouteQuotaSnapshot { // oe-exempt:20261106:framework:评测输入契约，单实现为设计终态
-	/** 套餐剩余百分比（0-100）。 */
+	/** 缓存首窗口已用百分比（0-100；磁盘形态直投，判定侧做剩余换算——口径权威 =
+	 * shared quota-types.ts QuotaWindow.pct「已用百分比」，declarative-engine 各 via
+	 * 全部转成已用落缓存，2026-11-07 真机核实 bigmodel percentage = 已用）。 */
 	percent: number
 }
+
+/** 百分比满刻度（缓存 pct 口径 0-100；剩余 = 满刻度 − 已用）。 */
+const QUOTA_PCT_FULL_SCALE = 100
 
 /** 落选原因词表（AX5 逐端点列明；文案映射见 MEMBER_BLOCK_REASON_LABELS）。 */
 export type MemberBlockReason = "time-window-out" | "quota-below-threshold" | "retry-excluded"
@@ -149,9 +155,14 @@ export function isWithinTimeWindow(route: AggregationRoute, member: AggregationM
 }
 
 /**
- * 额度条件判断（矩阵行 4/5/6）。快照未知 → 满足（fail-open，D5）；快照已知 →
- * percent ≥ thresholdPercent。member 无 quota 声明（type=quota 而 quota 字段留空）
- * = 无阈值可判 → 满足（无从判死，不猜阈值）。
+ * 额度条件判断（矩阵行 4/5/6）。快照未知 → 满足（fail-open，D5）；快照已知 → 剩余换算
+ * （100 − percent）≥ thresholdPercent 判满足——快照 percent 是缓存已用百分比（口径权威
+ * = shared quota-types.ts QuotaWindow.pct；2026-11-07 真机核实 bigmodel TOKENS_LIMIT
+ * percentage = 已用：TIME_LIMIT 条目 usage=1000 / currentValue=867 / remaining=133 /
+ * percentage=86 ≈ currentValue/usage，剩余方向应为 13，已用口径实锤），阈值语义 = 剩余
+ * ≥ 阈值可选用（thresholdPercent 100 = 剩余须满格 → 真实账号恒不满足，V3 恒耗尽技巧）。
+ * member 无 quota 声明（type=quota 而 quota 字段留空）= 无阈值可判 → 满足（无从判死，
+ * 不猜阈值）。
  */
 export function isQuotaConditionSatisfied(
 	member: AggregationMember,
@@ -161,7 +172,7 @@ export function isQuotaConditionSatisfied(
 	if (quota === undefined) return true
 	const snapshot = quotaByProviderId?.get(member.providerId)
 	if (snapshot === undefined) return true
-	return snapshot.percent >= quota.thresholdPercent
+	return QUOTA_PCT_FULL_SCALE - snapshot.percent >= quota.thresholdPercent
 }
 
 /** 单端点单条件维度的落选原因收集（advanced 模式；simple 由本函数短路）。 */
