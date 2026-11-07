@@ -6,11 +6,13 @@
  * 语义不得漂移——特别是「反查失败静默忽略」的兜底（渲染与点击之间列表被刷新时，
  * 不发伪造 provider 的 select，见 resolveProviderId 的消费方注释）。
  *
- * 零 vue 组件依赖：纯函数 + settingsStore 订阅（分组形状为结构化类型，与 ModelPickerPanel
- * 的 ModelPickerGroup 结构兼容，不从 .vue import 类型）。M3 命中端点展示（U6 完成）追加
- * routeView 只读缓存订阅（拉取 + 失效广播重拉，模块级单例——与 settingsStore 常驻订阅同型，
- * renderer 生命周期持有）+ evaluateRouteAt 此刻求值（@taiji/ui 纯函数，UI 预览半边与
- * pi 扩展求值语义对齐由同源坐标契约守护）；拉取失败 = 投影缺席（行标注零 DOM，不阻塞选择器）。
+ * 零 vue 组件依赖：纯函数 + settingsStore / quotaStore 只读订阅（分组形状为结构化类型，
+ * 与 ModelPickerPanel 的 ModelPickerGroup 结构兼容，不从 .vue import 类型）。M3 命中端点
+ * 展示（U6 完成）追加 routeView 只读缓存订阅（拉取 + 失效广播重拉，模块级单例——与
+ * settingsStore 常驻订阅同型，renderer 生命周期持有）+ evaluateRouteAt 此刻求值
+ *（@taiji/ui 纯函数，UI 预览半边与 pi 扩展求值语义对齐由同源坐标契约守护）；额度维度
+ * 接线（dmg-r1-10）：quotaOf 从 quotaStore 缓存投影，与路由页 chip、pi 生效判定同输入
+ *（见 routeQuotaOf 注释）；拉取失败 = 投影缺席（行标注零 DOM，不阻塞选择器）。
  */
 import { computed, ref, toValue } from 'vue'
 import type { ComputedRef, MaybeRefOrGetter } from 'vue'
@@ -18,6 +20,7 @@ import { getSettingsStore } from '@taiji/core'
 import type { AggregationRouteCard, ModelInfo, ProviderId } from '@taiji/shared'
 import { evaluateRouteAt, nowFromClock } from '@taiji/ui/features/settings'
 import { config } from '@/api'
+import { useQuotaStore } from '@/stores/quota'
 
 /** provider 分组（providerId 用于选中反查，provider 名仅用于分组标题显示） */
 export interface ModelGroup {
@@ -118,11 +121,27 @@ function toPickerGroups(groups: readonly ModelGroup[]): PickerGroupRef[] {
 }
 
 /**
+ * 「此刻」chip/行标注额度供给（dmg-r1-10 接线）：providerId → 首窗口已用百分比投影，
+ * 与路由页 SettingsModal.vue routeQuotaOf 同源形态（useQuotaStore.byProvider 缓存直投，
+ * wins[0].pct，输入侧不做 100−pct 换算——剩余换算在判定式内同型完成，「显示 ≡ 生效」
+ * 由两侧判定式同型保证）；无缓存/非有限值 = undefined（额度数据未知 → 求值 fail-open，
+ * D5 quota-unknown-open）。只读缓存不触发拉取（拉取编排归额度面板 useQuotaQuery，
+ * 选择器保持零额外请求）；投影在 pickerGroups computed 求值期内读取 reactive Map，
+ * 额度缓存更新随依赖追踪驱动行标注刷新。
+ */
+function routeQuotaOf(providerId: string): number | undefined {
+  const pct = useQuotaStore().byProvider.get(providerId)?.data?.wins[0]?.pct
+  return typeof pct === 'number' && Number.isFinite(pct) ? pct : undefined
+}
+
+/**
  * 路由行此刻命中端点投影（M3 命中端点展示，U6 完成）：对路由定义按当前坐标求值一次
  *（groups 重算时点求值——广播/挂载驱动的事件式刷新，无周期重算，ADR-0190）。命中端点
  * 展示名 = provider 名（GL2：端点真实 id 只在配置与消息记录可见，选择器显示名）；路由
  * 定义在但条件全不满足 = null（行显「此刻无命中」）；非路由行 / 路由视图未到位 = 缺省
- *（标注缺席）。
+ *（标注缺席）。额度维度同输入（dmg-r1-10）：quotaOf 与路由页 chip、pi 生效判定同源
+ *（routeQuotaOf 投影）——额度耗尽端点不再显示命中（数据在判定生效），数据未知仍
+ * fail-open 放行（与 pi 扩展侧同语义）。
  *
  * 路由视图缓存懒拉（不预拉语义，对齐分区首访 U10）：仅当候选里出现路由条目（聚合组）
  * 才触发首拉——零配置 / 未配路由环境零请求（V8 零行为形态）；拉取失败 = 标注整体缺席。
@@ -138,7 +157,7 @@ function withHitEndpoints(groups: readonly PickerGroupRef[], providerNames: Read
       models: g.models.map((m) => {
         const card = routeCardsById.value.get(m.id)
         if (!card) return m
-        const result = evaluateRouteAt(card.route, now)
+        const result = evaluateRouteAt(card.route, now, { quotaOf: routeQuotaOf })
         if (result.hit === null) return { ...m, hitEndpoint: null }
         const hit = result.hit
         return { ...m, hitEndpoint: providerNames.get(hit.providerId) ?? hit.providerId }

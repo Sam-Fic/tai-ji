@@ -15,11 +15,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { getSettingsStore } from '@taiji/core'
-import type { ModelInfo, ProviderId } from '@taiji/shared'
+import type { ModelInfo, NormalizedQuotaRow, ProviderId } from '@taiji/shared'
 import { useModelPickerData } from '@/components/panel/model-picker-data'
+import { useQuotaStore } from '@/stores/quota'
 
 const { getRouteViewMock, onRouteViewMock } = vi.hoisted(() => ({
-  // 首拉回两卡：work-route 无条件端点（恒命中）+ night-route 时间窗全空表（恒不命中）
+  // 首拉回三卡：work-route 无条件端点（恒命中）+ night-route 时间窗全空表（恒不命中）
+  // + quota-route 额度条件端点（threshold 20：剩余 < 20 落选——dmg-r1-10 额度接线锁定）
   getRouteViewMock: vi.fn(async () => ({
     cards: [
       {
@@ -41,6 +43,17 @@ const { getRouteViewMock, onRouteViewMock } = vi.hoisted(() => ({
         },
         scoped: true, scopedIndex: 1, memberIssues: [],
       },
+      {
+        route: {
+          id: 'quota-route', name: '额度路由', modelId: 'quota-route', enabled: true, mode: 'advanced',
+          members: [{
+            id: 'ep-3', providerId: 'zhipu', modelId: 'glm-4.7', type: 'quota',
+            quota: { thresholdPercent: 20 },
+          }],
+          specials: [],
+        },
+        scoped: true, scopedIndex: 2, memberIssues: [],
+      },
     ],
     orphanRefs: [],
   })),
@@ -53,12 +66,13 @@ vi.mock('@/api', () => ({
 
 const ROUTE_WORK: ModelInfo = { id: 'work-route', name: '工作路由', providerId: 'aggregation' as ProviderId, providerName: '模型路由', aggregation: true, enabled: true }
 const ROUTE_NIGHT: ModelInfo = { id: 'night-route', name: '夜间路由', providerId: 'aggregation' as ProviderId, providerName: '模型路由', aggregation: true, enabled: true }
+const ROUTE_QUOTA: ModelInfo = { id: 'quota-route', name: '额度路由', providerId: 'aggregation' as ProviderId, providerName: '模型路由', aggregation: true, enabled: true }
 const ZHIPU_GLM: ModelInfo = { id: 'glm-5.3', name: 'GLM 5.3', providerId: 'zhipu' as ProviderId, providerName: 'Zhipu', enabled: true }
 
 beforeEach(() => {
   setActivePinia(createPinia())
   const store = getSettingsStore()
-  store.models.value = [ZHIPU_GLM, ROUTE_WORK, ROUTE_NIGHT]
+  store.models.value = [ZHIPU_GLM, ROUTE_WORK, ROUTE_NIGHT, ROUTE_QUOTA]
   store.providers.value = [
     { id: 'zhipu' as ProviderId, name: 'Zhipu' },
     { id: 'aggregation' as ProviderId, name: '模型路由' },
@@ -94,5 +108,39 @@ describe('withHitEndpoints 命中端点投影（M3 数据半边）', () => {
     // 物理组行不经投影（零 hitEndpoint 键）
     const physical = pickerGroups.value.find((g) => !g.aggregation)
     expect(physical?.models.every((m) => m.hitEndpoint === undefined)).toBe(true)
+  })
+
+  // ── 额度维度接线（dmg-r1-10）：quotaOf 与路由页 chip、pi 生效判定同输入 ──
+
+  /** 构造 zhipu 首窗口已用 pct 的额度缓存行（wins[0] 携带，quotaOf 投影口径）。 */
+  const quotaRow = (pct: number): NormalizedQuotaRow => ({
+    label: 'Zhipu Plan',
+    wins: [
+      { pct, resetSec: 3600 },
+      { pct: 0, resetSec: null },
+      { pct: 0, resetSec: null },
+    ],
+  })
+
+  it('额度缓存缺席 = 数据未知 fail-open（quota-route 仍显示命中，D5 语义保持）', async () => {
+    const { pickerGroups } = useModelPickerData()
+    await flushPromises()
+    // quota store 零缓存 → pct undefined → quota-unknown-open 判满足
+    const routeGroup = pickerGroups.value.find((g) => g.aggregation)
+    expect(routeGroup?.models.find((m) => m.id === 'quota-route')?.hitEndpoint).toBe('Zhipu')
+  })
+
+  it('额度耗尽端点不再显示命中（剩余 < threshold 落选）；缓存更新驱动重算恢复命中', async () => {
+    const quotaStore = useQuotaStore()
+    // pct 81 → 剩余 19 < threshold 20 → 端点落选（pi 生效判定同结论——「显示 ≡ 生效」）
+    quotaStore.setCache('zhipu', quotaRow(81), Date.now())
+    const { pickerGroups } = useModelPickerData()
+    await flushPromises()
+    const routeGroup = pickerGroups.value.find((g) => g.aggregation)
+    expect(routeGroup?.models.find((m) => m.id === 'quota-route')?.hitEndpoint).toBeNull()
+
+    // 缓存刷新（pct 80 → 剩余 20 ≥ 20）：reactive Map 依赖追踪驱动 pickerGroups 重算
+    quotaStore.setCache('zhipu', quotaRow(80), Date.now())
+    expect(pickerGroups.value.find((g) => g.aggregation)?.models.find((m) => m.id === 'quota-route')?.hitEndpoint).toBe('Zhipu')
   })
 })
