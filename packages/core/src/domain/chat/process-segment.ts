@@ -2,12 +2,12 @@
  * 过程段（ProcessSegment）类型族——对话流「聚合块」的段契约（chat 域 SSOT）。
  *
  * 职责边界：本文件只承载类型族与契约条文（零运行时逻辑）；切段纯函数落在 trace-window.ts
- * （与 flattenTurnBlocks / computeTraceWindow / groupToolRuns 同文件族），消费本文件的导出。
+ * （与 flattenTurnBlocks 同文件族），消费本文件的导出。
  * 类型族独立成文件的原因：切段契约与切段实现由两条并行工作线分别落地，同文件并行写互斥——
  * 契约先在此定死，实现侧与渲染侧（fixture 驱动开发）同以本文件为唯一对齐点。
  *
  * 派生分工：切段、组分组、计数口径在 core 纯函数一次算好，渲染层零解析——UI 只按本文件的
- * 字段接线（与 groupToolRuns 的既有分工同构：口径 core 单点、ui 消费结果）。成员资格、计数
+ * 字段接线（口径 core 单点、ui 消费结果）。成员资格、计数
  * 口径、段 id 派生规则的任何调整只改 core，不进渲染层。
  */
 import type { FlatBlock, RunGroupBase } from './trace-window'
@@ -15,8 +15,8 @@ import type { FlatBlock, RunGroupBase } from './trace-window'
 /**
  * 段内工具组：段内连续同类型工具块的归组结果。
  *
- * 组资格只看工具类型、不看状态（running 与已完成一视同仁，running 也入组），类型判定与
- * groupToolRuns 共用 trace-window 的 RUN_GROUP_TOOLS 类型表——不另设第二判定源，两处口径
+ * 组资格只看工具类型、不看状态（running 与已完成一视同仁，running 也入组），类型判定用
+ * trace-window 的 RUN_GROUP_TOOLS 类型表（runBaseOf 同一判定源）——不另设第二判定源，两处口径
  * 漂移即计数对账失真。类型表外工具（自定义 / MCP / 扩展工具）与 agentgraph（子代理派发）块
  * 不入组、原样成行：组名是对 agent 行为的语义解读，场景一变解读就会错，纯类型映射的漏登记
  * 安全降级是「多显示一行」而不是「归错组」——成员资格零内容解析的原因。
@@ -28,15 +28,15 @@ export interface ProcessToolGroup { // oe-exempt:20261106:framework:chat 域契�
   members: FlatBlock[]
   /**
    * 组耗时口径 = 已完成成员耗时合计（endTime − startTime 之和；endTime 缺失的成员按 0 计，
-   * 负值钳 0）。running 成员 endTime 必缺失，天然按 0 不计入。与 RunGroupBlock.header.durationMs
-   * 同口径（同一条 memberDurationMs 规则，不另立第二套时间口径）。
+   * 负值钳 0）。running 成员 endTime 必缺失，天然按 0 不计入。
+   * （同一条 memberDurationMs 规则，不另立第二套时间口径。）
    */
   durationMs: number
   /** 组内失败计数 = 成员中 status==='error' 的数量（口径与段级 failedCount 一致，见 ProcessSegmentCounts） */
   failedCount: number
   /**
    * 组内是否含 status==='running' 成员（渲染信号，不是计数口径）：进行中聚合条「当前项高亮 +
-   * 自动滚到最新」与流光动效的判定谓词。放接口顶层不进计数字段，同 RunGroupBlock.hasRunning 先例。
+   * 自动滚到最新」与流光动效的判定谓词。放接口顶层不进计数字段。
    */
   hasRunning: boolean
 }
@@ -66,8 +66,7 @@ export interface ProcessSegmentCounts { // oe-exempt:20261106:framework:chat 域
   /**
    * 失败计数 = 段内已完成失败块数：kind ∈ {tool, agentgraph} 且 ref.status==='error' 的成员数。
    * 'error' 是 ToolCall 的终态（running 未定型、end_not_received 未确认，均不算失败）；
-   * thinking 无失败形态。与 TraceWindowResult.failedCount（旧窗口口径：不在可见集内的失败块）
-   * 是两回事——本字段是段内全量口径，失败块是段正式成员，不做任何可见性剔除。
+   * thinking 无失败形态。本字段是段内全量口径：失败块是段正式成员，不做任何可见性剔除。
    */
   failedCount: number
 }
