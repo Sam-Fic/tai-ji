@@ -141,7 +141,9 @@ describe('aggregation-catalog-consistency（A9/RL1 目录一致性对账，注�
 // 同一 fixture（上方 FIXTURE_ROUTES + ENDPOINT_PROVIDERS）喂扩展注册条目派生纯函数，
 // 与注入器输出逐项相等。目录快照按 fixture 物理端点构造；最小值/省略规则不在此复制
 // （resolveContextWindowFromDirectory 单源）。端点悬空时两侧省略形态按各自登记分流
-// （注入器取已知最小值 / 注册器省略 = pi 合成 0，impl-plan notes ② 登记）——RL1 对账
+// （注入器 deriveRouteContextWindow 跳过悬空端点取已知最小值 / 注册器
+// resolveContextWindowFromDirectory 任一端点不可解析即省略 = pi 合成 0，两侧各按
+// 其代码单源注释登记）——RL1 对账
 // 前提是同一加载时点的目录一致 fixture，悬空场景不入本对账。
 const fixtureDirectory = {
   find: (providerId: string, modelId: string) =>

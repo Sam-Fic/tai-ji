@@ -8,7 +8,9 @@
  * ④ 运行中新建路由窗口（注册表命中 + pi 未注册 + 扩展已装载）→ AGGREGATION_ROUTE_NOT_IN_SESSION
  *    可操作提示，不落 ENGINE_MODEL_MISSING 双因文案（D1 ③/D4 时点差）；
  * ⑤ 扩展禁用态 → AGGREGATION_EXTENSION_DISABLED（指引「在扩展管理中启用」，D9 ②）；
- * ⑥ pi 凭据缺失文本（No API key 前缀）→ PROVIDER_CREDENTIAL_MISSING 结构化映射（AX5 切换半边）。
+ * ⑥ pi 凭据缺失文本（No API key 前缀）→ PROVIDER_CREDENTIAL_MISSING 结构化映射
+ *    （切换链凭据缺失映射——设计 U3 检查点 / RL5 断言面 2026-11-07 补登记；AX5 是出站层
+ *    半边的公理引用）。
  */
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import type { IConfigService } from '../../../interfaces.js'

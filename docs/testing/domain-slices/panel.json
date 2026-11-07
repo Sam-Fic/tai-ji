@@ -59,6 +59,7 @@
     "packages/renderer/src/__tests__/panel/skill-notice-stream.test.ts",
     "packages/renderer/src/__tests__/panel/turn-working.test.ts",
     "packages/renderer/src/__tests__/panel/workflow-viz-overlay-derivation.test.ts",
+    "packages/renderer/src/components/panel/__tests__/ModelPickerPanel.route-hit.test.ts",
     "packages/renderer/src/components/panel/__tests__/Panel.dead-diagnostics-export.test.ts",
     "packages/renderer/src/components/panel/__tests__/Panel.test.ts",
     "packages/renderer/src/components/panel/detail-renderers/__tests__/DiffView.seq-guard.test.ts",

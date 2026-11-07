@@ -8,6 +8,9 @@
  * ③ U7 派生集：广播视图 ∖ 首次快照 = 运行期新建 id 集（旧 id 消失后集合收缩）
  * ④ 删除编排：消费 deleteRoute 端口 + 成功 toast + 主动拉取收敛
  * ⑤ 删除失败：error toast 且不向上抛（调用方 = SettingsModal 模板接线，无 catch 义务）
+ * ⑥ 保存编排（U9 保存侧）：单路由合并意图成功 / scopedModels 失败回滚（编辑 saveRoute(prior)
+ *    与新建 deleteRoute）/ 回滚也失败的残留态呈报（saveScopedMismatch 指引 + 收敛拉取）/
+ *    多路由批次拆分写残留态呈报 / 纯排序开关失败一致态 / routes 写失败白名单未动
  *
  * 测试模式（对齐 composables 域惯例）：'@/api' 门面 inline vi.mock（orchestration 只消费
  * config 域 aggregation 档五键）；useToast 为模块级单例（无需注入），toast 断言读其共享
@@ -18,7 +21,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import type { Mock } from 'vitest'
 import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { defineComponent } from 'vue'
-import type { AggregationRouteCard, AggregationRouteView } from '@taiji/shared'
+import type { AggregationRoute, AggregationRouteCard, AggregationRouteView } from '@taiji/shared'
 import { config as configApi } from '@/api'
 import { useToast } from '@/composables/useToast'
 import { useRoutePageOrchestration } from '../useRoutePageOrchestration'
@@ -62,6 +65,12 @@ function routeCardOf(id: string, scopedIndex: number): AggregationRouteCard {
     scopedIndex,
     memberIssues: [],
   }
+}
+
+/** 视图 route 的编辑副本（首端点换 modelId = 内容变化，过 composable 的 changedRoutes 判定）。 */
+function editedRouteOf(id: string): AggregationRoute {
+  const card = routeCardOf(id, 0)
+  return { ...card.route, members: [{ ...card.route.members[0]!, modelId: 'glm-5.2' }] }
 }
 
 function viewOf(ids: string[]): AggregationRouteView {
@@ -166,5 +175,136 @@ describe('删除路由编排（U9 删除侧：deleteRoute 端口单 RPC 双写�
     await expect(api.onRoutePageDelete('r1')).resolves.toBeUndefined()
     expect(toasts.value.length).toBe(toastsBefore + 1)
     expect(toasts.value[toasts.value.length - 1]!.type).toBe('error')
+  })
+})
+
+describe('保存编排（U9 保存侧：合并意图与失败恢复）', () => {
+  /** 挂载已加载视图的编排实例（save 失败路径全部以此为基准 prior）。 */
+  async function mountWithView(ids: string[]): Promise<{ api: Orchestration }> {
+    const { api } = mountOrchestration()
+    getRouteViewMock().mockResolvedValueOnce(viewOf(ids))
+    await api.ensureRouteView()
+    await flushPromises()
+    return { api }
+  }
+
+  it('单路由保存 = 合并意图一次 save：saveRoute + setScopedModels 同轮调用 + 成功 toast + 主动拉取收敛', async () => {
+    const { api } = mountOrchestration()
+    const { toasts } = useToast()
+    toasts.value = [] // toast 是模块级单例且在列上限 5：清掉前序用例残留，防限流丢弃 + 断言串扰
+    getRouteViewMock().mockResolvedValueOnce(viewOf(['r1', 'r2']))
+    await api.ensureRouteView()
+    await flushPromises()
+    const edited = editedRouteOf('r1')
+    const pullsBefore = getRouteViewMock().mock.calls.length
+    await api.onRoutePageSave({ routes: [edited], scopedRefs: ['agg/r1', 'zhipu/glm-5.3'] })
+    await flushPromises()
+    expect(vi.mocked(configApi.saveRoute)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(configApi.saveRoute)).toHaveBeenCalledWith(edited)
+    expect(vi.mocked(configApi.setScopedModels)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(configApi.setScopedModels)).toHaveBeenCalledWith(['agg/r1', 'zhipu/glm-5.3'])
+    expect(toasts.value).toHaveLength(1)
+    expect(toasts.value[0]).toMatchObject({ type: 'info', message: '已保存' })
+    expect(getRouteViewMock().mock.calls.length).toBe(pullsBefore + 1)
+  })
+
+  it('单路由编辑 scopedModels 失败：合并意图回滚 saveRoute(prior) + 原始错误 toast（回滚成功两权威一致，无残留拉取）', async () => {
+    const { api } = await mountWithView(['r1', 'r2'])
+    const { toasts } = useToast()
+    toasts.value = []
+    const prior = viewOf(['r1', 'r2']).cards[0]!.route
+    const edited = editedRouteOf('r1')
+    vi.mocked(configApi.setScopedModels).mockRejectedValueOnce(new Error('scoped write failed'))
+    const pullsBefore = getRouteViewMock().mock.calls.length
+    await api.onRoutePageSave({ routes: [edited], scopedRefs: ['agg/r1'] })
+    await flushPromises()
+    // 回滚 = saveRoute(priorRoute)（编辑语义：主写 edited → scopedModels 失败 → 回写 prior）
+    expect(vi.mocked(configApi.saveRoute)).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(configApi.saveRoute)).toHaveBeenNthCalledWith(1, edited)
+    expect(vi.mocked(configApi.saveRoute)).toHaveBeenNthCalledWith(2, prior)
+    // 回滚成功 = 两权威一致：呈报原始错误（非残留态专用指引），不触发收敛拉取
+    expect(toasts.value).toHaveLength(1)
+    expect(toasts.value[0]).toMatchObject({ type: 'error', message: 'scoped write failed' })
+    expect(getRouteViewMock().mock.calls.length).toBe(pullsBefore)
+  })
+
+  it('单路由新建 scopedModels 失败：合并意图回滚 deleteRoute 撤销刚建条目（priorRoute=null 语义）', async () => {
+    const { api } = await mountWithView(['r1'])
+    const { toasts } = useToast()
+    toasts.value = []
+    const newRoute = routeCardOf('r-new', -1).route
+    vi.mocked(configApi.setScopedModels).mockRejectedValueOnce(new Error('scoped write failed'))
+    await api.onRoutePageSave({ routes: [newRoute], scopedRefs: ['agg/r-new'] })
+    await flushPromises()
+    expect(vi.mocked(configApi.saveRoute)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(configApi.saveRoute)).toHaveBeenCalledWith(newRoute)
+    expect(vi.mocked(configApi.deleteRoute)).toHaveBeenCalledWith('r-new')
+    expect(toasts.value).toHaveLength(1)
+    expect(toasts.value[0]).toMatchObject({ type: 'error', message: 'scoped write failed' })
+  })
+
+  it('单路由保存 scopedModels 失败且回滚也失败：saveScopedMismatch 专用指引 + 主动拉取收敛（残留态禁止静默）', async () => {
+    const { api } = await mountWithView(['r1', 'r2'])
+    const { toasts } = useToast()
+    toasts.value = []
+    const edited = editedRouteOf('r1')
+    vi.mocked(configApi.saveRoute)
+      .mockResolvedValueOnce({ route: edited, memberIssues: [] }) // 主写成功
+      .mockRejectedValueOnce(new Error('rollback failed')) // 回滚失败
+    vi.mocked(configApi.setScopedModels).mockRejectedValueOnce(new Error('scoped write failed'))
+    getRouteViewMock().mockResolvedValueOnce(viewOf(['r1', 'r2'])) // 残留态收敛拉取
+    const pullsBefore = getRouteViewMock().mock.calls.length
+    await api.onRoutePageSave({ routes: [edited], scopedRefs: ['agg/r1'] })
+    await flushPromises()
+    expect(vi.mocked(configApi.saveRoute)).toHaveBeenCalledTimes(2)
+    expect(toasts.value).toHaveLength(1)
+    expect(toasts.value[0]).toMatchObject({ type: 'error', message: '路由定义已保存但模型白名单未同步，请重试保存' })
+    expect(getRouteViewMock().mock.calls.length).toBe(pullsBefore + 1)
+  })
+
+  it('多路由批次 scopedModels 失败（拆分写，routes 半边已落盘）：saveScopedMismatch 指引 + 主动拉取收敛（组合残留态）', async () => {
+    const { api } = await mountWithView(['r1', 'r2'])
+    const { toasts } = useToast()
+    toasts.value = []
+    const edited1 = editedRouteOf('r1')
+    const edited2 = editedRouteOf('r2')
+    vi.mocked(configApi.setScopedModels).mockRejectedValueOnce(new Error('scoped write failed'))
+    getRouteViewMock().mockResolvedValueOnce(viewOf(['r1', 'r2'])) // 残留态收敛拉取
+    const pullsBefore = getRouteViewMock().mock.calls.length
+    await api.onRoutePageSave({ routes: [edited1, edited2], scopedRefs: ['agg/r1', 'agg/r2'] })
+    await flushPromises()
+    expect(vi.mocked(configApi.saveRoute)).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(configApi.setScopedModels)).toHaveBeenCalledTimes(1)
+    expect(toasts.value).toHaveLength(1)
+    expect(toasts.value[0]).toMatchObject({ type: 'error', message: '路由定义已保存但模型白名单未同步，请重试保存' })
+    expect(getRouteViewMock().mock.calls.length).toBe(pullsBefore + 1)
+  })
+
+  it('纯排序/开关保存 scopedModels 失败（无 routes 写）：原始错误 toast（两权威一致非残留），不触发 saveRoute 与收敛拉取', async () => {
+    const { api } = await mountWithView(['r1', 'r2'])
+    const { toasts } = useToast()
+    toasts.value = []
+    const unchanged = routeCardOf('r1', 0).route
+    vi.mocked(configApi.setScopedModels).mockRejectedValueOnce(new Error('scoped write failed'))
+    const pullsBefore = getRouteViewMock().mock.calls.length
+    await api.onRoutePageSave({ routes: [unchanged], scopedRefs: ['zhipu/glm-5.3'] })
+    await flushPromises()
+    expect(vi.mocked(configApi.saveRoute)).not.toHaveBeenCalled()
+    expect(toasts.value).toHaveLength(1)
+    expect(toasts.value[0]).toMatchObject({ type: 'error', message: 'scoped write failed' })
+    expect(getRouteViewMock().mock.calls.length).toBe(pullsBefore)
+  })
+
+  it('routes 写失败：白名单未动（编排器 stage=routes 一致态），原始错误 toast 且 setScopedModels 未调用', async () => {
+    const { api } = await mountWithView(['r1', 'r2'])
+    const { toasts } = useToast()
+    toasts.value = []
+    vi.mocked(configApi.saveRoute).mockRejectedValueOnce(new Error('route_id_conflict'))
+    await api.onRoutePageSave({ routes: [editedRouteOf('r1')], scopedRefs: ['agg/r1'] })
+    await flushPromises()
+    expect(vi.mocked(configApi.saveRoute)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(configApi.setScopedModels)).not.toHaveBeenCalled()
+    expect(toasts.value).toHaveLength(1)
+    expect(toasts.value[0]).toMatchObject({ type: 'error', message: 'route_id_conflict' })
   })
 })

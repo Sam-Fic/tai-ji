@@ -5,15 +5,18 @@
  * 视图：aggregation.getRouteView 拉取 + routeView 失效广播订阅刷新（runtime 保存/删除后
  * last-value 全量下发，多窗口同步；丢失由保存成功后的主动拉取收敛——协议注释契约）。
  * 加载态（U11）：loading/failed 显式暴露，分区首拉期间与失败重试由 SettingsModal 呈现
- * 占位（routeView === null 不再是纯空白）。保存：core createRouteSaveOrchestrator（routes
- * 先写、scopedModels 后写、scopedModels 失败回滚 routes）；删除：同一编排器 delete 端口
- * （runtime 单 RPC 双写编排 = routes 删除 + scopedModels 精确清理 + 默认模型回退）；
+ * 占位（routeView === null 不再是纯空白）。保存：core createRouteSaveOrchestrator——单路由
+ * 变化为合并意图一次 save（routes 先写、scopedModels 后写、scopedModels 失败按 priorRoute
+ * 回滚 routes，U9 检查点「一次保存跨两权威」的失败恢复语义）；多路由批次 / 纯排序开关为
+ * 拆分写（routes 逐条 + scopedModels 单独），scopedModels 失败时 routes 半边已落盘 = 残留态，
+ * 按 RouteSaveFailure 契约呈报「已保存但白名单未同步」指引并主动拉取收敛；删除：同一编排器
+ * delete 端口（runtime 单 RPC 双写编排 = routes 删除 + scopedModels 精确清理 + 默认模型回退）；
  * transport 半边经 @/api config 域 aggregation 档 + setScopedModels 既有通道
  * （门面继承 VITE_MOCK 切换，mock 侧同构实现）。
  */
 import { computed, onBeforeUnmount, ref, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { createRouteSaveOrchestrator, toErrorMessage } from '@taiji/core'
+import { createRouteSaveOrchestrator, toErrorMessage, type RouteSaveFailure } from '@taiji/core'
 import type { AggregationRouteView } from '@taiji/shared'
 import type { RoutePageSavePayload } from '@taiji/ui/features/settings'
 import { config as configApi } from '@/api'
@@ -95,22 +98,58 @@ export function useRoutePageOrchestration(): {
   })
   onBeforeUnmount(disposeRouteViewSubscription)
 
+  /**
+   * 保存失败分型 → 待呈报错误（RouteSaveFailure 契约：残留态必须显式呈报「路由定义已保存
+   * 但白名单未同步，请重试」，禁止静默）。残留态两形态：
+   * - 'scoped-rollback-failed'：合并意图 scopedModels 失败且 routes 回滚也失败；
+   * - routes 已落盘后 scopedModels 才失败：拆分写的 scoped-only 调用编排器视角报
+   *   stage='scoped'（单调用内两权威一致），组合视角 routes 半边已生效。
+   * 残留态呈报 saveScopedMismatch 专用指引 + 主动拉取视图收敛（UI 反映磁盘实况；拉取失败
+   * 不阻断呈报，视图由失效广播或重进分区首拉兜底收敛）；其余 stage 两权威一致
+   * （routes 失败未动白名单 / scoped 失败未动 routes / 回滚成功复原），原样上抛编排器错误。
+   */
+  async function resolveSaveError(outcome: RouteSaveFailure, routesWritten: boolean): Promise<unknown> {
+    const residual = outcome.stage === 'scoped-rollback-failed' || (routesWritten && outcome.stage === 'scoped')
+    if (!residual) return outcome.error
+    try {
+      adoptRouteView(await configApi.getRouteView())
+    } catch (pullError) {
+      // 收敛拉取失败不掩盖残留态呈报（下一次 routeView 广播或重进分区收敛），留痕排查
+      console.warn('[useRoutePageOrchestration] 残留态收敛拉取失败:', pullError)
+    }
+    return new Error(t('settings.modelRoute.saveScopedMismatch'))
+  }
+
   async function onRoutePageSave(payload: RoutePageSavePayload): Promise<void> {
     if (saving) return
     saving = true
     try {
       const priorById = new Map((routeView.value?.cards ?? []).map((c) => [c.route.id, c.route]))
-      for (const route of payload.routes) {
+      // routes 变化集（逐条与视图 prior 对比；新建条目无 prior 恒为变化）。
+      const changedRoutes = payload.routes.filter((route) => {
         const prior = priorById.get(route.id)
-        if (prior !== undefined && JSON.stringify(prior) === JSON.stringify(route)) continue
-        const outcome = await routeSaveOrchestrator.save({ route, priorRoute: prior ?? null })
-        if (!outcome.ok) throw outcome.error
-      }
-      const scopedOutcome = await routeSaveOrchestrator.save({ scopedModels: payload.scopedRefs })
-      if (!scopedOutcome.ok) {
-        throw scopedOutcome.stage === 'scoped-rollback-failed'
-          ? new Error(t('settings.modelRoute.saveScopedMismatch'))
-          : scopedOutcome.error
+        return prior === undefined || JSON.stringify(prior) !== JSON.stringify(route)
+      })
+      if (changedRoutes.length === 1) {
+        // 单路由变化 = 合并意图一次 save（route + scopedModels 同调用）：scopedModels 失败时
+        // 编排器按 priorRoute 回滚 routes（U9 检查点的两权威失败恢复语义在生产路径生效）。
+        const route = changedRoutes[0]!
+        const outcome = await routeSaveOrchestrator.save({
+          route,
+          priorRoute: priorById.get(route.id) ?? null,
+          scopedModels: payload.scopedRefs,
+        })
+        if (!outcome.ok) throw await resolveSaveError(outcome, true)
+      } else {
+        // 多路由批次 / 纯排序开关 = 拆分写（编排器无批量回滚意图）：routes 逐条、scopedModels
+        // 单独；scopedModels 失败按「routes 半边是否已落盘」分流残留态 / 一致态呈报。
+        for (const route of changedRoutes) {
+          const prior = priorById.get(route.id)
+          const outcome = await routeSaveOrchestrator.save({ route, priorRoute: prior ?? null })
+          if (!outcome.ok) throw outcome.error
+        }
+        const scopedOutcome = await routeSaveOrchestrator.save({ scopedModels: payload.scopedRefs })
+        if (!scopedOutcome.ok) throw await resolveSaveError(scopedOutcome, changedRoutes.length > 0)
       }
       toastInfo(t('settings.saved'))
       // 主动拉取收敛（不依赖广播时序；视图刷新触发 ModelRoutePage 草稿重置回权威态）
