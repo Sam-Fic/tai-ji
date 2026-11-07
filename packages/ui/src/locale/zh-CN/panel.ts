@@ -721,7 +721,7 @@ export default {
     taskFailed: '任务创建失败：{error}',
     sendFailed: '消息发送失败：{error}',
     // ── U4 模型/档位切换失败（model-switch-live-provider-sync §3.4 错误规格表）──
-    // 5 个新码 + provider-aggregation 2 码（AGGREGATION_ROUTE_NOT_IN_SESSION /
+    // 4 个新码 + provider-aggregation 2 码（AGGREGATION_ROUTE_NOT_IN_SESSION /
     // AGGREGATION_EXTENSION_DISABLED，出处 provider-aggregation 设计 D1 ③/D9 ②）+ general；
     // 4 个既有透传码（SESSION_NOT_FOUND / MODEL_NOT_CONFIGURED /
     // RESTORE_FAILED / BUILTIN_EXTENSIONS_MISSING）走 general（toast 文本含后端 message）。

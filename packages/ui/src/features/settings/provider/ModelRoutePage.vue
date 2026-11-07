@@ -221,7 +221,7 @@ const props = defineProps<{
   /** scopedModels 白名单全量（渠道直连卡数据源；宿主传 settingsStore.scopedModels）。
    * 缺省 = 空白名单（测试/纯路由视图形态，仅路由卡）。 */
   scopedModels?: readonly string[]
-  /** 「此刻」求值坐标注入（测试确定性/展开时点墙钟；缺省 = 挂载时点墙钟一次，零定时器）。 */
+  /** 「此刻」求值坐标注入（测试确定性；缺省 = 挂载时点墙钟一次，props.now 注入优先、卡展开不重采样，零定时器）。 */
   now?: RouteNow
   /** 新会话可用路由 id 集（U7：不在本应用生命周期首次快照内的卡显徽标；宿主 = 编排 composable）。
    * 缺省 = 空集（不显徽标）。 */

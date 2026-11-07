@@ -5,7 +5,7 @@
  * popover，经壳层包装）；② 键盘循环路径（ctrl+p / shift+tab，经 shortcut 的内联 catch）。
  * 两条路径若各写一份 code→key 映射，迟早漂移（同一个失败在两处显示不同文案）。
  *
- * 映射表 = 设计 §3.4 错误规格表：5 个新码各有专用文案，+ provider-aggregation 2 码
+ * 映射表 = 设计 §3.4 错误规格表：4 个新码各有专用文案，+ provider-aggregation 2 码
  * （AGGREGATION_ROUTE_NOT_IN_SESSION / AGGREGATION_EXTENSION_DISABLED，出处 provider-aggregation
  * 设计 D1 ③/D9 ②，各有专用恢复指引文案）；**4 个既有透传码**
  * （SESSION_NOT_FOUND / MODEL_NOT_CONFIGURED / RESTORE_FAILED / BUILTIN_EXTENSIONS_MISSING）
