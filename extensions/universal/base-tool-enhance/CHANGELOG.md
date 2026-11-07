@@ -1,5 +1,11 @@
 # @zhushanwen/pi-base-tool-enhance
 
+## 0.12.1
+
+### Patch Changes
+
+- 20e2d850c: chore: refresh dependency range (triggered by @zhushanwen/subagent-core@2.3.0 → @zhushanwen/subagent-core@2.3.1)
+
 ## 0.12.0
 
 ### Minor Changes

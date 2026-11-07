@@ -1,5 +1,11 @@
 # @zhushanwen/pi-canvas
 
+## 0.4.10
+
+### Patch Changes
+
+- 20e2d850c: chore: refresh dependency range (triggered by @zhushanwen/subagent-core@2.3.0 → @zhushanwen/subagent-core@2.3.1)
+
 ## 0.4.9
 
 ### Patch Changes

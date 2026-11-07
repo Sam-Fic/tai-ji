@@ -1,5 +1,11 @@
 # @zhushanwen/subagent-core
 
+## 2.3.1
+
+### Patch Changes
+
+- 20e2d850c: Unify providers.json / quota-cache.json path formulas into the shared provider-store-paths pure module so all consumers resolve the same storage locations.
+
 ## 2.3.0
 
 ### Minor Changes

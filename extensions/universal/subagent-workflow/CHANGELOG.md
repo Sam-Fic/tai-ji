@@ -1,5 +1,11 @@
 # @zhushanwen/pi-subagent-workflow
 
+## 10.6.1
+
+### Patch Changes
+
+- 20e2d850c: chore: refresh dependency range (triggered by @zhushanwen/subagent-core@2.3.0 → @zhushanwen/subagent-core@2.3.1)
+
 ## 10.6.0
 
 ### Minor Changes
