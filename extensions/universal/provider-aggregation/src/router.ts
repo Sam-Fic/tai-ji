@@ -1,8 +1,9 @@
 /**
  * 路由条件求值纯函数（provider-aggregation D5/D6/D7/D12/D13）。
  *
- * 行为契约 = 行为契约 docs/design/provider-aggregation-route-matrix.md（穷举矩阵：端点可选性 12 行 + 全体候选状态
- * 5 行）；逐格断言在 src/__tests__/route-matrix.test.ts（RL2）。本模块零 IO、零时钟
+ * 行为契约 = docs/design/provider-aggregation-route-matrix.md（穷举矩阵两表：端点可选性
+ * 矩阵 + 全体候选状态 → 路由结果矩阵；表行数以契约文件为准，本注释不计数——加行不再漂移）；
+ * 逐格断言在 src/__tests__/route-matrix.test.ts（RL2）。本模块零 IO、零时钟
  * 读取、零目录访问——时间（now）/ 额度快照（quotaByProviderId）/ 重试信号（retryExclude）
  * 全部由调用方注入（AX3 求值输入最小化：同输入必同输出），pi 侧组装在 src/index.ts。
  *

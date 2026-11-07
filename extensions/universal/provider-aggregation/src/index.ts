@@ -4,6 +4,10 @@
  * 职责：把 providers.json 顶层 routes 域（@taiji/shared AggregationRoutesFile，唯一权威）
  * 派生为 pi 虚拟模型注册（AGGREGATION_PROVIDER_ID 承载，每条路由一个条目），并在每个
  * 请求发起前按路由条件（时间窗 / 额度 / 重试排除）从端点中选出本次实际发往的物理模型。
+ * 注册条目派生规则（id/name/thinkingLevels 并集/contextWindow 最小值）单源在
+ * virtual-model-definitions.ts 的 buildVirtualModelDefinitions（本文件 re-export）——
+ * RL1/A9 目录一致性对账（m8 aggregation-catalog-consistency.test）以同 fixture 调用
+ * 同一函数派生注册条目集，与本注册路径零漂移。
  *
  * 配置生效机制（D1 修订形态——时间机制红线对齐，AS21：无定时器、无 fs.watch）：
  * ① 工厂期注册：扩展工厂函数体内同步读配置并 registerVirtualModel——pi 的 pending
@@ -45,7 +49,7 @@
 
 import type { ExtensionAPI, ExtensionContext, ExtensionVirtualModel, ModelRoute, ModelRouteRequest } from "@earendil-works/pi-coding-agent";
 import { getLogger, setPiHandle } from "@zhushanwen/pi-extension-logger";
-import { AGGREGATION_PROVIDER_ID, type AggregationRoute } from "@taiji/shared/aggregation";
+import type { AggregationRoute } from "@taiji/shared/aggregation";
 import { RoutesConfigReader, type ConsumedRoutesSectionRead } from "./config-store.ts";
 import { QuotaCacheReader } from "./quota-cache-reader.ts";
 import {
@@ -53,11 +57,24 @@ import {
 	evaluateRoute,
 	MEMBER_BLOCK_REASON_LABELS,
 	resolveThinkingLevel,
-	unionThinkingLevels,
 	type EvaluateRouteInput,
 	type MemberBlockReason,
 	type RouteEvaluation,
 } from "./router.ts";
+import {
+	buildVirtualModelDefinitions,
+	resolveContextWindowFromDirectory,
+	type ResolveAggregationContextWindow,
+} from "./virtual-model-definitions.ts";
+
+/** RL1/A9 对账导出面：注册条目集派生规则单源（详见 virtual-model-definitions.ts 头注释）。 */
+export {
+	buildVirtualModelDefinitions,
+	resolveContextWindowFromDirectory,
+	type AggregationModelDirectorySnapshot,
+	type AggregationVirtualModelDefinition,
+	type ResolveAggregationContextWindow,
+} from "./virtual-model-definitions.ts";
 
 const logger = getLogger("provider-aggregation");
 
@@ -121,55 +138,40 @@ function buildUnresolvableError(route: AggregationRoute, refs: readonly string[]
 }
 
 /**
- * 注册一条路由为 pi 虚拟模型（同 provider+id 重复注册 = pi 侧幂等替换——AS1/UD1）。
+ * 把派生条目集落到 pi 注册与扩展状态（工厂期全量 / session_start 对账 / route 求值前
+ * 重读三处注册时点的公共应用段）。条目元数据派生单源 buildVirtualModelDefinitions
+ * （RL1/A9 对账同函数）；本函数只补注册路径特有的部分：route 闭包绑定（求值上下文：
+ * pi 句柄 + 扩展状态 + 配置/额度读取器）与注册状态记账。
  *
- * 元数据（D4 ⑤/D7）：thinkingLevels = 端点档位并集（空并集省略字段——pi 缺省 ["off"]，
- * 档位未声明不猜测）；contextWindow = 各端点 contextWindow 最小值（任一端点解析不到
- * 或值非正 → 省略字段，pi 合成 0 =「未知」语义，保守诚实——D7 明文缺省 0 下压缩恒不
- * 触发，含未知端点时取已知最小值会高估容量）。
+ * 同 provider+id 重复注册 = pi 侧幂等替换（AS1/UD1）。enabled=false 照常注册（停用 =
+ * 保持注册 + route 显式失败「已停用」，D9 停用侧——注册集按 enabled 投影后才与注入
+ * 目录相等，RL1「启停一致」的消费侧形态）。
  *
  * resolveContextWindow 为可选参数：工厂期无 modelRegistry（注册 flush 早于会话装配）
- * 不解析；session_start 对账与 route 前重读传入 ctx 解析补齐。
+ * 不解析；session_start 对账与 route 前重读传入目录快照解析补齐（D4 ⑤/D7）。
  */
-function registerRouteDefinition(
+function registerRouteDefinitions(
 	pi: ExtensionAPI,
 	state: AggregationState,
 	reader: RoutesConfigReader,
 	quotaReader: QuotaCacheReader,
-	route: AggregationRoute,
-	resolveContextWindow: ((route: AggregationRoute) => number | undefined) | undefined,
+	routes: readonly AggregationRoute[],
+	resolveContextWindow: ResolveAggregationContextWindow | undefined,
 ): void {
-	const definition: ExtensionVirtualModel = {
-		provider: AGGREGATION_PROVIDER_ID,
-		id: route.id,
-		name: route.name,
-		route: (request, ctx) => evaluateAndRoute(pi, state, reader, quotaReader, route.id, request, ctx),
+	const definitions = buildVirtualModelDefinitions(routes, resolveContextWindow)
+	for (let index = 0; index < routes.length; index++) {
+		const route = routes[index]!
+		const definition: ExtensionVirtualModel = {
+			...definitions[index]!,
+			route: (request, ctx) => evaluateAndRoute(pi, state, reader, quotaReader, route.id, request, ctx),
+		}
+		pi.registerVirtualModel(definition)
+		state.registeredIds.add(route.id)
+		state.definitions.set(route.id, route)
+		if (route.enabled) state.disabledIds.delete(route.id)
+		else state.disabledIds.add(route.id)
+		state.deletedIds.delete(route.id)
 	}
-	const levels = unionThinkingLevels(route.members)
-	if (levels.length > 0) definition.thinkingLevels = levels
-	const contextWindow = resolveContextWindow?.(route)
-	if (contextWindow !== undefined) definition.contextWindow = contextWindow
-	pi.registerVirtualModel(definition)
-	state.registeredIds.add(route.id)
-	state.definitions.set(route.id, route)
-	if (route.enabled) state.disabledIds.delete(route.id)
-	else state.disabledIds.add(route.id)
-	state.deletedIds.delete(route.id)
-}
-
-/**
- * 端点 contextWindow 最小值（D7）：全部端点可解析且 >0 → 最小值；否则 undefined
- * （省略声明 = pi 合成 0 未知——保守前提：显示与压缩判定不得高估容量）。
- */
-function resolveContextWindowFromRegistry(ctx: ExtensionContext, route: AggregationRoute): number | undefined {
-	let min: number | undefined
-	for (const member of route.members) {
-		const model = ctx.modelRegistry.find(member.providerId, member.modelId)
-		const contextWindow = model?.contextWindow
-		if (typeof contextWindow !== "number" || contextWindow <= 0) return undefined
-		min = min === undefined ? contextWindow : Math.min(min, contextWindow)
-	}
-	return min
 }
 
 /** 把 config-store 读取结果落到注册状态的公共尾段：文件有而注册集没有的 id 标删除态。 */
@@ -193,7 +195,7 @@ function applyReadResult(
 	reader: RoutesConfigReader,
 	quotaReader: QuotaCacheReader,
 	read: ConsumedRoutesSectionRead,
-	resolveContextWindow: ((route: AggregationRoute) => number | undefined) | undefined,
+	resolveContextWindow: ResolveAggregationContextWindow | undefined,
 ): void {
 	if (read.status === "corrupt" || read.status === "unreadable") {
 		logger.warn(`routes config ${read.status} — keeping last valid registrations (${read.reason})`)
@@ -203,9 +205,7 @@ function applyReadResult(
 		for (const id of state.registeredIds) state.deletedIds.add(id)
 		return
 	}
-	for (const route of read.file.routes) {
-		registerRouteDefinition(pi, state, reader, quotaReader, route, resolveContextWindow)
-	}
+	registerRouteDefinitions(pi, state, reader, quotaReader, read.file.routes, resolveContextWindow)
 	markVanishedIds(state, new Set(read.file.routes.map(r => r.id)))
 }
 
@@ -226,10 +226,8 @@ function reconcileRegisteredOnly(pi: ExtensionAPI, state: AggregationState, read
 		for (const id of state.registeredIds) state.deletedIds.add(id)
 		return
 	}
-	for (const route of read.file.routes) {
-		if (!state.registeredIds.has(route.id)) continue // 新增 id：不热注册（D1 ③）
-		registerRouteDefinition(pi, state, reader, quotaReader, route, candidate => resolveContextWindowFromRegistry(ctx, candidate))
-	}
+	const registeredRoutes = read.file.routes.filter(route => state.registeredIds.has(route.id))
+	registerRouteDefinitions(pi, state, reader, quotaReader, registeredRoutes, route => resolveContextWindowFromDirectory(ctx.modelRegistry, route))
 	markVanishedIds(state, new Set(read.file.routes.map(r => r.id)))
 }
 
@@ -331,7 +329,7 @@ export default function providerAggregation(pi: ExtensionAPI, options?: { config
 	//    失败不阻断会话启动（下次 session_start 重试）。
 	pi.on("session_start", async (_event, sessionCtx) => {
 		try {
-			applyReadResult(pi, state, reader, quotaReader, reader.readLatest(), candidate => resolveContextWindowFromRegistry(sessionCtx, candidate))
+			applyReadResult(pi, state, reader, quotaReader, reader.readLatest(), route => resolveContextWindowFromDirectory(sessionCtx.modelRegistry, route))
 		} catch (err) {
 			logger.error(`session-start aggregation reconcile failed: ${err instanceof Error ? err.message : String(err)}`)
 		}
