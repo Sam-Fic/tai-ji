@@ -183,24 +183,47 @@ function isValidTimeWindowTable(v: unknown): v is AggregationTimeWindowTable {
   return v.every(row => Array.isArray(row) && row.length === TIME_WINDOW_SLOTS_PER_DAY && row.every(cell => typeof cell === 'boolean'))
 }
 
+/** 端点三元组（id/providerId/modelId）非空串校验。 */
+function hasNonEmptyRefFields(m: Record<string, unknown>): boolean {
+  return typeof m.id === 'string' && m.id !== ''
+    && typeof m.providerId === 'string' && m.providerId !== ''
+    && typeof m.modelId === 'string' && m.modelId !== ''
+}
+
+/** 条件类型字段合法（在登记词表内）。 */
+function hasValidConditionType(m: Record<string, unknown>): boolean {
+  return typeof m.type === 'string'
+    && AGGREGATION_MEMBER_CONDITION_TYPES.includes(m.type as AggregationMemberConditionType)
+}
+
+/** 思考级别覆盖表条目合法（值 null 或 string）。 */
+function isValidLevelEntry(val: unknown): boolean {
+  return val === null || typeof val === 'string'
+}
+
+/** 额度条件字段合法（thresholdPercent 0..MAX 整数；undefined = 无额度条件，合法）。 */
+function hasValidQuotaCondition(m: Record<string, unknown>): boolean {
+  if (m.quota === undefined) return true
+  if (!isPlainObject(m.quota)) return false
+  const q = m.quota as Record<string, unknown>
+  return typeof q.thresholdPercent === 'number' && Number.isInteger(q.thresholdPercent)
+    && q.thresholdPercent >= 0 && q.thresholdPercent <= AGGREGATION_QUOTA_THRESHOLD_MAX
+}
+
+/** 思考级别覆盖表合法（undefined/null = 未覆盖，合法；对象形态则值逐条校验）。 */
+function hasValidLevelsMap(m: Record<string, unknown>): boolean {
+  if (m.levels === undefined || m.levels === null) return true
+  if (!isPlainObject(m.levels)) return false
+  return Object.values(m.levels).every(isValidLevelEntry)
+}
+
 function isValidMember(v: unknown): v is AggregationMember {
   if (!isPlainObject(v)) return false
   const m = v as Record<string, unknown>
-  if (typeof m.id !== 'string' || m.id === '' || typeof m.providerId !== 'string' || m.providerId === ''
-    || typeof m.modelId !== 'string' || m.modelId === '') return false
-  if (typeof m.type !== 'string' || !AGGREGATION_MEMBER_CONDITION_TYPES.includes(m.type as AggregationMemberConditionType)) return false
+  if (!hasNonEmptyRefFields(m)) return false
+  if (!hasValidConditionType(m)) return false
   if (m.window !== undefined && !isValidTimeWindowTable(m.window)) return false
-  if (m.quota !== undefined) {
-    if (!isPlainObject(m.quota)) return false
-    const q = m.quota as Record<string, unknown>
-    if (typeof q.thresholdPercent !== 'number' || !Number.isInteger(q.thresholdPercent)
-      || q.thresholdPercent < 0 || q.thresholdPercent > AGGREGATION_QUOTA_THRESHOLD_MAX) return false
-  }
-  if (m.levels !== undefined && m.levels !== null) {
-    if (!isPlainObject(m.levels)) return false
-    if (!Object.values(m.levels).every(val => val === null || typeof val === 'string')) return false
-  }
-  return true
+  return hasValidQuotaCondition(m) && hasValidLevelsMap(m)
 }
 
 function isValidSpecialDate(v: unknown): v is AggregationSpecialDate {
@@ -217,23 +240,32 @@ function isValidSpecialDate(v: unknown): v is AggregationSpecialDate {
   return true
 }
 
-function isValidRoute(v: unknown): v is AggregationRoute {
-  if (!isPlainObject(v)) return false
-  const r = v as Record<string, unknown>
+/** 路由头部五字段（id/name/modelId/enabled/mode）形态校验。 */
+function isValidRouteHeader(r: Record<string, unknown>): boolean {
   if (typeof r.id !== 'string' || r.id === '' || !isValidRouteId(r.id)) return false
   if (typeof r.name !== 'string' || r.name.trim() === '') return false
   if (typeof r.modelId !== 'string' || r.modelId === '') return false
   if (typeof r.enabled !== 'boolean') return false
-  if (typeof r.mode !== 'string' || !AGGREGATION_ROUTE_MODES.includes(r.mode as AggregationRouteMode)) return false
-  if (!Array.isArray(r.members) || r.members.length === 0 || !r.members.every(isValidMember)) return false
-  if (!Array.isArray(r.specials) || !r.specials.every(isValidSpecialDate)) return false
-  // 端点 id 路由内唯一（编辑器对齐键；重复 = 保存链 broken，判损坏）
+  return typeof r.mode === 'string' && AGGREGATION_ROUTE_MODES.includes(r.mode as AggregationRouteMode)
+}
+
+/** 端点 id 路由内唯一（编辑器对齐键；重复 = 保存链 broken，判损坏）。 */
+function hasUniqueMemberIds(members: readonly AggregationMember[]): boolean {
   const memberIds = new Set<string>()
-  for (const m of r.members as AggregationMember[]) {
+  for (const m of members) {
     if (memberIds.has(m.id)) return false
     memberIds.add(m.id)
   }
   return true
+}
+
+function isValidRoute(v: unknown): v is AggregationRoute {
+  if (!isPlainObject(v)) return false
+  const r = v as Record<string, unknown>
+  if (!isValidRouteHeader(r)) return false
+  if (!Array.isArray(r.members) || r.members.length === 0 || !r.members.every(isValidMember)) return false
+  if (!Array.isArray(r.specials) || !r.specials.every(isValidSpecialDate)) return false
+  return hasUniqueMemberIds(r.members as AggregationMember[])
 }
 
 /**

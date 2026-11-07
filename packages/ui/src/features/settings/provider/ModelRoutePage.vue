@@ -322,112 +322,54 @@ function cardOf(routeId: string): RouteDefinitionCard | undefined {
 /**
  * applyEditorOp：草稿变更唯一入口（route-editor-ops.ts 指令词表的执行端）。
  * 词表外 kind 走穷举 never 分支 fail-fast（不静默吞未知指令）。
+ *
+ * 分派壳只做指令路由（各指令执行体拆分至下方 op* 函数族，复杂度审计单点收敛）；
+ * route-delete 是唯一不标脏的指令（事实驱动，无草稿变更），case 内提前 return 跳过
+ * 尾部 markDirty。
  */
 function applyEditorOp(op: RouteEditorOp): void {
   switch (op.kind) {
-    case 'route-patch': {
-      const card = cardOf(op.routeId)
-      if (!card) return
-      Object.assign(card.card.route, op.patch)
+    case 'route-patch':
+      opRoutePatch(op)
       break
-    }
-    case 'endpoint-add': {
-      const card = cardOf(op.routeId)
-      if (!card) return
-      const member: AggregationMember = {
-        id: newMemberId(),
-        providerId: op.providerId,
-        modelId: card.card.route.modelId,
-        type: 'none',
-      }
-      if (card.card.route.mode === 'advanced') {
-        const firstNone = card.card.route.members.findIndex((m) => m.type === 'none')
-        card.card.route.members.splice(firstNone < 0 ? card.card.route.members.length : firstNone, 0, member)
-      } else {
-        card.card.route.members.push(member)
-      }
+    case 'endpoint-add':
+      opEndpointAdd(op)
       break
-    }
-    case 'endpoint-remove': {
-      cardOf(op.routeId)?.card.route.members.splice(op.memberIndex, 1)
+    case 'endpoint-remove':
+      opEndpointRemove(op)
       break
-    }
-    case 'endpoint-move': {
-      const members = cardOf(op.routeId)?.card.route.members
-      if (!members) return
-      const target = op.dir === 'up' ? op.memberIndex - 1 : op.memberIndex + 1
-      if (target < 0 || target >= members.length) return
-      const [moved] = members.splice(op.memberIndex, 1)
-      members.splice(target, 0, moved!)
+    case 'endpoint-move':
+      opEndpointMove(op)
       break
-    }
-    case 'endpoint-patch': {
-      const member = cardOf(op.routeId)?.card.route.members[op.memberIndex]
-      if (!member) return
-      Object.assign(member, op.patch)
+    case 'endpoint-patch':
+      opEndpointPatch(op)
       break
-    }
-    case 'endpoint-condition-type': {
-      const member = cardOf(op.routeId)?.card.route.members[op.memberIndex]
-      if (!member) return
-      member.type = op.type
-      if (op.type === 'none') {
-        delete member.window
-        delete member.quota
-      } else if (op.type === 'window') {
-        delete member.quota
-        member.window ??= weekdayBusinessWindow()
-      } else if (op.type === 'quota') {
-        delete member.window
-        member.quota ??= { thresholdPercent: DEFAULT_QUOTA_THRESHOLD_PERCENT }
-      } else {
-        member.window ??= weekdayBusinessWindow()
-        member.quota ??= { thresholdPercent: DEFAULT_QUOTA_THRESHOLD_PERCENT }
-      }
+    case 'endpoint-condition-type':
+      opEndpointConditionType(op)
       break
-    }
-    case 'endpoint-window-set': {
-      const member = cardOf(op.routeId)?.card.route.members[op.memberIndex]
-      if (!member) return
-      member.window ??= blankWindowTable()
-      member.window[op.day]![op.slot] = op.value
+    case 'endpoint-window-set':
+      opEndpointWindowSet(op)
       break
-    }
-    case 'endpoint-window-erase-cell': {
-      const card = cardOf(op.routeId)
-      if (!card) return
-      for (const member of card.card.route.members) {
-        if (member.type === 'window' || member.type === 'combo') {
-          member.window?.[op.day]?.splice(op.slot, 1, false)
-        }
-      }
+    case 'endpoint-window-erase-cell':
+      opEndpointWindowEraseCell(op)
       break
-    }
-    case 'endpoint-window-replace': {
-      const member = cardOf(op.routeId)?.card.route.members[op.memberIndex]
-      if (!member) return
-      member.window = op.table
+    case 'endpoint-window-replace':
+      opEndpointWindowReplace(op)
       break
-    }
-    case 'special-add': {
-      cardOf(op.routeId)?.card.route.specials.push(op.special)
+    case 'special-add':
+      opSpecialAdd(op)
       break
-    }
-    case 'special-remove': {
-      cardOf(op.routeId)?.card.route.specials.splice(op.index, 1)
+    case 'special-remove':
+      opSpecialRemove(op)
       break
-    }
-    case 'route-add': {
-      // 新卡参与选择默认开（新建即入选择器，V15 语义）；未入 scopedModels 前 scopedIndex = -1
-      draft.value.push({ kind: 'route', card: { route: op.route, scoped: true, scopedIndex: -1, memberIssues: [] } })
+    case 'route-add':
+      opRouteAdd(op)
       break
-    }
-    case 'route-delete': {
+    case 'route-delete':
       // 事实驱动（ADR-0122 ⑨）：草稿不乐观移除——卡消失 = 删除 RPC 成功后的视图刷新；
       // 失败经编排层 toast 显式呈报。不标脏（本指令无草稿变更）。
       emit('routeDelete', op.routeId)
       return
-    }
     default: {
       // 穷举守卫：编译期新 kind 未接线在此红灯（satisfies never 形态）
       const exhaustive: never = op
@@ -435,6 +377,107 @@ function applyEditorOp(op: RouteEditorOp): void {
     }
   }
   markDirty()
+}
+
+/** 判别联合按 kind 收窄的别名（op* 执行体参数类型单点）。 */
+type OpOf<K extends RouteEditorOp['kind']> = Extract<RouteEditorOp, { kind: K }>
+
+function opRoutePatch(op: OpOf<'route-patch'>): void {
+  const card = cardOf(op.routeId)
+  if (!card) return
+  Object.assign(card.card.route, op.patch)
+}
+
+function opEndpointAdd(op: OpOf<'endpoint-add'>): void {
+  const card = cardOf(op.routeId)
+  if (!card) return
+  const member: AggregationMember = {
+    id: newMemberId(),
+    providerId: op.providerId,
+    modelId: card.card.route.modelId,
+    type: 'none',
+  }
+  if (card.card.route.mode === 'advanced') {
+    // 插到首个无条件端点之前（none 段头部 = 新端点默认最易命中）；无 none 段时追加尾部
+    const firstNone = card.card.route.members.findIndex((m) => m.type === 'none')
+    card.card.route.members.splice(firstNone < 0 ? card.card.route.members.length : firstNone, 0, member)
+  } else {
+    card.card.route.members.push(member)
+  }
+}
+
+function opEndpointRemove(op: OpOf<'endpoint-remove'>): void {
+  cardOf(op.routeId)?.card.route.members.splice(op.memberIndex, 1)
+}
+
+function opEndpointMove(op: OpOf<'endpoint-move'>): void {
+  const members = cardOf(op.routeId)?.card.route.members
+  if (!members) return
+  const target = op.dir === 'up' ? op.memberIndex - 1 : op.memberIndex + 1
+  if (target < 0 || target >= members.length) return
+  const [moved] = members.splice(op.memberIndex, 1)
+  members.splice(target, 0, moved!)
+}
+
+function opEndpointPatch(op: OpOf<'endpoint-patch'>): void {
+  const member = cardOf(op.routeId)?.card.route.members[op.memberIndex]
+  if (!member) return
+  Object.assign(member, op.patch)
+}
+
+function opEndpointConditionType(op: OpOf<'endpoint-condition-type'>): void {
+  const member = cardOf(op.routeId)?.card.route.members[op.memberIndex]
+  if (!member) return
+  member.type = op.type
+  if (op.type === 'none') {
+    delete member.window
+    delete member.quota
+  } else if (op.type === 'window') {
+    delete member.quota
+    member.window ??= weekdayBusinessWindow()
+  } else if (op.type === 'quota') {
+    delete member.window
+    member.quota ??= { thresholdPercent: DEFAULT_QUOTA_THRESHOLD_PERCENT }
+  } else {
+    member.window ??= weekdayBusinessWindow()
+    member.quota ??= { thresholdPercent: DEFAULT_QUOTA_THRESHOLD_PERCENT }
+  }
+}
+
+function opEndpointWindowSet(op: OpOf<'endpoint-window-set'>): void {
+  const member = cardOf(op.routeId)?.card.route.members[op.memberIndex]
+  if (!member) return
+  member.window ??= blankWindowTable()
+  member.window[op.day]![op.slot] = op.value
+}
+
+function opEndpointWindowEraseCell(op: OpOf<'endpoint-window-erase-cell'>): void {
+  const card = cardOf(op.routeId)
+  if (!card) return
+  for (const member of card.card.route.members) {
+    if (member.type === 'window' || member.type === 'combo') {
+      member.window?.[op.day]?.splice(op.slot, 1, false)
+    }
+  }
+}
+
+function opEndpointWindowReplace(op: OpOf<'endpoint-window-replace'>): void {
+  const member = cardOf(op.routeId)?.card.route.members[op.memberIndex]
+  if (!member) return
+  member.window = op.table
+}
+
+function opSpecialAdd(op: OpOf<'special-add'>): void {
+  cardOf(op.routeId)?.card.route.specials.push(op.special)
+}
+
+function opSpecialRemove(op: OpOf<'special-remove'>): void {
+  cardOf(op.routeId)?.card.route.specials.splice(op.index, 1)
+}
+
+function opRouteAdd(op: OpOf<'route-add'>): void {
+  // 新卡参与选择默认开（新建即入选择器，V15 语义）；未入 scopedModels 前 scopedIndex = -1
+  draft.value.push({ kind: 'route', card: { route: op.route, scoped: true, scopedIndex: -1, memberIssues: [] } })
 }
 
 // ── 卡级编排 ──

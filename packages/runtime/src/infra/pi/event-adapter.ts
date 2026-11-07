@@ -57,6 +57,7 @@ import type {
   PiAgentSettledEvent,
   PiEntryAppendedEvent,
   PiAssistantMessageSubEvent,
+  PiErrorSubEvent,
   PiToolcallEndSubEvent,
 } from './pi-protocol.js'
 
@@ -152,6 +153,31 @@ function deltaUpdateMessage(
   }]
 }
 
+/**
+ * message_update.error 子事件翻译（FR-5 / RT-2#2）：streaming error 以 message.stream_error
+ * 呈现。payload 形状与 protocol 契约对齐：content（人类可读）+ kind（分类，可选）。
+ * wire 真实字段 = {reason:'aborted'|'error', error:{errorMessage?}}（PiErrorSubEvent）：
+ * content 读 error.errorMessage（缺失回退 reason），kind 透传 reason（运行时若 pi 新增
+ * reason 值仍如实分类）。
+ */
+function handleStreamErrorSub(sub: PiErrorSubEvent, sid: string): PiTranslatedEvent[] {
+  // aborted（用户中止）降级 noop，不产 stream_error 帧：中止不是流错误——pi 对中止的
+  // 权威收尾通路是 message_end/agent_end 携带的 stopReason='aborted'（→ 前端
+  // message.complete{stopReason:'aborted'}，complete 终态非 error）。此处若产帧，前端
+  // finalizeSession('stream_error') 会把主动中止错标为 error 红条，且 errorMessage 缺失时
+  // 原始枚举串 'aborted' 经 content 直进用户可见错误文本。
+  // [HISTORICAL] 本分支曾硬编码 kind='error'，使 provider 真错文本（401/限流/上下文溢出）
+  // 永久不显形——RT-2#2 改读 wire 真实字段后修复。
+  if (sub.reason === 'aborted') return [{ kind: 'noop' }]
+  // U3/AX5 出站错误结构化映射（凭据缺失形态）：pi 透传的 `No API key` 文本（checkAuth
+  // / pi-ai 出站构造，词表见 @taiji/shared PI_CREDENTIAL_MISSING_PREFIX）替换为
+  // 含端点名与恢复指引的呈现；非命中文本原样透传（映射仅覆盖真实会发生的错误形态，
+  // 厂商失败文本无统一形态不建词表——范围裁断见该函数 JSDoc）。
+  const rawStreamError = sub.error?.errorMessage ?? sub.reason
+  const content = formatCredentialMissingPresentation(rawStreamError) ?? rawStreamError
+  return [{ kind: 'message', message: { type: 'message.stream_error', payload: { sessionId: sid, content, kind: sub.reason } } }]
+}
+
 /** message_update — streaming text/thinking deltas and stream errors */
 function handleMessageUpdate(event: PiMessageUpdateEvent, sid: string): PiTranslatedEvent[] {
   // wire 帧经 JSON 解析，assistantMessageEvent 运行时可能缺位——保留检查，不用 as 断言
@@ -189,27 +215,8 @@ function handleMessageUpdate(event: PiMessageUpdateEvent, sid: string): PiTransl
       return [{ kind: 'noop' }, { kind: 'llm-first-output', sessionId: sid }]
     case 'toolcall_delta': case 'text_end':
       return [{ kind: 'noop' }]
-    // FR-5 / RT-2#2: streaming error — surface as message.stream_error
-    // payload 形状与 protocol 契约对齐：content（人类可读）+ kind（分类，可选）。
-    // wire 真实字段 = {reason:'aborted'|'error', error:{errorMessage?}}（PiErrorSubEvent）：
-    // content 读 error.errorMessage（缺失回退 reason），kind 透传 reason（运行时若 pi 新增
-    // reason 值仍如实分类）。
     case 'error':
-      // aborted（用户中止）降级 noop，不产 stream_error 帧：中止不是流错误——pi 对中止的
-      // 权威收尾通路是 message_end/agent_end 携带的 stopReason='aborted'（→ 前端
-      // message.complete{stopReason:'aborted'}，complete 终态非 error）。此处若产帧，前端
-      // finalizeSession('stream_error') 会把主动中止错标为 error 红条，且 errorMessage 缺失时
-      // 原始枚举串 'aborted' 经 content 直进用户可见错误文本。
-      // [HISTORICAL] 本分支曾硬编码 kind='error'，使 provider 真错文本（401/限流/上下文溢出）
-      // 永久不显形——RT-2#2 改读 wire 真实字段后修复。
-      if (sub.reason === 'aborted') return [{ kind: 'noop' }]
-      // U3/AX5 出站错误结构化映射（凭据缺失形态）：pi 透传的 `No API key` 文本（checkAuth
-      // / pi-ai 出站构造，词表见 @taiji/shared PI_CREDENTIAL_MISSING_PREFIX）替换为
-      // 含端点名与恢复指引的呈现；非命中文本原样透传（映射仅覆盖真实会发生的错误形态，
-      // 厂商失败文本无统一形态不建词表——范围裁断见该函数 JSDoc）。
-      const rawStreamError = sub.error?.errorMessage ?? sub.reason
-      const content = formatCredentialMissingPresentation(rawStreamError) ?? rawStreamError
-      return [{ kind: 'message', message: { type: 'message.stream_error', payload: { sessionId: sid, content, kind: sub.reason } } }]
+      return handleStreamErrorSub(sub, sid)
     default:
       console.warn('[EventAdapter] Unhandled message_update sub-type:', subType)
       return [{ kind: 'noop' }]

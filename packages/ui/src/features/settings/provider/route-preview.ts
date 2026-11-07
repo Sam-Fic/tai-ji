@@ -213,6 +213,34 @@ export function evaluateRouteAt(
   return { hit, hitIndex, steps }
 }
 
+/** 时间窗维度求值（window/combo 消费；其余类型恒满足——语义对齐原默认 timeOk=true）。 */
+function evalTimeDimension(
+  member: AggregationMember,
+  route: AggregationRoute,
+  now: RouteNow,
+  nowDate: string,
+): { ok: boolean; reason: RouteEvalReason } {
+  if (member.type !== 'window' && member.type !== 'combo') return { ok: true, reason: 'in-window' }
+  const ok = isWindowAt(member, now, route, nowDate)
+  return { ok, reason: ok ? 'in-window' : 'out-window' }
+}
+
+/** 额度维度求值（quota/combo 消费；数据未知 fail-open 单列 quota-unknown-open，D5）。 */
+function evalQuotaDimension(
+  member: AggregationMember,
+  options: RouteEvalOptions,
+): { ok: boolean; reason: RouteEvalReason } {
+  if (member.type !== 'quota' && member.type !== 'combo') return { ok: true, reason: 'quota-ok' }
+  const pct = options.quotaOf?.(member.providerId)
+  if (pct === undefined) return { ok: true, reason: 'quota-unknown-open' }
+  // pct 是缓存已用百分比（口径权威 = shared quota-types.ts QuotaWindow.pct；扩展
+  // router.ts 判定同型换算——「显示 ≡ 生效」），阈值语义 = 剩余（100 − 已用）≥ 阈值
+  // 可选用（thresholdPercent 100 = 恒耗尽，V3 技巧；2026-11-07 真机核实 bigmodel
+  // percentage = 已用口径，详见扩展 router.ts isQuotaConditionSatisfied 注释）。
+  const ok = QUOTA_PCT_FULL_SCALE - pct >= (member.quota?.thresholdPercent ?? 0)
+  return { ok, reason: ok ? 'quota-ok' : 'quota-low' }
+}
+
 /** 单端点条件求值（D5：时间窗 × 额度 × 无条件；combo 需同时满足）。 */
 function evaluateCondition(
   member: AggregationMember,
@@ -222,33 +250,13 @@ function evaluateCondition(
   options: RouteEvalOptions,
 ): { ok: boolean; reason: RouteEvalReason } {
   if (member.type === 'none') return { ok: true, reason: 'unconditional' }
-  let timeOk = true
-  let timeReason: RouteEvalReason = 'in-window'
-  let quotaOk = true
-  let quotaReason: RouteEvalReason = 'quota-ok'
-  if (member.type === 'window' || member.type === 'combo') {
-    timeOk = isWindowAt(member, now, route, nowDate)
-    timeReason = timeOk ? 'in-window' : 'out-window'
-  }
-  if (member.type === 'quota' || member.type === 'combo') {
-    const pct = options.quotaOf?.(member.providerId)
-    if (pct === undefined) {
-      quotaOk = true
-      quotaReason = 'quota-unknown-open'
-    } else {
-      // pct 是缓存已用百分比（口径权威 = shared quota-types.ts QuotaWindow.pct；扩展
-      // router.ts 判定同型换算——「显示 ≡ 生效」），阈值语义 = 剩余（100 − 已用）≥ 阈值
-      // 可选用（thresholdPercent 100 = 恒耗尽，V3 技巧；2026-11-07 真机核实 bigmodel
-      // percentage = 已用口径，详见扩展 router.ts isQuotaConditionSatisfied 注释）。
-      quotaOk = QUOTA_PCT_FULL_SCALE - pct >= (member.quota?.thresholdPercent ?? 0)
-      quotaReason = quotaOk ? 'quota-ok' : 'quota-low'
-    }
-  }
-  if (member.type === 'window') return { ok: timeOk, reason: timeReason }
-  if (member.type === 'quota') return { ok: quotaOk, reason: quotaReason }
-  if (!timeOk) return { ok: false, reason: timeReason }
-  if (!quotaOk) return { ok: false, reason: quotaReason }
-  return { ok: true, reason: quotaReason === 'quota-unknown-open' ? 'in-window' : quotaReason }
+  const time = evalTimeDimension(member, route, now, nowDate)
+  const quota = evalQuotaDimension(member, options)
+  if (member.type === 'window') return time
+  if (member.type === 'quota') return quota
+  if (!time.ok) return time
+  if (!quota.ok) return quota
+  return { ok: true, reason: quota.reason === 'quota-unknown-open' ? 'in-window' : quota.reason }
 }
 
 // ── 覆盖预览着色（coverOwnersAt · 时间轴穷举对照表，D14） ───────────────────────────

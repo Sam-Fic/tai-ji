@@ -1545,6 +1545,67 @@ async function provisionNewProvider(
 }
 
 /**
+ * 聚合保留 id 新建拒绝（D4 ③，拆分自 setProvider 的守卫段）：聚合 provider 固定 id 是
+ * 保留 id——新建撞保留 id 在任何写盘前拒绝（provider-write-proxy 插件通道复用本写策略链，
+ * 同被覆盖），否则 listProviders 会产出两条同 id ProviderInfo（用户条目 + 注入条目），
+ * 模型选择器按 providerId 分组与 find(p.id) 查找全部歧义。仅拦新建：编辑既有条目不触
+ * 本分支（存量异常条目仍可编辑清理）。错误经 server 全局 catch 以 shared 词表 code 透传
+ * error envelope。
+ */
+function assertNonReservedProviderId(providerId: string, existingConfig: ConfigProviderConfig | undefined): void {
+  if (existingConfig !== undefined || providerId !== AGGREGATION_PROVIDER_ID) return
+  throw errorWithCode(
+    `provider id "${AGGREGATION_PROVIDER_ID}" 是模型路由的保留 id（路由条目固定用它聚合进模型列表），` +
+      `不能用于自定义 provider。请改用其他 id（如 "${AGGREGATION_PROVIDER_ID}-custom"）。`,
+    AGGREGATION_PROVIDER_ID_RESERVED,
+  )
+}
+
+/**
+ * models 装配 + model 级 enabled 收集（拆分自 setProvider，同步函数）：mergeProviderModel
+ * 逐条合并（防线②：空/纯空白 id 被 mergeProviderModel 判 null，此处剔除——空 id 条目落盘
+ * 会毒化整个 models.json）。返回 modelStates 落盘 flush promise（G3 写侧切换：落
+ * providers.json modelStates，不写 models.json schema 外寄生字段）；undefined = 无落盘
+ * 路径，调用方条件 await（同步前缀时序契约不变）。
+ */
+function mergeProviderModelsAndCollectStates(
+  extrasStore: ProviderExtrasAccessors | undefined,
+  providerId: string,
+  data: SetProviderInput,
+  existingModels: ConfigModelDefinition[],
+  merged: Record<string, unknown>,
+): Promise<unknown> | undefined {
+  if (data.models === undefined) return undefined
+  const rawModels = data.models as Array<Record<string, unknown>>
+  // G3 写侧切换：model 级 enabled 收集到 providers.json modelStates（下方 modify 落盘），
+  // 不再写 models.json（pi schema 外寄生字段）。
+  const modelStatesUpdates: Record<string, { enabled: boolean }> = {}
+  merged.models = rawModels
+    .map(m => mergeProviderModel(m, existingModels, modelStatesUpdates, providerId))
+    .filter((m): m is ConfigModelDefinition => m !== null)
+  // modelStates 落 providers.json modelStates。await 对齐 authMethod 的 MF-1 语义：modify
+  // 失败 reject 上抛（handler try-catch 转 sendError），不静默吞。extrasStore 未注入时丢弃
+  // + warn（宁丢不写错位——生产恒注入）。
+  //
+  // S2（round 1 review suggestion）：旧实现只合并不清理（{...current, ...updates}）——
+  // 编辑体删除某自定义模型后其 modelStates 条目残留，同 id 重新添加时旧 disabled 复活。
+  // 改按保留集合（retainIds）重建（保留集合计算与写入检查见 persistModelStates）。
+  // 保留集合内：本次显式 enabled 优先，未显式传的保留既有状态（不丢未标注模型的状态）。
+  // （「条件 await」与丢弃分支归 persistModelStatesIfInjected。）
+  return persistModelStatesIfInjected(
+    extrasStore,
+    providerId,
+    merged.models as ConfigModelDefinition[],
+    modelStatesUpdates,
+  )
+}
+
+/** 写策略 kind 入口（catalog 分体系判定；write-policy 载体的 kind 参数单点）。 */
+function providerWriteKind(providerId: string): 'catalog' | 'custom' {
+  return isCatalogProvider(providerId) ? 'catalog' : 'custom'
+}
+
+/**
  * 新建 / 更新 provider（wave3 边界1 白名单检查 + I9 auth.json 清理 + catalog 分体系）。
  * 纯函数：configStore / authStorage / extrasStore / credentialWriter 经参数注入
  * （原 ConfigService.setProvider 逐字搬迁）。
@@ -1565,18 +1626,8 @@ export async function setProvider(
 ): Promise<{ newDefault?: { provider: ProviderId; modelId: string }; quotaAutoEnabled?: boolean }> {
   // wave3：existingConfig===undefined 判定「新建 provider」（边界1 白名单检查用）
   const existingConfig = configStore.getProviderConfig(providerId)
-  // D4 ③（provider-aggregation）：聚合 provider 固定 id 是保留 id——新建撞保留 id 在任何
-  // 写盘前拒绝（provider-write-proxy 插件通道复用本写策略链，同被覆盖），否则 listProviders
-  // 会产出两条同 id ProviderInfo（用户条目 + 注入条目），模型选择器按 providerId 分组与
-  // find(p.id) 查找全部歧义。仅拦新建：编辑既有条目不触本分支（存量异常条目仍可编辑清理）。
-  // 错误经 server 全局 catch 以 shared 词表 code 透传 error envelope。
-  if (existingConfig === undefined && providerId === AGGREGATION_PROVIDER_ID) {
-    throw errorWithCode(
-      `provider id "${AGGREGATION_PROVIDER_ID}" 是模型路由的保留 id（路由条目固定用它聚合进模型列表），` +
-        `不能用于自定义 provider。请改用其他 id（如 "${AGGREGATION_PROVIDER_ID}-custom"）。`,
-      AGGREGATION_PROVIDER_ID_RESERVED,
-    )
-  }
+  // D4 ③（provider-aggregation）：保留 id 守卫（条件与恢复指引见 assertNonReservedProviderId）。
+  assertNonReservedProviderId(providerId, existingConfig)
   const existing = existingConfig ?? {}
   // A1：merged 提前声明——catalog 分支 delete merged.apiKey 需在声明之后（原顺序触发 TDZ TS2448/2454）
   // TODO: 当 pi models.json 支持 schema 后收窄类型（现有 Record<string, unknown> 是架构限制）
@@ -1594,40 +1645,21 @@ export async function setProvider(
   // headers/authHeader 白名单写入。baseUrl/name/apiKey/api 的空串转译与 catalog 分体系
   // 语义委托防线载体（下方 models 装配后统一调用一次，见 applyProviderWritePolicy）。
   applyProviderHeaderFields(merged, providerId, data)
-  // wave3 C5/TC6：停用 provider 级 enabled 写入——provider 启用改由 enabledModels 白名单承载
+  // wave3 C5/TC6：停用 provider 级 enabled 写入已删除——provider 启用改由 enabledModels 白名单承载
   // （wave2 listProviders 已不读 models.json provider.enabled）。前端 onToggleEnabled 改走
   // toggleProviderEnabled（wave4），不再传 data.enabled 给 setProvider。data.enabled 参数声明保留
-  // （向后兼容），但不写入 models.json。model 级 enabled（下文 model 合并逻辑）保留。
+  // （向后兼容），但不写入 models.json。model 级 enabled（下方 models 装配）保留。
   // A1-5：quota 写入分支已删除（历史死分支：无前端调用方传 quota；quota 配置唯一写路径是
   // QuotaService.configure → config/providers.json）。禁止恢复经 setProvider 写 models.json quota。
-  if (data.models !== undefined) {
-    const rawModels = data.models as Array<Record<string, unknown>>
-    const existingModels = (existing.models ?? []) as ConfigModelDefinition[]
-    // G3 写侧切换：model 级 enabled 收集到 providers.json modelStates（下方 modify 落盘），
-    // 不再写 models.json（pi schema 外寄生字段）。
-    const modelStatesUpdates: Record<string, { enabled: boolean }> = {}
-    // 防线②（模型级空 id）：mergeProviderModel 对空/纯空白 id 返回 null，此处剔除——
-    // 空 id 条目落盘会毒化整个 models.json（pi id 是必需 minLength:1 字段）。
-    merged.models = rawModels
-      .map(m => mergeProviderModel(m, existingModels, modelStatesUpdates, providerId))
-      .filter((m): m is ConfigModelDefinition => m !== null)
-    // G3 写侧切换：model 级 enabled 落 providers.json modelStates。await 对齐 authMethod
-    // 的 MF-1 语义：modify 失败 reject 上抛（handler try-catch 转 sendError），不静默吞。
-    // extrasStore 未注入时丢弃 + warn（宁丢不写错位——生产恒注入）。
-    //
-    // S2（round 1 review suggestion）：旧实现只合并不清理（{...current, ...updates}）——
-    // 编辑体删除某自定义模型后其 modelStates 条目残留，同 id 重新添加时旧 disabled 复活。
-    // 改按保留集合（retainIds）重建（保留集合计算与写入检查见 persistModelStates）。
-    // 保留集合内：本次显式 enabled 优先，未显式传的保留既有状态（不丢未标注模型的状态）。
-    // （「条件 await」与丢弃分支归 persistModelStatesIfInjected。）
-    const modelStatesFlush = persistModelStatesIfInjected(
-      extrasStore,
-      providerId,
-      merged.models as ConfigModelDefinition[],
-      modelStatesUpdates,
-    )
-    if (modelStatesFlush) await modelStatesFlush
-  }
+  // models 装配 + modelStates 条件落盘（同步前缀时序契约不变——装配段同步执行，仅 flush 条件 await）。
+  const modelStatesFlush = mergeProviderModelsAndCollectStates(
+    extrasStore,
+    providerId,
+    data,
+    (existing.models ?? []) as ConfigModelDefinition[],
+    merged,
+  )
+  if (modelStatesFlush) await modelStatesFlush
   // ── 防线②③ 载体接线（设计 D1）──
   // 必须在 models 装配**之后**调用：载体产出 skipUpsert 时读的是装配完成的 merged.models，
   // 传原始 payload 会覆盖 mergeProviderModel 的 base spread 合并（见 ProviderWritePolicyInput.models
@@ -1636,7 +1668,7 @@ export async function setProvider(
   const { gatewayToSet, gatewayToClear, skipUpsert } = applyProviderWritePolicy(
     merged,
     { name: data.name, baseUrl: data.baseUrl, apiKey: data.apiKey, api },
-    isCatalogProvider(providerId) ? 'catalog' : 'custom',
+    providerWriteKind(providerId),
     'settings',
     providerId,
   )
