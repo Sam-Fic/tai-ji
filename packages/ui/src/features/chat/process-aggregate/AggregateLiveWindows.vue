@@ -27,7 +27,8 @@
       <div
         ref="thinkViewport"
         class="h-full overflow-y-auto overscroll-contain px-3 py-2 whitespace-pre-wrap text-[length:var(--text-sm)] leading-[1.6] text-neutral-mid"
-        :class="thinkingStreaming ? 'text-sweep [--sweep-base:var(--neutral-mid)]' : ''"
+        :class="thinkingStreaming ? 'text-sweep' : ''"
+        :style="thinkingStreaming ? { '--sweep-base': 'var(--neutral-mid)' } : undefined"
         data-testid="agg-think-viewport"
         @scroll.passive="onThinkScroll"
       >{{ thinkingContent }}</div>
@@ -191,9 +192,11 @@ function stripKey(unit: ProcessSegmentUnit): string {
 }
 
 /* 思考窗流式扫光（text-sweep，2.6s 循环，GL7/D10 轻量动效）：与 ThinkingRow 思考扫光
-   同形态（base 经模板任意属性类 [--sweep-base:var(--neutral-mid)] 覆盖为 mid 档——
-   思考窗常态字色即 mid）。机制 = background-clip:text + 透明字色，keyframes（text-sweep）
-   在 renderer style.css 动画区全局定义——scoped 内定义会被编译器哈希改名而失效。
+   同形态（base 经模板 :style 内联声明 --sweep-base: var(--neutral-mid) 覆盖为 mid 档——
+   思考窗常态字色即 mid；不用任意属性类挂法：其编译产物特异性 (0,1,0) 低于本 scoped
+   规则的 (0,2,0)，mid 覆盖恒被 dim 缺省压住——真机 getComputedStyle 实测确证）。机制 =
+   background-clip:text + 透明字色，keyframes（text-sweep）在 renderer style.css 动画区
+   全局定义——scoped 内定义会被编译器哈希改名而失效。
    与 ToolRow.vue / ThinkingRow.vue 各持一份同款规则（scoped 样式只作用于本组件模板元素，
    跨组件不命中——挂类不自带规则即静默失效）；prefers-reduced-motion 由 style.css 全局
    兜底，同先例不入组件级 reduce 覆盖。 */
