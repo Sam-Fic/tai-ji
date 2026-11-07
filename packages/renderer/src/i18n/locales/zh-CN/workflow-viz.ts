@@ -41,7 +41,13 @@ export default {
     noAgentCalls: '本脚本无 agent 调用点',
     noAgentCallsHint: '脚本仅包含脚本步骤，没有可展示的调用点',
     nodeRenderFailed: '节点渲染失败',
-    legendStopTitle: '停止叠加：run 停止后在途调用点不再脉冲——已中断/已取消呈中性灰，失败/超时呈失败红',
+    legendStopTitle: '停止叠加：run 停止后在途实例行不再呈运行色——已中断/已取消呈中性灰，失败/超时呈失败红',
+    // 调用点卡片（方案 C 三层结构：调用点卡片中性，状态归实例行）
+    callPointKind: '调用点',
+    callPointUntriggered: '未触发',
+    callPointInstances: '{n} 实例',
+    callPointFailed: '{n} 失败',
+    callPointPlaceholder: '未触发 · 0 实例',
     // 未匹配实例分组（D2⑥：零命中/歧义实例不静默丢弃，画布下方指定分组展示）
     unmatchedGroupTitle: '未匹配实例',
     unmatchedPhaseUnknown: '未归属 phase',

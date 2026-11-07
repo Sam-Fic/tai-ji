@@ -183,9 +183,10 @@
             :active-phase="activePhase"
             @select="(payload) => emit('select', payload)"
           />
-          <!-- D4 状态图例（workflow-overlay-refine）：七态 dot + 词，dot 类从 dag/tone.ts
-               同源取（「图例 = DAG 的图例」）；停止叠加两档说明由容器 title 承载；绝对
-               定位层不占画布布局流，pointer-events-none 不拦截节点点击与缩放手势（V3-wf⑤） -->
+          <!-- D4 状态图例：实例行 dot 四态 + 未触发（方案 C 后画布可见形态；卡片本体
+               中性不进图例），dot 类与实例行/占位行同源（「图例 = DAG 的图例」）；停止
+               叠加两档说明由容器 title 承载；绝对定位层不占画布布局流，pointer-events-none
+               不拦截节点点击与缩放手势（V3-wf⑤） -->
           <div
             class="pointer-events-none absolute bottom-2 left-3 flex items-center gap-3 rounded-sm border border-hairline bg-surface px-2.5 py-1.5"
             :title="t('panel.workflowViz.legendStopTitle')"
@@ -193,19 +194,19 @@
           >
             <span
               v-for="entry in legendEntries"
-              :key="entry.status"
+              :key="entry.key"
               class="inline-flex items-center gap-1.5 text-[length:var(--text-2xs)] text-neutral-mid"
             >
               <svg class="size-2 shrink-0" viewBox="0 0 8 8" aria-hidden="true">
-                <!-- dot fill 全量取 dotTone（含 pending 的中性灰）——禁另挂基础 fill 类：
-                     Tailwind 同属性任意值类按值字母序发射，双类并存时 neutral-dim 后发
-                     覆盖 tone 色（tone.ts 模块注释载机制与根因） -->
+                <!-- dot fill 单类（dotClass 预组装，含未触发的淡化形态）——禁另挂基础
+                     fill 类：Tailwind 同属性任意值类按值字母序发射，双类并存时
+                     neutral-dim 后发覆盖 tone 色（tone.ts 模块注释载机制与根因） -->
                 <circle
-                  :class="dotTone(entry.status)"
+                  :class="entry.dotClass"
                   cx="4"
                   cy="4"
                   r="4"
-                  :data-testid="`wfvz-dag-legend-dot-${entry.status}`"
+                  :data-testid="`wfvz-dag-legend-dot-${entry.key}`"
                 />
               </svg>
               {{ entry.label }}
@@ -487,32 +488,35 @@ function onTabClick(value: OverlayTab): void {
   emit('update:tab', value)
 }
 
-// ── D4 状态图例（七态 + 停止叠加说明；挂 DAG 区左下，绝对定位不占布局流）──
+// ── D4 状态图例（画布可见形态 + 停止叠加说明；挂 DAG 区左下，绝对定位不占布局流）──
 
 /**
- * 图例 dot 类消费 dag/tone.ts 的 dotTone（与节点 dot 同源的单一事实源，模板内
- * `dotTone(entry.status)` 逐条取类）；词用既有状态词族现值（与 RunTraceTable
- * statusLabel 同映射），skipped 为 workflow-overlay-refine D4 新增词条；cancelled
- * （§3.3.8 run 终局收尾在途成员，中性档）与 run 级 outcome 文案同词「已取消」。
+ * 图例描述画布实际可见形态（方案 C 后 = 实例行 dot 四态 + 未触发占位；卡片本体
+ * 中性无状态，不再进图例）：running / done / failed / cancelled 消费 dag/tone.ts
+ * 的 dotTone（与实例行 dot 同源的单一事实源）；「未触发」= 0 实例调用点的占位行
+ * dot（中性点淡化，与实例行点区分）。cancelled（§3.3.8 run 终局收尾在途成员，
+ * 中性档）与 run 级 outcome 文案同词「已取消」。
  * 停止叠加两档不进常驻图例，由图例容器 title 承载说明（i18n legendStopTitle）。
  */
-const LEGEND_STATUS_LABEL_KEYS = {
-  pending: 'panel.sideDrawer.workflowPending',
-  running: 'panel.sideDrawer.workflowRunning',
-  done: 'panel.workflowViz.statusDone',
-  failed: 'panel.workflowViz.statusFailed',
-  retrying: 'panel.workflowViz.statusRetrying',
-  cancelled: 'panel.workflowViz.statusCancelled',
-  skipped: 'panel.workflowViz.statusSkipped',
-} as const satisfies Record<WorkflowVizDagNodeStatus, string>
+const LEGEND_ENTRIES = [
+  { status: 'running', labelKey: 'panel.sideDrawer.workflowRunning' },
+  { status: 'done', labelKey: 'panel.workflowViz.statusDone' },
+  { status: 'failed', labelKey: 'panel.workflowViz.statusFailed' },
+  { status: 'cancelled', labelKey: 'panel.workflowViz.statusCancelled' },
+] as const satisfies ReadonlyArray<{ status: WorkflowVizDagNodeStatus; labelKey: string }>
 
-/** 图例条目（序 = 七态词表序：pending / running / done / failed / retrying / cancelled / skipped）。 */
-const legendEntries = computed(() =>
-  (Object.keys(LEGEND_STATUS_LABEL_KEYS) as WorkflowVizDagNodeStatus[]).map((status) => ({
-    status,
-    label: t(LEGEND_STATUS_LABEL_KEYS[status]),
+/** 未触发条目（0 实例占位行）：中性点淡化形态，dot 类与节点占位行同源。 */
+const UNTRIGGERED_DOT_CLASS = 'fill-[var(--neutral-dim)] opacity-60'
+
+/** 图例条目（序：运行中 / 完成 / 失败 / 已取消 / 未触发）。 */
+const legendEntries = computed(() => [
+  ...LEGEND_ENTRIES.map((entry) => ({
+    key: entry.status,
+    label: t(entry.labelKey),
+    dotClass: dotTone(entry.status),
   })),
-)
+  { key: 'untriggered', label: t('panel.workflowViz.callPointUntriggered'), dotClass: UNTRIGGERED_DOT_CLASS },
+])
 
 // ── 关闭通道（壳两通道：按钮/遮罩统一 close 事件上抛；ESC 归编排器）──
 

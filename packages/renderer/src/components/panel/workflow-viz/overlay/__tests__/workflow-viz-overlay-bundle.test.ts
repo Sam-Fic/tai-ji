@@ -342,7 +342,9 @@ const SAMPLE_DAG: WorkflowDag = {
     id: 'n1',
     kind: 'agent',
     templateName: 'preflight',
-    matchPattern: '',
+    // 锚定正则（解析器恒产 ^…$ 形态；空串 = 全匹配退化形态，tier 2 名称族回落会把
+    // 任意实例误挂到本节点）
+    matchPattern: '^preflight$',
     phase: 'gate',
     line: 3,
   }],
@@ -848,7 +850,9 @@ const SAMPLE_DAG: WorkflowDag = {
     id: 'n1',
     kind: 'agent',
     templateName: 'preflight',
-    matchPattern: '',
+    // 锚定正则（解析器恒产 ^…$ 形态；空串 = 全匹配退化形态，tier 2 名称族回落会把
+    // 任意实例误挂到本节点）
+    matchPattern: '^preflight$',
     phase: 'gate',
     line: 3,
   }],

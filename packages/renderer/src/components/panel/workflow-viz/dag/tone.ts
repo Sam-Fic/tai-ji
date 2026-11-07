@@ -1,19 +1,14 @@
 /**
- * workflow-viz DAG 七态着色的单一事实源（workflow-overlay-refine D4）。
+ * workflow-viz DAG 状态点着色的单一事实源（workflow-overlay-refine D4；2026-11
+ * 方案 C 收窄：卡片本体中性化后只剩 dot 着色）。
  *
- * 节点卡片（WorkflowVizDagNode）与状态图例（WorkflowVizOverlay 壳内图例段）共同
- * 消费本模块——「图例 = DAG 的图例」的同源性由类名同源构造性保证：图例 dot 直接取
- * dotTone 的返回类，节点完整形态（rect 描边 + dot 脉冲）由 nodeTone 组装，不平行
- * 手写第二份色值。
- *
- * 脉冲是节点态、不是图例态（D4）：running / retrying 的 wfvz-node-pulse 类只进
- * nodeTone，图例 dot 恒静态色——脉冲是运行反馈，不是解码信息。
+ * 实例行（WorkflowVizDagNode）与状态图例（WorkflowVizOverlay 壳内图例段）共同消费
+ * dotTone——「图例 = DAG 的图例」的同源性由类名同源构造性保证：图例 dot 直接取
+ * dotTone 的返回类，实例行小点同源取色，不平行手写第二份色值。方案 C 退役了节点
+ * 整卡着色（nodeTone）：调用点卡片恒中性，状态语义归实例行 dot。
  */
 
 import type { WorkflowVizDagNodeStatus, WorkflowVizDagStopTone } from './types'
-
-/** 脉冲动画类（引用全局 keyframes SSOT 的 wfvz-node-pulse，keyframes 定义在 style.css）。 */
-const PULSE_CLASS = 'animate-[wfvz-node-pulse_1.5s_ease-in-out_infinite]'
 
 /**
  * dot 静态色类（无脉冲）——图例七态与节点 dot 的共同颜色事实源。
@@ -40,35 +35,5 @@ export function dotTone(status: WorkflowVizDagNodeStatus, stopTone?: WorkflowViz
     case 'skipped':
     default:
       return 'fill-[var(--neutral-dim)]'
-  }
-}
-
-/**
- * 节点完整 tone（七态着色 + 停止叠加，映射语义与色值同 WorkflowVizDagNode 既有
- * 实现逐一保持）：同一时刻只发射一组状态类（Tailwind 发射序不保证同名工具类的
- * class 顺序胜负——见 Gantt 迁移同款裁决）；running / retrying 叠脉冲。
- * 每态都带 rect 描边——节点卡片 fill 与 phase 分区背景同为 surface，缺描边的卡片
- * 与背景融为一体（节点隐形）；pending 实线中性、skipped 虚线淡化，形态可区分。
- */
-export function nodeTone(status: WorkflowVizDagNodeStatus, stopTone?: WorkflowVizDagStopTone): { rect: string; dot: string } {
-  const dot = dotTone(status, stopTone)
-  if (stopTone === 'neutral') return { rect: 'stroke-[var(--neutral-dim)]', dot }
-  if (stopTone === 'failed') return { rect: 'stroke-[var(--danger)]', dot }
-  switch (status) {
-    case 'running':
-      return { rect: `stroke-[var(--accent)] [stroke-width:1.6] ${PULSE_CLASS}`, dot: `${dot} ${PULSE_CLASS}` }
-    case 'done':
-      return { rect: 'stroke-[var(--success)]', dot }
-    case 'failed':
-      return { rect: 'stroke-[var(--danger)] [stroke-width:1.6]', dot }
-    case 'retrying':
-      return { rect: `stroke-[var(--warn)] [stroke-width:1.6] ${PULSE_CLASS}`, dot: `${dot} ${PULSE_CLASS}` }
-    case 'cancelled':
-      return { rect: 'stroke-[var(--neutral-dim)]', dot }
-    case 'skipped':
-      return { rect: 'stroke-[var(--neutral-dim)] [stroke-dasharray:4_3] fill-[var(--surface-hover)]', dot }
-    case 'pending':
-    default:
-      return { rect: 'stroke-[var(--neutral-dim)]', dot }
   }
 }

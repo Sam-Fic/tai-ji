@@ -21,11 +21,14 @@
     no-op（纯展示）。
 
   运行实况：节点七态经 props.nodeStates 接收已派生映射（派生单处归 u5，D9 单点
-  实现——本组件不自行判定 retrying/skipped）；执行实例经 props.instancesByNode
-  接收已匹配映射（D2 产物，宿主单处派生），用于节点实例行渲染与增高节点的布局
-  高度表；run 停止叠加（D9）消费 run 级原始输入（runStatus/runOutcome）归一为
-  stopTone 传入节点卡片；当前 phase 分区高亮经 props.activePhase（已派生，由壳
-  透传）。
+  实现——本组件不自行判定 retrying/skipped；方案 C 后七态仅作 data-state 观察
+  锚与 skipped 淡化判据，卡片着色恒中性——状态语义归节点卡片内实例行）；执行实例
+  经 props.instancesByNode 接收已匹配映射（D2 产物含 tier 2 名称族回落，宿主单处
+  派生），用于节点实例行渲染与布局高度表；run 停止叠加（D9）消费 run 级原始输入
+  （runStatus/runOutcome）归一为 stopTone 传入节点卡片（作用于在途实例行 dot）；
+  当前 phase 分区高亮经 props.activePhase（已派生，由壳透传）。dag prop = 宿主的
+  重归属派生视图（blueprint-attribution：调用点按实例运行时 phase 落回语义分区，
+  分区按执行序）。
 -->
 <template>
   <div
@@ -64,17 +67,23 @@
       <g :transform="`translate(${vp.tx},${vp.ty}) scale(${vp.k})`" data-testid="wfvz-dag-viewport">
         <!-- phase 分区背景列（当前 phase 高亮：accent 描边）。分区虚线描边 border-strong
              级弱化「面板感」、强化「分组感」（workflow-overlay-refine D3）；分区标签
-             2xs/font-medium 与节点名 3xs 拉开半档（D3 标签档位，V1-wf③ 分层断言口径） -->
+             2xs/font-medium 与节点名 3xs 拉开半档（D3 标签档位，V1-wf③ 分层断言口径）。
+             纯脚本段（方案 C：无归属调用点的非 default 分区）透明底 +「纯脚本」标注；
+             空 default 分区在布局层已整体消隐（不产 cluster） -->
         <g
           v-for="c in layout.clusters"
           :key="c.phase"
           :data-wfvz-cluster="c.phase"
           :data-active="c.phase === activePhase ? 'true' : undefined"
+          :data-script-only="c.scriptOnly ? 'true' : undefined"
           :data-testid="`wfvz-dag-cluster-${c.phase}`"
         >
           <rect
-            class="fill-surface stroke-border-strong [rx:var(--radius-sm)] [stroke-dasharray:5_4]"
-            :class="c.phase === activePhase ? 'stroke-accent [stroke-width:1.5]' : ''"
+            :class="[
+              'stroke-border-strong [rx:var(--radius-sm)] [stroke-dasharray:5_4]',
+              c.scriptOnly ? 'fill-transparent' : 'fill-surface',
+              c.phase === activePhase ? 'stroke-accent [stroke-width:1.5]' : '',
+            ]"
             :x="c.x"
             :y="c.y"
             :width="c.width"
@@ -85,6 +94,13 @@
             :x="c.x + CLUSTER_TITLE_INSET"
             :y="c.y + CLUSTER_TITLE_H_BASE"
           >{{ c.phase }}</text>
+          <text
+            v-if="c.scriptOnly"
+            class="fill-neutral-faint text-[length:var(--text-3xs)] font-mono"
+            :x="c.x + CLUSTER_TITLE_INSET"
+            :y="c.y + CLUSTER_TITLE_H_BASE + CLUSTER_SCRIPT_NOTE_BASELINE_DROP"
+            :data-testid="`wfvz-dag-cluster-script-${c.phase}`"
+          >{{ t('panel.workflowViz.scriptOnly') }}</text>
         </g>
 
         <!-- 边：kind 着色（sequence 灰 / dataflow 实线深 / conditional 虚线 warn / loop-back 虚线 accent 下绕弧）；
@@ -215,6 +231,8 @@ const EDGE_KIND_CLASS: Record<WorkflowDagEdgeKind, string> = {
 
 const CLUSTER_TITLE_INSET = 12
 const CLUSTER_TITLE_H_BASE = 20
+/** 纯脚本标注与分区标题的基线落差（px，标注挂在标题下一行）。 */
+const CLUSTER_SCRIPT_NOTE_BASELINE_DROP = 14
 /** 条件谓词标注显示截断上限（px 布局友好宽度内的可读性上界；完整原文走 title 悬停）。
  *  40 字符容下常规布尔条件全文（如 `commitPlan.stagePaths.length === 0`），更长的
  *  仍截断省略。 */
@@ -246,17 +264,16 @@ const viewMode = ref<ViewMode>('fit')
 const EMPTY_DAG: WorkflowDag = { nodes: [], edges: [], phases: [], parallelGroups: [], loops: [] }
 
 /**
- * 增高节点的布局高度表（≥2 实例的节点按 dagNodeHeight 增高；与节点卡片同一
- * 高度函数——布局几何与卡片渲染单源，不会出现卡片溢出分区矩形）。
+ * 节点布局高度表（方案 C：全部节点按 dagNodeHeight 派生——实例行区恒在场；与节点
+ * 卡片同一高度函数，布局几何与卡片渲染单源，不会出现卡片溢出分区矩形。挂接映射
+ * 未就绪/零实例节点缺省键 = 0 实例高度（占位行），由 layout 兜底）。
  */
-/** 触发节点增高的最少实例数（单实例并入标题不增高）。 */
-const TALL_NODE_MIN_INSTANCES = 2
 const nodeHeights = computed(() => {
   const heights = new Map<string, number>()
   const byNode = props.instancesByNode
   if (byNode === undefined) return heights
   for (const [id, calls] of byNode) {
-    if (calls.length >= TALL_NODE_MIN_INSTANCES) heights.set(id, dagNodeHeight(calls.length))
+    heights.set(id, dagNodeHeight(calls.length))
   }
   return heights
 })
@@ -289,11 +306,17 @@ const stopTone = computed<WorkflowVizDagStopTone>(() => {
 
 // 切换 run（D11：开新 run 切内容）→ 视口重置为新蓝图的 fit（全图居中、四周
 // FIT_PAD_PX 留白）+ 状态机回 fit 态：此前用户 pan/zoom 接管过也在重置中放弃，
-// 此后恢复自动 fit 直至下次接管
-watch(() => props.dag, () => {
-  viewMode.value = 'fit'
-  fitWhenContainerReady()
-})
+// 此后恢复自动 fit 直至下次接管。
+// 重置锚 = 节点 id 集签名而非 dag 引用：宿主传入的是重归属派生视图
+//（blueprint-attribution，实例流式到达会换对象引用），引用判等会把每次实例
+// 到达误判成切 run；同一蓝图的节点 id 集（含行号）稳定不变，只有换脚本才会变。
+watch(
+  () => (props.dag?.nodes ?? []).map((n) => n.id).join('\u0000'),
+  () => {
+    viewMode.value = 'fit'
+    fitWhenContainerReady()
+  },
+)
 
 /**
  * fit-to-view（fit 态的视口写入单源）：内容缩放到四周各留 FIT_PAD_PX 空隙后居中；

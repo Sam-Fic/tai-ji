@@ -9,11 +9,14 @@
  * 布局规则：
  * - 分区列：WorkflowDagPhase.order 升序从左到右；分区内节点按 templateName
  *   词法序（codepoint）垂直排列——同列词法序是设计原型的排列口径。
- * - 节点高度：默认 DAG_NODE_H；挂接 ≥2 个执行实例的调用点按 dagNodeHeight 增高
- *   （实例行画进节点卡片内），经 nodeHeights 表传入布局——高度派生单处在消费侧
- *   （画布按 instancesByNode 计算），布局只消费数值表。
+ * - 节点高度：dagNodeHeight 按实例数派生（方案 C 三层结构——主体下实例行区恒在场，
+ *   0 实例为占位行），经 nodeHeights 表传入布局——高度派生单处在消费侧（画布按
+ *   instancesByNode 计算），布局只消费数值表（缺省键 = 0 实例高度）。
  * - 节点归属分区缺失（node.phase 不在 phases 清单，防御解析器缺省分区缺口）时
  *   动态补尾部分区，节点不丢弃。
+ * - 分区可见性（方案 C）：空 default 分区（重归属后无归属节点的解析器缺省兜底名）
+ *   整体消隐不占列；非 default 空分区保留为纯脚本段（cluster.scriptOnly=true，
+ *   渲染层虚线边框 + 「纯脚本」标注）。
  * - 并行组（parallelGroups）v1 不画组框：同组节点天然同列相邻（同 phase 内词法
  *   序排列），并行语义由调用点行内的实例列表表达（设计 §3.1-3 最小形态）。
  *
@@ -63,12 +66,12 @@ export const INSTANCE_ROW_H = 16
 const INSTANCE_ROWS_TOP_GAP = 4
 
 /**
- * 节点卡片高度（按挂接实例数）：0/1 实例保持基准高（单实例的 agent 名直接作为
- * 节点标题，不另起行）；≥2 实例在主体下方追加实例行区（每实例一行）。
+ * 节点卡片高度（按挂接实例数，方案 C 三层结构：主体 + 实例行区恒在场）：
+ * ≥1 实例每实例一行；0 实例行区容一行「未触发」占位（占位行高 = 实例行高）。
  */
 export function dagNodeHeight(instanceCount: number): number {
-  if (instanceCount <= 1) return DAG_NODE_H
-  return DAG_NODE_H + INSTANCE_ROWS_TOP_GAP + instanceCount * INSTANCE_ROW_H
+  const rows = Math.max(instanceCount, 1)
+  return DAG_NODE_H + INSTANCE_ROWS_TOP_GAP + rows * INSTANCE_ROW_H
 }
 
 // ── fit-to-view（默认打开时全图居中自适应）──
@@ -126,6 +129,12 @@ export interface DagLayoutCluster { // oe-exempt:20261002:framework:workflow-viz
   y: number
   width: number
   height: number
+  /**
+   * 纯脚本段（方案 C）：无归属调用点的非 default 分区（phase() 作用域内只有脚本步骤）。
+   * 渲染层出虚线边框 + 「纯脚本」标注；与空 default 分区（整体消隐）区分——default
+   * 是解析器缺省兜底名，不是脚本作者声明的执行段。
+   */
+  scriptOnly: boolean
 }
 
 /** 布局产物：分区矩形 + 节点几何 + 画布总尺寸。 */
@@ -144,8 +153,17 @@ function lexicalCompare(a: string, b: string): number {
 }
 
 /**
+ * 解析器缺省分区名（workflow-dag-parser WORKFLOW_DAG_DEFAULT_PHASE 的展示层镜像——
+ * shared 未冻结该常量值，两侧字面量一致由测试锚定）。空 default 分区整体消隐：
+ * 它是词法归属的兜底产物而非脚本声明的执行段，重归属后无节点即无展示价值
+ *（方案 C「分区层不再出现 default」；仍有未触发零实例节点时如实保留）。
+ */
+const DEFAULT_PHASE_NAME = 'default'
+
+/**
  * 布局单列：给定分区名与归属节点（已按词法序排好），产出分区矩形与节点坐标。
- * 节点高度查 nodeHeights 表（缺省基准高）——同列步进按各自实际高度累加。
+ * 节点高度查 nodeHeights 表（缺省 = 0 实例高度——行区占位行恒占一行）——同列步进
+ * 按各自实际高度累加。
  */
 function layoutCluster(phase: string, members: WorkflowDagNode[], x: number, nodeHeights: Map<string, number>): {
   cluster: DagLayoutCluster
@@ -154,7 +172,7 @@ function layoutCluster(phase: string, members: WorkflowDagNode[], x: number, nod
   const placed: DagLayoutNode[] = []
   let cursorY = CLUSTER_PAD_TOP + CLUSTER_TITLE_H
   for (const node of members) {
-    const h = nodeHeights.get(node.id) ?? DAG_NODE_H
+    const h = nodeHeights.get(node.id) ?? dagNodeHeight(0)
     placed.push({ node, x: x + CLUSTER_PAD_X, y: cursorY, h })
     cursorY += h + NODE_GAP
   }
@@ -169,6 +187,7 @@ function layoutCluster(phase: string, members: WorkflowDagNode[], x: number, nod
     y: 0,
     width: DAG_NODE_W + CLUSTER_PAD_X * HALF,
     height: Math.max(contentBottom, singleNodeMinHeight),
+    scriptOnly: members.length === 0 && phase !== DEFAULT_PHASE_NAME,
   }
   return { cluster, placed }
 }
@@ -216,6 +235,9 @@ export function layoutDag(dag: WorkflowDag, nodeHeights: DagNodeHeightMap = new 
   let maxBottom = 0
   for (const phase of orderedPhases) {
     const members = byPhase.get(phase.name) ?? []
+    // 空 default 分区消隐（方案 C）：重归属后无归属节点的缺省兜底分区不占列——
+    // 有节点（未触发零实例调用点）时如实保留，非 default 空分区保留为纯脚本段
+    if (members.length === 0 && phase.name === DEFAULT_PHASE_NAME) continue
     const { cluster, placed } = layoutCluster(phase.name, members, cursorX, nodeHeights)
     clusters.push(cluster)
     nodes.push(...placed)

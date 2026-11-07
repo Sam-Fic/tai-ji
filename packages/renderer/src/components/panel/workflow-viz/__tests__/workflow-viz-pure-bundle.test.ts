@@ -22,6 +22,7 @@ import { mount } from '@vue/test-utils'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { matchInstancesToNodes, templateLiteralLength } from '../blueprint-match'
+import { reattributeDagPhases } from '../blueprint-attribution'
 import {
   deriveWorkflowGanttSegments,
   deriveCallView,
@@ -68,6 +69,77 @@ describe('blueprint-match：D2 两级判据', () => {
     const result = matchInstancesToNodes(dag, [call(0, 'dev-W1', 'p')])
     expect(result.byNode.get('n1')).toHaveLength(1)
     expect(result.unmatched).toHaveLength(0)
+  })
+})
+
+describe('blueprint-match：tier 2 名称族回落（方案 C 归属修正）', () => {
+  it('词法 default 调用点 × 运行时具名 phase 实例：跨 phase 按模板挂接（W2 实测形态）', () => {
+    // wave-executor 形态：executeDevNode 在全部 phase() 之前声明 → 调用点词法归属
+    // default；实例运行时 phase = 并行执行开发节点
+    const dag = {
+      nodes: [
+        node('n1', 'node-${…}', '^node-.*$', 'default'),
+        node('n2', '验收聚合-r${…}', '^验收聚合-r.*$', '失败聚合裁决'),
+      ],
+    }
+    const result = matchInstancesToNodes(dag, [
+      call(0, 'node-node-a', '并行执行开发节点'),
+      call(1, '验收聚合-r1', '失败聚合裁决'),
+    ])
+    expect(result.byNode.get('n1')?.map((c) => c.agent)).toEqual(['node-node-a'])
+    expect(result.byNode.get('n2')?.map((c) => c.agent)).toEqual(['验收聚合-r1'])
+    expect(result.unmatched).toHaveLength(0)
+  })
+
+  it('tier 1 命中者不受 tier 2 干扰：同模板跨 phase 双调用点按 phase 等值分流（回落只收零候选）', () => {
+    const dag = {
+      nodes: [
+        node('dev', 'reviewer-${…}', '^reviewer-.*$', 'dev'),
+        node('verify', 'reviewer-${…}', '^reviewer-.*$', 'verify'),
+      ],
+    }
+    const result = matchInstancesToNodes(dag, [
+      call(0, 'reviewer-a', 'dev'),
+      call(1, 'reviewer-b', 'verify'),
+    ])
+    expect(result.byNode.get('dev')?.map((c) => c.agent)).toEqual(['reviewer-a'])
+    expect(result.byNode.get('verify')?.map((c) => c.agent)).toEqual(['reviewer-b'])
+    expect(result.unmatched).toHaveLength(0)
+  })
+
+  it('tier 2 跨 phase 多命中歧义 → 未匹配分组（同字面段总长并列不静默择一）', () => {
+    const dag = {
+      nodes: [
+        node('a', 'fix-${…}', '^fix-.*$', 'default'),
+        node('b', 'fix-${…}', '^fix-.*$', 'heal'),
+      ],
+    }
+    const result = matchInstancesToNodes(dag, [call(0, 'fix-x', 'verify')])
+    expect(result.byNode.size).toBe(0)
+    expect(result.unmatched).toHaveLength(1)
+    expect(result.unmatched[0].ambiguous).toBe(true)
+    expect(result.unmatched[0].hitCount).toBe(2)
+  })
+
+  it('tier 2 多命中按字面段总长降序取更具体者（同 tier 1 裁决口径）', () => {
+    const dag = {
+      nodes: [
+        node('broad', 'reviewer-${…}-a${…}', '^reviewer-.*-a.*$', 'default'),
+        node('specific', 'reviewer-security-${…}', '^reviewer-security-.*$', 'default'),
+      ],
+    }
+    const result = matchInstancesToNodes(dag, [call(0, 'reviewer-security-x', 'verify')])
+    expect(result.byNode.has('specific')).toBe(true)
+    expect(result.byNode.has('broad')).toBe(false)
+  })
+
+  it('两级均零命中 → 未匹配分组（hitCount=0，不静默丢弃）', () => {
+    const dag = { nodes: [node('n1', 'dev-${…}', '^dev-.*$', 'default')] }
+    const result = matchInstancesToNodes(dag, [call(0, 'other-agent', 'verify')])
+    expect(result.byNode.size).toBe(0)
+    expect(result.unmatched).toEqual([
+      { call: expect.objectContaining({ agent: 'other-agent' }), hitCount: 0, ambiguous: false },
+    ])
   })
 })
 
@@ -187,6 +259,83 @@ describe('blueprint-match：挂接与防御机制', () => {
     expect(result.unmatched.map((u) => u.call.id)).toEqual([1])
   })
 })
+})
+
+describe('blueprint-attribution：方案 C 展示层重归属', () => {
+  function attrNode(id: string, templateName: string, matchPattern: string, phase: string): WorkflowDagNode {
+    return { id, kind: 'agent', templateName, matchPattern, phase, line: 1 }
+  }
+
+  function attrCall(id: number, agent: string, phase: string): WorkflowAgentCall {
+    return { id, agent, phase, status: 'done' }
+  }
+
+  function fullDag(nodes: WorkflowDagNode[], phases: Array<{ name: string; order: number }>): WorkflowDag {
+    return { nodes, edges: [], phases, parallelGroups: [], loops: [] }
+  }
+
+  it('挂接实例的运行时 phase 改写节点显示 phase；零实例节点保持词法 phase', () => {
+    const dag = fullDag(
+      [
+        attrNode('n1', 'node-${…}', '^node-.*$', 'default'),
+        attrNode('n2', '接替-${…}', '^接替-.*$', 'default'),
+      ],
+      [{ name: '并行执行开发节点', order: 0 }],
+    )
+    const byNode = new Map([['n1', [attrCall(0, 'node-node-a', '并行执行开发节点')]]])
+    const out = reattributeDagPhases(dag, byNode)
+    expect(out.nodes.find((n) => n.id === 'n1')?.phase).toBe('并行执行开发节点')
+    // 零实例不被猜测改写（名称族→phase 显式映射表是 spec §9.4 登记的边界）
+    expect(out.nodes.find((n) => n.id === 'n2')?.phase).toBe('default')
+  })
+
+  it('实例 phase 分裂取众数（并列取 taskIndex 首现者）', () => {
+    const dag = fullDag([attrNode('n1', 'r-${…}', '^r-.*$', 'alpha')], [{ name: 'alpha', order: 0 }, { name: 'beta', order: 1 }])
+    const byNode = new Map([
+      ['n1', [attrCall(0, 'r-a', 'beta'), attrCall(1, 'r-b', 'beta'), attrCall(2, 'r-c', 'alpha')]],
+    ])
+    expect(reattributeDagPhases(dag, byNode).nodes[0].phase).toBe('beta')
+  })
+
+  it('分区清单序 = 运行时执行序优先，静态词法序补尾，运行时新增 phase 再补尾', () => {
+    // wave-executor 实测形态：失败聚合/修复组的 phase() 词法先于校验/开发段声明
+    const dag = fullDag(
+      [attrNode('n1', 'node-${…}', '^node-.*$', '并行执行开发节点')],
+      [
+        { name: '失败聚合裁决', order: 0 },
+        { name: '校验执行计划', order: 1 },
+        { name: '并行执行开发节点', order: 2 },
+      ],
+    )
+    const runOrder = ['校验执行计划', '并行执行开发节点', '失败聚合裁决']
+    const out = reattributeDagPhases(dag, undefined, runOrder)
+    expect(out.phases.map((p) => p.name)).toEqual(runOrder)
+    expect(out.phases.map((p) => p.order)).toEqual([0, 1, 2])
+  })
+
+  it('实例携带的运行时新增 phase（两侧清单都没有）按节点序首现补尾', () => {
+    const dag = fullDag([attrNode('n1', 'r-${…}', '^r-.*$', 'default')], [{ name: 'dev', order: 0 }])
+    const byNode = new Map([['n1', [attrCall(0, 'r-a', 'runtime-only')]]])
+    const out = reattributeDagPhases(dag, byNode)
+    expect(out.phases.map((p) => p.name)).toEqual(['dev', 'runtime-only'])
+    expect(out.nodes[0].phase).toBe('runtime-only')
+  })
+
+  it('输入不 mutate；边/并行组/循环照抄（重归属只改 node.phase 与分区清单序）', () => {
+    const dag: WorkflowDag = {
+      nodes: [attrNode('n1', 'r-${…}', '^r-.*$', 'default')],
+      edges: [{ id: 'e1', from: 'n1', to: 'n1', kind: 'sequence' }],
+      phases: [{ name: 'default', order: 0 }],
+      parallelGroups: [{ nodeIds: ['n1'] }],
+      loops: [],
+    }
+    const byNode = new Map([['n1', [attrCall(0, 'r-a', 'dev')]]])
+    const out = reattributeDagPhases(dag, byNode)
+    expect(dag.nodes[0].phase).toBe('default')
+    expect(out.edges).toBe(dag.edges)
+    expect(out.parallelGroups).toBe(dag.parallelGroups)
+    expect(out.nodes[0]).not.toBe(dag.nodes[0])
+  })
 })
 
 // ═══════════ 来源节：gantt-segments ═══════════
@@ -773,6 +922,39 @@ describe('layoutDag 列式布局（白盒）', () => {
     expect(result.height).toBeGreaterThan(0)
   })
 
+  it('方案 C：空 default 分区整体消隐（重归属后无节点的解析器缺省兜底名不占列）', () => {
+    const result = layoutDag(dag({
+      phases: [
+        { name: 'default', order: 0 },
+        { name: 'dev', order: 1 },
+      ],
+      nodes: [node({ id: 'a', phase: 'dev' })],
+    }))
+    expect(result.clusters.map((c) => c.phase)).toEqual(['dev'])
+  })
+
+  it('方案 C：default 分区仍有节点（未触发零实例调用点）时如实保留', () => {
+    const result = layoutDag(dag({
+      phases: [{ name: 'default', order: 0 }],
+      nodes: [node({ id: 'a', phase: 'default' })],
+    }))
+    expect(result.clusters.map((c) => c.phase)).toEqual(['default'])
+    expect(result.clusters[0].scriptOnly).toBe(false)
+  })
+
+  it('方案 C：非 default 空分区保留为纯脚本段（scriptOnly 标记，渲染层出标注）', () => {
+    const result = layoutDag(dag({
+      phases: [
+        { name: '校验执行计划', order: 0 },
+        { name: 'dev', order: 1 },
+      ],
+      nodes: [node({ id: 'a', phase: 'dev' })],
+    }))
+    const scriptCluster = result.clusters.find((c) => c.phase === '校验执行计划')
+    expect(scriptCluster?.scriptOnly).toBe(true)
+    expect(result.clusters.find((c) => c.phase === 'dev')?.scriptOnly).toBe(false)
+  })
+
   it('分区高度随节点行数增长（行多时覆盖节点堆叠高度）', () => {
     const nodes = Array.from({ length: 5 }, (_, i) => node({ id: `n${i}`, templateName: `agent-${i}` }))
     const result = layoutDag(dag({ phases: [{ name: 'p0', order: 0 }], nodes }))
@@ -805,7 +987,9 @@ function buildRoutedCanvas(partial: Partial<WorkflowDag> = {}): {
   edges: DagLayoutEdge[]
 } {
   const d = dag(partial)
-  const layout = layoutDag(d)
+  // 节点高钉基准高（方案 C 后 0 实例也含占位行 64px——路由用例的硬编码几何锚定在
+  // 44px 基准；高度派生由 nodeHeights 消费组单测覆盖，此处聚焦路由几何）
+  const layout = layoutDag(d, new Map(d.nodes.map((n) => [n.id, DAG_NODE_H])))
   return {
     d,
     layout,
@@ -851,7 +1035,8 @@ describe('layoutEdges 正交路由（白盒）', () => {
       ],
       edges: [{ id: 'e1', from: 'a', to: 'b', kind: 'sequence' }],
     })
-    const layout = layoutDag(d)
+    // 节点高钉基准高（锚点断言用 DAG_NODE_H/2 算中点；占位行增高由 nodeHeights 组覆盖）
+    const layout = layoutDag(d, new Map(d.nodes.map((n) => [n.id, DAG_NODE_H])))
     const [la, lb] = layout.nodes
     const [edge] = layoutEdges(d, layout.nodes)
     expect(edge.points[0]).toEqual({ x: la.x + DAG_NODE_W, y: la.y + DAG_NODE_H / 2 })
@@ -1410,9 +1595,17 @@ describe('layoutEdges 同行直线边绕行（残余 5，白盒）', () => {
         node({ id: 'f', templateName: 'c1', phase: 'p3' }),
       ],
       edges: [{ id: 'e1', from: 'a', to: 'f', kind: 'dataflow' }],
+      // 障碍节点按 2 实例增高、其余钉基准高（绕行带硬编码几何锚定 44px 基线——
+      // 方案 C 后缺省高含占位行，显式钉回防几何漂移）
     }), new Map([
+      ['p0f', DAG_NODE_H],
+      ['a', DAG_NODE_H],
       ['th', dagNodeHeight(2)],
       ['tm', dagNodeHeight(2)],
+      ['p2f', DAG_NODE_H],
+      ['m', DAG_NODE_H],
+      ['p3f', DAG_NODE_H],
+      ['f', DAG_NODE_H],
     ]))
     const [edge] = layoutEdges(dag({
       phases: layout.clusters.map((c, i) => ({ name: c.phase, order: i })),
@@ -1425,10 +1618,10 @@ describe('layoutEdges 同行直线边绕行（残余 5，白盒）', () => {
   })
 })
 
-describe('dagNodeHeight 节点高（实例数派生）', () => {
-  it('0/1 实例 = 基准高（单实例 agent 名直接作标题，不另起行）', () => {
-    expect(dagNodeHeight(0)).toBe(DAG_NODE_H)
-    expect(dagNodeHeight(1)).toBe(DAG_NODE_H)
+describe('dagNodeHeight 节点高（实例数派生，方案 C：实例行区恒在场）', () => {
+  it('0 实例 = 基准高 + 行区（占位行一行）；1 实例同高（单实例也起行）', () => {
+    expect(dagNodeHeight(0)).toBe(DAG_NODE_H + INSTANCE_ROW_H + 4)
+    expect(dagNodeHeight(1)).toBe(DAG_NODE_H + INSTANCE_ROW_H + 4)
   })
 
   it('≥2 实例 = 基准高 + 实例行区（每实例一行）', () => {
@@ -1445,10 +1638,11 @@ describe('layoutDag nodeHeights 高度表消费', () => {
     const layout = layoutDag(d, new Map([['a', tall]]))
     const [la, lb] = layout.nodes
     expect(la.h).toBe(tall)
-    expect(lb.h).toBe(DAG_NODE_H)
+    // 高度表缺省键 = 0 实例高度（占位行恒占一行——方案 C 三层结构）
+    expect(lb.h).toBe(dagNodeHeight(0))
     // b 的 y = a 底 + 行距（步进按实际高度累加）
     expect(lb.y).toBe(la.y + tall + 18)
-    expect(layout.clusters[0].height).toBeGreaterThanOrEqual(tall + DAG_NODE_H + 18)
+    expect(layout.clusters[0].height).toBeGreaterThanOrEqual(tall + dagNodeHeight(0) + 18)
   })
 })
 
@@ -1531,54 +1725,39 @@ function mountLegend(props: Record<string, unknown> = {}) {
   })
 }
 
-describe('WorkflowVizDag 图例（workflow-overlay-refine D4）', () => {
-  it('V3-wf① tone 同源：图例七态 dot 与 DAG 节点 dot 的 fill 类逐一相同，且图例 dot 无脉冲类', () => {
+describe('WorkflowVizDag 图例（workflow-overlay-refine D4；方案 C 后 = 实例行四态 + 未触发）', () => {
+  it('tone 同源：图例四态 dot 与实例行 dot 的 fill 类逐一相同（dotTone 单源），未触发 dot 为中性淡化', () => {
     const wrapper = mountLegend()
-    for (const state of STATES) {
-      const nodeDot = wrapper.find(`[data-testid="wfvz-dag-node-n-${state}"] circle`)
+    for (const state of ['running', 'done', 'failed', 'cancelled'] as const) {
       const legendDot = wrapper.find(`[data-testid="wfvz-dag-legend-dot-${state}"]`)
       expect(legendDot.exists()).toBe(true)
-      // 节点 dot 的全部 fill 类（静态基础类 + tone 类）都必须出现在图例 dot 上
-      // ——「图例 = DAG 的图例」由类名同源构造性保证（dag/tone.ts dotTone 单源）
-      const nodeFills = nodeDot.classes().filter((cls) => cls.startsWith('fill-['))
-      expect(nodeFills.length).toBeGreaterThan(0)
-      for (const cls of nodeFills) {
-        expect(legendDot.classes()).toContain(cls)
-      }
-      // 脉冲是节点态、不是图例态：图例 dot 恒静态色
-      expect(legendDot.classes().some((cls) => cls.includes('wfvz-node-pulse'))).toBe(false)
-    }
-  })
-
-  it('V3-wf① 图例七态 dot 各恰一个 fill 类且为 tone 色（无基础中性类竞争——单 fill 类消发射序覆盖）', () => {
-    const wrapper = mountLegend()
-    for (const state of STATES) {
-      const dot = wrapper.find(`[data-testid="wfvz-dag-legend-dot-${state}"]`)
-      const fills = dot.classes().filter((cls) => cls.startsWith('fill-['))
+      const fills = legendDot.classes().filter((cls) => cls.startsWith('fill-['))
       expect(fills).toHaveLength(1)
       expect(fills[0]).toBe(dotTone(state))
     }
+    const untriggered = wrapper.find('[data-testid="wfvz-dag-legend-dot-untriggered"]')
+    expect(untriggered.exists()).toBe(true)
+    expect(untriggered.classes()).toContain('fill-[var(--neutral-dim)]')
+    expect(untriggered.classes()).toContain('opacity-60')
   })
 
-  it('V3-wf① 图例七态词可见（现值词族 + skipped / cancelled 新词）', () => {
+  it('图例五词条可见（运行中 / 完成 / 失败 / 已取消 / 未触发）', () => {
     const wrapper = mountLegend()
     const text = wrapper.find('[data-testid="wfvz-dag-legend"]').text()
-    expect(text).toContain('等待中')
     expect(text).toContain('运行中')
     expect(text).toContain('完成')
     expect(text).toContain('失败')
-    expect(text).toContain('重试中')
     expect(text).toContain('已取消')
-    expect(text).toContain('已跳过')
+    expect(text).toContain('未触发')
   })
 
-  it('V3-wf② 停止叠加两档说明由图例容器 title 承载（neutral / failed 档位不入常驻图例）', () => {
+  it('停止叠加两档说明由图例容器 title 承载（neutral / failed 档位不入常驻图例）', () => {
     const wrapper = mountLegend()
     const title = wrapper.find('[data-testid="wfvz-dag-legend"]').attributes('title') ?? ''
     expect(title).toContain('已中断')
     expect(title).toContain('超时')
-    // 两档说明在 title，不作为图例条目渲染（图例只含七态 dot）
-    expect(wrapper.find('[data-testid="wfvz-dag-legend"]').findAll('circle')).toHaveLength(7)
+    // 两档说明在 title，不作为图例条目渲染（图例只含实例行四态 + 未触发五个 dot）
+    expect(wrapper.find('[data-testid="wfvz-dag-legend"]').findAll('circle')).toHaveLength(5)
   })
 
   it('V3-wf⑤ 图例绝对定位层不拦截交互：pointer-events-none + 节点点击上抛照常 + wheel 缩放照常', async () => {
@@ -1774,18 +1953,17 @@ describe('WorkflowVizDag 停止叠加（D9 着色映射）', () => {
     expect(wrapper.find('[data-testid="wfvz-dag-node-n-biz"]').attributes('data-stop-tone')).toBe('neutral')
   })
 
-  it('正常完成 run（outcome=done）：无叠加（done 节点 success 六态自明，D9 done=success 供扫读）', () => {
+  it('正常完成 run（outcome=done）：无叠加（卡片恒中性，状态归实例行——方案 C 卡片中性化）', () => {
     const states: Record<string, WorkflowVizDagNodeStatus> = { 'n-gate': 'done', 'n-biz': 'skipped' }
     const wrapper = mountDag(sampleDag(), { runStatus: 'done', runOutcome: 'done', nodeStates: states })
     const node = wrapper.find('[data-testid="wfvz-dag-node-n-biz"]')
     expect(node.attributes('data-stop-tone')).toBeUndefined()
-    // dot 单 fill 类 = tone 色（无基础中性类竞争——D3 剧本实锤的中性灰根因已修）
+    // 卡片 dot 单 fill 类恒中性（无状态着色；skipped 只作卡片虚线淡化呈现）
     const dot = node.find('circle')
     expect(dot.classes().filter((c) => c.startsWith('fill-['))).toEqual(['fill-[var(--neutral-dim)]'])
-    // done 节点 dot 恢复 success 绿
+    // done 节点卡片 dot 同样中性（成功绿归实例行）
     const doneDot = wrapper.find('[data-testid="wfvz-dag-node-n-gate"] circle')
-    expect(doneDot.classes()).toContain('fill-[var(--success)]')
-    expect(doneDot.classes().filter((c) => c.startsWith('fill-['))).toHaveLength(1)
+    expect(doneDot.classes().filter((c) => c.startsWith('fill-['))).toEqual(['fill-[var(--neutral-dim)]'])
   })
 })
 
@@ -1882,8 +2060,9 @@ describe('WorkflowVizDag 视口 fit-to-view（2026-10 用户裁决：默认打�
     }
     await wrapper.setProps({ dag: tall })
     const vp = readViewport(wrapper)
-    // 高 352 > 容器 200 → k = (200-40)/352，横向内容远小于容器 k 封顶不影响
-    expect(vp.k).toBeCloseTo((200 - 40) / 352, 6)
+    // 高 452 > 容器 200 → k = (200-40)/452，横向内容远小于容器 k 封顶不影响
+    //（方案 C：节点恒带实例行区——0 实例占位行也占高，5 节点高 = 48 + 5×64 + 4×18 + 12）
+    expect(vp.k).toBeCloseTo((200 - 40) / 452, 6)
     expect(vp.ty).toBeCloseTo(20, 6)
   })
 
@@ -2041,19 +2220,20 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('WorkflowVizDag 执行实例行（实际 agent 画进图，2026-10 用户裁决）', () => {
+describe('WorkflowVizDag 执行实例行（实际 agent 画进图；方案 C 三层结构与命名规则）', () => {
   function call(id: number, agent: string, status: WorkflowAgentCall['status'] = 'done'): WorkflowAgentCall {
     return { id, agent, status }
   }
 
-  it('恰 1 实例：节点标题 = 实例 agent 名（固定 agent 名，不再露模板通配形）', () => {
+  it('恰 1 实例：标题保持调用点模板名，实例行展示真实 agent 名（不再用实例名替换标题）', () => {
     const wrapper = mountDag(sampleDag(), {
       instancesByNode: new Map([['n-biz', [call(7, 'reviewer-alpha-r1')]]]),
     })
     const node = wrapper.find('[data-testid="wfvz-dag-node-n-biz"]')
-    expect(node.text()).toContain('reviewer-alpha-r1')
-    // 模板名不再是标题（同一信息不双轨；模板名 ≠ 实例名）
-    expect(node.text()).not.toContain('reviewer-biz')
+    expect(node.text()).toContain('reviewer-biz')
+    expect(node.find('[data-testid="wfvz-dag-instance-7"]').text()).toContain('reviewer-alpha-r1')
+    expect(node.find('[data-testid="wfvz-dag-instance-7"]').attributes('data-state')).toBe('done')
+    expect(node.find('[data-testid="wfvz-dag-placeholder-n-biz"]').exists()).toBe(false)
   })
 
   it('≥2 实例：标题保持调用点模板名，主体下方每实例一行（agent 名 + 实例状态点）', () => {
@@ -2063,8 +2243,8 @@ describe('WorkflowVizDag 执行实例行（实际 agent 画进图，2026-10 用�
         ['n-sec', [call(3, 'reviewer-sec-a1-r1'), call(9, 'reviewer-sec-a2-r2', 'running')]],
       ]),
     })
-    const node = wrapper.find('[data-testid="wfvz-dag-node-n-biz"]')
-    expect(node.text()).toContain('reviewer-biz')
+    const node = wrapper.find('[data-testid="wfvz-dag-node-n-sec"]')
+    expect(node.text()).toContain('reviewer-sec')
     const rowA = wrapper.find('[data-testid="wfvz-dag-instance-3"]')
     const rowB = wrapper.find('[data-testid="wfvz-dag-instance-9"]')
     expect(rowA.text()).toContain('reviewer-sec-a1-r1')
@@ -2073,7 +2253,7 @@ describe('WorkflowVizDag 执行实例行（实际 agent 画进图，2026-10 用�
     expect(rowB.attributes('data-state')).toBe('running')
   })
 
-  it('≥2 实例 + 全通配模板 *：标题改用实例派生摘要（首名 +N），不再露零信息通配符', () => {
+  it('全通配模板 * 标题原样展示（调用点身份不伪造运行名——方案 C §4 命名表 0/多实例行）', () => {
     const wildcardDag: WorkflowDag = {
       phases: [{ name: 'review', order: 0 }],
       nodes: [node({ id: 'n-w', templateName: '*', phase: 'review' })],
@@ -2088,22 +2268,77 @@ describe('WorkflowVizDag 执行实例行（实际 agent 画进图，2026-10 用�
       ]),
     })
     const nodeEl = wrapper.find('[data-testid="wfvz-dag-node-n-w"]')
-    // 预算内截断：后缀 +N 恒可见（首名超预算时 … 收敛，总宽 ≤ NAME_MAX_CHARS=18）
-    expect(nodeEl.text()).toContain('reviewer-arch-… +1')
-    expect(nodeEl.text()).not.toContain('*')
+    expect(nodeEl.text()).toContain('*')
+    expect(nodeEl.find('[data-testid="wfvz-dag-instance-3"]').text()).toContain('reviewer-arch-a1-r1')
   })
 
-  it('≥2 实例 + 有字面段模板：标题保持模板名（调用点身份可读，实例名在行区）', () => {
+  it('模板名变量段 ${…} 以 warn 色高亮（标识「还不是运行名」）；字面段正常着色', () => {
+    const tplDag: WorkflowDag = {
+      phases: [{ name: 'review', order: 0 }],
+      nodes: [node({ id: 'n-tpl', templateName: '验收-${…}-f${…}', phase: 'review' })],
+      edges: [],
+      parallelGroups: [],
+      loops: [],
+    }
+    const wrapper = mountDag(tplDag)
+    const title = wrapper.find('[data-testid="wfvz-dag-node-n-tpl"] text').findAll('tspan')
+    const variableSpans = title.filter((s) => s.classes().includes('fill-warn'))
+    expect(variableSpans.map((s) => s.text())).toEqual(['${…}', '${…}'])
+    expect(title.filter((s) => !s.classes().includes('fill-warn')).map((s) => s.text())).toEqual(['验收-', '-f'])
+  })
+
+  it('元信息行：有实例 = 调用点 · n 实例[ · k 失败] · L行号；0 实例 = 调用点 · 未触发 · L行号', () => {
+    const states: Record<string, WorkflowVizDagNodeStatus> = { 'n-sec': 'failed' }
     const wrapper = mountDag(sampleDag(), {
-      nodeStates: { 'n-sec': 'running' },
+      nodeStates: states,
       instancesByNode: new Map([
-        ['n-sec', [call(3, 'commit-env-fix-b1'), call(9, 'commit-env-fix-b2', 'running')]],
+        ['n-sec', [call(3, 'reviewer-sec-a1-r1'), call(9, 'reviewer-sec-a2-r2', 'failed')]],
       ]),
     })
-    // sampleDag n-sec 模板名 reviewer-sec（非通配）——标题保持模板，不摘要
-    const node = wrapper.find('[data-testid="wfvz-dag-node-n-sec"]')
-    expect(node.text()).toContain('reviewer-sec')
-    expect(node.text()).not.toContain('+1')
+    const sec = wrapper.find('[data-testid="wfvz-dag-node-n-sec"]')
+    expect(sec.text()).toContain('调用点 · 2 实例 · 1 失败 · L1')
+    // 失败只落在实例行：卡片 dot 恒中性（不染失败红）
+    const cardDot = sec.find('circle')
+    expect(cardDot.classes()).toContain('fill-[var(--neutral-dim)]')
+    const biz = wrapper.find('[data-testid="wfvz-dag-node-n-biz"]')
+    expect(biz.text()).toContain('调用点 · 未触发 · L1')
+  })
+
+  it('0 实例占位行：未触发 · 0 实例（不伪造运行名；实例行锚点零 DOM）', () => {
+    const wrapper = mountDag(sampleDag())
+    const placeholder = wrapper.find('[data-testid="wfvz-dag-placeholder-n-biz"]')
+    expect(placeholder.exists()).toBe(true)
+    expect(placeholder.text()).toContain('未触发 · 0 实例')
+    expect(wrapper.findAll('[data-wfvz-instance]')).toHaveLength(0)
+  })
+
+  it('skipped（run 终局零实例）卡片淡化虚线，pending 中性实线（卡片中性化的两分支）', () => {
+    const wrapper = mountDag(sampleDag(), { nodeStates: { 'n-biz': 'skipped', 'n-sec': 'pending' } })
+    const skippedRect = wrapper.find('[data-testid="wfvz-dag-node-n-biz"] rect')
+    expect(skippedRect.classes()).toContain('[stroke-dasharray:4_3]')
+    // 淡化类在节点组件根 g（外层 testid g 是画布的定位容器）
+    expect(wrapper.find('[data-testid="wfvz-dag-node-n-biz"] g').classes()).toContain('opacity-50')
+    const pendingRect = wrapper.find('[data-testid="wfvz-dag-node-n-sec"] rect')
+    expect(pendingRect.classes()).toContain('stroke-[var(--neutral-dim)]')
+    expect(pendingRect.classes()).not.toContain('[stroke-dasharray:4_3]')
+  })
+
+  it('卡片中性化：节点七态（done/failed/running/retrying）不染调用点卡片（状态归实例行）', () => {
+    const wrapper = mountDag(sampleDag(), {
+      nodeStates: { 'n-biz': 'done', 'n-sec': 'failed' },
+      instancesByNode: new Map([
+        ['n-biz', [call(7, 'reviewer-alpha-r1', 'done')]],
+        ['n-sec', [call(3, 'reviewer-sec-a1-r1', 'failed')]],
+      ]),
+    })
+    for (const id of ['n-biz', 'n-sec']) {
+      const rect = wrapper.find(`[data-testid="wfvz-dag-node-${id}"] rect`)
+      expect(rect.classes()).toContain('stroke-[var(--neutral-dim)]')
+      expect(rect.classes()).not.toContain('fill-[var(--surface-hover)]')
+    }
+    // 状态点归实例行：done 绿 / failed 红
+    expect(wrapper.find('[data-testid="wfvz-dag-instance-7"] circle').classes()).toContain('fill-[var(--success)]')
+    expect(wrapper.find('[data-testid="wfvz-dag-instance-3"] circle').classes()).toContain('fill-[var(--danger)]')
   })
 
   it('实例行点击 no-op（[2026-10-19] agent 钻取入口收归实例 trace 行——实例行纯展示）', async () => {
@@ -2118,7 +2353,7 @@ describe('WorkflowVizDag 执行实例行（实际 agent 画进图，2026-10 用�
     expect(wrapper.emitted('select')).toBeUndefined()
   })
 
-  it('≥2 实例节点增高进布局（rect 高于基准高——实例行画在节点卡片内，不溢出分区）', () => {
+  it('有实例节点按实例数增高进布局（rect 高于基准高——实例行画在节点卡片内，不溢出分区）', () => {
     const wrapper = mountDag(sampleDag(), {
       instancesByNode: new Map([
         ['n-sec', [call(3, 'reviewer-sec-a1-r1'), call(9, 'reviewer-sec-a2-r2', 'running')]],
@@ -2126,12 +2361,6 @@ describe('WorkflowVizDag 执行实例行（实际 agent 画进图，2026-10 用�
     })
     const rect = wrapper.find('[data-testid="wfvz-dag-node-n-sec"] rect')
     expect(Number(rect.attributes('height'))).toBeGreaterThan(44)
-  })
-
-  it('无实例数据（缺省）：全部节点零实例形态（模板名标题，零实例行 DOM）', () => {
-    const wrapper = mountDag(sampleDag())
-    expect(wrapper.find('[data-testid="wfvz-dag-node-n-biz"]').text()).toContain('reviewer-biz')
-    expect(wrapper.findAll('[data-wfvz-instance]')).toHaveLength(0)
   })
 })
 

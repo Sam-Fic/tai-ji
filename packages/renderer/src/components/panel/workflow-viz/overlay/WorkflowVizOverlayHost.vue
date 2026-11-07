@@ -37,7 +37,7 @@
     <WorkflowVizOverlay
       :open="isOverlayShellOpen"
       :run="runRecord"
-      :dag="overlayDag"
+      :dag="displayDag"
       :dag-error="overlayDagError"
       :tab="overlayTab"
       :scheduler-session-id="overlaySessionId"
@@ -109,7 +109,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { WorkflowRunRecord } from '@taiji/shared'
+import type { WorkflowDag, WorkflowRunRecord } from '@taiji/shared'
 import WorkflowVizOverlay from './WorkflowVizOverlay.vue'
 import WorkflowVizOverlayGuard from './WorkflowVizOverlayGuard.vue'
 import OverlayShell from './OverlayShell.vue'
@@ -119,6 +119,7 @@ import WorkflowLivePanel from '../panel/WorkflowLivePanel.vue'
 import AgentStreamDrawer from '../panel/AgentStreamDrawer.vue'
 import WorkflowVizGantt from '../gantt/WorkflowVizGantt.vue'
 import { matchInstancesToNodes } from '../blueprint-match'
+import { reattributeDagPhases } from '../blueprint-attribution'
 import type { WorkflowInstanceMatchResult } from '../blueprint-match'
 import { deriveNodeStatus } from '../gantt-segments'
 import type { WorkflowVizDagNodeStatus } from '../dag/types'
@@ -217,12 +218,27 @@ const panelInput = computed<{ sessionId: string; runId: string; run: WorkflowRun
 // ── 派生输入（容器单处派生，壳/面板均消费已派生 props）────────────────────────
 
 /** D2 匹配单源（byNode + 未匹配列表一次派生；节点七态 / 未匹配分组 / 点击钻取共用，
- *  避免三处各自调 matchInstancesToNodes 重复计算）。 */
+ *  避免三处各自调 matchInstancesToNodes 重复计算；含方案 C tier 2 名称族回落）。 */
 const matchResult = computed<WorkflowInstanceMatchResult | null>(() => {
   const dag = overlayDag.value
   const run = runRecord.value
   if (dag === null || run === null) return null
   return matchInstancesToNodes(dag, run.agentCalls)
+})
+
+/**
+ * 展示用重归属 DAG（方案 C 单处派生）：静态词法归属 + 匹配实例 → 调用点落回语义
+ * phase（node.phase = 实例运行时 phase 众数）、分区清单按执行序（run.phases 优先）。
+ * 画布/图例/点击语义消费本视图；DAG 未就绪时 null = 壳出解析中/降级形态。匹配数据
+ * 未就绪（matchResult null）时仍产出——零实例重排（全部节点保持词法 phase、分区按
+ * 执行序）不依赖实例流。
+ */
+const displayDag = computed<WorkflowDag | null>(() => {
+  const dag = overlayDag.value
+  if (dag === null) return null
+  const run = runRecord.value
+  const phaseOrder = run?.phases?.map((p) => p.phase)
+  return reattributeDagPhases(dag, matchResult.value?.byNode, phaseOrder)
 })
 
 /** 节点七态映射（D2 蓝图-实例匹配 → D9 节点级派生；DAG 未就绪时 undefined = 画布解析中）。 */

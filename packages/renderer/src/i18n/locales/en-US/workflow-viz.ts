@@ -32,7 +32,13 @@ export default {
     noAgentCalls: 'This script has no agent call sites',
     noAgentCallsHint: 'The script only contains script steps with no call sites to show',
     nodeRenderFailed: 'Node render failed',
-    legendStopTitle: 'Stop overlay: when a run stops, in-flight call sites stop pulsing — interrupted/cancelled turn neutral gray, failed/time-limited turn red',
+    legendStopTitle: 'Stop overlay: when a run stops, in-flight instance rows leave the running color — interrupted/cancelled turn neutral gray, failed/time-limited turn red',
+    // Call-site card (scheme C three-layer structure: neutral card, status on instance rows)
+    callPointKind: 'Call site',
+    callPointUntriggered: 'Not triggered',
+    callPointInstances: '{n} instance(s)',
+    callPointFailed: '{n} failed',
+    callPointPlaceholder: 'Not triggered · 0 instances',
     // Unmatched instance groups (D2⑥: zero-hit/ambiguous instances are never dropped
     // silently; shown in a dedicated group below the canvas)
     unmatchedGroupTitle: 'Unmatched instances',
