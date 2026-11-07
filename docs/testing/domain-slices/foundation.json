@@ -124,6 +124,7 @@
     "packages/runtime/src/utils/__tests__/utils-bundle.test.ts",
     "packages/runtime/test/helpers/free-port.test.ts",
     "packages/runtime/test/json-store.test.ts",
+    "packages/runtime/test/npm-installer-fetch-versions.test.ts",
     "packages/runtime/test/npm-installer-tarball-stall.test.ts",
     "packages/runtime/test/pending.test.ts",
     "packages/runtime/test/rpc-client-start-args-anchor.test.ts",

@@ -3536,7 +3536,7 @@
     },
     {
       "id": "E2E-INTEG-16",
-      "summary": "npm-installer stall 传输集成组：真实 TCP/TLS trickle 限速传输不误杀 + timeout 旋钮真窗（TAIJI_TEST_INTEGRATION 门控）",
+      "summary": "npm-installer 安装器组：真实 TCP/TLS trickle 限速传输不误杀 + timeout 旋钮真窗（TAIJI_TEST_INTEGRATION 门控）+ fetchPackageVersions 版本元数据（本地 TLS registry，默认组直跑）",
       "scope": [
         "packages/runtime/src/infra/installers/npm-installer.ts"
       ],
@@ -3545,14 +3545,18 @@
         {
           "kind": "spec",
           "ref": "packages/runtime/test/npm-installer-tarball-stall.test.ts"
+        },
+        {
+          "kind": "spec",
+          "ref": "packages/runtime/test/npm-installer-fetch-versions.test.ts"
         }
       ],
       "trigger": "on-diff",
       "serial": true,
-      "run": "TAIJI_TEST_INTEGRATION=1 pnpm --filter @taiji/runtime exec vitest run test/npm-installer-tarball-stall.test.ts",
+      "run": "TAIJI_TEST_INTEGRATION=1 pnpm --filter @taiji/runtime exec vitest run test/npm-installer-tarball-stall.test.ts test/npm-installer-fetch-versions.test.ts",
       "owner": "packages/runtime",
       "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
-      "note": "R2 态 + 用例级门控（文件留 main 默认组，快用例继续占默认组；门控 = TAIJI_TEST_INTEGRATION，SSOT = test-guard/integration-gate.ts，skip 理由注入 describe 名）。触发条件 = npm 安装器 stall 兜底链 diff 命中。断言本质 = stall timer 在真实持续数据流下不误杀 + 超时旋钮真窗触发（stall 窗口语义 4 条 fake timers 面与 complete 回归 2 条留默认组）；serial=真 的理由 = 真实 ~1s 限速传输依赖网络栈墙钟。"
+      "note": "R2 态 + 用例级门控（文件留 main 默认组，快用例继续占默认组；门控 = TAIJI_TEST_INTEGRATION，SSOT = test-guard/integration-gate.ts，skip 理由注入 describe 名）。触发条件 = npm 安装器 diff 命中。断言本质 = stall timer 在真实持续数据流下不误杀 + 超时旋钮真窗触发（stall 窗口语义 4 条 fake timers 面与 complete 回归 2 条留默认组）；serial=真 的理由 = 真实 ~1s 限速传输依赖网络栈墙钟。fetch-versions 资产 = fetchPackageVersions 版本下拉数据源（本地 TLS registry 回 metadata JSON，loopback 毫秒级确定性，3 用例全默认组无门控）。"
     },
     {
       "id": "E2E-INTEG-17",
