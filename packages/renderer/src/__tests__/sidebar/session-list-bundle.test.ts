@@ -1382,6 +1382,28 @@ describe('组头操作（hover 动作钮，demo .pgh-acts）', () => {
     expect(store.activeProjectId).toBe(DEFAULT_PROJECT_ID)
     wrapper.unmount()
   })
+
+  it('删除回执剔除被删组的展开残留（data-source-registry #94 清理语义：本键快照写自内存集合、无 #92 式全量重写天然清理，删除链路即唯一清理点）；其余组开合记忆保留', async () => {
+    // 预置持久化展开态：proj-a / proj-b 都在两套集合内（组合式函数启动读回进入内存镜像）
+    localStorage.setItem(GROUP_STATE_KEY, JSON.stringify({ flat: ['proj-a', 'proj-b'], groups: ['proj-a', 'proj-b'], defaultZone: false }))
+    const store = setupProjects_m2('proj-a', [['proj-a', 'Alpha'], ['proj-b', 'Beta']])
+    const wrapper = mountList_m2()
+
+    await groupOf_m2(wrapper, 'proj-a').find('[data-testid="project-group-delete"]').trigger('click')
+    await nextTick()
+    mockRemove.mockImplementation(async () => commandReply(store, { state: { projects: store.projects.filter((p) => p.id !== 'proj-a'), activeProjectId: DEFAULT_PROJECT_ID } }))
+    const confirmBtn = [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === '删除')
+    expect(confirmBtn).toBeTruthy()
+    confirmBtn!.click()
+    await flushPromises()
+
+    expect(store.projects.some((p) => p.id === 'proj-a')).toBe(false)
+    // 落盘快照：被删组 id 从两套集合剔除，未删组的记忆原样保留
+    const persisted = JSON.parse(localStorage.getItem(GROUP_STATE_KEY) ?? '{}') as { flat?: string[]; groups?: string[]; defaultZone?: boolean }
+    expect(persisted.flat).toEqual(['proj-b'])
+    expect(persisted.groups).toEqual(['proj-b'])
+    wrapper.unmount()
+  })
 })
 
 describe('新建项目入口（区头「+」→ 列表顶部草稿行）', () => {

@@ -272,6 +272,17 @@ export function useProjectGroups(options: {
     projectStore.reorderProject(draggedId, targetId)
   }
 
+  /** 项目删除回执后的展开残留剔除（data-source-registry #94 残留清理语义）：本键快照
+   *  写自内存集合、无 #92 projectOrder 式「下次写入全量重写」天然清理，集合不自清 =
+   *  删除链路是唯一清理点——两套开合集同步剔除该组 id 并落盘；命中才写（被删组从未
+   *  展开过 = 无变更不落盘） */
+  function discardExpanded(pgId: string): void {
+    if (!flatExpanded.value.has(pgId) && !dirExpanded.value.has(pgId)) return
+    flatExpanded.value = new Set([...flatExpanded.value].filter((id) => id !== pgId))
+    dirExpanded.value = new Set([...dirExpanded.value].filter((id) => id !== pgId))
+    persistGroupState()
+  }
+
   /** 默认区头行点击（与命名组头 onGroupHeadClick 同构的按模式裁决）：平铺 = 非锚定
    *  锚定+展开 / 已锚定翻转开合；目录 = 仅翻转开合（浏览态不切锚定）。锚定命令化：
    *  发命令、chip 跟随回执，失败 toast 由 store 出声。 */
@@ -296,14 +307,18 @@ export function useProjectGroups(options: {
 
   /** 删除确认（命令化：异步命令失败 toast 已由 store 出声，此处吞 rejection；归回的
    *  会话落默认项目区——删除回执落定后强制展开默认区（落进收起区的内容必须立即可见，
-   *  spec sidebar §3.7 恒展开可见的默认收起语义版），命名组开合记忆保留不动） */
+   *  spec sidebar §3.7 恒展开可见的默认收起语义版），其余组开合记忆保留不动；被删组
+   *  的展开残留随回执剔除落盘（discardExpanded，#94 登记的残留清理语义）） */
   async function confirmDelete(): Promise<void> {
     const target = pendingDelete.value
     pendingDelete.value = null
     deleteOpen.value = false
     if (!target) return
     await projectStore.removeProject(target.id).then(
-      () => expandDefaultZone(),
+      () => {
+        discardExpanded(target.id)
+        expandDefaultZone()
+      },
       () => {},
     )
   }
