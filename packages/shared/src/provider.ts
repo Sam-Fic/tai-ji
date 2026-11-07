@@ -266,11 +266,14 @@ export interface ModelInfo {
  *   （agent-session.js:1912）；pi-ai 出站请求构造 `No API key for provider: ${provider}` 与
  *   `No API key provided for provider "${provider}"`（pi-ai dist api/*.js）——共同前缀
  *   PI_CREDENTIAL_MISSING_PREFIX。
- * - 形态二「虚拟模型路由 resolveModel 凭据拦截」（model-runtime.js:744-751，agg-error-presentation
- *   剧本真机逐字捕获）：`Virtual model <聚合p>/<路由id> routed to <端点p>/<端点id>,
+ * - 形态二「虚拟模型路由 resolveModel 凭据拦截」（model-runtime.js:745-749，agg-error-presentation
+ *   剧本真机逐字捕获；探针 PS-98）：`Virtual model <聚合p>/<路由id> routed to <端点p>/<端点id>,
  *   which has no credentials.`——前缀非 No API key，按 PI_VIRTUAL_ROUTE_NO_CREDENTIALS_PATTERN
  *   整体形态判定，端点标识取 routed to 与 which has no credentials 之间的复合串。
- * pi 版本升级后文本变更即映射失守，与 PI_MODEL_NOT_FOUND_PREFIX 同受 C-proc-08 探针族管辖。
+ * pi 版本升级后文本变更即映射失守——两形态与虚拟模型注册时序已登记 pi-semantics 探针
+ * （PS-75 形态一 / PS-98 形态二 / PS-99 registerVirtualModel 幂等替换 + pending flush
+ * 先于 --model 解析；PI_MODEL_NOT_FOUND_PREFIX 同族见 PS-41），受 C-proc-08 版本门禁
+ * 在 pi 升级时强制重验（探针 = pi-semantics-virtual-route.test.ts）。
  *
  * 驻留 @taiji/shared（C-comm-01 分层修复）：纯常量 + 纯字符串处理，凭据文案与 provider
  * 语义同域——runtime 切换链分型（session-model-control）与 infra 出站呈现映射
