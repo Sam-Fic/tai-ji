@@ -112,9 +112,15 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
           '第 2 层输入编辑态（编辑态 Esc 取消编辑；CommandPopover 开启时先经已登记 command-popover 成员消费，组件级 Esc 仅浮层关闭时可达）',
         // 模态内消费方：仅模态开着时可达，编排器经聚合让位不参与
         'packages/renderer/src/components/settings/system/SystemShortcutSection.vue': '模态内消费方（改键录制）',
+        // 非模态提示覆盖层：hover 参数卡（仅卡在场时挂 window bubble 监听）按 Esc 只自隐藏，
+        // 不 preventDefault 不消费、不入聚合——编排器 Esc 决策不受其影响（u-aggregate-ui 存量）
+        'packages/ui/src/features/chat/process-aggregate/SegmentToolRow.vue': '非模态提示覆盖层（Esc 自隐藏 hover 卡，不消费不入聚合）',
         // 未收编模态族：模态自消费 + 聚合让位（modal-surface-registry 登记表成员）
         'packages/renderer/src/components/settings/SettingsModal.vue': '未收编模态族（自消费 + 聚合让位）',
         'packages/ui/src/overlays/SearchModal.vue': '未收编模态族（自消费 + 聚合让位）',
+        // 设置懒加载错误占位态的自关兜底（宿主 AppShell 装配）：占位表面
+        // async-error-fallback-overlay 让位后的消费通道，与 SettingsModal window 兜底同档
+        'packages/renderer/src/composables/shell/useSettingsErrorEsc.ts': '未收编模态族（错误占位态自关兜底 + 聚合让位）',
       }
       const hits = scanEscConsumers(root)
       const unaccounted = hits.filter(

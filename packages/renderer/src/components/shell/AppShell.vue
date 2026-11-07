@@ -39,6 +39,7 @@ import { detectPlatform, usePlatformChrome } from '@/composables/effects/usePlat
 import { useSettingsShell } from '@/composables/shell/useSettingsShell'
 import { useNarrowWindowCollapse } from '@/composables/shell/useNarrowWindowCollapse'
 import { useSidebar } from '@/composables/features/sidebar/useSidebar'
+import { useSettingsErrorEsc } from '@/composables/shell/useSettingsErrorEsc'
 import AppNavControls from './AppNavControls.vue'
 import AsideRegion from './AsideRegion.vue'
 import SidebarResizeHandle from './SidebarResizeHandle.vue'
@@ -95,6 +96,16 @@ provide('openSettings', (section?: string) => {
   settingsSection.value = section
   settingsOpen.value = true
 })
+
+// 设置懒加载错误态的 Esc 退出兜底（必须注册在 useKeyOrchestrator 之后——编排器先行让位、
+// 本兜底后行消费）：errorComponent 替换挂载后 SettingsModal 自身的 window Esc 兜底不存在，
+// 编排器因占位表面（async-error-fallback-overlay，yieldsEsc）让位 → 无人消费 = Esc 死键。
+// failed 由 createLazyChunkRetry 暴露；close 同 v-model:open 关闭路径（卸载，重开 = fresh load）。
+useSettingsErrorEsc(
+  () => settingsOpen.value,
+  () => settingsRetry.failed.value,
+  () => { settingsOpen.value = false },
+)
 
 // 平台 + 全屏态：data-platform 注入 <html>（usePlatformChrome）；全屏态经 isFullscreen ref 响应式通路消费（TrafficLight opacity / AppNavControls left），不设 data-fullscreen 属性。
 usePlatformChrome()
