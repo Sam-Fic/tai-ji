@@ -1,7 +1,7 @@
 /**
  * 路由求值穷举矩阵单测（RL2 / 验收 A1；T3 定名 route-matrix.test）。
  *
- * 行为契约 = 行为契约 docs/design/provider-aggregation-route-matrix.md：端点可选性矩阵 12 行逐格 + 全体候选状态
+ * 行为契约 = docs/design/provider-aggregation-route-matrix.md：端点可选性矩阵 12 行逐格 + 全体候选状态
  * 多端点叠加（纯函数半边；enabled/deleted 两条闭包态在 aggregation-hot-reload.test）
  * + D7 档位向上取映射 + D12 mode 维度 + D13 特殊日期双型 + 时间窗落格边界。
  * 求值函数为纯函数（now / 额度快照 / 重试信号全注入——AX3），本文件零 fs、零子进程。
