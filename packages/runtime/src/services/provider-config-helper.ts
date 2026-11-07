@@ -15,12 +15,8 @@ import type {
   AggregationRoute,
   AggregationValidModelIndex,
 } from '@taiji/shared'
-import { AGGREGATION_PROVIDER_ID, AGGREGATION_PROVIDER_ID_RESERVED } from '@taiji/shared'
-import {
-  annotateDanglingMembers,
-  collectOrphanAggregationRefs,
-  isAggregationModelRef,
-} from '@taiji/shared'
+import { AGGREGATION_PROVIDER_ID, AGGREGATION_PROVIDER_ID_RESERVED, PI_THINKING_LEVELS } from '@taiji/shared'
+import { annotateDanglingMembers, collectOrphanAggregationRefs } from '@taiji/shared'
 import { isCatalogProvider, deriveEnabled, getMergedCatalogModels } from './provider-catalog.js'
 // coding-plan 额度显示自动开启（新增即默认同意）：判定 + 落盘与导入路径（provider-importer）共用
 import { autoEnableQuotaDisplayOnCreate, isPlaintextCredential, resolveCreateMatchIdentity } from './quota-auto-enable.js'
@@ -650,9 +646,6 @@ export function readAggregationRoutes(
   }
 }
 
-/** 判别模型复合串是否为路由引用（shared 单点 re-export；本模块消费方免再 import shared）。 */
-export { isAggregationModelRef }
-
 // ── 目录注入（provider-aggregation U3/D4：listProviders 注入路由条目，纯磁盘派生视图） ────
 
 /**
@@ -666,12 +659,10 @@ export type AggregationRoutesInjector = Pick<TaijiProviderStore, 'getAggregation
  * 本名仅出现在模型选择器分组（U6 接 i18n 定稿时可调整）——runtime 下发数据侧给固定中文）。 */
 const AGGREGATION_PROVIDER_DISPLAY_NAME = '模型路由'
 
-/**
- * pi 思考档位七档全集（D4 ⑤ 构造规则的「普通档 / xhigh / max」分界基准）。
- * 与 pi-ai EXTENDED_THINKING_LEVELS 同源（models.js:680；runtime 侧独立字面量——
- * 显示侧门控真源在 computeSupportedLevels→pi-ai，本表只用于构造 null 键集）。
- */
-const EXTENDED_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+// pi 思考档位七档全集（D4 ⑤ 构造规则的「普通档 / xhigh / max」分界基准）＝ shared 单源
+// PI_THINKING_LEVELS（pi-preset.ts，barrel 导出；pi-ai EXTENDED_THINKING_LEVELS 同源锚点
+// 见该处 JSDoc）——显示侧门控真源在 computeSupportedLevels→pi-ai，本表只用于构造 null 键集。
+// （曾为手写字面量副本，pi 增档时与 shared 分叉的漂移面已收敛回单点。）
 
 /**
  * 路由条目 thinkingLevelMap 构造（D4 ⑤ 键集定形）：键集 = 端点档位并集 ∪ 并集外档位的
@@ -691,7 +682,7 @@ export function buildRouteThinkingLevelMap(members: readonly AggregationMember[]
     }
   }
   const map: Record<string, string | null> = {}
-  for (const level of EXTENDED_THINKING_LEVELS) {
+  for (const level of PI_THINKING_LEVELS) {
     map[level] = union.has(level) ? level : null
   }
   // 防御扩展：并集中出现七档全集外的键（pi 未来新增档位）同样保留（键集 = 并集 ∪ 全集 null 键）

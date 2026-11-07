@@ -25,7 +25,6 @@ import type {
 import {
   aggregationRouteIdFromRef,
   buildAggregationModelRef,
-  isAggregationModelRef,
 } from '@taiji/shared'
 
 // ── join 视图（wire 载荷组装：aggregation.getRouteView 的 reply 与 routeView 广播共用） ──
@@ -312,11 +311,16 @@ export interface DefaultSyncTarget { // oe-exempt:20261106:framework:ports 契�
  *   回退首个可用模型，landing fallback 不指向已删路由）。
  * - 新首位 provider 不在当前目录或已禁用 → null（跳过同步保留现有 default——写成不可用
  *   默认会被 getDefaultModel auto-fix 冲掉，静默破坏「第一位即默认」）。
+ * - 新首位为路由引用（provider 段 = 聚合保留 id）时在 provider 级之上补路由级判定：
+ *   routeId 在 routes 域存在且 enabled 才返回目标，否则 null（停用/悬空路由写成 default
+ *   会被 getDefaultModel 聚合分支按同一维度判不可用并 auto-fix 冲掉——判定维度对齐
+ *   读取侧 findValidDefaultModel；扩展禁用维度由读取侧组合根判定承载，本纯函数不持）。
  * - 否则返回写侧目标（handler 再对比 currentDefault：相同则幂等跳过写，仍视为已同步）。
  */
 export function resolveDefaultSyncAfterScopedWrite(
   scopedModels: readonly string[],
   providers: ReadonlyArray<Pick<ProviderInfo, 'id' | 'enabled'>>,
+  routes: readonly AggregationRoute[],
 ): DefaultSyncTarget | null {
   if (scopedModels.length === 0) return null
   const ref = scopedModels[0]!
@@ -326,6 +330,11 @@ export function resolveDefaultSyncAfterScopedWrite(
   const modelId = ref.substring(slashIdx + 1)
   const info = providers.find(p => p.id === provider)
   if (!info || info.enabled === false) return null
+  const routeId = aggregationRouteIdFromRef(ref)
+  if (routeId !== undefined) {
+    const route = routes.find(r => r.id === routeId)
+    if (!route || !route.enabled) return null
+  }
   return { ref, provider, modelId }
 }
 
@@ -334,6 +343,3 @@ export function resolveDefaultSyncAfterScopedWrite(
 // `<聚合providerId>/<routeId>` 恒满足 isModelRef 的「provider 与 id 段都非空」契约——
 // isModelRef 的真实执行点在 runtime config.setScopedModels 入口（model-message-handler
 // 格式校验），本模块不重复实现该谓词；A10 测试以同语义断言锁定该兼容性。
-
-/** 路由引用判别（shared 单点 re-export；本模块消费方免再 import shared 路径）。 */
-export { isAggregationModelRef }

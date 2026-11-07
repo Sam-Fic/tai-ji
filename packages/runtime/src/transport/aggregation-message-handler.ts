@@ -155,7 +155,14 @@ export class AggregationMessageHandler {
    * .syncDefaultToScopedModels：新首位 ≠ 当前 default 才写，相同视为已同步）。
    */
   private syncDefaultAfterScopedWrite(scopedModels: string[]): boolean {
-    const target = resolveDefaultSyncAfterScopedWrite(scopedModels, this.ctx.configService.listProviders())
+    // routes 实况入参：路由级可用性判定（routeId 存在且 enabled）对齐读取侧
+    // findValidDefaultModel 聚合分支——停用/悬空路由不被写成 default（清理失败路径已在
+    // 上游跳过，此处再判一道兜住 cleanupFailed=false 但首位仍为停用路由的形态）。
+    const target = resolveDefaultSyncAfterScopedWrite(
+      scopedModels,
+      this.ctx.configService.listProviders(),
+      this.ctx.configService.readAggregationRoutes().routes,
+    )
     if (!target) return false
     try {
       const currentDefault = this.ctx.configService.getDefaultModel()

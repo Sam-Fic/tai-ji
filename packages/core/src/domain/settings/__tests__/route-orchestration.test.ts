@@ -369,23 +369,52 @@ describe('A10 默认编排决策：resolveDefaultSyncAfterScopedWrite', () => {
   const providers = [
     { id: 'zhipu' as ProviderId, enabled: true },
     { id: 'opencode-go' as ProviderId, enabled: false },
+    { id: AGGREGATION_PROVIDER_ID as ProviderId, enabled: true },
+  ]
+  const routes: AggregationRoute[] = [
+    {
+      id: 'alpha', name: 'Alpha', modelId: 'alpha', enabled: true, mode: 'simple',
+      members: [makeMember('m1')], specials: [],
+    },
+    {
+      id: 'gamma', name: 'Gamma', modelId: 'gamma', enabled: false, mode: 'simple',
+      members: [makeMember('m1')], specials: [],
+    },
   ]
 
   it('scopedModels 删空：返回 null（保留现有 default，auto-fix 回退归 runtime 既有链）', () => {
-    expect(resolveDefaultSyncAfterScopedWrite([], providers)).toBeNull()
+    expect(resolveDefaultSyncAfterScopedWrite([], providers, routes)).toBeNull()
   })
 
   it('新首位 provider 不在目录或已禁用：返回 null（跳过同步保留现有 default）', () => {
-    expect(resolveDefaultSyncAfterScopedWrite(['ghost/gone'], providers)).toBeNull()
-    expect(resolveDefaultSyncAfterScopedWrite([buildAggregationModelRef('x')], providers)).toBeNull()
-    expect(resolveDefaultSyncAfterScopedWrite(['opencode-go/glm-5.2'], providers)).toBeNull()
+    expect(resolveDefaultSyncAfterScopedWrite(['ghost/gone'], providers, routes)).toBeNull()
+    expect(resolveDefaultSyncAfterScopedWrite(['opencode-go/glm-5.2'], providers, routes)).toBeNull()
+    // 聚合条目不在目录（零启用路由时不注入聚合壳条目）→ provider 级即拦
+    expect(resolveDefaultSyncAfterScopedWrite([buildAggregationModelRef('alpha')], providers.filter(p => p.id !== AGGREGATION_PROVIDER_ID), routes)).toBeNull()
+  })
+
+  it('路由引用 provider 级通过后补路由级判定：停用路由返回 null（不被写成 default）', () => {
+    // gamma 已停用（enabled=false）：目录注入条目恒无 enabled 字段，provider 级检查对
+    // 聚合条目恒通过——路由级判定是唯一能拦住停用路由的写侧防线（对齐读取侧
+    // findValidDefaultModel 聚合分支判定维度：停用路由写成 default 会被 auto-fix 冲掉）。
+    expect(resolveDefaultSyncAfterScopedWrite([buildAggregationModelRef('gamma')], providers, routes)).toBeNull()
+  })
+
+  it('路由引用 provider 级通过后补路由级判定：悬空路由（routes 域无该 id）返回 null', () => {
+    expect(resolveDefaultSyncAfterScopedWrite([buildAggregationModelRef('ghost-route')], providers, routes)).toBeNull()
+  })
+
+  it('启用的路由引用：返回写侧目标（provider 级 + 路由级双过）', () => {
+    expect(resolveDefaultSyncAfterScopedWrite([buildAggregationModelRef('alpha')], providers, routes)).toEqual({
+      ref: buildAggregationModelRef('alpha'), provider: AGGREGATION_PROVIDER_ID, modelId: 'alpha',
+    })
   })
 
   it('正常首位：返回写侧目标（provider/modelId 拆解；modelId 段可含 "/" 的复合串同型支持）', () => {
-    expect(resolveDefaultSyncAfterScopedWrite(['zhipu/glm-5.3'], providers)).toEqual({
+    expect(resolveDefaultSyncAfterScopedWrite(['zhipu/glm-5.3'], providers, routes)).toEqual({
       ref: 'zhipu/glm-5.3', provider: 'zhipu', modelId: 'glm-5.3',
     })
-    expect(resolveDefaultSyncAfterScopedWrite(['zhipu/a/b'], providers)).toEqual({
+    expect(resolveDefaultSyncAfterScopedWrite(['zhipu/a/b'], providers, routes)).toEqual({
       ref: 'zhipu/a/b', provider: 'zhipu', modelId: 'a/b',
     })
   })
@@ -393,7 +422,7 @@ describe('A10 默认编排决策：resolveDefaultSyncAfterScopedWrite', () => {
   it('删除路由后清理使首位变化：新首位成为默认目标（V14 默认同步语义的数据半边）', () => {
     const scoped = [buildAggregationModelRef('beta'), 'zhipu/glm-5.3']
     const cleaned = scopedModelsWithRouteRemoved(scoped, 'beta')
-    expect(resolveDefaultSyncAfterScopedWrite(cleaned, providers)).toEqual({
+    expect(resolveDefaultSyncAfterScopedWrite(cleaned, providers, routes)).toEqual({
       ref: 'zhipu/glm-5.3', provider: 'zhipu', modelId: 'glm-5.3',
     })
   })

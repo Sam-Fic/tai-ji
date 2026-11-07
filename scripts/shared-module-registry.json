@@ -2,6 +2,10 @@
   "_comment": "@taiji/shared 模块准入登记（D14：立模块准入规则 + 机器检查）。准入规则与机器检查 = scripts/check-shared-module-admission.mjs（头注释成文）。新模块进 packages/shared/src/ 必须同步在本表登记 purpose（一句话跨包理由），检查脚本对账磁盘与登记双向一致——不登记即红。模块发现覆盖子目录：顶层文件按文件名登记；src 一级子目录按目录级条目登记（`<dir>/` 形态，一个目录一个准入声明，其下文件增删不再逐个登记）。purpose 取模块头注释首句，描述整个模块而非文件内某一块；头注释缺失的模块应补头注释（新模块义务）。",
   "modules": [
     {
+      "file": "aggregation.ts",
+      "purpose": "模型路由（aggregation model）配置域契约根：类型全集 + 校验/标记纯函数（provider-aggregation D2 路由配置 schema 唯一定义点），runtime 写侧校验、路由页视图编排、设置页 UI 与 pi provider-aggregation 扩展共用同一套类型与判别语义，杜绝多端漂移。"
+    },
+    {
       "file": "archive.ts",
       "purpose": "session 归档域共享契约（session-archive 设计 §7 D3 簿记 schema + D5 RPC 消息，实施计划 u-foundation：类型 + 词表 + 解析校验的单一权威源）。"
     },
@@ -144,6 +148,10 @@
     {
       "file": "protocol.ts",
       "purpose": "Client→Runtime WS 协议消息类型 SSOT（消息枚举与 type→payload 映射的唯一权威源，runtime ↔ renderer 双侧共享）。"
+    },
+    {
+      "file": "provider-store-paths.ts",
+      "purpose": "provider 域跨进程落盘文件（providers.json / quota-cache.json）路径纯公式：runtime 写侧（pi-paths / provider-extras-store / quota-cache）与 pi 子树读侧（subagent-core scoped-models、provider-aggregation 扩展）同源消费的单一权威公式——「同一函数」即一致性本体，零 node 内置 import（拼接为 joinPath 纯计算，session-store-paths 先例同域）。"
     },
     {
       "file": "provider.ts",

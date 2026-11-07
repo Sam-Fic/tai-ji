@@ -36,6 +36,7 @@
     "shared": [
       "packages/shared/src/aggregation.ts",
       "packages/shared/src/network-proxy.ts",
+      "packages/shared/src/provider-store-paths.ts",
       "packages/shared/src/provider.ts",
       "packages/shared/src/retry-rules.ts"
     ]
@@ -73,11 +74,16 @@
     "packages/runtime/src/transport/__tests__/aggregation-message-handler.test.ts",
     "packages/runtime/src/services/__tests__/provider-config-helper-route-view.test.ts",
     "packages/runtime/src/services/__tests__/quota-fetch-many.test.ts",
-    "packages/shared/src/__tests__/provider.test.ts"
+    "packages/shared/src/__tests__/provider-store-paths.test.ts",
+    "packages/shared/src/__tests__/provider.test.ts",
+    "packages/runtime/src/services/__tests__/route-preview-differential.test.ts"
   ],
   "sharedBy": {
     "packages/runtime/src/services/__tests__/aggregation-new-route-binding.test.ts": [
       "chat"
+    ],
+    "packages/runtime/src/services/__tests__/route-preview-differential.test.ts": [
+      "settings"
     ]
   },
   "contracts": [],

@@ -10,7 +10,7 @@
  */
 import type { WebSocket as WsType } from 'ws'
 import type { ClientMessage } from '@taiji/shared'
-import { isAggregationModelRef } from '@taiji/shared'
+import { aggregationRouteIdFromRef, isAggregationModelRef } from '@taiji/shared'
 import type { SettingsHandlerContext } from './settings-message-handler.js'
 import { isModelRef, parseModelSelector } from '@zhushanwen/subagent-core'
 import { toErrorMessage } from '../utils/errors.js'
@@ -168,6 +168,18 @@ export class ModelMessageHandler {
       if (!providerInfo || providerInfo.enabled === false) {
         console.warn(`[settings-handler] setScopedModels: scoped[0] "${firstModel}" 的 provider 不可用（${providerInfo ? '已禁用' : '不在 providers 列表'}），跳过 default 同步，保留现有 default`)
         return false
+      }
+      // 聚合保留 id（provider 段 = 聚合保留 id）在 provider 级之上补路由级判定：
+      // routeId 须在 routes 域存在且 enabled（判定维度对齐读取侧 findValidDefaultModel
+      // 聚合分支）——停用/悬空路由写成 default 会被 getDefaultModel 聚合分支判不可用
+      // 并 auto-fix 改写（静默破坏「第一位即默认」），跳过同步保留现有 default
+      const routeId = aggregationRouteIdFromRef(firstModel)
+      if (routeId !== undefined) {
+        const route = this.ctx.configService.readAggregationRoutes().routes.find(r => r.id === routeId)
+        if (!route || !route.enabled) {
+          console.warn(`[settings-handler] setScopedModels: scoped[0] "${firstModel}" 的路由不可用（${route ? '已停用' : '不存在'}），跳过 default 同步，保留现有 default`)
+          return false
+        }
       }
       const currentDefault = this.ctx.configService.getDefaultModel()
       if (!currentDefault || `${currentDefault.provider}/${currentDefault.modelId}` !== firstModel) {

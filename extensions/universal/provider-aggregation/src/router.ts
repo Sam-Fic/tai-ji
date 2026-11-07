@@ -30,6 +30,7 @@
 
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { AggregationMember, AggregationRoute } from "@taiji/shared/aggregation";
+import { PI_THINKING_LEVELS } from "@taiji/shared/pi-preset";
 
 /** 端点额度快照（route 求值的额度输入形态）。由 index.ts 经 QuotaCacheReader 组装
  * （quota-cache.json 新鲜条目投影）；map 缺 provider 键 / undefined = 未知。 */
@@ -86,17 +87,13 @@ export type RouteEvaluation =
 	| { outcome: "candidates", memberIndexes: readonly number[] }
 	| { outcome: "no-candidate", members: readonly MemberEvaluation[] }
 
-/** pi 七档全集与档位序（pi-ai EXTENDED_THINKING_LEVELS，dist/models.js:680——
- * off < minimal < low < medium < high < xhigh < max；D7 向上取档的序锚）。 */
-export const THINKING_LEVEL_ORDER: readonly ModelThinkingLevel[] = [
-	"off",
-	"minimal",
-	"low",
-	"medium",
-	"high",
-	"xhigh",
-	"max",
-]
+/** pi 七档全集与档位序（单源 = @taiji/shared/pi-preset PI_THINKING_LEVELS——序锚
+ * pi-ai dist/models.js:680，off < minimal < low < medium < high < xhigh < max；
+ * D7 向上取档的序基准）。pi 增删档位只改 shared 单点：删档方向由消费侧残余
+ * 手抄副本对本类型的编译期断言红灯（增档不触发——并集扩宽不产生不相容），
+ * 增档方向由 scripts/check-thinking-levels.mjs T4 对账兜住（pre-commit 按
+ * pnpm-lock.yaml / pi-preset.ts 等触发文件挂载）。 */
+export const THINKING_LEVEL_ORDER: readonly ModelThinkingLevel[] = PI_THINKING_LEVELS;
 
 /** 每小时分钟数（墙钟落格与 `HH:mm` 解析共用的换算锚）。 */
 const MINUTES_PER_HOUR = 60

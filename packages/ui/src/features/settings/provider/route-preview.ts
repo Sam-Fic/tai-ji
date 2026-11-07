@@ -7,7 +7,12 @@
  * UI 预览不 import 扩展侧代码（包边界）。穷举语义一致性守护两层：坐标维度 = shared
  * aggregation.ts TIME_WINDOW 常量单源（本模块与 RouteTimeGrid 均从 shared 取值，
  * 改维度 UI 侧编译期红灯）；求值语义 = 两侧各自单测对照 route-matrix.md 矩阵逐格实现
- *（无自动对拍，改判定式须两侧同批核对）。
+ * + 跨实现对拍（对照验证，differential testing）测试（runtime
+ * src/services/__tests__/route-preview-differential.test.ts：同一 fixture 矩阵喂扩展
+ * evaluateRoute 与本模块 evaluateRouteAt 断言同结论；宿主在 runtime = 对拍先例
+ * aggregation-catalog-consistency 同域，且 UI tsconfig rootDir 不纳跨包源码）
+ * ——window 缺表 fail-open 与 specials 覆盖顺序两处历史分歧已对齐扩展侧语义，改任一侧
+ * 判定式对拍必红。
  *
  * 时间机制红线对齐（ADR-0190）：本模块零定时器。「实时」语义 = 打开/展开路由页时点取
  * 墙钟求值一次（事件驱动：组件 mount 传入），不做周期刷新。
@@ -136,15 +141,18 @@ function withinSpecialWindow(sp: AggregationSpecialDate, slot: number): boolean 
 
 /**
  * 时间窗判定（单端点 @ 单格）：特殊日期优先于周表（D13）——exclude 全天判窗外；
- * include 仅区间内判窗内、区间外回落周表；无特殊日期按周表。
+ * include 仅区间内判窗内、区间外回落周表；无特殊日期按周表。window 表缺失
+ *（type=window/combo 而无 window 字段——校验层不按 type 拒绝字段留驻）= 无约束判满足
+ *（fail-open 同族：缺失数据不判死）——与 pi 扩展侧 isWithinTimeWindow 同语义同序
+ *（specials 先于缺表；跨实现对拍测试 route-preview-differential.test.ts 锁定两侧同结论）。
  */
 export function isWindowAt(member: AggregationMember, now: RouteNow, route: AggregationRoute, nowDate: string): boolean {
-  if (!member.window) return false
   const sp = specialOverrideFor(route.specials, nowDate)
   if (sp) {
     if (sp.mode === 'exclude') return false
     if (withinSpecialWindow(sp, now.slot)) return true
   }
+  if (!member.window) return true
   return member.window[now.dow]?.[now.slot] === true
 }
 
