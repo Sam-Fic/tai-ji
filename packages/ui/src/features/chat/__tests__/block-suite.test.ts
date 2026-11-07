@@ -133,10 +133,10 @@ describe('error-visibility M2: Block text 分支 error 形态判定（TC1/TC3）
 })
 
 /* ── error-visibility M1：failed tool header danger 色 + 终态默认展开（TC1-3）──
- * - T1: toolStatusClass failed 分支 → text-danger（unfinished 保持中性灰）
+ * - T1: failed(error) 图标染 text-danger（行文字保持中性档，失败色不传染文字）
  * - T2: toolCollapsed 终态分化——failed(error) 初值 false（展开），其余 true（收起）
  * - CQ1: streaming 中失败不展开（mount 快照，running→error 不 remount），本测试覆盖终态挂载分支
- * stub / makeToolCall / mountToolBlock 经 ./helpers 共享（与 BlockWorkflow.test.ts 公共样板提取） */
+ * stub / makeToolCall / mountToolRow 经 ./helpers 共享（与 BlockWorkflow.test.ts 公共样板提取） */
 
 describe('error-visibility M1: failed tool header danger + 终态展开（TC1-3）', () => {
   it('TC1: failed(error) 行文字恒中性 text-neutral-mid，失败色常驻落在图标 text-danger（M3b demo 形态：.tool .t-name 恒 mid + .line.subagent.failed .sicon）', () => {
@@ -799,7 +799,10 @@ describe('bash running 行形态（方案 A：命令常显 + 工具名扫光，2
     const nameSpan = header.findAll('span').find((s) => s.text() === 'bash')
     expect(nameSpan).toBeTruthy()
     expect(nameSpan!.classes()).toContain('text-sweep')
-    expect(nameSpan!.classes()).toContain('[--sweep-base:var(--neutral-mid)]')
+    // base=mid 覆盖走内联 :style 声明——任意属性类挂法编译产物特异性 (0,1,0) 恒被
+    // scoped 规则 (0,2,0) 压住（真机 getComputedStyle 实测确证），覆盖必须内联才生效
+    expect(nameSpan!.attributes('style')).toContain('--sweep-base')
+    expect(nameSpan!.attributes('style')).toContain('var(--neutral-mid)')
     // 命令 span（收起态可见，无 invisible）不带扫光——扫光只扫工具名不扫命令
     const cmdSpan = header.findAll('span').find((s) => s.text() === CMD)
     expect(cmdSpan).toBeTruthy()
