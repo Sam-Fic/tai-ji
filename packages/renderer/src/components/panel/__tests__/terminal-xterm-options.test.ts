@@ -14,4 +14,20 @@ describe('resolveXtermFontOptions 终端字体栈', () => {
     expect(resolveXtermFontOptions({ fontFamily: '   ' }).fontFamily).toBe(DEFAULT_FONT_FAMILY)
     expect(resolveXtermFontOptions(undefined).fontFamily).toBe(DEFAULT_FONT_FAMILY)
   })
+
+  it('家族名含双引号 → 按字符串转义包裹，防 font-family 声明被破坏静默回落', () => {
+    const options = resolveXtermFontOptions({ fontFamily: 'My "Font" Pro' })
+    expect(options.fontFamily).toBe(`"My \\"Font\\" Pro", ${DEFAULT_FONT_FAMILY}`)
+  })
+
+  it('家族名含反斜杠 → 转义包裹', () => {
+    const options = resolveXtermFontOptions({ fontFamily: 'Foo\\Bar' })
+    expect(options.fontFamily).toBe(`"Foo\\\\Bar", ${DEFAULT_FONT_FAMILY}`)
+  })
+
+  it('家族名不含引号/反斜杠 → 保持裸拼形态不变', () => {
+    expect(resolveXtermFontOptions({ fontFamily: 'Maple Mono' }).fontFamily).toBe(
+      `Maple Mono, ${DEFAULT_FONT_FAMILY}`,
+    )
+  })
 })

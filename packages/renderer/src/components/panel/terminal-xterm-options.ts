@@ -22,7 +22,16 @@ export interface TerminalFontConfigSource {
   cursorStyle?: 'bar' | 'block' | 'underline'
 }
 
-/** 从 settings store 的 terminalConfig 解析 xterm 渲染选项；config 未加载时用默认值。 */
+/**
+ * 家族名按 CSS 字符串形态转义引用：家族名本身含 `"` 或 `\` 时裸拼会破坏 font-family
+ * 声明，xterm canvas 解析失败静默回落默认字体（FileFontSource 导入的字体元数据家族名
+ * 不受控，可含任意字符）。其余家族名保持裸拼（与 DEFAULT_FONT_FAMILY 中 `Menlo` 等既有形态一致）。
+ */
+function quoteCssFamily(family: string): string {
+  return /["\\]/.test(family) ? `"${family.replace(/(["\\])/g, '\\$1')}"` : family
+}
+
+/** 从 settings store terminalConfig 解析 xterm 渲染选项；config 未加载时用默认值。 */
 export function resolveXtermFontOptions(cfg: TerminalFontConfigSource | undefined): {
   fontFamily: string
   fontSize: number
@@ -31,7 +40,7 @@ export function resolveXtermFontOptions(cfg: TerminalFontConfigSource | undefine
 } {
   return {
     fontFamily: cfg?.fontFamily?.trim()
-      ? `${cfg.fontFamily.trim()}, ${DEFAULT_FONT_FAMILY}`
+      ? `${quoteCssFamily(cfg.fontFamily.trim())}, ${DEFAULT_FONT_FAMILY}`
       : DEFAULT_FONT_FAMILY,
     fontSize: cfg?.fontSize ?? DEFAULT_FONT_SIZE,
     scrollback: cfg?.scrollback ?? DEFAULT_SCROLLBACK,
