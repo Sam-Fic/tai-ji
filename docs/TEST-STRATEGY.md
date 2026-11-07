@@ -7,7 +7,7 @@
 > **各功能具体测试步骤**（MOCK/非MOCK/Playwright 调用链 + 每步期望输入输出）见 [docs/testing/](docs/testing/) 测试手册（2026-09 并册为 4 册）：
 > - [00-overview.md](docs/testing/00-overview.md) — 总览（双轨制 + Playwright harness + 公共前置 + E2E 常见坑，入口篇必读）+ 手册索引 + 真实进程层手工手册（RT-01~08）+ 真实进程层自动化 spec（真 Electron + runtime + pi + LLM，零 mock）
 > - [01-chat-panel-composer.md](docs/testing/01-chat-panel-composer.md) — 对话主链：新建任务（Landing + 选目录 + 首发提交）/ Composer（输入框 + slash 命令浮层 + 三态）/ 对话流（流式消息 + 工具调用 + 变更集）
-> - [02-panels-sidebar.md](docs/testing/02-panels-sidebar.md) — 面板与侧栏：文件树（懒加载 + 过滤 + git 角标，11 E2E 用例已落地）/ SideDrawer（文件预览 / diff / git tab）/ 搜索浮层（⌘K 四类搜索 + recents + 跳转，7 E2E 用例已落地）/ GUI 组件渲染 / Subagent-Workflow 面板 / 后台命令侧边栏
+> - [02-panels-sidebar.md](docs/testing/02-panels-sidebar.md) — 面板与侧栏：文件树（懒加载 + 过滤 + git 角标，11 E2E 用例已落地）/ 抽屉 DrawerPanel（原 SideDrawer，已迁 ui 包；文件预览 / diff / git tab）/ 搜索浮层（⌘K 四类搜索 + recents + 跳转，7 E2E 用例已落地）/ GUI 组件渲染 / Subagent-Workflow 面板 / 后台命令侧边栏
 > - [03-runtime-extensions.md](docs/testing/03-runtime-extensions.md) — runtime 服务与 extension：系统提示词配置 / extension 层运行时测试体系（worker harness L1 → real LLM L3，价值层级 + 决策树）/ 插件系统非 mock E2E / 自动升级验证
 
 ## 1. 测试框架 [HISTORICAL]
@@ -425,7 +425,7 @@ taste/no-silent-catch 处理：纯 console.warn 仍报（要求传播/重抛）�
 | `file-tree.spec.ts` | R1（1 条：E2E-1）+ R2（其余 9 条） | R2 触发：改 `FileView` / `FileTreeRow` / `useFileTree` / fileTreeStore / mock `file.tree` 时跑。E2E-3b 已退役 R3（2026-09-15 清理）：diff 视图已从 raw diff 文本（`diff --git` 头）改为结构化 hunk 渲染（`@@ … @@`），断言过期；git 可追溯 |
 | `failure-paths.spec.ts` | R1（1 条：A12）+ **R3 初判**（A13：pi 崩溃→重建） | A13 退役理由初判：TAIJI_MOCK=1 不起 runtime，崩溃重建链路在 mock 层不可达，现断言范围（title + 基础 UI 可见）与 harness smoke 重复、无守护价值；真实崩溃重建由 L2.5（真 pi 进程线）承接。**待 L2.5 调研线终判后再动文件** |
 | `workspace.spec.ts` | R2（3 条） | 触发：改 `workspaceStore` / DirSelectPopover / mockApi.workspace 门面时跑（含 §4「store 必须走 @/api 门面」基线） |
-| `gui-components.spec.ts` | R2（2 条） | 触发：改 `Block.vue`（`__gui__` tool result 渲染）/ SideDrawer terminal/browser tab 时跑。路径 A ×2 已退役 R3（2026-09-15 清理）：SideDrawer 内 `gui-stats-line` / `gui-list-tree` testid 不存在（widgetGui 渲染链路改版）；git 可追溯 |
+| `gui-components.spec.ts` | R2（2 条） | 触发：改 `ToolRow.vue` / `process-aggregate/AggregateToolDetailDrawer.vue`（`__gui__` tool result 渲染链——chat-flow-process-aggregate D4 后 `Block.vue` 已退役删除，card 经聚合块摘要行→单步行→工具详情抽屉富渲染，非聚合块路径 ToolRow 保留）时跑。路径 A ×2 已退役 R3（2026-09-15 清理）：SideDrawer（容器已迁 ui 包更名 DrawerPanel）内 `gui-stats-line` / `gui-list-tree` testid 不存在（widgetGui 渲染链路改版）；git 可追溯 |
 
 **行为 mock 层 real spec（`*-real.spec.ts`，6 个）**：需真实 runtime（不设 TAIJI_MOCK）+ real renderer bundle，其中 ask-user-real / tasks-drawer-real / workflow-thinkinglevel-real 含真实 LLM 调用——**不在此终判**，移交 L2.5（真 pi + faux LLM 调研线）/ L3（触发式回归设计线）终判；倾向初判：models-json-sanitize-real / workspace-real 为凭证无关 real 进程资产（create session 不调 LLM），适合 L2.5 承接（update-cleanup-real 已于 2026-09-15 升级进 CI 固定环节并更名 update-cleanup.spec.ts，见上表；tray-entry-real 归宿见下方真实进程层小节）。
 

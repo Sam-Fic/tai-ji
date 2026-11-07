@@ -793,14 +793,14 @@ pnpm dev    # 非 MOCK 层，起 runtime + pi
 | `gui-card` | Card | `rendering-protocol/primitives/Card.vue` |
 | `gui-columns` | Columns | `rendering-protocol/primitives/Columns.vue` |
 | `gui-list-tree` | ListTree | `rendering-protocol/primitives/ListTree.vue` |
-| `tool-block-header` | Block tool 块 header（点击展开） | `features/chat/Block.vue` |
+| `tool-block-header` | Tool tool 块 header（点击展开；对话流主链过程段已收进聚合块——chat-flow-process-aggregate D1 后仅 ChangeSetCard 等非聚合块路径可达） | `features/chat/ToolRow.vue` |
 | `drawer-tab-{key}` | DrawerPanel tab 按钮（终态 8 员，key=git/doc/detail/subagent/bashTask/plan/btw/workflow——terminal 迁底抽屉、browser 删除；与同文件「组件结构概述」及首份文档覆盖节枚举同源，避免双处枚举漂移） | `features/drawer/DrawerPanel.vue` |
 
 ## 2. 渲染路径概述
 
 两条渲染路径都收敛到 `GuiComponentRenderer` 按 `BUILTIN_MAP[type]` 路由到具体 primitive 组件：
 
-- **路径 B（消息流）**：extension tool 返回 `details.__gui__` → runtime event-adapter 随 `message.tool_call_end` 下发 → 前端把 details 存入 toolCall → `Block.vue` 的 guiComponent computed 提取组件 → GuiComponentRenderer 渲染。
+- **路径 B（消息流）**：extension tool 返回 `details.__gui__` → runtime event-adapter 随 `message.tool_call_end` 下发 → 前端把 details 存入 toolCall → 对话流过程段收进聚合块，工具详情抽屉 `process-aggregate/AggregateToolDetailDrawer.vue` 经 GuiComponentRenderer 富渲染（chat-flow-process-aggregate D4，`Block.vue` 已退役删除）；非聚合块路径 `ToolRow.vue` 保留 GuiComponentRenderer 渲染。
 - **路径 A（SideDrawer widget）[已退役 2026-09-16]**：extension 调 `ctx.ui.setWidget(key, [NUL_MARKER + JSON])` → runtime event-adapter 检测 marker、JSON.parse 并 isGuiComponent 校验 → 以 `extension:widgetGui` 帧下发 → 前端 dispatchSession 后由抽屉容器消费，按 widgetKey 挂到对应 tab → GuiComponentRenderer 渲染。**消费端已迁 composer 任务托盘 widget 区**（现行 = `TrayWidgetButton`/`TrayWidgetPanel` 经 ViewHostStore `getViewIds`/`getView` 消费；SideDrawer 不再挂 widget，上述抽屉消费形态为历史描述，git 可追溯）。
 
 Mock 模式跳过 runtime event-adapter：`run-send-stream.ts` 直接 `pushSession` 推已解码的 `extension:widgetGui`。
@@ -838,9 +838,9 @@ Mock 模式跳过 runtime event-adapter：`run-send-stream.ts` 直接 `pushSessi
 |---|---|---|
 | 1 | 激活 s3 session（'API 性能优化'） | `composer-box` 可见 |
 | 2 | 输入 'GUI 测试' + Enter | stop-btn 出现 → 消失（流式完成） |
-| 3 | 点击 `.turn-meta` | 展开 turn trace（完成后默认收起） |
-| 4 | 点击 `tool-block-header` | tool 块展开 |
-| 5 | 断言 `gui-card` | 可见，含 'CI Pipeline' |
+| 3 | 点击 `agg-summary-row`（首行） | 聚合条展开（`agg-expanded` 可见；chat-flow-process-aggregate D1 后回合落成收摘要行，旧「点 `.turn-meta` 展开 trace → 点 `tool-block-header`」四层折叠链已退役） |
+| 4 | 点击 `agg-tool-row`（首行） | 工具详情抽屉 `tool-detail-drawer` 打开（D4 富渲染通道） |
+| 5 | 断言 `gui-card`（抽屉内富渲染） | 可见，含 'CI Pipeline' |
 | 6 | 断言 `gui-progress-bar` | 可见，含 'build' '7' '8' |
 | 7 | 断言 `gui-stats-line` | 可见，含 'turns' '15' |
 
