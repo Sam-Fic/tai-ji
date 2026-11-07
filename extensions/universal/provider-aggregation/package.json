@@ -29,11 +29,12 @@
     "skills/"
   ],
   "dependencies": {
-    "@taiji/shared": "workspace:*",
+    "@zhushanwen/extension-protocol": "workspace:*",
     "@zhushanwen/pi-extension-logger": "workspace:*"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "1.0.0",
+    "@taiji/shared": "workspace:*",
     "@vitest/coverage-v8": "^4.1.9",
     "vitest": "^4.1.8"
   },

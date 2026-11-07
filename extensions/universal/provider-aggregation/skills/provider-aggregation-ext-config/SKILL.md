@@ -26,7 +26,7 @@ description: "使用或排查 @zhushanwen/pi-provider-aggregation（模型路由
 
 ## routes schema（权威源 = @taiji/shared aggregation 域）
 
-schema 唯一定义点在 `@taiji/shared` 的 aggregation 域（`packages/shared/src/aggregation.ts`
+schema 唯一定义点在 `@zhushanwen/extension-protocol/aggregation`（`packages/extension-protocol/src/aggregation.ts`
 的 `AggregationRoutesFile` / `parseAggregationRoutesSection`）；下文是消费侧摘要，冲突时以
 该模块为准。
 
@@ -173,5 +173,5 @@ simple 模式最小形态：`members` 只留一个 `"type": "none"` 端点、`sp
 ## 相关
 
 - 行为总览：本包 `README.md`（注册派生规则、求值语义摘要）。
-- schema 与校验唯一权威：`packages/shared/src/aggregation.ts`（@taiji/shared aggregation 域）。
+- schema 与校验唯一权威：`packages/extension-protocol/src/aggregation.ts`（@zhushanwen/extension-protocol/aggregation 子出口）。
 - 求值行为契约矩阵：`docs/design/provider-aggregation-route-matrix.md`。

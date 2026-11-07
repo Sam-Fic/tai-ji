@@ -188,7 +188,7 @@ export type {
   AggregationQuotaFreshnessProbe,
   AggregationProviderRouteRef,
   AggregationProviderRouteRefs,
-} from './aggregation'
+} from '@zhushanwen/extension-protocol/aggregation'
 export {
   AGGREGATION_PROVIDER_ID,
   AGGREGATION_ROUTES_VERSION,
@@ -217,7 +217,7 @@ export {
   collectOrphanAggregationRefs,
   collectProviderRouteRefs,
   isAggregationQuotaDataFresh,
-} from './aggregation'
+} from '@zhushanwen/extension-protocol/aggregation'
 // v1→v2 discovery.json 迁移纯函数（discovery-migrate.ts）
 export { migrateDiscoveryV1ToV2 } from './discovery-migrate'
 export type { ToolPermission, ThemeMode, ThemePreset } from './settings'

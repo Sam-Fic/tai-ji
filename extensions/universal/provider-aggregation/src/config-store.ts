@@ -1,7 +1,7 @@
 /**
  * providers.json routes 段读取（扩展侧只读，设计 D2/SC3/SC5）。
  *
- * 路径公式 SSOT = @taiji/shared/provider-store-paths 纯模块（getProviderExtrasPath
+ * 路径公式 SSOT = @zhushanwen/extension-protocol/provider-store-paths 纯模块（getProviderExtrasPath
  * 纯函数，agentDir 入参；写侧 runtime pi-paths 与另一读侧 subagent-core scoped-models
  * 同源消费，公式漂移结构上不可能）。本模块只补扩展侧基址：pi 官方 getAgentDir
  * （尊重 PI_CODING_AGENT_DIR，taiji 托管形态下即 <dataDir>/agent）。providers.json
@@ -27,8 +27,8 @@
 import { readFileSync, statSync } from "node:fs";
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { getProviderExtrasPath as sharedGetProviderExtrasPath } from "@taiji/shared/provider-store-paths";
-import { parseAggregationRoutesSection, type AggregationRoutesFile } from "@taiji/shared/aggregation";
+import { getProviderExtrasPath as sharedGetProviderExtrasPath } from "@zhushanwen/extension-protocol/provider-store-paths";
+import { parseAggregationRoutesSection, type AggregationRoutesFile } from "@zhushanwen/extension-protocol/aggregation";
 
 /** providers.json 绝对路径（延迟调用 getAgentDir——模块加载期 pi 环境未必就绪）。
  * 公式本体 = shared provider-store-paths 纯模块（与 runtime 写侧同源）。 */

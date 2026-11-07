@@ -14,7 +14,7 @@
  */
 
 import type { ExtensionVirtualModel } from "@earendil-works/pi-coding-agent";
-import { AGGREGATION_PROVIDER_ID, type AggregationRoute } from "@taiji/shared/aggregation";
+import { AGGREGATION_PROVIDER_ID, type AggregationRoute } from "@zhushanwen/extension-protocol/aggregation";
 import { unionThinkingLevels } from "./router.ts";
 
 /** 注册条目元数据形状（ExtensionVirtualModel 去 route 闭包——派生面只覆盖静态元数据，

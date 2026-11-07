@@ -2,7 +2,7 @@
  * quota-cache.json 只读通道（provider-aggregation D3/SC5，M2 接线增量）。
  *
  * 写侧唯一 = runtime QuotaCache（packages/runtime/src/services/quota-cache.ts）；路径
- * 公式 SSOT = @taiji/shared/provider-store-paths 纯模块（getQuotaCachePath 纯函数，
+ * 公式 SSOT = @zhushanwen/extension-protocol/provider-store-paths 纯模块（getQuotaCachePath 纯函数，
  * dataDir 入参，写侧同源消费，公式漂移结构上不可能）。扩展侧经 pi 官方 getAgentDir()
  * 推导 <dataDir>（设计 AS6：taiji 托管形态 agentDir = <dataDir>/agent，runtime spawn
  * 注入的 PI_CODING_AGENT_DIR 值同源）——独立 pi 用户（agentDir = ~/.pi/agent）下推导
@@ -28,8 +28,8 @@ import { readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { getQuotaCachePath as sharedGetQuotaCachePath } from "@taiji/shared/provider-store-paths";
-import { isAggregationQuotaDataFresh, type AggregationQuotaFreshnessProbe } from "@taiji/shared/aggregation";
+import { getQuotaCachePath as sharedGetQuotaCachePath } from "@zhushanwen/extension-protocol/provider-store-paths";
+import { isAggregationQuotaDataFresh, type AggregationQuotaFreshnessProbe } from "@zhushanwen/extension-protocol/aggregation";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 
 import type { RouteQuotaSnapshot } from "./router.ts";

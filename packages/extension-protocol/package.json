@@ -18,6 +18,14 @@
     "./scheduler-store": {
       "types": "./src/scheduler-store-entry.ts",
       "import": "./src/scheduler-store-entry.ts"
+    },
+    "./aggregation": {
+      "types": "./src/aggregation.ts",
+      "import": "./src/aggregation.ts"
+    },
+    "./provider-store-paths": {
+      "types": "./src/provider-store-paths.ts",
+      "import": "./src/provider-store-paths.ts"
     }
   },
   "publishConfig": {

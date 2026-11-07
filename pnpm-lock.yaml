@@ -606,9 +606,9 @@ importers:
       '@earendil-works/pi-coding-agent':
         specifier: 1.0.0
         version: 1.0.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(ws@8.21.0)(zod@3.25.76)
-      '@taiji/shared':
+      '@zhushanwen/extension-protocol':
         specifier: workspace:*
-        version: link:../../../packages/shared
+        version: link:../../../packages/extension-protocol
       '@zhushanwen/pi-extension-logger':
         specifier: workspace:*
         version: link:../../shared/extension-logger
@@ -616,6 +616,9 @@ importers:
       '@earendil-works/pi-ai':
         specifier: 1.0.0
         version: 1.0.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.21.0)(zod@3.25.76)
+      '@taiji/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       '@vitest/coverage-v8':
         specifier: ^4.1.9
         version: 4.1.9(vitest@4.1.9)

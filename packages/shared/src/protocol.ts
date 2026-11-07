@@ -8,7 +8,7 @@ import type {
   AggregationRouteDeleted,
   AggregationRouteSaved,
   AggregationRouteView,
-} from './aggregation'
+} from '@zhushanwen/extension-protocol/aggregation'
 import type { SessionGroup, SessionSummary, SessionStatus, SessionDataSource, SessionSurface } from './session'
 import type { FileChange, ChangeSetStatus, Message } from './message'
 // delivery 域帧 DTO（投递所有权内核 D7/ADR-0043）：segments 快照供草稿恢复

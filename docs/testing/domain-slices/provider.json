@@ -31,12 +31,13 @@
     ],
     "extension": [
       "extensions/universal/provider-aggregation/src/**",
-      "extensions/universal/provider-live-sync/src/**"
+      "extensions/universal/provider-live-sync/src/**",
+      "packages/extension-protocol/src/aggregation.ts",
+      "packages/extension-protocol/src/provider-store-paths.ts"
     ],
     "shared": [
-      "packages/shared/src/aggregation.ts",
-      "packages/shared/src/network-proxy.ts",
       "packages/shared/src/provider-store-paths.ts",
+      "packages/shared/src/network-proxy.ts",
       "packages/shared/src/provider.ts",
       "packages/shared/src/retry-rules.ts"
     ]

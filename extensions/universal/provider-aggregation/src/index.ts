@@ -49,7 +49,7 @@
 
 import type { ExtensionAPI, ExtensionContext, ExtensionVirtualModel, ModelRoute, ModelRouteRequest } from "@earendil-works/pi-coding-agent";
 import { getLogger, setPiHandle } from "@zhushanwen/pi-extension-logger";
-import type { AggregationRoute } from "@taiji/shared/aggregation";
+import type { AggregationRoute } from "@zhushanwen/extension-protocol/aggregation";
 import { RoutesConfigReader, type ConsumedRoutesSectionRead } from "./config-store.ts";
 import { QuotaCacheReader } from "./quota-cache-reader.ts";
 import {
