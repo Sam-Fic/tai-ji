@@ -18,7 +18,7 @@
 // - 按需加载（游标扩窗，渲染不虚拟化 §7.1——ChatView 全量渲染窗口内消息）
 // - M-7 撤回常显：deps.onRevokeMessage 接线（UserBubble msg-revoke-button 常显，
 //   core useChat.revokeMessage 单点路由）——v1 :70-72 原样保留
-// - M-8 运行中 bash 停止：deps.abortBash 接线（ToolRow 停止入口）——v1 :65-67 原样保留
+// - M-8 运行中 bash 停止：deps.abortBash 接线（UI 消费 = BashOutputBlock 取消按钮，turn.notices 链）——v1 :65-67 原样保留
 // - hover 族 no-op（M-9）/ mermaid 占位降级 / 图片粘贴降级（M-13）/ markdown 渲染桥接
 import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -58,7 +58,7 @@ const deps: ChatViewDeps = {
   // 操作回调
   toggleExpand: (turnKey) => expansion.toggle(turnKey),
   // [chat-flow-consistency C3] ChatViewDeps.collapse 已随 Turn.vue onComplete 接线退役删除
-  // [M-8] 运行中 bash 停止入口（ToolRow 停止按钮消费）——v1 :65-67 接线原样保留
+  // [M-8] 运行中 bash 停止入口（UI 消费 = BashOutputBlock 取消按钮，turn.notices 链）——v1 :65-67 接线原样保留
   abortBash: (sid) => {
     void useChatInstance.abortBash(sid)
   },
