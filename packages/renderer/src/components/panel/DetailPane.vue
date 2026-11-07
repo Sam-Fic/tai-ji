@@ -151,8 +151,8 @@
       </div>
     </div>
 
-    <!-- 加载态（骨架，AC-6.6/T6.7：异步返回前非空白；本条起是 loading/error/idle/binary/
-         内容区互斥 v-if 链——v16 前链头是 HTML 渲染态，退役后由 loading 领链） -->
+    <!-- 加载态（AC-6.6：异步返回前非空白；spinner 形态，detail-loading testid；本条起是
+         loading/error/idle/binary/内容区互斥 v-if 链——v16 前链头是 HTML 渲染态，退役后由 loading 领链） -->
     <div
       v-if="state.status === 'loading'"
       class="flex flex-1 flex-col items-center justify-center gap-2 p-4"

@@ -1,7 +1,7 @@
 <!--
-  展示组件 · 工具行（trace 块 tool / agentgraph 类型行组件，W2 壳化拆分自 Block.vue）。
-.trace-blk 类名契约归 Turn.vue 单元 wrapper、block-tool-<id> testid 随 Block 转发壳
-  退役（聚合块内成员行形态由 SegmentToolRow 承载），本组件根 =
+  展示组件 · 工具行（trace 块 tool / agentgraph 类型行组件）。
+.trace-blk 类名契约归 Turn.vue 单元 wrapper、block-tool-<id> testid 已退役
+  （聚合块内成员行形态由 SegmentToolRow 承载），本组件根 =
   原 tool 分支根 div（.trace-tool），无新 DOM 层。
   agentgraph 数据结构同 tool（ToolCall），Turn 层 type 语义与渲染分派在本组件内统一：
   按工具名两分——subagent → SubagentRow / 其余（含 workflow 工具组）普通 tool 形态。
@@ -39,7 +39,7 @@
              箭头（tool-cmd），命令字符串常显；扫光只扫「bash」工具名，不扫命令。 -->
         <RunningBlockIcon v-if="isRunning && !isBashTool" :kind="toolRunningKind" />
         <component :is="headerBlockIcon" v-else :class="[headerIconClass, 'self-center']" />
-        <span class="shrink-0 normal-case tracking-normal transition-opacity duration-[var(--duration-fast)] group-hover/tool:opacity-80" :class="isBashTool && isRunning ? 'text-sweep [--sweep-base:var(--neutral-mid)]' : ''">{{ toolName }}</span>
+        <span class="shrink-0 normal-case tracking-normal transition-opacity duration-[var(--duration-fast)] group-hover/tool:opacity-80" :class="isBashTool && isRunning ? 'text-sweep' : ''" :style="isBashTool && isRunning ? { '--sweep-base': 'var(--neutral-mid)' } : undefined">{{ toolName }}</span>
         <!-- running + 有流式输出：单行尾行视口（同 thinking header 结构：leading-normal
              字体无关行高 + mr-auto 短行左贴/溢出钉右 + 纵向状态机滑入）；否则静态 shortenForHeader。
              bash 不进尾行视口（2026-10-17 方案 A 裁决：running 中 header 保持命令字符串，
@@ -438,7 +438,7 @@ function openFileDetail(path: string): void {
    opacity + 轻微 translateY（从 header 方向淡入），120ms；保持 v-if 卸载折叠块的长输出
    （不做 grid 恒渲染，避免 streaming 中折叠块长 bash 输出恒挂载的性能代价）。
    escape hatch：Vue Transition 类用 scoped 表达（enter-from/leave-to 同时设 opacity+transform）。
-   与 Block.vue 壳内 run-group 展开区各持一份同款规则——scoped 样式只作用于本组件
+   与 ThinkingRow.vue 展开区各持一份同款规则——scoped 样式只作用于本组件
    模板元素。 */
 .block-expand-enter-active,
 .block-expand-leave-active {
