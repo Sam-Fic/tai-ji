@@ -83,6 +83,8 @@ export default taijiTestConfig({
             // 此处排除防跨池重复收集（显式路径 / E2E 档全文件跑由 live 池承载）
             '!test/updater.e2e.test.ts',
             'update/__tests__/**/*.test.ts',
+            // font:read-bytes 纯校验 + 注入 IO（无真实 fs），归 legacy 池
+            'gateway/__tests__/**/*.test.ts',
             '../scripts/__tests__/**/*.test.mjs',
           ],
         },

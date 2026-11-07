@@ -3,7 +3,7 @@
   <!-- split-justified: detail 文件预览域（多文件 tab 实例层 + header 动作 + 四态内容渲染 + 选区反推行号——同一预览面板语义域；display-containers W3 tab 条接入后 script 超 300，按登记制放行） -->
   <!--
     DetailPane —— 文件预览面板（#6，UC-6，对齐 draft-detail-pane.html）。
-    文件内容 / diff 预览，挂在 SideDrawer detail tab；顶部实例层 tab 条承载多文件
+    文件内容 / diff 预览，挂在 DrawerPanel detail tab；顶部实例层 tab 条承载多文件
     （display-containers §6.3：detail 多文件 tab，keep-alive 多实例）。
 
     HTML 形态（chat-html-support v16 形态变更，§6.4 D4）：.html/.htm 走 code 类 shiki
@@ -151,8 +151,8 @@
       </div>
     </div>
 
-    <!-- 加载态（骨架，AC-6.6/T6.7：异步返回前非空白；本条起是 loading/error/idle/binary/
-         内容区互斥 v-if 链——v16 前链头是 HTML 渲染态，退役后由 loading 领链） -->
+    <!-- 加载态（AC-6.6：异步返回前非空白；spinner 形态，detail-loading testid；本条起是
+         loading/error/idle/binary/内容区互斥 v-if 链——v16 前链头是 HTML 渲染态，退役后由 loading 领链） -->
     <div
       v-if="state.status === 'loading'"
       class="flex flex-1 flex-col items-center justify-center gap-2 p-4"
@@ -311,7 +311,7 @@ import { FileText, Loader2, AlertCircle, Image as ImageIcon, Copy, Check, Quote,
 import { Button } from '@/components/ui/button'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import { useDetailPane, type DetailViewMode } from '@/composables/features/file-tree/useDetailPane'
-import { useCopy } from '@/composables/panel/useCopy'
+import { useCopy } from '@/composables/useCopy'
 import { composerInjectionStore } from '@/composables/panel/composer-injection-store'
 import { extToLang } from '@/composables/logic/file-type'
 import { resolvePreviewPath } from '@/lib/path-utils'
@@ -331,7 +331,7 @@ const contentRef = ref<HTMLElement | null>(null)
 const selectionRange = ref<{ lineStart: number; lineEnd: number } | null>(null)
 
 const props = defineProps<{
-  /** widget 订阅的 session 标识（与 SideDrawer sessionId 一致，useDetailPane watch 用） */
+  /** widget 订阅的 session 标识（与 DrawerPanel sessionId 一致，useDetailPane watch 用） */
   sessionId: string | null
 }>()
 

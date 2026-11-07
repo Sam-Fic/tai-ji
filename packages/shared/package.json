@@ -10,6 +10,14 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     },
+    "./aggregation": {
+      "types": "./src/aggregation.ts",
+      "import": "./src/aggregation.ts"
+    },
+    "./pi-preset": {
+      "types": "./src/pi-preset.ts",
+      "import": "./src/pi-preset.ts"
+    },
     "./paths": {
       "types": "./src/paths.ts",
       "import": "./src/paths.ts"
@@ -21,6 +29,10 @@
     "./session-store-paths": {
       "types": "./src/session-store-paths.ts",
       "import": "./src/session-store-paths.ts"
+    },
+    "./provider-store-paths": {
+      "types": "./src/provider-store-paths.ts",
+      "import": "./src/provider-store-paths.ts"
     },
     "./plugin-permission-map": {
       "types": "./src/plugin-permission-map.ts",

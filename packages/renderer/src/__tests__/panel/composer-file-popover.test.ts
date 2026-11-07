@@ -45,7 +45,9 @@ import { createPinia, setActivePinia } from 'pinia'
 import fs from 'node:fs'
 import path from 'node:path'
 import * as events from '@taiji/core/transport/api'
-import { Turn, Block } from '@taiji/ui'
+import { Turn } from '@taiji/ui'
+import ToolRow from '@taiji/ui/features/chat/ToolRow.vue'
+import ThinkingRow from '@taiji/ui/features/chat/ThinkingRow.vue'
 import type { Message, ToolCall, FileNode, GenStatsDistribution, GenStatsFrame } from '@taiji/shared'
 import { useChatStore } from '@/stores/chat'
 import { useToast } from '@/composables/useToast'
@@ -439,8 +441,9 @@ afterEach(() => {
       global: {
         provide: mockChatProvide({ onFork: onForkMock, onForkAsk: onForkAskMock }),
         stubs: {
-          // Block 不 stub：[actions-anchor] 起 TurnSummary 经 Block 的 #turn-actions 具名插槽
-          // 挂载，stub 不渲染具名插槽会连操作栏一起丢掉
+          // MarkdownRenderer 必 stub（异步 shiki）；TextRow/聚合块族真渲染——
+          // [actions-anchor] 起 TurnSummary 经 Turn.vue 正文单元 wrapper 的 #turn-actions
+          // 具名插槽直传 TextRow，stub 不涉及该链路
           ChangeSetCard: true,
           MarkdownRenderer: true,
         },
@@ -483,7 +486,7 @@ afterEach(() => {
       expect(wrapper.findAll('[data-testid="fork-ask-btn"]').length).toBe(1)
       // fork 按钮与复制按钮在同一容器（action 行，4 个并列按钮：纯文本复制已退役，
       // 2026-10-15 裁决；[actions-anchor] 起 .turn-summary = 操作栏行本体，定位与显隐在
-      // Block 的插槽包装层）
+      // Turn.vue 正文单元 wrapper 与 TextRow 锚行）
       const actionRow = wrapper.find('.turn-summary')
       expect(actionRow.exists()).toBe(true)
       expect(actionRow.find('[data-testid="fork-ask-btn"]').exists()).toBe(true)
@@ -643,8 +646,8 @@ afterEach(() => {
 
   describe('W3: 普通 tool 展开体去重复 + 加补充细节条', () => {
     it('展开后不重复打印 toolName(args) 行（header 已有）', async () => {
-      const wrapper = mount(Block, {
-        props: { type: 'tool', tool: makeTool(), working: false },
+      const wrapper = mount(ToolRow, {
+        props: { tool: makeTool() },
         global: { provide: mockChatProvide() },
       })
       await wrapper.find('[data-testid="tool-block-header"]').trigger('click')
@@ -657,8 +660,8 @@ afterEach(() => {
     })
 
     it('展开后 result 区无 Check/XCircle 图标（header 状态指示已覆盖）', async () => {
-      const wrapper = mount(Block, {
-        props: { type: 'tool', tool: makeTool({ output: 'success result' }), working: false },
+      const wrapper = mount(ToolRow, {
+        props: { tool: makeTool({ output: 'success result' }) },
         global: { provide: mockChatProvide() },
       })
       await wrapper.find('[data-testid="tool-block-header"]').trigger('click')
@@ -674,8 +677,8 @@ afterEach(() => {
     })
 
     it('展开后显示补充细节条（耗时，从 startTime+endTime 计算）', async () => {
-      const wrapper = mount(Block, {
-        props: { type: 'tool', tool: makeTool({ startTime: 1000, endTime: 3000 }), working: false },
+      const wrapper = mount(ToolRow, {
+        props: { tool: makeTool({ startTime: 1000, endTime: 3000 }) },
         global: { provide: mockChatProvide() },
       })
       await wrapper.find('[data-testid="tool-block-header"]').trigger('click')
@@ -686,8 +689,8 @@ afterEach(() => {
     })
 
     it('展开后结果文本仍可见（去重复不影响结果展示）', async () => {
-      const wrapper = mount(Block, {
-        props: { type: 'tool', tool: makeTool({ output: 'file content here' }), working: false },
+      const wrapper = mount(ToolRow, {
+        props: { tool: makeTool({ output: 'file content here' }) },
         global: { provide: mockChatProvide() },
       })
       await wrapper.find('[data-testid="tool-block-header"]').trigger('click')
@@ -696,12 +699,8 @@ afterEach(() => {
     })
 
     it('失败 tool 终态挂载默认展开 error 直显（584869378 §3.3.1 选项 A），无鲜红框——Demo H 去鲜红', async () => {
-      const wrapper = mount(Block, {
-        props: {
-          type: 'tool',
-          tool: makeTool({ status: 'error', output: 'old_string not found', startTime: 1000, endTime: 1200 }),
-          working: false,
-        },
+      const wrapper = mount(ToolRow, {
+        props: { tool: makeTool({ status: 'error', output: 'old_string not found', startTime: 1000, endTime: 1200 }) },
         global: { provide: mockChatProvide() },
       })
       // failed 终态挂载默认展开（错误输出立即可见），error text 通过 displayContent 兜底显示
@@ -720,12 +719,8 @@ afterEach(() => {
   describe('W3 补充：read/bash 工具特化 meta（行数/字符数自算）', () => {
     it('read 工具展开后细节条含行数 + 字符数 + 耗时', async () => {
       const fileContent = 'line1\nline2\nline3' // 3 行 17 字符
-      const wrapper = mount(Block, {
-        props: {
-          type: 'tool',
-          tool: makeTool({ toolName: 'read', output: fileContent, startTime: 1000, endTime: 3000 }),
-          working: false,
-        },
+      const wrapper = mount(ToolRow, {
+        props: { tool: makeTool({ toolName: 'read', output: fileContent, startTime: 1000, endTime: 3000 }) },
         global: { provide: mockChatProvide() },
       })
       await wrapper.find('[data-testid="tool-block-header"]').trigger('click')
@@ -740,12 +735,8 @@ afterEach(() => {
 
     it('bash 工具展开后细节条不含行数统计（filteredMetaItems 已过滤），只有耗时', async () => {
       const output = 'stdout line1\nstdout line2\nstdout line3\nstdout line4'
-      const wrapper = mount(Block, {
-        props: {
-          type: 'tool',
-          tool: makeTool({ toolName: 'bash', output, startTime: 1000, endTime: 5200 }),
-          working: false,
-        },
+      const wrapper = mount(ToolRow, {
+        props: { tool: makeTool({ toolName: 'bash', output, startTime: 1000, endTime: 5200 }) },
         global: { provide: mockChatProvide() },
       })
       await wrapper.find('[data-testid="tool-block-header"]').trigger('click')
@@ -760,12 +751,8 @@ afterEach(() => {
 
     it('read 大文件字符数格式化为 XK 字符（>1000 字符）', async () => {
       const bigContent = 'x'.repeat(2500) // 1 行 2500 字符
-      const wrapper = mount(Block, {
-        props: {
-          type: 'tool',
-          tool: makeTool({ toolName: 'read', output: bigContent, startTime: 1000, endTime: 2000 }),
-          working: false,
-        },
+      const wrapper = mount(ToolRow, {
+        props: { tool: makeTool({ toolName: 'read', output: bigContent, startTime: 1000, endTime: 2000 }) },
         global: { provide: mockChatProvide() },
       })
       await wrapper.find('[data-testid="tool-block-header"]').trigger('click')
@@ -774,12 +761,8 @@ afterEach(() => {
     })
 
     it('edit 工具细节条只有耗时（output 是简短确认，行数无意义）', async () => {
-      const wrapper = mount(Block, {
-        props: {
-          type: 'tool',
-          tool: makeTool({ toolName: 'edit', output: 'done', startTime: 1000, endTime: 1500 }),
-          working: false,
-        },
+      const wrapper = mount(ToolRow, {
+        props: { tool: makeTool({ toolName: 'edit', output: 'done', startTime: 1000, endTime: 1500 }) },
         global: { provide: mockChatProvide() },
       })
       await wrapper.find('[data-testid="tool-block-header"]').trigger('click')
@@ -791,18 +774,14 @@ afterEach(() => {
     })
 
     it('read 失败时错误移至内容区（displayContent 兜底 tool.error，终态挂载默认展开），meta 不含错误摘要', async () => {
-      const wrapper = mount(Block, {
-        props: {
-          type: 'tool',
-          tool: makeTool({
+      const wrapper = mount(ToolRow, {
+        props: { tool: makeTool({
             toolName: 'read',
             status: 'error',
             output: 'File not found: src/missing.ts',
             startTime: 1000,
             endTime: 1100,
-          }),
-          working: false,
-        },
+          }) },
         global: { provide: mockChatProvide() },
       })
       // failed 终态挂载默认展开（584869378）：错误文本通过 displayContent（兜底 tool.error）在内容区可见
@@ -1070,18 +1049,20 @@ afterEach(() => {
     }
   }
 
-  /** thinking 块 mount 单源（working/collapsed 差异经参数；MarkdownRenderer 走 mdStub）。 */
+  /** thinking 块 mount 单源（working/collapsed 差异经参数；MarkdownRenderer 走 mdStub）。
+   *  [chat-flow-process-aggregate U3] Block 壳退役 → ThinkingRow 直挂。 */
   function mountThinkingBlock(over: { working?: boolean; collapsed?: boolean } = {}) {
-    return mount(Block, {
-      props: { type: 'thinking', content: LONG_THINKING, ...over },
+    return mount(ThinkingRow, {
+      props: { content: LONG_THINKING, ...over },
       global: { provide: mockChatProvide(), stubs: { MarkdownRenderer: mdStub } },
     })
   }
 
-  /** tool 块 mount 单源（tool 对象 + working 差异经参数）。 */
+  /** tool 块 mount 单源（tool 对象；working 由 ToolRow 自态承担——Block 壳退役后该 prop 无转发面）。 */
   function mountToolBlock(tool: ReturnType<typeof makeTool>, working: boolean) {
-    return mount(Block, {
-      props: { type: 'tool', tool, working },
+    void working
+    return mount(ToolRow, {
+      props: { tool },
       global: { provide: mockChatProvide() },
     })
   }
@@ -1123,8 +1104,8 @@ afterEach(() => {
     })
 
     it('U4: working=false 点击 header 可 toggle', async () => {
-      const wrapper = mount(Block, {
-        props: { type: 'thinking', content: '短推理', working: false, collapsed: true },
+      const wrapper = mount(ThinkingRow, {
+        props: { content: '短推理', working: false, collapsed: true },
         global: { provide: mockChatProvide(), stubs: { MarkdownRenderer: mdStub } },
       })
       const header = wrapper.find('.cursor-pointer')
@@ -1205,12 +1186,8 @@ afterEach(() => {
     it('U13: end_not_received 初始收起，点击 header 可 toggle（不像 running 锁死）', async () => {
       // 给 output + endTime 让展开体有内容可验证 toggle（W3 重构后展开体无重复 toolName 行，
       // 改用 result 文本的可见性验证展开/收起，比依赖具体展开体结构更稳定）
-      const wrapper = mount(Block, {
-        props: {
-          type: 'tool',
-          tool: makeTool({ status: 'end_not_received', output: 'partial output', startTime: 1000, endTime: 2000 }),
-          working: false,
-        },
+      const wrapper = mount(ToolRow, {
+        props: { tool: makeTool({ status: 'end_not_received', output: 'partial output', startTime: 1000, endTime: 2000 }) },
         global: { provide: mockChatProvide() },
       })
       const header = wrapper.find('.cursor-pointer')

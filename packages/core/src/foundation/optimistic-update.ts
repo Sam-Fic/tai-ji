@@ -12,7 +12,7 @@
  *   调用方只声明「下一个值 + 持久化」。
  *
  * 典型调用点（收编前各处手写「快照→改→await→catch 回滚」）：settings-store.setSystem、
- * useScopedModels add/remove/move、useApiKeyAutoEnable.onToggleEnabled、usePiPresets
+ * useApiKeyAutoEnable.onToggleEnabled、usePiPresets
  * setDefault/create/update、RPC 设置项字段 module（setting-field）与各 System Section、
  * extension toggle 双组件（ExtensionActions 启用开关 / ExtensionDetail autoUpgrade）、
  * useQuotaConfigure.setEnabled（envelope ok:false 转 throw 走同一回滚语义）。

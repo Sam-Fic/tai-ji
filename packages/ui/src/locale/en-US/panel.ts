@@ -205,24 +205,36 @@ export default {
     // [u3 remove-turn-progress-bar] TurnMeta generated tokens (TurnMeta.vue, design §2.1/§2.4;
     // 2026-09 token 口径: sum of reported output tokens over all LLM calls in the turn, no estimation)
     generatedTokens: 'Generated {tokens} tokens',
-    traceExpandAll: 'Expand all ({count} steps)',
-    traceCollapse: 'Collapse to latest',
     traceFailed: '{count} failed',
-    // [run-group] run type group header (Block.vue group branch): type names mirror the zh literals
-    // (探索 / 改动 / 执行命令); the stat segment is "{count} steps" plus duration (appended by the
-    // renderer only when ≥1s); the failure clause reuses traceFailed — same failure-count domain.
+    // [run-group] group type-name and stat keys (consumed by aggregate block SegmentToolGroup /
+    // AggregateLiveWindows strip entries): type names mirror the zh literals (探索 / 改动 /
+    // 执行命令); the stat segment is "{count} steps" plus duration (appended by the renderer
+    // only when ≥1s); the failure clause reuses traceFailed — same failure-count domain.
     runGroupExplore: 'Explore',
     runGroupEdit: 'Edits',
     runGroupExec: 'Commands',
     runGroupSteps: '{count} steps',
+    // [process-aggregate] aggregate-block (process segment tri-state container) copy: summary row
+    // label / running word (shared by group head and live strip) / row-level failure tag /
+    // hover-card done word. The failure-count clause reuses traceFailed and the thinking word
+    // reuses thinkingBlock (same semantic domains, no second key set) — no retry-tag key:
+    // terminal-state ③ ruled retry tags unrendered (no structural signal), zero key demand.
+    aggProcessLabel: 'Process',
+    aggGroupRunning: 'running',
+    aggRowFailed: 'failed',
+    aggStatusDone: 'done',
+    // [process-aggregate] tool detail drawer (u-detail-drawer assembly): drawer title (shared
+    // by the shell fallback and the tool-name suffix) / running note / params & output section
+    // headings. Status words reuse the three keys above
+    // (aggGroupRunning/aggRowFailed/aggStatusDone), no second status word set.
+    aggDetailTitle: 'Details',
+    aggDetailStillRunning: 'Still running',
+    aggDetailParams: 'Parameters',
+    aggDetailOutput: 'Output',
     // [tool-detail-rich] tool detail rich-render labels (renderer ToolDetailRenderer)
     toolDetailNewFile: 'New file',
     toolDetailGitDiff: 'vs git HEAD',
     toolDetailDiffLoading: 'Loading diff…',
-    // [run-group] milestone badge (spec §3.6): the only signal today = first edit (core structural
-    // derivation: the turn's first completed edit/write; semantic milestones need an explicit
-    // upstream tag and are deliberately not keyword-derived)
-    runGroupMileFirstEdit: 'First edit',
     bashCancelled: 'cancelled',
     bashTimeout: 'timeout',
     bashOutputTruncated: 'Output truncated',
@@ -248,7 +260,7 @@ export default {
     turnTriggerBgNotifyContinued: 'resumed',
     // [system-notice-rendering-upgrade U6] boundary-row failure clause (D5 "· M failed", consumed by
     // Turn.vue): dedicated key, not reusing traceFailed ("{count} failed" belongs to the
-    // TraceCompactorRow compacted-row phrasing — different semantic domain)
+    // aggregate-block failure-count phrasing — different semantic domain)
     turnTriggerBgNotifyFailed: '{count} failed',
     // [bg-notice-fold] settled-turn folded label: segmented by
     // type (occurrence order deduped, "·" joined; elapsed stays as the single trailing number).
@@ -579,6 +591,15 @@ export default {
     placeholder: '\u2026',
     // Model popover row-end "default" tag (demo .pt): shown on the row matching config.defaults.defaultModel
     defaultTag: 'Default',
+    // Model route group title (U6): aggregation provider group label in the model picker
+    // (i18n-finalized key — runtime data side carries a fixed zh name; display side localizes)
+    routeGroupTitle: 'Model Routes',
+    // Model route row-end badge (U6/GL2): distinguishes route entries from physical models
+    routeBadge: 'Route',
+    // Route row hit endpoint (M3): endpoint name the route currently evaluates to ("Route → endpoint")
+    routeHitNow: 'Route → {name}',
+    // Route row with no hit right now (M3): route defined but no endpoint satisfies its conditions
+    routeNoHitNow: 'Route · no hit now',
     // Model + thinking aggregate entry (W3a single-icon button; click opens model list + thinking levels) title
     modelThinkingAggregateTitle: 'Model · Thinking',
   },
@@ -728,7 +749,9 @@ export default {
     taskFailed: 'Task creation failed: {error}',
     sendFailed: 'Failed to send message: {error}',
     // ── U4 model/thinking switch failures (model-switch-live-provider-sync §3.4) ──
-    // 5 new codes + general; the 4 pass-through codes fall back to `general`
+    // 4 new codes + 2 provider-aggregation codes (AGGREGATION_ROUTE_NOT_IN_SESSION /
+    // AGGREGATION_EXTENSION_DISABLED, per provider-aggregation design D1 ③/D9 ②) + general;
+    // the 4 pass-through codes fall back to `general`
     // (toast shows the backend message).
     modelSwitch: {
       general: 'Switch failed: {error}',
@@ -736,6 +759,8 @@ export default {
       modelNotFound: 'This model no longer exists — please pick another',
       providerCredentialMissing: 'This provider has no credential — add the API key in Settings',
       engineModelMissing: 'The engine has not picked up this model yet: retry in a couple of seconds if you just changed the config; if it keeps failing, check the provider config in Settings',
+      aggregationRouteNotInSession: 'This model route is not available in the current session yet (routes register when a session loads) — start a new session to use it',
+      aggregationExtensionDisabled: 'The model route extension is disabled — enable it in Extension Manager first',
     },
   },
   ambiguous: {

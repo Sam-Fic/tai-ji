@@ -1,10 +1,12 @@
 <!--
-  展示组件 · 正文块（trace 块 text 类型行组件，W1 壳化拆分自 Block.vue）。
-  壳根类名契约（.trace-blk / .trace-blk--text）与 data-testid 留在 Block 壳，本组件根 =
-  原 text 分支根 div（data-testid="block-text"），无新 DOM 层。
+  展示组件 · 正文块（trace 块 text 类型行组件）。
+.trace-blk / .trace-blk--text 类名契约归 Turn.vue 单元 wrapper，
+  本组件根 = 原 text 分支根 div（data-testid="block-text"），无新 DOM 层。
   职责：markdown 正文渲染 + error 独立追加行 + 行尾时刻 + turn-actions 锚行（Turn 级
-  hover actions 挂载位：壳层收到 #turn-actions 插槽时经 hasTurnActions 打开锚行，插槽
-  经壳透传挂入，显隐由 opacity 门控）。
+  hover actions 挂载位：Turn.vue 以 isActionsAnchor 判据经 hasTurnActions prop 打开
+  锚行并直传 #turn-actions 插槽，显隐由 opacity 门控）+ 正文入场动效挂点（chat-flow-process-aggregate
+  D10：.agg-text-enter 挂本组件根，判据经 entrance prop 传入、setup 期一次性捕获——
+  Turn.vue 单元 wrapper 不再承载入场类，见 entrance prop 注释）。
 -->
 <template>
   <!-- 正文 text 块：全 inline 统一正文样式，行类型字号/行高随 density 切档（remote-use-mobile-v2
@@ -17,7 +19,7 @@
        streaming-tail 光标在 Turn.vue trace 容器末尾（跟在所有 block 后，不受 contentBlocks 时序影响）。
        [M2 形态统一] 唯一 error 形态 = 追加形态：content 崩溃前正文保持原色（可为空），
        msg.error 独立 danger 行（错误文本只住 error 字段，永不染红正文）。 -->
-  <div data-testid="block-text" class="group/text relative flex flex-col" :class="[bodyDensityClass, textColorClass]">
+  <div data-testid="block-text" class="group/text relative flex flex-col" :class="[bodyDensityClass, textColorClass, entranceClass]">
     <!-- 正文行（原行容器原样下沉一层；textColorClass 上提到外层列容器，继承不变） -->
     <div class="flex items-start gap-[8px]">
       <div class="min-w-0 flex-1">
@@ -39,8 +41,8 @@
          透明底不再覆盖任何文字）。常驻 h-6 行占位（opacity 门控显隐，与 UserBubble
          mt-1+h-6 同参）；悬停区 = 外层 group/text（正文行 + 本行），按钮是本块 DOM
          子孙，移入按钮期间悬停态经 DOM 祖先传递不丢失。
-         锚行开关 = hasTurnActions（Block 壳以 $slots 判空传入——壳收到插槽时锚行恒渲染，
-         与拆分前 $slots 判空语义一致）。 -->
+         锚行开关 = hasTurnActions（Turn.vue 以 isActionsAnchor 判据传入——真值时锚行
+         恒渲染，可见度由 opacity 门控）。 -->
     <span
       v-if="hasTurnActions"
       class="mt-1 flex h-6 items-center gap-0.5 opacity-0 pointer-events-none transition-opacity duration-[var(--duration-fast)] group-hover/text:pointer-events-auto group-hover/text:opacity-100 group-focus-within/text:pointer-events-auto group-focus-within/text:opacity-100"
@@ -58,6 +60,10 @@ import type { MessageStatus } from '@taiji/shared'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import { formatClock } from './format-utils'
 import { useChatDensity } from './chat-view-deps'
+// 正文块入场动效形态（chat-flow-process-aggregate D10，300ms 上移 5px 淡入）：keyframes
+// 全局注入——scoped 编译器哈希改名后跨组件不可命中（RunningBlockIcon 先例——keyframes 与
+// 消费同块才自洽）；CSS import 随挂点从 Turn.vue 移入本组件（挂点 = 本组件根，见下）。
+import './process-aggregate/aggregate-motion.css'
 
 const props = defineProps<{
   /** 正文内容 */
@@ -66,6 +72,13 @@ const props = defineProps<{
    *  complete/缺省→text-neutral-fg（单调，不随兄弟 message 到达翻转）。
    *  由 Turn.vue 传 assistant.status === 'streaming'。 */
   streaming?: boolean
+  /** 正文入场动效判据（chat-flow-process-aggregate D10 一次性语义）：调用方按「真实到达」
+   *  求值（textUnitProps.entrance = 回合流式 ∧ 文本未定稿），本组件 setup 期捕获一次、此后
+   *  不随 prop 变化重判——钉挂集合只含 isStreaming 回合（useStreamingPin），流式回合不卸载、
+   *  挂载即首次插入；等待态工作回合（ask-user/compacting，不流式不入集合）滚出视口卸载、
+   *  滚回重挂时调用方判据已翻 false，不重放（D10：虚拟化卸载重挂载不得重放）。
+   *  缺省 = 不播入场动画。 */
+  entrance?: boolean
   /** 所属 assistant 消息终态（error 形态判定，SSOT §3.3.2）：
    *  status==='error' → 追加形态（content 崩溃前正文原色 + error 独立 danger 行）。
    *  [M2 形态统一] 纯 error 形态已消灭——错误文本只住 error 字段，content 恒为崩溃前
@@ -77,13 +90,17 @@ const props = defineProps<{
   messageTimestamp?: number
   /** 所属 session（透传给 MarkdownRenderer 供文件路径打开 DetailPane 用） */
   sessionId?: string | null
-  /** 壳层是否收到 #turn-actions 插槽（Block 壳 $slots 判空传入；真值时锚行恒渲染，
+  /** 是否挂载 #turn-actions 插槽（Turn.vue 以 isActionsAnchor 判据传入；真值时锚行恒渲染，
    *  可见度由 opacity 门控） */
   hasTurnActions?: boolean
 }>()
 
 /** error 终态：msg.error 有值（收口侧兜底保证非空；!! 防御漏网产出点）→ 独立 danger 行。 */
 const isAppendError = computed(() => props.status === 'error' && !!props.error)
+
+/** 正文入场动画类（D10 一次性）：setup 期按挂载时刻判据捕获，此后恒定——类恒挂不构成
+ *  重放（animation 单次播放后停在元素常态帧），v-memo 失效重渲染亦不重启。 */
+const entranceClass = props.entrance ? 'agg-text-enter' : ''
 
 /** 密度档（§6.2）：setup 期一次 inject；mobile = 16px/1.62 手机阅读档 */
 const density = useChatDensity()

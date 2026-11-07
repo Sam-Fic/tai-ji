@@ -6,21 +6,23 @@
 // 条目 "provider/modelId"）。写入方 = runtime 侧 ProviderExtrasStore
 //（packages/runtime/src/services/provider-extras-store.ts，设置页 UI 编辑）；读取方 =
 // 本模块（ModelConfigService 消费，派发校验链 + 模型清单注入器）。跨进程契约：
-// runtime 写、扩展进程读，文件即真相（每派发现读，无快照陈旧问题）。路径推导 =
-// pi 数据目录布局契约，与 runtime 侧 getProviderExtrasPath（pi-paths.ts）同构；
-// 两侧 agentDir 同源（runtime spawn pi 恒设 PI_CODING_AGENT_DIR env）。
+// runtime 写、扩展进程读，文件即真相（每派发现读，无快照陈旧问题）。路径公式 SSOT =
+// @taiji/shared/provider-store-paths 纯模块（runtime 写侧与 provider-aggregation
+// 扩展 config-store 同源消费，公式漂移结构上不可能）；本模块只传本进程 agentDir
+//（两侧 agentDir 同源：runtime spawn pi 恒设 PI_CODING_AGENT_DIR env）。
 //
 // 归一化 + 白名单断言的纯函数单源在 shared/scoped-models.ts（本文件 re-export，
 // barrel 单点导出）；空数组 = 白名单未启用 = 全量放行。
 
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+
+import { getProviderExtrasPath } from "@taiji/shared/provider-store-paths";
 
 export { assertModelWithinScoped, scopedModelKey } from "../../shared/scoped-models.ts";
 
-/** 白名单文件路径（pi 数据目录布局契约；见文件头）。 */
+/** 白名单文件路径（公式本体 = shared provider-store-paths 纯模块；见文件头）。 */
 export function getScopedModelsPath(agentDir: string): string {
-  return join(agentDir, "config", "providers.json");
+  return getProviderExtrasPath(agentDir);
 }
 
 /**

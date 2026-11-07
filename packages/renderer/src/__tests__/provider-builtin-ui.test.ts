@@ -49,11 +49,15 @@ const configMock = vi.hoisted(() => ({
 }))
 
 // wave-oauth：useProviderOAuth onMounted 订阅 4 个 auth.* 事件（缺则 TypeError 崩 mount）。
-// 组件 import 必须排在本装配与 vi.mock 注册之后：vite-node 按源码顺序执行 import，
-// 组件链首次拉入 '@/api' 即触发 mock 工厂，装配晚于工厂执行即 TDZ。
-import { authEventCbs } from './helpers/oauth-auth-events-mock'
-
-const configWithAuth = { ...configMock, ...authEventCbs() }
+// 装配必须走 vi.hoisted（vitest 4 module runner 全部静态 import 先于模块体执行：import 链
+// ——ProviderPage / model-picker-data 等——首次拉入 '@/api' 触发 mock 工厂时模块体尚未
+// 执行，模块体 const 彼时 TDZ；hoisted 块先于 import 执行，工厂执行期必然已初始化）。
+// authEventCbs 经工厂内动态 import：hoisted 阶段静态 import 不可用（其绑定初始化随
+// import 语句，同样晚于 hoisted 块）。
+const configWithAuth = await vi.hoisted(async () => {
+  const { authEventCbs } = await import('./helpers/oauth-auth-events-mock')
+  return { ...configMock, ...authEventCbs() }
+})
 
 // [U1 保留式改造] 原窄替换 { config, default: { config } } → spread 全门面 + 仅覆写 config
 vi.mock('@/api', async (importOriginal) => {

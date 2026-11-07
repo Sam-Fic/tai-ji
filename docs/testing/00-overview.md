@@ -10,7 +10,7 @@
 |----|---------|------|
 | [00-overview.md](./00-overview.md)（本册） | 总览（双轨制 / harness / 公共前置 / E2E 常见坑）+ 文档索引 + 真实进程层手工手册（RT-01~08）+ 真实进程层自动化 spec | 00-test-strategy-overview.md + README.md + 08-real-track-manual.md + 11-real-e2e-specs.md |
 | [01-chat-panel-composer.md](./01-chat-panel-composer.md) | 新建任务（Landing）/ Composer（slash 浮层 + 三态）/ 对话流（流式 + 工具 + 变更集） | 01-new-task.md + 02-composer.md + 03-chat-flow.md |
-| [02-panels-sidebar.md](./02-panels-sidebar.md) | 文件树 / SideDrawer / 搜索浮层（⌘K）/ GUI 组件渲染 / Subagent-Workflow 面板 / 后台命令侧边栏 | 04-file-tree.md + 05-side-drawer.md + 06-search-modal.md + 07-gui-components.md + 09-subagent-workflow-panel.md + 14-background-task-sidebar.md |
+| [02-panels-sidebar.md](./02-panels-sidebar.md) | 文件树 / DrawerPanel / 搜索浮层（⌘K）/ GUI 组件渲染 / Subagent-Workflow 面板 / 后台命令侧边栏 | 04-file-tree.md + 05-side-drawer.md + 06-search-modal.md + 07-gui-components.md + 09-subagent-workflow-panel.md + 14-background-task-sidebar.md |
 | [03-runtime-extensions.md](./03-runtime-extensions.md) | 系统提示词配置 / extension 层运行时测试体系 / 插件系统非 mock E2E / 自动升级验证 | 10-settings-system-prompt.md + 12-extension-runtime-testing.md + 13-plugin-e2e.md + update-e2e.md |
 | [visual/vlm-prompt-template.md](./visual/vlm-prompt-template.md) | VLM 视觉验证派发模板（TEST-STRATEGY 引用的 SSOT，独立不并入） | — |
 | [render-sampling.md](./render-sampling.md) | 渲染采样管道（基线采集/真机验收共用：CDP 连接/选择器/注入/等待信号/DOM 采样脚本资产 + 清单表；采样前必读，禁现场重写管道） | 2026-09-19 markdown HTML 支持验收脚本提炼 |
@@ -378,7 +378,7 @@ pnpm run build:e2e   # 或删除 dist/ 强制 globalSetup 重建
 - Composer / slash 命令 → [01-chat-panel-composer.md](./01-chat-panel-composer.md)
 - 对话流 / 流式消息 → [01-chat-panel-composer.md](./01-chat-panel-composer.md)
 - 文件树 → [02-panels-sidebar.md](./02-panels-sidebar.md)
-- SideDrawer → [02-panels-sidebar.md](./02-panels-sidebar.md)
+- DrawerPanel（原 SideDrawer，已迁 ui 包）→ [02-panels-sidebar.md](./02-panels-sidebar.md)
 - 搜索浮层 → [02-panels-sidebar.md](./02-panels-sidebar.md)
 - GUI 组件渲染 → [02-panels-sidebar.md](./02-panels-sidebar.md)
 - 真实进程层手工测试 → [00-overview.md](./00-overview.md)
@@ -502,17 +502,17 @@ pnpm run dev
 
 ### RT-02: tool call 真实执行（read/bash）
 
-**验证目标**：pi 工具调用 → runtime 事件翻译 → 前端 Block.vue 渲染
+**验证目标**：pi 工具调用 → runtime 事件翻译 → 前端对话流渲染（chat-flow-process-aggregate 聚合块形态）
 
 | 步骤 | 操作 | 期望 |
 |---|---|---|
 | 1 | 在 session 中输入「读一下 package.json 的内容」+ Enter | 消息发出，转菊花 |
-| 2 | 等待 | 消息流出现 tool 块（read 工具，收起态） |
-| 3 | 点击 tool 块 header 展开 | 显示 toolName(read) + 参数 + 输出 |
+| 2 | 等待 | 回合落成收成聚合块摘要行（思考/工具收进过程段聚合条） |
+| 3 | 点击摘要行展开 → 点击 read 工具单步行 | 打开工具详情抽屉，显示 toolName(read) + 参数 + 输出 |
 | 4 | 输出内容 | 含 `package.json` 的真实文件内容（非 mock 的「…文件内容…」） |
 | 5 | assistant 回复 | 基于 package.json 内容的合理回复 |
 
-**验证点**：tool 块的输出是**真实文件内容**（mock 层是「…文件内容（mock）…」，真实进程层是实际文件内容）。
+**验证点**：工具详情抽屉的输出是**真实文件内容**（mock 层是「…文件内容（mock）…」，真实进程层是实际文件内容）。
 
 ### RT-03: extension GUI 组件渲染（需安装 extension）
 
@@ -530,19 +530,20 @@ pnpm run dev
 
 **验证点**：tool 块展开后是**结构化 UI 组件**（卡片/进度条/树），不是 `{"variant":"elevated","body":[...]}` 这样的 JSON 文本。如果是 JSON 文本说明 GuiComponentRenderer 路由失败或 extension 没推 `__gui__`。
 
-### RT-04: SideDrawer widget 渲染（需安装 extension）
+### RT-04: composer 托盘 widget 渲染（需安装 extension）
 
-**验证目标**：extension 推送 `extension:widgetGui` → SideDrawer 渲染
+**验证目标**：extension 推送 `extension:widgetGui` → composer 任务托盘协议 widget 区渲染（icon 条目 + 展开面板，见 extension-gui-protocol.md §4.3 / §15.1 / §15.4）
+
+**前置**：用 `TAIJI_EXTENSION_PATHS` 启动 dev，安装了会推 widget 的 extension（如 pi-subagent-workflow）
 
 | 步骤 | 操作 | 期望 |
 |---|---|---|
-| 1 | 让 AI 执行一个会推 widget 的操作（如 subagent workflow） | — |
-| 2 | 点 PanelHeader 右侧的 drawer-toggle 按钮（PanelRight 图标） | SideDrawer 打开 |
-| 3 | terminal tab | 如果 extension 推了 terminal widget，显示结构化组件或纯文本 |
-| 4 | 切到 browser tab | 如果 extension 推了 browser widget，显示结构化组件 |
-| 5 | 切到 git tab | 显示 git 状态（如果是 git 仓库） |
+| 1 | 让 AI 执行一个会推 widget 的操作（如 subagent workflow） | composer 工具条左侧托盘 widget 区出现对应 icon 条目（`tray-widget-button`） |
+| 2 | hover 该 icon 条目 | 弹出托盘 widget 面板（`tray-widget-panel`），面板内 `GuiComponentRenderer` 按 `guiTree` 渲染结构化组件（list-tree/stats-line 等），非 JSON 文本 |
+| 3 | 让 AI 再执行一次同 key 的 widget 操作 | 同 key 条目覆盖更新（常驻 + 覆盖语义，不重复出条目） |
+| 4 | session 重开 / 切换 session | widget 条目消失（ViewHostStore per-session 缓存，不持久化） |
 
-**验证点**：SideDrawer 的 widget 是**实时推送**的（extension 执行时出现），不是持久化的（session 重开后清空）。
+**验证点**：托盘 widget 是**实时推送**的（extension 执行时出现，同 key 覆盖更新、`undefined` 清除），不是持久化的（session 重开/切换后清除）。
 
 ### RT-05: session 隔离（多 session 并行）
 

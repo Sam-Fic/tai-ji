@@ -175,6 +175,8 @@ export function createSettingsTransport(): SettingsTransport {
     preparePluginInstall: (packageSpec) => plugin.preparePluginInstall(packageSpec),
     confirmPluginInstall: (pluginId) => plugin.confirmPluginInstall(pluginId),
     cancelPluginInstall: (pluginId) => plugin.cancelPluginInstall(pluginId),
+    // 版本下拉数据源（plugin.listVersions → WS 帧 → runtime npm registry 元数据）
+    listPluginVersions: (packageName) => plugin.listPluginVersions(packageName),
     // 挂载位分区清理（U2 悬置二选一裁决①：Provider 页家族切换防陈旧）
     clearPluginMountUi: (mountId) => plugin.clearPluginMountUi(mountId),
   }

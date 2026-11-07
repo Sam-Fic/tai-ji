@@ -4,8 +4,9 @@
  * 验证 GUI 渲染协议的**对话流内**链路（tool result 路径）：
  *
  * 路径 B（tool result __gui__）:
- *   mock tool_call_end 携带 details.__gui__ → Block.vue extractGui 提取
- *   → GuiComponentRenderer 路由 → card 嵌套 progress-bar + stats-line 渲染
+ *   mock tool_call_end 携带 details.__gui__ → 聚合块摘要行 → 工具单步行 → 工具详情抽屉
+ *   AggregateToolDetailDrawer extractGui 提取（原 Block.vue 挂点已随 chat-flow-process-aggregate
+ *   D1 退役，提取链由抽屉承接）→ GuiComponentRenderer 路由 → card 嵌套 progress-bar + stats-line 渲染
  *
  * [R3 退役 2026-09-15] 路径 A ×2（extension:widgetGui → SideDrawer terminal/browser
  * tab 渲染）已删除：SideDrawer 内 gui-stats-line / gui-list-tree testid 已不存在
@@ -40,6 +41,12 @@ import { test, expect } from './fixtures/launch-app'
 async function activateSession(page: import('@playwright/test').Page): Promise<void> {
   // 侧栏默认 activeTab=sessions，直接等目标 session 可见（不点「会话」tab：icon-only 模式下
   // accessible name 被计数徽标文本抢占，见 v6-shell-baseline.spec.ts activateSession 注释）
+  // 5b13f3f59（基线内）起默认项目组缺省收起（localStorage 记忆）——会话行不进 DOM 时先展开组
+  if (!(await page.getByText('API 性能优化').first().isVisible().catch(() => false))) {
+    await page.getByTestId('default-project-head').click().catch(() => {});
+    await expect(page.getByText('API 性能优化').first()).toBeVisible({ timeout: 10_000 });
+  }
+
   await expect(page.getByText('API 性能优化')).toBeVisible({ timeout: 10_000 })
   await page.getByText('API 性能优化').click()
   await expect(page.getByTestId('composer-box')).toBeVisible({ timeout: 5_000 })
@@ -79,32 +86,22 @@ test.describe('GUI 组件渲染 E2E', () => {
     await expect(page.getByTestId('app-shell')).toBeVisible({ timeout: 10_000 })
   })
 
-  test('路径 B: tool result __gui__ → Block.vue → card 嵌套渲染', async ({ page }) => {
+  test('路径 B: tool result __gui__ → 聚合块成员行 → 抽屉富渲染 card（chat-flow-process-aggregate D1/D4 形态适配：Block.vue 退役，__gui__ card 经聚合块单步行 → 工具详情抽屉富渲染通道渲染）', async ({ page }) => {
     await activateSession(page)
     await sendMessageAndWaitComplete(page)
 
-    // turn-meta 条件点击（ui-signal-density D1 后适配）：s3 mock 的 workflow 托盘含 11 条演员
-    // （4 条 running）→ derivedStatus 恒 working → TurnMeta disabled，且 working 态 trace 已默认
-    // 展开（Turn.vue showTrace = isWorkingTurn || isExpanded），点击多余；enabled 分支 =
-    // 历史终态回合路径（trace 收起，需手动展开）。
-    const turnMeta = page.locator('.turn-meta').first()
-    await expect(turnMeta).toBeVisible({ timeout: 5_000 })
-    if (await turnMeta.isEnabled()) {
-      await turnMeta.click()
-    }
+    // 聚合块形态（D1）：回合落成收成摘要行；点摘要行展开该段全量（思考行 + 工具组 + 单步行，
+    // 组头纯标题无折叠入口，成员逐行全可见——无 run-group-header / tool-block-header 旧锚点）
+    const summaryRow = page.locator('[data-testid="agg-summary-row"]').first()
+    await expect(summaryRow).toBeVisible({ timeout: 15_000 })
+    await summaryRow.click()
+    await expect(page.locator('[data-testid="agg-expanded"]').first()).toBeVisible({ timeout: 10_000 })
 
-    // 组头分支（run 类型分组）：工具行按类型折进 run 组，read 单成员也成「探索 1 步」组，
-    // 挂载一律收起（2026-10-15 ①A 裁决：running 组也不例外，成员行不在 DOM，须先点组头展开）——
-    // 按 aria-expanded 判定，不无条件点。
-    const groupHeader = page.getByTestId('run-group-header')
-    if ((await groupHeader.count()) > 0 && (await groupHeader.first().getAttribute('aria-expanded')) === 'false') {
-      await groupHeader.first().click()
-    }
-
-    // trace 展开后，tool 块 header 可见（mock 推了 toolName='read'），点击展开 tool 详情
-    const toolHeader = page.getByTestId('tool-block-header')
-    await expect(toolHeader).toBeVisible({ timeout: 5_000 })
-    await toolHeader.click()
+    // 点首个单步行（mock 推了 toolName='read'）→ 打开工具详情抽屉（D4 富渲染通道）
+    const toolRow = page.getByTestId('agg-tool-row').first()
+    await expect(toolRow).toBeVisible({ timeout: 10_000 })
+    await toolRow.click()
+    await expect(page.getByTestId('tool-detail-drawer')).toBeVisible({ timeout: 10_000 })
 
     // 展开后 guiComponent 渲染出 card（mock details.__gui__ = card 嵌套 progress-bar + stats-line）
     // card 存在（递归渲染导致 gui-component-renderer 有多个，直接断言 gui-card 更精确）

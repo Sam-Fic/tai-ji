@@ -40,6 +40,7 @@ import {
   type NetworkProxyStatsRange,
   type NetworkProxyTestResult,
   type NetworkProxyValidationResult,
+  type AggregationRoute,
 } from '@taiji/shared'
 import type { IConfigService } from '../interfaces.js'
 import type { RenamePromptSnapshot } from './rename-session-config.js'
@@ -100,6 +101,8 @@ import {
   toggleProviderEnabled as toggleProviderEnabledImpl,
   deleteProvider as deleteProviderImpl,
   removeProviderByKind as removeProviderByKindImpl,
+  readAggregationRoutes as readAggregationRoutesImpl,
+  type AggregationRoutesReadResult,
   type ProviderExtrasServiceDeps,
   type SetProviderInput,
   type QuotaStateCleaner,
@@ -532,6 +535,30 @@ export class ConfigService implements IConfigService {
       throw new Error('[config-service] providerExtrasStore not available (scoped models write)')
     }
     return this.providerExtrasStore.modifyScopedModels(fn)
+  }
+
+  // ── Aggregation routes（模型路由域，provider-aggregation U9——与 Scoped Models 同为
+  //    providers.json 顶层域，暴露形态对称）──
+
+  /**
+   * routes 域读取（U1 读取入口转发：routes/scopedModels/悬空端点/失效引用/隔离呈报一次带出）。
+   * 恒注入前提检查同 getScopedModels（providerExtrasStore 缺席 = 构造错误，fail-fast 指向恢复动作）。
+   */
+  readAggregationRoutes(): AggregationRoutesReadResult {
+    if (!this.providerExtrasStore) {
+      throw new Error(
+        '[config-service] providerExtrasStore 未注入：readAggregationRoutes 需要 providers.json 存储能力（routes 读）。恢复：在组合根构造 ConfigService 时注入 providerExtrasStore；若调用点与 provider 无关，改用不触此法的实例',
+      )
+    }
+    return readAggregationRoutesImpl(this.configStore, this.providerExtrasStore, { authStorage: this.authStorage })
+  }
+
+  /** routes 域 RMW（锁内重读 → fn(current) → 原子写回；aggregation.saveRoute/deleteRoute 写入口）。 */
+  async modifyAggregationRoutes(fn: (current: AggregationRoute[]) => AggregationRoute[]): Promise<AggregationRoute[]> {
+    if (!this.providerExtrasStore) {
+      throw new Error('[config-service] providerExtrasStore not available (aggregation routes write)')
+    }
+    return this.providerExtrasStore.modifyAggregationRoutes(fn)
   }
 
   // ── Skill CRUD（委托 skill-config-helper）─────────────────────────

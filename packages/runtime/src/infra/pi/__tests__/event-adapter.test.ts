@@ -578,6 +578,50 @@ describe('[retry-sound] agent_end willRetry 透传 message.complete payload', ()
     expect(message.payload.willRetry).toBe(false)
   })
 })
+
+// U3/AX5 出站映射（凭据缺失）在 agent_end errorMessage 出口的接线：流前 throw（pi
+// resolveModel 凭据拦截，agg-error-presentation 剧本真机形态）不经 message_update 子
+// 事件、无 stream_error 帧——该形态唯一到达对话流错误呈现的通路就是本出口的
+// message.complete errorMessage，映射必须在此出口生效（stream_error 出口覆盖不到）。
+describe('agent_end errorMessage 凭据缺失结构化映射（虚拟路由 routed to 形态）', () => {
+  const ROUTED_CREDENTIAL_ERROR =
+    'Virtual model aggregation/agg-err-route routed to mockllm/ep-cred-a, which has no credentials.'
+
+  it('凭据缺失文本 → payload.errorMessage 替换为结构化呈现（端点名 + 恢复指引）', () => {
+    const message = completeOf(
+      translate(
+        agentEndEvent(false, {
+          role: 'assistant',
+          content: [],
+          stopReason: 'error',
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+          errorMessage: ROUTED_CREDENTIAL_ERROR,
+        }),
+        SID_RETRY,
+      ),
+    )
+    expect(message.payload.stopReason).toBe('error')
+    expect(message.payload.errorMessage).toContain('mockllm/ep-cred-a')
+    expect(message.payload.errorMessage).toContain('设置页')
+    expect(message.payload.errorMessage).not.toContain('routed to')
+  })
+
+  it('非凭据缺失错误文本原样透传（映射不吞厂商失败形态）', () => {
+    const message = completeOf(
+      translate(
+        agentEndEvent(false, {
+          role: 'assistant',
+          content: [],
+          stopReason: 'error',
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+          errorMessage: 'Provider 500',
+        }),
+        SID_RETRY,
+      ),
+    )
+    expect(message.payload.errorMessage).toBe('Provider 500')
+  })
+})
 describe('handleToolExecutionUpdate 三形态分发（判别式）', () => {
   it('content 数组形态 → detail=details + output + outputRaw（含 ANSI）', () => {
     const partialResult = {

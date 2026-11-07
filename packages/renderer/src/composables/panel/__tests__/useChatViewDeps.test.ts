@@ -68,7 +68,7 @@ vi.mock('@/composables/features/chat/useChat', () => ({
   useChat: () => ({ abortBash: vi.fn(), editAndResend: vi.fn() }),
 }))
 vi.mock('@/composables/panel/useTurnExpansion', () => ({
-  useTurnExpansion: () => ({ isExpanded: () => false, toggle: vi.fn(), collapse: vi.fn(), isTakeover: () => false, setTakeover: vi.fn() }),
+  useTurnExpansion: () => ({ isExpanded: () => false, toggle: vi.fn(), expand: vi.fn() }),
 }))
 vi.mock('@/composables/features/sidebar/useSidebar', () => ({
   useSidebar: () => ({ forkSession: vi.fn(), handoff: vi.fn() }),

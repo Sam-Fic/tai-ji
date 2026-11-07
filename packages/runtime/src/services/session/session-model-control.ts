@@ -9,6 +9,7 @@
  * 无 onSessionDisposed）。Facade 保留两方法一行委托（ISessionService 契约不变）。
  */
 import type { ProviderId } from '@taiji/shared'
+import { AGGREGATION_PROVIDER_ID, PI_CREDENTIAL_MISSING_PREFIX } from '@taiji/shared'
 import type { IPiEngine } from '../ports/pi-engine.js'
 import type { IManagedSessionView } from './types.js'
 import type { SessionReplicatedStates } from './session-state-projection.js'
@@ -23,6 +24,8 @@ import {
   MODEL_NOT_FOUND,
   PROVIDER_CREDENTIAL_MISSING,
   ENGINE_MODEL_MISSING,
+  AGGREGATION_ROUTE_NOT_IN_SESSION,
+  AGGREGATION_EXTENSION_DISABLED,
   PI_MODEL_NOT_FOUND_PREFIX,
 } from '../../utils/errors.js'
 import { logger } from '../../infra/logger.js'
@@ -60,6 +63,21 @@ export function isPiModelNotFoundError(e: unknown): boolean {
 }
 
 /**
+ * pi 凭据缺失判定词表（PI_CREDENTIAL_MISSING_PREFIX）与出站呈现映射
+ * （formatCredentialMissingPresentation）已上移 @taiji/shared provider.ts（C-comm-01
+ * 分层修复：凭据文案与 provider 语义同域，infra 出站消费方 event-adapter 改从 shared
+ * 直取，infra 不得反向 value import services 层）。此处 re-export 保持既有 services
+ * 调用方（含本域单测）不破；isPiCredentialMissingError 依赖 runtime utils 的
+ * toErrorMessage，原地保留。
+ */
+export { formatCredentialMissingPresentation } from '@taiji/shared'
+
+/** pi 凭据缺失错误文本判定（前缀匹配；切换链分型与出站呈现映射共用同一谓词）。 */
+export function isPiCredentialMissingError(e: unknown): boolean {
+  return toErrorMessage(e).startsWith(PI_CREDENTIAL_MISSING_PREFIX)
+}
+
+/**
  * SessionModelControl 装配依赖（窄注入，S5/D2 风格：原 Facade 字段/子模块直读的逐字等价面）。
  */
 export interface SessionModelControlDeps {
@@ -83,9 +101,17 @@ export interface SessionModelControlDeps {
   isModelRegistered(provider: string, modelId: string): boolean
   /**
    * provider 是否有可用凭据（apiKey 落盘 / OAuth / ambient / env_var 引用）。同一 fail-open
-   * 语义：无法证明缺凭据时不误报 `PROVIDER_CREDENTIAL_MISSING`。
+   * 语义：无法证明缺凭据时不误报 `PROVIDER_CREDENTIAL_MISSING`。聚合 provider 由 guards
+   * 侧豁免（虚拟 provider 无凭据是设计内形态，AS2/AS9）。
    */
   hasProviderCredential(provider: string): boolean
+  /**
+   * 模型路由扩展是否装载（U3/D9 ② 禁用态分型）：runtime 侧解析结果与 pi 进程装载态一致
+   * （装载过滤本就发生在 runtime spawn 编排——extension-filter 对 loadable=false 的 feature
+   * 层扩展不进 pi 进程）。生产 = ExtensionService 禁用态查询；未注入实现时按 fail-open
+   * 返 true（宁落「新建会话」指引，不误报「扩展已禁用」）。
+   */
+  isRouteExtensionLoadable(): boolean
 }
 
 export class SessionModelControl {
@@ -122,19 +148,48 @@ export class SessionModelControl {
   }
 
   /**
-   * `Model not found` 三型分型（U2，设计 §3.4）：pi 的错误文本只说明「引擎快照里没这个模型」，
-   * 三种成因由 taiji 侧两判分开——① 不在注册表 → `MODEL_NOT_FOUND`；② 在注册表但 provider
-   * 无凭据 → `PROVIDER_CREDENTIAL_MISSING`；③ 在注册表且凭据齐备 → `ENGINE_MODEL_MISSING`
-   * （快照未同步 or 配置含坏内容，两因不机器可分 → 双因文案，D11）。
-   * 非该文本的错误原样返回（不吞、不重包）。
+   * `Model not found` 分型 + 凭据缺失映射（U2 §3.4 三型 + U3/D1 ③/D4/D9 路由分支）：
+   * pi 的错误文本只说明「引擎侧拒绝」，成因由 taiji 侧两判分开。
+   *
+   * 分型序（按 pi setModel 实际发生顺序）：
+   * ① 凭据缺失（`No API key` 前缀，checkAuth 在快照查找之前）→ `PROVIDER_CREDENTIAL_MISSING`
+   *    （message 含端点标识 + pi 原文；renderer 按既有码映射恢复指引文案）；
+   * ② `Model not found` 前缀三分型：
+   *    - 不在 taiji 注册表 → `MODEL_NOT_FOUND`（真已不存在）；
+   *    - 路由条目（聚合 provider）且扩展禁用 → `AGGREGATION_EXTENSION_DISABLED`
+   *      （指引「在扩展管理中启用」——不落「新建会话」，新会话同样不装载扩展会循环）；
+   *    - 路由条目且扩展已装载 → `AGGREGATION_ROUTE_NOT_IN_SESSION`（运行中新建窗口：
+   *      taiji 注册表是磁盘派生即时可见、pi 进程在会话加载时注册，D1 ③ 时点差）；
+   *    - 物理模型无凭据 → `PROVIDER_CREDENTIAL_MISSING`；
+   *    - 其余 → `ENGINE_MODEL_MISSING`（双因文案）。
+   * 非命中文本的错误原样返回（不吞、不重包）。
    */
   private classifySetModelError(e: unknown, provider: string, modelId: string): unknown {
+    if (isPiCredentialMissingError(e)) {
+      return errorWithCode(
+        `provider has no credential: ${provider}/${modelId} (pi said: ${toErrorMessage(e)})`,
+        PROVIDER_CREDENTIAL_MISSING,
+      )
+    }
     if (!isPiModelNotFoundError(e)) return e
     const target = `${provider}/${modelId}`
     if (!this.deps.isModelRegistered(provider, modelId)) {
       return errorWithCode(
         `model not in taiji registry: ${target} (pi said: ${toErrorMessage(e)})`,
         MODEL_NOT_FOUND,
+      )
+    }
+    // 路由条目分支（D1 ③/D4/D9 ②）：taiji 注册表命中（注入层磁盘派生）但 pi 进程未注册。
+    if (provider === AGGREGATION_PROVIDER_ID) {
+      if (!this.deps.isRouteExtensionLoadable()) {
+        return errorWithCode(
+          `model route extension disabled: ${target} (pi said: ${toErrorMessage(e)})`,
+          AGGREGATION_EXTENSION_DISABLED,
+        )
+      }
+      return errorWithCode(
+        `model route not registered in this session yet: ${target} (pi said: ${toErrorMessage(e)})`,
+        AGGREGATION_ROUTE_NOT_IN_SESSION,
       )
     }
     if (!this.deps.hasProviderCredential(provider)) {

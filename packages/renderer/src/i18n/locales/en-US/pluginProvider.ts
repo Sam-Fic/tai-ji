@@ -32,6 +32,16 @@ export default {
     focusMissing: 'Target plugin is not in the catalog (it may have been removed); reopen this page',
     channelUnavailable: 'Install channel unavailable: update to a version that supports plugin install, then retry',
     confirmFailed: 'Install failed',
+    preparingInstall: 'Preparing install details…',
+    preparingUpdate: 'Preparing update details…',
+    // Version selection step (all published npm versions, latest dist-tag default)
+    versionSelectDesc: 'Choose the version of {name} to install',
+    versionSelectDescUpdate: 'Choose the version of {name} to update to',
+    versionLoading: 'Fetching version list…',
+    versionSelectLabel: 'Version',
+    versionLatestOption: 'Latest ({version})',
+    installing: 'Installing…',
+    updating: 'Updating…',
     // S13 crash recovery (failure-path table: crashed family card "plugin stopped" + restart = toggle off/on)
     stoppedBadge: 'Plugin stopped',
     restart: 'Restart',

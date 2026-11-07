@@ -92,4 +92,9 @@ export interface IPluginInstaller {
   sweepStaging(): Promise<void>
   /** 删除 plugin 目录（pluginId 仅用于语义，实际按 pluginPath 删）。 */
   uninstall(pluginId: string, pluginPath: string): Promise<void>
+  /**
+   * 列出 npm registry 上该包的全部已发布版本（安装前版本下拉数据源）。
+   * versions semver 降序；latest = dist-tags latest（下拉默认值）。
+   */
+  listVersions(packageName: string): Promise<{ versions: string[]; latest: string }>
 }

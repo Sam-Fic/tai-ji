@@ -10,6 +10,7 @@
     "renderer": [
       "packages/renderer/src/components/panel/**",
       "packages/renderer/src/composables/panel/**",
+      "packages/renderer/src/composables/useCopy.ts",
       "packages/renderer/src/composables/features/command/**"
     ],
     "runtime": [
@@ -47,6 +48,7 @@
     "packages/renderer/src/__tests__/panel/fast-fork-e2e-journeys.test.ts",
     "packages/renderer/src/__tests__/panel/force-quit-draft-recovery-dom.test.ts",
     "packages/renderer/src/__tests__/panel/landing-bash-integration.test.ts",
+    "packages/renderer/src/__tests__/panel/model-picker-aggregation.test.ts",
     "packages/renderer/src/__tests__/panel/panel-container-drawer-mode.test.ts",
     "packages/renderer/src/__tests__/panel/panel-container-lazy-retry-detail.test.ts",
     "packages/renderer/src/__tests__/panel/panel-container-lazy-retry.test.ts",
@@ -58,10 +60,12 @@
     "packages/renderer/src/__tests__/panel/skill-notice-stream.test.ts",
     "packages/renderer/src/__tests__/panel/turn-working.test.ts",
     "packages/renderer/src/__tests__/panel/workflow-viz-overlay-derivation.test.ts",
+    "packages/renderer/src/components/panel/__tests__/ModelPickerPanel.route-hit.test.ts",
     "packages/renderer/src/components/panel/__tests__/Panel.dead-diagnostics-export.test.ts",
     "packages/renderer/src/components/panel/__tests__/Panel.test.ts",
     "packages/renderer/src/components/panel/detail-renderers/__tests__/DiffView.seq-guard.test.ts",
-    "packages/renderer/src/composables/panel/__tests__/composables-panel-mock-bundle.test.ts"
+    "packages/renderer/src/composables/panel/__tests__/composables-panel-mock-bundle.test.ts",
+    "packages/renderer/src/components/panel/__tests__/model-picker-data.route-hit-projection.test.ts"
   ],
   "sharedBy": {
     "packages/renderer/src/__tests__/composables/useCommandPopoverTrigger.session-subagent.test.ts": [

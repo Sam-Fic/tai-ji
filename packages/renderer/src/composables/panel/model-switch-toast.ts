@@ -5,7 +5,9 @@
  * popover，经壳层包装）；② 键盘循环路径（ctrl+p / shift+tab，经 shortcut 的内联 catch）。
  * 两条路径若各写一份 code→key 映射，迟早漂移（同一个失败在两处显示不同文案）。
  *
- * 映射表 = 设计 §3.4 错误规格表：5 个新码各有专用文案；**4 个既有透传码**
+ * 映射表 = 设计 §3.4 错误规格表：4 个新码各有专用文案，+ provider-aggregation 2 码
+ * （AGGREGATION_ROUTE_NOT_IN_SESSION / AGGREGATION_EXTENSION_DISABLED，出处 provider-aggregation
+ * 设计 D1 ③/D9 ②，各有专用恢复指引文案）；**4 个既有透传码**
  * （SESSION_NOT_FOUND / MODEL_NOT_CONFIGURED / RESTORE_FAILED / BUILTIN_EXTENSIONS_MISSING）
  * 与一切未知码落 `general`（toast 文本附后端 message，用户仍能读到原始信息）。
  */
@@ -21,6 +23,10 @@ const CODE_TO_KEY: Record<string, string> = {
   MODEL_NOT_FOUND: 'panel.panel.modelSwitch.modelNotFound',
   PROVIDER_CREDENTIAL_MISSING: 'panel.panel.modelSwitch.providerCredentialMissing',
   ENGINE_MODEL_MISSING: 'panel.panel.modelSwitch.engineModelMissing',
+  // 模型路由两分型（provider-aggregation U3/D1 ③/D9 ②）：运行中新建窗口与扩展禁用态
+  // 各有专用恢复指引（扩展禁用态不落「新建会话」——新会话同样不装载扩展，指引会循环）。
+  AGGREGATION_ROUTE_NOT_IN_SESSION: 'panel.panel.modelSwitch.aggregationRouteNotInSession',
+  AGGREGATION_EXTENSION_DISABLED: 'panel.panel.modelSwitch.aggregationExtensionDisabled',
 }
 
 /**

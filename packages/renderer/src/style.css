@@ -101,9 +101,15 @@
   --danger-soft: color-mix(in oklch, var(--danger) 12%, transparent);
   --warn-soft: color-mix(in oklch, var(--warn) 14%, transparent);
 
-  /* ── 字体 ───────────────────────────────────────────────── */
-  --font-sans: system-ui, 'PingFang SC', 'Helvetica Neue', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
-  --font-mono: 'JetBrains Mono', 'IBM Plex Mono', ui-monospace, Menlo, monospace;
+  /* ── 字体 ─────────────────────────────────────────────────
+     两层结构（font-system D8）：槽位 --font-ui / --font-mono-ui 由 applySystemToDom 写入
+     （用户选择，值为带引号的家族名）；终值变量 = 槽位 + 构建期系统栈，回落链是声明的一部分，
+     零运行时判断（AX3）。
+     [HISTORICAL] 槽位必须「不声明」——绝不写成 `--font-ui: ;`：已声明但值为空 token 流的
+     自定义属性不触发 var() 的缺省参数，会代入空 token（mono 侧前导逗号让整条声明非法），
+     默认态就击穿全站字体栈（实测）。未声明时 var() 取缺省参数，回落链完整。） */
+  --font-sans: var(--font-ui, system-ui, 'PingFang SC', 'Helvetica Neue', 'Microsoft YaHei'), 'Noto Sans CJK SC', sans-serif;
+  --font-mono: var(--font-mono-ui, 'JetBrains Mono', 'IBM Plex Mono'), ui-monospace, Menlo, monospace;
   /* 字重三档（2026-10-06 对话流视觉裁决）：正文 / 中档 / 粗体唯一来源，
      消费方用 Tailwind 任意值类 [font-weight:var(--fw-*)] 引用 */
   --fw-text: 500;               /* 日常文字 */

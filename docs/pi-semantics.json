@@ -2105,5 +2105,57 @@
       "note": "taiji 消费方 = 四域对账补投判据的磁盘事实源（base-tool-enhance background/pending-reconcile.ts、session-manager notify-reconcile.ts、subagent-workflow workflow-notify-reconcile.ts 的 readSessionFileEntries + packages/subagent-core execution/notify/notify-reconcile.ts 的 readSessionEntriesFromFile，各文件头「判据事实源磁盘化」段）。pi 升级时重验：grep dist/core/session-manager.js '_appendEntry'（内存 push 是否仍先于 _persist、persist 抛错是否仍无回滚）+ '_persist'（no-persist / 未 flush 早退分支是否保留；若改为 persist 成功后才入内存账或失败回滚，幽灵态消失——磁盘化读侧可简化，保留向后兼容无害）"
     },
     "verifiedWith": "1.0.0"
+  },
+  {
+    "id": "PS-98",
+    "claim": "虚拟模型路由凭据拦截错误词形封闭（taiji 出站错误结构化映射的形态二判定依据，@taiji/shared PI_VIRTUAL_ROUTE_NO_CREDENTIALS_PATTERN）：resolveModel 路由到目标物理端点后 hasConfiguredAuth 不过恒抛模板串 `Virtual model <p>/<id> routed to <p>/<id>, which has no credentials.`——routed 复合串 = `Virtual model ${model.provider}/${model.id} routed to ${route.model.provider}/${route.model.id}`；同函数 getPhysicalModel 未命中的前置分支抛 `..., which is not a physical model.`（同前缀非凭据形态，taiji 词表不得误捕获、走原文透传）。该文本不以 No API key 开头，taiji 映射按 PI_VIRTUAL_ROUTE_NO_CREDENTIALS_PATTERN 整体形态判定（routed to 与 which has no credentials 尾锚之间捕获端点复合串，formatCredentialMissingPresentation 先行分流）。词形漂移 = 映射失守，错误原文经 stream_error 裸透传",
+    "piAnchor": [
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/model-runtime.js",
+        "symbol": "resolveModel → getPhysicalModel / hasConfiguredAuth throw",
+        "note": ":727 方法头；:745 routed 复合串模板；:746-747 not a physical model 分支（非凭据形态）；:748-749 hasConfiguredAuth 不过抛 `which has no credentials.`【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      }
+    ],
+    "guard": {
+      "type": "probe",
+      "test": "packages/runtime/src/infra/pi/__tests__/pi-semantics-virtual-route.test.ts"
+    },
+    "verifiedWith": "1.0.0"
+  },
+  {
+    "id": "PS-99",
+    "claim": "虚拟模型注册语义两断言（taiji provider-aggregation 扩展的路由注册通路）：① registerVirtualModel 幂等替换——同 provider+id 重复注册覆盖旧定义（:696 models.set 覆盖），id 与该 provider 物理模型冲突恒抛 `conflicts with a physical model`（:692-693），纯虚拟 provider 注入 {type:\"api_key\",source:\"virtual\"} auth 占位使 session restore 在 refresh 落地前即判 configured（:698-703）；② 启动时序——扩展经 ctx（agent-session.js :2762-2768 委派 _modelRuntime）发起的注册挂 runtime.pendingVirtualModelRegistrations 队列，createAgentSessionServices 内统一 flush（逐条 registerVirtualModel 后清空队列 + refresh({allowNetwork:false})），该 flush 先于 main.js createRuntime 后段的 resolveModelScope / buildSessionOptions（--model/--models 经 resolveCliModel 消费同一 modelRuntime）——CLI --model 引用虚拟路由 id 时注册必已生效",
+    "piAnchor": [
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/model-runtime.js",
+        "symbol": "registerVirtualModel / unregisterVirtualModel",
+        "note": ":683-686 JSDoc 自述 Re-registering the same provider and id replaces；:687 方法头；:689-690 空 id throw；:692-693 物理模型冲突 throw；:696-697 models.set 覆盖注册；:698-703 纯虚拟 provider virtual auth 占位【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      },
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/agent-session-services.js",
+        "symbol": "createAgentSessionServices → pendingVirtualModelRegistrations flush",
+        "note": ":98-110 pending 虚拟模型逐条 modelRuntime.registerVirtualModel 后 :110 清空队列，:111 await modelRuntime.refresh({allowNetwork:false}) 收尾（:129 createAgentSessionFromServices 在其后）【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      },
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/main.js",
+        "symbol": "createRuntime → createAgentSessionServices 先于 resolveModelScope / buildSessionOptions",
+        "note": ":587 createRuntime → :599 services 创建（flush 发生点）→ :659 resolveModelScope(modelPatterns, modelRuntime) / :661 buildSessionOptions（:353 定义内 :367 resolveCliModel 消费 modelRuntime）【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      },
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/agent-session.js",
+        "symbol": "ctx 扩展 API registerVirtualModel / unregisterVirtualModel",
+        "note": ":2762-2768 —— registerVirtualModel: (definition) => this._modelRuntime.registerVirtualModel(definition) 委派【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      }
+    ],
+    "guard": {
+      "type": "probe",
+      "test": "packages/runtime/src/infra/pi/__tests__/pi-semantics-virtual-route.test.ts"
+    },
+    "verifiedWith": "1.0.0"
   }
 ]

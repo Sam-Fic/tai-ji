@@ -23,7 +23,7 @@
  * 产出一组中间事件），可变态由 EventInterpreter 持有。
  */
 import type { ServerMessage, ServerMessageType, ExtensionInteractMethod, PiMessageEntry, PiToolCallEntryForm } from '@taiji/shared'
-import { EXTENSION_EVENTS, SUBAGENT_DIRECTIVE_CUSTOM_TYPE, parseSubagentDirective } from '@taiji/shared'
+import { EXTENSION_EVENTS, SUBAGENT_DIRECTIVE_CUSTOM_TYPE, parseSubagentDirective, formatTurnErrorPresentation } from '@taiji/shared'
 import { GUI_WIDGET_MARKER, ASK_USER_MARKER, SESSION_MANAGER_MARKER, SESSION_MANAGER_ACTIONS, SCHEDULE_CREATE_MARKER, PLAN_REVIEW_MARKER, UI_FORM_MARKER, SUBAGENT_JOURNAL_MARKER, JOURNAL_REPORT_ACK, CANVAS_MARKER, PERMISSION_APPROVAL_TITLE, isCanvasMarkerRequest, isGuiComponent, isGuiRenderResult, isScheduleDraft, isFormQuestion, isSubagentJournalReport } from '@zhushanwen/extension-protocol'
 import type { SessionManagerAction } from '@zhushanwen/extension-protocol'
 import type { PiEventListener } from '../../services/ports/pi-engine.js'
@@ -57,6 +57,7 @@ import type {
   PiAgentSettledEvent,
   PiEntryAppendedEvent,
   PiAssistantMessageSubEvent,
+  PiErrorSubEvent,
   PiToolcallEndSubEvent,
 } from './pi-protocol.js'
 
@@ -152,6 +153,31 @@ function deltaUpdateMessage(
   }]
 }
 
+/**
+ * message_update.error 子事件翻译（FR-5 / RT-2#2）：streaming error 以 message.stream_error
+ * 呈现。payload 形状与 protocol 契约对齐：content（人类可读）+ kind（分类，可选）。
+ * wire 真实字段 = {reason:'aborted'|'error', error:{errorMessage?}}（PiErrorSubEvent）：
+ * content 读 error.errorMessage（缺失回退 reason），kind 透传 reason（运行时若 pi 新增
+ * reason 值仍如实分类）。
+ */
+function handleStreamErrorSub(sub: PiErrorSubEvent, sid: string): PiTranslatedEvent[] {
+  // aborted（用户中止）降级 noop，不产 stream_error 帧：中止不是流错误——pi 对中止的
+  // 权威收尾通路是 message_end/agent_end 携带的 stopReason='aborted'（→ 前端
+  // message.complete{stopReason:'aborted'}，complete 终态非 error）。此处若产帧，前端
+  // finalizeSession('stream_error') 会把主动中止错标为 error 红条，且 errorMessage 缺失时
+  // 原始枚举串 'aborted' 经 content 直进用户可见错误文本。
+  // [HISTORICAL] 本分支曾硬编码 kind='error'，使 provider 真错文本（401/限流/上下文溢出）
+  // 永久不显形——RT-2#2 改读 wire 真实字段后修复。
+  if (sub.reason === 'aborted') return [{ kind: 'noop' }]
+  // U3/AX5 出站错误结构化映射（凭据缺失形态）：pi 透传的 `No API key` 文本（checkAuth
+  // / pi-ai 出站构造，词表见 @taiji/shared PI_CREDENTIAL_MISSING_PREFIX）替换为
+  // 含端点名与恢复指引的呈现；非命中文本原样透传（组合单点 formatTurnErrorPresentation，
+  // 与 message.complete errorMessage 出口及重放链 reducer 同实现）。
+  const rawStreamError = sub.error?.errorMessage ?? sub.reason
+  const content = formatTurnErrorPresentation(rawStreamError)
+  return [{ kind: 'message', message: { type: 'message.stream_error', payload: { sessionId: sid, content, kind: sub.reason } } }]
+}
+
 /** message_update — streaming text/thinking deltas and stream errors */
 function handleMessageUpdate(event: PiMessageUpdateEvent, sid: string): PiTranslatedEvent[] {
   // wire 帧经 JSON 解析，assistantMessageEvent 运行时可能缺位——保留检查，不用 as 断言
@@ -189,21 +215,8 @@ function handleMessageUpdate(event: PiMessageUpdateEvent, sid: string): PiTransl
       return [{ kind: 'noop' }, { kind: 'llm-first-output', sessionId: sid }]
     case 'toolcall_delta': case 'text_end':
       return [{ kind: 'noop' }]
-    // FR-5 / RT-2#2: streaming error — surface as message.stream_error
-    // payload 形状与 protocol 契约对齐：content（人类可读）+ kind（分类，可选）。
-    // wire 真实字段 = {reason:'aborted'|'error', error:{errorMessage?}}（PiErrorSubEvent）：
-    // content 读 error.errorMessage（缺失回退 reason），kind 透传 reason（运行时若 pi 新增
-    // reason 值仍如实分类）。
     case 'error':
-      // aborted（用户中止）降级 noop，不产 stream_error 帧：中止不是流错误——pi 对中止的
-      // 权威收尾通路是 message_end/agent_end 携带的 stopReason='aborted'（→ 前端
-      // message.complete{stopReason:'aborted'}，complete 终态非 error）。此处若产帧，前端
-      // finalizeSession('stream_error') 会把主动中止错标为 error 红条，且 errorMessage 缺失时
-      // 原始枚举串 'aborted' 经 content 直进用户可见错误文本。
-      // [HISTORICAL] 本分支曾硬编码 kind='error'，使 provider 真错文本（401/限流/上下文溢出）
-      // 永久不显形——RT-2#2 改读 wire 真实字段后修复。
-      if (sub.reason === 'aborted') return [{ kind: 'noop' }]
-      return [{ kind: 'message', message: { type: 'message.stream_error', payload: { sessionId: sid, content: sub.error?.errorMessage ?? sub.reason, kind: sub.reason } } }]
+      return handleStreamErrorSub(sub, sid)
     default:
       console.warn('[EventAdapter] Unhandled message_update sub-type:', subType)
       return [{ kind: 'noop' }]
@@ -366,6 +379,12 @@ function emptyMessagesDegradedTurnEnd(sid: string, willRetry: boolean): PiTransl
 /**
  * 从 lastMsg 提取 stopReason / usage / responseModel / diagnostics / errorMessage。
  * errorMessage 仅在 error / tool_use 两种 stopReason 下透出（pi 契约，其余为 undefined）。
+ * errorMessage 出站前经 formatTurnErrorPresentation 结构化映射（U3/AX5）：凭据
+ * 缺失文本（No API key 词表 + 虚拟模型路由 routed to 形态）替换为含端点名与恢复指引的
+ * 呈现，非命中原样透传。流前 throw（pi resolveModel 凭据拦截）不经 message_update 子
+ * 事件——该形态的用户呈现通路就是本出口的 message.complete errorMessage（下方
+ * stream_error 出口覆盖不到），映射必须挂在本出口才到达对话流错误呈现；重放链对同一
+ * 落盘原文经同一映射函数（core apply-entry-convert），live 与重放文本逐字一致。
  */
 function extractAgentEndFields(
   lastMsg: PiAgentEndEvent['messages'][number],
@@ -379,12 +398,17 @@ function extractAgentEndFields(
 } {
   const rawReason = lastMsg.stopReason ?? 'stop'
   const usage = lastMsg.usage
+  const rawErrorMessage = (rawReason === 'error' || rawReason === 'tool_use') ? extras.errorMessage : undefined
+  const errorMessage =
+    rawErrorMessage === undefined
+      ? undefined
+      : formatTurnErrorPresentation(rawErrorMessage)
   return {
     rawReason,
     usage,
     responseModel: extras.responseModel,
     diagnostics: extras.diagnostics,
-    errorMessage: (rawReason === 'error' || rawReason === 'tool_use') ? extras.errorMessage : undefined,
+    errorMessage,
   }
 }
 

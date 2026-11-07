@@ -59,6 +59,11 @@ import type {
   Segment,
   ArchiveSummary,
   SessionSurface,
+  PluginListVersionsReply,
+  AggregationRoute,
+  AggregationRouteDeleted,
+  AggregationRouteSaved,
+  AggregationRouteView,
 } from '@taiji/shared'
 import { recommendedExtensions, PRESET_SKILL_DIRS, PRESET_AGENT_DIRS, PRESET_EXTENSION_DIRS, DEFAULT_DISCOVERY_CONFIG, DEFAULT_PRESETS, DELIVERY_PREVIEW_MAX_CHARS, QUOTA_PRESETS, RETRY_RULES_BASELINE } from '@taiji/shared'
 import { createSession, fixtureMessages, fixtureSessions, e2eTestSession } from './data'
@@ -1821,6 +1826,24 @@ const configImpl = {
     return { stats: [] }
   },
   onNetworkProxyConfig: (h: (config: NetworkProxyConfig) => void) => networkProxySub.subscribe((p) => h(p.config)),
+
+  // ── 模型路由页（provider-aggregation U9：mock 内存态 stub，与 real domains/config 同构；
+  //    G4 参数全等断言强制四成员签名对齐。真实编排归 runtime aggregation-message-handler +
+  //    extras store；mock 无 providers.json 域，getRouteView 恒空视图（无卡无孤儿）、
+  //    saveRoute 回显保存值、deleteRoute 回显 routeId + 空 scopedModels、routeView 广播不推送）──
+  async getRouteView(): Promise<AggregationRouteView> {
+    await sleep(TIMING.ack)
+    return { cards: [], orphanRefs: [] }
+  },
+  async saveRoute(route: AggregationRoute): Promise<AggregationRouteSaved> {
+    await sleep(TIMING.ack)
+    return { route, memberIssues: [] }
+  },
+  async deleteRoute(routeId: string): Promise<AggregationRouteDeleted> {
+    await sleep(TIMING.ack)
+    return { routeId, scopedModels: [] }
+  },
+  onRouteView: (_h: (view: AggregationRouteView) => void) => () => {},
 }
 
 // retry 配置内存态（pi 默认值兜底；声明在 configImpl 之后同 mockScopedModels 模式——方法运行期才读）
@@ -2065,6 +2088,11 @@ const pluginImpl = {
   },
   async cancelPluginInstall(_pluginId: string): Promise<void> {
     await sleep(TIMING.ack)
+  },
+  // 版本下拉数据源：mock 无 registry 通道，返回单版本演示形态（三段流在 mock 模式可走通）
+  async listPluginVersions(_packageName: string): Promise<PluginListVersionsReply> {
+    await sleep(TIMING.ack)
+    return { versions: ['0.1.0'], latest: '0.1.0' }
   },
 }
 

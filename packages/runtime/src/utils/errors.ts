@@ -141,6 +141,21 @@ export const PROVIDER_CREDENTIAL_MISSING = 'PROVIDER_CREDENTIAL_MISSING'
 export const ENGINE_MODEL_MISSING = 'ENGINE_MODEL_MISSING'
 
 /**
+ * pi 报 `Model not found`、模型是路由条目（taiji 注册表命中 = runtime 注入层磁盘派生可见）、
+ * 且路由扩展已装载——即「运行中新建路由」窗口（D1 ③/D4 时点差）：runtime 目录注入是纯
+ * 磁盘派生（立即可见），pi 进程在会话加载时才注册路由，本会话尚未注册。
+ * 用户侧：「该模型路由在当前会话尚不可用，请新建会话后使用」（恢复路径 = 新建会话）。
+ */
+export const AGGREGATION_ROUTE_NOT_IN_SESSION = 'AGGREGATION_ROUTE_NOT_IN_SESSION'
+
+/**
+ * pi 报 `Model not found`、模型是路由条目、且路由扩展被禁用（D9 禁用态分型 ②）：禁用后
+ * pi 会话进程不装载扩展、虚拟模型零注册，新会话同样不可用——指引必须指向「在扩展管理中
+ * 启用」，不落「请新建会话」（该指引对禁用态形成循环）。
+ */
+export const AGGREGATION_EXTENSION_DISABLED = 'AGGREGATION_EXTENSION_DISABLED'
+
+/**
  * pi `set_model` RPC 的「模型未找到」错误文本前缀（pi 实装唯一可用判据，1.0.0 复核）。
  *
  * 权威源：`node_modules/@earendil-works/pi-coding-agent/dist/modes/rpc/rpc-mode.js`

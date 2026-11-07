@@ -19,6 +19,7 @@ import { registerLogRetentionDebugHandler } from '../logs/log-retention-ipc.js'
 import { registerDiagnosticsExportHandler } from '../diagnostics/diagnostics-export-ipc.js'
 import { registerSessionExportHandler } from '../sessions/session-export-ipc.js'
 import { registerQuotaCookieRefreshHandler } from '../quota/quota-cookie-ipc.js'
+import { registerFontHandlers } from './font-handlers.js'
 
 /**
  * 注册所有 IPC handlers（特权 + 桥接 + browser drawer + 自动升级（含代理配置） + 系统提示音
@@ -49,4 +50,6 @@ export function registerIpcHandlers(deps: IpcHandlerDeps): void {
   // cookie 登录态刷新（设置页入口：隐藏窗口加载平台页轮询 API，导出 cookie 写回
   // secrets 文件；无 deps 注入面，dataDir 经 @taiji/shared/paths 推导）
   registerQuotaCookieRefreshHandler()
+  // 字体文件字节读取（导入与启动重放共用；无状态内容校验 + 凭据目录禁区）
+  registerFontHandlers()
 }

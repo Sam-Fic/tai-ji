@@ -12416,7 +12416,7 @@ const mkdtempP_m2_d1 = promisify(mkdtemp)
 const rmP_m2_d1 = promisify(rm)
 
 
-function makeHandler_m2(overrides: { setProvider?: ReturnType<typeof vi.fn>; deleteProvider?: ReturnType<typeof vi.fn>; toggleProviderEnabled?: ReturnType<typeof vi.fn>; removeProviderByKind?: ReturnType<typeof vi.fn>; getDefaultModel?: ReturnType<typeof vi.fn>; setDefaultModel?: ReturnType<typeof vi.fn>; listProviders?: ReturnType<typeof vi.fn>; applyImportProviders?: ReturnType<typeof vi.fn>; discover?: ReturnType<typeof vi.fn>; aggregate?: ReturnType<typeof vi.fn>; oauthLogin?: ReturnType<typeof vi.fn>; oauthCancel?: ReturnType<typeof vi.fn>; oauthLogout?: ReturnType<typeof vi.fn>; modifyScopedModels?: ReturnType<typeof vi.fn>; resolver?: unknown; testProviderConnections?: ReturnType<typeof vi.fn> } = {}) {
+function makeHandler_m2(overrides: { setProvider?: ReturnType<typeof vi.fn>; deleteProvider?: ReturnType<typeof vi.fn>; toggleProviderEnabled?: ReturnType<typeof vi.fn>; removeProviderByKind?: ReturnType<typeof vi.fn>; getDefaultModel?: ReturnType<typeof vi.fn>; setDefaultModel?: ReturnType<typeof vi.fn>; listProviders?: ReturnType<typeof vi.fn>; applyImportProviders?: ReturnType<typeof vi.fn>; discover?: ReturnType<typeof vi.fn>; aggregate?: ReturnType<typeof vi.fn>; oauthLogin?: ReturnType<typeof vi.fn>; oauthCancel?: ReturnType<typeof vi.fn>; oauthLogout?: ReturnType<typeof vi.fn>; modifyScopedModels?: ReturnType<typeof vi.fn>; readAggregationRoutes?: ReturnType<typeof vi.fn>; resolver?: unknown; testProviderConnections?: ReturnType<typeof vi.fn> } = {}) {
   const broadcasts: ServerMessage[] = []
   const replies: { id: string; type: string; payload: Record<string, unknown> }[] = []
   const sendErrorCalls: { code: string; message: string }[] = []
@@ -12430,6 +12430,8 @@ function makeHandler_m2(overrides: { setProvider?: ReturnType<typeof vi.fn>; del
     setDefaultModel: overrides.setDefaultModel ?? vi.fn(),
     getDefaultModel: overrides.getDefaultModel ?? vi.fn().mockReturnValue(null),
     getScopedModels: vi.fn(() => []),
+    // routes 域读取（default 同步的路由级判定消费；空域缺省 = 无路由）
+    readAggregationRoutes: (overrides as Record<string, unknown>).readAggregationRoutes as ReturnType<typeof vi.fn> ?? vi.fn().mockReturnValue({ routes: [], scopedModels: [], orphanRefs: [], memberIssues: [], corrupted: false }),
     // config.setScopedModels 写入口（scoped-model design）：默认执行 handler 传入的写入函数
     modifyScopedModels: overrides.modifyScopedModels ?? vi.fn(async (fn: (current: string[]) => string[]) => fn([])),
     applyImportProviders: overrides.applyImportProviders ?? vi.fn().mockResolvedValue({ result: {} }),
@@ -13552,6 +13554,76 @@ describe('SettingsMessageHandler', () => {
       expect(replies[0]).toMatchObject({ type: 'config.scopedModels', payload: { scopedModels: ['p/m1', 'p/m2'] } })
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('p/m1'))
       warnSpy.mockRestore()
+    })
+
+    it('R3-3 scoped[0] 为停用路由 → 路由级判定跳过 default 同步（聚合条目无 enabled 字段，provider 级拦不住）', async () => {
+      // 停用路由只被滤出聚合条目的 models 列表，条目本身恒无 enabled 字段——provider 级
+      // 检查对聚合引用恒通过。路由级判定（routeId 在 routes 域存在且 enabled，判定维度
+      // 对齐读取侧 findValidDefaultModel 聚合分支）是唯一写侧防线：否则写成 default 会被
+      // getDefaultModel 聚合分支判不可用并 auto-fix 改写（静默破坏「第一位即默认」）。
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const { ctx, replies, broadcasts, handler } = makeHandler_m2({
+        listProviders: vi.fn().mockReturnValue([{ id: 'aggregation' }]),
+        modifyScopedModels: vi.fn(async () => ['aggregation/gamma', 'p/m1']),
+        readAggregationRoutes: vi.fn().mockReturnValue({
+          routes: [
+            { id: 'alpha', enabled: true },
+            { id: 'gamma', enabled: false },
+          ],
+          scopedModels: [],
+        }),
+        getDefaultModel: vi.fn().mockReturnValue({ provider: 'other', modelId: 'keep' }),
+      })
+
+      await handler.handleSettingsMessage(msg_m2('config.setScopedModels', { models: ['aggregation/gamma', 'p/m1'] }), WS)
+
+      expect(ctx.configService.setDefaultModel).not.toHaveBeenCalled()
+      expect(broadcasts.filter(b => b.type === 'config.defaults')).toHaveLength(0)
+      // scoped 主语义不受影响：广播 + reply 正常
+      expect(ctx.broadcastProviderList).toHaveBeenCalledOnce()
+      expect(replies[0]).toMatchObject({ type: 'config.scopedModels', payload: { scopedModels: ['aggregation/gamma', 'p/m1'] } })
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('aggregation/gamma'))
+      warnSpy.mockRestore()
+    })
+
+    it('R3-4 scoped[0] 为悬空路由（routes 域无该 id）→ 路由级判定跳过 default 同步', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const { ctx, broadcasts, handler } = makeHandler_m2({
+        listProviders: vi.fn().mockReturnValue([{ id: 'aggregation' }]),
+        modifyScopedModels: vi.fn(async () => ['aggregation/ghost-route', 'p/m1']),
+        readAggregationRoutes: vi.fn().mockReturnValue({
+          routes: [{ id: 'alpha', enabled: true }],
+          scopedModels: [],
+        }),
+        getDefaultModel: vi.fn().mockReturnValue({ provider: 'other', modelId: 'keep' }),
+      })
+
+      await handler.handleSettingsMessage(msg_m2('config.setScopedModels', { models: ['aggregation/ghost-route', 'p/m1'] }), WS)
+
+      expect(ctx.configService.setDefaultModel).not.toHaveBeenCalled()
+      expect(broadcasts.filter(b => b.type === 'config.defaults')).toHaveLength(0)
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('aggregation/ghost-route'))
+      warnSpy.mockRestore()
+    })
+
+    it('R3-5 scoped[0] 为启用的路由引用 → default 同步写聚合保留 id（provider 级 + 路由级双过）', async () => {
+      const { ctx, broadcasts, handler } = makeHandler_m2({
+        listProviders: vi.fn().mockReturnValue([{ id: 'aggregation' }]),
+        modifyScopedModels: vi.fn(async () => ['aggregation/alpha', 'p/m1']),
+        readAggregationRoutes: vi.fn().mockReturnValue({
+          routes: [{ id: 'alpha', enabled: true }],
+          scopedModels: [],
+        }),
+        getDefaultModel: vi.fn().mockReturnValue(null),
+      })
+
+      await handler.handleSettingsMessage(msg_m2('config.setScopedModels', { models: ['aggregation/alpha', 'p/m1'] }), WS)
+
+      // 聚合引用拆解：provider 段 = 聚合保留 id、modelId 段 = routeId（读取侧聚合分支
+      // 以 defaultModel = routeId 判定可用性，写入形态必须同维）
+      expect(ctx.configService.setDefaultModel).toHaveBeenCalledWith('aggregation', 'alpha')
+      const d = broadcasts.find(b => b.type === 'config.defaults')
+      expect(d?.payload).toMatchObject({ defaultModel: 'aggregation/alpha', source: 'default-set' })
     })
   })
 

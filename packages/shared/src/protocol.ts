@@ -1,6 +1,14 @@
 // Client → Runtime message types
 
 import type { ProviderInfo, SkillInfo, AgentInfo, ModelInfo, SkillDirConfig, ScannedSkillInfo, ScannedAgentInfo, BuiltinProviderTemplate, ProviderId } from './provider'
+// 模型路由域（provider-aggregation F2 契约前移）：形状 SSOT 在 ./aggregation，
+// 本文件仅登记 type→payload 映射
+import type {
+  AggregationRoute,
+  AggregationRouteDeleted,
+  AggregationRouteSaved,
+  AggregationRouteView,
+} from './aggregation'
 import type { SessionGroup, SessionSummary, SessionStatus, SessionDataSource, SessionSurface } from './session'
 import type { FileChange, ChangeSetStatus, Message } from './message'
 // delivery 域帧 DTO（投递所有权内核 D7/ADR-0043）：segments 快照供草稿恢复
@@ -298,6 +306,9 @@ export type ClientMessageType =
   // 确认卡知情面（停在确认停点，S27）；confirm = 提交落盘并激活；cancel = 清暂存
   //（未确认不发生安装落盘）。reply：prepare/confirm 同名（payload 消费型），cancel pong ack。
   | 'plugin.prepareInstall' | 'plugin.confirmInstall' | 'plugin.cancelInstall'
+  // plugin.listVersions：npm registry 上该插件包的全部已发布版本（安装前版本下拉
+  // 数据源；免钉版清单形态下 UI 默认选 latest，用户可改选任意历史版本）。
+  | 'plugin.listVersions'
   | 'plugin.config.get' | 'plugin.config.set'
   | 'plugin.uiResponse'
   | 'plugin.mountPoints.sync'
@@ -386,6 +397,16 @@ export type ClientMessageType =
   | 'config.removeProviderByKind'
   // scoped model：配置模型白名单 + 有序列表（reply config.scopedModels）。
   | 'config.setScopedModels'
+  // aggregation.*（provider-aggregation F2 契约前移，实装归 U9）：模型路由页三 RPC——
+  // getRouteView（join 视图拉取）/ saveRoute（单条路由 upsert：新建 + 端点/条件编辑；
+  // id 冲突或字符集违规走统一 error envelope，错误码词表 AggregationErrorCode）/
+  // deleteRoute（删除 + scopedModels 精确清理复合串——同一保存跨两权威，D10）。
+  // 路由卡排序/开关不经本域——走既有 config.setScopedModels 通道（default 拉到第一位的
+  // 编排自动保留，D10/D11）。reply 与 request 异名配对（routeView/routeSaved/routeDeleted，
+  // preset.create→config 扇形先例的 payload 消费型同名段模式）；保存/删除成功后的视图
+  // 失效广播复用 aggregation.routeView 帧（server-push，U9 接线）。payload/reply 形状
+  // SSOT 在 ./aggregation。
+  | 'aggregation.getRouteView' | 'aggregation.saveRoute' | 'aggregation.deleteRoute'
   // backgroundTask 域（docs/architecture/background-task-sidebar-view.md §3.3 D3，u-proto）：后台命令
   // 侧边栏的拉取/操作 RPC——list 拉全量并隐式把 session 加入 runtime watched 集合（D8③）；
   // output 按字节窗口 tail 输出尾部；kill 走 D6 分支矩阵。回执/广播登记见 ServerMessageType。
@@ -833,9 +854,9 @@ export interface PluginCatalogEntry {
   pluginId: string
   displayName: string
   description?: string
-  /** taiji 插件包版本（双产物形态与 piExtensionVersion 成对钉定，D6） */
-  pluginVersion: string
-  /** pi 扩展包版本（双产物形态专用；单产物条目省略） */
+  /** taiji 插件包版本。缺省 = 免钉版形态：安装时解析 npm latest、扩展配对跟随 wool-manifest（清单零维护） */
+  pluginVersion?: string
+  /** pi 扩展包版本。钉版形态与 pluginVersion 成对；免钉版/单产物条目省略（免钉版扩展版本由 wool-manifest 决定） */
   piExtensionVersion?: string
   /** Provider 家族元数据（Provider 页家族卡数据源；非 provider 插件省略） */
   family?: PluginProviderFamilyMeta
@@ -919,6 +940,17 @@ export interface PluginPrepareInstallReply {
 export interface PluginConfirmInstallReply {
   success: boolean
   error?: string
+}
+
+/**
+ * plugin.listVersions reply：npm registry 上该插件包的全部已发布版本（安装前版本
+ * 下拉数据源）。versions 降序（新在前）；latest = dist-tags latest（下拉默认值）。
+ */
+export interface PluginListVersionsReply {
+  /** 全部已发布版本，semver 降序（新版本在前） */
+  versions: string[]
+  /** dist-tags latest（下拉框默认选项「最新」对应的版本） */
+  latest: string
 }
 
 
@@ -1289,6 +1321,8 @@ export interface ClientMessageMap {
   'plugin.prepareInstall': { packageSpec: string }
   'plugin.confirmInstall': { pluginId: string }
   'plugin.cancelInstall': { pluginId: string }
+  // plugin.listVersions：版本下拉数据源（packageName = npm 包名，scoped 形态原样）。
+  'plugin.listVersions': { packageName: string }
   'file.read': { path: string; sessionId?: string }
   'file.tree': { sessionId: string }
   'file.tree.expand': { sessionId: string; path: string }
@@ -1506,6 +1540,10 @@ export interface ClientMessageMap {
   'config.revealProviderApiKey': { providerId: string }
   // ── scoped model ──
   'config.setScopedModels': { models: string[] }
+  // ── aggregation（模型路由页，provider-aggregation F2 契约前移）：payload 形状 SSOT 在 ./aggregation ──
+  'aggregation.getRouteView': Record<string, never>
+  'aggregation.saveRoute': { route: AggregationRoute }
+  'aggregation.deleteRoute': { routeId: string }
   // ── backgroundTask 域（docs/architecture/background-task-sidebar-view.md §3.3 D3，u-proto）──
   // list：拉取该 session 后台任务全量（runtime 直读 registry 的派生视图；目录/文件不存在 → 空数组）。
   // 首次调用同时把 session 加入 runtime watched 集合（D8③）——订阅语义由 list 隐含，协议范围无
@@ -1726,6 +1764,10 @@ export type ServerMessageType =
   | 'config.providerCatalogsRefreshed'
   | 'config.quotaPresets'
   | 'config.scopedModels'
+  // aggregation.* reply/广播帧（provider-aggregation F2 契约前移）：routeView = getRouteView
+  // 的 reply 兼保存/删除后的视图失效广播（last-value 全量下发，U9 接线）；routeSaved /
+  // routeDeleted = 对应 request 的 payload 消费型 reply。
+  | 'aggregation.routeView' | 'aggregation.routeSaved' | 'aggregation.routeDeleted'
   | 'config.scannedSkills' | 'config.skillUpdated' | 'config.skillDeleted'
   | 'config.sessionSkills'
   | 'config.globalSkills' | 'config.projectSkills'
@@ -1802,6 +1844,8 @@ export type ServerMessageType =
   // 两段式安装 reply（provider-plugin-access U4/U6）：prepare/confirm 与 request 同名
   //（payload 消费型——确认卡知情面 / 提交结果）；cancel ack 型走 pong，不占下行帧。
   | 'plugin.prepareInstall' | 'plugin.confirmInstall'
+  // plugin.listVersions reply（与 request 同名，payload 消费型——版本下拉数据源）。
+  | 'plugin.listVersions'
   // plugin:headerActionUpdate：headerAction 可变字段（badge/tooltip/disabled）下行帧
   //（AP-1）。必带 sessionId——渲染端按 (sessionId, headerActionId) 写对应会话分区；
   // 经 broker 全局广播直发（同上不入 ring）。
@@ -2559,6 +2603,13 @@ export interface ServerMessageMapBase {
   }
   /** config.setScopedModels 的 reply（去重保序后的白名单；scoped-model design §4.1 A9）。 */
   'config.scopedModels': { scopedModels: string[] }
+  // ── aggregation（模型路由页，provider-aggregation F2 契约前移）：payload 形状 SSOT 在 ./aggregation ──
+  /** aggregation.getRouteView 的 reply 兼保存/删除后的视图失效广播（join 视图全量下发）。 */
+  'aggregation.routeView': AggregationRouteView
+  /** aggregation.saveRoute 的 reply（保存后路由 + 悬空端点标记——允许保留 + 标记提示回执）。 */
+  'aggregation.routeSaved': AggregationRouteSaved
+  /** aggregation.deleteRoute 的 reply（删除完成 + scopedModels 精确清理后全量）。 */
+  'aggregation.routeDeleted': AggregationRouteDeleted
   'config.extensions': { extensions: ExtensionInfo[]; upgradeResult?: { upgraded: boolean; from: string; to: string } }
   /** extension.recommended reply：推荐扩展列表（含已安装状态） */
   'extension.recommended': { recommended: Array<RecommendedExtension & { installed: boolean }> }
@@ -2580,6 +2631,8 @@ export interface ServerMessageMapBase {
   // 两段式安装 reply（provider-plugin-access U4/U6，与 request 同名——payload 消费型）。
   'plugin.prepareInstall': PluginPrepareInstallReply
   'plugin.confirmInstall': PluginConfirmInstallReply
+  // plugin.listVersions reply（与 request 同名——版本下拉数据源）。
+  'plugin.listVersions': PluginListVersionsReply
   // plugin:headerActionUpdate：headerAction 可变字段下行帧（AP-1；必带 sessionId，
   // 渲染端按 (sessionId, headerActionId) 写会话分区）。payload 契约见 HeaderActionUpdatePayload。
   'plugin:headerActionUpdate': HeaderActionUpdatePayload
@@ -3848,6 +3901,7 @@ export interface ReplyPayloadMap {
   'plugin.prepareInstall': ServerMessageMap['plugin.prepareInstall']
   'plugin.confirmInstall': ServerMessageMap['plugin.confirmInstall']
   'plugin.cancelInstall': ServerMessageMap['pong']
+  'plugin.listVersions': ServerMessageMap['plugin.listVersions']
   'plugin.config.get': ServerMessageMap['plugin:config']
   'plugin.config.set': ServerMessageMap['plugin:config']
   'plugin.mountPoints.sync': ServerMessageMap['pong']
@@ -4046,6 +4100,10 @@ export interface ReplyPayloadMap {
   'session.workflowAction': void  // reply session.workflowActionDone
   // ── scoped model 域──
   'config.setScopedModels': ServerMessageMap['config.scopedModels']  // reply config.scopedModels（去重保序后结果）
+  // ── aggregation 域（模型路由页，provider-aggregation F2 契约前移）：reply 异名配对（payload 消费型）──
+  'aggregation.getRouteView': ServerMessageMap['aggregation.routeView']
+  'aggregation.saveRoute': ServerMessageMap['aggregation.routeSaved']
+  'aggregation.deleteRoute': ServerMessageMap['aggregation.routeDeleted']
   // ── backgroundTask 域（docs/architecture/background-task-sidebar-view.md §3.3 D3，u-proto）──
   // 三个 RPC 全部 payload 消费型（renderer 读回执字段）；backgroundTask:updated 是 session 级
   // 广播（非 RPC reply），不走本映射——消费侧经 events 通道订阅。

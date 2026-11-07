@@ -175,7 +175,7 @@ const props = withDefaults(
     activeSessionId?: string | null
     /** search 编排依赖（core SearchDeps；壳层 Sidebar.vue 组装真实现，C-W4-1 props 注入） */
     deps: SearchDeps
-    /** drawer 打开动作（C-NT-3 拆除 useSideDrawer：file 跳转返 drawerTab:'detail' 时打开 SideDrawer；壳提供实现） */
+    /** drawer 打开动作（C-NT-3 拆除 useSideDrawer：file 跳转返 drawerTab:'detail' 时打开 DrawerPanel；壳提供实现） */
     onOpenDrawer?: (tab: string) => void
     /** toast 通知（C-W4-5 拆除 useToast；confirm {ok:false} 时展示错误；noop fallback） */
     onToastError?: (message: string) => void
@@ -367,7 +367,7 @@ async function confirmSel(): Promise<void> {
     { activeSessionId: props.activeSessionId ?? null },
   )
   if (result.ok) {
-    // file 跳转返 drawerTab:'detail'：打开 SideDrawer detail tab 让 DetailPane 挂载渲染文件内容。
+    // file 跳转返 drawerTab:'detail'：打开 DrawerPanel detail tab 让 DetailPane 挂载渲染文件内容。
     // （DetailPane 只在 activeTab==='detail' 时挂载；useSearchJump 编排层不直接调 drawer，由本组件接线
     //   props.onOpenDrawer——C-NT-3 拆除 useSideDrawer 依赖）
     if (result.drawerTab) props.onOpenDrawer(result.drawerTab)

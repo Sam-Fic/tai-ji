@@ -61,6 +61,8 @@ export type {
   // 两段式安装 reply（provider-plugin-access U4/U6）：确认卡知情面 + 提交结果
   //（core plugin 域 preparePluginInstall/confirmPluginInstall 跨包具名消费）
   PluginPrepareInstallReply, PluginConfirmInstallReply,
+  // 版本下拉数据源 reply（core plugin 域 listPluginVersions 跨包具名消费）
+  PluginListVersionsReply,
   // 连接目标快照 + project 写命令统一回执（connection-datasync-ssot u-foundation）：
   // 快照形状 = supervisor 生产（main/preload IPC 链）与 core 连接控制器消费跨包共用；
   // 命令回执 = runtime 写通道（u6a）与 renderer project store（u5）跨包共用
@@ -104,7 +106,7 @@ export type {
   PiRespawnNoticeVariant,
   SendPromptReason,
 } from './message'
-export { parseBgNotifyDetails, COMPLETE_NOTIFY_CUSTOM_TYPES, SUBAGENT_DIRECTIVE_CUSTOM_TYPE, parseSubagentDirective, PI_RESPAWN_NOTICE_CUSTOM_TYPE, parseRespawnNoticeVariant, parseBackgroundBashDetails, parseWorkflowResultNotify, MSG_ID_TAG_RE, MSG_ID_TAG_BARE_RE, BARE_UUID_RE, MSG_ID_UUID_SEGMENT, MSG_ID_ADOPTED_SEGMENT, markerLiteral, DELIVERY_PREVIEW_MAX_CHARS, decodeNewlineEscapes } from './message'
+export { parseBgNotifyDetails, COMPLETE_NOTIFY_CUSTOM_TYPES, SUBAGENT_DIRECTIVE_CUSTOM_TYPE, parseSubagentDirective, PI_RESPAWN_NOTICE_CUSTOM_TYPE, parseRespawnNoticeVariant, parseBackgroundBashDetails, parseWorkflowResultNotify, MSG_ID_TAG_RE, MSG_ID_TAG_BARE_RE, BARE_UUID_RE, MSG_ID_UUID_SEGMENT, MSG_ID_ADOPTED_SEGMENT, markerLiteral, DELIVERY_PREVIEW_MAX_CHARS, decodeNewlineEscapes, ASSISTANT_ERROR_FALLBACK_TEXT } from './message'
 // w21 pi-entry：pi session entry wire 类型（runtime 实时重构 ↔ core reducer ↔ protocol payload 三方共用）
 export type {
   PiEntry, PiEntryBase, PiMessageEntry, PiMessageBody,
@@ -149,7 +151,73 @@ export type {
   ScanSourceType, ScannedSkillInfo, ScannedAgentInfo,
   DiscoveryConfig, DiscoveryConfigV1, SkillDirConfig,
   ProviderId, ModelId,
+  ProviderKind,
 } from './provider'
+// pi 凭据缺失判定词表 + 出站呈现映射（U3/AX5；C-comm-01 分层修复自 services
+// session-model-control 上移：纯常量/纯函数无 node 依赖，barrel 安全；runtime
+// 切换链分型与 infra 出站映射共用同一判定）
+export {
+  PI_CREDENTIAL_MISSING_PREFIX, PI_VIRTUAL_ROUTE_NO_CREDENTIALS_PATTERN,
+  formatCredentialMissingPresentation, formatTurnErrorPresentation,
+} from './provider'
+// 模型路由域（provider-aggregation U1 契约根：类型全集 + 校验/标记纯函数 SSOT；
+// runtime store 写侧、路由页编排 U9、设置页 U5、选择器 U6、pi 路由扩展 U2 共同 import，
+// 纯类型/常量/纯函数无 node 依赖，barrel 安全）
+export type {
+  AggregationRoutesVersion,
+  AggregationTimeWindowTable,
+  AggregationMemberConditionType,
+  AggregationQuotaCondition,
+  AggregationMember,
+  AggregationSpecialDateMode,
+  AggregationSpecialDate,
+  AggregationRouteMode,
+  AggregationRoute,
+  AggregationRoutesFile,
+  AggregationRoutesParseResult,
+  AggregationErrorCode,
+  AggregationProviderIdErrorCode,
+  AggregationRouteValidationResult,
+  AggregationDanglingReason,
+  AggregationMemberIssue,
+  AggregationValidModelIndex,
+  AggregationRouteCard,
+  AggregationRouteView,
+  AggregationRouteSaved,
+  AggregationRouteDeleted,
+  AggregationQuotaFreshnessProbe,
+  AggregationProviderRouteRef,
+  AggregationProviderRouteRefs,
+} from './aggregation'
+export {
+  AGGREGATION_PROVIDER_ID,
+  AGGREGATION_ROUTES_VERSION,
+  AGGREGATION_MEMBER_CONDITION_TYPES,
+  AGGREGATION_SPECIAL_DATE_MODES,
+  AGGREGATION_ROUTE_MODES,
+  AGGREGATION_ERROR_CODES,
+  AGGREGATION_PROVIDER_ID_RESERVED,
+  AGGREGATION_PROVIDER_ID_ERROR_CODES,
+  AGGREGATION_DANGLING_REASONS,
+  AGGREGATION_QUOTA_THRESHOLD_MAX,
+  AGGREGATION_QUOTA_FRESHNESS_MS,
+  ROUTE_ID_MAX_LENGTH,
+  ROUTE_ID_PATTERN,
+  TIME_WINDOW_DAYS,
+  TIME_WINDOW_SLOTS_PER_DAY,
+  emptyAggregationRoutesFile,
+  parseAggregationRoutesSection,
+  isValidRouteId,
+  generateRouteIdFromName,
+  validateAggregationRouteUpsert,
+  annotateDanglingMembers,
+  buildAggregationModelRef,
+  isAggregationModelRef,
+  aggregationRouteIdFromRef,
+  collectOrphanAggregationRefs,
+  collectProviderRouteRefs,
+  isAggregationQuotaDataFresh,
+} from './aggregation'
 // v1→v2 discovery.json 迁移纯函数（discovery-migrate.ts）
 export { migrateDiscoveryV1ToV2 } from './discovery-migrate'
 export type { ToolPermission, ThemeMode, ThemePreset } from './settings'
@@ -274,6 +342,7 @@ export {
   GET_REMOTE_ACCESS_INFO, ROTATE_REMOTE_ACCESS_TOKEN, SET_REMOTE_ACCESS_ENABLED,
   SOUND_LIST, SOUND_PLAY,
   QUOTA_REFRESH_COOKIE,
+  READ_FONT_BYTES,
 } from './ipc-channels'
 // local-file 预检 / 源码读取通道 payload 类型（chat-html-support §6.9 D9：preload 两文件 /
 // renderer lib/ipc / main local-file-prefixes 四方共用同一形态声明——C-comm-22 唯一类型源）。
@@ -327,6 +396,12 @@ export type { BrowserFrameState } from './ipc-payloads'
 // quota:refresh-cookie 通道契约（请求 payload / 返回类型——main quota handler、
 // preload ElectronAPI 签名与 renderer 刷新入口三方共用同一形态声明，防漂移）。
 export type { QuotaRefreshCookiePayload, QuotaRefreshCookieResult } from './ipc-payloads'
+// font:read-bytes 通道契约（font-system §3.3 D10：请求 payload / 二态返回类型——main
+// font handler、preload ElectronAPI 签名与 renderer FileFontSource 三方共用同一形态
+// 声明，防漂移）。
+export type { ReadFontBytesPayload, ReadFontBytesResult } from './ipc-payloads'
+// font:read-bytes 重放失效 reason 字面量（font-system：main REASON_* 与 UI statusFor 映射的双侧同源常量）。
+export { FONT_READ_REASON_NOT_FOUND, FONT_READ_REASON_UNREADABLE } from './ipc-payloads'
 // 崩溃条目清单事件 Schema SSOT（docs/architecture/crash-forensics-and-watchdog.md §3.3 D1，
 // 实施计划 u1a：layer/event/reason 枚举 + 字段集 + writer 接口——u1b runtime 与
 // u1c main 两 writer 共用，禁止复制定义；纯类型/常量无 node 依赖，barrel 安全）。

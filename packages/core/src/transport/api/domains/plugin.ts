@@ -12,7 +12,7 @@
  *
  * 依赖方向：events（订阅）+ command（类型化请求/动作原语）。
  */
-import type { PluginEventPayload, PluginInfo, PluginInvokeReply, PluginCatalogReply, PluginListAvailableReply, PluginPrepareInstallReply, PluginConfirmInstallReply, PluginUiSnapshotPayload } from '@taiji/shared'
+import type { PluginEventPayload, PluginInfo, PluginInvokeReply, PluginCatalogReply, PluginListAvailableReply, PluginPrepareInstallReply, PluginConfirmInstallReply, PluginListVersionsReply, PluginUiSnapshotPayload } from '@taiji/shared'
 import { command } from '../request'
 import * as events from '../events'
 
@@ -187,4 +187,12 @@ export function confirmPluginInstall(pluginId: string): Promise<PluginConfirmIns
 /** 两段式安装取消：清暂存与 pending 登记（未确认不发生安装落盘）。reply pong ack。 */
 export async function cancelPluginInstall(pluginId: string): Promise<void> {
   await command('plugin.cancelInstall', { pluginId })
+}
+
+/**
+ * 列出 npm registry 上该插件包的全部已发布版本（安装前版本下拉数据源）。
+ * versions semver 降序；latest = dist-tags latest（下拉默认值）。
+ */
+export function listPluginVersions(packageName: string): Promise<PluginListVersionsReply> {
+  return command('plugin.listVersions', { packageName })
 }

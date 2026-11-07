@@ -15,7 +15,7 @@
  * 运行：cd packages/ui && npx vitest run src/features/chat/__tests__/chat-density.test.ts
  */
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { mount } from '@vue/test-utils'
 import { ChatView } from '@taiji/ui'
@@ -57,8 +57,17 @@ function normalizeRenderedHtml(html: string): string {
 }
 
 describe('ChatView density（remote-use-mobile-v2 §6.2）', () => {
+  // 快照重录开关：实现变更后 UPDATE_SNAPSHOT=1 npx vitest run chat-density 重录基线
+  // （金标准 fixture = 现状快照，重录 diff 须人工过目后随实现变更同 commit 提交）
+  const maybeUpdate = (wrapper: { html(): string }) => {
+    if (process.env.UPDATE_SNAPSHOT) {
+      writeFileSync(join(FIXTURE_DIR, 'chat-desktop-default.html'), normalizeRenderedHtml(wrapper.html()))
+    }
+  }
+
   it('桌面快照：density 缺省（不传 = desktop）时产出与现状基线逐字一致（additive-only 红线）', () => {
     const wrapper = mountChatView()
+    maybeUpdate(wrapper)
     const baseline = readFileSync(join(FIXTURE_DIR, 'chat-desktop-default.html'), 'utf-8')
     expect(normalizeRenderedHtml(wrapper.html())).toBe(baseline)
   })

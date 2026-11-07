@@ -122,8 +122,14 @@ export type ProviderStatus = 'connected' | 'not_configured' | 'error'
  *
  * - 'catalog'：定义来自 pi 二进制内置 catalog，凭据在 auth.json，models.json 可有 override
  * - 'custom'：定义全在 models.json（含 apiKey）
+ * - 'aggregation'：模型路由聚合条目（provider-aggregation D4 ①）——单一固定 id 聚合
+ *   provider（保留 id，见 shared aggregation.ts AGGREGATION_PROVIDER_ID）承载全部模型路由，
+ *   models 数组每项 = 一条路由条目；无凭据无 baseUrl（路由端点出站走其 provider 的既有
+ *   通道，AX4），模型链消费方（model.list / scopedModels / 默认模型）照常消费，非模型
+ *   消费方（ProviderPage 渠道列表 / NetworkPage 服务商行）按 kind 排除渲染——显式清单见
+ *   设计 D4 ① (a)(b)。
  */
-export type ProviderKind = 'catalog' | 'custom'
+export type ProviderKind = 'catalog' | 'custom' | 'aggregation'
 
 export interface ProviderInfo {
   id: ProviderId
@@ -243,6 +249,81 @@ export interface ModelInfo {
   thinkingLevelMap?: Record<string, string | null>
   cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }
   enabled?: boolean
+  /**
+   * 模型路由标记（provider-aggregation F2 契约前移）：true = 该条目是模型路由（聚合
+   * provider 下的路由条目，id 段 = 路由 id，复合串 <聚合providerId>/<routeId>）。runtime
+   * 目录注入时标注（D4 ①）；undefined = 物理模型（向后兼容，既有构造点零改动）。选择器
+   * 分组与徽标（U6）、路由相关 UI 判别统一消费本字段——禁止消费方按 providerId 字面值
+   * 自行推断（保留 id 判别单点在 shared aggregation.ts isAggregationModelRef）。
+   */
+  aggregation?: boolean
+}
+
+/**
+ * pi 凭据缺失错误文本词表（U3/AX5 出站错误结构化映射的判定依据）。pi 实装两形态
+ * （node_modules 实装版 1.0.0 亲读）：
+ * - 形态一「No API key」前缀三变体：setModel checkAuth `No API key for ${provider}/${id}`
+ *   （agent-session.js:1912）；pi-ai 出站请求构造 `No API key for provider: ${provider}` 与
+ *   `No API key provided for provider "${provider}"`（pi-ai dist api/*.js）——共同前缀
+ *   PI_CREDENTIAL_MISSING_PREFIX。
+ * - 形态二「虚拟模型路由 resolveModel 凭据拦截」（model-runtime.js:745-749，agg-error-presentation
+ *   剧本真机逐字捕获；探针 PS-98）：`Virtual model <聚合p>/<路由id> routed to <端点p>/<端点id>,
+ *   which has no credentials.`——前缀非 No API key，按 PI_VIRTUAL_ROUTE_NO_CREDENTIALS_PATTERN
+ *   整体形态判定，端点标识取 routed to 与 which has no credentials 之间的复合串。
+ * pi 版本升级后文本变更即映射失守——两形态与虚拟模型注册时序已登记 pi-semantics 探针
+ * （PS-75 形态一 / PS-98 形态二 / PS-99 registerVirtualModel 幂等替换 + pending flush
+ * 先于 --model 解析；PI_MODEL_NOT_FOUND_PREFIX 同族见 PS-41），受 C-proc-08 版本门禁
+ * 在 pi 升级时强制重验（探针 = pi-semantics-virtual-route.test.ts）。
+ *
+ * 驻留 @taiji/shared（C-comm-01 分层修复）：纯常量 + 纯字符串处理，凭据文案与 provider
+ * 语义同域——runtime 切换链分型（session-model-control）与 infra 出站呈现映射
+ * （event-adapter）共用同一词表，infra 不得反向 value import services 层。
+ */
+export const PI_CREDENTIAL_MISSING_PREFIX = 'No API key'
+
+/** 形态二判定：routed to 与 which has no credentials 尾锚之间的复合串为端点标识（捕获组）。 */
+export const PI_VIRTUAL_ROUTE_NO_CREDENTIALS_PATTERN = /routed to (.+), which has no credentials\.?$/
+
+/**
+ * 出站错误结构化映射（U3/AX5 runtime 半边）：pi 凭据缺失文本 → 含端点名与恢复指引的
+ * 呈现文案。命中返回结构化文案；非命中返回 undefined（调用方原样透传）。
+ *
+ * 范围裁断（设计检查点范围澄清，2026-11-06 D9）：映射仅覆盖真实会发生的错误形态——
+ * 凭据缺失（No API key 词表 + 虚拟路由 routed to 形态）结构化映射；厂商失败错误
+ * （HTTP 401/429/5xx 文本）无统一形态，不建映射词表（防永不触发的死分支），原文经
+ * 既有 stream_error 通道透传呈现。resume-发消息路径不存在本类错误（扩展禁用/删除后
+ * 重开会话按 UD9 回落物理模型正常出话），不为它准备分支。
+ */
+export function formatCredentialMissingPresentation(raw: string): string | undefined {
+  // 形态二：虚拟模型路由 resolveModel 凭据拦截（不以 No API key 开头，先行判定）。
+  if (!raw.startsWith(PI_CREDENTIAL_MISSING_PREFIX)) {
+    const routed = PI_VIRTUAL_ROUTE_NO_CREDENTIALS_PATTERN.exec(raw)
+    return routed === null ? undefined : credentialMissingPresentation(routed[1] ?? raw)
+  }
+  // 形态一端点标识提取：变体形态依次尝试——`No API key for <p>/<m>`、`No API key for provider: <p>`、
+  // `No API key provided for provider "<p>"`；全不匹配时退化为原文尾部（端点名不可解析也
+  // 不丢呈现——指引仍完整）。
+  const refMatch = /^No API key for ([^\s:]+\/[^\s:]+)$/.exec(raw)
+  const providerColonMatch = /^No API key for provider: (.+)$/.exec(raw)
+  const providerQuotedMatch = /^No API key provided for provider "(.+)"$/.exec(raw)
+  const target = refMatch?.[1] ?? providerColonMatch?.[1] ?? providerQuotedMatch?.[1] ?? raw
+  return credentialMissingPresentation(target)
+}
+
+/** 凭据缺失结构化呈现的公共尾段（端点名 + 失败原因 + 恢复指引，两形态同构产出）。 */
+function credentialMissingPresentation(target: string): string {
+  return `模型调用失败：${target} 的凭据缺失或已失效，请到设置页 Provider 分区更新该渠道的 API Key`
+}
+
+/**
+ * 回合失败错误的用户呈现（单点组合）：命中凭据缺失词表 → 结构化映射；未命中原样透传。
+ *
+ * 消费点（同一组合此前在 runtime event-adapter 两出口内联——live 链的 message.complete
+ * errorMessage 与 stream_error content；本函数收编后重放链 core apply-entry-convert 复用
+ * 同一实现，live 与重放对同一失败条目产出逐字相同的错误文本）。
+ */
+export function formatTurnErrorPresentation(raw: string): string {
+  return formatCredentialMissingPresentation(raw) ?? raw
 }
 
 export interface SkillInfo {

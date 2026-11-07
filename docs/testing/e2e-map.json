@@ -182,7 +182,7 @@
       "run": "npx playwright test --project=electron",
       "owner": "packages/renderer",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
-      "note": "scope 内 spec 文件精确列出（spec 自身变更也触发自身规则）；e2e/ 下新增 spec 文件不匹配任何 scope，由 --check 门强制显式登记。与 E2E-ELECTRON-01 是超集关系（smoke ⊂ 全量），CI 只跑 smoke 子集。[2026-09-16 composer-task-tray] e2e/workflow-sidebar-sync.spec.ts 语义复核：文件名保留（登记 id 与 scope 不变），断言范围随侧栏任务 tab 退役改写为「托盘同步」（workflow/subagent 记录 → 托盘条目/面板桶计数/行点击归宿 drawer workflow tab；原侧栏列表与详情视图断言随组件退役删除），行渲染细节下沉托盘组件测试（packages/renderer/src/__tests__/panel/tray/）——spec 只保留跨进程链路，复核后 scope 命中侧不变（packages/renderer/src/** 已覆盖托盘入/退役改动）。[2026-09-16 composer-task-tray 补 scope ②] 增补 `packages/ui/src/**`：本组断言的 @taiji/ui 渲染范围——gui-components.spec.ts 的 8 个渲染原语（ansi-text / card / stats-line / progress-bar / list-tree / columns / group / tab-bar，`packages/ui/src/rendering-protocol/primitives/`）+ v6-shell-baseline 打开 drawer 后断言的容器（renderer `components/workspace/PanelContainer.vue` 渲染 `features/drawer/DrawerPanel.vue`，`aside[aria-label=\"侧边抽屉\"]` 即其根）；改该目录会击穿本组断言却圈不到本 rule（该目录此前不在任何 rule 的 scope 内）。（归属澄清：v6-shell-baseline 的 shell 容器 app-shell / app-shell-aside / app-shell-main 属 renderer 的 `packages/renderer/src/components/shell/`，composer-box 属 renderer 的 `packages/renderer/src/components/panel/Composer.vue`（输入区 ComposerInput 来自 @taiji/ui）——前者由 scope 内既有的 `packages/renderer/src/**` 覆盖，不在 packages/ui。）本组为 on-diff，补后新增命中侧 = packages/ui/** 变更（按改动范围执行单 spec，非全量扫跑）。[2026-09-22 btw-question M4-b] MOCK 层 5 条单测化记录在案归属登记（设计 §4 e2e 影响面：5 条确定性断言随各单元 L1 落地，不占 e2e 执行侧）——S1 主 turn 中 btw 提问·双流隔离 → packages/runtime/src/transport/__tests__/btw-p-isolation.test.ts（P-isolation 分区无串扰）+ packages/runtime/src/services/session/__tests__/btw-no-abort.test.ts（P-no-abort 主 turn 面）；S2 btw 第二轮携带自身上文 → packages/runtime/src/__tests__/btw-ensure-branch.test.ts（同 vid 续问 ensureProcess 分支=第二轮落同一线；LLM 上文质量面归 A2/L4，mock 只承载路由半边）；S5 删主级联 → packages/runtime/src/services/session/__tests__/btw-cascade.test.ts（P-cascade + 三路并发收敛 + P-invisible runtime 面）；S6 持久恢复 → packages/runtime/src/services/session/__tests__/btw-persist-reload.test.ts（重建/孤儿补账/checkpoint 豁免）+ packages/renderer/src/__tests__/stores/btw-replay.test.ts（文件→chatStore 分区回放）；S9 交互路由 → packages/renderer/src/__tests__/panel/btw-overlay-routing.test.ts（vid 路由 + 终态机四行 + 外溢隔离）。scope 核对：btw 改动范围已在本 rule 既有 scope 内，无需扩。；[2026-10-02 workflow-visualization] 该 spec T3 断言范围随 D1 入口改向迁移：workflow 行点击归宿 overlay（drawer WorkflowTab = 被动回落载体），mock 层经 getWorkflowDag 同构降级回执覆盖 overlay 失败路径形态；[2026-10-02 workflow-visualization OV 层] 新增 `e2e/workflow-viz-overlay.spec.ts`（OV1-OV6 六 case）：承接设计 §4 S1/S2/S4/S6 mock 可达面与 impl-plan 验收计划 A5a/A6/A7 的脚本化部分——overlay run 身份对账（OV1）/ workflow tab 三子页行集对账（OV2：trace↔agentCalls、事件流↔fixtureRunEvents、Gantt↔分段派生）/ agent tab 钻取与回退（OV3）/ DAG 降级列表内容对账（OV4）/ L2TabBar 关闭编排（OV5）/ 三通道统一关闭（OV6）。mock 数据配套：getWorkflowRunEvents 对 wf-mock-001 补成功回执（fixtureRunEvents，workflow-data.ts——事件流/Gantt 子页正向对账数据；record_not_found 降级形态的 renderer 分流由组件测试 workflow-live-panel.test.ts 覆盖），getWorkflowDag 维持恒降级（T3/OV4 共用断言范围）。mock 不可达面登记：对话流 block 第二入口（s3 空会话被 composer/state-tearing 等 5 spec 依赖，不可注入 workflow tool 消息）、phase tab 钻取（依赖 DAG 成功臂）、焦点归还锚精确断言（受入口点击链路焦点转移干扰）——三项归 A4（L4 真机走查）；[终态同步 R1 补登记] A5a（S2 实况点亮确定性断言）的运行中面两子项 mock 不可达——「workflowUpdate 信号后刷新 ≤2s」（mock 层无 workflowUpdate 发射，见 workflow-sidebar-sync.spec.ts 注释）与「纯脚本 phase 推进期间分区高亮切换」（需运行中 run 的转态信号）同归 A4 真机走查；A5a 已承接子项 = 终态 data-status 断言（OV1/OV2）与 retrying 派生态（组件测试 workflow-live-panel.test.ts），信号重新拉取链路由 store 契约测试覆盖（triggerWorkflowReload 活跃 run 分支）。[终态同步 R1 补登记] OV 层承接 A7（S3 挂接对账 + S5 Gantt/事件流对账）的子集边界 = 单段无重试 done 形态的骨架对账（fixtureRunEvents 无重试帧，spec 自证）；S3 循环挂接的匹配侧归 blueprint-match.test.ts 单测、S5 多轮重试 attempt 分段反推公式归 gantt-segments.test.ts 单测（fixture 对拍）、aborted 终局在途末段归 L4 走查（l4-walkthrough）——载体均存在，归属在此声明[2026-10-06 workflow-overlay-refine D8] workflow-viz-overlay.spec.ts 边界用例注记（assets 依赖关系注记，无 assets/scope 变更）：OV7+ 六态边界断言（running / pending / failed / retrying / interrupted / stopped-time-limited 演员）与 OV4 降级断言迁移（parse_failed 演员承载）依赖 mock 通道按 runId 分支与演员集落地（packages/core/src/transport/mock/，已在本 rule scope 内）；workflow-sidebar-sync.spec.ts 的计数断言重写与按 runId 定位适配同批。[2026-11-02 tray-panel-interact M2] e2e/workflow-sidebar-sync.spec.ts 与 e2e/workflow-viz-overlay.spec.ts 移出本 rule：托盘 workflow/subagent 两件随容器扩展点统一 §6.6 U9/U10 从宿主 built-in 托盘迁插件推 widget 树后，两 spec 的全部用例依赖「托盘 widget 区挂载 → list-tree 可点行 → 容器导航执行器」这条入口链，而该链在 mock 层结构性不可达（mock pushSession 只走 session 通道，widget 区数据源 ViewHostStore 经 ExtensionHost bridge 的 onCrossSession 订阅、由 route-inbound 投递，mock 不进 route-inbound 且 getPluginUiSnapshot 恒空——证据链与仓内先例 gui-components.spec.ts 同款）。逐用例核实依赖后零可跑用例留存，两 spec 随入口链断言一并迁真实进程层 E2E-REAL-01 的 e2e/tray-entry-real.spec.ts（T1 行集 / T2 挂载回归 / T3 入口归宿 / D11 收起联动——RL8 新建断言，原无既有用例承接）；原 OV1-OV10（overlay 内部行为，依赖 mock 冻结演员表 workflow-data.ts 的 11 run）在 mock 层入口消失后无承载位，确定性半边由组件测试 workflow-viz-overlay-bundle.test.ts 承担，跨进程集成半边的恢复条件 = mock 的 pushSession 增补 crossSession 分发路径（出本 rule 领地，登记为 blocker）。"
+      "note": "scope 内 spec 文件精确列出（spec 自身变更也触发自身规则）；e2e/ 下新增 spec 文件不匹配任何 scope，由 --check 门强制显式登记。与 E2E-ELECTRON-01 是超集关系（smoke ⊂ 全量），CI 只跑 smoke 子集。[2026-09-16 composer-task-tray] e2e/workflow-sidebar-sync.spec.ts 语义复核：文件名保留（登记 id 与 scope 不变），断言范围随侧栏任务 tab 退役改写为「托盘同步」（workflow/subagent 记录 → 托盘条目/面板桶计数/行点击归宿 drawer workflow tab；原侧栏列表与详情视图断言随组件退役删除），行渲染细节下沉托盘组件测试（packages/renderer/src/__tests__/panel/tray/）——spec 只保留跨进程链路，复核后 scope 命中侧不变（packages/renderer/src/** 已覆盖托盘入/退役改动）。[2026-09-16 composer-task-tray 补 scope ②] 增补 `packages/ui/src/**`：本组断言的 @taiji/ui 渲染范围——gui-components.spec.ts 的 8 个渲染原语（ansi-text / card / stats-line / progress-bar / list-tree / columns / group / tab-bar，`packages/ui/src/rendering-protocol/primitives/`）+ v6-shell-baseline 打开 drawer 后断言的容器（renderer `components/workspace/PanelContainer.vue` 渲染 `features/drawer/DrawerPanel.vue`，`aside[aria-label=\"侧边抽屉\"]` 即其根）；改该目录会击穿本组断言却圈不到本 rule（该目录此前不在任何 rule 的 scope 内）。（归属澄清：v6-shell-baseline 的 shell 容器 app-shell / app-shell-aside / app-shell-main 属 renderer 的 `packages/renderer/src/components/shell/`，composer-box 属 renderer 的 `packages/renderer/src/components/panel/Composer.vue`（输入区 ComposerInput 来自 @taiji/ui）——前者由 scope 内既有的 `packages/renderer/src/**` 覆盖，不在 packages/ui。）本组为 on-diff，补后新增命中侧 = packages/ui/** 变更（按改动范围执行单 spec，非全量扫跑）。[2026-09-22 btw-question M4-b] MOCK 层 5 条单测化记录在案归属登记（设计 §4 e2e 影响面：5 条确定性断言随各单元 L1 落地，不占 e2e 执行侧）——S1 主 turn 中 btw 提问·双流隔离 → packages/runtime/src/transport/__tests__/btw-p-isolation.test.ts（P-isolation 分区无串扰）+ packages/runtime/src/services/session/__tests__/btw-no-abort.test.ts（P-no-abort 主 turn 面）；S2 btw 第二轮携带自身上文 → packages/runtime/src/__tests__/btw-ensure-branch.test.ts（同 vid 续问 ensureProcess 分支=第二轮落同一线；LLM 上文质量面归 A2/L4，mock 只承载路由半边）；S5 删主级联 → packages/runtime/src/services/session/__tests__/btw-cascade.test.ts（P-cascade + 三路并发收敛 + P-invisible runtime 面）；S6 持久恢复 → packages/runtime/src/services/session/__tests__/btw-persist-reload.test.ts（重建/孤儿补账/checkpoint 豁免）+ packages/renderer/src/__tests__/stores/btw-replay.test.ts（文件→chatStore 分区回放）；S9 交互路由 → packages/renderer/src/__tests__/panel/btw-overlay-routing.test.ts（vid 路由 + 终态机四行 + 外溢隔离）。scope 核对：btw 改动范围已在本 rule 既有 scope 内，无需扩。；[2026-10-02 workflow-visualization] 该 spec T3 断言范围随 D1 入口改向迁移：workflow 行点击归宿 overlay（drawer WorkflowTab = 被动回落载体），mock 层经 getWorkflowDag 同构降级回执覆盖 overlay 失败路径形态；[2026-10-02 workflow-visualization OV 层] 新增 `e2e/workflow-viz-overlay.spec.ts`（OV1-OV6 六 case）：承接设计 §4 S1/S2/S4/S6 mock 可达面与 impl-plan 验收计划 A5a/A6/A7 的脚本化部分——overlay run 身份对账（OV1）/ workflow tab 三子页行集对账（OV2：trace↔agentCalls、事件流↔fixtureRunEvents、Gantt↔分段派生）/ agent tab 钻取与回退（OV3）/ DAG 降级列表内容对账（OV4）/ L2TabBar 关闭编排（OV5）/ 三通道统一关闭（OV6）。mock 数据配套：getWorkflowRunEvents 对 wf-mock-001 补成功回执（fixtureRunEvents，workflow-data.ts——事件流/Gantt 子页正向对账数据；record_not_found 降级形态的 renderer 分流由组件测试 workflow-live-panel.test.ts 覆盖），getWorkflowDag 维持恒降级（T3/OV4 共用断言范围）。mock 不可达面登记：对话流 block 第二入口（s3 空会话被 composer/state-tearing 等 5 spec 依赖，不可注入 workflow tool 消息）、phase tab 钻取（依赖 DAG 成功臂）、焦点归还锚精确断言（受入口点击链路焦点转移干扰）——三项归 A4（L4 真机走查）；[终态同步 R1 补登记] A5a（S2 实况点亮确定性断言）的运行中面两子项 mock 不可达——「workflowUpdate 信号后刷新 ≤2s」（mock 层无 workflowUpdate 发射，见 workflow-sidebar-sync.spec.ts 注释）与「纯脚本 phase 推进期间分区高亮切换」（需运行中 run 的转态信号）同归 A4 真机走查；A5a 已承接子项 = 终态 data-status 断言（OV1/OV2）与 retrying 派生态（组件测试 workflow-live-panel.test.ts），信号重新拉取链路由 store 契约测试覆盖（triggerWorkflowReload 活跃 run 分支）。[终态同步 R1 补登记] OV 层承接 A7（S3 挂接对账 + S5 Gantt/事件流对账）的子集边界 = 单段无重试 done 形态的骨架对账（fixtureRunEvents 无重试帧，spec 自证）；S3 循环挂接的匹配侧归 blueprint-match.test.ts 单测、S5 多轮重试 attempt 分段反推公式归 gantt-segments.test.ts 单测（fixture 对拍）、aborted 终局在途末段归 L4 走查（l4-walkthrough）——载体均存在，归属在此声明[2026-10-06 workflow-overlay-refine D8] workflow-viz-overlay.spec.ts 边界用例注记（assets 依赖关系注记，无 assets/scope 变更）：OV7+ 六态边界断言（running / pending / failed / retrying / interrupted / stopped-time-limited 演员）与 OV4 降级断言迁移（parse_failed 演员承载）依赖 mock 通道按 runId 分支与演员集落地（packages/core/src/transport/mock/，已在本 rule scope 内）；workflow-sidebar-sync.spec.ts 的计数断言重写与按 runId 定位适配同批。[2026-11-02 tray-panel-interact M2] e2e/workflow-sidebar-sync.spec.ts 与 e2e/workflow-viz-overlay.spec.ts 移出本 rule：托盘 workflow/subagent 两件随容器扩展点统一 §6.6 U9/U10 从宿主 built-in 托盘迁插件推 widget 树后，两 spec 的全部用例依赖「托盘 widget 区挂载 → list-tree 可点行 → 容器导航执行器」这条入口链，而该链在 mock 层结构性不可达（mock pushSession 只走 session 通道，widget 区数据源 ViewHostStore 经 ExtensionHost bridge 的 onCrossSession 订阅、由 route-inbound 投递，mock 不进 route-inbound 且 getPluginUiSnapshot 恒空——证据链与仓内先例 gui-components.spec.ts 同款）。逐用例核实依赖后零可跑用例留存，两 spec 随入口链断言一并迁真实进程层 E2E-REAL-01 的 e2e/tray-entry-real.spec.ts（T1 行集 / T2 挂载回归 / T3 入口归宿 / D11 收起联动——RL8 新建断言，原无既有用例承接）；原 OV1-OV10（overlay 内部行为，依赖 mock 冻结演员表 workflow-data.ts 的 11 run）在 mock 层入口消失后无承载位，确定性半边由组件测试 workflow-viz-overlay-bundle.test.ts 承担，跨进程集成半边的恢复条件 = mock 的 pushSession 增补 crossSession 分发路径（出本 rule 领地，登记为 blocker）。[2026-11 chat-flow-process-aggregate] gui-components.spec.ts 路径 B 用例随聚合块形态适配——Block.vue 退役后 __gui__ card 渲染通道改经聚合块摘要行→单步行→工具详情抽屉富渲染（抽屉输出区新增 __gui__ 分支经 GuiComponentRenderer 渲染 card；旧 turn-meta 条件点击 / run-group-header / tool-block-header 锚点随四层折叠退役删除，提交 814f76e10），scope/assets 无变更"
     },
     {
       "id": "E2E-MOCK-02",
@@ -3536,7 +3536,7 @@
     },
     {
       "id": "E2E-INTEG-16",
-      "summary": "npm-installer stall 传输集成组：真实 TCP/TLS trickle 限速传输不误杀 + timeout 旋钮真窗（TAIJI_TEST_INTEGRATION 门控）",
+      "summary": "npm-installer 安装器组：真实 TCP/TLS trickle 限速传输不误杀 + timeout 旋钮真窗（TAIJI_TEST_INTEGRATION 门控）+ fetchPackageVersions 版本元数据（本地 TLS registry，默认组直跑）",
       "scope": [
         "packages/runtime/src/infra/installers/npm-installer.ts"
       ],
@@ -3545,14 +3545,18 @@
         {
           "kind": "spec",
           "ref": "packages/runtime/test/npm-installer-tarball-stall.test.ts"
+        },
+        {
+          "kind": "spec",
+          "ref": "packages/runtime/test/npm-installer-fetch-versions.test.ts"
         }
       ],
       "trigger": "on-diff",
       "serial": true,
-      "run": "TAIJI_TEST_INTEGRATION=1 pnpm --filter @taiji/runtime exec vitest run test/npm-installer-tarball-stall.test.ts",
+      "run": "TAIJI_TEST_INTEGRATION=1 pnpm --filter @taiji/runtime exec vitest run test/npm-installer-tarball-stall.test.ts test/npm-installer-fetch-versions.test.ts",
       "owner": "packages/runtime",
       "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
-      "note": "R2 态 + 用例级门控（文件留 main 默认组，快用例继续占默认组；门控 = TAIJI_TEST_INTEGRATION，SSOT = test-guard/integration-gate.ts，skip 理由注入 describe 名）。触发条件 = npm 安装器 stall 兜底链 diff 命中。断言本质 = stall timer 在真实持续数据流下不误杀 + 超时旋钮真窗触发（stall 窗口语义 4 条 fake timers 面与 complete 回归 2 条留默认组）；serial=真 的理由 = 真实 ~1s 限速传输依赖网络栈墙钟。"
+      "note": "R2 态 + 用例级门控（文件留 main 默认组，快用例继续占默认组；门控 = TAIJI_TEST_INTEGRATION，SSOT = test-guard/integration-gate.ts，skip 理由注入 describe 名）。触发条件 = npm 安装器 diff 命中。断言本质 = stall timer 在真实持续数据流下不误杀 + 超时旋钮真窗触发（stall 窗口语义 4 条 fake timers 面与 complete 回归 2 条留默认组）；serial=真 的理由 = 真实 ~1s 限速传输依赖网络栈墙钟。fetch-versions 资产 = fetchPackageVersions 版本下拉数据源（本地 TLS registry 回 metadata JSON，loopback 毫秒级确定性，3 用例全默认组无门控）。"
     },
     {
       "id": "E2E-INTEG-17",
@@ -5903,6 +5907,77 @@
       "run": "pnpm -C packages/runtime exec vitest run test/rpc-client-timeout-contract.test.ts",
       "owner": "packages/runtime",
       "note": "ADR-0190 时间机制退役的契约锁定测试（原 event-interpreter-watchdog.test.ts 改名）：断言 rpc-client 公开方法签名与 sendCommand 契约无墙钟参数面。"
+    },
+    {
+      "id": "E2E-FONTS-01",
+      "summary": "字体渲染真机断言：构建产物 .font-mono 走 var(--font-mono) / 默认态 computed 保留完整构建期栈 / 槽位写入与清除 / 失效回落 / 宿主兄弟字段不变",
+      "scope": [
+        "packages/shared/src/tailwind-preset.ts",
+        "packages/renderer/src/style.css",
+        "packages/core/src/domain/settings/**",
+        "packages/ui/src/features/settings/apply-system-to-dom.ts",
+        "packages/renderer/src/composables/shell/useSettingsShell.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "e2e/font-custom-render.spec.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "env -u ELECTRON_RUN_AS_NODE npx playwright test e2e/font-custom-render.spec.ts --project=electron",
+      "owner": "packages/renderer",
+      "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
+      "note": "R2：改字体槽位/构建期栈/设置持久化时在 dev-flow 验收阶段跑（空载串行）。断言全为浏览器渲染事实（computed font-family / var() 代入 / rect），happy-dom 无判别力故必须真机。[2026-11-05 终态同步] layer L3→L2（运行形态 = launch-app 拉起 mock 构建 Electron + mock transport，零 token 无 LLM 参与，与 E2E-MOCK-01/E2E-TERMINAL-01 同形态）；spec 增补 RL7（seed fontLibrary → reload → 重放注册 + 失败降级标注 + V4 槽位失效值标注）与 RL13（真 IPC 读真实字体 + FontFace 注册 → 选回系统名宽度回基准 + 大小写归一真机复演）两条真机断言，V8 重写为生产链驱动（设置页下拉提交 + reload，对照 localStorage/terminal.json/document.fonts/会话状态四表面）"
+    },
+    {
+      "id": "E2E-FONTS-02",
+      "summary": "mermaid 字体跟随：字体变化后在无人工干预下图表文字跟随，且 SVG 内不残留旧家族名（区分继承与重渲）",
+      "scope": [
+        "packages/ui/src/features/chat/mermaid.ts",
+        "packages/ui/src/features/chat/MermaidRenderer.vue",
+        "packages/renderer/src/style.css",
+        "packages/ui/src/features/settings/apply-system-to-dom.ts",
+        "packages/core/src/transport/mock/run-send-stream.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "e2e/font-custom-mermaid.spec.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "env -u ELECTRON_RUN_AS_NODE npx playwright test e2e/font-custom-mermaid.spec.ts --project=electron",
+      "owner": "packages/ui",
+      "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
+      "note": "R2：改 mermaid 渲染、字体槽位写入链（style.css 槽位名 / apply-system-to-dom.ts）或 mock 哨兵词（run-send-stream.ts 的 md-mermaid 判定 / MERMAID_REPLY 数据源）时跑。mermaid 在 mock DOM 里 render 静默返回空串，只有真机能断言。[2026-11-05 终态同步补 scope] 头注释与原 note 都声明触发条件含字体槽位写入链，scope 数组未兑现；且本 spec 断言的数据源（mock 哨兵词/MERMAID_REPLY）此前仅被 E2E-MOCK-01 的 packages/core/src/** 覆盖、其 assets 不含本 spec——改哨兵词不会选中本 rule 的盲区由本次增补收敛"
+    },
+    {
+      "id": "E2E-FONTS-03",
+      "summary": "font:read-bytes 通道边界：非字体文件被拒 / 超 20MB 被拒且不读入内存 / 凭据目录禁区拦截",
+      "scope": [
+        "apps/electron/main/gateway/font-handlers.ts",
+        "apps/electron/preload/preload.ts",
+        "packages/shared/src/ipc-channels.ts",
+        "packages/shared/src/ipc-payloads.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "e2e/font-custom-ipc.spec.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "env -u ELECTRON_RUN_AS_NODE npx playwright test e2e/font-custom-ipc.spec.ts --project=electron",
+      "owner": "apps/electron",
+      "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
+      "note": "R2：改 IPC 读取通道或其校验时跑。纯校验函数三关与禁区在 L1 单测已覆盖，本 spec 只验真机拒绝行为。[2026-11-05 终态同步] layer L3→L2（launch-app mock 构建真实进程、零 token；同 FONTS-01 口径）"
     }
   ]
 }

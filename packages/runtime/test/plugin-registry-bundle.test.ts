@@ -444,10 +444,12 @@ function makeProviderEntries(ids: string[]): ProviderEntriesFake {
 }
 
 
-/** piExtensionInstaller port fake（U7/U4 双产物接线用例）：记录 install/uninstall 入参。 */
+/** piExtensionInstaller port fake（U7/U4 双产物接线用例）：记录 install/uninstall 入参。
+ *  handlesPackage 可选注入（免钉版条目的双产物判定；缺省 = 旧实现未提供该方法的形态）。 */
 function makePiExtensionInstaller(): {
   installForCatalogEntry: ReturnType<typeof vi.fn<(entry: { packageName: string; piExtensionVersion: string }) => Promise<{ installedVersion: string }>>>
   uninstallForCatalogEntry: ReturnType<typeof vi.fn<(packageName: string) => Promise<void>>>
+  handlesPackage?: ReturnType<typeof vi.fn<(packageName: string) => boolean>>
 } {
   return {
     installForCatalogEntry: vi.fn(async () => ({ installedVersion: '0.2.0' })),
@@ -1172,6 +1174,54 @@ describe('PluginService 双产物安装编排（U7/D6：confirm 成功后接 pi 
     expect(piExtensionInstaller.installForCatalogEntry).not.toHaveBeenCalled()
   })
 
+  it('免钉版 wool 条目（无 piExtensionVersion）+ installer 声明 handlesPackage → 仍安装扩展成员（版本跟随 wool-manifest，入参 piExtensionVersion=undefined）', async () => {
+    const handlesPackage = vi.fn(() => true)
+    const piExtensionInstaller = { ...makePiExtensionInstaller(), handlesPackage }
+    const { service } = buildService({ piExtensionInstaller })
+    mockCatalog([{ ...WOOL_ENTRY, pluginVersion: undefined, piExtensionVersion: undefined }])
+    mockDownloadWrites(pkgJson('@zhushanwen/plugin-wool-workbuddy', { namespace: 'wool-workbuddy' }))
+    mockActivation(service, 'ACTIVE')
+
+    await service.preparePluginInstall('@zhushanwen/plugin-wool-workbuddy')
+    const result = await service.confirmPluginInstall('zhushanwen__plugin-wool-workbuddy')
+
+    expect(result.success).toBe(true)
+    expect(handlesPackage).toHaveBeenCalledWith('@zhushanwen/plugin-wool-workbuddy')
+    expect(piExtensionInstaller.installForCatalogEntry).toHaveBeenCalledTimes(1)
+    expect(piExtensionInstaller.installForCatalogEntry.mock.calls[0][0]).toEqual({
+      packageName: '@zhushanwen/plugin-wool-workbuddy',
+      piExtensionVersion: undefined,
+    })
+  })
+
+  it('免钉版条目 + installer 未提供 handlesPackage（旧实现）→ 按单产物跳过（向后兼容）', async () => {
+    const piExtensionInstaller = makePiExtensionInstaller()
+    const { service } = buildService({ piExtensionInstaller })
+    mockCatalog([{ ...WOOL_ENTRY, pluginVersion: undefined, piExtensionVersion: undefined }])
+    mockDownloadWrites(pkgJson('@zhushanwen/plugin-wool-workbuddy', { namespace: 'wool-workbuddy' }))
+    mockActivation(service, 'ACTIVE')
+
+    await service.preparePluginInstall('@zhushanwen/plugin-wool-workbuddy')
+    const result = await service.confirmPluginInstall('zhushanwen__plugin-wool-workbuddy')
+
+    expect(result.success).toBe(true)
+    expect(piExtensionInstaller.installForCatalogEntry).not.toHaveBeenCalled()
+  })
+
+  it('免钉版条目 + handlesPackage 判非双产物包名 → 跳过扩展安装', async () => {
+    const piExtensionInstaller = { ...makePiExtensionInstaller(), handlesPackage: vi.fn(() => false) }
+    const { service } = buildService({ piExtensionInstaller })
+    mockCatalog([{ ...WOOL_ENTRY, piExtensionVersion: undefined }])
+    mockDownloadWrites(pkgJson('@zhushanwen/plugin-wool-workbuddy', { namespace: 'wool-workbuddy' }))
+    mockActivation(service, 'ACTIVE')
+
+    await service.preparePluginInstall('@zhushanwen/plugin-wool-workbuddy')
+    const result = await service.confirmPluginInstall('zhushanwen__plugin-wool-workbuddy')
+
+    expect(result.success).toBe(true)
+    expect(piExtensionInstaller.installForCatalogEntry).not.toHaveBeenCalled()
+  })
+
   it('清单不可得（fail-safe 链尾）→ 跳过扩展安装不误伤（warn 留痕），confirm 成功', async () => {
     const piExtensionInstaller = makePiExtensionInstaller()
     const { service } = buildService({ piExtensionInstaller })
@@ -1184,6 +1234,32 @@ describe('PluginService 双产物安装编排（U7/D6：confirm 成功后接 pi 
 
     expect(result.success).toBe(true)
     expect(piExtensionInstaller.installForCatalogEntry).not.toHaveBeenCalled()
+  })
+
+  it('VERSION_PAIR_MISMATCH 且强制刷新清单后版本变化 → 用新配对自动重试并成功', async () => {
+    const piExtensionInstaller = makePiExtensionInstaller()
+    piExtensionInstaller.installForCatalogEntry
+      .mockRejectedValueOnce(Object.assign(new Error('version pair mismatch'), { code: 'VERSION_PAIR_MISMATCH' }))
+      .mockResolvedValueOnce({ installedVersion: '0.3.0' })
+    const { service } = buildService({ piExtensionInstaller })
+    refreshRemoteConfigMock
+      .mockResolvedValueOnce({ data: { version: 1, plugins: [{ ...WOOL_ENTRY, piExtensionVersion: '0.2.0' }] }, refreshed: false })
+      .mockResolvedValueOnce({ data: { version: 1, plugins: [{ ...WOOL_ENTRY, piExtensionVersion: '0.3.0' }] }, refreshed: true })
+    mockDownloadWrites(pkgJson('@zhushanwen/plugin-wool-workbuddy', { namespace: 'wool-workbuddy' }))
+    mockActivation(service, 'ACTIVE')
+
+    await service.preparePluginInstall('@zhushanwen/plugin-wool-workbuddy')
+    const result = await service.confirmPluginInstall('zhushanwen__plugin-wool-workbuddy')
+
+    expect(result.success).toBe(true)
+    expect(piExtensionInstaller.installForCatalogEntry.mock.calls).toEqual([
+      [{ packageName: '@zhushanwen/plugin-wool-workbuddy', piExtensionVersion: '0.2.0' }],
+      [{ packageName: '@zhushanwen/plugin-wool-workbuddy', piExtensionVersion: '0.3.0' }],
+    ])
+    const forcedRefresh = refreshRemoteConfigMock.mock.calls.find(
+      (call) => (call[2] as { force?: boolean } | undefined)?.force === true,
+    )
+    expect(forcedRefresh).toBeDefined()
   })
 
   it('扩展成员安装失败 → confirm 整体报失败（插件已落盘事实保留），错误含恢复指引', async () => {
@@ -1716,6 +1792,7 @@ function makeInstaller(overrides: Partial<IPluginInstaller> = {}): IPluginInstal
     discardReplaced: vi.fn(),
     sweepStaging: vi.fn(),
     uninstall: vi.fn().mockResolvedValue(undefined),
+    listVersions: vi.fn(async () => ({ versions: ['0.1.0'], latest: '0.1.0' })),
     ...overrides,
   }
 }
@@ -2261,6 +2338,7 @@ describe('external plugin install hard lock（§6.6 排期硬锁）', () => {
       discardReplaced: vi.fn().mockResolvedValue(undefined),
       sweepStaging: vi.fn().mockResolvedValue(undefined),
       uninstall: vi.fn().mockResolvedValue(undefined),
+      listVersions: vi.fn(async () => ({ versions: ['1.0.0'], latest: '1.0.0' })),
     }
     const service = createService_m2(installer)
     // 激活链 mock：activatePlugin 对无 descriptor 插件 no-op resolve；getState 恒 ACTIVE；

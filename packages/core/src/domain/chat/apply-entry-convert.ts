@@ -22,7 +22,9 @@ import type {
   ToolCall,
 } from '@taiji/shared'
 import {
+  ASSISTANT_ERROR_FALLBACK_TEXT,
   findSkillDataBlockRange,
+  formatTurnErrorPresentation,
   HANDOFF_PROMPT_TEMPLATE,
   MSG_ID_TAG_BARE_RE,
   parseSkillMarkers,
@@ -351,6 +353,26 @@ export function usageField(body: PiMessageBody): { usage?: { inputTokens: number
   return { usage: { inputTokens: input ?? 0, outputTokens: output ?? 0 } }
 }
 
+/**
+ * assistant 失败回合的错误呈现派生（agg-error-presentation 重放态缺口修复）。
+ *
+ * pi 对失败回合构造的 failureMessage（agent.js handleRunFailure：stopReason='error' +
+ * errorMessage=原文、content 为空串）常规落盘进 session JSONL——重放链此前不消费这两
+ * 字段，产物是「status:'complete' + 空正文 + 无 error」的哑气泡（用户切走会话再切回
+ * 看不到错误文本）。本派生把落盘事实还原为与 live 链同一形态：status 由调用点按
+ * stopReason 收窄、error 文本经 formatTurnErrorPresentation 单点映射（凭据缺失原文 →
+ * 结构化文案，与 live 链 event-adapter 出口同一实现）。
+ *
+ * 非空保底：stopReason='error' 而 errorMessage 缺失/空串（畸形/旧数据）时落
+ * ASSISTANT_ERROR_FALLBACK_TEXT——M2 不变量「status:'error' 则 error 必非空」，空串
+ * 会让 TextRow 的 error 独立行判据（status==='error' && !!error）静默漏渲染。
+ */
+function assistantReplayError(body: PiMessageBody): { error?: string } {
+  if (body.stopReason !== 'error') return {}
+  const raw = typeof body.errorMessage === 'string' && body.errorMessage.length > 0 ? body.errorMessage : undefined
+  return { error: raw !== undefined ? formatTurnErrorPresentation(raw) : ASSISTANT_ERROR_FALLBACK_TEXT }
+}
+
 function buildMessage(
   body: PiMessageBody,
   entryId: string | undefined,
@@ -362,7 +384,9 @@ function buildMessage(
     id: baseId,
     role: body.role === 'user' ? 'user' : 'assistant',
     content: acc.textContent,
-    status: 'complete',
+    // 失败回合条目（stopReason='error'，仅 assistant 存在该字段）派生 error 终态；
+    // 'aborted' 维持 complete——与 live 链 terminalMessagePatch 的 isErrorStop 口径一致。
+    status: body.stopReason === 'error' ? 'error' : 'complete',
     timestamp: body.timestamp ?? fallbackTs,
     // piEntryId：fork 定位截断点用（RPC 路径无此字段时 fallback 读 JSONL 按 timestamp 匹配）
     ...(entryId !== undefined && { piEntryId: entryId }),
@@ -372,6 +396,7 @@ function buildMessage(
     ...(acc.imageParts.length > 0 && { images: acc.imageParts }),
     ...fileChangesField(body, acc.toolCalls),
     ...usageField(body),
+    ...assistantReplayError(body),
   }
 }
 

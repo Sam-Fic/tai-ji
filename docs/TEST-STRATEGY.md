@@ -7,7 +7,7 @@
 > **各功能具体测试步骤**（MOCK/非MOCK/Playwright 调用链 + 每步期望输入输出）见 [docs/testing/](docs/testing/) 测试手册（2026-09 并册为 4 册）：
 > - [00-overview.md](docs/testing/00-overview.md) — 总览（双轨制 + Playwright harness + 公共前置 + E2E 常见坑，入口篇必读）+ 手册索引 + 真实进程层手工手册（RT-01~08）+ 真实进程层自动化 spec（真 Electron + runtime + pi + LLM，零 mock）
 > - [01-chat-panel-composer.md](docs/testing/01-chat-panel-composer.md) — 对话主链：新建任务（Landing + 选目录 + 首发提交）/ Composer（输入框 + slash 命令浮层 + 三态）/ 对话流（流式消息 + 工具调用 + 变更集）
-> - [02-panels-sidebar.md](docs/testing/02-panels-sidebar.md) — 面板与侧栏：文件树（懒加载 + 过滤 + git 角标，11 E2E 用例已落地）/ SideDrawer（文件预览 / diff / git tab）/ 搜索浮层（⌘K 四类搜索 + recents + 跳转，7 E2E 用例已落地）/ GUI 组件渲染 / Subagent-Workflow 面板 / 后台命令侧边栏
+> - [02-panels-sidebar.md](docs/testing/02-panels-sidebar.md) — 面板与侧栏：文件树（懒加载 + 过滤 + git 角标，11 E2E 用例已落地）/ 抽屉 DrawerPanel（原 SideDrawer，已迁 ui 包；文件预览 / diff / git tab）/ 搜索浮层（⌘K 四类搜索 + recents + 跳转，7 E2E 用例已落地）/ GUI 组件渲染 / Subagent-Workflow 面板 / 后台命令侧边栏
 > - [03-runtime-extensions.md](docs/testing/03-runtime-extensions.md) — runtime 服务与 extension：系统提示词配置 / extension 层运行时测试体系（worker harness L1 → real LLM L3，价值层级 + 决策树）/ 插件系统非 mock E2E / 自动升级验证
 
 ## 1. 测试框架 [HISTORICAL]
@@ -28,7 +28,7 @@
 
 > **[HISTORICAL] E2E 从手动升级为 Playwright**：原「E2E 手动，无 playwright/cypress」（2026-06-28 sidebar-project-file-tree W0 引入 Playwright 覆盖）。mock 层验证渲染/交互，但**验证不了模块加载期副作用**——`node:path` 类错误在 vite build 期被 externalize 成惰性代理，mock 模式不触发 getter，E2E 全绿却 dev 崩溃（2026-06-30 事故）。**必须配套 dev 冒烟门禁**。详见 `.taiji-harness/2026-06-30-e2e-retrospect/`。`[from: 2026-06-28-sidebar-project-file-tree §2/W8]`
 >
-> **dev 冒烟门禁（已实现，S1-W1 交付）**：`scripts/dev-smoke.mjs` 自管理完整生命周期（VITE_MOCK=true spawn vite → 轮询 ready → chromium 连接 → 双通道抓错误 → 断言挂载点 → cleanup），不依赖外部已启动的 dev server。双通道错误捕获：(A) vite 子进程输出正则匹配编译期错误（Module not found / Pre-transform error / Failed to resolve import 等）；(B) `page.on('console')` error + `page.on('pageerror')` 未捕获异常。**exit code 语义**：`0`=ok（零 error + 挂载点全存在）/ `1`=有 error（console/pageerror/编译 pattern 非空 或 挂载点缺失）/ `2`=dev server 启动超时 / `3`=chromium launch 失败。完整用法与错误注入指南见 `scripts/dev-smoke.mjs` 文件头注释。`[from: v6-ui-refactor-test-infra S1-W1 dev-smoke-gate]`
+> **dev 冒烟门禁（已实现，S1-W1 交付）**：`scripts/dev-smoke.mjs` 自管理完整生命周期（VITE_MOCK=true spawn vite → 双环回（127.0.0.1/[::1]）轮询 ready 并取可达地址 → chromium launch（ready 后启动、缺浏览器早失败 exit 3）→ newPage + goto 同一地址 → 双通道抓错误 → 断言挂载点 → cleanup（15s 有界）），不依赖外部已启动的 dev server。双通道错误捕获：(A) vite 子进程输出正则匹配编译期错误（Module not found / Pre-transform error / Failed to resolve import 等）；(B) `page.on('console')` error + `page.on('pageerror')` 未捕获异常。**exit code 语义**：`0`=ok（零 error + 挂载点全存在）/ `1`=有 error（console/pageerror/编译 pattern 非空 或 挂载点缺失 或 goto 失败）/ `2`=dev server 提前退出（spawn 的进程死亡；ready 轮询无超时上限）/ `3`=chromium launch 失败 或 newPage 失败。完整用法与错误注入指南见 `scripts/dev-smoke.mjs` 文件头注释。`[from: v6-ui-refactor-test-infra S1-W1 dev-smoke-gate]`
 
 ### 运行命令（cwd 敏感）
 
@@ -259,6 +259,7 @@ it('首屏渲染：<页面> DOM 含关键交互元素', () => {
 
 - **机制**：`playwright.config.ts` 的 `visual-chromium` project（testMatch `visual/**`）+ `e2e/visual/` spec + `e2e/visual-baselines/` baseline 快照（**git tracked**，CI/他人 clone 后无 baseline 则 diff 无意义）
 - **字体固定（2026-10-12）**：visual 层渲染字体 = bundled webfont（`e2e/visual/fixtures/visual-server.ts` 注入 @fontsource-variable/noto-sans-sc 可变字重单源 + `--font-sans` 变量覆盖 + route 本地供给，截图前 `fontsReady` 统一等待）——本机与 runner 渲染同源，本地重录即权威；字体族/包版本变更须全量重录基线一次。实现锚点 = e2e/visual/fixtures/visual-server.ts
+- **槽位机制不改变像素输入（2026-11-04，font-system 实测）**：字体终值变量改为「用户槽位 + 构建期栈」两层形态后（`--font-sans: var(--font-ui, …), …`），visual fixture 以 `html:root`（选择器特异性 0,1,1）直写完整 `--font-sans` 栈，高于 `:root` 声明（0,1,0）故**构造性胜出**——像素输入与改动前完全一致，实测 `npx playwright test --project=visual-chromium` 零漂移、无需重录。后续若改动 fixture 覆盖方式（不再直写完整栈而依赖 `var()` 回落），则必须重录。
 - **双 project 隔离**：electron 行为 mock 层（testIgnore `visual/**`）/ visual-chromium 像素对比层（testMatch `visual/**`）互斥，`npx playwright test e2e/visual` 自动只跑像素对比层
 - **阈值**：`maxDiffPixelRatio: 0.01`（容忍字体抗锯齿/caret 闪烁 flaky，抓真回归）+ `caret:'hide'`
 - **方法论 [from S2-W3]**：(1) `snapshotDir`/`snapshotPathTemplate` 是 TestProject **直接属性**（与 name/testMatch 同级），不是 `use` 属性——放 project.use 里静默不生效；(2) `toHaveScreenshot(name)` 的 name 必须带 `.png` 扩展名；(3) baseline 必须 git tracked
@@ -424,7 +425,7 @@ taste/no-silent-catch 处理：纯 console.warn 仍报（要求传播/重抛）�
 | `file-tree.spec.ts` | R1（1 条：E2E-1）+ R2（其余 9 条） | R2 触发：改 `FileView` / `FileTreeRow` / `useFileTree` / fileTreeStore / mock `file.tree` 时跑。E2E-3b 已退役 R3（2026-09-15 清理）：diff 视图已从 raw diff 文本（`diff --git` 头）改为结构化 hunk 渲染（`@@ … @@`），断言过期；git 可追溯 |
 | `failure-paths.spec.ts` | R1（1 条：A12）+ **R3 初判**（A13：pi 崩溃→重建） | A13 退役理由初判：TAIJI_MOCK=1 不起 runtime，崩溃重建链路在 mock 层不可达，现断言范围（title + 基础 UI 可见）与 harness smoke 重复、无守护价值；真实崩溃重建由 L2.5（真 pi 进程线）承接。**待 L2.5 调研线终判后再动文件** |
 | `workspace.spec.ts` | R2（3 条） | 触发：改 `workspaceStore` / DirSelectPopover / mockApi.workspace 门面时跑（含 §4「store 必须走 @/api 门面」基线） |
-| `gui-components.spec.ts` | R2（2 条） | 触发：改 `Block.vue`（`__gui__` tool result 渲染）/ SideDrawer terminal/browser tab 时跑。路径 A ×2 已退役 R3（2026-09-15 清理）：SideDrawer 内 `gui-stats-line` / `gui-list-tree` testid 不存在（widgetGui 渲染链路改版）；git 可追溯 |
+| `gui-components.spec.ts` | R2（2 条） | 触发：改 `process-aggregate/AggregateToolDetailDrawer.vue`（`__gui__` tool result 渲染链——chat-flow-process-aggregate D4 后 `Block.vue` 已退役删除，card 经聚合块摘要行→单步行→工具详情抽屉富渲染；`ToolRow.vue` 已无活跃消费方（休眠：生产链零 import，`tool-block-header` testid 生产渲染链不可达，仅组件级测试 mount 直挂可达））时跑。路径 A ×2 已退役 R3（2026-09-15 清理）：SideDrawer（容器已迁 ui 包更名 DrawerPanel）内 `gui-stats-line` / `gui-list-tree` testid 不存在（widgetGui 渲染链路改版）；git 可追溯 |
 
 **行为 mock 层 real spec（`*-real.spec.ts`，6 个）**：需真实 runtime（不设 TAIJI_MOCK）+ real renderer bundle，其中 ask-user-real / tasks-drawer-real / workflow-thinkinglevel-real 含真实 LLM 调用——**不在此终判**，移交 L2.5（真 pi + faux LLM 调研线）/ L3（触发式回归设计线）终判；倾向初判：models-json-sanitize-real / workspace-real 为凭证无关 real 进程资产（create session 不调 LLM），适合 L2.5 承接（update-cleanup-real 已于 2026-09-15 升级进 CI 固定环节并更名 update-cleanup.spec.ts，见上表；tray-entry-real 归宿见下方真实进程层小节）。
 

@@ -1,7 +1,7 @@
 <!--
-  展示组件 · 思考行（trace 块 thinking 类型行组件，W1 壳化拆分自 Block.vue）。
-  壳根类名契约（.trace-blk / .trace-blk--text）与 data-testid 留在 Block 壳，本组件根 =
-  原 thinking 分支根 div（.trace-think），无新 DOM 层。
+  展示组件 · 思考行（trace 块 thinking 类型行组件）。
+.trace-blk / .trace-blk--text 类名契约归 Turn.vue 单元 wrapper，
+  本组件根 = 原 thinking 分支根 div（.trace-think），无新 DOM 层。
   职责：折叠状态机（useThinkingCollapse：折叠/手动置位/working 回落/收起预览/尾行视口一体）
   + 思考时长（N6）+ 文字扫光（决策 10，块级生命周期随思考完结熄灭）+ 展开区（copy 按钮 +
   BlockScrollBox 240px 限高滚动 + 行区间信息条，fade=false 不渲染渐隐条）。
@@ -39,10 +39,12 @@
         <component :is="BLOCK_ICON_LUCIDE.thinking" v-else class="size-[15px] shrink-0 self-center text-neutral-ico [stroke-width:1.6]" />
         <!-- 状态词 label：思考进行中跑文字扫光（决策 10）。生命周期 = 块级（thinkingEnd 未填），
              非消息级 working——思考完结后消息仍在流式（工具执行中），扫光随思考完结熄灭。
-             base 覆盖为 mid 档对齐 BLOCK_LABEL_CLASS 常态字色（reduced-motion 停帧态 = 常态色，
+             base 经 :style 内联声明覆盖为 mid 档对齐 BLOCK_LABEL_CLASS 常态字色（不用任意
+             属性类挂法：其编译产物特异性 (0,1,0) 低于 scoped 规则的 (0,2,0)，mid 覆盖恒被
+             dim 缺省压住——真机 getComputedStyle 实测确证；reduced-motion 停帧态 = 常态色，
              构造性回退）。:key 绑定预览形态：预览分支切换（单行预览 ↔ 尾行视口）时预览元素
              重建重启动画，状态词同帧重建使两处扫光同一动画相位（整体一起闪）。 -->
-        <span :key="thinkingSweepPhase" :class="[BLOCK_LABEL_CLASS, 'transition-opacity duration-[var(--duration-fast)] group-hover/think:opacity-80', thinkingSweeping ? 'text-sweep [--sweep-base:var(--neutral-mid)]' : '']">{{ t('panel.message.thinkingBlock') }}</span>
+        <span :key="thinkingSweepPhase" :class="[BLOCK_LABEL_CLASS, 'transition-opacity duration-[var(--duration-fast)] group-hover/think:opacity-80', thinkingSweeping ? 'text-sweep' : '']" :style="thinkingSweeping ? { '--sweep-base': 'var(--neutral-mid)' } : undefined">{{ t('panel.message.thinkingBlock') }}</span>
         <!-- 分隔点常驻（demo 思考行运行/完成两态都有「·」）；展开态仅当其后无时长段时随
              预览一起隐（防悬挂点；展开且有时长 =「思考 · 22s」句式保留分隔） -->
         <span class="text-neutral-dim" :class="thinkingExpanded && !thinkingDuration ? 'invisible' : ''">·</span>
@@ -128,7 +130,7 @@ const density = useChatDensity()
 const props = defineProps<{
   /** thinking 内容 */
   content?: string
-  /** thinking 块 id（copy 键锚定 `thinking-<id>`；壳层 data-testid 锚定由 Block 壳承担） */
+  /** thinking 块 id（copy 键锚定 `thinking-<id>`） */
   thinkingId?: string
   /** thinking 起止毫秒时间戳（ThinkingBlock.startTime/endTime 透传，N6 思考行时长数据源；
    *  任一缺失不渲染时长——持久化重载链路 thinking part 无时间戳，维持现状展示） */
@@ -196,8 +198,7 @@ const thinkingSweepPhase = computed(() =>
    opacity + 轻微 translateY（从 header 方向淡入），120ms；保持 v-if 卸载折叠块的长输出
    （不做 grid 恒渲染，避免 streaming 中折叠块长输出恒挂载的性能代价）。
    escape hatch：Vue Transition 类用 scoped 表达（enter-from/leave-to 同时设 opacity+transform）。
-   与 Block.vue 壳内 tool/run-group 展开区各持一份同款规则——scoped 样式只作用于本组件
-   模板元素，Row 拆分后壳内副本不再命中思考行。 */
+   与 ToolRow.vue 展开区各持一份同款规则——scoped 样式只作用于本组件模板元素。 */
 .block-expand-enter-active,
 .block-expand-leave-active {
   transition:
@@ -213,14 +214,16 @@ const thinkingSweepPhase = computed(() =>
 /* 执行中文字扫光（ui-optimize-unified 决策 10 / N13）：扫光对象 = 思考行正在发生的
    内容文字（状态词 + 预览流/尾行视口），稳定标识（时长/时间戳）不扫。机制 =
    background-clip:text + 透明字色，base（--sweep-base，缺省 dim 档 = 预览流常态字色；
-   label 处经任意属性类覆盖为 mid 档）与 peak（--neutral-fg）全令牌化，六主题免逐个定值。
+   label 处经模板 :style 内联声明覆盖为 mid 档——任意属性类挂法不生效，其编译产物特异性
+   (0,1,0) 低于本 scoped 规则的 (0,2,0)，mid 覆盖恒被 dim 缺省压住）与 peak（--neutral-fg）
+   全令牌化，六主题免逐个定值。
    周期 2.6s：前 55% 扫程（peak 自元素左外 -25% 移至右外 125%），后 45% 停帧。
    keyframes（text-sweep）在 renderer style.css 动画区全局定义——scoped 内定义会被
    编译器哈希改名而失效（同全局动画区先例理由）。
    prefers-reduced-motion 由 style.css 全局兜底（duration 0.01ms 停终态帧 position 0%，
    元素内恒 base 段 = 常态字色，「退回常态字色」构造性成立，无需额外覆盖）。
    escape hatch 理由：多属性组合类 + 变量参数化 + 停帧几何推导，Tailwind 任意值
-   内联需 6 类 × 5 消费点且 motion-reduce 变体逐点易漏。与 Block.vue 壳内工具行副本
+   内联需 6 类 × 5 消费点且 motion-reduce 变体逐点易漏。与 ToolRow.vue 工具行
    各持一份同款规则——scoped 样式只作用于本组件模板元素。 */
 .text-sweep {
   --sweep-base: var(--neutral-dim);

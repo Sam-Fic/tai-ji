@@ -228,7 +228,7 @@ raw mirror 的显式降级标注（additive）：写侧 seq 按 `recordId` 进�
 
 pi 引擎单次工具调用的记录。是数据模型的最小单位（bash、read、edit、write、subagent 等）。挂在 Message.toolCalls[] 上。
 
-**Subagent 调用与 ToolCall 的关系**: `toolName` 属 subagent/workflow 族的 ToolCall（`SUBAGENT_TOOL_NAMES` / `WORKFLOW_TOOL_NAMES`，定义于 `packages/shared/src/constants.ts`，判定函数 `isAgentgraphToolName` 在 `packages/core/src/domain/chat/message-turns.ts`）在对话流中渲染为 agentgraph 块（`OrderedBlock` 的 `kind: 'agentgraph'` → `packages/ui/src/features/chat/BlockSubagent.vue` 单行折叠块，只展示发起参数：agent · slug · model · thinking）。点击整行经 `openSubagent`（`packages/core/src/domain/drawer/`）打开 SideDrawer 的 subagent tab——嵌套只读 MessageStream，虚拟 id 形如 `subagent:<mainSid>:<subId>`（`subagentVirtualId`，`packages/shared/src/virtual-session-id.ts`）。ToolCall 是底层数据，agentgraph 块是 UI 层的折叠视图，完整执行记录在 Execution Record / subagent session。
+**Subagent 调用与 ToolCall 的关系**: `toolName` 属 subagent/workflow 族的 ToolCall（`SUBAGENT_TOOL_NAMES` / `WORKFLOW_TOOL_NAMES`，定义于 `packages/shared/src/constants.ts`，判定函数 `isAgentgraphToolName` 在 `packages/core/src/domain/chat/message-turns.ts`）在对话流中渲染为 agentgraph 块（`OrderedBlock` 的 `kind: 'agentgraph'` → `packages/ui/src/features/chat/SubagentRow.vue` 单行折叠块，只展示发起参数：agent · slug · model · thinking）。点击整行经 `openSubagent`（`packages/core/src/domain/drawer/`）打开 DrawerPanel 的 subagent tab（抽屉容器 `packages/ui/src/features/drawer/DrawerPanel.vue`——原 SideDrawer.vue 已退役，跨端共享容器部分迁 ui 包更名 DrawerPanel）——嵌套只读 MessageStream，虚拟 id 形如 `subagent:<mainSid>:<subId>`（`subagentVirtualId`，`packages/shared/src/virtual-session-id.ts`）。ToolCall 是底层数据，agentgraph 块是 UI 层的折叠视图，完整执行记录在 Execution Record / subagent session。
 
 ### Provider
 用户自定义的模型提供商配置。一个 Provider = 一组 (baseUrl + apiKey)。同一真实厂商（如 OpenAI）可以有多个 Provider（如官方端点 + Azure 端点）。Provider 之间完全独立。
@@ -897,3 +897,30 @@ rejected 节点携带的否决理由与复活条件，不可删除——防 agen
 
 ### 就绪（ready）
 节点规划态的收敛判定（自底向上递归）：问题有选定方案且其子树就绪、或其分解子问题全部就绪——两路并存须同时成立（或判定范围外，即 rejected/shelved）；方案无未决分解子问题。**Avoid**: 不叫「完成」（执行完成归下游）。
+
+## 对话流过程聚合域（chat 渲染 trace 区）
+
+回合 trace 区「正文块 + 聚合块」两型单元与聚合块内部结构的统一语言。
+
+### 聚合块（aggregate block）
+回合 trace 区的聚合单元：两条正文块之间的全部过程块收进一个自维护三态的容器——进行中显示固定高度双窗、完成收成一行摘要（分类步数 + 思考数 + 总耗时 + 失败计数）、展开按真实发生顺序平铺（无第二层折叠）。展开/收起是组件本地交互态（不落 store、不持久化）。折叠回合显示全部聚合块摘要行 + 末位正文。进行中聚合窗内的单元列表称**聚合条**（运行中条目高亮 + 流光，失败即时标注「含 N 次失败」）；摘要行 / 组头 / 聚合条三处失败计数同口径（段级单一口径，chat-flow-process-aggregate D3）。
+
+**代码映射**: `packages/ui/src/features/chat/ProcessAggregateBlock.vue`（组件族 `packages/ui/src/features/chat/process-aggregate/`）；数据源 = 过程段（ProcessSegment）。**Avoid**: 不叫「折叠块」「分组块」。
+
+### 过程段（ProcessSegment）
+两条正文块之间的过程块集合，聚合块的 core 域数据契约：切段纯函数 `splitProcessSegments` 按 text 边界切段——text 恒为段边界、永不入段，段成员数 ≥ 1（空段不存在），assistant 边界不是段边界。段 id 形态 `seg:<段首块 flatIndex>`，派生源只有段首位置，流式全程稳定（禁止派生自消息 id / 成员集合 / 组内序号）。段完成的结构信号 = `followedByText`（段后出现 text 块）∨ 回合工作态落下（回合落下时段内全部未完成段同时完成）。
+
+**代码映射**: 类型族与契约条文 `packages/core/src/domain/chat/process-segment.ts`；切段实现在 `packages/core/src/domain/chat/trace-window.ts`。
+
+### 过程块
+回合内 agent 产出的非正文块：thinking（思考）/ tool（工具调用）/ agentgraph（子代理派发）三类，与正文块（text）相对；过程段的成员资格类型（拍平块 `FlatBlock` 经 `OrderedBlock` 承载的 kind：`'thinking'|'tool'|'text'|'agentgraph'`）。
+
+### 窗口（聚合块双窗）
+聚合块进行中态的两个固定高度显示窗：思考窗 92px + 聚合窗 116px（视口 ≤420px 降档 78/96）。可见性纯派生、无空态占位：段内已有思考步骤才出现思考窗，首个工具步骤（含 agentgraph）开始才挂载聚合窗，纯思考段聚合窗全程不出现。
+
+**代码映射**: `packages/ui/src/features/chat/process-aggregate/AggregateLiveWindows.vue`。与已退役的旧「trace 窗口切片」（`computeTraceWindow` 的 visible/compacted 可见性口径，四层折叠编排时代）不同义——旧切片消费路径已随聚合块形态退役。
+
+### run 组
+连续同类型工具块的归组。类型判定源 = `RUN_GROUP_TOOLS` 类型表（探索 explore = read/grep/find/ls、改动 edit = edit/write、执行命令 exec = bash），组资格只看工具类型、不看状态（running 也入组）；类型表外工具与 agentgraph 不入组、原样成行。现行形态 = 段内工具组（`ProcessToolGroup`），渲染在聚合块展开态内；旧形态独立组块组件 RunGroupBlock 已随四层折叠编排退役，`groupToolRuns` 的类型表口径被段内组分组复用（同一判定源）。
+
+**代码映射**: `packages/core/src/domain/chat/trace-window.ts`（类型表与组分组）。与 workflow 域的 run（Run record 事件流）不同义。

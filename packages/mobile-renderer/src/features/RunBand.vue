@@ -8,8 +8,8 @@
 // 占用判据 = running 且无 stopReason（镜像桌面 isRunningProjection SSOT 口径，读口内聚）。
 //
 // 交互：无运行中子代理不渲染不占位；计数 > 0 显示运行带，点击 → openSheet('subagentList')
-// （sheet-manager 单槽互斥，§6.13）。运行中 bash 的停止入口不在此——那是 ChatView 工具行
-// 的 ToolRow 停止按钮（deps.abortBash 接线，M-8），与本带无关。
+// （sheet-manager 单槽互斥，§6.13）。运行中 bash 的停止入口不在此——deps.abortBash 的
+// UI 消费 = BashOutputBlock 取消按钮（turn.notices 链，M-8 接线），与本带无关。
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChevronRight } from '@lucide/vue'

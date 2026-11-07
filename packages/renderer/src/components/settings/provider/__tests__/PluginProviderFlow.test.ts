@@ -59,6 +59,7 @@ const pluginMock = vi.hoisted(() => ({
   preparePluginInstall: vi.fn(),
   confirmPluginInstall: vi.fn(),
   cancelPluginInstall: vi.fn(),
+  listPluginVersions: vi.fn(),
   clearPluginMountUi: vi.fn(),
   sendPluginUiEvent: vi.fn(),
   invokePlugin: vi.fn(),
@@ -76,7 +77,7 @@ function previewOf(entry: PluginCatalogEntry) {
   return {
     pluginId: entry.pluginId,
     packageName: entry.packageName,
-    version: entry.pluginVersion,
+    version: entry.pluginVersion ?? '1.2.0',
     capabilities: entry.capabilities ?? [],
     readPaths: entry.readPaths ?? [],
     permissions: [],
@@ -121,6 +122,16 @@ function queryAll(testId: string): HTMLElement[] {
   return Array.from(document.body.querySelectorAll(`[data-testid="${testId}"]`))
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 beforeEach(() => {
   _resetPluginProviderSourceForTest()
   // [C3] 插件来源通道（清单 + 运行态/重启 + 两段式安装）经 SettingsTransport seam 注入
@@ -133,6 +144,7 @@ beforeEach(() => {
     preparePluginInstall: pluginMock.preparePluginInstall,
     confirmPluginInstall: pluginMock.confirmPluginInstall,
     cancelPluginInstall: pluginMock.cancelPluginInstall,
+    listPluginVersions: pluginMock.listPluginVersions,
     clearPluginMountUi: pluginMock.clearPluginMountUi,
     sendPluginUiEvent: pluginMock.sendPluginUiEvent,
     invokePlugin: pluginMock.invokePlugin,
@@ -145,10 +157,14 @@ beforeEach(() => {
   ]))
   pluginMock.togglePlugin.mockReset().mockResolvedValue([])
   pluginMock.preparePluginInstall.mockReset().mockImplementation((spec: string) => {
-    const entry = FAMILIES.find((e) => e.packageName === spec || e.pluginId === spec)
+    // 支持带版本 spec（pkg@version）：按去版本包名匹配（scoped 包取最后一个 @ 段）
+    const bareName = spec.startsWith('@') ? spec.replace(/@[^@]+$/, '') : spec.split('@')[0]
+    const entry = FAMILIES.find((e) => e.packageName === spec || e.packageName === bareName || e.pluginId === spec)
     if (entry === undefined) return Promise.reject(new Error(`unknown package: ${spec}`))
     return Promise.resolve(previewOf(entry))
   })
+  pluginMock.listPluginVersions.mockReset().mockImplementation(() =>
+    Promise.resolve({ versions: ['1.2.0', '1.1.0', '1.0.0'], latest: '1.2.0' }))
   pluginMock.confirmPluginInstall.mockReset().mockResolvedValue({ success: true })
   pluginMock.cancelPluginInstall.mockReset().mockResolvedValue(undefined)
   pluginMock.clearPluginMountUi.mockReset().mockResolvedValue(undefined)
@@ -239,6 +255,9 @@ describe('PluginProviderFlow S27：安装确认卡知情面（两路径）', () 
     queryAll('plugin-family-card')[0].click()
     await flushPromises()
     await nextTick()
+    query('plugin-version-install-btn')?.click()
+    await flushPromises()
+    await nextTick()
 
     expect(pluginMock.preparePluginInstall).toHaveBeenCalledWith('@zhushanwen/plugin-wool-workbuddy')
     expect(pluginMock.confirmPluginInstall).not.toHaveBeenCalled()
@@ -285,6 +304,9 @@ describe('PluginProviderFlow S27：安装确认卡知情面（两路径）', () 
     queryAll('plugin-family-card')[0].click()
     await flushPromises()
     await nextTick()
+    query('plugin-version-install-btn')?.click()
+    await flushPromises()
+    await nextTick()
     query('plugin-install-cancel')?.click()
     await flushPromises()
     await nextTick()
@@ -292,6 +314,118 @@ describe('PluginProviderFlow S27：安装确认卡知情面（两路径）', () 
     expect(pluginMock.cancelPluginInstall).toHaveBeenCalledWith('wool-workbuddy')
     expect(pluginMock.confirmPluginInstall).not.toHaveBeenCalled()
     expect(queryAll('plugin-family-card')).toHaveLength(3)
+  })
+})
+
+describe('PluginProviderFlow 安装等待态与迟到回包防护', () => {
+  it('prepare pending（直装路径）→ 立即显示准备中、禁用家族卡与直装输入，并忽略重复安装点击', async () => {
+    const pending = deferred<ReturnType<typeof previewOf>>()
+    pluginMock.preparePluginInstall.mockReturnValue(pending.promise)
+    wrapper = mountFlow()
+    await flushPromises()
+    await nextTick()
+
+    const input = query('plugin-direct-spec') as HTMLInputElement
+    input.value = '@zhushanwen/plugin-wool-workbuddy'
+    input.dispatchEvent(new Event('input'))
+    await nextTick()
+    query('plugin-direct-install-btn')?.click()
+    await nextTick()
+
+    expect(query('plugin-install-preparing')?.textContent).toContain('正在准备安装信息')
+    expect(query('plugin-install-confirm')).toBeNull()
+    expect(queryAll('plugin-family-card').every((card) => card.getAttribute('aria-disabled') === 'true')).toBe(true)
+    expect((query('plugin-direct-spec') as HTMLInputElement).disabled).toBe(true)
+    expect((query('plugin-direct-install-btn') as HTMLButtonElement).disabled).toBe(true)
+
+    // 等待期间重复点击其他家族卡 / 直装按钮不发起第二次 prepare
+    queryAll('plugin-family-card')[2].click()
+    query('plugin-direct-install-btn')?.click()
+    expect(pluginMock.preparePluginInstall).toHaveBeenCalledTimes(1)
+
+    pending.resolve(previewOf(FAMILIES[0]))
+    await flushPromises()
+    await nextTick()
+    expect(query('plugin-install-preparing')).toBeNull()
+    expect(query('plugin-install-confirm')).not.toBeNull()
+  })
+
+  it('prepare reject（直装路径）→ 隐藏准备中并在 family 段呈现错误', async () => {
+    const pending = deferred<ReturnType<typeof previewOf>>()
+    pluginMock.preparePluginInstall.mockReturnValue(pending.promise)
+    wrapper = mountFlow()
+    await flushPromises()
+    await nextTick()
+
+    const input = query('plugin-direct-spec') as HTMLInputElement
+    input.value = '@zhushanwen/plugin-wool-workbuddy'
+    input.dispatchEvent(new Event('input'))
+    await nextTick()
+    query('plugin-direct-install-btn')?.click()
+    await nextTick()
+    expect(query('plugin-install-preparing')).not.toBeNull()
+
+    pending.reject(new Error('network timeout'))
+    await flushPromises()
+    await nextTick()
+    expect(query('plugin-install-preparing')).toBeNull()
+    expect(query('plugin-flow-error')?.textContent).toContain('network timeout')
+    expect(query('plugin-install-confirm')).toBeNull()
+  })
+
+  it('prepare 期间关闭弹窗 → 迟到回包不复活确认卡，并清理已生成的暂存', async () => {
+    const pending = deferred<ReturnType<typeof previewOf>>()
+    pluginMock.preparePluginInstall.mockReturnValue(pending.promise)
+    wrapper = mountFlow()
+    await flushPromises()
+    await nextTick()
+
+    queryAll('plugin-family-card')[0].click()
+    await flushPromises()
+    await nextTick()
+    query('plugin-version-install-btn')?.click()
+    await nextTick()
+    await wrapper.setProps({ open: false })
+    await flushPromises()
+
+    pending.resolve(previewOf(FAMILIES[0]))
+    await flushPromises()
+    await nextTick()
+    expect(pluginMock.cancelPluginInstall).toHaveBeenCalledWith('wool-workbuddy')
+    expect(query('plugin-install-confirm')).toBeNull()
+
+    await wrapper.setProps({ open: true })
+    await flushPromises()
+    await nextTick()
+    expect(query('plugin-install-confirm')).toBeNull()
+    expect(queryAll('plugin-family-card')).toHaveLength(3)
+  })
+
+  it('confirm pending → 确认按钮呈现安装中并禁用，成功后才进入授权段', async () => {
+    const confirming = deferred<{ success: boolean }>()
+    pluginMock.confirmPluginInstall.mockReturnValue(confirming.promise)
+    wrapper = mountFlow()
+    await flushPromises()
+    await nextTick()
+
+    queryAll('plugin-family-card')[0].click()
+    await flushPromises()
+    await nextTick()
+    query('plugin-version-install-btn')?.click()
+    await flushPromises()
+    await nextTick()
+    query('plugin-install-confirm-btn')?.click()
+    await nextTick()
+
+    const button = query('plugin-install-confirm-btn') as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    expect(button.textContent).toContain('安装中')
+    expect(query('plugin-authorize-container')).toBeNull()
+
+    confirming.resolve({ success: true })
+    await flushPromises()
+    await nextTick()
+    expect(query('plugin-authorize-container')).not.toBeNull()
   })
 })
 
@@ -326,6 +460,9 @@ describe('PluginProviderFlow 授权视图渲染驱动（初始树生产者 = 插
 
     // 第一张卡 = WorkBuddy（未安装 → 安装确认卡）
     queryAll('plugin-family-card')[0].click()
+    await flushPromises()
+    await nextTick()
+    query('plugin-version-install-btn')?.click()
     await flushPromises()
     await nextTick()
     pluginMock.invokePlugin.mockClear()
@@ -502,8 +639,15 @@ describe('PluginProviderFlow focus 直达的分支路径（focus 缺失 / update
     expect(pluginMock.preparePluginInstall).not.toHaveBeenCalled()
   })
 
-  it('focus intent=update（已装家族更新入口）→ 直达确认卡（更新意图文案 + prepare 该包）', async () => {
+  it('focus intent=update（已装家族更新入口）→ 版本选择段（更新文案）→ 默认最新直达确认卡', async () => {
     wrapper = mountFlow({ focus: { pluginId: 'wool-workbuddy', intent: 'update' } })
+    await flushPromises()
+    await nextTick()
+
+    const versionPanel = query('plugin-version-select')
+    expect(versionPanel).not.toBeNull()
+    expect(versionPanel?.textContent).toContain('更新')
+    query('plugin-version-install-btn')?.click()
     await flushPromises()
     await nextTick()
 
@@ -535,7 +679,7 @@ describe('PluginProviderFlow 失败路径表（prepare/confirm/cancel/清理失�
     return vi.spyOn(console, 'warn').mockImplementation(() => {})
   }
 
-  it('prepare reject（下载/校验/NAMESPACE_MISMATCH）→ family 段错误条呈现 message，不进确认卡', async () => {
+  it('prepare reject（下载/校验/NAMESPACE_MISMATCH）→ 版本选择段错误条呈现 message，不进确认卡', async () => {
     pluginMock.preparePluginInstall.mockRejectedValue(new Error('download failed'))
     wrapper = mountFlow()
     await flushPromises()
@@ -544,10 +688,15 @@ describe('PluginProviderFlow 失败路径表（prepare/confirm/cancel/清理失�
     queryAll('plugin-family-card')[0].click()
     await flushPromises()
     await nextTick()
+    query('plugin-version-install-btn')?.click()
+    await flushPromises()
+    await nextTick()
 
-    const error = query('plugin-flow-error')
+    const error = query('plugin-version-error')
     expect(error?.textContent).toContain('download failed')
     expect(query('plugin-install-confirm')).toBeNull()
+    // 停留版本段（可改选重试），非 family 段
+    expect(query('plugin-version-select')).not.toBeNull()
   })
 
   it('确认提交失败（success=false）→ 确认卡错误条呈现 error 字段，停在确认停点', async () => {
@@ -557,6 +706,9 @@ describe('PluginProviderFlow 失败路径表（prepare/confirm/cancel/清理失�
     await nextTick()
 
     queryAll('plugin-family-card')[0].click()
+    await flushPromises()
+    await nextTick()
+    query('plugin-version-install-btn')?.click()
     await flushPromises()
     await nextTick()
     query('plugin-install-confirm-btn')?.click()
@@ -579,6 +731,9 @@ describe('PluginProviderFlow 失败路径表（prepare/confirm/cancel/清理失�
     queryAll('plugin-family-card')[0].click()
     await flushPromises()
     await nextTick()
+    query('plugin-version-install-btn')?.click()
+    await flushPromises()
+    await nextTick()
     query('plugin-install-confirm-btn')?.click()
     await flushPromises()
     await nextTick()
@@ -596,6 +751,9 @@ describe('PluginProviderFlow 失败路径表（prepare/confirm/cancel/清理失�
     queryAll('plugin-family-card')[0].click()
     await flushPromises()
     await nextTick()
+    query('plugin-version-install-btn')?.click()
+    await flushPromises()
+    await nextTick()
     query('plugin-install-cancel')?.click()
     await flushPromises()
     await nextTick()
@@ -611,6 +769,9 @@ describe('PluginProviderFlow 失败路径表（prepare/confirm/cancel/清理失�
     await flushPromises()
     await nextTick()
     queryAll('plugin-family-card')[0].click()
+    await flushPromises()
+    await nextTick()
+    query('plugin-version-install-btn')?.click()
     await flushPromises()
     await nextTick()
     expect(query('plugin-install-confirm')).not.toBeNull()
@@ -651,6 +812,9 @@ describe('PluginProviderFlow 失败路径表（prepare/confirm/cancel/清理失�
     queryAll('plugin-family-card')[0].click()
     await flushPromises()
     await nextTick()
+    query('plugin-version-install-btn')?.click()
+    await flushPromises()
+    await nextTick()
 
     expect(query('plugin-flow-error')?.textContent).toContain('安装通道未就绪')
     expect(query('plugin-install-confirm')).toBeNull()
@@ -661,6 +825,9 @@ describe('PluginProviderFlow 失败路径表（prepare/confirm/cancel/清理失�
     await flushPromises()
     await nextTick()
     queryAll('plugin-family-card')[0].click()
+    await flushPromises()
+    await nextTick()
+    query('plugin-version-install-btn')?.click()
     await flushPromises()
     await nextTick()
     expect(query('plugin-install-confirm')).not.toBeNull()
@@ -676,5 +843,152 @@ describe('PluginProviderFlow 失败路径表（prepare/confirm/cancel/清理失�
 
     expect(query('plugin-install-error')?.textContent).toContain('安装通道未就绪')
     expect(pluginMock.confirmPluginInstall).not.toHaveBeenCalled()
+  })
+})
+
+describe('PluginProviderFlow 版本选择段（npm 全部已发布版本下拉，默认最新）', () => {
+  /** 打开版本下拉（SelectTrigger 在 pointerdown 时打开，happy-dom 下需显式 dispatch；
+   *  选项在 body portal 内渲染，dispatch 后需 flush 等待）。 */
+  async function openVersionDropdown(): Promise<void> {
+    const trigger = query('plugin-version-options')
+    if (trigger === null) throw new Error('version trigger not found')
+    trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    trigger.click()
+    await flushPromises()
+    await nextTick()
+  }
+
+  /** 打开下拉并点选指定版本项（选项在 body portal 内，按 testid 定位）。 */
+  async function pickVersion(version: string): Promise<void> {
+    await openVersionDropdown()
+    const item = query(`plugin-version-option-${version}`)
+    if (item === null) throw new Error(`version option not found: ${version}`)
+    item.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))
+    item.click()
+    await flushPromises()
+    await nextTick()
+  }
+  it('点未装家族卡 → 进版本选择段：拉取版本列表、默认选中最新选项', async () => {
+    wrapper = mountFlow()
+    await flushPromises()
+    await nextTick()
+
+    queryAll('plugin-family-card')[0].click()
+    await flushPromises()
+    await nextTick()
+
+    const panel = query('plugin-version-select')
+    expect(panel).not.toBeNull()
+    expect(pluginMock.listPluginVersions).toHaveBeenCalledWith('@zhushanwen/plugin-wool-workbuddy')
+    expect(pluginMock.preparePluginInstall).not.toHaveBeenCalled()
+    // 打开下拉：选项含最新（latest dist-tag）与全部历史版本
+    await openVersionDropdown()
+    expect(query('plugin-version-option-latest')).not.toBeNull()
+    for (const v of ['1.2.0', '1.1.0', '1.0.0']) {
+      expect(query(`plugin-version-option-${v}`)).not.toBeNull()
+    }
+    expect(query('plugin-version-option-latest')?.textContent).toContain('1.2.0')
+  })
+
+  it('默认最新点安装 → 裸包名 spec 发起 prepare（dist-tags latest 解析）', async () => {
+    wrapper = mountFlow()
+    await flushPromises()
+    await nextTick()
+
+    queryAll('plugin-family-card')[0].click()
+    await flushPromises()
+    await nextTick()
+    query('plugin-version-install-btn')?.click()
+    await flushPromises()
+    await nextTick()
+
+    expect(pluginMock.preparePluginInstall).toHaveBeenCalledWith('@zhushanwen/plugin-wool-workbuddy')
+    expect(query('plugin-install-confirm')).not.toBeNull()
+    expect(query('plugin-version-select')).toBeNull()
+  })
+
+  it('改选历史版本 → pkg@version spec 发起 prepare；失败停留版本段可改选重试', async () => {
+    pluginMock.preparePluginInstall.mockRejectedValueOnce(new Error('tarball checksum failed'))
+    wrapper = mountFlow()
+    await flushPromises()
+    await nextTick()
+
+    queryAll('plugin-family-card')[0].click()
+    await flushPromises()
+    await nextTick()
+    await pickVersion('1.0.0')
+    query('plugin-version-install-btn')?.click()
+    await flushPromises()
+    await nextTick()
+
+    expect(pluginMock.preparePluginInstall).toHaveBeenCalledWith('@zhushanwen/plugin-wool-workbuddy@1.0.0')
+    // 失败退回版本选择段（非 family 段）：错误可见 + 下拉仍可改选
+    expect(query('plugin-version-select')).not.toBeNull()
+    expect(query('plugin-version-error')?.textContent).toContain('tarball checksum failed')
+    // 改选重试：第二次成功进确认卡
+    pluginMock.preparePluginInstall.mockResolvedValueOnce(previewOf(FAMILIES[0]))
+    await pickVersion('1.1.0')
+    query('plugin-version-install-btn')?.click()
+    await flushPromises()
+    await nextTick()
+    expect(pluginMock.preparePluginInstall).toHaveBeenLastCalledWith('@zhushanwen/plugin-wool-workbuddy@1.1.0')
+    expect(query('plugin-install-confirm')).not.toBeNull()
+  })
+
+  it('版本列表拉取失败 → 停留版本段呈错误，不自动降级直装', async () => {
+    pluginMock.listPluginVersions.mockRejectedValue(new Error('registry unreachable'))
+    wrapper = mountFlow()
+    await flushPromises()
+    await nextTick()
+
+    queryAll('plugin-family-card')[0].click()
+    await flushPromises()
+    await nextTick()
+
+    expect(query('plugin-version-select')).not.toBeNull()
+    expect(query('plugin-version-error')?.textContent).toContain('registry unreachable')
+    expect(query('plugin-version-options')).toBeNull()
+    expect(pluginMock.preparePluginInstall).not.toHaveBeenCalled()
+  })
+
+  it('版本段取消 → 退回家族卡（无暂存产生，无清理调用）', async () => {
+    wrapper = mountFlow()
+    await flushPromises()
+    await nextTick()
+
+    queryAll('plugin-family-card')[0].click()
+    await flushPromises()
+    await nextTick()
+    query('plugin-version-cancel')?.click()
+    await nextTick()
+
+    expect(queryAll('plugin-family-card')).toHaveLength(3)
+    expect(query('plugin-version-select')).toBeNull()
+    expect(pluginMock.preparePluginInstall).not.toHaveBeenCalled()
+    expect(pluginMock.cancelPluginInstall).not.toHaveBeenCalled()
+  })
+
+  it('port 未挂载 listPluginVersions（旧 runtime）→ 回退直装最新（安装链不断）', async () => {
+    wrapper = mountFlow()
+    await flushPromises()
+    await nextTick()
+    // 替换为不带 listPluginVersions 的 stub（模拟旧 runtime 未挂载该方法）
+    provideSettingsTransport(makeSettingsTransportStub({
+      listAvailablePlugins: pluginMock.listAvailablePlugins,
+      listPlugins: pluginMock.listPlugins,
+      preparePluginInstall: pluginMock.preparePluginInstall,
+      confirmPluginInstall: pluginMock.confirmPluginInstall,
+      cancelPluginInstall: pluginMock.cancelPluginInstall,
+    }))
+    await flushPromises()
+    await nextTick()
+
+    queryAll('plugin-family-card')[0].click()
+    await flushPromises()
+    await nextTick()
+
+    expect(pluginMock.listPluginVersions).not.toHaveBeenCalled()
+    expect(pluginMock.preparePluginInstall).toHaveBeenCalledWith('@zhushanwen/plugin-wool-workbuddy')
+    expect(query('plugin-install-confirm')).not.toBeNull()
   })
 })

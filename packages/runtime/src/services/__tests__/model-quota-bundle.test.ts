@@ -1103,6 +1103,25 @@ describe('WoolExtensionInstaller（D6 双产物安装编排·扩展侧）', () =
     expect(result).toEqual({ installedVersion: '0.2.0' })
   })
 
+  it('installPiExtension 免钉版（version 缺省）→ 直接按 wool-manifest 版本安装，无比对步骤', async () => {
+    const deps = makeDeps()
+    const installer = new WoolExtensionInstaller(deps)
+
+    const result = await installer.installPiExtension('workbuddy', undefined)
+
+    expect(vi.mocked(deps.extensionService.installExtension)).toHaveBeenCalledWith('npm:@zhushanwen/pi-wool-workbuddy@0.2.0')
+    expect(result).toEqual({ installedVersion: '0.2.0' })
+  })
+
+  it('handlesPackage：wool 形态包名 → true；非 wool 包名 → false（免钉版条目双产物判定）', () => {
+    const installer = new WoolExtensionInstaller(makeDeps())
+
+    expect(installer.handlesPackage('@zhushanwen/plugin-wool-workbuddy')).toBe(true)
+    expect(installer.handlesPackage('@scope/plugin-wool-qoder')).toBe(true)
+    expect(installer.handlesPackage('@zhushanwen/some-other-plugin')).toBe(false)
+    expect(installer.handlesPackage('plain-plugin')).toBe(false)
+  })
+
   it('版本配对不一致 → VERSION_PAIR_MISMATCH 拒绝，不执行安装（不落半成品）', async () => {
     const deps = makeDeps()
     const installer = new WoolExtensionInstaller(deps)

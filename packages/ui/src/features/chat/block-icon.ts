@@ -28,7 +28,8 @@ import type { ToolCallStatus } from '@taiji/shared'
  * 字形保留 + accent 动效元素——双环/呼吸弧全类型共用 loader 退役，见 RunningBlockIcon.vue）。
  *
  * 归属：本文件是图标决策的 SSOT（IF1/IF2 契约）。消费方拿 BlockIconKind 后，running 用
- * toolName → 动效 kind 映射（Block.vue TOOL_RUNNING_KIND），其余用 BLOCK_ICON_LUCIDE[kind]。
+ * toolName → 动效 kind 映射（ToolRow.vue TOOL_RUNNING_KIND——Block 壳退役后的现行位置），
+ * 其余用 BLOCK_ICON_LUCIDE[kind]。
  */
 export type BlockIconKind =
   | 'thinking' | 'tool-read' | 'tool-bash' | 'tool-cmd' | 'tool-edit' | 'tool-grep' | 'tool-other'
@@ -36,7 +37,8 @@ export type BlockIconKind =
 
 /**
  * 运行中动效 kind（RunningBlockIcon 消费；与静态档一一对应 + thinking 轨道点）。
- * 独立类型 = 消费方映射表（Block.vue TOOL_RUNNING_KIND / RUN_GROUP_RUNNING_ICON）的键域约束。
+ * 独立类型 = 消费方映射表（ToolRow.vue TOOL_RUNNING_KIND / SegmentToolGroup.vue
+ * RUN_GROUP_RUNNING_ICON——Block 壳退役后的现行位置）的键域约束。
  */
 export type RunningIconKind =
   | 'thinking' | 'tool-read' | 'tool-bash' | 'tool-edit' | 'tool-grep'
@@ -47,7 +49,8 @@ export type RunningIconKind =
  *  bash 静态字形 = tool-cmd（裸 › 提示符，2026-10-15 裁决 ③B：成员/单行 bash 抽象化，
  *  波及组内外所有 bash 行——本映射是全局 SSOT）；bash running 态不再走动效图标
  *  （2026-10-17 方案 A 裁决：与完成态同款 tool-cmd 静态箭头，TOOL_RUNNING_KIND 已无
- *  bash 条目）；exec 组头静态仍 tool-bash（RUN_GROUP_ICON 独立映射，不动）。 */
+ *  bash 条目）；exec 组头静态仍 tool-bash（RUN_GROUP_ICON 独立映射，SegmentToolGroup.vue
+ *  组件本地，不动）。 */
 const TOOL_ICON_MAP: Record<string, BlockIconKind> = {
   read: 'tool-read',
   bash: 'tool-cmd',
@@ -86,7 +89,8 @@ export function getBlockIcon(
  * workflow=workflow（lucide Workflow 双节点连线，与 composer slash 菜单 slash-icons.ts 同款——
  * 原独立档 list-checks 与菜单图标不一致，统一到同源字形）。
  * run 组块（run 类型分组）不占独立档：组头图标 = 组类型的语义图标（探索→tool-read /
- * 改动→tool-edit / 执行命令→tool-bash，映射在 Block.vue 的 RUN_GROUP_ICON），组身份由
+ * 改动→tool-edit / 执行命令→tool-bash，映射在 SegmentToolGroup.vue 的 RUN_GROUP_ICON——
+ * Block 壳退役后的现行权威位置），组身份由
  * 「类型名 + N 步」文案承载，行内有 running 成员时图标位让给 RunningBlockIcon 动效款
  * （组头动效 = 组类别同款，见 RunningBlockIcon）。
  */

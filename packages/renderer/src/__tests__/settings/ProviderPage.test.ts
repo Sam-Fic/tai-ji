@@ -21,10 +21,16 @@ import { getSettingsStore, provideSettingsTransport, provideSettingsStore, creat
 // （vi.hoisted 同族 TDZ 坑，settings-modal-smoke.test.ts 先例）。
 import { makeSettingsTransportStub } from '../helpers/settings-transport-stub'
 import { apiProjectMock } from '../helpers/api-facade-mock'
-import { authEventCbs } from '../helpers/oauth-auth-events-mock'
 
-const configMock = vi.hoisted(() => ({
-  onProviders: vi.fn(() => () => {}),
+// ProviderPage 模块图经 model-picker-data（ModelSelectPopover 数据域，M3 命中端点展示接入）
+// 静态 import '@/api'——vi.mock 工厂在组件 import 求值期（测试体执行前）即运行，configWithAuth
+// 若留在测试体将 TDZ（文件头注释同族坑）。configMock 与 auth 订阅捕获集整体上提 vi.hoisted
+// （helper 经动态 import 引入——hoisted 工厂不能直接引用静态 import 绑定），测试体仅保留
+// 断言用 configMock 引用。
+const { configMock, configWithAuth } = await vi.hoisted(async () => {
+  const { authEventCbs } = await import('../helpers/oauth-auth-events-mock')
+  const configMock = {
+    onProviders: vi.fn(() => () => {}),
   // 门面签名 { providers, scopedModels }（settings-lifecycle 解构消费）；裸数组解构得 undefined
   listProviders: vi.fn(async () => ({ providers: [], scopedModels: undefined })),
   setProvider: vi.fn(async () => ({})),
@@ -46,13 +52,12 @@ const configMock = vi.hoisted(() => ({
   listBuiltinProviders: vi.fn(async () => []),
   // ProviderPage onMounted 按需刷新远程模型目录（缺则 unhandled rejection）
   refreshProviderCatalogs: vi.fn(async () => ({ refreshed: [], failed: [] })),
-}))
-
-// wave-oauth：useProviderOAuth onMounted 订阅 4 个 auth.* 事件（缺则 TypeError 崩 mount）。
-// vi.hoisted 工厂不能引用 import 绑定（TDZ），auth 订阅捕获集单源在 helper——顶层装配
-// 后并入门面 config 域（同 use-provider-oauth.test.ts 先例）。
-const authCbs = authEventCbs()
-const configWithAuth = { ...configMock, ...authCbs }
+    // model-picker-data 的 routeView 只读缓存（M3 命中端点展示）选择器装配期拉取/订阅（缺则 TypeError 崩 mount）
+    getRouteView: vi.fn(async () => ({ cards: [], orphanRefs: [] })),
+    onRouteView: vi.fn(() => () => {}),
+  }
+  return { configMock, configWithAuth: { ...configMock, ...authEventCbs() } }
+})
 
 vi.mock('@/api', () => ({ project: apiProjectMock(),
   config: configWithAuth,
@@ -379,103 +384,191 @@ describe('ProviderPage QuickSetup OAuth 登录链路（B-1）', () => {
   })
 })
 
-describe('ProviderPage A6 e2e-mock: ScopedModelSection 挂载与交互链路', () => {
-  it('A6: ProviderPage 渲染 ScopedModelSection 区域（组件挂载链路通）', async () => {
+/**
+ * 模型路由接入页改造（provider-aggregation U5a，验收 A27 增量段：接入页渲染单测）。
+ *
+ * 覆盖（每条至少一个用户可见 DOM 断言）：
+ *  - kind=aggregation 排除渲染（D4 ①(a)）：渠道管理列表不渲染路由聚合条目、计数不含。
+ *  - 聚合条目独存 → 空状态可见（过滤后列表为空即空状态）。
+ *  - ScopedModelSection 白名单区退役（D10）：白名单卡零 DOM（负面断言锁定退役）。
+ *  - 下一步引导卡（外部 spec §6.5）：有渠道有模型时显示、点击上抛 open-route-page、
+ *    无模型时隐藏。
+ */
+describe('ProviderPage 接入页改造（provider-aggregation U5a）', () => {
+  /** 注入条目形态 fixture（D4：kind=aggregation、无凭据无 baseUrl、models = 路由条目） */
+  const AGGREGATION_ENTRY: ProviderInfo = {
+    id: 'aggregation',
+    name: '模型路由',
+    kind: 'aggregation',
+    apiKeySet: false,
+    status: 'connected',
+    models: [{ id: 'glm-flash-route', name: 'GLM Flash（路由）' }],
+  }
+
+  it('kind 排除: providers 含聚合条目 → 渠道列表只渲染物理渠道行、计数徽标不含聚合条目', async () => {
     wrapper = mount(ProviderPage, {
-      props: { providers: PROVIDERS },
+      props: { providers: [...PROVIDERS, AGGREGATION_ENTRY] },
       attachTo: document.body,
     })
     await flushPromises()
 
-    // ScopedModelSection 区域存在（mock 模式下 settingsStore.scopedModels 默认空数组）
-    expect(wrapper.find('[data-testid="scoped-model-section"]').exists()).toBe(true)
-    // 空状态提示可见
-    expect(wrapper.find('[data-testid="scoped-empty"]').exists()).toBe(true)
-    // 添加按钮存在
-    expect(wrapper.find('[data-testid="scoped-add-btn"]').exists()).toBe(true)
+    // 只渲染 2 个物理渠道行（聚合条目被排除）
+    const cards = wrapper.findAll('[data-testid="provider-card"]')
+    expect(cards.length).toBe(2)
+    // 聚合条目名不出现（行交互——凭据编辑/测试连接/启停——对无凭据无 baseUrl 条目全部错位）
+    expect(wrapper.text()).not.toContain('GLM Flash（路由）')
+    // 列表计数徽标 = 过滤后数量（渠道管理列表语义，非全量 providers）
+    expect(wrapper.find('[data-testid="provider-list-header"]').text()).toBeTruthy()
+    const badge = wrapper.findAll('section span').find((s) => s.text() === '2')
+    expect(badge).toBeTruthy()
   })
 
-  it('A6: 预填 scopedModels → 行序渲染 → 上移 → config.setScopedModels 收到交换后的完整有序数组', async () => {
-    const store = getSettingsStore()
-    // useScopedModels 从 store（非 props）派生渲染项：预填 providers + scopedModels
-    store.providers.value = PROVIDERS
-    store.scopedModels.value = ['anthropic/claude-sonnet-4', 'openai/gpt-4o']
-    configMock.setScopedModels.mockClear()
-
+  it('kind 排除: 全部条目均为聚合 → 空状态可见（过滤后列表为空即空状态）', async () => {
     wrapper = mount(ProviderPage, {
-      props: { providers: PROVIDERS },
+      props: { providers: [AGGREGATION_ENTRY] },
       attachTo: document.body,
     })
     await flushPromises()
 
-    // 行渲染顺序 = scopedModels 数组序
-    const names = wrapper.findAll('[data-testid="scoped-model-name"]')
-    expect(names.map((n) => n.text())).toEqual(['Claude Sonnet 4', 'GPT-4o'])
-    expect(wrapper.find('[data-testid="scoped-empty"]').exists()).toBe(false)
-
-    // 触发第二行（openai/gpt-4o）上移
-    const rows = wrapper.findAll('[data-testid="scoped-row"]')
-    await rows[1].find('[data-testid="scoped-move-up"]').trigger('click')
-    await flushPromises()
-
-    // RPC 收到交换后的完整有序数组（乐观更新直传 store 值）
-    expect(configMock.setScopedModels).toHaveBeenCalledTimes(1)
-    expect(configMock.setScopedModels).toHaveBeenCalledWith(['openai/gpt-4o', 'anthropic/claude-sonnet-4'])
+    expect(wrapper.findAll('[data-testid="provider-card"]').length).toBe(0)
+    expect(wrapper.text()).toContain('还没有供应商')
+    // 聚合条目不渲染为渠道行
+    expect(wrapper.text()).not.toContain('GLM Flash（路由）')
   })
 
-  it('A6: scoped 操作 RPC 失败 → 回滚 + 常驻 inline error 可见（非静默）', async () => {
-    const store = getSettingsStore()
-    store.providers.value = PROVIDERS
-    store.scopedModels.value = ['anthropic/claude-sonnet-4', 'openai/gpt-4o']
-    configMock.setScopedModels.mockClear()
-    configMock.setScopedModels.mockRejectedValueOnce(new Error('rpc down'))
-
+  it('白名单区退役: scoped-model-section 零 DOM 且页面无「模型白名单」文案（D10 UI 退役锁定）', async () => {
     wrapper = mount(ProviderPage, {
       props: { providers: PROVIDERS },
       attachTo: document.body,
     })
     await flushPromises()
 
-    const rows = wrapper.findAll('[data-testid="scoped-row"]')
-    await rows[1].find('[data-testid="scoped-move-up"]').trigger('click')
-    await flushPromises()
-
-    // 常驻 inline error 区域显示错误信息
-    const err = wrapper.find('[data-testid="provider-action-error"]')
-    expect(err.exists()).toBe(true)
-    expect(err.text()).toContain('rpc down')
-    // 乐观顺序已回滚
-    const names = wrapper.findAll('[data-testid="scoped-model-name"]')
-    expect(names.map((n) => n.text())).toEqual(['Claude Sonnet 4', 'GPT-4o'])
+    expect(wrapper.find('[data-testid="scoped-model-section"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="scoped-add-btn"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('模型白名单')
   })
 
-  it('A6: 连点两次下移 → in-flight 期间第二次被忽略（防重入检查，单次 RPC）', async () => {
-    const store = getSettingsStore()
-    store.providers.value = PROVIDERS
-    // 3 项列表：同一元素（首行）连点两次 down，第二次时该行已处 idx1、down 本有效
-    store.scopedModels.value = ['anthropic/claude-sonnet-4', 'anthropic/claude-opus-4', 'openai/gpt-4o']
-    configMock.setScopedModels.mockClear()
-    // 第一次 RPC 挂起（deferred），锁定 in-flight 窗口
-    let resolveRpc: (v: string[]) => void = () => {}
-    configMock.setScopedModels.mockImplementationOnce(
-      () => new Promise<string[]>((resolve) => { resolveRpc = resolve }),
-    )
-
+  it('引导卡: 有渠道有模型 → 引导卡与「打开模型路由」按钮可见，点击上抛 open-route-page', async () => {
     wrapper = mount(ProviderPage, {
       props: { providers: PROVIDERS },
       attachTo: document.body,
     })
     await flushPromises()
 
-    const rows = wrapper.findAll('[data-testid="scoped-row"]')
-    const downBtn = rows[0].find('[data-testid="scoped-move-down"]')
-    await downBtn.trigger('click') // claude-sonnet-4 idx0 → idx1（RPC pending，模块级 busy 置位）
-    await downBtn.trigger('click') // 连点：无检查会以含乐观值的快照二次 RPC；检查 → 忽略
-    resolveRpc(['anthropic/claude-opus-4', 'anthropic/claude-sonnet-4', 'openai/gpt-4o'])
+    const guide = wrapper.find('[data-testid="provider-route-guide"]')
+    expect(guide.exists()).toBe(true)
+    const btn = guide.find('[data-testid="provider-open-route-btn"]')
+    expect(btn.exists()).toBe(true)
+    // 引导文案带模型数（connectedModelCount = 2 + 1）
+    expect(guide.text()).toContain('3 个模型已接入')
+    await btn.trigger('click')
+    expect(wrapper.emitted('open-route-page')).toHaveLength(1)
+  })
+
+  it('引导卡: 渠道均无模型 → 引导卡隐藏（空状态同理隐藏）', async () => {
+    const noModelProviders: ProviderInfo[] = [
+      { id: 'empty-a', name: 'A', apiKeySet: false, status: 'not_configured', enabled: true, models: [] },
+    ]
+    wrapper = mount(ProviderPage, {
+      props: { providers: noModelProviders },
+      attachTo: document.body,
+    })
     await flushPromises()
 
-    // 仅第一次触发到达 RPC
-    expect(configMock.setScopedModels).toHaveBeenCalledTimes(1)
-    expect(configMock.setScopedModels).toHaveBeenCalledWith(['anthropic/claude-opus-4', 'anthropic/claude-sonnet-4', 'openai/gpt-4o'])
+    expect(wrapper.find('[data-testid="provider-route-guide"]').exists()).toBe(false)
+    // 渠道行仍渲染（接入职责不受引导卡条件影响）
+    expect(wrapper.findAll('[data-testid="provider-card"]').length).toBe(1)
+  })
+})
+
+// ── U5 补呈现（provider-aggregation · 外部 spec §6.3 行摘要 / §6.4 引用区与跳转）────────
+// routeView 经宿主（SettingsModal）prop 下发（编排归宿主，页面纯消费）——本文件直接以
+// prop 驱动，不经 @/api getRouteView mock。
+
+import type { AggregationRouteView } from '@taiji/shared'
+
+/** 引用视图 fixture：glm-flash 路由两端点（anthropic ×2 + openai ×1 = 路由去重口径用例），
+ *  sonnet-route 单端点引用 openai → anthropic 参与 1 条 / openai 参与 2 条。 */
+function routeViewFixture(): AggregationRouteView {
+  const window7x48 = Array.from({ length: 7 }, () => Array<boolean>(48).fill(false))
+  return {
+    cards: [
+      {
+        route: {
+          id: 'glm-flash', name: 'GLM Flash', modelId: 'glm-flash', enabled: true, mode: 'advanced',
+          members: [
+            { id: 'ep-a1', providerId: 'anthropic', modelId: 'claude-sonnet-4', type: 'none' },
+            { id: 'ep-o1', providerId: 'openai', modelId: 'gpt-4o', type: 'quota', quota: { thresholdPercent: 20 } },
+            { id: 'ep-a2', providerId: 'anthropic', modelId: 'claude-sonnet-4', type: 'window', window: window7x48 },
+          ],
+        },
+        scoped: true, scopedIndex: 0, memberIssues: [],
+      },
+      {
+        route: {
+          id: 'sonnet-route', name: 'Sonnet', modelId: 'sonnet-route', enabled: true, mode: 'simple',
+          members: [{ id: 'ep-o2', providerId: 'openai', modelId: 'gpt-4o', type: 'none' }],
+        },
+        scoped: true, scopedIndex: 1, memberIssues: [],
+      },
+    ],
+    orphanRefs: [],
+  }
+}
+
+describe('ProviderPage 路由引用呈现（U5 补呈现 · spec §6.3/§6.4）', () => {
+  it('行摘要:引用数据到位 → 参与数按路由去重展示（anthropic 同路由两端点 = 1 条 / openai 跨两路由 = 2 条）', async () => {
+    wrapper = mount(ProviderPage, { props: { providers: PROVIDERS, routeView: routeViewFixture() }, attachTo: document.body })
+    await flushPromises()
+
+    const summaries = wrapper.findAll('[data-testid="provider-route-ref-summary"]')
+    expect(summaries.length).toBe(2)
+    // anthropic：单路由两端点 → routeCount 去重 = 1（spec §6.3「不是端点数」）
+    expect(summaries[0]!.text()).toContain('参与 1 条路由')
+    // openai：glm-flash 与 sonnet-route 各一端点 → 两条路由
+    expect(summaries[1]!.text()).toContain('参与 2 条路由')
+  })
+
+  it('引用区:展开行渲染引用 chip（模型简称 · 第 N 顺位），点击经 open-route-ref 透传为带 focus 的 open-route-page', async () => {
+    wrapper = mount(ProviderPage, { props: { providers: PROVIDERS, routeView: routeViewFixture() }, attachTo: document.body })
+    await flushPromises()
+
+    // 展开 anthropic 行（行头名称点击 = 手风琴展开入口）
+    await wrapper.findAll('[data-testid="provider-card"]')[0]!.find('span[role="button"]').trigger('click')
+    const section = wrapper.find('[data-testid="provider-route-ref-section"]')
+    expect(section.exists()).toBe(true)
+    const chips = section.findAll('[data-testid="provider-route-ref-chip"]')
+    expect(chips.length).toBe(2) // 同路由两端点各一枚 chip
+    expect(chips[0]!.text()).toBe('GLM Flash · 第 1 顺位')
+    expect(chips[1]!.text()).toBe('GLM Flash · 第 3 顺位')
+
+    await chips[1]!.trigger('click')
+    // 行级 open-route-ref 经 ProviderPage onOpenRouteRef 透传为页级 open-route-page（带 focus）
+    expect(wrapper.emitted('open-route-page')).toEqual([[{ routeId: 'glm-flash', memberId: 'ep-a2' }]])
+  })
+
+  it('引用区:无引用渠道展开显示空文案，不渲染 chip', async () => {
+    wrapper = mount(ProviderPage, {
+      props: {
+        providers: [...PROVIDERS, { id: 'lonely', name: 'Lonely', apiKeySet: false, status: 'not_configured' as const, enabled: true, models: [] }],
+        routeView: routeViewFixture(),
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.findAll('[data-testid="provider-card"]')[2]!.find('span[role="button"]').trigger('click')
+    const empty = wrapper.find('[data-testid="provider-route-ref-empty"]')
+    expect(empty.exists()).toBe(true)
+    expect(empty.text()).toContain('还没有路由使用这个渠道')
+    expect(wrapper.findAll('[data-testid="provider-route-ref-chip"]').length).toBe(0)
+  })
+
+  it('数据未到位:宿主视图未下发（routeView prop 缺省）→ 行摘要与引用区整体零 DOM（不渲染「未参与路由」错态）', async () => {
+    wrapper = mount(ProviderPage, { props: { providers: PROVIDERS }, attachTo: document.body })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="provider-route-ref-summary"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="provider-route-ref-section"]').exists()).toBe(false)
   })
 })

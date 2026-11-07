@@ -78,10 +78,11 @@ export default [
       // 的 CJS 惯用形态（对齐内置 review-fix-loop-utils.cjs）——与上方 workflow 脚本
       // 豁免同理由，非项目源码不参与 lint
       '.agents/workflows/**',
-      // [HISTORICAL] 项目 pi workflow 脚本（.pi/workflows/tech-review-loop.js，pi 宿主
-      // workflow 引擎加载）：$ARGS/$WORKSPACE 是引擎注入符号（仓库 eslint 环境下未定义），
-      // require() 是该环境的 CJS 惯用形态——与上方 .agents/workflows/** 豁免同理由，
-      // 非项目源码不参与 lint
+      // [HISTORICAL] 项目级 pi workflow 脚本（pi 宿主引擎加载）：$ARGS/$WORKSPACE 是引擎
+      // 注入符号（仓库 eslint 环境下未定义），require() 是该环境的 CJS 惯用形态——与上方
+      // .agents/workflows/** 豁免同理由，非项目源码不参与 lint。
+      // 现无项目级脚本（tech-review-loop 旧版副本已移除，改用 ~/.pi/agent/workflows/ 全局新版），
+      // 豁免保留：将来放项目级脚本时无需再改这条配置
       '.pi/workflows/**',
     ],
   },
@@ -97,22 +98,23 @@ export default [
       'max-lines': 'off',
     },
   },
-  // chat 展示三件（Turn 轮次聚合 / Block 块渲染 / MarkdownRenderer 分通道净化渲染）：
-  // 职责内聚（轮次聚合、块类型分发、markdown 渲染管线各自唯一实现），行数超 500，
-  // 拆分属独立重构任务（文件头注释已登记）。短期 max-lines override 避免阻塞，长期应拆分。
+  // chat 展示一件（MarkdownRenderer 分通道净化渲染）：职责内聚（markdown 渲染管线唯一实现），
+  // 有效行超 500（2026-11-06 探针 520），拆分属独立重构任务。短期 max-lines override 避免阻塞，
+  // 长期应拆分。
+  // [chat-flow-process-aggregate u-wiring 2026-11-06] 原三件中 Block.vue 块渲染壳已随聚合块改造
+  // 退役；Turn.vue 重构后有效行回落 500 内（探针实测 498，split-justified 文件头注释已裁决
+  // 不再规划拆分任务），override 条目随之移除（对齐 subagent-service.ts「warning 消解即移除而非
+  // 抬阈值」先例）。探针复算：npx eslint packages/ui/src/features/chat/Turn.vue --rule
+  // 'max-lines: ["warn", { "max": 500, "skipBlankLines": true, "skipComments": true }]' → 零告警。
   {
-    files: [
-      'packages/ui/src/features/chat/Turn.vue',
-      'packages/ui/src/features/chat/Block.vue',
-      'packages/ui/src/features/chat/MarkdownRenderer.vue',
-    ],
+    files: ['packages/ui/src/features/chat/MarkdownRenderer.vue'],
     rules: {
       'max-lines': 'off',
     },
   },
   // sidebar 主组件（sessions tab 三支互斥链 / 项目分组 / 视图切换动效 / 恢复期状态行
   // 预留挂点的宿主壳，D11 R4 裁决的挂载层级看守对象）：职责内聚但非注释行 503 超 500，
-  // 拆分属独立重构任务（随 chat 三件先例）。短期 max-lines override 避免阻塞，长期应拆分；
+  // 拆分属独立重构任务（随 chat 展示 override 先例）。短期 max-lines override 避免阻塞，长期应拆分；
   // 首次纳入门禁视野 = design-code-sync R1 G4（2026-10-31）触及该文件时暴露存量超限。
   {
     files: ['packages/renderer/src/components/sidebar/Sidebar.vue'],
@@ -159,10 +161,13 @@ export default [
   // event-interpreter / engine-client 的「微超即提额，保留软上限告警」同型）。该文件
   // 曾按 max-lines 拆出 pi-maintenance / pi-enabled-models / pi-skill-paths /
   // pi-provider-repair（模块头注释），再拆属独立重构任务。
+  // [provider-aggregation u-runtime-inject 2026-11] listProviders 注入 aggregation 条目
+  // （D4 kind/thinkingLevelMap 并集 + contextWindow min）与虚拟 provider 凭据豁免守卫入列，
+  // 折算 532 > 520 微超——按「微超即提额，保留软上限告警」同型先例提额 540，超限即再暴露。
   {
     files: ['packages/runtime/src/infra/pi/pi-provider-store.ts'],
     rules: {
-      'max-lines': ['warn', { max: 520, skipBlankLines: true, skipComments: true }],
+      'max-lines': ['warn', { max: 540, skipBlankLines: true, skipComments: true }],
     },
   },
   // [M3 relay-spawn-transport u-m3-control] subagent control server：control 帧路由 /
@@ -174,6 +179,20 @@ export default [
     files: ['packages/runtime/src/infra/subagent-control/control-server.ts'],
     rules: {
       'max-lines': ['warn', { max: 1080, skipBlankLines: true, skipComments: true }],
+    },
+  },
+  // shared 包 barrel 出口（全部 domain 的 re-export 聚合点——barrel 的职责即聚合，
+  // 拆分不消行只移行）。provider-aggregation 域契约根（aggregation.ts 类型 + 纯函数
+  // 出口，多端共用 SSOT）净增 57 行越过 500，540 > 500 微超即提额保留软上限告警
+  //（pi-provider-store / control-server 同型先例；计数 = eslint max-lines
+  // skipBlankLines+skipComments 口径实测）。
+  // [feat-provider-routing 集成线 2026-11] aggregation 契约根出口随 route 求值接线
+  // （quota freshness 谓词等纯函数出口）追加，折算 544 > 540 微超——同型提额 560，
+  // 超限即再暴露。
+  {
+    files: ['packages/shared/src/index.ts'],
+    rules: {
+      'max-lines': ['warn', { max: 560, skipBlankLines: true, skipComments: true }],
     },
   },
   // [M3 relay-spawn-transport u-m2-prompt-ack] pi 引擎 spawn runner：spawn/握手/帧泵/
@@ -515,6 +534,16 @@ export default [
   // pi-provider-store「微超即提额，保留软上限告警」先例（508→520 同型），拆分归独立重构任务。
   {
     files: ['packages/renderer/src/components/panel/Composer.vue'],
+    rules: {
+      'max-lines': ['warn', { max: 520, skipBlankLines: true, skipComments: true }],
+    },
+  },
+  // SettingsModal.vue 是设置弹层壳 + 分区编排的聚合点：provider 行引用 chip 跳转（spec §6.4）
+  // 与「此刻」额度接线（F1-34/M2）后 ESLint 实测 511 代码行（skipBlankLines+skipComments 口径）
+  // 微超 500——新增均为接线声明（props 透传 / focus ref / quota 投影 lambda），无自然拆分线。
+  // 对齐上方 Composer.vue「微超即提额，保留软上限告警」同型先例（511→520），拆分归独立重构任务。
+  {
+    files: ['packages/renderer/src/components/settings/SettingsModal.vue'],
     rules: {
       'max-lines': ['warn', { max: 520, skipBlankLines: true, skipComments: true }],
     },
@@ -906,10 +935,14 @@ export default [
   // 长期仍应拆分（防线载体可拆独立模块）。
   // [gate static-gate 2026-10] provider 用量回写段入列后净代码行 938 > 920，微超即提额先例
   // （session-service 634→650 同型）抬到 950。提额而非 off：保留软上限告警，超限即再暴露，勿再增行。
+  // [2026-11-07 gate static-gate 复测] provider-aggregation u-foundation（路由读取入口 +
+  // getMergedCatalogModels 存在性校验单点，净增 ~240 物理行）与 dev-0.12.6 集成线 route
+  // 修复批次入列后折算 1089 > 950——sanitize* 校验组拆分仍是长期方向，按 worker-message-pump
+  // 1240→1400 同型提额 1100 保留软上限告警，超限即再暴露，勿再增行。
   {
     files: ['packages/runtime/src/services/provider-config-helper.ts'],
     rules: {
-      'max-lines': ['warn', { max: 950, skipBlankLines: true, skipComments: true }],
+      'max-lines': ['warn', { max: 1100, skipBlankLines: true, skipComments: true }],
     },
   },
   // declarative-engine：quota fetcher 声明式执行引擎（5 家平台 fetcher 的受限原语解释器），

@@ -215,6 +215,37 @@ export class QuotaService {
   }
 
   /**
+   * 面向路由引用的批量按需刷新（provider-aggregation D3/U4，M2）：事件驱动触发点
+   * （路由配置保存 / set_model 绑定路由 / 绑定路由会话回合收尾）的多 provider 一次刷新。
+   *
+   * - 全部走 fetch()（非 force）——既有 10s throttle + pending 并发复用天然完成「节流内
+   *   去重」：同批重复 id 与 10s 窗口内的重复触发（保存与回合收尾连续到达）都收敛为缓存
+   *   读取，不绕过节流、不新增 throttle 状态（与既有 hover/设置强刷互不干扰——各走各的
+   *   force 维度，W7 pendingKey 隔离）；
+   * - 单 provider 失败返回失败态（data=null + reason）不抛错、不影响同批其余
+   *   （allSettled 语义——编排层不因个别端点查询失败丢掉整批）；
+   * - 零定时器：本方法只在被事件显式调用时发起查询（ADR-0190 红线，上游查询属保留
+   *   白名单①外部网络调用）。
+   */
+  async fetchMany(providerIds: readonly string[]): Promise<Map<string, QuotaFetchResult>> {
+    const settled = await Promise.allSettled(providerIds.map(id => this.fetch(id)))
+    const results = new Map<string, QuotaFetchResult>()
+    providerIds.forEach((id, i) => {
+      const outcome = settled[i]
+      if (outcome.status === 'fulfilled') {
+        results.set(id, outcome.value)
+      } else {
+        // fetch 的实现路径不 throw（doFetch 全出口吞错返回失败态）；此分支防御未来
+        // 回归（runFetch 外层意外逃逸），按 network 失败态落盘不中断整批。
+        const msg = outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason)
+        logger.warn('[quota] fetchMany unexpected rejection', { providerId: id, error: msg })
+        results.set(id, { data: null, lastFetchAt: null, reason: 'network' })
+      }
+    })
+    return results
+  }
+
+  /**
    * fetch/refresh 共用实现。
    * @param force - true 时绕过 throttle（refresh 用）；false 时检查 10s 最小间隔（fetch 用）
    */

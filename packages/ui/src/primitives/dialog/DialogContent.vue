@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, getCurrentInstance, onBeforeUnmount, useAttrs } from "vue"
+import { computed, getCurrentInstance, onBeforeUnmount, unref, useAttrs } from "vue"
 import type { DialogContentEmits, DialogContentProps } from "reka-ui"
 import type { HTMLAttributes } from "vue"
 import { reactiveOmit } from "@vueuse/core"
@@ -36,15 +36,22 @@ defineOptions({ inheritAttrs: false })
 // 父级内在宽度的贡献）会把整层面板内容撑宽、吃掉右侧 padding；minmax(0,1fr) 使轨道
 // 恒等于内容盒且可收缩，超宽内容退化为在自身盒内截断。
 
-const props = defineProps<DialogContentProps & { class?: HTMLAttributes["class"]; hideClose?: boolean }>()
+const props = defineProps<
+  DialogContentProps & { class?: HTMLAttributes["class"]; hideClose?: boolean; variant?: "center" | "right-drawer" }
+>()
 const emits = defineEmits<DialogContentEmits>()
 const attrs = useAttrs()
 
-const delegatedProps = reactiveOmit(props, "class")
+// variant 是本原语的形态档（非 reka DialogContentProps 成员），不转发——漏 omit 会落进
+// attrs 合并到 DOM 面板元素上，产出无语义的 variant="…" 属性
+const delegatedProps = reactiveOmit(props, "class", "variant")
 
 const forwarded = useForwardPropsEmits(delegatedProps, emits)
-/** 合并 forwarded props + fallthrough attrs（如 data-testid），一次性绑到内层 reka-ui DialogContent */
-const mergedAttrs = computed(() => ({ ...forwarded, ...attrs }))
+/** 合并 forwarded props + fallthrough attrs（如 data-testid），一次性绑到内层 reka-ui DialogContent。
+ * forwarded 是 ComputedRef，脚本作用域内无模板自动解包——直接展开会把 RefImpl 实例
+ * 摊平成空对象（forwarded props 与 emits 上行链路全部丢失，closeAutoFocus 等事件到不了
+ * 消费方），必须 unref 后展开。 */
+const mergedAttrs = computed(() => ({ ...unref(forwarded), ...attrs }))
 
 // 模态表面聚合注册（§6.7 modal-dialog 族，经 renderer 注册桥——层级方向见
 // modal-surface-registrar.ts 文件头）：本原语常驻挂载（消费方模板恒含），开合态绑 reka
@@ -64,11 +71,20 @@ onBeforeUnmount(disposeSurfaceRegistration)
     <DialogOverlay
       class="fixed inset-0 z-[var(--z-modal)] bg-scrim backdrop-blur-sm reka-overlay-transition"
     />
+    <!-- 右贴边抽屉形态（variant='right-drawer'，工具详情抽屉壳基座，D4 裁决）：右侧贴边
+         全高 420px 档，≤620px 全宽；仅左缘 hairline + 无圆角；内边距不在形态档定型——
+         壳层用 header/body 分区自排。进出场过渡走 Tailwind data-[state] 工具类 +
+         @starting-style 任意变体（进场首帧），不复用宿主 style.css 的
+         .reka-dialog-transition——它把居中 translate(-50%,-50%) 定型进 data-state 规则，
+         右贴边形态会被拉回屏幕中心；reduced-motion 降级由宿主全局块承接（transform
+         过渡被全局清零），与居中形态同一机制。 -->
     <DialogContent
       v-bind="mergedAttrs"
       :class="
         cn(
-          'fixed left-1/2 top-1/2 z-[var(--z-modal)] grid w-full grid-cols-[minmax(0,1fr)] max-w-lg gap-4 border border-hairline bg-bg p-[20px] shadow-[var(--shadow-3)] select-text reka-dialog-transition rounded-lg',
+          props.variant === 'right-drawer'
+            ? 'fixed inset-y-0 right-0 z-[var(--z-modal)] flex w-[420px] max-w-full max-[620px]:w-full flex-col border-y-0 border-r-0 border-l border-hairline bg-bg shadow-[var(--shadow-3)] select-text outline-none rounded-none opacity-0 translate-x-6 transition-[opacity,transform] duration-150 ease-[var(--ease-in)] data-[state=open]:opacity-100 data-[state=open]:translate-x-0 data-[state=open]:duration-200 data-[state=open]:ease-[var(--ease-out-soft)] [@starting-style]:data-[state=open]:opacity-0 [@starting-style]:data-[state=open]:translate-x-6'
+            : 'fixed left-1/2 top-1/2 z-[var(--z-modal)] grid w-full grid-cols-[minmax(0,1fr)] max-w-lg gap-4 border border-hairline bg-bg p-[20px] shadow-[var(--shadow-3)] select-text reka-dialog-transition rounded-lg',
           props.class,
         )"
     >

@@ -159,7 +159,7 @@ import type { BackgroundTaskEntry } from '@/lib/background-task-bucket'
 import { formatClockDuration } from '@/lib/duration-format'
 import * as backgroundTaskApi from '@taiji/core/transport/api/domains/background-task'
 import { useToast } from '@/composables/useToast'
-import { useCopy } from '@/composables/panel/useCopy'
+import { useCopy } from '@/composables/useCopy'
 
 const { t } = useI18n()
 const toast = useToast()

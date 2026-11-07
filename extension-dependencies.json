@@ -537,6 +537,22 @@
       ]
     },
     {
+      "name": "@zhushanwen/pi-provider-aggregation",
+      "directory": "extensions/universal/provider-aggregation",
+      "dependsOn": [
+        {
+          "package": "@zhushanwen/pi-extension-logger",
+          "type": "package",
+          "reason": "代码层静态 import getLogger/setPiHandle（src/index.ts top-level import——损坏/对账日志走共享 logger 双通道：warn/error 落 pi.appendEntry 持久化 + TAIJI_AGENT_DEBUG/TAIJI_AGENT_EXT_LOG 文件日志，不依赖 pi 不捕获的 extension stderr），缺失时模块加载抛 Cannot find module，是强依赖"
+        },
+        {
+          "package": "@taiji/shared",
+          "type": "package",
+          "reason": "代码层静态 import AGGREGATION_PROVIDER_ID/parseAggregationRoutesSection 及路由域类型（src/index.ts、src/router.ts、src/config-store.ts top-level import——路由配置域契约根：聚合 provider 保留 id、routes 段读取侧形态校验；落选原因文案映射 MEMBER_BLOCK_REASON_LABELS 在扩展本地 router.ts 定义，不经 shared），缺失时模块加载抛 Cannot find module，是强依赖"
+        }
+      ]
+    },
+    {
       "name": "@zhushanwen/pi-exec-skills",
       "directory": "extensions/shared/exec-skills",
       "dependsOn": [

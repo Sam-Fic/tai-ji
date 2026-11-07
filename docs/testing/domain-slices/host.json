@@ -26,6 +26,7 @@
   },
   "tests": [
     "apps/electron/main/diagnostics/**",
+    "apps/electron/main/gateway/__tests__/font-handlers.test.ts",
     "apps/electron/main/images/**",
     "apps/electron/main/logs/**",
     "apps/electron/main/quota/__tests__/cookie-refresher.test.ts",

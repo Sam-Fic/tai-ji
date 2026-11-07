@@ -19,6 +19,7 @@ import type {
   LaunchResult,
   UpdateCheckResult,
   UpdateInstallResult,
+  ReadFontBytesResult,
 } from '@taiji/shared'
 import {
   getProxyConfig as getProxyConfigIpc,
@@ -38,6 +39,7 @@ import {
   openUpdateManualDir as openUpdateManualDirIpc,
   chooseDirectory as chooseDirectoryIpc,
   listSystemSounds as listSystemSoundsIpc,
+  readFontBytes as readFontBytesIpc,
 } from '@/lib/ipc'
 
 // ── 代理配置（update:getProxyConfig / update:setProxyConfig / update:testProxy）──
@@ -130,6 +132,11 @@ export function getDataDir(): Promise<string | undefined> {
 /** 打开目录选择 dialog，返回所选路径（canceled → null）。 */
 export async function chooseDirectory(): Promise<string | null> {
   return chooseDirectoryIpc()
+}
+
+/** 读取经 main 校验的字体文件字节（FileFontSource 导入与启动重放共用）。 */
+export async function readFontBytes(path: string): Promise<ReadFontBytesResult> {
+  return readFontBytesIpc(path)
 }
 
 /** 当前平台可用系统提示音清单。无 IPC 返回空 sounds。 */

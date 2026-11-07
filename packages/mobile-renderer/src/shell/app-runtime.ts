@@ -158,8 +158,7 @@ const useChatInstance = createUseChat(buildUseChatDeps())
 
 // ── turn 展开状态（桌面 useTurnExpansion 的 mobile 子集，per-session Map 分区）──────
 
-/** per-session turn 展开分区：turnKey 展开集合（isTakeover/setTakeover 是 optional 字段，
- *  移动壳按 D10 不 provide，分区无接管态）。
+/** per-session turn 展开分区：turnKey 展开集合（回合级手动展开态）。
  *  登记表主表 #54（声明处 @data-owner #54）——纯本地 UI 交互态（无 runtime 权威），
  *  写口 toggle 封闭于 createTurnExpansion，清理挂 registerSessionCleanup。
  *  [remote-use C3] collapse 写口已退役删除（会话结束 collapse 接线退役、ChatViewDeps.collapse

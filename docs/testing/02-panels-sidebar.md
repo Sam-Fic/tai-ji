@@ -1,4 +1,4 @@
-# 02 · 面板与侧栏测试手册（文件树 / SideDrawer / 搜索浮层 / GUI 组件 / Subagent 面板 / 后台命令）
+# 02 · 面板与侧栏测试手册（文件树 / DrawerPanel / 搜索浮层 / GUI 组件 / Subagent 面板 / 后台命令）
 
 > 合并自 04-file-tree.md + 05-side-drawer.md + 06-search-modal.md + 07-gui-components.md + 09-subagent-workflow-panel.md + 14-background-task-sidebar.md（2026-09 手册并册，原文 git 历史可查）。
 >
@@ -22,7 +22,7 @@
 点目录展开 → 加载该目录单层（expand，缓存复用）
 输入关键词 → 实时过滤节点
 ignored 节点（node_modules 等）恒显（2026-10-15 全量显示裁决）：未跟踪文件名基线灰、跟踪文件名顶格白，ignored 目录维持灰斜体
-点文件 → 打开 SideDrawer detail 预览（见 02-panels-sidebar.md）
+点文件 → 打开 DrawerPanel detail 预览（见 02-panels-sidebar.md）
 切 session 再切回 → 展开态恢复（expandedPaths 持久）
 ```
 
@@ -147,7 +147,7 @@ pnpm dev
 | 2 | 展开真实目录 | 子目录加载（runtime `file.tree` RPC） |
 | 3 | 观察 git 角标 | 与 `git status` 真实对账（A/M/D/U） |
 | 4 | 输入过滤 | 真实文件名匹配 |
-| 5 | 点文件 | SideDrawer 打开真实文件内容（runtime `file.read`） |
+| 5 | 点文件 | DrawerPanel 打开真实文件内容（runtime `file.read`） |
 
 **关键验证点**（MOCK 测不出）：
 - runtime `file.tree` / `file.expand` / `file.read` 真实 RPC（字段是否与 protocol 契约一致）
@@ -187,7 +187,7 @@ async function gotoFileTree(page: import('@playwright/test').Page): Promise<void
 | E2E-1 (T1.8) | 切文件 tab → 顶层节点 | `file-tree-dir-src` / `file-tree-file-README.md` / `file-tree-file-package.json` | 三个顶层节点 DOM 可见 |
 | E2E-2 (UC-1+2) | 点目录展开 + 角标 | `file-tree-file-src/index.ts` / `file-tree-file-src/new-feature.ts` | 子节点可见；new-feature.ts 含 'A' 角标 |
 | E2E-3a (T6.2) | 点文件 → drawer 内容 | `detail-pane` / `detail-content` | drawer 打开，内容含 'export function' |
-| E2E-3b (T6.10) | 改动文件 → diff + XSS 安全 | `detail-content` | 含 'diff --git'；`detail-content script` count=0 |
+| ~~E2E-3b (T6.10)~~ | [已退役 2026-09-15] 改动文件 → diff + XSS 安全——已从实际 spec 删除（diff 视图改结构化 hunk 渲染，raw diff 文本断言过期，git 可追溯；spec 头注 [R3] 标注）——本行非现行用例 | — | — |
 | E2E-3c (T6.12) | drawer 已开点新文件 → 新增 tab；已开仅激活（W3） | `detail-tab` count / `detail-pane` count / `data-active` | 新文件 tab count+1；已开文件再点 tab count 不变、激活态切到该 tab；`detail-pane` count 恒 1 |
 | E2E-4 (AC-3.5) | 切 session 再切回 → 展开态恢复 | `file-tree-file-src/index.ts` | 切回后子节点仍可见（expandedPaths 持久） |
 | T4.1 | 过滤命中 | `file-tree-file-README.md` 可见 / `file-tree-file-package.json` count=0 | 输入 'readme' 后只 README 命中 |
@@ -195,7 +195,7 @@ async function gotoFileTree(page: import('@playwright/test').Page): Promise<void
 | T4.5 | 清空 → 恢复完整树 | `file-tree-file-package.json` | 清空过滤后恢复 |
 | D-020 | 全量显示 + 跟踪态双色（2026-10-15 修订） | `file-tree-dir-node_modules` | ignored 目录恒显（灰斜体不变）；未跟踪文件名基线灰、跟踪文件名 fg |
 
-### 8.4 完整 E2E 代码（现有，可作其他功能 E2E 的参考模板）
+### 8.4 完整 E2E 代码（对齐 e2e/file-tree.spec.ts 现行登记；E2E-3b 为退役场景参考——可作其他功能 E2E 的参考模板）
 
 ```typescript
 import { test, expect } from './fixtures/launch-app'
@@ -229,7 +229,7 @@ test.describe('文件树 E2E', () => {
     await expect(newFeatureRow).toContainText('A')  // added 角标
   })
 
-  test('E2E-3a (T6.2): 点文件 → SideDrawer detail 打开 + 显示内容', async ({ page }) => {
+  test('E2E-3a (T6.2): 点文件 → DrawerPanel detail 打开 + 显示内容', async ({ page }) => {
     await gotoFileTree(page)
     await page.getByTestId('file-tree-dir-src').click()
     await page.getByTestId('file-tree-file-src/index.ts').click()
@@ -238,6 +238,8 @@ test.describe('文件树 E2E', () => {
     await expect(page.getByTestId('detail-content')).toContainText('export function')
   })
 
+  // [R3 退役 2026-09-15] E2E-3b 已从实际 spec 删除（diff 视图改结构化 hunk 渲染，raw diff 文本断言过期，git 可追溯）。
+  // 下例保留作「点改动文件 → diff + XSS 安全」场景写法参考，实际 spec 无此用例。
   test('E2E-3b (T6.1/T6.10): 改动文件 → diff 显示 + 禁 v-html（XSS 安全）', async ({ page }) => {
     await gotoFileTree(page)
     await page.getByTestId('file-tree-dir-src').click()
@@ -271,7 +273,7 @@ test.describe('文件树 E2E', () => {
     await expect(page.getByTestId('file-tree-file-README.md').locator('.fname')).toHaveClass(/text-neutral-fg/)
   })
 
-  // ... 完整 11 用例见 e2e/file-tree.spec.ts
+  // ... 完整 10 用例见 e2e/file-tree.spec.ts
 })
 ```
 
@@ -300,9 +302,9 @@ test.describe('文件树 E2E', () => {
 
 - 组件源码：[`components/sidebar/FileView.vue`](../../packages/renderer/src/components/sidebar/FileView.vue) / [`FileTreeRow.vue`](../../packages/renderer/src/components/sidebar/FileTreeRow.vue)
 - composable：[`composables/features/file-tree/useFileTree.ts`](../../packages/renderer/src/composables/features/file-tree/useFileTree.ts)
-- E2E spec：[`e2e/file-tree.spec.ts`](../../e2e/file-tree.spec.ts)（11 用例）
+- E2E spec：[`e2e/file-tree.spec.ts`](../../e2e/file-tree.spec.ts)（10 用例）
 - ADR：[ADR-0025 文件视图完整项目树](../adr/decisions.md) / [ADR-0026 懒加载](../adr/decisions.md) / [ADR-0027 FileService 三层](../adr/decisions.md)
-- SideDrawer detail：[02-panels-sidebar.md](./02-panels-sidebar.md)（点文件 → drawer 预览）
+- DrawerPanel detail：[02-panels-sidebar.md](./02-panels-sidebar.md)（点文件 → drawer 预览）
 
 ---
 
@@ -313,7 +315,7 @@ test.describe('文件树 E2E', () => {
 
 ## 1. 功能概述
 
-SideDrawer 是 workspace-body 级的右侧抽屉，终态 8 个 tab（本表为 GUI 族历史焦点视图，仅列 5 行——全量枚举见 §3 data-testid 清单「终态 8 员」行）：
+DrawerPanel 是 workspace-body 级的右侧抽屉，终态 8 个 tab（本表为 GUI 族历史焦点视图，仅列 5 行——全量枚举见 §3 data-testid 清单「终态 8 员」行）：
 
 | tab | 内容 | 数据来源 |
 |-----|------|---------|
@@ -323,7 +325,7 @@ SideDrawer 是 workspace-body 级的右侧抽屉，终态 8 个 tab（本表为 
 | `doc` | 命令/skill 详细文档（CommandDocPanel） | commandStore + skills |
 | `detail` | 文件预览（DetailPane，多文件 tab + diff/preview 切换，禁 v-html） | fileTreeStore.selectFile 注入 tab + useDetailPane 拉起加载 |
 
-**detail tab** 是文件树点文件的落点（见 [02-panels-sidebar.md](./02-panels-sidebar.md) E2E-3）：点文件 → `fileTreeStore.selectFile` → SideDrawer `open('detail')` → DetailPane 挂载 → useDetailPane 加载内容。
+**detail tab** 是文件树点文件的落点（见 [02-panels-sidebar.md](./02-panels-sidebar.md) E2E-3）：点文件 → `fileTreeStore.selectFile` → DrawerPanel `open('detail')` → DetailPane 挂载 → useDetailPane 加载内容。
 
 ## 2. 组件结构概述
 
@@ -426,9 +428,11 @@ pnpm dev
 
 ### 8.1 现有覆盖
 
-detail tab 的 E2E 已在 [`e2e/file-tree.spec.ts`](../../e2e/file-tree.spec.ts) 落地（E2E-3a/3b/3c，见 [02-panels-sidebar.md §8.3](./02-panels-sidebar.md)）。复用 gotoFileTree helper。
+detail tab 的 E2E 已在 [`e2e/file-tree.spec.ts`](../../e2e/file-tree.spec.ts) 落地（E2E-3a/3c；E2E-3b 已退役，git 可追溯，见 §8.3）。复用 gotoFileTree helper。
 
 ### 8.2 测试场景
+
+> 编号说明：E2E-SD-N 为本手册示意编号，非 `e2e/file-tree.spec.ts` 实际登记（实际登记见 spec 头注释）。对应关系：E2E-SD-1 ≈ 实际 E2E-3a；E2E-SD-3 ≈ 实际 E2E-3c；E2E-SD-2 对应已退役的 E2E-3b（见文件树章 §8.3 对照表）；E2E-SD-4 / E2E-SD-5（view-toggle 切换 / git tab 渲染）未落地为实际用例。
 
 | 场景 | testid 锚点 | 期望 |
 |------|------------|------|
@@ -440,7 +444,7 @@ detail tab 的 E2E 已在 [`e2e/file-tree.spec.ts`](../../e2e/file-tree.spec.ts)
 
 ### 8.3 完整 E2E 示例代码（含 tab 切换）
 
-> 注意：tab 切换部分（git/doc/terminal）是**范例模板**，detail 部分已落地在 file-tree.spec.ts。
+> 注意：本块为示意范例代码——describe「DrawerPanel E2E」与 E2E-SD-N 编号均非实际登记（实际 spec 的 describe 为「文件树 E2E」，见 §8.2 编号说明）；tab 切换部分（git/doc/terminal）是**范例模板**，detail 部分已落地在 file-tree.spec.ts（E2E-3a/3c）。
 
 ```typescript
 import { test, expect } from './fixtures/launch-app'
@@ -453,7 +457,7 @@ async function gotoFileTree(page: import('@playwright/test').Page): Promise<void
   await expect(page.getByTestId('file-view-root')).toBeVisible({ timeout: 10_000 })
 }
 
-test.describe('SideDrawer E2E', () => {
+test.describe('DrawerPanel E2E', () => {
   test('E2E-SD-1: 点未改动文件 → 内容预览', async ({ page }) => {
     await gotoFileTree(page)
     await page.getByTestId('file-tree-dir-src').click()
@@ -510,7 +514,7 @@ test.describe('SideDrawer E2E', () => {
   })
 
   test('E2E-SD-5: 切 git tab → GitPanel 渲染全量状态', async ({ page }) => {
-    // 入口选择：SideDrawer 的 git tab 按钮与 PanelHeader 的 git 按钮都含 "Git" 文本，
+    // 入口选择：DrawerPanel 的 git tab 按钮与 PanelHeader 的 git 按钮都含 "Git" 文本，
     // getByRole(button, name:/git/i) 会双匹配。改用 PanelHeader git 按钮（title 更具体
     // 「Git 状态 · 打开侧栏」），点击触发 openGit → openDrawer('git')
     // → drawer 切到 git tab → GitPanel 挂载。
@@ -539,7 +543,7 @@ test.describe('SideDrawer E2E', () => {
 |------|------|------|
 | 1. gotoFileTree | （helper） | 文件树可见 |
 | 2. 展开 src | 点 `file-tree-dir-src` | 子节点可见 |
-| 3. 点 index.ts | 点 `file-tree-file-src/index.ts` | `fileTreeStore.selectFile('src/index.ts')` → SideDrawer `open('detail')` |
+| 3. 点 index.ts | 点 `file-tree-file-src/index.ts` | `fileTreeStore.selectFile('src/index.ts')` → DrawerPanel `open('detail')` |
 | 4. DetailPane 挂载 | （DOM） | `detail-pane` 可见 |
 | 5. useDetailPane watch | （内部） | `openPreview('e2e-files', 'src/index.ts')` |
 | 6. 查 gitStatus | （内部） | `store.getGitStatus` 无记录 → hasGitChange=false → viewMode='preview' |
@@ -549,7 +553,7 @@ test.describe('SideDrawer E2E', () => {
 
 ## 9. 覆盖缺口（漏测 backlog）
 
-当前 E2E（E2E-SD-1~5）覆盖 detail tab 主路径 + git tab 全量状态渲染。以下场景待补：
+当前 E2E（E2E-3a/3c）覆盖 detail tab 主路径；git tab 渲染暂无 E2E 覆盖（示意编号 E2E-SD-1~5 与实际登记的对应见 §8.2 编号说明）。以下场景待补：
 
 | 缺口 | 场景 | 测试方式 | 优先级 |
 |------|------|---------|--------|
@@ -557,10 +561,10 @@ test.describe('SideDrawer E2E', () => {
 | ~~terminal tab widget~~ | [已退役] 双重失效：右抽屉 terminal tab 已迁底抽屉（display-containers §7.6）+ widget 消费端已于 2026-09-16 迁托盘（见同文件 gui 渲染管线文档「渲染路径概述」路径 A 退役注记）——本行非待补项 | — | — |
 | ~~browser tab widget~~ | [已退役] 同上：右抽屉 browser tab 已删除（能力在浮层壳），widget 消费端已迁托盘——本行非待补项 | — | — |
 | doc tab | slash 命令 chip 点击 → doc tab 展示 CommandDocPanel | E2E（需补 CommandDocPanel testid） | 中 |
-| git tab 暂存/提交交互 | stage/unstage/commit 操作（E2E-SD-5 已覆盖只读渲染） | E2E（需补操作按钮 testid） | 中 |
+| git tab 暂存/提交交互 | stage/unstage/commit 操作（只读渲染亦无 E2E 覆盖——示意编号 E2E-SD-5 场景未落地实际用例） | E2E（需补操作按钮 testid） | 中 |
 | 大文件截断 | file.read >1MB → detail-truncated 显示 | 非 MOCK（mock file.read 恒小文本） | 低 |
 | 二进制文件 | 图片等 → detail-binary 显示 | 非 MOCK（mock 不返回二进制标记） | 低 |
-| diff/preview 切换 | 点 detail-view-toggle 在 diff/preview 间切换（每次切换重新拉数据） | E2E（E2E-SD-4 已覆盖单次切换） | — |
+| diff/preview 切换 | 点 detail-view-toggle 在 diff/preview 间切换（每次切换重新拉数据；示意编号 E2E-SD-4 场景未落地实际用例，E2E 无现行覆盖） | E2E（需补） | 中 |
 
 > ⚠️ **viewMode 不持久（已知限制，非 backlog）**：`useDetailPane.state` 是组件级 `ref`，`DetailPane` 在抽屉容器内是条件挂载——切走（切到 git/doc tab）即 unmount，state 销毁；切回重新 `useDetailPane()` → `initialState()` → viewMode 复位为 `'preview'`。**无 store/localStorage 持久化**。如需「切走再切回记忆 viewMode」是功能增强需求，需改造成 store 或 module 级缓存，当前不作为测试 backlog（测了也是验证缺陷）。
 
@@ -579,7 +583,7 @@ test.describe('SideDrawer E2E', () => {
 
 - 组件源码：抽屉容器 [`features/drawer/DrawerPanel.vue`](../../packages/ui/src/features/drawer/DrawerPanel.vue)（原 SideDrawer，已迁 ui 包）/ [`DetailPane.vue`](../../packages/renderer/src/components/panel/DetailPane.vue)
 - composable：[`composables/features/file-tree/useDetailPane.ts`](../../packages/renderer/src/composables/features/file-tree/useDetailPane.ts) / [`composables/features/drawer/useSideDrawer.ts`](../../packages/renderer/src/composables/features/drawer/useSideDrawer.ts)
-- E2E（detail tab）：[`e2e/file-tree.spec.ts`](../../e2e/file-tree.spec.ts) E2E-3a/3b/3c
+- E2E（detail tab）：[`e2e/file-tree.spec.ts`](../../e2e/file-tree.spec.ts) E2E-3a/3c（E2E-3b 已退役）
 - 文件树入口：[02-panels-sidebar.md](./02-panels-sidebar.md)（点文件 → drawer detail）
 - XSS 安全约束：C-state-13（[docs/constraints.json](../constraints.json)）
 
@@ -793,14 +797,14 @@ pnpm dev    # 非 MOCK 层，起 runtime + pi
 | `gui-card` | Card | `rendering-protocol/primitives/Card.vue` |
 | `gui-columns` | Columns | `rendering-protocol/primitives/Columns.vue` |
 | `gui-list-tree` | ListTree | `rendering-protocol/primitives/ListTree.vue` |
-| `tool-block-header` | Block tool 块 header（点击展开） | `features/chat/Block.vue` |
+| `tool-block-header` | Tool tool 块 header（点击展开；对话流主链过程段已收进聚合块——chat-flow-process-aggregate D1 后对话流不再渲染 ToolRow：ChangeSetCard 不经 ToolRow，ToolRow 生产链零消费、组件休眠，本 testid 仅组件级测试可达） | `features/chat/ToolRow.vue` |
 | `drawer-tab-{key}` | DrawerPanel tab 按钮（终态 8 员，key=git/doc/detail/subagent/bashTask/plan/btw/workflow——terminal 迁底抽屉、browser 删除；与同文件「组件结构概述」及首份文档覆盖节枚举同源，避免双处枚举漂移） | `features/drawer/DrawerPanel.vue` |
 
 ## 2. 渲染路径概述
 
 两条渲染路径都收敛到 `GuiComponentRenderer` 按 `BUILTIN_MAP[type]` 路由到具体 primitive 组件：
 
-- **路径 B（消息流）**：extension tool 返回 `details.__gui__` → runtime event-adapter 随 `message.tool_call_end` 下发 → 前端把 details 存入 toolCall → `Block.vue` 的 guiComponent computed 提取组件 → GuiComponentRenderer 渲染。
+- **路径 B（消息流）**：extension tool 返回 `details.__gui__` → runtime event-adapter 随 `message.tool_call_end` 下发 → 前端把 details 存入 toolCall → 对话流过程段收进聚合块，工具详情抽屉 `process-aggregate/AggregateToolDetailDrawer.vue` 经 GuiComponentRenderer 富渲染（chat-flow-process-aggregate D4，`Block.vue` 已退役删除）；`ToolRow.vue` 已无活跃消费方（休眠：生产链零 import，对话流仅经聚合块路径富渲染，无 ToolRow 渲染分支）。
 - **路径 A（SideDrawer widget）[已退役 2026-09-16]**：extension 调 `ctx.ui.setWidget(key, [NUL_MARKER + JSON])` → runtime event-adapter 检测 marker、JSON.parse 并 isGuiComponent 校验 → 以 `extension:widgetGui` 帧下发 → 前端 dispatchSession 后由抽屉容器消费，按 widgetKey 挂到对应 tab → GuiComponentRenderer 渲染。**消费端已迁 composer 任务托盘 widget 区**（现行 = `TrayWidgetButton`/`TrayWidgetPanel` 经 ViewHostStore `getViewIds`/`getView` 消费；SideDrawer 不再挂 widget，上述抽屉消费形态为历史描述，git 可追溯）。
 
 Mock 模式跳过 runtime event-adapter：`run-send-stream.ts` 直接 `pushSession` 推已解码的 `extension:widgetGui`。
@@ -838,9 +842,9 @@ Mock 模式跳过 runtime event-adapter：`run-send-stream.ts` 直接 `pushSessi
 |---|---|---|
 | 1 | 激活 s3 session（'API 性能优化'） | `composer-box` 可见 |
 | 2 | 输入 'GUI 测试' + Enter | stop-btn 出现 → 消失（流式完成） |
-| 3 | 点击 `.turn-meta` | 展开 turn trace（完成后默认收起） |
-| 4 | 点击 `tool-block-header` | tool 块展开 |
-| 5 | 断言 `gui-card` | 可见，含 'CI Pipeline' |
+| 3 | 点击 `agg-summary-row`（首行） | 聚合条展开（`agg-expanded` 可见；chat-flow-process-aggregate D1 后回合落成收摘要行，旧「点 `.turn-meta` 展开 trace → 点 `tool-block-header`」四层折叠链已退役） |
+| 4 | 点击 `agg-tool-row`（首行） | 工具详情抽屉 `tool-detail-drawer` 打开（D4 富渲染通道） |
+| 5 | 断言 `gui-card`（抽屉内富渲染） | 可见，含 'CI Pipeline' |
 | 6 | 断言 `gui-progress-bar` | 可见，含 'build' '7' '8' |
 | 7 | 断言 `gui-stats-line` | 可见，含 'turns' '15' |
 
@@ -875,7 +879,7 @@ npx playwright test                            # 跑全部 E2E
 
 ## 5. 已知约束
 
-- **SideDrawer 打开方式**：通过 PanelHeader 的 `drawer-toggle` 按钮打开（always-visible，不依赖 git 仓库）。默认显示 git tab（display-containers §7.1 W1 裁决：terminal 迁底抽屉后首项改高频 git）。
+- **DrawerPanel 打开方式**：通过 PanelHeader 的 `drawer-toggle` 按钮打开（always-visible，不依赖 git 仓库）。默认显示 git tab（display-containers §7.1 W1 裁决：terminal 迁底抽屉后首项改高频 git）。
 - **widgetGui 是瞬态的**：不持久化到 message store，session 切换 / 组件卸载后清除。只有 tool result `__gui__` 在历史重放后仍存在。
 - **Card/Columns 递归**：通过 `<GuiComponentRenderer v-for :component>` 中转递归，不自己处理 type 路由。
 - **ListTree 自递归**：`<ListTree :items="children" :depth="depth+1">` Vue 组件自递归渲染子节点，depth 自动 +1 传递缩进。
@@ -1125,7 +1129,7 @@ testid 以组件 template 内 data-testid 属性为准（drawer 表已核实有�
 ## §4 相关文档
 
 - 设计文档：[background-task-sidebar-view.md](../architecture/background-task-sidebar-view.md)（终态 §3.1 / 筛选 D10 / kill 矩阵 D6 / 输出跟随 D7；含 2026-09-16 视图侧退役说明）+ [composer-task-tray.md](../design/composer-task-tray.md)（现行列表/计数入口）
-- SideDrawer 宿主：bashTask tab 为第 8 tab（drawer 4 点接线见 background-task-sidebar-view.md D5）
+- DrawerPanel 宿主：bashTask tab 为第 8 tab（drawer 4 点接线见 background-task-sidebar-view.md D5）
 - 列表侧范式：composer 任务托盘 bash 面板（分桶槽/两行式 item/行内两段式终止；原 Agents tab 同构先例已随侧栏任务 tab 退役）
 - 组件测试：`packages/renderer/src/__tests__/components/background-task-detail-panel.test.ts`（16 用例）；列表/计数侧 = `packages/renderer/src/__tests__/panel/tray/`（原 background-task-list-view.test.ts 已随视图退役删除）
 

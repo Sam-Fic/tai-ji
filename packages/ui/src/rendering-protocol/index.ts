@@ -10,8 +10,8 @@
  * ui 层不再持有独立的降级逻辑。
  */
 // AnsiText 例外暴露：它是通用 ANSI 文本渲染器（GuiComponentRenderer 的 ansi-text type
-// 与 ansi-fallback 均用它），外部原始 ANSI 文本消费（Block bash output / SideDrawer
-// status text）是其合法第二用途（IF3：优先复用 rendering-protocol 消费方，行为一致优先）。
+// 与 ansi-fallback 均用它），外部原始 ANSI 文本消费（Block bash output）是其合法第二用途
+// （IF3：优先复用 rendering-protocol 消费方，行为一致优先）。
 // 其余 6 原语（Card/Columns/ListTree/ProgressBar/StatsLine/TabBar）不暴露，仅经 barrel
 // 供 GuiComponentRenderer 内部消费（TC2 总则：原语是 RenderingProtocol 内部实现细节）。
 export { default as AnsiText } from './primitives/AnsiText.vue'

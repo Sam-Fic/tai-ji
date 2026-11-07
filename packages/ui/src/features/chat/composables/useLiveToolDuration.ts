@@ -1,12 +1,12 @@
 /**
- * useLiveToolDuration —— running 工具的行尾实时耗时（从 Block.vue 拆出，控 script 行数）。
+ * useLiveToolDuration —— running 工具的行尾实时耗时。
  *
  * 仅 isRunning 期间挂载 interval（100ms tick）驱动 nowTs 重算，onUnmounted 清理，
  * 页面 hidden 停不停 tick 不在职责内（tick 只驱动一个 computed，开销可忽略——
  * 与原实现一致，行为零变化）。
  * 终态耗时用 startTime/endTime；end_not_received（流结束未收到 tool_call_end，
- * 进程崩溃/WS 断连）原单独分支已并入 completed 的 neutral-mid 置灰（同为非 running
- * 非失败的中性态，无需视觉区分——色档判定留在 Block.vue 的 toolStatusClass）。
+ * 进程崩溃/WS 断连）与 completed 同档置灰（同为非 running 非失败的中性态，无需视觉
+ * 区分——行尾耗时渲染恒 neutral-dim，见 ToolRow.vue:105）。
  */
 import { computed, onUnmounted, ref, watch, type ComputedRef, type Ref } from 'vue'
 import type { ToolCall } from '@taiji/shared'

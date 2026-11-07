@@ -9,8 +9,10 @@
 # （模式中 `.` 匹配字面 `.` 或 `\.`）。只查 tracked 文本文件，docs/ 排除（历史叙述
 # 引用旧位置合法，其映射面由 check-doc-symbol-drift.mjs 管辖）。
 #
-# 豁免：PATH_REF_EXEMPT（下方登记表，唯一登记处，逐条附理由）——仅限「引用语义
-# 合理保留」的条目；新豁免须先在此登记再加白，禁止改检查逻辑绕过。
+# 豁免：PATH_REF_EXEMPT（下方登记表，唯一登记处，逐条附理由）——仅限两类：①残留
+# 引用合理保留（该引用不随迁移更新是有意为之）；②匹配口径副作用误伤（命中行实际
+# 不引用旧路径，如去扩展名 stem 前缀碰撞到仍存在的同前缀文件）；新豁免须先在此登
+# 记再加白，禁止改检查逻辑绕过。
 #
 # 用法：node/pre-commit 直跑 `python3 .githooks/check_path_ref_drift.py`；staged 无
 # 删除/移动时零成本放行。
@@ -20,7 +22,7 @@ import re
 import subprocess
 import sys
 
-# (旧路径, 引用文件完整相对路径) → 理由。按完整路径精确匹配。空表为常态；登记即声明「该引用不随迁移更新是有意为之」。
+# (旧路径, 引用文件完整相对路径) → 理由。按完整路径精确匹配。空表为常态；登记即声明该条目属文件头两类豁免之一：残留引用类 =「不随迁移更新是有意为之」，误伤类 =「命中行不引用旧路径、属匹配口径副作用」。
 PATH_REF_EXEMPT = {
     # 退役守卫检查（scripts/check-wool-retirement.mjs）：断言已删除的羊毛界面/类型文件保持
     # 不存在（防复活），引用即检查语义本身
@@ -57,6 +59,11 @@ PATH_REF_EXEMPT = {
     # history-rebuild-cache.ts 保持不存在（防回流），引用即检查语义本身
     ("packages/runtime/src/services/session/history-rebuild-cache.ts",
      "scripts/check-history-read-model.mjs"): "retirement-guard",
+    # Block.vue 已随聚合块改造退役（chat-flow-process-aggregate u-wiring）；命中行
+    # check-session-hidden-surface.mjs 引用的是仍存在的 BlockScrollBox.vue——去扩展名
+    # stem（…/chat/Block）是它文件名的前缀，属匹配口径副作用误伤，非旧路径残留引用
+    ("packages/ui/src/features/chat/Block.vue",
+     "scripts/check-session-hidden-surface.mjs"): "stem-prefix-collision：引用对象是仍存在的 BlockScrollBox.vue（hidden-surface 豁免清单条目），非已删除的 Block.vue",
 }
 
 SCAN_PATHSPEC = [

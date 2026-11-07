@@ -221,6 +221,26 @@ export class ExtensionService {
   }
 
   /**
+   * 模型路由扩展（provider-aggregation）是否被禁用（U3/D9 禁用态分型 + 默认模型裁定共用）。
+   *
+   * 与 pi 进程装载态一致的判据：路由扩展是 tier=feature 的 builtin 包（mandatory-extensions
+   * SSOT 登记，u-pi-extension 交付），extension-filter 对该层扩展的 loadable = !disabled.has
+   * （resolveExtension :86-88 同款判定），disabled key 形态 = `npm:<包名>`。禁用状态落
+   * disabled-packages.json（IExtensionSettings port，同步可读）。preset 过滤是会话级装载
+   * 旋钮（按会话 preset 二次筛选），不在本判定——设计 D9 禁用态分型只点名扩展禁用态。
+   *
+   * 消费方：SessionModelControl 的 AGGREGATION_EXTENSION_DISABLED 分型与组合根的
+   * findValidDefaultModel 路由可用性注入（D9 ③）。
+   */
+  isRouteExtensionDisabled(): boolean {
+    // 包名锚点 = impl-plan U2 定形的扩展包名（@zhushanwen/pi-provider-aggregation，
+    // extensions/universal/provider-aggregation）；禁用 key 命名空间 = settings/npm 源的
+    // `npm:` 前缀（extension-filter resolveExtension :85 同款）。
+    const ROUTE_EXTENSION_NAME = '@zhushanwen/pi-provider-aggregation'
+    return this.extSettings.getDisabled().includes(`npm:${ROUTE_EXTENSION_NAME}`)
+  }
+
+  /**
    * 扫描所有 extension，返回 ExtensionInfo[]（全局视图，含绝对路径 discovery 扩展）。
    * 用 ExtensionResolver 扫描所有源，复用 resolveExtensions 判定 loadable 状态。
    * 保留 disabled 包（enabled:false），前端 ExtensionPage 据此渲染。

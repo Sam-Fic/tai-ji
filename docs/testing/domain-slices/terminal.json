@@ -20,7 +20,8 @@
       "packages/renderer/src/stores/terminal-write-queue.ts",
       "packages/renderer/src/composables/features/terminal/**",
       "packages/renderer/src/components/panel/TerminalView.vue",
-      "packages/renderer/src/components/panel/TerminalInstanceBar.vue"
+      "packages/renderer/src/components/panel/TerminalInstanceBar.vue",
+      "packages/renderer/src/components/panel/terminal-xterm-options.ts"
     ],
     "shared": [
       "packages/shared/src/terminal-id.ts"
@@ -33,6 +34,7 @@
     "packages/renderer/src/__tests__/terminal/terminal-write-queue.test.ts",
     "packages/renderer/src/__tests__/terminal/use-terminal-raf-queue.test.ts",
     "packages/renderer/src/components/panel/__tests__/terminal-instance-bar.test.ts",
+    "packages/renderer/src/components/panel/__tests__/terminal-xterm-options.test.ts",
     "packages/renderer/src/composables/features/terminal/__tests__/use-terminal.test.ts",
     "packages/shared/src/__tests__/protocol-terminal.test.ts",
     "packages/shared/src/__tests__/terminal-id.test.ts",

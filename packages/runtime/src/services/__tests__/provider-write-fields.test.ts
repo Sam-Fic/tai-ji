@@ -345,6 +345,34 @@ describe('M1b：写侧防线②③ 端到端（P0 毒化链拆除）', () => {
     expect(providers['my-proxy']?.apiKey).toBe('sk-keep')
   })
 })
+
+// ======================================================================
+// D4 ③（provider-aggregation）：聚合 provider 保留 id——新建撞名拒绝（U4 一致性修复）
+// ======================================================================
+describe('D4 ③：setProvider 新建撞聚合保留 id 拒绝', () => {
+  it('新建 id="aggregation" → reject 携带 shared 词表 code，models.json 不落条目', async () => {
+    await expect(
+      svc.setProvider('aggregation', { name: 'My Aggregation', baseUrl: 'https://x.example.com', apiKey: 'sk-1' }),
+    ).rejects.toMatchObject({ code: 'aggregation_provider_id_reserved' })
+    // 写盘前拦截：文件未被物化，或物化后（其他用例先写过）无该条目
+    if (existsSync(join(agentDir, 'models.json'))) {
+      expect(readModelsJson().providers['aggregation']).toBeUndefined()
+    }
+  })
+
+  it('编辑既有同名条目（存量形态）→ 不拒，保存生效', async () => {
+    writeModelsJson({ aggregation: { name: 'legacy', baseUrl: 'https://legacy.example.com' } })
+    await expect(svc.setProvider('aggregation', { name: 'legacy-renamed' })).resolves.toBeDefined()
+    expect(readModelsJson().providers['aggregation']?.name).toBe('legacy-renamed')
+  })
+
+  it('非保留 id 新建不受影响（同参数形态正常落盘）', async () => {
+    await expect(
+      svc.setProvider('aggregation-custom', { name: 'My Aggregation', baseUrl: 'https://x.example.com', apiKey: 'sk-1' }),
+    ).resolves.toBeDefined()
+    expect(readModelsJson().providers['aggregation-custom']).toBeDefined()
+  })
+})
 });
 
 // ======================================================================

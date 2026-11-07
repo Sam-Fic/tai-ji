@@ -96,7 +96,7 @@ vi.mock('@/composables/features/file-tree/useDetailPane', () => ({
     sessionCwd: () => '/cwd',
   }),
 }))
-vi.mock('@/composables/panel/useCopy', () => ({
+vi.mock('@/composables/useCopy', () => ({
   useCopy: () => ({ copied: ref(null), copy: vi.fn() }),
 }))
 vi.mock('@/composables/logic/file-type', () => ({ extToLang: () => 'ts' }))
@@ -925,12 +925,12 @@ describe('ComposerMetricsAggregate coding-plan 区', () => {
       vi.useRealTimers()
     })
 
-    // TC-REG-1：零跳变回归——message_start 序列下窗口内块节点全程同一 DOM 引用。
+    // TC-REG-1：零跳变回归——message_start 序列下单元节点全程同一 DOM 引用。
     // T1=[a1 text streaming] → T2=[a1 text+tool running] → T3=[a1 text+tool, a2 text streaming]。
-    // [8be96c5dc 适配] 窗口语义：末位 text 全 turn 单个（不按 assistant 分组）——T3 时 a1 text
-    // （非末位）被收编出 visible，visible=[a1 tool, a2 text]；零跳变断言改为「T1→T2 a1 text 引用
-    // 稳定 + T2→T3 窗口内 a1 tool 引用稳定」（key=flatIndex keyed v-for 复用）。
-    it('TC-REG-1: 零跳变 — 窗口内块 DOM 引用在 T1→T3 全程同一节点，顺序不变，末位 text 无丢失', async () => {
+    // [chat-flow-process-aggregate U3 适配] 聚合块形态：正文全量原生渲染（D2，无窗口收编）——
+    // T3 时 a1 text 保持在场，a1 tool 收进聚合块；零跳变断言 = 「a1 text 引用稳定 +
+    // a1 聚合块引用稳定」（正文 key=flatIndex、聚合块 key=段 id 结构定位，v-for 复用）。
+    it('TC-REG-1: 零跳变 — 单元 DOM 引用在 T1→T3 全程同一节点，顺序不变，正文无丢失', async () => {
       const a1Text = (over: Partial<Message> = {}): Message =>
         msg({
           id: 'a1',
@@ -945,7 +945,8 @@ describe('ComposerMetricsAggregate coding-plan 区', () => {
       const wrapper = mountTurnWithRealBlock({
         turn: makeTurn({ isStreaming: true, hasFoldable: false, assistants: [a1Text()] }),
       })
-      const a1TextEl = wrapper.find('.trace .trace-blk > div').element as HTMLElement
+      // 引用锚 = 顶层单元 wrapper（与 blocksT* 同一取样域；TextRow 根在场另断言）
+      const a1TextEl = wrapper.find('.trace > .trace-blk').element as HTMLElement
       expect(a1TextEl).toBeInstanceOf(HTMLElement)
       expect(wrapper.find('.trace .trace-blk > div').exists()).toBe(true)
       expect(wrapper.find('.trace .trace-blk .md-stub').text()).toBe('我先读文件')
@@ -967,23 +968,21 @@ describe('ComposerMetricsAggregate coding-plan 区', () => {
           ],
         }),
       })
-      // a1 text 引用同一节点（keyed v-for 按 flatIndex=0 复用），textContent 无丢失
+      // a1 text 引用同一节点（keyed v-for 按 flatIndex=0 复用；引用锚 = wrapper，同 T1 取样域）
+      expect(wrapper.find('.trace > .trace-blk').element).toBe(a1TextEl)
       expect(wrapper.find('.trace .trace-blk > div').exists()).toBe(true)
-      expect(wrapper.find('.trace .trace-blk > div').element).toBe(a1TextEl)
       // U2 起 text 块行尾含时刻槽（text-time-slot），textContent 含时刻文本——断言「正文无丢失」用 toContain
       expect(a1TextEl.textContent).toContain('我先读文件')
-      // 相对顺序不变：a1 text 在 tool 前
-      // （顶层单元取子选择器：W3 起成员行直递 ToolRow 无壳根，本就不带 .trace-blk；
-      //   子选择器保证「块数 = 顶层单元数」口径与组内成员行无关）
+      // 相对顺序不变：a1 text 在聚合块前（contentBlocks 顺序；正文原生渲染 D2）
       const blocksT2 = wrapper.findAll('.trace > .trace-blk')
       expect(blocksT2.length).toBe(2)
       expect(blocksT2[0].find('.md-stub').exists()).toBe(true)
       expect(blocksT2[0].find('.md-stub').text()).toBe('我先读文件')
-      expect(blocksT2[1].find('.trace-run-group').exists()).toBe(true)
-      // 记录 T2 的 run 组 DOM 引用（T3 窗口收编 a1 text 后组仍在窗口内）
+      expect(blocksT2[1].find('[data-testid="process-aggregate"]').exists()).toBe(true)
+      // 记录 T2 的聚合块 DOM 引用（T3 a2 正文到达后聚合块键不变）
       const a1ToolEl = blocksT2[1].element as HTMLElement
 
-      // T3：message_start(a2)——a1 text 收编（非末位），visible=[a1 tool, a2 text]
+      // T3：message_start(a2)——a2 正文到达（正文全量原生渲染，无收编口径）
       await wrapper.setProps({
         turn: makeTurn({
           isStreaming: true,
@@ -1000,22 +999,25 @@ describe('ComposerMetricsAggregate coding-plan 区', () => {
           ],
         }),
       })
-      // a1 的 run 组引用仍同一节点（run head 锚定 key 不变，窗口内单元零跳变）
+      // a1 text 与 a1 聚合块引用均同一节点（正文 key=flatIndex、聚合块 key=段 id，零跳变）
       const blocksT3 = wrapper.findAll('.trace > .trace-blk')
-      expect(blocksT3.length).toBe(2)
-      expect(blocksT3[0].find('.trace-run-group').exists()).toBe(true)
-      expect(blocksT3[0].element).toBe(a1ToolEl)
-      // 相对顺序不变：a1 tool 在 a2 text（末位 text = 流式正文）前
-      expect(blocksT3[1].find('.md-stub').exists()).toBe(true)
-      expect(blocksT3[1].find('.md-stub').text()).toBe('内容是...')
-      // 末位 text 无丢失（a1 非末位 text 已收编，经 takeover/展开查看——8be96c5dc）
+      expect(blocksT3.length).toBe(3)
+      expect(blocksT3[0].find('.md-stub').exists()).toBe(true)
+      expect(blocksT3[0].element).toBe(a1TextEl)
+      expect(blocksT3[1].find('[data-testid="process-aggregate"]').exists()).toBe(true)
+      expect(blocksT3[1].element).toBe(a1ToolEl)
+      // 相对顺序不变：a1 text → a1 聚合块 → a2 text（contentBlocks 真实时序）
+      expect(blocksT3[2].find('.md-stub').exists()).toBe(true)
+      expect(blocksT3[2].find('.md-stub').text()).toBe('内容是...')
+      // 正文无丢失（a1 text 与 a2 text 均在场）
+      expect(wrapper.find('.trace').text()).toContain('我先读文件')
       expect(wrapper.find('.trace').text()).toContain('内容是...')
     })
 
-    // TC-REG-2：折叠态多 assistant 文字可见——showTrace=false 时仅全 turn 末位 text 可见
-    // （8be96c5dc：不按 assistant 分组，防 tool-loop 多 assistant visible 爆炸），thinking/tool
-    // 不存在，.trace 容器恒渲染；非末位 text 经展开（完成态全量 flatBlocks「回看就是全量」）恢复。
-    it('TC-REG-2: 折叠态多 assistant — 仅末位 text 可见，thinking/tool 隐藏；展开后全量恢复', async () => {
+    // TC-REG-2：折叠形态（D5）多 assistant——全部聚合块摘要行 + 全 turn 末位 text 可见，
+    // thinking/tool 细节不渲染，.trace 容器恒渲染；段细节经每段摘要行展开（回合级展开开关
+    // 在 D5 同形态下不改 trace 形态——旧「展开后全量 flatBlocks 恢复」口径随窗口化退役）。
+    it('TC-REG-2: 折叠形态多 assistant — 摘要行 + 末位 text，thinking/tool 细节隐藏；段展开恢复细节', async () => {
       const a1 = msg({
         id: 'a1',
         status: 'complete',
@@ -1033,34 +1035,30 @@ describe('ComposerMetricsAggregate coding-plan 区', () => {
       const wrapper = mountTurnWithRealBlock({
         turn: makeTurn({ isStreaming: false, hasFoldable: true, assistants: [a1, a2] }),
       })
-      // .trace 容器恒渲染（v-if 下沉 Block 级）
+      // .trace 容器恒渲染
       expect(wrapper.find('.trace').exists()).toBe(true)
-      // 折叠态仅全 turn 末位 text（a2「正文B」）可见；a1 非末位 text 收编
+      // 折叠形态 = [a1 thinking 段摘要, a1 tool 段摘要, 末位 text（a2「正文B」）] 三单元；
+      // a1 非末位 text 收敛（D5 折叠形态正文保留末位一条）
       const blocks = wrapper.findAll('.trace .trace-blk')
-      expect(blocks.length).toBe(1)
-      expect(blocks[0].find('.md-stub').exists()).toBe(true)
-      expect(blocks[0].find('.md-stub').text()).toBe('正文B')
-      // thinking/tool 节点不存在（showTrace=false 隐藏）
+      expect(blocks.length).toBe(3)
+      expect(blocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
+      expect(blocks[1].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
+      expect(blocks[2].find('.md-stub').exists()).toBe(true)
+      expect(blocks[2].find('.md-stub').text()).toBe('正文B')
+      // thinking/tool 细节节点不存在（折叠形态只在聚合块展开态渲染）
       expect(wrapper.find('.trace-think').exists()).toBe(false)
       expect(wrapper.find('.trace-tool').exists()).toBe(false)
       expect(wrapper.find('.trace').text()).toContain('正文B')
 
-      // 展开后（showTrace && !isWorkingTurn → 全量 flatBlocks）：a1 thinking/text/tool + a2 text 全恢复
-      expandedTurns.add('u1')
-      await nextTick()
-      const expanded = wrapper.findAll('.trace .trace-blk')
-      expect(expanded.length).toBe(4)
-      expect(wrapper.find('.trace').text()).toContain('正文A')
-      expect(wrapper.find('.trace').text()).toContain('正文B')
+      // 段细节经每段摘要行展开（GL2/GL3）：点第一段摘要行 → 思考行在聚合块内渲染（.trace-think 在场）
+      await blocks[0].find('[data-testid="agg-summary-row"]').trigger('click')
       expect(wrapper.find('.trace-think').exists()).toBe(true)
-      // a1 的工具行折进 run 组（grep → 探索组，已完成 → 组默认收起，成员行不在 DOM）
-      expect(wrapper.find('.trace-run-group').exists()).toBe(true)
     })
 
-    // TC-REG-3：样式统一——展开态多 assistant，所有 text block 含正文 token 锚点
+    // TC-REG-3：样式统一——工作展开形态（D2）多 assistant，所有 text block 含正文 token 锚点
     // （text-[length:var(--text-md)] + leading-[1.8]，D5 正文档；行高 ui-optimize-unified 决策 7 调 1.8），
     // 不含过程样式（text-sm / leading-relaxed）。
-    it('TC-REG-3: 展开态多 assistant — 所有 text block 统一正文样式（token 锚点）', async () => {
+    it('TC-REG-3: 工作态多 assistant — 所有 text block 统一正文样式（token 锚点）', async () => {
       const a1 = msg({
         id: 'a1',
         status: 'complete',
@@ -1073,13 +1071,12 @@ describe('ComposerMetricsAggregate coding-plan 区', () => {
       })
       const a2 = msg({ id: 'a2', status: 'complete', content: '正文B' })
       const wrapper = mountTurnWithRealBlock({
-        turn: makeTurn({ isStreaming: false, hasFoldable: true, assistants: [a1, a2] }),
+        turn: makeTurn({ isStreaming: true, hasFoldable: true, assistants: [a1, a2] }),
       })
-      // 手动展开 trace（reactive Set 驱动 isExpanded → showTrace）
-      expandedTurns.add('u1')
+      // 工作展开形态（D2 正文原生渲染）：[a1 text, a1 tool 段聚合块, a2 text] 三单元全量在场
       await nextTick()
       const blocks = wrapper.findAll('.trace .trace-blk')
-      expect(blocks.length).toBe(3) // a1 text + a1 tool + a2 text
+      expect(blocks.length).toBe(3)
       // 每个 text block 的 class 断言（token 锚点，禁止字面 'text-base' 子串匹配）
       const textEls = wrapper
         .findAll('.trace .trace-blk > div')

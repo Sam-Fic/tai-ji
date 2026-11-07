@@ -8,10 +8,11 @@
  *
  * fail-safe 链对齐 remote-config 基建（远程 → 上次缓存 → 无缓存报错）；本域不设
  * 编译期基线（清单消费方是 Provider 页家族卡，无数据时整页报错优于展示过期基线，
- * §4 S15）。双产物版本配对唯一权威 = 清单条目字段（D6）：pluginVersion 与
- * piExtensionVersion 成对钉定，任一缺失/损坏 → guard 整体拒用（VERSION_PAIR_MISMATCH），
- * 清单热更新后重试自愈；安装时点与 wool-manifest 资产的版本比对校验归 pi 扩展安装
- * 编排（U7），不在本模块。
+ * §4 S15）。版本字段语义：钉版形态（pluginVersion/piExtensionVersion 成对携带，
+ * 安装按钉版解析）与免钉版形态（两者缺省——安装时解析 npm latest，扩展配对跟随
+ * wool-manifest 资产清单）；字段出现但损坏（空串/类型非法）→ guard 整体拒用
+ * （VERSION_PAIR_MISMATCH），清单热更新后重试自愈；安装时点与 wool-manifest 资产
+ * 的版本比对校验归 pi 扩展安装编排（U7），不在本模块。
  */
 import semver from 'semver'
 import {
@@ -85,9 +86,10 @@ function isFamilyMetaValid(f: unknown): boolean {
 }
 
 /**
- * 单条清单条目校验。版本配对字段（pluginVersion / piExtensionVersion）的缺失、空串、
- * 类型非法统一归 VERSION_PAIR_MISMATCH——这两个字段是安装钉版本的唯一权威（D6），
- * 损坏即配对不可信；其余字段形状错误归 CATALOG_INVALID。
+ * 单条清单条目校验。版本字段（pluginVersion / piExtensionVersion）可缺省——缺省 =
+ * 免钉版形态（安装时解析 npm latest、扩展配对跟随 wool-manifest），出现即必须非空
+ * 字符串（空串/类型非法 = 钉版数据不可信，归 VERSION_PAIR_MISMATCH）；其余字段形状
+ * 错误归 CATALOG_INVALID。
  */
 function validateCatalogEntry(p: unknown, index: number): CatalogEntryValidation {
   const at = `plugins[${index}]`
@@ -95,9 +97,9 @@ function validateCatalogEntry(p: unknown, index: number): CatalogEntryValidation
     return { ok: false, code: CATALOG_INVALID, detail: `${at} is not an object` }
   }
   const entry = p as Record<string, unknown>
-  // 版本配对字段：pluginVersion 必填；piExtensionVersion 仅双产物条目携带，出现即必须合法
-  if (!isNonEmptyString(entry.pluginVersion)) {
-    return { ok: false, code: VERSION_PAIR_MISMATCH, detail: `${at}.pluginVersion must be a non-empty string` }
+  // 版本字段：可缺省（免钉版）；出现即必须合法
+  if (!isOptionalNonEmptyString(entry.pluginVersion)) {
+    return { ok: false, code: VERSION_PAIR_MISMATCH, detail: `${at}.pluginVersion must be a non-empty string when present` }
   }
   if (!isOptionalNonEmptyString(entry.piExtensionVersion)) {
     return { ok: false, code: VERSION_PAIR_MISMATCH, detail: `${at}.piExtensionVersion must be a non-empty string when present` }
@@ -262,7 +264,9 @@ export function listAvailablePlugins(
         ...entry,
         installed: true,
         installedVersion,
-        ...(isUpdateAvailable(entry.pluginVersion, installedVersion) ? { updateAvailable: true } : {}),
+        ...(entry.pluginVersion !== undefined && isUpdateAvailable(entry.pluginVersion, installedVersion)
+          ? { updateAvailable: true }
+          : {}),
       }
     }),
   }

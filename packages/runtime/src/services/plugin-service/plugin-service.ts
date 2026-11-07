@@ -12,6 +12,7 @@ import { PluginHost } from './plugin-host.js'
 import { PluginActivator } from './plugin-activator.js'
 import { registerAllRpcMethods } from './plugin-rpc-setup.js'
 import { PluginCatalogService, installedEntriesFromDescriptors, installedVersionsFromDescriptors } from './plugin-catalog.js'
+import { installPiExtensionMember as installExtensionMember } from './plugin-extension-member-install.js'
 import { terminateStaleSandboxWorker, reactivatePreviousVersionAfterRollback } from './plugin-update-activation.js'
 import { bootstrapPluginService } from './plugin-lifecycle.js'
 import { ActiveSessionResolver, SessionEventDispatch, sessionInfoFromSummary } from './api/session-api.js'
@@ -1159,31 +1160,7 @@ export class PluginService implements IPluginService {
    * 双产物，跳过 + warn；清单恢复后重试安装自愈）、条目无 piExtensionVersion（单产物）。
    */
   private async installPiExtensionMember(preview: PluginInstallPreview): Promise<InstallResult | undefined> {
-    const installer = this.deps.piExtensionInstaller
-    if (!installer) {
-      console.warn(`[plugin-service] no piExtensionInstaller configured; pi extension member skipped for ${preview.packageName}`)
-      return undefined
-    }
-    const load = await this.catalogService.load()
-    const entry = load.config?.plugins.find((p) => p.packageName === preview.packageName)
-    if (!entry) {
-      console.warn(`[plugin-service] catalog has no entry for ${preview.packageName}; pi extension member skipped`)
-      return undefined
-    }
-    if (entry.piExtensionVersion === undefined) {
-      return undefined
-    }
-    try {
-      await installer.installForCatalogEntry({ packageName: entry.packageName, piExtensionVersion: entry.piExtensionVersion })
-      return undefined
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err)
-      console.warn(`[plugin-service] pi extension member install failed for ${entry.packageName}:`, detail)
-      return {
-        success: false,
-        error: `插件已安装，但配套 pi 扩展成员安装失败：${detail}。请重试安装（幂等覆盖；扩展侧恢复后即自愈）`,
-      }
-    }
+    return installExtensionMember(this.deps, this.catalogService, preview)
   }
 
   /** 两段式安装取消：清暂存与 pending 登记（用户取消路径，S27「未确认不落盘」）。 */
@@ -1196,6 +1173,15 @@ export class PluginService implements IPluginService {
         console.warn(`[plugin-service] failed to clean staging for cancelled install ${pluginId}:`, toErrorMessage(err))
       })
     })
+  }
+
+  /** 列出 npm registry 上该插件包的全部已发布版本（安装前版本下拉数据源）。 */
+  async listPluginVersions(packageName: string): Promise<{ versions: string[]; latest: string }> {
+    const installer = this.deps.pluginInstaller
+    if (!installer) {
+      throw errorWithCode('Plugin installer not configured (pluginInstaller deps missing)', PLUGIN_PREPARE_FAILED)
+    }
+    return installer.listVersions(packageName)
   }
 
   /**

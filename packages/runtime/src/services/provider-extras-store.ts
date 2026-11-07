@@ -19,6 +19,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { isModelRef } from '@zhushanwen/subagent-core'
 import { dirname } from 'node:path'
 import type { QuotaCredentialSource } from '@taiji/shared'
+import {
+  parseAggregationRoutesSection,
+  type AggregationRoute,
+  type AggregationRoutesFile,
+} from '@taiji/shared'
 import { withFileLockAsync } from '../utils/file-lock.js'
 import { atomicWrite } from '../utils/fs-utils.js'
 import { quarantineCorruptFile } from '../utils/json-store.js'
@@ -29,6 +34,14 @@ export interface ProviderExtrasFile {
   providers: Record<string, ProviderExtras>
   /** 顶层 scopedModels（模型白名单 + 有序列表，scoped-model design §3.2）。可选：缺失 = 空。 */
   scopedModels?: string[]
+  /**
+   * 顶层 routes 域（模型路由配置，provider-aggregation D2）：外层 {version: 1, routes: []}，
+   * 形状 SSOT = shared aggregation.ts（schema 一次定形，字段只加不改）。可选：缺失 = 空
+   * 域（向后兼容，不迁移不报错）。读写唯一层 = 本 store（写侧复用既有文件锁 + 原子写）；
+   * 形态损坏走整文件隔离（readInternal 既有语义扩展 + 「路由配置已隔离」呈报，见
+   * ExtrasQuarantineDiagnostics）。
+   */
+  routes?: AggregationRoutesFile
 }
 
 /** 单 provider 的 taiji 扩展数据（全部字段自 models.json 寄生字段迁出，语义不变）。 */
@@ -161,18 +174,41 @@ function sanitizeScopedModels(value: unknown): string[] {
 
 /**
  * 读并解析 providers.json。文件不存在返回空结构（读路径不物化文件）。
- * 损坏（非法 JSON / version 非 1）→ quarantineCorruptFile 隔离为
- * `<path>.corrupt-<ts>` 后按空配置继续（设计文档 §3.4 错误规格：按空配置启动，
- * 备份坏文件供人工恢复——隔离是 rename 语义，原位置不会被后续写覆盖坏文件内容）。
+ * 损坏（非法 JSON / version 非 1 / providers 形态不符 / routes 段形态不符）→
+ * quarantineCorruptFile 隔离为 `<path>.corrupt-<ts>` 后按空配置继续（设计文档 §3.4
+ * 错误规格：按空配置启动，备份坏文件供人工恢复——隔离是 rename 语义，原位置不会被
+ * 后续写覆盖坏文件内容）。routes 段判别单点 = shared parseAggregationRoutesSection。
+ * 需要隔离呈报信息（「路由配置已隔离」+ 坏文件路径）的调用方走 readInternalWithDiagnostics。
  */
 function readInternal(filePath: string): ProviderExtrasFile {
-  if (!existsSync(filePath)) return { version: 1, providers: {} }
+  return readInternalWithDiagnostics(filePath).file
+}
+
+/** 读路径的隔离呈报信息（损坏被隔离时填充——设置页「路由配置已隔离」+ 修复指引的数据源）。 */
+export interface ExtrasQuarantineDiagnostics {
+  /** 恒 true（判别字段，避免消费方把 undefined 误读为「未损坏」以外的语义）。 */
+  corrupted: true
+  /**
+   * 被隔离的坏文件路径（quarantineCorruptFile rename 成功时的 .corrupt-<ts> 副本路径，
+   * 用户据此人工找回；rename 失败时 undefined——原文件保留原位，恢复入口即原路径）。
+   */
+  corruptedFilePath?: string
+}
+
+/** 带隔离诊断的读取结果：file 为解析产物（损坏时 = 空骨架），quarantine 仅损坏时存在。 */
+interface ReadInternalResult {
+  file: ProviderExtrasFile
+  quarantine?: ExtrasQuarantineDiagnostics
+}
+
+function readInternalWithDiagnostics(filePath: string): ReadInternalResult {
+  if (!existsSync(filePath)) return { file: { version: 1, providers: {} } }
   let parsed: unknown
   try {
     parsed = JSON.parse(readFileSync(filePath, 'utf-8'))
   } catch (cause) {
-    quarantineCorruptFile(filePath, { tag: 'provider-extras-store', reason: 'parse failed', cause })
-    return { version: 1, providers: {} }
+    const quarantinePath = quarantineCorruptFile(filePath, { tag: 'provider-extras-store', reason: 'parse failed', cause })
+    return { file: { version: 1, providers: {} }, quarantine: { corrupted: true, corruptedFilePath: quarantinePath } }
   }
   const file = parsed as ProviderExtrasFile
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
@@ -192,14 +228,27 @@ function readInternal(filePath: string): ProviderExtrasFile {
     || !Object.values(file.providers).every(
       entry => entry !== null && typeof entry === 'object' && !Array.isArray(entry),
     )) {
-    quarantineCorruptFile(filePath, {
+    const quarantinePath = quarantineCorruptFile(filePath, {
       tag: 'provider-extras-store',
       reason: 'schema mismatch (expect { version: 1, providers: {} })',
       cause: new Error(`unexpected shape: ${JSON.stringify(parsed).slice(0, SCHEMA_SNIPPET_MAX)}`),
     })
-    return { version: 1, providers: {} }
+    return { file: { version: 1, providers: {} }, quarantine: { corrupted: true, corruptedFilePath: quarantinePath } }
   }
-  return file
+  // routes 段形态校验（provider-aggregation D2/U1）：判别单点 = shared
+  // parseAggregationRoutesSection；损坏走同款整文件隔离（对齐既有损坏语义 + 路由域
+  // 呈报义务，不发明「部分接受」或「保持上一有效配置」语义——坏文件隔离后按空继续，
+  // 修复入口 = 隔离副本人工比对找回）。
+  const routesParse = parseAggregationRoutesSection(file.routes)
+  if (!routesParse.ok) {
+    const quarantinePath = quarantineCorruptFile(filePath, {
+      tag: 'provider-extras-store',
+      reason: `routes section malformed: ${routesParse.reason}`,
+      cause: new Error(`routes section: ${JSON.stringify(file.routes).slice(0, SCHEMA_SNIPPET_MAX)}`),
+    })
+    return { file: { version: 1, providers: {} }, quarantine: { corrupted: true, corruptedFilePath: quarantinePath } }
+  }
+  return { file }
 }
 
 /** 原子写（tmp + rename）+ 确保父目录。恒写 version: 1。 */
@@ -303,5 +352,46 @@ export class TaijiProviderStore {
       file.scopedModels = remaining
       writeInternal(this.filePath, file)
     })
+  }
+
+  // ── routes 域（模型路由配置，provider-aggregation D2/U1；scopedModels 域零改动） ──
+
+  /**
+   * 读顶层 routes 域（模型路由配置全集）。文件不存在 / 键缺失 / 段损坏被隔离 → 空数组
+   * （读路径不物化文件；损坏走整文件隔离 + 按空继续，对齐 readInternal 既有语义）。
+   * 需要隔离呈报（「路由配置已隔离」+ 坏文件路径）的调用方走 getAggregationRoutesWithDiagnosticsSync。
+   */
+  getAggregationRoutesSync(): AggregationRoute[] {
+    return readInternal(this.filePath).routes?.routes ?? []
+  }
+
+  /**
+   * getAggregationRoutesSync 的带呈报版：附带隔离诊断（本文件任一损坏触发点被隔离时
+   * 都会填充——routes 段损坏与文件级损坏同样使路由域呈报「已隔离」，后者 routes 段
+   * 一并没入坏文件）。非损坏时 quarantine 为 undefined。
+   */
+  getAggregationRoutesWithDiagnosticsSync(): { routes: AggregationRoute[]; quarantine?: ExtrasQuarantineDiagnostics } {
+    const result = readInternalWithDiagnostics(this.filePath)
+    return { routes: result.file.routes?.routes ?? [], quarantine: result.quarantine }
+  }
+
+  /**
+   * RMW 顶层 routes 域：锁内重读 → fn(current) → 原子写回（复用既有文件锁 + 原子写，
+   * 唯一写点不变——D2 红线）。current 是当前路由全集（键缺失 = []）；返回值整段替换
+   * （外层 {version, routes} 形态由本方法构造，调用方只算数组）。空数组也落全形态键
+   *（显式空域——与「键缺失 = 空」的读取语义等价，写侧不回删键：保留用户显式创建过
+   * 路由域的痕迹，避免键存在性成为隐藏状态）。
+   */
+  async modifyAggregationRoutes(
+    fn: (current: AggregationRoute[]) => AggregationRoute[],
+  ): Promise<AggregationRoute[]> {
+    let result: AggregationRoute[] | undefined
+    await withFileLock(this.filePath, async () => {
+      const file = readInternal(this.filePath)
+      result = fn(file.routes?.routes ?? [])
+      file.routes = { version: 1, routes: result }
+      writeInternal(this.filePath, file)
+    })
+    return result!
   }
 }

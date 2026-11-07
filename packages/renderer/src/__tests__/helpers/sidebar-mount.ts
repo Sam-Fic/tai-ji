@@ -196,8 +196,9 @@ export function expectTextOnlyTabs(
 }
 
 /**
- * 项目组折叠翻转单源：点组头 toggle 并断言展开态翻转为 false，返回 toggle 再取器
- * 供二次翻转/锚定断言（project-filter / project-groups 两文件的组头交互共用）。
+ * 项目组展开翻转单源：点组头 toggle 并断言展开态翻转为 true（默认收起语义下初始
+ * 收起），返回 toggle 再取器供二次翻转/锚定断言（project-filter / project-groups
+ * 两文件的组头交互共用）。
  */
 export async function flipProjectGroupToggle(
   findGroup: (projectId: string) => {
@@ -207,6 +208,6 @@ export async function flipProjectGroupToggle(
 ) {
   const toggle = () => findGroup(projectId).find('[data-testid="project-group-toggle"]')
   await toggle().trigger('click')
-  expect(toggle().attributes('aria-expanded')).toBe('false')
+  expect(toggle().attributes('aria-expanded')).toBe('true')
   return toggle
 }

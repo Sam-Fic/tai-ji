@@ -34,6 +34,12 @@ import { test, expect } from './fixtures/launch-app'
  * v6-shell-baseline.spec.ts activateSession 注释）。
  */
 async function activateSession(page: import('@playwright/test').Page): Promise<void> {
+  // 5b13f3f59（基线内）起默认项目组缺省收起（localStorage 记忆）——会话行不进 DOM 时先展开组
+  if (!(await page.getByText('API 性能优化').first().isVisible().catch(() => false))) {
+    await page.getByTestId('default-project-head').click().catch(() => {});
+    await expect(page.getByText('API 性能优化').first()).toBeVisible({ timeout: 10_000 });
+  }
+
   await expect(page.getByText('API 性能优化')).toBeVisible({ timeout: 10_000 })
   await page.getByText('API 性能优化').click()
   await expect(page.getByTestId('composer-box')).toBeVisible({ timeout: 5_000 })

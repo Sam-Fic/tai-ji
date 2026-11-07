@@ -46,6 +46,12 @@ test.describe('失败路径 E2E 烟雾', () => {
     await expect(page.getByTestId('app-shell-aside')).toBeVisible({ timeout: 10_000 })
 
     // session 列表随 AppShell 挂载渲染（activeTab 默认 sessions），直接等目标项
+    // 5b13f3f59（基线内）起默认项目组缺省收起（localStorage 记忆）——会话行不进 DOM 时先展开组
+    if (!(await page.getByText('API 性能优化').first().isVisible().catch(() => false))) {
+      await page.getByTestId('default-project-head').click().catch(() => {});
+      await expect(page.getByText('API 性能优化').first()).toBeVisible({ timeout: 10_000 });
+    }
+
     await expect(page.getByText('API 性能优化')).toBeVisible({ timeout: 10_000 })
     await page.getByText('API 性能优化').click()
 

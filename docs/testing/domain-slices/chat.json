@@ -172,7 +172,8 @@
     "packages/shared/src/__tests__/session-occupancy.test.ts",
     "packages/shared/src/__tests__/session-types.test.ts",
     "packages/shared/src/__tests__/session.test.ts",
-    "packages/ui/src/features/chat/**"
+    "packages/ui/src/features/chat/**",
+    "packages/runtime/src/services/session/__tests__/session-model-virtual.test.ts"
   ],
   "sharedBy": {
     "packages/runtime/src/services/session/__tests__/session-locate-single-source.test.ts": [
@@ -189,6 +190,9 @@
     ],
     "packages/renderer/src/composables/effects/__tests__/useMessageEffects.test.ts": [
       "subagent"
+    ],
+    "packages/runtime/src/services/session/__tests__/session-model-virtual.test.ts": [
+      "provider"
     ]
   },
   "contracts": [

@@ -19,8 +19,10 @@
   展开态 = 块实例本地 ref：不进 store、不持久化——virtua 回收/重开 session 自然复位，
   与 Block 本地折叠态同语义（展开态入 store 的代价四要素见设计 D6 不采用③）。
 
-  接入点（Block.vue 三处）：thinking 展开区 / bash 凹槽输出区（命令头保持在凹槽内、
-  本容器之外 = 恒吸顶）/ 非 bash 工具输出区（GuiComponentRenderer 输出自管理高度，不包）。
+  接入点三组件：ThinkingRow（thinking 展开区）/ ToolRow（bash 凹槽输出区——命令头保持
+  在凹槽内、本容器之外 = 恒吸顶——与工具输出区，GuiComponentRenderer 输出自管理高度，
+  不包）/ AggregateToolDetailDrawer（drawer 完整输出区）；段内思考行经 SegmentThinkingRow
+  适配 ThinkingRow 间接复用。
 -->
 <template>
   <div class="relative" :style="rootStyle" data-testid="block-scroll">
@@ -84,7 +86,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 // primitives 直接路径（不经 @taiji/ui 顶层 barrel）：chat 组件被 barrel 再导出，
-// barrel 自引用会封住循环依赖环（同 Block.vue / BashOutputBlock.vue 注释）
+// barrel 自引用会封住循环依赖环（同 BashOutputBlock.vue 注释）
 import { Button } from '../../primitives/button'
 import { useChatDensity } from './chat-view-deps'
 
