@@ -30,6 +30,7 @@
 
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { AggregationMember, AggregationRoute } from "@taiji/shared/aggregation";
+import { TIME_WINDOW_DAYS, TIME_WINDOW_SLOTS_PER_DAY } from "@taiji/shared/aggregation";
 import { PI_THINKING_LEVELS } from "@taiji/shared/pi-preset";
 
 /** 端点额度快照（route 求值的额度输入形态）。由 index.ts 经 QuotaCacheReader 组装
@@ -97,11 +98,15 @@ export const THINKING_LEVEL_ORDER: readonly ModelThinkingLevel[] = PI_THINKING_L
 
 /** 每小时分钟数（墙钟落格与 `HH:mm` 解析共用的换算锚）。 */
 const MINUTES_PER_HOUR = 60
-/** 时间窗半小时格的分钟跨度（坐标契约：格 c 覆盖 [c*30,(c+1)*30) 分钟）。 */
-const TIME_WINDOW_SLOT_MINUTES = 30
-/** ISO 星期换算：JS getDay 以周日=0，表行 0 = 周一——偏移 6 后对 7 取模。 */
+/** 一天小时数（格宽推导的钟表锚）。 */
+const HOURS_PER_DAY = 24
+/** 时间窗格分钟跨度（单源推导 = 24*60 分钟 / TIME_WINDOW_SLOTS_PER_DAY 格，单源 =
+ * @taiji/shared/aggregation TIME_WINDOW 常量——坐标契约：格 c 覆盖 [c*30,(c+1)*30) 分钟）。 */
+const TIME_WINDOW_SLOT_MINUTES = (HOURS_PER_DAY * MINUTES_PER_HOUR) / TIME_WINDOW_SLOTS_PER_DAY
+/** ISO 星期换算：JS getDay 以周日=0，表行 0 = 周一——偏移 6 后对一周天数取模。 */
 const ISO_WEEKDAY_OFFSET = 6
-const DAYS_PER_WEEK = 7
+/** 一周天数（= 时间窗表行数，单源 = @taiji/shared/aggregation TIME_WINDOW_DAYS——落格模数与表行数同源）。 */
+const DAYS_PER_WEEK = TIME_WINDOW_DAYS
 /** 本地日期 `YYYY-MM-DD` 的位宽（年份 4 位，月/日各 2 位补零）。 */
 const LOCAL_DATE_YEAR_DIGITS = 4
 const LOCAL_DATE_PART_DIGITS = 2

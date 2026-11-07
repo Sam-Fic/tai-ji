@@ -6,7 +6,8 @@
  * 可视权威。两者共用本模块，与 pi 扩展求值函数（U2 router.ts）语义对齐但各自实现——
  * UI 预览不 import 扩展侧代码（包边界）。穷举语义一致性守护两层：坐标维度 = shared
  * aggregation.ts TIME_WINDOW 常量单源（本模块与 RouteTimeGrid 均从 shared 取值，
- * 改维度 UI 侧编译期红灯）；求值语义 = 两侧各自单测对照 route-matrix.md 矩阵逐格实现
+ * 改维度 UI 侧编译期红灯；格宽换算由 SLOT_COUNT 推导，同属该单源）；求值语义 =
+ * 两侧各自单测对照 route-matrix.md 矩阵逐格实现
  * + 跨实现对拍（对照验证，differential testing）测试（runtime
  * src/services/__tests__/route-preview-differential.test.ts：同一 fixture 矩阵喂扩展
  * evaluateRoute 与本模块 evaluateRouteAt 断言同结论；宿主在 runtime = 对拍先例
@@ -24,7 +25,7 @@ import type {
   AggregationTimeWindowTable,
 } from '@taiji/shared'
 import type { ProviderInfo } from '@taiji/shared'
-import { annotateDanglingMembers, TIME_WINDOW_DAYS, TIME_WINDOW_SLOTS_PER_DAY } from '@taiji/shared'
+import { annotateDanglingMembers, PI_THINKING_LEVELS, TIME_WINDOW_DAYS, TIME_WINDOW_SLOTS_PER_DAY } from '@taiji/shared'
 
 /** 时间窗表维度（= shared aggregation.ts TIME_WINDOW 常量别名，坐标契约单源，禁止另定坐标系）。 */
 export const DAY_COUNT = TIME_WINDOW_DAYS
@@ -33,14 +34,18 @@ export const SLOT_COUNT = TIME_WINDOW_SLOTS_PER_DAY
 /** 百分比满刻度（quotaOf 供给的 pct 口径 0-100；剩余 = 满刻度 − 已用）。 */
 const QUOTA_PCT_FULL_SCALE = 100
 
-/** 一天 30 分钟格数下的一刻钟粒度换算常量（slot = floor(分钟 / 30)）。 */
-const MINUTES_PER_SLOT = 30
-
 /** 一小时分钟数（时间换算中间量）。 */
 const MINUTES_PER_HOUR = 60
 
 /** 一天小时数（slot 换算中间量）。 */
 const HOURS_PER_DAY = 24
+
+/**
+ * 时间窗格分钟跨度（单源推导 = 24*60 分钟 / SLOT_COUNT 格，SLOT_COUNT = shared
+ * TIME_WINDOW_SLOTS_PER_DAY——坐标契约单源，改格数本模块换算自动跟随；
+ * slot = floor(分钟 / MINUTES_PER_SLOT)）。
+ */
+const MINUTES_PER_SLOT = (HOURS_PER_DAY * MINUTES_PER_HOUR) / SLOT_COUNT
 
 /** `HH:mm` 各段时间位宽度（padStart 位宽）。 */
 const TIME_PART_PAD = 2
@@ -358,8 +363,8 @@ export function endpointIssueKey(kind: EndpointIssueKind): string {
 
 // ── 档位并集（D7） ──────────────────────────────────────────────────────────────────
 
-/** thinking 档位序（pi EXTENDED_THINKING_LEVELS 七档全集；并集按此序输出）。 */
-const THINKING_LEVEL_ORDER = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+/** thinking 档位序（单源 = @taiji/shared PI_THINKING_LEVELS——pi 七档全集与档位序，锚点见该处注释；并集按此序输出）。 */
+const THINKING_LEVEL_ORDER = PI_THINKING_LEVELS
 
 /**
  * 路由档位并集（D7：各端点 levels 声明并集；null 值键 = 不支持，不入并集；缺省端点 =

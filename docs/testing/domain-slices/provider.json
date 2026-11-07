@@ -76,13 +76,17 @@
     "packages/runtime/src/services/__tests__/quota-fetch-many.test.ts",
     "packages/shared/src/__tests__/provider-store-paths.test.ts",
     "packages/shared/src/__tests__/provider.test.ts",
-    "packages/runtime/src/services/__tests__/route-preview-differential.test.ts"
+    "packages/runtime/src/services/__tests__/route-preview-differential.test.ts",
+    "packages/runtime/src/services/__tests__/route-time-window-dimensions-differential.test.ts"
   ],
   "sharedBy": {
     "packages/runtime/src/services/__tests__/aggregation-new-route-binding.test.ts": [
       "chat"
     ],
     "packages/runtime/src/services/__tests__/route-preview-differential.test.ts": [
+      "settings"
+    ],
+    "packages/runtime/src/services/__tests__/route-time-window-dimensions-differential.test.ts": [
       "settings"
     ]
   },
