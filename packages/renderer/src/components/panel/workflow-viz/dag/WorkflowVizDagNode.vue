@@ -15,10 +15,11 @@
   有实例态均为中性实线。run 级停止叠加（stopTone）作用于在途实例小卡点（dotTone），
   主体无状态可叠加。data-state 属性仍承载节点七态派生值（测试观察锚点，非着色源）。
 
-  命名规则（方案 C §4）：标题恒为调用点模板名——单实例不再替换标题（保留「这是
-  调用点」的结构信息，真实 agent 名在下方实例小卡）；多实例逐卡展开；0 实例不伪造
-  运行名。模板名变量段 = u1 解析器合成标记 `${…}`（非源码原文），warn 色标识
-  「还不是运行名」；全通配 `*`（description 非静态）原样展示。
+  命名规则（方案 C §4 + 2026-11-08 显示名裁决）：标题 = 调用点显示名（模板名剥
+  `${…}` 占位符段后的全部静态段拼接，同族变体消歧）——单实例不再替换标题（保留
+  「这是调用点」的结构信息，真实 agent 名在下方实例小卡）；多实例逐卡展开；0 实例
+  不伪造运行名。全动态名（静态段拼空）兜底原样保留 `${…}`（warn 色标识「还不是
+  运行名」）；全通配 `*`（description 非静态）原样展示；完整模板名悬停可见。
 
   实例小卡 data-wfvz-instance 锚点保留为测试观察锚（非交互语义）：[2026-10-19]
   agent 钻取入口收归实例 trace 行，节点/实例卡点击不上抛 callId。
@@ -128,6 +129,7 @@ import {
   INSTANCE_ZONE_TOP_GAP,
 } from './layout'
 import { dotTone } from './tone'
+import { callpointDisplayName } from './callpoint-name'
 import type { WorkflowVizDagNodeStatus, WorkflowVizDagStopTone } from './types'
 
 const props = defineProps<{
@@ -198,12 +200,20 @@ const placeholderLabelBaselineY = placeholderTopY + INSTANCE_PLACEHOLDER_H / HAL
 const VAR_MARKER_LENGTH = '${…}'.length
 
 /**
- * 标题分段（方案 C §4）：模板名按变量段标记 `${…}` 拆为字面/变量段序列，变量段
- * warn 高亮（「还不是运行名」）；超出 NAME_MAX_CHARS 按段截断（末段追加省略号，
- * 后续段丢弃——截断发生在段内不产生空 tspan）。全通配 `*` 单段原样。
+ * 调用点显示名（2026-11-08 用户裁决：卡片标题不渲染占位符段，只渲染名称）：模板名
+ * 剥 `${…}` 段后全部静态段拼接（同族变体消歧——「诊断-f-r」vs「诊断-i」）；静态段
+ * 拼空（全动态名）兜底原样保留 `${…}`；完整模板名悬停 <title> 可见、匹配层仍消费。
+ */
+const displayName = computed(() => callpointDisplayName(props.node.templateName))
+
+/**
+ * 标题分段（方案 C §4）：显示名按变量段标记 `${…}` 拆为字面/变量段序列，变量段
+ * warn 高亮（仅全动态名兜底形态出现——「这不是运行名」）；超出 NAME_MAX_CHARS 按
+ * 段截断（末段追加省略号，后续段丢弃——截断发生在段内不产生空 tspan）。全通配
+ * `*` 单段原样。
  */
 const titleParts = computed<Array<{ text: string; variable: boolean }>>(() => {
-  const raw = props.node.templateName
+  const raw = displayName.value
   const parts: Array<{ text: string; variable: boolean }> = []
   let rest = raw
   for (;;) {

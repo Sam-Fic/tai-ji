@@ -31,6 +31,7 @@ import {
 import { normalizeWorkflowScriptName } from '../run-name'
 import { layoutDag, computeFitTransform, instanceZoneHeight, predicateBadgeWidth, PREDICATE_BADGE_CLEARANCE, PREDICATE_BADGE_LINE_LIFT, DAG_NODE_W, DAG_NODE_H, INSTANCE_CHIP_H, INSTANCE_CHIP_GAP, INSTANCE_PLACEHOLDER_H, INSTANCE_ZONE_TOP_GAP, FIT_PAD_PX, ZOOM_MIN } from '../dag/layout'
 import { layoutEdges } from '../dag/layout-edges'
+import { callpointDisplayName } from '../dag/callpoint-name'
 import { avoidObstructedChannelMid, LANE_STEP_PX } from '../dag/routing-avoid'
 import WorkflowVizDag from '../dag/WorkflowVizDag.vue'
 import { dotTone } from '../dag/tone'
@@ -2343,19 +2344,54 @@ describe('WorkflowVizDag 执行实例行（实际 agent 画进图；方案 C 三
     expect(nodeEl.find('[data-testid="wfvz-dag-instance-3"]').text()).toContain('reviewer-arch-a1-r1')
   })
 
-  it('模板名变量段 ${…} 以 warn 色高亮（标识「还不是运行名」）；字面段正常着色', () => {
+  it('调用点显示名（2026-11-08 裁决）：标题不渲染 ${…} 占位符段——静态段拼接（同族消歧），悬停 title 保留完整模板名', () => {
     const tplDag: WorkflowDag = {
       phases: [{ name: 'review', order: 0 }],
-      nodes: [node({ id: 'n-tpl', templateName: '验收-${…}-f${…}', phase: 'review' })],
+      nodes: [node({ id: 'n-tpl', templateName: '诊断-${…}-f${…}-r${…}', phase: 'review' })],
       edges: [],
       parallelGroups: [],
       loops: [],
     }
     const wrapper = mountDag(tplDag)
-    const title = wrapper.find('[data-testid="wfvz-dag-node-n-tpl"] text').findAll('tspan')
-    const variableSpans = title.filter((s) => s.classes().includes('fill-warn'))
-    expect(variableSpans.map((s) => s.text())).toEqual(['${…}', '${…}'])
-    expect(title.filter((s) => !s.classes().includes('fill-warn')).map((s) => s.text())).toEqual(['验收-', '-f'])
+    const nodeEl = wrapper.find('[data-testid="wfvz-dag-node-n-tpl"]')
+    // 标题 tspan = 显示名（静态段拼接，无 ${…} 段、无 warn 高亮段）
+    const spans = nodeEl.find('text').findAll('tspan')
+    expect(spans.map((sp) => sp.text()).join('')).toBe('诊断-f-r')
+    expect(spans.filter((sp) => sp.classes().includes('fill-warn'))).toHaveLength(0)
+    // 悬停保留完整模板名
+    expect(nodeEl.find('text').find('title').text()).toBe('诊断-${…}-f${…}-r${…}')
+  })
+
+  it('全动态名兜底：静态段拼空 → 标题原样保留 ${…} 并以 warn 色高亮（「还不是运行名」）', () => {
+    const tplDag: WorkflowDag = {
+      phases: [{ name: 'review', order: 0 }],
+      nodes: [node({ id: 'n-dyn', templateName: '${…}', phase: 'review' })],
+      edges: [],
+      parallelGroups: [],
+      loops: [],
+    }
+    const wrapper = mountDag(tplDag)
+    const spans = wrapper.find('[data-testid="wfvz-dag-node-n-dyn"] text').findAll('tspan')
+    expect(spans.filter((s) => s.classes().includes('fill-warn')).map((s) => s.text())).toEqual(['${…}'])
+  })
+
+  it('callpointDisplayName 派生纯函数：demo W2 样本全集 + 兜底（白盒）', () => {
+    expect(callpointDisplayName('fan-out-${…}')).toBe('fan-out')
+    expect(callpointDisplayName('node-${…}')).toBe('node')
+    expect(callpointDisplayName('接替-${…}')).toBe('接替')
+    expect(callpointDisplayName('验收-${…}-f${…}')).toBe('验收-f')
+    expect(callpointDisplayName('诊断-${…}-f${…}-r${…}')).toBe('诊断-f-r')
+    expect(callpointDisplayName('修复-${…}-f${…}')).toBe('修复-f')
+    expect(callpointDisplayName('诊断-${…}-i${…}')).toBe('诊断-i')
+    // -r/-g 是静态字面前缀（实例名「验收聚合-r1」的 r 非动态段）——全拼接口径保留
+    expect(callpointDisplayName('验收聚合-r${…}')).toBe('验收聚合-r')
+    expect(callpointDisplayName('验收修复-r${…}-g${…}')).toBe('验收修复-r-g')
+    // 同族消歧：诊断-f 族与诊断-i 族不同名（仅取首段会同为「诊断」撞名）
+    expect(callpointDisplayName('诊断-${…}-f${…}-r${…}')).not.toBe(callpointDisplayName('诊断-${…}-i${…}'))
+    // 兜底与原样
+    expect(callpointDisplayName('${…}')).toBe('${…}')
+    expect(callpointDisplayName('*')).toBe('*')
+    expect(callpointDisplayName('reviewer-biz')).toBe('reviewer-biz')
   })
 
   it('元信息行：有实例 = 调用点 · n 实例[ · k 失败] · L行号；0 实例 = 调用点 · 未触发 · L行号', () => {
