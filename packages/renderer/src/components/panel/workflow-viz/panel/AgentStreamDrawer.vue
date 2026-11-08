@@ -16,12 +16,18 @@
 
   宿主接线：宿主（WorkflowVizOverlayHost）经 ref 调 openAgent(call) 驱动（面板
   panelRef.openPhaseTab 同款 expose 模式）。
+
+  载体（[2026-11-08 用户裁决）：抽屉属 overlay 内部——挂 u4 壳 #agent-drawer 具名
+  slot、absolute 贴壳右缘（壳面板容器 relative + overflow-hidden，抽屉不出 overlay
+  范围），替代原 fixed 贴视口右缘的「全局 drawer」形态；宿主侧 AgentStreamDrawerGuard
+  包住本组件（errorCaptured 边界——渲染失败静默退出，不连坐 D10 壳回落关 overlay，
+  原「置于 Guard 外」语义的 slot 内等价物）。
 -->
 <template>
   <aside
     v-if="run !== null"
     ref="drawerEl"
-    class="fixed bottom-0 right-0 top-0 z-[calc(var(--z-dialog)+1)] flex w-[452px] max-w-[92vw] flex-col border-l border-hairline bg-surface shadow-drawer-left transition-transform duration-[250ms] ease-[var(--ease-out)]"
+    class="absolute inset-y-0 right-0 z-30 flex w-[452px] max-w-[70%] flex-col border-l border-hairline bg-surface shadow-drawer-left transition-transform duration-[250ms] ease-[var(--ease-out)]"
     :class="open ? 'translate-x-0' : 'translate-x-full'"
     :inert="!open"
     :aria-hidden="!open"

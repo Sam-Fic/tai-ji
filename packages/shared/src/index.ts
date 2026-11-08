@@ -626,6 +626,11 @@ export {
   WORKFLOW_RUN_EVENT_TYPES_ALL,
   WORKFLOW_RUN_EVENT_ENTRY_COVERAGE_LOCK,
 } from './workflow'
+// [可视化 U2] DAG 跨侧运行时常量单源（workflow-dag.ts 纯常量模块）——renderer 经
+// 包根消费（dag/layout 空缺省分区消隐判据 + dag/callpoint-name 模板名变量段标记）；
+// subagent-core 经 './workflow-dag' subpath 消费（解析器产出侧，bundle 内联——见
+// 该模块头注释）。
+export { WORKFLOW_DAG_DEFAULT_PHASE, WORKFLOW_DAG_VAR_MARKER } from './workflow-dag'
 // pi-preset 用具名导出（S-SH-3）：避免 export * 导致的命名冲突与 tree-shaking 不友好。
 // 所有 type / const / 运行时检查均显式列出，新增导出时同步在此登记。
 export type {

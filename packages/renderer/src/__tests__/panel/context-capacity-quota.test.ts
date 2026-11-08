@@ -1014,10 +1014,10 @@ describe('ComposerMetricsAggregate coding-plan 区', () => {
       expect(wrapper.find('.trace').text()).toContain('内容是...')
     })
 
-    // TC-REG-2：折叠形态（D5）多 assistant——全部聚合块摘要行 + 全 turn 末位 text 可见，
-    // thinking/tool 细节不渲染，.trace 容器恒渲染；段细节经每段摘要行展开（回合级展开开关
-    // 在 D5 同形态下不改 trace 形态——旧「展开后全量 flatBlocks 恢复」口径随窗口化退役）。
-    it('TC-REG-2: 折叠形态多 assistant — 摘要行 + 末位 text，thinking/tool 细节隐藏；段展开恢复细节', async () => {
+    // TC-REG-2：折叠形态多 assistant（chat-turn-fold-redesign）——折叠态仅全 turn 末位
+    // text 可见（聚合块与中间正文收起）；点 turn-meta 展开 = 真实时序 [th 段摘要, 正文A,
+    // tool 段摘要, 末位 text]；thinking/tool 细节只在聚合块内部展开态渲染，.trace 恒渲染。
+    it('TC-REG-2: 折叠形态多 assistant — 折叠仅末位 text；展开摘要行 + 全部正文，细节隐藏；段展开恢复细节', async () => {
       const a1 = msg({
         id: 'a1',
         status: 'complete',
@@ -1031,24 +1031,33 @@ describe('ComposerMetricsAggregate coding-plan 区', () => {
         ],
       })
       const a2 = msg({ id: 'a2', status: 'complete', content: '正文B' })
-      // complete 态 + 不传 isSessionActive → sessionActive 回退 turn.isStreaming=false → showTrace=false
+      // complete 态 + 不传 isSessionActive → sessionActive 回退 turn.isStreaming=false → 非工作态默认折叠
       const wrapper = mountTurnWithRealBlock({
         turn: makeTurn({ isStreaming: false, hasFoldable: true, assistants: [a1, a2] }),
       })
       // .trace 容器恒渲染
       expect(wrapper.find('.trace').exists()).toBe(true)
-      // 折叠形态 = [a1 thinking 段摘要, a1 tool 段摘要, 末位 text（a2「正文B」）] 三单元；
-      // a1 非末位 text 收敛（D5 折叠形态正文保留末位一条）
-      const blocks = wrapper.findAll('.trace .trace-blk')
-      expect(blocks.length).toBe(3)
-      expect(blocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
-      expect(blocks[1].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
-      expect(blocks[2].find('.md-stub').exists()).toBe(true)
-      expect(blocks[2].find('.md-stub').text()).toBe('正文B')
-      // thinking/tool 细节节点不存在（折叠形态只在聚合块展开态渲染）
+      // 折叠形态 = 仅末位 text（a2「正文B」）一单元；a1 正文与两段过程块全部收起
+      let blocks = wrapper.findAll('.trace .trace-blk')
+      expect(blocks.length).toBe(1)
+      expect(blocks[0].classes()).toContain('trace-blk--text')
+      expect(blocks[0].find('.md-stub').text()).toBe('正文B')
+      expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(false)
       expect(wrapper.find('.trace-think').exists()).toBe(false)
       expect(wrapper.find('.trace-tool').exists()).toBe(false)
       expect(wrapper.find('.trace').text()).toContain('正文B')
+
+      // 点 turn-meta 展开回合：真实时序 [th 段摘要, 正文A, tool 段摘要, 末位 text 正文B] 四单元
+      await wrapper.find('.turn-meta').trigger('click')
+      blocks = wrapper.findAll('.trace .trace-blk')
+      expect(blocks.length).toBe(4)
+      expect(blocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
+      expect(blocks[1].find('.md-stub').text()).toBe('正文A')
+      expect(blocks[2].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
+      expect(blocks[3].find('.md-stub').text()).toBe('正文B')
+      // thinking/tool 细节节点不存在（只在聚合块内部展开态渲染）
+      expect(wrapper.find('.trace-think').exists()).toBe(false)
+      expect(wrapper.find('.trace-tool').exists()).toBe(false)
 
       // 段细节经每段摘要行展开（GL2/GL3）：点第一段摘要行 → 思考行在聚合块内渲染（.trace-think 在场）
       await blocks[0].find('[data-testid="agg-summary-row"]').trigger('click')

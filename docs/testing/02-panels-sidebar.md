@@ -1190,7 +1190,7 @@ ForkGroup（当前会话的「本会话的分支」折叠区）已整体退役�
 | overlay 壳 | `wfvz-overlay` / `wfvz-overlay-header` / `wfvz-overlay-close` | 壳与两通道关闭（点遮罩/按钮；Esc 归编排器，display-containers §7.5） |
 | 浮层浏览器 | `browser-overlay-title` / `browser-pane` / `browser-vp` / `browser-create-error` / `browser-error` | BrowserPane 挂浮层壳（u-w2-browser-mount）：标题栏 URL / 面板 / 浮层视口 rect 同步观测目标 / 两类错误占位（创建失败 vs 页面加载失败） |
 | DAG 画布 | `wfvz-overlay-dag-pane` / `wfvz-overlay-dag-loading` / `wfvz-overlay-dag-fallback` / `wfvz-overlay-dag-error-code` | 画布三态互斥（就绪/降级/解析中） |
-| 节点 | `wfvz-dag-node-<id>` / `wfvz-dag-node-error` | 节点卡片与节点级渲染边界占位；≥2 执行实例的节点含实例行（`wfvz-dag-instance-<callId>` + `data-wfvz-instance` 点击锚，2026-10 正交路由重做同批：节点标题单实例直接用实例 agent 名、边横竖折线、打开 fit 居中） |
+| 节点 | `wfvz-dag-node-<id>` / `wfvz-dag-node-error` | 调用点主体框与节点级渲染边界占位。方案 C 三层结构：主体框恒高 44（标题 = 剥 `${…}` 段的静态段显示名，全动态名兜底原样保留 `${…}` + warn 高亮；亮底 surface-2 浮在分区暗底上）、状态不染主体（skipped 例外淡化虚线）；实例 = 主体框外独立边框小卡（`wfvz-dag-instance-<callId>` + `data-wfvz-instance` 点击钻取锚（agent 语义，等同 trace 行点击，画布事件委托）+ 测试观察锚；done/failed 状态染卡边框），0 实例虚线占位卡 `wfvz-dag-placeholder-<nodeId>`（「未触发 · 0 实例」，dot 与图例「未触发」条目同源 tone.ts 单源）；归属 = blueprint-attribution 重归属派生视图（调用点按实例运行时 phase 落回语义分区、分区按执行序、空 default 分区消隐、纯脚本分区 `data-script-only` 虚线专属语义——普通分区实线）；分区副标题 = `wfvz-dag-cluster-sub-<phase>`（「执行段 0N · n 调用点 / 纯脚本」） |
 | 未匹配分组 | `wfvz-overlay-unmatched` / `wfvz-overlay-unmatched-group-<phase>` / `wfvz-overlay-unmatched-item` | D2⑥ 指定分组（不静默丢弃） |
 | 实况面板 | `wf-viz-live-panel` / `wf-viz-trace-table` / `wf-viz-trace-row-<id>` / `wf-viz-trace-empty` | workflow tab 实例 trace |
 | 事件流 | 事件流子页（RunEventStream）含截断标注与错误二分形态 | record 原文（2KB 截断 + truncatedFields） |
