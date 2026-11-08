@@ -6,7 +6,8 @@
   调用点模板名（变量段 ${…} warn 高亮）+ 元信息行（调用点 · n 实例[ · k 失败] /
   未触发 · L<行号>）；实例小卡画在主体框之外下方（独立 rect 边框卡：≥1 实例每实例
   一张，done/failed 状态染边框 + 状态点 + 真实 agent 名；0 实例一张虚线占位卡
-  「未触发 · 0 实例」，不伪造运行名）。
+  「未触发 · 0 实例」，不伪造运行名）。小卡与主体同宽左右边框对齐，状态点与
+  文字锚主体同一垂直线（DOT_CX/LABEL_X）——两卡点列、文字列、边框全对齐。
 
   卡片中性化（方案 C §3.2/§9.1 裁决）：调用点是静态结构，状态语义归实例小卡承载——
   实例失败/完成只染对应实例小卡的边框与点，不染调用点主体（消除「一个实例失败整个
@@ -73,20 +74,20 @@
     >
       <rect
         :class="['fill-[var(--surface)] [rx:3] transition-[stroke] duration-[var(--duration-fast)] ease-[var(--ease)]', chipEdgeTone(call.status)]"
-        :x="INSTANCE_CHIP_INSET_X"
+        :x="0"
         :y="chipTopY(i)"
-        :width="DAG_NODE_W - INSTANCE_CHIP_INSET_X"
+        :width="DAG_NODE_W"
         :height="INSTANCE_CHIP_H"
       />
       <circle
         :class="['transition-[fill] duration-[var(--duration-fast)] ease-[var(--ease)]', dotTone(call.status, stopTone)]"
-        :cx="INSTANCE_CHIP_DOT_CX"
+        :cx="DOT_CX"
         :cy="chipCenterY(i)"
         r="3"
       />
       <text
         class="text-[length:var(--text-3xs)] font-mono fill-[var(--neutral-mid)]"
-        :x="INSTANCE_CHIP_LABEL_X"
+        :x="LABEL_X"
         :y="chipLabelBaselineY(i)"
       >
         <title>{{ call.agent }}</title>
@@ -100,14 +101,14 @@
     >
       <rect
         class="fill-transparent stroke-[var(--border-strong)] [stroke-dasharray:3_3] [rx:3]"
-        :x="INSTANCE_CHIP_INSET_X"
+        :x="0"
         :y="placeholderTopY"
-        :width="DAG_NODE_W - INSTANCE_CHIP_INSET_X"
+        :width="DAG_NODE_W"
         :height="INSTANCE_PLACEHOLDER_H"
       />
       <text
         class="text-[length:var(--text-3xs)] font-mono fill-[var(--neutral-faint)]"
-        :x="INSTANCE_CHIP_LABEL_X"
+        :x="LABEL_X"
         :y="placeholderLabelBaselineY"
       >{{ t('panel.workflowViz.callPointPlaceholder') }}</text>
     </g>
@@ -123,7 +124,6 @@ import {
   DAG_NODE_W,
   INSTANCE_CHIP_GAP,
   INSTANCE_CHIP_H,
-  INSTANCE_CHIP_INSET_X,
   INSTANCE_PLACEHOLDER_H,
   INSTANCE_ZONE_TOP_GAP,
 } from './layout'
@@ -148,7 +148,7 @@ const TITLE_BASELINE_Y = 20
 const META_BASELINE_Y = 34
 /** 标题最大字符数（超出按段截断 + 省略号；全名经 <title> 悬停可见）。 */
 const NAME_MAX_CHARS = 18
-/** 实例名最大字符数（卡内 mono 小字，卡宽 148 内容纳）。 */
+/** 实例名最大字符数（卡内 mono 小字，与主体同宽 156 内容纳）。 */
 const INSTANCE_NAME_MAX_CHARS = 20
 /** 元信息行最大字符数（全串经 <title> 悬停可见）。 */
 const META_MAX_CHARS = 26
@@ -156,13 +156,9 @@ const META_MAX_CHARS = 26
 const TEXT_CENTER_LIFT = 3
 /** 取半除数（卡中心 = 卡顶 + 卡高/2；具名以过 no-magic-numbers）。 */
 const HALF = 2
-/** 实例卡内状态点左缩进（chip 内相对 10——demo 同口径）。 */
-const INSTANCE_CHIP_DOT_INSET = 10
-/** 实例卡内文字左缩进（chip 内相对 18——demo 同口径）。 */
-const INSTANCE_CHIP_LABEL_INSET = 18
-/** 实例卡内状态点/文字的画布 x（chip 左缩进 + 卡内相对缩进——demo 同口径）。 */
-const INSTANCE_CHIP_DOT_CX = INSTANCE_CHIP_INSET_X + INSTANCE_CHIP_DOT_INSET
-const INSTANCE_CHIP_LABEL_X = INSTANCE_CHIP_INSET_X + INSTANCE_CHIP_LABEL_INSET
+/** 实例小卡与主体卡同宽对齐（2026-11-08 用户裁决，覆盖 demo §6 的 8px 缩进形态）：
+ *  小卡 rect x=0 宽 DAG_NODE_W，状态点与文字锚主体同一垂直线（DOT_CX / LABEL_X）
+ *  ——两卡边框、点列、文字列全对齐。 */
 
 // fail-fast 检查：prop 违约即抛（布局产物正常不可达；防御脏数据以占位错误态显形
 // 而非静默渲染空卡）。抛出点被父层 WorkflowVizDagNodeGuard 捕获。

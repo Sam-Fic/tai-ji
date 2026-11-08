@@ -29,7 +29,7 @@ import {
   deriveNodeStatus,
 } from '../gantt-segments'
 import { normalizeWorkflowScriptName } from '../run-name'
-import { layoutDag, computeFitTransform, instanceZoneHeight, DAG_NODE_W, DAG_NODE_H, INSTANCE_CHIP_H, INSTANCE_CHIP_GAP, INSTANCE_PLACEHOLDER_H, INSTANCE_ZONE_TOP_GAP, FIT_PAD_PX, ZOOM_MIN } from '../dag/layout'
+import { layoutDag, computeFitTransform, instanceZoneHeight, predicateBadgeWidth, PREDICATE_BADGE_CLEARANCE, DAG_NODE_W, DAG_NODE_H, INSTANCE_CHIP_H, INSTANCE_CHIP_GAP, INSTANCE_PLACEHOLDER_H, INSTANCE_ZONE_TOP_GAP, FIT_PAD_PX, ZOOM_MIN } from '../dag/layout'
 import { layoutEdges } from '../dag/layout-edges'
 import { avoidObstructedChannelMid, LANE_STEP_PX } from '../dag/routing-avoid'
 import WorkflowVizDag from '../dag/WorkflowVizDag.vue'
@@ -1533,8 +1533,8 @@ describe('layoutEdges 同行直线边绕行（残余 5，白盒）', () => {
     expect(edge.points[1]).toEqual({ x: edge.points[0].x, y: yB })
     expect(edge.points[2]).toEqual({ x: edge.points[3].x, y: yB })
     expectAxisAligned(edge.points)
-    // conditional 谓词徽章锚（统一规则）：中点 x × 徽章带 y（min(两端主体顶) − 4）
-    expect(edge.labelY).toBe(Math.min(la.y, lf.y) - 4)
+    // conditional 谓词徽章骑线：绕行横段中点 × 横段 y（列距自适应已保专属空间）
+    expect(edge.labelY).toBe(yB)
     expect(edge.labelX).toBe((edge.points[0].x + edge.points[3].x) / 2)
   })
 
@@ -1554,9 +1554,8 @@ describe('layoutEdges 同行直线边绕行（残余 5，白盒）', () => {
     const lb = geo.get('b')!
     const [edge] = edges
     expect(edge.points).toHaveLength(2)
-    expect(edge.labelX).toBe((edge.points[0].x + edge.points[1].x) / 2)
-    // 谓词徽章锚（统一规则）：两端卡水平中心中点 × 徽章带（min(两端主体顶) − 4）
-    expect(edge.labelY).toBe(Math.min(la.y, lb.y) - 4)
+    // 谓词徽章骑线：直线水平段中点 × 边线 y（列距自适应已保专属空间——不跨卡片）
+    expect(edge.labelY).toBe(edge.points[0].y)
     expect(edge.labelX).toBe((edge.points[0].x + edge.points[1].x) / 2)
   })
 
@@ -1595,8 +1594,8 @@ describe('layoutEdges 同行直线边绕行（残余 5，白盒）', () => {
     expect(edge.points).toHaveLength(4)
     expect(edge.points[1].y).toBe(yB)
     expect(edge.points[2].y).toBe(yB)
-    // 谓词徽章锚（统一规则）：min(两端主体顶) − 4（绕行带 y 属路径点，徽章恒在带）
-    expect(edge.labelY).toBe(Math.min(la.y, lf.y) - 4)
+    // 谓词徽章骑线：绕行横段中点 × 横段 y（列距自适应已保专属空间）
+    expect(edge.labelY).toBe(yB)
     expectAxisAligned(edge.points)
   })
 
@@ -1631,8 +1630,8 @@ describe('layoutEdges 同行直线边绕行（残余 5，白盒）', () => {
     const lf = layout.nodes.find((ln) => ln.node.id === 'f')!
     const [edge] = layoutEdges(canvas, layout.nodes).filter((le) => le.edge.id === 'e1')
     expect(edge.points).toHaveLength(2)
-    // 直线残留：谓词徽章锚（统一规则）min(两端主体顶) − 4（徽章带）
-    expect(edge.labelY).toBe(Math.min(la.y, lf.y) - 4)
+    // 直线残留：谓词徽章骑线（水平段中点 × 边线 y——列距自适应已保专属空间）
+    expect(edge.labelY).toBe(edge.points[0].y)
     expect(edge.labelX).toBe((edge.points[0].x + edge.points[1].x) / 2)
   })
 })
@@ -1646,6 +1645,23 @@ describe('instanceZoneHeight 实例卡区高度（实例数派生，方案 C：�
   it('≥2 实例 = 上间隙 + 每实例一张独立小卡（卡高 + 卡间距，末卡不带尾距）', () => {
     expect(instanceZoneHeight(2)).toBe(INSTANCE_ZONE_TOP_GAP + 2 * (INSTANCE_CHIP_H + INSTANCE_CHIP_GAP) - INSTANCE_CHIP_GAP)
     expect(instanceZoneHeight(5)).toBe(INSTANCE_ZONE_TOP_GAP + 5 * (INSTANCE_CHIP_H + INSTANCE_CHIP_GAP) - INSTANCE_CHIP_GAP)
+  })
+
+  it('跨列条件边列距自适应（2026-11-08 用户裁决）：列间隙 = max(基础 32, 徽章宽 + 两侧净距)，谓词徽章骑线平铺在间隙内不跨卡片', () => {
+    const d = dag({
+      phases: [{ name: 'p0', order: 0 }, { name: 'p1', order: 1 }],
+      nodes: [node({ id: 'a', phase: 'p0' }), node({ id: 'b', templateName: 'zb', phase: 'p1' })],
+      edges: [{ id: 'e-cond', from: 'a', to: 'b', kind: 'conditional', predicate: '$ARGS.aggregate === true' }],
+    })
+    const layout = layoutDag(d)
+    const [la, lb] = layout.nodes
+    // 卡间净空（卡1 右缘 → 卡2 左缘）恰好容纳徽章宽 + 两侧净距
+    const netGap = lb.x - (la.x + DAG_NODE_W)
+    expect(netGap).toBe(predicateBadgeWidth('$ARGS.aggregate === true') + PREDICATE_BADGE_CLEARANCE * 2)
+    // 骑线锚：直线水平段中点 × 边线 y——徽章平铺在专属间隙内（surface 底盖线成守卫形态）
+    const [edge] = layoutEdges(d, layout.nodes)
+    expect(edge.labelY).toBe(la.y + DAG_NODE_H / 2)
+    expect(edge.labelX).toBe((la.x + DAG_NODE_W + lb.x) / 2)
   })
 
   it('分区副标题数据（方案 C demo §3.1）：cluster 携带展示序号 order（消隐 default 后可见列序，1 起补零两位）与调用点计数 nodeCount', () => {
@@ -2369,13 +2385,14 @@ describe('WorkflowVizDag 执行实例行（实际 agent 画进图；方案 C 三
     // 主体 rect 恒 DAG_NODE_H（44）——实例小卡画在主体 rect 之外，不撑高主体
     const bodyRect = nodeEl.find('rect')
     expect(Number(bodyRect.attributes('height'))).toBe(44)
-    // 每实例一张独立小卡 rect（含边框——demo §3.3 形态），高 24、宽 148（缩进 8）
+    // 每实例一张独立小卡 rect：与主体同宽对齐（x=0 宽 156——2026-11-08 用户裁决
+    // 覆盖 demo §6 的 8px 缩进形态），高 24
     const chipRects = nodeEl.findAll('[data-testid^="wfvz-dag-instance-"] rect')
     expect(chipRects).toHaveLength(2)
     for (const chip of chipRects) {
       expect(Number(chip.attributes('height'))).toBe(24)
-      expect(Number(chip.attributes('width'))).toBe(148)
-      expect(Number(chip.attributes('x'))).toBe(8)
+      expect(Number(chip.attributes('width'))).toBe(156)
+      expect(Number(chip.attributes('x'))).toBe(0)
     }
     // 第一张小卡顶部 y = 主体底 44 + 上间隙 4（卡区在主体之外向下展开）
     expect(Number(chipRects[0].attributes('y'))).toBe(48)

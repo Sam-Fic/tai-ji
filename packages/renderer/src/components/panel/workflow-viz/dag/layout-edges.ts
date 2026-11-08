@@ -11,8 +11,9 @@
  * - 通道竖线先经 routing-avoid.assignChannelLanes 按纵向跨度游程错开（fan-in/out 不
  *   叠线），再经 routing-avoid.avoidObstructedChannelMid 整体平移到最近零穿卡走廊；
  *   同行直线有障碍时升级 routing-avoid.sameRowBypass 上下绕行 4 折线。
- * - 条件谓词徽章锚（labelX/labelY，全分支统一规则）：两端卡水平中心的中点 × 分区头
- *   预留的谓词徽章带（middle 平铺；贴边位置容不下徽章——详见 badgeAnchorY）。
+ * - 条件谓词徽章锚：跨列边骑线平铺（间隙中线 × 边线/竖线段/绕行段中点——列距已由
+ *   layoutDag 按徽章宽自适应拉开，徽章断开连线成流程图守卫形态，不跨卡片）；同列边
+ *   无间隙专属空间，退分区头徽章带（badgeAnchorY）。
  * - 锚点取节点主体四边中点（主体高恒 DAG_NODE_H=44，实例小卡不参与锚点几何），
  *   loop-back 底锚 = 主体 + 实例卡区总底（y + h + zoneH——回边从实例小卡下方走）。
  */
@@ -89,10 +90,10 @@ function roundedPath(points: DagPoint[]): string {
 }
 
 /** 待装配边（保持 dag.edges 序——输出序不因错开分配分遍打乱）：已定型路径或通道成员。 */
-/** 谓词徽章锚统一规则：labelX = 两端卡水平中心的中点（同列即本列卡中心），
- *  labelY = 徽章带（min(两端主体顶) − LABEL_ABOVE_GAP，分区头预留的专属平铺行）。
- *  全部路由分支共用同一锚规则——贴边位置（列间走廊 32px / gutter 8px）均容不下
- *  徽章，middle 居中平铺在徽章带是唯一无压卡位置（2026-11-08 视觉裁决）。 */
+/** 同列边谓词徽章锚 y：徽章带（min(两端主体顶) − LABEL_ABOVE_GAP，分区头预留的
+ *  专属平铺行）——同列边不占列间隙（无专属水平空间），徽章退徽章带平铺。
+ *  跨列边不消费本带：列距已按谓词徽章宽自适应拉开（layoutDag），徽章骑线平铺在
+ *  列间隙内（见各路由分支的 label 锚——2026-11-08 用户裁决）。 */
 function badgeAnchorY(from: DagLayoutNode, to: DagLayoutNode): number {
   return Math.min(from.y, to.y) - LABEL_ABOVE_GAP
 }
@@ -213,7 +214,7 @@ export function layoutEdges(dag: WorkflowDag, nodes: DagLayoutNode[]): DagLayout
           { x: gutterX, y: y2 },
           { x: to.x + DAG_NODE_W, y: y2 },
         ],
-        // 谓词徽章锚（统一规则）：两端卡水平中心的中点 × 徽章带（见 badgeAnchor）
+        // 同列边谓词徽章锚：本列卡中心 × 徽章带（同列无列间隙专属空间——badgeAnchorY）
         labelX: from.x + DAG_NODE_W / HALF,
         labelY: badgeAnchorY(from, to),
       })
@@ -221,8 +222,9 @@ export function layoutEdges(dag: WorkflowDag, nodes: DagLayoutNode[]): DagLayout
     }
     if (Math.abs(y1 - y2) < COINCIDE_EPS) {
       // 同行直线边（残余 5）：有障碍升级上下绕行 4 折线；无障碍/两方向均不满足保持
-      // 直线（零扰动——直线公式不变）。谓词徽章锚统一走徽章带（badgeAnchor——列间
-      // 走廊 32px 容不下徽章，任何贴边位置都压卡）
+      // 直线（零扰动——直线公式不变）。跨列谓词徽章骑线：列距已按徽章宽自适应拉开
+      //（layoutDag gapExtra），徽章平铺在间隙中线断开处（surface 底盖线成流程图守卫
+      // 形态），不跨任何卡片
       const bypass = sameRowBypass(x1, y1, x2, nodes, from.node.id, to.node.id)
       if (bypass !== null) {
         pending.push({
@@ -235,7 +237,7 @@ export function layoutEdges(dag: WorkflowDag, nodes: DagLayoutNode[]): DagLayout
             { x: x2, y: y2 },
           ],
           labelX: (x1 + x2) / HALF,
-          labelY: badgeAnchorY(from, to),
+          labelY: bypass.yB,
         })
         continue
       }
@@ -244,7 +246,7 @@ export function layoutEdges(dag: WorkflowDag, nodes: DagLayoutNode[]): DagLayout
         kind: 'fixed',
         points: [{ x: x1, y: y1 }, { x: x2, y: y2 }],
         labelX: (x1 + x2) / HALF,
-        labelY: badgeAnchorY(from, to),
+        labelY: y1,
       })
       continue
     }
@@ -256,8 +258,8 @@ export function layoutEdges(dag: WorkflowDag, nodes: DagLayoutNode[]): DagLayout
       fromId: from.node.id,
       toId: to.node.id,
     }
-    // 谓词徽章锚（统一规则，路径点在通道车道分配后才定型——锚随边携带不随路径走）
-    pending.push({ edge, kind: 'channeled', chan, labelX: (x1 + x2) / HALF, labelY: badgeAnchorY(from, to) })
+    // 跨列谓词徽章骑通道竖线段中点（间隙中线 × 竖线段中点——列距自适应已保空间）
+    pending.push({ edge, kind: 'channeled', chan, labelX: (x1 + x2) / HALF, labelY: (y1 + y2) / HALF })
     const key = `${x1}|${x2}`
     const list = channels.get(key)
     if (list) list.push(chan)
@@ -286,7 +288,7 @@ export function layoutEdges(dag: WorkflowDag, nodes: DagLayoutNode[]): DagLayout
       edge: item.edge,
       points,
       d: roundedPath(points),
-      // 谓词徽章锚在通道装配前随边定型（badgeAnchor 统一规则——见 PendingEdge 注释）
+      // 谓词徽章锚随边定型（间隙中线 × 竖线段中点——骑线平铺）
       labelX: item.labelX,
       labelY: item.labelY,
     })

@@ -206,7 +206,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { WorkflowAgentCall, WorkflowDag, WorkflowDagEdgeKind, WorkflowRunOutcome, WorkflowRunStatus } from '@taiji/shared'
 import { Button } from '@/components/ui/button'
-import { instanceZoneHeight, layoutDag } from './layout'
+import { instanceZoneHeight, layoutDag, PREDICATE_MAX_CHARS, predicateBadgeWidth } from './layout'
 import { layoutEdges } from './layout-edges'
 import { useDagViewport } from './useDagViewport'
 import WorkflowVizDagNode from './WorkflowVizDagNode.vue'
@@ -259,31 +259,19 @@ const CLUSTER_TITLE_INSET = 12
 const CLUSTER_TITLE_H_BASE = 20
 /** 分区副标题与分区标题的基线落差（px；副标题挂在标题下一行）。 */
 const CLUSTER_SUB_BASELINE_DROP = 14
-/** 条件谓词徽章显示截断上限（完整原文走徽章 title 悬停）。16 字符 = 徽章带宽度
- *  预算（分区头 14px 带内单行徽章，更宽会与相邻元素挤碰；谓词细节按需悬停）。 */
-const PREDICATE_MAX_CHARS = 16
+/** 谓词徽章截断上限与宽度估算单源在 layout（PREDICATE_MAX_CHARS /
+ *  predicateBadgeWidth——列距自适应与徽章渲染同宽，跨列徽章骑线平铺在自己专属的
+ *  列间隙内不跨卡片）。 */
 /** 谓词徽章高（px，= 分区头预留徽章带的带高）。 */
 const PREDICATE_BADGE_H = 14
-/** 谓词徽章左右内边距合计（px，每侧 4）。 */
-const PREDICATE_BADGE_PAD_X = 8
 /** 文字基线到徽章底边的下伸量（px，基线以下 3px 下缘收在底边内）。 */
 const TEXT_BASELINE_DROP = 3
 /** 取半除数（徽章中心 x = 锚点 x − 宽/2；具名以过 no-magic-numbers）。 */
 const HALF = 2
-/** 10px mono 单字符宽估算：CJK 全宽 10、ASCII 半宽 6（demo textWidth 同口径）。 */
-const CJK_CHAR_W = 10
-const ASCII_CHAR_W = 6
-/** CJK 判定起点码点（CJK 区块 ≥ U+2E80）。 */
-const CJK_START = 0x2e80
 
-/** 谓词徽章宽估算（截短后文本逐字符宽累加 + 内边距）。 */
+/** 谓词徽章宽（单源 layout.predicateBadgeWidth；空谓词按 0 宽）。 */
 function badgeWidth(predicate: string | undefined): number {
-  const text = truncate(predicate ?? '', PREDICATE_MAX_CHARS)
-  let w = 0
-  for (let i = 0; i < text.length; i++) {
-    w += text.charCodeAt(i) > CJK_START ? CJK_CHAR_W : ASCII_CHAR_W
-  }
-  return w + PREDICATE_BADGE_PAD_X
+  return predicate === undefined ? 0 : predicateBadgeWidth(predicate)
 }
 /** 分区展示序号补零位数（demo 同款「执行段 01」两位序）。 */
 const STAGE_ORDER_PAD = 2

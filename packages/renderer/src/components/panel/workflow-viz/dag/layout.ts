@@ -54,7 +54,7 @@ const CLUSTER_PAD_TOP = 44
 const CLUSTER_PAD_BOTTOM = 12
 /** 分区标题行高。 */
 const CLUSTER_TITLE_H = 18
-/** 分区列间水平间距。 */
+/** 分区列间水平间距（基础值；相邻列间的条件边按谓词徽章宽自适应拉开——见 layoutDag）。 */
 const CLUSTER_GAP_X = 32
 /** 比较器返回值（排序比较器惯例语义，命名消 magic number）。 */
 const ORDER_BEFORE = -1
@@ -71,8 +71,6 @@ const HALF = 2
 export const INSTANCE_CHIP_H = 24
 /** 相邻实例小卡间距（px；步进 = 卡高 + 间距）。 */
 export const INSTANCE_CHIP_GAP = 4
-/** 实例小卡左缩进（px；卡宽 = DAG_NODE_W − 本值，demo chip x+8 宽 148）。 */
-export const INSTANCE_CHIP_INSET_X = 8
 /** 0 实例占位卡高（px；虚线「未触发 · 0 实例」——不伪造运行实例名）。 */
 export const INSTANCE_PLACEHOLDER_H = 18
 /** 实例卡区与节点主体的上间隙（px；卡区画在主体 rect 之外下方）。 */
@@ -227,6 +225,34 @@ function layoutCluster(
 /** 节点实例卡区高度表（nodeId → zoneH；缺省键按 0 实例占位卡高）。 */
 export type DagNodeZoneMap = Map<string, number>
 
+// ── 条件谓词徽章宽度估算（布局列距自适应与渲染徽章同源——SSOT 单处）──
+
+/** 谓词徽章显示截断上限（完整原文走徽章 title 悬停；布局估宽与渲染显示共用）。 */
+export const PREDICATE_MAX_CHARS = 40
+/** 谓词徽章左右内边距合计（px，每侧 4）。 */
+export const PREDICATE_BADGE_PAD_X = 8
+/** 徽章与两侧卡片的最小净距（px，每侧——列距自适应的余量口径）。 */
+export const PREDICATE_BADGE_CLEARANCE = 8
+/** 10px mono 单字符宽估算：CJK 全宽、ASCII 半宽（demo textWidth 同口径）。 */
+const CJK_CHAR_W = 10
+const ASCII_CHAR_W = 6
+/** CJK 判定起点码点（CJK 区块 ≥ U+2E80）。 */
+const CJK_START = 0x2e80
+
+/**
+ * 谓词徽章宽估算（截短后文本逐字符宽累加 + 内边距）。布局侧用于相邻列条件边的
+ * 列距自适应（badge 骑线平铺在列间隙内不跨卡片——2026-11-08 用户裁决），渲染侧
+ * 画徽章 rect 同宽，两侧单源。
+ */
+export function predicateBadgeWidth(predicate: string): number {
+  const text = predicate.length > PREDICATE_MAX_CHARS ? `${predicate.slice(0, PREDICATE_MAX_CHARS)}…` : predicate
+  let w = 0
+  for (let i = 0; i < text.length; i++) {
+    w += text.charCodeAt(i) > CJK_START ? CJK_CHAR_W : ASCII_CHAR_W
+  }
+  return w + PREDICATE_BADGE_PAD_X
+}
+
 /**
  * 计算 DAG 列式布局。零节点 run（纯门禁脚本）：nodes 空数组、clusters 空、
  * 画布取最小占位尺寸——渲染层出空画布 + 居中摘要提示（设计 §3.1-3，提示由画布组件
@@ -261,6 +287,37 @@ export function layoutDag(dag: WorkflowDag, nodeZones: DagNodeZoneMap = new Map(
     byPhase.set(phase, list)
   }
 
+  // 可见列序（空 default 消隐后）：phase → 列序（0 起），供相邻列条件边的列距自适应查
+  const visibleColOfPhase = new Map<string, number>()
+  let visibleCol = 0
+  for (const phase of orderedPhases) {
+    const members = byPhase.get(phase.name) ?? []
+    if (members.length === 0 && phase.name === DEFAULT_PHASE_NAME) continue
+    visibleColOfPhase.set(phase.name, visibleCol)
+    visibleCol += 1
+  }
+  const colOfNode = new Map<string, number>()
+  for (const node of dag.nodes) {
+    const col = visibleColOfPhase.get(node.phase)
+    if (col !== undefined) colOfNode.set(node.id, col)
+  }
+
+  // 相邻列间的条件边谓词徽章需要专属水平空间：该列距 = max(基础间距, 徽章宽 + 两侧
+  // 净距)——徽章骑线平铺在列间隙内不跨任何卡片（2026-11-08 用户裁决；同列/跳列
+  // 条件边不占间隙，徽章走分区头徽章带）
+  const gapExtra = new Map<number, number>()
+  for (const edge of dag.edges) {
+    if (edge.kind !== 'conditional' || edge.predicate === undefined) continue
+    const fromCol = colOfNode.get(edge.from)
+    const toCol = colOfNode.get(edge.to)
+    if (fromCol === undefined || toCol === undefined || Math.abs(fromCol - toCol) !== 1) continue
+    const between = Math.min(fromCol, toCol)
+    // 卡间净空需求 = 徽章宽 + 两侧净距；分区缘间距 = 净空需求 − 两侧分区内边距
+    //（卡在分区内各缩进 CLUSTER_PAD_X），与基础间距取大
+    const needed = predicateBadgeWidth(edge.predicate) + PREDICATE_BADGE_CLEARANCE * HALF - CLUSTER_PAD_X * HALF
+    gapExtra.set(between, Math.max(gapExtra.get(between) ?? 0, needed))
+  }
+
   const clusters: DagLayoutCluster[] = []
   const nodes: DagLayoutNode[] = []
   let cursorX = 0
@@ -271,16 +328,18 @@ export function layoutDag(dag: WorkflowDag, nodeZones: DagNodeZoneMap = new Map(
     // 空 default 分区消隐（方案 C）：重归属后无归属节点的缺省兜底分区不占列——
     // 有节点（未触发零实例调用点）时如实保留，非 default 空分区保留为纯脚本段
     if (members.length === 0 && phase.name === DEFAULT_PHASE_NAME) continue
-    visibleOrder += 1
-    const { cluster, placed } = layoutCluster(phase.name, visibleOrder, members, cursorX, nodeZones)
+    if (visibleOrder > 0) cursorX += Math.max(CLUSTER_GAP_X, gapExtra.get(visibleOrder - 1) ?? 0)
+    const { cluster, placed } = layoutCluster(phase.name, visibleOrder + 1, members, cursorX, nodeZones)
     clusters.push(cluster)
     nodes.push(...placed)
     maxBottom = Math.max(maxBottom, cluster.height)
-    cursorX += cluster.width + CLUSTER_GAP_X
+    cursorX += cluster.width
+    visibleOrder += 1
   }
 
-  // 零分区（零节点 run）：最小占位，渲染层出居中摘要提示（无独立卡片容器）
-  const width = clusters.length > 0 ? cursorX - CLUSTER_GAP_X : EMPTY_DAG_MIN_W
+  // 零分区（零节点 run）：最小占位，渲染层出居中摘要提示（无独立卡片容器）。
+  // 列间 gap 在循环头加（首列前置空不加）——cursorX 即画布净宽，无尾部补偿
+  const width = clusters.length > 0 ? cursorX : EMPTY_DAG_MIN_W
   const height = clusters.length > 0 ? maxBottom : EMPTY_DAG_MIN_H
   return { clusters, nodes, width, height }
 }
