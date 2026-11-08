@@ -184,19 +184,25 @@ function getExpansionPartition(sid: string): Set<string> {
   return p
 }
 
+/** 重置 session 分区（重置写口单点，对齐桌面 clearSession）：先 clear() 再 delete(sid)
+ *  两段语义——clear 触发 reactive Set 的 key 变更通知，订阅该分区的 effect 失效重算；
+ *  delete 释放分区内存。消费路径两处共用：session 销毁注册表（registerSessionCleanup，
+ *  下方注册）与切入链 reconcileHistory 未 hydrate 重载重置（chat-flow-consistency C4）。 */
+function resetExpansionPartition(sid: string): void {
+  const p = turnExpansionMap.get(sid)
+  if (p) p.clear()
+  turnExpansionMap.delete(sid)
+}
+
 // [remote-use A15/U12] turn 展开分区挂 session 销毁注册表（registerSessionCleanup——
 // useSessionScopedState 模块级 registry，triggerSessionCleanups 遍历；形态与桌面
 // turn-expansion store 同构：自管 Map 分区 + 显式注册删除路径清理）。消费点 = 删除编排
 // （deleteSession → core cleanupSessionState → triggerSessionCleanups）；exited 分通道重置
 // （resetCompanionChannelsForExitedSession）不触本表——turnExpansion 非请求态，不进 exited
 // 编排（设计 D5 去留表）。桌面同样只在删除路径清（A15 残留登记口径）。
-// 先 clear() 再 delete(sid)（对齐桌面 clearSession 两段语义）：clear 触发 reactive Set 的
-// key 变更通知，订阅该分区的 effect 失效重算；delete 释放分区内存。
-registerSessionCleanup((sid) => {
-  const p = turnExpansionMap.get(sid)
-  if (p) p.clear()
-  turnExpansionMap.delete(sid)
-})
+// 先 clear() 再 delete(sid) 的两段语义收在 resetExpansionPartition 单点（注释在彼处），
+// 销毁与重载重置两路径不另立裸 delete 形态。
+registerSessionCleanup(resetExpansionPartition)
 
 /** turn 展开派生面（MobileMessageStream 按 sessionId 分区消费） */
 export function createTurnExpansion(sessionId: Ref<string>) {
@@ -255,12 +261,13 @@ const useSessionInstance = createUseSession({
     isHydrated: (sid) => chatStore.isHydrated(sid),
     hydrate: (sid, messages) => chatStore.hydrate(sid, messages),
     reconcileHistory: (sid, messages, window) => {
-      // [chat-flow-consistency C4 两段式契约] 磁盘重载基线接管点清 turn 展开分区（移动壳
-      // turnExpansionMap 同构桌面 turn-expansion store 的重置侧）：本映射是切入链全部
-      // history 写入通路的单点，未 hydrate（首次切入 / LRU 驱逐后切回）= 走盘重载形态，
-      // 重载换 id 空间，显式清替代静默键失配；已 hydrate（驻留期切回 reconcile 刷新）不清，
-      // 展开保持。门与 store.reconcileHistory 内部的 hydrate 分支同源。
-      if (!chatStore.isHydrated(sid)) turnExpansionMap.delete(sid)
+      // [chat-flow-consistency C4 两段式契约] 磁盘重载基线接管点重置 turn 展开分区（移动壳
+      // turnExpansionMap 同构桌面 turn-expansion store 的重置侧——走 resetExpansionPartition
+      // 单点两段语义，与销毁注册表路径同写法）：本映射是切入链全部 history 写入通路的单点，
+      // 未 hydrate（首次切入 / LRU 驱逐后切回）= 走盘重载形态，重载换 id 空间，显式清替代
+      // 静默键失配；已 hydrate（驻留期切回 reconcile 刷新）不清，展开保持。门与
+      // store.reconcileHistory 内部的 hydrate 分支同源。
+      if (!chatStore.isHydrated(sid)) resetExpansionPartition(sid)
       chatStore.reconcileHistory(sid, messages, window)
     },
     clearHistoryError: (sid) => chatStore.clearHistoryError(sid),
