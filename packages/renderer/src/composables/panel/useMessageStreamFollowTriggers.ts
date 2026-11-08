@@ -192,26 +192,37 @@ export function useMessageStreamFollowTriggers(deps: MessageStreamFollowTriggerD
     if (typeof ResizeObserver === 'undefined') return // happy-dom 无 RO 时 store watch 通路仍有效
 
     // contentWrapEl RO：测量留守 + 触发支 debounce 尾沿兜底（D3 触发矩阵 3 行）。
-    // 测量支每投递必执行（notifyRoActivity / measureTail / 基线快照维护——tailHeight 是
-    // endOffset 数据源，触发职责收窄后照常刷新）；[决策 12] tail/spacer 二分与 isPrepend
-    // 前插抑制窗随标记分档退役——两类变化统一跟随。基线未建只建基线、纯宽度变化显式
-    // no-op（两支同门）。[chat-flow-consistency F2] 高度变化事实同步喂脱离态几何快照刷新
-    // （测量支职责）——脱离静止用户的「回到最新」胶囊随内容增长即时浮现。
+    // tailEl 一并纳入同一 RO（border-box，高度语义 = offsetHeight 含 padding/border）：
+    // tailHeight 快照直接取 RO entry，消除回调内 offsetHeight 强制同步布局读——
+    // RO 回调内同步读其他元素几何会 flush 待处理布局，与 virtua 帧内写 spacer 叠加
+    // 放大「undelivered notifications」反馈环（流式期探针实测 14 回调/窗对告警 x10+，
+    // 2026-11-08 归因）。测量支每投递必执行（notifyRoActivity / 基线快照维护——
+    // tailHeight 是 endOffset 数据源）；[决策 12] tail/spacer 二分与 isPrepend
+    // 前插抑制窗随标记分档退役——两类变化统一跟随。基线未建只建基线、纯宽度变化
+    // 显式 no-op（两支同门）。[chat-flow-consistency F2] 高度变化事实同步喂脱离态
+    // 几何快照刷新（测量支职责）——脱离静止用户的「回到最新」胶囊随内容增长即时浮现。
     wrapRo = new ResizeObserver((entries) => {
       deps.notifyRoActivity()
-      const last = entries[entries.length - 1]
-      const wrapHeight = last ? last.contentRect.height : (contentWrapEl.value?.offsetHeight ?? 0)
-      const tailH = measureTail()
+      let wrapHeight: number | null = null
+      let tailH: number | null = null
+      for (const entry of entries) {
+        if (entry.target === contentWrapEl.value) wrapHeight = entry.contentRect.height
+        else if (entry.target === tailEl.value) tailH = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height
+      }
+      if (tailH !== null) tailHeight.value = tailH
+      const wrapH = wrapHeight ?? (contentWrapEl.value?.offsetHeight ?? 0)
+      const nextTail = tailH ?? tailHeight.value
       const prevTail = prevTailHeight
       const prevWrap = prevWrapHeight
-      prevTailHeight = tailH
-      prevWrapHeight = wrapHeight
+      prevTailHeight = nextTail
+      prevWrapHeight = wrapH
       if (prevTail === null || prevWrap === null) return // 首回调：只建基线
-      if (tailH === prevTail && wrapHeight === prevWrap) return // 纯宽度变化（高度未变）→ no-op
+      if (nextTail === prevTail && wrapH === prevWrap) return // 纯宽度变化（高度未变）→ no-op
       deps.refreshDistanceSnapshot()
       scheduleRoFollowDebounced()
     })
     if (contentWrapEl.value) wrapRo.observe(contentWrapEl.value)
+    if (tailEl.value) wrapRo.observe(tailEl.value, { box: 'border-box' })
 
     // scrollEl RO：视口尺寸变化 → 跟随（脱离态不滚由 guard 内聚；双 rAF 见文件头 P-timing）。
     // 不经 debounce（视口变化必有跟随需要且低频）；无宽高区分（宽/高任意维度变化均触发）。
