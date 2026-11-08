@@ -92,6 +92,13 @@ export function createCookieRefreshController(inputs: {
     // provider 的显示态、也不得在新 provider 上发起重查）
     const stillCurrent = (): boolean => inputs.providerId() === pid
 
+    /** 代际内失败呈现：仅当前编辑体仍是触发时 provider 才写入失败态（迟到结果丢弃） */
+    const showFailIfCurrent = (message: string): void => {
+      if (!stillCurrent()) return
+      result.value = 'fail'
+      error.value = message
+    }
+
     running.value = true
     result.value = null
     succeededAt.value = null
@@ -99,19 +106,13 @@ export function createCookieRefreshController(inputs: {
     try {
       const refreshed = await refreshQuotaCookie({ fetcherId: fid, providerId: pid })
       if (!(refreshed.ok && refreshed.cookie)) {
-        if (stillCurrent()) {
-          result.value = 'fail'
-          error.value = refreshed.error || inputs.t('settings.providerEdit.quotaCookieAutoRefreshFail')
-        }
+        showFailIfCurrent(refreshed.error || inputs.t('settings.providerEdit.quotaCookieAutoRefreshFail'))
         return
       }
       // 单写方落盘（data-source-registry #66）：保存失败按续期失败呈现（cookie 未生效）
       const saved = await inputs.saveCookie(pid, refreshed.cookie)
       if (!saved.ok) {
-        if (stillCurrent()) {
-          result.value = 'fail'
-          error.value = saved.error || inputs.t('settings.providerEdit.quotaCookieAutoRefreshFail')
-        }
+        showFailIfCurrent(saved.error || inputs.t('settings.providerEdit.quotaCookieAutoRefreshFail'))
         return
       }
       if (stillCurrent()) {
@@ -120,10 +121,7 @@ export function createCookieRefreshController(inputs: {
         await inputs.onRefreshed()
       }
     } catch (e) {
-      if (stillCurrent()) {
-        result.value = 'fail'
-        error.value = e instanceof Error ? e.message : inputs.t('settings.providerEdit.quotaCookieAutoRefreshFail')
-      }
+      showFailIfCurrent(e instanceof Error ? e.message : inputs.t('settings.providerEdit.quotaCookieAutoRefreshFail'))
     } finally {
       running.value = false
     }

@@ -164,10 +164,15 @@ const CODEMODE_DOMAIN_SOURCE = readFileSync(resolve(PROTOCOL_TS, '..', 'codemode
 const MCP_DOMAIN_SOURCE = readFileSync(resolve(PROTOCOL_TS, '..', 'mcp.ts'), 'utf8')
 
 
-// aggregation 域形状 SSOT（protocol.ts 头部登记约定：模型路由域 payload/reply 形状在
-// ./aggregation——saveRoute/deleteRoute 的 reply 直引 AggregationRouteSaved/Deleted 具名
-// 类型，本文件仅登记命令对；具名查找链须覆盖该域文件，否则 extractReplyShape 取不到声明体）
-const AGGREGATION_DOMAIN_SOURCE = readFileSync(resolve(PROTOCOL_TS, '..', 'aggregation.ts'), 'utf8')
+// aggregation 域形状 SSOT（模型路由域 payload/reply 形状 SSOT 在 extension-protocol 包的
+// aggregation 契约根——saveRoute/deleteRoute 的 reply 直引 AggregationRouteSaved/Deleted 具名
+// 类型，本文件仅登记命令对；具名查找链须覆盖该域文件，否则 extractReplyShape 取不到声明体。
+// 契约根在 packages/extension-protocol/src/，与 PROTOCOL_TS 所在的 shared/src 不同包不同目录，
+// 路径从测试文件位独立解析，不走 PROTOCOL_TS 同级拼接）
+const AGGREGATION_DOMAIN_SOURCE = readFileSync(
+  resolve(fileURLToPath(import.meta.url), '..', '..', '..', '..', 'extension-protocol', 'src', 'aggregation.ts'),
+  'utf8',
+)
 
 
 // ── 登记清单（SSOT：新增 mutation 必须在此登记，漏登记测试即红）──────────────
@@ -570,8 +575,8 @@ const MUTATION_RPC_REGISTRY: readonly MutationRegistryEntry[] = [
     effectiveFields: ['state', 'revision'],
   },
   // ── 分支二（aggregation 域）：模型路由页 routes 写通道（provider-aggregation U9）。
-  // 两条 reply 形状 SSOT 在 ./aggregation（AggregationRouteSaved/Deleted 具名类型，经
-  // AGGREGATION_DOMAIN_SOURCE 进具名查找链）。saveRoute 校验失败走错误信封不落盘
+  // 两条 reply 形状 SSOT 在 extension-protocol 的 aggregation 契约根（AggregationRouteSaved/
+  // Deleted 具名类型，经 AGGREGATION_DOMAIN_SOURCE 进具名查找链）。saveRoute 校验失败走错误信封不落盘
   //（AggregationErrorCode 词表 code），成功 upsert 原样存储（校验纯拒绝不变换，路由值无
   // 变换点），reply route = 保存的路由回显；memberIssues 是悬空端点标记（读取侧派生提示，
   // workspace degraded 同款不入契约）。deleteRoute 删除语义 + scopedModels 精确清理（跨
@@ -879,9 +884,10 @@ function extractMapValue(block: string, key: string): string | undefined {
 
 
 /** 提取 reply 形状文本：内联 `{ ... }` 直接返回；具名引用则取该声明的 body。
- *  具名查找次序：protocol.ts → ./codemode 域文件 → ./mcp 域文件 → ./aggregation 域文件
- *  （protocol.ts 头部登记约定：codemode / mcp / aggregation 域 payload/reply 形状 SSOT 在
- *  各自域文件，本文件仅登记命令对）；interface
+ *  具名查找次序：protocol.ts → ./codemode 域文件 → ./mcp 域文件 → extension-protocol 的
+ *  aggregation 契约根（AGGREGATION_DOMAIN_SOURCE）
+ *  （protocol.ts 头部登记约定：codemode / mcp 域形状 SSOT 在 shared 同级域文件、aggregation
+ *  域形状 SSOT 在 extension-protocol 包，本文件仅登记命令对）；interface
  *  与 type 联合两种声明形态均支持。
  *  ServerMessageMapBase 无该 replyKey 时回退取 ReplyPayloadMap 映射行的内联形状——适用
  *  wire reply 无具名广播条目的 RPC（如 config.setScopedModels 的 'config.scopedModels'）。 */
@@ -953,7 +959,7 @@ function extractReplyShape(replyKey: string, requestType: string): string {
       ?? extractNamedDeclarationBody(MCP_DOMAIN_SOURCE, base)
       ?? extractNamedDeclarationBody(AGGREGATION_DOMAIN_SOURCE, base)
     if (body === null) {
-      throw new Error(`reply '${replyKey}' 引用了具名类型 ${base}，但 protocol.ts / codemode / mcp 域文件中均未找到其声明`)
+      throw new Error(`reply '${replyKey}' 引用了具名类型 ${base}，但 protocol.ts / codemode / mcp / aggregation（extension-protocol）域文件中均未找到其声明`)
     }
     return expandAliasUnionMembers(body, new Set([base]))
   }
