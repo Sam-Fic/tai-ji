@@ -1,0 +1,218 @@
+name: Build deb from upstream
+
+# ─────────────────────────────────────────────────────────────────────
+# 从上游 zhushanwen321/tai-ji 的最新 release 检出源码，构建 .deb 并发布到本 fork。
+#
+# 设计要点：
+# - 打包走 electron-builder 原生 deb target（复用上游 electron-builder.yml，
+#   仅 CLI 覆盖 linux target 为 deb），不引入 debhelper/fpm 自建打包——
+#   依赖声明（libgtk-3-0 等）/ desktop entry / 图标由 electron-builder 保证
+# - fork release tag 统一加 deb- 前缀（如 deb-v0.12.6）：
+#   ① 不命中 fork 内继承自上游的 release.yml（on: push tags 'v*'）——否则会
+#     在 fork 里级联触发三平台全量构建
+#   ② 与上游同名 release 解耦，互不干扰
+# - pi 资源版本不写死：prepare-pi-resources.sh 无参调用使用脚本内置默认值
+#   （上游 check-pi-sync 纪律保证默认值跟随 pi 版本），fork 侧零维护
+# - 版本一致性断言：源码 apps/electron/package.json 版本必须等于上游 tag，
+#   防止打出错标版本的 deb
+# - 构建步骤复制自上游 build.yml linux job（2026-11 快照）：上游若大改构建
+#   管线，本文件需人工同步。刻意不引用上游 reusable workflow——它按上游
+#   electron-builder.yml 固定构建 AppImage，无法经 uses 调用覆盖 target
+# - 只构建稳定版（releases/latest 天然排除 prerelease/draft，另有 semver
+#   形态守卫兜手输 tag）
+#
+# 注意：GitHub 对 fork 仓库的 scheduled workflow 可能默认禁用，如定时未跑，
+# 在 Actions 页面对本 workflow 手动启用（workflow_dispatch 不受影响）。
+# ─────────────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    - cron: '0 */6 * * *' # 每 6 小时检查上游新 release
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '指定上游 tag（如 v0.12.6）。留空 = 上游最新 release。'
+        required: false
+        type: string
+      force:
+        description: '跳过「已构建」检查，强制重建同版本'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-deb
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: zhushanwen321/tai-ji
+
+jobs:
+  check:
+    name: Check upstream release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.decide.outputs.tag }}
+      should_build: ${{ steps.decide.outputs.should_build }}
+    steps:
+      - name: Resolve upstream tag and decide
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG=$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq '.tag_name')
+          fi
+          echo "上游 tag: ${TAG}"
+          # 稳定 semver 形态守卫（releases/latest 已排除 prerelease，这里再挡手输 tag；
+          # deb 版本号也不接受 '-' 后缀形态）
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::notice::tag ${TAG} 不是稳定 semver 形态（vX.Y.Z），跳过"
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          FORK_TAG="deb-${TAG}"
+          if [ "$INPUT_FORCE" != "true" ] && gh release view "$FORK_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "本 fork 已存在 release ${FORK_TAG}，跳过"
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build deb
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      UPSTREAM_TAG: ${{ needs.check.outputs.tag }}
+    steps:
+      - name: Checkout upstream source at tag
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.UPSTREAM_REPO }}
+          ref: ${{ env.UPSTREAM_TAG }}
+          fetch-depth: 1
+
+      - name: Record upstream commit
+        run: echo "UPSTREAM_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # 与上游 build.yml linux job 同环境（deb 构建不强制需要，保持一致便于
+      # 后续扩展 AppImage 镜像）
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools rpm
+
+      - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Electron binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/electron
+          key: ${{ runner.os }}-electron-${{ hashFiles('apps/electron/package.json') }}
+
+      # electron 二进制被提升到根 node_modules（node-linker=hoisted），从仓库根执行 install.js
+      - name: Download Electron binary
+        run: node node_modules/electron/install.js
+
+      - name: Verify source version matches upstream tag
+        run: |
+          VERSION=$(node -p "require('./apps/electron/package.json').version")
+          echo "源码版本: ${VERSION}，上游 tag: ${UPSTREAM_TAG}"
+          if [ "v${VERSION}" != "${UPSTREAM_TAG}" ]; then
+            echo "::error::版本不一致：源码 apps/electron/package.json=${VERSION}，上游 tag=${UPSTREAM_TAG}"
+            exit 1
+          fi
+
+      - name: Preflight check
+        run: bash scripts/preflight-check.sh --ci
+
+      - name: Engine package boundary guards
+        run: |
+          node .githooks/check-engine-sdk-boundary.mjs
+          node scripts/check-engine-package-boundary.mjs
+
+      # key 不含 pi 版本号（fork 侧不写死）：pi 版本升级必改 prepare 脚本默认值
+      # → hash 变 → 缓存失效。刻意不配 restore-keys：旧版本 pi 资源恢复后脚本
+      # 「binary 已存在则跳过下载」会静默沿用旧版
+      - name: Cache pi resources
+        uses: actions/cache@v4
+        with:
+          path: apps/electron/resources/pi
+          key: ${{ runner.os }}-pi-${{ runner.arch }}-${{ hashFiles('scripts/prepare-pi-resources.sh') }}
+
+      - name: Download and prepare pi resources
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          chmod +x scripts/prepare-pi-resources.sh
+          ./scripts/prepare-pi-resources.sh
+
+      # 根 prebuild 钩子在 --filter 直调 build 时不会触发，须显式执行（同上游 build.yml）
+      - name: Generate builtin providers catalog
+        run: node packages/runtime/scripts/gen-builtin-providers.mjs
+
+      - name: Build app
+        run: pnpm --filter @taiji/electron run build:pre
+
+      # CLI --linux deb 覆盖 electron-builder.yml 的 AppImage target；
+      # --publish never 与上游构建行为一致
+      - name: Package deb
+        working-directory: apps/electron
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: pnpm exec electron-builder --linux deb --publish never
+
+      # dir-only 模式：跳过 dmg/exe/AppImage 安装器存在性检查（deb-only 构建不产这些），
+      # 仍校验 linux-unpacked 结构（runtime bundle / builtin extensions / engines）
+      - name: Postbuild validation
+        run: bash scripts/postbuild-validate.sh --ci --dir-only
+
+      - name: Verify deb artifact
+        run: |
+          ls -lh apps/electron/dist/builder-output/*.deb
+          RUNTIME="apps/electron/dist/builder-output/linux-unpacked/resources/app.asar.unpacked/dist/runtime/index.cjs"
+          [ -f "$RUNTIME" ] || { echo '::error::Runtime bundle not found in linux-unpacked'; exit 1; }
+
+      - name: Create fork release with deb
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          FORK_TAG="deb-${UPSTREAM_TAG}"
+          SHA256=$(sha256sum apps/electron/dist/builder-output/*.deb | awk '{print $1}')
+          {
+            echo "自动从上游 [${UPSTREAM_REPO}@${UPSTREAM_TAG}](https://github.com/${UPSTREAM_REPO}/releases/tag/${UPSTREAM_TAG})（commit ${UPSTREAM_COMMIT}）源码构建的 .deb 安装包。"
+            echo ""
+            echo "- 架构: amd64 (x64)"
+            echo "- sha256: ${SHA256}"
+            echo "- 安装: sudo apt install ./TaiJi-*.deb"
+            echo ""
+            echo "本 release 由 fork 的 build-deb workflow 自动维护，请勿手动编辑。"
+          } > "$RUNNER_TEMP/release-notes.md"
+          gh release create "$FORK_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "tai-ji ${UPSTREAM_TAG} (deb)" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            apps/electron/dist/builder-output/*.deb
