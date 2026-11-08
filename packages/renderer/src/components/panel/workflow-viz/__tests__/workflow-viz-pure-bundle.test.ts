@@ -1874,7 +1874,7 @@ describe('WorkflowVizDag 图例（workflow-overlay-refine D4；方案 C 后 = �
     const legend = wrapper.find('[data-testid="wfvz-dag-legend"]')
     expect(legend.classes()).toContain('pointer-events-none')
     expect(legend.classes()).toContain('absolute')
-    // 图例在场时 pending 节点点击照常上抛（phase 语义；[2026-10-19] agent 语义已删）
+    // 图例在场时 pending 节点点击照常上抛（零实例节点 = phase 语义；[2026-11-08] 图上钻取恢复后 agent 语义经实例小卡/有实例节点上抛）
     const pendingNode = wrapper.find('[data-testid="wfvz-dag-node-n-pending"]')
     await pendingNode.trigger('pointerdown')
     await pendingNode.trigger('pointerup')

@@ -15,10 +15,11 @@
     拖拽位移超 PAN_THRESHOLD_PX 的 pan 与 wheel 缩放算接管，pointerdown 未移动
     不算（纯点击）；程序化写视口（fitView 及其全部调用路径）结构性不触发接管
     ——转 free 只存在于两个手势处理器内；切 run 重置回 fit 态；
-  - 点击上抛（[2026-10-19] agent 钻取语义删除，钻取入口 = 下方实例 trace 行）：
-    pending/skipped 节点（零实例、无对话可看——skipped = run 终局后零实例）与
-    phase 分区 → semantic 'phase'（设计 §3.1-2 点击行为边界）；其余节点/实例行
-    no-op（纯展示）。
+  - 点击上抛（[2026-11-08] 图上钻取恢复——routeClick 路由，trace 行入口并存）：
+    实例小卡 / 有实例（挂接映射非空）节点 → semantic 'agent'（等同 trace 行点击，
+    打开/切回该实例对话流；节点取末位实例）；零实例节点（pending 运行中 /
+    skipped 终局后，无对话可看）与 phase 分区 → semantic 'phase'（开所属
+    phase tab）。
 
   运行实况：节点七态经 props.nodeStates 接收已派生映射（派生单处归 u5，D9 单点
   实现——本组件不自行判定 retrying/skipped；方案 C 后七态仅作 data-state 观察
@@ -238,7 +239,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  /** 点击上抛：pending/skipped 节点（=phase 语义）/ phase 分区（agent 钻取语义已删）。 */
+  /** 点击上抛：实例小卡/有实例节点 = 'agent'（末位实例）；零实例节点与 phase 分区 = 'phase'。 */
   select: [payload: WorkflowVizDagClickPayload]
 }>()
 
