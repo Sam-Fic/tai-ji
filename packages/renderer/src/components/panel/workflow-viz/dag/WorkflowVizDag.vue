@@ -270,8 +270,8 @@ const CLUSTER_TITLE_H_BASE = 20
 /** 分区副标题与分区标题的基线落差（px；副标题挂在标题下一行）。 */
 const CLUSTER_SUB_BASELINE_DROP = 14
 /** 谓词徽章截断上限与宽度估算单源在 layout（PREDICATE_MAX_CHARS /
- *  predicateBadgeWidth——列距自适应与徽章渲染同宽，跨列徽章骑线平铺在自己专属的
- *  列间隙内不跨卡片）。 */
+ *  predicateBadgeWidth——列距自适应与徽章渲染同宽；徽章锚三形态分治在 layout-edges：
+ *  相邻列骑线 / 同列与跳列异行走徽章带——全场景不跨卡片）。 */
 /** 谓词徽章高（px，= 分区头预留徽章带的带高）。 */
 const PREDICATE_BADGE_H = 14
 /** 文字基线到徽章底边的下伸量（px，基线以下 3px 下缘收在底边内）。 */

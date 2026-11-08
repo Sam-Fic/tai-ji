@@ -42,6 +42,10 @@
       "types": "./src/plugin-capability-map.ts",
       "import": "./src/plugin-capability-map.ts"
     },
+    "./workflow-dag": {
+      "types": "./src/workflow-dag.ts",
+      "import": "./src/workflow-dag.ts"
+    },
     "./tailwind-preset": {
       "types": "./src/tailwind-preset.ts",
       "import": "./src/tailwind-preset.ts",

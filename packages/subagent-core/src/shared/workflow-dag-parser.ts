@@ -66,8 +66,11 @@
  *   事件流「未匹配实例」分组兜底（设计 D2 ⑥），不静默丢失。
  *
  * 类型跟随锚（core 为定义源——本文件是解析器产物类型；shared 的 WorkflowDag 族为
- * u2 协议冻结部分（跨包消费契约），core 包不依赖 @taiji/shared、双侧逐字段等值——同
- * RunOutcome 值域跟随先例的「core 定义源 + shared 跟随载体」方向）：
+ * u2 协议冻结部分（跨包消费契约），core 包不 import @taiji/shared 包根 barrel、
+ * 类型双侧逐字段等值——同 RunOutcome 值域跟随先例的「core 定义源 + shared 跟随
+ * 载体」方向；例外 = 运行时常量走 shared 纯常量 subpath 单源（如缺省分区名
+ * WORKFLOW_DAG_DEFAULT_PHASE 经 '@taiji/shared/workflow-dag'，session-store-paths
+ * 先例）：
  * packages/shared/src/workflow.ts 的 WorkflowDag 族（u2 冻结）。
  * 扩字段同步链：双侧同 commit 同步。等值锁定实测形态：shared 扩必选字段而 core
  * 未跟 → runtime 赋值点 typecheck 红（workflow-run-events-reader.ts）；core 扩
@@ -76,6 +79,7 @@
  */
 
 import * as acorn from "acorn";
+import { WORKFLOW_DAG_DEFAULT_PHASE as WORKFLOW_DAG_DEFAULT_PHASE_SOURCE } from "@taiji/shared/workflow-dag";
 import { collapseDuplicateCallSites } from "./workflow-dag-collapse.ts";
 
 /** DAG 节点类型（跟随 shared WorkflowDagNodeKind）。 */
@@ -142,8 +146,13 @@ export interface WorkflowDag { // oe-exempt:20261002:framework:workflow-viz 协�
   loops: WorkflowDagLoop[];
 }
 
-/** 未标注 phase 的调用点归入的缺省分区名（shared 未冻结该常量值——展示层直接消费节点.phase）。 */
-export const WORKFLOW_DAG_DEFAULT_PHASE = "default";
+/** 未标注 phase 的调用点归入的缺省分区名（单源 = @taiji/shared/workflow-dag u2 协议
+ * 冻结常量——subagent-core 与 renderer 展示层同源，改名经 import 编译期传播）。
+ * 形态 = const 重声明而非 `export { X } from` re-export：dts rollup 会把 re-export
+ * 留成对 private 包的外部模块引用（npm 消费方类型不可解析——本包 dual-form 发布，
+ * 见文件头类型跟随锚），重声明把字面量类型内联进本包 d.ts、值仍是 shared 单源
+ * （运行时 import，tsup bundle 内联，session-store-paths 先例）；公共 API 面不变。 */
+export const WORKFLOW_DAG_DEFAULT_PHASE = WORKFLOW_DAG_DEFAULT_PHASE_SOURCE;
 
 /** 解析失败结构化错误（session.getWorkflowDag 错误臂的 parse_failed 码源）。 */
 export type WorkflowDagParseResult =

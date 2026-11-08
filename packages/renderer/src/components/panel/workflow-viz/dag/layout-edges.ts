@@ -11,14 +11,16 @@
  * - 通道竖线先经 routing-avoid.assignChannelLanes 按纵向跨度游程错开（fan-in/out 不
  *   叠线），再经 routing-avoid.avoidObstructedChannelMid 整体平移到最近零穿卡走廊；
  *   同行直线有障碍时升级 routing-avoid.sameRowBypass 上下绕行 4 折线。
- * - 条件谓词徽章锚：跨列边悬浮在连线上方（间隙中线 × 线段中点上方 − LIFT——不遮盖
- *   连线，2026-11-08 用户裁决；列距已由 layoutDag 按徽章宽自适应拉开，不跨卡片）；
- *   同列边无间隙专属空间，退分区头徽章带（badgeAnchorY）。
+ * - 条件谓词徽章锚（三形态分治，2026-11-08 用户裁决「谓词徽章不跨卡片、不遮盖
+ *   连线」）：相邻列边骑线（间隙中线 × 线段中点上方 − LIFT——列距已由 layoutDag
+ *   按徽章宽自适应拉开）；同列边无间隙专属空间，退两端主体顶上方徽章带
+ *   （badgeAnchorY）；跳列异行边（channeled 形态，骑线中点落在中间列卡片带上）
+ *   退分区头徽章带（SKIP_COLUMN_BADGE_BAND_Y——首行卡片顶上方、全列卡片之上）。
  * - 锚点取节点主体四边中点（主体高恒 DAG_NODE_H=44，实例小卡不参与锚点几何），
  *   loop-back 底锚 = 主体 + 实例卡区总底（y + h + zoneH——回边从实例小卡下方走）。
  */
 import type { WorkflowDag, WorkflowDagEdge } from '@taiji/shared'
-import { DAG_NODE_W, PREDICATE_BADGE_LINE_LIFT, type DagLayoutNode } from './layout'
+import { CLUSTER_PAD_TOP, CLUSTER_TITLE_H, DAG_NODE_W, PREDICATE_BADGE_LINE_LIFT, type DagLayoutNode } from './layout'
 import {
   COINCIDE_EPS,
   assignChannelLanes,
@@ -62,6 +64,11 @@ const CORNER_RADIUS = 6
  *  谓词徽章带（layout CLUSTER_PAD_TOP 含 14px 专属带）：min(两端主体顶) − 本值 =
  *  徽章文字基线，任何贴边位置（列间走廊 32px / gutter 8px）均容不下徽章。 */
 const LABEL_ABOVE_GAP = 4
+/** 跳列条件边徽章带基线 y（分区头专属带 = 首行卡片顶 − LABEL_ABOVE_GAP：任何列的
+ *  卡片都在首行卡片顶及其下方，分区标题/副标题文字都停在该线上方——徽章在本线
+ *  平铺全场景不跨卡片，2026-11-08 用户裁决）。跳列异行边骑线中点落在中间列卡片
+ *  带上，徽章锚退本带；中间列为纯脚本空分区（无卡片）时无冲突，保持骑线中点锚。 */
+const SKIP_COLUMN_BADGE_BAND_Y = CLUSTER_PAD_TOP + CLUSTER_TITLE_H - LABEL_ABOVE_GAP
 /**
  * 折点序列 → 圆角 path d 串：直线段 L 连接，内部折点处用半径 r 的二次贝塞尔
  * 过渡（r 收敛到相邻段长一半，避免短段翻折）。折点本身保持轴对齐不变量。
@@ -91,9 +98,11 @@ function roundedPath(points: DagPoint[]): string {
 
 /** 待装配边（保持 dag.edges 序——输出序不因错开分配分遍打乱）：已定型路径或通道成员。 */
 /** 同列边谓词徽章锚 y：徽章带（min(两端主体顶) − LABEL_ABOVE_GAP，分区头预留的
- *  专属平铺行）——同列边不占列间隙（无专属水平空间），徽章退徽章带平铺。
- *  跨列边不消费本带：列距已按谓词徽章宽自适应拉开（layoutDag），徽章骑线平铺在
- *  列间隙内（见各路由分支的 label 锚——2026-11-08 用户裁决）。 */
+ *  专属平铺行）——同列边不占列间隙（无专属水平空间），徽章退徽章带平铺。已知
+ *  残留：同列多条条件边共享同一顶端节点时（如 a→b、a→c 同列）徽章同 x 同 y 重叠
+ *  ——14px 专属带只容单行，无错开空间；罕见形态（单列多条件边且共顶），登记不修。
+ *  跨列边不消费本带：相邻列边骑自适应拉开的列间隙（layoutDag gapExtra），跳列
+ *  异行边走分区头徽章带 SKIP_COLUMN_BADGE_BAND_Y（2026-11-08 用户裁决）。 */
 function badgeAnchorY(from: DagLayoutNode, to: DagLayoutNode): number {
   return Math.min(from.y, to.y) - LABEL_ABOVE_GAP
 }
@@ -257,8 +266,28 @@ export function layoutEdges(dag: WorkflowDag, nodes: DagLayoutNode[]): DagLayout
       fromId: from.node.id,
       toId: to.node.id,
     }
-    // 跨列谓词徽章悬浮在通道竖线段旁（间隙中线 × 竖线段中点上方——列距自适应已保空间）
-    pending.push({ edge, kind: 'channeled', chan, labelX: (x1 + x2) / HALF, labelY: (y1 + y2) / HALF - PREDICATE_BADGE_LINE_LIFT })
+    // 跳列判定（几何：两端列之间存在中间列的节点）——跳列边骑线中点（两端锚点
+    // 中点 × 竖线段中点上方）落在中间列卡片带上，谓词徽章改走分区头徽章带：
+    // y = SKIP_COLUMN_BADGE_BAND_Y（首行卡片顶上方、全列卡片之上），x 不变
+    //（= (x1+x2)/2，恰为两端卡片中心连线中点——不随通道竖线避让漂移）。
+    // 中间列为纯脚本空分区（无节点）时无卡片可冲突，保持骑线中点锚。
+    const middleColumnBetween = nodes.some(
+      (o) =>
+        Math.abs(o.x - from.x) > COINCIDE_EPS &&
+        Math.abs(o.x - to.x) > COINCIDE_EPS &&
+        o.x > Math.min(from.x, to.x) &&
+        o.x < Math.max(from.x, to.x),
+    )
+    // 相邻列谓词徽章骑线（间隙中线 × 竖线段中点上方——列距自适应已保空间）
+    pending.push({
+      edge,
+      kind: 'channeled',
+      chan,
+      labelX: (x1 + x2) / HALF,
+      labelY: middleColumnBetween
+        ? SKIP_COLUMN_BADGE_BAND_Y
+        : (y1 + y2) / HALF - PREDICATE_BADGE_LINE_LIFT,
+    })
     const key = `${x1}|${x2}`
     const list = channels.get(key)
     if (list) list.push(chan)

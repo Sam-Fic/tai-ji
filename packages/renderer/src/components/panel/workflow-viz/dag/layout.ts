@@ -37,7 +37,7 @@
  *   细道折返；自环边（from===to）画不出合法的四中点正交环，不产出几何。
  * 折点处用小半径圆弧过渡（视觉圆角，路由仍严格轴对齐）。
  */
-import type { WorkflowDag, WorkflowDagNode, WorkflowDagPhase } from '@taiji/shared'
+import { WORKFLOW_DAG_DEFAULT_PHASE, type WorkflowDag, type WorkflowDagNode, type WorkflowDagPhase } from '@taiji/shared'
 
 /** 节点卡片尺寸（px，画布坐标系）。 */
 export const DAG_NODE_W = 156
@@ -50,10 +50,10 @@ const CLUSTER_PAD_X = 12
 /** 分区顶带高：分区标题 + 副标题 + 谓词徽章带（条件边谓词徽章的专属平铺行，
  *  2026-11-08 视觉裁决：列间走廊 32px 与标题带空档均容不下 16 字符徽章，统一
  *  预留 14px 专属带使谓词徽章全场景无冲突平铺）。 */
-const CLUSTER_PAD_TOP = 44
+export const CLUSTER_PAD_TOP = 44
 const CLUSTER_PAD_BOTTOM = 12
 /** 分区标题行高。 */
-const CLUSTER_TITLE_H = 18
+export const CLUSTER_TITLE_H = 18
 /** 分区列间水平间距（基础值；相邻列间的条件边按谓词徽章宽自适应拉开——见 layoutDag）。 */
 const CLUSTER_GAP_X = 32
 /** 比较器返回值（排序比较器惯例语义，命名消 magic number）。 */
@@ -174,13 +174,10 @@ function lexicalCompare(a: string, b: string): number {
   return 0
 }
 
-/**
- * 解析器缺省分区名（workflow-dag-parser WORKFLOW_DAG_DEFAULT_PHASE 的展示层镜像——
- * shared 未冻结该常量值，两侧字面量一致由测试锚定）。空 default 分区整体消隐：
- * 它是词法归属的兜底产物而非脚本声明的执行段，重归属后无节点即无展示价值
- *（方案 C「分区层不再出现 default」；仍有未触发零实例节点时如实保留）。
- */
-const DEFAULT_PHASE_NAME = 'default'
+// 空 default 分区整体消隐：它是词法归属的兜底产物而非脚本声明的执行段，重归属后
+// 无节点即无展示价值（方案 C「分区层不再出现 default」；仍有未触发零实例节点时
+// 如实保留）。缺省分区名单源 = shared WORKFLOW_DAG_DEFAULT_PHASE（u2 协议冻结
+// 常量，与解析器产出侧同源 import——解析器侧改名经编译期传播到消隐判据，无手抄副本）。
 
 /**
  * 布局单列：给定分区名与归属节点（已按词法序排好），产出分区矩形与节点坐标。
@@ -215,7 +212,7 @@ function layoutCluster(
     y: 0,
     width: DAG_NODE_W + CLUSTER_PAD_X * HALF,
     height: Math.max(contentBottom, singleNodeMinHeight),
-    scriptOnly: members.length === 0 && phase !== DEFAULT_PHASE_NAME,
+    scriptOnly: members.length === 0 && phase !== WORKFLOW_DAG_DEFAULT_PHASE,
     order,
     nodeCount: members.length,
   }
@@ -295,7 +292,7 @@ function groupNodesByPhase(dag: WorkflowDag): Map<string, WorkflowDagNode[]> {
 
 /** 空分区判据（空 default 消隐 = 方案 C；非 default 空分区保留为纯脚本段）。 */
 function isHiddenEmptyPhase(name: string, members: WorkflowDagNode[] | undefined): boolean {
-  return (members?.length ?? 0) === 0 && name === DEFAULT_PHASE_NAME
+  return (members?.length ?? 0) === 0 && name === WORKFLOW_DAG_DEFAULT_PHASE
 }
 
 /**
@@ -318,7 +315,11 @@ function computeVisibleColOfPhase(
 /**
  * 相邻列间的条件边谓词徽章列距自适应：列序对（左列序 → 额外间距需求）。该列距 =
  * max(基础间距, 徽章宽 + 两侧净距)——徽章骑线平铺在列间隙内不跨任何卡片
- *（2026-11-08 用户裁决；同列/跳列条件边不占间隙，徽章走分区头徽章带）。
+ *（2026-11-08 用户裁决）。不参与列距自适应的其余形态（同裁决）：同列边徽章走
+ * 两端主体顶上方徽章带（layout-edges badgeAnchorY）；跳列异行边（channeled 形态）
+ * 徽章走分区头徽章带（首行卡片顶上方、全列卡片之上——layout-edges
+ * SKIP_COLUMN_BADGE_BAND_Y，中间列为纯脚本空分区无卡片时例外保持骑线）；
+ * 同行直线/绕行形态徽章骑线（线段本身已避卡）。
  */
 function computeGapExtra(dag: WorkflowDag, colOfNode: Map<string, number>): Map<number, number> {
   const gapExtra = new Map<number, number>()

@@ -1665,6 +1665,60 @@ describe('instanceZoneHeight 实例卡区高度（实例数派生，方案 C：�
     expect(edge.labelX).toBe((la.x + DAG_NODE_W + lb.x) / 2)
   })
 
+  it('跳列条件边谓词徽章走分区头徽章带（2026-11-08 用户裁决，dmg-r1-3）：锚 y = 首行卡片顶 − 4（全列卡片之上，不骑中间列卡片），x = 两端卡片中心中点', () => {
+    const d = dag({
+      phases: [
+        { name: 'p0', order: 0 },
+        { name: 'p1', order: 1 },
+        { name: 'p2', order: 2 },
+      ],
+      nodes: [
+        node({ id: 'a', phase: 'p0' }),
+        node({ id: 'm', phase: 'p1' }),
+        node({ id: 'f0', templateName: 'y0', phase: 'p2' }),
+        node({ id: 'f', templateName: 'y1', phase: 'p2' }),
+      ],
+      // a 在 p0 首行、f 在 p2 次行（不同行 → channeled 形态）；p1 有卡片 m（中间列）
+      edges: [{ id: 'e-skip', from: 'a', to: 'f', kind: 'conditional', predicate: '$ARGS.mode === audit' }],
+    })
+    const layout = layoutDag(d)
+    const la = layout.nodes.find((ln) => ln.node.id === 'a')!
+    const lf = layout.nodes.find((ln) => ln.node.id === 'f')!
+    const [edge] = layoutEdges(d, layout.nodes)
+    expect(edge.points).toHaveLength(4)
+    // 徽章锚 = 分区头徽章带基线（首行卡片顶 − 4）：任何列的卡片都在首行卡片顶及其
+    // 下方、分区标题文字停在其上方——徽章在此平铺全场景不跨卡片
+    expect(edge.labelY).toBe(la.y - 4)
+    expect(edge.labelX).toBe((la.x + DAG_NODE_W + lf.x) / 2)
+    // 回归锚定 dmg-r1-3：旧实现骑线中点（两端锚点中心中点 − LIFT）落在中间列卡片带上
+    expect(edge.labelY).not.toBe((la.y + DAG_NODE_H / 2 + lf.y + DAG_NODE_H / 2) / 2 - PREDICATE_BADGE_LINE_LIFT)
+  })
+
+  it('跳列条件边中间列为纯脚本空分区（无卡片）时保持骑线中点锚——徽章无卡片可冲突', () => {
+    const d = dag({
+      phases: [
+        { name: 'p0', order: 0 },
+        { name: 'pm', order: 1 },
+        { name: 'p2', order: 2 },
+      ],
+      // pm 无归属节点 → 纯脚本段（虚线空分区占列，无卡片）
+      nodes: [
+        node({ id: 'a', phase: 'p0' }),
+        node({ id: 'f0', templateName: 'y0', phase: 'p2' }),
+        node({ id: 'f', templateName: 'y1', phase: 'p2' }),
+      ],
+      edges: [{ id: 'e-skip-empty', from: 'a', to: 'f', kind: 'conditional', predicate: 'fixMode' }],
+    })
+    const layout = layoutDag(d)
+    const la = layout.nodes.find((ln) => ln.node.id === 'a')!
+    const lf = layout.nodes.find((ln) => ln.node.id === 'f')!
+    const [edge] = layoutEdges(d, layout.nodes)
+    expect(edge.points).toHaveLength(4)
+    // 中间列无节点 → 骑线中点锚（间隙中线 × 竖线段中点上方）不迁徽章带
+    expect(edge.labelY).toBe((la.y + DAG_NODE_H / 2 + lf.y + DAG_NODE_H / 2) / 2 - PREDICATE_BADGE_LINE_LIFT)
+    expect(edge.labelX).toBe((la.x + DAG_NODE_W + lf.x) / 2)
+  })
+
   it('分区副标题数据（方案 C demo §3.1）：cluster 携带展示序号 order（消隐 default 后可见列序，1 起补零两位）与调用点计数 nodeCount', () => {
     const d = dag({
       phases: [
