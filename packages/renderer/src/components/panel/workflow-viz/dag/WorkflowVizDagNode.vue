@@ -143,7 +143,7 @@ import {
   INSTANCE_ZONE_TOP_GAP,
 } from './layout'
 import { dotTone, UNTRIGGERED_DOT_TONE } from './tone'
-import { callpointDisplayName } from './callpoint-name'
+import { callpointDisplayName, VAR_MARKER } from './callpoint-name'
 import type { WorkflowVizDagNodeStatus, WorkflowVizDagStopTone } from './types'
 
 const props = defineProps<{
@@ -212,8 +212,8 @@ const placeholderTopY = DAG_NODE_H + INSTANCE_ZONE_TOP_GAP
 const placeholderDotCy = placeholderTopY + INSTANCE_PLACEHOLDER_H / HALF
 const placeholderLabelBaselineY = placeholderDotCy + TEXT_CENTER_LIFT
 
-/** 模板名变量段标记长度（u1 解析器合成标记 `${…}` 的字符数，截断预算计入）。 */
-const VAR_MARKER_LENGTH = '${…}'.length
+/** 模板名变量段标记长度（u1 解析器合成标记，单源 VAR_MARKER 的字符数，截断预算计入）。 */
+const VAR_MARKER_LENGTH = VAR_MARKER.length
 
 /**
  * 调用点显示名（2026-11-08 用户裁决：卡片标题不渲染占位符段，只渲染名称）：模板名
@@ -233,13 +233,13 @@ const titleParts = computed<Array<{ text: string; variable: boolean }>>(() => {
   const parts: Array<{ text: string; variable: boolean }> = []
   let rest = raw
   for (;;) {
-    const idx = rest.indexOf('${…}')
+    const idx = rest.indexOf(VAR_MARKER)
     if (idx === -1) {
       if (rest.length > 0) parts.push({ text: rest, variable: false })
       break
     }
     if (idx > 0) parts.push({ text: rest.slice(0, idx), variable: false })
-    parts.push({ text: '${…}', variable: true })
+    parts.push({ text: VAR_MARKER, variable: true })
     rest = rest.slice(idx + VAR_MARKER_LENGTH)
   }
   let budget = NAME_MAX_CHARS

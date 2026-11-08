@@ -79,7 +79,7 @@
  */
 
 import * as acorn from "acorn";
-import { WORKFLOW_DAG_DEFAULT_PHASE as WORKFLOW_DAG_DEFAULT_PHASE_SOURCE } from "@taiji/shared/workflow-dag";
+import { WORKFLOW_DAG_DEFAULT_PHASE as WORKFLOW_DAG_DEFAULT_PHASE_SOURCE, WORKFLOW_DAG_VAR_MARKER } from "@taiji/shared/workflow-dag";
 import { collapseDuplicateCallSites } from "./workflow-dag-collapse.ts";
 
 /** DAG 节点类型（跟随 shared WorkflowDagNodeKind）。 */
@@ -274,7 +274,7 @@ function extractNameTemplate(source: string, expr: AstNode | undefined): { templ
       template += seg.text;
       pattern += escapeRegExp(seg.text);
     } else {
-      template += "${…}";
+      template += WORKFLOW_DAG_VAR_MARKER;
       pattern += ".*";
     }
   }

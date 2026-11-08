@@ -14,8 +14,12 @@
  * 段，替换后原样返回，无需特判。
  */
 
-/** 模板名变量段合成标记（u1 解析器折叠动态 description 段的产物，字面 U+2026 省略号）。 */
-const VAR_MARKER = '${…}'
+import { WORKFLOW_DAG_VAR_MARKER } from '@taiji/shared'
+
+/** 模板名变量段合成标记（u1 解析器折叠动态 description 段的产物，字面 U+2026 省略号）。
+ *  单源 = shared WORKFLOW_DAG_VAR_MARKER（跨侧冻结，产出/展示任一侧改标记经 import
+ *  编译期传播）；此处绑定并导出，供节点卡标题分段（WorkflowVizDagNode）同源消费。 */
+export const VAR_MARKER = WORKFLOW_DAG_VAR_MARKER
 /** 名称分隔符（拼接后相邻游程折叠为首字符 + 首尾清理；覆盖连字符/下划线/点/斜杠/空格）。 */
 const SEPARATOR_RUN_RE = /[-_./ ]+/g
 /** 首尾分隔符清理。 */
