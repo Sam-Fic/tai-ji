@@ -530,18 +530,23 @@ describe('WorkflowVizOverlay 壳（黑盒 DOM）', () => {
     expect(second.emitted('close')).toBeUndefined()
   })
 
-  it('DAG 就绪：画布渲染；画布点击 select 透传（壳转发；[2026-10-19] agent 钻取语义已删——pending 节点 = phase 语义）', async () => {
+  it('DAG 就绪：画布渲染；画布点击 select 透传（壳转发；[2026-11-08] 图上钻取恢复——零实例节点 = phase、有实例节点 = agent 末位）', async () => {
     const wrapper = mountOverlay({ dag: SAMPLE_DAG, nodeStates: { n1: 'pending' } })
     expect(wrapper.find('[data-testid="wfvz-dag-svg"]').exists()).toBe(true)
-    // pending 节点点击 → 壳转发 select（phase 语义）；done 态节点点击 no-op（纯展示）
+    // pending 节点（零实例）点击 → 壳转发 select（phase 语义）
     await wrapper.find('[data-testid="wfvz-dag-node-n1"]').trigger('pointerdown')
     await wrapper.find('[data-testid="wfvz-dag-node-n1"]').trigger('pointerup')
     expect(wrapper.emitted('select')?.[0]?.[0]).toEqual({ semantic: 'phase', phase: 'gate' })
 
-    const done = mountOverlay({ dag: SAMPLE_DAG, nodeStates: { n1: 'done' } })
+    // 有实例节点点击 → agent 语义（末位实例——宿主接 AgentStreamDrawer.openAgent）
+    const done = mountOverlay({
+      dag: SAMPLE_DAG,
+      nodeStates: { n1: 'done' },
+      instancesByNode: new Map([['n1', [{ id: 3, agent: 'gate-a', status: 'done', sessionId: 's1' }]]]),
+    })
     await done.find('[data-testid="wfvz-dag-node-n1"]').trigger('pointerdown')
     await done.find('[data-testid="wfvz-dag-node-n1"]').trigger('pointerup')
-    expect(done.emitted('select')).toBeUndefined()
+    expect(done.emitted('select')?.[0]?.[0]).toEqual({ semantic: 'agent', callId: 3 })
   })
 
   it('body 纵向两段（D1 观察者形态）：上区 DAG flex-[1.6] + 下区 dock flex-1，无左右分栏中缝', () => {

@@ -1950,11 +1950,27 @@ describe('WorkflowVizDag 画布（黑盒 DOM）', () => {
     expect(wrapper.find('[data-testid="wfvz-dag-cluster-gate"]').attributes('data-active')).toBeUndefined()
   })
 
-  it('agent 节点点击 no-op（[2026-10-19] agent 钻取语义删除——节点纯展示，钻取入口 = 实例 trace 行）', async () => {
+  it('有实例节点点击 = agent 语义·末位实例（[2026-11-08] 图上钻取恢复——点抽象名打开/切回该 agent 对话流 tab）', async () => {
+    const wrapper = mountDag(sampleDag(), {
+      nodeStates: { 'n-biz': 'done' },
+      instancesByNode: new Map([
+        ['n-biz', [
+          { id: 7, agent: 'reviewer-biz-a', status: 'done' },
+          { id: 12, agent: 'reviewer-biz-b', status: 'done' },
+        ]],
+      ]),
+    })
+    await wrapper.find('[data-testid="wfvz-dag-node-n-biz"]').trigger('pointerdown')
+    await wrapper.find('[data-testid="wfvz-dag-node-n-biz"]').trigger('pointerup')
+    // 多实例调用点取末位实例（taskIndex 最大——「最近一次」）
+    expect(wrapper.emitted('select')?.[0]?.[0]).toEqual({ semantic: 'agent', callId: 12 })
+  })
+
+  it('挂接映射未就绪（instancesByNode 缺省）的有实例节点点击 = phase 语义兜底（零实例路由）', async () => {
     const wrapper = mountDag(sampleDag(), { nodeStates: { 'n-biz': 'done' } })
     await wrapper.find('[data-testid="wfvz-dag-node-n-biz"]').trigger('pointerdown')
     await wrapper.find('[data-testid="wfvz-dag-node-n-biz"]').trigger('pointerup')
-    expect(wrapper.emitted('select')).toBeUndefined()
+    expect(wrapper.emitted('select')?.[0]?.[0]).toEqual({ semantic: 'phase', phase: 'review' })
   })
 
   it('pending 节点点击 = phase 语义（零实例、无对话可看）', async () => {
@@ -2492,7 +2508,7 @@ describe('WorkflowVizDag 执行实例行（实际 agent 画进图；方案 C 三
     expect(wrapper.find('[data-testid="wfvz-dag-instance-3"] circle').classes()).toContain('fill-[var(--danger)]')
   })
 
-  it('实例行点击 no-op（[2026-10-19] agent 钻取入口收归实例 trace 行——实例行纯展示）', async () => {
+  it('实例小卡点击 = agent 语义·该实例（[2026-11-08] 图上钻取恢复——等同 trace 行点击，打开/切回该实例对话流）', async () => {
     const wrapper = mountDag(sampleDag(), {
       nodeStates: { 'n-sec': 'running' },
       instancesByNode: new Map([
@@ -2501,7 +2517,7 @@ describe('WorkflowVizDag 执行实例行（实际 agent 画进图；方案 C 三
     })
     await wrapper.find('[data-testid="wfvz-dag-instance-9"]').trigger('pointerdown')
     await wrapper.find('[data-testid="wfvz-dag-instance-9"]').trigger('pointerup')
-    expect(wrapper.emitted('select')).toBeUndefined()
+    expect(wrapper.emitted('select')?.[0]?.[0]).toEqual({ semantic: 'agent', callId: 9 })
   })
 })
 

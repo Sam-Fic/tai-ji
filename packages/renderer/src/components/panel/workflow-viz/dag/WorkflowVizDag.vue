@@ -149,7 +149,8 @@
           >{{ truncate(le.edge.predicate ?? '', PREDICATE_MAX_CHARS) }}</text>
         </g>
 
-        <!-- 节点卡片（per-node 边界：单节点渲染失败 = 占位错误态，不挂整画布）；
+        <!-- 节点卡片（per-node 边界：单节点渲染失败 = 占位错误态，不挂整画布；
+             实例小卡/有实例节点可点击钻取 agent 对话流——routeClick 注释）；
              data-stop-tone 同值绑外层与节点卡片根（测试观察锚点，非 CSS 选择器——
              着色由节点卡片 tone computed 整组切换 Tailwind 类） -->
         <g
@@ -257,11 +258,11 @@ const EDGE_KIND_CLASS: Record<WorkflowDagEdgeKind, string> = {
 }
 
 /** 画布点阵背景（demo graph-scroll 同款形态：1px 点 × 18px 网格，2026-11-08 用户
- *  裁决）：点色经 color-mix 从 --neutral-fg 派生（暗族白点微亮 / 亮族墨点微暗，六主题
- *  自动跟随），行内 style 而非 Tailwind 任意值类（radial-gradient 含逗号的任意值类
- *  挂 JIT 生成风险）。 */
+ *  裁决；同日对比度复审 4% → 9%——surface-2 亮底上 4% 与底色过近不可辨）：点色经
+ *  color-mix 从 --neutral-fg 派生（暗族白点 / 亮族墨点，六主题自动跟随），行内
+ *  style 而非 Tailwind 任意值类（radial-gradient 含逗号的任意值类挂 JIT 生成风险）。 */
 const DAG_DOTGRID_STYLE = {
-  backgroundImage: 'radial-gradient(circle at 1px 1px, color-mix(in oklch, var(--neutral-fg) 4%, transparent) 1px, transparent 0)',
+  backgroundImage: 'radial-gradient(circle at 1px 1px, color-mix(in oklch, var(--neutral-fg) 9%, transparent) 1px, transparent 0)',
   backgroundSize: '18px 18px',
 } as const
 const CLUSTER_TITLE_INSET = 12
@@ -351,23 +352,35 @@ const {
 })
 
 /**
- * 点击路由（[2026-10-19] agent 钻取语义删除——节点/实例行不再开 agent 详情，归宿 =
- * 下方实例 trace 行）：节点按渲染态分语义——pending（运行中零实例）与 skipped（run
- * 终局后零实例）同为「零实例、无对话可看」，点击开所属 phase tab（设计 §3.1-2 点击
- * 行为边界）；其余态节点与实例行 no-op（纯展示）；phase 分区点击开 phase tab。
+ * 点击路由（[2026-11-08 用户裁决] 图上点击钻取恢复——推翻 [2026-10-19] 收编裁决，
+ * trace 行入口并存）：实例小卡点击 = 'agent'（等同 trace 行点击，打开/切回该实例
+ * 对话流）；调用点卡片按实例挂接分语义——有实例（挂接映射就绪且非空）= 'agent'
+ * （末位实例，「点抽象名切回该 agent」——历史点过的 tab 重开激活）；零实例
+ * （pending 运行中 / skipped 终局后）= 'phase'（无对话可看，开所属 phase tab）；
+ * phase 分区点击开 phase tab。占位卡（0 实例）无 data-wfvz-instance，落节点分支。
  */
 function routeClick(target: EventTarget | null): void {
   const el = target as Element | null
   if (!el || typeof (el as Element).closest !== 'function') return
+  const instanceEl = (el as Element).closest('[data-wfvz-instance]')
+  if (instanceEl) {
+    const callId = Number(instanceEl.getAttribute('data-wfvz-instance'))
+    if (Number.isFinite(callId)) emit('select', { semantic: 'agent', callId })
+    return
+  }
   const nodeEl = (el as Element).closest('[data-wfvz-node]')
   if (nodeEl) {
     const id = nodeEl.getAttribute('data-wfvz-node') ?? ''
     const node = props.dag?.nodes.find((n) => n.id === id)
     if (!node) return
-    const state = nodeState(id)
-    if (state === 'pending' || state === 'skipped') {
-      emit('select', { semantic: 'phase', phase: node.phase })
+    const instances = props.instancesByNode?.get(id)
+    if (instances !== undefined && instances.length > 0) {
+      // 末位实例（taskIndex 最大——「最近一次」语义；AgentStreamDrawer.openAgent
+      // 对已开 tab 仅激活，实现「再点切回」）
+      emit('select', { semantic: 'agent', callId: instances[instances.length - 1].id })
+      return
     }
+    emit('select', { semantic: 'phase', phase: node.phase })
     return
   }
   const clusterEl = (el as Element).closest('[data-wfvz-cluster]')

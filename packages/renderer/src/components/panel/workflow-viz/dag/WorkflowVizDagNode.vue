@@ -21,8 +21,9 @@
   不伪造运行名。全动态名（静态段拼空）兜底原样保留 `${…}`（warn 色标识「还不是
   运行名」）；全通配 `*`（description 非静态）原样展示；完整模板名悬停可见。
 
-  实例小卡 data-wfvz-instance 锚点保留为测试观察锚（非交互语义）：[2026-10-19]
-  agent 钻取入口收归实例 trace 行，节点/实例卡点击不上抛 callId。
+  实例小卡可点击（[2026-11-08 用户裁决] 图上钻取恢复，推翻 [2026-10-19] 收编）：
+  data-wfvz-instance 承载点击路由（画布 routeClick 上抛 agent 语义，等同 trace 行
+  点击打开/切回该实例对话流）；tab 锚（data-testid）保留。
 
   检查：node prop 违约（缺失 / id 非法）时 fail-fast throw——本组件渲染抛错由外层
   WorkflowVizDagNodeGuard（errorCaptured 节点级边界）捕获并渲染占位错误态，不挂
@@ -69,6 +70,7 @@
     <g
       v-for="(call, i) in instances ?? []"
       :key="call.id"
+      class="cursor-pointer"
       :data-testid="`wfvz-dag-instance-${call.id}`"
       :data-wfvz-instance="call.id"
       :data-state="call.status"

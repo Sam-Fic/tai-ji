@@ -334,6 +334,12 @@
           <ViewHost :view-id="SCHEDULER_MODAL_VIEW_ID" :scope="{ kind: 'session', sessionId: schedulerSessionId ?? '' }" empty="hidden" />
         </div>
       </template>
+
+      <!-- agent 对话流抽屉挂载位（[2026-11-08 载体裁决：抽屉属 overlay 内部——absolute
+           贴壳右缘、随壳 overflow-hidden 裁剪，不再 fixed 贴视口呈「全局 drawer」观感）：
+           宿主填 AgentStreamDrawer（抽屉失败边界由宿主侧 DrawerGuard 包住，不进 D10 壳
+           回落链）；absolute 层不占 body 布局流 -->
+      <slot name="agent-drawer" />
   </OverlayShell>
 </template>
 
