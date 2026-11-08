@@ -37,7 +37,7 @@
  *   细道折返；自环边（from===to）画不出合法的四中点正交环，不产出几何。
  * 折点处用小半径圆弧过渡（视觉圆角，路由仍严格轴对齐）。
  */
-import type { WorkflowDag, WorkflowDagNode } from '@taiji/shared'
+import type { WorkflowDag, WorkflowDagNode, WorkflowDagPhase } from '@taiji/shared'
 
 /** 节点卡片尺寸（px，画布坐标系）。 */
 export const DAG_NODE_W = 156
@@ -261,53 +261,66 @@ export function predicateBadgeWidth(predicate: string): number {
  * 画布取最小占位尺寸——渲染层出空画布 + 居中摘要提示（设计 §3.1-3，提示由画布组件
  * 渲染，不归布局）。
  */
-export function layoutDag(dag: WorkflowDag, nodeZones: DagNodeZoneMap = new Map()): DagLayout {
-  // 分区清单（order 升序）；防御：节点归属分区缺失时动态补尾部分区（节点不丢弃）
-  const phaseOrder = new Map<string, number>()
-  const orderedPhases = [...dag.phases].sort((a, b) => a.order - b.order)
-  orderedPhases.forEach((p) => phaseOrder.set(p.name, p.order))
-
-  const missing = new Set<string>()
-  for (const node of dag.nodes) {
-    if (!phaseOrder.has(node.phase)) missing.add(node.phase)
-  }
-  let nextOrder = orderedPhases.length
-  for (const phase of [...missing].sort(lexicalCompare)) {
-    phaseOrder.set(phase, nextOrder)
-    orderedPhases.push({ name: phase, order: nextOrder })
+/**
+ * 分区清单展开（order 升序）+ 缺失分区防御补全：节点归属分区不在 phases 清单时
+ * 动态补尾部分区（词法序），节点不丢弃。返回补全后的有序分区清单。
+ */
+function expandPhases(dag: WorkflowDag): WorkflowDagPhase[] {
+  const known = new Set(dag.phases.map((p) => p.name))
+  const ordered = [...dag.phases].sort((a, b) => a.order - b.order)
+  const missing = [...new Set(dag.nodes.map((n) => n.phase).filter((p) => !known.has(p)))].sort(lexicalCompare)
+  let nextOrder = ordered.length
+  for (const phase of missing) {
+    ordered.push({ name: phase, order: nextOrder })
     nextOrder += 1
   }
+  return ordered
+}
 
-  // 分区内节点按词法序分组
+/**
+ * 分区内节点分组：phase 名 → 成员清单（组内按 templateName 词法序、同名词法 id 兜底）。
+ */
+function groupNodesByPhase(dag: WorkflowDag): Map<string, WorkflowDagNode[]> {
   const byPhase = new Map<string, WorkflowDagNode[]>()
   for (const node of dag.nodes) {
     const list = byPhase.get(node.phase) ?? []
     list.push(node)
     byPhase.set(node.phase, list)
   }
-  for (const [phase, list] of byPhase) {
+  for (const list of byPhase.values()) {
     list.sort((a, b) => lexicalCompare(a.templateName, b.templateName) || lexicalCompare(a.id, b.id))
-    byPhase.set(phase, list)
   }
+  return byPhase
+}
 
-  // 可见列序（空 default 消隐后）：phase → 列序（0 起），供相邻列条件边的列距自适应查
+/** 空分区判据（空 default 消隐 = 方案 C；非 default 空分区保留为纯脚本段）。 */
+function isHiddenEmptyPhase(name: string, members: WorkflowDagNode[] | undefined): boolean {
+  return (members?.length ?? 0) === 0 && name === DEFAULT_PHASE_NAME
+}
+
+/**
+ * 可见列序映射：phase → 列序（0 起，空 default 消隐后），供相邻列条件边的列距自适应查。
+ */
+function computeVisibleColOfPhase(
+  orderedPhases: WorkflowDagPhase[],
+  byPhase: Map<string, WorkflowDagNode[]>,
+): Map<string, number> {
   const visibleColOfPhase = new Map<string, number>()
   let visibleCol = 0
   for (const phase of orderedPhases) {
-    const members = byPhase.get(phase.name) ?? []
-    if (members.length === 0 && phase.name === DEFAULT_PHASE_NAME) continue
+    if (isHiddenEmptyPhase(phase.name, byPhase.get(phase.name))) continue
     visibleColOfPhase.set(phase.name, visibleCol)
     visibleCol += 1
   }
-  const colOfNode = new Map<string, number>()
-  for (const node of dag.nodes) {
-    const col = visibleColOfPhase.get(node.phase)
-    if (col !== undefined) colOfNode.set(node.id, col)
-  }
+  return visibleColOfPhase
+}
 
-  // 相邻列间的条件边谓词徽章需要专属水平空间：该列距 = max(基础间距, 徽章宽 + 两侧
-  // 净距)——徽章骑线平铺在列间隙内不跨任何卡片（2026-11-08 用户裁决；同列/跳列
-  // 条件边不占间隙，徽章走分区头徽章带）
+/**
+ * 相邻列间的条件边谓词徽章列距自适应：列序对（左列序 → 额外间距需求）。该列距 =
+ * max(基础间距, 徽章宽 + 两侧净距)——徽章骑线平铺在列间隙内不跨任何卡片
+ *（2026-11-08 用户裁决；同列/跳列条件边不占间隙，徽章走分区头徽章带）。
+ */
+function computeGapExtra(dag: WorkflowDag, colOfNode: Map<string, number>): Map<number, number> {
   const gapExtra = new Map<number, number>()
   for (const edge of dag.edges) {
     if (edge.kind !== 'conditional' || edge.predicate === undefined) continue
@@ -320,6 +333,19 @@ export function layoutDag(dag: WorkflowDag, nodeZones: DagNodeZoneMap = new Map(
     const needed = predicateBadgeWidth(edge.predicate) + PREDICATE_BADGE_CLEARANCE * HALF - CLUSTER_PAD_X * HALF
     gapExtra.set(between, Math.max(gapExtra.get(between) ?? 0, needed))
   }
+  return gapExtra
+}
+
+export function layoutDag(dag: WorkflowDag, nodeZones: DagNodeZoneMap = new Map()): DagLayout {
+  const orderedPhases = expandPhases(dag)
+  const byPhase = groupNodesByPhase(dag)
+  const visibleColOfPhase = computeVisibleColOfPhase(orderedPhases, byPhase)
+  const colOfNode = new Map<string, number>()
+  for (const node of dag.nodes) {
+    const col = visibleColOfPhase.get(node.phase)
+    if (col !== undefined) colOfNode.set(node.id, col)
+  }
+  const gapExtra = computeGapExtra(dag, colOfNode)
 
   const clusters: DagLayoutCluster[] = []
   const nodes: DagLayoutNode[] = []
@@ -330,7 +356,7 @@ export function layoutDag(dag: WorkflowDag, nodeZones: DagNodeZoneMap = new Map(
     const members = byPhase.get(phase.name) ?? []
     // 空 default 分区消隐（方案 C）：重归属后无归属节点的缺省兜底分区不占列——
     // 有节点（未触发零实例调用点）时如实保留，非 default 空分区保留为纯脚本段
-    if (members.length === 0 && phase.name === DEFAULT_PHASE_NAME) continue
+    if (isHiddenEmptyPhase(phase.name, members)) continue
     if (visibleOrder > 0) cursorX += Math.max(CLUSTER_GAP_X, gapExtra.get(visibleOrder - 1) ?? 0)
     const { cluster, placed } = layoutCluster(phase.name, visibleOrder + 1, members, cursorX, nodeZones)
     clusters.push(cluster)
