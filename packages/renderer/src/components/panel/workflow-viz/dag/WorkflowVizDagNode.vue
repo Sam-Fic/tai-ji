@@ -1,23 +1,26 @@
 <!--
   WorkflowVizDagNode —— DAG 画布的单节点卡片内容（SVG 子组件，方案 C 三层结构）。
 
-  只承担调用点卡片形态渲染：中性状态点 + 调用点模板名（变量段 ${…} warn 高亮）+
-  元信息行（调用点 · n 实例[ · k 失败] / 未触发 · L<行号>）+ 实例行区（主体下方逐行：
-  ≥1 实例每实例一行带状态点；0 实例一行「未触发 · 0 实例」占位）。
+  只承担调用点主体卡片与其实例小卡的形态渲染（方案 C demo §3.3/§6 形态）：主体框
+  恒高 DAG_NODE_H（44，实边框 + surface-2 亮底浮在分区暗底上）承载中性状态点 +
+  调用点模板名（变量段 ${…} warn 高亮）+ 元信息行（调用点 · n 实例[ · k 失败] /
+  未触发 · L<行号>）；实例小卡画在主体框之外下方（独立 rect 边框卡：≥1 实例每实例
+  一张，done/failed 状态染边框 + 状态点 + 真实 agent 名；0 实例一张虚线占位卡
+  「未触发 · 0 实例」，不伪造运行名）。
 
-  卡片中性化（方案 C §3.2/§9.1 裁决）：调用点是静态结构，状态语义归实例行承载——
-  实例失败/完成只染对应实例行的点，不染调用点卡片（消除「一个实例失败整个调用点
-  红边红点」的污染）；skipped（run 终局后零实例）保留淡化虚线形态，pending 与
-  有实例态均为中性实线。run 级停止叠加（stopTone）作用于在途实例行（dotTone），
-  卡片无状态可叠加。data-state 属性仍承载节点七态派生值（测试观察锚点，非着色源）。
+  卡片中性化（方案 C §3.2/§9.1 裁决）：调用点是静态结构，状态语义归实例小卡承载——
+  实例失败/完成只染对应实例小卡的边框与点，不染调用点主体（消除「一个实例失败整个
+  调用点红边红点」的污染）；skipped（run 终局后零实例）保留淡化虚线形态，pending 与
+  有实例态均为中性实线。run 级停止叠加（stopTone）作用于在途实例小卡点（dotTone），
+  主体无状态可叠加。data-state 属性仍承载节点七态派生值（测试观察锚点，非着色源）。
 
   命名规则（方案 C §4）：标题恒为调用点模板名——单实例不再替换标题（保留「这是
-  调用点」的结构信息，真实 agent 名在下方实例行）；多实例逐行展开；0 实例不伪造
+  调用点」的结构信息，真实 agent 名在下方实例小卡）；多实例逐卡展开；0 实例不伪造
   运行名。模板名变量段 = u1 解析器合成标记 `${…}`（非源码原文），warn 色标识
   「还不是运行名」；全通配 `*`（description 非静态）原样展示。
 
-  实例行 data-wfvz-instance 锚点保留为测试观察锚（非交互语义）：[2026-10-19]
-  agent 钻取入口收归实例 trace 行，节点/实例行点击不上抛 callId。
+  实例小卡 data-wfvz-instance 锚点保留为测试观察锚（非交互语义）：[2026-10-19]
+  agent 钻取入口收归实例 trace 行，节点/实例卡点击不上抛 callId。
 
   检查：node prop 违约（缺失 / id 非法）时 fail-fast throw——本组件渲染抛错由外层
   WorkflowVizDagNodeGuard（errorCaptured 节点级边界）捕获并渲染占位错误态，不挂
@@ -35,12 +38,12 @@
     :data-stop-tone="stopTone ?? undefined"
   >
     <rect
-      :class="['fill-[var(--surface)] [rx:var(--radius-sm)] transition-[stroke] duration-[var(--duration-fast)] ease-[var(--ease)]', rectTone]"
+      :class="['fill-surface-2 [rx:var(--radius-sm)] transition-[stroke] duration-[var(--duration-fast)] ease-[var(--ease)]', rectTone]"
       :width="DAG_NODE_W"
-      :height="height"
+      :height="DAG_NODE_H"
     />
     <circle
-      class="stroke-[var(--surface)] [stroke-width:1.5] fill-[var(--neutral-dim)] transition-[fill] duration-[var(--duration-fast)] ease-[var(--ease)]"
+      class="stroke-surface-2 [stroke-width:1.5] fill-[var(--neutral-dim)] transition-[fill] duration-[var(--duration-fast)] ease-[var(--ease)]"
       :cx="DOT_CX"
       :cy="DOT_CY"
       r="4"
@@ -57,7 +60,9 @@
       <title>{{ metaText }}</title>
       {{ truncate(metaText, META_MAX_CHARS) }}
     </text>
-    <!-- 实例行区：≥1 实例逐行（状态点归实例行——卡片本体中性）；0 实例一行占位。
+    <!-- 实例小卡区（主体框之外下方，方案 C demo §3.3）：≥1 实例每实例一张独立边框卡
+         （done/failed 状态染边 + 状态点归实例卡）；0 实例一张虚线占位卡。几何常量与
+         layout.instanceZoneHeight 同源口径（高度表由画布按实例数派生传入布局）。
          data-wfvz-instance = 测试观察锚，非交互语义——agent 钻取已收归 trace 行 -->
     <g
       v-for="(call, i) in instances ?? []"
@@ -66,16 +71,23 @@
       :data-wfvz-instance="call.id"
       :data-state="call.status"
     >
+      <rect
+        :class="['fill-[var(--surface)] [rx:3] transition-[stroke] duration-[var(--duration-fast)] ease-[var(--ease)]', chipEdgeTone(call.status)]"
+        :x="INSTANCE_CHIP_INSET_X"
+        :y="chipTopY(i)"
+        :width="DAG_NODE_W - INSTANCE_CHIP_INSET_X"
+        :height="INSTANCE_CHIP_H"
+      />
       <circle
         :class="['transition-[fill] duration-[var(--duration-fast)] ease-[var(--ease)]', dotTone(call.status, stopTone)]"
-        :cx="DOT_CX"
-        :cy="instanceRowCenterY(i)"
+        :cx="INSTANCE_CHIP_DOT_CX"
+        :cy="chipCenterY(i)"
         r="3"
       />
       <text
         class="text-[length:var(--text-3xs)] font-mono fill-[var(--neutral-mid)]"
-        :x="INSTANCE_LABEL_X"
-        :y="instanceRowBaselineY(i)"
+        :x="INSTANCE_CHIP_LABEL_X"
+        :y="chipLabelBaselineY(i)"
       >
         <title>{{ call.agent }}</title>
         {{ truncate(call.agent, INSTANCE_NAME_MAX_CHARS) }}
@@ -86,16 +98,17 @@
       :data-testid="`wfvz-dag-placeholder-${node.id}`"
       data-wfvz-placeholder="true"
     >
-      <circle
-        class="fill-[var(--neutral-dim)] opacity-60"
-        :cx="DOT_CX"
-        :cy="instanceRowCenterY(0)"
-        r="3"
+      <rect
+        class="fill-transparent stroke-[var(--border-strong)] [stroke-dasharray:3_3] [rx:3]"
+        :x="INSTANCE_CHIP_INSET_X"
+        :y="placeholderTopY"
+        :width="DAG_NODE_W - INSTANCE_CHIP_INSET_X"
+        :height="INSTANCE_PLACEHOLDER_H"
       />
       <text
         class="text-[length:var(--text-3xs)] font-mono fill-[var(--neutral-faint)]"
-        :x="INSTANCE_LABEL_X"
-        :y="instanceRowBaselineY(0)"
+        :x="INSTANCE_CHIP_LABEL_X"
+        :y="placeholderLabelBaselineY"
       >{{ t('panel.workflowViz.callPointPlaceholder') }}</text>
     </g>
   </g>
@@ -105,7 +118,15 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { WorkflowAgentCall, WorkflowDagNode } from '@taiji/shared'
-import { DAG_NODE_H, DAG_NODE_W, INSTANCE_ROW_H, dagNodeHeight } from './layout'
+import {
+  DAG_NODE_H,
+  DAG_NODE_W,
+  INSTANCE_CHIP_GAP,
+  INSTANCE_CHIP_H,
+  INSTANCE_CHIP_INSET_X,
+  INSTANCE_PLACEHOLDER_H,
+  INSTANCE_ZONE_TOP_GAP,
+} from './layout'
 import { dotTone } from './tone'
 import type { WorkflowVizDagNodeStatus, WorkflowVizDagStopTone } from './types'
 
@@ -120,26 +141,28 @@ const props = defineProps<{
 const { t } = useI18n()
 
 const DOT_CX = 14
-/** 状态点纵向锚定标题行（与原形态一致；增高节点不随行区漂移）。 */
+/** 状态点纵向锚定标题行（与原形态一致；实例卡在主体之外不随行区漂移）。 */
 const DOT_CY = 22
 const LABEL_X = 26
 const TITLE_BASELINE_Y = 20
 const META_BASELINE_Y = 34
-const INSTANCE_LABEL_X = 24
 /** 标题最大字符数（超出按段截断 + 省略号；全名经 <title> 悬停可见）。 */
 const NAME_MAX_CHARS = 18
-/** 实例名最大字符数（行内 mono 小字，节点宽 156 内容纳）。 */
+/** 实例名最大字符数（卡内 mono 小字，卡宽 148 内容纳）。 */
 const INSTANCE_NAME_MAX_CHARS = 20
 /** 元信息行最大字符数（全串经 <title> 悬停可见）。 */
 const META_MAX_CHARS = 26
-/** 标题基线到行中心的半行高（点与文字视觉对齐的固定修正量）。 */
+/** 文字基线到卡中心的半行高（点与文字视觉对齐的固定修正量）。 */
 const TEXT_CENTER_LIFT = 3
-/** 取半除数（行中心 = 行顶 + 行高/2；具名以过 no-magic-numbers）。 */
+/** 取半除数（卡中心 = 卡顶 + 卡高/2；具名以过 no-magic-numbers）。 */
 const HALF = 2
-/** 实例行区与节点主体的上间隙（px；与 layout.dagNodeHeight 同源口径）。 */
-const INSTANCE_ROWS_TOP_GAP = 4
-/** 模板名变量段标记长度（u1 解析器合成标记 `${…}` 的字符数，截断预算计入）。 */
-const VAR_MARKER_LENGTH = '${…}'.length
+/** 实例卡内状态点左缩进（chip 内相对 10——demo 同口径）。 */
+const INSTANCE_CHIP_DOT_INSET = 10
+/** 实例卡内文字左缩进（chip 内相对 18——demo 同口径）。 */
+const INSTANCE_CHIP_LABEL_INSET = 18
+/** 实例卡内状态点/文字的画布 x（chip 左缩进 + 卡内相对缩进——demo 同口径）。 */
+const INSTANCE_CHIP_DOT_CX = INSTANCE_CHIP_INSET_X + INSTANCE_CHIP_DOT_INSET
+const INSTANCE_CHIP_LABEL_X = INSTANCE_CHIP_INSET_X + INSTANCE_CHIP_LABEL_INSET
 
 // fail-fast 检查：prop 违约即抛（布局产物正常不可达；防御脏数据以占位错误态显形
 // 而非静默渲染空卡）。抛出点被父层 WorkflowVizDagNodeGuard 捕获。
@@ -147,8 +170,36 @@ if (!props.node || typeof props.node.id !== 'string' || props.node.id === '') {
   throw new Error('[WorkflowVizDagNode] node prop 违约：缺失或 id 非法')
 }
 
-/** 节点高度（与布局同表：dagNodeHeight 按实例数派生——0 实例含占位行）。 */
-const height = computed(() => dagNodeHeight(props.instances?.length ?? 0))
+/**
+ * 实例小卡边框着色（方案 C demo §3.3「失败态只染实例卡」）：done/failed 状态染
+ * 对应状态线 token（35% 透明描边档），其余（running/retrying/pending/cancelled）
+ * 中性边框——状态语义归实例卡，主体框恒中性。
+ */
+function chipEdgeTone(status: WorkflowAgentCall['status']): string {
+  if (status === 'done') return 'stroke-[var(--success-ring)]'
+  if (status === 'failed') return 'stroke-[var(--danger-ring)]'
+  return 'stroke-[var(--border)]'
+}
+
+/** 第 i 张（0-based）实例小卡的顶部 y（主体底 + 上间隙 + 步进 i×(卡高+卡间距)）。 */
+function chipTopY(i: number): number {
+  return DAG_NODE_H + INSTANCE_ZONE_TOP_GAP + i * (INSTANCE_CHIP_H + INSTANCE_CHIP_GAP)
+}
+
+/** 第 i 张实例小卡的视觉中心 y（状态点锚）与文字基线 y。 */
+function chipCenterY(i: number): number {
+  return chipTopY(i) + INSTANCE_CHIP_H / HALF
+}
+function chipLabelBaselineY(i: number): number {
+  return chipCenterY(i) + TEXT_CENTER_LIFT
+}
+
+/** 0 实例占位卡的顶部 y 与文字基线（卡高 18）。 */
+const placeholderTopY = DAG_NODE_H + INSTANCE_ZONE_TOP_GAP
+const placeholderLabelBaselineY = placeholderTopY + INSTANCE_PLACEHOLDER_H / HALF + TEXT_CENTER_LIFT
+
+/** 模板名变量段标记长度（u1 解析器合成标记 `${…}` 的字符数，截断预算计入）。 */
+const VAR_MARKER_LENGTH = '${…}'.length
 
 /**
  * 标题分段（方案 C §4）：模板名按变量段标记 `${…}` 拆为字面/变量段序列，变量段
@@ -185,12 +236,12 @@ const titleParts = computed<Array<{ text: string; variable: boolean }>>(() => {
   return out.length > 0 ? out : [{ text: '…', variable: false }]
 })
 
-/** 失败实例计数（元信息行的「k 失败」段来源；卡片本体不染失败色）。 */
+/** 失败实例计数（元信息行的「k 失败」段来源；主体不染失败色）。 */
 const failedCount = computed(() => props.instances?.filter((c) => c.status === 'failed').length ?? 0)
 
 /**
  * 元信息行（方案 C §3.2）：调用点身份 + 实例计数（含失败计数文字化——状态归实例
- * 行后，卡片层的失败信息以文字承载）+ 行号定位。
+ * 小卡后，主体层的失败信息以文字承载）+ 行号定位。
  */
 const metaText = computed(() => {
   const count = props.instances?.length ?? 0
@@ -202,22 +253,14 @@ const metaText = computed(() => {
 })
 
 /**
- * 卡片描边（中性化两分支）：skipped（run 终局后零实例）虚线 + 底色淡化；其余
- * （pending / 有实例各态）中性实线——实例状态不染卡片（方案 C §9.1 裁决）。
+ * 主体描边（中性化两分支）：skipped（run 终局后零实例）虚线 + 底色淡化；其余
+ * （pending / 有实例各态）中性实线——实例状态不染主体（方案 C §9.1 裁决）。
  */
 const rectTone = computed(() =>
   props.status === 'skipped'
     ? 'stroke-[var(--neutral-dim)] [stroke-dasharray:4_3] fill-[var(--surface-hover)]'
     : 'stroke-[var(--neutral-dim)]',
 )
-
-/** 第 i 行（0-based）的视觉中心 y 与文字基线 y（行区紧贴节点主体下方）。 */
-function instanceRowCenterY(i: number): number {
-  return DAG_NODE_H + INSTANCE_ROWS_TOP_GAP + INSTANCE_ROW_H / HALF + i * INSTANCE_ROW_H
-}
-function instanceRowBaselineY(i: number): number {
-  return instanceRowCenterY(i) + TEXT_CENTER_LIFT
-}
 
 function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text

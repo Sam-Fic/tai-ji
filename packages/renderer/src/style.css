@@ -100,6 +100,10 @@
   --success-soft: color-mix(in oklch, var(--success) 12%, transparent);
   --danger-soft: color-mix(in oklch, var(--danger) 12%, transparent);
   --warn-soft: color-mix(in oklch, var(--warn) 14%, transparent);
+  /* 状态件描边档（方案 C demo §3.3 实例小卡状态染边——demo done/failed 卡边 32%/36%
+     透明线）：color-mix 派生自基色，preset 块覆盖基色即自动适配六主题，无需重声明 */
+  --success-ring: color-mix(in oklch, var(--success) 35%, transparent);
+  --danger-ring: color-mix(in oklch, var(--danger) 35%, transparent);
 
   /* ── 字体 ─────────────────────────────────────────────────
      两层结构（font-system D8）：槽位 --font-ui / --font-mono-ui 由 applySystemToDom 写入

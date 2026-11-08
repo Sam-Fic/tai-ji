@@ -29,14 +29,18 @@ import {
   deriveNodeStatus,
 } from '../gantt-segments'
 import { normalizeWorkflowScriptName } from '../run-name'
-import { layoutDag, layoutEdges, computeFitTransform, dagNodeHeight, avoidObstructedChannelMid, DAG_NODE_W, DAG_NODE_H, INSTANCE_ROW_H, FIT_PAD_PX, ZOOM_MIN, LANE_STEP_PX } from '../dag/layout'
+import { layoutDag, computeFitTransform, instanceZoneHeight, DAG_NODE_W, DAG_NODE_H, INSTANCE_CHIP_H, INSTANCE_CHIP_GAP, INSTANCE_PLACEHOLDER_H, INSTANCE_ZONE_TOP_GAP, FIT_PAD_PX, ZOOM_MIN } from '../dag/layout'
+import { layoutEdges } from '../dag/layout-edges'
+import { avoidObstructedChannelMid, LANE_STEP_PX } from '../dag/routing-avoid'
 import WorkflowVizDag from '../dag/WorkflowVizDag.vue'
 import { dotTone } from '../dag/tone'
 import WorkflowVizOverlay from '../overlay/WorkflowVizOverlay.vue'
 import WorkflowVizGantt from '../gantt/WorkflowVizGantt.vue'
 import { buildGanttRows, computeGanttDomain, toPercent } from '../gantt/gantt-view'
 import type { WorkflowAgentCall, WorkflowDag, WorkflowDagNode, WorkflowRunRecord, WorkflowRunEventEntry, WorkflowGanttSegments } from '@taiji/shared'
-import type { DagLayout, DagLayoutEdge, DagLayoutNode, ChannelMember } from '../dag/layout'
+import type { DagLayout, DagLayoutNode } from '../dag/layout'
+import type { DagLayoutEdge } from '../dag/layout-edges'
+import type { ChannelMember } from '../dag/routing-avoid'
 import type { WorkflowVizDagNodeStatus } from '../dag/types'
 
 // ═══════════ 来源节：blueprint-match ═══════════
@@ -987,9 +991,10 @@ function buildRoutedCanvas(partial: Partial<WorkflowDag> = {}): {
   edges: DagLayoutEdge[]
 } {
   const d = dag(partial)
-  // 节点高钉基准高（方案 C 后 0 实例也含占位行 64px——路由用例的硬编码几何锚定在
-  // 44px 基准；高度派生由 nodeHeights 消费组单测覆盖，此处聚焦路由几何）
-  const layout = layoutDag(d, new Map(d.nodes.map((n) => [n.id, DAG_NODE_H])))
+  // 实例卡区钉 0（方案 C 后节点占位 = 主体 44 + 实例卡区 zoneH，缺省 zone 含 0 实例
+  // 占位卡 22px——路由用例的硬编码几何锚定在 44px 纯主体基准；卡区高度派生由
+  // instanceZoneHeight 消费组单测覆盖，此处聚焦路由几何）
+  const layout = layoutDag(d, new Map(d.nodes.map((n) => [n.id, 0])))
   return {
     d,
     layout,
@@ -998,9 +1003,9 @@ function buildRoutedCanvas(partial: Partial<WorkflowDag> = {}): {
   }
 }
 
-/** 全图最深节点底（loop-back 横行总线 y 的断言锚）。 */
+/** 全图最深节点底（loop-back 横行总线 y 的断言锚；含实例卡区——总线压在卡区之下）。 */
 function deepestBottomOf(layout: DagLayout): number {
-  return Math.max(...layout.nodes.map((ln) => ln.y + ln.h))
+  return Math.max(...layout.nodes.map((ln) => ln.y + ln.h + ln.zoneH))
 }
 
 /**
@@ -1099,7 +1104,8 @@ describe('layoutEdges 正交路由（白盒）', () => {
     const lb = geo.get('b')!
     const deepest = deepestBottomOf(layout)
     const [edge] = edges
-    expect(edge.points[0].y).toBe(lb.y + lb.h)
+    // 底锚 = 节点总占位底（主体 + 实例卡区——方案 C 后实例小卡在场，回边从最底元素下方走）
+    expect(edge.points[0].y).toBe(lb.y + lb.h + lb.zoneH)
     // 横行总线 y 压在全图最深节点底之下（busY = deepest + LOOP_DROP）
     const busY = edge.points[3].y
     expect(busY).toBeGreaterThan(deepest)
@@ -1129,15 +1135,16 @@ describe('layoutEdges 正交路由（白盒）', () => {
     expect(dropX).toBeLessThan(lf.x)
     // 总线仍压在全图最深节点底之下
     expect(edge.points[3].y).toBeGreaterThan(deepest)
-    // 贴边横行段下移进底边下方空隙带（回归锚定：旧实现横行段 y=节点底边，压边框）
+    // 贴边横行段下移进底边下方空隙带（回归锚定：旧实现横行段 y=节点底边，压边框；
+    // 底 = 主体 + 实例卡区）
     const fromLaneY = edge.points[1].y
-    expect(fromLaneY).toBeGreaterThan(lf.y + lf.h)
-    expect(fromLaneY).toBeLessThan(lf.y + lf.h + 12)
+    expect(fromLaneY).toBeGreaterThan(lf.y + lf.h + lf.zoneH)
+    expect(fromLaneY).toBeLessThan(lf.y + lf.h + lf.zoneH + 12)
     const toLaneY = edge.points[6].y
-    expect(toLaneY).toBeGreaterThan(lr1.y + lr1.h)
-    expect(toLaneY).toBeLessThan(lr1.y + lr1.h + 12)
+    expect(toLaneY).toBeGreaterThan(lr1.y + lr1.h + lr1.zoneH)
+    expect(toLaneY).toBeLessThan(lr1.y + lr1.h + lr1.zoneH + 12)
     // 终锚 = 目标底中心（细道上升 → 空隙带短横 → 底中点收锚）
-    expect(edge.points[7]).toEqual({ x: lr1.x + DAG_NODE_W / 2, y: lr1.y + lr1.h })
+    expect(edge.points[7]).toEqual({ x: lr1.x + DAG_NODE_W / 2, y: lr1.y + lr1.h + lr1.zoneH })
   })
 
   it('跨列 loop-back（两端下方无堆叠）：四折点直连，进出垂直于底边中点、节点附近无横行段', () => {
@@ -1150,10 +1157,10 @@ describe('layoutEdges 正交路由（白盒）', () => {
     const [edge] = edges
     // p1 列的 r1/r2 既非端点也不在端点列——两端中轴无遮挡 → 四折点直连
     expect(edge.points).toEqual([
-      { x: lf.x + DAG_NODE_W / 2, y: lf.y + lf.h },
+      { x: lf.x + DAG_NODE_W / 2, y: lf.y + lf.h + lf.zoneH },
       { x: lf.x + DAG_NODE_W / 2, y: deepest + 28 },
       { x: la.x + DAG_NODE_W / 2, y: deepest + 28 },
-      { x: la.x + DAG_NODE_W / 2, y: la.y + la.h },
+      { x: la.x + DAG_NODE_W / 2, y: la.y + la.h + la.zoneH },
     ])
     expectAxisAligned(edge.points)
   })
@@ -1247,26 +1254,29 @@ describe('layoutEdges 正交路由（白盒）', () => {
     const sideX = edge.points[2].x
     expect(sideX).toBeLessThan(la.x)
     expect(sideX).toBeGreaterThan(la.x - 12)
-    // 贴边横行段各自下移进所属节点底边下方空隙带（源 b 在下、目标 a 在上，不压边框）
+    // 贴边横行段各自下移进所属节点底边下方空隙带（源 b 在下、目标 a 在上，不压边框；
+    // 底 = 主体 + 实例卡区）
     const fromLaneY = edge.points[2].y
-    expect(fromLaneY).toBeGreaterThan(lb.y + lb.h)
-    expect(fromLaneY).toBeLessThan(lb.y + lb.h + 12)
+    expect(fromLaneY).toBeGreaterThan(lb.y + lb.h + lb.zoneH)
+    expect(fromLaneY).toBeLessThan(lb.y + lb.h + lb.zoneH + 12)
     const toLaneY = edge.points[3].y
-    expect(toLaneY).toBeGreaterThan(la.y + la.h)
-    expect(toLaneY).toBeLessThan(la.y + la.h + 12)
-    expect(edge.points[5]).toEqual({ x: la.x + DAG_NODE_W / 2, y: la.y + la.h })
+    expect(toLaneY).toBeGreaterThan(la.y + la.h + la.zoneH)
+    expect(toLaneY).toBeLessThan(la.y + la.h + la.zoneH + 12)
+    expect(edge.points[5]).toEqual({ x: la.x + DAG_NODE_W / 2, y: la.y + la.h + la.zoneH })
   })
 
-  it('连线锚点纪律：全部边首末折点只落在节点四条边的中点（4 个连线点）', () => {
+  it('连线锚点纪律：全部边首末折点只落在节点主体四边中点或总占位底中点（回边专用，4 个连线点）', () => {
     const { layout, geo, edges } = buildRoutedCanvas(crossColumnCanvas([
       { id: 'e-seq', from: 'a', to: 'r1', kind: 'sequence' },
       { id: 'e-df', from: 'r2', to: 'f', kind: 'dataflow' },
       { id: 'loop-x', from: 'f', to: 'r1', kind: 'loop-back' },
       { id: 'loop-same', from: 'r2', to: 'r1', kind: 'loop-back' },
     ]))
-    const midpoints = (ln: { x: number; y: number; h: number }) => [
+    // 锚点只取节点主体的四边中点（上/下/左/右）+ 总占位底中点（主体底+实例卡区，
+    // loop-back 进出锚专用——回边从实例小卡下方收锚不压卡）
+    const midpoints = (ln: { x: number; y: number; h: number; zoneH: number }) => [
       { x: ln.x + DAG_NODE_W / 2, y: ln.y },
-      { x: ln.x + DAG_NODE_W / 2, y: ln.y + ln.h },
+      { x: ln.x + DAG_NODE_W / 2, y: ln.y + ln.h + ln.zoneH },
       { x: ln.x, y: ln.y + ln.h / 2 },
       { x: ln.x + DAG_NODE_W, y: ln.y + ln.h / 2 },
     ]
@@ -1481,11 +1491,11 @@ describe('layoutEdges 通道竖线避让（残余 3，白盒）', () => {
     // 容纳 → 并线重评时 196 被 e1 seg3@132（p1 row2）挡、408 被 e1 seg1@70（p1 row1）
     // 挡 → 两走廊均非零穿卡 → 保持原车道 [166, 196, 226]
     const nodes: DagLayoutNode[] = [
-      { node: node({ id: 'src', phase: 'p0' }), x: 12, y: 48, h: 44 },
-      { node: node({ id: 'm0', phase: 'p1' }), x: 224, y: 48, h: 44 },
-      { node: node({ id: 'm2', phase: 'p1' }), x: 224, y: 110, h: 44 },
-      { node: node({ id: 'm3', phase: 'p1' }), x: 224, y: 172, h: 44 },
-      { node: node({ id: 'dst', phase: 'p2' }), x: 436, y: 48, h: 44 },
+      { node: node({ id: 'src', phase: 'p0' }), x: 12, y: 48, h: 44, zoneH: 0 },
+      { node: node({ id: 'm0', phase: 'p1' }), x: 224, y: 48, h: 44, zoneH: 0 },
+      { node: node({ id: 'm2', phase: 'p1' }), x: 224, y: 110, h: 44, zoneH: 0 },
+      { node: node({ id: 'm3', phase: 'p1' }), x: 224, y: 172, h: 44, zoneH: 0 },
+      { node: node({ id: 'dst', phase: 'p2' }), x: 436, y: 48, h: 44, zoneH: 0 },
     ]
     const members: ChannelMember[] = [
       { x1: 168, y1: 70, x2: 436, y2: 132, lo: 70, hi: 132, laneX: 166, fromId: 'src', toId: 'dst' },
@@ -1525,7 +1535,7 @@ describe('layoutEdges 同行直线边绕行（残余 5，白盒）', () => {
     expect(edge.labelX).toBe((edge.points[0].x + edge.points[3].x) / 2)
   })
 
-  it('无障碍同行边保持直线零扰动（labelX/labelY 现行公式不变）', () => {
+  it('无障碍同行边保持直线零扰动；谓词标注挂两端卡顶上方空档（不压卡片）', () => {
     const { geo, edges } = buildRoutedCanvas({
       phases: [
         { name: 'p0', order: 0 },
@@ -1535,17 +1545,23 @@ describe('layoutEdges 同行直线边绕行（残余 5，白盒）', () => {
         node({ id: 'a', phase: 'p0' }),
         node({ id: 'b', phase: 'p1' }),
       ],
-      edges: [{ id: 'e1', from: 'a', to: 'b', kind: 'sequence' }],
+      edges: [{ id: 'e1', from: 'a', to: 'b', kind: 'sequence', predicate: 'cond' }],
     })
+    const la = geo.get('a')!
+    const lb = geo.get('b')!
     const [edge] = edges
     expect(edge.points).toHaveLength(2)
     expect(edge.labelX).toBe((edge.points[0].x + edge.points[1].x) / 2)
-    expect(edge.labelY).toBe(edge.points[0].y)
+    // 直线水平段在两端卡主体中心（列间走廊 32px 容不下谓词文字）——标注挂两端卡
+    // 主体顶上方空档带（分区标题与首个节点之间的空档），middle 悬挂锚点中心
+    expect(edge.labelY).toBe(Math.min(la.y, lb.y) - 6)
+    expect(edge.labelAnchor).toBe('middle')
   })
 
   it('上方绕行带被高个节点覆盖 → 落到下方绕行带（近者规则的方向回退）', () => {
-    // a/f 在 row2（y=132），p2 的 m(row2) 是障碍；p1 的 th(row1) 加高到 [48,128]
-    // 覆盖上方带 110−12=98 → 回退下方 154+12=166（p1 无 row2 节点，无覆盖）
+    // a/f 在 row3（y=172，主体中心 194）；p2 的 m(row3) 是边的障碍；p1 的 th(zone=
+    // instanceZoneHeight(3)=88，盒 [48,180]) 覆盖上带 172−12=160 但不拦边（194>180）
+    // → 上带被覆盖（校验败）→ 回退下方 216+12=228（row3 下方无覆盖，可行）
     const canvas = dag({
       phases: [
         { name: 'p0', order: 0 },
@@ -1555,19 +1571,23 @@ describe('layoutEdges 同行直线边绕行（残余 5，白盒）', () => {
       ],
       nodes: [
         node({ id: 'p0f', templateName: 'a0', phase: 'p0' }),
-        node({ id: 'a', templateName: 'a1', phase: 'p0' }),
-        node({ id: 'th', phase: 'p1' }),
+        node({ id: 'am', templateName: 'a1', phase: 'p0' }),
+        node({ id: 'a', templateName: 'a2', phase: 'p0' }),
+        node({ id: 'th', templateName: 't0', phase: 'p1' }),
         node({ id: 'p2f', templateName: 'b0', phase: 'p2' }),
-        node({ id: 'm', templateName: 'b1', phase: 'p2' }),
+        node({ id: 'mm', templateName: 'b1', phase: 'p2' }),
+        node({ id: 'm', templateName: 'b2', phase: 'p2' }),
         node({ id: 'p3f', templateName: 'c0', phase: 'p3' }),
-        node({ id: 'f', templateName: 'c1', phase: 'p3' }),
+        node({ id: 'fm', templateName: 'c1', phase: 'p3' }),
+        node({ id: 'f', templateName: 'c2', phase: 'p3' }),
       ],
       edges: [{ id: 'e1', from: 'a', to: 'f', kind: 'dataflow' }],
     })
-    const layout = layoutDag(canvas, new Map([['th', dagNodeHeight(2)]]))
+    // 高个 th 按 3 实例增高卡区、其余钉 0（纯主体 44 盒——硬编码几何锚定基准）
+    const layout = layoutDag(canvas, new Map(canvas.nodes.map((n) => [n.id, n.id === 'th' ? instanceZoneHeight(3) : 0])))
     const lm = layout.nodes.find((ln) => ln.node.id === 'm')!
     const [edge] = layoutEdges(canvas, layout.nodes).filter((le) => le.edge.id === 'e1')
-    const yB = lm.y + lm.h + 12
+    const yB = lm.y + lm.h + lm.zoneH + 12
     expect(edge.points).toHaveLength(4)
     expect(edge.points[1].y).toBe(yB)
     expect(edge.points[2].y).toBe(yB)
@@ -1575,9 +1595,10 @@ describe('layoutEdges 同行直线边绕行（残余 5，白盒）', () => {
     expectAxisAligned(edge.points)
   })
 
-  it('上下绕行带均被覆盖 → 保持直线登记残留（现行直线公式不变）', () => {
-    // 同上图但 p1 增补 row2 节点 tm [146,190] 覆盖下方带 166 → 两方向均败 → 直线
-    const layout = layoutDag(dag({
+  it('上下绕行带均被覆盖 → 保持直线登记残留（谓词标注挂两端卡顶上方空档）', () => {
+    // 同上图但 p1 增补 tm（zone 同 88、th 增高后 tm 在 y=198，盒 [198,330]）覆盖下方带
+    // 228 → 两方向均败 → 直线残留
+    const canvas = dag({
       phases: [
         { name: 'p0', order: 0 },
         { name: 'p1', order: 1 },
@@ -1586,63 +1607,76 @@ describe('layoutEdges 同行直线边绕行（残余 5，白盒）', () => {
       ],
       nodes: [
         node({ id: 'p0f', templateName: 'a0', phase: 'p0' }),
-        node({ id: 'a', templateName: 'a1', phase: 'p0' }),
-        node({ id: 'th', phase: 'p1' }),
-        node({ id: 'tm', templateName: 'tb', phase: 'p1' }),
+        node({ id: 'am', templateName: 'a1', phase: 'p0' }),
+        node({ id: 'a', templateName: 'a2', phase: 'p0' }),
+        node({ id: 'th', templateName: 't0', phase: 'p1' }),
+        node({ id: 'tm', templateName: 't1', phase: 'p1' }),
         node({ id: 'p2f', templateName: 'b0', phase: 'p2' }),
-        node({ id: 'm', templateName: 'b1', phase: 'p2' }),
+        node({ id: 'mm', templateName: 'b1', phase: 'p2' }),
+        node({ id: 'm', templateName: 'b2', phase: 'p2' }),
         node({ id: 'p3f', templateName: 'c0', phase: 'p3' }),
-        node({ id: 'f', templateName: 'c1', phase: 'p3' }),
+        node({ id: 'fm', templateName: 'c1', phase: 'p3' }),
+        node({ id: 'f', templateName: 'c2', phase: 'p3' }),
       ],
       edges: [{ id: 'e1', from: 'a', to: 'f', kind: 'dataflow' }],
-      // 障碍节点按 2 实例增高、其余钉基准高（绕行带硬编码几何锚定 44px 基线——
-      // 方案 C 后缺省高含占位行，显式钉回防几何漂移）
-    }), new Map([
-      ['p0f', DAG_NODE_H],
-      ['a', DAG_NODE_H],
-      ['th', dagNodeHeight(2)],
-      ['tm', dagNodeHeight(2)],
-      ['p2f', DAG_NODE_H],
-      ['m', DAG_NODE_H],
-      ['p3f', DAG_NODE_H],
-      ['f', DAG_NODE_H],
-    ]))
-    const [edge] = layoutEdges(dag({
-      phases: layout.clusters.map((c, i) => ({ name: c.phase, order: i })),
-      nodes: layout.nodes.map((ln) => ln.node),
-      edges: [{ id: 'e1', from: 'a', to: 'f', kind: 'dataflow' }],
-    }), layout.nodes)
+    })
+    // 高个节点按 3 实例增高卡区、其余钉 0（纯主体 44 盒——硬编码几何锚定基准）
+    const layout = layoutDag(canvas, new Map(canvas.nodes.map((n) => [n.id, n.id === 'th' || n.id === 'tm' ? instanceZoneHeight(3) : 0])))
+    const la = layout.nodes.find((ln) => ln.node.id === 'a')!
+    const lf = layout.nodes.find((ln) => ln.node.id === 'f')!
+    const [edge] = layoutEdges(canvas, layout.nodes).filter((le) => le.edge.id === 'e1')
     expect(edge.points).toHaveLength(2)
-    expect(edge.labelY).toBe(edge.points[0].y)
+    // 直线残留：谓词标注挂两端卡主体顶上方空档带（列间走廊容不下谓词文字）
+    expect(edge.labelY).toBe(Math.min(la.y, lf.y) - 6)
     expect(edge.labelX).toBe((edge.points[0].x + edge.points[1].x) / 2)
+    expect(edge.labelAnchor).toBe('middle')
   })
 })
 
-describe('dagNodeHeight 节点高（实例数派生，方案 C：实例行区恒在场）', () => {
-  it('0 实例 = 基准高 + 行区（占位行一行）；1 实例同高（单实例也起行）', () => {
-    expect(dagNodeHeight(0)).toBe(DAG_NODE_H + INSTANCE_ROW_H + 4)
-    expect(dagNodeHeight(1)).toBe(DAG_NODE_H + INSTANCE_ROW_H + 4)
+describe('instanceZoneHeight 实例卡区高度（实例数派生，方案 C：实例 = 主体外独立小卡）', () => {
+  it('0 实例 = 上间隙 + 占位卡一行（虚线卡也占高——单实例同起一张独立小卡）', () => {
+    expect(instanceZoneHeight(0)).toBe(INSTANCE_ZONE_TOP_GAP + INSTANCE_PLACEHOLDER_H)
+    expect(instanceZoneHeight(1)).toBe(INSTANCE_ZONE_TOP_GAP + INSTANCE_CHIP_H)
   })
 
-  it('≥2 实例 = 基准高 + 实例行区（每实例一行）', () => {
-    expect(dagNodeHeight(2)).toBe(DAG_NODE_H + 2 * INSTANCE_ROW_H + 4)
-    expect(dagNodeHeight(5)).toBe(DAG_NODE_H + 5 * INSTANCE_ROW_H + 4)
+  it('≥2 实例 = 上间隙 + 每实例一张独立小卡（卡高 + 卡间距，末卡不带尾距）', () => {
+    expect(instanceZoneHeight(2)).toBe(INSTANCE_ZONE_TOP_GAP + 2 * (INSTANCE_CHIP_H + INSTANCE_CHIP_GAP) - INSTANCE_CHIP_GAP)
+    expect(instanceZoneHeight(5)).toBe(INSTANCE_ZONE_TOP_GAP + 5 * (INSTANCE_CHIP_H + INSTANCE_CHIP_GAP) - INSTANCE_CHIP_GAP)
+  })
+
+  it('分区副标题数据（方案 C demo §3.1）：cluster 携带展示序号 order（消隐 default 后可见列序，1 起补零两位）与调用点计数 nodeCount', () => {
+    const d = dag({
+      phases: [
+        { name: 'default', order: 0 },
+        { name: 'dev', order: 1 },
+        { name: '校验执行计划', order: 2 },
+      ],
+      // default 无归属节点（词法兜底分区空 = 整体消隐不占列）——可见序从 dev 起
+      nodes: [node({ id: 'c', phase: 'dev' })],
+    })
+    const layout = layoutDag(d)
+    // 空 default 分区消隐，可见列序从 dev 起：dev = 执行段 01、校验执行计划 = 执行段 02（纯脚本）
+    const [dev, verify] = layout.clusters
+    expect(dev).toMatchObject({ order: 1, nodeCount: 1, scriptOnly: false })
+    expect(verify).toMatchObject({ order: 2, nodeCount: 0, scriptOnly: true })
   })
 })
 
-describe('layoutDag nodeHeights 高度表消费', () => {
-  it('增高节点占据更大纵向步进，分区高度随之增长（卡片与布局同表不溢出）', () => {
+describe('layoutDag nodeZones 卡区高度表消费', () => {
+  it('增高节点占据更大纵向步进，分区高度随之增长（卡区与布局同表不溢出分区）', () => {
     const nodes = [node({ id: 'a', templateName: 'aa' }), node({ id: 'b', templateName: 'zb' })]
     const d = dag({ phases: [{ name: 'p0', order: 0 }], nodes })
-    const tall = dagNodeHeight(3)
+    const tall = instanceZoneHeight(3)
     const layout = layoutDag(d, new Map([['a', tall]]))
     const [la, lb] = layout.nodes
-    expect(la.h).toBe(tall)
-    // 高度表缺省键 = 0 实例高度（占位行恒占一行——方案 C 三层结构）
-    expect(lb.h).toBe(dagNodeHeight(0))
-    // b 的 y = a 底 + 行距（步进按实际高度累加）
-    expect(lb.y).toBe(la.y + tall + 18)
-    expect(layout.clusters[0].height).toBeGreaterThanOrEqual(tall + dagNodeHeight(0) + 18)
+    // 主体高恒 DAG_NODE_H（实例小卡在主体之外）；zone 承载卡区
+    expect(la.h).toBe(DAG_NODE_H)
+    expect(la.zoneH).toBe(tall)
+    // 高度表缺省键 = 0 实例占位卡高（占位卡恒占一行——方案 C 三层结构）
+    expect(lb.zoneH).toBe(instanceZoneHeight(0))
+    // b 的 y = a 总占位底 + 行距（步进按主体 + 卡区实际高度累加）
+    expect(lb.y).toBe(la.y + DAG_NODE_H + tall + 18)
+    expect(layout.clusters[0].height).toBeGreaterThanOrEqual(DAG_NODE_H + tall + DAG_NODE_H + instanceZoneHeight(0) + 18)
   })
 })
 
@@ -2060,10 +2094,11 @@ describe('WorkflowVizDag 视口 fit-to-view（2026-10 用户裁决：默认打�
     }
     await wrapper.setProps({ dag: tall })
     const vp = readViewport(wrapper)
-    // 高 452 > 容器 200 → k = (200-40)/452，横向内容远小于容器 k 封顶不影响
-    //（方案 C：节点恒带实例行区——0 实例占位行也占高，5 节点高 = 48 + 5×64 + 4×18 + 12）
-    expect(vp.k).toBeCloseTo((200 - 40) / 452, 6)
-    expect(vp.ty).toBeCloseTo(20, 6)
+    // 高 462 > 容器 200 → k = (200-40)/462 = 0.3463 < ZOOM_MIN 0.35 → 被下限 clamp
+    // （方案 C：节点恒带实例卡区——0 实例占位卡也占高，单节点占位 = 主体 44 + 卡区 22
+    // = 66，5 节点高 = 48 + 5×66 + 4×18 + 12）
+    expect(vp.k).toBe(ZOOM_MIN)
+    expect(vp.ty).toBeCloseTo((200 - 462 * ZOOM_MIN) / 2, 6)
   })
 
   it('容器零尺寸挂载（overlay 过渡态）不 fit；持续 ResizeObserver 在 fit 态下就绪补 fit、后续尺寸变化追 fit', async () => {
@@ -2304,12 +2339,55 @@ describe('WorkflowVizDag 执行实例行（实际 agent 画进图；方案 C 三
     expect(biz.text()).toContain('调用点 · 未触发 · L1')
   })
 
-  it('0 实例占位行：未触发 · 0 实例（不伪造运行名；实例行锚点零 DOM）', () => {
+  it('有实例节点主体框恒高 44，实例 = 主体外独立边框小卡（卡高 24，画进节点组不溢出分区）', () => {
+    const wrapper = mountDag(sampleDag(), {
+      instancesByNode: new Map([
+        ['n-sec', [call(3, 'reviewer-sec-a1-r1'), call(9, 'reviewer-sec-a2-r2', 'running')]],
+      ]),
+    })
+    const nodeEl = wrapper.find('[data-testid="wfvz-dag-node-n-sec"]')
+    // 主体 rect 恒 DAG_NODE_H（44）——实例小卡画在主体 rect 之外，不撑高主体
+    const bodyRect = nodeEl.find('rect')
+    expect(Number(bodyRect.attributes('height'))).toBe(44)
+    // 每实例一张独立小卡 rect（含边框——demo §3.3 形态），高 24、宽 148（缩进 8）
+    const chipRects = nodeEl.findAll('[data-testid^="wfvz-dag-instance-"] rect')
+    expect(chipRects).toHaveLength(2)
+    for (const chip of chipRects) {
+      expect(Number(chip.attributes('height'))).toBe(24)
+      expect(Number(chip.attributes('width'))).toBe(148)
+      expect(Number(chip.attributes('x'))).toBe(8)
+    }
+    // 第一张小卡顶部 y = 主体底 44 + 上间隙 4（卡区在主体之外向下展开）
+    expect(Number(chipRects[0].attributes('y'))).toBe(48)
+    // 第二张小卡步进 28（卡高 24 + 卡间距 4）
+    expect(Number(chipRects[1].attributes('y'))).toBe(48 + 28)
+  })
+
+  it('实例小卡状态染边（demo §3.3「失败态只染实例卡」）：done 绿线 / failed 红线 / 其余中性边', () => {
+    const wrapper = mountDag(sampleDag(), {
+      instancesByNode: new Map([
+        ['n-sec', [call(3, 'reviewer-sec-a1-r1'), call(9, 'reviewer-sec-a2-r2', 'failed'), call(11, 'reviewer-sec-a3-r3', 'running')]],
+      ]),
+    })
+    const nodeEl = wrapper.find('[data-testid="wfvz-dag-node-n-sec"]')
+    const chipRect = (callId: number) =>
+      nodeEl.find(`[data-testid="wfvz-dag-instance-${callId}"] rect`)
+    expect(chipRect(3).classes()).toContain('stroke-[var(--success-ring)]')
+    expect(chipRect(9).classes()).toContain('stroke-[var(--danger-ring)]')
+    expect(chipRect(11).classes()).toContain('stroke-[var(--border)]')
+  })
+
+  it('0 实例占位卡：虚线边框卡「未触发 · 0 实例」（不伪造运行名；实例锚点零 DOM）', () => {
     const wrapper = mountDag(sampleDag())
     const placeholder = wrapper.find('[data-testid="wfvz-dag-placeholder-n-biz"]')
     expect(placeholder.exists()).toBe(true)
     expect(placeholder.text()).toContain('未触发 · 0 实例')
     expect(wrapper.findAll('[data-wfvz-instance]')).toHaveLength(0)
+    // 占位卡 = 独立虚线 rect（透明底 + border-strong 虚线 3_3，高 18）
+    const placeholderRect = placeholder.find('rect')
+    expect(Number(placeholderRect.attributes('height'))).toBe(18)
+    expect(placeholderRect.classes()).toContain('fill-transparent')
+    expect(placeholderRect.classes()).toContain('[stroke-dasharray:3_3]')
   })
 
   it('skipped（run 终局零实例）卡片淡化虚线，pending 中性实线（卡片中性化的两分支）', () => {
@@ -2352,16 +2430,6 @@ describe('WorkflowVizDag 执行实例行（实际 agent 画进图；方案 C 三
     await wrapper.find('[data-testid="wfvz-dag-instance-9"]').trigger('pointerup')
     expect(wrapper.emitted('select')).toBeUndefined()
   })
-
-  it('有实例节点按实例数增高进布局（rect 高于基准高——实例行画在节点卡片内，不溢出分区）', () => {
-    const wrapper = mountDag(sampleDag(), {
-      instancesByNode: new Map([
-        ['n-sec', [call(3, 'reviewer-sec-a1-r1'), call(9, 'reviewer-sec-a2-r2', 'running')]],
-      ]),
-    })
-    const rect = wrapper.find('[data-testid="wfvz-dag-node-n-sec"] rect')
-    expect(Number(rect.attributes('height'))).toBeGreaterThan(44)
-  })
 })
 
 describe('WorkflowVizDag 画布视觉（workflow-overlay-refine D3）', () => {
@@ -2376,13 +2444,52 @@ describe('WorkflowVizDag 画布视觉（workflow-overlay-refine D3）', () => {
     expect(nodeName.classes()).toContain('text-[length:var(--text-3xs)]')
   })
 
-  it('分区虚线描边升 border-strong 级 + dasharray 保留（弱化「面板感」、强化「分组感」）', () => {
+  it('分区描边形态（方案 C demo §9.2 裁决，覆盖 D3 恒虚线形态）：普通分区实线，纯脚本分区虚线专属语义', () => {
     const wrapper = mountDag()
-    const rect = wrapper.find('[data-testid="wfvz-dag-cluster-gate"] rect')
-    expect(rect.classes()).toContain('stroke-border-strong')
-    expect(rect.classes()).toContain('[stroke-dasharray:5_4]')
-    // 描边升级不回退既有 hairline
-    expect(rect.classes()).not.toContain('stroke-border-hairline')
+    const normalRect = wrapper.find('[data-testid="wfvz-dag-cluster-gate"] rect')
+    expect(normalRect.classes()).toContain('stroke-border-strong')
+    expect(normalRect.classes()).toContain('fill-surface')
+    // 普通分区实线（虚线不再是常态——虚线 = 纯脚本段专属语义）
+    expect(normalRect.classes()).not.toContain('[stroke-dasharray:5_4]')
+    expect(normalRect.classes()).not.toContain('stroke-border-hairline')
+    const scriptDag: WorkflowDag = {
+      phases: [
+        { name: 'dev', order: 0 },
+        { name: '校验执行计划', order: 1 },
+      ],
+      nodes: [node({ id: 'n-dev', phase: 'dev' })],
+      edges: [],
+      parallelGroups: [],
+      loops: [],
+    }
+    const scriptWrapper = mountDag(scriptDag)
+    const scriptRect = scriptWrapper.find('[data-testid="wfvz-dag-cluster-校验执行计划"] rect')
+    expect(scriptRect.classes()).toContain('[stroke-dasharray:5_4]')
+    expect(scriptRect.classes()).toContain('fill-transparent')
+  })
+
+  it('分区副标题（方案 C demo §3.1）：「执行段 0N · n 调用点」，纯脚本段「执行段 0N · 纯脚本」合一行', () => {
+    const wrapper = mountDag()
+    const sub = wrapper.find('[data-testid="wfvz-dag-cluster-sub-gate"]')
+    expect(sub.exists()).toBe(true)
+    expect(sub.text()).toBe('执行段 01 · 1 调用点')
+    const scriptDag: WorkflowDag = {
+      phases: [
+        { name: 'dev', order: 0 },
+        { name: '校验执行计划', order: 1 },
+      ],
+      nodes: [node({ id: 'n-dev', phase: 'dev' })],
+      edges: [],
+      parallelGroups: [],
+      loops: [],
+    }
+    const scriptWrapper = mountDag(scriptDag)
+    expect(scriptWrapper.find('[data-testid="wfvz-dag-cluster-sub-校验执行计划"]').text()).toBe('执行段 02 · 纯脚本')
+  })
+
+  it('节点主体底色浮起：fill-surface-2 亮于分区 fill-surface（三层底色递进——demo §6 版式）', () => {
+    const wrapper = mountDag()
+    expect(wrapper.find('[data-testid="wfvz-dag-node-n-gate"] rect').classes()).toContain('fill-surface-2')
   })
 })
 })

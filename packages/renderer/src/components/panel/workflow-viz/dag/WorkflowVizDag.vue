@@ -65,11 +65,12 @@
         </marker>
       </defs>
       <g :transform="`translate(${vp.tx},${vp.ty}) scale(${vp.k})`" data-testid="wfvz-dag-viewport">
-        <!-- phase 分区背景列（当前 phase 高亮：accent 描边）。分区虚线描边 border-strong
-             级弱化「面板感」、强化「分组感」（workflow-overlay-refine D3）；分区标签
-             2xs/font-medium 与节点名 3xs 拉开半档（D3 标签档位，V1-wf③ 分层断言口径）。
-             纯脚本段（方案 C：无归属调用点的非 default 分区）透明底 +「纯脚本」标注；
-             空 default 分区在布局层已整体消隐（不产 cluster） -->
+        <!-- phase 分区背景列（当前 phase 高亮：accent 描边）。分区标签 2xs/font-medium
+             与节点名 3xs 拉开半档（D3 标签档位，V1-wf③ 分层断言口径）+ 副标题
+             「执行段 0N · n 调用点」（方案 C demo §3.1 分区信息行）。描边形态
+             （方案 C demo 裁决，覆盖 workflow-overlay-refine D3 恒虚线形态）：普通
+             分区实线（虚线 = 纯脚本段专属语义——demo §9.2 中优先级「普通 phase 实线
+             与 DAG 一致」；空 default 分区在布局层已整体消隐不产 cluster） -->
         <g
           v-for="c in layout.clusters"
           :key="c.phase"
@@ -80,8 +81,8 @@
         >
           <rect
             :class="[
-              'stroke-border-strong [rx:var(--radius-sm)] [stroke-dasharray:5_4]',
-              c.scriptOnly ? 'fill-transparent' : 'fill-surface',
+              'stroke-border-strong [rx:var(--radius-sm)]',
+              c.scriptOnly ? 'fill-transparent [stroke-dasharray:5_4]' : 'fill-surface',
               c.phase === activePhase ? 'stroke-accent [stroke-width:1.5]' : '',
             ]"
             :x="c.x"
@@ -94,13 +95,19 @@
             :x="c.x + CLUSTER_TITLE_INSET"
             :y="c.y + CLUSTER_TITLE_H_BASE"
           >{{ c.phase }}</text>
+          <!-- 分区副标题（方案 C demo §3.1）：展示序号（消隐 default 后的可见列序，
+               1 起补零两位）+ 调用点计数；纯脚本段以「纯脚本」替代计数（合一行，
+               demo 同款「执行段 01 · 纯脚本」） -->
           <text
-            v-if="c.scriptOnly"
             class="fill-neutral-faint text-[length:var(--text-3xs)] font-mono"
             :x="c.x + CLUSTER_TITLE_INSET"
-            :y="c.y + CLUSTER_TITLE_H_BASE + CLUSTER_SCRIPT_NOTE_BASELINE_DROP"
-            :data-testid="`wfvz-dag-cluster-script-${c.phase}`"
-          >{{ t('panel.workflowViz.scriptOnly') }}</text>
+            :y="c.y + CLUSTER_TITLE_H_BASE + CLUSTER_SUB_BASELINE_DROP"
+            :data-testid="`wfvz-dag-cluster-sub-${c.phase}`"
+          >{{
+            c.scriptOnly
+              ? t('panel.workflowViz.clusterStageScript', { order: formatStageOrder(c.order) })
+              : t('panel.workflowViz.clusterStageSub', { order: formatStageOrder(c.order), count: c.nodeCount })
+          }}</text>
         </g>
 
         <!-- 边：kind 着色（sequence 灰 / dataflow 实线深 / conditional 虚线 warn / loop-back 虚线 accent 下绕弧）；
@@ -114,13 +121,15 @@
           marker-end="url(#wfvz-dag-arrow)"
           :data-testid="`wfvz-dag-edge-${le.edge.id}`"
         />
-        <!-- 条件边谓词标注（原文截断，title 悬停全文） -->
+        <!-- 条件边谓词标注（原文截断，title 悬停全文；middle 悬挂锚点中心——同列
+             gutter 细道分支例外 start 右排，锚模式由布局产物 labelAnchor 携带） -->
         <text
           v-for="le in conditionalEdges"
           :key="`label-${le.edge.id}`"
           class="fill-warn text-[length:var(--text-3xs)] font-mono"
           :x="le.labelX"
           :y="le.labelY"
+          :text-anchor="le.labelAnchor ?? 'middle'"
         >
           <title>{{ le.edge.predicate }}</title>
           {{ truncate(le.edge.predicate ?? '', PREDICATE_MAX_CHARS) }}
@@ -180,11 +189,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { WorkflowAgentCall, WorkflowDag, WorkflowDagEdgeKind, WorkflowRunOutcome, WorkflowRunStatus } from '@taiji/shared'
 import { Button } from '@/components/ui/button'
-import { ZOOM_MIN, computeFitTransform, dagNodeHeight, layoutDag, layoutEdges } from './layout'
+import { instanceZoneHeight, layoutDag } from './layout'
+import { layoutEdges } from './layout-edges'
+import { useDagViewport } from './useDagViewport'
 import WorkflowVizDagNode from './WorkflowVizDagNode.vue'
 import WorkflowVizDagNodeGuard from './WorkflowVizDagNodeGuard.vue'
 import type { WorkflowVizDagClickPayload, WorkflowVizDagNodeStatus, WorkflowVizDagStopTone } from './types'
@@ -231,54 +242,41 @@ const EDGE_KIND_CLASS: Record<WorkflowDagEdgeKind, string> = {
 
 const CLUSTER_TITLE_INSET = 12
 const CLUSTER_TITLE_H_BASE = 20
-/** 纯脚本标注与分区标题的基线落差（px，标注挂在标题下一行）。 */
-const CLUSTER_SCRIPT_NOTE_BASELINE_DROP = 14
+/** 分区副标题与分区标题的基线落差（px；副标题挂在标题下一行）。 */
+const CLUSTER_SUB_BASELINE_DROP = 14
 /** 条件谓词标注显示截断上限（px 布局友好宽度内的可读性上界；完整原文走 title 悬停）。
  *  40 字符容下常规布尔条件全文（如 `commitPlan.stagePaths.length === 0`），更长的
  *  仍截断省略。 */
 const PREDICATE_MAX_CHARS = 40
+/** 分区展示序号补零位数（demo 同款「执行段 01」两位序）。 */
+const STAGE_ORDER_PAD = 2
 
-/** wheel 缩放灵敏度（指数系数，原型同款）。 */
-const ZOOM_WHEEL_FACTOR = 0.0012
-/** wheel 缩放上限（下限 ZOOM_MIN 单处在 layout，fit 与手动缩放共用同值）。 */
-const ZOOM_MAX = 2.6
-/** 拖拽判定阈值（px 位移，超过 = pan 非 click）。 */
-const PAN_THRESHOLD_PX = 5
+/** 分区展示序号格式化（1 → '01'，10 起原样两位）。 */
+function formatStageOrder(order: number): string {
+  return String(order).padStart(STAGE_ORDER_PAD, '0')
+}
 
-const svgRef = ref<SVGSVGElement | null>(null)
-/** 视口变换（tx/ty 平移 + k 缩放；初始与切换 run 重置时 tx 居中——见 centeredTx）。 */
-const vp = reactive({ k: 1, tx: 0, ty: 0 })
-
-/**
- * 视口模式状态机（2026-10-23 设计裁决「fit 不追打」）：'fit' = 全图自适应态
- * （挂载/切 run/回到全景时进入，容器尺寸变化自动重新 fit）；'free' = 用户接管态
- * （pan 位移超阈值或 wheel 缩放触发，自动 fit 停用，直至回到全景或切 run 重置）。
- * 转 'free' 只存在于两个用户手势处理器内（onPointerMove 的 moved 分支 / onWheel）
- * ——程序化写视口（fitView 及其调用路径：挂载、切 run、ResizeObserver 回调、
- * 回到全景按钮）结构性不可能触发接管。
- */
-type ViewMode = 'fit' | 'free'
-const viewMode = ref<ViewMode>('fit')
 
 /** dag prop 未就绪（null）时布局用的空 DAG（layoutDag/layoutEdges 均纯函数不 mutate 输入）。 */
 const EMPTY_DAG: WorkflowDag = { nodes: [], edges: [], phases: [], parallelGroups: [], loops: [] }
 
 /**
- * 节点布局高度表（方案 C：全部节点按 dagNodeHeight 派生——实例行区恒在场；与节点
- * 卡片同一高度函数，布局几何与卡片渲染单源，不会出现卡片溢出分区矩形。挂接映射
- * 未就绪/零实例节点缺省键 = 0 实例高度（占位行），由 layout 兜底）。
+ * 节点实例卡区高度表（方案 C demo §3.3 三层形态：实例 = 主体外独立小卡，全部节点
+ * 的卡区按 instanceZoneHeight 派生——0 实例也含一行虚线占位卡；与节点卡片同一高度
+ * 函数，布局几何与卡片渲染单源，不会出现小卡溢出分区矩形。挂接映射未就绪/零实例
+ * 节点缺省键 = 0 实例占位卡高，由 layout 兜底）。
  */
-const nodeHeights = computed(() => {
-  const heights = new Map<string, number>()
+const instanceZones = computed(() => {
+  const zones = new Map<string, number>()
   const byNode = props.instancesByNode
-  if (byNode === undefined) return heights
+  if (byNode === undefined) return zones
   for (const [id, calls] of byNode) {
-    heights.set(id, dagNodeHeight(calls.length))
+    zones.set(id, instanceZoneHeight(calls.length))
   }
-  return heights
+  return zones
 })
 
-const layout = computed(() => layoutDag(props.dag ?? EMPTY_DAG, nodeHeights.value))
+const layout = computed(() => layoutDag(props.dag ?? EMPTY_DAG, instanceZones.value))
 const edges = computed(() => layoutEdges(props.dag ?? EMPTY_DAG, layout.value.nodes))
 const conditionalEdges = computed(() => edges.value.filter((le) => le.edge.kind === 'conditional' && le.edge.predicate))
 const isEmptyDag = computed(() => (props.dag?.nodes.length ?? 0) === 0)
@@ -304,152 +302,19 @@ const stopTone = computed<WorkflowVizDagStopTone>(() => {
   return 'neutral'
 })
 
-// 切换 run（D11：开新 run 切内容）→ 视口重置为新蓝图的 fit（全图居中、四周
-// FIT_PAD_PX 留白）+ 状态机回 fit 态：此前用户 pan/zoom 接管过也在重置中放弃，
-// 此后恢复自动 fit 直至下次接管。
-// 重置锚 = 节点 id 集签名而非 dag 引用：宿主传入的是重归属派生视图
-//（blueprint-attribution，实例流式到达会换对象引用），引用判等会把每次实例
-// 到达误判成切 run；同一蓝图的节点 id 集（含行号）稳定不变，只有换脚本才会变。
-watch(
-  () => (props.dag?.nodes ?? []).map((n) => n.id).join('\u0000'),
-  () => {
-    viewMode.value = 'fit'
-    fitWhenContainerReady()
-  },
-)
-
-/**
- * fit-to-view（fit 态的视口写入单源）：内容缩放到四周各留 FIT_PAD_PX 空隙后居中；
- * 内容小于视口不放大（k 封顶 1，文字原生渲染）。容器尺寸无布局环境（jsdom
- * clientWidth 缺失）→ computeFitTransform 退化 k=1 平移 0，不破坏渲染。实例流式
- * 到达的节点增高不触发本函数（布局变化不改视口——free 态不与用户手势竞争，
- * fit 态下内容仍完整可达无需重 fit）。
- */
-function fitView(): void {
-  const fit = computeFitTransform(
-    svgRef.value?.clientWidth ?? 0,
-    svgRef.value?.clientHeight ?? 0,
-    layout.value.width,
-    layout.value.height,
-  )
-  vp.k = fit.k
-  vp.tx = fit.tx
-  vp.ty = fit.ty
-}
-
-/**
- * fit 前的容器尺寸就绪闸（挂载过渡态竞态）：overlay 刚挂载时容器可能尚未布局
- * （宽高均为 0 的过渡态）——此时 fit 只得 k=1 平移 0 的退化形态（内容宽于视口
- * 即裁切）。就绪 = 任一轴有布局（> 0），与 computeFitTransform 的单轴参与口径
- * 对齐（缺席轴不参与约束、该向偏移取 0）；未就绪时不 fit，由持续 ResizeObserver
- * 在 fit 态下首次非零尺寸回调补 fit。
- */
-function containerSizeReady(): boolean {
-  const el = svgRef.value
-  return (el?.clientWidth ?? 0) > 0 || (el?.clientHeight ?? 0) > 0
-}
-
-function fitWhenContainerReady(): void {
-  if (containerSizeReady()) fitView()
-}
-
-/**
- * 容器尺寸持续观察（fit 态自动重新 fit 的驱动源）：fit 态下容器变化（窗口拖宽、
- * overlay 布局就绪）→ 重新 fit；free 态 → 不动（用户接管后自动 fit 停用）。
- * 环境无 ResizeObserver（jsdom）时不观察，维持既有退化口径（挂载时一次性 fit）。
- */
-let resizeObserver: ResizeObserver | null = null
-
-// 打开 overlay 即挂载（壳 v-if dag !== null）→ 初始视口 = 全图 fit 居中
-// （容器未布局时不 fit，观察器回调就绪后补 fit）
-onMounted(() => {
-  fitWhenContainerReady()
-  const el = svgRef.value
-  if (el === null || typeof ResizeObserver === 'undefined') return
-  resizeObserver = new ResizeObserver(() => {
-    if (viewMode.value !== 'fit' || !containerSizeReady()) return
-    fitView()
-  })
-  resizeObserver.observe(el)
+// 视口（fit/free 状态机与 pan/zoom 手势）单源在 useDagViewport composable——
+// 2026-11 拆出（本组件 script setup 超 300 行门禁上限，拆分纯搬移零行为变更）；
+// 切 run 重置锚 = 节点 id 集签名（重归属派生视图引用不稳，签名判等防实例流式
+// 到达误判切 run——机制注释见 composable）；画布点击路由（emit 依赖）留本组件，
+// 经 onCanvasClick 注入（function 声明提升使其可前向引用）。
+const {
+  svgRef, vp, viewMode, backToFit,
+  onPointerDown, onPointerMove, onPointerUp, onWheel,
+} = useDagViewport({
+  contentSize: () => ({ width: layout.value.width, height: layout.value.height }),
+  runSignature: () => (props.dag?.nodes ?? []).map((n) => n.id).join('\u0000'),
+  onCanvasClick: routeClick,
 })
-
-onBeforeUnmount(() => {
-  resizeObserver?.disconnect()
-  resizeObserver = null
-})
-
-/**
- * 「回到全景」入口（free 态右下角按钮）：回 fit 态并 fit 一次——此后恢复自动
- * fit 语义（容器变化重新 fit）直至下次用户接管。
- */
-function backToFit(): void {
-  viewMode.value = 'fit'
-  fitWhenContainerReady()
-}
-
-// ── 缩放平移（原型 04-final-overlay.html 手法：client 坐标差换算，规避
-// getScreenCTM 在测试环境缺失；pan 位移按 1/k 修正保持视觉等速）。
-// 指针事件经 setPointerCapture 锁定到 svg（指针移出画布释放/移动仍可达——W3C
-// 指针捕获语义，比 window 级监听干净且无泄漏；环境不支持 capture 时退化为
-// 画布内交互，拖出释放的边缘场景丢失可接受） ──
-
-interface PanState {
-  sx: number
-  sy: number
-  tx0: number
-  ty0: number
-  moved: boolean
-  target: EventTarget | null
-}
-let pan: PanState | null = null
-
-function onPointerDown(e: PointerEvent): void {
-  pan = { sx: e.clientX, sy: e.clientY, tx0: vp.tx, ty0: vp.ty, moved: false, target: e.target }
-  const svg = svgRef.value
-  if (svg && typeof svg.setPointerCapture === 'function') {
-    try {
-      svg.setPointerCapture(e.pointerId)
-    } catch (err) {
-      // 捕获失败（指针已释放等竞态）：退化画布内交互（拖出释放的边缘场景丢失），不阻断
-      console.warn('[WorkflowVizDag] setPointerCapture failed, fallback to in-canvas pan', err)
-    }
-  }
-}
-
-function onPointerMove(e: PointerEvent): void {
-  if (!pan) return
-  if (Math.abs(e.clientX - pan.sx) + Math.abs(e.clientY - pan.sy) > PAN_THRESHOLD_PX) pan.moved = true
-  if (pan.moved) {
-    // pan 接管（位移超阈值的拖拽）→ free 态（自动 fit 停用；pointerdown 未移动
-    // 不进此分支——纯点击不算接管）
-    viewMode.value = 'free'
-    vp.tx = pan.tx0 + (e.clientX - pan.sx) / vp.k
-    vp.ty = pan.ty0 + (e.clientY - pan.sy) / vp.k
-  }
-}
-
-function onPointerUp(): void {
-  const wasClick = pan !== null && !pan.moved
-  const target = pan?.target ?? null
-  pan = null
-  if (!wasClick) return
-  routeClick(target)
-}
-
-/** wheel 缩放：以指针位置为缩放中心（画布坐标系下保持指针下的内容点不动）。
- *  wheel 即用户接管 → free 态（自动 fit 停用）。 */
-function onWheel(e: WheelEvent): void {
-  const rect = svgRef.value?.getBoundingClientRect()
-  if (!rect) return
-  viewMode.value = 'free'
-  const px = e.clientX - rect.left
-  const py = e.clientY - rect.top
-  const k2 = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, vp.k * Math.exp(-e.deltaY * ZOOM_WHEEL_FACTOR)))
-  // 保持指针下的画布坐标点不动：new_tx = px - (px - tx) * (k2/k)
-  vp.tx = px - (px - vp.tx) * (k2 / vp.k)
-  vp.ty = py - (py - vp.ty) * (k2 / vp.k)
-  vp.k = k2
-}
 
 /**
  * 点击路由（[2026-10-19] agent 钻取语义删除——节点/实例行不再开 agent 详情，归宿 =

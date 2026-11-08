@@ -97,6 +97,8 @@ export default {
     ganttPhaseTurns: 'Phase 轮次',
     scriptOnly: '纯脚本',
     scriptOnlyHint: '该 phase 全程无 agent 调用（脚本执行段）',
+    clusterStageSub: '执行段 {order} · {count} 调用点',
+    clusterStageScript: '执行段 {order} · 纯脚本',
     phaseSettled: '已收束',
     turnCount: '{count} 轮',
     phaseEventsTitle: '本 phase 事件',

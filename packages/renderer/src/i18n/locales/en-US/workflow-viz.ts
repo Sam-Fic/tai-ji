@@ -90,6 +90,8 @@ export default {
     ganttPhaseTurns: 'Phase turns',
     scriptOnly: 'Script-only',
     scriptOnlyHint: 'This phase dispatched no agent calls (script execution only)',
+    clusterStageSub: 'Stage {order} · {count} call site(s)',
+    clusterStageScript: 'Stage {order} · script-only',
     phaseSettled: 'Settled',
     turnCount: '{count} turns',
     phaseEventsTitle: 'Phase events',
