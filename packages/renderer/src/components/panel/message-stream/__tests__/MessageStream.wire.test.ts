@@ -149,20 +149,21 @@ beforeEach(() => {
 /* ──────────────────────────────────────────────────────────────
  * TC-w4-1/2/7/8：Turn.vue 接入 useTurnExpansion（真实 composable，端到端）
  * ────────────────────────────────────────────────────────────── */
-describe('Turn.vue 接线 useTurnExpansion（w1；聚合块形态后展开开关只驱动 chevron/指示器——D5 同形态）', () => {
-  it('TC-w4-1: complete 态折叠形态（D5：聚合块摘要行 + 末位正文），点 turn-meta → isExpanded 置位（chevron 翻转，trace 形态不变）', async () => {
+describe('Turn.vue 接线 useTurnExpansion（w1；chat-turn-fold-redesign 后展开开关驱动 chevron + trace 形态）', () => {
+  it('TC-w4-1: complete 态折叠仅末位正文，点 turn-meta → isExpanded 置位（chevron 翻转，聚合块摘要行进 DOM）', async () => {
     const wrapper = mountTurn({ turn: makeTurn() })
-    // trace 容器恒渲染：折叠形态 = [聚合块摘要行(think+tool 段), 末位 text] 两单元
+    // trace 容器恒渲染：折叠形态 = 仅末位 text 一单元（聚合块与过程细节不渲染）
     expect(wrapper.find('.trace').exists()).toBe(true)
-    expect(wrapper.findAll('.trace > .trace-blk').length).toBe(2)
-    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(true)
+    expect(wrapper.findAll('.trace > .trace-blk').length).toBe(1)
+    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(false)
     // chevron 未 rotate-90（折叠态）
     expect(wrapper.find('.chev').classes()).not.toContain('rotate-90')
-    // 点击 turn-meta → useTurnExpansion.toggle → isExpanded=true：D5 同形态——trace 区形态
-    // 不变（段细节经每段摘要行展开），开关的用户可见效果 = chevron/展开指示器
+    // 点击 turn-meta → useTurnExpansion.toggle → isExpanded=true：展开形态 = 聚合块摘要行
+    // + 末位 text（段细节再经每段摘要行展开），开关的用户可见效果 = chevron + trace 增显
     await wrapper.find('.turn-meta').trigger('click')
     expect(wrapper.find('.trace').exists()).toBe(true)
     expect(wrapper.findAll('.trace > .trace-blk').length).toBe(2)
+    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(true)
     // chevron rotate-90（展开态）
     expect(wrapper.find('.chev').classes()).toContain('rotate-90')
   })
@@ -186,13 +187,14 @@ describe('Turn.vue 接线 useTurnExpansion（w1；聚合块形态后展开开关
         stubs: { ChangeSetCard: true, MarkdownRenderer: true },
       },
     })
-    // sessionActive=true → 工作展开形态（D5 折叠同形态：聚合块摘要行 + 末位 text）
+    // sessionActive=true（本 fixture 非工作态：isStreaming=false 且未传 isLastTurn）+
+    // 预置展开 → 展开形态（聚合块摘要行 + 末位 text 两单元）
     expect(wrapper.find('.trace').exists()).toBe(true)
     expect(wrapper.findAll('.trace > .trace-blk').length).toBe(2)
     // 对话结束：isSessionActive true→false——不再有 onComplete collapse；手动展开保持
     expect(wrapper.find('.trace').exists()).toBe(true)
     await wrapper.setProps({ isSessionActive: false })
-    // 手动展开态保持：isExpanded('u1') 仍 true（chevron 保持展开指示；D5 同形态下 trace 形态不变）
+    // 手动展开态保持：isExpanded('u1') 仍 true（chevron 保持展开指示，trace 保持展开形态）
     expect(wrapper.findAll('.trace > .trace-blk').length).toBe(2)
     expect(expandedTurns.has('u1')).toBe(true)
   })
@@ -204,18 +206,21 @@ describe('Turn.vue 接线 useTurnExpansion（w1；聚合块形态后展开开关
     const turnB = makeTurn({ index: 2 })
     const wrapperA = mountTurn({ turn: turnA, sessionId: 'sessA' })
     const wrapperB = mountTurn({ turn: turnB, sessionId: 'sessB' })
-    // 初始都折叠：trace 容器恒渲染，折叠形态（D5：聚合块摘要行 + 末位 text，细节不渲染）
+    // 初始都折叠：trace 容器恒渲染，折叠形态 = 仅末位 text（聚合块不渲染）
     expect(wrapperA.find('.trace').exists()).toBe(true)
-    expect(wrapperA.find('[data-testid="agg-summary-row"]').exists()).toBe(true)
+    expect(wrapperA.findAll('.trace > .trace-blk').length).toBe(1)
+    expect(wrapperA.find('[data-testid="agg-summary-row"]').exists()).toBe(false)
     expect(wrapperB.find('.trace').exists()).toBe(true)
-    expect(wrapperB.find('[data-testid="agg-summary-row"]').exists()).toBe(true)
-    // 展开 A：isExpanded('keyA') 置位（chevron 指示器），D5 同形态下 trace 形态不变
+    expect(wrapperB.find('[data-testid="agg-summary-row"]').exists()).toBe(false)
+    // 展开 A：isExpanded('keyA') 置位——A 转展开形态（聚合块摘要行 + 末位 text）
     await wrapperA.find('.turn-meta').trigger('click')
     expect(wrapperA.find('.trace').exists()).toBe(true)
     expect(wrapperA.findAll('.trace > .trace-blk').length).toBe(2)
+    expect(wrapperA.find('[data-testid="agg-summary-row"]').exists()).toBe(true)
     // B 仍折叠（不同稳定 key，展开态隔离）
     expect(wrapperB.find('.trace').exists()).toBe(true)
-    expect(wrapperB.findAll('.trace > .trace-blk').length).toBe(2)
+    expect(wrapperB.findAll('.trace > .trace-blk').length).toBe(1)
+    expect(wrapperB.find('[data-testid="agg-summary-row"]').exists()).toBe(false)
   })
 
   it('TC-w4-8: 连续同类 tool 调用 → 聚进同一聚合块内工具组（组内逐行独立），末位 text 独立单元', async () => {
@@ -242,7 +247,8 @@ describe('Turn.vue 接线 useTurnExpansion（w1；聚合块形态后展开开关
       ],
     })
     const wrapper = mountTurnWithRealBlock({ turn })
-    // complete 态 = 折叠形态（D5）；点摘要行展开该段
+    // complete 态折叠不渲染聚合块：先点 turn-meta 展开回合（摘要行进 DOM），再点摘要行展开该段
+    await wrapper.find('.turn-meta').trigger('click')
     await wrapper.find('[data-testid="agg-summary-row"]').trigger('click')
     expect(wrapper.find('.trace').exists()).toBe(true)
     // 不存在 merged 卡片（合并功能已移除；现行聚合形态 = 聚合块内工具组，非 merged 卡）

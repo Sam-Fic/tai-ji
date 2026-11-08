@@ -165,7 +165,24 @@ const useChatInstance = createUseChat(buildUseChatDeps())
  *  成员已删，手动展开清除仅两路径——grep 零调用方核实后删除）。
  */
 // @data-owner #54 —— 主表 #54 mobile 壳 turn 展开分区
+// 响应式策略（对齐桌面 turn-expansion store 的双层形态，chat-turn-fold-redesign 验收 P1）：
+// 外层 plain Map + 内层 reactive Set。外层故意非响应式——分区集合变更（新增/删除 session
+// key）不发全局通知；精确的 per-turnKey 依赖建在内层：effect 读 reactiveSet.has(key) 时收集
+// 依赖，add/delete 同 key 时精确通知。Turn.vue 的 turnExpanded computed 经 deps.isExpanded
+// 读到 has——内层非 reactive 时 computed 永不失效（toggle 后 trace 区不展开、chevron 不转）。
 const turnExpansionMap = new Map<string, Set<string>>()
+
+/** 取或创建 session 分区（惰性创建契约，对齐桌面 getPartition）：isExpanded 读时若分区
+ *  不存在会先建空 reactive 分区——保证消费方 effect 首跑（读 has）已在内层建立依赖，
+ *  后续 toggle 对同 key 的 add/delete 才能精确触发失效重跑。 */
+function getExpansionPartition(sid: string): Set<string> {
+  let p = turnExpansionMap.get(sid)
+  if (!p) {
+    p = reactive(new Set<string>())
+    turnExpansionMap.set(sid, p)
+  }
+  return p
+}
 
 // [remote-use A15/U12] turn 展开分区挂 session 销毁注册表（registerSessionCleanup——
 // useSessionScopedState 模块级 registry，triggerSessionCleanups 遍历；形态与桌面
@@ -173,20 +190,20 @@ const turnExpansionMap = new Map<string, Set<string>>()
 // （deleteSession → core cleanupSessionState → triggerSessionCleanups）；exited 分通道重置
 // （resetCompanionChannelsForExitedSession）不触本表——turnExpansion 非请求态，不进 exited
 // 编排（设计 D5 去留表）。桌面同样只在删除路径清（A15 残留登记口径）。
+// 先 clear() 再 delete(sid)（对齐桌面 clearSession 两段语义）：clear 触发 reactive Set 的
+// key 变更通知，订阅该分区的 effect 失效重算；delete 释放分区内存。
 registerSessionCleanup((sid) => {
+  const p = turnExpansionMap.get(sid)
+  if (p) p.clear()
   turnExpansionMap.delete(sid)
 })
 
 /** turn 展开派生面（MobileMessageStream 按 sessionId 分区消费） */
 export function createTurnExpansion(sessionId: Ref<string>) {
   return {
-    isExpanded: (turnKey: string): boolean => turnExpansionMap.get(sessionId.value)?.has(turnKey) ?? false,
+    isExpanded: (turnKey: string): boolean => getExpansionPartition(sessionId.value).has(turnKey),
     toggle: (turnKey: string): void => {
-      let p = turnExpansionMap.get(sessionId.value)
-      if (!p) {
-        p = new Set()
-        turnExpansionMap.set(sessionId.value, p)
-      }
+      const p = getExpansionPartition(sessionId.value)
       if (p.has(turnKey)) p.delete(turnKey)
       else p.add(turnKey)
     },

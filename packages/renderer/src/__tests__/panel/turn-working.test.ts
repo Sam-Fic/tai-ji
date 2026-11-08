@@ -2,9 +2,10 @@
  * Turn working 态单测 —— 完成复位 + elapsed live 计时 + 清理（plan.md U9–U12）+
  * CW wave `session-active-ssot` T4：isWorking 拆分为 isStreaming / isSessionActive 两信号。
  *
- * 覆盖（[chat-flow-process-aggregate U3] trace 区聚合块形态修订：完成收起 = 折叠形态
- * （末位正文 + 全部聚合块摘要行），不再有「内容消失」口径）：
- * - U9：isStreaming true→false（isSessionActive 同步 false）时 trace 转折叠形态（聚合块摘要行）
+ * 覆盖（chat-turn-fold-redesign 三态矩阵：非工作态折叠 = 仅末位正文（聚合块与中间正文
+ * 不渲染，纯过程无正文 turn 的 trace 区为空）；非工作态展开（turn-meta 点击）= 全部
+ * 正文 + 全部聚合块摘要行；工作态不受折叠开关影响）：
+ * - U9：isStreaming true→false（isSessionActive 同步 false）时 trace 转折叠形态（仅末位正文）
  * - U10：streaming 态 elapsed 随 setInterval 实时增长（live 计时）
  * - U11：非 streaming 态 elapsed 静态，advance 不变（无 setInterval 驱动）
  * - U12：streaming 态 unmount 不抛错、无 timer 泄漏
@@ -127,13 +128,17 @@ function expectTraceTopBlocks(wrapper: Parameters<typeof traceTopBlocks>[0], cou
   return blocks
 }
 
-/** trace 前两个顶层单元形态断言单源（聚合块摘要行在前 + 末位正文殿后，D5 折叠形态）。 */
-function expectAggregateThenText(blocks: ReturnType<typeof traceTopBlocks>, textContent?: string) {
-  expect(blocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
-  expect(blocks[1].classes()).toContain('trace-blk--text')
-  if (textContent !== undefined) {
-    expect(blocks[1].text()).toContain(textContent)
-  }
+/** trace 展开形态（非工作态展开）断言单源：指定下标是聚合块摘要行 + 末单元是末位正文
+ *  （真实时序交错，用例 fixture 时序各异，聚合块下标显式指定）。 */
+function expectTextAggregateInterleaved(
+  blocks: ReturnType<typeof traceTopBlocks>,
+  aggIndex: number,
+  lastTextContent: string,
+) {
+  expect(blocks[aggIndex].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
+  const last = blocks[blocks.length - 1]
+  expect(last.classes()).toContain('trace-blk--text')
+  expect(last.text()).toContain(lastTextContent)
 }
 
 /** 从 wrapper 提取 elapsed 文本（meta 按钮里的 .elapsed span） */
@@ -150,8 +155,9 @@ describe('Turn working 态 · 完成复位 + elapsed live', () => {
     vi.useRealTimers()
   })
 
-  it('U9: 完成态（isStreaming + isSessionActive 同步 false）trace 转折叠形态（聚合块摘要行，细节收起）', async () => {
-    // trace 容器恒渲染；完成收起 = 折叠形态（聚合块摘要行 + 末位正文），过程细节不渲染
+  it('U9: 完成态（isStreaming + isSessionActive 同步 false）trace 转折叠形态（仅末位正文；纯过程无正文 turn trace 区空）', async () => {
+    // trace 容器恒渲染；完成收起 = 折叠形态（chat-turn-fold-redesign：聚合块整体不渲染，
+    // 本 fixture 纯 thinking 无正文 → trace 区空，过程信号展开即见）
     const thinkingTurn = (status: Message['status']) =>
       makeTurn({
         isStreaming: status === 'streaming',
@@ -171,10 +177,10 @@ describe('Turn working 态 · 完成复位 + elapsed live', () => {
     expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(true)
     // 切换到完成态（isStreaming false，无 prop 回退 → sessionActive 也 false）
     await wrapper.setProps({ turn: thinkingTurn('complete') })
-    // trace 容器仍在（恒渲染），转折叠形态：聚合块摘要行（thinking 细节收起）
+    // trace 容器仍在（恒渲染），转折叠形态：聚合块收起（摘要行不渲染），无正文 → 0 单元
     expect(wrapper.find('.trace').exists()).toBe(true)
-    expect(wrapper.findAll('.trace > .trace-blk').length).toBe(1)
-    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(true)
+    expect(wrapper.findAll('.trace > .trace-blk').length).toBe(0)
+    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(false)
     expect(wrapper.find('.trace-think').exists()).toBe(false)
   })
 
@@ -381,11 +387,11 @@ describe('Turn · T4 isWorking 拆分（isStreaming vs isSessionActive）', () =
     expect(wrapper.find('.trace').exists()).toBe(true)
     expect(wrapper.findAll('.trace > .trace-blk').length).toBe(1)
     expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(true)
-    // subagent 跑完（isSessionActive 转 false）→ 此刻才转折叠形态（聚合块摘要行）
+    // subagent 跑完（isSessionActive 转 false）→ 此刻才转折叠形态（纯过程无正文 → trace 区空）
     await wrapper.setProps({ isSessionActive: false })
     expect(wrapper.find('.trace').exists()).toBe(true)
-    expect(wrapper.findAll('.trace > .trace-blk').length).toBe(1)
-    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(true)
+    expect(wrapper.findAll('.trace > .trace-blk').length).toBe(0)
+    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(false)
     expect(wrapper.find('.trace-think').exists()).toBe(false)
   })
 
@@ -404,10 +410,10 @@ describe('Turn · T4 isWorking 拆分（isStreaming vs isSessionActive）', () =
     const wrapper = mountTurn({ turn: thinkingTurn, isSessionActive: true })
     expect(wrapper.find('.trace').exists()).toBe(true)
     expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(true)
-    // ask-user respond：对话真正结束 → 转折叠形态（聚合块摘要行）
+    // ask-user respond：对话真正结束 → 转折叠形态（聚合块收起，纯过程无正文 → trace 区空）
     await wrapper.setProps({ isSessionActive: false })
     expect(wrapper.find('.trace').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(false)
     expect(wrapper.find('.trace-think').exists()).toBe(false)
   })
 })
@@ -545,14 +551,14 @@ describe('Turn · trace 块按 contentBlocks 真实时序渲染', () => {
         assistants: [textFirstAssistant({ status: 'complete', toolCalls: [completedTool] })],
       }),
     })
-    // 完成态 = 折叠形态（D5）：[聚合块摘要行, 末位 text]，末单元是 text → 锚块合法存在
+    // 完成态 = 折叠形态：仅末位 text（聚合块收起），末单元是 text → 锚块合法存在
     // （占位行下方无后续块，不构成块间空洞）
     expect(wrapper.find('.turn-summary').exists()).toBe(true)
     // 光标消失（isStreaming=false）
     expect(wrapper.find('.streaming-tail').exists()).toBe(false)
   })
 
-  it('U19: complete 态手动展开 trace，D5 同形态（聚合块摘要行 + 末位正文），段细节经摘要行展开', async () => {
+  it('U19: complete 态展开 trace（聚合块摘要行 + 末位正文全显），段细节经摘要行展开', async () => {
     const wrapper = mountTurnWithRealBlock({
       turn: makeTurn({
         isStreaming: false,
@@ -560,20 +566,23 @@ describe('Turn · trace 块按 contentBlocks 真实时序渲染', () => {
         assistants: [textFirstAssistant({ status: 'complete' })],
       }),
     })
-    // complete 态 = 折叠形态；手动展开（点击 turn-meta）不改变默认形态（D5 裁决）
+    // complete 态默认折叠 = 仅末位 text；点击 turn-meta 展开后聚合块按真实时序进 DOM
     await wrapper.find('.turn-meta').trigger('click')
     expect(wrapper.find('.trace').exists()).toBe(true)
-    // trace 内聚合块摘要行 + 末位 text 两个顶层单元
+    // 展开形态（真实时序交错）：[a1 text 我先查一下, 聚合块摘要行] 两单元（末单元是聚合块）
     const blocks = traceTopBlocks(wrapper)
     expect(blocks.length).toBe(2)
-    expectAggregateThenText(blocks)
+    expect(blocks[0].classes()).toContain('trace-blk--text')
+    expect(blocks[0].find('.md-stub').text()).toBe('我先查一下')
+    expect(blocks[1].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
     // 段细节经每段摘要行展开（点摘要行 → 成员行平铺，GL2/GL3）
-    await blocks[0].find('[data-testid="agg-summary-row"]').trigger('click')
+    await blocks[1].find('[data-testid="agg-summary-row"]').trigger('click')
     expect(wrapper.find('[data-testid="agg-tool-row"]').exists()).toBe(true)
   })
 
-  // TC-M0-1：多 assistant 跨 message 顺序——中间过程段收进聚合块摘要行，非末位正文收敛（D5），末位正文殿后
-  it('TC-M0-1: a1 text+tool + a2 text → 折叠形态 [聚合块摘要行, a2 text]（a1 非末位正文收敛）', async () => {
+  // TC-M0-1：多 assistant 跨 message 顺序——折叠态中间正文与聚合块收起（仅末位正文），
+  // 展开态按真实时序 [a1 text, a1 tool 段摘要, a2 text] 全显
+  it('TC-M0-1: a1 text+tool + a2 text → 折叠仅末位正文；展开 [a1 text, 聚合块摘要行, a2 text]', async () => {
     const a1 = msg({
       id: 'a1',
       status: 'complete',
@@ -588,12 +597,18 @@ describe('Turn · trace 块按 contentBlocks 真实时序渲染', () => {
     const wrapper = mountTurnWithRealBlock({
       turn: makeTurn({ isStreaming: false, hasFoldable: true, assistants: [a1, a2] }),
     })
-    // complete 态 = 折叠形态；手动展开不改形态（D5 裁决）
+    // complete 态默认折叠：仅 a2 末位正文（a1 正文与 a1 tool 段全部收起）
+    let blocks = traceTopBlocks(wrapper)
+    expect(blocks.length).toBe(1)
+    expect(blocks[0].classes()).toContain('trace-blk--text')
+    expect(blocks[0].text()).toContain('内容是...')
+    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(false)
+    // 手动展开（点击 turn-meta）：真实时序 [a1 text, a1 tool 段摘要, a2 text] 三单元
     await wrapper.find('.turn-meta').trigger('click')
-    // [聚合块摘要行(a1 tool 段), a2 text] 两单元（D5：非末位正文收敛，聚合块按真实发生序在前）
-    const blocks = traceTopBlocks(wrapper)
-    expect(blocks.length).toBe(2)
-    expectAggregateThenText(blocks, '内容是...')
+    blocks = traceTopBlocks(wrapper)
+    expect(blocks.length).toBe(3)
+    expectTextAggregateInterleaved(blocks, 1, '内容是...')
+    expect(blocks[0].find('.md-stub').text()).toBe('我先查一下')
     // 操作栏存在但不再承载文字内容（MarkdownRenderer 回显 stub 不在 .turn-summary 内）
     expect(wrapper.find('.turn-summary').exists()).toBe(true)
     expect(wrapper.find('.turn-summary').find('.md-stub').exists()).toBe(false)
@@ -645,8 +660,9 @@ describe('Turn · trace 块按 contentBlocks 真实时序渲染', () => {
     expect(wrapper.find('.streaming-tail').exists()).toBe(false)
   })
 
-  // TC-M0-3：折叠形态（D5）= 全部聚合块摘要行 + 末位 text；过程细节（thinking/tool）不渲染
-  it('TC-M0-3: 折叠态 text 可见（两段过程块各一行摘要，thinking/tool 细节隐藏）', () => {
+  // TC-M0-3：折叠态仅末位 text；展开态 = 真实时序 [th 段摘要, text, tool 段摘要]，
+  // 过程细节（thinking/tool 成员行）只在聚合块内部展开态渲染
+  it('TC-M0-3: 折叠态仅末位 text；展开 [th 段摘要, text, tool 段摘要]，细节隐藏', async () => {
     const wrapper = mountTurnWithRealBlock({
       turn: makeTurn({
         isStreaming: false,
@@ -666,23 +682,28 @@ describe('Turn · trace 块按 contentBlocks 真实时序渲染', () => {
         ],
       }),
     })
-    // complete + 未展开 → 折叠形态；trace 容器恒渲染
+    // complete + 未展开 → 折叠形态：仅末位 text 一单元；trace 容器恒渲染
     expect(wrapper.find('.trace').exists()).toBe(true)
-    // [th 段摘要, tool 段摘要, 末位 text] 三单元（D5：每段一行 + 末位正文殿后）
-    const blocks = wrapper.findAll('.trace .trace-blk')
+    let blocks = wrapper.findAll('.trace .trace-blk')
+    expect(blocks.length).toBe(1)
+    expect(blocks[0].classes()).toContain('trace-blk--text')
+    expect(blocks[0].find('.md-stub').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(false)
+    // 展开形态：真实时序 [th 段摘要, text 正文, tool 段摘要] 三单元
+    await wrapper.find('.turn-meta').trigger('click')
+    blocks = wrapper.findAll('.trace .trace-blk')
     expect(blocks.length).toBe(3)
     expect(blocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
-    expect(blocks[1].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
-    expect(blocks[2].classes()).toContain('trace-blk--text')
-    expect(blocks[2].find('.md-stub').exists()).toBe(true)
+    expect(blocks[1].classes()).toContain('trace-blk--text')
+    expect(blocks[2].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
     // thinking/tool 细节 DOM 不存在（只在聚合块展开态渲染）
     expect(wrapper.find('.trace-think').exists()).toBe(false)
     expect(wrapper.find('.trace-tool').exists()).toBe(false)
   })
 
-  // 多 assistant turn（工具调用循环）折叠形态（D5）：全部聚合块摘要行 + 全 turn 末位 text
-  // （旧「只渲染末位 text」口径随聚合块形态退役——过程存在信号保留为每段一行摘要）
-  it('折叠态多 assistant text turn = [聚合块摘要行, 末位 text]（a1 正文收敛、a2 正文殿后）', () => {
+  // 多 assistant turn（工具调用循环）折叠形态：仅全 turn 末位 text（中间正文与聚合块收起）；
+  // 展开态 = [a1 text, a1 tool 段摘要, a2 text] 真实时序全显
+  it('折叠态多 assistant text turn = 仅 a2 末位 text；展开 [a1 text, 聚合块摘要行, a2 text]', async () => {
     const wrapper = mountTurnWithRealBlock({
       turn: makeTurn({
         isStreaming: false,
@@ -707,10 +728,18 @@ describe('Turn · trace 块按 contentBlocks 真实时序渲染', () => {
         ],
       }),
     })
-    // 折叠形态：a1 的 tool 段摘要行 + 末位 text（a2「已完成修改」）；a1 非末位正文收敛（D5）
-    const blocks = wrapper.findAll('.trace > .trace-blk')
-    expect(blocks).toHaveLength(2)
-    expectAggregateThenText(blocks, '已完成修改')
+    // 折叠形态：仅末位 text（a2「已完成修改」）；a1 正文与 tool 段收起
+    let blocks = wrapper.findAll('.trace > .trace-blk')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].classes()).toContain('trace-blk--text')
+    expect(blocks[0].text()).toContain('已完成修改')
+    expect(blocks[0].text()).not.toContain('我先查一下文件')
+    // 展开形态：[a1 text, a1 tool 段摘要行, a2 text] 三单元（真实时序交错）
+    await wrapper.find('.turn-meta').trigger('click')
+    blocks = wrapper.findAll('.trace > .trace-blk')
+    expect(blocks).toHaveLength(3)
+    expectTextAggregateInterleaved(blocks, 1, '已完成修改')
+    expect(blocks[0].find('.md-stub').text()).toBe('我先查一下文件')
   })
 })
 
@@ -761,7 +790,7 @@ describe('Turn · subagent 轮终 running-resumable → isWorkingTurn false（re
     expect(sessionActive.value).toBe(false)
 
     // Turn 挂载（isSessionActive = 真实派生值，isLastTurn=true）：isWorkingTurn=false 的
-    // 用户可见形态——label「已工作」（非「工作中」），trace 收起（thinking 隐藏，仅 text）
+    // 用户可见形态——label「已工作」（非「工作中」），trace 收起（折叠 = 仅末位 text）
     const wrapper = mountTurn({
       turn: makeTurn({
         isStreaming: false,
@@ -778,11 +807,11 @@ describe('Turn · subagent 轮终 running-resumable → isWorkingTurn false（re
       isSessionActive: sessionActive.value,
     })
     expect(wrapper.find('.lbl').text()).toBe('已工作')
-    // 折叠形态：[thinking 段摘要行, 末位 text]
+    // 折叠形态：仅末位 text（thinking 段收起）
     const blocks = wrapper.findAll('.trace > .trace-blk')
-    expect(blocks).toHaveLength(2)
-    expect(blocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
-    expect(blocks[1].classes()).toContain('trace-blk--text')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].classes()).toContain('trace-blk--text')
+    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(false)
   })
 
   it('record closed（重开后形态）与 running + result（live 轮终）派生一致（live ≡ reload 语义）', async () => {
@@ -872,7 +901,7 @@ describe('Turn · subagent 虚拟 session 轮终 running-resumable 不再卡 str
     const sessionActive = useSessionActive(sessionId, forceWorking)
     expect(sessionActive.value).toBe(false)
 
-    // 用户可见形态：末位 turn「已工作」（非「工作中」）、thinking 收起（仅 text 可见）
+    // 用户可见形态：末位 turn「已工作」（非「工作中」）、折叠 = 仅末位 text（thinking 收起）
     const wrapper = mountTurn({
       turn: makeTurn({
         isStreaming: false,
@@ -889,11 +918,11 @@ describe('Turn · subagent 虚拟 session 轮终 running-resumable 不再卡 str
       isSessionActive: sessionActive.value,
     })
     expect(wrapper.find('.lbl').text()).toBe('已工作')
-    // 折叠形态：[thinking 段摘要行, 末位 text]
+    // 折叠形态：仅末位 text（thinking 段收起）
     const blocks = wrapper.findAll('.trace > .trace-blk')
-    expect(blocks).toHaveLength(2)
-    expect(blocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
-    expect(blocks[1].classes()).toContain('trace-blk--text')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].classes()).toContain('trace-blk--text')
+    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(false)
   })
 
   it('虚拟 session 真 running record（无 result）→ forceWorking true、末位 turn「工作中」+ spinner', async () => {

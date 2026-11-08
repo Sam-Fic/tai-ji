@@ -6,10 +6,9 @@
     hover actions 操作栏（TurnSummary）经 trace 末单元正文的 #turn-actions 插槽挂载
     （[actions-anchor]，流内固定行 = text 块下部一行，与 UserBubble hover actions 同族，
     见下方锚块注释；末单元非 text 时无挂载点、不渲染）。
-    trace 区单元 = 正文块 + 聚合块两型（chat-flow-process-aggregate D1/D2/D5）：正文直渲染
-    TextRow（.trace-blk / .trace-blk--text 类名契约挂 Turn.vue 单元 wrapper），过程段收进
-    ProcessAggregateBlock 三态容器（进行中双窗 / 完成摘要 / 展开平铺）；折叠态 = 末位正文 +
-    全部聚合块摘要行（D5）。
+    trace 区单元 = 正文块 + 聚合块两型（chat-flow-process-aggregate D1/D2 + 折叠形态
+    重定义）：正文直渲染 TextRow，过程段收进 ProcessAggregateBlock 三态容器；非工作态
+    折叠 = 仅末位正文，展开 = 全部正文 + 全部聚合块摘要行（见 trace 容器注释）。
   -->
   <!-- 根元素 content-col（居中 + 封顶 --content-max-w，720px 内容列原语）：整 turn 居中（spec §6.1 R4）。
        轮次节奏（demo workbench.css 权威值）：gap-[12px] = 用户气泡→轮头 12px 紧凑档（.blk:has(+ .blk-compact)）；
@@ -134,11 +133,10 @@
            行尾 meta 小字（耗时/时刻/计数徽标）与展开内容区在子元素显式声明各自档位。
            无 mb（demo 轮次边界唯一贡献 = 根元素 pb-5 的 20px；原 mb-1 为 TurnSummary 流内
            占位预留，TurnSummary 悬浮化后移除）。
-           trace 区单元两分支（chat-flow-process-aggregate D1/D2/D5）：
-           工作展开态（isWorkingTurn）渲染全部正文 + 全部聚合块（正文原生展示，聚合块按
-             followedByText / turnWorking 自判进行中双窗或完成摘要）；
-           折叠态/完成态/历史手动展开（!isWorkingTurn）渲染全部聚合块摘要行 + 末位正文
-             （D5：每段一行保留过程存在信号，正文收敛到末位一条）。
+           trace 区单元三态（chat-turn-fold-redesign）：工作态全部正文 + 全部聚合块
+             （聚合块按 followedByText / turnWorking 自判双窗或摘要）；
+           非工作态折叠（默认）仅末位正文；展开（turnExpanded）全部正文 + 全部聚合块
+             摘要行 + 末位正文（真实时序；聚合块内部平铺由组件本地展开态控制）。
            [动效裁决 2A] trace--just-done = 轮次落完成瞬间的换块落位标记（200ms 淡入 + 4px
            落位），仅刚落完成的轮次携带（justDone ref，见 script），历史轮不误标。
            正文块入场动效（D10，300ms 上移 5px 淡入）挂 TextRow 根（.agg-text-enter，
@@ -156,9 +154,10 @@
       <div class="trace mt-[12px] flex flex-col" :class="[traceDensityClass, { 'trace--just-done': justDone }]">
         <!-- 收纳完成通知展开明细行：展开区首行起逐条一行
              （低频查看区，行距紧凑、无横线装饰；成功弱档 dim / 失败 warn 不依赖 hover），
-             其后才是本轮 trace。仅落成态展开时渲染（工作态通知还是外部行，无明细可看）。 -->
+             其后才是本轮 trace。仅落成态且回合展开时渲染（工作态通知还是外部行；折叠态
+             trace 区只留末位正文，明细行随之收起——展开才可见）。 -->
         <div
-          v-if="!isWorkingTurn && foldedRows.length > 0"
+          v-if="!isWorkingTurn && turnExpanded && foldedRows.length > 0"
           class="flex flex-col"
           data-testid="turn-folded-notices"
         >
@@ -468,7 +467,14 @@ const emit = defineEmits<{
 }>()
 
 const deps = useChatViewDeps()
-const { getChangeSetStatus, isActive } = deps
+const { getChangeSetStatus, isActive, isExpanded } = deps
+
+/**
+ * 回合展开态（turn-expansion store 派生，key = turnStableId 首条消息 id，M5 stable-key）：
+ * 非工作态折叠/展开的 trace 区形态信号（chat-turn-fold-redesign 三态矩阵），TurnMeta
+ * chevron 同 key 读写。computed 求值保持 store 响应式追踪。
+ */
+const turnExpanded = computed(() => isExpanded(turnStableId(props.turn)))
 
 /** 最后一条 assistant */
 const lastAssistant = computed(() => {
@@ -487,8 +493,8 @@ const sessionActive = computed(() => props.isSessionActive ?? props.turn.isStrea
  * [chat-flow-consistency D2] 判定放宽为 `sessionActive ∧ (isLastTurn ∨ isStreaming)`：
  * 插话回流开出新回合后，旧回合的 assistant 在定稿收尾（回合级 message.complete）前仍是
  * streaming——旧回合保持工作展开态与计时，与新回合双工作态并存（期望形态），complete 到达
- * 两者同时落定（收起为纯派生态：isWorkingTurn 翻 false，trace 区转折叠形态——末位正文 +
- * 全部聚合块摘要行）。
+ * 两者同时落定（收起为纯派生态：isWorkingTurn 翻 false，trace 区转折叠形态——仅末位正文，
+ * 展开态经回合级 chevron 恢复）。
  */
 const isWorkingTurn = computed(
   () => sessionActive.value && ((props.isLastTurn ?? false) || isStreaming.value),
@@ -508,7 +514,7 @@ const {
   unitMemoDeps,
   textUnitProps,
   lastUnitIsRunningTool,
-} = useTurnTrace(() => props.turn, () => isWorkingTurn.value, () => isStreaming.value)
+} = useTurnTrace(() => props.turn, () => isWorkingTurn.value, () => isStreaming.value, () => turnExpanded.value)
 
 const thinkCount = computed(() => countThinking(props.turn))
 const toolCount = computed(() => countToolCalls(props.turn))
