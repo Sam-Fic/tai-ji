@@ -1478,10 +1478,6 @@ const configImpl = {
     await sleep(TIMING.ack)
     return { refreshed: [], failed: [], corrupt: [] }
   },
-  // models-store 变化感知开关：mock 无 pi 落盘层，ack 同构（facade 三元）。
-  async setProviderCatalogWatch(_enable: boolean): Promise<void> {
-    await sleep(TIMING.ack)
-  },
   // quota presets 合并视图：mock 无 remote-config 层，返编译期基线（与 runtime
   // listQuotaPresets() 的「远程 presets ?? 基线」同口径——mock 层额度类型下拉非空）。
   async listQuotaPresets(): Promise<QuotaPreset[]> {

@@ -290,13 +290,8 @@ onMounted(async () => {
   // 广播推回 store 自动更新。RD-4#10 的陈旧判据（failed[] / transport reject）见
   // composables/features/settings/useProviderCatalogsStale.ts。
   await refreshCatalogs()
-  // W1+W3c：页签可见期启用 models-store.json 变化感知 + 重拉 quota presets（fire-and-forget，
-  // 编排走 core refreshQuotaPresets 单一实现——失败 warn 沿用缓存，消费方回落基线）。
-  // watch 启用失败同样留痕：enable 失败 = 设置页开期间失去 models-store.json 变化感知
-  // （列表停在挂载时快照），属用户可见辅助能力降级，warn 可见而非裸吞。
-  transport.setProviderCatalogWatch(true).catch((e) => {
-    console.warn('[settings] setProviderCatalogWatch(true) failed:', e)
-  })
+  // W3c：页签可见期重拉 quota presets（fire-and-forget，编排走 core refreshQuotaPresets
+  // 单一实现——失败 warn 沿用缓存，消费方回落基线）。
   // 插件清单（D1）：条目区识别插件来源条目 / 家族卡数据源。失败降级为「无插件条目识别」
   // （条目管理不受影响），重试入口在插件流程内（S15）。清单到达后按 D5「页进入即拉」对
   // 已识别的插件条目拉一次已知状态（拉为主，推送只作增量提示）。
@@ -308,11 +303,6 @@ onMounted(async () => {
   })
   void refreshQuotaPresets()
 })
-
-// disable 失败后果有界（重进页签即恢复），降为 debug 但不静默。
-onUnmounted(() => transport.setProviderCatalogWatch(false).catch((e) => {
-  console.debug('[settings] setProviderCatalogWatch(false) failed:', e)
-}))
 
 /** 选中内置模板 → 打开 QuickSetup（先刷新 OAuth presence + env 检测） */
 async function onTemplateSelect(tpl: BuiltinProviderTemplate): Promise<void> {
