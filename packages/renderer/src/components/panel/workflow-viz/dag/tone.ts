@@ -4,8 +4,10 @@
  *
  * 实例行（WorkflowVizDagNode）与状态图例（WorkflowVizOverlay 壳内图例段）共同消费
  * dotTone——「图例 = DAG 的图例」的同源性由类名同源构造性保证：图例 dot 直接取
- * dotTone 的返回类，实例行小点同源取色，不平行手写第二份色值。方案 C 退役了节点
- * 整卡着色（nodeTone）：调用点卡片恒中性，状态语义归实例行 dot。
+ * dotTone 的返回类，实例行小点同源取色，不平行手写第二份色值。未触发态（0 实例
+ * 占位卡 dot 与图例「未触发」条目）单源导出 UNTRIGGERED_DOT_TONE，同规则构造性
+ * 同源。方案 C 退役了节点整卡着色（nodeTone）：调用点卡片恒中性，状态语义归实例
+ * 行 dot。
  */
 
 import type { WorkflowVizDagNodeStatus, WorkflowVizDagStopTone } from './types'
@@ -37,3 +39,10 @@ export function dotTone(status: WorkflowVizDagNodeStatus, stopTone?: WorkflowViz
       return 'fill-[var(--neutral-dim)]'
   }
 }
+
+/**
+ * 未触发态 dot 类（占位卡无实例状态，不进 dotTone 七态词表）：0 实例占位卡 dot
+ * 与状态图例「未触发」条目共同消费——中性色 + opacity-60 淡化，与实例行实色 dot
+ * 区分（「未触发 = 无实例」的视觉语义）。
+ */
+export const UNTRIGGERED_DOT_TONE = 'fill-[var(--neutral-dim)] opacity-60'

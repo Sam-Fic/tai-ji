@@ -3,11 +3,12 @@
 
   只承担调用点主体卡片与其实例小卡的形态渲染（方案 C demo §3.3/§6 形态）：主体框
   恒高 DAG_NODE_H（44，实边框 + surface-2 亮底浮在分区暗底上）承载中性状态点 +
-  调用点模板名（变量段 ${…} warn 高亮）+ 元信息行（调用点 · n 实例[ · k 失败] /
+  调用点显示名标题（口径见下方命名规则）+ 元信息行（调用点 · n 实例[ · k 失败] /
   未触发 · L<行号>）；实例小卡画在主体框之外下方（独立 rect 边框卡：≥1 实例每实例
   一张，done/failed 状态染边框 + 状态点 + 真实 agent 名；0 实例一张虚线占位卡
-  「未触发 · 0 实例」，不伪造运行名）。小卡与主体同宽左右边框对齐，状态点与
-  文字锚主体同一垂直线（DOT_CX/LABEL_X）——两卡点列、文字列、边框全对齐。
+  「未触发 · 0 实例」（同源未触发 dot，见 tone.ts），不伪造运行名）。小卡与主体
+  同宽左右边框对齐，状态点与文字锚主体同一垂直线（DOT_CX/LABEL_X）——两卡点列、
+  文字列、边框全对齐。
 
   卡片中性化（方案 C §3.2/§9.1 裁决）：调用点是静态结构，状态语义归实例小卡承载——
   实例失败/完成只染对应实例小卡的边框与点，不染调用点主体（消除「一个实例失败整个
@@ -64,9 +65,12 @@
       {{ truncate(metaText, META_MAX_CHARS) }}
     </text>
     <!-- 实例小卡区（主体框之外下方，方案 C demo §3.3）：≥1 实例每实例一张独立边框卡
-         （done/failed 状态染边 + 状态点归实例卡）；0 实例一张虚线占位卡。几何常量与
+         （done/failed 状态染边 + 状态点归实例卡）；0 实例一张虚线占位卡（dot 消费
+         tone.ts 的 UNTRIGGERED_DOT_TONE，与状态图例「未触发」条目同源）。几何常量与
          layout.instanceZoneHeight 同源口径（高度表由画布按实例数派生传入布局）。
-         data-wfvz-instance = 测试观察锚，非交互语义——agent 钻取已收归 trace 行 -->
+         data-wfvz-instance = 点击路由锚 + 测试观察锚：点击路由由画布层事件委托实现
+         （WorkflowVizDag.routeClick 上抛 agent 语义，等同 trace 行点击），本组件只
+         挂 cursor-pointer 不自行监听 -->
     <g
       v-for="(call, i) in instances ?? []"
       :key="call.id"
@@ -109,6 +113,14 @@
         :width="DAG_NODE_W"
         :height="INSTANCE_PLACEHOLDER_H"
       />
+      <!-- 未触发 dot：与实例卡点同列（DOT_CX）、同径（r=3）；类单源 tone.ts
+           UNTRIGGERED_DOT_TONE，图例「未触发」条目同源消费 -->
+      <circle
+        :class="['transition-[fill] duration-[var(--duration-fast)] ease-[var(--ease)]', UNTRIGGERED_DOT_TONE]"
+        :cx="DOT_CX"
+        :cy="placeholderDotCy"
+        r="3"
+      />
       <text
         class="text-[length:var(--text-3xs)] font-mono fill-[var(--neutral-faint)]"
         :x="LABEL_X"
@@ -130,7 +142,7 @@ import {
   INSTANCE_PLACEHOLDER_H,
   INSTANCE_ZONE_TOP_GAP,
 } from './layout'
-import { dotTone } from './tone'
+import { dotTone, UNTRIGGERED_DOT_TONE } from './tone'
 import { callpointDisplayName } from './callpoint-name'
 import type { WorkflowVizDagNodeStatus, WorkflowVizDagStopTone } from './types'
 
@@ -194,9 +206,11 @@ function chipLabelBaselineY(i: number): number {
   return chipCenterY(i) + TEXT_CENTER_LIFT
 }
 
-/** 0 实例占位卡的顶部 y 与文字基线（卡高 18）。 */
+/** 0 实例占位卡的顶部 y（卡高 18）。 */
 const placeholderTopY = DAG_NODE_H + INSTANCE_ZONE_TOP_GAP
-const placeholderLabelBaselineY = placeholderTopY + INSTANCE_PLACEHOLDER_H / HALF + TEXT_CENTER_LIFT
+/** 占位卡视觉中心 y（未触发 dot 锚，与实例卡点同列 DOT_CX）与文字基线 y。 */
+const placeholderDotCy = placeholderTopY + INSTANCE_PLACEHOLDER_H / HALF
+const placeholderLabelBaselineY = placeholderDotCy + TEXT_CENTER_LIFT
 
 /** 模板名变量段标记长度（u1 解析器合成标记 `${…}` 的字符数，截断预算计入）。 */
 const VAR_MARKER_LENGTH = '${…}'.length

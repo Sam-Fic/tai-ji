@@ -360,7 +360,7 @@ import { useOverlayControl } from '@taiji/core/domain/overlay'
 import { deriveOverlayTabSegments, type OverlayTabSegment } from '@taiji/core/domain/overlay'
 import OverlayShell from './OverlayShell.vue'
 import WorkflowVizDag from '../dag/WorkflowVizDag.vue'
-import { dotTone } from '../dag/tone'
+import { dotTone, UNTRIGGERED_DOT_TONE } from '../dag/tone'
 import { SCHEDULER_MODAL_VIEW_ID, type OverlayTab } from './workflow-viz-overlay'
 import { buildFallbackGroups, buildUnmatchedGroups, hasExplicitPhase as hasAnyExplicitPhase, type FallbackGroup, type UnmatchedGroup } from './overlay-fallback-groups'
 import type { OverlayKind } from '@taiji/core/domain/overlay'
@@ -499,9 +499,10 @@ function onTabClick(value: OverlayTab): void {
 /**
  * 图例描述画布实际可见形态（方案 C 后 = 实例行 dot 四态 + 未触发占位；卡片本体
  * 中性无状态，不再进图例）：running / done / failed / cancelled 消费 dag/tone.ts
- * 的 dotTone（与实例行 dot 同源的单一事实源）；「未触发」= 0 实例调用点的占位行
- * dot（中性点淡化，与实例行点区分）。cancelled（§3.3.8 run 终局收尾在途成员，
- * 中性档）与 run 级 outcome 文案同词「已取消」。
+ * 的 dotTone（与实例行 dot 同源的单一事实源）；「未触发」= 0 实例占位卡 dot（消费
+ * dag/tone.ts 的 UNTRIGGERED_DOT_TONE，与节点占位卡 dot 同源；中性淡化，与实例
+ * 行点区分）。cancelled（§3.3.8 run 终局收尾在途成员，中性档）与 run 级 outcome
+ * 文案同词「已取消」。
  * 停止叠加两档不进常驻图例，由图例容器 title 承载说明（i18n legendStopTitle）。
  */
 const LEGEND_ENTRIES = [
@@ -511,9 +512,6 @@ const LEGEND_ENTRIES = [
   { status: 'cancelled', labelKey: 'panel.workflowViz.statusCancelled' },
 ] as const satisfies ReadonlyArray<{ status: WorkflowVizDagNodeStatus; labelKey: string }>
 
-/** 未触发条目（0 实例占位行）：中性点淡化形态，dot 类与节点占位行同源。 */
-const UNTRIGGERED_DOT_CLASS = 'fill-[var(--neutral-dim)] opacity-60'
-
 /** 图例条目（序：运行中 / 完成 / 失败 / 已取消 / 未触发）。 */
 const legendEntries = computed(() => [
   ...LEGEND_ENTRIES.map((entry) => ({
@@ -521,7 +519,7 @@ const legendEntries = computed(() => [
     label: t(entry.labelKey),
     dotClass: dotTone(entry.status),
   })),
-  { key: 'untriggered', label: t('panel.workflowViz.callPointUntriggered'), dotClass: UNTRIGGERED_DOT_CLASS },
+  { key: 'untriggered', label: t('panel.workflowViz.callPointUntriggered'), dotClass: UNTRIGGERED_DOT_TONE },
 ])
 
 // ── 关闭通道（壳两通道：按钮/遮罩统一 close 事件上抛；ESC 归编排器）──
