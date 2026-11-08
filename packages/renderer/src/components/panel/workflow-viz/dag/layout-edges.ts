@@ -1,5 +1,5 @@
 /**
- * layout-edges.ts —— DAG 边几何装配（正交路由：折点序列 + 圆角 path + 条件谓词标注
+ * layout-edges.ts —— DAG 边几何装配（正交路由：折点序列 + 圆角 path + 条件谓词徽章
  * 锚）。2026-11 自 layout.ts 拆出（layout.ts 超 max-lines 上限；依赖单向：本文件
  * import layout 的几何常量与 DagLayoutNode、routing-avoid 的避让层，layout 不反向
  * 依赖；消费方 = WorkflowVizDag 画布 + workflow-viz-pure-bundle 白盒用例）。
@@ -11,9 +11,8 @@
  * - 通道竖线先经 routing-avoid.assignChannelLanes 按纵向跨度游程错开（fan-in/out 不
  *   叠线），再经 routing-avoid.avoidObstructedChannelMid 整体平移到最近零穿卡走廊；
  *   同行直线有障碍时升级 routing-avoid.sameRowBypass 上下绕行 4 折线。
- * - 条件谓词标注锚（labelX/labelY/labelAnchor）：通道竖线旁居中悬挂（middle）、
- *   绕行横段中点（middle）、同行直线挂两端卡主体顶上方空档（middle——列间走廊容
- *   不下谓词文字）、同列 gutter 细道旁右排（start——gutter 宽 8px 容不下居中文字）。
+ * - 条件谓词徽章锚（labelX/labelY，全分支统一规则）：两端卡水平中心的中点 × 分区头
+ *   预留的谓词徽章带（middle 平铺；贴边位置容不下徽章——详见 badgeAnchorY）。
  * - 锚点取节点主体四边中点（主体高恒 DAG_NODE_H=44，实例小卡不参与锚点几何），
  *   loop-back 底锚 = 主体 + 实例卡区总底（y + h + zoneH——回边从实例小卡下方走）。
  */
@@ -46,12 +45,6 @@ export interface DagLayoutEdge { // oe-exempt:20261002:framework:workflow-viz �
   /** 谓词标注锚点（kind='conditional' 时携带；置于本边通道竖线旁）。 */
   labelX?: number
   labelY?: number
-  /**
-   * 谓词标注文字锚（text-anchor）：'middle'（悬挂锚点中心——通道竖线/绕行横段/卡顶
-   * 上方空档）为缺省；'start'（沿锚点右排）仅同列 gutter 细道分支（gutter 宽 8px 容
-   * 不下居中文字，靠细道右排）。
-   */
-  labelAnchor?: 'start' | 'middle'
 }
 
 /** 回边下探深度（画布坐标系常量——loop-back 横行总线的 y——压在所有分区内容之下）。 */
@@ -64,11 +57,10 @@ const LOOP_SIDE_OFFSET = 8
 const LOOP_APPROACH_DROP = 5
 /** 折点圆角半径（px；实际半径再按相邻段长收敛，短段不打弯）。 */
 const CORNER_RADIUS = 6
-/** 条件谓词标注与中位竖线的间隙（px）。 */
-const LABEL_GAP_X = 5
-/** 同行直线边谓词标注相对两端节点主体顶边的上移间隙（px）——列间走廊 32px 容不下
- *  谓词文字（40 字符截断上限 ~240px），标签挂两端卡顶上方的标题空档带，不压卡片。 */
-const LABEL_ABOVE_GAP = 6
+/** 谓词徽章基线相对两端节点主体顶边的上移间隙（px）——徽章平铺在分区头预留的
+ *  谓词徽章带（layout CLUSTER_PAD_TOP 含 14px 专属带）：min(两端主体顶) − 本值 =
+ *  徽章文字基线，任何贴边位置（列间走廊 32px / gutter 8px）均容不下徽章。 */
+const LABEL_ABOVE_GAP = 4
 /**
  * 折点序列 → 圆角 path d 串：直线段 L 连接，内部折点处用半径 r 的二次贝塞尔
  * 过渡（r 收敛到相邻段长一半，避免短段翻折）。折点本身保持轴对齐不变量。
@@ -97,9 +89,17 @@ function roundedPath(points: DagPoint[]): string {
 }
 
 /** 待装配边（保持 dag.edges 序——输出序不因错开分配分遍打乱）：已定型路径或通道成员。 */
+/** 谓词徽章锚统一规则：labelX = 两端卡水平中心的中点（同列即本列卡中心），
+ *  labelY = 徽章带（min(两端主体顶) − LABEL_ABOVE_GAP，分区头预留的专属平铺行）。
+ *  全部路由分支共用同一锚规则——贴边位置（列间走廊 32px / gutter 8px）均容不下
+ *  徽章，middle 居中平铺在徽章带是唯一无压卡位置（2026-11-08 视觉裁决）。 */
+function badgeAnchorY(from: DagLayoutNode, to: DagLayoutNode): number {
+  return Math.min(from.y, to.y) - LABEL_ABOVE_GAP
+}
+
 type PendingEdge =
-  | { edge: WorkflowDagEdge; kind: 'fixed'; points: DagPoint[]; labelX?: number; labelY?: number; labelAnchor?: 'start' | 'middle' }
-  | { edge: WorkflowDagEdge; kind: 'channeled'; chan: ChannelMember }
+  | { edge: WorkflowDagEdge; kind: 'fixed'; points: DagPoint[]; labelX?: number; labelY?: number }
+  | { edge: WorkflowDagEdge; kind: 'channeled'; chan: ChannelMember; labelX?: number; labelY?: number }
 
 /**
  * loop-back 路由（锚点只取节点四边中点：底边中点进出）。形态分三档：
@@ -213,18 +213,16 @@ export function layoutEdges(dag: WorkflowDag, nodes: DagLayoutNode[]): DagLayout
           { x: gutterX, y: y2 },
           { x: to.x + DAG_NODE_W, y: y2 },
         ],
-        // 谓词标注沿细道右排（gutter 宽 8px 容不下居中文字——锚点右移间隙起排）
-        labelX: gutterX + LABEL_GAP_X,
-        labelY: (y1 + y2) / HALF,
-        labelAnchor: 'start',
+        // 谓词徽章锚（统一规则）：两端卡水平中心的中点 × 徽章带（见 badgeAnchor）
+        labelX: from.x + DAG_NODE_W / HALF,
+        labelY: badgeAnchorY(from, to),
       })
       continue
     }
     if (Math.abs(y1 - y2) < COINCIDE_EPS) {
-      // 同行直线边（残余 5）：有障碍升级上下绕行 4 折线，标注锚随迁绕行横段中点
-      //（middle 悬挂）；无障碍/两方向均不满足保持直线——直线水平段在两端卡主体
-      // 中心，列间走廊容不下谓词文字，标注挂两端卡主体顶上方空档带（min(两端主体
-      // 顶) − LABEL_ABOVE_GAP，落在分区标题与首个节点之间的空档），不压卡片
+      // 同行直线边（残余 5）：有障碍升级上下绕行 4 折线；无障碍/两方向均不满足保持
+      // 直线（零扰动——直线公式不变）。谓词徽章锚统一走徽章带（badgeAnchor——列间
+      // 走廊 32px 容不下徽章，任何贴边位置都压卡）
       const bypass = sameRowBypass(x1, y1, x2, nodes, from.node.id, to.node.id)
       if (bypass !== null) {
         pending.push({
@@ -237,8 +235,7 @@ export function layoutEdges(dag: WorkflowDag, nodes: DagLayoutNode[]): DagLayout
             { x: x2, y: y2 },
           ],
           labelX: (x1 + x2) / HALF,
-          labelY: bypass.yB,
-          labelAnchor: 'middle',
+          labelY: badgeAnchorY(from, to),
         })
         continue
       }
@@ -247,8 +244,7 @@ export function layoutEdges(dag: WorkflowDag, nodes: DagLayoutNode[]): DagLayout
         kind: 'fixed',
         points: [{ x: x1, y: y1 }, { x: x2, y: y2 }],
         labelX: (x1 + x2) / HALF,
-        labelY: Math.min(from.y, to.y) - LABEL_ABOVE_GAP,
-        labelAnchor: 'middle',
+        labelY: badgeAnchorY(from, to),
       })
       continue
     }
@@ -260,7 +256,8 @@ export function layoutEdges(dag: WorkflowDag, nodes: DagLayoutNode[]): DagLayout
       fromId: from.node.id,
       toId: to.node.id,
     }
-    pending.push({ edge, kind: 'channeled', chan })
+    // 谓词徽章锚（统一规则，路径点在通道车道分配后才定型——锚随边携带不随路径走）
+    pending.push({ edge, kind: 'channeled', chan, labelX: (x1 + x2) / HALF, labelY: badgeAnchorY(from, to) })
     const key = `${x1}|${x2}`
     const list = channels.get(key)
     if (list) list.push(chan)
@@ -275,7 +272,7 @@ export function layoutEdges(dag: WorkflowDag, nodes: DagLayoutNode[]): DagLayout
   const result: DagLayoutEdge[] = []
   for (const item of pending) {
     if (item.kind === 'fixed') {
-      result.push({ edge: item.edge, points: item.points, d: roundedPath(item.points), labelX: item.labelX, labelY: item.labelY, labelAnchor: item.labelAnchor })
+      result.push({ edge: item.edge, points: item.points, d: roundedPath(item.points), labelX: item.labelX, labelY: item.labelY })
       continue
     }
     const c = item.chan
@@ -289,10 +286,9 @@ export function layoutEdges(dag: WorkflowDag, nodes: DagLayoutNode[]): DagLayout
       edge: item.edge,
       points,
       d: roundedPath(points),
-      // 谓词标注 middle 悬挂在通道竖线中心（竖线在列间走廊内，居中不压卡）
-      labelX: c.laneX,
-      labelY: (c.y1 + c.y2) / HALF,
-      labelAnchor: 'middle',
+      // 谓词徽章锚在通道装配前随边定型（badgeAnchor 统一规则——见 PendingEdge 注释）
+      labelX: item.labelX,
+      labelY: item.labelY,
     })
   }
   return result

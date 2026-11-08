@@ -47,7 +47,10 @@ export const DAG_NODE_H = 44
 const NODE_GAP = 18
 /** 分区内边距（节点区四周）。 */
 const CLUSTER_PAD_X = 12
-const CLUSTER_PAD_TOP = 30
+/** 分区顶带高：分区标题 + 副标题 + 谓词徽章带（条件边谓词徽章的专属平铺行，
+ *  2026-11-08 视觉裁决：列间走廊 32px 与标题带空档均容不下 16 字符徽章，统一
+ *  预留 14px 专属带使谓词徽章全场景无冲突平铺）。 */
+const CLUSTER_PAD_TOP = 44
 const CLUSTER_PAD_BOTTOM = 12
 /** 分区标题行高。 */
 const CLUSTER_TITLE_H = 18

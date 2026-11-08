@@ -110,8 +110,11 @@
           }}</text>
         </g>
 
-        <!-- 边：kind 着色（sequence 灰 / dataflow 实线深 / conditional 虚线 warn / loop-back 虚线 accent 下绕弧）；
-             marker-end 箭头标流向（tip 落在目标锚点 = 节点边中点） -->
+        <!-- 边：kind 着色（sequence 灰 / dataflow 实线深 / conditional 中性虚线 /
+             loop-back 虚线 accent 下绕弧）。conditional 2026-11-08 视觉裁决退黄：warn
+             色三重叠加（边 + 箭头 + 谓词文字）视觉噪声大，分支语义收敛为「中性虚线
+             线型」（虚线 = 非必走），推翻 fit-and-routing 的 warn 着色；marker-end 箭头
+             标流向（tip 落在目标锚点 = 节点边中点，色随 context-stroke 跟边） -->
         <path
           v-for="le in edges"
           :key="le.edge.id"
@@ -121,19 +124,29 @@
           marker-end="url(#wfvz-dag-arrow)"
           :data-testid="`wfvz-dag-edge-${le.edge.id}`"
         />
-        <!-- 条件边谓词标注（原文截断，title 悬停全文；middle 悬挂锚点中心——同列
-             gutter 细道分支例外 start 右排，锚模式由布局产物 labelAnchor 携带） -->
-        <text
+        <!-- 条件边谓词徽章（2026-11-08 视觉裁决）：小圆角底徽章替代裸 warn 文字——
+             常显截短文本（title 悬停全文），middle 平铺在分区头预留的谓词徽章带
+             （布局 badgeAnchorY 统一锚——贴边位置容不下徽章） -->
+        <g
           v-for="le in conditionalEdges"
           :key="`label-${le.edge.id}`"
-          class="fill-warn text-[length:var(--text-3xs)] font-mono"
-          :x="le.labelX"
-          :y="le.labelY"
-          :text-anchor="le.labelAnchor ?? 'middle'"
+          :data-testid="`wfvz-dag-edge-label-${le.edge.id}`"
         >
           <title>{{ le.edge.predicate }}</title>
-          {{ truncate(le.edge.predicate ?? '', PREDICATE_MAX_CHARS) }}
-        </text>
+          <rect
+            class="fill-[var(--surface)] stroke-[var(--border-strong)] [rx:3]"
+            :x="(le.labelX ?? 0) - badgeWidth(le.edge.predicate) / HALF"
+            :y="(le.labelY ?? 0) - PREDICATE_BADGE_H + TEXT_BASELINE_DROP"
+            :width="badgeWidth(le.edge.predicate)"
+            :height="PREDICATE_BADGE_H"
+          />
+          <text
+            class="fill-[var(--neutral-mid)] text-[length:var(--text-3xs)] font-mono"
+            :x="le.labelX ?? 0"
+            :y="le.labelY ?? 0"
+            text-anchor="middle"
+          >{{ truncate(le.edge.predicate ?? '', PREDICATE_MAX_CHARS) }}</text>
+        </g>
 
         <!-- 节点卡片（per-node 边界：单节点渲染失败 = 占位错误态，不挂整画布）；
              data-stop-tone 同值绑外层与节点卡片根（测试观察锚点，非 CSS 选择器——
@@ -232,11 +245,13 @@ const { t } = useI18n()
 /**
  * 边 kind → Tailwind 着色类（每分支给全 stroke 色 + 宽度/虚线，不做「基类 +
  * kind 覆盖」——同名 stroke-* 工具类并存时胜负取决于调色板发射序而非 class 顺序）。
+ * conditional 中性虚线（2026-11-08 视觉裁决退黄，见模板注释）：虚线线型承载「分支
+ * = 可能不走」语义，warn 色退场（此前边+箭头+谓词文字三重黄视觉噪声大）。
  */
 const EDGE_KIND_CLASS: Record<WorkflowDagEdgeKind, string> = {
   sequence: 'stroke-neutral-faint [stroke-width:1.2]',
   dataflow: 'stroke-neutral-ico [stroke-width:1.3]',
-  conditional: 'stroke-warn [stroke-width:1.2] [stroke-dasharray:5_4]',
+  conditional: 'stroke-neutral-dim [stroke-width:1.2] [stroke-dasharray:5_4]',
   'loop-back': 'stroke-accent [stroke-width:1.2] [stroke-dasharray:6_4]',
 }
 
@@ -244,10 +259,32 @@ const CLUSTER_TITLE_INSET = 12
 const CLUSTER_TITLE_H_BASE = 20
 /** 分区副标题与分区标题的基线落差（px；副标题挂在标题下一行）。 */
 const CLUSTER_SUB_BASELINE_DROP = 14
-/** 条件谓词标注显示截断上限（px 布局友好宽度内的可读性上界；完整原文走 title 悬停）。
- *  40 字符容下常规布尔条件全文（如 `commitPlan.stagePaths.length === 0`），更长的
- *  仍截断省略。 */
-const PREDICATE_MAX_CHARS = 40
+/** 条件谓词徽章显示截断上限（完整原文走徽章 title 悬停）。16 字符 = 徽章带宽度
+ *  预算（分区头 14px 带内单行徽章，更宽会与相邻元素挤碰；谓词细节按需悬停）。 */
+const PREDICATE_MAX_CHARS = 16
+/** 谓词徽章高（px，= 分区头预留徽章带的带高）。 */
+const PREDICATE_BADGE_H = 14
+/** 谓词徽章左右内边距合计（px，每侧 4）。 */
+const PREDICATE_BADGE_PAD_X = 8
+/** 文字基线到徽章底边的下伸量（px，基线以下 3px 下缘收在底边内）。 */
+const TEXT_BASELINE_DROP = 3
+/** 取半除数（徽章中心 x = 锚点 x − 宽/2；具名以过 no-magic-numbers）。 */
+const HALF = 2
+/** 10px mono 单字符宽估算：CJK 全宽 10、ASCII 半宽 6（demo textWidth 同口径）。 */
+const CJK_CHAR_W = 10
+const ASCII_CHAR_W = 6
+/** CJK 判定起点码点（CJK 区块 ≥ U+2E80）。 */
+const CJK_START = 0x2e80
+
+/** 谓词徽章宽估算（截短后文本逐字符宽累加 + 内边距）。 */
+function badgeWidth(predicate: string | undefined): number {
+  const text = truncate(predicate ?? '', PREDICATE_MAX_CHARS)
+  let w = 0
+  for (let i = 0; i < text.length; i++) {
+    w += text.charCodeAt(i) > CJK_START ? CJK_CHAR_W : ASCII_CHAR_W
+  }
+  return w + PREDICATE_BADGE_PAD_X
+}
 /** 分区展示序号补零位数（demo 同款「执行段 01」两位序）。 */
 const STAGE_ORDER_PAD = 2
 

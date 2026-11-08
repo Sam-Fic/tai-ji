@@ -1197,9 +1197,10 @@ describe('layoutEdges 正交路由（白盒）', () => {
     expect(gutterX).toBe(edge.points[2].x)
     expect(gutterX).toBeGreaterThan(la.x + DAG_NODE_W)
     expect(gutterX).toBeLessThan(la.x + DAG_NODE_W + 12)
-    // 谓词标注锚在细道旁（节点列之外，不再落进卡片内部）
-    expect(edge.labelX).toBe(gutterX + 5)
-    expect(edge.labelY).toBe((la.y + la.h / 2 + lb.y + lb.h / 2) / 2)
+    // 谓词徽章锚（统一规则）：同列边 labelX = 本列卡水平中心；labelY = 徽章带
+    //（min(两端主体顶) − 4，分区头预留带——贴边位置容不下徽章）
+    expect(edge.labelX).toBe(la.x + DAG_NODE_W / 2)
+    expect(edge.labelY).toBe(Math.min(la.y, lb.y) - 4)
   })
 
   it('同通道并行边（fan-in）：竖线段按错开位居中错开，不再重合成一根线', () => {
@@ -1523,6 +1524,8 @@ describe('layoutEdges 同行直线边绕行（残余 5，白盒）', () => {
       edges: [{ id: 'e1', from: 'a', to: 'f', kind: 'conditional', predicate: 'fixMode' }],
     })
     const [edge] = edges.filter((le) => le.edge.id === 'e1')
+    const la = geo.get('a')!
+    const lf = geo.get('f')!
     const lm = geo.get('m')!
     // 上下等距（障碍行底 +12 与行顶 −12 距边 y 相等）→ 取上
     const yB = lm.y - 12
@@ -1530,8 +1533,8 @@ describe('layoutEdges 同行直线边绕行（残余 5，白盒）', () => {
     expect(edge.points[1]).toEqual({ x: edge.points[0].x, y: yB })
     expect(edge.points[2]).toEqual({ x: edge.points[3].x, y: yB })
     expectAxisAligned(edge.points)
-    // conditional 谓词标注锚随迁绕行横段（中点 x、横段 y）
-    expect(edge.labelY).toBe(yB)
+    // conditional 谓词徽章锚（统一规则）：中点 x × 徽章带 y（min(两端主体顶) − 4）
+    expect(edge.labelY).toBe(Math.min(la.y, lf.y) - 4)
     expect(edge.labelX).toBe((edge.points[0].x + edge.points[3].x) / 2)
   })
 
@@ -1552,10 +1555,9 @@ describe('layoutEdges 同行直线边绕行（残余 5，白盒）', () => {
     const [edge] = edges
     expect(edge.points).toHaveLength(2)
     expect(edge.labelX).toBe((edge.points[0].x + edge.points[1].x) / 2)
-    // 直线水平段在两端卡主体中心（列间走廊 32px 容不下谓词文字）——标注挂两端卡
-    // 主体顶上方空档带（分区标题与首个节点之间的空档），middle 悬挂锚点中心
-    expect(edge.labelY).toBe(Math.min(la.y, lb.y) - 6)
-    expect(edge.labelAnchor).toBe('middle')
+    // 谓词徽章锚（统一规则）：两端卡水平中心中点 × 徽章带（min(两端主体顶) − 4）
+    expect(edge.labelY).toBe(Math.min(la.y, lb.y) - 4)
+    expect(edge.labelX).toBe((edge.points[0].x + edge.points[1].x) / 2)
   })
 
   it('上方绕行带被高个节点覆盖 → 落到下方绕行带（近者规则的方向回退）', () => {
@@ -1585,13 +1587,16 @@ describe('layoutEdges 同行直线边绕行（残余 5，白盒）', () => {
     })
     // 高个 th 按 3 实例增高卡区、其余钉 0（纯主体 44 盒——硬编码几何锚定基准）
     const layout = layoutDag(canvas, new Map(canvas.nodes.map((n) => [n.id, n.id === 'th' ? instanceZoneHeight(3) : 0])))
+    const la = layout.nodes.find((ln) => ln.node.id === 'a')!
+    const lf = layout.nodes.find((ln) => ln.node.id === 'f')!
     const lm = layout.nodes.find((ln) => ln.node.id === 'm')!
     const [edge] = layoutEdges(canvas, layout.nodes).filter((le) => le.edge.id === 'e1')
     const yB = lm.y + lm.h + lm.zoneH + 12
     expect(edge.points).toHaveLength(4)
     expect(edge.points[1].y).toBe(yB)
     expect(edge.points[2].y).toBe(yB)
-    expect(edge.labelY).toBe(yB)
+    // 谓词徽章锚（统一规则）：min(两端主体顶) − 4（绕行带 y 属路径点，徽章恒在带）
+    expect(edge.labelY).toBe(Math.min(la.y, lf.y) - 4)
     expectAxisAligned(edge.points)
   })
 
@@ -1626,10 +1631,9 @@ describe('layoutEdges 同行直线边绕行（残余 5，白盒）', () => {
     const lf = layout.nodes.find((ln) => ln.node.id === 'f')!
     const [edge] = layoutEdges(canvas, layout.nodes).filter((le) => le.edge.id === 'e1')
     expect(edge.points).toHaveLength(2)
-    // 直线残留：谓词标注挂两端卡主体顶上方空档带（列间走廊容不下谓词文字）
-    expect(edge.labelY).toBe(Math.min(la.y, lf.y) - 6)
+    // 直线残留：谓词徽章锚（统一规则）min(两端主体顶) − 4（徽章带）
+    expect(edge.labelY).toBe(Math.min(la.y, lf.y) - 4)
     expect(edge.labelX).toBe((edge.points[0].x + edge.points[1].x) / 2)
-    expect(edge.labelAnchor).toBe('middle')
   })
 })
 
@@ -1957,10 +1961,25 @@ describe('WorkflowVizDag 画布（黑盒 DOM）', () => {
     expect(wrapper.emitted('select')?.[0]?.[0]).toEqual({ semantic: 'phase', phase: 'gate' })
   })
 
-  it('条件边谓词标注可见（用户可见：predicate 截断文本）', () => {
+  it('条件边谓词徽章（2026-11-08 视觉裁决）：圆角底徽章 middle 平铺 + title 全文 + 条件边中性虚线（退黄）', () => {
     const wrapper = mountDag(sampleDag())
-    const labels = wrapper.findAll('text').filter((t) => t.text().includes('fixMode'))
-    expect(labels.length).toBeGreaterThan(0)
+    const badge = wrapper.find('[data-testid="wfvz-dag-edge-label-e-cond"]')
+    expect(badge.exists()).toBe(true)
+    // 徽章截短文本（16 字符上限）+ title 悬停全文
+    expect(badge.text()).toContain('fixMode === apply')
+    expect(badge.find('title').text()).toBe('fixMode === apply')
+    // 徽章底：surface 底 + border-strong 边、圆角 3、高 14
+    const rect = badge.find('rect')
+    expect(rect.classes()).toContain('fill-[var(--surface)]')
+    expect(rect.classes()).toContain('stroke-[var(--border-strong)]')
+    expect(Number(rect.attributes('height'))).toBe(14)
+    // 文字 middle 居中（text-anchor）
+    expect(badge.find('text').attributes('text-anchor')).toBe('middle')
+    // 条件边中性虚线（warn 退场——分支语义由虚线线型承载）
+    const edge = wrapper.find('[data-testid="wfvz-dag-edge-e-cond"]')
+    expect(edge.classes()).toContain('stroke-neutral-dim')
+    expect(edge.classes()).toContain('[stroke-dasharray:5_4]')
+    expect(edge.classes()).not.toContain('stroke-warn')
   })
 })
 
@@ -2094,11 +2113,12 @@ describe('WorkflowVizDag 视口 fit-to-view（2026-10 用户裁决：默认打�
     }
     await wrapper.setProps({ dag: tall })
     const vp = readViewport(wrapper)
-    // 高 462 > 容器 200 → k = (200-40)/462 = 0.3463 < ZOOM_MIN 0.35 → 被下限 clamp
+    // 高 476 > 容器 200 → k = (200-40)/476 ≈ 0.336 < ZOOM_MIN 0.35 → 被下限 clamp
     // （方案 C：节点恒带实例卡区——0 实例占位卡也占高，单节点占位 = 主体 44 + 卡区 22
-    // = 66，5 节点高 = 48 + 5×66 + 4×18 + 12）
+    // = 66；分区头带 = CLUSTER_PAD_TOP 44 + 标题 18 = 62（含谓词徽章专属带），
+    // 5 节点高 = 62 + 5×66 + 4×18 + 12）
     expect(vp.k).toBe(ZOOM_MIN)
-    expect(vp.ty).toBeCloseTo((200 - 462 * ZOOM_MIN) / 2, 6)
+    expect(vp.ty).toBeCloseTo((200 - 476 * ZOOM_MIN) / 2, 6)
   })
 
   it('容器零尺寸挂载（overlay 过渡态）不 fit；持续 ResizeObserver 在 fit 态下就绪补 fit、后续尺寸变化追 fit', async () => {
