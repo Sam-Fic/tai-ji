@@ -102,7 +102,9 @@ function roundedPath(points: DagPoint[]): string {
  *  残留：同列多条条件边共享同一顶端节点时（如 a→b、a→c 同列）徽章同 x 同 y 重叠
  *  ——14px 专属带只容单行，无错开空间；罕见形态（单列多条件边且共顶），登记不修。
  *  跨列边不消费本带：相邻列边骑自适应拉开的列间隙（layoutDag gapExtra），跳列
- *  异行边走分区头徽章带 SKIP_COLUMN_BADGE_BAND_Y（2026-11-08 用户裁决）。 */
+ *  异行边走分区头徽章带 SKIP_COLUMN_BADGE_BAND_Y（2026-11-08 用户裁决）。同族
+ *  残留：跳列多条条件边共享同一对列时（如 a→b、a→c 跨列）徽章同 x（labelX 恒为
+ *  两端 x 中点）同 y（同带）完全重叠——同上罕见形态，登记不修。 */
 function badgeAnchorY(from: DagLayoutNode, to: DagLayoutNode): number {
   return Math.min(from.y, to.y) - LABEL_ABOVE_GAP
 }

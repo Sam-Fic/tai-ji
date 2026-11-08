@@ -219,9 +219,11 @@ export function avoidObstructedChannelMid(channels: Map<string, ChannelMember[]>
  * 两端点决定无法横向迁移（纯水平路径必穿同 y 节点），唯一避让维度 = 纵向。障碍 =
  * 覆盖边 y 且 x 区间与 (x1,x2) 相交的节点（共用穿卡谓词——障碍盒含实例卡区，多障碍
  * 取并集）；绕行带 yB 取全部障碍行底（含卡区）+ margin（向下）或行顶 − margin
- * （向上）的近者（等距取上），选择后校验绕行横段（yB 高度上跨度内无任何节点覆盖），
- * 不满足试另一方向，两方向均不满足 → null（调用方保持直线，罕见残留——恢复路径与
- * 重审触发同决策三「残留登记要素」，重审后评估多级绕行档）。
+ * （向上）的近者（等距取上），选择后校验绕行 4 折线全程（layout.ts「任何段不穿
+ * 节点卡片」不变量）：绕行横段排除两端节点（横段贴两端锚定卡），两条绕行竖段各
+ * 排除自身锚定端点——竖段贴源/目标列缘，同列堆叠节点落进绕行跨度（y..yB）时竖段
+ * 压其卡缘即败；任一段穿卡试另一方向，两方向均不满足 → null（调用方保持直线，
+ * 罕见残留——恢复路径与重审触发同决策三「残留登记要素」，重审后评估多级绕行档）。
  */
 export function sameRowBypass(
   x1: number,
@@ -238,8 +240,16 @@ export function sameRowBypass(
   const upY = Math.min(...obstacles.map((o) => o.y)) - BYPASS_MARGIN_PX
   const preferUp = Math.abs(upY - y) <= Math.abs(downY - y)
   for (const yB of preferUp ? [upY, downY] : [downY, upY]) {
-    const crossed = nodes.some((n) => notEndpoint(n) && segmentHitsNode(x1, yB, x2, yB, n))
-    if (!crossed) return { yB }
+    // 4 折线全段穿卡校验：绕行横段 (x1..x2 @ yB) 排除两端节点；两条绕行竖段
+    // (x=x1 / x=x2, y..yB) 各排除自身锚定端点——竖段贴源/目标列缘，同列堆叠
+    // 节点（右/左缘与竖段同 x）落进绕行跨度即净距不足，压卡缘算穿卡
+    const hits = nodes.some(
+      (n) =>
+        (notEndpoint(n) && segmentHitsNode(x1, yB, x2, yB, n)) ||
+        (n.node.id !== fromId && segmentHitsNode(x1, y, x1, yB, n)) ||
+        (n.node.id !== toId && segmentHitsNode(x2, yB, x2, y, n)),
+    )
+    if (!hits) return { yB }
   }
   return null
 }
