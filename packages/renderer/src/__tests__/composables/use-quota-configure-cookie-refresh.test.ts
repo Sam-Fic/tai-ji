@@ -197,6 +197,56 @@ describe('useQuotaConfigure cookie 自动续期手动入口', () => {
     expect(module.view.value.cookieRefresh.error).toBe('')
   })
 
+  it('同 provider 对象身份替换（runtime 广播形态，id 不变）→ 不误清成功态', async () => {
+    const { module, provider: providerRef } = mountModule(
+      provider({ id: 'p1', quota: { enabled: true, fetcher: 'mimo', cookieSet: true } }),
+      P('mimo'),
+    )
+    await flushPromises()
+    await module.refreshCookie()
+    await flushPromises()
+    expect(module.view.value.cookieRefresh.result).toBe('ok')
+
+    // runtime 每次 provider 广播都替换数组元素对象（同 id，如 configure 保存回执）——
+    // 成功态生命周期跨同 id 广播保留
+    providerRef.value = provider({ id: 'p1', quota: { enabled: true, fetcher: 'mimo', cookieSet: true } })
+    await flushPromises()
+    expect(module.view.value.cookieRefresh.result).toBe('ok')
+    expect(module.view.value.cookieRefresh.succeededAt).not.toBeNull()
+  })
+
+  it('在途刷新期间切 provider：迟到的成功不写新 provider 显示态、不在新 provider 上重查', async () => {
+    let releaseIpc: ((v: { ok: boolean; cookie?: string }) => void) | undefined
+    ipcRefresh.refreshQuotaCookie.mockImplementation(
+      () => new Promise((resolve) => {
+        releaseIpc = resolve
+      }),
+    )
+    const { module, provider: providerRef } = mountModule(
+      provider({ id: 'p1', quota: { enabled: true, fetcher: 'mimo', cookieSet: true } }),
+      P('mimo'),
+    )
+    await flushPromises()
+    const pending = module.refreshCookie()
+    await flushPromises()
+
+    // 在途（running）期间编辑体切到 p2 → 旧链完成后显示态不落新家（落盘仍按 p1 正确执行）
+    providerRef.value = provider({ id: 'p2', quota: { enabled: true, fetcher: 'mimo', cookieSet: true } })
+    await flushPromises()
+    releaseIpc?.({ ok: true, cookie: 'sid=refreshed' })
+    await pending
+    await flushPromises()
+
+    expect(transportConfigureQuota).toHaveBeenCalledWith({
+      providerId: 'p1',
+      enabled: true,
+      cookie: 'sid=refreshed',
+    })
+    expect(module.view.value.cookieRefresh.result).toBeNull()
+    expect(module.view.value.cookieRefresh.succeededAt).toBeNull()
+    expect(module.view.value.cookieRefresh.running).toBe(false)
+  })
+
   it('失败流转：ok:false → result=fail + error 透传；草稿与测试结果不动、不落盘不重查', async () => {
     ipcRefresh.refreshQuotaCookie.mockResolvedValue({ ok: false, error: 'login timeout' })
     const { module } = mountModule(

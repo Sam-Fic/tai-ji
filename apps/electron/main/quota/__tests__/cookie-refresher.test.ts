@@ -565,6 +565,24 @@ describe('refreshQuotaCookie：网络级兜底超时（REFRESH_DEADLINE_MS）', 
     expect(await second).toEqual({ ok: true, cookie: 'sid=refreshed' })
   })
 
+  it('loadURL 悬挂（主文档 load 被挂起型子资源阻塞、不报错也不完成）→ 同受 120s 兜底覆盖，窗口 destroy', async () => {
+    vi.useFakeTimers()
+    // loadUrlImpl 返回永不落定的 promise：加载阶段无事件可等，deadline 武装点必须
+    // 覆盖 loadURL（只武装在探测阶段时该形态漏网 → 窗口泄漏 + inflight 挂死）
+    fake.state.loadUrlImpl = () => new Promise<void>(() => {})
+    const result = refreshQuotaCookie(
+      { fetcherId: 'mimo', providerId: 'p-hang' },
+      { dataDir: () => tmpDir },
+    )
+    const win = await windowOf(result)
+
+    vi.advanceTimersByTime(120_000)
+    const settled = await result
+    expect(settled.ok).toBe(false)
+    expect(settled.error).toContain('timed out')
+    expect(win.destroyed).toBe(true)
+  })
+
   it('超时前收尾（探测 200）→ deadline 计时器清除，不产生迟到失败', async () => {
     vi.useFakeTimers()
     const result = refreshQuotaCookie(

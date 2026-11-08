@@ -9,8 +9,8 @@
  *   （串经 IPC 回 renderer）。无周期轮询 / 登录页停留判定等时间阈值机制：探测时当前 URL
  *   命中登录页特征 = 登录态失效的确定性事实（URL 判定，非时间阈值），show() 转可见并即刻
  *   以 login required 失败收尾（成败都 destroy，渲染端 dedup 槽随 Promise 落定即时释放）；
- *   整体网络级兜底超时（REFRESH_DEADLINE_MS，ADR-0188 丙类保留项）封住「无事件可等」
- *   的挂起形态。
+ *   整体网络级兜底超时（REFRESH_DEADLINE_MS）封住「无事件可等」的挂起形态（归类依据见
+ *   该常量注释）。
  *
  * 日常零内存占用：窗口按需创建、成败都 destroy；partition 用 persist 前缀（历史登录态
  * 跨刷新保留，SSO 跳转链的中间 cookie 不丢）。
@@ -45,7 +45,9 @@ const HTTP_OK = 200
 /**
  * 刷新整体兜底超时（毫秒）：页面加载成功后「无任何导航/cookie 事件且探测不 200」的
  * 网络级异常形态（站点半死 / 网络中断 / 页面 JS 崩溃）没有事件可等，按失败收尾交用户
- * 重试。网络级超时是 ADR-0188 丙类保留项；120s 覆盖最慢合法形态（SSO 跳转链 + 慢网络，
+ * 重试。归类 ADR-0190 丙类③（远程网络相关调用的超时设置，事件驱动非轮询）；区别于
+ * 同裁决丁类已删的「cookie 刷新轮询周期 + deadline」机制（本 deadline 只封网络级挂起，
+ * 不做周期轮询/时间阈值判死）。120s 覆盖最慢合法形态（SSO 跳转链 + 慢网络，
  * 真机在册目标收尾实测 3.2s / 2.8s，两个数量级余量）。
  */
 const REFRESH_DEADLINE_MS = 120_000
@@ -93,37 +95,55 @@ async function runRefresh(input: QuotaRefreshInput, deps: QuotaRefreshDeps): Pro
   }
   const dataDir = deps.dataDir?.() ?? getDataDir()
   let win: BrowserWindow | null = null
+  // 整体兜底超时（REFRESH_DEADLINE_MS，归类依据见常量注释）：武装点在 runRefresh 进入
+  // 即启动——loadURL 悬挂（主文档 load 被挂起型子资源长期阻塞、不报错也不完成的罕见
+  // 形态）与探测全程同受约束；超时 reject 经下方 catch 归一 ok:false，窗口随 finally
+  // destroy、inflight 槽随 Promise 落定释放
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_, reject) => {
+    deadlineTimer = setTimeout(
+      () => reject(new Error(`refresh timed out after ${REFRESH_DEADLINE_S}s — 网络异常或站点无响应，请稍后重试`)),
+      REFRESH_DEADLINE_MS,
+    )
+  })
   try {
-    // persist 前缀 = 落盘 partition（历史登录态跨刷新保留）；providerId 维度隔离。
-    // fromPartition 一并进 try：任何环节异常都归一进 ok:false，守住「永不 reject」契约
-    const ses = session.fromPartition(`persist:quota-${input.providerId}`)
-    await seedCookies(ses, target, dataDir, input.providerId)
-    win = new BrowserWindow({
-      show: false,
-      webPreferences: {
-        session: ses,
-        nodeIntegration: false,
-        contextIsolation: true,
-      },
-    })
-    attachNavigationGuards(win, target)
-    try {
-      // loadURL resolve 即主文档加载完成（含 SSO 服务端跳转链），此后页面可执行 JS
-      await win.loadURL(target.pageUrl)
-    } catch (err) {
-      // ERR_ABORTED(-3) 不是失败：平台页 JS 发现未登录会主动导航到登录链
-      // （如 xiaomimimo 的 genLoginUrl → account.xiaomi.com），打断初始加载。
-      // 跳转后的 API 探测由页面导航/load 事件驱动（见 probeUntilApiOk），这里只拦真正的加载故障
-      if (!isAbortedNavigation(err)) {
-        return { ok: false, error: `page load failed: ${errorMessage(err)}` }
+    const main = (async (): Promise<QuotaRefreshCookieResult> => {
+      // persist 前缀 = 落盘 partition（历史登录态跨刷新保留）；providerId 维度隔离。
+      // fromPartition 一并进 main 链：任何环节异常都归一进 ok:false，守住「永不 reject」契约
+      const ses = session.fromPartition(`persist:quota-${input.providerId}`)
+      await seedCookies(ses, target, dataDir, input.providerId)
+      win = new BrowserWindow({
+        show: false,
+        webPreferences: {
+          session: ses,
+          nodeIntegration: false,
+          contextIsolation: true,
+        },
+      })
+      attachNavigationGuards(win, target)
+      try {
+        // loadURL resolve 即主文档加载完成（含 SSO 服务端跳转链），此后页面可执行 JS
+        await win.loadURL(target.pageUrl)
+      } catch (err) {
+        // ERR_ABORTED(-3) 不是失败：平台页 JS 发现未登录会主动导航到登录链
+        // （如 xiaomimimo 的 genLoginUrl → account.xiaomi.com），打断初始加载。
+        // 跳转后的 API 探测由页面导航/load 事件驱动（见 probeUntilApiOk），这里只拦真正的加载故障
+        if (!isAbortedNavigation(err)) {
+          return { ok: false, error: `page load failed: ${errorMessage(err)}` }
+        }
       }
-    }
-    await probeUntilApiOk(win, ses, target)
-    const cookie = await exportCookies(ses, target)
-    return { ok: true, cookie }
+      await probeUntilApiOk(win, ses, target)
+      const cookie = await exportCookies(ses, target)
+      return { ok: true, cookie }
+    })()
+    // race 输家吸收：超时先落定时，主链稍后的 settle（含 reject）不得成为 unhandled
+    // rejection；主链自身 reject 经 race 传递由外层 catch 归一
+    void main.catch(() => {})
+    return await Promise.race([main, deadline])
   } catch (err) {
     return { ok: false, error: errorMessage(err) }
   } finally {
+    clearTimeout(deadlineTimer)
     if (win && !win.isDestroyed()) win.destroy()
   }
 }
@@ -189,17 +209,13 @@ async function seedCookies(ses: Session, target: QuotaRefreshTarget, dataDir: st
  *   首探（换发完成前）401 后探测永不重试，登录态已换发成功却等不到 200 确证，
  *   Promise 挂起。cookie 落地是「换发完成」的确定性事实，事件驱动补源，非时间阈值。
  *
- * 兜底收尾（网络级整体超时，ADR-0188 丙类保留项）：事件源齐全不等于必有事件——页面
- * 加载成功后站点半死（API 挂、网络中断、页面 JS 崩溃）时不再有导航/cookie 事件、探测
- * 不 200，Promise 永不落定 = 隐藏窗口泄漏 + inflight 槽挂死该 provider 的全部后续续期
- * （prod 实证形态：续期按钮永久 loading）。REFRESH_DEADLINE_MS 覆盖最慢合法形态（SSO
- * 跳转链 + 慢网络），真机在册目标收尾实测 3.2s，超窗 = 网络级异常，按失败收尾交用户重试。
- *
  * 确定性收尾（URL 事实，非时间阈值停留判定）：探测时当前 URL 命中登录页特征
  * （isQuotaRefreshLoginUrl）= 登录态失效确证 → win.show() 转可见提示 + reject
  * （"login required"）——经 runRefresh 既有 catch 归一 ok:false，窗口随 finally
  * destroy、渲染端 cookieRefreshDedup 槽随 Promise 落定即时释放，恢复由用户侧重试
  * 承载（重新登录后下次 hover 重查，探测即 200）。窗口销毁 → reject（同经 catch 归一）。
+ * 「无事件可等」的挂起形态（页面加载成功后零事件且探测不 200）由 runRefresh 层的
+ * 整体网络级超时兜底（见 REFRESH_DEADLINE_MS），本函数不持计时器。
  */
 function probeUntilApiOk(win: BrowserWindow, ses: Session, target: QuotaRefreshTarget): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -212,7 +228,6 @@ function probeUntilApiOk(win: BrowserWindow, ses: Session, target: QuotaRefreshT
       wc.removeListener('destroyed', onDestroyed)
       // partition session 跨刷新常驻（persist 落盘）：不移除会随进程累积监听器泄漏
       ses.cookies.removeListener('changed', onCookieChanged)
-      clearTimeout(deadlineTimer)
     }
     const succeed = (): void => {
       if (settled) return
@@ -226,11 +241,6 @@ function probeUntilApiOk(win: BrowserWindow, ses: Session, target: QuotaRefreshT
       cleanup()
       reject(new Error(message))
     }
-    // 兜底超时（常量语义见 REFRESH_DEADLINE_MS）：与登录页确证同走 fail 归一，窗口由
-    // runRefresh 的 finally destroy 统一回收
-    const deadlineTimer = setTimeout(() => {
-      fail(`refresh timed out after ${REFRESH_DEADLINE_S}s without api ready — 网络异常或站点无响应，请稍后重试`)
-    }, REFRESH_DEADLINE_MS)
     const onReady = (): void => {
       if (win.isDestroyed()) {
         fail('refresh window destroyed before api ready')

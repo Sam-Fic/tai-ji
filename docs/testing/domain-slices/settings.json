@@ -11,7 +11,8 @@
   "scope": {
     "renderer": [
       "packages/renderer/src/components/settings/**",
-      "packages/renderer/src/features/fonts/**"
+      "packages/renderer/src/features/fonts/**",
+      "packages/renderer/src/composables/features/settings/useQuotaConfigureCookieRefresh.ts"
     ],
     "ui": [
       "packages/ui/src/features/settings/**"

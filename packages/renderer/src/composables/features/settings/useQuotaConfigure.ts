@@ -12,7 +12,6 @@
  *   保存侧识别哨兵不发送（保留既存）；哨兵展示单源来自 syncFromProvider 的磁盘态重建
  */
 import { ref, computed, watch } from 'vue'
-import type { ComputedRef } from 'vue'
 import type {
   NormalizedQuotaRow,
   QuotaConfigurePayload,
@@ -22,13 +21,12 @@ import type {
   QuotaAuthKind,
   QuotaFetchFailureReason,
 } from '@taiji/shared'
-import { normalizeCookieHeader, normalizeQuotaParamValue, getQuotaRefreshTarget, resolveQuotaCredentialSource, resolveQuotaPresets, supportsExclusiveCredential } from '@taiji/shared'
+import { normalizeCookieHeader, normalizeQuotaParamValue, resolveQuotaCredentialSource, resolveQuotaPresets, supportsExclusiveCredential } from '@taiji/shared'
 // W3c：presets 数据源从编译期基线切到 runtime 下发的合并视图（remote-config 域 2）
 import { getSettingsStore } from '@taiji/core'
 import type {
   QuotaConfigureInputs,
   QuotaConfigureModule,
-  QuotaCookieRefreshView,
   QuotaDraftInput,
   QuotaFailureKind,
   QuotaParamView,
@@ -42,7 +40,7 @@ import type {
 import { API_KEY_CLEAR_SENTINEL, QUOTA_SECRET_MASK, getSettingsTransport } from '@taiji/core'
 import { optimisticUpdate, refCell } from '@taiji/core/foundation/optimistic-update'
 import { useQuotaStore } from '@/stores/quota'
-import { refreshQuotaCookie } from '@/lib/ipc'
+import { createCookieRefreshController } from './useQuotaConfigureCookieRefresh'
 import { quotaFailReasonText } from '@/composables/features/model/useQuotaQuery'
 
 /**
@@ -208,117 +206,6 @@ const FAILURE_KINDS: Record<QuotaFetchFailureReason, QuotaFailureKind> = {
   'cookie-invalid-format': 'cookie-invalid-format',
   'credential-unavailable': 'generic',
   'credential-unsupported': 'generic',
-}
-
-// ── cookie 自动续期控制器（手动入口；执行体 = main 隐藏窗口刷新器，经 lib/ipc 调用）──
-
-/**
- * 控制器输入：主工厂内 ref 的 getter 只读视图（getter 内读 ref 建立响应式依赖）。
- * 拆为模块级工厂是为主工厂行数上限（taste max-lines-per-function 300）——
- * 续期状态与动作自成一组，不与草稿 / readiness 判定交叉。
- */
-interface CookieRefreshInputs {
-  t: QuotaConfigureInputs['t']
-  /** 当前编辑 provider id（无 provider = undefined，动作 no-op） */
-  providerId: () => string | undefined
-  /** 当前类型草稿（未选 = undefined） */
-  fetcherId: () => string | undefined
-  /** 磁盘已保存的 fetcher（从未保存 = undefined） */
-  savedFetcher: () => string | undefined
-  /** 当前草稿是否 cookie 形态（isCookieAuth 透传） */
-  isCookieAuth: () => boolean
-  /** 续期导出串的落盘（走 quota.configure 保存链，runtime 单点写 secrets 文件） */
-  saveCookie: (pid: string, cookie: string) => Promise<{ ok: boolean; error?: string }>
-  /** 续期成功后的结果刷新（重跑 testQuery） */
-  onRefreshed: () => Promise<void>
-}
-
-function createCookieRefreshController(inputs: CookieRefreshInputs): {
-  view: ComputedRef<QuotaCookieRefreshView>
-  refreshCookie: () => Promise<void>
-  /** 状态复位（编辑体切换 provider / 重新装配时调用）：续期结果不跨 provider 残留 */
-  reset: () => void
-} {
-  const running = ref(false)
-  const result = ref<'ok' | 'fail' | null>(null)
-  const succeededAt = ref<number | null>(null)
-  const error = ref('')
-
-  /**
-   * 入口可用性：cookie 形态 + 当前 fetcher 在 QUOTA_REFRESH_TARGETS 在册（在册 ⊆ cookie
-   * 类——opendesign 等 cookie 类但无刷新目标的 fetcher 不在册，入口不渲染）+ 类型未变更
-   * （归属判据同 readiness：类型已变未保存时，续期保存的 cookie 归属不明，等保存后再刷）。
-   * 从未保存过类型的 provider（savedFetcher undefined）放行：选好类型即可先续期登录
-   * （SSO 窗弹出），cookie 落盘后「保存并测试」即可消费。
-   */
-  const available = computed<boolean>(() => {
-    if (!inputs.isCookieAuth()) return false
-    const fid = inputs.fetcherId()
-    if (!fid || getQuotaRefreshTarget(fid) === undefined) return false
-    const saved = inputs.savedFetcher()
-    return saved === undefined || fid === saved
-  })
-
-  const view = computed<QuotaCookieRefreshView>(() => ({
-    available: available.value,
-    running: running.value,
-    result: result.value,
-    succeededAt: succeededAt.value,
-    error: error.value,
-  }))
-
-  /** 复位续期三态（providerRef 切换时由 syncFromProvider 调用）。 */
-  function reset(): void {
-    running.value = false
-    result.value = null
-    succeededAt.value = null
-    error.value = ''
-  }
-
-  /**
-   * 手动触发续期：main 隐藏窗口刷新器导出新 cookie 串（main 不落盘），经 saveCookie
-   * （quota.configure 保存链）由 runtime 单点写 secrets 文件。成功（保存 ok）重跑
-   * testQuery 并**保留成功态**（succeededAt 记时刻）——重查的成败由测试结果区独立
-   * 呈现，「续期成功 + 查询失败」与「续期失败」两个事实并列可见，不再互相覆盖；成功
-   * 态持续到下一次续期触发或编辑体切换（reset）。失败只写 error——不动草稿与既有测试
-   * 结果（用户已填的输入不因续期失败丢失）。lib/ipc 封装保证不 reject（main 侧业务
-   * 失败也 resolve ok:false），catch 面只覆盖通道装配异常。
-   */
-  async function refreshCookie(): Promise<void> {
-    const pid = inputs.providerId()
-    const fid = inputs.fetcherId()
-    if (!pid || !fid || !available.value || running.value) return
-
-    running.value = true
-    result.value = null
-    succeededAt.value = null
-    error.value = ''
-    try {
-      const refreshed = await refreshQuotaCookie({ fetcherId: fid, providerId: pid })
-      if (!(refreshed.ok && refreshed.cookie)) {
-        result.value = 'fail'
-        error.value = refreshed.error || inputs.t('settings.providerEdit.quotaCookieAutoRefreshFail')
-        return
-      }
-      // 单写方落盘（data-source-registry #66）：保存失败按续期失败呈现（cookie 未生效）
-      const saved = await inputs.saveCookie(pid, refreshed.cookie)
-      if (!saved.ok) {
-        result.value = 'fail'
-        error.value = saved.error || inputs.t('settings.providerEdit.quotaCookieAutoRefreshFail')
-        return
-      }
-      result.value = 'ok'
-      succeededAt.value = Date.now()
-      await inputs.onRefreshed()
-    } catch (e) {
-      result.value = 'fail'
-      error.value = e instanceof Error ? e.message : inputs.t('settings.providerEdit.quotaCookieAutoRefreshFail')
-    } finally {
-      running.value = false
-    }
-  }
-
-  return { view, refreshCookie, reset }
 }
 
 /**
@@ -527,10 +414,17 @@ function createCookieRefreshController(inputs: CookieRefreshInputs): {
   }))
 
   // ── 初始化：从 provider.quota 读取已保存的配置 ──
+  /** 上次同步的 provider id（null = 从未同步）：续期显示态的代际判据。 */
+  let lastSyncedProviderId: string | null = null
+
   function syncFromProvider(): void {
-    // 续期三态先复位（providerRef 切换）：续期结果不跨 provider 残留
-    cookieRefresh.reset()
     const p = providerRef.value
+    // 续期显示态代际守卫：本 watch 以 provider 对象身份触发，runtime 每次 provider
+    // 广播都替换数组元素对象（同 id）——同 provider 的无关写（如 configure 保存回执
+    // 广播）不得误清「已续期」成功态；仅 id 真变（编辑体切换 provider）才 reset
+    const currentId = p?.id ?? null
+    if (currentId !== lastSyncedProviderId) cookieRefresh.reset()
+    lastSyncedProviderId = currentId
     if (!p?.quota) {
       enabled.value = false
       // fetcherId 默认值：provider.quota.fetcher > 自动匹配的 preset.fetcher > undefined
