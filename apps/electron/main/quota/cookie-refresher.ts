@@ -4,12 +4,13 @@
  * cookie 类 provider（mimo / opencode-go）的服务端登录态换发必须走真实浏览器环境
  * （页面 JS + SSO 跳转），本模块按需创建隐藏 BrowserWindow 让续期循环跑起来：
  *
- *   种 cookie（secrets 文件 → partition）→ 加载 pageUrl → 页面导航/load 事件触发页面内
- *   API 探测（200 即就绪）→ 导出 partition 的目标域 cookie 串 → 销毁窗口（串经 IPC 回
- *   renderer）。无时间窗决策（周期轮询/登录页停留判定/超时等待已随时间机制清查删除）：
- *   探测时当前 URL 命中登录页特征 = 登录态失效的确定性事实（URL 判定，非时间阈值），
- *   show() 转可见并即刻以 login required 失败收尾（成败都 destroy，渲染端 dedup 槽随
- *   Promise 落定即时释放）；其余不 200 形态继续等下一个页面事件，由用户侧重试承载。
+ *   种 cookie（secrets 文件 → partition）→ 加载 pageUrl → 页面导航/load/cookie 变更
+ *   事件触发页面内 API 探测（200 即就绪）→ 导出 partition 的目标域 cookie 串 → 销毁窗口
+ *   （串经 IPC 回 renderer）。无周期轮询 / 登录页停留判定等时间阈值机制：探测时当前 URL
+ *   命中登录页特征 = 登录态失效的确定性事实（URL 判定，非时间阈值），show() 转可见并即刻
+ *   以 login required 失败收尾（成败都 destroy，渲染端 dedup 槽随 Promise 落定即时释放）；
+ *   整体网络级兜底超时（REFRESH_DEADLINE_MS，ADR-0188 丙类保留项）封住「无事件可等」
+ *   的挂起形态。
  *
  * 日常零内存占用：窗口按需创建、成败都 destroy；partition 用 persist 前缀（历史登录态
  * 跨刷新保留，SSO 跳转链的中间 cookie 不丢）。
@@ -40,6 +41,18 @@ import { mainLogger } from '../logs/main-logger.js'
 
 /** 完成信号：API 探测的 HTTP 状态码（只看 200，不校验业务字段）。 */
 const HTTP_OK = 200
+
+/**
+ * 刷新整体兜底超时（毫秒）：页面加载成功后「无任何导航/cookie 事件且探测不 200」的
+ * 网络级异常形态（站点半死 / 网络中断 / 页面 JS 崩溃）没有事件可等，按失败收尾交用户
+ * 重试。网络级超时是 ADR-0188 丙类保留项；120s 覆盖最慢合法形态（SSO 跳转链 + 慢网络，
+ * 真机在册目标收尾实测 3.2s / 2.8s，两个数量级余量）。
+ */
+const REFRESH_DEADLINE_MS = 120_000
+
+/** REFRESH_DEADLINE_MS 的秒制值（超时文案显示用，改窗长时随常量联动）。 */
+// eslint-disable-next-line no-magic-numbers -- ms→s 单位换算因子，非业务常量
+const REFRESH_DEADLINE_S = REFRESH_DEADLINE_MS / 1000
 
 /** 刷新请求（与 IPC payload 同构；providerId 决定 partition 与 secrets 文件名）。 */
 export type QuotaRefreshInput = {
@@ -176,7 +189,12 @@ async function seedCookies(ses: Session, target: QuotaRefreshTarget, dataDir: st
  *   首探（换发完成前）401 后探测永不重试，登录态已换发成功却等不到 200 确证，
  *   Promise 挂起。cookie 落地是「换发完成」的确定性事实，事件驱动补源，非时间阈值。
  *
- * 无 deadline：探测不 200 就继续等下一个页面事件（时间等待窗已随时间机制清查删除）。
+ * 兜底收尾（网络级整体超时，ADR-0188 丙类保留项）：事件源齐全不等于必有事件——页面
+ * 加载成功后站点半死（API 挂、网络中断、页面 JS 崩溃）时不再有导航/cookie 事件、探测
+ * 不 200，Promise 永不落定 = 隐藏窗口泄漏 + inflight 槽挂死该 provider 的全部后续续期
+ * （prod 实证形态：续期按钮永久 loading）。REFRESH_DEADLINE_MS 覆盖最慢合法形态（SSO
+ * 跳转链 + 慢网络），真机在册目标收尾实测 3.2s，超窗 = 网络级异常，按失败收尾交用户重试。
+ *
  * 确定性收尾（URL 事实，非时间阈值停留判定）：探测时当前 URL 命中登录页特征
  * （isQuotaRefreshLoginUrl）= 登录态失效确证 → win.show() 转可见提示 + reject
  * （"login required"）——经 runRefresh 既有 catch 归一 ok:false，窗口随 finally
@@ -194,6 +212,7 @@ function probeUntilApiOk(win: BrowserWindow, ses: Session, target: QuotaRefreshT
       wc.removeListener('destroyed', onDestroyed)
       // partition session 跨刷新常驻（persist 落盘）：不移除会随进程累积监听器泄漏
       ses.cookies.removeListener('changed', onCookieChanged)
+      clearTimeout(deadlineTimer)
     }
     const succeed = (): void => {
       if (settled) return
@@ -207,6 +226,11 @@ function probeUntilApiOk(win: BrowserWindow, ses: Session, target: QuotaRefreshT
       cleanup()
       reject(new Error(message))
     }
+    // 兜底超时（常量语义见 REFRESH_DEADLINE_MS）：与登录页确证同走 fail 归一，窗口由
+    // runRefresh 的 finally destroy 统一回收
+    const deadlineTimer = setTimeout(() => {
+      fail(`refresh timed out after ${REFRESH_DEADLINE_S}s without api ready — 网络异常或站点无响应，请稍后重试`)
+    }, REFRESH_DEADLINE_MS)
     const onReady = (): void => {
       if (win.isDestroyed()) {
         fail('refresh window destroyed before api ready')

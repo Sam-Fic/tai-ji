@@ -597,7 +597,8 @@ export default {
     // cookie auto-refresh (main hidden-window refresher): button / running / ok / fail copy
     quotaCookieAutoRefresh: 'Auto-refresh Cookie',
     quotaCookieAutoRefreshRunning: 'Refreshing…',
-    quotaCookieAutoRefreshOk: 'Cookie refreshed, re-querying',
+    // ok state persists across the re-query (followed by "· HH:mm"); re-query outcome renders in the test-result section
+    quotaCookieAutoRefreshOk: 'Login cookie refreshed',
     quotaCookieAutoRefreshFail: 'Auto-refresh failed; update the Cookie manually',
     // window labels + time formatting (CodingPlanSection inline quota preview)
     quotaWindow5h: '5h',

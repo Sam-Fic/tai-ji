@@ -138,13 +138,14 @@ describe('useQuotaConfigure cookie 自动续期手动入口', () => {
 
   // ── 状态流转 ──────────────────────────────────────────────────────────
 
-  it('成功流转：running 中间态 → ok 且带导出串 → 经 configure 落盘 → 重跑 testQuery → result 复位（「正在重新查询」不悬挂）', async () => {
+  it('成功流转：running 中间态 → ok 且带导出串 → 经 configure 落盘 → 重跑 testQuery → 成功态跨重查保留（succeededAt 记时刻）', async () => {
     let releaseIpc: ((v: { ok: boolean; cookie?: string }) => void) | undefined
     ipcRefresh.refreshQuotaCookie.mockImplementation(
       () => new Promise((resolve) => {
         releaseIpc = resolve
       }),
     )
+    const before = Date.now()
     const { module } = mountModule(
       provider({ quota: { enabled: true, fetcher: 'mimo', cookieSet: true } }),
       P('mimo'),
@@ -167,10 +168,33 @@ describe('useQuotaConfigure cookie 自动续期手动入口', () => {
       enabled: true,
       cookie: 'sid=refreshed',
     })
-    // 重查完成后 result 复位：查询结果由测试结果区呈现，「已续期，正在重新查询」不悬挂
-    expect(module.view.value.cookieRefresh.result).toBeNull()
+    // 成功态跨重查保留：重查成败由测试结果区独立呈现（两事实并列），succeededAt 落在
+    // [触发前, 现在] 区间（不悬挂也不闪没——「续期成功但查询失败」不再与「续期失败」混淆）
+    expect(module.view.value.cookieRefresh.result).toBe('ok')
+    const at = module.view.value.cookieRefresh.succeededAt
+    expect(at).not.toBeNull()
+    expect(at!).toBeGreaterThanOrEqual(before)
+    expect(at!).toBeLessThanOrEqual(Date.now())
     expect(module.test.value.status).toBe('success')
     expect(module.test.value.row).toEqual(mockRow)
+  })
+
+  it('续期结果不跨 provider 残留：providerRef 切换 → result/succeededAt/error 复位', async () => {
+    const { module, provider: providerRef } = mountModule(
+      provider({ id: 'p1', quota: { enabled: true, fetcher: 'mimo', cookieSet: true } }),
+      P('mimo'),
+    )
+    await flushPromises()
+    await module.refreshCookie()
+    await flushPromises()
+    expect(module.view.value.cookieRefresh.result).toBe('ok')
+
+    // 切到另一个 provider（编辑体就地切换形态）：上一家的续期结果不得带到下一家
+    providerRef.value = provider({ id: 'p2', quota: { enabled: true, fetcher: 'mimo', cookieSet: true } })
+    await flushPromises()
+    expect(module.view.value.cookieRefresh.result).toBeNull()
+    expect(module.view.value.cookieRefresh.succeededAt).toBeNull()
+    expect(module.view.value.cookieRefresh.error).toBe('')
   })
 
   it('失败流转：ok:false → result=fail + error 透传；草稿与测试结果不动、不落盘不重查', async () => {

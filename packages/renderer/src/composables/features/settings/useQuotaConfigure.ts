@@ -236,9 +236,12 @@ interface CookieRefreshInputs {
 function createCookieRefreshController(inputs: CookieRefreshInputs): {
   view: ComputedRef<QuotaCookieRefreshView>
   refreshCookie: () => Promise<void>
+  /** 状态复位（编辑体切换 provider / 重新装配时调用）：续期结果不跨 provider 残留 */
+  reset: () => void
 } {
   const running = ref(false)
   const result = ref<'ok' | 'fail' | null>(null)
+  const succeededAt = ref<number | null>(null)
   const error = ref('')
 
   /**
@@ -260,15 +263,26 @@ function createCookieRefreshController(inputs: CookieRefreshInputs): {
     available: available.value,
     running: running.value,
     result: result.value,
+    succeededAt: succeededAt.value,
     error: error.value,
   }))
+
+  /** 复位续期三态（providerRef 切换时由 syncFromProvider 调用）。 */
+  function reset(): void {
+    running.value = false
+    result.value = null
+    succeededAt.value = null
+    error.value = ''
+  }
 
   /**
    * 手动触发续期：main 隐藏窗口刷新器导出新 cookie 串（main 不落盘），经 saveCookie
    * （quota.configure 保存链）由 runtime 单点写 secrets 文件。成功（保存 ok）重跑
-   * testQuery；失败只写 error——不动草稿与既有测试结果（用户已填的输入不因续期失败
-   * 丢失）。lib/ipc 封装保证不 reject（main 侧业务失败也 resolve ok:false），
-   * catch 面只覆盖通道装配异常。
+   * testQuery 并**保留成功态**（succeededAt 记时刻）——重查的成败由测试结果区独立
+   * 呈现，「续期成功 + 查询失败」与「续期失败」两个事实并列可见，不再互相覆盖；成功
+   * 态持续到下一次续期触发或编辑体切换（reset）。失败只写 error——不动草稿与既有测试
+   * 结果（用户已填的输入不因续期失败丢失）。lib/ipc 封装保证不 reject（main 侧业务
+   * 失败也 resolve ok:false），catch 面只覆盖通道装配异常。
    */
   async function refreshCookie(): Promise<void> {
     const pid = inputs.providerId()
@@ -277,6 +291,7 @@ function createCookieRefreshController(inputs: CookieRefreshInputs): {
 
     running.value = true
     result.value = null
+    succeededAt.value = null
     error.value = ''
     try {
       const refreshed = await refreshQuotaCookie({ fetcherId: fid, providerId: pid })
@@ -293,10 +308,8 @@ function createCookieRefreshController(inputs: CookieRefreshInputs): {
         return
       }
       result.value = 'ok'
+      succeededAt.value = Date.now()
       await inputs.onRefreshed()
-      // ok 文案（「正在重新查询」）随重查完成使命结束——结果由测试结果区呈现，
-      // 不复位会永久悬挂
-      result.value = null
     } catch (e) {
       result.value = 'fail'
       error.value = e instanceof Error ? e.message : inputs.t('settings.providerEdit.quotaCookieAutoRefreshFail')
@@ -305,7 +318,7 @@ function createCookieRefreshController(inputs: CookieRefreshInputs): {
     }
   }
 
-  return { view, refreshCookie }
+  return { view, refreshCookie, reset }
 }
 
 /**
@@ -515,6 +528,8 @@ function createCookieRefreshController(inputs: CookieRefreshInputs): {
 
   // ── 初始化：从 provider.quota 读取已保存的配置 ──
   function syncFromProvider(): void {
+    // 续期三态先复位（providerRef 切换）：续期结果不跨 provider 残留
+    cookieRefresh.reset()
     const p = providerRef.value
     if (!p?.quota) {
       enabled.value = false
@@ -573,6 +588,22 @@ function createCookieRefreshController(inputs: CookieRefreshInputs): {
       console.debug('[quota] getCached failed:', e instanceof Error ? e.message : e)
     }
   }
+
+  // ── cookie 自动续期（手动入口；控制器实现见模块级 createCookieRefreshController）──
+  // 构造必须先于下方 watch（immediate: true 首跑即调 syncFromProvider → cookieRefresh.reset）；
+  // onRefreshed 引用 testQuery 依赖函数声明提升
+  const cookieRefresh = createCookieRefreshController({
+    t,
+    providerId: () => providerRef.value?.id,
+    fetcherId: () => fetcherIdDraft.value,
+    savedFetcher: () => providerRef.value?.quota?.fetcher,
+    isCookieAuth: () => isCookieAuth.value,
+    // 落盘中转：main 只导出串，保存走 quota.configure 保存链（enabled 传当前值，
+    // 其余键缺省 = 不变——fetcher/来源/params 继承磁盘既存）
+    saveCookie: (pid, cookie) =>
+      getSettingsTransport().configureQuota({ providerId: pid, enabled: enabled.value, cookie }),
+    onRefreshed: testQuery,
+  })
 
   // provider 变化时同步状态
   watch(() => providerRef.value, syncFromProvider, { immediate: true })
@@ -774,21 +805,6 @@ function createCookieRefreshController(inputs: CookieRefreshInputs): {
       quotaStore.setError(p.id, e instanceof Error ? e.message : String(e))
     }
   }
-
-  // ── cookie 自动续期（手动入口；控制器实现见模块级 createCookieRefreshController）──
-  // 放在 testQuery 之后：onRefreshed 引用 testQuery（函数声明提升，显式后置消除前向引用）
-  const cookieRefresh = createCookieRefreshController({
-    t,
-    providerId: () => providerRef.value?.id,
-    fetcherId: () => fetcherIdDraft.value,
-    savedFetcher: () => providerRef.value?.quota?.fetcher,
-    isCookieAuth: () => isCookieAuth.value,
-    // 落盘中转：main 只导出串，保存走 quota.configure 保存链（enabled 传当前值，
-    // 其余键缺省 = 不变——fetcher/来源/params 继承磁盘既存）
-    saveCookie: (pid, cookie) =>
-      getSettingsTransport().configureQuota({ providerId: pid, enabled: enabled.value, cookie }),
-    onRefreshed: testQuery,
-  })
 
   return {
     draft,

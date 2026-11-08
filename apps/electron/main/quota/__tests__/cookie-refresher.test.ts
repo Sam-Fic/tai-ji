@@ -531,6 +531,57 @@ describe('refreshQuotaCookie：登录页确定性收尾', () => {
   })
 })
 
+describe('refreshQuotaCookie：网络级兜底超时（REFRESH_DEADLINE_MS）', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('页面加载成功但零事件且探测不 200（站点半死/网络中断形态）→ 120s 超时失败收尾 + destroy + inflight 释放', async () => {
+    vi.useFakeTimers()
+    const result = refreshQuotaCookie(
+      { fetcherId: 'mimo', providerId: 'p-dead' },
+      { dataDir: () => tmpDir },
+    )
+    const win = await windowOf(result)
+    // 页面停在 console 页（非登录域，登录页收尾不可达）、API 恒 401（execImpl 缺省）、
+    // 零后续导航/cookie 事件——事件源齐全但无事件可等 = 修复前唯一永久挂起形态
+    win.webContents.url = CONSOLE_URL
+    win.webContents.emit('did-finish-load')
+    await untilProbeCount(1)
+
+    vi.advanceTimersByTime(120_000)
+    const settled = await result
+    expect(settled.ok).toBe(false)
+    expect(settled.error).toContain('timed out')
+    expect(win.destroyed).toBe(true)
+
+    // inflight 槽随落定释放：同 provider 可重新发起（新一轮可正常成功）
+    const second = refreshQuotaCookie(
+      { fetcherId: 'mimo', providerId: 'p-dead' },
+      { dataDir: () => tmpDir },
+    )
+    expect(second).not.toBe(result)
+    makeReady(await windowOf(second))
+    expect(await second).toEqual({ ok: true, cookie: 'sid=refreshed' })
+  })
+
+  it('超时前收尾（探测 200）→ deadline 计时器清除，不产生迟到失败', async () => {
+    vi.useFakeTimers()
+    const result = refreshQuotaCookie(
+      { fetcherId: 'mimo', providerId: 'p-fast' },
+      { dataDir: () => tmpDir },
+    )
+    const win = await windowOf(result)
+    makeReady(win)
+    expect(await result).toEqual({ ok: true, cookie: 'sid=refreshed' })
+
+    // 窗口已收尾销毁后越过 deadline：不应有任何迟到回调再触发（fail 文案不出现、无异常）
+    vi.advanceTimersByTime(120_000)
+    expect(win.destroyed).toBe(true)
+    expect(fake.FakeBrowserWindow.instances).toHaveLength(1)
+  })
+})
+
 describe('refreshQuotaCookie：SPA 换发（cookie 变更触发源）', () => {
   /**
    * stepfun 真机形态（2026-11-06 排障实证）：会话换发是页内 XHR 响应的 Set-Cookie，
