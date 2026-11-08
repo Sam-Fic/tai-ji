@@ -178,11 +178,15 @@ jobs:
 
       # CLI --linux deb 覆盖 electron-builder.yml 的 AppImage target；
       # --publish never 与上游构建行为一致
+      # extraMetadata.name=taiji：上游 package.json name 是 scoped 名（@taiji/electron），
+      # deb Package 字段从它派生 → '@' 开头被 dpkg 拒绝（invalid package name in
+      # 'Package' field）。executableName/artifactName/productName 上游已显式指定不受
+      # 此 overlay 影响，仅修 Package 名。
       - name: Package deb
         working-directory: apps/electron
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: pnpm exec electron-builder --linux deb --publish never
+        run: pnpm exec electron-builder --linux deb --publish never --config.extraMetadata.name=taiji
 
       # dir-only 模式：跳过 dmg/exe/AppImage 安装器存在性检查（deb-only 构建不产这些），
       # 仍校验 linux-unpacked 结构（runtime bundle / builtin extensions / engines）
@@ -194,6 +198,15 @@ jobs:
           ls -lh apps/electron/dist/builder-output/*.deb
           RUNTIME="apps/electron/dist/builder-output/linux-unpacked/resources/app.asar.unpacked/dist/runtime/index.cjs"
           [ -f "$RUNTIME" ] || { echo '::error::Runtime bundle not found in linux-unpacked'; exit 1; }
+          # dpkg 侧真实验证：Package 名合法（@taiji/electron 派生名事故防线）+ 架构正确
+          DEB=$(ls apps/electron/dist/builder-output/*.deb | head -1)
+          PKG=$(dpkg-deb -f "$DEB" Package)
+          echo "deb Package: ${PKG}, Version: $(dpkg-deb -f "$DEB" Version), Arch: $(dpkg-deb -f "$DEB" Architecture)"
+          if [[ ! "$PKG" =~ ^[a-z0-9][a-z0-9+.\-]+$ ]]; then
+            echo "::error::deb Package 名非法: ${PKG}（dpkg 要求字母数字开头）"
+            exit 1
+          fi
+          [ "$(dpkg-deb -f "$DEB" Architecture)" = "amd64" ] || { echo '::error::deb Architecture 非 amd64'; exit 1; }
 
       - name: Create fork release with deb
         env:
@@ -211,8 +224,14 @@ jobs:
             echo ""
             echo "本 release 由 fork 的 build-deb workflow 自动维护，请勿手动编辑。"
           } > "$RUNNER_TEMP/release-notes.md"
-          gh release create "$FORK_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "tai-ji ${UPSTREAM_TAG} (deb)" \
-            --notes-file "$RUNNER_TEMP/release-notes.md" \
-            apps/electron/dist/builder-output/*.deb
+          # force 重建场景（release 已存在）：换附件（--clobber）并刷新 notes（sha256 变化）
+          if gh release view "$FORK_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$FORK_TAG" --repo "$GITHUB_REPOSITORY" --clobber apps/electron/dist/builder-output/*.deb
+            gh release edit "$FORK_TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/release-notes.md"
+          else
+            gh release create "$FORK_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "tai-ji ${UPSTREAM_TAG} (deb)" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
+              apps/electron/dist/builder-output/*.deb
+          fi
