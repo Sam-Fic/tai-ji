@@ -894,13 +894,10 @@ describe("domains", () => {
       await expect(config.listProviders()).resolves.toEqual({ providers: [{ id: 'p' }], scopedModels: undefined })
     })
 
-    it('quota presets 下发 + models-store watch 开关（W3c/W1 新增 config.* RPC 封装）', async () => {
+    it('quota presets 下发（W3c 新增 config.* RPC 封装）', async () => {
       mockCommand.mockResolvedValueOnce({ presets: [{ fetcher: 'zhipu', label: 'L', auth: ['api-key'], match: {} }] })
       await expect(config.listQuotaPresets()).resolves.toEqual([{ fetcher: 'zhipu', label: 'L', auth: ['api-key'], match: {} }])
       expect(mockCommand).toHaveBeenLastCalledWith('config.listQuotaPresets', {})
-
-      await expect(config.setProviderCatalogWatch(true)).resolves.toBeUndefined()
-      expect(mockCommand).toHaveBeenLastCalledWith('config.setProviderCatalogWatch', { enable: true })
     })
 
     it('skill/agent 扫描与检测：解包数组', async () => {

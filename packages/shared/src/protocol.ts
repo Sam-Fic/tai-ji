@@ -259,7 +259,7 @@ export type ClientMessageType =
   | 'delivery.peek' | 'delivery.edit'
   | 'message.bash' | 'message.abortBash'
   | 'config.getProviders' | 'config.setProvider' | 'config.deleteProvider' | 'config.setToolPermissions'
-  | 'config.refreshProviderCatalogs' | 'config.setProviderCatalogWatch'
+  | 'config.refreshProviderCatalogs'
   | 'config.listQuotaPresets'
   | 'config.discoverModels' | 'config.setDefaultModel'
   | 'config.scanSkills' | 'config.setSkill' | 'config.deleteSkill'
@@ -1204,9 +1204,6 @@ export interface ClientMessageMap {
   'config.getProviders': Record<string, never>
   // 进入 Settings Provider 页时触发远程模型目录刷新（无参：刷新列表内全部 catalog provider）
   'config.refreshProviderCatalogs': Record<string, never>
-  // 设置页 Provider 页签可见期间的 models-store.json 变化感知开关（W1 缝隙 A：pi 启动刷
-  // 落盘后页签开着也能看到）。enable/disable 最后写者赢，runtime 内部幂等
-  'config.setProviderCatalogWatch': { enable: boolean }
   // quota presets 合并视图拉取（基线 ⊕ 远程 quota-fetchers.json presets；remote-config 域 2）
   'config.listQuotaPresets': Record<string, never>
   'config.setProvider': { providerId: ProviderId } & SetProviderData
@@ -4010,9 +4007,6 @@ export interface ReplyPayloadMap {
   // ── ack 型（value = void，domain register<void> 不读 reply payload）──
   'config.deleteAgent': void      // reply config.agentDeleted
   'config.deleteProvider': void   // reply config.providerUpdated
-  // watch 开关 ack 型（状态变更经 config.providers 广播承载，reply 无生效值；mutation
-  // 契约测试登记 excluded：运行时会话内开关，无持久化与 renderer store 副本）
-  'config.setProviderCatalogWatch': void
   'config.listQuotaPresets': ServerMessageMap['config.quotaPresets']
   'config.deleteSkill': void      // reply config.skillDeleted
   'config.setAgent': void         // reply config.agentUpdated
