@@ -233,6 +233,9 @@ export const PREDICATE_MAX_CHARS = 40
 export const PREDICATE_BADGE_PAD_X = 8
 /** 徽章与两侧卡片的最小净距（px，每侧——列距自适应的余量口径）。 */
 export const PREDICATE_BADGE_CLEARANCE = 8
+/** 跨列徽章基线相对边线 y 的上移量（px = 徽章底与线的净距 4 + 基线到徽章底下伸 3）
+ *  ——徽章悬浮在连线上方不遮盖连线（2026-11-08 用户裁决），连线完整可见。 */
+export const PREDICATE_BADGE_LINE_LIFT = 7
 /** 10px mono 单字符宽估算：CJK 全宽、ASCII 半宽（demo textWidth 同口径）。 */
 const CJK_CHAR_W = 10
 const ASCII_CHAR_W = 6

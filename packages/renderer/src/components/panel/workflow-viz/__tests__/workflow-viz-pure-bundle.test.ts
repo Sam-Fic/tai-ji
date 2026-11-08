@@ -29,7 +29,7 @@ import {
   deriveNodeStatus,
 } from '../gantt-segments'
 import { normalizeWorkflowScriptName } from '../run-name'
-import { layoutDag, computeFitTransform, instanceZoneHeight, predicateBadgeWidth, PREDICATE_BADGE_CLEARANCE, DAG_NODE_W, DAG_NODE_H, INSTANCE_CHIP_H, INSTANCE_CHIP_GAP, INSTANCE_PLACEHOLDER_H, INSTANCE_ZONE_TOP_GAP, FIT_PAD_PX, ZOOM_MIN } from '../dag/layout'
+import { layoutDag, computeFitTransform, instanceZoneHeight, predicateBadgeWidth, PREDICATE_BADGE_CLEARANCE, PREDICATE_BADGE_LINE_LIFT, DAG_NODE_W, DAG_NODE_H, INSTANCE_CHIP_H, INSTANCE_CHIP_GAP, INSTANCE_PLACEHOLDER_H, INSTANCE_ZONE_TOP_GAP, FIT_PAD_PX, ZOOM_MIN } from '../dag/layout'
 import { layoutEdges } from '../dag/layout-edges'
 import { avoidObstructedChannelMid, LANE_STEP_PX } from '../dag/routing-avoid'
 import WorkflowVizDag from '../dag/WorkflowVizDag.vue'
@@ -1533,8 +1533,8 @@ describe('layoutEdges 同行直线边绕行（残余 5，白盒）', () => {
     expect(edge.points[1]).toEqual({ x: edge.points[0].x, y: yB })
     expect(edge.points[2]).toEqual({ x: edge.points[3].x, y: yB })
     expectAxisAligned(edge.points)
-    // conditional 谓词徽章骑线：绕行横段中点 × 横段 y（列距自适应已保专属空间）
-    expect(edge.labelY).toBe(yB)
+    // conditional 谓词徽章悬浮：绕行横段中点 × 横段上方（不遮盖连线）
+    expect(edge.labelY).toBe(yB - PREDICATE_BADGE_LINE_LIFT)
     expect(edge.labelX).toBe((edge.points[0].x + edge.points[3].x) / 2)
   })
 
@@ -1554,8 +1554,8 @@ describe('layoutEdges 同行直线边绕行（残余 5，白盒）', () => {
     const lb = geo.get('b')!
     const [edge] = edges
     expect(edge.points).toHaveLength(2)
-    // 谓词徽章骑线：直线水平段中点 × 边线 y（列距自适应已保专属空间——不跨卡片）
-    expect(edge.labelY).toBe(edge.points[0].y)
+    // 谓词徽章悬浮：直线水平段中点 × 边线上方（不遮盖连线、不跨卡片）
+    expect(edge.labelY).toBe(edge.points[0].y - PREDICATE_BADGE_LINE_LIFT)
     expect(edge.labelX).toBe((edge.points[0].x + edge.points[1].x) / 2)
   })
 
@@ -1594,8 +1594,8 @@ describe('layoutEdges 同行直线边绕行（残余 5，白盒）', () => {
     expect(edge.points).toHaveLength(4)
     expect(edge.points[1].y).toBe(yB)
     expect(edge.points[2].y).toBe(yB)
-    // 谓词徽章骑线：绕行横段中点 × 横段 y（列距自适应已保专属空间）
-    expect(edge.labelY).toBe(yB)
+    // 谓词徽章悬浮：绕行横段中点 × 横段上方（不遮盖连线）
+    expect(edge.labelY).toBe(yB - PREDICATE_BADGE_LINE_LIFT)
     expectAxisAligned(edge.points)
   })
 
@@ -1630,8 +1630,8 @@ describe('layoutEdges 同行直线边绕行（残余 5，白盒）', () => {
     const lf = layout.nodes.find((ln) => ln.node.id === 'f')!
     const [edge] = layoutEdges(canvas, layout.nodes).filter((le) => le.edge.id === 'e1')
     expect(edge.points).toHaveLength(2)
-    // 直线残留：谓词徽章骑线（水平段中点 × 边线 y——列距自适应已保专属空间）
-    expect(edge.labelY).toBe(edge.points[0].y)
+    // 直线残留：谓词徽章悬浮（水平段中点 × 边线上方——不遮盖连线）
+    expect(edge.labelY).toBe(edge.points[0].y - PREDICATE_BADGE_LINE_LIFT)
     expect(edge.labelX).toBe((edge.points[0].x + edge.points[1].x) / 2)
   })
 })
@@ -1658,9 +1658,9 @@ describe('instanceZoneHeight 实例卡区高度（实例数派生，方案 C：�
     // 卡间净空（卡1 右缘 → 卡2 左缘）恰好容纳徽章宽 + 两侧净距
     const netGap = lb.x - (la.x + DAG_NODE_W)
     expect(netGap).toBe(predicateBadgeWidth('$ARGS.aggregate === true') + PREDICATE_BADGE_CLEARANCE * 2)
-    // 骑线锚：直线水平段中点 × 边线 y——徽章平铺在专属间隙内（surface 底盖线成守卫形态）
+    // 悬浮锚：直线水平段中点 × 边线上方（徽章底距线 4px——不遮盖连线，连线完整可见）
     const [edge] = layoutEdges(d, layout.nodes)
-    expect(edge.labelY).toBe(la.y + DAG_NODE_H / 2)
+    expect(edge.labelY).toBe(la.y + DAG_NODE_H / 2 - PREDICATE_BADGE_LINE_LIFT)
     expect(edge.labelX).toBe((la.x + DAG_NODE_W + lb.x) / 2)
   })
 

@@ -11,14 +11,14 @@
  * - 通道竖线先经 routing-avoid.assignChannelLanes 按纵向跨度游程错开（fan-in/out 不
  *   叠线），再经 routing-avoid.avoidObstructedChannelMid 整体平移到最近零穿卡走廊；
  *   同行直线有障碍时升级 routing-avoid.sameRowBypass 上下绕行 4 折线。
- * - 条件谓词徽章锚：跨列边骑线平铺（间隙中线 × 边线/竖线段/绕行段中点——列距已由
- *   layoutDag 按徽章宽自适应拉开，徽章断开连线成流程图守卫形态，不跨卡片）；同列边
- *   无间隙专属空间，退分区头徽章带（badgeAnchorY）。
+ * - 条件谓词徽章锚：跨列边悬浮在连线上方（间隙中线 × 线段中点上方 − LIFT——不遮盖
+ *   连线，2026-11-08 用户裁决；列距已由 layoutDag 按徽章宽自适应拉开，不跨卡片）；
+ *   同列边无间隙专属空间，退分区头徽章带（badgeAnchorY）。
  * - 锚点取节点主体四边中点（主体高恒 DAG_NODE_H=44，实例小卡不参与锚点几何），
  *   loop-back 底锚 = 主体 + 实例卡区总底（y + h + zoneH——回边从实例小卡下方走）。
  */
 import type { WorkflowDag, WorkflowDagEdge } from '@taiji/shared'
-import { DAG_NODE_W, type DagLayoutNode } from './layout'
+import { DAG_NODE_W, PREDICATE_BADGE_LINE_LIFT, type DagLayoutNode } from './layout'
 import {
   COINCIDE_EPS,
   assignChannelLanes,
@@ -222,9 +222,8 @@ export function layoutEdges(dag: WorkflowDag, nodes: DagLayoutNode[]): DagLayout
     }
     if (Math.abs(y1 - y2) < COINCIDE_EPS) {
       // 同行直线边（残余 5）：有障碍升级上下绕行 4 折线；无障碍/两方向均不满足保持
-      // 直线（零扰动——直线公式不变）。跨列谓词徽章骑线：列距已按徽章宽自适应拉开
-      //（layoutDag gapExtra），徽章平铺在间隙中线断开处（surface 底盖线成流程图守卫
-      // 形态），不跨任何卡片
+      // 直线（零扰动——直线公式不变）。跨列谓词徽章悬浮在连线上方：列距已按徽章宽
+      // 自适应拉开（layoutDag gapExtra），徽章底距线 4px——不遮盖连线、不跨任何卡片
       const bypass = sameRowBypass(x1, y1, x2, nodes, from.node.id, to.node.id)
       if (bypass !== null) {
         pending.push({
@@ -237,7 +236,7 @@ export function layoutEdges(dag: WorkflowDag, nodes: DagLayoutNode[]): DagLayout
             { x: x2, y: y2 },
           ],
           labelX: (x1 + x2) / HALF,
-          labelY: bypass.yB,
+          labelY: bypass.yB - PREDICATE_BADGE_LINE_LIFT,
         })
         continue
       }
@@ -246,7 +245,7 @@ export function layoutEdges(dag: WorkflowDag, nodes: DagLayoutNode[]): DagLayout
         kind: 'fixed',
         points: [{ x: x1, y: y1 }, { x: x2, y: y2 }],
         labelX: (x1 + x2) / HALF,
-        labelY: y1,
+        labelY: y1 - PREDICATE_BADGE_LINE_LIFT,
       })
       continue
     }
@@ -258,8 +257,8 @@ export function layoutEdges(dag: WorkflowDag, nodes: DagLayoutNode[]): DagLayout
       fromId: from.node.id,
       toId: to.node.id,
     }
-    // 跨列谓词徽章骑通道竖线段中点（间隙中线 × 竖线段中点——列距自适应已保空间）
-    pending.push({ edge, kind: 'channeled', chan, labelX: (x1 + x2) / HALF, labelY: (y1 + y2) / HALF })
+    // 跨列谓词徽章悬浮在通道竖线段旁（间隙中线 × 竖线段中点上方——列距自适应已保空间）
+    pending.push({ edge, kind: 'channeled', chan, labelX: (x1 + x2) / HALF, labelY: (y1 + y2) / HALF - PREDICATE_BADGE_LINE_LIFT })
     const key = `${x1}|${x2}`
     const list = channels.get(key)
     if (list) list.push(chan)

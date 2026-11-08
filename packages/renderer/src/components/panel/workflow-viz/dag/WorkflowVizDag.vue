@@ -34,6 +34,7 @@
   <div
     class="relative min-h-0 flex-1 cursor-grab overflow-hidden bg-surface-2 active:cursor-grabbing"
     data-testid="wfvz-dag-root"
+    :style="DAG_DOTGRID_STYLE"
   >
     <!-- select-none 替代原 :deep(svg/g) user-select——none 经 auto 传播覆盖全部后代 -->
     <svg
@@ -124,9 +125,9 @@
           marker-end="url(#wfvz-dag-arrow)"
           :data-testid="`wfvz-dag-edge-${le.edge.id}`"
         />
-        <!-- 条件边谓词徽章（2026-11-08 视觉裁决）：小圆角底徽章替代裸 warn 文字——
-             常显截短文本（title 悬停全文），middle 平铺在分区头预留的谓词徽章带
-             （布局 badgeAnchorY 统一锚——贴边位置容不下徽章） -->
+        <!-- 条件边谓词徽章（2026-11-08 视觉裁决）：小圆角底徽章，跨列边悬浮在连线
+             上方不遮盖连线（徽章底距线 4px，布局 PREDICATE_BADGE_LINE_LIFT 口径），
+             同列边平铺分区头徽章带；截短文本常显 + title 悬停全文 -->
         <g
           v-for="le in conditionalEdges"
           :key="`label-${le.edge.id}`"
@@ -255,6 +256,14 @@ const EDGE_KIND_CLASS: Record<WorkflowDagEdgeKind, string> = {
   'loop-back': 'stroke-accent [stroke-width:1.2] [stroke-dasharray:6_4]',
 }
 
+/** 画布点阵背景（demo graph-scroll 同款形态：1px 点 × 18px 网格，2026-11-08 用户
+ *  裁决）：点色经 color-mix 从 --neutral-fg 派生（暗族白点微亮 / 亮族墨点微暗，六主题
+ *  自动跟随），行内 style 而非 Tailwind 任意值类（radial-gradient 含逗号的任意值类
+ *  挂 JIT 生成风险）。 */
+const DAG_DOTGRID_STYLE = {
+  backgroundImage: 'radial-gradient(circle at 1px 1px, color-mix(in oklch, var(--neutral-fg) 4%, transparent) 1px, transparent 0)',
+  backgroundSize: '18px 18px',
+} as const
 const CLUSTER_TITLE_INSET = 12
 const CLUSTER_TITLE_H_BASE = 20
 /** 分区副标题与分区标题的基线落差（px；副标题挂在标题下一行）。 */
