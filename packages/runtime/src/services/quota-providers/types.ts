@@ -95,6 +95,13 @@ export function readSetCookies(resp: Response): string[] | undefined {
   return lines.length > 0 ? lines : undefined
 }
 
+/** outcome 挂载 Set-Cookie 的唯一入口（与 readSetCookies 配对持有「不得物化空键」契约）：
+ *  有 cookie 才追加 setCookies 键，无则原样返回 outcome——各出口分支不再手抄
+ *  `...(setCookies && { setCookies })` 惯用语（fetchQuotaJson / fetchPrimary 共用）。 */
+export function withSetCookies<C extends object>(setCookies: string[] | undefined, outcome: C): C & { setCookies?: string[] } {
+  return setCookies ? { ...outcome, setCookies } : outcome
+}
+
 /**
  * JSON fetcher 共用骨架：凭证检查 → HTTP 状态归类 → JSON 解析 + shape guard →
  * 网络异常归类（logger.debug 落盘，禁止静默 catch）。doFetch 返回的 Response 由
@@ -117,17 +124,17 @@ export async function fetchQuotaJson<T>(
       // [u10/G4] 非 2xx 提前 return 不读 body——未消费的 body 会钉住连接（无法回连接池
       // 复用 + 缓冲驻留），显式 cancel 释放（body 可为 null，如 204/304，optional chain 兜底）。
       void resp.body?.cancel()
-      return { ok: false, reason: statusToReason(resp.status), ...(setCookies && { setCookies }) }
+      return withSetCookies(setCookies, { ok: false, reason: statusToReason(resp.status) })
     }
 
     let data: T
     try {
       data = (await resp.json()) as T
     } catch {
-      return { ok: false, reason: 'parse', ...(setCookies && { setCookies }) }
+      return withSetCookies(setCookies, { ok: false, reason: 'parse' })
     }
-    if (!guard(data)) return { ok: false, reason: 'parse', ...(setCookies && { setCookies }) }
-    return { ok: true, data, ...(setCookies && { setCookies }) }
+    if (!guard(data)) return withSetCookies(setCookies, { ok: false, reason: 'parse' })
+    return withSetCookies(setCookies, { ok: true, data })
   } catch (err) {
     // fetch 网络异常 / 超时 → network（架构约定 #4 落盘，禁止静默 catch）。
     // RT-7#6：debug → warn——打包态日志级别 info 会过滤 debug，网络失败成因生产不可见。

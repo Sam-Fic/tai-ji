@@ -5,7 +5,7 @@
  */
 
 import type { QuotaFetchFailureReason } from './types.js'
-import { isRecord, readSetCookies, statusToReason } from './types.js'
+import { isRecord, readSetCookies, statusToReason, withSetCookies } from './types.js'
 import type { DeclarativeFetcherConfig } from './declarative-engine.js'
 
 const REQUEST_TIMEOUT_MS = 8000
@@ -41,14 +41,14 @@ export async function fetchPrimary(
   if (!resp.ok) {
     void resp.body?.cancel()
     const mapped = config.statusMap?.[String(resp.status)]
-    return { ok: false, reason: mapped ?? statusToReason(resp.status), ...(setCookies && { setCookies }) }
+    return withSetCookies(setCookies, { ok: false, reason: mapped ?? statusToReason(resp.status) })
   }
   try {
     const data: unknown = await resp.json()
-    if (!isRecord(data)) return { ok: false, reason: 'parse', ...(setCookies && { setCookies }) }
-    return { ok: true, data, ...(setCookies && { setCookies }) }
+    if (!isRecord(data)) return withSetCookies(setCookies, { ok: false, reason: 'parse' })
+    return withSetCookies(setCookies, { ok: true, data })
   } catch {
-    return { ok: false, reason: 'parse', ...(setCookies && { setCookies }) }
+    return withSetCookies(setCookies, { ok: false, reason: 'parse' })
   }
 }
 
