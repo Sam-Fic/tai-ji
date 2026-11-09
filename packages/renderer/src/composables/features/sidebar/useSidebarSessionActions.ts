@@ -30,6 +30,12 @@ import { useProjectStore } from '@/stores/project'
 import { useToast } from '@/composables/useToast'
 import { markForcedExit, consumeForcedExit } from '@/composables/effects/forced-exit-marks'
 import { useI18n } from 'vue-i18n'
+import {
+  beginSessionSwitch,
+  releaseSessionSwitch,
+  retargetSessionSwitch,
+  useSessionSwitchVeilState,
+} from './useSessionSwitchVeil'
 import { archiveErrorKey } from './archive-error-text'
 
 /**
@@ -81,20 +87,65 @@ export function useSidebarSessionActions(options: UseSidebarSessionActionsOption
   const { t } = useI18n()
   const { error: toastError, info: toastInfo } = useToast()
   const { abort: abortSession } = useChat()
+  const veil = useSessionSwitchVeilState()
 
+  /**
+   * 点击切换 session（session-switch-veil 幕布过渡入口）：
+   * - 空窗反馈：切换 promise settle 前，幕布层（SessionSwitchVeil）压暗对话流 + chip 报目标，
+   *   header 标题乐观切换（呈现层读 useSessionSwitchVeilState，编排只驱动状态机）；
+   * - 等待中再点 = 改投：只换幕布目标（retarget），不打断进行中的切换——driver 循环 settle
+   *   后按最新目标接续（被改投的旧链自然结束，其历史拉取独立落库不受影响）；
+   * - dead session → 显式 restore（重新 spawn pi + revive 统一在 useSidebar.restoreSession）；
+   *   非 dead → 常规切换。useSessionStore 是 pinia store，可在非 setup 上下文调用。
+   */
   async function onSelectSession(id: string): Promise<void> {
+    const label = useSessionStore().list.find((s) => s.id === id)?.label ?? ''
+    if (veil.driverRunning) {
+      retargetSessionSwitch(id, label)
+      return
+    }
+    beginSessionSwitch(id, label)
     try {
-      // dead session → 显式 restore（重新 spawn pi + revive 统一在 useSidebar.restoreSession）；
-      // 非 dead → 常规切换。useSessionStore 是 pinia store，可在非 setup 上下文调用。
-      const isDead = useSessionStore().list.find((s) => s.id === id)?.status === 'dead'
-      if (isDead) {
-        await restoreSession(id)
-      } else {
-        await selectSession(id)
-      }
+      await driveVeiledSwitch(id)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       toastError(t('sidebar.switchSessionFailed', { msg }))
+    }
+  }
+
+  /**
+   * 幕布 driver 循环：按幕布当前目标串行执行切换。settle 时目标已被改投 → 接续新目标
+   * （连点竞态的结构性收敛：后 settle 的旧链可能把 panel 切回旧 session，「以最后一次
+   * 目标为准重跑」保证最终停在用户最后点击的 session）；中途目标失败且未改投 → release
+   * 并上抛（外层既有 toast 口径）；失败但已改投 → 静默接续（当前意图是新目标，旧目标
+   * 失败与用户无关）。restoreSession 内部已自行 catch selectSession 错误恒 resolve，
+   * 不会走到上抛路径。
+   */
+  async function driveVeiledSwitch(firstId: string): Promise<void> {
+    let current = firstId
+    while (veil.driverRunning) {
+      const isDead = useSessionStore().list.find((s) => s.id === current)?.status === 'dead'
+      try {
+        if (isDead) {
+          await restoreSession(current)
+        } else {
+          await selectSession(current)
+        }
+      } catch (e) {
+        const redirect = veil.targetId
+        if (veil.driverRunning && redirect !== null && redirect !== current) {
+          current = redirect
+          continue
+        }
+        releaseSessionSwitch()
+        throw e
+      }
+      const next = veil.targetId
+      if (veil.driverRunning && next !== null && next !== current) {
+        current = next
+        continue
+      }
+      releaseSessionSwitch()
     }
   }
 

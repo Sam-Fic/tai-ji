@@ -72,7 +72,7 @@
              保持移除（sessionDir/gitBranch 仍供 Panel 消费）；.jsonl 文件名按钮按
              2026-10-14 用户裁决回归（sessionFileOf 供给）。 -->
         <PanelHeader
-          :session-label="sessionLabelOf(leaf)"
+          :session-label="veil.targetLabel || sessionLabelOf(leaf)"
           :session-id="leaf.sessionId ?? undefined"
           :session-file="sessionFileOf(leaf)"
           :status="statusOf(leaf)"
@@ -84,6 +84,11 @@
           :session-dir="sessionDirOf(leaf)"
           :git-branch="gitBranchOf(leaf)"
         />
+        <!-- 会话切换幕布（session-switch-veil）：sidebar 点击后切换 settle 前压暗对话流 +
+             chip 报目标；定位 top-[40px] 让卡头（h-[40px] 单档，demo N16）带乐观标题保持
+             在幕布之上。与 ToastContainer 同锚定层（main-area 内最后挂载，浮层互不重叠——
+             toast z-toast 恒高于幕布 z-overlay，错误提示仍可见）。 -->
+        <SessionSwitchVeil />
         <!-- Toast 通知锚点（右上角）：锚在 main-area 内——drawer 打开时本区收窄，toast 随宽左移，
              恒不遮 drawer；bottom 区域留给 composer。 -->
         <ToastContainer />
@@ -276,7 +281,9 @@ import { usePlanDrawerSync } from '@/composables/use-plan-drawer-sync'
 import { useChatStore } from '@/stores/chat'
 import Panel from '@/components/panel/Panel.vue'
 import PanelHeader from '@/components/panel/PanelHeader.vue'
+import SessionSwitchVeil from '@/components/panel/SessionSwitchVeil.vue'
 import ToastContainer from '@/components/ui/ToastContainer.vue'
+import { useSessionSwitchVeilState } from '@/composables/features/sidebar/useSessionSwitchVeil'
 import AsyncErrorFallback from '@/components/ui/AsyncErrorFallback.vue'
 import { createLazyChunkRetry } from '@/components/ui/lazy-chunk-retry'
 
@@ -315,6 +322,9 @@ const panel = usePanelStore()
 const session = useSessionStore()
 const chatStore = useChatStore()
 const { derivedStatus } = useSessionDerivations()
+// 会话切换幕布状态（session-switch-veil）：header 标题乐观切换——过渡期（idle 之外）
+// 直接显示目标名（sidebar 点击即变，不等步 7 syncSessionToPanel 才跳）
+const veil = useSessionSwitchVeilState()
 
 // sidebar 选 session → panel 载入的编排在 useSidebar.selectSession（代理 core use-session，主路径）
 // 与 AppShell watch(navigation.pointer)（⌘[/⌘] 同步），不在此组件 watch：

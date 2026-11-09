@@ -9,6 +9,8 @@ export default {
   selectSessionHint: '选择会话查看文件',
   sessionListLoadFailed: '会话列表加载失败（{error}）',
   switchSessionFailed: '切换会话失败：{msg}',
+  // 会话切换幕布（session-switch-veil）chip 文案：等待期报出目标会话名
+  switchingTo: '正在打开「{name}」',
   newTaskFailed: '新建任务失败：{msg}',
   // 归档发起 toast（session-archive §5.1 成功路径；压缩后台进行，文案不宣称已压缩）
   archiveSessionDone: '已归档「{name}」',
