@@ -1,8 +1,9 @@
 /**
- * Turn.vue trace 区单测（chat-flow-process-aggregate U3 聚合块形态）。
+ * Turn.vue trace 区单测（chat-flow-process-aggregate U3 聚合块形态 + 折叠形态重定义）。
  *
  * 覆盖：
- * 1. D5 折叠形态：折叠态 / 完成态 / 历史手动展开同形态——全部聚合块摘要行 + 末位正文
+ * 1. 折叠三态矩阵（chat-turn-fold-redesign §1）：折叠态仅末位正文 / 展开态中间正文 +
+ *    聚合块摘要行 + 末位正文全显 / 工作态不受折叠开关影响
  * 2. 工作态聚合形态（D2）：全部正文原生渲染 + 聚合块三态接线（双窗 / 摘要 / 失败标记）
  * 3. turn-attribution W4：trigger 起点行 + turn 内 notice 渲染
  * 4. 聚合块键稳定性（AX1 两方向）+ v-memo deps 完整性（S-3 非末位成员翻转）
@@ -186,21 +187,20 @@ const traceTopBlocks = (wrapper: { findAll: (s: string) => UnitWrapperLike[] }) 
   wrapper.findAll('.trace > .trace-blk')
 
 // ═════════════════════════════════════════════════════════════════
-// describe 1：D5 折叠形态（scope wave 回归改造——折叠 / 手动展开同形态）
+// describe 1：折叠三态矩阵（chat-turn-fold-redesign §1——推翻 D5「展开与折叠同形态」）
 // ═════════════════════════════════════════════════════════════════
 
-describe('chat-flow-process-aggregate D5: 折叠形态（摘要行 + 末位正文）', () => {
-  it('非末位 turn（isLastTurn=false）→ 折叠形态：聚合块摘要行 + 末位正文，过程细节不渲染', () => {
+describe('chat-turn-fold-redesign: 折叠三态（折叠仅末位正文 / 展开全显 / 工作态不受开关影响）', () => {
+  it('非末位 turn（isLastTurn=false）折叠态 → 仅末位正文：聚合块与过程细节不渲染', () => {
     const wrapper = mountTurn({ isSessionActive: true, isLastTurn: false })
-    // 顶层 2 单元：聚合块（thinking+tool 段，fallback 时序 [text, thinking, tool]）
+    // 折叠态唯一单元 = 末位正文（fallback 时序 [text, thinking, tool]——聚合块收起不渲染）
     const blocks = traceTopBlocks(wrapper)
-    expect(blocks.length).toBe(2)
-    // 首单元 = 聚合块摘要行（非工作态 isLive=false）
-    expect(blocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
-    expect(blocks[0].find('[data-testid="agg-live-windows"]').exists()).toBe(false)
-    // 末单元 = 末位正文（.trace-blk--text wrapper 契约 + 正文内容在场）
-    expect(blocks[1].classes()).toContain('trace-blk--text')
-    expect(blocks[1].text()).toContain('最终回复')
+    expect(blocks.length).toBe(1)
+    expect(blocks[0].classes()).toContain('trace-blk--text')
+    expect(blocks[0].text()).toContain('最终回复')
+    // 聚合块整体不在场（摘要行也收起——折叠态过程信号完全不可见，展开即见）
+    expect(wrapper.find('[data-testid="process-aggregate"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(false)
     // 过程细节不在场（思考行 / 工具行只在聚合块展开态渲染）
     expect(wrapper.find('.trace-think').exists()).toBe(false)
     expect(wrapper.find('.trace-tool').exists()).toBe(false)
@@ -253,18 +253,137 @@ describe('chat-flow-process-aggregate D5: 折叠形态（摘要行 + 末位正�
     expect(settled.find('[data-testid="block-text"]').classes()).not.toContain('agg-text-enter')
   })
 
-  it('手动展开（isExpanded=true）与折叠态同形态（D5：展开的语义是显式意图，不改默认形态）', () => {
+  it('手动展开（isExpanded=true）→ 展开形态：中间正文 + 聚合块摘要行 + 末位正文全显', () => {
     const wrapper = mountTurn({
+      turn: makeSeqTurn(
+        [
+          { kind: 'thinking' },
+          { kind: 'tool', toolName: 'read' },
+          { kind: 'text', content: '中间结论' },
+          { kind: 'tool', toolName: 'bash' },
+          { kind: 'text', content: '最终回复' },
+        ],
+        { assistantStatus: 'complete', isStreaming: false },
+      ),
       isSessionActive: true,
       isLastTurn: false,
       isExpanded: () => true,
     })
+    // 展开态按真实时序交错：[agg1(thinking+read), text 中间结论, agg2(bash), text 最终回复]
     const blocks = traceTopBlocks(wrapper)
-    expect(blocks.length).toBe(2)
+    expect(blocks.length).toBe(4)
+    // 非工作态聚合块 isLive=false → 摘要行（每段一行）
     expect(blocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
+    expect(blocks[0].find('[data-testid="agg-live-windows"]').exists()).toBe(false)
     expect(blocks[1].classes()).toContain('trace-blk--text')
-    // 点摘要行展开该段（回合级展开不展开段——每段一个入口，D9 收敛后唯一路径）
+    expect(blocks[1].text()).toContain('中间结论')
+    expect(blocks[2].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
+    expect(blocks[3].classes()).toContain('trace-blk--text')
+    expect(blocks[3].text()).toContain('最终回复')
+    // 聚合块内部平铺不渲染（组件本地展开态，D6 不落 store——点摘要行展开该段）
     expect(wrapper.find('.trace-think').exists()).toBe(false)
+  })
+
+  it('秒败 turn 折叠态例外非空：error 空正文 turn 仍产 text 宿主，error danger 行可见', () => {
+    // 设计 §1 例外条款：纯工具无正文 turn 折叠态 trace 区为空，但秒败 turn（content 空 +
+    // error 非空）经 ADR-0122 契约（assistant-blocks expandFallback 补空正文 text 块宿主）
+    // 折叠态非空——折叠只收过程，错误文案不可吞
+    const wrapper = mountTurn({
+      turn: makeTurn({
+        isStreaming: false,
+        hasFoldable: false,
+        assistants: [
+          { id: 'a1', role: 'assistant', content: '', status: 'error', error: '连接断开，执行结果未确认', timestamp: NOW },
+        ],
+      }),
+      isSessionActive: false,
+      isLastTurn: true,
+    })
+    // 折叠态唯一单元 = 空正文 text 宿主（fallback：content 空但 error 非空仍产块）
+    const blocks = traceTopBlocks(wrapper)
+    expect(blocks.length).toBe(1)
+    expect(blocks[0].classes()).toContain('trace-blk--text')
+    // error 独立 danger 行经宿主可见（M2 追加形态：错误文本只住 error 字段）
+    const err = wrapper.find('[data-testid="block-text-error"]')
+    expect(err.exists()).toBe(true)
+    expect(err.text()).toContain('连接断开，执行结果未确认')
+  })
+
+  it('bg-notify 收纳明细行区门控：非工作态折叠不渲染，展开后才渲染（turnExpanded 门控）', () => {
+    // [bg-notice-fold] 明细行区与 trace 区同受回合展开门控（chat-turn-fold-redesign §2.2）：
+    // 折叠态只留末位正文（明细行随之收起），展开才逐条可见。fixture = subagent 完成通知
+    // （customType + details 走 core deriveFoldedNoticeRows 单点派生，不 mock 派生）
+    const foldedNotices: Message[] = [
+      {
+        id: 'n1',
+        role: 'system',
+        content: '',
+        status: 'complete',
+        customType: 'subagent-bg-notify',
+        display: false,
+        details: { id: 'sub-1', status: 'done', agent: 'reviewer', startedAt: 0, endedAt: 5000, result: '审计完成' },
+        timestamp: NOW,
+      } as Message,
+    ]
+    const turn = () =>
+      makeTurn({ isStreaming: false, hasFoldable: true, foldedNotices })
+    // 折叠（默认）：明细行区不渲染
+    const folded = mountTurn({ turn: turn(), isSessionActive: false, isLastTurn: true })
+    expect(folded.find('[data-testid="turn-folded-notices"]').exists()).toBe(false)
+    // 展开：明细行区渲染，行内容 = core 派生的 subagent 明细（agent + result + 耗时）
+    const expanded = mountTurn({
+      turn: turn(),
+      isSessionActive: false,
+      isLastTurn: true,
+      isExpanded: () => true,
+    })
+    const area = expanded.find('[data-testid="turn-folded-notices"]')
+    expect(area.exists()).toBe(true)
+    expect(area.find('[data-testid="turn-folded-notice-subagent"]').exists()).toBe(true)
+    // 行内容 = summary（agent）+ 状态 + 耗时；fullText（result）只进 title 悬停属性
+    expect(area.text()).toContain('reviewer')
+    expect(area.text()).toContain('5s')
+    expect(area.find('[title="审计完成"]').exists()).toBe(true)
+  })
+
+  it('折叠↔展开切换（同实例）：v-memo 不吞形态切换，聚合块随开关增删', async () => {
+    // §2.3 实证检查点：折叠→展开 = 聚合块/中间正文 mount + 末位正文单元移动，v-memo 只
+    // 跳过同 key 存续且 deps 未变单元的重渲染，不阻碍列表 diff 的移动与增删——若缓存吞掉
+    // 形态切换，展开后聚合块缺席或正文滞旧。mock isExpanded 是普通函数无响应式，切换后经
+    // setProps 换新 turn 对象驱动 traceUnits 重算取新值
+    const makeFoldTurn = () =>
+      makeSeqTurn(
+        [
+          { kind: 'tool', toolName: 'bash' },
+          { kind: 'text', content: '中间结论' },
+          { kind: 'tool', toolName: 'bash' },
+          { kind: 'text', content: '最终回复' },
+        ],
+        { assistantStatus: 'complete', isStreaming: false },
+      )
+    const expanded = { on: false }
+    const wrapper = mountTurn({
+      turn: makeFoldTurn(),
+      isSessionActive: true,
+      isLastTurn: false,
+      isExpanded: () => expanded.on,
+    })
+    // 折叠态：仅末位正文
+    expect(traceTopBlocks(wrapper).length).toBe(1)
+    // 展开：[agg1, text 中间结论, agg2, text 最终回复] 4 单元
+    expanded.on = true
+    await wrapper.setProps({ turn: makeFoldTurn() })
+    const blocks = traceTopBlocks(wrapper)
+    expect(blocks.length).toBe(4)
+    expect(blocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
+    expect(blocks[3].classes()).toContain('trace-blk--text')
+    expect(blocks[3].text()).toContain('最终回复')
+    // 回折叠：聚合块与中间正文 unmount，回到仅末位正文
+    expanded.on = false
+    await wrapper.setProps({ turn: makeFoldTurn() })
+    const foldedBlocks = traceTopBlocks(wrapper)
+    expect(foldedBlocks.length).toBe(1)
+    expect(foldedBlocks[0].text()).toContain('最终回复')
   })
 })
 
@@ -304,6 +423,26 @@ describe('chat-flow-process-aggregate 工作态: D2 正文原生 + 段摘要', (
     expect(textBlocks[1].text()).toContain('中间结论二')
   })
 
+  it('三态矩阵第一行：工作态 ∧ isExpanded=true → 仍全显（与 isExpanded=false 同形，折叠开关不影响工作态）', () => {
+    // 同 fixture 两态对照：isExpanded 只作用于非工作态（folded = !isWorkingTurn && !turnExpanded），
+    // 工作态下展开开关不改变单元形态
+    const unitShape = (w: ReturnType<typeof mountTurn>) =>
+      traceTopBlocks(w).map((b) => b.classes().includes('trace-blk--text'))
+    const offState = mountTurn({ turn: alternatingTurn(), isSessionActive: true, isLastTurn: true })
+    const onState = mountTurn({
+      turn: alternatingTurn(),
+      isSessionActive: true,
+      isLastTurn: true,
+      isExpanded: () => true,
+    })
+    expect(unitShape(onState)).toEqual([false, true, false, true, false])
+    expect(unitShape(offState)).toEqual(unitShape(onState))
+    // 聚合块三态同样不受影响：已封闭段摘要行 / 末段双窗（与 describe 2 基线一致）
+    const onBlocks = traceTopBlocks(onState)
+    expect(onBlocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
+    expect(onBlocks[4].find('[data-testid="agg-live-windows"]').exists()).toBe(true)
+  })
+
   it('已完成段在工作态显摘要行（followedByText 封闭），末段双窗进行中', () => {
     const wrapper = mountTurn({
       turn: alternatingTurn(),
@@ -335,7 +474,7 @@ describe('chat-flow-process-aggregate 工作态: D2 正文原生 + 段摘要', (
     expect(wrapper.find('[data-testid="trace-compactor"]').exists()).toBe(false)
   })
 
-  it('D3/G4: 含失败工具 → 摘要行失败标记在场（「含 N 次失败」，不需接管态）', () => {
+  it('D3/G4: 含失败工具 → 展开形态摘要行失败标记在场（「含 N 次失败」，不需接管态）', () => {
     const wrapper = mountTurn({
       turn: makeSeqTurn([
         { kind: 'tool', toolName: 'bash', status: 'error' },
@@ -345,8 +484,10 @@ describe('chat-flow-process-aggregate 工作态: D2 正文原生 + 段摘要', (
       ]),
       isSessionActive: true,
       isLastTurn: false,
+      isExpanded: () => true,
     })
-    // 折叠形态：聚合块摘要行失败标记（口径 = 段内已完成失败块数，core counts 单源）
+    // 展开形态：聚合块摘要行失败标记（口径 = 段内已完成失败块数，core counts 单源）；
+    // 折叠态聚合块整体不渲染（收起失败信号，展开即见）
     const failed = wrapper.find('[data-testid="agg-summary-failed"]')
     expect(failed.exists()).toBe(true)
     expect(failed.text()).toContain('含 3 次失败')
@@ -706,7 +847,8 @@ describe('聚合块接线: 键稳定性两方向 + v-memo 完整性', () => {
         hasFoldable: true,
       }
     }
-    const wrapper = mountTurn({ turn: makeDoneTurn(r1Of('completed')), isSessionActive: false })
+    // 非工作态 + 展开形态（折叠态聚合块不渲染，摘要行断言需先展开）
+    const wrapper = mountTurn({ turn: makeDoneTurn(r1Of('completed')), isSessionActive: false, isExpanded: () => true })
     // 完成段默认摘要行：初始 0 失败 → 失败标记不渲染
     expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="agg-summary-failed"]').exists()).toBe(false)
@@ -764,7 +906,7 @@ describe('[actions-anchor] 操作栏只挂 trace 末单元为正文的块', () =
     expect(textBlocks[0].element.contains(anchors[0].element)).toBe(true)
   })
 
-  it('历史展开形态多 text 块：锚全 turn 唯一，挂时序最后的 text 块（D5 同形态：中间正文收敛，末位正文殿后）', () => {
+  it('非工作展开态多 text 块：两条正文全显，锚全 turn 唯一，挂时序最后的 text 块', () => {
     const twoTexts = makeTurn()
     twoTexts.assistants = [
       { id: 'a1', role: 'assistant', content: '第一段', status: 'complete', timestamp: NOW },
@@ -772,12 +914,14 @@ describe('[actions-anchor] 操作栏只挂 trace 末单元为正文的块', () =
     ]
     const wrapper = mountWithRealComponents(twoTexts, { isExpanded: true })
     const textBlocks = wrapper.findAll('.trace-blk--text')
-    // D5 折叠形态：两条历史正文收敛到末位一条（a1「第一段」不渲染）
-    expect(textBlocks.length).toBe(1)
-    expect(textBlocks[0].text()).toContain('最终回复')
+    // 展开形态：两条历史正文全显（折叠态才收敛到末位一条）
+    expect(textBlocks.length).toBe(2)
+    expect(textBlocks[0].text()).toContain('第一段')
+    expect(textBlocks[1].text()).toContain('最终回复')
     const anchors = wrapper.findAll('[data-testid="turn-actions-anchor"]')
     expect(anchors.length).toBe(1)
-    expect(textBlocks[0].element.contains(anchors[0].element)).toBe(true)
+    expect(textBlocks[0].element.contains(anchors[0].element)).toBe(false)
+    expect(textBlocks[1].element.contains(anchors[0].element)).toBe(true)
   })
 
   it('正文后跟聚合块（末单元是聚合块）：无锚块，操作栏不渲染', () => {

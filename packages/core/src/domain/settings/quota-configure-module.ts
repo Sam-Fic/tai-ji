@@ -127,6 +127,12 @@ export interface QuotaCookieRefreshView {
   running: boolean
   /** 最近一次结果：null = 从未触发 / 'ok' = cookie 已写入并重查 / 'fail' = 失败 */
   result: 'ok' | 'fail' | null
+  /**
+   * result==='ok' 的完成时刻（epoch ms）。成功态跨重查保留（重查成败由测试结果区
+   * 独立呈现，两事实并列可见——「续期成功但查询失败」不再与「续期失败」混淆），
+   * UI 以此渲染「已续期 · HH:mm」。
+   */
+  succeededAt: number | null
   /** 失败文案（result==='fail' 时非空；main 侧 error 透传，无则 i18n 兜底） */
   error: string
 }

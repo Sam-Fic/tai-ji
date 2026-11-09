@@ -190,7 +190,6 @@ export class SettingsMessageHandler {
     'config.listBuiltinProviders': (msg, ws) => this.providerHandler.handle(msg, ws),
     'config.previewImportProviders': (msg, ws) => this.providerHandler.handle(msg, ws),
     'config.applyImportProviders': (msg, ws) => this.providerHandler.handle(msg, ws),
-    'config.setProviderCatalogWatch': (msg, ws) => this.providerHandler.handle(msg, ws),
     'config.listQuotaPresets': (msg, ws) => this.providerHandler.handle(msg, ws),
     // ── OAuth 域（oauth-message-handler.ts）──
     'config.oauthLogin': (msg, ws) => this.oauthHandler.handle(msg, ws),

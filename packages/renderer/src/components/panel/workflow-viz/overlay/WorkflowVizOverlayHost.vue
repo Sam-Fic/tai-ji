@@ -37,7 +37,7 @@
     <WorkflowVizOverlay
       :open="isOverlayShellOpen"
       :run="runRecord"
-      :dag="overlayDag"
+      :dag="displayDag"
       :dag-error="overlayDagError"
       :tab="overlayTab"
       :scheduler-session-id="overlaySessionId"
@@ -63,19 +63,24 @@
         :gantt-component="WorkflowVizGantt"
         @open-agent="agentDrawerRef?.openAgent($event)"
       />
+      <!-- workflow agent 抽屉（[2026-11-08 载体裁决）：挂 u4 壳 #agent-drawer 具名
+           slot（absolute 贴壳右缘——overlay 内部 drawer，非全局）；随 workflow 内容
+           开合挂载/消亡（tab 集构造性清空）。DrawerGuard = errorCaptured 边界（渲染
+           失败静默退出，不连坐 D10 壳回落关 overlay——原「置于 Guard 外」语义的
+           slot 内等价物）。 -->
+      <template #agent-drawer>
+        <AgentStreamDrawerGuard>
+          <AgentStreamDrawer
+            v-if="isWorkflowOpen && panelInput"
+            ref="agentDrawerRef"
+            :key="panelInput.runId"
+            :session-id="panelInput.sessionId"
+            :run="panelInput.run"
+          />
+        </AgentStreamDrawerGuard>
+      </template>
     </WorkflowVizOverlay>
   </WorkflowVizOverlayGuard>
-  <!-- workflow agent 抽屉（[2026-10-19] demo 形态）：随 workflow 内容开合挂载/消亡
-       （tab 集构造性清空）；fixed 定位浮在 overlay 壳之上（z = dialog+1，壳提档
-       z-dialog 后随档）。置于 Guard 外——抽屉渲染失败不进 D10 回落链（壳装载失败才
-       回落；抽屉失败不该连坐关 overlay）。 -->
-  <AgentStreamDrawer
-    v-if="isWorkflowOpen && panelInput"
-    ref="agentDrawerRef"
-    :key="panelInput.runId"
-    :session-id="panelInput.sessionId"
-    :run="panelInput.run"
-  />
   <!-- 浮层浏览器内容（display-containers §7.4，u-w2-browser-mount）：单例换内容——
        当前内容是 browser 时由 BrowserOverlay 的 OverlayShell 承载（workflow 壳同期门控
        只在 workflow 内容时开，两壳互斥不叠显）。Guard 只包 workflow 内容（回落语义
@@ -109,7 +114,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { WorkflowRunRecord } from '@taiji/shared'
+import type { WorkflowDag, WorkflowRunRecord } from '@taiji/shared'
 import WorkflowVizOverlay from './WorkflowVizOverlay.vue'
 import WorkflowVizOverlayGuard from './WorkflowVizOverlayGuard.vue'
 import OverlayShell from './OverlayShell.vue'
@@ -117,8 +122,10 @@ import { ViewHost } from '@taiji/ui/extension-host'
 import BrowserOverlay from '@/components/panel/BrowserOverlay.vue'
 import WorkflowLivePanel from '../panel/WorkflowLivePanel.vue'
 import AgentStreamDrawer from '../panel/AgentStreamDrawer.vue'
+import AgentStreamDrawerGuard from '../panel/AgentStreamDrawerGuard.vue'
 import WorkflowVizGantt from '../gantt/WorkflowVizGantt.vue'
 import { matchInstancesToNodes } from '../blueprint-match'
+import { reattributeDagPhases } from '../blueprint-attribution'
 import type { WorkflowInstanceMatchResult } from '../blueprint-match'
 import { deriveNodeStatus } from '../gantt-segments'
 import type { WorkflowVizDagNodeStatus } from '../dag/types'
@@ -217,12 +224,27 @@ const panelInput = computed<{ sessionId: string; runId: string; run: WorkflowRun
 // ── 派生输入（容器单处派生，壳/面板均消费已派生 props）────────────────────────
 
 /** D2 匹配单源（byNode + 未匹配列表一次派生；节点七态 / 未匹配分组 / 点击钻取共用，
- *  避免三处各自调 matchInstancesToNodes 重复计算）。 */
+ *  避免三处各自调 matchInstancesToNodes 重复计算；含方案 C tier 2 名称族回落）。 */
 const matchResult = computed<WorkflowInstanceMatchResult | null>(() => {
   const dag = overlayDag.value
   const run = runRecord.value
   if (dag === null || run === null) return null
   return matchInstancesToNodes(dag, run.agentCalls)
+})
+
+/**
+ * 展示用重归属 DAG（方案 C 单处派生）：静态词法归属 + 匹配实例 → 调用点落回语义
+ * phase（node.phase = 实例运行时 phase 众数）、分区清单按执行序（run.phases 优先）。
+ * 画布/图例/点击语义消费本视图；DAG 未就绪时 null = 壳出解析中/降级形态。匹配数据
+ * 未就绪（matchResult null）时仍产出——零实例重排（全部节点保持词法 phase、分区按
+ * 执行序）不依赖实例流。
+ */
+const displayDag = computed<WorkflowDag | null>(() => {
+  const dag = overlayDag.value
+  if (dag === null) return null
+  const run = runRecord.value
+  const phaseOrder = run?.phases?.map((p) => p.phase)
+  return reattributeDagPhases(dag, matchResult.value?.byNode, phaseOrder)
 })
 
 /** 节点七态映射（D2 蓝图-实例匹配 → D9 节点级派生；DAG 未就绪时 undefined = 画布解析中）。 */
@@ -333,12 +355,17 @@ async function onSelectModel(payload: { modelId: string; provider: ProviderId })
 
 // ── 事件接线 ─────────────────────────────────────────────────────────────────
 
-/** DAG 点击（[2026-10-19] agent 钻取语义删除——点击入口收归实例 trace 行）：仅剩
- *  phase 语义（pending/skipped 节点与分区），开 phase tab。 */
+/** DAG 点击（[2026-11-08] 图上钻取恢复，推翻 [2026-10-19] 收编）：agent 语义 =
+ *  实例小卡/有实例调用点点击（run.agentCalls 反查 call——画布只传 callId 不复制投影）
+ *  → AgentStreamDrawer.openAgent（已开 tab 仅激活——「再点切回」）；phase 语义 =
+ *  零实例节点/分区点击 → 开 phase tab。 */
 function onSelect(payload: WorkflowVizDagClickPayload): void {
-  if (payload.semantic === 'phase') {
-    panelRef.value?.openPhaseTab(payload.phase)
+  if (payload.semantic === 'agent') {
+    const call = runRecord.value?.agentCalls.find((c) => c.id === payload.callId)
+    if (call !== undefined) agentDrawerRef.value?.openAgent(call)
+    return
   }
+  panelRef.value?.openPhaseTab(payload.phase)
 }
 
 /** D10 回落动作序列（[2026-10-19] drawer workflow tab 删除，回落载体不再存在）：

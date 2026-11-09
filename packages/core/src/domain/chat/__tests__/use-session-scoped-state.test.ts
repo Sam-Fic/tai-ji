@@ -257,6 +257,30 @@ describe("message-turns.incremental [src/domain/chat/__tests__]", () => {
       expect(turnOf(r2[0])).not.toBe(turnOf(r1[0]))
       expect(turnOf(r2[0]).hasFoldable).toBe(true)
     })
+
+    // chat-turn-fold-redesign §1 展开入口保证：折叠态中间正文收起，多正文纯 text turn
+    // 必须有 chevron 入口（移动端无 TurnRail 兜底）；单正文纯 text turn 折叠/展开同形，无入口
+    it('hasFoldable 正文块数口径：多正文纯 text turn=true（展开入口），单正文纯 text=false', () => {
+      const cache = createTurnRenderCache()
+      const u1 = makeMsg({ id: 'u1', role: 'user' })
+      const single = makeMsg({ id: 'a1', role: 'assistant', content: '唯一正文' })
+      const r1 = toRenderItemsIncremental([u1, single], false, cache)
+      expect(turnOf(r1[0]).hasFoldable).toBe(false)
+      // 追加第二条带正文的 assistant（pi 回合「正文→工具→正文」跨消息形态）：折叠态中间
+      // 正文收起 → hasFoldable 翻 true（chevron 渲染门）
+      const mid = makeMsg({ id: 'a2', role: 'assistant', content: '中间正文' })
+      const r2 = toRenderItemsIncremental([u1, single, mid], false, cache)
+      expect(turnOf(r2[0]).hasFoldable).toBe(true)
+      // contentBlocks 驱动的正文块同口径（hasMultipleTextBlocks 的 >1 判定与 trace 渲染单元同源）
+      const cbTurn = makeMsg({
+        id: 'a3',
+        role: 'assistant',
+        content: '正文X',
+        contentBlocks: [{ type: 'text', refId: 't1' }],
+      })
+      const r3 = toRenderItemsIncremental([makeMsg({ id: 'u2', role: 'user' }), cbTurn], false, createTurnRenderCache())
+      expect(turnOf(r3[0]).hasFoldable).toBe(false)
+    })
   })
 
   describe('toRenderItemsIncremental —— ③ forceWorking 变化只重算末位', () => {

@@ -47,7 +47,7 @@ function readyView(): QuotaSectionView {
       providerWarning: null,
     },
     params: [],
-    cookieRefresh: { available: false, running: false, result: null, error: '' },
+    cookieRefresh: { available: false, running: false, result: null, succeededAt: null, error: '' },
     help: null,
   }
 }
@@ -72,7 +72,7 @@ function emptyView(): QuotaSectionView {
       providerWarning: null,
     },
     params: [],
-    cookieRefresh: { available: false, running: false, result: null, error: '' },
+    cookieRefresh: { available: false, running: false, result: null, succeededAt: null, error: '' },
     help: null,
   }
 }

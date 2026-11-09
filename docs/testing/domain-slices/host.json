@@ -1,6 +1,6 @@
 {
   "name": "host",
-  "summary": "池：壳装配（electron-main 壳/更新/窗口/进程监督 76 件，remote-access 域 4 件已划出；mobile-renderer 移动端装配 11 件，remote-access 1 件已划出；renderer 更新横切 useAppUpdate；runtime 进程装配 cli/process-manager/孤儿收殓/启动后台序列/系统策略；electron main/test 内各域文件按精确路径划出归域）",
+  "summary": "池：壳装配（electron-main 壳/更新/窗口/进程监督 76 件，remote-access 域 4 件已划出；mobile-renderer 移动端装配 12 件，remote-access 1 件已划出；renderer 更新横切 useAppUpdate；runtime 进程装配 cli/process-manager/孤儿收殓/启动后台序列/系统策略；electron main/test 内各域文件按精确路径划出归域）",
   "layers": [
     "electron",
     "mobile",
@@ -89,6 +89,7 @@
     "packages/mobile-renderer/src/__tests__/mobile-companion-channels.test.ts",
     "packages/mobile-renderer/src/__tests__/mobile-package-and-delivery.test.ts",
     "packages/mobile-renderer/src/__tests__/mobile-shell-integration.test.ts",
+    "packages/mobile-renderer/src/__tests__/turn-expansion-reactive.test.ts",
     "packages/mobile-renderer/src/shell/__tests__/app-runtime.test.ts",
     "packages/mobile-renderer/src/views/__tests__/component-render.test.ts",
     "packages/renderer/src/__tests__/composables/useAppUpdate.test.ts",

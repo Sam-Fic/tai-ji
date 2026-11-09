@@ -54,6 +54,9 @@ import {
 import type { Message } from '@taiji/shared'
 import { deriveNotifySummary } from './notify-summary'
 import type { NotifySummary } from './notify-summary'
+// 本地绑定（与文件尾 re-export 同源同模块）：computeHasFoldable 的正文块计数与 trace 区
+// 渲染单元同口径（expandAssistantBlocks 产出），不另设第二套 text 块判定
+import { expandAssistantBlocks } from './assistant-blocks'
 
 // D5 边界聚合派生视图的公开类型（消费方：Turn.vue / 测试）；派生实现与判据在 ./notify-summary
 export type { NotifyOutcome, NotifySummary } from './notify-summary'
@@ -102,7 +105,8 @@ export interface MessageTurn {
    * 进行中（该信号由 session 级 isSessionActive 表达）。CW wave session-active-ssot T4。
    */
   isStreaming: boolean
-  /** 是否含可折叠块（thinking/toolCall → 有折叠条；纯文字无） */
+  /** 是否有展开入口（thinking/toolCall 块 / 正文块数 > 1 / 收纳完成通知任一命中；
+   *  单正文纯文字 turn 为 false——折叠态与展开态同形，无需入口） */
   hasFoldable: boolean
 }
 
@@ -586,12 +590,38 @@ function computeIsStreaming(
   return last?.status === 'streaming'
 }
 
-/** turn 派生字段：是否含可折叠块（thinking/toolCalls）——被收纳完成通知同样构成展开入口，计入口径与块同权。 */
+/**
+ * turn 正文块数是否 > 1（chat-turn-fold-redesign §1 展开入口保证）：折叠态只保留末位一条
+ * 正文，多正文 turn 缺展开入口 = 中间正文折叠后不可达。计数口径 = expandAssistantBlocks
+ * 产出的 text 块（与 trace 区渲染单元同源，ADR-0122 error 宿主块同计）。提前退出：纯
+ * text turn 无过程块时本函数是 computeHasFoldable 唯一要跑的判据，多数 turn 数到 2 即返。
+ */
+function hasMultipleTextBlocks(assistants: Message[]): boolean {
+  let count = 0
+  for (const m of assistants) {
+    for (const b of expandAssistantBlocks(m)) {
+      if (b.kind === 'text') {
+        count += 1
+        if (count > 1) return true
+      }
+    }
+  }
+  return false
+}
+
+/**
+ * turn 派生字段：是否有展开入口（chevron 渲染门）。三判据任一命中：
+ * - 含 thinking/toolCalls 块（折叠态过程段收进聚合块，展开才见）
+ * - 正文块数 > 1（折叠态中间正文收起，展开才见——多正文纯 text turn 的唯一入口）
+ * - 被收纳完成通知（折叠标签 / 明细行同受展开门控），计入口径与块同权。
+ */
 function computeHasFoldable(assistants: Message[], foldedNotices?: Message[]): boolean {
   return (
     assistants.some(
       (m) => (m.thinking?.length ?? 0) > 0 || (m.toolCalls?.length ?? 0) > 0,
-    ) || (foldedNotices?.length ?? 0) > 0
+    ) ||
+    hasMultipleTextBlocks(assistants) ||
+    (foldedNotices?.length ?? 0) > 0
   )
 }
 

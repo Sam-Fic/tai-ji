@@ -1,0 +1,24 @@
+diff --git a/dist/source-map/node.js b/dist/source-map/node.js
+index b1e322a10c7a47f3c7a5d0e72d04a80a3be705e1..df5682f686542340977cc879f72d52fd1efd6189 100644
+--- a/dist/source-map/node.js
++++ b/dist/source-map/node.js
+@@ -5,7 +5,18 @@ import convertSourceMap from 'convert-source-map';
+ // based on vite
+ // https://github.com/vitejs/vite/blob/84079a84ad94de4c1ef4f1bdb2ab448ff2c01196/packages/vite/src/node/server/sourcemap.ts#L149
+ function extractSourcemapFromFile(code, filePath) {
+-	const map = (convertSourceMap.fromSource(code) || convertSourceMap.fromMapFileSource(code, createConvertSourceMapReadMap(filePath)))?.toObject();
++	// [taiji vendor patch 2026-11-09] a stack-frame file whose sourceMappingURL
++	// comment fails JSON.parse (e.g. binary misread as utf-8) must degrade to
++	// "no sourcemap" (parseStacktrace's existing contract for missing maps:
++	// keep original frames), not kill the task-pack update RPC with a
++	// SyntaxError — CI runs 42543547276/42547459234 false-failed a file whose
++	// entire 788-test suite passed in junit.
++	let map;
++	try {
++		map = (convertSourceMap.fromSource(code) || convertSourceMap.fromMapFileSource(code, createConvertSourceMapReadMap(filePath)))?.toObject();
++	} catch {
++		map = void 0;
++	}
+ 	return map ? { map } : undefined;
+ }
+ function createConvertSourceMapReadMap(originalFileName) {

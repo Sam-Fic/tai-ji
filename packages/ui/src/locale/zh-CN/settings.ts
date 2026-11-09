@@ -609,7 +609,8 @@ export default {
     // cookie 自动续期（main 隐藏窗口刷新器）：按钮 / 进行中 / 成功 / 失败四态文案
     quotaCookieAutoRefresh: '自动续期 Cookie',
     quotaCookieAutoRefreshRunning: '正在续期…',
-    quotaCookieAutoRefreshOk: '已续期，正在重新查询',
+    // 成功态跨重查保留（后接「· HH:mm」完成时刻）；重查成败由测试结果区独立呈现
+    quotaCookieAutoRefreshOk: '已续期登录凭证',
     quotaCookieAutoRefreshFail: '自动续期失败，请手动更新 Cookie',
     // 三窗口标签 + 时间格式化（CodingPlanSection 内联额度预览）
     quotaWindow5h: '5h',

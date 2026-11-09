@@ -50,6 +50,11 @@ export function createTsxPathsTsconfig(): TsxPathsTsconfig {
           // 拉 TS 源）的裸名映射覆盖不到子路径 → require 撞 ERR_PACKAGE_PATH_NOT_EXPORTED
           '@taiji/shared/*': [join(PACKAGES_ROOT, 'shared', 'src', '*.ts')],
           '@zhushanwen/extension-protocol': [join(PACKAGES_ROOT, 'extension-protocol', 'src', 'index.ts')],
+          // 子路径通配（./aggregation / ./background-task / ./scheduler-store /
+          // ./provider-store-paths）：shared 的 protocol.ts 与 index.ts 以子路径
+          // 形态 import aggregation 契约，裸名映射覆盖不到子路径 → 同族撞
+          // ERR_PACKAGE_PATH_NOT_EXPORTED（f050b6853 起）
+          '@zhushanwen/extension-protocol/*': [join(PACKAGES_ROOT, 'extension-protocol', 'src', '*.ts')],
           '@zhushanwen/state-machine': [join(PACKAGES_ROOT, 'state-machine', 'src', 'index.ts')],
           // extension-protocol 的运行时依赖（其 src/extensions/plan/state-machine.ts 静态
           // import 它）：与协议包同族——workspace 内 TS 源码直连形态，exports 无 require

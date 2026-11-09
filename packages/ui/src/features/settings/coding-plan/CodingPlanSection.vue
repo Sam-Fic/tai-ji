@@ -89,8 +89,9 @@
         >{{ missingHint('cookie') }}</p>
         <!--
           cookie 自动续期：执行体是 main 隐藏窗口刷新器（写回 secrets 文件，写盘即生效），
-          成功后 module 内重跑 testQuery。可用性判定（cookie 形态 + fetcher 在册 + 类型未变）
-          在 module（view.cookieRefresh.available），此处只做渲染与 i18n 映射；不在册的
+          成功后 module 内重跑 testQuery 且保留「已续期」状态（重查成败由测试结果区独立
+          呈现）。可用性判定（cookie 形态 + fetcher 在册 + 类型未变）在 module
+          （view.cookieRefresh.available），此处只做渲染与 i18n 映射；不在册的
           cookie 类 fetcher（如 opendesign）不渲染本入口。
         -->
         <div v-if="view.cookieRefresh.available" class="mt-1.5 flex items-center gap-2" data-testid="quota-cookie-refresh">
@@ -344,12 +345,18 @@ const cookieRefreshButtonText = computed<string>(() => (
 ))
 
 /**
- * cookie 自动续期状态文案：成功后结果展示由重跑的 testQuery 接管，这里只提示「已续期」；
- * 失败显示 module 拼好的错误（main 侧 error 透传，无则 i18n 兜底）。
+ * cookie 自动续期状态文案：成功态跨重查保留（succeededAt 记时刻），与测试结果区的
+ * 查询成败并列呈现——「续期成功 + 查询失败」不再与「续期失败」混淆；失败显示 module
+ * 拼好的错误（main 侧 error 透传，无则 i18n 兜底）。
  */
 const cookieRefreshStatusText = computed<string>(() => {
-  if (view.value.cookieRefresh.result === 'ok') return t('settings.providerEdit.quotaCookieAutoRefreshOk')
-  if (view.value.cookieRefresh.result === 'fail') return view.value.cookieRefresh.error
+  const { result, succeededAt } = view.value.cookieRefresh
+  if (result === 'ok') {
+    // 完成时刻与「上次成功查询」（formatAbsoluteTime）同款展示
+    const time = succeededAt === null ? '' : ` · ${formatAbsoluteTime(succeededAt)}`
+    return `${t('settings.providerEdit.quotaCookieAutoRefreshOk')}${time}`
+  }
+  if (result === 'fail') return view.value.cookieRefresh.error
   return ''
 })
 

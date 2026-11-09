@@ -2,7 +2,7 @@ diff --git a/dist/chunks/cli-api.24X8XwN1.js b/dist/chunks/cli-api.24X8XwN1.js
 index 63a0164a50e1a3fc1522b122820d33c2fa22d389..8951a991260eb738a5531b515cdbf85d8255b761 100644
 --- a/dist/chunks/cli-api.24X8XwN1.js
 +++ b/dist/chunks/cli-api.24X8XwN1.js
-@@ -13911,7 +13911,58 @@ class Vitest {
+@@ -13911,7 +13911,70 @@ class Vitest {
  	}
  	/** @internal */
  	_checkUnhandledErrors(errors) {
@@ -23,20 +23,32 @@ index 63a0164a50e1a3fc1522b122820d33c2fa22d389..8951a991260eb738a5531b515cdbf85d
 +		// Retire: remove when installed vitest fixes upstream #11153 — re-verify
 +		// with a 20-round full-repo probe before removal. Version drift makes
 +		// this patch fail to apply, which is the upgrade-revalidation trigger.
++		const summarize = (e) => `${e.type || "Unhandled Error"} ${e.name}: ${String(e.message).split("\n")[0]}`;
++		// [taiji vendor patch 2026-11-09] convert-source-map signature suppressed on ANY
++		// run state: the error is raised inside vitest's own stack formatter
++		// (parseErrorStacktrace → convert-source-map), never in user code. On
++		// 2026-11-09 (CI Test runtime shard 1/2, run 42543547276) the mid-run
++		// attribution race (vitest#11153 family) marked the file under test
++		// failed — junit showed all 788 tests passing — which made greenRun
++		// false below and self-locked this gate: the error manufactured its own
++		// "not green" precondition. The stack anchor (convert-source-map) already
++		// excludes user-code JSON.parse failures (their stack carries test file
++		// paths), so unconditional suppression here cannot mask real failures.
++		try {
++			const sourceMapOnly = (e) => e.name === "SyntaxError" && typeof e.message === "string" && e.message.includes("is not valid JSON") && typeof e.stack === "string" && e.stack.includes("convert-source-map");
++			if (errors.every(sourceMapOnly)) {
++				this.logger.error(`[taiji-vitest-patch] suppressed ${errors.length} stack-formatter sourcemap error(s) on ${this.state.getCountOfFailedTests() === 0 && !hasFailed(this.state.getFiles()) ? "a fully green" : "a non-green"} run (vitest stack formatter): ${errors.map(summarize).join(" | ")}`);
++				return;
++			}
++		} catch {}
 +		const greenRun = this.state.getCountOfFailedTests() === 0 && !hasFailed(this.state.getFiles());
 +		if (greenRun) {
-+			const summarize = (e) => `${e.type || "Unhandled Error"} ${e.name}: ${String(e.message).split("\n")[0]}`;
 +			const teardownRaceSignatures = [
 +				(e) => e.name === "EnvironmentTeardownError",
 +				(e) => typeof e.message === "string" && e.message.startsWith("[vitest-worker]:"),
 +				(e) => typeof e.message === "string" && e.message.startsWith("[vitest-pool-runner]: Pending methods while closing rpc"),
-+				// [2026-10-20 state-machine D2 Gate A] vitest 堆栈格式化器假红：green run 下
-+				// parseErrorStacktrace → convert-source-map 解析某文件 sourceMappingURL 抛
-+				// SyntaxError("is not valid JSON")，两轮全量稳定复现且 junit/JSON reporter
-+				// 均 success（断言层零失败）。堆栈锚 convert-source-map 限定错误全链在
-+				// vitest sourcemap 工具链内——测试自身 JSON.parse 失败同报 SyntaxError 但
-+				// 堆栈含测试文件路径，不满足锚条件、不进本签名。
-+				(e) => e.name === "SyntaxError" && typeof e.message === "string" && e.message.includes("is not valid JSON") && typeof e.stack === "string" && e.stack.includes("convert-source-map"),
++				// [2026-11-09] former convert-source-map signature moved above the greenRun
++				// gate (unconditional suppression — see its comment block).
 +				// deliberately excluded: "[vitest-pool]: Worker ... emitted error" /
 +				// "Worker exited unexpectedly" (mid-run worker crash can lose files
 +				// without any failed task — swallowing would mask a fake green),

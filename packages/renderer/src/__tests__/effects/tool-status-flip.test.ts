@@ -363,16 +363,26 @@ describe('方案 b: mount Turn 组件 — 翻转 turn.assistants[0].toolCalls[0]
     const assistant = makeAssistantWithTool(tool)
     const turn = makeTurn(assistant, /* isStreaming */ false)
 
+    // 展开态 mock（reactive Set——普通 Set 非响应式，computed 不重算）
+    const expandedTurns = reactive(new Set<string>())
     const wrapper = mount(Turn, {
       props: { turn, sessionId: 's1' },
       global: {
-        provide: mockChatProvide(),
+        provide: mockChatProvide({
+          isExpanded: (key: string) => expandedTurns.has(key),
+          toggleExpand: (key: string) => {
+            if (expandedTurns.has(key)) expandedTurns.delete(key)
+            else expandedTurns.add(key)
+          },
+        }),
         stubs: { ChangeSetCard: true, MarkdownRenderer: true },
       },
     })
 
-    // [chat-flow-process-aggregate] complete turn = 折叠形态（D5）：过程块收进聚合块摘要行，
-    // 成员行动效图标在展开态（点摘要行）可见
+    // [chat-turn-fold-redesign] complete turn 折叠态不渲染聚合块——先点 turn-meta 展开
+    // 回合（聚合块摘要行进 DOM），再点摘要行展开该段，成员行动效图标可见
+    await wrapper.find('.turn-meta').trigger('click')
+    await nextTick()
     await wrapper.find('[data-testid="agg-summary-row"]').trigger('click')
     await nextTick()
 
@@ -419,7 +429,10 @@ describe('方案 c（叶子）: Turn 不可变替换翻转（聚合块展开态�
         stubs: { ChangeSetCard: true, MarkdownRenderer: true },
       },
     })
-    // complete turn 折叠形态（D5）：点聚合块摘要行展开，成员行动效图标可见
+    // complete turn 折叠态不渲染聚合块（chat-turn-fold-redesign）：先点 turn-meta 展开
+    // 回合，再点摘要行展开该段，成员行动效图标可见
+    await wrapper.find('.turn-meta').trigger('click')
+    await nextTick()
     await wrapper.find('[data-testid="agg-summary-row"]').trigger('click')
     await nextTick()
     expect(wrapper.findAll('[data-running-icon]').length).toBeGreaterThan(0)

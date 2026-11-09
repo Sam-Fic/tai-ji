@@ -1,6 +1,13 @@
-# ResizeObserver loop 告警刷屏（归因探针已交付，触发源治理待数据）
+# ResizeObserver loop 告警刷屏（归因已完成：环主体在 virtua 库内部，业务侧不可归零）
 
-状态：探针已交付——dev-only 归因探针 `packages/renderer/src/boot/resize-observer-probe.ts`（2026-10-30，分支 fix-console-problem），真机数据未回收；触发源治理（第 2 步）与聚合分支退役（第 3 步）以探针数据为前提，未完成。
+状态：**归因完成（2026-11-08，分支 fix-quota-refresh-probe-trigger）**——dev 实例探针真机数据回收，流式期 top 注册点 = useMessageStreamFollowTriggers 的 wrap RO（14 回调/60s 窗）与 virtua 库内部 RO（10 回调/窗），告警计数（x10~x12/窗）与两者活动量成正比（restore 期 3+4 回调对告警 x2，同比例关系）。两项修复真机实测后告警量级不变，环主体定位在 **virtua 库内部测量-写入模型**（其 RO 回调同步写 spacer/transform，扰动同帧内其他被观察元素），业务侧不可归零；聚合降噪分支（error-reporter D5）按「告警归零才退役」条件**保留为终态**。
+
+已落地的两项改善（均真机验证不劣化、测试全绿）：
+
+1. **virtua 0.50.0 → 0.54.2**：吸收上游 0.54.0 的 loop 告警抑制（PR #952，机制 = RO 回调期间新订阅延迟一帧 observe——只防库内部新 observe 环，防不了跨观察者帧内反馈，故告警量级未降，但升级本身正向且用法面窄：Virtualizer 组件 + handle 类型，5 文件）。
+2. **wrap RO 回调零强制布局读**：tailEl 纳入同一 RO（box:'border-box'，高度语义 = offsetHeight），tailHeight 直接取 entry，消除回调内 offsetHeight 同步读（RO 回调内同步读其他元素几何会 flush 待处理布局——结构上正确的修复，实测非告警成因）。
+
+后续方向（未做，超出业务侧修复射程）：向上游 inokawa/virtua 反馈跨观察者帧内反馈形态（流式追加 + 外层 wrapper RO 联动的 undelivered 告警，0.54.2 suppress 未覆盖）；或评估替换虚拟列表实现。
 
 ## 背景与现状
 
@@ -17,8 +24,8 @@ Chromium 在单帧观察者广播超限时经 window-onerror 派发一条无堆�
 |------|------|------|
 | 告警文本固定、无堆栈、由浏览器在帧边界派发 | 已确认事实 | error-reporter.ts 的 `isRoLoopNoiseHit` 判据（window-onerror ∧ 无堆栈 ∧ 规范化全等）；带堆栈的同文本错误不被聚合即实证 |
 | 聚合窗计数与窗尾汇总行为 | 已确认事实 | error-reporter.ts `countRoLoopNoise` / `flushRoLoopNoiseAggregate` 实装 + 单测 13 例 |
-| 触发源 = virtua 测量环 | 推断（未核实） | 候选观察点含 virtua 0.50.0 库内部 RO（`node_modules/virtua/lib/index.js:375`）与业务 composable 若干（`useMessageStreamFollowTriggers.ts` 的 wrapRo/scrollRo、`tray/use-composer-bar-density.ts`、`drawer/useDrawerSplitWidth.ts`、`terminal/useTerminalXterm.ts`、`browser/useBrowserRectSync.ts`）；原始告警无堆栈、帧边界派发，无法归因到具体观察者——这正是归因探针要回答的问题 |
-| 告警量级与 RO 活动频次的对应关系 | 推断（未核实） | 待探针数据回收后对照验证（同一 60s 窗内探针 top 注册点回调次数 vs 聚合汇总次数） |
+| 高频注册点 = wrap RO（useMessageStreamFollowTriggers）+ virtua 库内部 RO | 已确认事实（2026-11-08 探针真机数据） | 流式期窗：wrap RO 14 回调、virtua 10 回调，其余注册点 ≤3；同窗聚合告警 x10~x12，量级随两者活动同涨落（restore 期 3+4 回调对 x2） |
+| 环主体在 virtua 库内部（RO 回调同步写 spacer/transform 扰动同帧被观察元素） | 已确认事实（排除法实证） | 业务侧回调全只读 + rAF 延迟写；升级 virtua 0.54.2（含上游 suppress）与消除回调内强制布局读两项修复后，真机流式窗告警量级均不变（x12） |
 
 ## 长期方案（三步）
 

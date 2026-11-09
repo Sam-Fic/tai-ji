@@ -4,7 +4,8 @@
  * 验证 GUI 渲染协议的**对话流内**链路（tool result 路径）：
  *
  * 路径 B（tool result __gui__）:
- *   mock tool_call_end 携带 details.__gui__ → 聚合块摘要行 → 工具单步行 → 工具详情抽屉
+ *   mock tool_call_end 携带 details.__gui__ → 回合 chevron 展开后聚合块摘要行（折叠态聚合块
+ *   不渲染，chat-turn-fold-redesign）→ 工具单步行 → 工具详情抽屉
  *   AggregateToolDetailDrawer extractGui 提取（原 Block.vue 挂点已随 chat-flow-process-aggregate
  *   D1 退役，提取链由抽屉承接）→ GuiComponentRenderer 路由 → card 嵌套 progress-bar + stats-line 渲染
  *
@@ -90,10 +91,15 @@ test.describe('GUI 组件渲染 E2E', () => {
     await activateSession(page)
     await sendMessageAndWaitComplete(page)
 
-    // 聚合块形态（D1）：回合落成收成摘要行；点摘要行展开该段全量（思考行 + 工具组 + 单步行，
-    // 组头纯标题无折叠入口，成员逐行全可见——无 run-group-header / tool-block-header 旧锚点）
+    // 聚合块形态（D1）：回合落成转折叠（chat-turn-fold-redesign）——trace 区只留末位正文，
+    // 聚合块不渲染；先点 TurnMeta chevron（.chev，TurnMeta.vue 展开入口标记）展开回合，
+    // 聚合块摘要行才进 DOM。再点摘要行展开该段全量（思考行 + 工具组 + 单步行，组头纯标题
+    // 无折叠入口，成员逐行全可见——无 run-group-header / tool-block-header 旧锚点）
+    const chevron = page.locator('.chev').first()
+    await expect(chevron).toBeVisible({ timeout: 15_000 })
+    await chevron.click()
     const summaryRow = page.locator('[data-testid="agg-summary-row"]').first()
-    await expect(summaryRow).toBeVisible({ timeout: 15_000 })
+    await expect(summaryRow).toBeVisible({ timeout: 10_000 })
     await summaryRow.click()
     await expect(page.locator('[data-testid="agg-expanded"]').first()).toBeVisible({ timeout: 10_000 })
 

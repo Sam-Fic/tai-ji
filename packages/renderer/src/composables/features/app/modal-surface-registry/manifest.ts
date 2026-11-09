@@ -211,10 +211,8 @@ export const MODAL_SURFACE_MANIFEST = [
     id: 'agent-stream-drawer',
     family: 'agent-stream-drawer',
     kind: 'member',
-    zAnchors: [
-      { file: 'packages/renderer/src/components/panel/workflow-viz/panel/AgentStreamDrawer.vue', form: 'class-token-calc', literal: 'calc(var(--z-dialog)+1)', count: 1 },
-    ],
-    basis: '浮层子交互层：workflow 浮层内 trace 行钻取的 agent 对话流抽屉（挂载随浮层开合，[2026-10-19] demo 形态）；z = dialog+1 浮于壳之上（壳提档 z-dialog 后随档，曾因壳提档未同步致 1001<1100 被遮罩盖死）；非阻塞、Esc 归编排器关浮层整体',
+    zAnchors: [],
+    basis: '浮层子交互层：workflow 浮层内 trace 行 / DAG 实例卡钻取的 agent 对话流抽屉（挂载随浮层开合，[2026-10-19] demo 形态）。[2026-11-08 载体迁移] 抽屉改挂壳内 #agent-drawer slot——absolute 定位贴壳右缘（壳面板容器 relative + overflow-hidden，z-30 壳内局部层叠，不再进 z 锚对账基线）；非阻塞、Esc 归编排器关浮层整体',
   },
   {
     id: 'usage-heat-tooltip',
