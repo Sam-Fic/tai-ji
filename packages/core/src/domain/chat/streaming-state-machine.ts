@@ -596,17 +596,33 @@ export function createStreamingStateMachine(deps: StreamingStateMachineDeps) {
    * [steer-turn-seal] user 消息边界封口：把流内 streaming assistant 推到 complete 终态
    * （'normal' 语义——toolCall running 收尾为 end_not_received、补写 endedAt，幂等）。
    *
-   * 边界事实（构造性正确的前提）：message_end(user) 帧到达 = pi 已把该 user entry 写入
-   * transcript = LLM 消息交替序保证其前的 assistant 必然已 message_end（内容已定稿）——
+   * 边界事实（构造性正确的前提）：message_end(user) 帧到达时该 user entry 已写
+   * transcript，且 LLM 消息交替序保证其前的 assistant 必然已 message_end（内容已定稿）——
    * 此刻翻 status 后不会再有写给旧消息的 delta（后续 delta 落到 message_start 开的新
-   * streaming assistant），无内容分裂。不走 finalizeSession（那是回合级收尾，会清
-   * pendingSend——user 边界不清：direct 场景 message_start 紧随其后自会清）。
+   * streaming assistant），无内容分裂。时序的精确形态：pi 内部先发射后落盘（agent-session
+   * 事件处理先 emit 后 appendMessage，见下方锚点），帧到达后 pi 在同一同步续体内完成落盘，
+   * taiji RPC 观察面收到帧时 entry 已入 transcript。不走 finalizeSession（那是回合级收尾，
+   * 会清 pendingSend——user 边界不清：direct 场景 message_start 紧随其后自会清）。
    *
    * 消费点唯一：registry message.message_end 的 user role 分支（steer 注入生效 / followUp
    * / direct / 外来直发共用该边界）。修复双工作态：steer 注入不结束 pi agent turn（回合级
    * message.complete 迟到），旧回合 assistant 的 status 原本保持 streaming 到回合末尾
    * （finalized-rebuild status 规则 2），user 气泡入流开出新回合后新旧两个 turn 同时
    * 工作态；user 边界封口让旧 turn 随送达事实即时收尾。
+   *
+   * pi 行为断言锚点（惯例先例 pi-paths.ts getProviderExtrasPath，pi 行为断言须带源码依据）：
+   * - 权威源 = 实装 1.0.0（node_modules/@earendil-works）：
+   *   pi-agent-core/dist/agent-loop.js 排队/prepared 消息在 streamAssistantResponse（:141）
+   *   前逐条 emit message_start+message_end（:117-118）；assistant final message 的
+   *   message_end 发射点 :317-319/:330-332；turn_end（:180）后仅 finishTurn 裁决 end 才
+   *   emit agent_end（:182），否则 :186 re-fetch getSteeringMessages 进下一轮——steer
+   *   注入不结束 turn。pi-coding-agent/dist/core/agent-session.js 事件处理 :734-735 先
+   *   _emitExtensionEvent/_emit、:743/:750 才 appendCustomMessageEntry/appendMessage
+   *   （先发射后落盘）。
+   * - clone TS 参照（~/Code/git-fork/pi-mono-workspace 496185f6，0.84.2，2026-08-19）：
+   *   packages/agent/src/agent-loop.ts:182-193（排队消息先 emit 再 streamAssistantResponse）、
+   *   :259（steering 在 turn_end 后 re-fetch）、:357（assistant message_end 发射点）；
+   *   packages/coding-agent/src/core/agent-session.ts:645-668（先发射后落盘）。
    */
   function sealStreamingAssistants(sessionId: string): void {
     const prev = messages.value.get(sessionId)?.value

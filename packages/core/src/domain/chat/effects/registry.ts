@@ -677,10 +677,16 @@ const messageEffects: Partial<Record<ServerMessageType, MessageEffectHandler>> =
     // （① 回执 / ② 计数抵消）只做记账不入流（乐观气泡已显示）；未消费 = 外来直发（runtime
     // 注入的 user prompt，画布回推通知等）→ overlay 入流（权威喂 reducer + ref 入流，A3 缺口修复）。
     if ((entry as PiMessageEntry).message?.role === 'user') {
-      // [steer-turn-seal] user 边界封口（先于喂入）：帧到达 = user entry 已写 transcript，
-      // 其前 assistant 按 LLM 交替序必然已 message_end——翻掉 streaming status 让旧 turn
-      // 即时收尾，新 user 气泡入流开出新 turn 后不再与旧 turn 双工作态。①②③ 三条入流
-      // 子路径与 direct/steer/queued/外来各车道共用本边界，封口统一在此一处。
+      // [steer-turn-seal] user 边界封口（先于喂入）：帧到达时 user entry 已写 transcript
+      // （pi 内部先发射后落盘，帧到达后 pi 在同一同步续体内完成落盘，RPC 观察面收到帧时
+      // entry 已入 transcript），其前 assistant 按 LLM 交替序必然已 message_end——翻掉
+      // streaming status 让旧 turn 即时收尾，新 user 气泡入流开出新 turn 后不再与旧 turn
+      // 双工作态。①②③ 三条入流子路径与 direct/steer/queued/外来各车道共用本边界，封口
+      // 统一在此一处。锚点（全量见 store.sealStreamingAssistants 文档；权威源 = 实装
+      // 1.0.0）：交替序 = pi-agent-core/dist/agent-loop.js:117-118,141（clone TS 参照
+      // ~/Code/git-fork/pi-mono-workspace 496185f6 agent-loop.ts:182-193,357）；落盘时序 =
+      // pi-coding-agent/dist/core/agent-session.js:734-750（clone 参照
+      // coding-agent/src/core/agent-session.ts:645-668）。
       ctx.sealStreamingAssistants(sid)
       const consumed = confirmUserDeliveryOnMessageEnd(ctx, sid, entry as PiMessageEntry)
       if (consumed) ctx.applyEntryFrame(sid, entry as PiEntry)

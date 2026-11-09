@@ -47,9 +47,17 @@ export interface MessageEffectContext {
   /**
    * [steer-turn-seal] user 消息边界封口：把流内 streaming assistant 推 complete 终态
    * （不清 pendingSend——语义边界见 store.sealStreamingAssistants）。消费点唯一 =
-   * message.message_end 的 user role 分支：帧到达 = user entry 已写 transcript，其前
-   * assistant 按 LLM 交替序必然已定稿，旧 turn 随送达事实即时收尾（修复 steer 注入后
-   * 新旧两 turn 双工作态）。幂等；无 streaming assistant（direct 空闲发送）no-op。
+   * message.message_end 的 user role 分支：帧到达时 user entry 已写 transcript（pi 内部
+   * 先发射后落盘，帧到达后 pi 在同一同步续体内完成落盘，taiji RPC 观察面收到帧时 entry
+   * 已入 transcript），其前 assistant 按 LLM 交替序必然已定稿，旧 turn 随送达事实即时
+   * 收尾（修复 steer 注入后新旧两 turn 双工作态）。幂等；无 streaming assistant（direct
+   * 空闲发送）no-op。
+   *
+   * 锚点（全量见 store.sealStreamingAssistants 文档；权威源 = 实装 1.0.0）：交替序 =
+   * pi-agent-core/dist/agent-loop.js:117-118,141（clone TS 参照
+   * ~/Code/git-fork/pi-mono-workspace 496185f6 agent-loop.ts:182-193,357）；落盘时序 =
+   * pi-coding-agent/dist/core/agent-session.js:734-750（clone 参照
+   * coding-agent/src/core/agent-session.ts:645-668）。
    */
   sealStreamingAssistants: (sessionId: string) => void
   /**
