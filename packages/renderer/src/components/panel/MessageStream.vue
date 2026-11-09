@@ -27,9 +27,12 @@
       <ModeDeclarationRow :session-id="sessionId" />
     </div>
 
+    <!-- data-testid 非测试专用：跨组件 DOM 契约锚（QueueBubble measure 按它定位本滚动容器
+         算展开视口可用空间封顶，样式 class 仅兜底——样式重构改名不静默失去封顶） -->
     <div
       ref="scrollEl"
       class="message-stream relative flex-1 overflow-y-auto px-[30px]"
+      data-testid="message-stream"
       :style="{ overflowAnchor: 'none' }"
       @wheel="onWheel"
       @touchstart.passive="onTouchStart"

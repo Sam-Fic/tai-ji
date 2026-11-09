@@ -54,6 +54,7 @@
     "packages/renderer/src/__tests__/panel/panel-container-lazy-retry.test.ts",
     "packages/renderer/src/__tests__/panel/panel-view.test.ts",
     "packages/renderer/src/__tests__/panel/preset-chip.test.ts",
+    "packages/renderer/src/__tests__/panel/queue-stack.test.ts",
     "packages/renderer/src/__tests__/panel/schedule-create-inline.test.ts",
     "packages/renderer/src/__tests__/panel/session-active-state.test.ts",
     "packages/renderer/src/__tests__/panel/session-file-format.test.ts",
@@ -63,9 +64,9 @@
     "packages/renderer/src/components/panel/__tests__/ModelPickerPanel.route-hit.test.ts",
     "packages/renderer/src/components/panel/__tests__/Panel.dead-diagnostics-export.test.ts",
     "packages/renderer/src/components/panel/__tests__/Panel.test.ts",
+    "packages/renderer/src/components/panel/__tests__/model-picker-data.route-hit-projection.test.ts",
     "packages/renderer/src/components/panel/detail-renderers/__tests__/DiffView.seq-guard.test.ts",
-    "packages/renderer/src/composables/panel/__tests__/composables-panel-mock-bundle.test.ts",
-    "packages/renderer/src/components/panel/__tests__/model-picker-data.route-hit-projection.test.ts"
+    "packages/renderer/src/composables/panel/__tests__/composables-panel-mock-bundle.test.ts"
   ],
   "sharedBy": {
     "packages/renderer/src/__tests__/composables/useCommandPopoverTrigger.session-subagent.test.ts": [

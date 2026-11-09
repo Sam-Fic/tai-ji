@@ -532,10 +532,13 @@ export default [
   // 外置（tray/ComposerBtwButton.vue 子组件 + panel/useBtwTabData 簿记 + panel/useBtwInteraction
   // 编排），组件内仅剩入口声明行（prop / import / 模板一行），无自然拆分线。对齐
   // pi-provider-store「微超即提额，保留软上限告警」先例（508→520 同型），拆分归独立重构任务。
+  // 520→530：堆叠区拖放落点接线（@dragover/@drop 经 fallthrough 落 QueueBubble 根元素，
+  // 委托 shell 同一 onDragOver/onDrop——堆叠区释放文件的附件流落点）净增 2 模板声明行，
+  // 无自然拆分线，沿用微超提额先例（探针实测有效行 522）。
   {
     files: ['packages/renderer/src/components/panel/Composer.vue'],
     rules: {
-      'max-lines': ['warn', { max: 520, skipBlankLines: true, skipComments: true }],
+      'max-lines': ['warn', { max: 530, skipBlankLines: true, skipComments: true }],
     },
   },
   // SettingsModal.vue 是设置弹层壳 + 分区编排的聚合点：provider 行引用 chip 跳转（spec §6.4）
