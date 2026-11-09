@@ -1,10 +1,15 @@
 <!--
-  聚合块 · 完成态摘要行（chat-flow-process-aggregate U2，终态②）：过程图标 + 「过程」 +
+  聚合块 · 摘要行（chat-flow-process-aggregate U2，终态② + live 变体）：过程图标 + 「过程」 +
   分类计数（探索 N · 修改 N · 执行命令 N，0 的类型省略）+ 思考 N + 总耗时 + 失败标记
   （含 M 次失败，danger chip）。计数唯一数据源 = core ProcessSegmentCounts（段级口径，
   与组头/聚合条三处同口径——D3/RL4）。真实 button + aria-expanded 同步（可访问性规格）；
   点击整行展开/收起，展开态由容器（D6 组件本地 ref）持有，本组件纯受控。
   总耗时格式复用 formatDurationHms（mono 计时口径 SSOT：45s / 2m00s / 1h02m03s）。
+  [live 变体（2026-11-09 用户裁决：进行中同构可展开）] 段进行中（isLive）时本行即进行中
+  形态的展开入口：行首 Layers 换呼吸弧 loader（animate-loader-spin，ActivityStrip 活动
+  行同款「进行中」信号）；总耗时隐藏（live 期 totalDurationMs 只累计已完成步骤，不构成
+  段耗时语义）；分类/思考/失败计数保持实时（core counts 响应式重建）。落成瞬间图标
+  交叉切回 Layers、耗时行出现——与块级三态切换同帧。
 -->
 <template>
   <Button
@@ -14,7 +19,24 @@
     data-testid="agg-summary-row"
     @click="emit('toggle')"
   >
-    <Layers class="size-[15px] shrink-0 self-center text-neutral-ico [stroke-width:1.6]" aria-hidden="true" />
+    <!-- live 行首呼吸弧（SVG 内联结构与 ActivityStrip 活动行同构；.ld-track/.ld-arc
+         动画类由 style.css 全局层持有） -->
+    <svg
+      v-if="live"
+      class="size-[15px] shrink-0 self-center text-accent animate-loader-spin"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.7"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+      data-testid="agg-summary-live-loader"
+    >
+      <circle class="ld-track" cx="12" cy="12" r="10" opacity="0.16" />
+      <circle class="ld-arc" cx="12" cy="12" r="10" pathLength="100" />
+    </svg>
+    <Layers v-else class="size-[15px] shrink-0 self-center text-neutral-ico [stroke-width:1.6]" aria-hidden="true" />
     <span class="shrink-0">{{ t('panel.message.aggProcessLabel') }}</span>
     <!-- 分类计数：categoryCounts 三类按序（explore/edit/exec），0 省略——v-if 省略（DOM
          不渲染）：fx spec「摘要行只列存在的类型」，v-show 留隐藏节点会被辅助技术读出且
@@ -27,7 +49,7 @@
       >· {{ t(RUN_GROUP_LABEL_KEY[base]) }} {{ count }}</span>
     </template>
     <span v-if="segment.counts.thinkingCount > 0" class="shrink-0 text-neutral-dim" data-testid="agg-summary-thinking">· {{ t('panel.message.thinkingBlock') }} {{ segment.counts.thinkingCount }}</span>
-    <span v-if="durationText" class="shrink-0 font-mono text-[length:var(--text-2xs)] tabular-nums text-neutral-dim" data-testid="agg-summary-duration">· {{ durationText }}</span>
+    <span v-if="durationText && !live" class="shrink-0 font-mono text-[length:var(--text-2xs)] tabular-nums text-neutral-dim" data-testid="agg-summary-duration">· {{ durationText }}</span>
     <!-- 失败标记（含 M 次失败）：AX6 响亮契约——计数即存在信号，无失败不渲染 -->
     <span
       v-if="segment.counts.failedCount > 0"
@@ -50,6 +72,8 @@ const props = defineProps<{
   segment: ProcessSegment
   /** 展开/收起态（容器本地 ref 透传，aria-expanded 同步） */
   expanded: boolean
+  /** 段进行中（isLive 透传）：live 变体（呼吸弧行首 + 隐藏总耗时），缺省完成态形态 */
+  live?: boolean
 }>()
 
 const emit = defineEmits<{
