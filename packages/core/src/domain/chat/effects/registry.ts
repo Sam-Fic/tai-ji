@@ -677,6 +677,11 @@ const messageEffects: Partial<Record<ServerMessageType, MessageEffectHandler>> =
     // （① 回执 / ② 计数抵消）只做记账不入流（乐观气泡已显示）；未消费 = 外来直发（runtime
     // 注入的 user prompt，画布回推通知等）→ overlay 入流（权威喂 reducer + ref 入流，A3 缺口修复）。
     if ((entry as PiMessageEntry).message?.role === 'user') {
+      // [steer-turn-seal] user 边界封口（先于喂入）：帧到达 = user entry 已写 transcript，
+      // 其前 assistant 按 LLM 交替序必然已 message_end——翻掉 streaming status 让旧 turn
+      // 即时收尾，新 user 气泡入流开出新 turn 后不再与旧 turn 双工作态。①②③ 三条入流
+      // 子路径与 direct/steer/queued/外来各车道共用本边界，封口统一在此一处。
+      ctx.sealStreamingAssistants(sid)
       const consumed = confirmUserDeliveryOnMessageEnd(ctx, sid, entry as PiMessageEntry)
       if (consumed) ctx.applyEntryFrame(sid, entry as PiEntry)
       else applyEntryFrameWithOverlay(ctx, sid, entry as PiEntry)

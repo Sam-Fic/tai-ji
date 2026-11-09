@@ -45,6 +45,14 @@ export interface MessageEffectContext {
   /** message_start 清空窗（替代 setStreaming 隐式清 dispatching）。 */
   clearPendingSend: (sessionId: string) => void
   /**
+   * [steer-turn-seal] user 消息边界封口：把流内 streaming assistant 推 complete 终态
+   * （不清 pendingSend——语义边界见 store.sealStreamingAssistants）。消费点唯一 =
+   * message.message_end 的 user role 分支：帧到达 = user entry 已写 transcript，其前
+   * assistant 按 LLM 交替序必然已定稿，旧 turn 随送达事实即时收尾（修复 steer 注入后
+   * 新旧两 turn 双工作态）。幂等；无 streaming assistant（direct 空闲发送）no-op。
+   */
+  sealStreamingAssistants: (sessionId: string) => void
+  /**
    * 追加 user 消息（Segment[]，ADR-0043）。
    * 可选 id：提供则气泡沿用该 id，缺省自生成 `u-<uuid>`。保留原 id 消费方 = 送达回执的两分支
    * 入流（① morph 段 / ② 外来纯文本降级，effects/user-delivery）——重建气泡沿用提交时

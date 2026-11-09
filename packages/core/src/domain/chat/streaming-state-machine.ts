@@ -592,6 +592,36 @@ export function createStreamingStateMachine(deps: StreamingStateMachineDeps) {
     commitMessages(messages, sessionId, next)
   }
 
+  /**
+   * [steer-turn-seal] user 消息边界封口：把流内 streaming assistant 推到 complete 终态
+   * （'normal' 语义——toolCall running 收尾为 end_not_received、补写 endedAt，幂等）。
+   *
+   * 边界事实（构造性正确的前提）：message_end(user) 帧到达 = pi 已把该 user entry 写入
+   * transcript = LLM 消息交替序保证其前的 assistant 必然已 message_end（内容已定稿）——
+   * 此刻翻 status 后不会再有写给旧消息的 delta（后续 delta 落到 message_start 开的新
+   * streaming assistant），无内容分裂。不走 finalizeSession（那是回合级收尾，会清
+   * pendingSend——user 边界不清：direct 场景 message_start 紧随其后自会清）。
+   *
+   * 消费点唯一：registry message.message_end 的 user role 分支（steer 注入生效 / followUp
+   * / direct / 外来直发共用该边界）。修复双工作态：steer 注入不结束 pi agent turn（回合级
+   * message.complete 迟到），旧回合 assistant 的 status 原本保持 streaming 到回合末尾
+   * （finalized-rebuild status 规则 2），user 气泡入流开出新回合后新旧两个 turn 同时
+   * 工作态；user 边界封口让旧 turn 随送达事实即时收尾。
+   */
+  function sealStreamingAssistants(sessionId: string): void {
+    const prev = messages.value.get(sessionId)?.value
+    if (!prev) return
+    let changed = false
+    const next = prev.map((m) => {
+      // 窄语义：只翻 streaming assistant（bash 消息生命周期独立，finalizeMessage 同款跳过）；
+      // 已终态消息不触碰（其 running toolCall 收尾仍归回合级 finalizeSession 兜底）。
+      if (m.role !== 'assistant' || m.status !== 'streaming' || m.bashExecution) return m
+      changed = true
+      return finalizeMessage(m, 'normal', undefined)
+    })
+    if (changed) commitMessages(messages, sessionId, next)
+  }
+
   return {
     applySubagentStreamDelta,
     finalizeSubagentStream,
@@ -605,6 +635,7 @@ export function createStreamingStateMachine(deps: StreamingStateMachineDeps) {
     clearSubagentChunkState,
     clearSubagentChunkStateForSession,
     finalizeMessages,
+    sealStreamingAssistants,
     collectFinalizeCandidates,
     clearIndependentTransient,
     /** [测试逃生舱] 分区表只读引用（状态机四分支/水位/在途拉取断言用，生产代码勿读）。 */

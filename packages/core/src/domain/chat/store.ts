@@ -980,6 +980,7 @@ export function createChatStore(options: ChatStoreOptions = {}) {
         markChangeSetsSuperseded,
         finalizeSession,
         clearPendingSend,
+        sealStreamingAssistants,
         appendUser,
         applyEntryFrame,
         getInflight,
@@ -1008,6 +1009,16 @@ export function createChatStore(options: ChatStoreOptions = {}) {
     if (isDevMode() && reason !== 'normal' && reason !== 'aborted') {
       console.warn(`[chat] finalizeSession sid=${sessionId} reason=${reason}`)
     }
+  }
+
+  /**
+   * [steer-turn-seal] user 消息边界封口（委托 streamingStateMachine.sealStreamingAssistants）：
+   * message_end(user) 帧到达时把流内 streaming assistant 推 complete——steer 注入生效 /
+   * followUp / direct / 外来直发共用该边界，旧 turn 随送达事实即时收尾（修复双工作态）。
+   * 不清 pendingSend（语义边界见状态机方法注释）。
+   */
+  function sealStreamingAssistants(sessionId: string): void {
+    streamingStateMachine.sealStreamingAssistants(sessionId)
   }
 
   /**
@@ -1361,6 +1372,7 @@ export function createChatStore(options: ChatStoreOptions = {}) {
     isGenerating,
     isActive,
     finalizeSession,
+    sealStreamingAssistants,
     finalizeAllStreaming,
     resetTransientStates,
     addPendingSend,
@@ -1460,6 +1472,7 @@ export type ChatStoreOps = Pick<
   | 'sealSubagentStream' | 'markSubagentStreamDegraded' | 'clearSubagentChunkState' | 'clearSubagentChunkStateForSession'
   | 'applySubagentEntries' | 'appendUser'
   | 'applyMessageEvent' | 'finalizeSession'
+  | 'sealStreamingAssistants'
   | 'finalizeAllStreaming' | 'resetTransientStates' | 'addPendingSend'
   | 'clearPendingSend' | 'markSessionError'
   | 'setOccupancy' | 'clearOccupancy' | 'setCompactingReason'

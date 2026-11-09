@@ -938,6 +938,67 @@ describe('createChatStore factory', () => {
     })
   })
 
+  describe('sealStreamingAssistants：user 消息边界封口（steer-turn-seal）', () => {
+    it("streaming assistant → complete + endedAt 补写（'normal' 语义，error 不写）", () => {
+      const sid = 's1'
+      sut.store.setMessages(sid, [streamingAssistant('a1', { content: '旧段输出' })])
+      sut.store.sealStreamingAssistants(sid)
+      const m = sut.store.getMessages(sid)[0]
+      expect(m.status).toBe('complete')
+      expect(m.error).toBeUndefined()
+      expect(typeof m.endedAt).toBe('number')
+    })
+
+    it('running toolCall 级联 end_not_received（与 finalizeSession normal 同映射）', () => {
+      const sid = 's1'
+      sut.store.setMessages(sid, [streamingAssistant('a1', {
+        toolCalls: [{ id: 'tc1', toolName: 'read', input: {}, status: 'running', startTime: 1 }],
+      })])
+      sut.store.sealStreamingAssistants(sid)
+      const tc = sut.store.getMessages(sid)[0].toolCalls![0]
+      expect(tc.status).toBe('end_not_received')
+      expect(tc.endTime).toBeUndefined()
+    })
+
+    it('已终态消息不触碰（幂等；user 消息与 complete assistant 内容原样）', () => {
+      const sid = 's1'
+      const done = completeAssistant('a1', '已完成')
+      const user = userMsg('u1', 'hi')
+      sut.store.setMessages(sid, [done, user])
+      sut.store.sealStreamingAssistants(sid)
+      // 读侧是派生视图（truncateToolOutputBatch 缓存恒新数组），按内容等价断言不触碰
+      expect(sut.store.getMessages(sid)).toEqual([done, user])
+    })
+
+    it('bash 消息跳过（收尾链独立域，与 finalizeSession 同款边界）', () => {
+      const sid = 's1'
+      sut.store.setMessages(sid, [{
+        id: 'b1', role: 'system', content: '', status: 'streaming', timestamp: 1,
+        bashExecution: { command: 'ls', output: '', exitCode: null, cancelled: false, truncated: false, timestamp: 1 },
+      }])
+      sut.store.sealStreamingAssistants(sid)
+      expect(sut.store.getMessages(sid)[0].status).toBe('streaming')
+    })
+
+    it('无 streaming assistant（direct 空闲发送形态）幂等 no-op', () => {
+      const sid = 's1'
+      const done = completeAssistant('a1', '已完成')
+      sut.store.setMessages(sid, [done])
+      sut.store.sealStreamingAssistants(sid)
+      expect(sut.store.getMessages(sid)).toEqual([done])
+    })
+
+    it('多 assistant 混合：只翻 streaming 位，终态位内容原样（不可变替换语义）', () => {
+      const sid = 's1'
+      const done = completeAssistant('a1', '早段')
+      sut.store.setMessages(sid, [done, streamingAssistant('a2', { content: '晚段输出' })])
+      sut.store.sealStreamingAssistants(sid)
+      const msgs = sut.store.getMessages(sid)
+      expect(msgs[0]).toEqual(done)
+      expect(msgs[1].status).toBe('complete')
+    })
+  })
+
   describe('finalizeSession 收尾 warn 的 dev 门（D5）', () => {
     let warnSpy: ReturnType<typeof vi.spyOn>
 
