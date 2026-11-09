@@ -25,6 +25,10 @@
     <!-- QueueBubble（卡片堆叠形态：OD QueuedSendStack 同款相位机）——composer-box **外部**
          上方独立浮层（OD 同款挂载：strip 与 composer 各自成框，卡片不fuse 进 composer），
          紧贴 composer 上沿留 pb 间隙。队列空时不渲染，composer 视觉零变化。
+         拖放落点与 composer-box 同源：@dragover/@drop 经单根 fallthrough 落 QueueBubble
+         根元素，委托 shell onDragOver/onDrop 同一实现——堆叠区释放图片等同 box 释放；
+         若此区域缺 drop handler，释放文件走浏览器默认导航（file://），被主进程
+         will-navigate 白名单 preventDefault 拦下成静默无动作，故两区域落点须同步挂。
          [u3c/D7 单源化] 行数据 = session.delivery 状态帧派生视图（useQueueRows），
          × 撤销 → delivery.cancel、failed 行重试 → delivery.resync、
          重试全部 → 同一 useQueueRows 编排（Q5）；展开态为组件内瞬态（Q2 复裁：+N
@@ -33,6 +37,8 @@
       :rows="queueRows"
       :hint="queueHint"
       :editing-client-uuid="editingQueueClientUuid"
+      @dragover.prevent="onDragOver"
+      @drop.prevent="onDrop"
       @cancel="onCancelQueueEntry"
       @edit="onEditQueueEntry"
       @abandon-edit="onAbandonQueueEdit"
