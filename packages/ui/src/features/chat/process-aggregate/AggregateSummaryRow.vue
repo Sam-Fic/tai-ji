@@ -6,10 +6,11 @@
   点击整行展开/收起，展开态由容器（D6 组件本地 ref）持有，本组件纯受控。
   总耗时格式复用 formatDurationHms（mono 计时口径 SSOT：45s / 2m00s / 1h02m03s）。
   [live 变体（2026-11-09 用户裁决：进行中同构可展开）] 段进行中（isLive）时本行即进行中
-  形态的展开入口：行首 Layers 换呼吸弧 loader（animate-loader-spin，ActivityStrip 活动
-  行同款「进行中」信号）；总耗时隐藏（live 期 totalDurationMs 只累计已完成步骤，不构成
-  段耗时语义）；分类/思考/失败计数保持实时（core counts 响应式重建）。落成瞬间图标
-  交叉切回 Layers、耗时行出现——与块级三态切换同帧。
+  形态的展开入口：行首 Layers 换呼吸弧 loader（复用 block-icon.ts RUNNING_LOADER_SVG
+  SSOT + animate-loader-spin，ActivityStrip 活动行同款「进行中」信号）；总耗时隐藏
+  （live 期 totalDurationMs 只累计已完成步骤，不构成段耗时语义）；分类/思考/失败计数
+  保持实时（core counts 响应式重建）。落成瞬间图标交叉切回 Layers、耗时行出现——
+  与块级三态切换同帧。
 -->
 <template>
   <Button
@@ -19,23 +20,12 @@
     data-testid="agg-summary-row"
     @click="emit('toggle')"
   >
-    <!-- live 行首呼吸弧（SVG 内联结构与 ActivityStrip 活动行同构；.ld-track/.ld-arc
-         动画类由 style.css 全局层持有） -->
-    <svg
-      v-if="live"
-      class="size-[15px] shrink-0 self-center text-accent animate-loader-spin"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.7"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      aria-hidden="true"
-      data-testid="agg-summary-live-loader"
-    >
-      <circle class="ld-track" cx="12" cy="12" r="10" opacity="0.16" />
-      <circle class="ld-arc" cx="12" cy="12" r="10" pathLength="100" />
-    </svg>
+    <!-- live 行首呼吸弧：复用 block-icon.ts 的 RUNNING_LOADER_SVG（呼吸弧 SSOT，禁止
+         手抄同构副本；.ld-track/.ld-arc 动画类由 style.css 全局层持有）。testid 挂
+         v-html 包装层，与 TurnRail / BashOutputBlock / MarkdownRenderer / TurnMeta
+         四处既有消费同形态 -->
+    <!-- eslint-disable-next-line vue/no-v-html -- hardcoded constant from block-icon.ts -->
+    <span v-if="live" class="inline-flex size-[15px] shrink-0 self-center items-center justify-center text-accent animate-loader-spin" data-testid="agg-summary-live-loader" v-html="RUNNING_LOADER_SVG" />
     <Layers v-else class="size-[15px] shrink-0 self-center text-neutral-ico [stroke-width:1.6]" aria-hidden="true" />
     <span class="shrink-0">{{ t('panel.message.aggProcessLabel') }}</span>
     <!-- 分类计数：categoryCounts 三类按序（explore/edit/exec），0 省略——v-if 省略（DOM
@@ -65,6 +55,7 @@ import { useI18n } from 'vue-i18n'
 import { Layers } from '@lucide/vue'
 import type { RunGroupBase, ProcessSegment } from '@taiji/core/domain/chat'
 import { Button } from '../../../primitives/button'
+import { RUNNING_LOADER_SVG } from '../block-icon'
 import { formatDurationHms } from '../format-utils'
 
 const props = defineProps<{
