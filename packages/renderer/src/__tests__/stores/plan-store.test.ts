@@ -849,6 +849,9 @@ function makeCtx(initial: Message[] = []): MessageEffectContext {
     markChangeSetsSuperseded: vi.fn(),
     finalizeSession: vi.fn(),
     clearPendingSend: vi.fn(),
+    // [steer-turn-seal] user 边界封口（message_end user 分支消费；与 core 侧
+    // __tests__/helpers/fixtures.ts makeCtx 同构，本套用例不走该分支，no-op mock 即可）
+    sealStreamingAssistants: vi.fn(),
     appendUser: vi.fn(),
     // steer-bubble u1/D2：inflight 确认计数读取（message_start/abort 分支消费，store 注入；
     // 本套用例无计数断言，getInflight 恒 0 + 其余 no-op）
