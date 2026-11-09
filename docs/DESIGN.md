@@ -408,6 +408,7 @@ demo 阶段功能做到「可见 + 可交互 + 数据 mock」即够。不接 run
 
 /* 弹层遮罩（modal/overlay 背后全场最暗层；黑基六主题共用一值，demo .cmask 同值）*/
 --scrim: rgba(0,0,0,0.8);   /* Tailwind 映射 bg-scrim；消费点 = DialogContent overlay / SearchModal / workflow-viz OverlayShell */
+--scrim-veil: rgba(0,0,0,0.5);  /* 会话切换幕布压暗（session-switch-veil 组件消费）：比 --scrim 淡的非模态过渡遮罩，配 backdrop-blur 3px */
 
 /* z-index 语义化（demo styles #8 梯队：sticky < popover < overlay < hovercard < modal < dialog < toast < banner）*/
 --z-sticky: 1;  --z-popover: 10;  --z-overlay: 20;  --z-hovercard: 500;
