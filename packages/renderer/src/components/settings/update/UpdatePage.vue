@@ -290,8 +290,9 @@ const updateSourceBusy = updateSourceField.busy
 group.registerLoader(async () => {
   const settings = await getUpdateSettings()
   preDownloadField.reset(settings.preDownload)
-  // 旧 settings 文件无 autoUpdate/updateSource 字段 → 缺省回退（D3 向后兼容）
-  autoUpdateField.reset(settings.autoUpdate ?? false)
+  // 旧 settings 文件无 autoUpdate/updateSource 字段 → 缺省回退（D3 向后兼容）；
+  // autoUpdate 缺省 = 用户从未设置 = 默认开启（与调度轴 DEFAULT true 对齐）
+  autoUpdateField.reset(settings.autoUpdate ?? true)
   updateSourceField.reset(settings.updateSource ?? 'auto')
 })
 group.registerLoader(async () => {
