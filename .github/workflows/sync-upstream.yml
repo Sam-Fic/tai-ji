@@ -1,0 +1,106 @@
+name: Sync upstream main
+
+# ─────────────────────────────────────────────────────────────────────
+# 定时把上游 zhushanwen321/tai-ji 的 main 分支合并进本 fork 的 main。
+#
+# 设计要点：
+# - 两段式：gate job 纯 API 比对（秒级、零 clone）判断上游是否有新提交，
+#   有才进 sync job（仓库 ~91MB，浅克隆无法 merge，full clone 只在有增量时付出）
+# - merge 而非 rebase/force-push：fork 上有 build-deb 专有提交
+#   （.github/workflows/build-deb.yml / 本文件），merge 保留它们且历史连续
+# - compare 用 fork 侧口径（repos/Sam-Fic/tai-ji/compare/{fork_sha}...{up_sha}）：
+#   fork 共享上游对象，两边 sha 都可见；反向（在上游仓库查 fork 专有 sha）不可见
+# - 不同步 tag：上游 v* tag 推入 fork 会命中继承的 release.yml（on: push tags v*）
+#   触发三平台构建级联；deb 管线按上游 release 直接检出构建，不依赖 fork 本地 tag
+# - 用 GITHUB_TOKEN 推送不会触发 fork 内其他 workflow（GitHub 对 token 推送的
+#   防级联行为），sync 推送不会意外触发其他构建
+# - 冲突处理：fork 专有文件理论上上游不会触碰；若真冲突则 fail-fast 给人工处理，
+#   绝不做破坏性兜底
+# ─────────────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    - cron: '*/30 * * * *' # 每 30 分钟检查上游 main
+  workflow_dispatch:
+    inputs:
+      force:
+        description: '跳过增量判断，强制执行同步（无增量时 merge 为 no-op）'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: zhushanwen321/tai-ji
+
+jobs:
+  gate:
+    name: Check upstream increment
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_sync: ${{ steps.check.outputs.should_sync }}
+      up_sha: ${{ steps.check.outputs.up_sha }}
+    steps:
+      - name: Compare fork main with upstream main
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          FORK_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')
+          UP_SHA=$(gh api "repos/${UPSTREAM_REPO}/git/ref/heads/main" --jq '.object.sha')
+          echo "fork main:    ${FORK_SHA}"
+          echo "upstream main: ${UP_SHA}"
+          AHEAD=0
+          if [ "$FORK_SHA" != "$UP_SHA" ]; then
+            # ahead_by = 上游可达而 fork tip 不可达的提交数（fork 专有提交在
+            # behind_by 侧，不影响判断）
+            AHEAD=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${FORK_SHA}...${UP_SHA}" --jq '.ahead_by')
+          fi
+          echo "上游领先 ${AHEAD} 个提交"
+          SHOULD=false
+          if [ "${AHEAD}" -gt 0 ]; then
+            SHOULD=true
+          fi
+          if [ "$INPUT_FORCE" = "true" ]; then
+            SHOULD=true
+          fi
+          echo "should_sync=${SHOULD}" >> "$GITHUB_OUTPUT"
+          echo "up_sha=${UP_SHA}" >> "$GITHUB_OUTPUT"
+
+  sync:
+    name: Merge upstream into fork main
+    needs: gate
+    if: needs.gate.outputs.should_sync == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout fork main (full history for merge base)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge upstream and push
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream main --no-tags
+          UP_SHORT=$(git rev-parse --short upstream/main)
+          # merge 无增量时为 no-op（Already up to date），push 同样空操作——
+          # force dispatch 因此安全
+          if ! git merge --no-edit -m "chore: sync upstream ${UPSTREAM_REPO} main @ ${UP_SHORT}" upstream/main; then
+            echo "::error::合并冲突——检查上游是否改动了 fork 专有文件（.github/workflows/build-deb.yml / sync-upstream.yml），需人工处理"
+            exit 1
+          fi
+          git push origin "HEAD:refs/heads/main"
+          echo "已同步至 ${UP_SHORT}"
