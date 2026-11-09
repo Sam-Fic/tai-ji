@@ -23,7 +23,8 @@
     "packages/renderer/src/components/sidebar/__tests__/**",
     "packages/renderer/src/__tests__/composables/useSidebar.test.ts",
     "packages/renderer/src/__tests__/useSidebar-delete-cleanup.test.ts",
-    "packages/renderer/src/__tests__/composables/sidebar-actions-bundle.test.ts"
+    "packages/renderer/src/__tests__/composables/sidebar-actions-bundle.test.ts",
+    "packages/renderer/src/__tests__/composables/session-switch-veil.test.ts"
   ],
   "sharedBy": {},
   "contracts": [],

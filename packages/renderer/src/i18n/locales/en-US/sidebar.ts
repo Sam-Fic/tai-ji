@@ -9,6 +9,8 @@ export default {
   selectSessionHint: 'Select a session to view files',
   sessionListLoadFailed: 'Failed to load sessions ({error})',
   switchSessionFailed: 'Failed to switch session: {msg}',
+  // Session switch veil chip copy (session-switch-veil): announces the target while switching
+  switchingTo: 'Opening "{name}"',
   newTaskFailed: 'Failed to create task: {msg}',
   // Archive action toasts (session-archive §5.1 success path; compression runs in
   // background — wording does not claim completion)

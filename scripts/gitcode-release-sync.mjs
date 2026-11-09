@@ -328,6 +328,22 @@ function syncTagNamespace(refSource) {
     { stdio: 'pipe', timeout: 600000 });
 }
 
+/** push-repo 收尾自清 <src>-tags 命名空间：它是 syncTagNamespace 本次运行 fetch 的
+ * 重建缓存（下一次运行第一步 --prune 强制重建覆盖），push 与镜像验证完成后使命即终——
+ * 不清会跨发布周期无限积累（2026-10-30 实测残留 71 条 refs）。失败仅 WARN 不阻断。 */
+function cleanupTagNamespace(refSource) {
+  try {
+    const refs = execSync(`git for-each-ref "refs/remotes/${refSource}-tags" --format="%(refname)"`,
+      { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+    for (const ref of refs) execSync(`git update-ref -d ${ref}`, { stdio: 'pipe' });
+    if (refs.length > 0) {
+      console.log(`[push-repo] 已自清 ${refs.length} 条 ${refSource}-tags 重建缓存 refs（下次运行 fetch 重建）`);
+    }
+  } catch (e) {
+    console.log(`[WARN] ${refSource}-tags 命名空间自清失败（不影响本次镜像结果，下次运行 --prune 对齐）：${String(e.message || e).slice(0, 120)}`);
+  }
+}
+
 /** 强推 origin 分支 + tags 到 GitCode（--prune 保证与 refSource 完全一致，防 drift）。
  * 超时 30 分钟：GitHub runner（海外）→ GitCode（国内）实测上行约 0.8MB/s，
  * 首次全量（本仓 pack ≈ 490MB）需 10-20 分钟，仅首次；后续发布只推增量。
@@ -801,6 +817,7 @@ const COMMANDS = {
     try {
       const url = pushRepoMirror(refSource);
       await verifyMirrorAlignment(refSource, url);
+      cleanupTagNamespace(refSource);
     } catch (e) {
       die(String(e.message || e));
     }

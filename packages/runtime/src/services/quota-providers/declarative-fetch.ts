@@ -5,7 +5,7 @@
  */
 
 import type { QuotaFetchFailureReason } from './types.js'
-import { isRecord, statusToReason } from './types.js'
+import { isRecord, readSetCookies, statusToReason, withSetCookies } from './types.js'
 import type { DeclarativeFetcherConfig } from './declarative-engine.js'
 
 const REQUEST_TIMEOUT_MS = 8000
@@ -14,13 +14,6 @@ const REQUEST_TIMEOUT_MS = 8000
 export type FetchPrimaryResult =
   | { ok: true; data: unknown; setCookies?: string[] }
   | { ok: false; reason: QuotaFetchFailureReason; setCookies?: string[] }
-
-/** 读取响应全部 Set-Cookie 行（undici/Node 18.14+ 的 getSetCookie 逐条返回）。
- *  无 Set-Cookie 时返回 undefined（不带空数组——outcome 不得物化 setCookies 空键）。 */
-function readSetCookies(resp: Response): string[] | undefined {
-  const lines = resp.headers.getSetCookie().filter((line) => line !== '')
-  return lines.length > 0 ? lines : undefined
-}
 
 /** 引擎自管的主请求（fetchQuotaJson 骨架只有 reason 通道，statusMap 需要原始 HTTP 状态）。
  *  method/body 来自请求条目声明（2026-10 传输层扩展：POST + 静态 body；缺省 GET）。
@@ -48,14 +41,14 @@ export async function fetchPrimary(
   if (!resp.ok) {
     void resp.body?.cancel()
     const mapped = config.statusMap?.[String(resp.status)]
-    return { ok: false, reason: mapped ?? statusToReason(resp.status), ...(setCookies && { setCookies }) }
+    return withSetCookies(setCookies, { ok: false, reason: mapped ?? statusToReason(resp.status) })
   }
   try {
     const data: unknown = await resp.json()
-    if (!isRecord(data)) return { ok: false, reason: 'parse', ...(setCookies && { setCookies }) }
-    return { ok: true, data, ...(setCookies && { setCookies }) }
+    if (!isRecord(data)) return withSetCookies(setCookies, { ok: false, reason: 'parse' })
+    return withSetCookies(setCookies, { ok: true, data })
   } catch {
-    return { ok: false, reason: 'parse', ...(setCookies && { setCookies }) }
+    return withSetCookies(setCookies, { ok: false, reason: 'parse' })
   }
 }
 

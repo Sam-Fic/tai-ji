@@ -30,6 +30,12 @@ import { useProjectStore } from '@/stores/project'
 import { useToast } from '@/composables/useToast'
 import { markForcedExit, consumeForcedExit } from '@/composables/effects/forced-exit-marks'
 import { useI18n } from 'vue-i18n'
+import {
+  beginSessionSwitch,
+  releaseSessionSwitch,
+  retargetSessionSwitch,
+  useSessionSwitchVeilState,
+} from './useSessionSwitchVeil'
 import { archiveErrorKey } from './archive-error-text'
 
 /**
@@ -81,20 +87,76 @@ export function useSidebarSessionActions(options: UseSidebarSessionActionsOption
   const { t } = useI18n()
   const { error: toastError, info: toastInfo } = useToast()
   const { abort: abortSession } = useChat()
+  const veil = useSessionSwitchVeilState()
 
-  async function onSelectSession(id: string): Promise<void> {
+  /**
+   * 带幕布的 session 切换统一入口（session-switch-veil）：侧栏点击（onSelectSession）与
+   * 搜索跳转（searchDeps.selectSession）两个用户手势路径共用。
+   * - 空窗反馈：切换 promise settle 前，幕布层（SessionSwitchVeil）压暗对话流 + chip 报目标，
+   *   header 标题乐观切换（呈现层读 useSessionSwitchVeilState，编排只驱动状态机）；
+   * - 等待中再切换 = 改投：只换幕布目标（retarget），不打断进行中的切换——driver 循环 settle
+   *   后按最新目标接续（被改投的旧链自然结束，其历史拉取独立落库不受影响）；跨入口同态
+   *   （幕布状态机模块级单例：侧栏点击与搜索跳转互为改投来源）；
+   * - dead session → 显式 restore（重新 spawn pi + revive 统一在 useSidebar.restoreSession）；
+   *   非 dead → 常规切换。useSessionStore 是 pinia store，可在非 setup 上下文调用。
+   * - 恒 resolve（失败已 toast），调用方无需重复 catch——搜索编排消费方按既有无 catch
+   *   形态直调即可，不产生双份错误提示。
+   */
+  async function switchWithVeil(id: string): Promise<void> {
+    const label = useSessionStore().list.find((s) => s.id === id)?.label ?? ''
+    if (veil.phase !== 'idle') {
+      retargetSessionSwitch(id, label)
+      return
+    }
+    beginSessionSwitch(id, label)
     try {
-      // dead session → 显式 restore（重新 spawn pi + revive 统一在 useSidebar.restoreSession）；
-      // 非 dead → 常规切换。useSessionStore 是 pinia store，可在非 setup 上下文调用。
-      const isDead = useSessionStore().list.find((s) => s.id === id)?.status === 'dead'
-      if (isDead) {
-        await restoreSession(id)
-      } else {
-        await selectSession(id)
-      }
+      await driveVeiledSwitch(id)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       toastError(t('sidebar.switchSessionFailed', { msg }))
+    }
+  }
+
+  async function onSelectSession(id: string): Promise<void> {
+    await switchWithVeil(id)
+  }
+
+  /**
+   * 幕布 driver 循环：按幕布当前目标串行执行切换。settle 时目标已被改投 → 接续新目标
+   * （连点竞态的结构性收敛：后 settle 的旧链可能把 panel 切回旧 session，「以最后一次
+   * 目标为准重跑」保证最终停在用户最后点击的 session）；中途目标失败且未改投 → release
+   * 并上抛（外层既有 toast 口径）；失败但已改投 → 静默接续（当前意图是新目标，旧目标
+   * 失败与用户无关）。restoreSession 内部已自行 catch selectSession 错误恒 resolve，
+   * 不会走到上抛路径。
+   */
+  async function driveVeiledSwitch(firstId: string): Promise<void> {
+    let current = firstId
+    // 幕布进行中判定 = 非 idle（单一状态词表）。经函数封装读取：循环体跨 await，phase 可被
+    // 并发手势 release/改投，直比会被 TS 流程收窄误判为恒真（TS2367——reactive 突变不进类型系统）
+    const veilActive = (): boolean => veil.phase !== 'idle'
+    while (veilActive()) {
+      const isDead = useSessionStore().list.find((s) => s.id === current)?.status === 'dead'
+      try {
+        if (isDead) {
+          await restoreSession(current)
+        } else {
+          await selectSession(current)
+        }
+      } catch (e) {
+        const redirect = veil.targetId
+        if (veilActive() && redirect !== null && redirect !== current) {
+          current = redirect
+          continue
+        }
+        releaseSessionSwitch()
+        throw e
+      }
+      const next = veil.targetId
+      if (veilActive() && next !== null && next !== current) {
+        current = next
+        continue
+      }
+      releaseSessionSwitch()
     }
   }
 
@@ -291,9 +353,11 @@ export function useSidebarSessionActions(options: UseSidebarSessionActionsOption
     }
   }
 
-  /** [w5] SearchModal deps 组装（SearchDeps 壳适配）+ drawer/toast 接线（C-NT-3/C-W4-5）：file 跳转开 detail tab；confirm 失败 toast（复用顶部 toastError）。 */
+  /** [w5] SearchModal deps 组装（SearchDeps 壳适配）+ drawer/toast 接线（C-NT-3/C-W4-5）：file 跳转开 detail tab；confirm 失败 toast（复用顶部 toastError）。
+   *  selectSession 经 switchWithVeil（session-switch-veil）：搜索跳转与侧栏点击同享幕布过渡
+   *  与改投语义（同一状态机单例；switchWithVeil 恒 resolve，跳转编排无需新增 catch）。 */
   const searchDeps = useSearchModalDeps({
-    selectSession,
+    selectSession: switchWithVeil,
     newSession: () => { void newSession() },
   })
   function onOpenSearchDrawer(tab: string): void {
