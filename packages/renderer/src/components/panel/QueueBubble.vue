@@ -1,5 +1,6 @@
 <!--
-  展示组件 · 投递队列区（composer-box 顶部；卡片堆叠形态，交互参照 OpenDesign QueuedSendStack）。
+  展示组件 · 投递队列区（composer-box **外部**上方独立浮层，与 composer 各自成框；
+  卡片堆叠形态，交互参照 OpenDesign QueuedSendStack）。
 
   **单一数据源**：队列条目 = runtime 内核 `session.delivery` 状态帧派生视图（core
   getDeliveryProjectionRef），不再读 queue_update 快照 + 本地 defer 队列双拼（D7）。
@@ -26,7 +27,7 @@
 <template>
   <div
     v-if="rows.length > 0 || cards.length > 0"
-    class="qb-inline border-b border-[color-mix(in_oklch,var(--accent)_18%,transparent)] px-3.5 pt-2 pb-1.5"
+    class="qb-inline px-3.5 pt-2 pb-1.5"
     role="region"
     :aria-label="t('panel.queueBubble.regionLabel', { n: liveCount })"
     data-testid="queue-bubble"

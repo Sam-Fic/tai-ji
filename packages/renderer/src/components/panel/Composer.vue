@@ -22,6 +22,23 @@
     <!-- retry/queue 指示位（spec C10，#13，composer 上方独立行）：
          auto_retry_end / message_start 到达时 store 自动清 → state=undefined → 组件 v-if 消失 -->
     <RetryIndicator :state="retryState" />
+    <!-- QueueBubble（卡片堆叠形态：OD QueuedSendStack 同款相位机）——composer-box **外部**
+         上方独立浮层（OD 同款挂载：strip 与 composer 各自成框，卡片不fuse 进 composer），
+         紧贴 composer 上沿留 pb 间隙。队列空时不渲染，composer 视觉零变化。
+         [u3c/D7 单源化] 行数据 = session.delivery 状态帧派生视图（useQueueRows），
+         × 撤销 → delivery.cancel、failed 行重试 → delivery.resync、
+         重试全部 → 同一 useQueueRows 编排（Q5）；展开态为组件内瞬态（Q2 复裁：+N
+         点击开关已随堆叠形态退役，hover/focus 展开即全量浏览） -->
+    <QueueBubble
+      :rows="queueRows"
+      :hint="queueHint"
+      :editing-client-uuid="editingQueueClientUuid"
+      @cancel="onCancelQueueEntry"
+      @edit="onEditQueueEntry"
+      @abandon-edit="onAbandonQueueEdit"
+      @retry="onRetryQueueEntry"
+      @retry-all="onRetryAllQueueFailed"
+    />
     <!-- 命令浮层（§2d @/#//）：anchor = composer-box（slot），reka-ui Popover portal body。
          composer-box 内 focus 算 inside 不触发 dismiss，键盘路由见 onKeydown。
          cwd：landing 态 $ 候选的 cwd 通道（landing-composer-session-file-symbols D2；
@@ -51,22 +68,6 @@
         @dragleave.prevent="onDragLeave"
         @drop.prevent="onDrop"
       >
-        <!-- QueueBubble（卡片堆叠形态：OD QueuedSendStack 同款相位机，composer-box 顶部，
-             hover/focus 展开视口）——6 区第 1 位。
-             [u3c/D7 单源化] 行数据 = session.delivery 状态帧派生视图（useQueueRows），
-             × 撤销 → delivery.cancel、failed 行重试 → delivery.resync、
-             重试全部 → 同一 useQueueRows 编排（Q5）；展开态为组件内瞬态（Q2 复裁：+N
-             点击开关已随堆叠形态退役，hover/focus 展开即全量浏览） -->
-        <QueueBubble
-          :rows="queueRows"
-          :hint="queueHint"
-          :editing-client-uuid="editingQueueClientUuid"
-          @cancel="onCancelQueueEntry"
-          @edit="onEditQueueEntry"
-          @abandon-edit="onAbandonQueueEdit"
-          @retry="onRetryQueueEntry"
-          @retry-all="onRetryAllQueueFailed"
-        />
         <!-- Staging 模式 banner（fork/handoff 统一，demo .mode-banner 形态对齐）：composer-box 顶缘
              整条横幅，图标染 accent = 模式在途唯一染色点（标题粗体中性 fg，描述 fg-2，× 中性）。
              [HISTORICAL] 前身 mode-chip（accent-soft 底 + accent 字 + accent × + placeholder/box
