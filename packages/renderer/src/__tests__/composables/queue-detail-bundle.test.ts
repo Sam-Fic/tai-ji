@@ -91,8 +91,8 @@ import { closeDrawerIfTabsEmpty } from '@taiji/core/domain/drawer'
 import { triggerSessionCleanups } from '@/composables/useSessionScopedState'
 import { useSessionStore } from '@/stores/session'
 // deliveryQueueEntries 谓词自 U20 下沉 core（行为不变断言同迁——原断言改引 core 导出，
-// 队列区过滤行为锁定不变）；useQueueRows/foldQueueRows 仍是 renderer 壳层编排出处
-import { useQueueRows, foldQueueRows, QUEUE_VISIBLE_MAX } from '@/composables/panel/useQueueRows'
+// 队列区过滤行为锁定不变）；useQueueRows/stackRows 仍是 renderer 壳层编排出处
+import { useQueueRows, stackRows, QUEUE_VISIBLE_MAX } from '@/composables/panel/useQueueRows'
 import { useSidebarCounts } from '@/composables/features/sidebar/useSidebarCounts'
 import { toggleMarkedDone, __resetCacheForTest } from '@/composables/useSessionMarkers'
 import type { SessionGroup, SessionSummary } from '@taiji/shared'
@@ -726,32 +726,19 @@ describe('useQueueRows（use-queue-rows 合并节）', () => {
     })
   })
 
-  describe('foldQueueRows · 折叠口径唯一定义点（failed 置顶恒可见，QueueBubble 消费）', () => {
+  describe('stackRows · 堆叠序口径唯一定义点（failed 置顶 + 全量不裁剪，QueueBubble 消费）', () => {
     it('failed 行置顶（组内保持帧序），其余行保持帧序跟随', () => {
       const rows = [
         { clientUuid: 'q1', preview: 'm1', state: 'queued' as const },
         { clientUuid: 'f1', preview: 'm2', state: 'failed' as const },
         { clientUuid: 'i1', preview: 'm3', state: 'in-flight' as const },
       ]
-      const { visible, overflowCount } = foldQueueRows(rows)
-      expect(visible.map((r) => r.clientUuid)).toEqual(['f1', 'q1', 'i1'])
+      const { ordered, overflowCount } = stackRows(rows)
+      expect(ordered.map((r) => r.clientUuid)).toEqual(['f1', 'q1', 'i1'])
       expect(overflowCount).toBe(0)
     })
 
-    it('failed 行不折叠（恒可见可重试）：failed 数超可见上限仍全显，可见位全给 failed', () => {
-      const rows = [
-        { clientUuid: 'f1', preview: 'm1', state: 'failed' as const },
-        { clientUuid: 'f2', preview: 'm2', state: 'failed' as const },
-        { clientUuid: 'f3', preview: 'm3', state: 'failed' as const },
-        { clientUuid: 'f4', preview: 'm4', state: 'failed' as const },
-        { clientUuid: 'q1', preview: 'm5', state: 'queued' as const },
-      ]
-      const { visible, overflowCount } = foldQueueRows(rows)
-      expect(visible.map((r) => r.clientUuid)).toEqual(['f1', 'f2', 'f3', 'f4'])
-      expect(overflowCount).toBe(1)
-    })
-
-    it('「+N」只计被折叠的非 failed 行（failed 恒可见 → 溢出计数不含 failed）', () => {
+    it('不裁剪行：全部行进 ordered（收起态 depth>2 层由 CSS 隐藏，DOM 保留——离场/入场动画跨可见窗连续）', () => {
       const rows = [
         { clientUuid: 'f1', preview: 'm1', state: 'failed' as const },
         { clientUuid: 'q1', preview: 'm2', state: 'queued' as const },
@@ -759,51 +746,27 @@ describe('useQueueRows（use-queue-rows 合并节）', () => {
         { clientUuid: 'q3', preview: 'm4', state: 'queued' as const },
         { clientUuid: 'i1', preview: 'm5', state: 'in-flight' as const },
       ]
-      const { visible, overflowCount } = foldQueueRows(rows)
-      // failed 行全量可见（f1 在首位的置顶序），「+N」= 被折叠的 q3/i1 两行（不含 failed）
-      expect(visible.map((r) => r.clientUuid)).toEqual(['f1', 'q1', 'q2'])
+      const { ordered, overflowCount } = stackRows(rows)
+      expect(ordered.map((r) => r.clientUuid)).toEqual(['f1', 'q1', 'q2', 'q3', 'i1'])
+      // +N 角标计数 = 总数 − 可见层数（堆叠裁剪按显示序，failed 置顶占浅层）
       expect(overflowCount).toBe(2)
     })
 
-    it('无 failed → 前 N 条按帧序（与既有 v6 §8.5 行为一致，回归锚）', () => {
+    it('无 failed → 帧序原样（depth 0 = 队首 = 下一条发送），+N 计 3 层外的溢出（QUEUE_VISIBLE_MAX 锁定）', () => {
       const rows = [
         { clientUuid: 'q1', preview: 'm1', state: 'queued' as const },
         { clientUuid: 'q2', preview: 'm2', state: 'queued' as const },
         { clientUuid: 'q3', preview: 'm3', state: 'queued' as const },
         { clientUuid: 'q4', preview: 'm4', state: 'queued' as const },
       ]
-      const { visible, overflowCount } = foldQueueRows(rows)
-      expect(visible.map((r) => r.clientUuid)).toEqual(['q1', 'q2', 'q3'])
+      const { ordered, overflowCount } = stackRows(rows)
+      expect(ordered.map((r) => r.clientUuid)).toEqual(['q1', 'q2', 'q3', 'q4'])
       expect(overflowCount).toBe(1)
       expect(QUEUE_VISIBLE_MAX).toBe(3)
     })
 
-    it('空输入 → 空可见 + 零溢出', () => {
-      expect(foldQueueRows([])).toEqual({ visible: [], overflowCount: 0 })
-    })
-
-    it('expanded=true → 全部行可见（failed 置顶序保持）+ 溢出归零（Q2 +N 展开开关）', () => {
-      const rows = [
-        { clientUuid: 'f1', preview: 'm1', state: 'failed' as const },
-        { clientUuid: 'q1', preview: 'm2', state: 'queued' as const },
-        { clientUuid: 'q2', preview: 'm3', state: 'queued' as const },
-        { clientUuid: 'q3', preview: 'm4', state: 'queued' as const },
-        { clientUuid: 'q4', preview: 'm5', state: 'in-flight' as const },
-      ]
-      const { visible, overflowCount } = foldQueueRows(rows, { expanded: true })
-      expect(visible.map((r) => r.clientUuid)).toEqual(['f1', 'q1', 'q2', 'q3', 'q4'])
-      expect(overflowCount).toBe(0)
-    })
-
-    it('expanded 缺省 → 折叠行为逐字节不变（既有调用方与测试零改动锚）', () => {
-      const rows = [
-        { clientUuid: 'q1', preview: 'm1', state: 'queued' as const },
-        { clientUuid: 'q2', preview: 'm2', state: 'queued' as const },
-        { clientUuid: 'q3', preview: 'm3', state: 'queued' as const },
-        { clientUuid: 'q4', preview: 'm4', state: 'queued' as const },
-      ]
-      expect(foldQueueRows(rows)).toEqual(foldQueueRows(rows, {}))
-      expect(foldQueueRows(rows)).toEqual(foldQueueRows(rows, { expanded: false }))
+    it('空输入 → 空序 + 零溢出', () => {
+      expect(stackRows([])).toEqual({ ordered: [], overflowCount: 0 })
     })
   })
 
@@ -974,16 +937,11 @@ describe('useQueueRows（use-queue-rows 合并节）', () => {
     })
   })
 
-  describe('useQueueRows · +N 展开开关（Q2：per-session 分区持有展开态）', () => {
-    it('toggleExpanded 切换 expanded；不同会话分区互不影响（ADR-0049 分区语义）', () => {
-      const a = setup('s1')
-      const b = setup('s2')
-      expect(a.expanded.value).toBe(false)
-      a.toggleExpanded()
-      expect(a.expanded.value).toBe(true)
-      expect(b.expanded.value).toBe(false) // s2 分区独立
-      a.toggleExpanded()
-      expect(a.expanded.value).toBe(false)
+  describe('useQueueRows · 展开态不持分区（Q2 复裁：hover/focus 瞬态归 QueueBubble 组件内）', () => {
+    it('返回面不含 expanded/toggleExpanded（堆叠形态退役 per-session 展开分区）', () => {
+      const q = setup('s1')
+      expect(q).not.toHaveProperty('expanded')
+      expect(q).not.toHaveProperty('toggleExpanded')
     })
   })
 })

@@ -18,7 +18,7 @@
  *
  * preview 直用帧值：runtime 帧装配（session-delivery-topic `deliveryPreview`）已剥投递标记
  * 并截断，帧契约测试断言无标记——显示层不再二次剥除（单点剥离，防双规则漂移）。
- * 队列区折叠（failed 置顶恒可见 / +N 计数 / +N 展开开关）见 `foldQueueRows`（显示序，不改帧序语义）。
+ * 队列区堆叠序（failed 置顶 / 全量卡片 +N 角标计数）见 `stackRows`（显示序，不改帧序语义）。
  *
  * × 撤销（V9/V10）：queued 态立即移除；投递中（pi 槽位）走内核 clear_queue 全收 → 标记识别
  * → 其余条目保持相对序重投（收回-重投复用对账器路径）。reply.cancelled=false = 不可撤
@@ -36,7 +36,7 @@
  * 单锚定判定 → delivery.peek 取全文预填 + 锚定来源条目 id；发送时经 shell 分流通
  * delivery.edit 原位替换（位置不变 id 不变）。锚定活性/解除/提示条状态全在壳层。
  *
- * [ADR-0049] 本 composable 仅持展示态/瞬态的 per-session 分区（+N 展开标志、撤销单飞标志，
+ * [ADR-0049] 本 composable 仅持展示态/瞬态的 per-session 分区（撤销单飞标志，
  * useSessionScopedState 工厂），数据态零持有——派生视图分区由 core 派生视图 ref 持有（内核
  * 状态帧是 runtime 派生视图数据），行派生为 per-call computed，session 切换/销毁无残留范围。
  */
@@ -60,30 +60,23 @@ export interface QueueRow {
   state: DeliveryFrameEntry['state']
 }
 
-/** 队列区可见行数上限（v6 §8.5：多条显前 N 条 + 「+N」）。 */
+/** 收起态堆叠可见层数（depth 0..2；OD QueuedSendStack 同款三层裁剪，其余层收起态隐藏）。 */
 export const QUEUE_VISIBLE_MAX = 3
 
 /**
- * 队列区折叠口径（**唯一定义点**，QueueBubble 显示消费）：failed 行置顶且**恒可见**——
- * 失败条目（受理失败 / 断连未确认两成因）必须保留重试/撤销入口，不得折叠进「+N」静默
- * 滞留（§3.4）；其余行保持帧序填充剩余可见位。「+N」只计被折叠的非 failed 行（failed
- * 恒可见 → 溢出天然不含 failed）。`opts.expanded = true` 时全部行可见（overflowCount = 0，
- * +N 展开开关的展开态，Q2——点「+N」切换全显/收起，最简档无限高滚动）。
+ * 队列区堆叠序口径（**唯一定义点**，QueueBubble 显示消费）：failed 行置顶——失败条目
+ * （受理失败 / 断连未确认两成因）占用最浅 depth 层（收起态 depth 0..2 可见窗），
+ * 重试/撤销入口不落入被裁剪层静默滞留（§3.4）；其余行保持帧序。**不裁剪行**——全部行
+ * 渲染为卡片，收起态 depth>2 层由 CSS（data-overflow）隐藏而非 DOM 移除，保 enter/exit
+ * 动画跨可见窗边界可用（OD QueuedSendStack 同款，overflowCount 只喂 +N 信息角标）。
  * 仅显示序：不改 `deliveryQueueEntries` 的内核 FIFO 帧序语义。
  */
-export function foldQueueRows(
-  rows: readonly QueueRow[],
-  opts?: { expanded?: boolean },
-): { visible: QueueRow[]; overflowCount: number } {
+export function stackRows(rows: readonly QueueRow[]): { ordered: QueueRow[]; overflowCount: number } {
   const failed = rows.filter((r) => r.state === 'failed')
   const active = rows.filter((r) => r.state !== 'failed')
-  if (opts?.expanded === true) {
-    return { visible: [...failed, ...active], overflowCount: 0 }
-  }
-  const visibleActive = Math.max(0, QUEUE_VISIBLE_MAX - failed.length)
   return {
-    visible: [...failed, ...active.slice(0, visibleActive)],
-    overflowCount: Math.max(0, active.length - visibleActive),
+    ordered: [...failed, ...active],
+    overflowCount: Math.max(0, rows.length - QUEUE_VISIBLE_MAX),
   }
 }
 
@@ -106,8 +99,6 @@ export interface QueueRowsDeps {
 
 /** per-session 展示态分区（ADR-0049 工厂分区；数据态不在此）。 */
 interface QueueUiPartition {
-  /** +N 展开开关的展开态（Q2；会话切换经分区隔离自动重置） */
-  expanded: boolean
   /** 会话级撤销单飞（Q10）：在途取消的 clientUuid；null = 无在途取消 */
   cancelling: string | null
 }
@@ -118,10 +109,6 @@ export function useQueueRows(
 ): {
   rows: ComputedRef<QueueRow[]>
   hint: ComputedRef<string>
-  /** +N 展开开关的展开态（per-session 分区，Q2） */
-  expanded: ComputedRef<boolean>
-  /** +N 展开开关切换（分区 update 单入口，Q2） */
-  toggleExpanded: () => void
   onCancelEntry: (clientUuid: string) => Promise<void>
   /** ✎ 编辑（chat-flow-consistency D6）：单锚定判定 + peek 预填 + 锚定登记（编排见 deps.beginEdit） */
   onEditEntry: (clientUuid: string) => void
@@ -133,7 +120,7 @@ export function useQueueRows(
   const chatStore = useChatStore()
   const toast = useToast()
   const projection = getDeliveryProjectionRef()
-  const ui = useSessionScopedState(sessionId, () => reactive<QueueUiPartition>({ expanded: false, cancelling: null }))
+  const ui = useSessionScopedState(sessionId, () => reactive<QueueUiPartition>({ cancelling: null }))
 
   const rows = computed<QueueRow[]>(() => {
     const sid = sessionId.value
@@ -238,12 +225,6 @@ export function useQueueRows(
   return {
     rows,
     hint,
-    expanded: computed(() => ui.current.value.expanded),
-    toggleExpanded: () => {
-      ui.update((p) => {
-        p.expanded = !p.expanded
-      })
-    },
     onCancelEntry,
     onEditEntry,
     onRetryEntry,

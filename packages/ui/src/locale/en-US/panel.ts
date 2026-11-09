@@ -664,10 +664,9 @@ export default {
     // failed-row dedup note (second line of row hover title: retrying never delivers twice)
     retryDedupHint: 'Retrying auto-deduplicates — it will not deliver twice',
     retryFailed: 'Retry failed: {msg}',
-    // Batch retry and +N expand toggle
+    // Batch retry (Q5); region label (stack aria-label, carries the entry count)
     retryAll: 'Retry all failed',
-    expandQueued: 'Show {n} more queued messages',
-    collapseQueued: 'Collapse',
+    regionLabel: '{n} queued messages',
     // ✎ edit (chat-flow-consistency D6: peek prefill + anchor, available on all rows incl. failed — E7)
     editQueued: 'Edit queued message',
     // Editing banner (rendered while an anchor is held; auto-released by the frame watch when the entry leaves)
