@@ -3,7 +3,7 @@
  * visibility / 主文件五套同 SUT 测试单源；范式同 update-page-mount.ts）。
  * 收敛五文件逐字重复的挂载骨架：
  *  - 内存 ipc adapter + 控制器：setupAppUpdateLifecycle 的 beforeEach 重建（用例间零残留）
- *  - effectScope 订阅/启动编排（setupAppUpdate）
+ *  - effectScope 订阅/启动编排（setupAppUpdate / startAutoCheckChain / reinitAutoCheckInActiveScope）
  *  - ipc 七键默认 resolved 值（primeIpc 选项注入，覆写在 lifecycle 之后执行即生效）
  *  - 可见性/挂死装置（setHidden / makeCheckHang）与 release fixture（makeUpdateRelease）
  *
@@ -105,7 +105,7 @@ export function setupAppUpdateLifecycle(options: AppUpdateLifecycleOptions = {})
   })
 }
 
-/** 在 effectScope 内订阅控制器并（可选）执行启动编排，返回 result + scope.stop（onScopeDispose 需活跃 scope） */
+/** 在 effectScope 内订阅控制器并（可选）启动自动检查，返回 result + scope.stop（onScopeDispose 需活跃 scope） */
 export function setupAppUpdate(options?: { initAutoCheck?: boolean }): AppUpdateHandle {
   const scope = effectScope()
   activeScope = scope
@@ -116,6 +116,21 @@ export function setupAppUpdate(options?: { initAutoCheck?: boolean }): AppUpdate
     }
   })
   return { result: controller, stop: () => scope.stop() }
+}
+
+/**
+ * fake timers 下挂 auto-check 链并 flush 微任务：initAutoCheck 的定时器排在 settings
+ * promise 之后，先 flush 微任务再推进墙钟（本族 fake-timer 用例的标准前置）。
+ */
+export async function startAutoCheckChain(): Promise<AppUpdateHandle> {
+  const handle = setupAppUpdate({ initAutoCheck: true })
+  await vi.advanceTimersByTimeAsync(0)
+  return handle
+}
+
+/** 幂等重排：在当前活跃 scope 内再次 initAutoCheck（多消费者场景） */
+export function reinitAutoCheckInActiveScope(): void {
+  activeScope!.run(() => controller.initAutoCheck())
 }
 
 /** 构造测试用 LatestReleaseInfo（pending / 主文件共用字段值；manual-channel 断言依赖不同的 notes/url，留在该文件） */
