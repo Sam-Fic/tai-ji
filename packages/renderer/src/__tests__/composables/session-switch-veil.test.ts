@@ -80,7 +80,7 @@ describe('useSessionSwitchVeil 状态机', () => {
     vi.useRealTimers()
   })
 
-  it('VL1: 初始 idle；begin → pending（不出幕布）+ 登记 target/driverRunning；满延迟 → visible', () => {
+  it('VL1: 初始 idle；begin → pending（不出幕布，非 idle 即切换进行中）+ 登记 target；满延迟 → visible', () => {
     const veil = useSessionSwitchVeilState()
     expect(veil.phase).toBe('idle')
 
@@ -88,7 +88,6 @@ describe('useSessionSwitchVeil 状态机', () => {
     expect(veil.phase).toBe('pending')
     expect(veil.targetId).toBe('s1')
     expect(veil.targetLabel).toBe('会话一')
-    expect(veil.driverRunning).toBe(true)
 
     // 延迟内不出幕布（防闪烁：快切零 DOM）
     vi.advanceTimersByTime(SESSION_SWITCH_VEIL_DELAY_MS - 1)
@@ -105,7 +104,6 @@ describe('useSessionSwitchVeil 状态机', () => {
     expect(veil.phase).toBe('idle')
     expect(veil.targetId).toBeNull()
     expect(veil.targetLabel).toBe('')
-    expect(veil.driverRunning).toBe(false)
 
     vi.advanceTimersByTime(SESSION_SWITCH_VEIL_DELAY_MS * 2)
     expect(veil.phase).toBe('idle') // clearRevealTimer 生效，回调未把已 release 的状态升 visible
@@ -119,8 +117,7 @@ describe('useSessionSwitchVeil 状态机', () => {
     retargetSessionSwitch('s2', '会话二')
     expect(veil.targetId).toBe('s2')
     expect(veil.targetLabel).toBe('会话二')
-    expect(veil.phase).toBe('pending') // phase 不动（不闪不跳）
-    expect(veil.driverRunning).toBe(true)
+    expect(veil.phase).toBe('pending') // phase 不动（不闪不跳；非 idle 即切换仍在继续）
 
     vi.advanceTimersByTime(1)
     expect(veil.phase).toBe('visible') // 切换仍在继续（目标已换），幕布按新目标呈现
@@ -160,7 +157,7 @@ describe('useSidebarSessionActions 切换编排（session-switch-veil driver）'
     releaseSessionSwitch()
   })
 
-  it('SV1: 常规切换：selectSession 被调，settle 后 release（回 idle、driverRunning 复位）', async () => {
+  it('SV1: 常规切换：selectSession 被调，settle 后 release（回 idle）', async () => {
     seedSessions([{ id: 's1', label: '会话一' }])
     const opts = makeOptions()
     const actions = useSidebarSessionActions(opts)
@@ -171,7 +168,6 @@ describe('useSidebarSessionActions 切换编排（session-switch-veil driver）'
     expect(opts.selectSession).toHaveBeenCalledWith('s1')
     expect(opts.restoreSession).not.toHaveBeenCalled()
     expect(veil.phase).toBe('idle')
-    expect(veil.driverRunning).toBe(false)
     expect(toastErrorMock).not.toHaveBeenCalled()
   })
 
@@ -184,7 +180,7 @@ describe('useSidebarSessionActions 切换编排（session-switch-veil driver）'
 
     expect(opts.restoreSession).toHaveBeenCalledWith('d1')
     expect(opts.selectSession).not.toHaveBeenCalled()
-    expect(useSessionSwitchVeilState().driverRunning).toBe(false)
+    expect(useSessionSwitchVeilState().phase).toBe('idle')
   })
 
   it('SV3: 等待中改投：在途第二次切换只 retarget 不打断；首个 settle 后 driver 接续新目标', async () => {
@@ -212,7 +208,6 @@ describe('useSidebarSessionActions 切换编排（session-switch-veil driver）'
     await first
     expect(opts.selectSession).toHaveBeenNthCalledWith(2, 's2') // settle 后按最新目标接续
     expect(veil.phase).toBe('idle')
-    expect(veil.driverRunning).toBe(false)
   })
 
   it('SV4: 失败且未改投：release + toast「切换会话失败：<msg>」，恒 resolve 不上抛', async () => {
@@ -227,8 +222,7 @@ describe('useSidebarSessionActions 切换编排（session-switch-veil driver）'
     expect(toastErrorMock).toHaveBeenCalledTimes(1)
     expect(String(toastErrorMock.mock.calls[0][0])).toContain('切换会话失败')
     expect(String(toastErrorMock.mock.calls[0][0])).toContain('rpc boom')
-    expect(veil.phase).toBe('idle')
-    expect(veil.driverRunning).toBe(false) // 失败即收场，无残留 driver 态
+    expect(veil.phase).toBe('idle') // 失败即收场，无残留切换态
   })
 
   it('SV5: 失败但已改投：旧目标失败静默接续新目标（新意图与用户相关），不出声', async () => {
@@ -254,7 +248,7 @@ describe('useSidebarSessionActions 切换编排（session-switch-veil driver）'
 
     expect(opts.selectSession).toHaveBeenNthCalledWith(2, 's2') // 静默接续新目标
     expect(toastErrorMock).not.toHaveBeenCalled() // 旧目标失败与用户无关
-    expect(veil.driverRunning).toBe(false)
+    expect(veil.phase).toBe('idle') // 接续链 settle 后收场
   })
 
   it('SV6: 目标不在列表（列表过期形态）：label 回空串，切换照常驱动', async () => {

@@ -21,7 +21,7 @@
  * 等待中改投（用户幕布未揭时点另一个 session）：retarget 只换 targetId/targetLabel——
  * phase 不动（已 visible 的 chip 文案响应式换目标，不闪不跳）；编排层据此决定接续目标。
  */
-import { reactive } from 'vue'
+import { reactive, readonly } from 'vue'
 
 /**
  * 幕布显形延迟：切换启动后满该时长仍未 settle 才出幕布。取值对齐
@@ -33,16 +33,15 @@ export const SESSION_SWITCH_VEIL_DELAY_MS = 150
 export type SessionSwitchVeilPhase = 'idle' | 'pending' | 'visible'
 
 interface SessionSwitchVeilState {  // oe-exempt:20261109:framework:内部 reactive 状态的形状描述（非 ports 契约），单实现即终态
+  /**
+   * 三态机唯一状态词表：非 idle 即「切换进行中」（编排 driver 的单飞判定同源——
+   * switchWithVeil 与 driver 循环以 phase !== 'idle' 判定，不另持布尔防双写分叉）。
+   */
   phase: SessionSwitchVeilPhase
   /** 本次过渡的目标 session（等待中改投即更新；idle 时为 null） */
   targetId: string | null
   /** 目标展示名（chip / header 乐观标题共用；rename 后的短窗过时不追） */
   targetLabel: string
-  /**
-   * driver 单飞守卫：onSelectSession 的编排循环是否在跑。放本对象与切换状态同生命周期
-   * （release 一并复位），保证「等待中改投」判定与状态读取同源，不引入第二份布尔。
-   */
-  driverRunning: boolean
 }
 
 // @data-owner #96 —— 会话切换幕布过渡态（data-source-registry #96）：本模块即权威源，
@@ -51,8 +50,10 @@ const state = reactive<SessionSwitchVeilState>({
   phase: 'idle',
   targetId: null,
   targetLabel: '',
-  driverRunning: false,
 })
+
+/** 消费方只读投影（同一单例的 readonly 代理；写只经 begin/retarget/release 三入口，TS 层即拦直写） */
+const readonlyState = readonly(state)
 
 let revealTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -63,9 +64,9 @@ function clearRevealTimer(): void {
   }
 }
 
-/** 幕布状态（只读消费：SessionSwitchVeil.vue / PanelContainer） */
-export function useSessionSwitchVeilState(): SessionSwitchVeilState {
-  return state
+/** 幕布状态（只读消费：SessionSwitchVeil.vue / PanelContainer / 编排判定读点） */
+export function useSessionSwitchVeilState(): Readonly<SessionSwitchVeilState> {
+  return readonlyState
 }
 
 /** 发起一次切换过渡：记录目标并进入 pending；满延迟未 settle 升 visible。 */
@@ -74,7 +75,6 @@ export function beginSessionSwitch(id: string, label: string): void {
   state.targetId = id
   state.targetLabel = label
   state.phase = 'pending'
-  state.driverRunning = true
   revealTimer = setTimeout(() => {
     // 改投不影响本判定：切换仍在继续（目标已换），幕布按新目标呈现
     if (state.phase === 'pending') state.phase = 'visible'
@@ -93,5 +93,4 @@ export function releaseSessionSwitch(): void {
   state.phase = 'idle'
   state.targetId = null
   state.targetLabel = ''
-  state.driverRunning = false
 }

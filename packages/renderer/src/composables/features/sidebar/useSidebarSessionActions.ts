@@ -104,7 +104,7 @@ export function useSidebarSessionActions(options: UseSidebarSessionActionsOption
    */
   async function switchWithVeil(id: string): Promise<void> {
     const label = useSessionStore().list.find((s) => s.id === id)?.label ?? ''
-    if (veil.driverRunning) {
+    if (veil.phase !== 'idle') {
       retargetSessionSwitch(id, label)
       return
     }
@@ -131,7 +131,10 @@ export function useSidebarSessionActions(options: UseSidebarSessionActionsOption
    */
   async function driveVeiledSwitch(firstId: string): Promise<void> {
     let current = firstId
-    while (veil.driverRunning) {
+    // 幕布进行中判定 = 非 idle（单一状态词表）。经函数封装读取：循环体跨 await，phase 可被
+    // 并发手势 release/改投，直比会被 TS 流程收窄误判为恒真（TS2367——reactive 突变不进类型系统）
+    const veilActive = (): boolean => veil.phase !== 'idle'
+    while (veilActive()) {
       const isDead = useSessionStore().list.find((s) => s.id === current)?.status === 'dead'
       try {
         if (isDead) {
@@ -141,7 +144,7 @@ export function useSidebarSessionActions(options: UseSidebarSessionActionsOption
         }
       } catch (e) {
         const redirect = veil.targetId
-        if (veil.driverRunning && redirect !== null && redirect !== current) {
+        if (veilActive() && redirect !== null && redirect !== current) {
           current = redirect
           continue
         }
@@ -149,7 +152,7 @@ export function useSidebarSessionActions(options: UseSidebarSessionActionsOption
         throw e
       }
       const next = veil.targetId
-      if (veil.driverRunning && next !== null && next !== current) {
+      if (veilActive() && next !== null && next !== current) {
         current = next
         continue
       }
