@@ -107,7 +107,7 @@ export function matchInstancesToNodes(
     }
     const regexMatches = ({ regex }: { regex: RegExp | null }): boolean =>
       regex !== null && call.agent !== undefined && regex.test(call.agent)
-    const tier1 = compiled.filter(({ node, regex }) => node.phase === call.phase && regexMatches({ regex }))
+    const tier1 = compiled.filter((entry) => entry.node.phase === call.phase && regexMatches(entry))
 
     // 判据② tier 2 名称族回落：tier 1 零候选时跨 phase 按模板正则匹配（方案 C——
     // 词法归属与运行时 phase 错位的调用点按 agent 名称族挂接）

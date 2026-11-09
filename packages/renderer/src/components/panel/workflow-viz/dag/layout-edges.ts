@@ -96,7 +96,6 @@ function roundedPath(points: DagPoint[]): string {
   return d
 }
 
-/** 待装配边（保持 dag.edges 序——输出序不因错开分配分遍打乱）：已定型路径或通道成员。 */
 /** 同列边谓词徽章锚 y：徽章带（min(两端主体顶) − LABEL_ABOVE_GAP，分区头预留的
  *  专属平铺行）——同列边不占列间隙（无专属水平空间），徽章退徽章带平铺。已知
  *  残留：同列多条条件边共享同一顶端节点时（如 a→b、a→c 同列）徽章同 x 同 y 重叠
@@ -109,6 +108,7 @@ function badgeAnchorY(from: DagLayoutNode, to: DagLayoutNode): number {
   return Math.min(from.y, to.y) - LABEL_ABOVE_GAP
 }
 
+/** 待装配边（保持 dag.edges 序——输出序不因错开分配分遍打乱）：已定型路径或通道成员。 */
 type PendingEdge =
   | { edge: WorkflowDagEdge; kind: 'fixed'; points: DagPoint[]; labelX?: number; labelY?: number }
   | { edge: WorkflowDagEdge; kind: 'channeled'; chan: ChannelMember; labelX?: number; labelY?: number }
