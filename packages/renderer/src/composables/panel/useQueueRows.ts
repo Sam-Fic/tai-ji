@@ -70,13 +70,19 @@ export const QUEUE_VISIBLE_MAX = 3
  * 渲染为卡片，收起态 depth>2 层由 CSS（data-overflow）隐藏而非 DOM 移除，保 enter/exit
  * 动画跨可见窗边界可用（OD QueuedSendStack 同款，overflowCount 只喂 +N 信息角标）。
  * 仅显示序：不改 `deliveryQueueEntries` 的内核 FIFO 帧序语义。
+ *
+ * 溢出计数状态感知：failed 行收起态豁免裁剪（§3.4 恒可见——重试/撤销入口必须可达，
+ * QueueBubble inactiveOf/data-overflow 同口径豁免），故 failed 全部失败行不计入溢出，
+ * +N 只计被裁剪的非 failed 行（可见窗先被 failed 占满时非 failed 行全溢出）。
  */
 export function stackRows(rows: readonly QueueRow[]): { ordered: QueueRow[]; overflowCount: number } {
   const failed = rows.filter((r) => r.state === 'failed')
   const active = rows.filter((r) => r.state !== 'failed')
+  // 被裁剪的非 failed 行 = active 数 − 可见窗给非 failed 行留的层数（failed 占窗后余量，负则 0）
+  const overflowCount = Math.max(0, active.length - Math.max(0, QUEUE_VISIBLE_MAX - failed.length))
   return {
     ordered: [...failed, ...active],
-    overflowCount: Math.max(0, rows.length - QUEUE_VISIBLE_MAX),
+    overflowCount,
   }
 }
 

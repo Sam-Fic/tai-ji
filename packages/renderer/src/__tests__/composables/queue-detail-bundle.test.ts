@@ -765,6 +765,33 @@ describe('useQueueRows（use-queue-rows 合并节）', () => {
       expect(QUEUE_VISIBLE_MAX).toBe(3)
     })
 
+    it('failed≥4：失败行恒不裁剪（第 4+ 条收起态仍可见恒可交互），+N 角标不因失败行计数（§3.4 恒可见）', () => {
+      const rows = [
+        { clientUuid: 'f1', preview: 'm1', state: 'failed' as const },
+        { clientUuid: 'f2', preview: 'm2', state: 'failed' as const },
+        { clientUuid: 'f3', preview: 'm3', state: 'failed' as const },
+        { clientUuid: 'f4', preview: 'm4', state: 'failed' as const },
+      ]
+      const { ordered, overflowCount } = stackRows(rows)
+      // 全部行进 ordered（含挤出可见窗 depth 3 的第 4 条——QueueBubble 收起态豁免其裁剪）
+      expect(ordered.map((r) => r.clientUuid)).toEqual(['f1', 'f2', 'f3', 'f4'])
+      expect(overflowCount).toBe(0)
+    })
+
+    it('failed≥4 挤占可见窗：非 failed 行照常裁剪计数（窗内 3 层全被 failed 占 → 非 failed 全溢出）', () => {
+      const rows = [
+        { clientUuid: 'f1', preview: 'm1', state: 'failed' as const },
+        { clientUuid: 'f2', preview: 'm2', state: 'failed' as const },
+        { clientUuid: 'f3', preview: 'm3', state: 'failed' as const },
+        { clientUuid: 'f4', preview: 'm4', state: 'failed' as const },
+        { clientUuid: 'q1', preview: 'm5', state: 'queued' as const },
+        { clientUuid: 'q2', preview: 'm6', state: 'queued' as const },
+      ]
+      const { ordered, overflowCount } = stackRows(rows)
+      expect(ordered.map((r) => r.clientUuid)).toEqual(['f1', 'f2', 'f3', 'f4', 'q1', 'q2'])
+      expect(overflowCount).toBe(2)
+    })
+
     it('空输入 → 空序 + 零溢出', () => {
       expect(stackRows([])).toEqual({ ordered: [], overflowCount: 0 })
     })

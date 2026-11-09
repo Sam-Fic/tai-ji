@@ -5,8 +5,9 @@
   **单一数据源**：队列条目 = runtime 内核 `session.delivery` 状态帧派生视图（core
   getDeliveryProjectionRef），不再读 queue_update 快照 + 本地 defer 队列双拼（D7）。
   显示序与溢出计数由 stackRows 单点提供（useQueueRows）：failed 行置顶占最浅层
-  （重试/撤销入口不落被裁剪层），其余保持帧序；**全部行都渲染为卡片**，收起态 depth>2
-  层由 CSS（data-overflow）隐藏而非 DOM 移除——enter/exit 动画跨可见窗边界保持连续。
+  （重试/撤销入口不落被裁剪层，failed≥4 挤出可见窗的部分豁免裁剪恒可见），其余保持
+  帧序；**全部行都渲染为卡片**，收起态 depth>2 层由 CSS（data-overflow）隐藏而非 DOM
+  移除——enter/exit 动画跨可见窗边界保持连续。
 
   堆叠形态（OD QueuedSendStack 同款相位机）：depth 0 卡在最前（底部），旧卡每层上移
   12px 缩 6%、透明度 1/0.6/0.36 递减，depth 钳 3；hover/focus 展开成自底向上铺开的
@@ -71,8 +72,8 @@
             class="qb-card group absolute left-0 bottom-0 w-full h-[var(--qb-banner-height)] flex items-center border border-border rounded-[var(--radius-card)] bg-bg-card origin-bottom"
             :data-testid="`queue-item-${card.clientUuid}`"
             :data-phase="card.phase"
-            :data-depth="Math.min(card.depth, 3)"
-            :data-overflow="card.depth >= QUEUE_VISIBLE_MAX"
+            :data-depth="Math.min(depthOf(card), DEPTH_CLAMP)"
+            :data-overflow="isOverflowOf(card)"
             :aria-hidden="inactiveOf(card) || undefined"
             :inert="inactiveOf(card) || undefined"
             :title="rowTitleOf(displayOf(card))"
@@ -134,7 +135,8 @@
           </div>
         </div>
       </div>
-      <!-- +N 信息角标（非按钮）：收起态被裁剪层数提示；展开即全量浏览无溢出 -->
+      <!-- +N 信息角标（非按钮）：收起态被裁剪层数提示（只计非 failed 行——failed 恒可见
+           豁免不进计数，见 stackRows/inactiveOf 同口径）；展开即全量浏览无溢出 -->
       <div
         v-if="overflowCount > 0 && !expanded"
         class="pointer-events-none absolute -top-1 left-2 z-[1] rounded-full border border-border bg-bg px-1.5 text-[length:var(--text-2xs)] leading-[1.4] text-neutral-dim"
@@ -162,6 +164,7 @@ import { useI18n } from 'vue-i18n'
 import { AlertCircle, Hourglass, PenLine, RefreshCw, X, Zap } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { stackRows, QUEUE_VISIBLE_MAX, type QueueRow } from '@/composables/panel/useQueueRows'
+import { useQueueStackCards, type StackCard } from '@/composables/panel/useQueueStackCards'
 
 const props = defineProps<{
   /** 队列条目（调用方已按「非 direct 且未 delivered」过滤，帧序 = 内核 FIFO 发送序；显示序在组件内经 stackRows） */
@@ -187,9 +190,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-// ── 堆叠常量（OD QueuedSendStack 同款数值；时长取既有 token 对应值，CSS 侧用 var()） ──
-/** 离场卡移除延时 = CSS 离场时长（--duration，200ms）；改须与 .qb-card[data-phase='exit'] 同步 */
-const CLOSE_MS = 200
+// ── 堆叠常量（OD QueuedSendStack 同款数值；CSS 侧用 var()） ──
 /** 卡间距（展开态纵向 gap，px） */
 const SPREAD_GAP = 4
 /** 卡高测量下限（px） */
@@ -209,81 +210,38 @@ const VIEWPORT_GAP_PX = 4
 /** 滚动暗示：上限外第 6 卡露出比例的分母（半卡，OD 同款） */
 const SCROLL_CUE_FRACTION = 2
 
-// ── 相位机（OD 直译）：cards = rows 的显示镜像，exit 卡冻结深度与内容快照 ──
-type CardPhase = 'enter' | 'ready' | 'exit'
-interface StackCard {
-  clientUuid: string
-  preview: string
-  state: QueueRow['state']
-  phase: CardPhase
-  /** 显示序深度（0 = 最前底部；exit 卡保持离场瞬间值不跳位） */
-  depth: number
-}
-
 const rootRef = ref<HTMLDivElement | null>(null)
 const viewportRef = ref<HTMLDivElement | null>(null)
-const cards = ref<StackCard[]>([])
+// 堆叠相位机（enter/ready/exit 三相 + 离场冻结 + 重建对账）拆至 useQueueStackCards：
+// 卡片生命周期不触模板/DOM 契约，是组件内唯一可独立成块的职责（相位机文档见该文件头）
+const { cards, displayOf, depthOf } = useQueueStackCards(computed(() => props.rows), rootRef)
 const pointerInside = ref(false)
 const focusInside = ref(false)
 const cardHeight = ref(MIN_CARD_HEIGHT)
 /** 展开视口可用空间上限（消息流滚动容器顶到堆叠底的间距；0 = 无上限信息，跳过封顶） */
 const availableHeight = ref(0)
-const exitTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 const liveCount = computed(() => props.rows.length)
 /** 展开态 = 瞬态（hover/focus），不持 per-session 分区；无条目时恒收起 */
 const expanded = computed(() => liveCount.value > 0 && (pointerInside.value || focusInside.value))
-/** 显示序 + 溢出计数唯一定义点（useQueueRows.stackRows） */
-const orderedRows = computed(() => stackRows(props.rows).ordered)
 const overflowCount = computed(() => stackRows(props.rows).overflowCount)
 const failedCount = computed(() => props.rows.filter((r) => r.state === 'failed').length)
 
-/** 非离场卡内容实时取自 rows（状态/预览随帧更新）；离场卡读冻结快照（OD currentItems 同款回退） */
-function displayOf(card: StackCard): QueueRow {
-  if (card.phase === 'exit') return card
-  return orderedRows.value.find((r) => r.clientUuid === card.clientUuid) ?? card
+/** failed 卡（§3.4 恒可见保证的豁免对象）：非 exit 实时读帧态，exit 读冻结快照 */
+function isFailedOf(card: StackCard): boolean {
+  return displayOf(card).state === 'failed'
+}
+
+/** 收起态被裁剪层（CSS overflow 形）：failed 卡豁免——失败行的重试/撤销入口不落被裁剪层
+    （含 failed≥4 挤出可见窗的第 4+ 条失败行，收起态恒可见恒可交互） */
+function isOverflowOf(card: StackCard): boolean {
+  return !isFailedOf(card) && depthOf(card) >= QUEUE_VISIBLE_MAX
 }
 
 /** 收起态不可交互卡：离场中或被裁剪层（inert + aria-hidden；可见窗 = 前 QUEUE_VISIBLE_MAX 层） */
 function inactiveOf(card: StackCard): boolean {
-  return card.phase === 'exit' || (!expanded.value && card.depth >= QUEUE_VISIBLE_MAX)
+  return card.phase === 'exit' || (!expanded.value && isOverflowOf(card))
 }
-
-// enter→ready 翻相（flush post = 渲染后）：**必须先于重建 watch 注册**——重建 immediate 在
-// setup 期同步赋值 cards，注册顺序靠后才收不到这次变更（首帧卡会卡在 enter 起始帧不可见）
-watch(cards, () => {
-  if (!cards.value.some((c) => c.phase === 'enter') || !rootRef.value) return
-  void rootRef.value.offsetHeight
-  cards.value = cards.value.map((c) => (c.phase === 'enter' ? { ...c, phase: 'ready' } : c))
-}, { flush: 'post' })
-
-// ids 签名驱动重建（状态/预览变化不走此 watch——内容经 displayOf 实时读，避免逐帧重建）；
-// immediate = 首挂载即从当前 rows 建卡（无 immediate 则首帧空堆叠）
-const rowIdsSignature = computed(() => props.rows.map((r) => r.clientUuid).join('\n'))
-watch(rowIdsSignature, () => {
-  const previous = cards.value
-  const next: StackCard[] = orderedRows.value.map((row, index): StackCard => {
-    const old = previous.find((c) => c.clientUuid === row.clientUuid && c.phase !== 'exit')
-    // 复活边沿（exit 计时未到期又回来）：清计时器，回到 ready
-    const pending = exitTimers.get(row.clientUuid)
-    if (pending) {
-      clearTimeout(pending)
-      exitTimers.delete(row.clientUuid)
-    }
-    return { ...row, depth: index, phase: old ? 'ready' : 'enter' }
-  })
-  for (const old of previous) {
-    if (orderedRows.value.some((r) => r.clientUuid === old.clientUuid)) continue
-    next.push({ ...old, phase: 'exit' })
-    if (!exitTimers.has(old.clientUuid)) {
-      exitTimers.set(old.clientUuid, setTimeout(() => {
-        exitTimers.delete(old.clientUuid)
-        cards.value = cards.value.filter((c) => !(c.clientUuid === old.clientUuid && c.phase === 'exit'))
-      }, CLOSE_MS))
-    }
-  }
-  cards.value = next
-}, { immediate: true })
 
 // ── 高度模型：卡高实测（内容 scrollHeight），收起 reserve / 展开封顶（5.5 卡 + 可用空间） ──
 const fullHeight = computed(() => Math.max(cardHeight.value, liveCount.value * (cardHeight.value + SPREAD_GAP) - SPREAD_GAP))
@@ -303,10 +261,11 @@ const stackStyle = computed(() => ({
 }))
 
 function cardStyleOf(card: StackCard): Record<string, string | number> {
+  const depth = depthOf(card)
   return {
-    '--qb-depth': Math.min(card.depth, DEPTH_CLAMP),
-    '--qb-offset': `${card.depth * (cardHeight.value + SPREAD_GAP)}px`,
-    zIndex: card.phase === 'exit' ? 0 : Math.max(1, liveCount.value - card.depth),
+    '--qb-depth': Math.min(depth, DEPTH_CLAMP),
+    '--qb-offset': `${depth * (cardHeight.value + SPREAD_GAP)}px`,
+    zIndex: card.phase === 'exit' ? 0 : Math.max(1, liveCount.value - depth),
   }
 }
 
@@ -315,8 +274,10 @@ function measure(): void {
   if (!root) return
   const contents = root.querySelectorAll<HTMLElement>('[data-qb-card-content]')
   cardHeight.value = Math.max(MIN_CARD_HEIGHT, ...Array.from(contents, (n) => n.scrollHeight + CARD_BORDER_COMP_PX))
-  // 可用空间 = 堆叠底到消息流滚动容器顶的间距（向上展开的活动上限；找不到容器则跳过封顶）
-  const stream = document.querySelector('.message-stream')
+  // 可用空间 = 堆叠底到消息流滚动容器顶的间距（向上展开的活动上限；找不到容器则跳过封顶）。
+  // 跨组件 DOM 契约锚 = MessageStream 滚动容器的 data-testid（样式 class 兜底，focus-composer
+  // 双选择器同款惯例）——纯样式 class 是隐式契约，MessageStream 样式重构改名即静默失去封顶
+  const stream = document.querySelector<HTMLElement>('[data-testid="message-stream"], .message-stream')
   if (stream) {
     const bottom = root.getBoundingClientRect().bottom
     const top = stream.getBoundingClientRect().top
@@ -324,7 +285,14 @@ function measure(): void {
   }
 }
 
-watch([rowIdsSignature, expanded], () => { void measure() }, { flush: 'post' })
+/** 内容签名（ids + 各 preview 长度/换行数）：delivery.edit 原位替换同 id 换 preview、ids
+    不变——卡高测量若只随 ids 触发，编辑后卡高与 --qb-banner-height/--qb-viewport-height
+    过期（line-clamp-2 仍限误差于一行内，但收起 reserve/展开封顶按旧高计算） */
+const contentSignature = computed(() => props.rows
+  .map((r) => `${r.clientUuid}:${r.preview.length}:${r.preview.split('\n').length}`)
+  .join('\n'))
+
+watch([contentSignature, expanded], () => { void measure() }, { flush: 'post' })
 
 // ── 展开触发：pointer 进入（触屏除外）/ focus 捕获；document 级矩形校验负责退出 ──
 function onPointerEnter(event: PointerEvent): void {
@@ -377,8 +345,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', measure)
   document.removeEventListener('pointermove', onDocPointerMove)
   window.removeEventListener('blur', onWindowBlur)
-  exitTimers.forEach(clearTimeout)
-  exitTimers.clear()
 })
 
 // ── 状态 → 视觉映射（沿用 v6 语义：等待=info / 进行中=accent / 失败=danger） ──
