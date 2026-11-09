@@ -179,17 +179,33 @@ async function mountExpanded(segment: ProcessSegment): Promise<VueWrapper> {
 // ─── 三态翻转（事件驱动） ─────────────────────────────────────────
 
 describe('process-aggregate-block tri-state (event-driven)', () => {
-  it('进行中（turnWorking ∧ !followedByText）→ 双窗容器在场、摘要行不在场', () => {
+  it('进行中（turnWorking ∧ !followedByText）→ 摘要行 live 变体在场 + 双窗容器在场（2026-11-09 用户裁决：进行中同构可展开，摘要是展开入口）', () => {
     const wrapper = mountAgg(makeSegment([makeThinkingFlat('推理中')], { followedByText: false }), true);
     expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(false);
+    // 摘要行恒在场（展开交互的可见入口；live 变体 = 呼吸弧行首）
+    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="agg-summary-live-loader"]').exists()).toBe(true);
   });
 
-  it('回合工作态落下（turnWorking 翻 false）→ 收成摘要行（事件驱动，零 timer）', async () => {
+  it('进行中点击摘要行 → 双窗收起、平铺区展开（进行中同构可展开）', async () => {
+    const wrapper = mountAgg(makeSegment([makeThinkingFlat('推理中')], { followedByText: false }), true);
+    await wrapper.find('[data-testid="agg-summary-row"]').trigger('click');
+    expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="agg-expanded"]').exists()).toBe(true);
+    // 再点收起 → 回双窗
+    await wrapper.find('[data-testid="agg-summary-row"]').trigger('click');
+    expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="agg-expanded"]').exists()).toBe(false);
+  });
+
+  it('回合工作态落下（turnWorking 翻 false）→ live 变体切完成形态（呼吸弧摘除、双窗收成摘要行；展开态 ref 共用不跳变）', async () => {
     const wrapper = mountAgg(makeSegment([makeThinkingFlat('推理')], { followedByText: false }), true);
-    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="agg-summary-live-loader"]').exists()).toBe(true);
     await wrapper.setProps({ turnWorking: false });
     expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(true);
+    // 完成形态：呼吸弧摘除（Layers 静态字形回归）
+    expect(wrapper.find('[data-testid="agg-summary-live-loader"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(false);
   });
 

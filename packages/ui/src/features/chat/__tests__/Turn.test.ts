@@ -216,10 +216,11 @@ describe('chat-turn-fold-redesign: 折叠三态（折叠仅末位正文 / 展开
       isLastTurn: true,
     })
     const blocks = traceTopBlocks(wrapper)
-    // fallback makeTurn 无后继 text（段开放）→ 双窗进行中；本 fixture 段后无 text，同型
+    // fallback makeTurn 无后继 text（段开放）→ 摘要行 live 变体 + 双窗进行中
+    //（2026-11-09 用户裁决：进行中同构可展开，摘要是恒在场的展开入口）
     expect(blocks.length).toBe(1)
     expect(blocks[0].find('[data-testid="agg-live-windows"]').exists()).toBe(true)
-    expect(blocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(false)
+    expect(blocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
     // 思考窗 + 聚合窗双窗在场（段内已有思考与工具步骤）
     expect(blocks[0].find('[data-testid="agg-think-window"]').exists()).toBe(true)
     expect(blocks[0].find('[data-testid="agg-window"]').exists()).toBe(true)
@@ -785,14 +786,16 @@ describe('聚合块接线: 键稳定性两方向 + v-memo 完整性', () => {
     const agg1 = wrapper.find('[data-testid="process-aggregate"]')
     const node1 = agg1.element
     expect(agg1.find('[data-testid="agg-live-windows"]').exists()).toBe(true)
-    expect(agg1.find('[data-testid="agg-summary-row"]').exists()).toBe(false)
+    // 摘要行恒在场（live 变体，展开入口；2026-11-09 用户裁决）
+    expect(agg1.find('[data-testid="agg-summary-row"]').exists()).toBe(true)
     // 收尾正文到达：段被 text 封闭（followedByText 翻转），段首位置不变 → 键不变 → 不 remount
     await wrapper.setProps({ turn: makeBashChainTurn({ completed: 3, running: true }) })
     const agg2 = wrapper.find('[data-testid="process-aggregate"]')
     expect(agg2.element).toBe(node1)
-    // 同实例原地三态翻转：双窗 → 摘要行（RL2 事件驱动）
+    // 同实例原地三态翻转：双窗收起 → 完成态摘要行（live 呼吸弧摘除，RL2 事件驱动）
     expect(agg2.find('[data-testid="agg-live-windows"]').exists()).toBe(false)
     expect(agg2.find('[data-testid="agg-summary-row"]').exists()).toBe(true)
+    expect(agg2.find('[data-testid="agg-summary-live-loader"]').exists()).toBe(false)
   })
 
   it('新段出现：既有聚合块键稳定（前段节点不变），新段以新键追加单元', async () => {

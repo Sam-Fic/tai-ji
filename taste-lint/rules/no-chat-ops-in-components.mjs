@@ -46,6 +46,7 @@ const OPS_FIELDS = new Set([
   'sealSubagentStream', 'markSubagentStreamDegraded', 'clearSubagentChunkState', 'clearSubagentChunkStateForSession',
   'applySubagentEntries', 'appendUser', 'bumpSubmitSeq',
   'applyMessageEvent', 'finalizeSession',
+  'sealStreamingAssistants',
   'finalizeAllStreaming', 'resetTransientStates', 'addPendingSend',
   'clearPendingSend', 'markSessionError',
   'setOccupancy', 'clearOccupancy', 'setCompactingReason',

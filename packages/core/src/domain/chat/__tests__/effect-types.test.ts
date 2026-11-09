@@ -223,6 +223,7 @@ describe("effects-delivery-receipt", () => {
       markChangeSetsSuperseded: vi.fn(),
       finalizeSession: vi.fn(),
       clearPendingSend: vi.fn(),
+      sealStreamingAssistants: vi.fn(),
       appendUser: vi.fn(),
       applyEntryFrame: vi.fn(),
       getInflight: (sid: string) => inflight.get(sid) ?? 0,
@@ -362,6 +363,47 @@ describe("effects-delivery-receipt", () => {
       expect(ctx.applyEntryFrame).toHaveBeenCalledTimes(1)
       // 不走 appendUser（那是 ① 回执 morph 段的专用通道）
       expect(ctx.appendUser).not.toHaveBeenCalled()
+    })
+
+    it('AC-seal: user 帧到达即封口流内 streaming assistant（steer-turn-seal——旧 turn 随送达事实收尾，三条入流子路径共用边界）', () => {
+      // 带标记回执形态（① 命中）——封口在子路径分派前，任何形态（含 AC7 无标记外来直发）都应触发
+      replaceDeliveryProjection(SID, [entry()])
+      captureMorphSegments(SID, CLIENT_UUID, [{ type: 'text', text: '排队消息' }])
+      const ctx = makeCtx()
+      ctx.addInflight(1)
+
+      dispatchMessageEvent(ctx, SID, userEndFrame(SID, '排队消息', UUID))
+
+      expect(ctx.sealStreamingAssistants).toHaveBeenCalledTimes(1)
+      expect(ctx.sealStreamingAssistants).toHaveBeenCalledWith(SID)
+    })
+
+    it('AC-seal-b: 无标记外来直发形态（③ 降级入流）同样封口（同一 user entry 写入事实）', () => {
+      const ctx = makeCtx()
+
+      dispatchMessageEvent(ctx, SID, userEndFrame(SID, '[画布事件通知] 用户选定方案'))
+
+      expect(ctx.sealStreamingAssistants).toHaveBeenCalledWith(SID)
+    })
+
+    it('AC-seal-c: assistant role 帧不封口（边界只锚 user entry 写入）', () => {
+      const ctx = makeCtx()
+
+      dispatchMessageEvent(ctx, SID, {
+        type: 'message.message_end',
+        payload: {
+          sessionId: SID,
+          messageId: 'a-pi-1',
+          entry: {
+            type: 'message',
+            parentId: null,
+            timestamp: new Date(0).toISOString(),
+            message: { role: 'assistant', content: [{ type: 'text', text: '输出' }], timestamp: 0 },
+          },
+        },
+      } as ServerMessage)
+
+      expect(ctx.sealStreamingAssistants).not.toHaveBeenCalled()
     })
   })
 
@@ -622,6 +664,7 @@ describe("user-delivery", () => {
       markChangeSetsSuperseded: vi.fn(),
       finalizeSession: vi.fn(),
       clearPendingSend: vi.fn(),
+      sealStreamingAssistants: vi.fn(),
       appendUser: vi.fn(),
       applyEntryFrame: vi.fn(),
       getInflight: (sid: string) => inflight.get(sid) ?? 0,

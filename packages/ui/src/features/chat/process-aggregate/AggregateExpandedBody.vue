@@ -3,6 +3,11 @@
   一维平铺——思考行（SegmentThinkingRow，复用 ThinkingRow 行内展开 240px）与工具组
   （SegmentToolGroup，组头纯标题 + 成员全铺开）/ 独立工具行（SegmentToolRow）交替，
   无二次折叠（GL3）。渲染归属以 core units 投影为准，本组件零拼接。
+  [live 态（2026-11-09 用户裁决：进行中同构可展开）] 进行中段展开时本组件同样挂载：
+  units 对新成员增量响应式（core 切段重建），running 工具行自带进行中形态
+  （SegmentToolRow 呼吸弧 loader）；live 透传给思考行启用流式形态。进行中展开区
+  实时增长——平铺区无自动跟底（用户显式展开即主动观察位，滚动主导权在用户，与双窗
+  的跟底范式分工），新行追加由对话流层贴底跟随承载。
   单步详情抽屉接线（U4）：成员行 open-detail 事件在本组件本地消费（detailTool + detailOpen
   本地 ref，D6 同款瞬态不落 store），挂载 AggregateToolDetailDrawer（壳 = primitives/dialog
   ToolDetailDrawer，自有开合态）——事件链终结于此，不向容器冒泡。
@@ -28,6 +33,7 @@
         v-if="unit.kind === 'member' && unit.block.block.kind === 'thinking'"
         :thinking="unit.block.block.ref as ThinkingBlock"
         :session-id="sessionId"
+        :live="live"
       />
       <SegmentToolRow
         v-else-if="unit.kind === 'member'"
@@ -64,6 +70,8 @@ const props = defineProps<{
   segment: ProcessSegment
   /** 所属 session（透传思考行 MarkdownRenderer 与抽屉富渲染） */
   sessionId?: string | null
+  /** 段进行中（isLive 透传）：思考行按自身时间戳启用流式形态，缺省完成态形态 */
+  live?: boolean
 }>()
 
 /** 行错峰延迟常量（demo 实装值形态）：首行 30ms 起、逐行 +10ms、封顶 160ms */
