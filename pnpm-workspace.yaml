@@ -1,24 +1,22 @@
 packages:
-  - 'packages/*'
-  - 'apps/*'
-  - 'extensions/taiji/*'
-  - 'extensions/universal/*'
-  - 'extensions/shared/*'
+  - packages/*
+  - apps/*
+  - extensions/taiji/*
+  - extensions/universal/*
+  - extensions/shared/*
 
-# pnpm 10：patchedDependencies 的规范家（package.json 的 pnpm 字段被 pnpm>=10 忽略，
-# 写那里会导致下次 install 洗掉补丁）。裸键 = 应用到所有 vitest 版本实例。
-# vitest 全绿假红修复（两族根因签名：#11153 拆卸竞态族 + 堆栈格式化器族），退役条件按根因分判，
-# 权威登记见 docs/todo/vitest-teardown-race-vendor-patch.md。
-patchedDependencies:
-  vitest: patches/vitest.patch
-
-overrides:
-  '@earendil-works/pi-coding-agent': 1.0.0
-  '@earendil-works/pi-ai': 1.0.0
-  '@earendil-works/pi-tui': 1.0.0
-  '@earendil-works/pi-agent-core': 1.0.0
 onlyBuiltDependencies:
   - esbuild
   - electron
   - node-pty
   - vue-demi
+
+overrides:
+  '@earendil-works/pi-agent-core': 1.0.0
+  '@earendil-works/pi-ai': 1.0.0
+  '@earendil-works/pi-coding-agent': 1.0.0
+  '@earendil-works/pi-tui': 1.0.0
+
+patchedDependencies:
+  '@vitest/utils': patches/@vitest__utils.patch
+  vitest: patches/vitest.patch
