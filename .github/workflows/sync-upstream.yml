@@ -20,7 +20,7 @@ name: Sync upstream main
 
 on:
   schedule:
-    - cron: '*/30 * * * *' # 每 30 分钟检查上游 main
+    - cron: '0 */6 * * *' # 每 6 小时检查上游 main（与 build-deb 同节拍）
   workflow_dispatch:
     inputs:
       force:
