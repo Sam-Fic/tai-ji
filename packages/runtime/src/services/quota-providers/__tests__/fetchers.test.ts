@@ -962,6 +962,60 @@ describe('fetchQuotaJson 共享骨架（[u10/G4] 非 2xx body 释放）', () => 
     expect(cancelSpy).not.toHaveBeenCalled()
   })
 })
+
+// ── Set-Cookie 透传（对齐 declarative-fetch fetchPrimary 语义）：骨架拿到响应即
+// 捕获 Set-Cookie，成功 / 非 2xx / parse 分支均挂载，无则不物化空键——cookie 滑动
+// 续期载体，回写归 quota-service。──
+
+describe('fetchQuotaJson 共享骨架 — Set-Cookie 透传', () => {
+  /** 构造带 Set-Cookie 行的 Response（append 逐条添加，getSetCookie 逐条返回）。 */
+  function respWithCookies(body: string | null, setCookieLines: string[], status = 200): Response {
+    const headers = new Headers({ 'content-type': 'application/json' })
+    for (const line of setCookieLines) headers.append('set-cookie', line)
+    return new Response(body, { status, headers })
+  }
+
+  it('ok 分支：响应带多行 Set-Cookie → setCookies 挂载原始行（含属性段）', async () => {
+    const { fetchQuotaJson, isRecord } = await import('../types.js')
+    const resp = respWithCookies('{"a":1}', ['sid=new; Path=/; HttpOnly', 'csrf=tok'])
+
+    const out = await fetchQuotaJson('test', async () => resp, isRecord)
+
+    expect(out).toEqual({
+      ok: true,
+      data: { a: 1 },
+      setCookies: ['sid=new; Path=/; HttpOnly', 'csrf=tok'],
+    })
+  })
+
+  it('ok 分支：响应无 Set-Cookie → 不物化 setCookies 空键', async () => {
+    const { fetchQuotaJson, isRecord } = await import('../types.js')
+    const resp = respWithCookies('{"a":1}', [])
+
+    const out = await fetchQuotaJson('test', async () => resp, isRecord)
+
+    expect(out).toEqual({ ok: true, data: { a: 1 } })
+    expect('setCookies' in out).toBe(false)
+  })
+
+  it('非 2xx 分支：3xx 带 Set-Cookie → reason 归类照常 + setCookies 挂载（会话轮换常伴随出现）', async () => {
+    const { fetchQuotaJson, isRecord } = await import('../types.js')
+    const resp = respWithCookies(null, ['sid=refreshed; Path=/'], 302)
+
+    const out = await fetchQuotaJson('test', async () => resp, isRecord)
+
+    expect(out).toEqual({ ok: false, reason: 'unauthorized', setCookies: ['sid=refreshed; Path=/'] })
+  })
+
+  it('parse 分支：非法 JSON 带 Set-Cookie → 同样挂载', async () => {
+    const { fetchQuotaJson, isRecord } = await import('../types.js')
+    const resp = respWithCookies('<html>', ['sid=x'])
+
+    const out = await fetchQuotaJson('test', async () => resp, isRecord)
+
+    expect(out).toEqual({ ok: false, reason: 'parse', setCookies: ['sid=x'] })
+  })
+})
 })
 
 describe('opencode', () => {

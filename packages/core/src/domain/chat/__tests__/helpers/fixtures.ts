@@ -42,6 +42,8 @@ export function makeCtx(initial: Message[] = [], sid = 's-test'): MessageEffectC
     markChangeSetsSuperseded: vi.fn(),
     finalizeSession: vi.fn(),
     clearPendingSend: vi.fn(),
+    // [steer-turn-seal] user 边界封口（message_end user 分支消费；mock 断言调用即可）
+    sealStreamingAssistants: vi.fn(),
     appendUser: vi.fn(),
     // w21：entry 载体帧喂 reducer 的接入点（store.applyEntryFrame 注入）
     applyEntryFrame: vi.fn(),

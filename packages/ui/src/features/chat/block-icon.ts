@@ -110,8 +110,11 @@ export const BLOCK_ICON_LUCIDE: Record<Exclude<BlockIconKind, 'running'>, Compon
 /**
  * running 态呼吸弧 loader SVG（ui-optimize-unified 决策 11 / N14）。
  * [2026-10 trace 块动效退役] trace 块行头的 running 态已改用 RunningBlockIcon 动效组件
- * （每类活动专属动效，字形保留 + accent 动效元素）；本常量仅存 TurnRail / BashOutputBlock
- * 两个非块头消费点（rail 位置/通知位不与块动效同屏争抢），不再新增消费点。
+ * （每类活动专属动效，字形保留 + accent 动效元素），块头位置不消费本常量。
+ * 本常量是呼吸弧 loader 的唯一副本（SSOT），消费点一律 v-html 引用本常量、禁止手抄
+ * 同构 SVG 副本；现行非块头消费点 = TurnRail / BashOutputBlock / MarkdownRenderer /
+ * TurnMeta / process-aggregate/AggregateSummaryRow 五处（rail 位置/通知位/摘要行行首
+ * 不与块动效同屏争抢）。
  * 浅色轨道整圈 circle r=10 opacity 0.16 + accent 弧段 circle r=10 pathLength=100，
  * viewBox 0 0 24 24，stroke currentColor stroke-width 1.7 / linecap round / linejoin round。
  * 颜色唯一 accent（消费方 text-accent 继承 currentColor），不加发光与缩放脉冲。
