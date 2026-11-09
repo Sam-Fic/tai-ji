@@ -452,10 +452,9 @@ describe("mock-domains", () => {
     it('空签名同构 stub：builtin/refresh/checkEnv/oauth/discover/detectSources', async () => {
       expect(await config.listBuiltinProviders()).toEqual([])
       expect(await config.refreshProviderCatalogs()).toEqual({ refreshed: [], failed: [], corrupt: [] })
-      // W3c/W1 新增 config.*：mock 无网络/落盘层，签名同构 ack（presets 返编译期基线，
-      // 与 runtime listQuotaPresets() 的「远程 ?? 基线」同口径——mock 层额度类型下拉非空）
+      // W3c quota presets：mock 无网络层，返编译期基线（与 runtime listQuotaPresets() 的
+      // 「远程 ?? 基线」同口径——mock 层额度类型下拉非空）
       expect(await config.listQuotaPresets()).toEqual(QUOTA_PRESETS)
-      await expect(config.setProviderCatalogWatch(true)).resolves.toBeUndefined()
       expect(await config.checkEnvVars(['PATH'])).toEqual({ PATH: true })
       expect(await config.oauthLogin('p')).toMatchObject({ started: false })
       expect(await config.oauthCancel('p')).toEqual({ cancelled: false })

@@ -88,6 +88,18 @@ describe('CodingPlanSection cookie 自动续期入口', () => {
     await wrapper.vm.$nextTick()
     expect(wrapper.find('[data-testid="quota-cookie-refresh-status"]').text()).toContain('login timeout')
   })
+
+  it('result=ok 且 succeededAt 有值 → 成功文案后跟完成时刻（跨重查保留的成功态）', async () => {
+    const { wrapper, module } = mountSection()
+    module.view.value.cookieRefresh.available = true
+    module.view.value.cookieRefresh.result = 'ok'
+    // 完成时刻经 formatAbsoluteTime（与「上次成功查询」同款 toLocaleString 展示）
+    const at = new Date(2026, 10, 8, 21, 5).getTime()
+    module.view.value.cookieRefresh.succeededAt = at
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="quota-cookie-refresh-status"]').text())
+      .toContain(`settings.providerEdit.quotaCookieAutoRefreshOk · ${new Date(at).toLocaleString()}`)
+  })
 })
 
 describe('CodingPlanSection 用户维度参数区（2026-10 泛化）', () => {

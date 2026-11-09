@@ -49,6 +49,7 @@
     ],
     "shared": [
       "packages/shared/src/subagent.ts",
+      "packages/shared/src/workflow-dag.ts",
       "packages/shared/src/workflow.ts",
       "packages/shared/src/virtual-session-id.ts",
       "packages/shared/src/vid-rpc-gate.ts"

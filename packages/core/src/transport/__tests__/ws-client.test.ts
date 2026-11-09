@@ -539,3 +539,74 @@ describe("ws-client.single-flight", () => {
     })
   })
 });
+
+// ======== 来源：ws-client.onerror（连接错误路径：warn 降级日志 + gen guard）========
+// 覆盖 1769fa7c7 的降级裁决（console.error → console.warn：error 事件零信息，紧随的
+// onclose 日志带 code 承载归因）与 onerror 的旧代残余回调 guard。
+describe("ws-client.onerror", () => {
+  // ── 测试平台注入（前述分节同款 fake websocket factory）──
+  let fakes: FakeWebSocket[]
+
+  function installTestPlatform(): void {
+    fakes = []
+    providePlatform({
+      kind: 'mock',
+      storage: {
+        get: async () => null,
+        set: async () => {},
+        remove: async () => {},
+      },
+      webSocket: {
+        create: () => {
+          const f = createFakeWebSocket()
+          fakes.push(f)
+          return f
+        },
+      },
+    })
+  }
+
+  function latestFake(): FakeWebSocket {
+    expect(fakes.length).toBeGreaterThan(0)
+    return fakes[fakes.length - 1]
+  }
+
+  beforeEach(() => {
+    installTestPlatform()
+    disconnect() // 重置模块级单例状态（上轮残留连接）
+  })
+  afterEach(() => {
+    disconnect()
+    vi.restoreAllMocks()
+  })
+
+  it('连接错误路径：降级 warn 日志（不落 error 级）并关闭当前 socket', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    connect('ws://test', { auth: 'skip' })
+    latestFake().triggerOpen()
+    latestFake().triggerError()
+
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(String(warnSpy.mock.calls[0]?.[0])).toMatch(/\[ws\] connection error/)
+    expect(errorSpy).not.toHaveBeenCalled() // 降级判别面：error 级三重噪音不再出现
+    expect(latestFake().closeCalls).toBe(1) // onerror 处置 = 关闭当前 socket（onclose 随后落 failed 终态）
+  })
+
+  it('旧代残余 onerror：新连接建立后旧 socket 的 error 回调被 gen guard 拦下（不 warn、不误关新 socket）', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    connect('ws://test', { auth: 'skip' })
+    const oldFake = latestFake()
+    oldFake.triggerOpen()
+    oldFake.triggerClose() // 异常关闭 → failed；旧 socket 已 CLOSED（onerror 闭包仍持旧 gen）
+    connect('ws://test', { auth: 'skip' }) // 旧 socket 已死透 → 放行建 gen2 新连接
+    expect(fakes.length).toBe(2)
+    const warnCountBeforeGen2 = warnSpy.mock.calls.length
+
+    oldFake.triggerError()
+    expect(warnSpy).toHaveBeenCalledTimes(warnCountBeforeGen2) // gen guard 早退：无降级日志
+    expect(latestFake().closeCalls).toBe(0) // 不误关 gen2 新 socket
+  })
+});

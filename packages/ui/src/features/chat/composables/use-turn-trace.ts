@@ -5,16 +5,17 @@
  * composable 内接线，渲染层零解析 AX7）：
  * - flatBlocks：拍平（flattenTurnBlocks，跨 assistant 连续 flatIndex）。
  * - segments：切段（splitProcessSegments，core 单点算好段边界 / 组分组 / 计数口径）。
- * - traceUnits：两分支汇合的单元列表（D2 正文原生展示 + D5 折叠形态，见 traceUnits 注释）。
+ * - traceUnits：三态矩阵汇合的单元列表（工作态全显 / 非工作折叠仅末位正文 / 非工作展开
+ *   全显，见 traceUnits 注释）。
  *   旧四层折叠编排（窗口切片 / 并入计数摘要行 / run 组 / 接管态 takeover）的 UI 消费路径
  *   随聚合块形态退役（D1/D9）；core 既有三符号语义不动，其去留按死代码纪律单独处置。
  * - isActionsAnchor / unitKey / unitMemoDeps / textUnitProps：单层 v-for 的锚单元判定、
  *   两型键（正文 flatIndex / 聚合段 id，键空间不相交）、v-memo deps 二型、TextRow props
  *   收敛（v-memo 与 v-for 同元素挂载，正文/聚合两分支收敛在同一 wrapper 内）。
  *
- * showTrace 不再由本 composable 暴露：D5 裁决「回合级手动展开与折叠态同形态（末位正文 +
- * 全部摘要行）」后，非工作 turn 的渲染形态只有一种，回合级展开开关不再改变 trace 区内容
- * （isExpanded 仍被 TurnMeta chevron / TurnRail 指示消费，经 deps 直读）。
+ * showTrace 已退役（trace 容器恒渲染）；非工作 turn 的折叠/展开两形态经 turnExpanded 入参
+ * 区分（chat-turn-fold-redesign：折叠 = 仅末位正文，展开 = 全部正文 + 全部聚合块摘要行），
+ * isExpanded 的 store 侧消费（TurnMeta chevron / TurnRail 指示）不经本 composable。
  */
 import { computed } from 'vue'
 import { flattenTurnBlocks, splitProcessSegments } from '@taiji/core/domain/chat'
@@ -49,9 +50,9 @@ export type TraceUnit =
  * 拍平块序列 + 段列表 → 单元列表（正文与聚合块按真实发生顺序交错）。
  *
  * 走查单 pass：text 块直接成正文单元；过程块遇到「段首成员」时 emit 其所属段（段成员
- * 连续、段首即入列位置，后续成员跳过）。folded=true 时正文只保留末位一条并殿后（其余
- * 正文位置被段摘要顶替），聚合块按原位顺序排列——与展开态的元素位置连续（工作→落成
- * 折叠切换不跳位），折叠态阅读序 = 段摘要按真实发生序 → 末位正文。
+ * 连续、段首即入列位置，后续成员跳过）。folded=true 时只产末位正文单元（用户裁决
+ * chat-turn-fold-redesign：折叠态只展示最后一段 text，中间正文与聚合块全部不渲染——
+ * 聚合块的 push 与展开态共用同一行，折叠态以 !folded 门控跳过，不无条件删）。
  */
 function buildTraceUnits(blocks: FlatBlock[], segs: ProcessSegment[], folded: boolean): TraceUnit[] {
   const segmentHead = new Map<number, ProcessSegment>()
@@ -60,13 +61,13 @@ function buildTraceUnits(blocks: FlatBlock[], segs: ProcessSegment[], folded: bo
   let lastText: FlatBlock | undefined
   for (const fb of blocks) {
     if (fb.block.kind === 'text') {
-      // 正文原生展示（D2）：展开态每条正文都直接渲染；折叠态收敛到末位一条（D5）
+      // 正文原生展示（D2）：展开态每条正文都直接渲染；折叠态收敛到末位一条、循环后殿后
       if (!folded) units.push({ kind: 'text', block: fb })
       lastText = fb
       continue
     }
     const seg = segmentHead.get(fb.flatIndex)
-    if (seg) units.push({ kind: 'aggregate', segment: seg })
+    if (seg && !folded) units.push({ kind: 'aggregate', segment: seg })
   }
   if (folded && lastText) units.push({ kind: 'text', block: lastText })
   return units
@@ -81,11 +82,14 @@ function buildTraceUnits(blocks: FlatBlock[], segs: ProcessSegment[], folded: bo
  * @param turnStreaming 回合级流式 getter（Turn.vue isStreaming）：正文入场判据的「真实到达」
  *   信号（钉挂集合只含 isStreaming 回合，流式回合不卸载、挂载即首插；不流式挂载 = 重挂/
  *   历史，无入场——D10 一次性语义，见 TextUnitProps.entrance 注释）
+ * @param turnExpanded 回合展开态 getter（deps.isExpanded(turnStableId(turn))，store 派生）：
+ *   仅作用于非工作态折叠/展开切换，工作态不受其影响
  */
 export function useTurnTrace(
   turn: () => MessageTurn,
   isWorkingTurn: () => boolean,
   turnStreaming: () => boolean,
+  turnExpanded: () => boolean,
 ) {
   /**
    * trace 拍平 + 切段（chat-flow-process-aggregate U1 契约）。
@@ -98,17 +102,17 @@ export function useTurnTrace(
   const segments = computed<ProcessSegment[]>(() => splitProcessSegments(flatBlocks.value))
 
   /**
-   * trace 区单元列表（两分支形态）：
-   * - 工作展开态（isWorkingTurn）：全部正文 + 全部聚合块（D2「工作态不再只保留末位正文」；
-   *   聚合块三态由组件按 turnWorking + followedByText 自判——段后无 text 的开放段双窗进行中，
-   *   已封闭段摘要行）。
-   * - 折叠态 / 完成态 / 历史手动展开（!isWorkingTurn）：D5 同形态——全部聚合块摘要行（非工作
-   *   态组件 isLive=false → 摘要行，每段一行保留过程存在信号：段数 / 类型 / 失败）+ 末位正文。
-   *   回合级手动展开（isExpanded 分区）不改变本形态（D5「展开的语义是用户显式意图，
-   *   不改变默认形态」——过程细节经每段摘要行的展开入口按段查看）。
+   * trace 区单元列表（三态矩阵，chat-turn-fold-redesign §1）：
+   * - 工作态（isWorkingTurn）：全部正文 + 全部聚合块（聚合块三态由组件按 turnWorking +
+   *   followedByText 自判——段后无 text 的开放段双窗进行中，已封闭段摘要行），不受折叠开关影响。
+   * - 非工作态折叠（默认，!isWorkingTurn ∧ !turnExpanded）：仅末位一条正文；中间全部正文
+   *   与全部聚合块不渲染（用户裁决「折叠只展示最后一段 text」）；纯工具无正文 turn 的
+   *   trace 区为空。
+   * - 非工作态展开（!isWorkingTurn ∧ turnExpanded）：全部正文 + 全部聚合块摘要行 + 末位
+   *   正文（真实时序交错）；聚合块内部平铺由组件本地展开态控制（D6 不落 store）。
    */
   const traceUnits = computed<TraceUnit[]>(() => {
-    const folded = !isWorkingTurn()
+    const folded = !isWorkingTurn() && !turnExpanded()
     return buildTraceUnits(flatBlocks.value, segments.value, folded)
   })
 
@@ -118,7 +122,8 @@ export function useTurnTrace(
    * 撑出空洞，2026-10-17 用户裁决）。操作栏（TurnSummary）经 #turn-actions 插槽只挂在该正文
    * 单元上：悬停区收窄到 text 块本身，悬浮位随块定位。turn 以聚合块结尾（无末尾正文）或无
    * text 块时操作栏无挂载点、不渲染——复制/fork/handoff 服务于正文回复，无正文可悬停属预期
-   * 形态。折叠态末单元恒为末位正文 → 锚恒在（与旧折叠形态一致）。
+   * 形态。折叠态唯一单元是末位正文 → 锚恒在；展开态按真实时序交错，以聚合块结尾时无锚
+   * （与工作态同构，不改锚判定——见 chat-turn-fold-redesign §3.1）。
    */
   const actionsAnchorFlatIndex = computed<number | null>(() => {
     const units = traceUnits.value

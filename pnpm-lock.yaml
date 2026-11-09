@@ -11,8 +11,11 @@ overrides:
   '@earendil-works/pi-agent-core': 1.0.0
 
 patchedDependencies:
+  '@vitest/utils':
+    hash: 3fb82dab743b430dfc69b417beb133d20f47eaf7d3159fb70b68fd60ed657079
+    path: patches/@vitest__utils.patch
   vitest:
-    hash: 3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a
+    hash: 16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf
     path: patches/vitest.patch
 
 importers:
@@ -115,7 +118,7 @@ importers:
         version: 8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0)
       vitest:
         specifier: ^4.1.6
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/shared/delivery-port:
     dependencies:
@@ -143,7 +146,7 @@ importers:
         version: link:../../../packages/session-delivery
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/shared/exec-skills:
     dependencies:
@@ -159,7 +162,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/shared/ext-guards:
     devDependencies:
@@ -168,7 +171,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/shared/extension-logger:
     dependencies:
@@ -181,7 +184,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/shared/file-lock:
     devDependencies:
@@ -196,7 +199,7 @@ importers:
         version: 0.28.2
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/shared/llm-shared:
     dependencies:
@@ -221,7 +224,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/shared/session-path:
     devDependencies:
@@ -230,7 +233,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/taiji/canvas:
     dependencies:
@@ -267,7 +270,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/taiji/host-internals:
     dependencies:
@@ -286,7 +289,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/taiji/system-prompt:
     dependencies:
@@ -305,7 +308,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/taiji/system-prompt-trace:
     dependencies:
@@ -324,7 +327,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/universal/ask-user:
     dependencies:
@@ -358,7 +361,7 @@ importers:
         version: 1.3.27
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/universal/base-tool-enhance:
     dependencies:
@@ -401,7 +404,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/universal/cache-probe:
     dependencies:
@@ -417,7 +420,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/universal/goal:
     dependencies:
@@ -460,7 +463,7 @@ importers:
         version: 4.9.0
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/universal/network-proxy:
     dependencies:
@@ -491,7 +494,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/universal/pending-notifications:
     dependencies:
@@ -519,7 +522,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/universal/permission:
     dependencies:
@@ -556,7 +559,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/universal/plan:
     dependencies:
@@ -599,7 +602,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/universal/provider-aggregation:
     dependencies:
@@ -624,7 +627,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/universal/provider-live-sync:
     dependencies:
@@ -646,7 +649,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/universal/rename-session:
     dependencies:
@@ -680,7 +683,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/universal/retry-rules:
     dependencies:
@@ -708,7 +711,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/universal/scheduler:
     dependencies:
@@ -751,7 +754,7 @@ importers:
         version: 4.9.0
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/universal/session-manager:
     dependencies:
@@ -785,7 +788,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/universal/session-reader:
     dependencies:
@@ -825,7 +828,7 @@ importers:
         version: link:../../../packages/subagent-core
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/universal/smart-context:
     dependencies:
@@ -859,7 +862,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/universal/structured-output:
     dependencies:
@@ -893,7 +896,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/universal/subagent-workflow:
     dependencies:
@@ -951,7 +954,7 @@ importers:
         version: 4.1.2
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   extensions/universal/todo:
     dependencies:
@@ -982,7 +985,7 @@ importers:
         version: 4.1.9(vitest@4.1.9)
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   packages/core:
     dependencies:
@@ -1053,7 +1056,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.6
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   packages/mobile-renderer:
     dependencies:
@@ -1111,7 +1114,7 @@ importers:
         version: 8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@1.21.7)(tsx@4.23.0)(yaml@2.9.0)
       vitest:
         specifier: ^4.1.6
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@1.21.7)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@1.21.7)(tsx@4.23.0)(yaml@2.9.0))
       vue-tsc:
         specifier: ^2
         version: 2.2.12(typescript@5.9.3)
@@ -1132,7 +1135,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   packages/pi-subagent-cli:
     dependencies:
@@ -1160,7 +1163,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   packages/plugin-sdk:
     dependencies:
@@ -1234,8 +1237,8 @@ importers:
         specifier: ^3
         version: 3.6.0
       virtua:
-        specifier: ^0.50.0
-        version: 0.50.0(vue@3.5.39(typescript@5.9.3))
+        specifier: ^0.54.2
+        version: 0.54.2(vue@3.5.39(typescript@5.9.3))
       vue:
         specifier: ^3.5
         version: 3.5.39(typescript@5.9.3)
@@ -1284,7 +1287,7 @@ importers:
         version: 8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0)
       vitest:
         specifier: ^4.1.6
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
       vue-tsc:
         specifier: ^2
         version: 2.2.12(typescript@5.9.3)
@@ -1384,7 +1387,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.6
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@22.20.0)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@22.20.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@22.20.0)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@22.20.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
       vue:
         specifier: ^3.5
         version: 3.5.39(typescript@5.9.3)
@@ -1402,7 +1405,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.6
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   packages/session-delivery:
     devDependencies:
@@ -1417,7 +1420,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.6
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   packages/shared:
     dependencies:
@@ -1448,7 +1451,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.6
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   packages/subagent-core:
     dependencies:
@@ -1497,7 +1500,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   packages/subagent-engine-sdk:
     dependencies:
@@ -1519,7 +1522,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   packages/ui:
     dependencies:
@@ -1607,7 +1610,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.6
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
       vue-tsc:
         specifier: ^2
         version: 2.2.12(typescript@5.9.3)
@@ -1632,7 +1635,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.6
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   packages/zcode-subagent-cli:
     dependencies:
@@ -1654,7 +1657,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.8
-        version: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+        version: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
 packages:
 
@@ -6203,8 +6206,8 @@ packages:
   vfile@6.0.3:
     resolution: {integrity: sha512-KzIbH/9tXat2u30jf+smMwFCsno4wHVdNmzFyL+T/L3UGqqk6JKfVqOFOZEpZSHADH1k40ab6NUIXZq422ov3Q==}
 
-  virtua@0.50.0:
-    resolution: {integrity: sha512-W4lBvBqCIdNORXAVHHQbN+raBnViVZwKLk8BFhUAOOv8RashH/SU5DUSOk+RsS4UvqdZOaAylWC4pncw3JSaMQ==}
+  virtua@0.54.2:
+    resolution: {integrity: sha512-lYCAxyXCGkhXVvuKv8a+LklZquy0E9dIObYcOUyo6nP4VSvLeiIsiz94mA3ZKYuM5egkke5RIi2nXi5OIATc7A==}
     peerDependencies:
       '@angular/common': '>=20.0.0'
       '@angular/core': '>=20.0.0'
@@ -7405,7 +7408,7 @@ snapshots:
   '@fast-check/vitest@0.4.1(vitest@4.1.9)':
     dependencies:
       fast-check: 4.9.0
-      vitest: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+      vitest: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   '@floating-ui/core@1.7.5':
     dependencies:
@@ -8198,7 +8201,7 @@ snapshots:
   '@vitest/coverage-v8@4.1.9(vitest@4.1.9)':
     dependencies:
       '@bcoe/v8-coverage': 1.0.2
-      '@vitest/utils': 4.1.9
+      '@vitest/utils': 4.1.9(patch_hash=3fb82dab743b430dfc69b417beb133d20f47eaf7d3159fb70b68fd60ed657079)
       ast-v8-to-istanbul: 1.0.4
       istanbul-lib-coverage: 3.2.2
       istanbul-lib-report: 3.0.1
@@ -8207,14 +8210,14 @@ snapshots:
       obug: 2.1.3
       std-env: 4.1.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+      vitest: 4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   '@vitest/expect@4.1.9':
     dependencies:
       '@standard-schema/spec': 1.1.0
       '@types/chai': 5.2.3
       '@vitest/spy': 4.1.9
-      '@vitest/utils': 4.1.9
+      '@vitest/utils': 4.1.9(patch_hash=3fb82dab743b430dfc69b417beb133d20f47eaf7d3159fb70b68fd60ed657079)
       chai: 6.2.2
       tinyrainbow: 3.1.0
 
@@ -8256,19 +8259,19 @@ snapshots:
 
   '@vitest/runner@4.1.9':
     dependencies:
-      '@vitest/utils': 4.1.9
+      '@vitest/utils': 4.1.9(patch_hash=3fb82dab743b430dfc69b417beb133d20f47eaf7d3159fb70b68fd60ed657079)
       pathe: 2.0.3
 
   '@vitest/snapshot@4.1.9':
     dependencies:
       '@vitest/pretty-format': 4.1.9
-      '@vitest/utils': 4.1.9
+      '@vitest/utils': 4.1.9(patch_hash=3fb82dab743b430dfc69b417beb133d20f47eaf7d3159fb70b68fd60ed657079)
       magic-string: 0.30.21
       pathe: 2.0.3
 
   '@vitest/spy@4.1.9': {}
 
-  '@vitest/utils@4.1.9':
+  '@vitest/utils@4.1.9(patch_hash=3fb82dab743b430dfc69b417beb133d20f47eaf7d3159fb70b68fd60ed657079)':
     dependencies:
       '@vitest/pretty-format': 4.1.9
       convert-source-map: 2.0.0
@@ -11412,7 +11415,7 @@ snapshots:
       '@types/unist': 3.0.3
       vfile-message: 4.0.3
 
-  virtua@0.50.0(vue@3.5.39(typescript@5.9.3)):
+  virtua@0.54.2(vue@3.5.39(typescript@5.9.3)):
     optionalDependencies:
       vue: 3.5.39(typescript@5.9.3)
 
@@ -11476,7 +11479,7 @@ snapshots:
       tsx: 4.23.0
       yaml: 2.9.0
 
-  vitest@4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@22.20.0)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@22.20.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0)):
+  vitest@4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@22.20.0)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@22.20.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0)):
     dependencies:
       '@vitest/expect': 4.1.9
       '@vitest/mocker': 4.1.9(vite@8.1.3(@types/node@22.20.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
@@ -11484,7 +11487,7 @@ snapshots:
       '@vitest/runner': 4.1.9
       '@vitest/snapshot': 4.1.9
       '@vitest/spy': 4.1.9
-      '@vitest/utils': 4.1.9
+      '@vitest/utils': 4.1.9(patch_hash=3fb82dab743b430dfc69b417beb133d20f47eaf7d3159fb70b68fd60ed657079)
       es-module-lexer: 2.3.0
       expect-type: 1.4.0
       magic-string: 0.30.21
@@ -11507,7 +11510,7 @@ snapshots:
     transitivePeerDependencies:
       - msw
 
-  vitest@4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0)):
+  vitest@4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0)):
     dependencies:
       '@vitest/expect': 4.1.9
       '@vitest/mocker': 4.1.9(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
@@ -11515,7 +11518,7 @@ snapshots:
       '@vitest/runner': 4.1.9
       '@vitest/snapshot': 4.1.9
       '@vitest/spy': 4.1.9
-      '@vitest/utils': 4.1.9
+      '@vitest/utils': 4.1.9(patch_hash=3fb82dab743b430dfc69b417beb133d20f47eaf7d3159fb70b68fd60ed657079)
       es-module-lexer: 2.3.0
       expect-type: 1.4.0
       magic-string: 0.30.21
@@ -11538,7 +11541,7 @@ snapshots:
     transitivePeerDependencies:
       - msw
 
-  vitest@4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@1.21.7)(tsx@4.23.0)(yaml@2.9.0)):
+  vitest@4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@1.21.7)(tsx@4.23.0)(yaml@2.9.0)):
     dependencies:
       '@vitest/expect': 4.1.9
       '@vitest/mocker': 4.1.9(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@1.21.7)(tsx@4.23.0)(yaml@2.9.0))
@@ -11546,7 +11549,7 @@ snapshots:
       '@vitest/runner': 4.1.9
       '@vitest/snapshot': 4.1.9
       '@vitest/spy': 4.1.9
-      '@vitest/utils': 4.1.9
+      '@vitest/utils': 4.1.9(patch_hash=3fb82dab743b430dfc69b417beb133d20f47eaf7d3159fb70b68fd60ed657079)
       es-module-lexer: 2.3.0
       expect-type: 1.4.0
       magic-string: 0.30.21
@@ -11569,7 +11572,7 @@ snapshots:
     transitivePeerDependencies:
       - msw
 
-  vitest@4.1.9(patch_hash=3d1f228bd37403bc919237ebc78943c879d7efae79806ab664cf4da3af13fc1a)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0)):
+  vitest@4.1.9(patch_hash=16be816248ed71e79219e3c54e541926a1b66ba17de669fcbf4d2a9816367dcf)(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0)):
     dependencies:
       '@vitest/expect': 4.1.9
       '@vitest/mocker': 4.1.9(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
@@ -11577,7 +11580,7 @@ snapshots:
       '@vitest/runner': 4.1.9
       '@vitest/snapshot': 4.1.9
       '@vitest/spy': 4.1.9
-      '@vitest/utils': 4.1.9
+      '@vitest/utils': 4.1.9(patch_hash=3fb82dab743b430dfc69b417beb133d20f47eaf7d3159fb70b68fd60ed657079)
       es-module-lexer: 2.3.0
       expect-type: 1.4.0
       magic-string: 0.30.21

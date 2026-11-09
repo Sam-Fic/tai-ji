@@ -508,9 +508,13 @@ export function connect(url: string, credentials: ConnectCredentials): void {
     inFlightSubscribes.clear()
   }
 
-  ws.onerror = (err) => {
+  ws.onerror = () => {
     if (gen !== wsGeneration) return // 旧 WS 残余回调，忽略（避免误 close 掉已被新 gen 取代的当前 socket）
-    console.error('[ws] error:', err)
+    // 连接失败路径的预期日志（warn 非 error）：error 事件本身零信息（Event 对象无
+    // code/reason），浏览器原生 console 已打「WebSocket connection ... failed」，
+    // 紧随的 onclose 日志带 code（1006 等）承载归因——error 级是同事实的三重噪音，
+    // runtime 不可用场景下刷红 devtools 却无可操作信息
+    console.warn('[ws] connection error (native failure in browser console; close event follows)')
     ws?.close()
   }
 }
