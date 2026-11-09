@@ -172,7 +172,12 @@ const thinkingDuration = computed(() => {
 
 /** 思考是否已完结：endTime 晚于 startTime（实时链路 thinking_end 效果器填充；重载链路
  *  双 undefined → false，但历史块 working 恒 false，扫光判定不受影响）。守卫与
- *  thinkingDuration 同构。 */
+ *  thinkingDuration 同构。
+ *  独立裁决（dmg-r1-3 收敛时核定）：本谓词不收编进 isThinkingStreaming（useProcessAggregate
+ *  唯一实现点）——流式谓词是「有 start 无 end」，完结谓词不是它的否定式，两处数据缺口
+ *  分叉：①双 undefined（重载链路）流式判 false / 完结也判 false（扫光跟随 working 活性
+ *  优先）；②end<=start（数据缺口）完结守卫判 false 保持扫光，流式谓词不涉及。强制共用会
+ *  把两种缺口语义折进一个函数，故分立两谓词、仅注释锚定同族关系。 */
 const thinkingEnded = computed(() => {
   const start = props.thinkingStart
   const end = props.thinkingEnd

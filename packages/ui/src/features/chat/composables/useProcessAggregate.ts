@@ -23,6 +23,18 @@ import type { ThinkingBlock } from '@taiji/shared'
 const BOTTOM_EPSILON = 1
 
 /**
+ * 思考块流式中谓词（chat 域唯一实现点）：有 start 无 end = 流式中。此前该判据在
+ * useAggregateWindows.thinkingStreaming 与 SegmentThinkingRow.working 两处逐构手抄、
+ * 靠「同判据」注释人工对齐（branch-review dmg-r1-3），收敛为本函数单点。
+ * 双时间戳缺失（持久化重载链路 thinking part 无时间戳数据源）→ false，历史块恒静态。
+ * 参数取 Pick 而非整块：调用方持有的形态不一时仍可消费（SegmentThinkingRow 传整块，
+ * 时间戳对 prop 形态可自行组对象——见 ThinkingRow.thinkingEnded 独立裁决注释）。
+ */
+export function isThinkingStreaming(block: Pick<ThinkingBlock, 'startTime' | 'endTime'>): boolean {
+  return typeof block.startTime === 'number' && typeof block.endTime !== 'number'
+}
+
+/**
  * 聚合块三态状态（容器级）。
  *
  * 入参：segment = 段数据（core 切段纯函数输出）；turnWorking = 回合工作态
@@ -105,13 +117,11 @@ export function useAggregateWindows(segment: Ref<ProcessSegment>) {
     const fb = latestThinking.value
     return fb ? ((fb.block.ref as ThinkingBlock).content ?? '') : ''
   })
-  /** 思考进行中（跟底强化 + 流式态判定）：有 start 无 end = 进行中（ThinkingRow 同判据；
-   *  重载链路双时间戳缺失 → false，历史段恒静态） */
+  /** 思考进行中（跟底强化 + 流式态判定）：isThinkingStreaming 唯一判据实现
+   *  （重载链路双时间戳缺失 → false，历史段恒静态） */
   const thinkingStreaming = computed(() => {
     const fb = latestThinking.value
-    if (!fb) return false
-    const th = fb.block.ref as ThinkingBlock
-    return typeof th.startTime === 'number' && typeof th.endTime !== 'number'
+    return fb !== undefined && isThinkingStreaming(fb.block.ref as ThinkingBlock)
   })
 
   /**

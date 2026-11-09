@@ -5,7 +5,7 @@
   「不改」清单：ThinkingRow 组件本体被聚合块内思考行复用），本组件只做字段适配与
   行级对齐。
   working 判定（2026-11-09 用户裁决：进行中同构可展开）：进行中段展开时流式中的思考
-  （有 start 无 end，useProcessAggregate.thinkingStreaming 同判据）传 working=true
+  （有 start 无 end，isThinkingStreaming 唯一实现点）传 working=true
   ——复用 ThinkingRow 流式形态（尾部行视口 + 双轴尾部追踪）；完成段与已完成思考块恒
   false（历史块双时间戳缺失也天然 false）。收起态流式思考仍在思考窗呈现，不受影响。
   对齐规格（spec §7.3 / V2 通过标准）：负 8px 外边距 + 8px 内边距与本组其余行
@@ -29,6 +29,7 @@
 import { computed } from 'vue'
 import type { ThinkingBlock } from '@taiji/shared'
 import ThinkingRow from '../ThinkingRow.vue'
+import { isThinkingStreaming } from '../composables/useProcessAggregate'
 
 const props = defineProps<{
   /** 段成员的 ThinkingBlock（FlatBlock.block.ref 的 thinking 形态） */
@@ -40,9 +41,7 @@ const props = defineProps<{
   live?: boolean
 }>()
 
-/** 本块流式中（有 start 无 end；与 useProcessAggregate.thinkingStreaming 同判据）。
- *  live=false（完成段）短路 false——判据只作流式形态开关，不独立于段状态。 */
-const working = computed(() => props.live === true
-  && typeof props.thinking.startTime === 'number'
-  && typeof props.thinking.endTime !== 'number')
+/** 本块流式中（isThinkingStreaming 唯一判据实现，与 useProcessAggregate.thinkingStreaming
+ *  消费同一实现）。live=false（完成段）短路 false——判据只作流式形态开关，不独立于段状态。 */
+const working = computed(() => props.live === true && isThinkingStreaming(props.thinking))
 </script>
