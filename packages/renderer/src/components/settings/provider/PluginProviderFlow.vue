@@ -42,7 +42,7 @@
           :key="entry.pluginId"
           data-testid="plugin-family-card"
           class="flex cursor-pointer items-center gap-3 rounded-md border border-border bg-bg-card p-3 hover:border-accent hover:bg-surface-2"
-          :class="{ 'pointer-events-none opacity-60': preparing }"
+          :class="{ 'pointer-events-none opacity-60': preparing || activatingPluginId !== null }"
           role="button"
           :aria-label="entry.family?.displayName"
           :aria-disabled="preparing"
@@ -60,6 +60,12 @@
                 data-testid="plugin-family-installed"
                 class="shrink-0 rounded-sm bg-accent-soft px-1.5 py-0.5 text-[length:var(--text-3xs)] font-medium text-accent"
               >{{ t('pluginProvider.flow.installedBadge') }}</span>
+              <!-- 激活中标记（已装未激活卡点击后的激活段；审批门等待期覆盖此处） -->
+              <span
+                v-if="activatingPluginId === entry.pluginId"
+                data-testid="plugin-family-activating"
+                class="shrink-0 rounded-sm bg-accent-soft px-1.5 py-0.5 text-[length:var(--text-3xs)] font-medium text-accent"
+              >{{ t('pluginProvider.flow.activating') }}</span>
             </span>
             <span class="mt-0.5 flex items-center gap-2 text-[length:var(--text-3xs)] text-neutral-mid">
               <span>{{ credentialSourceLabel(entry.family?.credentialSource) }}</span>
@@ -307,6 +313,8 @@ const catalogRefreshing = ref(false)
 const directSpec = ref('')
 /** S13 重启中的插件 id（null = 无；重启按钮 loading/互斥判据） */
 const restartingPluginId = ref<string | null>(null)
+/** 激活中的插件 id（已装未激活家族卡点击路径；审批门等待期覆盖此处，null = 无） */
+const activatingPluginId = ref<string | null>(null)
 
 /** 家族条目（清单 family 非空者——Provider 来源插件的家族卡数据）。 */
 const familyEntries = computed(() => source.catalog.value.filter((e) => e.family !== undefined))
@@ -469,14 +477,42 @@ function familyAvatarChar(entry: PluginCatalogItem): string {
   return (entry.family?.displayName ?? entry.pluginId).charAt(0).toUpperCase()
 }
 
-/** 家族卡点击：已装 → 授权容器；未装 → 版本选择段（默认最新，可改选历史版本）。 */
+/** 家族卡点击：已装 → 授权容器；已装未激活 → 先激活再进授权段；未装 → 版本选择段。 */
 function onFamilySelect(entry: PluginCatalogItem): void {
-  if (preparing.value || confirming.value) return
+  if (preparing.value || confirming.value || activatingPluginId.value !== null) return
   if (entry.installed) {
+    // 已装未激活（安装中断在审批门后重启 / 停用态）：直接进授权段会 invoke 一个未注册
+    // 的命令面（插件未激活无命令），容器恒空态——用户看到的「点了没反应」即此形态
+    if (source.pluginInfoOf(entry.pluginId)?.status !== 'active') {
+      void activateThenAuthorize(entry.pluginId)
+      return
+    }
     enterAuthorize(entry.pluginId)
     return
   }
   enterVersionSelect({ packageName: entry.packageName, displayName: entry.family?.displayName ?? entry.displayName }, 'install')
+}
+
+/**
+ * 已装未激活家族卡的激活路径（plugin.toggle on，经 source.activatePlugin）：
+ * 审批门等待期 elevated 审批弹窗浮于本卡片区之上，批准/拒绝后 toggle 回包——
+ * 激活达 active 进授权段；未达 active（权限被拒等）显错不进段，失败显错不静默。
+ */
+async function activateThenAuthorize(pluginId: string): Promise<void> {
+  activatingPluginId.value = pluginId
+  flowError.value = ''
+  try {
+    await source.activatePlugin(pluginId)
+    if (source.pluginInfoOf(pluginId)?.status !== 'active') {
+      flowError.value = t('pluginProvider.flow.activateNotActive')
+      return
+    }
+    enterAuthorize(pluginId)
+  } catch (e) {
+    flowError.value = t('pluginProvider.flow.activateFailed', { reason: e instanceof Error ? e.message : String(e) })
+  } finally {
+    activatingPluginId.value = null
+  }
 }
 
 /**

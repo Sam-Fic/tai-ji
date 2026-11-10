@@ -122,6 +122,16 @@ export default [
       'max-lines': 'off',
     },
   },
+  // 插件 Provider 安装流主组件（家族卡 / 版本选择 / 确认卡 / 授权挂载位容器四段状态机，
+  // 安装-授权全流程唯一宿主）：职责内聚但非注释行 526 超 500（2026-11-10 已装未激活
+  // 先激活再授权路径修复 +40 行触顶，此前 486 已近限）。拆分属独立重构任务（随 Sidebar
+  // override 先例）。短期 max-lines override 避免阻塞，长期应拆分。
+  {
+    files: ['packages/renderer/src/components/settings/provider/PluginProviderFlow.vue'],
+    rules: {
+      'max-lines': 'off',
+    },
+  },
   // [HISTORICAL] runtime 的 .cjs 文件（plugin-esm-loader.cjs 等）是 Node CJS 模块，
   // require() 是唯一导入方式——no-require-imports 规则对 .cjs 是误报（2026-08-05 添加，
   // sandbox ESM loader 落地时确认：tsup entry 直接打包 .cjs 源文件，无 TS 转换层）。

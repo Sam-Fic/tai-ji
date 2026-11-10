@@ -45,6 +45,10 @@ export default {
     restart: '重启',
     restarting: '重启中…',
     restartFailed: '重启失败：{reason}',
+    // 已装未激活卡片点击（安装中断在审批门后重启/停用态）：先激活再进授权段
+    activating: '激活中…',
+    activateFailed: '插件激活失败：{reason}',
+    activateNotActive: '插件未激活（权限被拒绝或激活未完成）。可重新点击卡片或到插件列表开启',
     // 安装确认卡（S27 知情面）
     confirmInstallDesc: '将安装插件',
     confirmUpdateDesc: '将更新插件',
