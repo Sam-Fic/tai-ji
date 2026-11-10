@@ -551,7 +551,8 @@ export const CLIENT_MESSAGE_TYPES = [
 
 /** 清单完备性编译期断言：Exclude 非 never（清单漏成员）时违反 T extends never 约束，编译错误信息列出成员名。 */
 type AssertClientTypesNever<T extends never> = T
-type _AssertClientTypesComplete = AssertClientTypesNever<Exclude<ClientMessageType, (typeof CLIENT_MESSAGE_TYPES)[number]>>
+// export 使断言类型被消费（noUnusedLocals 不报 unused）；断言效力不变
+export type _AssertClientTypesComplete = AssertClientTypesNever<Exclude<ClientMessageType, (typeof CLIENT_MESSAGE_TYPES)[number]>>
 
 
 // ── Payload 类型定义 ────────────────────────────────────────────
