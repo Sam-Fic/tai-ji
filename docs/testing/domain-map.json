@@ -135,6 +135,7 @@
         "packages/ui/src/features/drawer/__tests__/DrawerPanel.test.ts",
         "packages/ui/src/overlays/__tests__/search-modal.test.ts",
         "packages/ui/src/primitives/dialog/__tests__/ConfirmDialog.test.ts",
+        "packages/ui/src/primitives/dialog/__tests__/DialogContent.elevation.test.ts",
         "packages/ui/src/primitives/select/__tests__/SelectItem.test.ts",
         "packages/ui/src/rendering-protocol/__tests__/primitives.test.ts"
       ]
