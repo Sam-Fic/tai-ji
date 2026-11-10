@@ -1343,6 +1343,12 @@ visibilitychange 7.5min 补查）属产品功能轮询（提示用户新版本�
 约束，已恢复（fix-update-autocheck，v0.12.8）。其「后台隐藏期跳过 + 恢复可见按阈值补查」的
 时间阈值行为与「递归 setTimeout 防并发堆积」实现随恢复保留；更新链 10s 手动节流维持丙类全删
 不恢复（release-checker 15min 缓存，己类保留，已覆盖该需求）。
+
+**例外登记（2026-11-10 用户裁决）**：对话流套餐浮层（PlanQuotaFloatPanel）定时统一刷新属产品
+功能轮询（保持额度展示数据新鲜），非判死/等待机制，不受丁类「面板轮询」全删约束，已恢复
+（dev-0.12.10）。形态 = 浮层展开挂载期间每 10min bump provide tick、全部套餐一起重查，收起态
+跳过（不可见期间的查询无人消费）；并发/节流保护沿用 useQuotaQuery pending 标记与 runtime
+QuotaService 10s 节流，间隔常量 SSOT = plan-quota-float.ts QUOTA_FLOAT_REFRESH_INTERVAL_MS。
 ### ADR-0191 字体成为可配置维度：两层结构（核心只认家族名 / 来源层可插拔）+ 槽位变量回落链（2026-11-04 设计裁决，font-system；合并时自 ADR-0182 重编号）
 
 **决策**：把「用哪个字体」从构建期常量变成用户可配置项。四条核心拍板：**D1**——`--font-mono` 的权威从 Tailwind preset 硬编码收回 CSS 变量（preset `mono` 键改 `['var(--font-mono)']`），使 493 处 `class="font-mono"` 与 11 处 `var(--font-mono)` 同源；**D4**——定义 `FontSource` 接口（`list(): Promise<FontEntry[]>`），v1 实现两个真实变体（`SystemFontSource` 走 `queryLocalFonts`、`FileFontSource` 走 `pickFile → font:read-bytes → FontFace`），**不预留 `RemoteFontSource` 占位**（为零实现方的来源预留枚举值会让每处 switch 拖着不可达分支；远程源的「列表」是可下载目录≠已可用字体，`list()` 承载不了下载→落盘→注册→降级这条链）；**D8**——终值变量改「用户槽位 + 构建期栈」两层形态，槽位**必须不声明**（`--font-ui: ;` 是「已声明但值为空 token 流」，不触发 `var()` 缺省参数，会代入空 token——mono 侧前导逗号让整条声明非法，默认态就击穿全站字体栈，真机实测），只写槽位绝不写终值（写终值会以内联样式击穿回落链），清除走 `removeProperty`；**D12**——v1 不做远程下载（探查实测：npm 上不存在「中文 + 四档字重 + 体积可控」的包；英文字体即便只有一个 130KB 文件，配套的仍是多源降级、落域白名单校验、sha256、断点续传、进度与重试一整套机制，与「核心层只认字体名」这条主线无关）。
