@@ -64,6 +64,7 @@ import type {
   AggregationRouteDeleted,
   AggregationRouteSaved,
   AggregationRouteView,
+  ExtensionUpgradeResult,
 } from '@taiji/shared'
 import { recommendedExtensions, PRESET_SKILL_DIRS, PRESET_AGENT_DIRS, PRESET_EXTENSION_DIRS, DEFAULT_DISCOVERY_CONFIG, DEFAULT_PRESETS, DELIVERY_PREVIEW_MAX_CHARS, QUOTA_PRESETS, RETRY_RULES_BASELINE } from '@taiji/shared'
 import { createSession, fixtureMessages, fixtureSessions, e2eTestSession } from './data'
@@ -1988,9 +1989,11 @@ export const extension = {
     const installedNames = new Set(fixtureExtensions.map((e) => e.name))
     return recommendedExtensions.map((r) => ({ ...r, installed: installedNames.has(r.name) }))
   },
-  /** 升级扩展（mock：仅等待 ack，不实际升级） */
-  async upgrade(_name: string) {
+  /** 升级扩展（mock：仅等待 ack，不实际升级）。upgraded=false = mock 不装新版本，
+   *  前端按「已是最新」提示，与 mock「不真升级」语义一致。 */
+  async upgrade(_name: string): Promise<ExtensionUpgradeResult> {
     await sleep(TIMING.ack)
+    return { upgraded: false, from: '', to: '' }
   },
   /** 设置自动升级开关（mock：仅等待 ack） */
   async setAutoUpgrade(_name: string, _enabled: boolean) {

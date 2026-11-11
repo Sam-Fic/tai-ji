@@ -20,7 +20,7 @@ import type { PiMessageEntry, PiToolCallEntryForm } from './pi-entry'
 import type { FileNode } from './file-tree'
 // 领域 DTO 已下沉到各自领域文件（E2 架构候选）：protocol.ts 仅保留 type→payload 映射 SSOT，
 // 领域形状（ExtensionInfo / GitStatusResult / PluginInfo …）按领域就近归属。
-import type { ExtensionInfo, RecommendedExtension, ExtensionInteractMethod } from './extension'
+import type { ExtensionInfo, RecommendedExtension, ExtensionInteractMethod, ExtensionUpgradeResult } from './extension'
 import type { ProjectStoreState } from './project'
 import type { GitStatusResult } from './git'
 import type { PluginInfo } from './plugin'
@@ -2715,7 +2715,7 @@ export interface ServerMessageMapBase {
   'aggregation.routeSaved': AggregationRouteSaved
   /** aggregation.deleteRoute 的 reply（删除完成 + scopedModels 精确清理后全量）。 */
   'aggregation.routeDeleted': AggregationRouteDeleted
-  'config.extensions': { extensions: ExtensionInfo[]; upgradeResult?: { upgraded: boolean; from: string; to: string } }
+  'config.extensions': { extensions: ExtensionInfo[]; upgradeResult?: ExtensionUpgradeResult }
   /** extension.recommended reply：推荐扩展列表（含已安装状态） */
   'extension.recommended': { recommended: Array<RecommendedExtension & { installed: boolean }> }
   'config.plugins': { plugins: PluginInfo[] }
@@ -4134,7 +4134,7 @@ export interface ReplyPayloadMap {
   'extension.setAutoUpgrade': void // reply config.extensions
   'extension.toggle': { extensions: ExtensionInfo[] }  // reply config.extensions（前端消费 reply 刷新 store；RPC reply 命中 pending 不走 dispatchGlobal）
   'extension.uninstall': void     // reply config.extensions
-  'extension.upgrade': void       // reply config.extensions
+  'extension.upgrade': { extensions: ExtensionInfo[]; upgradeResult?: ExtensionUpgradeResult }  // reply config.extensions（upgradeResult = upgradeExtension 返回值，upgraded=false = 已是最新未安装）
   'git.checkout': void            // reply message.status
   'git.checkoutCwd': void        // reply message.status
   'git.commit': void              // reply message.status

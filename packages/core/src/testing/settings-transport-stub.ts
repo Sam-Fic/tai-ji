@@ -207,7 +207,7 @@ export function makeSettingsTransportStub(overrides: SettingsTransportStubOverri
     installExtensionGitRepository: vi.fn(async () => ({ tempDir: '', candidates: [] })),
     finishExtensionInstall: vi.fn(async () => {}),
     cancelExtensionInstall: vi.fn(async () => {}),
-    upgradeExtension: vi.fn(async () => {}),
+    upgradeExtension: vi.fn(async () => ({ upgraded: true, from: '', to: '' })),
     setExtensionAutoUpgrade: vi.fn(async () => {}),
 
     // ── 插件 Provider 来源（provider-plugin-access U6）：读/调/订阅 + 输入回传中性默认。

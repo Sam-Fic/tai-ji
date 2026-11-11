@@ -125,7 +125,9 @@ async function onConfirmUninstall() {
   }
 }
 
-/** 升级扩展：从 npm 拉最新版重装（仅 user-installed） */
+/** 升级扩展：从 npm 拉最新版重装（仅 user-installed）。
+ *  按 runtime 返回值分支提示：upgraded=false = 远端已是最新、未执行安装，
+ *  提示「已是最新」而非假「已升级」（假 toast 修复）。 */
 async function onUpgrade(name: string) {
   if (upgrading.value.has(name)) return
   error.value = ''
@@ -133,8 +135,10 @@ async function onUpgrade(name: string) {
   next.add(name)
   upgrading.value = next
   try {
-    await getSettingsTransport().upgradeExtension(name)
-    toastInfo(t('settings.extension.upgradedToast'))
+    const result = await getSettingsTransport().upgradeExtension(name)
+    toastInfo(result.upgraded
+      ? t('settings.extension.upgradedToast')
+      : t('settings.extension.upToDateToast'))
   } catch (e) {
     error.value = e instanceof Error
       ? t('settings.extension.upgradeFailed', { msg: e.message })

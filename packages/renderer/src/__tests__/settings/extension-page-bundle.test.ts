@@ -428,6 +428,22 @@ describe('ExtensionPage 操作成功 toast 反馈（W4 D11）', () => {
     expect(extensionApiMock.upgrade).toHaveBeenCalledWith('my-tools')
     expect(toasts.value.some((t) => t.message === '扩展已升级' && t.type === 'info')).toBe(true)
   })
+
+  // 假 toast 修复：runtime upgraded=false = 远端已是最新、未执行安装——提示「已是最新」
+  // 而非无条件「已升级」（此前不检查返回值，always-success toast）。
+  it('upgrade 返回 upgraded=false → toastInfo("已是最新版本")（不弹「已升级」）', async () => {
+    extensionApiMock.upgrade.mockImplementationOnce(() =>
+      Promise.resolve({ upgraded: false, from: '1.0.0', to: '1.0.0' }))
+    const { toasts } = useToast()
+    wrapper = mount(ExtensionPage, { props: { extensions: [userExt()] } })
+    await flushPromises()
+    const upgradeBtn = wrapper.find('button[title="升级"]')
+    await upgradeBtn.trigger('click')
+    await flushPromises()
+    expect(extensionApiMock.upgrade).toHaveBeenCalledWith('my-tools')
+    expect(toasts.value.some((t) => t.message === '已是最新版本' && t.type === 'info')).toBe(true)
+    expect(toasts.value.some((t) => t.message === '扩展已升级')).toBe(false)
+  })
 })
 
 // ── RD-4#1 · 扩展加载路径保存失败回弹（skill/agent 同族第三处：onUpdateExtensionDirs）──
