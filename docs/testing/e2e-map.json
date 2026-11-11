@@ -6001,6 +6001,31 @@
       "owner": "apps/electron",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
       "note": "R2：改 IPC 读取通道或其校验时跑。纯校验函数三关与禁区在 L1 单测已覆盖，本 spec 只验真机拒绝行为。[2026-11-05 终态同步] layer L3→L2（launch-app mock 构建真实进程、零 token；同 FONTS-01 口径）"
+    },
+    {
+      "id": "E2E-EXTUPG-01",
+      "summary": "extension 升级链网络预算：慢速持续下载 budgetMs 到点终止（fake timers，默认组直跑）+ installNpm 预算接线断言",
+      "scope": [
+        "packages/runtime/src/infra/installers/npm-installer.ts",
+        "packages/runtime/src/services/extension-service.ts"
+      ],
+      "layer": "L1",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "packages/runtime/test/extension-upgrade-budget.test.ts"
+        },
+        {
+          "kind": "spec",
+          "ref": "packages/runtime/test/npm-installer-tarball-stall.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": false,
+      "run": "pnpm --filter @taiji/runtime exec vitest run test/extension-upgrade-budget.test.ts test/npm-installer-tarball-stall.test.ts",
+      "owner": "packages/runtime",
+      "authority": "docs/TEST-STRATEGY.md",
+      "note": "R2 态：npm 安装器/升级链 diff 命中时跑。budget 用例 = fake timers 推进预算窗口（默认组快用例）；接线用例 = fake installer 捕获 installNpm opts 断言 timeout+budgetMs 同传。tarball stall 文件同 scope 复跑（默认组 6 条快用例，门控 3 条 skip 不拖时）。serial=false：无真实传输依赖，loopback header 到达有 flushIo 确定性等待。"
     }
   ]
 }

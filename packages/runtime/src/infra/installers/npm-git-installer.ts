@@ -52,10 +52,10 @@ export function pickProxyExtras(parentEnv: Record<string, string | undefined>): 
 const VERSION_CHECK_DEFAULT_TIMEOUT = 15_000
 
 export class NpmGitInstaller implements IInstaller {
-  async installNpm(pkgName: string, nodeModulesDir: string, opts?: { timeout?: number }): Promise<void> {
+  async installNpm(pkgName: string, nodeModulesDir: string, opts?: { timeout?: number; budgetMs?: number }): Promise<void> {
     // npm-installer 抛 NpmInstallError（含 code 字段）。service 经结构化类型读取 err.code，
     // 不 import NpmInstallError 具体类（依赖倒置）。
-    await installPackage(pkgName, nodeModulesDir, opts ? { timeout: opts.timeout } : undefined)
+    await installPackage(pkgName, nodeModulesDir, opts ? { timeout: opts.timeout, budgetMs: opts.budgetMs } : undefined)
   }
 
   async uninstallNpm(name: string, nodeModulesDir: string): Promise<void> {

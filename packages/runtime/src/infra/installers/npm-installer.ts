@@ -45,7 +45,20 @@ interface PackageMetadata {
 }
 
 export interface NpmInstallOptions {
+  /** 单请求窗口（ms）：connect/header 等待、body 读取、下载无进展（stall）检测共用
+   * 的单阶段窗口。语义是「无进展检测」，慢速但持续的合法下载不会被它终止。 */
   timeout?: number
+  /**
+   * 整次安装（主包 metadata + tarball + 全部递归依赖）共享的网络预算（ms）。
+   * deadline = 入口时刻 + budgetMs，所有 HTTP 阶段的窗口取 min(单请求 timeout,
+   * deadline 剩余)；预算耗尽抛可重试 network 错误。
+   *
+   * 为什么需要：timeout/stall 都是无进展检测，慢速但持续的下载（弱网下常见的
+   * 每 x 秒滴一点形态）永不触发——没有总预算时一次 install 的时长无上界，且
+   * ExtensionService 的安装串行锁会被占住，后续 install/upgrade 全部排队等待。
+   * 预算属于远程网络调用超时白名单（ADR-0190 例外①），非任务级墙钟判死。
+   */
+  budgetMs?: number
 }
 
 /**
@@ -133,19 +146,46 @@ function getRegistry(): string {
   return process.env.NPM_CONFIG_REGISTRY ?? DEFAULT_REGISTRY
 }
 
-function httpGet(url: string, timeout?: number): Promise<http.IncomingMessage> {
+// ── 网络预算（deadline）工具 ──────────────────────────────────────
+
+/** 预算耗尽错误：可重试 network 语义，消息带恢复指引（错误必须可操作）。
+ * 预算时长本身由调用方设置（budgetMs），此处不重复数值——deadline 传递下内层
+ * 只持绝对时刻，写「after Xms」会误导（X 只能取到单请求窗口值）。 */
+function budgetExhaustedError(): NpmInstallError {
+  return new NpmInstallError(
+    'network',
+    'Install network budget exhausted (deadline passed). '
+      + '👉 Check network/registry reachability, then retry the install.',
+  )
+}
+
+/** 本次请求的有效窗口：min(单请求 timeout, deadline 剩余)。
+ * 无 deadline（未启用预算）时退化为纯单请求窗口，行为与旧版一致。 */
+function requestWindowMs(timeout: number | undefined, deadline: number | undefined): number {
+  const perRequest = timeout ?? DEFAULT_TIMEOUT
+  if (deadline === undefined) return perRequest
+  return Math.min(perRequest, deadline - Date.now())
+}
+
+function httpGet(url: string, timeout?: number, deadline?: number): Promise<http.IncomingMessage> {
   return new Promise((resolve, reject) => {
     const client = url.startsWith('https') ? https : http
-    const ms = timeout ?? DEFAULT_TIMEOUT
+    const ms = requestWindowMs(timeout, deadline)
+    if (ms <= 0) {
+      reject(budgetExhaustedError())
+      return
+    }
 
-    const timer = setTimeout(() => {
-      req.destroy(new Error(`Request timeout after ${ms}ms`))
-    }, ms)
-
+    // req 先于 timer 创建：timer 回调引用 req。若顺序颠倒（timer 先建），client.get
+    // 同步抛（如 ERR_INVALID_URL）时 req 永不赋值，泄漏的 timer 到点回调访问 TDZ 中的
+    // req 抛 ReferenceError → uncaughtException（进程级风险）。
     const req = client.get(url, (res) => {
       clearTimeout(timer)
       resolve(res)
     })
+    const timer = setTimeout(() => {
+      req.destroy(new Error(`Request timeout after ${ms}ms`))
+    }, ms)
     req.on('error', (err) => {
       clearTimeout(timer)
       reject(err)
@@ -153,10 +193,11 @@ function httpGet(url: string, timeout?: number): Promise<http.IncomingMessage> {
   })
 }
 
-/** 跟随 HTTP 重定向（最多 MAX_REDIRECTS 次），带 SSRF 校验 */
+/** 跟随 HTTP 重定向（最多 MAX_REDIRECTS 次），带 SSRF 校验。每跳共享同一 deadline。 */
 async function followRedirects(
   res: http.IncomingMessage,
   timeout?: number,
+  deadline?: number,
   remaining = MAX_REDIRECTS,
 ): Promise<http.IncomingMessage> {
   const status = res.statusCode ?? 0
@@ -171,15 +212,15 @@ async function followRedirects(
     }
     // SSRF: 校验重定向目标
     validateUrlHost(location)
-    const next = await httpGet(location, timeout)
-    return followRedirects(next, timeout, remaining - 1)
+    const next = await httpGet(location, timeout, deadline)
+    return followRedirects(next, timeout, deadline, remaining - 1)
   }
   return res
 }
 
-async function fetchJson<T>(url: string, timeout?: number): Promise<T> {
-  const res = await httpGet(url, timeout)
-  const final = await followRedirects(res, timeout)
+async function fetchJson<T>(url: string, timeout?: number, deadline?: number): Promise<T> {
+  const res = await httpGet(url, timeout, deadline)
+  const final = await followRedirects(res, timeout, deadline)
 
   if (final.statusCode === HTTP_NOT_FOUND) {
     throw new NpmInstallError('not_found', `Package not found (${HTTP_NOT_FOUND})`)
@@ -188,12 +229,18 @@ async function fetchJson<T>(url: string, timeout?: number): Promise<T> {
     throw new NpmInstallError('network', `HTTP ${final.statusCode}`)
   }
 
+  const bodyWindow = requestWindowMs(timeout, deadline)
+  if (bodyWindow <= 0) {
+    final.destroy()
+    throw budgetExhaustedError()
+  }
   return new Promise<T>((resolve, reject) => {
     let data = ''
-    // body 读取阶段也需超时——服务器发了 header 后 stall 不发 body 会永久 pending
+    // body 读取阶段也需超时——服务器发了 header 后 stall 不发 body 会永久 pending。
+    // 该 timer 是总窗口（非无进展检测）：慢速 metadata 流到点即终止。
     const bodyTimer = setTimeout(() => {
-      final.destroy(new Error(`Body read timeout after ${timeout ?? DEFAULT_TIMEOUT}ms`))
-    }, timeout ?? DEFAULT_TIMEOUT)
+      final.destroy(new Error(`Body read timeout after ${bodyWindow}ms`))
+    }, bodyWindow)
     final.on('data', (chunk: Buffer) => { data += chunk.toString() })
     final.on('end', () => {
       clearTimeout(bodyTimer)
@@ -296,12 +343,12 @@ function parseSpec(spec: string): { name: string; range?: string } {
   return { name: spec.slice(0, atIdx), range: spec.slice(atIdx + 1) }
 }
 
-async function fetchMetadata(name: string, timeout?: number): Promise<PackageMetadata> {
+async function fetchMetadata(name: string, timeout?: number, deadline?: number): Promise<PackageMetadata> {
   // RT-8#3：name 进 registry URL 前先过白名单（覆盖 install/tarball/latest 三个入口）
   validateNpmName(name)
   const registry = getRegistry()
   const url = `${registry}/${encodePackageName(name)}`
-  return fetchJson<PackageMetadata>(url, timeout)
+  return fetchJson<PackageMetadata>(url, timeout, deadline)
 }
 
 function resolveVersion(metadata: PackageMetadata, range?: string): string {
@@ -402,6 +449,7 @@ async function downloadAndExtract(
   dist: { integrity?: string; shasum?: string },
   packageName: string,
   timeout?: number,
+  deadline?: number,
 ): Promise<void> {
   // SSRF: 校验 tarball URL
   validateUrlHost(tarballUrl)
@@ -414,8 +462,8 @@ async function downloadAndExtract(
   }
   mkdirSync(tmpDir, { recursive: true })
 
-  const res = await httpGet(tarballUrl, timeout)
-  const final = await followRedirects(res, timeout)
+  const res = await httpGet(tarballUrl, timeout, deadline)
+  const final = await followRedirects(res, timeout, deadline)
 
   if (final.statusCode !== HTTP_OK) {
     rmSync(tmpDir, { recursive: true, force: true })
@@ -453,8 +501,37 @@ async function downloadAndExtract(
     activeGunzip?.destroy(stallError)
   }
 
+  // ── 预算兜底：整次安装的网络总预算（deadline）到点 → destroy → 可重试 network 错误 ──
+  // 与 stall 互补：stall 是无进展检测（慢速持续流永不触发），budget 是总上限（到点即
+  // 终止）——弱网下「每 x 秒滴一点」的合法形态也有上界。deadline 缺省时不设 timer
+  //（行为同旧版，仅 stall 检测）。
+  const budgetMs = deadline !== undefined ? deadline - Date.now() : undefined
+  let budgetTriggered = false
+  let budgetTimer: NodeJS.Timeout | undefined
+  const clearBudgetTimer = (): void => {
+    if (budgetTimer) {
+      clearTimeout(budgetTimer)
+      budgetTimer = undefined
+    }
+  }
+  // destroy 必须带 error：无参 destroy 不触发 'error' 事件，流式路径的 gunzip 侧
+  // 永不 settle（extractTarStream 的 reject 依赖 gunzip 'error'），反而制造新挂点。
+  const budgetError = new Error('network budget exhausted (deadline passed)')
+  const destroyByBudget = (): void => {
+    budgetTriggered = true
+    budgetTimer = undefined
+    final.destroy(budgetError)
+    activeGunzip?.destroy(budgetError)
+  }
+
   try {
     stallTimer = setTimeout(destroyByStall, stallMs)
+    if (budgetMs !== undefined) {
+      if (budgetMs <= 0) {
+        throw budgetExhaustedError()
+      }
+      budgetTimer = setTimeout(destroyByBudget, budgetMs)
+    }
     if (needsIntegrityCheck) {
       // 下载到内存，校验完整性，再写入 tmp 目录
       const buffer = await new Promise<Buffer>((resolve, reject) => {
@@ -465,10 +542,12 @@ async function downloadAndExtract(
         })
         final.on('end', () => {
           clearStallTimer()
+          clearBudgetTimer()
           resolve(Buffer.concat(chunks))
         })
         final.on('error', (err) => {
           clearStallTimer()
+          clearBudgetTimer()
           reject(err)
         })
       })
@@ -487,11 +566,15 @@ async function downloadAndExtract(
         // （此前无监听，中途 ECONNRESET 即未处理 'error' 事件，进程级风险）
         final.on('error', (err) => {
           clearStallTimer()
+          clearBudgetTimer()
           fail(err)
         })
         final.on('data', () => { stallTimer?.refresh() })
         gunzip.on('data', () => { stallTimer?.refresh() })
-        final.on('end', clearStallTimer)
+        final.on('end', () => {
+          clearStallTimer()
+          clearBudgetTimer()
+        })
         final.pipe(gunzip)
       })
     }
@@ -503,6 +586,7 @@ async function downloadAndExtract(
     renameSync(tmpDir, targetDir)
   } catch (e) {
     clearStallTimer()
+    clearBudgetTimer()
     // 清理失败的 tmp 目录
     if (existsSync(tmpDir)) {
       rmSync(tmpDir, { recursive: true, force: true })
@@ -515,6 +599,9 @@ async function downloadAndExtract(
         `Download failed: ${stallError.message}. 👉 Retry the install once the network is available.`,
       )
     }
+    if (budgetTriggered) {
+      throw budgetExhaustedError()
+    }
     throw e
   }
 }
@@ -524,12 +611,15 @@ async function downloadAndExtract(
 /**
  * 递归安装 npm 包及其依赖。
  * 内部函数，installed 集合在递归调用间共享。
+ * deadline：整次安装共享的网络预算截止（绝对时刻 ms），递归依赖共享同一 deadline
+ * ——依赖树任一深度都受总预算约束，install 总时长有上界。
  */
 async function installPackageRecursive(
   spec: string,
   nodeModulesDir: string,
   options: NpmInstallOptions | undefined,
   installed: Set<string>,
+  deadline?: number,
 ): Promise<void> {
   const { name, range } = parseSpec(spec)
 
@@ -539,7 +629,7 @@ async function installPackageRecursive(
   mkdirSync(nodeModulesDir, { recursive: true })
 
   // RT-8#3：name 经双向检查后才进 join（后续 rmSync/renameSync 均以 pkgDir 为靶）
-  const metadata = await fetchMetadata(name, options?.timeout)
+  const metadata = await fetchMetadata(name, options?.timeout, deadline)
   const version = resolveVersion(metadata, range)
   const manifest = metadata.versions[version]
 
@@ -551,14 +641,14 @@ async function installPackageRecursive(
   const pkgDir = guardedPackageDir(name, nodeModulesDir)
 
   // 下载 + 解压（原子操作）
-  await downloadAndExtract(manifest.dist.tarball, pkgDir, manifest.dist, name, options?.timeout)
+  await downloadAndExtract(manifest.dist.tarball, pkgDir, manifest.dist, name, options?.timeout, deadline)
 
   // 递归安装 dependencies（仅生产依赖，跳过 peer/dev/optional）
   const deps = manifest.dependencies ?? {}
   for (const [depName, depRange] of Object.entries(deps)) {
     try {
-      await installPackageRecursive(`${depName}@${depRange}`, nodeModulesDir, options, installed)
-    } catch (e) {  
+      await installPackageRecursive(`${depName}@${depRange}`, nodeModulesDir, options, installed, deadline)
+    } catch (e) {
       // 传递依赖安装失败不阻塞主包。仅记录错误继续安装其他依赖。
       console.warn(
         `[npm-installer] Failed to install dependency ${depName}@${depRange}:`,
@@ -614,13 +704,15 @@ export async function fetchPackageVersions(
 /**
  * 安装 npm 包及其依赖到 node_modules 目录。
  * 使用 flat node_modules 布局（类似 npm v3+）。
+ * options.budgetMs 启用时整次安装（含递归依赖）共享同一网络预算。
  */
 export async function installPackage(
   spec: string,
   nodeModulesDir: string,
   options?: NpmInstallOptions,
 ): Promise<void> {
-  return installPackageRecursive(spec, nodeModulesDir, options, new Set())
+  const deadline = options?.budgetMs !== undefined ? Date.now() + options.budgetMs : undefined
+  return installPackageRecursive(spec, nodeModulesDir, options, new Set(), deadline)
 }
 
 /**
@@ -652,7 +744,8 @@ export async function downloadPackageTarball(
   options?: NpmInstallOptions,
 ): Promise<{ name: string; version: string }> {
   const { name, range } = parseSpec(spec)
-  const metadata = await fetchMetadata(name, options?.timeout)
+  const deadline = options?.budgetMs !== undefined ? Date.now() + options.budgetMs : undefined
+  const metadata = await fetchMetadata(name, options?.timeout, deadline)
   const version = resolveVersion(metadata, range)
   const manifest = metadata.versions[version]
 
@@ -660,7 +753,7 @@ export async function downloadPackageTarball(
     throw new NpmInstallError('not_found', `Version ${version} not found for ${name}`)
   }
 
-  await downloadAndExtract(manifest.dist.tarball, targetDir, manifest.dist, name, options?.timeout)
+  await downloadAndExtract(manifest.dist.tarball, targetDir, manifest.dist, name, options?.timeout, deadline)
 
   return { name, version }
 }
@@ -707,10 +800,12 @@ export async function installDependencies(
   const deps = pkg.dependencies ?? {}
   const nodeModulesDir = join(projectDir, 'node_modules')
   const installed = new Set<string>()
+  // 整次依赖安装共享同一网络预算（git clone 后装依赖场景与单包安装同上界语义）
+  const deadline = options?.budgetMs !== undefined ? Date.now() + options.budgetMs : undefined
 
   for (const [depName, depRange] of Object.entries(deps)) {
     try {
-      await installPackageRecursive(`${depName}@${depRange}`, nodeModulesDir, options, installed)
+      await installPackageRecursive(`${depName}@${depRange}`, nodeModulesDir, options, installed, deadline)
     } catch (e) {
       // 聚合进 failed[] 供调用方裁决（warn 后 resolve 但不带失败信号 = 假成功）。
       const error = toErrorMessage(e)

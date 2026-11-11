@@ -344,6 +344,32 @@ describe.skipIf(
   }, 15_000)
 })
 
+// 网络预算兜底（budgetMs 总上界）：stall 是无进展检测，慢速但持续的下载永不触发
+// ——弱网「每 x 秒滴一点」形态下 install 时长无上界，安装串行锁被占、后续升级 RPC
+// 全部排队。budgetMs 到点即终止并收敛为可重试 network 错误（upgrade-hang-fix）。
+describe('网络预算兜底（budgetMs 总上界，fake timers）', () => {
+  it('慢速持续流 + budgetMs 到点 → network 预算耗尽错误（补上无进展检测盲区）', async () => {
+    behavior = 'trickle'
+    withIntegrity = false
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    // timeout 设 5 分钟：stall（无进展检测，数据持续流动永不触发）在本用例中必须保持沉默，
+    // 500ms 后触发预算耗尽的只能是 budgetMs——证明总上界独立于 stall 生效
+    const promise = installPackage('fake-pkg', nodeModulesDir, { timeout: 300_000, budgetMs: 500 })
+    promise.catch(() => {})
+    await tarballRequested
+    await flushIo() // header 经 loopback 到达，stall/budget timer 均已启动
+    await vi.advanceTimersByTimeAsync(500)
+    vi.useRealTimers()
+
+    await expect(promise).rejects.toBeInstanceOf(NpmInstallError)
+    await expect(promise).rejects.toMatchObject({ code: 'network' })
+    await expect(promise).rejects.toThrow(/network budget exhausted/)
+    // 失败的 tmp 半成品被清理
+    expect(existsSync(join(nodeModulesDir, 'fake-pkg.tmp'))).toBe(false)
+  })
+})
+
 describe('既有安装成功路径回归（stall 兜底不破坏正常流）', () => {
   it('完整响应 + integrity 校验：安装成功', async () => {
     behavior = 'complete'
