@@ -2059,6 +2059,11 @@ describe('SessionService · 业务持久化写安全检查（W2 ipc-converge-a3 
   })
 
   describe('writeImage（原 write-session-image IPC handler）', () => {
+    // 隔离纪律（与下方 segments describe 同款）：落真实 fs 的用例一律用本 describe 专属
+    // sessionId 命名空间，不裸用 's1' 这类全仓测试高频内存态 id——真实写入目标
+    // <dataDir>/ext-sessions/<sid>/attachments 按 sid 分区，专属 id 结构性排除跨文件路径碰撞。
+    const wiSid = 'sess-wi-shared'
+
     it('W3TC3: panel 态（sessionId 非空）→ 写 attachments/<sessionId>/ 返回 {path,fileName,displayName,id,persisted:true}', async () => {
       const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a])
       const result = await service.writeImage('sess-panel-1', bytes.toString('base64'), 'image/png', 'shot.png')
@@ -2093,22 +2098,22 @@ describe('SessionService · 业务持久化写安全检查（W2 ipc-converge-a3 
     })
 
     it('W3TC5: 非 image/* mimeType → throw「mimeType must start with image/」（ERR1）', async () => {
-      await expect(service.writeImage('s1', 'x', 'text/plain', 'x')).rejects.toThrow('mimeType must start with image/')
+      await expect(service.writeImage(wiSid, 'x', 'text/plain', 'x')).rejects.toThrow('mimeType must start with image/')
     })
 
     it('W3TC6: 超过 20MB → throw「图片过大...20MB」（ERR2 ATTACH_TOO_LARGE）不写文件', async () => {
       const targetBytes = 21 * 1024 * 1024
       const base64Len = Math.ceil((targetBytes * 4) / 3)
-      await expect(service.writeImage('s1', 'A'.repeat(base64Len), 'image/png', 'big.png')).rejects.toThrow(/图片过大.*20MB/)
+      await expect(service.writeImage(wiSid, 'A'.repeat(base64Len), 'image/png', 'big.png')).rejects.toThrow(/图片过大.*20MB/)
     })
 
     it('W3TC7: name 含路径分隔符 → sanitize 剥离，path 不逃逸 attachments 目录', async () => {
-      const result = await service.writeImage('s1', Buffer.from([0x01]).toString('base64'), 'image/png', '../../etc/passwd.png')
+      const result = await service.writeImage(wiSid, Buffer.from([0x01]).toString('base64'), 'image/png', '../../etc/passwd.png')
       writtenPaths.push(result.path)
       // path 不含穿越片段
       expect(result.path).not.toContain('etc/passwd')
-      // path 仍在 attachments/s1 下
-      const expectedDir = getAttachmentsDir('s1')
+      // path 仍在 attachments/sess-wi-shared 下
+      const expectedDir = getAttachmentsDir(wiSid)
       expect(result.path.startsWith(expectedDir)).toBe(true)
       expect(existsSync(result.path)).toBe(true)
     })
@@ -2116,20 +2121,20 @@ describe('SessionService · 业务持久化写安全检查（W2 ipc-converge-a3 
     it('W3TC8: 19MB（上限内）→ 正常写入不 throw', async () => {
       // 用 19MB（上限 20MB 内，留余量避开 base64 padding 估算误差）验证大图正常落地。
       const bytes = Buffer.alloc(19 * 1024 * 1024, 0x01)
-      const result = await service.writeImage('s1', bytes.toString('base64'), 'image/png', 'big.png')
+      const result = await service.writeImage(wiSid, bytes.toString('base64'), 'image/png', 'big.png')
       writtenPaths.push(result.path)
       expect(existsSync(result.path)).toBe(true)
     })
 
     it('mimeType=image/jpeg → ext=jpg', async () => {
-      const result = await service.writeImage('s1', Buffer.from([0x01]).toString('base64'), 'image/jpeg', 'pic')
+      const result = await service.writeImage(wiSid, Buffer.from([0x01]).toString('base64'), 'image/jpeg', 'pic')
       writtenPaths.push(result.path)
       expect(result.fileName.endsWith('.jpg')).toBe(true)
       expect(result.displayName.endsWith('.jpg')).toBe(true)
     })
 
     it('拖拽/+菜单（name 非空）→ displayName 用原 basename（sanitized + .ext）', async () => {
-      const result = await service.writeImage('s1', Buffer.from([0x01]).toString('base64'), 'image/png', 'photo.png')
+      const result = await service.writeImage(wiSid, Buffer.from([0x01]).toString('base64'), 'image/png', 'photo.png')
       writtenPaths.push(result.path)
       // displayName 用 sanitized basename，无 uuid 前缀
       expect(result.displayName).toBe('photo.png')
@@ -2138,7 +2143,7 @@ describe('SessionService · 业务持久化写安全检查（W2 ipc-converge-a3 
     })
 
     it('粘贴截图（name 为空，sanitized 退化 image）→ displayName 形如 截图-YYYYMMDD-HHMM.png', async () => {
-      const result = await service.writeImage('s1', Buffer.from([0x01]).toString('base64'), 'image/png', '')
+      const result = await service.writeImage(wiSid, Buffer.from([0x01]).toString('base64'), 'image/png', '')
       writtenPaths.push(result.path)
       // fileName 仍是 uuid-image.png 形式（uuid 前缀 + 占位 basename）
       expect(result.fileName).toMatch(/^[0-9a-f-]+-image\.png$/)
