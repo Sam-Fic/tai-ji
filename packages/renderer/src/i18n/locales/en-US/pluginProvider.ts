@@ -47,6 +47,11 @@ export default {
     restart: 'Restart',
     restarting: 'Restarting…',
     restartFailed: 'Restart failed: {reason}',
+    // Installed-but-inactive card click (install interrupted at the approval gate then
+    // restarted, or deactivated): activate first, then enter the authorize section
+    activating: 'Activating…',
+    activateFailed: 'Plugin activation failed: {reason}',
+    activateNotActive: 'Plugin is not active (permission denied or activation incomplete). Click the card again or enable it in the plugin list',
     // Install confirmation card (S27 disclosure)
     confirmInstallDesc: 'About to install',
     confirmUpdateDesc: 'About to update',

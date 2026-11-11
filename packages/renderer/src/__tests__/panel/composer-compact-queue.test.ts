@@ -275,4 +275,27 @@ describe('Composer 队列区单源渲染 + 撤销 / 重试（u3c/D7 + V9/V10）'
 
     expect(deliveryMock.resyncDelivery).toHaveBeenCalledWith('s1', ['u-f'])
   })
+
+  it('堆叠区（QueueBubble）为拖放落点：dragover/drop 监听经单根 fallthrough 落根元素（drop 准入）', async () => {
+    const wrapper = mountComposer({ sessionId: 's1' })
+    setProjection('s1', [{ clientUuid: 'u-a', preview: '排队中的消息', state: 'queued', lane: 'queued' }])
+    await wrapper.vm.$nextTick()
+    const bubble = wrapper.find('[data-testid="queue-bubble"]')
+    expect(bubble.exists()).toBe(true)
+
+    // dragover 准入：dragdrop.onDragOver 本体不 preventDefault（dragdrop.ts 只置 isDragOver），
+    // defaultPrevented=true 只能来自 Composer 模板 @dragover.prevent 经单根 fallthrough 落
+    // QueueBubble 根元素——缺监听时该区域 drop 不被允许（回归锚定：监听移除即红）。
+    const dragover = new Event('dragover', { bubbles: true, cancelable: true })
+    bubble.element.dispatchEvent(dragover)
+    expect(dragover.defaultPrevented).toBe(true)
+
+    // drop 落点生效：空 dataTransfer（非图片文件分支，dragdrop.onDrop 本体此分支不
+    // preventDefault）→ defaultPrevented 仍 true ⇒ @drop 监听已落根元素，.prevent 拦掉
+    // 浏览器默认导航（file:// 会被主进程 will-navigate 白名单 preventDefault 拦下成
+    // 静默无动作，故落点必须显式接线到 shell onDrop 同一实现）。
+    const drop = new Event('drop', { bubbles: true, cancelable: true })
+    bubble.element.dispatchEvent(drop)
+    expect(drop.defaultPrevented).toBe(true)
+  })
 })

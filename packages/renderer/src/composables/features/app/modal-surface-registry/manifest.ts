@@ -144,9 +144,10 @@ export const MODAL_SURFACE_MANIFEST = [
     family: 'modal-dialog',
     kind: 'member',
     zAnchors: [
-      { file: 'packages/ui/src/primitives/dialog/DialogContent.vue', form: 'class-token', literal: 'var(--z-modal)', count: 3 },
+      { file: 'packages/ui/src/primitives/dialog/DialogContent.vue', form: 'class-token', literal: 'var(--z-modal)', count: 2 },
+      { file: 'packages/ui/src/primitives/dialog/DialogContent.vue', form: 'class-token-calc', literal: 'calc(var(--z-modal)+1)', count: 2 },
     ],
-    basis: '§6.7 表：DialogContent 确认框族（遮罩 + 居中确认面板 + 右贴边 420px drawer variant 面板各一 z 字面量；已收敛至 ui 包单一实现并令牌化 --z-modal）',
+    basis: '§6.7 表：DialogContent 确认框族（遮罩 + 面板共享一组 z 三元，两种形态 variant 各取其一 = 每字面量 2 次）。elevated 档（calc(var(--z-modal)+1)）= 系统级提示弹窗压过同层 modal：同层平局 DOM 后序者胜，先挂载的审批弹窗会被后开的宿主弹窗整块遮盖——2026-11-10 插件权限批准弹窗被 provider 安装确认弹窗遮盖、审批门无时限致安装死锁后增设；+1 只压 modal 层，不进 --z-dialog(1100) 档（嵌套浮层 / ui-request band 语义不动）',
   },
   {
     id: 'companion-band',

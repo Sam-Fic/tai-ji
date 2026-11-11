@@ -37,14 +37,24 @@ defineOptions({ inheritAttrs: false })
 // 恒等于内容盒且可收缩，超宽内容退化为在自身盒内截断。
 
 const props = defineProps<
-  DialogContentProps & { class?: HTMLAttributes["class"]; hideClose?: boolean; variant?: "center" | "right-drawer" }
+  DialogContentProps & {
+    class?: HTMLAttributes["class"]
+    hideClose?: boolean
+    variant?: "center" | "right-drawer"
+    /** 系统级提示档：遮罩+面板 z 升到 calc(var(--z-modal)+1)。用于必须压过其他同层
+     * modal 的弹窗——同层平局由 DOM 后序者胜出裁决，先挂载的弹窗会被后开的宿主弹窗
+     * 整块遮盖（2026-11-10 插件权限批准弹窗被安装确认弹窗遮盖，审批门无时限 →
+     * 安装死锁）。+1 恰好只压过 modal 层，不进 --z-dialog(1100) 档（嵌套浮层与
+     * ui-request band 语义不动）。 */
+    elevated?: boolean
+  }
 >()
 const emits = defineEmits<DialogContentEmits>()
 const attrs = useAttrs()
 
-// variant 是本原语的形态档（非 reka DialogContentProps 成员），不转发——漏 omit 会落进
-// attrs 合并到 DOM 面板元素上，产出无语义的 variant="…" 属性
-const delegatedProps = reactiveOmit(props, "class", "variant")
+// variant / elevated 是本原语的形态档（非 reka DialogContentProps 成员），不转发——
+// 漏 omit 会落进 attrs 合并到 DOM 面板元素上，产出无语义的 variant="…" 属性
+const delegatedProps = reactiveOmit(props, "class", "variant", "elevated")
 
 const forwarded = useForwardPropsEmits(delegatedProps, emits)
 /** 合并 forwarded props + fallthrough attrs（如 data-testid），一次性绑到内层 reka-ui DialogContent。
@@ -69,7 +79,12 @@ onBeforeUnmount(disposeSurfaceRegistration)
 <template>
   <DialogPortal>
     <DialogOverlay
-      class="fixed inset-0 z-[var(--z-modal)] bg-scrim backdrop-blur-sm reka-overlay-transition"
+      :class="
+        cn(
+          'fixed inset-0 bg-scrim backdrop-blur-sm reka-overlay-transition',
+          props.elevated ? 'z-[calc(var(--z-modal)+1)]' : 'z-[var(--z-modal)]',
+        )
+      "
     />
     <!-- 右贴边抽屉形态（variant='right-drawer'，工具详情抽屉壳基座，D4 裁决）：右侧贴边
          全高 420px 档，≤620px 全宽；仅左缘 hairline + 无圆角；内边距不在形态档定型——
@@ -83,8 +98,9 @@ onBeforeUnmount(disposeSurfaceRegistration)
       :class="
         cn(
           props.variant === 'right-drawer'
-            ? 'fixed inset-y-0 right-0 z-[var(--z-modal)] flex w-[420px] max-w-full max-[620px]:w-full flex-col border-y-0 border-r-0 border-l border-hairline bg-bg shadow-[var(--shadow-3)] select-text outline-none rounded-none opacity-0 translate-x-6 transition-[opacity,transform] duration-150 ease-[var(--ease-in)] data-[state=open]:opacity-100 data-[state=open]:translate-x-0 data-[state=open]:duration-200 data-[state=open]:ease-[var(--ease-out-soft)] [@starting-style]:data-[state=open]:opacity-0 [@starting-style]:data-[state=open]:translate-x-6'
-            : 'fixed left-1/2 top-1/2 z-[var(--z-modal)] grid w-full grid-cols-[minmax(0,1fr)] max-w-lg gap-4 border border-hairline bg-bg p-[20px] shadow-[var(--shadow-3)] select-text reka-dialog-transition rounded-lg',
+            ? 'fixed inset-y-0 right-0 flex w-[420px] max-w-full max-[620px]:w-full flex-col border-y-0 border-r-0 border-l border-hairline bg-bg shadow-[var(--shadow-3)] select-text outline-none rounded-none opacity-0 translate-x-6 transition-[opacity,transform] duration-150 ease-[var(--ease-in)] data-[state=open]:opacity-100 data-[state=open]:translate-x-0 data-[state=open]:duration-200 data-[state=open]:ease-[var(--ease-out-soft)] [@starting-style]:data-[state=open]:opacity-0 [@starting-style]:data-[state=open]:translate-x-6'
+            : 'fixed left-1/2 top-1/2 grid w-full grid-cols-[minmax(0,1fr)] max-w-lg gap-4 border border-hairline bg-bg p-[20px] shadow-[var(--shadow-3)] select-text reka-dialog-transition rounded-lg',
+          props.elevated ? 'z-[calc(var(--z-modal)+1)]' : 'z-[var(--z-modal)]',
           props.class,
         )"
     >

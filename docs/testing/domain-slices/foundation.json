@@ -129,6 +129,7 @@
     "packages/runtime/test/pending.test.ts",
     "packages/runtime/test/rpc-client-start-args-anchor.test.ts",
     "packages/runtime/test/rpc-server-bundle.test.ts",
+    "packages/runtime/test/route-coverage.test.ts",
     "packages/runtime/test/skill-paths.test.ts",
     "packages/runtime/test/skill-registry-fallback-rescan.test.ts",
     "packages/runtime/test/skill-registry-watcher-real.test.ts",

@@ -9,7 +9,8 @@
  * ④ truncationInfo 截断警告数据
  * ⑤ levelsUnion 档位并集按序去重（D7）
  * ⑦ weekdayBusinessWindow / blankWindowTable 坐标契约（7×48）
- * ⑧ candidateProviderIds 添加端点候选（存在 / 启用 / 提供该模型 / 未被本路由占用）
+ * ⑧ candidateProviderIds 添加端点候选（存在 / 启用 / 未被本路由占用；端点模型可独立改选，
+ *    候选不再按 route.modelId 过滤渠道）
  * ⑨ specialOverrideFor 同日期多条取第一条（spec 已知限制）
  *
  * 测试判据：全部第①档同步逻辑（函数进、返回值出），零 mount / 零 IO / 零 fake timer。
@@ -349,11 +350,12 @@ describe('candidateProviderIds 添加端点候选（spec §7.9）', () => {
     prov({ id: 'stepfun', models: [{ id: 'glm-5-3' }] }),
   ]
 
-  it('只列启用 + 提供该模型 + 未被本路由占用的渠道', () => {
+  it('只列启用 + 未被本路由占用的渠道（模型可独立改选，不再按 route.modelId 过滤）', () => {
     const r = routeOf({
       members: [member({ id: 'a', providerId: 'zhipu' })],
     })
-    expect(candidateProviderIds(r, providers)).toEqual(['opencode-go', 'stepfun'])
+    // no-model 渠道（模型不同名）也可入选：端点模型在行内下拉改选，渠道候选不再锚 route.modelId
+    expect(candidateProviderIds(r, providers)).toEqual(['opencode-go', 'no-model', 'stepfun'])
   })
 
   it('本路由全部渠道占用后无候选', () => {
@@ -362,23 +364,22 @@ describe('candidateProviderIds 添加端点候选（spec §7.9）', () => {
         member({ id: 'a', providerId: 'zhipu' }),
         member({ id: 'b', providerId: 'opencode-go' }),
         member({ id: 'c', providerId: 'stepfun' }),
+        member({ id: 'd', providerId: 'no-model' }),
       ],
     })
     expect(candidateProviderIds(r, providers)).toEqual([])
   })
 
-  it('聚合条目一律不入选（kind=aggregation；路由 id 与聚合条目 models 撞名也不混入——嵌套路由拒绝，D4 ①/§1.3 ①）', () => {
+  it('聚合条目一律不入选（kind=aggregation——嵌套路由拒绝，D4 ①/§1.3 ①）', () => {
     const agg = prov({ id: AGGREGATION_PROVIDER_ID, kind: 'aggregation', models: [{ id: 'glm-5-3' }] })
     const r = routeOf({
       id: 'glm-5-3',
       modelId: 'glm-5-3',
       members: [member({ id: 'a', providerId: 'zhipu' })],
     })
-    // 撞名前提自证：聚合条目 models 含路由 modelId（settingsStore 全量下发形态），若无 kind 排除四条过滤本可满足
-    expect(agg.models.some((m) => m.id === r.modelId)).toBe(true)
     const ids = candidateProviderIds(r, [...providers, agg])
     expect(ids).not.toContain(AGGREGATION_PROVIDER_ID)
-    expect(ids).toEqual(['opencode-go', 'stepfun'])
+    expect(ids).toEqual(['opencode-go', 'no-model', 'stepfun'])
   })
 
   it('endpointProviderOptions 换渠道候选同样排除聚合条目（含当前渠道保留路径）', () => {
@@ -391,7 +392,7 @@ describe('candidateProviderIds 添加端点候选（spec §7.9）', () => {
     const opts = endpointProviderOptions(r, member({ id: 'a', providerId: 'zhipu' }), [...providers, agg])
     expect(opts.map((o) => o.provider.id)).not.toContain(AGGREGATION_PROVIDER_ID)
     // 当前渠道 zhipu 保留（spec §7.8 异常标注语义），聚合条目排除
-    expect(opts.map((o) => o.provider.id)).toEqual(['zhipu', 'opencode-go', 'stepfun'])
+    expect(opts.map((o) => o.provider.id)).toEqual(['zhipu', 'opencode-go', 'no-model', 'stepfun'])
   })
 })
 

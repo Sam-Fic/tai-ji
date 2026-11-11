@@ -25,9 +25,11 @@ import { mount, flushPromises, enableAutoUnmount, VueWrapper } from '@vue/test-u
 import type { AggregationRouteCard, AggregationRouteView, AggregationRoute, ProviderId, ProviderInfo } from '@taiji/shared'
 import { AGGREGATION_PROVIDER_ID } from '@taiji/shared'
 import ModelRoutePage from '../provider/ModelRoutePage.vue'
+import RouteCard from '../provider/RouteCard.vue'
 import RouteUnsavedBar from '../provider/RouteUnsavedBar.vue'
 import { blankWindowTable, weekdayBusinessWindow, type RouteNow } from '../provider/route-preview'
 import { SETTINGS_TOAST_KEY } from '../injection-keys'
+import { pickSelectOption } from './helpers'
 
 const NOW: RouteNow = { dow: 2, slot: 29 } // 周三 14:30（对齐 spec §5.2 演示坐标语义）
 
@@ -654,5 +656,209 @@ describe('ModelRoutePage 引用跳转定位（focus prop）', () => {
     const w = mountPage([cardOf(routeOf({}))])
     await flushPromises()
     expect(w.find('[data-testid="route-endpoint-row"]').exists()).toBe(false)
+  })
+})
+
+// ── 路由名称行内编辑（点击名称 → 编辑态 → route-patch { name }；id 是对齐键不可变，
+//    name 保存校验只要求非空，数据层原生支持改名）──
+
+describe('路由名称行内编辑（route-patch name）', () => {
+  it('点击名称进入编辑态，Enter 提交改名指令并回显新名 + 标脏', async () => {
+    const w = mountPage([cardOf(routeOf({ id: 'r1', name: '原名' }))])
+    await w.find('[data-testid="route-card-name"]').trigger('click')
+    const input = w.find('[data-testid="route-card-name-input"]')
+    expect(input.exists()).toBe(true)
+    await input.setValue('改名后')
+    await input.trigger('keydown.enter')
+    // 构建者白盒：RouteCard 上抛的指令载荷
+    const emitted = w.findComponent(RouteCard).emitted('op')
+    expect(emitted).toBeTruthy()
+    expect(emitted![0]![0]).toEqual({ kind: 'route-patch', routeId: 'r1', patch: { name: '改名后' } })
+    // 黑盒 DOM：提交后回展示态并显示新名；未保存条标脏
+    expect(w.find('[data-testid="route-card-name-input"]').exists()).toBe(false)
+    expect(w.find('[data-testid="route-card-name"]').text()).toBe('改名后')
+    expect(w.findComponent(RouteUnsavedBar).props('dirty')).toBe(true)
+  })
+
+  it('Esc 取消：不发指令、名称保持原值', async () => {
+    const w = mountPage([cardOf(routeOf({ id: 'r1', name: '原名' }))])
+    await w.find('[data-testid="route-card-name"]').trigger('click')
+    await w.find('[data-testid="route-card-name-input"]').setValue('草稿值')
+    await w.find('[data-testid="route-card-name-input"]').trigger('keydown.esc')
+    expect(w.findComponent(RouteCard).emitted('op')).toBeFalsy()
+    expect(w.find('[data-testid="route-card-name"]').text()).toBe('原名')
+    expect(w.findComponent(RouteUnsavedBar).props('dirty')).toBe(false)
+  })
+
+  it('空值不提交（trim 后为空直接退出编辑态，名称不变）', async () => {
+    const w = mountPage([cardOf(routeOf({ id: 'r1', name: '原名' }))])
+    await w.find('[data-testid="route-card-name"]').trigger('click')
+    await w.find('[data-testid="route-card-name-input"]').setValue('   ')
+    await w.find('[data-testid="route-card-name-input"]').trigger('keydown.enter')
+    expect(w.findComponent(RouteCard).emitted('op')).toBeFalsy()
+    expect(w.find('[data-testid="route-card-name"]').text()).toBe('原名')
+  })
+
+  it('失焦提交（blur 同提交通道）', async () => {
+    const w = mountPage([cardOf(routeOf({ id: 'r1', name: '原名' }))])
+    await w.find('[data-testid="route-card-name"]').trigger('click')
+    await w.find('[data-testid="route-card-name-input"]').setValue('失焦改名')
+    await w.find('[data-testid="route-card-name-input"]').trigger('blur')
+    const emitted = w.findComponent(RouteCard).emitted('op')
+    expect(emitted![0]![0]).toEqual({ kind: 'route-patch', routeId: 'r1', patch: { name: '失焦改名' } })
+  })
+})
+
+// ── 端点模型下拉（渠道与模型独立选择；候选 = 本渠道启用模型，当前值禁用/已移除保留标注）──
+
+describe('端点模型下拉（endpoint-patch modelId）', () => {
+  /** 展开 + 单端点 fixture：member 挂在 providers[0] 渠道。 */
+  async function expandedRow(
+    member: AggregationRoute['members'][number],
+    providers: ProviderInfo[],
+  ): Promise<VueWrapper> {
+    const w = mountPage([cardOf(routeOf({ members: [member] }))], providers)
+    await w.find('[data-testid="route-card-toggle"]').trigger('click')
+    return w
+  }
+
+  const ZHIPU_MIXED = (): ProviderInfo[] => [
+    prov({ id: 'zhipu', models: [{ id: 'glm-5-3' }, { id: 'glm-4-plus', enabled: false }] }),
+    prov({ id: 'opencode-go', models: [{ id: 'k2-turbo' }] }),
+  ]
+
+  async function openModelOptions(w: VueWrapper): Promise<string[]> {
+    const trigger = w.find('[data-testid="endpoint-model-select"]').element as HTMLElement
+    trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    trigger.click()
+    await flushPromises()
+    return Array.from(document.body.querySelectorAll('[role="option"]')).map((el) => el.textContent ?? '')
+  }
+
+  it('模型 chip 已换成下拉（endpoint-model-select）；候选只列启用模型', async () => {
+    const w = await expandedRow({ id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' }, ZHIPU_MIXED())
+    expect(w.find('[data-testid="endpoint-model-select"]').exists()).toBe(true)
+    const texts = await openModelOptions(w)
+    expect(texts).toContain('glm-5-3')
+    // 禁用模型不入候选（配置保留标注只对「当前值」生效，非当前值直接隐藏）
+    expect(texts.some((t) => t.includes('glm-4-plus'))).toBe(false)
+  })
+
+  it('选其他启用模型 → endpoint-patch { modelId } 载荷上抛', async () => {
+    const providers = [prov({ id: 'zhipu', models: [{ id: 'glm-5-3' }, { id: 'glm-4-air' }] })]
+    const w = await expandedRow({ id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' }, providers)
+    await pickSelectOption(w.find('[data-testid="endpoint-model-select"]').element as HTMLElement, 'glm-4-air')
+    const emitted = w.findComponent(RouteCard).emitted('op')
+    expect(emitted).toBeTruthy()
+    expect(emitted![0]![0]).toMatchObject({ kind: 'endpoint-patch', routeId: 'glm-5-3', patch: { modelId: 'glm-4-air' } })
+  })
+
+  it('当前模型已禁用：保留为选项并标注（modelDisabledLabel）', async () => {
+    const w = await expandedRow({ id: 'a', providerId: 'zhipu', modelId: 'glm-4-plus', type: 'none' }, ZHIPU_MIXED())
+    const texts = await openModelOptions(w)
+    expect(texts.some((t) => t.includes('glm-4-plus'))).toBe(true)
+    expect(texts.some((t) => t.includes('settings.modelRoute.modelDisabledLabel'))).toBe(true)
+  })
+
+  it('当前模型已移除：保留为选项并标注（modelRemovedLabel）', async () => {
+    const w = await expandedRow({ id: 'a', providerId: 'zhipu', modelId: 'gone-model', type: 'none' }, ZHIPU_MIXED())
+    const texts = await openModelOptions(w)
+    expect(texts.some((t) => t.includes('gone-model'))).toBe(true)
+    expect(texts.some((t) => t.includes('settings.modelRoute.modelRemovedLabel'))).toBe(true)
+  })
+})
+
+// ── 渠道切换联动模型重置（opEndpointPatch providerId 联动：端点渠道与模型独立选择的
+//    语义闭环——切渠道后旧 modelId 落新渠道悬空，重置为新渠道第一个启用模型）──
+
+describe('渠道切换联动模型重置（endpoint-patch providerId）', () => {
+  it('切到有模型渠道：modelId 重置为新渠道第一个启用模型（DOM + save 载荷双断言）', async () => {
+    const providers = [
+      prov({ id: 'zhipu', models: [{ id: 'glm-5-3' }] }),
+      prov({ id: 'opencode-go', models: [{ id: 'k2-turbo' }, { id: 'k2-lite', enabled: false }] }),
+    ]
+    const w = mountPage([cardOf(routeOf({ members: [{ id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' }] }))], providers)
+    await w.find('[data-testid="route-card-toggle"]').trigger('click')
+    await pickSelectOption(w.find('[data-testid="endpoint-provider-select"]').element as HTMLElement, 'opencode-go')
+    const row = w.find('[data-testid="route-endpoint-row"]')
+    expect(row.text()).toContain('opencode-go')
+    expect(row.text()).toContain('k2-turbo')
+    expect(row.text()).not.toContain('glm-5-3')
+    w.findComponent(RouteUnsavedBar).vm.$emit('save')
+    await w.vm.$nextTick()
+    const payload = (w.findComponent(ModelRoutePage).emitted('save')![0]![0]) as { routes: AggregationRoute[] }
+    expect(payload.routes[0]!.members[0]).toMatchObject({ providerId: 'opencode-go', modelId: 'k2-turbo' })
+  })
+
+  it('新渠道无启用模型：modelId 保留原值（悬空由异常 chip 呈报，保存不拒绝）', async () => {
+    const providers = [
+      prov({ id: 'zhipu', models: [{ id: 'glm-5-3' }] }),
+      prov({ id: 'opencode-go', models: [] }),
+    ]
+    const w = mountPage([cardOf(routeOf({ members: [{ id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' }] }))], providers)
+    await w.find('[data-testid="route-card-toggle"]').trigger('click')
+    await pickSelectOption(w.find('[data-testid="endpoint-provider-select"]').element as HTMLElement, 'opencode-go')
+    const row = w.find('[data-testid="route-endpoint-row"]')
+    // modelId 保留 + model-removed 异常 chip（配置保留优先语义）
+    expect(row.text()).toContain('glm-5-3')
+    expect(row.text()).toContain('settings.modelRoute.issue.model-removed')
+    w.findComponent(RouteUnsavedBar).vm.$emit('save')
+    await w.vm.$nextTick()
+    const payload = (w.findComponent(ModelRoutePage).emitted('save')![0]![0]) as { routes: AggregationRoute[] }
+    expect(payload.routes[0]!.members[0]).toMatchObject({ providerId: 'opencode-go', modelId: 'glm-5-3' })
+  })
+})
+
+// ── 卡片拖拽排序（HTML5 DnD：把手 dragstart → 卡根 dragover/drop → moveCardToSlot 纯函数）──
+
+describe('卡片拖拽排序（drag-and-drop reorder）', () => {
+  it('路由卡拖到第一张卡前缘：卡序交换 + 标脏 + save 载荷顺序跟随', async () => {
+    const w = mountPage([cardOf(routeOf({ id: 'r1' })), cardOf(routeOf({ id: 'r2' }))])
+    const cards = () => w.findAll('[data-testid="route-card"]')
+    await cards()[1]!.find('[data-testid="route-card-drag-handle"]').trigger('dragstart')
+    await cards()[0]!.trigger('dragover', { clientY: 0 })
+    // 指示线（前缘 inset shadow 工具类）挂在目标卡上
+    expect(cards()[0]!.classes()).toContain('shadow-[inset_0_2px_0_0_var(--accent)]')
+    await cards()[0]!.trigger('drop')
+    await cards()[0]!.trigger('dragend')
+    expect(cards()[0]!.attributes('data-route-id')).toBe('r2')
+    expect(cards()[1]!.attributes('data-route-id')).toBe('r1')
+    expect(w.findComponent(ModelRoutePage).emitted('change')).toBeTruthy()
+    w.findComponent(RouteUnsavedBar).vm.$emit('save')
+    await w.vm.$nextTick()
+    const payload = (w.findComponent(ModelRoutePage).emitted('save')![0]![0]) as { routes: AggregationRoute[] }
+    expect(payload.routes.map((r) => r.id)).toEqual(['r2', 'r1'])
+  })
+
+  it('放回原位（目标自身后缘）不重排不标脏', async () => {
+    const w = mountPage([cardOf(routeOf({ id: 'r1' })), cardOf(routeOf({ id: 'r2' }))])
+    const cards = () => w.findAll('[data-testid="route-card"]')
+    await cards()[0]!.find('[data-testid="route-card-drag-handle"]').trigger('dragstart')
+    await cards()[0]!.trigger('dragover', { clientY: 500 })
+    expect(cards()[0]!.classes()).toContain('shadow-[inset_0_-2px_0_0_var(--accent)]')
+    await cards()[0]!.trigger('drop')
+    await cards()[0]!.trigger('dragend')
+    expect(w.findComponent(ModelRoutePage).emitted('change')).toBeFalsy()
+    expect(cards()[0]!.attributes('data-route-id')).toBe('r1')
+    // 拖拽态已复位：指示类摘除
+    expect(cards()[0]!.classes()).not.toContain('shadow-[inset_0_-2px_0_0_var(--accent)]')
+  })
+
+  it('直连卡拖到路由卡之后：save 载荷 scopedRefs 顺序跟随（卡片序 = 白名单目标序）', async () => {
+    const w = mountPage(
+      [cardOf(routeOf({ id: 'r1' }), { scopedIndex: 0 })],
+      [prov({ id: 'zhipu' })],
+      undefined,
+      [`${AGGREGATION_PROVIDER_ID}/r1`, 'zhipu/glm-5-3'],
+    )
+    await w.find('[data-testid="route-direct-card"] [data-testid="route-direct-drag-handle"]').trigger('dragstart')
+    // 拖过路由卡（index 1）下缘 → 插入槽位 2 = 移到末尾
+    await w.find('[data-testid="route-card"]').trigger('dragover', { clientY: 500 })
+    await w.find('[data-testid="route-card"]').trigger('drop')
+    await w.find('[data-testid="route-card"]').trigger('dragend')
+    w.findComponent(RouteUnsavedBar).vm.$emit('save')
+    await w.vm.$nextTick()
+    const payload = (w.findComponent(ModelRoutePage).emitted('save')![0]![0]) as { scopedRefs: string[] }
+    expect(payload.scopedRefs).toEqual([`${AGGREGATION_PROVIDER_ID}/r1`, 'zhipu/glm-5-3'])
   })
 })

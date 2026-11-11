@@ -5889,6 +5889,29 @@
       "note": "跑绿门挂 u-retire-protocol commit 门 + CI invariants job 全量直调（.github/workflows/ci.yml history-read-model 步）；本条目 on-diff scope 是增量触发面，与 CI 全量直调互补。断言依赖实现终态——history-rebuild-cache.ts 迁移为 history-reader.ts 之前实跑 exit 1 是预期红（基线形态 13 处回流命中已实测登记）。范围外消费链（TraceSync / SessionRecords / 撤回定位 / 投递判重 / 插件读取 / 压缩分界的 get_entries）不在检查范围，见脚本头注。"
     },
     {
+      "id": "E2E-PIPE-31",
+      "summary": "路由对账测试（plugin.listVersions 漏登记 handles 事故后立的门禁）：协议全集（CLIENT_MESSAGE_TYPES 运行时清单，与 ClientMessageType 双向锁死）vs runtime 全部认领面（16 显式 handler handles + settings 兜底 claimedTypes + 内联路由），差集必须 === 显式豁免清单（每条带理由）",
+      "scope": [
+        "packages/shared/src/protocol.ts",
+        "packages/runtime/src/transport/plugin-message-handler.ts",
+        "packages/runtime/src/transport/config-preferences-message-handler.ts",
+        "packages/runtime/src/transport/settings-message-handler.ts"
+      ],
+      "layer": "L1",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "packages/runtime/test/route-coverage.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": false,
+      "run": "cd packages/runtime && npx vitest run test/route-coverage.test.ts",
+      "owner": "packages/runtime",
+      "authority": "packages/runtime/test/route-coverage.test.ts",
+      "note": "新增 RPC 漏登记任何一处（协议类型 / 分发表 / handles 认领）→ 差集多出一项 → 本测试红且错误信息点名漏登记 type。plugin handler 的 handles 已从分发表派生（表加条目自动跟上）；豁免清单成员失去豁免理由（预留实装 / 孤儿清理）时须同步移除。红灯验证已做：注释掉分发表 'plugin.listVersions' 条目 → 测试 1 红并列出该名。"
+    },
+    {
       "id": "E2E-RPCCONTRACT-01",
       "summary": "runtime rpc-client 公开面契约（mock 层，零 token）：任务级墙钟退役后公开 API 面不再暴露 timeoutMs 形参（ADR-0190 契约锁——防时间窗机制回潮）",
       "scope": [

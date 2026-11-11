@@ -93,8 +93,8 @@ export interface NewRouteDraftInput {
  * - id 缺省从名称生成（generateRouteIdFromName 既有形态）+ 既有 id 唯一性后缀（-2/-3…）；
  *   modelId 同值生成（编辑器恒与 id 同值的既有形态）。
  * - 端点预填第一个可用渠道的模型端点（无条件，endpoint-add 同形态）——保存校验要求
- *   至少一个端点，且 candidateProviderIds 按 route.modelId 过滤候选，预填真实模型是
- *   「创建后即可继续添加端点并保存」的唯一自洽初值。无可用渠道时落零端点草稿（保存被
+ *   至少一个端点，预填真实模型是「创建后即可保存」的自洽初值（端点模型可在行内下拉
+ *   独立改选，预填只是种子不再是锁定）。无可用渠道时落零端点草稿（保存被
  *   「至少一个端点」校验显式拒绝，不产假可保存态）。
  * - mode = 'advanced'（创建侧默认值）；enabled = true；specials = 空。
  */
@@ -119,4 +119,22 @@ export function buildNewRouteDraft(input: NewRouteDraftInput): AggregationRoute 
       : [],
     specials: [],
   }
+}
+
+// ── 卡片重排（拖拽排序数据层；上移/下移按钮与拖拽共用同一草稿数组语义） ──────────────
+
+/**
+ * 把 from 位置的卡片移动到插入槽位 slot（slot = 目标边界在原坐标系的插入位置，0..length）。
+ * 纯函数返回新数组（不就地改），供 ModelRoutePage 拖拽排序（HTML5 DnD drop 落点换算后的
+ * 数据层执行）与测试直接消费。越界或无位移（slot === from 或 slot === from + 1）时返回
+ * 等值副本——调用方据引用是否变化可跳过标脏。
+ */
+export function moveCardToSlot<T>(list: readonly T[], from: number, slot: number): T[] {
+  if (from < 0 || from >= list.length || slot < 0 || slot > list.length) return [...list]
+  if (slot === from || slot === from + 1) return [...list]
+  const next = [...list]
+  const [moved] = next.splice(from, 1)
+  // from 元素已摘除，slot 若在其后方需左移一位才是删除后坐标系的目标下标
+  next.splice(from < slot ? slot - 1 : slot, 0, moved!)
+  return next
 }

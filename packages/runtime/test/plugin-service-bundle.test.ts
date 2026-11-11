@@ -2075,9 +2075,9 @@ describe('PluginMessageHandler — 落空语义与 handles 清单', () => {
     expect(pluginService.getDiscoveredPlugins).not.toHaveBeenCalled()
   })
 
-  it('handles 清单含全部 21 个 plugin.* type', () => {
+  it('handles 清单含全部 22 个 plugin.* type', () => {
     const { handler } = makeHandler()
-    expect(handler.handles).toHaveLength(21)
+    expect(handler.handles).toHaveLength(22)
     expect(handler.handles).toEqual(expect.arrayContaining([
       'plugin.list', 'plugin.toggle', 'plugin.uninstall', 'plugin.approvePermissions', 'plugin.revokePermissions',
       'plugin.denyPermissions',
@@ -2090,6 +2090,8 @@ describe('PluginMessageHandler — 落空语义与 handles 清单', () => {
       'plugin.invoke', 'plugin.uiEvent', 'plugin.listAvailable', 'plugin.catalog',
       // provider-plugin-access U4/U6：两段式安装（prepare 确认停点 / confirm 提交 / cancel 清暂存）
       'plugin.prepareInstall', 'plugin.confirmInstall', 'plugin.cancelInstall',
+      // 版本选择步（fd3d42084 新增，曾漏登记 handles → 路由层 unknown_type，route-coverage 门禁在案）
+      'plugin.listVersions',
     ]))
   })
 })

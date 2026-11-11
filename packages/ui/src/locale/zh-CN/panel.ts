@@ -647,10 +647,9 @@ export default {
     // failed 行判重说明（行 hover title 第二行：重试入口不重复投递的保证，Q6）
     retryDedupHint: '点重试会自动判重，不会重复投递',
     retryFailed: '重试失败：{msg}',
-    // 批量重试（Q5）与 +N 展开开关（Q2）
+    // 批量重试（Q5）；region 标签（堆叠区 aria-label，含条目计数）
     retryAll: '重试全部失败项',
-    expandQueued: '展开折叠的 {n} 条消息',
-    collapseQueued: '收起',
+    regionLabel: '排队消息 · {n} 条',
     // ✎ 编辑（chat-flow-consistency D6：peek 预填 + 锚定登记，全行可用含 failed——E7）
     editQueued: '编辑排队消息',
     // 编辑态提示条（锚定在册渲染；条目离场由帧驱动自动解除 → 提示条随之消失）

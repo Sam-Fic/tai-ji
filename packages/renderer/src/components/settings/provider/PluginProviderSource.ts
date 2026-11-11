@@ -197,6 +197,12 @@ export type PluginProviderSourceReturn = {
    * 失败向调用方抛出（UI 层呈现，不静默）。
    */
   restartPlugin: (pluginId: string) => Promise<void>
+  /**
+   * 激活已装未激活插件（plugin.toggle on 单步；审批门等待期 toggle 不回包是设计内
+   * ——elevated 审批弹窗浮于设置弹窗之上，批准/拒绝后回包）。成功以 toggle reply 的
+   * 最新列表更新运行态缓存；失败向调用方抛出（UI 层呈现，不静默）。
+   */
+  activatePlugin: (pluginId: string) => Promise<void>
   /** 已知插件运行态（undefined = 未拉取/不在列表——无崩溃标记，不猜测） */
   pluginInfoOf: (pluginId: string) => PluginInfo | undefined
   /** 已知凭据状态（undefined = 未上报/未拉取——宿主不显示任何标记，D5/S5） */
@@ -312,6 +318,7 @@ export function usePluginProviderSource(): PluginProviderSourceReturn {
     refreshCatalog,
     refreshPlugins,
     restartPlugin,
+    activatePlugin,
     pluginInfoOf: (pluginId) => pluginInfoMap.value.get(pluginId),
     statusOf: (providerId) => statusMap.value.get(providerId),
     pullStatus,
@@ -342,11 +349,16 @@ async function refreshCatalog(): Promise<void> {
   }
 }
 
+/** 插件列表快照整表覆写运行态缓存（plugin.list / toggle reply 三个消费点共用同一覆写语义）。 */
+function setPluginInfoMap(plugins: readonly PluginInfo[]): void {
+  pluginInfoMap.value = new Map(plugins.map((p) => [p.pluginId, p]))
+}
+
 /** 拉取插件运行态列表（plugin.list；失败保持现状 + warn，S13 拉为主）。 */
 async function refreshPlugins(): Promise<void> {
   try {
     const plugins = await getSettingsTransport().listPlugins()
-    pluginInfoMap.value = new Map(plugins.map((p) => [p.pluginId, p]))
+    setPluginInfoMap(plugins)
   } catch (e) {
     // 辅助域降级：失败保持现状（无崩溃标记——不猜测），不向上抛。
     console.warn('[plugin-provider-source] plugin.list failed (kept current plugin states):', e)
@@ -360,8 +372,12 @@ async function refreshPlugins(): Promise<void> {
 async function restartPlugin(pluginId: string): Promise<void> {
   const transport = getSettingsTransport()
   await transport.togglePlugin(pluginId, false)
-  const plugins = await transport.togglePlugin(pluginId, true)
-  pluginInfoMap.value = new Map(plugins.map((p) => [p.pluginId, p]))
+  setPluginInfoMap(await transport.togglePlugin(pluginId, true))
+}
+
+/** 激活已装未激活插件（plugin.toggle on 单步）。审批门等待期 toggle 不回包（设计内）。 */
+async function activatePlugin(pluginId: string): Promise<void> {
+  setPluginInfoMap(await getSettingsTransport().togglePlugin(pluginId, true))
 }
 
 /** 条目展开 / 页进入的凭据状态拉取（invoke getStatus；失败 warn 降级，D5）。 */

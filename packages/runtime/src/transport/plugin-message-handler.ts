@@ -14,21 +14,14 @@ export interface PluginHandlerContext extends MessageHandlerContext {
 export class PluginMessageHandler {
   constructor(private ctx: PluginHandlerContext) {}
 
-  /** D1: 本 handler 认领的 ClientMessageType 清单。 */
-  readonly handles: ClientMessageType[] = [
-    'plugin.list', 'plugin.toggle', 'plugin.uninstall', 'plugin.approvePermissions', 'plugin.revokePermissions',
-    'plugin.denyPermissions',
-    'plugin.executeCommand', 'plugin.config.get', 'plugin.config.set', 'plugin.install', 'plugin.uiResponse',
-    'plugin.mountPoints.sync', 'plugin.ui.snapshot',
-    // provider-plugin-access U2 裁决①：家族切换的挂载位分区清理（防陈旧）。
-    'plugin.ui.clearMount',
-    // provider-plugin-access D9/D8/U5：plugin.invoke 业务方法调用、plugin.uiEvent 输入
-    // 值回传、清单域两个无参只读 RPC。
-    'plugin.invoke', 'plugin.uiEvent', 'plugin.listAvailable', 'plugin.catalog',
-    // provider-plugin-access U4/U6：两段式安装（prepare 确认停点 → confirm 提交 /
-    // cancel 清暂存），确认停点对接 Provider 页安装确认卡（S27）。
-    'plugin.prepareInstall', 'plugin.confirmInstall', 'plugin.cancelInstall',
-  ]
+  /**
+   * D1: 本 handler 认领的 ClientMessageType 清单——派生自分发表 PLUGIN_CASE_HANDLERS
+   * （S1 收敛：单一事实源，「分发表加条目漏改 handles」漂移类结构性消灭，对齐
+   * session-message-handler 同款先例；plugin.listVersions 曾因手写清单漏登记在
+   * 路由层落 unknown_type，事故后改造）。表为模块级 const，实例化时模块必已加载
+   * 完毕，类与表的声明先后无影响。
+   */
+  readonly handles: ClientMessageType[] = Object.keys(PLUGIN_CASE_HANDLERS) as ClientMessageType[]
 
   async handlePluginMessage(msg: ClientMessage, ws: WsType): Promise<void> {
     // D3: service-not-available 前置检查（与 extension 的 requireExt 同形）。
@@ -55,7 +48,7 @@ export class PluginMessageHandler {
   }
 }
 
-/** 本 handler 认领的 plugin.* type 全集（与 handles 清单一一对应，TS 层收窄用）。 */
+/** 本 handler 认领的 plugin.* type 全集（= 分发表 key 域，TS 层收窄用；handles 由表派生，此处即单一事实源）。 */
 type PluginHandledType =
   | 'plugin.list' | 'plugin.toggle' | 'plugin.uninstall' | 'plugin.approvePermissions' | 'plugin.revokePermissions'
   | 'plugin.denyPermissions'

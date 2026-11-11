@@ -77,6 +77,9 @@ export { TAIJI_NAV_COMMAND } from './protocol'
 // plugin 系下行帧类型全集（wire SSOT 运行时可迭代投影，成员类型 PluginDownlinkType
 // 在上方 type 块）——renderer 侧 bridge 对账测试取数源（plugin-downlink-contract）
 export { PLUGIN_DOWNLINK_TYPES } from './protocol'
+// ClientMessageType 全集运行时清单（协议 SSOT 可迭代投影）——runtime 路由对账测试
+// 取数源（plugin.listVersions 漏登记 handles 事故后立的门禁，互锁注释见 protocol.ts）
+export { CLIENT_MESSAGE_TYPES } from './protocol'
 // subagent.setModel「记账已写」错误码分型词表（D3 缺陷七）：renderer badge 亮灯判定
 // 的跨包消费常量（机制权威 = subagent-core model-switch.ts 处置表，词表扩位同批）。
 export { SUBAGENT_SET_MODEL_ACCOUNTED_ERROR_CODES } from './protocol'
