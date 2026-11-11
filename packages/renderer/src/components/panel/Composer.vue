@@ -22,6 +22,29 @@
     <!-- retry/queue 指示位（spec C10，#13，composer 上方独立行）：
          auto_retry_end / message_start 到达时 store 自动清 → state=undefined → 组件 v-if 消失 -->
     <RetryIndicator :state="retryState" />
+    <!-- QueueBubble（卡片堆叠形态：OD QueuedSendStack 同款相位机）——composer-box **外部**
+         上方独立浮层（OD 同款挂载：strip 与 composer 各自成框，卡片不fuse 进 composer），
+         紧贴 composer 上沿留 pb 间隙。队列空时不渲染，composer 视觉零变化。
+         拖放落点与 composer-box 同源：@dragover/@drop 经单根 fallthrough 落 QueueBubble
+         根元素，委托 shell onDragOver/onDrop 同一实现——堆叠区释放图片等同 box 释放；
+         若此区域缺 drop handler，释放文件走浏览器默认导航（file://），被主进程
+         will-navigate 白名单 preventDefault 拦下成静默无动作，故两区域落点须同步挂。
+         [u3c/D7 单源化] 行数据 = session.delivery 状态帧派生视图（useQueueRows），
+         × 撤销 → delivery.cancel、failed 行重试 → delivery.resync、
+         重试全部 → 同一 useQueueRows 编排（Q5）；展开态为组件内瞬态（Q2 复裁：+N
+         点击开关已随堆叠形态退役，hover/focus 展开即全量浏览） -->
+    <QueueBubble
+      :rows="queueRows"
+      :hint="queueHint"
+      :editing-client-uuid="editingQueueClientUuid"
+      @dragover.prevent="onDragOver"
+      @drop.prevent="onDrop"
+      @cancel="onCancelQueueEntry"
+      @edit="onEditQueueEntry"
+      @abandon-edit="onAbandonQueueEdit"
+      @retry="onRetryQueueEntry"
+      @retry-all="onRetryAllQueueFailed"
+    />
     <!-- 命令浮层（§2d @/#//）：anchor = composer-box（slot），reka-ui Popover portal body。
          composer-box 内 focus 算 inside 不触发 dismiss，键盘路由见 onKeydown。
          cwd：landing 态 $ 候选的 cwd 通道（landing-composer-session-file-symbols D2；
@@ -51,23 +74,6 @@
         @dragleave.prevent="onDragLeave"
         @drop.prevent="onDrop"
       >
-        <!-- QueueBubble（v6 §8.5：内嵌 composer-box 顶部，去独立卡片/pulse/标签/chevron，
-             仅 border-b 分隔）——6 区第 1 位。
-             [u3c/D7 单源化] 行数据 = session.delivery 状态帧派生视图（useQueueRows），
-             × 撤销 → delivery.cancel、failed 行重试 → delivery.resync、
-             +N 展开/重试全部 → 同一 useQueueRows 编排（Q2/Q5） -->
-        <QueueBubble
-          :rows="queueRows"
-          :hint="queueHint"
-          :expanded="queueExpanded"
-          :editing-client-uuid="editingQueueClientUuid"
-          @cancel="onCancelQueueEntry"
-          @edit="onEditQueueEntry"
-          @abandon-edit="onAbandonQueueEdit"
-          @retry="onRetryQueueEntry"
-          @retry-all="onRetryAllQueueFailed"
-          @toggle-expand="toggleQueueExpanded"
-        />
         <!-- Staging 模式 banner（fork/handoff 统一，demo .mode-banner 形态对齐）：composer-box 顶缘
              整条横幅，图标染 accent = 模式在途唯一染色点（标题粗体中性 fg，描述 fg-2，× 中性）。
              [HISTORICAL] 前身 mode-chip（accent-soft 底 + accent 字 + accent × + placeholder/box
@@ -513,13 +519,11 @@ const {
 } = shell
 
 // [u3c/D7] 队列区行（session.delivery 帧派生视图）+ 撤销/重试编排（行数约束拆出 useQueueRows；
-// 依赖 shell 的 restoreToDraft，故在解构后调用）。expanded/toggle = +N 展开开关（Q2，
-// per-session 分区持有）；onRetryAllFailed = 重试全部失败项（Q5）
+// 依赖 shell 的 restoreToDraft，故在解构后调用）。展开态 = 堆叠 hover/focus 瞬态（QueueBubble
+// 组件内自持）；onRetryAllFailed = 重试全部失败项（Q5）
 const {
   rows: queueRows,
   hint: queueHint,
-  expanded: queueExpanded,
-  toggleExpanded: toggleQueueExpanded,
   onCancelEntry: onCancelQueueEntry,
   onEditEntry: onEditQueueEntry,
   onRetryEntry: onRetryQueueEntry,

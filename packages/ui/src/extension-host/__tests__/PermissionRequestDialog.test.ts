@@ -42,10 +42,12 @@ import type { PermissionTransport } from '../permission-transport'
 
 const PERMISSIONS = ['fs.read', 'net.http']
 
-/** Dialog 家族 stub：内联渲染 slot，尊重 open（pending=false 时不渲染内容） */
+/** Dialog 家族 stub：内联渲染 slot，尊重 open（pending=false 时不渲染内容）。
+ *  DialogContent stub 声明 elevated prop（Boolean 类型化——裸属性形态的布尔转换
+ *  只有类型声明才生效）——消费接线断言（elevated=true 透传）经它捕获。 */
 const dialogStubs = {
   Dialog: { props: ['open'], template: '<div><slot v-if="open" /></div>' },
-  DialogContent: { template: '<div><slot /></div>' },
+  DialogContent: { name: 'DialogContent', props: { elevated: Boolean }, template: '<div><slot /></div>' },
   DialogHeader: { template: '<div><slot /></div>' },
   DialogTitle: { template: '<div><slot /></div>' },
   DialogDescription: { template: '<div><slot /></div>' },
@@ -152,5 +154,15 @@ describe('PermissionRequestDialog', () => {
     const wrapper = mountDialog({ pending: false })
     expect(wrapper.find('[data-testid="permission-dialog"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="permission-item-fs.read"]').exists()).toBe(false)
+  })
+
+  it('elevated 接线：Dialog 原语收到 elevated=true（接线丢失 = 审批弹窗重新可被宿主弹窗遮盖）', () => {
+    // 2026-11-10 安装死锁修复的消费侧锁：权限批准弹窗必须压过触发它的安装确认弹窗
+    // （同为 --z-modal 层时 DOM 先序者被后序者整块遮盖，审批门无时限 → confirm 永挂）。
+    // z 计算本体由 dialog/__tests__/DialogContent.elevation.test.ts 直测，此处只锁透传。
+    const wrapper = mountDialog()
+    const content = wrapper.findComponent({ name: 'DialogContent' })
+    expect(content.exists()).toBe(true)
+    expect(content.props('elevated')).toBe(true)
   })
 })

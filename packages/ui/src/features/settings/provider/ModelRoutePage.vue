@@ -1,6 +1,7 @@
-<!--
-  ModelRoutePage —— 模型路由页容器（provider-aggregation U5b · spec §7.1-§7.2/§7.11/§9）。
+<!-- ModelRoutePage —— 模型路由页容器（provider-aggregation U5b · spec §7.1-§7.2/§7.11/§9）。 -->
+<!-- split-justified: 模型路由页容器（草稿态与编辑指令执行端与拖拽编排的唯一入口） -->
 
+<!--
   数据流（D10 视图半边）：props.view = runtime join 视图（AggregationRouteView，非权威；
   wire 卡只含 routes 定义的模型），props.scopedModels = 白名单全量（渠道直连条目经它抵达
   ——D10 卡片集合 = scopedModels ∪ routes）；页面草稿经 core buildRoutePageCards 派生
@@ -78,10 +79,15 @@
           :new-session-available="newSessionRouteIds?.has(card.card.route.id) ?? false"
           :focus="focus && focus.routeId === card.card.route.id ? focus : undefined"
           :quota-of="quotaOf"
+          :class="drag.cardClass(idx)"
           @op="applyEditorOp"
           @move="moveCard(idx, $event)"
           @toggle-scoped="toggleScoped(idx)"
           @open-providers="emit('openProviders')"
+          @card-drag-start="drag.startDrag(idx, $event)"
+          @card-drag-over="drag.dragOverCard(idx, $event)"
+          @card-drop="drag.dropCard(idx, $event)"
+          @card-drag-end="drag.endDrag()"
         />
         <!-- 渠道直连卡（无 routes 定义的物理模型白名单条目，D10/U9「默认单端点形态」）：
              仅排序 + 参与选择开关，端点/条件编辑不适用 -->
@@ -90,8 +96,24 @@
           data-testid="route-direct-card"
           :data-ref="card.ref"
           class="rounded-lg border border-border bg-bg-card"
+          :class="drag.cardClass(idx)"
+          @dragover="drag.dragOverCard(idx, $event)"
+          @drop.prevent="drag.dropCard(idx, $event)"
+          @dragend="drag.endDrag()"
         >
           <div class="flex flex-wrap items-center gap-2 px-4 py-3">
+            <Button
+              variant="ghost"
+              size="icon"
+              class="size-7 shrink-0 cursor-grab rounded-sm p-0 text-neutral-dim hover:text-neutral-fg active:cursor-grabbing"
+              :aria-label="t('settings.modelRoute.dragCard')"
+              :title="t('settings.modelRoute.dragCard')"
+              data-testid="route-direct-drag-handle"
+              draggable="true"
+              @dragstart="drag.startDrag(idx, $event)"
+            >
+              <GripVertical class="size-3.5" />
+            </Button>
             <span class="text-[length:var(--text-sm)] font-medium text-neutral-fg" data-testid="route-direct-name">
               {{ card.providerName }} / {{ card.modelName }}
             </span>
@@ -176,7 +198,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ChevronDown, ChevronUp, Server } from '@lucide/vue'
+import { ChevronDown, ChevronUp, GripVertical, Server } from '@lucide/vue'
 import { Button, InlineNotice, Switch } from '@taiji/ui'
 import {
   buildRoutePageCards,
@@ -193,7 +215,8 @@ import { buildAggregationModelRef } from '@taiji/shared'
 import RouteCard from './RouteCard.vue'
 import RouteUnsavedBar from './RouteUnsavedBar.vue'
 import { blankWindowTable, nowFromClock, weekdayBusinessWindow, type RouteNow } from './route-preview'
-import { DEFAULT_QUOTA_THRESHOLD_PERCENT, buildNewRouteDraft, newMemberId, type RouteEditorOp } from './route-editor-ops'
+import { DEFAULT_QUOTA_THRESHOLD_PERCENT, buildNewRouteDraft, moveCardToSlot, newMemberId, type RouteEditorOp } from './route-editor-ops'
+import { useCardDnd } from './route-card-drag'
 
 /** 保存载荷（两权威目标态；写编排归上层——routes 逐条 saveRoute、scopedModels 全量走
  *  setScopedModels 既有通道，编排端 = core createRouteSaveOrchestrator）。 */
@@ -394,7 +417,9 @@ function opEndpointAdd(op: OpOf<'endpoint-add'>): void {
   const member: AggregationMember = {
     id: newMemberId(),
     providerId: op.providerId,
-    modelId: card.card.route.modelId,
+    // 端点模型自选（渠道与模型独立选择）：种子 = 新渠道第一个启用模型；渠道无模型时
+    // 回落 route.modelId（悬空由异常 chip 呈报，保存不拒绝）
+    modelId: firstEnabledModelId(op.providerId) ?? card.card.route.modelId,
     type: 'none',
   }
   if (card.card.route.mode === 'advanced') {
@@ -422,7 +447,18 @@ function opEndpointMove(op: OpOf<'endpoint-move'>): void {
 function opEndpointPatch(op: OpOf<'endpoint-patch'>): void {
   const member = cardOf(op.routeId)?.card.route.members[op.memberIndex]
   if (!member) return
+  // 渠道切换联动模型重置（渠道与模型独立选择的语义闭环）：member.modelId 仍指旧渠道模型名，
+  // 落新渠道即悬空——重置为新渠道第一个启用模型；新渠道无模型时保留原值（异常 chip 呈报，
+  // 保存校验不拒绝）。
+  if (op.patch.providerId !== undefined && op.patch.providerId !== member.providerId) {
+    member.modelId = firstEnabledModelId(op.patch.providerId) ?? member.modelId
+  }
   Object.assign(member, op.patch)
+}
+
+/** 渠道第一个启用模型 id（enabled !== false；渠道不存在或无模型返回 undefined）。 */
+function firstEnabledModelId(providerId: string): string | undefined {
+  return props.providers.find((p) => p.id === providerId)?.models.find((m) => m.enabled !== false)?.id
 }
 
 function opEndpointConditionType(op: OpOf<'endpoint-condition-type'>): void {
@@ -501,6 +537,13 @@ function moveCard(index: number, dir: 'up' | 'down'): void {
   draft.value.splice(target, 0, moved!)
   markDirty()
 }
+
+/** 拖拽排序（原生 HTML5 DnD，route-card-drag.ts）：重排走 moveCardToSlot 纯函数 + 标脏，
+ *  保存复用既有 save() 整表覆写链路（scopedRefs 按卡片序）。 */
+const drag = useCardDnd((from, slot) => {
+  draft.value = moveCardToSlot(draft.value, from, slot)
+  markDirty()
+})
 
 function toggleScoped(index: number): void {
   const card = draft.value[index]

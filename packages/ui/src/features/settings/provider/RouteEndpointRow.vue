@@ -1,8 +1,9 @@
 <!--
   RouteEndpointRow —— 路由端点行（provider-aggregation U5b · spec §7.8 / §7.9 编辑语义）。
 
-  行要素：顺位号 / 颜色点 / 渠道下拉（候选 = 存在·启用·提供该模型·未被占用；当前渠道
-  即使异常也保留并标注）/ 模型简称 chip / 异常 chip（配置保留优先，不剔除求值）/
+  行要素：顺位号 / 颜色点 / 渠道下拉（候选 = 存在·启用·未被占用；当前渠道
+  即使异常也保留并标注）/ 模型下拉（候选 = 本渠道启用模型；当前值禁用/已移除也保留
+  并标注）/ 异常 chip（配置保留优先，不剔除求值）/
   条件区（高级模式：四型分段 + 时间摘要 + 额度阈值）/ 截断与不命中标记 / 操作
   （涂时段·上移·下移·删除；最后端点删除 aria-disabled + toast 阻止）。
 
@@ -41,9 +42,22 @@
       </SelectContent>
     </Select>
 
-    <span class="rounded-sm bg-surface-2 px-1.5 py-0.5 font-mono text-[length:var(--text-3xs)] text-neutral-mid">
-      {{ member.modelId }}
-    </span>
+    <!-- 模型下拉：候选 = 本渠道启用模型；当前值即使禁用/已移除也保留为选项并标注
+         （与渠道下拉「当前渠道异常也保留」同型，spec §7.8 配置保留优先） -->
+    <Select
+      :model-value="member.modelId"
+      data-testid="endpoint-model-select"
+      @update:model-value="(modelId: unknown) => emit('op', opWith({ kind: 'endpoint-patch', patch: { modelId: String(modelId) } }))"
+    >
+      <SelectTrigger class="h-8 w-44 font-mono" :aria-label="t('settings.modelRoute.modelLabel')" data-testid="endpoint-model-select">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem v-for="opt in modelOptions" :key="opt.id" :value="opt.id">
+          {{ opt.label }}
+        </SelectItem>
+      </SelectContent>
+    </Select>
 
     <!-- 异常 chip（配置保留优先，spec §4.5） -->
     <span
@@ -208,6 +222,25 @@ const providerOptions = computed(() => endpointProviderOptions(props.route, prop
 const truncates = computed(() => truncatesAfter(props.route, props.index))
 const neverHit = computed(() => suppressedByEarlierUnconditional(props.route, props.index))
 const isLast = computed(() => props.index === props.total - 1)
+
+/**
+ * 模型下拉候选（当前渠道维度）：启用模型全集 + 当前值保留项。当前 member.modelId 不在
+ * 启用集时插到首位——渠道禁用标注 modelDisabledLabel、模型已移除（含渠道已删除）标注
+ * modelRemovedLabel，配置保留优先不产生「当前值无对应选项」的空显示。
+ */
+const modelOptions = computed(() => {
+  const provider = props.providers.find((p) => p.id === props.member.providerId)
+  const options = (provider?.models ?? [])
+    .filter((m) => m.enabled !== false)
+    .map((m) => ({ id: m.id, label: m.name ?? m.id }))
+  const current = props.member.modelId
+  if (!options.some((o) => o.id === current)) {
+    const raw = provider?.models.find((m) => m.id === current)
+    const suffix = raw !== undefined ? t('settings.modelRoute.modelDisabledLabel') : t('settings.modelRoute.modelRemovedLabel')
+    options.unshift({ id: current, label: (raw?.name ?? current) + suffix })
+  }
+  return options
+})
 
 const hasWindow = computed(() => props.member.type === 'window' || props.member.type === 'combo')
 const hasQuota = computed(() => props.member.type === 'quota' || props.member.type === 'combo')

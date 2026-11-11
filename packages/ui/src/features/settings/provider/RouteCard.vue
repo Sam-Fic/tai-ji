@@ -16,23 +16,59 @@
     data-testid="route-card"
     :data-route-id="card.route.id"
     class="rounded-lg border border-border bg-bg-card"
+    @dragover="emit('cardDragOver', $event)"
+    @drop.prevent="emit('cardDrop', $event)"
+    @dragend="emit('cardDragEnd', $event)"
   >
-    <!-- 卡头 -->
-    <div class="flex flex-wrap items-center gap-2 px-4 py-3">
-      <Button
-        variant="ghost"
-        size="icon"
-        class="size-7 rounded-sm p-0 text-neutral-dim hover:text-neutral-fg"
-        :aria-expanded="expanded"
-        :aria-label="expanded ? t('settings.modelRoute.collapse') : t('settings.modelRoute.expand')"
-        data-testid="route-card-toggle"
-        @click="expanded = !expanded"
-      >
-        <ChevronDown class="size-4 transition-transform" :class="expanded ? 'rotate-180' : ''" />
-      </Button>
-      <span class="text-[length:var(--text-sm)] font-medium text-neutral-fg" data-testid="route-card-name">
-        {{ card.route.name }}
-      </span>
+  <!-- 卡头 -->
+  <div class="flex flex-wrap items-center gap-2 px-4 py-3">
+    <!-- 拖拽把手（排序入口之一，与上移/下移按钮并存；把手拖动、卡根承载 dragover/drop） -->
+    <Button
+      variant="ghost"
+      size="icon"
+      class="size-7 shrink-0 cursor-grab rounded-sm p-0 text-neutral-dim hover:text-neutral-fg active:cursor-grabbing"
+      :aria-label="t('settings.modelRoute.dragCard')"
+      :title="t('settings.modelRoute.dragCard')"
+      data-testid="route-card-drag-handle"
+      draggable="true"
+      @dragstart="emit('cardDragStart', $event)"
+    >
+      <GripVertical class="size-3.5" />
+    </Button>
+    <Button
+      variant="ghost"
+      size="icon"
+      class="size-7 rounded-sm p-0 text-neutral-dim hover:text-neutral-fg"
+      :aria-expanded="expanded"
+      :aria-label="expanded ? t('settings.modelRoute.collapse') : t('settings.modelRoute.expand')"
+      data-testid="route-card-toggle"
+      @click="expanded = !expanded"
+    >
+      <ChevronDown class="size-4 transition-transform" :class="expanded ? 'rotate-180' : ''" />
+    </Button>
+    <!-- 路由名称（行内编辑）：点击名称进入编辑态，Enter/失焦提交、Esc 取消；空值不改名。
+         Esc 加 .stop：弹层 focus-scope 有 window 级 Escape 兜底（焦点落 body 即关弹层），
+         取消改名不应连带关闭整个设置弹层。 -->
+    <Input
+      v-if="editingName"
+      ref="nameInputEl"
+      v-model="nameDraft"
+      class="h-7 w-44 text-[length:var(--text-sm)]"
+      :aria-label="t('settings.modelRoute.routeNameLabel')"
+      data-testid="route-card-name-input"
+      @keydown.enter.prevent="commitNameEdit"
+      @keydown.esc.prevent.stop="cancelNameEdit"
+      @blur="commitNameEdit"
+    />
+    <span
+      v-else
+      class="cursor-text text-[length:var(--text-sm)] font-medium text-neutral-fg"
+      :title="t('settings.modelRoute.renameRoute')"
+      data-testid="route-card-name"
+      @click="startNameEdit"
+    >
+      {{ card.route.name }}
+    </span>
       <!-- 新会话可用徽标（U7/D1③）：本应用运行期内新建、当前 pi 会话未注册，重开会话方可绑定 -->
       <span
         v-if="newSessionAvailable"
@@ -252,8 +288,8 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ChevronDown, ChevronUp, Trash2 } from '@lucide/vue'
-import { Button, ConfirmDialog, Select, SelectTrigger, SelectValue, SelectContent, SelectItem, Switch } from '@taiji/ui'
+import { ChevronDown, ChevronUp, GripVertical, Trash2 } from '@lucide/vue'
+import { Button, ConfirmDialog, Input, Select, SelectTrigger, SelectValue, SelectContent, SelectItem, Switch } from '@taiji/ui'
 import type { AggregationMember, AggregationRoute, AggregationRouteMode, ProviderInfo } from '@taiji/shared'
 import { candidateProviderIds, evaluateRouteAt, levelsUnion } from './route-preview'
 import { dotColorClass } from './route-styles'
@@ -295,7 +331,17 @@ const props = defineProps<{
   quotaOf?: (providerId: string) => number | undefined
 }>()
 
-const emit = defineEmits<{ op: [op: RouteEditorOp]; move: [dir: 'up' | 'down']; toggleScoped: []; openProviders: [] }>()
+const emit = defineEmits<{
+  op: [op: RouteEditorOp]
+  move: [dir: 'up' | 'down']
+  toggleScoped: []
+  openProviders: []
+  /** 卡片拖拽排序事件（原生 DragEvent 原样上抛，页面 useCardDnd 统一判定插入位）。 */
+  cardDragStart: [e: DragEvent]
+  cardDragOver: [e: DragEvent]
+  cardDrop: [e: DragEvent]
+  cardDragEnd: [e: DragEvent]
+}>()
 
 const { t } = useI18n()
 const toast = useSettingsToast()
@@ -308,6 +354,35 @@ const addProviderId = ref('')
 const deleteConfirmOpen = ref(false)
 /** 卡根（引用 chip 跳转定位的端点行查找锚，spec §6.4）。 */
 const rootEl = ref<HTMLElement | null>(null)
+
+// ── 路由名称行内编辑（空值不改名；id 才是对齐键，name 保存校验只要求非空） ──
+
+const editingName = ref(false)
+const nameDraft = ref('')
+const nameInputEl = ref<{ $el: HTMLInputElement } | null>(null)
+
+async function startNameEdit(): Promise<void> {
+  nameDraft.value = props.card.route.name
+  editingName.value = true
+  await nextTick()
+  const el = nameInputEl.value?.$el
+  el?.focus()
+  el?.select()
+}
+
+/** 提交改名：trim 后非空且与原名不同才发 route-patch（否则静默退出编辑态）。 */
+function commitNameEdit(): void {
+  if (!editingName.value) return
+  const name = nameDraft.value.trim()
+  editingName.value = false
+  if (name === '' || name === props.card.route.name) return
+  emit('op', { kind: 'route-patch', routeId: props.card.route.id, patch: { name } })
+}
+
+/** 取消编辑（Esc）：丢弃草稿退出，不提交；随后触发的 blur 由 editingName 守卫拦截。 */
+function cancelNameEdit(): void {
+  editingName.value = false
+}
 
 // ── 引用 chip 跳转定位（外部 spec §6.4：展开对应模型卡 + 滚动到对应端点 + 闪烁高亮）──
 // focus 由页面按 routeId 分发（仅命中卡收到非空值）；memberId 定位端点行。视图未到位时

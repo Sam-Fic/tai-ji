@@ -271,6 +271,16 @@ export class SettingsMessageHandler {
     'mcp.testCancel': (msg, ws) => this.mcpHandler?.handle(msg, ws) ?? false,
   }
 
+  /**
+   * settings 兜底认领全集（偏好组 claimedTypes + 域路由表 keys，均从既有结构派生的
+   * 单一事实源）——runtime 路由对账测试消费（plugin.listVersions 漏登记 handles 事故
+   * 后立的门禁）。getter 惰性求值：preferencesHandler 在构造器体内创建，字段初始化器
+   * 时序上不可用。
+   */
+  get claimedTypes(): readonly ClientMessageType[] {
+    return [...this.preferencesHandler.claimedTypes, ...Object.keys(this.routes)] as ClientMessageType[]
+  }
+
   async handleSettingsMessage(msg: ClientMessage, ws: WsType): Promise<boolean> {
     // 偏好组先行（子 handler 未命中返回 false 继续本 switch——精确匹配无顺序依赖，行为等价）
     if (await this.preferencesHandler.handle(msg, ws)) return true

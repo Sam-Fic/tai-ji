@@ -660,7 +660,11 @@ export default {
     collapse: '收起',
     moveUp: '上移',
     moveDown: '下移',
+    dragCard: '拖拽排序',
     remove: '删除',
+    // 路由名称行内编辑（点击名称进入编辑态，Enter/失焦提交、Esc 取消）
+    renameRoute: '重命名',
+    routeNameLabel: '路由名称',
     routeEnabledLabel: '路由启用',
     scopedToggle: '参与选择',
     // 新建路由（U9 创建侧，GL5/V15）
@@ -690,6 +694,8 @@ export default {
     // 渠道条（spec §7.6，去重渠道计数）
     providerBar: '渠道',
     providerLabel: '渠道',
+    modelLabel: '模型',
+    modelDisabledLabel: '（已禁用）',
     providerEnabledN: '{n} 启用',
     providerDisabledN: '{n} 停用',
     providerDeletedN: '{n} 已删除',
@@ -709,7 +715,7 @@ export default {
     lastEndpointProtect: '这是该模型最后一个端点，移除后模型将不可用',
     addEndpoint: '添加端点',
     noCandidates: '没有可添加的渠道',
-    addEndpointHint: '只列出已启用、提供该模型且尚未加入的渠道。',
+    addEndpointHint: '只列出已启用且尚未加入的渠道；端点模型可在行内下拉改选。',
     // 异常 chip（spec §4.5 配置保留优先；D9 责任语义）
     'issue.provider-deleted': '渠道已删除（配置保留）',
     'issue.model-removed': '模型已移除（配置保留）',

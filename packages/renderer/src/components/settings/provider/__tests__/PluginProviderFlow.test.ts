@@ -600,6 +600,89 @@ describe('PluginProviderFlow S13：家族卡崩溃态（失败路径表「插件
   })
 })
 
+describe('PluginProviderFlow 已装未激活卡点击：先激活再进授权段（安装中断在审批门后重启的恢复路径）', () => {
+  /** 已装未激活运行态列表（Trae installed 但非 active——审批门中断后重启的形态） */
+  const inactivePluginsList = () => [
+    { pluginId: 'wool-trae', version: '1.2.0', displayName: 'Trae', description: '', status: 'inactive', trustLevel: 'sandbox', enabled: false },
+  ]
+
+  it('已装未激活卡点击 → plugin.toggle on → active → 进授权段驱动 getAuthorizeView（不再静默空态）', async () => {
+    pluginMock.listPlugins.mockImplementation(() => Promise.resolve(inactivePluginsList()))
+    pluginMock.togglePlugin.mockImplementation((_pluginId: string, enabled: boolean) =>
+      Promise.resolve(enabled
+        ? [{ pluginId: 'wool-trae', version: '1.2.0', displayName: 'Trae', description: '', status: 'active', trustLevel: 'sandbox', enabled: true }]
+        : inactivePluginsList()))
+    wrapper = mountFlow()
+    await flushPromises()
+    await nextTick()
+
+    // Trae 卡（第二张）= 已装未激活 → 点击进入激活路径
+    queryAll('plugin-family-card')[1].click()
+    await flushPromises()
+    await nextTick()
+
+    // 激活 = toggle on 单步（非崩溃重启的 off/on 序列）
+    expect(pluginMock.togglePlugin).toHaveBeenCalledTimes(1)
+    expect(pluginMock.togglePlugin).toHaveBeenCalledWith('wool-trae', true)
+    // 回包 active → 进授权段并驱动插件初始树
+    expect(query('plugin-authorize-container')).not.toBeNull()
+    expect(pluginMock.invokePlugin).toHaveBeenCalledWith('wool-trae', 'getAuthorizeView', {})
+  })
+
+  it('激活回包仍未 active（权限被拒形态）→ 显 activateNotActive 错误，不进授权段', async () => {
+    pluginMock.listPlugins.mockImplementation(() => Promise.resolve(inactivePluginsList()))
+    // toggle 回包仍是 inactive（审批被拒：激活作废终一化 UNLOADED/inactive）
+    pluginMock.togglePlugin.mockResolvedValue(inactivePluginsList())
+    wrapper = mountFlow()
+    await flushPromises()
+    await nextTick()
+
+    queryAll('plugin-family-card')[1].click()
+    await flushPromises()
+    await nextTick()
+
+    expect(pluginMock.togglePlugin).toHaveBeenCalledWith('wool-trae', true)
+    expect(query('plugin-authorize-container')).toBeNull()
+    expect(pluginMock.invokePlugin).not.toHaveBeenCalledWith('wool-trae', 'getAuthorizeView', {})
+    const error = query('plugin-flow-error')
+    expect(error).not.toBeNull()
+    expect(error?.textContent).toContain('插件未激活')
+  })
+
+  it('激活 reject → 显 activateFailed 错误（含原因），不静默', async () => {
+    pluginMock.listPlugins.mockImplementation(() => Promise.resolve(inactivePluginsList()))
+    pluginMock.togglePlugin.mockRejectedValue(new Error('sandbox spawn failed'))
+    wrapper = mountFlow()
+    await flushPromises()
+    await nextTick()
+
+    queryAll('plugin-family-card')[1].click()
+    await flushPromises()
+    await nextTick()
+
+    expect(query('plugin-authorize-container')).toBeNull()
+    const error = query('plugin-flow-error')
+    expect(error).not.toBeNull()
+    expect(error?.textContent).toContain('插件激活失败')
+    expect(error?.textContent).toContain('sandbox spawn failed')
+  })
+
+  it('已装已 active 卡点击 → 不经激活路径直接进授权段（快路径不被劫持）', async () => {
+    // 默认 beforeEach：Trae active
+    wrapper = mountFlow()
+    await flushPromises()
+    await nextTick()
+
+    queryAll('plugin-family-card')[1].click()
+    await flushPromises()
+    await nextTick()
+
+    expect(pluginMock.togglePlugin).not.toHaveBeenCalled()
+    expect(query('plugin-authorize-container')).not.toBeNull()
+    expect(pluginMock.invokePlugin).toHaveBeenCalledWith('wool-trae', 'getAuthorizeView', {})
+  })
+})
+
 describe('PluginProviderFlow U2 裁决①：离开授权段清挂载位快照分区（clearPluginMountUi）', () => {
   it('进入授权段后关闭对话框 → 清授权挂载位（防旧家族树残留进快照恢复源）', async () => {
     wrapper = mountFlow({ focus: { pluginId: 'wool-trae', intent: 'authorize' } })

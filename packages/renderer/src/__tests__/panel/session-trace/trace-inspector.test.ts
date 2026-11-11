@@ -572,12 +572,11 @@ describe('safeJson 检查 + 损坏行行号未知降级（RD-2#5 / RD-2#6）', (
   }
 
   /** mount 助手：rows/hint 为必传（Composer 恒传），缺省给中性值 */
-  function mountQB(overrides: { rows?: QueueRow[]; hint?: string; expanded?: boolean } = {}) {
+  function mountQB(overrides: { rows?: QueueRow[]; hint?: string } = {}) {
     return mount(QueueBubble, {
       props: {
         rows: overrides.rows ?? [],
         hint: overrides.hint ?? '等待上下文压缩完成后发送',
-        ...(overrides.expanded !== undefined ? { expanded: overrides.expanded } : {}),
       },
     })
   }
@@ -621,13 +620,23 @@ describe('safeJson 检查 + 损坏行行号未知降级（RD-2#5 / RD-2#6）', (
       expect(wrapper.find('[data-testid="queue-retry-u-5"]').exists()).toBe(false)
     })
 
-    it('多条 → 显前 3 条 + 「+N」溢出计数（行序 = 帧序 = 内核 FIFO 发送序）', () => {
+    it('多条 → 全量卡片渲染（depth 按显示序）+ 「+N」信息角标只计被裁剪层（堆叠形态：隐藏交 CSS 不移除 DOM）', () => {
       const wrapper = mountQB({
         rows: [row('u-1', 'm1'), row('u-2', 'm2'), row('u-3', 'm3'), row('u-4', 'm4'), row('u-5', 'm5')],
       })
-      expect(wrapper.findAll('.qb-item-text').map((w) => w.text())).toEqual(['m1', 'm2', 'm3'])
+      // 全部行渲染为卡片（收起态 depth>2 由 data-overflow 隐藏，DOM 保留——离场/入场动画跨可见窗连续）
+      expect(wrapper.findAll('.qb-card').length).toBe(5)
+      expect(wrapper.findAll('.qb-card-text').map((w) => w.text())).toEqual(['m1', 'm2', 'm3', 'm4', 'm5'])
+      // depth 0..4（显示序 = 帧序 = 内核 FIFO 发送序，failed 置顶口径见 stackRows 测试）
+      expect(wrapper.find('[data-testid="queue-item-u-1"]').attributes('data-depth')).toBe('0')
+      expect(wrapper.find('[data-testid="queue-item-u-4"]').attributes('data-depth')).toBe('3')
+      // 收起态被裁剪层标记（depth>2 → data-overflow + inert）
+      expect(wrapper.find('[data-testid="queue-item-u-4"]').attributes('data-overflow')).toBe('true')
+      expect(wrapper.find('[data-testid="queue-item-u-4"]').attributes('inert')).toBeDefined()
+      expect(wrapper.find('[data-testid="queue-item-u-1"]').attributes('inert')).toBeUndefined()
+      // +N 角标 = 被裁剪的两层（非按钮，无点击展开开关）
       expect(wrapper.text()).toContain('+2')
-      expect(wrapper.text()).not.toContain('m4')
+      expect(wrapper.find('[data-testid="queue-expand"]').exists()).toBe(false)
     })
 
     it('行 hover title = 传入的 hint（session 级占用分档文案）', () => {
@@ -642,26 +651,36 @@ describe('safeJson 检查 + 损坏行行号未知降级（RD-2#5 / RD-2#6）', (
       expect(title).toContain('点重试会自动判重，不会重复投递')
     })
 
-    it('rows 变化 → 行跟随更新（响应式）；清空 → 根门关闭', async () => {
-      const wrapper = mountQB({ rows: [row('u-1', 'first')] })
-      expect(wrapper.text()).toContain('first')
-      await wrapper.setProps({ rows: [row('u-1', 'first'), row('u-2', 'second')] })
-      await nextTick()
-      expect(wrapper.text()).toContain('second')
-      await wrapper.setProps({ rows: [] })
-      await nextTick()
-      expect(wrapper.find('[data-testid="queue-bubble"]').exists()).toBe(false)
+    it('rows 变化 → 行跟随更新（响应式）；清空 → 离场卡走 exit 相位，计时移除后根门关闭', async () => {
+      vi.useFakeTimers()
+      try {
+        const wrapper = mountQB({ rows: [row('u-1', 'first')] })
+        expect(wrapper.text()).toContain('first')
+        await wrapper.setProps({ rows: [row('u-1', 'first'), row('u-2', 'second')] })
+        await nextTick()
+        expect(wrapper.text()).toContain('second')
+        // 清空：条目进 exit 相位（根门暂不关——离场动画窗口内 DOM 保留）
+        await wrapper.setProps({ rows: [] })
+        await nextTick()
+        expect(wrapper.find('[data-testid="queue-item-u-1"]').attributes('data-phase')).toBe('exit')
+        expect(wrapper.find('[data-testid="queue-bubble"]').exists()).toBe(true)
+        // 离场时长（CLOSE_MS）后移除，根门关闭
+        vi.advanceTimersByTime(250)
+        await nextTick()
+        expect(wrapper.find('[data-testid="queue-bubble"]').exists()).toBe(false)
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 
   describe('QueueBubble · 行操作（撤销 / 重试）', () => {
-    it('× 撤销：点击 emit cancel(clientUuid)，title=撤销排队（hover 揭示载体）', async () => {
+    it('× 撤销：点击 emit cancel(clientUuid)，title=撤销排队（卡上恒显）', async () => {
       const wrapper = mountQB({ rows: [row('u-9', '待撤销消息')] })
       const cancel = wrapper.find('[data-testid="queue-cancel-u-9"]')
       expect(cancel.exists()).toBe(true)
       expect(cancel.attributes('disabled')).toBeUndefined()
-      const anchor = wrapper.find('[data-testid="queue-cancel-anchor-u-9"]')
-      expect(anchor.attributes('title')).toBe('撤销排队')
+      expect(cancel.attributes('title')).toBe('撤销排队')
       await cancel.trigger('click')
       expect(wrapper.emitted('cancel')).toEqual([['u-9']])
     })
@@ -676,8 +695,7 @@ describe('safeJson 检查 + 损坏行行号未知降级（RD-2#5 / RD-2#6）', (
     it('failed 行重试：点击 emit retry(clientUuid)，title=重试发送', async () => {
       const wrapper = mountQB({ rows: [row('u-11', '失败的消息', 'failed')] })
       const retry = wrapper.find('[data-testid="queue-retry-u-11"]')
-      const anchor = retry.element.closest('span')
-      expect(anchor?.getAttribute('title')).toBe('重试发送')
+      expect(retry.attributes('title')).toBe('重试发送')
       await retry.trigger('click')
       expect(wrapper.emitted('retry')).toEqual([['u-11']])
       // 重试不等于撤销：cancel 通道未被触发
@@ -690,32 +708,40 @@ describe('safeJson 检查 + 损坏行行号未知降级（RD-2#5 / RD-2#6）', (
     })
   })
 
-  describe('QueueBubble · +N 展开开关（Q2）与重试全部（Q5）', () => {
+  describe('QueueBubble · 堆叠展开（Q2 复裁：hover/focus 瞬态）与重试全部（Q5）', () => {
     const FIVE_ROWS = [row('u-1', 'm1'), row('u-2', 'm2'), row('u-3', 'm3'), row('u-4', 'm4'), row('u-5', 'm5')]
 
-    it('+N 为可点开关：点击 emit toggleExpand，aria-expanded 反映展开态（用户可见展开入口）', async () => {
+    it('hover 进入堆叠 → data-expanded 翻真（瞬态，无点击开关）；离开（window blur）→ 收起', async () => {
       const wrapper = mountQB({ rows: FIVE_ROWS })
-      expect(wrapper.text()).toContain('+2')
-      const expander = wrapper.find('[data-testid="queue-expand"]')
-      expect(expander.exists()).toBe(true)
-      expect(expander.attributes('aria-expanded')).toBe('false')
-      await expander.trigger('click')
-      expect(wrapper.emitted('toggleExpand')).toHaveLength(1)
+      const stack = wrapper.find('.qb-stack')
+      expect(stack.attributes('data-expanded')).toBe('false')
+      // 触屏 pointer 不触发展开
+      await stack.trigger('pointerenter', { pointerType: 'touch' })
+      expect(stack.attributes('data-expanded')).toBe('false')
+      await stack.trigger('pointerenter', { pointerType: 'mouse' })
+      expect(stack.attributes('data-expanded')).toBe('true')
+      // 展开态无 +N 角标（全量浏览）；被裁剪层不再 inert
+      expect(wrapper.find('[data-testid="queue-overflow-badge"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="queue-item-u-4"]').attributes('inert')).toBeUndefined()
+      // 离开（窗口失焦兜底退出路径）→ 收起，角标回归
+      window.dispatchEvent(new Event('blur'))
+      await nextTick()
+      expect(wrapper.find('.qb-stack').attributes('data-expanded')).toBe('false')
+      expect(wrapper.find('[data-testid="queue-overflow-badge"]').exists()).toBe(true)
     })
 
-    it('expanded=true → 全部行渲染（被折叠行可见，行操作天然可用）+ 无 +N 溢出', async () => {
-      const wrapper = mountQB({ rows: FIVE_ROWS, expanded: true })
-      expect(wrapper.findAll('.qb-item-text').map((w) => w.text())).toEqual(['m1', 'm2', 'm3', 'm4', 'm5'])
-      expect(wrapper.find('[data-testid="queue-expand"]').exists()).toBe(false)
-      // 收起出口：收起后仍有溢出行才显示
-      expect(wrapper.find('[data-testid="queue-collapse"]').exists()).toBe(true)
-      await wrapper.find('[data-testid="queue-collapse"]').trigger('click')
-      expect(wrapper.emitted('toggleExpand')).toHaveLength(1)
+    it('focus 进入堆叠 → 同样展开（focusout 到根外收起）', async () => {
+      const wrapper = mountQB({ rows: FIVE_ROWS })
+      const stack = wrapper.find('.qb-stack')
+      await stack.trigger('focusin')
+      expect(stack.attributes('data-expanded')).toBe('true')
+      await stack.trigger('focusout', { relatedTarget: null })
+      expect(stack.attributes('data-expanded')).toBe('false')
     })
 
-    it('展开但无溢出（行数 ≤ 上限）→ 不渲染收起出口', () => {
-      const wrapper = mountQB({ rows: [row('u-1', 'm1'), row('u-2', 'm2')], expanded: true })
-      expect(wrapper.find('[data-testid="queue-collapse"]').exists()).toBe(false)
+    it('region aria-label 携带条目计数（排队消息 · N）', () => {
+      const wrapper = mountQB({ rows: FIVE_ROWS })
+      expect(wrapper.find('[data-testid="queue-bubble"]').attributes('aria-label')).toBe('排队消息 · 5 条')
     })
 
     it('failed ≥2 → 「重试全部失败项」入口可见，点击 emit retryAll', async () => {

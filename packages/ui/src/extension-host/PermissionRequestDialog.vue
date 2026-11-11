@@ -90,9 +90,13 @@ function onDeny(): void {
 
 <template>
   <Dialog :open="pending">
-    <!-- 小屏全宽留边防溢出（375px 视口下按钮可见），sm+ 恢复 420px 上限（桌面形态不变） -->
+    <!-- 小屏全宽留边防溢出（375px 视口下按钮可见），sm+ 恢复 420px 上限（桌面形态不变）。
+         elevated：审批弹窗必须压过触发它的宿主 modal（provider 安装确认等）——同为
+         --z-modal 层时 DOM 先序者被后序者整块遮盖，而审批门无时限，遮盖即安装死锁
+         （2026-11-10 真机实证）；+1 档消除平局，审批入口恒可见可达。 -->
     <DialogContent
       hide-close
+      elevated
       class="w-full max-w-[calc(100vw-2rem)] sm:max-w-[420px]"
       data-testid="permission-dialog"
     >

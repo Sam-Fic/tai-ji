@@ -447,6 +447,114 @@ export type ClientMessageType =
   // ReplyPayloadMap 对应条目。实装随 M2（U6 其余实装）；M0 契约期先行定形。
   | 'runtime.readiness'
 
+// ── ClientMessageType 运行时清单（类型 ↔ 清单双向锁死）──────────────────────
+// 对账消费方：runtime 路由对账测试（全部 handler 认领面 vs 本清单，漏登记差集即红灯）。
+// 互锁：类型加成员而清单漏 → 下方完备性断言编译错（错误信息列缺失成员名）；
+// 清单写错名 → satisfies 编译错。两处同文件相邻，改类型时同屏维护清单。
+export const CLIENT_MESSAGE_TYPES = [
+  // ── aggregation 域 ──
+  'aggregation.deleteRoute', 'aggregation.getRouteView', 'aggregation.saveRoute',
+  // ── backgroundTask 域 ──
+  'backgroundTask.kill', 'backgroundTask.list', 'backgroundTask.output',
+  // ── btw 域 ──
+  'btw.create', 'btw.remove',
+  // ── canvas 域 ──
+  'canvas.get', 'canvas.list', 'canvas.mutate',
+  // ── config 域 ──
+  'config.applyImportProviders', 'config.archives', 'config.checkEnvVars', 'config.deleteAgent',
+  'config.deleteProvider', 'config.deleteSkill', 'config.detectSources', 'config.discoverModels',
+  'config.getAutoRenameEnabled', 'config.getBareSetupScript', 'config.getCodemodeEnabled',
+  'config.getDefaultBaseBranch', 'config.getGlobalSkills', 'config.getNetworkProxy',
+  'config.getNetworkProxyStats', 'config.getProjectSkills', 'config.getProviders', 'config.getRenameMaxLength',
+  'config.getRenameMode', 'config.getRenameModel', 'config.getRenamePrompt', 'config.getRetryConfig',
+  'config.getRetryRules', 'config.getSetupScript', 'config.getSmartContextConfig', 'config.getSystemPrompt',
+  'config.getTerminalConfig', 'config.getTimeout', 'config.getWorktreeRootDir', 'config.hasOAuth',
+  'config.listBuiltinProviders', 'config.listQuotaPresets', 'config.oauthCancel', 'config.oauthLogin',
+  'config.oauthLogout', 'config.previewImportProviders', 'config.refreshProviderCatalogs',
+  'config.removeProviderByKind', 'config.resetNetworkProxyStats', 'config.revealProviderApiKey',
+  'config.scanAgents', 'config.scanSessionSkills', 'config.scanSkills', 'config.sessions', 'config.setAgent',
+  'config.setAgentDirs', 'config.setAutoRenameEnabled', 'config.setBareSetupScript', 'config.setCodemodeEnabled',
+  'config.setDefaultBaseBranch', 'config.setDefaultModel', 'config.setExtensionDirs', 'config.setNetworkProxy',
+  'config.setProvider', 'config.setRenameMaxLength', 'config.setRenameMode', 'config.setRenameModel',
+  'config.setRenamePrompt', 'config.setRetryConfig', 'config.setRetryRules', 'config.setScopedModels',
+  'config.setSetupScript', 'config.setSkill', 'config.setSkillDirs',
+  'config.setSmartContextAutoCompactThresholdRatio', 'config.setSmartContextCompactModel',
+  'config.setSmartContextEnabled', 'config.setSmartContextExcludedModels', 'config.setSmartContextThresholds',
+  'config.setSystemPrompt', 'config.setTerminalConfig', 'config.setTimeout', 'config.setToolPermissions',
+  'config.setUiLocale', 'config.setWorktreeRootDir', 'config.testNetworkProxy', 'config.toggleProviderEnabled',
+  // ── delivery 域 ──
+  'delivery.cancel', 'delivery.drain', 'delivery.edit', 'delivery.peek', 'delivery.resync', 'delivery.submit',
+  // ── extension 域 ──
+  'extension.cancelInstall', 'extension.finishInstall', 'extension.getPendingRequests', 'extension.install',
+  'extension.installDir', 'extension.installGit', 'extension.list', 'extension.recommended',
+  'extension.setAutoUpgrade', 'extension.toggle', 'extension.ui_response', 'extension.uninstall',
+  'extension.upgrade',
+  // ── file 域 ──
+  'file.read', 'file.search', 'file.search.cwd', 'file.tree', 'file.tree.expand', 'file.write.create',
+  'file.write.delete', 'file.write.rename',
+  // ── git 域 ──
+  'git.checkout', 'git.checkoutCwd', 'git.commit', 'git.createBranch', 'git.diff', 'git.stage', 'git.status',
+  'git.unstage',
+  // ── mcp 域 ──
+  'mcp.add', 'mcp.list', 'mcp.remove', 'mcp.setEnabled', 'mcp.test', 'mcp.testCancel', 'mcp.update',
+  // ── message 域 ──
+  'message.abort', 'message.abortBash', 'message.bash', 'message.send',
+  // ── model 域 ──
+  'model.list', 'model.switch',
+  // ── plugin 域 ──
+  'plugin.approvePermissions', 'plugin.cancelInstall', 'plugin.catalog', 'plugin.config.get',
+  'plugin.config.set', 'plugin.confirmInstall', 'plugin.denyPermissions', 'plugin.executeCommand',
+  'plugin.install', 'plugin.invoke', 'plugin.list', 'plugin.listAvailable', 'plugin.listVersions',
+  'plugin.mountPoints.sync', 'plugin.prepareInstall', 'plugin.revokePermissions', 'plugin.toggle',
+  'plugin.ui.clearMount', 'plugin.ui.snapshot', 'plugin.uiEvent', 'plugin.uiResponse', 'plugin.uninstall',
+  // ── preset 域 ──
+  'preset.create', 'preset.delete', 'preset.export', 'preset.getDefault', 'preset.getUsage', 'preset.import',
+  'preset.list', 'preset.recordUsage', 'preset.setDefault', 'preset.update',
+  // ── project 域 ──
+  'project.createProject', 'project.load', 'project.removeProject', 'project.renameProject',
+  'project.setActiveProject',
+  // ── quota 域 ──
+  'quota.configure', 'quota.fetch', 'quota.getCached', 'quota.refresh',
+  // ── runtime 域 ──
+  'runtime.readiness',
+  // ── session 域 ──
+  'session.abortHandoff', 'session.abortPlan', 'session.archive', 'session.compactBackground', 'session.create',
+  'session.delete', 'session.deleteByCwd', 'session.fetchCurrentSystemPrompt', 'session.forceQuit',
+  'session.fork', 'session.getAgentCallFilePath', 'session.getAgentCallHistory', 'session.getCommands',
+  'session.getContext', 'session.getGenStats', 'session.getMessageCount', 'session.getPlanState',
+  'session.getState', 'session.getSubagentEngineConfig', 'session.getSubagentHistory',
+  'session.getSubagentStreamState', 'session.getSubagents', 'session.getTraceEntries', 'session.getWorkflowDag',
+  'session.getWorkflowRunEvents', 'session.getWorkflows', 'session.handoff', 'session.history', 'session.import',
+  'session.importCandidates', 'session.list', 'session.migrateImage', 'session.purgeArchive', 'session.rename',
+  'session.restore', 'session.revokeMessage', 'session.setProject', 'session.setSubagentDefaultEngine',
+  'session.setSubagentEngineDefaultModel', 'session.setThinkingLevel', 'session.subagentAction',
+  'session.subscribe', 'session.switch', 'session.unarchive', 'session.unsubscribe', 'session.workflowAction',
+  'session.writeImage', 'session.writeSegments',
+  // ── subagent 域 ──
+  'subagent.setModel',
+  // ── terminal 域 ──
+  'terminal.attach', 'terminal.kill', 'terminal.list', 'terminal.resize', 'terminal.spawn', 'terminal.write',
+  // ── tool 域 ──
+  'tool.always_allow', 'tool.approve', 'tool.deny',
+  // ── tts 域 ──
+  'tts.configure', 'tts.getCapabilities', 'tts.getConfig', 'tts.speak',
+  // ── usage 域 ──
+  'usage.getStats',
+  // ── workspace 域 ──
+  'workspace.defaultSessionDir', 'workspace.detect', 'workspace.listRecent', 'workspace.record',
+  'workspace.setPinned',
+  // ── worktree 域 ──
+  'worktree.create', 'worktree.list', 'worktree.listBranches',
+  // ── (无前缀) 域 ──
+  'auth', 'ping',
+] as const satisfies readonly ClientMessageType[]
+
+/** 清单完备性编译期断言：Exclude 非 never（清单漏成员）时违反 T extends never 约束，编译错误信息列出成员名。 */
+type AssertClientTypesNever<T extends never> = T
+// export 使断言类型被消费（noUnusedLocals 不报 unused）；断言效力不变
+export type _AssertClientTypesComplete = AssertClientTypesNever<Exclude<ClientMessageType, (typeof CLIENT_MESSAGE_TYPES)[number]>>
+
+
 // ── Payload 类型定义 ────────────────────────────────────────────
 
 /**
