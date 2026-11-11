@@ -295,14 +295,18 @@ const contentSignature = computed(() => props.rows
 watch([contentSignature, expanded], () => { void measure() }, { flush: 'post' })
 
 // ── 展开触发：pointer 进入（触屏除外）/ focus 捕获；document 级矩形校验负责退出 ──
+/** 点是否落在矩形内（含边界——进入与退出两处校验共用同一几何契约，边界语义单点定义）。 */
+function inRect(rect: DOMRect, x: number, y: number): boolean {
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+}
+
 function onPointerEnter(event: PointerEvent): void {
   if (event.pointerType === 'touch') return
   // 事件坐标必须落在堆叠当前矩形内：入场滑行卡（自 +80px 滑入）可瞬态穿过光标停留点
   // （输入框中心恰在滑行走廊内，真机实证），Chrome 对静止光标下的元素变化会补发
   // enter/over——坐标校验一次性排除滑行误触发；真悬停坐标必在矩形内不受影响
   const rect = rootRef.value?.getBoundingClientRect()
-  if (!rect) return
-  if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) return
+  if (!rect || !inRect(rect, event.clientX, event.clientY)) return
   pointerInside.value = true
 }
 
@@ -323,8 +327,7 @@ watch(pointerInside, (inside) => {
 function onDocPointerMove(event: PointerEvent): void {
   if (event.pointerType === 'touch') return
   const rect = viewportRef.value?.getBoundingClientRect()
-  if (rect && (event.clientX < rect.left || event.clientX > rect.right
-    || event.clientY < rect.top || event.clientY > rect.bottom)) pointerInside.value = false
+  if (rect && !inRect(rect, event.clientX, event.clientY)) pointerInside.value = false
 }
 
 function onWindowBlur(): void {

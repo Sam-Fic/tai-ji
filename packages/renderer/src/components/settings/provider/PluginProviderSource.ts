@@ -349,11 +349,16 @@ async function refreshCatalog(): Promise<void> {
   }
 }
 
+/** 插件列表快照整表覆写运行态缓存（plugin.list / toggle reply 三个消费点共用同一覆写语义）。 */
+function setPluginInfoMap(plugins: readonly PluginInfo[]): void {
+  pluginInfoMap.value = new Map(plugins.map((p) => [p.pluginId, p]))
+}
+
 /** 拉取插件运行态列表（plugin.list；失败保持现状 + warn，S13 拉为主）。 */
 async function refreshPlugins(): Promise<void> {
   try {
     const plugins = await getSettingsTransport().listPlugins()
-    pluginInfoMap.value = new Map(plugins.map((p) => [p.pluginId, p]))
+    setPluginInfoMap(plugins)
   } catch (e) {
     // 辅助域降级：失败保持现状（无崩溃标记——不猜测），不向上抛。
     console.warn('[plugin-provider-source] plugin.list failed (kept current plugin states):', e)
@@ -367,14 +372,12 @@ async function refreshPlugins(): Promise<void> {
 async function restartPlugin(pluginId: string): Promise<void> {
   const transport = getSettingsTransport()
   await transport.togglePlugin(pluginId, false)
-  const plugins = await transport.togglePlugin(pluginId, true)
-  pluginInfoMap.value = new Map(plugins.map((p) => [p.pluginId, p]))
+  setPluginInfoMap(await transport.togglePlugin(pluginId, true))
 }
 
 /** 激活已装未激活插件（plugin.toggle on 单步）。审批门等待期 toggle 不回包（设计内）。 */
 async function activatePlugin(pluginId: string): Promise<void> {
-  const plugins = await getSettingsTransport().togglePlugin(pluginId, true)
-  pluginInfoMap.value = new Map(plugins.map((p) => [p.pluginId, p]))
+  setPluginInfoMap(await getSettingsTransport().togglePlugin(pluginId, true))
 }
 
 /** 条目展开 / 页进入的凭据状态拉取（invoke getStatus；失败 warn 降级，D5）。 */
