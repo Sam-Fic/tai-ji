@@ -8,17 +8,42 @@
 # Skills are user/project-level (~/.agents/skills, <cwd>/.pi/agent/skills) —
 # not bundled with the app.
 #
-# Usage: ./scripts/prepare-pi-resources.sh [PI_VERSION]
+# Usage: ./scripts/prepare-pi-resources.sh [PI_VERSION] [--arch <arm64|x64>]
+# --arch 覆盖宿主架构检测：CI 在 arm64 macos runner 上交叉构建 Intel dmg 时
+# 传 --arch x64，staged 的 pi 二进制/`pi` 别名指向 pi-darwin-x64（运行时
+# find-pi-executable 按 process.arch 解析同名文件）。缺省 = uname -m 宿主检测。
 set -euo pipefail
 
 PI_VERSION="${1:-1.0.0}"
+shift || true
+
+# 可选 --arch 覆盖（见 usage 注释）
+ARCH_OVERRIDE=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --arch)
+      ARCH_OVERRIDE="${2:-}"
+      shift 2
+      ;;
+    --arch=*)
+      ARCH_OVERRIDE="${1#--arch=}"
+      shift
+      ;;
+    *) echo "Unknown option: $1" >&2; exit 1 ;;
+  esac
+done
+case "$ARCH_OVERRIDE" in
+  ""|arm64|x64) ;;
+  *) echo "Invalid --arch value: $ARCH_OVERRIDE (expected arm64|x64)" >&2; exit 1 ;;
+esac
+
 PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')"
-ARCH="$(uname -m)"
+ARCH="${ARCH_OVERRIDE:-$(uname -m)}"
 
 # Map uname -m to pi binary arch naming (matches Node.js process.arch)
 case "$ARCH" in
   arm64|aarch64) PI_ARCH="arm64" ;;
-  x86_64|amd64)  PI_ARCH="x64" ;;
+  x86_64|amd64|x64) PI_ARCH="x64" ;;
   *) echo "Unsupported arch: $ARCH" >&2; exit 1 ;;
 esac
 

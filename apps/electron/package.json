@@ -23,6 +23,7 @@
     "prepare-builtin-extensions": "bash ../../scripts/prepare-builtin-extensions.sh",
     "prepare-builtin-plugins": "bash ../../scripts/prepare-builtin-plugins.sh",
     "build:dir": "pnpm run build:pre && electron-builder --publish never --dir",
+    "build:mac-x64": "pnpm run build:pre && electron-builder --publish never --mac dmg:x64",
     "build:vite": "pnpm --filter @taiji/frontend run build",
     "build:mobile": "pnpm --filter @taiji/mobile-renderer run build",
     "build:e2e": "pnpm run build:main && pnpm run build:preload && pnpm run build:vite",

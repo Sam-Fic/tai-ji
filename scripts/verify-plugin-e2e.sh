@@ -33,7 +33,10 @@
 # 不占用正在跑的 dev app（随机端口 + 隔离数据目录）。
 #
 # 用法: bash scripts/verify-plugin-e2e.sh
-# 依赖: node >= 22（全局 WebSocket）、curl、lsof、esbuild（prepare-builtin-plugins 用）、pnpm
+# 依赖: node >= 24（全局 WebSocket；且 trusted 插件 Worker 的 tsx .js→.ts 解析映射实测仅 24 生效，
+# node 22 下 plugin-bootstrap.ts 的 './plugin-types.js' import 在 Worker 内报
+# Cannot find module——与 runtime package.json engines >=24 及 CI node 24 对齐）、
+# curl、lsof、esbuild（prepare-builtin-plugins 用）、pnpm
 # 耗时: ~15s
 
 set -euo pipefail
@@ -70,9 +73,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # ── 0. 环境前置 ─────────────────────────────────────────────────
 NODE_MAJOR="$(node -e 'console.log(process.versions.node.split(".")[0])')"
-if [ "$NODE_MAJOR" -lt 22 ]; then
-  echo -e "${RED}[ERROR] 需要 node >= 22（全局 WebSocket 客户端），当前 $(node --version)${NC}" >&2
-  echo -e "${YELLOW}[FIX] 升级 node（nvm install 22）后重试${NC}" >&2
+if [ "$NODE_MAJOR" -lt 24 ]; then
+  echo -e "${RED}[ERROR] 需要 node >= 24（全局 WebSocket 客户端；且 trusted 插件 Worker 的 tsx 解析链实测需 24），当前 $(node --version)${NC}" >&2
+  echo -e "${YELLOW}[FIX] 升级 node（nvm install 24）后重试${NC}" >&2
   exit 1
 fi
 

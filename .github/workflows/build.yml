@@ -32,15 +32,40 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # mac 双架构：arm64 原生构建 + Intel(x64) 交叉构建。macos-13 Intel runner
+          # 已被 GitHub 全量退役（2025-12），x64 dmg 在 arm64 runner 上交叉产出
+          # （electron-builder --mac dmg:x64，机制注释见 electron-builder.yml mac 段）。
+          # pi-arch = prepare-pi-resources.sh --arch 入参 + 两处缓存 key 架构段
+          # （交叉构建 staged 的 pi 二进制与宿主架构不同，缓存必须按目标架构分桶）。
+          # mac-unpacked = unpacked 目录名（electron-builder x64 产出是 mac，非 mac-arm64）。
+          # build-script = 完整构建入口（x64 job 用 build:mac-x64：CLI dmg:x64 限定单架构，
+          # 绕过 config 的 mac.target.arch 列表，防双架构并出/同名互覆）。
           - os: macos-latest
             platform: mac
+            pi-arch: arm64
+            mac-unpacked: mac-arm64
+            build-script: build
+          # Intel dmg：dir-only（PR CI）模式整 job 跳过（if 见下）——x64 是打包产物形态
+          # 关注点（交叉编译/架构资源正确性），release 完整构建覆盖；dir-only 只验
+          # 代码正确性（asar/runtime 与 arch 无关），双跑纯烧 mac runner 时长。
+          - os: macos-latest
+            platform: mac-x64
+            pi-arch: x64
+            mac-unpacked: mac
+            build-script: build:mac-x64
           - os: windows-latest
             platform: win
+            pi-arch: x64
+            build-script: build
           - os: ubuntu-latest
             platform: linux
+            pi-arch: x64
+            build-script: build
 
     name: Build ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
+    # dir-only（PR CI）跳过 mac-x64 交叉构建（理由见上方 matrix 注释）。
+    if: ${{ !(inputs.dir-only && matrix.platform == 'mac-x64') }}
     # 上限检查只能放本 job：GitHub 对 uses: 复用 workflow 的 caller job 只接受
     # name/needs/if/permissions/concurrency/strategy/with/secrets 字段，caller 上写
     # timeout-minutes 是 parse 期 startup_failure（ci.yml 全线 0 job 失败，2026-09-18）。
@@ -90,7 +115,9 @@ jobs:
           path: |
             ~/Library/Caches/electron
             ~/.cache/electron
-          key: ${{ runner.os }}-electron-${{ hashFiles('apps/electron/package.json') }}
+          # key 含 matrix.pi-arch（两个 mac job 同 OS 但目标架构集不同：x64 交叉构建额外拉
+          # x64 electron dist 进同一缓存目录，与 arm64 job 共 key 会互相漏存）。
+          key: ${{ runner.os }}-${{ matrix.pi-arch }}-electron-${{ hashFiles('apps/electron/package.json') }}
 
       # install 步骤跳过了 electron 二进制下载（节省时间），打包需要二进制，显式补回。
       # node-linker=hoisted（见 .npmrc）：electron 被提升到根 node_modules，
@@ -127,11 +154,13 @@ jobs:
       # key 含 PI_VERSION（版本升级自动失效重建，binary 文件名含版本，旧 cache 不会误用）
       # + prepare 脚本内容 hash（同版本下脚本改动 assets 组成/下载源时旧 cache 失效，
       # 防止脚本「binary 存在则跳过」让新增 assets 永不下载）。
+      # 架构段用 matrix.pi-arch（非 runner.arch）：mac-x64 job 交叉构建 staged 的是
+      # pi-darwin-x64（与宿主 arch 不同），两个 mac job 缓存必须分桶防互踩。
       - name: Cache pi resources
         uses: actions/cache@v4
         with:
           path: apps/electron/resources/pi
-          key: ${{ runner.os }}-pi-${{ env.PI_VERSION }}-${{ runner.arch }}-${{ hashFiles('scripts/prepare-pi-resources.sh') }}
+          key: ${{ runner.os }}-pi-${{ env.PI_VERSION }}-${{ matrix.pi-arch }}-${{ hashFiles('scripts/prepare-pi-resources.sh') }}
 
       - name: Download and prepare pi resources
         shell: bash
@@ -139,7 +168,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           chmod +x scripts/prepare-pi-resources.sh
-          ./scripts/prepare-pi-resources.sh "$PI_VERSION"
+          # --arch 交叉构建覆盖（mac-x64 job staged pi-darwin-x64；其余平台与宿主检测一致）
+          ./scripts/prepare-pi-resources.sh "$PI_VERSION" --arch ${{ matrix.pi-arch }}
 
       # 内置 provider catalog 由构建期脚本从 pi-ai 提取（git 跟踪的 JSON 是构建快照）。
       # 根 package.json 的 prebuild 只在根 `pnpm run build` 时触发；本 workflow 直接
@@ -166,7 +196,7 @@ jobs:
         env:
           # 跳过 macOS 代码签名（未配置 Apple Developer 证书）
           CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: pnpm --filter @taiji/electron run build
+        run: pnpm --filter @taiji/electron run ${{ matrix.build-script }}
 
       - name: Postbuild validation
         shell: bash
@@ -178,13 +208,17 @@ jobs:
           fi
 
       - name: Runtime smoke test (macOS)
-        if: matrix.platform == 'mac'
+        if: startsWith(matrix.platform, 'mac')
         shell: bash
         run: |
+          # 双架构 mac job 共用：unpacked 目录名由 matrix 提供（arm64 → mac-arm64，
+          # x64 → mac）。x64 产物在 arm64 runner 上经 Rosetta 2 执行（GitHub arm64
+          # runner 预装 Rosetta，x86_64 Mach-O 直接 exec 自动翻译），冒烟链路与 arm64
+          # 完全同构——能起 runtime 并应答 /health 即证明交叉产物可执行。
           # 产物名为 TaiJi.app / TaiJi 可执行文件（electron-builder.yml executableName；
           # productName「太极」只进 CFBundleName/CFBundleDisplayName，不出现在文件系统名），
           # .app 名派生方式与 scripts/postbuild-validate.sh 对齐，避免改名后再漂移
-          APP_PATH=$(find apps/electron/dist/builder-output/mac-arm64 -name "*.app" -maxdepth 1 | head -1)
+          APP_PATH=$(find "apps/electron/dist/builder-output/${{ matrix.mac-unpacked }}" -name "*.app" -maxdepth 1 | head -1)
           RUNTIME="$APP_PATH/Contents/Resources/app.asar.unpacked/dist/runtime/index.cjs"
           ELECTRON="$APP_PATH/Contents/MacOS/TaiJi"
           if [ ! -f "$RUNTIME" ]; then

@@ -214,6 +214,8 @@ if [ "$DIR_ONLY" = true ]; then
     # dir-only 模式：跳过安装器产物检查，只验证 unpacked 目录存在
     UNPACKED_COUNT=0
     [ -d "$OUTPUT_DIR/mac-arm64" ] && UNPACKED_COUNT=$((UNPACKED_COUNT + 1))
+    # mac = x64 dmg 交叉构建的 unpacked 目录名（electron-builder 惯例：x64 用裸 mac）
+    [ -d "$OUTPUT_DIR/mac" ] && UNPACKED_COUNT=$((UNPACKED_COUNT + 1))
     [ -d "$OUTPUT_DIR/win-unpacked" ] && UNPACKED_COUNT=$((UNPACKED_COUNT + 1))
     [ -d "$OUTPUT_DIR/linux-unpacked" ] && UNPACKED_COUNT=$((UNPACKED_COUNT + 1))
     if [ "$UNPACKED_COUNT" -eq 0 ]; then
@@ -233,11 +235,32 @@ else
 fi
 
 # ── 2. macOS app 结构 ──────────────────────────────────────────────
-if [ -d "$OUTPUT_DIR/mac-arm64" ]; then
+# 双架构循环：mac-arm64（arm64 原生）与 mac（Intel x64 交叉构建）各验一遍——
+# 同一次构建只会有其一（arm64 job / mac-x64 job 分开跑），存在性门控天然分流。
+MAC_UNPACKED_SEEN=0
+for MAC_UNPACKED_DIR in mac-arm64 mac; do
+    [ -d "$OUTPUT_DIR/$MAC_UNPACKED_DIR" ] || continue
+    MAC_UNPACKED_SEEN=$((MAC_UNPACKED_SEEN + 1))
+    # 目录名 → 期望架构：mac-arm64 → arm64；mac → x64（后续 main exe/pi 二进制/
+    # node-pty prebuilds/dmg 文件名的架构断言全部以它为锚。
+    MAC_ARCH="arm64"
+    [ "$MAC_UNPACKED_DIR" = "mac" ] && MAC_ARCH="x64"
     echo ""
-    echo -e "${BLUE}[2/6] macOS app structure...${NC}"
+    echo -e "${BLUE}[2/6] macOS app structure (${MAC_ARCH}, ${MAC_UNPACKED_DIR})...${NC}"
 
-    APP_PATH=$(find "$OUTPUT_DIR/mac-arm64" -name "*.app" -maxdepth 1 | head -1)
+    # 期望 dmg 文件名（非 dir-only）：TaiJi-<v>-mac-<arch>.dmg。交叉构建链路里若 CLI
+    # dmg:x64 被静默忽略（回退成 arm64 构建），产物名会变成 -mac-arm64.dmg，此处
+    # 第一时间拦住（release 尾部的 verify 只查「至少一个 dmg」，拦不住错架构）。
+    if [ "$DIR_ONLY" != true ]; then
+        if ls "$OUTPUT_DIR"/TaiJi-*-mac-"$MAC_ARCH".dmg >/dev/null 2>&1; then
+            echo -e "  ${GREEN}✓${NC} dmg 产物名含正确架构段: TaiJi-*-mac-${MAC_ARCH}.dmg"
+        else
+            echo -e "  ${RED}✗${NC} 未找到 TaiJi-*-mac-${MAC_ARCH}.dmg（${MAC_UNPACKED_DIR} 对应架构的 dmg 缺失——CLI dmg:x64 被忽略/文件名模板回退？）"
+            FAILED=1
+        fi
+    fi
+
+    APP_PATH=$(find "$OUTPUT_DIR/$MAC_UNPACKED_DIR" -name "*.app" -maxdepth 1 | head -1)
 
     if [ -n "$APP_PATH" ] && [ -d "$APP_PATH" ]; then
         # Info.plist
@@ -252,6 +275,20 @@ if [ -d "$OUTPUT_DIR/mac-arm64" ]; then
         MAIN_EXE=$(find "$APP_PATH/Contents/MacOS" -type f -maxdepth 1 | head -1)
         if [ -n "$MAIN_EXE" ]; then
             echo -e "  ${GREEN}✓${NC} Main: $(basename "$MAIN_EXE")"
+            # main executable 架构断言：交叉构建链路的硬证据——x64 job 若被静默
+            # 回退成 arm64 构建（CLI flag 失效等），此处第一时间拦截（Mach-O 头不会
+            # 说谎；file 输出 arm64 → "arm64"，x64 → "x86_64"）。
+            MAIN_EXE_FILE=$(file -b "$MAIN_EXE" 2>/dev/null || echo "")
+            case "$MAC_ARCH" in
+                arm64) EXPECTED_MACHO="arm64" ;;
+                *)      EXPECTED_MACHO="x86_64" ;;
+            esac
+            if echo "$MAIN_EXE_FILE" | grep -q "$EXPECTED_MACHO"; then
+                echo -e "  ${GREEN}✓${NC} Main executable 架构 = ${MAC_ARCH}（${MAIN_EXE_FILE%%,*}）"
+            else
+                echo -e "  ${RED}✗${NC} Main executable 架构与 ${MAC_UNPACKED_DIR} 期望（${MAC_ARCH}）不符: ${MAIN_EXE_FILE}"
+                FAILED=1
+            fi
         else
             echo -e "  ${RED}✗${NC} 无 main executable"
             FAILED=1
@@ -346,22 +383,24 @@ if [ -d "$OUTPUT_DIR/mac-arm64" ]; then
         fi
 
         # node-pty prebuilds 平台裁剪检查 — u2（设计 batch3 §3.2.2）靠 electron-builder.yml
-        # mac 平台段 files 排除 win32-*/darwin-x64 prebuilds。yml 回退或 electron-builder
-        # 升级改变 files 匹配语义时，全平台 prebuilds 会静默回到产物（死重 + 体积回涨），
-        # CI 无感。产物级断言：prebuilds 目录仅含 darwin-arm64，且 pty.node/spawn-helper 在位
-        # （darwin-arm64 被误裁时 S5 冒烟前在此捕获）。node-pty 整包 asarUnpack，prebuilds
-        # 目录本身缺失亦属回归。
+        # mac 平台段 files 排除 win32-* prebuilds（darwin-* 双架构随包，见 yml mac 段注释：
+        # x64 dmg 的运行时 fallback）。yml 回退或 electron-builder 升级改变 files 匹配语义
+        # 时，win32 prebuilds 会静默回到产物（死重 + 体积回涨），CI 无感。产物级断言：
+        # prebuilds 目录仅含 darwin-*（本架构目录必须在位且 pty.node/spawn-helper 齐全，
+        # 被误裁时 S5 冒烟前在此捕获——node-pty loadNativeModule 先 build/Release 后
+        # prebuilds，交叉重建失败时 prebuilds 是唯一可用源）。node-pty 整包 asarUnpack，
+        # prebuilds 目录本身缺失亦属回归。
         PTY_PREBUILDS_DIR="$APP_PATH/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds"
         if [ -d "$PTY_PREBUILDS_DIR" ]; then
-            PTY_FOREIGN_PLATFORMS=$(find "$PTY_PREBUILDS_DIR" -mindepth 1 -maxdepth 1 -type d ! -name 'darwin-arm64' -exec basename {} \;)
+            PTY_FOREIGN_PLATFORMS=$(find "$PTY_PREBUILDS_DIR" -mindepth 1 -maxdepth 1 -type d ! -name 'darwin-*' -exec basename {} \;)
             if [ -n "$PTY_FOREIGN_PLATFORMS" ]; then
-                echo -e "  ${RED}✗${NC} node-pty prebuilds 含非 darwin-arm64 平台目录:$(echo "$PTY_FOREIGN_PLATFORMS" | tr '\n' ' ')"
+                echo -e "  ${RED}✗${NC} node-pty prebuilds 含非 darwin 平台目录:$(echo "$PTY_FOREIGN_PLATFORMS" | tr '\n' ' ')"
                 echo -e "        u2 平台裁剪疑似被回退——检查 electron-builder.yml mac 段 files 的 prebuilds 排除行（设计 batch3 §3.2.2）"
                 FAILED=1
-            elif [ -f "$PTY_PREBUILDS_DIR/darwin-arm64/pty.node" ] && [ -f "$PTY_PREBUILDS_DIR/darwin-arm64/spawn-helper" ]; then
-                echo -e "  ${GREEN}✓${NC} node-pty prebuilds 仅 darwin-arm64（pty.node + spawn-helper 在位）"
+            elif [ -f "$PTY_PREBUILDS_DIR/darwin-$MAC_ARCH/pty.node" ] && [ -f "$PTY_PREBUILDS_DIR/darwin-$MAC_ARCH/spawn-helper" ]; then
+                echo -e "  ${GREEN}✓${NC} node-pty prebuilds 仅 darwin-*（darwin-$MAC_ARCH pty.node + spawn-helper 在位）"
             else
-                echo -e "  ${RED}✗${NC} node-pty darwin-arm64 native 缺失（pty.node/spawn-helper）: $PTY_PREBUILDS_DIR/darwin-arm64"
+                echo -e "  ${RED}✗${NC} node-pty darwin-$MAC_ARCH native 缺失（pty.node/spawn-helper）: $PTY_PREBUILDS_DIR/darwin-$MAC_ARCH"
                 FAILED=1
             fi
         else
@@ -373,8 +412,31 @@ if [ -d "$OUTPUT_DIR/mac-arm64" ]; then
         if [ -d "$APP_PATH/Contents/Resources/pi" ]; then
             echo -e "  ${GREEN}✓${NC} pi binary in Resources"
 
+            # pi 二进制架构断言（双架构 mac 产物）：Resources/pi/pi-darwin-<MAC_ARCH> 必须在位
+            # 且 Mach-O 架构匹配。这是交叉构建链路的硬证据——prepare 脚本 --arch 传错/被
+            # 忽略、或缓存串桶时，Intel dmg 里会只有 arm64 二进制（运行时 find-pi-executable
+            # 按 process.arch 找不到文件，pi 子进程全体哑火），必须在发布前拦住。
+            # `pi` PATH 别名（symlink）指向同目录 staged 二进制，随 staged 架构正确。
+            PI_BIN="$APP_PATH/Contents/Resources/pi/pi-darwin-$MAC_ARCH"
+            if [ -f "$PI_BIN" ]; then
+                PI_BIN_FILE=$(file -b "$PI_BIN" 2>/dev/null || echo "")
+                case "$MAC_ARCH" in
+                    arm64) EXPECTED_PI_MACHO="arm64" ;;
+                    *)      EXPECTED_PI_MACHO="x86_64" ;;
+                esac
+                if echo "$PI_BIN_FILE" | grep -q "$EXPECTED_PI_MACHO"; then
+                    echo -e "  ${GREEN}✓${NC} pi-darwin-$MAC_ARCH 架构匹配（$(echo "$PI_BIN_FILE" | cut -d, -f1)）"
+                else
+                    echo -e "  ${RED}✗${NC} pi-darwin-$MAC_ARCH Mach-O 架构不符（期望含 $EXPECTED_PI_MACHO）: $PI_BIN_FILE"
+                    FAILED=1
+                fi
+            else
+                echo -e "  ${RED}✗${NC} pi-darwin-$MAC_ARCH 缺失: $PI_BIN（交叉构建 staged 架构错误？）"
+                FAILED=1
+            fi
+
             # 致命：pi 目录中不能有指向 bundle 外部的 symlink。同目录相对 symlink 合法
-            # （prepare-pi-resources.sh 的 pi PATH 别名 = pi -> pi-darwin-arm64，拷贝进
+            # （prepare-pi-resources.sh 的 pi PATH 别名 = pi -> pi-darwin-<arch>，拷贝进
             # bundle 后仍指向同目录二进制，自包含；判定语义与 scripts/check-pi-resources-links.mjs
             # 构建前检查一致——目标 resolve 后落在 pi 目录内部即放行）。原「find -type l
             # 全拦」实现比注释意图严，pi 别名引入后误伤 CI（2026-10-22）。
@@ -477,7 +539,9 @@ if [ -d "$OUTPUT_DIR/mac-arm64" ]; then
     else
         echo -e "  ${YELLOW}⚠ 未找到 .app 目录${NC}"
     fi
-else
+done
+# 两类 mac unpacked 目录都不在（win/linux 构建，或 dir-only 缺产物）→ 跳过提示
+if [ "$MAC_UNPACKED_SEEN" -eq 0 ]; then
     echo ""
     echo -e "${YELLOW}[2/6] macOS 结构跳过（非 macOS 构建）${NC}"
 fi
@@ -676,7 +740,14 @@ echo ""
 echo -e "${BLUE}[5/6] Smoke test (optional)...${NC}"
 
 if [ "$(uname)" = "Darwin" ]; then
-    APP_BUNDLE=$(find "$OUTPUT_DIR/mac-arm64" -name "*.app" -maxdepth 1 2>/dev/null | head -1)
+    # 双架构目录逐一探测（find 对不存在目录返回非零，set -e 下会炸——不能两个目录
+    # 一次传给 find）；arm64 job 只有 mac-arm64，mac-x64 job 只有 mac。
+    APP_BUNDLE=""
+    for _mac_dir in mac-arm64 mac; do
+        [ -d "$OUTPUT_DIR/$_mac_dir" ] || continue
+        _found=$(find "$OUTPUT_DIR/$_mac_dir" -name "*.app" -maxdepth 1 2>/dev/null | head -1)
+        if [ -n "$_found" ]; then APP_BUNDLE="$_found"; break; fi
+    done
     if [ -n "$APP_BUNDLE" ]; then
         echo -e "  ${YELLOW}⚠ Smoke test 需要手动执行：open -a \"$APP_BUNDLE\"${NC}"
     fi
