@@ -27,45 +27,51 @@ permissions:
   contents: read
 
 jobs:
+  # ── 矩阵前置：按模式输出 build 矩阵（标准动态矩阵模式）─────────
+  # 为什么不用 job 级 if + matrix（GitHub 不允许：job 级 if 仅 github/inputs/needs/vars
+  # 上下文，写 matrix 会文件级解析失败，连带 uses 本 workflow 的 ci.yml / release.yml
+  # 一起 0 秒挂）：dir-only（PR CI）跳过 mac-x64 交叉构建——x64 是打包产物形态关注点
+  # （交叉编译/架构资源正确性），release 完整构建覆盖；dir-only 只验代码正确性
+  # （asar/runtime 与 arch 无关），双跑纯烧 mac runner 时长。
+  matrix-prep:
+    name: Matrix prep
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        shell: bash
+        env:
+          DIR_ONLY: ${{ inputs.dir-only }}
+        run: |
+          # 字段语义（两个数组共用，差异仅在是否含 mac-x64 条目）：
+          #   os / platform      —— runner 与平台标识（产物名/manifest 名/smoke 分流）
+          #   pi-arch            —— prepare-pi-resources.sh --arch 入参 + 两处缓存 key 架构段
+          #                         （交叉构建 staged 的 pi 二进制与宿主架构不同，缓存必须
+          #                         按目标架构分桶，不能用 runner.arch）
+          #   mac-unpacked       —— mac unpacked 目录名（electron-builder x64 产出是 mac，
+          #                         非 mac-arm64），仅 mac 条目需要
+          #   build-script       —— 完整构建入口；x64 用 build:mac-x64（CLI dmg:x64 限定单
+          #                         架构，绕过 config 的 mac.target.arch 列表，防双架构并出/
+          #                         同名互覆），机制注释见 electron-builder.yml mac 段
+          # mac 双架构背景：macos-13 Intel runner 已被 GitHub 全量退役（2025-12），
+          # Intel dmg 在 arm64 runner 上交叉产出（electron-builder --mac dmg:x64）。
+          if [ "$DIR_ONLY" = "true" ]; then
+            matrix='{"include":[{"os":"macos-latest","platform":"mac","pi-arch":"arm64","mac-unpacked":"mac-arm64","build-script":"build"},{"os":"windows-latest","platform":"win","pi-arch":"x64","build-script":"build"},{"os":"ubuntu-latest","platform":"linux","pi-arch":"x64","build-script":"build"}]}'
+          else
+            matrix='{"include":[{"os":"macos-latest","platform":"mac","pi-arch":"arm64","mac-unpacked":"mac-arm64","build-script":"build"},{"os":"macos-latest","platform":"mac-x64","pi-arch":"x64","mac-unpacked":"mac","build-script":"build:mac-x64"},{"os":"windows-latest","platform":"win","pi-arch":"x64","build-script":"build"},{"os":"ubuntu-latest","platform":"linux","pi-arch":"x64","build-script":"build"}]}'
+          fi
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "[matrix-prep] dir-only=$DIR_ONLY → $(echo "$matrix" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>console.log(JSON.parse(d).include.map(e=>e.platform).join(", ")))')"
+
   build:
+    needs: matrix-prep
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          # mac 双架构：arm64 原生构建 + Intel(x64) 交叉构建。macos-13 Intel runner
-          # 已被 GitHub 全量退役（2025-12），x64 dmg 在 arm64 runner 上交叉产出
-          # （electron-builder --mac dmg:x64，机制注释见 electron-builder.yml mac 段）。
-          # pi-arch = prepare-pi-resources.sh --arch 入参 + 两处缓存 key 架构段
-          # （交叉构建 staged 的 pi 二进制与宿主架构不同，缓存必须按目标架构分桶）。
-          # mac-unpacked = unpacked 目录名（electron-builder x64 产出是 mac，非 mac-arm64）。
-          # build-script = 完整构建入口（x64 job 用 build:mac-x64：CLI dmg:x64 限定单架构，
-          # 绕过 config 的 mac.target.arch 列表，防双架构并出/同名互覆）。
-          - os: macos-latest
-            platform: mac
-            pi-arch: arm64
-            mac-unpacked: mac-arm64
-            build-script: build
-          # Intel dmg：dir-only（PR CI）模式整 job 跳过（if 见下）——x64 是打包产物形态
-          # 关注点（交叉编译/架构资源正确性），release 完整构建覆盖；dir-only 只验
-          # 代码正确性（asar/runtime 与 arch 无关），双跑纯烧 mac runner 时长。
-          - os: macos-latest
-            platform: mac-x64
-            pi-arch: x64
-            mac-unpacked: mac
-            build-script: build:mac-x64
-          - os: windows-latest
-            platform: win
-            pi-arch: x64
-            build-script: build
-          - os: ubuntu-latest
-            platform: linux
-            pi-arch: x64
-            build-script: build
+      matrix: ${{ fromJSON(needs.matrix-prep.outputs.matrix) }}
 
     name: Build ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
-    # dir-only（PR CI）跳过 mac-x64 交叉构建（理由见上方 matrix 注释）。
-    if: ${{ !(inputs.dir-only && matrix.platform == 'mac-x64') }}
     # 上限检查只能放本 job：GitHub 对 uses: 复用 workflow 的 caller job 只接受
     # name/needs/if/permissions/concurrency/strategy/with/secrets 字段，caller 上写
     # timeout-minutes 是 parse 期 startup_failure（ci.yml 全线 0 job 失败，2026-09-18）。
