@@ -145,7 +145,12 @@ export function makeFetchRuns({ REPO, runImpl = run }) {
     const res = runImpl('gh', [
       'run', 'list',
       '--repo', REPO,
-      '--workflow', 'Release',
+      // 按【文件名】而非 workflow name 匹配：workflow 文件 startup_failure（如
+      // 语法错误导致 0 秒失败）后 GitHub 会把 name 重置成文件路径形态（
+      // .github/workflows/release.yml），且不随后续成功 run 自动恢复——按 name
+      // 匹配会「could not find any workflows named Release」（v0.13.0 实测）。
+      // 文件名是稳定标识，两种形态下都能命中。
+      '--workflow', 'release.yml',
       '--limit', '5',
       '--json', 'databaseId,status,conclusion,headBranch,displayTitle',
     ], { stdio: 'capture' })
