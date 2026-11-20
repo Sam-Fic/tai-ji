@@ -221,6 +221,9 @@ jobs:
           # x64 → mac）。x64 产物在 arm64 runner 上经 Rosetta 2 执行（GitHub arm64
           # runner 预装 Rosetta，x86_64 Mach-O 直接 exec 自动翻译），冒烟链路与 arm64
           # 完全同构——能起 runtime 并应答 /health 即证明交叉产物可执行。
+          # 预算 60s（120 × 0.5s）：runner 全新环境下 Rosetta 对 Electron 框架的首次
+          # AOT 翻译可达数十秒（v0.13.0 实测 10s 预算下进程还没跑起来就超时；本机
+          # 秒过是缓存预热后的假象）。属 CI 冒烟断言语义，非运行时超时机制。
           # 产物名为 TaiJi.app / TaiJi 可执行文件（electron-builder.yml executableName；
           # productName「太极」只进 CFBundleName/CFBundleDisplayName，不出现在文件系统名），
           # .app 名派生方式与 scripts/postbuild-validate.sh 对齐，避免改名后再漂移
@@ -231,12 +234,17 @@ jobs:
             echo '::error::Runtime bundle not found in app.asar.unpacked'
             exit 1
           fi
-          # Start runtime with ELECTRON_RUN_AS_NODE, verify it listens
+          # Rosetta 存在性探针（失败时诊断用，不构成判定）
+          sysctl -n hw.optional.rosetta 2>/dev/null && echo 'Rosetta installed' || echo 'hw.optional.rosetta unavailable'
+          pgrep -q oahd && echo 'Rosetta daemon (oahd) running' || echo 'Rosetta daemon not yet running'
+          # Start runtime with ELECTRON_RUN_AS_NODE, verify it listens；输出重定向到文件
+          # 失败时回显（静默超时最难排查——v0.13.0 首跑的教训）
           PORT=3299
-          ELECTRON_RUN_AS_NODE=1 "$ELECTRON" "$RUNTIME" --port=$PORT &
+          RUNTIME_OUT=$(mktemp)
+          ELECTRON_RUN_AS_NODE=1 "$ELECTRON" "$RUNTIME" --port=$PORT >"$RUNTIME_OUT" 2>&1 &
           PID=$!
           READY=false
-          for i in $(seq 1 20); do
+          for i in $(seq 1 120); do
             if curl -s --max-time 1 "http://127.0.0.1:$PORT/health" 2>/dev/null | grep -q ok; then
               READY=true; break
             fi
@@ -244,7 +252,9 @@ jobs:
           done
           kill $PID 2>/dev/null; wait $PID 2>/dev/null || true
           if [ "$READY" != true ]; then
-            echo '::error::Runtime smoke test failed — did not respond to /health'
+            echo '::error::Runtime smoke test failed — did not respond to /health within 60s'
+            echo '--- runtime output (tail) ---'
+            tail -30 "$RUNTIME_OUT" || echo '(no runtime output captured)'
             exit 1
           fi
           echo 'Runtime smoke test passed'
