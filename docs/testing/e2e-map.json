@@ -6009,7 +6009,7 @@
         "packages/ui/src/features/settings/provider/**",
         "packages/ui/src/locale/**"
       ],
-      "layer": "L1",
+      "layer": "L2",
       "assets": [
         {
           "kind": "spec",
@@ -6021,7 +6021,7 @@
       "run": "npx playwright test e2e/route-quick-create-real.spec.ts",
       "owner": "packages/renderer",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
-      "note": "[本轮新建] 模型路由快速创建 UI 链（RouteQuickCreatePanel simple/advanced → RouteUnsavedBar 保存 → providers.json routes 域）+ provider-aggregation 聚合虚拟模型端到端（session.create modelOverride=aggregation/<routeId> → faux 回复文本断言）。文件名带 -real，命中 REAL_TRACK_SPECS 首类形态，不进 CI 门禁，开发阶段按改动范围空载串行跑。"
+      "note": "[本轮新建；2026-11-21 修正 layer L1→L2（real 层误标 L1 被 e2e-on-diff×L1 消费，CI 无 X server 快败——与 REAL-01 同族口径，不进 CI 门禁）] 模型路由快速创建 UI 链（RouteQuickCreatePanel simple/advanced → RouteUnsavedBar 保存 → providers.json routes 域）+ provider-aggregation 聚合虚拟模型端到端（session.create modelOverride=aggregation/<routeId> → faux 回复文本断言）。文件名带 -real，命中 REAL_TRACK_SPECS 首类形态，不进 CI 门禁，开发阶段按改动范围空载串行跑。"
     },
     {
       "id": "E2E-PERF-01",
