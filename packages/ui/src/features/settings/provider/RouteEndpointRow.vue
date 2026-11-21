@@ -105,7 +105,7 @@
       @click="levelsOpen = !levelsOpen"
     >
       {{ t('settings.modelRoute.levelsToggle', { n: declaredLevelsCount }) }}
-      <ChevronDown class="size-3" :class="levelsOpen ? '' : '-rotate-90'" />
+      <ChevronDown class="size-3" :class="levelsToggleChevronClass" />
     </Button>
 
     <!-- 条件区（仅高级模式；joined 分段 demo 形态） -->
@@ -117,7 +117,7 @@
           variant="ghost"
           size="dense"
           class="rounded-none"
-          :class="member.type === ct ? 'bg-surface-2 font-medium text-neutral-fg' : 'text-neutral-mid'"
+          :class="condTypeClass(ct)"
           :aria-pressed="member.type === ct"
           :data-testid="`endpoint-cond-${ct}`"
           @click="setConditionType(ct)"
@@ -191,7 +191,7 @@
         size="icon"
         class="size-7 rounded-sm p-0 text-danger hover:bg-danger-soft"
         :aria-label="t('settings.modelRoute.remove')"
-        :aria-disabled="isLast || undefined"
+        :aria-disabled="removeAriaDisabled"
         data-testid="endpoint-remove"
         @click="onRemove"
       >
@@ -200,46 +200,19 @@
     </div>
 
     <!-- 思考等级标签区（spec §5.2-§5.4：7 档多选，按模型能力置灰；简单模式常驻 / 高级折叠。
-         demo 形态：标签带迷你柱状 icon、选中填充、右侧对外并集） -->
-    <div v-if="levelsVisible" class="w-full rounded-sm bg-surface-2 px-2 py-1.5" data-testid="endpoint-levels-row">
-      <div class="flex flex-wrap items-center gap-1.5">
-        <span class="text-[length:var(--text-2xs)] font-medium text-neutral-mid">{{ t('settings.modelRoute.levelsTitle') }}</span>
-        <span class="text-[length:var(--text-2xs)] text-neutral-dim">{{ t('settings.modelRoute.levelsHelper') }}</span>
-        <span class="ml-auto text-[length:var(--text-2xs)] text-neutral-mid" data-testid="endpoint-levels-union">
-          {{ t('settings.modelRoute.levelsUnionInline') }}
-          <span class="font-medium text-neutral-fg">{{ levelsUnionText || '—' }}</span>
-        </span>
-      </div>
-      <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
-        <Button
-          v-for="level in PI_THINKING_LEVELS"
-          :key="level"
-          variant="secondary"
-          size="dense"
-          class="gap-1 rounded-full"
-          :class="isLevelDeclared(level) ? 'border-success bg-success-soft text-success' : 'border-border text-neutral-mid'"
-          :aria-pressed="isLevelDeclared(level)"
-          :disabled="!isLevelAvailable(level) && !isLevelDeclared(level)"
-          :title="levelTitle(level)"
-          :data-testid="`endpoint-level-${level}`"
-          @click="toggleLevel(level)"
-        >
-          <svg viewBox="0 0 10 10" class="size-2.5 shrink-0" aria-hidden="true">
-            <rect x="0" y="6" width="2.4" height="4" rx="0.5" fill="currentColor" />
-            <rect x="3.8" y="3" width="2.4" height="7" rx="0.5" fill="currentColor" />
-            <rect x="7.6" y="0" width="2.4" height="10" rx="0.5" fill="currentColor" />
-          </svg>
-          {{ t(`composable.thinkingLevel.${level}`) }}
-        </Button>
-        <span v-if="supportedUnknown" class="text-[length:var(--text-2xs)] text-neutral-dim">
-          {{ t('settings.modelRoute.levelsUnknown') }}
-        </span>
-      </div>
-    </div>
+         demo 形态：标签带迷你柱状 icon、选中填充、右侧对外并集；拆出组件治理模板圈复杂度） -->
+    <RouteEndpointLevels
+      v-if="levelsVisible"
+      class="w-full"
+      :route="route"
+      :member="member"
+      :providers="providers"
+      @levels="(levels) => emit('op', opWith({ kind: 'endpoint-patch', patch: { levels } }))"
+    />
 
     <!-- 编辑时段行内网格（spec §12 迁移；仅窗型端点，demo 同形） -->
     <RouteInlineTimeGrid
-      v-if="gridOpen && hasWindow"
+      v-if="gridVisible"
       class="w-full"
       :route="route"
       :member="member"
@@ -257,12 +230,11 @@ import { useI18n } from 'vue-i18n'
 import { ChevronUp, ChevronDown, Trash2 } from '@lucide/vue'
 import { Button, Input, Label, Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@taiji/ui'
 import type { AggregationMember, AggregationRoute, AggregationMemberConditionType, ProviderInfo } from '@taiji/shared'
-import { AGGREGATION_QUOTA_THRESHOLD_MAX, PI_THINKING_LEVELS } from '@taiji/shared'
+import { AGGREGATION_QUOTA_THRESHOLD_MAX } from '@taiji/shared'
 import {
   endpointIssueKey,
   endpointIssueKinds,
   endpointProviderOptions,
-  levelsUnion,
   truncatesAfter,
   suppressedByEarlierUnconditional,
   type EndpointIssueKind,
@@ -270,6 +242,7 @@ import {
 import { dotColorClass, issueChipClass } from './route-styles'
 import { DEFAULT_QUOTA_THRESHOLD_PERCENT, type MemberOpInput, type RouteEditorOp } from './route-editor-ops'
 import RouteInlineTimeGrid from './RouteInlineTimeGrid.vue'
+import RouteEndpointLevels from './RouteEndpointLevels.vue'
 import { useSettingsToast } from '../injection-keys'
 
 const props = defineProps<{
@@ -303,6 +276,18 @@ const providerOptions = computed(() => endpointProviderOptions(props.route, prop
 const truncates = computed(() => truncatesAfter(props.route, props.index))
 const neverHit = computed(() => suppressedByEarlierUnconditional(props.route, props.index))
 const isLast = computed(() => props.index === props.total - 1)
+
+// ── 模板下沉的展示判定（单一语义化值，模板零组合条件） ──
+
+const levelsToggleChevronClass = computed(() => (levelsOpen.value ? '' : '-rotate-90'))
+
+/** 条件类型分段按钮样式（选中段填充，demo joined 形态）。 */
+function condTypeClass(type: AggregationMemberConditionType): string {
+  return props.member.type === type ? 'bg-surface-2 font-medium text-neutral-fg' : 'text-neutral-mid'
+}
+
+/** 最后端点删除保护：aria-disabled 用 undefined 摘除属性（保留点击，toast 阻止）。 */
+const removeAriaDisabled = computed(() => isLast.value || undefined)
 
 /**
  * 模型下拉候选（当前渠道维度）：启用模型全集 + 当前值保留项。当前 member.modelId 不在
@@ -375,47 +360,21 @@ function onRemove(): void {
 }
 
 // ── 思考等级（spec §5.4：支持声明编辑；能力唯一依据 = runtime 下发 supportedLevels）──
+// 标签区拆出 RouteEndpointLevels（模板圈复杂度治理），本组件只留折叠态与折叠开关计数。
 
 const levelsOpen = ref(false)
 /** 简单模式常驻（demo 同形）；高级模式经「思考等级 n」折叠。 */
 const levelsVisible = computed(() => !props.advanced || levelsOpen.value)
 
-/** 本端点模型的 supportedLevels（归一后）；null = 档位未知（能力标注缺失，不伪装置灰）。 */
-const supportedLevelsOfModel = computed<string[] | null>(() => {
-  const model = props.providers
-    .find((p) => p.id === props.member.providerId)
-    ?.models.find((m) => m.id === props.member.modelId)
-  return model?.supportedLevels ?? null
-})
-
-const supportedUnknown = computed(() => supportedLevelsOfModel.value === null)
-
-function isLevelAvailable(level: string): boolean {
-  const supported = supportedLevelsOfModel.value
-  return supported === null ? true : supported.includes(level)
-}
-
-function isLevelDeclared(level: string): boolean {
-  const levels = props.member.levels
-  if (!levels) return false
-  return levels[level] !== undefined && levels[level] !== null
-}
-
 const declaredLevelsCount = computed(
   () => Object.values(props.member.levels ?? {}).filter((v) => v !== null && v !== undefined).length,
 )
 
-const levelsUnionText = computed(() => levelsUnion(props.route).join(' · '))
+// ── 编辑时段行内网格 ──
 
-function levelTitle(level: string): string {
-  if (!isLevelAvailable(level)) {
-    // 已声明但新模型不支持：仍可点（取消声明），只有未声明且不支持才置灰（修剪 F2）
-    return isLevelDeclared(level)
-      ? t('settings.modelRoute.levelsDeclaredStale')
-      : t('settings.modelRoute.levelsUnsupported')
-  }
-  return isLevelDeclared(level) ? t('settings.modelRoute.levelsDeclared') : t('settings.modelRoute.levelsUndeclared')
-}
+const gridOpen = ref(false)
+/** 网格可见 = 展开开关且窗型端点（spec §12 仅窗型可编辑）。 */
+const gridVisible = computed(() => gridOpen.value && hasWindow.value)
 
 /**
  * 模型切换补丁（修剪 F2）：modelId 换到新模型时，已声明档位按新模型 supportedLevels
@@ -435,23 +394,5 @@ function patchModelSwitch(modelId: string): { modelId: string; levels?: Record<s
   return Object.keys(kept).length === 0 ? { modelId } : { modelId, levels: kept }
 }
 
-/** 档位 toggle（spec §5.4）：levels 缺省时首点初始化为「支持集全选」再 toggle 所点档；
- *  档位未知时以 7 档全集初始化。编辑走 endpoint-patch（AggregationMemberPatch 已含 levels）。 */
-function toggleLevel(level: string): void {
-  // 未声明且不支持 → 置灰拦截；已声明但模型不支持 → 放行（唯一动作 = 取消声明，修剪 F2）
-  if (!isLevelAvailable(level) && !isLevelDeclared(level)) {
-    toast.info(t('settings.modelRoute.levelsUnsupported'))
-    return
-  }
-  const supported = supportedLevelsOfModel.value ?? [...PI_THINKING_LEVELS]
-  const base: Record<string, string | null> = props.member.levels
-    ? { ...props.member.levels }
-    : Object.fromEntries(supported.map((l) => [l, l]))
-  base[level] = isLevelDeclared(level) ? null : level
-  emit('op', opWith({ kind: 'endpoint-patch', patch: { levels: base } }))
-}
-
 // ── 编辑时段行内网格 ──
-
-const gridOpen = ref(false)
 </script>

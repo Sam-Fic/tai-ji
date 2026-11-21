@@ -40,11 +40,11 @@
       size="icon"
       class="size-7 rounded-sm p-0 text-neutral-dim hover:text-neutral-fg"
       :aria-expanded="expanded"
-      :aria-label="expanded ? t('settings.modelRoute.collapse') : t('settings.modelRoute.expand')"
+      :aria-label="toggleAriaLabel"
       data-testid="route-card-toggle"
       @click="expanded = !expanded"
     >
-      <ChevronDown class="size-4 transition-transform" :class="expanded ? 'rotate-180' : ''" />
+      <ChevronDown class="size-4 transition-transform" :class="toggleChevronClass" />
     </Button>
     <!-- 路由名称（行内编辑）：点击名称进入编辑态，Enter/失焦提交、Esc 取消；空值不改名。
          Esc 加 .stop：弹层 focus-scope 有 window 级 Escape 兜底（焦点落 body 即关弹层），
@@ -108,7 +108,7 @@
       </span>
 
       <span class="rounded-sm border border-border px-1.5 py-0.5 text-[length:var(--text-3xs)] text-neutral-mid" data-testid="route-card-levels-union">
-        {{ t('settings.modelRoute.levelsUnion') }} {{ levelsUnionText || '—' }}
+        {{ t('settings.modelRoute.levelsUnion') }} {{ levelsUnionDisplay }}
       </span>
 
       <!-- 工具区 -->
@@ -143,7 +143,7 @@
             variant="ghost"
             size="dense"
             class="rounded-none"
-            :class="card.route.mode === 'simple' ? 'bg-surface-2 font-medium text-neutral-fg' : 'text-neutral-mid'"
+            :class="modeBtnClass('simple')"
             :aria-pressed="card.route.mode === 'simple'"
             data-testid="route-card-mode-simple"
             @click="setMode('simple')"
@@ -154,7 +154,7 @@
             variant="ghost"
             size="dense"
             class="rounded-none"
-            :class="card.route.mode === 'advanced' ? 'bg-surface-2 font-medium text-neutral-fg' : 'text-neutral-mid'"
+            :class="modeBtnClass('advanced')"
             :aria-pressed="card.route.mode === 'advanced'"
             data-testid="route-card-mode-advanced"
             @click="setMode('advanced')"
@@ -173,7 +173,7 @@
           size="dense"
           class="gap-1"
           :aria-pressed="card.scoped"
-          :class="card.scoped ? 'border-success text-success' : 'text-neutral-dim'"
+          :class="scopedBtnClass"
           data-testid="route-scoped-toggle"
           @click="emit('toggleScoped')"
         >
@@ -207,24 +207,8 @@
       @confirm="confirmDelete"
     />
 
-    <!-- 收起态端点 pill 摘要（spec §7.3；点击 pill 展开该卡） -->
-    <div v-if="!expanded" class="flex flex-wrap items-center gap-1.5 border-t border-border px-4 py-2">
-      <Button
-        v-for="(member, idx) in card.route.members"
-        :key="member.id"
-        variant="secondary"
-        size="dense"
-        class="gap-1 rounded-full"
-        data-testid="route-card-pill"
-        @click="expanded = true"
-      >
-        <span class="size-1.5 rounded-full" :class="dotColorClass(idx)" />
-        {{ idx + 1 }}. {{ providerNameOf(member) }}
-      </Button>
-      <span v-if="card.route.members.length === 0" class="text-[length:var(--text-2xs)] text-neutral-dim">
-        {{ t('settings.modelRoute.noEndpoints') }}
-      </span>
-    </div>
+    <!-- 收起态端点 pill 摘要（spec §7.3；点击 pill 展开该卡；拆出组件治理模板圈复杂度） -->
+    <RouteCollapsedPills v-if="!expanded" :route="card.route" :providers="providers" @expand="expanded = true" />
 
     <!-- 展开体 -->
     <div v-if="expanded" class="border-t border-border px-4 pb-4 pt-3">
@@ -266,7 +250,7 @@
       <div class="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
         <Select v-model="addProviderId" :disabled="candidates.length === 0">
           <SelectTrigger class="h-8 w-52" data-testid="add-endpoint-select" :aria-label="t('settings.modelRoute.addEndpoint')">
-            <SelectValue :placeholder="candidates.length === 0 ? t('settings.modelRoute.noCandidates') : ''" />
+            <SelectValue :placeholder="addEndpointPlaceholder" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem v-for="id in candidates" :key="id" :value="id">
@@ -289,31 +273,7 @@
       <RouteSpecialDates v-if="card.route.mode === 'advanced'" :route="card.route" @op="emit('op', $event)" />
 
       <!-- 兜底条（spec §7.7 demo 卡底形态：无条件兜底 → 模型名；时间轴已迁移端点行内网格） -->
-      <div
-        v-if="card.route.mode === 'advanced' && card.route.members.length > 0"
-        data-testid="route-time-fallback-bar"
-        class="mt-2 flex flex-wrap items-center gap-2 rounded-sm bg-surface-2 px-2 py-1.5"
-      >
-        <template v-if="fallbackMember">
-          <span class="size-2 rounded-full" :class="dotColorClass(card.route.members.findIndex((m) => m.id === fallbackMember!.id))" />
-          <span class="text-[length:var(--text-xs)] font-medium text-neutral-fg">
-            {{ t('settings.modelRoute.fallbackBar', { name: providerNameOf(fallbackMember) }) }}
-          </span>
-          <span
-            v-for="kind in fallbackIssueKinds"
-            :key="kind"
-            class="rounded-sm px-1.5 py-0.5 text-[length:var(--text-3xs)]"
-            :class="issueChipClass(kind)"
-          >
-            {{ t(endpointIssueKey(kind)) }}
-          </span>
-          <span class="ml-auto text-[length:var(--text-2xs)] text-neutral-dim">{{ t('settings.modelRoute.fbTruncateNote') }}</span>
-        </template>
-        <template v-else>
-          <span class="text-[length:var(--text-xs)] font-medium text-warn" data-testid="noFallback">{{ t('settings.modelRoute.noFallback') }}</span>
-          <span class="text-[length:var(--text-2xs)] text-neutral-dim">{{ t('settings.modelRoute.noFallbackHint') }}</span>
-        </template>
-      </div>
+      <RouteFallbackBar v-if="fallbackBarVisible" :route="card.route" :providers="providers" />
     </div>
   </div>
 </template>
@@ -326,17 +286,15 @@ import { Button, ConfirmDialog, Input, Select, SelectTrigger, SelectValue, Selec
 import type { AggregationMember, AggregationRoute, AggregationRouteMode, ProviderInfo } from '@taiji/shared'
 import {
   candidateProviderIds,
-  endpointIssueKey,
-  endpointIssueKinds,
   evaluateRouteAt,
-  fallbackMemberOf,
   levelsUnion,
 } from './route-preview'
-import { issueChipClass } from './route-styles'
-import { dotColorClass } from './route-styles'
+
 import type { RouteEditorOp } from './route-editor-ops'
 import type { RoutePageFocus } from './ModelRoutePage.vue'
 import RouteEndpointRow from './RouteEndpointRow.vue'
+import RouteCollapsedPills from './RouteCollapsedPills.vue'
+import RouteFallbackBar from './RouteFallbackBar.vue'
 import RouteSpecialDates from './RouteSpecialDates.vue'
 import { useSettingsToast } from '../injection-keys'
 
@@ -387,6 +345,31 @@ const { t } = useI18n()
 const toast = useSettingsToast()
 
 const expanded = ref(false)
+
+// ── 模板下沉的展示判定（单一语义化值，模板零组合条件） ──
+
+const toggleAriaLabel = computed(() =>
+  expanded.value ? t('settings.modelRoute.collapse') : t('settings.modelRoute.expand'),
+)
+const toggleChevronClass = computed(() => (expanded.value ? 'rotate-180' : ''))
+
+/** 模式分段按钮样式（simple/advanced 选中段填充，D12 可随时切换）。 */
+function modeBtnClass(mode: AggregationRouteMode): string {
+  return props.card.route.mode === mode ? 'bg-surface-2 font-medium text-neutral-fg' : 'text-neutral-mid'
+}
+
+const scopedBtnClass = computed(() =>
+  props.card.scoped ? 'border-success text-success' : 'text-neutral-dim',
+)
+
+const addEndpointPlaceholder = computed(() =>
+  candidates.value.length === 0 ? t('settings.modelRoute.noCandidates') : '',
+)
+
+/** 兜底条可见（spec §7.7：高级模式且有端点才展示）。 */
+const fallbackBarVisible = computed(
+  () => props.card.route.mode === 'advanced' && props.card.route.members.length > 0,
+)
 const addProviderId = ref('')
 /** 删除确认弹层开关（U9 删除侧；确认即上抛 route-delete 指令，无草稿就地变更）。 */
 const deleteConfirmOpen = ref(false)
@@ -460,14 +443,7 @@ const pendingSplit = computed(
 )
 
 const levelsUnionText = computed(() => levelsUnion(props.card.route).join(' / '))
-
-/** 兜底端点与其异常标记（卡底兜底条数据；时间轴迁移行内网格后由卡承载，demo 同形）。 */
-const fallbackMember = computed(() => fallbackMemberOf(props.card.route))
-const fallbackIssueKinds = computed(() => {
-  if (!fallbackMember.value) return []
-  const idx = props.card.route.members.findIndex((m) => m.id === fallbackMember.value!.id)
-  return endpointIssueKinds(props.card.route, props.providers).get(idx) ?? []
-})
+const levelsUnionDisplay = computed(() => levelsUnionText.value || '—')
 
 // ── 「此刻」chip（evaluateRouteAt 真实时钟求值，D14 权威展示） ──
 

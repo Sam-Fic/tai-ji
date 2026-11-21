@@ -36,8 +36,8 @@
         data-testid="route-quick-create-toggle"
         @click="open = !open"
       >
-        {{ open ? t('settings.modelRoute.quickCollapse') : t('settings.modelRoute.quickExpand') }}
-        <ChevronDown class="size-3.5" :class="open ? '' : 'rotate-180'" />
+        {{ toggleLabel }}
+        <ChevronDown class="size-3.5" :class="toggleChevronClass" />
       </Button>
     </div>
 
@@ -99,7 +99,7 @@
               </span>
               <span class="text-[length:var(--text-xs)] font-medium text-neutral-fg">{{ group.provider.name }}</span>
               <span class="text-[length:var(--text-2xs)] text-neutral-mid">
-                {{ filtering ? t('settings.modelRoute.quickGroupMatchCount', { n: group.models.length }) : t('settings.modelRoute.quickGroupModelCount', { n: group.models.length }) }}
+                {{ groupCountLabel(group.models.length) }}
               </span>
               <span
                 v-if="pickedCountOf(group.provider.id) > 0"
@@ -127,17 +127,17 @@
                 <Checkbox
                   :model-value="isPicked(group.provider.id, model.id)"
                   class="shrink-0"
-                  :aria-label="model.name ?? model.id"
+                  :aria-label="displayName(model)"
                   :data-testid="`route-quick-pick-${group.provider.id}-${model.id}`"
-                  @update:model-value="() => togglePick(group.provider.id, model.id, model.name ?? model.id)"
+                  @update:model-value="() => togglePick(group.provider.id, model.id, displayName(model))"
                 />
-                <span class="min-w-0 truncate text-[length:var(--text-xs)] text-neutral-fg" :title="model.id">{{ model.name ?? model.id }}</span>
+                <span class="min-w-0 truncate text-[length:var(--text-xs)] text-neutral-fg" :title="model.id">{{ displayName(model) }}</span>
                 <span class="text-[length:var(--text-2xs)] text-neutral-dim">
                   {{ modelMeta(group.provider.id, model) }}
                 </span>
                 <div class="ml-auto flex items-center gap-1.5">
                   <Button
-                    v-if="existingSimpleOf?.(group.provider.id, model.id)"
+                    v-if="simpleExists(group.provider.id, model.id)"
                     variant="ghost"
                     size="dense"
                     disabled
@@ -178,11 +178,11 @@
           <Button
             class="ml-auto"
             size="dense"
-            :disabled="disabled || picked.length < MIN_ADVANCED_PICKS"
+            :disabled="advancedDisabled"
             data-testid="route-quick-create-advanced"
             @click="emitAdvanced"
           >
-            {{ picked.length >= MIN_ADVANCED_PICKS ? t('settings.modelRoute.quickCreateAdvancedN', { n: picked.length }) : t('settings.modelRoute.quickCreateAdvanced') }}
+            {{ advancedLabel }}
           </Button>
         </div>
       </template>
@@ -240,6 +240,37 @@ const { t } = useI18n()
 const rootEl = ref<HTMLElement | null>(null)
 /** 面板展开态（默认展开，spec §4.1；折叠保留筛选/选择/展开态）。 */
 const open = ref(true)
+
+// ── 模板下沉的展示判定（单一语义化值，模板零组合条件） ──
+
+const toggleLabel = computed(() =>
+  open.value ? t('settings.modelRoute.quickCollapse') : t('settings.modelRoute.quickExpand'),
+)
+const toggleChevronClass = computed(() => (open.value ? '' : 'rotate-180'))
+
+/** 模型显示名（name 缺省回落 id）。 */
+function displayName(model: QuickModel): string {
+  return model.name ?? model.id
+}
+
+/** 重复创建防护（AC-Q13）：已存在同模型未保存简单路由 → 该行按钮禁用态。 */
+function simpleExists(providerId: string, modelId: string): boolean {
+  return props.existingSimpleOf?.(providerId, modelId) === true
+}
+
+/** 渠道行计数文案（筛选中显命中数，否则全量数）。 */
+function groupCountLabel(count: number): string {
+  return filtering.value
+    ? t('settings.modelRoute.quickGroupMatchCount', { n: count })
+    : t('settings.modelRoute.quickGroupModelCount', { n: count })
+}
+
+const advancedDisabled = computed(() => props.disabled === true || picked.value.length < MIN_ADVANCED_PICKS)
+const advancedLabel = computed(() =>
+  picked.value.length >= MIN_ADVANCED_PICKS
+    ? t('settings.modelRoute.quickCreateAdvancedN', { n: picked.value.length })
+    : t('settings.modelRoute.quickCreateAdvanced'),
+)
 const filter = ref('')
 const expandedProviders = ref(new Set<string>())
 const picked = ref<PickedEntry[]>([])
@@ -277,6 +308,7 @@ function avatarChar(name: string): string {
 /** 筛选词（trim 后小写；空串 = 未筛选）。匹配 = 模型显示名/id/渠道显示名/id。 */
 const filterQuery = computed(() => filter.value.trim().toLowerCase())
 const filtering = computed(() => filterQuery.value !== '')
+// filtering 供 groupCountLabel / 筛选空态使用
 
 const visibleProviders = computed(() => {
   const q = filterQuery.value
