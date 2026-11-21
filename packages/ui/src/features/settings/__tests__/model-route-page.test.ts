@@ -7,8 +7,8 @@
  * ② 空状态：无供应商时 model-route-empty + 概览条隐藏（spec §7.11）
  * ③ 孤儿引用提示条 + 隔离呈报（U1 读取标记的编辑器承载）
  * ④ 未保存条：初始隐藏 → 编辑标脏 → save/discard emit 载荷（spec §9.1 两页共享形态）
- * ⑤ 时间轴：role=gridcell + aria-label 完整（星期/时间范围/归属渠道或兜底，spec §11.4）
- * ⑥ 穷举对照表内容渲染：owner 归属 / fb 兜底 / 截断警告与「不会命中」标记（D14）
+ * ⑤ 端点行内时间轴（spec §12 迁移）：role=gridcell + aria-label 完整（星期/时间范围/归属渠道）+ 拖涂取反与快捷涂抹
+ * ⑥ 行内网格覆盖语义：覆盖/无覆盖对照 + 截断与「不会命中」标记 + 卡底兜底条（D14）
  * ⑦ 此刻 chip 求值展示 + 无命中态（D14 权威求值展示）
  * ⑧ simple/advanced 模式切换：条件区显隐与「无条件 · 按顺序兜底」（D12）
  * ⑨ 端点行：排序按钮禁用边界 + 最后端点删除保护（spec §7.8）
@@ -189,19 +189,20 @@ describe('未保存状态条（spec §9.1，两页共享组件）', () => {
   })
 })
 
-describe('时间轴与穷举对照表（A28：role=gridcell / aria-label 完整 / 内容渲染）', () => {
-  async function expandedPage(members: AggregationRoute['members']): Promise<VueWrapper> {
+describe('端点行内时间轴（spec §12 行内网格迁移：编辑时段展开 7×48，单端点可路由语义）', () => {
+  /** 展开卡并打开第一个窗型端点的行内网格。 */
+  async function gridPage(members: AggregationRoute['members']): Promise<VueWrapper> {
     const w = mountPage([cardOf(routeOf({ members }))])
     await w.find('[data-testid="route-card-toggle"]').trigger('click')
+    await w.find('[data-testid="endpoint-edit-time"]').trigger('click')
     return w
   }
 
-  it('时间轴格渲染 role=gridcell 且 aria-label 完整（星期+时间范围+归属）', async () => {
+  it('编辑时段展开 7×48 行内网格：role=gridcell + aria 含星期/时间范围/归属渠道', async () => {
     const win = blankWindowTable()
     win[2][29] = true // 周三 14:30 窗内
-    const w = await expandedPage([
+    const w = await gridPage([
       { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'window', window: win },
-      { id: 'b', providerId: 'opencode-go', modelId: 'glm-5-3', type: 'none' },
     ])
     const cells = w.findAll('[data-testid="route-time-cell"]')
     expect(cells.length).toBe(7 * 48)
@@ -211,76 +212,88 @@ describe('时间轴与穷举对照表（A28：role=gridcell / aria-label 完整 
     const label = owned!.attributes('aria-label') ?? ''
     expect(label).toContain('14:30') // 格起点半点
     expect(label).toContain('zhipu') // 归属渠道
+    // 覆盖格 = 该端点可路由（demo 绿格语义）：style 落 success 底
+    expect(owned!.attributes('style')).toContain('success')
   })
 
-  it('兜底格 aria-label 标注兜底渠道（fb 语义）', async () => {
-    const w = await expandedPage([
-      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'window', window: blankWindowTable() },
-      { id: 'b', providerId: 'opencode-go', modelId: 'glm-5-3', type: 'none' },
-    ])
-    const cell = w.find('[data-testid="route-time-cell"][data-day="2"][data-slot="29"]')
-    expect(cell.attributes('aria-label')).toContain('opencode-go')
-  })
-
-  it('仅额度端点路由拖拽网格：阻挡文案走 paintNoWindowEndpoint 独立键（与快捷涂抹 paintSelectFirst 分场景）', async () => {
-    const warnings: string[] = []
-    const members: AggregationRoute['members'] = [
-      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'quota', quota: { thresholdPercent: 20 } },
-    ]
-    const w = mount(ModelRoutePage, {
-      props: {
-        view: viewOf([cardOf(routeOf({ members }))]),
-        providers: [prov({ id: 'zhipu' })],
-        scopedModels: [`${AGGREGATION_PROVIDER_ID}/glm-5-3`],
-        now: NOW,
-      },
-      global: {
-        provide: {
-          [SETTINGS_TOAST_KEY as symbol]: {
-            error: () => {},
-            info: () => {},
-            warning: (m: string) => warnings.push(m),
-          },
-        },
-      },
-      attachTo: document.body,
-    })
-    await w.find('[data-testid="route-card-toggle"]').trigger('click')
-    // 路由无时间窗端点（仅额度端点，图例无端点可选）→ 拖拽网格被 startPaint 拦截；
-    // i18n mock t() 返回 key 本身：断言独立键而非快捷涂抹的 paintSelectFirst
-    await w.find('[data-testid="route-time-cell"][data-day="2"][data-slot="29"]').trigger('pointerdown')
-    expect(warnings).toContain('settings.modelRoute.paintNoWindowEndpoint')
-    expect(warnings).not.toContain('settings.modelRoute.paintSelectFirst')
-    w.unmount()
-  })
-
-  it('截断警告渲染 + 被截断端点「不会命中」标记（D14 / V12 半边）', async () => {
+  it('无覆盖格显 cellNoCover 语义（aria + surface 底），窗内/窗外对照', async () => {
     const win = blankWindowTable()
     win[2][29] = true
-    const w = await expandedPage([
-      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' },
-      { id: 'b', providerId: 'opencode-go', modelId: 'glm-5-3', type: 'window', window: win },
+    const w = await gridPage([
+      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'window', window: win },
     ])
-    expect(w.find('[data-testid="route-time-warning"]').exists()).toBe(true)
-    const row = w.find('[data-testid="route-endpoint-row"][data-index="1"]')
-    expect(row.text()).toContain('neverHit')
-  })
-
-  it('兜底条两态：有兜底渠道名 / 无兜底提示', async () => {
-    const withFb = await expandedPage([
-      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' },
-    ])
-    expect(withFb.find('[data-testid="route-time-fallback-bar"]').text()).toContain('zhipu')
-
-    const allWindow = await expandedPage([
-      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'window', window: weekdayBusinessWindow() },
-    ])
-    expect(allWindow.find('[data-testid="route-time-fallback-bar"]').text()).toContain('noFallback')
+    const empty = w.find('[data-testid="route-time-cell"][data-day="0"][data-slot="0"]')
+    expect(empty.attributes('aria-label')).toContain('cellNoCover')
+    expect(empty.classes()).toContain('bg-surface-2')
   })
 
   it('此刻格高亮（data-now 标记在周三 14:30 坐标）', async () => {
-    const w = await expandedPage([{ id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' }])
+    const w = await gridPage([
+      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'window', window: blankWindowTable() },
+    ])
     expect(w.find('[data-testid="route-time-cell"][data-day="2"][data-slot="29"][data-now]').exists()).toBe(true)
+  })
+
+  it('拖涂首格取反：窗内格 pointerdown → 涂擦（endpoint-window-set value=false 落草稿）', async () => {
+    const win = blankWindowTable()
+    win[2][29] = true
+    const w = await gridPage([
+      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'window', window: win },
+    ])
+    await w.find('[data-testid="route-time-cell"][data-day="2"][data-slot="29"]').trigger('pointerdown')
+    w.findComponent(RouteUnsavedBar).vm.$emit('save')
+    await w.vm.$nextTick()
+    const payload = (w.findComponent(ModelRoutePage).emitted('save')![0]![0]) as { routes: AggregationRoute[] }
+    expect(payload.routes[0]!.members[0]!.window![2]![29]).toBe(false)
+  })
+
+  it('快捷涂抹「清空时段」作用于本端点（endpoint-window-replace 全空表）', async () => {
+    const w = await gridPage([
+      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'window', window: weekdayBusinessWindow() },
+    ])
+    await w.find('[data-testid="route-time-preset-clear"]').trigger('click')
+    w.findComponent(RouteUnsavedBar).vm.$emit('save')
+    await w.vm.$nextTick()
+    const payload = (w.findComponent(ModelRoutePage).emitted('save')![0]![0]) as { routes: AggregationRoute[] }
+    const table = payload.routes[0]!.members[0]!.window!
+    expect(table.flat().every((v) => v === false)).toBe(true)
+  })
+
+  it('非窗型端点无「编辑时段」入口（仅额度端点不出行内网格；旧阻挡文案场景随迁移消亡）', async () => {
+    const w = mountPage([
+      cardOf(routeOf({ members: [{ id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'quota', quota: { thresholdPercent: 20 } }] })),
+    ])
+    await w.find('[data-testid="route-card-toggle"]').trigger('click')
+    expect(w.find('[data-testid="endpoint-edit-time"]').exists()).toBe(false)
+    expect(w.find('[data-testid="route-time-cell"]').exists()).toBe(false)
+  })
+
+  it('截断/不命中标记在端点行（迁移后警告由行内 chip 承载）', async () => {
+    const win = blankWindowTable()
+    win[2][29] = true
+    const w = await expandedCard([
+      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' },
+      { id: 'b', providerId: 'opencode-go', modelId: 'glm-5-3', type: 'window', window: win },
+    ])
+    expect(w.find('[data-testid="route-endpoint-row"][data-index="0"] [data-testid="endpoint-truncates"]').exists()).toBe(true)
+    expect(w.find('[data-testid="route-endpoint-row"][data-index="1"] [data-testid="endpoint-never-hit"]').exists()).toBe(true)
+  })
+
+  /** 展开卡（不开网格）。 */
+  async function expandedCard(members: AggregationRoute['members']): Promise<VueWrapper> {
+    const w = mountPage([cardOf(routeOf({ members }))])
+    await w.find('[data-testid="route-card-toggle"]').trigger('click')
+    return w
+  }
+
+  it('兜底条两态：有兜底渠道名 / 无兜底提示（卡底承载，demo 同形）', async () => {
+    const withFb = await expandedCard([{ id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' }])
+    expect(withFb.find('[data-testid="route-time-fallback-bar"]').text()).toContain('zhipu')
+
+    const allWindow = await expandedCard([
+      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'window', window: weekdayBusinessWindow() },
+    ])
+    expect(allWindow.find('[data-testid="route-time-fallback-bar"]').text()).toContain('noFallback')
   })
 })
 
@@ -313,7 +326,7 @@ describe('simple/advanced 模式切换（D12）', () => {
       cardOf(routeOf({ mode: 'simple', members: [{ id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'window', window: win }] })),
     ])
     await w.find('[data-testid="route-card-toggle"]').trigger('click')
-    expect(w.find('[data-testid="route-time-grid"]').exists()).toBe(false)
+    expect(w.find('[data-testid="endpoint-edit-time"]').exists()).toBe(false)
     expect(w.find('[data-testid="route-special-dates"]').exists()).toBe(false)
     expect(w.find('[data-testid="route-endpoint-row"]').text()).toContain('simpleFallback')
   })
@@ -329,8 +342,9 @@ describe('simple/advanced 模式切换（D12）', () => {
     await modeBtn.trigger('click')
     const emitted = w.findComponent(ModelRoutePage).emitted('change')
     expect(emitted).toBeTruthy()
-    // 切回 advanced 后时间轴恢复显示（条件数据未清空）
-    expect(w.find('[data-testid="route-time-grid"]').exists()).toBe(true)
+    // 切回 advanced 后条件编辑入口恢复（编辑时段/条件分段在位 = 条件数据未清空）
+    expect(w.find('[data-testid="endpoint-edit-time"]').exists()).toBe(true)
+    expect(w.find('[data-testid="endpoint-condition-type"]').exists()).toBe(true)
   })
 })
 

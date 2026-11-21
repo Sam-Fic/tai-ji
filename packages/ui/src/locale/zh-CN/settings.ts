@@ -652,8 +652,8 @@ export default {
     nowNoHit: '此刻 无可用端点',
     nowNoHitSuffix: '无可用端点',
     nowQuotaUnknown: '额度数据未知，按满足放行',
-    modeSimple: '依次兜底',
-    modeAdvanced: '按时段分流',
+    modeSimple: '简单',
+    modeAdvanced: '高级',
     modeToggleLabel: '求值模式',
     levelsUnion: '档位并集',
     expand: '展开',
@@ -800,6 +800,11 @@ export default {
     levelsUnknown: '模型档位未知，未按能力置灰',
     levelsDeclared: '已声明支持，点击取消',
     levelsUndeclared: '未声明，点击支持',
+    levelsHelper: '点选该模型支持的等级，可多选',
+    levelsUnionInline: '对外并集',
+    editTime: '编辑时段',
+    inlineGridNote: '绿色 = 该端点可路由的时段；时间轴只做覆盖预览，实际命中仍按端点顺序',
+    noticeText: '简单模式默认、覆盖大多数场景：选渠道和模型，把支持的思考等级点成标签即可，多个端点就是按顺序兜底。只有高级模式才需要条件、时间轴和特殊日期。思考等级沿用 pi 运行时七档 off / minimal / low / medium / high / xhigh / max，没有「自动」档；模型不支持的等级会置灰。',
   },
   // ── Extension 页（ExtensionPage）──
   extension: {

@@ -5,7 +5,7 @@
  *（不消费运行时状态）；卡头「此刻」chip 按真实时钟对当前坐标求值命中端点，是求值语义的
  * 可视权威。两者共用本模块，与 pi 扩展求值函数（U2 router.ts）语义对齐但各自实现——
  * UI 预览不 import 扩展侧代码（包边界）。穷举语义一致性守护两层：坐标维度 = shared
- * aggregation.ts TIME_WINDOW 常量单源（本模块与 RouteTimeGrid 均从 shared 取值，
+ * aggregation.ts TIME_WINDOW 常量单源（本模块与 RouteInlineTimeGrid/RouteCard 均从 shared 取值，
  * 改维度 UI 侧编译期红灯；格宽换算由 SLOT_COUNT 推导，同属该单源）；求值语义 =
  * 两侧各自单测对照 route-matrix.md 矩阵逐格实现
  * + 跨实现对拍（对照验证，differential testing）测试（runtime

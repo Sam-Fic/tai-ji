@@ -68,17 +68,22 @@
       />
     </div>
 
-    <!-- 概览条（spec §7.2；无卡隐藏） -->
+    <!-- 概览条（spec §7.2；demo 形态：竖线分隔 + hint 右对齐；无卡隐藏） -->
     <div
       v-if="draft.length > 0"
       class="mt-3 flex flex-wrap items-center gap-3 rounded-md bg-surface-2 px-3 py-2"
       data-testid="model-route-overview"
     >
       <span class="text-[length:var(--text-xs)] text-neutral-mid">{{ t('settings.modelRoute.overviewModels', { n: draft.length }) }}</span>
+      <span class="h-3 w-px bg-border" aria-hidden="true" />
       <span class="text-[length:var(--text-xs)] text-neutral-mid">{{ t('settings.modelRoute.overviewEndpoints', { n: endpointTotal }) }}</span>
+      <span class="h-3 w-px bg-border" aria-hidden="true" />
       <span class="text-[length:var(--text-xs)] text-neutral-mid">{{ t('settings.modelRoute.overviewAdvanced', { n: advancedCount }) }}</span>
-      <span class="text-[length:var(--text-2xs)] text-neutral-dim">{{ t('settings.modelRoute.overviewHint') }}</span>
+      <span class="ml-auto text-[length:var(--text-2xs)] text-neutral-dim">{{ t('settings.modelRoute.overviewHint') }}</span>
     </div>
+
+    <!-- 说明条（spec §3：简单模式默认 + 7 档等级 + 无「自动」档） -->
+    <InlineNotice v-if="draft.length > 0" tone="success" :text="t('settings.modelRoute.noticeText')" class="mt-3" data-testid="model-route-notice" />
 
     <!-- 卡列表（直连卡 ∪ 路由卡，scopedModels 序交错） -->
     <div v-if="draft.length > 0" class="mt-3 flex flex-col gap-3">

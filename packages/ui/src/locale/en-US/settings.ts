@@ -653,8 +653,8 @@ export default {
     nowNoHit: 'Now: no available endpoint',
     nowNoHitSuffix: 'no available endpoint',
     nowQuotaUnknown: 'quota data unknown, treated as satisfied',
-    modeSimple: 'Fallback in order',
-    modeAdvanced: 'Time-based split',
+    modeSimple: 'Simple',
+    modeAdvanced: 'Advanced',
     modeToggleLabel: 'Evaluation mode',
     levelsUnion: 'Levels union',
     expand: 'Expand',
@@ -793,6 +793,11 @@ export default {
     levelsUnknown: 'Model levels unknown; not greyed by capability',
     levelsDeclared: 'Declared supported; click to unset',
     levelsUndeclared: 'Not declared; click to support',
+    levelsHelper: 'Pick the levels this model supports; multi-select',
+    levelsUnionInline: 'Union',
+    editTime: 'Edit window',
+    inlineGridNote: 'Green = windows when this endpoint is routable; the grid is coverage preview only — actual hits still follow endpoint order',
+    noticeText: 'Simple mode is the default for most cases: pick a provider and model, tap the supported thinking levels as tags, and multiple endpoints simply fall back in order. Conditions, timelines and special dates are only needed in advanced mode. Thinking levels follow the seven pi runtime levels off / minimal / low / medium / high / xhigh / max — there is no "auto" level, and unsupported levels are greyed out.',
   },
   // ── Extension page (ExtensionPage) ──
   extension: {

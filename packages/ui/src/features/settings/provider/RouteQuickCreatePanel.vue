@@ -1,15 +1,15 @@
 <!--
-  RouteQuickCreatePanel —— 快速创建面板（模型路由页 spec §4）。
+  RouteQuickCreatePanel —— 快速创建面板（模型路由页 spec §4；视觉形态对齐 response.html demo）。
 
   两类创建入口（spec §3 创建入口收敛）：
-  - 渠道展开后模型行「建简单路由」（emit createSimple，单模型）。
+  - 渠道展开后模型行「建简单路由」（emit createSimple，单模型；描边 pill，低视觉重量）。
   - 底部「创建高级路由 · n」（emit createAdvanced，勾选序多选，≥2 解禁）。
 
   面板只发创建意图，草稿构建与 route-add 由 ModelRoutePage 执行（applyEditorOp 唯一入口）；
   高级创建 emit 后即清空筛选/选择/展开态（spec §4.6）。
   折叠不丢状态；选择键 = providerId+modelId（§4.4）；只列可用模型（渠道启用+有密钥+模型启用）。
-  重复创建防护（AC-Q13）走事实态：父级 existingSimpleOf 判定已存在同模型未保存简单路由时
-  该行按钮禁用（无时间窗逻辑，ADR-0190 精神）。
+  重复创建防护（AC-Q13）走事实态：父级 existingSimpleOf 判定本编辑会话内已存在同模型未保存
+  简单路由时该行按钮禁用（无时间窗逻辑，ADR-0190 精神）。
 -->
 <template>
   <div
@@ -17,20 +17,27 @@
     data-testid="route-quick-create"
     class="rounded-lg border border-border bg-bg-card"
   >
-    <!-- 标题行（折叠开关；折叠保留筛选/选择/展开态） -->
+    <!-- 标题行（demo 形态：+ 圆标徽标 + 标题说明 + 「收起 ⌄」pill；折叠保留筛选/选择/展开态） -->
     <div class="flex items-start justify-between gap-3 px-4 py-3">
-      <div>
-        <p class="text-[length:var(--text-sm)] font-medium text-neutral-fg">{{ t('settings.modelRoute.quickCreateTitle') }}</p>
-        <p class="mt-0.5 text-[length:var(--text-2xs)] text-neutral-mid">{{ t('settings.modelRoute.quickCreateDesc') }}</p>
+      <div class="flex items-start gap-2.5">
+        <span class="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md bg-success-soft text-success">
+          <Plus class="size-3.5" />
+        </span>
+        <div>
+          <p class="text-[length:var(--text-sm)] font-medium text-neutral-fg">{{ t('settings.modelRoute.quickCreateTitle') }}</p>
+          <p class="mt-0.5 text-[length:var(--text-2xs)] text-neutral-mid">{{ t('settings.modelRoute.quickCreateDesc') }}</p>
+        </div>
       </div>
       <Button
         variant="secondary"
         size="dense"
+        class="gap-1 rounded-full"
         :aria-expanded="open"
         data-testid="route-quick-create-toggle"
         @click="open = !open"
       >
         {{ open ? t('settings.modelRoute.quickCollapse') : t('settings.modelRoute.quickExpand') }}
+        <ChevronDown class="size-3.5" :class="open ? '' : 'rotate-180'" />
       </Button>
     </div>
 
@@ -43,16 +50,19 @@
       </div>
 
       <template v-else>
-        <!-- 搜索框（输入即筛；有原始输入即显清除） -->
+        <!-- 搜索框（demo 形态：全宽 + 内嵌放大镜；有原始输入即显清除） -->
         <div class="flex items-center gap-2">
-          <Input
-            v-model="filter"
-            type="search"
-            class="h-8 w-72 text-[length:var(--text-xs)]"
-            :placeholder="t('settings.modelRoute.quickFilterPlaceholder')"
-            :aria-label="t('settings.modelRoute.quickFilterPlaceholder')"
-            data-testid="route-quick-filter"
-          />
+          <div class="relative flex-1">
+            <Search class="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-neutral-dim" />
+            <Input
+              v-model="filter"
+              type="search"
+              class="h-8 w-full pl-8 text-[length:var(--text-xs)]"
+              :placeholder="t('settings.modelRoute.quickFilterPlaceholder')"
+              :aria-label="t('settings.modelRoute.quickFilterPlaceholder')"
+              data-testid="route-quick-filter"
+            />
+          </div>
           <Button
             v-if="filter !== ''"
             variant="ghost"
@@ -71,24 +81,23 @@
           </p>
         </div>
 
-        <!-- 渠道折叠列表（多渠道可同时展开；筛选态组头带匹配计数） -->
-        <div v-else class="mt-3 flex flex-col gap-2" data-testid="route-quick-provider-list">
-          <div
-            v-for="group in visibleProviders"
-            :key="group.provider.id"
-            class="rounded-md border border-border"
-            :data-provider-id="group.provider.id"
-          >
+        <!-- 渠道平铺列表（demo 形态：行 + 分隔线；首字母头像 + 名称 + 计数 + 右侧 chevron） -->
+        <div v-else class="mt-2 divide-y divide-border" data-testid="route-quick-provider-list">
+          <div v-for="group in visibleProviders" :key="group.provider.id" :data-provider-id="group.provider.id">
             <Button
               variant="ghost"
-              class="flex w-full justify-start gap-2 px-3 py-2 text-left"
+              class="flex w-full justify-start gap-2 px-0 py-2 text-left"
               :aria-expanded="expandedProviders.has(group.provider.id)"
               data-testid="route-quick-provider-row"
               @click="toggleProvider(group.provider.id)"
             >
-              <ChevronDown class="size-3.5 shrink-0 text-neutral-dim transition-transform" :class="expandedProviders.has(group.provider.id) ? '' : '-rotate-90'" />
+              <span
+                class="flex size-5 shrink-0 items-center justify-center rounded-full bg-success-soft text-[length:10px] font-medium leading-none text-success"
+                aria-hidden="true"
+              >
+                {{ avatarChar(group.provider.name) }}
+              </span>
               <span class="text-[length:var(--text-xs)] font-medium text-neutral-fg">{{ group.provider.name }}</span>
-              <span class="font-mono text-[length:var(--text-2xs)] text-neutral-dim">{{ group.provider.id }}</span>
               <span class="text-[length:var(--text-2xs)] text-neutral-mid">
                 {{ filtering ? t('settings.modelRoute.quickGroupMatchCount', { n: group.models.length }) : t('settings.modelRoute.quickGroupModelCount', { n: group.models.length }) }}
               </span>
@@ -99,28 +108,29 @@
               >
                 {{ t('settings.modelRoute.quickPickedN', { n: pickedCountOf(group.provider.id) }) }}
               </span>
+              <ChevronDown
+                class="ml-auto size-3.5 shrink-0 text-neutral-dim transition-transform"
+                :class="expandedProviders.has(group.provider.id) ? '' : '-rotate-90'"
+              />
             </Button>
 
             <!-- 模型行列表 -->
-            <div v-if="expandedProviders.has(group.provider.id)" class="border-t border-border">
+            <div v-if="expandedProviders.has(group.provider.id)" class="pb-2">
               <div
                 v-for="model in group.models"
                 :key="model.id"
-                class="flex flex-wrap items-center gap-2 px-3 py-1.5"
+                class="flex flex-wrap items-center gap-2 py-1 pl-7 pr-1"
                 data-testid="route-quick-model-row"
                 :data-model-id="model.id"
               >
-                <!-- 复选（aria-pressed 承载选中态；原生 checkbox 禁用规范） -->
-                <Button
-                  variant="secondary"
-                  size="dense"
-                  class="rounded-full"
-                  :aria-pressed="isPicked(group.provider.id, model.id)"
+                <!-- 复选（demo 形态 Checkbox；选择键 = providerId+modelId，spec §4.4） -->
+                <Checkbox
+                  :model-value="isPicked(group.provider.id, model.id)"
+                  class="shrink-0"
+                  :aria-label="model.name ?? model.id"
                   :data-testid="`route-quick-pick-${group.provider.id}-${model.id}`"
-                  @click="togglePick(group.provider.id, model.id, model.name ?? model.id)"
-                >
-                  {{ isPicked(group.provider.id, model.id) ? t('settings.modelRoute.quickPickedMark') : t('settings.modelRoute.quickPickMark') }}
-                </Button>
+                  @update:model-value="() => togglePick(group.provider.id, model.id, model.name ?? model.id)"
+                />
                 <span class="min-w-0 truncate text-[length:var(--text-xs)] text-neutral-fg" :title="model.id">{{ model.name ?? model.id }}</span>
                 <span class="text-[length:var(--text-2xs)] text-neutral-dim">
                   {{ modelMeta(group.provider.id, model) }}
@@ -138,7 +148,9 @@
                   </Button>
                   <Button
                     v-else
+                    variant="secondary"
                     size="dense"
+                    class="rounded-full"
                     data-testid="route-quick-create-simple"
                     :disabled="disabled"
                     @click="emitSimple(group.provider, model)"
@@ -152,7 +164,7 @@
         </div>
 
         <!-- 底部选择摘要与批量创建（spec §4.4/§4.6） -->
-        <div class="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3" data-testid="route-quick-footer">
+        <div class="mt-2 flex flex-wrap items-center gap-2 border-t border-border pt-3" data-testid="route-quick-footer">
           <span class="text-[length:var(--text-2xs)] text-neutral-mid" data-testid="route-quick-selection-summary">{{ selectionSummary }}</span>
           <Button
             v-if="picked.length > 0"
@@ -181,8 +193,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ChevronDown, Server } from '@lucide/vue'
-import { Button, Input } from '@taiji/ui'
+import { ChevronDown, Plus, Search, Server } from '@lucide/vue'
+import { Button, Checkbox, Input } from '@taiji/ui'
 import type { ProviderInfo } from '@taiji/shared'
 import type { QuickPickModel } from './route-quick-create'
 
@@ -255,6 +267,12 @@ const modelsByProvider = computed(() => {
   }
   return map
 })
+
+/** 渠道头像首字符（demo 形态：名称首字符圆标；空名回落 #）。 */
+function avatarChar(name: string): string {
+  const ch = name.trim().charAt(0)
+  return ch === '' ? '#' : ch
+}
 
 /** 筛选词（trim 后小写；空串 = 未筛选）。匹配 = 模型显示名/id/渠道显示名/id。 */
 const filterQuery = computed(() => filter.value.trim().toLowerCase())

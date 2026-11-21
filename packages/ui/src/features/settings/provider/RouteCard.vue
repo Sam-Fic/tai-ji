@@ -69,6 +69,8 @@
     >
       {{ card.route.name }}
     </span>
+      <!-- 路由 id（spec §5.1 卡头第 3 项：只读等宽小字 #route-id；demo #main-chat 同形） -->
+      <span class="font-mono text-[length:var(--text-3xs)] text-neutral-dim" data-testid="route-card-id">#{{ card.route.id }}</span>
       <!-- 新会话可用徽标（U7/D1③）：本应用运行期内新建、当前 pi 会话未注册，重开会话方可绑定 -->
       <span
         v-if="newSessionAvailable"
@@ -77,13 +79,13 @@
       >
         {{ t('settings.modelRoute.newSessionAvailable') }}
       </span>
-      <span class="rounded-sm bg-surface-2 px-1.5 py-0.5 text-[length:var(--text-3xs)] text-neutral-mid">
+      <span class="rounded-sm border border-border px-1.5 py-0.5 text-[length:var(--text-3xs)] text-neutral-mid">
         {{ t('settings.modelRoute.endpointsCount', { n: card.route.members.length }) }}
       </span>
       <!-- 待配置分流（spec §5.1/§4.6：高级模式且全部端点无条件 → 始终命中第 1 个，未分流） -->
       <span
         v-if="pendingSplit"
-        class="rounded-sm bg-warn-soft px-1.5 py-0.5 text-[length:var(--text-3xs)] text-warn"
+        class="rounded-sm border border-warn px-1.5 py-0.5 text-[length:var(--text-3xs)] text-warn"
         data-testid="route-card-pending-split"
       >
         {{ t('settings.modelRoute.pendingSplit') }}
@@ -105,12 +107,8 @@
         {{ nowChipText }}
       </span>
 
-      <span class="text-[length:var(--text-2xs)] text-neutral-mid" data-testid="route-card-mode-text">
-        {{ modeText }}
-      </span>
-      <span class="text-[length:var(--text-2xs)] text-neutral-dim">
-        {{ t('settings.modelRoute.levelsUnion') }}
-        <span class="font-mono">{{ levelsUnionText || '—' }}</span>
+      <span class="rounded-sm border border-border px-1.5 py-0.5 text-[length:var(--text-3xs)] text-neutral-mid" data-testid="route-card-levels-union">
+        {{ t('settings.modelRoute.levelsUnion') }} {{ levelsUnionText || '—' }}
       </span>
 
       <!-- 工具区 -->
@@ -139,11 +137,13 @@
         >
           <ChevronDown class="size-3.5" />
         </Button>
-        <!-- 模式切换（D12：可随时切换，条件数据保留） -->
-        <div class="flex items-center gap-1" role="group" :aria-label="t('settings.modelRoute.modeToggleLabel')">
+        <!-- 模式分段（demo 形态：joined segmented，选中段填充；D12：可随时切换，条件数据保留） -->
+        <div class="flex overflow-hidden rounded-md border border-border" role="group" :aria-label="t('settings.modelRoute.modeToggleLabel')">
           <Button
-            variant="secondary"
+            variant="ghost"
             size="dense"
+            class="rounded-none"
+            :class="card.route.mode === 'simple' ? 'bg-surface-2 font-medium text-neutral-fg' : 'text-neutral-mid'"
             :aria-pressed="card.route.mode === 'simple'"
             data-testid="route-card-mode-simple"
             @click="setMode('simple')"
@@ -151,8 +151,10 @@
             {{ t('settings.modelRoute.modeSimple') }}
           </Button>
           <Button
-            variant="secondary"
+            variant="ghost"
             size="dense"
+            class="rounded-none"
+            :class="card.route.mode === 'advanced' ? 'bg-surface-2 font-medium text-neutral-fg' : 'text-neutral-mid'"
             :aria-pressed="card.route.mode === 'advanced'"
             data-testid="route-card-mode-advanced"
             @click="setMode('advanced')"
@@ -166,12 +168,18 @@
           data-testid="route-card-enabled"
           @update:model-value="setEnabled"
         />
-        <Switch
-          :model-value="card.scoped"
-          :aria-label="t('settings.modelRoute.scopedToggle')"
+        <Button
+          variant="secondary"
+          size="dense"
+          class="gap-1"
+          :aria-pressed="card.scoped"
+          :class="card.scoped ? 'border-success text-success' : 'text-neutral-dim'"
           data-testid="route-scoped-toggle"
-          @update:model-value="emit('toggleScoped')"
-        />
+          @click="emit('toggleScoped')"
+        >
+          <Check v-if="card.scoped" class="size-3" />
+          {{ t('settings.modelRoute.scopedToggle') }}
+        </Button>
         <!-- 删除路由（U9 删除侧，GL5/V14）：确认后 route-delete 指令上抛，实际删除走编排层 -->
         <Button
           variant="ghost"
@@ -246,8 +254,8 @@
           :total="card.route.members.length"
           :providers="providers"
           :advanced="card.route.mode === 'advanced'"
+          :now="now"
           @op="emit('op', $event)"
-          @paint="scrollToTimeGrid"
         />
       </div>
       <div v-else class="mt-3 text-[length:var(--text-2xs)] text-neutral-dim">
@@ -277,18 +285,35 @@
         <span class="text-[length:var(--text-2xs)] text-neutral-dim">{{ t('settings.modelRoute.addEndpointHint') }}</span>
       </div>
 
-      <!-- 时间轴与特殊日期（仅高级模式，D12；条件数据保留切换恢复） -->
-      <template v-if="card.route.mode === 'advanced'">
-        <div ref="timeGridWrap">
-          <RouteTimeGrid
-            :route="card.route"
-            :providers="providers"
-            :now="now"
-            @op="emit('op', $event)"
-          />
-        </div>
-        <RouteSpecialDates :route="card.route" @op="emit('op', $event)" />
-      </template>
+      <!-- 特殊日期（仅高级模式，D12；demo 卡底 chip 行同形） -->
+      <RouteSpecialDates v-if="card.route.mode === 'advanced'" :route="card.route" @op="emit('op', $event)" />
+
+      <!-- 兜底条（spec §7.7 demo 卡底形态：无条件兜底 → 模型名；时间轴已迁移端点行内网格） -->
+      <div
+        v-if="card.route.mode === 'advanced' && card.route.members.length > 0"
+        data-testid="route-time-fallback-bar"
+        class="mt-2 flex flex-wrap items-center gap-2 rounded-sm bg-surface-2 px-2 py-1.5"
+      >
+        <template v-if="fallbackMember">
+          <span class="size-2 rounded-full" :class="dotColorClass(card.route.members.findIndex((m) => m.id === fallbackMember!.id))" />
+          <span class="text-[length:var(--text-xs)] font-medium text-neutral-fg">
+            {{ t('settings.modelRoute.fallbackBar', { name: providerNameOf(fallbackMember) }) }}
+          </span>
+          <span
+            v-for="kind in fallbackIssueKinds"
+            :key="kind"
+            class="rounded-sm px-1.5 py-0.5 text-[length:var(--text-3xs)]"
+            :class="issueChipClass(kind)"
+          >
+            {{ t(endpointIssueKey(kind)) }}
+          </span>
+          <span class="ml-auto text-[length:var(--text-2xs)] text-neutral-dim">{{ t('settings.modelRoute.fbTruncateNote') }}</span>
+        </template>
+        <template v-else>
+          <span class="text-[length:var(--text-xs)] font-medium text-warn" data-testid="noFallback">{{ t('settings.modelRoute.noFallback') }}</span>
+          <span class="text-[length:var(--text-2xs)] text-neutral-dim">{{ t('settings.modelRoute.noFallbackHint') }}</span>
+        </template>
+      </div>
     </div>
   </div>
 </template>
@@ -296,15 +321,22 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ChevronDown, ChevronUp, GripVertical, Trash2 } from '@lucide/vue'
+import { Check, ChevronDown, ChevronUp, GripVertical, Trash2 } from '@lucide/vue'
 import { Button, ConfirmDialog, Input, Select, SelectTrigger, SelectValue, SelectContent, SelectItem, Switch } from '@taiji/ui'
 import type { AggregationMember, AggregationRoute, AggregationRouteMode, ProviderInfo } from '@taiji/shared'
-import { candidateProviderIds, evaluateRouteAt, levelsUnion } from './route-preview'
+import {
+  candidateProviderIds,
+  endpointIssueKey,
+  endpointIssueKinds,
+  evaluateRouteAt,
+  fallbackMemberOf,
+  levelsUnion,
+} from './route-preview'
+import { issueChipClass } from './route-styles'
 import { dotColorClass } from './route-styles'
 import type { RouteEditorOp } from './route-editor-ops'
 import type { RoutePageFocus } from './ModelRoutePage.vue'
 import RouteEndpointRow from './RouteEndpointRow.vue'
-import RouteTimeGrid from './RouteTimeGrid.vue'
 import RouteSpecialDates from './RouteSpecialDates.vue'
 import { useSettingsToast } from '../injection-keys'
 
@@ -355,8 +387,6 @@ const { t } = useI18n()
 const toast = useSettingsToast()
 
 const expanded = ref(false)
-/** 时间轴包裹层（端点行「涂时段」平滑滚动定位目标，spec §9.5）。 */
-const timeGridWrap = ref<HTMLElement | null>(null)
 const addProviderId = ref('')
 /** 删除确认弹层开关（U9 删除侧；确认即上抛 route-delete 指令，无草稿就地变更）。 */
 const deleteConfirmOpen = ref(false)
@@ -431,11 +461,13 @@ const pendingSplit = computed(
 
 const levelsUnionText = computed(() => levelsUnion(props.card.route).join(' / '))
 
-const modeText = computed(() =>
-  props.card.route.mode === 'advanced'
-    ? t('settings.modelRoute.modeAdvanced')
-    : t('settings.modelRoute.modeSimple'),
-)
+/** 兜底端点与其异常标记（卡底兜底条数据；时间轴迁移行内网格后由卡承载，demo 同形）。 */
+const fallbackMember = computed(() => fallbackMemberOf(props.card.route))
+const fallbackIssueKinds = computed(() => {
+  if (!fallbackMember.value) return []
+  const idx = props.card.route.members.findIndex((m) => m.id === fallbackMember.value!.id)
+  return endpointIssueKinds(props.card.route, props.providers).get(idx) ?? []
+})
 
 // ── 「此刻」chip（evaluateRouteAt 真实时钟求值，D14 权威展示） ──
 
@@ -511,11 +543,6 @@ function setMode(mode: AggregationRouteMode): void {
 
 function setEnabled(value: boolean): void {
   emit('op', { kind: 'route-patch', routeId: props.card.route.id, patch: { enabled: value } })
-}
-
-/** 「涂时段」定位：平滑滚动到时间轴并居中（spec §9.5）。 */
-function scrollToTimeGrid(): void {
-  timeGridWrap.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
 
 /**
