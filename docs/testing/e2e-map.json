@@ -6022,6 +6022,26 @@
       "owner": "packages/renderer",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
       "note": "[本轮新建] 模型路由快速创建 UI 链（RouteQuickCreatePanel simple/advanced → RouteUnsavedBar 保存 → providers.json routes 域）+ provider-aggregation 聚合虚拟模型端到端（session.create modelOverride=aggregation/<routeId> → faux 回复文本断言）。文件名带 -real，命中 REAL_TRACK_SPECS 首类形态，不进 CI 门禁，开发阶段按改动范围空载串行跑。"
+    },
+    {
+      "id": "E2E-PERF-01",
+      "summary": "CDP 性能剖析工具（scripts/perf）：开发期 renderer 主线程采样/动画审计（非 CI 资产，设计期工具）",
+      "scope": [
+        "scripts/perf/**"
+      ],
+      "layer": "L3",
+      "assets": [
+        {
+          "kind": "script",
+          "ref": "scripts/perf/cdp-profile.mjs"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "（人工工具——需 dev 实例 CDP 端口：node scripts/perf/cdp-profile.mjs <端口> <target id> [秒数]；用法与配套动画审计方法见脚本头注释）",
+      "owner": "scripts/perf",
+      "authority": "scripts/perf/cdp-profile.mjs",
+      "note": "R3 归档态（2026-11-21 登记）：开发期性能分析工具，无独立 CI 环节；测量方法与基线数据记录在维护者本机 ~/Code/vue-performance/（taiji-analysis.md）"
     }
   ]
 }

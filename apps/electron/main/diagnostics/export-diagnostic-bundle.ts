@@ -110,6 +110,9 @@ export interface DiagnosticEnvironment {
   platformRelease: string
   arch: string
   nodeVersion: string
+  /** GPU 加速状态（app.getGPUFeatureStatus() 的可读拼串，IPC 层注入）——排查「GPU 加速
+   *  被禁用/驱动退化导致 blur/shadow 性能断崖」的断崖形态（2026-11 性能优化 G5 登记）。 */
+  gpuFeatureStatus: string
   markerPresent: boolean
   checkpointPresent: boolean
   checkpointFailedCount: number
@@ -129,6 +132,8 @@ export interface CollectDiagnosticOptions {
   dataDir?: string
   /** app 版本（IPC 层注入 app.getVersion()；缺省 unknown——纯收集层不依赖 electron） */
   appVersion?: string
+  /** GPU 加速状态拼串（IPC 层注入 app.getGPUFeatureStatus()；缺省 unknown） */
+  gpuFeatureStatus?: string
   /** 锚定时刻（水位窗口 / 导出时间戳；缺省 Date.now()，测试注入固定值） */
   now?: number
 }
@@ -322,6 +327,7 @@ export function buildDiagnosticEntries(options: CollectDiagnosticOptions = {}): 
     platformRelease: osRelease(),
     arch: process.arch,
     nodeVersion: process.version,
+    gpuFeatureStatus: options.gpuFeatureStatus ?? 'unknown',
     ...readRunState(dataDir),
   }
   const exportedAt = new Date(now).toISOString()
@@ -378,6 +384,7 @@ export function buildSummaryMarkdown(
   lines.push(`- app 版本：${environment.appVersion}`)
   lines.push(`- pi 版本：${environment.piVersion}`)
   lines.push(`- 平台：${environment.platform} ${environment.platformRelease} (${environment.arch})，Node ${environment.nodeVersion}`)
+  lines.push(`- GPU 加速状态：${environment.gpuFeatureStatus}`)
   lines.push(`- 运行状态：main 存活 marker ${environment.markerPresent ? '存在' : '不存在'}；runtime checkpoint ${environment.checkpointPresent ? '存在' : '不存在'}（失败现场 ${environment.checkpointFailedCount} 份）`)
   lines.push(`- 登记清单解析：main ${evaluated.parsedEventCount.main} 条 / runtime ${evaluated.parsedEventCount.runtime} 条（坏行 main ${evaluated.skippedLineCount.main} / runtime ${evaluated.skippedLineCount.runtime}）`)
   lines.push('')
@@ -485,6 +492,7 @@ export function exportDiagnosticBundle(options: ExportDiagnosticBundleOptions): 
       appVersion: collected.environment.appVersion,
       piVersion: collected.environment.piVersion,
       platform: collected.environment.platform,
+      gpuFeatureStatus: collected.environment.gpuFeatureStatus,
       trippedConditionIds: collected.evaluated.trippedIds,
       evaluatedConditionCount: collected.evaluated.rows.length,
       entryCount: collected.entries.length,
