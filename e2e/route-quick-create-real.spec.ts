@@ -150,7 +150,10 @@ async function chatViaRoute(port: number, dataDir: string, routeId: string, labe
 // ── simple route ────────────────────────────────────────────────────────
 
 test('simple route: 快速创建简单路由 → 保存 → aggregation/<id> 会话收到 faux 回复', async () => {
-  test.setTimeout(180_000)
+  // 360s：CI 共享 runner 实测本用例全链（真 Electron + pi 冷启动 + faux 流式）可达 ~4 分钟
+  //（本机 ~50s 绿；2026-11-21 首次 CI 首跑两用例 180s 超时，trace 显示流程在推进非死锁，
+  //  属 CI 慢机预算不足——e2e 断言语义超时在 ADR-0190 CI 白名单内）
+  test.setTimeout(360_000)
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'taiji-real-route-'))
   const { page, cleanup } = await launchRealApp({ dataDir, faux: { responses: FAUX_RESPONSES } })
   try {
@@ -185,7 +188,10 @@ test('simple route: 快速创建简单路由 → 保存 → aggregation/<id> 会
 // ── advanced route ──────────────────────────────────────────────────────
 
 test('advanced route: 筛选勾选双模型 → 高级路由卡（pending-split）→ 保存 → 会话回复', async () => {
-  test.setTimeout(180_000)
+  // 360s：CI 共享 runner 实测本用例全链（真 Electron + pi 冷启动 + faux 流式）可达 ~4 分钟
+  //（本机 ~50s 绿；2026-11-21 首次 CI 首跑两用例 180s 超时，trace 显示流程在推进非死锁，
+  //  属 CI 慢机预算不足——e2e 断言语义超时在 ADR-0190 CI 白名单内）
+  test.setTimeout(360_000)
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'taiji-real-route-'))
   const { page, cleanup } = await launchRealApp({ dataDir, faux: { responses: FAUX_RESPONSES } })
   try {
