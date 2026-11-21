@@ -96,7 +96,7 @@ describe('refreshProviderCatalogs 刷侧', () => {
     const fn = mockFetch(404, {})
     const result = await mod.refreshProviderCatalogs(['opendesign', 'zai'])
     // 附加段被剔除：fetch 只收到 zai
-    const calledUrls = fn.mock.calls.map(c => String(c[0]))
+    const calledUrls = fn.mock.calls.map(c => String((c as unknown[])[0]))
     expect(calledUrls.every(u => u.includes('zai'))).toBe(true)
     expect(result.refreshed).toEqual(['zai'])
     // 附加段既有缓存条目原样保留（不被 404 否定信号覆盖）

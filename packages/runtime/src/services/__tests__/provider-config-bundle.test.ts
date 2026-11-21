@@ -445,6 +445,63 @@ describe('M1b: setProvider 接线（防线②③ 经 applyProviderWritePolicy �
     expect(written.models![0]?.id).toBe('kept-model')
   })
 
+  it('G-extra: 附加段无显式 key + 快照 envVars 在环境有值 → auth.json 写 ${VAR} 模板', async () => {
+    vi.stubEnv('OPENDESIGN_API_KEY', 'sk-from-env')
+    try {
+      const auth = makeAuth()
+      const extras = new TaijiProviderStore(extrasPath)
+      const store = {
+        getProviderConfig: vi.fn(() => undefined),
+        applyTypeTranslation: vi.fn((t: string) => t),
+        upsertProvider: vi.fn((_id: string, _merged: Record<string, unknown>) => ({})),
+        ensureProviderInWhitelist: vi.fn(),
+        getEnabledModels: vi.fn(() => []),
+      } as unknown as IConfigStore
+      const svc = new ConfigService('/tmp/project', store, auth, extras)
+      // 凭据写通道与生产装配同构：AuthService（saveCredential = authStorage.set）回填
+      const { AuthService } = await import('../auth/auth-service.js')
+      type AuthServiceDeps = import('../auth/auth-service.js').AuthServiceDeps
+      svc.setCredentialWriter(
+        new AuthService({
+          authStorage: auth as unknown as AuthServiceDeps['authStorage'],
+          getOAuthConfig: () => undefined,
+          broadcast: () => {},
+          nextPushId: () => '1',
+          clearApiKey: () => {},
+        }),
+      )
+
+      await svc.setProvider('opendesign', { authMethod: 'api_key' })
+
+      // 模板串落 auth.json（pi 请求期自行解析 $VAR），models.json 不落明文
+      expect(auth.set).toHaveBeenCalledWith('opendesign', { type: 'api_key', key: '$OPENDESIGN_API_KEY' })
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('G-extra: 快照 envVars 环境都未设置 → 不写凭据（宁缺不写死模板）', async () => {
+    vi.stubEnv('OPENDESIGN_API_KEY', '')
+    try {
+      const auth = makeAuth()
+      const extras = new TaijiProviderStore(extrasPath)
+      const store = {
+        getProviderConfig: vi.fn(() => undefined),
+        applyTypeTranslation: vi.fn((t: string) => t),
+        upsertProvider: vi.fn((_id: string, _merged: Record<string, unknown>) => ({})),
+        ensureProviderInWhitelist: vi.fn(),
+        getEnabledModels: vi.fn(() => []),
+      } as unknown as IConfigStore
+      const svc = new ConfigService('/tmp/project', store, auth, extras)
+
+      await svc.setProvider('opendesign', { authMethod: 'api_key' })
+
+      expect(auth.set).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('c 既有条目 + 八字段全缺（全清空）→ upsertProvider 被调用，落盘内容为剥除后结果', async () => {
     const { svc, upsertProvider } = makeSetProviderService({
       name: 'OpenCode Go',

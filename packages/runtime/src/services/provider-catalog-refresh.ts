@@ -61,6 +61,17 @@ export function isTaijiExtraProvider(providerId: string): boolean {
 }
 
 /**
+ * 附加段 provider 的快照声明 envVars（凭据模板数据源；非附加段 id 返回空数组）。
+ */
+export function getTaijiExtraProviderEnvVars(providerId: string): string[] {
+  if (!isTaijiExtraProvider(providerId)) return []
+  const p = ((builtinData.providers ?? []) as Array<{ id: string; envVars?: string[] }>).find(
+    x => x.id === providerId,
+  )
+  return Array.isArray(p?.envVars) ? p.envVars : []
+}
+
+/**
  * 附加段 provider 的快照模板模型清单（实例播种数据源；非附加段 id 返回空数组）。
  * 模板元素即快照 summarizeModel 的 11 键形态，与 models.json 模型条目同构。
  */

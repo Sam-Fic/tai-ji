@@ -17,7 +17,7 @@ import type {
 } from '@taiji/shared'
 import { AGGREGATION_PROVIDER_ID, AGGREGATION_PROVIDER_ID_RESERVED, PI_THINKING_LEVELS } from '@taiji/shared'
 import { annotateDanglingMembers, collectOrphanAggregationRefs } from '@taiji/shared'
-import { isCatalogProvider, deriveEnabled, getMergedCatalogModels, isTaijiExtraProvider, getTaijiExtraTemplateModels } from './provider-catalog.js'
+import { isCatalogProvider, deriveEnabled, getMergedCatalogModels, isTaijiExtraProvider, getTaijiExtraTemplateModels, getTaijiExtraProviderEnvVars } from './provider-catalog.js'
 // coding-plan 额度显示自动开启（新增即默认同意）：判定 + 落盘与导入路径（provider-importer）共用
 import { autoEnableQuotaDisplayOnCreate, isPlaintextCredential, resolveCreateMatchIdentity } from './quota-auto-enable.js'
 // U6①：模型项 id 谓词（写侧与启动清洗侧共享单点，分层说明见该模块 JSDoc）
@@ -817,6 +817,25 @@ export function getProvider(configStore: IConfigStore, providerId: string): { ap
  *
  * 返回 auth.json 侧落盘 flush promise（catalog 写入 / custom 清理，RT-7#3 后两者均
  * await 后再 upsert，失败上抛）供调用方 await；无落盘路径返回 undefined——调用方
+/**
+ * 附加段 provider 的环境变量凭据模板：快照声明 envVars 且 runtime 环境中首个有值的
+ * 变量 → `${VAR}` 模板串；无声明/环境变量都未设置 → undefined。
+ *
+ * 为什么落模板而非明文：pi 原生支持 auth.json api_key key 的 config-value 解析
+ * （实装锚点 @earendil-works/pi-coding-agent@1.0.0 dist/core/resolve-config-value.js /
+ * auth-storage.js read :216 —— `$VAR` / `${VAR}` 请求期从进程环境解析，`$$`/`$!` 转义），
+ * 密钥不落盘、轮换即时生效；taiji 侧读路径 resolveCredentialValue 同语法已支持。
+ */
+export function resolveTaijiExtraEnvCredentialTemplate(providerId: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (!isTaijiExtraProvider(providerId)) return undefined
+  for (const name of getTaijiExtraProviderEnvVars(providerId)) {
+    const value = env[name]
+    if (typeof value === 'string' && value !== '') return `$${name}`
+  }
+  return undefined
+}
+
+/**
  * 条件 await 保持「无实际 await 分支时 setProvider 同步执行到底」的时序契约。
  */
 function applyProviderCredentials(
@@ -829,6 +848,18 @@ function applyProviderCredentials(
   // 防线② 空串转译（trim 后空串同视）：apiKey 空串 = 清除语义——不写 auth.json / models.json，
   // 由下游载体 applyProviderWritePolicy 删 merged 既有键（清除的正确落盘形态是删键）。
   const { apiKey } = data
+  // G-extra 环境变量凭据：附加段 provider 未显式传 key 且快照声明 envVars 在环境中
+  // 有值 → 保存 `${VAR}` 模板（语义见 resolveTaijiExtraEnvCredentialTemplate；显式空串
+  // 仍是清除语义，不走本分支）。
+  if (apiKey === undefined && isCatalogProvider(providerId) && isTaijiExtraProvider(providerId) && credentialWriter) {
+    const template = resolveTaijiExtraEnvCredentialTemplate(providerId)
+    if (template !== undefined) {
+      return credentialWriter.saveCredential(providerId, { type: 'api_key', key: template })
+        .then(() => {
+          delete merged.apiKey
+        })
+    }
+  }
   if (apiKey !== undefined && apiKey.trim() !== '') {
     if (isCatalogProvider(providerId) && credentialWriter) {
       // catalog provider: apiKey → auth.json (0600), strip from models.json
