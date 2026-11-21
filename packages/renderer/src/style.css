@@ -709,6 +709,16 @@ textarea {
  * 三层样式纪律：style.css 只放 design tokens（CSS 变量）+ base reset + 全局 keyframes SSOT。
  */
 
+/* 旋转动画容器合成层提升（2026-11 性能优化）：HTML 容器的 transform 旋转若未提升
+   合成层会走主线程逐帧重绘（实测侧栏 logo 单项即 idle CPU ~30%）；will-change 把
+   旋转交给 GPU 合成器。SVG 元素的旋转不受此提升覆盖（Chromium 不合成 SVG transform），
+   SVG 旋转须挂 HTML 包装层（见 TaijiLogo）。 */
+.animate-spin,
+.animate-loader-spin,
+.animate-taiji-spin {
+  will-change: transform;
+}
+
 /* ============================================================
    动画 keyframes SSOT（v6 §5.9：只在全局定义一次）
    消费方用 animation-name 引用（Tailwind animate-* 工具类 / 内联 animation）。
