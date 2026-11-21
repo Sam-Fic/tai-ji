@@ -952,10 +952,12 @@ export default [
   // getMergedCatalogModels 存在性校验单点，净增 ~240 物理行）与 dev-0.12.6 集成线 route
   // 修复批次入列后折算 1089 > 950——sanitize* 校验组拆分仍是长期方向，按 worker-message-pump
   // 1240→1400 同型提额 1100 保留软上限告警，超限即再暴露，勿再增行。
+  // [gate static-gate 2026-11] taiji-extra 实例种子段（seedTaijiExtraInstanceModels +
+  // env-var 凭据模板，净增 68 物理行）入列后折算 1125 > 1100——同型提额 1150，拆分方向不变。
   {
     files: ['packages/runtime/src/services/provider-config-helper.ts'],
     rules: {
-      'max-lines': ['warn', { max: 1100, skipBlankLines: true, skipComments: true }],
+      'max-lines': ['warn', { max: 1150, skipBlankLines: true, skipComments: true }],
     },
   },
   // declarative-engine：quota fetcher 声明式执行引擎（5 家平台 fetcher 的受限原语解释器），
