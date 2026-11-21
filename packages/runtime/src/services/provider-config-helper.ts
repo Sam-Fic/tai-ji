@@ -17,7 +17,7 @@ import type {
 } from '@taiji/shared'
 import { AGGREGATION_PROVIDER_ID, AGGREGATION_PROVIDER_ID_RESERVED, PI_THINKING_LEVELS } from '@taiji/shared'
 import { annotateDanglingMembers, collectOrphanAggregationRefs } from '@taiji/shared'
-import { isCatalogProvider, deriveEnabled, getMergedCatalogModels } from './provider-catalog.js'
+import { isCatalogProvider, deriveEnabled, getMergedCatalogModels, isTaijiExtraProvider, getTaijiExtraTemplateModels } from './provider-catalog.js'
 // coding-plan 额度显示自动开启（新增即默认同意）：判定 + 落盘与导入路径（provider-importer）共用
 import { autoEnableQuotaDisplayOnCreate, isPlaintextCredential, resolveCreateMatchIdentity } from './quota-auto-enable.js'
 // U6①：模型项 id 谓词（写侧与启动清洗侧共享单点，分层说明见该模块 JSDoc）
@@ -1591,6 +1591,35 @@ function mergeProviderModelsAndCollectStates(
   )
 }
 
+/**
+ * taiji 附加段实例播种（G-extra）：附加段 provider（快照 taijiExtra 标记，如 opendesign）
+ * 不在 pi-ai 上游 catalog / pi.dev 远程目录内，执行可见性必须落 models.json 实例（pi 原生
+ * 加载源），不能依赖 overlay 投喂链——远程目录 404 即永久失效 overlay、杀死可见性
+ * （2026-11-21 route-3 故障根因，改造决策见分支提交）。
+ *
+ * 写路径首次触达且条目无 models 时用快照模板播种；用户显式传入 models（
+ * mergeProviderModelsAndCollectStates 装配路径）或既有条目已有 models 时不动——
+ * 播种只填空，不覆盖任何既有/显式数据。
+ */
+function seedTaijiExtraInstanceModels(
+  providerId: string,
+  merged: Record<string, unknown>,
+  data: SetProviderInput,
+): void {
+  if (!isTaijiExtraProvider(providerId)) return
+  if (data.models !== undefined) return
+  const current = merged.models
+  if (Array.isArray(current) && current.length > 0) return
+  const seeded = getTaijiExtraTemplateModels(providerId).map(m => {
+    const out: Record<string, unknown> = { ...m }
+    // 快照模板 cost 可为 null（附加段模型未经市场定价核实）——models.json 模型条目
+    // 无 null 形态（ConfigModelDefinition.cost 为对象），缺键 = 未声明，同语义安全形态。
+    if (out.cost == null) delete out.cost
+    return out
+  })
+  if (seeded.length > 0) merged.models = seeded
+}
+
 /** 写策略 kind 入口（catalog 分体系判定；write-policy 载体的 kind 参数单点）。 */
 function providerWriteKind(providerId: string): 'catalog' | 'custom' {
   return isCatalogProvider(providerId) ? 'catalog' : 'custom'
@@ -1623,6 +1652,9 @@ export async function setProvider(
   // A1：merged 提前声明——catalog 分支 delete merged.apiKey 需在声明之后（原顺序触发 TDZ TS2448/2454）
   // TODO: 当 pi models.json 支持 schema 后收窄类型（现有 Record<string, unknown> 是架构限制）
   const merged: Record<string, unknown> = { ...existing }
+  // G-extra：附加段实例播种（语义与调用时点见 seedTaijiExtraInstanceModels——
+  // 在 models 装配之前，用户显式 models 入参会在装配段覆盖播种值）。
+  seedTaijiExtraInstanceModels(providerId, merged, data)
   // I9 清理① + catalog 分体系 + M5-01 只归 auth.json 决策：见 applyProviderCredentials。
   // 条件 await：无落盘路径（undefined）不产生微任务边界，保持同步前缀时序契约。
   const credentialsFlush = applyProviderCredentials(merged, authStorage, credentialWriter, providerId, data)

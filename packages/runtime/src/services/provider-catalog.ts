@@ -13,9 +13,15 @@ import builtinData from '../generated/builtin-providers.json'
 import type { BuiltinProviderTemplate } from '@taiji/shared'
 import {
   getCatalogOverlayState,
+  isTaijiExtraProvider,
+  getTaijiExtraTemplateModels,
   type OverlayModel,
   type CatalogOverlayState,
 } from './provider-catalog-refresh.js'
+
+// taiji 附加段判据的对外消费面（实现在本层下游 provider-catalog-refresh——本模块
+// import 它，反向成环；判据与刷新守卫共用同一实现，此处 re-export 保持单一 import 点）。
+export { isTaijiExtraProvider, getTaijiExtraTemplateModels }
 
 /**
  * 快照/合并视图的模型元素类型（= BuiltinModelSummary，shared 未从 index 导出该名，

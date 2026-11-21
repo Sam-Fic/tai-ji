@@ -177,6 +177,11 @@ const TAIJI_EXTRA_PROVIDERS = [
     modelCount: OPENDESIGN_MODELS.length,
     models: OPENDESIGN_MODELS,
     logoUrl: '',
+    // taijiExtra 标记：附加段判据的运行时承载（isTaijiExtraProvider 消费）。附加段 provider
+    // 不在 pi-ai 上游 catalog / pi.dev 远程目录内，执行可见性必须落 models.json 实例
+    // （runtime setProvider 写路径播种），远程目录刷新对其跳过（404 否定信号会永久失效
+    // overlay、杀死可见性——2026-11-21 route-3 故障根因）。
+    taijiExtra: true,
   },
 ]
 

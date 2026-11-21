@@ -410,6 +410,41 @@ describe('M1b: setProvider 接线（防线②③ 经 applyProviderWritePolicy �
     expect(upsertProvider).not.toHaveBeenCalled()
   })
 
+  it('G-extra: taiji 附加段新建（无 models 入参）→ 快照模板播种进 models.json 实例', async () => {
+    const { svc, upsertProvider } = makeSetProviderService(undefined)
+
+    await svc.setProvider('opendesign', { authMethod: 'api_key', apiKey: 'sk-test' })
+
+    // 播种使条目非空壳 → upsert 真发生（对比上方 p-empty：无播种的 catalog id 空壳不物化）
+    expect(upsertProvider).toHaveBeenCalledTimes(1)
+    const written = upsertProvider.mock.calls[0]?.[1] as { models?: Array<Record<string, unknown>> }
+    expect(Array.isArray(written.models)).toBe(true)
+    expect(written.models!.length).toBeGreaterThan(0)
+    expect(written.models!.every(m => typeof m.id === 'string' && m.id !== '')).toBe(true)
+    // 快照模板 cost:null → 缺键（models.json 模型条目无 null 形态）
+    expect(written.models!.some(m => m.cost === null)).toBe(false)
+  })
+
+  it('G-extra: 用户显式 models 入参 → 以用户为准（播种只填空）', async () => {
+    const { svc, upsertProvider } = makeSetProviderService(undefined)
+
+    await svc.setProvider('opendesign', { models: [{ id: 'my-model' }] })
+
+    const written = upsertProvider.mock.calls[0]?.[1] as { models?: Array<{ id?: string }> }
+    expect(written.models).toHaveLength(1)
+    expect(written.models![0]?.id).toBe('my-model')
+  })
+
+  it('G-extra: 附加段既有条目已有 models → 播种不覆盖既有数据', async () => {
+    const { svc, upsertProvider } = makeSetProviderService({ name: 'OpenDesign', models: [{ id: 'kept-model' }] })
+
+    await svc.setProvider('opendesign', { authMethod: 'api_key' })
+
+    const written = upsertProvider.mock.calls[0]?.[1] as { models?: Array<{ id?: string }> }
+    expect(written.models).toHaveLength(1)
+    expect(written.models![0]?.id).toBe('kept-model')
+  })
+
   it('c 既有条目 + 八字段全缺（全清空）→ upsertProvider 被调用，落盘内容为剥除后结果', async () => {
     const { svc, upsertProvider } = makeSetProviderService({
       name: 'OpenCode Go',
