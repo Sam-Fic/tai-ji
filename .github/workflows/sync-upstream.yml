@@ -14,6 +14,8 @@ name: Sync upstream main
 #   触发三平台构建级联；deb 管线按上游 release 直接检出构建，不依赖 fork 本地 tag
 # - 用 GITHUB_TOKEN 推送不会触发 fork 内其他 workflow（GitHub 对 token 推送的
 #   防级联行为），sync 推送不会意外触发其他构建
+# - workflow 文件例外：GITHUB_TOKEN 无权推送 .github/workflows 下的变更，合并后保留
+#   fork 侧版本；上游 ci/build 等 workflow 更新不进入 fork（deb 管线直接检出上游源码）
 # - 冲突处理：fork 专有文件理论上上游不会触碰；若真冲突则 fail-fast 给人工处理，
 #   绝不做破坏性兜底
 # ─────────────────────────────────────────────────────────────────────
@@ -102,5 +104,17 @@ jobs:
             echo "::error::合并冲突——检查上游是否改动了 fork 专有文件（.github/workflows/build-deb.yml / sync-upstream.yml），需人工处理"
             exit 1
           fi
+          # GITHUB_TOKEN 无 workflows 权限，无法推送 .github/workflows 下的变更，
+          # 故合并后把工作流目录恢复成 fork 侧版本（保留 build-deb.yml / sync-upstream.yml）。
+          WORKFLOW_ADDED=$(git diff --name-only --diff-filter=A HEAD^1 HEAD -- .github/workflows/)
+          if [ -n "$WORKFLOW_ADDED" ]; then
+            echo "$WORKFLOW_ADDED" | xargs -r git rm -f --
+          fi
+          git checkout HEAD^1 -- .github/workflows
+          git commit --amend --no-edit
+          if ! git diff --quiet HEAD^1 HEAD -- .github/workflows/; then
+            echo "::error::工作流文件仍与 fork 侧不一致，拒绝推送"
+            exit 1
+          fi
           git push origin "HEAD:refs/heads/main"
-          echo "已同步至 ${UP_SHORT}"
+          echo "已同步至 ${UP_SHORT}（.github/workflows 保持 fork 侧版本）"
