@@ -1612,9 +1612,13 @@ function seedTaijiExtraInstanceModels(
   if (Array.isArray(current) && current.length > 0) return
   const seeded = getTaijiExtraTemplateModels(providerId).map(m => {
     const out: Record<string, unknown> = { ...m }
-    // 快照模板 cost 可为 null（附加段模型未经市场定价核实）——models.json 模型条目
-    // 无 null 形态（ConfigModelDefinition.cost 为对象），缺键 = 未声明，同语义安全形态。
-    if (out.cost == null) delete out.cost
+    // 剥除 null 值键（pi models.json 模型条目 schema 的可选字段一律不接受 null：
+    // cost/compat/thinkingLevelMap 等对象/数组字段 null 即拒载该 provider——
+    // 快照模板对未核实字段写 null（cost:null / compat:null / thinkingLevelMap:null），
+    // 缺键 = 未声明，同语义安全形态）。
+    for (const k of Object.keys(out)) {
+      if (out[k] === null) delete out[k]
+    }
     return out
   })
   if (seeded.length > 0) merged.models = seeded

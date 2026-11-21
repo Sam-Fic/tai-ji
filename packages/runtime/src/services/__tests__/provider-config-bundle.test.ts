@@ -421,8 +421,8 @@ describe('M1b: setProvider 接线（防线②③ 经 applyProviderWritePolicy �
     expect(Array.isArray(written.models)).toBe(true)
     expect(written.models!.length).toBeGreaterThan(0)
     expect(written.models!.every(m => typeof m.id === 'string' && m.id !== '')).toBe(true)
-    // 快照模板 cost:null → 缺键（models.json 模型条目无 null 形态）
-    expect(written.models!.some(m => m.cost === null)).toBe(false)
+    // null 值键全部剥除（pi models.json 模型条目 schema 可选字段不接受 null，null 即拒载该 provider）
+    expect(written.models!.some(m => Object.values(m).includes(null))).toBe(false)
   })
 
   it('G-extra: 用户显式 models 入参 → 以用户为准（播种只填空）', async () => {
