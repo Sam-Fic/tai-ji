@@ -204,7 +204,7 @@
 
     <!-- 未保存条挂载点（两页共享形态的一侧） -->
     <div data-testid="route-unsaved-bar-slot">
-      <RouteUnsavedBar :dirty="dirty" @save="save" @discard="discard" />
+      <RouteUnsavedBar :dirty="dirty" :disabled="disabled" @save="save" @discard="discard" />
     </div>
   </div>
 </template>
@@ -543,7 +543,9 @@ const quickCreateEl = ref<InstanceType<typeof RouteQuickCreatePanel> | null>(nul
 const localFocus = ref<RoutePageFocus | null>(null)
 
 function focusOf(routeId: string): RoutePageFocus | undefined {
-  const active = localFocus.value ?? props.focus ?? null
+  // 父层 focus（引用 chip 深链）优先于本地快速创建定位——localFocus 无清除点，
+  // 反序会永久遮蔽父层定位（修剪 R3）
+  const active = props.focus ?? localFocus.value ?? null
   return active && active.routeId === routeId ? active : undefined
 }
 

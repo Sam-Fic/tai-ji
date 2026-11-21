@@ -79,10 +79,16 @@ export function useQuickCreate(input: UseQuickCreateInput): UseQuickCreate {
     )
   }
 
-  /** AC-Q13 事实防护：draft 已存在同 provider+model 的单端点简单路由 → 行内按钮禁用。 */
+  /**
+   * AC-Q13 事实防护：本编辑会话内「未保存落卡」的同 provider+model 单端点简单路由 →
+   * 行内按钮禁用（防重复点击）。口径 = 草稿路由 ∖ 已保存视图路由——已保存的同型路由
+   * 不拦（G8 逃生路径：保存后可再建一条同模型简单路由；修剪 F3）。
+   */
   function existingSimpleOf(providerId: string, modelId: string): boolean {
+    const savedIds = new Set(input.viewCardsOf().map((v) => v.route.id))
     return routeCardsOf(input.draftOf()).some(
       (c) =>
+        !savedIds.has(c.route.id) &&
         c.route.mode === 'simple' &&
         c.route.members.length === 1 &&
         c.route.members[0]!.providerId === providerId &&

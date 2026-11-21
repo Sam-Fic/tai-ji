@@ -168,6 +168,9 @@ export function useRoutePageOrchestration(): {
   }
 
   async function onRoutePageDelete(routeId: string): Promise<void> {
+    // 删除同样落盘 + 视图刷新（修剪 R1）：刷新窗口与保存同型——置 routeSaving 禁用
+    // 快速创建/保存/放弃，防窗口内新建未保存草稿被草稿重置 watch 静默清掉
+    routeSaving.value = true
     try {
       await routeSaveOrchestrator.delete(routeId)
       toastInfo(t('settings.modelRoute.routeDeleted'))
@@ -175,6 +178,8 @@ export function useRoutePageOrchestration(): {
       adoptRouteView(await configApi.getRouteView())
     } catch (e) {
       toastError(toErrorMessage(e))
+    } finally {
+      routeSaving.value = false
     }
   }
 

@@ -14,6 +14,9 @@ import type { AggregationMember, AggregationRoute } from '@taiji/shared'
 import { generateRouteIdFromName } from '@taiji/shared'
 import { newMemberId } from './route-editor-ops'
 
+/** 路由 id 长度上界（= extension-protocol ROUTE_ID_MAX_LENGTH，约束同源镜像）。 */
+const ID_MAX = 64
+
 /** 快速创建选中的一个模型（渠道 + 模型 + 展示元数据，勾选序承载于数组序）。 */
 export interface QuickPickModel { // oe-exempt:20261121:framework:快速创建跨文件形状契约（builder/组件/composable/测试多消费方，单实现为设计终态）
   providerId: string
@@ -56,13 +59,22 @@ export function uniqueDisplayName(base: string, taken: ReadonlySet<string>): str
   return `${trimmed} ${suffix}`
 }
 
-/** 路由 id 去重：generateRouteIdFromName（kebab + ≤64 截断内建）+ 冲突后缀 -2/-3…。 */
+/**
+ * 路由 id 去重：generateRouteIdFromName（kebab + ≤64 截断内建）+ 冲突后缀 -2/-3…。
+ * 后缀追加在截断之后做（修剪 P5）：base 截满 64 时先缩 base 再拼后缀，产物恒 ≤64
+ * 且过 isValidRouteId（否则保存报 route_id_invalid、草稿丢失且错误指向用户未输入的 id）。
+ */
 export function uniqueRouteId(base: string, taken: ReadonlySet<string>): string {
   const slug = generateRouteIdFromName(base)
   if (!taken.has(slug)) return slug
   let suffix = 2
-  while (taken.has(`${slug}-${suffix}`)) suffix += 1
-  return `${slug}-${suffix}`
+  while (true) {
+    // 64 = ROUTE_ID_MAX_LENGTH；'-'.length + suffix 位宽先预留，base 前段截缩
+    const room = ID_MAX - 1 - String(suffix).length
+    const candidate = `${slug.slice(0, room)}-${suffix}`
+    if (!taken.has(candidate)) return candidate
+    suffix += 1
+  }
 }
 
 /** buildSimpleQuickRoute 输入。 */

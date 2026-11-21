@@ -796,6 +796,7 @@ export default {
     levelsTitle: '思考等级',
     levelsToggle: '思考等级 {n}',
     levelsUnsupported: '该模型不支持此档位',
+    levelsDeclaredStale: '该模型不支持此档位（已声明，点击取消）',
     levelsUnknown: '模型档位未知，未按能力置灰',
     levelsDeclared: '已声明支持，点击取消',
     levelsUndeclared: '未声明，点击支持',

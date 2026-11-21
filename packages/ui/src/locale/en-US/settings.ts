@@ -789,6 +789,7 @@ export default {
     levelsTitle: 'Thinking levels',
     levelsToggle: 'Levels {n}',
     levelsUnsupported: 'This model does not support this level',
+    levelsDeclaredStale: 'Not supported by this model (declared; click to unset)',
     levelsUnknown: 'Model levels unknown; not greyed by capability',
     levelsDeclared: 'Declared supported; click to unset',
     levelsUndeclared: 'Not declared; click to support',

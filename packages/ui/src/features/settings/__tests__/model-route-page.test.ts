@@ -931,3 +931,79 @@ describe('卡片拖拽排序（drag-and-drop reorder）', () => {
     expect(payload.scopedRefs).toEqual([`${AGGREGATION_PROVIDER_ID}/r1`, 'zhipu/glm-5-3'])
   })
 })
+
+// ── 修剪回归（tree-plant prune：fixed 发现的探针升格单测） ────────────────────────
+
+describe('修剪回归：保存中禁用 / 已保存简单路由逃生 / 模型切换 levels 过滤', () => {
+  it('disabled prop → 未保存条保存/放弃按钮禁用（保存/删除编排窗口防并发，修剪 R2/R1）', async () => {
+    const w = mountPage([cardOf(routeOf({ id: 'r1' }))])
+    // 制造 dirty 使未保存条可见（v-show）
+    await w.find('[data-testid="route-scoped-toggle"]').trigger('click')
+    await w.setProps({ disabled: true })
+    expect((w.find('[data-testid="unsaved-save"]').element as HTMLButtonElement).disabled).toBe(true)
+    expect((w.find('[data-testid="unsaved-discard"]').element as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('已保存的同模型简单路由不拦「建简单路由」（G8 逃生路径：保存后可再建，修剪 F3）', async () => {
+    const w = mountPage(
+      [cardOf(routeOf({ id: 'r1', mode: 'simple', members: [{ id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' }] }))],
+    )
+    await w.find('[data-testid="route-quick-provider-row"]').trigger('click')
+    // 未保存同型草稿不存在 → 创建按钮在场（非「已建简单路由」禁用态）
+    expect(w.find('[data-testid="route-quick-create-simple"]').exists()).toBe(true)
+    expect(w.find('[data-testid="route-quick-simple-exists"]').exists()).toBe(false)
+  })
+
+  it('端点换模型：已声明档位按新模型 supportedLevels 过滤（修剪 F2 半更新死锁半边）', async () => {
+    const providers = [
+      prov({
+        id: 'zhipu',
+        models: [
+          { id: 'glm-4-6', name: 'GLM-4.6', supportedLevels: ['off', 'low'] },
+          { id: 'glm-4-air', name: 'glm-4-air', supportedLevels: ['off', 'high'] },
+        ],
+      }),
+      prov({ id: 'moonshot', models: [{ id: 'kimi-k2', name: 'Kimi K2' }] }),
+    ]
+    const route = routeOf({
+      id: 'r1',
+      members: [
+        { id: 'a', providerId: 'zhipu', modelId: 'glm-4-6', type: 'none', levels: { off: 'off', low: 'low' } },
+      ],
+    })
+    const w = mountPage([cardOf(route)], providers)
+    await w.find('[data-testid="route-card-toggle"]').trigger('click')
+    await pickSelectOption(w.find('[data-testid="endpoint-model-select"]').element as HTMLElement, 'glm-4-air')
+    await flushPromises()
+    w.findComponent(RouteUnsavedBar).vm.$emit('save')
+    await w.vm.$nextTick()
+    const payload = (w.findComponent(ModelRoutePage).emitted('save')![0]![0]) as { routes: AggregationRoute[] }
+    // low 不在新模型支持集 → 过滤掉；off 保留
+    expect(payload.routes[0]!.members[0]!.levels).toEqual({ off: 'off' })
+  })
+
+  it('已声明但新模型不支持的档位仍可点取消（不与 disabled 死锁，修剪 F2）', async () => {
+    const providers = [
+      prov({ id: 'zhipu', models: [{ id: 'glm-4-6', name: 'GLM-4.6', supportedLevels: ['off'] }] }),
+      prov({ id: 'moonshot', models: [{ id: 'kimi-k2', name: 'Kimi K2' }] }),
+    ]
+    const route = routeOf({
+      id: 'r1',
+      members: [
+        // 悬空声明形态：supportedLevels 缺 low，但 levels 已声明 low（历史数据/模型能力收缩）
+        { id: 'a', providerId: 'zhipu', modelId: 'glm-4-6', type: 'none', levels: { off: 'off', low: 'low' } },
+      ],
+    })
+    const w = mountPage([cardOf(route)], providers)
+    await w.find('[data-testid="route-card-toggle"]').trigger('click')
+    await w.find('[data-testid="endpoint-levels-toggle"]').trigger('click')
+    const lowBtn = w.find('[data-testid="endpoint-level-low"]')
+    expect((lowBtn.element as HTMLButtonElement).disabled).toBe(false)
+    await lowBtn.trigger('click')
+    await flushPromises()
+    w.findComponent(RouteUnsavedBar).vm.$emit('save')
+    await w.vm.$nextTick()
+    const payload = (w.findComponent(ModelRoutePage).emitted('save')![0]![0]) as { routes: AggregationRoute[] }
+    expect(payload.routes[0]!.members[0]!.levels).toEqual({ off: 'off', low: null })
+  })
+})

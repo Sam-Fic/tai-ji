@@ -47,7 +47,7 @@
     <Select
       :model-value="member.modelId"
       data-testid="endpoint-model-select"
-      @update:model-value="(modelId: unknown) => emit('op', opWith({ kind: 'endpoint-patch', patch: { modelId: String(modelId) } }))"
+      @update:model-value="(modelId: unknown) => emit('op', opWith({ kind: 'endpoint-patch', patch: patchModelSwitch(String(modelId)) }))"
     >
       <SelectTrigger class="h-8 w-44 font-mono" :aria-label="t('settings.modelRoute.modelLabel')" data-testid="endpoint-model-select">
         <SelectValue />
@@ -190,7 +190,7 @@
           variant="secondary"
           size="dense"
           :aria-pressed="isLevelDeclared(level)"
-          :disabled="!isLevelAvailable(level)"
+          :disabled="!isLevelAvailable(level) && !isLevelDeclared(level)"
           :title="levelTitle(level)"
           :data-testid="`endpoint-level-${level}`"
           @click="toggleLevel(level)"
@@ -274,14 +274,38 @@ const declaredLevelsCount = computed(
 )
 
 function levelTitle(level: string): string {
-  if (!isLevelAvailable(level)) return t('settings.modelRoute.levelsUnsupported')
+  if (!isLevelAvailable(level)) {
+    // 已声明但新模型不支持：仍可点（取消声明），只有未声明且不支持才置灰（修剪 F2）
+    return isLevelDeclared(level)
+      ? t('settings.modelRoute.levelsDeclaredStale')
+      : t('settings.modelRoute.levelsUnsupported')
+  }
   return isLevelDeclared(level) ? t('settings.modelRoute.levelsDeclared') : t('settings.modelRoute.levelsUndeclared')
+}
+
+/**
+ * 模型切换补丁（修剪 F2）：modelId 换到新模型时，已声明档位按新模型 supportedLevels
+ * 过滤（未知能力保留不过滤——零事实不伪装置灰同族语义）；过滤后空集删除 levels 字段。
+ */
+function patchModelSwitch(modelId: string): { modelId: string; levels?: Record<string, string | null> } {
+  if (modelId === props.member.modelId) return { modelId }
+  // 新模型的 supportedLevels（非当前 member 的——切换目标能力才是过滤依据）
+  const supported =
+    props.providers
+      .find((p) => p.id === props.member.providerId)
+      ?.models.find((m) => m.id === modelId)?.supportedLevels ?? null
+  if (supported === null || !props.member.levels) return { modelId }
+  const kept = Object.fromEntries(
+    Object.entries(props.member.levels).filter(([level, v]) => v !== null && v !== undefined && supported.includes(level)),
+  )
+  return Object.keys(kept).length === 0 ? { modelId } : { modelId, levels: kept }
 }
 
 /** 档位 toggle（spec §5.4）：levels 缺省时首点初始化为「支持集全选」再 toggle 所点档；
  *  档位未知时以 7 档全集初始化。编辑走 endpoint-patch（AggregationMemberPatch 已含 levels）。 */
 function toggleLevel(level: string): void {
-  if (!isLevelAvailable(level)) {
+  // 未声明且不支持 → 置灰拦截；已声明但模型不支持 → 放行（唯一动作 = 取消声明，修剪 F2）
+  if (!isLevelAvailable(level) && !isLevelDeclared(level)) {
     toast.info(t('settings.modelRoute.levelsUnsupported'))
     return
   }

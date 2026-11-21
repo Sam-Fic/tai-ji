@@ -39,6 +39,11 @@ describe('uniqueDisplayName / uniqueRouteId（§8 边界：重名序号 / id 后
     expect(uniqueRouteId('glm-4-6', new Set(['glm-4-6']))).toBe('glm-4-6-2')
     const long = 'a'.repeat(200)
     expect(uniqueRouteId(long, new Set()).length).toBeLessThanOrEqual(64)
+    // 修剪 P5 回归：base 截满 64 且冲突时，后缀产物恒 ≤64（保存校验 route_id 不再拒绝）
+    const slug = uniqueRouteId(long, new Set())
+    const deduped = uniqueRouteId(long, new Set([slug]))
+    expect(deduped.length).toBeLessThanOrEqual(64)
+    expect(deduped).not.toBe(slug)
   })
 })
 
