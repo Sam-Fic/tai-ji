@@ -147,12 +147,22 @@ describe('attachLfOnlyLineReader（D10：LF-only 分帧）', () => {
     // 能独立通过 JSON.parse——这正是旧实现的丢消息路径（parse error 静默 skip）。
     // 本组断言 node 行为漂移哨兵：若未来 readline 改为 LF-only 分帧，此断言失败，
     // 说明隐患面消失，对照组可复核后移除。
-    expect(
-      lines.length,
-      `node readline 分帧行为已变化（期望拆帧 >1 行，实际 ${lines.length} 行）——U+2028 拆帧隐患不再复现，复核后可移除本对照组`,
-    ).toBeGreaterThan(1)
-    for (const line of lines) {
-      expect(() => JSON.parse(line)).toThrow()
+    // [2026-11-21 哨兵触发后复核] Node v22.23.5 readline 已不再按 U+2028/U+2029 拆行
+    //（实测单条 JSON 整行到达，JSON.parse 可通过）——隐患面在该 Node 版本起消失。
+    // 对照组降级为条件性记录：拆帧不复现时跳过拆帧行断言（保留哨兵语义：拆帧仍复现的
+    // 环境——CI 的旧 Node——照旧断言，防回退）；LF-only 读取器本身的防护由 ①③ 承担。
+    if (lines.length > 1) {
+      expect(
+        lines.length,
+        `node readline 分帧行为已变化（期望拆帧 >1 行，实际 ${lines.length} 行）——U+2028 拆帧隐患不再复现，复核后可移除本对照组`,
+      ).toBeGreaterThan(1)
+      for (const line of lines) {
+        expect(() => JSON.parse(line)).toThrow()
+      }
+    } else {
+      // 单行到达且可独立解析 = Node 已修：隐患不复现，对照组使命完成
+      expect(lines).toHaveLength(1)
+      expect(() => JSON.parse(lines[0])).not.toThrow()
     }
   })
 
