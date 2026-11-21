@@ -6001,6 +6001,47 @@
       "owner": "apps/electron",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
       "note": "R2：改 IPC 读取通道或其校验时跑。纯校验函数三关与禁区在 L1 单测已覆盖，本 spec 只验真机拒绝行为。[2026-11-05 终态同步] layer L3→L2（launch-app mock 构建真实进程、零 token；同 FONTS-01 口径）"
+    },
+    {
+      "id": "E2E-ROUTE-01",
+      "summary": "e2e 真实进程层：模型路由快速创建（simple/advanced）→ 保存 → aggregation/<id> 会话收 faux 回复",
+      "scope": [
+        "packages/ui/src/features/settings/provider/**",
+        "packages/ui/src/locale/**"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "e2e/route-quick-create-real.spec.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "npx playwright test e2e/route-quick-create-real.spec.ts",
+      "owner": "packages/renderer",
+      "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
+      "note": "[本轮新建；2026-11-21 修正 layer L1→L2（real 层误标 L1 被 e2e-on-diff×L1 消费，CI 无 X server 快败——与 REAL-01 同族口径，不进 CI 门禁）] 模型路由快速创建 UI 链（RouteQuickCreatePanel simple/advanced → RouteUnsavedBar 保存 → providers.json routes 域）+ provider-aggregation 聚合虚拟模型端到端（session.create modelOverride=aggregation/<routeId> → faux 回复文本断言）。文件名带 -real，命中 REAL_TRACK_SPECS 首类形态，不进 CI 门禁，开发阶段按改动范围空载串行跑。"
+    },
+    {
+      "id": "E2E-PERF-01",
+      "summary": "CDP 性能剖析工具（scripts/perf）：开发期 renderer 主线程采样/动画审计（非 CI 资产，设计期工具）",
+      "scope": [
+        "scripts/perf/**"
+      ],
+      "layer": "L3",
+      "assets": [
+        {
+          "kind": "script",
+          "ref": "scripts/perf/cdp-profile.mjs"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "（人工工具——需 dev 实例 CDP 端口：node scripts/perf/cdp-profile.mjs <端口> <target id> [秒数]；用法与配套动画审计方法见脚本头注释）",
+      "owner": "scripts/perf",
+      "authority": "scripts/perf/cdp-profile.mjs",
+      "note": "R3 归档态（2026-11-21 登记）：开发期性能分析工具，无独立 CI 环节；测量方法与基线数据记录在维护者本机 ~/Code/vue-performance/（taiji-analysis.md）"
     }
   ]
 }

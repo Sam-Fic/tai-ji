@@ -46,6 +46,13 @@ ALLOWED_GLOBAL_ANIMATION_CLASSES = {
     # 内容不带 scoped data-v 属性，dasharray+transform 动画只能在全局类声明（keyframes
     # 同在 style.css 动画 SSOT 区）
     'ld-arc',
+    # 旋转动画容器合成层提升（2026-11 性能优化）：三个 Tailwind animate-* 简写是全局
+    # 动画工具类（animate-spin 内置 / loader-spin、taiji-spin 在 tailwind.config 注册），
+    # 跨数十个消费点；在此统一挂 will-change:transform 提升合成层，避免逐帧主线程重绘
+    # （实测侧栏 logo 单项即 idle CPU ~30%）。与 @keyframes SSOT 同层，非组件级样式。
+    'animate-spin',
+    'animate-loader-spin',
+    'animate-taiji-spin',
 }
 
 RED = '\033[0;31m'

@@ -157,6 +157,8 @@ export interface DiagnosticExportSummary {
   /** pi 版本（从条目清单事件提取最近值；无记录为 'unknown'） */
   piVersion: string
   platform: string
+  /** GPU 加速状态拼串（app.getGPUFeatureStatus()；unknown = 获取失败）——排查 GPU 被禁致渲染断崖 */
+  gpuFeatureStatus: string
   /** 本次评估越线的触发条件 id（D2 状态表；空数组 = 常态无越线） */
   trippedConditionIds: number[]
   /** 状态表总条数（20，附录 A SSOT） */

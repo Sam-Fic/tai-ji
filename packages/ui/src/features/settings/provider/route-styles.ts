@@ -1,9 +1,9 @@
 /**
  * 模型路由页共享样式映射（provider-aggregation U5b）：端点色板与异常 chip 配色，
- * RouteCard / RouteEndpointRow / RouteTimeGrid 三组件消费同一份（一致性 > 各自拼类）。
+ * RouteCard / RouteEndpointRow / RouteInlineTimeGrid 三组件消费同一份（一致性 > 各自拼类）。
  *
  * 色板 = CSS 语义变量对应的静态 Tailwind 字面类（JIT 扫描可达，禁硬编码色值）；
- * 覆盖预览格底的透明度派生在 RouteTimeGrid 内用 color-mix 内联样式处理（Tailwind v3
+ * 行内网格覆盖格底色在 RouteInlineTimeGrid 内以 success 变量直填（Tailwind v3 对 var() 色不支持 /opacity 修饰符）（Tailwind v3
  * 对 var() 色不支持 /opacity 修饰符）。
  */
 import type { EndpointIssueKind } from './route-preview'

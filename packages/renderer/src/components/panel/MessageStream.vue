@@ -34,7 +34,7 @@
       class="message-stream relative flex-1 overflow-y-auto px-[30px]"
       data-testid="message-stream"
       :style="{ overflowAnchor: 'none' }"
-      @wheel="onWheel"
+      @wheel.passive="onWheel"
       @touchstart.passive="onTouchStart"
       @touchmove.passive="onTouchMove"
     >

@@ -135,6 +135,7 @@
                 :new-session-route-ids="newSessionRouteIds"
                 :focus="routePageFocus"
                 :quota-of="routeQuotaOf"
+                :disabled="routeSaving"
                 @save="onRoutePageSave"
                 @route-delete="onRoutePageDelete"
                 @open-providers="select('provider')"
@@ -416,7 +417,7 @@ function openRoutePage(focus?: RoutePageFocus): void {
 
 // ── 模型路由页编排（数据与写通道收编 useRoutePageOrchestration，此处只接线）─────────────
 
-const { routeView, routeViewLoading, routeViewFailed, ensureRouteView, onRoutePageSave, onRoutePageDelete, newSessionRouteIds } = useRoutePageOrchestration()
+const { routeView, routeViewLoading, routeViewFailed, ensureRouteView, onRoutePageSave, onRoutePageDelete, newSessionRouteIds, routeSaving } = useRoutePageOrchestration()
 
 // 分区首访触发拉取（开弹层不预拉，与 visitedViews 首访挂载语义一致）；immediate 覆盖深链
 // 直开 model-route 的形态——activeMenu 初值即 model-route 时无变化沿，非 immediate watch

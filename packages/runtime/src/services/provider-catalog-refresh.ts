@@ -37,6 +37,52 @@ const HTTP_NOT_MODIFIED = 304
 const HTTP_NOT_FOUND = 404
 const HTTP_NOT_IMPLEMENTED = 501
 
+// ── taiji 附加段内置 provider 判据（gen 脚本 TAIJI_EXTRA_PROVIDERS 的运行时承载）──
+//
+// 附加段 provider 不在 pi-ai 上游 catalog / pi.dev 远程目录内：
+// - 执行可见性必须落 models.json 实例（runtime setProvider 写路径播种）——不能依赖
+//   overlay 投喂链（远程目录 404 即永久失效 overlay、杀死可见性，2026-11-21 route-3 故障根因）；
+// - 远程目录刷新对其必须跳过（refreshProviderCatalogs 入口守卫，本文件内消费——
+//   判据实现在本层而非 provider-catalog.ts：后者 import 本层，反向 import 会成环）。
+
+/** 附加段 provider id 集合（快照 taijiExtra 标记承载，JSON import 即内存常驻）。 */
+const taijiExtraProviderIds = new Set<string>(
+  ((builtinData.providers ?? []) as Array<{ id: string; taijiExtra?: boolean }>)
+    .filter(p => p.taijiExtra === true)
+    .map(p => p.id),
+)
+
+/**
+ * 判断 providerId 是否为 taiji 附加段内置 provider（pi-ai 上游 catalog 之外、
+ * 快照 taijiExtra 标记承载）。fail-safe：快照格式异常时集合为空、恒 false。
+ */
+export function isTaijiExtraProvider(providerId: string): boolean {
+  return taijiExtraProviderIds.has(providerId)
+}
+
+/**
+ * 附加段 provider 的快照声明 envVars（凭据模板数据源；非附加段 id 返回空数组）。
+ */
+export function getTaijiExtraProviderEnvVars(providerId: string): string[] {
+  if (!isTaijiExtraProvider(providerId)) return []
+  const p = ((builtinData.providers ?? []) as Array<{ id: string; envVars?: string[] }>).find(
+    x => x.id === providerId,
+  )
+  return Array.isArray(p?.envVars) ? p.envVars : []
+}
+
+/**
+ * 附加段 provider 的快照模板模型清单（实例播种数据源；非附加段 id 返回空数组）。
+ * 模板元素即快照 summarizeModel 的 11 键形态，与 models.json 模型条目同构。
+ */
+export function getTaijiExtraTemplateModels(providerId: string): Array<Record<string, unknown>> {
+  if (!isTaijiExtraProvider(providerId)) return []
+  const p = ((builtinData.providers ?? []) as Array<{ id: string; models?: Array<Record<string, unknown>> }>).find(
+    x => x.id === providerId,
+  )
+  return p?.models ?? []
+}
+
 /** overlay 条目模型（pi.dev 返回形状的宽松子集，仅要求 merge/展示所需字段存在）。 */
 export type OverlayModel = {
   id: string
@@ -316,6 +362,10 @@ async function refreshOneProvider(
  * 不影响其他 provider（allSettled），失败方保留原缓存条目。
  */
 export async function refreshProviderCatalogs(providerIds: string[]): Promise<CatalogRefreshResult> {
+  // 附加段守卫：taiji-extra provider 在 pi.dev 无远程目录，刷新必然落 404 分支的
+  // 「永久失效 overlay」否定信号（{models:[],lastModified:0}）——执行可见性由 models.json
+  // 实例承载（见 isTaijiExtraProvider 段注释），目录刷新对其无意义且有害，直接剔除。
+  const refreshableIds = providerIds.filter(id => !isTaijiExtraProvider(id))
   const { own, pi } = loadOverlay()
   const entries: Record<string, OverlayEntry> = { ...own.entries }
   const refreshed: string[] = []
@@ -327,7 +377,7 @@ export async function refreshProviderCatalogs(providerIds: string[]): Promise<Ca
   ]
 
   await Promise.allSettled(
-    providerIds.map(providerId => refreshOneProvider(providerId, entries, refreshed, failed)),
+    refreshableIds.map(providerId => refreshOneProvider(providerId, entries, refreshed, failed)),
   )
 
   let persistFailed: boolean | undefined

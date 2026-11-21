@@ -148,7 +148,8 @@ export interface ZcodeProviderSyncDeps { // oe-exempt:20261012:framework:映射�
   readonly configStore: Pick<IConfigStore, 'readModels' | 'getEnabledModels'>
   /** pi 凭据唯一通道（C-proc-14）：明文解析（async）+ provider 级 baseUrl 两级解析 +
    *  凭据两源（auth.json/models.json）id 并集枚举（同步候选集的第二源供数——catalog 型
-   *  provider 的 key 在 auth.json、models 在 catalog 快照，models.json 无条目；缺此源
+   *  provider 的 key 在 auth.json、models 在 catalog 快照，models.json 无条目〔taiji 附加段
+   *  除外：G-extra 改造后附加段实例落 models.json，本源同时供数〕；缺此源
    *  则这类 provider 永不进同步候选，透传翻译对它们失效〔2026-10-16 真机事故根因〕）。 */
   readonly credentialResolver: Pick<
     IProviderCredentialResolver,

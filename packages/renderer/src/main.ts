@@ -11,6 +11,7 @@ import { initExtensionHostBridge, getExtensionBus } from './composables/shell/us
 import { initPermissionRequest } from './composables/shell/usePermissionRequest'
 import { installRendererErrorReporting } from './boot/error-reporter'
 import { installResizeObserverProbe } from './boot/resize-observer-probe'
+import { installHiddenAnimationPause } from './boot/hidden-animation-pause'
 import { registerCanvasOverlayBridge } from './composables/use-canvas-sync'
 import { openCanvasTab } from './components/panel/workflow-viz/overlay/workflow-viz-overlay'
 import { getImageCacheWritePort } from './lib/ipc'
@@ -64,6 +65,7 @@ installRendererErrorReporting(app)
 // 频次，每 60s 窗 console.debug 输出 top 10；prod 经 import.meta.env.DEV 裁剪零执行。
 // 须在 mount 前安装（组件里的 new ResizeObserver 才走包装后的全局构造器）。
 installResizeObserverProbe()
+installHiddenAnimationPause()
 // ExtensionHost bridge 装配（audit §12.1）：WS plugin:* 消息 → bus → ViewHostStore →
 // app.provide 注入 ui 组件数据源。须在 mount 前（provide 全局生效）。
 initExtensionHostBridge(app)

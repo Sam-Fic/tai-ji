@@ -37,10 +37,14 @@ export function useRoutePageOrchestration(): {
   onRoutePageDelete: (routeId: string) => Promise<void>
   /** 新会话可用路由 id 集（U7：当前视图 ∖ 本应用生命周期首次加载快照）。 */
   newSessionRouteIds: Ref<ReadonlySet<string>>
+  /** 保存编排进行中（spec §6.3：保存中禁用快速创建等入口，防视图刷新覆盖新草稿）。 */
+  routeSaving: Ref<boolean>
   } {
   const routeView = ref<AggregationRouteView | null>(null)
   const routeViewLoading = ref(false)
   const routeViewFailed = ref(false)
+  /** 保存进行中（对外暴露：保存中禁用快速创建等并发入口，spec §6.3）。 */
+  const routeSaving = ref(false)
   /** 首访拉取标记（拉取副作用只跑一次，同 visitedViews 首访挂载语义）。 */
   let routeViewFetchStarted = false
   /** 保存编排进行中标记（防未保存条重复提交导致的两权威交错写）。 */
@@ -123,6 +127,7 @@ export function useRoutePageOrchestration(): {
   async function onRoutePageSave(payload: RoutePageSavePayload): Promise<void> {
     if (saving) return
     saving = true
+    routeSaving.value = true
     try {
       const priorById = new Map((routeView.value?.cards ?? []).map((c) => [c.route.id, c.route]))
       // routes 变化集（逐条与视图 prior 对比；新建条目无 prior 恒为变化）。
@@ -158,10 +163,14 @@ export function useRoutePageOrchestration(): {
       toastError(toErrorMessage(e))
     } finally {
       saving = false
+      routeSaving.value = false
     }
   }
 
   async function onRoutePageDelete(routeId: string): Promise<void> {
+    // 删除同样落盘 + 视图刷新（修剪 R1）：刷新窗口与保存同型——置 routeSaving 禁用
+    // 快速创建/保存/放弃，防窗口内新建未保存草稿被草稿重置 watch 静默清掉
+    routeSaving.value = true
     try {
       await routeSaveOrchestrator.delete(routeId)
       toastInfo(t('settings.modelRoute.routeDeleted'))
@@ -169,8 +178,10 @@ export function useRoutePageOrchestration(): {
       adoptRouteView(await configApi.getRouteView())
     } catch (e) {
       toastError(toErrorMessage(e))
+    } finally {
+      routeSaving.value = false
     }
   }
 
-  return { routeView, routeViewLoading, routeViewFailed, ensureRouteView, onRoutePageSave, onRoutePageDelete, newSessionRouteIds }
+  return { routeView, routeViewLoading, routeViewFailed, ensureRouteView, onRoutePageSave, onRoutePageDelete, newSessionRouteIds, routeSaving }
 }
