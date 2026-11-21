@@ -219,6 +219,8 @@ export function useVirtuaFollow(opts: {
 
   /**
    * wheel 事件回调：滚轮 / 触控板上滑（deltaY < 0）→ 脱离锚定。
+   * 只读 deltaY 不 preventDefault，消费点模板挂 @wheel.passive（非阻塞监听，
+   * 滚动合成不被主线程卡；Element 级监听默认非 passive，须显式标注）。
    * wheel 是纯用户信号（程序性 scrollToIndex 不触发 wheel），**恒即时生效，不受收敛抑制窗
    * 约束**（D7②；抑制窗副作用⑥的恢复路径之一）。下滑（deltaY > 0）不改变 stickToBottom——
    * 回到底部由 onScroll 恢复分支处理。

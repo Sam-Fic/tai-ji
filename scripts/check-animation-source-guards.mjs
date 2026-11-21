@@ -86,14 +86,12 @@ check(
 
 // ── plan 05 reduced-motion 兜底 + TaijiLogo ────────────────────────────────
 check(
-  'plan05/TC1 logo spin 静态类 + inline 时长覆盖',
+  'plan05/TC1 logo spin 挂 HTML 包装层 + 合成层提升（2026-11 性能裁决：SVG transform 动画不被 Chromium 合成，挂 svg 本体每帧主线程重绘 idle CPU ~30%）',
   taijiLogo.includes(":class=\"spin ? 'animate-taiji-spin' : ''\"")
-    && taijiLogo.includes(":style=\"spin ? { animationDuration: `${duration}s`, transformOrigin: 'center' } : undefined\"")
-    && !taijiLogo.includes('animate-[taiji-spin_${duration}')
-    && !taijiLogo.includes('animation: `taiji-spin')
-    && tailwindConfig.includes("'taiji-spin': 'taiji-spin 8s linear infinite'")
-    && taijiLogo.includes('class="block shrink-0 motion-reduce:animate-none"'),
-  'TaijiLogo 须用静态类 animate-taiji-spin + inline animationDuration 覆盖，config 注册 taiji-spin 简写，布局类保留',
+    && taijiLogo.includes(":style=\"spin ? { animationDuration: `${duration}s`, willChange: 'transform' } : undefined\"")
+    && taijiLogo.includes('class="block shrink-0 motion-reduce:animate-none"')
+    && tailwindConfig.includes("'taiji-spin': 'taiji-spin 8s linear infinite'"),
+  'TaijiLogo 旋转动画须挂在 HTML 包装 div（非 svg 本体）+ willChange:transform；静态类 animate-taiji-spin + inline animationDuration 覆盖保留，config 注册 taiji-spin 简写保留',
 )
 check(
   'plan05/TC2 style.css reduced-motion 白名单保留',
@@ -117,7 +115,7 @@ check(
       && taijiLogo.includes('d="M3655 9803 c-107 -15 -300 -61 -489 -118')
       && (taijiLogo.match(/<path d="/g) ?? []).length === 6
       && otherGuards.length > 0,
-    'TaijiLogo 默认 spin=true / duration=8 / viewBox 与 6 条 path 不得变；其他组件须至少保留一处 motion-reduce:animate-none',
+    'TaijiLogo 默认 spin=true / duration=8 / viewBox 与 6 条 path 不得变（注：侧栏 Brand 消费方传 spin=false——常驻旋转 2026-11 性能裁决退役）；其他组件须至少保留一处 motion-reduce:animate-none',
   )
 }
 check(

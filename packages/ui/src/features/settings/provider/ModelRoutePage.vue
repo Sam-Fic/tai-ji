@@ -29,9 +29,9 @@
         <Button variant="secondary" size="dense" data-testid="route-open-providers" @click="emit('openProviders')">
           {{ t('settings.modelRoute.openProviders') }}
         </Button>
-        <!-- 新建路由（U9 创建侧，GL5/V15）：默认草稿卡走 applyEditorOp 唯一入口 -->
-        <Button size="dense" data-testid="route-create-btn" @click="createRoute">
-          {{ t('settings.modelRoute.createRoute') }}
+        <!-- 快速创建入口（spec §3 创建入口收敛：页头按钮只展开并聚焦快速创建面板） -->
+        <Button size="dense" data-testid="route-create-btn" @click="openQuickCreate">
+          {{ t('settings.modelRoute.quickCreateTitle') }}
         </Button>
       </div>
     </div>
@@ -54,17 +54,36 @@
       data-testid="route-orphan-notice"
     />
 
-    <!-- 概览条（spec §7.2；无卡隐藏） -->
+    <!-- 快速创建面板（spec §4：页头之下、概览之上；渠道折叠建简单路由 / 筛选多选建高级路由） -->
+    <div class="mt-3">
+      <RouteQuickCreatePanel
+        ref="quickCreateEl"
+        :providers="providers"
+        :disabled="disabled"
+        :usage-of="usageOf"
+        :existing-simple-of="existingSimpleOf"
+        @create-simple="onQuickCreateSimple"
+        @create-advanced="onQuickCreateAdvanced"
+        @open-providers="emit('openProviders')"
+      />
+    </div>
+
+    <!-- 概览条（spec §7.2；demo 形态：竖线分隔 + hint 右对齐；无卡隐藏） -->
     <div
       v-if="draft.length > 0"
       class="mt-3 flex flex-wrap items-center gap-3 rounded-md bg-surface-2 px-3 py-2"
       data-testid="model-route-overview"
     >
       <span class="text-[length:var(--text-xs)] text-neutral-mid">{{ t('settings.modelRoute.overviewModels', { n: draft.length }) }}</span>
+      <span class="h-3 w-px bg-border" aria-hidden="true" />
       <span class="text-[length:var(--text-xs)] text-neutral-mid">{{ t('settings.modelRoute.overviewEndpoints', { n: endpointTotal }) }}</span>
+      <span class="h-3 w-px bg-border" aria-hidden="true" />
       <span class="text-[length:var(--text-xs)] text-neutral-mid">{{ t('settings.modelRoute.overviewAdvanced', { n: advancedCount }) }}</span>
-      <span class="text-[length:var(--text-2xs)] text-neutral-dim">{{ t('settings.modelRoute.overviewHint') }}</span>
+      <span class="ml-auto text-[length:var(--text-2xs)] text-neutral-dim">{{ t('settings.modelRoute.overviewHint') }}</span>
     </div>
+
+    <!-- 说明条（spec §3：简单模式默认 + 7 档等级 + 无「自动」档） -->
+    <InlineNotice v-if="draft.length > 0" tone="success" :text="t('settings.modelRoute.noticeText')" class="mt-3" data-testid="model-route-notice" />
 
     <!-- 卡列表（直连卡 ∪ 路由卡，scopedModels 序交错） -->
     <div v-if="draft.length > 0" class="mt-3 flex flex-col gap-3">
@@ -77,7 +96,7 @@
           :total="draft.length"
           :now="resolvedNow"
           :new-session-available="newSessionRouteIds?.has(card.card.route.id) ?? false"
-          :focus="focus && focus.routeId === card.card.route.id ? focus : undefined"
+          :focus="focusOf(card.card.route.id)"
           :quota-of="quotaOf"
           :class="drag.cardClass(idx)"
           @op="applyEditorOp"
@@ -182,15 +201,15 @@
       <Button size="dense" data-testid="route-empty-goto-providers" @click="emit('openProviders')">
         {{ t('settings.modelRoute.goProviders') }}
       </Button>
-      <!-- 全部路由删完 = V8 零配置态：同一空状态承载「新建路由」引导（U9 创建侧） -->
-      <Button size="dense" data-testid="route-empty-create" @click="createRoute">
-        {{ t('settings.modelRoute.createRoute') }}
+      <!-- 空列表引导 → 同样收敛到快速创建（spec §3：不再保留独立默认值入口） -->
+      <Button size="dense" data-testid="route-empty-create" @click="openQuickCreate">
+        {{ t('settings.modelRoute.quickCreateTitle') }}
       </Button>
     </div>
 
     <!-- 未保存条挂载点（两页共享形态的一侧） -->
     <div data-testid="route-unsaved-bar-slot">
-      <RouteUnsavedBar :dirty="dirty" @save="save" @discard="discard" />
+      <RouteUnsavedBar :dirty="dirty" :disabled="disabled" @save="save" @discard="discard" />
     </div>
   </div>
 </template>
@@ -213,9 +232,11 @@ import type {
 } from '@taiji/shared'
 import { buildAggregationModelRef } from '@taiji/shared'
 import RouteCard from './RouteCard.vue'
+import RouteQuickCreatePanel from './RouteQuickCreatePanel.vue'
 import RouteUnsavedBar from './RouteUnsavedBar.vue'
 import { blankWindowTable, nowFromClock, weekdayBusinessWindow, type RouteNow } from './route-preview'
-import { DEFAULT_QUOTA_THRESHOLD_PERCENT, buildNewRouteDraft, moveCardToSlot, newMemberId, type RouteEditorOp } from './route-editor-ops'
+import { DEFAULT_QUOTA_THRESHOLD_PERCENT, moveCardToSlot, newMemberId, type RouteEditorOp } from './route-editor-ops'
+import { useQuickCreate } from './use-quick-create'
 import { useCardDnd } from './route-card-drag'
 
 /** 保存载荷（两权威目标态；写编排归上层——routes 逐条 saveRoute、scopedModels 全量走
@@ -257,6 +278,8 @@ const props = defineProps<{
    *  route-preview.ts evaluateCondition，与扩展 router.ts 同型）；缺省不传 = 额度
    *  数据未知（chip 以 fail-open + 区分呈现承载）。宿主 = SettingsModal（useQuotaStore 投影）。 */
   quotaOf?: (providerId: string) => number | undefined
+  /** 创建入口禁用（spec §4.7/§6.3：保存进行中/加载中禁用快速创建）。缺省 = 不禁用。 */
+  disabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -518,17 +541,40 @@ function opRouteAdd(op: OpOf<'route-add'>): void {
 
 // ── 卡级编排 ──
 
-/** 「新建路由」（U9 创建侧，页头与空状态两入口共用）：默认草稿交 applyEditorOp 唯一入口。 */
-function createRoute(): void {
-  applyEditorOp({
-    kind: 'route-add',
-    route: buildNewRouteDraft({
-      defaultName: t('settings.modelRoute.newRouteName'),
-      takenRouteIds: draft.value.flatMap((c) => (c.kind === 'route' ? [c.card.route.id] : [])),
-      providers: props.providers,
-    }),
-  })
+// ── 快速创建接线（spec §4：面板发意图 → 构建器 → route-add 唯一入口 → 本地 focus 定位新卡）──
+
+const quickCreateEl = ref<InstanceType<typeof RouteQuickCreatePanel> | null>(null)
+/** 快速创建落卡的本地定位（与 props.focus 同型；本卡命中时下发 RouteCard 复用展开+滚动+闪烁）。 */
+const localFocus = ref<RoutePageFocus | null>(null)
+
+function focusOf(routeId: string): RoutePageFocus | undefined {
+  // 父层 focus（引用 chip 深链）优先于本地快速创建定位——localFocus 无清除点，
+  // 反序会永久遮蔽父层定位（修剪 R3）
+  const active = props.focus ?? localFocus.value ?? null
+  return active && active.routeId === routeId ? active : undefined
 }
+
+/** 页头/空态「快速创建」：展开面板并滚动到视野（spec §3 收敛入口）。 */
+function openQuickCreate(): void {
+  quickCreateEl.value?.focusPanel()
+}
+
+/** 快速创建接线（use-quick-create composable：占用集/统计/防护/两入口创建）。 */
+const quick = useQuickCreate({
+  draftOf: () => draft.value,
+  viewCardsOf: () => props.view.cards,
+  providersOf: () => props.providers,
+  addRoute: (route) => applyEditorOp({ kind: 'route-add', route }),
+  focusRoute: (routeId, memberId) => {
+    localFocus.value = { routeId, memberId }
+  },
+})
+const usageOf = quick.usageOf
+const existingSimpleOf = quick.existingSimpleOf
+const onQuickCreateSimple = quick.onQuickCreateSimple
+const onQuickCreateAdvanced = quick.onQuickCreateAdvanced
+
+/** 「新建路由」旧入口退役（spec §3：创建收敛到快速创建，不再生成另一套默认值）。 */
 
 function moveCard(index: number, dir: 'up' | 'down'): void {
   const target = dir === 'up' ? index - 1 : index + 1

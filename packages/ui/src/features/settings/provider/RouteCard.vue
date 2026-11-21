@@ -40,11 +40,11 @@
       size="icon"
       class="size-7 rounded-sm p-0 text-neutral-dim hover:text-neutral-fg"
       :aria-expanded="expanded"
-      :aria-label="expanded ? t('settings.modelRoute.collapse') : t('settings.modelRoute.expand')"
+      :aria-label="toggleAriaLabel"
       data-testid="route-card-toggle"
       @click="expanded = !expanded"
     >
-      <ChevronDown class="size-4 transition-transform" :class="expanded ? 'rotate-180' : ''" />
+      <ChevronDown class="size-4 transition-transform" :class="toggleChevronClass" />
     </Button>
     <!-- 路由名称（行内编辑）：点击名称进入编辑态，Enter/失焦提交、Esc 取消；空值不改名。
          Esc 加 .stop：弹层 focus-scope 有 window 级 Escape 兜底（焦点落 body 即关弹层），
@@ -69,6 +69,8 @@
     >
       {{ card.route.name }}
     </span>
+      <!-- 路由 id（spec §5.1 卡头第 3 项：只读等宽小字 #route-id；demo #main-chat 同形） -->
+      <span class="font-mono text-[length:var(--text-3xs)] text-neutral-dim" data-testid="route-card-id">#{{ card.route.id }}</span>
       <!-- 新会话可用徽标（U7/D1③）：本应用运行期内新建、当前 pi 会话未注册，重开会话方可绑定 -->
       <span
         v-if="newSessionAvailable"
@@ -77,8 +79,16 @@
       >
         {{ t('settings.modelRoute.newSessionAvailable') }}
       </span>
-      <span class="rounded-sm bg-surface-2 px-1.5 py-0.5 text-[length:var(--text-3xs)] text-neutral-mid">
+      <span class="rounded-sm border border-border px-1.5 py-0.5 text-[length:var(--text-3xs)] text-neutral-mid">
         {{ t('settings.modelRoute.endpointsCount', { n: card.route.members.length }) }}
+      </span>
+      <!-- 待配置分流（spec §5.1/§4.6：高级模式且全部端点无条件 → 始终命中第 1 个，未分流） -->
+      <span
+        v-if="pendingSplit"
+        class="rounded-sm border border-warn px-1.5 py-0.5 text-[length:var(--text-3xs)] text-warn"
+        data-testid="route-card-pending-split"
+      >
+        {{ t('settings.modelRoute.pendingSplit') }}
       </span>
       <span
         v-if="!card.route.enabled"
@@ -97,12 +107,8 @@
         {{ nowChipText }}
       </span>
 
-      <span class="text-[length:var(--text-2xs)] text-neutral-mid" data-testid="route-card-mode-text">
-        {{ modeText }}
-      </span>
-      <span class="text-[length:var(--text-2xs)] text-neutral-dim">
-        {{ t('settings.modelRoute.levelsUnion') }}
-        <span class="font-mono">{{ levelsUnionText || '—' }}</span>
+      <span class="rounded-sm border border-border px-1.5 py-0.5 text-[length:var(--text-3xs)] text-neutral-mid" data-testid="route-card-levels-union">
+        {{ t('settings.modelRoute.levelsUnion') }} {{ levelsUnionDisplay }}
       </span>
 
       <!-- 工具区 -->
@@ -131,11 +137,13 @@
         >
           <ChevronDown class="size-3.5" />
         </Button>
-        <!-- 模式切换（D12：可随时切换，条件数据保留） -->
-        <div class="flex items-center gap-1" role="group" :aria-label="t('settings.modelRoute.modeToggleLabel')">
+        <!-- 模式分段（demo 形态：joined segmented，选中段填充；D12：可随时切换，条件数据保留） -->
+        <div class="flex overflow-hidden rounded-md border border-border" role="group" :aria-label="t('settings.modelRoute.modeToggleLabel')">
           <Button
-            variant="secondary"
+            variant="ghost"
             size="dense"
+            class="rounded-none"
+            :class="modeBtnClass('simple')"
             :aria-pressed="card.route.mode === 'simple'"
             data-testid="route-card-mode-simple"
             @click="setMode('simple')"
@@ -143,8 +151,10 @@
             {{ t('settings.modelRoute.modeSimple') }}
           </Button>
           <Button
-            variant="secondary"
+            variant="ghost"
             size="dense"
+            class="rounded-none"
+            :class="modeBtnClass('advanced')"
             :aria-pressed="card.route.mode === 'advanced'"
             data-testid="route-card-mode-advanced"
             @click="setMode('advanced')"
@@ -158,12 +168,18 @@
           data-testid="route-card-enabled"
           @update:model-value="setEnabled"
         />
-        <Switch
-          :model-value="card.scoped"
-          :aria-label="t('settings.modelRoute.scopedToggle')"
+        <Button
+          variant="secondary"
+          size="dense"
+          class="gap-1"
+          :aria-pressed="card.scoped"
+          :class="scopedBtnClass"
           data-testid="route-scoped-toggle"
-          @update:model-value="emit('toggleScoped')"
-        />
+          @click="emit('toggleScoped')"
+        >
+          <Check v-if="card.scoped" class="size-3" />
+          {{ t('settings.modelRoute.scopedToggle') }}
+        </Button>
         <!-- 删除路由（U9 删除侧，GL5/V14）：确认后 route-delete 指令上抛，实际删除走编排层 -->
         <Button
           variant="ghost"
@@ -191,24 +207,8 @@
       @confirm="confirmDelete"
     />
 
-    <!-- 收起态端点 pill 摘要（spec §7.3；点击 pill 展开该卡） -->
-    <div v-if="!expanded" class="flex flex-wrap items-center gap-1.5 border-t border-border px-4 py-2">
-      <Button
-        v-for="(member, idx) in card.route.members"
-        :key="member.id"
-        variant="secondary"
-        size="dense"
-        class="gap-1 rounded-full"
-        data-testid="route-card-pill"
-        @click="expanded = true"
-      >
-        <span class="size-1.5 rounded-full" :class="dotColorClass(idx)" />
-        {{ idx + 1 }}. {{ providerNameOf(member) }}
-      </Button>
-      <span v-if="card.route.members.length === 0" class="text-[length:var(--text-2xs)] text-neutral-dim">
-        {{ t('settings.modelRoute.noEndpoints') }}
-      </span>
-    </div>
+    <!-- 收起态端点 pill 摘要（spec §7.3；点击 pill 展开该卡；拆出组件治理模板圈复杂度） -->
+    <RouteCollapsedPills v-if="!expanded" :route="card.route" :providers="providers" @expand="expanded = true" />
 
     <!-- 展开体 -->
     <div v-if="expanded" class="border-t border-border px-4 pb-4 pt-3">
@@ -238,8 +238,8 @@
           :total="card.route.members.length"
           :providers="providers"
           :advanced="card.route.mode === 'advanced'"
+          :now="now"
           @op="emit('op', $event)"
-          @paint="scrollToTimeGrid"
         />
       </div>
       <div v-else class="mt-3 text-[length:var(--text-2xs)] text-neutral-dim">
@@ -250,7 +250,7 @@
       <div class="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
         <Select v-model="addProviderId" :disabled="candidates.length === 0">
           <SelectTrigger class="h-8 w-52" data-testid="add-endpoint-select" :aria-label="t('settings.modelRoute.addEndpoint')">
-            <SelectValue :placeholder="candidates.length === 0 ? t('settings.modelRoute.noCandidates') : ''" />
+            <SelectValue :placeholder="addEndpointPlaceholder" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem v-for="id in candidates" :key="id" :value="id">
@@ -269,18 +269,11 @@
         <span class="text-[length:var(--text-2xs)] text-neutral-dim">{{ t('settings.modelRoute.addEndpointHint') }}</span>
       </div>
 
-      <!-- 时间轴与特殊日期（仅高级模式，D12；条件数据保留切换恢复） -->
-      <template v-if="card.route.mode === 'advanced'">
-        <div ref="timeGridWrap">
-          <RouteTimeGrid
-            :route="card.route"
-            :providers="providers"
-            :now="now"
-            @op="emit('op', $event)"
-          />
-        </div>
-        <RouteSpecialDates :route="card.route" @op="emit('op', $event)" />
-      </template>
+      <!-- 特殊日期（仅高级模式，D12；demo 卡底 chip 行同形） -->
+      <RouteSpecialDates v-if="card.route.mode === 'advanced'" :route="card.route" @op="emit('op', $event)" />
+
+      <!-- 兜底条（spec §7.7 demo 卡底形态：无条件兜底 → 模型名；时间轴已迁移端点行内网格） -->
+      <RouteFallbackBar v-if="fallbackBarVisible" :route="card.route" :providers="providers" />
     </div>
   </div>
 </template>
@@ -288,15 +281,20 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ChevronDown, ChevronUp, GripVertical, Trash2 } from '@lucide/vue'
+import { Check, ChevronDown, ChevronUp, GripVertical, Trash2 } from '@lucide/vue'
 import { Button, ConfirmDialog, Input, Select, SelectTrigger, SelectValue, SelectContent, SelectItem, Switch } from '@taiji/ui'
 import type { AggregationMember, AggregationRoute, AggregationRouteMode, ProviderInfo } from '@taiji/shared'
-import { candidateProviderIds, evaluateRouteAt, levelsUnion } from './route-preview'
-import { dotColorClass } from './route-styles'
+import {
+  candidateProviderIds,
+  evaluateRouteAt,
+  levelsUnion,
+} from './route-preview'
+
 import type { RouteEditorOp } from './route-editor-ops'
 import type { RoutePageFocus } from './ModelRoutePage.vue'
 import RouteEndpointRow from './RouteEndpointRow.vue'
-import RouteTimeGrid from './RouteTimeGrid.vue'
+import RouteCollapsedPills from './RouteCollapsedPills.vue'
+import RouteFallbackBar from './RouteFallbackBar.vue'
 import RouteSpecialDates from './RouteSpecialDates.vue'
 import { useSettingsToast } from '../injection-keys'
 
@@ -347,8 +345,31 @@ const { t } = useI18n()
 const toast = useSettingsToast()
 
 const expanded = ref(false)
-/** 时间轴包裹层（端点行「涂时段」平滑滚动定位目标，spec §9.5）。 */
-const timeGridWrap = ref<HTMLElement | null>(null)
+
+// ── 模板下沉的展示判定（单一语义化值，模板零组合条件） ──
+
+const toggleAriaLabel = computed(() =>
+  expanded.value ? t('settings.modelRoute.collapse') : t('settings.modelRoute.expand'),
+)
+const toggleChevronClass = computed(() => (expanded.value ? 'rotate-180' : ''))
+
+/** 模式分段按钮样式（simple/advanced 选中段填充，D12 可随时切换）。 */
+function modeBtnClass(mode: AggregationRouteMode): string {
+  return props.card.route.mode === mode ? 'bg-surface-2 font-medium text-neutral-fg' : 'text-neutral-mid'
+}
+
+const scopedBtnClass = computed(() =>
+  props.card.scoped ? 'border-success text-success' : 'text-neutral-dim',
+)
+
+const addEndpointPlaceholder = computed(() =>
+  candidates.value.length === 0 ? t('settings.modelRoute.noCandidates') : '',
+)
+
+/** 兜底条可见（spec §7.7：高级模式且有端点才展示）。 */
+const fallbackBarVisible = computed(
+  () => props.card.route.mode === 'advanced' && props.card.route.members.length > 0,
+)
 const addProviderId = ref('')
 /** 删除确认弹层开关（U9 删除侧；确认即上抛 route-delete 指令，无草稿就地变更）。 */
 const deleteConfirmOpen = ref(false)
@@ -413,13 +434,16 @@ function confirmDelete(): void {
 
 const candidates = computed(() => candidateProviderIds(props.card.route, props.providers))
 
-const levelsUnionText = computed(() => levelsUnion(props.card.route).join(' / '))
-
-const modeText = computed(() =>
-  props.card.route.mode === 'advanced'
-    ? t('settings.modelRoute.modeAdvanced')
-    : t('settings.modelRoute.modeSimple'),
+/** 待配置分流（spec：高级模式 ≥2 端点且全部无条件；单端点无分流语义不标）。 */
+const pendingSplit = computed(
+  () =>
+    props.card.route.mode === 'advanced' &&
+    props.card.route.members.length > 1 &&
+    props.card.route.members.every((m) => m.type === 'none'),
 )
+
+const levelsUnionText = computed(() => levelsUnion(props.card.route).join(' / '))
+const levelsUnionDisplay = computed(() => levelsUnionText.value || '—')
 
 // ── 「此刻」chip（evaluateRouteAt 真实时钟求值，D14 权威展示） ──
 
@@ -495,11 +519,6 @@ function setMode(mode: AggregationRouteMode): void {
 
 function setEnabled(value: boolean): void {
   emit('op', { kind: 'route-patch', routeId: props.card.route.id, patch: { enabled: value } })
-}
-
-/** 「涂时段」定位：平滑滚动到时间轴并居中（spec §9.5）。 */
-function scrollToTimeGrid(): void {
-  timeGridWrap.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
 
 /**

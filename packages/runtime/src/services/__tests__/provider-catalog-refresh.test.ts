@@ -90,6 +90,30 @@ describe('getCatalogOverlayModels 读侧', () => {
 })
 
 describe('refreshProviderCatalogs 刷侧', () => {
+  it('taiji 附加段 provider（taijiExtra 标记）→ 不发远程请求、不落否定信号（G-extra 守卫）', async () => {
+    writeOwnCache({ opendesign: { models: [{ id: 'deepseek-v4.1-flash' }], checkedAt: 1, lastModified: GENERATED_AT + 1000 } })
+    const mod = await loadFresh()
+    const fn = mockFetch(404, {})
+    const result = await mod.refreshProviderCatalogs(['opendesign', 'zai'])
+    // 附加段被剔除：fetch 只收到 zai
+    const calledUrls = fn.mock.calls.map(c => String((c as unknown[])[0]))
+    expect(calledUrls.every(u => u.includes('zai'))).toBe(true)
+    expect(result.refreshed).toEqual(['zai'])
+    // 附加段既有缓存条目原样保留（不被 404 否定信号覆盖）
+    expect(mod.getCatalogOverlayModels('opendesign').map(m => m.id)).toEqual(['deepseek-v4.1-flash'])
+  })
+
+  it('isTaijiExtraProvider / getTaijiExtraTemplateModels：附加段命中、pi catalog id 不命中', async () => {
+    const mod = await loadFresh()
+    expect(mod.isTaijiExtraProvider('opendesign')).toBe(true)
+    expect(mod.isTaijiExtraProvider('zai')).toBe(false)
+    expect(mod.isTaijiExtraProvider('not-a-provider')).toBe(false)
+    const models = mod.getTaijiExtraTemplateModels('opendesign')
+    expect(models.length).toBeGreaterThan(0)
+    expect(models.every(m => typeof m.id === 'string' && m.id !== '')).toBe(true)
+    expect(mod.getTaijiExtraTemplateModels('zai')).toEqual([])
+  })
+
   it('200 id-keyed map → 落盘 + 读侧可见（provider/baseUrl 等字段透传）', async () => {
     const mod = await loadFresh()
     mockFetch(200, { 'glm-5.3': { id: 'glm-5.3', name: 'GLM-5.3', contextWindow: 200000 } }, {

@@ -107,6 +107,11 @@ export const ENV_WHITELIST_PREFIXES: readonly string[] = [
   // 是文件型自定义 ADC 路径（spec §7 点名，漏掉则自定义路径检测不到）。
   'GOOGLE_APPLICATION_CREDENTIALS', 'AWS_PROFILE',
   'GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_LOCATION', 'GCLOUD_PROJECT', 'CLOUDSDK_REGION',
+  // taiji 附加段 provider 的环境变量凭据（G-extra 改造）：快照声明 envVars 的附加段
+  // provider（现仅 OPENDESIGN_API_KEY）在 auth.json 存 `${VAR}` 模板，pi 请求期从进程
+  // 环境解析——漏登记则 pi 子进程收不到值、模板展开失败（凭据缺失报错）。与 ambient
+  // 云凭证同款具体名最小暴露面；新增附加段 provider 的 envVars 时同批追加。
+  'OPENDESIGN_API_KEY',
 ]
 
 /**

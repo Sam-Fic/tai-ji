@@ -7,8 +7,8 @@
  * ② 空状态：无供应商时 model-route-empty + 概览条隐藏（spec §7.11）
  * ③ 孤儿引用提示条 + 隔离呈报（U1 读取标记的编辑器承载）
  * ④ 未保存条：初始隐藏 → 编辑标脏 → save/discard emit 载荷（spec §9.1 两页共享形态）
- * ⑤ 时间轴：role=gridcell + aria-label 完整（星期/时间范围/归属渠道或兜底，spec §11.4）
- * ⑥ 穷举对照表内容渲染：owner 归属 / fb 兜底 / 截断警告与「不会命中」标记（D14）
+ * ⑤ 端点行内时间轴（spec §12 迁移）：role=gridcell + aria-label 完整（星期/时间范围/归属渠道）+ 拖涂取反与快捷涂抹
+ * ⑥ 行内网格覆盖语义：覆盖/无覆盖对照 + 截断与「不会命中」标记 + 卡底兜底条（D14）
  * ⑦ 此刻 chip 求值展示 + 无命中态（D14 权威求值展示）
  * ⑧ simple/advanced 模式切换：条件区显隐与「无条件 · 按顺序兜底」（D12）
  * ⑨ 端点行：排序按钮禁用边界 + 最后端点删除保护（spec §7.8）
@@ -189,19 +189,20 @@ describe('未保存状态条（spec §9.1，两页共享组件）', () => {
   })
 })
 
-describe('时间轴与穷举对照表（A28：role=gridcell / aria-label 完整 / 内容渲染）', () => {
-  async function expandedPage(members: AggregationRoute['members']): Promise<VueWrapper> {
+describe('端点行内时间轴（spec §12 行内网格迁移：编辑时段展开 7×48，单端点可路由语义）', () => {
+  /** 展开卡并打开第一个窗型端点的行内网格。 */
+  async function gridPage(members: AggregationRoute['members']): Promise<VueWrapper> {
     const w = mountPage([cardOf(routeOf({ members }))])
     await w.find('[data-testid="route-card-toggle"]').trigger('click')
+    await w.find('[data-testid="endpoint-edit-time"]').trigger('click')
     return w
   }
 
-  it('时间轴格渲染 role=gridcell 且 aria-label 完整（星期+时间范围+归属）', async () => {
+  it('编辑时段展开 7×48 行内网格：role=gridcell + aria 含星期/时间范围/归属渠道', async () => {
     const win = blankWindowTable()
     win[2][29] = true // 周三 14:30 窗内
-    const w = await expandedPage([
+    const w = await gridPage([
       { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'window', window: win },
-      { id: 'b', providerId: 'opencode-go', modelId: 'glm-5-3', type: 'none' },
     ])
     const cells = w.findAll('[data-testid="route-time-cell"]')
     expect(cells.length).toBe(7 * 48)
@@ -211,76 +212,88 @@ describe('时间轴与穷举对照表（A28：role=gridcell / aria-label 完整 
     const label = owned!.attributes('aria-label') ?? ''
     expect(label).toContain('14:30') // 格起点半点
     expect(label).toContain('zhipu') // 归属渠道
+    // 覆盖格 = 该端点可路由（demo 绿格语义）：style 落 success 底
+    expect(owned!.attributes('style')).toContain('success')
   })
 
-  it('兜底格 aria-label 标注兜底渠道（fb 语义）', async () => {
-    const w = await expandedPage([
-      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'window', window: blankWindowTable() },
-      { id: 'b', providerId: 'opencode-go', modelId: 'glm-5-3', type: 'none' },
-    ])
-    const cell = w.find('[data-testid="route-time-cell"][data-day="2"][data-slot="29"]')
-    expect(cell.attributes('aria-label')).toContain('opencode-go')
-  })
-
-  it('仅额度端点路由拖拽网格：阻挡文案走 paintNoWindowEndpoint 独立键（与快捷涂抹 paintSelectFirst 分场景）', async () => {
-    const warnings: string[] = []
-    const members: AggregationRoute['members'] = [
-      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'quota', quota: { thresholdPercent: 20 } },
-    ]
-    const w = mount(ModelRoutePage, {
-      props: {
-        view: viewOf([cardOf(routeOf({ members }))]),
-        providers: [prov({ id: 'zhipu' })],
-        scopedModels: [`${AGGREGATION_PROVIDER_ID}/glm-5-3`],
-        now: NOW,
-      },
-      global: {
-        provide: {
-          [SETTINGS_TOAST_KEY as symbol]: {
-            error: () => {},
-            info: () => {},
-            warning: (m: string) => warnings.push(m),
-          },
-        },
-      },
-      attachTo: document.body,
-    })
-    await w.find('[data-testid="route-card-toggle"]').trigger('click')
-    // 路由无时间窗端点（仅额度端点，图例无端点可选）→ 拖拽网格被 startPaint 拦截；
-    // i18n mock t() 返回 key 本身：断言独立键而非快捷涂抹的 paintSelectFirst
-    await w.find('[data-testid="route-time-cell"][data-day="2"][data-slot="29"]').trigger('pointerdown')
-    expect(warnings).toContain('settings.modelRoute.paintNoWindowEndpoint')
-    expect(warnings).not.toContain('settings.modelRoute.paintSelectFirst')
-    w.unmount()
-  })
-
-  it('截断警告渲染 + 被截断端点「不会命中」标记（D14 / V12 半边）', async () => {
+  it('无覆盖格显 cellNoCover 语义（aria + surface 底），窗内/窗外对照', async () => {
     const win = blankWindowTable()
     win[2][29] = true
-    const w = await expandedPage([
-      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' },
-      { id: 'b', providerId: 'opencode-go', modelId: 'glm-5-3', type: 'window', window: win },
+    const w = await gridPage([
+      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'window', window: win },
     ])
-    expect(w.find('[data-testid="route-time-warning"]').exists()).toBe(true)
-    const row = w.find('[data-testid="route-endpoint-row"][data-index="1"]')
-    expect(row.text()).toContain('neverHit')
-  })
-
-  it('兜底条两态：有兜底渠道名 / 无兜底提示', async () => {
-    const withFb = await expandedPage([
-      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' },
-    ])
-    expect(withFb.find('[data-testid="route-time-fallback-bar"]').text()).toContain('zhipu')
-
-    const allWindow = await expandedPage([
-      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'window', window: weekdayBusinessWindow() },
-    ])
-    expect(allWindow.find('[data-testid="route-time-fallback-bar"]').text()).toContain('noFallback')
+    const empty = w.find('[data-testid="route-time-cell"][data-day="0"][data-slot="0"]')
+    expect(empty.attributes('aria-label')).toContain('cellNoCover')
+    expect(empty.classes()).toContain('bg-surface-2')
   })
 
   it('此刻格高亮（data-now 标记在周三 14:30 坐标）', async () => {
-    const w = await expandedPage([{ id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' }])
+    const w = await gridPage([
+      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'window', window: blankWindowTable() },
+    ])
     expect(w.find('[data-testid="route-time-cell"][data-day="2"][data-slot="29"][data-now]').exists()).toBe(true)
+  })
+
+  it('拖涂首格取反：窗内格 pointerdown → 涂擦（endpoint-window-set value=false 落草稿）', async () => {
+    const win = blankWindowTable()
+    win[2][29] = true
+    const w = await gridPage([
+      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'window', window: win },
+    ])
+    await w.find('[data-testid="route-time-cell"][data-day="2"][data-slot="29"]').trigger('pointerdown')
+    w.findComponent(RouteUnsavedBar).vm.$emit('save')
+    await w.vm.$nextTick()
+    const payload = (w.findComponent(ModelRoutePage).emitted('save')![0]![0]) as { routes: AggregationRoute[] }
+    expect(payload.routes[0]!.members[0]!.window![2]![29]).toBe(false)
+  })
+
+  it('快捷涂抹「清空时段」作用于本端点（endpoint-window-replace 全空表）', async () => {
+    const w = await gridPage([
+      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'window', window: weekdayBusinessWindow() },
+    ])
+    await w.find('[data-testid="route-time-preset-clear"]').trigger('click')
+    w.findComponent(RouteUnsavedBar).vm.$emit('save')
+    await w.vm.$nextTick()
+    const payload = (w.findComponent(ModelRoutePage).emitted('save')![0]![0]) as { routes: AggregationRoute[] }
+    const table = payload.routes[0]!.members[0]!.window!
+    expect(table.flat().every((v) => v === false)).toBe(true)
+  })
+
+  it('非窗型端点无「编辑时段」入口（仅额度端点不出行内网格；旧阻挡文案场景随迁移消亡）', async () => {
+    const w = mountPage([
+      cardOf(routeOf({ members: [{ id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'quota', quota: { thresholdPercent: 20 } }] })),
+    ])
+    await w.find('[data-testid="route-card-toggle"]').trigger('click')
+    expect(w.find('[data-testid="endpoint-edit-time"]').exists()).toBe(false)
+    expect(w.find('[data-testid="route-time-cell"]').exists()).toBe(false)
+  })
+
+  it('截断/不命中标记在端点行（迁移后警告由行内 chip 承载）', async () => {
+    const win = blankWindowTable()
+    win[2][29] = true
+    const w = await expandedCard([
+      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' },
+      { id: 'b', providerId: 'opencode-go', modelId: 'glm-5-3', type: 'window', window: win },
+    ])
+    expect(w.find('[data-testid="route-endpoint-row"][data-index="0"] [data-testid="endpoint-truncates"]').exists()).toBe(true)
+    expect(w.find('[data-testid="route-endpoint-row"][data-index="1"] [data-testid="endpoint-never-hit"]').exists()).toBe(true)
+  })
+
+  /** 展开卡（不开网格）。 */
+  async function expandedCard(members: AggregationRoute['members']): Promise<VueWrapper> {
+    const w = mountPage([cardOf(routeOf({ members }))])
+    await w.find('[data-testid="route-card-toggle"]').trigger('click')
+    return w
+  }
+
+  it('兜底条两态：有兜底渠道名 / 无兜底提示（卡底承载，demo 同形）', async () => {
+    const withFb = await expandedCard([{ id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' }])
+    expect(withFb.find('[data-testid="route-time-fallback-bar"]').text()).toContain('zhipu')
+
+    const allWindow = await expandedCard([
+      { id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'window', window: weekdayBusinessWindow() },
+    ])
+    expect(allWindow.find('[data-testid="route-time-fallback-bar"]').text()).toContain('noFallback')
   })
 })
 
@@ -313,7 +326,7 @@ describe('simple/advanced 模式切换（D12）', () => {
       cardOf(routeOf({ mode: 'simple', members: [{ id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'window', window: win }] })),
     ])
     await w.find('[data-testid="route-card-toggle"]').trigger('click')
-    expect(w.find('[data-testid="route-time-grid"]').exists()).toBe(false)
+    expect(w.find('[data-testid="endpoint-edit-time"]').exists()).toBe(false)
     expect(w.find('[data-testid="route-special-dates"]').exists()).toBe(false)
     expect(w.find('[data-testid="route-endpoint-row"]').text()).toContain('simpleFallback')
   })
@@ -329,8 +342,9 @@ describe('simple/advanced 模式切换（D12）', () => {
     await modeBtn.trigger('click')
     const emitted = w.findComponent(ModelRoutePage).emitted('change')
     expect(emitted).toBeTruthy()
-    // 切回 advanced 后时间轴恢复显示（条件数据未清空）
-    expect(w.find('[data-testid="route-time-grid"]').exists()).toBe(true)
+    // 切回 advanced 后条件编辑入口恢复（编辑时段/条件分段在位 = 条件数据未清空）
+    expect(w.find('[data-testid="endpoint-edit-time"]').exists()).toBe(true)
+    expect(w.find('[data-testid="endpoint-condition-type"]').exists()).toBe(true)
   })
 })
 
@@ -519,47 +533,116 @@ describe('渠道直连卡（D10/U9：无 routes 的白名单模型 = 默认单�
   })
 })
 
-describe('新建路由入口（U9 创建侧，GL5/V15）', () => {
-  it('页头「新建路由」按钮生成默认草稿卡：追加卡尾 + 默认名 + 预填首个可用渠道端点 + 标脏', async () => {
-    const w = mountPage([cardOf(routeOf({ id: 'r1' }))])
-    await w.find('[data-testid="route-create-btn"]').trigger('click')
+describe('快速创建入口（spec §4：渠道展开建简单路由 / 筛选多选建高级路由）', () => {
+  // jsdom 无 scrollIntoView（focus 定位与面板聚焦调用），测试级补桩
+  beforeAll(() => {
+    Element.prototype.scrollIntoView = () => {}
+  })
+
+  /** 展开第一个渠道的模型列表（点击渠道行）。 */
+  async function expandFirstProvider(w: VueWrapper): Promise<void> {
+    await w.find('[data-testid="route-quick-provider-row"]').trigger('click')
+  }
+
+  it('单模型「建简单路由」：追加卡尾 + mode=simple + 单端点无条件 + levels 全支持档 + 标脏', async () => {
+    const w = mountPage([cardOf(routeOf({ id: 'r1' }))], [
+      prov({ id: 'zhipu', name: '智谱', models: [{ id: 'glm-4-6', name: 'GLM-4.6', supportedLevels: ['off', 'low', 'high'] }] }),
+      prov({ id: 'moonshot' }),
+    ])
+    await expandFirstProvider(w)
+    await w.find('[data-testid="route-quick-create-simple"]').trigger('click')
     const cards = w.findAll('[data-testid="route-card"]')
     expect(cards.length).toBe(2)
-    const created = cards[1]!
-    expect(created.find('[data-testid="route-card-name"]').text()).toBe('settings.modelRoute.newRouteName')
-    // 预填端点可见（保存校验要求至少一个端点；候选下拉按 route.modelId 过滤，预填真实模型才可继续添加）
-    expect(created.text()).toContain('zhipu')
     expect(w.findComponent(ModelRoutePage).emitted('change')).toBeTruthy()
-    // 保存载荷含新路由（端点在位）
     w.findComponent(RouteUnsavedBar).vm.$emit('save')
     await w.vm.$nextTick()
     const payload = (w.findComponent(ModelRoutePage).emitted('save')![0]![0]) as { routes: AggregationRoute[] }
-    const createdRoute = payload.routes[1]!
-    expect(createdRoute.name).toBe('settings.modelRoute.newRouteName')
-    expect(createdRoute.members).toHaveLength(1)
-    expect(createdRoute.members[0]!.providerId).toBe('zhipu')
-    expect(createdRoute.members[0]!.type).toBe('none')
+    const created = payload.routes[1]!
+    expect(created.mode).toBe('simple')
+    expect(created.enabled).toBe(true)
+    expect(created.name).toBe('GLM-4.6')
+    expect(created.members).toHaveLength(1)
+    expect(created.members[0]!.providerId).toBe('zhipu')
+    expect(created.members[0]!.modelId).toBe('glm-4-6')
+    expect(created.members[0]!.type).toBe('none')
+    // AC-Q12：levels 初始化 = 模型全部支持档位
+    expect(Object.keys(created.members[0]!.levels ?? {})).toEqual(['off', 'low', 'high'])
   })
 
-  it('连点两次生成两张草稿卡：id 唯一性后缀不冲突', async () => {
-    const w = mountPage([])
-    await w.find('[data-testid="route-empty-create"]').trigger('click')
-    await w.find('[data-testid="route-create-btn"]').trigger('click')
+  it('重复建同模型简单路由被事实态拦截（AC-Q13）：按钮禁用显示已建', async () => {
+    const w = mountPage([cardOf(routeOf({ id: 'r1' }))])
+    await expandFirstProvider(w)
+    await w.find('[data-testid="route-quick-create-simple"]').trigger('click')
+    expect(w.findAll('[data-testid="route-card"]').length).toBe(2)
+    expect(w.find('[data-testid="route-quick-simple-exists"]').exists()).toBe(true)
+    expect(w.find('[data-testid="route-quick-create-simple"]').exists()).toBe(false)
+    expect(w.findAll('[data-testid="route-card"]').length).toBe(2)
+  })
+
+  it('筛选后勾选两模型 → 创建高级路由：勾选序多端点全无条件 + 待配置分流徽标 + 选择清空', async () => {
+    const w = mountPage(
+      [cardOf(routeOf({ id: 'r1' }))],
+      [
+        prov({ id: 'zhipu', name: '智谱', models: [{ id: 'glm-4-6', name: 'GLM-4.6' }, { id: 'glm-4-5-air', name: 'GLM-4.5 Air' }] }),
+        prov({ id: 'moonshot', models: [{ id: 'kimi-k2', name: 'Kimi K2' }] }),
+      ],
+    )
+    await w.find('[data-testid="route-quick-filter"]').setValue('glm')
+    // 筛选分组只显匹配渠道（moonshot 无 glm 模型不入组）
+    expect(w.findAll('[data-testid="route-quick-provider-row"]').length).toBe(1)
+    await expandFirstProvider(w)
+    await w.find('[data-testid="route-quick-pick-zhipu-glm-4-6"]').trigger('click')
+    await w.find('[data-testid="route-quick-pick-zhipu-glm-4-5-air"]').trigger('click')
+    // 保存摘要与计数
+    expect(w.find('[data-testid="route-quick-selection-summary"]').text()).toContain('settings.modelRoute.quickSelectedN')
+    const advBtn = w.find('[data-testid="route-quick-create-advanced"]')
+    expect((advBtn.element as HTMLButtonElement).disabled).toBe(false)
+    await advBtn.trigger('click')
+    const cards = w.findAll('[data-testid="route-card"]')
+    expect(cards.length).toBe(2)
+    // AC-Q7：待配置分流徽标
+    expect(cards[1]!.find('[data-testid="route-card-pending-split"]').exists()).toBe(true)
+    // 选择清空（创建后）
+    expect(w.find('[data-testid="route-quick-selection-summary"]').text()).toContain('settings.modelRoute.quickSelectHint')
     w.findComponent(RouteUnsavedBar).vm.$emit('save')
     await w.vm.$nextTick()
     const payload = (w.findComponent(ModelRoutePage).emitted('save')![0]![0]) as { routes: AggregationRoute[] }
-    const ids = payload.routes.map((r) => r.id)
-    expect(new Set(ids).size).toBe(2)
-    expect(ids[1]).toBe(`${ids[0]}-2`)
+    const created = payload.routes[1]!
+    expect(created.mode).toBe('advanced')
+    expect(created.members.map((m) => m.modelId)).toEqual(['glm-4-6', 'glm-4-5-air'])
+    expect(created.members.every((m) => m.type === 'none')).toBe(true)
   })
 
-  it('空状态「新建路由」= V8 零配置态引导：创建后空态消失、卡片与概览条出现', async () => {
-    const w = mountPage([])
+  it('已选 <2 时「创建高级路由」禁用；筛选无结果空态；选择跨筛选保留', async () => {
+    const w = mountPage(
+      [],
+      [
+        prov({ id: 'zhipu', models: [{ id: 'glm-4-6', name: 'GLM-4.6' }] }),
+        prov({ id: 'moonshot', models: [{ id: 'kimi-k2', name: 'Kimi K2' }] }),
+      ],
+    )
+    const advBtn = w.find('[data-testid="route-quick-create-advanced"]')
+    expect((advBtn.element as HTMLButtonElement).disabled).toBe(true)
+    await w.find('[data-testid="route-quick-filter"]').setValue('nomatch')
+    expect(w.find('[data-testid="route-quick-filter-empty"]').exists()).toBe(true)
+    // 换词后勾选，再清词：选择保留（spec §4.4）
+    await w.find('[data-testid="route-quick-filter"]').setValue('kimi')
+    await expandFirstProvider(w)
+    await w.find('[data-testid="route-quick-pick-moonshot-kimi-k2"]').trigger('click')
+    await w.find('[data-testid="route-quick-filter-clear"]').trigger('click')
+    expect(w.find('[data-testid="route-quick-selection-summary"]').text()).toContain('settings.modelRoute.quickSelectedN')
+    expect((advBtn.element as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('空状态「快速创建」按钮只展开聚焦面板，不生成另一套默认值卡片', async () => {
+    const w = mountPage(
+      [],
+      [prov({ id: 'zhipu', models: [{ id: 'glm-4-6', name: 'GLM-4.6' }] })],
+    )
     expect(w.find('[data-testid="model-route-empty"]').exists()).toBe(true)
     await w.find('[data-testid="route-empty-create"]').trigger('click')
-    expect(w.find('[data-testid="model-route-empty"]').exists()).toBe(false)
-    expect(w.findAll('[data-testid="route-card"]').length).toBe(1)
-    expect(w.find('[data-testid="model-route-overview"]').exists()).toBe(true)
+    expect(w.findAll('[data-testid="route-card"]').length).toBe(0)
+    expect(w.find('[data-testid="route-quick-create"]').exists()).toBe(true)
   })
 })
 
@@ -860,5 +943,81 @@ describe('卡片拖拽排序（drag-and-drop reorder）', () => {
     await w.vm.$nextTick()
     const payload = (w.findComponent(ModelRoutePage).emitted('save')![0]![0]) as { scopedRefs: string[] }
     expect(payload.scopedRefs).toEqual([`${AGGREGATION_PROVIDER_ID}/r1`, 'zhipu/glm-5-3'])
+  })
+})
+
+// ── 修剪回归（tree-plant prune：fixed 发现的探针升格单测） ────────────────────────
+
+describe('修剪回归：保存中禁用 / 已保存简单路由逃生 / 模型切换 levels 过滤', () => {
+  it('disabled prop → 未保存条保存/放弃按钮禁用（保存/删除编排窗口防并发，修剪 R2/R1）', async () => {
+    const w = mountPage([cardOf(routeOf({ id: 'r1' }))])
+    // 制造 dirty 使未保存条可见（v-show）
+    await w.find('[data-testid="route-scoped-toggle"]').trigger('click')
+    await w.setProps({ disabled: true })
+    expect((w.find('[data-testid="unsaved-save"]').element as HTMLButtonElement).disabled).toBe(true)
+    expect((w.find('[data-testid="unsaved-discard"]').element as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('已保存的同模型简单路由不拦「建简单路由」（G8 逃生路径：保存后可再建，修剪 F3）', async () => {
+    const w = mountPage(
+      [cardOf(routeOf({ id: 'r1', mode: 'simple', members: [{ id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' }] }))],
+    )
+    await w.find('[data-testid="route-quick-provider-row"]').trigger('click')
+    // 未保存同型草稿不存在 → 创建按钮在场（非「已建简单路由」禁用态）
+    expect(w.find('[data-testid="route-quick-create-simple"]').exists()).toBe(true)
+    expect(w.find('[data-testid="route-quick-simple-exists"]').exists()).toBe(false)
+  })
+
+  it('端点换模型：已声明档位按新模型 supportedLevels 过滤（修剪 F2 半更新死锁半边）', async () => {
+    const providers = [
+      prov({
+        id: 'zhipu',
+        models: [
+          { id: 'glm-4-6', name: 'GLM-4.6', supportedLevels: ['off', 'low'] },
+          { id: 'glm-4-air', name: 'glm-4-air', supportedLevels: ['off', 'high'] },
+        ],
+      }),
+      prov({ id: 'moonshot', models: [{ id: 'kimi-k2', name: 'Kimi K2' }] }),
+    ]
+    const route = routeOf({
+      id: 'r1',
+      members: [
+        { id: 'a', providerId: 'zhipu', modelId: 'glm-4-6', type: 'none', levels: { off: 'off', low: 'low' } },
+      ],
+    })
+    const w = mountPage([cardOf(route)], providers)
+    await w.find('[data-testid="route-card-toggle"]').trigger('click')
+    await pickSelectOption(w.find('[data-testid="endpoint-model-select"]').element as HTMLElement, 'glm-4-air')
+    await flushPromises()
+    w.findComponent(RouteUnsavedBar).vm.$emit('save')
+    await w.vm.$nextTick()
+    const payload = (w.findComponent(ModelRoutePage).emitted('save')![0]![0]) as { routes: AggregationRoute[] }
+    // low 不在新模型支持集 → 过滤掉；off 保留
+    expect(payload.routes[0]!.members[0]!.levels).toEqual({ off: 'off' })
+  })
+
+  it('已声明但新模型不支持的档位仍可点取消（不与 disabled 死锁，修剪 F2）', async () => {
+    const providers = [
+      prov({ id: 'zhipu', models: [{ id: 'glm-4-6', name: 'GLM-4.6', supportedLevels: ['off'] }] }),
+      prov({ id: 'moonshot', models: [{ id: 'kimi-k2', name: 'Kimi K2' }] }),
+    ]
+    const route = routeOf({
+      id: 'r1',
+      members: [
+        // 悬空声明形态：supportedLevels 缺 low，但 levels 已声明 low（历史数据/模型能力收缩）
+        { id: 'a', providerId: 'zhipu', modelId: 'glm-4-6', type: 'none', levels: { off: 'off', low: 'low' } },
+      ],
+    })
+    const w = mountPage([cardOf(route)], providers)
+    await w.find('[data-testid="route-card-toggle"]').trigger('click')
+    await w.find('[data-testid="endpoint-levels-toggle"]').trigger('click')
+    const lowBtn = w.find('[data-testid="endpoint-level-low"]')
+    expect((lowBtn.element as HTMLButtonElement).disabled).toBe(false)
+    await lowBtn.trigger('click')
+    await flushPromises()
+    w.findComponent(RouteUnsavedBar).vm.$emit('save')
+    await w.vm.$nextTick()
+    const payload = (w.findComponent(ModelRoutePage).emitted('save')![0]![0]) as { routes: AggregationRoute[] }
+    expect(payload.routes[0]!.members[0]!.levels).toEqual({ off: 'off', low: null })
   })
 })

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 /**
- * 品牌区：太极双鱼 logo（旋转，currentColor 适配主题）+ 产品名 + 版本号。
+ * 品牌区：太极双鱼 logo（静态，currentColor 适配主题）+ 产品名 + 版本号。
+ * 常驻不旋转：永久动画意味着合成器 60fps 常驻开销（实测 ~17% GPU，2026-11 性能
+ * 优化裁决）；旋转仅保留给瞬态等待场景（App.vue 连接屏）。
  *
  * - logo 资产从 v6 demo 复制（TaijiLogo.vue，SVG 矢量，禁止手改 path d）。
  * - 产品名走 i18n（app.title）：中文「太极」/ 英文「TaiJi」，与 v6 demo 对齐。
@@ -32,7 +34,7 @@ withDefaults(defineProps<Props>(), {
        行距拉开是品牌区高度的主导项（demo 总高 70.5 vs real 52.2）——行高类直接落在两个
        span 上（自身声明优先于继承链上中途插进来的 1.4 档，容器级 leading 类管不到它们）。 -->
   <div class="flex items-center gap-[9px] px-[14px] pt-[14px] pb-[10px]">
-    <TaijiLogo :size="28" :duration="8" class="shrink-0 text-neutral-fg" />
+    <TaijiLogo :size="28" :spin="false" class="shrink-0 text-neutral-fg" />
     <div class="flex min-w-0 flex-col">
       <!-- 产品名 + DEV 徽标内层行：产品名 min-w-0 让 truncate 在窄侧栏生效（flex item
            默认 min-width:auto 会撑住不截断），徽标 shrink-0 保证不被挤掉 -->

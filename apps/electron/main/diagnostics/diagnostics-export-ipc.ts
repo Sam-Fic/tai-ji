@@ -35,6 +35,8 @@ export interface DiagnosticsExportIpcDeps {
   exportBundle?: (options: ExportDiagnosticBundleOptions) => DiagnosticExportBundleResult
   /** app 版本来源；缺省 electron app.getVersion() */
   appVersion?: () => string
+  /** GPU 加速状态拼串来源；缺省 electron app.getGPUFeatureStatus()（排障「GPU 被禁致渲染断崖」） */
+  gpuFeatureStatus?: () => string
 }
 
 let registered = false
@@ -61,6 +63,28 @@ export function registerDiagnosticsExportHandler(deps: DiagnosticsExportIpcDeps 
     })
   const exportBundle = deps.exportBundle ?? exportDiagnosticBundle
   const appVersion = deps.appVersion ?? (() => app.getVersion())
+  const gpuFeatureStatus =
+    deps.gpuFeatureStatus ??
+    (() => {
+      try {
+        const status = app.getGPUFeatureStatus() as Record<string, string>
+        // 白名单字段（taste/no-unsafe-object-entries）：GPUFeatureStatus 固定键集，
+        // 未取到的键显式标 missing，保证排障时能看出「哪些能力被禁」。
+        const keys = [
+          '2d_canvas',
+          'gpu_compositing',
+          'webgl',
+          'rasterization',
+          'opengl',
+          'vulkan',
+          'multiple_raster_threads',
+        ]
+        const parts = keys.map((key) => `${key}=${status[key] ?? 'missing'}`)
+        return parts.length > 0 ? parts.join(', ') : 'unknown'
+      } catch {
+        return 'unknown'
+      }
+    })
 
   try {
     ipcMain.handle(
@@ -73,7 +97,7 @@ export function registerDiagnosticsExportHandler(deps: DiagnosticsExportIpcDeps 
         if (dialog.status === 'error') return dialog
         if (dialog.status === 'canceled') return { status: 'canceled' }
         const save = dialog.save
-        const result = exportBundle({ outPath: save.filePath, appVersion: appVersion() })
+        const result = exportBundle({ outPath: save.filePath, appVersion: appVersion(), gpuFeatureStatus: gpuFeatureStatus() })
         if (result.status === 'exported') {
           mainLogger.info('[diagnostics-export-ipc] bundle exported', {
             path: result.path,

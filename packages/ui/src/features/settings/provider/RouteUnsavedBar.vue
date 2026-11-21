@@ -18,10 +18,10 @@
     <span class="flex-1 text-[length:var(--text-xs)] text-neutral-fg">
       {{ t('settings.modelRoute.unsavedText') }}
     </span>
-    <Button variant="secondary" size="dense" data-testid="unsaved-discard" @click="emit('discard')">
+    <Button variant="secondary" size="dense" data-testid="unsaved-discard" :disabled="disabled" @click="emit('discard')">
       {{ t('settings.modelRoute.discard') }}
     </Button>
-    <Button size="dense" data-testid="unsaved-save" @click="emit('save')">
+    <Button size="dense" data-testid="unsaved-save" :disabled="disabled" @click="emit('save')">
       {{ t('settings.modelRoute.save') }}
     </Button>
   </div>
@@ -31,7 +31,11 @@
 import { useI18n } from 'vue-i18n'
 import { Button } from '@taiji/ui'
 
-defineProps<{ dirty: boolean }>()
+defineProps<{
+  dirty: boolean
+  /** 写编排进行中（spec §6.3：保存中禁用保存/放弃，防视图刷新覆盖新草稿；两页共享接缝）。 */
+  disabled?: boolean
+}>()
 
 const emit = defineEmits<{ save: []; discard: [] }>()
 

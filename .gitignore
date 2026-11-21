@@ -54,13 +54,12 @@ coverage/
 /blob-report/
 /playwright/.auth/
 
-# ZCode plan mode artifacts (session-local planning docs)
-.zcode/plans/
+# .zcode/（zcode 本地工作区：plans / workflow 引擎产物 / agents 子代理定义）——
+# 本机工具状态不随分支版本化；zcode 发现层 lstat 拒绝 symlink，各 worktree 独立真实目录
+.zcode/
 
-# ZCode dynamic-workflow engine artifacts (run script snapshots + launch drafts;
-# .zcode/agents/ stays tracked — subagent definitions)
-.zcode/workflow-runs/
-.zcode/workflow-drafts/
+# .workbuddy/（WorkBuddy 本地会话记忆）——本机工具状态，不入库
+.workbuddy/
 
 # Legacy build dir from pre-monorepo layout (commit 0f6eed87 migrated src-electron/
 # to packages/* + apps/electron). Leftover build artifacts + node_modules linger in
@@ -159,3 +158,6 @@ package-lock.json.*
 
 # AI 会话工作流产物（archify 可视化缓存，非项目源码）
 /.archify/
+
+# tree-plant 任务工作目录（设计/验收文档与运行产物，本地不入库）
+/tpkg/

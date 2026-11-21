@@ -2,6 +2,9 @@
 /** 太极双鱼 logo — 千问图 potrace 矢量复刻（从 v6 demo 复制，几何禁止手改）。
  *  fill/stroke 用 currentColor，由父级 CSS color 控制（暗主题浅字 / 亮主题深字）。
  *  支持旋转动画（太极「周而复始」语义，默认 8s，引用全局 @keyframes taiji-spin）。
+ *  旋转动画挂在 HTML 包装层而非 svg 本体：SVG 元素的 transform 动画不被 Chromium
+ *  合成加速，留在主线程绘制态会每帧重绘（实测 idle CPU ~30%）；HTML 层 +
+ *  willChange:transform 走 GPU 合成，主线程零开销。
  *  几何来自 logo-square.svg（6 条 path），禁止手改 d 属性——改几何回源头 SVG。
  *  reduced-motion 检查：用户设了「减少动态效果」时停止旋转（motion-reduce:animate-none）。 */
 interface Props {
@@ -17,14 +20,20 @@ withDefaults(defineProps<Props>(), {
 </script>
 
 <template>
+  <!-- 旋转动画挂在 HTML 包装层而非 svg 本体：SVG 元素的 transform 动画不被
+       Chromium 合成加速（每帧主线程重绘，实测 idle CPU ~30%）；HTML 层 +
+       will-change:transform 走 GPU 合成，主线程零开销。 -->
+  <div
+    class="block shrink-0 motion-reduce:animate-none"
+    :class="spin ? 'animate-taiji-spin' : ''"
+    :style="spin ? { animationDuration: `${duration}s`, willChange: 'transform' } : undefined"
+  >
   <svg
     :width="size"
     :height="size"
     viewBox="0 0 1200 1200"
     preserveAspectRatio="xMidYMid meet"
-    class="block shrink-0 motion-reduce:animate-none"
-    :class="spin ? 'animate-taiji-spin' : ''"
-    :style="spin ? { animationDuration: `${duration}s`, transformOrigin: 'center' } : undefined"
+    class="block"
     aria-hidden="true"
   >
     <g fill-rule="evenodd" fill="currentColor" stroke="currentColor" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
@@ -40,4 +49,5 @@ withDefaults(defineProps<Props>(), {
       </g>
     </g>
   </svg>
+  </div>
 </template>

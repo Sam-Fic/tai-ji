@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-18T10:22:19.060Z",
+  "generatedAt": "2026-11-21T03:48:42.222Z",
   "piAiVersion": "1.0.0",
   "catalogGeneratedAt": 1790881031882,
   "providerCount": 43,
@@ -43257,7 +43257,8 @@
           "compat": null
         }
       ],
-      "logoUrl": ""
+      "logoUrl": "",
+      "taijiExtra": true
     }
   ]
 }
