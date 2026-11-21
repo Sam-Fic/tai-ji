@@ -135,6 +135,16 @@
 
     <!-- 操作 -->
     <div class="ml-auto flex shrink-0 items-center gap-0.5">
+      <!-- 思考等级展开/收起（spec §5.3：端点级支持声明编辑，7 档多选） -->
+      <Button
+        variant="ghost"
+        size="dense"
+        :aria-expanded="levelsOpen"
+        data-testid="endpoint-levels-toggle"
+        @click="levelsOpen = !levelsOpen"
+      >
+        {{ t('settings.modelRoute.levelsToggle', { n: declaredLevelsCount }) }}
+      </Button>
       <Button
         variant="ghost"
         size="icon"
@@ -169,6 +179,29 @@
         <Trash2 class="size-3.5" />
       </Button>
     </div>
+
+    <!-- 思考等级标签区（spec §5.2-§5.4：7 档多选，按模型能力置灰；并集在卡头实时更新） -->
+    <div v-if="levelsOpen" class="w-full rounded-sm bg-surface-2 px-2 py-1.5" data-testid="endpoint-levels-row">
+      <div class="flex flex-wrap items-center gap-1.5">
+        <span class="text-[length:var(--text-2xs)] text-neutral-mid">{{ t('settings.modelRoute.levelsTitle') }}</span>
+        <Button
+          v-for="level in PI_THINKING_LEVELS"
+          :key="level"
+          variant="secondary"
+          size="dense"
+          :aria-pressed="isLevelDeclared(level)"
+          :disabled="!isLevelAvailable(level)"
+          :title="levelTitle(level)"
+          :data-testid="`endpoint-level-${level}`"
+          @click="toggleLevel(level)"
+        >
+          {{ t(`composable.thinkingLevel.${level}`) }}
+        </Button>
+        <span v-if="supportedUnknown" class="text-[length:var(--text-2xs)] text-neutral-dim">
+          {{ t('settings.modelRoute.levelsUnknown') }}
+        </span>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -178,7 +211,7 @@ import { useI18n } from 'vue-i18n'
 import { ChevronUp, ChevronDown, Trash2 } from '@lucide/vue'
 import { Button, Input, Label, Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@taiji/ui'
 import type { AggregationMember, AggregationRoute, AggregationMemberConditionType, ProviderInfo } from '@taiji/shared'
-import { AGGREGATION_QUOTA_THRESHOLD_MAX } from '@taiji/shared'
+import { AGGREGATION_QUOTA_THRESHOLD_MAX, PI_THINKING_LEVELS } from '@taiji/shared'
 import {
   endpointIssueKey,
   endpointIssueKinds,
@@ -210,6 +243,55 @@ function opWith(partial: MemberOpInput): RouteEditorOp {
 
 const { t } = useI18n()
 const toast = useSettingsToast()
+
+// ── 思考等级（spec §5.4：支持声明编辑；能力唯一依据 = runtime 下发 supportedLevels）──
+
+const levelsOpen = ref(false)
+
+/** 本端点模型的 supportedLevels（归一后）；null = 档位未知（能力标注缺失，不伪装置灰）。 */
+const supportedLevelsOfModel = computed<string[] | null>(() => {
+  const model = props.providers
+    .find((p) => p.id === props.member.providerId)
+    ?.models.find((m) => m.id === props.member.modelId)
+  return model?.supportedLevels ?? null
+})
+
+const supportedUnknown = computed(() => supportedLevelsOfModel.value === null)
+
+function isLevelAvailable(level: string): boolean {
+  const supported = supportedLevelsOfModel.value
+  return supported === null ? true : supported.includes(level)
+}
+
+function isLevelDeclared(level: string): boolean {
+  const levels = props.member.levels
+  if (!levels) return false
+  return levels[level] !== undefined && levels[level] !== null
+}
+
+const declaredLevelsCount = computed(
+  () => Object.values(props.member.levels ?? {}).filter((v) => v !== null && v !== undefined).length,
+)
+
+function levelTitle(level: string): string {
+  if (!isLevelAvailable(level)) return t('settings.modelRoute.levelsUnsupported')
+  return isLevelDeclared(level) ? t('settings.modelRoute.levelsDeclared') : t('settings.modelRoute.levelsUndeclared')
+}
+
+/** 档位 toggle（spec §5.4）：levels 缺省时首点初始化为「支持集全选」再 toggle 所点档；
+ *  档位未知时以 7 档全集初始化。编辑走 endpoint-patch（AggregationMemberPatch 已含 levels）。 */
+function toggleLevel(level: string): void {
+  if (!isLevelAvailable(level)) {
+    toast.info(t('settings.modelRoute.levelsUnsupported'))
+    return
+  }
+  const supported = supportedLevelsOfModel.value ?? [...PI_THINKING_LEVELS]
+  const base: Record<string, string | null> = props.member.levels
+    ? { ...props.member.levels }
+    : Object.fromEntries(supported.map((l) => [l, l]))
+  base[level] = isLevelDeclared(level) ? null : level
+  emit('op', opWith({ kind: 'endpoint-patch', patch: { levels: base } }))
+}
 
 const CONDITION_TYPES: readonly AggregationMemberConditionType[] = ['none', 'window', 'quota', 'combo']
 

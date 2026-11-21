@@ -80,6 +80,14 @@
       <span class="rounded-sm bg-surface-2 px-1.5 py-0.5 text-[length:var(--text-3xs)] text-neutral-mid">
         {{ t('settings.modelRoute.endpointsCount', { n: card.route.members.length }) }}
       </span>
+      <!-- 待配置分流（spec §5.1/§4.6：高级模式且全部端点无条件 → 始终命中第 1 个，未分流） -->
+      <span
+        v-if="pendingSplit"
+        class="rounded-sm bg-warn-soft px-1.5 py-0.5 text-[length:var(--text-3xs)] text-warn"
+        data-testid="route-card-pending-split"
+      >
+        {{ t('settings.modelRoute.pendingSplit') }}
+      </span>
       <span
         v-if="!card.route.enabled"
         class="rounded-sm bg-warn-soft px-1.5 py-0.5 text-[length:var(--text-3xs)] text-warn"
@@ -412,6 +420,14 @@ function confirmDelete(): void {
 }
 
 const candidates = computed(() => candidateProviderIds(props.card.route, props.providers))
+
+/** 待配置分流（spec：高级模式 ≥2 端点且全部无条件；单端点无分流语义不标）。 */
+const pendingSplit = computed(
+  () =>
+    props.card.route.mode === 'advanced' &&
+    props.card.route.members.length > 1 &&
+    props.card.route.members.every((m) => m.type === 'none'),
+)
 
 const levelsUnionText = computed(() => levelsUnion(props.card.route).join(' / '))
 

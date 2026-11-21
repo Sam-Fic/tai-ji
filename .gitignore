@@ -159,3 +159,6 @@ package-lock.json.*
 
 # AI 会话工作流产物（archify 可视化缓存，非项目源码）
 /.archify/
+
+# tree-plant 任务工作目录（设计/验收文档与运行产物，本地不入库）
+/tpkg/

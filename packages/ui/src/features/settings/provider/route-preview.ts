@@ -412,7 +412,7 @@ export function nightWindow(): AggregationTimeWindowTable {
   return table
 }
 
-// ── 添加端点候选（spec §7.9：存在 / 启用 / 未被本路由占用；另按 D4 ① kind 排除聚合条目——路由条目 models=路由 id 集合，选中即构造嵌套路由（设计 §1.3 ① 范围外 + shared route_member_nested 硬拒绝），须在候选源头排除。端点的渠道与模型各自独立选择（端点行模型下拉），候选不再按 route.modelId 过滤渠道——模型锚只保留在 buildNewRouteDraft 的创建种子与 route.modelId 形态校验中） ────
+// ── 添加端点候选（spec §7.9：存在 / 启用 / 未被本路由占用；另按 D4 ① kind 排除聚合条目——路由条目 models=路由 id 集合，选中即构造嵌套路由（设计 §1.3 ① 范围外 + shared route_member_nested 硬拒绝），须在候选源头排除。端点的渠道与模型各自独立选择（端点行模型下拉），候选不再按 route.modelId 过滤渠道——模型锚只保留在快速创建草稿的种子与 route.modelId 形态校验中） ────
 
 /** 换渠道候选（端点行下拉）：聚合条目一律排除；当前渠道即使不满足条件也保留（异常标注，spec §7.8）。 */
 export function endpointProviderOptions(

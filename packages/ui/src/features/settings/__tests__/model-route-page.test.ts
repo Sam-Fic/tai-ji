@@ -519,47 +519,116 @@ describe('渠道直连卡（D10/U9：无 routes 的白名单模型 = 默认单�
   })
 })
 
-describe('新建路由入口（U9 创建侧，GL5/V15）', () => {
-  it('页头「新建路由」按钮生成默认草稿卡：追加卡尾 + 默认名 + 预填首个可用渠道端点 + 标脏', async () => {
-    const w = mountPage([cardOf(routeOf({ id: 'r1' }))])
-    await w.find('[data-testid="route-create-btn"]').trigger('click')
+describe('快速创建入口（spec §4：渠道展开建简单路由 / 筛选多选建高级路由）', () => {
+  // jsdom 无 scrollIntoView（focus 定位与面板聚焦调用），测试级补桩
+  beforeAll(() => {
+    Element.prototype.scrollIntoView = () => {}
+  })
+
+  /** 展开第一个渠道的模型列表（点击渠道行）。 */
+  async function expandFirstProvider(w: VueWrapper): Promise<void> {
+    await w.find('[data-testid="route-quick-provider-row"]').trigger('click')
+  }
+
+  it('单模型「建简单路由」：追加卡尾 + mode=simple + 单端点无条件 + levels 全支持档 + 标脏', async () => {
+    const w = mountPage([cardOf(routeOf({ id: 'r1' }))], [
+      prov({ id: 'zhipu', name: '智谱', models: [{ id: 'glm-4-6', name: 'GLM-4.6', supportedLevels: ['off', 'low', 'high'] }] }),
+      prov({ id: 'moonshot' }),
+    ])
+    await expandFirstProvider(w)
+    await w.find('[data-testid="route-quick-create-simple"]').trigger('click')
     const cards = w.findAll('[data-testid="route-card"]')
     expect(cards.length).toBe(2)
-    const created = cards[1]!
-    expect(created.find('[data-testid="route-card-name"]').text()).toBe('settings.modelRoute.newRouteName')
-    // 预填端点可见（保存校验要求至少一个端点；候选下拉按 route.modelId 过滤，预填真实模型才可继续添加）
-    expect(created.text()).toContain('zhipu')
     expect(w.findComponent(ModelRoutePage).emitted('change')).toBeTruthy()
-    // 保存载荷含新路由（端点在位）
     w.findComponent(RouteUnsavedBar).vm.$emit('save')
     await w.vm.$nextTick()
     const payload = (w.findComponent(ModelRoutePage).emitted('save')![0]![0]) as { routes: AggregationRoute[] }
-    const createdRoute = payload.routes[1]!
-    expect(createdRoute.name).toBe('settings.modelRoute.newRouteName')
-    expect(createdRoute.members).toHaveLength(1)
-    expect(createdRoute.members[0]!.providerId).toBe('zhipu')
-    expect(createdRoute.members[0]!.type).toBe('none')
+    const created = payload.routes[1]!
+    expect(created.mode).toBe('simple')
+    expect(created.enabled).toBe(true)
+    expect(created.name).toBe('GLM-4.6')
+    expect(created.members).toHaveLength(1)
+    expect(created.members[0]!.providerId).toBe('zhipu')
+    expect(created.members[0]!.modelId).toBe('glm-4-6')
+    expect(created.members[0]!.type).toBe('none')
+    // AC-Q12：levels 初始化 = 模型全部支持档位
+    expect(Object.keys(created.members[0]!.levels ?? {})).toEqual(['off', 'low', 'high'])
   })
 
-  it('连点两次生成两张草稿卡：id 唯一性后缀不冲突', async () => {
-    const w = mountPage([])
-    await w.find('[data-testid="route-empty-create"]').trigger('click')
-    await w.find('[data-testid="route-create-btn"]').trigger('click')
+  it('重复建同模型简单路由被事实态拦截（AC-Q13）：按钮禁用显示已建', async () => {
+    const w = mountPage([cardOf(routeOf({ id: 'r1' }))])
+    await expandFirstProvider(w)
+    await w.find('[data-testid="route-quick-create-simple"]').trigger('click')
+    expect(w.findAll('[data-testid="route-card"]').length).toBe(2)
+    expect(w.find('[data-testid="route-quick-simple-exists"]').exists()).toBe(true)
+    expect(w.find('[data-testid="route-quick-create-simple"]').exists()).toBe(false)
+    expect(w.findAll('[data-testid="route-card"]').length).toBe(2)
+  })
+
+  it('筛选后勾选两模型 → 创建高级路由：勾选序多端点全无条件 + 待配置分流徽标 + 选择清空', async () => {
+    const w = mountPage(
+      [cardOf(routeOf({ id: 'r1' }))],
+      [
+        prov({ id: 'zhipu', name: '智谱', models: [{ id: 'glm-4-6', name: 'GLM-4.6' }, { id: 'glm-4-5-air', name: 'GLM-4.5 Air' }] }),
+        prov({ id: 'moonshot', models: [{ id: 'kimi-k2', name: 'Kimi K2' }] }),
+      ],
+    )
+    await w.find('[data-testid="route-quick-filter"]').setValue('glm')
+    // 筛选分组只显匹配渠道（moonshot 无 glm 模型不入组）
+    expect(w.findAll('[data-testid="route-quick-provider-row"]').length).toBe(1)
+    await expandFirstProvider(w)
+    await w.find('[data-testid="route-quick-pick-zhipu-glm-4-6"]').trigger('click')
+    await w.find('[data-testid="route-quick-pick-zhipu-glm-4-5-air"]').trigger('click')
+    // 保存摘要与计数
+    expect(w.find('[data-testid="route-quick-selection-summary"]').text()).toContain('settings.modelRoute.quickSelectedN')
+    const advBtn = w.find('[data-testid="route-quick-create-advanced"]')
+    expect((advBtn.element as HTMLButtonElement).disabled).toBe(false)
+    await advBtn.trigger('click')
+    const cards = w.findAll('[data-testid="route-card"]')
+    expect(cards.length).toBe(2)
+    // AC-Q7：待配置分流徽标
+    expect(cards[1]!.find('[data-testid="route-card-pending-split"]').exists()).toBe(true)
+    // 选择清空（创建后）
+    expect(w.find('[data-testid="route-quick-selection-summary"]').text()).toContain('settings.modelRoute.quickSelectHint')
     w.findComponent(RouteUnsavedBar).vm.$emit('save')
     await w.vm.$nextTick()
     const payload = (w.findComponent(ModelRoutePage).emitted('save')![0]![0]) as { routes: AggregationRoute[] }
-    const ids = payload.routes.map((r) => r.id)
-    expect(new Set(ids).size).toBe(2)
-    expect(ids[1]).toBe(`${ids[0]}-2`)
+    const created = payload.routes[1]!
+    expect(created.mode).toBe('advanced')
+    expect(created.members.map((m) => m.modelId)).toEqual(['glm-4-6', 'glm-4-5-air'])
+    expect(created.members.every((m) => m.type === 'none')).toBe(true)
   })
 
-  it('空状态「新建路由」= V8 零配置态引导：创建后空态消失、卡片与概览条出现', async () => {
-    const w = mountPage([])
+  it('已选 <2 时「创建高级路由」禁用；筛选无结果空态；选择跨筛选保留', async () => {
+    const w = mountPage(
+      [],
+      [
+        prov({ id: 'zhipu', models: [{ id: 'glm-4-6', name: 'GLM-4.6' }] }),
+        prov({ id: 'moonshot', models: [{ id: 'kimi-k2', name: 'Kimi K2' }] }),
+      ],
+    )
+    const advBtn = w.find('[data-testid="route-quick-create-advanced"]')
+    expect((advBtn.element as HTMLButtonElement).disabled).toBe(true)
+    await w.find('[data-testid="route-quick-filter"]').setValue('nomatch')
+    expect(w.find('[data-testid="route-quick-filter-empty"]').exists()).toBe(true)
+    // 换词后勾选，再清词：选择保留（spec §4.4）
+    await w.find('[data-testid="route-quick-filter"]').setValue('kimi')
+    await expandFirstProvider(w)
+    await w.find('[data-testid="route-quick-pick-moonshot-kimi-k2"]').trigger('click')
+    await w.find('[data-testid="route-quick-filter-clear"]').trigger('click')
+    expect(w.find('[data-testid="route-quick-selection-summary"]').text()).toContain('settings.modelRoute.quickSelectedN')
+    expect((advBtn.element as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('空状态「快速创建」按钮只展开聚焦面板，不生成另一套默认值卡片', async () => {
+    const w = mountPage(
+      [],
+      [prov({ id: 'zhipu', models: [{ id: 'glm-4-6', name: 'GLM-4.6' }] })],
+    )
     expect(w.find('[data-testid="model-route-empty"]').exists()).toBe(true)
     await w.find('[data-testid="route-empty-create"]').trigger('click')
-    expect(w.find('[data-testid="model-route-empty"]').exists()).toBe(false)
-    expect(w.findAll('[data-testid="route-card"]').length).toBe(1)
-    expect(w.find('[data-testid="model-route-overview"]').exists()).toBe(true)
+    expect(w.findAll('[data-testid="route-card"]').length).toBe(0)
+    expect(w.find('[data-testid="route-quick-create"]').exists()).toBe(true)
   })
 })
 
