@@ -145,8 +145,18 @@ extraResources:
       - "**/*"
       - "!**/*.map"
 
-# NOTE: macos-latest 是 arm64 runner，无法交叉编译 x64。
-# 如需 Intel Mac 支持，追加 macos-13 (Intel) 或配置 universal。
+# 双架构 dmg：arm64 由本配置默认产出（macos-latest arm64 runner 原生构建）；
+# x64 dmg 由 CI 矩阵 mac-x64 job 在同一 arm64 runner 上交叉构建（命令形态
+# `electron-builder --mac dmg:x64`，build:mac-x64 脚本）——dmg:arch 语法让 CLI
+# target 带非空列表，computeArchToTargetNamesMap 直接采用 CLI 集合、不并入本段
+# config 的 arch 列表（targetFactory.js：raw 任一 targetNames 非空即整你返回）。
+# 不用已退役的 macos-13 Intel runner（GitHub 2025-12 全量退役，之后 Intel 产物
+# 只能交叉构建）；electron-builder 对 mac 双向交叉编译支持（electron 双架构
+# dist 下载 + native 模块 Xcode 交叉重建）。
+# node-pty prebuilds：双架构 dmg 共用本段 files（electron-builder 无按 arch 的
+# files 段），排除 win32 后 darwin-arm64/darwin-x64 都随包（darwin-x64 是 x64 dmg
+# 的运行时加载 fallback——node-pty loadNativeModule 先 build/Release 后 prebuilds，
+# 交叉重建失败时产物仍可用；arm64 dmg 多携 64KB 属可接受噪声）。
 mac:
   target:
     - target: dmg
@@ -160,12 +170,12 @@ mac:
   # node-pty prebuilds 平台裁剪（设计 §3.2.2，docs/design/release-artifact-size-optimization-batch3.md）：
   # node-pty 运行时按 process.platform + "-" + process.arch 拼接 prebuilds/<目录> 加载路径
   # （node-pty lib/utils.js），跨平台目录在 mac 上永不命中，排除是纯减重无功能影响
-  # （win32-x64 736K + win32-arm64 704K + darwin-x64 64K ≈ 1.5M）。
+  # （win32-x64 736K + win32-arm64 704K ≈ 1.4M）。darwin-x64 不再排除：见本段上方
+  # 双架构 dmg 注释（x64 dmg 运行时 fallback，代价 arm64 dmg +64K）。
   # 平台段 files 与顶层 files 是追加合并语义（app-builder-lib fileMatcher.js:250-253），
   # 此处排除模式追加到顶层 node_modules/node-pty/**/* 包含规则之后生效。
   files:
     - "!node_modules/node-pty/prebuilds/win32-*"
-    - "!node_modules/node-pty/prebuilds/darwin-x64"
   category: public.app-category.developer-tools
   icon: build/icon.icns
   minimumSystemVersion: 12.0.0
@@ -173,7 +183,11 @@ mac:
   # 如 -mac-arm64.dmg 定位 asset，不依赖固定文件名——ad0bcf86a 起自动升级改走版本化 asset）。
   # [HISTORICAL] dmg 单形态：mac zip target 已删（设计 §3.3.3-C），更新链路改消费 dmg，
   # ${ext} 恒解析为 .dmg；存量 v0.8.44~v0.9.13 darwin 用户断供已拍板接受（设计 §2.5）。
-  artifactName: TaiJi-${version}-mac-arm64.${ext}
+  # ${arch}：arm64 构建（含默认 build）→ TaiJi-<v>-mac-arm64.dmg（文件名与历史版本字节一致，
+  # 自动升级 pattern 不变）；CI mac-x64 job 交叉构建 → TaiJi-<v>-mac-x64.dmg。
+  # Intel dmg 是纯手动下载产物：应用内自动升级对非 arm64 darwin 显式拒绝
+  # （update/orchestrator.ts downloadUpdate 架构门控），不消费 x64 asset。
+  artifactName: TaiJi-${version}-mac-${arch}.${ext}
 
 # dmg 压缩格式（设计 §3.3.2，docs/design/release-artifact-size-optimization-batch3.md）。
 # [位置] dmg 是顶层字段（与 mac/win/nsis 同级），不是 mac 子段：dmg-builder 直读

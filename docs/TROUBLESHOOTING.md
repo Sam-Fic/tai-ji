@@ -143,14 +143,14 @@ Resources/
 ### 1. pi 启动失败："Failed to start bundled pi process"
 
 ```bash
-ls -la /Applications/TaiJi.app/Contents/Resources/pi/pi-darwin-*   # 二进制是否存在
-file /Applications/TaiJi.app/Contents/Resources/pi/pi-darwin-arm64  # 是否 Mach-O 可执行
-chmod +x /Applications/TaiJi.app/Contents/Resources/pi/pi-darwin-arm64  # 权限丢失时修复
-uname -m   # 架构匹配检查（Intel Mac 上只有 arm64 二进制）
+ls -la /Applications/TaiJi.app/Contents/Resources/pi/pi-darwin-*   # 二进制是否存在（应与本机架构一致）
+file /Applications/TaiJi.app/Contents/Resources/pi/pi-darwin-$(node -p "process.arch")  # 是否 Mach-O 可执行
+chmod +x /Applications/TaiJi.app/Contents/Resources/pi/pi-darwin-$(node -p "process.arch")  # 权限丢失时修复
+uname -m   # 架构匹配检查（arm64 → pi-darwin-arm64；x86_64 → pi-darwin-x64，双架构 dmg 各自带对应二进制）
 /Applications/TaiJi.app/Contents/MacOS/TaiJi   # 终端启动看完整错误
 ```
 
-常见原因：pi 二进制缺失（`extraResources` 配置错误或 `resources/pi/` 内容不完整）、权限丢失（`chmod +x`）、架构不匹配（Intel Mac 装了 arm64-only DMG）、symlink 问题（`resources/pi/` 有指向外部绝对路径的 symlink，打包后目标不存在）。
+常见原因：pi 二进制缺失（`extraResources` 配置错误或 `resources/pi/` 内容不完整）、权限丢失（`chmod +x`）、架构不匹配（装错架构 DMG：mac dmg 分 `-mac-arm64.dmg` / `-mac-x64.dmg` 两种，按 `uname -m` 下载对应版本）、symlink 问题（`resources/pi/` 有指向外部绝对路径的 symlink，打包后目标不存在）。
 
 ### 2. Runtime 启动失败："Runtime bundle not found" 或 "Runtime health check timed out"
 
