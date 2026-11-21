@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================================
 # snapshot-skills.sh — 把 workspace 根的 .agents 实体快照到 refs/skills-snapshot
+#   并以同一 commit 镜像推送到 GitHub 可见分支 refs/heads/skills-snapshot
 #
 # 用法：
 #   .githooks/snapshot-skills.sh [--no-push]
@@ -18,6 +19,12 @@
 #     push 失败非致命，下次 commit 自动重试；远端 ref 是跨机器重建的权威备份点。
 #
 # 恢复：git archive refs/skills-snapshot | tar -x -C <workspace 根>
+#
+# 镜像分支（2026-11-21 ADR-0196）：push 时把同一快照 commit 同时推到
+#   refs/heads/skills-snapshot —— refs/* 快照 ref 在 GitHub 网页不可见、
+#   clone 默认不拉取；镜像分支让 skill 实体内容在分支列表可见、clone 默认可得。
+#   两 ref 源自同一 commit，内容一致由推送形态保证；本地快照链仍只在
+#   refs/skills-snapshot 上增长，CI 物化与排障恢复通道不读镜像分支。
 # ============================================================================
 set -u
 
@@ -26,6 +33,7 @@ WT_ROOT="$(dirname "$SCRIPT_DIR")"
 WS_ROOT="$(dirname "$WT_ROOT")"
 ENTITY="$WS_ROOT/.agents"
 SNAPSHOT_REF="refs/skills-snapshot"
+SNAPSHOT_BRANCH_REF="refs/heads/skills-snapshot"
 PUSH_TIMEOUT_SEC=20
 # remote 名自适应：本 workspace 既有仓库约定为 github（无 origin，refs/remotes/origin/* 是
 # 改名残留 stale refs，禁用）；fresh clone 默认 origin。取第一个存在的 remote。
@@ -93,11 +101,13 @@ msg "snapshot updated: $COMMIT ($SRC)"
 
 push_ok=false
 if command -v timeout >/dev/null 2>&1; then
-  timeout "$PUSH_TIMEOUT_SEC" git -C "$WT_ROOT" push --force "$WT_REMOTE" "$SNAPSHOT_REF:$SNAPSHOT_REF" \
+  timeout "$PUSH_TIMEOUT_SEC" git -C "$WT_ROOT" push --force "$WT_REMOTE" \
+    "$SNAPSHOT_REF:$SNAPSHOT_REF" "$SNAPSHOT_REF:$SNAPSHOT_BRANCH_REF" \
     && push_ok=true
 elif command -v perl >/dev/null 2>&1; then
   perl -e 'alarm shift; exec @ARGV or exit 127' "$PUSH_TIMEOUT_SEC" \
-    git -C "$WT_ROOT" push --force "$WT_REMOTE" "$SNAPSHOT_REF:$SNAPSHOT_REF" && push_ok=true
+    git -C "$WT_ROOT" push --force "$WT_REMOTE" \
+    "$SNAPSHOT_REF:$SNAPSHOT_REF" "$SNAPSHOT_REF:$SNAPSHOT_BRANCH_REF" && push_ok=true
 else
   msg "WARN: neither timeout nor perl available; skipping remote push (will retry on next snapshot)"
 fi
