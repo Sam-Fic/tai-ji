@@ -719,6 +719,15 @@ textarea {
   will-change: transform;
 }
 
+/* 窗口后台化动画暂停（boot/hidden-animation-pause.ts 挂载 .app-hidden；与
+   backgroundThrottling:false 正交——该设置保住 setTimeout 基础设施，代价是后台窗口
+   CSS 动画照跑满帧 GPU 空转。全仓无 animationend 依赖，暂停/恢复无计时副作用） */
+.app-hidden *,
+.app-hidden *::before,
+.app-hidden *::after {
+  animation-play-state: paused !important;
+}
+
 /* ============================================================
    动画 keyframes SSOT（v6 §5.9：只在全局定义一次）
    消费方用 animation-name 引用（Tailwind animate-* 工具类 / 内联 animation）。
