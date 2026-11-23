@@ -51,22 +51,19 @@ const evalExpr = async (expression) => {
 // edge-fade 元素在场（IO 哨兵化后仍是 sticky 渐焦带，fragment 多一个绝对哨兵节点）。
 const fadePresent = await evalExpr(`!!document.querySelector('[data-testid="edge-fade"]')`)
 
-// ① 贴顶：scrollTop=0 → 期望 maskImage 空。
-await evalExpr(`(() => { const el = document.querySelector('[data-testid="message-stream"]'); if (el) el.scrollTop = 0; return true })()`)
-await sleep(300)
-const topMask = String(await evalExpr(`document.querySelector('[data-testid="message-stream"]')?.style.maskImage || ''`) ?? '')
-
-// ② 滚离顶：scrollTop=200 → 期望 maskImage 含 linear-gradient（IO 哨兵翻 on → 套 active 常量）。
+// 滚离顶（scrollTop > 阈值）→ 渐焦激活 + mask = active 常量（linear-gradient 且含 13px 软 stop）。
+// 注：「贴顶 mask 空」态在跟底会话不可达（follow 拉回底部、哨兵恒滚离视口顶），由单测
+// edge-fade-sentinel 覆盖（stubGlobal IO trigger isIntersecting=true → on=false → mask ''）；
+// 本真机 case 只验 N1 mask 常量在真实 DOM 生效（对齐设计意图「滚离顶 → active 常量」）。
 await evalExpr(`(() => { const el = document.querySelector('[data-testid="message-stream"]'); if (el) el.scrollTop = 200; return true })()`)
 await sleep(400)
 const scrolledMask = String(await evalExpr(`document.querySelector('[data-testid="message-stream"]')?.style.maskImage || ''`) ?? '')
 
 cdp.close(); rt.ws.close()
 
-const topEmpty = topMask === ''
-const scrolledActive = scrolledMask.includes('linear-gradient')
-console.log(`edge-fade-mask top='${topMask.slice(0, 60)}' scrolled=linear-gradient:${scrolledActive ? 'yes' : 'no'} (present=${fadePresent})`)
+const scrolledActive = scrolledMask.includes('linear-gradient') && scrolledMask.includes('13px')
+console.log(`edge-fade-mask scrolled mask='${scrolledMask.slice(0, 60)}' active=${scrolledActive} (present=${fadePresent})`)
 
-const pass = fadePresent && topEmpty && scrolledActive
-console.log(pass ? 'RESULT edge-fade-mask PASS' : `RESULT edge-fade-mask FAIL present=${fadePresent} topEmpty=${topEmpty} scrolledActive=${scrolledActive}`)
+const pass = fadePresent && scrolledActive
+console.log(pass ? 'RESULT edge-fade-mask PASS' : `RESULT edge-fade-mask FAIL present=${fadePresent} scrolledActive=${scrolledActive}`)
 process.exit(pass ? 0 : 1)

@@ -312,12 +312,17 @@ export async function captureStreamingProfile ({ dataDir, sid, cdpPort, prompt, 
  * 探针不做任何杀进程/判死动作（挂死收终归用户）。
  */
 export async function waitForSessionComplete (rt, sid, timeoutMs) {
+  // 必须先 session.subscribe 才会收到该 session 的广播帧（message.complete）；未订阅则 rt.events
+  // 收不到终态 → 轮询超时（vp chat.wait 同此：subscribe 后 waitTurnEnd）。
+  try { await rt.call('session.subscribe', { sessionId: sid }, 30000) } catch { /* 订阅失败仍尝试轮询，下方超时收终 */ }
   const deadline = Date.now() + timeoutMs
-  let scanned = 0
+  // 只认订阅后到达的帧，防匹配订阅前的陈旧 complete。
+  let scanned = rt.events.length
+  const endTypes = new Set(['message.complete', 'message.error', 'message.stream_error', 'session.exited'])
   while (Date.now() < deadline) {
     for (let i = scanned; i < rt.events.length; i++) {
       const f = rt.events[i]
-      if (f.type === 'message.complete' && f.payload?.sessionId === sid) return f
+      if (endTypes.has(f.type) && f.payload?.sessionId === sid) return f
     }
     scanned = rt.events.length
     await sleep(100)

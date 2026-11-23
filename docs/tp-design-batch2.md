@@ -27,7 +27,7 @@
 
 ## 树形拆分
 
-主干 = 真机探针基建 + 无回归 smoke（不改生产行为，既有测试绿）。三枝递进：契约新面（B-props）→ 高风险（B-layout）→ 等价收尾（B-polish，依赖 B-layout 的 EdgeFade）。
+主干 = 真机探针基建 + 无回归 smoke（不改生产行为，既有测试绿）。两枝递进：契约新面（B-props，含 N2 aiCopyKey）→ 高风险 + 等价收尾（B-layout，含 N1 mask 常量）。N1 与 EdgeFade IO 哨兵同文件同批落地、N2 由 B-props 移除 turn prop 强制改用 id，故不单设 B-polish 枝。
 
 主干文件清单（trunk 期允许改动）：
 - probes/
@@ -36,8 +36,9 @@
 | 枝名 | 目标 | 依赖 | 风险级 | 文件 | case |
 |---|---|---|---|---|---|
 | B-props | G1 稳定引用 props + G6 aiCopyKey 用 id | trunk | 中 | packages/ui/src/features/chat/Turn.vue, packages/ui/src/features/chat/UserBubble.vue, packages/ui/src/features/chat/TurnSummary.vue, packages/ui/src/features/chat/__tests__/ | T2,T3 |
-| B-layout | G2 EdgeFade IO 哨兵 + G3 gap 修复 + G4 RO 循环削减 | trunk | 高 | packages/renderer/src/components/ui/edge-fade/EdgeFade.vue, packages/renderer/src/composables/panel/useMessageStreamFollowTriggers.ts, packages/renderer/src/components/panel/MessageStream.vue, packages/renderer/src/composables/panel/message-stream-layout.ts, packages/renderer/src/composables/panel/__tests__/, packages/renderer/src/__tests__/ | T4,T5 |
-| B-polish | G5 mask 常量（N1） | B-layout | 低 | packages/renderer/src/components/ui/edge-fade/EdgeFade.vue | T6 |
+| B-layout | G2 EdgeFade IO 哨兵 + G3 gap 修复 + G4 RO 循环削减 + G5 mask 常量（N1） | trunk | 高 | packages/renderer/src/components/ui/edge-fade/EdgeFade.vue, packages/renderer/src/composables/panel/useMessageStreamFollowTriggers.ts, packages/renderer/src/components/panel/MessageStream.vue, packages/renderer/src/composables/panel/message-stream-layout.ts, packages/renderer/src/composables/panel/__tests__/, packages/renderer/src/__tests__/, probes/lib/harness.mjs, probes/edge-fade-mask.mjs | T4,T5,T6 |
+
+> 范围注记：B-layout 验收 case T4/T6 依赖两个验收探针基建（trunk gate 仅跑 T1、未覆盖这些路径），随 B-layout 一并补齐：① `probes/lib/harness.mjs` 的 `waitForSessionComplete` 漏 `session.subscribe`（未订阅则收不到 message.complete 广播 → T4/T6 超时 exit 3）；② `probes/edge-fade-mask.mjs`（T6）原断言「贴顶 mask 空」在跟底会话不可达（follow 拉回底部、哨兵恒滚离视口），简化为验「滚离顶 → active 常量」（贴顶 mask 空态由单测 edge-fade-sentinel 覆盖）。二者列入 B-layout 改动范围。
 
 ## 方案要点（每枝）
 
