@@ -161,3 +161,4 @@ package-lock.json.*
 
 # tree-plant 任务工作目录（设计/验收文档与运行产物，本地不入库）
 /tpkg/
+.run/

@@ -255,8 +255,10 @@ describe('buildStreamViewItems — 逐项恒等缓存（streaming perf）', () =
     expect(second).toBe(first)
     expect(second[0]).toBe(first[0])
     expect(second[1]).toBe(first[1])
-    // 内容仍逐字节正确（引用复用不改变派生视图值）
-    expect(second[1]).toMatchObject({ kind: 'turn', key: 't-u2', preview: 'second question', canEdit: true, isLastTurn: true })
+    // 内容仍逐字节正确（引用复用不改变派生视图值）；preview 现为惰性 thunk，求值后比对
+    expect(second[1]).toMatchObject({ kind: 'turn', key: 't-u2', canEdit: true, isLastTurn: true })
+    expect(typeof second[1].preview).toBe('function')
+    expect((second[1].preview as () => string)()).toBe('second question')
   })
 
   it('streaming 末位 turn 引用替换（同内容新对象）：仅末位重建，历史项对象引用逐位复用', () => {
@@ -273,7 +275,9 @@ describe('buildStreamViewItems — 逐项恒等缓存（streaming perf）', () =
     expect(second).not.toBe(first)
     expect(second[0]).toBe(first[0]) // 历史项复用（preview 不重算的核心收益）
     expect(second[1]).not.toBe(first[1]) // 末位重建
-    expect(second[1]).toMatchObject({ key: 't-u2', preview: 'streaming question', isLastTurn: true })
+    expect(second[1]).toMatchObject({ key: 't-u2', isLastTurn: true })
+    expect(typeof second[1].preview).toBe('function')
+    expect((second[1].preview as () => string)()).toBe('streaming question')
   })
 
   it('lastRenderTurn 变化（isLastTurn 翻转）→ 只重建受影响项，其余项对象引用复用', () => {
@@ -367,6 +371,8 @@ describe('buildStreamViewItems — 逐项恒等缓存（streaming perf）', () =
     const turnB = turnFixture(0, 'u2', 'session b content')
     const viewsC = buildStreamViewItems([turnItem(turnB)], 0, turnB)
     expect(viewsC).toHaveLength(1)
-    expect(viewsC[0]).toMatchObject({ kind: 'turn', key: 't-u2', preview: 'session b content' })
+    expect(viewsC[0]).toMatchObject({ kind: 'turn', key: 't-u2' })
+    expect(typeof viewsC[0].preview).toBe('function')
+    expect((viewsC[0].preview as () => string)()).toBe('session b content')
   })
 })

@@ -35,6 +35,11 @@ const CreateManagedSessionParams = Type.Object({
 	cwd: Type.String({ description: "Working directory for the new session" }),
 	label: Type.Optional(Type.String({ description: "Human-readable label for the session" })),
 	prompt: Type.Optional(Type.String({ description: "Initial prompt injected right after creation (atomic create+send)" })),
+	// 模型覆盖（"provider/modelId" 格式，如 "aggregation/step-5-preview"）：透传 runtime
+	// session.create 的 modelOverride（优先级：metaOverride > modelOverride > settings.json
+	// 全局默认）。不传 = 全局默认——新建 session 的模型解析链里没有「继承派发方模型」这一级，
+	// 派发方在跑什么模型不影响子 session。
+	model: Type.Optional(Type.String({ description: "Model override for the new session in 'provider/modelId' format (e.g. 'aggregation/step-5-preview'). Omit = settings.json global default — the create path has no parent-model inheritance, so the dispatching session's own model never propagates." })),
 });
 
 const SendToSessionParams = Type.Object({
@@ -371,6 +376,8 @@ Returns the new session's id and its initial status. With a prompt it is deliver
 
 Different from send_to_session (delivers messages to an already-created session): this tool creates the session and can send its first message atomically in one call.
 
+Optional model param ('provider/modelId') selects the new session's model — passed through as the runtime session.create modelOverride. Omit = settings.json global default; there is NO parent-model inheritance on this path.
+
 ## Example
 {"cwd":"/absolute/path/to/project","label":"research","prompt":"Analyze the auth module"}
 
@@ -381,6 +388,9 @@ The returned sessionId is the value all other session tools take — keep it; li
 			cwd: p.cwd,
 			label: p.label,
 			prompt: p.prompt,
+			// 模型覆盖透传（runtime session.create payload 的 modelOverride 位，
+			// session-message-handler.ts 已支持——缺它则新建 session 只能吃全局默认）
+			modelOverride: p.model,
 			// 债权只可能在带 prompt 时产生（G1）——无 prompt 不携带 notifyId（缺省即不 arm）
 			notifyId: p.prompt !== undefined ? newNotifyId() : undefined,
 		}),
