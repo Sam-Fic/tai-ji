@@ -310,3 +310,82 @@ describe('markdown 三段拆分 × worker 高亮', () => {
     expect(html.match(new RegExp(WORKER_HTML, 'g'))).toHaveLength(2)
   })
 })
+
+// ── worker 侧协议（多 fence 排队 / 取消只丢未开始的 / jobError）────────────────
+describe('shiki-highlight-worker 协议', () => {
+  /** 导入 worker 模块（core 依赖 mock：高亮函数可控），self.postMessage 收消息 */
+  async function freshWorker() {
+    vi.resetModules()
+    vi.doMock('../shiki-highlight-core', () => ({
+      createShikiHighlighter: vi.fn(() => Promise.resolve({ tag: 'fake-hl' })),
+      highlightWithHighlighter: vi.fn((_hl, code, lang) => `HL(${lang}):${code}`),
+    }))
+    const posted: unknown[] = []
+    const selfObj = globalThis.self as unknown as { postMessage: (m: unknown) => void; onmessage: ((e: { data: unknown }) => void) | null }
+    selfObj.postMessage = (m) => posted.push(m)
+    await import('../shiki-highlight-worker')
+    return { posted, emit: (data: unknown) => selfObj.onmessage?.({ data }) }
+  }
+
+  it('一批多 job 串行处理、逐 job 回传 result（多 fence 连续闭合排队）', async () => {
+    const { posted, emit } = await freshWorker()
+    emit({ type: 'jobs', jobs: [{ id: 1, code: 'a', lang: 'typescript' }, { id: 2, code: 'b', lang: 'css' }] })
+    await vi.waitFor(() => expect(posted.filter((m) => (m as { type: string }).type === 'result')).toHaveLength(2))
+    const results = posted.filter((m) => (m as { type: string }).type === 'result')
+    expect(results).toEqual([
+      { type: 'result', id: 1, html: 'HL(typescript):a' },
+      { type: 'result', id: 2, html: 'HL(css):b' },
+    ])
+    // init 日志一条（一次/worker 生命周期）
+    expect(posted.filter((m) => (m as { type: string }).type === 'log' && /init/.test((m as { msg: string }).msg))).toHaveLength(1)
+  })
+
+  it('cancel 只丢未开始的：排队中的 job 被取消后不产出 result', async () => {
+    const { posted, emit } = await freshWorker()
+    // 首个 job 的处理依赖 mock highlighter（微任务解析），cancel 在同批次之后到达即排队态
+    emit({ type: 'jobs', jobs: [{ id: 1, code: 'a', lang: 'typescript' }, { id: 2, code: 'b', lang: 'typescript' }] })
+    emit({ type: 'cancel', ids: [2] })
+    await vi.waitFor(() => expect(posted.filter((m) => (m as { type: string }).type === 'result')).toHaveLength(1))
+    const results = posted.filter((m) => (m as { type: string }).type === 'result')
+    expect(results).toEqual([{ type: 'result', id: 1, html: 'HL(typescript):a' }])
+  })
+
+  it('高亮函数抛错 → jobError 回传（该 job 由主线程回退，不拖垮队列）', async () => {
+    vi.resetModules()
+    vi.doMock('../shiki-highlight-core', () => ({
+      createShikiHighlighter: vi.fn(() => Promise.resolve({ tag: 'fake-hl' })),
+      highlightWithHighlighter: vi.fn((_hl, code) => { if (code === 'bad') throw new Error('boom'); return `HL:${code}` }),
+    }))
+    const posted: unknown[] = []
+    const selfObj = globalThis.self as unknown as { postMessage: (m: unknown) => void; onmessage: ((e: { data: unknown }) => void) | null }
+    selfObj.postMessage = (m) => posted.push(m)
+    await import('../shiki-highlight-worker')
+    selfObj.onmessage?.({ data: { type: 'jobs', jobs: [{ id: 1, code: 'bad', lang: 'ts' }, { id: 2, code: 'ok', lang: 'ts' }] } })
+    await vi.waitFor(() => {
+      expect(posted.some((m) => (m as { type: string }).type === 'jobError')).toBe(true)
+      expect(posted.some((m) => (m as { type: string; id: number }).type === 'result' && m.id === 2)).toBe(true)
+    })
+    const err = posted.find((m) => (m as { type: string }).type === 'jobError')
+    expect(err).toEqual({ type: 'jobError', id: 1, message: 'boom' })
+  })
+})
+
+// ── 页面隐藏 → 取消全部在途（生命周期）────────────────────────────────────────
+describe('页面隐藏取消在途高亮', () => {
+  it('visibilitychange → hidden：在途 job 结算 null（回退同步），queued 之后的批次照常', async () => {
+    const { resolveFenceHighlights, cancelAllShikiHighlights } = await freshClient()
+    const p = resolveFenceHighlights([{ code: 'a', lang: 'typescript' }])
+    const worker = FakeWorker.instances[0]
+    // 直接驱动 visibility 钩子注册的监听器（模块在首个 worker 创建时注册）
+    const visSpy = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    document.dispatchEvent(new Event('visibilitychange'))
+    await expect(p).resolves.toEqual([null])
+    const cancelMsg = worker.posted.find((m) => (m as { type: string }).type === 'cancel') as { ids: number[] }
+    expect(cancelMsg.ids).toHaveLength(1)
+    visSpy.mockRestore()
+    // 未 degraded：后续批次仍走 worker
+    const p2 = resolveFenceHighlights([{ code: 'b', lang: 'typescript' }])
+    respondResults(worker, ['h'])
+    await expect(p2).resolves.toEqual(['h'])
+  })
+})
