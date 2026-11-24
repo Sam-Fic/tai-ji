@@ -25,12 +25,12 @@
 
 | 组件 | before（+10..73s，63.0s 窗） | after（send-relative 流式窗） | 变化 |
 |---|---|---|---|
-| UserBubble | 1.362s | `<after>` | 预期 →≈0（流式期 user 引用稳定，props 全稳定 → 整组件更新跳过） |
-| TurnSummary | 1.166s | `<after>` | 预期 →≈0（lastAssistant.id + isStreaming 稳定 → 跳过） |
-| Turn | 0.885s | `<after>` | 编排器仍每 delta 重渲（turn 引用变），承载派生；不承诺归零 |
-| MarkdownRenderer | 0.522s | `<after>` | 已有 rAF 合帧，非本批目标 |
-| MessageStream | 7.185s | `<after>` | 含 O(n²) 派生（批1 已归零）+ patch；不承诺归零 |
-| **UserBubble + TurnSummary（断言族）** | **2.528s（占窗 4.0%）** | `<after>` | 预期 ratio < 0.5（shouldUpdateComponent 整体跳过） |
+| UserBubble | 1.362s | ~0.002s | →≈0（流式期 user 引用稳定，props 全稳定 → shouldUpdateComponent 整组件更新跳过） |
+| TurnSummary | 1.166s | 0.000s | →0（lastAssistant.id + isStreaming 稳定 → 跳过） |
+| Turn | 0.885s | 0.466s（−47%） | 编排器仍每 delta 重渲（turn 引用变）；批1 派生归零后 patch 占比下降 |
+| MarkdownRenderer | 0.522s | 0.330s（−37%） | rAF 合帧 + 批1 前缀缓存，非本批直接目标 |
+| MessageStream | 7.185s | 0.423s（−94%） | 批1 O(n²) 派生归零 + B-props 静态子树跳过 |
+| **UserBubble + TurnSummary（断言族）** | **2.528s（占窗 4.0%）** | **0.002s（window 79.7s）** | **ratio 0.001（T2 PASS）——shouldUpdateComponent 整体跳过** |
 
 ## 2. 强制布局 self-time（核心指标：EdgeFade IO 哨兵 + 跟底 gap 修复）
 
@@ -38,9 +38,9 @@
 
 | 函数 | before（+10..73s） | after | 变化 |
 |---|---|---|---|
-| EdgeFade.vue 任意帧 self | 0.546s | `<after>` | 预期 →≈0（scroll 回调不再读 scrollTop，IO 哨兵零几何读） |
-| scrollTo self | 2.044s | `<after>` | 预期下降（gap 修复减少滚动 churn；原生滚动单次成本仍在） |
-| **EdgeFade + scrollTo（断言族）** | **2.590s（占窗 4.1%）** | `<after>` | 预期 ratio < 0.8 |
+| EdgeFade.vue 任意帧 self | 0.546s | 0.000s | →0（IO 哨兵，scroll/IO 回调零几何读；T5 PASS） |
+| scrollTo self | 2.044s | 1.531s（−25%） | gap 修复减少滚动 churn（endOffset 补偿 padTop、落点收敛）；原生滚动单次成本仍在 |
+| **EdgeFade + scrollTo（断言族）** | **2.590s（占窗 4.1%）** | **1.531s（window 79.3s）** | **ratio 0.591（T5 PASS，< 0.8 阈值）** |
 
 ## 3. renderer 主线程 TOP10（self-time）
 
@@ -85,8 +85,8 @@
 
 | 指标 | before（基线日志） | after（探针 delta） |
 |---|---|---|
-| pin-bottom-guard gap 警告 | 每次运行 32 条（gap=29.5/30px，非流式态持续） | `<after>`（预期 gap_warnings=0） |
-| ResizeObserver loop 错误 | ~164 条/run（virtua 内部测量-写 spacer 反馈环，业务侧射程内已做尽） | `<after>`（预期不恶化；**不承诺归零**） |
+| pin-bottom-guard gap 警告 | 每次运行 32 条（gap=29.5/30px，非流式态持续） | **delta 0**（本轮 full-turn 流式期 0 条新 gap 警告；**gap=29.5px 记账误差修复**，T4 PASS） |
+| ResizeObserver loop 错误 | ~164 条/run（virtua 内部测量-写 spacer 反馈环，业务侧射程内已做尽） | **delta 1**（1 条聚合汇总行，实际为 xN 聚合；**未归零**，符合「根因在 virtua 库内部 issue #470、业务侧不承诺归零」预期） |
 
 gap 根因 = `--message-stream-pad-top`(30px) 流内 spacer 未被 virtua container-driver 目标公式计入（commit `4eb083942` 引入），修法 = `endOffset = tailHeight + headOffset`（headOffset = padTop spacer 实测高），浏览器 clamp 自收敛到 gap=0。
 
