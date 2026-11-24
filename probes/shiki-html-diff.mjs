@@ -70,11 +70,20 @@ function decodeBase64Utf8(b64) {
   return new TextDecoder().decode(bytes)
 }
 
-/** 归一化：折叠标签间空白 + class 属性内令牌排序（允许 class 序差） */
+/**
+ * 归一化：折叠标签间空白 + class 属性内令牌排序（允许 class 序差）+
+ * HTML 实体解码（DOM outerHTML 序列化会把 > 转成 &gt;，shiki 原串是字面 >——
+ * 纯序列化差异，解码后两侧同一文本）。
+ */
 function normalizeHtml(html) {
   return html
     .replace(/>\s+</g, '><')
     .replace(/class="([^"]*)"/g, (_m, cls) => `class="${cls.split(/\s+/).filter(Boolean).sort().join(' ')}"`)
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
     .trim()
 }
 
