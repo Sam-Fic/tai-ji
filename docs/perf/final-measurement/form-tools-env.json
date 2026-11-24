@@ -1,0 +1,86 @@
+{
+ "head": "d7cd652b3cf23e9fc1c68fbb19b30e4a7143dbe6",
+ "tag": "form-tools",
+ "fixture": {
+  "path": "probes/fixtures/tool-calls.json",
+  "md5": "0bf013c7d226cd52a449e3f047137477"
+ },
+ "rendererBundle": {
+  "dir": "/Users/zhushanwen/worktrees/tai-ji/feat-cpu-gpu-performance/apps/electron/renderer/dist",
+  "indexMd5": "bbafa2d269949d0b6854646e07f3911d"
+ },
+ "load": {
+  "m1": 1.9,
+  "m5": 2.63,
+  "m15": 2.84
+ },
+ "ports": {
+  "runtimePort": 3620,
+  "cdpPort": 9488,
+  "runtimeInspectPort": 9229,
+  "piInspectPort": 52871
+ },
+ "pids": {
+  "runtimePid": 38289,
+  "sid": "01a20ed0-3bc4-71fa-a89a-62aa2bbf4826"
+ },
+ "packagedApp": [
+  {
+   "pid": 11504,
+   "cpuPct": 0,
+   "cmd": "/Applications/TaiJi.app/Contents/MacOS/TaiJi"
+  },
+  {
+   "pid": 11671,
+   "cpuPct": 15,
+   "cmd": "/Applications/TaiJi.app/Contents/Frameworks/M-eM-$M-*M-fM^^M^A Helper.app/Contents/MacOS/M-eM-$M-*M-fM^^M^A Helper --typ"
+  },
+  {
+   "pid": 11672,
+   "cpuPct": 0,
+   "cmd": "/Applications/TaiJi.app/Contents/Frameworks/M-eM-$M-*M-fM^^M^A Helper.app/Contents/MacOS/M-eM-$M-*M-fM^^M^A Helper --typ"
+  },
+  {
+   "pid": 11673,
+   "cpuPct": 5,
+   "cmd": "/Applications/TaiJi.app/Contents/Frameworks/M-eM-$M-*M-fM^^M^A Helper (Renderer).app/Contents/MacOS/M-eM-$M-*M-fM^^M^A H"
+  },
+  {
+   "pid": 11674,
+   "cpuPct": 0,
+   "cmd": "/Applications/TaiJi.app/Contents/MacOS/TaiJi /Applications/TaiJi.app/Contents/Resources/app.asar.unpacked/dist/runtime/i"
+  },
+  {
+   "pid": 12220,
+   "cpuPct": 0,
+   "cmd": "/Applications/TaiJi.app/Contents/Resources/pi/pi-darwin-x64 --mode rpc --no-extensions --approve --extension builtin:cod"
+  },
+  {
+   "pid": 12221,
+   "cpuPct": 1,
+   "cmd": "/Applications/TaiJi.app/Contents/Resources/pi/pi-darwin-x64 --mode rpc --no-extensions --approve --extension builtin:cod"
+  },
+  {
+   "pid": 44010,
+   "cpuPct": 0,
+   "cmd": "/Applications/TaiJi.app/Contents/Resources/pi/pi-darwin-x64 --mode rpc --no-extensions --approve --extension builtin:cod"
+  },
+  {
+   "pid": 56274,
+   "cpuPct": 1,
+   "cmd": "/Applications/TaiJi.app/Contents/Resources/pi/pi-darwin-x64 --mode rpc --no-extensions --approve --extension builtin:cod"
+  }
+ ],
+ "electronProcCount": 15,
+ "wall": {
+  "submitAt": 1795544889937,
+  "completeAt": 1795544940929,
+  "streamS": 50.992
+ },
+ "rendererWindow": {
+  "relFromS": 0.326,
+  "relToS": 51.232,
+  "sampledS": 50.905314,
+  "nonIdleRatio": 0.4073988621305823
+ }
+}

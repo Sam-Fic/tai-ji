@@ -1,0 +1,76 @@
+# 批5 干净测量 · CPU 三进程分析与前后对比（原始输出）
+# 生成 2026-11-25 02:35:56 · 复算: node /tmp/b5-cpu-compare.mjs / node /tmp/b5-incl.mjs / node /tmp/b5-forms.mjs
+
+## A. renderer 基线 vs 终版（同 harness / 同 fixture original-45k / 同 prod bundle 形态）
+指标                                       baseline                 final
+wall 窗长                                     58.9s                 58.7s
+idle                             25.011s (42.49%)      29.063s (49.50%)
+(program)                        17.209s (29.23%)      19.229s (32.75%)
+JS busy                          16.648s (28.28%)      10.331s (17.59%)
+非空闲 (idle 除)                     33.857s (57.51%)      29.656s (50.50%)
+派生生族 self                          2.248s (3.82%)        0.347s (0.59%)
+shiki 族 self                       1.073s (1.82%)        0.000s (0.00%)
+布局/滚动 self                         1.416s (2.41%)        1.375s (2.34%)
+EdgeFade self                      0.000s (0.00%)        0.000s (0.00%)
+UserBubble inclusive               0.000s (0.00%)        0.000s (0.00%)
+TurnSummary inclusive              0.000s (0.00%)        0.000s (0.00%)
+MessageStream inclusive            0.001s (0.00%)        0.000s (0.00%)
+MarkdownRenderer incl              0.000s (0.00%)        0.000s (0.00%)
+[baseline] metrics n=58 Task=32.96s Script=1.32s Layout=7.00s Style=1.97s  → Task/wall=56.0% Layout/wall=11.9% Style/wall=3.3%
+[final] metrics n=58 Task=29.83s Script=1.38s Layout=7.97s Style=2.32s  → Task/wall=50.8% Layout/wall=13.6% Style/wall=3.9%
+[baseline] runtime: sampled=58.7s nonIdle=2.7% top: 57.11s (idle) @ :0 | 0.25s ruleMatchesPath @ ignore-parser.ts:1 | 0.20s writev @ :0
+[baseline] pi: sampled=58.6s nonIdle=5.3% top: 55.47s (idle) @ :0 | 1.62s (program) @ :0 | 0.19s listOnTimeout @ timers:623
+[final] runtime: sampled=58.5s nonIdle=2.1% top: 57.25s (idle) @ :0 | 0.24s writev @ :0 | 0.13s (program) @ :0
+[final] pi: sampled=58.4s nonIdle=5.3% top: 55.30s (idle) @ :0 | 1.66s (program) @ :0 | 0.18s listOnTimeout @ timers:623
+
+## B. Vue 组件/render inclusive 明细
+== baseline (wall 58.9s)
+   componentUpdateFn        incl=7.975s self=0.072s
+   renderComponentRoot      incl=5.885s self=0.075s
+   shouldUpdateComponent    incl=0.040s self=0.026s
+   updateProps              incl=0.567s self=0.131s
+   removeChild              incl=0.303s self=0.303s
+   DOMPurify.sanitize       incl=1.170s self=0.210s
+   renderMarkdown           incl=4.567s self=0.031s
+   patchDOMProp             incl=0.100s self=0.082s
+   setStyle                 incl=0.149s self=0.145s
+   flushJobs                incl=8.894s self=0.027s
+   runIncrementalRender     incl=0.667s self=0.017s
+   doRender                 incl=0.617s self=0.004s
+   runRender                incl=0.613s self=0.003s
+   updateComponent          incl=3.474s self=0.068s
+   updateComponentPreRender incl=0.729s self=0.038s
+   renderList               incl=0.347s self=0.069s
+   patch                    incl=17.783s self=0.368s
+== final (wall 58.7s)
+   componentUpdateFn        incl=3.738s self=0.033s
+   renderComponentRoot      incl=1.867s self=0.053s
+   shouldUpdateComponent    incl=0.039s self=0.023s
+   updateProps              incl=0.472s self=0.094s
+   removeChild              incl=0.344s self=0.344s
+   DOMPurify.sanitize       incl=1.213s self=0.169s
+   renderMarkdown           incl=2.867s self=0.027s
+   patchDOMProp             incl=0.103s self=0.087s
+   setStyle                 incl=0.142s self=0.138s
+   flushJobs                incl=4.655s self=0.016s
+   runIncrementalRender     incl=0.790s self=0.017s
+   doRender                 incl=0.741s self=0.010s
+   runRender                incl=0.731s self=0.007s
+   updateComponent          incl=2.441s self=0.073s
+   updateComponentPreRender incl=0.613s self=0.045s
+   renderList               incl=0.281s self=0.064s
+   patch                    incl=13.290s self=0.321s
+
+## C. 三种补充 fixture 形态（HEAD 代码）
+form-fences    wall=52.5s nonIdle=41.9% load=2.25
+   deriv=0.233s  shiki=0.000s  scrollTo=2.653s
+   patch=0.00s flushJobs=4.93s componentUpdateFn=4.09s DOMPurify=0.82s renderMarkdown=1.89s
+   metrics Task=21.8s Script=1.60s Layout=2.9s Style=1.85s
+form-tools     wall=50.9s nonIdle=40.7% load=1.9
+   deriv=0.072s  shiki=0.000s  scrollTo=0.842s
+   patch=0.00s flushJobs=4.00s componentUpdateFn=3.20s DOMPurify=0.81s renderMarkdown=1.65s
+   metrics Task=20.6s Script=0.86s Layout=5.5s Style=1.20s
+form-thinking  wall=58.8s nonIdle=51.3% load=1.88
+   deriv=0.158s  shiki=0.000s  scrollTo=0.916s
+   patch=0.00s flushJobs=5.30s componentUpdateFn=4.57s DOMPurify=0.28s renderMarkdown=0.86s
+   metrics Task=30.2s Script=1.03s Layout=11.0s Style=1.71s

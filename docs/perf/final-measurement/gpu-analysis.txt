@@ -1,0 +1,179 @@
+# 批5 干净测量 · GPU union 分析与四臂/两次重复对比（原始输出）
+# 生成 2026-11-25 02:37:25 · 复算脚本 /tmp/b5-gpu-full-table.mjs /tmp/b5-gpu-direct.mjs /tmp/b5-gpu-table.mjs（口径同 probes/analyze-gpu-union.mjs：按线程时间轴 union，禁嵌套求和）
+
+## A. union 总表（CrGpuMain 顶层 + 直接子覆盖分解）
+label          wall   CrGpuMain  RunTask  raster  endRaster present  namedSum  UNNAMED_GAP  Compositor  CrRendererMain
+full-r1        63.8s  15.75s     15.71s  4.51s  2.64s    1.22s  33.37s    -17.66s      8.21s      29.49s
+full-r2        63.0s  14.79s     14.75s  4.29s  2.46s    1.17s  31.81s    -17.06s      8.18s      29.34s
+noblur-r1      62.1s  11.06s     11.03s  4.61s  2.71s    1.28s  34.22s    -23.19s      7.08s      29.21s
+noblur-r2      62.1s  11.66s     11.62s  4.28s  2.47s    1.62s  32.74s    -21.12s      7.50s      29.43s
+nomask-r1      63.0s  16.50s     16.46s  5.05s  2.78s    1.39s  37.13s    -20.67s      8.86s      30.85s
+nomask-r2      63.1s  13.88s     13.84s  4.06s  2.32s    1.38s  30.30s    -16.46s      7.81s      28.90s
+reduced-r1     62.2s  10.51s     10.48s  4.84s  2.86s    1.30s  35.66s    -25.18s      6.78s      29.43s
+baseline       63.5s  15.07s     15.03s  4.40s  2.55s    1.16s  32.58s    -17.55s      8.07s      28.47s
+
+## B. 每臂 CrGpuMain 直接子切片（RunTask 内顶层，去嵌套）
+
+### full-r1  wall=63.81s RunTask=15.71s 直接子覆盖=6.63s 未命中=9.08s
+   5.267s  GpuChannel::ExecuteDeferredRequest
+   1.222s  ImageTransportSurfaceOverlayMac::Present
+   0.088s  Scheduler::FinishTask
+   0.050s  IOSurfaceImageBacking::WaitForCommandsToBeScheduled
+   0.002s  SyncToken::Release
+   0.001s  GrShaderCache::store
+   0.000s  GrShaderCache::load
+   0.000s  CommandBufferStub::OnRegisterTransferBuffer
+
+### full-r2  wall=63.04s RunTask=14.75s 直接子覆盖=6.37s 未命中=8.38s
+   5.065s  GpuChannel::ExecuteDeferredRequest
+   1.172s  ImageTransportSurfaceOverlayMac::Present
+   0.086s  Scheduler::FinishTask
+   0.050s  IOSurfaceImageBacking::WaitForCommandsToBeScheduled
+   0.002s  SyncToken::Release
+   0.000s  GrShaderCache::store
+   0.000s  CommandBufferStub::OnRegisterTransferBuffer
+   0.000s  GrShaderCache::load
+
+### noblur-r1  wall=62.08s RunTask=11.03s 直接子覆盖=6.77s 未命中=4.25s
+   5.344s  GpuChannel::ExecuteDeferredRequest
+   1.283s  ImageTransportSurfaceOverlayMac::Present
+   0.089s  Scheduler::FinishTask
+   0.056s  IOSurfaceImageBacking::WaitForCommandsToBeScheduled
+   0.001s  SyncToken::Release
+   0.000s  CommandBufferStub::OnRegisterTransferBuffer
+   0.000s  GrShaderCache::store
+   0.000s  GrShaderCache::load
+
+### noblur-r2  wall=62.07s RunTask=11.62s 直接子覆盖=6.76s 未命中=4.86s
+   4.986s  GpuChannel::ExecuteDeferredRequest
+   1.621s  ImageTransportSurfaceOverlayMac::Present
+   0.094s  Scheduler::FinishTask
+   0.062s  IOSurfaceImageBacking::WaitForCommandsToBeScheduled
+   0.001s  SyncToken::Release
+   0.000s  CommandBufferStub::OnRegisterTransferBuffer
+   0.000s  GrShaderCache::store
+   0.000s  GrShaderCache::load
+
+### nomask-r1  wall=63.00s RunTask=16.46s 直接子覆盖=7.36s 未命中=9.10s
+   5.822s  GpuChannel::ExecuteDeferredRequest
+   1.391s  ImageTransportSurfaceOverlayMac::Present
+   0.072s  Scheduler::FinishTask
+   0.068s  IOSurfaceImageBacking::WaitForCommandsToBeScheduled
+   0.002s  SyncToken::Release
+   0.000s  GrShaderCache::store
+   0.000s  CommandBufferStub::OnRegisterTransferBuffer
+   0.000s  GrShaderCache::load
+
+### nomask-r2  wall=63.11s RunTask=13.84s 直接子覆盖=6.20s 未命中=7.64s
+   4.677s  GpuChannel::ExecuteDeferredRequest
+   1.378s  ImageTransportSurfaceOverlayMac::Present
+   0.078s  Scheduler::FinishTask
+   0.060s  IOSurfaceImageBacking::WaitForCommandsToBeScheduled
+   0.002s  SyncToken::Release
+   0.000s  GrShaderCache::store
+   0.000s  CommandBufferStub::OnRegisterTransferBuffer
+   0.000s  GrShaderCache::load
+
+### reduced-r1  wall=62.24s RunTask=10.48s 直接子覆盖=6.97s 未命中=3.51s
+   5.551s  GpuChannel::ExecuteDeferredRequest
+   1.297s  ImageTransportSurfaceOverlayMac::Present
+   0.069s  Scheduler::FinishTask
+   0.053s  IOSurfaceImageBacking::WaitForCommandsToBeScheduled
+   0.001s  SyncToken::Release
+   0.000s  CommandBufferStub::OnRegisterTransferBuffer
+
+### baseline  wall=63.51s RunTask=15.03s 直接子覆盖=6.52s 未命中=8.51s
+   5.215s  GpuChannel::ExecuteDeferredRequest
+   1.163s  ImageTransportSurfaceOverlayMac::Present
+   0.088s  Scheduler::FinishTask
+   0.049s  IOSurfaceImageBacking::WaitForCommandsToBeScheduled
+   0.002s  SyncToken::Release
+   0.000s  CommandBufferStub::OnRegisterTransferBuffer
+   0.000s  GrShaderCache::store
+   0.000s  GrShaderCache::load
+
+## C. 各线程 union（analyze-gpu-union.mjs 原始输出）
+[final-gpu] wall-span=63.81s events=1370228
+per-thread union (top busy threads):
+  38288:6954139 CrRendererMain [Renderer] union=29.49s (46.2%)
+  38281:6954092 CrGpuMain [GPU Process] union=15.75s (24.7%)
+  38288:6954173 Compositor [Renderer] union=8.21s (12.9%)
+  38288:6955955 DedicatedWorker thread [Renderer] union=2.73s (4.3%)
+  38288:6954167 ThreadPoolForegroundWorker [Renderer] union=1.81s (2.8%)
+  38288:6954170 ThreadPoolForegroundWorker [Renderer] union=0.62s (1.0%)
+Present: n=0 union=0.00s avg=-ms p50=-ms p95=-ms
+ApplyBackpressure: n=11366 union=0.15s avg=0.02ms p50=0.00ms p95=0.02ms
+Raster(CrGpuMain): n=54007 union=4.51s avg=0.21ms p50=0.09ms p95=0.65ms
+GPUTask: n=0 union=0.00s avg=-ms p50=-ms p95=-ms
+BeginMainFrame: n=0 union=0.00s avg=-ms p50=-ms p95=-ms
+
+[r2-full] wall-span=63.04s events=1374542
+per-thread union (top busy threads):
+  38288:6954139 CrRendererMain [Renderer] union=29.34s (46.5%)
+  38281:6954092 CrGpuMain [GPU Process] union=14.79s (23.5%)
+  38288:6954173 Compositor [Renderer] union=8.18s (13.0%)
+  38288:6954167 ThreadPoolForegroundWorker [Renderer] union=1.67s (2.6%)
+  38288:6955955 DedicatedWorker thread [Renderer] union=1.44s (2.3%)
+  38288:6954170 ThreadPoolForegroundWorker [Renderer] union=0.48s (0.8%)
+Present: n=0 union=0.00s avg=-ms p50=-ms p95=-ms
+ApplyBackpressure: n=11339 union=0.15s avg=0.02ms p50=0.00ms p95=0.02ms
+Raster(CrGpuMain): n=54584 union=4.29s avg=0.20ms p50=0.09ms p95=0.65ms
+GPUTask: n=0 union=0.00s avg=-ms p50=-ms p95=-ms
+BeginMainFrame: n=0 union=0.00s avg=-ms p50=-ms p95=-ms
+
+[r2-no-blur] wall-span=62.07s events=1313387
+per-thread union (top busy threads):
+  38288:6954139 CrRendererMain [Renderer] union=29.43s (47.4%)
+  38281:6954092 CrGpuMain [GPU Process] union=11.66s (18.8%)
+  38288:6954173 Compositor [Renderer] union=7.50s (12.1%)
+  38288:6954167 ThreadPoolForegroundWorker [Renderer] union=1.56s (2.5%)
+  38288:6955955 DedicatedWorker thread [Renderer] union=1.17s (1.9%)
+  38288:6954170 ThreadPoolForegroundWorker [Renderer] union=0.38s (0.6%)
+Present: n=0 union=0.00s avg=-ms p50=-ms p95=-ms
+ApplyBackpressure: n=11171 union=0.12s avg=0.02ms p50=0.01ms p95=0.04ms
+Raster(CrGpuMain): n=53105 union=4.29s avg=0.20ms p50=0.10ms p95=0.66ms
+GPUTask: n=0 union=0.00s avg=-ms p50=-ms p95=-ms
+BeginMainFrame: n=0 union=0.00s avg=-ms p50=-ms p95=-ms
+
+[r2-no-mask] wall-span=63.11s events=1360501
+per-thread union (top busy threads):
+  38288:6954139 CrRendererMain [Renderer] union=28.90s (45.8%)
+  38281:6954092 CrGpuMain [GPU Process] union=13.88s (22.0%)
+  38288:6954173 Compositor [Renderer] union=7.81s (12.4%)
+  38288:6954167 ThreadPoolForegroundWorker [Renderer] union=1.34s (2.1%)
+  38288:6955955 DedicatedWorker thread [Renderer] union=1.04s (1.7%)
+  38288:6954170 ThreadPoolForegroundWorker [Renderer] union=0.29s (0.5%)
+Present: n=0 union=0.00s avg=-ms p50=-ms p95=-ms
+ApplyBackpressure: n=11354 union=0.08s avg=0.01ms p50=0.00ms p95=0.03ms
+Raster(CrGpuMain): n=57040 union=4.06s avg=0.18ms p50=0.09ms p95=0.72ms
+GPUTask: n=0 union=0.00s avg=-ms p50=-ms p95=-ms
+BeginMainFrame: n=0 union=0.00s avg=-ms p50=-ms p95=-ms
+
+[arm-reduced] wall-span=62.24s events=1262036
+per-thread union (top busy threads):
+  96050:6838461 CrRendererMain [Renderer] union=29.43s (47.3%)
+  96041:6838393 CrGpuMain [GPU Process] union=10.51s (16.9%)
+  96050:6838499 Compositor [Renderer] union=6.78s (10.9%)
+  96050:6838488 ThreadPoolForegroundWorker [Renderer] union=1.86s (3.0%)
+  96050:6872990 DedicatedWorker thread [Renderer] union=1.34s (2.2%)
+  96050:6838491 ThreadPoolForegroundWorker [Renderer] union=0.74s (1.2%)
+Present: n=0 union=0.00s avg=-ms p50=-ms p95=-ms
+ApplyBackpressure: n=11202 union=0.07s avg=0.01ms p50=0.01ms p95=0.02ms
+Raster(CrGpuMain): n=53786 union=4.84s avg=0.23ms p50=0.10ms p95=0.79ms
+GPUTask: n=0 union=0.00s avg=-ms p50=-ms p95=-ms
+BeginMainFrame: n=0 union=0.00s avg=-ms p50=-ms p95=-ms
+
+[baseline-gpu] wall-span=63.51s events=1370291
+per-thread union (top busy threads):
+  35339:6945825 CrRendererMain [Renderer] union=28.47s (44.8%)
+  35337:6945774 CrGpuMain [GPU Process] union=15.07s (23.7%)
+  35339:6945861 Compositor [Renderer] union=8.07s (12.7%)
+  35339:6945850 ThreadPoolForegroundWorker [Renderer] union=2.76s (4.3%)
+  35339:6945853 ThreadPoolForegroundWorker [Renderer] union=1.67s (2.6%)
+  35339:6945889 ThreadPoolForegroundWorker [Renderer] union=1.45s (2.3%)
+Present: n=0 union=0.00s avg=-ms p50=-ms p95=-ms
+ApplyBackpressure: n=11379 union=0.09s avg=0.01ms p50=0.00ms p95=0.02ms
+Raster(CrGpuMain): n=53751 union=4.40s avg=0.21ms p50=0.09ms p95=0.67ms
+GPUTask: n=0 union=0.00s avg=-ms p50=-ms p95=-ms
+BeginMainFrame: n=0 union=0.00s avg=-ms p50=-ms p95=-ms
+

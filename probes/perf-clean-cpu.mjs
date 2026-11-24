@@ -54,9 +54,10 @@ const runtimeInspectPort = Number(arg('runtime-inspect-port', '9229'))
 // 固定端口不可用——runtime 会把 pi 留住（session 存活期），第二次采集会撞上一次的 pi。
 const piInspectFile = arg('pi-inspect-file', '/tmp/b5-pi-inspect.json')
 const prompt = arg('text', '请给出性能优化实施方案')
-// 期望的 assistant 终态条数：faux 脚本一步 = 一条 assistant 消息；工具轮 fixture 有多步
-// （toolUse 步 → 执行 → 下一文本步），因此「流式结束」= 收满 N 条 message.complete。
-// 事件驱动收尾（禁固定墙钟）：只数事件，不做任何推测判死。
+// 期望的 message.complete 条数。**口径**：message.complete 是 per-turn（整条 agent 循环
+// 走完一次），不是 per-assistant-message——工具轮 fixture 的 5 轮 toolUse + 1 轮收尾仍只产
+// 1 条 message.complete（实测：6 条 complete 的预期会让探针白等满预算并采到整段空闲）。
+// 多轮的工具轮数由 session JSONL 事后对账（见 final-summary 的形态节），探针只守终态。
 const expectCompletes = Number(arg('expect-completes', '1'))
 
 if (!dataDir) {
@@ -209,7 +210,9 @@ let sid = ''
 
 try {
   // ① session（fixture 已落盘；pi 进程在此时被 runtime spawn，置换位生效）
-  const label = `b5-${tag}`
+  // label 必须**每次唯一**：GUI 在场校验按 panel-session-label 文本匹配，同名会话（上一次
+  // 同 tag 的残留在侧栏里）会导致点错行 → 采到空闲 renderer（实测：nonIdle 掉到 1.3%）。
+  const label = `b5-${tag}-${Date.now().toString(36)}`
   const created = await rt.call('session.create', { cwd: REPO_ROOT, ...(modelOverride ? { modelOverride } : {}), label }, 120000)
   sid = created.session?.id ?? ''
   if (!sid) throw new Error(`session.create 未返回 session id：${JSON.stringify(created).slice(0, 300)}`)
@@ -260,27 +263,38 @@ try {
   }, 1000)
   console.log('[clean-cpu] three profilers started, sending prompt...')
 
+  // 必须先 session.subscribe，否则收不到该 session 的 message.* 广播帧（此前靠
+  // waitForSessionComplete 内部的 subscribe 隐式完成；改成游标扫 rt.events 后必须显式订阅）。
+  await rt.call('session.subscribe', { sessionId: sid }, 30000)
   const clientUuid = crypto.randomUUID()
   await rt.call('delivery.submit', { sessionId: sid, content: prompt, clientUuid }, 30000)
   sendWall = Date.now()
   console.log('[clean-cpu] prompt submitted, streaming window running...')
 
   // ⑤ 事件驱动收尾（禁固定窗；超时 = 调用方显式预算）
+  // 用**游标**扫 rt.events 而不是反复调 waitForSessionComplete：后者每次进入都把 scanned
+  // 重置为当前长度，两次调用之间到达的 complete 会被静默跳过（实测多轮 fixture 只数到 1/6，
+  // 随后空等到 300s 预算到顶还误判「有测量」）。
   let completes = 0
   let done = null
+  let cursor = rt.events.length
   const deadline = Date.now() + windowMs
   while (Date.now() < deadline) {
-    const evt = await waitForSessionComplete(rt, sid, Math.max(1000, deadline - Date.now()))
-    if (!evt) break
-    done = evt
-    if (evt.type === 'message.complete') completes++
-    if (evt.type !== 'message.complete' || completes >= expectCompletes) break
+    let progressed = false
+    for (; cursor < rt.events.length; cursor++) {
+      const f = rt.events[cursor]
+      if (f.payload?.sessionId !== undefined && f.payload.sessionId !== sid) continue
+      if (f.type === 'message.complete') { completes++; done = f; progressed = true }
+      else if (f.type === 'message.error' || f.type === 'message.stream_error' || f.type === 'session.exited') { done = f; progressed = true }
+    }
+    if (done && (done.type !== 'message.complete' || completes >= expectCompletes)) break
+    if (!progressed) await sleep(100)
   }
   clearInterval(metricsTimer)
   console.log(`[clean-cpu] message.complete count=${completes}/${expectCompletes}`)
-  if (!done) {
+  if (!done || completes < expectCompletes) {
     // 必须 throw（不用 process.exit）：exit 会跳过 finally 里的 pi 置换位恢复
-    throw new Error(`流式未在 ${windowMs}ms 预算内完成（事件驱动收尾未到 message.complete）——拒绝判定`)
+    throw new Error(`流式未在 ${windowMs}ms 预算内完成（message.complete ${completes}/${expectCompletes}）——拒绝判定`)
   }
   console.log(`[clean-cpu] turn complete (${done.type}) after ${((Date.now() - sendWall) / 1000).toFixed(1)}s`)
 
