@@ -2734,6 +2734,31 @@
       ]
     },
     {
+      "id": "C-pi-19",
+      "summary": "扩展侧 LLM 调用通道单点：一切类 LLM 请求（压缩摘要 / 标题生成 / 权限分类器等 agent loop 之外的调用）必须经 ctx.modelRegistry.streamSimple（= pi ModelRuntime 门面，含 isVirtualModel 分支先 route 再转发），禁止直连 @earendil-works/pi-ai/compat 的 completeSimple/streamSimple（compat 是静态 api 目录分发层，不认 api === \"pi-virtual\"，模型为聚合路由时恒抛 No API provider registered for api: pi-virtual）；nativeCompact 等宿主函数的 streamFn 参数也必须显式传入该门面（省略即回落 compat）",
+      "scope": [
+        "extensions/**"
+      ],
+      "authority": [
+        "TROUBLESHOOTING.md#46-后台压缩反复失败但通知只说摘要生成未返回结果会话模型是聚合路由时c-pi-19",
+        "pi-semantics.json"
+      ],
+      "dimensions": [
+        "extension-api",
+        "arch-boundary"
+      ],
+      "enforcement": [
+        {
+          "type": "machine",
+          "hook": "check-pi-semantics.mjs"
+        },
+        {
+          "type": "review",
+          "agent": "review-arch-boundary"
+        }
+      ]
+    },
+    {
       "id": "C-ext-22",
       "summary": "plugin 通知与 manifest 兼容契约：notify 走 info/warning/error 三级经 plugin:notification 广播；hook 的 blocked/transformedContent 变更在 session 历史可见（可审计）；manifest semver 不兼容跳过扫描",
       "scope": [
