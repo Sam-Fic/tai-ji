@@ -54,7 +54,7 @@
 
 | 枝名 | 目标 | 依赖 | 风险级 | 文件 | case |
 |---|---|---|---|---|---|
-| B-measure（主干） | G1 的 harness：三进程同运行采集探针 + pi 置换 launcher + GPU trace 补强 + 三种 fixture + `.tree-plant.json` docs 键覆写 | — | 高（测量基建坏 = 全批数据不可引用） | probes/perf-clean-cpu.mjs, probes/pi-profile-launcher.mjs, probes/gpu-trace.mjs, probes/lib/harness.mjs, probes/fixtures/*, .tree-plant.json, docs/tp-*-batch5.md | M1,M2 |
+| B-measure | G1 的 harness：三进程同运行采集探针 + pi 置换 launcher + GPU trace 补强 + 三种 fixture + `.tree-plant.json` docs 键覆写（主干枝：其验收 = trunk gate 的 M1/M2/P1） | — | 高（测量基建坏 = 全批数据不可引用） | probes/perf-clean-cpu.mjs, probes/pi-profile-launcher.mjs, probes/gpu-trace.mjs, probes/lib/harness.mjs, probes/fixtures/*, probes/analyze-clean-cpu.mjs, probes/analyze-gpu-arms.mjs, probes/analyze-original-baseline.mjs, probes/cpuprofile-to-folded.mjs, probes/check-final-reports.mjs, probes/b5-start-instance.sh, .tree-plant.json, docs/tp-*-batch5.md | M1,M2 |
 | B-clean-final | G1/G2 的 after 侧：HEAD 代码的干净 CPU + GPU 采集与归档 | trunk | 中 | docs/perf/final-measurement/*, probes/*（探针修正） | M1,M2 |
 | B-clean-baseline | G2 的 before 侧：`eff28e4a5`（pre-batch1）代码的干净 CPU + GPU 采集（含 git checkout 舞蹈与 HEAD 断言） | trunk | 高（工作区状态风险） | docs/perf/final-measurement/baseline-* | M3,M4 |
 | B-gpu-decision | G3：三臂 A/B（full / no-blur / reduced-transparency）+ 裁决文档 | trunk | 中 | docs/perf/gpu-decision.md, docs/perf/final-measurement/gpu-* | G1,G2,G3,G4 |

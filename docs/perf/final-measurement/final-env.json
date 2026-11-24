@@ -1,5 +1,5 @@
 {
- "head": "741991e191701cdca2a4f9b52558c596ce2bc715",
+ "head": "468a76563b0b6f012b95616d13e5332226dc1f43",
  "tag": "final",
  "fixture": {
   "path": "probes/fixtures/original-45k.json",
@@ -10,19 +10,19 @@
   "indexMd5": "bbafa2d269949d0b6854646e07f3911d"
  },
  "load": {
-  "m1": 2.87,
-  "m5": 3.82,
-  "m15": 3.29
+  "m1": 1.77,
+  "m5": 2.45,
+  "m15": 2.76
  },
  "ports": {
   "runtimePort": 3620,
   "cdpPort": 9488,
   "runtimeInspectPort": 9229,
-  "piInspectPort": 54700
+  "piInspectPort": 54997
  },
  "pids": {
-  "runtimePid": 38289,
-  "sid": "01a20fc3-3280-767d-b245-97fd527932a1"
+  "runtimePid": 85062,
+  "sid": "01a20fe6-ced8-717c-b7b5-18aa880f4c59"
  },
  "packagedApp": [
   {
@@ -42,7 +42,7 @@
   },
   {
    "pid": 11673,
-   "cpuPct": 4,
+   "cpuPct": 5,
    "cmd": "/Applications/TaiJi.app/Contents/Frameworks/M-eM-$M-*M-fM^^M^A Helper (Renderer).app/Contents/MacOS/M-eM-$M-*M-fM^^M^A H"
   },
   {
@@ -62,25 +62,25 @@
   },
   {
    "pid": 44010,
-   "cpuPct": 0,
+   "cpuPct": 1,
    "cmd": "/Applications/TaiJi.app/Contents/Resources/pi/pi-darwin-x64 --mode rpc --no-extensions --approve --extension builtin:cod"
   },
   {
    "pid": 56274,
-   "cpuPct": 3,
+   "cpuPct": 1,
    "cmd": "/Applications/TaiJi.app/Contents/Resources/pi/pi-darwin-x64 --mode rpc --no-extensions --approve --extension builtin:cod"
   }
  ],
  "electronProcCount": 15,
  "wall": {
-  "submitAt": 1795560813528,
-  "completeAt": 1795560872724,
-  "streamS": 59.196
+  "submitAt": 1795563147578,
+  "completeAt": 1795563206118,
+  "streamS": 58.54
  },
  "rendererWindow": {
-  "relFromS": 0.363,
-  "relToS": 59.49,
-  "sampledS": 58.934989,
-  "nonIdleRatio": 0.5478378896448084
+  "relFromS": 0.364,
+  "relToS": 58.829,
+  "sampledS": 58.458962,
+  "nonIdleRatio": 0.5294744200213477
  }
 }
