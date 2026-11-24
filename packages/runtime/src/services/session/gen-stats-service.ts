@@ -33,9 +33,16 @@
  *   per-session current 纯内存、runtime 重启清零（重启后「—」到本会话下个 turn；聚合仍从
  *   磁盘恢复）。无值编码纪律 [HISTORICAL]：全帧无值一律 null（null=无数据），禁止 ?? 0——
  *   0 只允许作为真实测量值出现。
+ *
+ * 模型 key 命名空间（2026-11-23 修复，根因见 gen-stats-model-keys.ts 文件头）：采样落盘按
+ * 消息自带**物理** key（`provider/model`），会话权威模型可能是**虚拟**路由 key
+ * （`aggregation/<routeId>`）——两套命名空间不互通会让路由会话的 current/窗口聚合全 null、
+ * 前端三个触发器整钮不渲染。读侧经 gen-stats-model-keys 的同一纯函数展开：current 匹配、
+ * 窗口聚合并集、广播反向寻址三处统一走 `modelKeyCovers` / `expandModelKeys`，落盘零改动。
  */
 
 import type {
+  AggregationRoute,
   GenStatsCacheMiss,
   GenStatsCacheRatio,
   GenStatsDistribution,
@@ -49,6 +56,7 @@ import { logger } from '../../infra/logger.js'
 import type { ISessionService } from '../../interfaces.js'
 import { getOrCreate } from '../../utils/collections.js'
 import type { IProcessManager } from '../ports/pi-engine.js'
+import { expandModelKeys, modelKeyCovers, modelKeysRelated, type ReadAggregationRoutes } from './gen-stats-model-keys.js'
 import type { GenStatsSample } from './types.js'
 import {
   aggregateCacheRatio,
@@ -125,8 +133,12 @@ function buildCacheRecord(s: GenStatsSample): CacheRatioRecord | null {
  * 字段缺省 = 该文件本次未写（guard 丢弃或写失败），聚合对应侧照旧读盘——
  * 写失败后帧内该侧值 = 盘上旧值，与重读行为一致（§3.5 容错语义不变）。
  * 字段按文件族参数化（ttft 单元素组与 speed/cache 二元组不同形，composer-genstats-ttft §3.3）。
+ *
+ * key（2026-11-23 路由修复）：刚落盘样本的**物理**模型 key。路由会话的聚合适并集读取多份
+ * 成员文件，只有与该 key 相等的那份可用内存值顶替，其余成员照旧读盘。
  */
-interface FreshDayRecords {
+interface FreshSamples {
+  key: string
   speed?: GenStatsDayRecords<SpeedRecord>
   cache?: GenStatsDayRecords<CacheRatioRecord>
   ttft?: GenStatsDayRecords<TtftRecord>
@@ -203,6 +215,25 @@ function entriesSince<T extends GenStatsRecord>(records: GenStatsDayRecords<T>, 
   return out
 }
 
+/**
+ * 多成员日记录并集（路由窗口聚合：同 day key 的样本数组拼接）。
+ * 不存在的成员文件由 readDayRecords 返回 `{}`，天然无贡献；不做跨成员去重——同一物理模型
+ * 在 expandModelKeys 已按 key 去重，故不会重复计量同一份文件。
+ */
+function mergeDayRecords<T extends GenStatsRecord>(
+  parts: readonly GenStatsDayRecords<T>[],
+): GenStatsDayRecords<T> {
+  const merged: GenStatsDayRecords<T> = {}
+  for (const part of parts) {
+    for (const [day, entries] of Object.entries(part)) {
+      const bucket = merged[day]
+      if (bucket === undefined) merged[day] = [...entries]
+      else bucket.push(...entries)
+    }
+  }
+  return merged
+}
+
 /** GenStatsService 装配依赖（窄注入，组合根 index.ts 构造）。 */
 export interface GenStatsServiceDeps {
   /** session 级帧发送通道（组合根绑 MessageBus.publish——stats_update 定向推给订阅该 sid 的连接）。 */
@@ -211,6 +242,13 @@ export interface GenStatsServiceDeps {
   pm: IProcessManager
   /** session 服务（销毁清理挂 onSessionDestroyedHandlers + 降级链③ replicated states 双写缓存值）。 */
   sessionService: ISessionService
+  /**
+   * 模型路由配置快照读取端口（组合根注入 `providerExtrasStore.getAggregationRoutesSync`）。
+   * 虚拟 key（`aggregation/<routeId>`）→ 成员物理 key 集展开的唯一配置来源；缺省不注入 =
+   * 等价「无路由配置」（展开恒等，行为与修复前逐字一致）。
+   * 每次操作只读一次快照后向内下钻（不建缓存 / 不建文件监听——ADR-0190 / ADR-0122）。
+   */
+  readRoutes?: ReadAggregationRoutes
 }
 
 export class GenStatsService {
@@ -225,6 +263,22 @@ export class GenStatsService {
   private readonly sessionCurrent = new Map<string, SessionCurrentEntry>()
 
   constructor(private readonly deps: GenStatsServiceDeps) {}
+
+  /**
+   * 模型路由配置快照（每次操作只读一次，向内下钻）。读失败（配置损坏 / IO 异常）不抛——
+   * 退化为空集 = 展开恒等，指标回落而不是把配置域故障升级成指标域异常（设计「非功能设计」
+   * 表第 3 行）。未注入 readRoutes（单测 / 无路由域的组合根）同样返回空集。
+   */
+  private routeSnapshot(): readonly AggregationRoute[] {
+    try {
+      return this.deps.readRoutes?.() ?? []
+    } catch (err) {
+      logger.warn('[gen-stats] aggregation routes read failed, degrade to identity expansion', {
+        error: toMessage(err),
+      })
+      return []
+    }
+  }
 
   // ── 写 1 + 扩展广播：interpreter turn-usage 分支调用（同步，fire-and-forget）────────
 
@@ -272,6 +326,8 @@ export class GenStatsService {
 
     const fresh = this.persistSample(provider, model, sample)
     // 扩展广播（D4）：仅 ≥1 条样本落盘时推——无落盘则聚合值不变，推帧无信息量。
+    // 路由会话的寻址/聚合都经 modelKey 展开（物理采样 key → 路由 owner key），见
+    // gen-stats-model-keys.ts。
     if (fresh) this.broadcastModel(modelKey, fresh)
   }
 
@@ -338,9 +394,9 @@ export class GenStatsService {
    * current 槽共用）：durationMs>0 附加防 0ms 退化样本（蓝本同款仅 guard output×duration
    * 组合，此处补 0ms 一并排除——0ms 分母样本无信息量）。
    */
-  private persistSample(provider: string, model: string, s: GenStatsSample): FreshDayRecords | null {
+  private persistSample(provider: string, model: string, s: GenStatsSample): FreshSamples | null {
     const day = localDayKey()
-    const fresh: FreshDayRecords = {}
+    const fresh: FreshSamples = { key: `${provider}/${model}` }
 
     const speedRecord = buildSpeedRecord(s)
     if (speedRecord) {
@@ -377,7 +433,7 @@ export class GenStatsService {
    * read→append→write 单同步临界段（D8；writeDayRecords 内含 30 天 GC + tmp+rename 原子写）。
    * T 进 T 出（entry 参数放宽至 GenStatsRecord 家族，§3.3 泛型化）：期望元组长度取自 entry
    * 自身长度（元组类型的运行时自描）——ttft 单元素组按长度 1 校验，不会被默认二元组校验
-   * 当畸形丢弃（S8）；返回按 T 参数化的日记录，供 FreshDayRecords 家族化复用。禁 as 绕过。
+   * 当畸形丢弃（S8）；返回按 T 参数化的日记录，供 FreshSamples 家族化复用。禁 as 绕过。
    */
   private appendRecord<T extends GenStatsRecord>(filePath: string, day: string, entry: T): GenStatsDayRecords<T> {
     const records = readDayRecords<T>(filePath, entry.length)
@@ -435,33 +491,45 @@ export class GenStatsService {
   /**
    * 完整帧构造（唯一出口）：模型全局聚合 + 本会话 current 合并（D6 聚合在 runtime 算好，
    * 前端只拿结论）。三条发送路径（recordSample 广播 / onModelSwitched / 恢复路径）全经此。
+   * 路由配置只在本方法读一次快照，聚合与 current 匹配共用同一快照（不重复读盘）。
    */
   frameFor(sid: string, modelKey: string | null): GenStatsFrame {
-    return this.composeFrame(sid, modelKey, this.modelAggregates(modelKey))
+    const routes = this.routeSnapshot()
+    return this.composeFrame(sid, modelKey, this.modelAggregates(modelKey, routes), routes)
   }
 
   /**
-   * 帧合成：聚合层（模型全局）+ 本会话 current（sessionCurrent 槽，按 modelKey 匹配）。
-   * 无回落纪律：本会话无样本 / 槽 modelKey ≠ 当前模型 → current null（UI「—」），绝不回落
+   * 帧合成：聚合层（模型全局）+ 本会话 current（sessionCurrent 槽，按模型 key 归属匹配）。
+   * 无回落纪律：本会话无样本 / 槽 key 与当前模型无关 → current null（UI「—」），绝不回落
    * 到模型全局末条。已预计算聚合层的调用方（broadcastModel 逐 sid 发帧）直接调本函数。
    *
+   * current 匹配（2026-11-23 路由修复）：从字符串全等改为 `modelKeysRelated`——会话权威
+   * key 是虚拟路由（`aggregation/<routeId>`）而槽里存的是成员物理 key，两侧不相等但同属
+   * 一个路由时必须命中（否则路由会话 current 恒 null）。物理直连时退化为全等。
+   *
    * 归因降噪（2026-09-19）：缓存槽带归因时随帧下发 cacheRatio.currentMiss（与 current 同源
-   * 同生命周期——槽 modelKey 不匹配时两者一起缺省，不会出现「无 current 却有归因」的错位帧）。
+   * 同生命周期——槽 key 不匹配时两者一起缺省，不会出现「无 current 却有归因」的错位帧）。
    */
-  private composeFrame(sid: string, modelKey: string | null, aggregate: ModelAggregates): GenStatsFrame {
+  private composeFrame(
+    sid: string,
+    modelKey: string | null,
+    aggregate: ModelAggregates,
+    routes: readonly AggregationRoute[],
+  ): GenStatsFrame {
     const entry = this.sessionCurrent.get(sid)
+    const matches = (slotKey: string): boolean => modelKey !== null && modelKeysRelated(modelKey, slotKey, routes)
     // current 口径 = 单样本分布取其 **p50**（= 原值四舍五入，单条样本五种量全等）——
     // 统一走 summarizeDistribution，不另设「单条样本直接取原值」旁路，防两条口径漂移
     const speedCurrent =
-      modelKey !== null && entry?.speed?.modelKey === modelKey
+      entry?.speed && matches(entry.speed.modelKey)
         ? aggregateSpeedDistribution([entry.speed.record]).p50
         : null
-    const cacheSlot = modelKey !== null && entry?.cache?.modelKey === modelKey ? entry.cache : undefined
+    const cacheSlot = entry?.cache && matches(entry.cache.modelKey) ? entry.cache : undefined
     const cacheCurrent = cacheSlot ? aggregateCacheRatio([cacheSlot.record]) : null
     // ttft current = 本会话最近一次样本（单样本分布 p50 = 原值，ttftMs 本为整数 ms 恒等）；
-    // modelKey 校验同 speed 槽（异模型残留 → null，无回落）
+    // key 校验同 speed 槽（异模型残留 → null，无回落）
     const ttftCurrent =
-      modelKey !== null && entry?.ttft?.modelKey === modelKey
+      entry?.ttft && matches(entry.ttft.modelKey)
         ? aggregateTtftDistribution([entry.ttft.record]).p50
         : null
     return {
@@ -503,19 +571,46 @@ export class GenStatsService {
    * 过渡现象非 bug。刻意不做迁移脚本：数据量小、无跨期对比消费方，迁移的写风险大于读
    * 偏差收益；重审触发 = 出现依赖聚合值做跨期对比的消费方或用户长期反馈倒挂误读。
    */
-  private modelAggregates(modelKey: string | null, fresh?: FreshDayRecords): ModelAggregates {
+  private modelAggregates(
+    modelKey: string | null,
+    routes: readonly AggregationRoute[],
+    fresh?: FreshSamples,
+  ): ModelAggregates {
     if (modelKey === null) {
       return { speed: NULL_SPEED_AGGREGATE, cacheRatio: NULL_CACHE_AGGREGATE, ttft: NULL_TTFT_AGGREGATE }
     }
-    const { provider, model } = splitModelKey(modelKey)
+    // 路由会话（键 = 虚拟路由）→ 成员物理 key 并集；物理 key → 恒等自身
+    // （路由不存在 / 无成员 / 配置损坏均退化为恒等，指标回落而非报错）。
+    const memberKeys = expandModelKeys(modelKey, routes)
     const now = new Date()
-    // 读取按文件族显式传记录类型 + 期望元组长度（§3.3 参数化校验：二元组 2 / 单元素组 1）
-    const speedRecords =
-      fresh?.speed ?? readDayRecords<SpeedRecord>(speedFilePath(provider, model), PAIR_RECORD_TUPLE_LENGTH)
-    const cacheRecords =
-      fresh?.cache ?? readDayRecords<CacheRatioRecord>(cacheRatioFilePath(provider, model), PAIR_RECORD_TUPLE_LENGTH)
-    const ttftRecords =
-      fresh?.ttft ?? readDayRecords<TtftRecord>(ttftFilePath(provider, model), TTFT_RECORD_TUPLE_LENGTH)
+    // 读取按文件族显式传记录类型 + 期望元组长度（§3.3 参数化校验：二元组 2 / 单元素组 1）。
+    // 多成员并集：每个成员各读一份日记录后按 day key 拼接（缺文件由 readDayRecords 返回 {}）；
+    // 本次刚落盘的成员（fresh.key 相等）用内存值顶替，免写后即读。
+    const speedParts: GenStatsDayRecords<SpeedRecord>[] = []
+    const cacheParts: GenStatsDayRecords<CacheRatioRecord>[] = []
+    const ttftParts: GenStatsDayRecords<TtftRecord>[] = []
+    for (const memberKey of memberKeys) {
+      const { provider, model } = splitModelKey(memberKey)
+      const isFresh = fresh?.key === memberKey
+      speedParts.push(
+        isFresh && fresh.speed
+          ? fresh.speed
+          : readDayRecords<SpeedRecord>(speedFilePath(provider, model), PAIR_RECORD_TUPLE_LENGTH),
+      )
+      cacheParts.push(
+        isFresh && fresh.cache
+          ? fresh.cache
+          : readDayRecords<CacheRatioRecord>(cacheRatioFilePath(provider, model), PAIR_RECORD_TUPLE_LENGTH),
+      )
+      ttftParts.push(
+        isFresh && fresh.ttft
+          ? fresh.ttft
+          : readDayRecords<TtftRecord>(ttftFilePath(provider, model), TTFT_RECORD_TUPLE_LENGTH),
+      )
+    }
+    const speedRecords = mergeDayRecords(speedParts)
+    const cacheRecords = mergeDayRecords(cacheParts)
+    const ttftRecords = mergeDayRecords(ttftParts)
     // 滚动窗口截止点只算一次（speed 与 ttft 两个聚合块共用同三档）。
     const cutoffDay = rollingWindowCutoff(now, WINDOW_DAYS.day)
     const cutoffD7 = rollingWindowCutoff(now, WINDOW_DAYS.d7)
@@ -589,25 +684,46 @@ export class GenStatsService {
 
   // ── 广播辅助（D4）────────────────────────────────────────────────────────────────────
 
-  /** 该模型全部已知 session（stats_update 扩展广播逐 sid 发帧用；映射由三写一清维护）。 */
-  sessionsOfModel(modelKey: string): string[] {
+  /**
+   * 该模型全部已知 session（stats_update 扩展广播逐 sid 发帧用；映射由三写一清维护）。
+   *
+   * 反向寻址（2026-11-23 路由修复）：映射里存的可能是虚拟路由 key（`aggregation/<routeId>`）
+   * 而本次采样的 modelKey 是成员物理 key——用 `modelKeyCovers` 判定「该 sid 的权威 key
+   * 是否覆盖本物理 key」。物理 owner 仍只匹配自身（行为不变）。
+   */
+  sessionsOfModel(modelKey: string, routes: readonly AggregationRoute[] = this.routeSnapshot()): string[] {
     const sids: string[] = []
-    for (const [sid, mk] of this.modelBySid) {
-      if (mk === modelKey) sids.push(sid)
+    for (const [sid, ownerKey] of this.modelBySid) {
+      if (modelKeyCovers(ownerKey, modelKey, routes)) sids.push(sid)
     }
     return sids
   }
 
   /**
-   * 对该模型全部已知 session 逐 sid 发帧：聚合层共享（只算一次），current 各取本会话槽
-   * ——同模型多 session 聚合值相同、current 各自独立（会话隔离语义）。
+   * 对该模型全部已知 session 逐 sid 发帧：聚合层按**每个 sid 自己的权威 model key** 计算
+   * （同 key 共用一份，Map 去重），current 各取本会话槽。
+   *
+   * 为什么不是一个共享 aggregate（2026-11-23 路由修复的关键点）：路由会话的窗口聚合口径是
+   * 「路由全部端点成员并集」，不是「本次命中端点单文件」——若把按物理采样 key 算的聚合直接
+   * 发给路由 sid，窗口值会随本次路由收窄（B3 反例）。故按 ownerKey 分组：物理 sid 算自身
+   * 文件，路由 sid 算成员并集；同一 ownerKey 只算一次（同 key 多 session 聚合值相同仍成立）。
+   *
+   * 帧的 model 字段回填 **该 sid 自己的权威 key**（而非本次采样的物理 key）：路由会话收到
+   * 的帧必须仍标 `aggregation/<routeId>`，否则前端「帧 model = 会话当前模型」归属契约破裂。
    */
-  private broadcastModel(modelKey: string, fresh?: FreshDayRecords): void {
-    const aggregate = this.modelAggregates(modelKey, fresh)
-    for (const targetSid of this.sessionsOfModel(modelKey)) {
+  private broadcastModel(modelKey: string, fresh?: FreshSamples): void {
+    const routes = this.routeSnapshot()
+    const aggregateByOwner = new Map<string, ModelAggregates>()
+    for (const targetSid of this.sessionsOfModel(modelKey, routes)) {
+      const ownerKey = this.modelBySid.get(targetSid) ?? modelKey
+      let aggregate = aggregateByOwner.get(ownerKey)
+      if (aggregate === undefined) {
+        aggregate = this.modelAggregates(ownerKey, routes, fresh)
+        aggregateByOwner.set(ownerKey, aggregate)
+      }
       this.deps.publish(targetSid, {
         type: 'session.stats_update',
-        payload: this.composeFrame(targetSid, modelKey, aggregate),
+        payload: this.composeFrame(targetSid, ownerKey, aggregate, routes),
       })
     }
   }

@@ -17,6 +17,7 @@
       "packages/runtime/src/services/quota-providers/**",
       "packages/runtime/src/services/quota-params.ts",
       "packages/runtime/src/services/session/gen-stats-service.ts",
+      "packages/runtime/src/services/session/gen-stats-model-keys.ts",
       "packages/runtime/src/services/session/gen-stats-store.ts",
       "packages/runtime/src/services/session/event-interpreter-gen-stats.ts",
       "packages/runtime/src/transport/usage-message-handler.ts",
@@ -43,6 +44,7 @@
     "packages/runtime/src/services/usage/**",
     "packages/runtime/src/__tests__/services/usage/**",
     "packages/runtime/src/services/session/__tests__/gen-stats-service.test.ts",
+    "packages/runtime/src/services/session/__tests__/gen-stats-model-keys.test.ts",
     "packages/runtime/test/services/quota-service.test.ts",
     "packages/runtime/test/services/quota-cache.test.ts",
     "packages/runtime/test/services/quota-auth-chain.integration.test.ts",
@@ -64,5 +66,7 @@
   ],
   "sharedBy": {},
   "contracts": [],
-  "e2eRules": []
+  "e2eRules": [
+    "E2E-GENSTATS-01"
+  ]
 }

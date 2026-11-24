@@ -29,7 +29,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { GenStatsFrame, ServerMessage } from '@taiji/shared'
+import type { AggregationRoute, GenStatsFrame, ServerMessage } from '@taiji/shared'
 import type { IProcessManager } from '../../ports/pi-engine.js'
 import type { IPiEngine } from '../../ports/pi-engine.js'
 import type { ISessionService, IMessageBroker } from '../../../interfaces.js'
@@ -81,7 +81,7 @@ interface Fixture {
   getSession: ReturnType<typeof vi.fn>
 }
 
-function makeService(getStateImpl?: () => Promise<unknown>): Fixture {
+function makeService(getStateImpl?: () => Promise<unknown>, routes: readonly AggregationRoute[] = []): Fixture {
   const published: Array<{ sid: string; msg: ServerMessage }> = []
   const getState = vi.fn(getStateImpl ?? (async () => undefined))
   const getClient = vi.fn(() => (getStateImpl === null ? undefined : ({ getState } as unknown)))
@@ -93,6 +93,8 @@ function makeService(getStateImpl?: () => Promise<unknown>): Fixture {
     publish: (sid, msg) => published.push({ sid, msg }),
     pm: { getClient } as unknown as IProcessManager,
     sessionService: { setOnSessionDestroyed, getSession } as unknown as ISessionService,
+    // 默认空路由表 = 展开恒等（既有用例行为不变）；路由用例显式传 fixtures。
+    readRoutes: () => routes,
   })
   return { service, published, getClient, getState, setOnSessionDestroyed, getSession }
 }
@@ -1096,5 +1098,196 @@ describe('SessionMessageHandler session.getGenStats case', () => {
     expect(errors).toHaveLength(0)
     expect(getSnapshotForSession).toHaveBeenCalledWith('s9')
     expect(replies).toEqual([{ id: 'req-1', type: 'session.stats_update', payload: frame }])
+  })
+})
+
+// ── 路由会话（aggregation 虚拟模型）命名空间对齐（2026-11-23 修复）────────────────────────
+// 根因：采样落盘按 assistant 消息的物理 key，会话权威模型是虚拟路由 key，三处字符串全等
+// 使路由会话 current/窗口聚合恒 null、前端整钮不渲染。修复 = 读侧展开层（gen-stats-model-keys）。
+// 本组用例锁死：current 匹配 / 窗口聚合并集 / 广播反向寻址三处的路由语义 + 降级恒等。
+
+/** 最小合法路由 fixture（只填展开层消费字段） */
+function makeRoute(id: string, members: Array<[string, string]>): AggregationRoute {
+  return {
+    id,
+    name: id,
+    modelId: id,
+    enabled: true,
+    mode: 'simple',
+    members: members.map(([providerId, modelId], index) => ({ id: `m${index}`, providerId, modelId, type: 'none' })),
+    specials: [],
+  }
+}
+
+describe('GenStatsService 路由会话（aggregation 虚拟模型）', () => {
+  const ROUTE_A: readonly AggregationRoute[] = [makeRoute('route-a', [['prov', 'mdl']])]
+
+  it('live 帧：物理样本推到路由会话，帧 model 保留虚拟 key，current 三槽非 null', () => {
+    const { service, published } = makeService(undefined, ROUTE_A)
+    service.onSnapshotResolved('s1', 'aggregation/route-a') // 会话权威 = 虚拟 key
+    service.recordSample('s1', { ...NORMAL_SAMPLE, ttftMs: 240 })
+
+    expect(published).toHaveLength(1)
+    const frame = published[0]!.msg.payload as GenStatsFrame
+    expect(published[0]!.sid).toBe('s1')
+    // 帧归属契约：帧 model = 该 sid 的权威 key（虚拟），不是本次采样的物理 key
+    expect(frame.model).toBe('aggregation/route-a')
+    expect(frame.speed.current).toBe(50)
+    expect(frame.cacheRatio.current).toBe(33)
+    expect(frame.ttft.current).toBe(240)
+    // 窗口聚合来自成员物理文件（落盘仍是物理 key，零格式变更）
+    expect(frame.speed.day).toEqual(distOfOne(50))
+    expect(readJson(speedFilePath('prov', 'mdl'))).toEqual({ [localDayKey()]: [[100, 2000]] })
+    expect(existsSync(speedFilePath('aggregation', 'route-a'))).toBe(false)
+  })
+
+  it('窗口聚合并集：多成员路由取全部端点文件并集（不是本次命中的单文件）', () => {
+    const routes: readonly AggregationRoute[] = [
+      makeRoute('dual', [
+        ['prov', 'mdl-a'],
+        ['prov', 'mdl-b'],
+      ]),
+    ]
+    const { service } = makeService(undefined, routes)
+    const day = localDayKey()
+    // 两成员各预置一条当日样本：a=50 t/s，b=100 t/s
+    writeDayRecords(speedFilePath('prov', 'mdl-a'), { [day]: [[100, 2000]] })
+    writeDayRecords(speedFilePath('prov', 'mdl-b'), { [day]: [[300, 3000]] })
+    writeDayRecords(cacheRatioFilePath('prov', 'mdl-a'), { [day]: [[300, 900]] })
+    writeDayRecords(cacheRatioFilePath('prov', 'mdl-b'), { [day]: [[100, 1000]] })
+    writeDayRecords(ttftFilePath('prov', 'mdl-a'), { [day]: [[200]] })
+    writeDayRecords(ttftFilePath('prov', 'mdl-b'), { [day]: [[400]] })
+
+    const frame = service.frameFor('s1', 'aggregation/dual')
+
+    expect(frame.model).toBe('aggregation/dual')
+    // 速度并集 [50, 100] → avg 75 / p50 75（偶数样本取双中位均值）/ p99 100 / max 100 / min 50
+    expect(frame.speed.day).toEqual(dist(75, 75, 100, 100, 50))
+    expect(frame.speed.d7).toEqual(dist(75, 75, 100, 100, 50))
+    // 命中率并集加权：Σread 400 / Σprompt 1900 = 21%
+    expect(frame.cacheRatio.day).toBe(21)
+    // TTFT 并集 [200, 400] → avg 300 / p50 300（偶数样本双中位均值）/ p99 400
+    expect(frame.ttft.day).toEqual(dist(300, 300, 400, 400, 200))
+    // 本会话无槽 → current 仍 null（无回落纪律不变）
+    expect(frame.speed.current).toBeNull()
+  })
+
+  it('current 匹配：路由 key × 成员物理槽命中；非成员物理模型不串台', () => {
+    const routes: readonly AggregationRoute[] = [
+      makeRoute('dual', [
+        ['prov', 'mdl-a'],
+        ['prov', 'mdl-b'],
+      ]),
+    ]
+    const { service } = makeService(undefined, routes)
+    service.recordSample('s1', { ...NORMAL_SAMPLE, provider: 'prov', model: 'mdl-b' })
+
+    // 路由 key 看到成员 b 的样本
+    expect(service.frameFor('s1', 'aggregation/dual').speed.current).toBe(50)
+    // 路由 a 名下的另一个成员也是成员 → 同一 current（current 语义 = 本会话最近一次请求）
+    expect(service.frameFor('s1', 'prov/mdl-b').speed.current).toBe(50)
+    // 无关物理模型恒 null
+    expect(service.frameFor('s1', 'prov/other').speed.current).toBeNull()
+  })
+
+  it('区间槽存虚拟 key 的反向命中：pi 少量通路把会话选择写进消息自身时不丢 current', () => {
+    const { service } = makeService(undefined, ROUTE_A)
+    service.recordSample('s1', { ...NORMAL_SAMPLE, provider: 'aggregation', model: 'route-a' })
+
+    expect(service.frameFor('s1', 'prov/mdl').speed.current).toBe(50)
+    expect(service.frameFor('s1', 'aggregation/route-a').speed.current).toBe(50)
+  })
+
+  it('fresh 写盘复用只替换对应成员：本次落盘成员用内存值，其余成员照旧读盘', () => {
+    const routes: readonly AggregationRoute[] = [
+      makeRoute('dual', [
+        ['prov', 'mdl-a'],
+        ['prov', 'mdl-b'],
+      ]),
+    ]
+    const { service, published } = makeService(undefined, routes)
+    const day = localDayKey()
+    writeDayRecords(speedFilePath('prov', 'mdl-b'), { [day]: [[300, 3000]] }) // 历史成员样本
+    service.onSnapshotResolved('s1', 'aggregation/dual')
+    service.recordSample('s1', { ...NORMAL_SAMPLE, provider: 'prov', model: 'mdl-a' })
+
+    const frame = published.at(-1)!.msg.payload as GenStatsFrame
+    // 并集 = fresh(50 t/s) + 磁盘 b(100 t/s) → avg 75 / p50 75（偶数双中位均值）
+    expect(frame.speed.day).toEqual(dist(75, 75, 100, 100, 50))
+    expect(frame.model).toBe('aggregation/dual')
+  })
+
+  it('路由被删除 / 配置损坏（readRoutes 返回 []）→ 展开恒等退化，指标回落 null 而不抛错', () => {
+    const { service, published } = makeService(undefined, [])
+    service.onSnapshotResolved('s1', 'aggregation/deleted')
+    expect(() => service.recordSample('s1', { ...NORMAL_SAMPLE })).not.toThrow()
+
+    // 恒等展开：虚拟 key 与物理 key 不相等 → 不推帧、current null（与修复前逐字一致）
+    expect(published).toHaveLength(0)
+    expect(service.sessionsOfModel('prov/mdl')).toEqual([])
+    const frame = service.frameFor('s1', 'aggregation/deleted')
+    expect(frame.model).toBe('aggregation/deleted')
+    expect(frame.speed.current).toBeNull()
+    expect(frame.speed.day).toEqual(NULL_DIST)
+  })
+
+  it('readRoutes 抛错（配置域故障）→ 记 warn 并退化为恒等，不污染采样热路径', () => {
+    const published: Array<{ sid: string; msg: ServerMessage }> = []
+    const service = new GenStatsService({
+      publish: (sid, msg) => published.push({ sid, msg }),
+      pm: { getClient: vi.fn(() => undefined) } as unknown as IProcessManager,
+      sessionService: { setOnSessionDestroyed: vi.fn(), getSession: vi.fn(() => undefined) } as unknown as ISessionService,
+      readRoutes: () => {
+        throw new Error('providers.json quarantined')
+      },
+    })
+    service.onSnapshotResolved('s1', 'aggregation/route-a')
+
+    expect(() => service.recordSample('s1', { ...NORMAL_SAMPLE })).not.toThrow()
+    expect(published).toHaveLength(0)
+    expect(service.frameFor('s1', 'aggregation/route-a').speed.current).toBeNull()
+  })
+
+  it('路由配置读取次数：每次操作只读一次快照（不建缓存也不逐 key 重读）', () => {
+    const routes: readonly AggregationRoute[] = [
+      makeRoute('dual', [
+        ['prov', 'mdl-a'],
+        ['prov', 'mdl-b'],
+      ]),
+    ]
+    let reads = 0
+    const published: Array<{ sid: string; msg: ServerMessage }> = []
+    const service = new GenStatsService({
+      publish: (sid, msg) => published.push({ sid, msg }),
+      pm: { getClient: vi.fn(() => undefined) } as unknown as IProcessManager,
+      sessionService: { setOnSessionDestroyed: vi.fn(), getSession: vi.fn(() => undefined) } as unknown as ISessionService,
+      readRoutes: () => {
+        reads += 1
+        return routes
+      },
+    })
+    service.onSnapshotResolved('s1', 'aggregation/dual')
+
+    // 采样一次 → 广播给 1 个 sid，多成员并集读取共用同一快照
+    service.recordSample('s1', { ...NORMAL_SAMPLE, provider: 'prov', model: 'mdl-a' })
+    expect(published).toHaveLength(1)
+    expect(reads).toBe(1)
+
+    // 恢复路径帧构造同样只读一次
+    reads = 0
+    service.frameFor('s1', 'aggregation/dual')
+    expect(reads).toBe(1)
+  })
+
+  it('物理模型直连零回归：readRoutes 注入后帧值/磁盘文件/寻址与修复前逐值一致', () => {
+    const { service, published } = makeService(undefined, ROUTE_A)
+    service.recordSample('s1', { ...NORMAL_SAMPLE })
+
+    expect(service.sessionsOfModel('prov/mdl')).toEqual(['s1'])
+    const frame = published[0]!.msg.payload as GenStatsFrame
+    expect(frame.model).toBe('prov/mdl')
+    expect(frame.speed.current).toBe(50)
+    expect(frame.speed.day).toEqual(distOfOne(50))
+    expect(readJson(speedFilePath('prov', 'mdl'))).toEqual({ [localDayKey()]: [[100, 2000]] })
   })
 })

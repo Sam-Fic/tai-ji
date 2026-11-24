@@ -6042,6 +6042,41 @@
       "owner": "scripts/perf",
       "authority": "scripts/perf/cdp-profile.mjs",
       "note": "R3 归档态（2026-11-21 登记）：开发期性能分析工具，无独立 CI 环节；测量方法与基线数据记录在维护者本机 ~/Code/vue-performance/（taiji-analysis.md）"
+    },
+    {
+      "id": "E2E-GENSTATS-01",
+      "summary": "composer 生成指标（token 速度/缓存命中率/TTFT）模型路由命名空间对齐实机验收：真 runtime + 真 pi + faux LLM（零 token）四 case（T1 路由 live 帧出数 / B1 多成员窗口聚合并集 / B2 物理直连零回归 / B3 未命中成员仍入窗口）",
+      "scope": [
+        "scripts/acceptance/gen-stats-route/**",
+        "packages/runtime/src/services/session/gen-stats-service.ts",
+        "packages/runtime/src/services/session/gen-stats-model-keys.ts",
+        "packages/runtime/src/services/session/gen-stats-store.ts"
+      ],
+      "layer": "L2.5",
+      "assets": [
+        {
+          "kind": "script",
+          "ref": "scripts/acceptance/gen-stats-route/route-stats-probe.mjs"
+        },
+        {
+          "kind": "spec",
+          "ref": "packages/runtime/src/services/session/__tests__/gen-stats-model-keys.test.ts"
+        },
+        {
+          "kind": "spec",
+          "ref": "packages/runtime/src/services/session/__tests__/gen-stats-service.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "ci": {
+        "runnable": false,
+        "skipReason": "L2.5 真 runtime + 真 pi 子进程层，需要 apps/electron/resources/pi 二进制（gitignored 的 prepare 产物），CI runner 无该 staged 产物；按改动范围在开发期空载串行跑"
+      },
+      "run": "node_modules/.bin/tsx scripts/acceptance/gen-stats-route/route-stats-probe.mjs --case t1 && node_modules/.bin/tsx scripts/acceptance/gen-stats-route/route-stats-probe.mjs --case b1 && node_modules/.bin/tsx scripts/acceptance/gen-stats-route/route-stats-probe.mjs --case b2 && node_modules/.bin/tsx scripts/acceptance/gen-stats-route/route-stats-probe.mjs --case b3",
+      "owner": "scripts/acceptance/gen-stats-route",
+      "authority": "packages/runtime/src/services/session/gen-stats-model-keys.ts",
+      "note": "R2 态（e2e 资产归宿纪律三态）：触发条件 = gen-stats 服务/展开层/存储任一文件或本探针族 diff 命中时，开发期空载串行执行四 case（各自独立 mkdtemp 数据目录 + 独立 runtime 子进程，~30s/case；PR/merge/CI 门禁不跑——AGENTS.md e2e 执行准则）。单测层回归（展开层纯函数、命名空间边界、fresh 复用、物理直连零回归）由本 rule assets 的两份 vitest 文件承载，属 L1 零 token 可进 CI 的部分。探针期望值直接 import gen-stats-store 的聚合/路径纯函数计算，不复制公式；数据目录自建自删，绝不触碰 ~/.taiji。 设计/事实核查档案为一次性排查产物（不入库），机制 SSOT 收敛到 authority 指向的展开层文件头注释。"
     }
   ]
 }

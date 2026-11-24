@@ -1264,6 +1264,10 @@ async function main(): Promise<void> {
     publish: (sid, msg) => messageBus.publish(sid, msg),
     pm,
     sessionService,
+    // 模型路由 key 展开层配置源（2026-11-23）：虚拟 key `aggregation/<routeId>` → 成员物理
+    // key 集的唯一权威映射。组合根同一作用域先建 store（上方 498）后建 service，闭包注入
+    // 不需调整构造序；每次操作读一次快照（store 内部无缓存、损坏已 quarantine → [] 恒等退化）。
+    readRoutes: () => providerExtrasStore.getAggregationRoutesSync(),
   })
   genStatsService.registerSessionCleanup()
   sessionService.setGenStatsModelSwitchTap((sid, modelKey) => genStatsService.onModelSwitched(sid, modelKey))
