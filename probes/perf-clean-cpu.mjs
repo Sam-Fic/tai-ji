@@ -28,6 +28,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import os from 'node:os'
 import { execSync, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
@@ -41,7 +42,16 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const flags = parseFlags()
 const arg = (n, d) => flags[n] ?? d
 
-const dataDir = path.resolve(arg('data-dir', ''))
+/** 数据目录：**先判原始值再 resolve**。`path.resolve('')` 返回 cwd（不是空串），
+ *  所以 `path.resolve(arg(...))` 之后的 `if (!dataDir)` 恒为假——守卫形同虚设（实测：
+ *  不带 --data-dir 时会一路跑到读 cwd/runtime.port 才 ENOENT 崩溃，而不是给可操作提示）。
+ *  值域 = `~/.taiji-dev` 树内（研发数据目录；`~/.taiji` 是真实用户数据，探针绝不落笔）。 */
+const dataDirRaw = arg('data-dir', '')
+if (!dataDirRaw) {
+  console.error('usage: node probes/perf-clean-cpu.mjs --data-dir <~/.taiji-dev/\u2026> --cdp-port <p> [--fixture <json>] [--tag <t>] [--window-ms <n>] [--expect-head <sha>] [--save-dir <dir>]')
+  process.exit(2)
+}
+const dataDir = path.resolve(dataDirRaw)
 const cdpPort = Number(arg('cdp-port', '9478'))
 const fixture = arg('fixture', '')
 const tag = arg('tag', 'run')
@@ -60,9 +70,12 @@ const prompt = arg('text', '请给出性能优化实施方案')
 // 多轮的工具轮数由 session JSONL 事后对账（见 final-summary 的形态节），探针只守终态。
 const expectCompletes = Number(arg('expect-completes', '1'))
 
-if (!dataDir) {
-  console.error('usage: node probes/perf-clean-cpu.mjs --data-dir <dir> --cdp-port <p> [--fixture <json>] [--tag <t>] [--window-ms <n>] [--expect-head <sha>] [--save-dir <dir>]')
-  process.exit(2)
+// 值域守卫：研发数据目录（~/.taiji-dev）之内。真实用户数据目录（~/.taiji）与仓库根
+// 一律拒绝——本探针会写 <dataDir>/agent/faux-responses.json（fixture 落盘）。
+const DEV_DATA_ROOT = path.join(os.homedir(), '.taiji-dev')
+if (!dataDir.startsWith(DEV_DATA_ROOT + path.sep)) {
+  console.error(`[clean-cpu] 拒绝采集：--data-dir 必须落在 ${path.join('~', '.taiji-dev')} 树内（实际 ${dataDir}）——探针会写入 fixture 与 inspector 端口文件，绝不碰真实用户数据`)
+  process.exit(3)
 }
 
 const PI_BIN = path.join(REPO_ROOT, 'apps', 'electron', 'resources', 'pi', `pi-${process.platform}-${process.arch}`)

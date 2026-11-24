@@ -28,6 +28,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import os from 'node:os'
 
 import { createProtocol } from './vp/lib/protocol.mjs'
 import { ensureGuiOnSessionViaLabel } from './lib/harness.mjs'
@@ -37,7 +38,13 @@ function arg (name, dflt) {
   return i >= 0 && process.argv[i + 1] !== undefined ? process.argv[i + 1] : dflt
 }
 
-const dataDir = path.resolve(arg('data-dir', ''))
+// 先判原始值再 resolve（`path.resolve('')` 返回 cwd，会让 `if (!dataDir)` 守卫失效）
+const dataDirRaw = arg('data-dir', '')
+if (!dataDirRaw) {
+  console.error('usage: node probes/gpu-trace.mjs --data-dir <~/.taiji-dev/\u2026> [--sid <sid>] [--arm full|no-blur|no-mask|reduced] [--window-ms 110000] [--save <file>] [--shot <file>]')
+  process.exit(2)
+}
+const dataDir = path.resolve(dataDirRaw)
 // 不传 --sid 时探针自己建一个全新 session（验收 case 需要自足：gate 命令里没有变量替换，
 // 手传 sid 既不可脚本化也容易在多次采集后指向已经演出完的旧 session——那会采到空闲 renderer）。
 let sid = arg('sid', '')
@@ -47,10 +54,18 @@ const windowMs = Number(arg('window-ms', '110000'))
 const savePath = arg('save', '')
 const shotPath = arg('shot', '')
 const prompt = arg('text', '请给出性能优化实施方案')
-
-if (!dataDir) {
-  console.error('usage: node probes/gpu-trace.mjs --data-dir <dir> [--sid <sid>] [--cdp-port 9478] [--arm full|no-blur|no-mask|reduced] [--window-ms 110000] [--save <file>] [--shot <file>]')
+// trace 单文件 230–260MB：落进仓库会撞 GitHub 100MB 硬限制（且破 harvest 清洁度检查）。
+// 指向仓库内时响亮拒绝，让调用方改到 .run/（gitignore）或会话 artifacts。
+if (savePath && !path.isAbsolute(savePath) && !savePath.startsWith('.run/') && !savePath.startsWith('/tmp/')) {
+  console.error(`[gpu-probe] 拒绝落盘：--save ${savePath} 不在 .run/ 或 /tmp/ 下（trace 单文件 230-260MB，不得入库；.gitignore 已含 *.trace.json，但显式指到 docs/ 会误导读者）`)
   process.exit(2)
+}
+
+// 值域守卫：只接受 ~/.taiji-dev 树内的研发数据目录（探针会自建 session 并写 fixture）
+const DEV_DATA_ROOT = path.join(os.homedir(), '.taiji-dev')
+if (!dataDir.startsWith(DEV_DATA_ROOT + path.sep)) {
+  console.error(`[gpu-probe] 拒绝采集：--data-dir 必须落在 ${path.join('~', '.taiji-dev')} 树内（实际 ${dataDir}）`)
+  process.exit(3)
 }
 if (!['full', 'no-blur', 'no-mask', 'reduced'].includes(arm)) {
   console.error(`[gpu-probe] --arm 非法：${arm}（允许 full / no-blur / no-mask / reduced）`)
