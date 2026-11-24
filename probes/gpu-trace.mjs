@@ -13,6 +13,8 @@
  * 三臂（批5 GPU 裁决）：
  *   --arm full     无注入（现状：四层 backdrop-blur + 沉色层 + 容器 mask）
  *   --arm no-blur  注入 CSS 摘除 backdrop-filter（mask 与沉色层保留）⇒ 隔离 blur 的 raster 成本
+ *   --arm no-mask  注入 CSS 摘除滚动容器的 mask-image（blur 与沉色层保留）⇒ 隔离 GPU-7
+ *                  的「mask 作用于整个滚动容器」这条合成路径的代价
  *   --arm reduced  CDP 模拟 prefers-reduced-transparency:reduce ⇒ 走组件内建降级
  *                  （遮罩层 hidden + 容器 mask 摘除）= 视觉项总 GPU 账
  *
@@ -48,8 +50,8 @@ if (!dataDir || !sid) {
   console.error('usage: node probes/gpu-trace.mjs --data-dir <dir> --sid <sid> [--cdp-port 9478] [--arm full|no-blur|reduced] [--window-ms 110000] [--save <file>] [--shot <file>]')
   process.exit(2)
 }
-if (!['full', 'no-blur', 'reduced'].includes(arm)) {
-  console.error(`[gpu-probe] --arm 非法：${arm}（允许 full / no-blur / reduced）`)
+if (!['full', 'no-blur', 'no-mask', 'reduced'].includes(arm)) {
+  console.error(`[gpu-probe] --arm 非法：${arm}（允许 full / no-blur / no-mask / reduced）`)
   process.exit(2)
 }
 
@@ -110,7 +112,10 @@ console.log('[gpu-probe] subscribed to session events')
 // 后续臂的 EdgeFade 计算样式恒为 backdrop-filter:none（等于第三臂也跑了 no-blur）。
 async function resetArmInjection () {
   await send('Runtime.evaluate', {
-    expression: `(() => { document.getElementById('b5-no-blur')?.remove(); return !!document.getElementById('b5-no-blur') })()`,
+    expression: `(() => {
+      for (const id of ['b5-no-blur', 'b5-no-mask']) document.getElementById(id)?.remove();
+      return document.getElementById('b5-no-blur') === null && document.getElementById('b5-no-mask') === null;
+    })()`,
     returnByValue: true,
   })
   await send('Emulation.setEmulatedMedia', { features: [] })
@@ -143,6 +148,21 @@ if (arm === 'no-blur') {
   })
   injected = `backdrop-filter(classes-at-inject=${r.result.value} verify=${verify.result.value})`
   console.log(`[gpu-probe] arm=no-blur 注入完成：${injected}`)
+} else if (arm === 'no-mask') {
+  // 只摘滚动容器 mask：blur 四层与沉色层全部保留 ⇒ 差值 ≈ mask 合成路径成本（GPU-7）
+  const r = await send('Runtime.evaluate', {
+    expression: `(() => {
+      const s = document.createElement('style');
+      s.id = 'b5-no-mask';
+      s.textContent = '[data-testid="message-stream"]{mask-image:none!important;-webkit-mask-image:none!important}';
+      document.head.appendChild(s);
+      const el = document.querySelector('[data-testid="message-stream"]');
+      return el ? getComputedStyle(el).maskImage : 'no-stream';
+    })()`,
+    returnByValue: true,
+  })
+  injected = `mask-image(computed=${r.result.value})`
+  console.log(`[gpu-probe] arm=no-mask 注入完成：${injected}`)
 } else if (arm === 'reduced') {
   // 组件内建降级路径：prefers-reduced-transparency: reduce → 遮罩 hidden + 容器 mask 摘除
   await send('Emulation.setEmulatedMedia', {
@@ -205,7 +225,7 @@ const armEndProbe = await send('Runtime.evaluate', {
     return JSON.stringify({
       blurEls: els.length,
       noneCount: els.filter((e) => getComputedStyle(e).backdropFilter === 'none').length,
-      maskOnScroller: s ? (s.style.maskImage || '') !== '' : null,
+      maskOnScroller: s ? (getComputedStyle(s).maskImage || 'none') !== 'none' : null,
       edgeFadeHidden: !!document.querySelector('[data-testid="edge-fade"].hidden'),
     });
   })()`,
