@@ -271,7 +271,7 @@ node node-profile.mjs <port> /tmp/taiji-prof/runtime.cpuprofile 75000
 #    （powermetrics 需 sudo，本机不可用；GPU 显存/帧率经 overlay 截图获取）
 ```
 
-**采集纪律**：先杀净上一实例全部进程（vite/electron/runtime/tsx/pi 都会在 SIGTERM 级联后幸存，端口被占会让 runtime 静默换端口 → renderer 连错 → 「runtime 不可用」）。
+**采集纪律**：采集前必须确认上一实例已彻底退出（vite/electron/runtime/tsx/pi 都会在 SIGTERM 级联后幸存，端口被占会让 runtime 静默换端口 → renderer 连错 →「runtime 不可用」）。**杀法遵守全局纪律 `~/.agents/AGENTS.md` §1（进程击杀纪律）：端口（`lsof -ti :<port>`）+ 明确路径枚举 → 逐个打印完整 argv 甄别 → 先 TERM 后 KILL 一个一个杀。严禁 `pkill -f` 宽模式、严禁 `ps aux | grep <worktree 路径> | xargs kill`（agent session 的 pi 进程 argv 含 `--skill <worktree>/.agents/...`，该模式会误杀他人/自己的会话——2026-11-24 已发事故）。**
 
 ---
 
