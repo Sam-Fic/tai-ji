@@ -18,21 +18,25 @@
 -->
 <template>
   <div :class="['agg-block', entranceClass]" data-testid="process-aggregate">
-    <!-- 摘要行恒渲染（展开交互的可见入口，两态共用；live 变体见 AggregateSummaryRow）；
-         单步详情抽屉在展开区本地接线（AggregateExpandedBody 自持开合态），事件链
-         终结于此不向容器冒泡——本组件无 open-detail 转发/声明 -->
+    <!-- 卡头恒渲染（展开交互的可见入口，两态共用；live 变体见 AggregateSummaryRow） -->
     <AggregateSummaryRow :segment="segment" :expanded="expanded" :live="isLive" @toggle="toggleExpanded" />
-    <!-- ① 进行中收起：双窗（无外框）；展开 = 平铺区（与完成态同一 v-if 位） -->
-    <AggregateLiveWindows v-if="isLive && !expanded" :segment="segment" />
-    <!-- ③ 平铺区（两态共用）：units 按真实顺序，running 成员实时态 -->
-    <AggregateExpandedBody v-if="expanded" :segment="segment" :session-id="sessionId" :live="isLive" />
+    <!-- 12 行窗口（进行中与落成后同一形态）：内容在窗口里滚动；进行中贴底跟随 -->
+    <div v-if="expanded" class="agg-tape mt-1" data-testid="agg-tape">
+      <div
+        ref="windowRef"
+        class="max-h-[calc(var(--proc-tape-rows)*var(--proc-tape-row-h))] overflow-y-auto"
+        data-testid="agg-tape-scroll"
+        @scroll="onScroll"
+      >
+        <AggregateExpandedBody :segment="segment" :session-id="sessionId" :live="isLive" />
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import type { ProcessSegment } from '@taiji/core/domain/chat'
-import AggregateLiveWindows from './process-aggregate/AggregateLiveWindows.vue'
 import AggregateSummaryRow from './process-aggregate/AggregateSummaryRow.vue'
 import AggregateExpandedBody from './process-aggregate/AggregateExpandedBody.vue'
 import { useProcessAggregateState } from './composables/useProcessAggregate'
@@ -55,6 +59,31 @@ const { isLive, expanded, toggleExpanded, entranceClass } = useProcessAggregateS
   turnWorking: computed(() => props.turnWorking),
   turnStreaming: computed(() => props.turnStreaming === true),
 })
+
+/* ── 窗口贴底跟随（进行中）：内容增长且用户未上滚时贴底；上滚即停吸，回底恢复。
+      跟底范式与 BlockScrollBox 同款（贴底容差 1px）。落成后打开窗口从第一条读起（不跟底）。 ── */
+const windowRef = ref<HTMLDivElement | null>(null)
+let followBottom = true
+function stickToBottom(): void {
+  const el = windowRef.value
+  if (el && followBottom) el.scrollTop = el.scrollHeight
+}
+function onScroll(): void {
+  const el = windowRef.value
+  if (!el) return
+  followBottom = el.scrollHeight - el.clientHeight - el.scrollTop <= 1
+}
+watch(() => props.segment.members.length, () => void nextTick(stickToBottom))
+onMounted(() => {
+  followBottom = isLive.value
+  void nextTick(stickToBottom)
+})
+watch(expanded, (open) => {
+  if (!open) return
+  followBottom = isLive.value
+  void nextTick(stickToBottom)
+})
+
 </script>
 
 <style scoped>

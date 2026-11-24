@@ -179,23 +179,23 @@ async function mountExpanded(segment: ProcessSegment): Promise<VueWrapper> {
 // ─── 三态翻转（事件驱动） ─────────────────────────────────────────
 
 describe('process-aggregate-block tri-state (event-driven)', () => {
-  it('进行中（turnWorking ∧ !followedByText）→ 摘要行 live 变体在场 + 双窗容器在场（2026-11-09 用户裁决：进行中同构可展开，摘要是展开入口）', () => {
+  it('进行中（turnWorking ∧ !followedByText）→ 摘要行 live 变体在场 + 12 行窗口默认展开（窗口 12 行裁决）', () => {
     const wrapper = mountAgg(makeSegment([makeThinkingFlat('推理中')], { followedByText: false }), true);
-    expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(true);
-    // 摘要行恒在场（展开交互的可见入口；live 变体 = 呼吸弧行首）
+    // 卡头恒在场（展开交互的可见入口；live 变体 = 呼吸弧行首）
     expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="agg-summary-live-loader"]').exists()).toBe(true);
+    // 进行中默认展开窗口（旧的「双窗」已由窗口取代）
+    expect(wrapper.find('[data-testid="agg-tape"]').exists()).toBe(true);
   });
 
-  it('进行中点击摘要行 → 双窗收起、平铺区展开（进行中同构可展开）', async () => {
+  it('进行中点击卡头 → 窗口收起成一行；再点展开', async () => {
     const wrapper = mountAgg(makeSegment([makeThinkingFlat('推理中')], { followedByText: false }), true);
     await wrapper.find('[data-testid="agg-summary-row"]').trigger('click');
-    expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="agg-expanded"]').exists()).toBe(true);
-    // 再点收起 → 回双窗
-    await wrapper.find('[data-testid="agg-summary-row"]').trigger('click');
-    expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="agg-tape"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="agg-expanded"]').exists()).toBe(false);
+    await wrapper.find('[data-testid="agg-summary-row"]').trigger('click');
+    expect(wrapper.find('[data-testid="agg-tape"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="agg-expanded"]').exists()).toBe(true);
   });
 
   it('回合工作态落下（turnWorking 翻 false）→ live 变体切完成形态（呼吸弧摘除、双窗收成摘要行；展开态 ref 共用不跳变）', async () => {
@@ -206,7 +206,8 @@ describe('process-aggregate-block tri-state (event-driven)', () => {
     expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(true);
     // 完成形态：呼吸弧摘除（Layers 静态字形回归）
     expect(wrapper.find('[data-testid="agg-summary-live-loader"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(false);
+    // 落成且用户没点过 → 自动收成一行（窗口摘除）
+    expect(wrapper.find('[data-testid="agg-tape"]').exists()).toBe(false);
   });
 
   it('纯思考段摘要：零分类不渲染（v-if 省略，真机剧本 agg-tf-1 抓的 v-show 残留缺陷），只列思考计数', () => {
@@ -231,7 +232,7 @@ describe('process-aggregate-block tri-state (event-driven)', () => {
   it('段后出现 text（followedByText=true）→ 段已封闭，回合仍在进行也显摘要行', async () => {
     const wrapper = mountAgg(makeSegment([makeThinkingFlat('推理')], { followedByText: true }), true);
     expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="agg-tape"]').exists()).toBe(false);
   });
 
   it('摘要行 aria-expanded 随展开/收起同步（真实 button 承载展开行为）', async () => {
@@ -246,45 +247,25 @@ describe('process-aggregate-block tri-state (event-driven)', () => {
   });
 });
 
-// ─── RL1：进行中占位不随步数增长 ─────────────────────────────────
+// ─── 窗口高度封顶（12 行 × 24px）──────────────────────────────────
 
-describe('process-aggregate-block RL1: live height stays constant as steps grow', () => {
-  it('1→8→26 步注入，聚合块根元素 scrollHeight 不变（占位与步骤数解耦，AX2）', async () => {
+describe('process-aggregate-block window cap: 12 rows × 24px', () => {
+  it('窗口的 max-height = 12 行 × 24px（CSS 令牌承载），行数增长不改变高度档', async () => {
     const wrapper = mountAgg(makeExploreSegment(1, { followedByText: false, id: 'seg:0' }), true);
-    const root = wrapper.find('[data-testid="process-aggregate"]').element as HTMLElement;
-    const h1 = root.scrollHeight;
-    // scrollHeight 恒等断言（任务书 RL1 形态）：happy-dom 无布局引擎恒返回 0（平凡通过，
-    // 真实浏览器下本断言按内容高度生效——进行中态高度机制由下方结构断言在单测层实际承载）
-    for (const steps of [8, 26]) {
-      await wrapper.setProps({ segment: makeExploreSegment(steps, { followedByText: false, id: 'seg:0' }) });
-      expect(root.scrollHeight).toBe(h1);
-    }
-    // 机制断言（happy-dom 下的实际防护）：
-    // ① 进行中不渲染展开平铺行，窗口数量不随步数增长（无 thinking → 仅聚合窗 1 个）
-    expect(wrapper.find('[data-testid="agg-expanded"]').exists()).toBe(false);
-    expect(wrapper.findAll('[data-testid="agg-think-window"], [data-testid="agg-window"]').length).toBe(1);
-    // ② 聚合窗高度档 = 设计规格值（D7：116px，窄屏 ≤420px 降档 96px——视口断点为纯 CSS
-    //    max-[420px] 变体，happy-dom 不做布局，class 断言承载规格值；断点行为归真机 V6）
-    expect(wrapper.find('[data-testid="agg-window"]').classes()).toEqual(
-      expect.arrayContaining(['h-[116px]', 'max-[420px]:h-[96px]']),
+    const scroll = wrapper.find('[data-testid="agg-tape-scroll"]');
+    expect(scroll.exists()).toBe(true);
+    expect(scroll.classes()).toEqual(
+      expect.arrayContaining(['max-h-[calc(var(--proc-tape-rows)*var(--proc-tape-row-h))]', 'overflow-y-auto']),
     );
-    // ③ 聚合条条目数与步数解耦（按组不按步：1 组恒 1 条目）
-    expect(wrapper.findAll('[data-testid="agg-strip-group"], [data-testid="agg-strip-current"]').length).toBe(1);
-  });
-
-  it('纯思考段 1→26 段思考，占位同样恒定（思考窗固定高度内滚动）', async () => {
-    const wrapper = mountAgg(makeSegment([makeThinkingFlat('t')], { followedByText: false, id: 'seg:0' }), true);
-    const root = wrapper.find('[data-testid="process-aggregate"]').element as HTMLElement;
-    const h1 = root.scrollHeight;
-    const thinkers = Array.from({ length: 26 }, () => makeThinkingFlat('更多推理'));
-    await wrapper.setProps({ segment: makeSegment(thinkers, { followedByText: false, id: 'seg:0' }) });
-    // 同上：scrollHeight 恒等（真实浏览器生效）+ 思考窗高度档 = 设计规格值（D7：92px，
-    // 窄屏 ≤420px 降档 78px）
-    expect(root.scrollHeight).toBe(h1);
-    expect(wrapper.find('[data-testid="agg-think-window"]').classes()).toEqual(
-      expect.arrayContaining(['h-[92px]', 'max-[420px]:h-[78px]']),
+    await wrapper.setProps({ segment: makeExploreSegment(8, { followedByText: false, id: 'seg:0' }) });
+    await wrapper.setProps({ segment: makeExploreSegment(26, { followedByText: false, id: 'seg:0' }) });
+    // 高度档不随步数变化（下限仍由 CSS 上限承载；真实像素由真机 AC-H12 断言）
+    expect(wrapper.find('[data-testid="agg-tape-scroll"]').classes()).toEqual(
+      expect.arrayContaining(['max-h-[calc(var(--proc-tape-rows)*var(--proc-tape-row-h))]']),
     );
-    expect(wrapper.find('[data-testid="agg-window"]').exists()).toBe(false);
+    // 行数增长 = 段成员增量（窗口内容随步骤增加）
+    const rows = wrapper.findAll('[data-testid="agg-expanded"] > [data-testid^="agg-row-"]');
+    expect(rows.length).toBeGreaterThan(0);
   });
 });
 
@@ -310,9 +291,9 @@ function makeFailedSegment(over: Partial<ProcessSegment> = {}): ProcessSegment {
 }
 
 describe('process-aggregate-block RL4: failure count agrees across summary / group head / live strip', () => {
-  it('进行中聚合条即时「含 1 次失败」（D3 直播口径，无需点开）', () => {
+  it('进行中窗口即时报「含 1 次失败」（组头在窗口内，无需点开）', () => {
     const wrapper = mountAgg(makeFailedSegment(), true);
-    expect(wrapper.find('[data-testid="agg-window"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="agg-tape"]').exists()).toBe(true);
     expect(wrapper.text()).toContain('含 1 次失败');
   });
 
@@ -331,59 +312,27 @@ describe('process-aggregate-block RL4: failure count agrees across summary / gro
   });
 });
 
-// ─── V8（组件侧）：窗口可见性纯派生 ──────────────────────────────
+// ─── 窗口内容随段成员增量（纯派生）──────────────────────────────
 
-describe('process-aggregate-block V8: window visibility purely derived', () => {
-  it('思考先行段：思考窗在场、聚合窗不渲染（无「等待工具调用」空态占位）', () => {
+describe('process-aggregate-block window content: derived from segment units', () => {
+  it('纯思考段：窗口里只有思考行，无工具行；追加思考后行数增长', async () => {
     const wrapper = mountAgg(makeSegment([makeThinkingFlat('先想后做')], { followedByText: false }), true);
-    expect(wrapper.find('[data-testid="agg-think-window"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="agg-window"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="agg-expanded"]').text()).toContain('先想后做');
+    expect(wrapper.find('[data-testid="agg-group-head"]').exists()).toBe(false);
+    await wrapper.setProps({
+      segment: makeSegment([makeThinkingFlat('先想后做'), makeThinkingFlat('第二段推理')], { followedByText: false }),
+    });
+    const rows = wrapper.findAll('[data-testid="agg-expanded"] > [data-testid^="agg-row-"]');
+    expect(rows.length).toBe(2);
     expect(wrapper.text()).not.toContain('等待工具调用');
   });
 
-  it('首个工具步骤开始 → 聚合窗立即挂载（无 timer、无预留高度）', async () => {
-    const wrapper = mountAgg(makeSegment([makeThinkingFlat('先想后做')], { followedByText: false }), true);
-    expect(wrapper.find('[data-testid="agg-window"]').exists()).toBe(false);
-    await wrapper.setProps({
-      segment: makeSegment(
-        [makeThinkingFlat('先想后做'), makeToolFlat()],
-        { followedByText: false },
-      ),
-    });
-    expect(wrapper.find('[data-testid="agg-window"]').exists()).toBe(true);
-    expect(wrapper.text()).not.toContain('等待工具调用');
-  });
-
-  it('纯思考段：全程追加思考，聚合窗始终不出现（D7 可见性纯派生）', async () => {
-    const wrapper = mountAgg(makeSegment([makeThinkingFlat('a')], { followedByText: false }), true);
-    await wrapper.setProps({
-      segment: makeSegment([makeThinkingFlat('a'), makeThinkingFlat('b')], { followedByText: false }),
-    });
-    expect(wrapper.find('[data-testid="agg-think-window"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="agg-window"]').exists()).toBe(false);
-  });
-
-  it('工具起始段：无前导思考窗，只聚合窗（三起始形态之二）', () => {
+  it('首个工具步骤出现 → 窗口里出现工具行（无空态占位、无 timer）', () => {
     const wrapper = mountAgg(makeSegment([makeToolFlat()], { followedByText: false }), true);
-    expect(wrapper.find('[data-testid="agg-think-window"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="agg-window"]').exists()).toBe(true);
-  });
-
-  it('agentgraph 成员同样触发聚合窗（core members 契约：结构上同是工具调用）', () => {
-    const wrapper = mountAgg(makeSegment([makeGraphFlat()], { followedByText: false }), true);
-    expect(wrapper.find('[data-testid="agg-window"]').exists()).toBe(true);
-  });
-
-  it('思考窗显示最新一段思考（下一段思考开始切换内容源）', async () => {
-    const wrapper = mountAgg(makeSegment([makeThinkingFlat('第一段推理')], { followedByText: false }), true);
-    expect(wrapper.find('[data-testid="agg-think-viewport"]').text()).toContain('第一段推理');
-    await wrapper.setProps({
-      segment: makeSegment(
-        [makeThinkingFlat('第一段推理'), makeThinkingFlat('第二段推理')],
-        { followedByText: false },
-      ),
-    });
-    expect(wrapper.find('[data-testid="agg-think-viewport"]').text()).toContain('第二段推理');
+    expect(wrapper.find('[data-testid="agg-expanded"]').exists()).toBe(true);
+    const rows = wrapper.findAll('[data-testid="agg-expanded"] > [data-testid^="agg-row-"]');
+    expect(rows.length).toBe(1);
+    expect(wrapper.text()).not.toContain('等待工具调用');
   });
 });
 

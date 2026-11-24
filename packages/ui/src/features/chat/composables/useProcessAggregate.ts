@@ -69,11 +69,18 @@ export function useProcessAggregateState(params: {
   const isLive = computed(
     () => params.turnWorking.value && !params.segment.value.followedByText,
   )
-  /** 展开/收起态（D6 组件本地 ref，不落 store 不持久化；aria-expanded 同步由消费模板承担） */
-  const expanded = ref(false)
+  /** 展开/收起态（D6 组件本地 ref，不落 store 不持久化；aria-expanded 同步由消费模板承担）。
+   *  进行中的段默认展开成 12 行窗口（用户裁决：进行中要看得到过程）；用户手动收起/展开过
+   *  之后不再随段状态自动翻转（落成时自动收成一行，手动开着的保持）。 */
+  const userToggled = ref(false)
+  const expanded = ref(params.turnWorking.value && !params.segment.value.followedByText)
   function toggleExpanded(): void {
+    userToggled.value = true
     expanded.value = !expanded.value
   }
+  watch(isLive, (live) => {
+    if (!live && !userToggled.value) expanded.value = false
+  })
   const entranceClass =
     params.turnWorking.value &&
     params.turnStreaming.value &&
