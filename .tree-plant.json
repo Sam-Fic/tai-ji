@@ -1,15 +1,15 @@
 {
-  "testCommand": "pnpm --filter @taiji/core test --testTimeout=30000 --hookTimeout=60000 && pnpm --filter @taiji/ui test --testTimeout=30000 --hookTimeout=60000 && pnpm --filter @taiji/frontend test --testTimeout=30000 --hookTimeout=60000",
-  "typecheckCommand": "pnpm --filter @taiji/core typecheck && pnpm --filter @taiji/ui typecheck && pnpm --filter @taiji/frontend typecheck",
+  "testCommand": "pnpm --filter @taiji/runtime test --testTimeout=30000 --hookTimeout=60000",
+  "typecheckCommand": "pnpm --filter @taiji/runtime typecheck && pnpm --filter @taiji/core typecheck && pnpm --filter @taiji/ui typecheck && pnpm --filter @taiji/frontend typecheck",
   "ignoreChangedPaths": [
     ".gitignore",
     "docs/perf/",
     "extensions/universal/session-manager/"
   ],
   "docs": {
-    "design": "docs/tp-design-batch3.md",
-    "acceptance": "docs/tp-acceptance-batch3.md",
-    "api": "docs/tp-api-batch3.md",
-    "factCheck": "docs/tp-fact-check-batch3.md"
+    "design": "docs/tp-design-batch4.md",
+    "acceptance": "docs/tp-acceptance-batch4.md",
+    "api": "docs/tp-api-batch4.md",
+    "factCheck": "docs/tp-fact-check-batch4.md"
   }
 }
