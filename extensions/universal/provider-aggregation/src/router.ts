@@ -286,6 +286,18 @@ export interface DecideRouteInput { // oe-exempt:20261124:framework:评测输入
 	failures: ReadonlyMap<string, number>
 	/** pi 的重试预算（pi.getSettings().retry?.maxRetries ?? 3）——终局失败判「用尽」的尺。 */
 	maxRetries: number
+	/**
+	 * 本次求值是否为链边界（user / continuation：新回合起点，上一链已终断）。
+	 *
+	 * 非边界的两个形态**不做终局观察**（入参 burnt/failures 原样用于软避让）：
+	 * - retry 落 normal-selection 的求值（失败端点已不在配置/目录）——链在途；
+	 * - direct 求值（链中压缩摘要 / 扩展调用，pi 不传 state）——夹在「retry bump」与
+	 *   下一次 stream 之间，其 messages 已被 _omitRecoveryAttempt 剔除失败 attempt，
+	 *   看到的是链前陈旧投影：按它观察会抹掉在途链的预算记账（修剪复审 F1：failover
+	 *   永不发生）或按陈旧成功结局反向清 burn。观察只在链边界跑（终局失败/成功/取消
+	 *   都是回合级事实）。
+	 */
+	chainBoundary: boolean
 }
 
 /**
@@ -329,7 +341,11 @@ function observeTerminalOutcome(
 	burnt: ReadonlySet<string>,
 	failures: ReadonlyMap<string, number>,
 	maxRetries: number,
+	chainBoundary: boolean,
 ): { burnt: ReadonlySet<string>, failures: ReadonlyMap<string, number> } {
+	// 非链边界求值（retry 落 normal-selection / direct）：不观察——投影是被 _omitRecoveryAttempt
+	// 剔除失败 attempt 后的在途形态，按它迁移状态会抹掉活链记账或按陈旧结局反向清 burn（修剪复审 F1）
+	if (!chainBoundary) return { burnt, failures }
 	const last = findLastPhysicalOutcome(messages)
 	if (last === undefined) return { burnt, failures: retireCounts(failures) }
 	const index = members.findIndex(m => m.providerId === last.provider && m.modelId === last.model)
@@ -430,15 +446,15 @@ function sameSequence(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
 }
 
 /**
- * 路由决策（方案 B）：终局观察（状态迁移）→ 条件求值（硬闸）→ burnt 软避让。
+ * 路由决策（方案 B）：终局观察（状态迁移，仅链边界）→ 条件求值（硬闸）→ burnt 软避让。
  *
  * 条件矩阵部分（evaluateRoute）原样复用——burnt 不参与条件判定，只在候选集内重排
  * 偏好：未 burnt 候选（配置序）优先；全部候选 burnt → 轮换重探（见 rotateOldestBurnt）。
  */
 export function decideRoute(input: DecideRouteInput): RouteDecision {
-	const { route, now, quotaByProviderId, messages, burnt: burntIn, failures: failuresIn, maxRetries } = input
+	const { route, now, quotaByProviderId, messages, burnt: burntIn, failures: failuresIn, maxRetries, chainBoundary } = input
 	// ① 终局观察（状态迁移——无观察时原引用返回，闭包层据此跳转 state 落盘）
-	const observed = observeTerminalOutcome(messages, route.members, burntIn, failuresIn, maxRetries)
+	const observed = observeTerminalOutcome(messages, route.members, burntIn, failuresIn, maxRetries, chainBoundary)
 	// ② 条件求值（硬闸，与 burn 无关——矩阵 12 行逐格语义不变）
 	const evaluation = evaluateRoute({ route, now, quotaByProviderId })
 	if (evaluation.outcome === "no-candidate") {

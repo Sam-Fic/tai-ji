@@ -354,6 +354,10 @@ function evaluateAndRoute(
 		burnt: burntIn,
 		failures: state.failures.get(routeId) ?? new Map<string, number>(),
 		maxRetries: readMaxRetries(pi),
+		// 链边界 = user/continuation（新回合起点）；retry 落 normal-selection 与 direct
+		// （链中压缩/扩展调用）不是边界——它们的 messages 是在途投影（失败 attempt 已
+		// 被 _omitRecoveryAttempt 剔除），按它观察会抹掉活链记账（修剪复审 F1）
+		chainBoundary: request.reason === "user" || request.reason === "continuation",
 	})
 	// 链内失败计数落闭包内存（生命周期 = 活跃重试链；burn 证据随 burnt 走 router state，
 	// 计数本身不持久化——session 历史不记瞬态记账）。

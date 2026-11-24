@@ -20,6 +20,7 @@
 | T9 | 修剪 P1：模型切换 away-and-back 后账户类 fail-fast 不误烧（链内计数退役，零 state 条目） | node docs/tree-plant/probes/t9-model-switch-no-misburn.mjs | exit:0;contains:✓ T9 | failover-edges |
 | T10 | 修剪 P3：单端点 burnt 稳态不重复落 state（轮换引用纪律，4 轮 1 条） | node docs/tree-plant/probes/t10-steady-state-no-duplicate-state.mjs | exit:0;contains:✓ T10 | failover-edges |
 | T11 | 修剪 P2：链中端点被改指向——divert 的重试也计数，第二轮即 burnt failover | node docs/tree-plant/probes/t11-midchain-repoint-accounting.mjs | exit:0;contains:✓ T11 | failover-edges |
+| T12 | 修剪复审 F1：链中压缩（direct 求值）不抹在途链的预算记账——第三轮仍 burnt failover | node docs/tree-plant/probes/t12-midchain-compaction-accounting.mjs | exit:0;contains:✓ T12 | failover-edges |
 | D1 | 文档同步静态对账：route-matrix.md 新章 / domain-model.md / SKILL.md 旧措辞清零 + routes schema 零新键 | node docs/tree-plant/probes/d1-doc-sync.mjs | exit:0;contains:✓ D1 | docs-sync |
 
 <!-- 命令形态：驱动真实宿主二进制（pi）与真实子进程；探针脚本随交付物入库。

@@ -55,18 +55,27 @@ export function completionJson(text) {
 /**
  * 启动故障注入服务器。
  *
- * @param plan { [pathPrefix: string]: Array<{ status: number, body: string }> }
+ * @param plan { [pathPrefix: string]: Array<{ status: number, body: string, contentType? }> }
  *   每个路径前缀按序消费响应规格（第 N 个请求取第 N 项；用尽后重复最后一项）——
  *   显式剧本比回调更可审计：请求序列即预期序列。
- * @returns { port, requests: Array<{ path, at }>, close() }
+ * @param options.summary { marker, step } 请求体含 marker 的请求（pi 压缩摘要请求）
+ *   走 step 规格而非路径剧本——链中压缩场景（T12）需要摘要成功、真实请求失败。
+ * @returns { port, requests: Array<{ path, at, isSummary }>, close() }
  */
-export function startFaultServer(plan) {
+export function startFaultServer(plan, options = {}) {
 	const requests = [];
 	const server = createServer((req, res) => {
-		req.resume();
+		let body = "";
+		req.on("data", chunk => { body += chunk.toString("utf8"); });
 		req.on("end", () => {
 			const path = req.url ?? "/";
-			requests.push({ path, at: Date.now() });
+			const isSummary = options.summary !== undefined && body.includes(options.summary.marker);
+			requests.push({ path, at: Date.now(), isSummary });
+			if (isSummary) {
+				res.writeHead(options.summary.step.status, { "content-type": options.summary.step.contentType ?? "application/json" });
+				res.end(options.summary.step.body);
+				return;
+			}
 			const prefix = Object.keys(plan).find(p => path.startsWith(p));
 			const script = plan[prefix];
 			if (script === undefined) {
@@ -74,7 +83,7 @@ export function startFaultServer(plan) {
 				res.end(JSON.stringify({ error: { message: `probe: no plan for ${path}` } }));
 				return;
 			}
-			const seen = requests.filter(r => (r.path ?? "").startsWith(prefix)).length;
+			const seen = requests.filter(r => !r.isSummary && (r.path ?? "").startsWith(prefix)).length;
 			const step = script[Math.min(seen, script.length) - 1] ?? script[script.length - 1];
 			res.writeHead(step.status, { "content-type": step.contentType ?? "application/json" });
 			res.end(step.body);
@@ -122,7 +131,7 @@ export function httpInsufficientQuota() {
 }
 
 /** 单个 provider 的 models.json 条目（openai-completions，指向故障服务器路径）。 */
-function modelEntry(providerId, modelId, baseUrl) {
+function modelEntry(providerId, modelId, baseUrl, contextWindow) {
 	return {
 		id: modelId,
 		name: modelId,
@@ -132,7 +141,7 @@ function modelEntry(providerId, modelId, baseUrl) {
 		reasoning: false,
 		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 128000,
+		contextWindow,
 		maxTokens: 4096,
 	};
 }
@@ -143,13 +152,14 @@ function modelEntry(providerId, modelId, baseUrl) {
  * @param routes providers.json routes 域数组（AggregationRoute 形态，schema 键全既有）。
  * @param providerPaths { [providerId]: urlPrefix } 端点 provider → 服务器路径前缀。
  * @param settings settings.json 内容（缺省 = pi 默认：retry enabled、maxRetries 3）。
+ * @param contextWindow 端点 contextWindow（缺省 128000；T12 用小窗强制链中压缩）。
  */
-export function writeAgentDir(baseDir, { routes, providerPaths, settings }) {
+export function writeAgentDir(baseDir, { routes, providerPaths, settings, contextWindow = 128_000 }) {
 	const agentDir = join(baseDir, "agent");
 	mkdirSync(join(agentDir, "config"), { recursive: true });
 	const models = { providers: {} };
 	for (const [providerId, urlPrefix] of Object.entries(providerPaths)) {
-		models.providers[providerId] = { models: [modelEntry(providerId, `${providerId}-model`, urlPrefix)] };
+		models.providers[providerId] = { models: [modelEntry(providerId, `${providerId}-model`, urlPrefix, contextWindow)] };
 	}
 	writeFileSync(join(agentDir, "models.json"), JSON.stringify(models, null, 2));
 	const auth = {};

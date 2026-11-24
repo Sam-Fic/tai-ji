@@ -39,7 +39,7 @@ pi 的重试事件族、上游请求序列、会话落盘与 router state。验�
 
 | 枝名 | 目标 | 依赖 | 风险级 | 文件 | case |
 |---|---|---|---|---|---|
-| failover-edges | failover 边界行为：实机覆盖（fail-fast 不换端点 / 全 burnt 轮换+康复清除 / 预算实读 / 幂等重导 / 重试停用即时 failover）+ 修剪修复三案与边界单测（切换不误烧 P1 / divert 计数不漏记 P2 / 稳态不重复落盘 P3 / 写回裁剪 P4 / 未知 stopReason 保守 P9） | trunk | 高 | docs/tree-plant/probes/t2-failover.mjs, docs/tree-plant/probes/t3-failfast.mjs, docs/tree-plant/probes/t4-rotation-clear.mjs, docs/tree-plant/probes/t5-budget-from-settings.mjs, docs/tree-plant/probes/t6-rederive.mjs, docs/tree-plant/probes/t8-retry-disabled-failover.mjs, docs/tree-plant/probes/t9-model-switch-no-misburn.mjs, docs/tree-plant/probes/t10-steady-state-no-duplicate-state.mjs, docs/tree-plant/probes/t11-midchain-repoint-accounting.mjs, docs/tree-plant/probes/lib/harness.mjs, extensions/universal/provider-aggregation/src/router.ts, extensions/universal/provider-aggregation/src/index.ts, extensions/universal/provider-aggregation/src/__tests__/ | T2,T3,T4,T5,T6,T8,T9,T10,T11 |
+| failover-edges | failover 边界行为：实机覆盖（fail-fast 不换端点 / 全 burnt 轮换+康复清除 / 预算实读 / 幂等重导 / 重试停用即时 failover）+ 修剪修复三案与边界单测（切换不误烧 P1 / divert 计数不漏记 P2 / 稳态不重复落盘 P3 / 写回裁剪 P4 / 未知 stopReason 保守 P9） | trunk | 高 | docs/tree-plant/probes/t2-failover.mjs, docs/tree-plant/probes/t3-failfast.mjs, docs/tree-plant/probes/t4-rotation-clear.mjs, docs/tree-plant/probes/t5-budget-from-settings.mjs, docs/tree-plant/probes/t6-rederive.mjs, docs/tree-plant/probes/t8-retry-disabled-failover.mjs, docs/tree-plant/probes/t9-model-switch-no-misburn.mjs, docs/tree-plant/probes/t10-steady-state-no-duplicate-state.mjs, docs/tree-plant/probes/t11-midchain-repoint-accounting.mjs, docs/tree-plant/probes/t12-midchain-compaction-accounting.mjs, docs/tree-plant/probes/lib/harness.mjs, extensions/universal/provider-aggregation/src/router.ts, extensions/universal/provider-aggregation/src/index.ts, extensions/universal/provider-aggregation/src/__tests__/ | T2,T3,T4,T5,T6,T8,T9,T10,T11,T12 |
 | docs-sync | 行为契约文档与技能文档同步（route-matrix.md 总则 5 + 新章 / domain-model.md / SKILL.md）+ changeset + 静态对账 case | trunk | 中 | docs/design/provider-aggregation-route-matrix.md, docs/domain-model.md, extensions/universal/provider-aggregation/skills/provider-aggregation-ext-config/SKILL.md, .changeset/, docs/tree-plant/probes/d1-doc-sync.mjs | D1 |
 
 顺序依据：契约新面（retry 透传/failover 主干路径）与高风险枝（failover 边界）先行；文档同步枝
@@ -52,7 +52,7 @@ pi 的重试事件族、上游请求序列、会话落盘与 router state。验�
 |---|---|---|---|
 | 持久化 router state 防御解析（parseFailoverState：坏形状 → 空集、保序、不抛） | 可靠性 | session jsonl 可被手工编辑 / 跨版本 fork，坏形状 state 直达求值会抛异常炸掉整条路由（会话卡死） | 事件驱动：手改 / fork 即发（无固定时长） |
 | burn 决策幂等重导（跳过虚拟模型消息向前找物理结局） | 可靠性 | 连续多轮路由失败（无候选 throw）后 burn 丢失 → 故障端点恢复首选，用户再打一次故障端点 | 事件驱动：单端点路由无候选连续失败即发 |
-| 链内失败计数退役（计数生命周期 = 活跃重试链） | 可靠性 | 旧计数被观察跳过（模型切走切回/端点移出配置）后孤立 → 后续账户类 fail-fast 误判「预算用尽」→ 误 burn + 向候选漂移（账户错误被掩盖——修剪实证 P1，T9 锁定） | 事件驱动：切模型/改配置后遇账户类错误即发 |
+| 链内失败计数退役（计数生命周期 = 活跃重试链） | 可靠性 | 旧计数被观察跳过（模型切走切回/端点移出配置）后孤立 → 后续账户类 fail-fast 误判「预算用尽」→ 误 burn + 向候选漂移（账户错误被掩盖——修剪实证 P1，T9 锁定） | 事件驱动：切模型/改配置后遇账户类错误即发；退役只在链边界求值发生（链中压缩的 direct 求值不碰计数——修剪复审 F1/T12） |
 | 真实错误呈现（不造二手错误） | 业务安全 | 二手中文错误替换真实 524：用户无法排障、retry 链被杀死（已实证：session 01a202a5，route-3 持续 25h 失败） | 已实证发生（本次修复根因） |
 | 零时间机制合规（无定时器 / 无墙钟 / 无轮询 / 无退避自旋） | 业务安全（ADR-0190 合规） | 违反时间阈值判死禁令，pre-commit / CI 机器检查拦截 | 即时（引入即被拦） |
 | 降级统一出口（路由失败全部走闭包 throw 结构化错误，AX5 既有形态） | 可靠性 | 多入口各自 try/catch → 降级方向与日志形态漂移；本修订不新增错误入口（删一个） | 三个月（新增失败路径时） |
@@ -64,7 +64,7 @@ pi 的重试事件族、上游请求序列、会话落盘与 router state。验�
 |---|---|---|---|
 | 修复 opendesign 上游端点本身的故障（route-3 当前仍故障态） | 本交付只改重试 / failover 语义与错误呈现，上游 524 是端点事实不是路由 bug | 否 | 上游恢复或更换端点供应商时 |
 | retry-rules 基线 generic-5xx 补 524 | 透传后终端错误是真实 524，pi 原生词表已含 524、重试不受影响；该条只影响 taiji 设置页分类展示与收尾失败分类（题面遗留事项 1，注明"独立小改"） | 否 | taiji 分类展示与 pi 原生词表分化误判时 / 设置页失败分类投诉 |
-| direct 求值（压缩摘要）的 burnt 感知 | pi 契约 direct 不传 state（virtual-models.d.ts:53-54,65-67）——burnt 不从 state 生效；实装观察仍从 messages 重导（压缩摘要避开刚烧端点，方向优于原登记成本，2026-11-24 修剪 P5 核实后按实景登记）；闭包计数被 direct 观察改写（退役/清）与主链同语义 | 否 | pi 为 direct 求值透传 router state（virtual-models.d.ts:54 改约）时重裁——届时 burnt 从 state 生效、重导退为兜底 |
+| direct 求值（压缩摘要）的 burnt 感知 | pi 契约 direct 不传 state（virtual-models.d.ts:53-54,65-67）——burnt 不从 state 生效，软避让退回配置序（压缩摘要可能选中 burnt 端点一次，可接受）；实装按此登记实现（终局观察只在链边界跑，direct 不观察不碰计数——修剪复审 F1 修正了「观察从 messages 重导」的越界实装） | 否 | pi 为 direct 求值透传 router state（virtual-models.d.ts:54 改约）时重裁——届时 burnt 从 state 生效、重导退为兜底 |
 | 链内失败计数跨进程重启保持 | 计数是闭包内存（生命周期 = 活跃重试链）；resume 后旧终局错误按 fail-fast 重导一次、再烧一轮预算才 burnt | 否 | resume 后 failover 延迟一轮形成用户可感知投诉时 |
 | TUI / 设置页侧新增交互（burnt 可视化等） | 题面要求规则固定、无新配置项——不引入任何 UI 面 | 否（题面"无新配置项"反向约束） | 用户要求可视化 burnt 状态时 |
 | extensions lint 的 stale-ctx 普查缺口登记 | 存量问题（provider-aggregation 未登记进 stale-ctx-audit.md §3），非本次引入；阻断 `pnpm extensions:lint`，本次用包级 eslint 绕过验证 | 否（题面遗留事项 3） | 下次跑全量 extensions:lint 前 |

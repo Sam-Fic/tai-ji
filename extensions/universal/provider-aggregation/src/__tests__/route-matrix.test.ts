@@ -87,7 +87,7 @@ function virtualError(routeId: string): RouteObservationMessage {
 	return { role: "assistant", provider: AGGREGATION_PROVIDER_ID, model: routeId, stopReason: "error" }
 }
 
-/** decideRoute 调用（缺省：无观察消息 / 空 burnt / 空计数 / maxRetries=3）。 */
+/** decideRoute 调用（缺省：无观察消息 / 空 burnt / 空计数 / maxRetries=3 / 链边界）。 */
 function decide(overrides: Partial<DecideRouteInput> & { route: AggregationRoute }): RouteDecision {
 	return decideRoute({
 		now: NOW_MONDAY_10,
@@ -95,6 +95,7 @@ function decide(overrides: Partial<DecideRouteInput> & { route: AggregationRoute
 		burnt: new Set(),
 		failures: new Map(),
 		maxRetries: 3,
+		chainBoundary: true,
 		...overrides,
 	})
 }
@@ -538,6 +539,44 @@ describe("D6 修订：终局观察与 burnt 软避让（decideRoute）", () => {
 		if (result.outcome !== "selected") return
 		expect(result.memberIndexes[0]).toBe(0)
 		expect([...result.burnt]).toEqual([ZAI, GLM])
+	})
+
+	// ── 修剪复审修复（F1）：非链边界求值不观察——在途投影不迁移状态 ──────────────
+
+	it("非链边界（direct 链中压缩 / retry 落 normal-selection）→ 不观察：在途计数不抹、burnt 不动", () => {
+		// 形态 ①：链在途的 direct 求值——投影里失败 attempt 已被剔除，只剩链前旧消息
+		// （他模型成功）。修复前：retireCounts 抹掉活链计数 → 终局 error 判 fail-fast → 永不 failover
+		const duringChain = decide({
+			route: twoMemberRoute(),
+			messages: [outcome("other-provider", "other-model", "stop")],
+			failures: new Map([[GLM, 1]]),
+			chainBoundary: false,
+		})
+		expect(duringChain.outcome).toBe("selected")
+		if (duringChain.outcome !== "selected") return
+		expect(duringChain.failures.get(GLM)).toBe(1) // 在途计数原样保留
+		expect([...duringChain.burnt]).toEqual([])
+		// 形态 ②：非边界求值看到本成员陈旧成功结局——不清 burnt（修复前会反向清掉持久 burn）
+		const staleSuccess = decide({
+			route: twoMemberRoute(),
+			messages: [outcome("zhipu", "glm", "stop")],
+			burnt: new Set([GLM]),
+			chainBoundary: false,
+		})
+		expect(staleSuccess.outcome).toBe("selected")
+		if (staleSuccess.outcome !== "selected") return
+		expect([...staleSuccess.burnt]).toEqual([GLM]) // 持久 burn 不被在途投影反向清
+		// 形态 ③：非边界求值看到本成员终局 error——不抢跑 burn（回合级事实只由边界观察）
+		const staleError = decide({
+			route: twoMemberRoute(),
+			messages: [outcome("zhipu", "glm", "error")],
+			failures: new Map([[GLM, 3]]),
+			chainBoundary: false,
+		})
+		expect(staleError.outcome).toBe("selected")
+		if (staleError.outcome !== "selected") return
+		expect([...staleError.burnt]).toEqual([]) // 不在途抢跑——下一链边界观察才 burnt
+		expect(staleError.failures.get(GLM)).toBe(3)
 	})
 
 	it("非本路由成员的物理 error（用户中途换过模型）→ 无观察，不误清既有 burn", () => {
