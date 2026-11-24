@@ -193,6 +193,7 @@ export const HIDDEN_ALLOWLIST = new Map([
   // document.hidden（浏览器 API）
   ['packages/renderer/src/composables/features/settings/use-app-update-autocheck.ts:169', 'document.hidden（浏览器 API：页面可见性；166→169 随 fix-update-autocheck 恢复 ADR-0190 例外调度轴（v0.12.8 恢复版较被删前版本 runAutoCheck 注释段 +3 行）漂移，同号收口）'],
   ['packages/ui/src/features/chat/composables/useTurnElapsed.ts:123', 'document.hidden（浏览器 API：页面可见性，计时器暂停判据）'],
+  ['packages/ui/src/features/chat/composables/useProcessAggregate.ts:309', 'document.hidden（浏览器 API：页面可见性，过程卡活动计时器暂停 / 恢复补算判据）'],
   ['packages/renderer/src/boot/hidden-animation-pause.ts:19', 'document.hidden（浏览器 API：页面可见性，窗口后台化动画暂停判据）'],
   // canvas 布局 opts.hidden（节点显隐回调）
   ['packages/renderer/src/components/canvas/CanvasGraph.vue:249', 'canvas 布局 opts.hidden（节点显隐回调注入）'],

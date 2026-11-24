@@ -203,7 +203,11 @@ export default {
     traceFailed: '含 {count} 次失败',
     // 过程卡卡头计数（chat-flow-v2）：步数 = 「{count} 步」；失败分句复用 traceFailed
     // （「含 M 次失败」），不另开键——语义域同属失败计数句式。
+    // 工具类型词：进行中活动 chip 显示「此刻在做什么」时用（类型表内工具按类取名）。
     runGroupSteps: '{count} 步',
+    runGroupExplore: '探索',
+    runGroupEdit: '改动',
+    runGroupExec: '执行命令',
     // [process-aggregate] 过程卡文案：卡头主词 / 运行态词（悬停浮层与思考行共用）/
     // 工具步行失败标记 / 悬停浮层完成态词。失败计数句式复用 traceFailed、
     // 思考词复用 thinkingBlock（语义域同源，不另立第二套键）——重试标记键不登记：
@@ -218,6 +222,8 @@ export default {
     procTapeToTop: '回到开头',
     // 过程卡卡头计数（chat-flow-v2）：思考数
     procThinkCount: '思考 {count}',
+    // 过程卡活动 chip：最后一个步骤已结束、回合仍在进行（等模型响应）时的类型词
+    procChipThinking: '思考中',
     aggStatusDone: '已完成',
     // [process-aggregate] 单步详情抽屉（u-detail-drawer 装配）：抽屉标题（壳缺省与工具名
     // 后缀共用一词）/ 运行中注记 / 参数与输出小节标题。状态词复用上面三键

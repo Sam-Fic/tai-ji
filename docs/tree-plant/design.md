@@ -68,6 +68,7 @@
 - packages/renderer/src/style.css
 - packages/shared/src/message.ts
 - scripts/acceptance/
+- scripts/check-session-hidden-surface.mjs
 - docs/tree-plant/
 - .tree-plant.json
 - docs/testing/e2e-map.json
@@ -77,7 +78,7 @@
 | tape-look | 长相对齐原型：卡片底、卡头形态、行字号与颜色、逐行平铺、行距、隐藏滚动条、轮头亮度；窗口内动效去位移 | 主干 | 中 | packages/ui/src/features/chat/process-aggregate/, packages/ui/src/features/chat/ProcessAggregateBlock.vue, packages/ui/src/features/chat/composables/useProcessAggregate.ts, packages/ui/src/features/chat/TurnMeta.vue, packages/ui/src/features/chat/__tests__/, packages/ui/src/locale/zh-CN/panel.ts, packages/ui/src/locale/en-US/panel.ts, packages/renderer/src/style.css, scripts/acceptance/, docs/testing/e2e-map.json | AC-LOOK, AC-MOTION |
 | tape-scroll | 跟随只听用户滚动、上滚暂停、滚动提示、上沿淡出 | tape-look | 中 | packages/ui/src/features/chat/composables/, packages/ui/src/features/chat/process-aggregate/, packages/ui/src/features/chat/__tests__/, packages/ui/src/locale/zh-CN/panel.ts, packages/ui/src/locale/en-US/panel.ts, scripts/acceptance/, docs/testing/e2e-map.json | AC-LIVE |
 | tape-think | 思考行三态：一行标签 / 进行中只露最新一行 / 点开全文 | tape-look | 中 | packages/ui/src/features/chat/process-aggregate/, packages/ui/src/features/chat/__tests__/, scripts/acceptance/, docs/testing/e2e-map.json | AC-THINK |
-| tape-live | 进行中：卡头活动 chip 计时 + 执行中命令行尾输出 | tape-think | 中 | packages/ui/src/features/chat/process-aggregate/, packages/ui/src/features/chat/composables/, packages/ui/src/features/chat/__tests__/, packages/ui/src/locale/zh-CN/panel.ts, packages/ui/src/locale/en-US/panel.ts, scripts/acceptance/, docs/testing/e2e-map.json | AC-CHIP, AC-RUN |
+| tape-live | 进行中：卡头活动 chip 计时 + 执行中命令行尾输出 | tape-think | 中 | packages/ui/src/features/chat/process-aggregate/, packages/ui/src/features/chat/composables/, packages/ui/src/features/chat/__tests__/, packages/ui/src/locale/zh-CN/panel.ts, packages/ui/src/locale/en-US/panel.ts, scripts/acceptance/, scripts/check-session-hidden-surface.mjs, docs/testing/e2e-map.json | AC-CHIP, AC-RUN |
 | tape-settle | 落成后收成一行、点开 12 行窗口、详情走右侧抽屉 | tape-think, tape-scroll | 低 | packages/ui/src/features/chat/process-aggregate/, packages/ui/src/features/chat/ProcessAggregateBlock.vue, packages/ui/src/features/chat/Turn.vue, packages/ui/src/features/chat/__tests__/, scripts/acceptance/, docs/testing/e2e-map.json | AC-SETTLE, AC-DETAIL |
 | msw-replay | 回放派生：`model_change` entry → `modelSwitch` 系统消息；同模型/首个切换不出行 | 主干 | 高 | packages/core/src/domain/chat/apply-entry.ts, packages/core/src/domain/chat/__tests__/, packages/shared/src/message.ts | AC-MSW-REPLAY, AC-MSW-DEDUPE, AC-CORE-EQUIV |
 | msw-live | 实时链路：host-internals 扩展转发 `model_select` → runtime 帧 → 前端合成 entry | msw-replay | 高 | extensions/taiji/host-internals/src/, packages/runtime/src/services/session/event-interpreter.ts, packages/runtime/src/services/session/event-interpreter*.ts, packages/shared/src/protocol.ts, packages/core/src/domain/chat/effects/, packages/runtime/src/__tests__/ | AC-MSW-LIVE |
@@ -105,5 +106,5 @@
 | 思考文字多行预览（窗口里一次露多行） | 用户裁决「一个 block 一行」；全文通过点开查看 | 是 | 题面口径变化（要求预览多行）时 |
 | 卡片内搜索/过滤 | 未过三个月判据 | 否 | 窗口内行数 × 回合数使定位成本明显上升（用户反馈检索困难时） |
 | 轮头的思考/工具计数标签改造 | 原型各处不统一（部分轮头带、部分不带），没有可对齐的目标形态；保持现状 | 否 | 原型给出统一形态时 |
-| 轮头计时与窗口内各步耗时的口径对账 | 现象已登记（进行中轮头计时小于窗口内各步耗时之和），原因未定，不属本交付 | 否 | 定因后另立任务 |
+| 各步计时起点的口径修正 | 现象已登记：工具步的计时起点早于实际开始执行（命令刚开始执行，卡头活动计时已显示 23s），轮头计时与窗口内各步耗时之和对不上与此同源；修正要动工具调用时间戳的来源，不属本交付 | 否 | 起点来源核实后另立任务 |
 | 模型切换展示字段的持久化格式演进（格式版本 / 迁移 / 重建代价） | 本交付不新增持久化格式：`model_change` 由 pi 写入、本交付只读；project 不引入新字段落盘，旧会话无需改写（格式版本 = 无新增，不迁移，重建代价 = 0） | 否 | pi 升级改变 `model_change` entry 结构（发行说明或回放用例开始失败时） |

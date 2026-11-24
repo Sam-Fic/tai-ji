@@ -1,7 +1,8 @@
 <!--
   过程卡（chat-flow-v2）：一张卡 = 卡片 + 卡头 + 12 行窗口。
   卡片：比页面底色亮一档的底色、圆角、左右 12px 内边距（原型同款）。
-  卡头（AggregateSummaryRow）承载开关与计数；右侧插槽放滚动提示
+  卡头（AggregateSummaryRow）承载开关与计数；右侧插槽放进行中的活动 chip
+  （AggregateActivityChip：此刻在做什么 + 已持续多久）与滚动提示
   （更早 N 条 / 回到最新 / 下面还有 N 条 / 回到开头——useTapeScroll 按窗口几何派生）。
   窗口（agg-tape-scroll）高度上限 = 12 行 × 24px，内容在其中滚动；滚动条隐藏；
   内容滚出窗口的一侧 16px 渐隐。思考块的展开集合由本组件持有（思考行与卡头的活动 chip 共用）。
@@ -17,6 +18,12 @@
       @toggle="emit('toggle')"
     >
       <template #right>
+        <AggregateActivityChip
+          v-if="activity"
+          :activity="activity"
+          :elapsed="activityElapsed"
+          @activate="toggleThinkingById(activity.thinkingId)"
+        />
         <Button
           v-if="hint"
           variant="ghost"
@@ -53,7 +60,8 @@ import type { ProcessSegment } from '@taiji/core/domain/chat'
 import { Button } from '../../../primitives/button'
 import AggregateSummaryRow from './AggregateSummaryRow.vue'
 import AggregateExpandedBody from './AggregateExpandedBody.vue'
-import { useTapeScroll } from '../composables/useProcessAggregate'
+import { useTapeActivity, useTapeScroll } from '../composables/useProcessAggregate'
+import AggregateActivityChip from './AggregateActivityChip.vue'
 
 const props = defineProps<{
   /** 段数据（core 切段纯函数输出；窗口行内容 = segment.units 逐行投影） */
@@ -80,6 +88,9 @@ const { hint, overTop, overBottom, onScroll, onScrollEnd, onWheel, onHint, attac
   live,
 })
 
+/* 卡头活动 chip：进行中「此刻在做什么 + 已持续多久」（卡内唯一的实时计时） */
+const { activity, elapsedText: activityElapsed } = useTapeActivity({ segment, live })
+
 /* 已点开的思考块：窗口收起再打开、段继续增长都保留；卡卸载即清空（瞬态，不落 store）。
    翻转时替换成新集合——读它的模板与 computed 才会更新 */
 const openThinking = ref<ReadonlySet<string>>(new Set())
@@ -88,6 +99,10 @@ function toggleThinking(id: string): void {
   if (next.has(id)) next.delete(id)
   else next.add(id)
   openThinking.value = next
+}
+/** 活动 chip 的点开请求：只对带目标 id 的 chip 生效（当前活动是流式中的思考） */
+function toggleThinkingById(id: string | undefined): void {
+  if (id !== undefined) toggleThinking(id)
 }
 
 /* 窗口挂载 / 卸载即接入滚动运行时：挂载后进行中且跟随时贴底，落成后打开从第一条读起；

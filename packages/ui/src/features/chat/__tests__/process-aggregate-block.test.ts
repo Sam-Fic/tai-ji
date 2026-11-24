@@ -48,6 +48,10 @@ vi.mock('vue-i18n', async () => {
     'panel.message.traceFailed': '含 {count} 次失败',
     'panel.message.runGroupSteps': '{count} 步',
     'panel.message.procThinkCount': '思考 {count}',
+    'panel.message.procChipThinking': '思考中',
+    'panel.message.runGroupExplore': '探索',
+    'panel.message.runGroupEdit': '改动',
+    'panel.message.runGroupExec': '执行命令',
     'panel.message.thinkingBlock': '思考',
     'panel.message.thinkingDuration': '持续了 {duration}',
     'panel.message.expand': '展开',
@@ -415,6 +419,103 @@ describe('process-aggregate-block thinking row: three states', () => {
   });
 });
 
+// ─── 卡头活动 chip：此刻在做什么 + 计时（chat-flow-v2）──────────
+
+describe('process-aggregate-block live activity chip', () => {
+  it('流式中的思考：chip =「思考」+ 计时；点 chip 点开该段思考', async () => {
+    const wrapper = mountAgg(
+      makeSegment([makeThinkingFlat('推理中', { startTime: Date.now() - 3000, endTime: undefined })], { followedByText: false }),
+      true,
+    );
+    const chip = wrapper.find('[data-testid="agg-activity-chip"]');
+    expect(chip.exists()).toBe(true);
+    expect(chip.find('[data-testid="agg-activity-label"]').text()).toBe('思考');
+    expect(chip.find('[data-testid="agg-activity-duration"]').text()).toBe('3s');
+    // 卡内没有第二个实时计时：流式中的思考行不带时长
+    expect(wrapper.find('[data-testid="agg-expanded"]').find('[data-testid="agg-thinking-duration"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="agg-thinking-toggle"]').exists()).toBe(false);
+    await chip.trigger('click');
+    expect(wrapper.find('[data-testid="agg-thinking-toggle"]').exists()).toBe(true);
+  });
+
+  it('执行中的命令：chip =「执行命令」+ 计时；窗口里的命令行不显示耗时', () => {
+    const segment = makeSegment(
+      [
+        makeThinkingFlat('想'),
+        makeToolFlat({ toolName: 'bash', input: { command: 'pnpm test' }, status: 'running', endTime: undefined, startTime: Date.now() - 4000 }),
+      ],
+      { followedByText: false },
+    );
+    const wrapper = mountAgg(segment, true);
+    expect(wrapper.find('[data-testid="agg-activity-label"]').text()).toBe('执行命令');
+    expect(wrapper.find('[data-testid="agg-activity-duration"]').text()).toBe('4s');
+    expect(wrapper.find('[data-testid="agg-expanded"]').find('[data-testid="agg-tool-duration"]').exists()).toBe(false);
+  });
+
+  it('类型表外的工具执行中：类型词显示工具名', () => {
+    const wrapper = mountAgg(
+      makeSegment([makeToolFlat({ toolName: 'custom_tool', status: 'running', endTime: undefined })], { followedByText: false }),
+      true,
+    );
+    expect(wrapper.find('[data-testid="agg-activity-label"]').text()).toBe('custom_tool');
+  });
+
+  it('最后一个步骤已结束、回合仍在进行：chip =「思考中」；段不在进行中：没有 chip', () => {
+    const waiting = mountAgg(makeSegment([makeThinkingFlat('想')], { followedByText: false }), true);
+    expect(waiting.find('[data-testid="agg-activity-label"]').text()).toBe('思考中');
+    const settled = mountAgg(makeSegment([makeThinkingFlat('想')], { followedByText: true }), true);
+    expect(settled.find('[data-testid="agg-activity-chip"]').exists()).toBe(false);
+  });
+});
+
+// ─── 执行中的命令行（chat-flow-v2）────────────────────────────────
+
+describe('process-aggregate-block running command row', () => {
+  const runningCmd = (output: string) =>
+    makeSegment(
+      [
+        makeToolFlat({
+          toolName: 'bash',
+          input: { command: 'for i in 1 2 3; do echo out-$i; done' },
+          status: 'running',
+          endTime: undefined,
+          output,
+        }),
+      ],
+      { followedByText: false },
+    );
+
+  it('执行中的命令行：行尾显示最新一行输出与光标，不显示耗时，不带工具名，保持静态箭头', () => {
+    const wrapper = mountAgg(runningCmd('out-1\nout-2\n'), true);
+    const row = wrapper.find('[data-testid="agg-tool-row"]');
+    expect(row.text()).not.toContain('bash');
+    expect(row.find('[data-testid="agg-tool-tail"]').text()).toBe('out-2');
+    expect(row.find('.agg-cursor').exists()).toBe(true);
+    expect(row.find('[data-testid="agg-tool-duration"]').exists()).toBe(false);
+    expect(row.find('[data-running-icon]').exists()).toBe(false);
+    // 结束后：输出尾行与光标撤下，换上耗时
+    wrapper.unmount()
+    const done = mountAgg(
+      makeSegment(
+        [makeToolFlat({ toolName: 'bash', input: { command: 'ls' }, status: 'completed', endTime: 9000, output: 'out-1\nout-2\n' })],
+        { followedByText: false },
+      ),
+      true,
+    )
+    const doneRow = done.find('[data-testid="agg-tool-row"]')
+    expect(doneRow.find('[data-testid="agg-tool-tail"]').exists()).toBe(false)
+    expect(doneRow.find('.agg-cursor').exists()).toBe(false)
+    expect(doneRow.find('[data-testid="agg-tool-duration"]').text()).not.toBe('')
+  })
+
+  it('执行中的命令还没有输出：只有光标，没有输出尾行', () => {
+    const wrapper = mountAgg(runningCmd('\n   \n'), true);
+    const row = wrapper.find('[data-testid="agg-tool-row"]');
+    expect(row.find('[data-testid="agg-tool-tail"]').exists()).toBe(false);
+    expect(row.find('.agg-cursor').exists()).toBe(true);
+  });
+});
+
 // ─── RL6：入场动效一次性 ─────────────────────────────────────────
 
 describe('process-aggregate-block RL6: entrance animation plays once across remount', () => {
@@ -660,6 +761,10 @@ describe('process-aggregate i18n keys (zh + en)', () => {
     'aggRowFailed',
     'aggStatusDone',
     'procThinkCount',
+    'procChipThinking',
+    'runGroupExplore',
+    'runGroupEdit',
+    'runGroupExec',
     'procTapeEarlier',
     'procTapeBelow',
     'procTapeToTop',

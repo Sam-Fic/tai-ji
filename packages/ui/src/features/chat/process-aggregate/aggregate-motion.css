@@ -29,3 +29,37 @@
     animation: none;
   }
 }
+
+/*
+ * 过程卡行尾光标（流式中的思考行 / 执行中的命令行共用）：强调色竖条闪烁 = 输出仍在进行。
+ * 放本文件而不是组件 scoped 的原因同上（keyframes 哈希改名）；消费方各自 import 一次
+ * （vite 全局注入幂等——不能依赖别的组件恰好先加载了它）。
+ */
+.agg-cursor {
+  display: inline-block;
+  flex: none;
+  width: 7px;
+  height: 13px;
+  margin-left: 5px;
+  border-radius: 1px;
+  background: var(--accent);
+  vertical-align: -2px;
+  animation: agg-cursor-blink 1s steps(1) infinite;
+}
+
+@keyframes agg-cursor-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agg-cursor {
+    animation: none;
+  }
+}

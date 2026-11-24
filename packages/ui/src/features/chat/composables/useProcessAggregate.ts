@@ -4,7 +4,8 @@
  * 职责分工（括注 = 承载导出）：
  * - 展开态与入场动效一次性语义（useProcessAggregateState——展开态是组件本地 ref，D6：不落 store、
  *   不持久化，虚拟化卸载即重置回默认；D10/RL6 两条重放路径的压制形态见 entranceClass 注释）；
- * - 窗口滚动运行时（useTapeScroll——进行中贴底跟随、上滚停吸、卡头右侧滚动提示、两侧渐隐）。
+ * - 窗口滚动运行时（useTapeScroll——进行中贴底跟随、上滚停吸、卡头右侧滚动提示、两侧渐隐）；
+ * - 卡头活动 chip（useTapeActivity——「此刻在做什么 + 已持续多久」，段进行中才有）。
  *
  * 时间机制红线（ADR-0190 / 时间平抑类逻辑红线）：展开态翻转、窗口贴底与提示更新全部由事件派生
  * （followedByText / turnWorking / 成员增量 / 内容尺寸变化 / 滚动事件），零 timer、零延迟判定。
@@ -14,11 +15,35 @@
  */
 import { computed, nextTick, onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { ProcessSegment } from '@taiji/core/domain/chat'
-import type { ThinkingBlock } from '@taiji/shared'
+import type { RunningIconKind } from '../block-icon'
+import { RUN_GROUP_TOOLS, type ProcessSegment, type RunGroupBase } from '@taiji/core/domain/chat'
+import type { ThinkingBlock, ToolCall } from '@taiji/shared'
+import { formatDurationHms } from '../format-utils'
 
 /** 滚动位置容差（px）：scrollTop 取整与亚像素高度差会让「到达」差 1px */
 const SCROLL_EPSILON = 1
+/** 活动计时的刷新间隔 */
+const ACTIVITY_TICK_MS = 1000
+/** 活动类型 → 卡头类型词的 i18n 键 */
+const RUN_GROUP_LABEL_KEY: Record<RunGroupBase, string> = {
+  explore: 'panel.message.runGroupExplore',
+  edit: 'panel.message.runGroupEdit',
+  exec: 'panel.message.runGroupExec',
+}
+/** 工具类型 → 执行中的图标种类（类型词旁的进行中信号） */
+const RUN_GROUP_RUNNING_ICON: Record<RunGroupBase, RunningIconKind> = {
+  explore: 'tool-read',
+  edit: 'tool-edit',
+  exec: 'tool-bash',
+}
+
+/** toolName → 工具类型（RUN_GROUP_TOOLS 类型表反查，与 core 分组同一判定源）；表外工具为 null */
+function runBaseOf(toolName: string): RunGroupBase | null {
+  for (const base of Object.keys(RUN_GROUP_TOOLS) as RunGroupBase[]) {
+    if (RUN_GROUP_TOOLS[base].includes(toolName)) return base
+  }
+  return null
+}
 
 /**
  * 思考块流式中谓词（chat 域唯一实现点）：有 start 无 end = 流式中。
@@ -244,4 +269,107 @@ export function useTapeScroll(params: {
   )
 
   return { hint, overTop, overBottom, onScroll, onScrollEnd, onWheel, onHint, attach }
+}
+
+/** 卡头活动 chip 的数据：此刻在做什么、从什么时候开始 */
+type TapeActivity = {
+  /** 类型词（已求值） */
+  label: string
+  /** 进行中图标种类（RunningBlockIcon 的 kind） */
+  icon: RunningIconKind
+  /** 该活动开始的时间戳；缺省 = 没有可用的时间戳，不显示计时 */
+  since?: number
+  /** 当前活动是流式中的思考时：该块的 id（点 chip 可点开它的全文） */
+  thinkingId?: string
+}
+
+/**
+ * 卡头活动 chip（AggregateTape 消费）：进行中在卡头右侧常驻「此刻在做什么 + 已持续多久」。
+ *
+ * 取段内最后一个成员判定：
+ *   流式中的思考 → 思考（可点开）；执行中的工具 → 该类工具的类型词（类型表外工具显示工具名）；
+ *   最后一个成员已结束而回合仍在进行 → 思考中（等模型响应），自该成员结束算起。
+ * 段不在进行中 → 没有 chip。
+ *
+ * 计时是卡内唯一的实时计时（行内只有已结束步骤的历史耗时）。每秒刷新一次、只更新 chip 文本；
+ * 页面不可见时停表、恢复可见立即补算（轮头耗时同款范式）；卸载即清理。
+ */
+export function useTapeActivity(params: {
+  /** 段数据 */
+  segment: Ref<ProcessSegment>
+  /** 段进行中 */
+  live: Ref<boolean>
+}) {
+  const { t } = useI18n()
+  const now = ref(Date.now())
+  let timer: ReturnType<typeof setInterval> | null = null
+
+  /** 页面是否不可见（浏览器可见性接口，与会话的 hidden 状态无关；收在一处便于同名登记） */
+  function pageHidden(): boolean {
+    return document.hidden
+  }
+
+  /** 计时器只在「有活动且带起始时间、页面可见」时运行 */
+  function syncTimer(needed: boolean): void {
+    if (needed && !pageHidden()) {
+      if (timer === null) timer = setInterval(() => (now.value = Date.now()), ACTIVITY_TICK_MS)
+    } else if (timer !== null) {
+      clearInterval(timer)
+      timer = null
+    }
+  }
+
+  function onVisibilityChange(): void {
+    if (!pageHidden()) now.value = Date.now()
+    syncTimer(params.live.value && activity.value?.since !== undefined)
+  }
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  onBeforeUnmount(() => {
+    syncTimer(false)
+    document.removeEventListener('visibilitychange', onVisibilityChange)
+  })
+
+  function waiting(since: number | undefined): TapeActivity {
+    return { label: t('panel.message.procChipThinking'), icon: 'thinking', since }
+  }
+
+  const activity = computed<TapeActivity | null>(() => {
+    if (!params.live.value) return null
+    const members = params.segment.value.members
+    const last = members[members.length - 1]
+    if (!last) return null
+    if (last.block.kind === 'thinking') {
+      const thinking = last.block.ref as ThinkingBlock
+      if (isThinkingStreaming(thinking)) {
+        return { label: t('panel.message.thinkingBlock'), icon: 'thinking', since: thinking.startTime, thinkingId: thinking.id }
+      }
+      return waiting(thinking.endTime)
+    }
+    const tool = last.block.ref as ToolCall
+    if (tool.status === 'running') {
+      const base = runBaseOf(tool.toolName)
+      const icon: RunningIconKind = base ? RUN_GROUP_RUNNING_ICON[base] : 'tool-other'
+      return { label: base ? t(RUN_GROUP_LABEL_KEY[base]) : tool.toolName, icon, since: tool.startTime }
+    }
+    return waiting(tool.endTime)
+  })
+
+  /* 活动或其起始时间变化：立即对表并按需启停计时器（新活动从 0 秒起算，不沿用上一次的对表时刻） */
+  watch(
+    () => [params.live.value, activity.value?.since] as const,
+    ([live, since]) => {
+      now.value = Date.now()
+      syncTimer(live && since !== undefined)
+    },
+    { immediate: true },
+  )
+
+  /** 已持续时长的文本（整秒；没有起始时间时不显示） */
+  const elapsedText = computed(() => {
+    const since = activity.value?.since
+    if (since === undefined) return ''
+    return formatDurationHms(Math.max(0, now.value - since))
+  })
+
+  return { activity, elapsedText }
 }

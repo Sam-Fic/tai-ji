@@ -32,7 +32,7 @@
 | I2 | 回合内通知可按时间戳与 trace 单元混排（block 时间戳与 notice 时间戳可比） | 推断 | packages/ui/src/features/chat/composables/use-turn-trace.ts:101 | 需核对 block startTime 的来源与缺省 |
 | I3 | 每张过程卡各持一个 1 秒 interval 可接受 | 推断 | packages/ui/src/features/chat/composables/useTurnElapsed.ts:109 | 同屏卡数有上限时成立；超出则共享单 tick |
 | I4 | 模型切换行的中英文案无需新增 locale 目录（只改 ui 两文件） | 推断 | packages/ui/src/locale/zh-CN/panel.ts:108 | renderer locales 无 chat 域；需实现期跑同步脚本核实 |
-| I6 | 进行中轮头计时小于窗口内各步耗时之和，源于各步时间戳口径 | 推断 | packages/ui/src/features/chat/composables/useTurnElapsed.ts:5 | 实测轮头「工作中 5s」时窗口内思考 4s + 命令 5s；原因未定，显式不做 |
+| I6 | 工具步的计时起点（`ToolCall.startTime`）早于实际开始执行，行内耗时与卡头活动计时因此偏大；进行中轮头计时与窗口内各步耗时之和对不上与此同源 | 推断 | packages/runtime/src/services/session/event-interpreter.ts:630 | 真机探针实测：命令刚开始执行，卡头活动计时已显示 23s；用户实例里瞬时完成的 ls 显示 5–6s。起点取自哪一事件未核实，显式不做 |
 
 ## 外部接口核实表
 
@@ -53,6 +53,7 @@
 | 命令行形态判定 | `RUN_GROUP_TOOLS.exec` 类型表内的工具按命令行形态显示 | packages/core/src/domain/chat/trace-window.ts:119 | AC-LOOK |
 | 轮头禁用态样式 | Button 基类 `disabled:opacity-50`，经 `cn` 合并可覆盖 | packages/ui/src/primitives/button/button-variants.ts:15; packages/ui/src/primitives/button/Button.vue:24 | AC-LOOK |
 | i18n 双侧 | `packages/ui/src/locale/{zh-CN,en-US}/panel.ts` 的 `message` 组 | packages/ui/src/locale/zh-CN/panel.ts:108; packages/ui/src/locale/en-US/panel.ts:111 | AC-I18N |
+| 页面可见性 | `document.hidden`（浏览器接口）：活动计时器页面不可见时停表、恢复可见补算；与会话 hidden 状态同名无关，登记进同名白名单 | packages/ui/src/features/chat/composables/useProcessAggregate.ts:309; scripts/check-session-hidden-surface.mjs:196 | AC-CHIP |
 | 真机装配 | 开发实例（vite+electron+真 pi）+ faux 演员（四模型） | .agents/skills/verify-taiji/SKILL.md:29; packages/runtime/src/__tests__/fixtures/faux-llm-ext.ts:153 | AC-H12 |
 | 图标资源 | lucide `box` 字形可直接引用（@lucide/vue） | node_modules/@lucide/vue/dist/esm/icons/box.mjs | AC-MSW-ICON |
 
@@ -62,4 +63,4 @@
 - I2：回合内通知与 trace 单元的时间可比性；若 block 缺 startTime（历史会话），通知退化为「回合末尾」位置并在报告中登记。
 - I3：同屏过程卡数量上限；若实测超过 3 张卡，改为「单一 tick 广播」的共享计时器。
 - I4：locale 目录是否只有 ui 两文件需要改；实现期跑 `check_i18n_locale_sync.py` 核实（AC-I18N 已覆盖）。
-- I6：进行中轮头计时与窗口内各步耗时之和对不上；原因未定，不属本交付，已登记为显式不做。
+- I6：各步计时的起点偏早（命令刚开始执行，卡头活动计时已显示 23s；轮头计时与窗口内各步耗时之和对不上）。起点取自哪一事件未核实；修正要动工具调用时间戳的来源，不属本交付，已登记为显式不做。

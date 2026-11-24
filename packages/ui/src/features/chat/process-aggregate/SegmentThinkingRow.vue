@@ -68,6 +68,7 @@ import { useI18n } from 'vue-i18n'
 import { ChevronRight, Lightbulb } from '@lucide/vue'
 import type { ThinkingBlock } from '@taiji/shared'
 import MarkdownRenderer from '../MarkdownRenderer.vue'
+import './aggregate-motion.css'
 import { isThinkingStreaming } from '../composables/useProcessAggregate'
 // primitives 直接路径（不经 @taiji/ui 顶层 barrel）：chat 组件被 barrel 再导出，
 // barrel 自引用会闭合一族循环依赖环（详见 BashOutputBlock.vue 同款注释）
@@ -167,32 +168,4 @@ function onTextClick(): void {
    （默认的收缩会把它压成一行高，多出的内容直接消失） */
 .agg-think-in {
   flex: none;
-}
-.agg-cursor {
-  display: inline-block;
-  width: 7px;
-  height: 13px;
-  margin-left: 5px;
-  border-radius: 1px;
-  background: var(--accent);
-  vertical-align: -2px;
-  animation: agg-cursor-blink 1s steps(1) infinite;
-}
-
-@keyframes agg-cursor-blink {
-  0%,
-  49% {
-    opacity: 1;
-  }
-  50%,
-  100% {
-    opacity: 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .agg-cursor {
-    animation: none;
-  }
-}
-</style>
+}</style>

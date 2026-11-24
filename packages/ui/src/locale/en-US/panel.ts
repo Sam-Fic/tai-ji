@@ -207,8 +207,12 @@ export default {
     generatedTokens: 'Generated {tokens} tokens',
     traceFailed: '{count} failed',
     // Process card head count (chat-flow-v2): step count; the failure clause reuses traceFailed
-    // — same failure-count domain.
+    // — same failure-count domain. Tool type names: shown by the live activity chip for tools
+    // that are in the type table.
     runGroupSteps: '{count} steps',
+    runGroupExplore: 'Explore',
+    runGroupEdit: 'Edits',
+    runGroupExec: 'Commands',
     // [process-aggregate] process card copy: head label / running word (shared by the hover card
     // and the thinking row) / row-level failure tag /
     // hover-card done word. The failure-count clause reuses traceFailed and the thinking word
@@ -222,6 +226,9 @@ export default {
     procTapeToTop: 'Back to top',
     // Process card head count (chat-flow-v2): thinking count
     procThinkCount: 'Thinking {count}',
+    // Process card activity chip: type word while the last step has finished and the turn
+    // is still waiting for the model
+    procChipThinking: 'Thinking…',
     aggStatusDone: 'done',
     // [process-aggregate] tool detail drawer (u-detail-drawer assembly): drawer title (shared
     // by the shell fallback and the tool-name suffix) / running note / params & output section

@@ -4,6 +4,7 @@
   命令类工具（RUN_GROUP_TOOLS.exec 类型表内，如 bash）只显示命令正文，不带工具名；
   其余工具显示工具名 + 参数摘要。行尾：diff 摘要、失败标记、耗时。
   失败行在场标红（失败是段的正式成员，不做可见性剔除）；重试标记不渲染（无结构判定源，D4）。
+  执行中：命令正文提亮，行尾显示最新一行输出与光标（没有输出时只有光标）；不显示耗时。
   详情通道分工（D4）：悬停 → 浮层摘要；点击 / Enter / Space → emit open-detail
   （右侧抽屉由 AggregateExpandedBody 接线；点击同时收浮层）。行内不展开输出。
   浮层传送到页面层、固定定位：行在限高滚动的窗口里，挂在行内的浮层会被窗口裁掉。
@@ -22,8 +23,9 @@
     @keydown.enter.stop.prevent="onRowClick"
     @keydown.space.stop.prevent="onRowClick"
   >
-    <!-- running 态 loader（呼吸弧 + accent），其余状态静态图标；失败行图标染 danger -->
-    <RunningBlockIcon v-if="isRunning" kind="tool-other" />
+    <!-- running 态 loader（呼吸弧 + accent），其余状态静态图标；失败行图标染 danger。
+         命令类工具执行中保持静态箭头：进度信号在行尾的输出与光标 -->
+    <RunningBlockIcon v-if="isRunning && !isCommandLine" kind="tool-other" />
     <component
       :is="headerIcon"
       v-else
@@ -33,7 +35,8 @@
     <!-- 主体：命令正文或参数摘要，占满剩余宽度后省略（完整内容走浮层/抽屉） -->
     <span
       v-if="paramText"
-      class="min-w-0 flex-1 truncate font-mono text-[length:var(--text-xs)] text-neutral-fg-2"
+      class="min-w-0 flex-1 truncate font-mono text-[length:var(--text-xs)]"
+      :class="isRunning ? 'text-neutral-fg' : 'text-neutral-fg-2'"
       data-testid="agg-tool-param"
     >{{ paramText }}</span>
     <span v-else class="flex-1" />
@@ -49,6 +52,13 @@
       class="shrink-0 rounded-[var(--radius-xs)] bg-danger-soft px-1.5 py-px text-[length:var(--text-2xs)] [font-weight:var(--fw-mid)] text-danger"
       data-testid="agg-tool-failed"
     >{{ t('panel.message.aggRowFailed') }}</span>
+    <!-- 执行中：最新一行输出（最多占行宽的 46%）与光标 -->
+    <span
+      v-if="isRunning && outputTail"
+      class="ml-auto flex min-w-0 max-w-[46%] shrink items-center gap-1 font-mono text-[length:var(--text-xs)] text-neutral-mid"
+      data-testid="agg-tool-tail"
+    ><CornerDownRight class="size-3 shrink-0 text-neutral-dim" aria-hidden="true" /><span class="truncate">{{ outputTail }}</span></span>
+    <span v-if="isRunning" class="agg-cursor" aria-hidden="true" />
     <!-- 耗时（行尾等宽中灰；running 无 endTime 不渲染） -->
     <span
       v-if="duration"
@@ -65,10 +75,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { CornerDownRight } from '@lucide/vue'
 import { RUN_GROUP_TOOLS } from '@taiji/core/domain/chat'
 import type { ToolCall } from '@taiji/shared'
 import RunningBlockIcon from '../RunningBlockIcon.vue'
 import AggregateHoverCard from './AggregateHoverCard.vue'
+import './aggregate-motion.css'
 import { BLOCK_ICON_CLASS, BLOCK_ICON_LUCIDE, getBlockIcon } from '../block-icon'
 import { formatDuration } from '../format-utils'
 import { toolArgFieldText } from './tool-arg-summary'
@@ -91,10 +103,21 @@ const isFailed = computed(() => props.tool.status === 'error')
 /** 命令类工具（类型表 RUN_GROUP_TOOLS.exec 内）：行内只显示命令正文，不带工具名 */
 const isCommandLine = computed(() => RUN_GROUP_TOOLS.exec.includes(props.tool.toolName))
 
-/** 静态图标（running 收窄回退 tool-other 字形——实际渲染走模板 RunningBlockIcon 分支） */
+/** 静态图标（按完成态取字形；执行中的非命令类工具在模板里换成功效图标） */
 const headerIcon = computed(() => {
-  const kind = getBlockIcon(props.tool.toolName, props.tool.status, false, false)
+  const kind = getBlockIcon(props.tool.toolName, 'completed', false, false)
   return kind === 'running' ? BLOCK_ICON_LUCIDE['tool-other'] : BLOCK_ICON_LUCIDE[kind]
+})
+
+/** 执行中最新一行输出：output 里最后一个非空行（output 已去 ANSI）；没有则不显示 */
+const outputTail = computed(() => {
+  if (!isRunning.value) return ''
+  const lines = (props.tool.output ?? '').split('\n')
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i].trim()
+    if (line) return line
+  }
+  return ''
 })
 
 const duration = computed(() => {

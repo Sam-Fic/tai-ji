@@ -6073,6 +6073,10 @@
         },
         {
           "kind": "probe",
+          "ref": "scripts/acceptance/tape-live.mjs"
+        },
+        {
+          "kind": "probe",
           "ref": "scripts/acceptance/tape-scroll.mjs"
         }
       ],
