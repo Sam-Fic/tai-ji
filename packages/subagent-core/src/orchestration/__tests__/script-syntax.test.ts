@@ -6,7 +6,7 @@
  *   函数内同名声明不红（作用域不同）；`export const meta` 形式可编译
  * - assertWorkflowScriptSyntax：空脚本文本跳过（旧格式 record）；撞名抛
  *   WorkflowScriptSyntaxError 且文案含恢复指引
- * - 内置模板对账：packages/subagent-core/workflows/ 下六个内置脚本全部通过本闸
+ * - 内置模板对账：packages/subagent-core/workflows/ 下内置脚本全部通过本闸（数量不写死，随目录派生）
  *   （模板演化出撞名声明时在此红，而不是真机异步语法错）
  */
 import { readdirSync, readFileSync } from "node:fs";
@@ -75,7 +75,7 @@ describe("assertWorkflowScriptSyntax（run / resume 入口共用）", () => {
 });
 
 describe("内置模板对账（workflows/*.js 必须全部通过派发前闸）", () => {
-  it("六个内置模板脚本全部通过 checkWorkflowScriptSyntax", () => {
+  it("内置模板脚本全部通过 checkWorkflowScriptSyntax（数量随 workflows/ 目录派生，不写死）", () => {
     const files = readdirSync(WORKFLOWS_DIR).filter((f) => f.endsWith(".js"));
     expect(files.length, "内置模板目录为空 = 路径锚或产物形态变了，对账失效").toBeGreaterThan(0);
     for (const file of files) {

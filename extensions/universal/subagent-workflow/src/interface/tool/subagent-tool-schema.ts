@@ -89,7 +89,7 @@ export const SubagentStartParams = Type.Object({
     description:
       "Execution engine. Omit to inherit config. Priority: this param > agent .md frontmatter > config.json defaultEngine. Non-pi engines reject fork/worktree.",
   })),
-  // [collect 退役] collect 参数已删除——批量编排的唯一入口是 `subagent_batch` tool（fan-out run
+  // [collect 退役] collect 参数已删除——批量编排的唯一入口是 `subagent_batch` tool（batch run
   // 管道），单数 start 不再有通知路由选项。旧调用形态（显式带 collect）不会被 pi 参数校验
   // 拒绝（typebox Object 不产 additionalProperties → 未知字段静默放行），通知路由不再生效；
   // 声明层无迁移期提示（原 description 的退役说明已随声明压缩删除，未在其他层重新承载）。
@@ -97,9 +97,9 @@ export const SubagentStartParams = Type.Object({
 
 // ── subagent_batch：批量派发（成员对象形状，subagent-tool-interface-refactor §3.1.2 终态）──
 //
-// 与 fan-out 模板共用同一形状（§3.1.2）：tasks 元素 = 成员对象（task/agent/model/
-// thinkingLevel），不再接受字符串元素；tasks 的 minItems/maxItems 与 fan-out 模板
-// @pi-meta 的 tasks 块同键同值（执行侧声明 = packages/subagent-core/workflows/fan-out.js
+// 与 batch 模板共用同一形状（§3.1.2）：tasks 元素 = 成员对象（task/agent/model/
+// thinkingLevel），不再接受字符串元素；tasks 的 minItems/maxItems 与 batch 模板
+// @pi-meta 的 tasks 块同键同值（执行侧声明 = packages/subagent-core/workflows/batch.js
 // parameters 块）——声明与执行同源，双源同步由 tool-subagents.test.ts 源码对拍 +
 // structured-output cross-package-contract.test.ts 真实 typebox 断言锁定。旧 `agents`（逗号串位置映射）与 `aggregate`
 // 从工具 schema 移除——「一个执行者用于全员」用运行级 agent 表达、「每个成员不同」
@@ -141,7 +141,7 @@ export const SubagentsParams = Type.Object({
       "One or more batch members; each element = one dispatch (object: {task, agent?, model?, thinkingLevel?}). " +
       "All members run in parallel as independent one-shot subagents.",
     minItems: 1,
-    // 与 fan-out 模板 @pi-meta 的 tasks.maxItems 同值（上限本源在执行侧模板）
+    // 与 batch 模板 @pi-meta 的 tasks.maxItems 同值（上限本源在执行侧模板）
     maxItems: 20,
   }),
   agent: Type.Optional(Type.String({

@@ -141,7 +141,7 @@ export function memberSettlementOf(call: AgentCall): MemberSettlement {
 }
 
 /**
- * [subagent-observability §3.3.10/UC-11] 脚本层部分交付事实提取：fan-out 交付校验
+ * [subagent-observability §3.3.10/UC-11] 脚本层部分交付事实提取：批量模板（batch/fan-out）交付校验
  * 在 worker 脚本内执行（§3.3.10「成员交付结算前校验」的模板侧落点），部分交付成员
  * 清单随脚本返回 outcome.partialMembers 传回宿主（run.state.scriptResult，handleReturn
  * 先于终局派生写点）。本函数把 unknown 形态的脚本产物收敛为结构化报告——逐条校验
@@ -195,11 +195,11 @@ function parsePartialMemberEntry(item: unknown): PartialMemberReport | undefined
  *   partially_succeeded）不被覆盖；
  * - 脚本层失败（run.state.error 有值——worker error / replay mismatch / 脚本 throw，
  *   harness 系统层失败）维持 failed 裁决不被改档；成员明细按形态分流：全部成员已
- *   终局时失败明细照常进帧（fan-out 全败 throw 是模板显式的终局上报），存在未终局
+ *   终局时失败明细照常进帧（批量模板全败 throw 是模板显式的终局上报），存在未终局
  *   成员时成员无责、维持抑制（见函数体内分流注释）。
  * - completed / 无 state.error 的 failed 才做成员 outcome 派生——成员失败传导 run
  *   终局（行为反转登记：现状成员失败完全不传导）。脚本吞掉成员失败的正常收尾
- *   （fan-out allSettled 语义）在此升格 partially_succeeded/failed（场景 2 主场景）。
+ *   （批量模板 allSettled 语义）在此升格 partially_succeeded/failed（场景 2 主场景）。
  * 空成员集回落原合成（脚本层判定）。settling 中双终局竞窗由状态机 terminal ×
  * 任意 fail-fast 承担（先到事实者胜）；interrupted 非终局不派生（resume 后再派生）。
  *
@@ -220,7 +220,7 @@ export function settleMembersIntoFinalSettlement(run: WorkflowRun, record: RunSe
   // 脚本层失败（run.state.error——worker error / replay mismatch / 脚本 throw，harness
   // 系统层失败）两形态分流（终局派生写点先于 closeOutInFlightCalls——未终局成员在本
   // 判定位仍无 result，两形态结构性可分）：
-  // - 全部成员已终局（有 result）：成员失败事实真实在案（fan-out 全败 throw 是模板
+  // - 全部成员已终局（有 result）：成员失败事实真实在案（批量模板全败 throw 是模板
   //   显式的终局上报形态），失败明细照常进终局帧；run 级 outcome 维持脚本层 failed
   //   裁决，不被成员派生改档（harness 系统层失败优先于成员集合聚合）。
   // - 存在未终局成员（worker 崩溃 / replay mismatch）：失败归 harness 系统层，成员无责
