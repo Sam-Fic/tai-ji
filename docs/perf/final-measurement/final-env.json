@@ -1,5 +1,5 @@
 {
- "head": "4a8e0f147a65b70e694268acc4d95a501eb1974f",
+ "head": "aa79ebf5543947bc170749efa9dd2088b3e066df",
  "tag": "final",
  "fixture": {
   "path": "probes/fixtures/original-45k.json",
@@ -10,19 +10,19 @@
   "indexMd5": "bbafa2d269949d0b6854646e07f3911d"
  },
  "load": {
-  "m1": 3.99,
-  "m5": 3.44,
-  "m15": 3.11
+  "m1": 3.12,
+  "m5": 3.32,
+  "m15": 3.42
  },
  "ports": {
   "runtimePort": 3620,
   "cdpPort": 9488,
   "runtimeInspectPort": 9229,
-  "piInspectPort": 52412
+  "piInspectPort": 53339
  },
  "pids": {
-  "runtimePid": 96056,
-  "sid": "01a20e56-8a4b-7341-b0c6-e555dd165725"
+  "runtimePid": 38289,
+  "sid": "01a20f15-7164-7372-90a8-da6e26c7284b"
  },
  "packagedApp": [
   {
@@ -32,7 +32,7 @@
   },
   {
    "pid": 11671,
-   "cpuPct": 15,
+   "cpuPct": 16,
    "cmd": "/Applications/TaiJi.app/Contents/Frameworks/M-eM-$M-*M-fM^^M^A Helper.app/Contents/MacOS/M-eM-$M-*M-fM^^M^A Helper --typ"
   },
   {
@@ -73,14 +73,14 @@
  ],
  "electronProcCount": 15,
  "wall": {
-  "submitAt": 1795536914568,
-  "completeAt": 1795536973351,
-  "streamS": 58.783
+  "submitAt": 1795549426547,
+  "completeAt": 1795549485020,
+  "streamS": 58.473
  },
  "rendererWindow": {
-  "relFromS": 0.328,
-  "relToS": 59.047000000000004,
-  "sampledS": 58.624237,
-  "nonIdleRatio": 0.5042436458490709
+  "relFromS": 0.356,
+  "relToS": 58.746,
+  "sampledS": 58.392696,
+  "nonIdleRatio": 0.5127397954018085
  }
 }

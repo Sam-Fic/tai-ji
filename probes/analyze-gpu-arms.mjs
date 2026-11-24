@@ -86,6 +86,14 @@ function analyze (file) {
     }
   }
   const named = [...perName].map(([name, iv]) => ({ name, union: unionSeconds(iv) })).sort((a, b) => b.union - a.union)
+  // 线程级（含嵌套）union：raster / endRaster 这类切片嵌在 RunTask 的更深层，
+  // 用直接子口径会得到 0.00s（误导）。线程级 union 仍是「不重复计数重叠区间」的口径。
+  const threadNamed = new Map()
+  for (const x of gpuSlices) {
+    if (!threadNamed.has(x.name)) threadNamed.set(x.name, [])
+    threadNamed.get(x.name).push([x.s, x.e])
+  }
+  const threadUnionOf = (n) => unionSeconds(threadNamed.get(n) ?? [])
   const covered = unionSeconds(coveredIv)
 
   // 逐秒 GPU 忙占比 + 逐秒帧数（去掉首尾 1s 的 trace 起停边界）
@@ -116,8 +124,11 @@ function analyze (file) {
     gpuRunTaskS: runTaskUnion,
     gpuNamedCoveredS: covered,
     gpuUnnamedGapS: runTaskUnion - covered,
-    rasterS: named.find((x) => x.name === 'RendererRasterWorker')?.union ?? 0,
-    presentS: named.find((x) => x.name === 'ImageTransportSurfaceOverlayMac::Present')?.union ?? 0,
+    rasterS: threadUnionOf('RendererRasterWorker'),
+    rasterN: (threadNamed.get('RendererRasterWorker') ?? []).length,
+    endRasterS: threadUnionOf('RasterDecoderImpl::DoEndRasterCHROMIUM'),
+    presentS: unionSeconds(threadNamed.get('ImageTransportSurfaceOverlayMac::Present') ?? []),
+    backpressureS: threadUnionOf('CALayerTreeCoordinator::ApplyBackpressure'),
     namedTop: named.slice(0, 8),
     framesPresented: presents.length,
     fpsMean: fpsInterior.reduce((a, b) => a + b, 0) / fpsInterior.length,
@@ -131,9 +142,9 @@ const rows = specs.map(({ label, file }) => ({ label, ...analyze(file) }))
 if (json) {
   console.log(JSON.stringify(rows, null, 1))
 } else {
-  console.log('label        wall    GPU忙%   RunTask  namedCov  GAP(未命名)  Raster  Present  帧数  均FPS  minFPS  <55fps秒')
+  console.log('label           wall    GPU忙%   RunTask  namedCov  GAP(未命名)  Raster(n)     endRaster  Present  Backpressure  帧数  均FPS minFPS <55fps秒')
   for (const r of rows) {
-    console.log(`${r.label.padEnd(12)} ${r.wallS.toFixed(1)}s  ${r.gpuBusyPct.toFixed(1).padStart(6)}%  ${r.gpuRunTaskS.toFixed(2).padStart(6)}s  ${r.gpuNamedCoveredS.toFixed(2).padStart(6)}s  ${r.gpuUnnamedGapS.toFixed(2).padStart(7)}s  ${r.rasterS.toFixed(2)}s  ${r.presentS.toFixed(2)}s  ${String(r.framesPresented).padStart(5)}  ${r.fpsMean.toFixed(1)}  ${String(r.fpsMin).padStart(4)}  ${String(r.fpsBelow55).padStart(4)}`)
+    console.log(`${r.label.padEnd(15)} ${r.wallS.toFixed(1)}s  ${r.gpuBusyPct.toFixed(1).padStart(6)}%  ${r.gpuRunTaskS.toFixed(2).padStart(6)}s  ${r.gpuNamedCoveredS.toFixed(2).padStart(6)}s  ${r.gpuUnnamedGapS.toFixed(2).padStart(7)}s  ${r.rasterS.toFixed(2)}s(${String(r.rasterN).padStart(6)})  ${r.endRasterS.toFixed(2)}s    ${r.presentS.toFixed(2)}s  ${r.backpressureS.toFixed(3)}s      ${String(r.framesPresented).padStart(5)}  ${r.fpsMean.toFixed(1)}  ${String(r.fpsMin).padStart(4)}  ${String(r.fpsBelow55).padStart(4)}`)
   }
   console.log('\nnamed direct children (top 6 per arm):')
   for (const r of rows) {

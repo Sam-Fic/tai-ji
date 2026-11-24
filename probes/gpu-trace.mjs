@@ -38,7 +38,9 @@ function arg (name, dflt) {
 }
 
 const dataDir = path.resolve(arg('data-dir', ''))
-const sid = arg('sid', '')
+// 不传 --sid 时探针自己建一个全新 session（验收 case 需要自足：gate 命令里没有变量替换，
+// 手传 sid 既不可脚本化也容易在多次采集后指向已经演出完的旧 session——那会采到空闲 renderer）。
+let sid = arg('sid', '')
 const cdpPort = Number(arg('cdp-port', '9478'))
 const arm = arg('arm', 'full')
 const windowMs = Number(arg('window-ms', '110000'))
@@ -46,8 +48,8 @@ const savePath = arg('save', '')
 const shotPath = arg('shot', '')
 const prompt = arg('text', '请给出性能优化实施方案')
 
-if (!dataDir || !sid) {
-  console.error('usage: node probes/gpu-trace.mjs --data-dir <dir> --sid <sid> [--cdp-port 9478] [--arm full|no-blur|reduced] [--window-ms 110000] [--save <file>] [--shot <file>]')
+if (!dataDir) {
+  console.error('usage: node probes/gpu-trace.mjs --data-dir <dir> [--sid <sid>] [--cdp-port 9478] [--arm full|no-blur|no-mask|reduced] [--window-ms 110000] [--save <file>] [--shot <file>]')
   process.exit(2)
 }
 if (!['full', 'no-blur', 'no-mask', 'reduced'].includes(arm)) {
@@ -90,6 +92,17 @@ const send = (method, params = {}) => new Promise((res, rej) => {
 // 面板态锚点是 [data-testid=panel-session-label] 文本 = 会话 label。三级退让：
 // ① data-session-id 命中 → ② panel-session-label 文本命中 → ③ 展开项目组后点目标会话行。
 // 旧的「点侧栏最新项」在多次采集后必然点错（最新项 = 上一次的 session）。
+// 自建 session（未传 --sid）：label 唯一，避免面板 label 匹配到上一次的会话
+if (!sid) {
+  const created = await rt.call('session.create', { cwd: process.cwd(), label: `b5-gpu-${arm}-${Date.now().toString(36)}` }, 120000)
+  sid = created.session?.id ?? created.sessionId ?? ''
+  if (!sid) {
+    console.error(`[gpu-probe] session.create 未返回 id：${JSON.stringify(created).slice(0, 300)}`)
+    process.exit(3)
+  }
+  console.log(`[gpu-probe] created session ${sid} (label ${created.session?.label ?? '?'})`)
+}
+
 const sessionList = await rt.call('config.sessions', {}, 30000).catch(() => null)
 let sessionLabel = ''
 for (const g of sessionList?.groups ?? []) {
@@ -274,6 +287,6 @@ await resetArmInjection()
 
 const parts = [`RESULT gpu-trace arm=${arm} wall-span=${wallSpanS.toFixed(2)}s events=${events.length} dataLoss=${dataLoss.length}`]
 if (injected) parts.push(`injected=${injected}`)
-parts.push(`completed=${completed} stream=${(streamMs / 1000).toFixed(1)}s`)
+parts.push(`completed=${completed} stream=${(streamMs / 1000).toFixed(1)}s sid=${sid}`)
 console.log(parts.join(' '))
 process.exit(0)

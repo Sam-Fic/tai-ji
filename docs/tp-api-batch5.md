@@ -66,6 +66,30 @@ FauxStep 契约 = packages/runtime/src/__tests__/fixtures/faux-llm-ext.ts `Scrip
 
 > 大 trace.json（~30MB/个）原则上入本会话 artifacts 目录并在报告给绝对路径；入库仅保留分析输出与体积受控产物。
 
+## 基线采集（一次性流程，归档后由 `analyze-clean-cpu.mjs` 复算）
+
+基线与终版必须同 harness。因为「同 harness」要求同一份代码的 dev 实例，基线只能在 checkout 到
+`eff28e4a5` 的窗口内采一次（gate 在 HEAD 上跑，所以这一步不进球 gate，产物入库后由 M3 机器复算）。
+
+```bash
+# 0) 停 HEAD 侧实例（端口 + 明确路径逐个甄别；遵守全局击杀纪律）
+for p in 4173 9488 3620; do lsof -nP -iTCP:$p -sTCP:LISTEN -t; done   # 逐个 ps -o command= -p <pid> 确认后再 kill
+
+git checkout eff28e4a5
+pnpm --filter @taiji/frontend exec vite build --minify false     # 基线侧的 production bundle
+node .agents/skills/verify-taiji/scripts/seed-faux.mjs . ~/.taiji-dev/verify-b5-baseline probes/fixtures/original-45k.json --force
+DATA_DIR=~/.taiji-dev/verify-b5-baseline PREVIEW_PORT=4174 CDP_PORT=9489 PORT_OFFSET=411 bash probes/b5-start-instance.sh &
+
+node probes/perf-clean-cpu.mjs --data-dir ~/.taiji-dev/verify-b5-baseline --cdp-port 9489 \
+  --fixture probes/fixtures/original-45k.json --tag baseline --expect-head eff28e4a5f39743782066f6055532924a8ffea8c \
+  --window-ms 200000 --save-dir docs/perf/final-measurement
+node probes/gpu-trace.mjs --data-dir ~/.taiji-dev/verify-b5-baseline --cdp-port 9489 --arm full --window-ms 160000 \
+  --save <artifacts>/b5-traces/baseline-gpu.trace.json --shot docs/perf/final-measurement/baseline-midstream.png
+
+# 采完立刻回 HEAD 并重建 bundle，再复验 HEAD 与 bundle 标识（防「测了 A 报成 B」）
+git checkout feat-cpu-gpu-performance && pnpm --filter @taiji/frontend exec vite build --minify false
+```
+
 ## 存储 / 挂点
 
 不适用：本批无新增存储、无新增挂点、无协议变更（WS 协议、CDP 用法、faux 脚本格式均沿用既有契约）。

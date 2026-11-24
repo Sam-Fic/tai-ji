@@ -26,6 +26,9 @@ const FAMILY = /railMemoFor|summarizeTurnForRail|summarizeAssistantForRail|strip
 const MARKDOWN_SCAN = /scanMarkdownBlocks|closesFence/
 const SHIKI = /findNextMatchSync|#execCore|codeToHtml|shiki_core|collectExternalReferences/
 const SCROLL = /^scrollTo/
+// EdgeFade 的旧实装函数名就是 `sync`（batch2 已改为 IO 哨兵 + applyMask，函数消失）——
+// 名字太通用，必须用 url 一起钉住，否则会误吞任意同名函数。
+const EDGE_FADE_SYNC = /^sync @ main-/
 
 function readJson (file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'))
@@ -82,11 +85,15 @@ function analyse (dir, tag) {
     markdownScanS: self(MARKDOWN_SCAN),
     shikiS: self(SHIKI),
     scrollS: self(SCROLL),
+    edgeFadeSyncS: self(EDGE_FADE_SYNC),
     patchInclS: incl(/^patch$/),
     flushJobsInclS: incl(/flushJobs/),
     componentUpdateInclS: incl(/componentUpdateFn/),
     dompurifyInclS: incl(/DOMPurify\.sanitize/),
     renderMarkdownInclS: incl(/renderMarkdown/),
+    // 组件名在 prod bundle 里被当作 defineComponent 的 name 保留（chunk 内有 `UserBubble` 字面量），
+    // 但 _sfc_render 函数本身匿名 ⇒ 只能按 url+行号定位，inclusive 口径不可用（记录为不可测，
+    // 组件级收益由 flushJobs / flushQueue 的降幅间接承载）。
     userBubbleInclS: incl(/UserBubble/),
     turnSummaryInclS: incl(/TurnSummary/),
     messageStreamInclS: incl(/MessageStream/),
@@ -133,6 +140,10 @@ if (asJson) {
   console.log('\nCDP metrics 明细（窗内增量）：')
   for (const r of rows) {
     console.log(`  ${r.tag.padEnd(14)} Task=${r.metrics.task.toFixed(2)}s Script=${r.metrics.script.toFixed(2)}s Layout=${r.metrics.layout.toFixed(2)}s Style=${r.metrics.style.toFixed(2)}s`)
+  }
+  console.log('\n强制布局族（EdgeFade sync 旧实装 + 原生 scrollTo）：')
+  for (const r of rows) {
+    console.log(`  ${r.tag.padEnd(14)} EdgeFade.sync=${r.edgeFadeSyncS.toFixed(3)}s scrollTo=${r.scrollS.toFixed(3)}s 合计=${(r.edgeFadeSyncS + r.scrollS).toFixed(3)}s`)
   }
   console.log('\n组件 inclusive：')
   for (const r of rows) {

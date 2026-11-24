@@ -13,10 +13,10 @@
 
 | 编号 | 目标 | 题面原句（逐字） | 限定词落点 | case/落点 |
 |---|---|---|---|---|
-| G1 | 干净环境下采齐三进程 profile + GPU trace | 「干净环境下采齐三进程 profile + GPU trace（满足全部测量纪律）」 | 8 条纪律逐条落（见「干净测量纪律」节）；无并存 Electron 的受限条件 L1 显式登记 | M1,M2,M3,M4 |
-| G2 | 终版同场景前后对比表（对原始基线） | 「产出最终版『同场景前后对比表』（对原始基线），证明 5 批优化的累计收益（CPU+GPU）」 | 三列口径 = 首轮原始基线（脏 harness）/ 干净基线（原始代码）/ 干净终版（HEAD）；同 harness 双测量隔离 harness 变量 | M1,M2,M3,M4 |
-| G3 | GPU 悬置项据干净数据裁动/不动 | 「GPU 悬置项（EdgeFade blur/mask）据干净数据做出『动/不动』决策并记录依据」 | 三臂 A/B（full / no-blur / reduced-transparency）测 compositing+raster 增量；不可证则登记「本环境不可证 + 需要的测量手段」 | G1,G2,G3 |
-| G4 | 全项目汇总报告（含前后火焰图对比索引） | 「产出全项目汇总报告（含前后火焰图对比索引）」 | 5 批累计 CPU+GPU+TTFT + 各批收益归因表 + 数据文件索引 + 残余风险 | M1,M2,M3,M4 |
+| G1 | 干净环境下采齐三进程 profile + GPU trace | 「干净环境下采齐三进程 profile + GPU trace（满足全部测量纪律）」 | 8 条纪律逐条落（见「干净测量纪律」节）；无并存 Electron 的受限条件 L1 显式登记 | M1,M2,M3 |
+| G2 | 终版同场景前后对比表（对原始基线） | 「产出最终版『同场景前后对比表』（对原始基线），证明 5 批优化的累计收益（CPU+GPU）」 | 三列口径 = 首轮原始基线（脏 harness）/ 干净基线（原始代码）/ 干净终版（HEAD）；同 harness 双测量隔离 harness 变量 | M1,M2,M3 |
+| G3 | GPU 悬置项据干净数据裁动/不动 | 「GPU 悬置项（EdgeFade blur/mask）据干净数据做出『动/不动』决策并记录依据」 | 三臂 A/B（full / no-blur / reduced-transparency）测 compositing+raster 增量；不可证则登记「本环境不可证 + 需要的测量手段」 | G1,G2,G3,G4 |
+| G4 | 全项目汇总报告（含前后火焰图对比索引） | 「产出全项目汇总报告（含前后火焰图对比索引）」 | 5 批累计 CPU+GPU+TTFT + 各批收益归因表 + 数据文件索引 + 残余风险 | M1,M2,M3 |
 | G5 | 补 fixture 形态覆盖的复测结论 | 「补充 fixture 形态覆盖（多小代码块 + 工具调用 + 重 thinking）的复测结论」 | 三种形态各测一轮（同 harness 同探针），结论进汇总报告 | F1,F2,F3 |
 
 ## 验收是什么
@@ -57,7 +57,7 @@
 | B-measure（主干） | G1 的 harness：三进程同运行采集探针 + pi 置换 launcher + GPU trace 补强 + 三种 fixture + `.tree-plant.json` docs 键覆写 | — | 高（测量基建坏 = 全批数据不可引用） | probes/perf-clean-cpu.mjs, probes/pi-profile-launcher.mjs, probes/gpu-trace.mjs, probes/lib/harness.mjs, probes/fixtures/*, .tree-plant.json, docs/tp-*-batch5.md | M1,M2 |
 | B-clean-final | G1/G2 的 after 侧：HEAD 代码的干净 CPU + GPU 采集与归档 | trunk | 中 | docs/perf/final-measurement/*, probes/*（探针修正） | M1,M2 |
 | B-clean-baseline | G2 的 before 侧：`eff28e4a5`（pre-batch1）代码的干净 CPU + GPU 采集（含 git checkout 舞蹈与 HEAD 断言） | trunk | 高（工作区状态风险） | docs/perf/final-measurement/baseline-* | M3,M4 |
-| B-gpu-decision | G3：三臂 A/B（full / no-blur / reduced-transparency）+ 裁决文档 | trunk | 中 | docs/perf/gpu-decision.md, docs/perf/final-measurement/gpu-* | G1,G2,G3 |
+| B-gpu-decision | G3：三臂 A/B（full / no-blur / reduced-transparency）+ 裁决文档 | trunk | 中 | docs/perf/gpu-decision.md, docs/perf/final-measurement/gpu-* | G1,G2,G3,G4 |
 | B-fixture-forms | G5：三种 fixture 形态各一轮（HEAD 代码） | trunk | 低 | docs/perf/final-measurement/form-* | F1,F2,F3 |
 | B-final-report | G2/G4：终版对比表 + 汇总报告 | B-clean-final, B-clean-baseline, B-gpu-decision, B-fixture-forms | 中 | docs/perf/final-comparison.md, docs/perf/final-summary.md | 不可机验：报告撰写 |
 
