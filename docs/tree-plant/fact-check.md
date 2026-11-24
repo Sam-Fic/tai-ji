@@ -39,7 +39,7 @@
 | reducer entry 契约 | `model_change` = { type, id, parentId, timestamp, provider, modelId } | node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js:851; packages/core/src/domain/chat/apply-entry.ts:709 | AC-MSW-REPLAY |
 | 回合归属 | message-turns 规则 6（system → boundary） | packages/core/src/domain/chat/message-turns.ts:556 | AC-MSW-MID |
 | 过程卡 props/段契约 | `segment` / `turnWorking` / `turnStreaming`；段含 members/units/counts/followedByText | packages/ui/src/features/chat/ProcessAggregateBlock.vue:40; packages/core/src/domain/chat/process-segment.ts:126 | AC-H12 |
-| 详情抽屉 | `AggregateToolDetailDrawer`（dialog 壳、420px 右贴边、Esc/焦点归还） | packages/ui/src/features/chat/process-aggregate/AggregateToolDetailDrawer.vue | AC-DETAIL |
+| 详情抽屉 | `AggregateToolDetailDrawer`（dialog 壳、420px 右贴边、Esc/焦点归还） | packages/ui/src/features/chat/process-aggregate/AggregateToolDetailDrawer.vue:1 | AC-DETAIL |
 | 计时 tick | `setInterval(1s)` + visibilitychange 停表/补算 | packages/ui/src/features/chat/composables/useTurnElapsed.ts:109 | AC-CHIP |
 | i18n 双侧 | `packages/ui/src/locale/{zh-CN,en-US}/panel.ts` 的 `message` 组 | packages/ui/src/locale/zh-CN/panel.ts:108; packages/ui/src/locale/en-US/panel.ts:111 | AC-I18N |
 | 真机装配 | 开发实例（vite+electron+真 pi）+ faux 演员（四模型） | .agents/skills/verify-taiji/SKILL.md:29; packages/runtime/src/__tests__/fixtures/faux-llm-ext.ts:153 | AC-H12 |
