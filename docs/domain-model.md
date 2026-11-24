@@ -174,7 +174,7 @@ subagent 体系的领域模型在「会话 + 轮 + 债权」框架下组织（pe
 ## 模型路由域（provider-aggregation，2026-11）
 > 机制纪律：领域规则的实现单点分两侧——配置权威读写单点在 runtime（providers.json 顶层 routes 键，`packages/runtime/src/services/provider-extras-store.ts`，写侧唯一写点、复用既有文件锁与原子写）；条件求值纯函数单点在 pi 路由扩展（`extensions/universal/provider-aggregation/src/router.ts`，route 回调在 pi 会话进程）。runtime 目录注入器与 pi 侧注册器都是路由配置的派生视图，任一侧不得自行发明、修改或缓存路由条目语义。决策登记 [ADR-0192](adr/decisions.md)～[ADR-0195](adr/decisions.md)。
 
-概念：**模型路由**（aggregation model）= 把若干已配置 provider 的指定模型登记为一个路由条目，作为一个普通模型出现在模型选择器与会话绑定链中；**端点**（member）= 路由条目内引用的一个 provider+模型渠道（可带条件）；**路由规则** = 端点有序条件求值——mode 为 schema 必填持久化路由字段（simple=依次兜底/advanced=按条件分流，D12；原「模式由数据推导」条款已随实装废除），初始默认 advanced、可随时切换且条件保留；simple 模式跳过全部条件判断（直接取第一个端点），重试排除作为选择层排除仍先行生效（上一失败端点先排除、再取兜底端点）；advanced 模式逐端点求值取第一个条件全满足者；切换不丢条件（simple 下条件不参与求值但保留显示）。条件求值是纯函数：同输入（路由配置 + 额度快照 + 墙钟 + 重试信号）必同输出；时间窗区间起点对齐半小时边界、本地时区语义；specialDates 覆盖周表（exclude 全天除外 / include 仅指定区间判窗内）。
+概念：**模型路由**（aggregation model）= 把若干已配置 provider 的指定模型登记为一个路由条目，作为一个普通模型出现在模型选择器与会话绑定链中；**端点**（member）= 路由条目内引用的一个 provider+模型渠道（可带条件）；**路由规则** = 端点有序条件求值——mode 为 schema 必填持久化路由字段（simple=依次兜底/advanced=按条件分流，D12；原「模式由数据推导」条款已随实装废除），初始默认 advanced、可随时切换且条件保留；simple 模式跳过全部条件判断（直接取第一个端点）， burnt 软避让作为选择层偏好仍先生效（终局失败且 pi 重试预算用尽的端点先避让、再取兜底端点）；advanced 模式逐端点求值取第一个条件全满足者；切换不丢条件（simple 下条件不参与求值但保留显示）。重试语义（D6 修订方案 B）：reason=retry 求值透传上一失败端点（不复查条件，pi 的重试预算真正打到上游），终局失败且预算用尽 → burnt → 下一轮 failover 到候选端点。条件求值是纯函数：同输入（路由配置 + 额度快照 + 墙钟 + 终局观察消息 + 链内失败计数 + pi 重试预算）必同输出；时间窗区间起点对齐半小时边界、本地时区语义；specialDates 覆盖周表（exclude 全天除外 / include 仅指定区间判窗内）。
 
 不变量（AX1-AX5，全部可核对，违反即缺陷）：
 

@@ -6042,6 +6042,58 @@
       "owner": "scripts/perf",
       "authority": "scripts/perf/cdp-profile.mjs",
       "note": "R3 归档态（2026-11-21 登记）：开发期性能分析工具，无独立 CI 环节；测量方法与基线数据记录在维护者本机 ~/Code/vue-performance/（taiji-analysis.md）"
+    },
+    {
+      "id": "E2E-GENSTATS-01",
+      "summary": "gen-stats × provider-aggregation 路由会话验收资产族（R2 按改动范围）：真实进程层探针（真 runtime + 真 pi + faux LLM 零 token）T1 路由会话出数 / B1 窗口聚合并集 / B3 未命中成员仍入窗 / B2 物理直连零回归",
+      "scope": [
+        "scripts/acceptance/gen-stats-route/**",
+        "packages/runtime/src/services/session/gen-stats-model-keys.ts",
+        "packages/runtime/src/services/session/gen-stats-service.ts",
+        "packages/runtime/src/services/session/__tests__/gen-stats-service.test.ts",
+        "packages/runtime/src/services/session/__tests__/gen-stats-model-keys.test.ts",
+        "packages/runtime/src/services/session/__tests__/gen-stats-service-member-read.test.ts"
+      ],
+      "layer": "L2.5",
+      "assets": [
+        {
+          "kind": "script",
+          "ref": "scripts/acceptance/gen-stats-route/route-stats-probe.mjs"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "node scripts/acceptance/gen-stats-route/route-stats-probe.mjs --case t1 && node scripts/acceptance/gen-stats-route/route-stats-probe.mjs --case b1 && node scripts/acceptance/gen-stats-route/route-stats-probe.mjs --case b3 && node scripts/acceptance/gen-stats-route/route-stats-probe.mjs --case b2",
+      "owner": "scripts/acceptance/gen-stats-route",
+      "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
+      "note": "R2 态（e2e 资产归宿纪律三态）：触发条件 = scripts/acceptance/gen-stats-route/** 或 gen-stats 域源码/测试精确路径（packages/runtime/src/services/session/gen-stats-model-keys.ts / gen-stats-service.ts 及两者 __tests__ 下 gen-stats-*.test.ts，共 5 条 scope）diff 命中时开发期执行 run（四例串行，各自 mkdtemp 独立数据目录 + 独立 runtime 子进程，零 token；串行防跨包 CPU 饱和——e2e 执行准则）。PR/merge/CI 门禁不跑。T1 含 transcript 断言（message.send 契约字段 content 生效见证）。"
+    },
+    {
+      "id": "E2E-ODCAT-01",
+      "summary": "OpenDesign 模型目录探测脚本（周度 CI 定时）：目录/价格表拉取（抖动重试）→ pi deepseek 线格式逐档探测（invalid_request_error = 端点显式拒绝，其余重试耗尽记不支持）→ 与编译期快照做差异补丁（只带差异字段 ⇒ 快照修好后补丁自然消失；下线模型进 removeModels）",
+      "scope": [
+        "scripts/probe-opendesign-catalog.mjs",
+        "packages/runtime/src/services/remote-config/remote-provider-metadata.ts",
+        "packages/runtime/src/services/remote-config/__tests__/probe-opendesign-catalog.test.ts",
+        "scripts/probe-opendesign-catalog.d.mts"
+      ],
+      "layer": "L1",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "packages/runtime/src/services/remote-config/__tests__/probe-opendesign-catalog.test.ts"
+        },
+        {
+          "kind": "spec",
+          "ref": "packages/runtime/src/services/remote-config/__tests__/remote-provider-metadata.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": false,
+      "run": "pnpm -C packages/runtime exec vitest run src/services/remote-config/__tests__/probe-opendesign-catalog.test.ts src/services/remote-config/__tests__/remote-provider-metadata.test.ts",
+      "owner": "scripts/",
+      "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
+      "note": "R3 态（2026-11-24 裁决：不在 GitHub Actions 跑——探测需要可用额度内的 key，且 ~100 次真实请求不适合放进 CI 的固定预算；改为本地/手动执行）。脚本 `scripts/probe-opendesign-catalog.mjs` 保留为手动工具：`OPENDESIGN_API_KEY=... node scripts/probe-opendesign-catalog.mjs` 有差异才写文件。判定语义由纯函数单测零 token 锁定（档位 map 三态 / input 模态映射 / 差异补丁形态）。运行时零探测（ADR-0190）：应用侧只消费 provider-model-metadata 域的 4h 节流拉取。"
     }
   ]
 }

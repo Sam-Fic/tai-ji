@@ -32,6 +32,20 @@ export interface SessionManagerCreateParams {
   /** 初始 prompt（可选；提供时 create 后立即注入——设计文档 §5.2 原子性决策） */
   prompt?: string
   /**
+   * 创建时生效模型（`provider/modelId` 复合串，optional）。提供时 runtime 经
+   * SessionCreateOptions.modelOverride 透传至 pi spawn `--model`（优先级高于 preset 与
+   * 全局默认）；缺省 = 全局默认模型档。
+   *
+   * 存在性校验**不在本协议层**：权威清单 = 子进程实际解析的模型目录（与发起方 pi 进程
+   * 同 agentDir 派生），在 extension 侧对 ctx.modelRegistry 全等校验后才会进本载荷
+   * （见 pi-session-manager src/model-param.ts）。本层只做类型范围检查（optional
+   * string）——畸形值仍走 error envelope，不静默流入 sessionService。
+   *
+   * additive 演进：旧 runtime 不读本字段 = 按默认模型创建，回包 modelId 恒为生效真值，
+   * 调用方可从结果自行判定是否生效。
+   */
+  model?: string
+  /**
    * 完成通知债权的幂等键（optional，notify-once D2/D6）：extension 侧
    * `crypto.randomUUID()` 前缀 `sm-` 生成。缺省/畸形 → runtime 不 arm、
    * `willNotify:false`、零完成通知——兼容判据从版本二分改为字段有无。
@@ -156,6 +170,7 @@ export function isSessionManagerCreateParams(v: unknown): v is SessionManagerCre
     isOptionalString(v.cwd) &&
     isOptionalString(v.label) &&
     isOptionalString(v.prompt) &&
+    isOptionalString(v.model) &&
     isOptionalNotifyId(v.notifyId)
   )
 }

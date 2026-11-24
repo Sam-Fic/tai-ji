@@ -1264,6 +1264,10 @@ async function main(): Promise<void> {
     publish: (sid, msg) => messageBus.publish(sid, msg),
     pm,
     sessionService,
+    // 模型路由配置快照（provider-aggregation 适配：虚拟 key → 成员物理 key 集展开源）。
+    // store 构造在本组合根早前位（providerExtrasStore 创建处先于本装配），闭包引用成立；
+    // 读路径不缓存——GenStatsService 每操作读一次快照（见 routeSnapshot 契约注释）。
+    readRoutes: () => providerExtrasStore.getAggregationRoutesSync(),
   })
   genStatsService.registerSessionCleanup()
   sessionService.setGenStatsModelSwitchTap((sid, modelKey) => genStatsService.onModelSwitched(sid, modelKey))

@@ -7,7 +7,7 @@ description: "使用或排查 @zhushanwen/pi-provider-aggregation（模型路由
 
 > @zhushanwen/pi-provider-aggregation：pi 进程内的模型路由扩展。把 providers.json 顶层
 > routes 域派生为 pi 虚拟模型注册（每条路由 = 模型选择器里的一个可选模型，对外模型 id =
-> `aggregation/<路由id>`），每个请求发起前按端点条件（时间窗 / 额度阈值 / 重试排除）选出
+> `aggregation/<路由id>`），每个请求发起前按端点条件（时间窗 / 额度阈值）选出
 > 本次实际发往的物理模型。本扩展**只读**配置；写侧唯一入口是 taiji runtime 的
 > provider-extras-store（设置页路由 UI 的保存链）。
 
@@ -91,8 +91,8 @@ schema 唯一定义点在 `@zhushanwen/extension-protocol/aggregation`（`packag
 | providers.json 损坏 / 不可读（JSON 非法、schema 非法、权限、stat 故障） | **保持上一有效注册继续路由**，warn 留痕；恢复 = 修复文件后 mtime 变化自动重读，或重开会话 |
 | 路由 `enabled=false` | 保持注册，请求显式失败「已停用」（提示去设置页处理） |
 | 路由条目被删除 | 保持注册，请求显式失败「已删除」；同 id 重建后自动恢复（无需更换模型） |
-| advanced 模式全部端点条件不满足 | 显式失败，错误逐端点列明落选原因（时间窗外 / 额度低于阈值 / 上一失败端点本轮排除）+ 恢复指引 |
-| 额度数据缺失 / 过期 / quota-cache.json 缺失或损坏 | **fail-open**：额度条件按满足处理（未知不判死），真耗尽由自动重试换端点纠正 |
+| advanced 模式全部端点条件不满足 | 显式失败，错误逐端点列明落选原因（时间窗外 / 额度低于阈值）+ 恢复指引 |
+| 额度数据缺失 / 过期 / quota-cache.json 缺失或损坏 | **fail-open**：额度条件按满足处理（未知不判死），真耗尽由下一轮 failover 纠正 |
 | 端点引用的 provider/模型不在当前模型目录 | 该端点本次落选（设置页有悬空标记提示）；全部不可解析时显式失败并列明引用 |
 
 额度新鲜度：缓存条目距上次成功取数超过 10 分钟，或任一计费窗口的重置点已过，即判过期
