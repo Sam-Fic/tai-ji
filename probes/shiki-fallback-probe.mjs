@@ -84,6 +84,7 @@ const restoreWorker = () => cdp.send('Runtime.evaluate', {
 }).catch(() => {})
 console.log('[probe] window.Worker stubbed to throw (worker unavailable)')
 
+let dom = { shikiPre: 0, shikiSpans: 0, codeChars: 0, sid: '', mdRenders: 0, rafFired: false }
 try {
   await ensureGuiOnSession(cdp, sid)
 
@@ -104,7 +105,6 @@ try {
   // finalize + 回填轮询（预算内事件驱动等待）。轮询带 GUI sid 与 rAF 存活诊断：
   // 页面刷新后若 GUI 漂移或 rAF 停摆，回填会迟到——诊断字段让失败可归因。
   const deadline = Date.now() + 60000
-  let dom = { shikiPre: 0, shikiSpans: 0, codeChars: 0, sid: '', mdRenders: 0, rafFired: false }
   let polls = 0
   while (Date.now() < deadline) {
     polls++
