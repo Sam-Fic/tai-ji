@@ -161,3 +161,5 @@ package-lock.json.*
 
 # tree-plant 任务工作目录（设计/验收文档与运行产物，本地不入库）
 /tpkg/
+# tree-plant 六道 gate 的运行产物（.run/*.json 内嵌内容哈希，手改会被后续阶段拒绝）
+/.run/

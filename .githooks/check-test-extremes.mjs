@@ -74,6 +74,19 @@ for (const k of Object.keys(STOCK)) STOCK[k] = '存量：二波清单外文件�
 
 const EXEMPT = {
   ...STOCK,
+  // —— X2（+X3）coverage 全量档负载 accommodation：确定性重型用例，默认预算校准从未覆盖它们 ——
+  // tts-page 两例（全控件交互回路 ~15 次 select/toggle + 词典行编辑）零等待全确定，耗时全在
+  // 真实组件机制（reka-ui 弹层 + 整页表单重渲染）：无负载实测 3.3s/2.5s，coverage 档
+  // （isCoverageRun 不套 domain 排除）5 worker 负载下实测 6.6-9.2s，超 5s 默认预算。本文件在
+  // domain 排除名单（默认档不跑），5s 预算的「<1s/例」校准结论从未覆盖它。缩数据量破「全控件」
+  // 回路意图；挂集成门控误标（无真进程/真 IO）；故显式 15s + 本登记。
+  'packages/renderer/src/components/settings/tts/__tests__/tts-page.test.ts': 'X2 豁免（15s×2）：全控件交互回路确定性重型用例（零等待），coverage 全量档 5 worker 负载实测 6.6-9.2s 超 5s 默认预算；默认预算校准从未覆盖本文件（domain 排除名单）；缩数据量破回路意图、挂门控误标，故显式预算 + 登记（无负载实测 3.3s/2.5s）',
+  // workflow-viz-overlay 两处：canvas 直达打开等 defineAsyncComponent 导入落定（waitFor 10s）
+  // + 时长 tick 活跃集合断言（用例 15s）。存量问题：dev-0.13.2 未改动线上同档复现（同文件
+  // canvas 用例 waitFor 1s 不够 + tick 计数撞外来显示 tick）。tick 断言已改基线 delta（免疫
+  // 渲染树里其他组件的显示 tick——进程级 setInterval spy 的在途混入，非本组件泄漏）；
+  // 等待/预算放宽是负载 accommodation，两用例本身零时间等待。
+  'packages/renderer/src/components/panel/workflow-viz/overlay/__tests__/workflow-viz-overlay-bundle.test.ts': 'X2+X3 豁免（15s/waitFor 10s）：canvas 异步组件导入落定 + tick 活跃集合基线 delta 断言，coverage 全量档负载下超默认预算（存量，dev-0.13.2 未改动线同档复现）；tick 断言已确定性化（基线 delta 免疫外来显示 tick），余下为负载 accommodation，用例零时间等待',
   // payload 字段 timeout:30000 是 extension_ui_request 的业务数据（fixture），非测试超时预算
   'packages/pi-subagent-cli/src/__tests__/spawn-event-adapter.test.ts': 'X2 误报：30000 是 UI 请求 payload 的业务 timeout 字段（fixture 数据），非测试超时预算',
   // —— ④ performance.now 非断言性消费：确定性时钟 mock（X4 假阳性：performance.now 被 vi.spyOn 全控，非真实计时断言） ——

@@ -100,7 +100,8 @@ beforeAll(async () => {
     import('@taiji/core'),
     import('@taiji/core/transport/api'),
   ])
-})
+
+}, 60_000) // 冷 transform + 重模块预热：5 worker 负载下超默认 10s 钩子预算（2026-11-24 全量跑实测超时，显式预算兜底）
 
 // 手动状态重置清单（模块图共享后，用例隔离的全部承担点）：
 // - pinia 新实例：chat/session store 分区态（respawnPending 是 store 内 ref，随新 store 归零）

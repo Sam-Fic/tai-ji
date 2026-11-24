@@ -87,7 +87,7 @@ function virtualError(routeId: string): RouteObservationMessage {
 	return { role: "assistant", provider: AGGREGATION_PROVIDER_ID, model: routeId, stopReason: "error" }
 }
 
-/** decideRoute 调用（缺省：无观察消息 / 空 burnt / 空计数 / maxRetries=3）。 */
+/** decideRoute 调用（缺省：无观察消息 / 空 burnt / 空计数 / maxRetries=3 / 链边界）。 */
 function decide(overrides: Partial<DecideRouteInput> & { route: AggregationRoute }): RouteDecision {
 	return decideRoute({
 		now: NOW_MONDAY_10,
@@ -95,6 +95,7 @@ function decide(overrides: Partial<DecideRouteInput> & { route: AggregationRoute
 		burnt: new Set(),
 		failures: new Map(),
 		maxRetries: 3,
+		chainBoundary: true,
 		...overrides,
 	})
 }
@@ -439,6 +440,145 @@ describe("D6 修订：终局观察与 burnt 软避让（decideRoute）", () => {
 		expect(result.memberIndexes).toEqual([0, 1])
 	})
 
+	// ── 修剪修复（P1）：链内计数的退役路径——计数生命周期 = 活跃重试链 ──────────────
+
+	it("计数退役：最近物理结局是非本路由成员的消息（模型切走切回）→ 旧计数作废，不误烧", () => {
+		const stale = decide({
+			route: twoMemberRoute(),
+			messages: [outcome("zhipu", "glm", "error"), outcome("other-provider", "other-model", "stop")],
+			failures: new Map([[GLM, 3]]),
+		})
+		expect(stale.outcome).toBe("selected")
+		if (stale.outcome !== "selected") return
+		expect(stale.failures.size).toBe(0) // 旧计数 3 已退役——切走轮次终断了本路由的链
+		expect([...stale.burnt]).toEqual([])
+		// 退役后同端点再遇账户类 fail-fast（pi 不重试，本链计数 0）→ 不 burnt（fail-fast 分界）
+		const failFast = decide({
+			route: twoMemberRoute(),
+			messages: [outcome("zhipu", "glm", "error")],
+			failures: stale.failures,
+		})
+		expect(failFast.outcome).toBe("selected")
+		if (failFast.outcome !== "selected") return
+		expect([...failFast.burnt]).toEqual([])
+		expect(failFast.memberIndexes).toEqual([0, 1])
+	})
+
+	it("计数退役：无物理消息可观察 → 旧计数作废（证据已不可考）", () => {
+		const result = decide({ route: twoMemberRoute(), failures: new Map([[GLM, 3]]) })
+		expect(result.outcome).toBe("selected")
+		if (result.outcome !== "selected") return
+		expect(result.failures.size).toBe(0)
+	})
+
+	it("burn 时保留 F 的计数作重导证据、其余成员计数退役（单活链，其余必陈旧）", () => {
+		const result = decide({
+			route: twoMemberRoute(),
+			messages: [outcome("zhipu", "glm", "error")],
+			failures: new Map([[GLM, 3], [ZAI, 1]]),
+		})
+		expect(result.outcome).toBe("selected")
+		if (result.outcome !== "selected") return
+		expect([...result.burnt]).toEqual([GLM])
+		expect(result.failures.size).toBe(1)
+		expect(result.failures.get(GLM)).toBe(3)
+	})
+
+	it("burn 后端点康复（成功出站）→ 清 burnt 且计数整体退役（证据计数一并作废）", () => {
+		const burned = decide({ route: twoMemberRoute(), messages: [outcome("zhipu", "glm", "error")], failures: new Map([[GLM, 3]]) })
+		if (burned.outcome !== "selected") throw new Error("unreachable")
+		const recovered = decide({
+			route: twoMemberRoute(),
+			messages: [outcome("zhipu", "glm", "stop")],
+			burnt: burned.burnt,
+			failures: burned.failures,
+		})
+		expect(recovered.outcome).toBe("selected")
+		if (recovered.outcome !== "selected") return
+		expect([...recovered.burnt]).toEqual([])
+		expect(recovered.failures.size).toBe(0)
+		// 康复后再遇账户类 fail-fast：无旧计数可误判 → 不 burnt
+		const failFast = decide({ route: twoMemberRoute(), messages: [outcome("zhipu", "glm", "error")], failures: recovered.failures })
+		if (failFast.outcome !== "selected") throw new Error("unreachable")
+		expect([...failFast.burnt]).toEqual([])
+	})
+
+	// ── 修剪修复（P9）：未知 stopReason 保守处理（不猜「康复」反向清理偏好） ──────────
+
+	it("未知 stopReason（pending/deferred/未来值）→ 不清 burnt、计数退役（值域外不猜测）", () => {
+		for (const stopReason of ["pending", "deferred", "some-future-reason"]) {
+			const result = decide({
+				route: twoMemberRoute(),
+				// 未知结局落在已 burnt 的成员身上——若按「成功」处理会反向清掉 burn
+				messages: [outcome("opencode-go", "zai-glm", stopReason)],
+				burnt: new Set([ZAI]),
+				failures: new Map([[GLM, 2]]),
+			})
+			expect(result.outcome).toBe("selected")
+			if (result.outcome !== "selected") continue
+			expect([...result.burnt]).toEqual([ZAI]) // 不动既有 burn
+			expect(result.failures.size).toBe(0) // 链已终断——计数退役
+		}
+	})
+
+	// ── 修剪修复（P3）：轮换重探的引用纪律——序列未变返回原引用 ──────────────────
+
+	it("单候选全 burnt 轮换 → 序列不变返回原引用（pi 落盘门禁是引用比较，防每请求重复 append）", () => {
+		const single = route({ members: [member({ id: "a", providerId: "zhipu", modelId: "glm", type: "none" })] })
+		const burntIn = new Set([GLM])
+		const result = decide({ route: single, burnt: burntIn })
+		expect(result.outcome).toBe("selected")
+		if (result.outcome !== "selected") return
+		expect(result.memberIndexes).toEqual([0]) // 仍重探唯一候选（≡ 直连每轮真试）
+		expect(result.burnt).toBe(burntIn) // 同引用——闭包层据此跳过 state 落盘
+	})
+
+	it("双候选全 burnt 轮换 → 序列真变化仍产出新序（坏端点交替，回归锁定）", () => {
+		const result = decide({ route: twoMemberRoute(), burnt: new Set([GLM, ZAI]) })
+		expect(result.outcome).toBe("selected")
+		if (result.outcome !== "selected") return
+		expect(result.memberIndexes[0]).toBe(0)
+		expect([...result.burnt]).toEqual([ZAI, GLM])
+	})
+
+	// ── 修剪复审修复（F1）：非链边界求值不观察——在途投影不迁移状态 ──────────────
+
+	it("非链边界（direct 链中压缩 / retry 落 normal-selection）→ 不观察：在途计数不抹、burnt 不动", () => {
+		// 形态 ①：链在途的 direct 求值——投影里失败 attempt 已被剔除，只剩链前旧消息
+		// （他模型成功）。修复前：retireCounts 抹掉活链计数 → 终局 error 判 fail-fast → 永不 failover
+		const duringChain = decide({
+			route: twoMemberRoute(),
+			messages: [outcome("other-provider", "other-model", "stop")],
+			failures: new Map([[GLM, 1]]),
+			chainBoundary: false,
+		})
+		expect(duringChain.outcome).toBe("selected")
+		if (duringChain.outcome !== "selected") return
+		expect(duringChain.failures.get(GLM)).toBe(1) // 在途计数原样保留
+		expect([...duringChain.burnt]).toEqual([])
+		// 形态 ②：非边界求值看到本成员陈旧成功结局——不清 burnt（修复前会反向清掉持久 burn）
+		const staleSuccess = decide({
+			route: twoMemberRoute(),
+			messages: [outcome("zhipu", "glm", "stop")],
+			burnt: new Set([GLM]),
+			chainBoundary: false,
+		})
+		expect(staleSuccess.outcome).toBe("selected")
+		if (staleSuccess.outcome !== "selected") return
+		expect([...staleSuccess.burnt]).toEqual([GLM]) // 持久 burn 不被在途投影反向清
+		// 形态 ③：非边界求值看到本成员终局 error——不抢跑 burn（回合级事实只由边界观察）
+		const staleError = decide({
+			route: twoMemberRoute(),
+			messages: [outcome("zhipu", "glm", "error")],
+			failures: new Map([[GLM, 3]]),
+			chainBoundary: false,
+		})
+		expect(staleError.outcome).toBe("selected")
+		if (staleError.outcome !== "selected") return
+		expect([...staleError.burnt]).toEqual([]) // 不在途抢跑——下一链边界观察才 burnt
+		expect(staleError.failures.get(GLM)).toBe(3)
+	})
+
 	it("非本路由成员的物理 error（用户中途换过模型）→ 无观察，不误清既有 burn", () => {
 		const result = decide({
 			route: twoMemberRoute(),
@@ -482,6 +622,39 @@ describe("D6 修订：终局观察与 burnt 软避让（decideRoute）", () => {
 		expect(result.memberIndexes).toEqual([1, 0])
 		expect([...result.burnt]).toEqual([GLM])
 	})
+
+	it("无候选 + 终局观察烧掉端点 → burn 仍随决策透出（throw 路径无 state 出口，下一轮幂等重导——T6 场景的单测锚）", () => {
+		const windowed = route({
+			members: [
+				member({ id: "a", providerId: "zhipu", modelId: "glm", type: "window", window: windowTable([]) }),
+				member({ id: "b", providerId: "opencode-go", modelId: "zai-glm", type: "window", window: windowTable([]) }),
+			],
+		})
+		const result = decide({
+			route: windowed,
+			messages: [outcome("zhipu", "glm", "error")],
+			failures: new Map([[GLM, 3]]),
+		})
+		expect(result.outcome).toBe("no-candidate")
+		if (result.outcome !== "no-candidate") return
+		expect([...result.burnt]).toEqual([GLM]) // burn 已算出——恢复配置后下一轮求值重导，不依赖闭包镜像
+		expect(result.failures.get(GLM)).toBe(3)
+	})
+
+	it("轮换重探跳过非候选 burnt 引用：窗外端点的旧 burn 不占用重探位（候选内取最旧）", () => {
+		const mixed = route({
+			members: [
+				member({ id: "a", providerId: "zhipu", modelId: "glm", type: "window", window: windowTable([]) }),
+				member({ id: "b", providerId: "opencode-go", modelId: "zai-glm", type: "none" }),
+			],
+		})
+		// GLM 窗外不在候选集但 burn 序更旧——轮换只能在候选（ZAI）内取
+		const result = decide({ route: mixed, burnt: new Set([GLM, ZAI]) })
+		expect(result.outcome).toBe("selected")
+		if (result.outcome !== "selected") return
+		expect(result.memberIndexes[0]).toBe(1) // 重探唯一候选 ZAI
+		expect([...result.burnt]).toEqual([GLM, ZAI]) // ZAI 移到序尾（GLM 保持最旧，恢复窗口后仍先避让）
+	})
 })
 
 describe("parseFailoverState（router state 防御解析）", () => {
@@ -492,6 +665,42 @@ describe("parseFailoverState（router state 防御解析）", () => {
 		expect([...parseFailoverState({})]).toEqual([])
 		expect([...parseFailoverState({ burnt: "zhipu/glm" })]).toEqual([])
 		expect([...parseFailoverState({ burnt: ["ok", 7, null] })]).toEqual(["ok"])
+	})
+
+	// 修剪修复（P6）：JSON 可达输入空间全枚举——行为侧零抛，形状矩阵逐形态锁定
+	it("输入形态矩阵（33 形态枚举：state 标量/数组、burnt 标量/对象/嵌套、空白串、重复、未来字段）→ 零抛，语义如注", () => {
+		const shapes: Array<[unknown, string[]]> = [
+			// state 自身形态
+			[true, []],
+			[false, []],
+			[42, []],
+			[0, []],
+			[[], []],
+			[["a/1"], []],
+			[[{ burnt: [] }], []],
+			// burnt 字段形态
+			[{ burnt: null }, []],
+			[{ burnt: true }, []],
+			[{ burnt: 42 }, []],
+			[{ burnt: {} }, []],
+			[{ burnt: { a: "ref" } }, []],
+			[{ burnt: [] }, []],
+			// 元素形态：嵌套 / 空白串（空白串是合法串——不匹配任何成员即惰性，放行不过滤）
+			[{ burnt: [["a/1"]] }, []],
+			[{ burnt: [{ ref: "a/1" }] }, []],
+			[{ burnt: [""] }, [""]],
+			[{ burnt: ["  "] }, ["  "]],
+			[{ burnt: ["\n"] }, ["\n"]],
+			// 重复元素去重（Set 语义）
+			[{ burnt: ["a/1", "a/1"] }, ["a/1"]],
+			// 未来字段（版本演进预留）不影响解析
+			[{ burnt: ["a/1"], version: 2, extra: { x: 1 } }, ["a/1"]],
+			// 原型污染字样按普通串处理（JSON.parse 不产生 __proto__ 自有属性）
+			[{ burnt: ["__proto__", "constructor"] }, ["__proto__", "constructor"]],
+		]
+		for (const [input, expected] of shapes) {
+			expect([...parseFailoverState(input)]).toEqual(expected)
+		}
 	})
 
 	it("合法数组 → 集（保序——burn 序是轮换公平的基准）", () => {
