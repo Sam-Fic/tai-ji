@@ -6,7 +6,7 @@
   "md5": "7646cb53861eaeef0f7bae8e1e750df2"
  },
  "rendererBundle": {
-  "dir": "/Users/zhushanwen/worktrees/tai-ji/feat-cpu-gpu-performance/apps/electron/renderer/dist",
+  "dir": "<repo>/apps/electron/renderer/dist",
   "indexMd5": "bbafa2d269949d0b6854646e07f3911d"
  },
  "load": {
@@ -82,5 +82,6 @@
   "relToS": 59.088,
   "sampledS": 58.750895,
   "nonIdleRatio": 0.5130983451401039
- }
+ },
+ "pathPolicy": "本机绝对路径已脱敏为 <repo> / ~（AGENTS.md 规则 22）；原始值仅存在于采集时环境"
 }

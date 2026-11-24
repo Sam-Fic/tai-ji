@@ -1,28 +1,28 @@
 {
- "head": "fa43afc7ba5add69f94d50a370426fa7b8a029c4",
+ "head": "60cfcd0ac6bbebc811d7d527e2e076807670c550",
  "tag": "final",
  "fixture": {
   "path": "probes/fixtures/original-45k.json",
   "md5": "b15ea1a4eddea15267bfd6d8db482642"
  },
  "rendererBundle": {
-  "dir": "/Users/zhushanwen/worktrees/tai-ji/feat-cpu-gpu-performance/apps/electron/renderer/dist",
+  "dir": "<repo>/apps/electron/renderer/dist",
   "indexMd5": "bbafa2d269949d0b6854646e07f3911d"
  },
  "load": {
-  "m1": 3.59,
-  "m5": 3.85,
-  "m15": 3.69
+  "m1": 4.7,
+  "m5": 4.4,
+  "m15": 3.92
  },
  "ports": {
   "runtimePort": 3620,
   "cdpPort": 9488,
   "runtimeInspectPort": 9229,
-  "piInspectPort": 53824
+  "piInspectPort": 54233
  },
  "pids": {
   "runtimePid": 38289,
-  "sid": "01a20f43-0cd6-72c7-b688-87080d7d31e0"
+  "sid": "01a20f5d-7ffd-7799-a936-b52aef82849d"
  },
  "packagedApp": [
   {
@@ -32,7 +32,7 @@
   },
   {
    "pid": 11671,
-   "cpuPct": 24,
+   "cpuPct": 17,
    "cmd": "/Applications/TaiJi.app/Contents/Frameworks/M-eM-$M-*M-fM^^M^A Helper.app/Contents/MacOS/M-eM-$M-*M-fM^^M^A Helper --typ"
   },
   {
@@ -42,7 +42,7 @@
   },
   {
    "pid": 11673,
-   "cpuPct": 5,
+   "cpuPct": 4,
    "cmd": "/Applications/TaiJi.app/Contents/Frameworks/M-eM-$M-*M-fM^^M^A Helper (Renderer).app/Contents/MacOS/M-eM-$M-*M-fM^^M^A H"
   },
   {
@@ -67,20 +67,21 @@
   },
   {
    "pid": 56274,
-   "cpuPct": 2,
+   "cpuPct": 0,
    "cmd": "/Applications/TaiJi.app/Contents/Resources/pi/pi-darwin-x64 --mode rpc --no-extensions --approve --extension builtin:cod"
   }
  ],
  "electronProcCount": 15,
  "wall": {
-  "submitAt": 1795552415842,
-  "completeAt": 1795552474525,
-  "streamS": 58.683
+  "submitAt": 1795554149802,
+  "completeAt": 1795554208165,
+  "streamS": 58.363
  },
  "rendererWindow": {
-  "relFromS": 0.354,
-  "relToS": 58.952,
-  "sampledS": 58.569511,
-  "nonIdleRatio": 0.5337008191855999
- }
+  "relFromS": 0.359,
+  "relToS": 58.659,
+  "sampledS": 58.213695,
+  "nonIdleRatio": 0.5215189484192679
+ },
+ "pathPolicy": "本机绝对路径已脱敏为 <repo> / ~（AGENTS.md 规则 22）；原始值仅存在于采集时环境"
 }
