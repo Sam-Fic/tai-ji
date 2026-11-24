@@ -1,0 +1,148 @@
+# taiji 对话流性能优化 · 5 批累计汇总报告
+
+> 分支 `feat-cpu-gpu-performance` · 原始基线 `eff28e4a5`（11-22，`origin/main` 同点）→ HEAD `fa43afc7b`（批5 末）
+> 上游链条：首轮实测（[perf-measured-report.md](perf-measured-report.md)）→ GLM 对抗审查（[adversarial-review-glm.md](adversarial-review-glm.md)）→ 5 批优化 → 本批**干净重测 + GPU 据实裁决**
+> 逐项数字见 [final-comparison.md](final-comparison.md)（本表的表格版）；GPU 裁决见 [gpu-decision.md](gpu-decision.md)；各批过程表见 [batch1](batch1-comparison.md)–[batch4](batch4-comparison.md)-comparison.md
+
+## 0. 一页结论
+
+| 问题 | 首轮判定 | 干净重测结论 |
+|---|---|---|
+| 瓶颈在哪 | 「每-delta Vue 重渲染 #1 + GPU 饱和 #2」 | **JS 侧派生/高亮/更新链**（已消除 96%+）；**GPU 从来不是瓶颈**（干净环境 23% 忙、60fps，首轮 69%/20fps 是测量环境产物） |
+| 优化收益 | 「主线程 39%→…」 | **JS busy −35%（28.3%→18.5%）、派生族 −96.6%、shiki 归零、EdgeFade 强制布局归零、Vue 更新链 −50%、TTFT 22ms** |
+| GPU 视觉项要不要动 | 「等干净数据」 | **blur：动（条件降档，26% GPU 工作量过判据但不掉帧⇒下一批带触发条件实施）；mask：不动（测不出代价）** |
+| 数据可引用性 | 混杂未披露 | **同 harness 双测量**（before/after 同机同壳同 bundle 形态同 fixture 同探针；load 2.19 vs 3.59；dataLoss 全 0；`(program)` 经 CDP metrics 交叉验证 Δ≤1.5pp） |
+
+## 1. 5 批做了什么
+
+| 批 | 主题 | 交付 | 交付依据 |
+|---|---|---|---|
+| 批1 | **派生归零** | rail 摘要流式冻结（`streamingRailAnchor`）+ preview 改 thunk（构建期不求值）+ `truncate` 码点级 early-exit | GLM A2/D8.1/M5：O(n²) 派生 ≈4.5s，rail/preview 每 delta 重算是 dev/prod 同量级的真瓶颈 |
+| 批2 | **契约层更新跳过 + 强制布局纪律** | `Turn.vue` → UserBubble/TurnSummary 改稳定引用 props（`shouldUpdateComponent` 整体跳过）+ EdgeFade 贴顶哨兵 IntersectionObserver（scroll 回调零几何读）+ 跟底 endOffset 补偿 padTop | GLM C2/D2（v-memo deps 不全 → 换稳定引用）/ C5（`sync` 2.5ms/次 = `scrollTop` 强制布局）/ D8.4 |
+| 批3 | **fence 闭合高亮移出主线程** | shiki Web Worker 化 + 两壳 CSP `worker-src 'self'` + 失败降级回同步高亮 + 流式期 streaming-fence 占位 | GLM C4（突发在 fence 闭合、complete 处为零）/ D6（分帧对单块无效，Worker 是唯一与块大小无关的解） |
+| 批4 | **TTFT（首 token 延迟）** | `.gitignore` matchPath 段级快路径（2.1–2.5×，oracle + 属性模糊双锁）+ pi 冷启动根因定位（dev jiti 1769 模块 vs bundle 59 模块，登记不可优化）+ 「walk 阻塞首 token」实测证伪 | GLM A4③/A5/S6/S9/F5 |
+| 批5 | **干净重测 + GPU 据实决策** | 三进程同运行采集探针 + recordContinuously GPU trace + 四臂 A/B + 三种补充 fixture + 终版对比表 + 汇总报告 | GLM A6–A9/S3/S4/S7/M8（首轮测量混杂 + GPU 数据不可引用） |
+
+## 2. 累计收益（对首轮原始基线，干净口径）
+
+### 2.1 CPU（renderer 主线程，58.9s vs 58.6s 流式窗）
+
+| 项 | 首轮脏基线 | 干净基线 | 干净终版 | 首轮→终版 |
+|---|---|---|---|---|
+| JS busy | 46.7%（+10..73s 窗） | 28.3% | **18.5%** | **−60%** |
+| 派生族 self | 2.919s（4.6% 窗） | 2.068s（3.51%） | **0.071s（0.12%）** | **−97.6%** |
+| fence 窗 shiki | 2.330s（46.6% 于 5s 窗） | 1.073s（1.82% 流式窗） | **0.000s** | **归零** |
+| EdgeFade.sync | 0.546s | 0.369s | **0.000s** | **归零** |
+| Vue 更新链（`flushJobs`） | 19.05s（30% 窗） | 8.894s（15.11%） | **4.450s（7.59%）** | **−77%** |
+| `renderMarkdown` | 5.53s | 4.567s | **2.659s** | **−52%** |
+| `(program)` 未归因 | 13.1s / 15.9% | 29.2% | 34.9% | 绝对量 −7.7%，占比随 JS 下降被动上升（§final-comparison 1.1） |
+| 非 idle | 62.5% | 57.5% | **48.8–53.4%** | **−9~14pp** |
+
+> 首轮列是**脏 harness**（dev bundle + 后台窗口 + 打包版并存 + tracing 混用），只作溯源；可引用的因果链是「干净基线 vs 干净终版」两列。
+
+### 2.2 GPU（union 口径，禁嵌套求和）
+
+| 项 | 首轮脏基线（33.67s） | 干净基线（63.5s） | 干净终版（63.8/63.0s） |
+|---|---|---|---|
+| CrGpuMain 忙占比 | **69.4%** | **23.3%** | **24.1% / 23.0%** |
+| Present union | 12.01s | 1.16s | 1.22s / 1.17s |
+| ApplyBackpressure | **11.353s** | **0.086s** | 0.146s / 0.147s |
+| Raster | 5.88s | 4.40s | 4.51s / 4.29s |
+| 均 FPS / <55fps 秒 | **20.0 / 32 秒** | **60.0 / 0** | 59.9–60.0 / 0 |
+
+**核心更正**：批1 的「GPU 99.4%→18.8%」不可引用——99.4% 来自**后台被降帧的 20fps 形态**。干净环境下 GPU 侧**无净收益**；5 批在 GPU 侧的真实价值 = 移除了「脏环境下才触发的饱和形态」的灌帧来源之一（每 delta 的派生/高亮/更新全部消失），但基线本就不饱和。
+
+### 2.3 TTFT
+
+| 模式 | 首轮 | 批4（dev） | 批5 干净（prod bundle，load 1.36） |
+|---|---|---|---|
+| warm | 未单列 | 39ms 中位 | **22ms / 21ms** |
+| walk | 「~0.9s 阻塞」 | 130ms 中位 | **30ms / 33ms**（编译 2 次） |
+| fresh | 未单列 | 71ms | 未复测（pi 冷启动结论见 §5） |
+
+## 3. 各批收益归因
+
+| 收益 | 贡献批次 | 量化 |
+|---|---|---|
+| 派生族归零 | 批1 | 2.068s → 0.071s（−96.6%），JS busy 里约 3.4pp |
+| 组件更新跳过 | 批2 | flushJobs −50%、componentUpdateFn −54%（prod bundle 无法测组件级 inclusive，见 R4） |
+| 强制布局（EdgeFade） | 批2 | 0.369s → 0（`sync` 帧在 bundle 中消失） |
+| shiki 冻结消除 | 批3 | 1.073s → 0，且 fence 闭合窗内零 shiki 帧 |
+| matchPath CPU | 批4 | 265→112ms/轮（2.16–2.33×，7003 路径） |
+| 测量基建纠错 | 批5 | GPU 侧首轮结论全部作废重立；cross-validation 建立 |
+
+## 4. 补充 fixture 形态覆盖（题面纪律 7）
+
+三种形态各测一轮（HEAD 代码、同 harness、同 prod bundle、自建 session、事件驱动收尾）：
+
+| 形态 | fixture | 字符 | 墙钟 | 非 idle | 派生族 | shiki | scrollTo | flushJobs | compUpdateFn | Layout |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 多小代码块（24 fence） | `multi-small-fences.json` | 41,010 | 52.6s | 41.9% | 0.055s | **0** | **2.653s (5.06%)** | 4.931s | 4.089s | 2.92s |
+| 工具调用（5 轮 toolUse / 7 bash） | `tool-calls.json` | 38,624 | 51.0s | 40.7% | 0.061s | **0** | 0.842s | 3.997s | 3.204s | **5.54s** |
+| 重 thinking（24K 思考） | `heavy-thinking.json` | 46,009 | 58.9s | 51.3% | 0.071s | **0** | 0.916s | 5.302s | 4.569s | **11.01s** |
+
+**三条结论**：
+
+1. **无回归、无新热点**：三种形态的派生族（0.055–0.071s）与 shiki（全 0）与主形态（original-45k 的 0.071s / 0）同量级 —— 批1/批3 的收益不是「单形态特化」的产物。
+2. **多小代码块把成本转移到滚动**：`scrollTo` 2.653s / 5.06%（主形态 3.81–4.11%）——24 个 fence 让内容高度变化更频繁，跟底滚动 churn 上升。这是 R1（scrollTo 上升）的同族信号，**下一批的明确目标**。
+3. **重 thinking 把成本转移到布局**：`LayoutDuration` 11.01s（主形态 7.95s）、非 idle 51.3% —— thinking 块的跟底滚动 + 高度重算（GPU-8 曾登记「thinking 跟底路径完全未测」，本批首次给出量化：在重 thinking 形态下它是最贵的单项原生工作）。
+4. **工具调用形态的布局成本居中**（5.54s）：多轮 turn 边界与工具卡的插入/折叠带来换行与高度变化，但比 thinking 轻。
+
+## 5. 残余风险与未决项
+
+| # | 项 | 状态 | 处置 |
+|---|---|---|---|
+| R1 | **`scrollTo` self 上升 57–70%**（1.416s → 2.409/2.224s），LayoutDuration +14%、RecalcStyle +24%；多小代码块形态达 5.06% | 实测两次同向，**根因未定位** | 下一批候选：`scrollTo` 的调用点与 churn 需要一轮 follow-health 探针（批1-4 遗留探针 `probes/follow-health.mjs` 可复用） |
+| R2 | minify 关闭的偏差 | 登记 | 影响限于解析/编译期；流式窗在加载之后 |
+| R3 | 打包版 TaiJi.app 并存（L1） | 无法消除（本会话宿主） | GPU helper 15–24% 瞬时 CPU；baseline/final 同条件 |
+| R4 | 组件级 inclusive 在 prod bundle 不可测（`_sfc_render` 匿名） | 方法学限制 | 由 flushJobs / componentUpdateFn 承载；要组件级数字需 dev bundle（引入 dev 扭曲） |
+| R5 | pi profile 用 node 替代 Bun SEA | 首轮已实证 Bun 不可 inspect | 只作「流式期 pi 空闲」的定性证据 |
+| R6 | 补充形态为合成语料 | 确定性生成器 | 结论不外推到真实对话 |
+| R7 | **`(program)` 仍是最大的未归因项（34.9%，≈20.4s）** | 本批定量（CDP metrics 交叉验证）但未拆解 | 它对应主线程原生渲染/布局（Blink + 光栅提交前处理）。拆解需要 `devtools.timeline` 全类别 trace（本批 GPU trace 有 `devtools.timeline` 类别，但只用于 GPU 分析；CPU 侧未做 timeline 归因）——下一批候选 |
+| R8 | pi 冷启动 dev 20s（批4 结论：不可优化） | 已裁决 | prod 不受影响（bundle 2.0–6.8s） |
+| R9 | 分支 34+ commit 从未推送；本目录是独立 clone 而非 `.bare` 链接 worktree | 批4 遗留待办 | 推送/开 PR 不在本批职责；独立 clone 与 AGENTS.md 描述的差异已登记 |
+
+## 6. 火焰图与数据索引
+
+### 6.1 火焰图（折叠栈已生成，可直接渲染）
+
+| 侧 | 折叠栈 | 渲染方式 |
+|---|---|---|
+| 基线 | `docs/perf/final-measurement/baseline-renderer.folded.txt`（1982 栈） | `flamegraph.pl baseline-renderer.folded.txt > baseline.svg`；或 speedscope 导入；或 DevTools Performance 直接加载同名 `.cpuprofile` |
+| 终版 | `docs/perf/final-measurement/final-renderer.folded.txt`（965 栈） | 同上 |
+| 生成器 | `node probes/cpuprofile-to-folded.mjs <profile> [--from s] [--to s]` | — |
+
+**栈数对比本身是一条结论**：1982 → 965 条不同栈（−51%）——热路径的形状从「每 delta 走一遍完整派生+渲染链」收敛成更窄的少量路径。
+
+### 6.2 原始数据
+
+| 类别 | 路径 | 说明 |
+|---|---|---|
+| 三进程 profile（baseline / final / final-r2 / 三形态） | `docs/perf/final-measurement/*.cpuprofile` | 入库（8.0MB 全量） |
+| CDP metrics 快照 | `docs/perf/final-measurement/*-metrics.json` | 每秒一次，`Performance.enable` 后采集 |
+| 环境声明 | `docs/perf/final-measurement/*-env.json` | HEAD / load / fixture md5 / bundle index md5 / 端口 / 并存 Electron 瞬时 CPU / 窗长 |
+| 分析原始输出 | `docs/perf/final-measurement/cpu-analysis.txt` / `gpu-analysis.txt` | 本报告与 final-comparison 的所有数字的机器输出 |
+| 构建证据 | `docs/perf/final-measurement/build-probe-grep.txt` | dev 插桩串计数 + 函数名可归因性 |
+| 截图 | `docs/perf/final-measurement/{baseline,final}-midstream.png` | 流式中期（FPS overlay 在场） |
+| **GPU trace 本体 ×9** | `<artifacts>/b5-traces/*.trace.json`（2.2GB） | baseline-gpu / final-gpu / r2-full / r2-no-blur / r2-no-mask / arm-no-blur / arm-no-mask / arm-reduced |
+| 首轮原始数据（只读） | `~/.taiji/ext-sessions/01a2077f-.../artifacts/profiling-data/`（44MB） | 首轮权威两件 + 复算脚本 |
+| 复算脚本 | `probes/analyze-clean-cpu.mjs` / `analyze-gpu-arms.mjs` / `analyze-gpu-union.mjs` / `cpuprofile-to-folded.mjs` / `perf-clean-cpu.mjs` / `gpu-trace.mjs` | 全部入库、零依赖 |
+
+## 7. 复算命令
+
+```bash
+# CPU 对比表（含 (program) 交叉验证）：任意 cwd、仓库根
+node probes/analyze-clean-cpu.mjs baseline=docs/perf/final-measurement final=docs/perf/final-measurement
+node probes/analyze-clean-cpu.mjs form-fences=docs/perf/final-measurement form-tools=docs/perf/final-measurement form-thinking=docs/perf/final-measurement
+
+# GPU union 分析（把 artifacts 里的 trace 拷回来即可）
+node probes/analyze-gpu-arms.mjs clean-baseline=/tmp/b5/baseline-gpu.trace.json final-r1=/tmp/b5/final-gpu.trace.json \
+  noblur-r1=/tmp/b5/arm-no-blur.trace.json nomask-r1=/tmp/b5/arm-no-mask.trace.json reduced-r1=/tmp/b5/arm-reduced.trace.json
+
+# 火焰图
+node probes/cpuprofile-to-folded.mjs docs/perf/final-measurement/final-renderer.cpuprofile > /tmp/final.folded
+
+# 重采（需实例；见 docs/tp-api-batch5.md 的启动命令）
+node probes/perf-clean-cpu.mjs --data-dir ~/.taiji-dev/verify-b5-final --cdp-port 9488 \
+  --fixture probes/fixtures/original-45k.json --tag final --window-ms 200000 --save-dir docs/perf/final-measurement
+```

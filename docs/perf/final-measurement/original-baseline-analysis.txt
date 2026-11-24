@@ -1,0 +1,8 @@
+# original dirty baseline: /Users/zhushanwen/.taiji/ext-sessions/01a2077f-d676-7095-b142-db7b972391f7/artifacts/profiling-data/run-notrace-renderer.cpuprofile
+# window +10..+73s = 63.0s
+RESULT original-baseline nonIdle=62.5% program=15.9% jsBusy=46.7%
+  derived-family=2.919s
+  shiki=2.540s
+  EdgeFade.sync=0.546s  scrollTo=2.044s
+  flushJobs=19.05s  componentUpdateFn=17.36s  renderMarkdown=5.53s  DOMPurify=0.62s
+  UserBubble=1.362s  TurnSummary=1.166s  MessageStream=15.317s
