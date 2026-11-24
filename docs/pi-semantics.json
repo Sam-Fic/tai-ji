@@ -2189,7 +2189,7 @@
   },
   {
     "id": "PS-101",
-    "claim": "极少数通路把会话选择写进消息自身产生**虚拟 key** 样本（taiji gen-stats 展开层的反向场景前提）：路由失败（resolveModel throw——未注册 / not-a-physical / 无凭据）时 prepareRequest reject → run 以 error 收终，handleRunFailure 合成 failureMessage（role=assistant），model/provider 取 this._state.model——此刻仍是**虚拟选择** `aggregation/<routeId>`，usage = EMPTY_USAGE 全 0；经 message_start/message_end/turn_end/agent_end 原样发出，turn_end.message 即带虚拟 key 进 taiji 采样链（速度/TTFT 侧判据只看 durationMs/ttftMs 与 output 阈值，output=0 非 bogus——虚拟 key 样本可真实进 gen-stats current）。正常路径 assistant 消息恒带物理端点 key（PS-100），虚拟 key 样本仅此失败通路产生，量级「极少数」",
+    "claim": "极少数通路把会话选择写进消息自身（taiji gen-stats 展开层反向命中的防御前提）：路由失败（resolveModel throw——未注册 / not-a-physical / 无凭据）时 prepareRequest reject → run 以 error 收终，handleRunFailure 合成 failureMessage（role=assistant），model/provider 取 this._state.model——此刻仍是**虚拟选择** `aggregation/<routeId>`，usage = EMPTY_USAGE 全 0；经 message_start/message_end/turn_end/agent_end 原样发出，failureMessage 带虚拟 key 经 turn_end 下发。但 taiji 适配层 totalTokens gate（event-adapter.ts:519 `if (!usage?.totalTokens) return []`，先于 kind:'turn-usage' 产出与 recordSample 注入）把 failure turn（usage = EMPTY_USAGE.totalTokens = 0）丢弃不产样本——**虚拟 key 样本在现接线管道不可达**；`recordSample` 的 `isAggregationModelRef` 跳过分支（gen-stats-service.ts:345）定性为 pi 行为漂移防御：未来 failure usage 非 0 时防 `aggregation__*.json` 无读方死字节，非现役通路。正常路径 assistant 消息恒带物理端点 key（PS-100），虚拟 key 消息仅此失败通路产生，量级「极少数」",
     "piAnchor": [
       {
         "pkg": "pi-coding-agent",

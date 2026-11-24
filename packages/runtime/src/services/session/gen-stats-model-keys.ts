@@ -9,8 +9,9 @@
  * 三处消费（current 匹配 / 窗口聚合 / 广播反向寻址）各自内联 `===` 字符串全等时，
  * 路由会话的 current 与窗口聚合全 null，前端按「空值不占位」裁决整钮不渲染——功能静默失效。
  *
- * 解法：读侧加一层「虚拟 key → 成员物理 key 集」展开，物理采样落盘零改动（虚拟 key 样本
- * 属 PS-101 路由失败通路，不落盘——gen-stats-service recordSample）。
+ * 解法：读侧加一层「虚拟 key → 成员物理 key 集」展开，物理采样落盘零改动（虚拟 key 消息
+ * 属 PS-101 路由失败通路——该类样本现接线管道不可达：适配层 totalTokens gate 把 failure
+ * turn〔usage 全 0〕先于采样丢弃；gen-stats-service 对虚拟 key 的豁免分支为漂移防御）。
  * 三处统一走本模块同一纯函数，命名空间规则只有一个落点（防止再次三处各自内联漂移）。
  *
  * 边界与降级（逐条自述如下）：
@@ -82,8 +83,9 @@ export function modelKeyCovers(
  * 对称形态 = `modelKeyCovers(a,b) || modelKeyCovers(b,a)`：
  *   - 会话权威 = 虚拟路由 key、槽 = 成员物理 key → 正向命中（主场景）；
  *   - 反向（槽 = 虚拟 key：pi 极少数通路把会话选择写进消息自身——路由失败 turn 的
- *     failureMessage 自带 `aggregation/<routeId>`，PS-101）也命中，避免这类样本永远无法
- *     成为 current。
+ *     failureMessage 自带 `aggregation/<routeId>`，PS-101）也命中——漂移防御：该类样本
+ *     现接线管道不可达（适配层 totalTokens gate 把 failure turn 先于采样丢弃，PS-101），
+ *     保留反向命中以防 pi 未来 failure usage 非 0 时样本重新可达。
  *
  * 两侧都是物理 key 时退化为字符串全等（恒等展开），与修复前逐字一致。
  */

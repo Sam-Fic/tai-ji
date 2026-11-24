@@ -39,9 +39,12 @@
  * 两套命名空间不互通会让路由会话的 current/窗口聚合全 null、前端三个触发器整钮不渲染。
  * 读侧经 gen-stats-model-keys 的同一纯函数展开：current 匹配、窗口聚合并集、广播反向
  * 寻址三处统一走 `modelKeyCovers` / `expandModelKeys`。落盘侧（2026-11-24 收口）：正常
- * 路径消息自带**物理** key（PS-100），落盘行为不变；虚拟 key 样本只来自路由失败通路
- * （PS-101），**不落盘**——`aggregation__*.json` 全仓无读方（展开层只读成员物理文件），
- * 落盘即无读方死字节；该类样本 current-only（槽照常更新、广播照常推）。
+ * 路径消息自带**物理** key（PS-100），落盘行为不变；虚拟 key 消息只来自路由失败通路
+ * （PS-101），但该类样本**在现接线管道不可达**——适配层 totalTokens gate（pi failure
+ * turn usage = EMPTY_USAGE.totalTokens = 0，event-adapter.ts:519）先于采样丢弃、到不了
+ * 本服务；`aggregation__*.json` 全仓无读方（展开层只读成员物理文件），落盘即无读方死字节
+ * ——下方 isAggregationModelRef 豁免分支定性为 pi 行为漂移防御（未来 failure usage 非 0
+ * 时防死字节；防御行为 = current-only：槽照常更新、广播照常推、不落盘）。
  */
 
 import type {
@@ -329,13 +332,16 @@ export class GenStatsService {
     // 槽按样本自带 modelKey 归属（迟到旧模型样本只进对应槽，不影响新模型 current）。
     const currentUpdated = this.updateSessionCurrent(sid, modelKey, sample)
 
-    // 虚拟 key 样本（PS-101：路由失败 turn 的 failureMessage 自带会话选择
-    // `aggregation/<routeId>`）**不落盘**：展开层（expandModelKeys）只读成员物理文件，
-    // `aggregation__*.json` 全仓无读方（窗口聚合/广播寻址都不消费它），落盘即无读方死字节
-    // 且 30 天 GC 只顺带清被写文件、孤儿持续累积——registry #26「不产生 aggregation__*.json」
-    // 声明据此成立。current 槽照常更新（current-only 语义）；广播条件与物理路径同构：两侧
-    // 共用同一组 build*Record 谓词，物理「≥1 条落盘」⟺ 虚拟「槽有更新」，帧流量不变
-    // （聚合层读不到本样本属预期：聚合口径 = 成员物理文件并集，虚拟样本只进 current）。
+    // 虚拟 key 消息（PS-101：路由失败 turn 的 failureMessage 自带会话选择
+    // `aggregation/<routeId>`）——漂移防御分支，**现接线管道不可达**：适配层 totalTokens
+    // gate（pi failure turn usage = EMPTY_USAGE.totalTokens = 0，event-adapter.ts:519）
+    // 先于采样丢弃，样本到不了本方法；本分支为未来 failure usage 非 0 的 pi 行为漂移预留。
+    // 命中时**不落盘**：展开层（expandModelKeys）只读成员物理文件，`aggregation__*.json`
+    // 全仓无读方（窗口聚合/广播寻址都不消费它），落盘即无读方死字节且 30 天 GC 只顺带清
+    // 被写文件、孤儿持续累积——registry #26「不产生 aggregation__*.json」声明据此成立。
+    // current 槽照常更新（current-only 语义）；广播条件与物理路径同构：两侧共用同一组
+    // build*Record 谓词，物理「≥1 条落盘」⟺ 虚拟「槽有更新」，帧流量不变（聚合层读不到
+    // 本样本属预期：聚合口径 = 成员物理文件并集，虚拟样本只进 current）。
     if (isAggregationModelRef(modelKey)) {
       if (currentUpdated) this.broadcastModel(modelKey)
       return
