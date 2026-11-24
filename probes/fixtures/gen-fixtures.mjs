@@ -94,7 +94,11 @@ function multiSmallFences () {
   return parts.join('')
 }
 
-/** 形态 2：工具调用（5 轮 bash 调用 + 每轮之间的中长文本，块内含 fence）。 */
+/** 形态 2：工具调用（5 轮，每轮「流式文本 + bash 工具卡」，末轮纯文本收尾）。
+ *  契约关键（首跑踩坑）：faux 队列的每一步 = 一条 assistant 消息；只有 stopReason='toolUse'
+ *  才会自动续跑下一轮。早期版本把 toolUse 与 text 拆成两步、text 步以 stop 收尾 ⇒ 整条链
+ *  只跑 1 轮工具就结束（completes=1/10）。正确形态 = 每步同时带 text 与 toolCalls。
+ */
 function toolCalls () {
   const rnd = lcg(20261125)
   const steps = []
@@ -102,16 +106,16 @@ function toolCalls () {
     const calls = r % 2 === 1
       ? [{ name: 'bash', args: { command: `echo probe-round-${r}` } }]
       : [{ name: 'bash', args: { command: `echo probe-a-${r}` } }, { name: 'bash', args: { command: `echo probe-b-${r}` } }]
+    const text = [`## 第 ${r} 轮：${TOPICS[r % TOPICS.length]}\n`, `\n${proseTo(rnd, 7000)}\n`]
+    if (r % 2 === 1) text.push(`\n\`\`\`ts\n${FENCES.ts(r)}\`\`\`\n`)
     steps.push({
-      ...(r === 1 ? { thinking: `第 ${r} 轮先跑探测命令，再据输出展开说明${'。'.repeat(6)}` } : {}),
+      ...(r === 1 ? { thinking: `先跑探测命令，再据输出展开${'。'.repeat(6)}` } : {}),
+      text: text.join(''),
       toolCalls: calls,
       stopReason: 'toolUse'
     })
-    const text = [`# 第 ${r} 轮结论：${TOPICS[r % TOPICS.length]}\n`, `\n${proseTo(rnd, 8000)}\n`]
-    if (r % 2 === 1) text.push(`\n\`\`\`ts\n${FENCES.ts(r)}\`\`\`\n`)
-    if (r === 5) text.push(`\n${prose(rnd, 6)}\n`)
-    steps.push({ text: text.join(''), stopReason: 'stop' })
   }
+  steps.push({ text: `\n## 收尾\n\n${proseTo(rnd, 3000)}\n`, stopReason: 'stop' })
   return steps
 }
 
