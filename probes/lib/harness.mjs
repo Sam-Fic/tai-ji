@@ -16,6 +16,8 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import http from 'node:http'
+import { spawnSync } from 'node:child_process'
 
 export function sleep (ms) {
   return new Promise((r) => setTimeout(r, ms))
@@ -371,4 +373,184 @@ export function countLogLines (dataDir, prefix, regex) {
     for (const line of text.split('\n')) if (re.test(line)) n++
   }
   return n
+}
+
+// ── 批5 干净测量新增原语（三进程同运行采集 + 环境声明）─────────────────────────
+
+/** 1 分钟 load avg（`uptime` 末段；解析失败返回 null）。 */
+export function readLoadAvg () {
+  const r = spawnSync('uptime', [], { encoding: 'utf8', timeout: 10_000 })
+  if (r.status !== 0) return null
+  const m = /load averages?:\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)/.exec(r.stdout)
+  return m ? { m1: Number(m[1]), m5: Number(m[2]), m15: Number(m[3]) } : null
+}
+
+/** ps time 串（[H:]MM:SS.ss）→ 秒。 */
+function psTimeToSec (t) {
+  const parts = String(t).trim().split(':').map(Number)
+  if (parts.some((n) => !Number.isFinite(n))) return 0
+  return parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : parts[0] * 60 + parts[1]
+}
+
+/**
+ * 进程组瞬时 CPU 占比（两次 `ps -o time` 采样差 / 间隔秒；macOS 无 /proc）。
+ * 返回 [{pid, cpuPct, cmd}]；cmd 截断到 120 字符（环境声明用）。
+ */
+export function instantCpuOf (pids, intervalMs = 1000) {
+  const list = pids.filter(Boolean)
+  if (list.length === 0) return []
+  const sample = () => {
+    const r = spawnSync('ps', ['-o', 'pid,time,command', '-p', list.join(',')], { encoding: 'utf8', timeout: 10_000 })
+    const out = new Map()
+    for (const line of (r.stdout ?? '').split('\n').slice(1)) {
+      const m = /^\s*(\d+)\s+(\S+)\s+(.*)$/.exec(line)
+      if (m) out.set(Number(m[1]), { t: psTimeToSec(m[2]), cmd: m[3].slice(0, 120) })
+    }
+    return out
+  }
+  const a = sample()
+  spawnSync('sleep', [String(intervalMs / 1000)], { timeout: intervalMs + 2000 })
+  const b = sample()
+  return list.map((pid) => {
+    const x = a.get(pid); const y = b.get(pid)
+    if (!x || !y) return { pid, cpuPct: null, cmd: y?.cmd ?? x?.cmd ?? '' }
+    return { pid, cpuPct: Number(((y.t - x.t) / (intervalMs / 1000) * 100).toFixed(1)), cmd: y.cmd }
+  })
+}
+
+/** HTTP GET JSON（inspector /json/list 用；零依赖）。 */
+function httpGetJson (url, timeoutMs = 3000) {
+  return new Promise((resolve) => {
+    const req = http.get(url, { timeout: timeoutMs }, (res) => {
+      let body = ''
+      res.on('data', (c) => (body += c))
+      res.on('end', () => { try { resolve(JSON.parse(body)) } catch { resolve(null) } })
+    })
+    req.on('error', () => resolve(null))
+    req.on('timeout', () => { req.destroy(); resolve(null) })
+  })
+}
+
+/**
+ * Node inspector（SIGUSR1 激活 / --inspect 拉起）的 CDP 客户端。
+ * match = 目标 url 需包含的子串（runtime 传 'runtime/src/index.ts'，pi 传 'cli.js'）。
+ * 轮询直到目标出现或超时（超时返回 null——调用方按「inspector 不可用」走回退路径）。
+ */
+export async function connectNodeInspector (port, match, { timeoutMs = 20000, intervalMs = 500 } = {}) {
+  const deadline = Date.now() + timeoutMs
+  let target = null
+  while (Date.now() < deadline) {
+    const list = await httpGetJson(`http://127.0.0.1:${port}/json/list`)
+    if (Array.isArray(list)) {
+      target = list.find((t) => t.webSocketDebuggerUrl && String(t.url ?? '').includes(match)) ?? null
+      if (!target && list.length === 1 && list[0].webSocketDebuggerUrl) target = list[0]
+    }
+    if (target) break
+    await sleep(intervalMs)
+  }
+  if (!target) return null
+  const ws = new WebSocket(target.webSocketDebuggerUrl)
+  let seq = 0
+  const pending = new Map()
+  const listeners = new Map()
+  await new Promise((resolve, reject) => {
+    ws.addEventListener('open', resolve)
+    ws.addEventListener('error', () => reject(new Error('inspector ws error')))
+    setTimeout(() => reject(new Error('inspector ws open timeout')), 10000)
+  })
+  ws.addEventListener('message', (ev) => {
+    const msg = JSON.parse(ev.data)
+    if (msg.id !== undefined && pending.has(msg.id)) {
+      const p = pending.get(msg.id)
+      pending.delete(msg.id)
+      msg.error ? p.reject(new Error(JSON.stringify(msg.error))) : p.resolve(msg.result)
+      return
+    }
+    if (msg.method) for (const cb of listeners.get(msg.method) ?? []) cb(msg.params)
+  })
+  return {
+    target,
+    send (method, params = {}) {
+      return new Promise((res, rej) => {
+        const id = ++seq
+        pending.set(id, { resolve: res, reject: rej })
+        ws.send(JSON.stringify({ id, method, params }))
+      })
+    },
+    on (method, cb) {
+      if (!listeners.has(method)) listeners.set(method, [])
+      listeners.get(method).push(cb)
+    },
+    close: () => ws.close()
+  }
+}
+
+/**
+ * 任意 CDP 客户端的窗口化 CPU profile：Profiler.enable/start → 调用方执行被测动作 →
+ * Profiler.stop。返回 { profile, startWall }（startWall 供调用方算 send 相对窗）。
+ */
+export async function startProfiler (client) {
+  await client.send('Profiler.enable')
+  await client.send('Profiler.start')
+  return Date.now()
+}
+
+export async function stopProfiler (client) {
+  const stopped = await client.send('Profiler.stop')
+  return stopped.profile
+}
+
+// ── 批5：GUI 在场校验的可观测锚点升级 ────────────────────────────────────────
+// 现状事实（verify-taiji capabilities/session.md「已知空洞」#1 登记）：会话行**没有**
+// `data-session-id`，`[data-session-id]` 只出现在 tray/btw 面板上；面板态的可观测锚点是
+// `[data-testid="panel-session-label"]` 的文本（= 会话 label）。首轮探针用 `[data-session-id]`
+// 在本仓当前版本恒为空串 ⇒ 会在 GUI 已正确切换的情况下误判「未切到目标 session」。
+// 本函数按三级事实判据，逐级退让：
+//   ① `[data-session-id]` 出现且等于 sid（老形态 / tray 面板在场时）
+//   ② `panel-session-label` 文本 === 期望 label（当前形态）
+//   ③ 目标 session 行可见并被激活：展开折叠的项目组 → 点 `.session-item` 的 aria-label 命中项
+// 全部用 DOM 事实判定，无时间推测（轮询只用于等异步渲染，超时即拒绝采集）。
+export async function ensureGuiOnSessionViaLabel (cdp, sid, label, { timeoutMs = 25000 } = {}) {
+  await cdp.send('Runtime.enable')
+  const ev = async (expr) => {
+    const r = await cdp.send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })
+    return r.result?.value
+  }
+  const sidMatch = () => ev(`document.querySelector('[data-session-id]')?.getAttribute('data-session-id') || ''`)
+  const labelMatch = () => ev(`(document.querySelector('[data-testid="panel-session-label"]')?.textContent || '').trim()`)
+
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    if ((await sidMatch()) === sid) { console.log(`[probe] GUI on target session via data-session-id: ${sid}`); return true }
+    if (label && (await labelMatch()) === label) { console.log(`[probe] GUI on target session via panel-session-label: "${label}"`); return true }
+    if (Date.now() > deadline) break
+    await sleep(400)
+  }
+
+  // ③ 展开所有折叠项目组，再点 aria-label 命中目标 label 的会话行
+  console.log('[probe] RPC 切换未在 DOM 上体现，改走侧栏：展开项目组 → 点击目标会话行')
+  await ev(`(() => {
+    const anchors = [...document.querySelectorAll('[data-testid="default-project-anchor"], [data-testid^="project-anchor-"]')];
+    for (const a of anchors) if (a.getAttribute('aria-expanded') === 'false') a.click();
+    return anchors.length;
+  })()`)
+  await sleep(600)
+  const clicked = await ev(`(() => {
+    const rows = [...document.querySelectorAll('.session-item')];
+    const want = ${JSON.stringify(label ?? '')};
+    const hit = rows.find((r) => (r.getAttribute('aria-label') || '').includes(want));
+    if (hit) { hit.click(); return true }
+    return rows.length;
+  })()`)
+  console.log(`[probe] sidebar click -> ${clicked}`)
+
+  const deadline2 = Date.now() + timeoutMs
+  for (;;) {
+    if ((await sidMatch()) === sid) { console.log(`[probe] GUI on target session via data-session-id: ${sid}`); return true }
+    if (label && (await labelMatch()) === label) { console.log(`[probe] GUI on target session via panel-session-label: "${label}"`); return true }
+    if (Date.now() > deadline2) break
+    await sleep(400)
+  }
+  console.error(`[probe] GUI 未切到目标 session（sid=${sid} label="${label}"；当前 panel label="${await labelMatch()}"）`)
+  return false
 }

@@ -7,9 +7,9 @@
     "extensions/universal/session-manager/"
   ],
   "docs": {
-    "design": "docs/tp-design-batch4.md",
-    "acceptance": "docs/tp-acceptance-batch4.md",
-    "api": "docs/tp-api-batch4.md",
-    "factCheck": "docs/tp-fact-check-batch4.md"
+    "design": "docs/tp-design-batch5.md",
+    "acceptance": "docs/tp-acceptance-batch5.md",
+    "api": "docs/tp-api-batch5.md",
+    "factCheck": "docs/tp-fact-check-batch5.md"
   }
 }
