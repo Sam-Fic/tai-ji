@@ -162,3 +162,6 @@ package-lock.json.*
 # tree-plant 任务工作目录（设计/验收文档与运行产物，本地不入库）
 /tpkg/
 .run/
+
+# 批5：GPU trace 单文件 230-260MB，不入库（归档于会话 artifacts / .run，报告给路径）
+*.trace.json
