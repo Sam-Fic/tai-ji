@@ -73,54 +73,64 @@ if (!ready) {
 }
 console.log('[probe] app ready after reload')
 
-// ③ worker 不可用桩：构造即抛错（客户端 ensureWorker catch → degrade → 主线程同步回退）
+// ③ worker 不可用桩：构造即抛错（客户端 ensureWorker catch → degrade → 主线程同步回退）。
+//    原 Worker 存 window.__origWorker，本探针结束必须还原——桩残留会令同页面后续
+//    worker 化渲染（如 T1 复跑）全部落主线程回退，把「冻结已消除」误测成「冻结仍在」。
 await cdp.send('Runtime.evaluate', {
-  expression: `window.Worker = class { constructor() { throw new Error('probe: worker unavailable') } }`,
+  expression: `window.__origWorker = window.Worker; window.Worker = class { constructor() { throw new Error('probe: worker unavailable') } }`,
 })
+const restoreWorker = () => cdp.send('Runtime.evaluate', {
+  expression: `if (window.__origWorker) { window.Worker = window.__origWorker; delete window.__origWorker }`,
+}).catch(() => {})
 console.log('[probe] window.Worker stubbed to throw (worker unavailable)')
 
-await ensureGuiOnSession(cdp, sid)
+try {
+  await ensureGuiOnSession(cdp, sid)
 
-const clientUuid = crypto.randomUUID()
-await rt.call('delivery.submit', { sessionId: sid, content: prompt, clientUuid }, 30000)
-console.log('[probe] prompt submitted, streaming with unavailable worker...')
+  const clientUuid = crypto.randomUUID()
+  await rt.call('delivery.submit', { sessionId: sid, content: prompt, clientUuid }, 30000)
+  console.log('[probe] prompt submitted, streaming with unavailable worker...')
 
-const endFrame = await waitForSessionComplete(rt, sid, timeoutMs)
-if (!endFrame) {
-  console.error('[probe] 流式未在显式预算内完成——弃测')
-  cdp.close()
-  rt.ws.close()
-  process.exit(3)
+  const endFrame = await waitForSessionComplete(rt, sid, timeoutMs)
+  if (!endFrame) {
+    console.error('[probe] 流式未在显式预算内完成——弃测')
+    await restoreWorker()
+    cdp.close()
+    rt.ws.close()
+    process.exit(3)
+  }
+  console.log(`[probe] stream complete: ${endFrame.type}`)
+
+  // finalize + 回填轮询（预算内事件驱动等待）。轮询带 GUI sid 与 rAF 存活诊断：
+  // 页面刷新后若 GUI 漂移或 rAF 停摆，回填会迟到——诊断字段让失败可归因。
+  const deadline = Date.now() + 60000
+  let dom = { shikiPre: 0, shikiSpans: 0, codeChars: 0, sid: '', mdRenders: 0, rafFired: false }
+  let polls = 0
+  while (Date.now() < deadline) {
+    polls++
+    const r = await cdp.send('Runtime.evaluate', {
+      expression: `(async () => {
+        const rafFired = await new Promise((res) => { let done = false; requestAnimationFrame(() => { if (!done) { done = true; res(true) } }); setTimeout(() => { if (!done) { done = true; res(false) } }, 800) })
+        return JSON.stringify({
+          sid: document.querySelector('[data-session-id]')?.getAttribute('data-session-id') || '',
+          mdRenders: document.querySelectorAll('.md-render').length,
+          shikiPre: document.querySelectorAll('pre.shiki').length,
+          shikiSpans: document.querySelectorAll('pre.shiki [style*="--shiki-dark"]').length,
+          codeChars: (document.querySelector('pre.shiki')?.textContent ?? '').length,
+          rafFired,
+        })
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    })
+    dom = JSON.parse(r.result?.value ?? '{}')
+    if (dom.shikiSpans >= 1) break
+    await sleep(500)
+  }
+  console.log(`[probe] final DOM (polls=${polls}): sid=${dom.sid} mdRenders=${dom.mdRenders} pre.shiki=${dom.shikiPre} spans=${dom.shikiSpans} codeChars=${dom.codeChars} rafFired=${dom.rafFired}`)
+} finally {
+  await restoreWorker()
 }
-console.log(`[probe] stream complete: ${endFrame.type}`)
-
-// finalize + 回填轮询（预算内事件驱动等待）。轮询带 GUI sid 与 rAF 存活诊断：
-// 页面刷新后若 GUI 漂移或 rAF 停摆，回填会迟到——诊断字段让失败可归因。
-const deadline = Date.now() + 60000
-let dom = { shikiPre: 0, shikiSpans: 0, codeChars: 0, sid: '', mdRenders: 0, rafFired: false }
-let polls = 0
-while (Date.now() < deadline) {
-  polls++
-  const r = await cdp.send('Runtime.evaluate', {
-    expression: `(async () => {
-      const rafFired = await new Promise((res) => { let done = false; requestAnimationFrame(() => { if (!done) { done = true; res(true) } }); setTimeout(() => { if (!done) { done = true; res(false) } }, 800) })
-      return JSON.stringify({
-        sid: document.querySelector('[data-session-id]')?.getAttribute('data-session-id') || '',
-        mdRenders: document.querySelectorAll('.md-render').length,
-        shikiPre: document.querySelectorAll('pre.shiki').length,
-        shikiSpans: document.querySelectorAll('pre.shiki [style*="--shiki-dark"]').length,
-        codeChars: (document.querySelector('pre.shiki')?.textContent ?? '').length,
-        rafFired,
-      })
-    })()`,
-    awaitPromise: true,
-    returnByValue: true,
-  })
-  dom = JSON.parse(r.result?.value ?? '{}')
-  if (dom.shikiSpans >= 1) break
-  await sleep(500)
-}
-console.log(`[probe] final DOM (polls=${polls}): sid=${dom.sid} mdRenders=${dom.mdRenders} pre.shiki=${dom.shikiPre} spans=${dom.shikiSpans} codeChars=${dom.codeChars} rafFired=${dom.rafFired}`)
 
 cdp.close()
 rt.ws.close()
