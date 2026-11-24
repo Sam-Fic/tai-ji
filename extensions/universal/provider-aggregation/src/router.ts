@@ -232,7 +232,7 @@ export function memberRef(member: AggregationMember): string {
 /**
  * 终局观察的最小消息视图（pi LLM 形态 assistant 消息的结构化窄面）。
  *
- * pi 的 convertToLlm 对 assistant 消息原样透传（core/messages.js：case "assistant": return m），
+ * pi 的 convertToLlm 对 assistant 消息原样透传（core/messages.js:111-115：case "assistant": return m），
  * provider/model/stopReason/errorMessage 全量在场；user/toolResult 等角色无这些字段，
  * 窄面按可选接收（role 唯一必填——扫描只认 assistant）。
  */
@@ -315,7 +315,7 @@ export type RouteDecision =
  * 终局观察（方案 B 的事实源）：从消息尾向前找最近一条**物理模型** assistant 消息。
  *
  * 跳过路由自身失败的消息（provider = AGGREGATION_PROVIDER_ID 的虚拟模型消息——pi 的
- * handleRunFailure 用 _state.model 构造，路由失败时 selection 仍是虚拟模型），使观察在
+ * handleRunFailure（pi-agent-core agent.js:364-375）用 _state.model 构造，路由失败时 selection 仍是虚拟模型），使观察在
  * 「连续多轮路由失败」后仍可凭更早的物理结局**幂等重导**：burn 不因选择层抛错（无候选 /
  * 悬空）而丢，也不需要闭包镜像——观察永远从会话事实重算。
  *

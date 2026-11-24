@@ -5,7 +5,8 @@
  * （新 id 忽略，D1 ③）/ 删除 = 保持注册 + 闭包显式失败（D9/AS22）/ 损坏隔离呈报 +
  * 扩展保持旧注册 / 停用与文件消失的闭包失败态 / 同 id 重建恢复链 / session_start
  * 对账（新增 id 补注册 + contextWindow 元数据补齐）/ 零配置零注册 / route 闭包端到端
- * （物理模型解析 + D7 档位映射 + D6 修订 retry 透传与终局 failover）。
+ * （物理模型解析 + D7 档位映射 + D6 修订 retry 透传与终局 failover）/ 链内失败计数
+ * （failures）删除态与 session 维度收口（残留计数不把 fail-fast 误判预算用尽）。
  *
  * 形态（TEST-STRATEGY 三档判据）：真实 fs 限 os.tmpdir() 白名单内 mkdtemp 自建自删；
  * 确定性同步化——mtime 用 utimesSync 显式错开（不依赖真实时钟精度，判据 i 类处置），
@@ -661,6 +662,88 @@ describe("route 闭包端到端", () => {
 		})
 		expect(result.modelId).toBe("zai-glm") // 软避让仍生效
 		expect(result.state).toBeUndefined() // 无变化——引用纪律守住，不刷条目
+	})
+})
+
+// ── failures 闭包计数收口（D6 修订：删除态 + session 维度，生命周期 = 活跃重试链） ──
+
+describe("链内失败计数（failures）删除态与 session 维度收口", () => {
+	/** 三次 retry 透传把指定路由的 glm 链内计数推到 3（= maxRetries，mock getSettings 缺省）。 */
+	function burnChainCounts(registered: Map<string, ExtensionVirtualModel>, ctx: ExtensionContext, routeId: string): void {
+		const failedGlm = {
+			model: { provider: "zhipu", id: "glm" } as unknown as Model,
+			thinkingLevel: "off",
+			message: { stopReason: "error", errorMessage: "524 origin timeout" } as unknown as AssistantMessage,
+		}
+		for (let i = 0; i < 3; i++) {
+			expect(routeVia(registered, routeId, ctx, { reason: "retry", failed: failedGlm }).modelId).toBe("glm")
+		}
+	}
+
+	/** 账户类 fail-fast 终局 error（pi 不重试、本链零计数）——探针：是否被残留计数误判「预算用尽」。 */
+	function failFastTurn(): ModelRouteRequest {
+		return {
+			reason: "user",
+			messages: [{ role: "assistant", provider: "zhipu", model: "glm", stopReason: "error" } as unknown as Message],
+		}
+	}
+
+	it("路由删除（条目从配置消失）：残留计数随删除态退役——同 id 重建后 fail-fast 不误判 burnt", () => {
+		writeConfig([ROUTE_A], T1)
+		const { pi, registered } = createMockPi()
+		providerAggregationFactory(pi, { configPath })
+		const ctx = createMockCtx()
+		burnChainCounts(registered, ctx, "route-a") // 链内计数 3（= maxRetries）
+		writeConfig([], T2) // 路由删除
+		expect(() => routeVia(registered, "route-a", ctx)).toThrow(/已删除/) // 求值前重读标记删除态（收口点）
+		writeConfig([ROUTE_A], T3) // 同 id 重建
+		const result = routeVia(registered, "route-a", ctx, failFastTurn())
+		expect(result.modelId).toBe("glm") // 无残留计数 → fail-fast 分界：仍选主端点，不向候选漂移
+		expect(result.state).toBeUndefined() // 未被误 burnt（修复前：计数 3 残留 → 误判 burnt + failover）
+	})
+
+	it("配置文件消失（absent）：全部计数随删除态退役——配置恢复后 fail-fast 不误判 burnt", () => {
+		writeConfig([ROUTE_A], T1)
+		const { pi, registered } = createMockPi()
+		providerAggregationFactory(pi, { configPath })
+		const ctx = createMockCtx()
+		burnChainCounts(registered, ctx, "route-a")
+		rmSync(configPath) // absent
+		expect(() => routeVia(registered, "route-a", ctx)).toThrow(/已删除/) // 全集 vanished（收口点）
+		writeConfig([ROUTE_A], T2) // 配置恢复
+		const result = routeVia(registered, "route-a", ctx, failFastTurn())
+		expect(result.modelId).toBe("glm")
+		expect(result.state).toBeUndefined()
+	})
+
+	it("session_start 对账：跨 session 残留计数整表清零——新会话 fail-fast 不误判 burnt", async () => {
+		writeConfig([ROUTE_A], T1)
+		const { pi, registered, handlers } = createMockPi()
+		providerAggregationFactory(pi, { configPath })
+		const ctx = createMockCtx()
+		burnChainCounts(registered, ctx, "route-a") // 上一会话留下计数 3
+		await runSessionStart(handlers, createMockCtx()) // 新 session 对账（收口点）
+		const result = routeVia(registered, "route-a", ctx, failFastTurn())
+		expect(result.modelId).toBe("glm") // 新会话无活链：账户类 fail-fast 不被旧计数判成「预算用尽」
+		expect(result.state).toBeUndefined()
+	})
+
+	it("删除态收口只清被删路由的计数：同配置内其他路由的活链计数不受影响（选择性回归）", () => {
+		writeConfig([ROUTE_A, ROUTE_B], T1)
+		const { pi, registered } = createMockPi()
+		providerAggregationFactory(pi, { configPath })
+		const ctx = createMockCtx()
+		burnChainCounts(registered, ctx, "route-a")
+		burnChainCounts(registered, ctx, "route-b") // route-b 单端点 glm，同样计数 3
+		writeConfig([ROUTE_B], T2) // 只删 route-a
+		expect(() => routeVia(registered, "route-a", ctx)).toThrow(/已删除/)
+		writeConfig([ROUTE_A, ROUTE_B], T3) // route-a 重建（其计数已随删除态退役）
+		const routeAResult = routeVia(registered, "route-a", ctx, failFastTurn())
+		expect(routeAResult.modelId).toBe("glm") // route-a 计数已退役 → fail-fast 不 burnt
+		expect(routeAResult.state).toBeUndefined()
+		const routeBResult = routeVia(registered, "route-b", ctx, failFastTurn())
+		expect(routeBResult.state).toEqual({ burnt: ["zhipu/glm"] }) // route-b 计数仍在 → 预算用尽 → burnt（单候选重探）
+		expect(routeBResult.modelId).toBe("glm")
 	})
 })
 

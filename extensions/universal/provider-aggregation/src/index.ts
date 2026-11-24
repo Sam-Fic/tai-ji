@@ -98,6 +98,12 @@ interface AggregationState { // oe-exempt:20261106:framework:扩展内部状态�
 	 * 生命周期 = 活跃重试链：retry 透传时递增（bumpChainFailure），终局观察在下一轮
 	 * 非 retry 求值读取它判「pi 重试预算是否用尽」。计数本身不持久化——session 历史不记
 	 * 瞬态记账；burn 证据（预算用尽的结论）随 burnt 走 router state 持久化。
+	 *
+	 * 收口路径（计数只对活链有效，陈旧计数必须退役，否则跨删除态 / 跨 session 残留会把
+	 * 账户类 fail-fast 误判「预算用尽」→ 误 burnt + 向候选静默漂移）：路由标记删除态时
+	 * 同步删除（markVanishedIds，含 absent 文件消失的全集删除）；session_start 对账时
+	 * 整表清零（新 session 无活链）。burnt 不走闭包（随请求经 router state 往返），
+	 * 不在此列。
 	 */
 	failures: Map<string, ReadonlyMap<string, number>>
 }
@@ -181,10 +187,20 @@ function registerRouteDefinitions(
 	}
 }
 
-/** 把 config-store 读取结果落到注册状态的公共尾段：文件有而注册集没有的 id 标删除态。 */
+/**
+ * 把 config-store 读取结果落到注册状态的公共尾段：文件有而注册集没有的 id 标删除态。
+ *
+ * 删除态与链内计数同步收口（failures 生命周期 = 活跃重试链）：路由已不在配置 = 它的
+ * 链不可能还有活性——残留计数（≥ maxRetries 时）会把同 id 重建后的账户类 fail-fast
+ * 误判「预算用尽」→ 误 burnt + 向候选静默漂移。absent（配置文件消失）语义 = 全集
+ * vanished（fileIds 传空集），删除态与计数一并退役。
+ */
 function markVanishedIds(state: AggregationState, fileIds: ReadonlySet<string>): void {
 	for (const id of state.registeredIds) {
-		if (!fileIds.has(id)) state.deletedIds.add(id)
+		if (!fileIds.has(id)) {
+			state.deletedIds.add(id)
+			state.failures.delete(id)
+		}
 	}
 }
 
@@ -209,7 +225,7 @@ function applyReadResult(
 		return
 	}
 	if (read.status === "absent") {
-		for (const id of state.registeredIds) state.deletedIds.add(id)
+		markVanishedIds(state, new Set()) // 文件消失 = 全集 vanished：删除态 + 链内计数一并退役
 		return
 	}
 	registerRouteDefinitions(pi, state, reader, quotaReader, read.file.routes, resolveContextWindow)
@@ -230,7 +246,7 @@ function reconcileRegisteredOnly(pi: ExtensionAPI, state: AggregationState, read
 		return
 	}
 	if (read.status === "absent") {
-		for (const id of state.registeredIds) state.deletedIds.add(id)
+		markVanishedIds(state, new Set()) // 文件消失 = 全集 vanished：删除态 + 链内计数一并退役
 		return
 	}
 	const registeredRoutes = read.file.routes.filter(route => state.registeredIds.has(route.id))
@@ -238,7 +254,7 @@ function reconcileRegisteredOnly(pi: ExtensionAPI, state: AggregationState, read
 	markVanishedIds(state, new Set(read.file.routes.map(r => r.id)))
 }
 
-/** pi 的重试预算默认值（锚 pi 实装 settings-manager.js getRetrySettings：`retry?.maxRetries ?? 3`）。 */
+/** pi 的重试预算默认值（锚 pi 实装 settings-manager.js:659-666 getRetrySettings 实装核实：:662 `retry?.maxRetries ?? 3`；同族 enabled 缺省 true 见 :648-650 `retry?.enabled ?? true`）。 */
 const DEFAULT_MAX_RETRIES = 3
 
 /**
@@ -408,7 +424,7 @@ function evaluateAndRoute(
 		// 不计数则预算漏记，终局观察误判 fail-fast → failover 晚一整轮（修剪发现 P2）
 		if (failedRequest !== undefined) bumpChainFailure(state, routeId, memberRef(member))
 		// burnt 集变化才写 router state（同引用 / undefined = pi 不落 virtual-model-state
-		// 条目——agent-session.js：route.state !== undefined && !== state 才 append）。
+		// 条目——agent-session.js:460-465：route.state !== undefined && !== state 才 append）。
 		// 写回前裁剪到当前配置成员：手改 / fork 注入的非配置 ref 不随每次写回放大携带
 		// （修剪发现 P4；无裁剪时 pruneBurntToConfig 原引用返回，守住引用比较纪律）。
 		const nextBurnt = pruneBurntToConfig(decision.burnt, route)
@@ -450,6 +466,11 @@ export default function providerAggregation(pi: ExtensionAPI, options?: { config
 	pi.on("session_start", async (_event, sessionCtx) => {
 		try {
 			applyReadResult(pi, state, reader, quotaReader, reader.readLatest(), route => resolveContextWindowFromDirectory(sessionCtx.modelRegistry, route))
+			// session 维度收口：failures 生命周期 = 活跃重试链——新 session 不存在跨会话的
+			// 活链，上一会话残留计数（≥ maxRetries 时）会把新会话一次账户类 fail-fast 误判
+			// 「预算用尽」→ 误 burnt，软避让跨轮次持续。整表清零使字段注释与实现一致
+			// （burnt 不走闭包——持久化在 router state 随请求往返，不受此影响）。
+			state.failures.clear()
 		} catch (err) {
 			logger.error(`session-start aggregation reconcile failed: ${err instanceof Error ? err.message : String(err)}`)
 		}
