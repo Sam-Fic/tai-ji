@@ -291,8 +291,10 @@ function coverageOf(segments: string[], path: string): Coverage {
   let prefix = ''
   for (let k = 0; k < segments.length; k += 1) {
     prefix = k === 0 ? segments[0]! : prefix + '/' + segments[k]!
-    self.push(path === prefix)
-    ancestor.push(path.startsWith(prefix + '/'))
+    // 免拼接判据：path === prefix ⟔ 等长且 startsWith；path.startsWith(prefix + '/') ⟔ startsWith 且下一字符为 '/'
+    const starts = path.startsWith(prefix)
+    self.push(starts && path.length === prefix.length)
+    ancestor.push(starts && path.length > prefix.length && path.charCodeAt(prefix.length) === 47 /* '/' */)
   }
   return { self, ancestor }
 }
