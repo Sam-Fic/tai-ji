@@ -42,7 +42,7 @@ const rt = await connectRuntime(dataDir)
 const cdp = await connectRendererCdp(Number(arg('cdp-port', '9478')))
 console.log('[probe] connected runtime + renderer CDP')
 await cdp.send('Runtime.enable')
-await ensureGuiOnSession(cdp, sid, arg('label', ''))
+await ensureGuiOnSession(cdp, sid)
 
 // DOM 提取：每个 .md-codeblock → lang 标签 + data-code（base64 源码）+ pre.shiki outerHTML
 // worker 高亮异步回填：轮询等 pre.shiki 出现（消息 complete 时 worker 可能在途），
