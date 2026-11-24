@@ -146,7 +146,7 @@ export async function collectConsoleMessages (cdp) {
 // [data-session-id] 仍指旧 session）。若 GUI 不在目标 session，目标 session 的流式不渲染
 // 进任何可见窗 ⇒ 族成本 0 ⇒ 与「优化生效」产出同一行 RESULT PASS。
 // 判据 = DOM 事实，不靠时间推测。
-export async function ensureGuiOnSession (cdp, sid, label) {
+export async function ensureGuiOnSession (cdp, sid) {
   const guiSid = () => cdp.send('Runtime.evaluate', {
     expression: `document.querySelector('[data-session-id]')?.getAttribute('data-session-id') || ''`,
     returnByValue: true,
@@ -164,12 +164,10 @@ export async function ensureGuiOnSession (cdp, sid, label) {
   // 侧栏项文本是「项目名 + 时间」不含 sid，按 sid 匹配恒失败，故不能按 sid 找项。
   if (active !== sid) {
     console.log(`[probe] RPC 切换未生效（当前 ${active || '<空>'}），改走侧栏点击`)
-    // 有 label 时按 label 文本匹配（侧栏项 = 「项目名/标签 + 时间」，不含 sid）；
-    // 无 label 退化为首项（旧行为）。并行验收多 session 同名时必须传 label。
-    const clickExpr = label
-      ? `(() => { const items = [...document.querySelectorAll('.session-item')]; const t = items.find((i) => i.textContent.includes(${JSON.stringify(label)})); if (t) { t.click(); return 'label' } return items[0] ? (items[0].click(), 'first') : 'none' })()`
-      : `(() => { const items = [...document.querySelectorAll('.session-item')]; if (items[0]) { items[0].click(); return 'first' } return 'none' })()`
-    await cdp.send('Runtime.evaluate', { expression: clickExpr, returnByValue: true })
+    await cdp.send('Runtime.evaluate', {
+      expression: `(() => { const items = [...document.querySelectorAll('.session-item')]; if (items[0]) items[0].click(); return items.length })()`,
+      returnByValue: true,
+    })
     for (let i = 0; i < 40; i++) {
       active = await guiSid()
       if (active === sid) break
