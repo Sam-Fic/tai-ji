@@ -74,11 +74,8 @@ console.log(`[probe] file.tree nodes=${nodes.length} compile-lines-delta=${after
 // 已知形态断言（与真实 .gitignore 规则对应；只断言确定存在的节点，缺失记 NOTE 不判失败）
 // 必在场且 ignored：node_modules（简单名非 dirOnly——目录自身即命中）
 const REQUIRED_IGNORED = ['node_modules']
-// 存在则须 ignored：apps/electron/resources（多段锚定 apps/electron/resources/）
-const OPTIONAL_IGNORED: Array<[string, string]> = [['apps', 'electron/resources']]
 // 必在场且不 ignored
 const REQUIRED_VISIBLE = ['apps', 'packages', 'probes', 'extensions', 'docs', 'scripts']
-// 存在则须不 ignored
 const OPTIONAL_VISIBLE = ['src', 'e2e', 'configs', 'test-guard', 'taste-lint']
 
 const byName = new Map(nodes.map((n) => [n.name, n]))
@@ -98,15 +95,28 @@ for (const name of OPTIONAL_VISIBLE) {
   if (!node) { console.log(`[probe] NOTE ${name} 不在仓库根（跳过）`); continue }
   if (node.ignored === true) { console.log(`[probe] MISMATCH ${name} 不应 ignored 实为 true`); mismatches++ }
 }
-// 二层抽样式断言：apps 下 electron（可见）与其下 resources（ignored，多段锚定）
+// 二层抽样式断言：apps 下 electron（可见）；apps/electron/resources/ 的多段锚定 dirOnly 规则在 walk 侧（file.search）验证
 const apps = byName.get('apps')
 if (apps?.children) {
   const electron = apps.children.find((c) => c.name === 'electron')
   if (!electron || electron.ignored === true) { console.log('[probe] MISMATCH apps/electron 应可见'); mismatches++ }
-  const resources = electron?.children?.find((c) => c.name === 'resources')
-  if (!resources || resources.ignored !== true) { console.log('[probe] MISMATCH apps/electron/resources 应 ignored（多段锚定 apps/electron/resources/）'); mismatches++ }
+  // apps/electron/resources 是第 3 层（listTree 仅展开顶层目录一层），其多段锚定 dirOnly 规则的语义在下方 walk 侧验证
 } else {
   console.log('[probe] NOTE apps 无 children（listTree 仅两层；二层断言跳过——不判失败）')
+}
+// walk 侧（file.search 全量递归，默认隐藏 ignored）：多段锚定 dirOnly 规则须让 apps/electron/resources/ 下内容消失，
+// node_modules/ 下内容消失，而未 ignored 的文件在场
+const search = await rt.call('file.search', { sessionId: sid }, 120_000).catch((e) => ({ error: String(e) }))
+const files = Array.isArray(search) ? search : search?.files ?? []
+if (files.length === 0) { console.log('[probe] MISMATCH file.search 无结果（walk 不可用）'); mismatches++ }
+else {
+  const paths = new Set(files.map((f) => f.path))
+  const leaked = [...paths].filter((p) => p.startsWith('apps/electron/resources/') || p.startsWith('node_modules/'))
+  if (leaked.length > 0) { console.log(`[probe] MISMATCH file.search 泄漏 ignored 路径 ${leaked.length} 条（如 ${leaked[0]}）`); mismatches++ }
+  for (const must of ['apps/electron/package.json', 'packages/runtime/src/index.ts']) {
+    if (!paths.has(must)) { console.log(`[probe] MISMATCH file.search 缺未 ignored 文件 ${must}（截断或语义漂移）`); mismatches++ }
+  }
+  console.log(`[probe] file.search files=${files.length}（ignored 泄漏 ${leaked.length}，在场抽查 2 条）`)
 }
 // dirOnly 语义（既有行为，快路径等价保持）：.run 目录自身不标记、其内容标记
 const runDir = byName.get('.run')

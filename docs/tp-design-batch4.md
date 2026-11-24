@@ -43,10 +43,10 @@ GLM 对抗审查指出数据里两个未入榜的用户可感知项（S6/A4③/F
 
 | 枝名 | 目标 | 依赖 | 风险级 | 文件 | case |
 |---|---|---|---|---|---|
-| B-prompt-path | G1/G2：matchPath 段级快路径（字面量 / 单星号无斜杠 / `**/字面量` 三形态）+ oracle 等价测试 + 裁决注释实测数据更新 + 匹配成本基准探针 | trunk | 高 | packages/runtime/src/infra/fs/ignore-parser.ts, packages/runtime/test/domains-bundle.test.ts, packages/runtime/src/services/file-service.ts, probes/perf-ignore-match.mjs | T2 |
-| B-cold-start | G3：冷启动根因结论（dev jiti TS 加载 5.1x；taiji 侧不可优化理由链）——无代码改动，结论落设计文档 + 对比表 | trunk | 中（结论风险） | docs/tp-design-batch4.md, probes/perf-pi-coldstart.mjs, docs/perf/batch4-comparison.md | T3 |
+| B-prompt-path | G1/G2：matchPath 段级快路径（字面量 / 单星号无斜杠 / `**/字面量` 三形态）+ oracle 等价测试（含修剪 P1 连续斜杠回归）+ 裁决注释实测数据更新 + 匹配成本基准探针 + 属性式模糊对拍探针（修剪 card-04/05 证据，随交付入库） | trunk | 高 | packages/runtime/src/infra/fs/ignore-parser.ts, packages/runtime/test/domains-bundle.test.ts, packages/runtime/src/services/file-service.ts, probes/perf-ignore-match.mjs, probes/ignore-match-fuzz.mjs, probes/tree-flags-probe.mjs, docs/tp-design-batch4.md, docs/tp-fact-check-batch4.md, docs/tp-acceptance-batch4.md | T2,T4,T5 |
+| B-cold-start | G3：冷启动根因结论（dev jiti TS 加载 5.1x；taiji 侧不可优化理由链）——无代码改动，结论落设计文档 + 对比表 | trunk | 中（结论风险） | docs/tp-design-batch4.md, probes/perf-pi-coldstart.mjs, docs/perf/batch4-comparison.md | T3,T6 |
 
-> 范围注记：B-prompt-path 不触碰 file-service 的 walk 结构（searchFilesInCwd 的递归/并发/截断语义）与 loadMatcher 的无缓存直读裁决——快路径是 ignore-parser.ts 内的纯计算替换；file-service.ts 的改动仅「裁决注释补实测数据」（编译成本量级、在途合并不适用的理由），零行为变更。渲染侧候选方案（空会话跳过白名单加载）经评估不采纳：history 加载与 watch(sessionId) 存在竞态，「会话有无消息」无同步可靠信号，误跳转会导致切会话时路径链接化闪烁——理由登记进设计文档「显式不做」。
+> 范围注记：B-prompt-path 不触碰 file-service 的 walk 结构（searchFilesInCwd 的递归/并发/截断语义）与 loadMatcher 的无缓存直读裁决——快路径是 ignore-parser.ts 内的纯计算替换；file-service.ts 的改动仅「裁决注释补实测数据」（编译成本量级、在途合并不适用的理由），零行为变更。docs/tp-design-batch4.md 与 docs/tp-fact-check-batch4.md 在本枝的改动 = 修剪 P1（连续斜杠 coverage 怪癖）的发现登记与本枝范围声明本身（自指登记，审计入口 = git log <trunk commit>..本枝 commit）；docs/tp-acceptance-batch4.md 与 probes/tree-flags-probe.mjs 的改动 = 本枝首次 gate 暴露的验收资产缺陷修正（命令列反引号被 sh 当命令替换执行；探针误用 TS 类型注解 + dirOnly 目录自身预期写反 + listTree 层级误判）——验收资产正确性修正，非交付物行为变更。渲染侧候选方案（空会话跳过白名单加载）经评估不采纳：history 加载与 watch(sessionId) 存在竞态，「会话有无消息」无同步可靠信号，误跳转会导致切会话时路径链接化闪烁——理由登记进设计文档「显式不做」。
 
 ## 方案要点（每枝）
 
@@ -58,7 +58,8 @@ GLM 对抗审查指出数据里两个未入榜的用户可感知项（S6/A4③/F
   3. **`**/字面量`**（含 `/**/字面量`）：regex `^(?:.*/)?L$` 的 `^` 被 `(?:.*/)?` 吸收 ⇒ 与非锚定字面量等价（gitignore 文档明示 `**/foo` ≡ `foo`）；rest 含 '/'（如 `**/foo/bar`，末两段匹配）不快路径化。
   - 保守排除（恒走 regex）：多星号、星号两侧含 '/'、`**` 跨目录、`?` 通配、空 pattern、含反斜杠 pattern。
 - **语义逐字节等价（本枝的第一风险）**：规则扫描序 + last-match-wins、coverage 判据（isSelf / isAncestorDir / dirOnly 不匹配同名文件）、normalizePath 反斜杠归一（含反斜杠 pattern 两侧都永不命中）、元字符字面量与历史怪癖（`a(b|c)+^d${e}\f` 不自匹配——锚定测试在册）全部不变。等价性由 **oracle 测试**锁定：改造前算法原样内联作 oracle，合成规则语料（形态空间全覆盖）× 合成路径语料（确定性生成）+ 仓库真实 .gitignore 全量快照（82 条）× 合成路径，全交叉断言；另加「覆盖度自检」（真实 .gitignore 的 76/82 条须进快路径，防优化空转）。
-- **收益实测**（`probes/perf-ignore-match.mjs`，真实语料 6960 路径）：见对比表——改造前 229ms/轮 → 优化后 ~86ms/轮（约 2.7x），全树 walk 的匹配成本占比约 67%，walk 总墙钟（worktree cwd 实测 341ms）相应下降。
+- **[修剪 P1 已修] 连续斜杠路径的 coverage 怪癖**：旧算法的前缀是折叠空段后的 join（`'a//b'` → 前缀 `'a/b'`），而 coverage 判据 `path.startsWith(prefix + '/')` 对**原始归一化路径**判——`'a//b'.startsWith('a/b/')` 为 false ⇒ 命中段落在 `//` 之后的规则（如 `b`）旧算法判不命中。初版快路径按段成员判定会误判 true（修剪模糊探针 16000 例抓到 13 例）。修正：coverage 一律按调用预计算、对原始路径判（`coverageOf`），与 regex 路径逐字节一致。回归锁定：oracle 套件「连续斜杠 × 单规则集」定点用例 + 属性式模糊对拍探针（`probes/ignore-match-fuzz.mjs`，随机规则集 × 随机路径，10 种子 × 32000 例零分歧）。
+- **收益实测**（`probes/perf-ignore-match.mjs`，真实语料 6969 路径）：见对比表——改造前 regex 逐前缀 vs 现行快路径，同语料同时段计时，加速比 **2.05–3.83x（随机器负载 8–27 波动；安静窗 467ms→122ms = 3.83x）**；绝对毫秒数受负载放大，结论取比率。全树 walk 的匹配成本占比约 67%，walk 总墙钟相应下降。
 - **file-service.ts 裁决注释更新**：原注释（U1 1-2 裁决）称「读盘编译微秒-毫秒级」——本批补实测数据（单次读+编译亚毫秒级；双请求双编译非并发、在途合并不适用；真正的 prompt 窗口成本是全树 walk 的 matchPath，已由快路径缓解）。**不恢复任何缓存**（G2）。
 
 **B-cold-start（诊断结论，无代码改动）**：

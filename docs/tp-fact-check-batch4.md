@@ -10,7 +10,7 @@
 | F2 | 两次 .gitignore 编译的触发源 = 渲染侧会话挂载（file.tree 来自 FileView；file.search 来自 useChatViewDeps） | 事实 | watch sessionId 即发两请求。源码 packages/renderer/src/components/sidebar/FileView.vue:273 与 packages/renderer/src/composables/panel/useChatViewDeps.ts:154 ，runtime handler packages/runtime/src/transport/file-message-handler.ts:77 |
 | F3 | 激活时两次编译相隔约 53ms（非并发，在途合并不适用） | 事实 | dev 实例 runtime 日志两条 gitignore 编译行 07:51:48.934 与 07:51:48.987 ；打点源 packages/runtime/src/services/file-service.ts:540 |
 | F4 | 单次 compileIgnoreRules 约 0.178ms（82 规则），重复编译本身可忽略 | 事实 | 本 session 复跑 hrtime 7 乘 100 取中位数得 0.178 ms 每次；被测函数在 packages/runtime/src/infra/fs/ignore-parser.ts |
-| F5 | matchPath 成本：改造前 226.3ms 每轮降到快路径 80.2ms 每轮（2.82 倍），6961 条真实路径零分歧 | 事实 | 探针末行 RESULT old-ms=226.3 new-ms=80.2 speedup=2.82 calls=6961 ，前置门 equivalence OK 6961 paths 0 mismatch。探针 probes/perf-ignore-match.mjs |
+| F5 | matchPath 成本：改造前 regex 逐前缀 vs 现行快路径，同语料（6969 条真实路径零分歧）同时段计时，加速比 2.05 到 3.83 倍随机器负载 8 到 27 波动，安静窗 467ms 降到 122ms 为 3.83 倍 | 事实 | 探针末行 RESULT speedup 在 2.05 与 3.83 之间（三轮，本 session 复跑），前置门 equivalence OK 6969 paths 0 mismatch。探针 probes/perf-ignore-match.mjs |
 | F6 | TTFT 实测：warm 47-65ms，walk 并发 file.tree 加 file.search 时 40-65ms，fresh 新建会话 GUI 流 87-227ms，walk 与 warm 地板无统计差异 | 事实 | 探针三模式 RESULT 行（dev 实例加 faux 200TPS，本批基线采集）。探针 probes/perf-ttft.mjs |
 | F7 | 机制压测：prompt 在途时并发 12 个全树 walk，TTFT 劣化至 896ms（机制存在但真实负载不触达） | 事实 | 探针 walk 模式 stress 12 单轮得 ttft=896ms submit-rtt=276ms gitignore-compiles=14 。探针 probes/perf-ttft.mjs |
 | F8 | 冷启动模块数：dev 源码集 1769 个 jiti 模块且 100% fsCache 命中零转译，packaged bundle 集 59 个（30 倍差距） | 事实 | JITI_DEBUG=1 直 spawn pi 计数得 dev cache hit 1769 miss 0 与 pkg cache hit 59 miss 0 ；spawn 形态依据 packages/runtime/src/infra/installers/extension-resolver.ts:209 |
@@ -19,7 +19,7 @@
 | F11 | dev 传源码目录，packaged 传 staged bundle（esbuild 自包含 index.js） | 事实 | scanBundledExtensions 双分支及历史三阶段记录。源码 packages/runtime/src/infra/installers/extension-resolver.ts:209 ；dev-instance 启动日志 argv 实证 |
 | F12 | warmup-pi-slot 消费驱动，只服务冷切与崩溃恢复的会话切换，对全新 session 首 prompt 无命中路径 | 事实 | 头部注释记载补位等于失败即空槽加消费驱动、冷启动恒空。源码 packages/runtime/src/services/session/warmup-pi-slot.ts:5 |
 | F13 | dirOnly 规则不标记目录自身（.run 目录自身无 ignored 标记但其内容有），快路径必须保持 | 事实 | 既有测试 dirOnly 套件含 does not match a file named like the dir ；判据源 ruleMatchesPath 的 dirOnly 分支。源码 packages/runtime/test/domains-bundle.test.ts:6598 与 packages/runtime/src/infra/fs/ignore-parser.ts:216 |
-| F14 | 快路径语义等价，含历史怪癖（a 括号 b 竖线 c 等 pattern 不自匹配）与反斜杠 pattern 永不命中，覆盖度 76/82 | 事实 | B4 oracle 套件 4 例全过，bench 前置门 6961 路径零分歧。源码 packages/runtime/test/domains-bundle.test.ts:6817 与 probes/perf-ignore-match.mjs |
+| F14 | 快路径语义等价，含历史怪癖（a 括号 b 竖线 c 等 pattern 不自匹配）、反斜杠 pattern 永不命中、连续斜杠路径的 coverage 错位（命中段在双斜杠之后时判 false），覆盖度 76/82 | 事实 | B4 oracle 套件 5 例全过（含修剪 P1 连续斜杠回归），bench 前置门 6969 路径零分歧，属性式模糊对拍 10 种子乘 32000 例零分歧。源码 packages/runtime/test/domains-bundle.test.ts 与 probes/ignore-match-fuzz.mjs |
 | F15 | dev spawn 23 扩展等于 22 mandatory 加 1 faux fixture，prod staged 22 bundle | 事实 | mandatory 清单 22 条。源码 packages/shared/src/mandatory-extensions.json ；dev-instance 日志 argv 与 apps/electron/resources/extensions/@zhushanwen 实测 |
 | F16 | 冷启动墙钟随负载大幅波动，dev quiet 6.2-6.7s 与 loaded 23.2s，pkg 2.3-6.8s | 事实 | 探针多轮（本日 load 8 至 17 两档各 3 轮）加 JITI_DEBUG 计数运行。探针 probes/perf-pi-coldstart.mjs |
 | X1 | 审查 S9 的 walk 0.9s 阻塞首 token 转发主张 | 虚构 | 作废：F6 与 F7 实测证伪，真实负载 40-65ms 等同 warm 地板 47-65ms，仅 12 路并发压测下劣化。该主张降级为机制存在但真实负载不触达，不作为设计依据，依赖它的缓存与时间窗类防阻塞分支全部删除 |
