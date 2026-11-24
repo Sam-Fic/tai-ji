@@ -42,21 +42,27 @@ const rt = await connectRuntime(dataDir)
 const cdp = await connectRendererCdp(Number(arg('cdp-port', '9478')))
 console.log('[probe] connected runtime + renderer CDP')
 await cdp.send('Runtime.enable')
-await ensureGuiOnSession(cdp, sid)
+await ensureGuiOnSession(cdp, sid, arg('label', ''))
 
 // DOM 提取：每个 .md-codeblock → lang 标签 + data-code（base64 源码）+ pre.shiki outerHTML
-const extracted = await cdp.send('Runtime.evaluate', {
-  expression: `JSON.stringify([...document.querySelectorAll('.md-codeblock')].map((el) => ({
-    lang: el.querySelector('.md-codeblock__lang')?.textContent ?? '',
-    dataCode: el.querySelector('.md-codeblock__copy')?.getAttribute('data-code') ?? '',
-    preHtml: el.querySelector('pre.shiki')?.outerHTML ?? null,
-  })))`,
-  returnByValue: true,
-})
-const blocks = JSON.parse(extracted.result?.value ?? '[]')
+// worker 高亮异步回填：轮询等 pre.shiki 出现（消息 complete 时 worker 可能在途），
+// 上限 30s（事件驱动轮询微任务 + 墙钟混合，非固定 sleep）。
+const EXTRACT_EXPR = `JSON.stringify([...document.querySelectorAll('.md-codeblock')].map((el) => ({
+  lang: el.querySelector('.md-codeblock__lang')?.textContent ?? '',
+  dataCode: el.querySelector('.md-codeblock__copy')?.getAttribute('data-code') ?? '',
+  preHtml: el.querySelector('pre.shiki')?.outerHTML ?? null,
+})))`
+let blocks = []
+const deadline = Date.now() + 30_000
+while (Date.now() < deadline) {
+  const extracted = await cdp.send('Runtime.evaluate', { expression: EXTRACT_EXPR, returnByValue: true })
+  blocks = JSON.parse(extracted.result?.value ?? '[]')
+  if (blocks.length > 0 && blocks.every((b) => b.preHtml)) break
+  await new Promise((r) => setTimeout(r, 500))
+}
 cdp.close()
 rt.ws.close()
-console.log(`[probe] extracted ${blocks.length} codeblock(s) from DOM`)
+console.log(`[probe] extracted ${blocks.length} codeblock(s) from DOM (highlighted: ${blocks.filter((b) => b.preHtml).length})`)
 
 if (blocks.length === 0) {
   console.error('[probe] DOM 无 .md-codeblock——消息未完成或未渲染，弃测')
