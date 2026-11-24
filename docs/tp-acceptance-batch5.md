@@ -19,6 +19,7 @@
 | F2 | fixture 形态 2：工具调用（5 轮 toolUse + 7 次 bash + 收尾，38K 字符） | node probes/perf-clean-cpu.mjs --data-dir ~/.taiji-dev/verify-b5-final --cdp-port 9488 --fixture probes/fixtures/tool-calls.json --tag form-tools --window-ms 200000 | exit:0;contains:RESULT clean-cpu tag=form-tools;contains:profiles=3;contains:completes=1/1 | B-fixture-forms |
 | F3 | fixture 形态 3：重 thinking（24K 思考 + 22K 正文，模型 faux/faux-1-reasoning） | node probes/perf-clean-cpu.mjs --data-dir ~/.taiji-dev/verify-b5-final --cdp-port 9488 --fixture probes/fixtures/heavy-thinking.json --tag form-thinking --model faux/faux-1-reasoning --window-ms 200000 | exit:0;contains:RESULT clean-cpu tag=form-thinking;contains:profiles=3;contains:completes=1/1 | B-fixture-forms |
 | P1 | pi 置换位三核对恢复（Mach-O 形态 + 无残留 .b5-bak + md5 为一串十六进制） | node probes/perf-clean-cpu.mjs --verify-pi-only | exit:0;contains:RESULT pi-restore ok=true;contains:backup-present=false;contains:macho=true | trunk |
+| R1 | 终版报告对账：结构章节齐全 + 报告数字与 `cpu-analysis.txt`/`gpu-analysis.txt` 双向成对一致 + GPU 裁决方向与测量方向一致 + 归档索引可达 | node probes/check-final-reports.mjs | exit:0;contains:RESULT final-reports ok=true;not-contains:✗ | B-final-report |
 
 > **case 拆分为何不链式**：单命令超 gate 单 case 900s 超时（spawnSync 杀 sh 后 node 孙进程孤儿挂住输出管道）——M/G/F 各自独立成 case，实例由前置命令准备。
 >
