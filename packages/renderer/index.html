@@ -26,8 +26,15 @@
        frame-src 检查——预览文档自发起的自导航（meta-refresh / location.href 跳远程）
        同样被拦（探针 P-1 实证）。
        依据 dev 实测（W2 门）+ 打包态实测（S3）：round1 违规 ws://localhost:3310（dev）、
-       data:font/woff2（打包），逐一最小增量补齐后双态零违规。 -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: local-file:; font-src 'self' data:; connect-src 'self' ws://localhost:*; media-src 'self' local-file: data:; frame-src 'self' local-file:" />
+       data:font/woff2（打包），逐一最小增量补齐后双态零违规。
+       worker-src 'self'（批3 B-csp，fence 闭合 shiki 高亮 Worker 化）：worker 脚本与
+       页面脚本同源（dev = vite dev-server 同源；打包 = file:// 同源 asset，Chromium 对
+       file: 源按 scheme+host+port 匹配 'self'——probes/csp-worker-probe.cjs 双形态实测）。
+       无该指令时按回退链落 script-src 'self' 亦可建 worker，显式登记把「worker 脚本与
+       脚本同源策略」变成显式决策，防未来收紧 script-src 时静默断裂（设计文档
+       docs/tp-design-batch3.md「CSP 一次性评估」节）。blob: 不放行：无 blob worker
+       使用方，实测当前策略下 blob worker 被拦（error 事件 → 降级主线程同步高亮）。 -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: local-file:; font-src 'self' data:; connect-src 'self' ws://localhost:*; media-src 'self' local-file: data:; frame-src 'self' local-file:" />
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TaiJi</title>
