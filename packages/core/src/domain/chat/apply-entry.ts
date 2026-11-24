@@ -64,6 +64,7 @@ import type {
   PiCompactionEntry,
   PiCustomMessageEntry,
   PiEntry,
+  PiModelChangeEntry,
   PiEntryBase,
   PiMessageBody,
   PiMessageEntry,
@@ -81,8 +82,7 @@ import type { PiToolResultBody } from './apply-entry-utils'
 // 方向的归属地。类型定义与注释见 @taiji/shared/pi-entry.ts。
 //
 // 与 runtime infra/pi/pi-protocol.ts 的 PiSessionEntry 结构兼容（TS 结构类型，runtime 侧
-// 无需 import 本文件类型即可喂入）。pi 还有 thinking_level_change / model_change /
-// session_info 三个 entry 类型，taiji 未建模——reducer 对未建模 type 走 default no-op
+// 无需 import 本文件类型即可喂入）。pi 还有 thinking_level_change / session_info 两个 entry 类型，taiji 未建模——reducer 对未建模 type 走 default no-op
 // （不丢弃 entry 语义 = 不崩溃不吞整个重放，见 default 分支注释）。
 //
 // id 可选的原因：pi 真实 entry 恒有 id（uuidv7）；wire 层 lift 无真实 entry id 的伪消息
@@ -98,6 +98,7 @@ export type {
   PiLabelEntry,
   PiCompactionEntry,
   PiBranchSummaryEntry,
+  PiModelChangeEntry,
   PiCustomMessageEntry,
 } from '@taiji/shared'
 
@@ -133,6 +134,12 @@ export interface ChatViewState {
    * pi 文件每 toolResult 只存一份 entry，簿记对重放路径无行为影响。
    */
   deliveredToolResultIds: Set<string>
+  /**
+   * 最近一条 model_change 记录的生效模型（模型切换行的基线）。
+   * 首个记录只写基线不出行；后续记录与它相同 → 不出行，不同 → 出行并更新基线。
+   * 可选：会话从未记录过模型时不存在（旧会话 / 只跑过默认模型）。
+   */
+  lastModel?: { provider: string; modelId: string }
   /**
    * reducer 簿记：最近一条带 toolCalls 的消息在 messages 中的下标（-1 = 无）。
    * toolResult 窗口局部配对的查找锚点（迁移前 convertPiHistory 同名局部变量语义）。
@@ -187,6 +194,10 @@ interface ChatStateCollector {
   recordDeliveredToolResult(toolCallId: string): void
   /** 追加的 assistant 消息带非空 toolCalls 时更新配对锚点下标 */
   markLastAssistantWithToolCalls(index: number): void
+  /** 最近一条 model_change 记录的生效模型（模型切换行的基线） */
+  lastModel(): ChatViewState['lastModel']
+  /** 记下最新的 model_change 生效模型 */
+  setLastModel(model: { provider: string; modelId: string }): void
   /** fold 终点：当前累积态（copy-on-write = 链末端引用；mutable = 内部容器组装） */
   snapshot(): ChatViewState
 }
@@ -228,6 +239,12 @@ function createCopyOnWriteCollector(state: ChatViewState): ChatStateCollector {
     markLastAssistantWithToolCalls(index) {
       commit({ lastAssistantWithToolCalls: index })
     },
+    lastModel() {
+      return cur.lastModel
+    },
+    setLastModel(model) {
+      commit({ lastModel: model })
+    },
     snapshot() {
       return cur
     },
@@ -246,6 +263,7 @@ function createMutableCollector(initial: ChatViewState): ChatStateCollector {
   const orphanToolResults = [...initial.orphanToolResults]
   const deliveredToolResultIds = new Set(initial.deliveredToolResultIds)
   let lastAssistantWithToolCalls = initial.lastAssistantWithToolCalls
+  let lastModel = initial.lastModel
   return {
     get messageCount() {
       return messages.length
@@ -272,12 +290,19 @@ function createMutableCollector(initial: ChatViewState): ChatStateCollector {
     markLastAssistantWithToolCalls(index) {
       lastAssistantWithToolCalls = index
     },
+    lastModel() {
+      return lastModel
+    },
+    setLastModel(model) {
+      lastModel = model
+    },
     snapshot() {
       return {
         messages,
         orphanToolResults,
         deliveredToolResultIds,
         lastAssistantWithToolCalls,
+        ...(lastModel !== undefined && { lastModel }),
       }
     },
   }
@@ -321,6 +346,7 @@ export function createChatViewStateBuffer(initial?: ChatViewState): ChatViewStat
     orphanToolResults,
     deliveredToolResultIds,
     lastAssistantWithToolCalls: initial?.lastAssistantWithToolCalls ?? -1,
+    ...(initial?.lastModel !== undefined && { lastModel: initial.lastModel }),
   }
   const collector: ChatStateCollector = {
     get messageCount() {
@@ -349,12 +375,19 @@ export function createChatViewStateBuffer(initial?: ChatViewState): ChatViewStat
     markLastAssistantWithToolCalls(index) {
       state.lastAssistantWithToolCalls = index
     },
+    lastModel() {
+      return state.lastModel
+    },
+    setLastModel(model) {
+      state.lastModel = model
+    },
     snapshot() {
       return {
         messages: [...messages],
         orphanToolResults: [...orphanToolResults],
         deliveredToolResultIds: new Set(deliveredToolResultIds),
         lastAssistantWithToolCalls: state.lastAssistantWithToolCalls,
+        ...(state.lastModel !== undefined && { lastModel: state.lastModel }),
       }
     },
   }
@@ -498,6 +531,29 @@ function deriveBranchSummaryRoleMessage(body: PiMessageBody, baseId: string, fal
     typeof body.summary === 'string' ? body.summary : undefined,
     typeof body.fromId === 'string' ? body.fromId : undefined,
   )
+}
+
+/** model_change entry 的派生段：模型真实变化 → system 行（模型切换行，SystemNotice 横线分隔行族）。 */
+function deriveModelSwitchEntryMessage(
+  entry: PiModelChangeEntry,
+  previous: { provider: string; modelId: string },
+  provider: string,
+  modelId: string,
+  baseId: string,
+): Message {
+  return {
+    id: baseId,
+    role: 'system',
+    status: 'complete',
+    timestamp: toMs(entry.timestamp),
+    content: `${previous.modelId} → ${modelId}`,
+    modelSwitch: {
+      modelId,
+      ...(provider !== '' && { provider }),
+      ...(previous.modelId !== '' && { previousModelId: previous.modelId }),
+      ...(previous.provider !== '' && { previousProvider: previous.provider }),
+    },
+  }
 }
 
 /** compaction entry 的派生段：pi 压缩记录 → system 消息 + compactionSummary 字段（SystemNotice「上下文已压缩」）。 */
@@ -667,7 +723,7 @@ function dispatchMessageEntry(c: ChatStateCollector, entry: PiMessageEntry): voi
  * case 覆盖（pi SessionEntry 全集）：message（role 细分 user/assistant/toolResult/
  * bashExecution/compactionSummary/custom/branchSummary）/ custom / label / compaction /
  * branch_summary / custom_message / usage / context_edit（后两者零派生视图显式 no-op）；
- * 未建模类型（thinking_level_change / model_change /
+ * 未建模类型（thinking_level_change /
  * session_info / 未来的新类型）走 default no-op——「converter 不丢弃任何 pi entry 类型」
  * （父文档规则 #9）指不崩溃、不中断重放、不静默吞掉后续 entry；元数据类 entry 本身不产出
  * 对话流消息。
@@ -680,6 +736,22 @@ function dispatchEntry(c: ChatStateCollector, entry: PiEntry): void {
     case 'compaction':
       c.appendMessage(deriveCompactionEntryMessage(entry, deriveBaseId(entry, c.messageCount)))
       return
+    case 'model_change': {
+      // 模型切换行（chat-flow-v2）：首个记录只是基线（没有「从什么切到什么」），不出行；
+      // 与上一生效值相同的重复写入不出行（pi 同模型 setModel 也会落 entry）；
+      // 真实变化 → system 行，回放与实时（合成 entry）两路同一派生。
+      const provider = typeof entry.provider === 'string' ? entry.provider : ''
+      const modelId = typeof entry.modelId === 'string' ? entry.modelId : ''
+      if (provider === '' && modelId === '') return
+      const previous = c.lastModel()
+      c.setLastModel({ provider, modelId })
+      if (!previous) return
+      if (previous.provider === provider && previous.modelId === modelId) return
+      c.appendMessage(
+        deriveModelSwitchEntryMessage(entry, previous, provider, modelId, deriveBaseId(entry, c.messageCount)),
+      )
+      return
+    }
     case 'branch_summary':
       c.appendMessage(deriveBranchSummaryEntryMessage(entry, deriveBaseId(entry, c.messageCount)))
       return
@@ -707,7 +779,7 @@ function dispatchEntry(c: ChatStateCollector, entry: PiEntry): void {
       return
     }
     default: {
-      // 未建模 entry 类型（thinking_level_change / model_change / session_info / pi 未来新增）
+      // 未建模 entry 类型（thinking_level_change / session_info / pi 未来新增）
       // → no-op。重放不中断，后续 entry 照常生成派生视图；类型清单见 pi session-manager.ts SessionEntry。
       return
     }

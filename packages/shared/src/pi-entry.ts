@@ -7,8 +7,8 @@
  * 的裁决兑现）。core/apply-entry.ts 改为 re-export 本文件保持 API 兼容。
  *
  * 结构镜像 pi session-manager.ts SessionEntry 联合（TS 结构类型，runtime 侧无需 import 本文件
- * 类型即可喂入 reducer）。pi 还有 thinking_level_change / model_change / session_info 三个 entry
- * 类型，taiji 未建模——reducer 对未建模 type 走 default no-op（不丢弃 entry 语义 = 不崩溃
+ * 类型即可喂入 reducer）。pi 还有 thinking_level_change / session_info 两个 entry 类型
+ * taiji 未建模——reducer 对未建模 type 走 default no-op（不丢弃 entry 语义 = 不崩溃
  * 不吞整个重放，见 apply-entry.ts default 分支注释）。
  *
  * id 可选的原因：pi 真实 entry 恒有 id（uuidv7）；但两个来源无真实 id——
@@ -93,6 +93,15 @@ export interface PiLabelEntry extends PiEntryBase {
   targetId?: string
 }
 
+/** model_change entry（pi `setModel` 的落盘记录）：只带切换后的 provider/modelId，不带来源。
+ *  回放侧由 reducer 派生模型切换行；实时侧同一事实经扩展转发 `model_select`（runtime 帧 →
+ *  合成 entry，见 effects registry），两路喂同一 reducer。 */
+export interface PiModelChangeEntry extends PiEntryBase {
+  type: 'model_change'
+  provider?: string
+  modelId?: string
+}
+
 /** compaction entry（compact 摘要）。summary/tokensBefore 在 pi 是必填，lift 容忍缺失。 */
 export interface PiCompactionEntry extends PiEntryBase {
   type: 'compaction'
@@ -133,9 +142,10 @@ export interface PiContextEditEntry extends PiEntryBase {
   replacement?: unknown
 }
 
-/** reducer 输入的 pi entry 联合（8 个 taiji 建模类型）。 */
+/** reducer 输入的 pi entry 联合（9 个 taiji 建模类型）。 */
 export type PiEntry =
   | PiMessageEntry
+  | PiModelChangeEntry
   | PiCustomEntry
   | PiLabelEntry
   | PiCompactionEntry

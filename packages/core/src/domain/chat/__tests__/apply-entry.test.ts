@@ -1348,12 +1348,12 @@ describe("apply-entry", () => {
     })
 
     // ── 未建模 entry 类型（default no-op，规则 #9 不丢弃）──────────────
-    it('未建模类型 thinking_level_change / model_change / session_info：no-op 不崩溃不产消息', () => {
-      // 这三个类型不在 taiji 建模联合内（pi session-manager.ts SessionEntry 全集成员），
-      // 通过结构形态直接喂入以覆盖 default 分支——reducer 对未建模类型静默跳过且不中断重放
+    it('未建模类型 thinking_level_change / session_info：no-op 不崩溃不产消息', () => {
+      // 这两个类型不在 taiji 建模联合内（pi session-manager.ts SessionEntry 全集成员），
+      // 通过结构形态直接喂入以覆盖 default 分支——reducer 对未建模类型静默跳过且不中断重放。
+      // （model_change 已建模：派生模型切换行，见 apply-entry-model-switch.test.ts。）
       const unmodeled = [
         { type: 'thinking_level_change', id: 't1', parentId: null, timestamp: ISO(1), thinkingLevel: 'high' },
-        { type: 'model_change', id: 't2', parentId: null, timestamp: ISO(2), provider: 'p', modelId: 'm' },
         { type: 'session_info', id: 't3', parentId: null, timestamp: ISO(3), name: 'n' },
         { type: 'future_unknown_type', id: 't4', parentId: null, timestamp: ISO(4) },
       ] as unknown as PiEntry[]
