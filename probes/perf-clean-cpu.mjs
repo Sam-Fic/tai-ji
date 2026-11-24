@@ -42,6 +42,36 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const flags = parseFlags()
 const arg = (n, d) => flags[n] ?? d
 
+const PI_BIN = path.join(REPO_ROOT, 'apps', 'electron', 'resources', 'pi', `pi-${process.platform}-${process.arch}`)
+const PI_BAK = `${PI_BIN}.b5-bak`
+const LAUNCHER = path.join(REPO_ROOT, 'probes', 'pi-profile-launcher.mjs')
+const RENDERER_DIST = path.join(REPO_ROOT, 'apps', 'electron', 'renderer', 'dist')
+
+const md5 = (file) => {
+  const buf = fs.readFileSync(file)
+  return crypto.createHash('md5').update(buf).digest('hex')
+}
+
+// --verify-pi-only 只核对置换位，不需要 --data-dir（也不该被数据目录守卫拦下）。
+// 位置必须在 PI_BIN / PI_BAK / md5 初始化之后（P1 case 依赖它）。
+if (flags['verify-pi-only']) {
+  process.exit(verifyPiRestore() ? 0 : 4)
+}
+
+// ── pi 置换位三核对（P1 case；也在探针首尾各跑一次）──────────────────────────
+function verifyPiRestore () {
+  const bakExists = fs.existsSync(PI_BAK)
+  const binExists = fs.existsSync(PI_BIN)
+  let macho = false
+  if (binExists) {
+    const r = spawnSync('file', ['-b', PI_BIN], { encoding: 'utf8', timeout: 10000 })
+    macho = /Mach-O/.test(r.stdout ?? '')
+  }
+  const ok = !bakExists && binExists && macho
+  console.log(`RESULT pi-restore ok=${ok} md5-match=${binExists ? md5(PI_BIN) : 'n/a'} backup-present=${bakExists} macho=${macho}`)
+  return ok
+}
+
 /** 数据目录：**先判原始值再 resolve**。`path.resolve('')` 返回 cwd（不是空串），
  *  所以 `path.resolve(arg(...))` 之后的 `if (!dataDir)` 恒为假——守卫形同虚设（实测：
  *  不带 --data-dir 时会一路跑到读 cwd/runtime.port 才 ENOENT 崩溃，而不是给可操作提示）。
@@ -72,38 +102,11 @@ const expectCompletes = Number(arg('expect-completes', '1'))
 
 // 值域守卫：研发数据目录（~/.taiji-dev）之内。真实用户数据目录（~/.taiji）与仓库根
 // 一律拒绝——本探针会写 <dataDir>/agent/faux-responses.json（fixture 落盘）。
+// 注意顺序：`--verify-pi-only` 只核对置换位、与本守卫无关，故守卫在它之后执行。
 const DEV_DATA_ROOT = path.join(os.homedir(), '.taiji-dev')
-if (!dataDir.startsWith(DEV_DATA_ROOT + path.sep)) {
+if (!flags['verify-pi-only'] && !dataDir.startsWith(DEV_DATA_ROOT + path.sep)) {
   console.error(`[clean-cpu] 拒绝采集：--data-dir 必须落在 ${path.join('~', '.taiji-dev')} 树内（实际 ${dataDir}）——探针会写入 fixture 与 inspector 端口文件，绝不碰真实用户数据`)
   process.exit(3)
-}
-
-const PI_BIN = path.join(REPO_ROOT, 'apps', 'electron', 'resources', 'pi', `pi-${process.platform}-${process.arch}`)
-const PI_BAK = `${PI_BIN}.b5-bak`
-const LAUNCHER = path.join(REPO_ROOT, 'probes', 'pi-profile-launcher.mjs')
-const RENDERER_DIST = path.join(REPO_ROOT, 'apps', 'electron', 'renderer', 'dist')
-
-const md5 = (file) => {
-  const buf = fs.readFileSync(file)
-  return crypto.createHash('md5').update(buf).digest('hex')
-}
-
-// ── pi 置换位三核对（P1 case；也在探针首尾各跑一次）──────────────────────────
-function verifyPiRestore () {
-  const bakExists = fs.existsSync(PI_BAK)
-  const binExists = fs.existsSync(PI_BIN)
-  let macho = false
-  if (binExists) {
-    const r = spawnSync('file', ['-b', PI_BIN], { encoding: 'utf8', timeout: 10000 })
-    macho = /Mach-O/.test(r.stdout ?? '')
-  }
-  const ok = !bakExists && binExists && macho
-  console.log(`RESULT pi-restore ok=${ok} md5-match=${binExists ? md5(PI_BIN) : 'n/a'} backup-present=${bakExists} macho=${macho}`)
-  return ok
-}
-
-if (flags['verify-pi-only']) {
-  process.exit(verifyPiRestore() ? 0 : 4)
 }
 
 // ── 前置校验 ────────────────────────────────────────────────────────────────

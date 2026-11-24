@@ -1,28 +1,28 @@
 {
- "head": "60cfcd0ac6bbebc811d7d527e2e076807670c550",
+ "head": "dd82c7ababfabea9efb13fa5f89d33203b807deb",
  "tag": "final",
  "fixture": {
   "path": "probes/fixtures/original-45k.json",
   "md5": "b15ea1a4eddea15267bfd6d8db482642"
  },
  "rendererBundle": {
-  "dir": "<repo>/apps/electron/renderer/dist",
+  "dir": "/Users/zhushanwen/worktrees/tai-ji/feat-cpu-gpu-performance/apps/electron/renderer/dist",
   "indexMd5": "bbafa2d269949d0b6854646e07f3911d"
  },
  "load": {
-  "m1": 4.7,
-  "m5": 4.4,
-  "m15": 3.92
+  "m1": 3.39,
+  "m5": 3.06,
+  "m15": 2.46
  },
  "ports": {
   "runtimePort": 3620,
   "cdpPort": 9488,
   "runtimeInspectPort": 9229,
-  "piInspectPort": 54233
+  "piInspectPort": 54497
  },
  "pids": {
   "runtimePid": 38289,
-  "sid": "01a20f5d-7ffd-7799-a936-b52aef82849d"
+  "sid": "01a20fba-cd0a-7482-8896-6e7939e894cf"
  },
  "packagedApp": [
   {
@@ -32,7 +32,7 @@
   },
   {
    "pid": 11671,
-   "cpuPct": 17,
+   "cpuPct": 15,
    "cmd": "/Applications/TaiJi.app/Contents/Frameworks/M-eM-$M-*M-fM^^M^A Helper.app/Contents/MacOS/M-eM-$M-*M-fM^^M^A Helper --typ"
   },
   {
@@ -67,21 +67,20 @@
   },
   {
    "pid": 56274,
-   "cpuPct": 0,
+   "cpuPct": 1,
    "cmd": "/Applications/TaiJi.app/Contents/Resources/pi/pi-darwin-x64 --mode rpc --no-extensions --approve --extension builtin:cod"
   }
  ],
  "electronProcCount": 15,
  "wall": {
-  "submitAt": 1795554149802,
-  "completeAt": 1795554208165,
-  "streamS": 58.363
+  "submitAt": 1795560263727,
+  "completeAt": 1795560322638,
+  "streamS": 58.911
  },
  "rendererWindow": {
-  "relFromS": 0.359,
-  "relToS": 58.659,
-  "sampledS": 58.213695,
-  "nonIdleRatio": 0.5215189484192679
- },
- "pathPolicy": "本机绝对路径已脱敏为 <repo> / ~（AGENTS.md 规则 22）；原始值仅存在于采集时环境"
+  "relFromS": 0.351,
+  "relToS": 59.201,
+  "sampledS": 58.691291,
+  "nonIdleRatio": 0.5518479734923534
+ }
 }
