@@ -36,7 +36,7 @@
       />
     </Button>
     <!-- 右侧一组（活动 chip / 滚动提示）：叠在开关之上、停在箭头左侧；容器不拦指针，子元素自行接收 -->
-    <div v-if="$slots.right" class="pointer-events-none absolute inset-y-0 right-8 flex items-center gap-0.5">
+    <div v-if="$slots.right" class="pointer-events-none absolute inset-y-0 right-10 flex items-center gap-0.5">
       <slot name="right" />
     </div>
   </div>

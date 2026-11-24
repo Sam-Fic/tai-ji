@@ -6077,6 +6077,10 @@
         },
         {
           "kind": "probe",
+          "ref": "scripts/acceptance/tape-settle.mjs"
+        },
+        {
+          "kind": "probe",
           "ref": "scripts/acceptance/tape-scroll.mjs"
         }
       ],
