@@ -3,7 +3,8 @@
   卡片：比页面底色亮一档的底色、圆角、左右 12px 内边距（原型同款）。
   卡头（AggregateSummaryRow）承载开关与计数；右侧插槽放滚动提示
   （更早 N 条 / 回到最新 / 下面还有 N 条 / 回到开头——useTapeScroll 按窗口几何派生）。
-  窗口（agg-tape-scroll）高度上限 = 12 行 × 24px，内容在其中滚动；滚动条隐藏。
+  窗口（agg-tape-scroll）高度上限 = 12 行 × 24px，内容在其中滚动；滚动条隐藏；
+  内容滚出窗口的一侧 16px 渐隐。
   窗口左右各外扩一段（卡片内边距 + 行悬停底色的外扩量），行悬停底色因此完整可见，
   又不会被窗口的滚动裁切。
 -->
@@ -29,8 +30,10 @@
       v-if="open"
       ref="windowRef"
       class="agg-tape-win max-h-[calc(var(--proc-tape-rows)*var(--proc-tape-row-h))] overflow-y-auto"
+      :class="{ 'is-over-top': overTop, 'is-over-bottom': overBottom }"
       data-testid="agg-tape-scroll"
       @scroll="onScroll"
+      @scrollend="onScrollEnd"
       @wheel="onWheel"
     >
       <AggregateExpandedBody :segment="segment" :session-id="sessionId" :live="live" />
@@ -39,7 +42,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { ProcessSegment } from '@taiji/core/domain/chat'
 import { Button } from '../../../primitives/button'
 import AggregateSummaryRow from './AggregateSummaryRow.vue'
@@ -65,19 +68,15 @@ const windowRef = ref<HTMLElement | null>(null)
 const live = computed(() => props.live)
 const segment = computed(() => props.segment)
 
-const { hint, onScroll, onWheel, onHint, stickToBottom } = useTapeScroll({ window: windowRef, segment, live })
+const { hint, overTop, overBottom, onScroll, onScrollEnd, onWheel, onHint, attach } = useTapeScroll({
+  window: windowRef,
+  segment,
+  live,
+})
 
-/* 展开态切换：落成后打开从第一条读起（不贴底）；进行中打开/内容变化即贴底 */
-watch(
-  () => props.open,
-  (open) => {
-    if (!open) return
-    if (live.value) void nextTick(stickToBottom)
-    else void nextTick(() => onScroll())
-  },
-)
-/* 挂载即量一次（真机首屏窗口已在位、内容未长满时也要给出正确提示） */
-watch(windowRef, () => void nextTick(() => onScroll()), { immediate: true })
+/* 窗口挂载 / 卸载即接入滚动运行时：挂载后进行中且跟随时贴底，落成后打开从第一条读起；
+   两种情况都立即量一次（内容未长满时也要给出正确的提示） */
+watch(windowRef, attach, { immediate: true })
 </script>
 
 <style scoped>
@@ -96,5 +95,15 @@ watch(windowRef, () => void nextTick(() => onScroll()), { immediate: true })
 }
 .agg-tape-win::-webkit-scrollbar {
   display: none;
+}
+/* 两侧渐隐：内容滚出窗口的一侧 16px 由透明到不透明，提示那一侧还有内容 */
+.agg-tape-win.is-over-top {
+  mask-image: linear-gradient(to bottom, transparent, #000 16px);
+}
+.agg-tape-win.is-over-bottom {
+  mask-image: linear-gradient(to top, transparent, #000 16px);
+}
+.agg-tape-win.is-over-top.is-over-bottom {
+  mask-image: linear-gradient(to bottom, transparent, #000 16px, #000 calc(100% - 16px), transparent);
 }
 </style>
