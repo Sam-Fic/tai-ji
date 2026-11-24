@@ -287,6 +287,53 @@ function pruneBurntToConfig(burnt: ReadonlySet<string>, route: AggregationRoute)
 }
 
 /**
+ * 求值前置短路（AX5 显式失败）：停用/删除/内部状态缺失 → 结构化错误；否则返回当前定义。
+ * 短路先于 retry 透传与条件求值——停用/删除态不进任何选择路径（D9）。
+ */
+function requireActiveRoute(state: AggregationState, routeId: string): AggregationRoute {
+	if (state.deletedIds.has(routeId)) {
+		throw new Error(`模型路由 "${routeId}" 已删除，请在设置页重新创建或更换模型。`)
+	}
+	if (state.disabledIds.has(routeId)) {
+		throw new Error(`模型路由 "${routeId}" 已停用，请在设置页重新启用或更换模型。`)
+	}
+	const route = state.definitions.get(routeId)
+	if (route === undefined) {
+		// 防御分支：deleted/disabled 短路已先行，正常控制流不可达（注册与定义同生命周期）。
+		throw new Error(`模型路由 "${routeId}" 没有有效的路由定义（扩展内部状态缺失），请重开会话恢复。`)
+	}
+	return route
+}
+
+/**
+ * ① retry 透传（D6 修订 / 方案 B）：pi 自动重试原样返回上一失败端点——重试归属在途
+ * 请求的延续，不复查路由条件（直连模型同样不复查任何东西），pi 的重试预算真正打到
+ * 上游；终局失败（预算用尽或 fail-fast）由下一轮求值的终局观察感知并 burnt → failover。
+ *
+ * 失败端点已不在本路由配置 / 模型目录（链中路过配置被改或悬空）→ 返回 undefined 落
+ * 正常选择；该次重试预算被正常选择选中的端点消耗——计数必须记在它头上（选择返回处 bump）。
+ */
+function passthroughFailedEndpoint(
+	state: AggregationState,
+	route: AggregationRoute,
+	routeId: string,
+	failedRequest: NonNullable<ModelRouteRequest["failed"]>,
+	request: ModelRouteRequest,
+	ctx: ExtensionContext,
+): ModelRoute | undefined {
+	const failed = failedRequest.model
+	const member = route.members.find(m => m.providerId === failed.provider && m.modelId === failed.id)
+	if (member === undefined) return undefined
+	const model = ctx.modelRegistry.find(member.providerId, member.modelId)
+	if (model === undefined) return undefined
+	bumpChainFailure(state, routeId, memberRef(member))
+	return {
+		model,
+		thinkingLevel: resolveThinkingLevel(request.thinkingLevel, endpointThinkingLevels(member)),
+	}
+}
+
+/**
  * 单次路由求值（pi route 回调入口）。
  *
  * 顺序：求值前 mtime 重读（编辑对下一请求生效的触发点）→ 停用/删除短路（AX5 显式
@@ -307,37 +354,15 @@ function evaluateAndRoute(
 ): ModelRoute {
 	reconcileRegisteredOnly(pi, state, reader, quotaReader, ctx)
 
-	if (state.deletedIds.has(routeId)) {
-		throw new Error(`模型路由 "${routeId}" 已删除，请在设置页重新创建或更换模型。`)
-	}
-	if (state.disabledIds.has(routeId)) {
-		throw new Error(`模型路由 "${routeId}" 已停用，请在设置页重新启用或更换模型。`)
-	}
-	const route = state.definitions.get(routeId)
-	if (route === undefined) {
-		// 防御分支：deleted/disabled 短路已先行，正常控制流不可达（注册与定义同生命周期）。
-		throw new Error(`模型路由 "${routeId}" 没有有效的路由定义（扩展内部状态缺失），请重开会话恢复。`)
-	}
+	const route = requireActiveRoute(state, routeId)
 
-	// ① retry 透传（D6 修订 / 方案 B）：pi 自动重试原样返回上一失败端点——重试归属在途
-	// 请求的延续，不复查路由条件（直连模型同样不复查任何东西），pi 的重试预算真正打到
-	// 上游；终局失败（预算用尽或 fail-fast）由下一轮求值的终局观察感知并 burnt → failover。
+	// ① retry 透传（D6 修订 / 方案 B）：失败端点仍在配置/目录内 → 原样返回并记账
+	// （passthroughFailedEndpoint）；已不在 → 落正常选择，该次重试预算由正常选择
+	// 选中的端点消耗（见选择返回处 bump）。
 	const failedRequest = request.reason === "retry" ? request.failed : undefined
 	if (failedRequest !== undefined) {
-		const failed = failedRequest.model
-		const member = route.members.find(m => m.providerId === failed.provider && m.modelId === failed.id)
-		if (member !== undefined) {
-			const model = ctx.modelRegistry.find(member.providerId, member.modelId)
-			if (model !== undefined) {
-				bumpChainFailure(state, routeId, memberRef(member))
-				return {
-					model,
-					thinkingLevel: resolveThinkingLevel(request.thinkingLevel, endpointThinkingLevels(member)),
-				}
-			}
-		}
-		// 失败端点已不在本路由配置 / 模型目录（链中路过配置被改或悬空）→ 落正常选择；
-		// 该次重试预算被正常选择选中的端点消耗——计数必须记在它头上（见选择返回处 bump）
+		const passthrough = passthroughFailedEndpoint(state, route, routeId, failedRequest, request, ctx)
+		if (passthrough !== undefined) return passthrough
 	}
 
 	// ② 非 retry（或透传不可用）：终局观察 + 条件求值 + burnt 软避让（纯函数 decideRoute）。
