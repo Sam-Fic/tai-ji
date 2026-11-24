@@ -20,7 +20,7 @@
  * 运行：cd packages/renderer && npx vitest run src/__tests__/stores/chat-lru-agentcall.test.ts
  * 测试框架 vitest（禁止 node:test / tsx --test）。
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import { effectScope, ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 
@@ -291,6 +291,15 @@ describe('M7/D6 虚拟 key 清理契约（真实工厂 key）', () => {
 const historyBackend = new Map<string, Message[]>()
 
 describe('selectSession 全链路 touchLru 接线（AC-2 单 panel LRU 基线不退化）', () => {
+  // 模块图预热：下面用例动态 import 的 useSidebar → core 13 步切入链是文件内首次加载，
+  // 冷 transform 整张图（实测 ~3.8s）全落在那一个用例上（越慢用例门禁 2s 线；循环体本身
+  // 实测 0ms/次）。vitest transform 缓存跨用例存活，先跑一次抛弃式 import 预热，该用例的
+  // import 回落到 ms 级。断言语义零变化：用例仍经 resetAppBootstrap() 显式复位引导态。
+  beforeAll(async () => {
+    await import('@/composables/features/sidebar/useSidebar')
+    await import('@/stores/session')
+  }, 60_000) // 同上：冷 transform 负载下超默认 10s 钩子预算
+
   beforeEach(() => {
     setActivePinia(createPinia())
     _resetLruForTest()
