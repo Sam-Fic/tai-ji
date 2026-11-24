@@ -9,7 +9,7 @@
 | 问题 | 首轮判定 | 干净重测结论 |
 |---|---|---|
 | 瓶颈在哪 | 「每-delta Vue 重渲染 #1 + GPU 饱和 #2」 | **JS 侧派生/高亮/更新链**（已消除 96%+）；**GPU 从来不是瓶颈**（干净环境 23% 忙、60fps，首轮 69%/20fps 是测量环境产物） |
-| 优化收益 | 「主线程 39%→…」 | **JS busy −35%（28.3%→18.5%）、派生族 −96.6%、shiki 归零、EdgeFade 强制布局归零、Vue 更新链 −50%、TTFT 22ms** |
+| 优化收益 | 「主线程 39%→…」 | **JS busy −28%（28.3%→20.5%，复采 −41%）、派生族 −97.1%、shiki 归零、EdgeFade 强制布局归零、Vue 更新链 −55%、TTFT 22ms** |
 | GPU 视觉项要不要动 | 「等干净数据」 | **blur：动（条件降档，26% GPU 工作量过判据但不掉帧⇒下一批带触发条件实施）；mask：不动（测不出代价）** |
 | 数据可引用性 | 混杂未披露 | **同 harness 双测量**（before/after 同机同壳同 bundle 形态同 fixture 同探针；load 2.19 vs 3.59；dataLoss 全 0；`(program)` 经 CDP metrics 交叉验证 Δ≤1.5pp） |
 
@@ -29,14 +29,14 @@
 
 | 项 | 首轮脏基线 | 干净基线 | 干净终版 | 首轮→终版 |
 |---|---|---|---|---|
-| JS busy | 46.7%（+10..73s 窗） | 28.3% | **18.5%** | **−60%** |
-| 派生族 self | 2.919s（4.6% 窗） | 2.068s（3.51%） | **0.071s（0.12%）** | **−97.6%** |
+| JS busy | 46.7%（+10..73s 窗） | 28.3% | **20.5%** | **−56%** |
+| 派生族 self | 2.919s（4.6% 窗） | 2.068s（3.51%） | **0.059s（0.10%）** | **−98.0%** |
 | fence 窗 shiki | 2.330s（46.6% 于 5s 窗） | 1.073s（1.82% 流式窗） | **0.000s** | **归零** |
 | EdgeFade.sync | 0.546s | 0.369s | **0.000s** | **归零** |
-| Vue 更新链（`flushJobs`） | 19.05s（30% 窗） | 8.894s（15.11%） | **4.450s（7.59%）** | **−77%** |
-| `renderMarkdown` | 5.53s | 4.567s | **2.659s** | **−52%** |
+| Vue 更新链（`flushJobs`） | 19.05s（30% 窗） | 8.894s（15.11%） | **4.027s（6.81%）** | **−79%** |
+| `renderMarkdown` | 5.53s | 4.567s | **2.653s** | **−52%** |
 | `(program)` 未归因 | 13.1s / 15.9% | 29.2% | 34.9% | 绝对量 −7.7%，占比随 JS 下降被动上升（§final-comparison 1.1） |
-| 非 idle | 62.5% | 57.5% | **48.8–53.4%** | **−9~14pp** |
+| 非 idle | 62.5% | 57.5% | **48.8–54.8%** | **−8~14pp** |
 
 > 首轮列是**脏 harness**（dev bundle + 后台窗口 + 打包版并存 + tracing 混用），只作溯源；可引用的因果链是「干净基线 vs 干净终版」两列。
 
@@ -64,8 +64,8 @@
 
 | 收益 | 贡献批次 | 量化 |
 |---|---|---|
-| 派生族归零 | 批1 | 2.068s → 0.071s（−96.6%），JS busy 里约 3.4pp |
-| 组件更新跳过 | 批2 | flushJobs −50%、componentUpdateFn −54%（prod bundle 无法测组件级 inclusive，见 R4） |
+| 派生族归零 | 批1 | 2.068s → 0.059s（−97.1%），JS busy 里约 3.4pp |
+| 组件更新跳过 | 批2 | flushJobs −55%、componentUpdateFn −61%（prod bundle 无法测组件级 inclusive，见 R4） |
 | 强制布局（EdgeFade） | 批2 | 0.369s → 0（`sync` 帧在 bundle 中消失） |
 | shiki 冻结消除 | 批3 | 1.073s → 0，且 fence 闭合窗内零 shiki 帧 |
 | matchPath CPU | 批4 | 265→112ms/轮（2.16–2.33×，7003 路径） |
@@ -92,7 +92,7 @@
 
 | # | 项 | 状态 | 处置 |
 |---|---|---|---|
-| R1 | **`scrollTo` self 上升 57–70%**（1.416s → 2.409/2.224s），LayoutDuration +14%、RecalcStyle +24%；多小代码块形态达 5.06% | 实测两次同向，**根因未定位** | 下一批候选：`scrollTo` 的调用点与 churn 需要一轮 follow-health 探针（批1-4 遗留探针 `probes/follow-health.mjs` 可复用） |
+| R1 | **`scrollTo` self 上升 57–62%**（1.416s → 2.300/2.224s），LayoutDuration +1.6~14%、RecalcStyle +21~24%；多小代码块形态达 5.06% | 实测两次同向，**根因未定位** | 下一批候选：`scrollTo` 的调用点与 churn 需要一轮 follow-health 探针（批1-4 遗留探针 `probes/follow-health.mjs` 可复用） |
 | R2 | minify 关闭的偏差 | 登记 | 影响限于解析/编译期；流式窗在加载之后 |
 | R3 | 打包版 TaiJi.app 并存（L1） | 无法消除（本会话宿主） | GPU helper 15–24% 瞬时 CPU；baseline/final 同条件 |
 | R4 | 组件级 inclusive 在 prod bundle 不可测（`_sfc_render` 匿名） | 方法学限制 | 由 flushJobs / componentUpdateFn 承载；要组件级数字需 dev bundle（引入 dev 扭曲） |

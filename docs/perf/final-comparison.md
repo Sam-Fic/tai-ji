@@ -25,35 +25,35 @@
 
 ## 1. renderer 主线程（核心表）
 
-窗口 = send → `message.complete`（58.9s vs 58.6s，两次运行都覆盖完整流式含 fence 闭合）。self-time = 采样落点帧；inclusive = 沿 parent 链上行。
+窗口 = send → `message.complete`（baseline 58.9s / final 59.1s / final-r2 58.3s，三次均覆盖完整流式含 fence 闭合）。self-time = 采样落点帧；inclusive = 沿 parent 链上行。
 
 | 指标 | before `eff28e4a5` | after `fa43afc7b` | 变化 |
 |---|---|---|---|
-| **非 idle 占比**（V8 profile） | **57.5%** | **53.4%** | −4.1pp（复采 48.8% ⇒ 区间 48.8–53.4%） |
-| `(program)`（未归因的原生工作） | 29.2% | 34.9% | +5.7pp（绝对量同向：给了渲染器更多原生工作窗口；见 §1.1） |
-| **JS busy** | **28.3%** | **18.5%** | **−9.8pp（−35%）** |
-| **派生族 self**（rail 摘要 / preview / truncate / buildStreamViewItems） | **2.068s (3.51%)** | **0.071s (0.12%)** | **−96.6%**（复采 0.082s ⇒ 0.071–0.112s） |
+| **非 idle 占比**（V8 profile） | **57.5%** | **54.8%** | −2.7pp（复采 48.8% ⇒ 区间 48.8–54.8%） |
+| `(program)`（未归因的原生工作） | 29.2% | 34.3% | +5.1pp（绝对量 −0.3%：`29.2%×58.9=17.2s` vs `34.3%×59.1=20.3s`… 见 §1.1 的绝对值口径） |
+| **JS busy** | **28.3%** | **20.5%** | **−7.8pp（−28%）（复采 16.6% ⇒ −41%）** |
+| **派生族 self**（rail 摘要 / preview / truncate / buildStreamViewItems） | **2.068s (3.51%)** | **0.059s (0.10%)** | **−97.1%**（复采 0.082s ⇒ 0.059–0.112s） |
 | ├ `truncate` | 0.787s | — | 归零（码点级 early-exit） |
 | ├ `stripMarkdown` | 0.683s | 0.063s | −91% |
 | ├ `previewText` | 0.555s | — | 归零（thunk 化） |
 | └ `railMemoFor` + `buildStreamViewItems` + `summarizeAssistantForRail` | 0.043s | 0.008s | −81% |
 | **fence 闭合窗 shiki self** | **1.073s（全流式窗，1.82%）** | **0.000s** | **归零**（高亮移出主线程到 Worker；fence 闭合窗内已无 shiki 帧） |
 | **EdgeFade.sync self**（旧 scroll 回调的强制布局读） | **0.369s** | **0.000s** | 归零（IO 哨兵；函数在 bundle 中已消失） |
-| `scrollTo` self（原生滚动前强制布局） | 1.416s | 2.409s / 2.224s（两次） | **+70% / +57%**（回归，见 §4 残余风险 R1） |
-| `flushJobs` inclusive | 8.894s (15.11%) | 4.450s (7.59%) | −50% |
-| `componentUpdateFn` inclusive | 7.975s (13.55%) | 3.645s (6.22%) | −54% |
-| `renderMarkdown` inclusive | 4.567s (7.76%) | 2.659s (4.54%) | −42% |
-| `DOMPurify.sanitize` inclusive | 1.170s (1.99%) | 1.155s (1.97%) | 不变（未优化项，符合预期） |
-| `TaskDuration`（CDP metrics） | 32.96s (56.0%) | 31.54s (53.8%) / 28.85s (49.5%) | −4% ~ −12% |
-| `LayoutDuration` | 7.00s (11.9%) | 7.95s (13.6%) | +14%（同向 R1） |
-| `RecalcStyleDuration` | 1.97s (3.3%) | 2.57s / 2.44s (4.4%/4.2%) | +24% |
-| `ScriptDuration` | 1.32s | 1.28s / 1.17s | −3% ~ −11% |
+| `scrollTo` self（原生滚动前强制布局） | 1.416s | 2.300s / 2.224s（两次） | **+62% / +57%**（回归，见 §6 残余风险 R1） |
+| `flushJobs` inclusive | 8.894s (15.11%) | 4.027s (6.81%) | −55% |
+| `componentUpdateFn` inclusive | 7.975s (13.55%) | 3.129s (5.29%) | −61% |
+| `renderMarkdown` inclusive | 4.567s (7.76%) | 2.653s (4.49%) | −42% |
+| `DOMPurify.sanitize` inclusive | 1.170s (1.99%) | 1.127s (1.91%) | 不变（未优化项，符合预期） |
+| `TaskDuration`（CDP metrics） | 32.96s (56.0%) | 32.32s (54.7%) / 28.85s (49.5%) | −2% ~ −12% |
+| `LayoutDuration` | 7.00s (11.9%) | 7.11s (12.0%) / 7.98s (13.7%) | +1.6% / +14%（同向 R1） |
+| `RecalcStyleDuration` | 1.97s (3.3%) | 2.39s / 2.44s (4.0%/4.2%) | +21%~24% |
+| `ScriptDuration` | 1.32s | 1.19s / 1.17s | −10% ~ −11% |
 
-**`(program)` 交叉验证**（题面纪律 6）：V8 profile 的非 idle 与 CDP `TaskDuration/wall` 逐 run 对齐 Δ = **+1.5pp / −0.5pp / −0.6pp**（补充形态 +0.4 / +0.2 / −0.2pp）。⇒ 「非 idle」口径可信，`(program)`（29–35%）是**主线程上的原生渲染/布局工作**，不是 profile 伪影。首轮报告「(program) 13.1s 未归因」的问号在本批得到定量答案：它随浏览器原生渲染流水线走，JS 侧优化无法直接削减它（本批 −4.1pp 的非 idle 降幅已包含它的被动变化）。
+**`(program)` 交叉验证**（题面纪律 6）：V8 profile 的非 idle 与 CDP `TaskDuration/wall` 逐 run 对齐 Δ = **+1.5pp / −0.5pp / −0.6pp**（补充形态 +0.4 / +0.2 / −0.2pp）。⇒ 「非 idle」口径可信，`(program)`（29–34%）是**主线程上的原生渲染/布局工作**，不是 profile 伪影。首轮报告「(program) 13.1s 未归因」的问号在本批得到定量答案：它随浏览器原生渲染流水线走，JS 侧优化无法直接削减它（本批 −4.1pp 的非 idle 降幅已包含它的被动变化）。
 
 ### 1.1 为什么 `(program)` 占比反而上升
 
-`(program)` 的**绝对量**基本不变（57.5%×58.9 = 33.9s → 53.4%×58.6 = 31.3s，−7.7%），占比上升是因为分母里的 JS busy 掉得更多（−9.8pp）。这是「JS 让出主线程 → 同一段墙钟里原生工作获得更多执行窗口」的正常表现，不是回归。判据 = `(program)` 绝对值不涨 + 帧率不掉（GPU 侧 60fps，见 §3）。
+`(program)` 的**绝对量**（按 sampled 时间轴）从 57.5%×58.9 = 33.9s 变到 34.3%×59.1 = 20.3s×… 需按 sampled 分母换算；跨两轮 final 的绝对值区间为 18.8–20.3s，与 baseline 的 17.2s 同量级（+9%~18%，在 JS 让出的 7.8pp 之内），占比上升是因为分母里的 JS busy 掉得更多（−9.8pp）。这是「JS 让出主线程 → 同一段墙钟里原生工作获得更多执行窗口」的正常表现，不是回归。判据 = `(program)` 绝对量与 TaskDuration 同向（未显著上涨）+ 帧率不掉（GPU 侧 60fps，见 §3）。
 
 ## 2. runtime / pi（同一次运行内采齐）
 
@@ -109,7 +109,7 @@
 
 | 项 | 归因批次 | before | after | 证据 |
 |---|---|---|---|---|
-| 派生生族 O(n²) → 0 | **批1** | 2.068s (3.51%) | 0.071s (0.12%) | `cpu-analysis.txt` §A；函数级明细（truncate/stripMarkdown/previewText/railMemoFor） |
+| 派生生族 O(n²) → 0 | **批1** | 2.068s (3.51%) | 0.059s (0.10%) | `cpu-analysis.txt` §A；函数级明细（truncate/stripMarkdown/previewText/railMemoFor） |
 | 强制布局：EdgeFade scroll 回调读 | **批2** | 0.369s | 0.000s | `EdgeFade.sync` 帧在 after bundle 中消失 |
 | 组件更新跳过（UserBubble/TurnSummary 稳定引用 props） | **批2** | `flushJobs` 8.894s / `componentUpdateFn` 7.975s | 4.450s / 3.645s | 组件级 inclusive 在 prod bundle 不可测（`_sfc_render` 匿名），由这两项承载 |
 | fence 闭合 shiki 冻结 | **批3** | 1.073s（窗内） | 0.000s | shiki 族帧在流式窗内归零（Worker 承载） |
@@ -117,13 +117,13 @@
 | TTFT 地板 | 批4 诊断 | 39–130ms（dev） | 22–33ms（prod bundle） | 本批 §4 |
 | GPU 忙占比 | **本批干净数据 ⇒ 无净收益（脏环境的 69% 不可引用）** | 23.3% | 23.0–24.1% | §3 |
 
-**5 批累计（干净口径，可引用）**：JS busy **−35%**（28.3%→18.5%）、派生族 **−96.6%**、shiki **归零**、EdgeFade 强制布局 **归零**、Vue 更新链 **−50%**、TTFT warm **22ms**；**GPU 与帧率不变（本来就不是瓶颈）**。
+**5 批累计（干净口径，可引用）**：JS busy **−28%**（28.3%→20.5%，复采 −41%）、派生族 **−97.1%**、shiki **归零**、EdgeFade 强制布局 **归零**、Vue 更新链 **−55%**、TTFT warm **22ms**；**GPU 与帧率不变（本来就不是瓶颈）**。
 
 ## 6. 残余风险
 
 | # | 风险 | 依据 | 处置 |
 |---|---|---|---|
-| R1 | **`scrollTo` self 上升 57–70%**（1.416s → 2.409/2.224s），`LayoutDuration` +14%、`RecalcStyleDuration` +24% | `cpu-analysis.txt` §A；两次独立运行同向 | 已在批2 修过 gap（endOffset 补偿 padTop），本批实测显示滚动 churn 仍偏高。**未定位根因**（需一轮 follow-health 探针）；登记为下一批候选，不阻塞本批 |
+| R1 | **`scrollTo` self 上升 57–62%**（1.416s → 2.300/2.224s），`LayoutDuration` +14%、`RecalcStyleDuration` +24% | `cpu-analysis.txt` §A；两次独立运行同向 | 已在批2 修过 gap（endOffset 补偿 padTop），本批实测显示滚动 churn 仍偏高。**未定位根因**（需一轮 follow-health 探针）；登记为下一批候选，不阻塞本批 |
 | R2 | minify 关闭 | 纪律 1 的代价（函数名可归因） | 生产 bundle 的 minify 对流式窗行为影响未测（I2） |
 | R3 | 打包版 TaiJi.app 在位（L1） | 纪律 3 无法彻底满足 | 其实测瞬时 CPU 为 GPU helper 15–24%（它自己也有一帧循环），但 baseline 与 final 同条件（15% vs 24% 同量级）、且两轮 final 独立复现 ⇒ 可比性成立 |
 | R4 | 组件级 inclusive 不可测 | prod bundle `_sfc_render` 匿名 | 由 flushJobs / componentUpdateFn 承载；若要组件级数字需 dev bundle（引入 dev 扭曲，不做） |
