@@ -161,3 +161,6 @@ package-lock.json.*
 
 # tree-plant 任务工作目录（设计/验收文档与运行产物，本地不入库）
 /tpkg/
+
+# AI 工作流产物（tree-plant 各阶段 gate 记录；交付证明落 docs/tree-plant/delivery.md）
+.run/

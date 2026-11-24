@@ -1,0 +1,5 @@
+{
+  "docsDir": "docs/tree-plant",
+  "testCommand": "node scripts/run-domain-tests.mjs chat session-manager",
+  "typecheckCommand": "pnpm --filter @taiji/shared --filter @taiji/core --filter @taiji/ui typecheck"
+}
