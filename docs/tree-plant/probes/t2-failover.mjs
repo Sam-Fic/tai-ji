@@ -74,6 +74,9 @@ try {
 	// ③ burnt 持久化：会话落 virtual-model-state 条目
 	const stateEntries = virtualModelStateEntries(entries);
 	c.check(stateEntries.length >= 1, `会话含 pi.virtual-model-state 条目（实际 ${stateEntries.length}）`);
+	// 引用相等纪律（pi 落盘条件 route.state !== state）：burnt 无变化的求值不得重复落条目——
+	// 本剧本只有一次 burn 事件，条目数上界 1（重复 append = 引用纪律回归）
+	c.check(stateEntries.length <= 1, `state 条目不重复（实际 ${stateEntries.length}）`);
 	const lastState = stateEntries[stateEntries.length - 1];
 	const burnt = lastState?.data?.state?.burnt ?? [];
 	c.check(Array.isArray(burnt) && burnt.includes("fault-a/fault-a-model"), `burnt 含 fault-a/fault-a-model（实际 ${JSON.stringify(burnt)}）`);

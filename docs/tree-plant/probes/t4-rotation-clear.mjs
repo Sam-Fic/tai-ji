@@ -73,6 +73,8 @@ try {
 	const stateEntries = virtualModelStateEntries(entries);
 	const lastBurnt = stateEntries.length > 0 ? (stateEntries[stateEntries.length - 1]?.data?.state?.burnt ?? null) : null;
 	c.check(lastBurnt !== null && lastBurnt.length === 0, `最终 burnt 已清空（实际 ${JSON.stringify(lastBurnt)}）`);
+	// 本剧本 burn/clear 各一次 → 条目数上界 2（重复 append = 引用纪律回归）
+	c.check(stateEntries.length <= 2, `state 条目不重复（实际 ${stateEntries.length}）`);
 	c.check(eventsOfType(events, "agent_settled").length === 3, "三轮各自 settle");
 	if (!c.done()) exitCode = 1;
 } catch (err) {
