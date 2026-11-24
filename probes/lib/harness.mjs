@@ -92,6 +92,7 @@ export async function connectRendererCdp (cdpPort) {
         const ws = new WebSocket(page.webSocketDebuggerUrl)
         let seq = 0
         const pending = new Map()
+        const listeners = new Map()
         ws.addEventListener('message', (ev) => {
           const msg = JSON.parse(ev.data)
           if (msg.id !== undefined && pending.has(msg.id)) {
@@ -99,7 +100,9 @@ export async function connectRendererCdp (cdpPort) {
             pending.delete(msg.id)
             if (msg.error) p.reject(new Error(JSON.stringify(msg.error)))
             else p.resolve(msg.result)
+            return
           }
+          if (msg.method) for (const cb of listeners.get(msg.method) ?? []) cb(msg.params)
         })
         ws.addEventListener('open', () => resolve({
           send (method, params = {}) {
@@ -109,12 +112,33 @@ export async function connectRendererCdp (cdpPort) {
               ws.send(JSON.stringify({ id, method, params }))
             })
           },
+          /** 订阅 CDP 事件（非 id 帧），用于 console 采集等推式通道 */
+          on (method, cb) {
+            if (!listeners.has(method)) listeners.set(method, [])
+            listeners.get(method).push(cb)
+          },
           close: () => ws.close(),
         }))
         ws.addEventListener('error', () => reject(new Error('cdp ws error')))
       })
       .catch(reject)
   })
+}
+
+/**
+ * renderer console 采集（批3 T1/T3）：启用 Runtime 并累积 consoleAPICalled 文本。
+ * worker 的 console 消息经主线程转发同样出现在 page target 的事件流里——worker 侧
+ * 成本日志（init/job 耗时）与降级出声都经此通道采集。
+ * 必须在页面加载完成前 enable 才能收到后续消息（探针在连 CDP 后立即调用）。
+ */
+export async function collectConsoleMessages (cdp) {
+  const messages = []
+  await cdp.send('Runtime.enable')
+  cdp.on('Runtime.consoleAPICalled', (p) => {
+    const text = (p.args ?? []).map((a) => a.value ?? a.description ?? '').join(' ')
+    messages.push({ type: p.type, text })
+  })
+  return messages
 }
 
 // ── GUI 在场校验（照搬 perf-derivatives.mjs GUI 校验段）───────────────────────
