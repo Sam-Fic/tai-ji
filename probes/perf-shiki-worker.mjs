@@ -10,8 +10,10 @@
  *       [--timeout-ms 240000] [--save <profile>]
  *
  * 动作：CDP Profiler（无 tracing）+ console 采集 → delivery.submit 发 prompt →
- *       等 message.complete（显式预算）→ Profiler.stop → 双口径聚合 shiki 族 self-time：
- *       ① 整条流式窗；② fence 闭合窗口（pre.shiki 首次出现的墙钟 ±窗）。
+ *       等 message.complete（显式预算）→ 轮询等高亮落 DOM（worker 异步回填可晚于
+ *       complete——流水线设计使然，轮询预算内等待）→ Profiler.stop → 双口径聚合
+ *       shiki 族 self-time：① 整条流式窗（send→profiler stop）；② fence 闭合窗口
+ *       （pre.shiki 首次出现的墙钟 ±窗）。
  *       在场有效性双断言：高亮确实发生（DOM pre.shiki 带 --shiki-dark span）+ worker 成本日志在场。
  *
  * 输出末行：RESULT shiki-family-self-time=<s> threshold=<s> PASS|FAIL；exit 0/1。
@@ -57,6 +59,30 @@ const rt = await connectRuntime(dataDir)
 const cdp = await connectRendererCdp(Number(arg('cdp-port', '9478')))
 console.log('[probe] connected runtime + renderer CDP')
 const consoleMessages = await collectConsoleMessages(cdp)
+await cdp.send('Page.enable')
+
+// 刷新页面拿全新客户端状态：worker 客户端 degraded 是页生命周期永久的（T3 降级探针
+// 打过桩后，同页面后续渲染全部落主线程回退 → shiki self-time 反弹 → 误报「冻结仍在」）。
+// 刷新在 Profiler.start 之前，测量窗只含本次流式。
+await cdp.send('Page.reload')
+console.log('[probe] page reloaded (fresh client state)')
+const readyDeadline = Date.now() + 60000
+let ready = false
+while (Date.now() < readyDeadline) {
+  const r = await cdp.send('Runtime.evaluate', {
+    expression: `document.querySelectorAll('.session-item').length > 0`,
+    returnByValue: true,
+  })
+  if (r.result?.value === true) { ready = true; break }
+  await sleep(500)
+}
+if (!ready) {
+  console.error('[probe] 页面刷新后 app 未就绪（60s 预算内未见侧栏）——弃测')
+  cdp.close()
+  rt.ws.close()
+  process.exit(3)
+}
+console.log('[probe] app ready after reload')
 
 await cdp.send('Profiler.enable')
 await cdp.send('Profiler.start')
@@ -70,20 +96,8 @@ console.log('[probe] prompt submitted, streaming window running...')
 
 await ensureGuiOnSession(cdp, sid)
 
-// fence 闭合墙钟：pre.shiki 首次带 --shiki-dark span 出现（流式期占位无 shiki 产物，
-// fixture 全文仅一个代码块 → 首次出现即 fence 闭合 + 高亮回填）
-let fenceClosureWall = null
-const closureDeadline = Date.now() + timeoutMs
-while (fenceClosureWall === null && Date.now() < closureDeadline) {
-  const r = await cdp.send('Runtime.evaluate', {
-    expression: `document.querySelectorAll('pre.shiki [style*="--shiki-dark"]').length`,
-    returnByValue: true,
-  })
-  if (Number(r.result?.value ?? 0) > 0) fenceClosureWall = Date.now()
-  else await sleep(500)
-}
-
-const endFrame = await waitForSessionComplete(rt, sid, Math.max(1000, closureDeadline - Date.now()))
+// ① 等流式结束（先等 complete：closure 轮询若先烧完预算，complete 帧已过扫描游标 → 误弃测）
+const endFrame = await waitForSessionComplete(rt, sid, Math.max(1000, timeoutMs - (Date.now() - sendWall)))
 if (!endFrame) {
   console.error('[probe] 流式未在显式预算内完成——弃测（不产 PASS/FAIL，不杀任何进程）')
   cdp.close()
@@ -91,25 +105,42 @@ if (!endFrame) {
   process.exit(3)
 }
 const completeWall = Date.now()
-console.log(`[probe] stream complete: ${endFrame.type}`)
+console.log(`[probe] stream complete: ${endFrame.type} (${((completeWall - sendWall) / 1000).toFixed(1)}s after send)`)
 
-// 在场有效性断言（防「0 因为什么都没渲染」假 PASS）：完成态 DOM 里高亮代码块确实在
-const domCheck = await cdp.send('Runtime.evaluate', {
-  expression: `JSON.stringify({
-    shikiPre: document.querySelectorAll('pre.shiki').length,
-    shikiSpans: document.querySelectorAll('pre.shiki [style*="--shiki-dark"]').length,
-    codeChars: (document.querySelector('pre.shiki')?.textContent ?? '').length,
-  })`,
-  returnByValue: true,
-})
-const dom = JSON.parse(domCheck.result?.value ?? '{}')
-console.log(`[probe] DOM presence: pre.shiki=${dom.shikiPre} spans=${dom.shikiSpans} codeChars=${dom.codeChars}`)
+// ② 轮询等高亮落 DOM：worker 异步回填可晚于 complete（流水线设计使然），轮询预算内等待。
+//    fixture 全文仅一个代码块 → pre.shiki 首现即 fence 闭合 + 高亮回填的墙钟。
+let fenceClosureWall = null
+let dom = { shikiPre: 0, shikiSpans: 0, codeChars: 0, sid: '', ph: 0 }
+const hlDeadline = Date.now() + 120000
+let hlPolls = 0
+while (Date.now() < hlDeadline) {
+  hlPolls++
+  const r = await cdp.send('Runtime.evaluate', {
+    expression: `JSON.stringify({
+      sid: document.querySelector('[data-session-id]')?.getAttribute('data-session-id') || '',
+      shikiPre: document.querySelectorAll('pre.shiki').length,
+      shikiSpans: document.querySelectorAll('pre.shiki [style*="--shiki-dark"]').length,
+      codeChars: (document.querySelector('pre.shiki')?.textContent ?? '').length,
+      ph: document.querySelectorAll('[data-testid="md-streaming-fence"]').length,
+    })`,
+    returnByValue: true,
+  })
+  dom = JSON.parse(r.result?.value ?? '{}')
+  if (dom.shikiSpans >= 1) { fenceClosureWall = Date.now(); break }
+  if (hlPolls % 10 === 1) console.log(`[probe] highlight poll #${hlPolls}: ${JSON.stringify(dom)}`)
+  await sleep(500)
+}
+console.log(`[probe] DOM presence: pre.shiki=${dom.shikiPre} spans=${dom.shikiSpans} codeChars=${dom.codeChars} (polls=${hlPolls})`)
+// 在场有效性断言（防「0 因为什么都没渲染」假 PASS）
 const presenceOk = dom.shikiPre >= 1 && dom.shikiSpans >= 1 && dom.codeChars > 1000
 if (!presenceOk) {
-  console.error('[probe] 在场有效性失败：完成态未见高亮代码块（pre.shiki 缺失或无 token span）——拒绝判定')
+  console.error('[probe] 在场有效性失败：轮询预算内未见高亮代码块（pre.shiki 缺失或无 token span）——拒绝判定')
   cdp.close()
   rt.ws.close()
   process.exit(3)
+}
+if (fenceClosureWall !== null) {
+  console.log(`[probe] fence highlight applied at ${((fenceClosureWall - sendWall) / 1000).toFixed(1)}s after send`)
 }
 
 const stopped = await cdp.send('Profiler.stop')
@@ -119,10 +150,10 @@ rt.ws.close()
 console.log(`[probe] profile captured: ${profile.samples.length} samples`)
 
 const relFromS = (sendWall - profilerStartWall) / 1000
-const relToS = (completeWall - profilerStartWall) / 1000
-console.log(`[probe] streaming window ${relFromS.toFixed(1)}s..${relToS.toFixed(1)}s (send-relative)`)
+const relToS = (Date.now() - profilerStartWall) / 1000
+console.log(`[probe] streaming window ${relFromS.toFixed(1)}s..${relToS.toFixed(1)}s (send-relative, until profiler stop)`)
 if (fenceClosureWall !== null) {
-  console.log(`[probe] fence closure at ${((fenceClosureWall - sendWall) / 1000).toFixed(1)}s after send (pre.shiki first seen)`)
+  console.log(`[probe] fence closure at ${((fenceClosureWall - profilerStartWall) / 1000).toFixed(1)}s after profiler start`)
 }
 
 // 测量有效性：采样量 + 窗内渲染活动（同 harness captureStreamingProfile 口径）
