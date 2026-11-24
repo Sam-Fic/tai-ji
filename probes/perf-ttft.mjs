@@ -78,21 +78,26 @@ async function waitTurnEnd (rt, sid, timeoutMs) {
   return null
 }
 
-/** 等本 session 首帧（message_start / text_delta），返回相对 t0 的毫秒 */
+/** 等本 session 首帧（message_start / text_delta），返回相对 t0 的毫秒。
+ *  TTFT = 首个 message_start；first_delta 在 start 后最多再等 DELTA_GRACE_MS（faux 短响应可能
+ *  无 text_delta——不为它空耗，超窗记 null，不影响 TTFT 口径）。 */
 async function waitFirstFrame (rt, sid, t0, timeoutMs) {
+  const DELTA_GRACE_MS = 3000
   const deadline = Date.now() + timeoutMs
   let firstStart = null
   let firstDelta = null
+  let startSeenAt = null
   let scanned = rt.events.length
   while (Date.now() < deadline) {
     for (let i = scanned; i < rt.events.length; i++) {
       const f = rt.events[i]
       if (f.payload?.sessionId !== sid) continue
-      if (firstStart === null && f.type === 'message.message_start') firstStart = f.receivedAt ?? Date.now()
+      if (firstStart === null && f.type === 'message.message_start') { firstStart = f.receivedAt ?? Date.now(); startSeenAt = Date.now() }
       if (firstDelta === null && f.type === 'message.text_delta') firstDelta = f.receivedAt ?? Date.now()
     }
     scanned = rt.events.length
     if (firstStart !== null && firstDelta !== null) break
+    if (startSeenAt !== null && Date.now() - startSeenAt > DELTA_GRACE_MS) break
     await sleep(2)
   }
   return { firstStart, firstDelta }
