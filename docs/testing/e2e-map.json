@@ -648,7 +648,9 @@
         "extensions/universal/subagent-workflow/src/**",
         "packages/subagent-core/workflows/fan-out.js",
         "packages/subagent-core/src/orchestration/**",
-        "packages/subagent-core/src/execution/service/**"
+        "packages/subagent-core/src/execution/service/**",
+        "packages/subagent-core/workflows/batch.js",
+        "packages/subagent-core/workflows/_shared/batch-collect.cjs"
       ],
       "layer": "L3",
       "assets": [
@@ -667,6 +669,14 @@
         {
           "kind": "harness",
           "ref": "e2e/fixtures/batch-real-helpers.ts"
+        },
+        {
+          "kind": "script",
+          "ref": "packages/subagent-core/workflows/batch.js"
+        },
+        {
+          "kind": "script",
+          "ref": "packages/subagent-core/workflows/_shared/batch-collect.cjs"
         }
       ],
       "trigger": "on-diff",
@@ -674,7 +684,7 @@
       "run": "前置：VITE_E2E=true pnpm run build:e2e（real renderer bundle，不带 VITE_MOCK）。执行：TAIJI_PI_LIVE=1 pnpm test:e2e --project=electron e2e/batch-s1-basic-chain.spec.ts（双凭证门 = env + 本机 provider 凭证，缺一 skip 不 fail；空载串行）。历史验收剧本（W1 batch-rerun.sh）已随 .tmp 清理（.tmp 不入 git），主命令即执行口径",
       "owner": "extensions/universal/subagent-workflow",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
-      "note": "剧本重建完成（2026-09-26 W1 介质归位触发义务收敛）：spec 落 git 跟踪路径防丢失复发；断言口径 = 原始场景 S1 通知收齐 + W1 新介质锚（journal 首帧/恰一 run-settled/seq 递增、v2 条目各恰两/实体、journal 胜出、死字节零命中、wf-done 幂等键）。 R2 态：触发范围 = subagent-workflow shell / fan-out 模板 / core 执行链（orchestration + execution/service）改动。asset 锚 = 被验能力本体（非验证剧本——validate 强校验 asset 磁盘存在，剧本未落建前以能力本体登记，落建后同 commit 回填）。验收敛径（设计 S1）：一条 notifyDone，status=ok 且 results.length=2、summary 计数正确、Agent Trace 2 条均 ok； 真机已过：status=ok/results=2/taskIndex 0,1/计数正确/wf-done 登记。"
+      "note": "剧本重建完成（2026-09-26 W1 介质归位触发义务收敛）：spec 落 git 跟踪路径防丢失复发；断言口径 = 原始场景 S1 通知收齐 + W1 新介质锚（journal 首帧/恰一 run-settled/seq 递增、v2 条目各恰两/实体、journal 胜出、死字节零命中、wf-done 幂等键）。 R2 态：触发范围 = subagent-workflow shell / batch 模板 / core 执行链（orchestration + execution/service）改动。asset 锚 = 被验能力本体（非验证剧本——validate 强校验 asset 磁盘存在，剧本未落建前以能力本体登记，落建后同 commit 回填）。验收敛径（设计 S1）：一条 notifyDone，status=ok 且 results.length=2、summary 计数正确、Agent Trace 2 条均 ok； 真机已过：status=ok/results=2/taskIndex 0,1/计数正确/wf-done 登记。"
     },
     {
       "id": "E2E-BATCH-02",
@@ -702,7 +712,9 @@
       "scope": [
         "extensions/universal/subagent-workflow/src/**",
         "packages/subagent-core/workflows/fan-out.js",
-        "packages/subagent-core/src/execution/assembly/subagent-actions-core.ts"
+        "packages/subagent-core/src/execution/assembly/subagent-actions-core.ts",
+        "packages/subagent-core/workflows/batch.js",
+        "packages/subagent-core/workflows/_shared/batch-collect.cjs"
       ],
       "layer": "L3",
       "assets": [
@@ -721,6 +733,14 @@
         {
           "kind": "harness",
           "ref": "e2e/fixtures/batch-real-helpers.ts"
+        },
+        {
+          "kind": "script",
+          "ref": "packages/subagent-core/workflows/batch.js"
+        },
+        {
+          "kind": "script",
+          "ref": "packages/subagent-core/workflows/_shared/batch-collect.cjs"
         }
       ],
       "trigger": "on-diff",
@@ -737,7 +757,9 @@
         "extensions/universal/subagent-workflow/src/**",
         "packages/subagent-core/workflows/fan-out.js",
         "packages/subagent-core/src/orchestration/**",
-        "packages/subagent-core/src/execution/service/**"
+        "packages/subagent-core/src/execution/service/**",
+        "packages/subagent-core/workflows/batch.js",
+        "packages/subagent-core/workflows/_shared/batch-collect.cjs"
       ],
       "layer": "L3",
       "assets": [
@@ -760,6 +782,14 @@
         {
           "kind": "harness",
           "ref": "e2e/fixtures/batch-real-helpers.ts"
+        },
+        {
+          "kind": "script",
+          "ref": "packages/subagent-core/workflows/batch.js"
+        },
+        {
+          "kind": "script",
+          "ref": "packages/subagent-core/workflows/_shared/batch-collect.cjs"
         }
       ],
       "trigger": "on-diff",
@@ -777,13 +807,24 @@
         "packages/subagent-core/src/execution/service/workflow-dispatch.ts",
         "packages/subagent-core/src/orchestration/__tests__/member-reuse-pool.test.ts",
         "packages/subagent-core/src/execution/__tests__/conversation-continuation.test.ts",
-        "packages/subagent-core/workflows/fan-out.js"
+        "packages/subagent-core/workflows/fan-out.js",
+        "packages/subagent-core/workflows/batch.js",
+        "packages/subagent-core/workflows/_shared/batch-collect.cjs",
+        "packages/subagent-core/src/__tests__/batch-script.test.ts"
       ],
       "layer": "L1",
       "assets": [
         {
           "kind": "script",
           "ref": "packages/subagent-core/workflows/fan-out.js"
+        },
+        {
+          "kind": "script",
+          "ref": "packages/subagent-core/workflows/batch.js"
+        },
+        {
+          "kind": "script",
+          "ref": "packages/subagent-core/workflows/_shared/batch-collect.cjs"
         }
       ],
       "trigger": "on-diff",
@@ -1393,7 +1434,9 @@
         "packages/pi-subagent-cli/src/**",
         "packages/subagent-core/src/execution/service/member-reuse-pool.ts",
         "packages/subagent-core/workflows/fan-out.js",
-        "extensions/universal/base-tool-enhance/**"
+        "extensions/universal/base-tool-enhance/**",
+        "packages/subagent-core/workflows/batch.js",
+        "packages/subagent-core/workflows/_shared/batch-collect.cjs"
       ],
       "layer": "L3",
       "assets": [
@@ -1412,6 +1455,14 @@
         {
           "kind": "harness",
           "ref": "e2e/fixtures/batch-real-helpers.ts"
+        },
+        {
+          "kind": "script",
+          "ref": "packages/subagent-core/workflows/batch.js"
+        },
+        {
+          "kind": "script",
+          "ref": "packages/subagent-core/workflows/_shared/batch-collect.cjs"
         }
       ],
       "trigger": "on-diff",

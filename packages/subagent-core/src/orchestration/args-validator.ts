@@ -109,18 +109,20 @@ function compileSchema(
   }
 }
 
-// ── 旧格式迁移指引（按包内自带模板名登记，当前仅 fan-out）────────────────
+// ── 旧格式迁移指引（按包内自带模板名登记：fan-out / batch）────────────────
 //
-// fan-out 把成员参数对象化（tasks 元素 = 成员对象 {task, agent?, model?, thinkingLevel?}，
-// 顶层 agents 参数删除）后，按旧格式形状（tasks 字符串数组 / 顶层 agents 键）新派的
-// args 会被 ajv 拒，但 ajv 文案只有 schema 语义（"must be object" /
+// fan-out 与 batch 把成员参数对象化（tasks 元素 = 成员对象 {task, agent?, model?,
+// thinkingLevel?}，顶层 agents 参数删除）后，按旧格式形状（tasks 字符串数组 / 顶层 agents
+// 键）新派的 args 会被 ajv 拒，但 ajv 文案只有 schema 语义（"must be object" /
 // "must NOT have additional properties"），模型无从识别「这是旧格式形状而非随手写错」
-// ——补专属迁移文案，与 fan-out.js 内 scriptPath 旧格式文案同构：命名旧形状、给迁移
+// ——补专属迁移文案，与模板内 scriptPath 旧格式文案同构：命名旧形状、给迁移
 // 映射（agents 逗号串 → 逐成员 agent）与恢复动作（按旧 tasks 内容重派成员对象新 run）。
-// 登记收敛在包内自带模板名上，不发明第三方 workflow 的文案；本表只附加迁移指引，
+// 登记收敛在包内自带模板名上（两模板共用同一收集内核、同一成员对象契约，故同一份
+// 文案），不发明第三方 workflow 的文案；本表只附加迁移指引，
 // 不改变拒绝判定（schema 仍是类型校验唯一权威——命中与否都以 ajv 已拒绝为前提）。
+const MEMBER_OBJECT_TEMPLATES = new Set(["fan-out", "batch"]);
 function legacyArgsAdvisory(scriptName: string, args: Record<string, unknown>): string | undefined {
-  if (scriptName !== "fan-out") return undefined;
+  if (!MEMBER_OBJECT_TEMPLATES.has(scriptName)) return undefined;
   const tasks: unknown = args.tasks;
   const stringTasks = Array.isArray(tasks) && tasks.some((t) => typeof t === "string");
   const agentsKey = args.agents !== undefined;

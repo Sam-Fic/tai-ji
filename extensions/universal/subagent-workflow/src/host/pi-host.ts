@@ -70,8 +70,8 @@ import { toErrorMessage } from "@zhushanwen/pi-ext-guards";
  *   - **dev / npm 形态**：`require.resolve` 沿本包依赖解析链命中 core 包；
  *   - **bundle / staged 打包形态**（2026-10-03 B′ 修复）：esbuild 自包含 bundle 把
  *     core inline、staged 布局无 node_modules ⇒ resolve 必败（实证：pi-host 日志全天
- *     202 条 'Cannot find module … workflows/README.md'，内置 6 workflow + 10 agent
- *     整体不可发现、`subagent_batch` 批量工具报 'Built-in workflow fan-out is not available'）。
+ *     202 条 'Cannot find module … workflows/README.md'，内置 7 workflow + 10 agent
+ *     整体不可发现、`subagent_batch` 批量工具报 'Built-in workflow batch is not available'）。
  *     此时回退到 staged scope 根（见 stagedScopeRootFromModuleUrl）——仅当回退也不
  *     成立（异常布局/解析器不可用）才降级为不注入并 warn。
  */
@@ -100,6 +100,26 @@ export function corePackageNpmRoot(moduleUrl: string = import.meta.url): string 
     );
     return undefined;
   }
+}
+
+/**
+ * core 内置 workflow 资产根（`batch` / `fan-out` 等内置模板所在目录）。
+ *
+ * 两种布局（与 corePackageNpmRoot 的槽根语义配套）：
+ *   - dev/npm 形态：内置模板在 `@zhushanwen/subagent-core` 包内 → `<槽根>/subagent-core/workflows`
+ *   - 打包 staged 形态：`scripts/bundle-extensions.mjs` 把整个 workflows/ 拷进
+ *     `pi-subagent-workflow` 包内 → `<scope 根>/pi-subagent-workflow/workflows`
+ * 返回 undefined = 两种布局都定位不到（此时发现层同样扫不到内置模板，调用方应
+ * fail-fast 而非回退到按名解析——按名解析可被 project 级同名 workflow 遮蔽）。
+ */
+export function builtinWorkflowsRoot(moduleUrl: string = import.meta.url): string | undefined {
+  const slotRoot = corePackageNpmRoot(moduleUrl);
+  if (slotRoot === undefined) return undefined;
+  for (const pkgDir of ["subagent-core", "pi-subagent-workflow"]) {
+    const dir = join(slotRoot, pkgDir, "workflows");
+    if (existsSync(dir)) return dir;
+  }
+  return undefined;
 }
 
 /**

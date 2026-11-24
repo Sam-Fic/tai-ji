@@ -8,8 +8,8 @@
  * 关系——改本文件不影响命令壳，反之亦然。
  *
  * 行为契约（subagent-tool-interface-refactor §3.1.2 批量终态 / §3.3.2）：
- * - 唯一批量入口：N 个已知独立任务一次派发；handler 按固定名解析内置 `fan-out`
- *   模板（FAN_OUT_SCRIPT_NAME，不经 registry 之外的第二套批机制），组装
+ * - 唯一批量入口：N 个已知独立任务一次派发；handler 按固定名解析内置 `batch`
+ *   模板（BATCH_SCRIPT_NAME，不经 registry 之外的第二套批机制），组装
  *   `args = {tasks}`（成员对象数组）后交 runWorkflow 执行——**不生成脚本
  *   文本**，执行形态 = 内置模板 + 一跳扁平 args 透传。
  * - 成员对象形状：tasks 元素 = {task, agent?, model?, thinkingLevel?}（schema 权威
@@ -23,6 +23,12 @@
  *   走 record 回放）、注入安全（workerData.scriptPath 定位 _shared，不回退当前目录）
  *   与脚本可探索性（@pi-meta 进可用 workflow 清单）——走 workflow 管道使批量派发
  *   继承持久化、journal、GUI 派生视图与断点恢复全套能力。
+ *
+ * 执行体选型（2026-11 批量无归约化）：批量工具专用 `batch` 模板 = 通用 `fan-out` 模板
+ * 去掉 aggregate 归约节点——批量契约是「把全部成员结果原样带回」，归约是主 agent 的
+ * 职责（它看得见全局意图；额外的归约成员只是一次 LLM 往返 + 一层信息损耗）。两模板
+ * 共用同一收集内核（workflows/_shared/batch-collect.cjs），fan-out 保留可选 aggregate
+ * 供直跑场景按需使用。
  * - 无 action 分发：status/abort 不复制，直接指路 workflow_control（runId 同体系）。
  * - 无 args 嵌套：tasks/agent/... 全在顶层（弱模型信任 schema 结构信号，
  *   两跳转译是事故高发区——对照 workflow_run 的 name+args 形态）。
@@ -35,6 +41,8 @@
  *
  * 层归属：Interface。依赖 Pi SDK + core lifecycle/registry + reentry-guard。
  */
+
+import { dirname, join } from "node:path";
 
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -71,6 +79,8 @@ import {
 } from "./tool-shared.ts";
 // GUI 上下文最小子集构造（Pi ExtensionContext → 协议 GuiContext）。
 import { toGuiCtx } from "../gui/gui-mappers.ts";
+// 内置 workflow 资产根（core 包内置模板的布局锚定——固定执行体按路径解析的前提）。
+import { builtinWorkflowsRoot } from "../../host/pi-host.ts";
 import type { RunStartDetails, WorkflowToolResult } from "./tool-result.ts";
 
 // ── Constants ────────────────────────────────────────────────
@@ -78,11 +88,22 @@ import type { RunStartDetails, WorkflowToolResult } from "./tool-result.ts";
 /**
  * 本工具的固定执行体（内置模板）脚本名。
  *
- * 常量而非参数：subagent_batch tool 的契约就是「把 tasks 透传给 fan-out 模板」——参数化会让
+ * 常量而非参数：subagent_batch tool 的契约就是「把 tasks 透传给 batch 模板」——参数化会让
  * 工具的语义随脚本漂移（对照 D3「执行管道唯一」）。脚本按名经 registry 解析
  * （内置名优先链与 workflow_run actionRun 同一条，见 plan U2「复刻既有加载路径」）。
+ *
+ * 为什么是专用模板而非通用 fan-out：批量契约 = 纯收集（全部成员结果原样带回），无
+ * aggregate 归约节点——归约由主 agent 自行完成。收集内核与 fan-out 共用
+ * （workflows/_shared/batch-collect.cjs），此处只固定「哪个模板」这一个决策。
+ *
+ * 为什么按内置绝对路径解析而非按名（2026-11-24 合入点审查 MF-1）：发现序
+ * project 级 > npm 槽（内置模板所在槽，resource-discovery 的 last-writer-wins 目标序），
+ * 用户/项目里一个同名 `.pi/workflows/batch.js` 会**整体顶替**内置模板（已实证：合并结果里
+ * 该名只剩 project 一条），`registry.get("batch")` 随即命中用户脚本 → 工具静默改跑它。
+ * 固定执行体是 core 包资产，路径锚定才与「本工具不允许换脚本」的契约自洽——与
+ * workflow_run 的「按名解析退役 → getPath 单通道」（D4-1）同方向。
  */
-export const FAN_OUT_SCRIPT_NAME = "fan-out";
+export const BATCH_SCRIPT_NAME = "batch";
 
 /** 批量标签时间短码基数（Date.now() 的 36 进制形态：8 字符覆盖到 2059 年）。 */
 const SLUG_TIME_RADIX = 36;
@@ -103,9 +124,9 @@ export type SubagentsToolParams = Static<typeof SubagentsParams>;
 export interface SubagentsToolDetails extends RunStartDetails {
   /** 启动即返回（后台运行），恒 "running"。 */
   status: "running";
-  /** 执行体模板名（恒 FAN_OUT_SCRIPT_NAME，供程序化消费方核对）。 */
+  /** 执行体模板名（恒 BATCH_SCRIPT_NAME，供程序化消费方核对）。 */
   scriptName: string;
-  /** 生效标签（模型提供的 slug，或 handler 生成的 fan-out-<时间短码>）。 */
+  /** 生效标签（模型提供的 slug，或 handler 生成的 batch-<时间短码>）。 */
   slug: string;
   taskCount: number;
   __gui__?: GuiRenderResult;
@@ -143,14 +164,14 @@ export function buildBatchGui(details: SubagentsToolDetails, tasks: SubagentsToo
 // ── helpers ──────────────────────────────────────────────────
 
 /**
- * 生成缺省批量标签 `fan-out-<时间短码>`（时间短码 = Date.now() 的 36 进制）。
+ * 生成缺省批量标签 `batch-<时间短码>`（时间短码 = Date.now() 的 36 进制形态）。
  *
- * 长度：`fan-out-` (8) + 8 = 16 ≤ SLUG_MAX_LENGTH (35)，数十年内形态稳定
+ * 长度：`batch-` (6) + 8 = 14 ≤ SLUG_MAX_LENGTH (35)，数十年内形态稳定
  * （36^8 = 2.8e12 ms ≈ 2059 年）——测试锁定该不变量。
  * 空串与空白串按「未提供」处理（避免状态侧出现空标签）。
  */
 export function generateBatchSlug(now: number = Date.now()): string {
-  return `${FAN_OUT_SCRIPT_NAME}-${now.toString(SLUG_TIME_RADIX)}`;
+  return `${BATCH_SCRIPT_NAME}-${now.toString(SLUG_TIME_RADIX)}`;
 }
 
 /** 启动返回文案（subagent-tool-interface-refactor §3.1.4 样例原文：一条通知 + 成员一次性 + 单次恢复查询出口（then stop again）+ abort 指引）。 */
@@ -172,6 +193,8 @@ function subagentsStartupText(
  * `aggregate` 已从工具删除。pi 参数校验对未知字段静默放行（typebox Object 不产
  * additionalProperties），而旧字段出现 = 模型记忆残留的混合形状，静默忽略会丢失
  * 用户意图（失败显式上报）——显式 throw 给成员对象 / 自行归约的 Correct 形状。
+ * （注：`aggregate` 在通用 fan-out 模板上仍存在，只是批量工具不再透传——批量结果
+ * 由主 agent 归约，见 batch 模板头说明。）
  */
 function assertNoLegacyBatchFields(params: SubagentsToolParams): void {
   if (!("agents" in params || "aggregate" in params)) return;
@@ -222,7 +245,7 @@ function assertBatchModelsInCatalog(params: SubagentsToolParams): void {
  *
  * 失败形态与恢复动作见设计 §3.1.5（本函数只做入口级 fail-fast：旧字段迁移检查、
  * tasks 缺失/空、成员 task 空白、slug 超长、显式模型目录校验；
- * fan-out 模板入口另有成员形状/trim 检查——run 即失败，两条路径不重复实现同一约束）。
+ * batch 模板入口另有成员形状/trim 检查——run 即失败，两条路径不重复实现同一约束）。
  */
 export async function runSubagentsBatch(
   params: SubagentsToolParams,
@@ -244,7 +267,7 @@ export async function runSubagentsBatch(
   }
 
   // 成员 task 非空白（三道防线：schema minLength:1 拦空串 → 本层 trim 检查拦纯空白串
-  // （带成员下标，模型可直接定位修正，先行 fail-fast）→ fan-out 模板入口 trim（run 侧兜底））。
+  // （带成员下标，模型可直接定位修正，先行 fail-fast）→ batch 模板入口 trim（run 侧兜底））。
   for (const [index, member] of tasks.entries()) {
     if (typeof member.task !== "string" || member.task.trim() === "") {
       throw new Error(
@@ -257,23 +280,26 @@ export async function runSubagentsBatch(
   // slug 运行时护栏（与 workflow_run actionRun 对称的纵深防御；schema maxLength 是第一道关卡）
   const providedSlug = params.slug?.trim();
   assertSlugWithinLimit(providedSlug, ["tri-review", "scan-docs"]);
-  // 缺省（或空白）时 handler 生成 fan-out-<时间短码>：受益面 = 状态侧（drawer run header /
+  // 缺省（或空白）时 handler 生成 batch-<时间短码>：受益面 = 状态侧（drawer run header /
   // run 派生视图名）；对话流块面显示的是模型 input.slug（无 input 回写通路——D8 分面声明）。
   const slug = providedSlug ? providedSlug : generateBatchSlug();
 
   // 显式模型入口校验（运行级一次 + 成员逐个带下标；catalog 不可用 fail-closed，§3.1.2）。
   assertBatchModelsInCatalog(params);
 
-  // 执行体脚本按固定内置名解析（registry.get 精确名匹配；脚本名是工具自带常量
-  // FAN_OUT_SCRIPT_NAME 而非用户参数——workflow_run actionRun 的按名解析已退役
-  // 走 getPath 单通道，本工具不允许换脚本，无 getPath 回落需求）。
-  const script = await deps.registry.get(FAN_OUT_SCRIPT_NAME);
+  // 执行体脚本按 core 内置绝对路径解析（registry.getPath——不经按名发现，project 级
+  // 同名 workflow 遮蔽不到它；布局锚定见 builtinWorkflowsRoot 注释）。解析不到内置根
+  // = 两种布局都定位失败（此时发现层同样扫不到内置模板），与「脚本不可用」同一 fail-fast。
+  const builtinRoot = builtinWorkflowsRoot();
+  const script = builtinRoot === undefined
+    ? undefined
+    : await deps.registry.getPath(join(builtinRoot, `${BATCH_SCRIPT_NAME}.js`));
   if (!script || !script.available) {
     const all = await deps.registry.loadAll();
     const available = formatAvailableWorkflowRefs(all);
     throw new Error(
-      `Built-in workflow '${FAN_OUT_SCRIPT_NAME}' is not available — the subagent_batch tool runs it as its batch body. ` +
-      `Recovery: verify the @zhushanwen/subagent-core package ships workflows/${FAN_OUT_SCRIPT_NAME}.js (reinstall/repair it), then retry. ` +
+      `Built-in workflow '${BATCH_SCRIPT_NAME}' is not available — the subagent_batch tool runs it as its batch body. ` +
+      `Recovery: verify the @zhushanwen/subagent-core package ships workflows/${BATCH_SCRIPT_NAME}.js (reinstall/repair it), then retry. ` +
       `Workflows currently available:\n${available || "  (none)"}`,
     );
   }
