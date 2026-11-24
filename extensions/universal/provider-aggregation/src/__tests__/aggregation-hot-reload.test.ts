@@ -561,6 +561,45 @@ describe("route 闭包端到端", () => {
 		} as unknown as ExtensionContext
 		expect(() => routeVia(registered, "route-a", emptyCtx)).toThrow(/不在当前模型目录/)
 	})
+
+	it("retry 透传边界：failed 端点在配置内但目录不可解析（链中路过 provider 被删）→ 落正常选择", () => {
+		writeConfig([ROUTE_A], T1)
+		const { pi, registered } = createMockPi()
+		providerAggregationFactory(pi, { configPath })
+		const partialCtx = {
+			// zhipu/glm 已不在目录（provider 被删）；opencode-go/zai-glm 仍在
+			modelRegistry: { find: vi.fn((provider: string, modelId: string) =>
+				(provider === "opencode-go" && modelId === "zai-glm"
+					? PHYSICAL_MODELS.find(m => m.provider === provider && m.id === modelId)
+					: undefined) as unknown as Model) },
+		} as unknown as ExtensionContext
+		const result = routeVia(registered, "route-a", partialCtx, {
+			reason: "retry",
+			failed: {
+				model: { provider: "zhipu", id: "glm" } as unknown as Model,
+				thinkingLevel: "off",
+				message: { stopReason: "error" } as unknown as AssistantMessage,
+			},
+		})
+		expect(result.modelId).toBe("zai-glm") // 透传目标不可解析 → 正常选择落到下一个候选
+	})
+
+	it("预算读取边界：retry.enabled=true 且 maxRetries=0（显式零容限）→ 终局 error 即 burnt", () => {
+		writeConfig([ROUTE_A], T1)
+		const base = createMockPi()
+		const pi = {
+			...base.pi,
+			getSettings: vi.fn(() => ({ retry: { enabled: true, maxRetries: 0, baseDelayMs: 2000 } })),
+		} as unknown as ExtensionAPI
+		providerAggregationFactory(pi, { configPath })
+		const ctx = createMockCtx()
+		const result = routeVia(base.registered, "route-a", ctx, {
+			reason: "user",
+			messages: [{ role: "assistant", provider: "zhipu", model: "glm", stopReason: "error" } as unknown as Message],
+		})
+		expect(result.modelId).toBe("zai-glm")
+		expect(result.state).toEqual({ burnt: ["zhipu/glm"] })
+	})
 })
 
 /** 取 mock ctx 里 modelRegistry.find 的全部调用参数（物理模型解析轨迹断言用）。 */

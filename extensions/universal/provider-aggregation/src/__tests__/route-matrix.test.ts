@@ -482,6 +482,39 @@ describe("D6 修订：终局观察与 burnt 软避让（decideRoute）", () => {
 		expect(result.memberIndexes).toEqual([1, 0])
 		expect([...result.burnt]).toEqual([GLM])
 	})
+
+	it("无候选 + 终局观察烧掉端点 → burn 仍随决策透出（throw 路径无 state 出口，下一轮幂等重导——T6 场景的单测锚）", () => {
+		const windowed = route({
+			members: [
+				member({ id: "a", providerId: "zhipu", modelId: "glm", type: "window", window: windowTable([]) }),
+				member({ id: "b", providerId: "opencode-go", modelId: "zai-glm", type: "window", window: windowTable([]) }),
+			],
+		})
+		const result = decide({
+			route: windowed,
+			messages: [outcome("zhipu", "glm", "error")],
+			failures: new Map([[GLM, 3]]),
+		})
+		expect(result.outcome).toBe("no-candidate")
+		if (result.outcome !== "no-candidate") return
+		expect([...result.burnt]).toEqual([GLM]) // burn 已算出——恢复配置后下一轮求值重导，不依赖闭包镜像
+		expect(result.failures.get(GLM)).toBe(3)
+	})
+
+	it("轮换重探跳过非候选 burnt 引用：窗外端点的旧 burn 不占用重探位（候选内取最旧）", () => {
+		const mixed = route({
+			members: [
+				member({ id: "a", providerId: "zhipu", modelId: "glm", type: "window", window: windowTable([]) }),
+				member({ id: "b", providerId: "opencode-go", modelId: "zai-glm", type: "none" }),
+			],
+		})
+		// GLM 窗外不在候选集但 burn 序更旧——轮换只能在候选（ZAI）内取
+		const result = decide({ route: mixed, burnt: new Set([GLM, ZAI]) })
+		expect(result.outcome).toBe("selected")
+		if (result.outcome !== "selected") return
+		expect(result.memberIndexes[0]).toBe(1) // 重探唯一候选 ZAI
+		expect([...result.burnt]).toEqual([GLM, ZAI]) // ZAI 移到序尾（GLM 保持最旧，恢复窗口后仍先避让）
+	})
 })
 
 describe("parseFailoverState（router state 防御解析）", () => {
