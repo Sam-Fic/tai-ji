@@ -362,10 +362,10 @@ describe('shiki-highlight-worker 协议', () => {
     await import('../shiki-highlight-worker')
     selfObj.onmessage?.({ data: { type: 'jobs', jobs: [{ id: 1, code: 'bad', lang: 'ts' }, { id: 2, code: 'ok', lang: 'ts' }] } })
     await vi.waitFor(() => {
-      expect(posted.some((m) => (m as { type: string }).type === 'jobError')).toBe(true)
-      expect(posted.some((m) => (m as { type: string; id: number }).type === 'result' && m.id === 2)).toBe(true)
+      expect(posted.some((m: unknown) => (m as { type: string }).type === 'jobError')).toBe(true)
+      expect(posted.some((m: unknown) => (m as { type: string; id: number }).type === 'result' && (m as { id: number }).id === 2)).toBe(true)
     })
-    const err = posted.find((m) => (m as { type: string }).type === 'jobError')
+    const err = posted.find((m: unknown) => (m as { type: string }).type === 'jobError')
     expect(err).toEqual({ type: 'jobError', id: 1, message: 'boom' })
   })
 })
