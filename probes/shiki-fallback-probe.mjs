@@ -6,7 +6,9 @@
  *
  * 形态：node probes/shiki-fallback-probe.mjs --data-dir <dir> --sid <sid> [--timeout-ms 240000]
  *
- * 动作：CDP Network.setBlockedURLs 拦掉 worker 脚本加载（模拟 CSP 被外部策略拦）→
+ * 动作：CDP Runtime.evaluate 把 window.Worker 换成「构造即抛错」的桩（模拟 worker
+ *       不可用——CSP 被外部策略拦 / 环境无 Worker；实测 Network.setBlockedURLs 不拦截
+ *       worker 脚本加载，故用构造抛错桩触发同一 degrade 路径）→
  *       delivery.submit 发 prompt → 等 complete → 断言：
  *       ① 高亮保留（pre.shiki + token span 在场，非纯文本降级）；
  *       ② 内容完整（代码字符数在场）；
@@ -33,7 +35,6 @@ const dataDir = path.resolve(arg('data-dir', ''))
 const sid = arg('sid', '')
 const timeoutMs = Number(arg('timeout-ms', '240000'))
 const prompt = arg('text', '请给出性能优化实施方案')
-const workerPattern = arg('block', '*shiki-highlight-worker*')
 
 if (!dataDir || !sid) {
   console.error('usage: node probes/shiki-fallback-probe.mjs --data-dir <dir> --sid <sid> [--timeout-ms 240000]')
@@ -44,9 +45,13 @@ const rt = await connectRuntime(dataDir)
 const cdp = await connectRendererCdp(Number(arg('cdp-port', '9478')))
 console.log('[probe] connected runtime + renderer CDP')
 const consoleMessages = await collectConsoleMessages(cdp)
-await cdp.send('Network.enable')
-await cdp.send('Network.setBlockedURLs', { urls: [workerPattern] })
-console.log(`[probe] worker script blocked: ${workerPattern}`)
+await cdp.send('Runtime.enable')
+// worker 不可用桩：构造即抛错（客户端 ensureWorker 的 catch → degrade → 主线程同步回退）。
+// 在首个 fence job（fence 闭合，流式中途）之前打桩——客户端惰性建 worker，此刻尚未建。
+await cdp.send('Runtime.evaluate', {
+  expression: `window.Worker = class { constructor() { throw new Error('probe: worker unavailable') } }`,
+})
+console.log('[probe] window.Worker stubbed to throw (worker unavailable)')
 await ensureGuiOnSession(cdp, sid)
 
 const clientUuid = crypto.randomUUID()
