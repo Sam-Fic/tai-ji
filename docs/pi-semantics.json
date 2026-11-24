@@ -2159,7 +2159,7 @@
     "verifiedWith": "1.0.0"
   },
   {
-    "id": "PS-100",
+    "id": "PS-102",
     "claim": "pi 重试预算缺省值（taiji @zhushanwen/pi-provider-aggregation 的影子副本锚）：getRetrySettings 的 maxRetries 缺省 3（`this.settings.retry?.maxRetries ?? 3`），getRetryEnabled 的 enabled 缺省 true（`this.settings.retry?.enabled ?? true`——重试默认开启）。taiji 侧 DEFAULT_MAX_RETRIES=3 与 readMaxRetries 的 enabled===false→0（重试停用 = 零次重试）是这两个缺省值的影子副本，直接决定 provider-aggregation「链内失败计数 ≥ 预算 → burnt → 下一轮 failover」的阈值——pi 升级若改缺省值、或 taiji 影子副本漂移，用户侧表现为 failover 时机静默偏移（重试次数感知不变、实际换端点时机变），故探针双断言（dist 缺省值 + 影子副本对拍）",
     "piAnchor": [
       {
