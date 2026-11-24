@@ -54,6 +54,7 @@ import type { SessionManagerAction, CanvasMarkerAction } from '@zhushanwen/exten
 // notify 通道 customType 词表单源（extension-protocol，与壳写点同源）；smart-context 落盘信号
 // 词表与 details 判读同源（C1 分界行实时化，扩展写侧同源消费）
 import {
+  MODEL_SELECT_CUSTOM_TYPE,
   parseCompactionPersistSignal,
   SMART_CONTEXT_NOTICE_CUSTOM_TYPE,
   SUBAGENT_BG_NOTIFY_CUSTOM_TYPE,
@@ -835,6 +836,8 @@ export class EventInterpreter {
         this.handleWorkflowResult(ev.message)
         // smart-context 落盘信号（C1）：命中后取 compaction entry 合成对话流分界行帧
         this.handleCompactionPersistSignal(ev.message)
+        // 模型切换信号（chat-flow-v2 msw-live）：命中后广播 message.modelSwitch 帧
+        this.handleModelSelectSignal(ev.message)
         return true
       case 'subagent-stream':
         // 路径 A-1：subagent 逐字 streaming → subagent.stream_delta WS 帧
@@ -1337,6 +1340,32 @@ export class EventInterpreter {
    * 降级契约（信号通道不产生新故障面）：entry 拉取失败 / 未注入 / 目标缺失 → 不发帧、
    * 不抛错、warn 留痕——最坏结果 = 分界行退回「重开会话才可见」原状，不阻断事件流。
    */
+  /**
+   * 模型切换信号分诊（chat-flow-v2 msw-live）：host-internals 在 pi `model_select` 后发隐藏的
+   * custom message（customType `taiji:model-select`）。本方法按 customType 分诊，广播
+   * message.modelSwitch 帧——帧只带切换后的 provider/modelId，切换前的模型由前端 reducer
+   * 按会话基线派生（live ≡ reload：重开侧同一 reducer 读 pi 落盘的 model_change entry）。
+   * 信号本身照常转发前端（display:false 消息由分组层透明跳过，不渲染）。
+   */
+  private handleModelSelectSignal(msg: ServerMessage): void {
+    const payload = msg.payload as { customType?: string; details?: Record<string, unknown> } | undefined
+    if (payload?.customType !== MODEL_SELECT_CUSTOM_TYPE) return
+    const details = payload.details
+    if (!details) return
+    const provider = typeof details.provider === 'string' ? details.provider : ''
+    const modelId = typeof details.modelId === 'string' ? details.modelId : ''
+    if (modelId === '') return
+    this.opts.send({
+      type: 'message.modelSwitch',
+      payload: {
+        sessionId: this.sessionId,
+        ...(provider !== '' && { provider }),
+        modelId,
+        timestamp: Date.now(),
+      },
+    })
+  }
+
   private async emitCompactionSummaryForPersistSignal(compactionId?: string): Promise<void> {
     try {
       const entries = await this.opts.getPiEntries?.()

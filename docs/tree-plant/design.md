@@ -67,6 +67,7 @@
 - packages/ui/src/locale/en-US/panel.ts
 - packages/renderer/src/style.css
 - packages/shared/src/message.ts
+- extension-dependencies.json
 - scripts/acceptance/
 - scripts/check-session-hidden-surface.mjs
 - docs/tree-plant/
@@ -81,7 +82,7 @@
 | tape-live | 进行中：卡头活动 chip 计时 + 执行中命令行尾输出 | tape-think | 中 | packages/ui/src/features/chat/process-aggregate/, packages/ui/src/features/chat/composables/, packages/ui/src/features/chat/__tests__/, packages/ui/src/locale/zh-CN/panel.ts, packages/ui/src/locale/en-US/panel.ts, scripts/acceptance/, scripts/check-session-hidden-surface.mjs, docs/testing/e2e-map.json | AC-CHIP, AC-RUN |
 | tape-settle | 落成后收成一行、点开 12 行窗口、详情走右侧抽屉 | tape-think, tape-scroll | 低 | packages/ui/src/features/chat/process-aggregate/, packages/ui/src/features/chat/ProcessAggregateBlock.vue, packages/ui/src/features/chat/Turn.vue, packages/ui/src/features/chat/__tests__/, scripts/acceptance/, docs/testing/e2e-map.json | AC-SETTLE, AC-DETAIL |
 | msw-replay | 回放派生：`model_change` entry → `modelSwitch` 系统消息；同模型/首个切换不出行 | 主干 | 高 | packages/core/src/domain/chat/apply-entry.ts, packages/core/src/domain/chat/__tests__/, packages/shared/src/message.ts | AC-MSW-REPLAY, AC-MSW-DEDUPE, AC-CORE-EQUIV |
-| msw-live | 实时链路：host-internals 扩展转发 `model_select` → runtime 帧 → 前端合成 entry | msw-replay | 高 | extensions/taiji/host-internals/src/, packages/runtime/src/services/session/event-interpreter.ts, packages/runtime/src/services/session/event-interpreter*.ts, packages/shared/src/protocol.ts, packages/core/src/domain/chat/effects/, packages/runtime/src/__tests__/ | AC-MSW-LIVE |
+| msw-live | 实时链路：host-internals 扩展转发 `model_select` → runtime 帧 → 前端合成 entry | msw-replay | 高 | extensions/taiji/host-internals/src/, packages/runtime/src/services/session/event-interpreter.ts, packages/runtime/src/services/session/event-interpreter*.ts, packages/shared/src/protocol.ts, packages/core/src/domain/chat/effects/, packages/runtime/src/__tests__/, packages/extension-protocol/, extension-dependencies.json | AC-MSW-LIVE |
 | msw-ui | 切换行渲染（横线分隔行族 + box 图标）与回合内插入 | msw-replay, msw-live | 高 | packages/core/src/domain/chat/message-turns.ts, packages/core/src/domain/chat/__tests__/, packages/ui/src/features/chat/Turn.vue, packages/ui/src/features/chat/SystemNotice.vue, packages/ui/src/locale/zh-CN/panel.ts, packages/ui/src/locale/en-US/panel.ts | AC-MSW-MID, AC-MSW-ICON |
 | i18n-final | 文案双侧对齐与词表核对 | 主干 | 低 | packages/ui/src/locale/zh-CN/panel.ts, packages/ui/src/locale/en-US/panel.ts | AC-I18N |
 

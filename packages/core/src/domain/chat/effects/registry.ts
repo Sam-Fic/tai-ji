@@ -49,6 +49,7 @@ import type {
   Message,
   PiBranchSummaryEntry,
   PiCompactionEntry,
+  PiModelChangeEntry,
   PiCustomMessageEntry,
   PiEntry,
   PiMessageEntry,
@@ -764,6 +765,26 @@ const messageEffects: Partial<Record<ServerMessageType, MessageEffectHandler>> =
   // 未注册 handler——dispatchMessageEvent 对未注册 type 直接 no-op（保留事件接收，不消费）。
   // 运行态语义未用：streaming/complete/error 是消息生命周期（finalizeSession 收尾），
   // 与 message.status 运行过程态正交（§3.3.6 死代码清理，原空 handler 删除）。
+
+  'message.modelSwitch': (ctx, sid, payload) => {
+    // 模型切换（chat-flow-v2 msw-live）：runtime 帧 → 合成 model_change entry 喂同一 reducer
+    //（compaction 的 cmp-<uuid> 同款范式）。切换前的模型不进 entry：reducer 按会话基线派生
+    //（live ≡ reload 构造性成立）；id 客户端生成 ms-<uuid>（重开侧为 pi 持久化 entry id，
+    // id 值异源属既有 live/reload 差异类）；timestamp 缺省用客户端时钟。
+    const provider = readString(payload, 'provider')
+    const modelId = readString(payload, 'modelId')
+    if (!modelId) return
+    const ts = payload['timestamp']
+    const entry: PiModelChangeEntry = {
+      type: 'model_change',
+      id: `ms-${randomUuid()}`,
+      parentId: null,
+      timestamp: new Date(typeof ts === 'number' ? ts : Date.now()).toISOString(),
+      ...(provider !== undefined && provider !== '' && { provider }),
+      modelId,
+    }
+    applyEntryFrameWithOverlay(ctx, sid, entry)
+  },
 
   'message.compactionSummary': (ctx, sid, payload) => {
     // [W6 fix-chat-flow-order] compaction 双路径收尾（最后一个未 entry 化的 live 消息类型）。
