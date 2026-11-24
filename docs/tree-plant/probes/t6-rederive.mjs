@@ -18,7 +18,6 @@ import {
 	assistantMessages,
 	checker,
 	cleanup,
-	eventsOfType,
 	http524,
 	httpOk,
 	makeWorkDir,

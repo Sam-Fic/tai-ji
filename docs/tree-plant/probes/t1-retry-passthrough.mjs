@@ -17,7 +17,6 @@ import {
 	cleanup,
 	eventsOfType,
 	http524,
-	httpOk,
 	makeWorkDir,
 	readSessionEntries,
 	runPiSession,

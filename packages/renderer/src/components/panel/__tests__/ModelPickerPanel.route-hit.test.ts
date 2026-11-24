@@ -5,6 +5,10 @@
  * 终态同步 F1-31 落地锁定）：行尾路由徽标三态——命中（routeHitNow）/ 无命中（routeNoHitNow）/
  * 数据未到位（routeBadge 原样）。数据求值半边在 model-picker-data（#94 缓存 + evaluateRouteAt），
  * 本文件只锁定呈现映射（模板三元），不 mock @/api（本组件不感知数据来源）。
+ *
+ * 文案口径（dmg-r1-1）：routeHitNow 是**条件命中**口径（时间窗 × 额度），不含 burnt 软避让——
+ * pi 侧选择层重排的状态在 pi session 的 virtual-model-state、renderer 无通道可见，burn 存活期
+ * 徽标可能与实际路由端点不一致。故本文件的 i18n mock 与断言随双语文案同步为「条件命中 →」。
  */
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
@@ -24,7 +28,7 @@ const i18n = createI18n({
           defaultTag: '默认',
           routeGroupTitle: '模型路由',
           routeBadge: '路由',
-          routeHitNow: '路由 → {name}',
+          routeHitNow: '条件命中 → {name}',
           routeNoHitNow: '路由 · 此刻无命中',
         },
       },
@@ -44,7 +48,7 @@ function routeBadgeText(wrapper: ReturnType<typeof mount>): string {
 }
 
 describe('ModelPickerPanel 路由行命中端点呈现（M3，F1-31）', () => {
-  it('hitEndpoint 为端点名 → 行尾「路由 → 端点名」', () => {
+  it('hitEndpoint 为端点名 → 行尾「条件命中 → 端点名」', () => {
     const wrapper = mountPanel([
       {
         provider: '模型路由',
@@ -53,7 +57,7 @@ describe('ModelPickerPanel 路由行命中端点呈现（M3，F1-31）', () => {
         models: [{ id: 'work-route', name: '工作路由', hitEndpoint: '智谱 GLM' }],
       },
     ])
-    expect(routeBadgeText(wrapper)).toBe('路由 → 智谱 GLM')
+    expect(routeBadgeText(wrapper)).toBe('条件命中 → 智谱 GLM')
   })
 
   it('hitEndpoint 为 null（定义在但条件全不满足）→ 行尾「路由 · 此刻无命中」', () => {
