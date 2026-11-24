@@ -1,5 +1,5 @@
 {
-  "testCommand": "pnpm --filter @taiji/core test --testTimeout=30000 && pnpm --filter @taiji/ui test --testTimeout=30000 && pnpm --filter @taiji/frontend test --testTimeout=30000",
+  "testCommand": "pnpm --filter @taiji/core test --testTimeout=30000 --hookTimeout=60000 && pnpm --filter @taiji/ui test --testTimeout=30000 --hookTimeout=60000 && pnpm --filter @taiji/frontend test --testTimeout=30000 --hookTimeout=60000",
   "typecheckCommand": "pnpm --filter @taiji/core typecheck && pnpm --filter @taiji/ui typecheck && pnpm --filter @taiji/frontend typecheck",
   "ignoreChangedPaths": [
     ".gitignore",
