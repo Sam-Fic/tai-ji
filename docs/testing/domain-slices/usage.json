@@ -17,6 +17,7 @@
       "packages/runtime/src/services/quota-providers/**",
       "packages/runtime/src/services/quota-params.ts",
       "packages/runtime/src/services/session/gen-stats-service.ts",
+      "packages/runtime/src/services/session/gen-stats-model-keys.ts",
       "packages/runtime/src/services/session/gen-stats-store.ts",
       "packages/runtime/src/services/session/gen-stats-model-keys.ts",
       "packages/runtime/src/services/session/event-interpreter-gen-stats.ts",
@@ -67,5 +68,7 @@
   ],
   "sharedBy": {},
   "contracts": [],
-  "e2eRules": []
+  "e2eRules": [
+    "E2E-GENSTATS-01"
+  ]
 }

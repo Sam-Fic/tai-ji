@@ -1,5 +1,5 @@
 {
-  "_comment": "C-state-05 判据数据 SSOT：packages/shared 禁 import node 内置模块（浏览器/runtime 共享层，node 内置在浏览器直接崩）。两个消费方共用本文件、不得各自维护副本——scripts/check-shared-module-admission.mjs（准入检查 B 项）与 .githooks/check_shared_node_builtin.py（pre-commit 机器执行点）。builtinModules 与 Node module.builtinModules 去 node: 前缀后的等值由 scripts/__tests__/check-shared-module-admission.test.mjs 断言（Node 新增内置未同步即测试红）。allowlistFiles 是存量待治理白名单（paths.ts / session-store-paths.ts，基线来源见 .githooks/check_shared_node_builtin.py 头注释），治理完成后删除即全量拦截。",
+  "_comment": "C-state-05 判据数据 SSOT：packages/shared 禁 import node 内置模块（浏览器/runtime 共享层，node 内置在浏览器直接崩）。两个消费方共用本文件、不得各自维护副本——scripts/check-shared-module-admission.mjs（准入检查 B 项）与 .githooks/check_shared_node_builtin.py（pre-commit 机器执行点）。builtinModules 是策略名单（对齐项目钉定的 Node 版本，只增不减）；内置清单与运行中 Node 的比对由 scripts/__tests__/check-shared-module-admission.test.mjs 做两条方向断言（运行中内置必须全部被覆盖 / 名单每条必须是真实内置，node: 前缀形态才算——test / test/reporters / sqlite / sea 这类仅前缀可用的内置在旧版本 Node 的 builtinModules 里不出现，逐版本等值会让同一份数据随本地 Node 版本时红时绿）。allowlistFiles 是存量待治理白名单（paths.ts / session-store-paths.ts，基线来源见 .githooks/check_shared_node_builtin.py 头注释），治理完成后删除即全量拦截。",
   "builtinModules": [
     "_http_agent",
     "_http_client",
