@@ -4,15 +4,16 @@
  *
  * 为什么需要这一层（2026-11-23 修复，根因 = 两套命名空间不互通）：
  * 采样按 assistant 消息自带的**物理**模型分桶（`provider/model`，pi 在虚拟模型选择下
- * 只有「本次请求」用物理模型，见 fact-check A8/A10），而会话权威模型（`session.getState`
+ * 只有「本次请求」用物理模型——PS-100），而会话权威模型（`session.getState`
  * / state_changed / JSONL model_change）是**虚拟**路由 key（`aggregation/<routeId>`）。
  * 三处消费（current 匹配 / 窗口聚合 / 广播反向寻址）各自内联 `===` 字符串全等时，
  * 路由会话的 current 与窗口聚合全 null，前端按「空值不占位」裁决整钮不渲染——功能静默失效。
  *
- * 解法（设计 §背景 ③）：读侧加一层「虚拟 key → 成员物理 key 集」展开，采样与落盘零改动。
+ * 解法：读侧加一层「虚拟 key → 成员物理 key 集」展开，物理采样落盘零改动（虚拟 key 样本
+ * 属 PS-101 路由失败通路，不落盘——gen-stats-service recordSample）。
  * 三处统一走本模块同一纯函数，命名空间规则只有一个落点（防止再次三处各自内联漂移）。
  *
- * 边界与降级（设计「非功能设计」表 + 显式不做表）：
+ * 边界与降级（逐条自述如下）：
  *   - 非 `aggregation/*` key 恒等返回自身（物理模型直连路径零变化，G3）；
  *   - 路由不存在 / 已删除 / 配置损坏返回 `[]`（store 已 quarantine）→ 恒等退化（指标回落
  *     null 而非抛错，不把配置域故障升级成指标域异常）；
@@ -80,8 +81,9 @@ export function modelKeyCovers(
  *
  * 对称形态 = `modelKeyCovers(a,b) || modelKeyCovers(b,a)`：
  *   - 会话权威 = 虚拟路由 key、槽 = 成员物理 key → 正向命中（主场景）；
- *   - 反向（槽 = 虚拟 key：pi 极少数通路会把会话选择写进消息自身，见 fact-check A20 里
- *     少量 `aggregation/<routeId>` 样本）也命中，避免这类样本永远无法成为 current。
+ *   - 反向（槽 = 虚拟 key：pi 极少数通路把会话选择写进消息自身——路由失败 turn 的
+ *     failureMessage 自带 `aggregation/<routeId>`，PS-101）也命中，避免这类样本永远无法
+ *     成为 current。
  *
  * 两侧都是物理 key 时退化为字符串全等（恒等展开），与修复前逐字一致。
  */

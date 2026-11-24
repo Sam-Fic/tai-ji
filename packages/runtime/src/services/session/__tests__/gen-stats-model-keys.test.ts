@@ -1,6 +1,9 @@
 /**
- * gen-stats-model-keys 单元测试（2026-11-23 路由命名空间修复，设计见
- * /tmp/genstats-agg-route/docs/design.md 与 fact-check A1/A3/A4/A5/A15/A16）。
+ * gen-stats-model-keys 单元测试（2026-11-23 路由命名空间修复）。
+ *
+ * pi 行为语义锚（docs/pi-semantics.json，探针 = pi-semantics-virtual-route.test.ts）：
+ * PS-100（虚拟选择下 assistant 消息自带物理端点 key——展开层的正向场景）与 PS-101
+ * （路由失败 failureMessage 把会话选择写进消息——反向场景）。
  *
  * 覆盖点：
  * - `expandModelKeys`：物理 key 恒等 / 单成员路由 / 多成员路由 / 成员去重 / 路由不存在回落

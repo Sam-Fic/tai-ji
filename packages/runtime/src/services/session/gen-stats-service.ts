@@ -34,11 +34,14 @@
  *   磁盘恢复）。无值编码纪律 [HISTORICAL]：全帧无值一律 null（null=无数据），禁止 ?? 0——
  *   0 只允许作为真实测量值出现。
  *
- * 模型 key 命名空间（2026-11-23 修复，根因见 gen-stats-model-keys.ts 文件头）：采样落盘按
- * 消息自带**物理** key（`provider/model`），会话权威模型可能是**虚拟**路由 key
- * （`aggregation/<routeId>`）——两套命名空间不互通会让路由会话的 current/窗口聚合全 null、
- * 前端三个触发器整钮不渲染。读侧经 gen-stats-model-keys 的同一纯函数展开：current 匹配、
- * 窗口聚合并集、广播反向寻址三处统一走 `modelKeyCovers` / `expandModelKeys`，落盘零改动。
+ * 模型 key 命名空间（2026-11-23 修复，根因见 gen-stats-model-keys.ts 文件头）：采样按
+ * 消息自带 key 分桶，会话权威模型可能是**虚拟**路由 key（`aggregation/<routeId>`）——
+ * 两套命名空间不互通会让路由会话的 current/窗口聚合全 null、前端三个触发器整钮不渲染。
+ * 读侧经 gen-stats-model-keys 的同一纯函数展开：current 匹配、窗口聚合并集、广播反向
+ * 寻址三处统一走 `modelKeyCovers` / `expandModelKeys`。落盘侧（2026-11-24 收口）：正常
+ * 路径消息自带**物理** key（PS-100），落盘行为不变；虚拟 key 样本只来自路由失败通路
+ * （PS-101），**不落盘**——`aggregation__*.json` 全仓无读方（展开层只读成员物理文件），
+ * 落盘即无读方死字节；该类样本 current-only（槽照常更新、广播照常推）。
  */
 
 import type {
@@ -51,6 +54,7 @@ import type {
   GenStatsTtft,
   ServerMessage,
 } from '@taiji/shared'
+import { isAggregationModelRef } from '@taiji/shared'
 import { parseModelSelector } from '@zhushanwen/subagent-core'
 import { logger } from '../../infra/logger.js'
 import type { ISessionService } from '../../interfaces.js'
@@ -313,8 +317,9 @@ export class GenStatsService {
     // 映射表达当前归属而非「有样本」，未采样的合法帧可达性由写 2/写 3 补全）。
     // D4 条件回写（adversarial-review-fixes §3.4 D4）：已登记为**其他**模型 key 时只落盘
     // 不回写——turn 中切模型后迟到的 usage 事件自带旧模型名，无条件 set 会把映射回写为
-    // 旧模型，该 sid 从新模型的扩展广播集合漏收帧；样本仍落盘到自带 model 名下（归属
-    // 正确），漏帧窗口交既有恢复路径（写 2 / getGenStats 降级链）自愈。未登记或同 key 才回写。
+    // 旧模型，该 sid 从新模型的扩展广播集合漏收帧；物理样本仍落盘到自带 model 名下（归属
+    // 正确；虚拟 key 样本不落盘，见下方 PS-101 分支），漏帧窗口交既有恢复路径（写 2 /
+    // getGenStats 降级链）自愈。未登记或同 key 才回写。
     const registered = this.modelBySid.get(sid)
     if (registered === undefined || registered === modelKey) {
       this.modelBySid.set(sid, modelKey)
@@ -322,7 +327,19 @@ export class GenStatsService {
 
     // per-session current 槽（会话视角）：与磁盘写解耦——写失败也更新（§3.5 当前帧照常推）。
     // 槽按样本自带 modelKey 归属（迟到旧模型样本只进对应槽，不影响新模型 current）。
-    this.updateSessionCurrent(sid, modelKey, sample)
+    const currentUpdated = this.updateSessionCurrent(sid, modelKey, sample)
+
+    // 虚拟 key 样本（PS-101：路由失败 turn 的 failureMessage 自带会话选择
+    // `aggregation/<routeId>`）**不落盘**：展开层（expandModelKeys）只读成员物理文件，
+    // `aggregation__*.json` 全仓无读方（窗口聚合/广播寻址都不消费它），落盘即无读方死字节
+    // 且 30 天 GC 只顺带清被写文件、孤儿持续累积——registry #26「不产生 aggregation__*.json」
+    // 声明据此成立。current 槽照常更新（current-only 语义）；广播条件与物理路径同构：两侧
+    // 共用同一组 build*Record 谓词，物理「≥1 条落盘」⟺ 虚拟「槽有更新」，帧流量不变
+    // （聚合层读不到本样本属预期：聚合口径 = 成员物理文件并集，虚拟样本只进 current）。
+    if (isAggregationModelRef(modelKey)) {
+      if (currentUpdated) this.broadcastModel(modelKey)
+      return
+    }
 
     const fresh = this.persistSample(provider, model, sample)
     // 扩展广播（D4）：仅 ≥1 条样本落盘时推——无落盘则聚合值不变，推帧无信息量。
@@ -341,8 +358,11 @@ export class GenStatsService {
    * 产出记录都消费**：标记只解释紧随 compaction 之后的那一次采样，证据见 classifyCacheMiss）。
    * 缓存槽归因只在「展示 0%」（store isDisplayedZeroCacheRatio，与 UI 四舍五入口径同源）时求——
    * 它是展示层注解，不改变 record 数值本身（落盘与聚合仍用原始 [cacheRead, promptTotal]）。
+   *
+   * 返回「是否产出 ≥1 条合法记录」（三槽任一更新）——recordSample 用作虚拟 key 样本
+   * （不落盘）的广播门，与物理路径「≥1 条落盘」同一组谓词恒等价。
    */
-  private updateSessionCurrent(sid: string, modelKey: string, s: GenStatsSample): void {
+  private updateSessionCurrent(sid: string, modelKey: string, s: GenStatsSample): boolean {
     const entry = getOrCreate(this.sessionCurrent, sid, (): SessionCurrentEntry => ({}))
     // 前序请求与 compaction 标记的读取（标记先读后清：本条样本消费它，不外溢到后续请求）
     const prevSampleAt = entry.lastSampleAt
@@ -354,7 +374,7 @@ export class GenStatsService {
     const speedRecord = buildSpeedRecord(s)
     const cacheRecord = buildCacheRecord(s)
     const ttftRecord = buildTtftRecord(s)
-    if (!speedRecord && !cacheRecord && !ttftRecord) return
+    if (!speedRecord && !cacheRecord && !ttftRecord) return false
     if (speedRecord) entry.speed = { modelKey, record: speedRecord }
     if (cacheRecord) {
       // 仅展示 0% 的样本求归因（命中样本恒缺省——currentMiss 与「刺眼的 0」严格同域）
@@ -370,6 +390,7 @@ export class GenStatsService {
       entry.cache = { modelKey, record: cacheRecord, ...(miss ? { miss } : {}) }
     }
     if (ttftRecord) entry.ttft = { modelKey, record: ttftRecord }
+    return true
   }
 
   /**

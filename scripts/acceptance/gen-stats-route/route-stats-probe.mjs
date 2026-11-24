@@ -2,7 +2,9 @@
 /**
  * route-stats-probe.mjs — composer 生成指标「模型路由（aggregation 虚拟模型）」实机验收探针
  *
- * 真进程层（设计 docs 见 /tmp/genstats-agg-route/docs/acceptance.md 的 T1/B1/B2/B3）：
+ * 真进程层（case 集 T1 路由 live 帧出数 / B1 多成员窗口并集 / B2 物理直连零回归 /
+ * B3 未命中成员仍入窗口——登记于 docs/testing/e2e-map.json E2E-GENSTATS-01；pi 行为
+ * 语义锚 PS-100/PS-101，docs/pi-semantics.json）：
  * 每条 case 独立 mkdtemp 数据目录 + 独立真 runtime 子进程（tsx 直起）+ 真 pi 子进程 +
  * faux LLM 演员（凭证无关零 token），走真实 WS 协议断言 `session.stats_update` 帧、
  * `session.getGenStats` reply 与磁盘采样文件。

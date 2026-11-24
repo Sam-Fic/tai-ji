@@ -1198,6 +1198,45 @@ describe('GenStatsService 路由会话（aggregation 虚拟模型）', () => {
     expect(service.frameFor('s1', 'aggregation/route-a').speed.current).toBe(50)
   })
 
+  it('虚拟 key 样本不落盘（PS-101 只进 current，不产 aggregation__* 死字节）：三族文件零写入 + current 槽命中 + current-only 帧照常推', () => {
+    const { service, published } = makeService(undefined, ROUTE_A)
+    service.recordSample('s1', { ...NORMAL_SAMPLE, ttftMs: 240, provider: 'aggregation', model: 'route-a' })
+
+    // registry #26「不产生 aggregation__*.json」声明锁死（全仓无读方的文件不落）
+    expect(existsSync(speedFilePath('aggregation', 'route-a'))).toBe(false)
+    expect(existsSync(cacheRatioFilePath('aggregation', 'route-a'))).toBe(false)
+    expect(existsSync(ttftFilePath('aggregation', 'route-a'))).toBe(false)
+    // current-only 广播：槽有更新 → 帧照常推（帧 model = 权威 key，current 三槽非 null）
+    expect(published).toHaveLength(1)
+    const frame = published[0]!.msg.payload as GenStatsFrame
+    expect(published[0]!.sid).toBe('s1')
+    expect(frame.model).toBe('aggregation/route-a')
+    expect(frame.speed.current).toBe(50)
+    expect(frame.cacheRatio.current).toBe(33)
+    expect(frame.ttft.current).toBe(240)
+    // 窗口聚合读不到本样本（聚合口径 = 成员物理文件并集，虚拟样本 current-only）
+    expect(frame.speed.day).toEqual(NULL_DIST)
+    // 反向命中仍成立：物理权威视角取到该虚拟样本的 current（不丢 current）
+    expect(service.frameFor('s1', 'prov/mdl').speed.current).toBe(50)
+  })
+
+  it('虚拟 key 样本三侧全无效（槽无更新）→ 无广播（与物理「无落盘不推帧」同构）', () => {
+    const { service, published } = makeService(undefined, ROUTE_A)
+    service.recordSample('s1', {
+      ...NORMAL_SAMPLE,
+      provider: 'aggregation',
+      model: 'route-a',
+      durationMs: null, // 速度侧无效（真缺闭）
+      input: 0,
+      cacheRead: 0,
+      cacheWrite: 0, // 命中率侧无效（promptTotal≤0）
+      ttftMs: null, // ttft 侧无效
+    })
+    expect(published).toHaveLength(0)
+    expect(existsSync(speedFilePath('aggregation', 'route-a'))).toBe(false)
+    expect(service.frameFor('s1', 'aggregation/route-a').speed.current).toBeNull()
+  })
+
   it('fresh 写盘复用只替换对应成员：本次落盘成员用内存值，其余成员照旧读盘', () => {
     const routes: readonly AggregationRoute[] = [
       makeRoute('dual', [
