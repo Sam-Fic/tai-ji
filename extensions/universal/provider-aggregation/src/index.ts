@@ -3,7 +3,9 @@
  *
  * 职责：把 providers.json 顶层 routes 域（@taiji/shared AggregationRoutesFile，唯一权威）
  * 派生为 pi 虚拟模型注册（AGGREGATION_PROVIDER_ID 承载，每条路由一个条目），并在每个
- * 请求发起前按路由条件（时间窗 / 额度 / 重试排除）从端点中选出本次实际发往的物理模型。
+ * 请求发起前从端点中选出本次实际发往的物理模型：非 retry 求值按路由条件（时间窗 / 额度）
+ * 硬闸 + burnt 软避让（终局 failover，D6 修订方案 B）；retry 求值透传上一失败端点——
+ * pi 的重试预算真正打到上游，终局失败（预算用尽）才 burnt 换端点。
  * 注册条目派生规则（id/name/thinkingLevels 并集/contextWindow 最小值）单源在
  * virtual-model-definitions.ts 的 buildVirtualModelDefinitions（本文件 re-export）——
  * RL1/A9 目录一致性对账（m8 aggregation-catalog-consistency.test）以同 fixture 调用
@@ -53,11 +55,12 @@ import type { AggregationRoute } from "@zhushanwen/extension-protocol/aggregatio
 import { RoutesConfigReader, type ConsumedRoutesSectionRead } from "./config-store.ts";
 import { QuotaCacheReader } from "./quota-cache-reader.ts";
 import {
+	decideRoute,
 	endpointThinkingLevels,
-	evaluateRoute,
-	MEMBER_BLOCK_REASON_LABELS,
+	memberRef,
+	parseFailoverState,
 	resolveThinkingLevel,
-	type EvaluateRouteInput,
+	MEMBER_BLOCK_REASON_LABELS,
 	type MemberBlockReason,
 	type RouteEvaluation,
 } from "./router.ts";
@@ -88,6 +91,14 @@ interface AggregationState { // oe-exempt:20261106:framework:扩展内部状态�
 	deletedIds: Set<string>
 	/** id → 最后一次有效读到的定义（route 闭包求值用最新定义——编辑对下一请求生效）。 */
 	definitions: Map<string, AggregationRoute>
+	/**
+	 * routeId → memberRef → 链内已观察连续失败次数（闭包内存）。
+	 *
+	 * 生命周期 = 活跃重试链：retry 透传时递增（bumpChainFailure），终局观察在下一轮
+	 * 非 retry 求值读取它判「pi 重试预算是否用尽」。计数本身不持久化——session 历史不记
+	 * 瞬态记账；burn 证据（预算用尽的结论）随 burnt 走 router state 持久化。
+	 */
+	failures: Map<string, ReadonlyMap<string, number>>
 }
 
 function createState(): AggregationState {
@@ -96,6 +107,7 @@ function createState(): AggregationState {
 		disabledIds: new Set(),
 		deletedIds: new Set(),
 		definitions: new Map(),
+		failures: new Map(),
 	}
 }
 
@@ -108,19 +120,13 @@ function formatBlockReasons(reasons: readonly MemberBlockReason[]): string {
 }
 
 /**
- * 无候选端点的结构化错误（矩阵「全部端点不可选」行：逐端点列明落选原因 + 恢复指引；
- * retry 且全部端点仅因排除为空 → 「上一端点失败且无其他可用端点」）。
+ * 无候选端点的结构化错误（矩阵「全部端点不可选」行：逐端点列明落选原因 + 恢复指引，AX5）。
  */
 function buildNoCandidateError(
 	route: AggregationRoute,
 	evaluation: Extract<RouteEvaluation, { outcome: "no-candidate" }>,
 	unresolvableRefs: readonly string[],
 ): Error {
-	const retryOnly = unresolvableRefs.length === 0
-		&& evaluation.members.every(m => !m.available && m.reasons.length === 1 && m.reasons[0] === "retry-excluded")
-	if (retryOnly) {
-		return new Error(`模型路由 "${route.id}"（${route.name}）：上一端点失败且无其他可用端点。请检查其余端点的条件配置，或在模型选择器更换模型。`)
-	}
 	const lines: string[] = []
 	for (const member of evaluation.members) {
 		if (member.available) continue
@@ -231,14 +237,46 @@ function reconcileRegisteredOnly(pi: ExtensionAPI, state: AggregationState, read
 	markVanishedIds(state, new Set(read.file.routes.map(r => r.id)))
 }
 
+/** pi 的重试预算默认值（锚 pi 实装 settings-manager.js getRetrySettings：`retry?.maxRetries ?? 3`）。 */
+const DEFAULT_MAX_RETRIES = 3
+
+/**
+ * pi 的自动重试预算（同步读 effective settings）。
+ *
+ * 扩展无重试决策钩子、auto_retry 事件族对扩展不可见（retry-rules 头注释已登记：扩展
+ * 可见 message_end，但不可见重试决策 payload——attempt 序号 / maxAttempts / 已调度 vs
+ * 预算耗尽）——「pi 重试了几次」只能由路由回调在 retry 求值时自己点数（透传计数），
+ * 预算同步读取；settings 变更下一轮求值生效，无缓存无定时器。
+ *
+ * enabled=false（重试停用）= 零次重试：预算读 0——用户裁决规则「超过 pi 的重试次数即
+ * failover」在停用形态下即首败即超（题面 §3.6 行为后果同）；否则 maxRetries 缺省 3。
+ */
+function readMaxRetries(pi: ExtensionAPI): number {
+	const retry = pi.getSettings().retry
+	if (retry?.enabled === false) return 0
+	return retry?.maxRetries ?? DEFAULT_MAX_RETRIES
+}
+
+/**
+ * retry 透传时递增端点链内失败计数（闭包内存：生命周期 = 活跃重试链——终局观察在下一轮
+ * 非 retry 求值读它判「pi 重试预算是否用尽」；burn 结论随 burnt 走 router state 持久化，
+ * 计数本身不落 session 历史）。
+ */
+function bumpChainFailure(state: AggregationState, routeId: string, ref: string): void {
+	const perRoute = new Map(state.failures.get(routeId))
+	perRoute.set(ref, (perRoute.get(ref) ?? 0) + 1)
+	state.failures.set(routeId, perRoute)
+}
+
 /**
  * 单次路由求值（pi route 回调入口）。
  *
  * 顺序：求值前 mtime 重读（编辑对下一请求生效的触发点）→ 停用/删除短路（AX5 显式
- * 失败）→ 条件求值（纯函数）→ 按候选序解析物理模型（第一个可解析的即命中）→ 档位
- * 向上取映射（D7）。全部失败路径 throw 结构化错误（pi 契约内路径：failed 路由把虚拟
- * 模型留在消息上，virtual-models.d.ts「Failed routing leaves the virtual model on its
- * message」）。
+ * 失败）→ **retry 透传**（reason=retry 且 failed 在配置内 → 原样返回该端点，D6 修订
+ * 方案 B）→ 非 retry 走 decideRoute（终局观察 + 条件硬闸 + burnt 软避让）→ 按偏好序
+ * 解析物理模型（第一个可解析的即命中）→ 档位向上取映射（D7）。全部失败路径 throw
+ * 结构化错误（pi 契约内路径：failed 路由把虚拟模型留在消息上，virtual-models.d.ts
+ * 「Failed routing leaves the virtual model on its message」）。
  */
 function evaluateAndRoute(
 	pi: ExtensionAPI,
@@ -263,40 +301,66 @@ function evaluateAndRoute(
 		throw new Error(`模型路由 "${routeId}" 没有有效的路由定义（扩展内部状态缺失），请重开会话恢复。`)
 	}
 
-	const now = new Date()
-	// D6 重试排除输入：failed 是「自动重试时上一失败请求」的物理模型（pi 契约 UD2）。
-	const retryExclude = request.reason === "retry" && request.failed !== undefined
-		? { providerId: request.failed.model.provider, modelId: request.failed.model.id }
-		: undefined
+	// ① retry 透传（D6 修订 / 方案 B）：pi 自动重试原样返回上一失败端点——重试归属在途
+	// 请求的延续，不复查路由条件（直连模型同样不复查任何东西），pi 的重试预算真正打到
+	// 上游；终局失败（预算用尽或 fail-fast）由下一轮求值的终局观察感知并 burnt → failover。
+	if (request.reason === "retry" && request.failed !== undefined) {
+		const failed = request.failed.model
+		const member = route.members.find(m => m.providerId === failed.provider && m.modelId === failed.id)
+		if (member !== undefined) {
+			const model = ctx.modelRegistry.find(member.providerId, member.modelId)
+			if (model !== undefined) {
+				bumpChainFailure(state, routeId, memberRef(member))
+				return {
+					model,
+					thinkingLevel: resolveThinkingLevel(request.thinkingLevel, endpointThinkingLevels(member)),
+				}
+			}
+		}
+		// 失败端点已不在本路由配置 / 模型目录（链中路过配置被改或悬空）→ 落正常选择
+	}
 
+	// ② 非 retry（或透传不可用）：终局观察 + 条件求值 + burnt 软避让（纯函数 decideRoute）。
+	const now = new Date()
 	// M2 接线（D3/SC5）：mtime 门读取 quota-cache.json，共享新鲜度纯函数过滤后的
 	// providerId → 快照 map；读失败/缺失/全过期 = 空快照（额度未知 → 纯函数 fail-open，
 	// 矩阵行 6/12）。与求值墙钟同一时点（AX3：同输入必同输出）。
-	const quotaByProviderId = quotaReader.readFreshSnapshots(now.getTime())
-
-	const input: EvaluateRouteInput = {
+	const burntIn = parseFailoverState(request.state)
+	const decision = decideRoute({
 		route,
 		now,
-		quotaByProviderId,
-		retryExclude,
-	}
-	const evaluation = evaluateRoute(input)
+		quotaByProviderId: quotaReader.readFreshSnapshots(now.getTime()),
+		messages: request.messages,
+		burnt: burntIn,
+		failures: state.failures.get(routeId) ?? new Map<string, number>(),
+		maxRetries: readMaxRetries(pi),
+	})
+	// 链内失败计数落闭包内存（生命周期 = 活跃重试链；burn 证据随 burnt 走 router state，
+	// 计数本身不持久化——session 历史不记瞬态记账）。
+	state.failures.set(routeId, decision.failures)
 
-	if (evaluation.outcome === "no-candidate") {
-		throw buildNoCandidateError(route, evaluation, [])
+	if (decision.outcome === "no-candidate") {
+		// 观察可能已 burnt 端点但无处落盘（throw 路径无 state 出口）——终局观察幂等重导
+		// （跳过虚拟模型消息向前找物理结局），下一轮求值重新 derive，不依赖镜像。
+		throw buildNoCandidateError(route, decision, [])
 	}
 
+	// 按偏好序解析物理模型（第一个可解析的即命中；部分候选悬空时静默落选续试——AX5）。
 	const unresolvableRefs: string[] = []
-	for (const memberIndex of evaluation.memberIndexes) {
+	for (const memberIndex of decision.memberIndexes) {
 		const member = route.members[memberIndex]
+		if (member === undefined) continue
 		const model = ctx.modelRegistry.find(member.providerId, member.modelId)
 		if (model === undefined) {
-			unresolvableRefs.push(`${member.providerId}/${member.modelId}`)
+			unresolvableRefs.push(memberRef(member))
 			continue
 		}
 		return {
 			model,
 			thinkingLevel: resolveThinkingLevel(request.thinkingLevel, endpointThinkingLevels(member)),
+			// burnt 集变化才写 router state（同引用 / undefined = pi 不落 virtual-model-state
+			// 条目——agent-session.js：route.state !== undefined && !== state 才 append）。
+			state: decision.burnt !== burntIn ? { burnt: [...decision.burnt] } : undefined,
 		}
 	}
 	throw buildUnresolvableError(route, unresolvableRefs)

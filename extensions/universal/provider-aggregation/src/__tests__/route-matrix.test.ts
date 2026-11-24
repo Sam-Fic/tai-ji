@@ -3,23 +3,30 @@
  *
  * 行为契约 = docs/design/provider-aggregation-route-matrix.md：端点可选性矩阵 12 行逐格 + 全体候选状态
  * 多端点叠加（纯函数半边；enabled/deleted 两条闭包态在 aggregation-hot-reload.test）
- * + D7 档位向上取映射 + D12 mode 维度 + D13 特殊日期双型 + 时间窗落格边界。
- * 求值函数为纯函数（now / 额度快照 / 重试信号全注入——AX3），本文件零 fs、零子进程。
+ * + D7 档位向上取映射 + D12 mode 维度 + D13 特殊日期双型 + 时间窗落格边界 + D6 修订
+ * （方案 B）终局观察 / burnt 软避让 / 轮换重探。
+ * 求值函数为纯函数（now / 额度快照 / 终局观察消息 / 链内失败计数 / pi 重试预算全注入——
+ * AX3），本文件零 fs、零子进程。
  */
 
 import { describe, expect, it } from "vitest";
 
-import type { AggregationMember, AggregationRoute, AggregationTimeWindowTable } from "@taiji/shared";
+import { AGGREGATION_PROVIDER_ID, type AggregationMember, type AggregationRoute, type AggregationTimeWindowTable } from "@taiji/shared";
 
 import {
-	evaluateRoute,
+	decideRoute,
 	endpointThinkingLevels,
+	evaluateRoute,
 	isWithinTimeWindow,
 	MEMBER_BLOCK_REASONS,
 	MEMBER_BLOCK_REASON_LABELS,
+	memberRef,
+	parseFailoverState,
 	resolveThinkingLevel,
 	unionThinkingLevels,
-	type EvaluateRouteInput,
+	type DecideRouteInput,
+	type RouteDecision,
+	type RouteObservationMessage,
 	type RouteQuotaSnapshot,
 } from "../router.ts";
 
@@ -64,8 +71,42 @@ function quotaMap(entries: Array<[providerId: string, percent: number]>): Readon
 	return new Map(entries.map(([providerId, percent]) => [providerId, { percent }]))
 }
 
-function evaluate(input: EvaluateRouteInput) {
+function evaluate(input: { route: AggregationRoute, now: Date, quotaByProviderId?: ReadonlyMap<string, RouteQuotaSnapshot> }) {
 	return evaluateRoute(input)
+}
+
+// ── D6 修订（方案 B）fixture：终局观察 + burnt 软避让 ────────────────────────
+
+/** 物理模型 assistant 消息（终局观察的最小视图——pi convertToLlm 对 assistant 原样透传）。 */
+function outcome(provider: string, model: string, stopReason: string): RouteObservationMessage {
+	return { role: "assistant", provider, model, stopReason }
+}
+
+/** 路由自身失败消息（pi handleRunFailure 用 _state.model 构造——provider = 虚拟 provider）。 */
+function virtualError(routeId: string): RouteObservationMessage {
+	return { role: "assistant", provider: AGGREGATION_PROVIDER_ID, model: routeId, stopReason: "error" }
+}
+
+/** decideRoute 调用（缺省：无观察消息 / 空 burnt / 空计数 / maxRetries=3）。 */
+function decide(overrides: Partial<DecideRouteInput> & { route: AggregationRoute }): RouteDecision {
+	return decideRoute({
+		now: NOW_MONDAY_10,
+		messages: [],
+		burnt: new Set(),
+		failures: new Map(),
+		maxRetries: 3,
+		...overrides,
+	})
+}
+
+/** 双端点路由（a 无条件 / b 无条件——failover 行为与条件矩阵正交，用例集中看 burn 逻辑）。 */
+function twoMemberRoute(): AggregationRoute {
+	return route({
+		members: [
+			member({ id: "a", providerId: "zhipu", modelId: "glm", type: "none" }),
+			member({ id: "b", providerId: "opencode-go", modelId: "zai-glm", type: "none" }),
+		],
+	})
 }
 
 /** 矩阵单格断言：单端点路由的评估结果。 */
@@ -245,40 +286,6 @@ describe("全体候选状态 → 路由结果（route-matrix.md 多端点叠加�
 		if (result.outcome !== "no-candidate") return
 		expect(result.members.map(m => MEMBER_BLOCK_REASON_LABELS[m.reasons[0]] ?? "")).toEqual(["时间窗外", "额度低于阈值"])
 	})
-
-	it("retry 且上一失败端点 ∈ 可选集 → 从候选中移除该端点后求值", () => {
-		const result = evaluate({
-			route: route({
-				members: [
-					member({ id: "a", providerId: "zhipu", modelId: "glm", type: "none" }),
-					member({ id: "b", providerId: "opencode-go", modelId: "zai-glm", type: "none" }),
-				],
-			}),
-			now: NOW_MONDAY_10,
-			retryExclude: { providerId: "zhipu", modelId: "glm" },
-		})
-		expect(result).toEqual({ outcome: "candidates", memberIndexes: [1] })
-	})
-
-	it("retry 排除后为空 → no-candidate，落选原因 = 上一失败端点本轮排除（闭包层据此报「上一端点失败且无其他可用端点」）", () => {
-		const result = evaluate({
-			route: route({ members: [member({ id: "a", providerId: "zhipu", modelId: "glm", type: "none" })] }),
-			now: NOW_MONDAY_10,
-			retryExclude: { providerId: "zhipu", modelId: "glm" },
-		})
-		expect(result.outcome).toBe("no-candidate")
-		if (result.outcome !== "no-candidate") return
-		expect(result.members[0]).toMatchObject({ available: false, reasons: ["retry-excluded"] })
-	})
-
-	it("retry 排除不写持久黑名单：同一输入去掉 retryExclude 后端点恢复可选（仅本次有效，SI4）", () => {
-		const input = {
-			route: route({ members: [member({ id: "a", providerId: "zhipu", modelId: "glm", type: "none" })] }),
-			now: NOW_MONDAY_10,
-		}
-		expect(evaluate({ ...input, retryExclude: { providerId: "zhipu", modelId: "glm" } }).outcome).toBe("no-candidate")
-		expect(evaluate({ ...input }).outcome).toBe("candidates")
-	})
 })
 
 // ── D12 求值模式（simple 短路 / advanced 分流） ─────────────────────────────
@@ -298,14 +305,197 @@ describe("D12 求值模式", () => {
 		const result = evaluate({ route: route({ mode: "simple", members: conditionalMembers() }), now: NOW_MONDAY_10 })
 		expect(result).toEqual({ outcome: "candidates", memberIndexes: [0, 1] })
 	})
+})
 
-	it("simple 模式下重试排除仍生效（D6「每个请求同型完整重算」——排除后取下一个兜底端点）", () => {
-		const result = evaluate({
-			route: route({ mode: "simple", members: conditionalMembers() }),
-			now: NOW_MONDAY_10,
-			retryExclude: { providerId: "zhipu", modelId: "glm-5.3-flash" },
+// ── D6 修订（方案 B）：终局观察 + burnt 软避让 + 轮换重探 ─────────────────────
+
+describe("D6 修订：终局观察与 burnt 软避让（decideRoute）", () => {
+	const GLM = "zhipu/glm"
+	const ZAI = "opencode-go/zai-glm"
+
+	it("无观察消息 → 按配置序命中首个候选（现状不回归）", () => {
+		const result = decide({ route: twoMemberRoute() })
+		expect(result.outcome).toBe("selected")
+		if (result.outcome !== "selected") return
+		expect(result.memberIndexes).toEqual([0, 1])
+	})
+
+	it("终局 error + 无链内计数（fail-fast：账户/凭据类，pi 压根没重试）→ 不 burnt，仍选该端点", () => {
+		const result = decide({ route: twoMemberRoute(), messages: [outcome("zhipu", "glm", "error")] })
+		expect(result.outcome).toBe("selected")
+		if (result.outcome !== "selected") return
+		expect(result.memberIndexes).toEqual([0, 1])
+		expect([...result.burnt]).toEqual([])
+	})
+
+	it("终局 error + failures ≥ maxRetries（pi 重试预算用尽）→ burnt 该端点，failover 到候选", () => {
+		const result = decide({
+			route: twoMemberRoute(),
+			messages: [outcome("zhipu", "glm", "error")],
+			failures: new Map([[GLM, 3]]),
 		})
-		expect(result).toEqual({ outcome: "candidates", memberIndexes: [1] })
+		expect(result.outcome).toBe("selected")
+		if (result.outcome !== "selected") return
+		expect(result.memberIndexes).toEqual([1, 0]) // zai-glm 优先，glm 降序尾（软避让不删候选）
+		expect([...result.burnt]).toEqual([GLM])
+		// burn 后计数保留作幂等重导证据（原样透出）
+		expect(result.failures.get(GLM)).toBe(3)
+	})
+
+	it("burn 幂等重导：同一终局 error 再次求值 → 仍 burnt 且同引用（闭包层据此跳过 state 落盘）", () => {
+		const first = decide({ route: twoMemberRoute(), messages: [outcome("zhipu", "glm", "error")], failures: new Map([[GLM, 3]]) })
+		if (first.outcome !== "selected") throw new Error("unreachable")
+		const second = decide({
+			route: twoMemberRoute(),
+			messages: [outcome("zhipu", "glm", "error")],
+			burnt: first.burnt,
+			failures: first.failures,
+		})
+		expect(second.outcome).toBe("selected")
+		if (second.outcome !== "selected") return
+		expect(second.memberIndexes[0]).toBe(1)
+		expect(second.burnt).toBe(first.burnt)
+	})
+
+	it("burnt 经 router state 持久化后，无观察消息也生效（跨轮次软避让）", () => {
+		const result = decide({ route: twoMemberRoute(), burnt: new Set([GLM]) })
+		expect(result.outcome).toBe("selected")
+		if (result.outcome !== "selected") return
+		expect(result.memberIndexes).toEqual([1, 0])
+	})
+
+	it("burnt 与条件正交：条件硬闸决定候选集（burn 不救活窗外端点、不制造 no-candidate）", () => {
+		const windowed = route({
+			members: [
+				member({ id: "a", providerId: "zhipu", modelId: "glm", type: "window", window: windowTable([]) }),
+				member({ id: "b", providerId: "opencode-go", modelId: "zai-glm", type: "none" }),
+			],
+		})
+		// a 窗外不在候选集——burn 标记对它无意义；b 是唯一候选
+		const r1 = decide({ route: windowed, burnt: new Set([GLM]) })
+		expect(r1.outcome).toBe("selected")
+		if (r1.outcome === "selected") expect(r1.memberIndexes).toEqual([1])
+		// b 也 burnt → 唯一候选仍被重探（软偏好不制造 no-candidate——单端点 ≡ 直连每轮真试）
+		const r2 = decide({ route: windowed, burnt: new Set([ZAI]) })
+		expect(r2.outcome).toBe("selected")
+		if (r2.outcome === "selected") expect(r2.memberIndexes).toEqual([1])
+		// 全部端点条件落选 → no-candidate（矩阵既有语义，与 burn 无关）
+		const quotaed = route({
+			members: [
+				member({ id: "a", providerId: "zhipu", modelId: "glm", type: "window", window: windowTable([]) }),
+				member({ id: "b", providerId: "opencode-go", modelId: "zai-glm", type: "quota", quota: { thresholdPercent: 50 } }),
+			],
+		})
+		const r3 = decide({ route: quotaed, burnt: new Set([GLM, ZAI]), quotaByProviderId: quotaMap([["opencode-go", 90]]) })
+		expect(r3.outcome).toBe("no-candidate")
+	})
+
+	it("成功观察（stop/toolUse/length）→ 清 burnt + 计数（端点康复，重新成为首选）", () => {
+		for (const stopReason of ["stop", "toolUse", "length"]) {
+			const result = decide({
+				route: twoMemberRoute(),
+				messages: [outcome("zhipu", "glm", stopReason)],
+				burnt: new Set([GLM]),
+				failures: new Map([[GLM, 3]]),
+			})
+			expect(result.outcome).toBe("selected")
+			if (result.outcome !== "selected") continue
+			expect(result.memberIndexes).toEqual([0, 1])
+			expect([...result.burnt]).toEqual([])
+			expect(result.failures.size).toBe(0)
+		}
+	})
+
+	it("aborted → 不观察：burnt 不动、链内计数作废（用户取消不是端点事实）", () => {
+		const result = decide({
+			route: twoMemberRoute(),
+			messages: [outcome("zhipu", "glm", "aborted")],
+			burnt: new Set([ZAI]),
+			failures: new Map([[GLM, 2]]),
+		})
+		expect(result.outcome).toBe("selected")
+		if (result.outcome !== "selected") return
+		expect(result.memberIndexes).toEqual([0, 1]) // ZAI 仍 burnt 被避让，GLM 恢复首选
+		expect([...result.burnt]).toEqual([ZAI])
+		expect(result.failures.size).toBe(0)
+	})
+
+	it("虚拟模型 error（路由自身失败）→ 跳过，向前找最近物理结局（连续多轮路由失败后幂等重导）", () => {
+		const result = decide({
+			route: twoMemberRoute(),
+			messages: [outcome("zhipu", "glm", "error"), virtualError("route-a")],
+			failures: new Map([[GLM, 3]]),
+		})
+		expect(result.outcome).toBe("selected")
+		if (result.outcome !== "selected") return
+		expect(result.memberIndexes[0]).toBe(1)
+		expect([...result.burnt]).toEqual([GLM])
+	})
+
+	it("全部消息都是虚拟 error → 无物理结局可观察（burnt 保持入参）", () => {
+		const result = decide({ route: twoMemberRoute(), messages: [virtualError("route-a"), virtualError("route-a")] })
+		expect(result.outcome).toBe("selected")
+		if (result.outcome !== "selected") return
+		expect(result.memberIndexes).toEqual([0, 1])
+	})
+
+	it("非本路由成员的物理 error（用户中途换过模型）→ 无观察，不误清既有 burn", () => {
+		const result = decide({
+			route: twoMemberRoute(),
+			messages: [outcome("other-provider", "other-model", "error")],
+			burnt: new Set([GLM]),
+		})
+		expect(result.outcome).toBe("selected")
+		if (result.outcome !== "selected") return
+		expect(result.memberIndexes).toEqual([1, 0])
+		expect([...result.burnt]).toEqual([GLM])
+	})
+
+	it("全部候选 burnt → 轮换重探：burn 序最旧的候选优先并移到序尾（坏端点交替，恢复者不被饿死）", () => {
+		const result = decide({ route: twoMemberRoute(), burnt: new Set([GLM, ZAI]) })
+		expect(result.outcome).toBe("selected")
+		if (result.outcome !== "selected") return
+		expect(result.memberIndexes[0]).toBe(0) // GLM burn 序最旧 → 优先重探
+		expect([...result.burnt]).toEqual([ZAI, GLM]) // GLM 移到序尾
+		// 下一轮：ZAI 成为最旧 → 重探 ZAI
+		const next = decide({ route: twoMemberRoute(), burnt: result.burnt })
+		if (next.outcome !== "selected") throw new Error("unreachable")
+		expect(next.memberIndexes[0]).toBe(1)
+		expect([...next.burnt]).toEqual([GLM, ZAI])
+	})
+
+	it("simple 模式下 burnt 软避让同样生效（burn 不是条件，条件不判避让照判）", () => {
+		const result = decide({ route: route({ mode: "simple", members: twoMemberRoute().members }), burnt: new Set([GLM]) })
+		expect(result.outcome).toBe("selected")
+		if (result.outcome !== "selected") return
+		expect(result.memberIndexes).toEqual([1, 0])
+	})
+
+	it("maxRetries=0（pi 重试停用）→ 任何终局 error 即 burnt（预算零容限，failover 即时生效）", () => {
+		const result = decide({
+			route: twoMemberRoute(),
+			messages: [outcome("zhipu", "glm", "error")],
+			maxRetries: 0,
+		})
+		expect(result.outcome).toBe("selected")
+		if (result.outcome !== "selected") return
+		expect(result.memberIndexes).toEqual([1, 0])
+		expect([...result.burnt]).toEqual([GLM])
+	})
+})
+
+describe("parseFailoverState（router state 防御解析）", () => {
+	it("坏形状（undefined / null / 非对象 / burnt 非数组 / 元素非字符串）→ 空集或过滤", () => {
+		expect([...parseFailoverState(undefined)]).toEqual([])
+		expect([...parseFailoverState(null)]).toEqual([])
+		expect([...parseFailoverState("burnt")]).toEqual([])
+		expect([...parseFailoverState({})]).toEqual([])
+		expect([...parseFailoverState({ burnt: "zhipu/glm" })]).toEqual([])
+		expect([...parseFailoverState({ burnt: ["ok", 7, null] })]).toEqual(["ok"])
+	})
+
+	it("合法数组 → 集（保序——burn 序是轮换公平的基准）", () => {
+		expect([...parseFailoverState({ burnt: ["a/1", "b/2"] })]).toEqual(["a/1", "b/2"])
 	})
 })
 

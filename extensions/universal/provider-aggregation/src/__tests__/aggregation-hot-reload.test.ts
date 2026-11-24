@@ -5,7 +5,7 @@
  * （新 id 忽略，D1 ③）/ 删除 = 保持注册 + 闭包显式失败（D9/AS22）/ 损坏隔离呈报 +
  * 扩展保持旧注册 / 停用与文件消失的闭包失败态 / 同 id 重建恢复链 / session_start
  * 对账（新增 id 补注册 + contextWindow 元数据补齐）/ 零配置零注册 / route 闭包端到端
- * （物理模型解析 + D7 档位映射 + D6 retry 排除）。
+ * （物理模型解析 + D7 档位映射 + D6 修订 retry 透传与终局 failover）。
  *
  * 形态（TEST-STRATEGY 三档判据）：真实 fs 限 os.tmpdir() 白名单内 mkdtemp 自建自删；
  * 确定性同步化——mtime 用 utimesSync 显式错开（不依赖真实时钟精度，判据 i 类处置），
@@ -19,7 +19,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext, ExtensionVirtualModel, ModelRouteRequest } from "@earendil-works/pi-coding-agent";
-import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
 import { getLogger } from "@zhushanwen/pi-extension-logger";
 import { AGGREGATION_PROVIDER_ID, type AggregationTimeWindowTable } from "@taiji/shared";
 
@@ -88,6 +88,7 @@ function createMockPi() {
 			handlers.set(event, handler)
 		}),
 		appendEntry: vi.fn(),
+		getSettings: vi.fn(() => ({ retry: { enabled: true, maxRetries: 3, baseDelayMs: 2000 } })),
 	}
 	return { pi: pi as unknown as ExtensionAPI, registered, handlers, registerVirtualModel: pi.registerVirtualModel, unregisterVirtualModel: pi.unregisterVirtualModel }
 }
@@ -146,13 +147,13 @@ async function runSessionStart(handlers: Map<string, (event: unknown, ctx: Exten
 	await handler?.(undefined, ctx)
 }
 
-/** 求值 route-a 闭包（命中端点的物理模型 id；闭包 throw 时透传异常）。 */
-function routeVia(registered: Map<string, ExtensionVirtualModel>, routeId: string, ctx: ExtensionContext, request?: ModelRouteRequest): { modelId: string, thinkingLevel: string } {
+/** 求值 route-a 闭包（命中端点的物理模型 id + 档位 + router state；闭包 throw 时透传异常）。 */
+function routeVia(registered: Map<string, ExtensionVirtualModel>, routeId: string, ctx: ExtensionContext, request?: ModelRouteRequest): { modelId: string, thinkingLevel: string, state: unknown } {
 	const definition = registered.get(`${AGGREGATION_PROVIDER_ID}/${routeId}`)
 	expect(definition).toBeDefined()
 	const result = definition?.route(routeRequest(request), ctx)
 	if (result instanceof Promise) throw new Error("route closure must be synchronous for this fixture")
-	return { modelId: result.model.id, thinkingLevel: result.thinkingLevel }
+	return { modelId: result.model.id, thinkingLevel: result.thinkingLevel, state: result.state }
 }
 
 // ── 工厂期注册与 session_start 对账 ──────────────────────────────────────────
@@ -408,7 +409,7 @@ describe("stat 故障 = 保持旧注册继续路由", () => {
 	})
 })
 
-// ── route 闭包端到端（物理模型解析 + D7 档位映射 + D6 retry 排除） ──────────
+// ── route 闭包端到端（物理模型解析 + D7 档位映射 + D6 修订 retry 透传与 failover） ──
 
 describe("route 闭包端到端", () => {
 	it("命中端点返回物理模型对象（ctx.modelRegistry.find 解析；AX2：虚拟条目永不出站）", () => {
@@ -444,12 +445,24 @@ describe("route 闭包端到端", () => {
 		expect(routeVia(registered, "route-a", ctx, { thinkingLevel: "max" }).thinkingLevel).toBe("high")
 	})
 
-	it("D6 retry 排除端到端：reason=retry 且 failed 指向第一端点 → 命中下一兜底端点", () => {
-		writeConfig([ROUTE_A], T1)
+	it("D6 修订 retry 透传端到端：reason=retry 且 failed 指向第一端点 → 原样返回该端点（不复查条件）", () => {
+		writeConfig(
+			[
+				{
+					...ROUTE_A,
+					// e1 窗外：透传不复查条件——重试归属在途请求的延续（直连模型同型）
+					members: [
+						{ id: "e1", providerId: "zhipu", modelId: "glm", type: "window", window: EMPTY_WINDOW },
+						{ id: "e2", providerId: "opencode-go", modelId: "zai-glm", type: "none" },
+					],
+				},
+			],
+			T1,
+		)
 		const { pi, registered } = createMockPi()
 		providerAggregationFactory(pi, { configPath })
 		const ctx = createMockCtx()
-		const failedMessage = { stopReason: "error", errorMessage: "429 Too Many Requests" } as unknown as AssistantMessage
+		const failedMessage = { stopReason: "error", errorMessage: "524 origin timeout" } as unknown as AssistantMessage
 		const result = routeVia(registered, "route-a", ctx, {
 			reason: "retry",
 			failed: {
@@ -458,7 +471,85 @@ describe("route 闭包端到端", () => {
 				message: failedMessage,
 			},
 		})
-		expect(result.modelId).toBe("zai-glm")
+		expect(result.modelId).toBe("glm") // 窗外端点仍被透传命中（不换端点、不复查条件）
+	})
+
+	it("D6 修订 failover 端到端：链内计数达到 maxRetries 后终局失败 → burnt 并换候选端点", async () => {
+		writeConfig([ROUTE_A], T1)
+		const { pi, registered } = createMockPi()
+		providerAggregationFactory(pi, { configPath })
+		const ctx = createMockCtx()
+		const failedMessage = { stopReason: "error", errorMessage: "524 origin timeout" } as unknown as AssistantMessage
+		const failedGlm = {
+			model: { provider: "zhipu", id: "glm" } as unknown as Model,
+			thinkingLevel: "off",
+			message: failedMessage,
+		}
+		// pi 重试预算 3 次：retry 求值透传 glm 并各计一次失败（maxRetries=3 来自 mock getSettings）
+		for (let i = 0; i < 3; i++) {
+			expect(routeVia(registered, "route-a", ctx, { reason: "retry", failed: failedGlm }).modelId).toBe("glm")
+		}
+		// 终局失败后的下一轮求值：messages 带 glm 的终局 error → 预算用尽 → burnt → 换 zai-glm
+		const afterFailure = routeVia(registered, "route-a", ctx, {
+			reason: "user",
+			messages: [{ role: "assistant", provider: "zhipu", model: "glm", stopReason: "error" } as unknown as Message],
+		})
+		expect(afterFailure.modelId).toBe("zai-glm")
+		expect(afterFailure.state).toEqual({ burnt: ["zhipu/glm"] })
+		// burnt 经 router state 回传：无观察消息也保持避让
+		const nextTurn = routeVia(registered, "route-a", ctx, {
+			reason: "user",
+			state: afterFailure.state,
+		})
+		expect(nextTurn.modelId).toBe("zai-glm")
+		expect(nextTurn.state).toBeUndefined() // 无变化不落 state 条目
+	})
+
+	it("D6 修订 fail-fast 不换端点端到端：终局 error 但无链内计数（pi 没重试）→ 仍选原端点", () => {
+		writeConfig([ROUTE_A], T1)
+		const { pi, registered } = createMockPi()
+		providerAggregationFactory(pi, { configPath })
+		const ctx = createMockCtx()
+		const result = routeVia(registered, "route-a", ctx, {
+			reason: "user",
+			messages: [{ role: "assistant", provider: "zhipu", model: "glm", stopReason: "error" } as unknown as Message],
+		})
+		expect(result.modelId).toBe("glm") // 账户类 fail-fast：主端点错误持续可见，不向候选漂移
+		expect(result.state).toBeUndefined()
+	})
+
+	it("D6 修订 retry 停用端到端：settings.retry.enabled=false → 预算读 0 → 终局 error 即 burnt failover（题面 §3.6 行为后果）", () => {
+		writeConfig([ROUTE_A], T1)
+		const base = createMockPi()
+		const pi = {
+			...base.pi,
+			getSettings: vi.fn(() => ({ retry: { enabled: false, maxRetries: 3, baseDelayMs: 2000 } })),
+		} as unknown as ExtensionAPI
+		// mock 的 registerVirtualModel 仍写回 base.registered（展开复制的是同一函数引用）
+		providerAggregationFactory(pi, { configPath })
+		const ctx = createMockCtx()
+		const result = routeVia(base.registered, "route-a", ctx, {
+			reason: "user",
+			messages: [{ role: "assistant", provider: "zhipu", model: "glm", stopReason: "error" } as unknown as Message],
+		})
+		expect(result.modelId).toBe("zai-glm") // 停用 = 零次重试：首败即超预算 → burnt → failover
+		expect(result.state).toEqual({ burnt: ["zhipu/glm"] })
+	})
+
+	it("retry 但 failed 端点已不在配置（链中路过配置被改）→ 落正常选择", () => {
+		writeConfig([ROUTE_A], T1)
+		const { pi, registered } = createMockPi()
+		providerAggregationFactory(pi, { configPath })
+		const ctx = createMockCtx()
+		const result = routeVia(registered, "route-a", ctx, {
+			reason: "retry",
+			failed: {
+				model: { provider: "zhipu", id: "removed-model" } as unknown as Model,
+				thinkingLevel: "off",
+				message: { stopReason: "error" } as unknown as AssistantMessage,
+			},
+		})
+		expect(result.modelId).toBe("glm") // 正常选择：配置序首个候选
 	})
 
 	it("候选端点全部不可解析（悬空端点）→ 闭包显式失败，错误列明端点与恢复指引（AX5 运行时半边）", () => {

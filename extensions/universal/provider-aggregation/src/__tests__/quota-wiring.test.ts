@@ -75,6 +75,7 @@ function createMockPi() {
 		unregisterVirtualModel: vi.fn(),
 		on: vi.fn(),
 		appendEntry: vi.fn(),
+		getSettings: vi.fn(() => ({ retry: { enabled: true, maxRetries: 3, baseDelayMs: 2000 } })),
 	}
 	return { pi: pi as unknown as ExtensionAPI, registered }
 }
