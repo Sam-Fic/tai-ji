@@ -39,21 +39,23 @@
 | 函数 | before（+10..73s） | after | 变化 |
 |---|---|---|---|
 | EdgeFade.vue 任意帧 self | 0.546s | 0.000s | →0（IO 哨兵，scroll/IO 回调零几何读；T5 PASS） |
-| scrollTo self | 2.044s | 1.531s（−25%） | gap 修复减少滚动 churn（endOffset 补偿 padTop、落点收敛）；原生滚动单次成本仍在 |
-| **EdgeFade + scrollTo（断言族）** | **2.590s（占窗 4.1%）** | **1.531s（window 79.3s）** | **ratio 0.591（T5 PASS，< 0.8 阈值）** |
+| scrollTo self | 2.044s | 1.760s（−14%） | gap 修复减少滚动 churn（endOffset 补偿 padTop、落点收敛）；原生滚动单次成本仍在 |
+| **EdgeFade + scrollTo（断言族）** | **2.590s（占窗 4.1%）** | **1.760s（window 79.7s）** | **ratio 0.680（T5 PASS，< 0.8 阈值）** |
 
 ## 3. renderer 主线程 TOP10（self-time）
 
 同一份 profile 各自流式窗，`analyze-cpuprofile.mjs` 同口径。before 列照批1（基线权威数据集）：
 
-| 排名 | before（+10..73s） | after |
+| 排名 | before（+10..73s，63.0s） | after（send-relative 0..80s，采样 78.9s） |
 |---|---|---|
-| 1 | (idle) 23.608s | `<after>` |
-| 2 | (program) 9.987s | `<after>` |
-| 3 | scrollTo 2.044s | `<after>` |
-| 4 | findNextMatchSync 1.257s | `<after>` |
-| 5 | truncate 1.069s（批1 已归零） | `<after>` |
-| … | 见 batch1-comparison.md §2 | `<after>` |
+| 1 | (idle) 23.608s | (idle) 45.752s |
+| 2 | (program) 9.987s | (program) 17.542s |
+| 3 | scrollTo 2.044s | (garbage collector) 1.229s |
+| 4 | findNextMatchSync 1.257s | scrollTo 1.206s（−41%，gap 修复减滚动 churn） |
+| 5 | truncate 1.069s（批1 已归零） | findNextMatchSync 0.983s（shiki fence 闭合） |
+| … | 见 batch1-comparison.md §2 | 派生族（truncate/stripMarkdown/previewText）已不在 TOP10（批1 归零且不回退）；**deriv-family-self-time=0.130s < 0.3 阈值（T1 PASS）** |
+
+> 窗口不可直接对齐：after 窗（0..80s）含冷启动 idle（45.8s vs 基线 23.6s）、起点与时长均异（GLM C1/C2）。可承载的信号 = **派生族整体移出 TOP10 + scrollTo 下降**；(idle)/(program) 绝对值受窗结构支配，不作结论。
 
 > 注：truncate/stripMarkdown/previewText 三项批1 已归零（rail 冻结 + preview 懒计算 + truncate early-exit），before 列为**批1 前**基线值；本批 after 复算应仍为归零态（不回退）。
 
@@ -61,12 +63,15 @@
 
 口径：按线程时间轴 union（嵌套子切片不重复计数）。复算脚本 `probes/analyze-gpu-union.mjs`。before 列照批1（run2d trace，33.67s 墙钟，流式子窗 23.0s）：
 
-| 指标 | before | after |
+| 指标 | before（run2d，33.67s 墙钟，152532 事件） | after（22.37s 墙钟，15542 事件） |
 |---|---|---|
-| CrGpuMain union | 22.88s（67.9% 全窗 / 99.4% 流式子窗） | `<after>` |
-| Raster union | 6.01s（流式子窗 26.0%） | `<after>` |
-| ApplyBackpressure union | 11.35s（流式子窗 49.3%） | `<after>` |
-| 帧率 | ~122fps（显示链接频率） | `<after>` |
+| CrGpuMain union | 22.88s（67.9% 全窗 / 99.4% 流式子窗） | 0.28s（1.2%） |
+| CrRendererMain union | 6.81s（20.2%） | 0.21s（1.0%） |
+| Compositor union | 2.13s（6.3%） | 0.15s（0.7%） |
+| Raster union | 6.01s（流式子窗 26.0%） | 0.05s（n=289） |
+| ApplyBackpressure union | 11.35s（流式子窗 49.3%） | 0.00s（n=210，avg 0.01ms） |
+
+> **GPU 对比仅方向性、不构成结论**：after trace 墙钟更短（22.37s vs 33.67s）、事件数低一个数量级（15542 vs 152532），提示本次 trace **未完整覆盖 active 流式段**（缓冲/采窗差异，GLM A6）。CrGpuMain/ApplyBackpressure/raster 数值虽大幅下行，但不能归因于本批。GPU 收益不承诺，干净 GPU 重测（前台窗、无并存 Electron、recordContinuously）属批5。
 
 > 本批 GPU 收益不确定（GLM 审查 A6：trace 未采到大 DOM 阶段；GPU 未饱和，真实工作 ~32%）。组件跳过 + 强制布局削减减少产帧，理论上 ApplyBackpressure/raster 有下行空间，但**不承诺 GPU 收益**（拿干净 GPU 数据属批5）。
 
@@ -75,7 +80,7 @@
 | | 截图 |
 |---|---|
 | before | `~/.taiji/ext-sessions/01a2077f-.../artifacts/profiling-data/run-notrace-midstream.png` |
-| after | `.run/after-midstream.png`（gpu-trace.mjs `--shot`） |
+| after | `.run/b2-after-fps.png`（gpu-trace.mjs `--shot`，本次 batch2 采集） |
 
 > 后台不可见窗口，Chromium 降帧，FPS 读数口径可疑（GLM A7）；截图仅作「GUI 确在流式」的在场证据，不作帧率证据。
 
