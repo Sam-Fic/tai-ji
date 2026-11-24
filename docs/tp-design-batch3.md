@@ -34,7 +34,7 @@
 
 | 枝名 | 目标 | 依赖 | 风险级 | 文件 | case |
 |---|---|---|---|---|---|
-| B-worker | G1 worker 化高亮主干 + G2 占位保留 + G5 成本出声 | trunk | 高 | packages/ui/src/features/chat/shiki-highlight-core.ts, packages/ui/src/features/chat/shiki-highlight-worker.ts, packages/ui/src/features/chat/shiki-highlight-client.ts, packages/ui/src/features/chat/markdown.ts, packages/ui/src/features/chat/markdown-incremental.ts, packages/ui/src/features/chat/composables/useMarkdownStreaming.ts, packages/ui/src/features/chat/__tests__/, probes/shiki-html-diff.mjs, probes/lib/harness.mjs, docs/tp-design-batch3.md | T1,T2 |
+| B-worker | G1 worker 化高亮主干 + G2 占位保留 + G5 成本出声 | trunk | 高 | packages/ui/src/features/chat/shiki-highlight-core.ts, packages/ui/src/features/chat/shiki-highlight-worker.ts, packages/ui/src/features/chat/shiki-highlight-client.ts, packages/ui/src/features/chat/markdown.ts, packages/ui/src/features/chat/markdown-incremental.ts, packages/ui/src/features/chat/composables/useMarkdownStreaming.ts, packages/ui/src/features/chat/__tests__/, probes/shiki-html-diff.mjs, docs/tp-design-batch3.md | T1,T2 |
 | B-csp | G3 两壳 CSP `worker-src 'self'` + 一次性评估登记 | trunk | 中 | packages/renderer/index.html, packages/mobile-renderer/index.html, probes/csp-worker-probe.cjs | T5 |
 | B-fallback | G4 降级路径硬化（error 事件 / 单 job 抛错 / 取消 → 主线程同步回退）+ 真机降级探针 | B-worker | 中 | packages/ui/src/features/chat/shiki-highlight-client.ts, packages/ui/src/features/chat/markdown.ts, probes/shiki-fallback-probe.mjs | T3 |
 
