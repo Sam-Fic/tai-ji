@@ -2166,7 +2166,7 @@
         "pkg": "pi-coding-agent",
         "distPath": "dist/core/agent-session.js",
         "symbol": "_installAgentRequestProjection → agent.prepareRequest 包装（虚拟选择逐请求路由）",
-        "note": ":421 方法头；:443 model = previous?.model ?? this.agent.state.model；:445-446 非虚拟直通返回（物理选择零变化）；:447-448 注释自述 The selection stays in agent state; only this request uses the routed model；:454 await this._modelRuntime.resolveModel(model, ...)；:472 return { ...previous, context, model: route.model, thinkingLevel: route.thinkingLevel }——请求侧模型换成路由后的物理端点【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+        "note": ":421 方法头；:443 model = previous?.model ?? this.agent.state.model；:445-446 非虚拟直通返回（物理选择零变化）；:447-448 注释自述 The selection stays in agent state; only this request uses the routed model；:453 await this._modelRuntime.resolveModel(model, ...)；:472 return { ...previous, context, model: route.model, thinkingLevel: route.thinkingLevel }——请求侧模型换成路由后的物理端点【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
       },
       {
         "pkg": "pi-coding-agent",
@@ -2201,7 +2201,7 @@
         "pkg": "pi-agent-core",
         "distPath": "dist/agent.js",
         "symbol": "handleRunFailure failureMessage 构造 + 四事件发射",
-        "note": ":364 方法头；:365-374 failureMessage（role: assistant）api :366 / provider :367 / model :368 取 this._state.model.*（虚拟选择直达消息字段）、usage :369 = EMPTY_USAGE 全 0（:10-16）；:376-379 message_start/message_end/turn_end/agent_end 原样发射——turn_end.message 即 taiji 采样入口所见【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+        "note": ":364 方法头；:365-374 failureMessage（role: assistant）api :368 / provider :369 / model :370 取 this._state.model.*（虚拟选择直达消息字段）、usage :371 = EMPTY_USAGE 全 0（:10-16）；:376-379 message_start/message_end/turn_end/agent_end 原样发射——turn_end.message 即 taiji 采样入口所见【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
       }
     ],
     "guard": {
