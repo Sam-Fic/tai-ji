@@ -30,10 +30,10 @@
 | 机制压测（walk + prompt 在途时并发 12 个全树 walk） | 896ms（submit-rtt 276ms；load ~8） | 未复测（压测形态非交付目标；after 侧单次 walk 成本已降 2.1x，饱和阈值相应抬高） | — |
 
 **读法（本批最重要的诚实结论）**：
-1. **walk ≡ warm 地板**。after 侧 walk 两轮 130ms / 48ms 对 warm 39ms / 33ms——差异完全由 submit-rtt 解释（28ms→130ms、7ms→48ms、3–4ms→33–39ms）：延迟落在**受理段**（delivery.submit 处理，含 Worker RPC hook；run1 恰逢该 session 的 pi 刚冷启动完、JIT 未稳），不在首 token 转发段。before 侧同样（walk 37–63ms，有的组甚至低于 warm）。
-2. 审查 S9「walk ~0.9s 阻塞首 token 转发」**不成立**：runtime WS 处理 fire-and-forget 并发（connection-manager.ts:225/252），文件 walk 与 pi stdout 数据事件在事件循环交错；真实负载下 walk 不在 TTFT 关键路径上。只有 ~10x 饱和形态（12 路并发全树 walk）才劣化到 896ms。
+1. **walk 对首 token 转发段的影响：安静窗为零，高负载下 <200ms，远不到审查所说的 ~0.9s**。按 submit-rtt 拆分受理段与转发段（转发 = ttft − submit-rtt），全部 gate 采集的 8 次运行：warm 转发段 30–59ms（n=4）；walk 转发段安静窗 41–46ms（leaf/branch，load ~5）≈ warm，高负载窗 102–180ms（trunk 两次，load 17–27，外部 vitest 并行）。即：事件循环交错（connection-manager.ts:225/252，fire-and-forget）让 walk 在安静窗不触达转发段；高负载下并发全树 walk 才挤占转发段百余毫秒——这是 CPU 争抢形态，不是同步阻塞；本批快路径把单次 walk 成本降 2.1x，直接收窄该窗口。受理段（submit-rtt：delivery.submit 处理含 Worker RPC hook）在高负载下同样抬升（3–4ms → 28–44ms），与 walk 无关。
+2. 审查 S9「walk ~0.9s 阻塞首 token 转发」**不成立**：实测转发段最大 180ms（高负载）而非 ~0.9s；且该数字是 CPU 争抢下的并发 walk 挤占，不是同步 IO 阻塞事件循环。真实用户流（单会话、无外部 CPU 争抢）落在安静窗形态（41–46ms ≈ warm）。只有 ~10x 饱和形态（12 路并发全树 walk）才劣化到 896ms。
 3. **TTFT 的唯一结构性因子是 pi 冷启动**（§3）：fresh 模式 71–227ms 是因为 GUI 切换/打字时间已让 pi 完成大部分冷启动；自动化/编程式「建会话即发」才吃满冷启动（dev 6–23s）。
-4. 本批 after 侧 TTFT 与 before 无统计差异——**这是预期**：快路径降的是 CPU 浪费（§2），不是 TTFT；TTFT 本就不被 walk 阻塞。
+4. 本批 after 侧 TTFT 与 before 无统计差异——**这是预期**：快路径降的是 CPU 浪费（§2），不是 TTFT 地板；TTFT 的转发段在安静窗本就不被 walk 触达，高负载下的百余毫秒挤占则随 walk 成本下降而收窄。
 
 ## 2. 匹配 CPU 成本（prompt 窗口的真实成本）
 
