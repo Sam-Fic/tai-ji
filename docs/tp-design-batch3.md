@@ -34,11 +34,11 @@
 
 | 枝名 | 目标 | 依赖 | 风险级 | 文件 | case |
 |---|---|---|---|---|---|
-| B-worker | G1 worker 化高亮主干 + G2 占位保留 + G5 成本出声 | trunk | 高 | packages/ui/src/features/chat/shiki-highlight-core.ts, packages/ui/src/features/chat/shiki-highlight-worker.ts, packages/ui/src/features/chat/shiki-highlight-client.ts, packages/ui/src/features/chat/markdown.ts, packages/ui/src/features/chat/markdown-incremental.ts, packages/ui/src/features/chat/composables/useMarkdownStreaming.ts, packages/ui/src/features/chat/__tests__/ | T1,T2 |
+| B-worker | G1 worker 化高亮主干 + G2 占位保留 + G5 成本出声 | trunk | 高 | packages/ui/src/features/chat/shiki-highlight-core.ts, packages/ui/src/features/chat/shiki-highlight-worker.ts, packages/ui/src/features/chat/shiki-highlight-client.ts, packages/ui/src/features/chat/markdown.ts, packages/ui/src/features/chat/markdown-incremental.ts, packages/ui/src/features/chat/composables/useMarkdownStreaming.ts, packages/ui/src/features/chat/__tests__/, probes/shiki-html-diff.mjs | T1,T2 |
 | B-csp | G3 两壳 CSP `worker-src 'self'` + 一次性评估登记 | trunk | 中 | packages/renderer/index.html, packages/mobile-renderer/index.html, probes/csp-worker-probe.cjs | T5 |
 | B-fallback | G4 降级路径硬化（error 事件 / 单 job 抛错 / 取消 → 主线程同步回退）+ 真机降级探针 | B-worker | 中 | packages/ui/src/features/chat/shiki-highlight-client.ts, packages/ui/src/features/chat/markdown.ts, probes/shiki-fallback-probe.mjs | T3 |
 
-> 范围注记：B-worker 的 markdown-incremental.ts 改动仅「把 cache 对象作为取消组令牌透传给 renderMarkdownSegments」（新增可选第三参，壳侧不传）；useMarkdownStreaming.ts 改动仅「卸载时按 cache 取消在途高亮组」。占位/finalize 逻辑零改动（G2 由 T4 断言）。
+> 范围注记：B-worker 的 markdown-incremental.ts 改动仅「把 cache 对象作为取消组令牌透传给 renderMarkdownSegments」（新增可选第三参，壳侧不传）；useMarkdownStreaming.ts 改动仅「卸载时按 cache 取消在途高亮组」。占位/finalize 逻辑零改动（G2 由 T4 断言）。T2 探针 probes/shiki-html-diff.mjs 随本枝收尾一并修正：DOM outerHTML 序列化会把 > 转义为 &gt; 而 shiki 原串是字面 >（纯序列化差异），对拍前增加 HTML 实体解码归一化——属「worker 产物 vs 主线程同源算法」对拍的探针正确性修正，故声明进本枝文件列。
 
 ## 方案要点（每枝）
 
