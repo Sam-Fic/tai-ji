@@ -600,6 +600,68 @@ describe("route 闭包端到端", () => {
 		expect(result.modelId).toBe("zai-glm")
 		expect(result.state).toEqual({ burnt: ["zhipu/glm"] })
 	})
+
+	// ── 修剪修复（P2）：retry 落到正常选择时，被消耗的重试预算记在被选中端点头上 ──────
+
+	it("修剪修复 P2：失败端点已不在配置（链中改配置）→ 正常选择接替的那次重试也计数，预算不漏记", () => {
+		writeConfig([ROUTE_A], T1)
+		const { pi, registered } = createMockPi()
+		providerAggregationFactory(pi, { configPath })
+		const ctx = createMockCtx()
+		const failedRemoved = {
+			model: { provider: "zhipu", id: "removed-model" } as unknown as Model,
+			thinkingLevel: "off",
+			message: { stopReason: "error" } as unknown as AssistantMessage,
+		}
+		// 链中配置把 m1 改指向别的模型：第一次 retry 的 failed 不在配置 → 落正常选择（选中 glm）
+		expect(routeVia(registered, "route-a", ctx, { reason: "retry", failed: failedRemoved }).modelId).toBe("glm")
+		// 后续两次 retry 走透传（failed = glm ∈ 配置）——合计 3 次链内计数
+		const failedGlm = {
+			model: { provider: "zhipu", id: "glm" } as unknown as Model,
+			thinkingLevel: "off",
+			message: { stopReason: "error" } as unknown as AssistantMessage,
+		}
+		expect(routeVia(registered, "route-a", ctx, { reason: "retry", failed: failedGlm }).modelId).toBe("glm")
+		expect(routeVia(registered, "route-a", ctx, { reason: "retry", failed: failedGlm }).modelId).toBe("glm")
+		// 终局失败后的下一轮：计数 3 ≥ maxRetries 3 → burnt failover（修复前漏记首次 → 计数 2 → 误判 fail-fast）
+		const afterFailure = routeVia(registered, "route-a", ctx, {
+			reason: "user",
+			messages: [{ role: "assistant", provider: "zhipu", model: "glm", stopReason: "error" } as unknown as Message],
+		})
+		expect(afterFailure.modelId).toBe("zai-glm")
+		expect(afterFailure.state).toEqual({ burnt: ["zhipu/glm"] })
+	})
+
+	// ── 修剪修复（P4）：state 写回裁剪到当前配置成员（手改/fork 注入的 ref 不放大携带） ──
+
+	it("修剪修复 P4：写回前 burnt 裁剪到配置成员——非配置 ref 不随 burn 写回放大携带", () => {
+		writeConfig([ROUTE_A], T1)
+		const { pi, registered } = createMockPi()
+		providerAggregationFactory(pi, { configPath })
+		const ctx = createMockCtx()
+		// 入参 state 含手改注入的非配置 ref（ghost/evil）与合法 ref
+		const result = routeVia(registered, "route-a", ctx, {
+			reason: "user",
+			state: { burnt: ["ghost/evil", "zhipu/glm"] },
+			messages: [{ role: "assistant", provider: "zhipu", model: "glm", stopReason: "error" } as unknown as Message],
+		})
+		// burn 已发生（入参即 burnt）→ 集合变化来自 ghost 裁剪 → 写回只含配置成员
+		expect(result.modelId).toBe("zai-glm")
+		expect(result.state).toEqual({ burnt: ["zhipu/glm"] })
+	})
+
+	it("修剪修复 P4（无裁剪不写盘）：入参 state 全为配置成员且无 burn 变化 → 不落 state", () => {
+		writeConfig([ROUTE_A], T1)
+		const { pi, registered } = createMockPi()
+		providerAggregationFactory(pi, { configPath })
+		const ctx = createMockCtx()
+		const result = routeVia(registered, "route-a", ctx, {
+			reason: "user",
+			state: { burnt: ["zhipu/glm"] },
+		})
+		expect(result.modelId).toBe("zai-glm") // 软避让仍生效
+		expect(result.state).toBeUndefined() // 无变化——引用纪律守住，不刷条目
+	})
 })
 
 /** 取 mock ctx 里 modelRegistry.find 的全部调用参数（物理模型解析轨迹断言用）。 */

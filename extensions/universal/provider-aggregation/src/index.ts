@@ -63,6 +63,7 @@ import {
 	MEMBER_BLOCK_REASON_LABELS,
 	type MemberBlockReason,
 	type RouteEvaluation,
+	type RouteFailoverState,
 } from "./router.ts";
 import {
 	buildVirtualModelDefinitions,
@@ -269,6 +270,23 @@ function bumpChainFailure(state: AggregationState, routeId: string, ref: string)
 }
 
 /**
+ * 写回前把 burnt 裁剪到当前配置成员（存储卫生）：手改 / 跨版本 fork 的 session 注入的非配置
+ * ref，不随每次 state 写回整体重新序列化而放大携带（修剪发现 P4）。无裁剪时原引用返回——
+ * 与 burntIn 的引用比较纪律不受影响（pi 落盘门禁是引用比较）。
+ */
+function pruneBurntToConfig(burnt: ReadonlySet<string>, route: AggregationRoute): ReadonlySet<string> {
+	const configRefs = new Set(route.members.map(memberRef))
+	for (const ref of burnt) {
+		if (!configRefs.has(ref)) {
+			const next = new Set<string>()
+			for (const kept of burnt) if (configRefs.has(kept)) next.add(kept)
+			return next
+		}
+	}
+	return burnt
+}
+
+/**
  * 单次路由求值（pi route 回调入口）。
  *
  * 顺序：求值前 mtime 重读（编辑对下一请求生效的触发点）→ 停用/删除短路（AX5 显式
@@ -304,8 +322,9 @@ function evaluateAndRoute(
 	// ① retry 透传（D6 修订 / 方案 B）：pi 自动重试原样返回上一失败端点——重试归属在途
 	// 请求的延续，不复查路由条件（直连模型同样不复查任何东西），pi 的重试预算真正打到
 	// 上游；终局失败（预算用尽或 fail-fast）由下一轮求值的终局观察感知并 burnt → failover。
-	if (request.reason === "retry" && request.failed !== undefined) {
-		const failed = request.failed.model
+	const failedRequest = request.reason === "retry" ? request.failed : undefined
+	if (failedRequest !== undefined) {
+		const failed = failedRequest.model
 		const member = route.members.find(m => m.providerId === failed.provider && m.modelId === failed.id)
 		if (member !== undefined) {
 			const model = ctx.modelRegistry.find(member.providerId, member.modelId)
@@ -317,7 +336,8 @@ function evaluateAndRoute(
 				}
 			}
 		}
-		// 失败端点已不在本路由配置 / 模型目录（链中路过配置被改或悬空）→ 落正常选择
+		// 失败端点已不在本路由配置 / 模型目录（链中路过配置被改或悬空）→ 落正常选择；
+		// 该次重试预算被正常选择选中的端点消耗——计数必须记在它头上（见选择返回处 bump）
 	}
 
 	// ② 非 retry（或透传不可用）：终局观察 + 条件求值 + burnt 软避让（纯函数 decideRoute）。
@@ -355,12 +375,19 @@ function evaluateAndRoute(
 			unresolvableRefs.push(memberRef(member))
 			continue
 		}
+		// retry 求值落到正常选择（失败端点已不在配置/目录）：该次重试预算被此端点消耗——
+		// 不计数则预算漏记，终局观察误判 fail-fast → failover 晚一整轮（修剪发现 P2）
+		if (failedRequest !== undefined) bumpChainFailure(state, routeId, memberRef(member))
+		// burnt 集变化才写 router state（同引用 / undefined = pi 不落 virtual-model-state
+		// 条目——agent-session.js：route.state !== undefined && !== state 才 append）。
+		// 写回前裁剪到当前配置成员：手改 / fork 注入的非配置 ref 不随每次写回放大携带
+		// （修剪发现 P4；无裁剪时 pruneBurntToConfig 原引用返回，守住引用比较纪律）。
+		const nextBurnt = pruneBurntToConfig(decision.burnt, route)
+		const nextState: RouteFailoverState | undefined = nextBurnt !== burntIn ? { burnt: [...nextBurnt] } : undefined
 		return {
 			model,
 			thinkingLevel: resolveThinkingLevel(request.thinkingLevel, endpointThinkingLevels(member)),
-			// burnt 集变化才写 router state（同引用 / undefined = pi 不落 virtual-model-state
-			// 条目——agent-session.js：route.state !== undefined && !== state 才 append）。
-			state: decision.burnt !== burntIn ? { burnt: [...decision.burnt] } : undefined,
+			state: nextState,
 		}
 	}
 	throw buildUnresolvableError(route, unresolvableRefs)

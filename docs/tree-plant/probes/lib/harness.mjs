@@ -246,6 +246,89 @@ export function runPiSession({ agentDir, workDir, model, prompts, extensionPath 
 	);
 }
 
+/**
+ * 带 set_model 交替的会话驱动（模型切换场景：steps = { prompt } 与 { setModel:[provider,id] }
+ * 交替序列，每条 prompt 等 agent_settled 后调 onSettled）。
+ *
+ * 用途 = 实机锁定「切换模型 away-and-back」类场景（路由闭包不参与切走轮次，但闭包状态留存——
+ * T9 链内计数退役判据依赖此驱动）。
+ */
+export function spawnPiWithSteps({ agentDir, workDir, model, steps, extensionPath = EXTENSION_PATH, timeoutMs = 180_000 }) {
+	const sessionDir = join(workDir, "sessions");
+	mkdirSync(sessionDir, { recursive: true });
+	const child = spawn("pi", [
+		"-ne",
+		"--mode", "rpc",
+		"--session-dir", sessionDir,
+		"--model", model,
+		"--approve",
+		"--offline",
+		"--no-context-files",
+		"--extension", extensionPath,
+	], {
+		cwd: workDir,
+		env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_CODING_AGENT_SESSION_DIR: sessionDir },
+		stdio: ["pipe", "pipe", "pipe"],
+	});
+
+	const events = [];
+	let buffer = "";
+	let waiters = [];
+	child.stdout.on("data", chunk => {
+		buffer += chunk.toString("utf8");
+		for (;;) {
+			const nl = buffer.indexOf("\n");
+			if (nl < 0) break;
+			const line = buffer.slice(0, nl).trim();
+			buffer = buffer.slice(nl + 1);
+			if (!line.startsWith("{")) continue;
+			try {
+				const event = JSON.parse(line);
+				events.push(event);
+				if (event.type === "agent_settled") {
+					const pending = waiters;
+					waiters = [];
+					for (const w of pending) w();
+				}
+			} catch { /* 非 JSON 行（启动横幅）忽略 */ }
+		}
+	});
+	let stderr = "";
+	child.stderr.on("data", chunk => { stderr += chunk.toString("utf8"); });
+
+	const done = (async () => {
+		let n = 0;
+		for (const step of steps) {
+			n += 1;
+			if (step.setModel !== undefined) {
+				child.stdin.write(`${JSON.stringify({ type: "set_model", id: `s${n}`, provider: step.setModel[0], modelId: step.setModel[1] })}\n`);
+				await new Promise(r => setTimeout(r, 300)); // 等 set_model 响应落地
+				continue;
+			}
+			await new Promise((resolveSend, rejectSend) => {
+				const timer = setTimeout(() => rejectSend(new Error(`probe timeout ${timeoutMs}ms waiting for step ${n} to settle (events: ${events.map(e => e.type).join(",")})`)), timeoutMs);
+				waiters.push(() => { clearTimeout(timer); resolveSend(); });
+				child.stdin.write(`${JSON.stringify({ type: "prompt", id: `p${n}`, message: step.prompt })}\n`);
+			});
+			await step.onSettled?.(n);
+		}
+		child.stdin.end();
+		await new Promise(resolveExit => {
+			if (child.exitCode !== null) resolveExit();
+			else child.once("exit", resolveExit);
+		});
+		return { events, sessionPath: findNewestSession(sessionDir), stderr };
+	})();
+
+	return done.then(
+		result => result,
+		async err => {
+			try { child.kill("SIGKILL"); } catch { /* 已退出 */ }
+			throw err;
+		},
+	);
+}
+
 /** session-dir 里最新的 jsonl 会话文件（pi 首次 flush 前可能不存在——调用方判空）。 */
 export function findNewestSession(sessionDir) {
 	let entries;

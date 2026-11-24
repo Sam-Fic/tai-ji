@@ -61,7 +61,7 @@
 |------|------|
 | retry 求值（reason=retry 且 failed ∈ 配置且目录可解析） | **纯透传**：原样返回失败端点，不复查路由条件（重试归属在途请求的延续，直连模型同样不复查）；链内失败计数 +1（闭包内存）；不写 router state |
 | 非 retry 求值（user / continuation） | 先**终局观察**后选择：见下表； burnt 变化才写 router state（返回 undefined = pi 不落 virtual-model-state 条目） |
-| direct 求值（压缩摘要，pi 不传 state） | 不写 state（写了也被丢弃——summarization 路径只取 model/thinkingLevel）；无 failed 走正常选择， burnt 软避让因 state 缺省退回配置序（边缘：压缩摘要请求可能路由到 burnt 端点，可接受） |
+| direct 求值（压缩摘要，pi 不传 state） | 不写 state（写了也被丢弃——summarization 路径只取 model/thinkingLevel）；无 failed 走正常选择；burnt 不从 state 生效（pi 不传），但终局观察从 messages 重导——压缩摘要请求同样避开刚烧端点（修剪发现 P5 核实：实装如此且方向更优，登记簿据此修正）；闭包计数会被 direct 求值的观察改写（退役/清），与主链同语义 |
 
 **终局观察**（`request.messages` 从尾向前找最近一条**物理模型** assistant 消息——跳过 provider = AGGREGATION_PROVIDER_ID 的虚拟模型消息，使观察在连续多轮路由失败后凭更早的物理结局**幂等重导**，burn 不因选择层抛错而丢、不需闭包镜像）：
 
@@ -71,12 +71,13 @@
 | error + 成员 F，计数 < maxRetries（fail-fast：401/402/配额类，pi 没重试） | 不 burnt、计数作废——主端点错误持续可见，不向候选漂移（方案 B 与「任何终局错误即换」的分界） |
 | stop/toolUse/length（成功出站） | 清 F 的 burnt + 计数（端点康复，重新成为首选） |
 | aborted（用户取消在途链） | 计数作废，burnt 不动（取消不是端点事实） |
-| 非本路由成员（用户中途换过模型） | 无观察 |
+| 非本路由成员（用户中途换过模型） | 无观察——计数整体退役（本路由的链已终断：孤立旧计数会把后续账户类 fail-fast 误判成「预算用尽」→ 误 burn + 漂移，修剪发现 P1），burnt 保持入参 |
+| 未知 stopReason 值（pending/deferred/未来新增值） | 不猜测：不清 burnt（不反向清理偏好）、计数退役（pi-ai StopReason 值域见 fact-check 接口表） |
 | 全部消息都是虚拟 error | 无物理结局可观察，burnt 保持入参 |
 
 **选择**：条件求值（硬闸，矩阵 12 行语义不变）→ 候选集内 burnt 软避让（未 burnt 按配置序优先、burnt 降序尾；首选全部悬空时闭包层仍可按序落到 burnt 端点，AX5 韧性不变）→ 全部候选 burnt → 轮换重探（burn 序最旧的候选优先并移到序尾——有序 Set 的 delete+add；坏端点交替重探，恢复即被成功观察清 mark，无时间机制）。
 
-**状态分工**：burnt（跨轮次路由偏好，历史里只有最后一跳结局、更早的 burn 不可从 messages 重导）走 **router state**（pi 持久化在 session branch，`pi.virtual-model-state` 条目，落盘条件 = 返回值 !== undefined 且 !== 入参 state——引用比较，agent-session.js:460-465）；链内失败计数（生命周期 = 活跃重试链，秒级）活**闭包内存**，不落 session 历史。进程重启（resume）丢计数：旧终局错误按 fail-fast 重导一次（不 burnt）→ 重选死端点→再烧一轮预算→才 burnt，代价一轮。
+**状态分工**：burnt（跨轮次路由偏好，历史里只有最后一跳结局、更早的 burn 不可从 messages 重导）走 **router state**（pi 持久化在 session branch，`pi.virtual-model-state` 条目，落盘条件 = 返回值 !== undefined 且 !== 入参 state——引用比较，agent-session.js:460-465；写回前裁剪到当前配置成员，手改/fork 注入的非配置 ref 不放大携带——修剪发现 P4）；链内失败计数（生命周期 = 活跃重试链，秒级）活**闭包内存**，不落 session 历史——计数只在「最近物理结局 = 该成员终局 error」时是活的，其余一切形态（成功/取消/未知/非成员/无物理消息）整体退役；burn 时保留该成员计数作重导证据（已 burnt 的重导幂等）。进程重启（resume）丢计数：旧终局错误按 fail-fast 重导一次（不 burnt）→ 重选死端点→再烧一轮预算→才 burnt，代价一轮。分支切换/fork 语义（修剪登记）：burnt 与为其背书的终局 error 同 branch 共业——fork 到 burn 前则首轮看不到 burnt、第二轮从 fork 自己的历史重导；原分支 burn 条目隔离不受影响。
 
 **行为后果（预期管理）**：pi 的重试链归 pi 所有，预算耗尽即终局——扩展无法往链里注入额外 attempt，故 failover 落在**下一轮第一个请求**：烧掉预算的那一轮呈现**真实上游错误全文**（修复的核心收益），下一轮起走候选端点。单端点路由在该语义下 ≡ 直连模型（每轮都真试、错误真实呈现）。maxRetries=0（显式设 0 或 retry 停用 enabled=false——停用即零次重试，预算读 0）→ 任何终局 error 即 burnt，failover 即时生效。
 

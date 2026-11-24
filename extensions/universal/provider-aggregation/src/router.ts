@@ -307,13 +307,21 @@ export type RouteDecision =
  * 「连续多轮路由失败」后仍可凭更早的物理结局**幂等重导**：burn 不因选择层抛错（无候选 /
  * 悬空）而丢，也不需要闭包镜像——观察永远从会话事实重算。
  *
- * 结局语义（对齐 AssistantMessage.stopReason 词表）：
+ * 计数生命周期 = 活跃重试链：只有「最近物理结局 = 本成员 F 的终局 error」时 F 的计数是
+ * 活的（该链刚在 F 上烧完预算）；其余一切形态（成功 / 取消 / 未知结局 / 非成员 / 无物理
+ * 消息）都意味着本路由的链已终断——计数整体退役。缺这条退役路径时，被观察跳过（模型切走
+ * 切回、端点移出配置）孤立的旧计数会把后续账户类 fail-fast 误判成「预算用尽」→ 误 burn +
+ * 向候选漂移（修剪发现 P1；T9 实机锁定）。burn 时保留 F 的计数作重导证据（已 burnt 的
+ * 重导幂等，不会二次误判），其余成员计数退役（单活链，其余必陈旧）。
+ *
+ * 结局语义（stopReason 值域 = pi-ai StopReason 联合 pending/stop/length/toolUse/error/
+ * aborted/deferred——未知值不猜测：按「非失败亦非康复」保守处理，burnt 不动、计数退役）：
  * - error + 成员 F：终局失败。failures[F] ≥ maxRetries（pi 重试预算真用尽）→ burnt F
- *   （计数保留作重导证据）；否则（fail-fast：账户/凭据类，pi 压根没重试）→ 不计 burnt、
- *   计数作废——主端点错误持续可见，不向候选漂移（方案 B 与方案 A 的分界）。
- * - stop/toolUse/length：成功出站 → 清 F 的 burnt + 计数（端点康复，重新成为首选）。
- * - aborted：用户取消在途链 → 计数作废，burnt 不动（取消不是端点事实）。
- * - 非本路由成员（用户中途换过模型）：无观察。
+ *   （计数保留作重导证据）；否则（fail-fast：账户/凭据类，pi 压根没重试）→ 不 burnt、
+ *   计数退役——主端点错误持续可见，不向候选漂移（方案 B 与方案 A 的分界）。
+ * - stop/toolUse/length：成功出站 → 清 F 的 burnt + 计数退役（端点康复，重新成为首选）。
+ * - aborted：用户取消在途链 → 计数退役，burnt 不动（取消不是端点事实）。
+ * - 非本路由成员（用户中途换过模型）：无观察——计数退役（链已终断），burnt 保持入参。
  */
 function observeTerminalOutcome(
 	messages: readonly RouteObservationMessage[],
@@ -323,25 +331,37 @@ function observeTerminalOutcome(
 	maxRetries: number,
 ): { burnt: ReadonlySet<string>, failures: ReadonlyMap<string, number> } {
 	const last = findLastPhysicalOutcome(messages)
-	if (last === undefined) return { burnt, failures }
+	if (last === undefined) return { burnt, failures: retireCounts(failures) }
 	const index = members.findIndex(m => m.providerId === last.provider && m.modelId === last.model)
-	if (index < 0) return { burnt, failures } // 非本路由成员——无观察
+	if (index < 0) return { burnt, failures: retireCounts(failures) } // 非本路由成员——无观察
 	const ref = memberRef(members[index]!)
-	if (last.stopReason !== "error") {
-		if (last.stopReason === "aborted") {
-			// 用户取消在途链：计数作废，burnt 不动
-			return failures.has(ref) ? { burnt, failures: withoutKey(failures, ref) } : { burnt, failures }
+	if (last.stopReason === "error") {
+		// 终局失败：预算用尽 → burnt（计数保留作重导证据，其余退役）；fail-fast → 不 burnt、计数退役
+		if ((failures.get(ref) ?? 0) >= maxRetries) {
+			if (burnt.has(ref)) return { burnt, failures: retireOthers(failures, ref) } // 已 burnt——幂等（顺序不变，不产生新 state）
+			return { burnt: appendRef(burnt, ref), failures: retireOthers(failures, ref) }
 		}
-		// 成功出站（stop/toolUse/length）：端点康复——清 burnt + 计数
-		if (!burnt.has(ref) && !failures.has(ref)) return { burnt, failures }
-		return { burnt: withoutRef(burnt, ref), failures: withoutKey(failures, ref) }
+		return { burnt, failures: retireCounts(failures) }
 	}
-	// 终局失败：预算用尽 → burnt（计数保留作重导证据）；fail-fast → 不 burnt、计数作废
-	if ((failures.get(ref) ?? 0) >= maxRetries) {
-		if (burnt.has(ref)) return { burnt, failures } // 已 burnt——幂等（顺序不变，不产生新 state）
-		return { burnt: appendRef(burnt, ref), failures }
-	}
-	return failures.has(ref) ? { burnt, failures: withoutKey(failures, ref) } : { burnt, failures }
+	// 非 error：已知成功结局清 burnt（端点康复）；取消与未知值只退役计数、不反向清理偏好
+	const recovered = SUCCESSFUL_STOP_REASONS.includes(last.stopReason ?? "")
+	return { burnt: recovered ? withoutRef(burnt, ref) : burnt, failures: retireCounts(failures) }
+}
+
+/** 已知成功出站结局（清 burnt = 端点康复）——pi-ai StopReason 值域内的非错误非取消值。 */
+const SUCCESSFUL_STOP_REASONS: readonly string[] = ["stop", "toolUse", "length"]
+
+/** 计数整体退役（链终断）；空集原引用返回（无变化不制造新对象）。 */
+function retireCounts(failures: ReadonlyMap<string, number>): ReadonlyMap<string, number> {
+	return failures.size === 0 ? failures : new Map()
+}
+
+/** 仅保留 keepRef 的计数（burn 重导证据），其余退役；无需裁剪时原引用返回。 */
+function retireOthers(failures: ReadonlyMap<string, number>, keepRef: string): ReadonlyMap<string, number> {
+	const kept = failures.get(keepRef)
+	if (kept === undefined) return retireCounts(failures)
+	if (failures.size === 1) return failures
+	return new Map([[keepRef, kept]])
 }
 
 /** 从消息尾向前找最近一条物理模型 assistant 消息（跳过 provider = AGGREGATION_PROVIDER_ID 的虚拟模型消息）。 */
@@ -355,15 +375,9 @@ function findLastPhysicalOutcome(messages: readonly RouteObservationMessage[]): 
 	return undefined
 }
 
-/** 集合去键（保持其余键序）。 */
-function withoutKey<K, V>(map: ReadonlyMap<K, V>, key: K): ReadonlyMap<K, V> {
-	const next = new Map(map)
-	next.delete(key)
-	return next
-}
-
-/** 集合去成员（保持其余元素序）。 */
+/** 集合去成员（保持其余元素序；成员不在集中原引用返回——无变化不制造新对象）。 */
 function withoutRef(refs: ReadonlySet<string>, ref: string): ReadonlySet<string> {
+	if (!refs.has(ref)) return refs
 	const next = new Set(refs)
 	next.delete(ref)
 	return next
@@ -398,7 +412,21 @@ function rotateOldestBurnt(burnt: ReadonlySet<string>, candidateIndexes: readonl
 	const rotated = new Set(burnt)
 	rotated.delete(oldestRef)
 	rotated.add(oldestRef) // 移到序尾——下次轮换让位给下一个坏端点
+	// 序列未变（单候选 / oldest 已在序尾）→ 返回原引用：pi 的 state 落盘门禁是引用比较，
+	// 内容等值的新对象会被每个请求 append 一条恒等条目（修剪发现 P3；T10 实机锁定）
+	if (sameSequence(rotated, burnt)) return { memberIndex, burnt }
 	return { memberIndex, burnt: rotated }
+}
+
+/** 两个有序集序列逐元素相等（插入序一致）。 */
+function sameSequence(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+	if (a.size !== b.size) return false
+	const left = [...a]
+	const right = [...b]
+	for (let i = 0; i < left.length; i++) {
+		if (left[i] !== right[i]) return false
+	}
+	return true
 }
 
 /**
