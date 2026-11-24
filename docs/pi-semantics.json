@@ -2157,5 +2157,28 @@
       "test": "packages/runtime/src/infra/pi/__tests__/pi-semantics-virtual-route.test.ts"
     },
     "verifiedWith": "1.0.0"
+  },
+  {
+    "id": "PS-100",
+    "claim": "pi 重试预算缺省值（taiji @zhushanwen/pi-provider-aggregation 的影子副本锚）：getRetrySettings 的 maxRetries 缺省 3（`this.settings.retry?.maxRetries ?? 3`），getRetryEnabled 的 enabled 缺省 true（`this.settings.retry?.enabled ?? true`——重试默认开启）。taiji 侧 DEFAULT_MAX_RETRIES=3 与 readMaxRetries 的 enabled===false→0（重试停用 = 零次重试）是这两个缺省值的影子副本，直接决定 provider-aggregation「链内失败计数 ≥ 预算 → burnt → 下一轮 failover」的阈值——pi 升级若改缺省值、或 taiji 影子副本漂移，用户侧表现为 failover 时机静默偏移（重试次数感知不变、实际换端点时机变），故探针双断言（dist 缺省值 + 影子副本对拍）",
+    "piAnchor": [
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/settings-manager.js",
+        "symbol": "getRetrySettings",
+        "note": ":659-666 —— :661 enabled 委派 getRetryEnabled；:662 maxRetries: this.settings.retry?.maxRetries ?? 3（缺省 3）；同段 baseDelayMs ?? 2000 / maxAgentDelayMs ?? DEFAULT_MAX_AGENT_RETRY_DELAY_MS【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      },
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/settings-manager.js",
+        "symbol": "getRetryEnabled",
+        "note": ":648-650 return this.settings.retry?.enabled ?? true（缺省 true = 重试默认开启；enabled=false 时 taiji readMaxRetries 预算读 0）【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      }
+    ],
+    "guard": {
+      "type": "probe",
+      "test": "packages/runtime/src/infra/pi/__tests__/pi-semantics-bundle-1.test.ts"
+    },
+    "verifiedWith": "1.0.0"
   }
 ]
