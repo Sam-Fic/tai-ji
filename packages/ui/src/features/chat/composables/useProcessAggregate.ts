@@ -16,6 +16,7 @@
  * 的唯一投影（渲染层禁止二次拼接）、counts 是三处失败计数的唯一口径——本文件只消费不重算。
  */
 import { computed, nextTick, ref, watch, type Ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { ProcessSegment, ProcessSegmentUnit } from '@taiji/core/domain/chat'
 import type { ThinkingBlock } from '@taiji/shared'
 
@@ -89,6 +90,118 @@ export function useProcessAggregateState(params: {
       ? 'agg-enter'
       : ''
   return { isLive, expanded, toggleExpanded, entranceClass }
+}
+
+/**
+ * 过程卡窗口滚动运行时（AggregateTape 消费）：贴底跟随（进行中）/ 上滚暂停 / 卡头右侧滚动提示。
+ *
+ * 三条事实都由窗口几何量派生，无 timer、无状态猜测：
+ * - 贴底 ⇔ scrollHeight − clientHeight − scrollTop ≤ 1（与 BlockScrollBox 同容差）；
+ * - 上沿/下沿被裁掉几行 = 按子元素 offsetTop 统计整条在视口外的行数；
+ * - 提示文案与动作方向（up = 去顶 / down = 去底）按「进行中 / 落成后」两态分别裁定：
+ *   进行中：未贴底 → 回到最新；贴底且上面有行 → 更早 N 条；否则无提示。
+ *   落成后：下面有行 → 下面还有 N 条；滚到底 → 回到开头；否则无提示。
+ * 跟随（进行中）：内容增长且用户没上滚 → 贴底；上滚即停吸，点「回到最新」恢复。
+ */
+export function useTapeScroll(params: {
+  /** 窗口滚动容器（null = 收起态，不测量） */
+  window: Ref<HTMLElement | null>
+  /** 段数据（内容增长信号 = members 增量） */
+  segment: Ref<ProcessSegment>
+  /** 段进行中（容器 isLive 透传） */
+  live: Ref<boolean>
+}) {
+  const { t } = useI18n()
+  const hint = ref('')
+  const hintAct = ref<'up' | 'down'>('up')
+  const atBottom = ref(true)
+  /** 进行中的贴底跟随开关：用户上滚一次即停吸，点「回到最新」恢复 */
+  const follow = ref(true)
+
+  function stickToBottom(): void {
+    const el = params.window.value
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    // 贴底后立即重算提示：scrollTop 未变化（本就贴底）时不触发 scroll 事件，
+    // 提示会停留在上一次的旧值（如「回到最新」）
+    measure()
+  }
+
+  /** 窗口内的「行」元素（组头 / 工具成员行 / 思考行——组是单个子元素，其成员行嵌在里面） */
+  function rowEls(el: HTMLElement): Element[] {
+    return Array.prototype.slice.call(
+      el.querySelectorAll('[data-testid="agg-group-head"], [data-testid="agg-tool-row"], [data-testid="thinking-duration"]'),
+    )
+  }
+
+  function measure(): void {
+    const el = params.window.value
+    if (!el || !el.clientHeight) return
+    const top = el.scrollTop
+    const overTop = top > 1
+    const overBottom = el.scrollHeight - el.clientHeight - top > 1
+    atBottom.value = !overBottom
+    // 整条在视口外的行数：按行元素与窗口视口的矩形比对（组内成员行嵌在组子元素里，不能按子元素数）
+    let above = 0
+    let below = 0
+    const view = el.getBoundingClientRect()
+    for (const row of rowEls(el)) {
+      const r = row.getBoundingClientRect()
+      if (r.bottom <= view.top + 1) above += 1
+      else if (r.top >= view.bottom - 1) below += 1
+    }
+    let text = ''
+    let act: 'up' | 'down' = 'up'
+    if (params.live.value) {
+      if (!atBottom.value) {
+        text = t('panel.message.scrollToBottom')
+        act = 'down'
+      } else if (above > 0) {
+        text = t('panel.message.procTapeEarlier', { count: above })
+        act = 'up'
+      }
+    } else if (below > 0) {
+      text = t('panel.message.procTapeBelow', { count: below })
+      act = 'down'
+    } else if (overTop) {
+      text = t('panel.message.procTapeToTop')
+      act = 'up'
+    }
+    hint.value = text
+    hintAct.value = act
+  }
+
+  function onScroll(): void {
+    measure()
+    if (params.live.value) follow.value = atBottom.value
+  }
+
+  /** 上滚手势同步停吸：wheel 事件先于 watcher 刷新到达，晚一步（等 scroll 事件）会被
+   *  同期到达的新成员贴底动作盖掉——跟随的暂停必须在手势发生时即刻生效。 */
+  function onWheel(e: WheelEvent): void {
+    if (e.deltaY < 0) follow.value = false
+  }
+
+  function onHint(): void {
+    const el = params.window.value
+    if (!el) return
+    if (hintAct.value === 'down') {
+      follow.value = true
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    } else {
+      el.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+  }
+
+  /* 内容增长：进行中且跟随未停 → 贴底（落成后打开窗口时停在用户该看的位置：从第一条起） */
+  watch(
+    () => params.segment.value.members.length,
+    () => {
+      if (params.live.value && follow.value) void nextTick(stickToBottom)
+    },
+  )
+
+  return { hint, hintAct, atBottom, follow, stickToBottom, onScroll, onWheel, measure, onHint }
 }
 
 /**

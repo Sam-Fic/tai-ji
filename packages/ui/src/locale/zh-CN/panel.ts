@@ -201,21 +201,23 @@ export default {
     // 2026-09 口径改 token：整 turn 全部 LLM 调用的 usage.outputTokens 之和，不估算）
     generatedTokens: '已生成 {tokens} tokens',
     traceFailed: '含 {count} 次失败',
-    // [run-group] 组类型名与统计段键（聚合块 SegmentToolGroup / AggregateLiveWindows 组条目
-    // 消费）：类型名按设计字面（探索 / 改动 / 执行命令），统计段 = 「{count} 步」+ 耗时
-    // （≥1s 才拼，渲染层拼装）；失败分句复用 traceFailed（「· 含 M 次失败」），不另开键——
-    // 语义域同属失败计数句式。
-    runGroupExplore: '探索',
-    runGroupEdit: '改动',
-    runGroupExec: '执行命令',
+    // 过程卡卡头计数（chat-flow-v2）：步数 = 「{count} 步」；失败分句复用 traceFailed
+    // （「含 M 次失败」），不另开键——语义域同属失败计数句式。
     runGroupSteps: '{count} 步',
-    // [process-aggregate] 聚合块（过程段三态容器）文案：摘要行主词 / 运行态词（组头与
-    // 聚合条共用）/ 单步行失败标记 / 悬停浮层完成态词。失败计数句式复用 traceFailed、
+    // [process-aggregate] 过程卡文案：卡头主词 / 运行态词（悬停浮层与思考行共用）/
+    // 工具步行失败标记 / 悬停浮层完成态词。失败计数句式复用 traceFailed、
     // 思考词复用 thinkingBlock（语义域同源，不另立第二套键）——重试标记键不登记：
     // 终态③裁决默认不渲染重试标记（无结构判定源），键的需求方 = 0。
     aggProcessLabel: '过程',
     aggGroupRunning: '进行中',
     aggRowFailed: '失败',
+    // 过程卡窗口滚动提示（chat-flow-v2）：进行中贴底时写「更早 N 条」、上滚后写「回到最新」；
+    // 落成后从第一条读起时写「下面还有 N 条」、滚到底后写「回到开头」
+    procTapeEarlier: '更早 {count} 条',
+    procTapeBelow: '下面还有 {count} 条',
+    procTapeToTop: '回到开头',
+    // 过程卡卡头计数（chat-flow-v2）：思考数
+    procThinkCount: '思考 {count}',
     aggStatusDone: '已完成',
     // [process-aggregate] 单步详情抽屉（u-detail-drawer 装配）：抽屉标题（壳缺省与工具名
     // 后缀共用一词）/ 运行中注记 / 参数与输出小节标题。状态词复用上面三键

@@ -6045,7 +6045,7 @@
     },
     {
       "id": "E2E-ACCEPT-01",
-      "summary": "tree-plant 实机验收探针：过程卡 12 行窗口上限（开发实例 + faux 演员 + CDP 断言，凭证无关零 token）",
+      "summary": "tree-plant 实机验收探针：过程卡（12 行窗口上限、长相对齐原型、思考行、进行中计时、滚动跟随、落成收起）（开发实例 + faux 演员 + CDP 断言，凭证无关零 token）",
       "scope": [
         "scripts/acceptance/**"
       ],
@@ -6053,7 +6053,23 @@
       "assets": [
         {
           "kind": "probe",
+          "ref": "scripts/acceptance/harness.mjs"
+        },
+        {
+          "kind": "probe",
           "ref": "scripts/acceptance/tape-height.mjs"
+        },
+        {
+          "kind": "probe",
+          "ref": "scripts/acceptance/tape-look.mjs"
+        },
+        {
+          "kind": "probe",
+          "ref": "scripts/acceptance/motion-overflow.mjs"
+        },
+        {
+          "kind": "probe",
+          "ref": "scripts/acceptance/tape-scroll.mjs"
         }
       ],
       "trigger": "on-diff",

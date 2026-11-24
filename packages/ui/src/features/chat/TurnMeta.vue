@@ -33,7 +33,7 @@
       <Button
         variant="ghost"
         size="sm"
-        class="turn-meta -mx-1.5 h-auto w-fit flex-wrap items-center justify-start gap-[10px] self-start px-1.5 py-[4px] font-mono font-normal text-[length:var(--text-xs)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease)]"
+        class="turn-meta -mx-1.5 h-auto w-fit flex-wrap items-center justify-start gap-[10px] self-start px-1.5 py-[4px] font-mono font-normal text-[length:var(--text-xs)] transition-colors duration-[var(--duration-fast)] ease-[var(--ease)] disabled:opacity-100"
         :class="[
           !turn.hasFoldable
             ? 'cursor-default hover:text-neutral-mid'

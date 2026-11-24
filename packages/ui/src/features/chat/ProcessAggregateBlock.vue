@@ -18,27 +18,15 @@
 -->
 <template>
   <div :class="['agg-block', entranceClass]" data-testid="process-aggregate">
-    <!-- 卡头恒渲染（展开交互的可见入口，两态共用；live 变体见 AggregateSummaryRow） -->
-    <AggregateSummaryRow :segment="segment" :expanded="expanded" :live="isLive" @toggle="toggleExpanded" />
-    <!-- 12 行窗口（进行中与落成后同一形态）：内容在窗口里滚动；进行中贴底跟随 -->
-    <div v-if="expanded" class="agg-tape mt-1" data-testid="agg-tape">
-      <div
-        ref="windowRef"
-        class="max-h-[calc(var(--proc-tape-rows)*var(--proc-tape-row-h))] overflow-y-auto"
-        data-testid="agg-tape-scroll"
-        @scroll="onScroll"
-      >
-        <AggregateExpandedBody :segment="segment" :session-id="sessionId" :live="isLive" />
-      </div>
-    </div>
+    <!-- 一张卡 = 卡头 + 12 行窗口（chat-flow-v2 二轮终态）；展开态与滚动运行时在容器内 -->
+    <AggregateTape :segment="segment" :live="isLive" :open="expanded" :session-id="sessionId" @toggle="toggleExpanded" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed } from 'vue'
 import type { ProcessSegment } from '@taiji/core/domain/chat'
-import AggregateSummaryRow from './process-aggregate/AggregateSummaryRow.vue'
-import AggregateExpandedBody from './process-aggregate/AggregateExpandedBody.vue'
+import AggregateTape from './process-aggregate/AggregateTape.vue'
 import { useProcessAggregateState } from './composables/useProcessAggregate'
 
 const props = defineProps<{
@@ -54,35 +42,15 @@ const props = defineProps<{
   sessionId?: string | null
 }>()
 
+/* 三态判定与展开态（useProcessAggregateState）：进行中 ⇔ turnWorking ∧ !followedByText；
+   进行中默认展开窗口；用户手动点过卡头后不随落成自动收起（自动收起只对未操作过的卡生效）。
+   窗口滚动运行时（贴底跟随 / 上滚暂停 / 滚动提示）在 AggregateTape 内的 useTapeScroll。 */
 const { isLive, expanded, toggleExpanded, entranceClass } = useProcessAggregateState({
   segment: computed(() => props.segment),
   turnWorking: computed(() => props.turnWorking),
   turnStreaming: computed(() => props.turnStreaming === true),
 })
 
-/* ── 窗口贴底跟随（进行中）：内容增长且用户未上滚时贴底；上滚即停吸，回底恢复。
-      跟底范式与 BlockScrollBox 同款（贴底容差 1px）。落成后打开窗口从第一条读起（不跟底）。 ── */
-const windowRef = ref<HTMLDivElement | null>(null)
-let followBottom = true
-function stickToBottom(): void {
-  const el = windowRef.value
-  if (el && followBottom) el.scrollTop = el.scrollHeight
-}
-function onScroll(): void {
-  const el = windowRef.value
-  if (!el) return
-  followBottom = el.scrollHeight - el.clientHeight - el.scrollTop <= 1
-}
-watch(() => props.segment.members.length, () => void nextTick(stickToBottom))
-onMounted(() => {
-  followBottom = isLive.value
-  void nextTick(stickToBottom)
-})
-watch(expanded, (open) => {
-  if (!open) return
-  followBottom = isLive.value
-  void nextTick(stickToBottom)
-})
 
 </script>
 
