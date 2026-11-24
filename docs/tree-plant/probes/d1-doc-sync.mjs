@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { checker } from "./lib/harness.mjs";
 
-const REPO_ROOT = resolve(import.meta.dirname, "../../../..");
+const REPO_ROOT = resolve(import.meta.dirname, "../../..");
 const read = rel => readFileSync(join(REPO_ROOT, rel), "utf8");
 
 const REMOVED_ERROR_TEXT = "上一端点失败且无其他可用端点";
@@ -79,7 +79,7 @@ try {
 		],
 		specials: [],
 	}];
-	const parsed = parseAggregationRoutesSection({ routes: { version: 1, routes: probeRoutes } });
+	const parsed = parseAggregationRoutesSection({ version: 1, routes: probeRoutes });
 	c.check(parsed.ok === true, `探针路由配置（零新键）过实装 schema 解析（实际 ${parsed.ok ? "ok" : parsed.reason}）`);
 	if (!c.done()) exitCode = 1;
 } catch (err) {
