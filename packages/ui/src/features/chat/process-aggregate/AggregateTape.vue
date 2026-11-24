@@ -4,7 +4,7 @@
   卡头（AggregateSummaryRow）承载开关与计数；右侧插槽放滚动提示
   （更早 N 条 / 回到最新 / 下面还有 N 条 / 回到开头——useTapeScroll 按窗口几何派生）。
   窗口（agg-tape-scroll）高度上限 = 12 行 × 24px，内容在其中滚动；滚动条隐藏；
-  内容滚出窗口的一侧 16px 渐隐。
+  内容滚出窗口的一侧 16px 渐隐。思考块的展开集合由本组件持有（思考行与卡头的活动 chip 共用）。
   窗口左右各外扩一段（卡片内边距 + 行悬停底色的外扩量），行悬停底色因此完整可见，
   又不会被窗口的滚动裁切。
 -->
@@ -36,7 +36,13 @@
       @scrollend="onScrollEnd"
       @wheel="onWheel"
     >
-      <AggregateExpandedBody :segment="segment" :session-id="sessionId" :live="live" />
+      <AggregateExpandedBody
+        :segment="segment"
+        :session-id="sessionId"
+        :live="live"
+        :expanded-thinking="openThinking"
+        @toggle-thinking="toggleThinking"
+      />
     </div>
   </div>
 </template>
@@ -73,6 +79,16 @@ const { hint, overTop, overBottom, onScroll, onScrollEnd, onWheel, onHint, attac
   segment,
   live,
 })
+
+/* 已点开的思考块：窗口收起再打开、段继续增长都保留；卡卸载即清空（瞬态，不落 store）。
+   翻转时替换成新集合——读它的模板与 computed 才会更新 */
+const openThinking = ref<ReadonlySet<string>>(new Set())
+function toggleThinking(id: string): void {
+  const next = new Set(openThinking.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  openThinking.value = next
+}
 
 /* 窗口挂载 / 卸载即接入滚动运行时：挂载后进行中且跟随时贴底，落成后打开从第一条读起；
    两种情况都立即量一次（内容未长满时也要给出正确的提示） */

@@ -2,6 +2,7 @@
   过程卡 · 窗口内容（chat-flow-v2）：思考块与工具步按发生顺序逐行平铺，一个 block 一行。
   行序列 = segment.units 的逐行投影：member 单元原样成行，group 单元按成员顺序展开成行
   （窗口内不设分组标题行）；不重新归组、不改顺序。
+  思考块的展开态不落在行上：行只上报点击，由卡持有展开集合并透传（卡头的活动 chip 点开同一段思考）。
   行高 24px、行间无间隙（12 行窗口 = 288px 整）。
   行入场动效只用透明度、不用位移：位移会临时增大窗口的内容高度，把贴底的窗口判成未贴底
   （机制探针 scripts/acceptance/motion-overflow.mjs）。
@@ -23,8 +24,10 @@
       <SegmentThinkingRow
         v-if="row.kind === 'thinking'"
         :thinking="row.block.block.ref as ThinkingBlock"
+        :expanded="openThinkingIds.has((row.block.block.ref as ThinkingBlock).id)"
         :session-id="sessionId"
         :live="live"
+        @toggle="emit('toggle-thinking', (row.block.block.ref as ThinkingBlock).id)"
       />
       <SegmentToolRow
         v-else
@@ -57,6 +60,16 @@ const props = defineProps<{
   sessionId?: string | null
   /** 段进行中（isLive 透传）：思考行按自身时间戳启用流式形态，缺省完成态形态 */
   live?: boolean
+  /** 已点开的思考块 id（卡的展开集合透传：思考行与卡头的活动 chip 共用这一份状态）；缺省 = 都没点开 */
+  expandedThinking?: ReadonlySet<string>
+}>()
+
+const NO_OPEN_THINKING: ReadonlySet<string> = new Set()
+const openThinkingIds = computed(() => props.expandedThinking ?? NO_OPEN_THINKING)
+
+const emit = defineEmits<{
+  /** 点思考行 → 请求翻转该块的展开态（状态在卡上） */
+  (e: 'toggle-thinking', id: string): void
 }>()
 
 type TapeRow =

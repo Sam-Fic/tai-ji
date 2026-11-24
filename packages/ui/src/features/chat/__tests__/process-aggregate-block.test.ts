@@ -342,8 +342,8 @@ describe('process-aggregate-block failure visibility: card head and failed row a
 describe('process-aggregate-block window content: derived from segment units', () => {
   it('纯思考段：窗口里只有思考行，无工具行；追加思考后行数增长', async () => {
     const wrapper = mountAgg(makeSegment([makeThinkingFlat('先想后做')], { followedByText: false }), true);
-    expect(wrapper.find('[data-testid="agg-expanded"]').text()).toContain('先想后做');
-    expect(wrapper.find('[data-testid="agg-group-head"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="agg-expanded"]').find('[data-testid="agg-thinking-row"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="agg-expanded"]').find('[data-testid="agg-tool-row"]').exists()).toBe(false);
     await wrapper.setProps({
       segment: makeSegment([makeThinkingFlat('先想后做'), makeThinkingFlat('第二段推理')], { followedByText: false }),
     });
@@ -358,6 +358,60 @@ describe('process-aggregate-block window content: derived from segment units', (
     const rows = wrapper.findAll('[data-testid="agg-expanded"] > [data-testid^="agg-row-"]');
     expect(rows.length).toBe(1);
     expect(wrapper.text()).not.toContain('等待工具调用');
+  });
+});
+
+// ─── 思考行三态（chat-flow-v2）──────────────────────────────────
+
+describe('process-aggregate-block thinking row: three states', () => {
+  it('已结束的思考：一行标签（灯泡 + 思考 + 时长 + 箭头），不带正文；点开才渲染全文，再点收起', async () => {
+    const wrapper = mountAgg(makeSegment([makeThinkingFlat('先想后做')], { followedByText: false }), true);
+    const row = () => wrapper.find('[data-testid="agg-thinking-row"]');
+    const toggle = () => row().find('[data-testid="agg-thinking-toggle"]');
+    expect(toggle().attributes('aria-expanded')).toBe('false');
+    expect(toggle().find('svg.lucide-lightbulb').exists()).toBe(true);
+    expect(toggle().find('svg.lucide-chevron-right').classes()).not.toContain('rotate-90');
+    expect(row().find('[data-testid="agg-thinking-duration"]').text()).not.toBe('');
+    expect(row().find('[data-testid="agg-thinking-text"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="agg-expanded"]').text()).not.toContain('先想后做');
+
+    await toggle().trigger('click');
+    expect(toggle().attributes('aria-expanded')).toBe('true');
+    expect(toggle().find('svg.lucide-chevron-right').classes()).toContain('rotate-90');
+    expect(row().classes()).toContain('is-open');
+    expect(row().find('[data-testid="agg-thinking-text"]').find('.stub-md').exists()).toBe(true);
+
+    await toggle().trigger('click');
+    expect(row().find('[data-testid="agg-thinking-text"]').exists()).toBe(false);
+  });
+
+  it('进行中的思考：不显示标签，只露最新一行（只渲染末尾一段文字）带光标；点它才展开全文并出现标签', async () => {
+    const long = Array.from({ length: 40 }, (_, i) => `第 ${i + 1} 行推理。`).join('\n');
+    const wrapper = mountAgg(makeSegment([makeThinkingFlat(long, { endTime: undefined })], { followedByText: false }), true);
+    const row = wrapper.find('[data-testid="agg-thinking-row"]');
+    expect(row.find('[data-testid="agg-thinking-toggle"]').exists()).toBe(false);
+    const text = row.find('[data-testid="agg-thinking-text"]');
+    expect(text.classes()).toContain('is-tail');
+    expect(text.find('.agg-cursor').exists()).toBe(true);
+    expect(text.text()).toContain('第 40 行推理');
+    expect(text.text()).not.toContain('第 1 行推理');
+
+    await text.trigger('click');
+    const toggle = row.find('[data-testid="agg-thinking-toggle"]');
+    expect(toggle.exists()).toBe(true);
+    expect(row.find('[data-testid="agg-thinking-running"]').text()).toBe('进行中');
+    expect(row.find('[data-testid="agg-thinking-text"]').classes()).not.toContain('is-tail');
+  });
+
+  it('落成后的段：缺 endTime 的思考也按已结束显示一行标签（无时长、无「进行中」、无正文）', async () => {
+    const wrapper = await mountExpanded(
+      makeSegment([makeThinkingFlat('历史会话里的思考', { endTime: undefined })], { followedByText: true }),
+    );
+    const row = wrapper.find('[data-testid="agg-thinking-row"]');
+    expect(row.find('[data-testid="agg-thinking-toggle"]').exists()).toBe(true);
+    expect(row.find('[data-testid="agg-thinking-duration"]').exists()).toBe(false);
+    expect(row.find('[data-testid="agg-thinking-running"]').exists()).toBe(false);
+    expect(row.find('[data-testid="agg-thinking-text"]').exists()).toBe(false);
   });
 });
 

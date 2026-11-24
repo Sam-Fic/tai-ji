@@ -6069,6 +6069,10 @@
         },
         {
           "kind": "probe",
+          "ref": "scripts/acceptance/tape-think.mjs"
+        },
+        {
+          "kind": "probe",
           "ref": "scripts/acceptance/tape-scroll.mjs"
         }
       ],
