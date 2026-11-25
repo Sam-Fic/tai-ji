@@ -125,16 +125,28 @@ describe('ModelRoutePage 首屏与页面级结构', () => {
     expect(w.find('[data-testid="model-route-overview"]').exists()).toBe(false)
   })
 
-  it('概览条计数：模型/端点/高级模式（spec §7.2）', () => {
+  it('概览条计数：模型/端点/高级模式/直连（spec §7.2）', () => {
     const win = blankWindowTable()
-    const w = mountPage([
-      cardOf(routeOf({ id: 'r1', mode: 'simple', members: [{ id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' }] })),
-      cardOf(routeOf({ id: 'r2', members: [{ id: 'b', providerId: 'zhipu', modelId: 'glm-5-3', type: 'window', window: win }] })),
-    ])
+    const w = mountPage(
+      [
+        cardOf(routeOf({ id: 'r1', mode: 'simple', members: [{ id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' }] })),
+        // r2 未参与选择（scoped=false）→ 跟在 scoped 段之后，仍计模型/端点/高级模式
+        cardOf(routeOf({ id: 'r2', members: [{ id: 'b', providerId: 'zhipu', modelId: 'glm-5-3', type: 'window', window: win }] }), { scoped: false }),
+      ],
+      [prov({ id: 'zhipu' })],
+      undefined,
+      ['zhipu/glm-5-3', `${AGGREGATION_PROVIDER_ID}/r1`],
+    )
     const overview = w.find('[data-testid="model-route-overview"]')
     expect(overview.exists()).toBe(true)
-    expect(overview.text()).toContain('2')
+    // 卡片集合 = 直连卡 1 + 路由卡 2（r1 参与 + r2 未参与）；端点 = 直连计 1 + 各路由成员数
+    expect(overview.text()).toContain('3')
+    expect(overview.text()).toContain('3') // 端点合计 3
     expect(overview.text()).toContain('1') // 高级模式 1 个
+    // 直连口径（新增）：1 个直连
+    const directStat = w.find('[data-testid="model-route-overview-direct"]')
+    expect(directStat.exists()).toBe(true)
+    expect(directStat.text()).toContain('settings.modelRoute.overviewDirect')
   })
 
   it('孤儿引用提示条渲染原值（U1 读取标记的页面承载）', () => {
@@ -531,9 +543,54 @@ describe('渠道直连卡（D10/U9：无 routes 的白名单模型 = 默认单�
     expect(payload.scopedRefs).toEqual([`${AGGREGATION_PROVIDER_ID}/r1`])
     expect(payload.routes.map((r) => r.id)).toEqual(['r1'])
   })
+
+  it('直连卡「移除」已落盘条目：确认对话框（白名单清理 + 默认回退提示）→ 确认后草稿摘除且保存载荷移除该条目', async () => {
+    const w = mixedPage()
+    await w.find('[data-testid="route-direct-card"] [data-testid="route-direct-remove"]').trigger('click')
+    await flushPromises()
+    // 确认对话框（RouteDirectCard 卡内承载，与删路由同款原语）
+    const dialogText = document.body.textContent ?? ''
+    expect(dialogText).toContain('settings.modelRoute.directRemoveConfirmTitle')
+    expect(dialogText).toContain('settings.modelRoute.directRemoveConfirmDesc')
+    expect(dialogText).toContain('zhipu / glm-5-3') // 名称插值进描述
+    // 未确认前草稿不动（无乐观移除）
+    expect(w.findAll('[data-testid="route-direct-card"]')).toHaveLength(1)
+    expect(w.findComponent(ModelRoutePage).emitted('change')).toBeFalsy()
+
+    const confirmBtn = Array.from(document.body.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'settings.modelRoute.directRemoveConfirmConfirm',
+    )
+    expect(confirmBtn).toBeTruthy()
+    await confirmBtn!.click()
+    await flushPromises()
+    expect(w.findAll('[data-testid="route-direct-card"]')).toHaveLength(0)
+    expect(w.findComponent(ModelRoutePage).emitted('change')).toBeTruthy()
+
+    w.findComponent(RouteUnsavedBar).vm.$emit('save')
+    await w.vm.$nextTick()
+    const payload = (w.findComponent(ModelRoutePage).emitted('save')![0]![0]) as { scopedRefs: string[] }
+    // 白名单半边目标态不再含该物理条目（清理由保存承载，非即时写权威）
+    expect(payload.scopedRefs).toEqual([`${AGGREGATION_PROVIDER_ID}/r1`])
+  })
+
+  it('直连卡「移除」未保存新卡：即时摘除无确认对话框（草稿内丢弃）', async () => {
+    const w = mountPage([cardOf(routeOf({ id: 'r1' }))], [
+      prov({ id: 'zhipu', name: '智谱', models: [{ id: 'glm-4-6', name: 'GLM-4.6' }] }),
+    ])
+    await w.find('[data-testid="route-quick-provider-row"]').trigger('click')
+    await w.find('[data-testid="route-quick-create-direct"]').trigger('click')
+    expect(w.findAll('[data-testid="route-direct-card"]')).toHaveLength(1)
+    await w.find('[data-testid="route-direct-card"] [data-testid="route-direct-remove"]').trigger('click')
+    await flushPromises()
+    // 无确认对话框（新增徽标条目 = 本会话草稿，丢弃不需确认）
+    expect(document.body.textContent ?? '').not.toContain('settings.modelRoute.directRemoveConfirmTitle')
+    expect(w.findAll('[data-testid="route-direct-card"]')).toHaveLength(0)
+    // 面板行恢复可创建态（去重防护随草稿摘除解除）
+    expect(w.find('[data-testid="route-quick-create-direct"]').exists()).toBe(true)
+  })
 })
 
-describe('快速创建入口（spec §4：渠道展开建简单路由 / 筛选多选建高级路由）', () => {
+describe('快速创建入口（spec §4：渠道展开加直连 / 筛选多选建高级路由）', () => {
   // jsdom 无 scrollIntoView（focus 定位与面板聚焦调用），测试级补桩
   beforeAll(() => {
     Element.prototype.scrollIntoView = () => {}
@@ -544,39 +601,62 @@ describe('快速创建入口（spec §4：渠道展开建简单路由 / 筛选�
     await w.find('[data-testid="route-quick-provider-row"]').trigger('click')
   }
 
-  it('单模型「建简单路由」：追加卡尾 + mode=simple + 单端点无条件 + levels 全支持档 + 标脏', async () => {
+  it('模型行「加直连」：草稿追加直连卡（卡尾 + 直连标记 + 新增徽标）+ 保存载荷 scopedRefs 含新条目', async () => {
     const w = mountPage([cardOf(routeOf({ id: 'r1' }))], [
-      prov({ id: 'zhipu', name: '智谱', models: [{ id: 'glm-4-6', name: 'GLM-4.6', supportedLevels: ['off', 'low', 'high'] }] }),
+      prov({ id: 'zhipu', name: '智谱', models: [{ id: 'glm-4-6', name: 'GLM-4.6' }] }),
       prov({ id: 'moonshot' }),
     ])
     await expandFirstProvider(w)
-    await w.find('[data-testid="route-quick-create-simple"]').trigger('click')
-    const cards = w.findAll('[data-testid="route-card"]')
-    expect(cards.length).toBe(2)
+    // 创建前：面板行显「加直连」入口（无「建简单路由」——入口已退役）
+    expect(w.find('[data-testid="route-quick-create-direct"]').exists()).toBe(true)
+    expect(w.find('[data-testid="route-quick-create-simple"]').exists()).toBe(false)
+    await w.find('[data-testid="route-quick-create-direct"]').trigger('click')
+
+    // 直连卡追加到草稿卡尾（direct 派生经 core buildDirectCard 单源）
+    const directs = w.findAll('[data-testid="route-direct-card"]')
+    expect(directs).toHaveLength(1)
+    const direct = directs[0]!
+    expect(direct.attributes('data-ref')).toBe('zhipu/glm-4-6')
+    expect(direct.find('[data-testid="route-direct-name"]').text()).toContain('智谱')
+    expect(direct.find('[data-testid="route-direct-name"]').text()).toContain('GLM-4.6')
+    // 新增徽标（本编辑会话未落盘）
+    expect(direct.find('[data-testid="route-direct-new"]').exists()).toBe(true)
+    // 卡片序 = 草稿序：路由卡在前、新直连卡追加卡尾
+    expect(w.find('[data-testid="route-direct-card"], [data-testid="route-card"]').attributes('data-testid')).toBe('route-card')
     expect(w.findComponent(ModelRoutePage).emitted('change')).toBeTruthy()
+
     w.findComponent(RouteUnsavedBar).vm.$emit('save')
     await w.vm.$nextTick()
-    const payload = (w.findComponent(ModelRoutePage).emitted('save')![0]![0]) as { routes: AggregationRoute[] }
-    const created = payload.routes[1]!
-    expect(created.mode).toBe('simple')
-    expect(created.enabled).toBe(true)
-    expect(created.name).toBe('GLM-4.6')
-    expect(created.members).toHaveLength(1)
-    expect(created.members[0]!.providerId).toBe('zhipu')
-    expect(created.members[0]!.modelId).toBe('glm-4-6')
-    expect(created.members[0]!.type).toBe('none')
-    // AC-Q12：levels 初始化 = 模型全部支持档位
-    expect(Object.keys(created.members[0]!.levels ?? {})).toEqual(['off', 'low', 'high'])
+    const payload = (w.findComponent(ModelRoutePage).emitted('save')![0]![0]) as { routes: AggregationRoute[]; scopedRefs: string[] }
+    // 直连条目只进白名单半边（routes 载荷不变——无 routes 定义）
+    expect(payload.routes.map((r) => r.id)).toEqual(['r1'])
+    expect(payload.scopedRefs).toEqual([`${AGGREGATION_PROVIDER_ID}/r1`, 'zhipu/glm-4-6'])
   })
 
-  it('重复建同模型简单路由被事实态拦截（AC-Q13）：按钮禁用显示已建', async () => {
-    const w = mountPage([cardOf(routeOf({ id: 'r1' }))])
+  it('直连去重防护（AC-Q13 同族）：白名单已有该模型 → 行内按钮禁用显示已添加直连', async () => {
+    const w = mountPage(
+      [cardOf(routeOf({ id: 'r1' }))],
+      [prov({ id: 'zhipu', name: '智谱', models: [{ id: 'glm-4-6', name: 'GLM-4.6' }] })],
+      undefined,
+      [`${AGGREGATION_PROVIDER_ID}/r1`, 'zhipu/glm-4-6'],
+    )
     await expandFirstProvider(w)
-    await w.find('[data-testid="route-quick-create-simple"]').trigger('click')
-    expect(w.findAll('[data-testid="route-card"]').length).toBe(2)
-    expect(w.find('[data-testid="route-quick-simple-exists"]').exists()).toBe(true)
-    expect(w.find('[data-testid="route-quick-create-simple"]').exists()).toBe(false)
-    expect(w.findAll('[data-testid="route-card"]').length).toBe(2)
+    // 已落盘直连条目：禁用态 + 无创建入口
+    expect(w.find('[data-testid="route-quick-direct-exists"]').exists()).toBe(true)
+    expect(w.find('[data-testid="route-quick-create-direct"]').exists()).toBe(false)
+    expect(w.findAll('[data-testid="route-direct-card"]')).toHaveLength(1)
+  })
+
+  it('草稿内重复添加被事实态拦截：加过一次后该行按钮即禁用（防同一白名单条目重复落卡）', async () => {
+    const w = mountPage([cardOf(routeOf({ id: 'r1' }))], [
+      prov({ id: 'zhipu', name: '智谱', models: [{ id: 'glm-4-6', name: 'GLM-4.6' }] }),
+    ])
+    await expandFirstProvider(w)
+    await w.find('[data-testid="route-quick-create-direct"]').trigger('click')
+    expect(w.findAll('[data-testid="route-direct-card"]')).toHaveLength(1)
+    // 草稿半边也进防护口径（保存整表覆写按去重保序会静默合并，草稿留空转卡）
+    expect(w.find('[data-testid="route-quick-direct-exists"]').exists()).toBe(true)
+    expect(w.find('[data-testid="route-quick-create-direct"]').exists()).toBe(false)
   })
 
   it('筛选后勾选两模型 → 创建高级路由：勾选序多端点全无条件 + 待配置分流徽标 + 选择清空', async () => {
@@ -948,7 +1028,7 @@ describe('卡片拖拽排序（drag-and-drop reorder）', () => {
 
 // ── 修剪回归（tree-plant prune：fixed 发现的探针升格单测） ────────────────────────
 
-describe('修剪回归：保存中禁用 / 已保存简单路由逃生 / 模型切换 levels 过滤', () => {
+describe('修剪回归：保存中禁用 / 模型切换 levels 过滤', () => {
   it('disabled prop → 未保存条保存/放弃按钮禁用（保存/删除编排窗口防并发，修剪 R2/R1）', async () => {
     const w = mountPage([cardOf(routeOf({ id: 'r1' }))])
     // 制造 dirty 使未保存条可见（v-show）
@@ -956,16 +1036,6 @@ describe('修剪回归：保存中禁用 / 已保存简单路由逃生 / 模型�
     await w.setProps({ disabled: true })
     expect((w.find('[data-testid="unsaved-save"]').element as HTMLButtonElement).disabled).toBe(true)
     expect((w.find('[data-testid="unsaved-discard"]').element as HTMLButtonElement).disabled).toBe(true)
-  })
-
-  it('已保存的同模型简单路由不拦「建简单路由」（G8 逃生路径：保存后可再建，修剪 F3）', async () => {
-    const w = mountPage(
-      [cardOf(routeOf({ id: 'r1', mode: 'simple', members: [{ id: 'a', providerId: 'zhipu', modelId: 'glm-5-3', type: 'none' }] }))],
-    )
-    await w.find('[data-testid="route-quick-provider-row"]').trigger('click')
-    // 未保存同型草稿不存在 → 创建按钮在场（非「已建简单路由」禁用态）
-    expect(w.find('[data-testid="route-quick-create-simple"]').exists()).toBe(true)
-    expect(w.find('[data-testid="route-quick-simple-exists"]').exists()).toBe(false)
   })
 
   it('端点换模型：已声明档位按新模型 supportedLevels 过滤（修剪 F2 半更新死锁半边）', async () => {

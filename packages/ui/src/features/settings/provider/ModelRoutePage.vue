@@ -14,6 +14,12 @@
   删除成功后的视图刷新承载（事实驱动，无乐观回显）。孤儿复合串不生成卡（视图层
   已保证），仅以提示条呈现（U1 读取标记承载，下一次保存清理）。
 
+  直连模型管理（新增）：快速创建面板模型行「加直连」→ direct-add 指令（core
+  buildDirectCard 派生 + 草稿追加 + 「新增」徽标）；直连卡「移除」→ direct-remove
+  指令（草稿摘除；已落盘条目的白名单清理由保存的 scopedRefs 承载，未落盘新卡在卡内
+  免确认、已落盘卡走卡内确认对话框）。去重防护走 useQuickCreate.existingDirectOf
+  （白名单 ∪ 草稿事实态）。「建简单路由」入口已退役（用户裁决：单模型直接加直连）。
+
   未保存条挂载 = 两页共享形态的一侧（RouteUnsavedBar，spec §9.1 接缝）。
 -->
 <template>
@@ -61,8 +67,8 @@
         :providers="providers"
         :disabled="disabled"
         :usage-of="usageOf"
-        :existing-simple-of="existingSimpleOf"
-        @create-simple="onQuickCreateSimple"
+        :existing-direct-of="existingDirectOf"
+        @create-direct="onQuickCreateDirect"
         @create-advanced="onQuickCreateAdvanced"
         @open-providers="emit('openProviders')"
       />
@@ -79,6 +85,8 @@
       <span class="text-[length:var(--text-xs)] text-neutral-mid">{{ t('settings.modelRoute.overviewEndpoints', { n: endpointTotal }) }}</span>
       <span class="h-3 w-px bg-border" aria-hidden="true" />
       <span class="text-[length:var(--text-xs)] text-neutral-mid">{{ t('settings.modelRoute.overviewAdvanced', { n: advancedCount }) }}</span>
+      <span class="h-3 w-px bg-border" aria-hidden="true" />
+      <span class="text-[length:var(--text-xs)] text-neutral-mid" data-testid="model-route-overview-direct">{{ t('settings.modelRoute.overviewDirect', { n: directCount }) }}</span>
       <span class="ml-auto text-[length:var(--text-2xs)] text-neutral-dim">{{ t('settings.modelRoute.overviewHint') }}</span>
     </div>
 
@@ -109,83 +117,22 @@
           @card-drag-end="drag.endDrag()"
         />
         <!-- 渠道直连卡（无 routes 定义的物理模型白名单条目，D10/U9「默认单端点形态」）：
-             仅排序 + 参与选择开关，端点/条件编辑不适用 -->
-        <div
+             来源 = scopedModels 既有条目 ∪ 快速创建「加直连」新落草稿卡（direct-add 指令）；
+             仅排序 + 参与选择 + 移除（白名单清理由保存承载），端点/条件编辑不适用 -->
+        <RouteDirectCard
           v-else
-          data-testid="route-direct-card"
-          :data-ref="card.ref"
-          class="rounded-lg border border-border bg-bg-card"
+          :card="card"
+          :index="idx"
+          :total="draft.length"
           :class="drag.cardClass(idx)"
-          @dragover="drag.dragOverCard(idx, $event)"
-          @drop.prevent="drag.dropCard(idx, $event)"
-          @dragend="drag.endDrag()"
-        >
-          <div class="flex flex-wrap items-center gap-2 px-4 py-3">
-            <Button
-              variant="ghost"
-              size="icon"
-              class="size-7 shrink-0 cursor-grab rounded-sm p-0 text-neutral-dim hover:text-neutral-fg active:cursor-grabbing"
-              :aria-label="t('settings.modelRoute.dragCard')"
-              :title="t('settings.modelRoute.dragCard')"
-              data-testid="route-direct-drag-handle"
-              draggable="true"
-              @dragstart="drag.startDrag(idx, $event)"
-            >
-              <GripVertical class="size-3.5" />
-            </Button>
-            <span class="text-[length:var(--text-sm)] font-medium text-neutral-fg" data-testid="route-direct-name">
-              {{ card.providerName }} / {{ card.modelName }}
-            </span>
-            <span class="rounded-sm bg-surface-2 px-1.5 py-0.5 text-[length:var(--text-3xs)] text-neutral-mid">
-              {{ t('settings.modelRoute.directCardTag') }}
-            </span>
-            <span
-              v-if="card.missing"
-              class="rounded-sm bg-warn-soft px-1.5 py-0.5 text-[length:var(--text-3xs)] text-warn"
-              data-testid="route-direct-missing"
-            >
-              {{ t('settings.modelRoute.directMissing') }}
-            </span>
-            <span
-              v-else-if="!card.apiKeySet"
-              class="rounded-sm bg-warn-soft px-1.5 py-0.5 text-[length:var(--text-3xs)] text-warn"
-            >
-              {{ t('settings.modelRoute.issue.no-key') }}
-            </span>
-            <div class="ml-auto flex items-center gap-1.5">
-              <Button
-                variant="ghost"
-                size="icon"
-                class="size-7 rounded-sm p-0 text-neutral-dim hover:text-neutral-fg"
-                :disabled="idx === 0"
-                :aria-label="t('settings.modelRoute.moveUp')"
-                :title="t('settings.modelRoute.moveUp')"
-                data-testid="route-direct-move-up"
-                @click="moveCard(idx, 'up')"
-              >
-                <ChevronUp class="size-3.5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                class="size-7 rounded-sm p-0 text-neutral-dim hover:text-neutral-fg"
-                :disabled="idx === draft.length - 1"
-                :aria-label="t('settings.modelRoute.moveDown')"
-                :title="t('settings.modelRoute.moveDown')"
-                data-testid="route-direct-move-down"
-                @click="moveCard(idx, 'down')"
-              >
-                <ChevronDown class="size-3.5" />
-              </Button>
-              <Switch
-                :model-value="card.scoped"
-                :aria-label="t('settings.modelRoute.scopedToggle')"
-                data-testid="route-direct-scoped-toggle"
-                @update:model-value="toggleScoped(idx)"
-              />
-            </div>
-          </div>
-        </div>
+          @move="moveCard(idx, $event)"
+          @toggle-scoped="toggleScoped(idx)"
+          @remove="applyEditorOp({ kind: 'direct-remove', ref: card.ref })"
+          @card-drag-start="drag.startDrag(idx, $event)"
+          @card-drag-over="drag.dragOverCard(idx, $event)"
+          @card-drop="drag.dropCard(idx, $event)"
+          @card-drag-end="drag.endDrag()"
+        />
       </template>
     </div>
 
@@ -217,13 +164,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ChevronDown, ChevronUp, GripVertical, Server } from '@lucide/vue'
-import { Button, InlineNotice, Switch } from '@taiji/ui'
-import {
-  buildRoutePageCards,
-  type RouteDefinitionCard,
-  type RouteDirectCard,
-} from '@taiji/core/domain/settings'
+import { Server } from '@lucide/vue'
+import { Button, InlineNotice } from '@taiji/ui'
+import { buildDirectCard, buildModelRef, buildRoutePageCards, type RouteDefinitionCard } from '@taiji/core/domain/settings'
 import type {
   AggregationMember,
   AggregationRoute,
@@ -232,6 +175,7 @@ import type {
 } from '@taiji/shared'
 import { buildAggregationModelRef } from '@taiji/shared'
 import RouteCard from './RouteCard.vue'
+import RouteDirectCard, { type RouteDirectCardData } from './RouteDirectCard.vue'
 import RouteQuickCreatePanel from './RouteQuickCreatePanel.vue'
 import RouteUnsavedBar from './RouteUnsavedBar.vue'
 import { blankWindowTable, nowFromClock, weekdayBusinessWindow, type RouteNow } from './route-preview'
@@ -298,14 +242,14 @@ const resolvedNow = computed<RouteNow>(() => props.now ?? nowFromClock(new Date(
 
 // ── 草稿态（core buildRoutePageCards 派生：直连卡 ∪ 路由卡，scopedModels 序交错）──
 
-/** 草稿直连卡 = 派生卡 + 草稿 scoped 态（派生侧直连卡全部来自 scopedModels 条目，初始恒
- * 参与选择；route 卡 scoped 内嵌 AggregationRouteCard）。 */
-type DraftDirectCard = RouteDirectCard & { scoped: boolean }
+/** 草稿直连卡 = 派生卡 + 草稿 scoped/isNew 态（scopedModels 既有条目 isNew=false；
+ *  「加直连」新落卡 isNew=true——保存后视图刷新重建草稿，徽标随之消失）。 */
+type DraftDirectCard = RouteDirectCardData
 type DraftCard = DraftDirectCard | RouteDefinitionCard
 
 function cloneDraft(): DraftCard[] {
   return buildRoutePageCards(props.view, props.scopedModels ?? [], props.providers).map((card) => {
-    if (card.kind === 'direct') return { ...card, scoped: true }
+    if (card.kind === 'direct') return { ...card, scoped: true, isNew: false }
     return {
       kind: 'route',
       card: { ...card.card, route: JSON.parse(JSON.stringify(card.card.route)) as AggregationRoute },
@@ -410,6 +354,12 @@ function applyEditorOp(op: RouteEditorOp): void {
       break
     case 'route-add':
       opRouteAdd(op)
+      break
+    case 'direct-add':
+      opDirectAdd(op)
+      break
+    case 'direct-remove':
+      opDirectRemove(op)
       break
     case 'route-delete':
       // 事实驱动（ADR-0122 ⑨）：草稿不乐观移除——卡消失 = 删除 RPC 成功后的视图刷新；
@@ -539,6 +489,25 @@ function opRouteAdd(op: OpOf<'route-add'>): void {
   draft.value.push({ kind: 'route', card: { route: op.route, scoped: true, scopedIndex: -1, memberIssues: [] } })
 }
 
+function opDirectAdd(op: OpOf<'direct-add'>): void {
+  // 「加直连」落卡：直连条目 = scopedModels 白名单半边（无 routes 定义），渲染元数据经
+  // core buildDirectCard 单源派生（与视图 join 同源）；参与选择默认开（V15 语义），
+  // isNew = 本编辑会话新建未落盘（保存后视图刷新重建草稿，徽标随之消失）。
+  draft.value.push({
+    ...buildDirectCard(buildModelRef(op.providerId, op.modelId), props.providers),
+    scoped: true,
+    isNew: true,
+  })
+}
+
+function opDirectRemove(op: OpOf<'direct-remove'>): void {
+  // 草稿摘除（ref = 直连卡复合串，草稿内唯一键）；已落盘条目的白名单清理由保存承载
+  //（scopedRefs 整表覆写不含该 ref）——事实驱动，无即时写权威。
+  const idx = draft.value.findIndex((c) => c.kind === 'direct' && c.ref === op.ref)
+  if (idx === -1) return
+  draft.value.splice(idx, 1)
+}
+
 // ── 卡级编排 ──
 
 // ── 快速创建接线（spec §4：面板发意图 → 构建器 → route-add 唯一入口 → 本地 focus 定位新卡）──
@@ -563,18 +532,21 @@ function openQuickCreate(): void {
 const quick = useQuickCreate({
   draftOf: () => draft.value,
   viewCardsOf: () => props.view.cards,
+  scopedModelsOf: () => props.scopedModels ?? [],
   providersOf: () => props.providers,
   addRoute: (route) => applyEditorOp({ kind: 'route-add', route }),
+  addDirect: (providerId, modelId) => applyEditorOp({ kind: 'direct-add', providerId, modelId }),
   focusRoute: (routeId, memberId) => {
     localFocus.value = { routeId, memberId }
   },
 })
 const usageOf = quick.usageOf
-const existingSimpleOf = quick.existingSimpleOf
-const onQuickCreateSimple = quick.onQuickCreateSimple
+const existingDirectOf = quick.existingDirectOf
+const onQuickCreateDirect = quick.onQuickCreateDirect
 const onQuickCreateAdvanced = quick.onQuickCreateAdvanced
 
-/** 「新建路由」旧入口退役（spec §3：创建收敛到快速创建，不再生成另一套默认值）。 */
+/** 「新建路由」旧入口退役（spec §3：创建收敛到快速创建，不再生成另一套默认值）；
+ *  「建简单路由」入口同批退役（用户裁决：单模型直接加直连，路由只承载多端点聚合）。 */
 
 function moveCard(index: number, dir: 'up' | 'down'): void {
   const target = dir === 'up' ? index - 1 : index + 1
@@ -605,6 +577,7 @@ const endpointTotal = computed(() =>
   draft.value.reduce((sum, c) => sum + (c.kind === 'route' ? c.card.route.members.length : 1), 0),
 )
 const advancedCount = computed(() => draft.value.filter((c) => c.kind === 'route' && c.card.route.mode === 'advanced').length)
+const directCount = computed(() => draft.value.filter((c) => c.kind === 'direct').length)
 
 // ── 呈报文案 ──
 
