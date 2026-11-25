@@ -79,6 +79,15 @@ const rt = await createProtocol({ dataDir, runtimePort })
 const page = (await (await fetch(`http://127.0.0.1:${cdpPort}/json/list`)).json())
   .find((t) => t.type === 'page' && t.webSocketDebuggerUrl)
 if (!page) { console.error('no renderer target'); process.exit(2) }
+// renderer 健康前置：dev 实例长跑后 renderer 可能崩（main 会加载 data:text/html 静态错误页），
+// 此时一切 GUI 校验都只会报「未切到目标 session」——误导排查方向。这里直接判页面形态。
+const pageUrl = String(page.url ?? page.webSocketDebuggerUrl ?? '')
+if (pageUrl.startsWith('data:text/html')) {
+  console.error('[probe] 拒绝采集：renderer 已崩溃（CDP 目标是静态错误页 data:text/html）。重启 dev 实例后重跑：')
+  console.error('  bash probes/b5-start-instance.sh   （先按全局击杀纪律停掉旧实例：端口 4173/9488/3620 + .dev-electron 明确路径）')
+  process.exit(3)
+}
+
 const ws = new WebSocket(page.webSocketDebuggerUrl)
 let seq = 0
 const pending = new Map()

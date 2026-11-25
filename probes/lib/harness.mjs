@@ -91,6 +91,11 @@ export async function connectRendererCdp (cdpPort) {
       .then((list) => {
         const page = list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl)
         if (!page) throw new Error('no renderer target')
+        // renderer 崩溃后 main 会加载 data:text/html 静态错误页：必须 fail-visible，
+        // 否则下游 GUI 校验只会报「未切到目标 session」，把排查引向错误方向。
+        if (String(page.url ?? '').startsWith('data:text/html')) {
+          throw new Error('renderer 已崩溃（CDP 目标是静态错误页 data:text/html）——重启 dev 实例后重跑（bash probes/b5-start-instance.sh）')
+        }
         const ws = new WebSocket(page.webSocketDebuggerUrl)
         let seq = 0
         const pending = new Map()
