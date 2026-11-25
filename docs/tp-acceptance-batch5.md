@@ -8,7 +8,7 @@
 
 | 编号 | 场景 | 命令 | 预期 | 关联 |
 |---|---|---|---|---|
-| M1 | 干净 CPU 采集（HEAD 代码）：单次运行内 renderer+runtime+pi 三进程 profile + Performance metrics + 环境声明（load / 端口归属 / 打包版瞬时 CPU） | node probes/perf-clean-cpu.mjs --data-dir ~/.taiji-dev/verify-b5-final --cdp-port 9488 --fixture probes/fixtures/original-45k.json --tag final --save-dir docs/perf/final-measurement | exit:0;contains:RESULT clean-cpu tag=final;contains:profiles=3;contains:renderer-nonidle=;not-contains:测量无效 | trunk |
+| M1 | 干净 CPU 采集（HEAD 代码）：单次运行内 renderer+runtime+pi 三进程 profile + Performance metrics + 环境声明（load / 端口归属 / 打包版瞬时 CPU） | node probes/perf-clean-cpu.mjs --data-dir ~/.taiji-dev/verify-b5-final --cdp-port 9488 --fixture probes/fixtures/original-45k.json --tag final --save-dir .run/b5-cpu-gate | exit:0;contains:RESULT clean-cpu tag=final;contains:profiles=3;contains:renderer-nonidle=;not-contains:测量无效 | trunk |
 | M2 | 干净 GPU trace（HEAD 代码）：recordContinuously + dataLoss 监听 + 事件驱动窗长（覆盖 fence 闭合与 complete）+ 自建 session | node probes/gpu-trace.mjs --data-dir ~/.taiji-dev/verify-b5-final --cdp-port 9488 --arm full --window-ms 160000 --shot docs/perf/final-measurement/final-midstream.png | exit:0;contains:RESULT gpu-trace arm=full;contains:wall-span=;contains:dataLoss=0;contains:completed=true;not-contains:采集无效 | trunk |
 | M3 | 干净基线与终版三进程 profile **归档可复算**：从 `docs/perf/final-measurement/` 的两套产物重算对比表（含 (program) 的 metrics 交叉验证） | node probes/analyze-clean-cpu.mjs baseline=docs/perf/final-measurement final=docs/perf/final-measurement | exit:0;contains:baseline;contains:final;contains:(program) 交叉验证;not-contains:Cannot find | B-clean-baseline |
 | G1 | GPU 四臂之 full（HEAD，EdgeFade 全效果）：blur / mask 对照的基准臂 | node probes/gpu-trace.mjs --data-dir ~/.taiji-dev/verify-b5-final --cdp-port 9488 --arm full --window-ms 160000 | exit:0;contains:arm=full;contains:dataLoss=0;contains:completed=true | B-gpu-decision |
@@ -26,6 +26,8 @@
 > **case 拆分为何不链式**：单命令超 gate 单 case 900s 超时（spawnSync 杀 sh 后 node 孙进程孤儿挂住输出管道）——M/G/F 各自独立成 case，实例由前置命令准备。
 >
 > **探针自建 session**：gpu-trace 不传 `--sid` 时自建全新 session（label 唯一），gate 命令里因此没有变量替换；手传陈旧 sid 会采到空闲 renderer（实测 nonIdle 掉到 1.3%）。
+>
+> **gate 不写归档目录**：M1/M2/G*/F* 的产物一律落 `.run/`（gitignore）。`docs/perf/final-measurement/` 是**已核验的测量归档**（与 `cpu-analysis.txt` / 报告数字同源），gate 每跑一次就覆盖它会让「归档 ↔ 报告」失去同源性——这是实测踩到的（一次 harvest 覆盖了 load 2.87 的验证窗，改成 load 5.44 的另一窗，报告对账 R1 随即与归档不符）。需要刷新归档时按 `docs/tp-api-batch5.md` 的手动流程重采并同 commit 重算 `*-analysis.txt`。
 >
 > **trace 不入库**：单文件 230–260MB（9 个共 2.2GB）。`.gitignore` 已加 `*.trace.json`；M2/G1–G4 只验「采集有效 + 结果行在场」，trace 体积落 `.run/`（gitignore）与会话 artifacts，报告给路径。以 `--save` 指到 `docs/` 会破 harvest 的清洁度检查。
 >
