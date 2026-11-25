@@ -124,7 +124,8 @@
 | 分析原始输出 | `docs/perf/final-measurement/cpu-analysis.txt` / `gpu-analysis.txt` | 本报告与 final-comparison 的所有数字的机器输出 |
 | 构建证据 | `docs/perf/final-measurement/build-probe-grep.txt` | dev 插桩串计数 + 函数名可归因性 |
 | 截图 | `docs/perf/final-measurement/{baseline,final}-midstream.png` | 流式中期（FPS overlay 在场） |
-| **GPU trace 本体 ×9** | `<artifacts>/b5-traces/*.trace.json`（2.2GB） | baseline-gpu / final-gpu / r2-full / r2-no-blur / r2-no-mask / arm-no-blur / arm-no-mask / arm-reduced |
+| **GPU trace 本体 ×9** | `<sessionsRoot>/<sessionId>/artifacts/b5-traces/*.trace.json`（2.2GB） | baseline-gpu / final-gpu / r2-full / r2-no-blur / r2-no-mask / arm-no-blur / arm-no-mask / arm-reduced |
+| **trace 清单（同源凭据）** | `docs/perf/final-measurement/gpu-trace-manifest.json` | 每个分析 label ↔ trace 文件名的 md5 对账；`check-clean-artifacts.mjs` 在 trace 可达时当场复算比对（防止 gate 重跑覆盖 trace 后「归档分析 ↔ trace 本体」悄悄漂移——本批实测踩到过一次） |
 | 首轮原始数据（只读） | `~/.taiji/ext-sessions/01a2077f-.../artifacts/profiling-data/`（44MB） | 首轮权威两件 + 复算脚本 |
 | 复算脚本 | `probes/analyze-clean-cpu.mjs` / `analyze-gpu-arms.mjs` / `analyze-gpu-union.mjs` / `cpuprofile-to-folded.mjs` / `perf-clean-cpu.mjs` / `gpu-trace.mjs` | 全部入库、零依赖 |
 

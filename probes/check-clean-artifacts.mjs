@@ -19,6 +19,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import nodeCrypto from 'node:crypto'
+
+const require_crypto = () => nodeCrypto
 import { fileURLToPath } from 'node:url'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -78,6 +81,42 @@ for (const tag of ['baseline', 'final', 'final-r2', 'form-fences', 'form-tools',
   // 本机绝对路径脱敏（AGENTS.md 规则 22）
   const envRaw = fs.readFileSync(path.join(MEAS, `${tag}-env.json`), 'utf8')
   check(`${tag}: env 无本机绝对路径`, !envRaw.includes(os.homedir()), 'env.json 里出现了 home 绝对路径')
+}
+
+// ── ③ GPU trace 归档清单 ↔ union 分析输出 同源对账 ────────────────────────
+// 背景（实测踩到）：trace 本体（230-260MB）不入库，只存在会话 artifacts；而 gate 的 M2/G*
+// 会重跑采集并可能用新 trace 覆盖同名文件 ⇒ 「gpu-analysis.txt 里的数字」与「artifact 里的
+// trace」可能悄悄不同源。清单把每份 trace 的 md5 钉住，并在 trace 仍可达时当场复算比对。
+const manifest = readJson('gpu-trace-manifest.json')
+check('gpu-trace-manifest.json 在场', manifest !== null)
+if (manifest) {
+  const entries = Object.entries(manifest.traces ?? {})
+  check('清单含 8 条（baseline/两轮 final/四臂）', entries.length === 8, `实际 ${entries.length}`)
+  check('清单路径不含本机绝对路径', !JSON.stringify(manifest).includes(os.homedir()))
+  const gpuAnalysis = fs.readFileSync(path.join(MEAS, 'gpu-analysis.txt'), 'utf8')
+  for (const [label, meta] of entries) {
+    check(`清单 ${label} 有 32 位 md5`, /^[0-9a-f]{32}$/.test(String(meta.md5)), String(meta.md5))
+    check(`gpu-analysis.txt 含 ${label} 行`, gpuAnalysis.includes(label))
+    // trace 仍在 artifacts 时：md5 必须与清单一致（不一致 = 被新采集覆盖，归档已漂移）。
+    // 目录用通配解析：<sessionsRoot>/<sessionId>/artifacts/b5-traces（sessionId 随会话变，
+    // 写死会让检查静默跳过——实测过：路径不存在时该断言被跳过，篡改 md5 也抓不到）。
+    const sessionsRoot = path.join(os.homedir(), '.taiji', 'ext-sessions')
+    const candidates = (() => {
+      try {
+        return fs.readdirSync(sessionsRoot)
+          .map((sid) => path.join(sessionsRoot, sid, 'artifacts', 'b5-traces', meta.file))
+          .filter((f) => fs.existsSync(f))
+      } catch {
+        return []
+      }
+    })()
+    const abs = candidates[0] ?? null
+    check(`trace ${meta.file} 在 artifacts 中可定位（或已随会话回收）`, true, abs ? '' : '未找到（会话 artifacts 可能已回收，跳过 md5 比对）')
+    if (abs) {
+      const actual = require_crypto().createHash('md5').update(fs.readFileSync(abs)).digest('hex')
+      check(`trace ${meta.file} md5 与清单一致（归档未漂移）`, actual === meta.md5, `清单 ${meta.md5.slice(0, 12)} vs 实际 ${actual.slice(0, 12)}`)
+    }
+  }
 }
 
 const ok = failures.length === 0
