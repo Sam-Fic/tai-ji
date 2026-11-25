@@ -18,7 +18,7 @@
  * 运行：cd packages/runtime && npx vitest run src/infra/pi/__tests__/rpc-client-observability.test.ts
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { RpcClient } from '../rpc-client.js'
+import { RpcClient } from '../rpc-client.js'
 
 // ── Mocks ────────────────────────────────────────────────────────
 
@@ -140,8 +140,10 @@ function emitProcExit(code: number | null = null): void {
   for (const h of [...procExitHandlers]) h(code)
 }
 
+// 模块图经静态顶层 import 装载（vi.mock hoist 语义下 mock 等价生效）——动态 import 放在
+// 用例体内会把模块图冷编译成本计入首条用例计时（用例级 junit 慢用例门禁 ≤2s，判据
+// docs/TEST-STRATEGY.md「新写测试判据」）。
 async function startClient(options: Record<string, unknown> = {}): Promise<RpcClient> {
-  const { RpcClient } = await import('../rpc-client.js')
   const client = new RpcClient({ cwd: '/project', sessionId: 'sid-obs-1', ...options })
   await client.start()
   return client

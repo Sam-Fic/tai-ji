@@ -1,10 +1,11 @@
 /**
  * retry 触发条件回归测试（RL6 / 验收 A6；T3 定名 retry-classification.test）。
  *
- * 锁定前提 AS13（D6 适用范围的机器红灯）：pi 自动重试按错误分类触发——瞬态错误
+ * 锁定前提 AS13（D6 修订透传语义的机器红灯）：pi 自动重试按错误分类触发——瞬态错误
  * （429 限速 / 过载 / 5xx）触发重试并在重试请求的 route 调用中携带 reason=retry 与
- * failed（D6 生效窗口）；配额耗尽类文案被 pi 判为不可重试直接 fail-fast，无重算机会
- * （D6 适用边界——该场景由额度条件路由预防层与失败结构化呈现承担，AS15）。
+ * failed（透传窗口：闭包层据此把 pi 的重试预算真正打到上游端点）；配额耗尽类文案被 pi
+ * 判为不可重试直接 fail-fast，无重算机会（fail-fast 窗口：终局观察据此不 burnt、主端点
+ * 错误持续可见——该场景由额度条件路由预防层与失败结构化呈现承担，AS15）。
  *
  * 判定源 = pi 实装版 pi-ai 的 isRetryableAssistantError（dist/utils/retry.js，NON
  * 先于 RETRY 判定）——本测试是对上游行为的对账锁：pi 升级改变分类清单时红灯提醒
@@ -21,7 +22,7 @@ function errorOf(errorMessage: string): AssistantMessage {
 	return { stopReason: "error", errorMessage } as unknown as AssistantMessage
 }
 
-describe("瞬态错误 → pi 自动重试（D6 生效窗口：重试请求携带 retry 信号）", () => {
+describe("瞬态错误 → pi 自动重试（D6 修订透传窗口：重试请求携带 retry 信号）", () => {
 	it("429 限速形态（zhipu 高峰限速的预期形态，AS15 待真机确认）→ 可重试", () => {
 		expect(isRetryableAssistantError(errorOf("429 Too Many Requests"))).toBe(true)
 		expect(isRetryableAssistantError(errorOf("HTTP 429: rate limit exceeded"))).toBe(true)
@@ -34,7 +35,7 @@ describe("瞬态错误 → pi 自动重试（D6 生效窗口：重试请求携�
 	})
 })
 
-describe("配额/订阅耗尽文案 → pi 不重试（D6 适用边界：无 retry 路由机会）", () => {
+describe("配额/订阅耗尽文案 → pi 不重试（D6 修订 fail-fast 窗口：无 retry 路由机会）", () => {
 	it("OpenAI quota 语义（insufficient_quota）→ 不可重试", () => {
 		expect(isRetryableAssistantError(errorOf("insufficient_quota: You have exceeded your quota"))).toBe(false)
 	})

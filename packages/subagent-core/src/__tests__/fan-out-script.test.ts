@@ -37,6 +37,9 @@ import { THINKING_ORDER } from "../shared/model-ref.ts";
 const WORKFLOWS_DIR = join(__dirname, "..", "..", "workflows");
 const FANOUT_PATH = join(WORKFLOWS_DIR, "fan-out.js");
 const FANOUT_SOURCE = readFileSync(FANOUT_PATH, "utf8");
+// 收集内核（fan-out.js 与 batch.js 共用的单实现）：派发块/成员 schema/failed 识别
+// 等收集段断言落在这里——模板自身只剩段编排（phase + 可选 aggregate）。
+const BATCH_CORE_SOURCE = readFileSync(join(WORKFLOWS_DIR, "_shared", "batch-collect.cjs"), "utf8");
 
 /** fake agent 行为表。 */
 interface AgentBehavior {
@@ -263,8 +266,9 @@ describe("fan-out.js 成员级配置派发（成员对象 agent/model/thinkingLe
   it("description 恒为 fan-out-<i>（成员复用身份键，正则 ^fan-out-(\\d+)$ 派发序对齐）", async () => {
     const r = await runScript({ tasks: THREE_TASKS }, { aggregate: "none" });
     expect(r.agentCalls.map((c) => c.description)).toEqual(["fan-out-0", "fan-out-1", "fan-out-2"]);
-    // 静态锚：派发块的 description 不承载显示语义，模板源码保持 "fan-out-" + i 字面拼接
-    expect(FANOUT_SOURCE).toContain('description: "fan-out-" + i,');
+    // 静态锚：派发块的 description 不承载显示语义，收集内核保持 label + "-" + i 字面拼接
+    // （label 由模板传入 = 模板名，两模板的身份键因此不撞车）
+    expect(BATCH_CORE_SOURCE).toContain('description: label + "-" + i,');
   });
 });
 
@@ -291,11 +295,12 @@ describe("fan-out.js taskIndex 派发序赋值（D4 权威源契约）", () => {
       expect(call.schema?.required).toEqual(["summary"]);
       expect(Object.keys(call.schema?.properties ?? {}).sort()).toEqual(["fullReportPath", "summary"]);
     }
-    // 静态检查：agent() 派发块源码不得出现 taskIndex 字段声明
-    const dispatchBlock = FANOUT_SOURCE.slice(
-      FANOUT_SOURCE.indexOf("agent({"),
-      FANOUT_SOURCE.indexOf('...memberOverride(member, "thinkingLevel")'),
+    // 静态检查：收集内核的成员调用构造块（buildMemberCall）不得出现 taskIndex 字段声明
+    const dispatchBlock = BATCH_CORE_SOURCE.slice(
+      BATCH_CORE_SOURCE.indexOf("function buildMemberCall"),
+      BATCH_CORE_SOURCE.indexOf("async function dispatchMembers"),
     );
+    expect(dispatchBlock).toContain("prompt: member.task");
     expect(dispatchBlock).not.toContain("taskIndex");
   });
 });

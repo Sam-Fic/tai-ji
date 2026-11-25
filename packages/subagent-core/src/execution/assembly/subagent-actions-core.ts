@@ -101,7 +101,7 @@ export interface StartHandlerInput {
   engine?: string;
   // [collect 退役] 原 collect 字段（sync 批通知路由选项）已随 collect 批机制整体删除：
   // pi 对未知字段静默放行（typebox 无 additionalProperties），存量调用形态的 collect
-  // 值到达此处即被忽略——批量编排走 `subagent_batch` tool（fan-out 模板），完成通知恒为
+  // 值到达此处即被忽略——批量编排走 `subagent_batch` tool（batch 模板），完成通知恒为
   // 逐条 async 投递。
 }
 

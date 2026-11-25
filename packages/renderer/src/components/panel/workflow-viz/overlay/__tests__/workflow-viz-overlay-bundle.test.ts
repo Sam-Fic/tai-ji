@@ -1218,7 +1218,10 @@ describe('scheduler 一级 tab（Host 挂载门控 + tab 状态机，scheduler �
 })
 
 describe('canvas 一级 tab（problem-solve-canvas §3.1(3)：画布按归属会话隔离 D4，scheduler 双入口先例平移）', () => {
-  it('canvas 直达打开（kind 直达）：overlay 面板呈现 + canvas pane 在场且 CanvasPane 真实挂载（core 内容 kind=canvas、canvasId=cvs-1 + 归属 sessionId）+ runs/scheduler body 不在场 + header 换画布标题', async () => {
+  // CanvasPane defineAsyncComponent 异步导入落定：waitFor 默认 1s 在 coverage 全量档
+  // 负载下不够（无负载整例 0.81s，5 worker 下跨 1s——存量，dev-0.13.2 同档复现）。
+  // 显式 waitFor 10s（小于用例 15s 预算，避免先撞测试超时）。
+  it('canvas 直达打开（kind 直达）：overlay 面板呈现 + canvas pane 在场且 CanvasPane 真实挂载（core 内容 kind=canvas、canvasId=cvs-1 + 归属 sessionId）+ runs/scheduler body 不在场 + header 换画布标题', { timeout: 15_000 }, async () => {
     const wrapper = mount(WorkflowVizOverlayHost)
 
     openCanvasTab('cvs-1', SID)
@@ -1232,7 +1235,7 @@ describe('canvas 一级 tab（problem-solve-canvas §3.1(3)：画布按归属会
     // 错误态渲染，根元素仍在——断言坐实「非空 wrapper」）
     await vi.waitFor(() => {
       expect(wrapper.find('[data-testid="canvas-pane"]').exists()).toBe(true)
-    }, { interval: 1 })
+    }, { interval: 1, timeout: 10_000 })
     expect(wrapper.find('[data-testid="wfvz-overlay-dag-pane"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="wfvz-overlay-live-pane"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="wfvz-overlay-scheduler-pane"]').exists()).toBe(false)
@@ -1347,6 +1350,12 @@ describe('kind 门控（U4 修复对账）：Guard 重挂与时长 tick 只随 w
     // 2026-10-22 测试整治：断言「活跃 handle 集合」而非「spy 调用次数」——次数把
     // watch 重跑的批处理切分变成了断言对象（满并行下一次开合多排空一轮即随机红）；
     // 行为语义是「同一时刻至多一个活跃 tick、内容换出/关闭后零活跃」，与重启几轮无关。
+    // 2026-11-24 负载鲁棒性修订（基线 delta）：globalThis.setInterval 是进程级观测面，
+    // 渲染树里其他组件的显示 tick（额度相对时间 / tray 时钟等）在子组件异步挂载落定于
+    // 观测窗口内时会被一并计为活跃——coverage 全量档 5 worker 负载下间歇出现（存量：
+    // dev-0.13.2 未改动线上同档复现，同文件 canvas 用例的 waitFor 1s 同因不够）。修法
+    // 不猜外来源也不滤周期（1s 周期在 renderer 里不唯一）：以外来 tick 为恒定加性基线，
+    // 只断言开/合/切换引起的增减；重开回稳不累积（覆盖泄漏会让基线逐次 +1，照样红）。
     const setSpy = vi.spyOn(globalThis, 'setInterval')
     const clearSpy = vi.spyOn(globalThis, 'clearInterval')
     const activeTickHandles = (): number => {
@@ -1355,24 +1364,34 @@ describe('kind 门控（U4 修复对账）：Guard 重挂与时长 tick 只随 w
       const cleared = new Set(clearSpy.mock.calls.map((call) => call[0]))
       return handles.filter((handle) => !cleared.has(handle)).length
     }
+    /** 采样前等集合沉降：连续两次采样相同才取（在途建/清的瞬态不当违反；永久泄漏稳定在高位仍红）。 */
+    const settledActiveTickHandles = async (): Promise<number> => {
+      let previous = Number.NaN
+      for (let round = 0; round < 40; round += 1) {
+        const current = activeTickHandles()
+        if (current === previous) return current
+        previous = current
+        await flushPromises()
+      }
+      return previous
+    }
 
     openWorkflowVizOverlay(SID, 'wf-1')
-    await flushPromises()
-    expect(activeTickHandles()).toBe(1) // workflow 开 → tick 启动（恰一个活跃）
+    const withWorkflow = await settledActiveTickHandles()
+    expect(withWorkflow).toBeGreaterThanOrEqual(1) // workflow 开 → 本组件 tick 必在场
     // 时长的用户可见消费方（壳 header 时长槽）随开渲染
     expect(wrapper.find('[data-testid="wfvz-overlay-elapsed"]').exists()).toBe(true)
 
     openBrowser('http://localhost:1420', SID)
-    await flushPromises()
-    expect(activeTickHandles()).toBe(0) // [U4] 换入 browser 即停（旧行为 tick 空转）
+    // [U4] 换入 browser 即停（旧行为 tick 空转）：恰减本组件那一个，外来基线不动
+    expect(await settledActiveTickHandles()).toBe(withWorkflow - 1)
 
     openWorkflowVizOverlay(SID, 'wf-1')
-    await flushPromises()
-    expect(activeTickHandles()).toBe(1) // workflow 再入 → 重启（仍恰一个活跃）
+    // workflow 再入 → 重启且回稳到同一水位（泄漏 = 每轮 +1，此处即红）
+    expect(await settledActiveTickHandles()).toBe(withWorkflow)
 
     closeOverlay()
-    await flushPromises()
-    expect(activeTickHandles()).toBe(0) // 关闭即停
+    expect(await settledActiveTickHandles()).toBe(withWorkflow - 1) // 关闭即停
 
     wrapper.unmount()
     setSpy.mockRestore()

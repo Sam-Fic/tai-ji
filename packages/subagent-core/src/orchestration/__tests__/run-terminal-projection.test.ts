@@ -31,6 +31,7 @@ import {
   finalizeRun,
   setRunEventJournalDirForTest,
 } from "../terminal-actions.ts";
+import { WORKFLOW_RECORD_CUSTOM_TYPE } from "../workflow-record-entry.ts";
 import { createRunEventJournal } from "../run-events.ts";
 import type { WorkflowRunEvent } from "../run-events.ts";
 import { flushMicrotasks } from "./helpers/flush-microtasks.ts";
@@ -517,5 +518,50 @@ describe("RunTerminalManifest 旧形态读兼容", () => {
     expect(manifest).not.toBeNull();
     expect(manifest).toMatchObject({ id: "wf-tee-legacy", outcome: "failed", errorCode: "engine_crashed" });
     expect(manifest?.stderrTeePath).toBeUndefined();
+  });
+});
+
+
+// ── 4. record IO 故障降级分支的失败升格对齐（dmg-r1-2） ─────────────────
+
+describe("[2026-11-25 失败可感知性] record IO 故障降级分支：脚本失败结论仍升格（dmg-r1-2）", () => {
+  it("脚本 return {status:'failed'} + journal 写入失败 → 降级条目 outcome=failed（不落 completed 假成功）", async () => {
+    const run = makeRun("wf-degraded-script-failed");
+    await dispatchRunCreated(run); // 首帧写入正常（毒化在此之前）
+    // 毒化 journal 目录（替换为文件）：dispatchFinalRunSettle 的帧写入 ENOTDIR →
+    // 非 IllegalTransitionError → 走降级分支（record IO 故障窗口）
+    fs.rmSync(projectionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    fs.writeFileSync(projectionDir, "not-a-directory");
+    run.state.scriptResult = { status: "failed", failedStep: "gates", error: "quality-gates FAIL" };
+
+    const deps = makeDeps();
+    const ok = await finalizeRun(run, deps, "completed", { context: "test" });
+    expect(ok).toBe(true); // 降级不阻断终局 coda（SW-DATA-3）
+
+    // 消费面一：v2 终态条目（appendWorkflowRecordSettledEntry）——outcome 与 reason 同源升格
+    const appendCalls = (deps.appendEntry as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const settledEntry = appendCalls.find((c) => c[0] === WORKFLOW_RECORD_CUSTOM_TYPE);
+    expect(settledEntry).toBeTruthy();
+    expect(settledEntry![1]).toMatchObject({ outcome: "failed", reason: "failed" });
+    // 同条目仍携脚本失败摘要（失败全文不因降级丢失）
+    expect((settledEntry![1] as { scriptResultSummary?: string }).scriptResultSummary).toContain("failed");
+
+    // 消费面二：pending:unregister 的 reason/status——与主路径同源（旧实现落 completed）
+    const unregisterEntry = appendCalls.find((c) => c[0] !== WORKFLOW_RECORD_CUSTOM_TYPE && c[1] && typeof c[1] === "object" && "reason" in (c[1] as object));
+    expect(unregisterEntry).toBeTruthy();
+    expect(unregisterEntry![1]).toMatchObject({ reason: "failed" });
+  });
+
+  it("无脚本失败结论时降级分支保持 done（升格只对失败结论生效，不误伤正常终局）", async () => {
+    const run = makeRun("wf-degraded-plain");
+    await dispatchRunCreated(run);
+    fs.rmSync(projectionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    fs.writeFileSync(projectionDir, "not-a-directory");
+
+    const deps = makeDeps();
+    expect(await finalizeRun(run, deps, "completed", { context: "test" })).toBe(true);
+    const appendCalls = (deps.appendEntry as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const settledEntry = appendCalls.find((c) => c[0] === WORKFLOW_RECORD_CUSTOM_TYPE);
+    expect(settledEntry![1]).toMatchObject({ outcome: "done", reason: "completed" });
   });
 });

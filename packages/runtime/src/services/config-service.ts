@@ -112,6 +112,13 @@ import {
   type CatalogRefreshResult,
 } from './provider-catalog-refresh.js'
 import { syncRemoteProviderModels } from './remote-config/remote-provider-sync.js'
+// G-extra 存量刷新：附加段 provider 的 models.json 实例 → 快照模板（⊕ 域 5 远程补丁）同步
+// （无新定时器，挂在 refreshRemoteProviders 的既有两个触发点上）。
+import { syncTaijiExtraProviderModels } from './provider-extra-model-sync.js'
+import {
+  DOMAIN as PROVIDER_METADATA_DOMAIN,
+  isProviderModelMetadataConfig,
+} from './remote-config/remote-provider-metadata.js'
 import { refreshRemoteConfig } from './remote-config/remote-config-fetch.js'
 import { syncRetryRulesRemote } from './remote-config/remote-retry-rules.js'
 import { isQuotaFetchersRemoteConfig } from './quota-providers/index.js'
@@ -295,7 +302,25 @@ export class ConfigService implements IConfigService {
     // 域 3 拉取 + 生效落盘（同触发点；syncRetryRulesRemote 无条件重算落盘——ext-config
     // 缺席即补写基线，不跳过；fail-safe 链内建在拉取层）
     await syncRetryRulesRemote()
-    return { updatedProviders: result.updatedProviders }
+    // 域 5 拉取：附加段 provider 模型元数据补丁（免发版修 reasoning / thinkingLevelMap /
+    // compat / contextWindow / maxTokens / cost）。必须在下面的实例同步**之前**落写——
+    // 同步读侧走 loadRemoteConfig 纯缓存，晚拉一拍会让本次写入用上一轮补丁。
+    await refreshRemoteConfig(PROVIDER_METADATA_DOMAIN, isProviderModelMetadataConfig)
+    // taiji 附加段实例模型同步（G-extra 存量刷新半边）：快照模板（⊕ 域 5 补丁）是附加段
+    // provider 模型清单的权威，但播种只在「条目无 models」时执行一次——存量实例会永远停在
+    // 播种时的快照版本，快照里修正的 reasoning / thinkingLevelMap / compat / contextWidth
+    // 对老用户无效。语义与上面的远程清单合并链同源（同 id 覆盖 + 新 id 追加 + 不删除
+    // 本地），数据源换成编译期快照 ⊕ 远程补丁。无变化零写盘，故挂在启动/进页两个既有
+    // 触发点的代价可忽略。
+    const extraSync = await syncTaijiExtraProviderModels({
+      configStore: this.configStore,
+      extrasStore: this.providerExtrasStore,
+      authStorage: this.authStorage,
+      credentialWriter: this.credentialWriter,
+    })
+    return {
+      updatedProviders: [...new Set([...result.updatedProviders, ...extraSync.updatedProviders])],
+    }
   }
 
   listBuiltinProviders(): BuiltinProviderTemplate[] {

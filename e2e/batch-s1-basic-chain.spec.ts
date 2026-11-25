@@ -19,11 +19,11 @@
  *     settled 条目 outcome === journal run-settled outcome；
  *   ④ W1 死字节断言：两族 v2 条目行不含 "eventLog" / "displayItems" 字符串。
  *
- * 可复用登记声明：本 spec 是 E2E-BATCH-01 的可复用真机资产（后续触碰批量 fan-out 行为范围
+ * 可复用登记声明：本 spec 是 E2E-BATCH-01 的可复用真机资产（后续触碰批量 batch 模板行为范围
  * 时直接执行本文件，不再重建一次性剧本）；场景 S2/S4/S7 家族见 BATCH-02/04/06 登记行。
  *
  * 执行侧约定（与 e2e-map note 同步维护，改其一须同 commit 改另一）：
- * - 触发：scope diff 命中（subagent-workflow shell / fan-out 模板 / core 执行链）时开发期
+ * - 触发：scope diff 命中（subagent-workflow shell / batch 模板 / core 执行链）时开发期
  *   按改动范围空载串行执行；双凭证门 = env TAIJI_PI_LIVE=1 + 本机 provider 凭证（缺一 skip
  *   不 fail，防全量扫跑烧 token）；CI/PR/merge 门禁不跑本组（AGENTS.md e2e 执行准则）。
  *   前置：real renderer bundle（VITE_E2E=true pnpm run build:e2e，不带 VITE_MOCK）。
@@ -73,7 +73,7 @@ import path from 'node:path'
 
 const SESSION_LABEL = 'batch-s1-basic-chain'
 
-/** 任务哨兵（进成员 prompt；成员 summary 归 fan-out schema required 字段）。 */
+/** 任务哨兵（进成员 prompt；成员 summary 归 batch 模板 schema required 字段）。 */
 const T1_TOKEN = 'BATCH-S1-T1-5301'
 const T2_TOKEN = 'BATCH-S1-T2-5302'
 const MAIN_MARKER = 'BATCH-S1-MAIN-5300'
@@ -198,15 +198,15 @@ function assertS1DeliveryContent(testInfo: TestInfo, sessionFile: string): void 
 const deliveries = extractCustomMessageEntries(sessionFile, 'workflow-result')
 expect(deliveries.length, 'workflow-result 送达 entry 应恰 1 条').toBe(1)
 const content = String(deliveries[0]['content'] ?? '')
-// Script Result 段（fan-out 返回 {status, results:[...]}）从通知 content 提取
+// Script Result 段（batch 模板返回 {status, results:[...]}）从通知 content 提取
 const scriptResultMatch = content.match(/--- Script Result ---\n([\s\S]*?)(\n\n--- Agent Trace ---|$)/)
-expect(scriptResultMatch, '通知 content 应含 Script Result 段（fan-out 返回值）').not.toBeNull()
+expect(scriptResultMatch, '通知 content 应含 Script Result 段（batch 模板返回值）').not.toBeNull()
 let scriptResult: { status?: string; results?: { taskIndex?: number; status?: string; error?: string }[] } = {}
 try {
   scriptResult = JSON.parse((scriptResultMatch![1] || '').trim()) as typeof scriptResult
 } catch {
   writeDiag(testInfo, 'batch-s1-script-result-unparsable.json', { contentHead: content.slice(0, 2000) })
-  throw new Error('Script Result 段应为合法 JSON（fan-out 返回 {status, results}）')
+  throw new Error('Script Result 段应为合法 JSON（batch 模板返回 {status, results}）')
 }
 expect(scriptResult.status, `批收尾 status 应为 ok（收到 "${String(scriptResult.status)}"）`).toBe('ok')
 expect(scriptResult.results?.length, 'results 应恰 2 条（双任务并行收齐）').toBe(2)

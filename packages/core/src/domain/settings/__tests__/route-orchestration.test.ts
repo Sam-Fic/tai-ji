@@ -20,6 +20,8 @@ import {
 } from '@taiji/shared'
 import {
   buildAggregationRouteView,
+  buildDirectCard,
+  buildModelRef,
   buildRoutePageCards,
   createRouteSaveOrchestrator,
   resolveDefaultSyncAfterScopedWrite,
@@ -200,6 +202,41 @@ describe('A10 路由页卡片派生：buildRoutePageCards（scopedModels 条目 
     expect(cards.map(c => c.kind)).toEqual(['route'])
     expect(cards).toHaveLength(1)
     expect((cards[0] as { card: { route: { id: string } } }).card.route.id).toBe('route-a')
+  })
+})
+
+describe('A10 直连条目构造与派生：buildModelRef / buildDirectCard（快速创建「加直连」单源）', () => {
+  const providers: RoutePageProviderIndex = [
+    { id: 'zhipu' as ProviderId, name: '智谱', models: [{ id: 'glm-5.3', name: 'GLM-5.3' }], apiKeySet: true },
+  ]
+
+  it('buildModelRef 与聚合引用对位构成白名单条目两形态（且与既有条目格式逐字一致）', () => {
+    expect(buildModelRef('zhipu', 'glm-5.3')).toBe('zhipu/glm-5.3')
+    // 对位形态：聚合引用 provider 段恒为保留 id，物理条目 provider 段为真实渠道
+    expect(buildModelRef('zhipu', 'glm-5.3')).not.toBe(buildAggregationModelRef('glm-5.3'))
+    expect(buildAggregationModelRef('glm-5.3')).toBe(`${AGGREGATION_PROVIDER_ID}/glm-5.3`)
+  })
+
+  it('buildDirectCard 与 buildRoutePageCards 的同条目派生逐字相等（单源不漂移）', () => {
+    const view = makeView()
+    const fromJoin = buildRoutePageCards(view, ['zhipu/glm-5.3'], providers)[0]!
+    expect(buildDirectCard(buildModelRef('zhipu', 'glm-5.3'), providers)).toEqual(fromJoin)
+  })
+
+  it('渠道已删 / 模型已移除 → missing=true 且名称降级回 id（保存不拒绝，异常 chip 呈报）', () => {
+    expect(buildDirectCard(buildModelRef('ghost', 'gone'), providers)).toMatchObject({
+      kind: 'direct',
+      ref: 'ghost/gone',
+      providerName: 'ghost',
+      modelName: 'gone',
+      apiKeySet: true,
+      missing: true,
+    })
+    expect(buildDirectCard(buildModelRef('zhipu', 'removed-model'), providers)).toMatchObject({
+      providerName: '智谱',
+      modelName: 'removed-model',
+      missing: true,
+    })
   })
 })
 

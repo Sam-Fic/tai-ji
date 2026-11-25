@@ -233,6 +233,57 @@ describe('SessionManagerHandler', () => {
       // broadcastSessionList 无参调用（签名已收窄为 ()，上下文由 server 侧组装）
       expect(opts.broadcastSessionList).toHaveBeenCalledWith()
     })
+
+    it('create 带 model → 透传为 SessionCreateOptions.modelOverride（子会话生效模型）', async () => {
+      const session = makeSessionSummary({ id: 'model-session' })
+      const opts = makeMockOptions({
+        sessionService: makeMockSessionService({
+          create: vi.fn().mockResolvedValue(session),
+          getSession: vi.fn().mockReturnValue({ id: 'model-session', modelId: 'deepseek/deepseek-v4-pro' }),
+        }),
+      })
+      const handler = new SessionManagerHandler(opts)
+
+      await handler.handle('req-1', 'sid-parent', 'create', {
+        cwd: '/test',
+        label: 'modeled',
+        model: 'deepseek/deepseek-v4-pro',
+      })
+
+      // modelOverride 走既有 SessionCreateOptions 字段（C-RL-6 最高优先：agent-managed
+      // create 不携 presetId，preset 档不可达）——不新增 create 选项面
+      expect(opts.sessionService.create).toHaveBeenCalledWith('/test', 'modeled', {
+        spawnSource: 'agent',
+        parentAgentSessionId: 'sid-parent',
+        persistLabel: true,
+        projectId: undefined,
+        modelOverride: 'deepseek/deepseek-v4-pro',
+      })
+      // respond 的 modelId = lifecycle 注册表生效值（get_state 读回播种，非请求值回显）
+      const createRespond = respondAt(opts)
+      expect(createRespond.modelId).toBe('deepseek/deepseek-v4-pro')
+    })
+
+    it('create 不带 model → modelOverride 缺省（全局默认模型档，旧行为不变）', async () => {
+      const session = makeSessionSummary({ id: 'default-model-session' })
+      const opts = makeMockOptions({
+        sessionService: makeMockSessionService({
+          create: vi.fn().mockResolvedValue(session),
+          getSession: vi.fn().mockReturnValue({ id: 'default-model-session', modelId: 'openai/gpt-4' }),
+        }),
+      })
+      const handler = new SessionManagerHandler(opts)
+
+      await handler.handle('req-1', 'sid-parent', 'create', { cwd: '/test' })
+
+      expect(opts.sessionService.create).toHaveBeenCalledWith('/test', undefined, {
+        spawnSource: 'agent',
+        parentAgentSessionId: 'sid-parent',
+        persistLabel: true,
+        projectId: undefined,
+        modelOverride: undefined,
+      })
+    })
   })
 
   describe('U4-A2: send/history/status/list/abort 五个 action 分支', () => {

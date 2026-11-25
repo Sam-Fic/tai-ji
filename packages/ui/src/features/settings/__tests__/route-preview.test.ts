@@ -12,6 +12,8 @@
  * ⑧ candidateProviderIds 添加端点候选（存在 / 启用 / 未被本路由占用；端点模型可独立改选，
  *    候选不再按 route.modelId 过滤渠道）
  * ⑨ specialOverrideFor 同日期多条取第一条（spec 已知限制）
+ * ⑩ 条件维度口径边界（dmg-r1-1）：reason 词表闭合于条件类取值（无 burnt / 失败避让类取值）、
+ *    无 burnt 输入维度（条件满足的首端点恒为命中——选择层重排不进 evaluateRouteAt）
  *
  * 测试判据：全部第①档同步逻辑（函数进、返回值出），零 mount / 零 IO / 零 fake timer。
  */
@@ -201,6 +203,81 @@ describe('evaluateRouteAt 此刻求值（D5 矩阵 UI 预览半边）', () => {
     expect(evaluateRouteAt(r, { dow: 3, slot: 40 }, { nowDate: '2026-12-24' }).hit?.id).toBe('a')
     // 10:00（slot 20）区间外且周表空 → 落选
     expect(evaluateRouteAt(r, { dow: 3, slot: 20 }, { nowDate: '2026-12-24' }).hit).toBeNull()
+  })
+})
+
+// ── 条件维度口径边界（dmg-r1-1：投影不含 burnt 软避让） ──────────────────────────────
+
+describe('条件维度口径边界（dmg-r1-1：UI 投影只覆盖条件，不含 burnt 软避让）', () => {
+  /** 汇总一组「路由 + 求值选项」产生的 reason 全集（防新增非条件类 reason 静默进入 UI 词表）。 */
+  const reasonsOf = (cases: Array<{ route: AggregationRoute; quotaOf?: (pid: string) => number | undefined }>): Set<string> => {
+    const all = new Set<string>()
+    for (const c of cases) {
+      for (const step of evaluateRouteAt(c.route, WED_1430, { quotaOf: c.quotaOf, nowDate: '2026-11-04' }).steps) {
+        all.add(step.reason)
+      }
+    }
+    return all
+  }
+
+  it('求值原因词表闭合于条件维度取值集（无 burnt / 失败避让类取值）', () => {
+    const win = blankWindowTable()
+    win[2][29] = true
+    const seen = reasonsOf([
+      { route: routeOf({ members: [member({ id: 'a', providerId: 'zhipu' })] }) },
+      { route: routeOf({ members: [member({ id: 'a', providerId: 'zhipu', type: 'window', window: win })] }) },
+      { route: routeOf({ members: [member({ id: 'a', providerId: 'zhipu', type: 'window', window: blankWindowTable() })] }) },
+      { route: routeOf({ members: [member({ id: 'a', providerId: 'zhipu', type: 'quota', quota: { thresholdPercent: 50 } })] }) },
+      {
+        route: routeOf({ members: [member({ id: 'a', providerId: 'zhipu', type: 'quota', quota: { thresholdPercent: 50 } })] }),
+        quotaOf: () => 0, // 剩余 100 ≥ 50 → 数据在且满足
+      },
+      { route: routeOf({ mode: 'simple', members: [member({ id: 'a', providerId: 'zhipu', type: 'window', window: blankWindowTable() })] }) },
+      {
+        route: routeOf({
+          members: [
+            member({ id: 'a', providerId: 'zhipu', type: 'window', window: win }),
+            member({ id: 'b', providerId: 'opencode-go', type: 'window', window: win }),
+            member({ id: 'c', providerId: 'stepfun' }),
+          ],
+        }),
+      },
+      {
+        route: routeOf({
+          members: [
+            member({ id: 'a', providerId: 'zhipu', type: 'window', window: blankWindowTable() }),
+            member({ id: 'b', providerId: 'opencode-go' }),
+          ],
+        }),
+      },
+    ])
+    // burnt 软避让 / rotateOldestBurnt 全 burnt 轮换是 pi 侧选择层重排（decideRoute 叠加，状态
+    // 持久化于 pi session branch 的 virtual-model-state、renderer 无输入通道），UI 投影若引入
+    // 该类取值即等于把「条件命中」伪装成「实际路由」——本断言红，迫使其同步 route-matrix.md
+    // 总则 3 的口径宣称与 data-source-registry.md #94 的边界登记。
+    expect([...seen].sort()).toEqual([
+      'after-hit',
+      'in-window',
+      'mode-simple',
+      'out-window',
+      'quota-ok',
+      'quota-unknown-open',
+      'unconditional',
+    ])
+  })
+
+  it('无 burnt 输入维度：条件满足的首端点恒为命中（选择层重排不进 evaluateRouteAt）', () => {
+    const win = blankWindowTable()
+    win[2][29] = true
+    // 两个端点条件均满足：投影恒取配置序首端点——不存在「把首端点降到序尾」的第二维度
+    const r = routeOf({
+      members: [
+        member({ id: 'a', providerId: 'zhipu', type: 'window', window: win }),
+        member({ id: 'b', providerId: 'opencode-go', type: 'window', window: win }),
+      ],
+    })
+    expect(evaluateRouteAt(r, WED_1430).hitIndex).toBe(0)
+    expect(evaluateRouteAt(r, WED_1430, { quotaOf: () => 99 }).hitIndex).toBe(0)
   })
 })
 

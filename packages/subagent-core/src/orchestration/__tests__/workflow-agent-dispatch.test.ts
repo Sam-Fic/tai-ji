@@ -271,6 +271,23 @@ describe("executeWorkflowAgent 注册范围", () => {
 // ============================================================
 
 describe("executeWorkflowAgent 池顺序", () => {
+  it("空/纯空白 prompt → 同步抛错 + 零池占用 + 零孤儿 record（prompt 卫生 fail-fast）", async () => {
+    const { service, store, pi } = makeHarness();
+    registerStrictEngine();
+    const pool = Reflect.get(service, "pool") as { acquire: (p: number, m?: number, s?: AbortSignal) => Promise<void> };
+    const acquireSpy = vi.spyOn(pool, "acquire");
+
+    for (const bad of ["", "   \n  "]) {
+      await expect(
+        service.executeWorkflowAgent(baseOpts({ prompt: bad }), "run-empty-prompt"),
+      ).rejects.toThrow(/empty prompt/);
+    }
+
+    expect(acquireSpy).not.toHaveBeenCalled(); // 零池占用（D3：与路由/预检同层同步拒绝）
+    expect(store.listRunning()).toHaveLength(0); // 零孤儿 record
+    expect(pi.events.emit).not.toHaveBeenCalledWith("pending:register", expect.anything());
+  });
+
   it("预检命中（不支持的 task shape）→ 同步抛错 + 池 acquire 未被调 + 零孤儿 record", async () => {
     const { service, store, pi } = makeHarness();
     registerStrictEngine();

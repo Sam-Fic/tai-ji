@@ -1,0 +1,11 @@
+{
+  "docs": {
+    "design": "docs/tree-plant/design.md",
+    "acceptance": "docs/tree-plant/acceptance.md",
+    "api": "docs/tree-plant/api.md",
+    "factCheck": "docs/tree-plant/fact-check.md"
+  },
+  "testCommand": "pnpm --filter @zhushanwen/pi-provider-aggregation test",
+  "typecheckCommand": "pnpm --filter @zhushanwen/pi-provider-aggregation typecheck",
+  "ignoreChangedPaths": []
+}

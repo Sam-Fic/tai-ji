@@ -2157,5 +2157,80 @@
       "test": "packages/runtime/src/infra/pi/__tests__/pi-semantics-virtual-route.test.ts"
     },
     "verifiedWith": "1.0.0"
+  },
+  {
+    "id": "PS-100",
+    "claim": "虚拟模型选择下 assistant 消息自带**物理端点** key（taiji gen-stats 展开层 gen-stats-model-keys 的正向场景前提）：会话选择（虚拟路由 `aggregation/<routeId>`）只存 agent state，逐请求路由——物理选择直通不改；虚拟选择经 resolveModel 路由到物理端点模型后作为请求侧 model 发请求（selection stays in agent state; only this request uses the routed model）。assistant 消息 model = 请求侧 model.id（pi-ai 全 provider 构造点统一，语义裁定见 PS-25）→ 虚拟选择下的采样桶落物理 key `provider/model`，与会话权威 key（虚拟 id）分属两套命名空间——taiji 读侧须展开（gen-stats-model-keys）才能对上。与 PS-99（注册时序）及 PS-98（路由凭据拦截）同域；PS-25 补充本条在虚拟选择场景的取值组合",
+    "piAnchor": [
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/agent-session.js",
+        "symbol": "_installAgentRequestProjection → agent.prepareRequest 包装（虚拟选择逐请求路由）",
+        "note": ":421 方法头；:443 model = previous?.model ?? this.agent.state.model；:445-446 非虚拟直通返回（物理选择零变化）；:447-448 注释自述 The selection stays in agent state; only this request uses the routed model；:453 await this._modelRuntime.resolveModel(model, ...)；:472 return { ...previous, context, model: route.model, thinkingLevel: route.thinkingLevel }——请求侧模型换成路由后的物理端点【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      },
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/model-runtime.js",
+        "symbol": "resolveModel 路由段",
+        "note": ":727 方法头；:737 const route = await virtual.route(...)；:744 const target = this.getPhysicalModel(route.model.provider, route.model.id)（路由结果必须落到物理模型）；:750 return { model: target, thinkingLevel: ..., state: route.state }【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      },
+      {
+        "pkg": "pi-ai",
+        "distPath": "dist/api/openai-completions.js",
+        "symbol": "流式 output 构造点 provider/model 赋值",
+        "note": ":159-160 provider: model.provider / model: model.id——assistant 消息 model = 请求侧（已路由物理）model.id；全 provider 构造点统一（语义裁定与 responseModel 边界见 PS-25）【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      }
+    ],
+    "guard": {
+      "type": "probe",
+      "test": "packages/runtime/src/infra/pi/__tests__/pi-semantics-virtual-route.test.ts"
+    },
+    "verifiedWith": "1.0.0"
+  },
+  {
+    "id": "PS-101",
+    "claim": "极少数通路把会话选择写进消息自身（taiji gen-stats 展开层反向命中的防御前提）：路由失败（resolveModel throw——未注册 / not-a-physical / 无凭据）时 prepareRequest reject → run 以 error 收终，handleRunFailure 合成 failureMessage（role=assistant），model/provider 取 this._state.model——此刻仍是**虚拟选择** `aggregation/<routeId>`，usage = EMPTY_USAGE 全 0；经 message_start/message_end/turn_end/agent_end 原样发出，failureMessage 带虚拟 key 经 turn_end 下发。但 taiji 适配层 totalTokens gate（event-adapter.ts:519 `if (!usage?.totalTokens) return []`，先于 kind:'turn-usage' 产出与 recordSample 注入）把 failure turn（usage = EMPTY_USAGE.totalTokens = 0）丢弃不产样本——**虚拟 key 样本在现接线管道不可达**；`recordSample` 的 `isAggregationModelRef` 跳过分支（gen-stats-service.ts:345）定性为 pi 行为漂移防御：未来 failure usage 非 0 时防 `aggregation__*.json` 无读方死字节，非现役通路。正常路径 assistant 消息恒带物理端点 key（PS-100），虚拟 key 消息仅此失败通路产生，量级「极少数」",
+    "piAnchor": [
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/agent-session.js",
+        "symbol": "_installAgentRequestProjection 路由失败语义（注释自述）",
+        "note": ":447-448 A routing failure rejects, which ends the run with an error response——reject 发生时 agent.state.model 仍是虚拟选择（尚未替换为路由结果）【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      },
+      {
+        "pkg": "pi-agent-core",
+        "distPath": "dist/agent.js",
+        "symbol": "handleRunFailure failureMessage 构造 + 四事件发射",
+        "note": ":364 方法头；:365-374 failureMessage（role: assistant）api :368 / provider :369 / model :370 取 this._state.model.*（虚拟选择直达消息字段）、usage :371 = EMPTY_USAGE 全 0（:10-16）；:376-379 message_start/message_end/turn_end/agent_end 原样发射——turn_end.message 即 taiji 采样入口所见【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      }
+    ],
+    "guard": {
+      "type": "probe",
+      "test": "packages/runtime/src/infra/pi/__tests__/pi-semantics-virtual-route.test.ts"
+    },
+    "verifiedWith": "1.0.0"
+  },
+  {
+    "id": "PS-102",
+    "claim": "pi 重试预算缺省值（taiji @zhushanwen/pi-provider-aggregation 的影子副本锚）：getRetrySettings 的 maxRetries 缺省 3（`this.settings.retry?.maxRetries ?? 3`），getRetryEnabled 的 enabled 缺省 true（`this.settings.retry?.enabled ?? true`——重试默认开启）。taiji 侧 DEFAULT_MAX_RETRIES=3 与 readMaxRetries 的 enabled===false→0（重试停用 = 零次重试）是这两个缺省值的影子副本，直接决定 provider-aggregation「链内失败计数 ≥ 预算 → burnt → 下一轮 failover」的阈值——pi 升级若改缺省值、或 taiji 影子副本漂移，用户侧表现为 failover 时机静默偏移（重试次数感知不变、实际换端点时机变），故探针双断言（dist 缺省值 + 影子副本对拍）",
+    "piAnchor": [
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/settings-manager.js",
+        "symbol": "getRetrySettings",
+        "note": ":659-666 —— :661 enabled 委派 getRetryEnabled；:662 maxRetries: this.settings.retry?.maxRetries ?? 3（缺省 3）；同段 baseDelayMs ?? 2000 / maxAgentDelayMs ?? DEFAULT_MAX_AGENT_RETRY_DELAY_MS【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      },
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/settings-manager.js",
+        "symbol": "getRetryEnabled",
+        "note": ":648-650 return this.settings.retry?.enabled ?? true（缺省 true = 重试默认开启；enabled=false 时 taiji readMaxRetries 预算读 0）【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      }
+    ],
+    "guard": {
+      "type": "probe",
+      "test": "packages/runtime/src/infra/pi/__tests__/pi-semantics-bundle-1.test.ts"
+    },
+    "verifiedWith": "1.0.0"
   }
 ]

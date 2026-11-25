@@ -309,7 +309,11 @@ describe('保存提交与保存并测试', () => {
 })
 
 describe('表单全控件操作回路（TtsProviderForm v-model 写路 + 发音词典行编辑）', () => {
-  it('MiniMax 全控件编辑 → save 载荷标准位与 vendor 子树按编辑值落位', async () => {
+  // 重交互回路（~15 次 select/toggle + 词典行编辑）：无负载实测 3.3s——默认 5s 预算
+  // 仅 1.5× 余量。本文件在 vitest config 的 domain 排除名单里（默认档不跑），5s 预算的
+  // 「<1s/例」校准结论从未覆盖它；coverage 档（isCoverageRun 不套 domain 排除）放出来跑，
+  // 5 worker 负载下必超 5s（存量：dev-0.13.2 未改动线上同档同两例超时）。显式 15s（实测负载 6.6-9.2s，1.6× 余量）。
+  it('MiniMax 全控件编辑 → save 载荷标准位与 vendor 子树按编辑值落位', { timeout: 15_000 }, async () => {
     const w = await mountPage()
     // 凭据区：baseUrl 切集群
     await pickSelect(w, 'tts-baseurl-select-minimax', '国际')
@@ -438,7 +442,8 @@ describe('通用开关与服务商下拉', () => {
     expect(enabled.value).toBe(false)
   })
 
-  it('切服务商：通用开关保留，表单区切换到对应家（三家独立记忆）', async () => {
+  // 同上重交互回路：无负载实测 2.5s，显式 20s（同上依据）。
+  it('切服务商：通用开关保留，表单区切换到对应家（三家独立记忆）', { timeout: 15_000 }, async () => {
     const w = await mountPage()
     expect(sel(w, 'tts-emotion-select-minimax').exists()).toBe(true)
     await pickSelect(w, 'tts-provider-select', 'MiMo')
