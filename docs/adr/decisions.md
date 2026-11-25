@@ -1404,3 +1404,7 @@ QuotaService 10s 节流，间隔常量 SSOT = plan-quota-float.ts QUOTA_FLOAT_RE
 ### ADR-0196 `.zcode/` 与 `.workbuddy/` 全目录本地化；skills 快照增挂 GitHub 可见分支（2026-11-21 用户裁决）
 
 `.zcode/`（含 agents/ 子代理定义）与 `.workbuddy/` 退出 git 跟踪、整目录 ignore（`git rm -r --cached`，文件留盘）：两者为本机工具状态（zcode 工作区 / WorkBuddy 会话记忆），fresh clone 缺失不阻碍任何检查与构建（CI 零引用；check-doc-symbol-drift 的全仓扫描剪枝清单本就含 `.zcode`）。本条修订 ADR-0086 中「`.zcode/agents/` 过两刀维持跟踪」的条款，其余不变——`.agents` 实体仍驻 workspace 根、worktree symlink 共享、脱离分支版本化。`.agents` 快照链增挂镜像分支：`snapshot-skills.sh` 推送时单次 push 双 refspec（`refs/skills-snapshot` + `refs/heads/skills-snapshot`，同一快照 commit），skill 实体内容在 GitHub 分支列表可见、clone 默认可得；本地快照链仍在 `refs/skills-snapshot` 上增长，CI 物化与排障恢复通道读旧 ref 不变。各 worktree 分支的脚本副本随正常合并传播；传播完成前旧副本只推旧 ref，镜像分支由已传播分支的下一次快照推送追平（快照推送失败本就非阻断、下次 commit 自动重试，短暂滞后同语义）。历史 commit 内的 `.zcode`/`.workbuddy` 内容保留，不做历史改写。
+
+### ADR-0197 perf 线历史粒度损失接受与 tree-plant 测试基建口径（2026-11-24 事故处置决策）
+
+原主仓 `.git` 被外部进程删除（非本仓任何流程所为，恢复手段已穷尽：废纸篓/本地快照/全盘对象搜索/远端核对均零命中），perf 批1/批2 的 8 个本地 commit 细粒度历史不可复原，代码内容零丢失。现行决策两条：① 接受现状，唯一备份锚点 = 远端保护分支 `perf-batch-rescue-20261124`（单 commit `3dc7ae791`，承载批1/批2 全部交付），该分支不得清理；不重建细粒度历史。② tree-plant 测试基建口径——`.tree-plant.json`（入库文件）每例 `--testTimeout=30000` 与 tree-plant gate `CASE_TIMEOUT_MS=900s`：治共享机 CPU 争抢下默认 5s 每例超时与 3 包 suite 总时长 300s 的误杀，属测试基建调整、非被测代码缺陷，不得以「恢复默认值」名义回退。事故叙事不回填不新建（本条为该事件决策的现行登记处，原叙事档案已移出库归档）。
