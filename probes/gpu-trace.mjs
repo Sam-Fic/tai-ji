@@ -190,7 +190,9 @@ if (arm === 'no-blur') {
     })()`,
     returnByValue: true,
   })
-  injected = `backdrop-filter(classes-at-inject=${r.result.value} verify=${verify.result.value})`
+  // 注入时机在 prompt 之前：此刻 EdgeFade 尚未挂载（classes-at-inject=0、verify.count=0 属正常），
+  // 真正的生效判据是**臂末**的 arm-end state（blurEls=4 noneCount=4）。此处只留注入记录。
+  injected = `backdrop-filter(injected-before-mount=${r.result.value}, arm-end-state-is-authoritative)`
   console.log(`[gpu-probe] arm=no-blur 注入完成：${injected}`)
 } else if (arm === 'no-mask') {
   // 只摘滚动容器 mask：blur 四层与沉色层全部保留 ⇒ 差值 ≈ mask 合成路径成本（GPU-7）
