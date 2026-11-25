@@ -42,7 +42,7 @@
  * 层归属：Interface。依赖 Pi SDK + core lifecycle/registry + reentry-guard。
  */
 
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";

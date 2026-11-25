@@ -132,12 +132,6 @@ function speedDistOf(samples) {
   }
 }
 
-function cacheRatioOf(records) {
-  const read = records.reduce((a, r) => a + r[0], 0)
-  const total = records.reduce((a, r) => a + r[1], 0)
-  return total <= 0 ? null : Math.round((read / total) * 100)
-}
-
 // ── 主流程 ──────────────────────────────────────────────────────────────────────────
 
 const caseName = process.argv[2] === '--case' ? process.argv[3] : undefined
