@@ -54,7 +54,7 @@ I1（SIGUSR1 能否在 tsx 壳上激活 inspector）、I2（minify 差异）、I
 | CDP `Tracing.start{options:'record-continuously'}` + `Tracing.dataLossOccured` | probes/gpu-trace.mjs:199 （本批改写） + 首轮缺失对照 = docs/perf/adversarial-review-glm.md:66 | M2 |
 | CDP `Emulation.setEmulatedMedia{features:[prefers-reduced-transparency]}` | probes/gpu-trace.mjs:181 （本批新增 arm=reduced） + 消费点 packages/renderer/src/components/ui/edge-fade/EdgeFade.vue:104 | G3 |
 | Node inspector（SIGUSR1 激活 / `--inspect` 拉起）+ CDP Profiler | probes/lib/harness.mjs:439 （本批新增 connectNodeInspector/startProfiler/stopProfiler） + runtime 无 handler 证据 = F6 | M1 |
-| runtime RPC：`session.create` / `session.subscribe` / `delivery.submit` / `message.complete` | probes/vp/lib/protocol.mjs:35 （reply 别名表）与 :393 （waitTurnEnd 事件集） + probes/lib/harness.mjs:340 （waitForSessionComplete） | M1,M2 |
+| runtime RPC：`session.create` / `session.subscribe` / `delivery.submit` / `message.complete` | .agents/skills/verify-taiji/scripts/lib/protocol.mjs:35 （reply 别名表）与 :404 （waitTurnEnd 事件集；dmg-r1-3 单源化后权威在 skill 侧，probes/vp/lib 副本已删除） + probes/lib/harness.mjs:340 （waitForSessionComplete） | M1,M2 |
 | pi 二进制解析点（dev 分支） | packages/runtime/src/infra/pi/find-pi-executable.ts:31 （dev 分支优先 resources/pi 下的已 prepare 二进制，实装 :62 拼接） | P1 |
 | faux 脚本通道（TAIJI_FAUX_SCRIPT / TAIJI_FAUX_TPS） | packages/runtime/src/__tests__/fixtures/faux-llm-ext.ts:141 （脚本读取）与 :147 （tps 流控） | F1,F2,F3 |
 | 端口注入三通道 | packages/shared/src/constants.ts:8 与 apps/electron/main/supervisor/port-discoverer.ts:36 与 apps/electron/scripts/dev-electron.mjs:162 与 apps/electron/main/window/window-factory.ts:46 | M1,M2,M3,G1 |
