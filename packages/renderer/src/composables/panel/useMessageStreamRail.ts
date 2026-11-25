@@ -13,7 +13,7 @@
  *
  * 提取至此（composables/panel 既有范式）：MessageStream.vue script setup ≤300 行规范 + rail 关注点单一可复用。
  */
-import { computed, ref, type ComputedRef, type Ref } from 'vue'
+import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
 import type { VirtualizerHandle } from 'virtua/vue'
 import type { MessageTurn } from '@/composables/logic/messageTurns'
 import type { SkillNoticeStreamItem } from '@/composables/panel/useSkillNoticeStream'
@@ -117,10 +117,16 @@ export function useMessageStreamRail(deps: UseMessageStreamRailDeps): {
    * 索引与本次数组同步（见 updateActiveTurnIndex）。
    */
   let railIndexByTurn = new WeakMap<MessageTurn, number>()
-  /** 上次求值时的 sessionId：变化即显式重置 rail 流式冻结槽（B-harden）。
-   *  per-instance 闭包持有（split mode 多实例各自跟踪自己的 session 切换）；重置的是
-   *  模块级单槽，故别实例的槽会被连带清掉——后果仅是多算一次摘要（守卫下永不错值），\   *  可接受。不变量本身由冻结槽的 (id, prefix) 守卫保证，此处是显式化 + 可检验。 */
-  let lastFreezeSessionId = ''
+  // 切 session：显式重置 rail 流式冻结槽（B-harden，resetRailFreezeSlot）。
+  // 放 watch（pre-flush）而非 railTurns computed 求值体内——computed 求值须纯，对 @taiji/ui
+  // 模块级单槽的副作用放在求值内违反 Vue computed 纯度契约；pre-flush watch 保证 reset
+  // 先于切换后同 tick 的任何求值，重置语义不变。重置的是模块级单槽，split mode 下别实例
+  // 正持有的槽会被连带清掉——后果仅是多算一次摘要（冻结槽 (id, prefix) 守卫下永不错值），
+  // 可接受（fact-check R4 申报）。不变量本身由冻结槽的 (id, prefix) 守卫保证，此处是
+  // 显式化 + 可检验。
+  watch(sessionId, () => {
+    resetRailFreezeSlot()
+  })
 
   /**
    * 派生视图恒等放宽判定：仅末位 turn 引用不同（streaming 末位 turn 每 delta 重建）、其余
@@ -169,12 +175,6 @@ export function useMessageStreamRail(deps: UseMessageStreamRailDeps): {
   }
 
   const railTurns = computed<MessageTurn[]>(() => {
-    // 切 session：显式重置冻结槽（槽内是上一个 session 的流式锚点，虽被 id 守卫排除复用，
-    // 显式清掉使「槽只属于当前 session 的流式 turn」这一不变量可局部检验）
-    if (sessionId.value !== lastFreezeSessionId) {
-      lastFreezeSessionId = sessionId.value
-      resetRailFreezeSlot()
-    }
     const next = renderItems.value.filter((item) => item.kind === 'turn').map((item) => item.turn)
     // 快判 → 派生视图恒等放宽 → 全量重建，三级判定语义见上方 railTurns 机制注释
     if (sameTurnRefSequence(lastRailTurns, next)) return lastRailTurns

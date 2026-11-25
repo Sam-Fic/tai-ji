@@ -49,8 +49,9 @@ const railMemo = new WeakMap<MessageTurn, RailTurnMemo>()
  *  ④ 摘要已触顶（isRailSummarySettled——带省略号后缀说明纯文本前 20 码点已超出显示预算，
  *     未触顶的空/短摘要其前 20 码点仍可能被后续 delta 改变，冻结它会把「尚未成形」的值钉住）。
  * 单槽模块级（随 WeakMap 条目一同自然轮换，无泄漏面）。切 session 的显式 reset 入口 =
- * resetRailFreezeSlot()（useMessageStreamRail 在 sessionId 变化时调用）——守卫①②已使跨
- * session 错用在结构上不可能（message id 全局唯一），reset 是让不变量可局部检验的显式化。
+ * resetRailFreezeSlot()（useMessageStreamRail 以 watch(sessionId) 在 session 变化时调用，
+ * 位于非响应式求值上下文——computed 求值体内不落副作用）——守卫①②已使跨 session 错用
+ * 在结构上不可能（message id 全局唯一），reset 是让不变量可局部检验的显式化。
  *
  * 已知代价（登记于 docs/fact-check.md R1 / tp-design.md G5）：守卫①②③④保证的是「摘要的前
  * 20 码点由前 K 原始字符决定」这一**充分条件**，不是必要条件。跨 K 才闭合的 markdown 构造
@@ -58,6 +59,7 @@ const railMemo = new WeakMap<MessageTurn, RailTurnMemo>()
  * 旧实现下一 delta 即更新，故这是本批引入的新鲜度回退，触发条件确定（非偶发）：消息以跨 K
  * 未闭合的强调/链接开头。收窄它需要在 delta 粒度上验「闭合后摘要是否已变」（O(K)/delta），\ * 代价大于收益，本批不做。
  */
+// @data-owner #58 —— chat 对话流渲染派生 memo ⑤（rail 流式冻结槽，plain-let 单槽，纯派生可丢弃）
 let frozenAgent: { id: string; prefix: string; agentSummary: string } | null = null
 
 /** 显式重置冻结槽（切 session 入口调用）。幂等；无槽时零操作。 */
