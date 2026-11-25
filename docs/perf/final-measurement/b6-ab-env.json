@@ -1,0 +1,28 @@
+{
+ "note": "批6 R1 A/B（OFF=守卫关闭 scratch build / ON=守卫）；profile 本体在 .run/b6ab2（gitignore），数字对账见 residual-risks-closure.md §1.3",
+ "arms": {
+  "off6": {
+   "head": "52b49aa16daa891ce12fd61037893b8ed577a075",
+   "load": 6.21,
+   "wallS": 60.7,
+   "window": {
+    "relFromS": 0.397,
+    "relToS": 60.943999999999996,
+    "sampledS": 60.491778,
+    "nonIdleRatio": 0.5427433295149632
+   }
+  },
+  "on6": {
+   "head": "52b49aa16daa891ce12fd61037893b8ed577a075",
+   "load": 6.03,
+   "wallS": 60.5,
+   "window": {
+    "relFromS": 0.351,
+    "relToS": 60.742,
+    "sampledS": 60.292604,
+    "nonIdleRatio": 0.4660248875633237
+   }
+  }
+ },
+ "pathPolicy": "本机绝对路径已脱敏"
+}

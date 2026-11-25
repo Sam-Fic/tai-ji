@@ -90,17 +90,21 @@
 
 ## 5. 残余风险与未决项
 
-| # | 项 | 状态 | 处置 |
-|---|---|---|---|
-| R1 | **`scrollTo` self 上升 57–62%**（1.416s → 2.300/2.224s），LayoutDuration +1.6~14%、RecalcStyle +21~24%；多小代码块形态达 5.06% | 实测两次同向，**根因未定位** | 下一批候选：`scrollTo` 的调用点与 churn 需要一轮 follow-health 探针（批1-4 遗留探针 `probes/follow-health.mjs` 可复用） |
-| R2 | minify 关闭的偏差 | 登记 | 影响限于解析/编译期；流式窗在加载之后 |
-| R3 | 打包版 TaiJi.app 并存（L1） | 无法消除（本会话宿主） | GPU helper 15–24% 瞬时 CPU；baseline/final 同条件 |
-| R4 | 组件级 inclusive 在 prod bundle 不可测（`_sfc_render` 匿名） | 方法学限制 | 由 flushJobs / componentUpdateFn 承载；要组件级数字需 dev bundle（引入 dev 扭曲） |
-| R5 | pi profile 用 node 替代 Bun SEA | 首轮已实证 Bun 不可 inspect | 只作「流式期 pi 空闲」的定性证据 |
-| R6 | 补充形态为合成语料 | 确定性生成器 | 结论不外推到真实对话 |
-| R7 | **`(program)` 仍是最大的未归因项（34.9%，≈20.4s）** | 本批定量（CDP metrics 交叉验证）但未拆解 | 它对应主线程原生渲染/布局（Blink + 光栅提交前处理）。拆解需要 `devtools.timeline` 全类别 trace（本批 GPU trace 有 `devtools.timeline` 类别，但只用于 GPU 分析；CPU 侧未做 timeline 归因）——下一批候选 |
-| R8 | pi 冷启动 dev 20s（批4 结论：不可优化） | 已裁决 | prod 不受影响（bundle 2.0–6.8s） |
-| R9 | 分支 34+ commit 从未推送；本目录是独立 clone 而非 `.bare` 链接 worktree | 批4 遗留待办 | 推送/开 PR 不在本批职责；独立 clone 与 AGENTS.md 描述的差异已登记 |
+> **批6 已全部闭环**：R1–R9 逐项调查/修复/定量的完整证据链见 [residual-risks-closure.md](residual-risks-closure.md)。下表为快照（状态以批6 为准）。
+
+| # | 项 | 批6 结果 |
+|---|---|---|
+| R1 | `scrollTo` self 上升 | **已修复**：85.7% 是恒等写（写前已在底 ∧ 目标≥底）；`useVirtuaFollow` 守卫跳过 → DOM 写 3283→568（−83%）、scrollTo 归因 2.242→0.322s（−86%）、窗内 Task −4.1s、非 idle 54.3→46.6%；跟随正确性实测无损（流中贴底 + 结束 gap 0）。根因澄清：批5 的「+57~62%」主体是强制布局的归因漂移（插桩对账实证），非写次数变化 |
+| R2 | minify 关闭偏差 | **已定量**：主 chunk 解析编译差 6ms（一次性、加载期）；流式窗内 parse/compile 0.378s/59.1s（0.64%，懒 chunk） |
+| R3 | 打包版并存（L1） | 维持 + 量化界（并存 helper 瞬时 39–48% 单核；A/B 双臂同条件） |
+| R4 | 组件级 inclusive 不可测 | **已推翻**：`__name` 行号映射归因（`analyze-component-attribution.mjs`）；实测组件渲染层 inclusive 仅 1.42s（2.4% 窗），组件渲染非热点 |
+| R5 | pi profile 用 node 代理 | **升级为真实证据**：macOS `sample` 直接采真实 Bun SEA；流式窗 pi CPU 5.56s/65.8s（8.4%，含冷启动段），流中主体为 `kevent` 等待 |
+| R6 | 合成语料 | **已定量**：fence/heading/list 刻意超加权 ×4~×45 ⇒ per-char 成本是真实流量上界；tool-calls 形态行密度 ×10.8 偏差登记 |
+| R7 | `(program)` 34% 未归因 | **已归因**：= 每帧原生 Layout（10.1–11.5s）+ Paint（6.6–7.5s）+ GC/EventDispatch；JS 侧强制布局仅 0.3s——内容增长的固有原生渲染，接受 |
+| R8 | pi 冷启动 dev | 维持裁决（不可优化）；新证据：新会话 pi 冷启动 ~5.5s CPU + 流式近零 |
+| R9 | 分支未推送 / 独立 clone | 维持登记（外部动作归用户裁决） |
+
+批6 后本报告口径更新：`scrollTo` 0.322s、非 idle 46.6%、JS busy 14.9%（派生族 0.084s、shiki 0、EdgeFade.sync 0 不变）——见 closure §1.3。
 
 ## 6. 火焰图与数据索引
 
