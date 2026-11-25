@@ -35,6 +35,11 @@
 curl -L https://gitcode.com/qq_18433817/tai-ji/releases/download/v0.13.2/TaiJi-0.13.2-mac-arm64.dmg -o /tmp/TaiJi.dmg && open /tmp/TaiJi.dmg
 ```
 
+**macOS（Intel）**
+```bash
+curl -L https://gitcode.com/qq_18433817/tai-ji/releases/download/v0.13.2/TaiJi-0.13.2-mac-x64.dmg -o /tmp/TaiJi.dmg && open /tmp/TaiJi.dmg
+```
+
 **Linux**
 ```bash
 curl -L https://gitcode.com/qq_18433817/tai-ji/releases/download/v0.13.2/TaiJi-0.13.2-x86_64.AppImage -o ~/TaiJi.AppImage && chmod +x ~/TaiJi.AppImage && ~/TaiJi.AppImage
@@ -55,6 +60,11 @@ Invoke-WebRequest -Uri "https://gitcode.com/qq_18433817/tai-ji/releases/download
 **macOS（Apple Silicon）**
 ```bash
 curl -L https://github.com/zhushanwen321/tai-ji/releases/download/v0.13.2/TaiJi-0.13.2-mac-arm64.dmg -o /tmp/TaiJi.dmg && open /tmp/TaiJi.dmg
+```
+
+**macOS（Intel）**
+```bash
+curl -L https://github.com/zhushanwen321/tai-ji/releases/download/v0.13.2/TaiJi-0.13.2-mac-x64.dmg -o /tmp/TaiJi.dmg && open /tmp/TaiJi.dmg
 ```
 
 **Linux**
@@ -80,7 +90,7 @@ Invoke-WebRequest -Uri "https://github.com/zhushanwen321/tai-ji/releases/downloa
 
 <!-- INSTALL:END -->
 
-> **macOS Intel 用户**：当前仅提供 Apple Silicon (arm64) DMG，暂不支持 Intel Mac。
+> **macOS Intel 用户**：v0.13.1 起提供 Intel (x64) DMG；v0.13.3 起 Intel mac 与 Apple Silicon 一样支持应用内自动更新（存量旧版本需手动安装一次 v0.13.3+ 后生效）。
 
 ---
 

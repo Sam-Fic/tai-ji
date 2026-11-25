@@ -111,6 +111,7 @@ function expectInstallersKept(paths: string[]): void {
 describe('preloaded-update (预下载产物元信息 SSOT)', () => {
   let mod: PreloadedUpdateModule
   let originalPlatform: PropertyDescriptor | undefined
+  const ORIG_ARCH = process.arch
   // 记录本用例创建的临时产物文件，afterEach 清理
   const createdFiles: string[] = []
 
@@ -118,6 +119,8 @@ describe('preloaded-update (预下载产物元信息 SSOT)', () => {
     // 桩 platform 为 darwin（readPreloadedUpdate 内 pickPlatformAssetName 读 process.platform）
     originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+    // darwin 用例锁定 arch=arm64（fixture 走 macArm64Dmg 槽位，ADR-0198 arch 感知）
+    Object.defineProperty(process, 'arch', { value: 'arm64', configurable: true })
 
     mod = await loadModule()
     // 每个用例独立：清掉残留的 preloaded-update.json
@@ -128,6 +131,7 @@ describe('preloaded-update (预下载产物元信息 SSOT)', () => {
 
   afterEach(() => {
     if (originalPlatform) Object.defineProperty(process, 'platform', originalPlatform)
+    Object.defineProperty(process, 'arch', { value: ORIG_ARCH, configurable: true })
     // 清理本用例创建的产物文件
     for (const f of createdFiles) {
       if (existsSync(f)) rmSync(f, { force: true })

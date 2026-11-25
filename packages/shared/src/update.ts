@@ -35,6 +35,8 @@ export interface LatestReleaseInfo {
   /** 按平台分流的产物资产（缺失平台为 undefined） */
   assets: {
     macArm64Dmg?: ReleaseAsset
+    /** Intel mac (x64) dmg 槽位（v0.13.1 起 release 双架构发布；x64 自动升级消费此槽位） */
+    macX64Dmg?: ReleaseAsset
     winX64Exe?: ReleaseAsset
     linuxX64AppImage?: ReleaseAsset
   }

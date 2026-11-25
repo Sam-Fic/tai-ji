@@ -6146,6 +6146,26 @@
       "owner": "scripts/",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
       "note": "R3 态（2026-11-24 裁决：不在 GitHub Actions 跑——探测需要可用额度内的 key，且 ~100 次真实请求不适合放进 CI 的固定预算；改为本地/手动执行）。脚本 `scripts/probe-opendesign-catalog.mjs` 保留为手动工具：`OPENDESIGN_API_KEY=... node scripts/probe-opendesign-catalog.mjs` 有差异才写文件。判定语义由纯函数单测零 token 锁定（档位 map 三态 / input 模态映射 / 差异补丁形态）。运行时零探测（ADR-0190）：应用侧只消费 provider-model-metadata 域的 4h 节流拉取。"
+    },
+    {
+      "id": "E2E-INTEG-78",
+      "summary": "main run-state 组：marker 写/清/残留消费 + checkpoint 冷启动可信度隔离 + crash journal 登记（每用例 vi.resetModules() 全量重导 main.ts，一次性模块级 flag 隔离语义；登记为慢用例门禁豁免资产）",
+      "scope": [
+        "apps/electron/main/main.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "apps/electron/main/test/main-run-state.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "pnpm --filter @taiji/electron run test:main test/main-run-state.test.ts",
+      "owner": "apps/electron",
+      "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
+      "note": "R2 态，2026-11-25 登记。默认套件常跑、不挂 TAIJI_TEST_INTEGRATION 门控（全 mock electron，无真进程/真 IO 等待）；豁免慢用例门禁（>2s 红）的理由 = 被测契约要求每用例 vi.resetModules() 重导 main.ts 模块图（before-quit isQuitting 等一次性模块级 flag，见文件头装置说明），模块图重评估成本随宿主负载波动（实测 solo 2.0s / 满载 4.9s），无确定上界、非用例本身慢。serial=真 的理由同（满载下无稳定上界）。"
     }
   ]
 }

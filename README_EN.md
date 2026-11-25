@@ -35,6 +35,11 @@ Mirror repository: [gitcode.com/qq_18433817/tai-ji](https://gitcode.com/qq_18433
 curl -L https://gitcode.com/qq_18433817/tai-ji/releases/download/v0.13.2/TaiJi-0.13.2-mac-arm64.dmg -o /tmp/TaiJi.dmg && open /tmp/TaiJi.dmg
 ```
 
+**macOS (Intel)**
+```bash
+curl -L https://gitcode.com/qq_18433817/tai-ji/releases/download/v0.13.2/TaiJi-0.13.2-mac-x64.dmg -o /tmp/TaiJi.dmg && open /tmp/TaiJi.dmg
+```
+
 **Linux**
 ```bash
 curl -L https://gitcode.com/qq_18433817/tai-ji/releases/download/v0.13.2/TaiJi-0.13.2-x86_64.AppImage -o ~/TaiJi.AppImage && chmod +x ~/TaiJi.AppImage && ~/TaiJi.AppImage
@@ -55,6 +60,11 @@ Repository: [github.com/zhushanwen321/tai-ji](https://github.com/zhushanwen321/t
 **macOS (Apple Silicon)**
 ```bash
 curl -L https://github.com/zhushanwen321/tai-ji/releases/download/v0.13.2/TaiJi-0.13.2-mac-arm64.dmg -o /tmp/TaiJi.dmg && open /tmp/TaiJi.dmg
+```
+
+**macOS (Intel)**
+```bash
+curl -L https://github.com/zhushanwen321/tai-ji/releases/download/v0.13.2/TaiJi-0.13.2-mac-x64.dmg -o /tmp/TaiJi.dmg && open /tmp/TaiJi.dmg
 ```
 
 **Linux**
@@ -80,7 +90,7 @@ Invoke-WebRequest -Uri "https://github.com/zhushanwen321/tai-ji/releases/downloa
 
 <!-- INSTALL:END -->
 
-> **macOS Intel users**: Only Apple Silicon (arm64) DMG is available. Intel Macs are not currently supported.
+> **macOS Intel users**: Intel (x64) DMG available since v0.13.1; in-app auto-update works on Intel Macs since v0.13.3 (existing installs need one manual upgrade to v0.13.3+ first).
 
 ---
 

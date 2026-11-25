@@ -23,10 +23,16 @@ import type { LatestReleaseInfo, ReleaseAsset } from '@taiji/shared'
 import { pickPlatformAsset, pickPlatformAssetName } from '../update/pick-platform-asset.js'
 
 const ORIG_PLATFORM = process.platform
+const ORIG_ARCH = process.arch
 
 /** 临时覆盖 process.platform（只读属性，需 Object.defineProperty）。 */
 function setPlatform(platform: string): void {
   Object.defineProperty(process, 'platform', { value: platform, configurable: true })
+}
+
+/** 临时覆盖 process.arch（mac 资产选择已 arch 感知，ADR-0198；测试需显式锁定）。 */
+function setArch(arch: string): void {
+  Object.defineProperty(process, 'arch', { value: arch, configurable: true })
 }
 
 /** 构造包含全部 3 个平台 asset 的 release fixture。 */
@@ -60,18 +66,33 @@ function makeFullRelease(): LatestReleaseInfo {
   }
 }
 
+/** 构造含 darwin 双架构槽位的 release fixture（ADR-0198）。 */
+function makeFullReleaseWithX64(): LatestReleaseInfo {
+  const release = makeFullRelease()
+  release.assets.macX64Dmg = {
+    name: 'TaiJi-0.10.0-mac-x64.dmg',
+    downloadUrl: 'https://example.com/mac-x64.dmg',
+    size: 1100,
+    sha256: 'd'.repeat(64),
+  }
+  return release
+}
+
 beforeEach(() => {
-  // 默认还原平台，单个用例内自行 setPlatform
+  // 默认还原平台与架构，单个用例内自行 setPlatform / setArch
   setPlatform(ORIG_PLATFORM)
+  setArch(ORIG_ARCH)
 })
 
 afterEach(() => {
   setPlatform(ORIG_PLATFORM)
+  setArch(ORIG_ARCH)
 })
 
 describe('pickPlatformAsset', () => {
-  it('darwin → 返回 macArm64Dmg asset', () => {
+  it('darwin + arm64 → 返回 macArm64Dmg asset', () => {
     setPlatform('darwin')
+    setArch('arm64')
     const asset = pickPlatformAsset(makeFullRelease())
     expect(asset?.name).toBe('TaiJi-0.10.0-mac-arm64.dmg')
     expect(asset?.size).toBe(1000)
@@ -99,6 +120,7 @@ describe('pickPlatformAsset', () => {
 
   it('当前平台 asset 缺失（release 未发布该平台产物）→ 返回 undefined', () => {
     setPlatform('darwin')
+    setArch('arm64')
     const release = makeFullRelease()
     // 删掉 mac 产物，模拟 release 未提供 mac 包
     delete release.assets.macArm64Dmg
@@ -108,9 +130,31 @@ describe('pickPlatformAsset', () => {
 })
 
 describe('pickPlatformAssetName', () => {
-  it('darwin → 返回 macArm64Dmg.name', () => {
+  it('darwin + arm64 → 返回 macArm64Dmg.name', () => {
     setPlatform('darwin')
+    setArch('arm64')
     expect(pickPlatformAssetName(makeFullRelease())).toBe('TaiJi-0.10.0-mac-arm64.dmg')
+  })
+
+  it('darwin + x64 → 返回 macX64Dmg.name（ADR-0198 双架构）', () => {
+    setPlatform('darwin')
+    setArch('x64')
+    expect(pickPlatformAssetName(makeFullReleaseWithX64())).toBe('TaiJi-0.10.0-mac-x64.dmg')
+  })
+
+  it('darwin + x64 且 macX64Dmg 缺失 → 返回 undefined（槽位缺失语义）', () => {
+    setPlatform('darwin')
+    setArch('x64')
+    const release = makeFullRelease()
+    expect(pickPlatformAsset(release)).toBeUndefined()
+  })
+
+  it('darwin + arm64 且仅有 macX64Dmg → 返回 undefined（双槽位互不兜底）', () => {
+    setPlatform('darwin')
+    setArch('arm64')
+    const release = makeFullReleaseWithX64()
+    delete release.assets.macArm64Dmg
+    expect(pickPlatformAsset(release)).toBeUndefined()
   })
 
   it('win32 → 返回 winX64Exe.name', () => {
@@ -137,6 +181,7 @@ describe('pickPlatformAssetName', () => {
 
   it('返回的 name 与 pickPlatformAsset 返回对象的 name 一致', () => {
     setPlatform('darwin')
+    setArch('arm64')
     const release = makeFullRelease()
     const asset: ReleaseAsset | undefined = pickPlatformAsset(release)
     const name: string | undefined = pickPlatformAssetName(release)
