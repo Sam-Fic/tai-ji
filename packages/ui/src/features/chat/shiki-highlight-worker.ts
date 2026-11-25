@@ -18,6 +18,11 @@
  *   回传，主线程对已取消 id 忽略（客户端pending 表已删）。这是同步 API 的物理边界，
  *   登记为设计已知限制（docs/tp-design-batch3.md 非功能节）。
  * - **无任何墙钟**：不设超时/判死（ADR-0190）；失败只抛 jobError 由主线程降级。
+ * - **init 失败 = worker 拒绝态**：highlighter 惰性初始化若异步失败（构造成功但 init
+ *   抛错），队列全部 job 逐个 jobError（主线程逐 job 同步回退），后续到达的 jobs 亦
+ *   立即 jobError、不重试 init——无 catch 时 rejection 抛出 pump → void pump() =
+ *   unhandled rejection，主线程 error/messageerror 事件均不触发，pending 永不
+ *   settle → renderMarkdown 挂死（分支审查 dmg-r1-2）。
  * - **成本出声**：init 与每 job 耗时经 log 消息回主线程 console，进验收对比表
  *   （worker 侧成本登记，G5）。
  */
@@ -36,8 +41,13 @@ const post = (msg: HighlightWorkerOutbound): void => ctx.postMessage(msg)
 
 let hl: HighlighterCore | null = null
 let starting: Promise<HighlighterCore> | null = null
+/** init 异步失败后的 worker 拒绝态：null = 未失败；非空 = 失败 message（后续 jobs 立即逐 job jobError，不重试 init） */
+let initFailed: string | null = null
 /** 已取消但尚未处理的 job id（处理时删除；运行中的 job 取消由主线程侧忽略结果） */
+// taste:allow-no-data-owner W24-EX-C（非 GUI 数据技术结构，已登记 §4 ⑧ 2026-11-26）：worker 内取消跳过集合
 const cancelled = new Set<number>()
+/** 迟到取消残留条目的封顶：超限整体清空（无正确性影响，说明见 onmessage cancel 分支注释） */
+const CANCELLED_SET_CLEAR_THRESHOLD = 256
 const queue: HighlightJob[] = []
 let pumping = false
 
@@ -47,7 +57,7 @@ ctx.onmessage = (event) => {
     for (const id of msg.ids) cancelled.add(id)
     // 取消集合封顶保护：运行中 job 的迟到取消会残留条目（主线程已忽略其结果），
     // 超限即清空——最坏后果是某个已取消 job 白跑一次，结果被主线程丢弃，无正确性影响。
-    if (cancelled.size > 256) cancelled.clear()
+    if (cancelled.size > CANCELLED_SET_CLEAR_THRESHOLD) cancelled.clear()
     return
   }
   if (msg.type === 'jobs') {
@@ -61,9 +71,24 @@ async function pump(): Promise<void> {
   if (pumping) return
   pumping = true
   try {
+    if (hl === null && initFailed !== null) {
+      failQueuedJobs(initFailed)
+      return
+    }
     if (hl === null) {
       const t0 = performance.now()
-      hl = await (starting ??= createShikiHighlighter())
+      try {
+        hl = await (starting ??= createShikiHighlighter())
+      } catch (err) {
+        // init 异步失败：复位 starting（释放 rejected promise）+ 进入拒绝态（不重试 init，
+        // 防 rejected promise 反复抛出），队列全部 job 逐个 jobError——复用既有协议，
+        // 客户端逐 job settle null → 主线程同步回退，零新增状态机。
+        starting = null
+        initFailed = err instanceof Error ? err.message : String(err)
+        post({ type: 'log', level: 'error', msg: `highlighter init failed: ${initFailed}` })
+        failQueuedJobs(initFailed)
+        return
+      }
       post({ type: 'log', level: 'log', msg: `highlighter init ${Math.round(performance.now() - t0)}ms` })
     }
     while (queue.length > 0) {
@@ -80,5 +105,15 @@ async function pump(): Promise<void> {
     }
   } finally {
     pumping = false
+  }
+}
+
+/** init 失败的队列排空：未取消 job 逐个 jobError（取消的照常丢弃，主线程已忽略其结果） */
+function failQueuedJobs(message: string): void {
+  while (queue.length > 0) {
+    const job = queue.shift()
+    if (job === undefined) break
+    if (cancelled.delete(job.id)) continue
+    post({ type: 'jobError', id: job.id, message })
   }
 }

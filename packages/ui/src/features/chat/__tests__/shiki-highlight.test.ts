@@ -368,6 +368,41 @@ describe('shiki-highlight-worker 协议', () => {
     const err = posted.find((m: unknown) => (m as { type: string }).type === 'jobError')
     expect(err).toEqual({ type: 'jobError', id: 1, message: 'boom' })
   })
+
+  it('init rejection：队列全部 jobError 回传（不挂死、不重试 init、后续批次立即 jobError）', async () => {
+    vi.resetModules()
+    const createSpy = vi.fn(() => Promise.reject(new Error('init boom')))
+    vi.doMock('../shiki-highlight-core', () => ({
+      createShikiHighlighter: createSpy,
+      highlightWithHighlighter: vi.fn((_hl, code) => `HL:${code}`),
+    }))
+    const posted: unknown[] = []
+    const selfObj = globalThis.self as unknown as { postMessage: (m: unknown) => void; onmessage: ((e: { data: unknown }) => void) | null }
+    selfObj.postMessage = (m) => posted.push(m)
+    await import('../shiki-highlight-worker')
+    const emit = (data: unknown) => selfObj.onmessage?.({ data })
+
+    emit({ type: 'jobs', jobs: [{ id: 1, code: 'a', lang: 'ts' }, { id: 2, code: 'b', lang: 'ts' }] })
+    await vi.waitFor(() => expect(posted.filter((m) => (m as { type: string }).type === 'jobError')).toHaveLength(2))
+    // 队列全部 jobError：客户端逐 job settle null → 主线程同步回退（pending 必 settle，renderMarkdown 不挂死）
+    expect(posted.filter((m) => (m as { type: string }).type === 'jobError')).toEqual([
+      { type: 'jobError', id: 1, message: 'init boom' },
+      { type: 'jobError', id: 2, message: 'init boom' },
+    ])
+    // 出声：log error 一条（不静默吞错）
+    expect(posted.some((m) => {
+      const msg = m as { type: string; level: string; msg: string }
+      return msg.type === 'log' && msg.level === 'error' && /init failed/.test(msg.msg)
+    })).toBe(true)
+    // worker 拒绝态：init 只尝试一次，后续批次不再重试 init、立即逐 job jobError（队列不挂死）
+    expect(createSpy).toHaveBeenCalledTimes(1)
+    emit({ type: 'jobs', jobs: [{ id: 3, code: 'c', lang: 'ts' }] })
+    await vi.waitFor(() => {
+      expect(posted.some((m) => (m as { type: string; id: number }).type === 'jobError' && (m as { id: number }).id === 3)).toBe(true)
+    })
+    expect(posted.filter((m) => (m as { type: string }).type === 'jobError')).toHaveLength(3)
+    expect(createSpy).toHaveBeenCalledTimes(1)
+  })
 })
 
 // ── 页面隐藏 → 取消全部在途（生命周期）────────────────────────────────────────
