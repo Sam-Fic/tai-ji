@@ -114,57 +114,68 @@ export async function createProtocol(options) {
     if (events.length > MAX_EVENTS) events.splice(0, events.length - MAX_EVENTS)
   }
 
-  function onMessage(raw) {
-    let frame
+  /** 解析 WS 帧文本/二进制 → 对象；非 JSON / 非对象 = null（忽略）。 */
+  function parseFrame(raw) {
     try {
-      frame = JSON.parse(typeof raw === 'string' ? raw : Buffer.from(raw).toString('utf8'))
+      const frame = JSON.parse(typeof raw === 'string' ? raw : Buffer.from(raw).toString('utf8'))
+      return frame && typeof frame === 'object' ? frame : null
     } catch {
-      return // 非 JSON 帧（理论上不存在）忽略
+      return null // 非 JSON 帧（理论上不存在）忽略
     }
-    if (!frame || typeof frame !== 'object') return
-    if (frame.type === 'auth.result') return // 握手由 open 阶段消费
-    if (frame.id !== undefined && frame.id !== null) {
-      const p = pending.get(frame.id)
-      if (!p) {
-        // 带 id 但不匹配任何在途 RPC = 服务端 push 帧：state topic（session.delivery /
-        // session.occupancy 等）与 broadcast 用 message-broker nextPushId() 的 `push_<n>` id，
-        // 区别于 RPC reply 的配对 id（lib RPC id = `rpc-*`、keepalive = `ka-*`，无碰撞）。
-        // 按广播帧入 events，否则状态帧被当「无关 reply」静默丢弃、waitFor 永远观测不到
-        // （2026-10-24 p1-queue-inline-edit 首跑实测：session.delivery 全部被丢）。
-        if (frame.type === 'error') return // 无匹配在途 RPC 的 error envelope 无从归因，不入 events
-        pushEvent(frame)
-        notifyFrame()
-        return
-      }
-      pending.delete(frame.id)
-      clearTimeout(p.timer)
-      if (frame.type === 'error') {
-        const payload = frame.payload ?? {}
-        p.reject(
-          new ProtocolError(`RPC ${p.type} 返回错误: ${payload.code ?? 'error'} — ${payload.message ?? ''}`, {
-            code: payload.code,
-            hint: '看 <dataDir>/logs/runtime-*.log 对应时间点；协议错误码见 buildError 表',
-            evidence: { requestType: p.type, expectedReplyType: p.replyType, errorPayload: payload },
-          }),
-        )
-      } else {
-        // id 是权威匹配键；reply 类型用于诊断（异名映射见 REPLY_TYPES）。
-        // __type 用不可枚举属性挂载：JSON.stringify / spread 不会把它当 payload 字段回传。
-        const out = { ...(frame.payload ?? {}) }
-        Object.defineProperty(out, '__type', { value: frame.type, enumerable: false, configurable: true })
-        p.resolve(out)
-      }
-      return
-    }
-    // 无 id = 广播帧
-    if (frame.type === 'error') {
-      pushEvent(frame)
-      return
-    }
+  }
+
+  /**
+   * 带 id 但不匹配任何在途 RPC = 服务端 push 帧：state topic（session.delivery /
+   * session.occupancy 等）与 broadcast 用 message-broker nextPushId() 的 `push_<n>` id，
+   * 区别于 RPC reply 的配对 id（lib RPC id = `rpc-*`、keepalive = `ka-*`，无碰撞）。
+   * 按广播帧入 events，否则状态帧被当「无关 reply」静默丢弃、waitFor 永远观测不到
+   * （2026-10-24 p1-queue-inline-edit 首跑实测：session.delivery 全部被丢）。
+   */
+  function handleUnmatchedIdFrame(frame) {
+    if (frame.type === 'error') return // 无匹配在途 RPC 的 error envelope 无从归因，不入 events
     pushEvent(frame)
     notifyFrame()
   }
 
+  /** RPC reply 分发：error envelope reject（带协议错误码），其余 resolve（__type 挂诊断类型）。 */
+  function settlePending(p, frame) {
+    pending.delete(frame.id)
+    clearTimeout(p.timer)
+    if (frame.type === 'error') {
+      const payload = frame.payload ?? {}
+      p.reject(
+        new ProtocolError(`RPC ${p.type} 返回错误: ${payload.code ?? 'error'} — ${payload.message ?? ''}`, {
+          code: payload.code,
+          hint: '看 <dataDir>/logs/runtime-*.log 对应时间点；协议错误码见 buildError 表',
+          evidence: { requestType: p.type, expectedReplyType: p.replyType, errorPayload: payload },
+        }),
+      )
+      return
+    }
+    // id 是权威匹配键；reply 类型用于诊断（异名映射见 REPLY_TYPES）。
+    // __type 用不可枚举属性挂载：JSON.stringify / spread 不会把它当 payload 字段回传。
+    const out = { ...(frame.payload ?? {}) }
+    Object.defineProperty(out, '__type', { value: frame.type, enumerable: false, configurable: true })
+    p.resolve(out)
+  }
+
+  function onMessage(raw) {
+    const frame = parseFrame(raw)
+    if (!frame) return
+    if (frame.type === 'auth.result') return // 握手由 open 阶段消费
+    if (frame.id !== undefined && frame.id !== null) {
+      const p = pending.get(frame.id)
+      if (!p) {
+        handleUnmatchedIdFrame(frame)
+        return
+      }
+      settlePending(p, frame)
+      return
+    }
+    // 无 id = 广播帧（error envelope 只入 events 不唤醒——与有 id 无匹配路径同语义）
+    pushEvent(frame)
+    if (frame.type !== 'error') notifyFrame()
+  }
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(

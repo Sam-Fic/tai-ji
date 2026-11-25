@@ -33,6 +33,67 @@ export function createEvidence({ runDir, feature, meta = {} } = {}) {
       .slice(0, 120)
   }
 
+  /** markdown 表格单元格：字符串化 + 管道符转义 + 截断。 */
+  function mdCell(v, max = 400) {
+    if (v === undefined) return ''
+    return String(typeof v === 'string' ? v : JSON.stringify(v)).replace(/\|/g, '\\|').slice(0, max)
+  }
+
+  /** report 头部：标题 + 生成时间 + 证据目录 + meta。 */
+  function reportHeaderLines(title) {
+    const lines = [`# ${title ?? feature ?? 'verify-taiji run'}`, '']
+    lines.push(`- 生成时间：${new Date().toISOString()}`)
+    lines.push(`- 证据目录：\`${dir}\``)
+    if (meta && Object.keys(meta).length > 0) {
+      lines.push(`- meta：\`${JSON.stringify(meta)}\``)
+    }
+    lines.push('')
+    return lines
+  }
+
+  /** report 步骤表（summary.jsonl 内存副本）。 */
+  function reportStepsLines(reportSteps) {
+    const lines = ['## 步骤（summary.jsonl）', '', '| # | step | channel | exitCode | 备注 |', '|---|------|---------|----------|------|']
+    const allSteps = reportSteps ?? steps
+    allSteps.forEach((s, i) => {
+      const note = s.stats ? JSON.stringify(s.stats).slice(0, 220) : s.command ? String(s.command).slice(0, 120) : ''
+      lines.push(`| ${i + 1} | ${s.step ?? ''} | ${s.channel ?? ''} | ${s.exitCode ?? ''} | ${mdCell(note, 220)} |`)
+    })
+    return lines
+  }
+
+  /** report 断言表（期望 vs 实际）。 */
+  function reportAssertionsLines() {
+    const lines = ['## 断言（期望 vs 实际）', '']
+    if (assertions.length === 0) return [...lines, '（无断言记录）']
+    lines.push('| 结果 | 断言 | 通道 | 期望 | 实际 |')
+    lines.push('|------|------|------|------|------|')
+    for (const a of assertions) {
+      lines.push(`| ${a.ok ? 'PASS' : 'FAIL'} | ${a.name} | ${a.channel ?? ''} | ${mdCell(a.expected)} | ${mdCell(a.actual)} |`)
+    }
+    return lines
+  }
+
+  /** report 清单节：条目为空输出占位（（无）），逐条 bullet。 */
+  function reportListLines(heading, items) {
+    const lines = [`## ${heading}`, '']
+    if (items.length === 0) lines.push('（无）')
+    else for (const item of items) lines.push(`- ${item}`)
+    lines.push('')
+    return lines
+  }
+
+  /** report 附件清单（目录实况；排除 report.md 自身）。 */
+  function reportAttachmentLines() {
+    const lines = ['## 附件', '']
+    for (const f of fs.readdirSync(dir).sort()) {
+      const st = fs.statSync(path.join(dir, f))
+      if (st.isFile() && f !== 'report.md') lines.push(`- \`${f}\`（${st.size} B）`)
+    }
+    lines.push('')
+    return lines
+  }
+
   const ev = {
     runDir: dir,
     feature,
@@ -111,63 +172,23 @@ export function createEvidence({ runDir, feature, meta = {} } = {}) {
 
     /** 人读报告：期望 vs 实际 + 运行中新增未决项 + 坑。 */
     report({ title, steps: reportSteps, uncovered = [], gotchas = [], summary } = {}) {
-      const lines = []
-      lines.push(`# ${title ?? feature ?? 'verify-taiji run'}`)
-      lines.push('')
-      lines.push(`- 生成时间：${new Date().toISOString()}`)
-      lines.push(`- 证据目录：\`${dir}\``)
-      if (meta && Object.keys(meta).length > 0) {
-        lines.push(`- meta：\`${JSON.stringify(meta)}\``)
-      }
-      lines.push('')
-      lines.push('## 结论')
-      lines.push('')
-      lines.push(`- 断言：${assertions.length - assertionFailures}/${assertions.length} 通过`)
-      lines.push(`- evidence.ok：${ok}`)
-      if (summary) lines.push('')
-      if (summary) lines.push(summary)
-      lines.push('')
-      lines.push('## 步骤（summary.jsonl）')
-      lines.push('')
-      lines.push('| # | step | channel | exitCode | 备注 |')
-      lines.push('|---|------|---------|----------|------|')
-      const allSteps = reportSteps ?? steps
-      allSteps.forEach((s, i) => {
-        const note = s.stats ? JSON.stringify(s.stats).slice(0, 220) : s.command ? String(s.command).slice(0, 120) : ''
-        lines.push(`| ${i + 1} | ${s.step ?? ''} | ${s.channel ?? ''} | ${s.exitCode ?? ''} | ${note.replace(/\|/g, '\\|')} |`)
-      })
-      lines.push('')
-      lines.push('## 断言（期望 vs 实际）')
-      lines.push('')
-      if (assertions.length === 0) {
-        lines.push('（无断言记录）')
-      } else {
-        lines.push('| 结果 | 断言 | 通道 | 期望 | 实际 |')
-        lines.push('|------|------|------|------|------|')
-        for (const a of assertions) {
-          const cell = (v) => (v === undefined ? '' : String(typeof v === 'string' ? v : JSON.stringify(v)).replace(/\|/g, '\\|').slice(0, 400))
-          lines.push(`| ${a.ok ? 'PASS' : 'FAIL'} | ${a.name} | ${a.channel ?? ''} | ${cell(a.expected)} | ${cell(a.actual)} |`)
-        }
-      }
-      lines.push('')
-      // 「运行中新增未决项」：指 run 过程中新发现的不确定项，与覆盖矩阵的「未覆盖」（能力面未验清单）同词不同义，刻意区分
-      lines.push('## 运行中新增未决项')
-      lines.push('')
-      if (uncovered.length === 0) lines.push('（无）')
-      else for (const u of uncovered) lines.push(`- ${u}`)
-      lines.push('')
-      lines.push('## 坑 / Gotchas')
-      lines.push('')
-      if (gotchas.length === 0) lines.push('（无）')
-      else for (const g of gotchas) lines.push(`- ${g}`)
-      lines.push('')
-      lines.push('## 附件')
-      lines.push('')
-      for (const f of fs.readdirSync(dir).sort()) {
-        const st = fs.statSync(path.join(dir, f))
-        if (st.isFile() && f !== 'report.md') lines.push(`- \`${f}\`（${st.size} B）`)
-      }
-      lines.push('')
+      const lines = [
+        ...reportHeaderLines(title),
+        '## 结论',
+        '',
+        `- 断言：${assertions.length - assertionFailures}/${assertions.length} 通过`,
+        `- evidence.ok：${ok}`,
+        ...(summary ? ['', summary] : []),
+        '',
+        ...reportStepsLines(reportSteps),
+        '',
+        ...reportAssertionsLines(),
+        '',
+        // 「运行中新增未决项」：指 run 过程中新发现的不确定项，与覆盖矩阵的「未覆盖」（能力面未验清单）同词不同义，刻意区分
+        ...reportListLines('运行中新增未决项', uncovered),
+        ...reportListLines('坑 / Gotchas', gotchas),
+        ...reportAttachmentLines(),
+      ]
       const file = path.join(dir, 'report.md')
       fs.writeFileSync(file, lines.join('\n'), 'utf8')
       return file

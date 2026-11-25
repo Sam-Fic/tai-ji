@@ -268,6 +268,73 @@ export function resolvedExtensionCount(dataDir) {
  * 创建一个实例句柄（不启动）。
  * @see API-CONTRACT §1.1
  */
+/** 读 JSON 文件，不存在 / 坏 JSON / 非对象 → fallback（验收实例不承担配置迁移职责）。 */
+function readJsonObjectOr(jsonPath, fallback) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(jsonPath, 'utf8'))
+    return parsed && typeof parsed === 'object' ? parsed : fallback
+  } catch {
+    return fallback
+  }
+}
+
+/**
+ * 写 models.json：只覆写本 provider（模板里用户自己的 provider 保留不动）。
+ *
+ * schema = `packages/runtime/src/infra/pi/pi-provider-store.ts` 的 `PiProviderConfig`：
+ * provider 级 name/baseUrl/apiKey/api/models[]，模型级 id/name/api/baseUrl/reasoning/
+ * input/contextWindow/maxTokens；apiKey 用**字面量**（pi 的 resolve-config-value 把 `$VAR`
+ * 当 env 模板、`!cmd` 当命令，纯字面量才是静态 key）。
+ */
+function writeModelsJson(agentDir, { providerId, baseUrl, actors }) {
+  const modelsPath = path.join(agentDir, 'models.json')
+  const models = readJsonObjectOr(modelsPath, { providers: {} })
+  if (!models.providers || typeof models.providers !== 'object') models.providers = {}
+  models.providers[providerId] = {
+    name: 'Mock LLM (verify-taiji local mock-http)',
+    api: 'openai-completions',
+    baseUrl,
+    apiKey: 'mock-key-not-needed',
+    models: actors.map((id) => ({
+      id,
+      name: id,
+      reasoning: false,
+      input: ['text'],
+      contextWindow: 128_000,
+      maxTokens: 16_384,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    })),
+  }
+  fs.writeFileSync(modelsPath, `${JSON.stringify(models, null, 2)}\n`)
+}
+
+/** 写 settings.json：defaultProvider/defaultModel + enabledModels + 关重试（剧本耗尽变慢速重放）。 */
+function writeSettingsJson(agentDir, { providerId, mainModel, actors }) {
+  const settingsPath = path.join(agentDir, 'settings.json')
+  const settings = readJsonObjectOr(settingsPath, {})
+  settings.defaultProvider = providerId
+  settings.defaultModel = mainModel
+  const enabled = new Set(Array.isArray(settings.enabledModels) ? settings.enabledModels : [])
+  for (const id of actors) enabled.add(`${providerId}/${id}`)
+  settings.enabledModels = [...enabled]
+  settings.retry = { ...(settings.retry ?? {}), enabled: false }
+  fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`)
+}
+
+/**
+ * 写 subagents/config.json：engineDefaults.pi = 孙进程缺省模型（不依赖派发参数）。
+ *
+ * engineDefaults 源 = `packages/subagent-core/src/execution/assembly/types.ts` 的
+ * `SubagentsGlobalConfig.engineDefaults`（无 per-engine defaultModel 字段）。
+ */
+function writeSubagentsConfig(agentDir, { providerId, subModel }) {
+  const subagentsPath = path.join(agentDir, 'subagents', 'config.json')
+  const subCfg = readJsonObjectOr(subagentsPath, {})
+  subCfg.defaultEngine = subCfg.defaultEngine ?? 'pi'
+  subCfg.engineDefaults = { ...(subCfg.engineDefaults ?? {}), pi: `${providerId}/${subModel}` }
+  fs.writeFileSync(subagentsPath, `${JSON.stringify(subCfg, null, 2)}\n`)
+}
+
 export function createInstance(options = {}) {
   const repo = resolveRepo(options.repo)
   const explicitDataDir = options.dataDir ? path.resolve(options.dataDir) : undefined
@@ -372,16 +439,8 @@ export function createInstance(options = {}) {
   /**
    * llm（mock-http）通道装配：起 mock server → 写 models.json / settings.json /
    * subagents/config.json → 删 auto-rename 标志。返回拓扑供探针断言。
-   *
-   * 关键事实（源码核对，勿凭示例硬写）：
-   * - models.json schema = `packages/runtime/src/infra/pi/pi-provider-store.ts` 的
-   *   `PiProviderConfig`：provider 级 name/baseUrl/apiKey/api/models[]，模型级
-   *   id/name/api/baseUrl/reasoning/input/contextWindow/maxTokens；
-   * - apiKey 用**字面量**（pi 的 resolve-config-value 把 `$VAR` 当 env 模板、`!cmd` 当命令，
-   *   纯字面量才是静态 key）；
-   * - 孙进程模型默认走 `<agentDir>/subagents/config.json` 的 `engineDefaults.pi`
-   *   （`packages/subagent-core/src/execution/assembly/types.ts` 的
-   *   `SubagentsGlobalConfig.engineDefaults`，无 per-engine defaultModel 字段）。
+   * 三个写盘步骤的 schema 事实清单见 writeModelsJson / writeSettingsJson /
+   * writeSubagentsConfig 各自头注释（apiKey 字面量 / engineDefaults.pi 等）。
    */
   async function ensureLlm(dir) {
     if (!llm) return
@@ -410,69 +469,136 @@ export function createInstance(options = {}) {
 
     const agentDir = path.join(dir, 'agent')
     fs.mkdirSync(path.join(agentDir, 'subagents'), { recursive: true })
-    // 1) models.json：只写本 provider（模板里用户自己的 provider 保留不动）
-    const modelsPath = path.join(agentDir, 'models.json')
-    let models = { providers: {} }
-    try {
-      const parsed = JSON.parse(fs.readFileSync(modelsPath, 'utf8'))
-      if (parsed && typeof parsed === 'object' && parsed.providers && typeof parsed.providers === 'object') {
-        models = parsed
-      }
-    } catch {
-      /* 不存在 / 坏 JSON：以最小骨架起（验收实例不承担配置迁移职责） */
-    }
-    models.providers[providerId] = {
-      name: 'Mock LLM (verify-taiji local mock-http)',
-      api: 'openai-completions',
-      baseUrl: mockLlm.baseUrl,
-      apiKey: 'mock-key-not-needed',
-      models: actors.map((id) => ({
-        id,
-        name: id,
-        reasoning: false,
-        input: ['text'],
-        contextWindow: 128_000,
-        maxTokens: 16_384,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      })),
-    }
-    fs.writeFileSync(modelsPath, `${JSON.stringify(models, null, 2)}\n`)
-
-    // 2) settings.json：defaultProvider/defaultModel + enabledModels（pi 的 model scope）
-    const settingsPath = path.join(agentDir, 'settings.json')
-    let settings = {}
-    try {
-      const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
-      if (parsed && typeof parsed === 'object') settings = parsed
-    } catch {
-      /* 模板种子理论上已写入；缺失时以空对象起 */
-    }
-    settings.defaultProvider = providerId
-    settings.defaultModel = mainModel
-    const enabled = new Set(Array.isArray(settings.enabledModels) ? settings.enabledModels : [])
-    for (const id of actors) enabled.add(`${providerId}/${id}`)
-    settings.enabledModels = [...enabled]
-    // 重试会让「剧本耗尽」变成慢速重放，验收实例显式关掉
-    settings.retry = { ...(settings.retry ?? {}), enabled: false }
-    fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`)
-
-    // 3) subagents/config.json：engineDefaults.pi = 孙进程缺省模型（pi 引擎无 config 时
-    //    会继承主 agent 模型；显式写死让「子演员」与主 agent 区分开，且不依赖派发参数）
-    const subagentsPath = path.join(agentDir, 'subagents', 'config.json')
-    let subCfg = {}
-    try {
-      const parsed = JSON.parse(fs.readFileSync(subagentsPath, 'utf8'))
-      if (parsed && typeof parsed === 'object') subCfg = parsed
-    } catch {
-      /* 无文件：以最小骨架起 */
-    }
-    subCfg.defaultEngine = subCfg.defaultEngine ?? 'pi'
-    subCfg.engineDefaults = { ...(subCfg.engineDefaults ?? {}), pi: `${providerId}/${subModel}` }
-    fs.writeFileSync(subagentsPath, `${JSON.stringify(subCfg, null, 2)}\n`)
-
-    // 4) auto-rename 关掉（标题生成会经 llm-shared 打 mock，消耗剧本 step 并污染断言）
+    writeModelsJson(agentDir, { providerId, baseUrl: mockLlm.baseUrl, actors })
+    writeSettingsJson(agentDir, { providerId, mainModel, actors })
+    writeSubagentsConfig(agentDir, { providerId, subModel })
+    // auto-rename 关掉（标题生成会经 llm-shared 打 mock，消耗剧本 step 并污染断言）
     disarmAutoRename(agentDir)
     return llmTopology
+  }
+
+  /** 实例元数据（验收辅助信息，非产品数据）：让只拿到 --data-dir 的调用方（vp.mjs / 人工复检）能还原实例名 → 端口派生与 doctor 判定同源。 */
+  function writeInstanceMeta(dir) {
+    try {
+      fs.writeFileSync(
+        path.join(dir, 'verify-instance.json'),
+        `${JSON.stringify(
+          {
+            instanceName,
+            repo,
+            vitePort: parsed?.vitePort ?? 0,
+            cdpPort: parsed?.cdpPort ?? 0,
+            runtimePortRange: parsed?.runtimePortRange ?? null,
+            pid,
+            launchedAt: new Date().toISOString(),
+          },
+          null,
+          2,
+        )}\n`,
+        'utf8',
+      )
+    } catch {
+      /* 元数据写失败不阻塞启动 */
+    }
+  }
+
+  /**
+   * launch 前数据目录装配。
+   * - llm 通道：--print 完成模板种子（models.json / settings.json 骨架来自模板）后起 mock，
+   *   合并式覆写本 provider 相关字段——顺序与 faux 相反，因为 mock-http 装配是「合并式」
+   *   而非「整文件预置」；
+   * - faux 通道：seed 预置必须先于 --print（--print 从只读模板种子实例目录，seed-faux 遇
+   *   已存在 settings.json 会拒绝覆盖，seed 先写则模板种子不覆盖已有文件）；disarm 放
+   *   --print 之后兜底（无论模板种子写了什么开关状态）。
+   */
+  async function prepareDataDir(dir) {
+    if (llm) {
+      const printed = printInstance({ repo, name: instanceName, dataDir: dir })
+      parsed = printed
+      await ensureLlm(dir)
+      return
+    }
+    ensureFaux(dir)
+    const printed = printInstance({ repo, name: instanceName, dataDir: dir })
+    parsed = printed
+    if (faux) {
+      disarmAutoRename(path.join(dir, 'agent'))
+    }
+  }
+
+  /** detached spawn 实例子进程 + exit/error 监听 + 日志 fd 收尾（写 pid / logFile / exitInfo）。 */
+  function spawnInstance(dir) {
+    logFile = path.join(dir, 'verify-launch.log')
+    const fd = fs.openSync(logFile, 'a')
+    const args = ['apps/electron/scripts/dev-instance.mjs', '--data-dir', dir, '--name', instanceName]
+    let child
+    try {
+      child = spawn(process.execPath, args, {
+        cwd: repo,
+        detached: true,
+        stdio: ['ignore', fd, fd],
+        env: buildLaunchEnv(dir, instanceName),
+      })
+    } catch (e) {
+      fs.closeSync(fd)
+      throw new InstanceError(`实例 spawn 失败: ${e instanceof Error ? e.message : String(e)}`, {
+        hint: '检查 node 可执行与 worktree 权限',
+        evidence: { args, logFile },
+      })
+    }
+    fs.closeSync(fd)
+    pid = child.pid ?? null
+    child.once('exit', (code, signal) => {
+      exitInfo = { code, signal, at: Date.now() }
+    })
+    child.once('error', (e) => {
+      exitInfo = { error: e instanceof Error ? e.message : String(e), at: Date.now() }
+    })
+    child.unref()
+  }
+
+  /** 关闭本实例的 mock-http 服务（生命周期与实例绑定；幂等，已关 = no-op）。 */
+  async function closeMockLlm() {
+    if (!mockLlm) return
+    try {
+      await mockLlm.close()
+    } catch {
+      /* 关闭失败不阻断 stop */
+    }
+    mockLlm = null
+  }
+
+  /** SIGTERM 自己起的 PID（ESRCH = 已死放行；其余失败 fail-visible，禁 pkill 宽匹配）。 */
+  function signalInstance(ports) {
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch (e) {
+      if (e?.code !== 'ESRCH') {
+        throw new InstanceError(`kill ${pid} 失败: ${e instanceof Error ? e.message : String(e)}`, {
+          hint: '按 PID 手工核对后处置（禁 pkill 宽匹配）',
+          evidence: { pid, ports },
+        })
+      }
+    }
+  }
+
+  /** 等端口释放 + 进程退出；超时返回残留明细（逐端口 PID + 存活 PID）。 */
+  async function awaitPortsFreed(ports, timeoutMs) {
+    const freed = await pollUntil(
+      async () => {
+        const portsFree = ports.every((p) => portOwners(p).length === 0)
+        const exited = exitInfo !== null || !isAlive(pid)
+        return portsFree && exited
+      },
+      { timeoutMs, intervalMs: 400 },
+    )
+    if (freed) return null
+    const residual = ports
+      .map((p) => ({ port: p, pids: portOwners(p) }))
+      .filter((x) => x.pids.length > 0)
+      .map((x) => `:${x.port} → PID ${x.pids.join(',')}`)
+    if (isAlive(pid)) residual.push(`PID ${pid} 仍存活（SIGTERM 未生效）`)
+    return residual
   }
 
   const api = {
@@ -514,76 +640,10 @@ export function createInstance(options = {}) {
         parsed = { ...(parsed ?? {}), dataDir: explicitDataDir }
       }
       const dir = dataDir()
-      if (llm) {
-        // llm 通道：先让 --print 完成模板种子（models.json / settings.json 骨架来自模板，
-        // 我们只在骨架之上覆写本 provider 相关字段），再起 mock 并写盘。
-        // 顺序与 faux 相反，是因为 mock-http 装配是「合并式」而非「整文件预置」。
-        const printed = printInstance({ repo, name: instanceName, dataDir: dir })
-        parsed = printed
-        await ensureLlm(dir)
-      } else {
-        // 1) faux 预置必须先于 --print：--print 会从只读模板种子实例目录（settings.json 等），
-        //    seed-faux 遇已存在的 settings.json 会拒绝覆盖。seed 先写，模板种子不覆盖已有文件。
-        ensureFaux(dir)
-        // 2) --print 拿权威端口（同时完成模板种子，幂等副作用）
-        const printed = printInstance({ repo, name: instanceName, dataDir: dir })
-        parsed = printed
-        if (faux) {
-          // 放在 --print 之后：无论模板种子写了什么开关状态，disarm 最后执行兜底
-          disarmAutoRename(path.join(dir, 'agent'))
-        }
-      }
+      await prepareDataDir(dir)
       fs.mkdirSync(dir, { recursive: true })
-      logFile = path.join(dir, 'verify-launch.log')
-      const fd = fs.openSync(logFile, 'a')
-      const args = ['apps/electron/scripts/dev-instance.mjs', '--data-dir', dir, '--name', instanceName]
-      let child
-      try {
-        child = spawn(process.execPath, args, {
-          cwd: repo,
-          detached: true,
-          stdio: ['ignore', fd, fd],
-          env: buildLaunchEnv(dir, instanceName),
-        })
-      } catch (e) {
-        fs.closeSync(fd)
-        throw new InstanceError(`实例 spawn 失败: ${e instanceof Error ? e.message : String(e)}`, {
-          hint: '检查 node 可执行与 worktree 权限',
-          evidence: { args, logFile },
-        })
-      }
-      fs.closeSync(fd)
-      pid = child.pid ?? null
-      child.once('exit', (code, signal) => {
-        exitInfo = { code, signal, at: Date.now() }
-      })
-      child.once('error', (e) => {
-        exitInfo = { error: e instanceof Error ? e.message : String(e), at: Date.now() }
-      })
-      child.unref()
-      // 实例元数据（验收辅助信息，非产品数据）：让只拿到 --data-dir 的调用方
-      // （vp.mjs / 人工复检）能还原实例名 → 端口派生与 doctor 判定同源。
-      try {
-        fs.writeFileSync(
-          path.join(dir, 'verify-instance.json'),
-          `${JSON.stringify(
-            {
-              instanceName,
-              repo,
-              vitePort: parsed?.vitePort ?? 0,
-              cdpPort: parsed?.cdpPort ?? 0,
-              runtimePortRange: parsed?.runtimePortRange ?? null,
-              pid,
-              launchedAt: new Date().toISOString(),
-            },
-            null,
-            2,
-          )}\n`,
-          'utf8',
-        )
-      } catch {
-        /* 元数据写失败不阻塞启动 */
-      }
+      spawnInstance(dir)
+      writeInstanceMeta(dir)
       state = 'launched'
       return api.info()
     },
@@ -770,44 +830,16 @@ export function createInstance(options = {}) {
       const runtimePort = readRuntimePort(dir)
       const ports = [parsed?.vitePort, parsed?.cdpPort, runtimePort].filter((p) => p > 0)
       // mock server 属于本实例的生命周期：stop 也要关（否则调用方只 stop 不 dispose 时
-      // 会留一个 listen 中的 HTTP server 吊住进程）；幂等（已关 = no-op）。
-      if (mockLlm) {
-        try {
-          await mockLlm.close()
-        } catch {
-          /* 关闭失败不阻断 stop */
-        }
-        mockLlm = null
-      }
+      // 会留一个 listen 中的 HTTP server 吊住进程）
+      await closeMockLlm()
       if (pid === null) {
         state = 'stopped'
         await releaseClients()
         return
       }
-      try {
-        process.kill(pid, 'SIGTERM')
-      } catch (e) {
-        if (e?.code !== 'ESRCH') {
-          throw new InstanceError(`kill ${pid} 失败: ${e instanceof Error ? e.message : String(e)}`, {
-            hint: '按 PID 手工核对后处置（禁 pkill 宽匹配）',
-            evidence: { pid, ports },
-          })
-        }
-      }
-      const freed = await pollUntil(
-        async () => {
-          const portsFree = ports.every((p) => portOwners(p).length === 0)
-          const exited = exitInfo !== null || !isAlive(pid)
-          return portsFree && exited
-        },
-        { timeoutMs, intervalMs: 400 },
-      )
-      if (!freed) {
-        const residual = ports
-          .map((p) => ({ port: p, pids: portOwners(p) }))
-          .filter((x) => x.pids.length > 0)
-          .map((x) => `:${x.port} → PID ${x.pids.join(',')}`)
-        if (isAlive(pid)) residual.push(`PID ${pid} 仍存活（SIGTERM 未生效）`)
+      signalInstance(ports)
+      const residual = await awaitPortsFreed(ports, timeoutMs)
+      if (residual) {
         throw new InstanceError(`端口未在 ${timeoutMs}ms 内释放`, {
           hint: '按残留 PID 逐个核对命令行（只杀自己实例的 PID；禁 pkill）',
           evidence: { residual, pid, logTail: api.logTail(60) },

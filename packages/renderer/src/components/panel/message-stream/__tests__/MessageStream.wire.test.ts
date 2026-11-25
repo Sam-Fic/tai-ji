@@ -660,7 +660,7 @@ describe('buildStreamViewItems — slot 表达式前置求值（RD-2#1 第一道
     } as MessageTurn
   }
 
-  it('正常项：key/canEdit/isLastTurn/preview 前置算好（canEdit 只落最后 user turn）', () => {
+  it('正常项：key/canEdit/isLastTurn 前置算好 + preview 惰性 thunk（canEdit 只落最后 user turn）', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const items = [
       { kind: 'turn', turn: turnFixture({ index: 0, user: { id: 'u1', role: 'user', content: 'first', status: 'complete', timestamp: 0 } as Message }) },
@@ -669,7 +669,11 @@ describe('buildStreamViewItems — slot 表达式前置求值（RD-2#1 第一道
     const views = buildStreamViewItems(items, 1, items[1]!.turn as MessageTurn)
     expect(views.map((v) => v.key)).toEqual(['t-u1', 't-u2'])
     expect(views[0]).toMatchObject({ kind: 'turn', canEdit: false, isLastTurn: false })
-    expect(views[1]).toMatchObject({ kind: 'turn', canEdit: true, isLastTurn: true, preview: 'last' })
+    expect(views[1]).toMatchObject({ kind: 'turn', canEdit: true, isLastTurn: true })
+    // preview 是惰性 thunk（B1：构建期不物化，占位行失败路径才求值）——取值断言走调用
+    const lastView = views[1]
+    if (lastView?.kind !== 'turn') throw new Error('expected turn view at index 1')
+    expect(lastView.preview()).toBe('last')
   })
 
   it('单项求值抛错（turn 缺失）→ broken 占位项（1:1 不删位），不炸整个列表构建', () => {

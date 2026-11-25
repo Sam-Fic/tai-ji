@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { truncate, stripMarkdown, summarizeTurnForRail, summarizeAssistantForRail, summarizeAssistantForRailWithSource } from '../summarize-turn'
+import { truncate, stripMarkdown, summarizeTurnForRail, summarizeAssistantForRail, summarizeAssistantForRailWithSource, streamingRailAnchor, isRailSummarySettled, RAIL_FREEZE_PREFIX } from '../summarize-turn'
 import type { MessageTurn } from '../message-turns'
 
 /** 构造最小 MessageTurn（rail 摘要单测够用） */
@@ -110,6 +110,10 @@ describe('rail 摘要纯函数契约', () => {
     expect(summarizeTurnForRail(turn)).toBe('这是一段很长的用户输入用来测试截断行为…')
   })
 
+  it('summarizeTurnForRail 无 user 时返回空串', () => {
+    expect(summarizeTurnForRail(makeTurn(undefined, []))).toBe('')
+  })
+
   it('summarizeAssistantForRail 无 user 时回落首条 assistant', () => {
     const turn = makeTurn(undefined, ['第一条回复内容'])
     expect(summarizeAssistantForRail(turn)).toBe('第一条回复内容')
@@ -149,5 +153,61 @@ describe('summarizeAssistantForRailWithSource 来源对齐（B-harden 冻结判�
     const r = summarizeAssistantForRailWithSource(turn)
     expect(r.text).toBe('1 thoughts')
     expect(r.sourceId).toBeNull()
+  })
+})
+
+describe('streamingRailAnchor 流式冻结锚点（B1：块级规则，不物化全文）', () => {
+  /** anchor 专用构造：content 形态自由（string / segment 数组） */
+  function anchorTurn (assistants: unknown[]): MessageTurn {
+    return { index: 0, user: null, assistants, isStreaming: true, hasFoldable: false } as MessageTurn
+  }
+
+  it('string content：返回首条 assistant 的 (id, length, prefix=slice(0, RAIL_FREEZE_PREFIX))', () => {
+    const turn = anchorTurn([
+      { id: 'a0', role: 'assistant', content: 'x'.repeat(300), status: 'streaming', timestamp: 2 },
+    ])
+    expect(streamingRailAnchor(turn)).toEqual({ id: 'a0', length: 300, prefix: 'x'.repeat(RAIL_FREEZE_PREFIX) })
+  })
+
+  it('segment content：取首个非空 text 块（后续块不参与）', () => {
+    const turn = anchorTurn([
+      { id: 'a0', role: 'assistant', content: [
+        { type: 'text', text: 'y'.repeat(100) },
+        { type: 'text', text: 'z'.repeat(100) },
+      ], status: 'streaming', timestamp: 2 },
+    ])
+    expect(streamingRailAnchor(turn)).toEqual({ id: 'a0', length: 100, prefix: 'y'.repeat(RAIL_FREEZE_PREFIX) })
+  })
+
+  it('无文本 message 被 continue 跳过，命中后续有文本 message', () => {
+    const turn = anchorTurn([
+      { id: 'a0', role: 'assistant', content: [], status: 'streaming', timestamp: 2 },
+      { id: 'a1', role: 'assistant', content: '正文', status: 'streaming', timestamp: 3 },
+    ])
+    expect(streamingRailAnchor(turn)).toEqual({ id: 'a1', length: 2, prefix: '正文' })
+  })
+
+  it('string content 为空串同样被跳过（text.length === 0 分支）', () => {
+    const turn = anchorTurn([
+      { id: 'a0', role: 'assistant', content: '', status: 'streaming', timestamp: 2 },
+      { id: 'a1', role: 'assistant', content: [{ type: 'text', text: '第二块' }], status: 'streaming', timestamp: 3 },
+    ])
+    expect(streamingRailAnchor(turn)).toEqual({ id: 'a1', length: 3, prefix: '第二块' })
+  })
+
+  it('segment 全部空 text 块 / 无 assistants → null', () => {
+    const emptyBlocks = anchorTurn([
+      { id: 'a0', role: 'assistant', content: [{ type: 'text', text: '' }], status: 'streaming', timestamp: 2 },
+    ])
+    expect(streamingRailAnchor(emptyBlocks)).toBeNull()
+    expect(streamingRailAnchor(anchorTurn([]))).toBeNull()
+  })
+})
+
+describe('isRailSummarySettled 触顶判定（B-harden：省略号后缀即显示预算已满）', () => {
+  it('省略号结尾 = settled；否则未触顶', () => {
+    expect(isRailSummarySettled('这是一段很长的用户输入用来测试截断行为…')).toBe(true)
+    expect(isRailSummarySettled('短')).toBe(false)
+    expect(isRailSummarySettled('')).toBe(false)
   })
 })

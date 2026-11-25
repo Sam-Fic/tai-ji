@@ -39,11 +39,15 @@ function unionSeconds (iv) {
   return (total + ce - cs) / 1e6
 }
 
-function analyze (file) {
-  const events = JSON.parse(fs.readFileSync(file, 'utf8'))
+/** thread_name 事件 → pid:tid → 线程名。 */
+function buildThreadNameMap (events) {
   const threadName = new Map()
   for (const e of events) if (e.ph === 'M' && e.name === 'thread_name') threadName.set(`${e.pid}:${e.tid}`, e.args.name)
+  return threadName
+}
 
+/** 收集全部 X 切片：按线程分组，同时求 trace 墙钟窗（坏点丢弃）。 */
+function collectPerThreadSlices (events) {
   let minTs = Infinity
   let maxTs = 0
   const perThread = new Map()
@@ -57,17 +61,11 @@ function analyze (file) {
     if (!perThread.has(key)) perThread.set(key, [])
     perThread.get(key).push({ name: e.name, s: e.ts, e: end })
   }
-  const wallS = (maxTs - minTs) / 1e6
+  return { perThread, minTs, wallS: (maxTs - minTs) / 1e6 }
+}
 
-  const threadUnion = new Map()
-  for (const [k, slices] of perThread) threadUnion.set(threadName.get(k) ?? `?${k}`, unionSeconds(slices.map((x) => [x.s, x.e])))
-
-  const gpuKey = [...perThread.keys()].find((k) => threadName.get(k) === 'CrGpuMain')
-  const gpuSlices = gpuKey ? perThread.get(gpuKey) : []
-  const runTasks = gpuSlices.filter((x) => x.name === 'Scheduler::RunTask')
-  const runTaskUnion = unionSeconds(runTasks.map((x) => [x.s, x.e]))
-
-  // 直接子切片：完全落在某个 RunTask 内、且不被另一个候选严格包含
+/** RunTask 直接子切片（完全落在某 RunTask 内、不被另一候选严格包含）按名归组 + 覆盖区间。 */
+function directChildrenOfRunTasks (gpuSlices, runTasks) {
   const perName = new Map()
   const coveredIv = []
   for (const rt of runTasks) {
@@ -86,17 +84,21 @@ function analyze (file) {
     }
   }
   const named = [...perName].map(([name, iv]) => ({ name, union: unionSeconds(iv) })).sort((a, b) => b.union - a.union)
-  // 线程级（含嵌套）union：raster / endRaster 这类切片嵌在 RunTask 的更深层，
-  // 用直接子口径会得到 0.00s（误导）。线程级 union 仍是「不重复计数重叠区间」的口径。
+  return { named, covered: unionSeconds(coveredIv) }
+}
+
+/** 线程级（含嵌套）union：raster 这类切片嵌在 RunTask 更深层，直接子口径会得 0（误导）。 */
+function threadLevelNamedUnion (gpuSlices) {
   const threadNamed = new Map()
   for (const x of gpuSlices) {
     if (!threadNamed.has(x.name)) threadNamed.set(x.name, [])
     threadNamed.get(x.name).push([x.s, x.e])
   }
-  const threadUnionOf = (n) => unionSeconds(threadNamed.get(n) ?? [])
-  const covered = unionSeconds(coveredIv)
+  return { threadNamed, threadUnionOf: (n) => unionSeconds(threadNamed.get(n) ?? []) }
+}
 
-  // 逐秒 GPU 忙占比 + 逐秒帧数（去掉首尾 1s 的 trace 起停边界）
+/** 逐秒 GPU 忙占比（去掉首尾 1s 的 trace 起停边界）。 */
+function perSecondBusy (runTasks, minTs, wallS) {
   const nSec = Math.ceil(wallS)
   const busyPerSec = new Array(nSec).fill(0)
   for (const rt of runTasks) {
@@ -109,12 +111,36 @@ function analyze (file) {
     }
   }
   const interior = busyPerSec.slice(1, Math.max(2, nSec - 1))
-  const meanBusy = interior.reduce((a, b) => a + b, 0) / interior.length
+  return interior.reduce((a, b) => a + b, 0) / interior.length
+}
 
+/** 逐秒呈现帧数（CommitPresentedFrameToCA，去首尾边界）。 */
+function perSecondFps (gpuSlices, minTs, wallS) {
+  const nSec = Math.ceil(wallS)
   const presents = gpuSlices.filter((x) => x.name === 'CommitPresentedFrameToCA').map((x) => x.s)
   const fpsPerSec = new Array(nSec).fill(0)
   for (const ts of presents) { const i = Math.floor((ts - minTs) / 1e6); if (i >= 0 && i < nSec) fpsPerSec[i]++ }
-  const fpsInterior = fpsPerSec.slice(1, Math.max(2, nSec - 1))
+  return { presents, fpsInterior: fpsPerSec.slice(1, Math.max(2, nSec - 1)) }
+}
+
+function analyze (file) {
+  const events = JSON.parse(fs.readFileSync(file, 'utf8'))
+  const threadName = buildThreadNameMap(events)
+  const { perThread, minTs, wallS } = collectPerThreadSlices(events)
+
+  const threadUnion = new Map()
+  for (const [k, slices] of perThread) threadUnion.set(threadName.get(k) ?? `?${k}`, unionSeconds(slices.map((x) => [x.s, x.e])))
+
+  const gpuKey = [...perThread.keys()].find((k) => threadName.get(k) === 'CrGpuMain')
+  const gpuSlices = gpuKey ? perThread.get(gpuKey) : []
+  const runTasks = gpuSlices.filter((x) => x.name === 'Scheduler::RunTask')
+  const runTaskUnion = unionSeconds(runTasks.map((x) => [x.s, x.e]))
+
+  const { named, covered } = directChildrenOfRunTasks(gpuSlices, runTasks)
+  const { threadNamed, threadUnionOf } = threadLevelNamedUnion(gpuSlices)
+
+  const meanBusy = perSecondBusy(runTasks, minTs, wallS)
+  const { presents, fpsInterior } = perSecondFps(gpuSlices, minTs, wallS)
 
   return {
     file,

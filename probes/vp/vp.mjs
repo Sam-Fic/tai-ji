@@ -118,6 +118,35 @@ function filterBySession(evt, sid) {
 
 // ── 文件树 / grep（evidence.* / shell.grep 的纯 fs 实现，零第三方依赖）────────
 
+/** 单条目处理：产出条目描述（含 size），返回应下钻的子目录清单（dir 直下 + link 跟随）。 */
+function visitWalkEntry(ent, dir, rel, depth, { maxDepth, followLinks }, out) {
+  const full = path.join(dir, ent.name)
+  const childRel = rel ? `${rel}/${ent.name}` : ent.name
+  let stat = null
+  try {
+    stat = fs.lstatSync(full)
+  } catch {
+    /* race */
+  }
+  const isLink = ent.isSymbolicLink()
+  const isDir = ent.isDirectory()
+  out.push({
+    path: childRel,
+    type: isLink ? 'symlink' : isDir ? 'dir' : 'file',
+    ...(stat && !isDir ? { size: stat.size } : {}),
+  })
+  const descend = []
+  if (isDir && depth + 1 < maxDepth) descend.push({ dir: full, depth: depth + 1, rel: childRel })
+  if (isLink && followLinks && depth + 1 < maxDepth) {
+    try {
+      if (fs.statSync(full).isDirectory()) descend.push({ dir: full, depth: depth + 1, rel: childRel })
+    } catch {
+      /* broken link */
+    }
+  }
+  return descend
+}
+
 function walk(root, { maxDepth = 4, maxEntries = 500, followLinks = false } = {}) {
   const out = []
   const stack = [{ dir: root, depth: 0, rel: '' }]
@@ -131,36 +160,41 @@ function walk(root, { maxDepth = 4, maxEntries = 500, followLinks = false } = {}
       continue
     }
     for (const ent of entries) {
-      const full = path.join(dir, ent.name)
-      const childRel = rel ? `${rel}/${ent.name}` : ent.name
-      let stat = null
-      try {
-        stat = fs.lstatSync(full)
-      } catch {
-        /* race */
-      }
-      const isLink = ent.isSymbolicLink()
-      const isDir = ent.isDirectory()
-      out.push({
-        path: childRel,
-        type: isLink ? 'symlink' : isDir ? 'dir' : 'file',
-        ...(stat && !isDir ? { size: stat.size } : {}),
-      })
+      const descend = visitWalkEntry(ent, dir, rel, depth, { maxDepth, followLinks }, out)
       if (out.length >= maxEntries) break
-      if (isDir && depth + 1 < maxDepth) stack.push({ dir: full, depth: depth + 1, rel: childRel })
-      if (isLink && followLinks && depth + 1 < maxDepth) {
-        try {
-          if (fs.statSync(full).isDirectory()) stack.push({ dir: full, depth: depth + 1, rel: childRel })
-        } catch {
-          /* broken link */
-        }
-      }
+      stack.push(...descend)
     }
   }
   return out
 }
-
 const TEXT_EXT = new Set(['.log', '.jsonl', '.json', '.md', '.txt', '.ts', '.mjs', '.js', '.yaml', '.yml', ''])
+
+/** grep 时不进入的目录名（同时跳过同名文件——与旧逐名 continue 语义一致）。 */
+const SKIP_GREP_NAMES = new Set(['node_modules', '.git', 'dist', 'test-results'])
+
+/** 单文件 grep：候选过滤（glob/扩展名/大小）+ 行扫描（预算内追加 matches）。 */
+function grepFile(full, ent, re, { glob, maxFileBytes }, matches, files, maxMatches) {
+  if (glob && !full.endsWith(glob)) return
+  if (!TEXT_EXT.has(path.extname(ent.name).toLowerCase())) return
+  let st
+  try {
+    st = fs.statSync(full)
+  } catch {
+    return
+  }
+  if (st.size > maxFileBytes) return
+  let text
+  try {
+    text = fs.readFileSync(full, 'utf8')
+  } catch {
+    return
+  }
+  files.push(full)
+  const lines = text.split('\n')
+  for (let i = 0; i < lines.length && matches.length < maxMatches; i++) {
+    if (re.test(lines[i])) matches.push({ file: full, line: i + 1, text: lines[i].slice(0, 500) })
+  }
+}
 
 function grepTree(root, pattern, { ignoreCase = false, maxMatches = 200, maxFileBytes = 2_000_000, glob } = {}) {
   const re = new RegExp(pattern, ignoreCase ? 'i' : '')
@@ -177,38 +211,18 @@ function grepTree(root, pattern, { ignoreCase = false, maxMatches = 200, maxFile
     }
     for (const ent of entries) {
       if (matches.length >= maxMatches) break
-      if (ent.name === 'node_modules' || ent.name === '.git' || ent.name === 'dist' || ent.name === 'test-results') continue
+      if (SKIP_GREP_NAMES.has(ent.name)) continue
       const full = path.join(dir, ent.name)
       if (ent.isDirectory()) {
         if (depth < 8) stack.push({ dir: full, depth: depth + 1 })
         continue
       }
       if (!ent.isFile()) continue
-      if (glob && !full.endsWith(glob)) continue
-      if (!TEXT_EXT.has(path.extname(ent.name).toLowerCase())) continue
-      let st
-      try {
-        st = fs.statSync(full)
-      } catch {
-        continue
-      }
-      if (st.size > maxFileBytes) continue
-      let text
-      try {
-        text = fs.readFileSync(full, 'utf8')
-      } catch {
-        continue
-      }
-      files.push(full)
-      const lines = text.split('\n')
-      for (let i = 0; i < lines.length && matches.length < maxMatches; i++) {
-        if (re.test(lines[i])) matches.push({ file: full, line: i + 1, text: lines[i].slice(0, 500) })
-      }
+      grepFile(full, ent, re, { glob, maxFileBytes }, matches, files, maxMatches)
     }
   }
   return { matches, filesScanned: files.length }
 }
-
 /**
  * Message.content → 纯文本（string 或 Segment[]）。
  * Segment 形态见 `packages/shared/src/message.ts`：text / slash / file / mention / session。
@@ -712,59 +726,74 @@ function readFilesUnder(root) {
   return out.join('\n')
 }
 
-async function main() {
-  const startedAt = Date.now()
+/** capability 缺失 / 未知时的 early-exit payload（exit 2）。 */
+function unknownCapabilityPayload() {
   if (!CAPABILITY) {
-    process.stdout.write(
-      `${JSON.stringify({
-        ok: false,
-        capability: null,
-        reason: '缺 capability id',
-        hint: 'node vp.mjs <capability> ...；可用：' + Object.keys(CAPS).join(' '),
-      })}\n`,
-    )
-    process.exit(2)
+    return {
+      ok: false,
+      capability: null,
+      reason: '缺 capability id',
+      hint: 'node vp.mjs <capability> ...；可用：' + Object.keys(CAPS).join(' '),
+    }
   }
-  const cap = CAPS[CAPABILITY]
-  if (!cap) {
-    process.stdout.write(
-      `${JSON.stringify({
-        ok: false,
-        capability: CAPABILITY,
-        reason: `未知 capability: ${CAPABILITY}`,
-        hint: '可用：' + Object.keys(CAPS).join(' '),
-      })}\n`,
-    )
-    process.exit(2)
+  return {
+    ok: false,
+    capability: CAPABILITY,
+    reason: `未知 capability: ${CAPABILITY}`,
+    hint: '可用：' + Object.keys(CAPS).join(' '),
   }
-  try {
-    const ctx = resolveContext()
-    const result = await cap.run(ctx)
-    // [M21] capability 显式返回 `ok: false` = 动作本身判定失败（如 chat.wait 命中错误 turn）。
-    // 此时必须 exit 1 + ok:false，否则 codemode 编排会把 LLM 404 / 中断当成功。
-    // 注意与「exitCode 非 0 但不改变传输语义」的区别：doctor RED 属于观测结果（ok 仍 true、
-    // observations.exitCode 非 0）；capability 自己说失败才算失败。
-    const capOk = result.ok !== false
-    const payload = {
+}
+
+/** capability 成功返回的 payload（[M21] ok:false 显式判定 = 动作失败，exit 1）。 */
+function successPayload(cap, result, startedAt) {
+  // [M21] capability 显式返回 `ok: false` = 动作本身判定失败（如 chat.wait 命中错误 turn）。
+  // 此时必须 exit 1 + ok:false，否则 codemode 编排会把 LLM 404 / 中断当成功。
+  // 注意与「exitCode 非 0 但不改变传输语义」的区别：doctor RED 属于观测结果（ok 仍 true、
+  // observations.exitCode 非 0）；capability 自己说失败才算失败。
+  const capOk = result.ok !== false
+  return {
+    payload: {
       ok: capOk,
       capability: CAPABILITY,
       ...(capOk ? {} : { reason: result.reason ?? 'capability 判定失败（见 observations）' }),
       observations: result.observations ?? {},
       evidence: result.evidence ?? {},
       elapsedMs: Date.now() - startedAt,
-    }
-    process.stdout.write(`${JSON.stringify(payload)}\n`)
-    process.exit(capOk ? 0 : 1)
-  } catch (e) {
-    const reason = e?.reason ?? (e instanceof Error ? e.message : String(e))
-    const payload = {
+    },
+    exitCode: capOk ? 0 : 1,
+  }
+}
+
+/** capability 抛错的 payload（exit 1）。 */
+function failurePayload(e, startedAt) {
+  return {
+    payload: {
       ok: false,
       capability: CAPABILITY,
-      reason,
+      reason: e?.reason ?? (e instanceof Error ? e.message : String(e)),
       hint: e?.hint ?? '看 evidence 与 <dataDir>/logs/runtime-*.log；单步复现后按提示修复',
       evidence: e?.evidence ?? {},
       elapsedMs: Date.now() - startedAt,
-    }
+    },
+    exitCode: 1,
+  }
+}
+
+async function main() {
+  const startedAt = Date.now()
+  const cap = CAPABILITY ? CAPS[CAPABILITY] : null
+  if (!cap) {
+    process.stdout.write(`${JSON.stringify(unknownCapabilityPayload())}\n`)
+    process.exit(2)
+  }
+  try {
+    const ctx = resolveContext()
+    const result = await cap.run(ctx)
+    const { payload, exitCode } = successPayload(cap, result, startedAt)
+    process.stdout.write(`${JSON.stringify(payload)}\n`)
+    process.exit(exitCode)
+  } catch (e) {
+    const { payload } = failurePayload(e, startedAt)
     process.stdout.write(`${JSON.stringify(payload)}\n`)
     process.exit(1)
   }

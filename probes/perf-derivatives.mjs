@@ -124,41 +124,61 @@ const FAMILY = [
   { name: 'buildStreamViewItems', any: true },
 ]
 
-function analyze (profile, relFromS, relToS) {
-  const byId = new Map(profile.nodes.map((n) => [n.id, n]))
+/** 全量采样起点表（ms）：samples[i] 的起始时刻 = 累加 timeDeltas。 */
+function sampleStarts(profile) {
   const st = profile.startTime / 1000
-  let acc = st
   const starts = new Array(profile.samples.length)
+  let acc = st
   for (let i = 0; i < profile.timeDeltas.length; i++) { starts[i] = acc; acc += profile.timeDeltas[i] / 1000 }
-  const fromMs = st + relFromS * 1000
-  const toMs = st + relToS * 1000
-  const selfUs = new Map()
+  return { starts, st }
+}
+
+/** 窗口内采样聚合：node → 合计 timeDeltas（µs）；返回 [node, delta] 对（窗口过滤后）。 */
+function windowedSamplePairs(profile, starts, fromMs, toMs) {
+  const byId = new Map(profile.nodes.map((n) => [n.id, n]))
+  const pairs = []
   let total = 0
   for (let i = 0; i < profile.samples.length; i++) {
     if (starts[i] < fromMs || starts[i] >= toMs) continue
     const node = byId.get(profile.samples[i])
     if (!node) continue
     total += profile.timeDeltas[i]
+    pairs.push([node, profile.timeDeltas[i]])
+  }
+  return { pairs, total }
+}
+
+/** callFrame 的归组 key（函数名 + URL 文件名 [+ 行号]）。 */
+function frameKey(cf, withLine) {
+  const url = (cf.url || '').replace(/^.*\//, '')
+  const name = cf.functionName || '(anonymous)'
+  return withLine ? `${name} @ ${url}:${cf.lineNumber}` : `${name} @ ${url}`
+}
+
+function analyze (profile, relFromS, relToS) {
+  const { starts, st } = sampleStarts(profile)
+  const fromMs = st + relFromS * 1000
+  const toMs = st + relToS * 1000
+  const { pairs, total } = windowedSamplePairs(profile, starts, fromMs, toMs)
+
+  const selfUs = new Map()
+  for (const [node, delta] of pairs) {
     const cf = node.callFrame
     for (const f of FAMILY) {
       if ((cf.functionName || '') === f.name) {
-        const key = `${f.name} @ ${(cf.url || '').replace(/^.*\//, '')}`
-        selfUs.set(key, (selfUs.get(key) ?? 0) + profile.timeDeltas[i])
+        const key = frameKey(cf, false)
+        selfUs.set(key, (selfUs.get(key) ?? 0) + delta)
       }
     }
   }
+
   const top10All = new Map()
-  for (let i = 0; i < profile.samples.length; i++) {
-    if (starts[i] < fromMs || starts[i] >= toMs) continue
-    const node = byId.get(profile.samples[i])
-    if (!node) continue
-    const cf = node.callFrame
-    const key = `${cf.functionName || '(anonymous)'} @ ${(cf.url || '').replace(/^.*\//, '')}:${cf.lineNumber}`
-    top10All.set(key, (top10All.get(key) ?? 0) + profile.timeDeltas[i])
+  for (const [node, delta] of pairs) {
+    const key = frameKey(node.callFrame, true)
+    top10All.set(key, (top10All.get(key) ?? 0) + delta)
   }
   return { selfUs, totalMs: total / 1000, top10: top10All }
 }
-
 // ── 主流程 ────────────────────────────────────────────────────────────────
 const rt = await connectRuntime()
 const cdp = await connectRendererProfiler()

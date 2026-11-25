@@ -54,18 +54,20 @@ const BUCKETS = new Map([
   ['EventDispatch', new Set(['EventDispatch', 'HitTest', 'ScrollLayer', 'ParseHTML', 'StyleRecalcInvalidationTracking'])],
 ])
 
-function analyze (file) {
-  const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
-  const events = raw.traceEvents ?? Object.values(raw)
+/** 找 CrRendererMain 线程（thread_name 事件 → pid/tid）；缺失 = 无可分析对象，fail-visible。 */
+function findRendererMainThread (events, file) {
   const threadName = new Map()
   for (const e of events) if (e.name === 'thread_name') threadName.set(`${e.pid}:${e.tid}`, e.args?.name)
+  for (const [k, v] of threadName) {
+    if (v !== 'CrRendererMain') continue
+    const [p, t] = k.split(':')
+    return { pid: +p, tid: +t }
+  }
+  throw new Error(`no CrRendererMain in ${file}`)
+}
 
-  let pid = null
-  let tid = null
-  for (const [k, v] of threadName) if (v === 'CrRendererMain') { const [p, t] = k.split(':'); pid = +p; tid = +t }
-  if (pid === null) throw new Error(`no CrRendererMain in ${file}`)
-
-  // 收集主线程 X 事件，按 (s asc, e desc) 排序后用栈建父子关系
+/** 收集主线程 X 切片（ts/dur 必须是有限正数，坏点丢弃）。 */
+function collectMainThreadSlices (events, pid, tid) {
   const slices = []
   for (const e of events) {
     if (e.pid !== pid || e.tid !== tid) continue
@@ -74,9 +76,12 @@ function analyze (file) {
     slices.push({ name: e.name, s: e.ts, e: e.ts + e.dur })
   }
   slices.sort((a, b) => a.s - b.s || b.e - a.e)
+  return slices
+}
 
+/** 按 (s asc, e desc) 排序后的栈建父子关系：返回 children 索引表。 */
+function buildSliceTree (slices) {
   const children = new Map() // index -> array of child indices
-  const roots = []
   const stack = []
   for (let i = 0; i < slices.length; i++) {
     const cur = slices[i]
@@ -85,20 +90,25 @@ function analyze (file) {
       const parentIdx = stack[stack.length - 1]
       if (!children.has(parentIdx)) children.set(parentIdx, [])
       children.get(parentIdx).push(i)
-    } else roots.push(i)
+    }
     stack.push(i)
   }
+  return children
+}
 
-  // 禁 spread：主线程切片可过百万，Math.max(...arr) 直接 RangeError（批5 trace 采集踩过同族坑）
+/** 主线程切片墙钟窗（µs）；禁 spread（百万级切片 Math.max(...arr) 会 RangeError）。 */
+function sliceWallMicros (slices) {
   let minS = Infinity
   let maxE = -Infinity
   for (const s of slices) {
     if (s.s < minS) minS = s.s
     if (s.e > maxE) maxE = s.e
   }
-  const wall = (maxE - minS) / 1e6
+  return (maxE - minS) / 1e6
+}
 
-  // self = 自身区间 − 直接子区间 union
+/** self = 自身区间 − 直接子区间 union；同时分出 JS 本体（FunctionCall）与原生 self。 */
+function computeSelfTime (slices, children) {
   const selfByName = new Map()
   let nativeSelf = 0
   let jsSelf = 0
@@ -112,14 +122,17 @@ function analyze (file) {
     if (s.name === 'FunctionCall') jsSelf += self
     else nativeSelf += self
   }
+  return { selfByName, nativeSelf, jsSelf }
+}
 
+/** 原生桶合计 + 未分桶残余（含包裹层切片）Top 清单。 */
+function bucketSummary (selfByName) {
   const byBucket = new Map()
   for (const [bucket, names] of BUCKETS) {
     let t = 0
     for (const n of names) t += selfByName.get(n) ?? 0
     if (t > 0) byBucket.set(bucket, t / 1e6)
   }
-  // 未分桶的原生 self（含 26.7s 级的包裹层残余、驱动回调等）
   const bucketedNames = new Set()
   for (const names of BUCKETS.values()) for (const n of names) bucketedNames.add(n)
   let unbucketed = 0
@@ -130,6 +143,19 @@ function analyze (file) {
     unbucketedTop.push([n, v / 1e6])
   }
   unbucketedTop.sort((a, b) => b[1] - a[1])
+  return { byBucket, unbucketed, unbucketedTop }
+}
+
+function analyze (file) {
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
+  const events = raw.traceEvents ?? Object.values(raw)
+  const { pid, tid } = findRendererMainThread(events, file)
+
+  const slices = collectMainThreadSlices(events, pid, tid)
+  const children = buildSliceTree(slices)
+  const wall = sliceWallMicros(slices)
+  const { selfByName, nativeSelf, jsSelf } = computeSelfTime(slices, children)
+  const { byBucket, unbucketed, unbucketedTop } = bucketSummary(selfByName)
 
   return {
     label: path_base(file),
