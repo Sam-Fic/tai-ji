@@ -991,7 +991,10 @@ export async function finalizeRun(
       });
       return false;
     }
-    settlement = composeFinalSettlement(run, doneReason);
+    // 与主路径同源的派生单点（deriveFinalSettlement：compose → 成员派生 → 脚本失败
+    // 升格）——漏升格时脚本 return {status:"failed"} + record IO 失败的组合会让降级
+    // 条目落 completed 假成功（2026-11-25 dev-merge review dmg-r1-2）。
+    settlement = deriveFinalSettlement(run, doneReason);
     logger.error(
       `[workflow] run-settled record dispatch failed (runId=${run.runId}, reason=${doneReason}): ${toErrorMessage(err)}`,
     );
@@ -1166,6 +1169,19 @@ function composeFinalSettlement(run: WorkflowRun, doneReason: DoneReason): RunSe
 }
 
 /**
+ * 终局 settlement 派生单点（主路径 dispatchFinalRunSettle 与 record IO 故障降级分支
+ * 共用）：compose → 成员派生 → 脚本层失败结论升格，次序即契约——成员派生只认成员
+ * 集合、会把脚本结论洗回 done，故 escalate 必须后置（run-member-view 测试锁定）。
+ * 抽单点的动机 = 两条路径的派生次序结构性一致：2026-11-25 dev-merge review dmg-r1-2
+ * 此前降级分支只 compose 不过派生链，脚本 return {status:"failed"} + record IO 失败
+ * 的组合会让降级条目落 completed 假成功（同条目 scriptResultSummary 却写着失败）。
+ */
+function deriveFinalSettlement(run: WorkflowRun, doneReason: DoneReason): RunSettlementRecord {
+  const settled = settleMembersIntoFinalSettlement(run, composeFinalSettlement(run, doneReason));
+  return escalateScriptFailureVerdict(run, settled);
+}
+
+/**
  * [D15] 终局记录原语（journal 帧 + manifest 派生缓存两件一次齐全；唯一生产
  * 调用方是同文件 dispatchFinalRunSettle——finalizeRun 的写入 journal 记录半边。interruptRun
  * 的中断路径不走本原语：中断是暂停态收敛词，落 run-interrupted 帧 + interrupted
@@ -1243,8 +1259,7 @@ async function dispatchFinalRunSettle(run: WorkflowRun, doneReason: DoneReason):
   // 在 settleMembersIntoFinalSettlement 之后接脚本层失败结论改档（成员派生只认成员
   // 集合、会把脚本结论洗回 done——2026-11-25 dev-merge-gates 事故：gates FAIL 写在
   // 返回载荷里，run 终态却显示 completed，页面/托盘/通知感知不到失败）。
-  const settled = settleMembersIntoFinalSettlement(run, composeFinalSettlement(run, doneReason));
-  const record = escalateScriptFailureVerdict(run, settled);
+  const record = deriveFinalSettlement(run, doneReason);
   if (doneReason === "aborted") {
     await dispatchRunTrigger(run, {
       type: "cancel-requested",

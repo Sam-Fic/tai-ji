@@ -15,7 +15,6 @@
 import { useI18n } from 'vue-i18n'
 import type { AggregationRoute, ProviderInfo } from '@taiji/shared'
 import { useSettingsToast } from '../injection-keys'
-import { buildModelRef } from '@taiji/core/domain/settings'
 import {
   buildAdvancedQuickRoute,
   buildUsageIndex,
@@ -32,8 +31,6 @@ export interface UseQuickCreateInput { // oe-exempt:20261121:framework:快速创
   draftOf: () => readonly QuickCreateDraftCard[]
   /** wire 视图（路由 id/name 占用集的已保存半边）。 */
   viewCardsOf: () => ReadonlyArray<{ route: AggregationRoute }>
-  /** scopedModels 白名单全量（直连去重防护的已落盘半边；reactive getter 注入）。 */
-  scopedModelsOf: () => readonly string[]
   providersOf: () => ReadonlyArray<ProviderInfo>
   /** route-add 指令通道（页面 applyEditorOp）。 */
   addRoute: (route: AggregationRoute) => void
@@ -94,14 +91,15 @@ export function useQuickCreate(input: UseQuickCreateInput): UseQuickCreate {
 
   /**
    * 直连去重防护（事实态，AC-Q13 同族）：该 provider+model 已有直连条目 → true。
-   * 口径 = 白名单已落盘条目（scopedModels 复合串精确匹配）∪ 本编辑会话草稿直连卡——
-   * 两半并集防的是「同一白名单条目重复落卡」（保存整表覆写按去重保序会静默合并，
-   * 草稿里留一张空转卡）。与简单路由的事实防护不同：已落盘直连条目同样拦截
-   * （不存在「保存后再加一条同模型直连」的合法场景——白名单条目即模型本身）。
+   * 口径 = 草稿目标态直连卡（一张即拦截）——防的是「同一白名单条目重复落卡」
+   * （保存整表覆写按去重保序会静默合并，草稿里留一张空转卡）。已落盘条目同样
+   * 拦截（不存在「保存后再加一条同模型直连」的合法场景——白名单条目即模型本身），
+   * 但其事实来源是草稿而非持久态：草稿由 cloneDraft 从持久态播种（已落盘直连卡
+   * isNew:false 入草稿），本会话 direct-remove 摘除后 ref 不在草稿 → 该行恢复
+   * 可创建态。恒读持久态的旧口径把「本会话已移除」误判为仍存在（2026-11-25
+   * dev-merge review dmg-r1-1：移除后快速创建行仍显禁用态、同模型无法重加）。
    */
   function existingDirectOf(providerId: string, modelId: string): boolean {
-    const ref = buildModelRef(providerId, modelId)
-    if (input.scopedModelsOf().includes(ref)) return true
     return input.draftOf().some((c) => c.kind === 'direct' && c.providerId === providerId && c.modelId === modelId)
   }
 

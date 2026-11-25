@@ -6058,7 +6058,8 @@
       "summary": "e2e 真实进程层：模型路由快速创建（direct 加直连 / advanced 高级路由）→ 保存 → faux/<modelId> 或 aggregation/<id> 会话收 faux 回复",
       "scope": [
         "packages/ui/src/features/settings/provider/**",
-        "packages/ui/src/locale/**"
+        "packages/ui/src/locale/**",
+        "packages/core/src/domain/settings/route-orchestration.ts"
       ],
       "layer": "L2",
       "assets": [

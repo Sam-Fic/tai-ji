@@ -253,8 +253,11 @@ export function escalateScriptFailureVerdict(run: WorkflowRun, record: RunSettle
  * [{taskIndex, missing[]}]，部分交付成员不进 failedMembers、无 cause），派生 outcome
  * 为 done 时升格 partially_succeeded（「无失败但存在部分交付」聚合规则支）。
  * [2026-11-25 失败可感知性] 脚本层失败结论支：脚本 return {status:"failed"}（模板族
- * 失败终态约定，不 throw）时 done → failed 升格（先于成员派生与部分交付支）——缺此环
- * 时脚本层失败在 run 终态不可见（completed 假成功），详见 scriptFailureVerdictOf。
+ * 失败终态约定，不 throw）时 done → failed 升格（后置于成员派生与部分交付支；调用点
+ * 契约：terminal-actions dispatchFinalRunSettle 内 settleMembersIntoFinalSettlement
+ * 之后 escalate 后置——成员派生只认成员集合、会把脚本结论洗回 done，见
+ * escalateScriptFailureVerdict 文档与 run-member-view 测试锁定）——缺此环时脚本层
+ * 失败在 run 终态不可见（completed 假成功），详见 scriptFailureVerdictOf。
  */
 export function settleMembersIntoFinalSettlement(run: WorkflowRun, record: RunSettlementRecord): RunSettlementRecord {
   if (record.outcome !== "done" && record.outcome !== "failed") return record;

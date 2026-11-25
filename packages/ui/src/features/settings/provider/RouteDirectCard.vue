@@ -127,23 +127,16 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChevronDown, ChevronUp, GripVertical, Trash2 } from '@lucide/vue'
 import { Button, ConfirmDialog, Switch } from '@taiji/ui'
+import type { RouteDirectCard } from '@taiji/core/domain/settings'
 
 /**
- * 直连卡草稿数据（页面草稿态形状）：core RouteDirectCard 的渲染字段 + 草稿 scoped/isNew 态。
+ * 直连卡草稿数据（页面草稿态形状）：core RouteDirectCard 领域类型 + 草稿 scoped/isNew 态。
  * 与 wire 载荷有意不同——直连条目不经 wire 下发（D10：白名单半边走 settingsStore 通道），
  * 卡片由 core buildDirectCard / buildRoutePageCards 派生，scoped/isNew 属页面编辑态。
+ * 渲染字段经 extends 与 core 领域类型对拍（C-state-07 单源）：core 字段演进时 UI 侧
+ * 形状漂移有编译期信号，不靠逐字复刻的人肉同步（2026-11-25 dev-merge review dmg-r1-4）。
  */
-export interface RouteDirectCardData {
-  /** 判别标签（与 RouteDefinitionCard 的 kind:'route' 构成页面草稿判别联合）。 */
-  kind: 'direct'
-  /** 模型复合串 `provider/modelId`（scopedModels 条目原值）。 */
-  ref: string
-  providerId: string
-  modelId: string
-  providerName: string
-  modelName: string
-  apiKeySet: boolean
-  missing: boolean
+export interface RouteDirectCardData extends RouteDirectCard {
   /** 参与选择（草稿态；保存进 scopedRefs 目标态）。 */
   scoped: boolean
   /** 本编辑会话新建（未落白名单）→ 显「新增」徽标 + 移除免确认。 */

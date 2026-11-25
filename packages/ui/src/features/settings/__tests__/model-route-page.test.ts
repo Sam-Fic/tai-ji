@@ -573,6 +573,32 @@ describe('渠道直连卡（D10/U9：无 routes 的白名单模型 = 默认单�
     expect(payload.scopedRefs).toEqual([`${AGGREGATION_PROVIDER_ID}/r1`])
   })
 
+  it('直连卡「移除」已落盘条目后：快速创建行恢复「加直连」可创建态（去重防护读草稿目标态，dmg-r1-1）', async () => {
+    const w = mixedPage()
+    await w.find('[data-testid="route-quick-provider-row"]').trigger('click') // 面板分组默认折叠，展开后模型行可见
+    // 落盘态：该模型行显「已添加直连」禁用态（持久 ref 在草稿直连卡中）
+    expect(w.find('[data-testid="route-quick-direct-exists"]').exists()).toBe(true)
+    expect(w.find('[data-testid="route-quick-create-direct"]').exists()).toBe(false)
+
+    // 移除已落盘直连卡（确认对话框 → 确认；草稿摘除、权威未写）
+    await w.find('[data-testid="route-direct-card"] [data-testid="route-direct-remove"]').trigger('click')
+    await flushPromises()
+    const confirmBtn = Array.from(document.body.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'settings.modelRoute.directRemoveConfirmConfirm',
+    )
+    expect(confirmBtn).toBeTruthy()
+    await confirmBtn!.click()
+    await flushPromises()
+
+    // 草稿目标态已摘除 → 去重防护不拦截，同一行恢复可创建态并可重加
+    // （旧口径恒读持久 scopedModels：props 未变 → 移除后仍显禁用态，同模型无法重加）
+    expect(w.find('[data-testid="route-quick-direct-exists"]').exists()).toBe(false)
+    expect(w.find('[data-testid="route-quick-create-direct"]').exists()).toBe(true)
+    await w.find('[data-testid="route-quick-create-direct"]').trigger('click')
+    await flushPromises()
+    expect(w.findAll('[data-testid="route-direct-card"]')).toHaveLength(1)
+  })
+
   it('直连卡「移除」未保存新卡：即时摘除无确认对话框（草稿内丢弃）', async () => {
     const w = mountPage([cardOf(routeOf({ id: 'r1' }))], [
       prov({ id: 'zhipu', name: '智谱', models: [{ id: 'glm-4-6', name: 'GLM-4.6' }] }),

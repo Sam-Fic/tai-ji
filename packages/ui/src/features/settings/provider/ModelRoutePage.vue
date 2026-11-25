@@ -562,7 +562,6 @@ function openQuickCreate(): void {
 const quick = useQuickCreate({
   draftOf: () => draft.value,
   viewCardsOf: () => props.view.cards,
-  scopedModelsOf: () => props.scopedModels ?? [],
   providersOf: () => props.providers,
   addRoute: (route) => applyEditorOp({ kind: 'route-add', route }),
   addDirect: (providerId, modelId) => applyEditorOp({ kind: 'direct-add', providerId, modelId }),
