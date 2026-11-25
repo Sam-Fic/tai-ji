@@ -68,7 +68,7 @@ export {
   scanRunEvents,
 } from "../execution/persistence/run-event-journal.ts";
 // [subagent-observability §3.3.8] 成员交付结算派生面（纯派生模块——finalizeRun 合成链消费）。
-import { settleMembersIntoFinalSettlement } from "./run-member-settlement.ts";
+import { escalateScriptFailureVerdict, settleMembersIntoFinalSettlement } from "./run-member-settlement.ts";
 // [W1 / D1] v2 条目契约（两族小条目）：customType 同 v1（kind 判别），构造器与
 // 写点在本文件（见「v2 条目接驳」段）。
 import {
@@ -1240,7 +1240,11 @@ export async function settleRunAccounting(
 async function dispatchFinalRunSettle(run: WorkflowRun, doneReason: DoneReason): Promise<RunSettlementRecord> {
   // [subagent-observability §3.3.8] 成员交付结算派生先于帧构造（run 级终局优先级
   // 在 settleMembersIntoFinalSettlement 内裁决——cancelled 族不被成员集合覆盖）。
-  const record = settleMembersIntoFinalSettlement(run, composeFinalSettlement(run, doneReason));
+  // 在 settleMembersIntoFinalSettlement 之后接脚本层失败结论改档（成员派生只认成员
+  // 集合、会把脚本结论洗回 done——2026-11-25 dev-merge-gates 事故：gates FAIL 写在
+  // 返回载荷里，run 终态却显示 completed，页面/托盘/通知感知不到失败）。
+  const settled = settleMembersIntoFinalSettlement(run, composeFinalSettlement(run, doneReason));
+  const record = escalateScriptFailureVerdict(run, settled);
   if (doneReason === "aborted") {
     await dispatchRunTrigger(run, {
       type: "cancel-requested",

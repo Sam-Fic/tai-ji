@@ -37,6 +37,7 @@ import {
   wsRoundTrip,
   openListenWs,
   waitForExtensionsReady,
+  type WsFrame,
 } from './fixtures/launch-app-real'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -44,6 +45,8 @@ const SAMPLE_PROJECT = path.join(REPO_ROOT, 'e2e', 'fixtures', 'sample-project')
 
 /** faux 响应队列：每个 test 只发一次 prompt，消费步骤 1 文本 */
 const FAUX_RESPONSES = [{ text: 'ok-from-route' }]
+/** 回复断言标记（等待循环与断言的单一出处） */
+const FAUX_REPLY_MARK = 'ok-from-route'
 
 function writeDiag(name: string, data: Record<string, unknown>): void {
   fs.writeFileSync(`/tmp/${name}`, JSON.stringify(data, null, 2))
@@ -119,6 +122,29 @@ async function readRouteId(page: import('@playwright/test').Page): Promise<strin
   return routeId!
 }
 
+/** 从事件缓冲累积 assistant 文本（text_delta 增量优先，complete 终态 content 兜底） */
+function accumulateReplyText(events: WsFrame[]): string {
+  let got = ''
+  for (const e of events) {
+    if (e.type === 'message.text_delta' && typeof e.payload?.delta === 'string') got += e.payload.delta
+    if (e.type === 'message.complete' && typeof e.payload?.content === 'string' && !got) got = e.payload.content
+  }
+  return got
+}
+
+/** 轮询等 faux 回复文本或失败事件（90s 预算 = e2e 断言语义超时，ADR-0190 CI 白名单） */
+async function waitForReplyText(events: WsFrame[]): Promise<string> {
+  const deadline = Date.now() + 90_000
+  while (Date.now() < deadline) {
+    const got = accumulateReplyText(events)
+    if (got.includes(FAUX_REPLY_MARK)) return got
+    const failed = events.find((e) => e.type === 'message.complete' && e.payload?.stopReason === 'error')
+    if (failed) break
+    await new Promise((r) => setTimeout(r, 1000))
+  }
+  return accumulateReplyText(events)
+}
+
 /** 用 modelRef 覆盖建新会话，发 prompt，等 faux 回复文本（直连物理条目与聚合路由共用） */
 async function chatViaModel(port: number, dataDir: string, modelRef: string, label: string): Promise<void> {
   const sessionId = await createSession(port, dataDir, label, modelRef)
@@ -134,19 +160,7 @@ async function chatViaModel(port: number, dataDir: string, modelRef: string, lab
     expect(sendReply.type).toBe('message.status')
     expect(sendReply.payload?.status).toBe('sent')
 
-    // 等 assistant 回复（text_delta 增量或 complete 终态 content）
-    const deadline = Date.now() + 90_000
-    let got = ''
-    while (Date.now() < deadline) {
-      for (const e of events) {
-        if (e.type === 'message.text_delta' && typeof e.payload?.delta === 'string') got += e.payload.delta
-        if (e.type === 'message.complete' && typeof e.payload?.content === 'string' && !got) got = e.payload.content
-      }
-      if (got.includes('ok-from-route')) break
-      const failed = events.find((e) => e.type === 'message.complete' && e.payload?.stopReason === 'error')
-      if (failed) break
-      await new Promise((r) => setTimeout(r, 1000))
-    }
+    const got = await waitForReplyText(events)
     if (!got.includes('ok-from-route')) {
       writeDiag('route-chat-diag.json', {
         modelRef,

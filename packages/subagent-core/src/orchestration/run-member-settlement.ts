@@ -189,6 +189,50 @@ function parsePartialMemberEntry(item: unknown): PartialMemberReport | undefined
 }
 
 /**
+ * 脚本层失败结论提取（workflow 模板族失败终态约定：一律 `return {status:"failed", ...}`
+ * 而不 throw——pr-lifecycle 模板注释明文，dev-merge-gates 同型）。
+ *
+ * 为什么需要：脚本 return 失败结论时 worker 正常收尾 → run 级 outcome 恒 "done"
+ * （2026-11-25 dev-merge-gates 事故：gates FAIL 详情齐全地写在返回载荷里，run 终态
+ * 却显示 completed——托盘画绿勾、通知写 "done (completed)"、页面与 runtime 全部
+ * 感知不到失败，失败仅存于 Script Result 段正文）。本函数把该结论提为可判事实，
+ * 由 settleMembersIntoFinalSettlement 升格 run 终态（done → failed）。
+ *
+ * 返回简短 reason（failedStep 优先，回落固定标记）；非失败结论/缺载荷 → undefined。
+ * 只认 status === "failed" 字面：review-fix-loop（terminated 词表）/ merge
+ * （needs-human/released 等）不用本约定，不受影响。
+ */
+export function scriptFailureVerdictOf(scriptResult: unknown): string | undefined {
+  if (typeof scriptResult !== "object" || scriptResult === null) return undefined;
+  if ((scriptResult as { status?: unknown }).status !== "failed") return undefined;
+  const failedStep = (scriptResult as { failedStep?: unknown }).failedStep;
+  if (typeof failedStep === "string" && failedStep.trim() !== "") return failedStep.trim();
+  return "script-verdict";
+}
+
+/**
+ * 脚本层失败结论 → run 终局改档（done → failed）：在 settleMembersIntoFinalSettlement
+ * **之后**调用（成员派生只认成员集合，会把脚本结论洗回 done——2026-11-25
+ * dev-merge-gates 事故：gates FAIL 详情齐全地写在返回载荷里，run 终态却显示
+ * completed，托盘画绿勾、通知写 "done (completed)"，页面与 runtime 全部感知不到
+ * 失败，失败仅存于 Script Result 段正文）。
+ *
+ * 只对非失败终局改档：failed（脚本 throw / budget_limited 等更强形态）/ cancelled /
+ * time_limited 等 run 级终局族不动；done 与 partially_succeeded（成员派生升格）都可被
+ * 脚本失败结论压回 failed——脚本自身的失败裁决强于成员集合聚合（成员部分成功不构成
+ * 「失败被感知」：partially_succeeded 在条目/托盘同显非 clean，但结论级失败必须是
+ * failed，否则 dev-merge-gates 类「 gates FAIL + 个别成员成功」组合又漂成部分成功）。
+ * failed 之上的成员失败明细（failedMembers）原样保留——失败结论 + 成员明细同帧更信息量。
+ * reason 携 failedStep 短标记（条目/托盘归因），失败全文仍随 scriptResult 进通知。
+ */
+export function escalateScriptFailureVerdict(run: WorkflowRun, record: RunSettlementRecord): RunSettlementRecord {
+  if (record.outcome !== "done" && record.outcome !== "partially_succeeded") return record;
+  const verdict = scriptFailureVerdictOf(run.state.scriptResult);
+  if (verdict === undefined) return record;
+  return { ...record, outcome: "failed", reason: verdict };
+}
+
+/**
  * [subagent-observability §3.3.8] run 终局吸收成员交付：在 DoneReason 合成记录上
  * 叠加成员集合派生。两级优先序（run 级终局优先于成员集合派生）：
  * - run 自身终局族：budget_limited/time_limited/cancelled（UC-16：取消不产生
@@ -208,6 +252,9 @@ function parsePartialMemberEntry(item: unknown): PartialMemberReport | undefined
  * 接入本结算——存在部分交付事实时 run-settled 帧携带 partialMembers（明细：
  * [{taskIndex, missing[]}]，部分交付成员不进 failedMembers、无 cause），派生 outcome
  * 为 done 时升格 partially_succeeded（「无失败但存在部分交付」聚合规则支）。
+ * [2026-11-25 失败可感知性] 脚本层失败结论支：脚本 return {status:"failed"}（模板族
+ * 失败终态约定，不 throw）时 done → failed 升格（先于成员派生与部分交付支）——缺此环
+ * 时脚本层失败在 run 终态不可见（completed 假成功），详见 scriptFailureVerdictOf。
  */
 export function settleMembersIntoFinalSettlement(run: WorkflowRun, record: RunSettlementRecord): RunSettlementRecord {
   if (record.outcome !== "done" && record.outcome !== "failed") return record;

@@ -318,33 +318,17 @@ function cardOf(routeId: string): RouteDefinitionCard | undefined {
  * 尾部 markDirty。
  */
 function applyEditorOp(op: RouteEditorOp): void {
+  // 端点指令族（endpoint-* 8 kind）前置子分派：分发壳只做族路由，执行体沉到
+  // applyEndpointOp——指令词表增长不撑破本入口圈复杂度（metrics 门 maxCyclomatic 15；
+  // 2026-11-25 直连指令入表时 16 越限的拆出点）。
+  if (isEndpointEditorOp(op)) {
+    applyEndpointOp(op)
+    markDirty()
+    return
+  }
   switch (op.kind) {
     case 'route-patch':
       opRoutePatch(op)
-      break
-    case 'endpoint-add':
-      opEndpointAdd(op)
-      break
-    case 'endpoint-remove':
-      opEndpointRemove(op)
-      break
-    case 'endpoint-move':
-      opEndpointMove(op)
-      break
-    case 'endpoint-patch':
-      opEndpointPatch(op)
-      break
-    case 'endpoint-condition-type':
-      opEndpointConditionType(op)
-      break
-    case 'endpoint-window-set':
-      opEndpointWindowSet(op)
-      break
-    case 'endpoint-window-erase-cell':
-      opEndpointWindowEraseCell(op)
-      break
-    case 'endpoint-window-replace':
-      opEndpointWindowReplace(op)
       break
     case 'special-add':
       opSpecialAdd(op)
@@ -377,6 +361,15 @@ function applyEditorOp(op: RouteEditorOp): void {
 
 /** 判别联合按 kind 收窄的别名（op* 执行体参数类型单点）。 */
 type OpOf<K extends RouteEditorOp['kind']> = Extract<RouteEditorOp, { kind: K }>
+
+/** 端点指令族全集（endpoint-* 前缀 8 kind）。与 route-editor-ops 的 MemberEditorOp
+ *  （memberIndex 定位子集，供端点行 opWith 构造入参）不同——这里是分发族口径。 */
+type EndpointEditorOp = Extract<RouteEditorOp, { kind: `endpoint-${string}` }>
+
+/** 端点指令族判定（applyEditorOp 前置分派用；负分支收窄出路由/特殊日期/直连族）。 */
+function isEndpointEditorOp(op: RouteEditorOp): op is EndpointEditorOp {
+  return op.kind.startsWith('endpoint-')
+}
 
 function opRoutePatch(op: OpOf<'route-patch'>): void {
   const card = cardOf(op.routeId)
@@ -487,6 +480,43 @@ function opSpecialRemove(op: OpOf<'special-remove'>): void {
 function opRouteAdd(op: OpOf<'route-add'>): void {
   // 新卡参与选择默认开（新建即入选择器，V15 语义）；未入 scopedModels 前 scopedIndex = -1
   draft.value.push({ kind: 'route', card: { route: op.route, scoped: true, scopedIndex: -1, memberIssues: [] } })
+}
+
+/**
+ * 端点指令族分派（endpoint-* 8 kind 全集）：自 applyEditorOp 拆出的族子入口——执行体
+ * 仍为下方 opEndpoint* 函数族，族内穷举守卫同样在此（编译期新 kind 未接线红灯）。
+ */
+function applyEndpointOp(op: EndpointEditorOp): void {
+  switch (op.kind) {
+    case 'endpoint-add':
+      opEndpointAdd(op)
+      break
+    case 'endpoint-remove':
+      opEndpointRemove(op)
+      break
+    case 'endpoint-move':
+      opEndpointMove(op)
+      break
+    case 'endpoint-patch':
+      opEndpointPatch(op)
+      break
+    case 'endpoint-condition-type':
+      opEndpointConditionType(op)
+      break
+    case 'endpoint-window-set':
+      opEndpointWindowSet(op)
+      break
+    case 'endpoint-window-erase-cell':
+      opEndpointWindowEraseCell(op)
+      break
+    case 'endpoint-window-replace':
+      opEndpointWindowReplace(op)
+      break
+    default: {
+      const exhaustive: never = op
+      throw new Error(`Unknown member editor op: ${JSON.stringify(exhaustive)}`)
+    }
+  }
 }
 
 function opDirectAdd(op: OpOf<'direct-add'>): void {
