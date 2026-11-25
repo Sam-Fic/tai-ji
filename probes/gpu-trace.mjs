@@ -84,9 +84,25 @@ let seq = 0
 const pending = new Map()
 const events = []
 const dataLoss = []
+const frameErrors = []
 ws.addEventListener('message', (ev) => {
-  const msg = JSON.parse(ev.data)
-  if (msg.method === 'Tracing.dataCollected') { events.push(...msg.params.value); return }
+  let msg
+  try {
+    msg = JSON.parse(ev.data)
+  } catch (e) {
+    // 单帧解析失败不该杀死整场采集（渲染侧可能中断在半个帧上），但要留痕并计入有效性判据
+    frameErrors.push(`JSON.parse: ${e.message}`)
+    return
+  }
+  if (msg.method === 'Tracing.dataCollected') {
+    // **禁 spread**：record-continuously 的单个 dataCollected 批次可达数十万条，
+    // `events.push(...batch)` 会抛 RangeError: Maximum call stack size exceeded，
+    // 且异常发生在 ws 事件回调里 → 未捕获 → 整个采集进程崩（实测：no-blur/no-mask/reduced
+    // 三臂全崩在这行，full 臂因批次较小侥幸通过）。
+    const batch = msg.params.value
+    for (let i = 0; i < batch.length; i++) events.push(batch[i])
+    return
+  }
   if (msg.method === 'Tracing.dataLossOccured') { dataLoss.push(msg.params ?? {}); return }
   if (msg.id !== undefined && pending.has(msg.id)) {
     const p = pending.get(msg.id)
@@ -281,12 +297,13 @@ for (const e of events) {
   if (t > maxTs) maxTs = t
 }
 const wallSpanS = (maxTs - minTs) / 1e6
-console.log(`[gpu-probe] events=${events.length} wall-span=${wallSpanS.toFixed(2)}s dataLossEvents=${dataLoss.length}`)
+console.log(`[gpu-probe] events=${events.length} wall-span=${wallSpanS.toFixed(2)}s dataLossEvents=${dataLoss.length} frameErrors=${frameErrors.length}`)
 
 // ── 采集有效性断言（空 trace 绝不 exit 0）────────────────────────────────────
 const MIN_EVENTS = 5000
 const spanOk = Number.isFinite(wallSpanS) && wallSpanS >= 5 && wallSpanS <= (windowMs / 1000) * 2
 const eventsOk = events.length >= MIN_EVENTS
+if (frameErrors.length > 0) console.error(`[gpu-probe] 出现 ${frameErrors.length} 个解析失败帧（首个：${frameErrors[0]}）——采集可信度下降`)
 if (!eventsOk || !spanOk) {
   console.error(`[gpu-probe] 采集无效：events=${events.length}（需 ≥${MIN_EVENTS}）wall-span=${wallSpanS.toFixed(2)}s（需 ∈ [5, ${((windowMs / 1000) * 2).toFixed(1)}]s）——拒绝落盘/拒绝 exit 0`)
   process.exit(3)
