@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { computed, defineComponent, h, nextTick, ref, shallowRef } from 'vue'
+import type { ComputedRef, Ref } from 'vue'
 import { createPinia } from 'pinia'
 import { TurnRail } from '@taiji/ui'
 import { resetRailFreezeSlot } from '@taiji/ui'
@@ -38,12 +39,15 @@ function mkTurn (opts: { id?: string; text?: string; isStreaming?: boolean; with
   } as MessageTurn
 }
 
-/** 挂一个只用 railTurns 的最小宿主，返回取 rail 的句柄。 */
-function mountRailHost (sessionId: ReturnType<typeof computed<string>>, items: ReturnType<typeof ref<ReadonlyArray<SkillNoticeStreamItem>>>) {
+/** 挂一个只用 railTurns 的最小宿主，返回取 rail 的句柄。
+ *  形参类型对齐 deps 契约（ComputedRef<string> / ComputedRef<ReadonlyArray<…>>）——
+ *  旧写法用 `ReturnType<typeof computed<string>>`（= WritableComputedRef）和 `ReturnType<typeof ref<…>>`
+ *  当注解，与实际传入的 computed/ref 都不兼容（tsconfig.typecheck-test.json 一开就报 3 条）。 */
+function mountRailHost (sessionId: ComputedRef<string>, items: Ref<ReadonlyArray<SkillNoticeStreamItem>>) {
   let rail!: ReturnType<typeof useMessageStreamRail>
   const Host = defineComponent({
     setup () {
-      rail = useMessageStreamRail({ sessionId, renderItems: items, vlistRef: shallowRef(null) })
+      rail = useMessageStreamRail({ sessionId, renderItems: computed(() => items.value), vlistRef: shallowRef(null) })
       return () => h('div')
     },
   })
@@ -74,7 +78,7 @@ describe('useMessageStreamRail — 冻结槽切 session reset（P1-5）', () => 
     await nextTick()
 
     const railWrapper = mount(TurnRail, {
-      props: { turns: [s2Grow], activeIndex: 0, sessionActive: true },
+      props: { turns: [s2Grow], activeTurnIndex: 0, sessionActive: true },
       global: { plugins: [createPinia()], mocks: { t: (k: string) => k } },
     })
     // 值仍由该 message 前缀正确决定（跨 session 不错值），且 reset 后已重新冻结

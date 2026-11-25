@@ -166,9 +166,24 @@ export function useVirtuaFollow(opts: {
   function scrollToRealBottom(v: VirtualizerHandle, smooth = false): void {
     const count = opts.itemCount?.() ?? Number.MAX_SAFE_INTEGER
     if (count <= 0) return
+    // [batch6 R1] 已在底就不写：virtua 的 end 目标 = offset + startSpacer + itemOffset(last) +
+    // itemSize(last) - viewport，其中 offset 还叠加了 endOffset（尾部块 + 头部 spacer）——落点
+    // **结构性超出**浏览器 scrollTop 上界，由浏览器 clamp 收口。也就是说：已经贴底时每次写都是
+    // 「算出一个 ≥ max 的目标，写进去被夹回原位」的恒等写，却不免费——它仍会走 Blink 的 scroll
+    // 更新路径（真机插桩实测：流式窗 3018 次写里 85.7% 属此类，写前 scrollTop 已在 max 且目标
+    // ≥ max 占 86.6%）。
+    // 判据只用 virtua 自身缓存（scrollSize / scrollOffset / viewportSize 都是它的 store 属性，
+    // 不读 DOM 几何，无强制布局）：距底 ≤ 1px ⇒ 写入必被 clamp 成恒等，直接跳过。
+    // 内容真增长时 scrollSize 先变，距底恢复 >1px，写入照常发生——不影响跟随收敛。
+    // 距底必须按 virtua 的目标公式算（含 endOffset）：virtua 的 scrollSize 只覆盖条目总高，
+    // 真实底部还要加尾部块 + 头部 spacer（D2/F4 的 endOffset 补偿项），只用 scrollSize 会在
+    // 「差一个 tail+padTop」时误判已到底而漏跟随。
+    const endOffset = opts.endOffset?.() ?? 0
+    const distance = v.scrollSize + endOffset - v.scrollOffset - v.viewportSize
+    if (distance <= 1) return
     // smooth 仅胶囊点击路径（决策 12「点击平滑回底」断言），且经 opts.smoothAllowed 通行门
     // （缺陷①：流式增长期降级即时跳，见 opts 注释）。
-    v.scrollToIndex(count - 1, { align: 'end', offset: opts.endOffset?.() ?? 0, smooth })
+    v.scrollToIndex(count - 1, { align: 'end', offset: endOffset, smooth })
   }
 
   // ── D7② force 后收敛抑制窗 ────────────────────────────────────────────────
