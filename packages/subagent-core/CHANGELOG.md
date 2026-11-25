@@ -1,5 +1,13 @@
 # @zhushanwen/subagent-core
 
+## 2.4.0
+
+### Minor Changes
+
+- 81bf59ceb: subagent_batch 工具切换专用执行体模板 `batch`：批量派发不再走通用 `fan-out` 模板，改为专用的「N 个独立任务并行派发 + 全量收集」模板——**去掉 aggregate 归约节点**，成员结果原样全量返回（`outcome.results`），归约由主 agent 自行完成（批量契约 = 把事实收齐，不替主 agent 下结论）。收集内核（成员对象校验 / 派发 / allSettled 降级 / deliverables 产物契约谓词 / 通知体积保序截断 / partial 收尾）收敛为 `workflows/_shared/batch-collect.cjs` 单实现，`batch` 与 `fan-out` 两模板共用，通用 `fan-out` 模板的可选 `aggregate` 归约段保留供直跑场景按需使用。
+
+- 81bf59ceb: workflow 失败可感知性与派发卫生加固：① 脚本按模板族约定 `return {status:"failed"}` 收尾时，run 终态由 done/partially_succeeded 改档 failed（reason 携 failedStep）——此前脚本层失败结论只存在于 Script Result 段正文，run 终态恒显 completed，托盘画绿勾、通知写 "done (completed)"，页面与 runtime 感知不到失败；② workflow agent 派发空/非字符串/纯空白 prompt 时同步抛错 fail-fast（零池占用、零孤儿 record），不再派出空转轮次。
+
 ## 2.3.2
 
 ### Patch Changes

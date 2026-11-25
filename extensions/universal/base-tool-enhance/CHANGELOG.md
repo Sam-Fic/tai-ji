@@ -1,5 +1,11 @@
 # @zhushanwen/pi-base-tool-enhance
 
+## 0.12.3
+
+### Patch Changes
+
+- 81bf59ceb: chore: refresh dependency range (triggered by @zhushanwen/extension-protocol@0.30.0 → @zhushanwen/extension-protocol@0.31.0, @zhushanwen/subagent-core@2.3.2 → @zhushanwen/subagent-core@2.4.0)
+
 ## 0.12.2
 
 ### Patch Changes
