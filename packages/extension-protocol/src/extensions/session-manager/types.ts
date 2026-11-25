@@ -32,6 +32,16 @@ export interface SessionManagerCreateParams {
   /** 初始 prompt（可选；提供时 create 后立即注入——设计文档 §5.2 原子性决策） */
   prompt?: string
   /**
+   * 创建时生效模型（`provider/modelId` 复合串，optional）。提供时 runtime 经
+   * SessionManagerHandler.handleCreate 透传 sessionService.create options.modelOverride
+   * （CreateOptions.modelOverride 链路，优先级 `override > preset > 全局默认`，C-RL-6）；
+   * 缺省 = settings.json 全局默认模型档（create 路径无「继承派发方模型」语义）。
+   *
+   * 本层只做类型范围检查（optional string）；模型 id 是否可解析归 pi spawn 侧
+   * fail-visible（无效模型名经创建失败错误回包，不静默降级默认）。
+   */
+  modelOverride?: string
+  /**
    * 完成通知债权的幂等键（optional，notify-once D2/D6）：extension 侧
    * `crypto.randomUUID()` 前缀 `sm-` 生成。缺省/畸形 → runtime 不 arm、
    * `willNotify:false`、零完成通知——兼容判据从版本二分改为字段有无。
@@ -149,13 +159,14 @@ function isSessionIdParams(v: unknown): boolean {
   return isRecord(v) && typeof v.sessionId === 'string'
 }
 
-/** create：字段可选 string + optional notifyId（类型范围，sm- 形态判定归 arm 判据） */
+/** create：字段可选 string + optional modelOverride/notifyId（类型范围，sm- 形态判定归 arm 判据） */
 export function isSessionManagerCreateParams(v: unknown): v is SessionManagerCreateParams {
   return (
     isRecord(v) &&
     isOptionalString(v.cwd) &&
     isOptionalString(v.label) &&
     isOptionalString(v.prompt) &&
+    isOptionalString(v.modelOverride) &&
     isOptionalNotifyId(v.notifyId)
   )
 }

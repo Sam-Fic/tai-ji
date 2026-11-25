@@ -490,7 +490,7 @@ export class SessionManagerHandler {
    *   extension 收到 error 不会开表，留记录必悬挂）。
    */
   private async handleCreate(parentSessionId: string, params: SessionManagerCreateParams): Promise<SessionManagerCreateResult> {
-    const { cwd, label, prompt } = params
+    const { cwd, label, prompt, modelOverride } = params
 
     // 0. project 归属继承（u8，设计文档 D8）：子会话随父会话归入同一 project。
     // 侧栏命名 project 视图按 projectId 过滤，不继承会让派发出的子会话在用户当前
@@ -520,11 +520,18 @@ export class SessionManagerHandler {
     // A'（2026-08-24）：persistLabel=true —— agent 传 label 时是显式命名（语义性），
     // 持久化且防 auto-rename 覆盖；未传 label 则 no-op（见 session-lifecycle persistExplicitLabel）
     // projectId：undefined 时空值检查（persistCreateSidecars）跳过 sidecar 落盘 = 落默认项目。
+    // modelOverride：extension create_managed_session 的可选 model 参数（协议位
+    // SessionManagerCreateParams.modelOverride，本 handler 经 select+SESSION_MANAGER_MARKER
+    // 通道受理）；此处只透传，语义 = CreateOptions 的 `override > preset > 全局默认` 链
+    // （agent-managed create 不携 presetId，preset 档不可达），经 resolveCreateLaunch /
+    // readBackCreateState 落 pi spawn 生效值与注册表双写缓存。
+    // 缺省（undefined）= settings.json 全局默认模型档，与既有行为逐字节一致。
     const session = await this.opts.sessionService.create(cwd, label, {
       spawnSource: 'agent',
       parentAgentSessionId: parentSessionId,
       persistLabel: true,
       projectId: parentProjectId,
+      modelOverride,
     })
 
     // 2. broadcastSessionList（先于 sendMessage，opts 注入回调）

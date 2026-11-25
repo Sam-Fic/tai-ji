@@ -131,6 +131,13 @@ describe('send/create optional-notifyId 检查（缺省放行 + 类型范围，�
     expect(isSessionManagerCreateParams({ notifyId: 7 })).toBe(false)
     expect(isSessionManagerCreateParams(null)).toBe(false)
   })
+
+  it('create：modelOverride 类型范围（缺省放行 / string 放行 / 非 string 拒绝）——工具层 model 参数的 wire 字段（dmg-r1-1）', () => {
+    expect(isSessionManagerCreateParams({})).toBe(true)
+    expect(isSessionManagerCreateParams({ modelOverride: 'zai/glm-5' })).toBe(true)
+    expect(isSessionManagerCreateParams({ modelOverride: 42 })).toBe(false)
+    expect(isSessionManagerCreateParams({ modelOverride: { id: 'x' } })).toBe(false)
+  })
 })
 
 describe('watch respond payload（sessionId 回带 + meta 可选字段）', () => {

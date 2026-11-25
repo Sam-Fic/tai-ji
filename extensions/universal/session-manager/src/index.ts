@@ -388,8 +388,10 @@ The returned sessionId is the value all other session tools take — keep it; li
 			cwd: p.cwd,
 			label: p.label,
 			prompt: p.prompt,
-			// 模型覆盖透传（runtime session.create payload 的 modelOverride 位，
-			// session-message-handler.ts 已支持——缺它则新建 session 只能吃全局默认）
+			// 模型覆盖透传（协议位 SessionManagerCreateParams.modelOverride，经
+			// select+SESSION_MANAGER_MARKER 通道由 runtime SessionManagerHandler
+			// （session-manager-handler.ts）handleCreate 喂入 sessionService.create
+			// options.modelOverride——缺它则新建 session 只能吃全局默认）
 			modelOverride: p.model,
 			// 债权只可能在带 prompt 时产生（G1）——无 prompt 不携带 notifyId（缺省即不 arm）
 			notifyId: p.prompt !== undefined ? newNotifyId() : undefined,

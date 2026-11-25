@@ -60,6 +60,14 @@ describe("U5-A3 tool-schema", () => {
 			const required = schemas.create_managed_session.required as string[];
 			expect(required).not.toContain("prompt");
 		});
+
+		it("has optional model (string) — dmg-r1-1: tool 参数 model 透传协议 modelOverride，缺省 = 全局默认", () => {
+			const props = schemas.create_managed_session.properties as Record<string, unknown>;
+			expect(props.model).toBeDefined();
+			expect((props.model as Record<string, unknown>).type).toBe("string");
+			const required = schemas.create_managed_session.required as string[];
+			expect(required).not.toContain("model");
+		});
 	});
 
 	describe("send_to_session", () => {

@@ -233,6 +233,46 @@ describe('SessionManagerHandler', () => {
       // broadcastSessionList 无参调用（签名已收窄为 ()，上下文由 server 侧组装）
       expect(opts.broadcastSessionList).toHaveBeenCalledWith()
     })
+
+    it('create modelOverride 契约两态：传 model → 透传 sessionService.create options.modelOverride 且回执 modelId=生效值；不传 → options 不携 modelOverride（全局默认）', async () => {
+      // 态 1：extension 传 model（wire 字段 SessionManagerCreateParams.modelOverride，
+      // dmg-r1-1 修复锚——断链曾经在此静默 no-op）。真链路：modelOverride 经
+      // CreateOptions 落 pi spawn 生效值并由注册表双写缓存，此处以 getSession 回读模拟。
+      const withModel = makeSessionSummary({ id: 'with-model' })
+      const optsModel = makeMockOptions({
+        sessionService: makeMockSessionService({
+          create: vi.fn().mockResolvedValue(withModel),
+          getSession: vi.fn().mockReturnValue({ id: 'with-model', modelId: 'zai/glm-5' }),
+        }),
+      })
+      await new SessionManagerHandler(optsModel).handle('req-m', 'sid-parent', 'create', {
+        cwd: '/test',
+        label: 'with-model',
+        modelOverride: 'zai/glm-5',
+      })
+      expect(optsModel.sessionService.create).toHaveBeenCalledWith(
+        '/test',
+        'with-model',
+        expect.objectContaining({ modelOverride: 'zai/glm-5' }),
+      )
+      expect(respondAt(optsModel).modelId).toBe('zai/glm-5')
+
+      // 态 2：不传 model → options 不携 modelOverride（undefined 缺省），解析链落全局默认
+      const defaultModel = makeSessionSummary({ id: 'default-model' })
+      const optsDefault = makeMockOptions({
+        sessionService: makeMockSessionService({
+          create: vi.fn().mockResolvedValue(defaultModel),
+          getSession: vi.fn().mockReturnValue({ id: 'default-model', modelId: 'settings-default/model' }),
+        }),
+      })
+      await new SessionManagerHandler(optsDefault).handle('req-d', 'sid-parent', 'create', {
+        cwd: '/test',
+      })
+      const sentOptions = (optsDefault.sessionService.create as ReturnType<typeof vi.fn>).mock
+        .calls[0][2] as Record<string, unknown>
+      expect(sentOptions.modelOverride).toBeUndefined()
+      expect(respondAt(optsDefault).modelId).toBe('settings-default/model')
+    })
   })
 
   describe('U4-A2: send/history/status/list/abort 五个 action 分支', () => {

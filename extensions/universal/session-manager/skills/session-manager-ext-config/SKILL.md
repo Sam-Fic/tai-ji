@@ -78,7 +78,7 @@ runtime 查得到时附 `Full transcript: <sessionFilePath>` 指针行。
 
 | 工具 | 说明 |
 |------|------|
-| `create_managed_session` | 创建子 session（cwd 必填；可选 label；可选 prompt 原子 create+send） |
+| `create_managed_session` | 创建子 session（cwd 必填；可选 label；可选 prompt 原子 create+send；可选 model（"provider/modelId"）指定生效模型，不传 = settings.json 全局默认） |
 | `send_to_session` | 向子 session 发 prompt（忙时排队，`queued: true` 立即返回） |
 | `read_session_history` | 读子 session 对话历史（可选 tailTurns 截尾部 N 个 turn） |
 | `list_my_sessions` | 列本 agent 管理的 session（顺带回填 label 缓存，修复重启后的文案 label 降级） |
