@@ -72,7 +72,7 @@ export interface RunMemberView { // oe-exempt:20261022:framework:设计 §3.1.3 
   /** 批量 = tasks 下标；脚本 = agent() 调用序。 */
   stepIndex: number;
   state: MemberState;
-  /** 执行者短名：record.agent 优先；缺省回落 trace 标签（fan-out-<i>）。 */
+  /** 执行者短名：record.agent 优先；缺省回落 trace 标签（批量模板成员 description 前缀 <模板名>-<i>，如 batch-0）。 */
   agent: string;
   /**
    * 用户显式指定的模型（record.model）；未指定时为请求缺省标记 "default"（trace）。

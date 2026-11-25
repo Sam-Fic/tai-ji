@@ -70,13 +70,20 @@ const MOCK_RELEASE: LatestReleaseInfo = {
   publishedAt: new Date().toISOString(),
   htmlUrl: 'https://github.com/zhushanwen321/tai-ji/releases/dev-mock',
   assets: {
-    // macArm64Dmg 是必须的（MacUpdater 走此 asset）；指向不存在的 URL，
-    // 真实下载时会失败——但 P2 不走到这步（只验证检测 + UI）。
+    // macArm64Dmg / macX64Dmg 分别供 arm64/x64 架构的 MacUpdater 消费（双架构
+    // 自动升级）；指向不存在的 URL，真实下载时会失败——但 P2 不走到这步（只验证
+    // 检测 + UI）。
     // downloadUrl 用合法的 GitHub URL（即使 404），以便通过 validateRelease
     // 白名单校验（install 路径会校验从 preloaded 读出的 release）。
     macArm64Dmg: {
       name: 'TaiJi-mac-arm64.dmg',
       downloadUrl: 'https://github.com/zhushanwen321/tai-ji/releases/download/v999.999.999/TaiJi-mac-arm64.dmg',
+      size: 0,
+      sha256: 'a'.repeat(SHA256_HEX_LENGTH),
+    },
+    macX64Dmg: {
+      name: 'TaiJi-mac-x64.dmg',
+      downloadUrl: 'https://github.com/zhushanwen321/tai-ji/releases/download/v999.999.999/TaiJi-mac-x64.dmg',
       size: 0,
       sha256: 'a'.repeat(SHA256_HEX_LENGTH),
     },

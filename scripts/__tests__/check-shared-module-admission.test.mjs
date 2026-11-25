@@ -9,7 +9,8 @@
  *     node:path / node:url / node:os 等纯计算内置同样在禁列；存量白名单
  *     （paths.ts / session-store-paths.ts）放行
  *   - 登记完备：未登记模块 / 死登记 / 空 purpose 检出；双向一致通过；子目录按目录级条目对账
- *   - 判据数据：shared-node-builtin-rules.json 的内置名单与 Node module.builtinModules 等值
+ *   - 判据数据：shared-node-builtin-rules.json 覆盖运行中 Node 的全部内置（含仅 node:
+ *     前缀可用的内置），且名单每条均为真实内置
  *   - main --root：干净树绿 / 违规树红（exit 1）/ 目录缺失 exit 2 / 子目录未登记红
  *   - isMain：脚本路径含 # 时仍正常执行（pathToFileURL 归一化，不再空转 exit 0）
  *   - pre-commit hook（.githooks/check_shared_node_builtin.py）：tmp mirror + spawnSync
@@ -18,7 +19,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { builtinModules } from 'node:module'
+import { builtinModules, isBuiltin } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -120,10 +121,22 @@ describe('scanSourceViolations：依赖方向与 node 内置禁令', () => {
 })
 
 describe('判据数据（shared-node-builtin-rules.json）', () => {
-  it('内置名单与 Node module.builtinModules 等值（去 node: 前缀）', () => {
-    const rules = JSON.parse(readFileSync(RULES_PATH, 'utf8'))
-    const nodeBuiltins = new Set(builtinModules.map((m) => m.replace(/^node:/, '')))
-    expect(new Set(rules.builtinModules)).toEqual(nodeBuiltins)
+  // 判据数据是策略 SSOT（对齐项目钉定的 Node 版本），不是运行中 Node 的 builtinModules
+  // 快照：仅 node: 前缀可用的内置（test / test/reporters / sqlite / sea）在旧版本 Node 的
+  // builtinModules 里根本不出现，逐版本等值会让同一份数据随本地 shell 的 Node 版本时红时绿
+  // （2026-11-24 实测：Node 22 shell 下 quality-gates 的 scripts-guards 族因此单点红）。
+  // 原红灯意图（Node 新增内置未同步即红）拆成两条方向断言，与运行时版本解耦：
+  //   ① 运行中 Node 的每个内置都必须被名单覆盖
+  //   ② 名单每条都必须是真实内置（node: 前缀形态才算，覆盖 prefix-only 内置）
+  it('覆盖运行中 Node 的全部内置（新增内置未同步即红）', () => {
+    const rules = new Set(JSON.parse(readFileSync(RULES_PATH, 'utf8')).builtinModules)
+    const missing = builtinModules.map((m) => m.replace(/^node:/, '')).filter((m) => !rules.has(m))
+    expect(missing).toEqual([])
+  })
+
+  it('名单每条都是真实内置（含仅 node: 前缀可用的内置）', () => {
+    const rules = JSON.parse(readFileSync(RULES_PATH, 'utf8')).builtinModules
+    expect(rules.filter((m) => !isBuiltin(`node:${m}`))).toEqual([])
   })
 })
 

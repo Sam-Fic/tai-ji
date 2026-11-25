@@ -34,7 +34,9 @@ import type { WorkflowRunEvent } from "../run-events.ts";
 import {
   ADOPTED_MEMBER_CAUSE,
   deriveRunOutcomeFromMembers,
+  escalateScriptFailureVerdict,
   memberSettlementOf,
+  scriptFailureVerdictOf,
   settleMembersIntoFinalSettlement,
 } from "../run-member-settlement.ts";
 import { dispatchRunTrigger } from "../terminal-actions.ts";
@@ -977,5 +979,82 @@ describe("[§3.3.8 脚本层失败两形态分流] 成员明细的抑制边界�
 describe("[§3.3.8] INITIAL_RUN_EVENT_FOLD 兼容（runSettled 骨架新字段缺省形态）", () => {
   it("fold 初值 runSettled = undefined（新字段不破坏既有 fold 契约）", () => {
     expect(INITIAL_RUN_EVENT_FOLD.runSettled).toBeUndefined();
+  });
+});
+
+describe("[2026-11-25 失败可感知性] 脚本层失败结论（status:\"failed\"）升格 run 终态", () => {
+  /** 成员派生之后的完整链（与 terminal-actions dispatchFinalRunSettle 同构） */
+  function settleChain(run: ReturnType<typeof makeRunWithMembers>, over: Partial<RunSettlementRecord> = {}): RunSettlementRecord {
+    return escalateScriptFailureVerdict(run, settleMembersIntoFinalSettlement(run, { ...BASE_RECORD, ...over }));
+  }
+
+  it("done + 脚本 return {status:'failed'} → failed 升格 + reason=failedStep（页面/托盘/通知可感知）", () => {
+    const run = makeRunWithMembers([OK, OK]);
+    run.state.scriptResult = { status: "failed", failedStep: "gates", error: "quality-gates FAIL…" };
+    const record = settleChain(run);
+    expect(record.outcome).toBe("failed");
+    expect(record.reason).toBe("gates");
+  });
+
+  it("failedStep 缺省 → reason 回落 script-verdict 固定标记", () => {
+    const run = makeRunWithMembers([OK]);
+    run.state.scriptResult = { status: "failed", error: "x" };
+    const record = settleChain(run);
+    expect(record.outcome).toBe("failed");
+    expect(record.reason).toBe("script-verdict");
+  });
+
+  it("成员派生把结论洗回 done 之后仍改档（escalate 必须在 settleMembers 之后——调用点契约）", () => {
+    const run = makeRunWithMembers([OK, OK]); // 成员全成功 → 派生 done
+    run.state.scriptResult = { status: "failed", failedStep: "branch-review" };
+    const afterMembers = settleMembersIntoFinalSettlement(run, BASE_RECORD);
+    expect(afterMembers.outcome).toBe("done"); // 成员派生不认识脚本结论
+    expect(escalateScriptFailureVerdict(run, afterMembers).outcome).toBe("failed");
+  });
+
+  it("脚本失败结论压过成员部分成功：派生 partially_succeeded 也被改档 failed（成员明细保留）", () => {
+    const run = makeRunWithMembers([OK, FAIL]); // 成员派生 → partially_succeeded
+    run.state.scriptResult = { status: "failed", failedStep: "gates" };
+    const afterMembers = settleMembersIntoFinalSettlement(run, BASE_RECORD);
+    expect(afterMembers.outcome).toBe("partially_succeeded"); // 成员派生不认识脚本结论
+    const record = escalateScriptFailureVerdict(run, afterMembers);
+    expect(record.outcome).toBe("failed"); // 脚本自身失败裁决强于成员集合聚合
+    expect(record.reason).toBe("gates");
+    expect(record.failedMembers).toEqual([{ taskIndex: 1, cause: "provider.rate_limited" }]); // 明细不丢
+  });
+
+  it("非失败结论不动终态：{status:'done'} / {status:'partial'} / {status:'ok'} / 缺 status 一律保持 done（模板词表不误伤）", () => {
+    for (const scriptResult of [{ status: "done" }, { status: "partial" }, { status: "ok" }, {}]) {
+      const run = makeRunWithMembers([OK, OK]);
+      run.state.scriptResult = scriptResult;
+      expect(settleChain(run).outcome).toBe("done");
+    }
+  });
+
+  it("budget_limited 优先族不被脚本结论覆盖（真实终局形态 = outcome failed + errorCode）", () => {
+    const run = makeRunWithMembers([OK]);
+    run.state.scriptResult = { status: "failed", failedStep: "gates" };
+    // composeFinalSettlement 对 budget_limited 的产物形态（run-vocabulary D5 映射表）
+    const record = settleChain(run, { outcome: "failed", errorCode: "budget_limited", reason: "budget_limited" });
+    expect(record.outcome).toBe("failed");
+    expect(record.errorCode).toBe("budget_limited"); // run 级终局码不被脚本结论改写
+    expect(record.reason).toBe("budget_limited");
+  });
+
+  it("cancelled 终局不被脚本结论覆盖（UC-16 同族：取消不是失败）", () => {
+    const run = makeRunWithMembers([OK]);
+    run.state.scriptResult = { status: "failed", failedStep: "gates" };
+    const record = settleChain(run, { outcome: "cancelled" });
+    expect(record.outcome).toBe("cancelled");
+  });
+
+  it("escalateScriptFailureVerdict 直接单测：非对象/status 非 failed/failedStep 非字符串三形态", () => {
+    expect(scriptFailureVerdictOf(undefined)).toBeUndefined();
+    expect(scriptFailureVerdictOf(null)).toBeUndefined();
+    expect(scriptFailureVerdictOf("failed")).toBeUndefined();
+    expect(scriptFailureVerdictOf({ status: "done" })).toBeUndefined();
+    expect(scriptFailureVerdictOf({ status: "failed" })).toBe("script-verdict");
+    expect(scriptFailureVerdictOf({ status: "failed", failedStep: "  gates  " })).toBe("gates");
+    expect(scriptFailureVerdictOf({ status: "failed", failedStep: 42 })).toBe("script-verdict");
   });
 });

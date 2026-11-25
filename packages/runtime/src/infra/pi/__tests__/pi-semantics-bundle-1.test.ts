@@ -1022,3 +1022,83 @@ describe.skipIf(!PI_DIST_m2_d1)(
   },
 )
 });
+
+// ======================================================================
+// PS-102 探针段（pi-semantics.json PS-102 登记；provider-aggregation 域）
+// —— pi 重试预算缺省值 + taiji 影子副本对拍
+// ======================================================================
+
+/** 定位仓库根（含 docs/pi-semantics.json 的目录，cwd 逐级上溯）。 */
+function locateRepoRoot_ps102(): string | null {
+  let dir = process.cwd()
+  for (let i = 0; i < 6; i++) {
+    if (existsSync(join(dir, 'docs', 'pi-semantics.json'))) return dir
+    const parent = join(dir, '..')
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
+}
+
+
+const PI_DIST_ps102 = locatePiCodingAgentDist()
+
+const REPO_ROOT_ps102 = locateRepoRoot_ps102()
+
+const SKIP_REASON_ps102 = PI_DIST_ps102 && REPO_ROOT_ps102
+  ? ''
+  : 'node_modules/@earendil-works/pi-coding-agent/dist 或仓库根不可达（cwd 上溯 6 级未命中）'
+
+
+// dist 不可达时 skip（describe.skipIf 命中时 vitest 仍执行工厂体——读取必须在模块级
+// 三元检查内完成，不能放 describe 体，否则收集期抛错而非 skip）
+const SETTINGS_MANAGER_SRC_ps102 = PI_DIST_ps102 ? readFileSync(join(PI_DIST_ps102, 'core', 'settings-manager.js'), 'utf-8') : ''
+
+// wave3 包装：本段原文件顶层语句收进 describe 作用域（顶层 hook 不再外溢到同文件其他来源的用例）
+describe('pi-semantics-retry-budget', () => {
+if (!PI_DIST_ps102 || !REPO_ROOT_ps102) console.warn(`[pi-semantics] skip：${SKIP_REASON_ps102}`)
+describe.skipIf(!PI_DIST_ps102 || !REPO_ROOT_ps102)(
+  `PS-102 探针：pi 重试预算缺省值 maxRetries=3 / enabled=true + taiji 影子副本对拍（${SKIP_REASON_ps102 ? `skip：${SKIP_REASON_ps102}` : 'settings-manager.js getRetrySettings/getRetryEnabled'}）`,
+  () => {
+    it('getRetryEnabled 缺省 true（`retry?.enabled ?? true`——重试默认开启）', () => {
+      const win = methodWindow(SETTINGS_MANAGER_SRC_ps102, 'getRetryEnabled() {')
+      expect(win, 'PS-102 漂移：getRetryEnabled 方法消失/改名——复核 PS-102 锚点 dist/core/settings-manager.js:648-650').not.toBe('')
+      expect(
+        win.includes('return this.settings.retry?.enabled ?? true;'),
+        'PS-102 漂移：getRetryEnabled 缺省值不再是 true（重试缺省停用？）——taiji readMaxRetries 的 enabled===false→0 语义基准变化（停用形态与缺省形态的边界移动），复核 PS-102',
+      ).toBe(true)
+    })
+
+    it('getRetrySettings 的 maxRetries 缺省 3（`retry?.maxRetries ?? 3`）且 enabled 委派 getRetryEnabled', () => {
+      const win = methodWindow(SETTINGS_MANAGER_SRC_ps102, 'getRetrySettings() {')
+      expect(win, 'PS-102 漂移：getRetrySettings 方法消失/改名——复核 PS-102 锚点 dist/core/settings-manager.js:659-666').not.toBe('')
+      expect(
+        win.includes('maxRetries: this.settings.retry?.maxRetries ?? 3,'),
+        'PS-102 漂移：maxRetries 缺省值不再是 3——taiji DEFAULT_MAX_RETRIES=3 影子副本与实际预算分裂（「链内失败计数 ≥ 预算 → burnt → failover」阈值偏移，用户侧 failover 时机静默变化），复核 PS-102 并同步 extensions/universal/provider-aggregation/src/index.ts',
+      ).toBe(true)
+      // 两缺省值必须同源：enabled 经 getRetryEnabled 委派（不得在 getRetrySettings 内联第二处缺省定义）
+      expect(
+        win.includes('enabled: this.getRetryEnabled(),'),
+        'PS-102 漂移：getRetrySettings 不再委派 getRetryEnabled（enabled 缺省值出现第二处内联定义？）——两缺省值分裂风险，复核 PS-102',
+      ).toBe(true)
+    })
+
+    it('taiji 影子副本对拍：DEFAULT_MAX_RETRIES 与 dist 缺省值一致，readMaxRetries 的 enabled===false→0 在场', () => {
+      const extSrc = readFileSync(join(REPO_ROOT_ps102 as string, 'extensions', 'universal', 'provider-aggregation', 'src', 'index.ts'), 'utf-8')
+      const distDefault = /maxRetries:\s*this\.settings\.retry\?\.maxRetries\s*\?\?\s*(\d+)/.exec(SETTINGS_MANAGER_SRC_ps102)
+      expect(distDefault, 'PS-102 漂移：dist getRetrySettings 的 maxRetries 缺省形态消失（`?? <n>` 不存在）——复核 PS-102 锚点').not.toBeNull()
+      const shadow = /const DEFAULT_MAX_RETRIES = (\d+)/.exec(extSrc)
+      expect(shadow, 'PS-102 漂移：provider-aggregation index.ts 的 DEFAULT_MAX_RETRIES 常量消失/改名——taiji 侧影子副本锚点丢失，复核 PS-102').not.toBeNull()
+      expect(
+        Number(shadow![1]),
+        'PS-102 漂移：taiji DEFAULT_MAX_RETRIES 与 pi 缺省值分裂——「超过 pi 的重试次数即 failover」阈值偏移，复核 PS-102 并同步 extensions/universal/provider-aggregation/src/index.ts',
+      ).toBe(Number(distDefault![1]))
+      // 停用形态：enabled=false = 零次重试（预算读 0）——与 pi 缺省 true 互补的 taiji 侧判据
+      expect(
+        extSrc.includes('if (retry?.enabled === false) return 0'),
+        'PS-102 漂移：readMaxRetries 的 enabled===false→0 分支消失——retry 停用形态下预算语义变化（首败即超 → burnt 的规则失效），复核 PS-102',
+      ).toBe(true)
+    })
+  },
+)
+});

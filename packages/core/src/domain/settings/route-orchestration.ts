@@ -110,6 +110,41 @@ export interface RouteDefinitionCard { // oe-exempt:20261106:framework:ports 契
   card: AggregationRouteCard
 }
 
+/**
+ * 物理模型复合串（scopedModels 渠道直连条目的对齐键；与聚合引用
+ * buildAggregationModelRef 对位——两者共同构成白名单条目的两种形态）。
+ */
+export function buildModelRef(providerId: string, modelId: string): string {
+  return `${providerId}/${modelId}`
+}
+
+/**
+ * 渠道直连卡派生（物理模型复合串 → 渲染卡）：provider 已删 / 模型已移除时
+ * missing=true、名称降级回 id（原值保留，配置保留优先）。
+ *
+ * 单源消费方 = buildRoutePageCards（scopedModels 既有条目视图 join）与
+ * 快速创建「加直连」（草稿新卡派生）——同一派生逻辑两处消费，禁在 UI 侧重放。
+ */
+export function buildDirectCard(ref: string, providers: RoutePageProviderIndex): RouteDirectCard {
+  const slashIdx = ref.indexOf('/')
+  const providerId = slashIdx === -1 ? ref : ref.substring(0, slashIdx)
+  const modelId = slashIdx === -1 ? '' : ref.substring(slashIdx + 1)
+  // key 放宽为 string：ref 拆出的 provider 段是裸 string，而 ProviderInfo.id 是
+  // ProviderId branded string——Map key 用宽类型，构造侧 branded 值直接放入。
+  const provider = new Map<string, RoutePageProviderIndex[number]>(providers.map(p => [p.id, p])).get(providerId)
+  const model = provider?.models.find(m => m.id === modelId)
+  return {
+    kind: 'direct',
+    ref,
+    providerId,
+    modelId,
+    providerName: provider?.name ?? providerId,
+    modelName: model?.name ?? modelId,
+    apiKeySet: provider?.apiKeySet ?? true,
+    missing: !provider || !model,
+  }
+}
+
 /** 路由页卡片（直连形态 ∪ 路由形态，scopedModels 序交错）。 */
 export type RoutePageCard = RouteDirectCard | RouteDefinitionCard
 
@@ -131,9 +166,6 @@ export function buildRoutePageCards(
   providers: RoutePageProviderIndex,
 ): RoutePageCard[] {
   const cardByRouteId = new Map(view.cards.map(c => [c.route.id, c]))
-  // key 放宽为 string：scopedModels 条目拆出的 provider 段是裸 string，而 ProviderInfo.id
-  // 是 ProviderId branded string——Map key 用宽类型，构造侧 branded 值直接放入。
-  const providerById = new Map<string, RoutePageProviderIndex[number]>(providers.map(p => [p.id, p]))
   const usedRouteIds = new Set<string>()
   const scopedCards: RoutePageCard[] = []
   for (const ref of scopedModels) {
@@ -145,22 +177,8 @@ export function buildRoutePageCards(
       continue
     }
     if (routeId !== undefined) continue // 孤儿引用：不生成卡（view.orphanRefs 提示条承载）
-    // 渠道直连卡：物理模型复合串的渲染元数据派生（原 useScopedModels.scopedRenderItems 逻辑归位）
-    const slashIdx = ref.indexOf('/')
-    const providerId = slashIdx === -1 ? ref : ref.substring(0, slashIdx)
-    const modelId = slashIdx === -1 ? '' : ref.substring(slashIdx + 1)
-    const provider = providerById.get(providerId)
-    const model = provider?.models.find(m => m.id === modelId)
-    scopedCards.push({
-      kind: 'direct',
-      ref,
-      providerId,
-      modelId,
-      providerName: provider?.name ?? providerId,
-      modelName: model?.name ?? modelId,
-      apiKeySet: provider?.apiKeySet ?? true,
-      missing: !provider || !model,
-    })
+    // 渠道直连卡：渲染元数据经 buildDirectCard 单源派生（原 useScopedModels.scopedRenderItems 逻辑归位）
+    scopedCards.push(buildDirectCard(ref, providers))
   }
   const unscopedCards: RoutePageCard[] = view.cards
     .filter(c => !c.scoped && !usedRouteIds.has(c.route.id))

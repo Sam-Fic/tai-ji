@@ -20,7 +20,7 @@
 
 ## 快速开始
 
-当前最新版本：**v0.13.1**（[查看全部版本](https://github.com/zhushanwen321/tai-ji/releases)）。安装后 app 内会自动检测新版本，提示一键升级。
+当前最新版本：**v0.13.3**（[查看全部版本](https://github.com/zhushanwen321/tai-ji/releases)）。安装后 app 内会自动检测新版本，提示一键升级。
 
 <!-- INSTALL:BEGIN -->
 <!-- 本区块内的版本号由 .agents/skills/merge/scripts/update-readme-install.mjs 在每次正式发布后自动替换；区块外仅上方「当前最新版本」行会同步更新，其余内容不会被打扰。 -->
@@ -32,17 +32,22 @@
 
 **macOS（Apple Silicon）**
 ```bash
-curl -L https://gitcode.com/qq_18433817/tai-ji/releases/download/v0.13.1/TaiJi-0.13.1-mac-arm64.dmg -o /tmp/TaiJi.dmg && open /tmp/TaiJi.dmg
+curl -L https://gitcode.com/qq_18433817/tai-ji/releases/download/v0.13.3/TaiJi-0.13.3-mac-arm64.dmg -o /tmp/TaiJi.dmg && open /tmp/TaiJi.dmg
+```
+
+**macOS（Intel）**
+```bash
+curl -L https://gitcode.com/qq_18433817/tai-ji/releases/download/v0.13.3/TaiJi-0.13.3-mac-x64.dmg -o /tmp/TaiJi.dmg && open /tmp/TaiJi.dmg
 ```
 
 **Linux**
 ```bash
-curl -L https://gitcode.com/qq_18433817/tai-ji/releases/download/v0.13.1/TaiJi-0.13.1-x86_64.AppImage -o ~/TaiJi.AppImage && chmod +x ~/TaiJi.AppImage && ~/TaiJi.AppImage
+curl -L https://gitcode.com/qq_18433817/tai-ji/releases/download/v0.13.3/TaiJi-0.13.3-x86_64.AppImage -o ~/TaiJi.AppImage && chmod +x ~/TaiJi.AppImage && ~/TaiJi.AppImage
 ```
 
 **Windows（PowerShell）**
 ```powershell
-Invoke-WebRequest -Uri "https://gitcode.com/qq_18433817/tai-ji/releases/download/v0.13.1/TaiJi-0.13.1-setup-x64.exe" -OutFile "$env:TEMP\TaiJi-setup.exe" -UseBasicParsing; & "$env:TEMP\TaiJi-setup.exe"
+Invoke-WebRequest -Uri "https://gitcode.com/qq_18433817/tai-ji/releases/download/v0.13.3/TaiJi-0.13.3-setup-x64.exe" -OutFile "$env:TEMP\TaiJi-setup.exe" -UseBasicParsing; & "$env:TEMP\TaiJi-setup.exe"
 ```
 
 </details>
@@ -54,17 +59,22 @@ Invoke-WebRequest -Uri "https://gitcode.com/qq_18433817/tai-ji/releases/download
 
 **macOS（Apple Silicon）**
 ```bash
-curl -L https://github.com/zhushanwen321/tai-ji/releases/download/v0.13.1/TaiJi-0.13.1-mac-arm64.dmg -o /tmp/TaiJi.dmg && open /tmp/TaiJi.dmg
+curl -L https://github.com/zhushanwen321/tai-ji/releases/download/v0.13.3/TaiJi-0.13.3-mac-arm64.dmg -o /tmp/TaiJi.dmg && open /tmp/TaiJi.dmg
+```
+
+**macOS（Intel）**
+```bash
+curl -L https://github.com/zhushanwen321/tai-ji/releases/download/v0.13.3/TaiJi-0.13.3-mac-x64.dmg -o /tmp/TaiJi.dmg && open /tmp/TaiJi.dmg
 ```
 
 **Linux**
 ```bash
-curl -L https://github.com/zhushanwen321/tai-ji/releases/download/v0.13.1/TaiJi-0.13.1-x86_64.AppImage -o ~/TaiJi.AppImage && chmod +x ~/TaiJi.AppImage && ~/TaiJi.AppImage
+curl -L https://github.com/zhushanwen321/tai-ji/releases/download/v0.13.3/TaiJi-0.13.3-x86_64.AppImage -o ~/TaiJi.AppImage && chmod +x ~/TaiJi.AppImage && ~/TaiJi.AppImage
 ```
 
 **Windows（PowerShell）**
 ```powershell
-Invoke-WebRequest -Uri "https://github.com/zhushanwen321/tai-ji/releases/download/v0.13.1/TaiJi-0.13.1-setup-x64.exe" -OutFile "$env:TEMP\TaiJi-setup.exe" -UseBasicParsing; & "$env:TEMP\TaiJi-setup.exe"
+Invoke-WebRequest -Uri "https://github.com/zhushanwen321/tai-ji/releases/download/v0.13.3/TaiJi-0.13.3-setup-x64.exe" -OutFile "$env:TEMP\TaiJi-setup.exe" -UseBasicParsing; & "$env:TEMP\TaiJi-setup.exe"
 ```
 
 </details>
@@ -80,7 +90,7 @@ Invoke-WebRequest -Uri "https://github.com/zhushanwen321/tai-ji/releases/downloa
 
 <!-- INSTALL:END -->
 
-> **macOS Intel 用户**：当前仅提供 Apple Silicon (arm64) DMG，暂不支持 Intel Mac。
+> **macOS Intel 用户**：v0.13.1 起提供 Intel (x64) DMG；v0.13.3 起 Intel mac 与 Apple Silicon 一样支持应用内自动更新（存量旧版本需手动安装一次 v0.13.3+ 后生效）。
 
 ---
 

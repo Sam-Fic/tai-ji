@@ -185,6 +185,23 @@ function highlightShikiSync(hl: HighlighterCore, code: string, lang: string): st
       lang: resolved,
       themes: { dark: SHIKI_DARK, light: SHIKI_LIGHT },
       defaultColor: false,
+      // 关闭 shiki 的墙钟早停（vscode-textmate `_tokenizeString` 的 tokenizeTimeLimit，
+      // 默认 500ms/行：超时即 return 截断本行 tokenization）。
+      //
+      // 为什么必须关（ADR-0190 时间阈值判死禁令的第三方存量形态）：双主题下
+      // `codeToTokensWithThemes` 对同一行跑两趟 tokenize（暗 → 亮），两趟共享同一
+      // grammar 但**不共享时间预算**。机器负载高时（coverage-gate 5 worker 连跑 6 包）
+      // 先跑的暗色趟可能被判超时截断 → 该行只剩一个整段默认色 token；后跑的亮色趟
+      // grammar 已热、不超时 → 正常细分 token。`alignThemesTokenization` 再按亮色趟的
+      // 边界把暗色整段 token 切段，每段沿用暗色默认色 → 同一 token 双主题色错位
+      // （`--shiki-dark:var(--neutral-fg-2);--shiki-light:var(--md-code-fg)`），
+      // 高亮产物随负载非确定（实测偶发致 packages/ui markdown-extras「abap 回落
+      // 与显式 typescript 逐字节一致」断言红）。
+      //
+      // 0 = 该行完全不设时间判定（shiki 契约 `timeLimit !== 0` 才检查），tokenization
+      // 结果只由输入决定——时间相关的提前放弃是数据正确性问题，不是性能开关。
+      // 单行上限由 tokenizeMaxLineLength（默认 0 = 不限）单独表达，不混入墙钟。
+      tokenizeTimeLimit: 0,
     })
   } catch {
     // 未知语言/解析失败：返回空串，调用方降级为 <pre><code> 纯文本

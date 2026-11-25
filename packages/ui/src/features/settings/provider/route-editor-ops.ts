@@ -60,6 +60,12 @@ export type RouteEditorOp =
   | { kind: 'route-add'; route: AggregationRoute }
   /** 删除路由（U9 删除侧：卡头删除确认后上抛；页面转发编排层走 deleteRoute 端口，草稿不乐观改）。 */
   | { kind: 'route-delete'; routeId: string }
+  /** 添加渠道直连模型（快速创建面板模型行「加直连」→ 草稿追加直连卡，参与选择默认开）。
+   *  落卡态 = scopedModels 白名单条目（保存经 scopedRefs 整表覆写生效，无 routes 定义）。 */
+  | { kind: 'direct-add'; providerId: string; modelId: string }
+  /** 移除渠道直连卡（直连卡移除按钮 → 草稿摘除；已落盘条目的白名单清理由保存承载）。
+   *  ref = 直连卡复合串（草稿内唯一键；路由卡不受影响）。 */
+  | { kind: 'direct-remove'; ref: string }
 
 /** 端点缺省阈值（spec §7.8：仅额度缺阈值默认 20%）。 */
 export const DEFAULT_QUOTA_THRESHOLD_PERCENT = 20

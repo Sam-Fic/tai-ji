@@ -206,7 +206,7 @@ const WORKFLOW_DIR_PACKAGES = new Set(["subagent-workflow"]);
  * `<scope>/<pkg>/{agents,workflows}` 走约定目录扫描；因此**这两个目录必须实际存在于
  * staged 包目录内**（同目录形态在 dev/npm 形态本来也由约定扫描命中，三形态对齐）。
  * 缺失后果：打包版 `<available_subagents>` 缺失 10 内置角色、`<available_workflows>`
- * 缺失 6 内置模板（`subagents` 批量工具报 'Built-in workflow fan-out is not available'）。
+ * 缺失 7 内置模板（`subagents` 批量工具报 'Built-in workflow batch is not available'）。
  * 落点约束：**不得**把 node_modules 形态引进来（electron-builder 内建丢弃相对路径恰为
  * `node_modules` 的目录，见 `app-builder-lib/out/util/filter.js:43`）。
  */

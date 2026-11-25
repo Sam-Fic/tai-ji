@@ -144,6 +144,7 @@ type ResolveSourceOrderFn = (pref: UpdateSourcePref) => Promise<SourceOrder>
 /** asset 文件名 pattern（按平台后缀匹配；兼容带/不带版本号的文件名，历史语义） */
 const ASSET_PATTERNS = {
   macArm64Dmg: (name: string): boolean => name.endsWith('-mac-arm64.dmg'),
+  macX64Dmg: (name: string): boolean => name.endsWith('-mac-x64.dmg'),
   winX64Exe: (name: string): boolean => name.endsWith('-setup-x64.exe'),
   linuxX64AppImage: (name: string): boolean => name.endsWith('-x86_64.AppImage'),
 } as const
@@ -193,6 +194,7 @@ function buildLatestReleaseInfo(source: UpdateSource, release: SourceRelease): L
     htmlUrl: release.html_url ?? '',
     assets: {
       macArm64Dmg: pickPlatformAsset(release.assets, ASSET_PATTERNS.macArm64Dmg),
+      macX64Dmg: pickPlatformAsset(release.assets, ASSET_PATTERNS.macX64Dmg),
       winX64Exe: pickPlatformAsset(release.assets, ASSET_PATTERNS.winX64Exe),
       linuxX64AppImage: pickPlatformAsset(release.assets, ASSET_PATTERNS.linuxX64AppImage),
     },
@@ -673,6 +675,7 @@ function applyManifestToInfo(
     ...info,
     assets: {
       macArm64Dmg: patch(info.assets.macArm64Dmg),
+      macX64Dmg: patch(info.assets.macX64Dmg),
       winX64Exe: patch(info.assets.winX64Exe),
       linuxX64AppImage: patch(info.assets.linuxX64AppImage),
     },

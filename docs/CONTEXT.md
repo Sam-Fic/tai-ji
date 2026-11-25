@@ -152,10 +152,10 @@ R2+ 聚合重报命中问题清单已追踪条目的形态：title 缺失侧从�
 
 跨轮表格号不稳定下的条目同一性判定：L1 编号+标题双核、L2 归一标题唯一命中、L3 占号避让（`review-fix-loop-utils.cjs` resolveIssueIdentity）。_Avoid_：「编号对齐」「标题匹配」单称。
 
-### Fan-out / 批量派发
+### Batch / 批量派发（batch 模板）
 
 
-2+ 独立任务并行、结果收齐一起处理的批量编排形态。唯一入口是 `subagent_batch` 批量 tool（常驻 direct）：一次调用传 `tasks` 成员对象数组——每个元素 = `{task, agent?, model?, thinkingLevel?}`（task 必填、自包含、非空白；成员级执行者 / 模型 / 思考档位实现逐成员隔离），运行级 `agent` / `model` / `thinkingLevel` 是成员未指定时的缺省值（`agent` 由工具填入未指定的成员；`model` / `thinkingLevel` 留空给 `$MODEL` / `$THINKING_LEVEL` 继承）。工具不接受 `agents`（逗号串）与 `aggregate`——出现即报错并给出正确形状（「一个执行者用于全员」用运行级 `agent`，「每个成员不同」用成员级 `agent`，归约由主 agent 自行完成）。handler 转译 `runWorkflow("fan-out")` 走 workflow 单管道——`parallel()` allSettled 并行派 N 个一次性成员（one-shot，不可 message/续聊），任一成员失败降 `partial` 不炸 run。run 未收敛窗口内可查 `workflow_control {"action":"status","runId":"…"}` 得成员表：每成员一行（stepIndex / state / agent / model / 耗时 / 最后一错；state 四态 running / completed / failed / cancelled；record 为权威源，trace 派生兜底），run 行带 `failed N/M` 失败计数；恢复 = 只把失败 taskIndex 对应的成员对象再发一次。run 收敛后主 agent 收到一条聚合结果通知（结构化 results：task / taskIndex / status / summary / fullReportPath）。机制落点：[subagents/architecture.md §4 批量编排行](../extensions/subagents/architecture.md)。
+2+ 独立任务并行、结果收齐一起处理的批量编排形态（通用直跑同族模板 = `fan-out`，多一个可选 `aggregate` 归约段；批量 tool 走无归约的 `batch` 专用执行体）。唯一入口是 `subagent_batch` 批量 tool（常驻 direct）：一次调用传 `tasks` 成员对象数组——每个元素 = `{task, agent?, model?, thinkingLevel?}`（task 必填、自包含、非空白；成员级执行者 / 模型 / 思考档位实现逐成员隔离），运行级 `agent` / `model` / `thinkingLevel` 是成员未指定时的缺省值（`agent` 由工具填入未指定的成员；`model` / `thinkingLevel` 留空给 `$MODEL` / `$THINKING_LEVEL` 继承）。工具不接受 `agents`（逗号串）与 `aggregate`——出现即报错并给出正确形状（「一个执行者用于全员」用运行级 `agent`，「每个成员不同」用成员级 `agent`，归约由主 agent 自行完成）。handler 转译 `runWorkflow("batch")` 走 workflow 单管道（执行体 = `batch` 专用模板：纯收集、无归约节点，结果原样全量带回；与通用 `fan-out` 模板共用收集内核 `workflows/_shared/batch-collect.cjs`）——`parallel()` allSettled 并行派 N 个一次性成员（one-shot，不可 message/续聊），任一成员失败降 `partial` 不炸 run。run 未收敛窗口内可查 `workflow_control {"action":"status","runId":"…"}` 得成员表：每成员一行（stepIndex / state / agent / model / 耗时 / 最后一错；state 四态 running / completed / failed / cancelled；record 为权威源，trace 派生兜底），run 行带 `failed N/M` 失败计数；恢复 = 只把失败 taskIndex 对应的成员对象再发一次。run 收敛后主 agent 收到一条聚合结果通知（结构化 results：task / taskIndex / status / summary / fullReportPath）。机制落点：[subagents/architecture.md §4 批量编排行](../extensions/subagents/architecture.md)。
 
 
 **与单数派发的边界**：`subagent_start` 无批量与通知路由参数（pi 参数校验对未知字段静默放行——typebox 不产 `additionalProperties`，携带不存在的字段不报错但也不生效），单发逐条独立通知；2+ 独立任务并行的正确调用 = `subagent_batch` tool（成员对象 `tasks` 数组、一次调用、一条聚合结果通知）。

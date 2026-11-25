@@ -648,7 +648,9 @@
         "extensions/universal/subagent-workflow/src/**",
         "packages/subagent-core/workflows/fan-out.js",
         "packages/subagent-core/src/orchestration/**",
-        "packages/subagent-core/src/execution/service/**"
+        "packages/subagent-core/src/execution/service/**",
+        "packages/subagent-core/workflows/batch.js",
+        "packages/subagent-core/workflows/_shared/batch-collect.cjs"
       ],
       "layer": "L3",
       "assets": [
@@ -667,6 +669,14 @@
         {
           "kind": "harness",
           "ref": "e2e/fixtures/batch-real-helpers.ts"
+        },
+        {
+          "kind": "script",
+          "ref": "packages/subagent-core/workflows/batch.js"
+        },
+        {
+          "kind": "script",
+          "ref": "packages/subagent-core/workflows/_shared/batch-collect.cjs"
         }
       ],
       "trigger": "on-diff",
@@ -674,7 +684,7 @@
       "run": "前置：VITE_E2E=true pnpm run build:e2e（real renderer bundle，不带 VITE_MOCK）。执行：TAIJI_PI_LIVE=1 pnpm test:e2e --project=electron e2e/batch-s1-basic-chain.spec.ts（双凭证门 = env + 本机 provider 凭证，缺一 skip 不 fail；空载串行）。历史验收剧本（W1 batch-rerun.sh）已随 .tmp 清理（.tmp 不入 git），主命令即执行口径",
       "owner": "extensions/universal/subagent-workflow",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
-      "note": "剧本重建完成（2026-09-26 W1 介质归位触发义务收敛）：spec 落 git 跟踪路径防丢失复发；断言口径 = 原始场景 S1 通知收齐 + W1 新介质锚（journal 首帧/恰一 run-settled/seq 递增、v2 条目各恰两/实体、journal 胜出、死字节零命中、wf-done 幂等键）。 R2 态：触发范围 = subagent-workflow shell / fan-out 模板 / core 执行链（orchestration + execution/service）改动。asset 锚 = 被验能力本体（非验证剧本——validate 强校验 asset 磁盘存在，剧本未落建前以能力本体登记，落建后同 commit 回填）。验收敛径（设计 S1）：一条 notifyDone，status=ok 且 results.length=2、summary 计数正确、Agent Trace 2 条均 ok； 真机已过：status=ok/results=2/taskIndex 0,1/计数正确/wf-done 登记。"
+      "note": "剧本重建完成（2026-09-26 W1 介质归位触发义务收敛）：spec 落 git 跟踪路径防丢失复发；断言口径 = 原始场景 S1 通知收齐 + W1 新介质锚（journal 首帧/恰一 run-settled/seq 递增、v2 条目各恰两/实体、journal 胜出、死字节零命中、wf-done 幂等键）。 R2 态：触发范围 = subagent-workflow shell / batch 模板 / core 执行链（orchestration + execution/service）改动。asset 锚 = 被验能力本体（非验证剧本——validate 强校验 asset 磁盘存在，剧本未落建前以能力本体登记，落建后同 commit 回填）。验收敛径（设计 S1）：一条 notifyDone，status=ok 且 results.length=2、summary 计数正确、Agent Trace 2 条均 ok； 真机已过：status=ok/results=2/taskIndex 0,1/计数正确/wf-done 登记。"
     },
     {
       "id": "E2E-BATCH-02",
@@ -702,7 +712,9 @@
       "scope": [
         "extensions/universal/subagent-workflow/src/**",
         "packages/subagent-core/workflows/fan-out.js",
-        "packages/subagent-core/src/execution/assembly/subagent-actions-core.ts"
+        "packages/subagent-core/src/execution/assembly/subagent-actions-core.ts",
+        "packages/subagent-core/workflows/batch.js",
+        "packages/subagent-core/workflows/_shared/batch-collect.cjs"
       ],
       "layer": "L3",
       "assets": [
@@ -721,6 +733,14 @@
         {
           "kind": "harness",
           "ref": "e2e/fixtures/batch-real-helpers.ts"
+        },
+        {
+          "kind": "script",
+          "ref": "packages/subagent-core/workflows/batch.js"
+        },
+        {
+          "kind": "script",
+          "ref": "packages/subagent-core/workflows/_shared/batch-collect.cjs"
         }
       ],
       "trigger": "on-diff",
@@ -737,7 +757,9 @@
         "extensions/universal/subagent-workflow/src/**",
         "packages/subagent-core/workflows/fan-out.js",
         "packages/subagent-core/src/orchestration/**",
-        "packages/subagent-core/src/execution/service/**"
+        "packages/subagent-core/src/execution/service/**",
+        "packages/subagent-core/workflows/batch.js",
+        "packages/subagent-core/workflows/_shared/batch-collect.cjs"
       ],
       "layer": "L3",
       "assets": [
@@ -760,6 +782,14 @@
         {
           "kind": "harness",
           "ref": "e2e/fixtures/batch-real-helpers.ts"
+        },
+        {
+          "kind": "script",
+          "ref": "packages/subagent-core/workflows/batch.js"
+        },
+        {
+          "kind": "script",
+          "ref": "packages/subagent-core/workflows/_shared/batch-collect.cjs"
         }
       ],
       "trigger": "on-diff",
@@ -777,13 +807,24 @@
         "packages/subagent-core/src/execution/service/workflow-dispatch.ts",
         "packages/subagent-core/src/orchestration/__tests__/member-reuse-pool.test.ts",
         "packages/subagent-core/src/execution/__tests__/conversation-continuation.test.ts",
-        "packages/subagent-core/workflows/fan-out.js"
+        "packages/subagent-core/workflows/fan-out.js",
+        "packages/subagent-core/workflows/batch.js",
+        "packages/subagent-core/workflows/_shared/batch-collect.cjs",
+        "packages/subagent-core/src/__tests__/batch-script.test.ts"
       ],
       "layer": "L1",
       "assets": [
         {
           "kind": "script",
           "ref": "packages/subagent-core/workflows/fan-out.js"
+        },
+        {
+          "kind": "script",
+          "ref": "packages/subagent-core/workflows/batch.js"
+        },
+        {
+          "kind": "script",
+          "ref": "packages/subagent-core/workflows/_shared/batch-collect.cjs"
         }
       ],
       "trigger": "on-diff",
@@ -1393,7 +1434,9 @@
         "packages/pi-subagent-cli/src/**",
         "packages/subagent-core/src/execution/service/member-reuse-pool.ts",
         "packages/subagent-core/workflows/fan-out.js",
-        "extensions/universal/base-tool-enhance/**"
+        "extensions/universal/base-tool-enhance/**",
+        "packages/subagent-core/workflows/batch.js",
+        "packages/subagent-core/workflows/_shared/batch-collect.cjs"
       ],
       "layer": "L3",
       "assets": [
@@ -1412,6 +1455,14 @@
         {
           "kind": "harness",
           "ref": "e2e/fixtures/batch-real-helpers.ts"
+        },
+        {
+          "kind": "script",
+          "ref": "packages/subagent-core/workflows/batch.js"
+        },
+        {
+          "kind": "script",
+          "ref": "packages/subagent-core/workflows/_shared/batch-collect.cjs"
         }
       ],
       "trigger": "on-diff",
@@ -6004,10 +6055,11 @@
     },
     {
       "id": "E2E-ROUTE-01",
-      "summary": "e2e 真实进程层：模型路由快速创建（simple/advanced）→ 保存 → aggregation/<id> 会话收 faux 回复",
+      "summary": "e2e 真实进程层：模型路由快速创建（direct 加直连 / advanced 高级路由）→ 保存 → faux/<modelId> 或 aggregation/<id> 会话收 faux 回复",
       "scope": [
         "packages/ui/src/features/settings/provider/**",
-        "packages/ui/src/locale/**"
+        "packages/ui/src/locale/**",
+        "packages/core/src/domain/settings/route-orchestration.ts"
       ],
       "layer": "L2",
       "assets": [
@@ -6021,7 +6073,7 @@
       "run": "npx playwright test e2e/route-quick-create-real.spec.ts",
       "owner": "packages/renderer",
       "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
-      "note": "[本轮新建；2026-11-21 修正 layer L1→L2（real 层误标 L1 被 e2e-on-diff×L1 消费，CI 无 X server 快败——与 REAL-01 同族口径，不进 CI 门禁）] 模型路由快速创建 UI 链（RouteQuickCreatePanel simple/advanced → RouteUnsavedBar 保存 → providers.json routes 域）+ provider-aggregation 聚合虚拟模型端到端（session.create modelOverride=aggregation/<routeId> → faux 回复文本断言）。文件名带 -real，命中 REAL_TRACK_SPECS 首类形态，不进 CI 门禁，开发阶段按改动范围空载串行跑。"
+      "note": "[本轮新建；2026-11-21 修正 layer L1→L2（real 层误标 L1 被 e2e-on-diff×L1 消费，CI 无 X server 快败——与 REAL-01 同族口径，不进 CI 门禁）] 模型路由快速创建 UI 链（RouteQuickCreatePanel 模型行「加直连」/筛选多选「创建高级路由」→ RouteUnsavedBar 保存 → providers.json scopedModels 白名单域 / routes 域）+ 双引用形态端到端（session.create modelOverride=faux/<modelId> 直连物理条目 或 aggregation/<routeId> 聚合虚拟模型 → faux 回复文本断言）。[2026-11-25] 「建简单路由」入口退役（用户裁决：单模型直接加直连），原 simple 用例改写为 direct 用例（断言直连卡 data-ref + 新增徽标 + 保存后徽标消退）。文件名带 -real，命中 REAL_TRACK_SPECS 首类形态，不进 CI 门禁，开发阶段按改动范围空载串行跑。"
     },
     {
       "id": "E2E-PERF-01",
@@ -6042,6 +6094,78 @@
       "owner": "scripts/perf",
       "authority": "scripts/perf/cdp-profile.mjs",
       "note": "R3 归档态（2026-11-21 登记）：开发期性能分析工具，无独立 CI 环节；测量方法与基线数据记录在维护者本机 ~/Code/vue-performance/（taiji-analysis.md）"
+    },
+    {
+      "id": "E2E-GENSTATS-01",
+      "summary": "gen-stats × provider-aggregation 路由会话验收资产族（R2 按改动范围）：真实进程层探针（真 runtime + 真 pi + faux LLM 零 token）T1 路由会话出数 / B1 窗口聚合并集 / B3 未命中成员仍入窗 / B2 物理直连零回归",
+      "scope": [
+        "scripts/acceptance/gen-stats-route/**",
+        "packages/runtime/src/services/session/gen-stats-model-keys.ts",
+        "packages/runtime/src/services/session/gen-stats-service.ts",
+        "packages/runtime/src/services/session/__tests__/gen-stats-service.test.ts",
+        "packages/runtime/src/services/session/__tests__/gen-stats-model-keys.test.ts",
+        "packages/runtime/src/services/session/__tests__/gen-stats-service-member-read.test.ts"
+      ],
+      "layer": "L2.5",
+      "assets": [
+        {
+          "kind": "script",
+          "ref": "scripts/acceptance/gen-stats-route/route-stats-probe.mjs"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "node scripts/acceptance/gen-stats-route/route-stats-probe.mjs --case t1 && node scripts/acceptance/gen-stats-route/route-stats-probe.mjs --case b1 && node scripts/acceptance/gen-stats-route/route-stats-probe.mjs --case b3 && node scripts/acceptance/gen-stats-route/route-stats-probe.mjs --case b2",
+      "owner": "scripts/acceptance/gen-stats-route",
+      "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
+      "note": "R2 态（e2e 资产归宿纪律三态）：触发条件 = scripts/acceptance/gen-stats-route/** 或 gen-stats 域源码/测试精确路径（packages/runtime/src/services/session/gen-stats-model-keys.ts / gen-stats-service.ts 及两者 __tests__ 下 gen-stats-*.test.ts，共 5 条 scope）diff 命中时开发期执行 run（四例串行，各自 mkdtemp 独立数据目录 + 独立 runtime 子进程，零 token；串行防跨包 CPU 饱和——e2e 执行准则）。PR/merge/CI 门禁不跑。T1 含 transcript 断言（message.send 契约字段 content 生效见证）。"
+    },
+    {
+      "id": "E2E-ODCAT-01",
+      "summary": "OpenDesign 模型目录探测脚本（周度 CI 定时）：目录/价格表拉取（抖动重试）→ pi deepseek 线格式逐档探测（invalid_request_error = 端点显式拒绝，其余重试耗尽记不支持）→ 与编译期快照做差异补丁（只带差异字段 ⇒ 快照修好后补丁自然消失；下线模型进 removeModels）",
+      "scope": [
+        "scripts/probe-opendesign-catalog.mjs",
+        "packages/runtime/src/services/remote-config/remote-provider-metadata.ts",
+        "packages/runtime/src/services/remote-config/__tests__/probe-opendesign-catalog.test.ts",
+        "scripts/probe-opendesign-catalog.d.mts"
+      ],
+      "layer": "L1",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "packages/runtime/src/services/remote-config/__tests__/probe-opendesign-catalog.test.ts"
+        },
+        {
+          "kind": "spec",
+          "ref": "packages/runtime/src/services/remote-config/__tests__/remote-provider-metadata.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": false,
+      "run": "pnpm -C packages/runtime exec vitest run src/services/remote-config/__tests__/probe-opendesign-catalog.test.ts src/services/remote-config/__tests__/remote-provider-metadata.test.ts",
+      "owner": "scripts/",
+      "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
+      "note": "R3 态（2026-11-24 裁决：不在 GitHub Actions 跑——探测需要可用额度内的 key，且 ~100 次真实请求不适合放进 CI 的固定预算；改为本地/手动执行）。脚本 `scripts/probe-opendesign-catalog.mjs` 保留为手动工具：`OPENDESIGN_API_KEY=... node scripts/probe-opendesign-catalog.mjs` 有差异才写文件。判定语义由纯函数单测零 token 锁定（档位 map 三态 / input 模态映射 / 差异补丁形态）。运行时零探测（ADR-0190）：应用侧只消费 provider-model-metadata 域的 4h 节流拉取。"
+    },
+    {
+      "id": "E2E-INTEG-78",
+      "summary": "main run-state 组：marker 写/清/残留消费 + checkpoint 冷启动可信度隔离 + crash journal 登记（每用例 vi.resetModules() 全量重导 main.ts，一次性模块级 flag 隔离语义；登记为慢用例门禁豁免资产）",
+      "scope": [
+        "apps/electron/main/main.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "apps/electron/main/test/main-run-state.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "pnpm --filter @taiji/electron run test:main test/main-run-state.test.ts",
+      "owner": "apps/electron",
+      "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
+      "note": "R2 态，2026-11-25 登记。默认套件常跑、不挂 TAIJI_TEST_INTEGRATION 门控（全 mock electron，无真进程/真 IO 等待）；豁免慢用例门禁（>2s 红）的理由 = 被测契约要求每用例 vi.resetModules() 重导 main.ts 模块图（before-quit isQuitting 等一次性模块级 flag，见文件头装置说明），模块图重评估成本随宿主负载波动（实测 solo 2.0s / 满载 4.9s），无确定上界、非用例本身慢。serial=真 的理由同（满载下无稳定上界）。"
     }
   ]
 }

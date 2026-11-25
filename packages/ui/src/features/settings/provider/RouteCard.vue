@@ -324,7 +324,10 @@ const props = defineProps<{
    * 额度数据供给（providerId → 首窗口百分比投影，M2 接线）：传入后「此刻」chip 的额度
    * 条件按真实数据求值；缺省不传 = 额度数据未知（fail-open 放行，chip 以中性着色 +
    * 文案后缀区分「数据在且满足」）。语义与 pi 扩展同源投影（quota-cache-reader wins[0].pct），
-   * 「显示 ≡ 生效」由上层注入同一投影保证。
+   * 「条件维度显示 ≡ 生效」由上层注入同一投影保证——**口径限定（dmg-r1-1）**：chip 只覆盖
+   * 条件维度（时间窗 × 额度），不含 burnt 软避让 / 全 burnt 轮换（pi 侧选择层重排，状态持久化
+   * 于 pi session，renderer 无通道可见），故 chip 的命中结论只代表条件维度，不等于 burnt
+   * 生效期的实际路由端点（口径边界见 route-preview 头注）。
    */
   quotaOf?: (providerId: string) => number | undefined
 }>()
@@ -446,6 +449,10 @@ const levelsUnionText = computed(() => levelsUnion(props.card.route).join(' / ')
 const levelsUnionDisplay = computed(() => levelsUnionText.value || '—')
 
 // ── 「此刻」chip（evaluateRouteAt 真实时钟求值，D14 权威展示） ──
+// 口径限定（dmg-r1-1）：chip 是**条件维度**命中（时间窗 × 额度）——evaluateRouteAt 不消费
+// burnt 软避让（pi 侧选择层重排，状态在 pi session branch 的 virtual-model-state，renderer
+// 无输入通道），burn 存活期内 chip 端点可能与实际路由端点不一致；跨实现对拍
+// （route-preview-differential.test.ts）因此只比对扩展 evaluateRoute 的条件半边。
 
 const nowEval = computed(() => evaluateRouteAt(props.card.route, props.now, { quotaOf: props.quotaOf }))
 

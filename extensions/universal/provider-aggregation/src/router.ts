@@ -4,8 +4,9 @@
  * 行为契约 = docs/design/provider-aggregation-route-matrix.md（穷举矩阵两表：端点可选性
  * 矩阵 + 全体候选状态 → 路由结果矩阵；表行数以契约文件为准，本注释不计数——加行不再漂移）；
  * 逐格断言在 src/__tests__/route-matrix.test.ts（RL2）。本模块零 IO、零时钟
- * 读取、零目录访问——时间（now）/ 额度快照（quotaByProviderId）/ 重试信号（retryExclude）
- * 全部由调用方注入（AX3 求值输入最小化：同输入必同输出），pi 侧组装在 src/index.ts。
+ * 读取、零目录访问——时间（now）/ 额度快照（quotaByProviderId）/ 终局观察（messages）/
+ * 链内失败计数（failures）/ pi 重试预算（maxRetries）全部由调用方注入（AX3 求值输入
+ * 最小化：同输入必同输出），pi 侧组装在 src/index.ts。
  *
  * 语义总则（route-matrix.md 总则 1-6 + 总则 2 的求值模式维度段，落点标注）：
  * 1. 端点按配置顺序求值，命中第一个「条件全满足」的端点；无候选 → 路由失败（index.ts
@@ -18,19 +19,22 @@
  *    undefined）时按满足处理（fail-open，D5 矩阵行 6/12——未知不判死，真耗尽由 D6
  *    重试感知纠正）。
  * 4. 两条件并存（combo）需同时满足（矩阵行 7-12）。
- * 5. 重试排除（D6）：reason=retry 的上一失败端点本轮临时不可用，排除后照常按序求值；
- *    仅作用于本次选择，不写持久黑名单（SI4 假阳性收窄）。
+ * 5. 重试透传与终局 failover（D6 修订，方案 B）：reason=retry 的求值在闭包层
+ *    （index.ts）原样返回上一失败端点——重试归属在途请求的延续，不复查条件（直连模型
+ *    同型），pi 的重试预算真正打到上游；终局失败由 decideRoute 的终局观察感知：预算
+ *    用尽（failures ≥ maxRetries）→ 该端点 burnt（软避让 = 选择层偏好，不是端点条件），
+ *    fail-fast（账户/凭据类，pi 不重试）→ 不 burnt（主端点错误持续可见，不漂移）。
  * 6. 端点供给侧状态（凭据、provider 启停）不在求值输入（AX3/矩阵总则 6）——本模块
  *    不预判任何供给侧事实。
- * 7. mode（D12）：simple 跳过全部条件判断依次兜底（route-matrix.md 总则 2 的求值模式维度段「下表仅适用于 advanced」）；
- *    重试排除不是端点条件而是选择层排除——D6「每个请求（user/continuation/retry 同型）
- *    都按路由规则完整重算」对 simple 同样成立，故 simple 模式下上一失败端点仍被排除、
- *    取下一个兜底端点。
+ * 7. mode（D12）：simple 跳过全部条件判断依次兜底（route-matrix.md 总则 2 的求值模式维度段「下表仅适用于 advanced」）。
+ *    burnt 软避让不是端点条件而是选择层偏好——D6 修订「每个请求（user/continuation/retry
+ *    同型）都按路由规则完整重算」对 simple 同样成立：simple 模式下 burnt 端点同样被软
+ *    避让（条件不判，避让照判）。
  */
 
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { AggregationMember, AggregationRoute } from "@zhushanwen/extension-protocol/aggregation";
-import { TIME_WINDOW_DAYS, TIME_WINDOW_SLOTS_PER_DAY } from "@zhushanwen/extension-protocol/aggregation";
+import { AGGREGATION_PROVIDER_ID, TIME_WINDOW_DAYS, TIME_WINDOW_SLOTS_PER_DAY } from "@zhushanwen/extension-protocol/aggregation";
 import { PI_THINKING_LEVELS } from "@taiji/shared/pi-preset";
 
 /** 端点额度快照（route 求值的额度输入形态）。由 index.ts 经 QuotaCacheReader 组装
@@ -46,19 +50,17 @@ export interface RouteQuotaSnapshot { // oe-exempt:20261106:framework:评测输�
 const QUOTA_PCT_FULL_SCALE = 100
 
 /** 落选原因词表（AX5 逐端点列明；文案映射见 MEMBER_BLOCK_REASON_LABELS）。 */
-export type MemberBlockReason = "time-window-out" | "quota-below-threshold" | "retry-excluded"
+export type MemberBlockReason = "time-window-out" | "quota-below-threshold"
 
 export const MEMBER_BLOCK_REASONS: readonly MemberBlockReason[] = [
 	"time-window-out",
 	"quota-below-threshold",
-	"retry-excluded",
 ]
 
 /** 落选原因的面向用户文案（矩阵行 3/5/10 的「落选原因」列；组合时以「 + 」并列）。 */
 export const MEMBER_BLOCK_REASON_LABELS: Record<MemberBlockReason, string> = {
 	"time-window-out": "时间窗外",
 	"quota-below-threshold": "额度低于阈值",
-	"retry-excluded": "上一失败端点本轮排除",
 }
 
 /** 单个端点的一次求值评估。 */
@@ -72,15 +74,13 @@ export type MemberEvaluation = {
 	| { available: false; reasons: MemberBlockReason[] }
 )
 
-/** 路由求值输入（AX3 输入清单：配置 + 墙钟 + 额度快照 + 重试信号，无其他持久状态）。 */
+/** 路由求值输入（AX3 输入清单：配置 + 墙钟 + 额度快照，无其他持久状态）。 */
 export interface EvaluateRouteInput { // oe-exempt:20261106:framework:评测输入契约，单实现为设计终态
 	route: AggregationRoute
 	/** 求值墙钟（本地时区语义——构造方决定时区，本模块只用本地取值）。 */
 	now: Date
 	/** providerId → 额度快照；undefined 或缺 provider 键 = 数据未知（fail-open）。 */
 	quotaByProviderId?: ReadonlyMap<string, RouteQuotaSnapshot>
-	/** reason=retry 时的上一失败端点（物理模型 provider/id），本轮临时排除（D6）。 */
-	retryExclude?: { providerId: string, modelId: string }
 }
 
 /** 路由求值结果：候选序（条件全满足的端点下标，按配置顺序）或全落选明细。 */
@@ -181,14 +181,7 @@ export function isQuotaConditionSatisfied(
 /** 单端点单条件维度的落选原因收集（advanced 模式；simple 由本函数短路）。 */
 function collectMemberBlockReasons(route: AggregationRoute, member: AggregationMember, input: EvaluateRouteInput): MemberBlockReason[] {
 	const reasons: MemberBlockReason[] = []
-	if (
-		input.retryExclude !== undefined
-		&& input.retryExclude.providerId === member.providerId
-		&& input.retryExclude.modelId === member.modelId
-	) {
-		reasons.push("retry-excluded")
-	}
-	// D12：simple 模式跳过全部条件判断依次兜底（route-matrix.md 总则 2 的求值模式维度段）——重试排除不是条件，先行生效。
+	// D12：simple 模式跳过全部条件判断依次兜底（route-matrix.md 总则 2 的求值模式维度段）。
 	if (route.mode === "simple") return reasons
 	switch (member.type) {
 		case "none":
@@ -211,21 +204,278 @@ function collectMemberBlockReasons(route: AggregationRoute, member: AggregationM
  * 路由求值（矩阵「全体候选状态 → 路由结果」的纯函数半边；enabled/deleted 两条闭包态
  * 在 index.ts 闭包层先行短路，不进本函数）。
  *
- * 返回候选序（条件全满足、未被重试排除的端点下标，保持配置顺序——index.ts 按序解析
- * 物理模型，第一个可解析的即本次命中）或全落选明细（no-candidate，供闭包层组合
- * AX5 逐端点错误）。
+ * 返回候选序（条件全满足的端点下标，保持配置顺序——decideRoute 在其上叠加 burnt 软
+ * 避让偏好，index.ts 闭包层按偏好序解析物理模型，第一个可解析的即本次命中）或全落选
+ * 明细（no-candidate，供闭包层组合 AX5 逐端点错误）。
  */
 export function evaluateRoute(input: EvaluateRouteInput): RouteEvaluation {
 	const { route } = input
 	const evaluations: MemberEvaluation[] = route.members.map((member, memberIndex) => {
 		const reasons = collectMemberBlockReasons(route, member, input)
+		const ref = memberRef(member)
 		return reasons.length === 0
-			? { memberIndex, memberRef: `${member.providerId}/${member.modelId}`, available: true as const, reasons: [] as [] }
-			: { memberIndex, memberRef: `${member.providerId}/${member.modelId}`, available: false as const, reasons }
+			? { memberIndex, memberRef: ref, available: true as const, reasons: [] as [] }
+			: { memberIndex, memberRef: ref, available: false as const, reasons }
 	})
 	const candidates = evaluations.filter(e => e.available).map(e => e.memberIndex)
 	if (candidates.length === 0) return { outcome: "no-candidate", members: evaluations }
 	return { outcome: "candidates", memberIndexes: candidates }
+}
+
+// ── D6 修订（方案 B）：retry 透传的终局观察 + burnt 软避让 + router state 迁移 ──────
+
+/** 成员复合串（`<providerId>/<modelId>`——与 MemberEvaluation.memberRef / 悬空标记同形）。 */
+export function memberRef(member: AggregationMember): string {
+	return `${member.providerId}/${member.modelId}`
+}
+
+/**
+ * 终局观察的最小消息视图（pi LLM 形态 assistant 消息的结构化窄面）。
+ *
+ * pi 的 convertToLlm 对 assistant 消息原样透传（core/messages.js:111-115：case "assistant": return m），
+ * provider/model/stopReason/errorMessage 全量在场；user/toolResult 等角色无这些字段，
+ * 窄面按可选接收（role 唯一必填——扫描只认 assistant）。
+ */
+export interface RouteObservationMessage { // oe-exempt:20261124:framework:观察输入结构化窄面，单实现为设计终态
+	role: string
+	provider?: string
+	model?: string
+	stopReason?: string
+}
+
+/**
+ * 路由 router state（pi 持久化在 session branch 的 virtual-model-state 条目；契约见
+ * virtual-models.d.ts ModelRouteRequest.state / VirtualModelStateData）。
+ *
+ * 只持 burnt（终局失败标记）—— burnt 是跨轮次的路由偏好事实（历史里只有最后一跳结局，
+ * 更早的 burn 不可从 messages 重导），必须持久化。链内失败计数（failures）生命周期 =
+ * 活跃重试链（秒级），活扩展闭包内存（index.ts AggregationState.failures），不进
+ * session 历史。
+ */
+export interface RouteFailoverState { // oe-exempt:20261124:framework:router state 契约，单实现为设计终态
+	/**
+	 * 已用尽 pi 重试预算仍终局失败的端点 memberRef 集。
+	 *
+	 * 有序集：插入序 = burn 序——全部候选 burnt 时取序最旧的重探并移到序尾（坏端点
+	 * 交替重探，恢复即被成功观察清 mark；无时间机制，ADR-0190 白名单外不建时间决策）。
+	 */
+	burnt: readonly string[]
+}
+
+/** 解析 router state 的 burnt 集（防御：持久化 JSON 形态不可信——坏形状按空集，保序不抛）。 */
+export function parseFailoverState(state: unknown): ReadonlySet<string> {
+	if (typeof state !== "object" || state === null) return new Set()
+	if (!("burnt" in state)) return new Set()
+	const burnt: unknown = state.burnt
+	if (!Array.isArray(burnt)) return new Set()
+	return new Set(burnt.filter((ref): ref is string => typeof ref === "string"))
+}
+
+/** decideRoute 输入（AX3 同族：条件输入 + 终局观察 + 状态，无其他隐式来源）。 */
+export interface DecideRouteInput { // oe-exempt:20261124:framework:评测输入契约，单实现为设计终态
+	route: AggregationRoute
+	/** 求值墙钟（本地时区语义）。 */
+	now: Date
+	/** providerId → 额度快照；undefined 或缺 provider 键 = 数据未知（fail-open）。 */
+	quotaByProviderId?: ReadonlyMap<string, RouteQuotaSnapshot>
+	/** 路由回调收到的会话消息（终局观察源——最近一条物理模型 assistant 消息的结局）。 */
+	messages: readonly RouteObservationMessage[]
+	/** 当前 burnt 集（parseFailoverState(request.state)；有序 = burn 序）。 */
+	burnt: ReadonlySet<string>
+	/** 各端点链内已观察连续失败次数（闭包内存；retry 透传时递增）。 */
+	failures: ReadonlyMap<string, number>
+	/** pi 的重试预算（pi.getSettings().retry?.maxRetries ?? 3）——终局失败判「用尽」的尺。 */
+	maxRetries: number
+	/**
+	 * 本次求值是否为链边界（user / continuation：新回合起点，上一链已终断）。
+	 *
+	 * 非边界的两个形态**不做终局观察**（入参 burnt/failures 原样用于软避让）：
+	 * - retry 落 normal-selection 的求值（失败端点已不在配置/目录）——链在途；
+	 * - direct 求值（链中压缩摘要 / 扩展调用，pi 不传 state）——夹在「retry bump」与
+	 *   下一次 stream 之间，其 messages 已被 _omitRecoveryAttempt 剔除失败 attempt，
+	 *   看到的是链前陈旧投影：按它观察会抹掉在途链的预算记账（修剪复审 F1：failover
+	 *   永不发生）或按陈旧成功结局反向清 burn。观察只在链边界跑（终局失败/成功/取消
+	 *   都是回合级事实）。
+	 */
+	chainBoundary: boolean
+}
+
+/**
+ * decideRoute 结果：选中候选偏好序（含迁移后状态）或无候选明细（闭包层组合 AX5 错误）。
+ *
+ * memberIndexes 是偏好序而非单点：未 burnt 候选按配置序在前、burnt 候选降序尾（ burnt
+ * 只重排不删候选）；闭包层按序解析物理模型，第一个可解析的即命中——部分候选悬空
+ * （provider 已删/模型已移除）时静默落选续试的既有语义（AX5）不变。
+ */
+export type RouteDecision =
+	| { outcome: "selected", memberIndexes: readonly number[], burnt: ReadonlySet<string>, failures: ReadonlyMap<string, number> }
+	| { outcome: "no-candidate", members: readonly MemberEvaluation[], burnt: ReadonlySet<string>, failures: ReadonlyMap<string, number> }
+
+/**
+ * 终局观察（方案 B 的事实源）：从消息尾向前找最近一条**物理模型** assistant 消息。
+ *
+ * 跳过路由自身失败的消息（provider = AGGREGATION_PROVIDER_ID 的虚拟模型消息——pi 的
+ * handleRunFailure（pi-agent-core agent.js:364-375）用 _state.model 构造，路由失败时 selection 仍是虚拟模型），使观察在
+ * 「连续多轮路由失败」后仍可凭更早的物理结局**幂等重导**：burn 不因选择层抛错（无候选 /
+ * 悬空）而丢，也不需要闭包镜像——观察永远从会话事实重算。
+ *
+ * 计数生命周期 = 活跃重试链：只有「最近物理结局 = 本成员 F 的终局 error」时 F 的计数是
+ * 活的（该链刚在 F 上烧完预算）；其余一切形态（成功 / 取消 / 未知结局 / 非成员 / 无物理
+ * 消息）都意味着本路由的链已终断——计数整体退役。缺这条退役路径时，被观察跳过（模型切走
+ * 切回、端点移出配置）孤立的旧计数会把后续账户类 fail-fast 误判成「预算用尽」→ 误 burn +
+ * 向候选漂移（修剪发现 P1；T9 实机锁定）。burn 时保留 F 的计数作重导证据（已 burnt 的
+ * 重导幂等，不会二次误判），其余成员计数退役（单活链，其余必陈旧）。
+ *
+ * 结局语义（stopReason 值域 = pi-ai StopReason 联合 pending/stop/length/toolUse/error/
+ * aborted/deferred——未知值不猜测：按「非失败亦非康复」保守处理，burnt 不动、计数退役）：
+ * - error + 成员 F：终局失败。failures[F] ≥ maxRetries（pi 重试预算真用尽）→ burnt F
+ *   （计数保留作重导证据）；否则（fail-fast：账户/凭据类，pi 压根没重试）→ 不 burnt、
+ *   计数退役——主端点错误持续可见，不向候选漂移（方案 B 与方案 A 的分界）。
+ * - stop/toolUse/length：成功出站 → 清 F 的 burnt + 计数退役（端点康复，重新成为首选）。
+ * - aborted：用户取消在途链 → 计数退役，burnt 不动（取消不是端点事实）。
+ * - 非本路由成员（用户中途换过模型）：无观察——计数退役（链已终断），burnt 保持入参。
+ */
+function observeTerminalOutcome(
+	messages: readonly RouteObservationMessage[],
+	members: readonly AggregationMember[],
+	burnt: ReadonlySet<string>,
+	failures: ReadonlyMap<string, number>,
+	maxRetries: number,
+	chainBoundary: boolean,
+): { burnt: ReadonlySet<string>, failures: ReadonlyMap<string, number> } {
+	// 非链边界求值（retry 落 normal-selection / direct）：不观察——投影是被 _omitRecoveryAttempt
+	// 剔除失败 attempt 后的在途形态，按它迁移状态会抹掉活链记账或按陈旧结局反向清 burn（修剪复审 F1）
+	if (!chainBoundary) return { burnt, failures }
+	const last = findLastPhysicalOutcome(messages)
+	if (last === undefined) return { burnt, failures: retireCounts(failures) }
+	const index = members.findIndex(m => m.providerId === last.provider && m.modelId === last.model)
+	if (index < 0) return { burnt, failures: retireCounts(failures) } // 非本路由成员——无观察
+	const ref = memberRef(members[index]!)
+	if (last.stopReason === "error") {
+		// 终局失败：预算用尽 → burnt（计数保留作重导证据，其余退役）；fail-fast → 不 burnt、计数退役
+		if ((failures.get(ref) ?? 0) >= maxRetries) {
+			if (burnt.has(ref)) return { burnt, failures: retireOthers(failures, ref) } // 已 burnt——幂等（顺序不变，不产生新 state）
+			return { burnt: appendRef(burnt, ref), failures: retireOthers(failures, ref) }
+		}
+		return { burnt, failures: retireCounts(failures) }
+	}
+	// 非 error：已知成功结局清 burnt（端点康复）；取消与未知值只退役计数、不反向清理偏好
+	const recovered = SUCCESSFUL_STOP_REASONS.includes(last.stopReason ?? "")
+	return { burnt: recovered ? withoutRef(burnt, ref) : burnt, failures: retireCounts(failures) }
+}
+
+/** 已知成功出站结局（清 burnt = 端点康复）——pi-ai StopReason 值域内的非错误非取消值。 */
+const SUCCESSFUL_STOP_REASONS: readonly string[] = ["stop", "toolUse", "length"]
+
+/** 计数整体退役（链终断）；空集原引用返回（无变化不制造新对象）。 */
+function retireCounts(failures: ReadonlyMap<string, number>): ReadonlyMap<string, number> {
+	return failures.size === 0 ? failures : new Map()
+}
+
+/** 仅保留 keepRef 的计数（burn 重导证据），其余退役；无需裁剪时原引用返回。 */
+function retireOthers(failures: ReadonlyMap<string, number>, keepRef: string): ReadonlyMap<string, number> {
+	const kept = failures.get(keepRef)
+	if (kept === undefined) return retireCounts(failures)
+	if (failures.size === 1) return failures
+	return new Map([[keepRef, kept]])
+}
+
+/** 从消息尾向前找最近一条物理模型 assistant 消息（跳过 provider = AGGREGATION_PROVIDER_ID 的虚拟模型消息）。 */
+function findLastPhysicalOutcome(messages: readonly RouteObservationMessage[]): RouteObservationMessage | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i]
+		if (message?.role !== "assistant") continue
+		if (message.provider === AGGREGATION_PROVIDER_ID) continue // 路由自身失败（虚拟模型消息）——跳过
+		return message
+	}
+	return undefined
+}
+
+/** 集合去成员（保持其余元素序；成员不在集中原引用返回——无变化不制造新对象）。 */
+function withoutRef(refs: ReadonlySet<string>, ref: string): ReadonlySet<string> {
+	if (!refs.has(ref)) return refs
+	const next = new Set(refs)
+	next.delete(ref)
+	return next
+}
+
+/** 集合追加成员（已存在则不动——保持原 burn 序，保证幂等重导不扰乱轮换公平）。 */
+function appendRef(refs: ReadonlySet<string>, ref: string): ReadonlySet<string> {
+	if (refs.has(ref)) return refs
+	const next = new Set(refs)
+	next.add(ref)
+	return next
+}
+
+/**
+ * 轮换重探：burn 序（有序集插入序）最旧的**候选**端点优先重探，并移到 burn 序尾。
+ *
+ * 全部候选 burnt 时命中（两个坏端点交替重探而不是固定锤配置序首个——恢复者不被饿死）；
+ * 单端点时退化为原样重探（≡ 直连模型：每轮都真试，错误真实呈现）。
+ */
+function rotateOldestBurnt(burnt: ReadonlySet<string>, candidateIndexes: readonly number[], refs: readonly string[]): { memberIndex: number, burnt: ReadonlySet<string> } {
+	const candidateRefs = new Set(candidateIndexes.map(i => refs[i]))
+	let oldestRef: string | undefined
+	for (const ref of burnt) {
+		if (candidateRefs.has(ref)) {
+			oldestRef = ref
+			break
+		}
+	}
+	// 不变量：本路径调用方保证全部候选已 burnt，oldestRef 必存在；防御性回落配置序首个
+	const memberIndex = oldestRef !== undefined ? candidateIndexes.find(i => refs[i] === oldestRef)! : candidateIndexes[0]!
+	if (oldestRef === undefined) return { memberIndex, burnt }
+	const rotated = new Set(burnt)
+	rotated.delete(oldestRef)
+	rotated.add(oldestRef) // 移到序尾——下次轮换让位给下一个坏端点
+	// 序列未变（单候选 / oldest 已在序尾）→ 返回原引用：pi 的 state 落盘门禁是引用比较，
+	// 内容等值的新对象会被每个请求 append 一条恒等条目（修剪发现 P3；T10 实机锁定）
+	if (sameSequence(rotated, burnt)) return { memberIndex, burnt }
+	return { memberIndex, burnt: rotated }
+}
+
+/** 两个有序集序列逐元素相等（插入序一致）。 */
+function sameSequence(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+	if (a.size !== b.size) return false
+	const left = [...a]
+	const right = [...b]
+	for (let i = 0; i < left.length; i++) {
+		if (left[i] !== right[i]) return false
+	}
+	return true
+}
+
+/**
+ * 路由决策（方案 B）：终局观察（状态迁移，仅链边界）→ 条件求值（硬闸）→ burnt 软避让。
+ *
+ * 条件矩阵部分（evaluateRoute）原样复用——burnt 不参与条件判定，只在候选集内重排
+ * 偏好：未 burnt 候选（配置序）优先；全部候选 burnt → 轮换重探（见 rotateOldestBurnt）。
+ */
+export function decideRoute(input: DecideRouteInput): RouteDecision {
+	const { route, now, quotaByProviderId, messages, burnt: burntIn, failures: failuresIn, maxRetries, chainBoundary } = input
+	// ① 终局观察（状态迁移——无观察时原引用返回，闭包层据此跳转 state 落盘）
+	const observed = observeTerminalOutcome(messages, route.members, burntIn, failuresIn, maxRetries, chainBoundary)
+	// ② 条件求值（硬闸，与 burn 无关——矩阵 12 行逐格语义不变）
+	const evaluation = evaluateRoute({ route, now, quotaByProviderId })
+	if (evaluation.outcome === "no-candidate") {
+		return { outcome: "no-candidate", members: evaluation.members, burnt: observed.burnt, failures: observed.failures }
+	}
+	// ③ burnt 软避让：未 burnt 候选按配置序优先，burnt 候选降队尾（软避让 = 排序偏好，
+	// 永不删候选——首选全部悬空时闭包层仍可按序落到 burnt 端点，保留 AX5 既有韧性）。
+	const refs = route.members.map(memberRef)
+	const preferred = evaluation.memberIndexes.filter(i => !observed.burnt.has(refs[i]!))
+	if (preferred.length > 0) {
+		const demoted = evaluation.memberIndexes.filter(i => observed.burnt.has(refs[i]!))
+		return { outcome: "selected", memberIndexes: [...preferred, ...demoted], burnt: observed.burnt, failures: observed.failures }
+	}
+	// ④ 全部候选 burnt → 轮换重探（burn 序最旧候选优先，移到序尾）
+	const rotated = rotateOldestBurnt(observed.burnt, evaluation.memberIndexes, refs)
+	return {
+		outcome: "selected",
+		memberIndexes: [rotated.memberIndex, ...evaluation.memberIndexes.filter(i => i !== rotated.memberIndex)],
+		burnt: rotated.burnt,
+		failures: observed.failures,
+	}
 }
 
 /** 单端点支持档位集（member.levels 声明：key 存在且 value ≠ null = 支持；按档位序输出）。 */
