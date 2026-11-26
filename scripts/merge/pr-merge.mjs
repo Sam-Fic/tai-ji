@@ -88,7 +88,7 @@ if (PR_STATE === 'MERGED') {
   // gate.mjs 对 null 持续重试到 deadline 判 fetch-error，上方分支 exit 1 拒绝
   // 合并，绝不归一成 [] 把工具错误混进 no-runs 语义）。WORKFLOW 传 '' 保留工厂
   // 内置的 Dependabot 过滤（机器人红不阻塞合并判定）
-  const fetchRuns = makeFetchRuns({ REF: HEAD_SHA, WORKFLOW: '', GH_REPO: DEFAULT_REPO })
+  const fetchRuns = makeFetchRuns({ REF: HEAD_SHA, BRANCH: HEAD_BRANCH, WORKFLOW: '', GH_REPO: DEFAULT_REPO })
 
   const verdict = await waitForRuns({
     fetchRuns,

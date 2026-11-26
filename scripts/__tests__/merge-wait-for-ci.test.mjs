@@ -13,7 +13,7 @@ import { waitForRuns } from '../merge/lib/gate.mjs'
 import { makeFetchRuns } from '../merge/lib/fetch-runs.mjs'
 
 describe('parseArgs（argv 解析）', () => {
-  it('全缺省值：仅位置参数，timeout=2400（main push CI 含 30 分钟档 e2e job）其余空串', () => {
+  it('全缺省值：仅位置参数，timeout=2400（main push CI 含 30 分钟档 e2e job）其余空串；branch 缺省 main（branch+headSha 判定通道）', () => {
     expect(parseArgs(['abc123'])).toEqual({
       ok: true,
       sha: 'abc123',
@@ -21,10 +21,11 @@ describe('parseArgs（argv 解析）', () => {
       workflow: '',
       verifyReleaseTag: '',
       repo: '',
+      branch: 'main',
     })
   })
 
-  it('四个选项全部解析（可出现在位置参数之后）', () => {
+  it('五个选项全部解析（可出现在位置参数之后）', () => {
     expect(
       parseArgs([
         'abc123',
@@ -32,6 +33,7 @@ describe('parseArgs（argv 解析）', () => {
         '--workflow', 'CI',
         '--verify-release', 'v1.2.3',
         '--repo', 'someone/repo',
+        '--branch', 'dev-x',
       ]),
     ).toEqual({
       ok: true,
@@ -40,12 +42,13 @@ describe('parseArgs（argv 解析）', () => {
       workflow: 'CI',
       verifyReleaseTag: 'v1.2.3',
       repo: 'someone/repo',
+      branch: 'dev-x',
     })
   })
 
   it('位置参数可省略（sha 为空串，读 merge 状态由主流程负责）', () => {
-    expect(parseArgs([])).toEqual({ ok: true, sha: '', timeout: 2400, workflow: '', verifyReleaseTag: '', repo: '' })
-    expect(parseArgs(['--timeout', '60'])).toEqual({ ok: true, sha: '', timeout: 60, workflow: '', verifyReleaseTag: '', repo: '' })
+    expect(parseArgs([])).toEqual({ ok: true, sha: '', timeout: 2400, workflow: '', verifyReleaseTag: '', repo: '', branch: 'main' })
+    expect(parseArgs(['--timeout', '60'])).toEqual({ ok: true, sha: '', timeout: 60, workflow: '', verifyReleaseTag: '', repo: '', branch: 'main' })
   })
 
   it('未知选项报错（原文案 Unknown option）', () => {
@@ -173,6 +176,68 @@ describe('makeFetchRuns（gh 查询失败与「成功且空」分流）', () => 
     const stdout = JSON.stringify([{ databaseId: 2, status: 'completed', conclusion: 'failure', workflowName: 'Dependabot Updates' }])
     const fetchRuns = makeFetchRuns({ REF: 'abc', WORKFLOW: 'Dependabot Updates', GH_REPO: '', runImpl: fakeRun({ stdout }) })
     expect((await fetchRuns()).length).toBe(1)
+  })
+
+  it('【2026-11 双通道】branch 通道：--branch 拉取 + headSha 客户端精确过滤（免疫 check-suite 关联延迟——服务端 --commit 在 push run queued 早期持续返回空，实测形态）', async () => {
+    const captured = []
+    const runSpy = (_cmd, args) => {
+      captured.push(args)
+      return {
+        code: 0,
+        ok: true,
+        stdout: JSON.stringify([
+          { databaseId: 1, headSha: 'abc', status: 'completed', conclusion: 'success', name: 'ci', workflowName: 'CI' },
+          { databaseId: 2, headSha: 'other', status: 'completed', conclusion: 'failure', name: 'ci', workflowName: 'CI' },
+        ]),
+        stderr: '',
+        error: null,
+      }
+    }
+    const fetchRuns = makeFetchRuns({ REF: 'abc', BRANCH: 'main', WORKFLOW: '', GH_REPO: '', runImpl: runSpy })
+    const runs = await fetchRuns()
+    expect(captured[0]).toContain('--branch')
+    expect(captured[0]).not.toContain('--commit')
+    // headSha 不匹配的 run（其它 head 的同分支 run）被客户端过滤剥除——裁决锚仍是 commit sha
+    expect(runs).toEqual([
+      { databaseId: 1, headSha: 'abc', status: 'completed', conclusion: 'success', name: 'ci', workflowName: 'CI' },
+    ])
+  })
+
+  it('【2026-11 双通道】BRANCH 缺省回退旧 --commit 通道（向后兼容）', async () => {
+    const captured = []
+    const runSpy = (_cmd, args) => {
+      captured.push(args)
+      return { code: 0, ok: true, stdout: '[]', stderr: '', error: null }
+    }
+    await makeFetchRuns({ REF: 'abc', WORKFLOW: '', GH_REPO: '', runImpl: runSpy })()
+    expect(captured[0]).toContain('--commit')
+    expect(captured[0]).toContain('abc')
+  })
+
+  it('【2026-11 双通道】branch 通道短 sha：startsWith 谓词与 gh --commit 服务端语义对齐（调用方常传短 sha，全等比对永不命中——冒烟实测形态）', async () => {
+    const stdout = JSON.stringify([
+      { databaseId: 1, headSha: '5a4958f525423619ae39e6fd68dd3cd15d28a332', status: 'completed', conclusion: 'success', name: 'ci', workflowName: 'CI' },
+      { databaseId: 2, headSha: '5b0000000000000000000000000000000000000000', status: 'completed', conclusion: 'failure', name: 'ci', workflowName: 'CI' },
+    ])
+    const fetchRuns = makeFetchRuns({ REF: '5a4958f52', BRANCH: 'main', WORKFLOW: '', GH_REPO: '', runImpl: fakeRun({ stdout }) })
+    expect(await fetchRuns()).toEqual([
+      { databaseId: 1, headSha: '5a4958f525423619ae39e6fd68dd3cd15d28a332', status: 'completed', conclusion: 'success', name: 'ci', workflowName: 'CI' },
+    ])
+  })
+
+  it('【2026-11 双通道】branch 通道空 REF 守卫：startsWith(\'\') 全命中形态不放行（宁漏勿滥）', async () => {
+    const stdout = JSON.stringify([
+      { databaseId: 1, headSha: 'abc', status: 'completed', conclusion: 'success', name: 'ci', workflowName: 'CI' },
+    ])
+    const fetchRuns = makeFetchRuns({ REF: '', BRANCH: 'main', WORKFLOW: '', GH_REPO: '', runImpl: fakeRun({ stdout }) })
+    expect(await fetchRuns()).toEqual([])
+  })
+
+  it('【2026-11 双通道】branch 通道三态契约保持：gh 失败 → null；成功空 → []（唯一可走 no-runs 放行的形态）', async () => {
+    expect(
+      await makeFetchRuns({ REF: 'abc', BRANCH: 'main', WORKFLOW: '', GH_REPO: '', runImpl: fakeRun({ code: 1, ok: false }) })(),
+    ).toBe(null)
+    expect(await makeFetchRuns({ REF: 'abc', BRANCH: 'main', WORKFLOW: '', GH_REPO: '', runImpl: fakeRun() })()).toEqual([])
   })
 
   it('【审查修复回归】全程查询失败 → fetch-error 而非 no-runs——no-runs 是 printNoRunsDetected exit 0 放行的唯一来源，查询失败不得静默跳过 main push CI 验证', async () => {

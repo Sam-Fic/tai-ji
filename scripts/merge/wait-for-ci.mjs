@@ -57,16 +57,17 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
  * job，600s 必超时（旧默认，已上调——超时应是异常而非常态首跑体验）。
  */
 export function parseArgs(argv) {
-  const out = { sha: '', timeout: 2400, workflow: '', verifyReleaseTag: '', repo: '' }
+  const out = { sha: '', timeout: 2400, workflow: '', verifyReleaseTag: '', repo: '', branch: 'main' }
   const rest = [...argv]
   while (rest.length > 0) {
     const a = rest.shift()
-    if (a === '--timeout' || a === '--workflow' || a === '--verify-release' || a === '--repo') {
+    if (a === '--timeout' || a === '--workflow' || a === '--verify-release' || a === '--repo' || a === '--branch') {
       const v = rest.shift()
       if (v === undefined) return { ok: false, error: `Missing value for option: ${a}` }
       if (a === '--timeout') out.timeout = v
       else if (a === '--workflow') out.workflow = v
       else if (a === '--verify-release') out.verifyReleaseTag = v
+      else if (a === '--branch') out.branch = v
       else out.repo = v
     } else if (a.startsWith('--') || out.sha !== '') {
       return { ok: false, error: `Unknown option: ${a}` }
@@ -317,6 +318,9 @@ export async function main() {
   const WORKFLOW = parsed.workflow
   const VERIFY_RELEASE_TAG = parsed.verifyReleaseTag
   const GH_REPO = parsed.repo
+  // 判定对象恒为 main push CI（REF = mergeSha / main HEAD，语义见 SKILL 阶段 3）；
+  // branch 通道缺省 main，--branch 仅作逃生舱（makeFetchRuns 双通道，2026-11）
+  const BRANCH_ARG = parsed.branch
   const ciLog = makeCiLog(process.env.MERGE_LOG_FILE)
 
   const REF = resolveRefOrFail(parsed)
@@ -324,16 +328,16 @@ export async function main() {
   assertGhCliReady()
 
   console.log(`${BOLD}等待 CI 完成...${NC}`)
-  ciLog(`等待 CI: commit=${REF}, workflow=${WORKFLOW || 'all'}, timeout=${TIMEOUT}s`)
+  ciLog(`等待 CI: commit=${REF}, branch=${BRANCH_ARG}, workflow=${WORKFLOW || 'all'}, timeout=${TIMEOUT}s`)
   console.log(`  Commit: ${REF}`)
+  console.log(`  Branch: ${BRANCH_ARG}（branch + headSha 客户端过滤通道，免疫 check-suite 关联延迟）`)
   if (WORKFLOW !== '') {
     console.log(`  Workflow: ${WORKFLOW}`)
   }
   console.log(`  超时: ${TIMEOUT}s`)
   console.log('')
 
-  const fetchRuns = makeFetchRuns({ REF, WORKFLOW, GH_REPO })
-
+  const fetchRuns = makeFetchRuns({ REF, BRANCH: BRANCH_ARG, WORKFLOW, GH_REPO })
   const waitStartMs = Date.now()
   const verdict = await waitForRuns({
     fetchRuns,
