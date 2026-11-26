@@ -64,6 +64,12 @@ function makeTurn(over: Partial<MessageTurn> = {}): MessageTurn {
   }
 }
 
+/** 取 turn.user（UserBubble 新契约只收 user: Message；测试 turn 恒有 user，null 即测试构造错误）。 */
+function userOf(turn: MessageTurn): Message {
+  if (!turn.user) throw new Error('mount UserBubble: test turn must have a user')
+  return turn.user
+}
+
 function mountBubble(props: {
   turn?: MessageTurn
   sessionId?: string
@@ -72,7 +78,7 @@ function mountBubble(props: {
 } = {}, deps: Partial<ChatViewDeps> = {}) {
   return mount(UserBubble, {
     props: {
-      turn: props.turn ?? makeTurn(),
+      user: userOf(props.turn ?? makeTurn()),
       sessionId: props.sessionId ?? 's1',
       canEdit: props.canEdit ?? false,
       isSessionEditable: props.isSessionEditable ?? false,
@@ -443,9 +449,7 @@ describe('[D12] UserBubble 混排 inline 化（is-mixed）', () => {
   function mountWithContent(content: Segment[] | string) {
     return mount(UserBubble, {
       props: {
-        turn: makeTurn({
-          user: { id: 'u1', role: 'user', content, status: 'complete', timestamp: NOW } as Message,
-        }),
+        user: { id: 'u1', role: 'user', content, status: 'complete', timestamp: NOW } as Message,
         sessionId: 's1',
         canEdit: false,
         isSessionEditable: false,
@@ -546,9 +550,7 @@ describe('[MF-1] UserBubble slash 段（归位序渲染 + live ≡ reload）', (
   function mountWithSlash(content: Segment[]) {
     return mount(UserBubble, {
       props: {
-        turn: makeTurn({
-          user: { id: 'u1', role: 'user', content, status: 'complete', timestamp: NOW } as Message,
-        }),
+        user: { id: 'u1', role: 'user', content, status: 'complete', timestamp: NOW } as Message,
         sessionId: 's1',
         canEdit: false,
         isSessionEditable: false,
@@ -690,7 +692,7 @@ describe('[D3] submitEdit 双发锁', () => {
   async function enterEditAndType(provideOverrides: Parameters<typeof mockChatProvide>[0], draft: string) {
     const editAndResend = vi.fn()
     const wrapper = mount(UserBubble, {
-      props: { turn: makeTurn(), sessionId: 's1', canEdit: true, isSessionEditable: false },
+      props: { user: userOf(makeTurn()), sessionId: 's1', canEdit: true, isSessionEditable: false },
       global: {
         provide: mockChatProvide({ editAndResend, ...provideOverrides }),
         stubs: { MarkdownRenderer: true, ImageThumb: true },
@@ -745,9 +747,7 @@ describe('[MF-2] submitEdit 编辑重发 slash 段不翻倍', () => {
     ]
     const wrapper = mount(UserBubble, {
       props: {
-        turn: makeTurn({
-          user: { id: 'u1', role: 'user', content: segments, status: 'complete', timestamp: NOW } as Message,
-        }),
+        user: { id: 'u1', role: 'user', content: segments, status: 'complete', timestamp: NOW } as Message,
         sessionId: 's1',
         canEdit: true,
         isSessionEditable: false,
@@ -811,9 +811,7 @@ describe('[轮 3] submitEdit 编辑重发 skill 段标记不翻倍', () => {
     const segments: Segment[] = [{ type: 'text', text: '正文' }, SKILL]
     return mount(UserBubble, {
       props: {
-        turn: makeTurn({
-          user: { id: 'u1', role: 'user', content: segments, status: 'complete', timestamp: NOW } as Message,
-        }),
+        user: { id: 'u1', role: 'user', content: segments, status: 'complete', timestamp: NOW } as Message,
         sessionId: 's1',
         canEdit: true,
         isSessionEditable: false,
@@ -925,7 +923,7 @@ describe('[U5] UserBubble 撤回单入口（D6）', () => {
 
   function mountRevokeBubble(isActive = false) {
     return mount(UserBubble, {
-      props: { turn: makeTurn(), sessionId: 's1', canEdit: false, isSessionEditable: false },
+      props: { user: userOf(makeTurn()), sessionId: 's1', canEdit: false, isSessionEditable: false },
       global: {
         provide: mockChatProvide({ onRevokeMessage, isActive: () => isActive }),
         stubs: { MarkdownRenderer: true, ImageThumb: true },

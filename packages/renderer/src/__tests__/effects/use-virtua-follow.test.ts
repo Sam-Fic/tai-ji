@@ -273,7 +273,9 @@ describe('useVirtuaFollow', () => {
       const findItemIndex = vi.fn(() => 3)
       const { followToBottom } = setupFollow(
         { itemCount: () => 5, endOffset: () => 24 },
-        { scrollSize: 1000, findItemIndex },
+        // [batch6 R1] 几何显式声明「离底」：已在底时 scrollToRealBottom 跳过写入（恒等写省掉），
+        // 本用例要断言的是索引/offset 参数，故必须先离开底部。
+        { scrollSize: 1000, scrollOffset: 100, viewportSize: 500, findItemIndex },
       )
 
       followToBottom(true)
@@ -281,6 +283,31 @@ describe('useVirtuaFollow', () => {
       // 末项索引 = itemCount-1 = 4 直取（不吃反查结果 3）；offset = endOffset() = 24
       expect(mock.scrollToIndex).toHaveBeenCalledWith(4, { align: 'end', offset: 24, smooth: false })
       expect(findItemIndex).not.toHaveBeenCalled()
+    })
+
+    it('[batch6 R1] 已在底（距底 ≤1px，含 endOffset 补偿项）→ 跳过写入（恒等写省掉）', () => {
+      // 真机实测：流式窗 ~3000 次 scrollTo 里 85.7% 是「写前已在底 ∧ 目标≥底」的恒等写，
+      // 每次仍走 Blink scroll 更新路径。判据必须把 endOffset 计入目标（virtua scrollSize 不含
+      // 尾部块/头部 spacer）：此处 tail=40 时 1160+40-700-500=0 ⇒ 跳过。
+      const { followToBottom } = setupFollow(
+        { itemCount: () => 5, endOffset: () => 40 },
+        { scrollSize: 1160, scrollOffset: 700, viewportSize: 500 },
+      )
+
+      followToBottom(true)
+
+      expect(mock.scrollToIndex).not.toHaveBeenCalled()
+    })
+
+    it('[batch6 R1] 距底 2px（内容刚增长）→ 照常写入（守卫不得吞掉真实跟随）', () => {
+      const { followToBottom } = setupFollow(
+        { itemCount: () => 5, endOffset: () => 40 },
+        { scrollSize: 1162, scrollOffset: 700, viewportSize: 500 },
+      )
+
+      followToBottom(true)
+
+      expect(mock.scrollToIndex).toHaveBeenCalledWith(4, { align: 'end', offset: 40, smooth: false })
     })
 
     it('边界4：itemCount ≤ 0（空列表）→ 不滚，但贴底态重置照常', () => {

@@ -1,0 +1,87 @@
+{
+ "head": "d7cd652b3cf23e9fc1c68fbb19b30e4a7143dbe6",
+ "tag": "final-r2",
+ "fixture": {
+  "path": "probes/fixtures/original-45k.json",
+  "md5": "b15ea1a4eddea15267bfd6d8db482642"
+ },
+ "rendererBundle": {
+  "dir": "<repo>/apps/electron/renderer/dist",
+  "indexMd5": "bbafa2d269949d0b6854646e07f3911d"
+ },
+ "load": {
+  "m1": 3.5,
+  "m5": 3.31,
+  "m15": 2.87
+ },
+ "ports": {
+  "runtimePort": 3620,
+  "cdpPort": 9488,
+  "runtimeInspectPort": 9229,
+  "piInspectPort": 52969
+ },
+ "pids": {
+  "runtimePid": 38289,
+  "sid": "01a20ef5-b87d-7499-9df9-b365c64745dc"
+ },
+ "packagedApp": [
+  {
+   "pid": 11504,
+   "cpuPct": 0,
+   "cmd": "/Applications/TaiJi.app/Contents/MacOS/TaiJi"
+  },
+  {
+   "pid": 11671,
+   "cpuPct": 16,
+   "cmd": "/Applications/TaiJi.app/Contents/Frameworks/M-eM-$M-*M-fM^^M^A Helper.app/Contents/MacOS/M-eM-$M-*M-fM^^M^A Helper --typ"
+  },
+  {
+   "pid": 11672,
+   "cpuPct": 0,
+   "cmd": "/Applications/TaiJi.app/Contents/Frameworks/M-eM-$M-*M-fM^^M^A Helper.app/Contents/MacOS/M-eM-$M-*M-fM^^M^A Helper --typ"
+  },
+  {
+   "pid": 11673,
+   "cpuPct": 5,
+   "cmd": "/Applications/TaiJi.app/Contents/Frameworks/M-eM-$M-*M-fM^^M^A Helper (Renderer).app/Contents/MacOS/M-eM-$M-*M-fM^^M^A H"
+  },
+  {
+   "pid": 11674,
+   "cpuPct": 0,
+   "cmd": "/Applications/TaiJi.app/Contents/MacOS/TaiJi /Applications/TaiJi.app/Contents/Resources/app.asar.unpacked/dist/runtime/i"
+  },
+  {
+   "pid": 12220,
+   "cpuPct": 0,
+   "cmd": "/Applications/TaiJi.app/Contents/Resources/pi/pi-darwin-x64 --mode rpc --no-extensions --approve --extension builtin:cod"
+  },
+  {
+   "pid": 12221,
+   "cpuPct": 0,
+   "cmd": "/Applications/TaiJi.app/Contents/Resources/pi/pi-darwin-x64 --mode rpc --no-extensions --approve --extension builtin:cod"
+  },
+  {
+   "pid": 44010,
+   "cpuPct": 0,
+   "cmd": "/Applications/TaiJi.app/Contents/Resources/pi/pi-darwin-x64 --mode rpc --no-extensions --approve --extension builtin:cod"
+  },
+  {
+   "pid": 56274,
+   "cpuPct": 1,
+   "cmd": "/Applications/TaiJi.app/Contents/Resources/pi/pi-darwin-x64 --mode rpc --no-extensions --approve --extension builtin:cod"
+  }
+ ],
+ "electronProcCount": 15,
+ "wall": {
+  "submitAt": 1795547347619,
+  "completeAt": 1795547406014,
+  "streamS": 58.395
+ },
+ "rendererWindow": {
+  "relFromS": 0.336,
+  "relToS": 58.665,
+  "sampledS": 58.33068,
+  "nonIdleRatio": 0.4882388821800123
+ },
+ "pathPolicy": "本机绝对路径已脱敏为 <repo> / ~（AGENTS.md 规则 22）；原始值仅存在于采集时环境"
+}

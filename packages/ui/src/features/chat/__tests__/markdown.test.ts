@@ -1585,11 +1585,24 @@ describe('W23 ③: finalize 事件契约（流中停顿不 finalize，complete �
     // 消息 complete → finalize：占位消失，未结束 fence 以完整代码块呈现
     // （header 语言标签 + shiki pre + 源码可见）
     await wrapper.setProps({ streaming: false } as never)
-    await flushRaf()
+    // finalize 帧收敛轮询（与 flushRaf 头注释同款负载教训：complete watch → rAF → 增量
+    // 渲染含 markdown-it parse + shiki 预解析，链深不定，单轮 flushRaf 在高负载 gate
+    // 环境不保证排空——占位消失即出，预算耗尽仍未消失由下方断言拦截）
+    for (let i = 0; i < 50 && wrapper.find('[data-testid="md-streaming-fence"]').exists(); i++) {
+      await new Promise((r) => realSetTimeout(r, 0))
+      await flushRaf()
+    }
     expect(wrapper.find('[data-testid="md-streaming-fence"]').exists()).toBe(false)
     expect(wrapper.find('.md-codeblock').exists()).toBe(true)
     expect(wrapper.find('.md-codeblock__lang').text()).toContain('ts')
-    expect(fakeCodeToHtml).toHaveBeenCalled()
+    // finalize 帧高亮产物就位（批3 B-worker 后 shiki 执行位置分两态、产物等价）：
+    // jsdom 无 Worker → 主线程降级路径调 mock（计数 > 0）；worker / 真实 shiki 产物路径
+    // → 代码块带 token span（mock 与降级纯文本输出都无 span，以 span 区分 shiki 真产物）。
+    // 降级纯文本（两者皆无）仍不通过——「finalize 后高亮跑完」契约不变
+    expect(
+      fakeCodeToHtml.mock.calls.length > 0 ||
+        wrapper.find('.md-codeblock pre.shiki span').exists(),
+    ).toBe(true)
     expect(wrapper.text()).toContain('const a = 1')
   })
 })

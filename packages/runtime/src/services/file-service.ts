@@ -504,6 +504,17 @@ export class FileService implements IFileService {
    * 操作，读盘编译微秒-毫秒级；原 (mtimeMs,size) 身份戳 LRU 有「同毫秒等长写」陈旧
    * 窗口，直读后外部改动下一次读即生效。多文件合并 = rules 拼接（compileIgnoreRules
    * 逐行编译无跨行状态，按目录序拼接顺序求值语义不变）。
+   *
+   * [B4 实测补录 2026-11-24] 批4 对「prompt 路径 .gitignore 成本」的实测数据：
+   * - 单次读+编译亚毫秒级（82 规则 .gitignore）；「每次 prompt 编译两次」是 file.tree
+   *   与 file.search 两个请求各编译一次（日志实测相隔 ~53ms、非并发）——在途合并
+   *   （in-flight coalescing）对该时序永不触发，且编译本身可忽略，故不引入。
+   * - prompt 窗口的真实成本是全树 walk 的 matchPath（实测 6960 路径 × 82 规则 =
+   *   229ms/轮，占 walk 墙钟大头），已由 ignore-parser 的段级快路径缓解
+   *   （2.8x，语义等价性由 domains-bundle.test.ts B4 oracle 套件锁定）。
+   * - TTFT 实测：walk 与 prompt 并发时首帧 40-65ms，与无文件请求的 warm 地板
+   *   （47-65ms）无统计差异——事件循环交错下 walk 不在首 token 关键路径上
+   *   （探针 scripts/perf-probes/perf-ttft.mjs，对比表 docs/perf/batch4-comparison.md）。
    */
   private async loadMatcher(...dirs: string[]): Promise<IgnoreMatcher> {
     const collected: IgnoreMatcher[] = []

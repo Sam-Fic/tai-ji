@@ -19,7 +19,7 @@
     非 subagent session：4 按钮全显；subagent session：复制/朗读（无 fork/handoff）。
   -->
   <div
-    v-if="lastAssistant"
+    v-if="lastAssistantId"
     class="turn-summary flex items-center gap-0.5"
   >
     <!-- 复制：末条 assistant 正文（仅 text，不含思考/工具分区，2026-10-15 用户裁决）。
@@ -31,7 +31,7 @@
       class="size-6 text-neutral-dim hover:text-neutral-fg"
       data-testid="copy-btn"
       :title="t('panel.message.copy')"
-      @click="copy(summaryText, aiCopyKey)"
+      @click="copy(summaryText(), aiCopyKey)"
     >
       <Check v-if="copied === aiCopyKey" class="size-3 text-success" />
       <Copy v-else class="size-3" />
@@ -49,7 +49,7 @@
       data-testid="speak-btn"
       :disabled="speakDisabled"
       :title="speakTitle"
-      @click="onSpeakClick(lastAssistant)"
+      @click="onSpeakClick()"
     >
       <Loader2 v-if="speakState === 'loading'" class="size-3 animate-spin" />
       <Square v-else-if="speakState === 'playing'" class="size-3" />
@@ -65,7 +65,7 @@
         class="fork-btn relative size-6 text-neutral-dim hover:bg-accent-soft hover:text-accent"
         data-testid="fork-ask-btn"
         :title="t('panel.message.forkAsk')"
-        @click="onForkAsk(lastAssistant)"
+        @click="onForkAsk()"
       >
         <GitFork class="size-3" />
       </Button>
@@ -77,7 +77,7 @@
         :class="['handoff-btn relative size-6 text-neutral-dim hover:text-neutral-fg', { 'opacity-50 pointer-events-none': isHandingOff }]"
         data-testid="handoff-ask-btn"
         :title="t('panel.message.handoffAsk')"
-        @click="onHandoffAsk(lastAssistant)"
+        @click="onHandoffAsk()"
       >
         <HandHelping class="size-3.5 fill-current" />
       </Button>
@@ -92,7 +92,6 @@ import { Check, Copy, GitFork, HandHelping, Loader2, Square, Volume2 } from '@lu
 // primitives 直接路径（不经 @taiji/ui 顶层 barrel）：chat 组件被 barrel 再导出，
 // barrel 自引用会封住一族循环依赖环（详见 BashOutputBlock.vue 同款注释）
 import { Button } from '../../primitives/button'
-import type { MessageTurn } from '@taiji/core/domain/chat'
 import { normalizeContent, type Message } from '@taiji/shared'
 import { useCopy } from './composables/useCopy'
 import { isSubagentVirtualId } from '../../lib/subagent-id'
@@ -100,9 +99,10 @@ import { useChatViewDeps } from './chat-view-deps'
 import type { SpeakState } from './chat-view-deps'
 
 const props = defineProps<{
-  turn: MessageTurn
+  lastAssistantId: string | null
+  isStreaming: boolean
   sessionId: string
-  lastAssistant: Message | null
+  resolveLastAssistant: () => Message | null
 }>()
 
 const { t } = useI18n()
@@ -110,23 +110,22 @@ const deps = useChatViewDeps()
 
 /** fork/handoff hover action handler（经 deps 桥接 useTurnActions）。
  *  统一进 composer staging 模式（原 +Q 路径），主操作（后台 fork/handoff）由空提交检查实现。 */
-function onForkAsk(msg: Message): void { deps.onForkAsk(props.sessionId, msg) }
-function onHandoffAsk(msg: Message): void { deps.onHandoffAsk(props.sessionId, msg) }
+function onForkAsk(): void { const msg = props.resolveLastAssistant(); if (msg) deps.onForkAsk(props.sessionId, msg) }
+function onHandoffAsk(): void { const msg = props.resolveLastAssistant(); if (msg) deps.onHandoffAsk(props.sessionId, msg) }
 
 /** 朗读态（ai-voice-tts §5.1 状态机）：数据源 deps.speakStateOf（renderer useTtsPlayer
  *  全局单例任务态按 messageId 派生，D11——切 session 回来按钮仍显示正确播放态）。
  *  computed 内调用使单例 ref 变化可追踪；两字段未 provide（宿主未接语音能力/测试 mock 壳）
  *  返回 undefined → 按钮不渲染。 */
 const speakState = computed<SpeakState | undefined>(() => {
-  const msg = props.lastAssistant
-  if (!msg) return undefined
-  return deps.speakStateOf?.(msg.id)
+  if (!props.lastAssistantId) return undefined
+  return deps.speakStateOf?.(props.lastAssistantId)
 })
 
 /** 生成中置灰（§5.1）：朗读语义锚定「最终」assistant 文本，流式生成中点击会合成半截内容——
- *  disabled 保持操作栏形态稳定不闪烁。turn 级状态组件内取（MessageTurn.isStreaming），
+ *  disabled 保持操作栏形态稳定不闪烁。turn 级 isStreaming 由 Turn.vue 作标量 prop 传入，
  *  不经 ChatViewDeps 新增字段。 */
-const speakDisabled = computed(() => props.turn.isStreaming)
+const speakDisabled = computed(() => props.isStreaming)
 
 /** 朗读按钮 title：三态各一（idle 朗读 / loading 取消 / playing 停止）+ 生成中置灰文案优先。
  *  键名对齐 u4 已登记的 locale 键（panel.message.speak* 族，idle 态键 = speakTitle）。 */
@@ -141,24 +140,26 @@ const speakTitle = computed(() => {
 
 /** 朗读点击：动作分流在壳层装配侧（idle=朗读 / loading=取消 / playing=停止，stop 同源
  *  useTtsPlayer 点击停止），ui 只透传 (sessionId, message)。 */
-function onSpeakClick(msg: Message): void { deps.onSpeak?.(props.sessionId, msg) }
+function onSpeakClick(): void { const msg = props.resolveLastAssistant(); if (msg) deps.onSpeak?.(props.sessionId, msg) }
 
 /** 本 session 是否正在交接（防 handoff 按钮重复点击） */
 const isHandingOff = computed(() => deps.isHandingOff(props.sessionId))
 
 /** 复制反馈 */
 const { copied, copy } = useCopy()
-const aiCopyKey = computed(() => `ai-${props.turn.index}`)
+const aiCopyKey = computed(() => `ai-${props.lastAssistantId}`)
 
 /**
  * 复制内容 = 末条 assistant 正文（normalizeContent(msg.content)，仅 text——不含思考/工具分区，
- * 2026-10-15 用户裁决）。读既有 lastAssistant prop（Turn.vue 单点推导后传入），
- * 「末条 assistant」语义变化时只改 Turn.vue 一处；该 prop 同时承托复制/朗读/fork/handoff。
+ * 2026-10-15 用户裁决）。点击时经 resolveLastAssistant() 取当前末条 assistant（Turn.vue 单点
+ * 推导），「末条 assistant」语义变化时只改 Turn.vue 一处；该 getter 同时承托复制/朗读/fork/handoff。
+ * 刻意做成函数而非 computed：render 期不读它（仅点击时求值），避免追踪 Turn 每 delta 重建的
+ * lastAssistant 而抵消 shouldUpdateComponent 的更新跳过。
  */
-const summaryText = computed(() => {
-  const last = props.lastAssistant
+function summaryText(): string {
+  const last = props.resolveLastAssistant()
   if (!last?.content) return ''
   const text = normalizeContent(last.content)
   return text.trim() ? text : ''
-})
+}
 </script>
