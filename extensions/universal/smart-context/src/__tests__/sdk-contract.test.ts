@@ -12,8 +12,8 @@ import {
 	compact,
 	convertToLlm,
 	DEFAULT_COMPACTION_SETTINGS,
+	ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
-import { completeSimple } from "@earendil-works/pi-ai/compat";
 
 describe("pi SDK 契约（compact 接管路径依赖的导出形状）", () => {
 	it("compact / buildSessionContext / convertToLlm / DEFAULT_COMPACTION_SETTINGS 为函数/对象导出", () => {
@@ -41,8 +41,16 @@ describe("pi SDK 契约（compact 接管路径依赖的导出形状）", () => {
 		expect(out[0].role).toBe("user");
 	});
 
-	it("completeSimple 为函数导出（same-mode LLM 调用通道）", () => {
-		expect(typeof completeSimple).toBe("function");
+	/**
+	 * C-pi-19：same-mode 的模型调用通道 = `ctx.modelRegistry.streamSimple`（虚拟模型感知，
+	 * 内部 `if (isVirtualModel(model))` 分支先 route 再转发）。**不得**使用
+	 * `@earendil-works/pi-ai/compat` 的 `completeSimple`——compat 是静态目录分发层，不认识
+	 * `api === "pi-virtual"`（聚合路由），会恒抛 `No API provider registered for api: pi-virtual`
+	 * 使后台压缩连续失败三次熔断（2026-11-23 事故）。
+	 */
+	it("模型调用通道 = ModelRegistry.streamSimple / complete（虚拟模型感知，C-pi-19）", () => {
+		expect(typeof ModelRegistry.prototype.streamSimple).toBe("function");
+		expect(typeof ModelRegistry.prototype.complete).toBe("function");
 	});
 
 	/**
