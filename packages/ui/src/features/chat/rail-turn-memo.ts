@@ -19,7 +19,13 @@
  */
 import type { MessageTurn } from '@taiji/core/domain/chat'
 import { hasFailedTool } from '@taiji/core/domain/chat'
-import { summarizeTurnForRail, summarizeAssistantForRailWithSource, streamingRailAnchor, isRailSummarySettled, RAIL_FREEZE_K } from '@taiji/core/domain/chat'
+import {
+  summarizeTurnForRail,
+  summarizeAssistantForRailWithSource,
+  streamingRailAnchor,
+  isRailSummarySettled,
+  RAIL_FREEZE_K,
+} from '@taiji/core/domain/chat'
 
 /** memo 条目的纯数据形状（非待实现契约——无 implements/extends 变体，用 type 别名；导出 =
  * railMemoFor 返回类型可命名，消费方 useMessageStreamRail 做派生视图签名比对时字段有权威源） */
