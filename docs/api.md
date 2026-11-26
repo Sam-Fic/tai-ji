@@ -21,11 +21,10 @@
 ## 2. memo 契约（@taiji/ui · features/chat）
 
 ### `railMemoFor(turn: MessageTurn): RailTurnMemo`
-- **本批变化**：内部新增「流式冻结」——当 turn 判定为 streaming、首个非空 assistant 文本块长度 ≥ K（256）、其前缀 fence 已闭合、且**该块的 message id 与上次冻结的记录相同**（前缀指纹 FREEZE_PREFIX=64 字节也相同）时，复用上次计算的 `agentSummary`。
+- **本批变化**：内部新增「流式冻结」——当 turn 判定为 streaming、且现行四重守卫全过（**同 message id**、**同 64 字节前缀指纹** FREEZE_PREFIX、**块长 ≥ K=256**、摘要**已触顶** `isRailSummarySettled`）时，复用上次计算的 `agentSummary`。无 fence 闭合条件——`fenceOpen` 守卫已删除（append-only 下前 K 字符恒不变 ⇒ 该值是常量，会使 coding 主场景长响应整个 turn 永不冻结；未闭合 fence 标记由 stripMarkdown 行级无条件剥离结构性排除，见同文件 §1）。
   - `userSummary` / `failed` / `iconClass` **不冻结**，按 turn 现算（成本 O(结构化 content 块数 + 工具数)，不随 assistant 文本长度增长）。
 - **正确性契约**：
   - 冻结仅在 streaming 态生效；streaming 结束（turn 引用末次变化）正常重算，终态值与旧实现一致；
-  - 未闭合 fence（前缀 256 字符内 ``` 计数奇）不冻结；
   - 换消息 id / 前缀指纹变化立即使冻结失效；
   - 纯空白首块不会成为冻结锚点：冻结记录的 id 必须是 `summarizeAssistantForRailWithSource` 实际产出摘要的那个 message id（`sourceId`），在 **message 粒度**上排除「锚点指向空白块、摘要来自别块」的错绑；fallback 计数摘要（无文本块时按 thinking/toolCalls 计数）`sourceId` 为 null，永不被冻结；
   - 摘要必须已触顶（`isRailSummarySettled`——带省略号后缀），未触顶的空/短摘要其前 20 码点仍可能被后续 delta 改变，冻结它会把「尚未成形」的值钉住整个流式窗；
