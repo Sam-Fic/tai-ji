@@ -91,12 +91,17 @@ const LINUX_RELEASE = {
 
 describe('W3: platform-updater (W3TC5-7)', () => {
   let originalPlatform: PropertyDescriptor | undefined
+  let originalArch: PropertyDescriptor | undefined
   let originalExecPath: string
   let originalAppImage: string | undefined
 
   beforeEach(async () => {
-    // 保存 process.platform / execPath / APPIMAGE 原值
+    // 保存 process.platform / arch / execPath / APPIMAGE 原值
     originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
+    originalArch = Object.getOwnPropertyDescriptor(process, 'arch')
+    // darwin 用例锁定 arch=arm64（mac 资产选择已 arch 感知，ADR-0198；不锁定则
+    // 断言随宿主机 arm64/x64 漂移；x64 路径由 W3TC5d 显式覆盖）
+    Object.defineProperty(process, 'arch', { value: 'arm64', configurable: true })
     originalExecPath = process.execPath
     originalAppImage = process.env.APPIMAGE
 
@@ -112,6 +117,7 @@ describe('W3: platform-updater (W3TC5-7)', () => {
   afterEach(() => {
     // 还原 process 字段
     if (originalPlatform) Object.defineProperty(process, 'platform', originalPlatform)
+    if (originalArch) Object.defineProperty(process, 'arch', originalArch)
     vi.restoreAllMocks()
     delete process.env.APPIMAGE
     const updateDir = path.join(TMP_DATA_DIR, 'update')
@@ -169,6 +175,31 @@ describe('W3: platform-updater (W3TC5-7)', () => {
     }
 
     expect(() => updater.prepareUpdate('/tmp/dl.dmg', releaseNoSha as never)).toThrow(/missing sha256/)
+  })
+
+  it('W3TC5d: mac x64（ADR-0198）→ sha256 取 macX64Dmg 槽位注入脚本', async () => {
+    setPlatform('darwin', '/Applications/TaiJi.app/Contents/MacOS/TaiJi')
+    Object.defineProperty(process, 'arch', { value: 'x64', configurable: true })
+    const { MacUpdater } = await loadModule()
+    const updater = new MacUpdater()
+    const releaseX64 = {
+      ...MAC_RELEASE,
+      assets: {
+        macX64Dmg: {
+          name: 'TaiJi-mac-x64.dmg',
+          downloadUrl: 'https://example.com/mac-x64.dmg',
+          size: 1100,
+          sha256: 'c'.repeat(64),
+        },
+      },
+    }
+
+    const ref = updater.prepareUpdate('/tmp/downloaded-x64.dmg', releaseX64 as never)
+    expect(ref.kind).toBe('detached-script')
+    // 脚本注入的是 x64 槽位的 sha256（非 arm64 槽位的 'a'.repeat(64)）
+    const scriptContent = readFileSync(ref.kind === 'detached-script' ? ref.scriptPath : '', 'utf-8')
+    expect(scriptContent).toContain('c'.repeat(64))
+    expect(scriptContent).not.toContain('a'.repeat(64))
   })
 
   // ── W3TC6：WinUpdater（u2a 改造：cmd wrapper 写盘 + detached spawn）──

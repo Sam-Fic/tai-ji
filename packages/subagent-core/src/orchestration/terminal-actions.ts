@@ -68,7 +68,7 @@ export {
   scanRunEvents,
 } from "../execution/persistence/run-event-journal.ts";
 // [subagent-observability §3.3.8] 成员交付结算派生面（纯派生模块——finalizeRun 合成链消费）。
-import { settleMembersIntoFinalSettlement } from "./run-member-settlement.ts";
+import { escalateScriptFailureVerdict, settleMembersIntoFinalSettlement } from "./run-member-settlement.ts";
 // [W1 / D1] v2 条目契约（两族小条目）：customType 同 v1（kind 判别），构造器与
 // 写点在本文件（见「v2 条目接驳」段）。
 import {
@@ -991,7 +991,10 @@ export async function finalizeRun(
       });
       return false;
     }
-    settlement = composeFinalSettlement(run, doneReason);
+    // 与主路径同源的派生单点（deriveFinalSettlement：compose → 成员派生 → 脚本失败
+    // 升格）——漏升格时脚本 return {status:"failed"} + record IO 失败的组合会让降级
+    // 条目落 completed 假成功（2026-11-25 dev-merge review dmg-r1-2）。
+    settlement = deriveFinalSettlement(run, doneReason);
     logger.error(
       `[workflow] run-settled record dispatch failed (runId=${run.runId}, reason=${doneReason}): ${toErrorMessage(err)}`,
     );
@@ -1166,6 +1169,19 @@ function composeFinalSettlement(run: WorkflowRun, doneReason: DoneReason): RunSe
 }
 
 /**
+ * 终局 settlement 派生单点（主路径 dispatchFinalRunSettle 与 record IO 故障降级分支
+ * 共用）：compose → 成员派生 → 脚本层失败结论升格，次序即契约——成员派生只认成员
+ * 集合、会把脚本结论洗回 done，故 escalate 必须后置（run-member-view 测试锁定）。
+ * 抽单点的动机 = 两条路径的派生次序结构性一致：2026-11-25 dev-merge review dmg-r1-2
+ * 此前降级分支只 compose 不过派生链，脚本 return {status:"failed"} + record IO 失败
+ * 的组合会让降级条目落 completed 假成功（同条目 scriptResultSummary 却写着失败）。
+ */
+function deriveFinalSettlement(run: WorkflowRun, doneReason: DoneReason): RunSettlementRecord {
+  const settled = settleMembersIntoFinalSettlement(run, composeFinalSettlement(run, doneReason));
+  return escalateScriptFailureVerdict(run, settled);
+}
+
+/**
  * [D15] 终局记录原语（journal 帧 + manifest 派生缓存两件一次齐全；唯一生产
  * 调用方是同文件 dispatchFinalRunSettle——finalizeRun 的写入 journal 记录半边。interruptRun
  * 的中断路径不走本原语：中断是暂停态收敛词，落 run-interrupted 帧 + interrupted
@@ -1240,7 +1256,10 @@ export async function settleRunAccounting(
 async function dispatchFinalRunSettle(run: WorkflowRun, doneReason: DoneReason): Promise<RunSettlementRecord> {
   // [subagent-observability §3.3.8] 成员交付结算派生先于帧构造（run 级终局优先级
   // 在 settleMembersIntoFinalSettlement 内裁决——cancelled 族不被成员集合覆盖）。
-  const record = settleMembersIntoFinalSettlement(run, composeFinalSettlement(run, doneReason));
+  // 在 settleMembersIntoFinalSettlement 之后接脚本层失败结论改档（成员派生只认成员
+  // 集合、会把脚本结论洗回 done——2026-11-25 dev-merge-gates 事故：gates FAIL 写在
+  // 返回载荷里，run 终态却显示 completed，页面/托盘/通知感知不到失败）。
+  const record = deriveFinalSettlement(run, doneReason);
   if (doneReason === "aborted") {
     await dispatchRunTrigger(run, {
       type: "cancel-requested",

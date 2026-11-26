@@ -2,8 +2,8 @@
  * 模型路由页求值预览纯函数（provider-aggregation U5b · D14「覆盖预览 + 此刻权威展示」的逻辑半边）。
  *
  * 分工边界（D14 / spec §7.7 语义边界）：时间轴着色是「时间窗覆盖预览」而非完整求值结果
- *（不消费运行时状态）；卡头「此刻」chip 按真实时钟对当前坐标求值命中端点，是求值语义的
- * 可视权威。两者共用本模块，与 pi 扩展求值函数（U2 router.ts）语义对齐但各自实现——
+ *（不消费运行时状态）；卡头「此刻」chip 按真实时钟对当前坐标求值命中端点，是**条件维度**
+ * 求值语义的可视权威。两者共用本模块，与 pi 扩展求值函数（U2 router.ts）语义对齐但各自实现——
  * UI 预览不 import 扩展侧代码（包边界）。穷举语义一致性守护两层：坐标维度 = shared
  * aggregation.ts TIME_WINDOW 常量单源（本模块与 RouteInlineTimeGrid/RouteCard 均从 shared 取值，
  * 改维度 UI 侧编译期红灯；格宽换算由 SLOT_COUNT 推导，同属该单源）；求值语义 =
@@ -14,6 +14,13 @@
  * aggregation-catalog-consistency 同域，且 UI tsconfig rootDir 不纳跨包源码）
  * ——window 缺表 fail-open 与 specials 覆盖顺序两处历史分歧已对齐扩展侧语义，改任一侧
  * 判定式对拍必红。
+ *
+ * **条件维度口径边界（2026-11-24 dmg-r1-1）**：本模块只覆盖条件维度（时间窗 × 额度）；pi 侧
+ * 选择层的 burnt 软避让与 rotateOldestBurnt 全 burnt 轮换（D6 终局观察）不在输入内——其状态
+ * 持久化于 pi session branch 的 virtual-model-state，renderer 无通道可见。故「此刻」chip /
+ * 选择器行徽标的口径是「条件命中」而非 burnt 生效期的实际路由端点（route-matrix.md 总则 3
+ * 同口径降级）；跨实现对拍因此只比对条件半边（扩展 evaluateRoute ⇔ 本模块 evaluateRouteAt），
+ * 不比 decideRoute（条件求值之上叠加 burnt 重排的完整选择路径）。
  *
  * 时间机制红线对齐（ADR-0190）：本模块零定时器。「实时」语义 = 打开/展开路由页时点取
  * 墙钟求值一次（事件驱动：组件 mount 传入），不做周期刷新。
@@ -247,7 +254,8 @@ function evalQuotaDimension(
   const pct = options.quotaOf?.(member.providerId)
   if (pct === undefined) return { ok: true, reason: 'quota-unknown-open' }
   // pct 是缓存已用百分比（口径权威 = shared quota-types.ts QuotaWindow.pct；扩展
-  // router.ts 判定同型换算——「显示 ≡ 生效」），阈值语义 = 剩余（100 − 已用）≥ 阈值
+  // router.ts 判定同型换算——「条件维度显示 ≡ 生效」（burnt 软避让不在本模块输入内，
+  // 见头注口径边界））；阈值语义 = 剩余（100 − 已用）≥ 阈值
   // 可选用（thresholdPercent 100 = 恒耗尽，V3 技巧；2026-11-07 真机核实 bigmodel
   // percentage = 已用口径，详见扩展 router.ts isQuotaConditionSatisfied 注释）。
   const ok = QUOTA_PCT_FULL_SCALE - pct >= (member.quota?.thresholdPercent ?? 0)

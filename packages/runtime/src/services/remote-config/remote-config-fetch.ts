@@ -19,6 +19,25 @@ import { logger } from '../../infra/logger.js'
 export const REMOTE_CONFIG_BASE_URL =
   'https://raw.githubusercontent.com/zhushanwen321/tai-ji/main/configs/remote'
 
+/**
+ * 远程配置候选源（按优先级排序；「配置源 commit main 即发布」不变，多源只解决可达性）。
+ *
+ * 拉取策略 = **并发探测 + 按优先级取首个有效源**（不串行 fail-forward：串行在首源超时时要
+ * 白等满 REQUEST_TIMEOUT_MS 才试下一源，而本链在启动与进设置页两个用户可感知路径上）。
+ * 有效性判据包含「HTTP 2xx **且** body 可 JSON.parse **且** 通过域 guard」——把「200 + 非
+ * JSON」当成成功会让 GitCode 的边缘缓存页（HTML/占位文案）变成永久的 invalid 域。
+ *
+ * GitCode 侧属主与 GitHub 不同（qq_18433817 vs zhushanwen321），仓库内容由
+ * scripts/gitcode-release-sync.mjs 的 pushRepoMirror 单向镜像；raw 端点为
+ * `raw.gitcode.com/<repo>/raw/<ref>/<path>`（实测支持 if-none-match 304），
+ * 而 `gitcode.com/<repo>/raw/...` 返回 SSR HTML 不可解析——故 baseUrl 只能用前者。
+ */
+export const REMOTE_CONFIG_SOURCES = [
+  { id: 'github', baseUrl: REMOTE_CONFIG_BASE_URL },
+  { id: 'gitcode', baseUrl: 'https://raw.gitcode.com/qq_18433817/tai-ji/raw/main/configs/remote' },
+] as const
+
+
 /** 新鲜度窗口 4h = 14_400_000ms（窗口内直接用缓存，不发网络请求；对齐 pi remote-catalog 的 4h 节奏）。 */
 const REFRESH_INTERVAL_MS = 14_400_000
 const REQUEST_TIMEOUT_MS = 8000
@@ -30,7 +49,16 @@ const HTTP_NOT_MODIFIED = 304
 /** 当前已接入的配置域（quota-fetchers = quota presets + fetcher 声明式配置，域 2；
  * v2-plugins = 可安装插件清单，provider-plugin-access U5 域 3，guard 归 plugin-catalog.ts；
  * retry-rules = 重试规则远程覆盖层，域 4，subagent-observability §3.3.12）。 */
-export type RemoteConfigDomain = 'builtin-providers' | 'quota-fetchers' | 'v2-plugins' | 'retry-rules'
+/** 当前已接入的配置域（quota-fetchers = quota presets + fetcher 声明式配置，域 2；
+v2-plugins = 可安装插件清单，域 3；retry-rules = 重试规则远程覆盖层，域 4；
+provider-model-metadata = 附加段 provider（taijiExtra）模型元数据补丁，域 5，
+见 remote-provider-metadata.ts）。 */
+export type RemoteConfigDomain =
+  | 'builtin-providers'
+  | 'quota-fetchers'
+  | 'v2-plugins'
+  | 'retry-rules'
+  | 'provider-model-metadata'
 
 
 /** 落盘缓存 envelope（元数据与域数据分离；内容比较只比 data）。 */
@@ -38,6 +66,17 @@ interface RemoteCacheEnvelope { // oe-exempt:20261019:framework:taiji 远程配�
   version: number
   /** 最近一次完成检查（含 304）的时刻（ms）。节流窗的承载字段。 */
   checkedAt: number
+  /**
+   * 本次 data 的来源源 id（排障可见；双源后「哪一源落后」是新不可观测面，留痕消费）。
+   * version 1 的 envelope 无此字段（读侧按无来源处理，不迁移写盘）。
+   */
+  source?: string
+  /**
+   * per-source ETag（源 id → etag）。双源下必须按源分存：单字段会把 A 源的 etag 送给 B 源，
+   * 且 304 分支无法判断「这个 304 是对哪个源的」。version 1 的 envelope 用单 `etag`。
+   */
+  etags?: Record<string, string>
+  /** @deprecated version 1 单源形态；读侧兼容（视为无 etag，首轮无条件 GET），写侧不再产出。 */
   etag?: string
   /** guard 校验通过后的域数据（未校验的原始响应永不落盘）。 */
   data: unknown
@@ -51,6 +90,10 @@ export interface RemoteRefreshOutcome<T> { // oe-exempt:20261019:framework:taiji
   data: T | undefined
   refreshed: boolean
   reason?: 'throttled' | 'network' | 'invalid'
+  /** 本次数据的来源源 id（仅排障/日志消费，不参与任何业务判定）。 */
+  source?: string
+  /** 本次各失败源的归因（源 id → 原因），双源可达性排障用（ADR-0122 ⑧ 失败显式上报）。 */
+  sourceFailures?: Array<{ source: string; reason: 'network' | 'invalid' }>
 }
 
 function remoteCachePath(domain: RemoteConfigDomain): string {
@@ -116,67 +159,94 @@ function guardedCacheData<T>(cached: RemoteCacheEnvelope | null, guard: (v: unkn
   return cached && guard(cached.data) ? cached.data : undefined
 }
 
-/** 网络请求段：失败/超时归 network（返回 null，调用方回退缓存）。 */
-async function fetchRemote(domain: RemoteConfigDomain, cached: RemoteCacheEnvelope | null): Promise<globalThis.Response | null> {
+/** 单源探测结果：有效（拿得到 guard 通过的数据）/ 304（缓存仍有效）/ 失败（归因）。 */
+type SourceProbe<T> =
+  | { source: string; kind: 'valid'; body: T; etag?: string; changed: boolean }
+  | { source: string; kind: 'cached'; etag?: string }
+  | { source: string; kind: 'failed'; reason: 'network' | 'invalid' }
+
+/** 从缓存里取某源的 etag（version 1 单 etag 字段不参与——未知源，首轮无条件 GET）。 */
+function etagForSource(cached: RemoteCacheEnvelope | null, sourceId: string): string | undefined {
+  return cached?.etags?.[sourceId]
+}
+
+/**
+ * 单源探测：网络 → 304 / 2xx + JSON + guard / 失败归因。
+ *
+ * 有效判据必须同时满足「2xx」「body 可 JSON.parse」「通过域 guard」——GitCode 的
+ * raw 端点在边缘缓存异常时会返回 200 + 占位文案/HTML，只看状态码会让该域永久 invalid。
+ */
+async function probeSource<T>(
+  domain: RemoteConfigDomain,
+  guard: (v: unknown) => v is T,
+  cached: RemoteCacheEnvelope | null,
+  sourceId: string,
+  baseUrl: string,
+): Promise<SourceProbe<T>> {
+  let res: globalThis.Response
   try {
     const headers: Record<string, string> = { accept: 'application/json' }
-    if (cached?.etag) headers['if-none-match'] = cached.etag
-    return await fetch(`${REMOTE_CONFIG_BASE_URL}/${domain}.json`, {
+    const etag = etagForSource(cached, sourceId)
+    if (etag) headers['if-none-match'] = etag
+    res = await fetch(`${baseUrl}/${domain}.json`, {
       headers,
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     })
   } catch (err) {
-    logger.warn('[remote-config] fetch failed, falling back to cache', {
+    logger.warn('[remote-config] source fetch failed', {
       domain,
+      source: sourceId,
       error: err instanceof Error ? err.message : String(err),
     })
-    return null
+    return { source: sourceId, kind: 'failed', reason: 'network' }
   }
-}
 
-/** 200 响应应用段：JSON 解析 + guard 整体校验 + 变更检测 + 落盘（落盘失败不阻断返回）。 */
-async function applyRemotePayload<T>(
-  domain: RemoteConfigDomain,
-  guard: (v: unknown) => v is T,
-  cached: RemoteCacheEnvelope | null,
-  res: globalThis.Response,
-): Promise<RemoteRefreshOutcome<T>> {
+  if (res.status === HTTP_NOT_MODIFIED) {
+    // 304 只对「本次发的 etag 所属源」有意义——etag 是按源取的，故命中的就是本源的缓存
+    return { source: sourceId, kind: 'cached', etag: etagForSource(cached, sourceId) }
+  }
+  if (!res.ok) {
+    void res.body?.cancel()
+    logger.warn('[remote-config] source returned non-ok', { domain, source: sourceId, status: res.status })
+    return { source: sourceId, kind: 'failed', reason: 'network' }
+  }
+
   let body: unknown
   try {
     body = await res.json()
   } catch {
-    logger.warn('[remote-config] response body is not JSON, falling back to cache', { domain })
-    return { data: guardedCacheData(cached, guard), refreshed: false, reason: 'invalid' }
+    logger.warn('[remote-config] source body is not JSON', { domain, source: sourceId })
+    return { source: sourceId, kind: 'failed', reason: 'invalid' }
   }
   if (!guard(body)) {
-    logger.warn('[remote-config] remote payload rejected by domain guard, falling back to cache', { domain })
-    return { data: guardedCacheData(cached, guard), refreshed: false, reason: 'invalid' }
+    logger.warn('[remote-config] source payload rejected by domain guard', { domain, source: sourceId })
+    return { source: sourceId, kind: 'failed', reason: 'invalid' }
   }
 
-  const changed = !cached || JSON.stringify(cached.data) !== JSON.stringify(body)
-  const etag = res.headers.get('etag') ?? undefined
-  try {
-    await persistCache(domain, { version: CACHE_VERSION, checkedAt: Date.now(), etag, data: body })
-  } catch (e) {
-    // 落盘失败不阻断本次返回（内存数据已可用），下次触发点重刷
-    logger.warn('[remote-config] persist cache failed', {
-      domain,
-      error: e instanceof Error ? e.message : String(e),
-    })
+  return {
+    source: sourceId,
+    kind: 'valid',
+    body,
+    etag: res.headers.get('etag') ?? undefined,
+    changed: !cached || JSON.stringify(cached.data) !== JSON.stringify(body),
   }
-  return { data: body, refreshed: changed, reason: changed ? undefined : 'throttled' }
 }
 
 /**
- * 拉取域配置并返回可用数据（含节流/ETag/fail-safe 全语义）。
+ * 拉取域配置并返回可用数据（含节流/ETag/双源/fail-safe 全语义）。
  *
  * - 节流：缓存 checkedAt 在窗口内 → 直接返回缓存数据（reason: throttled）。
+ * - 并发探测全部候选源，**按优先级取首个有效源**（有效 = 2xx + JSON + guard，或 304）。
+ *   串行 fail-forward 会在首源超时语境下白等满超时再试下一源，而本链在启动与进设置页
+ *   两个用户可感知路径上（并发成本 = 每域 2 个 KB 级请求，可接受）。
  * - 304：仅顺延 checkedAt（节流窗承载点），返回缓存数据。
  * - 200 + guard 通过：内容与缓存一致 → 只顺延元数据；有变化 → 落盘并返回新数据
  *   （refreshed: true，下游触发合并写盘）。
- * - 200 + guard 拒绝：整体拒用（不部分采纳），warn + 返回旧缓存数据。
- * - 网络失败/超时：warn + 返回旧缓存数据。
- * - 全链无数据（无缓存且拉不到）：data undefined，reason 取真实未刷新原因（network / invalid）。
+ * - 所有源都失败/都 guard 拒：整体拒用（不部分采纳），warn + 返回旧缓存数据。
+ * - 全链无数据（无缓存且拉不到）：data undefined，reason 取真实未刷新原因。
+ *
+ * 高优先级源先成功时，低优先级源的结果只用于排障日志（sourceFailures / 内容不一致提示）——
+ * 不参与选优，避免引入「哪份更新」的不可判定问题（镜像滞后就滞后，主源权威）。
  */
 export async function refreshRemoteConfig<T>(
   domain: RemoteConfigDomain,
@@ -188,26 +258,93 @@ export async function refreshRemoteConfig<T>(
     return { data: guardedCacheData(cached, guard), refreshed: false, reason: 'throttled' }
   }
 
-  const res = await fetchRemote(domain, cached)
-  if (!res) return { data: guardedCacheData(cached, guard), refreshed: false, reason: 'network' }
+  // 两源是独立数据源（任一失败不影响另一源可用）：allSettled 而非 all——probeSource 内部
+  // 已把网络/非 2xx/非 JSON/guard 拒全部归一为 failed 分支，allSettled 是对「它自己意外抛出」
+  // 的额外隔离层（单源探测异常不得拖垮整次刷新）。
+  const settled = await Promise.allSettled(
+    REMOTE_CONFIG_SOURCES.map((s) => probeSource(domain, guard, cached, s.id, s.baseUrl)),
+  )
+  const probes: Array<SourceProbe<T>> = settled.map((r, idx) => {
+    if (r.status === 'fulfilled') return r.value
+    logger.warn('[remote-config] source probe threw', {
+      domain,
+      source: REMOTE_CONFIG_SOURCES[idx]?.id,
+      error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+    })
+    return { source: REMOTE_CONFIG_SOURCES[idx]?.id ?? String(idx), kind: 'failed', reason: 'network' }
+  })
+  const winner = probes.find((p) => p.kind !== 'failed')
+  const sourceFailures = probes
+    .filter((p): p is Extract<SourceProbe<T>, { kind: 'failed' }> => p.kind === 'failed')
+    .map((p) => ({ source: p.source, reason: p.reason }))
+  const withFailures = <O extends RemoteRefreshOutcome<T>>(o: O): O =>
+    sourceFailures.length > 0 ? { ...o, sourceFailures } : o
 
-  if (res.status === HTTP_NOT_MODIFIED && cached) {
-    // 落盘失败不阻断本次返回（缓存数据已可用），下次触发点重刷；留痕与 200 路径同构
-    await persistCache(domain, { ...cached, checkedAt: Date.now() }).catch((e) => {
+  if (!winner) {
+    // 全部源失败：归因取「是否有源返回了坏内容」——有 invalid 优先报 invalid（配置源本身有问题）
+    const reason: 'network' | 'invalid' = sourceFailures.some((f) => f.reason === 'invalid')
+      ? 'invalid'
+      : 'network'
+    return withFailures({ data: guardedCacheData(cached, guard), refreshed: false, reason })
+  }
+
+  if (winner.kind === 'cached') {
+    if (!cached) {
+      // 理论上不可达（304 需要先发 etag，而 etag 来自缓存）；防御性归为 network
+      return withFailures({ data: undefined, refreshed: false, reason: 'network', source: winner.source })
+    }
+    await persistCache(domain, {
+      ...cached,
+      version: CACHE_VERSION,
+      checkedAt: Date.now(),
+      source: winner.source,
+      etags: { ...cached.etags, ...(winner.etag ? { [winner.source]: winner.etag } : {}) },
+    }).catch((e) => {
       logger.warn('[remote-config] persist cache failed', {
         domain,
         error: e instanceof Error ? e.message : String(e),
       })
     })
-    return { data: guardedCacheData(cached, guard), refreshed: false, reason: 'throttled' }
-  }
-  if (!res.ok) {
-    void res.body?.cancel()
-    logger.warn('[remote-config] non-ok response, falling back to cache', { domain, status: res.status })
-    return { data: guardedCacheData(cached, guard), refreshed: false, reason: 'network' }
+    return withFailures({
+      data: guardedCacheData(cached, guard),
+      refreshed: false,
+      reason: 'throttled',
+      source: winner.source,
+    })
   }
 
-  return applyRemotePayload(domain, guard, cached, res)
+  try {
+    await persistCache(domain, {
+      version: CACHE_VERSION,
+      checkedAt: Date.now(),
+      source: winner.source,
+      // 收录**全部有效源**的 etag（不止胜出源）：下一轮两源都能各自送 if-none-match，
+      // 命中 304 即省下整份 body。收录失败源/坏内容的 etag 无意义（该源本轮没给出可信
+      // 版本标识），故只取 kind==='valid' 的那些。
+      etags: {
+        ...(cached?.etags ?? {}),
+        ...Object.fromEntries(
+          probes
+            .filter((p): p is Extract<SourceProbe<T>, { kind: 'valid' }> => p.kind === 'valid')
+            .filter((p) => p.etag !== undefined)
+            .map((p) => [p.source, p.etag as string]),
+        ),
+      },
+      data: winner.body,
+    })
+  } catch (e) {
+    // 落盘失败不阻断本次返回（内存数据已可用），下次触发点重刷
+    logger.warn('[remote-config] persist cache failed', {
+      domain,
+      error: e instanceof Error ? e.message : String(e),
+    })
+  }
+  return withFailures({
+    data: winner.body,
+    refreshed: winner.changed,
+    reason: winner.changed ? undefined : 'throttled',
+    source: winner.source,
+  })
 }
 
 /** 读域数据（纯缓存，不发网络；域消费方的同步读侧入口）。 */

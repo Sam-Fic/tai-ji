@@ -77,35 +77,6 @@ export function uniqueRouteId(base: string, taken: ReadonlySet<string>): string 
   }
 }
 
-/** buildSimpleQuickRoute 输入。 */
-export interface SimpleQuickRouteInput { // oe-exempt:20261121:framework:快速创建跨文件形状契约（builder/组件/composable/测试多消费方，单实现为设计终态）
-  /** 所点模型行（渠道 + 模型 + 元数据）。 */
-  pick: QuickPickModel
-  /** 已占用路由 id / 显示名（草稿 ∪ 视图；唯一性判定基准）。 */
-  takenRouteIds: readonly string[]
-  takenNames: readonly string[]
-}
-
-/**
- * 单模型简单路由草稿（spec §4.5）：mode=simple、单端点无条件、levels=全支持档、
- * name=模型显示名（重名序号）、id 从模型 id 生成、enabled=true、specials=[]。
- */
-export function buildSimpleQuickRoute(input: SimpleQuickRouteInput): AggregationRoute {
-  const takenIds = new Set(input.takenRouteIds)
-  const takenNames = new Set(input.takenNames)
-  const name = uniqueDisplayName(input.pick.modelDisplayName, takenNames)
-  const id = uniqueRouteId(input.pick.modelId, takenIds)
-  return {
-    id,
-    name,
-    modelId: id,
-    enabled: true,
-    mode: 'simple',
-    members: [quickMember(input.pick)],
-    specials: [],
-  }
-}
-
 /** buildAdvancedQuickRoute 输入。 */
 export interface AdvancedQuickRouteInput { // oe-exempt:20261121:framework:快速创建跨文件形状契约（builder/组件/composable/测试多消费方，单实现为设计终态）
   /** 勾选序模型集（≥2 由面板入口约束；本函数不重复校验）。 */

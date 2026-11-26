@@ -18,7 +18,11 @@
  *   缓存值 → 全 null；
  * - interpreter 接线（LLM 窗口口径 genstats-speed-llm-window D1/D3）：turn-start →
  *   message_end(assistant) → turn-usage → onGenStats 携带扩展字段 + durationMs=窗口差；
- *   无 turn-start / 缺配对结束 → durationMs=null。
+ *   无 turn-start / 缺配对结束 → durationMs=null；
+ * - 模型路由适配（provider-aggregation × gen-stats 命名空间）：会话权威 key 是虚拟
+ *   `aggregation/<routeId>` 而采样落盘物理 key——current 匹配按「展开集成员」判定、
+ *   广播反向寻址按「注册 key 展开集覆盖物理 key」、窗口聚合并集读成员文件；路由缺失
+ *   → 恒等退化（与修复前逐字一致）。
  *
  * 数据目录红线（TEST-STRATEGY / fs-guard）：全部写删目标 = mkdtempSync(
  * join(tmpdir(), 'taiji-gen-stats-')) + TAIJI_AGENT_DATA_DIR env 注入，零共享推导路径触碰。
@@ -29,7 +33,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { GenStatsFrame, ServerMessage } from '@taiji/shared'
+import type { AggregationRoute, GenStatsFrame, ServerMessage } from '@taiji/shared'
 import type { IProcessManager } from '../../ports/pi-engine.js'
 import type { IPiEngine } from '../../ports/pi-engine.js'
 import type { ISessionService, IMessageBroker } from '../../../interfaces.js'
@@ -79,9 +83,11 @@ interface Fixture {
   setOnSessionDestroyed: ReturnType<typeof vi.fn>
   /** [W3] 降级链③读点：lifecycle 注册表记录（IManagedSessionView.modelId 双写缓存）。 */
   getSession: ReturnType<typeof vi.fn>
+  /** 模型路由配置快照读取（provider-aggregation 适配：虚拟 key → 成员物理 key 集展开源）。 */
+  readRoutes: ReturnType<typeof vi.fn>
 }
 
-function makeService(getStateImpl?: () => Promise<unknown>): Fixture {
+function makeService(getStateImpl?: () => Promise<unknown>, routes: AggregationRoute[] = []): Fixture {
   const published: Array<{ sid: string; msg: ServerMessage }> = []
   const getState = vi.fn(getStateImpl ?? (async () => undefined))
   const getClient = vi.fn(() => (getStateImpl === null ? undefined : ({ getState } as unknown)))
@@ -89,12 +95,14 @@ function makeService(getStateImpl?: () => Promise<unknown>): Fixture {
   // W3：SessionSummary.modelId 已删（三状态字段退役），降级链③读点从 getSummary
   // 改到 getSession（注册表记录的同名双写缓存字段）。
   const getSession = vi.fn(() => undefined)
+  const readRoutes = vi.fn(() => routes)
   const service = new GenStatsService({
     publish: (sid, msg) => published.push({ sid, msg }),
     pm: { getClient } as unknown as IProcessManager,
     sessionService: { setOnSessionDestroyed, getSession } as unknown as ISessionService,
+    readRoutes,
   })
-  return { service, published, getClient, getState, setOnSessionDestroyed, getSession }
+  return { service, published, getClient, getState, setOnSessionDestroyed, getSession, readRoutes }
 }
 
 /** 无活跃 pi 进程（降级链①不可用）形态 */
@@ -1096,5 +1104,368 @@ describe('SessionMessageHandler session.getGenStats case', () => {
     expect(errors).toHaveLength(0)
     expect(getSnapshotForSession).toHaveBeenCalledWith('s9')
     expect(replies).toEqual([{ id: 'req-1', type: 'session.stats_update', payload: frame }])
+  })
+})
+
+// ── 模型路由适配（provider-aggregation × gen-stats 命名空间展开层）────────────────────
+//
+// 失配形态（prod 实机证据，fact-check A20/A21）：pi 只让本次请求用物理模型、会话状态留
+// 虚拟 `aggregation/<routeId>`（agent-session.js isVirtualModel 分支）→ 采样按物理 key
+// 落盘正确，而 current 匹配 / 窗口聚合 / 广播反向寻址三处按字符串全等 → 路由会话帧值全 null。
+// 修法 = 读侧展开层（gen-stats-model-keys.ts）：虚拟 key → 成员物理 key 集。
+
+/** 测试用路由 fixture（形状 SSOT = extension-protocol aggregation.ts） */
+function routeFixture(id: string, members: Array<[string, string]>): AggregationRoute {
+  return {
+    id, name: id, modelId: id, enabled: true, mode: 'simple',
+    members: members.map(([providerId, modelId], i) => ({ id: `m${i}`, providerId, modelId, type: 'none' as const })),
+    specials: [],
+  }
+}
+
+const ROUTE_A: AggregationRoute[] = [routeFixture('route-a', [['faux', 'faux-1']])]
+const ROUTE_AB: AggregationRoute[] = [routeFixture('route-a', [['faux', 'faux-1'], ['faux', 'faux-1-b']])]
+
+describe('GenStatsService 模型路由适配（虚拟 key 展开层）', () => {
+  it('路由会话采样：帧 model = 虚拟 key、current 三槽非 null、磁盘只落物理文件、采样 sid 收到帧', () => {
+    const { service, published } = makeService(undefined, ROUTE_A)
+    // 会话权威 key = 虚拟路由（state_changed 登记，写 2 同形态）
+    service.onModelSwitched('s1', 'aggregation/route-a')
+    published.length = 0
+    // turn 采样：pi 以物理模型完成本次请求，usage 样本自带物理 provider/model
+    service.recordSample('s1', { ...NORMAL_SAMPLE, model: 'faux-1', provider: 'faux', ttftMs: 120 })
+
+    expect(published).toHaveLength(1)
+    const frame = published[0]!.msg.payload as GenStatsFrame
+    expect(frame.model).toBe('aggregation/route-a')
+    expect(frame.speed.current).toBe(50) // 100 tok / 2000ms = 50 t/s
+    expect(frame.cacheRatio.current).toBe(33) // 300/900 → 加权命中率百分比制（round(33.33)）
+    expect(frame.ttft.current).toBe(120)
+    // 磁盘仍只落物理模型文件（零存储格式变更：无 aggregation__*.json）
+    expect(existsSync(speedFilePath('faux', 'faux-1'))).toBe(true)
+    expect(existsSync(speedFilePath('aggregation', 'route-a'))).toBe(false)
+  })
+
+  it('同路由另一会话（未采样）经反向寻址收到帧：frame.model = 其自身虚拟 key', () => {
+    const { service, published } = makeService(undefined, ROUTE_A)
+    service.onModelSwitched('s1', 'aggregation/route-a')
+    service.onModelSwitched('s2', 'aggregation/route-a')
+    published.length = 0
+
+    service.recordSample('s1', { ...NORMAL_SAMPLE, model: 'faux-1', provider: 'faux' })
+
+    const sids = published.map((p) => p.sid).sort()
+    expect(sids).toEqual(['s1', 's2'])
+    for (const p of published) {
+      expect((p.msg.payload as GenStatsFrame).model).toBe('aggregation/route-a')
+    }
+    // s2 无本会话样本 → current null（无回落纪律），但帧可达（修复前 s2 完全收不到帧）
+    const s2Frame = published.find((p) => p.sid === 's2')!.msg.payload as GenStatsFrame
+    expect(s2Frame.speed.current).toBeNull()
+    const s1Frame = published.find((p) => p.sid === 's1')!.msg.payload as GenStatsFrame
+    expect(s1Frame.speed.current).toBe(50)
+  })
+
+  it('混合场景：路由会话与物理直连会话各收到自己权威 key 的帧', () => {
+    const { service, published } = makeService(undefined, ROUTE_A)
+    service.onModelSwitched('s-route', 'aggregation/route-a')
+    service.onModelSwitched('s-direct', 'faux/faux-1')
+    published.length = 0
+
+    service.recordSample('s-route', { ...NORMAL_SAMPLE, model: 'faux-1', provider: 'faux' })
+
+    const bySid = new Map(published.map((p) => [p.sid, p.msg.payload as GenStatsFrame]))
+    expect([...bySid.keys()].sort()).toEqual(['s-direct', 's-route'])
+    expect(bySid.get('s-route')!.model).toBe('aggregation/route-a')
+    expect(bySid.get('s-direct')!.model).toBe('faux/faux-1')
+    // 两会话窗口聚合此时都读同一物理文件（聚合层共享），current 各自独立——
+    // s-direct 本会话无样本 → current null（无回落纪律）；s-route 有样本 → 50
+    expect(bySid.get('s-direct')!.speed.current).toBeNull()
+    expect(bySid.get('s-route')!.speed.current).toBe(50)
+  })
+
+  it('current 匹配按展开集成员：切到本会话无样本的成员 → current null（无回落）', () => {
+    const { service, published } = makeService(undefined, ROUTE_AB)
+    service.onModelSwitched('s1', 'aggregation/route-a')
+    service.recordSample('s1', { ...NORMAL_SAMPLE, model: 'faux-1', provider: 'faux' })
+    // 槽内物理 key = faux/faux-1；会话权威 key 换成非成员路由 → 展开集不含槽 key
+    service.onModelSwitched('s1', 'aggregation/route-gone')
+    const frame = published.at(-1)!.msg.payload as GenStatsFrame
+    expect(frame.model).toBe('aggregation/route-gone')
+    expect(frame.speed.current).toBeNull()
+  })
+
+  it('路由缺失（readRoutes → []）：退化为修复前行为（虚拟 key 恒等，采样 sid 收不到广播帧、不抛错）', () => {
+    const { service, published, readRoutes } = makeService(undefined, [])
+    service.onModelSwitched('s1', 'aggregation/route-a')
+    published.length = 0
+    service.recordSample('s1', { ...NORMAL_SAMPLE, model: 'faux-1', provider: 'faux' })
+
+    expect(readRoutes).toHaveBeenCalled()
+    // 恒等退化后反向寻址按字符串全等（修复前同形态）：注册 key = 虚拟、采样 key = 物理 → 不匹配
+    expect(published).toHaveLength(0)
+    // 恢复路径帧仍可构造（model = 虚拟 key），current 不匹配 → null（修复前逐字一致）
+  })
+
+  it('恢复路径（getSnapshotForSession）：get_state 返回虚拟模型 → 帧 model = 虚拟 key + current 非 null', async () => {
+    const getState = async () => ({ model: { id: 'route-a', provider: 'aggregation' } })
+    const { service } = makeService(getState, ROUTE_A)
+    service.onModelSwitched('s1', 'aggregation/route-a')
+    service.recordSample('s1', { ...NORMAL_SAMPLE, model: 'faux-1', provider: 'faux' })
+
+    const frame = await service.getSnapshotForSession('s1')
+    expect(frame.model).toBe('aggregation/route-a')
+    expect(frame.speed.current).toBe(50)
+  })
+
+  it('每操作只读一次路由快照（不建缓存/watcher；recordSample 广播一次、onModelSwitched 一次）', () => {
+    const { service, readRoutes } = makeService(undefined, ROUTE_A)
+    service.onModelSwitched('s1', 'aggregation/route-a')
+    expect(readRoutes).toHaveBeenCalledTimes(1)
+    service.recordSample('s1', { ...NORMAL_SAMPLE, model: 'faux-1', provider: 'faux' })
+    expect(readRoutes).toHaveBeenCalledTimes(2)
+  })
+
+  it('物理直连零回归（B2 单测锚点）：帧值/磁盘/寻址与无路由时逐字一致', () => {
+    // 注意取**采样帧**（published.at(-1)）：onModelSwitched 先推的帧无样本无窗口，不是比对对象
+    const withRoutes = makeService(undefined, ROUTE_A)
+    withRoutes.service.onModelSwitched('s1', 'faux/faux-1')
+    withRoutes.service.recordSample('s1', { ...NORMAL_SAMPLE, model: 'faux-1', provider: 'faux' })
+
+    const withoutRoutes = makeService(undefined, [])
+    withoutRoutes.service.onModelSwitched('s1', 'faux/faux-1')
+    withoutRoutes.service.recordSample('s1', { ...NORMAL_SAMPLE, model: 'faux-1', provider: 'faux' })
+
+    // 两服务共享同一数据目录（模块级 fixture）：第二个服务的采样追加到同一物理文件，
+    // 两条样本逐值相同（NORMAL_SAMPLE 常量）→ 窗口聚合值相等，帧体应逐字一致
+    const fA = withRoutes.published.at(-1)!.msg.payload as GenStatsFrame
+    const fB = withoutRoutes.published.at(-1)!.msg.payload as GenStatsFrame
+    expect(fA).toEqual(fB)
+    expect(fA.model).toBe('faux/faux-1')
+    expect(fA.speed.current).toBe(50)
+    expect(fA.speed.day).toEqual(distOfOne(50))
+  })
+})
+
+describe('GenStatsService 路由窗口聚合并集（window-aggregate）', () => {
+  it('B1 锚点：两成员路由的 day 窗口 = 成员样本并集（speed 分布 / cache 加权 / ttft 分布）', async () => {
+    const { service } = makeService(undefined, ROUTE_AB)
+    // 预置两成员各自当日样本（直接写盘，绕过采样入口）
+    writeDayRecords(speedFilePath('faux', 'faux-1'), { [localDayKey()]: [[100, 2000], [200, 2000]] })
+    writeDayRecords(speedFilePath('faux', 'faux-1-b'), { [localDayKey()]: [[300, 2000], [400, 2000]] })
+    writeDayRecords(cacheRatioFilePath('faux', 'faux-1'), { [localDayKey()]: [[300, 900]] })
+    writeDayRecords(cacheRatioFilePath('faux', 'faux-1-b'), { [localDayKey()]: [[900, 900]] })
+    writeDayRecords(ttftFilePath('faux', 'faux-1'), { [localDayKey()]: [[100]] })
+    writeDayRecords(ttftFilePath('faux', 'faux-1-b'), { [localDayKey()]: [[400]] })
+    service.onModelSwitched('s1', 'aggregation/route-a')
+
+    const frame = await service.getSnapshotForSession('s1')
+
+    // 并集速度样本 [50,100,150,200] t/s → avg/p50=125, min=50, max=200, p99=200（最近秩）
+    expect(frame.speed.day).toEqual(dist(125, 125, 200, 200, 50))
+    expect(frame.speed.d7).toEqual(dist(125, 125, 200, 200, 50))
+    expect(frame.speed.d30).toEqual(dist(125, 125, 200, 200, 50))
+    // 并集加权命中率 (300+900)/(900+900) = 67%
+    expect(frame.cacheRatio.day).toBe(67)
+    // 并集 ttft [100,400] → p50 = 双中位均值 250
+    expect(frame.ttft.day).toEqual(dist(250, 250, 400, 400, 100))
+    // 本会话无样本 → current 三槽 null（无回落纪律）
+    expect(frame.speed.current).toBeNull()
+    expect(frame.model).toBe('aggregation/route-a')
+  })
+
+  it('B3 锚点：只命中一个端点时，窗口仍覆盖未命中成员（max=200 只有 faux-1-b 种子能产出）', async () => {
+    const { service, published } = makeService(undefined, ROUTE_AB)
+    writeDayRecords(speedFilePath('faux', 'faux-1'), { [localDayKey()]: [[100, 2000], [200, 2000]] })
+    writeDayRecords(speedFilePath('faux', 'faux-1-b'), { [localDayKey()]: [[300, 2000], [400, 2000]] })
+    service.onModelSwitched('s1', 'aggregation/route-a')
+    published.length = 0
+
+    // live 采样只落在 faux-1（路由命中端点 1）
+    service.recordSample('s1', { ...NORMAL_SAMPLE, model: 'faux-1', provider: 'faux' })
+
+    const frame = published.at(-1)!.msg.payload as GenStatsFrame
+    expect(frame.speed.current).toBe(50) // current 来自实际命中成员
+    // 窗口并集含未命中成员 faux-1-b 的 200 t/s 种子（单成员窗口 max 至多 100 + live）
+    expect(frame.speed.day?.max).toBe(200)
+    expect(frame.speed.day?.min).toBeLessThanOrEqual(50)
+  })
+
+  it('fresh 只并入其归属成员（live 样本落在 faux-1 时，faux-1-b 仍纯读盘）', async () => {
+    const { service, published } = makeService(undefined, ROUTE_AB)
+    writeDayRecords(speedFilePath('faux', 'faux-1-b'), { [localDayKey()]: [[400, 2000]] })
+    service.onModelSwitched('s1', 'aggregation/route-a')
+    published.length = 0
+
+    service.recordSample('s1', { ...NORMAL_SAMPLE, model: 'faux-1', provider: 'faux' })
+
+    // 窗口 = faux-1 fresh（50）+ faux-1-b 读盘（200）→ [50,200] avg=125 p50=125
+    const frame = published.at(-1)!.msg.payload as GenStatsFrame
+    expect(frame.speed.day).toEqual(dist(125, 125, 200, 200, 50))
+  })
+
+  it('成员文件缺失/悬空端点：并集自然忽略（readDayRecords 不存在文件返回 {}），不抛错', async () => {
+    const dangling = [routeFixture('route-d', [['faux', 'faux-1'], ['gone', 'ghost']])]
+    const { service } = makeService(undefined, dangling)
+    writeDayRecords(speedFilePath('faux', 'faux-1'), { [localDayKey()]: [[100, 2000]] })
+    service.onModelSwitched('s1', 'aggregation/route-d')
+
+    const frame = await service.getSnapshotForSession('s1')
+    expect(frame.speed.day).toEqual(distOfOne(50)) // 仅存在的成员计入
+    expect(frame.model).toBe('aggregation/route-d')
+  })
+
+  it('窗口并集不影响物理直连：单成员展开时逐字读该模型文件（含 fresh 复用）', async () => {
+    const { service, published } = makeService(undefined, ROUTE_AB)
+    service.onModelSwitched('s1', 'faux/faux-1')
+    published.length = 0
+    service.recordSample('s1', { ...NORMAL_SAMPLE, model: 'faux-1', provider: 'faux' })
+    const frame = published.at(-1)!.msg.payload as GenStatsFrame
+    expect(frame.speed.day).toEqual(distOfOne(50))
+    expect(frame.speed.current).toBe(50)
+  })
+})
+
+describe('GenStatsService 路由适配边界（leaf：异常/兜底/存量形态）', () => {
+  it('存量会话路由被删除：快照帧 model 仍回填虚拟 key、current/窗口回落 null（不抛错）', async () => {
+    // 会话曾注册到 route-a，随后路由被删除（readRoutes 快照不再含它）
+    const { service, published } = makeService(undefined, [])
+    service.onModelSwitched('s1', 'aggregation/route-a')
+    service.recordSample('s1', { ...NORMAL_SAMPLE, model: 'faux-1', provider: 'faux' })
+    // 退化后 live 广播不到该 sid（恒等全等，修复前同形态）；恢复路径仍可构造帧
+    expect(published.filter((p) => p.sid === 's1')).toHaveLength(1) // 仅 onModelSwitched 那一帧
+
+    const frame = await service.getSnapshotForSession('s1')
+    expect(frame.model).toBe('aggregation/route-a') // model 恒回填（MF8），前端校验不拦截
+    expect(frame.speed.current).toBeNull() // 槽物理 key 不在恒等展开集 → null（无回落）
+    expect(frame.speed.day).toEqual(NULL_DIST)
+  })
+
+  it('readRoutes 抛错（配置读取异常）：兜底恒等退化，recordSample 热路径不炸', () => {
+    const f = makeService(undefined, ROUTE_A)
+    f.readRoutes.mockImplementation(() => { throw new Error('providers.json read exploded') })
+    f.service.onModelSwitched('s1', 'aggregation/route-a')
+    expect(() => {
+      f.service.recordSample('s1', { ...NORMAL_SAMPLE, model: 'faux-1', provider: 'faux' })
+    }).not.toThrow()
+    // 兜底后广播寻址按恒等全等：虚拟注册 key 收不到物理采样帧（与修复前逐字一致）
+    expect(f.published.filter((p) => p.sid === 's1')).toHaveLength(1) // 仅 onModelSwitched 帧
+  })
+
+  it('共享成员两路由：route-a 会话收到落在共享成员上的采样帧（成员级归属正确）', () => {
+    const shared = [
+      routeFixture('route-a', [['faux', 'faux-1']]),
+      routeFixture('route-c', [['faux', 'faux-1'], ['faux', 'faux-1-b']]),
+    ]
+    const { service, published } = makeService(undefined, shared)
+    service.onModelSwitched('s-a', 'aggregation/route-a')
+    service.onModelSwitched('s-c', 'aggregation/route-c')
+    published.length = 0
+
+    service.recordSample('s-c', { ...NORMAL_SAMPLE, model: 'faux-1', provider: 'faux' })
+
+    const sids = published.map((p) => p.sid).sort()
+    expect(sids).toEqual(['s-a', 's-c']) // 共享成员 faux-1 的采样两路由会话都可达
+  })
+})
+
+describe('GenStatsService 恢复路径异步竞态（prune C02-2/C02-3 锁死）', () => {
+  const ROUTE_TWO = [
+    routeFixture('route-a', [['faux', 'faux-1']]),
+    routeFixture('route-b', [['faux', 'faux-2']]),
+  ]
+
+  it('C02-2：get_state 迟到回包（旧模型）不覆写 await 期间的写 2（新模型）——live 帧不丢失', async () => {
+    let release: (v: unknown) => void = () => {}
+    const getState = () => new Promise((res) => { release = res })
+    const { service, published } = makeService(getState, ROUTE_TWO)
+    service.onModelSwitched('s1', 'aggregation/route-a')
+    const pending = service.getSnapshotForSession('s1') // await 悬空（get_state 往返窗）
+    service.onModelSwitched('s1', 'aggregation/route-b') // await 期间并发写 2（更新的注册）
+    release({ model: { id: 'route-a', provider: 'aggregation' } }) // 迟到回包（旧模型）
+    await pending
+    published.length = 0
+
+    // 新模型成员的采样必须可达（修复前：写 3 无条件覆写 → 注册被钉回 route-a → 0 帧）
+    service.recordSample('s1', { ...NORMAL_SAMPLE, model: 'faux-2', provider: 'faux' })
+    const frames = published.filter((p) => p.sid === 's1')
+    expect(frames).toHaveLength(1)
+    expect((frames[0]!.msg.payload as GenStatsFrame).model).toBe('aggregation/route-b')
+    expect((frames[0]!.msg.payload as GenStatsFrame).speed.current).toBe(50)
+  })
+
+  it('C02-2 补：未登记 session 的写 3 缺口覆盖仍在（新 session 恢复路径登记）', async () => {
+    const getState = async () => ({ model: { id: 'route-a', provider: 'aggregation' } })
+    const { service } = makeService(getState, ROUTE_TWO)
+    // 未经 onModelSwitched/recordSample：映射未登记
+    expect(service.sessionsOfModel('aggregation/route-a')).toEqual([])
+
+    const frame = await service.getSnapshotForSession('s-new')
+    expect(frame.model).toBe('aggregation/route-a')
+    expect(service.sessionsOfModel('aggregation/route-a')).toEqual(['s-new']) // 写 3 生效
+  })
+
+  it('C02-3：await 期间采样落在回包路由之外 → 恢复帧 current null（混合时序，现状锁死防恶化）', async () => {
+    let release: (v: unknown) => void = () => {}
+    const getState = () => new Promise((res) => { release = res })
+    const { service } = makeService(getState, ROUTE_TWO)
+    service.onModelSwitched('s1', 'aggregation/route-a')
+    const pending = service.getSnapshotForSession('s1')
+    // await 期间采样落在 route-b 成员（回包将是 route-a，其展开集不含 faux-2）
+    service.recordSample('s1', { ...NORMAL_SAMPLE, model: 'faux-2', provider: 'faux' })
+    release({ model: { id: 'route-a', provider: 'aggregation' } })
+
+    const frame = await pending
+    expect(frame.model).toBe('aggregation/route-a')
+    expect(frame.speed.current).toBeNull() // 槽 key faux/faux-2 ∉ expand(route-a)，无回落
+  })
+})
+
+describe('GenStatsService 文件名别名与首 turn 残差窗（dev-merge 1.7 MF-1 / S-1）', () => {
+  it('MF-1 集成锁：两成员别名同一文件（safeModelFileName raw 碰撞）→ 端到端值正确不炸', async () => {
+    // ('faux','x__y') 与 ('faux__x','y') 的 raw 串均为 'faux__x__y' → 同一 safeModelFileName
+    const alias = [routeFixture('route-alias', [['faux', 'x__y'], ['faux__x', 'y']])]
+    const { service } = makeService(undefined, alias)
+    // 只向别名文件写一份当日样本（两条不同值：双算会让 max/p99 直接见证）
+    writeDayRecords(speedFilePath('faux', 'x__y'), { [localDayKey()]: [[100, 2000], [400, 2000]] })
+    service.onModelSwitched('s1', 'aggregation/route-alias')
+
+    const frame = await service.getSnapshotForSession('s1')
+
+    // 注：分布口径对精确翻倍不敏感（avg/p50/p99/max/min 均不变），帧 API 无法见证双算——
+    // 去重的真鉴别力在 planMemberReads 纯函数单测（见 gen-stats-model-keys.test.ts）；
+    // 本锁只保端到端集成路径值正确、不炸、model 归属正确。
+    expect(frame.speed.day).toEqual(dist(125, 125, 200, 200, 50))
+    expect(frame.model).toBe('aggregation/route-alias')
+  })
+
+  it('MF-1 集成锁：fresh 样本经别名成员的 live 广播帧值正确', () => {
+    const alias = [routeFixture('route-alias', [['faux', 'x__y'], ['faux__x', 'y']])]
+    const { service, published } = makeService(undefined, alias)
+    service.onModelSwitched('s1', 'aggregation/route-alias')
+    published.length = 0
+
+    service.recordSample('s1', { ...NORMAL_SAMPLE, model: 'x__y', provider: 'faux' })
+
+    const frame = published.at(-1)!.msg.payload as GenStatsFrame
+    expect(frame.speed.current).toBe(50)
+    expect(frame.speed.day).toEqual(distOfOne(50))
+    // fresh 只并入归属成员（别名成员经计划去重跳过，不从磁盘读回同一刚落盘记录）；
+    // 翻倍同样帧上不可观测，去重判据的鉴别力在 planMemberReads 单测
+  })
+
+  it('S-1：首 turn 采样先于写 2 落定——物理 key 暂代权威 key（有界残差窗，锁存防恶化）', () => {
+    const { service, published } = makeService(undefined, ROUTE_A)
+    // 不调 onModelSwitched：模拟 usage 事件早于首次 state_changed 发布（投影播种未落定）
+    service.recordSample('s1', { ...NORMAL_SAMPLE, model: 'faux-1', provider: 'faux' })
+
+    const frame = published.at(-1)!.msg.payload as GenStatsFrame
+    expect(frame.model).toBe('faux/faux-1') // 写 1 把物理成员 key 暂登记为权威 key
+    expect(frame.speed.current).toBe(50) // 数值真实（无假值），仅归属短暂失真
+
+    // 写 2 落定后收敛为虚拟 key + 路由并集语义
+    service.onModelSwitched('s1', 'aggregation/route-a')
+    const frame2 = published.at(-1)!.msg.payload as GenStatsFrame
+    expect(frame2.model).toBe('aggregation/route-a')
   })
 })

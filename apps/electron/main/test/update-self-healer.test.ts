@@ -13,7 +13,7 @@
  *
  * 运行：cd apps/electron/main && npx vitest run test/update-self-healer.test.ts
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
@@ -78,6 +78,12 @@ process.env.TAIJI_AGENT_DATA_DIR = TMP_DATA_DIR
 async function loadModule() {
   return await import('../update/update-self-healer.js')
 }
+
+// 首次导入在 beforeAll 完成（同 orchestrator.test.ts：一次性导入成本不记到首个用例，
+// 防慢用例门禁把 junit 的一次性导入开销误判为用例本身慢）
+beforeAll(async () => {
+  await loadModule()
+})
 
 describe('W3: update-self-healer (W3TC11)', () => {
   let originalPlatform: PropertyDescriptor | undefined

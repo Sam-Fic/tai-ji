@@ -61,7 +61,7 @@
 
 | 子入口 | 内容 |
 |--------|------|
-| `@zhushanwen/subagent-core/workflows/*` | 内置 workflow 脚本原文件（`chain.js` / `parallel.js` / `scatter-gather.js` / `map-reduce.js` / `review-fix-loop.js` + `review-fix-loop-utils.cjs` / `_shared/`），`require` 与 `import` 条件同径（D1 同字节直发） |
+| `@zhushanwen/subagent-core/workflows/*` | 内置 workflow 脚本原文件（`chain.js` / `parallel.js` / `scatter-gather.js` / `map-reduce.js` / `review-fix-loop.js` / `fan-out.js` / `batch.js` + `review-fix-loop-utils.cjs` / `_shared/`），`require` 与 `import` 条件同径（D1 同字节直发） |
 
 仓内壳侧（pi extension）与 npm 消费方均只走上列受控入口：开发态 `./* -> src/*` 通配已删除（D5 豁免终止），extensions 生产码写深路径由根 ESLint `no-restricted-imports` 检查拦截（C-ext-27，白名单动态读本包 exports）；壳测试侧带 `.ts` 后缀的深路径经壳 vitest alias 物理解析到 core `src`（不经 exports）。语义子入口精确条目优先于资产通配（Node exact-match-beats-pattern）。
 

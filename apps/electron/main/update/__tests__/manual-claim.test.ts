@@ -111,15 +111,19 @@ function readPreloaded(): Record<string, unknown> {
 
 // ─── 全局编排 ──────────────────────────────────────────────────────
 
-// 锁定 darwin 平台分支（pickPlatformAsset 读 process.platform），与 host 无关
+// 锁定 darwin 平台 + arm64 架构分支（pickPlatformAsset 读 process.platform/arch，
+// ADR-0198 mac 资产选择 arch 感知——不锁定则断言随宿主机漂移），与 host 无关
 const ORIGINAL_PLATFORM = process.platform
+const ORIGINAL_ARCH = process.arch
 
 beforeAll(() => {
   Object.defineProperty(process, 'platform', { value: 'darwin' })
+  Object.defineProperty(process, 'arch', { value: 'arm64', configurable: true })
 })
 
 afterAll(() => {
   Object.defineProperty(process, 'platform', { value: ORIGINAL_PLATFORM })
+  Object.defineProperty(process, 'arch', { value: ORIGINAL_ARCH, configurable: true })
   rmSync(TEST_UPDATE_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
 })
 

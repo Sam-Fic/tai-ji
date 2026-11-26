@@ -123,11 +123,12 @@ function toPickerGroups(groups: readonly ModelGroup[]): PickerGroupRef[] {
 /**
  * 「此刻」chip/行标注额度供给（dmg-r1-10 接线）：providerId → 首窗口已用百分比投影，
  * 与路由页 SettingsModal.vue routeQuotaOf 同源形态（useQuotaStore.byProvider 缓存直投，
- * wins[0].pct，输入侧不做 100−pct 换算——剩余换算在判定式内同型完成，「显示 ≡ 生效」
- * 由两侧判定式同型保证）；无缓存/非有限值 = undefined（额度数据未知 → 求值 fail-open，
- * D5 quota-unknown-open）。只读缓存不触发拉取（拉取编排归额度面板 useQuotaQuery，
- * 选择器保持零额外请求）；投影在 pickerGroups computed 求值期内读取 reactive Map，
- * 额度缓存更新随依赖追踪驱动行标注刷新。
+ * wins[0].pct，输入侧不做 100−pct 换算——剩余换算在判定式内同型完成，「条件维度
+ * 显示 ≡ 生效」由两侧判定式同型保证——同型只覆盖条件维度，burnt 软避让不进本投影，
+ * 见 withHitEndpoints 头注边界）；无缓存/非有限值 = undefined（额度数据未知 → 求值
+ * fail-open，D5 quota-unknown-open）。只读缓存不触发拉取（拉取编排归额度面板
+ * useQuotaQuery，选择器保持零额外请求）；投影在 pickerGroups computed 求值期内读取
+ * reactive Map，额度缓存更新随依赖追踪驱动行标注刷新。
  */
 function routeQuotaOf(providerId: string): number | undefined {
   const pct = useQuotaStore().byProvider.get(providerId)?.data?.wins[0]?.pct
@@ -139,9 +140,15 @@ function routeQuotaOf(providerId: string): number | undefined {
  *（groups 重算时点求值——广播/挂载驱动的事件式刷新，无周期重算，ADR-0190）。命中端点
  * 展示名 = provider 名（GL2：端点真实 id 只在配置与消息记录可见，选择器显示名）；路由
  * 定义在但条件全不满足 = null（行显「此刻无命中」）；非路由行 / 路由视图未到位 = 缺省
- *（标注缺席）。额度维度同输入（dmg-r1-10）：quotaOf 与路由页 chip、pi 生效判定同源
+ *（标注缺席）。额度维度同输入（dmg-r1-10）：quotaOf 与路由页 chip 的额度输入同源
  *（routeQuotaOf 投影）——额度耗尽端点不再显示命中（数据在判定生效），数据未知仍
- * fail-open 放行（与 pi 扩展侧同语义）。
+ * fail-open 放行（与 pi 扩展侧条件判定同语义）。
+ *
+ * **口径边界（2026-11-24 dmg-r1-1）**：本投影只覆盖**条件维度**（时间窗 × 额度）。pi 侧
+ * 选择层的 burnt 软避让与 rotateOldestBurnt 全 burnt 轮换不在输入内——其状态持久化于 pi
+ * session branch 的 virtual-model-state，renderer 无通道可见；burn 存活期内 hitEndpoint
+ * 可能与实际路由端点不一致。故行徽标文案（routeHitNow）按「条件命中」口径降级，
+ * route-matrix.md 总则 3 与 data-source-registry #94 同口径登记，不宣称「显示与生效同判」。
  *
  * 路由视图缓存懒拉（不预拉语义，对齐分区首访 U10）：仅当候选里出现路由条目（聚合组）
  * 才触发首拉——零配置 / 未配路由环境零请求（V8 零行为形态）；拉取失败 = 标注整体缺席。

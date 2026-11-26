@@ -165,7 +165,7 @@ check_builtin_ext_assets() {
     if [ "$wf_src" -gt 0 ] && [ "$wf_pkg" = "$wf_src" ]; then
         echo -e "  ${GREEN}✓${NC} 内置 workflow 资产齐备（$wf_pkg 个，与源同量）"
     else
-        echo -e "  ${RED}✗${NC} 内置 workflow 资产缺量: 产物 ${wf_pkg} / 源 ${wf_src}（→ subagents 批量工具将报 'fan-out is not available'）"
+        echo -e "  ${RED}✗${NC} 内置 workflow 资产缺量: 产物 ${wf_pkg} / 源 ${wf_src}（→ subagents 批量工具将报 'batch is not available'）"
         failed=1
     fi
     if [ "$ag_src" -gt 0 ] && [ "$ag_pkg" = "$ag_src" ]; then

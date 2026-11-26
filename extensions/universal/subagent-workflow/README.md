@@ -111,7 +111,7 @@ Workflow run 有两类结束形态：**终局**（`done`，outcome 区分 done /
 | `"agents": "<path-a>/explorer.md"`（单值作用于全部成员） | 运行级 `"agent": "<path-a>/explorer.md"` |
 | `"aggregate": true`（追加一个归约成员） | 无对应参数：结果照常逐条返回，归约由主 agent 收到完成通知后自行完成 |
 
-旧写法会被拒绝，错误信息即迁移指引：工具调用中出现 `agents` / `aggregate` 时入口直接报错并给出成员对象 / 自行归约的正确形状；`workflow_run` 直调 fan-out 模板的旧 CLI 风格写法 `tasks=["…"]` / `agents="…"` 会在 worker 启动前被类型校验拒绝。已保存的旧脚本按上表改为成员对象写法。
+旧写法会被拒绝，错误信息即迁移指引：工具调用中出现 `agents` / `aggregate` 时入口直接报错并给出成员对象 / 自行归约的正确形状；`workflow_run` 直调 fan-out / batch 模板的旧 CLI 风格写法 `tasks=["…"]` / `agents="…"` 会在 worker 启动前被类型校验拒绝。已保存的旧脚本按上表改为成员对象写法。
 
 ## 安装
 

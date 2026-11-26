@@ -161,3 +161,22 @@ package-lock.json.*
 
 # tree-plant 任务工作目录（设计/验收文档与运行产物，本地不入库）
 /tpkg/
+# tree-plant 六道 gate 的运行产物（.run/*.json 内嵌内容哈希，手改会被后续阶段拒绝）
+/.run/
+
+# 批5：GPU trace 单文件 230-260MB，不入库（归档于会话 artifacts / .run，报告给路径）
+*.trace.json
+
+# 发布管线状态（scripts/merge/lib/state.mjs，v0.13.4 后迁普通仓库布局落主仓根）——
+# bare-workspace 时代在仓外 workspace 根，普通布局下 WS_ROOT = 主仓根，状态文件落在仓内；
+# 不 ignore 会让 pre-merge-check 步骤 4（Git 状态检查）把每次发布链误报未提交变更卡死
+/.merge-state/
+
+# perf 测量收尾（branch-review dmg-r1-2）：原始 CPU 采集物不入库——pi/runtime cpuprofile 内嵌
+# worktree 绝对路径（rule-22①）；本体归档于会话 artifacts，去向对账清单 =
+# docs/perf/final-measurement/raw-artifacts-manifest.json（md5/bytes，沿用 gpu-trace-manifest 同模式）
+*.cpuprofile
+# 例外：final-measurement/ 的归档 cpuprofile 是已核验测量归档（md5 manifest 锁定、
+# check-clean-artifacts 门禁的离线对账数据源，closeout 交付物），非原始采集物——
+# 原始物在 .run / 会话 artifacts，去向由 raw-artifacts-manifest.json 对账
+!docs/perf/final-measurement/*.cpuprofile

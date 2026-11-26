@@ -12,7 +12,7 @@ agent-managed session pi extension：把 session 的创建/发送/读取/列表/
 
 | 工具 | action | 说明 |
 |------|--------|------|
-| `create_managed_session` | create | 在指定 cwd 创建子 session（可选 label；可选 `prompt` 作初始 prompt，create+send 原子完成）；服务端注入 `spawnSource: 'agent'` 与父 session id，`.agent.json` sidecar 落盘供重启恢复 |
+| `create_managed_session` | create | 在指定 cwd 创建子 session（可选 label；可选 `prompt` 作初始 prompt，create+send 原子完成；可选 `model` 指定生效模型）；服务端注入 `spawnSource: 'agent'` 与父 session id，`.agent.json` sidecar 落盘供重启恢复 |
 | `send_to_session` | send | 向子 session 发送 prompt（异步处理） |
 | `read_session_history` | history | 读子 session 对话历史（可选 tailTurns 截尾部 N 个 turn） |
 | `list_my_sessions` | list | 列出本 agent 管理的 session（无过滤参数，自动限定发起方 agent） |
@@ -20,6 +20,15 @@ agent-managed session pi extension：把 session 的创建/发送/读取/列表/
 | `abort_session` | abort | 中止运行中的子 session |
 | `archive_session` | archive | 归档子 session（可恢复）：会话退场进归档区（文件压缩搬移），用户可随时查看摘要并恢复；agent 可主动调用做任务收尾整理，生成中的会话拒绝归档（先 `abort_session` 或等完成） |
 | `delete_session` | delete | 彻底删除子 session（不可恢复）：进程 + 历史 + 衍生数据整树进废纸篓。USER-INITIATED ONLY：仅当用户消息明确表达不可恢复的删除意图时调用，agent 永不主动发起；模糊表达（「清理掉/收掉」等）一律归 `archive_session` |
+
+## create 的 model 参数
+
+`model`（optional，`"provider/modelId"` 复合串）指定新子会话的生效模型：
+
+- **前置校验**（extension 侧同步、零 runtime 往返）：值须与 `ctx.modelRegistry.getAvailable()` **全等精确匹配**（provider 与 id 均区分大小写），否则 throw 且错误文本列出可用模型（≤20 条）——agent 可一次重发自纠，**不创建会话**。为什么必须校验：子会话由 runtime 以 `--model` spawn，pi CLI 的模型解析是模糊引擎，provider 命中但 id 未命中时会伪造自定义模型条目让进程正常起来（`buildFallbackModel`），无校验即把「以为用了 X 实际用 Y」的静默错模送进侧栏。
+- **数据源同子进程**：`ctx.modelRegistry` 与子进程同 agentDir 派生（同一份 models.json / auth.json），聚合路由条目（`aggregation/<routeId>`，由 provider-aggregation 扩展 `registerVirtualModel` 注册）同在清单内；清单不可得（缺席 / 抛错 / 空目录）时 fail-open 不阻断创建，交由子进程自己的模型错误 surfaced。
+- **runtime 透传**：经既有 `SessionCreateOptions.modelOverride` 落 pi spawn `--model`（C-RL-6 最高优先；agent-managed create 不携 presetId，preset 档不可达），缺省 = 全局默认模型档（旧行为逐字节不变）。回包 `modelId` 恒为 get_state 读回的生效真值——需要确认时读它，不要拿请求值当生效值。
+- **additive 兼容**：旧 runtime 不读该字段 = 按默认模型创建，回包 `modelId` 说明真相。
 
 ## 运行要求
 

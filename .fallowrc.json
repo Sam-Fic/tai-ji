@@ -107,6 +107,7 @@
   },
   "ignoreUnresolvedImports": [
     "./helpers/rpc-client-mock",
-    "./helpers/companion-bridge-test-env"
+    "./helpers/companion-bridge-test-env",
+    "../packages/runtime/src/infra/fs/ignore-parser.ts"
   ]
 }

@@ -2,14 +2,15 @@
   RouteQuickCreatePanel —— 快速创建面板（模型路由页 spec §4；视觉形态对齐 response.html demo）。
 
   两类创建入口（spec §3 创建入口收敛）：
-  - 渠道展开后模型行「建简单路由」（emit createSimple，单模型；描边 pill，低视觉重量）。
+  - 渠道展开后模型行「加直连」（emit createDirect，单模型 → 渠道直连卡 = 白名单条目）。
   - 底部「创建高级路由 · n」（emit createAdvanced，勾选序多选，≥2 解禁）。
 
   面板只发创建意图，草稿构建与 route-add 由 ModelRoutePage 执行（applyEditorOp 唯一入口）；
   高级创建 emit 后即清空筛选/选择/展开态（spec §4.6）。
   折叠不丢状态；选择键 = providerId+modelId（§4.4）；只列可用模型（渠道启用+有密钥+模型启用）。
-  重复创建防护（AC-Q13）走事实态：父级 existingSimpleOf 判定本编辑会话内已存在同模型未保存
-  简单路由时该行按钮禁用（无时间窗逻辑，ADR-0190 精神）。
+  直连去重防护（AC-Q13 同族）走事实态：父级 existingDirectOf 判定该模型已有直连条目
+  （白名单已落盘 ∪ 本会话草稿）时该行按钮禁用——单模型路由形态的「建简单路由」入口已
+  退役（用户裁决：单模型直接加直连）。
 -->
 <template>
   <div
@@ -137,25 +138,25 @@
                 </span>
                 <div class="ml-auto flex items-center gap-1.5">
                   <Button
-                    v-if="simpleExists(group.provider.id, model.id)"
+                    v-if="directExists(group.provider.id, model.id)"
                     variant="ghost"
                     size="dense"
                     disabled
-                    :title="t('settings.modelRoute.quickSimpleExists')"
-                    data-testid="route-quick-simple-exists"
+                    :title="t('settings.modelRoute.quickDirectExists')"
+                    data-testid="route-quick-direct-exists"
                   >
-                    {{ t('settings.modelRoute.quickSimpleExists') }}
+                    {{ t('settings.modelRoute.quickDirectExists') }}
                   </Button>
                   <Button
                     v-else
                     variant="secondary"
                     size="dense"
                     class="rounded-full"
-                    data-testid="route-quick-create-simple"
+                    data-testid="route-quick-create-direct"
                     :disabled="disabled"
-                    @click="emitSimple(group.provider, model)"
+                    @click="emitDirect(group.provider, model)"
                   >
-                    {{ t('settings.modelRoute.quickCreateSimple') }}
+                    {{ t('settings.modelRoute.quickCreateDirect') }}
                   </Button>
                 </div>
               </div>
@@ -225,12 +226,12 @@ const props = defineProps<{
   disabled?: boolean
   /** 「用于 m 条路由」统计（仅路由口径，spec §4.8）；缺省恒 0。 */
   usageOf?: (providerId: string, modelId: string) => number
-  /** 事实态重复防护（AC-Q13）：draft 已存在同 provider+model 未保存简单路由 → true。 */
-  existingSimpleOf?: (providerId: string, modelId: string) => boolean
+  /** 事实态去重防护（AC-Q13 同族）：该模型已有直连条目（白名单 ∪ 草稿）→ true。 */
+  existingDirectOf?: (providerId: string, modelId: string) => boolean
 }>()
 
 const emit = defineEmits<{
-  createSimple: [pick: QuickPickModel]
+  createDirect: [pick: QuickPickModel]
   createAdvanced: [payload: { picks: QuickPickModel[]; filterKeyword: string }]
   openProviders: []
 }>()
@@ -253,9 +254,9 @@ function displayName(model: QuickModel): string {
   return model.name ?? model.id
 }
 
-/** 重复创建防护（AC-Q13）：已存在同模型未保存简单路由 → 该行按钮禁用态。 */
-function simpleExists(providerId: string, modelId: string): boolean {
-  return props.existingSimpleOf?.(providerId, modelId) === true
+/** 直连去重防护（AC-Q13 同族）：已有直连条目的模型 → 该行按钮禁用态。 */
+function directExists(providerId: string, modelId: string): boolean {
+  return props.existingDirectOf?.(providerId, modelId) === true
 }
 
 /** 渠道行计数文案（筛选中显命中数，否则全量数）。 */
@@ -370,10 +371,10 @@ function modelOf(providerId: string, modelId: string): QuickModel | undefined {
   return modelsByProvider.value.get(providerId)?.find((m) => m.id === modelId)
 }
 
-/** 单模型简单路由意图（spec §4.5）；重复点击防护走 existingSimpleOf 事实态按钮禁用。 */
-function emitSimple(provider: ProviderInfo, model: QuickModel): void {
+/** 单模型「加直连」意图（spec §4.5）；重复点击防护走 existingDirectOf 事实态按钮禁用。 */
+function emitDirect(provider: ProviderInfo, model: QuickModel): void {
   if (props.disabled) return
-  emit('createSimple', {
+  emit('createDirect', {
     providerId: provider.id,
     modelId: model.id,
     modelDisplayName: model.name ?? model.id,

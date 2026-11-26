@@ -686,7 +686,7 @@ node scripts/network-proxy-drift-probe.mjs   # 分流前提探针：PASS/FAIL �
 
 **症状**：对话流反复出现 `[smart-context] 后台压缩失败：摘要生成未返回结果，上下文保持原样`；连续 3 次后加一句「自动触发压缩已暂停」——但主对话的 turn 一直正常（模型可用、网络正常）。会话模型是 provider-aggregation 的模型路由（`aggregation/*`，选择器里显示为路由名如 `Step` / `GLM-Flash`）时必然命中。
 
-**根因**：扩展侧 LLM 调用原先直连 `@earendil-works/pi-ai/compat` 的 `completeSimple`——compat 是**静态 api 目录分发层**（按 `model.api` 查它自带的 `BUILTIN_APIS` 十项），路由模型条目是 pi 原生虚拟模型（`api === "pi-virtual"`，见 `docs/pi-semantics.json` PS-99/PS-100），compat 不认识它，恒抛 `No API provider registered for api: pi-virtual`；错误只进 `smart-context:log` 的 warn entry（`<session>/logs/pi-<date>.jsonl` 或 session JSONL 的 custom entry），用户侧通知把原因盖掉了。同一会话若模型切回物理模型（如 `stepfun-step-plan/step-5-preview`）即恢复。
+**根因**：扩展侧 LLM 调用原先直连 `@earendil-works/pi-ai/compat` 的 `completeSimple`——compat 是**静态 api 目录分发层**（按 `model.api` 查它自带的 `BUILTIN_APIS` 十项），路由模型条目是 pi 原生虚拟模型（`api === "pi-virtual"`，见 `docs/pi-semantics.json` PS-99/PS-103），compat 不认识它，恒抛 `No API provider registered for api: pi-virtual`；错误只进 `smart-context:log` 的 warn entry（`<session>/logs/pi-<date>.jsonl` 或 session JSONL 的 custom entry），用户侧通知把原因盖掉了。同一会话若模型切回物理模型（如 `stepfun-step-plan/step-5-preview`）即恢复。
 
 **判定**（按顺序）：
 
@@ -699,7 +699,7 @@ grep -o '"error":"No API provider registered for api: [^"]*"' <sessionfile>.json
 
 ② 命中 `pi-virtual` = 通道选错（旧版扩展）；② 无输出则按失败通知的 `outcome` 分流：`empty` 且无错误文本 = 生成返回空、查 provider 侧；`error` = 通知文案里已带原始错误。
 
-**修复与防线**：扩展侧一切 LLM 调用（压缩摘要 / 标题生成 / 权限分类器）必须经 `ctx.modelRegistry.streamSimple`（pi 的 `ModelRuntime` 门面，内部有 `if (isVirtualModel(model))` 分支先 route 到物理端点），**禁止直连 `pi-ai/compat`**；cross-mode 的 `compact(preparation, ..., streamFn)` 第 8 参必须显式传 `ctx.modelRegistry.streamSimple`（省略即回落 compat）。门禁 = PS-100 探针（`packages/runtime/src/infra/pi/__tests__/pi-semantics-model-channel.test.ts`）静态断言两通道不对称 + 运行时对拍 compat 必抛；`extensions/shared/llm-shared` 与 `smart-context` 已不再 import `pi-ai/compat`（回归：`grep -rn 'pi-ai/compat' extensions --include=*.ts` 应只剩测试夹具）。
+**修复与防线**：扩展侧一切 LLM 调用（压缩摘要 / 标题生成 / 权限分类器）必须经 `ctx.modelRegistry.streamSimple`（pi 的 `ModelRuntime` 门面，内部有 `if (isVirtualModel(model))` 分支先 route 到物理端点），**禁止直连 `pi-ai/compat`**；cross-mode 的 `compact(preparation, ..., streamFn)` 第 8 参必须显式传 `ctx.modelRegistry.streamSimple`（省略即回落 compat）。门禁 = PS-103 探针（`packages/runtime/src/infra/pi/__tests__/pi-semantics-model-channel.test.ts`）静态断言两通道不对称 + 运行时对拍 compat 必抛；`extensions/shared/llm-shared` 与 `smart-context` 已不再 import `pi-ai/compat`（回归：`grep -rn 'pi-ai/compat' extensions --include=*.ts` 应只剩测试夹具）。
 
 **若仍出现失败而②无输出**：读通知里的 `outcome` 与同 session 的 `smart-context:log` warn（`same-mode call failed` / `background compaction error` 的 `data.error`），那是失败原因的唯一落点（`errorMessage` 由 pi `lazyStream` 提供，消费方必须读）。
 

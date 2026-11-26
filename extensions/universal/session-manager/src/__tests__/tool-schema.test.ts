@@ -60,6 +60,18 @@ describe("U5-A3 tool-schema", () => {
 			const required = schemas.create_managed_session.required as string[];
 			expect(required).not.toContain("prompt");
 		});
+
+		it("has optional model (string) — create 指定生效模型", () => {
+			const props = schemas.create_managed_session.properties as Record<string, unknown>;
+			expect(props.model).toBeDefined();
+			expect((props.model as Record<string, unknown>).type).toBe("string");
+			const required = schemas.create_managed_session.required as string[];
+			expect(required).not.toContain("model");
+			// 描述须交代格式 / 大小写敏感 / 缺省语义（LLM 填参的唯一指引面）
+			const desc = (props.model as Record<string, unknown>).description as string;
+			expect(desc).toContain("provider/modelId");
+			expect(desc).toContain("CASE-SENSITIVE");
+		});
 	});
 
 	describe("send_to_session", () => {

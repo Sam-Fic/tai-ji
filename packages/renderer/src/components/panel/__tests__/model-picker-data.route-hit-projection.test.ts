@@ -10,6 +10,10 @@
  * 锁定数据求值半边（#94 缓存懒拉 + evaluateRouteAt 投影）。'@/api' config 域窄 mock
  * （getRouteView/onRouteView 两键，缓存懒拉与失效广播重拉的数据源）；模块级缓存单例
  * （routeCardsById）按测试文件隔离——本文件内两用例共享同一次首拉结果。
+ *
+ * 口径边界（dmg-r1-1）：hitEndpoint 只覆盖**条件维度**（时间窗 × 额度），不含 burnt 软避让
+ * （pi 侧选择层重排，状态在 pi session 的 virtual-model-state、renderer 无通道可见）——故
+ * 本文件「pi 生效判定同结论」的断言口径同为条件半边，不等于 burnt 生效期的实际路由端点。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
@@ -132,7 +136,7 @@ describe('withHitEndpoints 命中端点投影（M3 数据半边）', () => {
 
   it('额度耗尽端点不再显示命中（剩余 < threshold 落选）；缓存更新驱动重算恢复命中', async () => {
     const quotaStore = useQuotaStore()
-    // pct 81 → 剩余 19 < threshold 20 → 端点落选（pi 生效判定同结论——「显示 ≡ 生效」）
+    // pct 81 → 剩余 19 < threshold 20 → 端点落选（pi 条件判定同结论——「条件维度显示 ≡ 生效」）
     quotaStore.setCache('zhipu', quotaRow(81), Date.now())
     const { pickerGroups } = useModelPickerData()
     await flushPromises()

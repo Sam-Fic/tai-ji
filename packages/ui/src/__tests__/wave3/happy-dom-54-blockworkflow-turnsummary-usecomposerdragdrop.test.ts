@@ -183,11 +183,13 @@ function mountSummary(props: {
   depsOverrides?: Partial<ChatViewDeps>
 } = {}) {
   const turn = props.turn ?? makeTurn()
+  const lastAssistant = 'lastAssistant' in props ? (props.lastAssistant ?? null) : (turn.assistants[turn.assistants.length - 1] ?? null)
   return mount(TurnSummary, {
     props: {
-      turn,
+      lastAssistantId: lastAssistant?.id ?? null,
+      isStreaming: turn.isStreaming,
       sessionId: props.sessionId ?? 's1',
-      lastAssistant: 'lastAssistant' in props ? (props.lastAssistant ?? null) : (turn.assistants[turn.assistants.length - 1] ?? null),
+      resolveLastAssistant: () => lastAssistant,
     },
     global: {
       provide: mockChatProvide(props.depsOverrides ?? {}),
@@ -332,7 +334,9 @@ describe('ai-voice-tts §5.1: 朗读按钮', () => {
 
   it('idle 态：按钮可点、title=朗读、点击透传 onSpeak(sessionId, lastAssistant)', async () => {
     const onSpeak = vi.fn()
-    const wrapper = mountSummary({ depsOverrides: { onSpeak } })
+    const turn = makeTurn()
+    const last = turn.assistants[turn.assistants.length - 1] ?? null
+    const wrapper = mountSummary({ turn, lastAssistant: last, depsOverrides: { onSpeak } })
     const btn = wrapper.find('[data-testid="speak-btn"]')
     expect(btn.attributes('title')).toBe('朗读')
     expect(btn.attributes('disabled')).toBeUndefined()
@@ -341,7 +345,7 @@ describe('ai-voice-tts §5.1: 朗读按钮', () => {
 
     await btn.trigger('click')
     expect(onSpeak).toHaveBeenCalledTimes(1)
-    expect(onSpeak).toHaveBeenCalledWith('s1', wrapper.props('lastAssistant'))
+    expect(onSpeak).toHaveBeenCalledWith('s1', last)
   })
 
   it('loading 态：Loader2 旋转形态 + title=取消；点击仍透传 onSpeak（取消动作分流在装配层）', async () => {
@@ -385,7 +389,7 @@ describe('ai-voice-tts §5.1: 朗读按钮', () => {
     expect(btn.attributes('title')).toBe('回复生成中')
 
     // 生成完成（isStreaming 翻转）→ 恢复可点 + title=朗读
-    await wrapper.setProps({ turn: makeTurn({ isStreaming: false }) })
+    await wrapper.setProps({ isStreaming: false })
     btn = wrapper.find('[data-testid="speak-btn"]')
     expect(btn.attributes('disabled')).toBeUndefined()
     expect(btn.attributes('title')).toBe('朗读')

@@ -4,7 +4,7 @@
  * effectiveRules 合并持久段重算）、远程生效落盘、读侧坏文件回落、校验拒绝路径。
  * 策略同 remote-provider-sync.test.ts（tmp dataDir + fetch mock + resetModules）。
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -50,6 +50,13 @@ function writeExtConfig(content: unknown): void {
   mkdirSync(join(dataDir, 'agent', 'config'), { recursive: true })
   writeFileSync(EXT_CONFIG_PATH(), JSON.stringify(content, null, 2), 'utf-8')
 }
+
+// 首载成本预热（同 remote-config-fetch.test.ts 注释）：本文件首个用例的 2-3s 是模块图
+// 首次 import 的 transform 开销，落在钩子里而非用例里（慢用例门禁按 testcase time 判定）。
+// hook 超时显式放宽：装载成本（模块图首次 transform），不是断言盲等。
+beforeAll(async () => {
+  await loadFresh()
+}, 60_000)
 
 describe('getBuiltinRetryRules 合并视图', () => {
   it('无远程缓存 = 编译期基线原样（source 恒 builtin，非空——基线随包在场）', async () => {

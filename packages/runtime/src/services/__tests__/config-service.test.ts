@@ -235,9 +235,12 @@ function mockFetchByDomain() {
 }
 
 function makeService(): ConfigService {
-  // refreshRemoteProviders 只经 syncRemoteProviderModels 消费 configStore，且 extrasStore
-  // 未注入时 sync 在拉取后即早退——configStore 传最小 mock 即可（方法不被调用）。
-  return new ConfigService('/tmp/project', {} as unknown as IConfigStore)
+  // refreshRemoteProviders 经 syncRemoteProviderModels（remoteSource 圈定，extrasStore 未注入
+  // 即早退）与 syncTaijiExtraProviderModels（readModels 枚举 models.json 里的 taijiExtra 实例）
+  // 两处消费 configStore；这里只需 readModels 返回空 providers——无附加段实例 ⇒ 同步零动作。
+  return new ConfigService('/tmp/project', {
+    readModels: () => ({ providers: {} }),
+  } as unknown as IConfigStore)
 }
 
 describe('ConfigService.refreshRemoteProviders — 域 2（quota-fetchers）拉取触发点', () => {

@@ -6794,6 +6794,235 @@ describe('compileIgnoreRules / matchPath', () => {
       expect(matchPath(m, '')).toBe(matchViaExpansion(m, ''))
     })
   })
+
+  /**
+   * B4（批4 B-prompt-path）：段级快路径（literal fast path）等价性 oracle。
+   *
+   * 优化内容：matchPath 对可快路径化的规则不再走 regex.test(prefix)，改段级字符串比较。
+   * 快路径化三形态（computeFastPath）：① 字面量（无 * / ?）——anchored 判整串前缀
+   * （path === L 或 path.startsWith(L + '/')），非 anchored 判段成员（L ∈ path 的段；
+   * dirOnly 时须为严格祖先段）；② 单星号（恰一个 *、两侧不含 / 与 ?）——段判据 =
+   * startsWith(prefix) && endsWith(suffix) && 长度 ≥ 两者之和（`[^/]*` 可空），锚定时
+   * 仅首段可命中（命中的前缀必须整体无 '/'）；③ 前置双星加斜杠的字面量——git 语义 ≡
+   * 非锚定字面量（gitignore 文档明示：该前缀与其后的字面量等价）。以下语义逐条保持不变：
+   * - 规则求值序（顺序扫描 + last match wins，negation 覆盖）；
+   * - coverage 判据（isSelf / isAncestorDir / dirOnly 不匹配同名文件）；
+   * - normalizePath 反斜杠归一（含反斜杠 pattern 不进快路径，两侧都永不命中）；
+   * - 元字符按字面量（转义表语义）与历史怪癖（如 a(b|c)+^d${e}\f 不自匹配）。
+   *
+   * oracle = 改造前算法原样内联（regex 逐前缀 + coverage）。语料 = 合成规则集（形态全覆盖，
+   * 含单星号/双星号/跨斜杠星号/锚定星号各形态）+ 仓库真实 .gitignore 快照（82 条）
+   * × 合成路径语料（确定性生成，无 IO）。
+   */
+  describe('literal fast path equivalence vs regex oracle (B4)', () => {
+    // ── oracle：改造前 compileIgnoreRules + matchPath 原样内联（逐前缀 regex + coverage）──
+    const REF_META = new Set(['.', '+', '^', '$', '{', '}', '(', ')', '|', '[', ']', '\\'])
+    function refGlobToRegex (pattern: string, anchored: boolean): RegExp {
+      let src = ''
+      let i = 0
+      while (i < pattern.length) {
+        const ch = pattern[i]
+        if (ch === '*' && pattern[i + 1] === '*') {
+          if (pattern[i + 2] === '/') { src += '(?:.*/)?'; i += 3; continue }
+          src += '.*'; i += 2; continue
+        }
+        if (ch === '*') { src += '[^/]*'; i += 1; continue }
+        if (ch === '?') { src += '[^/]'; i += 1; continue }
+        src += REF_META.has(ch) ? '\\' + ch : ch
+        i += 1
+      }
+      return new RegExp((anchored ? '^' : '(?:^|/)') + src + '$')
+    }
+    function refCompile (content: string): Array<{ negated: boolean; dirOnly: boolean; regex: RegExp }> {
+      return content
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0 && !line.startsWith('#'))
+        .map((raw) => {
+          let line = raw
+          const negated = line.startsWith('!')
+          if (negated) line = line.slice(1)
+          const dirOnly = line.endsWith('/')
+          if (dirOnly) line = line.slice(0, -1)
+          let anchored = false
+          if (line.startsWith('/')) { anchored = true; line = line.slice(1) } else if (line.includes('/')) anchored = true
+          return { negated, dirOnly, regex: refGlobToRegex(line, anchored) }
+        })
+    }
+    function refNormalize (path: string): string {
+      return path.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
+    }
+    function refAllPrefixes (path: string): string[] {
+      const segments = path.split('/').filter((s) => s.length > 0)
+      const result: string[] = []
+      for (let end = segments.length; end >= 1; end -= 1) result.push(segments.slice(0, end).join('/'))
+      return result
+    }
+    function refMatchPath (rules: ReturnType<typeof refCompile>, path: string): boolean {
+      const normalized = refNormalize(path)
+      const prefixes = normalized !== '' && !normalized.includes('/') ? [normalized] : refAllPrefixes(normalized)
+      let ignored = false
+      for (const rule of rules) {
+        const hit = prefixes.some((prefix) => {
+          if (!rule.regex.test(prefix)) return false
+          const isSelf = prefix === normalized
+          const isAncestorDir = normalized.startsWith(prefix + '/')
+          return rule.dirOnly ? isAncestorDir : isSelf || isAncestorDir
+        })
+        if (hit) ignored = !rule.negated
+      }
+      return ignored
+    }
+
+    /** 合成规则语料：形态空间全覆盖（simple/dirOnly/anchored/negation/wildcard/double-star/meta/怪癖/重复/空）。 */
+    const RULE_CORPUS: Array<[string, string]> = [
+      ['empty', ''],
+      ['whitespace-only', '\n  \n\t\n'],
+      ['comment-only', '# just a comment'],
+      ['simple', 'node_modules'],
+      ['simple-dirOnly', 'dist/'],
+      ['anchored', '/dist'],
+      ['anchored-dirOnly', '/build/'],
+      ['anchored-internal-slash', 'src/dist/'],
+      ['anchored-multi-segment', 'apps/electron/resources/'],
+      ['wildcard-suffix', '*.log'],
+      ['wildcard-anchored', '/*.log'],
+      ['wildcard-prefix', '.env.*'],
+      ['wildcard-mid', '.cw-rsu-*.json'],
+      ['wildcard-dirOnly-anchored', '/.cw/*/'],
+      ['question-mark', 'file?.txt'],
+      ['double-star-dirOnly', '**/__pycache__/'],
+      ['double-star-mid', 'node_modules/**/test'],
+      ['double-star-bare', '**'],
+      ['double-star-slash-plain', '**/foo'],
+      ['double-star-slash-anchored', '/**/foo'],
+      ['double-star-slash-dirOnly', '/**/foo/'],
+      ['double-star-slash-multiseg', '**/foo/bar'],
+      ['star-empty-prefix', '*~'],
+      ['star-empty-suffix', 'foo*'],
+      ['star-both-sides', 'a*b'],
+      ['anchored-star-both', '/a*b'],
+      ['anchored-star-dirOnly', '/foo*/'],
+      ['negation-star', '*.log\n!keep.log'],
+      ['negation-only', '!keep'],
+      ['negation-ordering', 'node_modules\n!node_modules/keep'],
+      ['negation-then-positive', '!foo\nfoo'],
+      ['duplicate-rules', 'foo\nfoo'],
+      ['mixed-depth', 'a\na/b\n!a/b/c'],
+      ['meta-bracket', 'foo[1].txt'],
+      ['meta-backslash-quirk', 'a(b|c)+^d${e}\\f'],
+      ['hash-midline', 'foo#bar'],
+      ['crlf', 'dist\r\n*.log\r'],
+      ['dot-name', '.DS_Store'],
+    ]
+
+    /** 合成路径语料：确定性生成（ seeded LCG，无 IO）+ 显式边界形态。 */
+    const SEGMENTS = ['a', 'b', 'dist', 'build', 'node_modules', 'foo', 'bar', '.env', 'x.log', 'src', 'test', '__pycache__', 'keep', 'apps', 'electron', 'resources', 'index.ts', 'foo[1].txt', 'file1.txt', 'screenshot.png', '.DS_Store', 'playwright-report', 'coverage', 'a(b|c)+^d${e}\\f']
+    function buildPathCorpus (): string[] {
+      const explicit = ['', '/', '//', 'dist', 'dist/', '/dist', 'a//b', 'a\\b', 'foo/bar/foo', 'a/a/a', 'a/b/c/d/e/f/g/h', 'node_modules/pkg/index.js', '.env.example', 'apps/electron/resources/pi/x', 'src/dist', '/playwright-report/index.html',
+        // [B4 修剪抓到的漂移点] 连续斜杠：折叠前缀 vs 原串 coverage 错位——规则命中段在 // 之后时旧算法判 false
+        'a//b', 'a//b/c', 'a///b', '//a', '//a/b', 'x//a/b', 'a//node_modules', 'a//node_modules/x', 'x.log//foo', '/a//b/', 'a//', '//', '///', 'a/b//c//d']
+      let seed = 20261124
+      const rnd = (n: number): number => {
+        seed = (seed * 1103515245 + 12345) % 2147483648
+        return seed % n
+      }
+      const generated: string[] = []
+      for (let i = 0; i < 220; i++) {
+        const depth = 1 + rnd(6)
+        const parts: string[] = []
+        for (let d = 0; d < depth; d++) parts.push(SEGMENTS[rnd(SEGMENTS.length)]!)
+        generated.push(parts.join('/'))
+      }
+      return [...explicit, ...generated]
+    }
+
+    /** 仓库真实 .gitignore 全量快照（2026-11-24，feat-cpu-gpu-performance；82 条活跃规则，27 条通配）：真实规则组合交互。 */
+    const REAL_GITIGNORE = [
+      '!.env.example', '.DS_Store', '.env', '.env.*', '.superpowers/', '*.local', '*.log', 'dist/',
+      'node_modules', 'sidecar/dist/', 'sidecar/node_modules/', 'src-tauri/binaries/', 'src-tauri/gen/',
+      'src-tauri/target/', 'src/dist/', 'src/node_modules/', 'superpowers/20*/', 'target/',
+      '.claude/worktrees/', 'apps/electron/resources/', 'resources/plugins/*/index.js', '.pi/*',
+      '!.pi/workflows/', '/.pi/workflows/.tmp/', '.electron-dist/', '**/__pycache__/', '*.pyc',
+      'test-results/', '/playwright-report/', 'coverage/', '/playwright/.cache/', '/blob-report/',
+      '/playwright/.auth/', '.zcode/', '.workbuddy/', 'src-electron/', 'screenshot.png',
+      '!docs/assets/screenshot/screenshot.png', '.cw-rsu-*.json', '.impeccable/', '/**/.impeccable/',
+      '.v3-audit/', '/.cw-*.json', '/.cw-*.md', '/.cw/*/', '/.cw/*.json', '/.shot-*.mjs',
+      '/wave-*.json', '/wave-*.md', '/clarify.json', '/clarify-*.json', '/design-review.json', '/plan.json',
+      '/plan.md', '/exec-review.json', '/retrospect.json', '/closeout.json', '/test.json', '/review-*.md',
+      '/.review/', '/session-data/', '/packages/runtime/session-data/', '/apps/electron/renderer/dist/',
+      '/apps/electron/renderer/dist-new/', 'package-lock.json', 'package-lock.json.*',
+      '**/package-lock.json', '**/package-lock.json.*', '*.bak', '*.tmp', '*.swp', '*.orig', '*~',
+      '/.tmp/', '.review-reports/', '/apps/electron/.dev-electron/', '/apps/electron/.taiji/',
+      '/.taiji-harness/', '.agents', '/.archify/', '/tpkg/', '.run/',
+    ].join('\n')
+
+    it('合成规则语料 × 合成路径语料：快速路径与 regex oracle 全交叉等价', () => {
+      const paths = buildPathCorpus()
+      for (const [name, content] of RULE_CORPUS) {
+        const m = compileIgnoreRules(content)
+        const refRules = refCompile(content)
+        for (const p of paths) {
+          expect(matchPath(m, p), `rule-set=${name} path=${JSON.stringify(p)}`).toBe(refMatchPath(refRules, p))
+        }
+      }
+    })
+
+    /** 连续斜杠专用单规则集（修剪 P1）：命中段落在 // 之后 / 之前 / 锚定首段 / dirOnly / 星号 各形态 */
+    const SLASH_RULE_SETS: Array<[string, string]> = [
+      ['slash-single-after', 'b'], ['slash-single-before', 'a'], ['slash-dirOnly-after', 'b/'], ['slash-dirOnly-before', 'a/'],
+      ['slash-anchored-first', '/a'], ['slash-anchored-star', '/a*'], ['slash-star-after', '*.b'], ['slash-double-star', '**/b'],
+      ['slash-negated', '!b'], ['slash-deep', 'c'], ['slash-deep-dirOnly', 'c/'], ['slash-anchored-deep', '/x/a'],
+    ]
+
+    it('仓库真实 .gitignore × 合成路径语料：等价', () => {
+      const m = compileIgnoreRules(REAL_GITIGNORE)
+      const refRules = refCompile(REAL_GITIGNORE)
+      for (const p of buildPathCorpus()) {
+        expect(matchPath(m, p), `real-gitignore path=${JSON.stringify(p)}`).toBe(refMatchPath(refRules, p))
+      }
+    })
+
+    it('[修剪 P1 回归] 连续斜杠路径 × 单规则集：折叠前缀的 coverage 错位须与旧算法一致（命中段在 // 之后时判 false）', () => {
+      // 旧算法：前缀 = 折叠空段后的 join（'a/b'），coverage = path.startsWith(prefix+'/') 对原串 'a//b' 判
+      // → 'a//b'.startsWith('a/b/') 为 false ⇒ 规则 b 不命中；快路径若按段成员判定会误判 true。
+      const paths = buildPathCorpus().filter((p) => p.includes('//'))
+      expect(paths.length).toBeGreaterThan(10) // 语料在场自检
+      for (const [name, content] of [...SLASH_RULE_SETS, ...RULE_CORPUS]) {
+        const m = compileIgnoreRules(content)
+        const refRules = refCompile(content)
+        for (const p of paths) {
+          expect(matchPath(m, p), `slash rule-set=${name} path=${JSON.stringify(p)}`).toBe(refMatchPath(refRules, p))
+        }
+      }
+      // 定点锚定：规则 b × 路径 a//b 两侧均 false（快路径的曾经漂移点）
+      expect(matchPath(compileIgnoreRules('b'), 'a//b')).toBe(false)
+      expect(refMatchPath(refCompile('b'), 'a//b')).toBe(false)
+      // 规则 a × 路径 a//b：前缀 a 覆盖（'a//b'.startsWith('a/')）⇒ 两侧 true
+      expect(matchPath(compileIgnoreRules('a'), 'a//b')).toBe(true)
+    })
+
+    it('合成规则 × 真实 .gitignore 路径采样：等价（组合交互）', () => {
+      const paths = buildPathCorpus().filter((p) => p.includes('/'))
+      for (const [name, content] of RULE_CORPUS) {
+        const m = compileIgnoreRules(content)
+        const refRules = refCompile(content)
+        for (const p of paths) {
+          expect(matchPath(m, p), `rule-set=${name} path=${JSON.stringify(p)}`).toBe(refMatchPath(refRules, p))
+        }
+      }
+    })
+
+    it('快速路径覆盖度自检：真实 .gitignore 的 76/82 条规则走段级快路径（防止优化空转）', () => {
+      const m = compileIgnoreRules(REAL_GITIGNORE)
+      const fastCount = m.rules.filter((r) => r.fast !== null).length
+      // 82 条活跃规则：55 字面量 + 18 单星号（无斜杠）+ 3 条 **/字面量 = 76 快路径化；
+      // 余 6 条（星号两侧含 / 或多星号：superpowers/20*/、resources/plugins/*/index.js、
+      // .pi/*、/.cw/*/、/.cw/*.json、**/package-lock.json.*）保守走 regex。
+      expect(fastCount).toBe(76)
+      expect(fastCount / m.rules.length).toBeGreaterThan(0.9)
+    })
+  })
 })
 });
 // ======================================================================

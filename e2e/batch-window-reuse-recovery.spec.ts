@@ -16,7 +16,7 @@
  *    memberRecordId 绑定单帧承载，见用例内注记）。
  *
  * 自定义模板：e2e/fixtures/wl-seq-two.js / wl-name-reuse.js（@pi-meta 头齐全；经
- * workflow tool run action 的绝对路径 name 派发——subagent_batch tool 恒转译 fan-out，
+ * workflow tool run action 的绝对路径 name 派发——subagent_batch tool 恒转译 batch 模板，
  * 承载不了顺序/同名形态）。
  *
  * 断言原始证据文档 = run journal（run-events 帧型，W1 权威介质）+ ps 进程表

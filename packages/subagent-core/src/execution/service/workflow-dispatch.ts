@@ -266,6 +266,16 @@ export class WorkflowDispatch {
     stepIndex?: number,
   ): Promise<WorkflowAgentResult> {
     this.deps.assertReady();
+    // prompt 卫生 fail-fast（2026-11-25 dev-merge-gates 事故加固层）：空/纯空白 task
+    // = 脚本侧构造 bug（壳层 ask 类型标签判别失误、模板漏插值等），派发即空转一轮再
+    // 失败——与路由/预检同层同步拒绝（D3 顺序红线：失败零池占用、零孤儿 record）。
+    // 注：壳层拼 persona 前缀后的畸形 prompt（如整条只剩 "string"）不在本判据内
+    // （非空），那类由壳自身类型标签形态校验拦截（workflow pi 壳 wfAgent.ask）。
+    if (isDegeneratePrompt(opts.prompt)) {
+      throw new Error(
+        `workflow agent dispatch rejected: empty prompt (agent=${agentLabelOf(opts)})`,
+      );
+    }
     const execOpts = workflowCallToExecuteOptions(opts);
 
     // ── 八步迁移 ①②③：路由 → 预检 → identity（含非 pi 引擎 model 校验）──
@@ -880,8 +890,19 @@ function present<T>(
   return value === undefined ? {} : project(value);
 }
 
+/** prompt 卫生判定（非字符串 / 空串 / 纯空白 → true）。派发前 fail-fast 的判据单点
+ *  （2026-11-25 dev-merge-gates 事故加固：壳层 ask 类型标签失误曾派出空转 agent 轮）。 */
+function isDegeneratePrompt(prompt: unknown): boolean {
+  return typeof prompt !== "string" || prompt.trim() === "";
+}
+
+/** 调用方标签（record slug / 报错归因同一口径：description ?? agent ?? unknown）。 */
+function agentLabelOf(opts: AgentCallOpts): string {
+  return opts.description ?? opts.agent ?? "unknown";
+}
+
 function workflowCallToExecuteOptions(opts: AgentCallOpts): ExecuteOptions {
-  const agentName = opts.description ?? opts.agent ?? "unknown";
+  const agentName = agentLabelOf(opts);
   const slug = agentName.length > SLUG_MAX_LENGTH ? agentName.slice(0, SLUG_MAX_LENGTH) : agentName;
   return {
     task: opts.prompt,

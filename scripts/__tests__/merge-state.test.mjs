@@ -2,7 +2,8 @@
  * merge 管线状态文件与 workspace 定位（scripts/merge/lib/state.mjs + workspace.mjs）。
  */
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, mkdirSync, existsSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, mkdirSync, existsSync, rmSync, writeFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readMergeState, writeMergeState, mergeStatePath, TERMINAL_STAGES, isPipelineBusy, isSamePipeline, buildMergedPatch } from '../merge/lib/state.mjs'
@@ -171,6 +172,67 @@ describe('workspace 定位', () => {
     const root = makeTmp()
     try {
       expect(findWorkspaceRoot(root)).toBeNull()
+    } finally {
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
+  })
+})
+
+describe('workspace 定位（普通仓库布局回退，2026-11 双布局修复）', () => {
+  const GIT_IDENTITY = {
+    GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t',
+    GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t',
+  }
+
+  /** tmp 内建一个带空 commit 的真 git 仓（git-common-dir 回退需要真实 .git 结构） */
+  function initRepo(root) {
+    execFileSync('git', ['init', '-q', '-b', 'main', root], { stdio: 'ignore' })
+    execFileSync('git', ['-C', root, 'commit', '--allow-empty', '-q', '-m', 'init'], {
+      stdio: 'ignore', env: { ...process.env, ...GIT_IDENTITY },
+    })
+  }
+
+  it('普通仓库：主 worktree 根即 workspace 根，mainWorktreePath 返回根本身', () => {
+    const root = makeTmp()
+    try {
+      initRepo(root)
+      const deep = join(root, 'scripts', 'merge', 'lib')
+      mkdirSync(deep, { recursive: true })
+      // git 视角返回 realpath 形态（macOS /var → /private/var symlink 展开），语义等价比较
+      expect(realpathSync(findWorkspaceRoot(deep))).toBe(realpathSync(root))
+      expect(mainWorktreePath(root)).toBe(root)
+    } finally {
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
+  })
+
+  it('普通仓库：链接 worktree 内解析到主仓根（--git-common-dir 跨 worktree）', () => {
+    const root = makeTmp()
+    const wtParent = makeTmp()
+    try {
+      initRepo(root)
+      const wtPath = join(wtParent, 'feat-x')
+      execFileSync('git', ['-C', root, 'worktree', 'add', '-q', '-b', 'feat-x', wtPath], {
+        stdio: 'ignore', env: { ...process.env, ...GIT_IDENTITY },
+      })
+      expect(realpathSync(findWorkspaceRoot(wtPath))).toBe(realpathSync(root))
+      const nested = join(wtPath, 'packages')
+      mkdirSync(nested, { recursive: true })
+      expect(realpathSync(findWorkspaceRoot(nested))).toBe(realpathSync(root)) // worktree 内深层目录同样解析到主仓根
+      expect(mainWorktreePath(root)).toBe(root)
+    } finally {
+      rmSync(wtParent, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }
+  })
+
+  it('双布局优先序：目录既是 git 仓又含 .bare/ 时恒走 bare 容器判定', () => {
+    const root = makeTmp()
+    try {
+      initRepo(root)
+      mkdirSync(join(root, '.bare'))
+      expect(findWorkspaceRoot(root)).toBe(root)
+      expect(mainWorktreePath(root)).toBe(join(root, 'main'))
     } finally {
       rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
     }
