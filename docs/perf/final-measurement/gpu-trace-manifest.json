@@ -1,0 +1,47 @@
+{
+ "dir": "<sessionsRoot>/<sessionId>/artifacts/b5-traces",
+ "note": "GPU trace 本体（单文件 230-260MB，不入库）。md5 用于「归档分析 ↔ trace 本体」同源对账：gpu-analysis.txt 的每个 label 都由对应 trace 复算得出。",
+ "traces": {
+  "clean-baseline": {
+   "file": "baseline-gpu.trace.json",
+   "md5": "79e43bbc4a57d8134b056d95e96d01c2",
+   "bytes": 260891961
+  },
+  "final-r1": {
+   "file": "final-gpu.trace.json",
+   "md5": "f7e9ebffdaeb6ac68f6c4bcb9572bb6f",
+   "bytes": 260477572
+  },
+  "final-r2": {
+   "file": "r2-full.trace.json",
+   "md5": "95996b58cf4cd2240c20ff87f6382c82",
+   "bytes": 261842253
+  },
+  "noblur-r1": {
+   "file": "arm-no-blur.trace.json",
+   "md5": "2e454a38517ba47d81b857aa21ea35d2",
+   "bytes": 247053161
+  },
+  "noblur-r2": {
+   "file": "r2-no-blur.trace.json",
+   "md5": "05f57bd857cb33f38afede8edc9e34a3",
+   "bytes": 251718679
+  },
+  "nomask-r1": {
+   "file": "arm-no-mask.trace.json",
+   "md5": "e94521c547014dcf34032b024038bcb1",
+   "bytes": 261488783
+  },
+  "nomask-r2": {
+   "file": "r2-no-mask.trace.json",
+   "md5": "5d5eebbb31f82030050b20b84aad2d06",
+   "bytes": 259452675
+  },
+  "reduced-r1": {
+   "file": "arm-reduced.trace.json",
+   "md5": "26ea726f2e73eec81087fc37afabc881",
+   "bytes": 243160297
+  }
+ },
+ "resolution": "<sessionsRoot> = ~/.taiji/ext-sessions；<sessionId> 由扫描通配（任一 session 的 artifacts/b5-traces 下命中同名文件即采用）。"
+}

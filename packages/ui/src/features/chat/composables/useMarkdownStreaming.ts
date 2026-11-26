@@ -31,6 +31,7 @@ import { onScopeDispose, ref, watch } from 'vue'
 import type { Ref } from 'vue'
 import type { ChatViewDeps } from '../chat-view-deps'
 import type { IncrementalMarkdownCache, MarkdownSegment } from '../markdown-types'
+import { cancelShikiHighlightGroup } from '../shiki-highlight-client'
 
 /** HTML 特殊字符转义（渲染失败降级路径用）：deps 抛错时把原始 content 转义后作为单个
  *  text segment 回填——保证消息气泡可读。 */
@@ -176,7 +177,9 @@ export function useMarkdownStreaming(
   )
 
   // 卸载时置 disposed（短路 in-flight 结果应用与 queued 消费，W23 review Fix-3）+
-  // 丢弃 queued + 取消 pending rAF
+  // 丢弃 queued + 取消 pending rAF + 取消在途 worker 高亮任务（批3 B-worker：切 session
+  // 整树重建时，本实例全部在途渲染的结果都不会被消费，按 cache 取消组终止在途任务——
+  // 结算取消哨兵而非同步回退，不为已丢弃结果烧主线程）
   onScopeDispose(() => {
     disposed = true
     queuedRender = null
@@ -184,6 +187,7 @@ export function useMarkdownStreaming(
       cancelAnimationFrame(rafId)
       rafId = null
     }
+    if (incrementalCache !== null) cancelShikiHighlightGroup(incrementalCache)
   })
 
   return { segments }

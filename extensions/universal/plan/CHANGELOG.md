@@ -1,5 +1,11 @@
 # @zhushanwen/pi-plan
 
+## 1.3.3
+
+### Patch Changes
+
+- 2cffda2dc: chore: refresh dependency range (triggered by @zhushanwen/pi-llm-shared@0.13.0 → @zhushanwen/pi-llm-shared@0.13.1)
+
 ## 1.3.2
 
 ### Patch Changes

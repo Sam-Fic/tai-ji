@@ -88,7 +88,7 @@ if (PR_STATE === 'MERGED') {
   // gate.mjs 对 null 持续重试到 deadline 判 fetch-error，上方分支 exit 1 拒绝
   // 合并，绝不归一成 [] 把工具错误混进 no-runs 语义）。WORKFLOW 传 '' 保留工厂
   // 内置的 Dependabot 过滤（机器人红不阻塞合并判定）
-  const fetchRuns = makeFetchRuns({ REF: HEAD_SHA, WORKFLOW: '', GH_REPO: DEFAULT_REPO })
+  const fetchRuns = makeFetchRuns({ REF: HEAD_SHA, BRANCH: HEAD_BRANCH, WORKFLOW: '', GH_REPO: DEFAULT_REPO })
 
   const verdict = await waitForRuns({
     fetchRuns,
@@ -162,7 +162,7 @@ console.log('')
 console.log('  sync 本地 main...')
 const WS_ROOT = findWorkspaceRoot()
 if (WS_ROOT === null) {
-  fail('Error: 未找到 workspace 根（向上查找含 .bare/ 的目录失败）——请在 worktree 内运行')
+  fail('Error: 未找到 workspace 根（bare 布局向上无 .bare/，且回退 git rev-parse 也未命中仓库）——请在 worktree 内运行')
   process.exit(1)
 }
 const MAIN_WT = mainWorktreePath(WS_ROOT)

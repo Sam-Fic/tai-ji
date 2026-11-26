@@ -23,6 +23,15 @@ export interface LlmRetryConfig {
   provider?: LlmRetryProviderConfig
 }
 
+/** taiji 产品默认（首装 provisioning 写入 settings.json retry 域的值）。区别于 pi 内建缺省
+ * （maxRetries 3 / baseDelayMs 2000，实装核实见 runtime PI_RETRY_DEFAULTS）——taiji 通过
+ * 首装写盘让产品默认即刻生效，而非依赖 pi 兜底。值域受 D8 约束（10 ≤ max 20、5000 ≤ 600000）。 */
+export const LLM_RETRY_TAIJI_DEFAULTS = {
+  enabled: true,
+  maxRetries: 10,
+  baseDelayMs: 5000,
+} as const
+
 /** D8 数值合法域（设计 §3.3 D8 表，唯一依据）。 */
 export const LLM_RETRY_DOMAIN = {
   maxRetries: { min: 0, max: 20 },

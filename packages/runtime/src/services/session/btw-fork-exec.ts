@@ -227,6 +227,13 @@ function watchForNewJsonl(dir: string, existing: ReadonlySet<string>): { promise
  * 异因退出 → throw 携带 stderr 尾，调用方 warn 后回落 no-source，pill 不静默）；
  * pi 不写文件也不退出时本调用挂起等待（时间机制删除裁决，不做超时放弃回落）。
  * 出站 env 经 buildOutboundChildEnv（C-proc-09），PI_CODING_AGENT_DIR 与线进程同源隔离。
+ *
+ * 优先序契约（事实驱动裁决，v0.13.4 CI 满载 flake 修复 2026-11-26）：fork 成败的唯一
+ * 裁决事实 = 交付物（线目录内 existing 之外的新增 .jsonl）的同步目录查询；watch /
+ * exit / error 事件只是触发裁决的信号，不携带裁决权——fs.watch 与子进程事件走不同
+ * 内核通道，满载下投递先序不定，exit 先投递而交付物已落盘时按死亡裁决会误回落
+ * no-source。故死亡分支与就绪通道失效分支都先做一次交付物事实查询再裁决（子进程
+ * 已退时写入侧构造性封闭，交付物在场即成功）。
  */
 export async function forkViaCliPi(req: ForkViaCliRequest): Promise<string> {
   // 线目录预创建：fs.watch 需要已存在的目录（pi forkFrom 写入前自建目录，幂等）
@@ -253,9 +260,23 @@ export async function forkViaCliPi(req: ForkViaCliRequest): Promise<string> {
     child.on('exit', code => resolve(code ?? -1))
     child.on('error', (e: Error) => { spawnError = e; resolve(-1) })
   })
+  // fork 交付物裁决（优先序契约的执行点，见函数头注）：exit/error 事件只说明「写入侧
+  // 封闭」，fork 是否成功以线目录同步查询为准——交付物在场即按成功返回（race 的第二
+  // 个成功侧出口），查无交付物才是真失败（调用方按 D3 分支② 回落）。
+  const findDeliveredForkFile = (): string | undefined => {
+    try {
+      const fresh = readdirSync(req.threadDir).filter(f => f.endsWith('.jsonl') && !existing.has(f))
+      const pick = fresh[0]
+      return pick === undefined ? undefined : join(req.threadDir, pick)
+    } catch {
+      return undefined // 目录不可读 = 无交付物，按原死亡原因上抛
+    }
+  }
   // 进程死亡分支：spawn 失败带原因；异因退出带 stderr 尾。调用方按 D3 分支② 回落。
   const death = (async (): Promise<string> => {
     const code = await exited
+    const delivered = findDeliveredForkFile()
+    if (delivered) return delivered
     if (spawnError) throw new BtwError('fork_failed', `[btw] pi fork bootstrap spawn failed: ${spawnError.message} — source=${req.sourceFile}`)
     const tail = stderr.trim().split('\n').slice(-STDERR_TAIL_LINES).join(' | ')
     throw new BtwError('fork_failed', `[btw] pi fork bootstrap exited (code ${code}) — source=${req.sourceFile} stderr=${tail}`)
@@ -265,10 +286,16 @@ export async function forkViaCliPi(req: ForkViaCliRequest): Promise<string> {
   try {
     file = await Promise.race([readiness.promise, death])
   } catch (e) {
-    // watch error 等非死亡路径的失败：bootstrap 还活着，收掉再上抛（死亡路径进程已退，
-    // kill 为无害 no-op——统一调用保持单一出口形态）
-    child.kill('SIGTERM')
-    throw e
+    // watch error 等就绪通道侧失败：bootstrap 还活着，交付物可能已落盘（watcher 失效
+    // ≠ fork 失败）——同一优先序契约先查交付物；查无才收掉进程上抛（死亡路径进程已退，
+    // kill 为无害 no-op——统一调用保持单一出口形态）。命中交付物则置 file 落入下方
+    // 统一成功出口（kill + 等退出，写入侧封闭语义与就绪 resolve 路径一致）。
+    const delivered = findDeliveredForkFile()
+    if (delivered === undefined) {
+      child.kill('SIGTERM')
+      throw e
+    }
+    file = delivered
   } finally {
     readiness.close()
     // race 输掉一方的 rejection 显式吞（death 恒 reject——类型上以 string 竞速），

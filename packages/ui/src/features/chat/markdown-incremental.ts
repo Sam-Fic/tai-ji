@@ -572,7 +572,7 @@ async function renderFallbackFull(
   env?: MarkdownEnv,
   opts?: { openFence: BlockScan['openFence']; finalize: boolean },
 ): Promise<IncrementalMarkdownResult> {
-  let tailSegments = await renderMarkdownSegments(content, env)
+  let tailSegments = await renderMarkdownSegments(content, env, cache ?? undefined)
   if (opts && !opts.finalize) tailSegments = degradeOpenHtmlPreviewSegment(tailSegments, content, opts.openFence)
   if (cache) resetIncrementalCache(cache, env)
   let localId = 0
@@ -629,7 +629,7 @@ async function advancePrefixCache(
   if (boundary > c.boundary) {
     // 新增稳定区独立渲染并入前缀缓存（该区起止都是合法边界，拼接等价由边界判定保证）
     const piece = content.slice(c.boundary, boundary)
-    const pieceSegs = piece.trim() === '' ? [] : await renderMarkdownSegments(piece, env)
+    const pieceSegs = piece.trim() === '' ? [] : await renderMarkdownSegments(piece, env, c)
     for (const s of pieceSegs) s.segId = c.nextSegId++
     if (pieceSegs.length > 0) c.prefixSegments = [...c.prefixSegments, ...pieceSegs]
     c.boundary = boundary
@@ -649,7 +649,7 @@ async function resolvePrefixSegments(
 ): Promise<MarkdownSegment[]> {
   if (ids.cache) return ids.cache.prefixSegments
   const prefixText = content.slice(0, boundary)
-  const segs = prefixText.trim() === '' ? [] : await renderMarkdownSegments(prefixText, env)
+  const segs = prefixText.trim() === '' ? [] : await renderMarkdownSegments(prefixText, env, ids.cache ?? undefined)
   for (const s of segs) s.segId = allocSegId(ids)
   return segs
 }
@@ -671,7 +671,7 @@ async function buildTailSegments(
   if (scan.openFence && !finalize) {
     const pre = content.slice(boundary, scan.openFence.offset)
     if (pre.trim() !== '') {
-      tailSegments = await renderMarkdownSegments(pre, env)
+      tailSegments = await renderMarkdownSegments(pre, env, ids.cache ?? undefined)
       // pre 段与正常 tail 段一样携带 segId（W22 review：此分支曾漏赋值，
       // 占位前文本段无 key → v-for 复用错位）
       for (const s of tailSegments) s.segId = allocSegId(ids)
@@ -686,7 +686,7 @@ async function buildTailSegments(
       segId: allocSegId(ids),
     })
   } else if (tailText.trim() !== '') {
-    tailSegments = await renderMarkdownSegments(tailText, env)
+    tailSegments = await renderMarkdownSegments(tailText, env, ids.cache ?? undefined)
     for (const s of tailSegments) s.segId = allocSegId(ids)
   }
   return tailSegments
@@ -694,6 +694,10 @@ async function buildTailSegments(
 
 /**
  * 增量渲染（D-5 核心，W22）：前缀 segments 缓存 + tail segments 增量。
+ *
+ * 高亮取消组（批3 B-worker）：本函数的全部 renderMarkdownSegments 调用以 cache 对象为
+ * 「取消组」令牌透传——组件卸载（切 session 整树重建）时壳侧按同一 cache 取消在途
+ * worker 高亮任务（useMarkdownStreaming onScopeDispose），不为已丢弃结果烧 CPU。
  *
  * **硬约束（并发，W22 review）**：同一 cache 必须串行调用——上一帧 Promise 落定后才能发起
  * 下一帧，按发起顺序应用结果、丢弃乱序帧。本函数在 await 点交错原地更新 cache（边界前进

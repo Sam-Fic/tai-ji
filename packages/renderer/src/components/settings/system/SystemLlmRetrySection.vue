@@ -175,6 +175,7 @@ import { useToast } from '@/composables/useToast'
 import { createExplicitSave } from '@/composables/features/settings/setting-field'
 import {
   LLM_RETRY_DOMAIN,
+  LLM_RETRY_TAIJI_DEFAULTS,
   validateLlmRetryConfig,
   type LlmRetryConfig,
   type LlmRetryProviderConfig,
@@ -191,10 +192,11 @@ const SEC_PER_MIN = 60
 const MIN_PER_HOUR = 60
 const EXP_BACKOFF_BASE = 2
 const ROUND_ONE = 10
-// pi 默认，见设计文档 §2.2
-const PI_DEFAULT_MAX_RETRIES = 3
-const PI_DEFAULT_BASE_DELAY_SEC = 2
-const PI_DEFAULT_BASE_DELAY_MS = 2000
+// taiji 产品默认（首装 provisioning 写入 settings.json，shared 单一来源；pi 内建缺省为
+// 3/2000，仅在文件无 provisioning 值时由 pi 兜底，见 runtime PI_RETRY_DEFAULTS）
+const TAIJI_DEFAULT_MAX_RETRIES = LLM_RETRY_TAIJI_DEFAULTS.maxRetries
+const TAIJI_DEFAULT_BASE_DELAY_SEC = LLM_RETRY_TAIJI_DEFAULTS.baseDelayMs / MS_PER_SEC
+const TAIJI_DEFAULT_BASE_DELAY_MS = LLM_RETRY_TAIJI_DEFAULTS.baseDelayMs
 
 /** 保留一位小数。 */
 function round1(v: number): number {
@@ -203,8 +205,8 @@ function round1(v: number): number {
 
 // ── 表单状态（provider 三键用 string 承载「留空 = 未设」语义）──
 const enabled = ref(true)
-const maxRetries = ref<number | ''>(PI_DEFAULT_MAX_RETRIES)
-const baseDelaySec = ref<number | ''>(PI_DEFAULT_BASE_DELAY_SEC)
+const maxRetries = ref<number | ''>(TAIJI_DEFAULT_MAX_RETRIES)
+const baseDelaySec = ref<number | ''>(TAIJI_DEFAULT_BASE_DELAY_SEC)
 const advancedOpen = ref(false)
 const providerMaxRetriesInput = ref('')
 const providerTimeoutSecInput = ref('')
@@ -282,11 +284,11 @@ function applyLoaded(config: LlmRetryConfig): void {
 /** 基础区三键回填：enabled / maxRetries / baseDelayMs（秒显示，内部存 ms）。 */
 function applyBasicKeys(config: LlmRetryConfig): void {
   enabled.value = config.enabled
-  const mr = checkDomain(config.maxRetries, LLM_RETRY_DOMAIN.maxRetries.min, LLM_RETRY_DOMAIN.maxRetries.max, PI_DEFAULT_MAX_RETRIES)
+  const mr = checkDomain(config.maxRetries, LLM_RETRY_DOMAIN.maxRetries.min, LLM_RETRY_DOMAIN.maxRetries.max, TAIJI_DEFAULT_MAX_RETRIES)
   maxRetries.value = mr.display
   if (!mr.ok) warnings.maxRetries = warnText(mr.raw)
 
-  const bd = checkDomain(config.baseDelayMs, LLM_RETRY_DOMAIN.baseDelayMs.min, LLM_RETRY_DOMAIN.baseDelayMs.max, PI_DEFAULT_BASE_DELAY_MS)
+  const bd = checkDomain(config.baseDelayMs, LLM_RETRY_DOMAIN.baseDelayMs.min, LLM_RETRY_DOMAIN.baseDelayMs.max, TAIJI_DEFAULT_BASE_DELAY_MS)
   baseDelaySec.value = bd.display / MS_PER_SEC
   if (!bd.ok) warnings.baseDelayMs = warnTextForMs(config.baseDelayMs)
 }

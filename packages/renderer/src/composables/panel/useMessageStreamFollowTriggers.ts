@@ -108,18 +108,27 @@ interface MessageStreamFollowTriggerDeps {
 /**
  * 跟随触发编排（数据信号主触发 + wrap RO 测量留守 / 触发支 debounce 兜底 + store watch）。
  *
- * 返回 contentWrapEl / tailEl 供 MessageStream 模板绑定（ref），tailHeight 供
- * useVirtuaFollow 的 endOffset 消费（D2：offset=tailHeight 即真实底部）。
+ * 返回 contentWrapEl / tailEl 供 MessageStream 模板绑定（ref），tailHeight / headOffset 供
+ * useVirtuaFollow 的 endOffset 消费（D2：offset=tailHeight+headOffset 即真实底部——tailHeight
+ * 补尾部块、headOffset 补 contentWrapEl 之前的流内前置 spacer）。
  */
 export function useMessageStreamFollowTriggers(deps: MessageStreamFollowTriggerDeps): {
   contentWrapEl: Ref<HTMLElement | null>
   tailEl: Ref<HTMLElement | null>
   tailHeight: Ref<number>
+  headOffset: Ref<number>
 } {
   const contentWrapEl = ref<HTMLElement | null>(null)
   const tailEl = ref<HTMLElement | null>(null)
   /** D2：尾部块实测总高（endOffset 数据源；RO 实测持续刷新，初始 0） */
   const tailHeight = ref(0)
+  /** [batch2 F4] 头部流内前置 spacer 实测高（endOffset 补偿项）：contentWrapEl 之前的所有流内
+   *  前置兄弟总高（EdgeFade 净 0 + hist-line 净 0 + 顶部 padTop spacer）。virtua container-driver
+   *  的 $scroll 目标公式只建模 contentWrapEl 及以下、不含此前置兄弟 → 贴底 follow 落点系统性短
+   *  一个 padTop（gap=30px 记账误差；git 考古 commit 4eb083942 把 padding-top 挪成 in-flow spacer 时
+   *  引入）。onMounted 一次实测缓存（静态不随 delta 变），经 endOffset 补偿、浏览器对 scrollTop 的
+   *  clamp 使过补自收敛到 gap=0；只改滚动落点，不动触发时序 / 抑制窗 / guard。 */
+  const headOffset = ref(0)
 
   let wrapRo: ResizeObserver | null = null
   let scrollRo: ResizeObserver | null = null
@@ -188,6 +197,9 @@ export function useMessageStreamFollowTriggers(deps: MessageStreamFollowTriggerD
     // 首滚时 tailHeight 已就绪。
     prevTailHeight = measureTail()
     prevWrapHeight = contentWrapEl.value?.offsetHeight ?? null
+    // headOffset = contentWrapEl 相对滚动父级 content 顶的偏移 = 其之前所有流内前置兄弟总高
+    // （EdgeFade 净 0 + hist-line 净 0 + padTop spacer）。onMounted 布局已定，一次实测、非每 delta。
+    headOffset.value = contentWrapEl.value?.offsetTop ?? 0
 
     if (typeof ResizeObserver === 'undefined') return // happy-dom 无 RO 时 store watch 通路仍有效
 
@@ -210,7 +222,10 @@ export function useMessageStreamFollowTriggers(deps: MessageStreamFollowTriggerD
         else if (entry.target === tailEl.value) tailH = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height
       }
       if (tailH !== null) tailHeight.value = tailH
-      const wrapH = wrapHeight ?? (contentWrapEl.value?.offsetHeight ?? 0)
+      // contentWrapEl 不在本批 entries 时用上次快照 prevWrapHeight 兜底，不在 RO 回调内读 offsetHeight
+      // （同步几何读会 flush 待处理布局、与 virtua 帧内写 spacer 叠加放大 RO「undelivered notifications」
+      // 反馈环；wrapper 与 tailEl 恒同批投递，此兜底实际罕用，纯为消几何读）。
+      const wrapH = wrapHeight ?? prevWrapHeight ?? 0
       const nextTail = tailH ?? tailHeight.value
       const prevTail = prevTailHeight
       const prevWrap = prevWrapHeight
@@ -300,5 +315,5 @@ export function useMessageStreamFollowTriggers(deps: MessageStreamFollowTriggerD
     scrollRo = null
   })
 
-  return { contentWrapEl, tailEl, tailHeight }
+  return { contentWrapEl, tailEl, tailHeight, headOffset }
 }

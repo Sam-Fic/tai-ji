@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-rename-session",
-  "version": "0.14.8",
+  "version": "0.14.9",
   "type": "module",
   "main": "index.ts",
   "taiji": {

@@ -162,6 +162,15 @@ if (!args.some((a) => a.startsWith('--remote-debugging-port'))) {
   args.push(`--remote-debugging-port=${process.env.TAIJI_CDP_PORT ?? '9222'}`)
 }
 
+// 额外 Chromium 开关（验收基建逃生舱）：TAIJI_DEV_EXTRA_CHROMIUM_FLAGS="--flag-a --flag-b"。
+// 用途例：--disable-backgrounding-occluded-windows —— dev 实例后台窗口被其他窗口
+// 全遮挡时 Chromium 把页面判 hidden 并停发 rAF，流式渲染（rAF 驱动）不落 DOM，
+// 真机验收探针的 DOM 断言假红（渲染其实 pending，窗口恢复可见即落盘）。
+// 幂等：已显式传过的开关不重复追加。
+for (const f of (process.env.TAIJI_DEV_EXTRA_CHROMIUM_FLAGS ?? '').split(/\s+/).filter(Boolean)) {
+  if (!args.includes(f)) args.push(f)
+}
+
 if (process.env.TAIJI_DEV_ELECTRON_VERBOSE === '1') {
   console.log('[dev-electron] binary:', binary)
   console.log('[dev-electron] args:', args)

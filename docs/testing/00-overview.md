@@ -14,6 +14,7 @@
 | [03-runtime-extensions.md](./03-runtime-extensions.md) | 系统提示词配置 / extension 层运行时测试体系 / 插件系统非 mock E2E / 自动升级验证 | 10-settings-system-prompt.md + 12-extension-runtime-testing.md + 13-plugin-e2e.md + update-e2e.md |
 | [visual/vlm-prompt-template.md](./visual/vlm-prompt-template.md) | VLM 视觉验证派发模板（TEST-STRATEGY 引用的 SSOT，独立不并入） | — |
 | [render-sampling.md](./render-sampling.md) | 渲染采样管道（基线采集/真机验收共用：CDP 连接/选择器/注入/等待信号/DOM 采样脚本资产 + 清单表；采样前必读，禁现场重写管道） | 2026-09-19 markdown HTML 支持验收脚本提炼 |
+| [perf-probes.md](./perf-probes.md) | 真机性能测量工具族（CPU profile / GPU trace / TTFT 采集探针 + 离线复算 + 门禁；harness 连接/拒绝纪律单源；原始采集物不入库 + 归档 md5 对账；perf 报告复算前必读） | 2026-11-25 feat-cpu-gpu-performance 分支 probes/ 收编登记（branch-review dmg-r1-4） |
 | [testids-plan.md](./testids-plan.md) | 计划面 data-testid 清单（PlanModeBar / PlanReviewBar / PlanDocsPanel / PlanCommentPopover 四组件；验收剧本 patterns.mjs 锚源） | 2026-09-24 U4b 建账（plan-mode-state-machine） |
 | [testids-canvas.md](./testids-canvas.md) | 画布面 data-testid 清单（CanvasPane / CanvasGraph / CanvasNodeCard / CanvasNodeDetail / CanvasDetailPanel / CanvasArgStrip / CanvasReviewPanel / CanvasExportPanel / CanvasOpDialog / CanvasBindingBadge / TrayCanvasPanel 11 组件） | 2026-10-15 建账（problem-solve-canvas D5 终态同步 F1-27） |
 

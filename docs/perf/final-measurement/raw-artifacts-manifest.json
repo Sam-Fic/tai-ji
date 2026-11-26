@@ -1,0 +1,20 @@
+{
+ "dir": "<sessionsRoot>/<sessionId>/artifacts/final-measurement-raw",
+ "note": "原始 CPU 采集物（branch-review dmg-r1-2 收尾：pi/runtime cpuprofile 内嵌 worktree 绝对路径，rule-22① 不入库；cpu-analysis.txt 为 analyze-clean-cpu 复算的机器输出，随本体一并归档）。md5 用于「报告/门禁 ↔ 采集物本体」同源对账：check-final-reports / check-clean-artifacts 经本清单定位并复算校验，防止归档漂移（与 gpu-trace-manifest.json 同模式）。",
+ "resolution": "<sessionsRoot> = ~/.taiji/ext-sessions；<sessionId> 由扫描通配（任一 session 的 artifacts/final-measurement-raw 下命中同名文件即采用，与 gpu-trace-manifest.json 的解析约定一致）。会话树被人工清理后检查按「归档不可达」显式降级，不静默 PASS。",
+ "artifacts": {
+  "baseline-pi.cpuprofile": { "kind": "pi cpuprofile", "md5": "2f8330bc0d08d6962e52ce12d6d79c72", "bytes": 370849 },
+  "baseline-runtime.cpuprofile": { "kind": "runtime cpuprofile", "md5": "b865f1255bb7e5e21bca5e3b28c64613", "bytes": 447753 },
+  "final-pi.cpuprofile": { "kind": "pi cpuprofile", "md5": "44e870b7c1c0322eb2361264b3045dc0", "bytes": 365607 },
+  "final-r2-pi.cpuprofile": { "kind": "pi cpuprofile", "md5": "5ff9e5d646b4363de037679ca01383bd", "bytes": 365652 },
+  "final-r2-runtime.cpuprofile": { "kind": "runtime cpuprofile", "md5": "39062c48a57f27366004412867878608", "bytes": 368227 },
+  "final-runtime.cpuprofile": { "kind": "runtime cpuprofile", "md5": "0adbc7ec5b545d118b9e9af1db15d792", "bytes": 382650 },
+  "form-fences-pi.cpuprofile": { "kind": "pi cpuprofile", "md5": "fe4f21ceaeb32886b9db2607df46d3d0", "bytes": 339622 },
+  "form-fences-runtime.cpuprofile": { "kind": "runtime cpuprofile", "md5": "495598170f913d1c74572c1c7f92fb62", "bytes": 337847 },
+  "form-thinking-pi.cpuprofile": { "kind": "pi cpuprofile", "md5": "eb9eb25250356e5676f98e7c7a38c442", "bytes": 375392 },
+  "form-thinking-runtime.cpuprofile": { "kind": "runtime cpuprofile", "md5": "39bb513687043a671f4143349d878732", "bytes": 366926 },
+  "form-tools-pi.cpuprofile": { "kind": "pi cpuprofile", "md5": "501d21ff2ef5cedb04c98cf308ca47b4", "bytes": 375888 },
+  "form-tools-runtime.cpuprofile": { "kind": "runtime cpuprofile", "md5": "542f10734b196cee4487b28ac5c068b3", "bytes": 364218 },
+  "cpu-analysis.txt": { "kind": "analysis output（analyze-clean-cpu 人读表）", "md5": "c2f57a4be11d0caa595e3a5b73e650a6", "bytes": 5038 }
+ }
+}

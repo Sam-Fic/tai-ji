@@ -23,7 +23,7 @@
         :is="chatViewDeps.editComposerRenderer"
         v-if="chatViewDeps.editComposerRenderer"
         :session-id="sessionId"
-        :message-id="turn.user!.id"
+        :message-id="user.id"
         :segments="editSegments"
         :disabled="isPendingSend(sessionId)"
         @submit="onEditorSubmit"
@@ -60,8 +60,8 @@
       class="group/ts relative flex items-start justify-end self-stretch"
     >
       <!-- 用户时刻（悬挂气泡上方右侧，demo .user-bubble .ts） -->
-      <span v-if="turn.user?.timestamp" class="absolute -top-[22px] right-[10px] font-mono text-[length:var(--text-2xs)] text-neutral-dim tabular-nums opacity-0 transition-opacity duration-[var(--duration-fast)] group-hover/ts:opacity-100 group-focus-within/ts:opacity-100" data-testid="user-timestamp">
-        {{ formatClock(turn.user.timestamp) }}
+      <span v-if="user.timestamp" class="absolute -top-[22px] right-[10px] font-mono text-[length:var(--text-2xs)] text-neutral-dim tabular-nums opacity-0 transition-opacity duration-[var(--duration-fast)] group-hover/ts:opacity-100 group-focus-within/ts:opacity-100" data-testid="user-timestamp">
+        {{ formatClock(user.timestamp) }}
       </span>
       <!-- N3 宽度纪律（设计决策 8）：desktop max-width min(72%, 64ch) 双约束——窄窗按容器 72% 收，
            宽窗按 64ch 封顶防长行拉伸；mobile 档（remote-use-mobile-v2 §6.2）= 82% + 右下角 6px
@@ -143,7 +143,7 @@
         </span>
         <MarkdownRenderer v-else-if="seg.type === 'text' && seg.text" :content="seg.text" :session-id="sessionId" />
       </template>
-      <MarkdownRenderer v-if="!userSegments.length && typeof turn.user?.content === 'string'" :content="turn.user!.content" :session-id="sessionId" />
+      <MarkdownRenderer v-if="!userSegments.length && typeof user.content === 'string'" :content="user.content" :session-id="sessionId" />
       </div>
     </div>
     <!-- hover actions：复制常驻 hover；编辑仅 AI 停止（非活跃态）时显示；撤回单入口（D6，路由判定在 core）。
@@ -166,7 +166,7 @@
         size="icon"
         class="size-6 text-neutral-dim hover:text-neutral-fg"
         :title="t('panel.message.copy')"
-        @click="copy(normalizeContent(turn.user!.content), userCopyKey)"
+        @click="copy(normalizeContent(user.content), userCopyKey)"
       >
         <Check v-if="copied === userCopyKey" class="size-3 text-success" />
         <Copy v-else class="size-3" />
@@ -210,9 +210,7 @@ import { ArrowRight, Check, Copy, FileText, Pencil, Undo2 } from '@lucide/vue'
 // barrel 自引用会封住一族循环依赖环（详见 BashOutputBlock.vue 同款注释）
 import { Button } from '../../primitives/button'
 import { Textarea } from '../../primitives/textarea'
-import { turnStableId } from '@taiji/core/domain/chat'
-import type { MessageTurn } from '@taiji/core/domain/chat'
-import type { Segment } from '@taiji/shared'
+import type { Message, Segment } from '@taiji/shared'
 import { isAgentCallVirtualId, isSubagentVirtualId, normalizeContent, needsBoundarySpace, normalizeSegmentOrder, segmentsToText, textToSegments } from '@taiji/shared'
 import { rebuildSegmentsWithEditedText } from '../../lib/segment-rebuild'
 import { useCopy } from './composables/useCopy'
@@ -224,7 +222,7 @@ import MarkdownRenderer from './MarkdownRenderer.vue'
 
 const props = withDefaults(
   defineProps<{
-    turn: MessageTurn
+    user: Message
     sessionId: string
     canEdit?: boolean
     isSessionEditable?: boolean
@@ -233,10 +231,9 @@ const props = withDefaults(
 )
 
 const emit = defineEmits<{
-  // D2：turnKey = turnStableId(turn)，编辑身份由事件源携带——父组件不再把数组索引
+  // D2：turnKey = user.id（= turnStableId(turn) 有 user 时的值），编辑身份由事件源携带——父组件不再把数组索引
   // 快照当钉住状态（virtua keepMounted 越界崩溃根因），改为按稳定身份反查当前索引。
-  // 本组件只渲染有 user 的 turn，实际恒取 turn.user.id，但仍走 turnStableId 保持
-  // 与渲染层 renderKey 单一身份口径。
+  // 本组件只渲染有 user 的 turn，user.id 即稳定身份，与渲染层 renderKey 单一身份口径一致。
   'edit-state-change': [{ editing: boolean; turnKey: string }]
 }>()
 
@@ -304,7 +301,7 @@ function fileBasename(path: string): string {
 
 /** user message 的 content segments */
 const userSegments = computed<Segment[]>(() => {
-  const content = props.turn.user?.content
+  const content = props.user.content
   if (Array.isArray(content)) return content
   return []
 })
@@ -316,7 +313,7 @@ const userSegments = computed<Segment[]>(() => {
  * 单点（纯文本 → 单 text 段），不在此复制。
  */
 const editSegments = computed<Segment[]>(() => {
-  const content = props.turn.user?.content
+  const content = props.user.content
   if (Array.isArray(content)) return content
   return typeof content === 'string' ? textToSegments(content) : []
 })
@@ -359,14 +356,14 @@ function boundarySpaceBefore(i: number): boolean {
 
 /** 复制反馈 */
 const { copied, copy } = useCopy()
-const userCopyKey = computed(() => `user-${props.turn.user?.id ?? props.turn.index}`)
+const userCopyKey = computed(() => `user-${props.user.id}`)
 
 /* ── [U5 消息撤回 D6] 撤回单入口：UI 透传 targetId，路由判定（在途 cancel / 已送达回退）
       只在 core useChat.revokeMessage 单点（内核派生视图复核分派）；UI 仅用 isActive 谓词做
       展示态（生成中置灰 + tooltip）。 ── */
 
 /** 撤回 targetId = 消息 id 原样（live 态 `u-<uuid>` clientUuid / 基线重开态 pi entryId，形态分派在 runtime） */
-const revokeTargetId = computed(() => props.turn.user?.id ?? null)
+const revokeTargetId = computed(() => props.user.id)
 
 /**
  * 生成中置灰（D2 附带裁决）：isActive = isGenerating ∨ pendingSend 的保守超集——撤回编排
@@ -387,11 +384,11 @@ const draftText = ref('')
 // isVidView 参与：vid 下编辑入口已裁剪，editingUserId 理论不可被置位——此处兜住
 // 「置位残留 + sessionId 变为 vid」的极端序列，保证 vid 视图永不渲染编辑器（防御一致性）。
 const isEditingThisUser = computed(
-  () => !isVidView.value && !!props.turn.user && editingUserId.value === props.turn.user.id,
+  () => !isVidView.value && editingUserId.value === props.user.id,
 )
 
 watch(isEditingThisUser, (editing) => {
-  emit('edit-state-change', { editing, turnKey: turnStableId(props.turn) })
+  emit('edit-state-change', { editing, turnKey: props.user.id })
 })
 
 // D3 卸载清理（谁置位谁清理）：切 session / 数据换血等路径卸载本组件时，编辑态
@@ -402,13 +399,12 @@ watch(isEditingThisUser, (editing) => {
 // 仍可达，wrapper.emitted 能收到该条记录——无需降级 onBeforeUnmount。
 onUnmounted(() => {
   if (editingUserId.value !== null) {
-    emit('edit-state-change', { editing: false, turnKey: turnStableId(props.turn) })
+    emit('edit-state-change', { editing: false, turnKey: props.user.id })
   }
 })
 
 function startEdit(): void {
-  if (!props.turn.user) return
-  editingUserId.value = props.turn.user.id
+  editingUserId.value = props.user.id
   // 回填 normalizeContent 归位全文是登记过的近似路径（composer-chip-insertion-semantics D6 +
   // composer-multi-skill-injection §3.5-⑤）：
   // ① 归位全文让命令在编辑稿中可见可改——提交侧「剥离与保留段重复的前缀命令」语义以此为前提；
@@ -418,7 +414,7 @@ function startEdit(): void {
   // 重复的序列化文本」收尾防标记翻倍，回填侧另造一套还原会形成两套口径。
   // [user-bubble-edit-composer] draftText 现只服务回退路径（未注入 editComposerRenderer 的
   // 宿主）：富编辑器路径自带 setSegments 真 chip 还原，草稿真源在编辑框 DOM 内，不经本 ref。
-  draftText.value = normalizeContent(props.turn.user.content)
+  draftText.value = normalizeContent(props.user.content)
 }
 
 function cancelEdit(): void {
@@ -436,8 +432,7 @@ function cancelEdit(): void {
  * ③ editingUserId=null 收尾 → editAndResend（截断 + 重发）。
  */
 function onEditorSubmit(segments: Segment[]): void {
-  const user = props.turn.user
-  if (!user) return
+  const user = props.user
   if (!segmentsToText(segments).trim()) return
   if (isPendingSend(props.sessionId)) return
   editingUserId.value = null
@@ -445,8 +440,7 @@ function onEditorSubmit(segments: Segment[]): void {
 }
 
 async function submitEdit(): Promise<void> {
-  const user = props.turn.user
-  if (!user) return
+  const user = props.user
   const text = draftText.value.trim()
   if (!text) return
   // [D3] 双发锁：提交在途（send 或上一次 editAndResend 的 pendingSend 瞬时态）时直接

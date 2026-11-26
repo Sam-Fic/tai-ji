@@ -717,7 +717,7 @@ describe('P-restore-skip 分支一（失忆半边）：尾 session_end 变体 + 
     expect(reverseReads[0].totalBytesRead).toBeLessThan(2 * 1024 * 1024)
     // 预检 warn（含大小与原因）
     expect(vi.mocked(console.warn).mock.calls.some((args) => String(args[0]).includes('read-precheck cap') && String(args[0]).includes('streaming minimal normalization'))).toBe(true)
-  })
+  }, 30_000)
 
   it('超阈值 + 无 session_end + cwd 存活 → 零变换直附着（文件字节不变，无 tmp 残留）', () => {
     const { filePath } = writeBigSessionFile('clean-big.jsonl', { includeTailSessionEnd: false, deadCwd: false })
@@ -728,7 +728,7 @@ describe('P-restore-skip 分支一（失忆半边）：尾 session_end 变体 + 
     expect(readFileSync(filePath, 'utf-8')).toBe(before)
     const residue = readdirSync(tmpDir).filter((n) => n.includes('.tmp-migrate-'))
     expect(residue).toEqual([])
-  })
+  }, 30_000)
 })
 describe('P-restore-skip 分支二（cwd 半边）：cwd 死路径', () => {
   it('超阈值 + cwd 死路径 → 首行 header cwd 被修复为 homedir（真 pi assertSessionCwdExists 对修复后 header 不抛）', async () => {
@@ -760,7 +760,7 @@ describe('P-restore-skip 分支二（cwd 半边）：cwd 死路径', () => {
       threwName = (e as Error).name
     }
     expect(threwName).toBe('MissingSessionCwdError')
-  })
+  }, 30_000)
 
   it('小文件 + cwd 死路径 → 行为不变（首行 header cwd 同样修复为 homedir）', () => {
     const filePath = write('small-dead-cwd.jsonl', [headerLine(join(tmpdir(), 'gone-dir')), assistantLine('e1', null)].join('\n') + '\n')

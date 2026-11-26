@@ -16,7 +16,7 @@ import { McpStoreError, addMcpServer, mcpServerNamespace, readMcpServers, remove
 import { getAgentsDir, getPiAgentDir, getProviderExtrasPath } from '../pi-paths.js';
 import { extractExtensionCommandNames, matchCommandName } from '../pi-protocol.js';
 import { clearProviderApiKey, findValidDefaultModel, getProviderConfig, initProviderCredentialResolver, readModels, sanitizeInvalidProviders, setModelsPath } from '../pi-provider-store.js';
-import { PiRetrySettings } from '../pi-retry-settings.js';
+import { PiRetrySettings, ensureLlmRetryDefaults } from '../pi-retry-settings.js';
 import { SettingsCorruptedError, SettingsWriteRejectedError, getActiveSettingsPath, getSettingsCorruption, invalidateSettingsCache, readSettings, setSettingsPath, type SettingsCorruption, updateSettingsFields } from '../pi-settings-store.js';
 import { getSkillPaths, setSkillPaths } from '../pi-skill-paths.js';
 import type { McpServerEntryValue } from '@taiji/shared';
@@ -3542,3 +3542,64 @@ describe('matchCommandName：逐字精确匹配 + `:N` 消歧两类形态（D2�
 })
 });
 });
+
+describe('llm-retry 默认值 provisioning（首装 ensureLlmRetryDefaults）', () => {
+  let dir: string
+  let settingsPath: string
+
+  const seedRaw = (raw: string): void => {
+    writeFileSync(settingsPath, raw, 'utf-8')
+    invalidateSettingsCache()
+  }
+  const seedRetry = (retryValue: unknown): void => {
+    seedRaw(JSON.stringify({ retry: retryValue }, null, 2))
+  }
+  const readRawFromDisk = (): string => readFileSync(settingsPath, 'utf-8')
+  const readRetryFromDisk = (): unknown => JSON.parse(readRawFromDisk())['retry']
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'llm-retry-ensure-'))
+    settingsPath = join(dir, 'settings.json')
+    setSettingsPath(settingsPath)
+  })
+  afterEach(() => {
+    invalidateSettingsCache()
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+  })
+
+  it('文件缺失（首装）：ensure 写入 taiji 产品默认 10 次 / 5s', () => {
+    ensureLlmRetryDefaults()
+    // provider:{} 与 GUI 写路径 setRetryConfig 同形（mergeRetryConfig 恒置 provider 键，空对象 = 未设语义）
+    expect(readRetryFromDisk()).toEqual({ enabled: true, maxRetries: 10, baseDelayMs: 5000, provider: {} })
+  })
+
+  it('文件存在但 retry 域缺失：ensure 写入默认，其余字段域原样保留', () => {
+    seedRaw(JSON.stringify({ defaultModel: 'x/y', defaultProvider: 'x' }))
+    ensureLlmRetryDefaults()
+    const raw = JSON.parse(readRawFromDisk())
+    expect(raw.retry).toEqual({ enabled: true, maxRetries: 10, baseDelayMs: 5000, provider: {} })
+    expect(raw.defaultModel).toBe('x/y')
+    expect(raw.defaultProvider).toBe('x')
+  })
+
+  it('已有显式配置（含 enabled:false）：ensure 不碰', () => {
+    const user = { enabled: false, maxRetries: 7, baseDelayMs: 9000 }
+    seedRetry(user)
+    ensureLlmRetryDefaults()
+    expect(readRetryFromDisk()).toEqual(user)
+  })
+
+  it('部分显式（仅 provider 子键）：configured=true 判据同源 → 整域不碰', () => {
+    const user = { provider: { maxRetryDelayMs: 1800000 } }
+    seedRetry(user)
+    ensureLlmRetryDefaults()
+    expect(readRetryFromDisk()).toEqual(user)
+  })
+
+  it('损坏文件：不抛、不写（原样保留，告警上报）', () => {
+    const corrupt = '{ "retry": { "maxRetries": '
+    seedRaw(corrupt)
+    expect(() => ensureLlmRetryDefaults()).not.toThrow()
+    expect(readRawFromDisk()).toBe(corrupt)
+  })
+})

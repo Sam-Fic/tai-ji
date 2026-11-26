@@ -2232,5 +2232,40 @@
       "test": "packages/runtime/src/infra/pi/__tests__/pi-semantics-bundle-1.test.ts"
     },
     "verifiedWith": "1.0.0"
+  },
+  {
+    "id": "PS-103",
+    "claim": "两条模型调用通道对虚拟模型的感知能力不对称（扩展侧选通道的依据）：① `@earendil-works/pi-ai/compat` 的 completeSimple/streamSimple 是静态目录分发层——按 `model.api` 查 compat 自带的 apiProviderRegistry（BUILTIN_APIS 十项，无 pi-virtual），虚拟模型（api === \"pi-virtual\"）恒抛 `No API provider registered for api: ${api}`（resolveApiProvider），既不 route 也不解析物理端点；② `ModelRegistry.streamSimple`（= ModelRuntime.streamSimple 门面）有 `if (isVirtualModel(model))` 分支——先 `resolveModel` 按 route 回调选出物理端点与档位（reasoning 取 options.reasoning ?? \"off\"，maxTokens 按物理模型上限裁剪，provider 不同的调用方凭据被丢弃以免发给错的 vendor），再递归走物理端点通道。结论：**扩展侧一切 LLM 调用（压缩摘要 / 标题生成 / 分类器）必须经 ctx.modelRegistry，禁止直连 compat**；物理模型下两通道等价（同一 provider 实例与 auth 解析）。事故锚（2026-11-23）：smart-context same-mode 压缩经 compat 调用，会话模型为聚合路由时连续失败三次熔断，错误仅 `No API provider registered for api: pi-virtual`",
+    "piAnchor": [
+      {
+        "pkg": "pi-ai",
+        "distPath": "dist/compat.js",
+        "symbol": "BUILTIN_APIS / resolveApiProvider / streamSimple / completeSimple",
+        "note": "BUILTIN_APIS 十项 = anthropic-messages / openai-completions / openai-responses / openai-codex-responses / azure-openai-responses / google-generative-ai / google-vertex / mistral-conversations / bedrock-converse-stream / pi-messages（无 pi-virtual）；resolveApiProvider :163-168 未命中即 throw `No API provider registered for api: ${api}`；streamSimple :186-196 与 completeSimple :198-200 都经它分发【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      },
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/model-runtime.js",
+        "symbol": "streamSimple 的 isVirtualModel 分支 / completeSimple",
+        "note": "streamSimple :489-509——:491 if (isVirtualModel(model)) → :495-499 resolveModel(model, transcript.messages, {reason:\"direct\", thinkingLevel: options?.reasoning ?? \"off\"}) → :500-502 maxTokens 按物理端点上限裁剪 → :503-506 provider 不同则丢弃调用方 apiKey/headers/env → :507 递归 streamSimple(route.model, ...)；completeSimple :516-517 = streamSimple(...).result()【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      },
+      {
+        "pkg": "pi-coding-agent",
+        "distPath": "dist/core/model-registry.js",
+        "symbol": "ModelRegistry.streamSimple / complete（扩展侧门面）",
+        "note": ":74-79 streamSimple/complete 直接委派 this.runtime（= ModelRuntime），即虚拟模型感知通路的扩展可达入口；:39 类型声明 `streamSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions)`【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      },
+      {
+        "pkg": "pi-ai",
+        "distPath": "dist/api/lazy.js",
+        "symbol": "lazyStream / createSetupErrorMessage",
+        "note": ":41-53 lazyStream 把 setup 期异常（auth / route / 装配）转成 `stopReason:\"error\"` + `errorMessage` 的终态消息（content 为空数组），不 reject——故消费方必须读 errorMessage 才能拿到失败原因（:10-28 createSetupErrorMessage 的 errorMessage 字段）【行号锚基于 pi@1.0.0 实装实测（node_modules dist 亲读）】"
+      }
+    ],
+    "guard": {
+      "type": "probe",
+      "test": "packages/runtime/src/infra/pi/__tests__/pi-semantics-model-channel.test.ts"
+    },
+    "verifiedWith": "1.0.0"
   }
 ]

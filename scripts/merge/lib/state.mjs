@@ -19,7 +19,8 @@
  * 的判定对象。init 与 pr-merge 两个开线入口均以非终态 + 12h 活跃窗作发布互斥（判定谓词 isPipelineBusy，见下方导出；消费方 init.sh 经 import 复用）。
  *
  * 落位 <workspace 根>/.merge-state/current.json——workspace 级运行态（与 .bare、
- * .agents 同级，在 git 工作树之外），发布管线按 workspace 串行（同一时刻一条线），
+ * .agents 同级，在 git 工作树之外；普通仓库布局下 = 主 worktree 根，与 .git 同级），
+ * 发布管线按 workspace 串行（同一时刻一条线），
  * 单文件即够；无 key 时为 null，消费方自行兜底。
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs'

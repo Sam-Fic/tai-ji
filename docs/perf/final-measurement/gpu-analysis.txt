@@ -1,0 +1,28 @@
+# 批5 干净测量 · GPU union 分析（原始输出）
+# 生成 2026-11-25 04:42:44
+# 复算：node scripts/perf-probes/analyze-gpu-arms.mjs <label>=<trace.json>  （口径：按线程时间轴 union，禁嵌套求和；GLM M1）
+# trace 本体（每个 230-260MB，不入库）归档于本会话 artifacts：<artifacts>/b5-traces/
+#   baseline-gpu / final-gpu / r2-full / r2-no-blur / r2-no-mask / arm-no-blur / arm-no-mask / arm-reduced
+# 原始脏基线（首轮 run2d，33.67s 窗）：~/.taiji/ext-sessions/01a2077f-.../artifacts/profiling-data/run2d-renderer.trace.json
+
+label           wall    GPU忙%   RunTask  namedCov  GAP(未命名)  Raster(n)     endRaster  Present  Backpressure  帧数  均FPS minFPS <55fps秒
+original-dirty-run2d 33.7s    69.4%   22.87s   18.08s     4.79s  5.88s(  1100)  2.41s    12.01s  11.353s        660  20.0     0    32
+clean-baseline  63.5s    23.3%   15.03s    6.52s     8.51s  4.40s(  5349)  2.55s    1.16s  0.086s       3793  60.0    59     0
+final-r1        63.8s    24.1%   15.71s    6.63s     9.08s  4.51s(  5643)  2.64s    1.22s  0.146s       3790  59.9    55     0
+final-r2        63.0s    23.0%   14.75s    6.37s     8.38s  4.29s(  5603)  2.46s    1.17s  0.147s       3780  60.0    59     0
+noblur-r1       62.1s    17.5%   11.03s    6.77s     4.25s  4.61s(  3504)  2.71s    1.28s  0.085s       3724  60.0    59     0
+noblur-r2       62.1s    18.6%   11.62s    6.76s     4.86s  4.28s(  3485)  2.47s    1.62s  0.116s       3724  60.0    59     0
+nomask-r1       63.0s    25.9%   16.46s    7.36s     9.10s  5.05s(  5814)  2.78s    1.39s  0.161s       3778  60.0    59     0
+nomask-r2       63.1s    21.8%   13.84s    6.20s     7.64s  4.06s(  3888)  2.32s    1.38s  0.084s       3785  60.0    59     0
+reduced-r1      62.2s    16.6%   10.48s    6.97s     3.51s  4.84s(  3579)  2.86s    1.30s  0.068s       3734  60.0    60     0
+
+named direct children (top 6 per arm):
+  original-dirty-run2d: ImageTransportSurfaceOverlayMac::Present=12.01s  GpuChannel::ExecuteDeferredRequest=6.00s  Scheduler::FinishTask=0.03s  IOSurfaceImageBacking::WaitForCommandsToBeScheduled=0.02s  SyncToken::Release=0.01s  CommandBufferStub::OnRegisterTransferBuffer=0.00s
+  clean-baseline: GpuChannel::ExecuteDeferredRequest=5.22s  ImageTransportSurfaceOverlayMac::Present=1.16s  Scheduler::FinishTask=0.09s  IOSurfaceImageBacking::WaitForCommandsToBeScheduled=0.05s  SyncToken::Release=0.00s  CommandBufferStub::OnRegisterTransferBuffer=0.00s
+  final-r1: GpuChannel::ExecuteDeferredRequest=5.27s  ImageTransportSurfaceOverlayMac::Present=1.22s  Scheduler::FinishTask=0.09s  IOSurfaceImageBacking::WaitForCommandsToBeScheduled=0.05s  SyncToken::Release=0.00s  GrShaderCache::store=0.00s
+  final-r2: GpuChannel::ExecuteDeferredRequest=5.07s  ImageTransportSurfaceOverlayMac::Present=1.17s  Scheduler::FinishTask=0.09s  IOSurfaceImageBacking::WaitForCommandsToBeScheduled=0.05s  SyncToken::Release=0.00s  GrShaderCache::store=0.00s
+  noblur-r1: GpuChannel::ExecuteDeferredRequest=5.34s  ImageTransportSurfaceOverlayMac::Present=1.28s  Scheduler::FinishTask=0.09s  IOSurfaceImageBacking::WaitForCommandsToBeScheduled=0.06s  SyncToken::Release=0.00s  CommandBufferStub::OnRegisterTransferBuffer=0.00s
+  noblur-r2: GpuChannel::ExecuteDeferredRequest=4.99s  ImageTransportSurfaceOverlayMac::Present=1.62s  Scheduler::FinishTask=0.09s  IOSurfaceImageBacking::WaitForCommandsToBeScheduled=0.06s  SyncToken::Release=0.00s  CommandBufferStub::OnRegisterTransferBuffer=0.00s
+  nomask-r1: GpuChannel::ExecuteDeferredRequest=5.82s  ImageTransportSurfaceOverlayMac::Present=1.39s  Scheduler::FinishTask=0.07s  IOSurfaceImageBacking::WaitForCommandsToBeScheduled=0.07s  SyncToken::Release=0.00s  GrShaderCache::store=0.00s
+  nomask-r2: GpuChannel::ExecuteDeferredRequest=4.68s  ImageTransportSurfaceOverlayMac::Present=1.38s  Scheduler::FinishTask=0.08s  IOSurfaceImageBacking::WaitForCommandsToBeScheduled=0.06s  SyncToken::Release=0.00s  GrShaderCache::store=0.00s
+  reduced-r1: GpuChannel::ExecuteDeferredRequest=5.55s  ImageTransportSurfaceOverlayMac::Present=1.30s  Scheduler::FinishTask=0.07s  IOSurfaceImageBacking::WaitForCommandsToBeScheduled=0.05s  SyncToken::Release=0.00s  CommandBufferStub::OnRegisterTransferBuffer=0.00s

@@ -1,0 +1,22 @@
+# 批5 harness 事实证据 · 生成 2026-11-24 23:09:46
+
+## ① production 模式 bundle 的 dev 专属插桩串计数（F1）
+判据：dev 专属 = 只在 Vue/vue-i18n 的 dev 构建里出现的插桩串。
+注意（本表修正过一次）：friendlyJSONstringify 是 vue-i18n 的生产实现（vendor chunk 内 generateFormatCacheKey 的调用），
+ResizeObserver loop 是本仓自己的噪声过滤器常量 → 两者均非 dev-only，删除后改判据。
+
+performance.mark                 0
+performance.measure              0
+validateProps                    0
+__VUE_DEVTOOLS_GLOBAL_HOOK__     0
+devtoolsRawSetupState            0
+vue-i18n:                        0
+
+## ② 函数名可归因性：minified vs --minify false（F2）
+minified 产物（vite build 默认）实测: railMemoFor / summarizeAssistantForRail / stripMarkdown / buildStreamViewItems 全 0
+--minify false 产物（当前 dist）实测如下（dist 体积  18M）：
+railMemoFor                  18
+summarizeAssistantForRail    5
+stripMarkdown                5
+buildStreamViewItems         2
+previewText                  17
