@@ -1,15 +1,11 @@
 {
-  "testCommand": "pnpm --filter @taiji/runtime test --testTimeout=30000 --hookTimeout=60000",
-  "typecheckCommand": "pnpm --filter @taiji/runtime typecheck && pnpm --filter @taiji/core typecheck && pnpm --filter @taiji/ui typecheck && pnpm --filter @taiji/frontend typecheck",
-  "ignoreChangedPaths": [
-    ".gitignore",
-    "docs/perf/",
-    "extensions/universal/session-manager/"
-  ],
   "docs": {
-    "design": "docs/tp-design-batch5.md",
-    "acceptance": "docs/tp-acceptance-batch5.md",
-    "api": "docs/tp-api-batch5.md",
-    "factCheck": "docs/tp-fact-check-batch5.md"
-  }
+    "design": "docs/tree-plant/design.md",
+    "acceptance": "docs/tree-plant/acceptance.md",
+    "api": "docs/tree-plant/api.md",
+    "factCheck": "docs/tree-plant/fact-check.md"
+  },
+  "testCommand": "pnpm --filter @zhushanwen/pi-provider-aggregation test",
+  "typecheckCommand": "pnpm --filter @zhushanwen/pi-provider-aggregation typecheck",
+  "ignoreChangedPaths": []
 }
