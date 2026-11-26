@@ -99,7 +99,7 @@ import { NpmGitInstaller } from './infra/installers/npm-git-installer.js'
 import { NpmPluginInstaller } from './infra/installers/plugin-installer-adapter.js'
 import { ExtensionResolver } from './infra/installers/extension-resolver.js'
 import { PiExtensionSettings } from './infra/pi/pi-extension-settings.js'
-import { PiRetrySettings } from './infra/pi/pi-retry-settings.js'
+import { PiRetrySettings, ensureLlmRetryDefaults } from './infra/pi/pi-retry-settings.js'
 import { EventAdapter } from './infra/pi/event-adapter.js'
 import { FileChangeDiffAdapter } from './infra/pi/file-change-diff-adapter.js'
 import { EventInterpreter, applySessionOccupancyTransition } from './services/session/event-interpreter.js'
@@ -527,6 +527,9 @@ async function main(): Promise<void> {
   const extensionSettings = new PiExtensionSettings(configStore.getPiAgentDir())
   // ILlmRetrySettings port 的 infra 实现：settings.json retry 域读写（无参构造，同上）。
   const llmRetrySettings = new PiRetrySettings()
+  // 首装/未配置 provisioning（幂等 ensure，事件驱动非定时）：retry 域无显式键 → 写入 taiji
+  // 产品默认（10 次 / 5s 初始间隔）；已有显式配置不碰。失败仅告警不阻断启动。
+  ensureLlmRetryDefaults()
   // ICodemodeSettings port 的实现：settings.json defaultTools 域开关读写（codemode 设计
   // D1/A1——损坏检查经 getSettingsCorruption 单点，字段域写入经 pi-codemode-settings）。
   const codemodeSettings = new PiCodemodeSettings()
