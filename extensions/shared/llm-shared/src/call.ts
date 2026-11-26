@@ -120,7 +120,8 @@ export function extractText(resp: {
  * 3. 检查 resp.stopReason：error/aborted（流终止事件带 stopReason，不 reject，G3）
  *    → {ok:false, error: 提取错误文本, stopReason}（不再当正常内容提取）。
  *    错误文本优先 content 文本（provider 把错误写进文本块的形态），空则回落 errorMessage
- *    （lazyStream setup 失败的唯一载荷：路由失败 / 凭据缺失 / 请求装配异常），再回落 stopReason。
+ *    （lazyStream setup 失败的唯一载荷：路由失败 / 凭据缺失 / 请求装配异常），再空则落
+ *    「unknown error」字面量——stopReason 不进 error 文本，作为独立字段透传（见上）。
  * 4. 提取 text → {ok:true, content}；resp.usage 存在则一并透传（条件 spread，缺失时不带字段——
  *    AssistantMessage.usage 类型必填但运行时 provider 可能不回，P-usage-shape 的降级分支）
  * 5. throw（getApiKeyAndHeaders reject / 网络 / 超时 / 解析）→ catch → {ok:false, error:String(e)}
