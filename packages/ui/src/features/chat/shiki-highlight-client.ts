@@ -37,9 +37,9 @@ let degraded = false
 let visibilityBound = false
 
 /** jobId → 在途登记（结果关联 / 取消结算） */
-const pending = new Map<number, PendingEntry>()
+const pending = new Map<number, PendingEntry>() // taste:allow-no-data-owner W24-EX-C（非 GUI 数据技术结构，已登记 §4 ⑧ 2026-11-26）：在途 job 结算表
 /** 组对象 → 在途 jobId 集合（WeakMap：组随消息组件死亡自动回收） */
-const groupJobs = new WeakMap<object, Set<number>>()
+const groupJobs = new WeakMap<object, Set<number>>() // taste:allow-no-data-owner W24-EX-C（非 GUI 数据技术结构，已登记 §4 ⑧ 2026-11-26）：取消组登记表
 let nextJobId = 1
 
 /**
@@ -95,7 +95,10 @@ export async function resolveFenceHighlights(
   } catch (err) {
     degrade('worker postMessage threw', err)
   }
-  return Promise.all(settlements)
+  // settlement promise 只 resolve 不 reject（构造即仅暴露 resolve，单 job 无失败态），
+  // allSettled 保持「单 job 异常不炸整批」的部分降级语义（rejected → null 主线程同步回退）。
+  const settled = await Promise.allSettled(settlements)
+  return settled.map((r) => (r.status === 'fulfilled' ? r.value : null))
 }
 
 /** 未传组的调用方共享的占位组（不可取消；组登记随进程，条目为空集） */
@@ -116,8 +119,9 @@ export function cancelShikiHighlightGroup(group: object): void {
   if (worker !== null && !degraded) {
     try {
       worker.postMessage({ type: 'cancel', ids: [...ids] } satisfies HighlightWorkerInbound)
-    } catch {
-      /* worker 已死：degrade 由 error 事件接管，此处静默 */
+    } catch (err) {
+      /* worker 已死：degrade 由 error 事件接管，此处不重复 degrade，仅留痕 */
+      console.warn('[shiki-highlight] cancel postMessage failed (degrade follows via error event):', err)
     }
   }
 }
@@ -133,8 +137,9 @@ export function cancelAllShikiHighlights(): void {
   if (worker !== null && !degraded) {
     try {
       worker.postMessage({ type: 'cancel', ids } satisfies HighlightWorkerInbound)
-    } catch {
-      /* 同上 */
+    } catch (err) {
+      /* 同上：degrade 由 error 事件接管，此处不重复 degrade，仅留痕 */
+      console.warn('[shiki-highlight] cancelAll postMessage failed (degrade follows via error event):', err)
     }
   }
 }
