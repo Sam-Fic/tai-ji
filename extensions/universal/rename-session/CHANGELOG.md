@@ -1,5 +1,11 @@
 # @zhushanwen/pi-rename-session
 
+## 0.14.9
+
+### Patch Changes
+
+- 2cffda2dc: chore: refresh dependency range (triggered by @zhushanwen/pi-llm-shared@0.13.0 → @zhushanwen/pi-llm-shared@0.13.1)
+
 ## 0.14.8
 
 ### Patch Changes

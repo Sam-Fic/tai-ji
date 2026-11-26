@@ -1,5 +1,11 @@
 # @zhushanwen/pi-network-proxy
 
+## 0.3.5
+
+### Patch Changes
+
+- 2cffda2dc: chore: refresh dependency range (triggered by @zhushanwen/pi-llm-shared@0.13.0 → @zhushanwen/pi-llm-shared@0.13.1)
+
 ## 0.3.4
 
 ### Patch Changes

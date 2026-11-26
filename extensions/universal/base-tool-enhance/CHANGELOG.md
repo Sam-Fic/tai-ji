@@ -1,5 +1,11 @@
 # @zhushanwen/pi-base-tool-enhance
 
+## 0.12.4
+
+### Patch Changes
+
+- 2cffda2dc: chore: refresh dependency range (triggered by @zhushanwen/pi-llm-shared@0.13.0 → @zhushanwen/pi-llm-shared@0.13.1)
+
 ## 0.12.3
 
 ### Patch Changes
