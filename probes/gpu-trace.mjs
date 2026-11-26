@@ -30,8 +30,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import os from 'node:os'
 
-import { createProtocol } from './vp/lib/protocol.mjs'
-import { ensureGuiOnSessionViaLabel } from './lib/harness.mjs'
+import { connectRuntime, ensureGuiOnSessionViaLabel, waitForSessionComplete } from './lib/harness.mjs'
 
 function arg (name, dflt) {
   const i = process.argv.indexOf(`--${name}`)
@@ -72,9 +71,10 @@ if (!['full', 'no-blur', 'no-mask', 'reduced'].includes(arm)) {
   process.exit(2)
 }
 
-// runtime 协议：复用 vp 库（已认证连接 + subscribe + waitTurnEnd，禁手搓第二份 WS 客户端）
-const runtimePort = Number(fs.readFileSync(path.join(dataDir, 'runtime.port'), 'utf8').trim())
-const rt = await createProtocol({ dataDir, runtimePort })
+// runtime 协议：仓内探针统一走 harness.connectRuntime（perf-ttft / follow-health 同款）。
+// vp lib 已单源迁 verify-taiji skill 实体（dmg-r1-3 + 删除侧 9ba3cebb6），仓内不再有
+// protocol.mjs 可 import——删除侧遗漏本文件接线，metrics-gate unresolved-import 拦截后归位。
+const rt = await connectRuntime(dataDir)
 
 const page = (await (await fetch(`http://127.0.0.1:${cdpPort}/json/list`)).json())
   .find((t) => t.type === 'page' && t.webSocketDebuggerUrl)
@@ -154,9 +154,9 @@ if (!(await ensureGuiOnSessionViaLabel({ send }, sid, sessionLabel))) {
   process.exit(3)
 }
 
-// 必须先订阅才有 message.* 广播帧（否则 waitTurnEnd 永远观测不到终态，只能等预算到顶——
+// 必须先订阅才有 message.* 广播帧（否则 waitForSessionComplete 永远观测不到终态，只能等预算到顶——
 // 那正是首轮「固定 34s 窗」掩盖成「窗口正常」的同类缺陷）。
-await rt.subscribe(sid, { timeoutMs: 30000 })
+await rt.call('session.subscribe', { sessionId: sid }, 30000)
 console.log('[gpu-probe] subscribed to session events')
 
 // ── 三臂注入（在 tracing 之前完成，注入本身不计入被比较的窗口）───────────────
@@ -248,16 +248,14 @@ const clientUuid = crypto.randomUUID()
 await rt.call('delivery.submit', { sessionId: sid, content: prompt, clientUuid }, 30000)
 console.log('[gpu-probe] prompt submitted')
 
-// 等 turn 结束（事件驱动）；windowMs = 显式预算上限，到顶即收（弃测判据见尾部）
+// 等 turn 结束（事件驱动）；windowMs = 显式预算上限，到顶即收（弃测判据见尾部）。
+// waitForSessionComplete 内部自带同预算 deadline（超时返回 null），无需外层竞速。
 let completed = false
 try {
-  const r = await Promise.race([
-    rt.waitTurnEnd(sid, { timeoutMs: windowMs }),
-    new Promise((resolve) => setTimeout(() => resolve(null), windowMs)),
-  ])
-  completed = r !== null && r !== undefined
+  const r = await waitForSessionComplete(rt, sid, windowMs)
+  completed = r !== null
 } catch (e) {
-  console.log(`[gpu-probe] waitTurnEnd 异常：${e.message}`)
+  console.log(`[gpu-probe] waitForSessionComplete 异常：${e.message}`)
 }
 const streamMs = Date.now() - t0
 console.log(`[gpu-probe] window closed: completed=${completed} stream=${(streamMs / 1000).toFixed(1)}s`)
