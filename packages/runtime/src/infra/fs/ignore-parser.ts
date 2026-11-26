@@ -160,8 +160,9 @@ function computeFastPath(line: string, anchored: boolean): IgnoreFastPath | null
   }
   // `**/L` 或 `/**/L`（compileRule 已剥前导 '/'，故此处 line 以 `**/` 开头）；
   // rest 含 '/' 时（如 `**/foo/bar`）regex 是「末两段」匹配而非单段相等，不快路径化。
+  const DOUBLE_STAR_SLASH_LEN = 3 // '**/' 双星加斜杠占 3 字符
   if (line.startsWith('**/')) {
-    const rest = line.slice(3)
+    const rest = line.slice(DOUBLE_STAR_SLASH_LEN)
     if (rest.length > 0 && !/[*?/]/.test(rest)) {
       return { prefix: rest, suffix: rest, star: false, anchored: false }
     }
@@ -254,12 +255,12 @@ function globToRegex(pattern: string, anchored: boolean): RegExp {
 export function matchPath(matcher: IgnoreMatcher, path: string): boolean {
   // 规范化路径：去前导斜杠、去末尾分隔符
   const normalized = normalizePath(path)
-  // 段数组（空段过滤，与 allPrefixes 内部口径一致）；短路径（≤1 段）时即前缀数组本身，
+  // 段数组（空段过滤，与 prefixesOf 入参口径一致）；短路径（≤1 段）时即前缀数组本身，
   // 省一次 split/join（D7-2 直通语义：无 '/' 路径只有自身一个前缀）。
   // 空串（W24 审查 A-2）：segments = [] → prefixes = [] → 恒 false，保持旧语义。
   const segments = normalized === '' ? [] : normalized.split('/').filter((s) => s.length > 0)
   const prefixes = segments.length <= 1 ? segments : prefixesOf(segments)
-  // [B4] coverage 预计算（每调用一次）：前缀 X_k = 段 0..k 的 join（折叠空段，与 allPrefixes
+  // [B4] coverage 预计算（每调用一次）：前缀 X_k = 段 0..k 的 join（折叠空段，与 prefixesOf
   // 同口径），对**原始归一化路径**判 isSelf / isAncestorDir——与 regex 路径的 ruleMatchesPath
   // 判据逐字节一致。路径含连续斜杠（'a//b'）时折叠前缀与原串错位，coverage 为 false，
   // 这是改造前既有行为，快路径必须保持（修剪模糊探针抓到的漂移点）。
@@ -285,6 +286,8 @@ interface Coverage {
 }
 const EMPTY_COVERAGE: Coverage = { self: [], ancestor: [] }
 
+const CHAR_CODE_SLASH = 47 // '/' 的 charCode
+
 function coverageOf(segments: string[], path: string): Coverage {
   const self: boolean[] = []
   const ancestor: boolean[] = []
@@ -294,7 +297,7 @@ function coverageOf(segments: string[], path: string): Coverage {
     // 免拼接判据：path === prefix ⟔ 等长且 startsWith；path.startsWith(prefix + '/') ⟔ startsWith 且下一字符为 '/'
     const starts = path.startsWith(prefix)
     self.push(starts && path.length === prefix.length)
-    ancestor.push(starts && path.length > prefix.length && path.charCodeAt(prefix.length) === 47 /* '/' */)
+    ancestor.push(starts && path.length > prefix.length && path.charCodeAt(prefix.length) === CHAR_CODE_SLASH)
   }
   return { self, ancestor }
 }
@@ -387,11 +390,4 @@ function prefixesOf(segments: string[]): string[] {
   return result
 }
 
-/**
- * 生成路径的所有祖先前缀（含自身），从深到浅。
- * 例：'a/b/c' → ['a/b/c', 'a/b', 'a']；'x' → ['x']。
- */
-function allPrefixes(path: string): string[] {
-  const segments = path.split('/').filter((s) => s.length > 0)
-  return prefixesOf(segments)
-}
+

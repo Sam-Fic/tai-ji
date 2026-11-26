@@ -50,7 +50,8 @@ ws.addEventListener('message', (ev) => {
   if (msg.id !== undefined && pending.has(msg.id)) {
     const p = pending.get(msg.id)
     pending.delete(msg.id)
-    msg.error ? p.reject(new Error(JSON.stringify(msg.error))) : p.resolve(msg.result)
+    if (msg.error) p.reject(new Error(JSON.stringify(msg.error)))
+    else p.resolve(msg.result)
   }
 })
 await new Promise((res, rej) => { ws.addEventListener('open', res); ws.addEventListener('error', rej); setTimeout(rej, 10000) })

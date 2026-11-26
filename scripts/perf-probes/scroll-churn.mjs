@@ -44,7 +44,6 @@ const sid = flags.sid
 const cdpPort = Number(flags['cdp-port'] ?? 9488)
 const timeoutMs = Number(flags.timeout ?? 200000)
 const prompt = flags.text ?? '请给出性能优化实施方案'
-const label = flags.label ?? ''
 
 if (!dataDir || !sid) {
   console.error('usage: node scripts/perf-probes/scroll-churn.mjs --data-dir <dir> --sid <sid> [--cdp-port 9488] [--timeout 180000]')
@@ -155,12 +154,6 @@ const INJECT = `(() => {
   return 'ok'
 })()`
 
-function quantile (arr, q) {
-  if (!arr.length) return 0
-  const s = arr.slice().sort((a, b) => a - b)
-  return s[Math.min(s.length - 1, Math.floor(s.length * q))]
-}
-
 const rt = await connectRuntime(dataDir)
 const cdp = await connectRendererCdp(cdpPort)
 await ensureGuiOnSession(cdp, sid)
@@ -192,7 +185,6 @@ if (flags.profile) {
   await cdp.send('Profiler.enable')
   await cdp.send('Profiler.start')
 }
-const t0 = Date.now()
 const clientUuid = crypto.randomUUID()
 await rt.call('delivery.submit', { sessionId: sid, content: prompt, clientUuid }, 30000)
 console.log('[churn] prompt submitted, waiting for stream start…')

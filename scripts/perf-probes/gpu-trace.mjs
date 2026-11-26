@@ -116,7 +116,8 @@ ws.addEventListener('message', (ev) => {
   if (msg.id !== undefined && pending.has(msg.id)) {
     const p = pending.get(msg.id)
     pending.delete(msg.id)
-    msg.error ? p.reject(new Error(JSON.stringify(msg.error))) : p.resolve(msg.result)
+    if (msg.error) p.reject(new Error(JSON.stringify(msg.error)))
+    else p.resolve(msg.result)
   }
 })
 await new Promise((res, rej) => { ws.addEventListener('open', res); ws.addEventListener('error', rej); setTimeout(rej, 10000) })
@@ -189,17 +190,7 @@ if (arm === 'no-blur') {
     })()`,
     returnByValue: true,
   })
-  // 校验注入真的生效：至少一个带 backdrop-blur 类的元素计算值应为 none（未生效则拒绝采集，
-  // 否则 no-blur 臂等于 full 臂，差值恒 0 会被误读成「blur 无成本」）
-  const verify = await send('Runtime.evaluate', {
-    expression: `(() => {
-      const els = [...document.querySelectorAll('[class*="backdrop-blur"]')];
-      const bf = els.map((e) => getComputedStyle(e).backdropFilter);
-      return JSON.stringify({ count: els.length, noneCount: bf.filter((v) => v === 'none').length });
-    })()`,
-    returnByValue: true,
-  })
-  // 注入时机在 prompt 之前：此刻 EdgeFade 尚未挂载（classes-at-inject=0、verify.count=0 属正常），
+  // 注入时机在 prompt 之前：此刻 EdgeFade 尚未挂载（classes-at-inject=0 属正常），
   // 真正的生效判据是**臂末**的 arm-end state（blurEls=4 noneCount=4）。此处只留注入记录。
   injected = `backdrop-filter(injected-before-mount=${r.result.value}, arm-end-state-is-authoritative)`
   console.log(`[gpu-probe] arm=no-blur 注入完成：${injected}`)

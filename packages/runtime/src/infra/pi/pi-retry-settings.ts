@@ -64,6 +64,7 @@ export function ensureLlmRetryDefaults(): void {
       s.retry = mergeRetryConfig(s.retry, { ...LLM_RETRY_TAIJI_DEFAULTS })
     })
   } catch (err) {
+    // best-effort 降级：非关键路径，读/写 settings 失败仅告警不阻断启动；用户可在设置页手动配置 retry。
     console.warn(
       `[pi-retry-settings] retry 默认值 provisioning 未完成（不影响启动；可在设置页手动配置）: ${toErrorMessage(err)}`,
     )

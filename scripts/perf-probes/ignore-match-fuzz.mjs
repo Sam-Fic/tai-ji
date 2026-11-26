@@ -103,11 +103,11 @@ const samples = []
 for (let it = 0; it < ITER; it++) {
   const content = genContent()
   let m, ref
-  try { m = compileIgnoreRules(content); ref = refCompile(content) } catch (e) {
+  try { m = compileIgnoreRules(content); ref = refCompile(content) } catch {
     // 两边编译行为不一致（一边抛一边不抛）也算分歧：分别试
-    let m2 = null, r2 = null, e1 = null, e2 = null
-    try { m2 = compileIgnoreRules(content) } catch (e) { e1 = String(e) }
-    try { r2 = refCompile(content) } catch (e) { e2 = String(e) }
+    let e1 = null, e2 = null
+    try { compileIgnoreRules(content) } catch (e) { e1 = String(e) }
+    try { refCompile(content) } catch (e) { e2 = String(e) }
     if ((e1 === null) !== (e2 === null)) { mismatches++; samples.push({ content, kind: 'compile-divergence', e1, e2 }) }
     continue
   }

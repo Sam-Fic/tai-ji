@@ -468,7 +468,8 @@ export async function connectNodeInspector (port, match, { timeoutMs = 20000, in
     if (msg.id !== undefined && pending.has(msg.id)) {
       const p = pending.get(msg.id)
       pending.delete(msg.id)
-      msg.error ? p.reject(new Error(JSON.stringify(msg.error))) : p.resolve(msg.result)
+      if (msg.error) p.reject(new Error(JSON.stringify(msg.error)))
+      else p.resolve(msg.result)
       return
     }
     if (msg.method) for (const cb of listeners.get(msg.method) ?? []) cb(msg.params)

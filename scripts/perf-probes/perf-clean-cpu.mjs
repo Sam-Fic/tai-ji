@@ -34,7 +34,7 @@ import { fileURLToPath } from 'node:url'
 
 import {
   parseFlags, sleep, connectRuntime, connectRendererCdp,
-  waitForSessionComplete, windowStats, readLoadAvg, instantCpuOf,
+  windowStats, readLoadAvg, instantCpuOf,
   connectNodeInspector, startProfiler, stopProfiler, ensureGuiOnSessionViaLabel
 } from './lib/harness.mjs'
 

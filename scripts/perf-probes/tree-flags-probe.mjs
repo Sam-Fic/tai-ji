@@ -17,7 +17,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { connectRuntime, sleep } from './lib/harness.mjs'
+import { connectRuntime } from './lib/harness.mjs'
 
 function arg (name, dflt) {
   const argv = process.argv.slice(2)

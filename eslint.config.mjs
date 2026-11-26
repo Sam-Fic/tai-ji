@@ -23,9 +23,10 @@ export default [
   {
     ignores: [
       'taste-lint/**',
-      // 独立 CJS 验证脚本（verify-scheduler-e2e.cjs，随 tools→scripts 目录迁移更新路径）：
+      // 独立 CJS 验证脚本（verify-scheduler-e2e.cjs，随 tools→scripts 目录迁移更新路径；
+      // perf-probes/csp-worker-probe.cjs 同型真机探针）：
       // require() 是 CJS 唯一导入方式 + 内部 `_` 占位变量，no-require-imports/no-unused-vars 均误报
-      'scripts/*.cjs',
+      'scripts/**/*.cjs',
       // 临时/历史 demo 目录（.tmp 已 gitignore，v6 是重构前的遗留 demo）
       '.tmp/**',
       // 构建产物（目录重构后：apps/electron + packages/*）

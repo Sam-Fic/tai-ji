@@ -113,7 +113,6 @@ function measureOnce (extensionPaths) {
     let buf = ''
     let firstMs = null
     let secondMs = null
-    let sent = 0
     let cpuS = null
     const timer = setTimeout(() => {
       try { child.kill('SIGKILL') } catch {}
@@ -132,7 +131,6 @@ function measureOnce (extensionPaths) {
         if (firstMs === null) {
           firstMs = Date.now() - t0
           // 热路径：立刻再发一次
-          sent = 2
           child.stdin.write(`${JSON.stringify({ id: 2, type: 'get_state' })}\n`)
         } else if (msg.id === 2 && secondMs === null) {
           secondMs = Date.now() - t0
