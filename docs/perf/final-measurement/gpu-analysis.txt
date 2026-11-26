@@ -1,6 +1,6 @@
 # 批5 干净测量 · GPU union 分析（原始输出）
 # 生成 2026-11-25 04:42:44
-# 复算：node probes/analyze-gpu-arms.mjs <label>=<trace.json>  （口径：按线程时间轴 union，禁嵌套求和；GLM M1）
+# 复算：node scripts/perf-probes/analyze-gpu-arms.mjs <label>=<trace.json>  （口径：按线程时间轴 union，禁嵌套求和；GLM M1）
 # trace 本体（每个 230-260MB，不入库）归档于本会话 artifacts：<artifacts>/b5-traces/
 #   baseline-gpu / final-gpu / r2-full / r2-no-blur / r2-no-mask / arm-no-blur / arm-no-mask / arm-reduced
 # 原始脏基线（首轮 run2d，33.67s 窗）：~/.taiji/ext-sessions/01a2077f-.../artifacts/profiling-data/run2d-renderer.trace.json

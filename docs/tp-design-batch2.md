@@ -30,15 +30,15 @@
 主干 = 真机探针基建 + 无回归 smoke（不改生产行为，既有测试绿）。两枝递进：契约新面（B-props，含 N2 aiCopyKey）→ 高风险 + 等价收尾（B-layout，含 N1 mask 常量）。N1 与 EdgeFade IO 哨兵同文件同批落地、N2 由 B-props 移除 turn prop 强制改用 id，故不单设 B-polish 枝。
 
 主干文件清单（trunk 期允许改动）：
-- probes/
+- scripts/perf-probes/
 - .tree-plant.json
 
 | 枝名 | 目标 | 依赖 | 风险级 | 文件 | case |
 |---|---|---|---|---|---|
 | B-props | G1 稳定引用 props + G6 aiCopyKey 用 id | trunk | 中 | packages/ui/src/features/chat/Turn.vue, packages/ui/src/features/chat/UserBubble.vue, packages/ui/src/features/chat/TurnSummary.vue, packages/ui/src/features/chat/__tests__/ | T2,T3 |
-| B-layout | G2 EdgeFade IO 哨兵 + G3 gap 修复 + G4 RO 循环削减 + G5 mask 常量（N1） | trunk | 高 | packages/renderer/src/components/ui/edge-fade/EdgeFade.vue, packages/renderer/src/composables/panel/useMessageStreamFollowTriggers.ts, packages/renderer/src/components/panel/MessageStream.vue, packages/renderer/src/composables/panel/message-stream-layout.ts, packages/renderer/src/composables/panel/__tests__/, packages/renderer/src/__tests__/, probes/lib/harness.mjs, probes/edge-fade-mask.mjs | T4,T5,T6 |
+| B-layout | G2 EdgeFade IO 哨兵 + G3 gap 修复 + G4 RO 循环削减 + G5 mask 常量（N1） | trunk | 高 | packages/renderer/src/components/ui/edge-fade/EdgeFade.vue, packages/renderer/src/composables/panel/useMessageStreamFollowTriggers.ts, packages/renderer/src/components/panel/MessageStream.vue, packages/renderer/src/composables/panel/message-stream-layout.ts, packages/renderer/src/composables/panel/__tests__/, packages/renderer/src/__tests__/, scripts/perf-probes/lib/harness.mjs, scripts/perf-probes/edge-fade-mask.mjs | T4,T5,T6 |
 
-> 范围注记：B-layout 验收 case T4/T6 依赖两个验收探针基建（trunk gate 仅跑 T1、未覆盖这些路径），随 B-layout 一并补齐：① `probes/lib/harness.mjs` 的 `waitForSessionComplete` 漏 `session.subscribe`（未订阅则收不到 message.complete 广播 → T4/T6 超时 exit 3）；② `probes/edge-fade-mask.mjs`（T6）原断言「贴顶 mask 空」在跟底会话不可达（follow 拉回底部、哨兵恒滚离视口），简化为验「滚离顶 → active 常量」（贴顶 mask 空态由单测 edge-fade-sentinel 覆盖）。二者列入 B-layout 改动范围。
+> 范围注记：B-layout 验收 case T4/T6 依赖两个验收探针基建（trunk gate 仅跑 T1、未覆盖这些路径），随 B-layout 一并补齐：① `scripts/perf-probes/lib/harness.mjs` 的 `waitForSessionComplete` 漏 `session.subscribe`（未订阅则收不到 message.complete 广播 → T4/T6 超时 exit 3）；② `scripts/perf-probes/edge-fade-mask.mjs`（T6）原断言「贴顶 mask 空」在跟底会话不可达（follow 拉回底部、哨兵恒滚离视口），简化为验「滚离顶 → active 常量」（贴顶 mask 空态由单测 edge-fade-sentinel 覆盖）。二者列入 B-layout 改动范围。
 
 ## 方案要点（每枝）
 
@@ -71,6 +71,6 @@
 | 修改 virtua 上游 | 红线：禁改上游 pi/依赖；gap 修法走 taiji 侧 endOffset 补偿 | 否 | virtua 升级改变 ref-scroller 目标公式（重跑 check-pi-semantics 族）时 |
 | EdgeFade blur/mask 视觉降档 | GPU-6/7 数据未采到大 DOM 阶段（A6），批5 干净重测前不动视觉 | 否 | 批5 拿到干净 GPU trace 证明 blur 是 raster 大头时 |
 | EdgeFade scrollTop 读优化成字符串常量即止 | 审查 D4：0.86s 是强制布局非字符串；本批用 IO 哨兵根治，N1 常量仅等价顺手 | 是（N1 收益≈0） | 常量化引入视觉差异即回退 |
-| 探针脚本类型层（probes/ .mjs） | 真机采集探针为零依赖 Node .mjs 一次性脚本（沿用批1 口径），不做 tsc 类型层；生产交付面（packages/）全 .ts 由 typecheckCommand 承载 | 否 | 探针引入跨文件复用/复杂逻辑，或被非采集链路依赖时 |
+| 探针脚本类型层（scripts/perf-probes/ .mjs） | 真机采集探针为零依赖 Node .mjs 一次性脚本（沿用批1 口径），不做 tsc 类型层；生产交付面（packages/）全 .ts 由 typecheckCommand 承载 | 否 | 探针引入跨文件复用/复杂逻辑，或被非采集链路依赖时 |
 | gap 修法改跟底读写时机（移出双 rAF） | P-timing 双 rAF 是为让 virtua 内部 RO 先更新测量缓存（消除「用旧视口算目标」缝隙），改动会引入竞态 | 否 | virtua 提供同步测量 API 或去掉该缝隙需求时 |
 | padTop 硬编码常量 | 优先 RO/offsetTop 实测 headOffset，避免与 CSS 变量漂移；仅在实测路径不可行时回落常量 + dev 断言 | 否 | `--message-stream-pad-top` 值变更且实测路径失效时 |

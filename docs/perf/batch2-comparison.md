@@ -2,7 +2,7 @@
 
 > 采集分支 `feat-cpu-gpu-performance` · 交付 = Turn.vue 稳定引用 props（UserBubble/TurnSummary shouldUpdateComponent 跳过）+ EdgeFade IO 哨兵（消 scrollTop 强制布局读）+ 跟底 endOffset 补偿 padTop（修 gap=29.5px 记账误差）+ 业务侧 RO 回调几何读清理；N1 mask 常量 / N2 aiCopyKey 用 id 为等价顺手。
 >
-> **口径声明（先读，照批1）**：前后两次采集不是同一次运行，也不共享同一窗口结构。本表所有数字都用**同一套脚本、同一份函数/切片名单**对两侧的原始产物复算得出（脚本随交付物入库：`probes/perf-component-render.mjs`、`probes/perf-forced-layout.mjs`、`probes/analyze-gpu-union.mjs`），但**跨运行的绝对差含采集噪声**（GLM 审查实证同场景跨运行差异 ≥2.7×）。因此结论只承载**量级与方向**，不承载精确百分比；凡涉及"前/后"的差，一律同时给出绝对值和窗口占比两个口径。
+> **口径声明（先读，照批1）**：前后两次采集不是同一次运行，也不共享同一窗口结构。本表所有数字都用**同一套脚本、同一份函数/切片名单**对两侧的原始产物复算得出（脚本随交付物入库：`scripts/perf-probes/perf-component-render.mjs`、`scripts/perf-probes/perf-forced-layout.mjs`、`scripts/perf-probes/analyze-gpu-union.mjs`），但**跨运行的绝对差含采集噪声**（GLM 审查实证同场景跨运行差异 ≥2.7×）。因此结论只承载**量级与方向**，不承载精确百分比；凡涉及"前/后"的差，一律同时给出绝对值和窗口占比两个口径。
 
 ## 0. 采集 harness
 
@@ -17,11 +17,11 @@
 
 基线原始产物（**只读，未重测**）：`~/.taiji/ext-sessions/01a2077f-d676-7095-b142-db7b972391f7/artifacts/profiling-data/run-notrace-renderer.cpuprofile`（CPU 权威，流式窗 +10..+73s）、`run2d-renderer.trace.json`（GPU）。
 
-**基线数字口径**：下列 before 列由 `probes/lib/harness.mjs` 的 `inclusiveByLabel` / `selfTimeByLabel` 对基线 cpuprofile 在 **+10..+73s 流式窗（63.0s 采样，nonIdle 62.5%）** 离线复算得出（与批1 `analyze-cpuprofile.mjs` 同源窗口）。after 列由同名探针对 after profile 在各自 send-relative 流式窗复算。
+**基线数字口径**：下列 before 列由 `scripts/perf-probes/lib/harness.mjs` 的 `inclusiveByLabel` / `selfTimeByLabel` 对基线 cpuprofile 在 **+10..+73s 流式窗（63.0s 采样，nonIdle 62.5%）** 离线复算得出（与批1 `analyze-cpuprofile.mjs` 同源窗口）。after 列由同名探针对 after profile 在各自 send-relative 流式窗复算。
 
 ## 1. 组件 render inclusive（核心指标：稳定引用 props → shouldUpdateComponent 跳过）
 
-探针 `probes/perf-component-render.mjs`。inclusive = 沿 parent 链上行、每样本对匹配 label 去重、累加 timeDeltas（= 该组件渲染子树总耗时）。
+探针 `scripts/perf-probes/perf-component-render.mjs`。inclusive = 沿 parent 链上行、每样本对匹配 label 去重、累加 timeDeltas（= 该组件渲染子树总耗时）。
 
 | 组件 | before（+10..73s，63.0s 窗） | after（send-relative 流式窗） | 变化 |
 |---|---|---|---|
@@ -34,7 +34,7 @@
 
 ## 2. 强制布局 self-time（核心指标：EdgeFade IO 哨兵 + 跟底 gap 修复）
 
-探针 `probes/perf-forced-layout.mjs`。self-time ≈ 次数 × 单次成本；成本恒定下 self-time 下降 ∝ 强制布局次数下降。
+探针 `scripts/perf-probes/perf-forced-layout.mjs`。self-time ≈ 次数 × 单次成本；成本恒定下 self-time 下降 ∝ 强制布局次数下降。
 
 | 函数 | before（+10..73s） | after | 变化 |
 |---|---|---|---|
@@ -61,7 +61,7 @@
 
 ## 4. GPU union 口径前后对比
 
-口径：按线程时间轴 union（嵌套子切片不重复计数）。复算脚本 `probes/analyze-gpu-union.mjs`。before 列照批1（run2d trace，33.67s 墙钟，流式子窗 23.0s）：
+口径：按线程时间轴 union（嵌套子切片不重复计数）。复算脚本 `scripts/perf-probes/analyze-gpu-union.mjs`。before 列照批1（run2d trace，33.67s 墙钟，流式子窗 23.0s）：
 
 | 指标 | before（run2d，33.67s 墙钟，152532 事件） | after（22.37s 墙钟，15542 事件） |
 |---|---|---|
@@ -86,7 +86,7 @@
 
 ## 6. 贴底收敛 + RO 循环（正确性指标）
 
-探针 `probes/follow-health.mjs`（流式期 renderer 日志 delta）：
+探针 `scripts/perf-probes/follow-health.mjs`（流式期 renderer 日志 delta）：
 
 | 指标 | before（基线日志） | after（探针 delta） |
 |---|---|---|

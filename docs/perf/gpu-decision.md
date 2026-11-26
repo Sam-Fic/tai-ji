@@ -27,7 +27,7 @@
 - **每臂开始前清掉上一臂注入**（`b5-no-blur` / `b5-no-mask` style 节点删除 + `setEmulatedMedia{features:[]}`）——首跑实测踩坑：no-blur 的 style 残留会让后续臂的 `backdrop-filter` 恒为 `none`（等于「第三臂也跑了 no-blur」）；
 - **注入必须验证生效**（`getComputedStyle().backdropFilter === 'none'` 的元素计数），否则拒绝采集（防「等于基准臂」的假零差）;
 - **窗长事件驱动**（等 `message.complete`），`Tracing` 用 `record-continuously` + `dataLoss` 监听——四臂 dataLoss 全为 0，墙钟 62.1–63.8s，均覆盖完整流式（含 fence 闭合段与 complete）；
-- **禁嵌套求和**：所有时长按线程时间轴 union 计（`probes/analyze-gpu-arms.mjs`）。
+- **禁嵌套求和**：所有时长按线程时间轴 union 计（`scripts/perf-probes/analyze-gpu-arms.mjs`）。
 
 ## 2. 数据
 
@@ -95,7 +95,7 @@
 |---|---|---|
 | mask 的逐层栅格成本 | 无 `cc` 层树 dump；`Tracing` 的 `cc` 类别在 macOS 上不给逐层（layer）成本，只给线程级切片 | ① `chrome://tracing` 导入 trace 看 `cc` 类别 layer tree（本机 trace 已归档，可离线看）；② `--enable-gpu-service-logging` + 逐帧命令缓冲；③ 组件级拆臂（单独渲染一个只有 mask 的静态页做基线，扣掉对话流全部其他成本） |
 | blur 的 GPU 时间精确值 | `backdrop-filter` 的开销落在未命名 gap（驱动侧），无专用 GPU timer | ① `powermetrics --samplers gpu_power`（需 sudo，本机不可用）；② Metal System Trace（Xcode Instruments，需 GUI 与真机 hook）；③ 把 blur 换成等面积 `filter: blur()` 做增量对照（语义不同，只作量级参照） |
-| 其他 GPU / 其他分辨率下的比例 | 本机 = Intel Iris Pro（ANGLE/OpenGL 4.1），blur 走的是这条路径；Apple Silicon 的 Metal 路径代价结构不同 | 在 M 系列机器上重跑同一四臂脚本（`probes/gpu-trace.mjs --arm full\|no-blur\|no-mask\|reduced` + `probes/analyze-gpu-arms.mjs`），脚本已参数化、零改动可复跑 |
+| 其他 GPU / 其他分辨率下的比例 | 本机 = Intel Iris Pro（ANGLE/OpenGL 4.1），blur 走的是这条路径；Apple Silicon 的 Metal 路径代价结构不同 | 在 M 系列机器上重跑同一四臂脚本（`scripts/perf-probes/gpu-trace.mjs --arm full\|no-blur\|no-mask\|reduced` + `scripts/perf-probes/analyze-gpu-arms.mjs`），脚本已参数化、零改动可复跑 |
 
 ## 6. 与首轮脏基线的对照（说明为什么必须重测）
 
@@ -114,11 +114,11 @@
 
 ```bash
 # 四臂采集（每臂各跑两次以估噪声；脚本自建 session，不依赖外部 sid）
-node probes/gpu-trace.mjs --data-dir ~/.taiji-dev/verify-b5-final --cdp-port 9488 --arm full     --window-ms 160000 --save /tmp/b5/full.trace.json
-node probes/gpu-trace.mjs --data-dir ~/.taiji-dev/verify-b5-final --cdp-port 9488 --arm no-blur  --window-ms 160000 --save /tmp/b5/noblur.trace.json
-node probes/gpu-trace.mjs --data-dir ~/.taiji-dev/verify-b5-final --cdp-port 9488 --arm no-mask  --window-ms 160000 --save /tmp/b5/nomask.trace.json
-node probes/gpu-trace.mjs --data-dir ~/.taiji-dev/verify-b5-final --cdp-port 9488 --arm reduced  --window-ms 160000 --save /tmp/b5/reduced.trace.json
+node scripts/perf-probes/gpu-trace.mjs --data-dir ~/.taiji-dev/verify-b5-final --cdp-port 9488 --arm full     --window-ms 160000 --save /tmp/b5/full.trace.json
+node scripts/perf-probes/gpu-trace.mjs --data-dir ~/.taiji-dev/verify-b5-final --cdp-port 9488 --arm no-blur  --window-ms 160000 --save /tmp/b5/noblur.trace.json
+node scripts/perf-probes/gpu-trace.mjs --data-dir ~/.taiji-dev/verify-b5-final --cdp-port 9488 --arm no-mask  --window-ms 160000 --save /tmp/b5/nomask.trace.json
+node scripts/perf-probes/gpu-trace.mjs --data-dir ~/.taiji-dev/verify-b5-final --cdp-port 9488 --arm reduced  --window-ms 160000 --save /tmp/b5/reduced.trace.json
 
 # union 口径分析（禁嵌套求和）
-node probes/analyze-gpu-arms.mjs full=/tmp/b5/full.trace.json noblur=/tmp/b5/noblur.trace.json nomask=/tmp/b5/nomask.trace.json reduced=/tmp/b5/reduced.trace.json
+node scripts/perf-probes/analyze-gpu-arms.mjs full=/tmp/b5/full.trace.json noblur=/tmp/b5/noblur.trace.json nomask=/tmp/b5/nomask.trace.json reduced=/tmp/b5/reduced.trace.json
 ```

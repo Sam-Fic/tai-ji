@@ -12,7 +12,7 @@ pnpm --filter @taiji/frontend exec vite build --minify false     # → apps/elec
 pnpm --filter @taiji/frontend exec vite preview --port 4173 --strictPort
 
 # ③ faux 数据目录预置（四类文件 + 响应脚本）
-node .agents/skills/verify-taiji/scripts/seed-faux.mjs <repo> ~/.taiji-dev/verify-b5-final probes/fixtures/original-45k.json --force
+node .agents/skills/verify-taiji/scripts/seed-faux.mjs <repo> ~/.taiji-dev/verify-b5-final scripts/perf-probes/fixtures/original-45k.json --force
 
 # ④ 启动（前台：不设 TAIJI_DEV_BACKGROUND）
 TAIJI_AGENT_DATA_DIR=~/.taiji-dev/verify-b5-final \
@@ -32,16 +32,16 @@ node apps/electron/scripts/dev-electron.mjs .
 
 | 命令 | 用途 | 关键参数 | 输出契约 |
 |---|---|---|---|
-| `node probes/perf-clean-cpu.mjs --data-dir <dir> --cdp-port <p> [--fixture <json>] [--tag <t>] [--model <provider/id>] [--window-ms <n>] [--expect-head <sha>] [--save-dir <dir>] [--runtime-inspect-port 9229] [--pi-inspect-port 9231]` | 干净 CPU 采集：单次运行内 renderer（CDP Profiler 无 tracing + Performance.enable 指标快照）+ runtime（SIGUSR1→inspector→CDP Profiler）+ pi（mock-pi 置换 launcher `--inspect`→CDP Profiler）三进程 profile；pi 二进制三核对置换/恢复 | `--fixture` 指定 faux 脚本（写入 `<dataDir>/agent/faux-responses.json`）；`--expect-head` HEAD 断言（baseline 枝用）；`--window-ms` = 事件驱动收尾的**上限预算**（用户显式传入，非探针自设墙钟） | 末行 `RESULT clean-cpu tag=<t> profiles=3 renderer-sampled=<s>s renderer-nonidle=<p>% runtime-samples=<n> pi-samples=<n> turn-count=<n> load-1m=<n>`；测量无效 exit 3；pi 恢复失败 exit 4 |
-| `node probes/perf-clean-cpu.mjs --verify-pi-only` | pi 置换位三核对（md5 + Mach-O 形态 + 无残留 .b5-bak），不采数据 | — | 末行 `RESULT pi-restore ok=<bool> md5-match=<bool>` |
-| `node probes/pi-profile-launcher.mjs` | mock-pi 置换位本体（被 runtime 当 pi 二进制 exec）：透传 argv，`--inspect` 起 pi cli.js，stdio 双向 pipe，**无任何定时关 stdin** | 环境变量 `PI_PROFILE_INSPECT_PORT`（缺省 9231） | 无 stdout 契约（协议转发）；stderr 一行启动标识 |
-| `node probes/gpu-trace.mjs --data-dir <dir> --sid <sid> [--cdp-port 9478] [--arm full\|no-blur\|reduced] [--window-ms 110000] [--save <file>] [--shot <file>]` | GPU trace 采集（三臂受控实验）：recordContinuously + dataLoss 监听 + 事件驱动窗长 + 中期截图 + FPS overlay | `--arm no-blur` 注入 `[class*="backdrop-blur"]{backdrop-filter:none!important}`；`--arm reduced` 经 `Emulation.setEmulatedMedia` 模拟 prefers-reduced-transparency | 末行 `RESULT gpu-trace arm=<a> wall-span=<s>s events=<n> dataLoss=<n>`；采集无效 exit 3 |
-| `node probes/analyze-gpu-union.mjs <trace.json> [label]` | union 口径分析（墙钟跨度 / 每线程顶层切片 union / Present / ApplyBackpressure / Raster / GPUTask / BeginMainFrame） | — | 多行文本（M1 口径：禁嵌套求和） |
-| `node probes/fixtures/gen-fixtures.mjs` | 三种 fixture 形态生成（确定性 LCG，同 seed 同字节） | `--out` 覆写输出目录 | 每个文件一行 `chars=` |
+| `node scripts/perf-probes/perf-clean-cpu.mjs --data-dir <dir> --cdp-port <p> [--fixture <json>] [--tag <t>] [--model <provider/id>] [--window-ms <n>] [--expect-head <sha>] [--save-dir <dir>] [--runtime-inspect-port 9229] [--pi-inspect-port 9231]` | 干净 CPU 采集：单次运行内 renderer（CDP Profiler 无 tracing + Performance.enable 指标快照）+ runtime（SIGUSR1→inspector→CDP Profiler）+ pi（mock-pi 置换 launcher `--inspect`→CDP Profiler）三进程 profile；pi 二进制三核对置换/恢复 | `--fixture` 指定 faux 脚本（写入 `<dataDir>/agent/faux-responses.json`）；`--expect-head` HEAD 断言（baseline 枝用）；`--window-ms` = 事件驱动收尾的**上限预算**（用户显式传入，非探针自设墙钟） | 末行 `RESULT clean-cpu tag=<t> profiles=3 renderer-sampled=<s>s renderer-nonidle=<p>% runtime-samples=<n> pi-samples=<n> turn-count=<n> load-1m=<n>`；测量无效 exit 3；pi 恢复失败 exit 4 |
+| `node scripts/perf-probes/perf-clean-cpu.mjs --verify-pi-only` | pi 置换位三核对（md5 + Mach-O 形态 + 无残留 .b5-bak），不采数据 | — | 末行 `RESULT pi-restore ok=<bool> md5-match=<bool>` |
+| `node scripts/perf-probes/pi-profile-launcher.mjs` | mock-pi 置换位本体（被 runtime 当 pi 二进制 exec）：透传 argv，`--inspect` 起 pi cli.js，stdio 双向 pipe，**无任何定时关 stdin** | 环境变量 `PI_PROFILE_INSPECT_PORT`（缺省 9231） | 无 stdout 契约（协议转发）；stderr 一行启动标识 |
+| `node scripts/perf-probes/gpu-trace.mjs --data-dir <dir> --sid <sid> [--cdp-port 9478] [--arm full\|no-blur\|reduced] [--window-ms 110000] [--save <file>] [--shot <file>]` | GPU trace 采集（三臂受控实验）：recordContinuously + dataLoss 监听 + 事件驱动窗长 + 中期截图 + FPS overlay | `--arm no-blur` 注入 `[class*="backdrop-blur"]{backdrop-filter:none!important}`；`--arm reduced` 经 `Emulation.setEmulatedMedia` 模拟 prefers-reduced-transparency | 末行 `RESULT gpu-trace arm=<a> wall-span=<s>s events=<n> dataLoss=<n>`；采集无效 exit 3 |
+| `node scripts/perf-probes/analyze-gpu-union.mjs <trace.json> [label]` | union 口径分析（墙钟跨度 / 每线程顶层切片 union / Present / ApplyBackpressure / Raster / GPUTask / BeginMainFrame） | — | 多行文本（M1 口径：禁嵌套求和） |
+| `node scripts/perf-probes/fixtures/gen-fixtures.mjs` | 三种 fixture 形态生成（确定性 LCG，同 seed 同字节） | `--out` 覆写输出目录 | 每个文件一行 `chars=` |
 
-公共 harness：`probes/lib/harness.mjs`（connectRuntime / connectRendererCdp / ensureGuiOnSession / captureStreamingProfile / waitForSessionComplete / windowStats / inclusiveByLabel / selfTimeByLabel；本批新增 `connectNodeInspector` / `captureWindowedProfile` / `readLoadAvg` / `instantCpuOf`）。
+公共 harness：`scripts/perf-probes/lib/harness.mjs`（connectRuntime / connectRendererCdp / ensureGuiOnSession / captureStreamingProfile / waitForSessionComplete / windowStats / inclusiveByLabel / selfTimeByLabel；本批新增 `connectNodeInspector` / `captureWindowedProfile` / `readLoadAvg` / `instantCpuOf`）。
 
-## fixture 契约（`probes/fixtures/`）
+## fixture 契约（`scripts/perf-probes/fixtures/`）
 
 | 文件 | 形态 | 字符数 | 用途 |
 |---|---|---|---|
@@ -77,13 +77,13 @@ for p in 4173 9488 3620; do lsof -nP -iTCP:$p -sTCP:LISTEN -t; done   # 逐个 p
 
 git checkout eff28e4a5
 pnpm --filter @taiji/frontend exec vite build --minify false     # 基线侧的 production bundle
-node .agents/skills/verify-taiji/scripts/seed-faux.mjs . ~/.taiji-dev/verify-b5-baseline probes/fixtures/original-45k.json --force
-DATA_DIR=~/.taiji-dev/verify-b5-baseline PREVIEW_PORT=4174 CDP_PORT=9489 PORT_OFFSET=411 bash probes/b5-start-instance.sh &
+node .agents/skills/verify-taiji/scripts/seed-faux.mjs . ~/.taiji-dev/verify-b5-baseline scripts/perf-probes/fixtures/original-45k.json --force
+DATA_DIR=~/.taiji-dev/verify-b5-baseline PREVIEW_PORT=4174 CDP_PORT=9489 PORT_OFFSET=411 bash scripts/perf-probes/b5-start-instance.sh &
 
-node probes/perf-clean-cpu.mjs --data-dir ~/.taiji-dev/verify-b5-baseline --cdp-port 9489 \
-  --fixture probes/fixtures/original-45k.json --tag baseline --expect-head eff28e4a5f39743782066f6055532924a8ffea8c \
+node scripts/perf-probes/perf-clean-cpu.mjs --data-dir ~/.taiji-dev/verify-b5-baseline --cdp-port 9489 \
+  --fixture scripts/perf-probes/fixtures/original-45k.json --tag baseline --expect-head eff28e4a5f39743782066f6055532924a8ffea8c \
   --window-ms 200000 --save-dir docs/perf/final-measurement
-node probes/gpu-trace.mjs --data-dir ~/.taiji-dev/verify-b5-baseline --cdp-port 9489 --arm full --window-ms 160000 \
+node scripts/perf-probes/gpu-trace.mjs --data-dir ~/.taiji-dev/verify-b5-baseline --cdp-port 9489 --arm full --window-ms 160000 \
   --save <artifacts>/b5-traces/baseline-gpu.trace.json --shot docs/perf/final-measurement/baseline-midstream.png
 
 # 采完立刻回 HEAD 并重建 bundle，再复验 HEAD 与 bundle 标识（防「测了 A 报成 B」）

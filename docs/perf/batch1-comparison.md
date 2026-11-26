@@ -2,7 +2,7 @@
 
 > 采集日期 2026-11-23 · 分支 `feat-cpu-gpu-performance` · 交付 = rail 流式冻结 + preview 懒计算 + truncate 码点级 early-exit
 >
-> **口径声明（先读）**：前后两次采集不是同一次运行，也不共享同一窗口结构。本表所有数字都用**同一套脚本、同一份函数/切片名单**对两侧的原始产物复算得出（脚本随交付物入库：`probes/analyze-gpu-union.mjs`、`probes/perf-derivatives.mjs`），但**跨运行的绝对差含采集噪声**（GLM 对抗审查 A7/A8 已实证同场景跨运行差异 ≥2.7×）。因此本表的结论只承载**量级与方向**，不承载精确百分比；凡涉及"前/后"的差，一律同时给出绝对值和窗口占比两个口径。
+> **口径声明（先读）**：前后两次采集不是同一次运行，也不共享同一窗口结构。本表所有数字都用**同一套脚本、同一份函数/切片名单**对两侧的原始产物复算得出（脚本随交付物入库：`scripts/perf-probes/analyze-gpu-union.mjs`、`scripts/perf-probes/perf-derivatives.mjs`），但**跨运行的绝对差含采集噪声**（GLM 对抗审查 A7/A8 已实证同场景跨运行差异 ≥2.7×）。因此本表的结论只承载**量级与方向**，不承载精确百分比；凡涉及"前/后"的差，一律同时给出绝对值和窗口占比两个口径。
 
 ## 0. 采集 harness
 
@@ -17,13 +17,13 @@
 
 基线原始产物（**只读，未重测**）：`~/.taiji/ext-sessions/01a2077f-d676-7095-b142-db7b972391f7/artifacts/profiling-data/`（`run-notrace-renderer.cpuprofile` = CPU 权威数据集，`run2d-renderer.trace.json` = GPU 数据集）。
 
-after 侧原始产物（`.run/after-renderer.cpuprofile` / `.run/after-gpu.trace.json` / `.run/after-midstream.png`）**不入库**（`.run/` 在 .gitignore）——它们体积大（trace 745K 事件）且含屏幕内容。**复算脚本全部入库**（`probes/deriv-family.mjs` / `probes/gpu-compare.mjs` / `probes/analyze-gpu-union.mjs` / `probes/perf-derivatives.mjs`），故给定上述任一侧产物即可逐字复现本表所有数字；after 侧产物可用 T1/G1 验收 case 重新生成（`probes/perf-derivatives.mjs --save` / `probes/gpu-trace.mjs --save`）。
+after 侧原始产物（`.run/after-renderer.cpuprofile` / `.run/after-gpu.trace.json` / `.run/after-midstream.png`）**不入库**（`.run/` 在 .gitignore）——它们体积大（trace 745K 事件）且含屏幕内容。**复算脚本全部入库**（`scripts/perf-probes/deriv-family.mjs` / `scripts/perf-probes/gpu-compare.mjs` / `scripts/perf-probes/analyze-gpu-union.mjs` / `scripts/perf-probes/perf-derivatives.mjs`），故给定上述任一侧产物即可逐字复现本表所有数字；after 侧产物可用 T1/G1 验收 case 重新生成（`scripts/perf-probes/perf-derivatives.mjs --save` / `scripts/perf-probes/gpu-trace.mjs --save`）。
 
 ## 1. 派生生族 self-time（核心指标）
 
 派生族 = `railMemoFor` → `summarizeTurnForRail` / `summarizeAssistantForRail` / `stripMarkdown` / `truncate` + `turnPreview` / `previewText` + `buildStreamViewItems`。
 
-复算口径：`node probes/deriv-family.mjs <profile> <relFromS> <relToS>`（与 `probes/perf-derivatives.mjs` 同一函数名单）。窗口取各自 profile 的**流式段**（before = +10..+73s，after = +65..+80s，即各自 findNextMatchSync/shiki 突发所在的流式段）。
+复算口径：`node scripts/perf-probes/deriv-family.mjs <profile> <relFromS> <relToS>`（与 `scripts/perf-probes/perf-derivatives.mjs` 同一函数名单）。窗口取各自 profile 的**流式段**（before = +10..+73s，after = +65..+80s，即各自 findNextMatchSync/shiki 突发所在的流式段）。
 
 | 口径 | before | after | 变化 |
 |---|---|---|---|
@@ -38,7 +38,7 @@ after 侧原始产物（`.run/after-renderer.cpuprofile` / `.run/after-gpu.trace
 | └ `turnPreview` | 1.515ms | — | 归零 |
 | 占流式窗采样时长 | 2.919s / 63.0s = 4.6% | 0.005s / 15.0s = 0.03% | −99.4% |
 
-**真机阈值断言（T1 探针）**：`node probes/perf-derivatives.mjs --data-dir <dir> --sid <sid> --threshold-s 0.3`
+**真机阈值断言（T1 探针）**：`node scripts/perf-probes/perf-derivatives.mjs --data-dir <dir> --sid <sid> --threshold-s 0.3`
 ```
 RESULT deriv-family-self-time=0.000s threshold=0.3s PASS
 ```
@@ -73,7 +73,7 @@ RESULT deriv-family-self-time=0.000s threshold=0.3s PASS
 
 ## 3. GPU union 口径前后对比
 
-口径：按线程时间轴 union（嵌套子切片不重复计数——GLM 审查 M1 判定的正确口径）。复算脚本：`probes/analyze-gpu-union.mjs`（全窗）+ `probes/gpu-compare.mjs`（可指定子窗口）。
+口径：按线程时间轴 union（嵌套子切片不重复计数——GLM 审查 M1 判定的正确口径）。复算脚本：`scripts/perf-probes/analyze-gpu-union.mjs`（全窗）+ `scripts/perf-probes/gpu-compare.mjs`（可指定子窗口）。
 
 窗内组成不同：before 的 33.67s 里前 ~10s 是 pi 冷启动（每 2s 桶 GPU 活动 66–157ms），后 23s 是流式段（每 2s 桶 ~10,000ms）；after 的 34.65s 全程活跃（jiti 磁盘缓存已热，无冷启动段）。故同时给两个口径：
 
@@ -111,16 +111,16 @@ RESULT deriv-family-self-time=0.000s threshold=0.3s PASS
 ```bash
 P=~/.taiji/ext-sessions/01a2077f-d676-7095-b142-db7b972391f7/artifacts/profiling-data
 # 派生生族（CPU）
-node probes/deriv-family.mjs $P/run-notrace-renderer.cpuprofile 10 73   # before
-node probes/deriv-family.mjs .run/after-renderer.cpuprofile 65 80       # after
+node scripts/perf-probes/deriv-family.mjs $P/run-notrace-renderer.cpuprofile 10 73   # before
+node scripts/perf-probes/deriv-family.mjs .run/after-renderer.cpuprofile 65 80       # after
 # renderer TOP10（CPU，官方脚本）
 node $P/analyze-cpuprofile.mjs $P/run-notrace-renderer.cpuprofile 12 --rel-from 10 --rel-to 73
 node $P/analyze-cpuprofile.mjs .run/after-renderer.cpuprofile 12 --rel-from 65 --rel-to 80
 # GPU union（全窗）
-node probes/analyze-gpu-union.mjs $P/run2d-renderer.trace.json run2d-before
-node probes/analyze-gpu-union.mjs .run/after-gpu.trace.json after
+node scripts/perf-probes/analyze-gpu-union.mjs $P/run2d-renderer.trace.json run2d-before
+node scripts/perf-probes/analyze-gpu-union.mjs .run/after-gpu.trace.json after
 # GPU union（流式子窗对比）
-node probes/gpu-compare.mjs $P/run2d-renderer.trace.json .run/after-gpu.trace.json 10 33 0 34
+node scripts/perf-probes/gpu-compare.mjs $P/run2d-renderer.trace.json .run/after-gpu.trace.json 10 33 0 34
 ```
 
 ## 5. 可比性声明与残余风险

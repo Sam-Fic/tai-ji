@@ -8,19 +8,19 @@
 
 | 命令 | 用途 | 关键输出 |
 |---|---|---|
-| `node probes/perf-shiki-worker.mjs --data-dir <dir> --sid <sid> --threshold-s 0.3 [--save <profile>]` | T1：流式全程 CDP profile → fence 闭合窗口 shiki 族 self-time 阈值断言 + 在场有效性（高亮确实发生 + worker 成本日志） | `RESULT shiki-family-self-time=<s> threshold=<s> PASS\|FAIL`；`worker-init-ms=` / `worker-job-ms=` 行 |
-| `node_modules/.bin/tsx probes/shiki-html-diff.mjs --data-dir <dir> --sid <sid>` | T2：完成消息 DOM 代码块 HTML vs 同源配置主线程算法重算，归一化对拍 | `RESULT shiki-html-identical:true\|false` |
-| `node probes/shiki-fallback-probe.mjs --data-dir <dir> --sid <sid>` | T3：CDP 拦 worker 脚本 → 断言回退同步高亮保留 + 降级出声 | `RESULT fallback-highlight-preserved:true highlighted:true fallback-logged:true` |
-| `node probes/streaming-placeholder.mjs --data-dir <dir> --sid <sid>` | T4：流式中途占位在场（无 shiki 产物）→ complete 后占位消失 + 高亮在场 | `RESULT streaming-placeholder:true final-highlighted:true placeholder-gone:true` |
-| `env -u ELECTRON_RUN_AS_NODE node_modules/.bin/electron probes/csp-worker-probe.cjs` | T5：真实 Electron 二进制，运行时读取 packages/renderer/index.html 的 CSP 串，验证 file://（打包态）与 http（dev 态）同源 module worker | `FILE_MODULE_WORKER=OK` / `HTTP_MODULE_WORKER=OK` |
+| `node scripts/perf-probes/perf-shiki-worker.mjs --data-dir <dir> --sid <sid> --threshold-s 0.3 [--save <profile>]` | T1：流式全程 CDP profile → fence 闭合窗口 shiki 族 self-time 阈值断言 + 在场有效性（高亮确实发生 + worker 成本日志） | `RESULT shiki-family-self-time=<s> threshold=<s> PASS\|FAIL`；`worker-init-ms=` / `worker-job-ms=` 行 |
+| `node_modules/.bin/tsx scripts/perf-probes/shiki-html-diff.mjs --data-dir <dir> --sid <sid>` | T2：完成消息 DOM 代码块 HTML vs 同源配置主线程算法重算，归一化对拍 | `RESULT shiki-html-identical:true\|false` |
+| `node scripts/perf-probes/shiki-fallback-probe.mjs --data-dir <dir> --sid <sid>` | T3：CDP 拦 worker 脚本 → 断言回退同步高亮保留 + 降级出声 | `RESULT fallback-highlight-preserved:true highlighted:true fallback-logged:true` |
+| `node scripts/perf-probes/streaming-placeholder.mjs --data-dir <dir> --sid <sid>` | T4：流式中途占位在场（无 shiki 产物）→ complete 后占位消失 + 高亮在场 | `RESULT streaming-placeholder:true final-highlighted:true placeholder-gone:true` |
+| `env -u ELECTRON_RUN_AS_NODE node_modules/.bin/electron scripts/perf-probes/csp-worker-probe.cjs` | T5：真实 Electron 二进制，运行时读取 packages/renderer/index.html 的 CSP 串，验证 file://（打包态）与 http（dev 态）同源 module worker | `FILE_MODULE_WORKER=OK` / `HTTP_MODULE_WORKER=OK` |
 
 复算命令（前后对比表数字，任意 cwd 仓库根）：
 
 ```bash
 # after 侧 shiki 族 self-time（流式全程，T1 保存的 profile）
-node probes/shiki-family.mjs .run/b3-after-renderer.cpuprofile <relFromS> <relToS>
+node scripts/perf-probes/shiki-family.mjs .run/b3-after-renderer.cpuprofile <relFromS> <relToS>
 # before 侧同口径（基线只读）
-node probes/shiki-family.mjs ~/.taiji/ext-sessions/01a2077f-d676-7095-b142-db7b972391f7/artifacts/profiling-data/run-notrace-renderer.cpuprofile 10 73
+node scripts/perf-probes/shiki-family.mjs ~/.taiji/ext-sessions/01a2077f-d676-7095-b142-db7b972391f7/artifacts/profiling-data/run-notrace-renderer.cpuprofile 10 73
 ```
 
 ## 工具

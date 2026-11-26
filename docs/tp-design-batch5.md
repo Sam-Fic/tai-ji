@@ -32,10 +32,10 @@
 | 1 | prod 构建（至少 `--mode production` 的 vite build 产物） | `pnpm --filter @taiji/frontend exec vite build --minify false`（**production 模式 + 关 minify**）+ `vite preview` 静态伺服，经 `TAIJI_VITE_DEV_URL` 注入 dev Electron 壳 | minify 关闭（见 F2：minified 产物函数名被 mangle，CPU 归因不可用）；dev 主进程/runtime/pi 仍 dev 形态（tsx/jiti）——renderer 侧 dev 扭曲（HMR client / Vite 转发 / vue-i18n mark+measure / Vue dev 构建）已消除（F1） |
 | 2 | 窗口前台可见 | 不设 `TAIJI_DEV_BACKGROUND`（dev-instance 透传该值才走 showInactive） | 无 |
 | 3 | 无其他 Electron 并存 | 测量前枚举并停掉本 worktree 的 dev 实例（端口+明确路径，遵守全局击杀纪律）；**打包版 TaiJi.app 是本会话宿主（session 数据目录 `~/.taiji/ext-sessions`），不可安全关闭 → 登记受限条件 L1**：实测其采集期瞬时 CPU（近 0% 才采，否则重测） | L1：另一合成器在位（idle 形态）；其 GPU helper/renderer 的瞬时 CPU 逐次记录进环境声明 |
-| 4 | 同一运行内采齐三进程 | 新探针 `probes/perf-clean-cpu.mjs`：单次运行内 renderer（CDP Profiler，无 tracing）+ runtime（SIGUSR1 → inspector → CDP Profiler）+ pi（mock-pi 置换为 node launcher，`--inspect` → CDP Profiler），同一 send 锚点、事件驱动收尾（`message.complete`） | pi 进程形态 = node + cli.js（非 Bun SEA，见 F6）——绝对 CPU 不可与真 Bun pi 比；流式窗内 pi 的角色（事件转发/序列化）不变 |
-| 5 | Tracing recordContinuously + dataLoss 处理 | `probes/gpu-trace.mjs` 增补：`options:'record-continuously'` + `Tracing.dataLossOccured` 监听（记录丢失事件数，丢失 >0 在报告显式登记）+ 窗长按流式实际长度事件驱动延长（覆盖 fence 闭合与 complete） | 无 |
+| 4 | 同一运行内采齐三进程 | 新探针 `scripts/perf-probes/perf-clean-cpu.mjs`：单次运行内 renderer（CDP Profiler，无 tracing）+ runtime（SIGUSR1 → inspector → CDP Profiler）+ pi（mock-pi 置换为 node launcher，`--inspect` → CDP Profiler），同一 send 锚点、事件驱动收尾（`message.complete`） | pi 进程形态 = node + cli.js（非 Bun SEA，见 F6）——绝对 CPU 不可与真 Bun pi 比；流式窗内 pi 的角色（事件转发/序列化）不变 |
+| 5 | Tracing recordContinuously + dataLoss 处理 | `scripts/perf-probes/gpu-trace.mjs` 增补：`options:'record-continuously'` + `Tracing.dataLossOccured` 监听（记录丢失事件数，丢失 >0 在报告显式登记）+ 窗长按流式实际长度事件驱动延长（覆盖 fence 闭合与 complete） | 无 |
 | 6 | Performance.enable 交叉验证 | renderer CDP `Performance.enable` + 窗内每秒 `Performance.getMetrics` 快照 → TaskDuration/LayoutDuration/RecalcStyleDuration/ScriptDuration 与 (program) 占比对账 | 无 |
-| 7 | 补 fixture 形态 | `probes/fixtures/gen-fixtures.mjs` 生成三种形态（多小代码块 24 fence / 工具调用 7 次 bash / 重 thinking 24K），体量与 original-45k 对齐（40-46K 字符） | 合成语料 ≠ 真实对话语义；结论只承载「形态覆盖无回归/无新热点」 |
+| 7 | 补 fixture 形态 | `scripts/perf-probes/fixtures/gen-fixtures.mjs` 生成三种形态（多小代码块 24 fence / 工具调用 7 次 bash / 重 thinking 24K），体量与 original-45k 对齐（40-46K 字符） | 合成语料 ≠ 真实对话语义；结论只承载「形态覆盖无回归/无新热点」 |
 | 8 | 归档全部原始文件 | 采集产物三处分层：① `.cpuprofile`/截图/日志 → `docs/perf/final-measurement/`（入库，体积受控者）；② 大 trace.json（~30MB/个）→ 本会话 artifacts（不入库，报告给绝对路径）；③ 分析中间产物 → `.run/`（gitignore） | 无 |
 
 ## 树形拆分
@@ -43,7 +43,7 @@
 主干 = **干净测量基建**（在当前 HEAD 上先跑通一次完整采集，证明 harness 自身有效且「三进程同运行 + recordContinuously + Performance.enable」可复现）。
 
 主干文件清单：
-- probes/
+- scripts/perf-probes/
 - docs/tp-design-batch5.md
 - docs/tp-acceptance-batch5.md
 - docs/tp-api-batch5.md
@@ -54,23 +54,23 @@
 
 | 枝名 | 目标 | 依赖 | 风险级 | 文件 | case |
 |---|---|---|---|---|---|
-| B-measure | G1 的 harness：三进程同运行采集探针 + pi 置换 launcher + GPU trace 补强 + 三种 fixture + `.tree-plant.json` docs 键覆写（主干枝：其验收 = trunk gate 的 M1/M2/P1） | — | 高（测量基建坏 = 全批数据不可引用） | probes/perf-clean-cpu.mjs, probes/pi-profile-launcher.mjs, probes/gpu-trace.mjs, probes/lib/harness.mjs, probes/fixtures/*, probes/analyze-clean-cpu.mjs, probes/analyze-gpu-arms.mjs, probes/analyze-original-baseline.mjs, probes/cpuprofile-to-folded.mjs, probes/check-final-reports.mjs, probes/b5-start-instance.sh, .tree-plant.json, docs/tp-*-batch5.md | M1,M2 |
-| B-clean-final | G1/G2 的 after 侧：HEAD 代码的干净 CPU + GPU 采集与归档 | trunk | 中 | docs/perf/final-measurement/*, probes/*（探针修正） | M1,M2 |
+| B-measure | G1 的 harness：三进程同运行采集探针 + pi 置换 launcher + GPU trace 补强 + 三种 fixture + `.tree-plant.json` docs 键覆写（主干枝：其验收 = trunk gate 的 M1/M2/P1） | — | 高（测量基建坏 = 全批数据不可引用） | scripts/perf-probes/perf-clean-cpu.mjs, scripts/perf-probes/pi-profile-launcher.mjs, scripts/perf-probes/gpu-trace.mjs, scripts/perf-probes/lib/harness.mjs, scripts/perf-probes/fixtures/*, scripts/perf-probes/analyze-clean-cpu.mjs, scripts/perf-probes/analyze-gpu-arms.mjs, scripts/perf-probes/analyze-original-baseline.mjs, scripts/perf-probes/cpuprofile-to-folded.mjs, scripts/perf-probes/check-final-reports.mjs, scripts/perf-probes/b5-start-instance.sh, .tree-plant.json, docs/tp-*-batch5.md | M1,M2 |
+| B-clean-final | G1/G2 的 after 侧：HEAD 代码的干净 CPU + GPU 采集与归档 | trunk | 中 | docs/perf/final-measurement/*, scripts/perf-probes/*（探针修正） | M1,M2 |
 | B-clean-baseline | G2 的 before 侧：`eff28e4a5`（pre-batch1）代码的干净 CPU + GPU 采集（含 git checkout 舞蹈与 HEAD 断言） | trunk | 高（工作区状态风险） | docs/perf/final-measurement/baseline-* | M3,M4 |
 | B-gpu-decision | G3：三臂 A/B（full / no-blur / reduced-transparency）+ 裁决文档 | trunk | 中 | docs/perf/gpu-decision.md, docs/perf/final-measurement/gpu-* | G1,G2,G3,G4 |
 | B-fixture-forms | G5：三种 fixture 形态各一轮（HEAD 代码） | trunk | 低 | docs/perf/final-measurement/form-* | F1,F2,F3 |
-| B-final-report | G2/G4：终版对比表 + 汇总报告 + 报告对账探针（结构/数字/裁决方向/索引四类机器断言，含变异验证） | B-clean-final, B-clean-baseline, B-gpu-decision, B-fixture-forms | 中 | docs/perf/final-comparison.md, docs/perf/final-summary.md, probes/check-final-reports.mjs, probes/analyze-original-baseline.mjs, docs/tp-acceptance-batch5.md | R1 |
+| B-final-report | G2/G4：终版对比表 + 汇总报告 + 报告对账探针（结构/数字/裁决方向/索引四类机器断言，含变异验证） | B-clean-final, B-clean-baseline, B-gpu-decision, B-fixture-forms | 中 | docs/perf/final-comparison.md, docs/perf/final-summary.md, scripts/perf-probes/check-final-reports.mjs, scripts/perf-probes/analyze-original-baseline.mjs, docs/tp-acceptance-batch5.md | R1 |
 
 > checkout 舞蹈的安全规程（B-clean-baseline）：dev 实例必须已停（runtime 是 tsx 直读工作区源码，混码即数据污染）；测量探针启动时断言 `git rev-parse HEAD` = 目标 commit，不符即 exit 3；测完立即 `git checkout feat-cpu-gpu-performance` 并复验 HEAD + `git status` 干净。apps/electron 在 34 个 commit 中零改动（F4）⇒ main/preload dist 无需重建；renderer bundle 需按各侧代码分别构建（ui/core/renderer 均经 workspace src 进 bundle，F5）。
 
 ## 方案要点
 
-### B-measure：三进程同运行采集（`probes/perf-clean-cpu.mjs`）
+### B-measure：三进程同运行采集（`scripts/perf-probes/perf-clean-cpu.mjs`）
 
 单次运行内按序：
 
 1. **前置校验**：load 采样（`uptime` 1 分钟均值，>15 拒绝采集并提示等安静窗）；HEAD 断言（baseline 枝）；pi 二进制 md5 记录；`lsof` 确认 CDP/runtime 端口归属本实例。
-2. **pi 置换**：`mv pi-darwin-x64 pi-darwin-x64.b5-bak` + 安装 `probes/pi-profile-launcher.mjs`（chmod +x，shebang `#!/usr/bin/env node`）。launcher = 原样透传 runtime 给的 argv，`spawn(execPath, ['--inspect=9231', CLI, ...args], stdio: pipe)` 并双向 pipe stdin/stdout——**不设任何关 stdin 定时器**（pi 生命周期归 runtime，禁时间机制）；探针显式 CDP Profiler.start/stop 取窗口化 profile，无 flush 依赖。退出时**三核对恢复**（mv 回 + md5 比对 + `file` 形态）。
+2. **pi 置换**：`mv pi-darwin-x64 pi-darwin-x64.b5-bak` + 安装 `scripts/perf-probes/pi-profile-launcher.mjs`（chmod +x，shebang `#!/usr/bin/env node`）。launcher = 原样透传 runtime 给的 argv，`spawn(execPath, ['--inspect=9231', CLI, ...args], stdio: pipe)` 并双向 pipe stdin/stdout——**不设任何关 stdin 定时器**（pi 生命周期归 runtime，禁时间机制）；探针显式 CDP Profiler.start/stop 取窗口化 profile，无 flush 依赖。退出时**三核对恢复**（mv 回 + md5 比对 + `file` 形态）。
 3. **runtime inspector**：`kill -USR1 <runtimePid>`（Node 默认行为激活 inspector，端口 9229；F6 实证 runtime 源码与 tsx cli 均无 SIGUSR1 handler）→ 轮询 `http://127.0.0.1:9229/json/list` 直到出现 → CDP Profiler。
 4. **renderer**：CDP `Profiler.enable/start`（**无 tracing**）+ `Performance.enable` + 每秒 `getMetrics` 快照（异步累积，不进采样栈）。
 5. **锚点与收尾**：`delivery.submit`（clientUuid）为 t0；等 `message.complete`（事件驱动，非固定窗；超时 = 用户显式传入预算，到期弃测 exit 3 不杀进程）→ 停三个 profiler → 落盘 3 个 cpuprofile + metrics.json + env.json（load / ps 快照 / 端口归属 / 打包版瞬时 CPU）。
@@ -78,7 +78,7 @@
 
 ### B-gpu-decision：三臂受控实验
 
-同一 fixture、同一 harness、同一安静窗，三臂各采一次 GPU trace（`probes/gpu-trace.mjs --arm <full|no-blur|reduced>`）：
+同一 fixture、同一 harness、同一安静窗，三臂各采一次 GPU trace（`scripts/perf-probes/gpu-trace.mjs --arm <full|no-blur|reduced>`）：
 
 | 臂 | 注入 | 隔离的变量 |
 |---|---|---|
@@ -97,7 +97,7 @@ before/after 各一次完整采集（CPU 三进程 + GPU trace），唯一差异
 - **测量有效性优先于结论**：探针一律「无效即 exit 3」，绝不允许空数据 PASS（批1-4 既定纪律，本批沿用并加 HEAD 断言与 load 门）。
 - **禁时间判死**：全部收尾事件驱动（`message.complete`）；超时预算由调用方显式传入；不杀任何进程（含挂死的 pi——收终归用户）。
 - **零产品代码改动**：本批交付物 = 探针 + 文档 + 归档。GPU 裁决若为「动」，只产设计建议与后续批次登记，不在本批改视觉代码。
-- **可复现**：fixture 由确定性生成器产出并入库；分析脚本全部入库（`probes/analyze-gpu-union.mjs` / `probes/deriv-family.mjs` / `probes/perf-component-render.mjs` / `probes/perf-forced-layout.mjs` / `probes/shiki-family.mjs` / `probes/lib/harness.mjs`）；报告给复算命令。
+- **可复现**：fixture 由确定性生成器产出并入库；分析脚本全部入库（`scripts/perf-probes/analyze-gpu-union.mjs` / `scripts/perf-probes/deriv-family.mjs` / `scripts/perf-probes/perf-component-render.mjs` / `scripts/perf-probes/perf-forced-layout.mjs` / `scripts/perf-probes/shiki-family.mjs` / `scripts/perf-probes/lib/harness.mjs`）；报告给复算命令。
 
 ### 显式不做
 
@@ -107,7 +107,7 @@ before/after 各一次完整采集（CPU 三进程 + GPU trace），唯一差异
 | 改 EdgeFade 视觉代码（即使裁决为「动」） | 本批只产裁决与设计建议；视觉改动需独立批次走设计 | 否（题面要求「据实决策」而非实施） | 裁决为「动」且用户批准后续批次 |
 | 完整 `pnpm build` 打包形态 | 打包版 TaiJi.app 是本会话宿主，无法并行起第二份同 bundle 实例（单实例锁 + 数据目录竞争）；prod renderer bundle 已满足纪律 1 的第一选项 | 否（纪律 1 给的是二选一） | 有独立打包测量环境时 |
 | `powermetrics` GPU 计数器 | 需 sudo，本机不可用（首轮已登记） | 否 | 用户提供 sudo 环境 |
-| 探针的类型层（probes/ 下全部 .mjs） | 类型层放弃：真机采集/分析探针是零依赖 Node 一次性脚本，沿用批1-4 口径不进 tsc 类型层（无构建步骤、无跨包复用） | 否 | 探针被非采集链路依赖（进 CI 常驻、被产品代码 import）或出现跨文件复用需求时，改为 TS + 独立 tsconfig |
+| 探针的类型层（scripts/perf-probes/ 下全部 .mjs） | 类型层放弃：真机采集/分析探针是零依赖 Node 一次性脚本，沿用批1-4 口径不进 tsc 类型层（无构建步骤、无跨包复用） | 否 | 探针被非采集链路依赖（进 CI 常驻、被产品代码 import）或出现跨文件复用需求时，改为 TS + 独立 tsconfig |
 | 全量 e2e / 真实 LLM 回归 | 与本批目标无关：零产品代码改动，e2e 影响面为 0（`e2e-map` 无 rule 命中） | 否 | 本批若新增/修改任何产品代码（当前设计明确为零改动）时，重审并跑 `node scripts/select-affected-e2e.mjs --base <ref>` 圈定的子集 |
 | 三臂之外的 GPU 拆解（如逐层 blur 半径对照） | 投入产出不符：裁决只需 blur / mask / 总量三档 | 否 | 裁决为「动」且需定降档档位时 |
 | 对 pi 用真 Bun SEA 采 profile | Bun 不食 NODE_OPTIONS、SIGUSR1 直接杀死它（首轮已实证）；mock-pi 置换是既有规范手段 | 否 | pi 上游提供 inspector 入口时 |

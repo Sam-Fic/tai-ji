@@ -114,7 +114,7 @@
 |---|---|---|
 | 基线 | `docs/perf/final-measurement/baseline-renderer.folded.txt`（1982 栈） | `flamegraph.pl baseline-renderer.folded.txt > baseline.svg`；或 speedscope 导入；或 DevTools Performance 直接加载同名 `.cpuprofile` |
 | 终版 | `docs/perf/final-measurement/final-renderer.folded.txt`（965 栈） | 同上 |
-| 生成器 | `node probes/cpuprofile-to-folded.mjs <profile> [--from s] [--to s]` | — |
+| 生成器 | `node scripts/perf-probes/cpuprofile-to-folded.mjs <profile> [--from s] [--to s]` | — |
 
 **栈数对比本身是一条结论**：1982 → 965 条不同栈（−51%）——热路径的形状从「每 delta 走一遍完整派生+渲染链」收敛成更窄的少量路径。
 
@@ -122,32 +122,32 @@
 
 | 类别 | 路径 | 说明 |
 |---|---|---|
-| 三进程 profile（baseline / final / final-r2 / 三形态） | `docs/perf/final-measurement/*.cpuprofile` | 入库（8.0MB 全量） |
+| 三进程 profile（baseline / final / final-r2 / 三形态） | renderer 侧 6 件：`docs/perf/final-measurement/*-renderer.cpuprofile`（入库，无绝对路径，DevTools 可直接加载）；pi/runtime 侧 12 件：归档出库（branch-review dmg-r1-2：内嵌 worktree 绝对路径，rule-22① 不入库） | pi/runtime 本体落会话 artifacts `<sessionsRoot>/<sessionId>/artifacts/final-measurement-raw/`，去向与 md5/bytes 对账见同目录 `raw-artifacts-manifest.json`（会话扫描通配解析，与下行 GPU trace 同模式） |
 | CDP metrics 快照 | `docs/perf/final-measurement/*-metrics.json` | 每秒一次，`Performance.enable` 后采集 |
 | 环境声明 | `docs/perf/final-measurement/*-env.json` | HEAD / load / fixture md5 / bundle index md5 / 端口 / 并存 Electron 瞬时 CPU / 窗长 |
-| 分析原始输出 | `docs/perf/final-measurement/cpu-analysis.txt` / `gpu-analysis.txt` | 本报告与 final-comparison 的所有数字的机器输出 |
+| 分析原始输出 | cpu-analysis.txt（归档，同上清单）；gpu-analysis.txt 在库：`docs/perf/final-measurement/gpu-analysis.txt` | 本报告与 final-comparison 的所有数字的机器输出；check-final-reports 经清单定位 cpu-analysis.txt 并 md5 对账 |
 | 构建证据 | `docs/perf/final-measurement/build-probe-grep.txt` | dev 插桩串计数 + 函数名可归因性 |
 | 截图 | `docs/perf/final-measurement/{baseline,final}-midstream.png` | 流式中期（FPS overlay 在场） |
 | **GPU trace 本体 ×9** | `<sessionsRoot>/<sessionId>/artifacts/b5-traces/*.trace.json`（2.2GB） | baseline-gpu / final-gpu / r2-full / r2-no-blur / r2-no-mask / arm-no-blur / arm-no-mask / arm-reduced |
 | **trace 清单（同源凭据）** | `docs/perf/final-measurement/gpu-trace-manifest.json` | 每个分析 label ↔ trace 文件名的 md5 对账；`check-clean-artifacts.mjs` 在 trace 可达时当场复算比对（防止 gate 重跑覆盖 trace 后「归档分析 ↔ trace 本体」悄悄漂移——本批实测踩到过一次） |
 | 首轮原始数据（只读） | `~/.taiji/ext-sessions/01a2077f-.../artifacts/profiling-data/`（44MB） | 首轮权威两件 + 复算脚本 |
-| 复算脚本 | `probes/analyze-clean-cpu.mjs` / `analyze-gpu-arms.mjs` / `analyze-gpu-union.mjs` / `cpuprofile-to-folded.mjs` / `perf-clean-cpu.mjs` / `gpu-trace.mjs` | 全部入库、零依赖 |
+| 复算脚本 | `scripts/perf-probes/`（测量工具族，登记见 [docs/testing/perf-probes.md](../testing/perf-probes.md)）：analyze-clean-cpu / analyze-gpu-arms / analyze-gpu-union / cpuprofile-to-folded / perf-clean-cpu / gpu-trace | 全部入库、零依赖 |
 
 ## 7. 复算命令
 
 ```bash
-# CPU 对比表（含 (program) 交叉验证）：任意 cwd、仓库根
-node probes/analyze-clean-cpu.mjs baseline=docs/perf/final-measurement final=docs/perf/final-measurement
-node probes/analyze-clean-cpu.mjs form-fences=docs/perf/final-measurement form-tools=docs/perf/final-measurement form-thinking=docs/perf/final-measurement
+# CPU 对比表（含 (program) 交叉验证）：任意 cwd、仓库根（renderer profile + env + metrics 均在库）
+node scripts/perf-probes/analyze-clean-cpu.mjs baseline=docs/perf/final-measurement final=docs/perf/final-measurement
+node scripts/perf-probes/analyze-clean-cpu.mjs form-fences=docs/perf/final-measurement form-tools=docs/perf/final-measurement form-thinking=docs/perf/final-measurement
 
 # GPU union 分析（把 artifacts 里的 trace 拷回来即可）
-node probes/analyze-gpu-arms.mjs clean-baseline=/tmp/b5/baseline-gpu.trace.json final-r1=/tmp/b5/final-gpu.trace.json \
+node scripts/perf-probes/analyze-gpu-arms.mjs clean-baseline=/tmp/b5/baseline-gpu.trace.json final-r1=/tmp/b5/final-gpu.trace.json \
   noblur-r1=/tmp/b5/arm-no-blur.trace.json nomask-r1=/tmp/b5/arm-no-mask.trace.json reduced-r1=/tmp/b5/arm-reduced.trace.json
 
 # 火焰图
-node probes/cpuprofile-to-folded.mjs docs/perf/final-measurement/final-renderer.cpuprofile > /tmp/final.folded
+node scripts/perf-probes/cpuprofile-to-folded.mjs docs/perf/final-measurement/final-renderer.cpuprofile > /tmp/final.folded
 
-# 重采（需实例；见 docs/tp-api-batch5.md 的启动命令）
-node probes/perf-clean-cpu.mjs --data-dir ~/.taiji-dev/verify-b5-final --cdp-port 9488 \
-  --fixture probes/fixtures/original-45k.json --tag final --window-ms 200000 --save-dir docs/perf/final-measurement
+# 重采（需实例；见 docs/tp-api-batch5.md 的启动命令）。原始采集物不入库，产出落 .run（*.cpuprofile 已 gitignore）
+node scripts/perf-probes/perf-clean-cpu.mjs --data-dir ~/.taiji-dev/verify-b5-final --cdp-port 9488 \
+  --fixture scripts/perf-probes/fixtures/original-45k.json --tag final --window-ms 200000 --save-dir .run/final-measurement-raw
 ```

@@ -3,7 +3,7 @@
 > 采集分支 `feat-cpu-gpu-performance` · 交付 = fence 闭合的 shiki 高亮 Web Worker 化（主线程发「代码文本+语言」，worker 跑 codeToHtml 回填 HTML）+ 两壳 CSP 显式 `worker-src 'self'` + 失败降级（worker 不可用 → 主线程同步高亮，高亮不丢）+ 流式期 streaming-fence 占位保留。
 > 依据 = [adversarial-review-glm.md](adversarial-review-glm.md) F 节建议 3 / C4 / D6 / M6（shiki 突发在 fence 闭合时刻、complete 处为零；分帧 tokenize 对单块无效、可视区优先粒度不匹配，Worker 是唯一与块大小无关的解）。
 >
-> **口径声明（先读，照批1/批2）**：前后两次采集不是同一次运行，也不共享同一窗口结构。本表所有数字都用**同一套脚本、同一份函数名单**对两侧的原始产物复算得出（脚本随交付物入库：`probes/shiki-family.mjs`，与验收探针 `probes/perf-shiki-worker.mjs` 同一 SHIKI_FAMILY_RE），但**跨运行的绝对差含采集噪声**（GLM 审查实证同场景跨运行差异 ≥2.7×）。因此结论只承载**量级与方向**，不承载精确百分比；凡涉及"前/后"的差，一律同时给出绝对值和窗口占比两个口径。
+> **口径声明（先读，照批1/批2）**：前后两次采集不是同一次运行，也不共享同一窗口结构。本表所有数字都用**同一套脚本、同一份函数名单**对两侧的原始产物复算得出（脚本随交付物入库：`scripts/perf-probes/shiki-family.mjs`，与验收探针 `scripts/perf-probes/perf-shiki-worker.mjs` 同一 SHIKI_FAMILY_RE），但**跨运行的绝对差含采集噪声**（GLM 审查实证同场景跨运行差异 ≥2.7×）。因此结论只承载**量级与方向**，不承载精确百分比；凡涉及"前/后"的差，一律同时给出绝对值和窗口占比两个口径。
 
 ## 0. 采集 harness
 
@@ -17,11 +17,11 @@
 
 基线原始产物（**只读，未重测**）：`~/.taiji/ext-sessions/01a2077f-d676-7095-b142-db7b972391f7/artifacts/profiling-data/run-notrace-renderer.cpuprofile`（CPU 权威数据集，流式窗 +10..+73s；GLM 审查 C4 实证 fence 闭合突发出现在 +50..+55s、complete（+73s）处 shiki 为零）。
 
-**基线数字口径**：before 列由 `probes/shiki-family.mjs` 对基线 cpuprofile 离线复算（与批1 `analyze-cpuprofile.mjs` 同源窗口）。after 列由同一脚本对 T1 保存的 profile 在 send-relative 窗复算。
+**基线数字口径**：before 列由 `scripts/perf-probes/shiki-family.mjs` 对基线 cpuprofile 离线复算（与批1 `analyze-cpuprofile.mjs` 同源窗口）。after 列由同一脚本对 T1 保存的 profile 在 send-relative 窗复算。
 
 ## 1. fence 闭合窗口主线程占用（核心指标：shiki 帧 self-time）
 
-口径：`node probes/shiki-family.mjs <profile> <relFromS> <relToS>`（SHIKI_FAMILY_RE 覆盖 findNextMatchSync / #execCore / codeToHtml / shiki_core / collectExternalReferences* 等全部高亮相关帧）。fence 闭合窗口 = 基线 profile 相对 +50..+55s（GLM 审查 C4 定位的突发区，send-relative ≈ +40..+45s）；after 侧取高亮回填前后各 5s（63.9..69.2s，T1 探针日志定位）。
+口径：`node scripts/perf-probes/shiki-family.mjs <profile> <relFromS> <relToS>`（SHIKI_FAMILY_RE 覆盖 findNextMatchSync / #execCore / codeToHtml / shiki_core / collectExternalReferences* 等全部高亮相关帧）。fence 闭合窗口 = 基线 profile 相对 +50..+55s（GLM 审查 C4 定位的突发区，send-relative ≈ +40..+45s）；after 侧取高亮回填前后各 5s（63.9..69.2s，T1 探针日志定位）。
 
 | 口径 | before（+50..+55s，5.0s 窗） | after（63.9..69.2s，5.3s 窗） | 变化 |
 |---|---|---|---|
@@ -90,11 +90,11 @@ worker 线程的成本不进主线程 profile（§2 口径外），由 worker �
 ```bash
 P=~/.taiji/ext-sessions/01a2077f-d676-7095-b142-db7b972391f7/artifacts/profiling-data
 # shiki 族 self-time（fence 闭合窗口）
-node probes/shiki-family.mjs $P/run-notrace-renderer.cpuprofile 50 55        # before
-node probes/shiki-family.mjs .run/b3-after-renderer.cpuprofile 63.9 69.2     # after
+node scripts/perf-probes/shiki-family.mjs $P/run-notrace-renderer.cpuprofile 50 55        # before
+node scripts/perf-probes/shiki-family.mjs .run/b3-after-renderer.cpuprofile 63.9 69.2     # after
 # shiki 族 self-time（整条流式窗）
-node probes/shiki-family.mjs $P/run-notrace-renderer.cpuprofile 10 73        # before
-node probes/shiki-family.mjs .run/b3-after-renderer.cpuprofile 0 69.2        # after
+node scripts/perf-probes/shiki-family.mjs $P/run-notrace-renderer.cpuprofile 10 73        # before
+node scripts/perf-probes/shiki-family.mjs .run/b3-after-renderer.cpuprofile 0 69.2        # after
 # after 侧原始产物可由 T1 验收 case 重新生成：
-#   node probes/perf-shiki-worker.mjs --data-dir ~/.taiji-dev/verify-prof-20261123-1730 --sid <sid> --threshold-s 0.3 --save .run/b3-after-renderer.cpuprofile
+#   node scripts/perf-probes/perf-shiki-worker.mjs --data-dir ~/.taiji-dev/verify-prof-20261123-1730 --sid <sid> --threshold-s 0.3 --save .run/b3-after-renderer.cpuprofile
 ```

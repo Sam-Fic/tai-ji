@@ -41,9 +41,9 @@ F3 的否定性搜索命令（shiki 全 dist + @shikijs 四包 dist，grep 四�
 |---|---|---|---|
 | new Worker 同源 module worker | Vite/rolldown 标准 worker 模式；dev = 同源 dev-server URL，打包 = file:// asset；CSP 经 worker-src（显式）回落 script-src 'self' 放行 | .run/probe-csp-worker.txt packages/renderer/vite.config.ts packages/mobile-renderer/vite.config.ts | T1,T5 |
 | shiki createHighlighterCore 与 codeToHtml（worker 内，无 DOM） | createHighlighterCore 装配后 codeToHtml；lang 未加载回落 typescript；抛错返回空串 | .run/probe-shiki-nodedom.txt packages/ui/src/features/chat/markdown.ts:139 | T1,T2 |
-| CDP Profiler.start 与 Profiler.stop（renderer 主线程） | 无 tracing；profile 只含主线程——worker 成本不经此口径（改由 worker 日志登记） | probes/lib/harness.mjs | T1 |
-| CDP Network.setBlockedURLs | 按 URL 模式拦截 worker 脚本加载 → worker error 事件 → 降级路径 | probes/lib/harness.mjs （CDP 通道已具备） | T3 |
-| runtime WS delivery.submit 与 chat.wait | 起流式 / 等 complete | probes/perf-derivatives.mjs probes/vp/vp.mjs | T1,T2,T3,T4 |
+| CDP Profiler.start 与 Profiler.stop（renderer 主线程） | 无 tracing；profile 只含主线程——worker 成本不经此口径（改由 worker 日志登记） | scripts/perf-probes/lib/harness.mjs | T1 |
+| CDP Network.setBlockedURLs | 按 URL 模式拦截 worker 脚本加载 → worker error 事件 → 降级路径 | scripts/perf-probes/lib/harness.mjs （CDP 通道已具备） | T3 |
+| runtime WS delivery.submit 与 chat.wait | 起流式 / 等 complete | scripts/perf-probes/perf-derivatives.mjs scripts/perf-probes/vp/vp.mjs | T1,T2,T3,T4 |
 | DOM 提取面 | .md-codeblock 容器（data-code base64 + lang 标签 + pre.shiki）；data-testid=md-streaming-fence 占位 | packages/ui/src/features/chat/markdown.ts:264 packages/ui/src/features/chat/MarkdownRenderer.vue | T2,T3,T4 |
 | CSP meta（两壳 index.html） | renderer = file:// 打包态；mobile-renderer = runtime HTTP 托管态；均为 script-src 'self' | packages/renderer/index.html:30 packages/mobile-renderer/index.html:17 | T5 |
 | worker 消息协议 | 主到 worker 的 jobs 与 cancel 两类消息；worker 回主线程的 result / jobError / log 三类消息；无 ready 握手（worker 内部排队） | docs/tp-design-batch3.md docs/tp-api-batch3.md | T1,T3 |

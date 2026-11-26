@@ -4,12 +4,12 @@
 
 | 命令 | 用途 | 关键参数 | 输出契约 |
 |---|---|---|---|
-| `node probes/perf-ttft.mjs --data-dir <dir> [--cdp-port 9478] [--mode warm\|walk\|fresh] [--runs N] [--walk-lead-ms N] [--walk-stress N] [--cwd <path>] [--text <prompt>]` | TTFT（delivery.submit → 首个 message_start / text_delta 帧）三模式测量 + 窗口内 .gitignore 编译次数对账 | `--mode walk` 复刻 GUI 挂载时的 file.tree+file.search 并发；`--walk-stress N` 机制压测（N 个并发全树 walk）；`--cwd` 会话 cwd（缺省仓库根，对齐实测场景） | 末行 `RESULT mode=<m> ttft-ms=<n> first-delta-ms=<n> gitignore-compiles=<n>`；测量无效（超时/无首帧）exit 3 |
-| `node probes/perf-ignore-match.mjs [--repo <repo>] [--limit N] [--rounds N]` | matchPath CPU 成本对比（改造前 regex 逐前缀 vs 现行段级快路径），仓库真实 .gitignore × 真实路径语料；前置正确性门（两算法不等即弃测 exit 3） | `--limit` 截断语料；`--rounds` 轮数取中位数 | 末行 `RESULT old-ms=<n> new-ms=<n> speedup=<n>x calls=<n> per-call-old-us=<n> per-call-new-us=<n>` |
-| `node probes/perf-pi-coldstart.mjs [--repo <repo>] [--runs N]` | pi 冷启动对照：直接 spawn pi 二进制（不经 Electron/runtime），dev 源码扩展集 vs packaged bundle 扩展集，量 spawn → get_state 首响墙钟 + 进程累计 CPU | `--runs` 各集合轮数（中位数） | 末行 `RESULT dev-cold-ms=<n> dev-cpu-s=<n> pkg-cold-ms=<n> pkg-cpu-s=<n> ratio-cold=<n>` |
-| `node probes/tree-flags-probe.mjs --data-dir <dir>` | 真机文件树 ignored 标记对账（快路径宿主侧确认）+ file.tree 的编译行数 | 复用/自建 cwd=仓库根的 session | 末行 `RESULT tree-flags-ok=<bool> mismatches=<n> compile-lines=<n>`；有 mismatches exit 1 |
+| `node scripts/perf-probes/perf-ttft.mjs --data-dir <dir> [--cdp-port 9478] [--mode warm\|walk\|fresh] [--runs N] [--walk-lead-ms N] [--walk-stress N] [--cwd <path>] [--text <prompt>]` | TTFT（delivery.submit → 首个 message_start / text_delta 帧）三模式测量 + 窗口内 .gitignore 编译次数对账 | `--mode walk` 复刻 GUI 挂载时的 file.tree+file.search 并发；`--walk-stress N` 机制压测（N 个并发全树 walk）；`--cwd` 会话 cwd（缺省仓库根，对齐实测场景） | 末行 `RESULT mode=<m> ttft-ms=<n> first-delta-ms=<n> gitignore-compiles=<n>`；测量无效（超时/无首帧）exit 3 |
+| `node scripts/perf-probes/perf-ignore-match.mjs [--repo <repo>] [--limit N] [--rounds N]` | matchPath CPU 成本对比（改造前 regex 逐前缀 vs 现行段级快路径），仓库真实 .gitignore × 真实路径语料；前置正确性门（两算法不等即弃测 exit 3） | `--limit` 截断语料；`--rounds` 轮数取中位数 | 末行 `RESULT old-ms=<n> new-ms=<n> speedup=<n>x calls=<n> per-call-old-us=<n> per-call-new-us=<n>` |
+| `node scripts/perf-probes/perf-pi-coldstart.mjs [--repo <repo>] [--runs N]` | pi 冷启动对照：直接 spawn pi 二进制（不经 Electron/runtime），dev 源码扩展集 vs packaged bundle 扩展集，量 spawn → get_state 首响墙钟 + 进程累计 CPU | `--runs` 各集合轮数（中位数） | 末行 `RESULT dev-cold-ms=<n> dev-cpu-s=<n> pkg-cold-ms=<n> pkg-cpu-s=<n> ratio-cold=<n>` |
+| `node scripts/perf-probes/tree-flags-probe.mjs --data-dir <dir>` | 真机文件树 ignored 标记对账（快路径宿主侧确认）+ file.tree 的编译行数 | 复用/自建 cwd=仓库根的 session | 末行 `RESULT tree-flags-ok=<bool> mismatches=<n> compile-lines=<n>`；有 mismatches exit 1 |
 
-公共 harness：`probes/lib/harness.mjs`（connectRuntime / connectRendererCdp / ensureGuiOnSession / sleep，批1-批3 既有，本批零改动）。
+公共 harness：`scripts/perf-probes/lib/harness.mjs`（connectRuntime / connectRendererCdp / ensureGuiOnSession / sleep，批1-批3 既有，本批零改动）。
 
 ## 库 API（`packages/runtime/src/infra/fs/ignore-parser.ts`）
 

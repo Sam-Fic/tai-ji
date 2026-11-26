@@ -23,7 +23,7 @@
 - packages/ui/src/features/chat/
 - packages/renderer/src/components/panel/message-stream/
 - packages/renderer/src/composables/panel/
-- probes/
+- scripts/perf-probes/
 - .tree-plant.json
 - packages/renderer/src/__tests__/wave3/happy-dom-21-composer-landing-skill-reload-stream-view-items.test.ts
 
@@ -32,8 +32,8 @@
 | B1 rail-freeze | rail 流式冻结 + fence 行无条件剥离 | 无（先行：契约新面） | 中 | packages/ui/src/features/chat/rail-turn-memo.ts, packages/core/src/domain/chat/summarize-turn.ts | B1,B3 |
 | B2 preview-lazy | turn 项 preview 懒计算 + canReuseView 去 preview 比对 | 无 | 中 | packages/renderer/src/components/panel/message-stream/stream-view-items.ts, packages/renderer/src/components/panel/MessageStream.vue | B2 |
 | B3 truncate-exit | truncate 码点级 early-exit | 无 | 低 | packages/core/src/domain/chat/summarize-turn.ts | B3 |
-| B-gpu | GPU after-side trace 采集 + 前后对比表 | 主干实现（B1-B3） | 中 | probes/gpu-trace.mjs, probes/analyze-gpu-union.mjs, probes/rail-visual-diff.mjs, docs/perf/batch1-comparison.md | G1 |
-| B-harden | 边界加固：anchor 对 whitespace-only assistant 的处理、preview thunk 抛错降级、冻结槽显式 reset 入口（切 session） | 主干实现（B1-B3） | 中 | packages/core/src/domain/chat/summarize-turn.ts, packages/ui/src/features/chat/rail-turn-memo.ts, packages/renderer/src/components/panel/message-stream/stream-view-items.ts, packages/renderer/src/components/panel/message-stream/StreamItemBoundary.vue, packages/renderer/src/composables/panel/useMessageStreamRail.ts, packages/core/src/domain/chat/__tests__/summarize-rail.test.ts, probes/deriv-family.mjs, probes/gpu-compare.mjs, packages/ui/src/features/chat/__tests__/rail-freeze.test.ts, packages/renderer/src/components/panel/message-stream/__tests__/preview-lazy.test.ts | B1,B2,B3 |
+| B-gpu | GPU after-side trace 采集 + 前后对比表 | 主干实现（B1-B3） | 中 | scripts/perf-probes/gpu-trace.mjs, scripts/perf-probes/analyze-gpu-union.mjs, scripts/perf-probes/rail-visual-diff.mjs, docs/perf/batch1-comparison.md | G1 |
+| B-harden | 边界加固：anchor 对 whitespace-only assistant 的处理、preview thunk 抛错降级、冻结槽显式 reset 入口（切 session） | 主干实现（B1-B3） | 中 | packages/core/src/domain/chat/summarize-turn.ts, packages/ui/src/features/chat/rail-turn-memo.ts, packages/renderer/src/components/panel/message-stream/stream-view-items.ts, packages/renderer/src/components/panel/message-stream/StreamItemBoundary.vue, packages/renderer/src/composables/panel/useMessageStreamRail.ts, packages/core/src/domain/chat/__tests__/summarize-rail.test.ts, scripts/perf-probes/deriv-family.mjs, scripts/perf-probes/gpu-compare.mjs, packages/ui/src/features/chat/__tests__/rail-freeze.test.ts, packages/renderer/src/components/panel/message-stream/__tests__/preview-lazy.test.ts | B1,B2,B3 |
 
 ## 非功能设计
 
@@ -41,7 +41,7 @@
 |---|---|---|---|
 | 冻结缓存无泄漏（沿用 WeakMap，不新增 Map 槽） | 容量 | 流式会话累积残留条目，长会话内存单调涨 | 一次长会话即可暴露 |
 | 语义边界单测（truncate 边界/fence 对拍/冻结状态机） | 可靠性 | 后续改 stripMarkdown 规则时静默改变 rail 标签 | 下次改动即暴露 |
-| 真机探针入库（probes/，阈值断言） | 性能 | 收益无机器证伪手段，回归无门禁 | 下次改动即暴露 |
+| 真机探针入库（scripts/perf-probes/，阈值断言） | 性能 | 收益无机器证伪手段，回归无门禁 | 下次改动即暴露 |
 
 ### 显式不做
 

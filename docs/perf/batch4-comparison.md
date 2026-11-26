@@ -13,9 +13,9 @@
 | 宿主 | dev 实例（`TAIJI_DEV_BACKGROUND=1`，`~/.taiji-dev/verify-prof-20261123-1730`） | 同左 + `--disable-backgrounding-occluded-windows --disable-renderer-backgrounding`（批3 逃生舱，防遮挡停 rAF） |
 | faux 脚本 | `~/.taiji-dev/verify-prof-20261123-1730/agent/faux-responses.json`（200TPS） | 同左 |
 | session cwd | worktree 根（对齐原始实测场景） | 同左 |
-| TTFT 探针 | `probes/perf-ttft.mjs`（warm / walk / fresh 三模式） | 同左（同协议；after 侧 text_delta 改 3s 宽限——faux 短响应可无 text_delta 帧，不影响 TTFT=message_start 口径） |
-| 匹配成本探针 | `probes/perf-ignore-match.mjs`（真实 .gitignore 82 规则 × 仓库真实路径语料 ~6970 条，两算法同语料同时段计时，前置等价门） | 同左 |
-| 冷启动探针 | `probes/perf-pi-coldstart.mjs`（直 spawn pi 二进制，dev 源码扩展集 vs packaged bundle 集） | 同左 |
+| TTFT 探针 | `scripts/perf-probes/perf-ttft.mjs`（warm / walk / fresh 三模式） | 同左（同协议；after 侧 text_delta 改 3s 宽限——faux 短响应可无 text_delta 帧，不影响 TTFT=message_start 口径） |
+| 匹配成本探针 | `scripts/perf-probes/perf-ignore-match.mjs`（真实 .gitignore 82 规则 × 仓库真实路径语料 ~6970 条，两算法同语料同时段计时，前置等价门） | 同左 |
+| 冷启动探针 | `scripts/perf-probes/perf-pi-coldstart.mjs`（直 spawn pi 二进制，dev 源码扩展集 vs packaged bundle 集） | 同左 |
 | 打包版 TaiJi.app | 在跑（用户工作宿主，竞争噪声） | 同左 |
 
 ## 1. TTFT（send → 首 token/首帧）——核心指标
@@ -37,7 +37,7 @@
 
 ## 2. 匹配 CPU 成本（prompt 窗口的真实成本）
 
-口径：`probes/perf-ignore-match.mjs`——仓库真实 .gitignore（82 规则：55 字面量 + 18 单星号无斜杠 + 3 前置双星加斜杠 = 76 条进快路径；余 6 条保守 regex）× 仓库真实路径语料 ~6970 条（排除 node_modules/.git，对齐 walk 的 BUILTIN_IGNORE_DIRS 口径），两算法同语料同时段计时（中位数）；前置门 = 两算法逐路径结果零分歧。
+口径：`scripts/perf-probes/perf-ignore-match.mjs`——仓库真实 .gitignore（82 规则：55 字面量 + 18 单星号无斜杠 + 3 前置双星加斜杠 = 76 条进快路径；余 6 条保守 regex）× 仓库真实路径语料 ~6970 条（排除 node_modules/.git，对齐 walk 的 BUILTIN_IGNORE_DIRS 口径），两算法同语料同时段计时（中位数）；前置门 = 两算法逐路径结果零分歧。
 
 | 口径 | before | after | 变化 |
 |---|---|---|---|
@@ -51,7 +51,7 @@
 
 ## 3. pi 冷启动（根因定位 + 结论）
 
-口径：`probes/perf-pi-coldstart.mjs` 直 spawn pi 二进制（不经 Electron/runtime），量 spawn → get_state 首响墙钟 + 进程累计 CPU（ps time）。模块数 = JITI_DEBUG=1 直 spawn 计数（`[cache hit]` 行）。
+口径：`scripts/perf-probes/perf-pi-coldstart.mjs` 直 spawn pi 二进制（不经 Electron/runtime），量 spawn → get_state 首响墙钟 + 进程累计 CPU（ps time）。模块数 = JITI_DEBUG=1 直 spawn 计数（`[cache hit]` 行）。
 
 | 口径 | dev 源码扩展集（22 个 TS 源，jiti 加载） | packaged bundle 扩展集（22 个自包含 index.js） | 倍率 |
 |---|---|---|---|
@@ -86,7 +86,7 @@
 | `IgnoreRule.fast` 字段 | 每条规则一个 {prefix, suffix, star, anchored} 小对象（编译期一次，0.178ms/82 规则不变） | 可忽略；随规则合并（loadMatcher 拼接）自动迁移 |
 | 匹配期 coverage 表 | 每次 matchPath 两次小数组分配（段数长度）；免拼接判据（startsWith + 长度/下一字符比较） | 已计入 §2 的 after 数字 |
 | oracle 套件 | 5 例（合成 × 合成 1.2s + 真实快照 27ms + 组合 0.7s + 连续斜杠 + 覆盖度自检） | testCommand 承载 |
-| 模糊对拍探针 | `probes/ignore-match-fuzz.mjs`，400 迭代 ≈ 10s | 修剪证据 + 回归复算入口（不进 CI） |
+| 模糊对拍探针 | `scripts/perf-probes/ignore-match-fuzz.mjs`，400 迭代 ≈ 10s | 修剪证据 + 回归复算入口（不进 CI） |
 | 探针脚本 | 5 个零依赖 .mjs（TTFT / 匹配基准 / 冷启动 / 树标记 / 模糊），随交付入库 | 验收 + 对比表复算入口 |
 
 ## 6. 与题面对齐
@@ -103,17 +103,17 @@
 
 ```bash
 # 匹配成本 + 等价性（纯 Node；load 敏感，取 load<8 窗口；两算法同时段同条件）
-npx tsx probes/perf-ignore-match.mjs --rounds 5
+npx tsx scripts/perf-probes/perf-ignore-match.mjs --rounds 5
 # 属性模糊对拍（修剪证据 / 回归）
-npx tsx probes/ignore-match-fuzz.mjs --iter 800 --seed 1
+npx tsx scripts/perf-probes/ignore-match-fuzz.mjs --iter 800 --seed 1
 # TTFT 三模式（需 dev 实例活着；每 case ≤ 900s）
-node probes/perf-ttft.mjs --data-dir ~/.taiji-dev/verify-prof-20261123-1730 --mode warm --runs 2
-node probes/perf-ttft.mjs --data-dir ~/.taiji-dev/verify-prof-20261123-1730 --mode walk --runs 2
-node probes/perf-ttft.mjs --data-dir ~/.taiji-dev/verify-prof-20261123-1730 --mode fresh --runs 1
+node scripts/perf-probes/perf-ttft.mjs --data-dir ~/.taiji-dev/verify-prof-20261123-1730 --mode warm --runs 2
+node scripts/perf-probes/perf-ttft.mjs --data-dir ~/.taiji-dev/verify-prof-20261123-1730 --mode walk --runs 2
+node scripts/perf-probes/perf-ttft.mjs --data-dir ~/.taiji-dev/verify-prof-20261123-1730 --mode fresh --runs 1
 # 冷启动对照（直 spawn，不需实例）
-node probes/perf-pi-coldstart.mjs --runs 3
+node scripts/perf-probes/perf-pi-coldstart.mjs --runs 3
 # 树标记 + walk 侧对账（需实例）
-node probes/tree-flags-probe.mjs --data-dir ~/.taiji-dev/verify-prof-20261123-1730
+node scripts/perf-probes/tree-flags-probe.mjs --data-dir ~/.taiji-dev/verify-prof-20261123-1730
 # 单测（oracle 等价 + 覆盖度 + 连续斜杠回归）
 cd packages/runtime && npx vitest run test/domains-bundle.test.ts -t "ignore-parser"
 ```

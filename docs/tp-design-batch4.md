@@ -9,17 +9,17 @@ GLM 对抗审查指出数据里两个未入榜的用户可感知项（S6/A4③/F
 
 本批先用真机测量把两个问题的机制钉死（扎根结论见下），再据此定方案。**关键实测结论（本批设计的基石）**：
 
-1. **「.gitignore 编译阻塞首 token 转发」不成立（测量证伪）**。TTFT 探针（`probes/perf-ttft.mjs`）三模式实测：warm（pi 热、无文件请求）47–65ms；walk（prompt 同时刻并发 file.tree + file.search 两次全树 ignore 匹配，worktree cwd 实测单次全树 walk 341ms/5000 文件截断）40–65ms——**与 warm 地板无统计差异**；机制压测（prompt 在途时并发 12 个全树 walk）TTFT 才劣化到 896ms。结论：runtime 的 WS 消息处理是 fire-and-forget 并发（connection-manager.ts:225-252），文件 walk 与 pi stdout 数据事件在事件循环里交错，**真实负载下 walk 不在 TTFT 关键路径上**；审查的「~0.9s 阻塞」是把「prompt 窗口内的 CPU 成本」误推为「转发延迟」。
-2. **walk 的真实成本是 CPU 浪费**：全树 walk 的 matchPath 占大头——实测（`probes/perf-ignore-match.mjs`，仓库真实 .gitignore 82 规则 × 真实路径语料 6960 条）：改造前 229ms/轮（33µs/call），其中 27 条通配规则的 regex 逐前缀求值占 131ms。
+1. **「.gitignore 编译阻塞首 token 转发」不成立（测量证伪）**。TTFT 探针（`scripts/perf-probes/perf-ttft.mjs`）三模式实测：warm（pi 热、无文件请求）47–65ms；walk（prompt 同时刻并发 file.tree + file.search 两次全树 ignore 匹配，worktree cwd 实测单次全树 walk 341ms/5000 文件截断）40–65ms——**与 warm 地板无统计差异**；机制压测（prompt 在途时并发 12 个全树 walk）TTFT 才劣化到 896ms。结论：runtime 的 WS 消息处理是 fire-and-forget 并发（connection-manager.ts:225-252），文件 walk 与 pi stdout 数据事件在事件循环里交错，**真实负载下 walk 不在 TTFT 关键路径上**；审查的「~0.9s 阻塞」是把「prompt 窗口内的 CPU 成本」误推为「转发延迟」。
+2. **walk 的真实成本是 CPU 浪费**：全树 walk 的 matchPath 占大头——实测（`scripts/perf-probes/perf-ignore-match.mjs`，仓库真实 .gitignore 82 规则 × 真实路径语料 6960 条）：改造前 229ms/轮（33µs/call），其中 27 条通配规则的 regex 逐前缀求值占 131ms。
 3. **「每 prompt 编译两次」是两次请求各编译一次，不是并发重复**：file.tree（FileView 挂载）与 file.search（useChatViewDeps 挂载）在会话激活时先后到达（日志实测相隔 ~53ms），单次读+编译亚毫秒-毫秒级（file-service.ts 503-507 裁决注释口径），**在途合并（in-flight coalescing）不适用**（请求到达时前一次已 settle）。
-4. **pi 冷启动 20s 是 dev 形态成本，prod 不是**：`probes/perf-pi-coldstart.mjs` 直接 spawn pi 二进制对照——dev 源码扩展集（22 个 TS 源扩展，jiti 加载）23.2s 墙钟 / 9.0s CPU；packaged bundle 扩展集（esbuild 自包含 index.js）4.5s / 3.7s（**5.1x / 2.4x**）。根因 = jiti 2.7.0 的 fsCache 只缓存转译产物、**不缓存模块解析**，每次冷启动对 ~1000 个 TS 模块（22 扩展 + shared 库 + subagent-core 传递图）重跑 statSync/ENOENT 解析风暴（profile 的 statSync 4.05s + stat 1.85s + NodeError 0.72s 全部来自 jiti `moduleResolve`，find-callers 实证）。
+4. **pi 冷启动 20s 是 dev 形态成本，prod 不是**：`scripts/perf-probes/perf-pi-coldstart.mjs` 直接 spawn pi 二进制对照——dev 源码扩展集（22 个 TS 源扩展，jiti 加载）23.2s 墙钟 / 9.0s CPU；packaged bundle 扩展集（esbuild 自包含 index.js）4.5s / 3.7s（**5.1x / 2.4x**）。根因 = jiti 2.7.0 的 fsCache 只缓存转译产物、**不缓存模块解析**，每次冷启动对 ~1000 个 TS 模块（22 扩展 + shared 库 + subagent-core 传递图）重跑 statSync/ENOENT 解析风暴（profile 的 statSync 4.05s + stat 1.85s + NodeError 0.72s 全部来自 jiti `moduleResolve`，find-callers 实证）。
 
 | 编号 | 目标 | 题面原句（逐字） | 限定词落点 | case/落点 |
 |---|---|---|---|---|
 | G1 | 定位 prompt 路径 runtime 同步阻塞的根因并修复/缓解 | 「定位并修复/缓解 prompt 路径的 runtime 同步阻塞（基线 ~0.9s/次，每 prompt 重复编译两次）」 | 机制：根因 = 全树 ignore 匹配（matchPath）的 CPU 成本 + 双请求双 walk；缓解 = matchPath 段级快路径（三形态，语义逐字节等价，oracle 测试锁定）；TTFT 机制经实测证伪并登记 | T1,T2 |
 | G2 | 铁律：不恢复 mtime 缓存、不引入时间窗缓存 | 「不得恢复 .gitignore mtime 缓存」「不得引入时间窗缓存/轮询兜底」 | 机制：快路径是纯计算优化（编译期预计算判据、匹配期字符串比较），零缓存零时间窗；裁决注释随实测数据更新（编译成本量级登记） | T2 |
 | G3 | pi 冷启动根因定位 + 优化或明确不可优化结论 | 「pi 冷启动 20s CPU 风暴完成根因定位，给出优化或明确的「不可优化+理由」结论」 | 机制：根因 = dev 形态 jiti TS 加载（实测 5.1x 于 packaged bundle）；taiji 侧可行解全部有不可接受代价（见「冷启动结论」节），上游禁改 | T3 |
-| G4 | TTFT 前后对比表（同 harness） | 「TTFT（send → 首 token/首帧）前后对比表（同 harness）」 | 机制：同 fixture（faux 200TPS）、同实例形态、同探针（probes/perf-ttft.mjs）三模式（warm/walk/fresh）+ 匹配成本基准（probes/perf-ignore-match.mjs） | T1,T2 |
+| G4 | TTFT 前后对比表（同 harness） | 「TTFT（send → 首 token/首帧）前后对比表（同 harness）」 | 机制：同 fixture（faux 200TPS）、同实例形态、同探针（scripts/perf-probes/perf-ttft.mjs）三模式（warm/walk/fresh）+ 匹配成本基准（scripts/perf-probes/perf-ignore-match.mjs） | T1,T2 |
 | G5 | 三包 test+typecheck 全绿 | 「三包 test+typecheck 全绿」 | 不可机验：由 trunk/leaf gate 的 testCommand + typecheckCommand 承载（非真机探针） | 不可机验：gate 承载 |
 
 ## 验收是什么
@@ -28,11 +28,11 @@ GLM 对抗审查指出数据里两个未入榜的用户可感知项（S6/A4③/F
 
 ## 树形拆分
 
-主干 = TTFT 测量基建（`probes/perf-ttft.mjs` 三模式探针 + `probes/lib/harness.mjs` 复用）+ 诊断探针（`probes/perf-pi-coldstart.mjs` 冷启动对照 + `probes/perf-ignore-match.mjs` 匹配成本基准）——探针在当前 HEAD（批3 已 delivered 代码）上先跑出基线，证明测量有效且「walk 不阻塞 TTFT」的结论可复现。一枝一目标：B-prompt-path（matchPath 段级快路径 + 裁决注释实测更新）。冷启动（B-cold-start）= 纯诊断结论，无代码改动，其「实现」= 设计文档结论节 + 对比表登记（不可优化的理由链）。
+主干 = TTFT 测量基建（`scripts/perf-probes/perf-ttft.mjs` 三模式探针 + `scripts/perf-probes/lib/harness.mjs` 复用）+ 诊断探针（`scripts/perf-probes/perf-pi-coldstart.mjs` 冷启动对照 + `scripts/perf-probes/perf-ignore-match.mjs` 匹配成本基准）——探针在当前 HEAD（批3 已 delivered 代码）上先跑出基线，证明测量有效且「walk 不阻塞 TTFT」的结论可复现。一枝一目标：B-prompt-path（matchPath 段级快路径 + 裁决注释实测更新）。冷启动（B-cold-start）= 纯诊断结论，无代码改动，其「实现」= 设计文档结论节 + 对比表登记（不可优化的理由链）。
 
 主干文件清单（trunk 期允许改动）：
-- probes/
-- probes/lib/
+- scripts/perf-probes/
+- scripts/perf-probes/lib/
 - .tree-plant.json
 - docs/tp-design-batch4.md
 - docs/tp-acceptance-batch4.md
@@ -43,10 +43,10 @@ GLM 对抗审查指出数据里两个未入榜的用户可感知项（S6/A4③/F
 
 | 枝名 | 目标 | 依赖 | 风险级 | 文件 | case |
 |---|---|---|---|---|---|
-| B-prompt-path | G1/G2：matchPath 段级快路径（字面量 / 单星号无斜杠 / `**/字面量` 三形态）+ oracle 等价测试（含修剪 P1 连续斜杠回归）+ 裁决注释实测数据更新 + 匹配成本基准探针 + 属性式模糊对拍探针（修剪 card-04/05 证据，随交付入库） | trunk | 高 | packages/runtime/src/infra/fs/ignore-parser.ts, packages/runtime/test/domains-bundle.test.ts, packages/runtime/src/services/file-service.ts, probes/perf-ignore-match.mjs, probes/ignore-match-fuzz.mjs, probes/tree-flags-probe.mjs, docs/tp-design-batch4.md, docs/tp-fact-check-batch4.md, docs/tp-acceptance-batch4.md | T2,T4,T5 |
-| B-cold-start | G3：冷启动根因结论（dev jiti TS 加载 5.1x；taiji 侧不可优化理由链）——无代码改动，结论落设计文档 + 对比表 | trunk | 中（结论风险） | docs/tp-design-batch4.md, probes/perf-pi-coldstart.mjs, docs/perf/batch4-comparison.md | T3,T6 |
+| B-prompt-path | G1/G2：matchPath 段级快路径（字面量 / 单星号无斜杠 / `**/字面量` 三形态）+ oracle 等价测试（含修剪 P1 连续斜杠回归）+ 裁决注释实测数据更新 + 匹配成本基准探针 + 属性式模糊对拍探针（修剪 card-04/05 证据，随交付入库） | trunk | 高 | packages/runtime/src/infra/fs/ignore-parser.ts, packages/runtime/test/domains-bundle.test.ts, packages/runtime/src/services/file-service.ts, scripts/perf-probes/perf-ignore-match.mjs, scripts/perf-probes/ignore-match-fuzz.mjs, scripts/perf-probes/tree-flags-probe.mjs, docs/tp-design-batch4.md, docs/tp-fact-check-batch4.md, docs/tp-acceptance-batch4.md | T2,T4,T5 |
+| B-cold-start | G3：冷启动根因结论（dev jiti TS 加载 5.1x；taiji 侧不可优化理由链）——无代码改动，结论落设计文档 + 对比表 | trunk | 中（结论风险） | docs/tp-design-batch4.md, scripts/perf-probes/perf-pi-coldstart.mjs, docs/perf/batch4-comparison.md | T3,T6 |
 
-> 范围注记：B-prompt-path 不触碰 file-service 的 walk 结构（searchFilesInCwd 的递归/并发/截断语义）与 loadMatcher 的无缓存直读裁决——快路径是 ignore-parser.ts 内的纯计算替换；file-service.ts 的改动仅「裁决注释补实测数据」（编译成本量级、在途合并不适用的理由），零行为变更。docs/tp-design-batch4.md 与 docs/tp-fact-check-batch4.md 在本枝的改动 = 修剪 P1（连续斜杠 coverage 怪癖）的发现登记与本枝范围声明本身（自指登记，审计入口 = git log <trunk commit>..本枝 commit）；docs/tp-acceptance-batch4.md 与 probes/tree-flags-probe.mjs 的改动 = 本枝首次 gate 暴露的验收资产缺陷修正（命令列反引号被 sh 当命令替换执行；探针误用 TS 类型注解 + dirOnly 目录自身预期写反 + listTree 层级误判）——验收资产正确性修正，非交付物行为变更。渲染侧候选方案（空会话跳过白名单加载）经评估不采纳：history 加载与 watch(sessionId) 存在竞态，「会话有无消息」无同步可靠信号，误跳转会导致切会话时路径链接化闪烁——理由登记进设计文档「显式不做」。
+> 范围注记：B-prompt-path 不触碰 file-service 的 walk 结构（searchFilesInCwd 的递归/并发/截断语义）与 loadMatcher 的无缓存直读裁决——快路径是 ignore-parser.ts 内的纯计算替换；file-service.ts 的改动仅「裁决注释补实测数据」（编译成本量级、在途合并不适用的理由），零行为变更。docs/tp-design-batch4.md 与 docs/tp-fact-check-batch4.md 在本枝的改动 = 修剪 P1（连续斜杠 coverage 怪癖）的发现登记与本枝范围声明本身（自指登记，审计入口 = git log <trunk commit>..本枝 commit）；docs/tp-acceptance-batch4.md 与 scripts/perf-probes/tree-flags-probe.mjs 的改动 = 本枝首次 gate 暴露的验收资产缺陷修正（命令列反引号被 sh 当命令替换执行；探针误用 TS 类型注解 + dirOnly 目录自身预期写反 + listTree 层级误判）——验收资产正确性修正，非交付物行为变更。渲染侧候选方案（空会话跳过白名单加载）经评估不采纳：history 加载与 watch(sessionId) 存在竞态，「会话有无消息」无同步可靠信号，误跳转会导致切会话时路径链接化闪烁——理由登记进设计文档「显式不做」。
 
 ## 方案要点（每枝）
 
@@ -58,8 +58,8 @@ GLM 对抗审查指出数据里两个未入榜的用户可感知项（S6/A4③/F
   3. **`**/字面量`**（含 `/**/字面量`）：regex `^(?:.*/)?L$` 的 `^` 被 `(?:.*/)?` 吸收 ⇒ 与非锚定字面量等价（gitignore 文档明示 `**/foo` ≡ `foo`）；rest 含 '/'（如 `**/foo/bar`，末两段匹配）不快路径化。
   - 保守排除（恒走 regex）：多星号、星号两侧含 '/'、`**` 跨目录、`?` 通配、空 pattern、含反斜杠 pattern。
 - **语义逐字节等价（本枝的第一风险）**：规则扫描序 + last-match-wins、coverage 判据（isSelf / isAncestorDir / dirOnly 不匹配同名文件）、normalizePath 反斜杠归一（含反斜杠 pattern 两侧都永不命中）、元字符字面量与历史怪癖（`a(b|c)+^d${e}\f` 不自匹配——锚定测试在册）全部不变。等价性由 **oracle 测试**锁定：改造前算法原样内联作 oracle，合成规则语料（形态空间全覆盖）× 合成路径语料（确定性生成）+ 仓库真实 .gitignore 全量快照（82 条）× 合成路径，全交叉断言；另加「覆盖度自检」（真实 .gitignore 的 76/82 条须进快路径，防优化空转）。
-- **[修剪 P1 已修] 连续斜杠路径的 coverage 怪癖**：旧算法的前缀是折叠空段后的 join（`'a//b'` → 前缀 `'a/b'`），而 coverage 判据 `path.startsWith(prefix + '/')` 对**原始归一化路径**判——`'a//b'.startsWith('a/b/')` 为 false ⇒ 命中段落在 `//` 之后的规则（如 `b`）旧算法判不命中。初版快路径按段成员判定会误判 true（修剪模糊探针 16000 例抓到 13 例）。修正：coverage 一律按调用预计算、对原始路径判（`coverageOf`），与 regex 路径逐字节一致。回归锁定：oracle 套件「连续斜杠 × 单规则集」定点用例 + 属性式模糊对拍探针（`probes/ignore-match-fuzz.mjs`，随机规则集 × 随机路径，10 种子 × 32000 例零分歧）。
-- **收益实测**（`probes/perf-ignore-match.mjs`，真实语料 6969 路径）：见对比表——改造前 regex 逐前缀 vs 现行快路径，同语料同时段计时，加速比 **2.2–2.5x（安静窗 load ~5：265→114ms / 244→109ms；高负载 load 8–27 下 2.05–3.83x 波动）**；绝对毫秒数受负载放大，结论取比率。全树 walk 的匹配成本占比约 67%，walk 总墙钟相应下降。
+- **[修剪 P1 已修] 连续斜杠路径的 coverage 怪癖**：旧算法的前缀是折叠空段后的 join（`'a//b'` → 前缀 `'a/b'`），而 coverage 判据 `path.startsWith(prefix + '/')` 对**原始归一化路径**判——`'a//b'.startsWith('a/b/')` 为 false ⇒ 命中段落在 `//` 之后的规则（如 `b`）旧算法判不命中。初版快路径按段成员判定会误判 true（修剪模糊探针 16000 例抓到 13 例）。修正：coverage 一律按调用预计算、对原始路径判（`coverageOf`），与 regex 路径逐字节一致。回归锁定：oracle 套件「连续斜杠 × 单规则集」定点用例 + 属性式模糊对拍探针（`scripts/perf-probes/ignore-match-fuzz.mjs`，随机规则集 × 随机路径，10 种子 × 32000 例零分歧）。
+- **收益实测**（`scripts/perf-probes/perf-ignore-match.mjs`，真实语料 6969 路径）：见对比表——改造前 regex 逐前缀 vs 现行快路径，同语料同时段计时，加速比 **2.2–2.5x（安静窗 load ~5：265→114ms / 244→109ms；高负载 load 8–27 下 2.05–3.83x 波动）**；绝对毫秒数受负载放大，结论取比率。全树 walk 的匹配成本占比约 67%，walk 总墙钟相应下降。
 - **file-service.ts 裁决注释更新**：原注释（U1 1-2 裁决）称「读盘编译微秒-毫秒级」——本批补实测数据（单次读+编译亚毫秒级；双请求双编译非并发、在途合并不适用；真正的 prompt 窗口成本是全树 walk 的 matchPath，已由快路径缓解）。**不恢复任何缓存**（G2）。
 
 **B-cold-start（诊断结论，无代码改动）**：
@@ -96,7 +96,7 @@ taiji 侧可行解与否决理由：
 | 搜索深度/结果上限调整 | 产品行为变更（composer 候选与链接化白名单的覆盖面），超出本批范围 | 否 | 白名单漏链的用户反馈积累时 |
 | pi 上游修改（jiti 解析缓存/惰性加载） | 仓规铁禁（不修改 pi 源码、不提 PR、不 fork） | 是（铁律明禁） | —（红线，不设重审） |
 | dev 改 staged bundle / 删 mandatory 扩展 / 启动期预热 pi | DX 回归（extension-resolver [HISTORICAL] 决策记录）/ 产品回归 / 感知转移到启动期且不覆盖编程式建会话 | 否 | 用户裁决重新权衡 dev 启动成本 vs live-edit DX 时 |
-| 探针脚本类型层（probes/ .mjs） | 真机采集/诊断探针为零依赖 Node 一次性脚本（沿用批1/批2/批3 口径），不进 tsc 类型层；T2/T3 探针经仓库既有 tsx 运行（dev 依赖，非新增） | 否 | 探针引入跨文件复用/复杂逻辑，或被非采集链路依赖时 |
+| 探针脚本类型层（scripts/perf-probes/ .mjs） | 真机采集/诊断探针为零依赖 Node 一次性脚本（沿用批1/批2/批3 口径），不进 tsc 类型层；T2/T3 探针经仓库既有 tsx 运行（dev 依赖，非新增） | 否 | 探针引入跨文件复用/复杂逻辑，或被非采集链路依赖时 |
 
 ## 冷启动结论（G3 登记）
 

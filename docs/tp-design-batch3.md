@@ -29,16 +29,16 @@
 主干 = 真机探针基建（T1/T2/T4/T5 四个探针 + harness console 采集扩展）+ 无回归 smoke（T4 在当前 HEAD 即绿，证明探针有效且占位行为基线可测）。三枝递进：核心路径（B-worker，含 G1/G2/G5）→ CSP 放行与登记（B-csp，G3）→ 降级路径硬化（B-fallback，G4）。生命周期/排队/单测补全归长叶。
 
 主干文件清单（trunk 期允许改动）：
-- probes/
-- probes/lib/
+- scripts/perf-probes/
+- scripts/perf-probes/lib/
 
 | 枝名 | 目标 | 依赖 | 风险级 | 文件 | case |
 |---|---|---|---|---|---|
-| B-worker | G1 worker 化高亮主干 + G2 占位保留 + G5 成本出声 | trunk | 高 | packages/ui/src/features/chat/shiki-highlight-core.ts, packages/ui/src/features/chat/shiki-highlight-worker.ts, packages/ui/src/features/chat/shiki-highlight-client.ts, packages/ui/src/features/chat/markdown.ts, packages/ui/src/features/chat/markdown-incremental.ts, packages/ui/src/features/chat/composables/useMarkdownStreaming.ts, packages/ui/src/features/chat/__tests__/, probes/shiki-html-diff.mjs, docs/tp-design-batch3.md | T1,T2 |
-| B-csp | G3 两壳 CSP `worker-src 'self'` + 一次性评估登记 | trunk | 中 | packages/renderer/index.html, packages/mobile-renderer/index.html, probes/csp-worker-probe.cjs | T5 |
-| B-fallback | G4 降级路径硬化（error 事件 / 单 job 抛错 / 取消 → 主线程同步回退）+ 真机降级探针 | B-worker | 中 | packages/ui/src/features/chat/shiki-highlight-client.ts, packages/ui/src/features/chat/markdown.ts, probes/shiki-fallback-probe.mjs | T3 |
+| B-worker | G1 worker 化高亮主干 + G2 占位保留 + G5 成本出声 | trunk | 高 | packages/ui/src/features/chat/shiki-highlight-core.ts, packages/ui/src/features/chat/shiki-highlight-worker.ts, packages/ui/src/features/chat/shiki-highlight-client.ts, packages/ui/src/features/chat/markdown.ts, packages/ui/src/features/chat/markdown-incremental.ts, packages/ui/src/features/chat/composables/useMarkdownStreaming.ts, packages/ui/src/features/chat/__tests__/, scripts/perf-probes/shiki-html-diff.mjs, docs/tp-design-batch3.md | T1,T2 |
+| B-csp | G3 两壳 CSP `worker-src 'self'` + 一次性评估登记 | trunk | 中 | packages/renderer/index.html, packages/mobile-renderer/index.html, scripts/perf-probes/csp-worker-probe.cjs | T5 |
+| B-fallback | G4 降级路径硬化（error 事件 / 单 job 抛错 / 取消 → 主线程同步回退）+ 真机降级探针 | B-worker | 中 | packages/ui/src/features/chat/shiki-highlight-client.ts, packages/ui/src/features/chat/markdown.ts, scripts/perf-probes/shiki-fallback-probe.mjs | T3 |
 
-> 范围注记：B-worker 的 markdown-incremental.ts 改动仅「把 cache 对象作为取消组令牌透传给 renderMarkdownSegments」（新增可选第三参，壳侧不传）；useMarkdownStreaming.ts 改动仅「卸载时按 cache 取消在途高亮组」。占位/finalize 逻辑零改动（G2 由 T4 断言）。T2 探针 probes/shiki-html-diff.mjs 随本枝收尾一并修正：DOM outerHTML 序列化会把 > 转义为 &gt; 而 shiki 原串是字面 >（纯序列化差异），对拍前增加 HTML 实体解码归一化 + pre.shiki 回填轮询（complete 时 worker 可能在途）——属「worker 产物 vs 主线程同源算法」对拍的探针正确性修正，故声明进本枝文件列；docs/tp-design-batch3.md 的改动即本条范围声明本身（自指登记，审计入口 = git log 96eea45f..本枝 commit）。
+> 范围注记：B-worker 的 markdown-incremental.ts 改动仅「把 cache 对象作为取消组令牌透传给 renderMarkdownSegments」（新增可选第三参，壳侧不传）；useMarkdownStreaming.ts 改动仅「卸载时按 cache 取消在途高亮组」。占位/finalize 逻辑零改动（G2 由 T4 断言）。T2 探针 scripts/perf-probes/shiki-html-diff.mjs 随本枝收尾一并修正：DOM outerHTML 序列化会把 > 转义为 &gt; 而 shiki 原串是字面 >（纯序列化差异），对拍前增加 HTML 实体解码归一化 + pre.shiki 回填轮询（complete 时 worker 可能在途）——属「worker 产物 vs 主线程同源算法」对拍的探针正确性修正，故声明进本枝文件列；docs/tp-design-batch3.md 的改动即本条范围声明本身（自指登记，审计入口 = git log 96eea45f..本枝 commit）。
 
 ## 方案要点（每枝）
 
@@ -59,7 +59,7 @@
 
 ### CSP 一次性评估（G3 登记）
 
-评估手段 = 真实 Electron 二进制 + 与 `packages/renderer/index.html` 逐字相同的 CSP meta（探针 `probes/csp-worker-probe.cjs` 运行时读取该文件 CSP 串，不手抄），Electron 42.3.3：
+评估手段 = 真实 Electron 二进制 + 与 `packages/renderer/index.html` 逐字相同的 CSP meta（探针 `scripts/perf-probes/csp-worker-probe.cjs` 运行时读取该文件 CSP 串，不手抄），Electron 42.3.3：
 
 | 形态 | CSP | 同源 URL module worker | 判定 |
 |---|---|---|---|
@@ -87,7 +87,7 @@
 | 高亮永不丢失（含降级） | 可靠性 | worker 被拦/抛错时若直接吐纯文本且无回退 → 高亮静默丢失（2026-08 CSP 事故同族） | worker 首次失败即触发（T3 真机 + 单测） |
 | 在途任务可取消（切 session/页面隐藏） | 资源 | 切 session 后旧消息的高亮 job 继续跑完，后台白烧 worker CPU；页面隐藏时同理 | 流式中途切 session 即发生（长叶 + 单测） |
 | 无墙钟判死 | 架构红线（ADR-0190） | worker 往返加超时 = 时间阈值判死回潮，pre-commit/审查拦截 | 引入即违规 |
-| 探针脚本类型层（probes/ .mjs/.cjs） | 工程纪律 | 探针零依赖一次性脚本（沿用批1/批2 口径），无 tsc 类型层 | 探针出现跨文件复用/被非采集链依赖时 |
+| 探针脚本类型层（scripts/perf-probes/ .mjs/.cjs） | 工程纪律 | 探针零依赖一次性脚本（沿用批1/批2 口径），无 tsc 类型层 | 探针出现跨文件复用/被非采集链依赖时 |
 
 ### 显式不做
 
@@ -96,7 +96,7 @@
 | drawer CodeBlock/DiffView 也 Worker 化 | 本批射程 = 对话流 fence 闭合路径；drawer 非流式热路径，`highlightCode` 保持主线程 | 否（题面限定 fence 闭合） | drawer 代码块被实测进火焰图 TOP10 时 |
 | 分帧 tokenize / 可视区优先 | 审查 D6/D0 已判：单块无增量接口、virtua 粒度是 turn 不是行 | 是（题面引审查结论否决） | shiki 暴露增量 tokenize API 时 |
 | worker 超时/健康探测/自动重建 | ADR-0190 时间阈值判死禁令；失败只认确定性事件（error 事件/抛错），挂死收终归用户 | 否 | —（红线，不设重审） |
-| 探针脚本类型层（probes/ .mjs/.cjs/.mts） | 真机采集探针为零依赖 Node 一次性脚本（沿用批1/批2 口径），不进 tsc 类型层；T2 探针经仓库既有 tsx 运行（dev 依赖，非新增） | 否 | 探针引入跨文件复用/复杂逻辑，或被非采集链路依赖时 |
+| 探针脚本类型层（scripts/perf-probes/ .mjs/.cjs/.mts） | 真机采集探针为零依赖 Node 一次性脚本（沿用批1/批2 口径），不进 tsc 类型层；T2 探针经仓库既有 tsx 运行（dev 依赖，非新增） | 否 | 探针引入跨文件复用/复杂逻辑，或被非采集链路依赖时 |
 | 页面可见性恢复后的重渲染兜底 | rAF 在页面隐藏期天然暂停、可见时挂起帧自然续跑（事件驱动，非时间机制）；无需额外兜底 | 否 | 实测发现可见性恢复后高亮不恢复时 |
 | 移动壳独立 worker 客户端 | 双壳共用 ui 包同一客户端（移动壳 HTTP 托管态同源 worker 实测可用），不复制实现 | 否 | 移动壳出现独立 CSP/构建约束时 |
 | worker 池/多 worker 并发 | 单 worker 串行已覆盖本场景（一批 job 一次往返）；多 worker 增量收益未测量 | 否 | 实测 fence 密度高到单 worker 排队可感知时 |

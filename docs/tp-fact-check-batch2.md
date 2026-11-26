@@ -26,8 +26,8 @@
 | IntersectionObserver | `new IntersectionObserver(cb,{root:scroller})`，哨兵可见性经 `entry.isIntersecting` 判；布局后投递零强制 | packages/ui/src/features/chat/__tests__/media-suite.test.ts:27 (IO mock 先例)；HtmlPreviewInline.vue:471 生产用法 | T6 |
 | virtua `VirtualizerHandle.scrollToIndex` | `(index,{align:'end',offset,smooth})`，offset=endOffset；目标 = offset+startSpacer+itemOffset+itemSize−viewportSize | node_modules/virtua/lib/core/index.js:630 | T4,T5 |
 | virtua viewportSize | = scrollRef(contentRect).height，经 ResizeObserver 更新 | node_modules/virtua/lib/core/index.js:599 | T4 |
-| CDP Profiler | `Profiler.enable/start/stop` → profile（无 tracing） | probes/perf-derivatives.mjs | T1,T2,T5 |
-| runtime WS `delivery.submit` | `{sessionId,content,clientUuid}` 起流式 | probes/perf-derivatives.mjs | T1,T2,T4,T5,T6 |
+| CDP Profiler | `Profiler.enable/start/stop` → profile（无 tracing） | scripts/perf-probes/perf-derivatives.mjs | T1,T2,T5 |
+| runtime WS `delivery.submit` | `{sessionId,content,clientUuid}` 起流式 | scripts/perf-probes/perf-derivatives.mjs | T1,T2,T4,T5,T6 |
 | chat-view-deps speakStateOf/onSpeak/onForkAsk/onHandoffAsk | 签名（id / sessionId+Message） | packages/ui/src/features/chat/chat-view-deps.ts:97,114,116,122 | T2 |
 | turn.user 稳定引用 / turnStableId | 流式期 user 引用稳定；turnStableId=user.id | packages/core/src/domain/chat/message-turns.ts:673,942,145 | T2,T3 |
 

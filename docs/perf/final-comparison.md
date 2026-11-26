@@ -2,9 +2,9 @@
 
 > 分支 `feat-cpu-gpu-performance` · before = `eff28e4a5`（批1 前的原始代码）· after = HEAD `fa43afc7b`（5 批优化全部落地）
 > 数据 = `docs/perf/final-measurement/`（三进程 profile、metrics、env、folded 栈、分析原始输出）；trace 本体在会话 artifacts `<artifacts>/b5-traces/`
-> 复算：`node probes/analyze-clean-cpu.mjs baseline=docs/perf/final-measurement final=docs/perf/final-measurement` / `node probes/analyze-gpu-arms.mjs ...`
+> 复算：`node scripts/perf-probes/analyze-clean-cpu.mjs baseline=docs/perf/final-measurement final=docs/perf/final-measurement` / `node scripts/perf-probes/analyze-gpu-arms.mjs ...`
 >
-> **本表与批1-4 对比表的根本差别**：批1-4 的 before 继承首轮脏测量（打包版并存 + 后台窗口 + 4 次运行拼盘 + GPU trace 仅 33.67s）。本表的前后两侧**跑在同一 harness 上**——同一台机、同一 dev Electron 壳、同一 production bundle 形态（`vite build --minify false` + `vite preview` 静态伺服）、同一 faux fixture（`original-45k`，45,663 字符）、同一探针（`probes/perf-clean-cpu.mjs`，单次运行内采齐 renderer+runtime+pi）、同一安静窗（load 1m 2.19 vs 3.59）。唯一变量 = 代码。
+> **本表与批1-4 对比表的根本差别**：批1-4 的 before 继承首轮脏测量（打包版并存 + 后台窗口 + 4 次运行拼盘 + GPU trace 仅 33.67s）。本表的前后两侧**跑在同一 harness 上**——同一台机、同一 dev Electron 壳、同一 production bundle 形态（`vite build --minify false` + `vite preview` 静态伺服）、同一 faux fixture（`original-45k`，45,663 字符）、同一探针（`scripts/perf-probes/perf-clean-cpu.mjs`，单次运行内采齐 renderer+runtime+pi）、同一安静窗（load 1m 2.19 vs 3.59）。唯一变量 = 代码。
 
 ## 0. 环境声明（题面 8 条测量纪律的逐条落实）
 

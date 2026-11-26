@@ -31,8 +31,8 @@
 | StreamViewItem turn 项 preview 字段 | string 改惰性求值形态 | packages/renderer/src/components/panel/message-stream/stream-view-items.ts:33 | T1,B2 |
 | canReuseView turn 分派 | 复用判定；移除 preview 比对 | packages/renderer/src/components/panel/message-stream/stream-view-items.ts:145 | T1,B2 |
 | StreamItemBoundary :preview | broken 占位行消费点 | packages/renderer/src/components/panel/MessageStream.vue:121 | B2 |
-| runtime WS 协议（auth+session.create+chat.send） | auth.result → RPC；零依赖 WebSocket；服务端入口 | packages/runtime/src/transport/message-broker.ts probes/perf-derivatives.mjs | T1 |
-| CDP Profiler（renderer target） | json/list 取 webSocketDebuggerUrl 后 Profiler.start/stop | probes/perf-derivatives.mjs | T1 |
+| runtime WS 协议（auth+session.create+chat.send） | auth.result → RPC；零依赖 WebSocket；服务端入口 | packages/runtime/src/transport/message-broker.ts scripts/perf-probes/perf-derivatives.mjs | T1 |
+| CDP Profiler（renderer target） | json/list 取 webSocketDebuggerUrl 后 Profiler.start/stop | scripts/perf-probes/perf-derivatives.mjs | T1 |
 
 ## 未核实风险
 

@@ -20,9 +20,9 @@
 | F12 | 打包版 TaiJi.app 在跑且本会话宿主即该应用（session 数据目录在 `~/.taiji/ext-sessions` 下，即打包态 getDataDir）⇒ 不可安全关闭，登记受限条件 L1 | 事实 | .run/b5-evidence/electron-procs.txt:3 （pid 11504 /Applications/TaiJi.app/Contents/MacOS/TaiJi） + 本 session artifacts 路径由宿主注入 |
 | F13 | 测量前瞬时负载已落安静区（load 1m 2.65，CPU idle 84%），但 1 小时前曾 27.98 ⇒ 采集前必须复测 load | 事实 | .run/b5-evidence/uptime-samples.txt:3 （23:09 采样 load 2.65/3.71/4.86）与 :6 （idle 84.27%） + 21:50 采样 1m 27.98 见题面开局环境事实 |
 | F14 | 首轮 pi profile 的采集手段 = mock-pi 置换为 node launcher + Bun SEA 不食 NODE_OPTIONS 且 SIGUSR1 会杀死它 | 事实 | docs/perf/perf-measured-report.md:20 与 :666 （launcher 代码留档）与 :15 （数据文件名） |
-| F15 | analyze-gpu-union.mjs 已是 union 口径（墙钟跨度 + 每线程 union + Present/Raster/GPUTask 统计），本批直接复用 | 事实 | probes/analyze-gpu-union.mjs 第 3 行起（头注对齐 GLM M1 口径） |
-| F16 | 首轮 GPU trace 墙钟仅 33.67s 且未覆盖 fence 闭合，根因 = Tracing.start 未指定 recordMode（默认 record-until-full）且不处理 dataLoss | 事实 | probes/gpu-trace.mjs 第 109 行（批1 版 Tracing.start 仅 categories + transferMode） + docs/perf/adversarial-review-glm.md 第 66 行起（A6 复算） |
-| F17 | 三臂注入手段可经 CDP 完成：CSS 注入 = Runtime.evaluate 追加 style + prefers-reduced-transparency 模拟 = Emulation.setEmulatedMedia | 事实 | packages/renderer/src/components/ui/edge-fade/EdgeFade.vue:104 （matchMedia 监听 = 模拟值的消费点） + 探针实装 probes/gpu-trace.mjs:181 （setEmulatedMedia）与 :145 （no-blur 注入） |
+| F15 | analyze-gpu-union.mjs 已是 union 口径（墙钟跨度 + 每线程 union + Present/Raster/GPUTask 统计），本批直接复用 | 事实 | scripts/perf-probes/analyze-gpu-union.mjs 第 3 行起（头注对齐 GLM M1 口径） |
+| F16 | 首轮 GPU trace 墙钟仅 33.67s 且未覆盖 fence 闭合，根因 = Tracing.start 未指定 recordMode（默认 record-until-full）且不处理 dataLoss | 事实 | scripts/perf-probes/gpu-trace.mjs 第 109 行（批1 版 Tracing.start 仅 categories + transferMode） + docs/perf/adversarial-review-glm.md 第 66 行起（A6 复算） |
+| F17 | 三臂注入手段可经 CDP 完成：CSS 注入 = Runtime.evaluate 追加 style + prefers-reduced-transparency 模拟 = Emulation.setEmulatedMedia | 事实 | packages/renderer/src/components/ui/edge-fade/EdgeFade.vue:104 （matchMedia 监听 = 模拟值的消费点） + 探针实装 scripts/perf-probes/gpu-trace.mjs:181 （setEmulatedMedia）与 :145 （no-blur 注入） |
 | F18 | 首轮流式窗长度不可复现：faux 200TPS 的实际流式时长在 48-155s 区间波动（事件循环影响配速）⇒ 固定墙钟窗不可用 | 事实 | docs/perf/adversarial-review-glm.md:23 （A1 四次运行 53/74/48/155s）与 :66 （A6 trace 33.67s） |
 
 ## 二、推断与未核实风险
@@ -49,12 +49,12 @@ I1（SIGUSR1 能否在 tsx 壳上激活 inspector）、I2（minify 差异）、I
 
 | 接口 | 依据 | case |
 |---|---|---|
-| CDP `Profiler.enable/start/stop`（renderer target，无 tracing） | probes/lib/harness.mjs:287 （captureStreamingProfile 既有实装，批1-4 复用） + docs/perf/batch1-comparison.md:18 （无 tracing 口径） | M1 |
-| CDP `Performance.enable` + `getMetrics` | probes/perf-clean-cpu.mjs:260 （本批新增，窗内每秒快照） + 首轮缺失证据 = docs/perf/adversarial-review-glm.md:85 （metrics 全空） | M1 |
-| CDP `Tracing.start{options:'record-continuously'}` + `Tracing.dataLossOccured` | probes/gpu-trace.mjs:199 （本批改写） + 首轮缺失对照 = docs/perf/adversarial-review-glm.md:66 | M2 |
-| CDP `Emulation.setEmulatedMedia{features:[prefers-reduced-transparency]}` | probes/gpu-trace.mjs:181 （本批新增 arm=reduced） + 消费点 packages/renderer/src/components/ui/edge-fade/EdgeFade.vue:104 | G3 |
-| Node inspector（SIGUSR1 激活 / `--inspect` 拉起）+ CDP Profiler | probes/lib/harness.mjs:439 （本批新增 connectNodeInspector/startProfiler/stopProfiler） + runtime 无 handler 证据 = F6 | M1 |
-| runtime RPC：`session.create` / `session.subscribe` / `delivery.submit` / `message.complete` | .agents/skills/verify-taiji/scripts/lib/protocol.mjs:35 （reply 别名表）与 :404 （waitTurnEnd 事件集；dmg-r1-3 单源化后权威在 skill 侧，probes/vp/lib 副本已删除） + probes/lib/harness.mjs:340 （waitForSessionComplete） | M1,M2 |
+| CDP `Profiler.enable/start/stop`（renderer target，无 tracing） | scripts/perf-probes/lib/harness.mjs:287 （captureStreamingProfile 既有实装，批1-4 复用） + docs/perf/batch1-comparison.md:18 （无 tracing 口径） | M1 |
+| CDP `Performance.enable` + `getMetrics` | scripts/perf-probes/perf-clean-cpu.mjs:260 （本批新增，窗内每秒快照） + 首轮缺失证据 = docs/perf/adversarial-review-glm.md:85 （metrics 全空） | M1 |
+| CDP `Tracing.start{options:'record-continuously'}` + `Tracing.dataLossOccured` | scripts/perf-probes/gpu-trace.mjs:199 （本批改写） + 首轮缺失对照 = docs/perf/adversarial-review-glm.md:66 | M2 |
+| CDP `Emulation.setEmulatedMedia{features:[prefers-reduced-transparency]}` | scripts/perf-probes/gpu-trace.mjs:181 （本批新增 arm=reduced） + 消费点 packages/renderer/src/components/ui/edge-fade/EdgeFade.vue:104 | G3 |
+| Node inspector（SIGUSR1 激活 / `--inspect` 拉起）+ CDP Profiler | scripts/perf-probes/lib/harness.mjs:439 （本批新增 connectNodeInspector/startProfiler/stopProfiler） + runtime 无 handler 证据 = F6 | M1 |
+| runtime RPC：`session.create` / `session.subscribe` / `delivery.submit` / `message.complete` | .agents/skills/verify-taiji/scripts/lib/protocol.mjs:35 （reply 别名表）与 :404 （waitTurnEnd 事件集；dmg-r1-3 单源化后权威在 skill 侧，scripts/perf-probes/vp/lib 副本已删除） + scripts/perf-probes/lib/harness.mjs:340 （waitForSessionComplete） | M1,M2 |
 | pi 二进制解析点（dev 分支） | packages/runtime/src/infra/pi/find-pi-executable.ts:31 （dev 分支优先 resources/pi 下的已 prepare 二进制，实装 :62 拼接） | P1 |
 | faux 脚本通道（TAIJI_FAUX_SCRIPT / TAIJI_FAUX_TPS） | packages/runtime/src/__tests__/fixtures/faux-llm-ext.ts:141 （脚本读取）与 :147 （tps 流控） | F1,F2,F3 |
 | 端口注入三通道 | packages/shared/src/constants.ts:8 与 apps/electron/main/supervisor/port-discoverer.ts:36 与 apps/electron/scripts/dev-electron.mjs:162 与 apps/electron/main/window/window-factory.ts:46 | M1,M2,M3,G1 |

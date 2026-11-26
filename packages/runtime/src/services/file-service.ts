@@ -514,7 +514,7 @@ export class FileService implements IFileService {
    *   （2.8x，语义等价性由 domains-bundle.test.ts B4 oracle 套件锁定）。
    * - TTFT 实测：walk 与 prompt 并发时首帧 40-65ms，与无文件请求的 warm 地板
    *   （47-65ms）无统计差异——事件循环交错下 walk 不在首 token 关键路径上
-   *   （探针 probes/perf-ttft.mjs，对比表 docs/perf/batch4-comparison.md）。
+   *   （探针 scripts/perf-probes/perf-ttft.mjs，对比表 docs/perf/batch4-comparison.md）。
    */
   private async loadMatcher(...dirs: string[]): Promise<IgnoreMatcher> {
     const collected: IgnoreMatcher[] = []
