@@ -14390,6 +14390,9 @@ afterEach(() => {
   rmSync(tmpDir_m2_m2_d1, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
 })
 describe('@zhushanwen/pi-system-prompt', () => {
+  // 冷加载预热：loadPlugin 首次动态 import 需现场变换扩展 TS 源，满并行门禁负载下实测 5.46s
+  // 越过默认 5s 用例预算；把冷加载成本挂进 beforeAll 自带显式超时，各用例保持默认预算。
+  beforeAll(async () => { await loadPlugin() }, 30_000)
   it('append 开启且非空 → 返回 BASE + "\\n\\n" + EXTRA', async () => {
     const factory = await loadPlugin()
     writeConfig(dataDir, {
