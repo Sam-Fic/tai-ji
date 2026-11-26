@@ -558,7 +558,9 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
         setTimeout(() => {
           fs.writeFileSync(dir + '/2026T_fresh.jsonl', '{"type":"session","id":"fresh"}\\n')
         }, 30)
-        ${sleepCode(5000)}
+        // 自终止 2s（非 5s）：就绪投递丢失时 death 分支的交付物事实查询回收也要落在
+        // vitest 默认 5s 用例预算内（子进程 boot 本身在满载下可达秒级）
+        ${sleepCode(2000)}
       `)
 
       const got = await forkViaCliPi({ piCommand: script, sourceFile: src, threadDir, cwd: fx })
@@ -566,6 +568,26 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
       expect(got).toBe(join(threadDir, '2026T_fresh.jsonl')) // 新文件，不是 pre-existing
       const argv = JSON.parse(readFileSync(join(scriptDir, 'ok.js.argv'), 'utf8')) as string[]
       expect(argv).toEqual(['--mode', 'rpc', '--fork', src, '--session-dir', threadDir])
+    })
+
+    it('投递先序反转形态：交付物落盘 + 子进程即刻退出（watch 事件与 exit 任意先序）→ 仍按 fork 成功返回', async () => {
+      // v0.13.4 CI 满载 flake 回归锚：fs.watch 与子进程事件走不同内核通道，满载下投递
+      // 先序不定——旧实现按「death 赢得 race」误回落 no-source。fake pi 同步写交付物后
+      // 立即自然退出（无保活窗），death 分支的交付物事实查询（优先序契约）保证任意
+      // 投递先序下结果一致；本用例无等待窗，watch 通道任一失效仍有 exit 信号兜底收口。
+      const threadDir = join(fx, 'threadB')
+      mkdirSync(threadDir, { recursive: true })
+      const src = join(fx, 'src-race.jsonl')
+      writeFileSync(src, '{"type":"session"}\n')
+      const script = writeFakePi('race.js', `
+        const dir = args[args.indexOf('--session-dir') + 1]
+        fs.mkdirSync(dir, { recursive: true })
+        fs.writeFileSync(dir + '/2026T_race.jsonl', '{"type":"session","id":"race"}\\n')
+      `)
+
+      const got = await forkViaCliPi({ piCommand: script, sourceFile: src, threadDir, cwd: fx })
+
+      expect(got).toBe(join(threadDir, '2026T_race.jsonl'))
     })
 
     it('bootstrap 异常退出（无文件）→ BtwError fork_failed 携带 stderr（调用方回落分支②）', async () => {
@@ -604,7 +626,7 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
           setTimeout(() => {
             fs.writeFileSync(dir + '/2026T_cli.jsonl', JSON.stringify({type:'session',id:'cli',cwd:${JSON.stringify(cwd)}}) + '\\n')
           }, 20)
-          ${sleepCode(5000)}
+          ${sleepCode(2000)} // 自终止 2s：death 事实查询回收路径须落在 vitest 默认用例预算内（同 ok.js）
         `
         h.deps.resolvePiCommand = () => writeFakePi('chain.js', chainBody)
         // get_state 读回须与 fork header id 一致（附着一致性检查）

@@ -142,6 +142,22 @@ describe("forkViaCliPi mock 双轨（默认档）", () => {
     expect(fakeChild.kill).toHaveBeenCalledWith("SIGTERM"); // 死亡路径统一出口的收口调用
   });
 
+  it("death 先到但交付物已在（exit 先于 watch 投递）→ 交付物事实查询裁决按成功返回（优先序契约）", async () => {
+    // v0.13.4 CI 满载 flake 回归锚（确定性形态）：fs.watch 与子进程事件走不同内核通道，
+    // 满载下投递先序不定——exit 只说明写入侧封闭，fork 成败以交付物（existing 外新增
+    // .jsonl）的同步目录查询为准，信号先序不再影响结果。
+    const p = forkViaCliPi({ piCommand: "/fake/pi", sourceFile: join(dir, "s.jsonl"), threadDir: dir, cwd: dir });
+    await flush();
+
+    // watch 回调不触发（模拟满载下 fs.watch 事件迟到/丢失）；子进程写完交付物后退出
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(join(dir, "delivered.jsonl"), '{"type":"session","id":"d"}\n');
+    fakeChild.emit("exit", 0);
+
+    await expect(p).resolves.toBe(join(dir, "delivered.jsonl"));
+    expect(fakeChild.kill).toHaveBeenCalledWith("SIGTERM"); // 死亡路径统一出口的收口调用（进程已退为无害 no-op）
+  });
+
   it("spawn 'error' 事件（ENOENT 形态）→ fork_failed 携原因（M1-b：不 uncaught、不挂起）", async () => {
     const p = forkViaCliPi({ piCommand: "/no/such/pi", sourceFile: join(dir, "s.jsonl"), threadDir: dir, cwd: dir });
     await flush();
@@ -173,6 +189,24 @@ describe("forkViaCliPi mock 双轨（默认档）", () => {
 
     await expect(p).rejects.toThrow(/watch failed.*EPERM/s);
     expect(fakeChild.kill).toHaveBeenCalledWith("SIGTERM"); // 非死亡路径：收掉还活着的 bootstrap
+  });
+
+  it("watch error 但交付物已在 → 收掉还活着的 bootstrap 按成功返回（同一优先序契约的就绪通道失效形态）", async () => {
+    const p = forkViaCliPi({ piCommand: "/fake/pi", sourceFile: join(dir, "s.jsonl"), threadDir: dir, cwd: dir });
+    await flush();
+
+    const errorHandler = watchers[0]?.on.mock.calls.find(([event]) => event === "error")?.[1] as
+      | ((e: Error) => void)
+      | undefined;
+    expect(errorHandler).toBeDefined();
+    // 交付物先落盘，随后就绪通道报错（watcher 失效 ≠ fork 失败）、子进程收尾退出
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(join(dir, "delivered-on-watch-error.jsonl"), '{"type":"session","id":"d2"}\n');
+    errorHandler?.(new Error("ENOSPC: inotify limit"));
+    fakeChild.emit("exit", 0);
+
+    await expect(p).resolves.toBe(join(dir, "delivered-on-watch-error.jsonl"));
+    expect(fakeChild.kill).toHaveBeenCalledWith("SIGTERM"); // 命中交付物同样走统一成功出口（kill + 等退出）
   });
 
   it("成功路径不泄漏 watcher（settled 后 close 为 no-op）；race 输掉方 rejection 显式吞（无 unhandled）", async () => {

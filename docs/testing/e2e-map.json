@@ -5174,7 +5174,7 @@
       "run": "TAIJI_TEST_INTEGRATION=1 pnpm --filter @taiji/runtime exec vitest run src/services/session/__tests__/btw-lifecycle.test.ts",
       "owner": "packages/runtime",
       "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
-      "note": "R2 态 + 用例级门控（2026-10-27 测试范围收缩：writeFakePi 真 node 子进程 + FORK_POLL 轮询 + SIGTERM→SIGKILL 宽限的 btw-fork-cli describe 整体门控；btw-lifecycle / btw-contract-inject / btw-create-branches 三簇 mock 驱动逻辑用例留无门控默认组）。触发条件 = scope 内 fork 执行链 diff 命中。断言本质 = 线目录新 .jsonl 探测、SIGTERM 被吞后宽限升级 SIGKILL、deps 装配与回落。serial=真 的理由 = 真进程 / 真磁盘吞吐在满载下无稳定上界。"
+      "note": "R2 态 + 用例级门控（2026-10-27 测试范围收缩：writeFakePi 真 node 子进程 + fs.watch 事件驱动就绪检测的 btw-fork-cli describe 整体门控——ADR-0188 时间机制删除后轮询/SIGTERM 宽限升级已退役；btw-lifecycle / btw-contract-inject / btw-create-branches 三簇 mock 驱动逻辑用例留无门控默认组）。触发条件 = scope 内 fork 执行链 diff 命中。断言本质 = 线目录新 .jsonl 探测（任意事件投递先序下结果一致——fork 成败以交付物同步目录查询裁决，优先序契约，v0.13.4 CI 满载 flake 修复 2026-11-26）+ deps 装配与回落。serial=真 的理由 = 真进程 / 真磁盘吞吐在满载下无稳定上界。"
     },
     {
       "id": "E2E-INTEG-68",
