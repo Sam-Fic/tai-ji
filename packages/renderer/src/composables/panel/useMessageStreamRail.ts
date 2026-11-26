@@ -13,12 +13,12 @@
  *
  * 提取至此（composables/panel 既有范式）：MessageStream.vue script setup ≤300 行规范 + rail 关注点单一可复用。
  */
-import { computed, ref, type ComputedRef, type Ref } from 'vue'
+import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
 import type { VirtualizerHandle } from 'virtua/vue'
 import type { MessageTurn } from '@/composables/logic/messageTurns'
 import type { SkillNoticeStreamItem } from '@/composables/panel/useSkillNoticeStream'
 import { turnStableId } from '@taiji/core/domain/chat'
-import { railMemoFor } from '@taiji/ui'
+import { railMemoFor, resetRailFreezeSlot } from '@taiji/ui'
 import { useTurnExpansion } from '@/composables/panel/useTurnExpansion'
 import { useTurnExpansionStore } from '@/stores/turn-expansion'
 
@@ -35,7 +35,16 @@ function sameTurnRefSequence(a: readonly MessageTurn[], b: readonly MessageTurn[
   return a.length === b.length && a.every((turn, i) => turn === b[i])
 }
 
-/** rail 可见派生视图签名逐字段比对（railMemoFor 四字段 = TurnRail 渲染消费的全部 turn 派生字段）。 */
+/** rail 可见派生视图签名逐字段比对（railMemoFor 四字段 = TurnRail 渲染消费的全部 turn 派生字段）。
+ *
+ * 签名必须覆盖 TurnRail 模板真实读取的**全部** turn 派生字段，否则「rail 看到的回合状态」与
+ * 「renderItems/对话流看到的回合状态」会对同一事实给出不同答案（card-03 P3-1）：
+ * - railMemoFor 四字段（userSummary/agentSummary/failed/iconClass）——摘要与图标着色；
+ * - `isStreaming`——`isActiveTurn()` 的呼吸弧 loader 开关（`TurnRail.vue:233`）与
+ *   `isTurnExpanded()` 的 toggle 图标方向（`:192-196`）。streaming 期间该字段恒 true、比对恒过，
+ *   只在流起/止的迁移帧多一次重建，优化收益不受影响；
+ * - user 行有无（`v-if="turn.user"`，`TurnRail.vue:62`）——决定整行是否渲染。
+ */
 function railMemoEquals(
   a: ReturnType<typeof railMemoFor>,
   b: ReturnType<typeof railMemoFor>,
@@ -46,6 +55,11 @@ function railMemoEquals(
     a.failed === b.failed &&
     a.iconClass === b.iconClass
   )
+}
+
+/** turn 的 rail 可见非摘要派生字段（isStreaming / user 行有无）——签名比对的一部分，见 railMemoEquals。 */
+function railTurnShapeEquals(a: MessageTurn, b: MessageTurn): boolean {
+  return a.isStreaming === b.isStreaming && !!a.user === !!b.user
 }
 
 /** useMessageStreamRail 依赖（由 MessageStream.vue 注入，避免重复读取 store/props）。 */
@@ -103,6 +117,16 @@ export function useMessageStreamRail(deps: UseMessageStreamRailDeps): {
    * 索引与本次数组同步（见 updateActiveTurnIndex）。
    */
   let railIndexByTurn = new WeakMap<MessageTurn, number>()
+  // 切 session：显式重置 rail 流式冻结槽（B-harden，resetRailFreezeSlot）。
+  // 放 watch（pre-flush）而非 railTurns computed 求值体内——computed 求值须纯，对 @taiji/ui
+  // 模块级单槽的副作用放在求值内违反 Vue computed 纯度契约；pre-flush watch 保证 reset
+  // 先于切换后同 tick 的任何求值，重置语义不变。重置的是模块级单槽，split mode 下别实例
+  // 正持有的槽会被连带清掉——后果仅是多算一次摘要（冻结槽 (id, prefix) 守卫下永不错值），
+  // 可接受（fact-check R4 申报）。不变量本身由冻结槽的 (id, prefix) 守卫保证，此处是
+  // 显式化 + 可检验。
+  watch(sessionId, () => {
+    resetRailFreezeSlot()
+  })
 
   /**
    * 派生视图恒等放宽判定：仅末位 turn 引用不同（streaming 末位 turn 每 delta 重建）、其余
@@ -128,6 +152,9 @@ export function useMessageStreamRail(deps: UseMessageStreamRailDeps): {
       return false
     }
     if (!railMemoEquals(railMemoFor(prevLast), railMemoFor(nextLast))) return false
+    // 非摘要派生字段（isStreaming / user 行有无）：TurnRail 模板同样直接读它们，漏比会让
+    // rail 与对话流对「是否还在流式」给出不同答案（流结束不灭 loader / 流开始不亮 loader）
+    if (!railTurnShapeEquals(prevLast, nextLast)) return false
     // rail 派生视图恒等 → 复用旧数组。补末位下标映射保持索引与当前 renderItems 同步
     // （同位同派生）：updateActiveTurnIndex 对末位新引用仍 O(1) 命中，不退化 findIndex。
     railIndexByTurn.set(nextLast, lastIdx)

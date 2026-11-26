@@ -163,3 +163,15 @@ package-lock.json.*
 /tpkg/
 # tree-plant 六道 gate 的运行产物（.run/*.json 内嵌内容哈希，手改会被后续阶段拒绝）
 /.run/
+
+# 批5：GPU trace 单文件 230-260MB，不入库（归档于会话 artifacts / .run，报告给路径）
+*.trace.json
+
+# perf 测量收尾（branch-review dmg-r1-2）：原始 CPU 采集物不入库——pi/runtime cpuprofile 内嵌
+# worktree 绝对路径（rule-22①）；本体归档于会话 artifacts，去向对账清单 =
+# docs/perf/final-measurement/raw-artifacts-manifest.json（md5/bytes，沿用 gpu-trace-manifest 同模式）
+*.cpuprofile
+# 例外：final-measurement/ 的归档 cpuprofile 是已核验测量归档（md5 manifest 锁定、
+# check-clean-artifacts 门禁的离线对账数据源，closeout 交付物），非原始采集物——
+# 原始物在 .run / 会话 artifacts，去向由 raw-artifacts-manifest.json 对账
+!docs/perf/final-measurement/*.cpuprofile
