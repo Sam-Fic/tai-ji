@@ -22,8 +22,14 @@
  * 档位不同 → 前缀缓存整体 miss。传 `ctx.thinkingLevel` 使两侧同值同源。
  */
 
-import type { Context as LlmContext, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
-import type { Tool as LlmTool, Message, ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type {
+	Context as LlmContext,
+	Message,
+	Model,
+	ModelThinkingLevel,
+	SimpleStreamOptions,
+	Tool as LlmTool,
+} from "@earendil-works/pi-ai";
 import type { ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { isRecord, toErrorMessage } from "@zhushanwen/pi-ext-guards";
 
@@ -116,7 +122,7 @@ function blockText(block: unknown): string {
 	return typeof block.text === "string" ? block.text : "";
 }
 
-/** 失败诊断文本：errorMessage 优先（setup 失败唯一载荷），回落 content 文本，再回落 stopReason。 */
+/** 失败诊断文本：content 文本优先（provider 把错误写进 text 块的既有形态），空则回落 errorMessage（setup 失败唯一载荷），再回落 stopReason。 */
 function failureText(resp: SimpleResponseLike): string {
 	const contentText = resp.content.map(blockText).join(" ").trim();
 	if (contentText !== "") return contentText;
