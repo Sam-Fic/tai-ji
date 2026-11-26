@@ -66,6 +66,19 @@ runtime 查得到时附 `Full transcript: <sessionFilePath>` 指针行。
   档必载），本扩展零装配义务——port 恒可用；缺席仅覆盖装配异常窗口（warn + 弃投该条，
   下次 session_start 重试装配）。
 
+## create 的 model 参数
+
+`model`（optional，`"provider/modelId"`）让新子会话跑在指定模型上：
+
+- **创建前校验**：值须与 `ctx.modelRegistry.getAvailable()` 全等精确匹配（provider 与 id 均
+  区分大小写），未命中即 throw 并列可用模型（≤20 条）——**不创建会话**，按清单重发即可。
+  数据源与子进程同 agentDir 派生，聚合路由条目（`aggregation/<routeId>`）同样可指定。
+- **为什么校验**：runtime 以 `--model` spawn 子进程，pi CLI 的模型解析是模糊引擎，provider
+  命中但 id 未命中会伪造自定义模型条目让进程正常起来——不校验就会得到「显示用了 X、实际
+  跑的是伪造条目」的静默错模会话。
+- **确认生效**：回包 `modelId` 是 get_state 读回的生效真值（不是请求值回显）；旧 runtime 不读
+  该字段时按默认模型创建，也从 `modelId` 看得出来。
+
 ## 排查入口
 
 | 症状 | 排查路径 |
@@ -78,7 +91,7 @@ runtime 查得到时附 `Full transcript: <sessionFilePath>` 指针行。
 
 | 工具 | 说明 |
 |------|------|
-| `create_managed_session` | 创建子 session（cwd 必填；可选 label；可选 prompt 原子 create+send；可选 model（"provider/modelId"）指定生效模型，不传 = settings.json 全局默认） |
+| `create_managed_session` | 创建子 session（cwd 必填；可选 label；可选 prompt 原子 create+send；可选 model 指定生效模型） |
 | `send_to_session` | 向子 session 发 prompt（忙时排队，`queued: true` 立即返回） |
 | `read_session_history` | 读子 session 对话历史（可选 tailTurns 截尾部 N 个 turn） |
 | `list_my_sessions` | 列本 agent 管理的 session（顺带回填 label 缓存，修复重启后的文案 label 降级） |

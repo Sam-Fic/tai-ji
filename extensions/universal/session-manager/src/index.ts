@@ -24,6 +24,7 @@ import { renderSessionManagerResult } from "./render.ts";
 import { runNotifyReconcileMaintenance } from "./notify-reconcile.ts";
 import { recordManagedNotify } from "./notify-delivery.ts";
 import { createWatchCoordinator } from "./watch-coordinator.ts";
+import { assertModelAvailable } from "./model-param.ts";
 
 // 模块级 logger（default export 首行 setPiHandle 注入后自动走 appendEntry 持久化，
 // 注入前/失败降级文件日志——见 extension-logger 三层通道设计）
@@ -35,11 +36,15 @@ const CreateManagedSessionParams = Type.Object({
 	cwd: Type.String({ description: "Working directory for the new session" }),
 	label: Type.Optional(Type.String({ description: "Human-readable label for the session" })),
 	prompt: Type.Optional(Type.String({ description: "Initial prompt injected right after creation (atomic create+send)" })),
-	// 模型覆盖（"provider/modelId" 格式，如 "aggregation/step-5-preview"）：透传 runtime
-	// session.create 的 modelOverride（优先级：metaOverride > modelOverride > settings.json
-	// 全局默认）。不传 = 全局默认——新建 session 的模型解析链里没有「继承派发方模型」这一级，
-	// 派发方在跑什么模型不影响子 session。
-	model: Type.Optional(Type.String({ description: "Model override for the new session in 'provider/modelId' format (e.g. 'aggregation/step-5-preview'). Omit = settings.json global default — the create path has no parent-model inheritance, so the dispatching session's own model never propagates." })),
+	model: Type.Optional(
+		Type.String({
+			description:
+				'Model for the new session in "provider/modelId" format (e.g. "deepseek/deepseek-v4-pro"). '
+				+ 'CASE-SENSITIVE — must equal an available model exactly; unknown or unauthenticated '
+				+ 'models are rejected before the session is created (the error lists the available models). '
+				+ 'Omit to use the default model. The result carries `modelId` — the model actually in effect.',
+		}),
+	),
 });
 
 const SendToSessionParams = Type.Object({
@@ -266,6 +271,13 @@ interface SessionToolConfig<S extends TObject> {
 	action: SessionManagerAction
 	/** schema params → 协议 params 的映射（undefined 字段由 JSON.stringify 丢弃） */
 	toParams: (params: Static<S>) => Record<string, unknown>
+	/**
+	 * 同步前置校验（仅 create 消费）：参数级校验，失败即 throw——在 select 通道往返
+	 * **之前**拦掉可自纠的非法参数，不产生 runtime 调用、不创建会话。throw 走 pi
+	 * agent-loop catch 置 isError:true（与 executeTool 的失败路径同范式，语义登记
+	 * PS-56），agent 可读错误文本重发修正值。
+	 */
+	validate?: (params: Static<S>, ctx: ExtensionToolContext) => void
 	/** 成功结果钩子（仅非错误通道结果触发）——notify-once 的 arm/label 缓存编排 */
 	onResult?: (ctx: ExtensionContext, params: Record<string, unknown>, result: unknown) => void
 	/**
@@ -306,6 +318,8 @@ function registerSessionTool<S extends TObject>(pi: ExtensionAPI, cfg: SessionTo
 			// pi 1.0.0：ToolDefinition.execute 第 5 参 ctx 收窄为 ExtensionToolContext
 			ctx: ExtensionToolContext,
 		) {
+			// 前置校验先于通道往返（create 的 model 存在性校验——见 model-param.ts）
+			cfg.validate?.(params, ctx);
 			return executeTool(ctx, cfg.action, cfg.toParams(params), cfg.onResult, cfg.toSummary);
 		},
 	});
@@ -369,30 +383,30 @@ export default function sessionManagerExtension(pi: ExtensionAPI): void {
 		// 其余七件保持 deferred
 		exposure: "direct",
 		promptSnippet:
-			"Create a new managed child session in a working directory, optionally with an initial prompt.",
+			"Create a new managed child session in a working directory, optionally with an initial prompt and a model.",
 		description: `Create a new managed child session in a working directory, optionally with an initial prompt.
 
 Returns the new session's id and its initial status. With a prompt it is delivered immediately (new sessions are always idle) and exactly one completion notification is delivered to this session when that first run finishes (see pending_notifications, type 'session'); without a prompt, no completion notification. If the session dies later, its terminal death is notified once regardless — independent of completion notifications.
 
+Pass \`model\` ("provider/modelId") to pick the model the new session runs on — case-sensitive, must equal an available model exactly, and an unknown or unauthenticated model is rejected before anything is created (the error lists the available models; retry with one of them, or omit the param to use the default model). The result carries \`modelId\`: the model actually in effect — check it when you need to confirm.
+
 Different from send_to_session (delivers messages to an already-created session): this tool creates the session and can send its first message atomically in one call.
 
-Optional model param ('provider/modelId') selects the new session's model — passed through as the runtime session.create modelOverride. Omit = settings.json global default; there is NO parent-model inheritance on this path.
-
 ## Example
-{"cwd":"/absolute/path/to/project","label":"research","prompt":"Analyze the auth module"}
+{"cwd":"/absolute/path/to/project","label":"research","prompt":"Analyze the auth module","model":"deepseek/deepseek-v4-pro"}
 
 The returned sessionId is the value all other session tools take — keep it; list_my_sessions recovers it later. Requires the taiji desktop runtime (in standalone pi this tool hangs forever — no runtime answers the channel).`,
 		parameters: CreateManagedSessionParams,
 		action: "create",
+		// 前置校验（不产生 runtime 往返）：model 须与可用目录全等——模糊/不存在/无凭据
+		// 的模型在创建前即 throw（错误文本列出可用模型，agent 可一次重发自纠）。
+		// ctx.modelRegistry 与子进程同 agentDir 派生（聚合路由条目同在清单内）。
+		validate: (p, ctx) => assertModelAvailable(p.model, ctx.modelRegistry),
 		toParams: (p) => ({
 			cwd: p.cwd,
 			label: p.label,
 			prompt: p.prompt,
-			// 模型覆盖透传（协议位 SessionManagerCreateParams.modelOverride，经
-			// select+SESSION_MANAGER_MARKER 通道由 runtime SessionManagerHandler
-			// （session-manager-handler.ts）handleCreate 喂入 sessionService.create
-			// options.modelOverride——缺它则新建 session 只能吃全局默认）
-			modelOverride: p.model,
+			model: p.model,
 			// 债权只可能在带 prompt 时产生（G1）——无 prompt 不携带 notifyId（缺省即不 arm）
 			notifyId: p.prompt !== undefined ? newNotifyId() : undefined,
 		}),
@@ -416,9 +430,11 @@ The returned sessionId is the value all other session tools take — keep it; li
 		},
 		toSummary: (params, result) => {
 			const label = stringField(params, "label");
-			if (label) return `Created session "${label}"`;
+			const model = stringField(params, "model");
+			const suffix = model ? ` · ${model}` : "";
+			if (label) return `Created session "${label}"${suffix}`;
 			const sessionId = stringField(asResultRecord(result), "sessionId");
-			return sessionId ? `Created session ${sessionId}` : "Created session";
+			return sessionId ? `Created session ${sessionId}${suffix}` : `Created session${suffix}`;
 		},
 	});
 

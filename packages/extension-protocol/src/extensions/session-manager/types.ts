@@ -33,14 +33,18 @@ export interface SessionManagerCreateParams {
   prompt?: string
   /**
    * 创建时生效模型（`provider/modelId` 复合串，optional）。提供时 runtime 经
-   * SessionManagerHandler.handleCreate 透传 sessionService.create options.modelOverride
-   * （CreateOptions.modelOverride 链路，优先级 `override > preset > 全局默认`，C-RL-6）；
-   * 缺省 = settings.json 全局默认模型档（create 路径无「继承派发方模型」语义）。
+   * SessionCreateOptions.modelOverride 透传至 pi spawn `--model`（优先级高于 preset 与
+   * 全局默认）；缺省 = 全局默认模型档。
    *
-   * 本层只做类型范围检查（optional string）；模型 id 是否可解析归 pi spawn 侧
-   * fail-visible（无效模型名经创建失败错误回包，不静默降级默认）。
+   * 存在性校验**不在本协议层**：权威清单 = 子进程实际解析的模型目录（与发起方 pi 进程
+   * 同 agentDir 派生），在 extension 侧对 ctx.modelRegistry 全等校验后才会进本载荷
+   * （见 pi-session-manager src/model-param.ts）。本层只做类型范围检查（optional
+   * string）——畸形值仍走 error envelope，不静默流入 sessionService。
+   *
+   * additive 演进：旧 runtime 不读本字段 = 按默认模型创建，回包 modelId 恒为生效真值，
+   * 调用方可从结果自行判定是否生效。
    */
-  modelOverride?: string
+  model?: string
   /**
    * 完成通知债权的幂等键（optional，notify-once D2/D6）：extension 侧
    * `crypto.randomUUID()` 前缀 `sm-` 生成。缺省/畸形 → runtime 不 arm、
@@ -159,14 +163,14 @@ function isSessionIdParams(v: unknown): boolean {
   return isRecord(v) && typeof v.sessionId === 'string'
 }
 
-/** create：字段可选 string + optional modelOverride/notifyId（类型范围，sm- 形态判定归 arm 判据） */
+/** create：字段可选 string + optional notifyId（类型范围，sm- 形态判定归 arm 判据） */
 export function isSessionManagerCreateParams(v: unknown): v is SessionManagerCreateParams {
   return (
     isRecord(v) &&
     isOptionalString(v.cwd) &&
     isOptionalString(v.label) &&
     isOptionalString(v.prompt) &&
-    isOptionalString(v.modelOverride) &&
+    isOptionalString(v.model) &&
     isOptionalNotifyId(v.notifyId)
   )
 }

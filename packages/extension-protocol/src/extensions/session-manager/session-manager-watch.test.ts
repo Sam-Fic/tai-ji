@@ -132,11 +132,22 @@ describe('send/create optional-notifyId 检查（缺省放行 + 类型范围，�
     expect(isSessionManagerCreateParams(null)).toBe(false)
   })
 
-  it('create：modelOverride 类型范围（缺省放行 / string 放行 / 非 string 拒绝）——工具层 model 参数的 wire 字段（dmg-r1-1）', () => {
-    expect(isSessionManagerCreateParams({})).toBe(true)
-    expect(isSessionManagerCreateParams({ modelOverride: 'zai/glm-5' })).toBe(true)
-    expect(isSessionManagerCreateParams({ modelOverride: 42 })).toBe(false)
-    expect(isSessionManagerCreateParams({ modelOverride: { id: 'x' } })).toBe(false)
+  it('create：model 三态（缺省 / 合法 provider-modelId 串 / 任意字符串）通过', () => {
+    // 协议层只做类型范围检查（optional string）——存在性校验在 extension 侧对
+    // ctx.modelRegistry 全等裁决（pi-session-manager src/model-param.ts），畸形语义串
+    // 不该在协议层被当成形状违规拒掉（那是运行时才可知的域判据）
+    expect(isSessionManagerCreateParams({ cwd: '/tmp' })).toBe(true)
+    expect(isSessionManagerCreateParams({ cwd: '/tmp', model: 'deepseek/deepseek-v4-pro' })).toBe(true)
+    expect(isSessionManagerCreateParams({ cwd: '/tmp', model: 'aggregation/route-3' })).toBe(true)
+    // 值域非法但类型合法 → 仍通过（语义归 extension 前置校验，不进 error envelope）
+    expect(isSessionManagerCreateParams({ cwd: '/tmp', model: 'nonsense' })).toBe(true)
+    expect(isSessionManagerCreateParams({ cwd: '/tmp', model: '' })).toBe(true)
+  })
+
+  it('create：model 非 string（类型违规）→ 拒绝（error envelope 路径）', () => {
+    expect(isSessionManagerCreateParams({ cwd: '/tmp', model: 42 })).toBe(false)
+    expect(isSessionManagerCreateParams({ cwd: '/tmp', model: { provider: 'p', id: 'm' } })).toBe(false)
+    expect(isSessionManagerCreateParams({ cwd: '/tmp', model: null })).toBe(false)
   })
 })
 

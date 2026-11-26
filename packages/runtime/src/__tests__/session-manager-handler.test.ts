@@ -234,44 +234,55 @@ describe('SessionManagerHandler', () => {
       expect(opts.broadcastSessionList).toHaveBeenCalledWith()
     })
 
-    it('create modelOverride 契约两态：传 model → 透传 sessionService.create options.modelOverride 且回执 modelId=生效值；不传 → options 不携 modelOverride（全局默认）', async () => {
-      // 态 1：extension 传 model（wire 字段 SessionManagerCreateParams.modelOverride，
-      // dmg-r1-1 修复锚——断链曾经在此静默 no-op）。真链路：modelOverride 经
-      // CreateOptions 落 pi spawn 生效值并由注册表双写缓存，此处以 getSession 回读模拟。
-      const withModel = makeSessionSummary({ id: 'with-model' })
-      const optsModel = makeMockOptions({
+    it('create 带 model → 透传为 SessionCreateOptions.modelOverride（子会话生效模型）', async () => {
+      const session = makeSessionSummary({ id: 'model-session' })
+      const opts = makeMockOptions({
         sessionService: makeMockSessionService({
-          create: vi.fn().mockResolvedValue(withModel),
-          getSession: vi.fn().mockReturnValue({ id: 'with-model', modelId: 'zai/glm-5' }),
+          create: vi.fn().mockResolvedValue(session),
+          getSession: vi.fn().mockReturnValue({ id: 'model-session', modelId: 'deepseek/deepseek-v4-pro' }),
         }),
       })
-      await new SessionManagerHandler(optsModel).handle('req-m', 'sid-parent', 'create', {
-        cwd: '/test',
-        label: 'with-model',
-        modelOverride: 'zai/glm-5',
-      })
-      expect(optsModel.sessionService.create).toHaveBeenCalledWith(
-        '/test',
-        'with-model',
-        expect.objectContaining({ modelOverride: 'zai/glm-5' }),
-      )
-      expect(respondAt(optsModel).modelId).toBe('zai/glm-5')
+      const handler = new SessionManagerHandler(opts)
 
-      // 态 2：不传 model → options 不携 modelOverride（undefined 缺省），解析链落全局默认
-      const defaultModel = makeSessionSummary({ id: 'default-model' })
-      const optsDefault = makeMockOptions({
+      await handler.handle('req-1', 'sid-parent', 'create', {
+        cwd: '/test',
+        label: 'modeled',
+        model: 'deepseek/deepseek-v4-pro',
+      })
+
+      // modelOverride 走既有 SessionCreateOptions 字段（C-RL-6 最高优先：agent-managed
+      // create 不携 presetId，preset 档不可达）——不新增 create 选项面
+      expect(opts.sessionService.create).toHaveBeenCalledWith('/test', 'modeled', {
+        spawnSource: 'agent',
+        parentAgentSessionId: 'sid-parent',
+        persistLabel: true,
+        projectId: undefined,
+        modelOverride: 'deepseek/deepseek-v4-pro',
+      })
+      // respond 的 modelId = lifecycle 注册表生效值（get_state 读回播种，非请求值回显）
+      const createRespond = respondAt(opts)
+      expect(createRespond.modelId).toBe('deepseek/deepseek-v4-pro')
+    })
+
+    it('create 不带 model → modelOverride 缺省（全局默认模型档，旧行为不变）', async () => {
+      const session = makeSessionSummary({ id: 'default-model-session' })
+      const opts = makeMockOptions({
         sessionService: makeMockSessionService({
-          create: vi.fn().mockResolvedValue(defaultModel),
-          getSession: vi.fn().mockReturnValue({ id: 'default-model', modelId: 'settings-default/model' }),
+          create: vi.fn().mockResolvedValue(session),
+          getSession: vi.fn().mockReturnValue({ id: 'default-model-session', modelId: 'openai/gpt-4' }),
         }),
       })
-      await new SessionManagerHandler(optsDefault).handle('req-d', 'sid-parent', 'create', {
-        cwd: '/test',
+      const handler = new SessionManagerHandler(opts)
+
+      await handler.handle('req-1', 'sid-parent', 'create', { cwd: '/test' })
+
+      expect(opts.sessionService.create).toHaveBeenCalledWith('/test', undefined, {
+        spawnSource: 'agent',
+        parentAgentSessionId: 'sid-parent',
+        persistLabel: true,
+        projectId: undefined,
+        modelOverride: undefined,
       })
-      const sentOptions = (optsDefault.sessionService.create as ReturnType<typeof vi.fn>).mock
-        .calls[0][2] as Record<string, unknown>
-      expect(sentOptions.modelOverride).toBeUndefined()
-      expect(respondAt(optsDefault).modelId).toBe('settings-default/model')
     })
   })
 

@@ -66,19 +66,6 @@ describe("U5-A2 tool-execute", () => {
 		expect(payload.params.label).toBe("test");
 	});
 
-	it("create_managed_session passes model through as modelOverride（不传则 undefined = 全局默认）", async () => {
-		const tool = harness.registered.find((t) => t.name === "create_managed_session")!;
-		harness.selectMock.mockResolvedValue('{"sessionId":"s1"}');
-		await tool.execute("call-1", { cwd: "/work", model: "aggregation/step-5-preview" }, undefined, undefined, harness.ctx);
-		const payload = JSON.parse(harness.selectMock.mock.calls[0][1][0]);
-		expect(payload.params.modelOverride).toBe("aggregation/step-5-preview");
-		harness.selectMock.mockClear();
-		harness.selectMock.mockResolvedValue('{"sessionId":"s2"}');
-		await tool.execute("call-2", { cwd: "/work" }, undefined, undefined, harness.ctx);
-		const payload2 = JSON.parse(harness.selectMock.mock.calls[0][1][0]);
-		expect(payload2.params.modelOverride).toBeUndefined();
-	});
-
 	it("send_to_session includes sessionId and prompt in payload.params", async () => {
 		const tool = harness.registered.find((t) => t.name === "send_to_session")!;
 		harness.selectMock.mockResolvedValue('{"queued":true}');
