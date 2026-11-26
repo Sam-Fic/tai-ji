@@ -113,6 +113,8 @@ const EXEMPT = {
   'scripts/__tests__/check-domain-slices.test.mjs': '域切分守卫黑盒自测（spawn 检查脚本本体，亚秒级，沿检查器自测先例）',
   'scripts/__tests__/check-test-results.test.mjs': 'junit 聚合检查黑盒自测（spawn 检查脚本本体，亚秒级）',
   'scripts/__tests__/check-test-junit-parity.test.mjs': 'junit 守恒工具黑盒自测（spawn 工具本体，亚秒级）',
+  // —— workspace 双布局定位（2026-11 普通仓库布局回退）：git 仅作 fixture 构建工具 ——
+  'scripts/__tests__/merge-state.test.mjs': 'X1 豁免：git 仅作 fixture 构建工具（tmp 内 git init/worktree add 搭真实 .git 结构供 git-common-dir 回退解析，被测物 = findWorkspaceRoot/mainWorktreePath 纯函数逻辑，非进程语义）；确定性、整套 16 用例实测 1.4s；tmp 自建自删，手工伪造 .git 结构不可靠（git 内部结构有版本约束）且测的是假结构',
   'scripts/__tests__/check-global-slot-keys.test.mjs': '检查器黑盒自测（spawn 检查脚本本体，亚秒级）',
   'scripts/__tests__/check-guide-contract-projection.test.mjs': '检查器黑盒自测（spawn 检查脚本本体，亚秒级）',
   'scripts/__tests__/check-infra-services-import.test.mjs': '检查器黑盒自测（spawn 检查脚本本体，亚秒级）',

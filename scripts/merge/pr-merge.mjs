@@ -162,7 +162,7 @@ console.log('')
 console.log('  sync 本地 main...')
 const WS_ROOT = findWorkspaceRoot()
 if (WS_ROOT === null) {
-  fail('Error: 未找到 workspace 根（向上查找含 .bare/ 的目录失败）——请在 worktree 内运行')
+  fail('Error: 未找到 workspace 根（bare 布局向上无 .bare/，且回退 git rev-parse 也未命中仓库）——请在 worktree 内运行')
   process.exit(1)
 }
 const MAIN_WT = mainWorktreePath(WS_ROOT)
