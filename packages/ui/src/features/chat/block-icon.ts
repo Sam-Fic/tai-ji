@@ -119,19 +119,24 @@ export const BLOCK_ICON_LUCIDE: Record<Exclude<BlockIconKind, 'running'>, Compon
  * viewBox 0 0 24 24，stroke currentColor stroke-width 1.7 / linecap round / linejoin round。
  * 颜色唯一 accent（消费方 text-accent 继承 currentColor），不加发光与缩放脉冲。
  *
- * 三重动画的驱动位置：
+ * 两层动画的驱动位置（[perf:animation] 2026-11 由三层降为两层，并再收尾为「仅外层一层」）：
  * - 整体旋转 = 消费方容器 class animate-loader-spin（1.15s/圈 cubic-bezier(.6,.1,.35,.9)，
- *   简写注册在 renderer tailwind.config.ts animation 段）；
- * - 弧段呼吸/摆动 = 全局 .ld-arc 类（style.css 动画 SSOT 区：dasharray 16%↔54% 呼吸
- *   2.3s ease-in-out + 150° 摆动同周期同相）——v-html 注入的 SVG 内部元素不带 scoped
- *   data-v 属性，Tailwind 类也无法静态命中，只能全局类声明（keyframes 同理必须全局）。
+ *   简写注册在 renderer tailwind.config.ts animation 段）。消费方容器一律是 HTML span，
+ *   且必须补 translateZ(0) 才能进合成层（实测：无提升单 spinner 9.3%/4.2% →
+ *   translateZ(0) 2.7%/2.0%，will-change 实测无改善）。
+ * - 弧段：**现为纯静态形态**（无动画）。两条原动画依次退役：① ld-arc-dash
+ *   （`stroke-dasharray` 16%↔54% 呼吸）—— stroke 几何属性逐帧重绘矢量、不可合成，且本
+ *   常量有 6 个挂点各一份；② ld-arc-swing（150° 摆动）—— 同在 SVG 元素上，同样不可合成
+ *   （实测流式场景只停 .ld-arc 一条，GPU helper 37.9%→24.7%），且外层 animate-loader-spin
+ *   已提供「在跑」视觉，去之无损语义。dasharray / rotate 现均为固定基态（16 100 / -75°）。
+ *   v-html 注入的 SVG 内部元素不带 scoped data-v 属性，Tailwind 类也无法静态命中，
+ *   只能全局类声明。
  *
  * prefers-reduced-motion 由 style.css 全局 @media reduce 兜底（animation-duration 0.01ms
- * + iteration 1）：三重动画全部瞬切终态后回 .ld-arc 基态——静态呈现「浅色轨道整圈 + 固定
- * 相位弧段」，无运动感但保留形态识别。
+ * + iteration 1）：外层旋转瞬切终态——静态呈现「浅色轨道整圈 + 固定相位弧段」，保留形态识别。
  *
- * 浅色轨道 .ld-track / 弧段 .ld-arc class 仅作形态标记与动画挂点，样式一律由 CSS 侧持有，
- * inline 只保留无动画的静态属性（opacity/pathLength），保证 v-html 可用。
+ * 浅色轨道 .ld-track / 弧段 .ld-arc class 仅作形态标记，样式一律由 CSS 侧持有，
+ * inline 只保留静态属性（opacity/pathLength），保证 v-html 可用。
  */
 export const RUNNING_LOADER_SVG: string =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +

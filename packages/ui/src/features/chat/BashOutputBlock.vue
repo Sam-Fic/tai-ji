@@ -47,7 +47,7 @@
           data-testid="bash-streaming-spinner"
         >
           <!-- eslint-disable-next-line vue/no-v-html -- hardcoded constant from block-icon.ts -->
-          <span class="inline-flex size-3 items-center justify-center animate-loader-spin" v-html="RUNNING_LOADER_SVG" />
+          <span class="inline-flex size-3 items-center justify-center animate-loader-spin [transform:translateZ(0)]" v-html="RUNNING_LOADER_SVG" />
         </span>
         <!-- W5：error==='timeout'（超时收尾形态）优先于 cancelled，显示「超时」与「已取消」区分。
              灰阶化：timeout/cancelled 改 neutral-dim（§13.2-D，非终端语义色） -->

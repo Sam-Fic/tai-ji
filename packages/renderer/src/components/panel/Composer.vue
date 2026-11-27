@@ -249,7 +249,7 @@
           class="ml-[4px] grid size-[var(--composer-btn-size)] place-items-center rounded-md bg-accent text-accent-fg"
           :title="t('panel.composer.sending')"
         >
-          <span class="inline-block size-[15px] animate-loader-spin" aria-hidden="true">
+          <span class="inline-block size-[15px] animate-loader-spin [transform:translateZ(0)]" aria-hidden="true">
             <svg
               class="size-full"
               viewBox="0 0 24 24"

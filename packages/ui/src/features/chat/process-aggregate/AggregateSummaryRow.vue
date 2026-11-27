@@ -25,7 +25,7 @@
          v-html 包装层，与 TurnRail / BashOutputBlock / MarkdownRenderer / TurnMeta
          四处既有消费同形态 -->
     <!-- eslint-disable-next-line vue/no-v-html -- hardcoded constant from block-icon.ts -->
-    <span v-if="live" class="inline-flex size-[15px] shrink-0 self-center items-center justify-center text-accent animate-loader-spin" data-testid="agg-summary-live-loader" v-html="RUNNING_LOADER_SVG" />
+    <span v-if="live" class="inline-flex size-[15px] shrink-0 self-center items-center justify-center text-accent animate-loader-spin [transform:translateZ(0)]" data-testid="agg-summary-live-loader" v-html="RUNNING_LOADER_SVG" />
     <Layers v-else class="size-[15px] shrink-0 self-center text-neutral-ico [stroke-width:1.6]" aria-hidden="true" />
     <span class="shrink-0">{{ t('panel.message.aggProcessLabel') }}</span>
     <!-- 分类计数：categoryCounts 三类按序（explore/edit/exec），0 省略——v-if 省略（DOM
