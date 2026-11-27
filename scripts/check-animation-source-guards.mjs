@@ -7,7 +7,7 @@
  *   - 常驻装饰性动画零残留（pulse-dot / steer-breathe / wiggle）与死类 animate-bounce-small
  *   - pending / retrying / streaming / compacting / working / waiting 各状态 animation 字段形态
  *   - SegmentedTab 文字 tab 形态（无 badge / 无 count 数字 / 无 motion-reduce 动画类）
- *   - SessionItem running 态 animate-spin 保留
+ *   - SessionItem running 态为静态 accent 空心环（2026-11 常驻动画退役）
  *   - composer-shell isActive 分支静态 ring（无动画装饰）
  *   - TaijiLogo 静态类 + inline 时长覆盖形态（Tailwind JIT 可生成），SVG 几何未变
  *   - style.css reduced-motion 块 !important 白名单 + @keyframes 定义存在
@@ -15,6 +15,12 @@
  * 为什么是脚本而不是 vitest 用例：整套判据都是「读源码字符串断言」，不验证任何运行时
  * 行为，也不构造模块图；放测试套件里每个用例只为 per-file 装载付固定成本。判据与阈值
  * 逐条原样承接（原 `.test.ts` 的 12 条断言一一对应本文件的 12 条检查）。
+ *
+ * [HISTORICAL] 2026-11 性能裁决修订 5 条判据（原判据断言 animate-spin 常驻，与本批「常驻
+ * 装饰动画退役」直接冲突）：plan06/TC1 pending 放宽到 pulse-strong 家族（量化版）；
+ * plan06/TC3 + plan04/TC4/T5 的 working/compacting 从 animate-spin 改静态空串；
+ * plan04/TC2 SessionItem running 从「保留 animate-spin」改为「静态空心环且禁 animate-spin」。
+ * 实体实现证据 = 打包版 GPU helper 54-60% + renderer 85%（dev 消融全停掉到 1/6）。
  *
  * 用法：node scripts/check-animation-source-guards.mjs
  * 退出码：0 = 全部通过；1 = 命中违规；2 = 环境错误（被读文件缺失）
@@ -63,9 +69,14 @@ function check(id, cond, expectation) {
 
 // ── plan 06 pending 死类修复 ────────────────────────────────────────────────
 check(
-  'plan06/TC1 pending 改用 animate-pulse-strong',
-  sessionStatus.includes("pending: { icon: 'ArrowUpCircle', color: 'text-accent', animation: 'animate-pulse-strong' }"),
-  "sessionStatus.ts 的 pending 应为 animate-pulse-strong（ArrowUpCircle / text-accent）",
+  'plan06/TC1 pending 使用 animate-pulse-strong 家族',
+  // [perf:animation] 2026-11 裁决修订：pending / retrying 从 animate-pulse-strong 改为
+  // animate-pulse-strong-quantized（steps(4) 量化）——两者动画目标都是 <svg>（Chromium
+  // 不合成 SVG transform），逐帧 opacity+scale 重绘；量化后重建频率降到 4 段而语义不变。
+  // 判据放宽为「必须属于 pulse-strong 家族」（原逐字断言 animate-pulse-strong 已失效）。
+  /animation: 'animate-pulse-strong[a-z-]*'/.test(sessionStatus)
+    && sessionStatus.includes("pending: { icon: 'ArrowUpCircle', color: 'text-accent', animation: 'animate-pulse-strong-quantized' }"),
+  "sessionStatus.ts 的 pending 应为 animate-pulse-strong-quantized（ArrowUpCircle / text-accent）",
 )
 check(
   'plan06/TC2 死类 animate-bounce-small 零残留',
@@ -73,15 +84,18 @@ check(
   'sessionStatus.ts 不得含 animate-bounce-small（死类已清理）',
 )
 check(
-  'plan06/TC3 其他状态 animation 字段不受影响',
+  'plan06/TC3 各状态 animation 字段形态（2026-11 性能裁决）',
+  // [perf:animation] 裁决修订：working / compacting 为「后台任务生命周期（分钟-小时）」的
+  // 常驻态，从 animate-spin 改静态（实测常驻动画是风扇根因，全停掉到 1/6）。streaming 是
+  // 秒-分钟的真实流式且用户预期在转，保留 spin（现由 PanelHeader 的 HTML 包装层承担）。
   sessionStatus.includes("streaming: { icon: 'RefreshCw', color: 'text-accent', animation: 'animate-spin' }")
-    && sessionStatus.includes("compacting: { icon: 'Hourglass', color: 'text-accent', animation: 'animate-spin' }")
-    && sessionStatus.includes("working: { icon: 'RefreshCw', color: 'text-accent', animation: 'animate-spin' }")
-    && sessionStatus.includes("retrying: { icon: 'Zap', color: 'text-warn', animation: 'animate-pulse-strong' }")
+    && sessionStatus.includes("compacting: { icon: 'Hourglass', color: 'text-accent', animation: '' }")
+    && sessionStatus.includes("working: { icon: 'Hourglass', color: 'text-accent', animation: '' }")
+    && sessionStatus.includes("retrying: { icon: 'Zap', color: 'text-warn', animation: 'animate-pulse-strong-quantized' }")
     && sessionStatus.includes("waiting: { icon: 'Wrench', color: 'text-warn', animation: '' }")
     && !tailwindConfig.includes('bounce-small')
     && !styleCss.includes('bounce-small'),
-  'streaming/compacting/working 的 animate-spin、retrying 的 pulse-strong、waiting 的空串须保留；config/style 不得新增 bounce-small',
+  'streaming 保留 animate-spin；working/compacting 改静态空串（常驻态降级）；retrying 量化；waiting 空串；config/style 不得新增 bounce-small',
 )
 
 // ── plan 05 reduced-motion 兜底 + TaijiLogo ────────────────────────────────
@@ -135,9 +149,14 @@ check(
   'SegmentedTab 须无 pulse-dot / motion-reduce 动画类 / badge / count 数字，label 直出',
 )
 check(
-  'plan04/TC2 SessionItem running 态保留旋转动画',
-  sessionItem.includes('animate-spin'),
-  'SessionItem（含 session-item/ 子组件）须保留 running 态 animate-spin',
+  'plan04/TC2 SessionItem running 态改静态空心环（2026-11 性能裁决）',
+  // [perf:animation] 裁决修订：SessionItem 是全仓唯一「N 实例」常驻动画点（每个 working
+  // session 一个环，多后台会话并存时线性增多），且持续整个任务生命周期。实测单 14px
+  // spinner 即 9.3% GPU helper，故 spinning 档改静态 accent 空心环（与 hollow 同形）。
+  // 判据改为「必须有 static 空心环 + 不得含 animate-spin」。
+  sessionItem.includes('rounded-full border-[1.5px] border-accent')
+    && !sessionItem.includes('animate-spin'),
+  'SessionItem（含 session-item/ 子组件）的 running 档须为静态 accent 空心环，且不得含 animate-spin（2026-11 常驻动画退役）',
 )
 check(
   'plan04/TC3 composer-shell isActive 静态 ring',
@@ -152,12 +171,13 @@ check(
   "waiting 的 animation 须为空串且无 animate-wiggle",
 )
 check(
-  'plan04/TC5 spin 保留 + pulse-dot keyframes 保留',
+  'plan04/TC5 streaming 保留 spin（working/compacting 已降级） + pulse-dot keyframes 保留',
+  // [perf:animation] 裁决修订：working / compacting 的 spin 已于 2026-11 退役（常驻态），
+  // streaming 保留（真实流式秒-分钟）。pulse-dot keyframes 仍须保留（TrayNativePanel 等消费）。
   sessionStatus.includes("streaming: { icon: 'RefreshCw', color: 'text-accent', animation: 'animate-spin' }")
-    && sessionStatus.includes("compacting: { icon: 'Hourglass', color: 'text-accent', animation: 'animate-spin' }")
-    && sessionStatus.includes("working: { icon: 'RefreshCw', color: 'text-accent', animation: 'animate-spin' }")
+    && !sessionStatus.includes("working: { icon: 'RefreshCw', color: 'text-accent', animation: 'animate-spin' }")
     && styleCss.includes('@keyframes pulse-dot'),
-  'streaming/compacting/working 的 spin 与 @keyframes pulse-dot 须保留',
+  'streaming 的 spin 与 @keyframes pulse-dot 须保留；working 不得再挂 animate-spin（2026-11 常驻动画退役）',
 )
 
 if (problems.length > 0) {

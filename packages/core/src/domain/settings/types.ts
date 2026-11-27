@@ -56,6 +56,16 @@ export interface SystemSettings {
    * 唯一写方 = 用户导入/删除动作；启动重放只读不写。
    */
   fontLibrary?: FontLibraryEntry[]
+  /**
+   * 减少动效开关（[perf:animation] 2026-11）：应用内的 `prefers-reduced-motion` 等价物。
+   * 缺省/false = 正常动效；true = 全局动画瞬切终态（语义同全局 reduce 兜底块：
+   * animation-duration 0.01ms + iteration 1，静态呈现终态而非冻结在首帧）。
+   *
+   * 存在理由：全局 reduce 兜底只依赖 OS 辅助功能设置，而「跑长任务时风扇狂转」是性能诉求
+   * 而非无障碍诉求，用户需要应用内可切换的降级口（审计报告 §6 指出机制缺失）。
+   * 落点 = <html data-reduce-motion="on">（apply-system-to-dom 写，style.css 消费）。
+   */
+  reduceMotion?: boolean
 }
 
 /**
@@ -136,4 +146,6 @@ export const DEFAULT_SYSTEM: SystemSettings = {
   fontSize: 'medium',
   fontScales: { ...DEFAULT_FONT_SCALES },
   completionSound: true,
+  // [perf:animation] 2026-11 减少动效开关默认关（不动用户现有观感；需要时由用户在外观页开启）。
+  reduceMotion: false,
 }

@@ -44,6 +44,10 @@ export default {
         'loader-spin': 'loader-spin 1.15s cubic-bezier(.6,.1,.35,.9) infinite',
         'ask-user-slide-up': 'ask-user-slide-up var(--duration-slow) var(--ease)',
         'pulse-strong': 'pulse-strong 1.4s ease-in-out infinite',
+        // [perf:animation] 量化版 pulse-strong（供挂在 <svg> 根的常驻/半常驻状态指示用：
+        // STATUS_ICON 的 pending / retrying 两态）。逐帧 opacity+scale 重绘 SVG 不可合成，
+        // steps(4) 把重建频率降到 4 段（实测 60fps→steps(8) 掉 2/3，取更粗的 4 段）。
+        'pulse-strong-quantized': 'pulse-strong 1.4s steps(4, end) infinite',
         'notice-in': 'notice-in 200ms var(--ease)',
         // 品牌旋转（太极「周而复始」）：静态简写注册供 JIT 生成；TaijiLogo 用 inline
         // animation-duration 覆盖时长（default 8s，可传 prop）。motion-reduce:animate-none

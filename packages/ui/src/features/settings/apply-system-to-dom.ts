@@ -117,4 +117,9 @@ export function applySystemToDom(
   // 写终值会以内联样式击穿样式表里的回落链声明。
   applyFontSlot(root.style, '--font-ui', s.fonts?.ui)
   applyFontSlot(root.style, '--font-mono-ui', s.fonts?.mono)
+
+  // [perf:animation] 2026-11 减少动效开关：写 <html data-reduce-motion="on">，由 style.css
+  // 的 [data-reduce-motion="on"] 规则快照终态（与全局 prefers-reduced-motion 同语义）。
+  // 用 setAttribute 不删 key：显式 "off" 亦写（不留悬空属，便于调试时看出开关已生效过）。
+  root.setAttribute('data-reduce-motion', s.reduceMotion === true ? 'on' : 'off')
 }
