@@ -49,7 +49,9 @@
       class="inline-flex items-center gap-1 text-[length:var(--text-3xs)] text-neutral-mid"
       data-testid="update-progress"
     >
-      <Loader2 class="size-3 animate-spin" />
+      <!-- [perf:animation] 2026-11 去掉旋转：下载安装包是分钟级、且已有百分比 + 进度条双指示，
+           旋转在这里属于纯装饰（原挂 <svg> 根，Chromium 不合成 SVG transform 每帧重绘矢量）。 -->
+      <Loader2 class="size-3" />
       <span class="tabular-nums">{{ t('sidebar.update.downloading', { percent: state.percent }) }}</span>
       <!-- 进度条（div 拼：bg-surface-2 容器 + bg-accent 子条） -->
       <span
@@ -73,7 +75,8 @@
       class="inline-flex items-center gap-1 text-[length:var(--text-3xs)] text-neutral-mid"
       data-testid="update-replacing"
     >
-      <Loader2 class="size-3 animate-spin" />
+      <!-- [perf:animation] 2026-11 同上：替换文件阶段的文案已表达进行中，去掉旋转。 -->
+      <Loader2 class="size-3" />
       <span>{{ t('sidebar.update.replacing') }}</span>
     </span>
 

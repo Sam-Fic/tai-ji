@@ -213,7 +213,10 @@ function onSubmit(): void {
       data-testid="form-head"
       class="relative flex items-center gap-2 px-3.5 pt-2.5"
     >
-      <span class="size-1.5 shrink-0 animate-pulse rounded-full bg-accent" />
+      <!-- [perf:animation] 2026-11 脉冲点改静态 accent 点：该点持续 = 等用户回答的整个时长
+           （分钟级→小时级，无上限）——原 animate-pulse（opacity）在用户离开思考期间恒跑。
+           语义「待你处理」由标题 + 表单本体承担，点位本体与 accent 色已足够。 -->
+      <span class="size-1.5 shrink-0 rounded-full bg-accent" />
       <!-- 单问题：标题提到 head 行，单行 truncate（draft 直挂无问题文本 → 只余脉冲点） -->
       <span
         v-if="!multiQuestion"

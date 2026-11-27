@@ -212,14 +212,14 @@ describe('WorkflowLivePanel · header 去重（D2 单 header 终态）', () => {
       completedAt: undefined,
       agentCalls: [makeCall({ id: 2, status: 'running', attempts: undefined, phase: 'beta' })],
     }))
-    // call #2 running → stoppedInFlight：状态文字 span 叠 text-neutral-mid；Loader2 静态（无 animate-spin）
+    // call #2 running → stoppedInFlight：状态文字 span 叠 text-neutral-mid；行内不再有 svg spinner
+    //（[perf:animation] 2026-11 收敛为静态状态点 + 表头唯一旋转指示）
     const status2 = wrapper.find('[data-testid="wf-viz-trace-status-2"]')
     expect(status2.attributes('data-status')).toBe('running')
     const label = status2.find('span.font-mono')
     expect(label.classes()).toContain('text-neutral-mid')
-    const spinner = status2.find('svg')
-    expect(spinner.exists()).toBe(true)
-    expect(spinner.classes()).not.toContain('animate-spin')
+    expect(status2.find('svg').exists()).toBe(false)
+    expect(status2.find('span.rounded-full').exists()).toBe(true)
   })
 
   it('cancelled 行（§3.3.8 run 终局收尾在途成员）：trace 表渲染中性档状态词，不再折进 failed', async () => {

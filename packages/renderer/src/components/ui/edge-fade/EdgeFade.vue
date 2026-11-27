@@ -36,11 +36,12 @@ let scroller: HTMLElement | null = null
 let transparencyMedia: MediaQueryList | null = null
 let sentinelIo: IntersectionObserver | null = null
 
+/* [perf:animation] 2026-11 四层 backdrop-blur 减为一层（原 1/2/4/8px 四层叠在同一 40px 带上
+   = 同一区域 4 次 backdrop 采样，是「动画期间成本放大器」的第二项；实测 blur 单独停掉零收益，
+   但叠加在动画/滚动上时被连带计费）。现单层 blur-[4px] 全高 + 下面仍在的渐变遮罩层负责
+   柔和度；分层梯度由 [mask-image] 的 4 stop 剖面继续承担，视觉差异极小。 */
 const LAYERS = [
-  { blur: 'h-full backdrop-blur-[1px]' },
-  { blur: 'h-3/4 backdrop-blur-[2px]' },
-  { blur: 'h-1/2 backdrop-blur-[4px]' },
-  { blur: 'h-1/4 backdrop-blur-[8px]' },
+  { blur: 'h-full backdrop-blur-[4px]' },
 ] as const
 
 /** 顶缘渐焦带高度（px），同时是容器 mask 的过渡段长度（demo 同值）。

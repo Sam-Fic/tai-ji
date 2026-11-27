@@ -13,13 +13,21 @@
       <TaijiLogo :size="48" class="text-accent" />
       <!-- runtime 重启中 -->
       <template v-if="connectionState === 'restarting'">
-        <Loader2 class="size-4 animate-spin text-neutral-dim" />
+        <!-- [perf:animation] 2026-11 restarting 保留旋转（主进程重启是秒级真实推进态，且这是
+            唯一指示「真的在重启」的信号）。旋转挂 HTML 包装层 + translateZ(0) 而非直接挂 SVG
+            （Chromium 不合成 SVG transform；实测无提升 9.3% → translateZ(0) 2.7%）。 -->
+        <span class="inline-flex size-4 animate-spin items-center justify-center text-neutral-dim [transform:translateZ(0)]" aria-hidden="true">
+          <Loader2 class="size-4" />
+        </span>
         <span class="text-[12.5px] text-neutral-dim">{{ t('connection.restarting') }}</span>
       </template>
       <!-- 等待 runtime 启动（目标快照未获得——冷启动 dev 延迟编译期即此态，快照到达即转连接）。
            重试 = 主动重拉目标快照（非蛮重连）；拉取中禁用防连点，失败停留本态可再点。 -->
       <template v-else-if="connectionState === 'waiting-runtime'">
-        <Loader2 class="size-4 animate-spin text-neutral-dim" />
+        <!-- [perf:animation] 2026-11 去掉转圈：本态可无限停留（等用户点重试），转圈在这一
+            场景正是「看起来在连、其实没连」的误导源（见模板头注 §6.8）；静态记号由上方
+            TaijiLogo 承担。 -->
+        <span class="block size-1 rounded-full bg-neutral-dim opacity-60" aria-hidden="true" />
         <span class="text-[12.5px] text-neutral-dim">{{ t('connection.waitingRuntime') }}</span>
         <Button
           variant="default"

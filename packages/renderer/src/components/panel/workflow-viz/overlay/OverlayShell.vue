@@ -35,9 +35,12 @@
   -dag-* 等）归各内容组件。
 -->
 <template>
+  <!-- [perf:animation] 2026-11 去掉全屏 backdrop-blur-[2px]：该模糊覆盖整屏面积、overlay 打开
+       期间常驻，并与内部动画（Gantt 段呼吸 / trace 旋转）同帧被连带计费；--scrim 本身已 0.8
+       不透明，模糊在几乎不透明的底上视觉价值低（与 DialogContent 同族注释口径一致）。 -->
   <div
     v-if="open"
-    class="fixed inset-0 z-[var(--z-dialog)] flex items-center justify-center bg-scrim backdrop-blur-[2px]"
+    class="fixed inset-0 z-[var(--z-dialog)] flex items-center justify-center bg-scrim"
     data-testid="wfvz-overlay"
     @click.self="close"
     @pointerdown.stop

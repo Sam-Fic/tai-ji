@@ -130,7 +130,9 @@
         class="absolute inset-0 flex flex-col items-center justify-center gap-3"
         data-testid="browser-loading"
       >
-        <div class="size-6 animate-spin rounded-full border-2 border-border border-t-accent" />
+        <!-- [perf:animation] 2026-11 补 translateZ(0)：HTML 边框环旋转不提层会走主线程逐帧重绘
+             （实测无提升单 spinner 9.3% GPU helper → 提升后 2.7%，will-change 无改善）。 -->
+        <div class="size-6 animate-spin rounded-full border-2 border-border border-t-accent [transform:translateZ(0)]" />
         <span class="font-mono text-[length:var(--text-2xs)] text-neutral-mid">{{ displayUrl }}</span>
       </div>
       <!-- 错误态（页面加载失败，§5.3 两类占位之一） -->
