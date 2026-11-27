@@ -26,7 +26,7 @@
  * 退出码：0 = 全部通过；1 = 命中违规；2 = 环境错误（被读文件缺失）
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -63,7 +63,9 @@ function collectVueFiles(dir, acc = []) {
 
 const problems = []
 /** 单条判据：cond=false 时记一条违规（带判据名与期望说明） */
+let checksRun = 0
 function check(id, cond, expectation) {
+  checksRun++
   if (!cond) problems.push(`${id}：${expectation}`)
 }
 
@@ -90,12 +92,12 @@ check(
   // 秒-分钟的真实流式且用户预期在转，保留 spin（现由 PanelHeader 的 HTML 包装层承担）。
   sessionStatus.includes("streaming: { icon: 'RefreshCw', color: 'text-accent', animation: 'animate-spin' }")
     && sessionStatus.includes("compacting: { icon: 'Hourglass', color: 'text-accent', animation: '' }")
-    && sessionStatus.includes("working: { icon: 'Hourglass', color: 'text-accent', animation: '' }")
+    && sessionStatus.includes("working: { icon: 'Loader2', color: 'text-accent', animation: '' }")
     && sessionStatus.includes("retrying: { icon: 'Zap', color: 'text-warn', animation: 'animate-pulse-strong-quantized' }")
     && sessionStatus.includes("waiting: { icon: 'Wrench', color: 'text-warn', animation: '' }")
     && !tailwindConfig.includes('bounce-small')
     && !styleCss.includes('bounce-small'),
-  'streaming 保留 animate-spin；working/compacting 改静态空串（常驻态降级）；retrying 量化；waiting 空串；config/style 不得新增 bounce-small',
+  'streaming 保留 animate-spin；working(Loader2)/compacting(Hourglass) 改静态空串且字形互异（常驻态降级 + 静态可区分，分支审查 arch-boundary M3）；retrying 量化；waiting 空串；config/style 不得新增 bounce-small',
 )
 
 // ── plan 05 reduced-motion 兜底 + TaijiLogo ────────────────────────────────
@@ -109,13 +111,46 @@ check(
 )
 check(
   'plan05/TC2 style.css reduced-motion 白名单保留',
-  styleCss.includes('transition-property: opacity, color, background-color, border-color, fill, stroke, box-shadow, filter !important')
-    && styleCss.includes('transition-duration: var(--duration-fast) !important')
-    && styleCss.includes('animation-duration: 0.01ms !important')
-    && styleCss.includes('animation-iteration-count: 1 !important')
-    && styleCss.includes('transition-duration: 0.01ms !important')
-    && styleCss.includes('transition-delay: 0ms !important'),
-  'reduced-motion 块的 !important 过渡白名单与瞬切兜底须完整保留',
+  // [HISTORICAL] 2026-11 分支审查 arch-boundary M1：原断言对全文 includes，被同批新增的
+  // [data-reduce-motion="on"] 块（逐字相同的声明）冒充——整段删掉 OS 媒体查询仍全绿。
+  // 改为锚定 @media 块内部：先定位块头，截到下一个顶层 '}' 为止再逐条断言。
+  (() => {
+    const head = styleCss.indexOf('@media (prefers-reduced-motion: reduce)')
+    if (head < 0) return false
+    const tail = styleCss.indexOf('transition-duration: var(--duration-fast) !important;', head)
+    if (tail < 0) return false
+    const block = styleCss.slice(head, styleCss.indexOf('}', tail))
+    return block.includes('transition-property: opacity, color, background-color, border-color, fill, stroke, box-shadow, filter !important')
+      && block.includes('transition-duration: var(--duration-fast) !important')
+      && block.includes('animation-duration: 0.01ms !important')
+      && block.includes('animation-iteration-count: 1 !important')
+      && block.includes('transition-duration: 0.01ms !important')
+      && block.includes('transition-delay: 0ms !important')
+  })(),
+  'reduced-motion 块的 !important 过渡白名单与瞬切兜底须完整保留（锚定 @media 块内部，不受同批属性选择器块冒充）',
+)
+check(
+  'plan05/TC5 应用内 [data-reduce-motion="on"] 块与 OS 媒体查询声明逐字同步',
+  // [HISTORICAL] 2026-11 分支审查 arch-boundary S2：两条触发通道（OS 媒体查询 / 应用开关）
+  // 各持一份同语义声明，CSS 无法 OR 合并，故用机器断言锁「两侧声明串逐字相等」——
+  // 任何一侧单独改动（漏同步）即红。
+  (() => {
+    const media = styleCss.indexOf('@media (prefers-reduced-motion: reduce)')
+    const attr = styleCss.indexOf('[data-reduce-motion="on"] *,')
+    if (media < 0 || attr < 0) return false
+    // 两块均以白名单声明收尾：块尾锚到该声明后的首个 '}'（不能锚首个 '\n}' ——属性块的
+    // 内层规则 '}' 顶格，会在第一个规则后截断）
+    const decls = (from) => {
+      const tail = styleCss.indexOf('transition-duration: var(--duration-fast) !important;', from)
+      const end = styleCss.indexOf('}', tail)
+      return styleCss.slice(from, end)
+        .split('\n').map((l) => l.trim()).filter((l) => /^[a-z-]+:/.test(l)).sort().join('\n')
+    }
+    const mediaBlock = decls(media)
+    const attrBlock = decls(attr)
+    return mediaBlock.length > 0 && mediaBlock === attrBlock
+  })(),
+  '应用内 reduce-motion 块的声明集必须与 OS 媒体查询块逐字相等（两通道单点维护）',
 )
 {
   const otherGuards = collectVueFiles(resolve(RENDERER, 'src/components'))
@@ -152,11 +187,20 @@ check(
   'plan04/TC2 SessionItem running 态改静态空心环（2026-11 性能裁决）',
   // [perf:animation] 裁决修订：SessionItem 是全仓唯一「N 实例」常驻动画点（每个 working
   // session 一个环，多后台会话并存时线性增多），且持续整个任务生命周期。实测单 14px
-  // spinner 即 9.3% GPU helper，故 spinning 档改静态 accent 空心环（与 hollow 同形）。
-  // 判据改为「必须有 static 空心环 + 不得含 animate-spin」。
-  sessionItem.includes('rounded-full border-[1.5px] border-accent')
-    && !sessionItem.includes('animate-spin'),
-  'SessionItem（含 session-item/ 子组件）的 running 档须为静态 accent 空心环，且不得含 animate-spin（2026-11 常驻动画退役）',
+  // spinner 即 9.3% GPU helper，故 spinning 档改静态 accent 空心环。
+  // 判据锚定 spinning 分支行本身（2026-11 分支审查 arch-boundary S3a：原全文 includes
+  // 由 hollow 分支即可满足，删掉整个 spinning 分支仍绿）：
+  //   ① spinning 行存在且为静态 border-dashed 环（与 pending 的实线 hollow 可区分，M3）；
+  //   ② spinning 行不得含 animate-spin / border-t-transparent（旋转环的静态残形）。
+  (() => {
+    const spinningLine = sessionItem.split('\n').find((l) => l.includes("iconKind === 'spinning'"))
+    if (!spinningLine) return false
+    return spinningLine.includes('rounded-full border-[1.5px] border-dashed border-accent')
+      && !spinningLine.includes('animate-spin')
+      && !spinningLine.includes('border-t-transparent')
+      && !sessionItem.includes('animate-spin')
+  })(),
+  'SessionItem（含 session-item/ 子组件）的 running 档须为静态 accent 虚线环（锚定 spinning 分支行），且不得含 animate-spin（2026-11 常驻动画退役）',
 )
 check(
   'plan04/TC3 composer-shell isActive 静态 ring',
@@ -180,6 +224,45 @@ check(
   'streaming 的 spin 与 @keyframes pulse-dot 须保留；working 不得再挂 animate-spin（2026-11 常驻动画退役）',
 )
 
+// ── [perf:animation] 2026-11 分支审查 business-logic 探针实测：translateZ(0) 与 animate-* 同元素
+// = 旋转不动。机制：spin / loader-spin / rbi-spin 的 keyframes 只写 to（无显式 from），隐式
+// from = 元素当前 transform；当前值为 translateZ(0) 时，插值 translateZ(0)→rotate(360deg)
+// 两端同为单位矩阵，Chrome 计算样式恒 matrix(1,0,0,1,0,0)。实测「修复后 GPU 下降」有一部分
+// 其实是转不动了（静默视觉回归）。正确形态 = 两层：外层 [transform:translateZ(0)] 提层，
+// 内层 animate-*；或 keyframes 显式 from/to 均带 translateZ(0)（RunningBlockIcon 自包含原语）。
+// 本守卫扫 renderer + ui 两包全部 .vue：同一 class 属性值（静态或 :class 字面量）内不得同时
+// 出现 translateZ(0) 与 animate-<x>（含 animate-[...] 任意值形）。
+{
+  const UI = resolve(ROOT, 'packages/ui/src')
+  const vueFiles = [
+    ...collectVueFiles(resolve(RENDERER, 'src')),
+    ...collectVueFiles(UI),
+  ]
+  const TZ = /translateZ\(0\)/
+  const ANIM = /\banimate-(?:\[|[a-z])/
+  // 取每个 class="..." / :class="..." / class='...' 属性值（单行内；多行 class 绑定另按
+  // 「同一标签开区间」兜底：把 <tag ... > 之间拼成一行再判）
+  const sameElementHits = []
+  for (const f of vueFiles) {
+    const src = readFileSync(f, 'utf-8')
+    for (const m of src.matchAll(/<[a-zA-Z][^<>]*?>/gs)) {
+      const tag = m[0].replace(/\s+/g, ' ')
+      const classAttrs = [...tag.matchAll(/(?:^|\s):?class="([^"]*)"/g)].map((x) => x[1]).join(' ')
+      if (TZ.test(classAttrs) && ANIM.test(classAttrs)) {
+        const line = src.slice(0, m.index).split('\n').length
+        sameElementHits.push(`${relative(ROOT, f)}:${line}  ${classAttrs.slice(0, 120)}`)
+      }
+    }
+  }
+  check(
+    '[perf:animation] translateZ(0) 与 animate-* 不同元素（keyframes 隐式 from 冲突 → 旋转不动）',
+    sameElementHits.length === 0,
+    sameElementHits.length === 0
+      ? '全仓 .vue 无同元素 translateZ(0)+animate-*（正确形态 = 外层提层 + 内层 animate，或 keyframes 显式 from/to 带 translateZ(0)）'
+      : `同元素 translateZ(0)+animate-* ${sameElementHits.length} 处（旋转静默失效）：\n      ${sameElementHits.join('\n      ')}`,
+  )
+}
+
 if (problems.length > 0) {
   console.error(`[check-animation-source-guards] 命中 ${problems.length} 条静态守卫违规：`)
   for (const p of problems) console.error(`  - ${p}`)
@@ -187,4 +270,4 @@ if (problems.length > 0) {
   process.exit(1)
 }
 
-console.log('[check-animation-source-guards] OK（12 条判据全部通过）')
+console.log(`[check-animation-source-guards] OK（${checksRun} 条判据全部通过）`)
