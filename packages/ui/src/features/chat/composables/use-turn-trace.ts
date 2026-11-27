@@ -41,36 +41,71 @@ export interface TextUnitProps {
   messageTimestamp?: number
 }
 
-/** trace 区渲染单元（两型）：正文块（TextRow 直渲染）与聚合块（ProcessAggregateBlock）。 */
+/** trace 区渲染单元（三型）：正文块（TextRow 直渲染）、聚合块（ProcessAggregateBlock）与
+ *  模型切换行（SystemNotice，G9 回合内按序锚插入）。 */
 export type TraceUnit =
   | { kind: 'text'; block: FlatBlock }
   | { kind: 'aggregate'; segment: ProcessSegment }
+  | { kind: 'notice'; message: Message }
 
 /**
- * 拍平块序列 + 段列表 → 单元列表（正文与聚合块按真实发生顺序交错）。
+ * 拍平块序列 + 段列表 + 回合内切换行 → 单元列表（按真实发生顺序交错）。
  *
  * 走查单 pass：text 块直接成正文单元；过程块遇到「段首成员」时 emit 其所属段（段成员
- * 连续、段首即入列位置，后续成员跳过）。folded=true 时只产末位正文单元（用户裁决
- * chat-turn-fold-redesign：折叠态只展示最后一段 text，中间正文与聚合块全部不渲染——
- * 聚合块的 push 与展开态共用同一行，折叠态以 !folded 门控跳过，不无条件删）。
+ * 连续、段首即入列位置，后续成员跳过）；切换行按序锚（switchAfter，规则 4c 附着时点的
+ * assistant 数）插在首个「所属 assistant 序号 ≥ 锚」的块之前（晚于全部块的殿后）。锚不
+ * 比较时间戳：pi assistant 消息体 timestamp 是会话级常量、与 entry/帧时钟不同源，回放侧
+ * 跨钟比较会错位——实时与回放按同一数组序推导同一锚。切换行是元信息分隔行族，折叠态
+ * 不丢失：先按展开形态产出完整时序列，折叠态只把正文收敛到末位一条、切换行保持原位。
  */
-function buildTraceUnits(blocks: FlatBlock[], segs: ProcessSegment[], folded: boolean): TraceUnit[] {
+function buildTraceUnits(
+  blocks: FlatBlock[],
+  segs: ProcessSegment[],
+  folded: boolean,
+  switchNotices: Message[],
+  assistantIndex: Map<string, number>,
+  switchAfter: Record<string, number> | undefined,
+): TraceUnit[] {
   const segmentHead = new Map<number, ProcessSegment>()
   for (const seg of segs) segmentHead.set(seg.members[0].flatIndex, seg)
   const units: TraceUnit[] = []
-  let lastText: FlatBlock | undefined
+  let noticeIndex = 0
   for (const fb of blocks) {
+    const blockIdx = assistantIndex.get(fb.assistantId) ?? Number.MAX_SAFE_INTEGER
+    for (;;) {
+      const notice = switchNotices[noticeIndex]
+      if (notice === undefined) break
+      const anchor = switchAfter?.[notice.id] ?? Number.MAX_SAFE_INTEGER
+      if (anchor > blockIdx) break
+      units.push({ kind: 'notice', message: notice })
+      noticeIndex += 1
+    }
     if (fb.block.kind === 'text') {
-      // 正文原生展示（D2）：展开态每条正文都直接渲染；折叠态收敛到末位一条、循环后殿后
-      if (!folded) units.push({ kind: 'text', block: fb })
-      lastText = fb
+      // 正文原生展示（D2）：展开态每条正文都直接渲染
+      units.push({ kind: 'text', block: fb })
       continue
     }
     const seg = segmentHead.get(fb.flatIndex)
     if (seg && !folded) units.push({ kind: 'aggregate', segment: seg })
   }
-  if (folded && lastText) units.push({ kind: 'text', block: lastText })
-  return units
+  for (;;) {
+    const notice = switchNotices[noticeIndex]
+    if (notice === undefined) break
+    units.push({ kind: 'notice', message: notice })
+    noticeIndex += 1
+  }
+  if (!folded) return units
+  // 折叠态（chat-turn-fold-redesign）：正文收敛到末位一条，中间正文与聚合块不渲染；
+  // 切换单元保持原位不随折叠丢失（分隔行族恒显语义）
+  let lastTextIndex = -1
+  for (let i = units.length - 1; i >= 0; i--) {
+    const unit = units[i]
+    if (unit !== undefined && unit.kind === 'text') {
+      lastTextIndex = i
+      break
+    }
+  }
+  return units.filter((unit, i) => unit.kind !== 'text' || i === lastTextIndex)
 }
 
 /**
@@ -101,19 +136,33 @@ export function useTurnTrace(
   const flatBlocks = computed<FlatBlock[]>(() => flattenTurnBlocks(turn().assistants))
   const segments = computed<ProcessSegment[]>(() => splitProcessSegments(flatBlocks.value))
 
+  /** 回合内模型切换行（规则 4c 归 notices，G9）：按到达序参与 trace 交错；bash 等其余
+   *  notice 不入 trace 区（bash 维持回合末尾渲染）。 */
+  const switchNotices = computed<Message[]>(() => turn().notices?.filter((m) => m.modelSwitch !== undefined) ?? [])
+
+  /** assistantId → 回合内序号（切换行插入锚的比较基准，见 buildTraceUnits）。 */
+  const assistantIndex = computed<Map<string, number>>(() => {
+    const index = new Map<string, number>()
+    let i = 0
+    for (const a of turn().assistants) index.set(a.id, i++)
+    return index
+  })
+
   /**
    * trace 区单元列表（三态矩阵，chat-turn-fold-redesign §1）：
    * - 工作态（isWorkingTurn）：全部正文 + 全部聚合块（聚合块三态由组件按 turnWorking +
    *   followedByText 自判——段后无 text 的开放段双窗进行中，已封闭段摘要行），不受折叠开关影响。
    * - 非工作态折叠（默认，!isWorkingTurn ∧ !turnExpanded）：仅末位一条正文；中间全部正文
-   *   与全部聚合块不渲染（用户裁决「折叠只展示最后一段 text」）；纯工具无正文 turn 的
-   *   trace 区为空。
+   *   与全部聚合块不渲染（用户裁决「折叠只展示最后一段 text」）；切换行保持原位恒显；
+   *   纯工具无正文 turn 的 trace 区只剩切换行。
    * - 非工作态展开（!isWorkingTurn ∧ turnExpanded）：全部正文 + 全部聚合块摘要行 + 末位
    *   正文（真实时序交错）；聚合块内部平铺由组件本地展开态控制（D6 不落 store）。
+   * 三态共同：模型切换行按序锚插入正文/聚合块之间（G9——回合进行中切换的行在该回合
+   * trace 区内、新模型内容之前）。
    */
   const traceUnits = computed<TraceUnit[]>(() => {
     const folded = !isWorkingTurn() && !turnExpanded()
-    return buildTraceUnits(flatBlocks.value, segments.value, folded)
+    return buildTraceUnits(flatBlocks.value, segments.value, folded, switchNotices.value, assistantIndex.value, turn().switchAfter)
   })
 
   /**
@@ -138,13 +187,16 @@ export function useTurnTrace(
   }
 
   /**
-   * 渲染单元 key：正文单元 = flatIndex（数字）；聚合单元 = 段 id（`seg:<n>` 字符串）。
-   * 非数字前缀使两型键空间不相交（ProcessSegment.id 契约条款），同层 v-for 键不撞。
+   * 渲染单元 key：正文单元 = flatIndex（数字）；聚合单元 = 段 id（`seg:<n>` 字符串）；
+   * 切换单元 = 消息 id（uuid 字符串，消息身份不可变——M5 stable-key 同源）。
+   * 三型键空间互不相交（数字 / seg: 前缀 / uuid），同层 v-for 键不撞。
    * 段 id 结构定位（派生源只有段首位置）：流式成员追加 / 新段出现都不改变既有段 id——
    * 键抖 = remount = 组件本地展开态丢 + 滚动锚点跳（AX1 / 旧 PR-6 同因）。
    */
   function unitKey(unit: TraceUnit): string | number {
-    return unit.kind === 'aggregate' ? unit.segment.id : unit.block.flatIndex
+    if (unit.kind === 'aggregate') return unit.segment.id
+    if (unit.kind === 'notice') return unit.message.id
+    return unit.block.flatIndex
   }
 
   /**
@@ -182,6 +234,10 @@ export function useTurnTrace(
         seg.followedByText,
         isWorkingTurn(),
       ]
+    }
+    if (unit.kind === 'notice') {
+      // 消息身份 = 引用（ADR-0039 不可变替换）：切换行落定后不再变更，单引用入键即全量指纹
+      return [unit.message]
     }
     const assistant = assistantById.value.get(unit.block.assistantId)
     return [

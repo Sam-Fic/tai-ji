@@ -200,6 +200,9 @@ export default {
     handoffDocTag: 'Handoff document',
     branchCreated: 'Branch created (from {from})',
     branchCreatedNoFrom: 'Branch created',
+    // [chat-flow-v2 G8] model switch row phrase (SystemNotice modelSwitch branch); previous →
+    // next model ids go to the right-pinned mono meta (technical tokens stay out of copy keys)
+    modelSwitchRow: 'Model switched',
     thinkCount: 'Think ×{count}',
     toolCount: 'Tool ×{count}',
     // [u3 remove-turn-progress-bar] TurnMeta generated tokens (TurnMeta.vue, design §2.1/§2.4;

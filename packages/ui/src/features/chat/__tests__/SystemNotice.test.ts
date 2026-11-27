@@ -28,6 +28,7 @@ vi.mock('vue-i18n', async () => {
     'panel.message.compactedTokens': '{tokens} tokens',
     'panel.message.branchCreated': '已创建分支（自 {from}）',
     'panel.message.branchCreatedNoFrom': '已创建分支',
+    'panel.message.modelSwitchRow': '已切换模型',
     'panel.message.bashFinished': '后台命令已完成',
     'panel.message.bashFinishedFailed': '后台命令执行失败',
     'panel.message.bashTimedOut': '后台命令已超时',
@@ -533,5 +534,48 @@ describe('SystemNotice D3 增强规格（U3）', () => {
     expect(row.find('[data-testid="system-notice-text"]').text()).toBe('已创建分支（自 msg-7）')
     expect(row.find('[data-testid="system-notice-text"]').classes()).toContain('text-[length:var(--text-sm)]')
     expect(row.find('[data-testid="system-notice-meta"]').exists()).toBe(false)
+  })
+})
+
+// ── 模型切换行（chat-flow-v2 G8）──────────────────────────────────────────────
+//
+// resolveNotice 的 modelSwitch 分支：横线分隔行族 + box 图标（G8 原型裁决「用 box」）+
+// 主体短语 + 钉右 mono meta（前 → 后模型 id，技术串不进文案键）。
+
+function switchMessage(over: Partial<Message> = {}): Message {
+  return {
+    id: 'sys-sw',
+    role: 'system',
+    content: 'faux-1 → faux-1-b',
+    status: 'complete',
+    timestamp: NOW,
+    modelSwitch: { provider: 'faux', modelId: 'faux-1-b', previousProvider: 'faux', previousModelId: 'faux-1' },
+    ...over,
+  } as Message
+}
+
+describe('SystemNotice 模型切换行（chat-flow-v2 G8）', () => {
+  it('modelSwitch 消息 → box 图标 + 主体短语「已切换模型」+ meta 前 → 后模型 id', () => {
+    const wrapper = mount(SystemNotice, { props: { message: switchMessage() } })
+    const row = wrapper.find('.system-notice')
+    expect(row.exists()).toBe(true)
+    expect(row.find('svg').classes()).toContain('lucide-box')
+    expect(wrapper.find('[data-testid="system-notice-text"]').text()).toBe('已切换模型')
+    expect(wrapper.find('[data-testid="system-notice-meta"]').text()).toBe('faux-1 → faux-1-b')
+  })
+
+  it('meta 走等宽 mono 钉右档（前后模型 id 扫读对齐，与压缩 tokens meta 同规格）', () => {
+    const wrapper = mount(SystemNotice, { props: { message: switchMessage() } })
+    const meta = wrapper.find('[data-testid="system-notice-meta"]')
+    expect(meta.classes()).toContain('font-mono')
+    expect(meta.classes()).toContain('tabular-nums')
+    expect(meta.classes()).toContain('shrink-0')
+  })
+
+  it('无切换前模型（防御形态，reducer 正常不出行）→ meta 只显新模型 id，不抛', () => {
+    const wrapper = mount(SystemNotice, {
+      props: { message: switchMessage({ modelSwitch: { modelId: 'faux-1' } }) },
+    })
+    expect(wrapper.find('[data-testid="system-notice-meta"]').text()).toBe('faux-1')
   })
 })

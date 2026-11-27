@@ -111,7 +111,7 @@
 </template>
 
 <script setup lang="ts">
-import { GitBranch, Layers, Info, ArrowRight, ArrowLeftRight, SquareTerminal } from '@lucide/vue'
+import { GitBranch, Layers, Info, ArrowRight, ArrowLeftRight, Box, SquareTerminal } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import { onUnmounted, ref, type Component } from 'vue'
 import {
@@ -216,7 +216,8 @@ interface NoticeView {
 /** 按消息类型选图标 + 主体/meta（纯函数，props 不变则结果不变）。
  *  图标分配（2026-10-21 用户裁决）：压缩行 Layers（多层堆叠 = 上下文摘要；与收纳通知
  *  managed 行同形——同属多条目堆叠语义族，撞形已接受）；兜底行 Info（系统信息通行图标）；
- *  Archive 归归档域（侧栏会话归档箱），对话流不再占用。 */
+ *  模型切换行 Box（chat-flow-v2 G8 原型裁决「用 box」）；Archive 归归档域（侧栏会话归档箱），
+ *  对话流不再占用。 */
 const notice: NoticeView = finalizeDetail(resolveNotice(props.message))
 
 function resolveNotice(message: Message): NoticeView {
@@ -259,6 +260,17 @@ function resolveNotice(message: Message): NoticeView {
       icon: GitBranch,
       iconClass: ICON_NEUTRAL_CLASS,
       text: from ? t('panel.message.branchCreated', { from }) : t('panel.message.branchCreatedNoFrom'),
+    }
+  }
+  // 模型切换行（chat-flow-v2 G8）：主体短语 + 钉右 mono meta（前 → 后模型 id，token 同类
+  // 技术串不进 i18n 键）；无切换前模型（会话首条记录形态，reducer 不出行，防御保留）只显新模型
+  const sw = message.modelSwitch
+  if (sw) {
+    return {
+      icon: Box,
+      iconClass: ICON_NEUTRAL_CLASS,
+      text: t('panel.message.modelSwitchRow'),
+      meta: sw.previousModelId ? `${sw.previousModelId} → ${sw.modelId}` : sw.modelId,
     }
   }
   // 兜底：纯 system 文本（流健康警告 / scheduler 派发提示等 display:true custom 消息同族同规格）

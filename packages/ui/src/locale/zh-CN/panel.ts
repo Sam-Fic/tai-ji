@@ -195,6 +195,9 @@ export default {
     handoffDocTag: '交接文档',
     branchCreated: '已创建分支（自 {from}）',
     branchCreatedNoFrom: '已创建分支',
+    // [chat-flow-v2 G8] 模型切换行主体短语（SystemNotice modelSwitch 分支）；前后模型 id
+    // 走钉右 mono meta（previous → next，技术串不进文案键）
+    modelSwitchRow: '已切换模型',
     thinkCount: '思考 ×{count}',
     toolCount: '工具 ×{count}',
     // [u3 remove-turn-progress-bar] TurnMeta 已生成 token 数（TurnMeta.vue，设计 §2.1/§2.4；

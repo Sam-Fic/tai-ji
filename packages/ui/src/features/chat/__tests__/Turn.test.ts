@@ -33,6 +33,7 @@ vi.mock('vue-i18n', async () => {
     'panel.message.runGroupSteps': '{count} 步',
     'panel.message.turnTriggerBgNotifySummary': '{count} 个后台任务完成',
     'panel.message.turnTriggerBgNotifyContinued': '已继续处理',
+    'panel.message.modelSwitchRow': '已切换模型',
     // 边界行失败分句专用键（D5「· M 失败」）：与聚合块的 traceFailed 不同键，
     // 文案按设计字面（无「含…次」句式）
     'panel.message.turnTriggerBgNotifyFailed': '{count} 失败',
@@ -181,6 +182,7 @@ interface UnitWrapperLike {
   classes: () => string[]
   text: () => string
   element: Element
+  attributes: () => Record<string, string>
   find: (selector: string) => { exists: () => boolean; text: () => string; element: Element }
 }
 const traceTopBlocks = (wrapper: { findAll: (s: string) => UnitWrapperLike[] }) =>
@@ -539,15 +541,15 @@ describe('turn-attribution W4: trigger 起点行 + turn 内 notice', () => {
     } as Message
   }
 
-  /** turn 内 liveOnly 健康警告（stream_warn，无 entry 无 replay 对应物） */
-  function liveOnlyNotice(id: string): Message {
+  /** turn 内模型切换行（role:'system' + modelSwitch，分组规则 4c 归 turn；trace 区按序锚插入） */
+  function switchNotice(id: string): Message {
     return {
       id,
       role: 'system',
-      content: '上下文长度接近上限，请注意',
+      content: 'faux-1 → faux-1-b',
       status: 'complete',
-      liveOnly: true,
-      timestamp: NOW,
+      timestamp: NOW + 500,
+      modelSwitch: { provider: 'faux', modelId: 'faux-1-b', previousProvider: 'faux', previousModelId: 'faux-1' },
     } as Message
   }
 
@@ -575,29 +577,26 @@ describe('turn-attribution W4: trigger 起点行 + turn 内 notice', () => {
     expect(wrapper.findComponent(UserBubble).exists()).toBe(false)
   })
 
-  it('W4-N1: turn.notices 渲染在 turn 内部末尾——bash 复用 BashOutputBlock、liveOnly 走 SystemNotice 弱化行', () => {
+  it('W4-N1: turn.notices 末尾渲染收窄为 bash（复用 BashOutputBlock）；非 bash notice（模型切换行）不在底部渲染——改由 trace 区按序锚插入（chat-flow-v2 规则 4c / G9）', () => {
     const wrapper = mountTurn({
-      turn: makeTurn({ notices: [bashNotice('bash-n1'), liveOnlyNotice('warn-n1')] }),
+      turn: makeTurn({ notices: [bashNotice('bash-n1'), switchNotice('sw-n1')], switchAfter: { 'sw-n1': 1 } }),
     })
     // bash notice：wrapper testid + 内部复用 BashOutputBlock（真组件，含 bash-output-block 根 testid）
     const bashWrap = wrapper.find('[data-testid="turn-inline-bash"]')
     expect(bashWrap.exists()).toBe(true)
     expect(bashWrap.find('[data-testid="bash-output-block"]').exists()).toBe(true)
     expect(bashWrap.text()).toContain('npm test')
-    // liveOnly notice：wrapper testid + SystemNotice 弱化行（兜底分支渲染 content 文本）
-    const noticeWrap = wrapper.find('[data-testid="turn-inline-notice"]')
-    expect(noticeWrap.exists()).toBe(true)
-    expect(noticeWrap.text()).toContain('上下文长度接近上限')
-    // 到达序忠实：bash（先到）在 notice（后到）之前（DOM 顺序）
-    const bashEl = bashWrap.element as HTMLElement
-    const warnEl = noticeWrap.element as HTMLElement
-    expect(bashEl.compareDocumentPosition(warnEl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // 非 bash notice 不产底部 wrapper（inlineBashNotices 收窄，无双渲染）——切换行由 trace 区单元承载
+    expect(wrapper.findAll('[data-testid="turn-inline-bash"]')).toHaveLength(1)
+    const switchRow = wrapper.find('[data-testid="turn-switch-notice"]')
+    expect(switchRow.exists()).toBe(true)
+    expect(switchRow.text()).toContain('已切换模型')
   })
 
-  it('W4-N2: turn.notices 为空/undefined → 不渲染任何 inline notice wrapper（历史 turn 形态不变）', () => {
+  it('W4-N2: turn.notices 为空/undefined → 不渲染 inline bash wrapper（历史 turn 形态不变）', () => {
     const wrapper = mountTurn({ turn: makeTurn() })
     expect(wrapper.find('[data-testid="turn-inline-bash"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="turn-inline-notice"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="turn-switch-notice"]').exists()).toBe(false)
   })
 
   it('W4-N3: trigger turn 也可携带 notices（后台续跑期间跑过 `!` 命令）——起点行与 notice 共存', () => {
@@ -1014,5 +1013,74 @@ describe('正文颜色逐消息派生（chat-flow-text-color D1）', () => {
   it('complete 回归锚 → streaming=false', () => {
     const wrapper = mountAndProbe(makeTextTurn('complete'))
     expect(wrapper.find('[data-testid="block-text"]').classes()).toContain('text-neutral-fg')
+  })
+})
+
+// ═══ 模型切换行 trace 按序锚插入（chat-flow-v2 G9）══════════════════════════════
+
+/**
+ * 双 assistant 序列 turn：a1 / a2 各一条正文，切换行锚 = 1（a1 之后、a2 之前）——
+ * 序锚插入判据的正中形态（行必须落在两条正文之间）。
+ */
+function twoAssistantTurnWithSwitch(over: Partial<MessageTurn> = {}): MessageTurn {
+  const a1: Message = {
+    id: 'a1', role: 'assistant', content: '第一段', status: 'complete', timestamp: NOW,
+    contentBlocks: [{ type: 'text', refId: 'text-0' }],
+  }
+  const a2: Message = {
+    id: 'a2', role: 'assistant', content: '第二段', status: 'complete', timestamp: NOW + 2000,
+    contentBlocks: [{ type: 'text', refId: 'text-1' }],
+  }
+  const sw: Message = {
+    id: 'sw1', role: 'system', content: 'faux-1 → faux-1-b', status: 'complete', timestamp: NOW + 1000,
+    modelSwitch: { provider: 'faux', modelId: 'faux-1-b', previousProvider: 'faux', previousModelId: 'faux-1' },
+  }
+  return {
+    index: 1,
+    user: { id: 'u1', role: 'user', content: 'hi', status: 'complete', timestamp: NOW },
+    assistants: [a1, a2],
+    isStreaming: false,
+    hasFoldable: true,
+    notices: [sw],
+    switchAfter: { sw1: 1 },
+    ...over,
+  }
+}
+
+describe('chat-flow-v2 G9: 模型切换行 trace 按序锚插入', () => {
+  it('回合内切换行插在新模型正文之前（正文一 → 切换行 → 正文二），trace 区单条', () => {
+    const wrapper = mountTurn({ turn: twoAssistantTurnWithSwitch(), isSessionActive: true, isLastTurn: true })
+    const blocks = traceTopBlocks(wrapper)
+    expect(blocks.length).toBe(3)
+    expect(blocks[0].text()).toContain('第一段')
+    expect(blocks[1].attributes()['data-testid']).toBe('turn-switch-notice')
+    expect(blocks[1].find('[data-testid="system-notice-text"]').text()).toBe('已切换模型')
+    expect(blocks[1].find('[data-testid="system-notice-meta"]').text()).toBe('faux-1 → faux-1-b')
+    expect(blocks[2].text()).toContain('第二段')
+    // 底部 bash 通知位不再渲染切换行（无双渲染——inlineBashNotices 收窄）
+    expect(wrapper.findAll('[data-testid="turn-inline-bash"]')).toHaveLength(0)
+  })
+
+  it('bash 记录与切换行共存：切换行进 trace 区按序锚插入，bash 维持回合末尾（行为不变）', () => {
+    const turn = twoAssistantTurnWithSwitch()
+    turn.notices = [
+      ...(turn.notices ?? []),
+      {
+        id: 'b1', role: 'system', content: '', status: 'complete', timestamp: NOW + 500,
+        bashExecution: { command: 'echo hi', output: 'hi', exitCode: 0, cancelled: false, truncated: false, timestamp: NOW + 500 },
+      },
+    ]
+    const wrapper = mountTurn({ turn, isSessionActive: true, isLastTurn: true })
+    expect(traceTopBlocks(wrapper).length).toBe(3)
+    expect(wrapper.findAll('[data-testid="turn-inline-bash"]')).toHaveLength(1)
+  })
+
+  it('折叠态：正文收敛末位一条，切换行保持原位恒显（在末位正文之前）', () => {
+    const wrapper = mountTurn({ turn: twoAssistantTurnWithSwitch(), isSessionActive: false, isLastTurn: false })
+    const blocks = traceTopBlocks(wrapper)
+    expect(blocks.length).toBe(2)
+    expect(blocks[0].attributes()['data-testid']).toBe('turn-switch-notice')
+    expect(blocks[1].text()).toContain('第二段')
+    expect(blocks.some((b) => b.text().includes('第一段'))).toBe(false)
   })
 })

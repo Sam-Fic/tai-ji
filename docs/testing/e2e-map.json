@@ -6212,7 +6212,9 @@
         "scripts/acceptance/tape-settle.mjs",
         "scripts/acceptance/tape-scroll.mjs",
         "scripts/acceptance/msw-replay.mjs",
-        "scripts/acceptance/msw-live.mjs"
+        "scripts/acceptance/msw-live.mjs",
+        "scripts/acceptance/msw-mid.mjs",
+        "scripts/acceptance/msw-icon.mjs"
       ],
       "layer": "L2.5",
       "assets": [
@@ -6255,6 +6257,14 @@
         {
           "kind": "probe",
           "ref": "scripts/acceptance/msw-live.mjs"
+        },
+        {
+          "kind": "probe",
+          "ref": "scripts/acceptance/msw-mid.mjs"
+        },
+        {
+          "kind": "probe",
+          "ref": "scripts/acceptance/msw-icon.mjs"
         }
       ],
       "trigger": "on-diff",

@@ -28,7 +28,7 @@
 | F22 | 工具类型表：exec = bash、explore = read/grep/find/ls、edit = edit/write（命令行形态的判定源），经 chat barrel 导出 | 事实 | packages/core/src/domain/chat/trace-window.ts:119; packages/core/src/domain/chat/index.ts:66 | |
 | F23 | 耗时格式化入口 formatDuration（行内历史耗时与卡头计时共用） | 事实 | packages/ui/src/features/chat/format-utils.ts:58 | |
 | F24 | 窗口挂载首帧，流式中的思考行高度处于过渡态（逐帧记录：首帧内容 42px / 可视 25px），窗口被量成未贴底；把这次测量当作用户滚动即会停吸，之后内容恢复贴底（46/46、21/21）却没有事件再触发测量，「回到最新」残留 | 事实 | scripts/acceptance/tape-scroll.mjs:1 | 真机逐帧记录（AC-LIVE 据此断言） |
-| I2 | 回合内通知可按时间戳与 trace 单元混排（block 时间戳与 notice 时间戳可比） | 推断 | packages/ui/src/features/chat/composables/use-turn-trace.ts:101 | 需核对 block startTime 的来源与缺省 |
+| I2 | 回合内切换行与 trace 单元的交错位置可由分组时点推导（不依赖时间戳比较） | 事实 | packages/core/src/domain/chat/message-turns.ts:216; packages/ui/src/features/chat/composables/use-turn-trace.ts:60 | 实现期修正：原判「block 时间戳与 notice 时间戳可比」被真机否证——回放侧 assistant 消息用 pi 消息体 timestamp（会话级常量）、切换行用 entry timestamp，两钟不同源（F31），跨钟比较把行排到新模型正文之后（AC-MSW-MID 探针重载段红）。插入改按序锚：规则 4c 附着时点记录「组内已有 assistant 数」（switchAfter），渲染层插在第 N 条 assistant 的块之后，实时与回放按同一数组序推导同一锚 |
 | I3 | 每张过程卡各持一个 1 秒 interval 可接受 | 推断 | packages/ui/src/features/chat/composables/useTurnElapsed.ts:109 | 同屏卡数有上限时成立；超出则共享单 tick |
 | I4 | 模型切换行的中英文案无需新增 locale 目录（只改 ui 两文件） | 推断 | packages/ui/src/locale/zh-CN/panel.ts:108 | renderer locales 无 chat 域；需实现期跑同步脚本核实 |
 | I6 | 工具步的计时起点（`ToolCall.startTime`）早于实际开始执行，行内耗时与卡头活动计时因此偏大；进行中轮头计时与窗口内各步耗时之和对不上与此同源 | 推断 | packages/runtime/src/services/session/event-interpreter.ts:630 | 真机探针实测：命令刚开始执行，卡头活动计时已显示 23s；用户实例里瞬时完成的 ls 显示 5–6s。起点取自哪一事件未核实，显式不做 |
@@ -38,6 +38,7 @@
 | F28 | runtime 历史链路把 message / compaction / branch_summary / custom_message 映射成伪消息，custom 进数据侧，其余记录类型跳过；`model_change` 核实时被跳过 | 事实 | packages/runtime/src/infra/pi/session-entry-mapper.ts:239; packages/runtime/src/infra/pi/entry-tree-builder.ts:222 | 压缩、分支记录曾因同一原因在重开后消失（同处注释）。msw-replay 枝补上 `model_change` → wire 伪角色 `modelChange`，lift 时还原成专用 entry |
 | F29 | pi 写的记录 id / parentId 在行首附近，扩展写的 custom 记录 id / parentId 在行尾，且父链会经过 custom 记录 | 事实 | node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js:828; node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js:902 | 仓库内安装副本（1.0.0）实读：appendMessage 的键序 type / id / parentId / timestamp / message，appendCustomEntry 的键序 type / customType / data / id / parentId / timestamp。真机探针保留的会话文件里窗口第一条的父亲是 custom 记录；本机数据目录前 60 个会话文件的顶层键序统计同此（2026-11-27）。找窗口基线要逐行解析取顶层字段，按位置匹配不可靠 |
 | F30 | 隐藏的模型切换信号消息在回放侧不出行：切换行只由 `model_change` 记录派生 | 事实 | scripts/acceptance/msw-replay.mjs:1 | 探针里每次切换都伴随扩展发出的隐藏信号消息落盘，重载后切换行条数与真实切换次数一致（AC-MSW-DEDUPE）；原 I1 由此升级为事实 |
+| F31 | pi assistant 消息体 timestamp 与 entry timestamp 不同源：同回合两条 assistant 的消息体 timestamp 逐毫秒相同且早于 user 消息体 timestamp，entry timestamp 才按 append 时序递增（≈ 消息产出结束） | 事实 | scripts/acceptance/msw-mid.mjs:1 | AC-MSW-MID 探针保留的会话文件实测（2026-11-28）：a1/a2 消息体 timestamp 均为 16:33:49.422Z（会话起步常量，早于 user 的 16:34:12.051Z），entry timestamp 分别为 16:34:12.302Z / 16:34:16.576Z。回放侧 user/assistant 的 Message.timestamp 优先取消息体（core dispatchMessageEntry 的 fallbackTs 只在缺失时用），切换行取 entry 时间——两钟不可比，序列锚替代时间戳比较（I2） |
 | I7 | 窗口基线查找的代价：窗口含切换记录且不含文件头时读一遍窗口之前的文件并逐行解析，10MB 量级约百毫秒、同步阻塞 runtime；文件与窗口起点不变时命中进程内缓存 | 推断 | packages/runtime/src/infra/pi/session-model-tail-read.ts:77 | 量级是估计，未实测；触发面 = 超过 20 回合且最近切换过模型的会话 |
 
 ## 外部接口核实表
@@ -55,7 +56,9 @@
 | 窗口基线查找 | `findModelChangeBaselineBefore(filePath, fromParentId, endOffset?)`：从窗口第一条的父亲沿 parentId 回溯，取链上最近一条 `model_change`（被撤子树的记录不在链上） | packages/runtime/src/infra/pi/session-model-tail-read.ts:77 | AC-MSW-REPLAY |
 | 逆读终点 | `forEachReversedLineChunk(filePath, { endOffset }, visit)`：只向前读 `[0, endOffset)` | packages/runtime/src/utils/history-reverse-read.ts:46 | AC-MSW-REPLAY |
 | 历史窗口大小 | 索引窗口：最近 `HISTORY_BUDGET.RECENT_TURNS`（20）个回合；窗口含第一个回合时从文件头读 | packages/shared/src/constants.ts:458; packages/runtime/src/services/session/history-reader.ts:189 | AC-MSW-REPLAY |
-| 回合归属 | message-turns 规则 6（system → boundary） | packages/core/src/domain/chat/message-turns.ts:556 | AC-MSW-MID |
+| 回合归属 | 规则 4c：回合进行中切换行归当前回合 notices（`isMidTurnSwitch` 向后看下一条非透明消息是 assistant；连续切换行互跳；数组末尾窗口按 `isTurnGroupActive`——流式中 / running 工具 / user 锚待首回复读作进行中），回合之间切换独立静态分隔行 + 关闭回合 | packages/core/src/domain/chat/message-turns.ts:261; packages/core/src/domain/chat/message-turns.ts:273; packages/core/src/domain/chat/message-turns.ts:590 | AC-MSW-MID |
+| 切换行 trace 插入 | `TraceUnit` 第三型 `notice`：`buildTraceUnits` 按序锚交错——锚 = 规则 4c 附着时点组内 assistant 数（`MessageTurn.switchAfter`），行插在首个「所属 assistant 序号 ≥ 锚」的块之前，实时与回放同一数组序同一锚；折叠态正文收敛末位一条而切换单元保持原位恒显；单元 testid `turn-switch-notice` | packages/ui/src/features/chat/composables/use-turn-trace.ts:37; packages/ui/src/features/chat/composables/use-turn-trace.ts:60 | AC-MSW-MID |
+| 切换行渲染分支 | `resolveNotice` 的 modelSwitch 分支：lucide Box 图标 + `t('panel.message.modelSwitchRow')` 主体短语 + 钉右 mono meta「前 → 后」模型 id（防御形态无前值时只显新模型） | packages/ui/src/features/chat/SystemNotice.vue:267; packages/ui/src/features/chat/SystemNotice.vue:270 | AC-MSW-ICON |
 | 过程卡 props/段契约 | `segment` / `turnWorking` / `turnStreaming`；段含 members/units/counts/followedByText | packages/ui/src/features/chat/ProcessAggregateBlock.vue:32; packages/core/src/domain/chat/process-segment.ts:103 | AC-H12 |
 | 详情抽屉 | `AggregateToolDetailDrawer`（dialog 壳、420px 右贴边、Esc/焦点归还） | packages/ui/src/features/chat/process-aggregate/AggregateToolDetailDrawer.vue:1 | AC-DETAIL |
 | 计时 tick | `setInterval(1s)` + visibilitychange 停表/补算 | packages/ui/src/features/chat/composables/useTurnElapsed.ts:109 | AC-CHIP |
@@ -75,3 +78,4 @@
 - I4：locale 目录是否只有 ui 两文件需要改；实现期跑 `check_i18n_locale_sync.py` 核实（AC-I18N 已覆盖）。
 - I6：各步计时的起点偏早（命令刚开始执行，卡头活动计时已显示 23s；轮头计时与窗口内各步耗时之和对不上）。起点取自哪一事件未核实；修正要动工具调用时间戳的来源，不属本交付，已登记为显式不做。
 - I7：窗口基线查找的性能代价（读窗口之前的文件并逐行解析）是估计值，未实测；触发面是超过 20 回合且最近切换过模型的会话。实测明显卡顿时改为在回合索引里带上模型基线。
+- I8：切换行归属的微窗口：切换帧到达的瞬间回合既无后续消息也无活动信号（末位 assistant 刚定稿、工具与下一步都未开始），`isTurnGroupActive` 判否 → 行落为回合之间的静态分隔行；后续 assistant 到达触发全量重扫时行会移入回合内部（位置一次性跳变）。触发面极窄（两次活动之间的空隙内切模型），接受；出现明显困扰再收窄判定（如结合会话级活动信号入参）。
