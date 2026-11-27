@@ -6201,7 +6201,7 @@
     },
     {
       "id": "E2E-ACCEPT-01",
-      "summary": "tree-plant 实机验收探针：过程卡（12 行窗口上限、长相对齐原型、思考行、进行中计时、滚动跟随、落成收起）与模型切换行回放（开发实例 + faux 演员 + CDP 断言，凭证无关零 token）",
+      "summary": "tree-plant 实机验收探针：过程卡（12 行窗口上限、长相对齐原型、思考行、进行中计时、滚动跟随、落成收起）与模型切换行（回放、实时、重载同形）（开发实例 + faux 演员 + CDP 断言，凭证无关零 token）",
       "scope": [
         "scripts/acceptance/harness.mjs",
         "scripts/acceptance/tape-height.mjs",
@@ -6211,7 +6211,8 @@
         "scripts/acceptance/tape-live.mjs",
         "scripts/acceptance/tape-settle.mjs",
         "scripts/acceptance/tape-scroll.mjs",
-        "scripts/acceptance/msw-replay.mjs"
+        "scripts/acceptance/msw-replay.mjs",
+        "scripts/acceptance/msw-live.mjs"
       ],
       "layer": "L2.5",
       "assets": [
@@ -6250,6 +6251,10 @@
         {
           "kind": "probe",
           "ref": "scripts/acceptance/msw-replay.mjs"
+        },
+        {
+          "kind": "probe",
+          "ref": "scripts/acceptance/msw-live.mjs"
         }
       ],
       "trigger": "on-diff",

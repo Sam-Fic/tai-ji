@@ -58,6 +58,7 @@ import type {
   ServerMessageType,
   ToolCall,
 } from '@taiji/shared'
+import { applyEntry, createInitialChatViewState } from '../apply-entry'
 import { deriveToolResultOutputs, isPlainRecord, parseDiffStat } from '../apply-entry-utils'
 // [chat-flow-consistency D3/C1] 定稿重建与迟到帧定位实现体（独立模块，先例 entry-overlay）
 import { locateToolCallHost, rebuildAssistantOnFinalize } from './finalized-rebuild'
@@ -370,6 +371,19 @@ function deriveToolCallEndOverlay(message: PiMessageEntry['message']): {
  * 的实现体归位 effects/finalized-rebuild.ts（entry-overlay / user-delivery 同款模块化先例，
  * 注册表本体只留 handler 接线）——rebuildAssistantOnFinalize / locateToolCallHost。
  */
+
+/** 实时侧合成的 model_change entry（重开侧是 pi 落盘的同形 entry）；id 客户端生成 ms-<uuid>。 */
+function syntheticModelChangeEntry(model: { provider?: string; modelId: string }, timestamp: string): PiModelChangeEntry {
+  const provider = model.provider ?? ''
+  return {
+    type: 'model_change',
+    id: `ms-${randomUuid()}`,
+    parentId: null,
+    timestamp,
+    ...(provider !== '' && { provider }),
+    modelId: model.modelId,
+  }
+}
 
 const messageEffects: Partial<Record<ServerMessageType, MessageEffectHandler>> = {
   // ── 主流式生命周期（chunk 创建/收尾 + isGenerating 派生）──
@@ -767,23 +781,33 @@ const messageEffects: Partial<Record<ServerMessageType, MessageEffectHandler>> =
   // 与 message.status 运行过程态正交（§3.3.6 死代码清理，原空 handler 删除）。
 
   'message.modelSwitch': (ctx, sid, payload) => {
-    // 模型切换（chat-flow-v2 msw-live）：runtime 帧 → 合成 model_change entry 喂同一 reducer
-    //（compaction 的 cmp-<uuid> 同款范式）。切换前的模型不进 entry：reducer 按会话基线派生
-    //（live ≡ reload 构造性成立）；id 客户端生成 ms-<uuid>（重开侧为 pi 持久化 entry id，
-    // id 值异源属既有 live/reload 差异类）；timestamp 缺省用客户端时钟。
+    // 模型切换（chat-flow-v2 msw-live）：runtime 帧 → 合成 model_change entry 喂与回放同一个
+    // reducer（compaction 的 cmp-<uuid> 同款范式）。不走 applyEntryFrameWithOverlay：切换行的
+    // 派生依赖前置 state（上一生效模型），在空 state 上派生恒为「只记基线」不出行。这里读
+    // 权威 state 的模型基线，权威 state 与渲染列表用同一基线、同一 reducer 派生。
+    // 基线缺席时用帧携带的切换前模型补：pi 新建会话时落盘的初始 model_change 不经事件送达，
+    // 实时侧没有它——先喂一条基线 entry（等价于那条初始记录）。不补的话实时下首次切换
+    // 不出行，重开侧却出行。timestamp 缺省用客户端时钟。
     const provider = readString(payload, 'provider')
     const modelId = readString(payload, 'modelId')
     if (!modelId) return
     const ts = payload['timestamp']
-    const entry: PiModelChangeEntry = {
-      type: 'model_change',
-      id: `ms-${randomUuid()}`,
-      parentId: null,
-      timestamp: new Date(typeof ts === 'number' ? ts : Date.now()).toISOString(),
-      ...(provider !== undefined && provider !== '' && { provider }),
-      modelId,
-    }
-    applyEntryFrameWithOverlay(ctx, sid, entry)
+    const timestamp = new Date(typeof ts === 'number' ? ts : Date.now()).toISOString()
+    const recorded = ctx.getLastModel(sid)
+    const previousModelId = readString(payload, 'previousModelId')
+    const baseline = recorded
+      ?? (previousModelId ? { provider: readString(payload, 'previousProvider') ?? '', modelId: previousModelId } : undefined)
+    // 先补基线、再喂切换：顺序对调会把首次切换本身记成基线
+    if (!recorded && baseline) ctx.applyEntryFrame(sid, syntheticModelChangeEntry(baseline, timestamp))
+    const entry = syntheticModelChangeEntry({ provider, modelId }, timestamp)
+    ctx.applyEntryFrame(sid, entry)
+    const derived = applyEntry(
+      baseline ? { ...createInitialChatViewState(), lastModel: baseline } : createInitialChatViewState(),
+      entry,
+    )
+    if (derived.messages.length === 0) return
+    const prev = ctx.messages.value.get(sid)?.value ?? []
+    commitMessages(ctx.messages, sid, [...prev, ...derived.messages])
   },
 
   'message.compactionSummary': (ctx, sid, payload) => {

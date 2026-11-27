@@ -44,11 +44,11 @@ const check = (name, ok, extra) => {
   if (!ok) problems.push(name)
 }
 try {
-  for (let n = 1; n <= SWITCH_AFTER; n += 1) await sendAndWaitTurn(ws, sessionId, page, `第${n}轮`)
+  for (let n = 1; n <= SWITCH_AFTER; n += 1) await sendAndWaitTurn(ws, sessionId, `第${n}轮`)
   await switchModel(ws, sessionId, 'faux', 'faux-1-reasoning')
   // 同模型再切一次：pi 照样落一条 model_change，但不是一次真实切换
   await switchModel(ws, sessionId, 'faux', 'faux-1-reasoning')
-  for (let n = SWITCH_AFTER + 1; n <= TOTAL_TURNS; n += 1) await sendAndWaitTurn(ws, sessionId, page, `第${n}轮`)
+  for (let n = SWITCH_AFTER + 1; n <= TOTAL_TURNS; n += 1) await sendAndWaitTurn(ws, sessionId, `第${n}轮`)
 
   const modelIds = (entries) => entries.filter((e) => e.type === 'model_change').map((e) => e.modelId)
   const userCount = (entries) => entries.filter((e) => e.type === 'message' && e.message?.role === 'user').length

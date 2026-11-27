@@ -1343,8 +1343,9 @@ export class EventInterpreter {
   /**
    * 模型切换信号分诊（chat-flow-v2 msw-live）：host-internals 在 pi `model_select` 后发隐藏的
    * custom message（customType `taiji:model-select`）。本方法按 customType 分诊，广播
-   * message.modelSwitch 帧——帧只带切换后的 provider/modelId，切换前的模型由前端 reducer
-   * 按会话基线派生（live ≡ reload：重开侧同一 reducer 读 pi 落盘的 model_change entry）。
+   * message.modelSwitch 帧——带切换后的 provider/modelId 与切换前的 previous*（pi 事件的
+   * previousModel）。前端合成 model_change entry 喂与重开回放同一个 reducer：有会话基线时
+   * 按基线派生，没有时（pi 新建会话落盘的初始记录不经事件送达）用 previous* 补基线。
    * 信号本身照常转发前端（display:false 消息由分组层透明跳过，不渲染）。
    */
   private handleModelSelectSignal(msg: ServerMessage): void {
@@ -1355,12 +1356,15 @@ export class EventInterpreter {
     const provider = typeof details.provider === 'string' ? details.provider : ''
     const modelId = typeof details.modelId === 'string' ? details.modelId : ''
     if (modelId === '') return
+    const previousProvider = typeof details.previousProvider === 'string' ? details.previousProvider : ''
+    const previousModelId = typeof details.previousModelId === 'string' ? details.previousModelId : ''
     this.opts.send({
       type: 'message.modelSwitch',
       payload: {
         sessionId: this.sessionId,
         ...(provider !== '' && { provider }),
         modelId,
+        ...(previousModelId !== '' && { previousProvider: previousProvider, previousModelId }),
         timestamp: Date.now(),
       },
     })

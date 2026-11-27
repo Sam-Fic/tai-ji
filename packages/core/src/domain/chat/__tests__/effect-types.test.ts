@@ -226,6 +226,7 @@ describe("effects-delivery-receipt", () => {
       sealStreamingAssistants: vi.fn(),
       appendUser: vi.fn(),
       applyEntryFrame: vi.fn(),
+      getLastModel: vi.fn(),
       getInflight: (sid: string) => inflight.get(sid) ?? 0,
       decrementInflight: (sid: string, n = 1) => {
         const next = Math.max(0, (inflight.get(sid) ?? 0) - n)
@@ -667,6 +668,7 @@ describe("user-delivery", () => {
       sealStreamingAssistants: vi.fn(),
       appendUser: vi.fn(),
       applyEntryFrame: vi.fn(),
+      getLastModel: vi.fn(),
       getInflight: (sid: string) => inflight.get(sid) ?? 0,
       decrementInflight: (sid: string, n = 1) => {
         const next = Math.max(0, (inflight.get(sid) ?? 0) - n)

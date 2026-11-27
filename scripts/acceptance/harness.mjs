@@ -283,7 +283,7 @@ const TURN_END_TYPES = new Set(['message.complete', 'message.error', 'message.st
  * 发一条消息并等回合落成（订阅后的终态帧）；超时抛错。
  * 只认发送之后到达的帧（防匹配订阅前已入队的旧帧）。
  */
-export async function sendAndWaitTurn(ws, sessionId, page, content) {
+export async function sendAndWaitTurn(ws, sessionId, content) {
   let ended
   const done = new Promise((resolve, reject) => {
     const to = setTimeout(() => {
