@@ -706,7 +706,12 @@ textarea {
  * 的 v6 对齐归各消费组件（M5 sidebar/M8 composer 等）按 Button 组件 props 处理。
  * 选中态范式（design §3.7 D8：tab 型=bg-elevated / 列表项型=bg-surface+accent）由各组件实现。
  *
- * 三层样式纪律：style.css 只放 design tokens（CSS 变量）+ base reset + 全局 keyframes SSOT。
+ * 三层样式纪律：style.css 只放 design tokens（CSS 变量）+ base reset + 全局 keyframes SSOT
+ * + 全局态选择器层（[data-theme] / [data-theme-preset] / [data-fs-scope] / [data-reduce-motion]
+ * 属性选择器、.app-hidden 状态类、@media (prefers-reduced-motion) 无障碍兜底）——它们是
+ * 「<html> 全局态 → 全仓样式」的投影规则，无组件归属，不属任何单组件 scoped；属性选择器
+ * 形态对 check_css_tokens.py 的 `^\.class \{` 匹配不可见，靠本自述 + 逐条注释登记
+ * （2026-11 分支审查 arch-boundary S2）。
  */
 
 /* 旋转动画容器合成层提升（2026-11 性能优化）：HTML 容器的 transform 旋转若未提升
@@ -916,7 +921,8 @@ textarea {
    存在理由：全局 reduce 兜底只跟 OS 设置，而「跑长任务（workflow/subagent）时风扇狂转」是
    性能诉求，用户需要应用内可切换的降级口（审计报告 §6 指出该机制缺失）。
    两条通道（OS 设置 / 应用开关）语义一致，不新增动画语义——只是同一个瞬切终态的第二个
-   触发源；恢复不动效即摘掉属性，无额外状态机。 */
+   触发源；关闭时写 off（不摘属性，便于调试观察开关已生效过），无额外状态机。
+   两块的声明集由 scripts/check-animation-source-guards.mjs plan05/TC5 锁逐字同步。 */
 [data-reduce-motion="on"] *,
 [data-reduce-motion="on"] *::before,
 [data-reduce-motion="on"] *::after {

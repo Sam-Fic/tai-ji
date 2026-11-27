@@ -1,5 +1,5 @@
 <template>
-  <!-- split-justified: 设置·外观页偏好聚合 -->
+  <!-- split-justified: 设置·外观页偏好聚合（GroupCard + SettingsFontsSection + terminal-config harness 同一 props 装配上下文，拆出即转发壳） -->
   <!--
     Settings · 外观菜单页（v6 §6.4 + §5.8）。
     聚合系统级外观偏好：外观模式（light/dark/system）、太极配色、全局字号（D17），

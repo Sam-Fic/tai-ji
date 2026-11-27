@@ -117,7 +117,8 @@ export function applySystemToDom(
  *   缺省对象，不可假设区域 key 完整）。档位→倍率映射在 renderer style.css [data-fs-*] 规则
  * - reduceMotion：`on` / `off`（[perf:animation] 2026-11 应用内减少动效开关，style.css 的
  *   [data-reduce-motion="on"] 规则快照终态。用 setAttribute 不删 key：显式 off 亦写，
- *   便于调试时看出开关已生效过）
+ *   便于调试时看出开关已生效过。槽位归属：desktop 壳（renderer/style.css）独占——
+ *   mobile-renderer 当前只有 OS prefers-reduced-motion 一条通道，不对齐时无需改本函数）
  */
 function writeDataAttrs(root: HTMLElement, s: SystemSettings): void {
   root.setAttribute('data-theme', resolveTheme(s.theme))
