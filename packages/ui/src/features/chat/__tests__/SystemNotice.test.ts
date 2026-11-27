@@ -579,3 +579,21 @@ describe('SystemNotice 模型切换行（chat-flow-v2 G8）', () => {
     expect(wrapper.find('[data-testid="system-notice-meta"]').text()).toBe('faux-1')
   })
 })
+
+describe('SystemNotice 模型切换行长 meta（G2-4 回归）', () => {
+  it('超长前后模型串：meta 限宽截断（max-w + truncate），title 携带全文', () => {
+    const longId = 'custom-provider/very-long-model-name-that-goes-on'.repeat(4)
+    const wrapper = mount(SystemNotice, {
+      props: { message: switchMessage({ modelSwitch: { modelId: longId, previousModelId: longId } }) },
+    })
+    const meta = wrapper.find('[data-testid="system-notice-meta"]')
+    expect(meta.classes()).toContain('truncate')
+    expect(meta.classes()).toContain('max-w-[240px]')
+    expect(meta.attributes()['title']).toBe(`${longId} → ${longId}`)
+  })
+
+  it('常规长度 meta 同样带 title（原文即全文，无害）', () => {
+    const wrapper = mount(SystemNotice, { props: { message: switchMessage() } })
+    expect(wrapper.find('[data-testid="system-notice-meta"]').attributes()['title']).toBe('faux-1 → faux-1-b')
+  })
+})

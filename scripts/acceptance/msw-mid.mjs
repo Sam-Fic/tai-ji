@@ -62,6 +62,17 @@ const check = (name, ok, extra) => {
   console.log(`${ok ? '✓' : '✗'} ${name}${extra ? `（${extra}）` : ''}`)
   if (!ok) problems.push(name)
 }
+// 轮询式断言：markdown 正文经异步渲染增量到达（G2-5——首拍可能只剩行尾时刻，数秒内自愈），
+// 单拍断言会撞空窗；15 秒内轮询到 ok 即通过，超时以末拍取证
+const probeDomStable = async (timeoutMs = 15_000) => {
+  const deadline = Date.now() + timeoutMs
+  let last = await probeDom(page)
+  while (Date.now() < deadline && !last.ok) {
+    await sleep(500)
+    last = await probeDom(page)
+  }
+  return last
+}
 try {
   // 回合进行中切换：先挂终态帧监听再发消息，工具（sleep 4）执行到一半时切模型——
   // 新模型答复（第二步）在切换之后才创建，时间序上切换行落在两者之间
@@ -93,14 +104,14 @@ try {
   const endType = await turnEnded
   check('切换后回合照常落成', endType === 'message.complete', `终态帧 ${endType}`)
 
-  // ── 回合内部位置断言（DOM 序）────────────────────────────────
-  const live = await probeDom(page)
+  // ── 回合内部位置断言（DOM 序，轮询式防异步渲染空窗）──────────
+  const live = await probeDomStable()
   check('实时：切换行在回合内部、过程块之后、新模型正文之前', live.ok, live.ok ? `行「${live.rowText}」` : live.why)
 
   // ── 重载后同形（会话文件回放 → 同一分组规则）──────────────────
   await reloadIntoSession(page)
   await page.getByText('新模型答复。').first().waitFor({ state: 'visible', timeout: 30_000 })
-  const replay = await probeDom(page)
+  const replay = await probeDomStable()
   check('重载后（回放）：切换行同形——仍在回合内、新模型正文之前', replay.ok, replay.ok ? `行「${replay.rowText}」` : replay.why)
   check('重载后对话流没有多余切换行', (await noticeRowTexts(page)).filter((t) => / → /.test(t)).length === 1)
 

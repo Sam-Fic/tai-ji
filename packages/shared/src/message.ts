@@ -691,14 +691,14 @@ export interface FileChange {
  */
 export type ChangeSetStatus = 'accumulating' | 'ready' | 'partially-reviewed' | 'resolved' | 'superseded'
 
-/** 模型切换行数据（chat-flow-v2）：provider/modelId 是切换后的生效值，previous* 是切换前。 */
+/** 模型切换行数据（chat-flow-v2）：provider/modelId 是切换后的生效值，previous* 是切换前。
+ *  切换来源（pi `model_select` 的 source）不在本数据：WS 帧契约未携带，来源归属已登记
+ *  显式不做（要带须帧加字段并逐层透传）。 */
 export interface ModelSwitchData {
   provider?: string
   modelId: string
   previousProvider?: string
   previousModelId?: string
-  /** pi `model_select` 的触发来源原值（手工选择 / 线上恢复等）；回放侧没有来源信息 */
-  source?: string
 }
 
 export interface Message {

@@ -9,6 +9,7 @@
  * 登记）。读者归类 = census §6 N16（照实族）。
  */
 import { statSync } from 'node:fs'
+import { READ_PRECHECK_MAX_BYTES } from '@taiji/shared'
 import { forEachReversedLineChunk } from '../../utils/history-reverse-read.js'
 import { scanJsonlFromTail } from './session-file-utils.js'
 
@@ -68,11 +69,13 @@ const baselineCache = new Map<string, { provider: string; modelId: string } | un
  * custom 记录，按位置匹配字段不可靠），再在内存里回溯。
  *
  * 什么时候调用：窗口里有 model_change 且窗口不含文件头。没有切换记录的窗口不需要基线，
- * 不要调用（省掉这次读）。代价：前缀有多大就读多少、逐行解析（10MB 量级约百毫秒，同步）；
- * 文件不变且窗口起点不变时命中缓存不重算。
+ * 不要调用（省掉这次读）。代价：前缀逐行解析（10MB 量级约百毫秒，同步），读入量受
+ * READ_PRECHECK_MAX_BYTES（32MB）硬上限——超限的前缀读不全，链查不到基线 → undefined
+ * （极端超大文件下重载切换行缺失的降级，登记 I7）；文件不变且窗口起点不变时命中缓存不重算。
  *
  * endOffset 缺省 = 文件末尾。父链总是指向更早的 entry，窗口之后的内容不影响结果；
- * 调用方有窗口起点偏移时传入可少读一段。文件不存在 / 链上没有 model_change → undefined，不抛。
+ * 调用方有窗口起点偏移时传入可少读一段。文件不存在 / 非常规文件（FIFO/目录占位）/
+ * 链上没有 model_change → undefined，不抛。
  */
 export function findModelChangeBaselineBefore(
   filePath: string,
@@ -84,6 +87,9 @@ export function findModelChangeBaselineBefore(
   let mtimeMs: number
   try {
     const stat = statSync(filePath)
+    // 非常规文件前置检查：FIFO/设备占位时 openSync('r') 会永久阻塞，目录占位 read 抛
+    // EISDIR——都在 stat 层拦下按无值降级（不抛不挂）
+    if (!stat.isFile()) return undefined
     size = stat.size
     mtimeMs = stat.mtimeMs
   } catch {
@@ -98,7 +104,10 @@ export function findModelChangeBaselineBefore(
   }
   const parentOf = new Map<string, string | null>()
   const changes = new Map<string, { provider: string; modelId: string }>()
-  forEachReversedLineChunk(filePath, { endOffset }, (chunk) => {
+  // 逆读异常不在本函数再兜底：常规文件判定（isFile）已挡住占位族，打开失败由逆读工具的
+  // openFailed 降级（history-reverse-read），其余意外 IO 错误向上抛给调用方如实报错——
+  // 双层吞异常会让任何一层的保护在单行变异下不可验证
+  forEachReversedLineChunk(filePath, { endOffset, maxTotalBytes: READ_PRECHECK_MAX_BYTES }, (chunk) => {
     for (const line of chunk.lines) {
       if (line === '') continue
       let parsed: unknown

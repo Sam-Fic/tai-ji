@@ -161,3 +161,37 @@ describe('规则 4c：增量与全量分组等价', () => {
     expect(staticNoticeIds(incremental)).toEqual(['sw1'])
   })
 })
+
+describe('规则 4c 长叶：回合内语义消息不当边界（G1-2 修复回归）', () => {
+  it('切换行后是 liveOnly 健康警告：警告不判回合已终，切换行归回合内部', () => {
+    const warn = makeMsg({ id: 'warn1', role: 'system', content: 'stream 超时', liveOnly: true })
+    const items = toRenderItems([userMsg('u1'), assistantMsg('a1'), switchMsg('sw1'), warn, assistantMsg('a2')])
+    // 切换行归回合内部（警告不当边界）；liveOnly 警告自身按规则 4b 落回合后的时序位置 static 项
+    expect(items).toHaveLength(2)
+    const turn = turnOf(items[0])
+    expect(turn.assistants.map((m) => m.id)).toEqual(['a1', 'a2'])
+    expect(turn.switchAfter).toEqual({ sw1: 1 })
+    expect(staticNoticeIds(items)).toEqual(['warn1'])
+  })
+
+  it('切换行后是 bash 执行记录（规则 4 inline）：不判回合已终，切换行归回合内部', () => {
+    const bash = makeMsg({
+      id: 'bash1', role: 'system', content: '',
+      bashExecution: { command: 'echo hi', output: 'hi', exitCode: 0, cancelled: false, truncated: false, timestamp: 1000 },
+    })
+    const items = toRenderItems([userMsg('u1'), assistantMsg('a1'), switchMsg('sw1'), bash, assistantMsg('a2')])
+    // 切换行归回合内部（bash 内联记录不当边界）；bash 自身按规则 4 一并挂回合 notices
+    expect(items).toHaveLength(1)
+    const turn = turnOf(items[0])
+    expect(turn.assistants.map((m) => m.id)).toEqual(['a1', 'a2'])
+    expect(turn.notices?.map((m) => m.id)).toEqual(['sw1', 'bash1'])
+    expect(turn.switchAfter).toEqual({ sw1: 1 })
+  })
+
+  it('切换行后是可见普通 system（compaction 同族）：仍是回合已终，静态分隔行', () => {
+    const compaction = makeMsg({ id: 'c1', role: 'system', content: '压缩记录', compactionSummary: { summary: '已压缩', tokensBefore: 1000 } })
+    const items = toRenderItems([userMsg('u1'), assistantMsg('a1'), switchMsg('sw1'), compaction, assistantMsg('a2')])
+    expect(staticNoticeIds(items)).toEqual(['sw1', 'c1'])
+    expect(turnOf(items[0]).notices).toBeUndefined()
+  })
+})

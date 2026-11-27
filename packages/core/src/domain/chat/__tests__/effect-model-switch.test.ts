@@ -215,3 +215,29 @@ describe('message.modelSwitch：空 state 派生不出行（切换行依赖前�
     expect(state.lastModel).toEqual({ provider: 'faux', modelId: 'faux-1-reasoning' })
   })
 })
+
+describe('message.modelSwitch：流式中切插到流式 assistant 之前（G1-4，live 序对齐文件序）', () => {
+  it('末位 assistant streaming：切换行插在它之前而非数组末尾', () => {
+    const { ctx, messages } = createHarness(sessionStart())
+    // 流式中的 assistant 已在渲染列表（帧序：assistant 在前）
+    const streaming: Message = {
+      id: 'a-live', role: 'assistant', content: '', status: 'streaming', timestamp: T1,
+    }
+    messages.value.set(SID, shallowRef([streaming]))
+    dispatchMessageEvent(ctx, SID, switchFrame({ provider: 'faux', modelId: 'faux-1-reasoning', timestamp: T1 + 1000 }))
+    const list = rendered(messages)
+    expect(list.map((m) => m.role)).toEqual(['system', 'assistant'])
+    expect(list[0]?.modelSwitch?.modelId).toBe('faux-1-reasoning')
+  })
+
+  it('末位 assistant 已完成（工具执行中/idle）：维持数组末尾 append', () => {
+    const { ctx, messages } = createHarness(sessionStart())
+    const done: Message = { id: 'a-done', role: 'assistant', content: '', status: 'complete', timestamp: T1 }
+    messages.value.set(SID, shallowRef([done]))
+    dispatchMessageEvent(ctx, SID, switchFrame({ provider: 'faux', modelId: 'faux-1-b', timestamp: T1 + 1000 }))
+    const list = rendered(messages)
+    expect(list.map((m) => m.role)).toEqual(['assistant', 'system'])
+    expect(list[0]?.id).toBe('a-done')
+    expect(list[1]?.modelSwitch?.modelId).toBe('faux-1-b')
+  })
+})

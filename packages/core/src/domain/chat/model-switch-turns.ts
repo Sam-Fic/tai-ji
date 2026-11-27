@@ -27,14 +27,15 @@ function isTurnGroupActive(group: TurnGroup): boolean {
 }
 
 /** 模型切换行的回合归属判定（规则 4c，G9）：向后看下一条非透明消息——assistant = 切换落在
- *  回合中段；连续切换行相互跳过（同属中段）；user / 可见 system / 隐藏完成通知边界 = 回合
+ *  回合中段；回合内语义消息相互跳过（连续切换行同属中段；liveOnly 健康警告与 bash 执行
+ *  记录按规则 4/4b 不切断回合，不能当边界）；user / 可见 system / 隐藏完成通知边界 = 回合
  *  已终。数组末尾窗口（切换之后还没有新消息）按回合活动信号判定。纯读取：全量与增量两条
  *  分组路径从任意下标重跑都读到同一未来，判定恒一致。 */
 export function isMidTurnSwitch(messages: Message[], index: number, current: TurnGroup): boolean {
   for (let j = index + 1; j < messages.length; j++) {
     const next = messages[j]
     if (next.role === 'assistant') return true
-    if (next.modelSwitch !== undefined) continue
+    if (next.modelSwitch !== undefined || next.liveOnly === true || next.bashExecution !== undefined) continue
     if (next.role !== 'user' && next.display === false && !isHiddenCompleteNotify(next)) continue
     return false
   }

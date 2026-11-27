@@ -32,5 +32,5 @@
 | 历史窗口的模型基线 | `packages/runtime/src/services/session-history.ts` | `convertWindowEntries(entries, store, segments?, orphans?, windowSource?)`：`windowSource = { filePath, endOffset? }`。窗口不含文件头且含 `model_change` 时，以窗口起点处的生效模型前插一条基线伪消息（不产消息，只让 reducer 有上一模型可比）；其余情况不读文件 |
 | 窗口基线查找 | `packages/runtime/src/infra/pi/session-model-tail-read.ts` | `findModelChangeBaselineBefore(filePath, fromParentId, endOffset?)`：读 `[0, endOffset)` 建 id → 父节点映射，从 `fromParentId`（窗口第一条 entry 的真实父亲）沿父链回溯，取链上最近一条 `model_change`。被撤子树里的记录不在链上。文件不变且起点不变时命中进程内缓存（上限 16 条） |
 | 逆读终点 | `packages/runtime/src/utils/history-reverse-read.ts` | `forEachReversedLineChunk(filePath, { endOffset }, visit)`：只向前读 `[0, endOffset)`；endOffset 须落在行首 |
-| 回合归属 | `packages/core/src/domain/chat/message-turns.ts` | `modelSwitch` 消息：回合打开时插入该回合的回合内通知位（按时间排入 trace）；无打开回合时作为回合间的静态分隔行 |
+| 回合归属 | `packages/core/src/domain/chat/message-turns.ts` | `modelSwitch` 消息：回合打开时插入该回合的回合内通知位（按分组时点的 assistant 序锚排入 trace，不比较时间戳）；无打开回合时作为回合间的静态分隔行 |
 | UI 渲染 | `packages/ui/src/features/chat/` | 切换行渲染进 SystemNotice 横线分隔行族（box 图标）；过程卡 = `ProcessAggregateBlock` → `AggregateTape`（卡片：`AggregateSummaryRow` 卡头 + 窗口；右侧 `AggregateActivityChip` 活动计时与滚动提示；窗口内 `AggregateExpandedBody` 逐行平铺 `SegmentThinkingRow` / `SegmentToolRow`） |

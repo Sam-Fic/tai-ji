@@ -807,7 +807,21 @@ const messageEffects: Partial<Record<ServerMessageType, MessageEffectHandler>> =
     )
     if (derived.messages.length === 0) return
     const prev = ctx.messages.value.get(sid)?.value ?? []
-    commitMessages(ctx.messages, sid, [...prev, ...derived.messages])
+    // 流式中切：pi 对流式中的 assistant 要到 message_end 才落 entry，切换 entry 落在该
+    // assistant 之前——行插到末位流式 assistant 之前，live 数组序与重放侧文件序同位
+    // （live ≡ reload 含位置）；非流式形态维持 append（文件序天然同位）。
+    let insertAt = prev.length
+    for (let i = prev.length - 1; i >= 0; i--) {
+      const m = prev[i]
+      if (m?.role === 'user') break
+      if (m?.role === 'assistant' && m.status === 'streaming') {
+        insertAt = i
+        break
+      }
+    }
+    const next = [...prev]
+    next.splice(insertAt, 0, ...derived.messages)
+    commitMessages(ctx.messages, sid, next)
   },
 
   'message.compactionSummary': (ctx, sid, payload) => {

@@ -8,9 +8,10 @@
  * 的真实父亲沿父链回溯得到。
  */
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
 import type { ServerMessage } from '@taiji/shared'
 import { forEachReversedLineChunk } from '../utils/history-reverse-read.js'
 import { findModelChangeBaselineBefore } from '../infra/pi/session-model-tail-read.js'
@@ -183,6 +184,19 @@ describe('findModelChangeBaselineBefore：从窗口第一条的父亲沿父链�
     const { file } = writeSession([header(), modelChange('mc0', null, 'faux-1')])
     expect(findModelChangeBaselineBefore(file, null)).toBeUndefined()
     expect(findModelChangeBaselineBefore(file, undefined)).toBeUndefined()
+  })
+
+  it('非常规文件占位：目录与 FIFO 都按无值降级，不抛不挂（G2-1/G2-2 回归）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'msw-odd-file-'))
+    dirs.push(dir)
+    // 目录占位（readSync EISDIR 族）
+    const asDir = join(dir, 's.jsonl')
+    mkdirSync(asDir)
+    expect(findModelChangeBaselineBefore(asDir, 'mc1')).toBeUndefined()
+    // FIFO 占位（openSync 阻塞族）——mkfifo 后立刻调用，挂起会被 vitest 超时暴露
+    const asFifo = join(dir, 'f.jsonl')
+    spawnSync('mkfifo', [asFifo])
+    expect(findModelChangeBaselineBefore(asFifo, 'mc1')).toBeUndefined()
   })
 })
 

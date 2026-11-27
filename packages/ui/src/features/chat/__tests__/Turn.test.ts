@@ -1084,3 +1084,43 @@ describe('chat-flow-v2 G9: 模型切换行 trace 按序锚插入', () => {
     expect(blocks.some((b) => b.text().includes('第一段'))).toBe(false)
   })
 })
+
+// ═══ 切换行序锚边界（chat-flow-v2 G9 长叶）══════════════════════════════
+
+describe('chat-flow-v2 G9 长叶: 切换行序锚边界', () => {
+  it('锚越界（大于 assistant 数，防御形态）：行殿后不抛，正文全显', () => {
+    const turn = twoAssistantTurnWithSwitch({ switchAfter: { sw1: 9 } })
+    const wrapper = mountTurn({ turn, isSessionActive: true, isLastTurn: true })
+    const blocks = traceTopBlocks(wrapper)
+    expect(blocks.length).toBe(3)
+    expect(blocks[0].text()).toContain('第一段')
+    expect(blocks[1].text()).toContain('第二段')
+    expect(blocks[2].attributes()['data-testid']).toBe('turn-switch-notice')
+  })
+
+  it('缺锚字段（undefined，旧数据防御形态）：行殿后', () => {
+    const turn = twoAssistantTurnWithSwitch()
+    delete turn.switchAfter
+    const wrapper = mountTurn({ turn, isSessionActive: true, isLastTurn: true })
+    const blocks = traceTopBlocks(wrapper)
+    expect(blocks.length).toBe(3)
+    expect(blocks[2].attributes()['data-testid']).toBe('turn-switch-notice')
+  })
+
+  it('双行各带锚（锚 1 / 锚 2）：按锚插在各自 assistant 之后', () => {
+    const turn = twoAssistantTurnWithSwitch()
+    const sw2: Message = {
+      id: 'sw2', role: 'system', content: 'faux-1-b → faux-1-c', status: 'complete', timestamp: NOW + 3000,
+      modelSwitch: { modelId: 'faux-1-c', previousModelId: 'faux-1-b' },
+    }
+    turn.notices = [turn.notices![0]!, sw2]
+    turn.switchAfter = { sw1: 1, sw2: 2 }
+    const wrapper = mountTurn({ turn, isSessionActive: true, isLastTurn: true })
+    const blocks = traceTopBlocks(wrapper)
+    expect(blocks.length).toBe(4)
+    expect(blocks[0].text()).toContain('第一段')
+    expect(blocks[1].attributes()['data-testid']).toBe('turn-switch-notice')
+    expect(blocks[2].text()).toContain('第二段')
+    expect(blocks[3].text()).toContain('已切换模型')
+  })
+})
