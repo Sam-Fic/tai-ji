@@ -4,9 +4,10 @@
 真机 case 统一走开发实例装配（真 Electron + 真 pi 子进程 + 真扩展装载 + faux 演员），探针脚本内嵌装配/断言/收尾（scripts/acceptance/）。
 预期判据用分号分隔：`exit:0`（缺省）、`contains:子串`、`not-contains:子串`。
 关联列 = `trunk` 或枝名（与设计文档树形拆分一致）。
+并发约束列 = 独占标记（真机探针 case 起独立开发实例，标「独占」避免并行互扰）；不填 = 可与其他 case 同时运行。
 
-| 编号 | 场景 | 命令 | 预期 | 关联 |
-|---|---|---|---|---|
+| 编号 | 场景 | 命令 | 预期 | 关联 | 并发约束 |
+|---|---|---|---|---|---|
 | AC-H12 | 真机：长回合里过程卡窗口不超过 12 行（卡片 ≤ 316px、窗口 ≤ 288px、行高 24px、行间无间隙、窗口内 12 整行可见） | node scripts/acceptance/tape-height.mjs | exit:0;contains:OK-H12 | trunk |
 | AC-LOOK | 真机：过程卡长相对齐原型（卡片底色/圆角/内边距；卡头 24px、计数「N 步 · 思考 M」、箭头、无总耗时；行 24px 无间隙；命令行不带工具名、命令与耗时等宽 12px；无分组标题行；滚动条隐藏；进行中轮头亮度不变） | node scripts/acceptance/tape-look.mjs | exit:0;contains:OK-LOOK | tape-look |
 | AC-MOTION | 真实浏览器（离线最小页）：带位移的入场动效会临时增大滚动容器的内容高度，只用透明度的动效不改变它 | node scripts/acceptance/motion-overflow.mjs | exit:0;contains:OK-MOTION | tape-look |
