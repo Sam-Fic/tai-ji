@@ -105,11 +105,15 @@ describe('session status icons extended states', () => {
       },
     })
     // streaming → 右槽 spinning 档 icon（2026-10-11 裁决状态点右移，session-icon 本体即
-    // 状态元素）。[perf:animation] 2026-11：spinning 档已改静态空心 accent 环（去旋转）——
-    // 该点持续整个后台任务期内，N 实例并发，旋转是常驻开销主源。语义由 accent 空心环承担。
+    // 状态元素）。[perf:animation] 2026-11：spinning 档已改静态 accent **虚线**环（去旋转）——
+    // 该点持续整个后台任务期内，N 实例并发，旋转是常驻开销主源。与 pending 的实线空心环在
+    // 无动效下靠 border-dashed 区分；data-icon-kind 使「streaming → spinning 档」这条派生可观测
+    //（分支审查 data-governance S4：spinning/hollow 同色同类串后仅靠 class 无法区分走了哪个分支）。
     const icon = wrapper.find('[data-testid="session-icon"]')
     expect(icon.exists()).toBe(true)
+    expect(icon.attributes('data-icon-kind')).toBe('spinning')
     expect(icon.classes()).toContain('border-accent')
+    expect(icon.classes()).toContain('border-dashed')
     expect(icon.classes()).not.toContain('animate-spin')
   })
 

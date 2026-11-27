@@ -220,6 +220,39 @@ describe('WorkflowLivePanel · header 去重（D2 单 header 终态）', () => {
     expect(label.classes()).toContain('text-neutral-mid')
     expect(status2.find('svg').exists()).toBe(false)
     expect(status2.find('span.rounded-full').exists()).toBe(true)
+    // [perf:animation] 分支审查 data-governance S5：run 已终局（interrupted）→ 成员行虽投影 running，
+    // 但表头唯一旋转指示不得出现（否则在已停止的 run 上永转——「无终点等待态」同族）
+    expect(wrapper.find('[data-testid="wf-viz-trace-live-indicator"]').exists()).toBe(false)
+  })
+
+  // [perf:animation] 分支审查 data-governance S5：表头唯一活动指示是收敛后唯一表达「run 仍在跑」的
+  // 运行时信号（每行 spinner 已退役）——活态存在时必须存在且挂 animate-spin + 合成层提升
+  it('run 进行中 + 成员行 running：表头唯一旋转指示存在（外层提层 + 内层 animate-spin 两层），行内无 svg', async () => {
+    const wrapper = await mountPanel(makeRun({
+      status: 'running',
+      completedAt: undefined,
+      agentCalls: [makeCall({ id: 2, status: 'running', attempts: undefined })],
+    }))
+    const indicator = wrapper.find('[data-testid="wf-viz-trace-live-indicator"]')
+    expect(indicator.exists()).toBe(true)
+    // 两层形态：提层（translateZ(0)）在外层 testid 元素，animate-spin 在内层子元素——
+    // 同元素时 keyframes 隐式 from = translateZ(0)，旋转不动（探针实测，守卫脚本已拦）
+    expect(indicator.classes()).toContain('[transform:translateZ(0)]')
+    expect(indicator.classes()).not.toContain('animate-spin')
+    const spinner = indicator.element.firstElementChild
+    expect(spinner, '内层旋转元素应存在').toBeTruthy()
+    expect(spinner!.className).toContain('animate-spin')
+    expect(spinner!.className).not.toContain('translateZ(0)')
+    expect(indicator.element.tagName).toBe('SPAN') // HTML 环，非 svg（SVG transform 不被 Chromium 合成）
+    expect(indicator.find('svg').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="wf-viz-trace-status-2"] svg').exists()).toBe(false)
+  })
+
+  it('run 终局且成员行全部终态：表头无旋转指示', async () => {
+    const wrapper = await mountPanel(makeRun({
+      agentCalls: [makeCall({ id: 1, status: 'done' }), makeCall({ id: 3, status: 'failed' })],
+    }))
+    expect(wrapper.find('[data-testid="wf-viz-trace-live-indicator"]').exists()).toBe(false)
   })
 
   it('cancelled 行（§3.3.8 run 终局收尾在途成员）：trace 表渲染中性档状态词，不再折进 failed', async () => {

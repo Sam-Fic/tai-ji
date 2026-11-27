@@ -26,9 +26,13 @@
         <span
           v-if="hasLiveRunning"
           data-testid="wf-viz-trace-live-indicator"
-          class="block size-[7px] shrink-0 animate-spin rounded-full border-[1.5px] border-accent [transform:translateZ(0)]"
+          class="block size-[7px] shrink-0 [transform:translateZ(0)]"
           aria-hidden="true"
-        />
+        >
+          <!-- translateZ(0) 与 animate-spin 分层：同元素时 keyframes 隐式 from = translateZ(0)，
+               插值到 rotate(360deg) 两端同为单位矩阵 → 不转（分支审查 business-logic 探针实测） -->
+          <span class="block size-full animate-spin rounded-full border-[1.5px] border-accent" />
+        </span>
       </span>
       <span>{{ t('panel.workflowViz.traceColStarted') }}</span>
       <span class="text-right">{{ t('panel.workflowViz.traceColDuration') }}</span>
@@ -160,13 +164,21 @@ const rows = computed<TraceRow[]>(() =>
     const view = deriveCallView(call, props.runStatus)
     const stoppedColor = view.stoppedInFlight ? stoppedColorOf(props.runStatus, props.runOutcome) : ''
     const status = view.status
-    const isLiveRunning = status === 'running' || status === 'retrying'
+    // 活态 = 状态在跑 **且** run 本身未终局：run 停止后在途成员（stoppedInFlight）虽投影仍 running，
+    // 但已不会有任何帧推进——若仍计入，表头唯一旋转指示会在已停止的 run 上永转（分支审查
+    // data-governance S5 补断言时发现，属「无终点等待态」同族）。
+    const isLiveRunning = (status === 'running' || status === 'retrying') && !view.stoppedInFlight
     // [perf:animation] 活态行改静态 accent 点（原为 '' 表示「走 Loader2 旋转分支」，旋转现收敛到表头）。
-    // 停止在途行（run 已终局、成员行仍 running）沿用 D9 着色：失败系 danger / 其余中性。
-    const liveDotClass = stoppedColor
-      ? (stoppedColor === 'text-danger' ? 'bg-danger opacity-90' : 'bg-neutral-dim opacity-70')
-      : 'bg-accent'
-    return { call, view, isLiveRunning, dotClass: isLiveRunning ? liveDotClass : STATUS_DOT_CLASS[status], stoppedColorClass: stoppedColor }
+    // 停止在途行（run 已终局、成员行仍 running/retrying）沿用 D9 着色：失败系 danger / 其余中性——
+    // 这两档状态不在 STATUS_DOT_CLASS 内（该表只登记终态词），故此处单独给色不走查表。
+    const stoppedInFlightDotClass = stoppedColor === 'text-danger' ? 'bg-danger opacity-90' : 'bg-neutral-dim opacity-70'
+    // 三档互斥：① 活态（run 进行中的 running/retrying）accent 点；② 停止在途（run 已终局、成员行
+    // 仍投影 running/retrying）按 D9 着色；③ 已终态行查表——STATUS_DOT_CLASS 只登记终态词，
+    // running/retrying 不在表内，此处经 isLiveRunning/stoppedInFlight 两道排除后收窄类型。
+    const isRunningLike = status === 'running' || status === 'retrying'
+    const settledDotClass = isRunningLike ? stoppedInFlightDotClass : STATUS_DOT_CLASS[status]
+    const dotClass = isLiveRunning ? 'bg-accent' : view.stoppedInFlight ? stoppedInFlightDotClass : settledDotClass
+    return { call, view, isLiveRunning, dotClass, stoppedColorClass: stoppedColor }
   }),
 )
 
