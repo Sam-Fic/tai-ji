@@ -33,7 +33,7 @@
       >
         <span class="inline-flex size-[15px] shrink-0 items-center justify-center text-accent [transform:translateZ(0)]">
           <!-- eslint-disable-next-line vue/no-v-html -- 硬编码常量 loader SVG（block-icon.ts RUNNING_LOADER_SVG） -->
-          <span class="block size-full animate-loader-spin" v-html="RUNNING_LOADER_SVG" />
+          <span class="block size-full animate-loader-spin text-accent" v-html="RUNNING_LOADER_SVG" />
         </span>
         <span data-testid="md-streaming-fence-lang" class="font-mono text-[length:var(--text-2xs)] font-semibold lowercase tracking-[0.08em] text-neutral-dim">{{ seg.lang }}</span>
       </div>

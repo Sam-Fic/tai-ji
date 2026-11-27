@@ -100,6 +100,53 @@ check(
   'streaming 保留 animate-spin；working(Loader2)/compacting(Hourglass) 改静态空串且字形互异（常驻态降级 + 静态可区分，分支审查 arch-boundary M3）；retrying 量化；waiting 空串；config/style 不得新增 bounce-small',
 )
 
+// ── [HISTORICAL] 2026-11 分支审查后新增的块内锚定判据（纯函数，降判据表达式的 CRAP） ──────
+
+/** @media (prefers-reduced-motion: reduce) 块：从块头到白名单声明后的首个 '}'（两块同形收尾）。 */
+function blockDecls(headMarker) {
+  const head = styleCss.indexOf(headMarker)
+  if (head < 0) return null
+  const tail = styleCss.indexOf('transition-duration: var(--duration-fast) !important;', head)
+  if (tail < 0) return null
+  return styleCss.slice(head, styleCss.indexOf('}', tail))
+}
+
+/** plan05/TC2：OS 媒体查询块内部的瞬切 + 过渡白名单声明逐条保留。
+ *  原判据对全文 includes，被同批新增的 [data-reduce-motion="on"] 块（逐字相同声明）冒充——
+ *  整段删掉 OS 媒体查询仍全绿（实测），故改锚定块内部。 */
+function reducedMotionMediaBlockIntact() {
+  const block = blockDecls('@media (prefers-reduced-motion: reduce)')
+  return !!block && [
+    'transition-property: opacity, color, background-color, border-color, fill, stroke, box-shadow, filter !important',
+    'transition-duration: var(--duration-fast) !important',
+    'animation-duration: 0.01ms !important',
+    'animation-iteration-count: 1 !important',
+    'transition-duration: 0.01ms !important',
+    'transition-delay: 0ms !important',
+  ].every((d) => block.includes(d))
+}
+
+/** plan05/TC5：两条触发通道（OS 媒体查询 / 应用开关属性选择器）的声明集逐字相等。
+ *  CSS 无法 OR 合并两通道，各持一份同语义声明——单侧漏同步即红。 */
+function reducedMotionChannelsInSync() {
+  const declsOf = (block) => (block ?? '')
+    .split('\n').map((l) => l.trim()).filter((l) => /^[a-z-]+:/.test(l)).sort().join('\n')
+  const media = declsOf(blockDecls('@media (prefers-reduced-motion: reduce)'))
+  const attr = declsOf(blockDecls('[data-reduce-motion="on"] *,'))
+  return media.length > 0 && media === attr
+}
+
+/** plan04/TC2：SessionItem spinning 分支行 = 静态 accent 虚线环，且不含旋转残形。
+ *  原判据全文 includes 由 hollow 分支即可满足（删掉整个 spinning 分支仍绿），故锚定分支行。 */
+function sessionItemSpinningIsStaticDashed() {
+  const line = sessionItem.split('\n').find((l) => l.includes("iconKind === 'spinning'"))
+  return !!line
+    && line.includes('rounded-full border-[1.5px] border-dashed border-accent')
+    && !line.includes('animate-spin')
+    && !line.includes('border-t-transparent')
+    && !sessionItem.includes('animate-spin')
+}
+
 // ── plan 05 reduced-motion 兜底 + TaijiLogo ────────────────────────────────
 check(
   'plan05/TC1 logo spin 挂 HTML 包装层 + 合成层提升（2026-11 性能裁决：SVG transform 动画不被 Chromium 合成，挂 svg 本体每帧主线程重绘 idle CPU ~30%）',
@@ -111,45 +158,12 @@ check(
 )
 check(
   'plan05/TC2 style.css reduced-motion 白名单保留',
-  // [HISTORICAL] 2026-11 分支审查 arch-boundary M1：原断言对全文 includes，被同批新增的
-  // [data-reduce-motion="on"] 块（逐字相同的声明）冒充——整段删掉 OS 媒体查询仍全绿。
-  // 改为锚定 @media 块内部：先定位块头，截到下一个顶层 '}' 为止再逐条断言。
-  (() => {
-    const head = styleCss.indexOf('@media (prefers-reduced-motion: reduce)')
-    if (head < 0) return false
-    const tail = styleCss.indexOf('transition-duration: var(--duration-fast) !important;', head)
-    if (tail < 0) return false
-    const block = styleCss.slice(head, styleCss.indexOf('}', tail))
-    return block.includes('transition-property: opacity, color, background-color, border-color, fill, stroke, box-shadow, filter !important')
-      && block.includes('transition-duration: var(--duration-fast) !important')
-      && block.includes('animation-duration: 0.01ms !important')
-      && block.includes('animation-iteration-count: 1 !important')
-      && block.includes('transition-duration: 0.01ms !important')
-      && block.includes('transition-delay: 0ms !important')
-  })(),
+  reducedMotionMediaBlockIntact(),
   'reduced-motion 块的 !important 过渡白名单与瞬切兜底须完整保留（锚定 @media 块内部，不受同批属性选择器块冒充）',
 )
 check(
   'plan05/TC5 应用内 [data-reduce-motion="on"] 块与 OS 媒体查询声明逐字同步',
-  // [HISTORICAL] 2026-11 分支审查 arch-boundary S2：两条触发通道（OS 媒体查询 / 应用开关）
-  // 各持一份同语义声明，CSS 无法 OR 合并，故用机器断言锁「两侧声明串逐字相等」——
-  // 任何一侧单独改动（漏同步）即红。
-  (() => {
-    const media = styleCss.indexOf('@media (prefers-reduced-motion: reduce)')
-    const attr = styleCss.indexOf('[data-reduce-motion="on"] *,')
-    if (media < 0 || attr < 0) return false
-    // 两块均以白名单声明收尾：块尾锚到该声明后的首个 '}'（不能锚首个 '\n}' ——属性块的
-    // 内层规则 '}' 顶格，会在第一个规则后截断）
-    const decls = (from) => {
-      const tail = styleCss.indexOf('transition-duration: var(--duration-fast) !important;', from)
-      const end = styleCss.indexOf('}', tail)
-      return styleCss.slice(from, end)
-        .split('\n').map((l) => l.trim()).filter((l) => /^[a-z-]+:/.test(l)).sort().join('\n')
-    }
-    const mediaBlock = decls(media)
-    const attrBlock = decls(attr)
-    return mediaBlock.length > 0 && mediaBlock === attrBlock
-  })(),
+  reducedMotionChannelsInSync(),
   '应用内 reduce-motion 块的声明集必须与 OS 媒体查询块逐字相等（两通道单点维护）',
 )
 {
@@ -190,16 +204,7 @@ check(
   // spinner 即 9.3% GPU helper，故 spinning 档改静态 accent 空心环。
   // 判据锚定 spinning 分支行本身（2026-11 分支审查 arch-boundary S3a：原全文 includes
   // 由 hollow 分支即可满足，删掉整个 spinning 分支仍绿）：
-  //   ① spinning 行存在且为静态 border-dashed 环（与 pending 的实线 hollow 可区分，M3）；
-  //   ② spinning 行不得含 animate-spin / border-t-transparent（旋转环的静态残形）。
-  (() => {
-    const spinningLine = sessionItem.split('\n').find((l) => l.includes("iconKind === 'spinning'"))
-    if (!spinningLine) return false
-    return spinningLine.includes('rounded-full border-[1.5px] border-dashed border-accent')
-      && !spinningLine.includes('animate-spin')
-      && !spinningLine.includes('border-t-transparent')
-      && !sessionItem.includes('animate-spin')
-  })(),
+  sessionItemSpinningIsStaticDashed(),
   'SessionItem（含 session-item/ 子组件）的 running 档须为静态 accent 虚线环（锚定 spinning 分支行），且不得含 animate-spin（2026-11 常驻动画退役）',
 )
 check(

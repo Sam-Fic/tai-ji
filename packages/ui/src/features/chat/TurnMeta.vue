@@ -30,7 +30,7 @@
     <div class="flex items-center gap-[10px]">
       <span v-if="isStreaming" class="inline-block size-[15px] shrink-0 text-accent [transform:translateZ(0)]">
         <!-- eslint-disable-next-line vue/no-v-html -- hardcoded constant from block-icon.ts -->
-        <span class="block size-full animate-loader-spin" v-html="RUNNING_LOADER_SVG" />
+        <span class="block size-full animate-loader-spin text-accent" v-html="RUNNING_LOADER_SVG" />
       </span>
       <Button
         variant="ghost"

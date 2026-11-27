@@ -412,34 +412,48 @@ export function collectHits(rootDir = REPO_ROOT, roots = scanRoots(rootDir)) {
  *   READ_POINTS ∪ WRITE_SIDE。
  */
 export function findViolations(hits, { stale = false } = {}) {
-  const violations = []
   const hitKeys = new Set(hits.map((h) => `${h.file}:${h.line}`))
-  for (const hit of hits) {
-    const key = `${hit.file}:${hit.line}`
-    if (hit.kind === 'hidden') {
-      if (!HIDDEN_ALLOWLIST.has(key)) {
-        violations.push({ ...hit, reason: '会话 hidden 同名名列未登记（ALLOWLIST 之外即红；非会话同名命中须附理由登记）' })
-      }
-      continue
-    }
-    if (SURFACE_SAME_NAME_EXCLUDE.has(hit.file)) continue
-    if (SURFACE_PASSTHROUGH_EXCLUDE.has(key)) continue
-    if (SURFACE_READ_POINTS.has(key) || SURFACE_WRITE_SIDE_FILES.has(hit.file)) continue
-    violations.push({ ...hit, reason: 'surface 命中未登记（读取点须带 usage 登记进 READ_POINTS，写入侧载体登记进 WRITE_SIDE，同名载体登记进 SAME_NAME_EXCLUDE）' })
-  }
-  // [HISTORICAL] 2026-11 分支审查 data-governance MF1 修法③：登记条目「从未命中」即红。
-  // ALLOWLIST 的行号登记只有在与实况对齐时才有意义；行号漂移后条目成为死登记，而原判定
-  // 只查「命中是否登记」不查「登记是否命中」——两条 locale 登记行偏离实况 219/229 行仍长期
-  // 报绿（叠加 import 跳过漏报，双重假绿）。死登记的红是行号漂移的唯一结构性消解手段。
-  // 仅真实仓 CLI 跑启用（stale=true）：selftest 的样本树不含真实登记文件，启用则 20 条全红。
-  if (stale) {
-    for (const key of HIDDEN_ALLOWLIST.keys()) {
-      if (!hitKeys.has(key)) {
-        violations.push({ kind: 'hidden', file: key.slice(0, key.lastIndexOf(':')), line: Number(key.slice(key.lastIndexOf(':') + 1)), text: '（无命中）', reason: 'ALLOWLIST 死登记：登记行号处无 hidden 命中（行号漂移或命中已删——改行号或删条目；登记文件不存在亦同）' })
-      }
-    }
-  }
-  return violations
+  // 按命中序逐条判定（违规清单保持文件行序，报告与既有单测依赖该序）
+  const judged = hits.map((h) => (h.kind === 'hidden' ? judgeHidden(h) : judgeSurface(h)))
+  return [...judged.flat(), ...(stale ? staleAllowlistEntries(hitKeys) : [])]
+}
+
+/** hidden 命中判定：命中 ⊆ HIDDEN_ALLOWLIST。 */
+function judgeHidden(hit) {
+  return HIDDEN_ALLOWLIST.has(`${hit.file}:${hit.line}`)
+    ? []
+    : [{ ...hit, reason: '会话 hidden 同名名列未登记（ALLOWLIST 之外即红；非会话同名命中须附理由登记）' }]
+}
+
+/** surface 命中判定：命中 ⊆ SAME_NAME_EXCLUDE（文件级）∪ PASSTHROUGH_EXCLUDE ∪ READ_POINTS ∪ WRITE_SIDE。 */
+function judgeSurface(hit) {
+  const key = `${hit.file}:${hit.line}`
+  const registered = SURFACE_SAME_NAME_EXCLUDE.has(hit.file)
+    || SURFACE_PASSTHROUGH_EXCLUDE.has(key)
+    || SURFACE_READ_POINTS.has(key)
+    || SURFACE_WRITE_SIDE_FILES.has(hit.file)
+  return registered
+    ? []
+    : [{ ...hit, reason: 'surface 命中未登记（读取点须带 usage 登记进 READ_POINTS，写入侧载体登记进 WRITE_SIDE，同名载体登记进 SAME_NAME_EXCLUDE）' }]
+}
+
+/**
+ * [HISTORICAL] 2026-11 分支审查 data-governance MF1 修法③：登记条目「从未命中」即红。
+ * ALLOWLIST 的行号登记只有在与实况对齐时才有意义；行号漂移后条目成为死登记，而原判定
+ * 只查「命中是否登记」不查「登记是否命中」——两条 locale 登记行偏离实况 219/229 行仍长期
+ * 报绿（叠加 import 跳过漏报，双重假绿）。死登记的红是行号漂移的唯一结构性消解手段。
+ * 仅真实仓 CLI 跑启用（stale=true）：selftest 的样本树不含真实登记文件，启用则 20 条全红。
+ */
+function staleAllowlistEntries(hitKeys) {
+  return [...HIDDEN_ALLOWLIST.keys()]
+    .filter((key) => !hitKeys.has(key))
+    .map((key) => ({
+      kind: 'hidden',
+      file: key.slice(0, key.lastIndexOf(':')),
+      line: Number(key.slice(key.lastIndexOf(':') + 1)),
+      text: '（无命中）',
+      reason: 'ALLOWLIST 死登记：登记行号处无 hidden 命中（行号漂移或命中已删——改行号或删条目；登记文件不存在亦同）',
+    }))
 }
 
 /** 全仓扫描 + 判定（CLI 主流程）。 */

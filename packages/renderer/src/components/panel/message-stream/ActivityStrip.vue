@@ -86,7 +86,7 @@
         v-else
         class="inline-flex size-[15px] shrink-0 items-center justify-center text-accent [transform:translateZ(0)]"
       >
-        <span class="block size-full animate-loader-spin">
+        <span class="block size-full animate-loader-spin text-accent">
         <svg
           class="size-full"
           viewBox="0 0 24 24"

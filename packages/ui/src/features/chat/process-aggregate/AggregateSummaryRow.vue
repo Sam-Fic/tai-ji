@@ -27,7 +27,7 @@
     <!-- translateZ(0) 与 animate-loader-spin 分层：同元素时 keyframes 隐式 from = translateZ(0) → 不转 -->
     <span v-if="live" class="inline-flex size-[15px] shrink-0 self-center items-center justify-center text-accent [transform:translateZ(0)]" data-testid="agg-summary-live-loader">
       <!-- eslint-disable-next-line vue/no-v-html -- hardcoded constant from block-icon.ts -->
-      <span class="block size-full animate-loader-spin" v-html="RUNNING_LOADER_SVG" />
+      <span class="block size-full animate-loader-spin text-accent" v-html="RUNNING_LOADER_SVG" />
     </span>
     <Layers v-else class="size-[15px] shrink-0 self-center text-neutral-ico [stroke-width:1.6]" aria-hidden="true" />
     <span class="shrink-0">{{ t('panel.message.aggProcessLabel') }}</span>
