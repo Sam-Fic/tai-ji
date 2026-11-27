@@ -27,12 +27,30 @@
  * 安全性：全仓无 animationend/animationcancel 宿主监听（2026-11 核实，grep 零命中；
  * mobile-renderer 测试里的 dispatch 是测试自造事件，非运行时监听），暂停不影响任何
  * 计时语义；transition 不受影响。
+ *
+ * 安装幂等（2026-11 分支审查 arch-boundary S1）：与同目录 resize-observer-probe 同款
+ * `installed` 早返——HMR / 测试重复调用不再重复注册 listener；uninstall 仅供测试清场
+ * （生产入口 main.ts 单点安装、页面生命周期内常驻）。
  */
+let installed = false
+
+/** 仅供测试清场：摘除三个监听并清 installed，使下个用例从干净态安装。 */
+export function uninstallHiddenAnimationPause(): void {
+  if (!installed) return
+  document.removeEventListener('visibilitychange', sync)
+  window.removeEventListener('blur', sync)
+  window.removeEventListener('focus', sync)
+  installed = false
+}
+
+const shouldPause = (): boolean => document.hidden || !document.hasFocus()
+const sync = (): void => {
+  document.documentElement.classList.toggle('app-hidden', shouldPause())
+}
+
 export function installHiddenAnimationPause(): void {
-  const shouldPause = (): boolean => document.hidden || !document.hasFocus()
-  const sync = (): void => {
-    document.documentElement.classList.toggle('app-hidden', shouldPause())
-  }
+  if (installed) return
+  installed = true
   document.addEventListener('visibilitychange', sync)
   window.addEventListener('blur', sync)
   window.addEventListener('focus', sync)

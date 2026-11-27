@@ -74,6 +74,10 @@ function scanRoots(rootDir) {
 const SKIP_DIRS = new Set(['__tests__', 'node_modules', 'dist', 'build', 'coverage', 'test-results'])
 const SOURCE_FILE = /\.(ts|tsx|vue)$/
 const TEST_FILE = /\.(spec|test)\.(ts|tsx|vue)$/
+/** import 声明行（置 inImport 前先排除下面三类非跨行形态）。 */
+const IMPORT_DECL = /^\s*import\b/
+/** 命中即「不是跨行 import 块」：对象键 `import:` / 副作用 `import './x'` / 动态 `import(`。 */
+const NOT_IMPORT_BLOCK = /^\s*import\s*(?:\(|:|['"`])/
 
 /**
  * 逐行剥注释（行号保持原文件行号——块注释跨行延续状态）：
@@ -193,7 +197,7 @@ export const HIDDEN_ALLOWLIST = new Map([
   // document.hidden（浏览器 API）
   ['packages/renderer/src/composables/features/settings/use-app-update-autocheck.ts:169', 'document.hidden（浏览器 API：页面可见性；166→169 随 fix-update-autocheck 恢复 ADR-0190 例外调度轴（v0.12.8 恢复版较被删前版本 runAutoCheck 注释段 +3 行）漂移，同号收口）'],
   ['packages/ui/src/features/chat/composables/useTurnElapsed.ts:123', 'document.hidden（浏览器 API：页面可见性，计时器暂停判据）'],
-  ['packages/renderer/src/boot/hidden-animation-pause.ts:32', 'document.hidden（浏览器 API：页面可见性，窗口后台化/失焦动画暂停判据；19→32 随 2026-11 [perf:animation] shouldPause 加 !document.hasFocus() 判定（失焦但可见时动画照跑，实测与风扇一致）文件头注释扩写 +10 行漂移，同号收口）'],
+  ['packages/renderer/src/boot/hidden-animation-pause.ts:46', 'document.hidden（浏览器 API：页面可见性，窗口后台化/失焦动画暂停判据；19→32 随 2026-11 [perf:animation] shouldPause 加 !document.hasFocus() 判定（失焦但可见时动画照跑，实测与风扇一致）：+13 行 = 文件头注释扩写 +10 / shouldPause 提取 +2 / 新增 blur+focus 监听 +1；32→46 随同批分支审查 S1 安装幂等改造（shouldPause/sync 提到模块作用域 + uninstall 导出）再漂 +14，同号收口）'],
   // canvas 布局 opts.hidden（节点显隐回调）
   ['packages/renderer/src/components/canvas/CanvasGraph.vue:249', 'canvas 布局 opts.hidden（节点显隐回调注入）'],
   ['packages/renderer/src/components/canvas/canvas-display.ts:229', 'canvas 布局 opts.hidden 形参声明'],
@@ -203,9 +207,12 @@ export const HIDDEN_ALLOWLIST = new Map([
   // 1394/1393→1399/1398 随 feat-quota-cookie-refresh 在 quota 段加 5 行漂移；
   // 1399/1398→1398/1396 随 main 合并（stepfun i18n 键 + genstats locale 编辑）漂移；
   // 1398/1396→1400/1398 随 refactor-plugin-implement 并入 dev-0.12.1 漂移；
-  // 1400/1398→1405/1403 随 feat-compaction-closure smart-context 压缩设置页 i18n 键新增漂移）
-  ['packages/ui/src/locale/en-US/settings.ts:1405', 'locale 键 hidden（设置项字面键名，非会话语义）'],
-  ['packages/ui/src/locale/zh-CN/settings.ts:1403', 'locale 键 hidden（设置项字面键名，非会话语义）'],
+  // 1400/1398→1405/1403 随 feat-compaction-closure smart-context 压缩设置页 i18n 键新增漂移；
+  // 1405/1403→1624/1632 [HISTORICAL] 实为 import 跳过状态机漏报所致的「假绿」（对象键 `import:`
+  // 在 :58 置 inImport 永不复位，此后 1600+ 行被吞）——2026-11 分支审查 data-governance MF1
+  // 修状态机后露出真实行号；该两条自 1393 起从未与实况对齐过，靠漏报维持绿）
+  ['packages/ui/src/locale/en-US/settings.ts:1624', 'locale 键 hidden（设置项字面键名，非会话语义）'],
+  ['packages/ui/src/locale/zh-CN/settings.ts:1632', 'locale 键 hidden（设置项字面键名，非会话语义）'],
 ])
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -370,12 +377,18 @@ export function collectHits(rootDir = REPO_ROOT, roots = scanRoots(rootDir)) {
       let inImport = false
       codeLines(text).forEach((line, idx) => {
         // import / export...from 行是声明不是用法（标识符形态的 isKnownBtwLine 等会命中
-        // import 行）——跳过；多行 import 以 from 子句结束为界
+        // import 行）——跳过；多行 import 以 from 子句结束为界。
+        // [HISTORICAL] 2026-11 分支审查 data-governance MF1：原 `/^\s*import\b/` 同时命中
+        // 三类非 import 声明形态并置 inImport=true 且永不复位（复位条件只有 `from '`）：
+        // (a) 对象键 `import: 'Import font'`（\b 在 t→: 处成立）；(b) 副作用 import `import './x.css'`；
+        // (c) 动态 import `import(x)`。此后该文件剩余行全部被吞——实测 7 个文件自该点起
+        // 整段漏扫仍报绿（含本检查自己登记的两条 locale 行）。现置位前排除三类形态：
+        // 它们均无跨行块，按普通代码行继续走 pattern 匹配。
         if (inImport) {
           if (/\bfrom\s+['"]/.test(line)) inImport = false
           return
         }
-        if (/^\s*import\b/.test(line)) {
+        if (IMPORT_DECL.test(line) && !NOT_IMPORT_BLOCK.test(line)) {
           if (!/\bfrom\s+['"]/.test(line)) inImport = true
           return
         }
@@ -398,8 +411,9 @@ export function collectHits(rootDir = REPO_ROOT, roots = scanRoots(rootDir)) {
  * - surface：命中 ⊆ SAME_NAME_EXCLUDE（文件级）∪ PASSTHROUGH_EXCLUDE ∪
  *   READ_POINTS ∪ WRITE_SIDE。
  */
-export function findViolations(hits) {
+export function findViolations(hits, { stale = false } = {}) {
   const violations = []
+  const hitKeys = new Set(hits.map((h) => `${h.file}:${h.line}`))
   for (const hit of hits) {
     const key = `${hit.file}:${hit.line}`
     if (hit.kind === 'hidden') {
@@ -413,24 +427,36 @@ export function findViolations(hits) {
     if (SURFACE_READ_POINTS.has(key) || SURFACE_WRITE_SIDE_FILES.has(hit.file)) continue
     violations.push({ ...hit, reason: 'surface 命中未登记（读取点须带 usage 登记进 READ_POINTS，写入侧载体登记进 WRITE_SIDE，同名载体登记进 SAME_NAME_EXCLUDE）' })
   }
+  // [HISTORICAL] 2026-11 分支审查 data-governance MF1 修法③：登记条目「从未命中」即红。
+  // ALLOWLIST 的行号登记只有在与实况对齐时才有意义；行号漂移后条目成为死登记，而原判定
+  // 只查「命中是否登记」不查「登记是否命中」——两条 locale 登记行偏离实况 219/229 行仍长期
+  // 报绿（叠加 import 跳过漏报，双重假绿）。死登记的红是行号漂移的唯一结构性消解手段。
+  // 仅真实仓 CLI 跑启用（stale=true）：selftest 的样本树不含真实登记文件，启用则 20 条全红。
+  if (stale) {
+    for (const key of HIDDEN_ALLOWLIST.keys()) {
+      if (!hitKeys.has(key)) {
+        violations.push({ kind: 'hidden', file: key.slice(0, key.lastIndexOf(':')), line: Number(key.slice(key.lastIndexOf(':') + 1)), text: '（无命中）', reason: 'ALLOWLIST 死登记：登记行号处无 hidden 命中（行号漂移或命中已删——改行号或删条目；登记文件不存在亦同）' })
+      }
+    }
+  }
   return violations
 }
 
 /** 全仓扫描 + 判定（CLI 主流程）。 */
-export function runCheck(rootDir = REPO_ROOT) {
+export function runCheck(rootDir = REPO_ROOT, opts = {}) {
   const roots = scanRoots(rootDir)
   if (roots.length === 0) {
     throw new Error(`scope 为空：${path.join(rootDir, 'packages')} 下没有可扫的 src 目录——拒绝出绿（fail-closed，设计 §3.3.8）`)
   }
   const hits = collectHits(rootDir, roots)
-  const violations = findViolations(hits)
+  const violations = findViolations(hits, opts)
   const hiddenHits = hits.filter((h) => h.kind === 'hidden').length
   const surfaceHits = hits.filter((h) => h.kind === 'surface').length
   return { hits, violations, hiddenHits, surfaceHits, roots }
 }
 
 function report(rootDir) {
-  const { violations, hiddenHits, surfaceHits } = runCheck(rootDir)
+  const { violations, hiddenHits, surfaceHits } = runCheck(rootDir, { stale: true })
   console.log(`[hidden-surface] scope=packages/<任意包>/src：hidden 命中 ${hiddenHits} 处（ALLOWLIST ${HIDDEN_ALLOWLIST.size} 条）/ surface 命中 ${surfaceHits} 处（读取点 ${SURFACE_READ_POINTS.size} 条 + 载体文件 ${SURFACE_WRITE_SIDE_FILES.size} 个）`)
   if (violations.length === 0) {
     console.log('[hidden-surface] OK：全部命中均在登记清单内')
@@ -489,6 +515,18 @@ function makeSampleTree(root) {
     "export const u = link('https://x', { surface: 'btw' })",
     'export const v = f("/*", { hidden: true })',
   ].join('\n'))
+  // 红样本⑤（2026-11 MF1）：三类非跨行 import 形态之后的行不得被吞——对象键 `import:` /
+  // 副作用 import / 动态 import( 曾把 inImport 置 true 且永不复位，此后整文件漏扫仍报绿
+  write('packages/demo/src/red-import-leak.ts', [
+    "import './style.css'",
+    'export const cfg = {',
+    "  import: 'Import font',",
+    '  hidden: true,', // 第 4 行：须命中
+    '}',
+    'const m = await import("./m.ts")',
+    'export const w = { surface: "btw" }', // 第 7 行：须命中
+    'export const z = (o) => o.hidden', // 第 8 行：须命中
+  ].join('\n'))
   return root
 }
 
@@ -516,6 +554,7 @@ function selftest() {
       expectRed('packages/demo/src/red-surface.ts', [1, 2, 3, 4], 'surface 四形态未登记命中即红'),
       expectRed('packages/demo/src/red-drift.ts', [1], 'ALLOWLIST 行号漂移命中即红'),
       expectRed('packages/demo/src/red-string.ts', [1, 2], '字符串字面量内注释形态（https:// 的 // 与 /* 块注释态）不截断该行、后续命中即红'),
+      expectRed('packages/demo/src/red-import-leak.ts', [4, 7, 8], '非跨行 import 形态（对象键 import: / import \'./x\' / import(...) 不置 inImport，其后命中即红'),
       expectGreen('packages/demo/src/clean.ts', '合法用法不红'),
       expectGreen('packages/demo/src/commented.ts', '注释行（块/行/Vue 模板）不计命中'),
       expectGreen('packages/demo/src/__tests__/ignored.ts', '__tests__ 目录排除'),
@@ -541,6 +580,15 @@ function selftest() {
     const registerOk = afterRegister.length === 0
     console.log(`${registerOk ? '[selftest OK]' : '[selftest FAIL]'} 清单内命中（ALLOWLIST / SAME_NAME_EXCLUDE / PASSTHROUGH_EXCLUDE）不红：${registerOk ? '符合预期' : JSON.stringify(afterRegister)}`)
     results.push(registerOk)
+    // 死登记即红（2026-11 MF1 修法③，仅 stale=true 启用）：只喂 1 条命中 → 其余 ALLOWLIST 条目
+    // 全部「从未命中」应红；stale=false 时同样的命中集应绿（不改变 selftest 其余用例的语义）
+    const oneHit = [fakeHits[0]]
+    const staleOff = findViolations(oneHit)
+    const staleOn = findViolations(oneHit, { stale: true })
+    const staleWant = HIDDEN_ALLOWLIST.size - 1
+    const staleOk = staleOff.length === 0 && staleOn.length === staleWant && staleOn.every((v) => v.reason.startsWith('ALLOWLIST 死登记'))
+    console.log(`${staleOk ? '[selftest OK]' : '[selftest FAIL]'} ALLOWLIST 死登记即红（stale=true）：期望红 ${staleWant}（stale=false 同集绿）；实际 stale=true 红 ${staleOn.length} / stale=false 红 ${staleOff.length}`)
+    results.push(staleOk)
     const pass = results.every(Boolean)
     console.log(pass ? '[selftest] 全部通过（样本树红/绿符合预期）' : '[selftest] 存在失败项')
     return pass ? 0 : 3

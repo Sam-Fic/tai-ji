@@ -9,10 +9,10 @@
  *
  * 运行：cd packages/renderer && npx vitest run src/__tests__/boot/hidden-animation-pause.test.ts
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { installHiddenAnimationPause } from '@/boot/hidden-animation-pause'
+import { installHiddenAnimationPause, uninstallHiddenAnimationPause } from '@/boot/hidden-animation-pause'
 
 /** happy-dom 的 visibilityState 可写（defineProperty 覆盖只读 getter）。 */
 function setHidden(hidden: boolean): void {
@@ -45,6 +45,8 @@ describe('installHiddenAnimationPause', () => {
   afterEach(() => {
     cleanupFns.forEach((fn) => fn())
     cleanupFns = []
+    // 摘除监听 + 清 installed：用例间不漏 listener（否则后续 dispatchEvent 打到前序用例的 handler）
+    uninstallHiddenAnimationPause()
   })
 
   it('挂载即按当前可见态同步（可见 → 无 .app-hidden）', () => {
@@ -59,14 +61,29 @@ describe('installHiddenAnimationPause', () => {
     expect(document.documentElement.classList.contains('app-hidden')).toBe(true)
   })
 
-  it('visibilitychange 翻转：<html> 类跟随 hidden 挂/摘（幂等重挂不重复注册）', () => {
+  it('visibilitychange 翻转：<html> 类跟随 hidden 挂/摘', () => {
     setHidden(false)
     installHiddenAnimationPause()
-    installHiddenAnimationPause() // 幂等：重复安装不应造成类状态错乱
     setHidden(true)
     expect(document.documentElement.classList.contains('app-hidden')).toBe(true)
     setHidden(false)
     expect(document.documentElement.classList.contains('app-hidden')).toBe(false)
+  })
+
+  // [perf:animation] 2026-11 分支审查 arch-boundary S1：安装幂等 = 不重复注册 listener
+  // （原用例注释写「幂等」但只验了类状态幂等——sync() 结果幂等掩盖了注册泄漏）
+  it('重复安装不重复注册监听（installed 早返）', () => {
+    const addDoc = vi.spyOn(document, 'addEventListener')
+    const addWin = vi.spyOn(window, 'addEventListener')
+    try {
+      installHiddenAnimationPause()
+      installHiddenAnimationPause()
+      expect(addDoc).toHaveBeenCalledTimes(1)
+      expect(addWin).toHaveBeenCalledTimes(2) // blur + focus
+    } finally {
+      addDoc.mockRestore()
+      addWin.mockRestore()
+    }
   })
 
   // [perf:animation] 2026-11 增补：失焦但窗口可见时也必须暂停
