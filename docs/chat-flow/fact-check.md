@@ -18,7 +18,7 @@
 | F12 | 过程卡容器 = ProcessAggregateBlock（卡头 + 12 行窗口由 AggregateTape 承载） | 事实 | packages/ui/src/features/chat/ProcessAggregateBlock.vue:22 | |
 | F13 | 工具输出的行内展开已按 D4 退役，详情 = 右侧抽屉 | 事实 | packages/ui/src/features/chat/process-aggregate/SegmentToolRow.vue:11 | 本次不推翻 D4 |
 | F14 | 轮头耗时已有 1 秒 tick + 页面隐藏停表范式 | 事实 | packages/ui/src/features/chat/composables/useTurnElapsed.ts:109 | 卡头计时沿用同式 |
-| F15 | i18n 落点 = ui 两个 panel.ts；已有键：回到最新/思考/执行命令/过程/进行中 | 事实 | packages/ui/src/locale/zh-CN/panel.ts:182; packages/ui/src/locale/zh-CN/panel.ts:123; packages/ui/src/locale/zh-CN/panel.ts:210; packages/ui/src/locale/zh-CN/panel.ts:216 | en 侧同组 |
+| F15 | i18n 落点 = ui 包的两个 locale 文件；已有键：回到最新/思考/执行命令/过程/进行中 | 事实 | packages/ui/src/locale/zh-CN/panel.ts:182; packages/ui/src/locale/zh-CN/panel.ts:123; packages/ui/src/locale/zh-CN/panel.ts:210; packages/ui/src/locale/zh-CN/panel.ts:216 | en 侧同组 |
 | F16 | 过程卡测试范式 = fixture 驱动 mount | 事实 | packages/ui/src/features/chat/__tests__/process-aggregate-block.test.ts:1 | |
 | F17 | faux 扩展注册四个模型（真机可切模型） | 事实 | packages/runtime/src/__tests__/fixtures/faux-llm-ext.ts:153 | faux-1 / faux-1-reasoning / faux-1-b / faux-1-c |
 | F18 | testCommand 收窄到 ui/core 的 chat 子集（域全量 227 文件超 300s 门禁超时） | 事实 | .tree-plant.json:2 | |
@@ -68,7 +68,7 @@
 | 轮头禁用态样式 | Button 基类 `disabled:opacity-50`，经 `cn` 合并可覆盖 | packages/ui/src/primitives/button/button-variants.ts:15; packages/ui/src/primitives/button/Button.vue:24 | AC-LOOK |
 | i18n 双侧 | `packages/ui/src/locale/{zh-CN,en-US}/panel.ts` 的 `message` 组 | packages/ui/src/locale/zh-CN/panel.ts:108; packages/ui/src/locale/en-US/panel.ts:111 | AC-I18N |
 | 页面可见性 | `document.hidden`（浏览器接口）：活动计时器页面不可见时停表、恢复可见补算；与会话 hidden 状态同名无关，登记进同名白名单 | packages/ui/src/features/chat/composables/useProcessAggregate.ts:309; scripts/check-session-hidden-surface.mjs:196 | AC-CHIP |
-| 真机装配 | 开发实例（vite+electron+真 pi）+ faux 演员（四模型） | .agents/skills/verify-taiji/SKILL.md:29; packages/runtime/src/__tests__/fixtures/faux-llm-ext.ts:153 | AC-H12 |
+| 真机装配 | 开发实例（vite+electron+真 pi）+ faux 演员（四模型） | scripts/acceptance/harness.mjs:320; scripts/acceptance/harness.mjs:339; packages/runtime/src/__tests__/fixtures/faux-llm-ext.ts:153 | AC-H12 |
 | 图标资源 | lucide `box` 字形可直接引用（@lucide/vue） | node_modules/@lucide/vue/dist/esm/icons/box.mjs | AC-MSW-ICON |
 
 ## 未核实风险
@@ -79,3 +79,12 @@
 - I6：各步计时的起点偏早（命令刚开始执行，卡头活动计时已显示 23s；轮头计时与窗口内各步耗时之和对不上）。起点取自哪一事件未核实；修正要动工具调用时间戳的来源，不属本交付，已登记为显式不做。
 - I7：窗口基线查找的性能代价：读入量受 READ_PRECHECK_MAX_BYTES（32MB）硬上限（对齐同文件惯例；修复前无上界，64.5MB 前缀同步阻塞 575-693ms，修复后有界实测约 200-290ms）。超上限的远古前缀读不全——链查不到基线 → undefined → 该会话重载后切换行缺失（极端大文件降级，触发面 = 头端切换记录距窗口起点超过 32MB）；就近切换记录（最近 32MB 内）不受影响。实测明显卡顿时改为在回合索引里带上模型基线。
 - I8：切换行归属的末尾窗口双向一次性跳变（live 瞬时形态 → 设计终态的收敛，跳一次后不再变）：① 切换帧到达时回合既无后续消息也无活动信号 → 行落为回合之间静态分隔行，后续 assistant 到达后移入回合内部；② 流式中/工具中切（行先归回合内部）之后回合落成且始终无后续消息 → 行移出为回合之间的静态分隔行。两个方向的终态位置都由向后看判定给出（时序正确），跳变触发面 = 切换行处于数组末尾窗口期间发生状态变化，接受；出现明显困扰再收窄判定（如结合会话级活动信号入参）。
+
+### 编号对照
+
+| 编号 | 含义 |
+|---|---|
+| F1-F31 | 「论据三分类」表的论据编号（事实/推断/虚构三类，证据为文件:行号或探针输出） |
+| I1-I8 | 「未核实风险」节的登记编号（推断未核实项 / 显式登记的代价与边界） |
+
+> I2 已升级为事实（见三分类表 I2 行）；I1 曾登记、后被 F30 证伪收编（见 F30 说明）。I6 为显式不做，I7/I8 为代价与边界登记。

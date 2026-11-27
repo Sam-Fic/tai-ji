@@ -12,13 +12,13 @@
 | G2 | 进行中卡头常驻「此刻在做什么 + 计时」 | 「2. 卡头常驻OK」 | 机制：卡头右侧活动 chip（类型词 + 已持续时长），每秒刷新；它是卡内唯一的实时计时（行内历史耗时不属于此类） | AC-CHIP |
 | G3 | 进行中要能感知持续推进 | 「要给用户能感知到是在持续推进，而不是固定4行陷入了停滞的感觉」 | 机制：跟随滚动 + 上沿淡出 + 「更早 N 条/回到最新」+ 执行中命令行尾输出 + 卡头计时 | AC-LIVE, AC-RUN |
 | G4 | 落成后收成一行，点开是 12 行窗口 | 「3. 落成后收成一行OK」 | 机制：`followedByText`/回合落成 → 收成一行；点卡头展开窗口，从第一条读起 | AC-SETTLE |
-| G5 | 单条详情走右侧抽屉（沿用 D4，不改行内展开） | 用户裁决：「沿用右侧详情抽屉（推荐）」 | 机制：点击窗口内工具行 → 现行 `AggregateToolDetailDrawer`（2026-11-06 D4 保持） | AC-DETAIL |
+| G5 | 单条详情走右侧抽屉（沿用既有右侧详情抽屉形态，不改行内展开） | 用户裁决：「沿用右侧详情抽屉（推荐）」 | 机制：点击窗口内工具行 → 现行 `AggregateToolDetailDrawer`（2026-11-06 定型的行内不展开、详情进右抽屉形态保持） | AC-DETAIL |
 | G6 | 思考在窗口里一块一行，点开看全文 | 「一个 block 一行」 | 机制：已结束的思考 = 一行标签，不带正文；进行中的思考只露最新一行文字；点开在窗口内展开 240px 滚动区 | AC-THINK |
 | G7 | 窗口里的行 = 思考块与工具步按发生顺序逐行平铺 | 用户对照原型截图后指示：「全部修复」（原型窗口内命令直接平铺） | 机制：组单元直接渲染其成员行，窗口内不设分组标题行；步数按段内工具类成员累计 | AC-LOOK |
 | G8 | 模型切换成功后出一条横线分隔行（box 图标） | 「对话中如果切换了模型，并且 pi 也接收到了切换，那么也要展示一条模型切换的消息」「5. 横线分隔行」「用box。」 | 机制：新系统消息 `modelSwitch`，渲染复用 SystemNotice 横线分隔行族，图标 = lucide Box | AC-MSW-LIVE, AC-MSW-ICON |
 | G9 | 回合进行中切换插入回合内部 | 用户裁决：「回合内插入（推荐）」 | 机制：`message-turns` 给打开的回合加回合内通知位并记录 assistant 序锚，trace 按锚插入该行（pi 消息体时钟与 entry 时钟不同源，不比较时间戳） | AC-MSW-MID |
 | G10 | 只有 pi 确认成功才出行；同模型重复写入不出行（前向：与上一生效模型不同 → 出行；反向：相同 → 不出行） | 「并且 pi 也接收到了切换」 | 机制：行以 pi `model_select`（仅真实变化时发出）为信号源；reducer 对「与上一生效模型相同」的 `model_change` 不出行。上一生效模型 = 会话的模型基线：pi 新建会话时落盘的首条 `model_change`。实时侧收不到这条记录，由切换帧携带的切换前模型补；历史按窗口读取、窗口不含文件头时，从窗口第一条的父亲沿父链回溯补 | AC-MSW-REPLAY, AC-MSW-DEDUPE |
-| G11 | 实时与回放两条通路同形 | 项目红线：live ≡ reload（AGENTS.md 关键规则 9） | 机制：同一 reducer 派生同一 `modelSwitch` 消息。实时走合成 entry；回放把 pi 落盘的 `model_change` 经共享映射还原成同一种 entry。派生依赖前置基线，权威 state 与渲染列表用同一基线派生 | AC-CORE-EQUIV |
+| G11 | 实时与回放两条通路同形 | 项目红线：live ≡ reload（同一现象在实时与重开两条通路必须同形） | 机制：同一 reducer 派生同一 `modelSwitch` 消息。实时走合成 entry；回放把 pi 落盘的 `model_change` 经共享映射还原成同一种 entry。派生依赖前置基线，权威 state 与渲染列表用同一基线派生 | AC-CORE-EQUIV |
 | G12 | 新增文案中英双侧对齐 | 项目规范（check_i18n_locale_sync） | 机制：`packages/ui/src/locale/{zh-CN,en-US}/panel.ts` 同组新增键 | AC-I18N |
 | G13 | 过程卡长相对齐原型（逐项值见「长相对齐原型」表） | 「这个样式，和 demo html 的内容一样吗？」「全部修复」 | 机制：卡片底色/圆角/内边距、卡头形态、行字号与颜色、行距、滚动条、提示样式全部按表取值 | AC-LOOK |
 | G14 | 执行中的命令行行尾显示最新一行输出与光标 | 「要给用户能感知到是在持续推进」「全部修复」 | 机制：读 `ToolCall.output` 末行（runtime `message.tool_call_update` 流式回填），行尾光标闪烁 | AC-RUN |
@@ -103,7 +103,7 @@
 | tape-live | 进行中：卡头活动 chip 计时 + 执行中命令行尾输出 | tape-think | 中 | packages/ui/src/features/chat/process-aggregate/, packages/ui/src/features/chat/composables/, packages/ui/src/features/chat/__tests__/, packages/ui/src/locale/zh-CN/panel.ts, packages/ui/src/locale/en-US/panel.ts, scripts/acceptance/, scripts/check-session-hidden-surface.mjs, docs/testing/e2e-map.json | AC-CHIP, AC-RUN |
 | tape-settle | 落成后收成一行、点开 12 行窗口、详情走右侧抽屉 | tape-think, tape-scroll | 低 | packages/ui/src/features/chat/process-aggregate/, packages/ui/src/features/chat/ProcessAggregateBlock.vue, packages/ui/src/features/chat/Turn.vue, packages/ui/src/features/chat/__tests__/, scripts/acceptance/, docs/testing/e2e-map.json | AC-SETTLE, AC-DETAIL |
 | msw-replay | 回放派生：pi 落盘的 `model_change` 经共享映射与还原到达 reducer，出 `modelSwitch` 系统消息；同模型/首个记录不出行；历史按窗口读取时补窗口起点处的模型基线 | 主干 | 高 | packages/core/src/domain/chat/apply-entry.ts, packages/core/src/domain/chat/__tests__/, packages/shared/src/message.ts, packages/shared/src/pi-entry.ts, packages/shared/src/index.ts, packages/runtime/src/infra/pi/pi-session-data.ts, packages/runtime/src/infra/pi/session-entry-mapper.ts, packages/runtime/src/infra/pi/message-converter.ts, packages/runtime/src/infra/pi/session-model-tail-read.ts, packages/runtime/src/services/session-history.ts, packages/runtime/src/services/session/history-reader.ts, packages/runtime/src/utils/history-reverse-read.ts, packages/runtime/src/__tests__/model-switch-history.test.ts, scripts/acceptance/, docs/testing/e2e-map.json, docs/testing/domain-slices/ | AC-MSW-REPLAY, AC-MSW-DEDUPE |
-| msw-live | 实时链路：host-internals 扩展转发 `model_select` → runtime 帧（带切换前模型）→ 前端合成 entry；新会话首次切换补基线；权威 state 与渲染列表同基线派生 | msw-replay | 高 | extensions/taiji/host-internals/src/, packages/runtime/src/services/session/event-interpreter.ts, packages/runtime/src/services/session/event-interpreter*.ts, packages/runtime/src/__tests__/, packages/shared/src/protocol.ts, packages/core/src/domain/chat/effects/, packages/core/src/domain/chat/effect-types.ts, packages/core/src/domain/chat/store.ts, packages/core/src/domain/chat/__tests__/, packages/renderer/src/__tests__/stores/plan-store.test.ts, packages/extension-protocol/, extensions/taiji/host-internals/package.json, extension-dependencies.json, pnpm-lock.yaml, docs/testing/domain-slices/, scripts/acceptance/, docs/testing/e2e-map.json | AC-MSW-LIVE, AC-CORE-EQUIV |
+| msw-live | 实时链路：host-internals 扩展转发 `model_select` → runtime 帧（带切换前模型）→ 前端合成 entry；新会话首次切换补基线；权威 state 与渲染列表同基线派生 | msw-replay | 高 | extensions/taiji/host-internals/src/, packages/runtime/src/services/session/event-interpreter.ts, packages/runtime/src/__tests__/, packages/shared/src/protocol.ts, packages/core/src/domain/chat/effects/, packages/core/src/domain/chat/effect-types.ts, packages/core/src/domain/chat/store.ts, packages/core/src/domain/chat/__tests__/, packages/renderer/src/__tests__/stores/plan-store.test.ts, packages/extension-protocol/, extensions/taiji/host-internals/package.json, extension-dependencies.json, pnpm-lock.yaml, docs/testing/domain-slices/, scripts/acceptance/, docs/testing/e2e-map.json | AC-MSW-LIVE, AC-CORE-EQUIV |
 | msw-ui | 切换行渲染（横线分隔行族 + box 图标）与回合内插入 | msw-replay, msw-live | 高 | packages/core/src/domain/chat/message-turns.ts, packages/core/src/domain/chat/model-switch-turns.ts, packages/core/src/domain/chat/__tests__/, packages/ui/src/features/chat/composables/use-turn-trace.ts, packages/ui/src/features/chat/Turn.vue, packages/ui/src/features/chat/SystemNotice.vue, packages/ui/src/features/chat/__tests__/, packages/ui/src/locale/zh-CN/panel.ts, packages/ui/src/locale/en-US/panel.ts, scripts/acceptance/, docs/testing/e2e-map.json | AC-MSW-MID, AC-MSW-ICON |
 | i18n-final | 文案双侧对齐与词表核对 | 主干 | 低 | packages/ui/src/locale/zh-CN/panel.ts, packages/ui/src/locale/en-US/panel.ts | AC-I18N |
 
@@ -131,3 +131,11 @@
 | 轮头的思考/工具计数标签改造 | 原型各处不统一（部分轮头带、部分不带），没有可对齐的目标形态；保持现状 | 否 | 原型给出统一形态时 |
 | 各步计时起点的口径修正 | 现象已登记：工具步的计时起点早于实际开始执行（命令刚开始执行，卡头活动计时已显示 23s），轮头计时与窗口内各步耗时之和对不上与此同源；修正要动工具调用时间戳的来源，不属本交付 | 否 | 起点来源核实后另立任务 |
 | 模型切换展示字段的持久化格式演进（格式版本 / 迁移 / 重建代价） | 本交付不新增持久化格式：`model_change` 由 pi 写入、本交付只读；project 不引入新字段落盘，旧会话无需改写（格式版本 = 无新增，不迁移，重建代价 = 0） | 否 | pi 升级改变 `model_change` entry 结构（发行说明或回放用例开始失败时） |
+
+### 编号对照
+
+| 编号 | 含义 |
+|---|---|
+| G1-G11 | 目标清单编号（本文件「目标清单」表） |
+| AC-* | 验收 case 编号（acceptance.md 的 case 表） |
+| 2026-11-06 D4 | 历史任务编号：行内展开退役、详情走右抽屉的定型裁决（本任务沿用其形态，不重新展开） |
