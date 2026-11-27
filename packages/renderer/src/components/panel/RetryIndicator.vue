@@ -18,7 +18,10 @@
     class="mb-1 flex items-center gap-1.5 px-3.5 py-0.5 text-[length:var(--text-xs)]"
     :title="state.errorMessage ? t('panel.retryIndicator.lastFailed', { error: state.errorMessage }) : t('panel.retryIndicator.autoRetrying')"
   >
-    <RefreshCw class="size-3 shrink-0 animate-spin text-warn" />
+    <!-- [perf:animation] 2026-11 去旋转：自动重试在 429/限流场景可连续多次累积到分钟级，
+         原 animate-spin 挂 <RefreshCw> 的 SVG 根（Chromium 不合成 SVG transform → 每帧主线程
+         重绘矢量）。「重试中」语义已由右侧文案标签完整表达，图标静态取 warn 色即可。 -->
+    <RefreshCw class="size-3 shrink-0 text-warn" />
     <span class="shrink-0 rounded-[var(--radius-sm)] bg-warn-soft px-1 py-px text-[length:var(--text-2xs)] font-medium leading-[1.4] text-warn">
       {{ t('panel.retryIndicator.retrying') }}
     </span>

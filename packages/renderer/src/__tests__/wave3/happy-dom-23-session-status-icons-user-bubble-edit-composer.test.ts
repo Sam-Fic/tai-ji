@@ -96,7 +96,7 @@ describe('session status icons extended states', () => {
     expect(deriveStatus('sid', chat, true, false, true)).toBe('working')
   })
 
-  it('streaming 状态 SessionItem 渲染 running badge（spec §5.6A D12 列表主行范式）', () => {
+  it('streaming / working 状态 SessionItem 渲染静态 accent 空心环（[perf:animation] 2026-11）', () => {
     const wrapper = mount(SessionItem, {
       props: {
         session: { id: '1', label: 'x', cwd: '/a', lastActiveAt: 0, status: 'active' },
@@ -104,11 +104,13 @@ describe('session status icons extended states', () => {
         status: 'streaming',
       },
     })
-    // streaming → 右槽 spinning icon（旋转箭头；2026-10-11 裁决状态点右移，session-icon
-    // 本体即状态元素）
+    // streaming → 右槽 spinning 档 icon（2026-10-11 裁决状态点右移，session-icon 本体即
+    // 状态元素）。[perf:animation] 2026-11：spinning 档已改静态空心 accent 环（去旋转）——
+    // 该点持续整个后台任务期内，N 实例并发，旋转是常驻开销主源。语义由 accent 空心环承担。
     const icon = wrapper.find('[data-testid="session-icon"]')
     expect(icon.exists()).toBe(true)
-    expect(icon.classes()).toContain('animate-spin')
+    expect(icon.classes()).toContain('border-accent')
+    expect(icon.classes()).not.toContain('animate-spin')
   })
 
   it('waiting 状态 SessionItem 渲染 waiting … badge', () => {

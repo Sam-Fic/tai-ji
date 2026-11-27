@@ -90,17 +90,33 @@ export const DOT_CLASS: Record<DerivedStatus, string> = {
  * icon: lucide 图标名（与 @lucide/vue 导出同名）。
  * color: Tailwind 语义色类（text-*）。
  * animation: 动画类（'' 表示静态）。
+ *
+ * [perf:animation] working / compacting 两态改静态（2026-11 实测：打包版 workflow/subagent
+ * 后台跑期间风扇狂转，GPU helper 54-60% + renderer 85%；dev 受控消融把 animate-spin 全停后
+ * 掉到 1/6，单个 14px spinner 即 9.3%/4.2%）。这两态持续 = 整个后台任务生命周期（分钟-小时），
+ * 且落到 lucide <svg> 根（Chromium 不合成 SVG transform，style.css 的 will-change 空转），
+ * 是「一直有动画在跑」布尔事实的第一个来源。语义识别由静态字形 + accent 色承担。
+ * streaming 保留旋转：真实流式是秒-分钟且用户预期在转。
  */
 export const STATUS_ICON: Record<
   DerivedStatus,
   { icon: string; color: string; animation: string }
 > = {
   streaming: { icon: 'RefreshCw', color: 'text-accent', animation: 'animate-spin' },
-  pending: { icon: 'ArrowUpCircle', color: 'text-accent', animation: 'animate-pulse-strong' },
-  compacting: { icon: 'Hourglass', color: 'text-accent', animation: 'animate-spin' },
-  working: { icon: 'RefreshCw', color: 'text-accent', animation: 'animate-spin' },
+  // [perf:animation] steps(4) 量化：pulse-strong 动 opacity + transform:scale，挂在
+  // <ArrowUpCircle> SVG 根（不可合成）；steps 把逐帧重建降到 4 段（实测 60fps→steps(8)
+  // 掉 2/3，此处取更粗的 4 段）。pending = 上行未确认，秒级但可累积。
+  pending: { icon: 'ArrowUpCircle', color: 'text-accent', animation: 'animate-pulse-strong-quantized' },
+  // [perf:animation] compacting 亦为常驻态（threshold/overflow 自动压缩可持续分钟级），
+  // 同 working 处理：静态 Hourglass 保留「压缩中」语义，不转。
+  compacting: { icon: 'Hourglass', color: 'text-accent', animation: '' },
+  // [perf:animation] working = 后台 subagent/workflow 运行中，持续整个任务生命周期（
+  // 分钟-小时）。原 animate-spin 挂在 <RefreshCw> SVG 根，每帧主线程重绘 13px 矢量。
+  // 改静态 Hourglass（与 compacting 同族「等待中」字形，色仍 accent 表「活跃」）。
+  working: { icon: 'Hourglass', color: 'text-accent', animation: '' },
   waiting: { icon: 'Wrench', color: 'text-warn', animation: '' },
-  retrying: { icon: 'Zap', color: 'text-warn', animation: 'animate-pulse-strong' },
+  // [perf:animation] 同 pending：SVG 目标 + 量化 steps(4)。
+  retrying: { icon: 'Zap', color: 'text-warn', animation: 'animate-pulse-strong-quantized' },
   done: { icon: 'Check', color: 'text-accent', animation: '' },
   stopped: { icon: 'Ban', color: 'text-neutral-mid', animation: '' },
   error: { icon: 'AlertCircle', color: 'text-danger', animation: '' },

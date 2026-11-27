@@ -72,13 +72,22 @@
         <Plus class="size-[17px]" stroke-width="1.8" />
       </Button>
     </div>
-    <component
-      :is="ICON_COMPONENTS[iconConfig.icon]"
-      data-testid="panel-session-icon"
-      :data-icon="iconConfig.icon"
-      class="size-[13px] shrink-0"
-      :class="[iconConfig.color, iconConfig.animation]"
-    />
+    <!-- [perf:animation] 2026-11 旋转挂 HTML 包装层而非 lucide svg 根：Chromium 不合成 SVG
+         transform，animate-spin 落在 <component :is> 的 svg 根上 = 每帧主线程重绘 13px 矢量
+         （实测该形态是「一直有动画在跑」布尔事实的主要来源：dev 消融全停 animate-spin 后
+         GPU helper 17.4%→3.2%，单个 14px spinner 即 9.3%/4.2%）。包装 span 挂
+         animate-spin + translateZ(0) 进独立合成层，实测同形态 9.3%→2.7%。
+         形态零变化：span 尺寸 / inline-flex 对齐与原本 svg 一致，testid 仍在 svg 上（
+         panel-session-icon 断言面不变）。 -->
+    <span class="inline-flex shrink-0 items-center justify-center [transform:translateZ(0)]" :class="iconConfig.animation">
+      <component
+        :is="ICON_COMPONENTS[iconConfig.icon]"
+        data-testid="panel-session-icon"
+        :data-icon="iconConfig.icon"
+        class="size-[13px] shrink-0"
+        :class="iconConfig.color"
+      />
+    </span>
     <!-- 会话名（demo 问题 7 裁决 + 审计 R11：卡头是「当前会话身份位」，只显会话名；
          目录/分支三重重复形态已删——侧栏组头/hover 卡为唯一承载）。长会话名截断优先
          发生于此，绝不盖右侧按钮组（按钮组 ml-auto + shrink-0）。 -->
