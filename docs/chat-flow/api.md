@@ -2,7 +2,7 @@
 
 ## 命令
 
-无新增用户命令。验收探针（随交付物入库，scripts/acceptance/）：`harness.mjs`（共用装配：开发实例启动、WS 建会话、CDP 挂载）与 `tape-height.mjs` / `tape-look.mjs` / `motion-overflow.mjs` / `tape-think.mjs` / `tape-live.mjs` / `tape-scroll.mjs` / `tape-settle.mjs` / `msw-replay.mjs` / `msw-equivalence.mjs` / `msw-live.mjs` / `msw-mid.mjs` / `msw-icon.mjs`，统一 `node <脚本>` 运行，成功打印 `OK-*` 标记串并以 0 退出。
+无新增用户命令。验收探针（随交付物入库，scripts/acceptance/）：`harness.mjs`（共用装配：开发实例启动、WS 建会话并订阅会话事件、CDP 挂载；切换模型、读历史接口、读会话文件、重载后重进会话）与 `tape-height.mjs` / `tape-look.mjs` / `motion-overflow.mjs` / `tape-think.mjs` / `tape-live.mjs` / `tape-scroll.mjs` / `tape-settle.mjs` / `msw-replay.mjs` / `msw-live.mjs` / `msw-mid.mjs` / `msw-icon.mjs`，统一 `node <脚本>` 运行，成功打印 `OK-*` 标记串并以 0 退出。
 
 ## 工具
 
@@ -24,9 +24,13 @@
 |---|---|---|
 | pi 扩展监听 | `extensions/taiji/host-internals/src/` | `pi.on('model_select', …)`（事件由 pi `setModel` 在模型真实变化时发出，携带 model / previousModel / source） |
 | 扩展 → runtime 信号 | 同上 | `pi.sendMessage({ customType: 'taiji:model-select', display: false, details: { provider, modelId, previousProvider, previousModelId, source } }, { triggerTurn: false })`（沿用压缩落盘信号同款通道） |
-| runtime 分诊 | `packages/runtime/src/services/session/event-interpreter.ts` | customType + details 双判据 → 广播 WS 帧 `message.modelSwitch` |
-| WS 帧契约 | `packages/shared/src/protocol.ts` | `'message.modelSwitch': { sessionId, provider, modelId, previousProvider, previousModelId, source?, timestamp }` |
-| 前端合成 entry | `packages/core/src/domain/chat/effects/registry.ts` | 按帧构造合成 `model_change` entry（id `ms-<uuid>`，附 previous* 与 source），喂 reducer（compaction `cmp-<uuid>` 同式） |
-| core 派生 | `packages/core/src/domain/chat/apply-entry.ts` | 新增 `model_change` case：与上一生效模型不同且上一模型存在 → `modelSwitch` 系统消息；否则不出行 |
+| runtime 分诊 | `packages/runtime/src/services/session/event-interpreter.ts` | customType + details 双判据 → 广播 WS 帧 `message.modelSwitch`（带切换前模型；模型 id 为空不广播） |
+| WS 帧契约 | `packages/shared/src/protocol.ts` | `'message.modelSwitch': { sessionId, provider?, modelId, previousProvider?, previousModelId?, timestamp }`。previous* 供前端在没有会话基线时补基线 |
+| 前端合成 entry | `packages/core/src/domain/chat/effects/registry.ts` | 按帧构造合成 `model_change` entry（id `ms-<uuid>`）。切换行的派生依赖「上一生效模型」，不走「空 state 派生」的入流骨架：handler 经 `ctx.getLastModel`（`effect-types.ts`，实现在 `store.getLastModel`）读权威 state 的模型基线，缺且帧带切换前模型时先喂一条基线 entry；权威 state 与渲染列表用同一基线、同一 reducer 派生 |
+| core 派生 | `packages/core/src/domain/chat/apply-entry.ts` | `model_change` case：会话首条记录只记基线；与上一生效模型相同的记录不出行；真实变化 → `modelSwitch` 系统消息 |
+| 历史回放 | `packages/runtime/src/infra/pi/session-entry-mapper.ts`、`message-converter.ts` | `mapSessionEntries` 把 pi 落盘的 `model_change` 映射成 wire 伪角色 `{ role: 'modelChange', provider, modelId, timestamp }`；`liftHistoryToEntries` 把它还原成专用 `model_change` entry（与实时合成的是同一种 entry） |
+| 历史窗口的模型基线 | `packages/runtime/src/services/session-history.ts` | `convertWindowEntries(entries, store, segments?, orphans?, windowSource?)`：`windowSource = { filePath, endOffset? }`。窗口不含文件头且含 `model_change` 时，以窗口起点处的生效模型前插一条基线伪消息（不产消息，只让 reducer 有上一模型可比）；其余情况不读文件 |
+| 窗口基线查找 | `packages/runtime/src/infra/pi/session-model-tail-read.ts` | `findModelChangeBaselineBefore(filePath, fromParentId, endOffset?)`：读 `[0, endOffset)` 建 id → 父节点映射，从 `fromParentId`（窗口第一条 entry 的真实父亲）沿父链回溯，取链上最近一条 `model_change`。被撤子树里的记录不在链上。文件不变且起点不变时命中进程内缓存（上限 16 条） |
+| 逆读终点 | `packages/runtime/src/utils/history-reverse-read.ts` | `forEachReversedLineChunk(filePath, { endOffset }, visit)`：只向前读 `[0, endOffset)`；endOffset 须落在行首 |
 | 回合归属 | `packages/core/src/domain/chat/message-turns.ts` | `modelSwitch` 消息：回合打开时插入该回合的回合内通知位（按时间排入 trace）；无打开回合时作为回合间的静态分隔行 |
 | UI 渲染 | `packages/ui/src/features/chat/` | 切换行渲染进 SystemNotice 横线分隔行族（box 图标）；过程卡 = `ProcessAggregateBlock` → `AggregateTape`（卡片：`AggregateSummaryRow` 卡头 + 窗口；右侧 `AggregateActivityChip` 活动计时与滚动提示；窗口内 `AggregateExpandedBody` 逐行平铺 `SegmentThinkingRow` / `SegmentToolRow`） |

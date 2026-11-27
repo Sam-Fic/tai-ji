@@ -58,6 +58,10 @@ export interface PiMessageBody {
   display?: unknown
   /** branchSummary role 专属 */
   fromId?: unknown
+  /** modelChange role 专属（taiji 的 wire 伪角色：mapSessionEntries 对 pi model_change entry 的映射，
+   *  lift 时还原成专用 entry；不是 pi AgentMessage 成员） */
+  provider?: unknown
+  modelId?: unknown
   /**
    * assistant role 专属：pi StopReason（'stop' | 'length' | 'content_filter' | 'tool_use'
    * | 'error' | 'aborted'）。重放派生消费 'error'（失败回合落盘条目——pi agent.js

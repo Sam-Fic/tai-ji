@@ -46,6 +46,10 @@ import type { PiEntry, PiMessageEntry } from '../../../../core/src/domain/chat/a
  * entryId 解析优先级与迁移前一致：平行 entryIds[i] > 消息体 __entryId（文件路径旧注入）；
  * 都缺失时 entry 不带 id（reducer 不回填 piEntryId，piEntryId 缺失语义与迁移前一致）。
  *
+ * 唯一例外：wire 伪角色 modelChange（mapSessionEntries 对 pi model_change entry 的映射）不包成
+ * message entry，而是还原成专用 model_change entry——模型切换行的派生依赖「上一生效模型」，
+ * reducer 只在专用 entry 分支里记这条基线。
+ *
  * 缺失 timestamp 的兜底（Date.now）在 lift 时落定——与迁移前同点位，保证 reducer 输入
  * 确定后输出确定（reducer 内部无 Date.now / randomUUID）。
  *
@@ -63,6 +67,19 @@ export function liftHistoryToEntries(raw: unknown[], entryIds?: string[]): PiEnt
     const inlineId = typeof rec.__entryId === 'string' ? rec.__entryId : undefined
     const entryId = entryIds?.[i] ?? inlineId
     const tsMs = typeof rec.timestamp === 'number' ? rec.timestamp : Date.now()
+    // wire 伪角色 modelChange（mapSessionEntries 对 pi model_change entry 的映射形态）：还原成
+    // 专用 entry，与实时侧合成的 model_change entry 走 reducer 同一分支
+    if (rec.role === 'modelChange') {
+      entries.push({
+        type: 'model_change',
+        ...(entryId !== undefined && { id: entryId }),
+        parentId: null,
+        timestamp: new Date(tsMs).toISOString(),
+        ...(typeof rec.provider === 'string' && { provider: rec.provider }),
+        ...(typeof rec.modelId === 'string' && { modelId: rec.modelId }),
+      })
+      continue
+    }
     const entry: PiMessageEntry = {
       type: 'message',
       ...(entryId !== undefined && { id: entryId }),

@@ -2,7 +2,7 @@
  * mapSessionEntries — session entry → 伪消息映射的共享单点（converter M1）。
  *
  * 把 pi session JSONL entry 数组映射为三类产物，供 RPC/文件两条历史读取链路共用：
- * - messages：四类 entry（message 透传 / compaction / branch_summary / custom_message）转成的伪消息，
+ * - messages：五类 entry（message 透传 / compaction / branch_summary / model_change / custom_message）转成的伪消息，
  *   role 集合与 RPC get_messages 返回对齐，供 convertPiHistory 单点消费（AGENTS.md 关键规则 9）。
  * - entryIds：与 messages 平行对齐的来源 entry id（替代旧 __entryId 注入，M1 不再塞消息体）。
  * - customDataEntries：纯数据 custom entry（type:'custom'，不进 LLM 上下文），按需读取。
@@ -24,7 +24,7 @@ import { COMPLETE_NOTIFY_CUSTOM_TYPES, SUBAGENT_DIRECTIVE_CUSTOM_TYPE, parseSuba
 
 /** mapSessionEntries 返回类型。 */
 export interface MappedSessionEntries {
-  /** 四类 entry 转成的伪消息数组（供 convertPiHistory 消费）。 */
+  /** 五类 entry 转成的伪消息数组（供 convertPiHistory 消费）。 */
   messages: unknown[]
   /** 与 messages 平行对齐的来源 entry id（entryIds[i] = messages[i] 来源 entry 的 id）。 */
   entryIds: string[]
@@ -192,6 +192,8 @@ export function computeActivePathEntries<T extends { id?: unknown; parentId?: un
  *   subagent-directive customType display 覆写为 true（extension 落 false 是 pi TUI 语义，
  *   taiji 聊天流定向气泡统一显示，见 case 内注释）
  * - branch_summary → { role:'branchSummary', summary, fromId, timestamp }
+ * - model_change → { role:'modelChange', provider, modelId, timestamp }（wire 伪角色：lift 时
+ *   还原成专用 entry 喂 reducer；不映射则重开后模型切换行消失）
  * - custom → 进 customDataEntries（不进 messages）
  * - 其余（label/session_info 等未建模类型）→ 跳过
  *
@@ -229,6 +231,19 @@ export function mapSessionEntries(entries: PiSessionEntry[], leafId?: string): M
           role: 'compactionSummary',
           summary: entry.summary,
           tokensBefore: entry.tokensBefore,
+          ...(ts !== undefined && { timestamp: ts }),
+        })
+        entryIds.push(entry.id)
+        break
+      }
+      case 'model_change': {
+        // 模型切换记录：映射为 wire 伪角色 modelChange，liftHistoryToEntries 还原成专用 entry，
+        // 与实时侧合成的 model_change entry 走 reducer 同一分支
+        const ts = entryTs(entry.timestamp)
+        messages.push({
+          role: 'modelChange',
+          provider: entry.provider,
+          modelId: entry.modelId,
           ...(ts !== undefined && { timestamp: ts }),
         })
         entryIds.push(entry.id)

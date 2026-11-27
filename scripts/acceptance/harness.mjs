@@ -179,6 +179,138 @@ export function wsRoundTrip(ws, msg, replyId, timeoutMs = 60_000) {
   })
 }
 
+/** 从面板进入会话。给了标签按标签找；没给取第一个会话项——探针实例的数据目录是全新的，
+ *  只有探针自己建的那一个会话。重载后必须不传标签：首轮之后扩展会调假模型改写会话标题，
+ *  侧栏里原标签已经不在了。 */
+export async function enterSession(page, label) {
+  await page.waitForLoadState('domcontentloaded')
+  await page.getByText(/连接中/).waitFor({ state: 'hidden', timeout: 45_000 }).catch(() => {})
+  await page.getByRole('button', { name: /^会话/ }).click({ timeout: 10_000 }).catch(() => {})
+  // 会话挂在默认项目头行下（未归类收件箱），头行默认收起：先展开
+  const defaultHead = page.locator('[data-testid="default-project-anchor"]').first()
+  if ((await defaultHead.count()) > 0) {
+    await defaultHead.waitFor({ state: 'visible', timeout: 20_000 })
+    if ((await defaultHead.getAttribute('aria-expanded')) === 'false') await defaultHead.click()
+  }
+  const item = label === undefined
+    ? page.locator('.session-item').first()
+    : page.locator('.session-item').filter({ hasText: label }).first()
+  await item.waitFor({ state: 'visible', timeout: 30_000 })
+  await item.click()
+  await page.getByTestId('composer-box').waitFor({ state: 'visible', timeout: 30_000 })
+}
+
+/** 重载页面并重新进入会话（取第一个会话项）：此后对话流来自会话文件的回放，不是实时帧。 */
+export async function reloadIntoSession(page) {
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await enterSession(page)
+}
+
+/** 拉一次会话历史（runtime 按窗口读会话文件并转换的产物）：messages / truncated / loadedTurns。 */
+export async function historyWindow(ws, sessionId) {
+  const id = `hist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const reply = await wsRoundTrip(ws, { type: 'session.history', id, payload: { sessionId } }, id, 90_000)
+  if (reply.error) throw new Error(`session.history 失败：${JSON.stringify(reply.error).slice(0, 300)}`)
+  return reply.payload
+}
+
+/** 经 WS 切换会话模型并等回执（回执带 pi 实际生效的 provider/modelId）。 */
+export async function switchModel(ws, sessionId, provider, modelId) {
+  const id = `sw-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const reply = await wsRoundTrip(ws, { type: 'model.switch', id, payload: { sessionId, provider, modelId } }, id)
+  if (reply.error) throw new Error(`model.switch 失败：${JSON.stringify(reply.error).slice(0, 300)}`)
+  return reply.payload
+}
+
+/** 对话流里系统通知行的文本（一行一条：主体短语连同钉右的等宽小字）。 */
+export const noticeRowTexts = (page) =>
+  page.evaluate(() =>
+    Array.from(document.querySelectorAll('.system-notice')).map((el) => (el.textContent ?? '').replace(/\s+/g, ' ').trim()),
+  )
+
+/** 这行是不是「从 from 切到 to」的切换行：两个模型 id 以箭头相连，两侧边界精确（faux-1 不匹配 faux-1-b）。 */
+export function isSwitchRow(text, from, to) {
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(^|[^\\w.-])${esc(from)}\\s*→\\s*${esc(to)}([^\\w.-]|$)`).test(text)
+}
+
+/** 等到「从 from 切到 to」的切换行出现，返回全部切换行文本；超时返回当前行文本（断言方判失败）。 */
+export async function waitForSwitchRows(page, from, to, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs
+  let rows = []
+  while (Date.now() < deadline) {
+    rows = await noticeRowTexts(page)
+    if (rows.some((t) => isSwitchRow(t, from, to))) return rows
+    await sleep(200)
+  }
+  return rows
+}
+
+/** 会话落盘的 entry（pi session JSONL），按文件序。只认 agent/sessions 下的会话文件——
+ *  数据目录里投递箱等别的 jsonl 文件名也含会话 id。 */
+export function readSessionEntries(dataDir, sessionId) {
+  const files = fs
+    .globSync(`**/*${sessionId}*.jsonl`, { cwd: path.join(dataDir, 'agent', 'sessions') })
+    .filter((f) => !f.endsWith('.backup'))
+  if (files.length === 0) throw new Error(`agent/sessions 下没有会话 ${sessionId} 的 JSONL`)
+  return fs
+    .readFileSync(path.join(dataDir, 'agent', 'sessions', files[0]), 'utf-8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+}
+
+/** 等会话文件里的 entry 满足条件（pi 落盘有延迟），返回读到的 entry；超时返回末次读数。 */
+export async function waitForSessionEntries(dataDir, sessionId, predicate, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs
+  let entries = []
+  while (Date.now() < deadline) {
+    try {
+      entries = readSessionEntries(dataDir, sessionId)
+      if (predicate(entries)) return entries
+    } catch {
+      // 文件尚未建出属启动慢路径
+    }
+    await sleep(300)
+  }
+  return entries
+}
+
+/** 回合终态帧（收到任一即视为落成）。 */
+const TURN_END_TYPES = new Set(['message.complete', 'message.error', 'message.stream_error', 'session.exited'])
+
+/**
+ * 发一条消息并等回合落成（订阅后的终态帧）；超时抛错。
+ * 只认发送之后到达的帧（防匹配订阅前已入队的旧帧）。
+ */
+export async function sendAndWaitTurn(ws, sessionId, page, content) {
+  let ended
+  const done = new Promise((resolve, reject) => {
+    const to = setTimeout(() => {
+      ws.off('message', onMessage)
+      reject(new Error('回合未在限时内落成'))
+    }, 90_000)
+    const onMessage = (data) => {
+      let m
+      try {
+        m = JSON.parse(data.toString())
+      } catch {
+        return
+      }
+      if (TURN_END_TYPES.has(m.type) && m.payload?.sessionId === sessionId) {
+        clearTimeout(to)
+        ws.off('message', onMessage)
+        ended = m
+        resolve(m)
+      }
+    }
+    ws.on('message', onMessage)
+  })
+  await ws.send(JSON.stringify({ type: 'message.send', id: `send-${Date.now()}`, payload: { sessionId, content } }))
+  await done
+  return ended
+}
+
 /**
  * 启动一个带 faux 装配的开发实例并建好会话。
  * @param steps faux 响应脚本（FauxStep 数组）
@@ -254,23 +386,14 @@ export async function boot({ steps, label, tps = '20' }) {
     const createReply = await wsRoundTrip(ws, { type: 'session.create', id: `${runId}-create`, payload: { cwd: SAMPLE_PROJECT, label } }, `${runId}-create`)
     const sessionId = createReply.payload?.session?.id
     if (!sessionId) throw new Error(`session.create 回执无 session.id：${JSON.stringify(createReply).slice(0, 300)}`)
+    // 订阅会话事件：此后探针的 WS 收到该会话的广播帧，回合落成以终态帧为准（长会话里早期回合
+    // 会被对话流的虚拟列表卸载，按 DOM 数轮头不可靠）
+    await wsRoundTrip(ws, { type: 'session.subscribe', id: `${runId}-subscribe`, payload: { sessionId } }, `${runId}-subscribe`)
 
     const browser = browserRef = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`)
     const ctx = browser.contexts()[0]
     const page = ctx.pages().find((p) => p.url().includes(`:${vitePort}`)) ?? ctx.pages()[0]
-    await page.waitForLoadState('domcontentloaded')
-    await page.getByText(/连接中/).waitFor({ state: 'hidden', timeout: 45_000 }).catch(() => {})
-    await page.getByRole('button', { name: /^会话/ }).click({ timeout: 10_000 }).catch(() => {})
-    // 会话挂在默认项目头行下（未归类收件箱），头行默认收起：先展开
-    const defaultHead = page.locator('[data-testid="default-project-anchor"]').first()
-    if ((await defaultHead.count()) > 0) {
-      await defaultHead.waitFor({ state: 'visible', timeout: 20_000 })
-      if ((await defaultHead.getAttribute('aria-expanded')) === 'false') await defaultHead.click()
-    }
-    const item = page.locator('.session-item').filter({ hasText: label }).first()
-    await item.waitFor({ state: 'visible', timeout: 30_000 })
-    await item.click()
-    await page.getByTestId('composer-box').waitFor({ state: 'visible', timeout: 30_000 })
+    await enterSession(page, label)
 
     return { runId, dataDir, vitePort, cdpPort, ws, sessionId, page, browser, child, instanceLog, cleanup }
   } catch (err) {
