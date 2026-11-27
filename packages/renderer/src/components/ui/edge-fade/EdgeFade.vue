@@ -1,8 +1,6 @@
 <script setup lang="ts">
 // EdgeFade —— 滚动容器顶缘「渐焦」提示（demo chat spec 裁决 4B，OpenDesign edge-fade 同构）。
-// 自包含：作为任意 overflow 滚动容器的第一个子元素挂载（sticky 钉在滚动视口顶，不随内容滚走）；
-// 自行监听滚动父级的 scroll（程序赋值 scrollTop 同样触发 scroll 事件）切换显隐，
-// 并直接驱动父级容器的顶部 mask（内容在渐焦带下淡出顶缘）——消费方零配置。
+// 自包含：作为任意 overflow 滚动容器的前两个子元素挂载（一个贴顶哨兵 + sticky 渐焦带），消费方零配置。
 // 渐焦 = 失焦 + 沉色双通道：四层渐高 blur 之上叠一层底色渐变（--edge-fade-sink，默认
 // --surface，峰值浓度 75%：光晕基本压平且保留失焦感），暗色压住亮字模糊的泛白光晕、
 // 亮色沉入纸白；底色非 --surface 的消费方在滚动容器上覆写 --edge-fade-sink。层遮罩与
@@ -18,14 +16,25 @@
 // 关整个渐焦效果（遮罩层隐藏 + 容器 mask 摘除）。
 // [消费范围门禁] 仅对话流及其同族场景（经 MessageStream 复用：drawer subagent / 旁路提问 /
 // workflow agent）可用；.githooks/check_edge_fade_scope.mjs 强制。
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+//
+// [强制布局纪律 · batch2 F4] 离顶判定经**贴顶哨兵的 IntersectionObserver 投递**（布局后、绘制前），
+// 不在 scroll 回调里读 scroller.scrollTop——后者在 DOM 刚被 delta 改脏时读几何量会触发强制同步布局
+// （实测旧 sync 2.5ms/次）。IO 回调只把 isIntersecting 翻成 scrolledPast 布尔，mask 串按 on 翻转时
+// （watch）套模块常量（N1），scroll/IO 回调全程零几何读。
+import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 
-const on = ref(false)
 const reducedTransparency = ref(false)
+/** sticky 渐焦带根（原 EdgeFade 单体，形态不变）。 */
 const root = ref<HTMLElement | null>(null)
+/** 贴顶哨兵：绝对定位（包含块 = position:relative 的滚动父级）、top-0、高 = 离顶阈值。
+ *  随滚动内容滚出视口顶时 IO 投递 isIntersecting=false → 判定「已离顶」。absolute 不占流内空间。 */
+const sentinel = ref<HTMLElement | null>(null)
+/** 哨兵是否已滚离视口顶（IO 投递的事实，非 scroll 回调推测）。 */
+const scrolledPast = ref(false)
 
 let scroller: HTMLElement | null = null
 let transparencyMedia: MediaQueryList | null = null
+let sentinelIo: IntersectionObserver | null = null
 
 const LAYERS = [
   { blur: 'h-full backdrop-blur-[1px]' },
@@ -34,42 +43,58 @@ const LAYERS = [
   { blur: 'h-1/4 backdrop-blur-[8px]' },
 ] as const
 
-/** 离顶判定阈值（px）：滚动不足此值视为贴顶，不启用渐焦（demo 同值）。 */
-const SCROLL_TOP_THRESHOLD = 4
-/** 顶缘渐焦带高度（px），同时是容器 mask 的过渡段长度（demo 同值）。 */
+/** 顶缘渐焦带高度（px），同时是容器 mask 的过渡段长度（demo 同值）。
+ *  离顶判定阈值 = 哨兵高度（模板 h-1 = 4px，demo 同值）：哨兵滚出视口顶 ⇔ scrollTop 超过 4px。 */
 const FADE_BAND_HEIGHT = 40
 /** 容器 mask 多 stop 剖面的比例点（近似 smoothstep：40px 带上 13px/26px 两档过渡）。 */
 const MASK_STOP_SOFT = 0.325
 const MASK_STOP_FIRM = 0.65
 
-function sync(): void {
+// N1: 容器 mask 两态串提为模块级常量（active/inactive 只依赖 on 布尔 + 上述常量，编译期定值；
+// 等价重构——0.86s 旧成本实为 scrollTop 强制布局而非字符串，常量提取本身收益≈0，勿记为收益）。
+const MASK_ACTIVE = `linear-gradient(to bottom, transparent 0, rgba(0,0,0,0.4) ${Math.round(FADE_BAND_HEIGHT * MASK_STOP_SOFT)}px, rgba(0,0,0,0.8) ${Math.round(FADE_BAND_HEIGHT * MASK_STOP_FIRM)}px, #000 ${FADE_BAND_HEIGHT}px)`
+const MASK_INACTIVE = ''
+
+/** 渐焦激活 = 哨兵滚离顶 ∧ ¬reducedTransparency。 */
+const on = computed(() => scrolledPast.value && !reducedTransparency.value)
+
+/** on 翻转时把 mask 常量套到滚动容器（CSSOM 读写，无几何量读取、不触发 reflow）。 */
+function applyMask(): void {
   if (!scroller) return
-  const active = scroller.scrollTop > SCROLL_TOP_THRESHOLD && !reducedTransparency.value
-  on.value = active
-  const next = active
-    ? `linear-gradient(to bottom, transparent 0, rgba(0,0,0,0.4) ${Math.round(FADE_BAND_HEIGHT * MASK_STOP_SOFT)}px, rgba(0,0,0,0.8) ${Math.round(FADE_BAND_HEIGHT * MASK_STOP_FIRM)}px, #000 ${FADE_BAND_HEIGHT}px)`
-    : ''
+  const next = on.value ? MASK_ACTIVE : MASK_INACTIVE
   if (scroller.style.maskImage !== next) scroller.style.maskImage = next
 }
+watch(on, applyMask)
 
 function onTransparencyChange(): void {
   reducedTransparency.value = transparencyMedia?.matches ?? false
-  sync()
 }
 
 function unbind(): void {
-  if (!scroller) return
-  scroller.removeEventListener('scroll', sync)
-  scroller.style.maskImage = ''
+  sentinelIo?.disconnect()
+  sentinelIo = null
+  if (scroller) scroller.style.maskImage = ''
   scroller = null
+  scrolledPast.value = false
 }
 
 function bind(el: HTMLElement | null): void {
   if (scroller === el) return
   unbind()
   scroller = el
-  scroller?.addEventListener('scroll', sync, { passive: true })
-  onTransparencyChange()
+  // 无滚动父级 / 无哨兵 / 宿主无 IntersectionObserver（happy-dom 等）：降级为不激活（on 恒 false），
+  // 绝不回退到 scroll 回调读 scrollTop（那正是要消除的强制布局源）。
+  if (!scroller || !sentinel.value || typeof IntersectionObserver === 'undefined') {
+    scrolledPast.value = false
+    applyMask()
+    return
+  }
+  sentinelIo = new IntersectionObserver((entries) => {
+    const e = entries[entries.length - 1]
+    if (e) scrolledPast.value = !e.isIntersecting
+  }, { root: scroller, threshold: 0 })
+  sentinelIo.observe(sentinel.value)
+  applyMask()
 }
 
 onMounted(() => {
@@ -78,6 +103,7 @@ onMounted(() => {
   if (typeof window.matchMedia === 'function') {
     transparencyMedia = window.matchMedia('(prefers-reduced-transparency: reduce)')
     transparencyMedia.addEventListener('change', onTransparencyChange)
+    onTransparencyChange()
   }
   bind(root.value?.parentElement ?? null)
 })
@@ -86,10 +112,18 @@ onBeforeUnmount(() => {
   transparencyMedia?.removeEventListener('change', onTransparencyChange)
   unbind()
 })
-
 </script>
 
 <template>
+  <!-- 贴顶哨兵：绝对定位、top-0、高 4px（= 离顶阈值）。随滚动内容滚出视口顶时 IO 投递
+       isIntersecting=false 激活渐焦。absolute 不占流内空间（零布局扰动），置于渐焦带之前
+       保证仍是滚动容器首个元素子节点。 -->
+  <div
+    ref="sentinel"
+    data-testid="edge-fade-sentinel"
+    aria-hidden="true"
+    class="pointer-events-none absolute inset-x-0 top-0 h-1 max-w-none"
+  />
   <div
     ref="root"
     data-testid="edge-fade"

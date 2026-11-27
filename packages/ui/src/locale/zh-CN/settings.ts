@@ -639,6 +639,7 @@ export default {
     overviewModels: '{n} 个模型',
     overviewEndpoints: '{n} 个端点',
     overviewAdvanced: '{n} 个高级模式',
+    overviewDirect: '{n} 个直连',
     overviewHint: '由上到下即模型选择器顺序（↑↓ 调整）；组内由上到下即兜底优先级',
     emptyTitle: '还没有可用渠道',
     emptyDesc: '先到供应商页添加渠道并选择模型，再回来编排路由。',
@@ -681,9 +682,15 @@ export default {
     loading: '路由配置加载中…',
     loadFailed: '路由配置加载失败，请重试',
     retry: '重试',
-    // 渠道直连卡（无 routes 定义的物理模型白名单条目，D10/U9 默认单端点形态）
+    // 渠道直连卡（无 routes 定义的物理模型白名单条目，D10/U9 默认单端点形态；
+    // 「加直连」新落卡 isNew → 新增徽标；移除 = 草稿摘除 + 保存时白名单清理）
     directCardTag: '直连',
     directMissing: '渠道或模型已不存在（配置保留）',
+    directNewBadge: '新增',
+    directRemove: '移除直连模型',
+    directRemoveConfirmTitle: '移除该直连模型？',
+    directRemoveConfirmDesc: '「{name}」将从模型白名单移除，模型选择器中不再出现；默认模型指向它时自动回退到列表首位。',
+    directRemoveConfirmConfirm: '移除',
     // 保存编排失败分型（U9：routes 已写、scopedModels 写失败且回滚也失败的残留态呈报）
     saveScopedMismatch: '路由定义已保存但模型白名单未同步，请重试保存',
     noEndpoints: '还没有端点',
@@ -764,7 +771,7 @@ export default {
     save: '保存',
     // 快速创建面板（spec §4）
     quickCreateTitle: '快速创建',
-    quickCreateDesc: '展开渠道直接建简单路由；或筛选多个模型，一次建高级路由，再到卡片里设置规则。',
+    quickCreateDesc: '展开渠道直接加直连模型；或筛选多个模型，一次建高级路由，再到卡片里设置规则。',
     quickExpand: '展开',
     quickCollapse: '收起',
     quickFilterPlaceholder: '筛选模型，如 glm、kimi、claude',
@@ -776,8 +783,8 @@ export default {
     quickPickedN: '已选 {n}',
     quickPickMark: '勾选',
     quickPickedMark: '已选',
-    quickCreateSimple: '建简单路由',
-    quickSimpleExists: '已建简单路由',
+    quickCreateDirect: '加直连',
+    quickDirectExists: '已添加直连',
     quickCreateAdvanced: '创建高级路由',
     quickCreateAdvancedN: '创建高级路由 · {n}',
     quickSelectHint: '勾选 2 个以上模型，可创建高级路由',
@@ -788,7 +795,7 @@ export default {
     quickLevelsN: '支持 {n} 档',
     quickUsedByN: '用于 {n} 条路由',
     quickUnused: '未使用',
-    quickSimpleToast: '已创建草稿「{name}」，保存后加入选择器（新会话生效）',
+    quickDirectToast: '已添加直连模型「{name}」，保存后加入模型选择器',
     quickAdvancedToast: '已创建高级路由「{name}」，到卡片里设置条件与时段',
     // 待配置分流（spec §5.1/§4.6）
     pendingSplit: '待配置分流',

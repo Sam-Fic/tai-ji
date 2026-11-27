@@ -28,10 +28,12 @@ const PREVIEW_MAX_CHARS = 120
 /**
  * 渲染视图项：kind 全集与 SkillNoticeStreamItem 一一对应，另加 broken（前置求值抛错的
  * 降级位）。turn 项携带 slot 原本现算的 canEdit / isLastTurn；每项必带 key / preview
- * （占位行数据源）。
+ * （占位行数据源——**turn 项为惰性 thunk**：B1 派生归零，previewText 对 45K assistant
+ * 全文的 \s+ 压平是流式期 O(n) 项，而其唯一消费点是 StreamItemBoundary 的 render 失败
+ * 占位行（正常渲染零消费）⇒ 构建期不物化，占位行渲染时才求值）。
  */
 export type StreamViewItem =
-  | { kind: 'turn'; key: string; preview: string; turn: MessageTurn; canEdit: boolean; isLastTurn: boolean }
+  | { kind: 'turn'; key: string; preview: () => string; turn: MessageTurn; canEdit: boolean; isLastTurn: boolean }
   | { kind: 'bashExecution'; key: string; preview: string; message: Message }
   | { kind: 'systemNotice'; key: string; preview: string; message: Message }
   | { kind: 'skillNotice'; key: string; preview: string; entry: DeepReadonly<SkillNoticeEntry> }
@@ -193,7 +195,7 @@ export function buildStreamViewItems(
         return {
           kind: 'turn',
           key,
-          preview: turnPreview(item.turn),
+          preview: () => turnPreview(item.turn), // 惰性：占位行失败路径才求值（B1）
           turn: item.turn,
           canEdit: !!item.turn.user && index === lastUserTurnIdx,
           isLastTurn: item.turn === lastRenderTurn,

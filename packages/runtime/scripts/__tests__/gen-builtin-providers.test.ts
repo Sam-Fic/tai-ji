@@ -28,15 +28,34 @@ describe('gen-builtin-providers', () => {
       expect(p.authMode).toBe('api_key')
     }
     const opendesign = providers.find((e) => e.id === 'opendesign')
-    // thinking 声明只登记真机核实的模型（deepseek-v4.1-flash 实测）：未核实模型必须是非思考形态
-    const verified = opendesign.models.find((m) => m.id === 'deepseek-v4.1-flash')
-    expect(verified.reasoning).toBe(true)
-    expect(verified.compat.thinkingFormat).toBe('deepseek')
-    const unverified = opendesign.models.filter((m) => m.id !== 'deepseek-v4.1-flash')
-    for (const m of unverified) {
-      expect(m.reasoning, `${m.id} 未核实 thinking 前必须 reasoning:false`).toBe(false)
-      expect(m.compat, `${m.id} 未核实 thinking 前必须 compat:null`).toBeNull()
+    // 2026-11-22 全量实测重核实：14 个模型 × 7 档逐格探针，除两处端点显式拒绝外全档可用。
+    // 旧断言（「只登记 deepseek-v4.1-flash 一个，其余必须 reasoning:false」）是核实前的
+    // 保守形态，已随实测数据落地退役——现行约定：全部模型 reasoning:true + 统一 deepseek
+    // compat（网关只认 deepseek 线格式；openai 格式的 off 对多个模型直接 400）。
+    expect(opendesign.models).toHaveLength(14)
+    for (const m of opendesign.models) {
+      expect(m.reasoning, `${m.id} 已实测支持 thinking`).toBe(true)
+      expect(m.compat, `${m.id} 必须带 compat`).not.toBeNull()
+      expect(m.compat.thinkingFormat, `${m.id} 网关统一走 deepseek 线格式`).toBe('deepseek')
+      expect(m.thinkingLevelMap, `${m.id} 必须有档位 map`).not.toBeNull()
+      // cost 四字段齐全（pi ModelCostSchema 缺字段会拒载整个 models.json）
+      expect(m.cost).toMatchObject({
+        input: expect.any(Number),
+        output: expect.any(Number),
+        cacheRead: expect.any(Number),
+        cacheWrite: expect.any(Number),
+      })
+      expect(m.maxTokens).toBeGreaterThan(0)
+      expect(m.contextWindow).toBeGreaterThan(0)
     }
+    // 端点显式拒绝的两档：必须在 map 里写 null（不写 = pi 默认保留 = UI 会给出会 400 的档）
+    const flashx = opendesign.models.find((m) => m.id === 'glm-5.3-flashx')
+    expect(flashx.thinkingLevelMap.medium, 'glm-5.3-flashx 拒 medium（实测 400）').toBeNull()
+    const kimi = opendesign.models.find((m) => m.id === 'kimi-k2.7-code')
+    expect(kimi.thinkingLevelMap.max, 'kimi-k2.7-code 拒 max（实测 400）').toBeNull()
+    // 这两个模型在端点 output_budget 上分别是 32000 / 32000，context_limit 分别 1000000 / 262000
+    expect(flashx.maxTokens).toBe(32000)
+    expect(kimi.contextWindow).toBe(262000)
   })
 
   it('t2: openai envVars 含 OPENAI_API_KEY 且 authMode===both（1.0.0 起新增 oauth）', () => {

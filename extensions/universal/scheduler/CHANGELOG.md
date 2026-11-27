@@ -1,5 +1,17 @@
 # @zhushanwen/pi-scheduler
 
+## 0.14.3
+
+### Patch Changes
+
+- 2cffda2dc: chore: refresh dependency range (triggered by @zhushanwen/pi-llm-shared@0.13.0 → @zhushanwen/pi-llm-shared@0.13.1)
+
+## 0.14.2
+
+### Patch Changes
+
+- 81bf59ceb: chore: refresh dependency range (triggered by @zhushanwen/extension-protocol@0.30.0 → @zhushanwen/extension-protocol@0.31.0, @zhushanwen/pi-delivery-port@0.4.3 → @zhushanwen/pi-delivery-port@0.4.4)
+
 ## 0.14.1
 
 ### Patch Changes

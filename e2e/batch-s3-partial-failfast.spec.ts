@@ -13,7 +13,7 @@
  *   非法 agent——非 `^/` 绝对路径——在 subagent_batch 工具入口被拒）。
  * - 持久介质断言 = W1 设计（w1-run-record-journal-authority，历史设计档案已随 .tmp 清理，git 可追溯）§4.2 场景 1
  *   （介质归位）+ D7 终态双维度语义：
- *   ① S3a partial：fan-out 脚本返回 status=partial（脚本层失败），run 终局由成员交付
+ *   ① S3a partial：batch 脚本返回 status=partial（脚本层失败），run 终局由成员交付
  *      债结算集合派生——journal run-settled outcome=partially_succeeded + failedMembers
  *      （subagent-observability §3.3.8：存在失败且存在非失败成员 → 第五值，失败成员
  *      cause 点拼 "<class>.<kind>"；成员失败传导 run 终局，不折进 completed 吞失败）；

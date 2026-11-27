@@ -9,7 +9,12 @@
  * - 小文件（>32KB 尾窗但 ≤ 阈值）行为不变：仍走全量 fallback 命中，且不触发逆序扫
  * - 文件不存在：返回 null 不抛（INVAR-tail-7 回归）
  *
- * fixture：mkdtempSync 自建自删（fs-guard 白名单 tmpdir）；大文件用 1MB 级合法 JSON 行拼接。
+ * fixture：mkdtempSync 自建自删（fs-guard 白名单 tmpdir）。缩数据量 fixture 标定（用例级
+ * junit 慢用例门禁 ≤2s，判据 docs/TEST-STRATEGY.md「新写测试判据」）：生产值
+ * READ_PRECHECK_MAX_BYTES=32MB / 块 1MB / padding 行 1MB 下，超阈值用例需真读 32MB 且逐行
+ * JSON.parse，单用例 2s+；此处把阈值/块/行三件套同比缩小（1MB / 128KB / 64KB），
+ * 「文件 > 阈值」「命中即止读取量 ≪ 文件」「超阈值截停无全量读」三条语义断言的结构与
+ * 比例关系逐字保留，仅体积缩小。
  * 运行：cd packages/runtime && npx vitest run src/infra/pi/__tests__/session-file-utils-find-last-entry.test.ts
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -17,8 +22,21 @@ import { writeFileSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { READ_PRECHECK_MAX_BYTES } from '@taiji/shared'
-// vi.hoisted 承载 mock 记录（vi.mock factory 被 hoist，不能引用未初始化的外部 let）
-const { reverseReads } = vi.hoisted(() => ({ reverseReads: [] as { totalBytesRead: number }[] }))
+// vi.hoisted 承载 mock 记录与 fixture 标定值（vi.mock factory 被 hoist，不能引用未初始化的外部 let/const）
+const { reverseReads, TEST_READ_PRECHECK_MAX_BYTES, TEST_REVERSE_CHUNK_BYTES } = vi.hoisted(() => ({
+  reverseReads: [] as { totalBytesRead: number }[],
+  // fixture 预检阈值（生产 = 32MB，shared SSOT；缩数据量标定，语义比例不变）
+  TEST_READ_PRECHECK_MAX_BYTES: 1024 * 1024,
+  // fixture 逆序块大小（生产默认 = 1MB，DEFAULT_REVERSE_CHUNK_BYTES；与缩小的阈值/文件同比）
+  TEST_REVERSE_CHUNK_BYTES: 128 * 1024,
+}))
+
+// 缩数据量：预检阈值 mock——session-file-utils 与本测试 import 的是同一 mock 视图，
+// 分流判定与断言锚点天然一致（importOriginal 保留 shared 其余真实导出）。
+vi.mock('@taiji/shared', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@taiji/shared')>()
+  return { ...actual, READ_PRECHECK_MAX_BYTES: TEST_READ_PRECHECK_MAX_BYTES }
+})
 
 // 包装真实现（行为不变）+ 记录每次逆序扫的读取字节数——「不触全量」的机械断言锚点。
 // 历史注释：之所以不 spy node:fs.readSync（ESM 内置模块 spy 不可靠），改在共享工具模块
@@ -32,7 +50,12 @@ vi.mock('../../../utils/history-reverse-read.js', async (importOriginal) => {
       options: Parameters<typeof actual.forEachReversedLineChunk>[1],
       visit: Parameters<typeof actual.forEachReversedLineChunk>[2],
     ) => {
-      const summary = actual.forEachReversedLineChunk(filePath, options, visit)
+      const summary = actual.forEachReversedLineChunk(
+        filePath,
+        // fixture 块大小注入（调用方未显式传 chunkBytes 时生效）——与缩小的阈值/文件同比（见文件头）
+        { chunkBytes: TEST_REVERSE_CHUNK_BYTES, ...options },
+        visit,
+      )
       reverseReads.push({ totalBytesRead: summary.totalBytesRead })
       return summary
     },
@@ -59,9 +82,9 @@ function write(name: string, content: string): string {
   return filePath
 }
 
-/** ~1MB 的合法 assistant entry 行（padding：撑体积 + 保证 JSONL 形态真实）。 */
+/** ~64KB 的合法 assistant entry 行（padding：撑体积 + 保证 JSONL 形态真实；缩数据量标定）。 */
 function bigPaddingLine(id: number): string {
-  return JSON.stringify({ type: 'assistant', id: `pad-${id}`, parentId: `pad-${id - 1}`, message: { content: 'x'.repeat(1024 * 1024) } })
+  return JSON.stringify({ type: 'assistant', id: `pad-${id}`, parentId: `pad-${id - 1}`, message: { content: 'x'.repeat(64 * 1024) } })
 }
 
 function sessionEndLine(outcome = 'done'): string {
@@ -73,8 +96,8 @@ function headerLine(): string {
 }
 
 describe('D5③ 大文件：逆序分块扫命中即止（全量读 fallback 已删除）', () => {
-  it('36MB 文件 session_end 在尾部附近（>32KB 尾窗外）→ 命中 done，读取量 ≪ 文件大小', () => {
-    // 布局：header + 34 条 1MB padding（撑过 32MB 阈值）+ session_end + 100KB tail-pad
+  it('大文件（fixture 阈值 1MB）session_end 在尾部附近（>32KB 尾窗外）→ 命中 done，读取量 ≪ 文件大小', () => {
+    // 布局：header + 34 条 64KB padding（撑过 fixture 阈值 1MB）+ session_end + 100KB tail-pad
     // + 尾行——session_end 距文件尾 >32KB，readTailEntries 尾读不命中，必须走预检+逆序扫
     const lines = [headerLine()]
     for (let i = 0; i < 34; i++) lines.push(bigPaddingLine(i))
@@ -89,13 +112,13 @@ describe('D5③ 大文件：逆序分块扫命中即止（全量读 fallback 已
     const outcome = extractSessionOutcome(filePath)
 
     expect(outcome).toBe('done')
-    // 命中即止：恰好一次逆序扫，读取量 ~首块（1MB）量级，远小于 36MB 文件
+    // 命中即止：恰好一次逆序扫，读取量 ~首块（fixture 128KB）量级，远小于 ~2.3MB 文件
     expect(reverseReads).toHaveLength(1)
-    expect(reverseReads[0].totalBytesRead).toBeLessThan(2 * 1024 * 1024)
+    expect(reverseReads[0].totalBytesRead).toBeLessThan(2 * TEST_REVERSE_CHUNK_BYTES)
     expect(reverseReads[0].totalBytesRead).toBeLessThan(size / 10)
   })
 
-  it('大文件 session_end 在文件头（逆序窗口 32MB 之外）→ 返回 null（读取量被阈值截停，无全量读）', () => {
+  it('大文件 session_end 在文件头（逆序窗口 fixture 阈值 1MB 之外）→ 返回 null（读取量被阈值截停，无全量读）', () => {
     // 原实现此场景 fallback 全量读会命中——D5③ 刻意删除：读取量降级由消费方
     // outcome=null（idle）承接，换取退出收尾路径的内存安全（设计已接受代价）
     const lines = [headerLine(), sessionEndLine('error')]
@@ -106,7 +129,7 @@ describe('D5③ 大文件：逆序分块扫命中即止（全量读 fallback 已
 
     expect(outcome).toBeNull()
     expect(reverseReads).toHaveLength(1)
-    // 逆序扫被 maxTotalBytes=READ_PRECHECK_MAX_BYTES 硬帽截停
+    // 逆序扫被 maxTotalBytes=READ_PRECHECK_MAX_BYTES（fixture 1MB）硬帽截停
     expect(reverseReads[0].totalBytesRead).toBeLessThanOrEqual(READ_PRECHECK_MAX_BYTES)
   })
 })

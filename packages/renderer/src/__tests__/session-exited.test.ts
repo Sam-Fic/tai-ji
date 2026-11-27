@@ -17,7 +17,7 @@
  *
  * 运行：pnpm --filter @taiji/frontend run test -- src/__tests__/session-exited.test.ts
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick, ref } from 'vue'
 import type { ServerMessage, SessionGroup } from '@taiji/shared'
@@ -76,6 +76,19 @@ let useConnection: typeof import('@/composables/useConnection').useConnection
 let useChatStore: typeof import('@/stores/chat').useChatStore
 let useSessionStore: typeof import('@/stores/session').useSessionStore
 let useToast: typeof import('@/composables/useToast').useToast
+
+// 模块图预热：resetModules 后首次动态 import 要冷 transform 整张图（useConnection →
+// core transport → stores → …，实测 ~2.3s），该成本全落在第一个用例的 beforeEach 上
+// （单用例 3s+，越过慢用例门禁 2s 线）。vitest 的 transform 缓存跨模块注册表重置存活，
+// 先跑一次抛弃式 reset + import  cycles 预热后，每个用例的重导入回落到 ~100ms。
+// 隔离语义零变化：各用例仍 resetModules + 全新 import，断言的仍是全新模块实例。
+beforeAll(async () => {
+  vi.resetModules()
+  await import('@/composables/useConnection')
+  await import('@/stores/chat')
+  await import('@/stores/session')
+  await import('@/composables/useToast')
+}, 60_000) // 冷 transform 在 5 worker 负载下会超默认 10s 钩子预算（respawn-pending 同模式先例）
 
 beforeEach(async () => {
   setActivePinia(createPinia())

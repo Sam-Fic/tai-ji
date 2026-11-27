@@ -109,60 +109,182 @@ const AMBIENT_PROVIDERS = new Set(['google-vertex', 'amazon-bedrock'])
 //   用该函数做内存重生成比对，两处拼接会让快照恒判过期。
 // - 不进 PROVIDER_ENV_VARS 镜像表（双向守卫只针对 pi-ai catalog 的 findEnvKeys，附加段
 //   条目会被判孤儿）；envVars 直接写在本段，checkEnvVars 运行时读 process.env 无需登记。
-// - 模型条目保持 11 键恒定（与 summarizeModel 同形）。thinking 声明只登记经真机核实的
-//   模型：deepseek 系 compat 实测（taiji prod deepseek-v4.1-flash 实测，同族沿用），
-//   其余模型未核实 thinking 传递格式，按非思考模型入榜（reasoning:false），核实后再补——
-//   猜错 thinkingFormat 会让请求报错，宁缺勿错。
+// - 模型条目保持 11 键恒定（与 summarizeModel 同形）。
+// - thinking 声明（2026-11-22 全量实测重核实）：14 个模型 × 7 档逐格探针，除两处端点显式
+//   拒绝外全档可用——`glm-5.3-flashx` 拒 `medium`、`kimi-k2.7-code` 拒 `max`（均 400
+//   invalid_request_error），这两个档在 thinkingLevelMap 里写 null 剔除。
+// - **compat 不能照抄同名 pi catalog 模板**：同名模型在不同 provider 下的 thinkingFormat
+//   完全不同（glm-5.3-flash 在 zai 是 'zai'、gpt-6-luna 在 openai 是 'openai'），而
+//   opendesign 网关只认 deepseek 线格式（thinking:{type:enabled} + reasoning_effort）。
+//   实测：openai 格式的 off（reasoning_effort:'off'）对 claude-haiku-5.5 / gpt-6-luna /
+//   minimax-m3.1-flash 等直接 400。故整段统一挂 OPENDESIGN_DEEPSEEK_COMPAT。
+// - 字段口径（照 pi catalog 同名模板）：contextWindow = 端点 context_limit（与官方 provider
+//   同量级，实测灌 945K prompt 仍 200）；maxTokens = 端点 output_budget；cost = 公开价格表
+//   （https://amr-api.open-design.ai/api/v1/public/model-prices，无鉴权）。
 // - input 只映射 text/image（pi ModelDefinitionSchema 枚举仅此二者，file/audio/video 丢弃）。
 
 const OPENDESIGN_BASE_URL = 'https://amr-link.open-design.ai/v1'
 
-// deepseek 系 thinking 声明（2026-10-18 taiji prod deepseek-v4.1-flash 实测，同族模型沿用）
+// 全网关统一 thinking 声明（2026-11-22 全量实测；语义见上方注释段）。
 const OPENDESIGN_DEEPSEEK_COMPAT = {
   thinkingFormat: 'deepseek',
   supportsDeveloperRole: false,
   supportsReasoningEffort: true,
   requiresReasoningContentOnAssistantMessages: true,
 }
-const OPENDESIGN_DEEPSEEK_TLM = { off: 'off', minimal: null, low: null, medium: null, high: 'high', xhigh: null, max: null }
 
-function opendesignModel({ id, input, contextWindow, reasoning = false, thinkingLevelMap = null, compat = null }) {
+/** opendesign 支持的档位全序（pi EXTENDED_THINKING_LEVELS）。 */
+const OPENDESIGN_ALL_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+/**
+ * 生成某模型的全档 identity thinkingLevelMap，`omit` 里的档写 null（端点显式拒绝）。
+ * 全档声明 = 端点实测接受；identity value = 档位名直接作为 reasoning_effort 发出。
+ */
+function opendesignTlm(omit = []) {
+  return Object.fromEntries(OPENDESIGN_ALL_LEVELS.map((level) => [level, omit.includes(level) ? null : level]))
+}
+
+/** cost 四字段（+ 可选 tiers）；缺任一字段时 pi 会拒载整个 models.json。 */
+function opendesignCost({ input, output, cacheRead, cacheWrite = 0, tiers }) {
+  return { input, output, cacheRead, cacheWrite, ...(tiers ? { tiers } : {}) }
+}
+
+function opendesignModel({ id, input, contextWindow, maxTokens, cost, omitLevels = [] }) {
   return {
     id,
     name: id,
     api: 'openai-completions',
     baseUrl: OPENDESIGN_BASE_URL,
-    reasoning,
+    reasoning: true,
     input,
-    cost: null,
+    cost,
     contextWindow,
-    maxTokens: 32000,
-    thinkingLevelMap,
-    compat,
+    maxTokens,
+    thinkingLevelMap: opendesignTlm(omitLevels),
+    compat: OPENDESIGN_DEEPSEEK_COMPAT,
   }
 }
 
-// 模型清单 2026-10-18 从 GET /v1/models 实测（12 个，全 enabled）。
+// 模型清单 2026-11-22 从 GET /v1/models 实测（14 个，全 enabled）+ 公开价格表。
+// contextWindow = metadata.context_limit；maxTokens = metadata.output_budget；
+// cost = model-prices（USD / 1M tokens）；claude-haiku-5.5 与 gpt-6-luna 带 longContext 阶梯。
 const OPENDESIGN_MODELS = [
-  opendesignModel({ id: 'claude-haiku-5.5', input: ['text', 'image'], contextWindow: 1000000 }),
-  opendesignModel({ id: 'deepseek-v4-flash', input: ['text'], contextWindow: 1048000 }),
-  opendesignModel({ id: 'deepseek-v4-flash-vision-exp', input: ['text', 'image'], contextWindow: 1048000 }),
-  opendesignModel({ id: 'deepseek-v4-pro', input: ['text'], contextWindow: 1048000 }),
+  opendesignModel({
+    id: 'claude-haiku-5.5',
+    input: ['text', 'image'],
+    contextWindow: 1000000,
+    maxTokens: 128000,
+    cost: opendesignCost({
+      input: 0.1,
+      output: 0.5,
+      cacheRead: 0.01,
+      cacheWrite: 0.125,
+      tiers: [{ inputTokensAbove: 100000, input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 }],
+    }),
+  }),
+  opendesignModel({
+    id: 'deepseek-v4-flash',
+    input: ['text'],
+    contextWindow: 1048000,
+    maxTokens: 32000,
+    cost: opendesignCost({ input: 0.44, output: 1.32, cacheRead: 0.014 }),
+  }),
+  opendesignModel({
+    id: 'deepseek-v4-flash-vision-exp',
+    input: ['text', 'image'],
+    contextWindow: 1048000,
+    maxTokens: 32000,
+    cost: opendesignCost({ input: 0.44, output: 1.32, cacheRead: 0.014 }),
+  }),
+  opendesignModel({
+    id: 'deepseek-v4-pro',
+    input: ['text'],
+    contextWindow: 1048000,
+    maxTokens: 128000,
+    cost: opendesignCost({ input: 1.32, output: 3.96, cacheRead: 0.044 }),
+  }),
   opendesignModel({
     id: 'deepseek-v4.1-flash',
     input: ['text', 'image'],
     contextWindow: 1048000,
-    reasoning: true,
-    thinkingLevelMap: OPENDESIGN_DEEPSEEK_TLM,
-    compat: OPENDESIGN_DEEPSEEK_COMPAT,
+    maxTokens: 128000,
+    cost: opendesignCost({ input: 0.3, output: 1.2, cacheRead: 0.006 }),
   }),
-  opendesignModel({ id: 'glm-5.3-flash', input: ['text', 'image'], contextWindow: 1048000 }),
-  opendesignModel({ id: 'glm-5.3-flashx', input: ['text', 'image'], contextWindow: 1000000 }),
-  opendesignModel({ id: 'gpt-6-luna', input: ['text', 'image'], contextWindow: 1050000 }),
-  opendesignModel({ id: 'hy4-preview', input: ['text'], contextWindow: 1048000 }),
-  opendesignModel({ id: 'kimi-k2.7-code', input: ['text', 'image'], contextWindow: 262000 }),
-  opendesignModel({ id: 'mimo-v2.6-flash', input: ['text', 'image'], contextWindow: 1048000 }),
-  opendesignModel({ id: 'mimo-v2.6-pro', input: ['text', 'image'], contextWindow: 1048000 }),
+  opendesignModel({
+    id: 'deepseek-v4.1-flash-eco',
+    input: ['text'],
+    contextWindow: 1048000,
+    maxTokens: 128000,
+    cost: opendesignCost({ input: 0.3, output: 1.2, cacheRead: 0.006 }),
+  }),
+  opendesignModel({
+    id: 'glm-5.3-flash',
+    input: ['text', 'image'],
+    contextWindow: 1048000,
+    maxTokens: 32000,
+    cost: opendesignCost({ input: 0.075, output: 0.25, cacheRead: 0.015 }),
+  }),
+  opendesignModel({
+    id: 'glm-5.3-flashx',
+    input: ['text', 'image'],
+    contextWindow: 1000000,
+    maxTokens: 32000,
+    cost: opendesignCost({ input: 0.37, output: 1.25, cacheRead: 0.075 }),
+    // 端点显式拒绝 medium（400 invalid_request_error，2026-11-22 实测）。
+    omitLevels: ['medium'],
+  }),
+  opendesignModel({
+    id: 'gpt-6-luna',
+    input: ['text', 'image'],
+    contextWindow: 1050000,
+    maxTokens: 128000,
+    cost: opendesignCost({
+      input: 0.1,
+      output: 0.5,
+      cacheRead: 0.01,
+      cacheWrite: 0.125,
+      tiers: [{ inputTokensAbove: 272000, input: 0.2, output: 0.75, cacheRead: 0.02, cacheWrite: 0.25 }],
+    }),
+  }),
+  opendesignModel({
+    id: 'hy4-preview',
+    input: ['text'],
+    contextWindow: 1048000,
+    maxTokens: 32000,
+    cost: opendesignCost({ input: 0.834, output: 2.501, cacheRead: 0.042 }),
+  }),
+  opendesignModel({
+    id: 'kimi-k2.7-code',
+    input: ['text', 'image'],
+    contextWindow: 262000,
+    maxTokens: 32000,
+    cost: opendesignCost({ input: 0.95, output: 4, cacheRead: 0.19 }),
+    // 端点显式拒绝 max（400 invalid_request_error，2026-11-22 实测）。
+    omitLevels: ['max'],
+  }),
+  opendesignModel({
+    id: 'mimo-v2.6-flash',
+    input: ['text', 'image'],
+    contextWindow: 1048000,
+    maxTokens: 32000,
+    cost: opendesignCost({ input: 0.14, output: 0.28, cacheRead: 0.0028 }),
+  }),
+  opendesignModel({
+    id: 'mimo-v2.6-pro',
+    input: ['text', 'image'],
+    contextWindow: 1048000,
+    maxTokens: 32000,
+    cost: opendesignCost({ input: 0.435, output: 0.87, cacheRead: 0.0036 }),
+  }),
+  // 端点缺 metadata.context_budget / output_budget（只有 context_limit）：maxTokens 取同族
+  // 平台默认 32000（与 glm / hy4 / kimi / mimo 同档），不臆造 512K。
+  opendesignModel({
+    id: 'minimax-m3.1-flash',
+    input: ['text', 'image'],
+    contextWindow: 1000000,
+    maxTokens: 32000,
+    cost: opendesignCost({ input: 0.15, output: 0.6, cacheRead: 0.015 }),
+  }),
 ]
 
 const TAIJI_EXTRA_PROVIDERS = [

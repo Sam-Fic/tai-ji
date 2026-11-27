@@ -229,7 +229,7 @@ export type {
 } from './panel'
 // LLM 重试配置域（类型 + D8 合法域常量 + 校验纯函数，renderer 表单与 runtime 写入侧共用）
 export type { LlmRetryConfig, LlmRetryProviderConfig } from './llm-retry'
-export { LLM_RETRY_DOMAIN, validateLlmRetryConfig } from './llm-retry'
+export { LLM_RETRY_DOMAIN, LLM_RETRY_TAIJI_DEFAULTS, validateLlmRetryConfig } from './llm-retry'
 // LLM 重试规则域（subagent-observability §3.3.12：类型 + 校验 + 判定管线纯函数，SSOT；
 // retry-rules extension bundle 自包含复制同语义实现时以本出口为准）
 export type {

@@ -17,6 +17,10 @@
   边界自身 render 不消费响应式子树（占位行是静态模板），自身抛错路径结构性为零；slot
   函数体的表达式抛错由上层前置求值兜（stream-view-items.ts，本组件捕获不到自身 render
   帧内的错误——Vue errorCaptured 只链式上报后代组件的错误）。
+
+  B-harden（preview 惰性化后的兜底）：preview 为 thunk，其求值发生在本组件的 render 帧内
+  （computed 懒求值）——thunk 抛错时本组件的 errorCaptured 捕获不到自身 render 帧的错误，
+  会直接把占位行也炸掉。故 previewText 自带 try/catch 降级为空串（诊断文本可丢，兜底不可丢）。
 -->
 <template>
   <div
@@ -28,10 +32,10 @@
     <div class="flex min-w-0 flex-col gap-0.5">
       <span class="text-[length:var(--text-xs)] text-warn">{{ t('panel.message.itemRenderFailed') }}</span>
       <span
-        v-if="preview"
+        v-if="previewText"
         class="min-w-0 truncate text-[length:var(--text-2xs)] text-neutral-dim"
-        :title="preview"
-      >{{ preview }}</span>
+        :title="previewText"
+      >{{ previewText }}</span>
     </div>
     <Button variant="ghost" size="sm" data-testid="stream-item-error-retry" @click="retry">
       {{ t('panel.message.itemRenderRetry') }}
@@ -43,16 +47,38 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { onErrorCaptured, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { AlertTriangle } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { reportCapturedError } from '@/boot/error-reporter'
 
-defineProps<{
-  /** 原文预览（占位行诊断信息；由上层视图模型算好传入，空串时不显示） */
-  preview: string
+const props = defineProps<{
+  /** 原文预览（占位行诊断信息；由上层视图模型算好传入，空串时不显示）。
+   *  turn 项为惰性 thunk（B1 派生归零）：仅占位行渲染时求值——正常渲染路径零成本。 */
+  preview: string | (() => string)
 }>()
+
+// 占位行专用：failed 渲染分支才访问 ⇒ thunk 仅在失败路径物化（computed 懒求值）
+// 抛错降级（B-harden）：本组件是渲染失败的最后兜底，自身不能再抛——thunk 求值失败
+// （turn 数据畸形致 previewText/turnPreview 抛错）时降级为空串，占位行只丢诊断文本、
+// 不把「单条渲染失败」升级成「占位行也渲染失败」。
+const previewText = computed(() => {
+  const p = props.preview
+  if (typeof p !== 'function') return p
+  try {
+    return p()
+  } catch (err) {
+    // 双通道上报（与同文件 onErrorCaptured 及全部同族 Guard 一致）：renderer 无 console
+    // 持久化，只 console.error 会让该错误在打包版完全不可见——用户看到「无诊断文本的
+    // 占位行」而日志零痕迹。降级方向（return ''）不扩大故障面：进入 failed 分支本身已
+    // 意味着单条渲染失败显形 + retry 入口在场，preview 只是二线诊断文本。
+    console.error('[StreamItemBoundary] preview thunk failed:', err)
+    reportCapturedError(err, 'stream-item-boundary:preview-thunk')
+    return ''
+  }
+})
 
 const { t } = useI18n()
 

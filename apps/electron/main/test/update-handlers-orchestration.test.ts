@@ -165,10 +165,13 @@ let capturedQuitCallback: (() => void) | null = null
 // CI 在 linux x64 runner 上跑，本地 mac 全绿、CI 恒红的根因；FIXTURE 即 mac 语义，
 // 全文件统一桩 darwin
 let originalPlatform: PropertyDescriptor | undefined
+const ORIG_ARCH = process.arch
 
 beforeEach(() => {
   originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
   Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+  // darwin 用例锁定 arch=arm64（fixture 走 macArm64Dmg 槽位，ADR-0198 arch 感知）
+  Object.defineProperty(process, 'arch', { value: 'arm64', configurable: true })
   handlers.clear()
   vi.clearAllMocks()
   sendSpy.mockClear()
@@ -183,6 +186,7 @@ beforeEach(() => {
 
 afterEach(() => {
   if (originalPlatform) Object.defineProperty(process, 'platform', originalPlatform)
+  Object.defineProperty(process, 'arch', { value: ORIG_ARCH, configurable: true })
 })
 
 // ── S#9：update:getPending / update:getSettings / update:setSettings ──

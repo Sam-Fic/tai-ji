@@ -14,7 +14,7 @@
  *
  * 运行：cd apps/electron/main && npx vitest run test/orchestrator.test.ts
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
@@ -57,6 +57,14 @@ async function loadModule() {
   return await import('../update/orchestrator.js')
 }
 
+// 首次导入在 beforeAll 完成（模块缓存后各用例 loadModule 恒命中）：orchestrator
+// 导入链较重（download-asset / release-sources / upgrade-fetch 等），若由首个用例
+// 的 before/用例体承担，junit 会把一次性导入成本记到该用例头上（实测 1-2.7s），
+// 触发慢用例门禁误拦——与被测行为无关的一次性成本不属任何单个用例。
+beforeAll(async () => {
+  await loadModule()
+})
+
 /** LatestReleaseInfo fixture（mac + linux 都覆盖） */
 const MAC_RELEASE: LatestReleaseInfo = {
   version: '0.9.0',
@@ -70,15 +78,29 @@ const MAC_RELEASE: LatestReleaseInfo = {
   },
 }
 
+/** mac x64（Intel）槽位 fixture（ADR-0198 双架构：x64 用例消费此槽位） */
+const MAC_RELEASE_X64: LatestReleaseInfo = {
+  ...MAC_RELEASE,
+  assets: {
+    macX64Dmg: {
+      name: 'TaiJi-0.13.3-mac-x64.dmg',
+      downloadUrl: 'https://x/TaiJi-0.13.3-mac-x64.dmg',
+      size: 1100,
+      sha256: 'c'.repeat(64),
+    },
+    linuxX64AppImage: { name: 'app.AppImage', downloadUrl: 'https://x/app', size: 3000 },
+  },
+}
+
 describe('W3: orchestrator (W3TC8-9)', () => {
   let originalPlatform: PropertyDescriptor | undefined
   let originalArch: PropertyDescriptor | undefined
 
   beforeEach(async () => {
     originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
-    // darwin 用例的隐含环境是 Apple Silicon（m8 检查 downloadUpdate 拒 Intel mac）：
-    // CI 在 x64 runner 上跑，若不桩 arch，darwin+x64 会误命中架构门控抛
-    // UpdateUnsupportedError——本地 arm64 全绿、CI 恒红的根因
+    // darwin 用例统一锁定 arch=arm64（fixture 走 macArm64Dmg 槽位）：mac 资产选择已
+    // arch 感知（ADR-0198 双架构），不锁定则 darwin 用例在本机 Intel（x64）与 CI
+    // arm64 上各选不同槽位，断言随宿主机漂移；x64 路径由专门用例显式置 arch 覆盖
     originalArch = Object.getOwnPropertyDescriptor(process, 'arch')
     Object.defineProperty(process, 'arch', { value: 'arm64', configurable: true })
     vi.clearAllMocks()
@@ -182,19 +204,60 @@ describe('W3: orchestrator (W3TC8-9)', () => {
     ).rejects.toMatchObject({ fallbackUrl: MAC_RELEASE.htmlUrl })
   })
 
-  // ── W3TC9b：无 platform asset → 抛 UpdateError ─────────────────
-  it('W3TC9b: 当前平台无 asset（如 unknown 平台）→ downloadUpdate 抛 UpdateError（含 release 页链接）', async () => {
+  // ── W3TC9b：平台×架构 asset 缺失 → unsupported（手动下载降级）──
+  it('W3TC9b: 当前平台×架构无 asset（如 unknown 平台）→ downloadUpdate 抛 UpdateUnsupportedError（含 release 页链接）', async () => {
     setPlatform('freebsd')
-    // performUpdate 组合函数已随批次 3 删除：无 asset 检查在 downloadUpdate 内（pickPlatformAsset）
     const { downloadUpdate } = await loadModule()
-    // 批次 3 §3.3.3-D：断供错误信息并入 release.htmlUrl——存量 darwin 用户
-    // （本版本起只发 dmg）报错时有一键手动下载出路（错误信息可操作）
+    // ADR-0198：槽位缺失 = 当前安装形态吃不到该 release 的自动升级 → unsupported
+    // （前端跳 release 页手动下载），不再走可重试 error——重试无法让产物长出来
     await expect(
       downloadUpdate(MAC_RELEASE),
-    ).rejects.toThrow(
-      `no asset for platform freebsd (release page: ${MAC_RELEASE.htmlUrl})`,
-    )
+    ).rejects.toMatchObject({
+      errorCode: 'UPDATE_UNSUPPORTED_PLATFORM',
+      fallbackUrl: MAC_RELEASE.htmlUrl,
+    })
+    await expect(
+      downloadUpdate(MAC_RELEASE),
+    ).rejects.toThrow(/no auto-update asset for freebsd\//)
     // downloadAsset 不应被调
+    expect(downloadMocks.downloadAsset).not.toHaveBeenCalled()
+  })
+
+  // ── mac x64（Intel）双架构路径（ADR-0198）───────────────────
+  it('mac x64: darwin + arch=x64 → 选 macX64Dmg 槽位，downloadUpdate 正常下载', async () => {
+    setPlatform('darwin')
+    Object.defineProperty(process, 'arch', { value: 'x64', configurable: true })
+    downloadMocks.downloadAsset.mockResolvedValue({ filePath: '/tmp/x64.dmg', multiPart: false, engine: 'undici' })
+
+    const { downloadUpdate } = await loadModule()
+    const result = await downloadUpdate(MAC_RELEASE_X64)
+
+    expect(result).toEqual({ filePath: '/tmp/x64.dmg' })
+    // downloadAsset 收到的是 x64 槽位 asset（非 arm64 槽位）
+    const downloadArg = downloadMocks.downloadAsset.mock.calls[0][0]
+    expect(downloadArg.name).toBe('TaiJi-0.13.3-mac-x64.dmg')
+  })
+
+  it('mac x64 缺货: darwin + arch=x64 且 release 无 macX64Dmg → UpdateUnsupportedError（零字节）', async () => {
+    setPlatform('darwin')
+    Object.defineProperty(process, 'arch', { value: 'x64', configurable: true })
+    const { downloadUpdate } = await loadModule()
+
+    await expect(downloadUpdate(MAC_RELEASE)).rejects.toMatchObject({
+      errorCode: 'UPDATE_UNSUPPORTED_PLATFORM',
+      fallbackUrl: MAC_RELEASE.htmlUrl,
+    })
+    expect(downloadMocks.downloadAsset).not.toHaveBeenCalled()
+  })
+
+  it('mac arm64 缺货: darwin + arch=arm64 且 release 无 macArm64Dmg → UpdateUnsupportedError（零字节）', async () => {
+    setPlatform('darwin')
+    const { downloadUpdate } = await loadModule()
+    const release = { ...MAC_RELEASE, assets: { macX64Dmg: MAC_RELEASE.assets.macArm64Dmg } }
+
+    await expect(downloadUpdate(release)).rejects.toMatchObject({
+      errorCode: 'UPDATE_UNSUPPORTED_PLATFORM',
+    })
     expect(downloadMocks.downloadAsset).not.toHaveBeenCalled()
   })
 

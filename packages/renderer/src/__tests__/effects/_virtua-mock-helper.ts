@@ -12,8 +12,11 @@ import { vi } from 'vitest'
 import type { ScrollToIndexOpts } from 'virtua'
 import type { VirtualizerHandle } from 'virtua/vue'
 
-/** 默认 mock 几何（distance = scrollSize - scrollOffset - viewportSize = 0，即默认贴底） */
-const DEFAULT_SCROLL_SIZE = 1000
+/** 默认 mock 几何（distance = scrollSize - scrollOffset - viewportSize = 200，即「离底 200px」）。
+ *  [batch6 R1] 不能默认贴底（distance = 0）：scrollToRealBottom 现在对「已在底（distance ≤ 1）」
+ *  跳过写入（恒等写无效果却要走 Blink scroll 更新路径），默认贴底会让所有 follow 断言失效。
+ *  需要贴底场景的用例显式传 scrollSize/scrollOffset/viewportSize（几何事实由用例声明）。 */
+const DEFAULT_SCROLL_SIZE = 1200
 const DEFAULT_SCROLL_OFFSET = 500
 const DEFAULT_VIEWPORT_SIZE = 500
 /** findItemIndex 默认返回值（mock 5 项数据：末项 index=4，中间 index=2） */
@@ -22,7 +25,8 @@ const DEFAULT_MID_INDEX = 2
 
 /**
  * mock 工厂（contract W1CO2）：造一个满足 VirtualizerHandle 接口的 mock 对象。
- * 默认 scrollSize/scrollOffset/viewportSize 使 distance=0（默认贴底）；其余方法为 vi.fn()，可被断言。
+ * 默认 scrollSize/scrollOffset/viewportSize 使 distance=200（离底，写入会真的发生）；
+ * 其余方法为 vi.fn()，可被断言。贴底场景由用例显式声明几何。
  */
 export function createMockVlist(
   overrides?: Partial<{

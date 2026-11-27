@@ -9,7 +9,7 @@
 // 驱动方式：AsyncFunction 包装 + require/log 注入，进程内求值真实脚本源码
 // （单测层极端测试整治第二波收敛：依赖加载 fail-fast 是纯逻辑判定，用注入
 // 加载器即可确定性断言，不背 node 子进程冷启动成本，判据见
-// docs/TEST-STRATEGY.md「新写测试判据」节「判据类型 / 处置通道」）。五个脚本均含
+// docs/TEST-STRATEGY.md「新写测试判据」节「判据类型 / 处置通道」）。下表各脚本均含
 // 顶层 await（agent/parallel 入口）与顶层 return，是 worker 模板宿主形态——纯文件
 // 加载（.js ESM / .cjs CJS）在解析期即 SyntaxError，检查无从执行；以
 // AsyncFunction 构造器复刻 worker 模板的「async 函数包装 + require 注入」宿主
@@ -28,8 +28,10 @@ import { describe, expect, it } from "vitest";
 
 const WORKFLOWS_DIR = join(__dirname, "..", "..", "..", "workflows");
 
-/** 五个内置脚本（stem → 源文件名），直接读真实源文件求值。 */
-const SCRIPT_STEMS = ["review-fix-loop", "chain", "parallel", "map-reduce", "scatter-gather"] as const;
+/** 内置脚本（stem → 源文件名），直接读真实源文件求值。fan-out / batch 与其余四件
+ *  同为 _shared 族依赖的锚定加载方（fan-out → agent-refs 历史依赖已上收内核，现与
+ *  batch 同锚 _shared/batch-collect.cjs），故同表枚举。 */
+const SCRIPT_STEMS = ["review-fix-loop", "chain", "parallel", "map-reduce", "scatter-gather", "fan-out", "batch"] as const;
 
 /** 各脚本到达依赖加载检查所需的最小合法 $ARGS（编排四件的必需参数校验先于检查——
  *  真实触发场景即「args 合法 + scriptPath 缺失」，与 worker 宿主总是成对注入的契约一致）。 */
@@ -39,8 +41,9 @@ const MIN_VALID_ARGS: Record<string, Record<string, unknown>> = {
   parallel: { target: "probe" },
   "map-reduce": { operation: "probe", items: ["a"] },
   "scatter-gather": { task: "probe" },
-  // fan-out tasks 为成员对象形态（对象-only 契约，u-fanout-template）
+  // fan-out / batch tasks 为成员对象形态（对象-only 契约，u-fanout-template）
   "fan-out": { tasks: [{ task: "probe" }] },
+  batch: { tasks: [{ task: "probe" }] },
 };
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
@@ -123,8 +126,7 @@ describe("内置 workflow 脚本 scriptPath 锚定 fail-fast", () => {
 
   // 空串形态 = resume 从旧 record 流（scriptPath 载荷落地前）重建的 spec——与缺席
   // 同拦（D5 收紧），文案区分两种形态：空串指明「旧 run 重跑」而非「注入义务」。
-  // fan-out 不在 SCRIPT_STEMS（原覆盖五件），此处单独枚举补齐六件。
-  it.each([...SCRIPT_STEMS, "fan-out"].map((stem) => [stem] as const))(
+  it.each(SCRIPT_STEMS.map((stem) => [stem] as const))(
     "%s：scriptPath 为空串（旧 record 流形态）→ fail-fast + 空串专属恢复指引，依赖文件零请求",
     async (stem) => {
       const outcome = await evalScriptInWorkerShape(stem, { scriptPath: "" }, MIN_VALID_ARGS[stem]);

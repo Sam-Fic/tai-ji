@@ -14,6 +14,7 @@
  */
 
 import type { LlmRetryConfig } from '@taiji/shared'
+import { LLM_RETRY_TAIJI_DEFAULTS } from '@taiji/shared'
 import type { ILlmRetrySettings, LlmRetryConfigSnapshot } from '../../services/ports/llm-retry-settings.js'
 import { mergeRetryConfig, resolveRetryConfig, validateRetryConfigForWrite } from '../../services/llm-retry-config-helper.js'
 import { readSettings, updateSettingsFields } from './pi-settings-store.js'
@@ -44,5 +45,28 @@ export class PiRetrySettings implements ILlmRetrySettings {
       // 锁超时 / 写盘失败：同一错误信封（D10，设计 §3.3 错误规格表）。
       return { ok: false, error: toErrorMessage(err) }
     }
+  }
+}
+
+/**
+ * 首装/未配置 provisioning（幂等 ensure，事件驱动非定时）：settings.json retry 域无任何
+ * 显式键时写入 taiji 产品默认（LLM_RETRY_TAIJI_DEFAULTS，10 次 / 5s 初始间隔），让产品默认
+ * 在首次启动即生效而非依赖 pi 内建兑底（3/2000）。已有显式配置（任意已知键，含仅 provider
+ * 子键的部分配置）一律不碰——尊重显式配置意图（configured 判据与 resolveRetryConfig 同源）。
+ * 失败仅告警不阻断启动（非关键路径；设置页保留完整手动配置面）。幂等：写入后下次调用
+ * configured=true 直接返回。
+ */
+export function ensureLlmRetryDefaults(): void {
+  try {
+    const snapshot = resolveRetryConfig(readSettings().retry)
+    if (snapshot.configured) return
+    updateSettingsFields('retry', s => {
+      s.retry = mergeRetryConfig(s.retry, { ...LLM_RETRY_TAIJI_DEFAULTS })
+    })
+  } catch (err) {
+    // best-effort 降级：非关键路径，读/写 settings 失败仅告警不阻断启动；用户可在设置页手动配置 retry。
+    console.warn(
+      `[pi-retry-settings] retry 默认值 provisioning 未完成（不影响启动；可在设置页手动配置）: ${toErrorMessage(err)}`,
+    )
   }
 }

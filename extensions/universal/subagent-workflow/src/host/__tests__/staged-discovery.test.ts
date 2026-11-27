@@ -6,7 +6,7 @@
 // 又无 node_modules，于是孝在包里的 `workflows/` 无人能扫到。既有门禁全是“文件在不在”
 // 级断言（dry-run import 不调工厂、TC8 只比字节），对本类失效天然失明。
 //
-// 本文件的断言对象是**发现结果**（6 内置 workflow + 10 内置 agent 真的被列出来），
+// 本文件的断言对象是**发现结果**（7 内置 workflow + 10 内置 agent 真的被列出来），
 // 而非“文件存在”：前者才能拦住“路径/产物层”回归。两条通路都被锁：
 //   ① 纯函数：bundle 形态模块路径 → scope 根；dev/异常形态 → undefined（不误触发）；
 //   ② 集成：以合成 bundle 模块路径调 `corePackageNpmRoot()`（resolve 必败 → 回退分支），
@@ -15,7 +15,7 @@
 // 资产集不写死数量（口径：与 `packages/subagent-core/{workflows,agents}` 源目录集合比对，
 // 源增删自动跟随）。
 
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -32,7 +32,7 @@ vi.mock("@zhushanwen/pi-extension-logger", () => ({
   getLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-const { corePackageNpmRoot, stagedScopeRootFromModuleUrl } = await import("../pi-host.ts");
+const { corePackageNpmRoot, builtinWorkflowsRoot, stagedScopeRootFromModuleUrl } = await import("../pi-host.ts");
 
 /** 本仓 `packages/subagent-core`（源单源：断言口径由此推导，不写死数量）。
  *  路径经与生产同一锚点解析得出（禁止手数 `..` 层级）。 */
@@ -96,6 +96,21 @@ describe("B′：staged/bundle 形态的 core 资产发现根", () => {
     const { scopeDir, moduleUrl } = makeStagedLayout();
     expect(corePackageNpmRoot(moduleUrl)).toBe(scopeDir);
   });
+
+  it("builtinWorkflowsRoot：dev/workspace 形态 → core 包 workflows 根（固定执行体路径解析的锚）", () => {
+    const root = builtinWorkflowsRoot();
+    expect(root).toBeDefined();
+    // 两种布局的候选包目录之一，且批量工具固定执行体确在其中
+    expect(root).toMatch(/workflows$/);
+    expect(existsSync(join(root as string, "batch.js")), "batch.js 应在内置 workflows 根下").toBe(true);
+    expect(existsSync(join(root as string, "_shared", "batch-collect.cjs"))).toBe(true);
+  });
+
+  it("builtinWorkflowsRoot：bundle 形态 → staged scope 下 pi-subagent-workflow/workflows（拷贝布局）", () => {
+    const { scopeDir, moduleUrl } = makeStagedLayout();
+    expect(builtinWorkflowsRoot(moduleUrl)).toBe(join(scopeDir, "pi-subagent-workflow", "workflows"));
+    expect(existsSync(join(scopeDir, "pi-subagent-workflow", "workflows", "batch.js"))).toBe(true);
+  });
 });
 
 describe("B′：回退根下的**发现结果**（本批防复发的核心断言）", () => {
@@ -114,6 +129,8 @@ describe("B′：回退根下的**发现结果**（本批防复发的核心断�
       .sort();
     expect(names).toEqual(sourceExpected("workflows"));
     // 回归锚：批量入口的固定执行体必须在列
+    expect(names).toContain("batch.js");
+    // 通用模板仍在列（batch 与 fan-out 共用收集内核，fan-out 保留可选 aggregate）
     expect(names).toContain("fan-out.js");
   });
 

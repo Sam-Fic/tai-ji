@@ -418,6 +418,7 @@ async function fetchSourceReleaseViaChannel(
 // 与 release-checker.ts 组装段标注并存的同构副本（非领地阻塞，详见文件头声明）。
 const ASSET_PATTERNS = {
   macArm64Dmg: (name: string): boolean => name.endsWith('-mac-arm64.dmg'),
+  macX64Dmg: (name: string): boolean => name.endsWith('-mac-x64.dmg'),
   winX64Exe: (name: string): boolean => name.endsWith('-setup-x64.exe'),
   linuxX64AppImage: (name: string): boolean => name.endsWith('-x86_64.AppImage'),
 } as const
@@ -468,6 +469,7 @@ function toLatestReleaseInfo(source: UpdateSource, release: SourceRelease): Late
   const info: Omit<LatestReleaseInfo, 'assets'> & {
     assets: {
       macArm64Dmg?: ReleaseAssetLoose
+      macX64Dmg?: ReleaseAssetLoose
       winX64Exe?: ReleaseAssetLoose
       linuxX64AppImage?: ReleaseAssetLoose
     }
@@ -479,6 +481,7 @@ function toLatestReleaseInfo(source: UpdateSource, release: SourceRelease): Late
     htmlUrl: release.html_url ?? '',
     assets: {
       macArm64Dmg: pickAsset(release.assets, ASSET_PATTERNS.macArm64Dmg),
+      macX64Dmg: pickAsset(release.assets, ASSET_PATTERNS.macX64Dmg),
       winX64Exe: pickAsset(release.assets, ASSET_PATTERNS.winX64Exe),
       linuxX64AppImage: pickAsset(release.assets, ASSET_PATTERNS.linuxX64AppImage),
     },

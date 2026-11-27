@@ -822,7 +822,7 @@ export class RunOrchestration {
     // 轮应答（UC-4：正常轮收单条轮应答；该域无 run，runSettledEffects 的 wf-done 不
     // 适用——构造性不双发）。gate 两步判定与 Continuation 调用点同形（notifyGate
     // 消费方注释登记的「泛化派发主干尾部 one-shot 回注」位）；workflow origin 分支
-    // 维持 origin gate 静默（结果由脚本返回值承载，fan-out 成员放行判据缺口另案裁决
+    // 维持 origin gate 静默（结果由脚本返回值承载，批量工作流成员放行判据缺口另案裁决
     // ——u4 deviations 登记）。
     if (notifyGateAllowsDelivery(record)) {
       this.deps.getNotifyHost().notifyComplete(record);

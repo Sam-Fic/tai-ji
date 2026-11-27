@@ -22,6 +22,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import { MOCK_TTS_FORMS, mockDefaultTtsConfig } from '@taiji/core/transport/mock/tts-data'
 import type { SanitizedTtsConfig, TtsFormModel } from '@taiji/shared'
 
@@ -122,6 +123,29 @@ async function saveAndCaptureApiKeys(w: ReturnType<typeof mount>): Promise<Recor
 /** 断言当前 toast 列表中存在含指定文案的条目（错误/成功提示路径共用）。 */
 function expectToastContaining(fragment: string): void {
   expect(useToast().toasts.value.some((x) => x.message.includes(fragment))).toBe(true)
+}
+
+/**
+ * 直驱写路：对 data-testid 所在 Select 根发 update:modelValue（即选项被选中后 Select
+ * 发出的同一条事件），跳过 portal 开合的交互载体。全控件回路用例的目标 =
+ * TtsProviderForm v-model 写路 + buildConfig 落位；reka 选项点击的真实交互由
+ * 「切服务商」用例与 @taiji/ui Select 原语测试覆盖——portal 每次开合 ~0.1s，
+ * 本文件 14 连选曾把单条推过慢用例门禁与 coverage 门 5s 预算。
+ */
+type SelectLike = { vm: { $emit(event: string, ...args: unknown[]): void } }
+
+async function setSelectValue(w: ReturnType<typeof mount>, testid: string, value: string): Promise<void> {
+  const selects = w.findAllComponents({ name: 'Select' })
+  let hit: SelectLike | null = null
+  for (let i = 0; i < selects.length; i++) {
+    if (selects[i].find(`[data-testid="${testid}"]`).exists()) {
+      hit = selects[i]
+      break
+    }
+  }
+  expect(hit, `Select hosting ${testid} not found`).toBeTruthy()
+  hit!.vm.$emit('update:modelValue', value)
+  await nextTick()
 }
 
 const sel = (w: ReturnType<typeof mount>, testid: string) => w.find(`[data-testid="${testid}"]`)
@@ -309,28 +333,32 @@ describe('保存提交与保存并测试', () => {
 })
 
 describe('表单全控件操作回路（TtsProviderForm v-model 写路 + 发音词典行编辑）', () => {
-  it('MiniMax 全控件编辑 → save 载荷标准位与 vendor 子树按编辑值落位', async () => {
+  // 重交互回路（~15 次 select/toggle + 词典行编辑）：无负载实测 3.3s——默认 5s 预算
+  // 仅 1.5× 余量。本文件在 vitest config 的 domain 排除名单里（默认档不跑），5s 预算的
+  // 「<1s/例」校准结论从未覆盖它；coverage 档（isCoverageRun 不套 domain 排除）放出来跑，
+  // 5 worker 负载下必超 5s（存量：dev-0.13.2 未改动线上同档同两例超时）。显式 15s（实测负载 6.6-9.2s，1.6× 余量）。
+  it('MiniMax 全控件编辑 → save 载荷标准位与 vendor 子树按编辑值落位', { timeout: 15_000 }, async () => {
     const w = await mountPage()
     // 凭据区：baseUrl 切集群
-    await pickSelect(w, 'tts-baseurl-select-minimax', '国际')
+    await setSelectValue(w, 'tts-baseurl-select-minimax', 'https://api.minimaxi.com/v1')
     // 基础区：模型/音色/语速/音量/音调
-    await pickSelect(w, 'tts-model-select-minimax', 'Speech 2.8 HD')
-    await pickSelect(w, 'tts-speed-select-minimax', '1.5')
-    await pickSelect(w, 'tts-volume-select-minimax', '2')
-    await pickSelect(w, 'tts-pitch-select-minimax', '4')
+    await setSelectValue(w, 'tts-model-select-minimax', 'speech-2.8-hd')
+    await setSelectValue(w, 'tts-speed-select-minimax', '1.5')
+    await setSelectValue(w, 'tts-volume-select-minimax', '2')
+    await setSelectValue(w, 'tts-pitch-select-minimax', '4')
     // 音频区：采样率/声道
-    await pickSelect(w, 'tts-samplerate-select-minimax', '32000')
-    await pickSelect(w, 'tts-channel-select-minimax', '双声道')
+    await setSelectValue(w, 'tts-samplerate-select-minimax', '32000')
+    await setSelectValue(w, 'tts-channel-select-minimax', '2')
     // 风格区：情感/语言增强/LaTeX 开关
-    await pickSelect(w, 'tts-emotion-select-minimax', '悲伤')
-    await pickSelect(w, 'tts-lang-select-minimax', 'English')
+    await setSelectValue(w, 'tts-emotion-select-minimax', 'sad')
+    await setSelectValue(w, 'tts-lang-select-minimax', 'English')
     await sel(w, 'tts-toggle-minimax-latex_read').trigger('click')
     // 进阶区：第二音色 → 权重档位出现并选档；效果器档位 + 效果；水印开关；词典行增删
-    await pickSelect(w, 'tts-secondvoice-select-minimax', '青涩青年音色')
+    await setSelectValue(w, 'tts-secondvoice-select-minimax', 'male-qn-qingse')
     expect(sel(w, 'tts-weight-select-minimax').exists()).toBe(true)
-    await pickSelect(w, 'tts-weight-select-minimax', '51%')
-    await pickSelect(w, 'tts-vm-minimax-pitch', '25')
-    await pickSelect(w, 'tts-vm-effect-minimax', '电话失真')
+    await setSelectValue(w, 'tts-weight-select-minimax', '51')
+    await setSelectValue(w, 'tts-vm-minimax-pitch', '25')
+    await setSelectValue(w, 'tts-vm-effect-minimax', 'lofi_telephone')
     await sel(w, 'tts-toggle-minimax-aigc_watermark').trigger('click')
     await sel(w, 'tts-pronunciation-add-minimax').trigger('click')
     await sel(w, 'tts-pronunciation-from-0').setValue('太极')
@@ -438,24 +466,27 @@ describe('通用开关与服务商下拉', () => {
     expect(enabled.value).toBe(false)
   })
 
-  it('切服务商：通用开关保留，表单区切换到对应家（三家独立记忆）', async () => {
+  // 同上重交互回路：无负载实测 2.5s，显式 20s（同上依据）。
+  it('切服务商：通用开关保留，表单区切换到对应家（三家独立记忆）', { timeout: 15_000 }, async () => {
     const w = await mountPage()
     expect(sel(w, 'tts-emotion-select-minimax').exists()).toBe(true)
+    // 未保存编辑态先行（情感 = 悲伤）：切换链只改 activeProvider 引用、不写 formStates，
+    // 「先编辑后切换」与「先切换后编辑」覆盖同一记忆语义，但 portal 交互轮次减半
+    // （本文件是 coverage 门最慢用例族，须在单用例 5s 预算内留负载余量）
+    await pickSelect(w, 'tts-emotion-select-minimax', '悲伤')
+    // 切到 MiMo：表单区整体切换到对应家（minimax 情感控件不渲染；mimo 指令渲染且可用）
     await pickSelect(w, 'tts-provider-select', 'MiMo')
     await flushPromises()
     expect(sel(w, 'tts-emotion-select-minimax').exists()).toBe(false)
     const mimoInstructions = sel(w, 'tts-instructions-input-mimo')
     expect(mimoInstructions.exists()).toBe(true)
     expect(mimoInstructions.attributes('disabled')).toBeUndefined()
-    // 切回 MiniMax：情感选择（未保存编辑态）保留（SelectValue 显示选中项 label）
-    await pickSelect(w, 'tts-provider-select', 'MiniMax')
-    await flushPromises()
-    await pickSelect(w, 'tts-emotion-select-minimax', '悲伤')
-    await pickSelect(w, 'tts-provider-select', 'MiMo')
-    await flushPromises()
+    // 切回 MiniMax：未保存编辑态保留（SelectValue 显示选中项 label）——编辑态随家独立记忆
     await pickSelect(w, 'tts-provider-select', 'MiniMax')
     await flushPromises()
     expect(sel(w, 'tts-emotion-select-minimax').text()).toContain('悲伤')
+    // 通用开关保留：切服务商链路不触碰共享偏好（模块级单例，beforeEach 置 true）
+    expect(useTtsSpeechEnabled().enabled.value).toBe(true)
   })
 })
 

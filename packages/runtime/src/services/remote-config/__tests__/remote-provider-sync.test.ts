@@ -6,7 +6,7 @@
  * 策略同 remote-config-fetch.test.ts（tmp dataDir + fetch mock + resetModules）。
  * 模板读侧在 remote-provider-templates.ts（helper ↔ sync 解环拆分），一并覆盖。
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -80,6 +80,14 @@ function makeExtrasStore(markers: Record<string, { remoteSource?: string; modelS
     cleanScopedModelsResidue: async () => {},
   }
 }
+
+// 首载成本预热（同 remote-config-fetch.test.ts 注释）：本文件动态 import 会连带装载
+// builtin-providers.json 快照，首次解析约 2-4s，全部记在第一个用例头上（慢用例阈值 2s）。
+// hook 超时显式放宽：这是**装载成本**（builtin-providers.json 快照 1546 models 的首次
+// 解析），不是断言盲等——9 worker 并行时 transform 挤在钩子里，默认 10s 会被顶满。
+beforeAll(async () => {
+  await loadFresh()
+}, 60_000)
 
 describe('listRemoteProviderTemplates', () => {
   it('合法缓存 → 模板同形映射（authMode api_key + remoteSource 标记 + modelCount）', async () => {

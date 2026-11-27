@@ -1,28 +1,29 @@
 /**
- * LLM 调用封装：completeSimple + 凭证注入 + 文本提取 + 错误归一化。
+ * LLM 调用封装：模型调用通道 + 凭证注入 + 文本提取 + 错误归一化。
  *
- * import 方式：顶层【静态】import completeSimple。
- * 探针①（2026-08-12，pi 0.84.0）实测：pi extension loader 加载含顶层
- * `import { completeSimple } from "@earendil-works/pi-ai/compat"` 的 extension 不 throw，
- * typeof completeSimple === "function"。compat.js 本身是真实模块（非 throwing stub），
- * rename-session/llm.ts 旧注释「加载阶段 compat 是 throwing stub」已过时（其代码用 import type +
- * 动态 import，从未真正测过顶层静态运行时 import）。故本库用静态 import，更简单且 tree-shake 友好。
+ * 调用通道（C-pi-19）：必须经 `ctx.modelRegistry`（= pi 的 ModelRuntime 门面），
+ * **禁止直连 `@earendil-works/pi-ai/compat` 的 completeSimple**。compat 是静态目录分发层
+ * （按 `model.api` 查 registry），不认识 provider-aggregation 注册的虚拟模型
+ * （`api === "pi-virtual"`）：模型是聚合路由时 compat 恒抛
+ * `No API provider registered for api: pi-virtual`（具象事故：smart-context 后台压缩连续
+ * 失败三次熔断；permission classifier 的 auto 取 getAvailable()[0] 也常命中虚拟模型 → 静默
+ * fail-closed）。`ModelRegistry.streamSimple` 才是虚拟模型感知路径（model-runtime.js 的
+ * `if (isVirtualModel(model))` 分支：先 route 到物理端点再转发，并丢弃不属于物理端点的
+ * 调用方凭据）。物理模型路径下两条通道等价（同一 provider 实例、同一 auth 解析）。
+ *
+ * 顺带收益：本库不再静态 import pi-ai/compat（PS-15 时间炸弹面收敛到 pi 自身内部）。
  *
  * 凭证：getApiKeyAndHeaders 返回判别联合 ResolvedRequestAuth，必须 `if(!auth.ok) return` narrow
  * 后才能取 apiKey/headers/env（否则 TS 报错、运行时 auth.error 不存在）。
  */
 
-// 顶层静态 import —— 探针①已验证加载阶段不 throw（见模块注释）
-import { completeSimple } from "@earendil-works/pi-ai/compat";
-import type {
-	Context as LlmContext,
-	SimpleStreamOptions,
-} from "@earendil-works/pi-ai/compat";
 import type {
 	Api,
+	Context as LlmContext,
 	Message,
 	Model,
 	ModelThinkingLevel,
+	SimpleStreamOptions,
 	StopReason,
 	Usage,
 } from "@earendil-works/pi-ai";
@@ -57,7 +58,7 @@ export interface CallLLMOptions {
 
 /**
  * callLLM 出参。
- * - ok:true → content 为提取并 trim 的文本；usage 为 completeSimple 响应的 resp.usage 透传
+ * - ok:true → content 为提取并 trim 的文本；usage 为响应的 resp.usage 透传
  *   （可选，存在才带——usage 整体缺失时不带字段，「跳过记录」语义由调用方处理，如
  *   rename-session 的 appendEntry 存在性检查；permission classifier 等既有调用方不消费，零影响）。
  *   stopReason 透传（可选，存在才带）：ok:false 分支只可能是 error/aborted；ok:true 分支的
@@ -95,7 +96,7 @@ export function joinTextBlocks(content: unknown): string {
 /**
  * 从 AssistantMessage.content 提取所有 text block 拼接并 trim。
  *
- * 参数用结构类型（不直接依赖 AssistantMessage），便于测试 mock —— 调用方传 completeSimple 返回值即可。
+ * 参数用结构类型（不直接依赖 AssistantMessage），便于测试 mock —— 调用方传 assistant 消息即可。
  * 无 text block（如纯 ThinkingContent / ToolCall）→ 返回 ""。
  * trim 契约不变：内部委托 joinTextBlocks 内核再 trim（ext-simplify-17 D7，行为等价由等价探针验证）。
  */
@@ -108,15 +109,19 @@ export function extractText(resp: {
 // ──────────────────────── 调用 ────────────────────────
 
 /**
- * 发起一次 LLM 调用（completeSimple），返回归一化结果。
+ * 发起一次 LLM 调用（经 ctx.modelRegistry），返回归一化结果。
  *
  * 流程：
  * 1. 凭证：getApiKeyAndHeaders(model) → narrow（auth.ok 判别联合）→ 返回 {ok:false} 提前返回；
- *    reject（抛异常，非返回 {ok:false}）也落入步骤 5（B5：凭证注入与 completeSimple 同处 try，
+ *    reject（抛异常，非返回 {ok:false}）也落入步骤 5（B5：凭证注入与模型调用同处 try，
  *    保证 reject 归一为 {ok:false}，调用方日志前缀一致）
- * 2. 调用：completeSimple(model, {systemPrompt, messages, tools:[]}, {apiKey, headers?, env?, signal?, maxTokens?, timeoutMs?, sessionId?})
- * 3. 检查 resp.stopReason：error/aborted（completeSimple 对错误/中止也 resolve 带 stopReason，G3）
- *    → {ok:false, error: 提取错误文本, stopReason}（不再当正常内容提取）
+ * 2. 调用：ctx.modelRegistry.streamSimple(model, {systemPrompt, messages, tools:[]}, {...}).result()
+ *    （不得换回 pi-ai/compat —— 虚拟模型会报 `No API provider registered for api: pi-virtual`，见文件头）
+ * 3. 检查 resp.stopReason：error/aborted（流终止事件带 stopReason，不 reject，G3）
+ *    → {ok:false, error: 提取错误文本, stopReason}（不再当正常内容提取）。
+ *    错误文本优先 content 文本（provider 把错误写进文本块的形态），空则回落 errorMessage
+ *    （lazyStream setup 失败的唯一载荷：路由失败 / 凭据缺失 / 请求装配异常），再空则落
+ *    「unknown error」字面量——stopReason 不进 error 文本，作为独立字段透传（见上）。
  * 4. 提取 text → {ok:true, content}；resp.usage 存在则一并透传（条件 spread，缺失时不带字段——
  *    AssistantMessage.usage 类型必填但运行时 provider 可能不回，P-usage-shape 的降级分支）
  * 5. throw（getApiKeyAndHeaders reject / 网络 / 超时 / 解析）→ catch → {ok:false, error:String(e)}
@@ -128,7 +133,7 @@ export async function callLLM(
 	ctx: ExtensionContext,
 	opts: CallLLMOptions,
 ): Promise<CallLLMResult> {
-	// 整个流程纳入 try：getApiKeyAndHeaders / completeSimple 任一 reject/throw 都归一为
+	// 整个流程纳入 try：getApiKeyAndHeaders / 模型调用任一 reject/throw 都归一为
 	// {ok:false}，保证调用方日志前缀一致（B5：凭证注入原在 try 外，reject 时
 	// callLLM 直接 reject，上游走外层 .catch 输出不一致前缀，如 [pi-rename-session] 而非 [rename-session]）。
 	try {
@@ -138,15 +143,15 @@ export async function callLLM(
 			return { ok: false, error: auth.error };
 		}
 
-		// 2. 调用 completeSimple（字段名经探针⑤对齐：Context{systemPrompt?,messages,tools?},
+		// 2. 调用（字段名经探针⑤对齐：Context{systemPrompt?,messages,tools?},
 		//    SimpleStreamOptions extends StreamOptions{apiKey?,headers?,env?,signal?,maxTokens?,timeoutMs?,sessionId?}）
 		const context: LlmContext = {
 			systemPrompt: opts.systemPrompt,
 			messages: opts.messages,
 			tools: [],
 		};
-		// apiKey/headers/env 来自 auth（即使 undefined 也传，让 completeSimple 用默认）；
-		// signal/maxTokens/timeoutMs/sessionId 条件 spread（不设置则不传，保留 completeSimple 默认）。
+		// apiKey/headers/env 来自 auth（即使 undefined 也传，让 registry 用默认）；
+		// signal/maxTokens/timeoutMs/sessionId 条件 spread（不设置则不传，保留默认）。
 		const options: SimpleStreamOptions = {
 			apiKey: auth.apiKey,
 			headers: auth.headers,
@@ -157,11 +162,11 @@ export async function callLLM(
 			...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
 			...(opts.reasoning && opts.reasoning !== "off" ? { reasoning: opts.reasoning } : {}),
 		};
-		const resp = await completeSimple(opts.model, context, options);
-		// G3/C1a：completeSimple 对 error/aborted 也 resolve（带 stopReason，不 reject）。
+		const resp = await ctx.modelRegistry.streamSimple(opts.model, context, options).result();
+		// G3/C1a：流终态对 error/aborted 也 resolve（带 stopReason，不 reject）。
 		// 归一为 ok:false + stopReason 独立透传。
 		if (resp.stopReason === "error" || resp.stopReason === "aborted") {
-			const errorText = extractText(resp) || "unknown error";
+			const errorText = extractText(resp) || resp.errorMessage?.trim() || "unknown error";
 			return { ok: false, error: errorText, stopReason: resp.stopReason };
 		}
 		return {

@@ -84,10 +84,16 @@ function makeEvent(overrides?: Partial<SessionBeforeCompactEvent["preparation"]>
 function makeCtx(crossModel?: { provider: string; id: string } | null): ExtensionContext {
 	return {
 		model: { provider: "zai", id: "glm" },
+		// 会话思考档位：same-mode 生成必须与主会话同值透传（虚拟模型分支用它求路由档位，
+		// 缺省会被算成 off → 前缀缓存 miss），见 llm.ts 文件头 reasoning 段
+		thinkingLevel: "max",
 		getSystemPrompt: () => "sys",
 		sessionManager: { getSessionId: () => "s1", getSessionFile: () => "/tmp/s1.jsonl" },
 		modelRegistry: {
 			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "k" }),
+			// 虚拟模型感知通道（C-pi-19）：cross-mode 的 streamFn 与 same-mode 共用它。
+			// 单测不触网——mockedNative 替换了 compact() 实现，本替身只用于形状/装配断言。
+			streamSimple: () => ({ result: async () => null }),
 			// resolveRef 精确匹配：仅 (provider,id) 同时命中时返回模型（配合 hasConfiguredAuth 放行）
 			find: (provider: string, id: string) =>
 				crossModel && provider === crossModel.provider && id === crossModel.id ? crossModel : null,
@@ -181,6 +187,10 @@ describe("session_before_compact 接管 handler", () => {
 		});
 		// nativeCompact 收到的 model 就是解析结果（details.model 与实际执行模型同源）
 		expect(mockedNative.mock.calls[0][1]).toEqual({ provider: "xiaomi", id: "mimo" });
+		// C-pi-19：streamFn（第 8 个位置参数）必须显式给 ctx.modelRegistry.streamSimple——
+		// 省略时 compact() 内部回落 pi-ai/compat 的 completeSimple，而 compat 不认识虚拟模型
+		// （api === "pi-virtual"），compactModel 指向聚合路由时压缩恒失败。
+		expect(typeof mockedNative.mock.calls[0][7]).toBe("function");
 	});
 
 	it("收缩校验失败（摘要 ≥ 被压段）→ 拒绝 + 同段记录不重试（D13-1）", async () => {

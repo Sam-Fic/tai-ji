@@ -14,6 +14,16 @@
  * 本文件 localIso 派生，扩展侧直接消费 Date（本地时区语义两侧同轴）；额度快照同一张
  * Map 同时喂扩展 quotaByProviderId 与 UI quotaOf。协调世界时无关：两侧各自用本地取值，
  * 同一进程内一致。
+ *
+ * **只比条件半边（2026-11-24 dmg-r1-1 显式登记）**：本文件对拍的是扩展 evaluateRoute ⇔ UI
+ * evaluateRouteAt，即**条件维度**（时间窗 × 额度 + specials + mode）。pi 实际选择路径
+ * decideRoute（extensions/universal/provider-aggregation/src/router.ts）在条件求值之上还叠加
+ * observed.burnt 重排与 rotateOldestBurnt 全 burnt 轮换—— burnt 状态持久化于 pi session branch
+ * 的 virtual-model-state，renderer 无输入通道可见，UI 侧结构性无法参与对拍。故本文件
+ * 「两侧同结论」的结论域仅限条件半边：条件半边无漂移 ⇒ 全绿；它**不断言** burnt 生效期
+ * UI 显示与实际路由一致（该口径已按降级方案改为「条件命中」，见
+ * docs/design/provider-aggregation-route-matrix.md 总则 3 与 data-source-registry.md
+ * #94）。burnt 重排语义由扩展侧 route-matrix.test.ts 锁定。
  */
 import { describe, expect, it } from 'vitest'
 import type {

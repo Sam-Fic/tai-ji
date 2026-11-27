@@ -20,6 +20,34 @@ export interface IgnoreMatcher {
   readonly rules: IgnoreRule[]
 }
 
+/**
+ * [B4] 无「跨斜杠通配」规则的段级快路径判据（matchPath 据此跳过 regex.test）。
+ *
+ * 覆盖三类形态（其余形态——多星号、星号两侧含 /、`**` 跨目录、`?` 通配——恒为
+ * null 走 regex 路径）：
+ * - 字面量（star=false）：prefix === suffix === 完整字面量，段判据 = 整段相等；
+ * - 单星号（star=true）：原始 pattern = prefix + '*' + suffix（`*` 恰一个，且两侧
+ *   均不含 '/'），段判据 = 段以 prefix 开头、以 suffix 结尾、长度 ≥ 两者之和
+ *   （`[^/]*` 可匹配空串，故长度下限不可省）；
+ * - 前置双星加斜杠的字面量（double-star-slash 前缀，含前置斜杠形态）：git 语义 ≡
+ *   非锚定字面量（gitignore 文档明示：该前缀与其后的字面量等价），故记
+ *   star=false + anchored=false。
+ *
+ * anchored 为「有效锚定」（快路径语义），与 IgnoreRule.anchored（regex 形态）可能
+ * 不同——前置斜杠加双星斜杠形态的 regex 是锚定形态，但其中「点星加斜杠」可选组
+ * 已可吸收任意目录前缀，段判据按非锚定处理（等价性由 oracle 测试锁定）。
+ */
+export interface IgnoreFastPath {
+  /** 星号左侧字面（star=false 时 = 完整字面量） */
+  readonly prefix: string
+  /** 星号右侧字面（star=false 时 = 完整字面量） */
+  readonly suffix: string
+  /** 是否单星号形态（false = 整段相等） */
+  readonly star: boolean
+  /** 有效锚定：true = 仅首段可命中；false = 任意段 */
+  readonly anchored: boolean
+}
+
 /** 单条 ignore 规则（.gitignore 语法子集） */
 export interface IgnoreRule {
   /** 原始 pattern */
@@ -32,6 +60,13 @@ export interface IgnoreRule {
   readonly anchored: boolean
   /** 编译后的正则 */
   readonly regex: RegExp
+  /**
+   * [B4] 段级快路径判据；null = 走 regex 逐前缀路径。非 null 时 matchPath 用
+   * fastRuleMatches（字符串/段比较）替代 regex.test——逐字节等价（oracle 测试：
+   * domains-bundle.test.ts「literal fast path equivalence」套件，语料含仓库真实
+   * .gitignore × 真实路径采样）。含反斜杠的 pattern 不进快路径（保守走 regex）。
+   */
+  readonly fast: IgnoreFastPath | null
 }
 
 /**
@@ -85,7 +120,54 @@ function compileRule(rawLine: string): IgnoreRule {
   }
   // 4. 编译为正则
   const regex = globToRegex(line, anchored)
-  return { pattern: rawLine, negated, dirOnly, anchored, regex }
+  // [B4] 段级快路径判据（matchPath 用 fastRuleMatches 替代 regex.test，语义逐字节
+  // 等价——oracle 测试锁定）。仅覆盖「无跨斜杠通配」的三类形态：
+  //   ① 字面量（无 * / ?）：段判据 = 整段相等；
+  //   ② 单星号（恰一个 *，两侧不含 / 与 ?）：段判据 = startsWith(prefix) && endsWith(suffix)
+  //      && 长度 ≥ 两者之和（`[^/]*` 可空）；
+  //   ③ `**/字面量` / `/**/字面量`（rest 不再含 * ? /）：git 语义 ≡ 非锚定字面量。
+  // 其余形态（多星号 / 星号两侧含 / / `**` 跨目录 / `?` / 空串 / 含反斜杠）恒 null。
+  const fast = computeFastPath(line, anchored)
+  return { pattern: rawLine, negated, dirOnly, anchored, regex, fast }
+}
+
+/**
+ * [B4] 计算段级快路径判据（null = 不可快路径化，走 regex 逐前缀路径）。
+ * 判据推导（与 globToRegex 产出的 regex 逐前缀求值等价）：
+ * - 字面量 L（无通配）：regex 为 `^L$` / `(?:^|/)L$`（元字符已转义 ⇒ 纯字面匹配）；
+ *   前缀 X 命中 ⇔ X === L 或 X 以 '/'+L 结尾 ⇔ L 是 path 的某个段（锚定时 regex 的
+ *   `^` 要求 X 无 '/' 之外的约束不成立——X === L 本身可含 '/'，故锚定判据用整串
+ *   前缀比较 path === L || path.startsWith(L + '/')，见 fastRuleMatches）。
+ * - 单星号 P1*P2（无 '/' 无 '?'）：regex 段形态 `P1[^/]*P2`，`[^/]*` 不跨斜杠 ⇒
+ *   只需段级 startsWith/endsWith；锚定时 X 必须整体无 '/' ⇒ 仅首段可命中。
+ * - 前置双星加斜杠的 L：regex = 可选「任意目录前缀」组 + 转义后 L（前置斜杠形态的
+ *   行首锚被该可选组吸收）⇒ X === L 或 X 以 '/'+L 结尾 ⇒ 与非锚定字面量同。
+ */
+function computeFastPath(line: string, anchored: boolean): IgnoreFastPath | null {
+  if (line.length === 0 || line.includes('?') || line.includes('\\')) return null
+  const starCount = line.split('*').length - 1
+  if (starCount === 0) {
+    return { prefix: line, suffix: line, star: false, anchored }
+  }
+  if (starCount === 1 && !line.includes('/')) {
+    const starAt = line.indexOf('*')
+    return {
+      prefix: line.slice(0, starAt),
+      suffix: line.slice(starAt + 1),
+      star: true,
+      anchored,
+    }
+  }
+  // `**/L` 或 `/**/L`（compileRule 已剥前导 '/'，故此处 line 以 `**/` 开头）；
+  // rest 含 '/' 时（如 `**/foo/bar`）regex 是「末两段」匹配而非单段相等，不快路径化。
+  const DOUBLE_STAR_SLASH_LEN = 3 // '**/' 双星加斜杠占 3 字符
+  if (line.startsWith('**/')) {
+    const rest = line.slice(DOUBLE_STAR_SLASH_LEN)
+    if (rest.length > 0 && !/[*?/]/.test(rest)) {
+      return { prefix: rest, suffix: rest, star: false, anchored: false }
+    }
+  }
+  return null
 }
 
 /** 正则元字符集合（表驱动）：命中则转义输出，未命中原样拼接——与原逐 case 转义逐字节等价。 */
@@ -163,24 +245,100 @@ function globToRegex(pattern: string, anchored: boolean): RegExp {
  *   - 非 dirOnly 规则：X == 路径（文件/目录自身命中）或 X 是路径的严格前缀（目录命中，其下所有内容被忽略）→ 匹配。
  *   - dirOnly 规则：仅当 X 是路径的严格前缀（X 是目录，路径在其下），或 X == 路径且路径以分隔符结尾（目录自身）。
  *   （gitignore: `foo` 匹配文件或目录；`foo/` 仅匹配目录及其内容。）
+ *
+ * [B4] 双通道求值：可快路径化的规则（fast !== null，字面量 / 单星号无斜杠 /
+ * 前置双星加斜杠字面量 三形态）走 fastRuleMatches（段级字符串比较），其余走原 regex 逐前缀
+ * 路径（ruleMatchesPath）。两通道对同一 (rule, path) 的结果逐字节等价（oracle 测试：
+ * domains-bundle.test.ts「literal fast path equivalence」套件）；规则扫描序与
+ * last-match-wins 不受通道选择影响。
  */
 export function matchPath(matcher: IgnoreMatcher, path: string): boolean {
   // 规范化路径：去前导斜杠、去末尾分隔符
   const normalized = normalizePath(path)
-  // 短路径直通（D7-2）：无 '/' 的路径只有自身一个前缀（allPrefixes('x') ≡ ['x']），
-  // 跳过 split/构建数组，直接以 [path] 测试——文件树顶层 entry 全是短路径，省 split 开销。
-  // 空串检查（W24 审查 A-2）：''/根路径（'/' 归一化后为 ''）必须保持旧 allPrefixes 语义
-  // （返回 [] → 恒 false），不能落入直通分支——否则 `*` 规则下 [''] 前缀命中 regex 且
-  // isSelf(''==='') 成立，被错误判为 ignored（探针证实旧版 false / 新版 true 的漂移）。
-  const prefixes = normalized !== '' && !normalized.includes('/') ? [normalized] : allPrefixes(normalized)
+  // 段数组（空段过滤，与 prefixesOf 入参口径一致）；短路径（≤1 段）时即前缀数组本身，
+  // 省一次 split/join（D7-2 直通语义：无 '/' 路径只有自身一个前缀）。
+  // 空串（W24 审查 A-2）：segments = [] → prefixes = [] → 恒 false，保持旧语义。
+  const segments = normalized === '' ? [] : normalized.split('/').filter((s) => s.length > 0)
+  const prefixes = segments.length <= 1 ? segments : prefixesOf(segments)
+  // [B4] coverage 预计算（每调用一次）：前缀 X_k = 段 0..k 的 join（折叠空段，与 prefixesOf
+  // 同口径），对**原始归一化路径**判 isSelf / isAncestorDir——与 regex 路径的 ruleMatchesPath
+  // 判据逐字节一致。路径含连续斜杠（'a//b'）时折叠前缀与原串错位，coverage 为 false，
+  // 这是改造前既有行为，快路径必须保持（修剪模糊探针抓到的漂移点）。
+  const needsCoverage = matcher.rules.some((r) => r.fast !== null)
+  const cov = needsCoverage ? coverageOf(segments, normalized) : EMPTY_COVERAGE
   let ignored = false
   for (const rule of matcher.rules) {
     // 任一祖先前缀命中该规则 → 该规则对整条路径生效
-    if (prefixes.some((prefix) => ruleMatchesPath(rule, prefix, normalized))) {
+    const hit = rule.fast !== null
+      ? fastRuleMatches(rule.fast, rule.dirOnly, normalized, segments, cov)
+      : prefixes.some((prefix) => ruleMatchesPath(rule, prefix, normalized))
+    if (hit) {
       ignored = !rule.negated
     }
   }
   return ignored
+}
+
+/** coverage 表：cov.self[k] / cov.ancestor[k] 为前缀「段 0..k」是否覆盖 path（isSelf / isAncestorDir）。 */
+interface Coverage {
+  readonly self: boolean[]
+  readonly ancestor: boolean[]
+}
+const EMPTY_COVERAGE: Coverage = { self: [], ancestor: [] }
+
+const CHAR_CODE_SLASH = 47 // '/' 的 charCode
+
+function coverageOf(segments: string[], path: string): Coverage {
+  const self: boolean[] = []
+  const ancestor: boolean[] = []
+  let prefix = ''
+  for (let k = 0; k < segments.length; k += 1) {
+    prefix = k === 0 ? segments[0]! : prefix + '/' + segments[k]!
+    // 免拼接判据：path === prefix ⟔ 等长且 startsWith；path.startsWith(prefix + '/') ⟔ startsWith 且下一字符为 '/'
+    const starts = path.startsWith(prefix)
+    self.push(starts && path.length === prefix.length)
+    ancestor.push(starts && path.length > prefix.length && path.charCodeAt(prefix.length) === CHAR_CODE_SLASH)
+  }
+  return { self, ancestor }
+}
+
+/**
+ * [B4] 段级快路径匹配——与 regex 逐前缀求值逐字节等价（oracle 测试 + 修剪模糊探针锁定）：
+ * - 非锚定字面量（regex `(?:^|/)L$`）：前缀 X_k 命中 ⇔ X_k 的末段 === L；coverage 用预计算表
+ *   （isSelf / isAncestorDir 对原始路径判，保留连续斜杠怪癖）。
+ * - 非锚定单星号（regex `(?:^|/)P1[^/]*P2$`）：末段 startsWith(P1) && endsWith(P2) && 长度 ≥ 两者之和。
+ * - 锚定字面量（regex `^L$`，L 可含 '/'）：X === L；coverage = path === L 或 path 以 L+'/' 开头。
+ * - 锚定单星号（regex `^P1[^/]*P2$`，P1/P2 无 '/'）：命中的 X 必须整体无 '/' ⇒ X = 首段；
+ *   coverage 对原始路径判。
+ * - 前置双星加斜杠形态（fast.anchored=false 的字面量）：regex 行首锚被「任意目录前缀」
+ *   可选组吸收 ⇒ 与非锚定字面量同（gitignore 文档同结论）。
+ * dirOnly 仅认严格祖先（self 不命中）；归一化后路径恒不含反斜杠，含反斜杠的 pattern 不进快路径。
+ */
+function fastRuleMatches(fast: IgnoreFastPath, dirOnly: boolean, path: string, segments: string[], cov: Coverage): boolean {
+  if (fast.anchored) {
+    if (!fast.star) {
+      // 锚定字面量（可含 '/'）：^L$ 只命中 X === L
+      if (path === fast.prefix) return !dirOnly // isSelf；dirOnly 不匹配目录自身名
+      return path.startsWith(fast.prefix + '/') // isAncestorDir
+    }
+    // 锚定单星号：命中的前缀 X 必须整体无 '/' ⇒ X = 首段
+    if (segments.length === 0 || !segMatchesStar(fast, segments[0]!)) return false
+    if (cov.ancestor[0]) return true // isAncestorDir（对原始路径判，保留连续斜杠怪癖）
+    return cov.self[0] && !dirOnly // isSelf；dirOnly 不匹配目录自身名
+  }
+  // 非锚定：任一前缀 X_k 末段命中且覆盖 path；dirOnly 仅认严格祖先
+  for (let k = 0; k < segments.length; k += 1) {
+    if (!(dirOnly ? cov.ancestor[k] : cov.self[k] || cov.ancestor[k])) continue
+    if (fast.star ? segMatchesStar(fast, segments[k]!) : segments[k] === fast.prefix) return true
+  }
+  return false
+}
+
+/** 单星号段判据：段以 prefix 开头、以 suffix 结尾、长度 ≥ 两者之和（`[^/]*` 可匹配空串）。 */
+function segMatchesStar(fast: IgnoreFastPath, seg: string): boolean {
+  return seg.length >= fast.prefix.length + fast.suffix.length
+    && seg.startsWith(fast.prefix)
+    && seg.endsWith(fast.suffix)
 }
 
 /**
@@ -221,13 +379,15 @@ function normalizePath(path: string): string {
 
 /**
  * 生成路径的所有祖先前缀（含自身），从深到浅。
- * 例：'a/b/c' → ['a/b/c', 'a/b', 'a']；'x' → ['x']。
+ * 例：['a','b','c'] → ['a/b/c', 'a/b', 'a']；['x'] → ['x']。
+ * 入参为已过滤空段的段数组（与 matchPath 的 segments 同口径，避免重复 split）。
  */
-function allPrefixes(path: string): string[] {
-  const segments = path.split('/').filter((s) => s.length > 0)
+function prefixesOf(segments: string[]): string[] {
   const result: string[] = []
   for (let end = segments.length; end >= 1; end -= 1) {
     result.push(segments.slice(0, end).join('/'))
   }
   return result
 }
+
+

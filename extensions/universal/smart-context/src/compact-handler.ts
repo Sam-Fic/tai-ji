@@ -1083,6 +1083,9 @@ async function generateSameMode(
 		systemPrompt: ctx.getSystemPrompt() ?? "",
 		messages: [...fullMessages, instructionMessage],
 		tools,
+		// cache-key 一致性（D13-5）：档位与会话同值透传。虚拟模型分支用 reasoning 求路由档位，
+		// 缺省（undefined）会被算成 "off"，与主会话请求档位不同 → 前缀缓存整体 miss。
+		reasoning: ctx.thinkingLevel,
 		signal,
 		sessionId: ctx.sessionManager.getSessionId(),
 	});
@@ -1155,7 +1158,10 @@ async function generateCrossMode(
 		input.customInstructions,
 		input.signal,
 		undefined,
-		undefined,
+		// streamFn 必须给 ctx.modelRegistry（虚拟模型感知的通路）：省略时 compact() 内部回落
+		// pi-ai/compat 的 completeSimple，而 compat 不认识虚拟模型（api === "pi-virtual"），
+		// 配置 compactModel 指向聚合路由时压缩恒失败（C-pi-19）。物理模型路径两通道等价。
+		(m, c, o) => ctx.modelRegistry.streamSimple(m, c, o),
 		auth.env,
 	);
 	// D13-2：原生 compact 内部对截断的处理沿用原生语义；此处补 engine 标记

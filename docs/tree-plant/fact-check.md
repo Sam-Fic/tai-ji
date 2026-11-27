@@ -1,66 +1,62 @@
-# 事实核查
+# 事实核查文档
 
-## 论据三分类
+分类三值：**事实**（已核实，证据 = 文件:行号 或探针输出）、**推断**（合理推导未核实，登记
+「未核实风险」）、**虚构**（无依据臆断——作废并删除依赖分支）。纪律：设计只准建立在事实上。
+
+核实执行：pi 契约簇（C1-C9）与方案前提簇（P1-P6）各派一名独立核实者读 node_modules 实装
+dist（禁止 clone / 文档 / 记忆）；主 agent 两道亲核——① 每簇至少一条开 文件:行号 逐行核对
+（A1 的 model-runtime.js:744-750、A3 的 agent.js:364-375、A5 的 messages.js:111-115 由主
+agent 亲开）；② 关键探针纯机器复跑（.run/probe-c1-c9-rerun.out 与首次输出逐字节一致；
+.run/probe-p2-rerun.out 判定一致）。
+
+## 论据三分类表
 
 | 编号 | 论据 | 分类 | 证据 | 说明 |
 |---|---|---|---|---|
-| F1 | pi `setModel` 落 `model_change` entry，并且只在模型真实变化时向扩展发 `model_select`（携带 next/previous/source） | 事实 | node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js:1917; node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js:1898; node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js:851 | 仓库内安装副本（1.0.0）实读；`model_select` 走扩展 runner |
-| F2 | RPC 客户端事件面 = AgentSessionEvent 联合，不含 `model_select` | 事实 | packages/runtime/src/infra/pi/pi-protocol.ts:848 | runtime 镜像事件清单 21 项无该事件；drift guard 同文件 |
-| F3 | runtime 自发起切换的成功分支在覆写前持有旧模型（`session.modelId`） | 事实 | packages/runtime/src/services/session/session-model-control.ts:267 | 覆写发生在 `client.setModel` 成功之后 |
-| F4 | 压缩摘要的实时合成范式：runtime 广播 `message.compactionSummary` 帧 | 事实 | packages/runtime/src/services/session/event-interpreter-compaction.ts:157; packages/shared/src/protocol.ts:3200 | |
-| F5 | 前端 effects 层把帧合成 entry（`cmp-<uuid>`）再喂 reducer | 事实 | packages/core/src/domain/chat/effects/registry.ts:789 | |
-| F6 | reducer 对 `model_change` entry 现为 default no-op | 事实 | packages/core/src/domain/chat/apply-entry.ts:709 | |
-| F7 | compaction 派生范式：entry case + derive 纯函数 | 事实 | packages/core/src/domain/chat/apply-entry.ts:680; packages/core/src/domain/chat/apply-entry.ts:503 | |
-| F8 | message-turns 规则 6：其余可见 system → 回合边界（关闭当前 turn） | 事实 | packages/core/src/domain/chat/message-turns.ts:556 | 回合内插入需要新通知位 |
-| F9 | 扩展已有监听 `model_select` 的先例 | 事实 | extensions/universal/smart-context/src/index.ts:418; extensions/universal/subagent-workflow/src/model-events.ts:21 | |
-| F10 | 扩展 → runtime 的可用通道 = `pi.sendMessage` custom message → runtime 分诊 | 事实 | extensions/universal/smart-context/src/notices.ts:228; packages/runtime/src/services/session/event-interpreter.ts:1325 | 压缩落盘信号同款 |
-| F11 | host-internals 是 pi 侧基础设施扩展的装配点（registerHostCommands 等） | 事实 | extensions/taiji/host-internals/src/index.ts:8 | |
-| F12 | 过程卡容器 = ProcessAggregateBlock（卡头 + 12 行窗口由 AggregateTape 承载） | 事实 | packages/ui/src/features/chat/ProcessAggregateBlock.vue:22 | |
-| F13 | 工具输出的行内展开已按 D4 退役，详情 = 右侧抽屉 | 事实 | packages/ui/src/features/chat/process-aggregate/SegmentToolRow.vue:11 | 本次不推翻 D4 |
-| F14 | 轮头耗时已有 1 秒 tick + 页面隐藏停表范式 | 事实 | packages/ui/src/features/chat/composables/useTurnElapsed.ts:109 | 卡头计时沿用同式 |
-| F15 | i18n 落点 = ui 两个 panel.ts；已有键：回到最新/思考/执行命令/过程/进行中 | 事实 | packages/ui/src/locale/zh-CN/panel.ts:182; packages/ui/src/locale/zh-CN/panel.ts:123; packages/ui/src/locale/zh-CN/panel.ts:210; packages/ui/src/locale/zh-CN/panel.ts:216 | en 侧同组 |
-| F16 | 过程卡测试范式 = fixture 驱动 mount | 事实 | packages/ui/src/features/chat/__tests__/process-aggregate-block.test.ts:1 | |
-| F17 | faux 扩展注册四个模型（真机可切模型） | 事实 | packages/runtime/src/__tests__/fixtures/faux-llm-ext.ts:153 | faux-1 / faux-1-reasoning / faux-1-b / faux-1-c |
-| F18 | testCommand 收窄到 ui/core 的 chat 子集（域全量 227 文件超 300s 门禁超时） | 事实 | .tree-plant.json:2 | |
-| F19 | 执行中的 bash 输出经 runtime `message.tool_call_update`（载荷 output / outputRaw，尾窗 8KB）送到前端并回填 `ToolCall.output` | 事实 | packages/runtime/src/infra/pi/event-adapter.ts:1402; packages/core/src/domain/chat/effects/registry.ts:698 | 执行中命令行尾输出的数据源 |
-| F20 | 带位移的入场动效会临时增大滚动容器的内容高度；只用透明度的动效不改变它（离线最小页实测） | 事实 | scripts/acceptance/motion-overflow.mjs:1 | 探针即证据（AC-MOTION） |
-| F21 | 轮头进行中变暗 = 按钮基类的禁用态半透明叠加「进行中禁用折叠」；Button 经类合并，外部同变体类可覆盖 | 事实 | packages/ui/src/primitives/button/button-variants.ts:15; packages/ui/src/features/chat/TurnMeta.vue:42; packages/ui/src/primitives/button/Button.vue:24 | 覆盖后禁用行为不变 |
-| F22 | 工具类型表：exec = bash、explore = read/grep/find/ls、edit = edit/write（命令行形态的判定源），经 chat barrel 导出 | 事实 | packages/core/src/domain/chat/trace-window.ts:119; packages/core/src/domain/chat/index.ts:66 | |
-| F23 | 耗时格式化入口 formatDuration（行内历史耗时与卡头计时共用） | 事实 | packages/ui/src/features/chat/format-utils.ts:58 | |
-| F24 | 窗口挂载首帧，流式中的思考行高度处于过渡态（逐帧记录：首帧内容 42px / 可视 25px），窗口被量成未贴底；把这次测量当作用户滚动即会停吸，之后内容恢复贴底（46/46、21/21）却没有事件再触发测量，「回到最新」残留 | 事实 | scripts/acceptance/tape-scroll.mjs:1 | 真机逐帧记录（AC-LIVE 据此断言） |
-| I1 | `pi.sendMessage({ display: false })` 的 custom_message entry 在回放侧不渲染 | 推断 | extensions/universal/smart-context/src/notices.ts:228 | 压缩信号同款；需核对 reducer 对 custom_message display 的过滤 |
-| I2 | 回合内通知可按时间戳与 trace 单元混排（block 时间戳与 notice 时间戳可比） | 推断 | packages/ui/src/features/chat/composables/use-turn-trace.ts:101 | 需核对 block startTime 的来源与缺省 |
-| I3 | 每张过程卡各持一个 1 秒 interval 可接受 | 推断 | packages/ui/src/features/chat/composables/useTurnElapsed.ts:109 | 同屏卡数有上限时成立；超出则共享单 tick |
-| I4 | 模型切换行的中英文案无需新增 locale 目录（只改 ui 两文件） | 推断 | packages/ui/src/locale/zh-CN/panel.ts:108 | renderer locales 无 chat 域；需实现期跑同步脚本核实 |
-| I6 | 工具步的计时起点（`ToolCall.startTime`）早于实际开始执行，行内耗时与卡头活动计时因此偏大；进行中轮头计时与窗口内各步耗时之和对不上与此同源 | 推断 | packages/runtime/src/services/session/event-interpreter.ts:630 | 真机探针实测：命令刚开始执行，卡头活动计时已显示 23s；用户实例里瞬时完成的 ls 显示 5–6s。起点取自哪一事件未核实，显式不做 |
+| A1 | resolveModel 对 router 返回值的硬约束只有「已注册物理模型 + provider 有凭据」——返回刚失败的同一个模型完全合法；failed 是递给 router 的信息，不是「必须换端点」的指令 | 事实 | node_modules/@earendil-works/pi-coding-agent/dist/core/model-runtime.js:744 node_modules/@earendil-works/pi-coding-agent/dist/core/model-runtime.js:748 node_modules/@earendil-works/pi-coding-agent/dist/core/virtual-models.d.ts:44 node_modules/@earendil-works/pi-coding-agent/dist/core/virtual-models.d.ts:52 | 亲核通过。补：thinkingLevel 被 clampThinkingLevel 静默钳制（model-runtime.js:750） 不影响同模型返回合法性 |
+| A2 | 终局失败消息留在投影里：只有被重试的中间 attempt 被 _omitRecoveryAttempt 剔除，预算耗尽那次不剔除，下一轮求值的 messages 可见 | 事实 | node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js:2996 node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js:3010 node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js:822 | _prepareRetry 预算耗尽分支（:2996-2999）直接 return false，不进 omit |
+| A3 | 终局失败消息带物理模型标识，路由自身失败的消息带虚拟模型标识（失败消息由 _state.model 构造） | 事实 | node_modules/@earendil-works/pi-agent-core/dist/agent.js:364 node_modules/@earendil-works/pi-agent-core/dist/agent.js:368 node_modules/@earendil-works/pi-ai/dist/api/lazy.js:3 node_modules/@earendil-works/pi-ai/dist/api/lazy.js:8 node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js:447 node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js:448 | 交接文档原写 handleRunFailure 在 agent-session.js——实装符号在 pi-agent-core/dist/agent.js:364（同名不同包 差异已登记） 路由时 selection 保持虚拟模型（agent-session.js:447 保持虚拟模型（agent-session.js:448） |
+| A4 | 重试预算可读：pi.getSettings().retry?.maxRetries ?? 3（getRetrySettings 同默认）；扩展事件面无 auto_retry 族 | 事实 | node_modules/@earendil-works/pi-coding-agent/dist/core/settings-manager.js:659 node_modules/@earendil-works/pi-coding-agent/dist/core/settings-manager.js:666 node_modules/@earendil-works/pi-coding-agent/dist/core/settings-manager.js:648 node_modules/@earendil-works/pi-coding-agent/dist/core/settings-manager.js:650 node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts:1038 | 修正交接文档措辞：扩展可见 message_end（每失败 attempt 派发），不可见的是重试决策 payload（attempt/maxAttempts/已调度 vs 耗尽）。设计不依赖 message_end 点数——用透传计数 + 预算实读（确定性来源） |
+| A5 | request.messages 是 convertToLlm 投影，assistant 消息的 provider/model/stopReason/errorMessage 原样在场 | 事实 | node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js:452 node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js:453 node_modules/@earendil-works/pi-coding-agent/dist/core/messages.js:111 node_modules/@earendil-works/pi-coding-agent/dist/core/messages.js:115 | 亲核通过。四角色透传；bashExecution/custom/摘要被改写——观察只认 assistant 物理消息，不受改写影响 |
+| A6 | route.state 落盘条件 = !== undefined 且 !== 入参 state（引用比较）；回读按 provider+modelId 取 branch 上最近一条；custom 条目不进 LLM 投影 | 事实 | node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js:460 node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js:461 node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js:901 node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js:912 | 引用相等纪律：实现侧 burnt 无变化必须原样返回入参集或 undefined，否则每轮求值刷一条重复条目（T2/T4 对条目数上界断言兜底） |
+| A7 | direct 求值（压缩摘要）不传 state | 事实 | node_modules/@earendil-works/pi-coding-agent/dist/core/virtual-models.d.ts:53 node_modules/@earendil-works/pi-coding-agent/dist/core/virtual-models.d.ts:54 node_modules/@earendil-works/pi-coding-agent/dist/core/virtual-models.d.ts:53 node_modules/@earendil-works/pi-coding-agent/dist/core/virtual-models.d.ts:54 node_modules/@earendil-works/pi-coding-agent/dist/core/virtual-models.d.ts:65 node_modules/@earendil-works/pi-coding-agent/dist/core/virtual-models.d.ts:67 node_modules/@earendil-works/pi-coding-agent/dist/core/model-runtime.js:494 node_modules/@earendil-works/pi-coding-agent/dist/core/model-runtime.js:499 | 全仓 reason="direct" 仅两处调用点，均无 state 入参；→ 显式不做「direct 求值 burnt 感知」 |
+| A8 | 524/timeout/connection error 命中 pi 原生 RETRYABLE 词表；账户类（insufficient_quota/billing/quota exceeded 等）命中 NON_RETRYABLE 且优先判定 | 事实 | node_modules/@earendil-works/pi-ai/dist/utils/retry.js:4 node_modules/@earendil-works/pi-ai/dist/utils/retry.js:21 node_modules/@earendil-works/pi-ai/dist/utils/retry.js:23 node_modules/@earendil-works/pi-ai/dist/utils/retry.js:186 node_modules/@earendil-works/pi-ai/dist/utils/retry.js:188 .run/probe-c1-c9.out | 探针真值表：524/timeout/connection error → true；insufficient_quota/billing/quota exceeded → false；顺序确认 NON 先于 RETRYABLE |
+| A9 | 旧中文错误文案「上一端点失败且无其他可用端点…」不命中可重试词表——重试链死在 attempt 1/3 的机制 | 事实 | .run/probe-p2-retry-pattern.output.txt extensions/universal/provider-aggregation/src/index.ts:122 | 45 条 retryable 全 miss + 9 条 non-retryable 全 miss 复跑一致（.run/probe-p2-rerun.out）。透传链：route throw 的 message 逐字成 errorMessage（pi-agent-core/dist/agent.js:373） |
+| A10 | 旧实现「单端点路由 + reason=retry → no-candidate → 中文硬闸错误」控制流存在（bug 实装） | 事实 | extensions/universal/provider-aggregation/src/router.ts:185 extensions/universal/provider-aggregation/src/router.ts:189 extensions/universal/provider-aggregation/src/router.ts:227 extensions/universal/provider-aggregation/src/index.ts:268 extensions/universal/provider-aggregation/src/index.ts:286 extensions/universal/provider-aggregation/src/index.ts:114 extensions/universal/provider-aggregation/src/index.ts:124 .run/probe-t1-prefix-red.txt | 实机复现：T1 探针在未修复代码上红（上游仅 1 次请求、attempt 1/3、终局消息 provider=aggregation 带中文错误） |
+| A11 | RPC 模式 stdout 流式输出全部 AgentSessionEvent（含 auto_retry_start/end）——探针的观测通道 | 事实 | node_modules/@earendil-works/pi-coding-agent/dist/modes/rpc/rpc-mode.js:265 node_modules/@earendil-works/pi-coding-agent/dist/modes/rpc/rpc-mode.js:266 | T1/T5/T8 的重试计数断言依赖此通道 |
+| A12 | 链在途的 direct 求值真实存在且发生在「retry bump」与「下一次 stream」之间：prepareRequest 路由求值后 _exceedsCompactionThreshold 超阈即 _runAutoCompaction，摘要请求经 resolveModel(reason="direct") 再进 route 回调；此时被重试的中间 attempt 已被 _omitRecoveryAttempt 剔除，direct 求值的 messages 是在途投影 | 事实 | node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js:468 node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js:239 | 修剪复审 F1 的契约依据（T12 锁定：direct 求值不观察不碰计数） |
+| E1 | 运行环境：pi 二进制（PATH）1.0.0；node_modules 三包（pi-coding-agent/pi-ai/pi-agent-core）均 1.0.0；Node v22.23.5 | 事实 | .run/probe-env.txt | 版本一致 = pi 语义断言对实装版成立；升级 pi 须复核本表全部行 |
+| E2 | 扩展测试基线（未修复态）：vitest 4 文件 74 passed | 事实 | .run/probe-env.txt | 主干交付后期望 89 passed（交接文档 §5） |
+| E3 | Node 22 可直接 import .ts 源（D1 探针的 schema 实装校验通道） | 事实 | .run/probe-ts-import.txt | D1 动态 import packages/extension-protocol/src/aggregation.ts 成功 |
+| R1 | retry.enabled=false 时预算应读为 0（停用 = 零次重试 → 任何终局 error 即 burnt，failover 即时生效） | 推断 | | 题面 §3.6 明载该后果，但参考实现只读 maxRetries（enabled=false 且 maxRetries 缺省 → 读成 3 → 永不 burnt，与题面后果不符）。本交付按题面后果实现映射（readMaxRetries：enabled=false → 0）。见「未核实风险」R1 |
+| R2 | 单端点路由 burnt 后「轮换重探」退化为原样重探 ≡ 直连模型每轮真试 | 推断 | | 由 rotateOldestBurnt 单候选退化路径 + 题面 3.4 条推得；T4 实机锁定。见「未核实风险」R2 |
+| R3 | compaction 改写投影后，burn 偏好靠 router state 兜底（重导可能失效但偏好不丢） | 推断 | | 未实机验证 compaction 对物理错误消息投影的影响；burnt 存 state 不受投影影响。见「未核实风险」R3 |
 
 ## 外部接口核实表
 
 | 接口 | 形态 | 依据 | case |
 |---|---|---|---|
-| pi 扩展事件面：`model_select` | `pi.on('model_select', (event, ctx) => …)`，event = { model, previousModel, source } | extensions/universal/smart-context/src/index.ts:418 | AC-MSW-LIVE |
-| pi 扩展发消息：`pi.sendMessage` | customType + display:false + details + triggerTurn:false | extensions/universal/smart-context/src/notices.ts:228 | AC-MSW-LIVE |
-| pi RPC 事件面 | 不转发 `model_select`；`model_change` append 无事件 | packages/runtime/src/infra/pi/pi-protocol.ts:848 | AC-MSW-LIVE |
-| runtime WS 帧 | `type: 'message.compactionSummary'` 范式；新增 `message.modelSwitch` | packages/runtime/src/services/session/event-interpreter-compaction.ts:157; packages/shared/src/protocol.ts:3200 | AC-MSW-LIVE |
-| 前端合成 entry | 构造 entry（id `cmp-<uuid>` 范式）→ `applyEntryFrameWithOverlay` | packages/core/src/domain/chat/effects/registry.ts:789 | AC-CORE-EQUIV |
-| reducer entry 契约 | `model_change` = { type, id, parentId, timestamp, provider, modelId } | node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js:851; packages/core/src/domain/chat/apply-entry.ts:709 | AC-MSW-REPLAY |
-| 回合归属 | message-turns 规则 6（system → boundary） | packages/core/src/domain/chat/message-turns.ts:556 | AC-MSW-MID |
-| 过程卡 props/段契约 | `segment` / `turnWorking` / `turnStreaming`；段含 members/units/counts/followedByText | packages/ui/src/features/chat/ProcessAggregateBlock.vue:32; packages/core/src/domain/chat/process-segment.ts:103 | AC-H12 |
-| 详情抽屉 | `AggregateToolDetailDrawer`（dialog 壳、420px 右贴边、Esc/焦点归还） | packages/ui/src/features/chat/process-aggregate/AggregateToolDetailDrawer.vue:1 | AC-DETAIL |
-| 计时 tick | `setInterval(1s)` + visibilitychange 停表/补算 | packages/ui/src/features/chat/composables/useTurnElapsed.ts:109 | AC-CHIP |
-| 执行中的命令输出 | `ToolCall.output` 在 running 态流式回填（尾窗 8KB） | packages/runtime/src/infra/pi/event-adapter.ts:1402; packages/core/src/domain/chat/effects/registry.ts:698 | AC-RUN |
-| 滚动窗口贴底判据 | `scrollHeight − clientHeight − scrollTop > 1` 即未贴底 | packages/ui/src/features/chat/composables/useProcessAggregate.ts:142 | AC-LIVE |
-| 命令行形态判定 | `RUN_GROUP_TOOLS.exec` 类型表内的工具按命令行形态显示 | packages/core/src/domain/chat/trace-window.ts:119 | AC-LOOK |
-| 轮头禁用态样式 | Button 基类 `disabled:opacity-50`，经 `cn` 合并可覆盖 | packages/ui/src/primitives/button/button-variants.ts:15; packages/ui/src/primitives/button/Button.vue:24 | AC-LOOK |
-| i18n 双侧 | `packages/ui/src/locale/{zh-CN,en-US}/panel.ts` 的 `message` 组 | packages/ui/src/locale/zh-CN/panel.ts:108; packages/ui/src/locale/en-US/panel.ts:111 | AC-I18N |
-| 页面可见性 | `document.hidden`（浏览器接口）：活动计时器页面不可见时停表、恢复可见补算；与会话 hidden 状态同名无关，登记进同名白名单 | packages/ui/src/features/chat/composables/useProcessAggregate.ts:309; scripts/check-session-hidden-surface.mjs:196 | AC-CHIP |
-| 真机装配 | 开发实例（vite+electron+真 pi）+ faux 演员（四模型） | .agents/skills/verify-taiji/SKILL.md:29; packages/runtime/src/__tests__/fixtures/faux-llm-ext.ts:153 | AC-H12 |
-| 图标资源 | lucide `box` 字形可直接引用（@lucide/vue） | node_modules/@lucide/vue/dist/esm/icons/box.mjs | AC-MSW-ICON |
+| resolveModel 硬约束 | router 返回值须是已注册物理模型且 provider 有凭据；返回刚失败的同一模型合法（failed 仅信息透传，pi 无强制换端点逻辑）；thinkingLevel 静默钳制 | node_modules/@earendil-works/pi-coding-agent/dist/core/model-runtime.js:744 node_modules/@earendil-works/pi-coding-agent/dist/core/model-runtime.js:748 | T1,T7 |
+| ModelRouteRequest 载荷 | reason（user/continuation/retry/direct）+ failed（retry 时上一失败请求的物理模型与 message；路由自身失败时 absent）+ messages（convertToLlm 投影，含 system）+ state（branch 上最近 router state；direct 时 undefined） | node_modules/@earendil-works/pi-coding-agent/dist/core/virtual-models.d.ts:33 node_modules/@earendil-works/pi-coding-agent/dist/core/virtual-models.d.ts:48 node_modules/@earendil-works/pi-coding-agent/dist/core/virtual-models.d.ts:56 node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js:452 | T1,T2,T7 |
+| retry 求值的 messages 语义 | 被重试的中间 attempt 已从投影剔除（_omitRecoveryAttempt 挂 context_edit）；预算耗尽那次不剔除 → 下一轮求值可见终局失败 | node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js:2990 node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js:3011 node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js:822 | T2,T6 |
+| 终局/路由失败消息的模型标识 | 端点失败 = 物理 provider/model（stream setup 错误消息构造）；路由 throw = _state.model（会话 selection = 虚拟模型，handleRunFailure） | node_modules/@earendil-works/pi-agent-core/dist/agent.js:364 node_modules/@earendil-works/pi-agent-core/dist/agent.js:375 node_modules/@earendil-works/pi-ai/dist/api/lazy.js:3 node_modules/@earendil-works/pi-ai/dist/api/lazy.js:8 | T2,T6 |
+| router state 落盘/回读 | route.state !== undefined 且 !== 入参 state（引用比较）才 append pi.virtual-model-state；回读按 provider+modelId 匹配最近一条；custom 条目不参与 LLM 投影 | node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js:460 node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js:465 node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js:901 node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js:912 | T2,T4,T8 |
+| 重试预算读取 | pi.getSettings().retry?.maxRetries ?? 3（SettingsManager.getRetrySettings 同默认）；getRetryEnabled 缺省 true；ExtensionEvent 联合类型无 auto_retry 族（重试决策 payload 对扩展不可见） | node_modules/@earendil-works/pi-coding-agent/dist/core/settings-manager.js:659 node_modules/@earendil-works/pi-coding-agent/dist/core/settings-manager.js:666 node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts:1038 | T1,T5,T8 |
+| 错误分类词表 | RETRYABLE_PROVIDER_ERROR_PATTERN（45 条，含 524/timeout/connection error）；NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN（9 条账户类）优先判定 → 账户类 fail-fast | node_modules/@earendil-works/pi-ai/dist/utils/retry.js:4 node_modules/@earendil-works/pi-ai/dist/utils/retry.js:23 node_modules/@earendil-works/pi-ai/dist/utils/retry.js:186 node_modules/@earendil-works/pi-ai/dist/utils/retry.js:188 | T1,T3 |
+| convertToLlm 投影 | assistant 消息 provider/model/stopReason/errorMessage 原样在场（system/user/assistant/toolResult 四角色透传；bashExecution/custom/摘要被改写为 user） | node_modules/@earendil-works/pi-coding-agent/dist/core/messages.js:111 node_modules/@earendil-works/pi-coding-agent/dist/core/messages.js:115 | T2,T6 |
+| 虚拟模型识别 | VIRTUAL_MODEL_API = "pi-virtual"；isVirtualModel 按 api 判别；路由失败消息带虚拟 provider/api → 观察侧按 provider = AGGREGATION_PROVIDER_ID 跳过 | node_modules/@earendil-works/pi-coding-agent/dist/core/virtual-models.d.ts:16 node_modules/@earendil-works/pi-coding-agent/dist/core/virtual-models.d.ts:90 packages/extension-protocol/src/aggregation.ts:25 | T6 |
+| RPC 事件流（探针观测通道） | --mode rpc 的 stdout = 全部 AgentSessionEvent JSONL（session.subscribe → writeRawStdout），auto_retry_start/end 在内 | node_modules/@earendil-works/pi-coding-agent/dist/modes/rpc/rpc-mode.js:265 node_modules/@earendil-works/pi-coding-agent/dist/modes/rpc/rpc-mode.js:266 | T1,T5,T8 |
+| ExtensionContext.modelRegistry.find | route 闭包经 ctx 解析物理模型目录条目（retry 透传目标与候选命中都经它；返回 undefined = 端点悬空，落选续试） | node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts:225 | T1,T2,T7 |
+| StopReason 值域 | assistant 消息 stopReason 取值集合 = pending/stop/length/toolUse/error/aborted/deferred；观察侧只认 error（终局失败）与 stop/toolUse/length（成功康复），取消与未知值保守处理（不清 burnt、计数退役） | node_modules/@earendil-works/pi-ai/dist/types.d.ts:311 | T2,T6 |
+| 链边界判定（观察作用域） | ModelRouteReason 四值中 user/continuation = 链边界（终局观察与计数退役只在此跑）；retry 落 normal-selection 与 direct（链中压缩/扩展调用）不是边界——在途投影无刚失败 attempt，按它观察会抹活链记账（A12） | node_modules/@earendil-works/pi-coding-agent/dist/core/virtual-models.d.ts:29 | T12 |
+| mtime 门重读（配置/额度） | route 求值前按文件 mtime 决定重读：providers.json（config-store）与 quota-cache.json（quota-cache-reader）；链中变更对下一求值生效，无定时器无 watcher | extensions/universal/provider-aggregation/src/config-store.ts:114 extensions/universal/provider-aggregation/src/quota-cache-reader.ts:133 | T6,T7 |
+| ExtensionAPI.getSettings | 扩展可同步读 effective settings（Settings.retry 形态：enabled/maxRetries/baseDelayMs…） | node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts:1241 | T5,T8 |
 
 ## 未核实风险
 
-- I1：`display:false` custom_message 在回放侧的可见性；若 reducer 会渲染它，需在合成侧用「无 UI 字段 + display 标记」两条都过滤（实现期核对 `apply-entry` 的 custom_message 分支，核对不过则在 design 增加过滤机制并重跑 root）。
-- I2：回合内通知与 trace 单元的时间可比性；若 block 缺 startTime（历史会话），通知退化为「回合末尾」位置并在报告中登记。
-- I3：同屏过程卡数量上限；若实测超过 3 张卡，改为「单一 tick 广播」的共享计时器。
-- I4：locale 目录是否只有 ui 两文件需要改；实现期跑 `check_i18n_locale_sync.py` 核实（AC-I18N 已覆盖）。
-- I6：各步计时的起点偏早（命令刚开始执行，卡头活动计时已显示 23s；轮头计时与窗口内各步耗时之和对不上）。起点取自哪一事件未核实；修正要动工具调用时间戳的来源，不属本交付，已登记为显式不做。
+- R1：若 pi 改 _prepareRetry 的 enabled 检查语义（停用不再等于零重试），或用户报告「停用重试后
+  仍不 failover / 意外漂移」，readMaxRetries 的 enabled=false → 0 映射已按题面 §3.6 后果实现（T8 实机 + 单测锁定）。
+- R2：若 T4 红（单端点烧掉后未原样重试），rotateOldestBurnt 的单候选退化路径需重裁——
+  触发条件：T4 实机回归红。
+- R3：若实机观察到 compaction 后 failover 行为异常（burn 偏好丢或重复烧），需补 compaction
+  投影影响的实机 case——触发条件：压缩摘要请求选中 burnt 端点的用户报告。

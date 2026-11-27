@@ -1,7 +1,9 @@
 /**
  * CI 门禁判定与等待（merge 管线的唯一裁判实现）。
  *
- * 判定唯一数据源 = workflow runs（gh run list --commit <sha>，按 commit 一手拉取）；
+ * 判定唯一数据源 = workflow runs（branch + headSha 客户端过滤通道，2026-11 起；
+ * 旧服务端 --commit 过滤依赖 check-suite 关联元数据、push run queued 早期持续返回空，
+ * 降级为 BRANCH 缺省时的回退通道——见 lib/fetch-runs.mjs）；
  * 语义 = 「有 runs 必等全部完成才裁决」。check-rollup 轨已删除（双轨归一）：
  * rollup 是平台聚合的二手视图，注册时机不受本仓控制——PR #45 的「部分结论未出」
  * 穿透形态与 v0.11.16 的半注册窗口形态（CI check runs 尚未注册进 rollup、只含

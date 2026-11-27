@@ -194,7 +194,10 @@ function onRowEnter(model: ModelPickerModel, group: ModelPickerGroup): void {
           <span class="flex-1 text-left">{{ model.name ?? model.id }}</span>
           <!-- 行尾「路由」徽标（U6/GL2：路由条目与物理模型可区分；随路由组整组渲染）。
                M3 联动：路由行尾附此刻命中端点名（routeHitNow）/ 无命中（routeNoHitNow）——
-               数据侧求值注入（model-picker-data），本组件只呈现。 -->
+               数据侧求值注入（model-picker-data），本组件只呈现。
+               口径限定（dmg-r1-1）：徽标是**条件维度**命中（时间窗 × 额度），不含 burnt 软避让——
+               pi 侧选择层重排的状态在 pi session 的 virtual-model-state、renderer 无通道可见，
+               burn 存活期内徽标可能与实际路由端点不一致（故文案用「条件命中 →」而非「路由 →」）。 -->
           <span
             v-if="group.aggregation"
             data-testid="model-picker-route-badge"

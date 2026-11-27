@@ -1,111 +1,70 @@
-# 设计文档（四件事，一件不多）
+# 设计文档：provider-aggregation 重试语义修订（D6 → 方案 B）
+
+> 树形交付任务文档。题面 = `/tmp/provider-aggregation-retry-failover-handoff.md`（provider-aggregation
+> 重试语义修订交接文档，用户裁决 2026-11-24 取方案 B）。行为契约正文同步落在
+> `docs/design/provider-aggregation-route-matrix.md`（docs-sync 枝交付），本文只承载树形拆分与验收指针。
 
 ## 背景与目标
 
-对话流里「两段正文之间的执行信息」（思考 + 工具步骤）收在一张过程卡里。过程卡以原型为准：一张卡 = 卡头 + 12 行窗口、一个 block 一行；进行中卡头常驻「此刻在做什么 + 计时」，落成后收成一行、点开是同一窗口；卡片底、卡头、每一行的字号与颜色与原型逐项一致（逐项值见「长相对齐原型」表）。同时，模型切换成功后对话流里没有任何记录（pi 落 `model_change` entry 但无事件、reducer 该类型 no-op、轮头不显示模型名），用户无从知道后半段回答换了模型。
-
-目标：① 过程卡与原型一致——长相逐项对齐，进行中看得出在持续推进，落成后收成一行；② 模型切换成功后，在对话流里于切换发生的位置出一条横线分隔行（box 图标），回合进行中切换插入回合内部。
+provider-aggregation 扩展把 pi 的虚拟模型（`aggregation/<路由id>`）按路由条件落到物理端点。原 D6
+「重试排除」在 pi 自动重试时把刚失败的端点临时排除后重新求值：单端点路由排除后候选集为空，闭包
+throw「上一端点失败且无其他可用端点」——该二手错误掩盖真实上游故障（524 origin timeout），且不命中
+pi 原生可重试词表，重试链死在 attempt 1/3（生产实证：session 01a202a5，route-3 持续 25h 失败）。
+本交付按用户裁决把重试语义改为方案 B：**retry 透传 + 预算用尽后 failover**。受众 = 走模型路由的
+pi 会话用户；现在做因为故障形态已被实机日志锤实且修复面（9 文件）已与原会话逐字节重建待合入。
 
 | 编号 | 目标 | 题面原句（逐字） | 限定词落点 | case/落点 |
 |---|---|---|---|---|
-| G1 | 过程卡窗口上限 12 行、一个 block 一行（步数按 block 计：一个思考块一行、一次工具调用一行；窗口 12 行 = 288px） | 「窗口 12 行。」「改成一个 block height 为一行，改成12行」 | 机制：窗口行数由 CSS 令牌 `--proc-tape-rows: 12` 定义，行高 24px、行间无间隙，整卡 316px | AC-H12 |
-| G2 | 进行中卡头常驻「此刻在做什么 + 计时」 | 「2. 卡头常驻OK」 | 机制：卡头右侧活动 chip（类型词 + 已持续时长），每秒刷新；它是卡内唯一的实时计时（行内历史耗时不属于此类） | AC-CHIP |
-| G3 | 进行中要能感知持续推进 | 「要给用户能感知到是在持续推进，而不是固定4行陷入了停滞的感觉」 | 机制：跟随滚动 + 上沿淡出 + 「更早 N 条/回到最新」+ 执行中命令行尾输出 + 卡头计时 | AC-LIVE, AC-RUN |
-| G4 | 落成后收成一行，点开是 12 行窗口 | 「3. 落成后收成一行OK」 | 机制：`followedByText`/回合落成 → 收成一行；点卡头展开窗口，从第一条读起 | AC-SETTLE |
-| G5 | 单条详情走右侧抽屉（沿用 D4，不改行内展开） | 用户裁决：「沿用右侧详情抽屉（推荐）」 | 机制：点击窗口内工具行 → 现行 `AggregateToolDetailDrawer`（2026-11-06 D4 保持） | AC-DETAIL |
-| G6 | 思考在窗口里一块一行，点开看全文 | 「一个 block 一行」 | 机制：已结束的思考 = 一行标签，不带正文；进行中的思考只露最新一行文字；点开在窗口内展开 240px 滚动区 | AC-THINK |
-| G7 | 窗口里的行 = 思考块与工具步按发生顺序逐行平铺 | 用户对照原型截图后指示：「全部修复」（原型窗口内命令直接平铺） | 机制：组单元直接渲染其成员行，窗口内不设分组标题行；步数按段内工具类成员累计 | AC-LOOK |
-| G8 | 模型切换成功后出一条横线分隔行（box 图标） | 「对话中如果切换了模型，并且 pi 也接收到了切换，那么也要展示一条模型切换的消息」「5. 横线分隔行」「用box。」 | 机制：新系统消息 `modelSwitch`，渲染复用 SystemNotice 横线分隔行族，图标 = lucide Box | AC-MSW-LIVE, AC-MSW-ICON |
-| G9 | 回合进行中切换插入回合内部 | 用户裁决：「回合内插入（推荐）」 | 机制：`message-turns` 给打开的回合加回合内通知位，trace 按时间插入该行 | AC-MSW-MID |
-| G10 | 只有 pi 确认成功才出行；同模型重复写入不出行（前向：与上一生效模型不同 → 出行；反向：相同 → 不出行） | 「并且 pi 也接收到了切换」 | 机制：行以 pi `model_select`（仅真实变化时发出）为信号源；reducer 对「与上一生效模型相同」的 `model_change` 不出行 | AC-MSW-REPLAY, AC-MSW-DEDUPE |
-| G11 | 实时与回放两条通路同形 | 项目红线：live ≡ reload（AGENTS.md 关键规则 9） | 机制：同一 reducer 派生同一 `modelSwitch` 消息；live 走合成 entry、回放走真实 `model_change` entry | AC-CORE-EQUIV |
-| G12 | 新增文案中英双侧对齐 | 项目规范（check_i18n_locale_sync） | 机制：`packages/ui/src/locale/{zh-CN,en-US}/panel.ts` 同组新增键 | AC-I18N |
-| G13 | 过程卡长相对齐原型（逐项值见「长相对齐原型」表） | 「这个样式，和 demo html 的内容一样吗？」「全部修复」 | 机制：卡片底色/圆角/内边距、卡头形态、行字号与颜色、行距、滚动条、提示样式全部按表取值 | AC-LOOK |
-| G14 | 执行中的命令行行尾显示最新一行输出与光标 | 「要给用户能感知到是在持续推进」「全部修复」 | 机制：读 `ToolCall.output` 末行（runtime `message.tool_call_update` 流式回填），行尾光标闪烁 | AC-RUN |
-| G15 | 内容不满 12 行的进行中窗口不出现滚动提示；满 12 行后提示在场（按滚出的行数写） | 「可以滚动或者折叠」「全部修复」 | 机制：自动跟随只由用户滚动改变（滚轮上滚停吸、滚到底恢复），挂载与内容尺寸变化引起的测量不改变它；内容尺寸变化时重新贴底并更新提示；窗口内的入场动效只用透明度 | AC-LIVE, AC-MOTION |
-| G16 | 轮头在进行中保持与落成后相同的亮度（进行中禁止折叠的行为不变） | 「全部修复」 | 机制：轮头按钮禁用态不再套用基类的半透明 | AC-LOOK |
-
-### 长相对齐原型
-
-| 部位 | 取值 |
-|---|---|
-| 卡片 | 底色 `--bg-input`、圆角 `--radius`、内边距上下 2px、左右 12px；落成收起 = 28px 一行 |
-| 卡头 | 高 24px；层叠图标（恒定，进行中不换转圈）+「过程」（`--neutral-fg-2`、600）+ 计数「N 步 · 思考 M」（`--neutral-mid`、常规字重、13px）；右端展开箭头（展开时染强调色并旋转 90°）；失败标记保留；卡头不显示段总耗时 |
-| 卡头右侧 | 进行中：活动 chip（进行中图标 + 类型词 + 等宽计时）；有内容滚出时：滚动提示（等宽 12px、`--neutral-mid`、无下划线） |
-| 行 | 高 24px、行间无间隙；行文字 13px；命令与耗时等宽 12px |
-| 思考行 | 已结束：灯泡 +「思考」+ 该次时长（等宽、`--neutral-mid`）+ 行尾箭头，不带正文；进行中：只露最新一行文字（左缘与标签文字对齐、`--neutral-mid`、14px/1.7）+ 行尾光标；点开：标签行 + 全文（最高 240px、内滚动） |
-| 命令行 | `>` 图标 + 命令正文（等宽 12px、`--neutral-fg-2`，不带工具名）+ 行尾耗时（等宽 12px、`--neutral-mid`）；执行中：行尾显示最新一行输出 + 光标 |
-| 其它工具行 | `>` 图标 + 工具名（`--neutral-mid`）+ 参数摘要（等宽 12px、`--neutral-fg-2`）+ 行尾耗时/diff 摘要（原型未定义此类行，形态由命令行与具名工具行推广） |
-| 窗口 | 上限 12 行 × 24px；滚动条隐藏；内容滚出窗口的一侧 16px 渐隐 |
+| G1 | retry 求值透传上一失败端点：原样返回、不换端点、不复查条件 | "先按照 pi 的重试规则重试当前真实模型"；"重试归属在途请求：透传，不换端点、不复查条件——与直连模型行为对齐" | 机制：闭包层 retry 分支（reason=retry && failed ∈ 配置 → bumpChainFailure + 原样返回） | T1,T7 |
+| G2 | failover 触发口径 = pi 重试预算用尽；fail-fast 类不触发 | "如果超过 pi 的重试次数，则 failover 到候选模型"；"failover 的触发口径 = pi 的重试预算被用尽（fail-fast 类错误不触发，见方案 B 分界）" | 机制：终局观察 + 链内计数 ≥ maxRetries 才 burnt；账户类 pi 不重试 → 计数保持 0 → 不 burnt | T2,T3,T5,T8 |
+| G3 | 零新配置项，规则固定 | "无新配置项，规则固定" | 机制：routes schema 键集不变；预算读 pi 既有 settings.retry | T1,T2,D1 |
+| G4 | 预算用尽那轮呈现真实上游错误全文（消除掩盖性二手错误） | "用户看到的二手错误替换了真实的 524（连 ray_id、上游域名都没有）"；"重试死在 attempt 1/3，剩余预算作废" | 机制：删 retryOnly 硬闸与中文文案；透传后终局错误即端点错误全文 | T1,T7 |
+| G5 | burnt 跨轮次偏好：router state 持久化 / 全 burnt 轮换重探 / 成功康复清除 / 单端点 ≡ 直连 | "恢复者不被饿死；单端点时退化为原样重探"；"清 F 的 burnt + 计数（端点康复，重新成为首选）"；"烧掉预算的那一轮呈现真实上游错误全文（修复的核心收益），下一轮起走候选端点" | 机制：burnt 走 router state；rotateOldestBurnt；成功结局（stop/toolUse/length）清 mark | T2,T4,T6 |
+| G6 | 链中配置变更与路由自身失败不丢 burn（幂等重导） | "连续多轮路由失败后仍可凭更早的物理结局幂等重导（burn 不因选择层抛错而丢，不需闭包镜像）" | 机制：findLastPhysicalOutcome 跳过虚拟模型消息，观察从会话事实重算 | T6 |
 
 ## 验收是什么
 
-本验收的重点是**真机 DOM 行为**：开发实例 + faux 对话（真 Electron + 真 pi 子进程 + 真扩展装载）驱动出长回合、慢命令与模型切换，用 CDP 断言窗口 12 行上限、长相的计算样式、卡头计时、思考行三态、落成收起/展开、切换行在回合内/回合间的位置；core 侧另用真实 pi session JSONL fixture 直跑 reducer 断言回放派生。
-
-验收判据 = [acceptance.md](acceptance.md) 的实机 case 全绿（trunk = AC-H12）。
-
-## 方案对比与层归属
-
-| 方案 | 形态 | 取舍 |
-|---|---|---|
-| A（选定） | 在现组件族内按原型重做：`AggregateTape` = 卡片（底色/圆角/内边距）+ 卡头 + 窗口；`AggregateSummaryRow` 改为卡头（计数、箭头、右侧活动 chip 与滚动提示位）；`SegmentThinkingRow` 重做为过程卡专用的三态思考行（展开态由卡持有，不再复用 `ThinkingRow` 的 60 字预览与折叠状态机）；`SegmentToolRow` 按原型行形态；`SegmentToolGroup` 退役 | 复用既有段契约、抽屉、悬停卡、i18n 词表与测试范式；改动集中在一个组件族 |
-| B | 新建独立组件族替换整族 | 控制更自由，但丢弃既有抽屉/悬停卡接线与 fixture 测试，重复实现 |
-| C | 只给现有组件覆盖样式类 | 思考行要摆脱同行 60 字预览、命令行要去掉工具名段，都是结构变化；靠覆盖类会让两套语义并存，三个月后难维护 |
-
-层归属：过程卡的**行数据**（段、组、计数、单位序）留在 core `process-segment` / `trace-window`（不改）；**展示态**（窗口展开、跟随、思考展开集合、活动 chip 文案与计时）留在 ui 组件本地 + composable（不落 store）；**模型切换的事实**在 core 派生（`apply-entry` 新增 `model_change` case），**实时信号**经 pi 扩展 → runtime 帧 → 前端合成 entry（沿用压缩摘要的现行范式：`message.compactionSummary` + `cmp-<uuid>` 合成）。
+本次验收重点 = **真实宿主行为**（非单测顶替）：全部 case 驱动本机 pi 二进制（--mode rpc）装载
+真实扩展源码，端点 = 本机 HTTP 故障注入服务器（524 / insufficient_quota / 恢复 剧本），断言
+pi 的重试事件族、上游请求序列、会话落盘与 router state。验收判据 = `docs/tree-plant/acceptance.md`
+的实机 case 全绿。
 
 ## 树形拆分
 
 主干文件清单：
-- packages/ui/src/features/chat/process-aggregate/
-- packages/ui/src/features/chat/composables/
-- packages/ui/src/features/chat/ProcessAggregateBlock.vue
-- packages/ui/src/features/chat/Turn.vue
-- packages/ui/src/features/chat/TurnMeta.vue
-- packages/ui/src/features/chat/__tests__/
-- packages/ui/src/locale/zh-CN/panel.ts
-- packages/ui/src/locale/en-US/panel.ts
-- packages/renderer/src/style.css
-- packages/shared/src/message.ts
-- extension-dependencies.json
-- scripts/acceptance/
-- scripts/check-session-hidden-surface.mjs
-- docs/tree-plant/
-- .tree-plant.json
-- docs/testing/e2e-map.json
+- extensions/universal/provider-aggregation/src/router.ts
+- extensions/universal/provider-aggregation/src/index.ts
+- extensions/universal/provider-aggregation/src/__tests__/
+- docs/tree-plant/probes/
 
 | 枝名 | 目标 | 依赖 | 风险级 | 文件 | case |
 |---|---|---|---|---|---|
-| tape-look | 长相对齐原型：卡片底、卡头形态、行字号与颜色、逐行平铺、行距、隐藏滚动条、轮头亮度；窗口内动效去位移 | 主干 | 中 | packages/ui/src/features/chat/process-aggregate/, packages/ui/src/features/chat/ProcessAggregateBlock.vue, packages/ui/src/features/chat/composables/useProcessAggregate.ts, packages/ui/src/features/chat/TurnMeta.vue, packages/ui/src/features/chat/__tests__/, packages/ui/src/locale/zh-CN/panel.ts, packages/ui/src/locale/en-US/panel.ts, packages/renderer/src/style.css, scripts/acceptance/, docs/testing/e2e-map.json | AC-LOOK, AC-MOTION |
-| tape-scroll | 跟随只听用户滚动、上滚暂停、滚动提示、上沿淡出 | tape-look | 中 | packages/ui/src/features/chat/composables/, packages/ui/src/features/chat/process-aggregate/, packages/ui/src/features/chat/__tests__/, packages/ui/src/locale/zh-CN/panel.ts, packages/ui/src/locale/en-US/panel.ts, scripts/acceptance/, docs/testing/e2e-map.json | AC-LIVE |
-| tape-think | 思考行三态：一行标签 / 进行中只露最新一行 / 点开全文 | tape-look | 中 | packages/ui/src/features/chat/process-aggregate/, packages/ui/src/features/chat/__tests__/, scripts/acceptance/, docs/testing/e2e-map.json | AC-THINK |
-| tape-live | 进行中：卡头活动 chip 计时 + 执行中命令行尾输出 | tape-think | 中 | packages/ui/src/features/chat/process-aggregate/, packages/ui/src/features/chat/composables/, packages/ui/src/features/chat/__tests__/, packages/ui/src/locale/zh-CN/panel.ts, packages/ui/src/locale/en-US/panel.ts, scripts/acceptance/, scripts/check-session-hidden-surface.mjs, docs/testing/e2e-map.json | AC-CHIP, AC-RUN |
-| tape-settle | 落成后收成一行、点开 12 行窗口、详情走右侧抽屉 | tape-think, tape-scroll | 低 | packages/ui/src/features/chat/process-aggregate/, packages/ui/src/features/chat/ProcessAggregateBlock.vue, packages/ui/src/features/chat/Turn.vue, packages/ui/src/features/chat/__tests__/, scripts/acceptance/, docs/testing/e2e-map.json | AC-SETTLE, AC-DETAIL |
-| msw-replay | 回放派生：`model_change` entry → `modelSwitch` 系统消息；同模型/首个切换不出行 | 主干 | 高 | packages/core/src/domain/chat/apply-entry.ts, packages/core/src/domain/chat/__tests__/, packages/shared/src/message.ts | AC-MSW-REPLAY, AC-MSW-DEDUPE, AC-CORE-EQUIV |
-| msw-live | 实时链路：host-internals 扩展转发 `model_select` → runtime 帧 → 前端合成 entry | msw-replay | 高 | extensions/taiji/host-internals/src/, packages/runtime/src/services/session/event-interpreter.ts, packages/runtime/src/services/session/event-interpreter*.ts, packages/shared/src/protocol.ts, packages/core/src/domain/chat/effects/, packages/runtime/src/__tests__/, packages/extension-protocol/, extension-dependencies.json | AC-MSW-LIVE |
-| msw-ui | 切换行渲染（横线分隔行族 + box 图标）与回合内插入 | msw-replay, msw-live | 高 | packages/core/src/domain/chat/message-turns.ts, packages/core/src/domain/chat/__tests__/, packages/ui/src/features/chat/Turn.vue, packages/ui/src/features/chat/SystemNotice.vue, packages/ui/src/locale/zh-CN/panel.ts, packages/ui/src/locale/en-US/panel.ts | AC-MSW-MID, AC-MSW-ICON |
-| i18n-final | 文案双侧对齐与词表核对 | 主干 | 低 | packages/ui/src/locale/zh-CN/panel.ts, packages/ui/src/locale/en-US/panel.ts | AC-I18N |
+| failover-edges | failover 边界行为：实机覆盖（fail-fast 不换端点 / 全 burnt 轮换+康复清除 / 预算实读 / 幂等重导 / 重试停用即时 failover）+ 修剪修复三案与边界单测（切换不误烧 P1 / divert 计数不漏记 P2 / 稳态不重复落盘 P3 / 写回裁剪 P4 / 未知 stopReason 保守 P9） | trunk | 高 | docs/tree-plant/probes/t2-failover.mjs, docs/tree-plant/probes/t3-failfast.mjs, docs/tree-plant/probes/t4-rotation-clear.mjs, docs/tree-plant/probes/t5-budget-from-settings.mjs, docs/tree-plant/probes/t6-rederive.mjs, docs/tree-plant/probes/t8-retry-disabled-failover.mjs, docs/tree-plant/probes/t9-model-switch-no-misburn.mjs, docs/tree-plant/probes/t10-steady-state-no-duplicate-state.mjs, docs/tree-plant/probes/t11-midchain-repoint-accounting.mjs, docs/tree-plant/probes/t12-midchain-compaction-accounting.mjs, docs/tree-plant/probes/lib/harness.mjs, extensions/universal/provider-aggregation/src/router.ts, extensions/universal/provider-aggregation/src/index.ts, extensions/universal/provider-aggregation/src/__tests__/ | T2,T3,T4,T5,T6,T8,T9,T10,T11,T12 |
+| docs-sync | 行为契约文档与技能文档同步（route-matrix.md 总则 5 + 新章 / domain-model.md / SKILL.md）+ changeset + 静态对账 case | trunk | 中 | docs/design/provider-aggregation-route-matrix.md, docs/domain-model.md, extensions/universal/provider-aggregation/skills/provider-aggregation-ext-config/SKILL.md, .changeset/, docs/tree-plant/probes/d1-doc-sync.mjs | D1 |
 
-（长叶阶段：空段/无模型信息/超长命令截断/暂停后新内容/12 行临界/失败步/思考无文字/时间戳缺失的历史会话，归入 `leaf`，不单独立枝。）
+顺序依据：契约新面（retry 透传/failover 主干路径）与高风险枝（failover 边界）先行；文档同步枝
+不动运行时行为，置后。异常、兜底、边界类目标（坏 state 防御、幂等重导、中止不清 mark）归长叶
+单测层，不单独立枝。
 
 ## 非功能设计
 
 | 项 | 类别 | 不做会怎样 | 预计多久出问题 |
 |---|---|---|---|
-| 计时器生命周期：unmount 清理、页面隐藏暂停、只更新 chip 文本不重算段 | 可靠性/性能 | 多个过程卡各持 interval，卸载不清理会持续重渲染；页面隐藏仍在跑白烧 CPU | 一次 packed 长回合、多卡同屏即出现 |
-| 高度上限在任意内容下成立（行高固定 24px、行间无间隙、长命令/长参数截断） | 可靠性 | 超出上限的卡把对话流挤走，用户回到「太长了」的原问题 | 首个长回合 |
-| 进行中的自动跟随只听用户滚动：窗口挂载首帧与内容变化期间会被量成未贴底，据此停吸会留下不该有的「回到最新」且新行不再跟随；窗口内的入场动效只用透明度（位移同样会临时撑大内容高度） | 可靠性 | 卡头常驻「回到最新」；长回合里新行滚出视口，看不到最新进度 | 每个回合开始时 |
-| live ≡ reload：同一现象两通路同形（合成 entry 与真实 entry 派生同字段） | 可靠性 | 实时看到切换行、重开会话消失（或反之），用户不信任记录 | 首次重开会话 |
-| 每秒 tick 的更新范围限定在 chip 文本（不触发段重算/列表重排） | 性能 | 长回合里每秒全量重渲染，滚动卡顿 | 数百步的回合 |
+| 持久化 router state 防御解析（parseFailoverState：坏形状 → 空集、保序、不抛） | 可靠性 | session jsonl 可被手工编辑 / 跨版本 fork，坏形状 state 直达求值会抛异常炸掉整条路由（会话卡死） | 事件驱动：手改 / fork 即发（无固定时长） |
+| burn 决策幂等重导（跳过虚拟模型消息向前找物理结局） | 可靠性 | 连续多轮路由失败（无候选 throw）后 burn 丢失 → 故障端点恢复首选，用户再打一次故障端点 | 事件驱动：单端点路由无候选连续失败即发 |
+| 链内失败计数退役（计数生命周期 = 活跃重试链） | 可靠性 | 旧计数被观察跳过（模型切走切回/端点移出配置）后孤立 → 后续账户类 fail-fast 误判「预算用尽」→ 误 burn + 向候选漂移（账户错误被掩盖——修剪实证 P1，T9 锁定） | 事件驱动：切模型/改配置后遇账户类错误即发；退役只在链边界求值发生（链中压缩的 direct 求值不碰计数——修剪复审 F1/T12） |
+| 真实错误呈现（不造二手错误） | 业务安全 | 二手中文错误替换真实 524：用户无法排障、retry 链被杀死（已实证：session 01a202a5，route-3 持续 25h 失败） | 已实证发生（本次修复根因） |
+| 零时间机制合规（无定时器 / 无墙钟 / 无轮询 / 无退避自旋） | 业务安全（ADR-0190 合规） | 违反时间阈值判死禁令，pre-commit / CI 机器检查拦截 | 即时（引入即被拦） |
+| 降级统一出口（路由失败全部走闭包 throw 结构化错误，AX5 既有形态） | 可靠性 | 多入口各自 try/catch → 降级方向与日志形态漂移；本修订不新增错误入口（删一个） | 三个月（新增失败路径时） |
+| router state 存储格式演进（`{burnt: string[]}`，v1 首版） | 可靠性 | 无声明则未来加字段时旧 session 解析行为未定义（抛异常或静默丢偏好） | 三个月内（首次扩展 state 字段时）——处置：不迁移；旧形状缺字段 → 空集（软避让退回配置序，单轮代价），坏形状同契约（见 api.md 存储节） |
 
 ### 显式不做
 
 | 项 | 理由 | 题面提及 | 重审触发 |
 |---|---|---|---|
-| 连续切换合并成一行（写最早→最后，中途进悬停） | 每次切换是独立事实，合并需引入相邻判定与额外展示状态；先逐条记录，真实噪声出现再合并 | 否 | 真实使用中 1 秒内出现 ≥3 次切换 |
-| 切换来源归属（定时任务名） | pi `model_select` 不带来源信息，scheduler 只调 `pi.setModel`；要归属需扩展另发上下文信号 | 否 | 用户把定时任务切换误读为手切（反馈记录出现时） |
-| 思考文字多行预览（窗口里一次露多行） | 用户裁决「一个 block 一行」；全文通过点开查看 | 是 | 题面口径变化（要求预览多行）时 |
-| 卡片内搜索/过滤 | 未过三个月判据 | 否 | 窗口内行数 × 回合数使定位成本明显上升（用户反馈检索困难时） |
-| 轮头的思考/工具计数标签改造 | 原型各处不统一（部分轮头带、部分不带），没有可对齐的目标形态；保持现状 | 否 | 原型给出统一形态时 |
-| 各步计时起点的口径修正 | 现象已登记：工具步的计时起点早于实际开始执行（命令刚开始执行，卡头活动计时已显示 23s），轮头计时与窗口内各步耗时之和对不上与此同源；修正要动工具调用时间戳的来源，不属本交付 | 否 | 起点来源核实后另立任务 |
-| 模型切换展示字段的持久化格式演进（格式版本 / 迁移 / 重建代价） | 本交付不新增持久化格式：`model_change` 由 pi 写入、本交付只读；project 不引入新字段落盘，旧会话无需改写（格式版本 = 无新增，不迁移，重建代价 = 0） | 否 | pi 升级改变 `model_change` entry 结构（发行说明或回放用例开始失败时） |
+| 修复 opendesign 上游端点本身的故障（route-3 当前仍故障态） | 本交付只改重试 / failover 语义与错误呈现，上游 524 是端点事实不是路由 bug | 否 | 上游恢复或更换端点供应商时 |
+| retry-rules 基线 generic-5xx 补 524 | 透传后终端错误是真实 524，pi 原生词表已含 524、重试不受影响；该条只影响 taiji 设置页分类展示与收尾失败分类（题面遗留事项 1，注明"独立小改"） | 否 | taiji 分类展示与 pi 原生词表分化误判时 / 设置页失败分类投诉 |
+| direct 求值（压缩摘要）的 burnt 感知 | pi 契约 direct 不传 state（virtual-models.d.ts:53-54,65-67）——burnt 不从 state 生效，软避让退回配置序（压缩摘要可能选中 burnt 端点一次，可接受）；实装按此登记实现（终局观察只在链边界跑，direct 不观察不碰计数——修剪复审 F1 修正了「观察从 messages 重导」的越界实装） | 否 | pi 为 direct 求值透传 router state（virtual-models.d.ts:54 改约）时重裁——届时 burnt 从 state 生效、重导退为兜底 |
+| 链内失败计数跨进程重启保持 | 计数是闭包内存（生命周期 = 活跃重试链）；resume 后旧终局错误按 fail-fast 重导一次、再烧一轮预算才 burnt | 否 | resume 后 failover 延迟一轮形成用户可感知投诉时 |
+| TUI / 设置页侧新增交互（burnt 可视化等） | 题面要求规则固定、无新配置项——不引入任何 UI 面 | 否（题面"无新配置项"反向约束） | 用户要求可视化 burnt 状态时 |
+| extensions lint 的 stale-ctx 普查缺口登记 | 存量问题（provider-aggregation 未登记进 stale-ctx-audit.md §3），非本次引入；阻断 `pnpm extensions:lint`，本次用包级 eslint 绕过验证 | 否（题面遗留事项 3） | 下次跑全量 extensions:lint 前 |

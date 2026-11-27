@@ -43,7 +43,7 @@ import { runWorkflow } from "@zhushanwen/subagent-core/orchestration/lifecycle.t
 import { getModelConfigService } from "@zhushanwen/subagent-core/execution/assembly/model-config-service.ts";
 import { SLUG_MAX_LENGTH } from "@zhushanwen/subagent-core";
 import {
-  FAN_OUT_SCRIPT_NAME,
+  BATCH_SCRIPT_NAME,
   generateBatchSlug,
   registerSubagentsTool,
   runSubagentsBatch,
@@ -106,26 +106,28 @@ function captureSubagentsTool(
 
 // ── registry / deps stubs ──
 
-/** fan-out 执行体 stub（toExecutable 形态与真 WorkflowScript 同签名）。 */
-function makeFanOutScript() {
+/** batch 执行体 stub（toExecutable 形态与真 WorkflowScript 同签名）。 */
+function makeBatchScript() {
   return {
-    name: FAN_OUT_SCRIPT_NAME,
-    path: "/builtin/workflows/fan-out.js",
+    name: BATCH_SCRIPT_NAME,
+    path: "/builtin/workflows/batch.js",
     available: true,
-    sourceCode: "// fan-out source",
+    sourceCode: "// batch source",
     meta: {
       description: "N 个已知独立任务并行派发并全量收集",
       parameters: { type: "object", properties: { tasks: { type: "array" } } },
     },
-    toExecutable: () => "// fan-out executable",
+    toExecutable: () => "// batch executable",
   };
 }
 
-function makeRegistry(script?: ReturnType<typeof makeFanOutScript>): Record<string, unknown> {
+function makeRegistry(script?: ReturnType<typeof makeBatchScript>): Record<string, unknown> {
   return {
-    get: vi.fn().mockResolvedValue(script ?? makeFanOutScript()),
-    getPath: vi.fn().mockResolvedValue(undefined),
-    loadAll: vi.fn().mockResolvedValue([script ?? makeFanOutScript()]),
+    // 按名发现（project 级同名 workflow 会在此胜出——固定执行体不走这条路）
+    get: vi.fn().mockResolvedValue(script ?? makeBatchScript()),
+    // 按绝对路径加载（固定执行体的唯一解析通道）
+    getPath: vi.fn().mockResolvedValue(script ?? makeBatchScript()),
+    loadAll: vi.fn().mockResolvedValue([script ?? makeBatchScript()]),
     invalidate: vi.fn(),
   };
 }
@@ -258,22 +260,22 @@ describe("schema 契约：一跳扁平 + 成员对象 tasks 必填 + 常驻", ()
     expect(TOOL_SRC).not.toContain("Type.Array(");
   });
 
-  it("tasks.minItems/maxItems 与 fan-out 模板 @pi-meta 同值（声明与执行同源，双源漂移即红）", () => {
+  it("tasks.minItems/maxItems 与 batch 模板 @pi-meta 同值（声明与执行同源，双源漂移即红）", () => {
     // 本包 typebox mock 丢 options（文件头注），maxItems 同步对拍走源码级：SW 声明面
-    // （subagent-tool-schema.ts）与 fan-out 执行面（@pi-meta parameters 块）各恰一处
+    // （subagent-tool-schema.ts）与 batch 执行面（@pi-meta parameters 块）各恰一处
     // maxItems 且同为 20——任何一侧单改即红（执行侧值另由 subagent-core 的
-    // fan-out-script.test.ts 锁定）。
+    // batch-script.test.ts 锁定）。
     const singleMaxItems = (src: string, label: string): number => {
       const found = [...src.matchAll(/maxItems:\s*(\d+)/g)];
       expect(found, `${label} 恰好一处 maxItems 声明（新增声明须同步更新本对拍）`).toHaveLength(1);
       return Number(found[0]?.[1]);
     };
-    const fanOutSrc = readFileSync(
-      join(__dirname, "../../../../../../../packages/subagent-core/workflows/fan-out.js"),
+    const batchSrc = readFileSync(
+      join(__dirname, "../../../../../../../packages/subagent-core/workflows/batch.js"),
       "utf-8",
     );
     expect(singleMaxItems(SCHEMA_SRC, "subagent-tool-schema.ts")).toBe(20);
-    expect(singleMaxItems(fanOutSrc, "fan-out.js @pi-meta")).toBe(20);
+    expect(singleMaxItems(batchSrc, "batch.js @pi-meta")).toBe(20);
   });
 
   it("常驻（2026-10-23 二次裁决：先收起后转回常驻）：不写 exposure 字段（SDK 缺省 direct，pi-semantics PS-91）", () => {
@@ -357,7 +359,7 @@ describe("GUI attach（execute 级 RPC/非 RPC 分发）", () => {
   });
 });
 
-describe("handler 组装：runWorkflow('fan-out') 确定性映射（成员对象 args）", () => {
+describe("handler 组装：runWorkflow('batch') 确定性映射（成员对象 args）", () => {
   it("全参数调用 → spec 逐字段映射（运行级 agent 填入未指定成员；model/thinkingLevel 不复制进成员）", async () => {
     const registry = makeRegistry();
     const result = await runSubagentsBatch(
@@ -376,11 +378,14 @@ describe("handler 组装：runWorkflow('fan-out') 确定性映射（成员对象
       undefined,
     );
 
-    expect(registry.get).toHaveBeenCalledWith(FAN_OUT_SCRIPT_NAME);
+    // 固定执行体按 core 内置绝对路径解析（不经按名发现——MF-1 回归锚见下）
+    expect(vi.mocked(registry.get)).not.toHaveBeenCalled();
+    expect(vi.mocked(registry.getPath)).toHaveBeenCalledTimes(1);
+    expect(String(vi.mocked(registry.getPath).mock.calls[0]?.[0])).toMatch(/workflows\/batch\.js$/);
     const spec = lastSpec();
-    expect(spec.scriptSource).toBe("// fan-out executable");
-    expect(spec.scriptName).toBe(FAN_OUT_SCRIPT_NAME);
-    expect(spec.scriptPath).toBe("/builtin/workflows/fan-out.js");
+    expect(spec.scriptSource).toBe("// batch executable");
+    expect(spec.scriptName).toBe(BATCH_SCRIPT_NAME);
+    expect(spec.scriptPath).toBe("/builtin/workflows/batch.js");
     expect(spec.parameters).toEqual({ type: "object", properties: { tasks: { type: "array" } } });
     // 运行级 agent 填入未指定 agent 的成员（成员 [0] 已显式指定保持，成员 [1] 填入缺省）；
     // model/thinkingLevel 不复制进成员——留空给 $MODEL/$THINKING_LEVEL 继承。
@@ -401,7 +406,7 @@ describe("handler 组装：runWorkflow('fan-out') 确定性映射（成员对象
     expect(result.details).toMatchObject({
       runId: "wf-1700000000000-abcd",
       status: "running",
-      scriptName: FAN_OUT_SCRIPT_NAME,
+      scriptName: BATCH_SCRIPT_NAME,
       slug: "foo-tri-review",
       taskCount: 2,
       stateFile: "/tmp/state/wf-1700000000000-abcd.jsonl",
@@ -464,22 +469,22 @@ describe("handler 组装：runWorkflow('fan-out') 确定性映射（成员对象
 });
 
 // ══════════════════════════════════════════════════════════════
-describe("slug 缺省生成 fan-out-<时间短码>（D8 状态侧辨识）", () => {
+describe("slug 缺省生成 batch-<时间短码>（D8 状态侧辨识）", () => {
   it("generateBatchSlug 形态稳定且 ≤ SLUG_MAX_LENGTH(35)", () => {
-    expect(generateBatchSlug(0)).toBe("fan-out-0");
+    expect(generateBatchSlug(0)).toBe("batch-0");
     const slug = generateBatchSlug(1700000000000);
-    expect(slug).toMatch(/^fan-out-[0-9a-z]+$/);
+    expect(slug).toMatch(/^batch-[0-9a-z]+$/);
     expect(slug.length).toBeLessThanOrEqual(SLUG_MAX_LENGTH);
   });
 
   it("未提供 slug → spec.slug 为生成值（不是 undefined/空）", async () => {
     await runSubagentsBatch({ tasks: TWO_TASKS }, makeDeps(makeRegistry()) as never, undefined);
-    expect(String(lastSpec().slug)).toMatch(/^fan-out-[0-9a-z]+$/);
+    expect(String(lastSpec().slug)).toMatch(/^batch-[0-9a-z]+$/);
   });
 
   it("空白 slug 按缺省处理；显式 slug 原样透传", async () => {
     await runSubagentsBatch({ tasks: TWO_TASKS, slug: "   " }, makeDeps(makeRegistry()) as never, undefined);
-    expect(String(lastSpec().slug)).toMatch(/^fan-out-[0-9a-z]+$/);
+    expect(String(lastSpec().slug)).toMatch(/^batch-[0-9a-z]+$/);
 
     vi.mocked(runWorkflow).mockClear();
     await runSubagentsBatch({ tasks: TWO_TASKS, slug: "tri-review" }, makeDeps(makeRegistry()) as never, undefined);
@@ -489,7 +494,7 @@ describe("slug 缺省生成 fan-out-<时间短码>（D8 状态侧辨识）", () 
   it("生成的 slug 出现在启动文案与 details（状态侧/文本面可对账）", async () => {
     const result = await runSubagentsBatch({ tasks: TWO_TASKS }, makeDeps(makeRegistry()) as never, undefined);
     const generated = result.details.slug;
-    expect(String(generated)).toMatch(/^fan-out-[0-9a-z]+$/);
+    expect(String(generated)).toMatch(/^batch-[0-9a-z]+$/);
     expect(result.content[0].text).toContain(`Started batch '${String(generated)}'`);
   });
 });
@@ -632,26 +637,26 @@ describe("错误规格（成员 task 空白带下标 + 既有入口 fail-fast）
     expect(vi.mocked(runWorkflow)).not.toHaveBeenCalled();
   });
 
-  it("fan-out 执行体缺席/不可用 → throw 带恢复动作 + 可用清单（按名解析失败的自救指引）", async () => {
+  it("batch 执行体缺席/不可用 → throw 带恢复动作 + 可用清单（按名解析失败的自救指引）", async () => {
     const registry = {
-      get: vi.fn().mockResolvedValue(undefined),
+      get: vi.fn().mockResolvedValue(makeBatchScript()),
       getPath: vi.fn().mockResolvedValue(undefined),
-      loadAll: vi.fn().mockResolvedValue([makeFanOutScript()]),
+      loadAll: vi.fn().mockResolvedValue([makeBatchScript()]),
       invalidate: vi.fn(),
     };
     const err = await runSubagentsBatch({ tasks: TWO_TASKS }, makeDeps(registry) as never, undefined)
       .catch((e: unknown) => e as Error);
-    expect(err.message).toContain(`Built-in workflow 'fan-out' is not available`);
+    expect(err.message).toContain(`Built-in workflow 'batch' is not available`);
     expect(err.message).toContain("Recovery:");
-    expect(err.message).toContain("  - fan-out:");
+    expect(err.message).toContain("  - batch:");
     expect(vi.mocked(runWorkflow)).not.toHaveBeenCalled();
   });
 
   it("available:false stub 同样走 fail-fast（不静默空源码启动）", async () => {
-    const ghost = { ...makeFanOutScript(), available: false };
+    const ghost = { ...makeBatchScript(), available: false };
     const registry = {
       get: vi.fn().mockResolvedValue(ghost),
-      getPath: vi.fn().mockResolvedValue(undefined),
+      getPath: vi.fn().mockResolvedValue(ghost),
       loadAll: vi.fn().mockResolvedValue([]),
       invalidate: vi.fn(),
     };
@@ -659,6 +664,31 @@ describe("错误规格（成员 task 空白带下标 + 既有入口 fail-fast）
       runSubagentsBatch({ tasks: TWO_TASKS }, makeDeps(registry) as never, undefined),
     ).rejects.toThrow(/not available/);
     expect(vi.mocked(runWorkflow)).not.toHaveBeenCalled();
+  });
+
+  it("MF-1 回归锚：project 级同名 workflow 遮蔽不到固定执行体（按名解析通道不被调用）", async () => {
+    // 发现序 project 级 > npm 槽（内置模板所在槽）：用户/项目里一个同名
+    // .pi/workflows/batch.js 会在按名发现里整体顶替内置模板。固定执行体必须走
+    // 内置绝对路径（registry.getPath），按名通道一次都不该被触碰。
+    const registry = makeRegistry();
+    const userShadow = {
+      ...makeBatchScript(),
+      name: "batch",
+      path: "/ws/.pi/workflows/batch.js",
+      sourceCode: "// user project shadow",
+      toExecutable: () => "// user project shadow",
+    };
+    vi.mocked(registry.get).mockResolvedValue(userShadow);
+
+    await runSubagentsBatch({ tasks: TWO_TASKS }, makeDeps(registry) as never, undefined);
+
+    expect(vi.mocked(registry.get)).not.toHaveBeenCalled();
+    const pathArg = String(vi.mocked(registry.getPath).mock.calls[0]?.[0] ?? "");
+    expect(pathArg).toMatch(/workflows\/batch\.js$/);
+    expect(pathArg).not.toContain(".pi/workflows");
+    // 派发用的是内置执行体（stub 的 path/sourceCode），不是用户脚本
+    expect(lastSpec().scriptPath).toBe("/builtin/workflows/batch.js");
+    expect(lastSpec().scriptSource).toBe("// batch executable");
   });
 });
 
@@ -739,7 +769,7 @@ describe("TUI 渲染（renderCall/renderResult 既有惯例）", () => {
   it("renderResult 透出返回文案（多行保留）", () => {
     const tool = captureSubagentsTool({ isProcessing: false }, makeRegistry());
     const text = renderedText(tool.renderResult(
-      { content: [{ type: "text", text: "Started batch 'x' (wf-1) as workflow run 'fan-out'" }] },
+      { content: [{ type: "text", text: "Started batch 'x' (wf-1) as workflow run 'batch'" }] },
       undefined,
       makeTheme(),
     ));

@@ -1,25 +1,27 @@
 # 实机验收 case
 
-每条 case 必须在真实宿主/真实进程上执行；命令不得是单测 runner 或 mock 形态（root gate 拒绝）。
-真机 case 统一走开发实例装配（真 Electron + 真 pi 子进程 + 真扩展装载 + faux 演员），探针脚本内嵌装配/断言/收尾（scripts/acceptance/）。
-预期判据用分号分隔：`exit:0`（缺省）、`contains:子串`、`not-contains:子串`。
-关联列 = `trunk` 或枝名（与设计文档树形拆分一致）。
+每条 case 在真实宿主上执行：本机 pi 二进制（`--mode rpc`，版本 1.0.0）经 jiti 装载真实扩展源码
+`extensions/universal/provider-aggregation/src/index.ts`；端点 = 探针自建的本机 HTTP 故障注入
+服务器（openai-completions 协议，剧本 = 524 / insufficient_quota / 恢复）。断言源 = pi 的 RPC
+事件流（auto_retry 事件族）、上游请求序列、会话 jsonl 落盘（含 pi.virtual-model-state 条目）。
+探针共享基座 = `docs/tree-plant/probes/lib/harness.mjs`（随交付物入库）。单测归长叶阶段
+（testCommand），不进本表。
 
 | 编号 | 场景 | 命令 | 预期 | 关联 |
 |---|---|---|---|---|
-| AC-H12 | 真机：长回合里过程卡窗口不超过 12 行（卡片 ≤ 316px、窗口 ≤ 288px、行高 24px、行间无间隙、窗口内 12 整行可见） | node scripts/acceptance/tape-height.mjs | exit:0;contains:OK-H12 | trunk |
-| AC-LOOK | 真机：过程卡长相对齐原型（卡片底色/圆角/内边距；卡头 24px、计数「N 步 · 思考 M」、箭头、无总耗时；行 24px 无间隙；命令行不带工具名、命令与耗时等宽 12px；无分组标题行；滚动条隐藏；进行中轮头亮度不变） | node scripts/acceptance/tape-look.mjs | exit:0;contains:OK-LOOK | tape-look |
-| AC-MOTION | 真实浏览器（离线最小页）：带位移的入场动效会临时增大滚动容器的内容高度，只用透明度的动效不改变它 | node scripts/acceptance/motion-overflow.mjs | exit:0;contains:OK-MOTION | tape-look |
-| AC-THINK | 真机：已结束的思考占一行且不带正文；点开后全文区在场；进行中的思考只露最新一行、无标签行 | node scripts/acceptance/tape-think.mjs | exit:0;contains:OK-THINK | tape-think |
-| AC-CHIP | 真机：卡头活动 chip = 类型词 + 计时，计时随时间增长；窗口内没有第二个实时递增的计时（行内历史耗时不计） | node scripts/acceptance/tape-live.mjs | exit:0;contains:OK-CHIP | tape-live |
-| AC-RUN | 真机：执行中的命令行行尾显示最新一行输出与光标 | node scripts/acceptance/tape-live.mjs | exit:0;contains:OK-RUN | tape-live |
-| AC-LIVE | 真机：内容不满 12 行时无滚动提示；满 12 行后贴底跟随并提示「更早 N 条」；上滚后停吸并提示「回到最新」，点击恢复；上沿淡出在场 | node scripts/acceptance/tape-scroll.mjs | exit:0;contains:OK-LIVE | tape-scroll |
-| AC-SETTLE | 真机：回合落成后过程卡收成一行；点卡头展开 12 行窗口并从第一条读起；再点收起 | node scripts/acceptance/tape-settle.mjs | exit:0;contains:OK-SETTLE | tape-settle |
-| AC-DETAIL | 真机：窗口里点一条工具行，右侧详情抽屉打开 | node scripts/acceptance/tape-settle.mjs | exit:0;contains:OK-DETAIL | tape-settle |
-| AC-MSW-REPLAY | 回放：真实 pi session JSONL 经 core reducer 派生切换行，前后模型正确 | node scripts/acceptance/msw-replay.mjs | exit:0;contains:OK-REPLAY | msw-replay |
-| AC-MSW-DEDUPE | 回放：同模型重复写入的 model_change 不出行；会话首个 model_change 不出行 | node scripts/acceptance/msw-replay.mjs | exit:0;contains:OK-DEDUPE | msw-replay |
-| AC-CORE-EQUIV | 同形：实时合成 entry 与真实 entry 派生出的切换行字段一致（live ≡ reload） | node scripts/acceptance/msw-equivalence.mjs | exit:0;contains:OK-EQUIV | msw-replay |
-| AC-MSW-LIVE | 真机：切换模型成功后，回合之间出现切换行（横线分隔行族） | node scripts/acceptance/msw-live.mjs | exit:0;contains:OK-LIVE-MSW | msw-live |
-| AC-MSW-MID | 真机：回合进行中切换，切换行出现在该回合内部、新模型内容之前 | node scripts/acceptance/msw-mid.mjs | exit:0;contains:OK-MID | msw-ui |
-| AC-MSW-ICON | 真机：切换行行首图标为 box（非 cpu/双箭头） | node scripts/acceptance/msw-icon.mjs | exit:0;contains:OK-ICON | msw-ui |
-| AC-I18N | 静态：新增文案在中英两侧 key 对齐 | python3 .githooks/check_i18n_locale_sync.py | exit:0 | i18n-final |
+| T1 | retry 透传 + 真实错误呈现：单端点路由持续 524，重试全打同一端点，终局错误是上游 524 全文（非「上一端点失败且无其他可用端点」） | node docs/tree-plant/probes/t1-retry-passthrough.mjs | exit:0;contains:✓ T1 | trunk |
+| T2 | failover 端到端 + state 持久化：双端点路由 fault-a 用尽预算后，下一轮 burnt 并切 fault-b，会话落 virtual-model-state | node docs/tree-plant/probes/t2-failover.mjs | exit:0;contains:✓ T2 | trunk |
+| T7 | 透传不复查条件：额度条件链中翻到不满足，重试仍打原端点（旧实现此形态下第 2 次求值即抛路由错误） | node docs/tree-plant/probes/t7-passthrough-ignores-conditions.mjs | exit:0;contains:✓ T7 | trunk |
+| T3 | fail-fast 不换端点：429 insufficient_quota（pi 不重试）→ 两轮都选主端点，候选零请求 | node docs/tree-plant/probes/t3-failfast.mjs | exit:0;contains:✓ T3 | failover-edges |
+| T4 | 全 burnt 轮换重探 + 成功康复清 burn：单端点烧掉预算后仍原样重试，恢复即清 mark | node docs/tree-plant/probes/t4-rotation-clear.mjs | exit:0;contains:✓ T4 | failover-edges |
+| T5 | 预算从 settings 实读：retry.maxRetries=1 → 只重试 1 次即 burnt failover（非硬编码 3） | node docs/tree-plant/probes/t5-budget-from-settings.mjs | exit:0;contains:✓ T5 | failover-edges |
+| T6 | 路由自身失败后幂等重导：链中改配置造无候选 → 虚拟 error 入投影 → 恢复配置后跳过虚拟消息重导 burn 并 failover | node docs/tree-plant/probes/t6-rederive.mjs | exit:0;contains:✓ T6 | failover-edges |
+| T8 | 重试停用即时 failover：retry.enabled=false → 预算读为 0 → 终局 error 即 burnt 换端点 | node docs/tree-plant/probes/t8-retry-disabled-failover.mjs | exit:0;contains:✓ T8 | failover-edges |
+| T9 | 修剪 P1：模型切换 away-and-back 后账户类 fail-fast 不误烧（链内计数退役，零 state 条目） | node docs/tree-plant/probes/t9-model-switch-no-misburn.mjs | exit:0;contains:✓ T9 | failover-edges |
+| T10 | 修剪 P3：单端点 burnt 稳态不重复落 state（轮换引用纪律，4 轮 1 条） | node docs/tree-plant/probes/t10-steady-state-no-duplicate-state.mjs | exit:0;contains:✓ T10 | failover-edges |
+| T11 | 修剪 P2：链中端点被改指向——divert 的重试也计数，第二轮即 burnt failover | node docs/tree-plant/probes/t11-midchain-repoint-accounting.mjs | exit:0;contains:✓ T11 | failover-edges |
+| T12 | 修剪复审 F1：链中压缩（direct 求值）不抹在途链的预算记账——第三轮仍 burnt failover | node docs/tree-plant/probes/t12-midchain-compaction-accounting.mjs | exit:0;contains:✓ T12 | failover-edges |
+| D1 | 文档同步静态对账：route-matrix.md 新章 / domain-model.md / SKILL.md 旧措辞清零 + routes schema 零新键 | node docs/tree-plant/probes/d1-doc-sync.mjs | exit:0;contains:✓ D1 | docs-sync |
+
+<!-- 命令形态：驱动真实宿主二进制（pi）与真实子进程；探针脚本随交付物入库。
+     接口核实表（fact-check.md）每一行至少被一条 case 覆盖。 -->

@@ -369,10 +369,11 @@ async function main() {
     process.exit(1)
   }
 
-  // ── 定位 workspace（原 bash 以脚本自身路径向上找 .bare，Node 同锚点，不依赖 cwd）──
+  // ── 定位 workspace（以脚本自身路径为锚：本文件恒从 main worktree 副本调起，
+  //    双布局下向上均能命中——bare 布局命中 .bare 容器，普通布局命中主仓 .git）──
   const WS_ROOT = findWorkspaceRoot(dirname(fileURLToPath(import.meta.url)))
   if (WS_ROOT === null) {
-    fail('Error: 未找到 workspace 根（向上查找含 .bare/ 的目录失败）')
+    fail('Error: 未找到 workspace 根（bare 布局向上无 .bare/，且回退 git rev-parse 也未命中仓库）')
     process.exit(1)
   }
   const MAIN_WT = mainWorktreePath(WS_ROOT)

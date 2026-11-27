@@ -5,7 +5,8 @@
  * 生成替换脚本/参数，触发替换动作（mac/linux spawn detached bash，win 返回 NSIS 参数）。
  *
  * [HISTORICAL] 不变量：
- * - mac：detached bash 脚本（staging 状态机，含 sha256 二次校验），prepareUpdate 内已 spawn
+ * - mac：detached bash 脚本（staging 状态机，含 sha256 二次校验），prepareUpdate 内已 spawn；
+ *   sha256 槽位按 process.arch 选（arm64 → macArm64Dmg / x64 → macX64Dmg，双架构自动升级）
  * - linux：AppImage 走 detached 脚本（与 mac 一致，避免双实例）；deb 包（APPIMAGE undefined）走 unsupported
  * - win：cmd wrapper（设计 §3.4 批次 2）——prepareUpdate 内写盘 updater.cmd +
  *   detached spawn，返回 detached-script（三平台统一语义）；sha256 缺失 throw
@@ -38,6 +39,7 @@ import { buildLinuxUpdaterScript, buildUpdaterScript } from './updater-script.js
 import { buildWinUpdaterCmd } from './win-updater-cmd.js'
 import { UpdateError, UpdateUnsupportedError } from './types.js'
 import type { UpdateScriptRef } from './types.js'
+import { macDmgAssetKeyForArch } from './pick-platform-asset.js'
 
 /** updater 脚本文件权限（rwxr-xr-x）：写盘 + chmod 共用，确保 detached bash 可执行。 */
 const UPDATER_SCRIPT_MODE = 0o755
@@ -98,10 +100,12 @@ export class MacUpdater implements PlatformUpdater {
     if (!appBundle.endsWith('.app')) {
       throw new UpdateError(`unexpected app bundle path (not .app): ${appBundle}`, 'replacing')
     }
-    // toLowerCase：GitHub digest 可能返回大写 hex，而 updater.sh 的 `shasum -a 256`
-    // 输出小写。注入前统一小写，避免 [ "$ACTUAL" != "$SHA256" ] 字符串比较大写 vs 小写
-    // 误判为不匹配（导致正确下载被错误回滚）。download-asset.ts 的下载期校验已小写化。
-    const sha256 = release.assets.macArm64Dmg?.sha256?.toLowerCase()
+    // sha256 取当前架构对应 dmg 槽位（darwin 双架构：arm64 → macArm64Dmg，
+    // x64 → macX64Dmg；与 pickPlatformAsset 分流同源）。toLowerCase：GitHub digest
+    // 可能返回大写 hex，而 updater.sh 的 `shasum -a 256` 输出小写。注入前统一小写，
+    // 避免 [ "$ACTUAL" != "$SHA256" ] 字符串比较大写 vs 小写误判为不匹配（导致
+    // 正确下载被错误回滚）。download-asset.ts 的下载期校验已小写化。
+    const sha256 = release.assets[macDmgAssetKeyForArch(process.arch)]?.sha256?.toLowerCase()
     if (!sha256) throw new UpdateError('mac asset missing sha256', 'downloading')
     const script = buildUpdaterScript({
       appBundle,

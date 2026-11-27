@@ -463,7 +463,10 @@ const { stickToBottom, showJumpButton, onScroll, onWheel, onTouchStart, onTouchM
     follow: useVirtuaFollow({
       vlistRef,
       itemCount: () => streamItems.value.length, // [D1] 末项索引直取数据源（= :data 同一 streamItems 基准）
-      endOffset: () => tailHeight.value,
+      // [batch2 F4] D2 endOffset = tailHeight + headOffset：tailHeight 补 Virtualizer 之后的尾部块，
+      // headOffset 补 contentWrapEl 之前的流内前置 spacer（padTop）——virtua container-driver $scroll
+      // 目标公式不含此前置兄弟，补偿后贴底 follow 落点 = 真实底部（gap 记账误差归零），浏览器 clamp 自收敛。
+      endOffset: () => tailHeight.value + headOffset.value,
       // [缺陷①] 流式增长期禁 smooth：胶囊点击降级即时跳（根因链见 useVirtuaFollow opts 注释）
       smoothAllowed: () => !hasStreamingTurn.value,
     }),
@@ -473,7 +476,7 @@ const { stickToBottom, showJumpButton, onScroll, onWheel, onTouchStart, onTouchM
 
 // [D3/D5] 跟随触发编排（触发语义见 useMessageStreamFollowTriggers 头注释）：[F1] 提交序号
 // 递增强制回底；[F2] RO/条数 watch 喂脱离态几何快照（guard 在原语内聚）。
-const { contentWrapEl, tailEl, tailHeight } = useMessageStreamFollowTriggers({
+const { contentWrapEl, tailEl, tailHeight, headOffset } = useMessageStreamFollowTriggers({
   renderItems,
   submitSeq: () => chat.getSubmitSeq(props.sessionId),
   scrollEl,

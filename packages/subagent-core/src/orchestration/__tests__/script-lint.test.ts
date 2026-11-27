@@ -12,7 +12,7 @@
  */
 import { describe, it, expect } from "vitest";
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { lintAgentMeta, lintScript } from "../../shared/script-lint.ts";
@@ -794,10 +794,13 @@ describe("m4 W1-W5: meta 质量 lint", () => {
     expect(findings[0]!.message).toContain("上限");
   });
 
-  it("TC9: 5 内置真实 workflow 过 W1-W5（lintScript valid 无 meta 质量 error）", () => {
-    const files = ["chain", "parallel", "scatter-gather", "map-reduce", "review-fix-loop"];
+  it("TC9: 内置真实 workflow 全量过 W1-W5（lintScript valid 无 meta 质量 error；清单随 workflows/ 目录派生，新增模板自动入检）", () => {
+    // 目录派生而非硬编码清单：fan-out / batch 加入内置族时曾因清单停在 5 件而免检
+    // （S-2/S-9，dev-merge 合入点审查）——写死数量等于新模板的 meta 质量无守。
+    const files = readdirSync(WORKFLOWS_DIR).filter((f) => f.endsWith(".js")).sort();
+    expect(files.length, "内置模板目录为空 = 路径锚或产物形态变了，对账失效").toBeGreaterThan(0);
     for (const f of files) {
-      const src = readFileSync(join(WORKFLOWS_DIR, `${f}.js`), "utf-8");
+      const src = readFileSync(join(WORKFLOWS_DIR, f), "utf-8");
       // F11：先断言 meta 真实解析成功——防 parse 失败时 W1-W3 整体跳过真空通过
       const meta = parseResourceMeta(src, "workflow");
       expect(meta, `${f} meta 解析`).not.toBeNull();

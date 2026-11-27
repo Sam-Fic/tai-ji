@@ -49,7 +49,7 @@
     />
     <UserBubble
       v-else-if="turn.user"
-      :turn="turn"
+      :user="turn.user"
       :session-id="sessionId"
       :can-edit="canEdit"
       :is-session-editable="isSessionEditable"
@@ -221,9 +221,10 @@
           >
             <template v-if="isActionsAnchor(unit)" #turn-actions>
               <TurnSummary
-                :turn="turn"
+                :last-assistant-id="lastAssistant?.id ?? null"
+                :is-streaming="isStreaming"
                 :session-id="sessionId"
-                :last-assistant="lastAssistant"
+                :resolve-last-assistant="getLastAssistant"
               />
             </template>
           </TextRow>
@@ -284,15 +285,7 @@ import type { Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Bell, CheckCircle2, TriangleAlert } from '@lucide/vue'
 import type { FoldedNoticeRow, MessageTurn, NotifyOutcome } from '@taiji/core/domain/chat'
-import {
-  countThinking,
-  countToolCalls,
-  deriveFoldedNoticeRows,
-  deriveTurnAggregates,
-  isBashCompleteNotice,
-  isHandoffInstructionNotice,
-  turnStableId,
-} from '@taiji/core/domain/chat'
+import { countThinking, countToolCalls, deriveFoldedNoticeRows, deriveTurnAggregates, isBashCompleteNotice, isHandoffInstructionNotice, turnStableId } from '@taiji/core/domain/chat'
 import ChangeSetCard from './ChangeSetCard.vue'
 import UserBubble from './UserBubble.vue'
 import TurnMeta from './TurnMeta.vue'
@@ -481,6 +474,11 @@ const lastAssistant = computed(() => {
   const as = props.turn.assistants
   return as[as.length - 1] ?? null
 })
+
+/** TurnSummary 稳定 getter（batch2 F2）：点击时按当前末条 assistant 取 Message——setup 期一次创建的
+ *  稳定闭包，避免把每 delta 重建的 lastAssistant 对象作 prop 传入致 TurnSummary 每 delta 重渲
+ *  （lastAssistant.id 流式期稳定，作标量传入即可让 shouldUpdateComponent 跳过更新）。 */
+const getLastAssistant = () => lastAssistant.value
 
 /**
  * isStreaming（turn 级）：文本正在流式生成。
