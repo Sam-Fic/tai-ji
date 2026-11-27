@@ -31,7 +31,8 @@
   本族（2026-09-16 裁决，design §3.3 D4）——摘除 -mx-5 通栏 / bg-[var(--accent-soft)] 底 /
   border-y，与 bash/thinking/settling 行共用一套 DOM 结构：两端渐隐横线（transparent→
   --border-strong 18%→82%→transparent）+ 15px accent 呼吸弧（demo .run-ic 规格，
-  animate-loader-spin 三重动画；M3c 起替换 Loader2 spinner）+ text-base(14px)/mid/fw-mid
+  animate-loader-spin 单层旋转，弧段静态固定相位（[perf:animation] 2026-11 前为三重动画，
+  两条 SVG 弧段动画退役）；M3c 起替换 Loader2 spinner）+ text-base(14px)/mid/fw-mid
   主文案（demo .think .t-name）+ 可选 mono meta（text-2xs/500/tabular-nums/neutral-dim）+
   可选「待发 N」chip（mono text-3xs + border-strong 描边，计数口径不变：未提交全量条数，
   count===0 时 chip 不渲染）。system-notice + content-col 保留（居中 720 内容列）。
@@ -77,11 +78,15 @@
         <i class="block size-[6px] rounded-full bg-accent opacity-30"></i><i class="block size-[6px] rounded-full bg-accent opacity-30"></i><i class="block size-[6px] rounded-full bg-accent opacity-30"></i>
       </span>
       <!-- [perf:animation] 旋转挂 HTML 包装层 + translateZ(0)（理由见上注释）；SVG 本体只
-           承担静态字形（。ld-arc 现为固定相位静态形态；原摆动动画已退役，见 style.css 注释）。 -->
+           承担静态字形（。ld-arc 现为固定相位静态形态；原摆动动画已退役，见 style.css 注释）。
+           [必须分层] translateZ(0) 与 animate-* 不可同元素：同元素时 keyframes 的隐式 from = 当前
+           transform（translateZ(0)）→ 插值到 rotate(360deg) 两端同为单位矩阵，旋转不动
+           （分支审查 business-logic 探针实测，Chrome 计算样式恒 matrix(1,0,0,1,0,0)）。 -->
       <span
         v-else
-        class="inline-flex size-[15px] shrink-0 items-center justify-center text-accent animate-loader-spin [transform:translateZ(0)]"
+        class="inline-flex size-[15px] shrink-0 items-center justify-center text-accent [transform:translateZ(0)]"
       >
+        <span class="block size-full animate-loader-spin">
         <svg
           class="size-full"
           viewBox="0 0 24 24"
@@ -95,6 +100,7 @@
           <circle class="ld-track" cx="12" cy="12" r="10" opacity="0.16" />
           <circle class="ld-arc" cx="12" cy="12" r="10" pathLength="100" />
         </svg>
+        </span>
       </span>
       <HoverCard
         :open="openDetailKind === row.kind"

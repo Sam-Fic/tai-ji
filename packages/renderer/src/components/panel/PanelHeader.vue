@@ -75,11 +75,14 @@
     <!-- [perf:animation] 2026-11 旋转挂 HTML 包装层而非 lucide svg 根：Chromium 不合成 SVG
          transform，animate-spin 落在 <component :is> 的 svg 根上 = 每帧主线程重绘 13px 矢量
          （实测该形态是「一直有动画在跑」布尔事实的主要来源：dev 消融全停 animate-spin 后
-         GPU helper 17.4%→3.2%，单个 14px spinner 即 9.3%/4.2%）。包装 span 挂
-         animate-spin + translateZ(0) 进独立合成层，实测同形态 9.3%→2.7%。
+         GPU helper 17.4%→3.2%，单个 14px spinner 即 9.3%/4.2%）。两层：外层 span 挂
+         translateZ(0) 提独立合成层，内层 span 挂 animate-spin（旋转重绘被限制在 13px 层内）。
+         [必须分层] 同元素时 keyframes 隐式 from = translateZ(0)，两端同为单位矩阵 → 不转
+         （分支审查 business-logic 探针实测）。
          形态零变化：span 尺寸 / inline-flex 对齐与原本 svg 一致，testid 仍在 svg 上（
          panel-session-icon 断言面不变）。 -->
-    <span class="inline-flex shrink-0 items-center justify-center [transform:translateZ(0)]" :class="iconConfig.animation">
+    <span class="inline-flex shrink-0 items-center justify-center [transform:translateZ(0)]">
+      <span class="inline-flex" :class="iconConfig.animation">
       <component
         :is="ICON_COMPONENTS[iconConfig.icon]"
         data-testid="panel-session-icon"
@@ -87,6 +90,7 @@
         class="size-[13px] shrink-0"
         :class="iconConfig.color"
       />
+      </span>
     </span>
     <!-- 会话名（demo 问题 7 裁决 + 审计 R11：卡头是「当前会话身份位」，只显会话名；
          目录/分支三重重复形态已删——侧栏组头/hover 卡为唯一承载）。长会话名截断优先

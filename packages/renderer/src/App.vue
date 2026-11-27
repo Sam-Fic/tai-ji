@@ -16,8 +16,8 @@
         <!-- [perf:animation] 2026-11 restarting 保留旋转（主进程重启是秒级真实推进态，且这是
             唯一指示「真的在重启」的信号）。旋转挂 HTML 包装层 + translateZ(0) 而非直接挂 SVG
             （Chromium 不合成 SVG transform；实测无提升 9.3% → translateZ(0) 2.7%）。 -->
-        <span class="inline-flex size-4 animate-spin items-center justify-center text-neutral-dim [transform:translateZ(0)]" aria-hidden="true">
-          <Loader2 class="size-4" />
+        <span class="inline-flex size-4 items-center justify-center text-neutral-dim [transform:translateZ(0)]" aria-hidden="true">
+          <Loader2 class="size-4 animate-spin" />
         </span>
         <span class="text-[12.5px] text-neutral-dim">{{ t('connection.restarting') }}</span>
       </template>

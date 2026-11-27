@@ -155,9 +155,17 @@ defineProps<{ kind: RunningIconKind }>()
   animation-direction: reverse;
   opacity: 0.5;
 }
+/* [perf:animation] 关键帧显式带 translateZ(0)：容器规则已有静态 transform: translateZ(0)
+   （提层），若关键帧只写 to，隐式 from = 容器当前 transform（translateZ(0)），插值到
+   rotate(360deg) 两端同为单位矩阵 → 旋转不动（分支审查 business-logic 探针实测 Chrome
+   计算样式恒 matrix(1,0,0,1,0,0)）。显式 from/to 均带 translateZ(0) 同时保住提层
+   （只在 to 带 tz 的 from/to 对会让前半程失去合成层）。 */
 @keyframes rbi-spin {
+  from {
+    transform: translateZ(0) rotate(0deg);
+  }
   to {
-    transform: rotate(360deg);
+    transform: translateZ(0) rotate(360deg);
   }
 }
 
@@ -227,16 +235,16 @@ defineProps<{ kind: RunningIconKind }>()
 }
 @keyframes rbi-draw-line {
   0% {
-    transform: scaleX(0);
+    transform: translateZ(0) scaleX(0);
     opacity: 1;
   }
   55% {
-    transform: scaleX(1);
+    transform: translateZ(0) scaleX(1);
     opacity: 1;
   }
   75%,
   100% {
-    transform: scaleX(1);
+    transform: translateZ(0) scaleX(1);
     opacity: 0;
   }
 }
@@ -278,12 +286,12 @@ defineProps<{ kind: RunningIconKind }>()
 }
 @keyframes rbi-ping {
   0% {
-    transform: scale(0.6);
+    transform: translateZ(0) scale(0.6);
     opacity: 0.8;
   }
   80%,
   100% {
-    transform: scale(2.1);
+    transform: translateZ(0) scale(2.1);
     opacity: 0;
   }
 }

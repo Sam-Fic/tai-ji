@@ -121,9 +121,11 @@ export const BLOCK_ICON_LUCIDE: Record<Exclude<BlockIconKind, 'running'>, Compon
  *
  * 两层动画的驱动位置（[perf:animation] 2026-11 由三层降为两层，并再收尾为「仅外层一层」）：
  * - 整体旋转 = 消费方容器 class animate-loader-spin（1.15s/圈 cubic-bezier(.6,.1,.35,.9)，
- *   简写注册在 renderer tailwind.config.ts animation 段）。消费方容器一律是 HTML span，
- *   且必须补 translateZ(0) 才能进合成层（实测：无提升单 spinner 9.3%/4.2% →
- *   translateZ(0) 2.7%/2.0%，will-change 实测无改善）。
+ *   简写注册在 renderer tailwind.config.ts animation 段）。消费方一律两层 HTML span：
+ *   外层 [transform:translateZ(0)] 提层，内层 animate-loader-spin 旋转——[不可合到同一元素]：
+ *   keyframes 只写 to，隐式 from = 当前 transform（translateZ(0)），两端同为单位矩阵 → 不转
+ *   （2026-11 分支审查探针实测；机器守卫 = check-animation-source-guards.mjs「translateZ(0)
+ *   与 animate-* 不同元素」）。will-change 实测无改善。
  * - 弧段：**现为纯静态形态**（无动画）。两条原动画依次退役：① ld-arc-dash
  *   （`stroke-dasharray` 16%↔54% 呼吸）—— stroke 几何属性逐帧重绘矢量、不可合成，且本
  *   常量有 6 个挂点各一份；② ld-arc-swing（150° 摆动）—— 同在 SVG 元素上，同样不可合成
