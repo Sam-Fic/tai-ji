@@ -46,13 +46,34 @@
 
 ## 方案对比与层归属
 
-| 方案 | 形态 | 取舍 |
-|---|---|---|
-| A（选定） | 在现组件族内按原型重做：`AggregateTape` = 卡片（底色/圆角/内边距）+ 卡头 + 窗口；`AggregateSummaryRow` 改为卡头（计数、箭头、右侧活动 chip 与滚动提示位）；`SegmentThinkingRow` 重做为过程卡专用的三态思考行（展开态由卡持有，不再复用 `ThinkingRow` 的 60 字预览与折叠状态机）；`SegmentToolRow` 按原型行形态；`SegmentToolGroup` 退役 | 复用既有段契约、抽屉、悬停卡、i18n 词表与测试范式；改动集中在一个组件族 |
-| B | 新建独立组件族替换整族 | 控制更自由，但丢弃既有抽屉/悬停卡接线与 fixture 测试，重复实现 |
-| C | 只给现有组件覆盖样式类 | 思考行要摆脱同行 60 字预览、命令行要去掉工具名段，都是结构变化；靠覆盖类会让两套语义并存，三个月后难维护 |
+| 候选方案 | 核心机制 | 保护范围来源 | 取舍 |
+|---|---|---|---|
+| A（选定） | 在现组件族内按原型重做：`AggregateTape` = 卡片（底色/圆角/内边距）+ 卡头 + 窗口；`AggregateSummaryRow` 改为卡头（计数、箭头、右侧活动 chip 与滚动提示位）；`SegmentThinkingRow` 重做为过程卡专用的三态思考行（展开态由卡持有，不再复用 `ThinkingRow` 的 60 字预览与折叠状态机）；`SegmentToolRow` 按原型行形态；`SegmentToolGroup` 退役 | 不适用：本任务没有受保护对象（纯展示与消息派生，没有破坏性操作，也不读保护判定所依赖的状态），没有可被实验命令改写的范围 | 复用既有段契约、抽屉、悬停卡、i18n 词表与测试范式；改动集中在一个组件族 |
+| B | 新建独立组件族替换整族 | 不适用：同 A，没有受保护对象，没有可被实验命令改写的范围 | 控制更自由，但丢弃既有抽屉/悬停卡接线与 fixture 测试，重复实现 |
+| C | 只给现有组件覆盖样式类 | 不适用：同 A，没有受保护对象，没有可被实验命令改写的范围 | 思考行要摆脱同行 60 字预览、命令行要去掉工具名段，都是结构变化；靠覆盖类会让两套语义并存，三个月后难维护 |
 
 层归属：过程卡的**行数据**（段、组、计数、单位序）留在 core `process-segment` / `trace-window`（不改）；**展示态**（窗口展开、跟随、思考展开集合、活动 chip 文案与计时）留在 ui 组件本地 + composable（不落 store）；**模型切换的事实**在 core 派生（`apply-entry` 新增 `model_change` case），**实时信号**经 pi 扩展 → runtime 帧 → 前端合成 entry（沿用压缩摘要的现行范式：`message.compactionSummary` + `cmp-<uuid>` 合成）。
+
+### 开关与状态转移
+
+本任务没有题面意义上的保护句（没有「不得删除/不得进入」类的受保护对象），下表都是开关、上限与「只允许一个」类目标，判定输入清单列一律写「—」。通道里「命令通道」指用户在界面上的点击与滚动，「自动路径」指数据到达引起的自动处理。
+
+| 对象 | 状态 | 动作 | 通道 | 会话边界 | 判定输入清单 | 处置 |
+|---|---|---|---|---|---|---|
+| 过程卡窗口（落成后） | 收起（一行） | 点击卡头 | 命令通道 | 同会话 | — | AC-SETTLE（展开 12 行窗口，从第一条读起） |
+| 过程卡窗口（落成后） | 展开 | 点击卡头 | 命令通道 | 同会话 | — | AC-SETTLE（收成一行） |
+| 过程卡窗口行数 | 内容超过 12 行 | 追加新行 | 自动路径 | 同会话 | — | AC-H12（窗口高度不变，内容在窗口内滚动） |
+| 思考行 | 收起（已结束，一行标签） | 点击标签 | 命令通道 | 同会话 | — | AC-THINK（全文区在场） |
+| 思考行 | 展开 | 点击标签 | 命令通道 | 同会话 | — | AC-THINK（收回一行） |
+| 跟随滚动 | 贴底 | 用户上滚 | 命令通道 | 同会话 | — | AC-LIVE（停吸，新行到来不拉回） |
+| 跟随滚动 | 停吸 | 滚到底或点「回到最新」 | 命令通道 | 同会话 | — | AC-LIVE（恢复贴底） |
+| 跟随滚动 | 贴底 | 新行到来或内容尺寸变化 | 自动路径 | 同会话 | — | AC-LIVE, AC-MOTION（保持贴底，不出现「回到最新」） |
+| 卡内实时计时 | 卡头活动 chip 在计时 | 渲染窗口内的行 | 自动路径 | 同会话 | — | AC-CHIP（窗口内不出现第二个实时计时） |
+| 轮头折叠 | 回合进行中 | 点击轮头 | 命令通道 | 同会话 | — | AC-LOOK（折叠禁用，亮度与落成后相同） |
+| 轮头折叠 | 回合落成后 | 点击轮头 | 命令通道 | 同会话 | — | AC-SETTLE（展开回合，过程卡以一行在场） |
+| 模型切换行 | 会话里还没有生效模型（首个 `model_change`） | 收到 `model_change` | 自动路径 | 跨会话（重载后同形） | — | AC-MSW-DEDUPE（不出行，只记基线） |
+| 模型切换行 | 与上一生效模型相同 | 收到 `model_change` | 自动路径 | 跨会话（重载后同形） | — | AC-MSW-DEDUPE（不出行） |
+| 模型切换行 | 与上一生效模型不同 | 收到 `model_change` | 自动路径 | 跨会话（重载后同形） | — | AC-MSW-REPLAY（出行，前后模型正确） |
 
 ## 树形拆分
 
@@ -81,8 +102,8 @@
 | tape-think | 思考行三态：一行标签 / 进行中只露最新一行 / 点开全文 | tape-look | 中 | packages/ui/src/features/chat/process-aggregate/, packages/ui/src/features/chat/__tests__/, scripts/acceptance/, docs/testing/e2e-map.json | AC-THINK |
 | tape-live | 进行中：卡头活动 chip 计时 + 执行中命令行尾输出 | tape-think | 中 | packages/ui/src/features/chat/process-aggregate/, packages/ui/src/features/chat/composables/, packages/ui/src/features/chat/__tests__/, packages/ui/src/locale/zh-CN/panel.ts, packages/ui/src/locale/en-US/panel.ts, scripts/acceptance/, scripts/check-session-hidden-surface.mjs, docs/testing/e2e-map.json | AC-CHIP, AC-RUN |
 | tape-settle | 落成后收成一行、点开 12 行窗口、详情走右侧抽屉 | tape-think, tape-scroll | 低 | packages/ui/src/features/chat/process-aggregate/, packages/ui/src/features/chat/ProcessAggregateBlock.vue, packages/ui/src/features/chat/Turn.vue, packages/ui/src/features/chat/__tests__/, scripts/acceptance/, docs/testing/e2e-map.json | AC-SETTLE, AC-DETAIL |
-| msw-replay | 回放派生：`model_change` entry → `modelSwitch` 系统消息；同模型/首个切换不出行 | 主干 | 高 | packages/core/src/domain/chat/apply-entry.ts, packages/core/src/domain/chat/__tests__/, packages/shared/src/message.ts | AC-MSW-REPLAY, AC-MSW-DEDUPE, AC-CORE-EQUIV |
-| msw-live | 实时链路：host-internals 扩展转发 `model_select` → runtime 帧 → 前端合成 entry | msw-replay | 高 | extensions/taiji/host-internals/src/, packages/runtime/src/services/session/event-interpreter.ts, packages/runtime/src/services/session/event-interpreter*.ts, packages/shared/src/protocol.ts, packages/core/src/domain/chat/effects/, packages/runtime/src/__tests__/, packages/extension-protocol/, extension-dependencies.json | AC-MSW-LIVE |
+| msw-replay | 回放派生：`model_change` entry → `modelSwitch` 系统消息；同模型/首个切换不出行 | 主干 | 高 | packages/core/src/domain/chat/apply-entry.ts, packages/core/src/domain/chat/__tests__/, packages/shared/src/message.ts, packages/shared/src/pi-entry.ts, packages/shared/src/index.ts | AC-MSW-REPLAY, AC-MSW-DEDUPE, AC-CORE-EQUIV |
+| msw-live | 实时链路：host-internals 扩展转发 `model_select` → runtime 帧 → 前端合成 entry | msw-replay | 高 | extensions/taiji/host-internals/src/, packages/runtime/src/services/session/event-interpreter.ts, packages/runtime/src/services/session/event-interpreter*.ts, packages/shared/src/protocol.ts, packages/core/src/domain/chat/effects/, packages/runtime/src/__tests__/, packages/extension-protocol/, extensions/taiji/host-internals/package.json, extension-dependencies.json, pnpm-lock.yaml, docs/testing/domain-slices/ | AC-MSW-LIVE |
 | msw-ui | 切换行渲染（横线分隔行族 + box 图标）与回合内插入 | msw-replay, msw-live | 高 | packages/core/src/domain/chat/message-turns.ts, packages/core/src/domain/chat/__tests__/, packages/ui/src/features/chat/Turn.vue, packages/ui/src/features/chat/SystemNotice.vue, packages/ui/src/locale/zh-CN/panel.ts, packages/ui/src/locale/en-US/panel.ts | AC-MSW-MID, AC-MSW-ICON |
 | i18n-final | 文案双侧对齐与词表核对 | 主干 | 低 | packages/ui/src/locale/zh-CN/panel.ts, packages/ui/src/locale/en-US/panel.ts | AC-I18N |
 
