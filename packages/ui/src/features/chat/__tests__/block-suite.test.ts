@@ -1102,8 +1102,10 @@ describe('block-icon.ts', () => {
     expect(RUNNING_LOADER_SVG).not.toBe('')
     expect(RUNNING_LOADER_SVG).toContain('<svg')
     expect(RUNNING_LOADER_SVG).toContain('circle')
-    // 浅色轨道整圈（stroke 16% 透明度）+ 弧段（pathLength=100 归一，dasharray 呼吸/摆动由
-    // 全局 .ld-arc 类驱动——style.css 动画 SSOT 区）
+    // 浅色轨道整圈（stroke 16% 透明度）+ 弧段（pathLength=100 归一）。[perf:animation] 2026-11：
+    // SVG 内部两条动画均已退役（ld-arc-dash 先删，ld-arc-swing 本轮收尾也删——同在 SVG 元素
+    // 上不可合成）；整体旋转由消费方 HTML 容器 animate-loader-spin + translateZ(0) 承担，
+    // arc 现为固定相位静态形态。
     expect(RUNNING_LOADER_SVG).toContain('class="ld-track"')
     expect(RUNNING_LOADER_SVG).toContain('opacity="0.16"')
     expect(RUNNING_LOADER_SVG).toContain('class="ld-arc"')

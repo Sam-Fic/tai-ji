@@ -174,12 +174,14 @@ function stripKey(unit: ProcessSegmentUnit): string {
 }
 
 /* 运行中聚合条流光（1.9s 循环，D10）：横向强调色渐变扫过条底（text-sweep 同机制作用于
-   背景层）；非运行条目中性底无动画 */
+   背景层）；非运行条目中性底无动画。
+   [perf:animation] steps(6) 量化（2026-11）：background-position 动画每帧重排+重绘，
+   无法提层；实测 60fps→steps(8) 掉 2/3。 */
 .agg-strip--running {
   background-image: linear-gradient(100deg, transparent 42%, var(--accent-soft) 50%, transparent 58%);
   background-size: 250% 100%;
   background-repeat: no-repeat;
-  animation: agg-strip-sweep 1.9s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+  animation: agg-strip-sweep 1.9s steps(6, end) infinite;
 }
 
 @keyframes agg-strip-sweep {
@@ -208,7 +210,10 @@ function stripKey(unit: ProcessSegmentUnit): string {
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: text-sweep 2.6s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+  /* [perf:animation] steps(6) 量化：background-position + background-clip:text 每帧
+     重排并重绘字形，无法靠合成层消除（translateZ 对 background-position 无效）；
+     实测 60fps → steps(8) 掉 2/3。扫光是视觉装饰，量化后仍可读。 */
+  animation: text-sweep 2.6s steps(6, end) infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

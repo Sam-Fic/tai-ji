@@ -28,8 +28,10 @@
     <!-- 轮头行：flex 容器承载运行态呼吸弧 + Button。呼吸弧悬挂在 Button 外（v-html 注入的
          svg 无 class 可竞争，尺寸只能由容器 span 承载，弧规格 = demo run-ic 15px accent）。 -->
     <div class="flex items-center gap-[10px]">
-      <!-- eslint-disable-next-line vue/no-v-html -- hardcoded constant from block-icon.ts -->
-      <span v-if="isStreaming" class="inline-block size-[15px] shrink-0 text-accent animate-loader-spin" v-html="RUNNING_LOADER_SVG" />
+      <span v-if="isStreaming" class="inline-block size-[15px] shrink-0 text-accent [transform:translateZ(0)]">
+        <!-- eslint-disable-next-line vue/no-v-html -- hardcoded constant from block-icon.ts -->
+        <span class="block size-full animate-loader-spin text-accent" v-html="RUNNING_LOADER_SVG" />
+      </span>
       <Button
         variant="ghost"
         size="sm"

@@ -7,7 +7,7 @@
  *   - 常驻装饰性动画零残留（pulse-dot / steer-breathe / wiggle）与死类 animate-bounce-small
  *   - pending / retrying / streaming / compacting / working / waiting 各状态 animation 字段形态
  *   - SegmentedTab 文字 tab 形态（无 badge / 无 count 数字 / 无 motion-reduce 动画类）
- *   - SessionItem running 态 animate-spin 保留
+ *   - SessionItem running 态为静态 accent 空心环（2026-11 常驻动画退役）
  *   - composer-shell isActive 分支静态 ring（无动画装饰）
  *   - TaijiLogo 静态类 + inline 时长覆盖形态（Tailwind JIT 可生成），SVG 几何未变
  *   - style.css reduced-motion 块 !important 白名单 + @keyframes 定义存在
@@ -16,11 +16,17 @@
  * 行为，也不构造模块图；放测试套件里每个用例只为 per-file 装载付固定成本。判据与阈值
  * 逐条原样承接（原 `.test.ts` 的 12 条断言一一对应本文件的 12 条检查）。
  *
+ * [HISTORICAL] 2026-11 性能裁决修订 5 条判据（原判据断言 animate-spin 常驻，与本批「常驻
+ * 装饰动画退役」直接冲突）：plan06/TC1 pending 放宽到 pulse-strong 家族（量化版）；
+ * plan06/TC3 + plan04/TC4/T5 的 working/compacting 从 animate-spin 改静态空串；
+ * plan04/TC2 SessionItem running 从「保留 animate-spin」改为「静态空心环且禁 animate-spin」。
+ * 实体实现证据 = 打包版 GPU helper 54-60% + renderer 85%（dev 消融全停掉到 1/6）。
+ *
  * 用法：node scripts/check-animation-source-guards.mjs
  * 退出码：0 = 全部通过；1 = 命中违规；2 = 环境错误（被读文件缺失）
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -57,15 +63,22 @@ function collectVueFiles(dir, acc = []) {
 
 const problems = []
 /** 单条判据：cond=false 时记一条违规（带判据名与期望说明） */
+let checksRun = 0
 function check(id, cond, expectation) {
+  checksRun++
   if (!cond) problems.push(`${id}：${expectation}`)
 }
 
 // ── plan 06 pending 死类修复 ────────────────────────────────────────────────
 check(
-  'plan06/TC1 pending 改用 animate-pulse-strong',
-  sessionStatus.includes("pending: { icon: 'ArrowUpCircle', color: 'text-accent', animation: 'animate-pulse-strong' }"),
-  "sessionStatus.ts 的 pending 应为 animate-pulse-strong（ArrowUpCircle / text-accent）",
+  'plan06/TC1 pending 使用 animate-pulse-strong 家族',
+  // [perf:animation] 2026-11 裁决修订：pending / retrying 从 animate-pulse-strong 改为
+  // animate-pulse-strong-quantized（steps(4) 量化）——两者动画目标都是 <svg>（Chromium
+  // 不合成 SVG transform），逐帧 opacity+scale 重绘；量化后重建频率降到 4 段而语义不变。
+  // 判据放宽为「必须属于 pulse-strong 家族」（原逐字断言 animate-pulse-strong 已失效）。
+  /animation: 'animate-pulse-strong[a-z-]*'/.test(sessionStatus)
+    && sessionStatus.includes("pending: { icon: 'ArrowUpCircle', color: 'text-accent', animation: 'animate-pulse-strong-quantized' }"),
+  "sessionStatus.ts 的 pending 应为 animate-pulse-strong-quantized（ArrowUpCircle / text-accent）",
 )
 check(
   'plan06/TC2 死类 animate-bounce-small 零残留',
@@ -73,16 +86,66 @@ check(
   'sessionStatus.ts 不得含 animate-bounce-small（死类已清理）',
 )
 check(
-  'plan06/TC3 其他状态 animation 字段不受影响',
+  'plan06/TC3 各状态 animation 字段形态（2026-11 性能裁决）',
+  // [perf:animation] 裁决修订：working / compacting 为「后台任务生命周期（分钟-小时）」的
+  // 常驻态，从 animate-spin 改静态（实测常驻动画是风扇根因，全停掉到 1/6）。streaming 是
+  // 秒-分钟的真实流式且用户预期在转，保留 spin（现由 PanelHeader 的 HTML 包装层承担）。
   sessionStatus.includes("streaming: { icon: 'RefreshCw', color: 'text-accent', animation: 'animate-spin' }")
-    && sessionStatus.includes("compacting: { icon: 'Hourglass', color: 'text-accent', animation: 'animate-spin' }")
-    && sessionStatus.includes("working: { icon: 'RefreshCw', color: 'text-accent', animation: 'animate-spin' }")
-    && sessionStatus.includes("retrying: { icon: 'Zap', color: 'text-warn', animation: 'animate-pulse-strong' }")
+    && sessionStatus.includes("compacting: { icon: 'Hourglass', color: 'text-accent', animation: '' }")
+    && sessionStatus.includes("working: { icon: 'Loader2', color: 'text-accent', animation: '' }")
+    && sessionStatus.includes("retrying: { icon: 'Zap', color: 'text-warn', animation: 'animate-pulse-strong-quantized' }")
     && sessionStatus.includes("waiting: { icon: 'Wrench', color: 'text-warn', animation: '' }")
     && !tailwindConfig.includes('bounce-small')
     && !styleCss.includes('bounce-small'),
-  'streaming/compacting/working 的 animate-spin、retrying 的 pulse-strong、waiting 的空串须保留；config/style 不得新增 bounce-small',
+  'streaming 保留 animate-spin；working(Loader2)/compacting(Hourglass) 改静态空串且字形互异（常驻态降级 + 静态可区分，分支审查 arch-boundary M3）；retrying 量化；waiting 空串；config/style 不得新增 bounce-small',
 )
+
+// ── [HISTORICAL] 2026-11 分支审查后新增的块内锚定判据（纯函数，降判据表达式的 CRAP） ──────
+
+/** @media (prefers-reduced-motion: reduce) 块：从块头到白名单声明后的首个 '}'（两块同形收尾）。 */
+function blockDecls(headMarker) {
+  const head = styleCss.indexOf(headMarker)
+  if (head < 0) return null
+  const tail = styleCss.indexOf('transition-duration: var(--duration-fast) !important;', head)
+  if (tail < 0) return null
+  return styleCss.slice(head, styleCss.indexOf('}', tail))
+}
+
+/** plan05/TC2：OS 媒体查询块内部的瞬切 + 过渡白名单声明逐条保留。
+ *  原判据对全文 includes，被同批新增的 [data-reduce-motion="on"] 块（逐字相同声明）冒充——
+ *  整段删掉 OS 媒体查询仍全绿（实测），故改锚定块内部。 */
+function reducedMotionMediaBlockIntact() {
+  const block = blockDecls('@media (prefers-reduced-motion: reduce)')
+  return !!block && [
+    'transition-property: opacity, color, background-color, border-color, fill, stroke, box-shadow, filter !important',
+    'transition-duration: var(--duration-fast) !important',
+    'animation-duration: 0.01ms !important',
+    'animation-iteration-count: 1 !important',
+    'transition-duration: 0.01ms !important',
+    'transition-delay: 0ms !important',
+  ].every((d) => block.includes(d))
+}
+
+/** plan05/TC5：两条触发通道（OS 媒体查询 / 应用开关属性选择器）的声明集逐字相等。
+ *  CSS 无法 OR 合并两通道，各持一份同语义声明——单侧漏同步即红。 */
+function reducedMotionChannelsInSync() {
+  const declsOf = (block) => (block ?? '')
+    .split('\n').map((l) => l.trim()).filter((l) => /^[a-z-]+:/.test(l)).sort().join('\n')
+  const media = declsOf(blockDecls('@media (prefers-reduced-motion: reduce)'))
+  const attr = declsOf(blockDecls('[data-reduce-motion="on"] *,'))
+  return media.length > 0 && media === attr
+}
+
+/** plan04/TC2：SessionItem spinning 分支行 = 静态 accent 虚线环，且不含旋转残形。
+ *  原判据全文 includes 由 hollow 分支即可满足（删掉整个 spinning 分支仍绿），故锚定分支行。 */
+function sessionItemSpinningIsStaticDashed() {
+  const line = sessionItem.split('\n').find((l) => l.includes("iconKind === 'spinning'"))
+  return !!line
+    && line.includes('rounded-full border-[1.5px] border-dashed border-accent')
+    && !line.includes('animate-spin')
+    && !line.includes('border-t-transparent')
+    && !sessionItem.includes('animate-spin')
+}
 
 // ── plan 05 reduced-motion 兜底 + TaijiLogo ────────────────────────────────
 check(
@@ -95,13 +158,13 @@ check(
 )
 check(
   'plan05/TC2 style.css reduced-motion 白名单保留',
-  styleCss.includes('transition-property: opacity, color, background-color, border-color, fill, stroke, box-shadow, filter !important')
-    && styleCss.includes('transition-duration: var(--duration-fast) !important')
-    && styleCss.includes('animation-duration: 0.01ms !important')
-    && styleCss.includes('animation-iteration-count: 1 !important')
-    && styleCss.includes('transition-duration: 0.01ms !important')
-    && styleCss.includes('transition-delay: 0ms !important'),
-  'reduced-motion 块的 !important 过渡白名单与瞬切兜底须完整保留',
+  reducedMotionMediaBlockIntact(),
+  'reduced-motion 块的 !important 过渡白名单与瞬切兜底须完整保留（锚定 @media 块内部，不受同批属性选择器块冒充）',
+)
+check(
+  'plan05/TC5 应用内 [data-reduce-motion="on"] 块与 OS 媒体查询声明逐字同步',
+  reducedMotionChannelsInSync(),
+  '应用内 reduce-motion 块的声明集必须与 OS 媒体查询块逐字相等（两通道单点维护）',
 )
 {
   const otherGuards = collectVueFiles(resolve(RENDERER, 'src/components'))
@@ -135,9 +198,14 @@ check(
   'SegmentedTab 须无 pulse-dot / motion-reduce 动画类 / badge / count 数字，label 直出',
 )
 check(
-  'plan04/TC2 SessionItem running 态保留旋转动画',
-  sessionItem.includes('animate-spin'),
-  'SessionItem（含 session-item/ 子组件）须保留 running 态 animate-spin',
+  'plan04/TC2 SessionItem running 态改静态空心环（2026-11 性能裁决）',
+  // [perf:animation] 裁决修订：SessionItem 是全仓唯一「N 实例」常驻动画点（每个 working
+  // session 一个环，多后台会话并存时线性增多），且持续整个任务生命周期。实测单 14px
+  // spinner 即 9.3% GPU helper，故 spinning 档改静态 accent 空心环。
+  // 判据锚定 spinning 分支行本身（2026-11 分支审查 arch-boundary S3a：原全文 includes
+  // 由 hollow 分支即可满足，删掉整个 spinning 分支仍绿）：
+  sessionItemSpinningIsStaticDashed(),
+  'SessionItem（含 session-item/ 子组件）的 running 档须为静态 accent 虚线环（锚定 spinning 分支行），且不得含 animate-spin（2026-11 常驻动画退役）',
 )
 check(
   'plan04/TC3 composer-shell isActive 静态 ring',
@@ -152,13 +220,53 @@ check(
   "waiting 的 animation 须为空串且无 animate-wiggle",
 )
 check(
-  'plan04/TC5 spin 保留 + pulse-dot keyframes 保留',
+  'plan04/TC5 streaming 保留 spin（working/compacting 已降级） + pulse-dot keyframes 保留',
+  // [perf:animation] 裁决修订：working / compacting 的 spin 已于 2026-11 退役（常驻态），
+  // streaming 保留（真实流式秒-分钟）。pulse-dot keyframes 仍须保留（TrayNativePanel 等消费）。
   sessionStatus.includes("streaming: { icon: 'RefreshCw', color: 'text-accent', animation: 'animate-spin' }")
-    && sessionStatus.includes("compacting: { icon: 'Hourglass', color: 'text-accent', animation: 'animate-spin' }")
-    && sessionStatus.includes("working: { icon: 'RefreshCw', color: 'text-accent', animation: 'animate-spin' }")
+    && !sessionStatus.includes("working: { icon: 'RefreshCw', color: 'text-accent', animation: 'animate-spin' }")
     && styleCss.includes('@keyframes pulse-dot'),
-  'streaming/compacting/working 的 spin 与 @keyframes pulse-dot 须保留',
+  'streaming 的 spin 与 @keyframes pulse-dot 须保留；working 不得再挂 animate-spin（2026-11 常驻动画退役）',
 )
+
+// ── [perf:animation] 2026-11 分支审查 business-logic 探针实测：translateZ(0) 与 animate-* 同元素
+// = 旋转不动。机制：spin / loader-spin / rbi-spin 的 keyframes 只写 to（无显式 from），隐式
+// from = 元素当前 transform；当前值为 translateZ(0) 时，插值 translateZ(0)→rotate(360deg)
+// 两端同为单位矩阵，Chrome 计算样式恒 matrix(1,0,0,1,0,0)。实测「修复后 GPU 下降」有一部分
+// 其实是转不动了（静默视觉回归）。正确形态 = 两层：外层 [transform:translateZ(0)] 提层，
+// 内层 animate-*；或 keyframes 显式 from/to 均带 translateZ(0)（RunningBlockIcon 自包含原语）。
+// 本守卫扫 renderer + ui 两包全部 .vue：同一 class 属性值（静态或 :class 字面量）内不得同时
+// 出现 translateZ(0) 与 animate-<x>（含 animate-[...] 任意值形）。
+{
+  const UI = resolve(ROOT, 'packages/ui/src')
+  const vueFiles = [
+    ...collectVueFiles(resolve(RENDERER, 'src')),
+    ...collectVueFiles(UI),
+  ]
+  const TZ = /translateZ\(0\)/
+  const ANIM = /\banimate-(?:\[|[a-z])/
+  // 取每个 class="..." / :class="..." / class='...' 属性值（单行内；多行 class 绑定另按
+  // 「同一标签开区间」兜底：把 <tag ... > 之间拼成一行再判）
+  const sameElementHits = []
+  for (const f of vueFiles) {
+    const src = readFileSync(f, 'utf-8')
+    for (const m of src.matchAll(/<[a-zA-Z][^<>]*?>/gs)) {
+      const tag = m[0].replace(/\s+/g, ' ')
+      const classAttrs = [...tag.matchAll(/(?:^|\s):?class="([^"]*)"/g)].map((x) => x[1]).join(' ')
+      if (TZ.test(classAttrs) && ANIM.test(classAttrs)) {
+        const line = src.slice(0, m.index).split('\n').length
+        sameElementHits.push(`${relative(ROOT, f)}:${line}  ${classAttrs.slice(0, 120)}`)
+      }
+    }
+  }
+  check(
+    '[perf:animation] translateZ(0) 与 animate-* 不同元素（keyframes 隐式 from 冲突 → 旋转不动）',
+    sameElementHits.length === 0,
+    sameElementHits.length === 0
+      ? '全仓 .vue 无同元素 translateZ(0)+animate-*（正确形态 = 外层提层 + 内层 animate，或 keyframes 显式 from/to 带 translateZ(0)）'
+      : `同元素 translateZ(0)+animate-* ${sameElementHits.length} 处（旋转静默失效）：\n      ${sameElementHits.join('\n      ')}`,
+  )
+}
 
 if (problems.length > 0) {
   console.error(`[check-animation-source-guards] 命中 ${problems.length} 条静态守卫违规：`)
@@ -167,4 +275,4 @@ if (problems.length > 0) {
   process.exit(1)
 }
 
-console.log('[check-animation-source-guards] OK（12 条判据全部通过）')
+console.log(`[check-animation-source-guards] OK（${checksRun} 条判据全部通过）`)

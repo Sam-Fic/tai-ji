@@ -471,7 +471,10 @@ function openFileDetail(path: string): void {
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: text-sweep 2.6s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+  /* [perf:animation] steps(6) 量化：background-position + background-clip:text 每帧
+     重排并重绘字形，无法靠合成层消除（translateZ 对 background-position 无效）；
+     实测 60fps → steps(8) 掉 2/3。扫光是视觉装饰，量化后仍可读。 */
+  animation: text-sweep 2.6s steps(6, end) infinite;
 }
 
 /* 工具行文件 chip hover 滚动（MF-1-24，demo workbench.css .fchip-roll 轻方案原样移植）：

@@ -3,14 +3,16 @@
     展示组件 · session-switch-veil（会话切换幕布过渡）：sidebar 点击 session 后、切换
     promise settle 前的过渡呈现层。锚定模式同 ToastContainer（挂 main-area 内、absolute
     贴最近 positioned 祖先）。三段视觉（对齐 demo 形态）：
-    - 压暗幕布：--scrim-veil（弱于 modal 的 --scrim）+ backdrop-blur，盖住对话流与 composer
+    - 压暗幕布：--scrim-veil（弱于 modal 的 --scrim），盖住对话流与 composer
       （等待期不该输入），header 保持在幕布之上（组件定位从卡头 40px 下沿起）；
     - 顶部细进度线：2px accent 横扫，抄 MessageStream .hist-line-sweep 模式（keyframes
       scoped 自足，跨文件引用才需进全局 SSOT）；
     - 状态 chip：bg-bg + border + shadow-2（SessionItem hover 详情卡同源视觉档）+
       三点跳动，role="status" 供屏幕阅读器播报。
-    淡入淡出走 Transition（进 ease-out / 出 ease-in，E5 分向纪律）；leave 同时过渡
-    backdrop-filter 到 blur(0)，避免底色已淡而 blur 突消的跳变。
+    淡入淡出走 Transition（进 ease-out / 出 ease-in，E5 分向纪律）。
+    [perf:animation] 2026-11 去掉了 backdrop-blur-[3px] 与配套的 blur 过渡：幕布面积 = header
+    以下整区（全仓最大 blur 面之一），而 --scrim-veil 本身已是压暗底、blur 只是柔化；blur 实测
+    不是主因但会在动画/滚动同帧被连带计费。扫线与三点跳动保留（短时长，且随 .app-hidden 暂停）。
     reduced-motion 由 style.css 全局兜底承接（扫线/跳动冻结为静止、过渡保留 opacity）。
   -->
   <Transition name="veil-fade">
@@ -18,7 +20,7 @@
       v-if="state.phase === 'visible'"
       data-testid="session-switch-veil"
       role="status"
-      class="absolute inset-x-0 bottom-0 top-[40px] z-[var(--z-overlay)] bg-[var(--scrim-veil)] backdrop-blur-[3px]"
+      class="absolute inset-x-0 bottom-0 top-[40px] z-[var(--z-overlay)] bg-[var(--scrim-veil)]"
     >
       <div class="veil-line absolute inset-x-0 top-0 block h-0.5 overflow-hidden" />
       <div class="absolute inset-x-0 top-6 flex justify-center">
@@ -65,9 +67,7 @@ const state = useSessionSwitchVeilState()
 }
 
 .veil-fade-leave-active {
-  transition:
-    opacity var(--duration) var(--ease-in),
-    backdrop-filter var(--duration) var(--ease-in);
+  transition: opacity var(--duration) var(--ease-in);
 }
 
 .veil-fade-enter-from {
@@ -76,6 +76,5 @@ const state = useSessionSwitchVeilState()
 
 .veil-fade-leave-to {
   opacity: 0;
-  backdrop-filter: blur(0px);
 }
 </style>

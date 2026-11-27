@@ -595,8 +595,9 @@ describe('TurnRail (IF4)', () => {
     expect(icons[0].classes()).toContain('text-neutral-ico')
     // failed turn → text-danger（agentIconClass hasFailedTool 分支，§5.6B 常驻红）
     expect(icons[1].classes()).toContain('text-danger')
-    // streaming turn → animate-loader-spin（呼吸弧微缩 loader，进行中信号）+ 选中 fg-2（demo 权威）
-    expect(icons[2].classes()).toContain('animate-loader-spin')
+    // streaming turn → 呼吸弧 loader（两层形态：testid 元素 = 提层包装，内层挂 animate-loader-spin）
+    // + 选中 fg-2（demo 权威；外层包装与内层 loader 同色，currentColor 继承）
+    expect(icons[2].element.firstElementChild?.className).toContain('animate-loader-spin')
     expect(icons[2].classes()).toContain('text-[color:var(--neutral-fg-2)]')
   })
 
@@ -613,8 +614,9 @@ describe('TurnRail (IF4)', () => {
       props: defaultProps({ turns, activeTurnIndex: 2, sessionActive: true }),
     })
     const icons = wrapper.findAll('[data-testid="rail-agent-icon"]')
-    // streaming 的非选中回合 → 呼吸弧 loader（数据派生）
-    expect(icons[0].classes()).toContain('animate-loader-spin')
+    // streaming 的非选中回合 → 呼吸弧 loader（数据派生；两层形态，animate 在内层）
+    expect(icons[0].element.firstElementChild?.className).toContain('animate-loader-spin')
+    expect(icons[0].classes()).toContain('[transform:translateZ(0)]')
     // 选中（视口首项）但非 streaming → Bot 图标（不含 loader-spin）
     expect(icons[2].classes()).not.toContain('animate-loader-spin')
     expect(icons[2].element.tagName.toLowerCase()).toBe('svg')
@@ -633,9 +635,13 @@ describe('TurnRail (IF4)', () => {
       props: defaultProps({ turns, activeTurnIndex: 1, sessionActive: true }),
     })
     const icons = wrapper.findAll('[data-testid="rail-agent-icon"]')
-    expect(icons[0].classes()).toContain('animate-loader-spin')
-    expect(icons[2].classes()).toContain('animate-loader-spin')
-    expect(icons[1].classes()).not.toContain('animate-loader-spin')
+    // [perf:animation] 两层形态：testid 元素 = 提层包装（translateZ(0)），内层子元素挂 animate-loader-spin
+    //（同元素时 keyframes 隐式 from = translateZ(0)，旋转不动——守卫脚本已拦同元素形态）
+    expect(icons[0].classes()).toContain('[transform:translateZ(0)]')
+    expect(icons[2].classes()).toContain('[transform:translateZ(0)]')
+    expect(icons[0].element.firstElementChild?.className).toContain('animate-loader-spin')
+    expect(icons[2].element.firstElementChild?.className).toContain('animate-loader-spin')
+    expect(icons[1].element.firstElementChild?.className ?? '').not.toContain('animate-loader-spin')
   })
 
   it('TC-w3-23 [C5]: sessionActive=false 时 streaming 回合不显 loader（会话已结束不谎报进行中）', () => {
@@ -644,7 +650,9 @@ describe('TurnRail (IF4)', () => {
       props: defaultProps({ turns, sessionActive: false }),
     })
     const icons = wrapper.findAll('[data-testid="rail-agent-icon"]')
+    // sessionActive=false → 渲染 <Bot>（svg 本体，无包装层、无 spin）
     expect(icons[0].classes()).not.toContain('animate-loader-spin')
+    expect(icons[0].element.innerHTML).not.toContain('animate-loader-spin')
   })
 
   it('TC-w3-20: 选中节点 = demo Tier B 行类范式（无底无框仅文字提亮）：无 elevated 底/inset accent 左标，节点与 agent 摘要提 text-neutral-fg，hover 底为全节点共有', () => {

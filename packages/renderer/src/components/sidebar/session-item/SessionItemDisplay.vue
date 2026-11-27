@@ -71,11 +71,18 @@
       data-testid="session-meta"
       :class="confirming ? 'opacity-0' : 'group-hover/item:opacity-0 group-focus-within/item:opacity-0'"
     >
-      <!-- 7px 状态 icon（原名称左侧位右移至此）：unread(未读替换) / spinning(旋转箭头) /
+      <!-- 7px 状态 icon（原名称左侧位右移至此）：unread(未读替换) / spinning(accent 空心环，静态) /
            hollow(空心圆) / waiting / error / done / stopped / dead / 空。未读为替换式：
-           accent 实心点本体取代状态 icon——叠加式几何上盖不全 7px 状态点，左下必露底层点月牙边。 -->
+           accent 实心点本体取代状态 icon——叠加式几何上盖不全 7px 状态点，左下必露底层点月牙边。
+           [perf:animation] spinning 档改静态空心环（2026-11）：这是全仓唯一 N 实例常驻点
+           （每个 working session 一个环，多个后台会话并存时线性增多），且持续整个后台任务
+           生命周期。实测 dev 消融：单 14px spinner 即 9.3% GPU helper；打 translateZ(0) 才降
+           到 2.7%（will-change 无改善——7px 边框环每帧整边重画且原未提升层）。这里直接改静态
+           空心环，零合成开销。可区分性（2026-11 分支审查 arch-boundary M3）：spinning 档取
+           **虚线**环（border-dashed，「在跑」的静态惯用形），与 pending 的 hollow 实线环、
+           归档的 hollow-dim 三档在无动效下仍互异。 -->
       <span v-if="iconKind === 'unread'" data-testid="session-unread-dot" class="block size-[7px] shrink-0 rounded-full bg-accent" />
-      <span v-else-if="iconKind === 'spinning'" data-testid="session-icon" class="block size-[7px] shrink-0 animate-spin rounded-full border-[1.5px] border-accent border-t-transparent" />
+      <span v-else-if="iconKind === 'spinning'" data-testid="session-icon" data-icon-kind="spinning" class="block size-[7px] shrink-0 rounded-full border-[1.5px] border-dashed border-accent" />
       <span v-else-if="iconKind === 'hollow'" data-testid="session-icon" class="block size-[7px] shrink-0 rounded-full border-[1.5px] border-accent" />
       <span v-else-if="iconKind === 'hollow-dim'" data-testid="session-icon" class="block size-[7px] shrink-0 rounded-full border-[1.5px] border-neutral-dim opacity-60" />
       <span v-else-if="iconKind === 'waiting'" data-testid="session-icon" class="block size-[7px] shrink-0 rounded-full bg-warn" />
@@ -149,7 +156,9 @@ const freshImportState = computed(() => isImportedFresh(props.session.id))
 /**
  * 状态 icon 映射（单一 icon 范式，位次随裁决移至右槽）。
  * unread: 未读（后台完成 / fork 分支变更，两源合流）→ accent 实心圆替换状态 icon
- * spinning: streaming/compacting/working/retrying → 旋转箭头（accent 边框+透明顶边）
+ * spinning: streaming/compacting/working/retrying → accent 空心环（静态；[perf:animation]
+ *   2026-11 去旋转，名称保留避免牵连本文件判定与其他消费方——渲染形态已是静态环，
+ *   与 hollow 档同形，语义由 accent 色承担）
  * hollow: pending → accent 空心圆
  * hollow-dim: stopped → dim 空心圆
  * waiting: 等用户操作 → warn 实心圆

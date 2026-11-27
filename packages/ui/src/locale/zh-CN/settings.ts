@@ -98,6 +98,9 @@ export default {
   },
   appearance: {
     quickChatFont: '对话流字号',
+    // [perf:animation] 2026-11 减少动效开关（跑长任务风扇狂转的应用内降级口）。
+    reduceMotion: '减少动效',
+    reduceMotionDesc: '关闭常驻旋转 / 脉动 / 扫光动画（任务运行指示变为静态）；适合长任务时降低 GPU / CPU 占用',
     region: {
       sidebar: '左侧边栏',
       chat: '对话流',

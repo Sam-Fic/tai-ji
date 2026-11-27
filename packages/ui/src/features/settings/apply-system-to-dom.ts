@@ -93,21 +93,7 @@ export function applySystemToDom(
   if (typeof document === 'undefined') return
 
   const root = document.documentElement
-
-  root.setAttribute('data-theme', resolveTheme(s.theme))
-
-  // themePreset：缺省空串（与 DEFAULT_SYSTEM 一致，保证老数据无 themePreset 时回落默认主题）。
-  root.setAttribute('data-theme-preset', s.themePreset ?? '')
-
-  // fontSize：缺省 medium（D17，与 DEFAULT_SYSTEM 一致）。
-  root.dataset.fontSize = s.fontSize ?? 'medium'
-
-  // fontScales：分区字号档位，逐区域回落 DEFAULT_FONT_SCALES（sidebar/drawer=medium、
-  // chat=small；SSOT 在 core，getSystem 浅合并可能产生部分缺省对象，不可假设区域 key 完整）。
-  // 档位→倍率映射在 renderer style.css [data-fs-*] 规则。
-  root.dataset.fsSidebar = s.fontScales?.sidebar ?? DEFAULT_FONT_SCALES.sidebar
-  root.dataset.fsChat = s.fontScales?.chat ?? DEFAULT_FONT_SCALES.chat
-  root.dataset.fsDrawer = s.fontScales?.drawer ?? DEFAULT_FONT_SCALES.drawer
+  writeDataAttrs(root, s)
 
   if (s.locale && deps?.setLocale) {
     deps.setLocale(s.locale)
@@ -117,4 +103,29 @@ export function applySystemToDom(
   // 写终值会以内联样式击穿样式表里的回落链声明。
   applyFontSlot(root.style, '--font-ui', s.fonts?.ui)
   applyFontSlot(root.style, '--font-mono-ui', s.fonts?.mono)
+}
+
+/**
+ * 写 <html> 上的全部 data-* 外观档位（[perf:animation] 2026-11 从 applySystemToDom 内联段
+ * 提取为独立函数：原内联段让 applySystemToDom 圈复杂度到 16 超出 metrics-gate 阈值 15。
+ * 提取纯为复杂度拆分，写入语义与顺序逐字不变）。
+ *
+ * 各档位缺省回落：
+ * - themePreset：空串（与 DEFAULT_SYSTEM 一致，保证老数据无 themePreset 时回落默认主题）
+ * - fontSize：medium（D17）
+ * - fontScales：逐区域回落 DEFAULT_FONT_SCALES（SSOT 在 core；getSystem 浅合并可能产生部分
+ *   缺省对象，不可假设区域 key 完整）。档位→倍率映射在 renderer style.css [data-fs-*] 规则
+ * - reduceMotion：`on` / `off`（[perf:animation] 2026-11 应用内减少动效开关，style.css 的
+ *   [data-reduce-motion="on"] 规则快照终态。用 setAttribute 不删 key：显式 off 亦写，
+ *   便于调试时看出开关已生效过。槽位归属：desktop 壳（renderer/style.css）独占——
+ *   mobile-renderer 当前只有 OS prefers-reduced-motion 一条通道，不对齐时无需改本函数）
+ */
+function writeDataAttrs(root: HTMLElement, s: SystemSettings): void {
+  root.setAttribute('data-theme', resolveTheme(s.theme))
+  root.setAttribute('data-theme-preset', s.themePreset ?? '')
+  root.dataset.fontSize = s.fontSize ?? 'medium'
+  root.dataset.fsSidebar = s.fontScales?.sidebar ?? DEFAULT_FONT_SCALES.sidebar
+  root.dataset.fsChat = s.fontScales?.chat ?? DEFAULT_FONT_SCALES.chat
+  root.dataset.fsDrawer = s.fontScales?.drawer ?? DEFAULT_FONT_SCALES.drawer
+  root.setAttribute('data-reduce-motion', s.reduceMotion === true ? 'on' : 'off')
 }

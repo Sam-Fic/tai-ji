@@ -142,27 +142,12 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-/* 失败行呼吸微光（1.6s，仅左缘红渐隐——D10 动效清单；成功重试调用不染红：
-   判定源 = status==='error' 事实，无重试推断）。悬停底色走模板层 --hover-tint
-   任意值类，无 scoped 规则体。 */
+/* 失败行静态微光（[perf:animation] 2026-11 去动画）：原 agg-fail-glow 1.6s ease-in-out
+   infinite 动画 `box-shadow`（必走重绘，不可合成），且失败行常驻对话流、无终点——失败
+   历史行可长期存在。现固定取原动画 50% 帧值（视觉不变但零动画开销）：悬停底色仍走模板层
+   --hover-tint 任意值类，无 scoped 规则体。 */
 .agg-tool-row--failed {
   border-left: 2px solid var(--danger);
-  animation: agg-fail-glow 1.6s ease-in-out infinite;
-}
-
-@keyframes agg-fail-glow {
-  0%,
-  100% {
-    box-shadow: -2px 0 6px -2px color-mix(in oklch, var(--danger) 35%, transparent);
-  }
-  50% {
-    box-shadow: -2px 0 10px -1px color-mix(in oklch, var(--danger) 60%, transparent);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .agg-tool-row--failed {
-    animation: none;
-  }
+  box-shadow: -2px 0 10px -1px color-mix(in oklch, var(--danger) 60%, transparent);
 }
 </style>

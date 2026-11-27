@@ -1,4 +1,5 @@
 <template>
+  <!-- split-justified: 设置·外观页偏好聚合（GroupCard + SettingsFontsSection + terminal-config harness 同一 props 装配上下文，拆出即转发壳） -->
   <!--
     Settings · 外观菜单页（v6 §6.4 + §5.8）。
     聚合系统级外观偏好：外观模式（light/dark/system）、太极配色、全局字号（D17），
@@ -65,6 +66,17 @@
               {{ t(fs === 'small' ? 'settings.system.fontSmall' : fs === 'medium' ? 'settings.system.fontMedium' : 'settings.system.fontLarge') }}
             </Button>
           </div>
+        </SettingRow>
+        <SettingRow :label="t('settings.appearance.reduceMotion')" :desc="t('settings.appearance.reduceMotionDesc')">
+          <!-- [perf:animation] 2026-11 减少动效开关：关闭全局常驻动画（旋转/脉动/扫光）→ 静态
+               终态。等价于 OS prefers-reduced-motion 的应用内版（style.css 的
+               [data-reduce-motion="on"] 规则，applySystemToDom 写 <html data-reduce-motion>）。
+               默认关（不动用户现有观感），用户可手动开启。 -->
+          <Switch
+            data-testid="setting-reduce-motion"
+            :model-value="system.reduceMotion ?? false"
+            @update:model-value="emit('update', { reduceMotion: $event === true })"
+          />
         </SettingRow>
         <SettingRow
           v-for="region in FONT_REGIONS"
@@ -190,6 +202,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Check } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch' // [perf:animation] 2026-11 减少动效开关（外观页）
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { GroupCard, SettingsFontsSection } from '@taiji/ui/features/settings'

@@ -19,7 +19,8 @@ import Panel from '@/components/panel/Panel.vue'
 import { useChatStore } from '@/stores/chat'
 import { useSessionStore } from '@/stores/session'
 import { useSessionDerivations, invalidateStatusCache } from '@/composables/features/chat/useSessionDerivations'
-import { DOT_CLASS } from '@/composables/logic/sessionStatus'
+import { DOT_CLASS, STATUS_ICON } from '@/composables/logic/sessionStatus'
+import type { DerivedStatus } from '@/composables/logic/sessionStatus'
 import type { SessionSummary } from '@taiji/shared'
 
 // flow 单例态 mock（panel-view 派生消费 isActive）：E4 的 landing 场景需 flow 活跃。
@@ -212,5 +213,23 @@ describe('DOT_CLASS SSOT 一致性（附加 sanity）', () => {
     // 但 DOT_CLASS 表不可漂移，仍作为 fallback 使用。
     expect(DOT_CLASS.streaming).toContain('bg-accent')
     expect(DOT_CLASS.done).toBe('bg-success')
+  })
+
+  // [perf:animation] 2026-11 分支审查 M3 把 STATUS_ICON.working 改 Loader2 后 PanelHeader 的
+  // ICON_COMPONENTS 漏登记 → <component :is=undefined> 静默不渲染，working 态卡头图标消失
+  // （实机复测才发现）。此处锁契约：STATUS_ICON 的每个 icon 名必须是 @lucide/vue 真实导出
+  // （PanelHeader 的 ICON_COMPONENTS 键集已在类型层与 STATUS_ICON 对齐）。
+  it('STATUS_ICON 每个 icon 名都是 @lucide/vue 真实导出（防卡头图标静默消失）', async () => {
+    const lucide = await import('@lucide/vue')
+    for (const [status, cfg] of Object.entries(STATUS_ICON)) {
+      expect((lucide as Record<string, unknown>)[cfg.icon], `${status}.icon=${cfg.icon} 应是 lucide 导出`).toBeTruthy()
+    }
+    // 三态字形互异（静态化后状态可区分性靠字形承担，M3）
+    const activeGlyphs = new Set(['streaming', 'working', 'compacting'].map((s) => STATUS_ICON[s as DerivedStatus].icon))
+    expect(activeGlyphs.size).toBe(3)
+    // working / compacting 静态（常驻态不转）；streaming 保留旋转
+    expect(STATUS_ICON.working.animation).toBe('')
+    expect(STATUS_ICON.compacting.animation).toBe('')
+    expect(STATUS_ICON.streaming.animation).toBe('animate-spin')
   })
 })

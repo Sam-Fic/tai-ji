@@ -122,3 +122,19 @@ node scripts/perf-probes/gpu-trace.mjs --data-dir ~/.taiji-dev/verify-b5-final -
 # union 口径分析（禁嵌套求和）
 node scripts/perf-probes/analyze-gpu-arms.mjs full=/tmp/b5/full.trace.json noblur=/tmp/b5/noblur.trace.json nomask=/tmp/b5/nomask.trace.json reduced=/tmp/b5/reduced.trace.json
 ```
+
+## 3.3 修订（2026-11，feat-optimize-cpu-gpu-v2）：GPU-6 形态改「单层、无条件」
+
+**触发依据** = §3.1 登记的重审触发条件①已由用户实机成立：打包版 taiji 在 workflow / subagent 后台运行期 GPU helper 54–60% + renderer 85% CPU，风扇狂转（p95 远超 60% 判据）。该场景的干净数据来自后续「常驻动画消融」批次（审计报告 `artifacts/wf-fan-analysis.html` + `artifacts/wf-fan/measurements-dev.csv`）：
+
+| 项 | 事实 |
+|---|---|
+| blur 单独停掉 | 零收益（与 §0「吃掉余量」一致——静止时不可感知） |
+| blur 叠在常驻动画/滚动上 | 被连带计费：每一帧合成都要重做 4 次 backdrop 采样，是「动画期间成本放大器」的第二项（第一项 = 不被合成的 SVG transform 动画，已另批退役） |
+| 四层 → 单层 `blur-[4px]` 全高 | 带面积 2.5× → 1.0×；柔和度由仍在的沉色渐变层 + `[mask-image]` 4 stop 剖面承担 |
+
+**形态选择**：不走 §3.1 的「两层 + 条件触发」，直接单层、无条件。理由：① 条件触发的两个判据（software path ∨ `prefers-reduced-transparency`）在本机都不成立，但用户实机已过载——「条件」在这里测不出问题，事实（风扇）才是判据；② 1px/4px 两档在 40px 带内本就不可分辨（§3.1 已登记），单层消掉的是更多同质档位而非视觉意图；③ 「越靠顶越失焦」的意图由 mask 剖面继续承担，blur 半径不再分层。
+
+**视觉验收**：dev 实例截图对拍（`/tmp/wf-prof/dev-now.png`），对话流顶缘失焦感与沉色层观感无可见差异。`prefers-reduced-transparency` 路径不变（`reducedTransparency` → 整个 blur 层 `hidden`）。
+
+**连带同步**：`EdgeFade.vue` 头注释 + `docs/DESIGN.md` `--scrim-veil` 注释（SessionSwitchVeil 同批去全屏 blur）+ `docs/perf/final-summary.md` blur 口径。

@@ -408,7 +408,7 @@ demo 阶段功能做到「可见 + 可交互 + 数据 mock」即够。不接 run
 
 /* 弹层遮罩（modal/overlay 背后全场最暗层；黑基六主题共用一值，demo .cmask 同值）*/
 --scrim: rgba(0,0,0,0.8);   /* Tailwind 映射 bg-scrim；消费点 = DialogContent overlay / SearchModal / workflow-viz OverlayShell */
---scrim-veil: rgba(0,0,0,0.5);  /* 会话切换幕布压暗（session-switch-veil 组件消费）：比 --scrim 淡的非模态过渡遮罩，配 backdrop-blur 3px */
+--scrim-veil: rgba(0,0,0,0.5);  /* 会话切换幕布压暗（session-switch-veil 组件消费）：比 --scrim 淡的非模态过渡遮罩；纯压暗不带 backdrop-blur（全屏 backdrop-filter 是常驻合成开销，2026-11 性能裁决退役） */
 
 /* z-index 语义化（demo styles #8 梯队：sticky < popover < overlay < hovercard < modal < dialog < toast < banner）*/
 --z-sticky: 1;  --z-popover: 10;  --z-overlay: 20;  --z-hovercard: 500;
@@ -647,7 +647,7 @@ demo 用 `@keyframes shimmer`（1.4s ease-in-out infinite，linear-gradient 扫�
 - **骨架行**：`height 10px + radius 999px`（胶囊条），3 行堆叠模拟列表（间距用标准 scale）
 - **骨架卡片**：`bg-card` 卡片 + 内部 shimmer 扫光
 - **loading 防闪**（SearchModal）：`LOADING_DELAY_MS=200`，开扫 200ms 后才显 spinner，防连续输入闪烁
-- **ToolBlock running**：呼吸弧 loader（13px，浅色轨道整圈 opacity 0.16 + accent 弧段 `pathLength=100`；三重动画 = 整体 1.15s/圈旋转 `cubic-bezier(.6,.1,.35,.9)` + 弧段 dasharray 16%↔54% 呼吸 2.3s ease-in-out + 弧段 150° 摆动同周期同相；`prefers-reduced-motion` 静态呈「浅色轨道整圈 + 固定相位弧段」），name 染 accent
+- **ToolBlock running**：呼吸弧 loader（13px，浅色轨道整圈 opacity 0.16 + accent 弧段 `pathLength=100`；外层 HTML 容器单层旋转 1.15s/圈 `cubic-bezier(.6,.1,.35,.9)` + 弧段静态固定相位（dasharray 16/100、rotate −75°）——原「弧段呼吸 + 150° 摆动」两条 SVG 动画 2026-11 性能裁决退役：SVG transform 不被 Chromium 合成，叠在旋转上每帧重画），name 染 accent
 - **TaijiLogo 旋转**：8s（reduced-motion 停），`currentColor` 适配主题
 
 ### 5.11 内联反馈条（v6 不做全局 toast）
