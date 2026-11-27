@@ -164,7 +164,7 @@
  
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { PanelLeftOpen, PanelLeftClose, PanelRight, ArrowLeft, ArrowRight, Plus, RefreshCw, ArrowUpCircle, Hourglass, Wrench, Zap, Ban, AlertCircle, FileText, Check } from '@lucide/vue'
+import { PanelLeftOpen, PanelLeftClose, PanelRight, ArrowLeft, ArrowRight, Plus, RefreshCw, ArrowUpCircle, Hourglass, Wrench, Zap, Ban, AlertCircle, FileText, Check, Loader2 } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { useNavigationStore } from '@/stores/navigation'
 import { useSidebarStore } from '@/stores/sidebar'
@@ -177,7 +177,7 @@ import { useSessionTrace, setTraceView, type TraceMainView } from '@/composables
 import TraceViewToggle from './trace/TraceViewToggle.vue'
 import { ViewHost } from '@taiji/ui/extension-host'
 import type { DerivedStatus } from '@/types'
-import { STATUS_ICON } from '@/composables/logic/sessionStatus'
+import { STATUS_ICON, type StatusIconName } from '@/composables/logic/sessionStatus'
 
 const props = defineProps<{
   sessionLabel: string
@@ -229,10 +229,13 @@ const shortFileName = computed(() => (props.sessionFile ? formatShortSessionFile
 const { copied, copy } = useCopy()
 
 /** lucide 图标名 → 组件映射 */
-const ICON_COMPONENTS: Record<string, unknown> = {
+// 键集 = STATUS_ICON 全部 icon 名（类型层强制：漏登记某个 icon 名即编译错——2026-11 分支审查
+// M3 把 working 改 Loader2 后漏登记，<component :is=undefined> 静默不渲染，working 态图标消失）
+const ICON_COMPONENTS: Record<StatusIconName, unknown> = {
   RefreshCw,
   ArrowUpCircle,
   Hourglass,
+  Loader2,
   Wrench,
   Zap,
   Check,

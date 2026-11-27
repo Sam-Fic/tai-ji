@@ -98,9 +98,12 @@ export const DOT_CLASS: Record<DerivedStatus, string> = {
  * 是「一直有动画在跑」布尔事实的第一个来源。语义识别由静态字形 + accent 色承担。
  * streaming 保留旋转：真实流式是秒-分钟且用户预期在转。
  */
+/** STATUS_ICON 的 icon 名字面量集（PanelHeader 的 ICON_COMPONENTS 键集以此为类型约束，漏登记即编译错）。 */
+export type StatusIconName = 'RefreshCw' | 'ArrowUpCircle' | 'Hourglass' | 'Loader2' | 'Wrench' | 'Zap' | 'Check' | 'Ban' | 'AlertCircle'
+
 export const STATUS_ICON: Record<
   DerivedStatus,
-  { icon: string; color: string; animation: string }
+  { icon: StatusIconName; color: string; animation: string }
 > = {
   streaming: { icon: 'RefreshCw', color: 'text-accent', animation: 'animate-spin' },
   // [perf:animation] steps(4) 量化：pulse-strong 动 opacity + transform:scale，挂在
