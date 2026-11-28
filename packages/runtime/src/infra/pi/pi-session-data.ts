@@ -98,13 +98,14 @@ export interface PiHistoryToolResult extends PiHistoryMessage { // oe-exempt:202
  * 但 rebuildHistoryFromEntries 当前跳过不处理。
  *
  * 类型以 pi 源码为准（session-manager.ts:46-149）。pi 还定义了 thinking_level_change /
- * model_change / custom_message / session_info 等 entry 类型——这里只建模 taiji
+ * session_info 等 entry 类型——这里只建模 taiji
  * 可能消费的子集，未建模的 entry 在 rebuildHistoryFromEntries 中按 unknown 跳过。
  */
 export type PiSessionEntry =
   | PiSessionMessageEntry
   | PiSessionCustomEntry
   | PiSessionLabelEntry
+  | PiSessionModelChangeEntry
   | PiSessionCompactionEntry
   | PiSessionBranchSummaryEntry
   | PiSessionCustomMessageEntry
@@ -168,6 +169,18 @@ export interface PiSessionLabelEntry extends PiSessionEntryBase { // oe-exempt:2
   type: 'label'
   label: string | undefined
   targetId: string
+}
+
+/**
+ * model_change entry（pi `setModel` 的落盘记录）。对应 pi ModelChangeEntry
+ * （session-manager.js:851-861）。只带切换后的 provider/modelId。pi 新建会话时也落一条
+ * 记录初始模型（sdk.js:285-287）——它是会话的模型基线，不是一次切换。
+ * 历史重建经 mapSessionEntries 映射、lift 还原成专用 entry 喂 reducer，派生模型切换行。
+ */
+export interface PiSessionModelChangeEntry extends PiSessionEntryBase { // oe-exempt:20261127:framework:pi 会话数据模型接口镜像（同文件存量条目同款）
+  type: 'model_change'
+  provider?: string
+  modelId?: string
 }
 
 /**

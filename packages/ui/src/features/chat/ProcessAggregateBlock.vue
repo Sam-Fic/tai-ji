@@ -18,23 +18,15 @@
 -->
 <template>
   <div :class="['agg-block', entranceClass]" data-testid="process-aggregate">
-    <!-- 摘要行恒渲染（展开交互的可见入口，两态共用；live 变体见 AggregateSummaryRow）；
-         单步详情抽屉在展开区本地接线（AggregateExpandedBody 自持开合态），事件链
-         终结于此不向容器冒泡——本组件无 open-detail 转发/声明 -->
-    <AggregateSummaryRow :segment="segment" :expanded="expanded" :live="isLive" @toggle="toggleExpanded" />
-    <!-- ① 进行中收起：双窗（无外框）；展开 = 平铺区（与完成态同一 v-if 位） -->
-    <AggregateLiveWindows v-if="isLive && !expanded" :segment="segment" />
-    <!-- ③ 平铺区（两态共用）：units 按真实顺序，running 成员实时态 -->
-    <AggregateExpandedBody v-if="expanded" :segment="segment" :session-id="sessionId" :live="isLive" />
+    <!-- 一张卡 = 卡头 + 12 行窗口（chat-flow-v2 二轮终态）；展开态与滚动运行时在容器内 -->
+    <AggregateTape :segment="segment" :live="isLive" :open="expanded" :session-id="sessionId" @toggle="toggleExpanded" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ProcessSegment } from '@taiji/core/domain/chat'
-import AggregateLiveWindows from './process-aggregate/AggregateLiveWindows.vue'
-import AggregateSummaryRow from './process-aggregate/AggregateSummaryRow.vue'
-import AggregateExpandedBody from './process-aggregate/AggregateExpandedBody.vue'
+import AggregateTape from './process-aggregate/AggregateTape.vue'
 import { useProcessAggregateState } from './composables/useProcessAggregate'
 
 const props = defineProps<{
@@ -50,11 +42,16 @@ const props = defineProps<{
   sessionId?: string | null
 }>()
 
+/* 三态判定与展开态（useProcessAggregateState）：进行中 ⇔ turnWorking ∧ !followedByText；
+   进行中默认展开窗口；用户手动点过卡头后不随落成自动收起（自动收起只对未操作过的卡生效）。
+   窗口滚动运行时（贴底跟随 / 上滚暂停 / 滚动提示）在 AggregateTape 内的 useTapeScroll。 */
 const { isLive, expanded, toggleExpanded, entranceClass } = useProcessAggregateState({
   segment: computed(() => props.segment),
   turnWorking: computed(() => props.turnWorking),
   turnStreaming: computed(() => props.turnStreaming === true),
 })
+
+
 </script>
 
 <style scoped>

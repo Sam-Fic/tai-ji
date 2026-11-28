@@ -223,11 +223,11 @@ describe('Turn.vue 接线 useTurnExpansion（w1；chat-turn-fold-redesign 后展
     expect(wrapperB.find('[data-testid="agg-summary-row"]').exists()).toBe(false)
   })
 
-  it('TC-w4-8: 连续同类 tool 调用 → 聚进同一聚合块内工具组（组内逐行独立），末位 text 独立单元', async () => {
+  it('TC-w4-8: 连续同类 tool 调用 → 聚进同一聚合块成员直接成行（无组标题行），末位 text 独立单元', async () => {
     // 构造 3 个连续 toolCall（同类型 grep ∈ explore 分组名单，非失败）
-    // [chat-flow-process-aggregate U3] 组形态归聚合块（SegmentToolGroup）：连续同类 tool
-    // 聚成 1 个组（成员行不误合并、text 不被吞的锁定意图不变）；组头为纯标题（不可点击），
-    // 段展开即全部成员逐行可见（GL3 无二次折叠）
+    // [chat-flow-process-aggregate U3] 聚合块形态（tape-look 后）：连续同类 tool 聚成同一
+    // 聚合块，展开体内不设分组标题行（SegmentToolGroup 已退役）——成员在展开体直接逐行
+    // 独立渲染（GL3 无二次折叠），text 不被吞
     const tc1 = makeToolCall('tc1')
     const tc2 = makeToolCall('tc2')
     const tc3 = makeToolCall('tc3')
@@ -256,13 +256,12 @@ describe('Turn.vue 接线 useTurnExpansion（w1；chat-turn-fold-redesign 后展
     // 顶层 = 1 个聚合块 + 末位 text 独立单元
     const topBlocks = wrapper.findAll('.trace > .trace-blk')
     expect(topBlocks).toHaveLength(2)
-    expect(topBlocks[0].find('[data-testid="agg-tool-group"]').exists()).toBe(true)
+    // 窗口内不设分组标题行（tape-look 后展开体为平铺行）：无组包裹 / 组头，成员直接成行
+    expect(topBlocks[0].find('[data-testid="agg-tool-group"]').exists()).toBe(false)
+    expect(topBlocks[0].find('[data-testid="agg-group-head"]').exists()).toBe(false)
     // 末位 text 在 trace 内（不被分组吞掉）
     expect(topBlocks[1].findComponent({ name: 'MarkdownRenderer' }).exists()).toBe(true)
-    // 组头为纯标题（div 无 role/tabindex——组级无折叠入口，D1 裁决）；段展开即 3 个成员行独立渲染
-    const head = topBlocks[0].find('[data-testid="agg-group-head"]')
-    expect(head.element.tagName).toBe('DIV')
-    expect(head.attributes('role')).toBeUndefined()
+    // 段展开即 3 个成员行独立渲染（GL3 无二次折叠）
     const members = topBlocks[0].findAll('[data-testid="agg-tool-row"]')
     expect(members).toHaveLength(3)
   })

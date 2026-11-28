@@ -1016,22 +1016,15 @@ describe('ui-optimize-unified 决策 10 修正: thinking 扫光生命周期（�
 })
 
 // ═════════════════════════════════════════════════════════════════
-// [chat-flow-process-aggregate U3] RunGroupBlock 退役：组块渲染断言随被测对象删除
-// （聚合块内组形态 = SegmentToolGroup，由 process-aggregate-block.test.ts 承载；
-//  组名/统计段 i18n 键仍被聚合块消费，键值锁定保留如下。runGroupMileFirstEdit 的唯一
-//  渲染消费方（RunGroupBlock 里程碑徽标）随退役消失，键已双侧删除——无消费方的 locale
-//  键会被 i18n 反向检查拦截；里程碑徽标待上游显式信号落地时随消费方一并恢复。）
+// [chat-flow-v2] 过程卡窗口内不设分组标题行：组名键（探索 / 改动 / 执行命令）随消费方退役，
+// 零引用的 locale 键由 i18n 反向检查拒收；步数键由过程卡卡头计数消费，键值锁定保留如下。
+// runGroupMileFirstEdit 的唯一渲染消费方（RunGroupBlock 里程碑徽标）随退役消失，键已双侧删除；
+// 里程碑徽标待上游显式信号落地时随消费方一并恢复。
 // ═════════════════════════════════════════════════════════════════
 
-describe('runGroup 组名/统计段键值锁定（zh / en 双侧登记，聚合块组头消费）', () => {
-  it('组名与统计段文案在 zh / en 两侧都登记（键缺失时生产环境会把 key 原样渲染到界面）', () => {
-    expect(zhPanel.message.runGroupExplore).toBe('探索')
-    expect(zhPanel.message.runGroupEdit).toBe('改动')
-    expect(zhPanel.message.runGroupExec).toBe('执行命令')
+describe('过程卡步数键值锁定（zh / en 双侧登记，卡头计数消费）', () => {
+  it('步数文案在 zh / en 两侧都登记（键缺失时生产环境会把 key 原样渲染到界面）', () => {
     expect(zhPanel.message.runGroupSteps).toBe('{count} 步')
-    expect(enPanel.message.runGroupExplore).toBe('Explore')
-    expect(enPanel.message.runGroupEdit).toBe('Edits')
-    expect(enPanel.message.runGroupExec).toBe('Commands')
     expect(enPanel.message.runGroupSteps).toBe('{count} steps')
   })
 })

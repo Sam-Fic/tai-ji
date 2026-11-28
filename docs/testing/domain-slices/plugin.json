@@ -37,6 +37,7 @@
   },
   "tests": [
     "extensions/taiji/host-internals/src/__tests__/agent-ext.test.ts",
+    "extensions/taiji/host-internals/src/__tests__/model-select-forwarder.test.ts",
     "extensions/taiji/host-internals/src/__tests__/msg-id-mapper.test.ts",
     "packages/core/src/transport/api/__tests__/plugin-domain-rpc.test.ts",
     "packages/renderer/src/__tests__/composables/useExtensionHostBridge-plugin-replay.test.ts",

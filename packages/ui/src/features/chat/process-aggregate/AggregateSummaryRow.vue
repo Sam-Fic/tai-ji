@@ -1,72 +1,60 @@
 <!--
-  聚合块 · 摘要行（chat-flow-process-aggregate U2，终态② + live 变体）：过程图标 + 「过程」 +
-  分类计数（探索 N · 修改 N · 执行命令 N，0 的类型省略）+ 思考 N + 总耗时 + 失败标记
-  （含 M 次失败，danger chip）。计数唯一数据源 = core ProcessSegmentCounts（段级口径，
-  与组头/聚合条三处同口径——D3/RL4）。真实 button + aria-expanded 同步（可访问性规格）；
-  点击整行展开/收起，展开态由容器（D6 组件本地 ref）持有，本组件纯受控。
-  总耗时格式复用 formatDurationHms（mono 计时口径 SSOT：45s / 2m00s / 1h02m03s）。
-  [live 变体（2026-11-09 用户裁决：进行中同构可展开）] 段进行中（isLive）时本行即进行中
-  形态的展开入口：行首 Layers 换呼吸弧 loader（复用 block-icon.ts RUNNING_LOADER_SVG
-  SSOT + animate-loader-spin，ActivityStrip 活动行同款「进行中」信号）；总耗时隐藏
-  （live 期 totalDurationMs 只累计已完成步骤，不构成段耗时语义）；分类/思考/失败计数
-  保持实时（core counts 响应式重建）。落成瞬间图标交叉切回 Layers、耗时行出现——
-  与块级三态切换同帧。
+  过程卡 · 卡头（chat-flow-v2）：一行 24px。左侧开关 = 层叠图标 +「过程」+ 计数 + 失败标记
+  + 展开箭头；右侧插槽（由 AggregateTape 提供）放进行中的活动 chip 与滚动提示。
+  行首图标恒为层叠字形：进行中的动态信号在右侧活动 chip，不在行首（原型同款）。
+  计数口径：步数按段内工具类成员累计（思考不计步），思考数取 core counts.thinkingCount；
+  失败计数取 core counts.failedCount（与失败行同一口径）。
+  卡头不显示段总耗时——卡内唯一的实时计时在活动 chip。
+  展开/收起态由容器持有（D6 组件本地 ref），本组件纯受控：真实 button + aria-expanded 同步。
 -->
 <template>
-  <Button
-    variant="ghost"
-    class="agg-summary -mx-2 h-auto w-full justify-start gap-2 rounded-[var(--radius-xs)] px-2 py-1 [font-weight:var(--fw-mid)] text-neutral-mid focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-[color:var(--focus-ring)] hover:text-neutral-mid"
-    :aria-expanded="expanded"
-    data-testid="agg-summary-row"
-    @click="emit('toggle')"
-  >
-    <!-- live 行首呼吸弧：复用 block-icon.ts 的 RUNNING_LOADER_SVG（呼吸弧 SSOT，禁止
-         手抄同构副本；.ld-track/.ld-arc 动画类由 style.css 全局层持有）。testid 挂
-         v-html 包装层，与 TurnRail / BashOutputBlock / MarkdownRenderer / TurnMeta
-         四处既有消费同形态 -->
-    <!-- translateZ(0) 与 animate-loader-spin 分层：同元素时 keyframes 隐式 from = translateZ(0) → 不转 -->
-    <span v-if="live" class="inline-flex size-[15px] shrink-0 self-center items-center justify-center text-accent [transform:translateZ(0)]" data-testid="agg-summary-live-loader">
-      <!-- eslint-disable-next-line vue/no-v-html -- hardcoded constant from block-icon.ts -->
-      <span class="block size-full animate-loader-spin text-accent" v-html="RUNNING_LOADER_SVG" />
-    </span>
-    <Layers v-else class="size-[15px] shrink-0 self-center text-neutral-ico [stroke-width:1.6]" aria-hidden="true" />
-    <span class="shrink-0">{{ t('panel.message.aggProcessLabel') }}</span>
-    <!-- 分类计数：categoryCounts 三类按序（explore/edit/exec），0 省略——v-if 省略（DOM
-         不渲染）：fx spec「摘要行只列存在的类型」，v-show 留隐藏节点会被辅助技术读出且
-         testid 查询仍命中（真机剧本 agg-tf-1 实证），纯思考段三类全零时摘要只列思考计数 -->
-    <template v-for="(count, base) in segment.counts.categoryCounts" :key="base">
+  <div class="relative h-[length:var(--proc-tape-row-h)]">
+    <Button
+      variant="ghost"
+      class="-mx-2 h-[length:var(--proc-tape-row-h)] w-full justify-start gap-2 rounded-[var(--radius-xs)] px-2 text-[length:var(--text-sm)] text-neutral-fg-2 [font-weight:var(--fw-mid)] hover:bg-transparent hover:text-neutral-fg focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-0 focus-visible:outline-[color:var(--focus-ring)]"
+      :aria-expanded="expanded"
+      data-testid="agg-summary-row"
+      @click="emit('toggle')"
+    >
+      <Layers class="size-[15px] shrink-0 text-neutral-ico [stroke-width:1.6]" aria-hidden="true" />
+      <span class="shrink-0">{{ t('panel.message.aggProcessLabel') }}</span>
       <span
-        v-if="count > 0"
-        class="shrink-0 text-neutral-dim"
-        :data-testid="`agg-summary-cat-${base}`"
-      >· {{ t(RUN_GROUP_LABEL_KEY[base]) }} {{ count }}</span>
-    </template>
-    <span v-if="segment.counts.thinkingCount > 0" class="shrink-0 text-neutral-dim" data-testid="agg-summary-thinking">· {{ t('panel.message.thinkingBlock') }} {{ segment.counts.thinkingCount }}</span>
-    <span v-if="durationText && !live" class="shrink-0 font-mono text-[length:var(--text-2xs)] tabular-nums text-neutral-dim" data-testid="agg-summary-duration">· {{ durationText }}</span>
-    <!-- 失败标记（含 M 次失败）：AX6 响亮契约——计数即存在信号，无失败不渲染 -->
-    <span
-      v-if="segment.counts.failedCount > 0"
-      class="shrink-0 rounded-[var(--radius-xs)] bg-danger-soft px-1.5 py-px text-[length:var(--text-2xs)] [font-weight:var(--fw-mid)] text-danger"
-      data-testid="agg-summary-failed"
-    >{{ t('panel.message.traceFailed', { count: segment.counts.failedCount }) }}</span>
-  </Button>
+        v-if="countText"
+        class="min-w-0 shrink truncate text-neutral-mid [font-weight:var(--fw-text)]"
+        data-testid="agg-summary-count"
+      >{{ countText }}</span>
+      <!-- 失败标记（含 M 次失败）：计数即存在信号，无失败不渲染 -->
+      <span
+        v-if="segment.counts.failedCount > 0"
+        class="shrink-0 rounded-[var(--radius-xs)] bg-danger-soft px-1.5 py-px text-[length:var(--text-2xs)] [font-weight:var(--fw-mid)] text-danger"
+        data-testid="agg-summary-failed"
+      >{{ t('panel.message.traceFailed', { count: segment.counts.failedCount }) }}</span>
+      <ChevronRight
+        class="ml-auto size-[15px] shrink-0 text-neutral-dim transition-[color,transform] duration-[var(--duration-fast)] ease-[var(--ease)]"
+        :class="expanded ? 'rotate-90 text-accent' : ''"
+        aria-hidden="true"
+      />
+    </Button>
+    <!-- 右侧一组（活动 chip / 滚动提示）：叠在开关之上、停在箭头左侧；容器不拦指针，子元素自行接收 -->
+    <div v-if="$slots.right" class="pointer-events-none absolute inset-y-0 right-10 flex items-center gap-0.5">
+      <slot name="right" />
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Layers } from '@lucide/vue'
-import type { RunGroupBase, ProcessSegment } from '@taiji/core/domain/chat'
+import { ChevronRight, Layers } from '@lucide/vue'
+import type { ProcessSegment } from '@taiji/core/domain/chat'
 import { Button } from '../../../primitives/button'
-import { RUNNING_LOADER_SVG } from '../block-icon'
-import { formatDurationHms } from '../format-utils'
 
 const props = defineProps<{
-  /** 段数据（counts 是摘要行唯一数据源，core 单源口径） */
+  /** 段数据（counts 与 members 是计数唯一数据源，core 单源口径） */
   segment: ProcessSegment
   /** 展开/收起态（容器本地 ref 透传，aria-expanded 同步） */
   expanded: boolean
-  /** 段进行中（isLive 透传）：live 变体（呼吸弧行首 + 隐藏总耗时），缺省完成态形态 */
+  /** 段进行中（isLive 透传）：卡头形态不随它变化，保留给需要区分的调用方 */
   live?: boolean
 }>()
 
@@ -76,15 +64,13 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-/** 分类名 i18n 键（SegmentToolGroup 同键同值——摘要行与组头共用 runGroup* 词表） */
-const RUN_GROUP_LABEL_KEY: Record<RunGroupBase, string> = {
-  explore: 'panel.message.runGroupExplore',
-  edit: 'panel.message.runGroupEdit',
-  exec: 'panel.message.runGroupExec',
-}
-
-const durationText = computed(() => {
-  const ms = props.segment.counts.totalDurationMs
-  return ms > 0 ? formatDurationHms(ms) : ''
+/** 卡头计数：「N 步 · 思考 M」。步数按段内工具类成员累计（思考不计步），思考数取 core 计数 */
+const countText = computed(() => {
+  const steps = props.segment.members.filter((m) => m.block.kind !== 'thinking').length
+  const thinking = props.segment.counts.thinkingCount
+  const parts: string[] = []
+  if (steps > 0) parts.push(t('panel.message.runGroupSteps', { count: steps }))
+  if (thinking > 0) parts.push(t('panel.message.procThinkCount', { count: thinking }))
+  return parts.join(' · ')
 })
 </script>

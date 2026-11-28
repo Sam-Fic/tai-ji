@@ -47,6 +47,8 @@ export function makeCtx(initial: Message[] = [], sid = 's-test'): MessageEffectC
     appendUser: vi.fn(),
     // w21：entry 载体帧喂 reducer 的接入点（store.applyEntryFrame 注入）
     applyEntryFrame: vi.fn(),
+    // 模型切换帧读会话模型基线（store.getLastModel 注入；mock 无基线）
+    getLastModel: vi.fn(),
     // steer-bubble u1/D2：inflight 确认计数（message_end 纯计数兜底裁决输入，store 注入；
     // 增量入口 incrementInflight 已收敛到 store 方法侧，ctx 只暴露读/减/清三操作）
     getInflight: vi.fn(() => 0),

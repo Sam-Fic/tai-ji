@@ -6223,6 +6223,101 @@
       "owner": "packages/runtime",
       "authority": "docs/TEST-STRATEGY.md",
       "note": "R2 态：npm 安装器/升级链 diff 命中时跑。budget 用例 = fake timers 推进预算窗口（默认组快用例）；接线用例 = fake installer 捕获 installNpm opts 断言 timeout+budgetMs 同传。tarball stall 文件同 scope 复跑（默认组 6 条快用例，门控 3 条 skip 不拖时）。serial=false：无真实传输依赖，loopback header 到达有 flushIo 确定性等待。"
+    },
+    {
+      "id": "E2E-ACCEPT-01",
+      "summary": "tree-plant 实机验收探针：过程卡（12 行窗口上限、长相对齐原型、思考行、进行中计时、滚动跟随、落成收起）与模型切换行（回放、实时、重载同形）（开发实例 + faux 演员 + CDP 断言，凭证无关零 token）",
+      "scope": [
+        "scripts/acceptance/harness.mjs",
+        "scripts/acceptance/tape-height.mjs",
+        "scripts/acceptance/tape-look.mjs",
+        "scripts/acceptance/motion-overflow.mjs",
+        "scripts/acceptance/tape-think.mjs",
+        "scripts/acceptance/tape-live.mjs",
+        "scripts/acceptance/tape-settle.mjs",
+        "scripts/acceptance/tape-scroll.mjs",
+        "scripts/acceptance/msw-replay.mjs",
+        "scripts/acceptance/msw-live.mjs",
+        "scripts/acceptance/msw-mid.mjs",
+        "scripts/acceptance/msw-icon.mjs"
+      ],
+      "layer": "L2.5",
+      "assets": [
+        {
+          "kind": "probe",
+          "ref": "scripts/acceptance/harness.mjs"
+        },
+        {
+          "kind": "probe",
+          "ref": "scripts/acceptance/tape-height.mjs"
+        },
+        {
+          "kind": "probe",
+          "ref": "scripts/acceptance/tape-look.mjs"
+        },
+        {
+          "kind": "probe",
+          "ref": "scripts/acceptance/motion-overflow.mjs"
+        },
+        {
+          "kind": "probe",
+          "ref": "scripts/acceptance/tape-think.mjs"
+        },
+        {
+          "kind": "probe",
+          "ref": "scripts/acceptance/tape-live.mjs"
+        },
+        {
+          "kind": "probe",
+          "ref": "scripts/acceptance/tape-settle.mjs"
+        },
+        {
+          "kind": "probe",
+          "ref": "scripts/acceptance/tape-scroll.mjs"
+        },
+        {
+          "kind": "probe",
+          "ref": "scripts/acceptance/msw-replay.mjs"
+        },
+        {
+          "kind": "probe",
+          "ref": "scripts/acceptance/msw-live.mjs"
+        },
+        {
+          "kind": "probe",
+          "ref": "scripts/acceptance/msw-mid.mjs"
+        },
+        {
+          "kind": "probe",
+          "ref": "scripts/acceptance/msw-icon.mjs"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "node scripts/acceptance/tape-height.mjs",
+      "owner": "packages/ui",
+      "authority": "docs/TEST-STRATEGY.md#e2e-资产归宿纪律三态-r1r2r32026-09-15",
+      "note": "R2 归宿（chat-flow-v2 tree-plant trunk case AC-H12；开发实例装配走 .agents/skills/verify-taiji 的 seed-faux + dev-instance --print 派生端口，faux provider 扩展经 TAIJI_EXTENSION_PATHS 装载；执行归阶段门禁按改动范围触发，PR/merge/CI 不跑——探针启动真 Electron 窗口，需桌面环境与空闲端口；后续每枝新增的验收探针同族登记到本 rule 的 assets 与 scope）。"
+    },
+    {
+      "id": "E2E-INTEG-79",
+      "summary": "PanelContainer 懒加载失败态双面板回归（TAIJI_TEST_INTEGRATION 门控；组件图渲染水位无确定上界的慢用例豁免登记）",
+      "scope": [
+        "packages/renderer/src/__tests__/panel/panel-container-lazy-retry.test.ts"
+      ],
+      "layer": "L2",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "packages/renderer/src/__tests__/panel/panel-container-lazy-retry.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": true,
+      "run": "TAIJI_TEST_INTEGRATION=1 pnpm --filter @taiji/renderer exec vitest run src/__tests__/panel/panel-container-lazy-retry.test.ts（domain 档：TAIJI_TEST_DOMAIN=panel 同前缀）",
+      "owner": "packages/renderer",
+      "authority": "docs/TEST-STRATEGY.md#集成测试门控约定taiji_test_integration",
+      "note": "R2 态 + 文件级门控成员（同 E2E-INTEG-78 的登记形态）：用例体全确定性 mock（懒加载失败注入），但 mount PanelContainer 全树 + defineAsyncComponent 的 vite 按需编译链——组件图重评估成本随宿主负载波动、无确定上界（孤跑 2.06s / 满载 2.22s，超慢用例 2s 判据），语义同 E2E-INTEG-78 先例（非用例本身慢），挂门控豁免慢用例门禁；本地不设 env 时 describe.skipIf 跳过、CI 设 env=1 真跑。触发条件 = scope 文件 diff 命中时开发阶段串行跑。"
     }
   ]
 }

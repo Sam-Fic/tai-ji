@@ -30,6 +30,13 @@
  *    时序位置（开放 turn 期间到达先缓冲、该 turn 关闭后随其后输出；无开放 turn 立即输出）。
  *    理由：stream_warn 语义是会话级健康提示（registry W2），归「到达时末位 turn」会随其后
  *    到达的回合漂移；独立成项不切断 turn、不改归属判定、不引入新判定源。
+ * 4c. 模型切换行（modelSwitch 存在，chat-flow-v2 G9）→ 回合进行中切换归当前 turn 的 notices
+ *    （不切断 turn；渲染层在 trace 区按时间插入该行），回合之间切换独立成 systemNotice
+ *    static 项 + 关闭当前 turn（同规则 6 形态）。归属判定（isMidTurnSwitch）向后看下一条
+ *    非透明消息：assistant = 切换落在回合中段（新模型内容将归同一回合）；连续切换行相互
+ *    跳过（同属中段）；user / 可见 system / 隐藏完成通知边界 = 回合已终。数组末尾窗口
+ *    （切换是最后一条消息）按回合活动信号判定（isTurnGroupActive）——流式中 / 工具执行中 /
+ *    user 锚待首回复读作进行中，等待回合延续后再定归属。
  * 5. background-bash 结构化完成通知（display 非 false 且 details 可解析，解析器即判定 SSOT）→
  *    边界 + 收纳附着
  *    缓冲——后续 assistant 开新 turn（或规则 2 开 trigger turn）时按到达序注入该组
@@ -48,15 +55,15 @@
  * ui 包经 @taiji/core/domain/chat 子路径 import（仅类型/纯函数，非 store/composable 运行时）。
  */
 import {
-  COMPLETE_NOTIFY_CUSTOM_TYPES,
   parseBackgroundBashDetails,
 } from '@taiji/shared'
 import type { Message } from '@taiji/shared'
+import { isHiddenCompleteNotify, isMidTurnSwitch } from './model-switch-turns'
 import { deriveNotifySummary } from './notify-summary'
 import type { NotifySummary } from './notify-summary'
-// 本地绑定（与文件尾 re-export 同源同模块）：computeHasFoldable 的正文块计数与 trace 区
-// 渲染单元同口径（expandAssistantBlocks 产出），不另设第二套 text 块判定
-import { expandAssistantBlocks } from './assistant-blocks'
+// turn 标量派生纯函数（isStreaming 期望值 / hasFoldable 展开门）实装在 ./turn-derived
+// （badge 计数族同在彼处，文件尾 re-export）——与 trace 区渲染单元同口径，不另设第二套判定
+import { computeHasFoldable, computeIsStreaming } from './turn-derived'
 
 // D5 边界聚合派生视图的公开类型（消费方：Turn.vue / 测试）；派生实现与判据在 ./notify-summary
 export type { NotifyOutcome, NotifySummary } from './notify-summary'
@@ -77,11 +84,16 @@ export interface MessageTurn {
   user: Message | null
   /** 回合内的 assistant 消息（一条或多条） */
   assistants: Message[]
-  /** turn 内 notice 列表（D4）：bash 执行记录，按到达序挂在 turn 内部末尾（bash entry 在
-   *  文件序即级联末，位置忠实），不切断回合。[chat-flow-consistency C6] 后 liveOnly 健康
-   *  警告不再归本字段——恒独立成 systemNotice static 项（分组层规则 4b），由流层渲染。
+  /** turn 内 notice 列表（D4）：bash 执行记录按到达序挂末尾（bash entry 在文件序即级联末，
+   *  位置忠实）；模型切换行（规则 4c）按到达序追加、渲染层在 trace 区按序锚插入——两者都
+   *  不切断回合。[chat-flow-consistency C6] 后 liveOnly 健康警告不再归本字段——恒独立成
+   *  systemNotice static 项（分组层规则 4b），由流层渲染。
    *  W4 渲染消费；undefined = 无 notice（历史 turn 形态不变）。 */
   notices?: Message[]
+  /** 模型切换行的回合内插入锚（规则 4c 派生）：noticeId → 行到达时点组内已有 assistant 数，
+   *  渲染层据此把行插在第 N 条 assistant 的块之后——实时与回放按同一数组序推导同一锚，
+   *  不比较时间戳（pi 消息体时钟与 entry 时钟不同源）。undefined = 本回合无切换行。 */
+  switchAfter?: Record<string, number>
   /** 无 user 起点的续跑 turn 标记（D3）：'bg-notify' = 隐藏完成通知（subagent/workflow 后台
    *  任务完成）触发的续跑 turn。W4 据此渲染「后台任务完成」起点行（替代 user 气泡）。
    *  undefined = user 锚 turn 或 assistant 自启 turn（现状形态）。 */
@@ -194,12 +206,16 @@ export function createTurnRenderCache(): TurnRenderCache {
   }
 }
 
-/** 分组中间结构：一个「turn」的成员组（user 起点锚 / assistant 自启 / 隐藏通知触发） */
-interface TurnGroup {
+/** 分组中间结构：一个「turn」的成员组（user 起点锚 / assistant 自启 / 隐藏通知触发）。
+ *  导出给 model-switch-turns 做归属判定（type-only import，无运行时依赖环）。 */
+export interface TurnGroup {
   user: Message | null
   assistants: Message[]
-  /** turn 内 notice（D4 规则 4），按到达序追加；undefined = 尚无 notice（输出形态同历史 turn） */
+  /** turn 内 notice（D4 规则 4 / 规则 4c），按到达序追加；undefined = 尚无 notice（输出形态同历史 turn） */
   notices?: Message[]
+  /** 模型切换行插入锚（规则 4c，附着时点组内 assistant 数）：随组透传到 MessageTurn（两个
+   *  构造点同款携带）。undefined = 本组无切换行。 */
+  switchAfter?: Record<string, number>
   /** 被隐藏的完成通知本体（D5 载体）：规则 2 开/复用 trigger turn 时压入，连续边界折叠
    *  复用组时累积追加。**本体不渲染**（隐藏语义保持），只服务 notifySummary 派生与增量
    *  复用键；命名与 notices（字面仅差一词）刻意区分语义：notices = 要渲染的 turn 内
@@ -219,16 +235,6 @@ interface TurnGroup {
 /** 渲染槽位：turn 槽位引用 groups 下标；system 类直接产出静态项（不参与 turn 复用） */
 type GroupSlot = { slot: 'turn'; group: number } | { slot: 'static'; item: RenderItem }
 
-/** 隐藏完成通知判定（D3 边界触发器）：display===false 且 customType 属完成通知 SSOT 常量集
- *  （与 apply-entry 覆写 / registry 同一常量源——分组侧不引入第二份判定）。 */
-function isHiddenCompleteNotify(msg: Message): boolean {
-  return (
-    msg.display === false &&
-    msg.customType !== undefined &&
-    COMPLETE_NOTIFY_CUSTOM_TYPES.has(msg.customType)
-  )
-}
-
 /** background-bash 结构化完成通知判定
  *  可见 system 消息且 details 经 shared 单点解析命中（解析器即判定 SSOT——与 SystemNotice
  *  结构化行渲染同一入口，无第二份形状判定；display:false 形态由规则 2/透明分支先行拦截，
@@ -239,12 +245,10 @@ export function isBashCompleteNotice(msg: Message): boolean {
   return msg.display !== false && parseBackgroundBashDetails(msg.details) !== null
 }
 
-/** inline notice 判定（D4 规则 4）：bash 执行记录（有 bashExecution 字段）→ turn 内部语义，
+/** inline notice 判定（D4 规则 4）：bash 执行记录（bashExecution 字段在）→ turn 内部语义，
  *  不切断 turn。[chat-flow-consistency C6] liveOnly 不再属本判定（独立成 systemNotice 项，
- *  位置 = 时序位置，见分组规则头 4 节）。 */
-function isInlineNotice(msg: Message): boolean {
-  return msg.bashExecution !== undefined
-}
+ *  位置 = 时序位置，见分组规则头 4 节）。模型切换行走规则 4c 独立判定（modelSwitch 字段在，
+ *  归属判定见 ./model-switch-turns），不属本判定——主循环按字段直接分派，无第二份函数。 */
 
 /**
  * 交接指令提示行判定（chat-flow-consistency U9 / 特殊流程 S2）：reducer 派生段
@@ -486,13 +490,84 @@ function collectBashCompleteNotice(
  * 两处分组逻辑漂移会导致增量输出与全量输出不等价。
  *
  * 分组不变量（设计文档 D-A5）：static 槽位结构性不含 display:false 消息，依赖分支顺序
- * （透明分支先于 isInlineNotice 与规则 5 拦截）——新增 static 产出分支须保持该分支顺序前提。
+ * （透明分支先于规则 4 bash 判定与规则 5 拦截）——新增 static 产出分支须保持该分支顺序前提。
  *
  * from = 起始下标（尾部快路径 D-4 用：从末位 turn 的起始下标重跑子数组分组——该下标处
  * 分组状态归零，子重跑与全量路径在该区间逐字一致）。starts = 各 turn 组的最早成员下标
  * （与 groups 等长对齐，供下次尾部快路径定位重受影响区）。分组规则分支本体不感知 from/
  * starts（纯 bookkeeping），全量调用（from 缺省 0）行为与历史版本逐字一致。
  */
+/** 规则 1 分支体：user 锚 → 开新 turn（挂起的空 trigger turn 折叠不产出；缓冲的 liveOnly 与
+ *  挂起的 pending bash 无宿主轮 → 依次落位外部行，随后到达的用户消息不被误认为宿主）。
+ *  [chat-flow-consistency U9 / S2] 交接指令提示行同款作锚（判定与锚位语义见
+ *  isHandoffInstructionNotice 注释）——其后的 assistant（交接文档）归本 turn。 */
+function openUserAnchorTurn(
+  msg: Message,
+  current: TurnGroup | null,
+  pendingLiveNotices: Message[],
+  pendingBashNotices: PendingBashNotice[],
+  groups: TurnGroup[],
+  slots: GroupSlot[],
+  starts: number[],
+  i: number,
+): TurnGroup {
+  closeTurn(current, groups, slots, starts)
+  flushLiveNotices(pendingLiveNotices, slots)
+  flushPendingBashAsStatic(pendingBashNotices, slots)
+  return openTurn(msg, undefined, groups, slots, starts, i)
+}
+
+/** 规则 4b 分支体（[chat-flow-consistency C6]）：liveOnly 健康警告独立成 systemNotice 项，
+ *  位置 = 时序位置——开放 turn 期间缓冲、该 turn 关闭/换组后随其后落位（各关闭点
+ *  flushLiveNotices）；无开放 turn 立即落位。不切断 turn、不改任何消息归属判定。 */
+function bufferOrEmitLiveNotice(msg: Message, current: TurnGroup | null, pendingLiveNotices: Message[], slots: GroupSlot[]): void {
+  if (current !== null) {
+    pendingLiveNotices.push(msg)
+  } else {
+    slots.push({ slot: 'static', item: { kind: 'systemNotice', message: msg } })
+  }
+}
+
+/** 回合间静态分隔行落位：关闭当前 turn + 两缓冲按到达序先落位（保持流序）+ 独立
+ *  systemNotice 项。返回 null = 落位后必无开放 turn（调用方 current 归零）。 */
+function closeTurnEmitStaticSystem(
+  msg: Message,
+  current: TurnGroup | null,
+  pendingLiveNotices: Message[],
+  pendingBashNotices: PendingBashNotice[],
+  groups: TurnGroup[],
+  slots: GroupSlot[],
+  starts: number[],
+): null {
+  closeTurn(current, groups, slots, starts)
+  flushLiveNotices(pendingLiveNotices, slots)
+  flushPendingBashAsStatic(pendingBashNotices, slots)
+  slots.push({ slot: 'static', item: { kind: 'systemNotice', message: msg } })
+  return null
+}
+
+/** 规则 4c（G9）分支体：模型切换行。回合进行中切换 → 归当前 turn 内部（不切断 turn，
+ *  附着时点记录 assistant 序锚供渲染层插入）；回合之间切换 → 独立静态分隔行（同规则 6
+ *  形态，缓冲先落位保持流序）。归属判定见 isMidTurnSwitch。 */
+function appendModelSwitchNotice(
+  msg: Message,
+  current: TurnGroup | null,
+  messages: Message[],
+  i: number,
+  pendingLiveNotices: Message[],
+  pendingBashNotices: PendingBashNotice[],
+  groups: TurnGroup[],
+  slots: GroupSlot[],
+  starts: number[],
+): TurnGroup | null {
+  if (current !== null && isMidTurnSwitch(messages, i, current)) {
+    ;(current.notices ??= []).push(msg)
+    ;(current.switchAfter ??= {})[msg.id] = current.assistants.length
+    return current
+  }
+  return closeTurnEmitStaticSystem(msg, current, pendingLiveNotices, pendingBashNotices, groups, slots, starts)
+}
+
 function groupRenderInput(
   messages: Message[],
   from = 0,
@@ -517,14 +592,8 @@ function groupRenderInput(
   for (let i = from; i < messages.length; i++) {
     const msg = messages[i]
     if (msg.role === 'user' || isHandoffInstructionNotice(msg)) {
-      // 规则 1：user 锚 → 开新 turn（挂起的空 trigger turn 折叠不产出；缓冲的 liveOnly 与
-      // 挂起的 pending bash 无宿主轮 → 依次落位外部行，随后到达的用户消息不被误认为宿主）。
-      // [chat-flow-consistency U9 / S2] 交接指令提示行同款作锚（判定与锚位语义见
-      // isHandoffInstructionNotice 注释）——其后的 assistant（交接文档）归本 turn。
-      current = closeTurn(current, groups, slots, starts)
-      flushLiveNotices(pendingLiveNotices, slots)
-      flushPendingBashAsStatic(pendingBashNotices, slots)
-      current = openTurn(msg, undefined, groups, slots, starts, i)
+      // 规则 1（分支体见 openUserAnchorTurn）
+      current = openUserAnchorTurn(msg, current, pendingLiveNotices, pendingBashNotices, groups, slots, starts, i)
     } else if (msg.role === 'assistant') {
       // 规则 3（分支体见 appendAssistantEntry）
       current = appendAssistantEntry(msg, current, groups, slots, starts, i, pendingBashNotices)
@@ -538,31 +607,25 @@ function groupRenderInput(
     } else if (isBashCompleteNotice(msg)) {
       // 规则 5 收纳分支（分支体见 collectBashCompleteNotice）
       current = collectBashCompleteNotice(msg, current, groups, slots, starts, i, pendingBashNotices, pendingLiveNotices)
-    } else if (isInlineNotice(msg)) {
+    } else if (msg.bashExecution !== undefined) {
       // 规则 4：bash inline notice → 归当前 turn 内部（分支体见 appendInlineNotice）；
       // 无当前 turn 退化为独立 static 项——pending bash 行先落位（保持流序）
       if (current === null) flushPendingBashAsStatic(pendingBashNotices, slots)
       current = appendInlineNotice(msg, current, slots)
     } else if (msg.liveOnly === true) {
-      // 规则 4b（[chat-flow-consistency C6]）：liveOnly 健康警告独立成 systemNotice 项，
-      // 位置 = 时序位置——开放 turn 期间缓冲、该 turn 关闭/换组后随其后落位（各关闭点
-      // flushLiveNotices）；无开放 turn 立即落位。不切断 turn、不改任何消息归属判定。
-      if (current !== null) {
-        pendingLiveNotices.push(msg)
-      } else {
-        slots.push({ slot: 'static', item: { kind: 'systemNotice', message: msg } })
-      }
+      // 规则 4b（分支体见 bufferOrEmitLiveNotice）
+      bufferOrEmitLiveNotice(msg, current, pendingLiveNotices, slots)
+    } else if (msg.modelSwitch !== undefined) {
+      // 规则 4c（分支体见 appendModelSwitchNotice）
+      current = appendModelSwitchNotice(msg, current, messages, i, pendingLiveNotices, pendingBashNotices, groups, slots, starts)
     } else {
       // 规则 6：其余可见 system → boundary：独立 systemNotice 项 + 关闭当前 turn（现状语义）。
       // else 即「非 user/assistant 且非上述属性」兜底分支：现状唯一合法值是 role === 'system'
       // （compactionSummary/branchSummary/可见 custom/通用 system）。刻意不做显式 system 判定后
       // 丢弃——类型外 role（未来扩展）兜底渲染为 systemNotice 可见可发现，静默丢弃会违背
       // 「渲染过滤不丢消息」语义（AGENTS.md 规则 9）。bashExecution 此分支不可达（规则 4 已收）。
-      // 缓冲的 liveOnly 与 pending bash 行先落位（到达序在先）。
-      current = closeTurn(current, groups, slots, starts)
-      flushLiveNotices(pendingLiveNotices, slots)
-      flushPendingBashAsStatic(pendingBashNotices, slots)
-      slots.push({ slot: 'static', item: { kind: 'systemNotice', message: msg } })
+      // 分支体见 closeTurnEmitStaticSystem（缓冲的 liveOnly 与 pending bash 行先落位，到达序在先）。
+      current = closeTurnEmitStaticSystem(msg, current, pendingLiveNotices, pendingBashNotices, groups, slots, starts)
     }
   }
   // 数组结束时仍挂起的空 trigger turn 不产出（空 turn 折叠——其附着的 bash 行经 closeTurn
@@ -572,57 +635,6 @@ function groupRenderInput(
   flushLiveNotices(pendingLiveNotices, slots)
   flushPendingBashAsStatic(pendingBashNotices, slots)
   return { slots, groups, starts }
-}
-
-/**
- * turn 派生字段：isStreaming（「回合内末位 assistant 是否 streaming」）。
- * [chat-flow-consistency D2] 不再以末位回合短路：插话回流开出新回合后，旧回合的 assistant
- * 仍 streaming（到回合级 message.complete 才收尾）→ 保持 true，双工作态并存是期望形态。
- * forceWorking 仍只作用于末位回合（虚拟会话历史回合无 streaming assistant 天然 false）。
- */
-function computeIsStreaming(
-  assistants: Message[],
-  isLastTurn: boolean,
-  forceWorking: boolean,
-): boolean {
-  if (isLastTurn && forceWorking) return true
-  const last = assistants[assistants.length - 1]
-  return last?.status === 'streaming'
-}
-
-/**
- * turn 正文块数是否 > 1（chat-turn-fold-redesign §1 展开入口保证）：折叠态只保留末位一条
- * 正文，多正文 turn 缺展开入口 = 中间正文折叠后不可达。计数口径 = expandAssistantBlocks
- * 产出的 text 块（与 trace 区渲染单元同源，ADR-0122 error 宿主块同计）。提前退出：纯
- * text turn 无过程块时本函数是 computeHasFoldable 唯一要跑的判据，多数 turn 数到 2 即返。
- */
-function hasMultipleTextBlocks(assistants: Message[]): boolean {
-  let count = 0
-  for (const m of assistants) {
-    for (const b of expandAssistantBlocks(m)) {
-      if (b.kind === 'text') {
-        count += 1
-        if (count > 1) return true
-      }
-    }
-  }
-  return false
-}
-
-/**
- * turn 派生字段：是否有展开入口（chevron 渲染门）。三判据任一命中：
- * - 含 thinking/toolCalls 块（折叠态过程段收进聚合块，展开才见）
- * - 正文块数 > 1（折叠态中间正文收起，展开才见——多正文纯 text turn 的唯一入口）
- * - 被收纳完成通知（折叠标签 / 明细行同受展开门控），计入口径与块同权。
- */
-function computeHasFoldable(assistants: Message[], foldedNotices?: Message[]): boolean {
-  return (
-    assistants.some(
-      (m) => (m.thinking?.length ?? 0) > 0 || (m.toolCalls?.length ?? 0) > 0,
-    ) ||
-    hasMultipleTextBlocks(assistants) ||
-    (foldedNotices?.length ?? 0) > 0
-  )
 }
 
 /** 签名相等 = 长度相同且逐成员引用相等（自启 turn 无 user 位，序列天然对齐） */
@@ -668,11 +680,18 @@ function reuseOrRebuildTurn(
     const expected = computeIsStreaming(g.assistants, isLastTurn, forceWorking)
     return prevTurn.isStreaming === expected ? prevTurn : { ...prevTurn, isStreaming: expected }
   }
+  return turnFromGroup(g, abs + 1, isLastTurn, forceWorking)
+}
+
+/** TurnGroup → MessageTurn 唯一构造工厂（全量版与增量重建两个构造点共用，字段清单单点）。
+ *  index = 1 起算的回合序号（两调用点各自 +1 传入）。 */
+function turnFromGroup(g: TurnGroup, index: number, isLastTurn: boolean, forceWorking: boolean): MessageTurn {
   return {
-    index: abs + 1,
+    index,
     user: g.user,
     assistants: g.assistants,
     notices: g.notices,
+    switchAfter: g.switchAfter,
     trigger: g.trigger,
     notifySummary: g.notifySummary,
     foldedNotices: g.foldedNotices,
@@ -937,38 +956,15 @@ export function toRenderItems(
   forceWorking = false,
 ): RenderItem[] {
   const { slots, groups } = groupRenderInput(messages)
-  const turns: MessageTurn[] = groups.map((g, i) => ({
-    index: i + 1,
-    user: g.user,
-    assistants: g.assistants,
-    notices: g.notices,
-    trigger: g.trigger,
-    notifySummary: g.notifySummary,
-    foldedNotices: g.foldedNotices,
-    isStreaming: computeIsStreaming(g.assistants, i === groups.length - 1, forceWorking),
-    hasFoldable: computeHasFoldable(g.assistants, g.foldedNotices),
-  }))
+  const turns: MessageTurn[] = groups.map((g, i) => turnFromGroup(g, i + 1, i === groups.length - 1, forceWorking))
   return slots.map((s): RenderItem =>
     s.slot === 'turn' ? { kind: 'turn', turn: turns[s.group] } : s.item,
   )
 }
 
-/** 统计 turn 内 thinking 块数（折叠条 badge） */
-export function countThinking(turn: MessageTurn): number {
-  return turn.assistants.reduce((sum, m) => sum + (m.thinking?.length ?? 0), 0)
-}
-
-/** 统计 turn 内 toolCall 块数（折叠条 badge） */
-export function countToolCalls(turn: MessageTurn): number {
-  return turn.assistants.reduce((sum, m) => sum + (m.toolCalls?.length ?? 0), 0)
-}
-
-/** turn 是否含失败的 tool（影响 trace 渲染：失败 tool 整块红框） */
-export function hasFailedTool(turn: MessageTurn): boolean {
-  return turn.assistants.some((m) =>
-    m.toolCalls?.some((t) => t.status === 'error'),
-  )
-}
+// turn 标量派生之 badge 计数族：实装在 ./turn-derived（此处 re-export 保持原 import
+// 路径不变——summarize-turn 等包内消费方与 @taiji/core/domain/chat 桶出口零改动）
+export { countThinking, countToolCalls, hasFailedTool } from './turn-derived'
 
 // 有序渲染块展开（OrderedBlock / expandAssistantBlocks）：实装在 ./assistant-blocks
 // （此处 re-export 保持原 import 路径不变——包内 trace-window 深路径与桶出口消费方零改动），

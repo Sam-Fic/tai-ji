@@ -691,6 +691,16 @@ export interface FileChange {
  */
 export type ChangeSetStatus = 'accumulating' | 'ready' | 'partially-reviewed' | 'resolved' | 'superseded'
 
+/** 模型切换行数据（chat-flow-v2）：provider/modelId 是切换后的生效值，previous* 是切换前。
+ *  切换来源（pi `model_select` 的 source）不在本数据：WS 帧契约未携带，来源归属已登记
+ *  显式不做（要带须帧加字段并逐层透传）。 */
+export interface ModelSwitchData {
+  provider?: string
+  modelId: string
+  previousProvider?: string
+  previousModelId?: string
+}
+
 export interface Message {
   id: string
   role: MessageRole
@@ -764,6 +774,10 @@ export interface Message {
   error?: string
   /** 上下文压缩摘要（W07-C，message.compactionSummary） */
   compactionSummary?: CompactionSummary
+  /** 模型切换行（chat-flow-v2）：模型真实变化时由 reducer 派生（首个 model_change 只是基线，
+   *  同模型重复写入不出行）。渲染走 SystemNotice 横线分隔行族；回合进行中切换由分组层放进
+   *  该回合内部，回合之间切换作静态分隔行。content 带 `previous → next` 的兜底文本。 */
+  modelSwitch?: ModelSwitchData
   /** 分支摘要（W07-C，message.branchSummary） */
   branchSummary?: BranchSummary
   /** pi CustomMessage 的 customType（识别来源扩展，如 "subagent-bg-notify"）。

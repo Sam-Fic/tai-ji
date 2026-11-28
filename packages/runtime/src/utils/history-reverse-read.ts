@@ -37,6 +37,13 @@ export interface ReverseReadOptions {
    * import 而由调用方传参注入默认值，保持工具零 shared 依赖、纯 IO 形态）。
    */
   maxTotalBytes?: number
+  /**
+   * 读取终点（exclusive，缺省 = 文件末尾）：只向前读 [0, endOffset)。
+   * 调用方手里已有更靠后一段内容时用它避免重读——如索引窗口读取要找「窗口起点之前」
+   * 的记录。endOffset 须落在行首字节（上一行换行之后），否则终点处的残行按 pending
+   * 语义丢弃。大于文件大小按文件大小计。
+   */
+  endOffset?: number
 }
 
 /** 交付给 visit 的单个完整行块。 */
@@ -203,9 +210,10 @@ export function forEachReversedLineChunk(
   }
   try {
     const size = fstatSync(fd).size
-    // 空文件：天然「无内容可读」= 已完整扫描（避免调用方把空文件误判为「未读到头」）
-    if (size === 0) return { totalBytesRead: 0, sawStart: true, stopped: false, fullyScanned: true, openFailed: false }
-    const state: ReverseScanState = { end: size, totalBytesRead: 0, pending: '', sawStart: false }
+    const end = Math.min(size, Math.max(0, options?.endOffset ?? size))
+    // 空文件 / 终点为 0：天然「无内容可读」= 已完整扫描（避免调用方误判为「未读到头」）
+    if (end === 0) return { totalBytesRead: 0, sawStart: true, stopped: false, fullyScanned: true, openFailed: false }
+    const state: ReverseScanState = { end, totalBytesRead: 0, pending: '', sawStart: false }
     let stopped = false
 
     while (state.end > 0) {

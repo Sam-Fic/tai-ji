@@ -198,6 +198,7 @@ export const HIDDEN_ALLOWLIST = new Map([
   ['packages/renderer/src/composables/features/settings/use-app-update-autocheck.ts:169', 'document.hidden（浏览器 API：页面可见性；166→169 随 fix-update-autocheck 恢复 ADR-0190 例外调度轴（v0.12.8 恢复版较被删前版本 runAutoCheck 注释段 +3 行）漂移，同号收口）'],
   ['packages/ui/src/features/chat/composables/useTurnElapsed.ts:123', 'document.hidden（浏览器 API：页面可见性，计时器暂停判据）'],
   ['packages/renderer/src/boot/hidden-animation-pause.ts:46', 'document.hidden（浏览器 API：页面可见性，窗口后台化/失焦动画暂停判据；19→32 随 2026-11 [perf:animation] shouldPause 加 !document.hasFocus() 判定（失焦但可见时动画照跑，实测与风扇一致）：+13 行 = 文件头注释扩写 +10 / shouldPause 提取 +2 / 新增 blur+focus 监听 +1；32→46 随同批分支审查 S1 安装幂等改造（shouldPause/sync 提到模块作用域 + uninstall 导出）再漂 +14，同号收口）'],
+  ['packages/ui/src/features/chat/composables/useProcessAggregate.ts:318', 'document.hidden（浏览器 API：页面可见性，过程卡活动计时器暂停 / 恢复补算判据；309→318 随过程卡行锚点常量块（AGG_ROW_ANCHOR/AGG_ROW_SELECTOR，import 后 +9 行）漂移，同号收口）'],
   // canvas 布局 opts.hidden（节点显隐回调）
   ['packages/renderer/src/components/canvas/CanvasGraph.vue:249', 'canvas 布局 opts.hidden（节点显隐回调注入）'],
   ['packages/renderer/src/components/canvas/canvas-display.ts:229', 'canvas 布局 opts.hidden 形参声明'],

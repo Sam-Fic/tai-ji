@@ -1,18 +1,18 @@
 <!--
-  聚合块 · 段内单步行（chat-flow-process-aggregate U2）：展开平铺与聚合条共用的工具行。
-  形态（任务书硬约束）：工具名 + 参数（超宽 min(420px,52%) 省略；窄屏 11px）+ diff 摘要 + 耗时 +
-  失败标记；失败行在场标红（AX6：失败是段的正式成员，不做可见性剔除）；重试标记不渲染
-  （无结构判定源，D4 裁决——demo 数据里的重试标记不进生产口径）。
-  详情通道分工（D4）：悬停 → 浮层摘要（本组件内显隐）；点击 / Enter / Space → emit
-  open-detail（右侧抽屉由 U4 接线；点击同时收浮层 = 「开抽屉时消失」路径之一）。
-  行可聚焦（role=button + tabindex=0）：键盘可达 + 鼠标点击持焦点——抽屉壳在 open 时刻
-  读 activeElement 当触发行、关闭归还到它（GL6「焦点归还触发行」前提，ToolRow 文件 chip
-  同款可聚焦行形态）。
-  行内不展开输出（行内展开已随 D4 退役——输出不再挤占对话流）。
+  过程卡 · 工具步行（chat-flow-v2）：一行 24px，一个工具调用一行。
+  形态（原型同款）：`>` 等工具图标 + 主体 + 行尾。主体按工具类型二选一——
+  命令类工具（RUN_GROUP_TOOLS.exec 类型表内，如 bash）只显示命令正文，不带工具名；
+  其余工具显示工具名 + 参数摘要。行尾：diff 摘要、失败标记、耗时。
+  失败行在场标红（失败是段的正式成员，不做可见性剔除）；重试标记不渲染（无结构判定源，D4）。
+  执行中：命令正文提亮，行尾显示最新一行输出与光标（没有输出时只有光标）；不显示耗时。
+  详情通道分工（D4）：悬停 → 浮层摘要；点击 / Enter / Space → emit open-detail
+  （右侧抽屉由 AggregateExpandedBody 接线；点击同时收浮层）。行内不展开输出。
+  浮层传送到页面层、固定定位：行在限高滚动的窗口里，挂在行内的浮层会被窗口裁掉。
 -->
 <template>
   <div
-    class="agg-tool-row group/aggrow relative -mx-2 flex min-w-0 cursor-pointer select-none items-baseline gap-[8px] rounded-[var(--radius-xs)] px-2 py-0.5 hover:bg-[color:var(--hover-tint)]"
+    ref="rowRef"
+    class="agg-tool-row group/aggrow relative -mx-2 flex h-[length:var(--proc-tape-row-h)] min-w-0 cursor-pointer select-none items-center gap-2 rounded-[var(--radius-xs)] px-2 text-[length:var(--text-sm)] hover:bg-[color:var(--hover-tint)]"
     :class="isFailed ? 'agg-tool-row--failed' : ''"
     role="button"
     tabindex="0"
@@ -23,24 +23,27 @@
     @keydown.enter.stop.prevent="onRowClick"
     @keydown.space.stop.prevent="onRowClick"
   >
-    <!-- running 态 loader（呼吸弧 + accent），其余状态静态图标二选一切换；
-         失败行图标染 danger（状态色只落图标，行文字恒行层级——demo .tool .t-name 同规） -->
-    <RunningBlockIcon v-if="isRunning" kind="tool-other" />
-    <component :is="headerIcon" v-else :class="[BLOCK_ICON_CLASS, isFailed ? 'text-danger' : '', 'self-center']" />
-    <span class="shrink-0 text-neutral-mid">{{ tool.toolName }}</span>
-    <!-- 参数摘要：超宽 min(420px,52%) 省略（任务书硬约束；完整参数走浮层/抽屉）；
-         窄屏 11px = --text-2xs 令牌（chat 语境 11px 基准，D4 采用栏 demo 规格），判定源 =
-         视口 ≤420px 断点（D7 双窗降档 max-[420px]: 同款机制——spec §9 表把单步行参数 11px
-         与思考窗/聚合窗降档绑同一断点，桌面窗口缩到 390px 时 V6 走查同样生效） -->
+    <!-- running 态 loader（呼吸弧 + accent），其余状态静态图标；失败行图标染 danger。
+         命令类工具执行中保持静态箭头：进度信号在行尾的输出与光标 -->
+    <RunningBlockIcon v-if="isRunning && !isCommandLine" kind="tool-other" />
+    <component
+      :is="headerIcon"
+      v-else
+      :class="[BLOCK_ICON_CLASS, isFailed ? 'text-danger' : '', 'shrink-0']"
+    />
+    <span v-if="!isCommandLine" class="shrink-0 text-neutral-mid">{{ tool.toolName }}</span>
+    <!-- 主体：命令正文或参数摘要，占满剩余宽度后省略（完整内容走浮层/抽屉） -->
     <span
       v-if="paramText"
-      class="min-w-0 max-w-[min(420px,52%)] truncate font-mono text-neutral-dim max-[420px]:text-[length:var(--text-2xs)]"
+      class="min-w-0 flex-1 truncate font-mono text-[length:var(--text-xs)]"
+      :class="isRunning ? 'text-neutral-fg' : 'text-neutral-fg-2'"
       data-testid="agg-tool-param"
     >{{ paramText }}</span>
+    <span v-else class="flex-1" />
     <!-- diff 摘要（edit 工具增删行数，core diffStat 口径；write/历史会话缺省不渲染） -->
     <span
       v-if="tool.diffStat"
-      class="shrink-0 font-mono text-[length:var(--text-2xs)] tabular-nums text-neutral-dim"
+      class="shrink-0 font-mono text-[length:var(--text-xs)] tabular-nums text-neutral-mid"
       data-testid="agg-tool-diffstat"
     >+{{ tool.diffStat.additions }} −{{ tool.diffStat.deletions }}</span>
     <!-- 失败标记（危险色文字；行左缘另有呼吸微光动画，scoped 尾部） -->
@@ -49,23 +52,35 @@
       class="shrink-0 rounded-[var(--radius-xs)] bg-danger-soft px-1.5 py-px text-[length:var(--text-2xs)] [font-weight:var(--fw-mid)] text-danger"
       data-testid="agg-tool-failed"
     >{{ t('panel.message.aggRowFailed') }}</span>
-    <!-- 耗时（行尾 mono dim；running 无 endTime 不渲染） -->
+    <!-- 执行中：最新一行输出（最多占行宽的 46%）与光标 -->
+    <span
+      v-if="isRunning && outputTail"
+      class="ml-auto flex min-w-0 max-w-[46%] shrink items-center gap-1 font-mono text-[length:var(--text-xs)] text-neutral-mid"
+      data-testid="agg-tool-tail"
+    ><CornerDownRight class="size-3 shrink-0 text-neutral-dim" aria-hidden="true" /><span class="truncate">{{ outputTail }}</span></span>
+    <span v-if="isRunning" class="agg-cursor" aria-hidden="true" />
+    <!-- 耗时（行尾等宽中灰；running 无 endTime 不渲染） -->
     <span
       v-if="duration"
-      class="ml-auto shrink-0 font-mono text-[length:var(--text-2xs)] tabular-nums text-neutral-dim"
+      class="ml-auto shrink-0 font-mono text-[length:var(--text-xs)] tabular-nums text-neutral-mid"
       data-testid="agg-tool-duration"
     >{{ duration }}</span>
-    <!-- 悬停浮层：v-if 挂载（happy-dom 可断言存在性）；显隐归本组件（滚动/缩放/Esc 全局监听） -->
-    <AggregateHoverCard v-if="cardVisible" :tool="tool" />
+    <!-- 悬停浮层：传送到页面层并按行的视口位置固定定位（v-if 挂载；显隐归本组件） -->
+    <Teleport to="body">
+      <AggregateHoverCard v-if="cardVisible" :tool="tool" :anchor="anchor" />
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { CornerDownRight } from '@lucide/vue'
+import { RUN_GROUP_TOOLS } from '@taiji/core/domain/chat'
 import type { ToolCall } from '@taiji/shared'
 import RunningBlockIcon from '../RunningBlockIcon.vue'
 import AggregateHoverCard from './AggregateHoverCard.vue'
+import './aggregate-motion.css'
 import { BLOCK_ICON_CLASS, BLOCK_ICON_LUCIDE, getBlockIcon } from '../block-icon'
 import { formatDuration } from '../format-utils'
 import { toolArgFieldText } from './tool-arg-summary'
@@ -76,7 +91,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  /** 单步行点击 → 右侧抽屉触发（抽屉壳与焦点管理在 U4 接线，本单元只发事件） */
+  /** 工具步行点击 → 右侧抽屉触发（抽屉壳与焦点管理在 U4 接线，本单元只发事件） */
   (e: 'open-detail', tool: ToolCall): void
 }>()
 
@@ -85,11 +100,24 @@ const { t } = useI18n()
 const isRunning = computed(() => props.tool.status === 'running')
 const isFailed = computed(() => props.tool.status === 'error')
 
-/** 静态图标（running 收窄回退 tool-other 字形——实际渲染走模板 RunningBlockIcon 分支，
- *  ToolRow headerBlockIcon 同款收窄形态） */
+/** 命令类工具（类型表 RUN_GROUP_TOOLS.exec 内）：行内只显示命令正文，不带工具名 */
+const isCommandLine = computed(() => RUN_GROUP_TOOLS.exec.includes(props.tool.toolName))
+
+/** 静态图标（按完成态取字形；执行中的非命令类工具在模板里换成功效图标） */
 const headerIcon = computed(() => {
-  const kind = getBlockIcon(props.tool.toolName, props.tool.status, false, false)
+  const kind = getBlockIcon(props.tool.toolName, 'completed', false, false)
   return kind === 'running' ? BLOCK_ICON_LUCIDE['tool-other'] : BLOCK_ICON_LUCIDE[kind]
+})
+
+/** 执行中最新一行输出：output 里最后一个非空行（output 已去 ANSI）；没有则不显示 */
+const outputTail = computed(() => {
+  if (!isRunning.value) return ''
+  const lines = (props.tool.output ?? '').split('\n')
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i].trim()
+    if (line) return line
+  }
+  return ''
 })
 
 const duration = computed(() => {
@@ -99,18 +127,21 @@ const duration = computed(() => {
 })
 
 /**
- * 参数摘要（字段序单源 tool-arg-summary；展示级提取，非成员资格判定）。样式与提取分离：
- * 超宽省略宽度是模板层约束（min(420px,52%)），提取只产出文本；未覆盖形态回退空串
- * （窄行不进长 JSON——回退两档义务见 tool-arg-summary.ts 头注释）。
+ * 行内主体（命令正文 / 参数摘要；字段序单源 tool-arg-summary）。提取与样式分离：
+ * 省略是模板层约束，提取只产出文本；未覆盖形态回退空串（窄行不进长 JSON）。
  */
 const paramText = computed(() => toolArgFieldText(props.tool.input) ?? '')
 
-/* ── 悬停浮层显隐：滚动 / 缩放 / Esc / 行点击时消失（任务书硬约束）。
-      监听器随浮层在场挂载、离场移除（常驻空监听 = 无谓的全局开销）；
-      scroll 用 capture 捕获对话流内部容器的滚动（window 级 scroll 事件不冒泡）。 ── */
+/* ── 悬停浮层显隐：滚动 / 缩放 / Esc / 行点击时消失。监听器随浮层在场挂载、离场移除 ── */
+const rowRef = ref<HTMLElement | null>(null)
 const cardVisible = ref(false)
+/** 行的视口矩形（浮层定位依据；显示那一刻取一次，之后行一动浮层即收起） */
+const anchor = ref({ top: 0, bottom: 0, left: 0 })
 
 function showCard(): void {
+  const rect = rowRef.value?.getBoundingClientRect()
+  if (!rect) return
+  anchor.value = { top: rect.top, bottom: rect.bottom, left: rect.left }
   cardVisible.value = true
   window.addEventListener('scroll', hideCard, true)
   window.addEventListener('resize', hideCard)
@@ -142,12 +173,25 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-/* 失败行静态微光（[perf:animation] 2026-11 去动画）：原 agg-fail-glow 1.6s ease-in-out
-   infinite 动画 `box-shadow`（必走重绘，不可合成），且失败行常驻对话流、无终点——失败
-   历史行可长期存在。现固定取原动画 50% 帧值（视觉不变但零动画开销）：悬停底色仍走模板层
-   --hover-tint 任意值类，无 scoped 规则体。 */
+/* 失败行呼吸微光（1.6s，仅左缘红渐隐——D10 动效清单）。悬停底色走模板层 --hover-tint */
 .agg-tool-row--failed {
   border-left: 2px solid var(--danger);
-  box-shadow: -2px 0 10px -1px color-mix(in oklch, var(--danger) 60%, transparent);
+  animation: agg-fail-glow 1.6s ease-in-out infinite;
+}
+
+@keyframes agg-fail-glow {
+  0%,
+  100% {
+    box-shadow: -2px 0 6px -2px color-mix(in oklch, var(--danger) 35%, transparent);
+  }
+  50% {
+    box-shadow: -2px 0 10px -1px color-mix(in oklch, var(--danger) 60%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agg-tool-row--failed {
+    animation: none;
+  }
 }
 </style>

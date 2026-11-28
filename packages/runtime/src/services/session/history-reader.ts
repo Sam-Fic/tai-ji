@@ -426,7 +426,8 @@ export class SessionHistoryReader {
     let orphans: unknown[] = []
     let entries = await readEntriesAtOffset(filePath, selected.startByte, selected.endByte)
     if (entries === null) return { ok: true, result: emptyPage() }
-    let messages = convertWindowEntries(entries, this.deps.sessionStore, sidecar.segmentsMetadata, orphans)
+    let startByte = selected.startByte
+    let messages = convertWindowEntries(entries, this.deps.sessionStore, sidecar.segmentsMetadata, orphans, { filePath, endOffset: startByte })
     let extensions = 0
     while (orphans.length > 0 && startIdx > 0 && extensions < MAX_ORPHAN_TURN_EXTENSIONS) {
       // 向前扩一个 turn 段：扩进段先过边界 entryId 反证（失配交 rebuildAfterMismatch 重建）
@@ -437,12 +438,12 @@ export class SessionHistoryReader {
       }
       startIdx = prevIdx
       // 扩到 turn 0 时从 byte 0 读（前导段 header 不单独建记录，与 selectIndexWindow 同口径）
-      const startByte = startIdx === 0 ? 0 : snapshot.turns[startIdx].byteOffset
+      startByte = startIdx === 0 ? 0 : snapshot.turns[startIdx].byteOffset
       const reEntries = await readEntriesAtOffset(filePath, startByte, selected.endByte)
       if (reEntries === null) return { ok: true, result: emptyPage() }
       entries = reEntries
       orphans = []
-      messages = convertWindowEntries(entries, this.deps.sessionStore, sidecar.segmentsMetadata, orphans)
+      messages = convertWindowEntries(entries, this.deps.sessionStore, sidecar.segmentsMetadata, orphans, { filePath, endOffset: startByte })
       extensions++
     }
     if (orphans.length > 0) {

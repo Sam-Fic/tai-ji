@@ -692,6 +692,7 @@ function assertReducerCaseCoverage(entry: PiEntry): void {
     case 'custom_message':
     case 'usage':
     case 'context_edit':
+    case 'model_change':
       return
     default: {
       const uncovered: never = entry

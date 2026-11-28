@@ -38,6 +38,7 @@ import { backfillConvertedSegments } from '../infra/pi/entry-tree-builder.js'
 import { exceedsTurnByteBudget, isUserMessageBoundary } from '../infra/pi/turn-index-types.js'
 import type { PiSessionEntry } from '../infra/pi/pi-protocol.js'
 import { forEachReversedLineChunk } from '../utils/history-reverse-read.js'
+import { findModelChangeBaselineBefore } from '../infra/pi/session-model-tail-read.js'
 
 /**
  * 过滤出 object entry 并收窄为 PiSessionEntry[]（供 mapSessionEntries 消费）。
@@ -188,7 +189,10 @@ export async function getHistoryFromFilePath(filePath: string, sessionStore: ISe
     const loaded = collectRecentTurnEntriesFromTail(filePath, HISTORY_BUDGET.RECENT_TURNS, { maxBytes: HISTORY_BUDGET.MAX_BYTES })
     // 预检后文件被竞态删除（openSync 失败）→ 空结果不抛（对齐规则 #6 降级语义）
     if (!loaded) return { messages: [], truncated: false }
-    return { messages: convertWindowEntries(loaded.entries, sessionStore), truncated: loaded.truncated }
+    return {
+      messages: convertWindowEntries(loaded.entries, sessionStore, undefined, undefined, { filePath }),
+      truncated: loaded.truncated,
+    }
   }
 
   // 现状全量读路径（< 32MB，行为不变）
@@ -450,12 +454,19 @@ function collectRecentTurnEntriesFromTail(
  * 无法配对的 toolResult（其 toolCall 在窗口外更早 turn 段）经本链 push 出来，供索引窗口
  * 读取编排（history-reader）按索引补读配对 turn 段后重 fold；不传时行为不变（reducer 内
  * warn 丢弃，全量读 / ①②档窗口无跨窗口配对需求）。
+ *
+ * windowSource 可选（模型切换行的窗口基线，chat-flow-v2）：窗口不含文件头且含 model_change
+ * 时，窗口内第一条 model_change 之前没有更早记录，reducer 会把它记成基线而不出切换行。
+ * 传入窗口来源后，从活跃路径上第一条 entry 的真实父亲回溯，找到窗口起点处的生效模型，
+ * 以一条基线伪消息前插（不产消息，只让 reducer 有「上一模型」可比）。窗口含文件头或没有
+ * 切换记录时不读文件。见 findModelChangeBaselineBefore。
  */
 export function convertWindowEntries(
   entries: PiSessionEntry[],
   sessionStore: ISessionStore,
   segmentsMetadata?: SegmentsMetadataFile | null,
   orphanToolResults?: unknown[],
+  windowSource?: WindowSource,
 ): Message[] {
   // 文件路径喂入前剥 session header 行：pi getEntries() RPC 已滤除（dist/core/
   // session-manager.js getEntries 的 `e.type !== "session"`，0.84.4 实锚），而 parseJsonl
@@ -467,10 +478,16 @@ export function convertWindowEntries(
   // 类型注记：header 形态不在 PiSessionEntry 联合内（pi 类型层的已知盲区——它只在文件
   // raw 首行存在，历史调用点把 parseJsonl 输出直接断言成 PiSessionEntry[]），故谓词经
   // unknown 中转比较；此 filter 即运行时检查本体。
+  const hasHeader = entries.some((e) => (e as { type?: unknown }).type === 'session')
   const scoped = entries.filter((e) => (e as { type?: unknown }).type !== 'session')
   const last = scoped[scoped.length - 1]
   const leafId = last !== undefined && typeof last.id === 'string' ? last.id : undefined
   const { messages, entryIds, customDataEntries } = mapSessionEntries(scoped, leafId)
+  const baseline = hasHeader ? undefined : windowModelBaseline(scoped, leafId, windowSource)
+  if (baseline !== undefined) {
+    messages.unshift({ role: 'modelChange', provider: baseline.provider, modelId: baseline.modelId })
+    entryIds.unshift(MODEL_BASELINE_ENTRY_ID)
+  }
   const converted = sessionStore.convertHistory(messages, entryIds, orphanToolResults)
   // [session-cold-switch-perf] segments.json sidecar 回填（尾读窗口对齐全量路径的消息
   // 内容——图片/文件/技能 chip）：与 rebuildHistoryFromEntries 第 2-4 步同一判定链
@@ -481,6 +498,32 @@ export function convertWindowEntries(
   }
   applyEntryEndTimes(converted, scoped)
   return converted
+}
+
+/** 窗口来源：这段 entries 读自哪个文件、起点在哪（模型切换行的窗口基线查找用）。 */
+export interface WindowSource {
+  filePath: string
+  /** 窗口起点的字节偏移：只向前读 [0, endOffset)；缺省 = 读到文件末尾（父链只指向更早的 entry，结果相同，多读一段）。 */
+  endOffset?: number
+}
+
+/** 前插的基线伪消息在 entryIds 里的占位 id：基线不产消息，这个值不进任何输出。 */
+const MODEL_BASELINE_ENTRY_ID = 'window-model-baseline'
+
+/**
+ * 窗口模型基线：窗口里有切换记录才读文件；从活跃路径上第一条 entry 的真实父亲回溯
+ * （窗口第一条若属于被撤分支，它的父亲链不是当前路径）。
+ */
+function windowModelBaseline(
+  scoped: PiSessionEntry[],
+  leafId: string | undefined,
+  windowSource: WindowSource | undefined,
+): { provider: string; modelId: string } | undefined {
+  if (windowSource === undefined) return undefined
+  if (!scoped.some((e) => e.type === 'model_change')) return undefined
+  const first = computeActivePathEntries(scoped, leafId)[0]
+  const fromParentId = first !== undefined && typeof first.parentId === 'string' ? first.parentId : null
+  return findModelChangeBaselineBefore(windowSource.filePath, fromParentId, windowSource.endOffset)
 }
 
 export function activePathEntriesOf(entries: PiSessionEntry[]): PiSessionEntry[] {
@@ -543,7 +586,13 @@ export async function tailReadHistory(
   // 本尾读链 warn 丢弃（不额外拉取）；索引窗口读取链（history-reader）已按 turn 边界
   // 索引实现跨窗口补读配对（convertWindowEntries 的 orphanToolResults out 参数）。
   return {
-    messages: convertWindowEntries(loaded.entries, sessionStore, sidecar?.segmentsMetadata ?? null),
+    messages: convertWindowEntries(
+      loaded.entries,
+      sessionStore,
+      sidecar?.segmentsMetadata ?? null,
+      undefined,
+      { filePath },
+    ),
     truncated: loaded.truncated,
     loadedTurns: loaded.loadedTurns,
     totalTurnsEstimate: loaded.totalTurnsEstimate,

@@ -1968,6 +1968,7 @@ export type ServerMessageType =
   | 'extension:setEditorText'
   | 'extension:requestsInvalidated'
   | 'message.compactionSummary' | 'message.branchSummary'
+  | 'message.modelSwitch'
   | 'message.auto_retry_start' | 'message.auto_retry_end'
   | 'message.stream_error'
   | 'message.stream_warn'
@@ -3198,6 +3199,19 @@ export interface ServerMessageMapBase {
   // tokensBefore 合成广播（live 帧与重载翻译同一条 reducer，C1 分界行实时化）。
   // 前端 chat-message-effects 把它渲染成 system 消息（SystemNotice.vue「上下文已压缩」）。
   'message.compactionSummary': { sessionId: string; summary?: string; tokensBefore?: number; timestamp?: number }
+  // message.modelSwitch：模型切换信号（chat-flow-v2）。pi setModel 成功且模型真实变化后，
+  // host-internals 扩展经隐藏 custom message 送达 runtime，runtime 广播本帧；前端合成
+  // model_change entry 喂同一 reducer（重开侧读 pi 落盘的 model_change entry，两路同形）。
+  // previous* = pi model_select 事件携带的切换前模型：pi 在新建会话时落盘的初始 model_change
+  // 不经事件送达前端，实时侧没有会话基线时靠它补上（缺省 = 扩展未带，此时首条只记基线）。
+  'message.modelSwitch': {
+    sessionId: string
+    provider?: string
+    modelId: string
+    previousProvider?: string
+    previousModelId?: string
+    timestamp?: number
+  }
   // session.state_changed：session 级状态变更（model.switch 成功后推送，含新 modelId + 当前
   // thinkingLevel）。前端据 modelId/thinkingLevel 同步 Composer 工具条。thinkingLevel optional
   // （未设置时省略）。
