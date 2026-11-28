@@ -211,8 +211,8 @@ export const HIDDEN_ALLOWLIST = new Map([
   // 1405/1403→1624/1632 [HISTORICAL] 实为 import 跳过状态机漏报所致的「假绿」（对象键 `import:`
   // 在 :58 置 inImport 永不复位，此后 1600+ 行被吞）——2026-11 分支审查 data-governance MF1
   // 修状态机后露出真实行号；该两条自 1393 起从未与实况对齐过，靠漏报维持绿）
-  ['packages/ui/src/locale/en-US/settings.ts:1624', 'locale 键 hidden（设置项字面键名，非会话语义）'],
-  ['packages/ui/src/locale/zh-CN/settings.ts:1632', 'locale 键 hidden（设置项字面键名，非会话语义）'],
+  ['packages/ui/src/locale/en-US/settings.ts:1625', 'locale 键 hidden（设置项字面键名，非会话语义）'],
+  ['packages/ui/src/locale/zh-CN/settings.ts:1633', 'locale 键 hidden（设置项字面键名，非会话语义）'],
 ])
 
 // ─────────────────────────────────────────────────────────────────────────────

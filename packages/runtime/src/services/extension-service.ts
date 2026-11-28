@@ -964,7 +964,10 @@ export class ExtensionService {
   private async installAndValidate(pkgName: string, npmDir: string, contextLabel = 'install', installSpec?: string): Promise<void> {
     const nodeModulesDir = join(npmDir, 'node_modules')
     try {
-      await this.installer.installNpm(installSpec ?? pkgName, nodeModulesDir, { timeout: NPM_INSTALL_TIMEOUT })
+      // timeout + budgetMs 同值：timeout 是单请求窗口（stall 无进展检测），budgetMs 是
+      // 整次安装（含递归依赖）网络总预算——弱网慢速持续下载在无进展检测下无上界，
+      // 预算保证 install 有上界、安装串行锁不被长期占用（升级 RPC 不会无限排队）。
+      await this.installer.installNpm(installSpec ?? pkgName, nodeModulesDir, { timeout: NPM_INSTALL_TIMEOUT, budgetMs: NPM_INSTALL_TIMEOUT })
     } catch (e) {
       const msg = toErrorMessage(e)
       const errCode = (e as { code?: string }).code

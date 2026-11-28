@@ -32,6 +32,7 @@
   },
   "tests": [
     "packages/runtime/test/extension-bundle.test.ts",
+    "packages/runtime/test/extension-upgrade-budget.test.ts",
     "packages/runtime/test/extension-resolver.test.ts",
     "packages/runtime/test/server-extension.test.ts",
     "packages/core/src/extension-host/**",

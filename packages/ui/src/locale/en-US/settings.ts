@@ -845,6 +845,7 @@ export default {
     installedToast: 'Extension installed',
     uninstalledToast: 'Extension uninstalled',
     upgradedToast: 'Extension upgraded',
+    upToDateToast: 'Already up to date',
     upgradeFailed: 'Upgrade failed: {msg}',
     loadRecommendedFailed: 'Failed to load recommended extensions: {msg}',
     autoUpgradeFailed: 'Failed to set auto-upgrade: {msg}',

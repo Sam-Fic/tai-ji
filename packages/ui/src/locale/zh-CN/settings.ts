@@ -853,6 +853,7 @@ export default {
     installedToast: '扩展已安装',
     uninstalledToast: '扩展已卸载',
     upgradedToast: '扩展已升级',
+    upToDateToast: '已是最新版本',
     upgradeFailed: '升级失败: {msg}',
     loadRecommendedFailed: '加载推荐扩展失败: {msg}',
     autoUpgradeFailed: '设置自动升级失败: {msg}',

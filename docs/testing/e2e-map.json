@@ -6198,6 +6198,31 @@
       "owner": "scripts/perf-probes",
       "authority": "docs/testing/perf-probes.md",
       "note": "R3 归档态（2026-11-26 登记；feat-cpu-gpu-performance 测量活动收尾收编——原仓库根 probes/ 一次性脚本族迁入 scripts/perf-probes/，branch-review dmg-r1-4）。全族资产清单 SSOT = docs/testing/perf-probes.md 资产清单表（closeout 同 commit 维护）；coverage 由 scope 全覆盖族内文件，assets 登记连接/拒绝纪律与归档对账单源 + 两验收门禁。on-diff = 改探针/门禁时提醒复跑离线门禁（报告与落盘分析数字双向对账）与真机预飞，无独立 CI 环节；真机采集空载串行。[补登记] pre-commit --staged 防漏登记检出：scripts/ 是资产族看护根（同目录孤资产 ≥2 聚族），族文件迁入即须显式登记"
+    },
+    {
+      "id": "E2E-EXTUPG-01",
+      "summary": "extension 升级链网络预算：慢速持续下载 budgetMs 到点终止（fake timers，默认组直跑）+ installNpm 预算接线断言",
+      "scope": [
+        "packages/runtime/src/infra/installers/npm-installer.ts",
+        "packages/runtime/src/services/extension-service.ts"
+      ],
+      "layer": "L1",
+      "assets": [
+        {
+          "kind": "spec",
+          "ref": "packages/runtime/test/extension-upgrade-budget.test.ts"
+        },
+        {
+          "kind": "spec",
+          "ref": "packages/runtime/test/npm-installer-tarball-stall.test.ts"
+        }
+      ],
+      "trigger": "on-diff",
+      "serial": false,
+      "run": "pnpm --filter @taiji/runtime exec vitest run test/extension-upgrade-budget.test.ts test/npm-installer-tarball-stall.test.ts",
+      "owner": "packages/runtime",
+      "authority": "docs/TEST-STRATEGY.md",
+      "note": "R2 态：npm 安装器/升级链 diff 命中时跑。budget 用例 = fake timers 推进预算窗口（默认组快用例）；接线用例 = fake installer 捕获 installNpm opts 断言 timeout+budgetMs 同传。tarball stall 文件同 scope 复跑（默认组 6 条快用例，门控 3 条 skip 不拖时）。serial=false：无真实传输依赖，loopback header 到达有 flushIo 确定性等待。"
     }
   ]
 }
