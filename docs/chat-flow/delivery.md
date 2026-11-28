@@ -1,7 +1,7 @@
 # 交付终态证明
 
 - 终态：delivered
-- root 基线 commit：ff2f0ea77fed1fb49c972d68f5278cafaea02221
+- root 基线 commit：43ff19b2e20da31b9814884d78589e8c622d56a9
 - case 并发度：自适应，上限 3
 
 ## 实机 case 终态重跑（16 条，16 绿）
@@ -65,9 +65,9 @@
 ## 回溯核对与残余登记
 
 - 门禁基线：本会话先合并 remote main（4f2d6331e），四文档按 skill 2.10.0 补齐（d05a4b7bf）后重跑 root 与全部枝门禁。tape 五枝与 msw-replay/msw-live 的枝提交早于本次合并，其枝记录为合并后重跑（基线 d05a4b7bf）；msw-ui/i18n-final 的枝记录基线为本轮各自提交。
-- 跨枝修复：修剪发现 G1-4 的修复改动落在 registry.ts（msw-live 枝声明的文件），由 msw-ui 交付后的修剪轮驱动，宿主执行；各枝范围核对行已如实呈现。
+- 跨枝修复：修剪发现 G1-4 的修复改动落在 registry.ts（msw-live 枝声明的文件），由 msw-ui 交付后的修剪轮驱动，宿主执行（1d9b2e299、cbb94f829）；后续枝 gate 对这些跨枝修复报范围超出属预期历史态（生长已收口，dev-merge 门禁口径 = 分支增量，见交付后流程）。
 - R4（定向复审登记，存量不扩权修复）：FIFO 占位挂起的暴露面不止本次修复的单点——readTailBytes（packages/runtime/src/infra/pi/jsonl.ts:134）、forEachReversedLineChunk 自身 openSync（三处消费方共因）、network-proxy-config.ts:319 无上界读，均系存量路径，待另行立项。
 - 深评角色：.tree-plant.json 未配置 subagentRoles 映射，深评环节由宿主自任（协议合法形态）；修剪攻击由三个与宿主同档的 subagent 并行执行（三组 × 三份缺陷清单）。
 - 工具缺口（环境侧，非本任务交付物）：tree-plant xvalidate 的网格污染快照对「symlink 指向目录」直接 readFileSync（EISDIR 崩溃）——worktree 的 .agents symlink 与 gitignored 运行时产物（apps/electron/.dev-electron、apps/electron/resources/pi 的子目录 symlink）都会触发；本次以「跑前临时挪开、跑后立即恢复」绕过，产物内容零改动。修复属 zsw-skills 仓库，待用户裁决。
 - I6/I7 指向：工具步计时起点偏早（显式不做）与窗口基线 32MB 有界降级（头端基线距窗口起点超过 32MB 的会话重载后切换行缺失）见 fact-check.md 未核实风险节。
-- 验收空白：纯文本流式中切的形态断言由 .run/g1-probe-flip.mjs 承载（修剪专用探针，不入库）；验收矩阵的 AC-MSW-MID 以工具执行中切为主形态。
+- 验收空白：纯文本流式中切的形态断言由 .run/g1-probe-flip.mjs 承载（修剪专用探针，不入库）；验收矩阵的 AC-MSW-MID 以工具执行中切为主形态。E2E-INTEG-79（panel 懒加载回归挂门控）为 dev-merge 门禁轮新增登记，见 e2e-map。
