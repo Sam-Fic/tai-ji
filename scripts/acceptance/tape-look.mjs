@@ -3,7 +3,6 @@
  * AC-LOOK 真机探针：过程卡长相对齐原型（tape-look 枝）。
  *
  * 在开发实例上读元素的计算样式（真 Electron + 真 pi + faux 演员）：
- *  进行中：轮头保持全亮（不因禁用折叠而变暗）；卡头 24px、行首图标恒为层叠字形；
  *  落成后打开窗口：卡片底色/圆角/内边距；卡头计数与箭头、无段总耗时；行 24px 无间隙；
  *  命令类工具行不带工具名、命令正文与耗时取等宽小字档；窗口内无分组标题行；
  *  内容不满 12 行时没有滚动提示；滚动条隐藏。进行中的滚动提示归 AC-LIVE。
@@ -51,32 +50,6 @@ try {
   const card = page.locator('[data-testid="agg-tape"]').last()
   await card.waitFor({ state: 'visible', timeout: 60_000 })
   await page.locator('[data-testid="agg-tool-row"]').first().waitFor({ state: 'visible', timeout: 60_000 })
-  await sleep(900) // 等行入场动效结束再量
-  const meta = page.locator('.turn-meta').last()
-  const live = await page.evaluate(() => {
-    const cs = (el, props) => {
-      const s = getComputedStyle(el)
-      return Object.fromEntries(props.map((p) => [p, s.getPropertyValue(p)]))
-    }
-    const meta = document.querySelector('.turn-meta')
-    const head = document.querySelector('[data-testid="agg-summary-row"]')
-    return {
-      meta: meta ? { disabled: meta.disabled, ...cs(meta, ['opacity']) } : null,
-      head: head
-        ? {
-            h: head.getBoundingClientRect().height,
-            ...cs(head, ['font-size']),
-            layers: !!head.querySelector('svg.lucide-layers'),
-            loader: !!head.querySelector('[data-testid="agg-summary-live-loader"]'),
-            chevron: !!head.querySelector('svg.lucide-chevron-right'),
-            duration: !!document.querySelector('[data-testid="agg-summary-duration"]'),
-          }
-        : null,
-      liveHint: (document.querySelector('[data-testid="agg-tape-hint"]')?.textContent ?? '').trim(),
-    }
-  })
-  const cardEl = card.locator(':scope').first()
-  const sm = await tokenPx(cardEl, '--text-sm')
   // ── 落成后：展开回合 → 打开窗口 ─────────────────────────────
   const turnMeta = page.locator('[data-testid^="turn-meta-"]').first()
   const settledDeadline = Date.now() + 120_000
@@ -146,7 +119,7 @@ try {
   console.log(`[probe] 截图：${inst.dataDir}/look-card.png`)
 
   if (problems.length > 0) throw new Error(problems.join('；'))
-  console.log('OK-LOOK 卡片 / 卡头 / 行 / 命令行 / 耗时 / 无分组标题 / 无多余提示 / 隐藏滚动条 / 轮头亮度 全部通过')
+  console.log('OK-LOOK 卡片 / 卡头 / 行 / 命令行 / 耗时 / 无分组标题 / 无多余提示 / 隐藏滚动条 全部通过')
 } catch (err) {
   console.error(`[probe] 失败：${err instanceof Error ? err.message : String(err)}`)
   console.error(`[probe] 数据目录保留：${inst.dataDir}`)

@@ -349,6 +349,9 @@ export async function boot({ steps, label, tps = '20' }) {
 
   // 调试连接与 WS 在 cleanup 里断开：不断开则事件循环被占着，探针进程结束后不退出
   let browserRef = null
+  // 保活定时器句柄声明提为函数作用域：cleanup 要清它——原 const 声明在 try 块内，
+  // cleanup 闭包引用的是未定义自由变量，ReferenceError 被 catch 吞掉，定时器实际从未被清
+  let keepalive = null
   const cleanup = async () => {
     try {
       clearInterval(keepalive)
@@ -376,7 +379,7 @@ export async function boot({ steps, label, tps = '20' }) {
 
     const ws = await openAuthedWs(runtimePort, dataDir)
     // 保活：runtime 45s 无消息断连（e2e fixture 同款处理）——探针的 WS 在长回合里长时间空闲
-    const keepalive = setInterval(() => {
+    keepalive = setInterval(() => {
       try {
         ws.send(JSON.stringify({ type: 'config.get', id: `ka-${Date.now()}` }))
       } catch {
