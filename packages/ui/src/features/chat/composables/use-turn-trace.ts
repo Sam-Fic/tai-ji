@@ -58,6 +58,52 @@ export type TraceUnit =
  * 跨钟比较会错位——实时与回放按同一数组序推导同一锚。切换行是元信息分隔行族，折叠态
  * 不丢失：先按展开形态产出完整时序列，折叠态只把正文收敛到末位一条、切换行保持原位。
  */
+/**
+ * 锚时点已到的切换行落位：从 noticeIndex 起，把插入锚 ≤ 块锚（assistantIdx）的行依序推入
+ * units，返回推进后的下标（行已尽或锚晚于当前块即停——行按到达序保持原位）。
+ */
+function drainDueSwitchNotices(
+  units: TraceUnit[],
+  switchNotices: Message[],
+  noticeIndex: number,
+  assistantIdx: number,
+  switchAfter: Record<string, number> | undefined,
+): number {
+  let i = noticeIndex
+  for (;;) {
+    const notice = switchNotices[i]
+    if (notice === undefined) break
+    const anchor = switchAfter?.[notice.id] ?? Number.MAX_SAFE_INTEGER
+    if (anchor > assistantIdx) break
+    units.push({ kind: 'notice', message: notice })
+    i += 1
+  }
+  return i
+}
+
+/** 剩余切换行全部落位（块的殿后——晚于全部块的切换行在 trace 区末尾依序出现）。 */
+function drainRemainingSwitchNotices(units: TraceUnit[], switchNotices: Message[], noticeIndex: number): void {
+  for (const notice of switchNotices.slice(noticeIndex)) {
+    units.push({ kind: 'notice', message: notice })
+  }
+}
+
+/**
+ * 折叠态收敛（chat-turn-fold-redesign）：正文收敛到末位一条，中间正文与聚合块不渲染；
+ * 切换单元保持原位不随折叠丢失（分隔行族恒显语义）。
+ */
+function foldToLastText(units: TraceUnit[]): TraceUnit[] {
+  let lastTextIndex = -1
+  for (let i = units.length - 1; i >= 0; i--) {
+    const unit = units[i]
+    if (unit?.kind === 'text') {
+      lastTextIndex = i
+      break
+    }
+  }
+  return units.filter((unit, i) => unit.kind !== 'text' || i === lastTextIndex)
+}
+
 function buildTraceUnits(
   blocks: FlatBlock[],
   segs: ProcessSegment[],
@@ -71,15 +117,13 @@ function buildTraceUnits(
   const units: TraceUnit[] = []
   let noticeIndex = 0
   for (const fb of blocks) {
-    const blockIdx = assistantIndex.get(fb.assistantId) ?? Number.MAX_SAFE_INTEGER
-    for (;;) {
-      const notice = switchNotices[noticeIndex]
-      if (notice === undefined) break
-      const anchor = switchAfter?.[notice.id] ?? Number.MAX_SAFE_INTEGER
-      if (anchor > blockIdx) break
-      units.push({ kind: 'notice', message: notice })
-      noticeIndex += 1
-    }
+    noticeIndex = drainDueSwitchNotices(
+      units,
+      switchNotices,
+      noticeIndex,
+      assistantIndex.get(fb.assistantId) ?? Number.MAX_SAFE_INTEGER,
+      switchAfter,
+    )
     if (fb.block.kind === 'text') {
       // 正文原生展示（D2）：展开态每条正文都直接渲染
       units.push({ kind: 'text', block: fb })
@@ -88,24 +132,8 @@ function buildTraceUnits(
     const seg = segmentHead.get(fb.flatIndex)
     if (seg && !folded) units.push({ kind: 'aggregate', segment: seg })
   }
-  for (;;) {
-    const notice = switchNotices[noticeIndex]
-    if (notice === undefined) break
-    units.push({ kind: 'notice', message: notice })
-    noticeIndex += 1
-  }
-  if (!folded) return units
-  // 折叠态（chat-turn-fold-redesign）：正文收敛到末位一条，中间正文与聚合块不渲染；
-  // 切换单元保持原位不随折叠丢失（分隔行族恒显语义）
-  let lastTextIndex = -1
-  for (let i = units.length - 1; i >= 0; i--) {
-    const unit = units[i]
-    if (unit !== undefined && unit.kind === 'text') {
-      lastTextIndex = i
-      break
-    }
-  }
-  return units.filter((unit, i) => unit.kind !== 'text' || i === lastTextIndex)
+  drainRemainingSwitchNotices(units, switchNotices, noticeIndex)
+  return folded ? foldToLastText(units) : units
 }
 
 /**

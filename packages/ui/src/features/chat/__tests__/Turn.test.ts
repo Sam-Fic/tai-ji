@@ -184,6 +184,7 @@ interface UnitWrapperLike {
   element: Element
   attributes: () => Record<string, string>
   find: (selector: string) => { exists: () => boolean; text: () => string; element: Element }
+  findAll: (selector: string) => UnitWrapperLike[]
 }
 const traceTopBlocks = (wrapper: { findAll: (s: string) => UnitWrapperLike[] }) =>
   wrapper.findAll('.trace > .trace-blk')
@@ -208,7 +209,7 @@ describe('chat-turn-fold-redesign: 折叠三态（折叠仅末位正文 / 展开
     expect(wrapper.find('.trace-tool').exists()).toBe(false)
   })
 
-  it('末位工作 turn（isLastTurn=true, sessionActive）→ 展开形态：正文 + 聚合块双窗（进行中）', () => {
+  it('末位工作 turn（isLastTurn=true, sessionActive）→ 展开形态：正文 + 聚合块窗口（进行中）', () => {
     const wrapper = mountTurn({
       turn: makeSeqTurn(
         [{ kind: 'thinking' }, { kind: 'tool', toolName: 'read', status: 'running' }],
@@ -218,14 +219,14 @@ describe('chat-turn-fold-redesign: 折叠三态（折叠仅末位正文 / 展开
       isLastTurn: true,
     })
     const blocks = traceTopBlocks(wrapper)
-    // fallback makeTurn 无后继 text（段开放）→ 摘要行 live 变体 + 双窗进行中
+    // fallback makeTurn 无后继 text（段开放）→ 摘要行 live 变体 + 窗口进行中
     //（2026-11-09 用户裁决：进行中同构可展开，摘要是恒在场的展开入口）
     expect(blocks.length).toBe(1)
-    expect(blocks[0].find('[data-testid="agg-live-windows"]').exists()).toBe(true)
+    expect(blocks[0].find('[data-testid="agg-tape-scroll"]').exists()).toBe(true)
     expect(blocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
-    // 思考窗 + 聚合窗双窗在场（段内已有思考与工具步骤）
-    expect(blocks[0].find('[data-testid="agg-think-window"]').exists()).toBe(true)
-    expect(blocks[0].find('[data-testid="agg-window"]').exists()).toBe(true)
+    // 窗口内容在场（段内已有思考与工具步骤，展开体逐行平铺）
+    expect(blocks[0].find('[data-testid="agg-expanded"]').exists()).toBe(true)
+    expect(blocks[0].findAll('[data-testid^="agg-row-"]').length).toBeGreaterThan(0)
   })
 
   it('正文块入场动效一次性判据（D10）：工作流式正文携带 agg-text-enter（TextRow 根），等待态重挂/历史形态不携带（重挂不重放）', () => {
@@ -275,9 +276,9 @@ describe('chat-turn-fold-redesign: 折叠三态（折叠仅末位正文 / 展开
     // 展开态按真实时序交错：[agg1(thinking+read), text 中间结论, agg2(bash), text 最终回复]
     const blocks = traceTopBlocks(wrapper)
     expect(blocks.length).toBe(4)
-    // 非工作态聚合块 isLive=false → 摘要行（每段一行）
+    // 非工作态聚合块 isLive=false → 摘要行（每段一行），窗口收起
     expect(blocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
-    expect(blocks[0].find('[data-testid="agg-live-windows"]').exists()).toBe(false)
+    expect(blocks[0].find('[data-testid="agg-tape-scroll"]').exists()).toBe(false)
     expect(blocks[1].classes()).toContain('trace-blk--text')
     expect(blocks[1].text()).toContain('中间结论')
     expect(blocks[2].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
@@ -440,23 +441,23 @@ describe('chat-flow-process-aggregate 工作态: D2 正文原生 + 段摘要', (
     })
     expect(unitShape(onState)).toEqual([false, true, false, true, false])
     expect(unitShape(offState)).toEqual(unitShape(onState))
-    // 聚合块三态同样不受影响：已封闭段摘要行 / 末段双窗（与 describe 2 基线一致）
+    // 聚合块三态同样不受影响：已封闭段摘要行 / 末段窗口进行中（与 describe 2 基线一致）
     const onBlocks = traceTopBlocks(onState)
     expect(onBlocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
-    expect(onBlocks[4].find('[data-testid="agg-live-windows"]').exists()).toBe(true)
+    expect(onBlocks[4].find('[data-testid="agg-tape-scroll"]').exists()).toBe(true)
   })
 
-  it('已完成段在工作态显摘要行（followedByText 封闭），末段双窗进行中', () => {
+  it('已完成段在工作态显摘要行（followedByText 封闭），末段窗口进行中', () => {
     const wrapper = mountTurn({
       turn: alternatingTurn(),
       isSessionActive: true,
       isLastTurn: true,
     })
     const blocks = traceTopBlocks(wrapper)
-    // 段 1/2 已被后继正文封闭 → 摘要行；段 3 开放且回合进行中 → 双窗
+    // 段 1/2 已被后继正文封闭 → 摘要行；段 3 开放且回合进行中 → 窗口展开
     expect(blocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
     expect(blocks[2].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
-    expect(blocks[4].find('[data-testid="agg-live-windows"]').exists()).toBe(true)
+    expect(blocks[4].find('[data-testid="agg-tape-scroll"]').exists()).toBe(true)
   })
 
   it('收编行 / 接管态 chrome 已退役：trace 区无 trace-compactor 锚点（D1/D9）', () => {
@@ -756,8 +757,8 @@ function makeBashChainTurn(opts: { completed?: number; running?: boolean; traili
 }
 
 describe('聚合块接线: 键稳定性两方向 + v-memo 完整性', () => {
-  it('方向①（段尾延长）：live 段成员追加 → 聚合块 DOM 节点不变（isSameNode），双窗内容增长', async () => {
-    // 开放段（无收尾正文）：工作态双窗进行中
+  it('方向①（段尾延长）：live 段成员追加 → 聚合块 DOM 节点不变（isSameNode），窗口内容增长', async () => {
+    // 开放段（无收尾正文）：工作态窗口进行中
     const wrapper = mountTurn({
       turn: makeBashChainTurn({ completed: 3, running: true, trailingText: false }),
       isSessionActive: true,
@@ -765,7 +766,7 @@ describe('聚合块接线: 键稳定性两方向 + v-memo 完整性', () => {
     })
     const agg1 = wrapper.find('[data-testid="process-aggregate"]')
     expect(agg1.exists()).toBe(true)
-    expect(agg1.find('[data-testid="agg-live-windows"]').exists()).toBe(true)
+    expect(agg1.find('[data-testid="agg-tape-scroll"]').exists()).toBe(true)
     const node1 = agg1.element
     // 段尾延长：b3 完成、新 running 启动（members 4→5，段首位置不变 → 段 id 不变 → key 稳定）
     await wrapper.setProps({ turn: makeBashChainTurn({ completed: 4, running: true, trailingText: false }) })
@@ -776,7 +777,7 @@ describe('聚合块接线: 键稳定性两方向 + v-memo 完整性', () => {
     expect(traceTopBlocks(wrapper).length).toBe(1)
   })
 
-  it('方向②（段封闭）：新正文到达使段转完成 → 聚合块节点不变（键段首定位），原地双窗转摘要行', async () => {
+  it('方向②（段封闭）：新正文到达使段转完成 → 聚合块节点不变（键段首定位），原地窗口转摘要行', async () => {
     const wrapper = mountTurn({
       turn: makeBashChainTurn({ completed: 3, running: true, trailingText: false }),
       isSessionActive: true,
@@ -784,15 +785,15 @@ describe('聚合块接线: 键稳定性两方向 + v-memo 完整性', () => {
     })
     const agg1 = wrapper.find('[data-testid="process-aggregate"]')
     const node1 = agg1.element
-    expect(agg1.find('[data-testid="agg-live-windows"]').exists()).toBe(true)
+    expect(agg1.find('[data-testid="agg-tape-scroll"]').exists()).toBe(true)
     // 摘要行恒在场（live 变体，展开入口；2026-11-09 用户裁决）
     expect(agg1.find('[data-testid="agg-summary-row"]').exists()).toBe(true)
     // 收尾正文到达：段被 text 封闭（followedByText 翻转），段首位置不变 → 键不变 → 不 remount
     await wrapper.setProps({ turn: makeBashChainTurn({ completed: 3, running: true }) })
     const agg2 = wrapper.find('[data-testid="process-aggregate"]')
     expect(agg2.element).toBe(node1)
-    // 同实例原地三态翻转：双窗收起 → 完成态摘要行（live 呼吸弧摘除，RL2 事件驱动）
-    expect(agg2.find('[data-testid="agg-live-windows"]').exists()).toBe(false)
+    // 同实例原地三态翻转：窗口收起 → 完成态摘要行（live 呼吸弧摘除，RL2 事件驱动）
+    expect(agg2.find('[data-testid="agg-tape-scroll"]').exists()).toBe(false)
     expect(agg2.find('[data-testid="agg-summary-row"]').exists()).toBe(true)
     expect(agg2.find('[data-testid="agg-summary-live-loader"]').exists()).toBe(false)
   })

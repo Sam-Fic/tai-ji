@@ -20,7 +20,54 @@
  */
 import type { Message } from '@taiji/shared'
 import type { PiSessionEntry, PiSessionCustomEntry } from './pi-protocol.js'
+import type { PiSessionCustomMessageEntry } from './pi-session-data.js'
 import { COMPLETE_NOTIFY_CUSTOM_TYPES, SUBAGENT_DIRECTIVE_CUSTOM_TYPE, parseSubagentDirective } from '@taiji/shared'
+
+/** 单条映射落点：伪消息 + 来源 entry id 平行入列（messages[i] ↔ entryIds[i] 不错位）。 */
+function pushMapped(messages: unknown[], entryIds: string[], id: string, message: unknown): void {
+  messages.push(message)
+  entryIds.push(id)
+}
+
+/** 条件 timestamp 字段（RT-3#6：畸形 timestamp 省略字段而非注入 NaN / Date.now()）。 */
+function tsField(ts: number | undefined): { timestamp: number } | undefined {
+  return ts !== undefined ? { timestamp: ts } : undefined
+}
+
+/** custom_message case 体：display 覆写优先级（完成通知 → 隐藏；subagent-directive → 显示；
+ *  其余透传持久化值）+ 畸形降级（content 非字符串 → 空串）。覆写语义见函数内注释。 */
+function pushCustomMessageEntry(
+  messages: unknown[],
+  entryIds: string[],
+  entry: PiSessionCustomMessageEntry,
+  entryTs: (timestamp: unknown) => number | undefined,
+): void {
+  // 完成通知类 customType：display 覆写为 false（pi 可能持久化 true，taiji 统一隐藏）
+  const isCompleteNotify = COMPLETE_NOTIFY_CUSTOM_TYPES.has(entry.customType)
+  // subagent-directive：display 覆写为 true（composer-symbol-system §3.3.3a reload 链路）。
+  // 为什么覆写：extension 落 display:false 是 pi TUI 渲染语义；taiji 聊天流的定向
+  // 气泡必须「重开后仍在」（关键规则 9），display:false 会被前端 display 过滤隐藏。
+  // 仅 details 可解析时覆写（parse 与 live 广播同一解析器）——畸形时保持透传
+  //（false → 隐藏），与 live 侧 parse 失败不广播的降级行为对称。
+  // 本 mapper 是 RPC（entry-tree-builder）与文件（session-history）两条 reload 路径的
+  // 共享单点，覆写在此做即覆盖全部 reload 链路。
+  const isDirectiveVisible = entry.customType === SUBAGENT_DIRECTIVE_CUSTOM_TYPE
+    && parseSubagentDirective(entry.content, entry.details) !== null
+  // display 覆写优先级：完成通知 → 隐藏（false）；subagent-directive → 显示（true）；
+  // 其余透传持久化值
+  let display = entry.display
+  if (isCompleteNotify) display = false
+  else if (isDirectiveVisible) display = true
+  pushMapped(messages, entryIds, entry.id, {
+    role: 'custom',
+    customType: entry.customType,
+    // 畸形降级：content 非字符串时默认空串（session JSONL 截断/损坏不抛错）
+    content: typeof entry.content === 'string' ? entry.content : '',
+    details: entry.details,
+    display,
+    ...tsField(entryTs(entry.timestamp)),
+  })
+}
 
 /** mapSessionEntries 返回类型。 */
 export interface MappedSessionEntries {
@@ -221,73 +268,39 @@ export function mapSessionEntries(entries: PiSessionEntry[], leafId?: string): M
     switch (entry.type) {
       case 'message': {
         // 透传 message 体（不注入 __entryId，改用平行 entryIds）
-        messages.push(entry.message)
-        entryIds.push(entry.id)
+        pushMapped(messages, entryIds, entry.id, entry.message)
         break
       }
       case 'compaction': {
-        const ts = entryTs(entry.timestamp)
-        messages.push({
+        pushMapped(messages, entryIds, entry.id, {
           role: 'compactionSummary',
           summary: entry.summary,
           tokensBefore: entry.tokensBefore,
-          ...(ts !== undefined && { timestamp: ts }),
+          ...tsField(entryTs(entry.timestamp)),
         })
-        entryIds.push(entry.id)
         break
       }
       case 'model_change': {
         // 模型切换记录：映射为 wire 伪角色 modelChange，liftHistoryToEntries 还原成专用 entry，
         // 与实时侧合成的 model_change entry 走 reducer 同一分支
-        const ts = entryTs(entry.timestamp)
-        messages.push({
+        pushMapped(messages, entryIds, entry.id, {
           role: 'modelChange',
           provider: entry.provider,
           modelId: entry.modelId,
-          ...(ts !== undefined && { timestamp: ts }),
+          ...tsField(entryTs(entry.timestamp)),
         })
-        entryIds.push(entry.id)
         break
       }
-      case 'custom_message': {
-        // 完成通知类 customType：display 覆写为 false（pi 可能持久化 true，taiji 统一隐藏）
-        const isCompleteNotify = COMPLETE_NOTIFY_CUSTOM_TYPES.has(entry.customType)
-        // subagent-directive：display 覆写为 true（composer-symbol-system §3.3.3a reload 链路）。
-        // 为什么覆写：extension 落 display:false 是 pi TUI 渲染语义；taiji 聊天流的定向
-        // 气泡必须「重开后仍在」（关键规则 9），display:false 会被前端 display 过滤隐藏。
-        // 仅 details 可解析时覆写（parse 与 live 广播同一解析器）——畸形时保持透传
-        //（false → 隐藏），与 live 侧 parse 失败不广播的降级行为对称。
-        // 本 mapper 是 RPC（entry-tree-builder）与文件（session-history）两条 reload 路径的
-        // 共享单点，覆写在此做即覆盖全部 reload 链路。
-        const isDirectiveVisible = entry.customType === SUBAGENT_DIRECTIVE_CUSTOM_TYPE
-          && parseSubagentDirective(entry.content, entry.details) !== null
-        // display 覆写优先级：完成通知 → 隐藏（false）；subagent-directive → 显示（true）；
-        // 其余透传持久化值
-        let display = entry.display
-        if (isCompleteNotify) display = false
-        else if (isDirectiveVisible) display = true
-        const ts = entryTs(entry.timestamp)
-        messages.push({
-          role: 'custom',
-          customType: entry.customType,
-          // 畸形降级：content 非字符串时默认空串（session JSONL 截断/损坏不抛错）
-          content: typeof entry.content === 'string' ? entry.content : '',
-          details: entry.details,
-          display,
-          ...(ts !== undefined && { timestamp: ts }),
-        })
-        entryIds.push(entry.id)
+      case 'custom_message':
+        pushCustomMessageEntry(messages, entryIds, entry, entryTs)
         break
-      }
       case 'branch_summary': {
-        const ts = entryTs(entry.timestamp)
-        messages.push({
+        pushMapped(messages, entryIds, entry.id, {
           role: 'branchSummary',
           summary: entry.summary,
           fromId: entry.fromId,
-          ...(ts !== undefined && { timestamp: ts }),
+          ...tsField(entryTs(entry.timestamp)),
         })
-        entryIds.push(entry.id)
         break
       }
       case 'custom': {

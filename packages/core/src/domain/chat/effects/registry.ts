@@ -385,6 +385,41 @@ function syntheticModelChangeEntry(model: { provider?: string; modelId: string }
   }
 }
 
+/** modelSwitch 帧携带的「切换前模型」字段 → 基线模型（帧缺 previousModelId = undefined，不补基线）。 */
+function modelSwitchBaselineFromFrame(payload: Record<string, unknown>): { provider: string; modelId: string } | undefined {
+  const previousModelId = readString(payload, 'previousModelId')
+  if (!previousModelId) return undefined
+  return { provider: readString(payload, 'previousProvider') ?? '', modelId: previousModelId }
+}
+
+/**
+ * 切换前的模型基线 + 缺席补种：权威 state 已有基线直接用；缺席时用帧携带的切换前模型补
+ * （pi 新建会话落盘的初始 model_change 不经事件送达，实时侧没有它——先喂一条基线 entry，
+ * 等价于那条初始记录；不补则实时下首次切换不出行，重开侧却出行）。先补基线、再喂切换：
+ * 顺序对调会把首次切换本身记成基线。
+ */
+function resolveModelSwitchBaseline(ctx: MessageEffectContext, sid: string, payload: Record<string, unknown>, timestamp: string): { provider: string; modelId: string } | undefined {
+  const recorded = ctx.getLastModel(sid)
+  if (recorded) return recorded
+  const fromFrame = modelSwitchBaselineFromFrame(payload)
+  if (fromFrame) ctx.applyEntryFrame(sid, syntheticModelChangeEntry(fromFrame, timestamp))
+  return fromFrame
+}
+
+/**
+ * 切换行插入位：末位流式 assistant 之前（pi 对流式中的 assistant 要到 message_end 才落
+ * entry，切换 entry 落在该 assistant 之前——live 数组序与重放侧文件序同位，live ≡ reload
+ * 含位置）；遇到 user 锚或无流式 assistant = append（文件序天然同位）。
+ */
+function modelSwitchInsertIndex(messages: Message[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m?.role === 'user') break
+    if (m?.role === 'assistant' && m.status === 'streaming') return i
+  }
+  return messages.length
+}
+
 const messageEffects: Partial<Record<ServerMessageType, MessageEffectHandler>> = {
   // ── 主流式生命周期（chunk 创建/收尾 + isGenerating 派生）──
   'message.message_start': (ctx, sid, payload) => {
@@ -784,21 +819,14 @@ const messageEffects: Partial<Record<ServerMessageType, MessageEffectHandler>> =
     // 模型切换（chat-flow-v2 msw-live）：runtime 帧 → 合成 model_change entry 喂与回放同一个
     // reducer（compaction 的 cmp-<uuid> 同款范式）。不走 applyEntryFrameWithOverlay：切换行的
     // 派生依赖前置 state（上一生效模型），在空 state 上派生恒为「只记基线」不出行。这里读
-    // 权威 state 的模型基线，权威 state 与渲染列表用同一基线、同一 reducer 派生。
-    // 基线缺席时用帧携带的切换前模型补：pi 新建会话时落盘的初始 model_change 不经事件送达，
-    // 实时侧没有它——先喂一条基线 entry（等价于那条初始记录）。不补的话实时下首次切换
-    // 不出行，重开侧却出行。timestamp 缺省用客户端时钟。
+    // 权威 state 的模型基线（缺席补种语义见 resolveModelSwitchBaseline——权威 state 与渲染
+    // 列表用同一基线、同一 reducer 派生）。timestamp 缺省用客户端时钟。
     const provider = readString(payload, 'provider')
     const modelId = readString(payload, 'modelId')
     if (!modelId) return
     const ts = payload['timestamp']
     const timestamp = new Date(typeof ts === 'number' ? ts : Date.now()).toISOString()
-    const recorded = ctx.getLastModel(sid)
-    const previousModelId = readString(payload, 'previousModelId')
-    const baseline = recorded
-      ?? (previousModelId ? { provider: readString(payload, 'previousProvider') ?? '', modelId: previousModelId } : undefined)
-    // 先补基线、再喂切换：顺序对调会把首次切换本身记成基线
-    if (!recorded && baseline) ctx.applyEntryFrame(sid, syntheticModelChangeEntry(baseline, timestamp))
+    const baseline = resolveModelSwitchBaseline(ctx, sid, payload, timestamp)
     const entry = syntheticModelChangeEntry({ provider, modelId }, timestamp)
     ctx.applyEntryFrame(sid, entry)
     const derived = applyEntry(
@@ -807,20 +835,9 @@ const messageEffects: Partial<Record<ServerMessageType, MessageEffectHandler>> =
     )
     if (derived.messages.length === 0) return
     const prev = ctx.messages.value.get(sid)?.value ?? []
-    // 流式中切：pi 对流式中的 assistant 要到 message_end 才落 entry，切换 entry 落在该
-    // assistant 之前——行插到末位流式 assistant 之前，live 数组序与重放侧文件序同位
-    // （live ≡ reload 含位置）；非流式形态维持 append（文件序天然同位）。
-    let insertAt = prev.length
-    for (let i = prev.length - 1; i >= 0; i--) {
-      const m = prev[i]
-      if (m?.role === 'user') break
-      if (m?.role === 'assistant' && m.status === 'streaming') {
-        insertAt = i
-        break
-      }
-    }
+    // 插入位判定（流式中切 vs append）见 modelSwitchInsertIndex 注释
     const next = [...prev]
-    next.splice(insertAt, 0, ...derived.messages)
+    next.splice(modelSwitchInsertIndex(prev), 0, ...derived.messages)
     commitMessages(ctx.messages, sid, next)
   },
 

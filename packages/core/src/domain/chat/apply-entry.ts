@@ -714,11 +714,28 @@ function dispatchMessageEntry(c: ChatStateCollector, entry: PiMessageEntry): voi
   }
 }
 
+/** model_change case 体（chat-flow-v2 模型切换行）：首个记录只是基线（没有「从什么切到
+ *  什么」），不出行；与上一生效值相同的重复写入不出行（pi 同模型 setModel 也会落 entry）；
+ *  真实变化 → system 行，回放与实时（合成 entry）两路同一派生。 */
+function dispatchModelChangeEntry(c: ChatStateCollector, entry: PiModelChangeEntry): void {
+  const provider = typeof entry.provider === 'string' ? entry.provider : ''
+  const modelId = typeof entry.modelId === 'string' ? entry.modelId : ''
+  if (provider === '' && modelId === '') return
+  const previous = c.lastModel()
+  c.setLastModel({ provider, modelId })
+  if (!previous) return
+  if (previous.provider === provider && previous.modelId === modelId) return
+  c.appendMessage(
+    deriveModelSwitchEntryMessage(entry, previous, provider, modelId, deriveBaseId(entry, c.messageCount)),
+  )
+}
+
 /**
  * 单条 pi entry → chat 视图态切片的派生视图 dispatch（D5）。
  *
- * 按 entry type 分派（message 经 dispatchMessageEntry 按 role 细分），applyEntry /
- * replayEntries 两条 fold 路径共用——「live ≡ reload」两条链路共用同一 dispatch 与派生段。
+ * 按 entry type 分派（message 经 dispatchMessageEntry 按 role 细分，model_change 细分见
+ * dispatchModelChangeEntry），applyEntry / replayEntries 两条 fold 路径共用——「live ≡
+ * reload」两条链路共用同一 dispatch 与派生段。
  *
  * case 覆盖（pi SessionEntry 全集）：message（role 细分 user/assistant/toolResult/
  * bashExecution/compactionSummary/custom/branchSummary）/ custom / label / compaction /
@@ -736,22 +753,9 @@ function dispatchEntry(c: ChatStateCollector, entry: PiEntry): void {
     case 'compaction':
       c.appendMessage(deriveCompactionEntryMessage(entry, deriveBaseId(entry, c.messageCount)))
       return
-    case 'model_change': {
-      // 模型切换行（chat-flow-v2）：首个记录只是基线（没有「从什么切到什么」），不出行；
-      // 与上一生效值相同的重复写入不出行（pi 同模型 setModel 也会落 entry）；
-      // 真实变化 → system 行，回放与实时（合成 entry）两路同一派生。
-      const provider = typeof entry.provider === 'string' ? entry.provider : ''
-      const modelId = typeof entry.modelId === 'string' ? entry.modelId : ''
-      if (provider === '' && modelId === '') return
-      const previous = c.lastModel()
-      c.setLastModel({ provider, modelId })
-      if (!previous) return
-      if (previous.provider === provider && previous.modelId === modelId) return
-      c.appendMessage(
-        deriveModelSwitchEntryMessage(entry, previous, provider, modelId, deriveBaseId(entry, c.messageCount)),
-      )
+    case 'model_change':
+      dispatchModelChangeEntry(c, entry)
       return
-    }
     case 'branch_summary':
       c.appendMessage(deriveBranchSummaryEntryMessage(entry, deriveBaseId(entry, c.messageCount)))
       return

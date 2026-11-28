@@ -567,9 +567,25 @@ describe('process-aggregate-block key stability: 50 streaming increments without
           );
       },
     });
-    const initial = makeExploreSegment(1, { followedByText: false, id: 'seg:0' });
+    // 成员数组跨增量保持前缀引用稳定（真实流式增量 = 追加不改前缀，AX1 同形）：每步只追加
+    // 1 个成员后整段重建，前缀成员对象与行键不换——既对齐「增量追加」契约，又避免每步
+    // 全量重建成员制造的 O(N²) 行重挂载（fixture 形态噪声，非被测行为）
+    const members: FlatBlock[] = [makeToolFlat({ toolName: 'read' })];
+    const segmentAt = (): ProcessSegment => {
+      const group = makeGroup('explore', members, { durationMs: members.length * 100 });
+      return makeSegment(members, {
+        groups: [group],
+        units: [{ kind: 'group', group }],
+        counts: makeCounts({
+          categoryCounts: { explore: members.length, edit: 0, exec: 0 },
+          totalDurationMs: members.length * 100,
+        }),
+        followedByText: false,
+        id: 'seg:0',
+      });
+    };
     const wrapper = mount(Harness, {
-      props: { segments: [initial], turnWorking: true },
+      props: { segments: [segmentAt()], turnWorking: true },
       global: {
         provide: mockChatProvide(),
         stubs: { MarkdownRenderer: { props: ['content', 'variant'], template: '<div class="stub-md" />' } },
@@ -577,7 +593,8 @@ describe('process-aggregate-block key stability: 50 streaming increments without
     });
     let el = wrapper.find('[data-testid="process-aggregate"]').element;
     for (let step = 2; step <= 50; step++) {
-      const grown = makeExploreSegment(step, { followedByText: false, id: 'seg:0' });
+      members.push(makeToolFlat({ toolName: 'read' }));
+      const grown = segmentAt();
       // 段 id 在流式生长中稳定（core 契约：派生自段首位置，成员追加不改 id）
       expect(grown.id).toBe('seg:0');
       await wrapper.setProps({ segments: [grown] });

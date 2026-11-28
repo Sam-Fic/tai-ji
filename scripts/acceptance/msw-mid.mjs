@@ -15,43 +15,66 @@ const steps = [
   { text: '新模型答复。', stopReason: 'stop' },
 ]
 
-/** 回合容器的 DOM 断言（live 与重载共用同一函数）：行在回合内、过程块之后、新模型正文之前。 */
+/** 回合容器的 DOM 断言（live 与重载共用同一函数）：行在回合内、过程块之后、新模型正文之前。
+ *  断言分解为页面内小探针（探针返回失败原因字符串或 null，主流程短路返回）。 */
 const probeDom = (page) =>
   page.evaluate(() => {
     const FOLLOWING = 4 // Node.DOCUMENT_POSITION_FOLLOWING
-    const notice = document.querySelector('[data-testid="turn-switch-notice"]')
-    if (!notice) {
+    const fail = (why) => ({ ok: false, why })
+    const pass = (rowText) => ({ ok: true, rowText })
+    const rowTextOf = (notice) => (notice.textContent ?? '').replace(/\s+/g, ' ').trim()
+
+    // 回合根容器的 testid 形如 turn-<数字>（子元素锚点同族前缀，不能 closest 泛配——
+    // 本行自身 testid turn-switch-notice 就以前缀命中）
+    const turnRootOf = (notice) => {
+      let ancestor = notice.parentElement
+      while (ancestor && !/^turn-\d+$/.test(ancestor.getAttribute('data-testid') ?? '')) {
+        ancestor = ancestor.parentElement
+      }
+      return ancestor
+    }
+
+    const missingNoticeReason = () => {
       const staticRow = Array.from(document.querySelectorAll('.system-notice')).find((el) =>
         (el.textContent ?? '').includes('已切换模型'),
       )
-      return { ok: false, why: staticRow ? '切换行渲染为回合外静态行（不在回合容器内）' : '对话流里没有切换行' }
+      return staticRow ? '切换行渲染为回合外静态行（不在回合容器内）' : '对话流里没有切换行'
     }
-    // 回合根容器的 testid 形如 turn-<数字>（子元素锚点同族前缀，不能 closest 泛配——
-    // 本行自身 testid turn-switch-notice 就以前缀命中）
-    let ancestor = notice.parentElement
-    while (ancestor && !/^turn-\d+$/.test(ancestor.getAttribute('data-testid') ?? '')) {
-      ancestor = ancestor.parentElement
+
+    const phraseProblem = (notice) => {
+      const rowText = rowTextOf(notice)
+      if (!rowText.includes('已切换模型')) return `切换行主体短语不对：「${rowText}」`
+      if (!/faux-1\s*→\s*faux-1-reasoning/.test(rowText)) return `切换行前后模型不对：「${rowText}」`
+      return null
     }
-    const turn = ancestor
-    if (!turn) return { ok: false, why: '切换行不在回合容器内' }
-    const rowText = (notice.textContent ?? '').replace(/\s+/g, ' ').trim()
-    if (!rowText.includes('已切换模型')) return { ok: false, why: `切换行主体短语不对：「${rowText}」` }
-    if (!/faux-1\s*→\s*faux-1-reasoning/.test(rowText)) return { ok: false, why: `切换行前后模型不对：「${rowText}」` }
-    const texts = turn.querySelectorAll('[data-testid="block-text"]')
-    const lastText = texts[texts.length - 1]
-    if (!lastText) {
-      const dump = Array.from(turn.querySelectorAll(':scope > *')).slice(0, 8)
-        .map((c) => `${c.tagName.toLowerCase()}#${c.getAttribute('data-testid') ?? c.className.split(' ').slice(0, 2).join('.')}`)
-        .join(' | ')
-      return { ok: false, why: `回合内没有正文行（turn=${turn.getAttribute('data-testid')}，子结构 ${dump}）` }
+
+    const textStructureProblem = (turn, notice) => {
+      const texts = turn.querySelectorAll('[data-testid="block-text"]')
+      const lastText = texts[texts.length - 1]
+      if (!lastText) {
+        const dump = Array.from(turn.querySelectorAll(':scope > *')).slice(0, 8)
+          .map((c) => `${c.tagName.toLowerCase()}#${c.getAttribute('data-testid') ?? c.className.split(' ').slice(0, 2).join('.')}`)
+          .join(' | ')
+        return `回合内没有正文行（turn=${turn.getAttribute('data-testid')}，子结构 ${dump}）`
+      }
+      if (!(lastText.textContent ?? '').includes('新模型答复')) {
+        return `末位正文不是新模型答复：「${(lastText.textContent ?? '').trim()}」`
+      }
+      if (!(notice.compareDocumentPosition(lastText) & FOLLOWING)) return '切换行不在新模型正文之前'
+      return null
     }
-    if (!(lastText.textContent ?? '').includes('新模型答复')) {
-      return { ok: false, why: `末位正文不是新模型答复：「${(lastText.textContent ?? '').trim()}」` }
-    }
-    if (!(notice.compareDocumentPosition(lastText) & FOLLOWING)) return { ok: false, why: '切换行不在新模型正文之前' }
+
+    const notice = document.querySelector('[data-testid="turn-switch-notice"]')
+    if (!notice) return fail(missingNoticeReason())
+    const turn = turnRootOf(notice)
+    if (!turn) return fail('切换行不在回合容器内')
+    const phrase = phraseProblem(notice)
+    if (phrase) return fail(phrase)
+    const structure = textStructureProblem(turn, notice)
+    if (structure) return fail(structure)
     const agg = turn.querySelector('[data-testid="process-aggregate"]')
-    if (agg && !(agg.compareDocumentPosition(notice) & FOLLOWING)) return { ok: false, why: '切换行不在回合过程块之后' }
-    return { ok: true, rowText }
+    if (agg && !(agg.compareDocumentPosition(notice) & FOLLOWING)) return fail('切换行不在回合过程块之后')
+    return pass(rowTextOf(notice))
   })
 
 const label = `tp-msw-mid-${Date.now()}`
