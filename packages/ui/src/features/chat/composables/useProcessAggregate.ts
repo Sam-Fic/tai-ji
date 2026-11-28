@@ -20,6 +20,15 @@ import { RUN_GROUP_TOOLS, type ProcessSegment, type RunGroupBase } from '@taiji/
 import type { ThinkingBlock, ToolCall } from '@taiji/shared'
 import { formatDurationHms } from '../format-utils'
 
+/**
+ * 过程卡窗口行锚点属性（生产契约）：行 div 与 useTapeScroll.measure() 行计数之间的双端约定——
+ * AggregateExpandedBody 行元素按本常量发射该 data 属性，measure() 按本常量派生选择器数视口外行。
+ * data-testid（agg-row-N）保留测试钩子单一职责，不参与生产行为。
+ */
+export const AGG_ROW_ANCHOR = 'data-agg-row'
+/** 行锚点选择器：由常量派生（属性名调整时查询端同步生效） */
+const AGG_ROW_SELECTOR = `[${AGG_ROW_ANCHOR}]`
+
 /** 滚动位置容差（px）：scrollTop 取整与亚像素高度差会让「到达」差 1px */
 const SCROLL_EPSILON = 1
 /** 活动计时的刷新间隔 */
@@ -159,7 +168,7 @@ export function useTapeScroll(params: {
     const view = el.getBoundingClientRect()
     let above = 0
     let below = 0
-    for (const row of Array.from(el.querySelectorAll('[data-testid^="agg-row-"]'))) {
+    for (const row of Array.from(el.querySelectorAll(AGG_ROW_SELECTOR))) {
       const r = row.getBoundingClientRect()
       if (r.height <= 0) continue
       if (r.bottom <= view.top + SCROLL_EPSILON) above += 1

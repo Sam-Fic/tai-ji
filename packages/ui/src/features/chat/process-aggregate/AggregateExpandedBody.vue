@@ -17,6 +17,7 @@
     <div
       v-for="(row, i) in rows"
       :key="row.key"
+      v-bind="rowAnchorAttrs"
       class="agg-row-in"
       :style="{ animationDelay: `${rowDelayMs(i)}ms` }"
       :data-testid="`agg-row-${i}`"
@@ -49,9 +50,13 @@
 import { computed, onMounted, ref } from 'vue'
 import type { FlatBlock, ProcessSegment } from '@taiji/core/domain/chat'
 import type { ThinkingBlock, ToolCall } from '@taiji/shared'
+import { AGG_ROW_ANCHOR } from '../composables/useProcessAggregate'
 import SegmentThinkingRow from './SegmentThinkingRow.vue'
 import SegmentToolRow from './SegmentToolRow.vue'
 import AggregateToolDetailDrawer from './AggregateToolDetailDrawer.vue'
+
+/** 行锚点属性绑定（属性名取自双端共享常量，v-bind 对象形态挂动态名 data 属性；空串 = 存在性语义） */
+const rowAnchorAttrs = { [AGG_ROW_ANCHOR]: '' }
 
 const props = defineProps<{
   /** 段数据（units 是窗口行序唯一投影） */
