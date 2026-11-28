@@ -1,5 +1,11 @@
 # @zhushanwen/pi-pending-notifications
 
+## 0.12.3
+
+### Patch Changes
+
+- eed443751: chore: refresh dependency range (triggered by @zhushanwen/extension-protocol@0.31.0 → @zhushanwen/extension-protocol@0.32.0, @zhushanwen/pi-delivery-port@0.4.4 → @zhushanwen/pi-delivery-port@0.4.5)
+
 ## 0.12.2
 
 ### Patch Changes
