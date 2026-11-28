@@ -393,17 +393,24 @@ function modelSwitchBaselineFromFrame(payload: Record<string, unknown>): { provi
 }
 
 /**
- * 切换前的模型基线 + 缺席补种：权威 state 已有基线直接用；缺席时用帧携带的切换前模型补
- * （pi 新建会话落盘的初始 model_change 不经事件送达，实时侧没有它——先喂一条基线 entry，
- * 等价于那条初始记录；不补则实时下首次切换不出行，重开侧却出行）。先补基线、再喂切换：
- * 顺序对调会把首次切换本身记成基线。
+ * 切换前的模型基线。取值优先序：帧 payload 携带 previousModelId 时一律以帧为准——pi
+ * model_select 事件携带的是该次切换的权威前置值；WS 断连超过消息总线回放窗后重连对账只刷
+ * 渲染列表、不喂 reducer（store.reconcileHistory 不喂 entryStates），权威 state 的 lastModel
+ * 会落后于文件事实（真值 B→C 按 recorded 派生成 A→C），故帧缺 previous*（扩展未带）时才
+ * 回退权威 state。补种 entry 照喂 applyEntryFrame：断连窗口内漏喂的历史切换（A→B）由此
+ * 补进权威 state，与文件重放同形；先补基线、再喂切换的顺序不变——顺序对调会把首次切换
+ * 本身记成基线。pi 新建会话落盘的初始 model_change 不经事件送达，实时侧没有它——帧带
+ * previous* 的首条切换即经同一条补种路径等价于那条初始记录；不补则实时下首次切换不出行，
+ * 重开侧却出行。
+ * 帧目标已等于当前生效值 = 该切换已应用过（同源重复帧：订阅失败重订的全量回放 / 重连回拉
+ * 重叠段）→ 返回 recorded，让派生与 reducer 走同模型 no-op，不出第二条行、不喂补种 entry。
  */
 function resolveModelSwitchBaseline(ctx: MessageEffectContext, sid: string, payload: Record<string, unknown>, timestamp: string): { provider: string; modelId: string } | undefined {
   const recorded = ctx.getLastModel(sid)
-  if (recorded) return recorded
   const fromFrame = modelSwitchBaselineFromFrame(payload)
+  if (recorded && recorded.provider === readString(payload, 'provider') && recorded.modelId === readString(payload, 'modelId')) return recorded
   if (fromFrame) ctx.applyEntryFrame(sid, syntheticModelChangeEntry(fromFrame, timestamp))
-  return fromFrame
+  return fromFrame ?? recorded
 }
 
 /**
@@ -818,9 +825,10 @@ const messageEffects: Partial<Record<ServerMessageType, MessageEffectHandler>> =
   'message.modelSwitch': (ctx, sid, payload) => {
     // 模型切换（chat-flow-v2 msw-live）：runtime 帧 → 合成 model_change entry 喂与回放同一个
     // reducer（compaction 的 cmp-<uuid> 同款范式）。不走 applyEntryFrameWithOverlay：切换行的
-    // 派生依赖前置 state（上一生效模型），在空 state 上派生恒为「只记基线」不出行。这里读
-    // 权威 state 的模型基线（缺席补种语义见 resolveModelSwitchBaseline——权威 state 与渲染
-    // 列表用同一基线、同一 reducer 派生）。timestamp 缺省用客户端时钟。
+    // 派生依赖前置 state（上一生效模型），在空 state 上派生恒为「只记基线」不出行。基线取值
+    // 优先序见 resolveModelSwitchBaseline（帧带 previous* 时以帧为权威前置值，帧缺才回退权威
+    // state——断连重连对账只刷渲染列表不喂 reducer，recorded 可能落后于文件事实）。timestamp
+    // 缺省用客户端时钟。
     const provider = readString(payload, 'provider')
     const modelId = readString(payload, 'modelId')
     if (!modelId) return

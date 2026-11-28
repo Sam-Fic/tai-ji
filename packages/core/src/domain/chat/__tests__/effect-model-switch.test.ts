@@ -6,8 +6,11 @@
  * 骨架——权威 state 与渲染列表必须用同一基线、同一 reducer。这里用真实 reducer 缓冲
  * （镜像 store.applyEntryFrame / getLastModel 的实现）驱动真实 handler，断言两层一致。
  *
- * 基线来源两条：权威 state 已有基线时沿用；没有时（pi 新建会话落盘的初始记录不经事件
- * 送达）用帧携带的切换前模型补一条，等价于那条初始记录。
+ * 基线取值优先序：帧携带切换前模型（previous*）时一律以帧为准——pi model_select 事件是
+ * 该次切换的权威前置值（WS 断连超过消息总线回放窗后重连对账只刷渲染列表、不喂 reducer，
+ * 权威 state 的 lastModel 可能落后于文件事实）；帧缺 previous* 时回退权威 state；权威
+ * state 也没有时（pi 新建会话落盘的初始记录不经事件送达）用帧携带的切换前模型补一条，
+ * 等价于那条初始记录。帧目标已等于当前生效值 = 重复帧，走同模型 no-op 不重复出行。
  */
 import { describe, expect, it } from 'vitest'
 import { shallowRef, type ShallowRef } from 'vue'
@@ -160,16 +163,44 @@ describe('message.modelSwitch：实时切换行进渲染列表', () => {
     expect(switchRows(rendered(messages))).toHaveLength(1)
   })
 
-  it('权威 state 已有基线时以它为准，帧携带的切换前模型不参与派生', () => {
-    const { ctx, messages } = createHarness(sessionStart())
+  it('帧携带切换前模型时以帧为准：权威 state 落后于文件事实也按真值出行（断连重连场景）', () => {
+    // WS 断连期间发生 A→B 切换，重连 reconcile 只刷渲染列表、不喂 reducer（store
+    // reconcileHistory 不动 entryStates）——权威 state 停在 A（sessionStart），渲染列表已按
+    // 文件刷新出 A→B 行。此后下一条实时切换帧 B→C 必须以帧 previous（B）为基线：
+    // 旧口径（recorded 优先）会派生成 A→C，与文件事实漂移。
+    const { ctx, messages, authoritative } = createHarness(sessionStart())
+    const refreshed: Message[] = [
+      {
+        id: 'row-reconciled',
+        role: 'system',
+        status: 'complete',
+        timestamp: T0 + 1000,
+        content: 'faux-1 → faux-1-b',
+        modelSwitch: { provider: 'faux', modelId: 'faux-1-b', previousProvider: 'faux', previousModelId: 'faux-1' },
+      },
+    ]
+    messages.value.set(SID, shallowRef(refreshed))
     dispatchMessageEvent(
       ctx,
       SID,
       switchFrame({ provider: 'faux', modelId: 'faux-1-c', previousProvider: 'faux', previousModelId: 'faux-1-b', timestamp: T1 }),
     )
+    expect(switchRows(rendered(messages)).map((m) => m.content)).toEqual(['faux-1 → faux-1-b', 'faux-1-b → faux-1-c'])
+    expect(authoritative.state.lastModel).toEqual({ provider: 'faux', modelId: 'faux-1-c' })
+    // 权威 state 侧同形：断连窗口内漏喂的 A→B 经补种 entry 补进 reducer（与文件重放同形），
+    // 随后的实时切换以补种后的基线派生——state.messages 与文件重放逐行一致
+    expect(switchRows(authoritative.state.messages).map((m) => m.content)).toEqual([
+      'faux-1 → faux-1-b',
+      'faux-1-b → faux-1-c',
+    ])
+  })
+
+  it('帧缺切换前模型时回退权威 state（扩展未带 previous* 的取值口径不变）', () => {
+    const { ctx, messages } = createHarness(sessionStart())
+    dispatchMessageEvent(ctx, SID, switchFrame({ provider: 'faux', modelId: 'faux-1-reasoning', timestamp: T1 }))
     const rows = switchRows(rendered(messages))
     expect(rows).toHaveLength(1)
-    expect(rows[0].content).toBe('faux-1 → faux-1-c')
+    expect(rows[0].content).toBe('faux-1 → faux-1-reasoning')
   })
 
   it('实时与回放同形：补基线 + 切换 与 初始记录 + 切换记录 派生出同一行', () => {

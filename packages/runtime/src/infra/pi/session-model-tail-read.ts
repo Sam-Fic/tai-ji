@@ -51,7 +51,10 @@ export function extractLatestModelChangeFromJsonl(filePath: string): { provider:
   return found.length > 0 ? found[0] : undefined
 }
 
-/** 窗口模型基线的进程内缓存上限（每个会话的每个窗口起点一条；LRU 淘汰最旧）。 */
+/**
+ * 窗口模型基线的进程内缓存上限（每个会话的每个窗口起点一条；LRU 淘汰最旧）。
+ * @data-owner #97（纯派生可重建读缓存，失效语义见登记表主表 #97）
+ */
 const BASELINE_CACHE_MAX = 16
 const baselineCache = new Map<string, { provider: string; modelId: string } | undefined>()
 
