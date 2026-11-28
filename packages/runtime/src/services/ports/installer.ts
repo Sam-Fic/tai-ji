@@ -44,8 +44,12 @@ export interface ExtensionPaths {
  * 这些都是外部系统调用（npm registry HTTPS、git 子进程），归属 infra。
  */
 export interface IInstaller {
-  /** npm install 一个包到指定 node_modules 目录。失败抛 InstallerError 形状的错误。 */
-  installNpm(pkgName: string, nodeModulesDir: string, opts?: { timeout?: number }): Promise<void>
+  /** npm install 一个包到指定 node_modules 目录。失败抛 InstallerError 形状的错误。
+   *  opts.timeout：单请求窗口（connect/header 等待与 stall 无进展检测）。
+   *  opts.budgetMs：整次安装（含递归依赖）的网络总预算——弱网慢速持续下载在
+   *  无进展检测下无上界，预算到点即以可重试 network 错误终止，保证 install
+   *  时长有上界、ExtensionService 安装串行锁不被长期占用。 */
+  installNpm(pkgName: string, nodeModulesDir: string, opts?: { timeout?: number; budgetMs?: number }): Promise<void>
   /** npm uninstall 一个包。 */
   uninstallNpm(name: string, nodeModulesDir: string): Promise<void>
   /** 在指定目录执行 npm install（装 dependencies，用于 git clone 后的仓库）。

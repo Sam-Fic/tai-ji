@@ -239,7 +239,8 @@
              压缩中 = 消息将排队；Alt+⏎ 同判定同角标；空闲无角标；无内容空闲 = 禁用态发送占位）。
              派生源 = shell sendButtonState / sendButtonBadge（D1 判定集合经 isActiveTurnPhase，
              与 Alt+⏎ 分流共用同一函数——角标恒等于真实去向）。 -->
-        <!-- 发送中 spinner = 呼吸弧（chat 域统一 loader 规格同构：15px accent + 三重动画）。
+        <!-- 发送中 spinner = 呼吸弧（chat 域统一 loader 规格同构：15px accent，外层 HTML 容器单层
+             旋转 + 弧段静态固定相位；[perf:animation] 2026-11 前为三重动画）。
              svg 骨架与 ui 包 RUNNING_LOADER_SVG 同构（该常量未在 ui 包 exports 白名单，
              共享需动 package.json 归交接项）；弧段动画原语 .ld-track/.ld-arc 仍由
              style.css 全局单源承载，此处仅静态属性无独立样式。优先级链首档（D5）：提交
@@ -249,7 +250,9 @@
           class="ml-[4px] grid size-[var(--composer-btn-size)] place-items-center rounded-md bg-accent text-accent-fg"
           :title="t('panel.composer.sending')"
         >
-          <span class="inline-block size-[15px] animate-loader-spin" aria-hidden="true">
+          <!-- translateZ(0) 与 animate-loader-spin 分层（同元素 = 旋转不动，见 ActivityStrip 同款注释） -->
+          <span class="inline-block size-[15px] [transform:translateZ(0)]" aria-hidden="true">
+            <span class="block size-full animate-loader-spin">
             <svg
               class="size-full"
               viewBox="0 0 24 24"
@@ -262,6 +265,7 @@
               <circle class="ld-track" cx="12" cy="12" r="10" opacity="0.16" />
               <circle class="ld-arc" cx="12" cy="12" r="10" pathLength="100" />
             </svg>
+            </span>
           </span>
         </div>
         <Button

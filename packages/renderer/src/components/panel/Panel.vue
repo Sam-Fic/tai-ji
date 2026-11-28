@@ -120,7 +120,9 @@
         class="flex items-center gap-2 rounded-[var(--radius-sm)] border border-[color-mix(in_oklch,var(--warn)_40%,transparent)] bg-warn-soft px-3 py-2"
         role="status"
       >
-        <LoaderCircle class="size-3.5 shrink-0 animate-spin text-warn" />
+        <!-- [perf:animation] 2026-11 恢复中指示改静态（原 LoaderCircle + animate-spin 挂在 SVG 根，
+            每帧主线程重绘；该窗口常态秒级但卡住时可无限停留）。语义由 warn 色 + 文案承担。 -->
+        <LoaderCircle class="size-3.5 shrink-0 text-warn" />
         <span class="text-xs text-text">{{ t('panel.message.respawnPending') }}</span>
       </div>
       <!-- [crash-forensics-and-watchdog §3.3 D8 / u10a 挂载点] 入站超界帧终止阀的会话级

@@ -1,20 +1,23 @@
 /**
- * 聚合块组件族 mount 测试（chat-flow-process-aggregate U2，fixture 驱动——不接线 Turn，
- * 编排切换在 u-wiring 单元；段对象按 core ProcessSegment 契约手工构造，切段纯函数的
- * 口径对账归 U1 单测）。
+ * 过程卡组件族 mount 测试（chat-flow-v2，fixture 驱动——不接线 Turn，编排切换在 Turn.test.ts；
+ * 段对象按 core ProcessSegment 契约手工构造，切段纯函数的口径对账归 core 单测）。
  *
- * 覆盖（任务书目标 3）：
- * - 三态翻转（事件驱动：followedByText / turnWorking，零 timer——ADR-0190）
- * - RL1：进行中占位不随步数增长（1→8→26 注入断言根元素 scrollHeight）
- * - RL4：三处失败计数对账（摘要行 = 组头 = 聚合条，口径 = core counts 单源）
- * - V8 组件侧：窗口可见性纯派生（延迟挂载 / 无空态 / 纯思考段 / 工具起始）
- * - RL6：入场动效一次性（初次挂载在场 / 卸载重挂不重放 / memo 失效重渲染不重放）
- * - 键稳定性：50 次流式增量无重挂载（段 id 结构定位，AX1）
- * - 展开平铺与交互（aria-expanded / 组头纯标题 / 单步行信息位 / 重试标记不渲染）
- * - 悬停浮层（tooltip / pointer-events:none / 滚动 / Esc / 点击消失）
+ * 覆盖：
+ * - 展开态（事件驱动：followedByText / turnWorking，零 timer——ADR-0190）：进行中默认展开、
+ *   点击卡头收起/展开、落成自动收成一行
+ * - 卡头形态：计数「N 步 · 思考 M」、失败标记、箭头、不显示段总耗时、行首图标恒定
+ * - 窗口：max-height = 12 行 × 24px；内容随段成员增量；逐行平铺（不设分组标题行）
+ * - 失败可见性：卡头失败标记与失败行同口径同在场
+ * - 入场动效一次性（初次挂载在场 / 卸载重挂不重放 / memo 失效重渲染不重放）；
+ *   窗口内的入场动效不含位移（位移会临时增大窗口内容高度，把贴底判成未贴底）
+ * - 键稳定性：50 次流式增量无重挂载（段 id 结构定位）
+ * - 工具步行：命令类工具不带工具名、其余工具带工具名与参数、diff 摘要、耗时、失败标记
+ * - 悬停浮层（传送到页面层 / tooltip / pointer-events:none / 滚动 / Esc / 点击消失）
  *
  * 运行：node scripts/run-domain-tests.mjs chat（域触发收集；本文件落 chat 切片 glob）。
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import enPanel from '../../../locale/en-US/panel';
 import zhPanel from '../../../locale/zh-CN/panel';
 import { mount } from '@vue/test-utils';
@@ -43,10 +46,12 @@ vi.mock('vue-i18n', async () => {
     'panel.message.aggRowFailed': '失败',
     'panel.message.aggStatusDone': '已完成',
     'panel.message.traceFailed': '含 {count} 次失败',
+    'panel.message.runGroupSteps': '{count} 步',
+    'panel.message.procThinkCount': '思考 {count}',
+    'panel.message.procChipThinking': '思考中',
     'panel.message.runGroupExplore': '探索',
     'panel.message.runGroupEdit': '改动',
     'panel.message.runGroupExec': '执行命令',
-    'panel.message.runGroupSteps': '{count} 步',
     'panel.message.thinkingBlock': '思考',
     'panel.message.thinkingDuration': '持续了 {duration}',
     'panel.message.expand': '展开',
@@ -169,7 +174,10 @@ function mountAgg(segment: ProcessSegment, turnWorking = true, turnStreaming = t
   });
 }
 
-/** 展开完成态段（点击摘要行）并返回 wrapper */
+/** 悬停浮层传送到页面层（不在组件树内），从 document.body 查 */
+const hoverCard = (): Element | null => document.body.querySelector('[data-testid="agg-hover-card"]');
+
+/** 展开完成态段（点击卡头）并返回 wrapper */
 async function mountExpanded(segment: ProcessSegment): Promise<VueWrapper> {
   const wrapper = mountAgg(segment, false);
   await wrapper.find('[data-testid="agg-summary-row"]').trigger('click');
@@ -179,37 +187,35 @@ async function mountExpanded(segment: ProcessSegment): Promise<VueWrapper> {
 // ─── 三态翻转（事件驱动） ─────────────────────────────────────────
 
 describe('process-aggregate-block tri-state (event-driven)', () => {
-  it('进行中（turnWorking ∧ !followedByText）→ 摘要行 live 变体在场 + 双窗容器在场（2026-11-09 用户裁决：进行中同构可展开，摘要是展开入口）', () => {
+  it('进行中（turnWorking ∧ !followedByText）→ 卡头在场（行首图标恒定，不换转圈）+ 12 行窗口默认展开', () => {
     const wrapper = mountAgg(makeSegment([makeThinkingFlat('推理中')], { followedByText: false }), true);
-    expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(true);
-    // 摘要行恒在场（展开交互的可见入口；live 变体 = 呼吸弧行首）
-    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="agg-summary-live-loader"]').exists()).toBe(true);
-  });
-
-  it('进行中点击摘要行 → 双窗收起、平铺区展开（进行中同构可展开）', async () => {
-    const wrapper = mountAgg(makeSegment([makeThinkingFlat('推理中')], { followedByText: false }), true);
-    await wrapper.find('[data-testid="agg-summary-row"]').trigger('click');
-    expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="agg-expanded"]').exists()).toBe(true);
-    // 再点收起 → 回双窗
-    await wrapper.find('[data-testid="agg-summary-row"]').trigger('click');
-    expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="agg-expanded"]').exists()).toBe(false);
-  });
-
-  it('回合工作态落下（turnWorking 翻 false）→ live 变体切完成形态（呼吸弧摘除、双窗收成摘要行；展开态 ref 共用不跳变）', async () => {
-    const wrapper = mountAgg(makeSegment([makeThinkingFlat('推理')], { followedByText: false }), true);
-    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="agg-summary-live-loader"]').exists()).toBe(true);
-    await wrapper.setProps({ turnWorking: false });
-    expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(true);
-    // 完成形态：呼吸弧摘除（Layers 静态字形回归）
+    const head = wrapper.find('[data-testid="agg-summary-row"]');
+    expect(head.exists()).toBe(true);
+    expect(head.find('svg.lucide-layers').exists()).toBe(true);
+    // 进行动态信号在卡头右侧活动 chip，行首不换成转圈
     expect(wrapper.find('[data-testid="agg-summary-live-loader"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(false);
+    // 进行中默认展开窗口（旧的「双窗」已由窗口取代）
+    expect(wrapper.find('[data-testid="agg-tape-scroll"]').exists()).toBe(true);
   });
 
-  it('纯思考段摘要：零分类不渲染（v-if 省略，真机剧本 agg-tf-1 抓的 v-show 残留缺陷），只列思考计数', () => {
+  it('进行中点击卡头 → 窗口收起成一行；再点展开', async () => {
+    const wrapper = mountAgg(makeSegment([makeThinkingFlat('推理中')], { followedByText: false }), true);
+    await wrapper.find('[data-testid="agg-summary-row"]').trigger('click');
+    expect(wrapper.find('[data-testid="agg-tape-scroll"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="agg-expanded"]').exists()).toBe(false);
+    await wrapper.find('[data-testid="agg-summary-row"]').trigger('click');
+    expect(wrapper.find('[data-testid="agg-tape-scroll"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="agg-expanded"]').exists()).toBe(true);
+  });
+
+  it('回合工作态落下（turnWorking 翻 false）→ 自动收成一行（卡头在场、窗口摘除）', async () => {
+    const wrapper = mountAgg(makeSegment([makeThinkingFlat('推理')], { followedByText: false }), true);
+    await wrapper.setProps({ turnWorking: false });
+    // 落成且用户没点过 → 自动收成一行（窗口摘除）
+    expect(wrapper.find('[data-testid="agg-tape-scroll"]').exists()).toBe(false);
+  });
+
+  it('纯思考段卡头计数：只列思考数，不显示总耗时', () => {
     const wrapper = mountAgg(
       makeSegment([makeThinkingFlat('纯推理')], {
         followedByText: true,
@@ -222,16 +228,14 @@ describe('process-aggregate-block tri-state (event-driven)', () => {
       }),
       true,
     );
-    const row = wrapper.find('[data-testid="agg-summary-row"]');
-    expect(row.exists()).toBe(true);
-    expect(row.findAll('[data-testid^="agg-summary-cat-"]').length).toBe(0);
-    expect(wrapper.find('[data-testid="agg-summary-thinking"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="agg-summary-count"]').text()).toBe('思考 1');
+    expect(wrapper.find('[data-testid="agg-summary-duration"]').exists()).toBe(false);
   });
 
   it('段后出现 text（followedByText=true）→ 段已封闭，回合仍在进行也显摘要行', async () => {
     const wrapper = mountAgg(makeSegment([makeThinkingFlat('推理')], { followedByText: true }), true);
     expect(wrapper.find('[data-testid="agg-summary-row"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="agg-tape-scroll"]').exists()).toBe(false);
   });
 
   it('摘要行 aria-expanded 随展开/收起同步（真实 button 承载展开行为）', async () => {
@@ -246,45 +250,55 @@ describe('process-aggregate-block tri-state (event-driven)', () => {
   });
 });
 
-// ─── RL1：进行中占位不随步数增长 ─────────────────────────────────
+// ─── 卡头形态（chat-flow-v2）────────────────────────────────────
 
-describe('process-aggregate-block RL1: live height stays constant as steps grow', () => {
-  it('1→8→26 步注入，聚合块根元素 scrollHeight 不变（占位与步骤数解耦，AX2）', async () => {
-    const wrapper = mountAgg(makeExploreSegment(1, { followedByText: false, id: 'seg:0' }), true);
-    const root = wrapper.find('[data-testid="process-aggregate"]').element as HTMLElement;
-    const h1 = root.scrollHeight;
-    // scrollHeight 恒等断言（任务书 RL1 形态）：happy-dom 无布局引擎恒返回 0（平凡通过，
-    // 真实浏览器下本断言按内容高度生效——进行中态高度机制由下方结构断言在单测层实际承载）
-    for (const steps of [8, 26]) {
-      await wrapper.setProps({ segment: makeExploreSegment(steps, { followedByText: false, id: 'seg:0' }) });
-      expect(root.scrollHeight).toBe(h1);
-    }
-    // 机制断言（happy-dom 下的实际防护）：
-    // ① 进行中不渲染展开平铺行，窗口数量不随步数增长（无 thinking → 仅聚合窗 1 个）
-    expect(wrapper.find('[data-testid="agg-expanded"]').exists()).toBe(false);
-    expect(wrapper.findAll('[data-testid="agg-think-window"], [data-testid="agg-window"]').length).toBe(1);
-    // ② 聚合窗高度档 = 设计规格值（D7：116px，窄屏 ≤420px 降档 96px——视口断点为纯 CSS
-    //    max-[420px] 变体，happy-dom 不做布局，class 断言承载规格值；断点行为归真机 V6）
-    expect(wrapper.find('[data-testid="agg-window"]').classes()).toEqual(
-      expect.arrayContaining(['h-[116px]', 'max-[420px]:h-[96px]']),
+describe('process-aggregate-block card head (chat-flow-v2)', () => {
+  it('计数「N 步 · 思考 M」：步数按段内工具类成员累计（思考不计步，类型表外成员也计步）', () => {
+    const wrapper = mountAgg(
+      makeSegment([makeThinkingFlat('想'), makeToolFlat({ toolName: 'read' }), makeToolFlat({ toolName: 'custom_tool' })], {
+        followedByText: true,
+        counts: makeCounts({ categoryCounts: { explore: 1, edit: 0, exec: 0 }, thinkingCount: 1 }),
+      }),
+      false,
     );
-    // ③ 聚合条条目数与步数解耦（按组不按步：1 组恒 1 条目）
-    expect(wrapper.findAll('[data-testid="agg-strip-group"], [data-testid="agg-strip-current"]').length).toBe(1);
+    expect(wrapper.find('[data-testid="agg-summary-count"]').text()).toBe('2 步 · 思考 1');
   });
 
-  it('纯思考段 1→26 段思考，占位同样恒定（思考窗固定高度内滚动）', async () => {
-    const wrapper = mountAgg(makeSegment([makeThinkingFlat('t')], { followedByText: false, id: 'seg:0' }), true);
-    const root = wrapper.find('[data-testid="process-aggregate"]').element as HTMLElement;
-    const h1 = root.scrollHeight;
-    const thinkers = Array.from({ length: 26 }, () => makeThinkingFlat('更多推理'));
-    await wrapper.setProps({ segment: makeSegment(thinkers, { followedByText: false, id: 'seg:0' }) });
-    // 同上：scrollHeight 恒等（真实浏览器生效）+ 思考窗高度档 = 设计规格值（D7：92px，
-    // 窄屏 ≤420px 降档 78px）
-    expect(root.scrollHeight).toBe(h1);
-    expect(wrapper.find('[data-testid="agg-think-window"]').classes()).toEqual(
-      expect.arrayContaining(['h-[92px]', 'max-[420px]:h-[78px]']),
+  it('只有工具步时只列步数', () => {
+    const wrapper = mountAgg(makeSegment([makeToolFlat()], { followedByText: true }), false);
+    expect(wrapper.find('[data-testid="agg-summary-count"]').text()).toBe('1 步');
+  });
+
+  it('展开箭头随展开/收起翻转（收起指向右，展开转下并染强调色）', async () => {
+    const wrapper = mountAgg(makeSegment([makeToolFlat()], { followedByText: true }), false);
+    const chevron = () => wrapper.find('[data-testid="agg-summary-row"] svg.lucide-chevron-right');
+    expect(chevron().exists()).toBe(true);
+    expect(chevron().classes()).not.toContain('rotate-90');
+    await wrapper.find('[data-testid="agg-summary-row"]').trigger('click');
+    expect(chevron().classes()).toContain('rotate-90');
+    expect(chevron().classes()).toContain('text-accent');
+  });
+});
+
+// ─── 窗口高度封顶（12 行 × 24px）──────────────────────────────────
+
+describe('process-aggregate-block window cap: 12 rows × 24px', () => {
+  it('窗口的 max-height = 12 行 × 24px（CSS 令牌承载），行数增长不改变高度档', async () => {
+    const wrapper = mountAgg(makeExploreSegment(1, { followedByText: false, id: 'seg:0' }), true);
+    const scroll = wrapper.find('[data-testid="agg-tape-scroll"]');
+    expect(scroll.exists()).toBe(true);
+    expect(scroll.classes()).toEqual(
+      expect.arrayContaining(['max-h-[calc(var(--proc-tape-rows)*var(--proc-tape-row-h))]', 'overflow-y-auto']),
     );
-    expect(wrapper.find('[data-testid="agg-window"]').exists()).toBe(false);
+    await wrapper.setProps({ segment: makeExploreSegment(8, { followedByText: false, id: 'seg:0' }) });
+    await wrapper.setProps({ segment: makeExploreSegment(26, { followedByText: false, id: 'seg:0' }) });
+    // 高度档不随步数变化（下限仍由 CSS 上限承载；真实像素由真机 AC-H12 断言）
+    expect(wrapper.find('[data-testid="agg-tape-scroll"]').classes()).toEqual(
+      expect.arrayContaining(['max-h-[calc(var(--proc-tape-rows)*var(--proc-tape-row-h))]']),
+    );
+    // 行数增长 = 段成员增量（窗口内容随步骤增加）
+    const rows = wrapper.findAll('[data-testid="agg-expanded"] > [data-testid^="agg-row-"]');
+    expect(rows.length).toBeGreaterThan(0);
   });
 });
 
@@ -309,81 +323,196 @@ function makeFailedSegment(over: Partial<ProcessSegment> = {}): ProcessSegment {
   });
 }
 
-describe('process-aggregate-block RL4: failure count agrees across summary / group head / live strip', () => {
-  it('进行中聚合条即时「含 1 次失败」（D3 直播口径，无需点开）', () => {
+describe('process-aggregate-block failure visibility: card head and failed row agree', () => {
+  it('进行中卡头即时报「含 1 次失败」（无需点开）', () => {
     const wrapper = mountAgg(makeFailedSegment(), true);
-    expect(wrapper.find('[data-testid="agg-window"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="agg-tape-scroll"]').exists()).toBe(true);
     expect(wrapper.text()).toContain('含 1 次失败');
   });
 
-  it('完成态摘要行「含 1 次失败」；展开态组头「含 1 次失败」——同一 fixture 三处恒等', async () => {
+  it('完成态卡头「含 1 次失败」；展开后失败行带失败标记——同一 fixture 两处同在场', async () => {
     const segment = makeFailedSegment();
-    // 完成态：摘要行
     const done = mountAgg({ ...segment, followedByText: true }, false);
     expect(done.find('[data-testid="agg-summary-failed"]').text()).toBe('含 1 次失败');
-    // 展开态：组头
     const expanded = await mountExpanded({ ...segment, followedByText: true });
-    expect(expanded.find('[data-testid="agg-group-failed"]').text()).toBe('含 1 次失败');
-    // 口径恒等：三处文本同串（段级 counts 与组级 failedCount 声明同值）
-    expect(expanded.find('[data-testid="agg-summary-failed"]').text()).toBe(
-      done.find('[data-testid="agg-summary-failed"]').text(),
-    );
+    expect(expanded.find('[data-testid="agg-summary-failed"]').text()).toBe('含 1 次失败');
+    const failRow = expanded.findAll('[data-testid="agg-tool-row"]')[1];
+    expect(failRow.find('[data-testid="agg-tool-failed"]').text()).toBe('失败');
   });
 });
 
-// ─── V8（组件侧）：窗口可见性纯派生 ──────────────────────────────
+// ─── 窗口内容随段成员增量（纯派生）──────────────────────────────
 
-describe('process-aggregate-block V8: window visibility purely derived', () => {
-  it('思考先行段：思考窗在场、聚合窗不渲染（无「等待工具调用」空态占位）', () => {
+describe('process-aggregate-block window content: derived from segment units', () => {
+  it('纯思考段：窗口里只有思考行，无工具行；追加思考后行数增长', async () => {
     const wrapper = mountAgg(makeSegment([makeThinkingFlat('先想后做')], { followedByText: false }), true);
-    expect(wrapper.find('[data-testid="agg-think-window"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="agg-window"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="agg-expanded"]').find('[data-testid="agg-thinking-row"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="agg-expanded"]').find('[data-testid="agg-tool-row"]').exists()).toBe(false);
+    await wrapper.setProps({
+      segment: makeSegment([makeThinkingFlat('先想后做'), makeThinkingFlat('第二段推理')], { followedByText: false }),
+    });
+    const rows = wrapper.findAll('[data-testid="agg-expanded"] > [data-testid^="agg-row-"]');
+    expect(rows.length).toBe(2);
     expect(wrapper.text()).not.toContain('等待工具调用');
   });
 
-  it('首个工具步骤开始 → 聚合窗立即挂载（无 timer、无预留高度）', async () => {
-    const wrapper = mountAgg(makeSegment([makeThinkingFlat('先想后做')], { followedByText: false }), true);
-    expect(wrapper.find('[data-testid="agg-window"]').exists()).toBe(false);
-    await wrapper.setProps({
-      segment: makeSegment(
-        [makeThinkingFlat('先想后做'), makeToolFlat()],
-        { followedByText: false },
-      ),
-    });
-    expect(wrapper.find('[data-testid="agg-window"]').exists()).toBe(true);
-    expect(wrapper.text()).not.toContain('等待工具调用');
-  });
-
-  it('纯思考段：全程追加思考，聚合窗始终不出现（D7 可见性纯派生）', async () => {
-    const wrapper = mountAgg(makeSegment([makeThinkingFlat('a')], { followedByText: false }), true);
-    await wrapper.setProps({
-      segment: makeSegment([makeThinkingFlat('a'), makeThinkingFlat('b')], { followedByText: false }),
-    });
-    expect(wrapper.find('[data-testid="agg-think-window"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="agg-window"]').exists()).toBe(false);
-  });
-
-  it('工具起始段：无前导思考窗，只聚合窗（三起始形态之二）', () => {
+  it('首个工具步骤出现 → 窗口里出现工具行（无空态占位、无 timer）', () => {
     const wrapper = mountAgg(makeSegment([makeToolFlat()], { followedByText: false }), true);
-    expect(wrapper.find('[data-testid="agg-think-window"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="agg-window"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="agg-expanded"]').exists()).toBe(true);
+    const rows = wrapper.findAll('[data-testid="agg-expanded"] > [data-testid^="agg-row-"]');
+    expect(rows.length).toBe(1);
+    expect(wrapper.text()).not.toContain('等待工具调用');
+  });
+});
+
+// ─── 思考行三态（chat-flow-v2）──────────────────────────────────
+
+describe('process-aggregate-block thinking row: three states', () => {
+  it('已结束的思考：一行标签（灯泡 + 思考 + 时长 + 箭头），不带正文；点开才渲染全文，再点收起', async () => {
+    const wrapper = mountAgg(makeSegment([makeThinkingFlat('先想后做')], { followedByText: false }), true);
+    const row = () => wrapper.find('[data-testid="agg-thinking-row"]');
+    const toggle = () => row().find('[data-testid="agg-thinking-toggle"]');
+    expect(toggle().attributes('aria-expanded')).toBe('false');
+    expect(toggle().find('svg.lucide-lightbulb').exists()).toBe(true);
+    expect(toggle().find('svg.lucide-chevron-right').classes()).not.toContain('rotate-90');
+    expect(row().find('[data-testid="agg-thinking-duration"]').text()).not.toBe('');
+    expect(row().find('[data-testid="agg-thinking-text"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="agg-expanded"]').text()).not.toContain('先想后做');
+
+    await toggle().trigger('click');
+    expect(toggle().attributes('aria-expanded')).toBe('true');
+    expect(toggle().find('svg.lucide-chevron-right').classes()).toContain('rotate-90');
+    expect(row().classes()).toContain('is-open');
+    expect(row().find('[data-testid="agg-thinking-text"]').find('.stub-md').exists()).toBe(true);
+
+    await toggle().trigger('click');
+    expect(row().find('[data-testid="agg-thinking-text"]').exists()).toBe(false);
   });
 
-  it('agentgraph 成员同样触发聚合窗（core members 契约：结构上同是工具调用）', () => {
-    const wrapper = mountAgg(makeSegment([makeGraphFlat()], { followedByText: false }), true);
-    expect(wrapper.find('[data-testid="agg-window"]').exists()).toBe(true);
+  it('进行中的思考：不显示标签，只露最新一行（只渲染末尾一段文字）带光标；点它才展开全文并出现标签', async () => {
+    const long = Array.from({ length: 40 }, (_, i) => `第 ${i + 1} 行推理。`).join('\n');
+    const wrapper = mountAgg(makeSegment([makeThinkingFlat(long, { endTime: undefined })], { followedByText: false }), true);
+    const row = wrapper.find('[data-testid="agg-thinking-row"]');
+    expect(row.find('[data-testid="agg-thinking-toggle"]').exists()).toBe(false);
+    const text = row.find('[data-testid="agg-thinking-text"]');
+    expect(text.classes()).toContain('is-tail');
+    expect(text.find('.agg-cursor').exists()).toBe(true);
+    expect(text.text()).toContain('第 40 行推理');
+    expect(text.text()).not.toContain('第 1 行推理');
+
+    await text.trigger('click');
+    const toggle = row.find('[data-testid="agg-thinking-toggle"]');
+    expect(toggle.exists()).toBe(true);
+    expect(row.find('[data-testid="agg-thinking-running"]').text()).toBe('进行中');
+    expect(row.find('[data-testid="agg-thinking-text"]').classes()).not.toContain('is-tail');
   });
 
-  it('思考窗显示最新一段思考（下一段思考开始切换内容源）', async () => {
-    const wrapper = mountAgg(makeSegment([makeThinkingFlat('第一段推理')], { followedByText: false }), true);
-    expect(wrapper.find('[data-testid="agg-think-viewport"]').text()).toContain('第一段推理');
-    await wrapper.setProps({
-      segment: makeSegment(
-        [makeThinkingFlat('第一段推理'), makeThinkingFlat('第二段推理')],
+  it('落成后的段：缺 endTime 的思考也按已结束显示一行标签（无时长、无「进行中」、无正文）', async () => {
+    const wrapper = await mountExpanded(
+      makeSegment([makeThinkingFlat('历史会话里的思考', { endTime: undefined })], { followedByText: true }),
+    );
+    const row = wrapper.find('[data-testid="agg-thinking-row"]');
+    expect(row.find('[data-testid="agg-thinking-toggle"]').exists()).toBe(true);
+    expect(row.find('[data-testid="agg-thinking-duration"]').exists()).toBe(false);
+    expect(row.find('[data-testid="agg-thinking-running"]').exists()).toBe(false);
+    expect(row.find('[data-testid="agg-thinking-text"]').exists()).toBe(false);
+  });
+});
+
+// ─── 卡头活动 chip：此刻在做什么 + 计时（chat-flow-v2）──────────
+
+describe('process-aggregate-block live activity chip', () => {
+  it('流式中的思考：chip =「思考」+ 计时；点 chip 点开该段思考', async () => {
+    const wrapper = mountAgg(
+      makeSegment([makeThinkingFlat('推理中', { startTime: Date.now() - 3000, endTime: undefined })], { followedByText: false }),
+      true,
+    );
+    const chip = wrapper.find('[data-testid="agg-activity-chip"]');
+    expect(chip.exists()).toBe(true);
+    expect(chip.find('[data-testid="agg-activity-label"]').text()).toBe('思考');
+    expect(chip.find('[data-testid="agg-activity-duration"]').text()).toBe('3s');
+    // 卡内没有第二个实时计时：流式中的思考行不带时长
+    expect(wrapper.find('[data-testid="agg-expanded"]').find('[data-testid="agg-thinking-duration"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="agg-thinking-toggle"]').exists()).toBe(false);
+    await chip.trigger('click');
+    expect(wrapper.find('[data-testid="agg-thinking-toggle"]').exists()).toBe(true);
+  });
+
+  it('执行中的命令：chip =「执行命令」+ 计时；窗口里的命令行不显示耗时', () => {
+    const segment = makeSegment(
+      [
+        makeThinkingFlat('想'),
+        makeToolFlat({ toolName: 'bash', input: { command: 'pnpm test' }, status: 'running', endTime: undefined, startTime: Date.now() - 4000 }),
+      ],
+      { followedByText: false },
+    );
+    const wrapper = mountAgg(segment, true);
+    expect(wrapper.find('[data-testid="agg-activity-label"]').text()).toBe('执行命令');
+    expect(wrapper.find('[data-testid="agg-activity-duration"]').text()).toBe('4s');
+    expect(wrapper.find('[data-testid="agg-expanded"]').find('[data-testid="agg-tool-duration"]').exists()).toBe(false);
+  });
+
+  it('类型表外的工具执行中：类型词显示工具名', () => {
+    const wrapper = mountAgg(
+      makeSegment([makeToolFlat({ toolName: 'custom_tool', status: 'running', endTime: undefined })], { followedByText: false }),
+      true,
+    );
+    expect(wrapper.find('[data-testid="agg-activity-label"]').text()).toBe('custom_tool');
+  });
+
+  it('最后一个步骤已结束、回合仍在进行：chip =「思考中」；段不在进行中：没有 chip', () => {
+    const waiting = mountAgg(makeSegment([makeThinkingFlat('想')], { followedByText: false }), true);
+    expect(waiting.find('[data-testid="agg-activity-label"]').text()).toBe('思考中');
+    const settled = mountAgg(makeSegment([makeThinkingFlat('想')], { followedByText: true }), true);
+    expect(settled.find('[data-testid="agg-activity-chip"]').exists()).toBe(false);
+  });
+});
+
+// ─── 执行中的命令行（chat-flow-v2）────────────────────────────────
+
+describe('process-aggregate-block running command row', () => {
+  const runningCmd = (output: string) =>
+    makeSegment(
+      [
+        makeToolFlat({
+          toolName: 'bash',
+          input: { command: 'for i in 1 2 3; do echo out-$i; done' },
+          status: 'running',
+          endTime: undefined,
+          output,
+        }),
+      ],
+      { followedByText: false },
+    );
+
+  it('执行中的命令行：行尾显示最新一行输出与光标，不显示耗时，不带工具名，保持静态箭头', () => {
+    const wrapper = mountAgg(runningCmd('out-1\nout-2\n'), true);
+    const row = wrapper.find('[data-testid="agg-tool-row"]');
+    expect(row.text()).not.toContain('bash');
+    expect(row.find('[data-testid="agg-tool-tail"]').text()).toBe('out-2');
+    expect(row.find('.agg-cursor').exists()).toBe(true);
+    expect(row.find('[data-testid="agg-tool-duration"]').exists()).toBe(false);
+    expect(row.find('[data-running-icon]').exists()).toBe(false);
+    // 结束后：输出尾行与光标撤下，换上耗时
+    wrapper.unmount()
+    const done = mountAgg(
+      makeSegment(
+        [makeToolFlat({ toolName: 'bash', input: { command: 'ls' }, status: 'completed', endTime: 9000, output: 'out-1\nout-2\n' })],
         { followedByText: false },
       ),
-    });
-    expect(wrapper.find('[data-testid="agg-think-viewport"]').text()).toContain('第二段推理');
+      true,
+    )
+    const doneRow = done.find('[data-testid="agg-tool-row"]')
+    expect(doneRow.find('[data-testid="agg-tool-tail"]').exists()).toBe(false)
+    expect(doneRow.find('.agg-cursor').exists()).toBe(false)
+    expect(doneRow.find('[data-testid="agg-tool-duration"]').text()).not.toBe('')
+  })
+
+  it('执行中的命令还没有输出：只有光标，没有输出尾行', () => {
+    const wrapper = mountAgg(runningCmd('\n   \n'), true);
+    const row = wrapper.find('[data-testid="agg-tool-row"]');
+    expect(row.find('[data-testid="agg-tool-tail"]').exists()).toBe(false);
+    expect(row.find('.agg-cursor').exists()).toBe(true);
   });
 });
 
@@ -438,9 +567,25 @@ describe('process-aggregate-block key stability: 50 streaming increments without
           );
       },
     });
-    const initial = makeExploreSegment(1, { followedByText: false, id: 'seg:0' });
+    // 成员数组跨增量保持前缀引用稳定（真实流式增量 = 追加不改前缀，AX1 同形）：每步只追加
+    // 1 个成员后整段重建，前缀成员对象与行键不换——既对齐「增量追加」契约，又避免每步
+    // 全量重建成员制造的 O(N²) 行重挂载（fixture 形态噪声，非被测行为）
+    const members: FlatBlock[] = [makeToolFlat({ toolName: 'read' })];
+    const segmentAt = (): ProcessSegment => {
+      const group = makeGroup('explore', members, { durationMs: members.length * 100 });
+      return makeSegment(members, {
+        groups: [group],
+        units: [{ kind: 'group', group }],
+        counts: makeCounts({
+          categoryCounts: { explore: members.length, edit: 0, exec: 0 },
+          totalDurationMs: members.length * 100,
+        }),
+        followedByText: false,
+        id: 'seg:0',
+      });
+    };
     const wrapper = mount(Harness, {
-      props: { segments: [initial], turnWorking: true },
+      props: { segments: [segmentAt()], turnWorking: true },
       global: {
         provide: mockChatProvide(),
         stubs: { MarkdownRenderer: { props: ['content', 'variant'], template: '<div class="stub-md" />' } },
@@ -448,7 +593,8 @@ describe('process-aggregate-block key stability: 50 streaming increments without
     });
     let el = wrapper.find('[data-testid="process-aggregate"]').element;
     for (let step = 2; step <= 50; step++) {
-      const grown = makeExploreSegment(step, { followedByText: false, id: 'seg:0' });
+      members.push(makeToolFlat({ toolName: 'read' }));
+      const grown = segmentAt();
       // 段 id 在流式生长中稳定（core 契约：派生自段首位置，成员追加不改 id）
       expect(grown.id).toBe('seg:0');
       await wrapper.setProps({ segments: [grown] });
@@ -491,38 +637,41 @@ describe('process-aggregate-block expanded body (flat units)', () => {
     );
   }
 
-  it('units 按真实顺序平铺：思考行 / 工具组 / 思考行 / 独立行交替（GL3 无二次折叠）', async () => {
+  it('按发生顺序逐行平铺：思考 / 两个工具步 / 思考 / 独立行——一个 block 一行', async () => {
     const wrapper = await mountExpanded(makeMixedSegment());
     const rows = wrapper.findAll('[data-testid="agg-expanded"] > [data-testid^="agg-row-"]');
-    expect(rows.length).toBe(4);
-    expect(rows[0].find('.trace-think').exists()).toBe(true);
-    expect(rows[1].find('[data-testid="agg-tool-group"]').exists()).toBe(true);
-    expect(rows[2].find('.trace-think').exists()).toBe(true);
-    expect(rows[3].find('[data-testid="agg-tool-row"]').exists()).toBe(true);
+    expect(rows.length).toBe(5);
+    const isTool = (i: number) => rows[i].find('[data-testid="agg-tool-row"]').exists();
+    expect([isTool(0), isTool(1), isTool(2), isTool(3), isTool(4)]).toEqual([false, true, true, false, true]);
   });
 
-  it('组头是纯标题（div、无 role=button、无 tabindex——组级无折叠入口，D1 裁决）', async () => {
-    const wrapper = await mountExpanded(makeMixedSegment());
-    const head = wrapper.find('[data-testid="agg-group-head"]');
-    expect(head.element.tagName).toBe('DIV');
-    expect(head.attributes('role')).toBeUndefined();
-    expect(head.attributes('tabindex')).toBeUndefined();
-    expect(head.text()).toContain('探索');
-    expect(head.text()).toContain('2 步');
+  it('窗口内不设分组标题行：同类型工具的成员直接成行', async () => {
+    const wrapper = await mountExpanded(makeExploreSegment(3, { followedByText: true }));
+    expect(wrapper.find('[data-testid="agg-tool-group"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="agg-group-head"]').exists()).toBe(false);
+    expect(wrapper.findAll('[data-testid="agg-tool-row"]').length).toBe(3);
+    expect(wrapper.find('[data-testid="agg-expanded"]').text()).not.toContain('探索');
   });
 
-  it('单步行显示工具名 / 参数 / diff 摘要 / 耗时 / 失败标记；无「更早 N 步」入口', async () => {
+  it('命令类工具行只显示命令正文（不带工具名）与耗时；非命令类工具行显示工具名与参数', async () => {
     const segment = makeFailedSegment({ followedByText: true });
-    segment.units = [...segment.units];
     const wrapper = await mountExpanded(segment);
     const okRow = wrapper.findAll('[data-testid="agg-tool-row"]')[0];
-    expect(okRow.text()).toContain('bash');
+    expect(okRow.text()).not.toContain('bash');
     expect(okRow.find('[data-testid="agg-tool-param"]').text()).toBe('pnpm test');
     expect(okRow.find('[data-testid="agg-tool-duration"]').text()).not.toBe('');
     const failRow = wrapper.findAll('[data-testid="agg-tool-row"]')[1];
     expect(failRow.find('[data-testid="agg-tool-failed"]').exists()).toBe(true);
-    expect(wrapper.text()).not.toContain('更早');
-    expect(wrapper.text()).not.toContain('重试');
+    expect(wrapper.find('[data-testid="agg-expanded"]').text()).not.toContain('更早');
+    expect(wrapper.find('[data-testid="agg-expanded"]').text()).not.toContain('重试');
+    wrapper.unmount();
+
+    const read = await mountExpanded(
+      makeSegment([makeToolFlat({ toolName: 'read', input: { path: '/tmp/a.ts' } })], { followedByText: true }),
+    );
+    const row = read.find('[data-testid="agg-tool-row"]');
+    expect(row.text()).toContain('read');
+    expect(row.find('[data-testid="agg-tool-param"]').text()).toBe('/tmp/a.ts');
   });
 
   it('edit 行 diff 摘要（+N −N，core diffStat 口径）', async () => {
@@ -538,36 +687,38 @@ describe('process-aggregate-block expanded body (flat units)', () => {
     expect(wrapper.find('[data-testid="agg-tool-row"]').text()).toContain('subagent_task');
   });
 
-  it('counts 全 0 的摘要行只显主词（分类 / 思考 / 耗时 / 失败按 0 省略）', () => {
+  it('卡头无失败时不渲染失败标记，且不显示段总耗时', () => {
     const wrapper = mountAgg(makeSegment([makeToolFlat({ toolName: 'custom_tool' })], { followedByText: true }), false);
     const row = wrapper.find('[data-testid="agg-summary-row"]');
     expect(row.text()).toContain('过程');
     expect(row.find('[data-testid="agg-summary-failed"]').exists()).toBe(false);
-    expect(row.find('[data-testid="agg-summary-duration"]').exists()).toBe(false);
-    expect(row.find('[data-testid="agg-summary-thinking"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="agg-summary-duration"]').exists()).toBe(false);
   });
 });
 
 // ─── 悬停浮层 ────────────────────────────────────────────────────
 
 describe('process-aggregate-block hover card', () => {
-  it('悬停单步行 → 浮层在场：role=tooltip、pointer-events:none、参数与输出（≤8 行）', async () => {
+  it('悬停单步行 → 浮层传送到页面层并固定定位：role=tooltip、pointer-events:none、参数与输出（≤8 行）', async () => {
     const tool = makeToolFlat({
       input: { path: '/tmp/long/path/x.ts' },
       output: Array.from({ length: 12 }, (_, i) => `line${i + 1}`).join('\n'),
     });
     const wrapper = await mountExpanded(makeSegment([tool], { followedByText: true }));
     await wrapper.find('[data-testid="agg-tool-row"]').trigger('mouseenter');
-    const card = wrapper.find('[data-testid="agg-hover-card"]');
-    expect(card.exists()).toBe(true);
-    expect(card.attributes('role')).toBe('tooltip');
-    expect(card.classes()).toContain('pointer-events-none');
-    expect(card.find('[data-testid="agg-hover-param"]').text()).toContain('/tmp/long/path/x.ts');
-    const outputText = card.find('[data-testid="agg-hover-output"]').text();
+    // 浮层不在组件树内（挂在行内会被限高滚动的窗口裁掉），传送到了页面层
+    expect(wrapper.find('[data-testid="agg-hover-card"]').exists()).toBe(false);
+    const card = hoverCard();
+    expect(card).not.toBeNull();
+    expect(card?.getAttribute('role')).toBe('tooltip');
+    expect(card?.classList.contains('pointer-events-none')).toBe(true);
+    expect(card?.classList.contains('fixed')).toBe(true);
+    expect(card?.querySelector('[data-testid="agg-hover-param"]')?.textContent).toContain('/tmp/long/path/x.ts');
+    const outputText = card?.querySelector('[data-testid="agg-hover-output"]')?.textContent ?? '';
     expect(outputText).toContain('line8');
     expect(outputText).not.toContain('line9');
     await wrapper.find('[data-testid="agg-tool-row"]').trigger('mouseleave');
-    expect(wrapper.find('[data-testid="agg-hover-card"]').exists()).toBe(false);
+    expect(hoverCard()).toBeNull();
   });
 
   it('窗口滚动 / Esc / 行点击三路都收浮层（开抽屉时消失路径 = 点击）', async () => {
@@ -575,22 +726,22 @@ describe('process-aggregate-block hover card', () => {
     const row = () => wrapper.find('[data-testid="agg-tool-row"]');
     // 滚动（capture 监听 window scroll——dispatchEvent 冒泡形态触发）
     await row().trigger('mouseenter');
-    expect(wrapper.find('[data-testid="agg-hover-card"]').exists()).toBe(true);
+    expect(hoverCard()).not.toBeNull();
     window.dispatchEvent(new Event('scroll'));
     await nextTick();
-    expect(wrapper.find('[data-testid="agg-hover-card"]').exists()).toBe(false);
+    expect(hoverCard()).toBeNull();
     // Esc
     await row().trigger('mouseenter');
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     await nextTick();
-    expect(wrapper.find('[data-testid="agg-hover-card"]').exists()).toBe(false);
+    expect(hoverCard()).toBeNull();
     // 点击（开抽屉触发点）：抽屉经 teleport 打开在 body（U4 接线——open-detail 事件在
     // 展开区本地消费、不再冒泡到本组件顶层，u-wiring 的 Turn 挂载点不监听该事件），
     // 浮层收起；断言后 Esc 关抽屉防 teleport 残留污染后续用例
     await row().trigger('mouseenter');
     await row().trigger('click');
     expect(document.body.querySelector('[data-testid="tool-detail-drawer"]')).not.toBeNull();
-    expect(wrapper.find('[data-testid="agg-hover-card"]').exists()).toBe(false);
+    expect(hoverCard()).toBeNull();
     // unmount 连带移除 teleport 内容（Esc 卸载经关闭动画延迟、DOM 卸载时机不可靠——
     // 开/关与 Esc emit 的完整交互契约由 process-aggregate-drawer.test.ts 承载）
     wrapper.unmount();
@@ -601,14 +752,40 @@ describe('process-aggregate-block hover card', () => {
     const bad = makeToolFlat({ toolName: 'bash', status: 'error', error: 'ENOENT', output: '' });
     const wrapper = await mountExpanded(makeSegment([bad], { followedByText: true }));
     await wrapper.find('[data-testid="agg-tool-row"]').trigger('mouseenter');
-    expect(wrapper.find('[data-testid="agg-hover-output"]').text()).toContain('ENOENT');
+    expect(hoverCard()?.querySelector('[data-testid="agg-hover-output"]')?.textContent).toContain('ENOENT');
+    wrapper.unmount();
+    expect(hoverCard()).toBeNull();
+  });
+});
+
+// ─── 窗口内的入场动效不含位移（chat-flow-v2）─────────────────────
+
+describe('process-aggregate-block window motion: opacity only', () => {
+  it('展开区的样式块不含位移（位移会临时增大窗口内容高度，把贴底的窗口判成未贴底）', () => {
+    const source = readFileSync(resolve(__dirname, '../process-aggregate/AggregateExpandedBody.vue'), 'utf8');
+    const styleBlock = source.slice(source.indexOf('<style scoped>'));
+    expect(styleBlock.length).toBeGreaterThan(0);
+    expect(styleBlock).not.toContain('translate');
   });
 });
 
 // ─── i18n：zh / en 双侧键对齐 ────────────────────────────────────
 
 describe('process-aggregate i18n keys (zh + en)', () => {
-  const AGG_KEYS = ['aggProcessLabel', 'aggGroupRunning', 'aggRowFailed', 'aggStatusDone'] as const;
+  const AGG_KEYS = [
+    'aggProcessLabel',
+    'aggGroupRunning',
+    'aggRowFailed',
+    'aggStatusDone',
+    'procThinkCount',
+    'procChipThinking',
+    'runGroupExplore',
+    'runGroupEdit',
+    'runGroupExec',
+    'procTapeEarlier',
+    'procTapeBelow',
+    'procTapeToTop',
+  ] as const;
 
   it('新键 zh / en 双侧登记（message 段）；重试标记键不登记（D4 裁决）', () => {
   const zh = (zhPanel as unknown as { message: Record<string, string> }).message;

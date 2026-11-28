@@ -40,7 +40,9 @@ export interface ExtensionApiMock { // oe-exempt:20260930:test:测试 mock 的�
 /** extension 门面捕获单例（乐观更新测试经 mockImplementationOnce / mockRejectedValueOnce
  *  接管 toggle / setAutoUpgrade；默认 impl 全部 resolve） */
 export const extensionApiMock: ExtensionApiMock = {
-  upgrade: vi.fn(() => Promise.resolve()),
+  // 默认 resolve 升级结果（契约 SettingsTransport.upgradeExtension → ExtensionUpgradeResult）：
+  // upgraded=true = 组件走「已升级」toast 分支（原「升级成功」用例语义不变）
+  upgrade: vi.fn(() => Promise.resolve({ upgraded: true, from: '1.0.0', to: '1.0.0' })),
   setAutoUpgrade: vi.fn(() => Promise.resolve()),
   fetchRecommended: vi.fn(() => Promise.resolve([])),
   onExtensions: vi.fn(() => () => {}),

@@ -244,6 +244,10 @@ export {
 } from './extensions/smart-context/notify-types'
 export type { CompactionPersistSignal } from './extensions/smart-context/notify-types'
 
+// ── ./extensions/model-select：模型切换信号词表（customType 单源：写侧 = host-internals 转发，
+// 读侧 = runtime event-interpreter 分诊）──
+export { MODEL_SELECT_CUSTOM_TYPE } from './extensions/model-select'
+
 // [pi1-disposition-chat-flow D7①] plugin-bridge 协议段（marker/types/guards + 桶导出）
 // 随 plugin-bridge 整体退役删除；select 通道原语（core/select-rpc.ts）为公共层保留。
 

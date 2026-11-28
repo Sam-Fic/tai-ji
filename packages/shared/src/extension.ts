@@ -62,6 +62,16 @@ export interface ExtensionInfo {
 
 // ── Extension install flow payload interfaces ──────────────────
 
+/** extension.upgrade 的升级结果（runtime ExtensionService.upgradeExtension 返回值透传，
+ * 'config.extensions' reply 的 upgradeResult 字段形状）。
+ * from/to = 升级前版本与目标版本；upgraded=false 表示远端已是最新、无需升级（未执行
+ * npm install），前端据此展示「已是最新」而非「已升级」。 */
+export interface ExtensionUpgradeResult {
+  upgraded: boolean
+  from: string
+  to: string
+}
+
 export interface ExtensionDiscoveredPayload {
   tempDir: string
   candidates: ExtensionInfo[]

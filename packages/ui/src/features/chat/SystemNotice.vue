@@ -71,8 +71,9 @@
           >{{ notice.text }}</span>
           <span
             v-if="notice.meta"
-            class="shrink-0 font-mono text-[length:var(--text-2xs)] font-medium tabular-nums text-neutral-dim"
+            class="shrink-0 max-w-[240px] truncate font-mono text-[length:var(--text-2xs)] font-medium tabular-nums text-neutral-dim"
             :class="notice.metaClass"
+            :title="notice.metaTitle"
             data-testid="system-notice-meta"
           >{{ notice.meta }}</span>
         </span>
@@ -111,7 +112,7 @@
 </template>
 
 <script setup lang="ts">
-import { GitBranch, Layers, Info, ArrowRight, ArrowLeftRight, SquareTerminal } from '@lucide/vue'
+import { GitBranch, Layers, Info, ArrowRight, ArrowLeftRight, Box, SquareTerminal } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import { onUnmounted, ref, type Component } from 'vue'
 import {
@@ -207,6 +208,8 @@ interface NoticeView {
   text: string
   /** 钉右 meta：压缩 tokens / exit 结果 · 耗时 */
   meta?: string
+  /** meta 的悬停原文（meta 被限宽截断时——如超长模型 id——title 显全文；缺省不加 title） */
+  metaTitle?: string
   /** meta 语义色 class（缺省 neutral-dim） */
   metaClass?: string
   /** 悬停详情（无界载荷存在时） */
@@ -216,7 +219,8 @@ interface NoticeView {
 /** 按消息类型选图标 + 主体/meta（纯函数，props 不变则结果不变）。
  *  图标分配（2026-10-21 用户裁决）：压缩行 Layers（多层堆叠 = 上下文摘要；与收纳通知
  *  managed 行同形——同属多条目堆叠语义族，撞形已接受）；兜底行 Info（系统信息通行图标）；
- *  Archive 归归档域（侧栏会话归档箱），对话流不再占用。 */
+ *  模型切换行 Box（chat-flow-v2 G8 原型裁决「用 box」）；Archive 归归档域（侧栏会话归档箱），
+ *  对话流不再占用。 */
 const notice: NoticeView = finalizeDetail(resolveNotice(props.message))
 
 function resolveNotice(message: Message): NoticeView {
@@ -259,6 +263,21 @@ function resolveNotice(message: Message): NoticeView {
       icon: GitBranch,
       iconClass: ICON_NEUTRAL_CLASS,
       text: from ? t('panel.message.branchCreated', { from }) : t('panel.message.branchCreatedNoFrom'),
+    }
+  }
+  // 模型切换行（chat-flow-v2 G8）：主体短语 + 钉右 mono meta（前 → 后模型 id，token 同类
+  // 技术串不进 i18n 键）；无切换前模型（会话首条记录形态，reducer 不出行，防御保留）只显新模型。
+  // 模型 id 用户可配置（自定义 provider 串可超长）：meta 限宽截断，全文走 title 悬停
+  //（本族「无界载荷不进行内」同一语义；正文短语恒有界，不需要 detail 兜底）。
+  const sw = message.modelSwitch
+  if (sw) {
+    const meta = sw.previousModelId ? `${sw.previousModelId} → ${sw.modelId}` : sw.modelId
+    return {
+      icon: Box,
+      iconClass: ICON_NEUTRAL_CLASS,
+      text: t('panel.message.modelSwitchRow'),
+      meta,
+      metaTitle: meta,
     }
   }
   // 兜底：纯 system 文本（流健康警告 / scheduler 派发提示等 display:true custom 消息同族同规格）

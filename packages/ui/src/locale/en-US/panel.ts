@@ -200,28 +200,38 @@ export default {
     handoffDocTag: 'Handoff document',
     branchCreated: 'Branch created (from {from})',
     branchCreatedNoFrom: 'Branch created',
+    // [chat-flow-v2 G8] model switch row phrase (SystemNotice modelSwitch branch); previous →
+    // next model ids go to the right-pinned mono meta (technical tokens stay out of copy keys)
+    modelSwitchRow: 'Model switched',
     thinkCount: 'Think ×{count}',
     toolCount: 'Tool ×{count}',
     // [u3 remove-turn-progress-bar] TurnMeta generated tokens (TurnMeta.vue, design §2.1/§2.4;
     // 2026-09 token 口径: sum of reported output tokens over all LLM calls in the turn, no estimation)
     generatedTokens: 'Generated {tokens} tokens',
     traceFailed: '{count} failed',
-    // [run-group] group type-name and stat keys (consumed by aggregate block SegmentToolGroup /
-    // AggregateLiveWindows strip entries): type names mirror the zh literals (探索 / 改动 /
-    // 执行命令); the stat segment is "{count} steps" plus duration (appended by the renderer
-    // only when ≥1s); the failure clause reuses traceFailed — same failure-count domain.
+    // Process card head count (chat-flow-v2): step count; the failure clause reuses traceFailed
+    // — same failure-count domain. Tool type names: shown by the live activity chip for tools
+    // that are in the type table.
+    runGroupSteps: '{count} steps',
     runGroupExplore: 'Explore',
     runGroupEdit: 'Edits',
     runGroupExec: 'Commands',
-    runGroupSteps: '{count} steps',
-    // [process-aggregate] aggregate-block (process segment tri-state container) copy: summary row
-    // label / running word (shared by group head and live strip) / row-level failure tag /
+    // [process-aggregate] process card copy: head label / running word (shared by the hover card
+    // and the thinking row) / row-level failure tag /
     // hover-card done word. The failure-count clause reuses traceFailed and the thinking word
     // reuses thinkingBlock (same semantic domains, no second key set) — no retry-tag key:
     // terminal-state ③ ruled retry tags unrendered (no structural signal), zero key demand.
     aggProcessLabel: 'Process',
     aggGroupRunning: 'running',
     aggRowFailed: 'failed',
+    procTapeEarlier: '{count} earlier',
+    procTapeBelow: '{count} below',
+    procTapeToTop: 'Back to top',
+    // Process card head count (chat-flow-v2): thinking count
+    procThinkCount: 'Thinking {count}',
+    // Process card activity chip: type word while the last step has finished and the turn
+    // is still waiting for the model
+    procChipThinking: 'Thinking…',
     aggStatusDone: 'done',
     // [process-aggregate] tool detail drawer (u-detail-drawer assembly): drawer title (shared
     // by the shell fallback and the tool-name suffix) / running note / params & output section

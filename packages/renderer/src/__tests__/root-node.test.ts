@@ -1112,7 +1112,8 @@ describe('FG5 chat store 块类型扩展', () => {
 // ws-client / pending mock 与 workspace-store 节共享（见文件头共享 mock 区）：
 // transportMock.send 捕获消息并返回 true（boolean 契约），pending 默认工厂值
 // 'pid-1' + envelope resolve；本节 beforeEach 覆写 createCommandId→'test-id'、
-// register→undefined-resolve（本节不消费 reply envelope）。
+// register→extension.upgrade reply envelope（upgrade() 解包 reply.upgradeResult，
+// register 须 resolve 对象，undefined 会 TypeError）。
 
 import * as extension from '@taiji/core/transport/api/domains/extension'
 import * as transport from '@taiji/core/transport/ws-client'
@@ -1122,16 +1123,25 @@ describe('extension domain upgrade', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(pending.createCommandId).mockReturnValue('test-id')
-    vi.mocked(pending.register).mockReturnValue(Promise.resolve())
+    vi.mocked(pending.register).mockReturnValue(
+      Promise.resolve({ extensions: [], upgradeResult: { upgraded: true, from: '1.0.0', to: '1.1.0' } }),
+    )
   })
 
-  it('upgrade 发送 extension.upgrade 消息，payload 含 name', () => {
-    extension.upgrade('my-extension')
+  it('upgrade 发送 extension.upgrade 消息，payload 含 name，解包 reply.upgradeResult 返回', async () => {
+    const result = await extension.upgrade('my-extension')
     expect(transport.send).toHaveBeenCalledWith({
       type: 'extension.upgrade',
       id: 'test-id',
       payload: { name: 'my-extension' },
     })
+    expect(result).toEqual({ upgraded: true, from: '1.0.0', to: '1.1.0' })
+  })
+
+  it('reply 缺 upgradeResult → 回退 upgraded=true（缺字段 = 本次 reply 不承载升级结果，不能据此断言「已是最新」误导用户）', async () => {
+    vi.mocked(pending.register).mockResolvedValueOnce({ extensions: [] })
+    const result = await extension.upgrade('my-extension')
+    expect(result).toEqual({ upgraded: true, from: '', to: '' })
   })
 
   // （「upgrade 返回 pending promise」恒真用例已删：任何 request 封装都返回 Promise，

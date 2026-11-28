@@ -1059,9 +1059,9 @@ describe('ComposerMetricsAggregate coding-plan 区', () => {
       expect(wrapper.find('.trace-think').exists()).toBe(false)
       expect(wrapper.find('.trace-tool').exists()).toBe(false)
 
-      // 段细节经每段摘要行展开（GL2/GL3）：点第一段摘要行 → 思考行在聚合块内渲染（.trace-think 在场）
+      // 段细节经每段摘要行展开（GL2/GL3）：点第一段摘要行 → 思考行在聚合块内渲染（agg-thinking-row 在场）
       await blocks[0].find('[data-testid="agg-summary-row"]').trigger('click')
-      expect(wrapper.find('.trace-think').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="agg-thinking-row"]').exists()).toBe(true)
     })
 
     // TC-REG-3：样式统一——工作展开形态（D2）多 assistant，所有 text block 含正文 token 锚点

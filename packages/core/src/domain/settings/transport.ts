@@ -33,6 +33,7 @@ import type {
   SkillInfo,
   AgentInfo,
   ExtensionInfo,
+  ExtensionUpgradeResult,
   SkillDirConfig,
   SystemPromptConfig,
   TerminalConfig,
@@ -385,7 +386,9 @@ export interface SettingsTransport {
   finishExtensionInstall(tempDir: string, selected: string[]): Promise<void>
   /** 放弃安装（清理 tempDir） */
   cancelExtensionInstall(tempDir: string): Promise<void>
-  upgradeExtension(name: string): Promise<void>
+  /** 升级扩展（runtime npm 安装最新版）。返回升级结果——upgraded=false 表示远端
+   *  已是最新、未执行安装，前端据此展示「已是最新」而非「已升级」。 */
+  upgradeExtension(name: string): Promise<ExtensionUpgradeResult>
   setExtensionAutoUpgrade(name: string, enabled: boolean): Promise<void>
 
   // ── 插件 Provider 来源（provider-plugin-access U6：清单 / 业务方法 / 状态上报 / 输入回传）──

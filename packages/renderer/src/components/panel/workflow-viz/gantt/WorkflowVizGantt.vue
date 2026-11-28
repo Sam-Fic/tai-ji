@@ -234,7 +234,10 @@ function segClass(seg: WorkflowGanttAttemptSegment): string {
       : 'bg-neutral-dim opacity-70'
   }
   switch (seg.state) {
-    case 'running': return 'bg-accent animate-[wfvz-gantt-pulse_1.5s_ease-in-out_infinite]'
+    // [perf:animation] 2026-11 running 段呼吸改 steps(4) 量化（保留 running 语义）：
+    // 每 running 段一条 opacity 动画，workflow 并发 5~10 时同屏多条；实测 60fps→steps(8)
+    // 掉 2/3，此处取更粗的 4 段。
+    case 'running': return 'bg-accent animate-[wfvz-gantt-pulse_1.5s_steps(4,end)_infinite]'
     case 'done': return 'bg-success opacity-85'
     case 'failed': return 'bg-danger opacity-90'
     case 'cancelled': return 'bg-neutral-dim opacity-70'

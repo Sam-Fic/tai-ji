@@ -22,8 +22,14 @@ export function trayItemButtonClass(active: boolean): string {
   )
 }
 
-/** running 呼吸点类（仅「有进行中」渲染；归零不虚亮由各自 v-if 判定） */
-export const TRAY_PULSE_CLASS = 'size-[6px] shrink-0 animate-pulse rounded-full bg-accent'
+/** running 指示点类（仅「有进行中」渲染；归零不虚亮由各自 v-if 判定）。
+ *
+ * [perf:animation] 2026-11 去 animate-pulse 改静态 accent 点：该点持续 = 后台任务全程
+ * （subagent/workflow/bash/canvas，分钟级→小时级），三处消费点同帧与 PanelHeader /
+ * 侧栏环共存。实测：pulse 单项零收益（只停它不掉 CPU），但它是「一直有动画在跑」
+ * 布尔事实的构成项——全停才掉到地板（17.4%/17.5% → 3.2%/2.1%）。语义「进行中」由
+ * 点位与 accent 色承担，不靠呼吸节奏。类名保留以免牵连三处 import。 */
+export const TRAY_PULSE_CLASS = 'size-[6px] shrink-0 rounded-full bg-accent'
 
 /**
  * 计数角标形态（demo .cbtn .badge）：绝对定位于按钮右上角 -3px，min-w/h 14px、px 3px、

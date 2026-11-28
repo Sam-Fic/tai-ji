@@ -93,6 +93,11 @@ const EXEMPT = {
   'packages/ui/src/primitives/__tests__/sheet.test.ts': 'Sheet 拖拽手势测试的时钟全控 mock——happy-dom 的 PointerEvent 构造函数自身消费 performance.now() 做 timeStamp，须 spyOn mock 后事件构造与 handler 共享同一时钟源，速度 = dy/durationMs 断言才确定性成立；是确定性化手段，非性能水位断言',
   // transport-local.test.ts 已删（382c73f6f 用例合并入 engine-client.test.ts，该文件挂
   // 集成门控后 scanFile 直接跳过）——原豁免键随之移除，无承接豁免义务。
+  // model-switch-history 的 FIFO 占位用例（G2-1 防御回归）：spawnSync('mkfifo') 只为构造
+  // 非常规文件占位本身（被测物 = findModelChangeBaselineBefore 对 FIFO 的降级路径），非
+  // 集成进程依赖——同步建一个 FIFO 即返回，确定性无外部服务；挂集成门控会让默认档失去
+  // 该防御回归（FIFO 挂起回归正是要在默认档常态验证的）。
+  'packages/runtime/src/__tests__/model-switch-history.test.ts': 'X1 豁免：spawnSync(mkfifo) 构造非常规文件占位本身是被测物（FIFO 降级防御回归），同步系统调用、确定性零外部依赖；挂集成门控会让默认档失去该防御回归',
   // —— ④ performance.now 非断言性消费：轮询时钟（fake Date 用例下 Date.now 冻结的替代），非性能断言 ——
   // —— 检查器黑盒自测（spawn 检查脚本本体，亚秒级） ——
   'scripts/__tests__/check-test-extremes.test.mjs': '本检查器黑盒自测（spawn 检查器本体，单处 <300ms）',

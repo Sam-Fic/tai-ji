@@ -241,10 +241,12 @@ describe('ActivityStrip · 横线分隔行族形态（compacting 降级回归 + 
       expect(line.classes()).toContain(FADE_LINE_CLASS)
     }
     // 呼吸弧：15px + accent（M3c demo .run-ic 复刻，替换原 Loader2 13px neutral-mid spinner）
+    // 两层形态（[perf:animation]）：testid 外层 = size-[15px] 提层包装，内层 = animate-loader-spin + text-accent
     const loader = row.find('.animate-loader-spin')
     expect(loader.exists()).toBe(true)
-    expect(loader.classes()).toContain('size-[15px]')
     expect(loader.classes()).toContain('text-accent')
+    expect(loader.element.parentElement?.className).toContain('size-[15px]')
+    expect(loader.element.parentElement?.className).toContain('[transform:translateZ(0)]')
     // 主文案（文本容器首个 span）：text-base / neutral-mid / fw-mid（demo .think .t-name）
     const main = row.find('[data-testid="activity-strip-text-compacting"] > span')
     expect(main.classes()).toContain('text-[length:var(--text-base)]')
@@ -301,9 +303,10 @@ describe('ActivityStrip · 横线分隔行族形态（compacting 降级回归 + 
     for (const line of bashLines) {
       expect(line.classes()).toContain(FADE_LINE_CLASS)
     }
-    // 呼吸弧 15px / accent（M3c）
+    // 呼吸弧 15px / accent（M3c；两层形态：size 在提层包装、animate+accent 在内层）
     const loader = bashRow.find('.animate-loader-spin')
-    expect(loader.classes()).toContain('size-[15px]')
+    expect(loader.element.parentElement?.className).toContain('size-[15px]')
+    expect(loader.classes()).toContain('text-accent')
     // 主文案 text-base/mid/fw-mid（M3c demo .think .t-name）；方案 A 后无内联命令（命令在悬停详情），行内仅短语 + elapsed meta
     const main = bashRow.find('[data-testid="activity-strip-text-bash"] > span')
     expect(main.classes()).toContain('text-[length:var(--text-base)]')

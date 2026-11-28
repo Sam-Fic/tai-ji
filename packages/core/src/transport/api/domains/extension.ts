@@ -18,6 +18,7 @@ import type {
   ExtensionInfo,
   ExtensionDiscoveredPayload,
   ExtensionInteractMethod,
+  ExtensionUpgradeResult,
   RecommendedExtension,
 } from '@taiji/shared'
 import { command } from '../request'
@@ -96,13 +97,21 @@ export async function scan(): Promise<void> {
   await command('extension.list', {})
 }
 
+/** extension.upgrade 的升级结果（形状 SSOT = shared ExtensionUpgradeResult） */
+export type { ExtensionUpgradeResult } from '@taiji/shared'
+
 /**
  * 升级指定扩展：从 npm 拉取最新版本并重装。
  * 仅对 user-installed（npm 来源）扩展有效。
- * runtime 执行 npm install <pkg>@latest → 替换旧版 → 推 config.extensions 刷新。
+ * runtime 执行 npm install <pkg>@latest → 替换旧版 → 回 config.extensions（带 id），
+ * payload.upgradeResult 携带升级结果。
  */
-export function upgrade(name: string): Promise<void> {
-  return command('extension.upgrade', { name })
+export async function upgrade(name: string): Promise<ExtensionUpgradeResult> {
+  const reply = await command('extension.upgrade', { name })
+  // upgradeResult 可选（shared protocol 声明——同 reply type 也被 extension.list 等
+  // 非 upgrade 路径复用）。缺失时回退 upgraded=true 维持「已升级」提示：缺字段说明
+  // 本次 reply 不承载升级结果，不能据此断言「已是最新」误导用户。
+  return reply.upgradeResult ?? { upgraded: true, from: '', to: '' }
 }
 
 /**

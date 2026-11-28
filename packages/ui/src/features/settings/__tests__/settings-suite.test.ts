@@ -337,6 +337,23 @@ describe('applySystemToDom', () => {
     expect(doc.documentElement.dataset.fontSize).toBe('medium')
   })
 
+  // [perf:animation] 2026-11 分支审查 data-governance S3：reduceMotion 投影契约（本批最关键的
+  // 兼容性语义——老数据无该字段时必须落 off，与 DEFAULT_SYSTEM.reduceMotion=false 等价）
+  it('reduceMotion=true → data-reduce-motion=on', () => {
+    applySystemToDom(makeSystem({ reduceMotion: true }))
+    expect(setAttribute).toHaveBeenCalledWith('data-reduce-motion', 'on')
+  })
+
+  it('reduceMotion=false → data-reduce-motion=off（显式写不摘属性）', () => {
+    applySystemToDom(makeSystem({ reduceMotion: false }))
+    expect(setAttribute).toHaveBeenCalledWith('data-reduce-motion', 'off')
+  })
+
+  it('reduceMotion 字段缺失（老数据）→ data-reduce-motion=off（与缺省 false 等价）', () => {
+    applySystemToDom(makeSystem({ reduceMotion: undefined }))
+    expect(setAttribute).toHaveBeenCalledWith('data-reduce-motion', 'off')
+  })
+
   it('fontScales 写 data-fs-* dataset，逐区域独立档位', () => {
     const doc: any = (globalThis as any).document
     applySystemToDom(makeSystem({ fontScales: { sidebar: 'small', chat: 'xlarge', drawer: 'large' } }))

@@ -49,6 +49,7 @@ import type {
   Message,
   PiBranchSummaryEntry,
   PiCompactionEntry,
+  PiModelChangeEntry,
   PiCustomMessageEntry,
   PiEntry,
   PiMessageEntry,
@@ -57,6 +58,7 @@ import type {
   ServerMessageType,
   ToolCall,
 } from '@taiji/shared'
+import { applyEntry, createInitialChatViewState } from '../apply-entry'
 import { deriveToolResultOutputs, isPlainRecord, parseDiffStat } from '../apply-entry-utils'
 // [chat-flow-consistency D3/C1] 定稿重建与迟到帧定位实现体（独立模块，先例 entry-overlay）
 import { locateToolCallHost, rebuildAssistantOnFinalize } from './finalized-rebuild'
@@ -369,6 +371,61 @@ function deriveToolCallEndOverlay(message: PiMessageEntry['message']): {
  * 的实现体归位 effects/finalized-rebuild.ts（entry-overlay / user-delivery 同款模块化先例，
  * 注册表本体只留 handler 接线）——rebuildAssistantOnFinalize / locateToolCallHost。
  */
+
+/** 实时侧合成的 model_change entry（重开侧是 pi 落盘的同形 entry）；id 客户端生成 ms-<uuid>。 */
+function syntheticModelChangeEntry(model: { provider?: string; modelId: string }, timestamp: string): PiModelChangeEntry {
+  const provider = model.provider ?? ''
+  return {
+    type: 'model_change',
+    id: `ms-${randomUuid()}`,
+    parentId: null,
+    timestamp,
+    ...(provider !== '' && { provider }),
+    modelId: model.modelId,
+  }
+}
+
+/** modelSwitch 帧携带的「切换前模型」字段 → 基线模型（帧缺 previousModelId = undefined，不补基线）。 */
+function modelSwitchBaselineFromFrame(payload: Record<string, unknown>): { provider: string; modelId: string } | undefined {
+  const previousModelId = readString(payload, 'previousModelId')
+  if (!previousModelId) return undefined
+  return { provider: readString(payload, 'previousProvider') ?? '', modelId: previousModelId }
+}
+
+/**
+ * 切换前的模型基线。取值优先序：帧 payload 携带 previousModelId 时一律以帧为准——pi
+ * model_select 事件携带的是该次切换的权威前置值；WS 断连超过消息总线回放窗后重连对账只刷
+ * 渲染列表、不喂 reducer（store.reconcileHistory 不喂 entryStates），权威 state 的 lastModel
+ * 会落后于文件事实（真值 B→C 按 recorded 派生成 A→C），故帧缺 previous*（扩展未带）时才
+ * 回退权威 state。补种 entry 照喂 applyEntryFrame：断连窗口内漏喂的历史切换（A→B）由此
+ * 补进权威 state，与文件重放同形；先补基线、再喂切换的顺序不变——顺序对调会把首次切换
+ * 本身记成基线。pi 新建会话落盘的初始 model_change 不经事件送达，实时侧没有它——帧带
+ * previous* 的首条切换即经同一条补种路径等价于那条初始记录；不补则实时下首次切换不出行，
+ * 重开侧却出行。
+ * 帧目标已等于当前生效值 = 该切换已应用过（同源重复帧：订阅失败重订的全量回放 / 重连回拉
+ * 重叠段）→ 返回 recorded，让派生与 reducer 走同模型 no-op，不出第二条行、不喂补种 entry。
+ */
+function resolveModelSwitchBaseline(ctx: MessageEffectContext, sid: string, payload: Record<string, unknown>, timestamp: string): { provider: string; modelId: string } | undefined {
+  const recorded = ctx.getLastModel(sid)
+  const fromFrame = modelSwitchBaselineFromFrame(payload)
+  if (recorded && recorded.provider === readString(payload, 'provider') && recorded.modelId === readString(payload, 'modelId')) return recorded
+  if (fromFrame) ctx.applyEntryFrame(sid, syntheticModelChangeEntry(fromFrame, timestamp))
+  return fromFrame ?? recorded
+}
+
+/**
+ * 切换行插入位：末位流式 assistant 之前（pi 对流式中的 assistant 要到 message_end 才落
+ * entry，切换 entry 落在该 assistant 之前——live 数组序与重放侧文件序同位，live ≡ reload
+ * 含位置）；遇到 user 锚或无流式 assistant = append（文件序天然同位）。
+ */
+function modelSwitchInsertIndex(messages: Message[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m?.role === 'user') break
+    if (m?.role === 'assistant' && m.status === 'streaming') return i
+  }
+  return messages.length
+}
 
 const messageEffects: Partial<Record<ServerMessageType, MessageEffectHandler>> = {
   // ── 主流式生命周期（chunk 创建/收尾 + isGenerating 派生）──
@@ -764,6 +821,33 @@ const messageEffects: Partial<Record<ServerMessageType, MessageEffectHandler>> =
   // 未注册 handler——dispatchMessageEvent 对未注册 type 直接 no-op（保留事件接收，不消费）。
   // 运行态语义未用：streaming/complete/error 是消息生命周期（finalizeSession 收尾），
   // 与 message.status 运行过程态正交（§3.3.6 死代码清理，原空 handler 删除）。
+
+  'message.modelSwitch': (ctx, sid, payload) => {
+    // 模型切换（chat-flow-v2 msw-live）：runtime 帧 → 合成 model_change entry 喂与回放同一个
+    // reducer（compaction 的 cmp-<uuid> 同款范式）。不走 applyEntryFrameWithOverlay：切换行的
+    // 派生依赖前置 state（上一生效模型），在空 state 上派生恒为「只记基线」不出行。基线取值
+    // 优先序见 resolveModelSwitchBaseline（帧带 previous* 时以帧为权威前置值，帧缺才回退权威
+    // state——断连重连对账只刷渲染列表不喂 reducer，recorded 可能落后于文件事实）。timestamp
+    // 缺省用客户端时钟。
+    const provider = readString(payload, 'provider')
+    const modelId = readString(payload, 'modelId')
+    if (!modelId) return
+    const ts = payload['timestamp']
+    const timestamp = new Date(typeof ts === 'number' ? ts : Date.now()).toISOString()
+    const baseline = resolveModelSwitchBaseline(ctx, sid, payload, timestamp)
+    const entry = syntheticModelChangeEntry({ provider, modelId }, timestamp)
+    ctx.applyEntryFrame(sid, entry)
+    const derived = applyEntry(
+      baseline ? { ...createInitialChatViewState(), lastModel: baseline } : createInitialChatViewState(),
+      entry,
+    )
+    if (derived.messages.length === 0) return
+    const prev = ctx.messages.value.get(sid)?.value ?? []
+    // 插入位判定（流式中切 vs append）见 modelSwitchInsertIndex 注释
+    const next = [...prev]
+    next.splice(modelSwitchInsertIndex(prev), 0, ...derived.messages)
+    commitMessages(ctx.messages, sid, next)
+  },
 
   'message.compactionSummary': (ctx, sid, payload) => {
     // [W6 fix-chat-flow-order] compaction 双路径收尾（最后一个未 entry 化的 live 消息类型）。

@@ -90,17 +90,37 @@ export const DOT_CLASS: Record<DerivedStatus, string> = {
  * icon: lucide 图标名（与 @lucide/vue 导出同名）。
  * color: Tailwind 语义色类（text-*）。
  * animation: 动画类（'' 表示静态）。
+ *
+ * [perf:animation] working / compacting 两态改静态（2026-11 实测：打包版 workflow/subagent
+ * 后台跑期间风扇狂转，GPU helper 54-60% + renderer 85%；dev 受控消融把 animate-spin 全停后
+ * 掉到 1/6，单个 14px spinner 即 9.3%/4.2%）。这两态持续 = 整个后台任务生命周期（分钟-小时），
+ * 且落到 lucide <svg> 根（Chromium 不合成 SVG transform，style.css 的 will-change 空转），
+ * 是「一直有动画在跑」布尔事实的第一个来源。语义识别由静态字形 + accent 色承担。
+ * streaming 保留旋转：真实流式是秒-分钟且用户预期在转。
  */
+/** STATUS_ICON 的 icon 名字面量集（PanelHeader 的 ICON_COMPONENTS 键集以此为类型约束，漏登记即编译错）。 */
+export type StatusIconName = 'RefreshCw' | 'ArrowUpCircle' | 'Hourglass' | 'Loader2' | 'Wrench' | 'Zap' | 'Check' | 'Ban' | 'AlertCircle'
+
 export const STATUS_ICON: Record<
   DerivedStatus,
-  { icon: string; color: string; animation: string }
+  { icon: StatusIconName; color: string; animation: string }
 > = {
   streaming: { icon: 'RefreshCw', color: 'text-accent', animation: 'animate-spin' },
-  pending: { icon: 'ArrowUpCircle', color: 'text-accent', animation: 'animate-pulse-strong' },
-  compacting: { icon: 'Hourglass', color: 'text-accent', animation: 'animate-spin' },
-  working: { icon: 'RefreshCw', color: 'text-accent', animation: 'animate-spin' },
+  // [perf:animation] steps(4) 量化：pulse-strong 动 opacity + transform:scale，挂在
+  // <ArrowUpCircle> SVG 根（不可合成）；steps 把逐帧重建降到 4 段（实测 60fps→steps(8)
+  // 掉 2/3，此处取更粗的 4 段）。pending = 上行未确认，秒级但可累积。
+  pending: { icon: 'ArrowUpCircle', color: 'text-accent', animation: 'animate-pulse-strong-quantized' },
+  // [perf:animation] compacting 亦为常驻态（threshold/overflow 自动压缩可持续分钟级），
+  // 同 working 处理：静态 Hourglass 保留「压缩中」语义，不转。
+  compacting: { icon: 'Hourglass', color: 'text-accent', animation: '' },
+  // [perf:animation] working = 后台 subagent/workflow 运行中，持续整个任务生命周期（
+  // 分钟-小时）。原 animate-spin 挂在 <RefreshCw> SVG 根，每帧主线程重绘 13px 矢量。
+  // 改静态 Loader2（齿轮字形本身即「加载中」，与 streaming 的 RefreshCw / compacting 的
+  // Hourglass 三态字形互异——静态化后状态可区分性靠字形而非动效承担），色仍 accent 表「活跃」。
+  working: { icon: 'Loader2', color: 'text-accent', animation: '' },
   waiting: { icon: 'Wrench', color: 'text-warn', animation: '' },
-  retrying: { icon: 'Zap', color: 'text-warn', animation: 'animate-pulse-strong' },
+  // [perf:animation] 同 pending：SVG 目标 + 量化 steps(4)。
+  retrying: { icon: 'Zap', color: 'text-warn', animation: 'animate-pulse-strong-quantized' },
   done: { icon: 'Check', color: 'text-accent', animation: '' },
   stopped: { icon: 'Ban', color: 'text-neutral-mid', animation: '' },
   error: { icon: 'AlertCircle', color: 'text-danger', animation: '' },
@@ -114,40 +134,7 @@ export function statusDotClass(status: DerivedStatus): string {
   return DOT_CLASS[status]
 }
 
-/**
- * 活跃态用转菊花（Loader2 + animate-spin）替代脉冲圆点的旧行为已迁移到 STATUS_ICON。
- * 以下常量保留仅作向后兼容：历史组件若仍消费 shouldShowSpinner / spinnerTextClass，
- * 行为与旧态一致（running/waiting/working 显示 spinner）。
- * 新组件建议直接消费 STATUS_ICON。
- */
-const SPINNER_STATUSES: ReadonlySet<DerivedStatus> = new Set(['streaming', 'waiting', 'working'])
-
-export function shouldShowSpinner(status: DerivedStatus): boolean {
-  return SPINNER_STATUSES.has(status)
-}
-
-/** spinner 图标色（streaming/working→accent 蓝，waiting→warning 橙） */
-export const SPINNER_TEXT_CLASS: Record<'streaming' | 'waiting' | 'working', string> = {
-  streaming: 'text-accent',
-  waiting: 'text-warn',
-  working: 'text-accent',
-}
-
-/** spinner 适用状态联合（用于类型收窄） */
-export type SpinnerStatus = 'streaming' | 'waiting' | 'working'
-
-/**
- * 类型检查：status 是否为 spinner 适用状态（streaming / waiting）。
- * 收窄后可安全索引 SPINNER_TEXT_CLASS。
- */
-export function isSpinnerStatus(status: DerivedStatus): status is SpinnerStatus {
-  return SPINNER_STATUSES.has(status)
-}
-
-/**
- * 取 spinner 图标色 class（类型安全封装）。
- * isSpinnerStatus 收窄后安全索引 SPINNER_TEXT_CLASS，消除组件侧 `as` 断言。
- */
-export function spinnerTextClass(status: DerivedStatus): string | null {
-  return isSpinnerStatus(status) ? SPINNER_TEXT_CLASS[status] : null
-}
+// [HISTORICAL] 原 SPINNER_STATUSES / shouldShowSpinner / SPINNER_TEXT_CLASS / isSpinnerStatus /
+// spinnerTextClass 兼容族已删（2026-11 动画降级分支审查 data-governance S8）：全仓零消费方，
+// 且其 SPINNER_STATUSES 仍含 'working' 与 STATUS_ICON.working.animation='' 对同一问题
+// （working 是否旋转）给出相反答案——「是否旋转」的派生只在 STATUS_ICON 一处。
