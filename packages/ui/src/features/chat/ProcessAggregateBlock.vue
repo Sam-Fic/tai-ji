@@ -50,8 +50,6 @@ const { isLive, expanded, toggleExpanded, entranceClass } = useProcessAggregateS
   turnWorking: computed(() => props.turnWorking),
   turnStreaming: computed(() => props.turnStreaming === true),
 })
-
-
 </script>
 
 <style scoped>
