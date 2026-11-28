@@ -1,6 +1,6 @@
 {
   "name": "@zhushanwen/pi-session-reader",
-  "version": "0.15.2",
+  "version": "0.15.3",
   "type": "module",
   "main": "index.ts",
   "taiji": {

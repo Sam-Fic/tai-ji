@@ -1,5 +1,11 @@
 # @zhushanwen/pi-smart-context
 
+## 0.5.6
+
+### Patch Changes
+
+- eed443751: chore: refresh dependency range (triggered by @zhushanwen/extension-protocol@0.31.0 → @zhushanwen/extension-protocol@0.32.0)
+
 ## 0.5.5
 
 ### Patch Changes
