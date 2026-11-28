@@ -5,6 +5,9 @@
   "scope": {
     "runtime": [
       "packages/runtime/src/services/background-task/update-broadcast.ts"
+    ],
+    "protocol": [
+      "packages/extension-protocol/src/extensions/model-select.ts"
     ]
   },
   "tests": [

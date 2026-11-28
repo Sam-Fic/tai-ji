@@ -1,11 +1,5 @@
 {
-  "docs": {
-    "design": "docs/tree-plant/design.md",
-    "acceptance": "docs/tree-plant/acceptance.md",
-    "api": "docs/tree-plant/api.md",
-    "factCheck": "docs/tree-plant/fact-check.md"
-  },
-  "testCommand": "pnpm --filter @zhushanwen/pi-provider-aggregation test",
-  "typecheckCommand": "pnpm --filter @zhushanwen/pi-provider-aggregation typecheck",
-  "ignoreChangedPaths": []
+  "docsDir": "docs/chat-flow",
+  "testCommand": "pnpm --filter @taiji/ui exec vitest run src/features/chat && pnpm --filter @taiji/core exec vitest run src/domain/chat",
+  "typecheckCommand": "pnpm --filter @taiji/shared --filter @taiji/core --filter @taiji/ui typecheck"
 }

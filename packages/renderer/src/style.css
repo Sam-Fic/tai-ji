@@ -193,6 +193,9 @@
      240px ≈ mono 14 行（行高 16.98px）/ markdown 11 行（行高 21.0px）——dev 真机实测校准
      （faux 轨 80 行 bash / 40 行 thinking，2026-09-16） */
   --block-scroll-max-height: 240px;
+  /* 过程卡窗口：行数上限与单行高度（tree-plant chat-flow-v2：窗口 12 行、一个 block 一行） */
+  --proc-tape-rows: 12;
+  --proc-tape-row-h: 24px;
   --composer-btn-size: 30px;
 
   /* ── diff 着色（v6 §4.5 柔化 12%：行背景 + 字符级高饱和）── */
@@ -706,7 +709,12 @@ textarea {
  * 的 v6 对齐归各消费组件（M5 sidebar/M8 composer 等）按 Button 组件 props 处理。
  * 选中态范式（design §3.7 D8：tab 型=bg-elevated / 列表项型=bg-surface+accent）由各组件实现。
  *
- * 三层样式纪律：style.css 只放 design tokens（CSS 变量）+ base reset + 全局 keyframes SSOT。
+ * 三层样式纪律：style.css 只放 design tokens（CSS 变量）+ base reset + 全局 keyframes SSOT
+ * + 全局态选择器层（[data-theme] / [data-theme-preset] / [data-fs-scope] / [data-reduce-motion]
+ * 属性选择器、.app-hidden 状态类、@media (prefers-reduced-motion) 无障碍兜底）——它们是
+ * 「<html> 全局态 → 全仓样式」的投影规则，无组件归属，不属任何单组件 scoped；属性选择器
+ * 形态对 check_css_tokens.py 的 `^\.class \{` 匹配不可见，靠本自述 + 逐条注释登记
+ * （2026-11 分支审查 arch-boundary S2）。
  */
 
 /* 旋转动画容器合成层提升（2026-11 性能优化）：HTML 容器的 transform 旋转若未提升
@@ -719,13 +727,19 @@ textarea {
   will-change: transform;
 }
 
-/* 窗口后台化动画暂停（boot/hidden-animation-pause.ts 挂载 .app-hidden；与
+/* 窗口后台化/失焦动画暂停（boot/hidden-animation-pause.ts 挂载 .app-hidden；与
    backgroundThrottling:false 正交——该设置保住 setTimeout 基础设施，代价是后台窗口
-   CSS 动画照跑满帧 GPU 空转。全仓无 animationend 依赖，暂停/恢复无计时副作用） */
+   CSS 动画照跑满帧 GPU 空转。全仓无 animationend 依赖，暂停/恢复无计时副作用）。
+   触发条件 = document.hidden ∨ 窗口失焦（2026-11 [perf:animation] 增补：原实现只认
+   document.hidden，切到别的 app / 窗口被遮但未最小化时动画照跑，与实测一致）。
+   backdrop-filter 也一并置 none：窗口不可见/不在前台时 blur 的合成成本纯属浪费
+   （实测 blur 本身不是主因，但它会放大任何仍在跑的动画/滚动成本）。 */
 .app-hidden *,
 .app-hidden *::before,
 .app-hidden *::after {
   animation-play-state: paused !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 /* ============================================================
@@ -749,37 +763,35 @@ textarea {
 }
 @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
 @keyframes loader-spin { to { transform: rotate(360deg); } }
-/* 呼吸弧 loader 弧段动画（ui-optimize-unified 决策 11 / N14）：RUNNING_LOADER_SVG
-   （packages/ui features/chat/block-icon.ts 单一出口，chat 域 7 处 running 挂点共用）
-   v-html 注入的 .ld-arc circle 消费——v-html 内容不带 scoped data-v 属性，Tailwind 类
-   也无法静态命中，故与 reka-*-transition 同层属全局动画原语（check_css_tokens.py
-   ALLOWED_GLOBAL_ANIMATION_CLASSES 白名单登记）。呼吸 = dasharray 16%↔54%（pathLength=100
-   归一，gap 100 保证单段弧）+ 150° 摆动（-75°↔+75°）同周期同相（2.3s ease-in-out）；
-   整体 1.15s/圈旋转由容器 animate-loader-spin 简写承担（tailwind.config.ts）。
-   基态 = 固定相位短弧：prefers-reduced-motion 全局兜底（0.01ms 瞬切 + iteration 1）
-   播完回基态，静态呈现「淡轨整圈 + 固定相位弧段」，与动画 0% 帧一致无跳变。 */
+/* 呼吸弧 loader 弧段（ui-optimize-unified 决策 11 / N14 / [perf:animation] 2026-11 收尾）：
+   RUNNING_LOADER_SVG（packages/ui features/chat/block-icon.ts 单一出口，chat 域 7 处 running
+   挂点共用）的 v-html 注入 circle。v-html 内容不带 scoped data-v 属性，Tailwind 类也无法
+   静态命中，故与 reka-*-transition 同层属全局动画原语（check_css_tokens.py
+   ALLOWED_GLOBAL_ANIMATION_CLASSES 白名单登记）。
+
+   [perf:animation] 2026-11 两条动画依次退役，现为纯静态形态：
+   ① ld-arc-dash（stroke-dasharray 16%↔54% 呼吸）已删——stroke 几何属性逐帧重绘矢量，
+     不可合成，6 个挂点各一份；dasharray 固定基态 16 100。
+   ② ld-arc-swing（150° 摆动）本轮收尾也删除——它是 SVG 元素上的 transform: rotate，
+     同样不可合成（实测流式场景消融：只停 .ld-arc 一条，GPU helper 37.9%→24.7%）；
+     而外层的 animate-loader-spin 已在 HTML 包装层旋转（translateZ(0) 可合成），
+     两层叠加的视觉增量只是「弧段额外摆一下」，去掉不损失「在跑」语义。
+   现形态 = 「浅色轨道整圈 + 固定相位 accent 弧段」+ 整体旋转（外层 HTML 容器承担）。
+   全仓无 animationend/animationcancel 依赖（2026-11 核实），删动画无计时副作用。 */
 .ld-arc {
   stroke-dasharray: 16 100;
   transform: rotate(-75deg);
   transform-box: fill-box;
   transform-origin: center;
-  animation:
-    ld-arc-swing 2.3s ease-in-out infinite,
-    ld-arc-dash 2.3s ease-in-out infinite;
-}
-@keyframes ld-arc-swing {
-  0%, 100% { transform: rotate(-75deg); }
-  50% { transform: rotate(75deg); }
-}
-@keyframes ld-arc-dash {
-  0%, 100% { stroke-dasharray: 16 100; }
-  50% { stroke-dasharray: 54 100; }
 }
 /* 执行中文字扫光（ui-optimize-unified 决策 10 / N13）：chat/Block.vue scoped
    .text-sweep 类消费——background-clip:text 文字扫光，base/peak 全令牌化
    （base = --sweep-base 缺省 --neutral-dim，peak = --neutral-fg）；周期 2.6s，
    0%→55% 扫程（peak 自元素左外 -25% 移至右外 125%，背景位移动画不用 transform
    是因为 clip:text 下字形填充由 background-position 驱动），55%→100% 停帧。
+   [perf:animation] 2026-11 把各消费点的 timing-function 改成 steps(6)：
+   background-position + background-clip:text 每帧重排并重绘字形，无法提层，steps 量化
+   是唯一低风险手段（实测 60fps → steps(8) 掉 2/3）；扫光是视觉装饰，量化后仍可读。
    keyframes 必须在全局定义——scoped 内定义会被编译器改名为哈希名而失效 */
 @keyframes text-sweep {
   0% { background-position: 100% 0; }
@@ -901,4 +913,31 @@ textarea {
     transition-property: opacity, color, background-color, border-color, fill, stroke, box-shadow, filter !important;
     transition-duration: var(--duration-fast) !important;
   }
+}
+
+/* ============================================================
+   Reduced motion · 应用内开关（[perf:animation] 2026-11）
+   ============================================================ */
+/* 与上面 @media (prefers-reduced-motion) 同语义，但触发源是应用内开关而非 OS 辅助功能设置：
+   设置页「外观 → 减少动效」开关经 applySystemToDom 写 <html data-reduce-motion="on/off">
+   （SSOT 字段 = SystemSettings.reduceMotion，packages/core/src/domain/settings/types.ts）。
+   存在理由：全局 reduce 兜底只跟 OS 设置，而「跑长任务（workflow/subagent）时风扇狂转」是
+   性能诉求，用户需要应用内可切换的降级口（审计报告 §6 指出该机制缺失）。
+   两条通道（OS 设置 / 应用开关）语义一致，不新增动画语义——只是同一个瞬切终态的第二个
+   触发源；关闭时写 off（不摘属性，便于调试观察开关已生效过），无额外状态机。
+   两块的声明集由 scripts/check-animation-source-guards.mjs plan05/TC5 锁逐字同步。 */
+[data-reduce-motion="on"] *,
+[data-reduce-motion="on"] *::before,
+[data-reduce-motion="on"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  transition-delay: 0ms !important;
+}
+/* 保留非位移过渡（同上条 @media 块的白名单与理由）：位移瞬切、opacity/color 温和过渡。 */
+[data-reduce-motion="on"] *,
+[data-reduce-motion="on"] *::before,
+[data-reduce-motion="on"] *::after {
+  transition-property: opacity, color, background-color, border-color, fill, stroke, box-shadow, filter !important;
+  transition-duration: var(--duration-fast) !important;
 }

@@ -130,6 +130,19 @@ describe('AppearancePage Select 载荷检查（reka Select 交互 → update emi
     expect(lastUpdate()).toEqual({ fontSize: 'large' })
   })
 
+  // [perf:animation] 2026-11 分支审查 data-governance S3：新增开关的用户可见断言
+  // （点击 → emit {reduceMotion:true}，$event 宽载荷收窄为布尔）
+  it('减少动效 Switch：点击 → emit update {reduceMotion:true}', async () => {
+    wrapper = mountPage() // DEFAULT_SYSTEM reduceMotion=false → 关
+    await flushPromises()
+    const sw = wrapper.find('[data-testid="setting-reduce-motion"]')
+    expect(sw.exists(), '减少动效开关应存在').toBe(true)
+    expect(sw.attributes('aria-checked')).toBe('false')
+    await sw.trigger('click')
+    await flushPromises()
+    expect(lastUpdate()).toEqual({ reduceMotion: true })
+  })
+
   it('分区字号 Select（sidebar）：点「特大」→ emit update {fontScales 含 sidebar:"xlarge"}（浅合并回传完整对象）', async () => {
     wrapper = mountPage()
     await flushPromises()

@@ -244,7 +244,10 @@ vi.mock('@/composables/useExtensionUI', () => ({
       expect(wrapper.find('.stop-btn').exists()).toBe(false)
       expect(wrapper.find('[data-testid="composer-send-btn"]').exists()).toBe(false)
       expect(wrapper.find('.animate-loader-spin').exists()).toBe(true)
-      expect(wrapper.find('.animate-loader-spin').attributes('aria-hidden')).toBe('true')
+      // 两层形态：aria-hidden 在提层包装（外层），animate-loader-spin 在内层（[perf:animation] 分层）
+      expect(wrapper.find('.animate-loader-spin').element.parentElement?.getAttribute('aria-hidden')).toBe('true')
+      expect(wrapper.find('.animate-loader-spin').element.parentElement?.className).toContain('translateZ(0)')
+      expect(wrapper.find('.animate-loader-spin').classes()).not.toContain('[transform:translateZ(0)]')
 
       releaseSend()
       await wrapper.vm.$nextTick()

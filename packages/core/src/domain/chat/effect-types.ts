@@ -78,6 +78,13 @@ export interface MessageEffectContext {
    */
   applyEntryFrame: (sessionId: string, entry: PiEntry) => void
   /**
+   * 读 per-session reducer state 的模型基线（最近一条生效 model_change；没有 = undefined）。
+   * 派生依赖前置 state 的 entry 不能走「空 state 派生」的 overlay 骨架（effects/entry-overlay.ts
+   * 适用前提），handler 用它取到与权威 state 相同的前置基线再派生本条消息。
+   * 消费点 = message.modelSwitch。实现在 store.getLastModel。
+   */
+  getLastModel: (sessionId: string) => { provider: string; modelId: string } | undefined
+  /**
    * [steer-bubble u0 / D2] per-session
    * inflight 投递确认计数读写——语义 = **已记为待确认的投递数**（统一提交的乐观气泡其
    * 确认帧 message_end(user) 未到）。不变式 ≥ 0（decrement 钳制，配额漂移不产生负值），

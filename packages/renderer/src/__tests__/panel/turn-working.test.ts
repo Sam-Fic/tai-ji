@@ -171,10 +171,10 @@ describe('Turn working 态 · 完成复位 + elapsed live', () => {
       })
     // 不传 isSessionActive → 回退到 turn.isStreaming（旧调用方/简单场景，streaming=false 即对话结束）
     const wrapper = mountTurn({ turn: thinkingTurn('streaming') })
-    // streaming 态 trace 展开（聚合块双窗进行中——开放段无后继正文）
+    // streaming 态 trace 展开（聚合块窗口进行中——开放段无后继正文）
     expect(wrapper.find('.trace').exists()).toBe(true)
     expect(wrapper.findAll('.trace > .trace-blk').length).toBe(1)
-    expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="agg-tape-scroll"]').exists()).toBe(true)
     // 切换到完成态（isStreaming false，无 prop 回退 → sessionActive 也 false）
     await wrapper.setProps({ turn: thinkingTurn('complete') })
     // trace 容器仍在（恒渲染），转折叠形态：聚合块收起（摘要行不渲染），无正文 → 0 单元
@@ -386,7 +386,7 @@ describe('Turn · T4 isWorking 拆分（isStreaming vs isSessionActive）', () =
     const wrapper = mountTurn({ turn: thinkingTurn, isSessionActive: true })
     expect(wrapper.find('.trace').exists()).toBe(true)
     expect(wrapper.findAll('.trace > .trace-blk').length).toBe(1)
-    expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="agg-tape-scroll"]').exists()).toBe(true)
     // subagent 跑完（isSessionActive 转 false）→ 此刻才转折叠形态（纯过程无正文 → trace 区空）
     await wrapper.setProps({ isSessionActive: false })
     expect(wrapper.find('.trace').exists()).toBe(true)
@@ -409,7 +409,7 @@ describe('Turn · T4 isWorking 拆分（isStreaming vs isSessionActive）', () =
     })
     const wrapper = mountTurn({ turn: thinkingTurn, isSessionActive: true })
     expect(wrapper.find('.trace').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="agg-live-windows"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="agg-tape-scroll"]').exists()).toBe(true)
     // ask-user respond：对话真正结束 → 转折叠形态（聚合块收起，纯过程无正文 → trace 区空）
     await wrapper.setProps({ isSessionActive: false })
     expect(wrapper.find('.trace').exists()).toBe(true)
@@ -466,7 +466,7 @@ describe('Turn · trace 块按 contentBlocks 真实时序渲染', () => {
     })
   }
 
-  it('U15: streaming 态 trace 单元序 = contentBlocks 顺序（think 与 tool 同段，聚合块双窗承接）', () => {
+  it('U15: streaming 态 trace 单元序 = contentBlocks 顺序（think 与 tool 同段，聚合块窗口承接）', () => {
     const wrapper = mountTurnWithRealBlock({
       turn: makeTurn({
         isStreaming: true,
@@ -474,12 +474,11 @@ describe('Turn · trace 块按 contentBlocks 真实时序渲染', () => {
         assistants: [thinkToolAssistant(true)],
       }),
     })
-    // thinkToolAssistant 无 text 块：think + tool 收进一个聚合块（段后无正文 → 双窗进行中）
+    // thinkToolAssistant 无 text 块：think + tool 收进一个聚合块（段后无正文 → 窗口进行中）
     const blocks = expectTraceTopBlocks(wrapper, 1)
-    expect(blocks[0].find('[data-testid="agg-think-window"]').exists()).toBe(true)
-    expect(blocks[0].find('[data-testid="agg-window"]').exists()).toBe(true)
-    // 过程细节不在顶层（思考行 / 工具行只在聚合块展开态渲染）
-    expect(wrapper.find('.trace-think').exists()).toBe(false)
+    expect(blocks[0].find('[data-testid="agg-tape-scroll"]').exists()).toBe(true)
+    // 窗口展开体在场（思考行与工具行在窗口内逐行平铺，不在 trace 顶层）
+    expect(blocks[0].find('[data-testid="agg-expanded"]').exists()).toBe(true)
     // [actions-anchor] 无 text 块 → 无锚块 → 操作栏不渲染（lastAssistant 非 null 也不再足够）
     expect(wrapper.find('.turn-summary').exists()).toBe(false)
   })
@@ -495,8 +494,8 @@ describe('Turn · trace 块按 contentBlocks 真实时序渲染', () => {
     // tool + thinking 收进同一聚合块（切段只看拍平序，tool 先行不产生新段）
     const blocks = traceTopBlocks(wrapper)
     expect(blocks.length).toBe(1)
-    expect(blocks[0].find('[data-testid="agg-think-window"]').exists()).toBe(true)
-    expect(blocks[0].find('[data-testid="agg-window"]').exists()).toBe(true)
+    expect(blocks[0].find('[data-testid="agg-tape-scroll"]').exists()).toBe(true)
+    expect(blocks[0].find('[data-testid="agg-expanded"]').exists()).toBe(true)
     // [actions-anchor] 末单元是聚合块（锚要求末单元是 text）→ 无锚块 → 操作栏不渲染
     expect(wrapper.find('.turn-summary').exists()).toBe(false)
   })
@@ -518,8 +517,8 @@ describe('Turn · trace 块按 contentBlocks 真实时序渲染', () => {
     const blocks = expectTraceTopBlocks(wrapper, 2)
     expect(blocks[0].classes()).toContain('trace-blk--text')
     expect(blocks[0].find('.md-stub').exists()).toBe(true)
-    // 聚合块段后无正文（开放段）→ 双窗进行中（聚合窗在场）
-    expect(blocks[1].find('[data-testid="agg-live-windows"]').exists()).toBe(true)
+    // 聚合块段后无正文（开放段）→ 窗口进行中（聚合窗在场）
+    expect(blocks[1].find('[data-testid="agg-tape-scroll"]').exists()).toBe(true)
   })
 
   it('U18: streaming→complete 切换后，Turn 尾部 streaming-tail 光标消失', async () => {

@@ -112,7 +112,12 @@ describe('RetryIndicator', () => {
   it('warn 语义只上图标与「重试中」chip（bg-warn-soft 小胶囊）', () => {
     const w = mountIndicator(fullState)
     const icon = w.get('svg')
-    expect(icon.classes()).toContain('animate-spin')
+    // [perf:animation] 2026-11 去旋转：自动重试是分钟级可累积状态（429/限流场景连续多次），
+    // 原 animate-spin 挂 <RefreshCw> 的 SVG 根（Chromium 不合成 SVG transform → 每帧主线程
+    // 重绘矢量）。「重试中」语义已由右侧 chip 完整表达，图标静态取 warn 色即可（实测：全仓
+    // 常驻动画是「跑长任务风扇狂转」的根因，单 SVG spinner 即 9.3% GPU helper）。
+    // 本用例锁定新约定：图标不再挂 animate-spin（若日后回退旋转，此断言会失败提醒）。
+    expect(icon.classes()).not.toContain('animate-spin')
     expect(icon.classes()).toContain('text-warn')
     const chip = w.findAll('span').find((s) => s.text() === '重试中')
     expect(chip).toBeDefined()

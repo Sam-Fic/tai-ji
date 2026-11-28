@@ -67,10 +67,14 @@ function buildPackageTarball(): { gzip: Buffer; integrity: string } {
 const tarball = buildPackageTarball()
 
 // ── 本地 registry/tarball 服务器 ──────────────────────────────────────
-type TarballBehavior = 'complete' | 'trickle' | 'stall-after-header' | 'stall-after-bytes'
+type TarballBehavior = 'complete' | 'trickle' | 'trickle-slow' | 'stall-after-header' | 'stall-after-bytes'
 
 const TRICKLE_CHUNK = 2048
 const TRICKLE_INTERVAL_MS = 40
+// 慢速节流：budget 用例专用。fake 推进窗口内 chunk 数量必须远小于 tarball 总 chunk 数，
+// 否则数据在 budget 拍点前传满 content-length → final 'end' → install 先成功 resolve
+// （真实 IO 在 fake timer 间隙的 yield 中跑完，机器负载决定胜负 → 偶现假绿/假红）
+const TRICKLE_SLOW_INTERVAL_MS = 200
 
 let server: https.Server
 let baseUrl: string
@@ -107,9 +111,11 @@ async function startServer(): Promise<void> {
           res.writeHead(200, { 'content-length': tarball.gzip.length })
           res.end(tarball.gzip)
           return
-        case 'trickle': {
+        case 'trickle':
+        case 'trickle-slow': {
           // 限速分段发送：总时长（chunk 数 × 间隔）显著超过测试 timeout 窗口，
           // 安装若成功即证明 stall timer 被持续 data 刷新而非「传输太快未触发」
+          const interval = behavior === 'trickle-slow' ? TRICKLE_SLOW_INTERVAL_MS : TRICKLE_INTERVAL_MS
           res.writeHead(200, { 'content-length': tarball.gzip.length })
           let offset = 0
           const sendChunk = (): void => {
@@ -121,7 +127,7 @@ async function startServer(): Promise<void> {
             const end = Math.min(offset + TRICKLE_CHUNK, tarball.gzip.length)
             res.write(tarball.gzip.subarray(offset, end))
             offset = end
-            setTimeout(sendChunk, TRICKLE_INTERVAL_MS)
+            setTimeout(sendChunk, interval)
           }
           sendChunk()
           return
@@ -342,6 +348,35 @@ describe.skipIf(
     await expect(promise).rejects.toMatchObject({ code: 'network' })
     await expect(promise).rejects.toThrow(/no data received for 250ms/)
   }, 15_000)
+})
+
+// 网络预算兜底（budgetMs 总上界）：stall 是无进展检测，慢速但持续的下载永不触发
+// ——弱网「每 x 秒滴一点」形态下 install 时长无上界，安装串行锁被占、后续升级 RPC
+// 全部排队。budgetMs 到点即终止并收敛为可重试 network 错误（upgrade-hang-fix）。
+describe('网络预算兜底（budgetMs 总上界，fake timers）', () => {
+  it('慢速持续流 + budgetMs 到点 → network 预算耗尽错误（补上无进展检测盲区）', async () => {
+    behavior = 'trickle-slow'
+    withIntegrity = false
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    // timeout 设 5 分钟：stall（无进展检测，数据持续流动永不触发）在本用例中必须保持沉默，
+    // 500ms 后触发预算耗尽的只能是 budgetMs——证明总上界独立于 stall 生效。
+    // trickle-slow（200ms/2KB）：500ms 推进窗口内最多 2 个 chunk（≈4KB ≪ content-length
+    // 26KB），数据在预算拍点前不可能传满 → final 不会 'end' → 成功 resolve 路径被排除，
+    // reject 为唯一 settle 路径（trickle 40ms 节奏 ~480ms 传完，会与 budget 拍点竞速，偶现假绿）
+    const promise = installPackage('fake-pkg', nodeModulesDir, { timeout: 300_000, budgetMs: 500 })
+    promise.catch(() => {})
+    await tarballRequested
+    await flushIo() // header 经 loopback 到达，stall/budget timer 均已启动
+    await vi.advanceTimersByTimeAsync(500)
+    vi.useRealTimers()
+
+    await expect(promise).rejects.toBeInstanceOf(NpmInstallError)
+    await expect(promise).rejects.toMatchObject({ code: 'network' })
+    await expect(promise).rejects.toThrow(/network budget exhausted/)
+    // 失败的 tmp 半成品被清理
+    expect(existsSync(join(nodeModulesDir, 'fake-pkg.tmp'))).toBe(false)
+  })
 })
 
 describe('既有安装成功路径回归（stall 兜底不破坏正常流）', () => {

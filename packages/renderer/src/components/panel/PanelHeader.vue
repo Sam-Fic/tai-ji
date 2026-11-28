@@ -72,13 +72,26 @@
         <Plus class="size-[17px]" stroke-width="1.8" />
       </Button>
     </div>
-    <component
-      :is="ICON_COMPONENTS[iconConfig.icon]"
-      data-testid="panel-session-icon"
-      :data-icon="iconConfig.icon"
-      class="size-[13px] shrink-0"
-      :class="[iconConfig.color, iconConfig.animation]"
-    />
+    <!-- [perf:animation] 2026-11 旋转挂 HTML 包装层而非 lucide svg 根：Chromium 不合成 SVG
+         transform，animate-spin 落在 <component :is> 的 svg 根上 = 每帧主线程重绘 13px 矢量
+         （实测该形态是「一直有动画在跑」布尔事实的主要来源：dev 消融全停 animate-spin 后
+         GPU helper 17.4%→3.2%，单个 14px spinner 即 9.3%/4.2%）。两层：外层 span 挂
+         translateZ(0) 提独立合成层，内层 span 挂 animate-spin（旋转重绘被限制在 13px 层内）。
+         [必须分层] 同元素时 keyframes 隐式 from = translateZ(0)，两端同为单位矩阵 → 不转
+         （分支审查 business-logic 探针实测）。
+         形态零变化：span 尺寸 / inline-flex 对齐与原本 svg 一致，testid 仍在 svg 上（
+         panel-session-icon 断言面不变）。 -->
+    <span class="inline-flex shrink-0 items-center justify-center [transform:translateZ(0)]">
+      <span class="inline-flex" :class="iconConfig.animation">
+      <component
+        :is="ICON_COMPONENTS[iconConfig.icon]"
+        data-testid="panel-session-icon"
+        :data-icon="iconConfig.icon"
+        class="size-[13px] shrink-0"
+        :class="iconConfig.color"
+      />
+      </span>
+    </span>
     <!-- 会话名（demo 问题 7 裁决 + 审计 R11：卡头是「当前会话身份位」，只显会话名；
          目录/分支三重重复形态已删——侧栏组头/hover 卡为唯一承载）。长会话名截断优先
          发生于此，绝不盖右侧按钮组（按钮组 ml-auto + shrink-0）。 -->
@@ -151,7 +164,7 @@
  
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { PanelLeftOpen, PanelLeftClose, PanelRight, ArrowLeft, ArrowRight, Plus, RefreshCw, ArrowUpCircle, Hourglass, Wrench, Zap, Ban, AlertCircle, FileText, Check } from '@lucide/vue'
+import { PanelLeftOpen, PanelLeftClose, PanelRight, ArrowLeft, ArrowRight, Plus, RefreshCw, ArrowUpCircle, Hourglass, Wrench, Zap, Ban, AlertCircle, FileText, Check, Loader2 } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { useNavigationStore } from '@/stores/navigation'
 import { useSidebarStore } from '@/stores/sidebar'
@@ -164,7 +177,7 @@ import { useSessionTrace, setTraceView, type TraceMainView } from '@/composables
 import TraceViewToggle from './trace/TraceViewToggle.vue'
 import { ViewHost } from '@taiji/ui/extension-host'
 import type { DerivedStatus } from '@/types'
-import { STATUS_ICON } from '@/composables/logic/sessionStatus'
+import { STATUS_ICON, type StatusIconName } from '@/composables/logic/sessionStatus'
 
 const props = defineProps<{
   sessionLabel: string
@@ -216,10 +229,13 @@ const shortFileName = computed(() => (props.sessionFile ? formatShortSessionFile
 const { copied, copy } = useCopy()
 
 /** lucide 图标名 → 组件映射 */
-const ICON_COMPONENTS: Record<string, unknown> = {
+// 键集 = STATUS_ICON 全部 icon 名（类型层强制：漏登记某个 icon 名即编译错——2026-11 分支审查
+// M3 把 working 改 Loader2 后漏登记，<component :is=undefined> 静默不渲染，working 态图标消失）
+const ICON_COMPONENTS: Record<StatusIconName, unknown> = {
   RefreshCw,
   ArrowUpCircle,
   Hourglass,
+  Loader2,
   Wrench,
   Zap,
   Check,

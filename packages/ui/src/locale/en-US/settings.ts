@@ -98,6 +98,9 @@ export default {
   },
   appearance: {
     quickChatFont: 'Chat font size',
+    // [perf:animation] 2026-11 in-app reduce-motion switch (fan-spin escape hatch for long tasks).
+    reduceMotion: 'Reduce motion',
+    reduceMotionDesc: 'Disable always-on spin / pulse / sweep animations (running indicators become static); lowers GPU / CPU load during long tasks',
     region: {
       sidebar: 'Left sidebar',
       chat: 'Chat stream',
@@ -842,6 +845,7 @@ export default {
     installedToast: 'Extension installed',
     uninstalledToast: 'Extension uninstalled',
     upgradedToast: 'Extension upgraded',
+    upToDateToast: 'Already up to date',
     upgradeFailed: 'Upgrade failed: {msg}',
     loadRecommendedFailed: 'Failed to load recommended extensions: {msg}',
     autoUpgradeFailed: 'Failed to set auto-upgrade: {msg}',

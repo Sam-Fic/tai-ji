@@ -19,8 +19,14 @@
  *   模块图变成不同实例，pinia store / drawer 单例分裂，drawer 打不开）。
  *
  * 运行：cd packages/renderer && TAIJI_TEST_DOMAIN=panel npx vitest run src/__tests__/panel/panel-container-lazy-retry.test.ts（本文件登记在 domain-map.json panel 域，默认档被排除）
+ *
+ * 慢用例门控（TAIJI_TEST_INTEGRATION，E2E-INTEG-79）：用例体全确定性 mock，但 mount 的是
+ * PanelContainer 全树 + defineAsyncComponent 的 vite 按需编译链——组件图重评估成本随宿主
+ * 负载波动、无确定上界（孤跑 2.06s / 满载 2.22s，超 2s 判据），语义与 E2E-INTEG-78 的
+ * 「模块图重评估成本」先例同构：非用例本身慢，挂门控豁免慢用例门禁（登记见 e2e-map）。
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
+import { INTEGRATION_TESTS_ENABLED } from '../../../../../test-guard/integration-gate.ts'
 import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { computed, reactive } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
@@ -160,7 +166,8 @@ beforeEach(() => {
 // [HISTORICAL] 用例间 wrapper 必须自动 unmount（原因见 panel-container-drawer-mode.test.ts 同注释）
 enableAutoUnmount(afterEach)
 
-describe('PanelContainer 懒加载失败态（自动重试已删：失败即错误态，重开恢复）', () => {
+describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
+'PanelContainer 懒加载失败态（自动重试已删：失败即错误态，重开恢复）', () => {
   it('装载失败立即进错误态（无自动重试无按钮）；关闭重开 fresh load 恢复；双挂载点互不串线', async () => {
     lazy.detailFailures = 1
     lazy.terminalFailures = 999

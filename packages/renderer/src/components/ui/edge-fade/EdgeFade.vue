@@ -1,11 +1,12 @@
 <script setup lang="ts">
 // EdgeFade —— 滚动容器顶缘「渐焦」提示（demo chat spec 裁决 4B，OpenDesign edge-fade 同构）。
 // 自包含：作为任意 overflow 滚动容器的前两个子元素挂载（一个贴顶哨兵 + sticky 渐焦带），消费方零配置。
-// 渐焦 = 失焦 + 沉色双通道：四层渐高 blur 之上叠一层底色渐变（--edge-fade-sink，默认
+// 渐焦 = 失焦 + 沉色双通道：blur 层之上叠一层底色渐变（--edge-fade-sink，默认
 // --surface，峰值浓度 75%：光晕基本压平且保留失焦感），暗色压住亮字模糊的泛白光晕、
 // 亮色沉入纸白；底色非 --surface 的消费方在滚动容器上覆写 --edge-fade-sink。层遮罩与
 // 容器 mask 用多 stop 近似 smoothstep 的平滑剖面（线性渐变人眼感知中段偏快，多 stop
-// 消台阶感）。
+// 消台阶感）。层数沿革见 LAYERS 上方 [perf:animation] 注释（裁决修订 =
+// docs/perf/gpu-decision.md §3.3）。
 // z-[3] 为容器内局部层级刻意值，不取 style.css z 档（对照 z 表：--z-sticky 1 / --z-popover 10）：
 // 须高于滚动容器内 sticky 内容（同 z 值时按 DOM 序 sticky 项会盖住渐焦带、滚入带内逃逸
 // 失焦+沉色），又须低于容器内交互控件（MessageStream 回到底部按钮走 --z-popover 同值
@@ -36,11 +37,16 @@ let scroller: HTMLElement | null = null
 let transparencyMedia: MediaQueryList | null = null
 let sentinelIo: IntersectionObserver | null = null
 
+/* [perf:animation] 2026-11 四层 backdrop-blur 减为一层（原 1/2/4/8px 四层叠在同一 40px 带上
+   = 同一区域 4 次 backdrop 采样，是「动画期间成本放大器」的第二项；实测 blur 单独停掉零收益，
+   但叠加在动画/滚动上时被连带计费）。现单层 blur-[4px] 全高 + 下面仍在的渐变遮罩层负责
+   柔和度；分层梯度由 [mask-image] 的 4 stop 剖面继续承担，视觉差异极小。
+   裁决修订（docs/perf/gpu-decision.md §3.3）：§3.1 登记的「两层 + 条件触发」形态被本修订取代——
+   触发条件①（目标硬件 GPU 忙占比 > 60%）已由用户实机成立（打包版 workflow 运行期 GPU helper
+   54-60% + 风扇），且本批实测单层是「动画常驻时成本放大器」消融链的一环，不是孤立的视觉取舍。
+   LAYERS 保持数组形态（层数是数据不是模板结构，后续若需回到多档直接加条目）。 */
 const LAYERS = [
-  { blur: 'h-full backdrop-blur-[1px]' },
-  { blur: 'h-3/4 backdrop-blur-[2px]' },
-  { blur: 'h-1/2 backdrop-blur-[4px]' },
-  { blur: 'h-1/4 backdrop-blur-[8px]' },
+  { blur: 'h-full backdrop-blur-[4px]' },
 ] as const
 
 /** 顶缘渐焦带高度（px），同时是容器 mask 的过渡段长度（demo 同值）。

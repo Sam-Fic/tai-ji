@@ -8,6 +8,9 @@
  * 内部单向依赖，消费方 services 侧经 check_services_infra_import BASELINE_MODULES
  * 登记）。读者归类 = census §6 N16（照实族）。
  */
+import { statSync } from 'node:fs'
+import { READ_PRECHECK_MAX_BYTES } from '@taiji/shared'
+import { forEachReversedLineChunk } from '../../utils/history-reverse-read.js'
 import { scanJsonlFromTail } from './session-file-utils.js'
 
 /**
@@ -46,4 +49,101 @@ export function extractLatestModelChangeFromJsonl(filePath: string): { provider:
     return true
   }, { activePath: true })
   return found.length > 0 ? found[0] : undefined
+}
+
+/**
+ * 窗口模型基线的进程内缓存上限（每个会话的每个窗口起点一条；LRU 淘汰最旧）。
+ * @data-owner #97（纯派生可重建读缓存，失效语义见登记表主表 #97）
+ */
+const BASELINE_CACHE_MAX = 16
+const baselineCache = new Map<string, { provider: string; modelId: string } | undefined>()
+
+/**
+ * 找「某个位置之前、活跃路径上最近一条 model_change」——历史按窗口读取时的模型基线。
+ *
+ * 为什么需要：对话流历史默认按窗口读（最近 N 个回合 + 字节预算）。窗口不含文件头时，
+ * 文件头那条初始 model_change 不在窗口里；窗口内第一条 model_change 之前没有更早记录，
+ * reducer 会把它记成基线而不出切换行——同一个会话实时下是出行的。
+ *
+ * 怎么找：fromParentId 是窗口第一条 entry 的真实父亲，从它沿 parentId 回溯的链就是窗口
+ * 起点之前的活跃路径，链上最近一条 model_change 就是窗口起点处的生效模型。被撤子树里的
+ * model_change 不在链上，不会被误当成基线。读 [0, endOffset) 一遍建 id → 父节点映射
+ * （逐行解析：pi 写的记录 id 在行首附近、扩展写的 custom 记录 id 在行尾，且父链会经过
+ * custom 记录，按位置匹配字段不可靠），再在内存里回溯。
+ *
+ * 什么时候调用：窗口里有 model_change 且窗口不含文件头。没有切换记录的窗口不需要基线，
+ * 不要调用（省掉这次读）。代价：前缀逐行解析（10MB 量级约百毫秒，同步），读入量受
+ * READ_PRECHECK_MAX_BYTES（32MB）硬上限——超限的前缀读不全，链查不到基线 → undefined
+ * （极端超大文件下重载切换行缺失的降级，登记 I7）；文件不变且窗口起点不变时命中缓存不重算。
+ *
+ * endOffset 缺省 = 文件末尾。父链总是指向更早的 entry，窗口之后的内容不影响结果；
+ * 调用方有窗口起点偏移时传入可少读一段。文件不存在 / 非常规文件（FIFO/目录占位）/
+ * 链上没有 model_change → undefined，不抛。
+ */
+export function findModelChangeBaselineBefore(
+  filePath: string,
+  fromParentId: string | null | undefined,
+  endOffset?: number,
+): { provider: string; modelId: string } | undefined {
+  if (typeof fromParentId !== 'string' || fromParentId === '') return undefined
+  let size: number
+  let mtimeMs: number
+  try {
+    const stat = statSync(filePath)
+    // 非常规文件前置检查：FIFO/设备占位时 openSync('r') 会永久阻塞，目录占位 read 抛
+    // EISDIR——都在 stat 层拦下按无值降级（不抛不挂）
+    if (!stat.isFile()) return undefined
+    size = stat.size
+    mtimeMs = stat.mtimeMs
+  } catch {
+    return undefined
+  }
+  const cacheKey = `${filePath}\u0000${size}\u0000${mtimeMs}\u0000${endOffset ?? ''}\u0000${fromParentId}`
+  if (baselineCache.has(cacheKey)) {
+    const hit = baselineCache.get(cacheKey)
+    baselineCache.delete(cacheKey)
+    baselineCache.set(cacheKey, hit)
+    return hit
+  }
+  const parentOf = new Map<string, string | null>()
+  const changes = new Map<string, { provider: string; modelId: string }>()
+  // 逆读异常不在本函数再兜底：常规文件判定（isFile）已挡住占位族，打开失败由逆读工具的
+  // openFailed 降级（history-reverse-read），其余意外 IO 错误向上抛给调用方如实报错——
+  // 双层吞异常会让任何一层的保护在单行变异下不可验证
+  forEachReversedLineChunk(filePath, { endOffset, maxTotalBytes: READ_PRECHECK_MAX_BYTES }, (chunk) => {
+    for (const line of chunk.lines) {
+      if (line === '') continue
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(line)
+      } catch {
+        continue
+      }
+      if (typeof parsed !== 'object' || parsed === null) continue
+      const entry = parsed as Record<string, unknown>
+      if (typeof entry.id !== 'string') continue
+      parentOf.set(entry.id, typeof entry.parentId === 'string' ? entry.parentId : null)
+      const value = modelChangeEntryValueOf(entry)
+      if (value !== null) changes.set(entry.id, value)
+    }
+  })
+  let result: { provider: string; modelId: string } | undefined
+  const seen = new Set<string>()
+  let cursor: string | null | undefined = fromParentId
+  while (typeof cursor === 'string' && !seen.has(cursor)) {
+    seen.add(cursor)
+    const change = changes.get(cursor)
+    if (change !== undefined) {
+      result = change
+      break
+    }
+    // 父节点不在已读范围（文件损坏 / 链上的行畸形）→ undefined，链终止
+    cursor = parentOf.get(cursor)
+  }
+  if (baselineCache.size >= BASELINE_CACHE_MAX) {
+    const oldest = baselineCache.keys().next().value
+    if (oldest !== undefined) baselineCache.delete(oldest)
+  }
+  baselineCache.set(cacheKey, result)
+  return result
 }

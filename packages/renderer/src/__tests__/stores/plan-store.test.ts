@@ -860,6 +860,8 @@ function makeCtx(initial: Message[] = []): MessageEffectContext {
     clearInflight: vi.fn(),
     // w21：entry 载体帧喂 reducer 的接入点
     applyEntryFrame: vi.fn(),
+    // 模型切换帧读会话模型基线（本套用例不走该分支，no-op mock）
+    getLastModel: vi.fn(),
   }
 }
 

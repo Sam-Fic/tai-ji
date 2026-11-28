@@ -84,8 +84,10 @@
                  仅保留给 viewport indicator 与节点选中高亮（mini-map「你在哪」语义，视口
                  派生本就正确）；占位判据（sessionActive ∧ 真末位）仍独立：占位必须钉在真
                  末位（pending turn 还没有 streaming assistant 可依）。 -->
-            <!-- eslint-disable-next-line vue/no-v-html -- hardcoded constant from block-icon.ts -->
-            <span v-if="isActiveTurn(turn, idx)" data-testid="rail-agent-icon" class="inline-flex size-[12px] shrink-0 items-center justify-center text-[color:var(--neutral-fg-2)] animate-loader-spin" v-html="RUNNING_LOADER_SVG" />
+            <span v-if="isActiveTurn(turn, idx)" data-testid="rail-agent-icon" class="inline-flex size-[12px] shrink-0 items-center justify-center text-[color:var(--neutral-fg-2)] [transform:translateZ(0)]">
+              <!-- eslint-disable-next-line vue/no-v-html -- hardcoded constant from block-icon.ts -->
+              <span class="block size-full animate-loader-spin text-[color:var(--neutral-fg-2)]" v-html="RUNNING_LOADER_SVG" />
+            </span>
             <!-- 非 active 态：Bot 图标（failed=danger 常驻 / 其余 neutral-ico；选中提 fg-2） -->
             <Bot
               v-else

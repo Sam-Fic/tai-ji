@@ -55,10 +55,17 @@ async function fetchReloadEntriesStripped(fx: PiFixture): Promise<PiEntry[]> {
 }
 
 
-/** bash 消息 timestamp 归一（live bash 走 RPC reply 无 message_end，timestamp 非同源）。 */
-function normalizeBashTimestamps(state: ChatViewState): ChatViewState {
+/**
+ * 跨源字段归一：
+ * - bash 消息 timestamp（live bash 走 RPC reply 无 message_end，timestamp 非同源）；
+ * - lastModel 基线（live 的 message_end 流结构性不含初始 model_change——pi 落盘不发事件，
+ *   见 fact-check F25；msw-replay 引入基线语义后 reload 侧恒有、live 侧恒无。生产 live 侧
+ *   由帧携带的切换前模型补基线，等价由 effect-model-switch 单测覆盖，本归一只保消息流等价）。
+ */
+function normalizeCrossSourceFields(state: ChatViewState): ChatViewState {
   return {
     ...state,
+    lastModel: undefined,
     messages: state.messages.map((m) =>
       m.bashExecution !== undefined
         ? { ...m, timestamp: 0, bashExecution: { ...m.bashExecution, timestamp: 0 } }
@@ -186,7 +193,7 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
       const reloadState = replayEntries(await fetchReloadEntriesStripped(fx))
 
       // bashExecution.timestamp 非同源（reply 无 timestamp）→ 归一后全量对比
-      expect(normalizeBashTimestamps(liveState)).toEqual(normalizeBashTimestamps(reloadState))
+      expect(normalizeCrossSourceFields(liveState)).toEqual(normalizeCrossSourceFields(reloadState))
       // bash 消息检查：两侧各恰好一条 bashExecution 且输出一致
       const liveBash = liveState.messages.filter((m) => m.bashExecution !== undefined)
       const reloadBash = reloadState.messages.filter((m) => m.bashExecution !== undefined)
@@ -692,6 +699,7 @@ function assertReducerCaseCoverage(entry: PiEntry): void {
     case 'custom_message':
     case 'usage':
     case 'context_edit':
+    case 'model_change':
       return
     default: {
       const uncovered: never = entry

@@ -17,7 +17,23 @@
       <span>{{ t('panel.workflowViz.traceColAgent') }}</span>
       <span>{{ t('panel.workflowViz.traceColPhase') }}</span>
       <span>{{ t('panel.workflowViz.traceColAttempt') }}</span>
-      <span>{{ t('panel.workflowViz.traceColStatus') }}</span>
+      <!-- [perf:animation] 2026-11：全表只保留这 1 个旋转指示（HTML 环 + translateZ(0) 可合成）。
+           原实现每个 live running call 一个 <svg> Loader2 animate-spin，workflow 并发 5~10 时同屏
+           5~10 个 SVG 旋转（Chromium 不合成 SVG transform）+ 叠加全屏 backdrop-blur 被连带计费。
+           实测单 14px SVG spinner 即 9.3% GPU helper；translateZ(0) 后 2.7%。 -->
+      <span class="flex items-center gap-1">
+        {{ t('panel.workflowViz.traceColStatus') }}
+        <span
+          v-if="hasLiveRunning"
+          data-testid="wf-viz-trace-live-indicator"
+          class="block size-[7px] shrink-0 [transform:translateZ(0)]"
+          aria-hidden="true"
+        >
+          <!-- translateZ(0) 与 animate-spin 分层：同元素时 keyframes 隐式 from = translateZ(0)，
+               插值到 rotate(360deg) 两端同为单位矩阵 → 不转（分支审查 business-logic 探针实测） -->
+          <span class="block size-full animate-spin rounded-full border-[1.5px] border-accent" />
+        </span>
+      </span>
       <span>{{ t('panel.workflowViz.traceColStarted') }}</span>
       <span class="text-right">{{ t('panel.workflowViz.traceColDuration') }}</span>
       <span class="text-right">{{ t('panel.workflowViz.traceColTokens') }}</span>
@@ -51,12 +67,9 @@
            停止的在途行——叠加停止着色不显示蓝脉冲（spinner 静态不旋转，旋转动效本身是
            「还在跑」的视觉信号），着色随 run 终局 outcome） -->
       <span class="flex items-center gap-1" :data-testid="`wf-viz-trace-status-${row.call.id}`" :data-status="row.view.status">
-        <Loader2
-          v-if="row.isLiveRunning"
-          class="size-[11px] shrink-0"
-          :class="[row.stoppedColorClass, row.view.stoppedInFlight ? '' : 'animate-spin']"
-        />
-        <span v-else class="size-1.5 shrink-0 rounded-full" :class="row.dotClass" />
+        <!-- [perf:animation] 2026-11 行内不再旋转：live running/retrying 行改静态 accent 点
+             （「在跑」由色 + 状态词 + 表头唯一旋转指示承担），停止在途行仍落中性/失败色点。 -->
+        <span class="size-1.5 shrink-0 rounded-full" :class="row.dotClass" />
         <span class="font-mono" :class="row.stoppedColorClass">{{ statusLabel(row.view.status) }}</span>
       </span>
       <span class="truncate font-mono text-neutral-dim" :title="row.call.startedAt">{{ formatTime(row.call.startedAt) }}</span>
@@ -72,7 +85,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Loader2 } from '@lucide/vue'
 import { deriveCallView } from '../gantt-segments'
 import type { WorkflowAgentCall, WorkflowRunStatus, WorkflowRunOutcome } from '@taiji/shared'
 import { formatTokens } from '@/lib/token-format'
@@ -136,8 +148,8 @@ function stoppedColorOf(runStatus: WorkflowRunStatus, outcome: WorkflowRunOutcom
 }
 
 /**
- * 派生态 → 状态点着色（dot 仅非活态渲染：running/retrying 活态走 Loader2 转圈分支，
- * 不落 dot 表——查表键 = dot 可达四态，嵌套三元链的平铺替代）。cancelled（run 终局
+ * 派生态 → 状态点着色（[perf:animation] 2026-11 起全部状态都落 dot：活态 running/retrying
+ * 用 accent 点（旋转收敛到表头唯一指示），停止在途用中性/失败色点。cancelled（run 终局
  * 收尾在途成员，§3.3.8）= 中性档，与 pending 同灰系（D9 中性灰先例）。
  */
 const STATUS_DOT_CLASS: Record<Exclude<TraceRow['view']['status'], 'running' | 'retrying'>, string> = {
@@ -152,10 +164,26 @@ const rows = computed<TraceRow[]>(() =>
     const view = deriveCallView(call, props.runStatus)
     const stoppedColor = view.stoppedInFlight ? stoppedColorOf(props.runStatus, props.runOutcome) : ''
     const status = view.status
-    const isLiveRunning = status === 'running' || status === 'retrying'
-    return { call, view, isLiveRunning, dotClass: isLiveRunning ? '' : STATUS_DOT_CLASS[status], stoppedColorClass: stoppedColor }
+    // 活态 = 状态在跑 **且** run 本身未终局：run 停止后在途成员（stoppedInFlight）虽投影仍 running，
+    // 但已不会有任何帧推进——若仍计入，表头唯一旋转指示会在已停止的 run 上永转（分支审查
+    // data-governance S5 补断言时发现，属「无终点等待态」同族）。
+    const isLiveRunning = (status === 'running' || status === 'retrying') && !view.stoppedInFlight
+    // [perf:animation] 活态行改静态 accent 点（原为 '' 表示「走 Loader2 旋转分支」，旋转现收敛到表头）。
+    // 停止在途行（run 已终局、成员行仍 running/retrying）沿用 D9 着色：失败系 danger / 其余中性——
+    // 这两档状态不在 STATUS_DOT_CLASS 内（该表只登记终态词），故此处单独给色不走查表。
+    const stoppedInFlightDotClass = stoppedColor === 'text-danger' ? 'bg-danger opacity-90' : 'bg-neutral-dim opacity-70'
+    // 三档互斥：① 活态（run 进行中的 running/retrying）accent 点；② 停止在途（run 已终局、成员行
+    // 仍投影 running/retrying）按 D9 着色；③ 已终态行查表——STATUS_DOT_CLASS 只登记终态词，
+    // running/retrying 不在表内，此处经 isLiveRunning/stoppedInFlight 两道排除后收窄类型。
+    const isRunningLike = status === 'running' || status === 'retrying'
+    const settledDotClass = isRunningLike ? stoppedInFlightDotClass : STATUS_DOT_CLASS[status]
+    const dotClass = isLiveRunning ? 'bg-accent' : view.stoppedInFlight ? stoppedInFlightDotClass : settledDotClass
+    return { call, view, isLiveRunning, dotClass, stoppedColorClass: stoppedColor }
   }),
 )
+
+/** 是否存在活态行（表头唯一旋转指示的显示判据；无活态 = 零旋转） */
+const hasLiveRunning = computed(() => rows.value.some((row) => row.isLiveRunning))
 
 /** 状态文案（D9 派生词表；停止叠加的语义说明由 title 承载——列宽有限不折行）。 */
 function statusLabel(status: TraceRow['view']['status']): string {

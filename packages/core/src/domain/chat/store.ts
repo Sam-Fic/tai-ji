@@ -916,6 +916,16 @@ export function createChatStore(options: ChatStoreOptions = {}) {
   }
 
   /**
+   * 读 per-session reducer state 的模型基线（最近一条生效 model_change；无记录 = undefined）。
+   * 消费点 = message.modelSwitch 的 effect：切换行的派生依赖前置 state（上一生效模型），
+   * handler 经本方法取到与权威 state 相同的基线，再派生本条消息进 overlay。
+   * 返回的基线对象按替换更新（reducer setLastModel），读方不就地改写。
+   */
+  function getLastModel(sessionId: string): { provider: string; modelId: string } | undefined {
+    return entryStates.get(sessionId)?.state.lastModel
+  }
+
+  /**
    * [E-4] subagent entry 帧消费（subagent-realtime-channel §6.1/§6.2）：虚拟分区喂
    * applyEntry + 基线派生视图 + toolCall overlay。
    *
@@ -983,6 +993,7 @@ export function createChatStore(options: ChatStoreOptions = {}) {
         sealStreamingAssistants,
         appendUser,
         applyEntryFrame,
+        getLastModel,
         getInflight,
         decrementInflight,
         clearInflight,

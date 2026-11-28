@@ -72,8 +72,12 @@
             @click="openBashTask(entry)" @mouseleave="killConfirm.clear()"
           >
             <div class="mt-[3px] size-[7px] shrink-0" data-testid="tray-bash-icon" :title="statusText(entry)">
+              <!-- [perf:animation] running 行 icon 改静态空心 accent 环（2026-11）：原 animate-spin
+                   的 7px 边框环与侧栏同形同尺寸，面板打开期间 N 行并发（N = 后台命令数），
+                   且持续整条后台命令时长。实测单 spinner 9.3% GPU helper、translateZ(0) 后 2.7%
+                   ——静态化是零成本路径。 -->
               <span v-if="iconOf(entry).shape === 'spinner'"
-                class="block size-[7px] animate-spin rounded-full border-[1.5px] border-accent border-t-transparent" />
+                class="block size-[7px] rounded-full border-[1.5px] border-accent" />
               <span v-else class="block size-[7px] rounded-full" :class="DOT_TONE_CLASS[iconOf(entry).tone]" />
             </div>
             <div class="min-w-0 flex-1">

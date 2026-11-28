@@ -122,7 +122,9 @@
       data-testid="plan-review-revising"
       class="flex items-center gap-2 text-[length:var(--text-xs)] text-warn"
     >
-      <span class="size-1.5 animate-pulse rounded-full bg-warn" aria-hidden="true" />
+      <!-- [perf:animation] 2026-11 脉冲点改静态 warn 点：revising 持续 = agent 重写计划的分钟级
+           全期，原 animate-pulse 在这段无终点。语义由文案 + warn 色承担。 -->
+      <span class="size-1.5 rounded-full bg-warn" aria-hidden="true" />
       {{ t('plan.reviewBar.revising') }}
     </div>
     <!-- 分支③ 降级态（D8 可行动化：一句成因说明 + [重新提交审批] 按钮）：state=reviewing 而

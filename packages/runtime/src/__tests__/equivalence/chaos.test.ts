@@ -151,7 +151,9 @@ describe.skipIf(!INTEGRATION_TESTS_ENABLED)(
     // 语料同构检查（W21 同构在本语料上成立——后续混沌断言的合法前提）：
     // message_end 单通道重放 == 权威全量重放（本语料无 bash RPC；未建模 entry 类型走 reducer
     // default no-op）
-    expect(replayEntries(endEntries)).toEqual(authoritativeState)
+    // lastModel 归一：live 的 message_end 流不含初始 model_change（pi 落盘不发事件，F25），
+    // 权威侧回放恒有基线——剥除后断言消息流等价（基线语义由 model-switch-history 单测覆盖）
+    expect({ ...replayEntries(endEntries), lastModel: undefined }).toEqual({ ...authoritativeState, lastModel: undefined })
     const toolOwner = authoritativeState.messages.find((m) => (m.toolCalls?.length ?? 0) > 0)
     expect(toolOwner).toBeDefined()
     expect(toolOwner?.toolCalls?.[0]?.output).toContain('chaos-w22')

@@ -33,6 +33,7 @@ vi.mock('vue-i18n', async () => {
     'panel.message.runGroupSteps': '{count} 步',
     'panel.message.turnTriggerBgNotifySummary': '{count} 个后台任务完成',
     'panel.message.turnTriggerBgNotifyContinued': '已继续处理',
+    'panel.message.modelSwitchRow': '已切换模型',
     // 边界行失败分句专用键（D5「· M 失败」）：与聚合块的 traceFailed 不同键，
     // 文案按设计字面（无「含…次」句式）
     'panel.message.turnTriggerBgNotifyFailed': '{count} 失败',
@@ -181,7 +182,9 @@ interface UnitWrapperLike {
   classes: () => string[]
   text: () => string
   element: Element
+  attributes: () => Record<string, string>
   find: (selector: string) => { exists: () => boolean; text: () => string; element: Element }
+  findAll: (selector: string) => UnitWrapperLike[]
 }
 const traceTopBlocks = (wrapper: { findAll: (s: string) => UnitWrapperLike[] }) =>
   wrapper.findAll('.trace > .trace-blk')
@@ -206,7 +209,7 @@ describe('chat-turn-fold-redesign: 折叠三态（折叠仅末位正文 / 展开
     expect(wrapper.find('.trace-tool').exists()).toBe(false)
   })
 
-  it('末位工作 turn（isLastTurn=true, sessionActive）→ 展开形态：正文 + 聚合块双窗（进行中）', () => {
+  it('末位工作 turn（isLastTurn=true, sessionActive）→ 展开形态：正文 + 聚合块窗口（进行中）', () => {
     const wrapper = mountTurn({
       turn: makeSeqTurn(
         [{ kind: 'thinking' }, { kind: 'tool', toolName: 'read', status: 'running' }],
@@ -216,14 +219,14 @@ describe('chat-turn-fold-redesign: 折叠三态（折叠仅末位正文 / 展开
       isLastTurn: true,
     })
     const blocks = traceTopBlocks(wrapper)
-    // fallback makeTurn 无后继 text（段开放）→ 摘要行 live 变体 + 双窗进行中
+    // fallback makeTurn 无后继 text（段开放）→ 摘要行 live 变体 + 窗口进行中
     //（2026-11-09 用户裁决：进行中同构可展开，摘要是恒在场的展开入口）
     expect(blocks.length).toBe(1)
-    expect(blocks[0].find('[data-testid="agg-live-windows"]').exists()).toBe(true)
+    expect(blocks[0].find('[data-testid="agg-tape-scroll"]').exists()).toBe(true)
     expect(blocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
-    // 思考窗 + 聚合窗双窗在场（段内已有思考与工具步骤）
-    expect(blocks[0].find('[data-testid="agg-think-window"]').exists()).toBe(true)
-    expect(blocks[0].find('[data-testid="agg-window"]').exists()).toBe(true)
+    // 窗口内容在场（段内已有思考与工具步骤，展开体逐行平铺）
+    expect(blocks[0].find('[data-testid="agg-expanded"]').exists()).toBe(true)
+    expect(blocks[0].findAll('[data-testid^="agg-row-"]').length).toBeGreaterThan(0)
   })
 
   it('正文块入场动效一次性判据（D10）：工作流式正文携带 agg-text-enter（TextRow 根），等待态重挂/历史形态不携带（重挂不重放）', () => {
@@ -273,9 +276,9 @@ describe('chat-turn-fold-redesign: 折叠三态（折叠仅末位正文 / 展开
     // 展开态按真实时序交错：[agg1(thinking+read), text 中间结论, agg2(bash), text 最终回复]
     const blocks = traceTopBlocks(wrapper)
     expect(blocks.length).toBe(4)
-    // 非工作态聚合块 isLive=false → 摘要行（每段一行）
+    // 非工作态聚合块 isLive=false → 摘要行（每段一行），窗口收起
     expect(blocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
-    expect(blocks[0].find('[data-testid="agg-live-windows"]').exists()).toBe(false)
+    expect(blocks[0].find('[data-testid="agg-tape-scroll"]').exists()).toBe(false)
     expect(blocks[1].classes()).toContain('trace-blk--text')
     expect(blocks[1].text()).toContain('中间结论')
     expect(blocks[2].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
@@ -438,23 +441,23 @@ describe('chat-flow-process-aggregate 工作态: D2 正文原生 + 段摘要', (
     })
     expect(unitShape(onState)).toEqual([false, true, false, true, false])
     expect(unitShape(offState)).toEqual(unitShape(onState))
-    // 聚合块三态同样不受影响：已封闭段摘要行 / 末段双窗（与 describe 2 基线一致）
+    // 聚合块三态同样不受影响：已封闭段摘要行 / 末段窗口进行中（与 describe 2 基线一致）
     const onBlocks = traceTopBlocks(onState)
     expect(onBlocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
-    expect(onBlocks[4].find('[data-testid="agg-live-windows"]').exists()).toBe(true)
+    expect(onBlocks[4].find('[data-testid="agg-tape-scroll"]').exists()).toBe(true)
   })
 
-  it('已完成段在工作态显摘要行（followedByText 封闭），末段双窗进行中', () => {
+  it('已完成段在工作态显摘要行（followedByText 封闭），末段窗口进行中', () => {
     const wrapper = mountTurn({
       turn: alternatingTurn(),
       isSessionActive: true,
       isLastTurn: true,
     })
     const blocks = traceTopBlocks(wrapper)
-    // 段 1/2 已被后继正文封闭 → 摘要行；段 3 开放且回合进行中 → 双窗
+    // 段 1/2 已被后继正文封闭 → 摘要行；段 3 开放且回合进行中 → 窗口展开
     expect(blocks[0].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
     expect(blocks[2].find('[data-testid="agg-summary-row"]').exists()).toBe(true)
-    expect(blocks[4].find('[data-testid="agg-live-windows"]').exists()).toBe(true)
+    expect(blocks[4].find('[data-testid="agg-tape-scroll"]').exists()).toBe(true)
   })
 
   it('收编行 / 接管态 chrome 已退役：trace 区无 trace-compactor 锚点（D1/D9）', () => {
@@ -539,15 +542,15 @@ describe('turn-attribution W4: trigger 起点行 + turn 内 notice', () => {
     } as Message
   }
 
-  /** turn 内 liveOnly 健康警告（stream_warn，无 entry 无 replay 对应物） */
-  function liveOnlyNotice(id: string): Message {
+  /** turn 内模型切换行（role:'system' + modelSwitch，分组规则 4c 归 turn；trace 区按序锚插入） */
+  function switchNotice(id: string): Message {
     return {
       id,
       role: 'system',
-      content: '上下文长度接近上限，请注意',
+      content: 'faux-1 → faux-1-b',
       status: 'complete',
-      liveOnly: true,
-      timestamp: NOW,
+      timestamp: NOW + 500,
+      modelSwitch: { provider: 'faux', modelId: 'faux-1-b', previousProvider: 'faux', previousModelId: 'faux-1' },
     } as Message
   }
 
@@ -575,29 +578,26 @@ describe('turn-attribution W4: trigger 起点行 + turn 内 notice', () => {
     expect(wrapper.findComponent(UserBubble).exists()).toBe(false)
   })
 
-  it('W4-N1: turn.notices 渲染在 turn 内部末尾——bash 复用 BashOutputBlock、liveOnly 走 SystemNotice 弱化行', () => {
+  it('W4-N1: turn.notices 末尾渲染收窄为 bash（复用 BashOutputBlock）；非 bash notice（模型切换行）不在底部渲染——改由 trace 区按序锚插入（chat-flow-v2 规则 4c / G9）', () => {
     const wrapper = mountTurn({
-      turn: makeTurn({ notices: [bashNotice('bash-n1'), liveOnlyNotice('warn-n1')] }),
+      turn: makeTurn({ notices: [bashNotice('bash-n1'), switchNotice('sw-n1')], switchAfter: { 'sw-n1': 1 } }),
     })
     // bash notice：wrapper testid + 内部复用 BashOutputBlock（真组件，含 bash-output-block 根 testid）
     const bashWrap = wrapper.find('[data-testid="turn-inline-bash"]')
     expect(bashWrap.exists()).toBe(true)
     expect(bashWrap.find('[data-testid="bash-output-block"]').exists()).toBe(true)
     expect(bashWrap.text()).toContain('npm test')
-    // liveOnly notice：wrapper testid + SystemNotice 弱化行（兜底分支渲染 content 文本）
-    const noticeWrap = wrapper.find('[data-testid="turn-inline-notice"]')
-    expect(noticeWrap.exists()).toBe(true)
-    expect(noticeWrap.text()).toContain('上下文长度接近上限')
-    // 到达序忠实：bash（先到）在 notice（后到）之前（DOM 顺序）
-    const bashEl = bashWrap.element as HTMLElement
-    const warnEl = noticeWrap.element as HTMLElement
-    expect(bashEl.compareDocumentPosition(warnEl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // 非 bash notice 不产底部 wrapper（inlineBashNotices 收窄，无双渲染）——切换行由 trace 区单元承载
+    expect(wrapper.findAll('[data-testid="turn-inline-bash"]')).toHaveLength(1)
+    const switchRow = wrapper.find('[data-testid="turn-switch-notice"]')
+    expect(switchRow.exists()).toBe(true)
+    expect(switchRow.text()).toContain('已切换模型')
   })
 
-  it('W4-N2: turn.notices 为空/undefined → 不渲染任何 inline notice wrapper（历史 turn 形态不变）', () => {
+  it('W4-N2: turn.notices 为空/undefined → 不渲染 inline bash wrapper（历史 turn 形态不变）', () => {
     const wrapper = mountTurn({ turn: makeTurn() })
     expect(wrapper.find('[data-testid="turn-inline-bash"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="turn-inline-notice"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="turn-switch-notice"]').exists()).toBe(false)
   })
 
   it('W4-N3: trigger turn 也可携带 notices（后台续跑期间跑过 `!` 命令）——起点行与 notice 共存', () => {
@@ -757,8 +757,8 @@ function makeBashChainTurn(opts: { completed?: number; running?: boolean; traili
 }
 
 describe('聚合块接线: 键稳定性两方向 + v-memo 完整性', () => {
-  it('方向①（段尾延长）：live 段成员追加 → 聚合块 DOM 节点不变（isSameNode），双窗内容增长', async () => {
-    // 开放段（无收尾正文）：工作态双窗进行中
+  it('方向①（段尾延长）：live 段成员追加 → 聚合块 DOM 节点不变（isSameNode），窗口内容增长', async () => {
+    // 开放段（无收尾正文）：工作态窗口进行中
     const wrapper = mountTurn({
       turn: makeBashChainTurn({ completed: 3, running: true, trailingText: false }),
       isSessionActive: true,
@@ -766,7 +766,7 @@ describe('聚合块接线: 键稳定性两方向 + v-memo 完整性', () => {
     })
     const agg1 = wrapper.find('[data-testid="process-aggregate"]')
     expect(agg1.exists()).toBe(true)
-    expect(agg1.find('[data-testid="agg-live-windows"]').exists()).toBe(true)
+    expect(agg1.find('[data-testid="agg-tape-scroll"]').exists()).toBe(true)
     const node1 = agg1.element
     // 段尾延长：b3 完成、新 running 启动（members 4→5，段首位置不变 → 段 id 不变 → key 稳定）
     await wrapper.setProps({ turn: makeBashChainTurn({ completed: 4, running: true, trailingText: false }) })
@@ -777,7 +777,7 @@ describe('聚合块接线: 键稳定性两方向 + v-memo 完整性', () => {
     expect(traceTopBlocks(wrapper).length).toBe(1)
   })
 
-  it('方向②（段封闭）：新正文到达使段转完成 → 聚合块节点不变（键段首定位），原地双窗转摘要行', async () => {
+  it('方向②（段封闭）：新正文到达使段转完成 → 聚合块节点不变（键段首定位），原地窗口转摘要行', async () => {
     const wrapper = mountTurn({
       turn: makeBashChainTurn({ completed: 3, running: true, trailingText: false }),
       isSessionActive: true,
@@ -785,15 +785,15 @@ describe('聚合块接线: 键稳定性两方向 + v-memo 完整性', () => {
     })
     const agg1 = wrapper.find('[data-testid="process-aggregate"]')
     const node1 = agg1.element
-    expect(agg1.find('[data-testid="agg-live-windows"]').exists()).toBe(true)
+    expect(agg1.find('[data-testid="agg-tape-scroll"]').exists()).toBe(true)
     // 摘要行恒在场（live 变体，展开入口；2026-11-09 用户裁决）
     expect(agg1.find('[data-testid="agg-summary-row"]').exists()).toBe(true)
     // 收尾正文到达：段被 text 封闭（followedByText 翻转），段首位置不变 → 键不变 → 不 remount
     await wrapper.setProps({ turn: makeBashChainTurn({ completed: 3, running: true }) })
     const agg2 = wrapper.find('[data-testid="process-aggregate"]')
     expect(agg2.element).toBe(node1)
-    // 同实例原地三态翻转：双窗收起 → 完成态摘要行（live 呼吸弧摘除，RL2 事件驱动）
-    expect(agg2.find('[data-testid="agg-live-windows"]').exists()).toBe(false)
+    // 同实例原地三态翻转：窗口收起 → 完成态摘要行（live 呼吸弧摘除，RL2 事件驱动）
+    expect(agg2.find('[data-testid="agg-tape-scroll"]').exists()).toBe(false)
     expect(agg2.find('[data-testid="agg-summary-row"]').exists()).toBe(true)
     expect(agg2.find('[data-testid="agg-summary-live-loader"]').exists()).toBe(false)
   })
@@ -1014,5 +1014,114 @@ describe('正文颜色逐消息派生（chat-flow-text-color D1）', () => {
   it('complete 回归锚 → streaming=false', () => {
     const wrapper = mountAndProbe(makeTextTurn('complete'))
     expect(wrapper.find('[data-testid="block-text"]').classes()).toContain('text-neutral-fg')
+  })
+})
+
+// ═══ 模型切换行 trace 按序锚插入（chat-flow-v2 G9）══════════════════════════════
+
+/**
+ * 双 assistant 序列 turn：a1 / a2 各一条正文，切换行锚 = 1（a1 之后、a2 之前）——
+ * 序锚插入判据的正中形态（行必须落在两条正文之间）。
+ */
+function twoAssistantTurnWithSwitch(over: Partial<MessageTurn> = {}): MessageTurn {
+  const a1: Message = {
+    id: 'a1', role: 'assistant', content: '第一段', status: 'complete', timestamp: NOW,
+    contentBlocks: [{ type: 'text', refId: 'text-0' }],
+  }
+  const a2: Message = {
+    id: 'a2', role: 'assistant', content: '第二段', status: 'complete', timestamp: NOW + 2000,
+    contentBlocks: [{ type: 'text', refId: 'text-1' }],
+  }
+  const sw: Message = {
+    id: 'sw1', role: 'system', content: 'faux-1 → faux-1-b', status: 'complete', timestamp: NOW + 1000,
+    modelSwitch: { provider: 'faux', modelId: 'faux-1-b', previousProvider: 'faux', previousModelId: 'faux-1' },
+  }
+  return {
+    index: 1,
+    user: { id: 'u1', role: 'user', content: 'hi', status: 'complete', timestamp: NOW },
+    assistants: [a1, a2],
+    isStreaming: false,
+    hasFoldable: true,
+    notices: [sw],
+    switchAfter: { sw1: 1 },
+    ...over,
+  }
+}
+
+describe('chat-flow-v2 G9: 模型切换行 trace 按序锚插入', () => {
+  it('回合内切换行插在新模型正文之前（正文一 → 切换行 → 正文二），trace 区单条', () => {
+    const wrapper = mountTurn({ turn: twoAssistantTurnWithSwitch(), isSessionActive: true, isLastTurn: true })
+    const blocks = traceTopBlocks(wrapper)
+    expect(blocks.length).toBe(3)
+    expect(blocks[0].text()).toContain('第一段')
+    expect(blocks[1].attributes()['data-testid']).toBe('turn-switch-notice')
+    expect(blocks[1].find('[data-testid="system-notice-text"]').text()).toBe('已切换模型')
+    expect(blocks[1].find('[data-testid="system-notice-meta"]').text()).toBe('faux-1 → faux-1-b')
+    expect(blocks[2].text()).toContain('第二段')
+    // 底部 bash 通知位不再渲染切换行（无双渲染——inlineBashNotices 收窄）
+    expect(wrapper.findAll('[data-testid="turn-inline-bash"]')).toHaveLength(0)
+  })
+
+  it('bash 记录与切换行共存：切换行进 trace 区按序锚插入，bash 维持回合末尾（行为不变）', () => {
+    const turn = twoAssistantTurnWithSwitch()
+    turn.notices = [
+      ...(turn.notices ?? []),
+      {
+        id: 'b1', role: 'system', content: '', status: 'complete', timestamp: NOW + 500,
+        bashExecution: { command: 'echo hi', output: 'hi', exitCode: 0, cancelled: false, truncated: false, timestamp: NOW + 500 },
+      },
+    ]
+    const wrapper = mountTurn({ turn, isSessionActive: true, isLastTurn: true })
+    expect(traceTopBlocks(wrapper).length).toBe(3)
+    expect(wrapper.findAll('[data-testid="turn-inline-bash"]')).toHaveLength(1)
+  })
+
+  it('折叠态：正文收敛末位一条，切换行保持原位恒显（在末位正文之前）', () => {
+    const wrapper = mountTurn({ turn: twoAssistantTurnWithSwitch(), isSessionActive: false, isLastTurn: false })
+    const blocks = traceTopBlocks(wrapper)
+    expect(blocks.length).toBe(2)
+    expect(blocks[0].attributes()['data-testid']).toBe('turn-switch-notice')
+    expect(blocks[1].text()).toContain('第二段')
+    expect(blocks.some((b) => b.text().includes('第一段'))).toBe(false)
+  })
+})
+
+// ═══ 切换行序锚边界（chat-flow-v2 G9 长叶）══════════════════════════════
+
+describe('chat-flow-v2 G9 长叶: 切换行序锚边界', () => {
+  it('锚越界（大于 assistant 数，防御形态）：行殿后不抛，正文全显', () => {
+    const turn = twoAssistantTurnWithSwitch({ switchAfter: { sw1: 9 } })
+    const wrapper = mountTurn({ turn, isSessionActive: true, isLastTurn: true })
+    const blocks = traceTopBlocks(wrapper)
+    expect(blocks.length).toBe(3)
+    expect(blocks[0].text()).toContain('第一段')
+    expect(blocks[1].text()).toContain('第二段')
+    expect(blocks[2].attributes()['data-testid']).toBe('turn-switch-notice')
+  })
+
+  it('缺锚字段（undefined，旧数据防御形态）：行殿后', () => {
+    const turn = twoAssistantTurnWithSwitch()
+    delete turn.switchAfter
+    const wrapper = mountTurn({ turn, isSessionActive: true, isLastTurn: true })
+    const blocks = traceTopBlocks(wrapper)
+    expect(blocks.length).toBe(3)
+    expect(blocks[2].attributes()['data-testid']).toBe('turn-switch-notice')
+  })
+
+  it('双行各带锚（锚 1 / 锚 2）：按锚插在各自 assistant 之后', () => {
+    const turn = twoAssistantTurnWithSwitch()
+    const sw2: Message = {
+      id: 'sw2', role: 'system', content: 'faux-1-b → faux-1-c', status: 'complete', timestamp: NOW + 3000,
+      modelSwitch: { modelId: 'faux-1-c', previousModelId: 'faux-1-b' },
+    }
+    turn.notices = [turn.notices![0]!, sw2]
+    turn.switchAfter = { sw1: 1, sw2: 2 }
+    const wrapper = mountTurn({ turn, isSessionActive: true, isLastTurn: true })
+    const blocks = traceTopBlocks(wrapper)
+    expect(blocks.length).toBe(4)
+    expect(blocks[0].text()).toContain('第一段')
+    expect(blocks[1].attributes()['data-testid']).toBe('turn-switch-notice')
+    expect(blocks[2].text()).toContain('第二段')
+    expect(blocks[3].text()).toContain('已切换模型')
   })
 })

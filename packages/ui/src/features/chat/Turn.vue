@@ -210,6 +210,7 @@
           v-memo="unitMemoDeps(unit)"
           class="trace-blk"
           :class="unit.kind === 'text' ? 'trace-blk--text' : ''"
+          :data-testid="unit.kind === 'notice' ? 'turn-switch-notice' : undefined"
         >
           <!-- 正文行 → TextRow 直渲染：turn-actions 锚行插槽直传，锚行开关 =
                isActionsAnchor（use-turn-trace.ts:131 锚单元判定——末位 text 单元才挂插槽） -->
@@ -233,12 +234,15 @@
                （AggregateExpandedBody），本层无接线点；
                turn-streaming = 入场一次性判据的「真实到达」信号，D10） -->
           <ProcessAggregateBlock
-            v-else
+            v-else-if="unit.kind === 'aggregate'"
             :segment="unit.segment"
             :turn-working="isWorkingTurn"
             :turn-streaming="isStreaming"
             :session-id="sessionId"
           />
+          <!-- 模型切换行（chat-flow-v2 G9）：回分组层规则 4c 归回合的切换行按时间插在
+               trace 单元之间（回合进行中切换的行在新模型内容之前），inline 行距（轮内形态） -->
+          <SystemNotice v-else :message="unit.message" inline />
         </div>
         <!-- streaming 光标：turn 内容区末尾独立元素（跟在所有 block 后，位置稳定不受 block 增删/折叠态影响）。
              mt-2 = 8px 光标底距（正文末块无 py 时为唯一贡献；MF-1-3 过程行恢复 py 5px 后，
@@ -262,19 +266,16 @@
       />
     </div>
 
-    <!-- turn 内 notice（W4·D4）：仅 bash 执行记录（inline），按到达序在 turn 内部末尾渲染
-         （不切断回合），复用 BashOutputBlock（既有 bash 消费点，取消按钮经 abortBash 仍可用）。
+    <!-- turn 内 notice（W4·D4）：bash 执行记录按到达序在 turn 内部末尾渲染（不切断回合），
+         复用 BashOutputBlock（既有 bash 消费点，取消按钮经 abortBash 仍可用）。
+         模型切换行（chat-flow-v2 规则 4c）不在此渲染——它在 trace 区按时间插入（G9），
+         经 inlineBashNotices 过滤避免双渲染。
          liveOnly（stream_warn）经 [chat-flow-consistency C6] 独立成 systemNotice static 项
          （core 分组层规则 4b），由流层（ChatView static 分支）渲染，不进 turn.notices。
-         wrapper 的 data-testid（turn-inline-bash / turn-inline-notice）是 W4 渲染契约——
-         不落在子组件根上，避免覆盖 BashOutputBlock 自身的 bash-output-block testid。 -->
-    <div
-      v-for="n in turn.notices"
-      :key="n.id"
-      :data-testid="n.bashExecution ? 'turn-inline-bash' : 'turn-inline-notice'"
-    >
-      <BashOutputBlock v-if="n.bashExecution" :message="n" :session-id="sessionId" />
-      <SystemNotice v-else :message="n" />
+         wrapper 的 data-testid（turn-inline-bash）是 W4 渲染契约——不落在子组件根上，
+         避免覆盖 BashOutputBlock 自身的 bash-output-block testid。 -->
+    <div v-for="n in inlineBashNotices" :key="n.id" data-testid="turn-inline-bash">
+      <BashOutputBlock :message="n" :session-id="sessionId" />
     </div>
   </div>
 </template>
@@ -529,6 +530,12 @@ const foldedRows = computed<FoldedNoticeRow[]>(() =>
 /** 工作态临时外部行消息（bash 结构化行；settle 后本列表不再渲染） */
 const workingBashNotices = computed(() =>
   (props.turn.foldedNotices ?? []).filter(isBashCompleteNotice),
+)
+
+/** 回合内末尾渲染的 bash 执行记录（W4·D4）：turn.notices 收窄为 bash——模型切换行已改在
+ *  trace 区按时间插入（chat-flow-v2 规则 4c / G9），在此排除避免双渲染。 */
+const inlineBashNotices = computed(() =>
+  (props.turn.notices ?? []).filter((n) => n.bashExecution !== undefined),
 )
 
 /**

@@ -146,6 +146,10 @@ export function useSettingsShell(): void {
       // fonts 同上——两个槽位是兄弟字段，写侧必须 spread，新对象引用即触发
       store.system.value.fonts,
       store.system.value.locale,
+      // [perf:animation] 2026-11 reduceMotion 也必须在源内：否则在外观页拨开关后
+      // applySystemToDom 不重跑，<html data-reduce-motion> 永不更新（开关看起来无效，
+      // 与 fontSize/fonts 漏加时的缺陷同型）。
+      store.system.value.reduceMotion,
     ] as const,
     () => applyCurrent(),
     { flush: 'pre' },
